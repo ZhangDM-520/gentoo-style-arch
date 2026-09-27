@@ -225,10 +225,13 @@ end
 
 # ─── Project configuration ───────────────────────────────────────────────────
 # The group roster is stated ONCE, here. Group membership lives in each
-# topology record's groups field; only these six names are readable anywhere
+# topology record's groups field; only these five names are readable anywhere
 # (loader validation, resolve_group, usage, diagnostics all derive from this
 # list). Group variables are _GROUP_<name with '-' as '_'>.
-set -g _GROUP_NAMES git stable core misc third-party app
+# 2026-09-27: third-party retired — its members moved to app; `-g third-party`
+# now fails through the unknown-group path (its members' recipes were never
+# reachable through the group name again).
+set -g _GROUP_NAMES git stable core misc app
 set -g _PACKAGE_MAP
 set -g _PACKAGE_IDS
 set -g _DEPS
@@ -237,7 +240,6 @@ set -g _GROUP_git
 set -g _GROUP_stable
 set -g _GROUP_core
 set -g _GROUP_misc
-set -g _GROUP_third_party
 set -g _GROUP_app
 set -g _DEFAULT_LANES auto
 set -g _DEFAULT_JOBS auto
@@ -463,12 +465,18 @@ function read_topology_config
         end
         # tags: closed vocabulary, no repeats. Unknown tags are refused, not
         # ignored — a typo'd batch tag would silently disable the batch gate.
+        # Vocabulary: abi=must, abi=should (batch relation) and
+        # app-cluster=<name> (the app prompt's shared toggle row; its name
+        # charset matches a record id). Like the abi tags, app-cluster is
+        # accepted on ANY group's record — the loader validates tags by their
+        # own semantics, never by group membership; outside the app prompt
+        # (i.e. on a non-app record) it is simply inert.
         set -l record_tags
         if test (count $fields) -eq 5
             for tag in (string split ',' -- "$fields[5]")
                 test -n "$tag"; or continue
-                if not contains "$tag" abi=must abi=should
-                    ui_error "unknown tag in topology record $id: $tag (allowed: abi=must,abi=should)"
+                if not contains "$tag" abi=must abi=should; and not string match -qr '^app-cluster=[A-Za-z0-9._+-]+$' -- "$tag"
+                    ui_error "unknown tag in topology record $id: $tag (allowed: abi=must,abi=should,app-cluster=<name>)"
                     return 1
                 end
                 if contains "$tag" $record_tags
@@ -479,6 +487,15 @@ function read_topology_config
             end
             if contains abi=must $record_tags; and contains abi=should $record_tags
                 ui_error "topology record for $id names both abi=must and abi=should"
+                return 1
+            end
+            set -l cluster_tag_count 0
+            for tag in $record_tags
+                string match -q 'app-cluster=*' -- "$tag"
+                and set cluster_tag_count (math $cluster_tag_count + 1)
+            end
+            if test $cluster_tag_count -gt 1
+                ui_error "topology record for $id names more than one app-cluster tag"
                 return 1
             end
         end
@@ -3341,10 +3358,12 @@ function deps_of -a pkg
     end
 end
 
-# ─── Coupled-batch tags (the topology record's tags field) ───────────────────
+# ─── Topology tags (the record's tags field) ─────────────────────────────────
 # The vocabulary is closed and loader-validated: abi=must (batch anchor or
-# mandatory member) and abi=should (same-pass candidate). These helpers turn
-# the tags + edge graph into the batch relation; the gate in main consumes it.
+# mandatory member), abi=should (same-pass candidate) and app-cluster=<name>
+# (members sharing the name render as ONE app-prompt toggle row). These
+# helpers turn the abi tags + edge graph into the batch relation; the gate in
+# main consumes it. package_app_cluster is the app prompt's seam.
 # package_abi_severity PKG → must | should | none
 function package_abi_severity -a pkg
     for entry in $_TAGS
@@ -3359,6 +3378,23 @@ function package_abi_severity -a pkg
         return
     end
     echo none
+end
+
+# package_app_cluster PKG → the record's app-cluster=<name> value, or nothing.
+# Members sharing one name belong to one prompt row; the loader caps a record
+# at one such tag, and only prompt_app_selection consumes this.
+function package_app_cluster -a pkg
+    for entry in $_TAGS
+        set -l parts (string split '|' -- "$entry")
+        test "$parts[1]" = "$pkg"; or continue
+        for tag in (string split ',' -- "$parts[2]")
+            if string match -q 'app-cluster=*' -- "$tag"
+                string replace 'app-cluster=' '' -- "$tag"
+                return
+            end
+        end
+        return
+    end
 end
 
 # has_abi_tagged_dependency PKG → 0 when any transitive dependency carries an
@@ -5349,11 +5385,16 @@ function print_topology
         end
         set -l edge_values (deps_of $id)
         set -l tag_values
-        switch (package_abi_severity $id)
-            case must
-                set tag_values abi=must
-            case should
-                set tag_values abi=should
+        # Raw record tags, comma-joined in record order: the data channel
+        # round-trips every tag (app-cluster=<name> included) unchanged. The
+        # vocabulary is closed and loader-validated, so raw == the old
+        # abi-only normalisation for every pre-existing record.
+        for entry in $_TAGS
+            set -l parts (string split '|' -- "$entry")
+            if test "$parts[1]" = "$id"
+                set tag_values (string split ',' -- "$parts[2]")
+                break
+            end
         end
         set -l groups_str (string join ',' $group_values)
         set -l edges_str (string join ',' $edge_values)
@@ -5522,8 +5563,6 @@ function usage
                 set desc "Heavyweight, source-heavy, ABI-critical, and ROCm packages — auto-installs and runs core builds solo"
             case misc
                 set desc "Auxiliary packages"
-            case third-party
-                set desc "Additional package recipes"
             case app
                 set desc "Optional applications — leaf builds: dependency chain is never expanded, no auto -i"
         end
@@ -5570,12 +5609,8 @@ end
 # only sound with immediate installs).
 function resolve_group -a grp
     set -l name "$grp"
-    # Historical aliases for third-party; every other name matches exactly —
-    # a typo is never auto-corrected into a different group.
-    switch "$name"
-        case third_party 3rdp
-            set name third-party
-    end
+    # Every name matches exactly — a typo is never auto-corrected into a
+    # different group (the third-party/3rdp aliases died with the group).
     if not contains "$name" $_GROUP_NAMES
         # This function's stdout is a data channel — the caller captures it
         # with a command substitution — so diagnostics must go to stderr or
@@ -5621,20 +5656,61 @@ end
 # and the input hint all go to stderr so a command substitution cannot
 # swallow them. The caller must only invoke this on a TTY (test -t 0);
 # off-terminal runs never reach it, so there is no hang path in a pipe.
+#
+# Rows, not packages: members sharing one app-cluster=<name> tag render as a
+# SINGLE toggle row (label '<name> [<member ids>]') at the cluster's first
+# member's position in build order, and toggling that row checks or clears
+# EVERY member at once (pkg_row maps each package to its row). A cluster
+# member never renders its own row; untagged members are one row each.
 function prompt_app_selection
     set -l items $argv
     test (count $items) -gt 0; or return 0
     set -l ordered (topo_sort (string join ' ' $items))
+    set -l row_labels
+    set -l row_members
+    set -l row_cluster
+    set -l pkg_row
+    for pkg in $ordered
+        set -l cluster (package_app_cluster $pkg)
+        set -l row 0
+        if test -n "$cluster"
+            set -l r 1
+            for seen in $row_cluster
+                if test "$seen" = "$cluster"
+                    set row $r
+                    break
+                end
+                set r (math $r + 1)
+            end
+        end
+        if test $row -eq 0
+            set row (math (count $row_cluster) + 1)
+            set -a row_cluster "$cluster"
+            set -a row_members "$pkg"
+            set -a row_labels "$pkg"
+        else
+            set row_members[$row] "$row_members[$row] $pkg"
+        end
+        set -a pkg_row $row
+    end
+    # Cluster rows relabel to '<name> [<member ids>]'; singletons keep the id.
+    set -l row 1
+    for cluster in $row_cluster
+        if test -n "$cluster"
+            set row_labels[$row] "$cluster ["$row_members[$row]"]"
+        end
+        set row (math $row + 1)
+    end
     set -l checked
     while true
         printf '%s\n' "app group — choose what to build ("(count $ordered)" packages):" >&2
         printf '%s\n' "  default: nothing checked = build EVERY app package" >&2
         set -l i 1
-        for pkg in $ordered
+        for label in $row_labels
             if contains -- "$i" $checked
-                printf '  [x] %2d. %s\n' $i $pkg >&2
+                printf '  [x] %2d. %s\n' $i $label >&2
             else
-                printf '  [ ] %2d. %s\n' $i $pkg >&2
+                printf '  [ ] %2d. %s\n' $i $label >&2
             end
             set i (math $i + 1)
         end
@@ -5658,13 +5734,13 @@ function prompt_app_selection
                     ui_error "app selection aborted" >&2
                     return 1
                 case a all
-                    set checked (seq (count $ordered))
+                    set checked (seq (count $row_labels))
                 case c clear
                     set checked
                 case '*'
                     if string match -qr '^[0-9]+$' -- $token
                         and test $token -ge 1
-                        and test $token -le (count $ordered)
+                        and test $token -le (count $row_labels)
                         set -l at (contains -i -- "$token" $checked)
                         if test $status -eq 0
                             set -e checked[$at]
@@ -5685,9 +5761,11 @@ function prompt_app_selection
         printf '%s\n' $ordered # all-unchecked = build the whole group
         return 0
     end
+    # Checked ROWS map back through pkg_row — a checked cluster row prints
+    # every one of its member IDs here.
     set -l i 1
     for pkg in $ordered
-        if contains -- "$i" $checked
+        if contains -- "$pkg_row[$i]" $checked
             printf '%s\n' $pkg
         end
         set i (math $i + 1)

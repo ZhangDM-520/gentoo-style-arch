@@ -14,15 +14,16 @@ credentials, downloaded sources, or generated build output to this journal.
 
 The workspace was reorganized twice; entries keep whatever names were true when
 they were written. Current names are `packages/<category>/<package-id>/` with
-categories `git`, `stable`, `core`, `misc`, `third-party`, and logical groups
-of the same five names (`config/groups/*.list`).
+categories `git`, `stable`, `core`, `misc` (the `third-party` category was
+retired 2026-09-27), and logical groups `git`, `stable`, `core`, `misc`, `app`
+(stated in `config/topology.conf`).
 
 | In older entries | Was | Now |
 | --- | --- | --- |
 | `.Heavy/`, `.Heavyweight/` | the heavyweight build area | `packages/core/` (or `packages/git/` for rolling recipes) |
 | `.Static/`, `.Stable/` | stock-name packages whose versions track the repos | `packages/stable/` (or `packages/git/`) |
 | `.Core/` | `.Heavyweight/` renamed 2026-09-15 | `packages/core/` |
-| `.3rdP/` | third-party application recipes | `packages/third-party/` |
+| `.3rdP/` | third-party application recipes | `packages/stable/` — directory retired 2026-09-27 (group `third-party` retired with it; the recipes are `app` members) |
 | `.Misc/` | auxiliary recipes | `packages/misc/` |
 | `-g static`, `-g heavy`, `-g critical`, `-g rocm` | four separate groups | `-g stable` and `-g core` (2026-09-15); `core` auto-enables `-i` |
 | `-si`, `--sepinstall` | the separated-install flag | removed 2026-09-17 — `-i`/`--install` is the only spelling |
@@ -34,6 +35,72 @@ of the same five names (`config/groups/*.list`).
 So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
+
+## 2026-09-27 — `app` group wired (22 members), `third-party` retired, `app-cluster` prompt rows
+
+Symptom — the `app` group sat at 0 members while some 20 desktop
+applications lived in `git`/`stable`/`core`/`third-party`, so `-g app` could
+not select
+them; the fcitx5 stack also presented as six separate prompt rows that had to
+be toggled one by one, and `third-party` was a two-recipe group duplicating
+what `stable` already means. Root cause — `app` had been created as a prompt
+layer (2026-09-23) without ever being wired, and no tag expressed prompt-row
+clustering. Fix — 22 records now carry `app` as their **sole** group
+(membership replaces the previous group): zen-browser-pgo, bettbox, qt5ct,
+qt6ct, libreoffice-fresh, networkmanager-openvpn, blender-git,
+easyeffects-git, the five fcitx5 recipes (fcitx5-git, fcitx5-gtk-git,
+fcitx5-lua-git, fcitx5-qt-git, fcitx5-chinese-addons-git), gimp-git,
+krita-git, libime-git,
+logseq-desktop-git, noctalia-git, onlyoffice-git, vscodium-insiders-git,
+vencord-git, niri-spicy-git. Deliberately not wired: autofdo-git (core
+toolchain), bpftune-git (daemon), flatpak-git (framework), texlive-texmf
+(24-output data), xcb-imdkit-git (build dep). The `third-party` group was
+retired — description arm, accumulator and `packages/third-party/` gone;
+`zen-browser-pgo` and `bettbox` relocated to `packages/stable/` as pure
+renames (PKGBUILDs unchanged) — and `-g third-party` with the historical
+`third_party`/`3rdp` aliases now fails the unknown-group path. The audit's
+legacy `.3rdP/` path-drift regex is intentionally kept: it scans for pre-Git
+filesystem paths, not group names. New topology tag `app-cluster=<name>`
+(fifth field, comma-joined with `abi=` tags, charset `[A-Za-z0-9._+-]+`, at
+most one per record, accepted on any record but inert outside the app
+prompt) collapses prompt rows: the six fcitx-family records
+(fcitx5-git/-gtk-git/-lua-git/-qt-git/-chinese-addons-git, libime-git) share
+`app-cluster=fcitx5` and the multi-select shows them as one
+`fcitx5 [member ids]` row whose toggle checks or clears all members; they
+remain six separate packages in `-l`, the run record, ranges and lanes, and
+"N checked" counts rows, not packages. Prompt semantics are otherwise
+unchanged: filter layer in front of the pipeline, TTY-only, all-unchecked +
+Enter = whole group, `q`/EOF abort non-zero, `-l` never prompts, non-TTY
+takes the whole group, and group selections never `expand_deps`.
+
+Consequence — `qt5ct`/`qt6ct` thereby left `core` while keeping their
+`abi=must` tags, so `-g core`'s solo dispatch no longer rebuilds them and a
+Qt ABI batch must name them explicitly. A cluster is presentation data only;
+never build grouping logic on it.
+
+Validation — group counts read from the `groups` fields of
+`config/topology.conf` and confirmed with `fish build-all.fish --list -g
+<group>`: git 42, stable 27, core 39 (34 under `packages/core/`,
+`autofdo-git`/`libclc-git` under `packages/git/`, `hip-runtime`/`hsa-rocr`/
+`openssl` the three `stable,core` members under `packages/stable/`), misc 1,
+app 22 — 128 records, 131 memberships. Prompt clustering exercised by the
+app fixtures (updated in the concurrent `tests/` change).
+
+Durable rule — `app` membership is exclusive (a record carries `app` alone)
+but never clears coupled-batch tags; the roster is five names and nothing
+outside it resolves; an `app-cluster` tag affects prompt presentation only.
+
+### Host incident the same day: fish `rm` wrapper hang
+
+Fixture and builder runs on the maintainer host hung at ~100 % CPU before
+doing any work; pristine HEAD hung identically, so it was not a repo bug.
+Root cause — the user-level fish config autoloaded a trash-cli-backed `rm`
+wrapper that spun on any invocation, and both the builder and the fixtures
+call `rm` early. Workaround for reproducers: run under
+`XDG_CONFIG_HOME=$(mktemp -d)` so fish falls back to the system `rm`. Rule:
+when a run hangs with no output, suspect the shell environment first and
+re-test at HEAD before debugging the repo; keep host specifics out of these
+docs.
 
 ## 2026-09-26 — audit lints: provides versioning, purged tools, IgnorePkg (architecture-deepening wave-4)
 

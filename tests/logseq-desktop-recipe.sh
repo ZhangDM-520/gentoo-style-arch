@@ -110,14 +110,16 @@ grep -Fq 'chmod 4755' "$pkgbuild" || fail "chrome-sandbox is not made setuid"
 grep -Fq 'dist/linux-unpacked' "$pkgbuild" || fail "unpacked Electron tree unused"
 
 # Topology: the recipe must be reachable through a topology record (id+path)
-# and a git-group membership, read through the builder's --topology channel.
+# and an app-group membership (the 2026-09-27 app-group expansion moved this
+# desktop application from git to app), read through the builder's --topology
+# channel.
 topo=$(fish "$root/build-all.fish" --topology) || fail "--topology failed"
 rec=$(printf '%s\n' "$topo" | awk -F'|' -v id=logseq-desktop-git '$1 == id')
 [[ -n $rec ]] || fail "not registered in config/topology.conf (no record)"
 [[ $(printf '%s\n' "$rec" | cut -d'|' -f2) == "$recipe" ]] ||
     fail "topology record does not point at $recipe"
-[[ ",$(printf '%s\n' "$rec" | cut -d'|' -f3)," == *,git,* ]] ||
-    fail "not a member of the git group"
+[[ ",$(printf '%s\n' "$rec" | cut -d'|' -f3)," == *,app,* ]] ||
+    fail "not a member of the app group"
 
 # .SRCINFO freshness is owned by tests/srcinfo-freshness.sh (it regenerates and
 # diffs every recipe from the --topology channel), so it is not re-asserted here.

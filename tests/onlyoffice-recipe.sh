@@ -221,14 +221,16 @@ grep -Fq 'v8.data' "$pkgbuild" ||
 
 # ----------------------------------------------------------------- topology
 # Read through the builder's --topology channel (id|path|groups|edges|tags):
-# the record must exist, point at the recipe, and carry the git membership.
+# the record must exist, point at the recipe, and carry the app membership
+# (onlyoffice-git moved from git to app with the 2026-09-27 app-group
+# expansion).
 topo=$(fish "$root/build-all.fish" --topology) || fail "--topology failed"
 rec=$(printf '%s\n' "$topo" | awk -F'|' -v id=onlyoffice-git '$1 == id')
 [[ -n $rec ]] || fail "not registered in config/topology.conf (no record)"
 [[ $(printf '%s\n' "$rec" | cut -d'|' -f2) == "$recipe" ]] ||
     fail "topology record does not point at $recipe"
-[[ ",$(printf '%s\n' "$rec" | cut -d'|' -f3)," == *,git,* ]] ||
-    fail "not a member of the git group"
+[[ ",$(printf '%s\n' "$rec" | cut -d'|' -f3)," == *,app,* ]] ||
+    fail "not a member of the app group"
 
 # The dependency edge must name the same capabilities the recipe declares, or
 # the recorded build order would not describe a real rebuild trigger. Ids are

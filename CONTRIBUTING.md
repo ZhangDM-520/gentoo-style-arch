@@ -36,7 +36,7 @@ belong in `docs/NOTE.md`; `docs/MEMORY.md` §5 holds a live decision.
    record format is exactly `id|path|groups|edges[|tags]`; the loader rejects
    any other shape, and the record is the only place that binds an ID to a
    path.
-5. Record group membership (`groups`, a comma list of the six group names)
+5. Record group membership (`groups`, a comma list of the five group names)
    and any local dependency edges (`edges`) in the same record, and only after
    verifying a dependency with the package metadata and a build-order reason.
    Coupled-batch tags (`abi=must`/`abi=should`) belong in the same record's

@@ -7,7 +7,7 @@ set -euo pipefail
 # extendedTimeout), and .SRCINFO agrees with the PKGBUILD on pkgrel.
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-recipe="packages/third-party/zen-browser-pgo"
+recipe="packages/stable/zen-browser-pgo"
 pkgbuild="$root/$recipe/PKGBUILD"
 patch="$root/$recipe/0007-pgo-speedometer3.patch"
 
@@ -90,7 +90,7 @@ printf 'zen-pgo-workload fixture: PASS\n'
 # single-file unified diff.
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-recipe="packages/third-party/zen-browser-pgo"
+recipe="packages/stable/zen-browser-pgo"
 pkgbuild="$root/$recipe/PKGBUILD"
 patch="$root/$recipe/0007-pgo-speedometer3.patch"
 

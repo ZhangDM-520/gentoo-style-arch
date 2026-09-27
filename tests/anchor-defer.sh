@@ -5,7 +5,7 @@ set -euo pipefail
 #
 # Before 2026-09-24 the first anchoring refusal exited the lane non-zero, the
 # dispatcher treated that as a failed build, set stop_starting and drained:
-# measured on a stable,core,git,third-party run, ONE recipe whose official
+# measured on a full-roster whole-tree run, ONE recipe whose official
 # .SRCINFO published no checksum for a moved source cost the other ~120
 # packages their dispatch (two consecutive runs, "stopped dispatching, drained
 # in-flight lanes"). Anchoring impossibility is not a failed build — it is a

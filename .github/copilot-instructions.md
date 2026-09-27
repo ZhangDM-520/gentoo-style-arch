@@ -181,7 +181,11 @@ group, and the group's members are never run through `expand_deps`, so an app
 package's local dependency edge must not drag its dependency chain into the
 run. The prompt is a filter layer in front of the normal pipeline: whatever it
 returns becomes the group's contribution to the selection and every later step
-(topo sort, ranges, lanes) is the existing code.
+(topo sort, ranges, lanes) is the existing code. Records sharing an
+`app-cluster=<name>` topology tag present as ONE prompt row
+(`fcitx5 [member ids]`; toggling checks/clears all members, "N checked" counts
+rows, not packages) — presentation only: the packages stay separate in `-l`,
+the run record, ranges and lanes.
 
 ```sh
 fish build-all.fish --no-deps niri-spicy-git   # leaf rebuild only
@@ -257,15 +261,17 @@ Four modules, deliberately separated (`docs/architecture.md`):
    record per package, `id|path|groups|edges[|tags]`, and is *the only* place
    that binds a package ID to a recipe path; the loader rejects malformed
    records by naming the offender and line. Group membership (comma list ⊂
-   `git,stable,core,misc,third-party,app`, roster stated once) and local
+   `git,stable,core,misc,app`, roster stated once; the `third-party` group was
+   retired 2026-09-27 and its two recipes moved to `packages/stable/`) and local
    build-order edges (a trailing empty `edges` field is a deliberate no-edge
    record) live in the same record, as do optional `abi=must`/`abi=should`
-   coupled-batch tags consumed by the generic batch gate. Tooling reads
+   coupled-batch tags consumed by the generic batch gate and the
+   `app-cluster=<name>` prompt-cluster tag. Tooling reads
    topology through the builder's `--topology` data channel, never by parsing
    `config/` directly. `build-defaults.conf` holds the GiB-per-job
    baselines (`memory_per_job_gib`, `core_memory_per_job_gib`,
    `reserved_memory_gib`) and the default `lanes`/`jobs`/`intensity`/`state_dir`.
-   The six group names are stated once (`_GROUP_NAMES`) and nothing outside
+   The five group names are stated once (`_GROUP_NAMES`) and nothing outside
    that roster is readable; any other file in `config/` is unreachable state
    that silently goes stale — `tests/project.sh` fails on it.
 3. **Builder** — `build-all.fish` resolves IDs, expands and topologically sorts

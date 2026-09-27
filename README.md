@@ -23,20 +23,21 @@ verification.
 
 ## What is included
 
-The current set has 128 recipe directories and 131 group memberships. The
-counts differ because `core` is a logical build group: 36 of its 41 members
-live under `packages/core/`, while `autofdo-git`, `libclc-git` come from
-`packages/git/` and `hip-runtime`, `hsa-rocr`, `openssl` from
-`packages/stable/`:
+The current set has 128 recipe directories and 131 group memberships (counts
+from the `groups` fields in `config/topology.conf`, cross-checked with `fish
+build-all.fish --list -g <group>`). The counts differ because `hip-runtime`,
+`hsa-rocr` and `openssl` are `stable,core` records counted in both groups;
+`core` is a logical build group whose 39 members span the physical layout: 34
+live under `packages/core/`, `autofdo-git` and `libclc-git` come from
+`packages/git/`, and the three `stable,core` members from `packages/stable/`:
 
 | Group | Members | Purpose |
 | --- | ---: | --- |
-| `git` | 58 | Top-level development and rolling packages |
-| `stable` | 29 | Stock-name packages synchronized with Arch repositories |
-| `core` | 41 | Heavy, ABI-coupled, source-heavy, and ROCm packages |
+| `git` | 42 | Top-level development and rolling packages |
+| `stable` | 27 | Stock-name packages synchronized with Arch repositories |
+| `core` | 39 | Heavy, ABI-coupled, source-heavy, and ROCm packages |
 | `misc` | 1 | Optional CachyOS kernel recipe |
-| `third-party` | 2 | Additional application recipes |
-| `app` | 0 | Optional applications; a TTY build/`-n` run prompts to multi-select (all unchecked = build all), leaf builds with no dependency expansion |
+| `app` | 22 | Optional applications; a TTY build/`-n` run prompts to multi-select (all unchecked + Enter = build all; records sharing an `app-cluster` tag toggle as one row), leaf builds with no dependency expansion |
 
 Package records — the ID-to-path binding, group membership, the local
 dependency graph, and coupled-batch tags — are declarative, one record per

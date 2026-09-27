@@ -12,11 +12,12 @@ Gentoo_Style_Arch has four deliberately separate modules:
 2. **Topology** is one declarative file, `config/topology.conf`: one record
    per package, `id|path|groups|edges[|tags]`. The `id|path` pair binds the
    package ID to its recipe path — the only place that binding exists —
-   `groups` states group membership as a comma list over the six logical
-   groups (`git, stable, core, misc, third-party, app`; the roster is stated
+   `groups` states group membership as a comma list over the five logical
+   groups (`git, stable, core, misc, app`; the roster is stated
    once, in the builder), `edges` is the comma list of local build-order
    dependencies (a lone `id|path|groups|` is a deliberate no-edge record),
-   and `tags` carries coupled-batch policy (`abi=must` / `abi=should`).
+   and `tags` carries coupled-batch policy (`abi=must` / `abi=should`) and
+   the optional `app-cluster=<name>` prompt-cluster tag.
    `config/build-defaults.conf` stays separate: lanes/jobs/intensity and the
    memory budgets are knobs, not topology. The loader resolves every record
    on EVERY invocation and one malformed record breaks every command; the

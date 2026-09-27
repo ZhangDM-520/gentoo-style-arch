@@ -5,11 +5,12 @@
 Place a clean recipe directory under the physical category that best describes
 it, and add one record to `config/topology.conf`:
 `id|path|groups|edges[|tags]`. The record is the only place that binds a
-package ID to a filesystem path. `groups` is a comma list over the six group
-names (`git, stable, core, misc, third-party, app`), `edges` is the comma
+package ID to a filesystem path. `groups` is a comma list over the five group
+names (`git, stable, core, misc, app`), `edges` is the comma
 list of local build-order dependencies (a record ending in a bare `|` is a
 deliberate no-edge record), and `tags` carries coupled-batch policy
-(`abi=must` / `abi=should`, see "Updating coupled stacks"). The loader
+(`abi=must` / `abi=should`, see "Updating coupled stacks") and the optional
+`app-cluster=<name>` prompt-cluster tag (see "The app group"). The loader
 validates every record on every invocation and one malformed record breaks
 every command — and names the offender.
 
@@ -32,6 +33,26 @@ does both, and `tests/kernel-recipes.sh` pins it. Never grow `b2sums` with
 per-knob `b2sums+=(…)` appends next to each `source+=(…)`: `updpkgsums`
 rewrites the whole assignment as a literal on every version bump, so the
 appends double-count at the first bump.
+
+## The app group
+
+`app` is a real group with leaf-build semantics: a record wired into it
+carries `app` **alone** — membership replaces the record's previous group.
+The 2026-09-27 wiring moved 22 records in; `qt5ct`/`qt6ct` thereby left
+`core`, and the `third-party` group retired at the same time (its two
+recipes relocated to `packages/stable/`). Leaving a group does not touch
+coupled-batch tags: `qt5ct`/`qt6ct` keep their `abi=must` tags, so a Qt ABI
+batch must still name them explicitly even though `-g core` no longer
+dispatches them.
+
+`app-cluster=<name>` (tags field, charset `[A-Za-z0-9._+-]+`, at most one per
+record, comma-joined with any `abi=` tags) collapses records into one row of
+the app multi-select prompt — the six `app-cluster=fcitx5` records present as
+a single `fcitx5 [member ids]` row whose toggle checks or clears every
+member. The cluster is prompt presentation only: members remain separate
+packages in `-l`, the run record, ranges and lanes, and the prompt's
+"N checked" counts rows, not packages. The tag is accepted on any record but
+is inert outside the app prompt.
 
 ## Updating coupled stacks
 

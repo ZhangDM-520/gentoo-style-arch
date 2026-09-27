@@ -6,7 +6,8 @@
 > NOTE.md opens with a **naming-history table** — entries written before
 > 2026-09-15 use the old `.Static/.Heavy/.Heavyweight/.3rdP` paths and the
 > `static/heavy/critical/rocm` group names, which map onto today's
-> `packages/{git,stable,core,misc,third-party}` layout.
+> `packages/{git,stable,core,misc}` layout (`packages/third-party/` was
+> retired 2026-09-27).
 > Host-specific and private details — home directories, machine names,
 > credentials, downloaded sources, build artifacts — are intentionally
 > excluded. Standard system paths that the workflow depends on
@@ -262,13 +263,18 @@
 ## 2. Workspace overview
 
 - The public tree is `Gentoo_Style_Arch/`; recipes live under
-  `packages/{git,stable,core,misc,third-party}/`.
+  `packages/{git,stable,core,misc}/` (the `packages/third-party/` category
+  was retired 2026-09-27; `zen-browser-pgo` and `bettbox` relocated to
+  `packages/stable/` as pure renames).
 - `config/topology.conf` is the ONE topology source: one record per package,
   `id|path|groups|edges[|tags]` — the only id→path binding, group membership
-  (comma list ⊂ the six names, roster stated once in `_GROUP_NAMES`), local
+  (comma list ⊂ the five names `git,stable,core,misc,app`, roster stated once
+  in `_GROUP_NAMES`), local
   build-order edges (a trailing empty `edges` field is the deliberate no-edge
   statement; records ALWAYS exist, so the old map⊆deps asymmetry is gone),
-  and optional `abi=must`/`abi=should` coupled-batch tags. The loader rejects
+  and optional `abi=must`/`abi=should` coupled-batch tags plus at most one
+  `app-cluster=<name>` prompt-cluster tag (charset `[A-Za-z0-9._+-]+`,
+  comma-joined with `abi=` tags). The loader rejects
   malformed records by naming the offender and line (duplicate ids included)
   and validates records, roster, graph and a full topological sort on EVERY
   invocation. Tooling reads topology through the `--topology` data channel,
@@ -283,11 +289,24 @@
   recipe** (`SRCDEST`/`PKGDEST` default to `$startdir`), which is why the
   recipe directories carry ignore rules; both classes are ignored runtime
   state.
-- The logical groups are `git`, `stable`, `core`, `misc`, `third-party` and
-  `app` (the optional-applications group: on a TTY a build/`-n` run prompts to
+- The logical groups are `git`, `stable`, `core`, `misc` and `app` (the
+  optional-applications group: on a TTY a build/`-n` run prompts to
   multi-select them, non-TTY runs take the whole list, and app members are
-  leaf builds whose dependency chain is never expanded). Membership counts are
-  deliberately not recorded here — they are hand-maintained and the first
+  leaf builds whose dependency chain is never expanded). `app` membership is
+  EXCLUSIVE — wiring a record into `app` replaces its previous group (22
+  members as of the 2026-09-27 wiring; `qt5ct`/`qt6ct` thereby left `core`,
+  while their `abi=must` tags are untouched — a Qt ABI batch must name them
+  explicitly, since `-g core`'s solo dispatch no longer rebuilds them). A
+  record's `app-cluster=<name>` tag collapses members into ONE prompt row
+  (six fcitx-family records show as `fcitx5 [member ids]`, toggled together;
+  "N checked" counts rows) and is presentation only — packages stay separate
+  in `-l`, the run record, ranges and lanes, and the tag is inert outside the
+  app prompt. The `third-party` group was retired 2026-09-27 (`-g
+  third-party`/`third_party`/`3rdp` now fail the unknown-group path); the
+  audit's legacy `.3rdP/` path-drift regex intentionally remains — it scans
+  for pre-Git filesystem paths, not group names. Membership counts are
+  deliberately not recorded here (the 22 above is dated history, not a
+  maintained figure) — they are hand-maintained and the first
   thing a batch invalidates — so `fish build-all.fish --list` is the source
   of truth. `core` intentionally overlaps stable
   packages whose ABI must be rebuilt and installed as one batch.
@@ -652,6 +671,16 @@ zero baked `.gcda` destinations — `ctest`'s single hit is the `/*.gcda` glob
 constant, not a baked path).
 
 ## 6. Pitfall digest (full details: NOTE.md sections of same dates)
+
+- **fish autoloaded a user-level `rm` wrapper and hung every run** (2026-09-27,
+  host state, not repo code): fixture and builder runs hung at ~100 % CPU
+  before doing any work; pristine HEAD hung identically, exonerating the repo —
+  the user-level fish config autoloaded a trash-cli-backed `rm` wrapper that
+  spun on any invocation, and both the builder and the fixtures call `rm`
+  early. When a run hangs with no output, suspect the shell environment first
+  and re-test at HEAD before debugging repo code; reproduce with
+  `XDG_CONFIG_HOME=$(mktemp -d)` so fish falls back to the system `rm`. Keep
+  host specifics out of the repo docs.
 
 - **A quoted fish array slice collapses to ONE argument** (2026-09-26,
   install/lane refactor): `"$argv[2..-1]"` joins the slice into a single

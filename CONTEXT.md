@@ -21,7 +21,7 @@ group membership, build-order edges, and coupled-batch tags.
 _Avoid_: map entry, dependency record (names for the pre-2026-09-26 four-file split)
 
 **Group**:
-A logical scheduling class (git, stable, core, misc, third-party, app) with
+A logical scheduling class (git, stable, core, misc, app) with
 scheduling semantics such as core-runs-alone and app-is-leaf. Deliberately
 overlaps physical layout.
 _Avoid_: category (that is the directory layout)
