@@ -37,6 +37,8 @@ rather than granting it.
 | `docs/portability.md` | Intensity profiles and their formulas, `GSA_*` overrides, CPU-tuning policy. |
 | `CONTRIBUTING.md` | Recipe-change checklist, trimming standard, source-verification rules. |
 | `SECURITY.md` | Trust model (a recipe executes arbitrary shell), safe-operation rules, what must never be committed. |
+| `CONTEXT.md` | The project's own vocabulary: recipe, topology record, build-order edge, coupled batch, lane, run record, continuation, deferral — each with the terms to avoid (e.g. "dependency" means a pacman dependency, never a build-order edge). |
+| `docs/adr/` | One decision record per seam that fought back: the shared PGO gate (`0001`), the one-record topology (`0002`), the run record (`0003`). Read the matching ADR before re-opening a decision. |
 
 `docs/NOTE.md` is the long chronological file (newest section first): grep a
 dated section rather than reading it end to end, and remember its naming-history
@@ -74,7 +76,8 @@ bash tests/run-all.sh --serial       # one at a time (debugging a flaky fixture)
 bash tests/recipe-sources.sh         # run one fixture directly
 ```
 
-`tests/run-all.sh` discovers fixtures recursively (excluding `tests/assets/`)
+`tests/run-all.sh` discovers fixtures recursively (excluding `tests/assets/`
+and `tests/lib/`)
 and needs no edit for a new one. It runs them in parallel by default, which is
 sound because every fixture is non-mutating and `$TMPDIR`-scoped, so none writes
 what another reads — **a new fixture must keep that true** (bug in the fixture,
@@ -109,7 +112,14 @@ Scheduler, install and cleanup fixtures never exercise the real repository.
 They build a synthetic workspace under `$TMPDIR` — copy `build-all.fish`, then
 write a minimal `config/` (a hand-written `topology.conf` and
 `build-defaults.conf`, one-line `PKGBUILD`s) — and prefix `PATH` with
-stub `makepkg`/`sudo`/`pacman` executables. The fixture drives those stubs
+stub `makepkg`/`sudo`/`pacman` executables. Shared skeleton/stub synthesis
+lives in `tests/lib/fixture-lib.bash`, which is **sourced, never executed**
+(`.bash` extension plus a `lib/` exclusion in `run-all.sh` keep it out of the
+battery — both are load-bearing); it covers workspace synthesis and trivial
+byte-identical stubs only. Everything oracle-shaped — assertions, `fail()`
+prefixes, the `( subshell )` section structure, scenario-specific stubs such
+as fake `date` or marker-flipping pacman — stays inline in the fixture that
+gives it meaning. Fixtures drive those stubs
 through variables the *stub* defines, not the builder: `GSA_FAKE_SUDO_MODE`,
 `GSA_FAKE_SUDO_STATE`, `GSA_FAKE_SUDO_LOG`, `GSA_FAKE_BUILD_SECONDS`,
 `GSA_FAKE_MARKER_DIR`, `GSA_FAIL_PACKAGE`, `GSA_SPAWN_LOG`.
@@ -147,7 +157,9 @@ cleanup. There is no CI workflow and no compilable language here — fixtures an
 `tools/` is deliberately outside the battery: host-side diagnostics that are
 heavy and mutating, so `tests/run-all.sh` never discovers them. Each one's
 contract is still fixture-pinned at reduced scale — `tools/go-modcache-check.sh`
-by `tests/modcache-check.sh`. Re-list the directory (`ls tools/`) rather than
+by `tests/modcache-check.sh`, `tools/provides-audit.sh` by
+`tests/provides-audit.sh`, `tools/nvcheck.sh` by `tests/nvcheck-aggregator.sh`.
+Re-list the directory (`ls tools/`) rather than
 trusting a remembered inventory.
 
 Agent shells inject git config (`safe.bareRepository=explicit`), which breaks
@@ -217,9 +229,20 @@ the three wipe strengths are `-c`/`--clean` (`src/`, `pkg/`, `build/` and the
 archive of each selected package, run before the skip check so it forces a
 rebuild), `-cc`/`--cleanup` (every built archive in the workspace) and
 `-ccc`/`--nuclear` (pulled sources as well).
-Installs run in the lanes as `sudo -n`, so the dispatcher keeps a credential
-warm and refuses to start a long run when installs are impossible; `sudo fish
-build-all.fish …` starts a root supervisor while `makepkg` still runs as the
+Installs run in the lanes through **one** pipeline — `install_plan` computes
+silent decision rows (`install`/`skip`/`refuse`/`noop`) once, and only
+`install_execute` renders and runs the single `pacman -U` transaction; `-ia`
+shares the same pipeline in force mode (no same-version skip). The hidden
+`--install-decide <checked|force>` seam prints those plan rows without
+touching pacman, sudo, flock or makepkg (rc 0 plan / 1 refusal / 2 bad usage)
+— that is the fixture entry point for install behaviour. All privilege
+escalation is `sudo -n` and the builder **never prompts** (2026-09-26): the
+preflight refuses to start an `-i` run when installs cannot succeed
+(`sudo cannot install non-interactively`), and a credential lost mid-run stops
+dispatch exactly once (`sudo credential expired and cannot be refreshed`)
+with a non-zero exit — a TTY changes nothing. A system pacman database lock
+is never deleted automatically. `sudo fish build-all.fish …` starts a root
+supervisor while `makepkg` still runs as the
 invoking user. Interactive terminals get a dashboard, pipes get plain output —
 parse the latter.
 
@@ -268,8 +291,21 @@ Consequences worth internalising:
   mandatory (a bare invocation never starts a rebuild), `-i` installs each
   package before its dependents compile, core packages run alone with a
   separate memory-aware job budget, and a failure stops new dispatches while
-  draining existing lanes. A run whose dispatch stopped early must exit
-  non-zero.
+  draining existing lanes. A *deferral* is not a failure: a lane that exits 99
+  (`lane_outcome_defer`) has its package parked — dependents wait
+  (`waits on a deferred package`), dispatch continues — but the run still
+  exits non-zero. Lane outcomes carry a named vocabulary
+  (`lane_outcome_{ok 0, failed 1, defer 99, lost 125, hup 129, int 130, term
+  143}`) and cross the process boundary only through the
+  `lane_result_encode`/`decode` codec pair.
+- The **run record** (ADR `0003`) is one builder-internal data structure —
+  plan, per-package outcome rows, and the continuation — computed once and
+  rendered three ways: the streaming dashboard, the prose summary, and an
+  additive machine-checkable block on stdout (default-on, also emitted on the
+  interrupt path). It is not persisted to `.state/`, and there is no opt-in
+  flag. Continuation arguments come from one flag-rule table with an explicit
+  not-mirrored list; ambient env knobs (`GSA_TARGET_CPU`, `GSA_STATE_DIR`) are
+  warned about, not mirrored. Fixtures assert on the record, not on prose.
 - The source-sharing seam is between a recipe's VCS source name and its runtime
   mirror. A missing canonical mirror is valid on a clean checkout — the first
   build populates it. A populated non-Git directory is never silently
@@ -277,9 +313,12 @@ Consequences worth internalising:
 - Resource planning is entirely host-derived; the profiles and formulas are in
   `docs/portability.md`. Never predict a plan — read the `parallelism:` line the
   builder prints. `--lanes`/`--jobs` override `--intensity`.
-- `build-all.fish` is one ~4 100-line fish program (4 165 lines) with no includes, so there
+- `build-all.fish` is one ~6 500-line fish program (6 491 lines as of
+  2026-09-27) with no includes, so there
   is no module to look for: every helper, the lane dispatcher, and the
   `INTENSITY_*` constants (inside `configure_intensity`) live in that file.
+  The one shared code module in the repo is `lib/pgo.sh`, and it is sourced by
+  recipes, not by the builder.
 
 ## Conventions
 
@@ -291,7 +330,17 @@ must also appear in the host's `/etc/pacman.conf` `IgnorePkg` closure —
 cumulative repeated `IgnorePkg =` lines, all inside `[options]` (a line inside
 a repo section is silently dropped). Verify by unioning `pkgbase`+`pkgname[]`
 from every recipe and diffing against `pacman-conf IgnorePkg | sort -u` with
-`comm -23`; empty output means covered. A new edge's reason belongs in
+`comm -23`; empty output means covered. This rule is linted: `--audit`
+includes the recipe-contract lints (provides-versioning, the purged-tools
+denylist, and the IgnorePkg closure — read the way pacman reads
+`/etc/pacman.conf`, with repeated `IgnorePkg` lines inside `[options]`
+cumulative), report-only, and the hidden `--audit-lint <name> [pacman-conf]`
+seam runs one lint at a time (`tests/recipe-contract.sh` pins both); the
+audit's exit status stays 0, so read the report. Per-recipe exceptions are
+data: a recipe's own `FETCHED-ONLY` file (one source-basename glob per line)
+excuses fetched-at-build-time names from `tests/recipe-sources.sh`'s
+missing/untracked checks — never a name-matched branch in a repo-wide walker.
+A new edge's reason belongs in
 `docs/NOTE.md`, and a changed operational contract in `docs/MEMORY.md`.
 
 **Meson staleness.** Re-running `meson setup` over an existing build directory
@@ -351,18 +400,37 @@ argument cache rather than only recompiling — Meson's `meson setup
 install prefix and the dependency selection) — are documented in
 `docs/build-guide.md` and `MEMORY.md` §4/§6.
 
-The instrumentation check needs **both predicates and both seams**. Inside
-`package()`, before makepkg strips, `readelf -sW <lib> | grep -E
-'__gcov_|__llvm_profile'` must be empty; against anything installed or already
-stripped that same command reports a false clean, so use `strings -a <bin> |
-grep -c '\.gcda'` there — the baked path is what survives stripping. A defensive
-call inside a shell function must end in `|| return 1`, because bash returns the
-*last* command's status and a bare mid-function call prints its error and
-passes anyway (fish behaves the same). The invariant is enforced from the
-builder rather than per recipe: `verify_pgo_payload()` in `build-all.fish`
-refuses to install an archive from a `-fprofile-generate` recipe that still
-carries a baked `.gcda` destination, because most recipes instrument and only a
-handful guard themselves.
+The instrumentation check needs **both predicates and both seams**, and the
+per-recipe half is one shared module: `lib/pgo.sh`, sourced from each PGO
+recipe as `source "$startdir/../../../lib/pgo.sh"` and called as the **last**
+statement of every `package*` function (a split recipe gates each
+`package_*`'s own `$pkgdir`):
+
+```sh
+verify_no_profile_instrumentation "$pkgdir" [extra-literal...]
+```
+
+The gate is fatal by design — `exit 1` on any hit, which kills makepkg's
+function subshell. Do not "soften" a call with `|| return 1`: bash returns the
+*last* command's status, so a mid-function call whose failure a later command
+overwrites is silently discarded — that discarded-status convention is exactly
+what the shared gate replaced. Inside `package()`, before makepkg strips, the
+symbol predicate is the check
+(`readelf -sW <lib> | grep -E '__gcov_|__llvm_profile'` must be empty);
+against anything installed or already stripped that same command reports a
+false clean, so the module also uses the baked path
+(`strings -a <bin> | grep -c '\.gcda'`) — what survives stripping.
+`tests/pgo-lib.sh` pins the module's fatal semantics (every assertion runs it
+in a subshell) and the clean-checkout fact that each consuming PKGBUILD
+resolves the tracked path. A new PGO family extends **this module** and earns
+a fixture; recipes only ever call it.
+
+The invariant is also enforced from the builder as the fail-closed backstop:
+`pgo_payload_refusals` in `build-all.fish` (formerly `verify_pgo_payload`) is
+a step of the one install pipeline, emitting silent `refuse pgo-*` plan rows
+that abort before any archive from a `-fprofile-generate`/`-Cprofile-generate`
+recipe carrying a baked `.gcda`/`.profraw` destination can be installed —
+because most recipes instrument and only a handful guard themselves.
 
 The builder exports `GSA_BUILD_JOBS` to every lane and rewrites `MAKEFLAGS`/
 `NINJAFLAGS` without discarding the caller's other flags, so a recipe that
