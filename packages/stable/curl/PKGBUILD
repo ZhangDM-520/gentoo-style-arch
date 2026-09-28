@@ -207,7 +207,6 @@ package_libcurl-gnutls() {
   rm "${pkgdir}"/usr/lib/libcurl.{a,so}*
   ln -s libcurl-gnutls.so.4 "${pkgdir}"/usr/lib/libcurl-gnutls.so
   for version in 3 4 4.0.0 4.1.0 4.2.0 4.3.0 4.4.0 4.5.0 4.6.0 4.7.0; do
-    ln -s libcurl-gnutls.so.4.8.0 "${pkgdir}"/usr/lib/libcurl.so.${version}
     ln -s libcurl-gnutls.so.4.8.0 "${pkgdir}"/usr/lib/libcurl-gnutls.so.${version}
   done
 

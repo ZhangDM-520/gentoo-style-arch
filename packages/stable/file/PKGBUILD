@@ -8,7 +8,7 @@ source "$startdir/../../../lib/pgo.sh"
 
 pkgname=file
 pkgver=5.48
-pkgrel=1
+pkgrel=1.1
 pkgdesc='File type identification utility'
 arch=('x86_64')
 license=('BSD-2-Clause-Darwin')

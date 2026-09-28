@@ -47,7 +47,11 @@ set -euo pipefail
 #      hand', '--no-sync' builds the committed version as-is), the recipe
 #      restored, makepkg never started — and the run DEFERS the recipe
 #      (parked with a named marker) instead of killing the dispatch, which
-#      tests/anchor-defer.sh pins end to end.
+#      tests/anchor-defer.sh pins end to end;
+#  14. a local pkgrel ahead of the repo is a DELIBERATE bump (a PGO wave marks
+#      its own revision, e.g. ripgrep's pkgrel 2 over the repo's 1) and is
+#      never rewritten back to the repo value — only a repo pkgrel actually
+#      ahead is synced (case 7's pkgrel-only variant pins that direction).
 #
 # All four collaborators (pacman, curl, updpkgsums, makepkg) are stubs on PATH,
 # so this runs with no network and never builds anything.
@@ -463,6 +467,10 @@ done
 # The pkgver variant must still have synced the version, or it proves nothing.
 grep -q "^pkgver=$repo_version$" "$(pkgfile "$fixture/static-pkgver")" \
     || fail 'the static-source variant did not sync the version, so it tested nothing'
+# The pkgrel-only variant must have adopted the repo's higher pkgrel — the
+# never-downgrade guard (case 12) only ever blocks the opposite direction.
+grep -q '^pkgrel=2$' "$(pkgfile "$fixture/pkgrel-only")" \
+    || fail 'a repo pkgrel ahead of the local one was not adopted'
 
 # ─── Case 7: an official file publishing two algorithms ─────────────────────
 # The sums for one file list do not line up flat: fish has a single source with
@@ -583,6 +591,38 @@ if [[ ! -s $dir/fake/makepkg_argv ]]; then
 fi
 if grep -q -- '--skipchecksums' "$dir/fake/makepkg_argv"; then
     fail '--no-sync still disabled checksum verification'
+fi
+
+# ─── Case 12: a local pkgrel ahead of the repo is a deliberate bump ─────────
+# ripgrep carries pkgrel 2 over the repo's 1: the Rust PGO wave changed the
+# build, so the recipe marks its own revision. Rewriting it back to the repo
+# value clobbered ripgrep 15.2.0-2 to 15.2.0-1 on 2026-09-28, re-stamping a
+# PGO build with the pre-PGO revision identity. pkgver is at parity here, so
+# there is nothing to sync at all.
+dir="$fixture/pkgrel-ahead"
+make_case_workspace "$dir" "$staged_version-1"
+sed -i 's/^pkgrel=1$/pkgrel=2/' "$(pkgfile "$dir")"
+set_official_srcinfo "$dir" "$staged_version" \
+    "	source = https://example.invalid/s1-$staged_version.tar.gz" \
+    "	sha256sums = $published_sha"
+set_delivery "$dir" "$published_payload"
+run_build "$dir" 'pkgrel-ahead' 0
+
+grep -q '^pkgrel=2$' "$(pkgfile "$dir")" \
+    || fail 'a local pkgrel ahead of the repo was downgraded back to the repo value'
+grep -q "^pkgver=$staged_version$" "$(pkgfile "$dir")" \
+    || fail 'pkgrel-ahead: pkgver moved although the repo carried it at parity'
+if [[ -e $dir/fake/curl_calls ]]; then
+    fail 'pkgrel-ahead: official checksums were fetched although nothing was synced'
+fi
+if [[ -s $dir/fake/updpkgsums_calls ]]; then
+    fail 'pkgrel-ahead: the sums were rewritten although source=() did not move'
+fi
+if [[ ! -s $dir/fake/makepkg_argv ]]; then
+    fail 'pkgrel-ahead: the build was refused instead of being built'
+fi
+if [[ -s $dir/state/synced.list ]]; then
+    fail 'pkgrel-ahead: the run witness lists a recipe the sync must not have touched'
 fi
 
 printf 'stable-sync fixture: PASS\n'

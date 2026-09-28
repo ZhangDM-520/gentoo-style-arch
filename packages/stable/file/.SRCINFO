@@ -1,7 +1,7 @@
 pkgbase = file
 	pkgdesc = File type identification utility
 	pkgver = 5.48
-	pkgrel = 1
+	pkgrel = 1.1
 	url = https://www.darwinsys.com/file/
 	arch = x86_64
 	license = BSD-2-Clause-Darwin

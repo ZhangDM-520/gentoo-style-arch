@@ -1,7 +1,7 @@
 pkgbase = ffmpegthumbnailer
 	pkgdesc = Lightweight video thumbnailer that can be used by file managers
 	pkgver = 2.3.1
-	pkgrel = 1
+	pkgrel = 1.1
 	url = https://github.com/dirkvdb/ffmpegthumbnailer
 	arch = x86_64
 	license = GPL-2.0-or-later

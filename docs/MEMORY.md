@@ -876,15 +876,20 @@ constant, not a baked path).
   before being trusted — reverting the sum map, the `name::` rule, the source
   diff, the VCS branch, the tag fallback, the refresh-only branch or the
   defer switch each makes scenarios fail exactly where they should.
-  The same sync OWNS `pkgver`/`pkgrel` on `packages/stable` recipes: it
-  rewrites them to the repo's values EXACTLY and in BOTH directions on every
-  loader run (2026-09-26 campaign: `openshadinglanguage` was rewritten
-  1.2→1.1 *down* to the repo's 1.15.3.0-1.1, `wireplumber` 0.5.17-1.1→2.1),
-  so a local `pkgrel` bump on a stable recipe is clobbered before it can
-  even be built. The standing convention is to align committed values to the
-  repo (campaign decision: OSL `pkgrel=1.1`, wireplumber `0.5.17-2.1`)
-  rather than fight the sync; a deliberate local bump needs `--no-sync` and
-  should expect the mismatch to stay visible until the repo catches up.
+  The same sync OWNS `pkgver`/`pkgrel` on `packages/stable` recipes, and since
+  2026-09-28 it never *downgrades* them: a repo bump still moves forward
+  (`wireplumber` 0.5.17-1.1→2.1), a `pkgver` move resets `pkgrel` to the
+  repo's, but at equal `pkgver` a local `pkgrel` **ahead** of the repo is a
+  deliberate bump and survives (the 2026-09-28 sync clobbered ripgrep's PGO
+  `pkgrel=2` back to the repo's 1 on every loader run, silently re-stamping a
+  three-phase PGO build with the pre-PGO revision identity — and the
+  2026-09-26 campaign stance, "rewrite EXACTLY and in BOTH directions; align
+  committed values to the repo rather than fight the sync; a deliberate local
+  bump needs `--no-sync`", is superseded: `--no-sync` also disables version
+  tracking, so it cannot carry a standing bump, and pkgrels never move down at
+  a fixed `pkgver` in the repos, which makes "local ahead" unambiguous — a
+  deliberate bump, never staleness). `tests/stable-sync-checksums.sh` case 12
+  pins the kept direction and its pkgrel-only variant pins the adopted one.
 
 - **Sources and checksums in a .SRCINFO line up only within one algorithm**
   (2026-09-20, same work): Arch publishes the same file list once *per*

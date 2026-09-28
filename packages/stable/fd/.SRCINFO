@@ -1,7 +1,7 @@
 pkgbase = fd
 	pkgdesc = Simple, fast and user-friendly alternative to find
 	pkgver = 10.5.0
-	pkgrel = 3
+	pkgrel = 3.1
 	url = https://github.com/sharkdp/fd
 	arch = x86_64
 	license = MIT OR Apache-2.0

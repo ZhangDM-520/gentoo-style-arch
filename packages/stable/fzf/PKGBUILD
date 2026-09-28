@@ -14,7 +14,7 @@ source "$startdir/../../../lib/pgo.sh"
 
 pkgname=fzf
 pkgver=0.74.4
-pkgrel=1
+pkgrel=1.1
 pkgdesc='Command-line fuzzy finder'
 arch=('x86_64')
 url='https://github.com/junegunn/fzf'

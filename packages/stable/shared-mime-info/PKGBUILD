@@ -2,7 +2,7 @@
 
 pkgname=shared-mime-info
 pkgver=2.5.1
-pkgrel=2
+pkgrel=2.1
 pkgdesc="Freedesktop.org Shared MIME Info"
 arch=('x86_64')
 license=('GPL-2.0-or-later')

@@ -36,6 +36,68 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-09-28 — real build of the utility batch: bare-repo VCS, keyring imports, the curl split conflict, and the sync pkgrel downgrade
+
+Symptom — the first real `--no-deps -i` pass over the 17 new stable recipes
+hit four failure classes in sequence: (1) `fatal: cannot use bare repository …
+(safe.bareRepository is 'explicit')` on every git-source recipe (libnotify,
+desktop-file-utils, xdg-user-dirs, fd, fzf); (2) `unknown public key` for IDs
+makepkg could not find although every `validpgpkeys` entry was present
+(libnotify's `40F65066…`, playerctl's `564F0717…`); (3) `pacman -U` of the curl
+three-way split in ONE transaction refused 10 file conflicts —
+`/usr/lib/libcurl.so.4 exists in both 'curl' and 'libcurl-gnutls'`, plus
+`libcurl.so.3`/`4.x.y` in both `libcurl-compat` and `libcurl-gnutls` — and the
+builder correctly stopped dispatch ("later packages would build against the
+wrong system state"); (4) quietly, the loader sync rewrote ripgrep's deliberate
+PGO `pkgrel=2` down to the repo's `1` before it built, so the three-phase PGO
+build came out stamped `15.2.0-1`.
+
+Root cause — (1) the agent-shell git hardening breaks makepkg VCS operations
+(documented remedy `GIT_CONFIG_COUNT=0`); (2) `validpgpkeys` lists *acceptable*
+keys, it does not import them — the error IDs were subkeys of primaries the
+build user's keyring lacked; (3) `package_libcurl-gnutls()` in our curl recipe
+created an extra `libcurl.so.{3,4,4.0.0…4.7.0}` symlink set Arch does not: the
+two split functions were otherwise byte-identical to Arch's, and Arch's gnutls
+split ships only `libcurl-gnutls.so.*` (compared against the official
+gitlab PKGBUILD). The extra set collides with `curl`'s real `libcurl.so.4` and
+with `libcurl-compat`'s compat symlinks; (4) `sync_stable_version`'s
+never-downgrade guard covered `pkgver` only — at equal `pkgver` it rewrote
+`pkgrel` in both directions (the 2026-09-26 "rewrite EXACTLY" contract), which
+cannot carry a PGO wave's standing revision mark.
+
+Fix — (2) imported all 12 `validpgpkeys` fingerprints from
+keyserver.ubuntu.com (5 new, 7 already present; importing a primary brings the
+subkeys the errors named); (3) deleted the one extra `ln -s` line and
+repackaged with `makepkg -Rf` — only packaging had changed and the three
+`src/build-curl*` trees were intact, so no rebuild and no retrain — then
+verified the three archives' `.so` partitions pairwise with `comm`: zero
+overlap, `curl` owns `libcurl.so{,.4,.4.8.0}` and the splits only their own
+symlink sets; (4) the sync now compares `pkgrel` with `vercmp` at equal
+`pkgver` and adopts only a repo value actually ahead; ripgrep's `pkgrel=2`
+restored and rebuilt (`15.2.0-2` installed). `tests/stable-sync-checksums.sh`
+gained case 12 (local pkgrel ahead kept) plus a forward assertion on its
+pkgrel-only variant (repo ahead still adopted).
+
+Validation — `bash tests/stable-sync-checksums.sh` green (case 12 fails
+against the old guard, so it is not vacuous); full battery green (42/42,
+`recipe-sources` included); `fish
+build-all.fish --audit` (no lint findings, no baked PGO payloads across 14 669
+inspected files), `--list` and the git/stable/core dry-runs green;
+resume run `curl fzf ripgrep` ok (curl skip-installed from the repackaged
+archives, fzf forward-synced to `0.74.4-1.1`); `pacman -Qi` sweep shows all 19
+package names (17 recipes; curl splits in three) installed and `pacman -Ql` of
+the three curl packages matches the designed partition.
+
+Durable rule — a split package ships its own soname set and never re-exports
+the base library's names; verify file partitions with `tar -tf` + `comm`
+before any multi-archive `-i` transaction. When only `package*()` changes,
+`makepkg -Rf` repackages from existing build trees. `validpgpkeys` is
+necessary but not sufficient: the fingerprints must be in the build user's
+keyring, and primaries bring the subkeys the errors name. The stable sync
+never downgrades `pkgrel` at `pkgver` parity — the 09-26 "both directions"
+contract is superseded (MEMORY updated). An `-i` conflict stops the dispatch
+on purpose; fix, then resume the remainder with `-s`.
+
 ## 2026-09-28 — utility batch (17 leaf recipes) and the C-autotools / Go / ripgrep PGO tiers
 
 Symptom — the 2026-09-27 `trash-put` hang showed the set ships no trash-cli

@@ -59,9 +59,13 @@ leave logs that poison the next one.
 `packages/stable` recipes track the Arch repository version and are updated
 automatically before they build: the builder reads the repo's version with
 `pacman -Si` and rewrites `pkgver`/`pkgrel` in the recipe **in place** when the
-repo is newer (never a downgrade; a `pkgver()`-driven recipe is skipped
-entirely). The edit is left in the working tree for you to commit, and the
-committed `.SRCINFO` and sums stay stale until you refresh and commit them.
+repo is newer. A downgrade is never written: a higher content `pkgver` is kept,
+and at equal `pkgver` a local `pkgrel` **ahead** of the repo is a deliberate
+bump (a PGO wave marks its own revision — ripgrep's `pkgrel=2` over the repo's
+1) and is kept too; only a repo `pkgrel` actually ahead is adopted, and a
+`pkgver` move resets `pkgrel` to the repo's. A `pkgver()`-driven recipe is
+skipped entirely. The edit is left in the working tree for you to commit, and
+the committed `.SRCINFO` and sums stay stale until you refresh and commit them.
 
 A rewrite that moves **`pkgver`** can move the `source=()` URLs with it, so the
 committed sums can end up describing the previous version and `makepkg` would

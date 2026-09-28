@@ -1,7 +1,7 @@
 pkgbase = libnotify
 	pkgdesc = Library for sending desktop notifications
 	pkgver = 0.8.8
-	pkgrel = 1
+	pkgrel = 1.1
 	url = https://gitlab.gnome.org/GNOME/libnotify
 	arch = x86_64
 	license = LGPL-2.1-or-later

@@ -793,7 +793,7 @@ end
 # ─── Sync stable package version with Arch repos ─────────────────────────────
 # Return contract (build_package switches on it):
 #   0 = nothing to do — not a stable recipe, already current, or the repo
-#       version is a downgrade
+#       version/pkgrel is a downgrade
 #   1 = rewritten, and pkgver moved
 #   2 = rewrite failed
 #   3 = rewritten, but only pkgrel/epoch moved
@@ -873,8 +873,25 @@ function sync_stable_version -a pkg_path
     if test "$vercmp_res" -gt 0
         return 0
     end
-    if test "$vercmp_res" -eq 0 -a "$cur_pkgrel" = "$repo_pkgrel"
-        return 0
+    if test "$vercmp_res" -eq 0
+        if test "$cur_pkgrel" = "$repo_pkgrel"
+            return 0
+        end
+        # pkgver is at repo parity, so only a repo pkgrel that is actually
+        # AHEAD is a sync worth making. A local pkgrel ahead of the repo is a
+        # deliberate bump (e.g. ripgrep's Rust PGO wave carries pkgrel 2 over
+        # the repo's 1), not staleness — rewriting it back to the repo value
+        # clobbered ripgrep 15.2.0-2 to 15.2.0-1 on 2026-09-28, silently
+        # re-stamping a PGO build with the pre-PGO revision identity. Same as
+        # the pkgver guard above, the ordering rests on vercmp; without it the
+        # inequality case falls through to the historical rewrite behaviour.
+        set -l pkgrel_cmp 0
+        if type -q vercmp
+            set pkgrel_cmp (vercmp "$cur_pkgrel" "$repo_pkgrel")
+        end
+        if test "$pkgrel_cmp" -ge 0
+            return 0
+        end
     end
 
     if test "$_BUILD_QUIET" != "1"
