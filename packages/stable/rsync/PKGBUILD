@@ -1,0 +1,178 @@
+# Maintainer: Christian Hesse <mail@eworm.de>
+# Maintainer: T.J. Townsend <blakkheim@archlinux.org>
+
+# Shared PGO payload gate — one implementation in lib/pgo.sh, called at the
+# end of package(). A missing module fails at parse time on purpose.
+source "$startdir/../../../lib/pgo.sh"
+
+pkgname=rsync
+pkgver=3.5.1
+pkgrel=1
+pkgdesc='A fast and versatile file copying tool for remote and local files'
+arch=('x86_64')
+url='https://rsync.samba.org/'
+license=('GPL-3.0-or-later')
+depends=('acl' 'libacl.so' 'lz4' 'openssl' 'popt' 'xxhash' 'libxxhash.so'
+         'zlib' 'zstd')
+optdepends=('python: for rrsync')
+makedepends=('python-commonmark')
+backup=('etc/rsyncd.conf')
+validpgpkeys=('0048C8B026D4C96F0E589C2F6C859FB14B96A8C5'  # Wayne Davison <wayned@users.sourceforge.net>
+              '9FEF112DCE19A0DC7E882CB81BB24997A8535F6F'  # Andrew Tridgell <andrew@tridgell.net
+              'C0E1054505704F757D925AB26A64E8AA2EFBCF5D') # Zen Dodd <mail@steadytao.com>
+
+# Release tarball (Arch pins the git tag instead), detached-signed upstream.
+source=("https://github.com/RsyncProject/rsync/releases/download/v${pkgver}/rsync-${pkgver}.tar.gz"{,.asc}
+        'rsyncd.conf')
+sha256sums=('c55f9c9dc10fb8bec397b399a0fdded53cc9a2d8e30891bb0d63724d25c37bef'
+            'SKIP'
+            '733ccb571721433c3a6262c58b658253ca6553bec79c2bdd0011810bb4f2156b')
+
+prepare() {
+  cd "$pkgname-$pkgver"
+
+  # For historic reasons we install the systemd unit as `rsyncd.*`, instead of
+  # just `rsync.*`. Let's make it conflict as expected with these names.
+  sed -i '/^Conflicts=/s|rsync.service|rsyncd.service|' packaging/systemd/rsync.socket
+}
+
+build() {
+  cd "$pkgname-$pkgver"
+
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  local _conf_args=(
+    --prefix=/usr
+    --enable-ipv6
+    --disable-debug
+    --with-rrsync
+    --with-included-popt=no
+    --with-included-zlib=no
+  )
+
+  # PGO: instrument -> train -> use (C-autotools tier).
+  # CFLAGS/LDFLAGS bake into the generated Makefile at ./configure time, so
+  # every phase below re-runs ./configure and then make clean — make clean
+  # alone never re-bakes flags. -fprofile-generate=<dir> and
+  # -fprofile-use=<dir> must name the SAME directory: profiles are looked up
+  # as <dir>/<mangled-object-path>.gcda, so a bare generate paired with
+  # use=<dir> misses every profile and silently compiles a profile-less build.
+  local _pgo_dir="$PWD/pgo-profiles"
+  mkdir -p "$_pgo_dir"
+  local _final_cflags="$CFLAGS"
+  local _final_ldflags="$LDFLAGS"
+
+  # Phase 1 (instrument) drops -flto: generate-mode bookkeeping and LTO
+  # whole-program codegen interact badly (rsync has a history of LTO
+  # breakage — Fedora rhbz#1898912), and the Rust family drops LTO for the
+  # same reason. Phase 2 restores the host flags untouched: measured
+  # 2026-09-28 on GCC 17, LTO + profile-use builds and runs fine, so the
+  # shipped build is LTO + profile-used and the plain (LTO-only) fallback
+  # below is the rhbz#1898912 escape hatch if that ever regresses.
+  local _gen_cflags="" _gen_ldflags="" _flag
+  for _flag in $_final_cflags; do
+    case "$_flag" in
+      -flto*) ;;
+      *) _gen_cflags+=" $_flag" ;;
+    esac
+  done
+  for _flag in $_final_ldflags; do
+    case "$_flag" in
+      -flto*) ;;
+      *) _gen_ldflags+=" $_flag" ;;
+    esac
+  done
+
+  # Phase 1: instrumented build.
+  export CFLAGS="${_gen_cflags# } -fprofile-generate=$_pgo_dir"
+  export LDFLAGS="${_gen_ldflags# } -fprofile-generate=$_pgo_dir"
+  ./configure "${_conf_args[@]}"
+  make
+
+  # Training run: the testsuite first (broadest coverage), then a local
+  # tree-copy loop so the flist/generator/receiver/cleanup paths see repeated
+  # full and incremental passes. A failing trainer is tolerated — the floor
+  # guard below turns thin profiles into a plain build.
+  make test || true
+  rm -rf pgo-train-src pgo-train-dst
+  mkdir -p pgo-train-src/sub
+  local _i
+  for _i in $(seq 1 200); do
+    printf 'pgo training %d\n' "$_i" > "pgo-train-src/f$_i.txt"
+  done
+  ./rsync -a pgo-train-src/ pgo-train-dst/ >/dev/null 2>&1 || true
+  ./rsync -a --delete pgo-train-src/ pgo-train-dst/ >/dev/null 2>&1 || true
+  rm -rf pgo-train-src pgo-train-dst
+
+  # Floor guard: pgo_min_gcda ≈ the minimum distinct translation units the
+  # training must touch before a profile is worth trusting; at or below it
+  # the profile is too thin and the recipe falls back to a plain (LTO-only)
+  # build rather than shipping an empty-profile binary.
+  local pgo_min_gcda=20
+  local _gcda_count
+  _gcda_count="$(find "$_pgo_dir" -name '*.gcda' 2>/dev/null | wc -l)"
+  if (( _gcda_count < pgo_min_gcda )); then
+    warning "PGO produced only %d gcda files — rebuilding plain (LTO only)" "$_gcda_count"
+    export CFLAGS="$_final_cflags"
+    export LDFLAGS="$_final_ldflags"
+    ./configure "${_conf_args[@]}"
+    make clean
+    make
+  else
+    msg "PGO profile: %d gcda files — rebuilding with profile" "$_gcda_count"
+    # Phase 2: profile-used build. Tolerance flags are load-bearing:
+    # -Wno-error=missing-profile keeps a TU the training never ran (or a
+    # configure probe) a warning instead of a hard error;
+    # -Wno-error=coverage-mismatch downgrades the arc-count mismatch GCC
+    # otherwise errors on — those functions compile without profile data,
+    # everything else keeps the real profile, and the payload stays
+    # uninstrumented either way. No -fprofile-correction: the house pattern
+    # (cmake-git, glib2-git) does not use it.
+    export CFLAGS="$_final_cflags -fprofile-use=$_pgo_dir -Wno-error=missing-profile -Wno-error=coverage-mismatch"
+    export LDFLAGS="$_final_ldflags -fprofile-use=$_pgo_dir"
+    ./configure "${_conf_args[@]}"
+    if grep -q -- '-fprofile-generate' Makefile; then
+      error "phase-2 configure left -fprofile-generate in Makefile"
+      return 1
+    fi
+    make clean
+    make
+  fi
+}
+
+check() {
+  cd "$pkgname-$pkgver"
+
+  # check for IPv6 support
+  # https://gitlab.archlinux.org/archlinux/packaging/packages/rsync/-/commit/8936e33b245da170e7b5488b4ca35727ac9c4b68
+  if ./rsync -V | grep -q 'no IPv6'; then
+    echo 'Built without IPv6 support!' >&2
+    exit 1
+  fi
+
+  make test
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+
+  make DESTDIR="$pkgdir" install
+  # install support scripts to doc
+  for i in support/*; do
+    install -Dm0644 "$i" "$pkgdir/usr/share/doc/rsync/$i"
+  done
+  install -Dm0644 "tech_report.tex" "$pkgdir/usr/share/doc/rsync/tech_report.tex"
+  install -Dm644 ../rsyncd.conf "$pkgdir/etc/rsyncd.conf"
+  install -Dm644 packaging/systemd/rsync.service "$pkgdir/usr/lib/systemd/system/rsyncd.service"
+  install -Dm644 packaging/systemd/rsync.socket "$pkgdir/usr/lib/systemd/system/rsyncd.socket"
+  install -Dm644 packaging/systemd/rsync@.service "$pkgdir/usr/lib/systemd/system/rsyncd@.service"
+  # House rule: ship the license under /usr/share/licenses.
+  install -Dm644 COPYING "$pkgdir/usr/share/licenses/$pkgname/COPYING"
+
+  # Fatal shared gate (lib/pgo.sh) — last statement on purpose: nothing may
+  # be added to $pkgdir after the payload is verified.
+  verify_no_profile_instrumentation "$pkgdir"
+}

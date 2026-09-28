@@ -1,0 +1,67 @@
+# Maintainer: Alexander Epaneshnikov <alex19ep@archlinux.org>
+# Contributor: Eli Schwartz <eschwartz@archlinux.org>
+# Contributor: Pierre Neidhardt <ambrevar@gmail.com>
+# Contributor: Renato Garcia <fgarcia.renato@gmail.com>
+
+pkgname=trash-cli
+pkgver=0.26.9.14
+pkgrel=1
+pkgdesc="Command line trashcan (recycle bin) interface"
+arch=(any)
+url="https://github.com/andreafrancia/trash-cli"
+license=(GPL-2.0-only)
+depends=(
+  python
+  python-psutil
+  python-six)
+makedepends=(
+  python-build
+  python-installer
+  python-setuptools
+  python-shtab
+  python-wheel)
+checkdepends=(
+  python-flexmock
+  python-parameterized
+  python-pytest)
+# upstream tag 0.26.9.14 is lightweight/unsigned: checksum-pin only,
+# never --skippgpcheck. This version carries upstream e62b15d085
+# (HARD_ERRNOS) which fixes the unbounded-retry hang of 0.24.x.
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/$pkgver.tar.gz")
+sha256sums=('734f5433adeec2b21b1a0cdb3e113bb670cc5e109b9ca8a3ed34fa0b8159f1f9')
+
+prepare() {
+  cd "$pkgname-$pkgver"
+
+  # don't depend on thirdparty copies of the stdlib
+  find tests -type f -name "*.py" -exec \
+    sed -i 's/^import mock$/from unittest import mock/;s/from mock /from unittest.mock /;s/from mock.mock /from unittest.mock /' {} +
+}
+
+build() {
+  cd "$pkgname-$pkgver"
+
+  python -m build --wheel --no-isolation
+  # shtab completions for the whole command suite (trash-rm included)
+  for cmd in trash trash-put trash-list trash-restore trash-empty trash-rm; do
+    ./"$cmd" --print-completion bash > ./"$cmd-completion"
+    ./"$cmd" --print-completion zsh > ./"_$cmd-completion"
+  done
+}
+
+check() {
+  cd "$pkgname-$pkgver"
+
+  python -m pytest
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+
+  python -m installer --destdir="$pkgdir" dist/*.whl
+  for cmd in trash trash-put trash-list trash-restore trash-empty trash-rm; do
+    install -vDm644 ./"$cmd-completion" "$pkgdir/usr/share/bash-completion/completions/$cmd"
+    install -vDm644 ./"_$cmd-completion" "$pkgdir/usr/share/zsh/site-functions/_$cmd"
+  done
+  install -Dm644 COPYING "$pkgdir/usr/share/licenses/$pkgname/COPYING"
+}

@@ -1,0 +1,181 @@
+# Maintainer: Sven-Hendrik Haase <svenstaro@archlinux.org>
+# Maintainer: Carl Smedstad <carsme@archlinux.org>
+# Contributor: Maxim Baz <archlinux at maximbaz dot com>
+# Contributor: Andrew Gallant <jamslam@gmail.com>
+
+# Shared PGO payload gate — one implementation in lib/pgo.sh, called at the
+# end of package(). A missing module fails at parse time on purpose.
+source "$startdir/../../../lib/pgo.sh"
+
+pkgname=ripgrep
+pkgver=15.2.0
+# pkgrel 2: the Rust PGO wave (three-phase instrument/train/use in build());
+# the source tarball and its checksum are unchanged.
+pkgrel=2
+pkgdesc="A search tool that combines the usability of ag with the raw speed of grep"
+arch=('x86_64')
+url="https://github.com/BurntSushi/ripgrep"
+license=('MIT OR Unlicense')
+depends=(
+  'glibc'
+  'libgcc'
+  'pcre2'
+)
+# rust: compiler; llvm: llvm-profdata merges the PGO profiles.
+makedepends=('rust' 'llvm')
+# !debug: the profile-use phase strips symbols (-Cstrip=symbols) on purpose.
+# !lto: rust LTO is set per phase through CARGO_PROFILE_RELEASE_* below;
+#   makepkg's -flto must not leak into build.rs C compiles (pcre2-sys builds
+#   PCRE2 from C whenever the system library is not picked up).
+# strip: makepkg's own strip pass over whatever rustc left behind.
+options=(!debug strip !lto)
+source=("$url/archive/$pkgver/$pkgname-$pkgver.tar.gz")
+# Same source file Arch pins (their sha512sums entry); the archive is
+# verified against the identical tarball.
+sha256sums=('7605249d3eb0d5f170e3414498e3344e26b1e7a147aec518b57090b80036a562')
+
+prepare() {
+  cd "$pkgname-$pkgver"
+
+  cargo fetch --locked --target host-tuple
+}
+
+# The house Rust PGO family — three phases, the mold-git shape: an
+# instrumented build, training runs that exercise the instrumented rg, then a
+# profile-use rebuild with fat LTO + CGU=1. Upstream's [profile.release-lto]
+# profile is not adopted: LTO is driven per phase through
+# CARGO_PROFILE_RELEASE_* below.
+build() {
+  cd "$pkgname-$pkgver"
+
+  # External compiler wrappers must not interfere with the per-phase
+  # RUSTFLAGS (sccache especially: every phase changes RUSTFLAGS, which
+  # would invalidate the entire cache). Force it off.
+  unset RUSTC_WRAPPER
+
+  # Start from the RUSTFLAGS provided by the environment (e.g. CachyOS's
+  # /etc/makepkg.conf.d/rust.conf already sets "-C opt-level=3 -C target-cpu=native").
+  local _rustflags="${RUSTFLAGS:-}"
+
+  # ISA fallback for systems whose makepkg.conf does not tune the target.
+  if ! grep -q 'target-cpu' <<<"${_rustflags}"; then
+    _rustflags+=" -C target-cpu=native"
+  fi
+
+  # Fast linker: huge win for fat-LTO link times (build-time only, no output
+  # effect). Probed, not declared.
+  if command -v mold >/dev/null 2>&1; then
+    _rustflags+=" -C link-arg=-fuse-ld=mold"
+  fi
+
+  # Prevent warning: 'Package contains reference to $srcdir'
+  _rustflags+=" --remap-path-prefix=${srcdir}=/"
+
+  local _pgo_dir="${srcdir}/pgo-data"
+  # pgo_min_profraw: ≈ minimum distinct TUs the training phase touches before
+  # a profile is worth trusting (here: .profraw files, rustc's profiling
+  # format). 0 = any profile data at all is enough; 0 files means the
+  # instrumented rg never ran and we fall back to a plain fat-LTO build.
+  local pgo_min_profraw=0
+  rm -rf "${_pgo_dir}"
+  mkdir -p "${_pgo_dir}"
+
+  # Phase 1: instrumented build (LTO off — faster, and profiling does not
+  # need it; phase 3 turns LTO back on).
+  msg "PGO Phase 1: instrumented build"
+  RUSTFLAGS="${_rustflags} -Cprofile-generate=${_pgo_dir}" \
+    CARGO_PROFILE_RELEASE_LTO=false \
+    cargo build --frozen --release --features pcre2
+
+  # Phase 2: training runs. Upstream's benchsuite corpora are NOT in the
+  # source tree (benchsuite/ ships only the driver script; its corpora are
+  # multi-GB external downloads — a Linux fork clone and OpenSubtitles
+  # archives — that a package build must not pull), so the instrumented rg
+  # is trained over the extracted tree instead, with workloads shaped like
+  # benchsuite's own classes: literal, case-insensitive word, regex
+  # alternation, typed regex, unicode/PCRE2, JSON and count output — plus
+  # the directory walk and shell-completion codegen package() exercises.
+  # rg exits 1 on "no matches", so every run is status-guarded: a failed run
+  # costs only its samples and the floor guard below decides. target/ is
+  # excluded by upstream's own .gitignore.
+  msg "PGO Phase 2: training runs"
+  local _bin="target/release/rg"
+  export LLVM_PROFILE_FILE="${_pgo_dir}/rg-%p-%m.profraw"
+  "${_bin}" --version >/dev/null
+  "${_bin}" --help >/dev/null
+  "${_bin}" --files >/dev/null
+  "${_bin}" -F 'fn main' . >/dev/null || true
+  "${_bin}" -i -w 'unsafe' . >/dev/null || true
+  "${_bin}" -e 'TODO|FIXME|XXX|HACK' . >/dev/null || true
+  "${_bin}" -e 'fn [a-z_][a-z0-9_]*\(' --type rust . >/dev/null || true
+  "${_bin}" --engine pcre2 '(?i)\bfn\s+\w+\s*\(' . >/dev/null || true
+  "${_bin}" --json -e 'struct[[:space:]]' . >/dev/null || true
+  "${_bin}" --count-matches -e 'the' tests >/dev/null || true
+  "${_bin}" --generate complete-zsh >/dev/null
+  unset LLVM_PROFILE_FILE
+
+  # Floor guard + fallback: never ship a mis-instrumented binary. If the
+  # training runs produced no profile at all, rebuild plain (fat-LTO) from
+  # scratch rather than merging an empty profile.
+  local profraw_count
+  profraw_count=$(find "${_pgo_dir}" -name '*.profraw' 2>/dev/null | wc -l)
+  if (( profraw_count <= pgo_min_profraw )); then
+    warning "No profile data generated — falling back to a plain fat-LTO build"
+    RUSTFLAGS="${_rustflags} -Cstrip=symbols" \
+      CARGO_PROFILE_RELEASE_LTO=fat \
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 \
+      cargo build --frozen --release --features pcre2
+    rm -rf "${_pgo_dir}"
+    return 0
+  fi
+  msg "Profile data generated: $profraw_count .profraw files"
+
+  # Phase 3: merge the profiles, then rebuild with profile-use + fat LTO +
+  # CGU=1 (max cross-crate optimization; overrides upstream's thin-LTO
+  # [profile.release-lto] intent without editing Cargo.toml) + symbol
+  # stripping. The RUSTFLAGS differ from phase 1, so every unit recompiles —
+  # no instrumentation can survive into the final binary.
+  msg "PGO Phase 3: optimized build"
+  llvm-profdata merge -o "${_pgo_dir}/merged.profdata" "${_pgo_dir}"/*.profraw
+  RUSTFLAGS="${_rustflags} -Cprofile-use=${_pgo_dir}/merged.profdata -Cstrip=symbols" \
+    CARGO_PROFILE_RELEASE_LTO=fat \
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 \
+    cargo build --frozen --release --features pcre2
+  rm -rf "${_pgo_dir}"
+}
+
+check() {
+  cd "$pkgname-$pkgver"
+
+  cargo test --frozen --features 'pcre2'
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+
+  install -vDm755 -t "$pkgdir/usr/bin" target/release/rg
+
+  mkdir -vp "$pkgdir/usr/share/zsh/site-functions"
+  target/release/rg --generate complete-zsh > "$pkgdir/usr/share/zsh/site-functions/_rg"
+
+  mkdir -vp "$pkgdir/usr/share/bash-completion/completions"
+  target/release/rg --generate complete-bash > "$pkgdir/usr/share/bash-completion/completions/rg"
+
+  mkdir -vp "$pkgdir/usr/share/fish/vendor_completions.d"
+  target/release/rg --generate complete-fish > "$pkgdir/usr/share/fish/vendor_completions.d/rg.fish"
+
+  mkdir -vp "$pkgdir/usr/share/man/man1"
+  target/release/rg --generate man > "$pkgdir/usr/share/man/man1/rg.1"
+
+  install -vDm644 -t "$pkgdir/usr/share/doc/$pkgname" README.md
+  install -vDm644 -t "$pkgdir/usr/share/licenses/$pkgname" COPYING
+  install -vDm644 -t "$pkgdir/usr/share/licenses/$pkgname" LICENSE-MIT
+  install -vDm644 -t "$pkgdir/usr/share/licenses/$pkgname" UNLICENSE
+
+  # Fatal shared gate (lib/pgo.sh) — last statement on purpose: nothing may be
+  # added to $pkgdir after the payload is verified. `pgo-data` is the profile
+  # work directory name phase 1 embeds; rustc may bake the directory alone,
+  # with no .profraw suffix, so it is matched as a raw literal too.
+  verify_no_profile_instrumentation "$pkgdir" pgo-data
+}
+# vim: ts=2 sw=2 et:

@@ -1,0 +1,51 @@
+# Maintainer: Andreas Radke <andyrtr@archlinux.org>
+# Contributor: Jan de Groot <jgc@archlinux.org>
+
+pkgname=xdg-utils
+# https://gitlab.freedesktop.org/xdg/xdg-utils/commits/master
+_commit=356c380ad6fecc9ce6bea1f6a77986ba67402c80 # tag # 1.2.1
+pkgver=1.2.1
+pkgrel=2
+pkgdesc="Command line tools that assist applications with a variety of desktop integration tasks"
+arch=('any')
+url="https://gitlab.freedesktop.org/xdg/xdg-utils"
+license=('MIT')
+depends=('sh' 'file')
+makedepends=('docbook-xsl' 'lynx' 'xmlto' 'git')
+optdepends=('kde-cli-tools: for KDE Plasma5 support in xdg-open'
+            'exo: for Xfce support in xdg-open'
+            'pcmanfm: for LXDE support in xdg-open'
+            'perl-file-mimeinfo: for generic support in xdg-open'
+            'perl-net-dbus: Perl extension to dbus used in xdg-screensaver'
+            'perl-x11-protocol: Perl X11 protocol used in xdg-screensaver'
+            'xorg-xset: for X11 support in xdg-screensaver'
+            'xorg-xprop: for X11 support in xdg-screensaver')
+# non-codegen: pure POSIX shell — nothing for strip/debug/LTO to act on
+options=(!lto !strip !debug)
+source=("git+https://gitlab.freedesktop.org/xdg/xdg-utils.git#commit=$_commit")
+sha256sums=('SKIP')
+#validpgpkeys=('8B75CA7811367175D05F3B03C43570F80CC295E6') # "Per Olofsson <pelle@pqz.se>"
+
+pkgver() {
+  cd $pkgname
+  # filter tag to avoid need for epoch when the release happens
+  git describe --tags | sed 's/^v//;s/-beta1-/r/;s/-/+/g'
+}
+
+build() {
+  cd $pkgname
+  ./configure --prefix=/usr --mandir=/usr/share/man
+  make
+}
+
+# check() omitted: the testsuite needs a running X session and a browser and
+# runs interactive programs — not suitable for a text chroot (Arch omits it too)
+
+package() {
+  cd $pkgname
+  make DESTDIR="${pkgdir}" install
+  install -D -m644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+
+  # install empty directory to prevent xdg-desktop-menu install *.desktop to fail, see FS#33316
+  install -dm755 "$pkgdir"/usr/share/desktop-directories
+}

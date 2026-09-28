@@ -1,0 +1,38 @@
+# Maintainer: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
+# Contributor: Stefan Husmann <stefan-husmann@t-online.de>
+# Contributor:  <mathieu.clabaut@gmail.com>
+
+pkgname=xdg-user-dirs
+pkgver=0.20
+pkgrel=1
+pkgdesc="Manage user directories like ~/Desktop and ~/Music"
+url="https://www.freedesktop.org/wiki/Software/xdg-user-dirs"
+arch=(x86_64)
+license=(GPL-2.0-or-later)
+depends=(
+  glibc
+)
+makedepends=(
+  docbook-xsl
+  git
+  meson
+  systemd
+)
+backup=(etc/xdg/user-dirs.{conf,defaults})
+install=xdg-user-dirs.install
+source=("git+https://gitlab.freedesktop.org/xdg/xdg-user-dirs.git#tag=v$pkgver")
+b2sums=('4a3bc0549be562edba4c4011015f15314753ca947b99a2673f1cdd92e8e16bd71f807d4bd89aa6db69af4c9c76237f316b124a6eca532c29f1cb857e403c246f')
+
+build() {
+  arch-meson $pkgname build
+  meson compile -C build
+}
+
+check() {
+  meson test -C build --print-errorlogs
+}
+
+package() {
+  meson install -C build --destdir "$pkgdir"
+  install -Dm644 $pkgname/COPYING -t "$pkgdir"/usr/share/licenses/$pkgname/
+}

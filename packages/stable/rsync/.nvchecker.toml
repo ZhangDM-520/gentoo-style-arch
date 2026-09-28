@@ -1,0 +1,4 @@
+[rsync]
+source = "git"
+git = "https://github.com/RsyncProject/rsync.git"
+prefix = "v"

@@ -1,0 +1,59 @@
+# Maintainer: Christian Rebischke <Chris.Rebischke@archlinux.org>
+# Maintainer: Carl Smedstad <carsme@archlinux.org>
+# Contributor : Maxim Baz <$pkgname at maximbaz dot com>
+# Contributor: Ian D. Scott <ian@perebruin.com>
+# Contributor: Tony Crisci <tony@dubstepdish.com>
+
+pkgname=playerctl
+pkgver=2.4.1
+pkgrel=5
+pkgdesc="mpris media player controller and lib for spotify, vlc, audacious, bmp, xmms2, and others."
+arch=('x86_64')
+url="https://github.com/altdesktop/playerctl"
+license=('LGPL-3.0-only')
+depends=(
+    'glib2'
+    'glibc'
+)
+makedepends=(
+    'glib2-devel'
+    'gobject-introspection'
+    'gtk-doc'
+    'meson'
+)
+checkdepends=(
+    'dbus'
+    'python-dbus-next'
+    'python-pytest'
+    'python-pytest-asyncio'
+)
+source=("${pkgname}-${pkgver}.tar.gz::${url}/archive/v${pkgver}.tar.gz"
+        "${url}/releases/download/v${pkgver}/${pkgname}-${pkgver}.tar.gz.asc")
+sha512sums=('2d84f657b07c948cd6990d9e79c4eb6e83f97c387ac53c2322fc0adbeb853950fa935332233329e7555db7d157f3ced6498cc102edaffd78849ca1f7d4c49bdc'
+            'SKIP')
+validpgpkeys=('8CDFCC2D6611ACDE63D2C348564F0717F9D84E49') # Tony Crisci <tony@dubstepdish.com>
+
+build() {
+  cd "${pkgname}-${pkgver}"
+  arch-meson build -D bash-completions=true -D zsh-completions=true -Db_lto=true
+  meson compile -C build
+}
+
+check() {
+  cd "${pkgname}-${pkgver}"
+  # Deselect failing tests - unsure why they fail.
+  export PATH="${PWD}/build/playerctl:${PATH}"
+  dbus-run-session pytest \
+    --override-ini="asyncio_mode=auto" \
+    --deselect test/test_basics.py::test_system_list_players \
+    --deselect test/test_daemon.py::test_active_player_change \
+    --deselect test/test_daemon.py::test_daemon_commands \
+    --deselect test/test_daemon.py::test_daemon_follow \
+    --deselect test/test_daemon.py::test_daemon_shift_simple
+}
+
+package() {
+  cd "${pkgname}-${pkgver}"
+  meson install -C build --destdir "$pkgdir"
+  install -Dm644 COPYING -t "$pkgdir"/usr/share/licenses/$pkgname/
+}

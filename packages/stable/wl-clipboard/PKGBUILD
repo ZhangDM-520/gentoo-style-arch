@@ -1,0 +1,30 @@
+# Maintainer: Brett Cornwall <ainola@archlinux.org>
+# Maintainer: Robin Candau <antiz@archlinux.org>
+# Contributor: Adam Brunnmeier
+
+pkgname=wl-clipboard
+pkgver=2.3.0
+pkgrel=1
+epoch=1
+pkgdesc="Command-line copy/paste utilities for Wayland"
+arch=('x86_64')
+url="https://github.com/bugaevc/wl-clipboard"
+license=('GPL-3.0-or-later')
+depends=('glibc' 'wayland')
+optdepends=(
+    'xdg-utils: for content type inference in wl-copy'
+    'mailcap: for type inference in wl-paste'
+)
+makedepends=('meson' 'wayland-protocols')
+source=("$pkgname-$pkgver.tar.gz::https://github.com/bugaevc/wl-clipboard/archive/v$pkgver.tar.gz")
+sha256sums=('b4dc560973f0cd74e02f817ffa2fd44ba645a4f1ea94b7b9614dacc9f895f402')
+
+build() {
+  arch-meson "$pkgname-$pkgver" build -Db_lto=true
+  meson compile -C build
+}
+
+package() {
+  meson install -C build --destdir "$pkgdir"
+  install -Dm644 "$pkgname-$pkgver"/COPYING -t "$pkgdir"/usr/share/licenses/$pkgname/
+}

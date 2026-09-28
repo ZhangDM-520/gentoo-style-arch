@@ -1,0 +1,16 @@
+pkgbase = fd
+	pkgdesc = Simple, fast and user-friendly alternative to find
+	pkgver = 10.5.0
+	pkgrel = 3
+	url = https://github.com/sharkdp/fd
+	arch = x86_64
+	license = MIT OR Apache-2.0
+	makedepends = git
+	makedepends = rust
+	depends = glibc
+	depends = jemalloc
+	depends = libgcc
+	source = git+https://github.com/sharkdp/fd.git#tag=v10.5.0
+	sha256sums = 8b9c1501778c38962d23f5428de9e7aeb9f4d1fda6598e547d760c07b4851e12
+
+pkgname = fd

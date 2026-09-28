@@ -89,9 +89,10 @@ Trim packaging to the maintained target:
   `docs/build-guide.md`; the failure mechanisms are in `MEMORY.md` §6); a
   recipe that trains with `-fprofile-generate` must call the shared payload
   gate (`lib/pgo.sh`) as the last statement of its package function(s) —
-  never copy its implementation; a new PGO family extends the module and
-  earns a fixture — and the builder's central gate does not make the call
-  optional; and
+  never copy its implementation; a new PGO family earns a fixture and extends
+  the module when its leak shapes are new (the 2026-09-28 C-autotools and Go
+  flavors needed no module change) — and the builder's central gate does not
+  make the call optional; and
 - never use invalid `options` such as `!check` or `autodeps` to paper over a
   recipe problem.
 

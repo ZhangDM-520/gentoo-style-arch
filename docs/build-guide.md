@@ -426,7 +426,9 @@ makepkg packaged the instrumented payload anyway (four recipes were in
 exactly that state until 2026-09-20). Recipes call the gate; they never copy
 its implementation — the copied versions had drifted (mold-git's predicates
 were stricter than the rest) and the copy-paste mandate was itself the
-recurrence engine. A new PGO family extends `lib/pgo.sh` and earns a fixture;
+recurrence engine. A new PGO family earns a fixture and extends `lib/pgo.sh`
+when its leak shapes are new (2026-09-28's C-autotools and Go flavors needed
+no module change);
 `tests/pgo-lib.sh` pins the module's behaviour and how each recipe resolves
 it, and `tests/pgo-transition.sh` drives each recipe's profile *and*
 below-threshold fallback branches.

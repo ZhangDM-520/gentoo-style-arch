@@ -1,6 +1,6 @@
 # Copilot instructions — Gentoo_Style_Arch
 
-A curated Arch Linux package set: 128 `PKGBUILD` recipe directories plus an
+A curated Arch Linux package set: 145 `PKGBUILD` recipe directories plus an
 automatic-parallelism build scheduler. The repo holds recipes and topology
 only — never upstream sources, package archives, downloaded signatures, PGP
 caches, or build output.
@@ -98,8 +98,9 @@ was once caught by an unrelated recipe fixture.
 
 Three harness conventions worth copying rather than reinventing: a fixture that
 applies to many packages takes its package/project as `$1`/`$2`
-(`tests/pgo-transition.sh` runs all five of its pairs with no arguments, one
-pair when given the three); sibling areas share ONE file as sequential sections,
+(`tests/pgo-transition.sh` runs all eight of its pairs with no arguments, one
+pair when given the four — the fourth names the build-system family,
+`meson` or `autotools`); sibling areas share ONE file as sequential sections,
 each absorbed script wrapped in a `( subshell )` so its variables, traps and
 `fail()` prefix stay isolated (`kernel-recipes`, `log-ownership`, `noctalia-pgo`,
 `zen-pgo`, `vencord`, `project`) — merge into an existing subject file rather
@@ -428,8 +429,17 @@ false clean, so the module also uses the baked path
 (`strings -a <bin> | grep -c '\.gcda'`) — what survives stripping.
 `tests/pgo-lib.sh` pins the module's fatal semantics (every assertion runs it
 in a subshell) and the clean-checkout fact that each consuming PKGBUILD
-resolves the tracked path. A new PGO family extends **this module** and earns
-a fixture; recipes only ever call it.
+resolves the tracked path. A new PGO family earns a fixture and extends
+**this module** when its leak shapes are new; recipes only ever call it. The
+families span five build-system
+styles as of 2026-09-28: meson (glib2/gtk/cairo/…), CMake (`cmake-git`), Rust
+(`mold-git`/`niri-spicy-git`/`ripgrep`), **C-autotools** (`jq`/`file`/`rsync`
+— every phase re-runs `./configure`, and `-fprofile-generate=<dir>` must be
+symmetric with `-fprofile-use=<dir>` or the profile is silently missed) and
+**Go** (`fzf` — a `go tool pprof -proto` profile wired via `GOFLAGS+=-pgo=…`,
+floor `pgo_min_samples`); every family falls back to a plain build when its
+floor is missed (MEMORY §4) — the C-autotools and Go flavors of 2026-09-28
+needed no module change.
 
 The invariant is also enforced from the builder as the fail-closed backstop:
 `pgo_payload_refusals` in `build-all.fish` (formerly `verify_pgo_payload`) is

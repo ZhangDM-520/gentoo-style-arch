@@ -1,0 +1,5 @@
+[curl]
+source = "regex"
+url = "https://curl.se/download/"
+regex = 'curl-([\d.]+)\.tar\.xz'
+sort_version_key = 'vercmp'

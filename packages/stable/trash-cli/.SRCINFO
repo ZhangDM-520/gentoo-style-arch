@@ -1,0 +1,22 @@
+pkgbase = trash-cli
+	pkgdesc = Command line trashcan (recycle bin) interface
+	pkgver = 0.26.9.14
+	pkgrel = 1
+	url = https://github.com/andreafrancia/trash-cli
+	arch = any
+	license = GPL-2.0-only
+	checkdepends = python-flexmock
+	checkdepends = python-parameterized
+	checkdepends = python-pytest
+	makedepends = python-build
+	makedepends = python-installer
+	makedepends = python-setuptools
+	makedepends = python-shtab
+	makedepends = python-wheel
+	depends = python
+	depends = python-psutil
+	depends = python-six
+	source = trash-cli-0.26.9.14.tar.gz::https://github.com/andreafrancia/trash-cli/archive/refs/tags/0.26.9.14.tar.gz
+	sha256sums = 734f5433adeec2b21b1a0cdb3e113bb670cc5e109b9ca8a3ed34fa0b8159f1f9
+
+pkgname = trash-cli

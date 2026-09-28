@@ -1,0 +1,19 @@
+pkgbase = xdg-user-dirs
+	pkgdesc = Manage user directories like ~/Desktop and ~/Music
+	pkgver = 0.20
+	pkgrel = 1
+	url = https://www.freedesktop.org/wiki/Software/xdg-user-dirs
+	install = xdg-user-dirs.install
+	arch = x86_64
+	license = GPL-2.0-or-later
+	makedepends = docbook-xsl
+	makedepends = git
+	makedepends = meson
+	makedepends = systemd
+	depends = glibc
+	backup = etc/xdg/user-dirs.conf
+	backup = etc/xdg/user-dirs.defaults
+	source = git+https://gitlab.freedesktop.org/xdg/xdg-user-dirs.git#tag=v0.20
+	b2sums = 4a3bc0549be562edba4c4011015f15314753ca947b99a2673f1cdd92e8e16bd71f807d4bd89aa6db69af4c9c76237f316b124a6eca532c29f1cb857e403c246f
+
+pkgname = xdg-user-dirs

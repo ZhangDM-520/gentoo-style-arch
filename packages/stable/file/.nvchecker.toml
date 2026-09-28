@@ -1,0 +1,5 @@
+[file]
+source = "regex"
+url = "http://ftp.astron.com/pub/file/"
+regex = 'file-([\d.]+)\.tar\.gz'
+sort_version_key = 'vercmp'

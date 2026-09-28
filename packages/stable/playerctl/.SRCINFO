@@ -1,0 +1,24 @@
+pkgbase = playerctl
+	pkgdesc = mpris media player controller and lib for spotify, vlc, audacious, bmp, xmms2, and others.
+	pkgver = 2.4.1
+	pkgrel = 5
+	url = https://github.com/altdesktop/playerctl
+	arch = x86_64
+	license = LGPL-3.0-only
+	checkdepends = dbus
+	checkdepends = python-dbus-next
+	checkdepends = python-pytest
+	checkdepends = python-pytest-asyncio
+	makedepends = glib2-devel
+	makedepends = gobject-introspection
+	makedepends = gtk-doc
+	makedepends = meson
+	depends = glib2
+	depends = glibc
+	source = playerctl-2.4.1.tar.gz::https://github.com/altdesktop/playerctl/archive/v2.4.1.tar.gz
+	source = https://github.com/altdesktop/playerctl/releases/download/v2.4.1/playerctl-2.4.1.tar.gz.asc
+	validpgpkeys = 8CDFCC2D6611ACDE63D2C348564F0717F9D84E49
+	sha512sums = 2d84f657b07c948cd6990d9e79c4eb6e83f97c387ac53c2322fc0adbeb853950fa935332233329e7555db7d157f3ced6498cc102edaffd78849ca1f7d4c49bdc
+	sha512sums = SKIP
+
+pkgname = playerctl

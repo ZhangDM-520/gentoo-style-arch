@@ -1,0 +1,5 @@
+[jq]
+source = "git"
+git = "https://github.com/jqlang/jq.git"
+prefix = "jq-"
+exclude_regex = ".*(alpha|beta|rc|pre|dev).*"

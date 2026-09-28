@@ -1,0 +1,192 @@
+# Maintainer: Thore Bödecker <foxxx0@archlinux.org>
+# Maintainer: Filipe Laíns (FFY00) <lains@archlinux.org>
+# Maintainer: Christian Heusel <gromit@archlinux.org>
+# Contributor: Morten Linderud <foxboron@archlinux.org>
+# Contributor: Pierre Neidhardt <ambrevar@gmail.com>
+# Contributor: Hermann Zahnweh (eigengrau)
+# Contributor: Andy Weidenbaum <archbaum@gmail.com>
+# Contributor: foalsrock <foalsrock at gmail dot-com>
+# Contributor: jebaum <jebaum at ucla dot edu>
+
+# Shared PGO payload gate — one implementation in lib/pgo.sh, called at the
+# end of package(). A missing module fails at parse time on purpose.
+source "$startdir/../../../lib/pgo.sh"
+
+pkgname=fzf
+pkgver=0.74.4
+pkgrel=1
+pkgdesc='Command-line fuzzy finder'
+arch=('x86_64')
+url='https://github.com/junegunn/fzf'
+license=('MIT')
+depends=(
+    'bash'
+    'glibc'
+)
+makedepends=('git' 'go')
+optdepends=('fish: fish keybindings'
+            'tmux: fzf-tmux script for launching fzf in a tmux pane'
+            'vim: plugin'
+            'zsh: zsh keybindings')
+options=(!lto)
+source=("git+https://github.com/junegunn/fzf.git#tag=v${pkgver}?signed")
+validpgpkeys=(
+	'B5FB4AB5F32EC1A0C9DE9637254BC280FEF9C627'
+	'23F9CCD32FBC4A8D4E822AB8D9770615D226D94C') # Junegunn Choi <junegunn.c@gmail.com>
+# Same tag tree Arch pins (their sha512sums entry), hashed via `git archive`.
+sha256sums=('5ad68d4221cf133773e58fa583b927dd47df6ea7d414b2f804663dd72899adde')
+
+prepare() {
+	cd "${pkgname}"
+	sed -i 's/-w /-w -linkmode external /' Makefile
+	# Drop `go build -a` from BUILD_FLAGS: -a rebuilds every dependency and
+	# defeats the Go build cache without changing the output. Every other
+	# Arch flag is kept (-ldflags "-s -w …", -trimpath, GOFLAGS below).
+	sed -i 's/-a -ldflags/-ldflags/' Makefile
+}
+
+build() {
+	cd "${pkgname}"
+	export CGO_LDFLAGS="${LDFLAGS}"
+	export CGO_CFLAGS="${CFLAGS}"
+	export CGO_CPPFLAGS="${CPPFLAGS}"
+	export CGO_CXXFLAGS="${CXXFLAGS}"
+	export GOFLAGS="-buildmode=pie -trimpath -mod=readonly -modcacherw"
+	local base_goflags="$GOFLAGS"
+
+	# ---- PGO phase 1: training -------------------------------------------
+	# What the training run represents (Go's PGO docs warn an unrepresentative
+	# profile buys little, so state it honestly): fzf's batch-matching hot
+	# path — repeated `fzf --filter` queries over a generated 200k-line
+	# path-like candidate list (algo.FuzzyMatchV2, Pattern.matchChunk) — plus
+	# upstream's own `make bench` suite (ANSI escape parsing, pattern cache,
+	# IndexByteTwo primitives). It does NOT represent interactive TUI usage:
+	# terminal rendering, the event loop and preview/tmux integration
+	# contribute no samples here.
+	#
+	# pgo_min_samples: ≈ the minimum sampled CPU time — runtime/pprof samples
+	# at 100 Hz, one sample = 10 ms — the training must capture before a
+	# profile is worth trusting (the sample-count analogue of cmake-git's
+	# pgo_min_gcda / mold-git's pgo_min_profraw). Below it the profile is
+	# noise: a 1-sample bench profile contains only GC stalls, while the ~90
+	# samples of a single filter run already attribute 46% of flat time to
+	# algo.FuzzyMatchV2. 500 samples (5 s of sampled CPU) is the hard floor,
+	# not a quality target — Go profiling guidance wants ~1k-3k samples for
+	# statistical stability and this run normally yields ~1.5k+. At or below
+	# the floor the release build falls back to -pgo=off (logged below):
+	# underproduction must never fail the build or ship a noise-guided binary.
+	local profile="$srcdir/cpu.pprof"
+	local pgo_min_samples=500
+	local train="$srcdir/pgo-train"
+	rm -rf "$train" "$profile"
+	mkdir -p "$train"
+
+	# Training builds must never consume a profile.
+	export GOFLAGS="$base_goflags -pgo=off"
+
+	# (a) upstream `make bench` (go test -run=Bench -bench=. -benchmem in
+	# src/) with -cpuprofile attached, one profile per package — go test can
+	# profile only a single package at a time.
+	( cd src && go test -v -run=Bench -bench=. -benchmem -cpuprofile="$train/bench-src.pprof" ) || true
+	( cd src/algo && go test -v -run=Bench -bench=. -benchmem -cpuprofile="$train/bench-algo.pprof" ) || true
+
+	# (b) `fzf --filter` training over a generated candidate list.
+	# --profile-cpu exists only in a -tags=pprof build, so train on a
+	# dedicated binary; the release binary keeps upstream's tag set.
+	go build -tags=pprof -o "$train/fzf-train" . || true
+	awk 'BEGIN {
+		split("src algo tui util test bin doc shell plugin man", d)
+		split("match pattern cache ansi color index chunk runes item view", w)
+		for (i = 1; i <= 200000; i++)
+			printf "%s/%s-%s%d.%s\n", d[i % 10 + 1], w[i * 7 % 10 + 1], w[i * 3 % 10 + 1], i, d[i * 13 % 10 + 1]
+	}' > "$train/candidates.txt" || true
+	local q
+	for q in src algo fzf mtch pttrn ansi 42 item zzzz-no-match; do
+		"$train/fzf-train" --profile-cpu "$train/filter-$q.pprof" --filter "$q" < "$train/candidates.txt" >/dev/null || true
+	done
+
+	# (c) merge everything into one profile; `go tool pprof` merges multiple
+	# profiles by function name, so the bench test binaries and fzf-train
+	# combine fine.
+	local profiles=() f
+	for f in "$train"/*.pprof; do
+		if [[ -s "$f" ]]; then
+			profiles+=("$f")
+		fi
+	done
+	if ((${#profiles[@]} > 0)); then
+		go tool pprof -proto -output="$profile" "${profiles[@]}" || true
+	fi
+
+	# (d) floor check — the exact number `go tool pprof -top` prints ("Total
+	# samples = Nms"; CPU samples are 10 ms each).
+	local samples=0 t v u
+	if [[ -s "$profile" ]]; then
+		t=$(go tool pprof -top -nodecount=1 "$profile" 2>&1 | sed -n 's/.*Total samples = \([0-9.]*\)\([[:alpha:]µ]*\).*/\1 \2/p' | head -n1) || true
+		if [[ -n "$t" ]]; then
+			v=${t%% *}
+			u=${t##* }
+			case $u in
+				s)  samples=$(awk -v v="$v" 'BEGIN { printf "%d", v * 100 }') ;;
+				ms) samples=$(awk -v v="$v" 'BEGIN { printf "%d", v / 10 }') ;;
+				us|µs) samples=$(awk -v v="$v" 'BEGIN { printf "%d", v / 10000 }') ;;
+			esac
+		fi
+	fi
+	if ((samples <= pgo_min_samples)); then
+		echo "Warning: fzf PGO profile too thin ($samples samples <= $pgo_min_samples floor); building with -pgo=off"
+		export GOFLAGS="$base_goflags -pgo=off"
+	else
+		echo "fzf: PGO profile accepted ($samples samples > $pgo_min_samples floor)"
+		export GOFLAGS="$base_goflags -pgo=$profile"
+	fi
+
+	# ---- PGO phase 2: release build (flags unchanged) --------------------
+	make
+	make bin/fzf
+}
+
+check() {
+	cd "${pkgname}"
+	export CGO_LDFLAGS="${LDFLAGS}"
+	export CGO_CFLAGS="${CFLAGS}"
+	export CGO_CPPFLAGS="${CPPFLAGS}"
+	export CGO_CXXFLAGS="${CXXFLAGS}"
+	export GOFLAGS="-buildmode=pie -trimpath -mod=readonly -modcacherw"
+	go test ./...
+}
+
+package() {
+	cd "${pkgname}"
+
+	## Man page
+	install -Dm644 man/man1/fzf.1 "$pkgdir"/usr/share/man/man1/fzf.1
+	install -Dm644 man/man1/fzf-tmux.1 "$pkgdir"/usr/share/man/man1/fzf-tmux.1
+
+	## License
+	install -Dm644 LICENSE "$pkgdir"/usr/share/licenses/fzf/LICENSE
+
+	## Binaries
+	install -dm755 "$pkgdir"/usr/bin
+	install -m755 bin/fzf-tmux "$pkgdir"/usr/bin/
+	install -m755 bin/fzf "$pkgdir"/usr/bin/
+
+	## Completion and keybindings
+	install -dm755 "$pkgdir"/usr/share/fzf
+	install -m644 shell/*.bash shell/*.zsh "$pkgdir"/usr/share/fzf
+	install -m755 bin/fzf-preview.sh "$pkgdir"/usr/share/fzf/fzf-preview.sh
+
+	## Fish keybindings
+	install -Dm644 shell/key-bindings.fish "$pkgdir"/usr/share/fish/vendor_functions.d/fzf_key_bindings.fish
+
+	## Vim plugin
+	install -Dm644 doc/fzf.txt "$pkgdir"/usr/share/vim/vimfiles/doc/fzf.txt
+	install -Dm644 plugin/fzf.vim "$pkgdir"/usr/share/vim/vimfiles/plugin/fzf.vim
+
+	# Fatal shared gate (lib/pgo.sh) — last statement on purpose: nothing may
+	# be added to $pkgdir after the payload is verified. Go PGO bakes no
+	# profile paths or instrumentation into the binary (the pprof profile is
+	# a build INPUT), so the module's existing predicates pass trivially —
+	# this call is the fail-closed habit shared with every PGO recipe.
+	verify_no_profile_instrumentation "$pkgdir"
+}

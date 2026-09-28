@@ -308,8 +308,19 @@
   deliberately not recorded here (the 22 above is dated history, not a
   maintained figure) — they are hand-maintained and the first
   thing a batch invalidates — so `fish build-all.fish --list` is the source
-  of truth. `core` intentionally overlaps stable
+  of truth. (2026-09-28 batch: `stable` grew 27 → 44 and the set 128 → 145
+  recipes — dated figures again.) `core` intentionally overlaps stable
   packages whose ABI must be rebuilt and installed as one batch.
+- **Leaf-utility class** (2026-09-28, 17 recipes under `packages/stable/`):
+  release-tracked utilities whose topology records are
+  `id|packages/stable/<id>|stable|` — empty edges, no tags, and no incoming
+  edges: trash-cli (ships the 2026-09-27 hang fix, §6), desktop glue
+  (xdg-utils, libnotify, wl-clipboard, shared-mime-info, desktop-file-utils,
+  xdg-user-dirs, playerctl, brightnessctl, ffmpegthumbnailer), dev glue (jq,
+  the curl/libcurl-compat/libcurl-gnutls three-way split, file, rsync) and
+  Rust/Go CLIs (ripgrep, fd, fzf). This is the class to extend for further
+  utility gaps (stretch: ghostscript/tesseract, §5) — one recipe plus one
+  edge-free topology record per gap.
 - No upstream checkout, package archive, downloaded signature, PGP cache,
   encrypted CI artifact, or host profile belongs in the public tree.
 
@@ -526,19 +537,44 @@ install history lives in `NOTE.md`.
   (LLVM_PROFILE_FILE + llvm-profdata, unset sccache). Verify:
   `find <profile-dir> -name '*.gcda'` count > threshold. The threshold is a
   per-recipe `local` — `pgo_min_gcda`, or `pgo_min_profraw` for mold-git's
-  Rust `.profraw` profiles; it is NOT a `lib/pgo.sh` knob — and its comment
+  Rust `.profraw` profiles (and ripgrep's), or `pgo_min_samples` for the Go
+  flavor's pprof sample count; it is NOT a `lib/pgo.sh` knob — and its comment
   contract is "≈ the minimum distinct translation units the training must
   touch before a profile is worth trusting": at or below it the profile is too
-  thin and the recipe falls back to a non-PGO (LTO-only) build rather than
-  shipping one. Values today: 0 (`cmake-git`, `mold-git` — any profile data at
+  thin and the recipe falls back to a plain (non-PGO) build rather than
+  shipping one. Values today — `pgo_min_gcda`: 0 (`cmake-git`, `mold-git` —
+  any profile data at
   all suffices; zero files means training never ran and phase 2 is skipped),
   50 (`glib2-git`, `cairo-git`, `xorg-xwayland-git`), 100 (`gtk3-git`,
-  `gtk4-git`). A threshold change is a behavioural change — it decides whether
+  `gtk4-git`), 15 (`jq`, `file`), 20 (`rsync`); `pgo_min_profraw`: 0
+  (`ripgrep`); `pgo_min_samples`: 500 (`fzf`). The fallback is family-shaped —
+  LTO-only for the meson/CMake recipes, fat-LTO plain for ripgrep,
+  LTO-restored-without-use for the C-autotools trio, `-pgo=off` for fzf — and
+  always plain, never half-trained. A threshold change is a behavioural change — it decides whether
   the recipe ships a profile-used build at all — and belongs in a NOTE.md
   entry with the reason; if the thresholds are ever lifted into `lib/pgo.sh`,
   a change there is a behavioural change to every consuming recipe at once.
-- **Autotools PGO**: CFLAGS bake at ./configure time — every phase must
-  re-run ./configure; `make clean` is NOT enough.
+- **C-autotools PGO family** (jq/file/rsync, 2026-09-28): CFLAGS bake at
+  ./configure time — every phase must re-run ./configure; `make clean` is NOT
+  enough. Phase 1 strips `-flto*` and instruments with
+  `-fprofile-generate=<dir>`; the `=<dir>` spelling must be SYMMETRIC with
+  `-fprofile-use=<dir>` on both sides — a bare `-fprofile-generate` plus
+  `-fprofile-use=<dir>` silently misses every profile (GCC probe: the counters
+  land where the use phase never looks). Training is `make check` plus
+  workload loops (filter/sweep/tree-copy; gcda counts 23/25/119). Phase 2
+  restores LTO plus `-fprofile-use=<dir> -Wno-error=missing-profile
+  -Wno-error=coverage-mismatch`. rsync keeps Fedora's rhbz#1898912 LTO
+  history as the escape-hatch comment (LTO+PGO builds fine on GCC 17).
+- **Go-PGO flavor** (fzf, 2026-09-28, first Go member): training = upstream
+  bench suite + `fzf --profile-cpu` filter runs, merged via
+  `go tool pprof -proto` into `$srcdir/cpu.pprof`, wired as
+  `GOFLAGS+=-pgo=$srcdir/cpu.pprof`; the floor `pgo_min_samples=500` is
+  parsed from `go tool pprof -top` "Total samples" and below it the release
+  build sets `-pgo=off`. The recipe keeps the honesty caveat: the profile
+  over-represents micro-benchmarks versus interactive TUI use — it represents
+  the batch-matching hot path. `lib/pgo.sh` is deliberately unchanged: Go
+  leaks none of the `.gcda`/`.profraw` literals its predicates cover, so the
+  gate trivially passes; the family still earns `tests/fzf-pgo.sh`.
 - **Special cases**: rust-git (bootstrap.toml flags, 5 patches, and
   `options` must keep `!lto`: makepkg's `-flto=auto` makes the C++
   llvm-wrapper GCC-LTO, which lld — rustc's `gnu-lld-cc` default linker —
@@ -658,6 +694,10 @@ going stale.
   lead is still absence of evidence. One full-length 6-minute rebuild (Tctl
   91 °C) passed with no freeze — with sched_ext unloaded, so it is not a control.
 - systemd is a separately coupled effort whenever its recipe changes.
+- **Stretch backlog: ghostscript / tesseract recipes** (out of scope for the
+  2026-09-28 utilities batch): leaf-utility recipes in the §2 class, claimed
+  here only so the print/OCR gap is visible; drop this item if the gap stops
+  mattering.
 
 Queue items deleted as done in earlier passes (each verified, not assumed):
 the `-Rns hyperv intel-speed-select x86_energy_perf_policy` batch and
@@ -671,6 +711,29 @@ zero baked `.gcda` destinations — `ctest`'s single hit is the `/*.gcda` glob
 constant, not a baked path).
 
 ## 6. Pitfall digest (full details: NOTE.md sections of same dates)
+
+- **shtab ≥ 1.6 outgrew upstream's hard-coded shell list** (2026-09-28,
+  trash-cli `check()`): 3 `test_help` assertions fail because shtab's help
+  text lists more shells than upstream's expectations hardcode — upstream
+  brittleness, not a packaging defect. The suite stays full and the recipe
+  documents the skew (the host's `BUILDENV=(!check)` makes makepkg skip
+  `check()` here anyway). Leave a full suite with documented skew rather than
+  deleting tests to make `check()` green.
+
+- **`cargo test` integration suites mis-resolve test binaries on this host's
+  rust-git toolchain** (2026-09-28): the binaries land in
+  `build/<pkg>/<hash>/out/` instead of `deps/`, which breaks harnesses that
+  resolve the binary path. Irrelevant to packaging (`BUILDENV=(!check)`
+  skips `check()`), so do not chase a scratch `cargo test` failure as a
+  recipe bug.
+
+- **An expired maintainer key whose signature predates the expiry verifies,
+  with a warning** (2026-09-28, `file` 5.48): Zoulas' key expired 2026-08-15;
+  makepkg reports EXPKEYSIG and still passes. Keep `#signed`/`validpgpkeys`
+  and never `--skippgpcheck`; record the expiry date and the re-key
+  contingency for the next bump. (Subkey signatures — rsync via Zen Dodd's
+  subkey to primary `C0E10545`, fd via web-flow — resolve to the primary as
+  the existing rule says; do not append every subkey.)
 
 - **fish autoloaded a user-level `rm` wrapper and hung every run** (2026-09-27,
   host state, not repo code): fixture and builder runs hung at ~100 % CPU

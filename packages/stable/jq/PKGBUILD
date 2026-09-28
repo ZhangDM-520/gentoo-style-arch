@@ -1,0 +1,135 @@
+# Maintainer: Evgeniy Alekseev <arcanis at archlinux dot org>
+# Contributor: Alex Chamberlain <alex at alexchamberlain dot co dot uk>
+# Contributor: Kars Wang <jaklsy at gmail dot com>
+
+# Shared PGO payload gate — one implementation in lib/pgo.sh, called at the
+# end of package(). A missing module fails at parse time on purpose.
+source "$startdir/../../../lib/pgo.sh"
+
+pkgname=jq
+pkgver=1.8.2
+pkgrel=1
+pkgdesc='Command-line JSON processor'
+arch=('x86_64')
+url='https://jqlang.github.io/jq/'
+license=('MIT')
+depends=('glibc' 'oniguruma')
+# Release tarball (Arch pins the git tag instead): ships a prebuilt
+# `configure` and generated lexer/parser, so no autotools/bison/flex inputs.
+# Upstream publishes sha256sum.txt alongside the asset; jq-1.8.2 is not
+# detached-signature-verified upstream (Arch's git tag pin is equally
+# hash-only), so the pinned sha256 is the integrity anchor.
+source=("https://github.com/jqlang/jq/releases/download/jq-${pkgver}/jq-${pkgver}.tar.gz")
+sha256sums=('71b8d6e8f5fe81f6c6d0d110e3892251f6ce76ed095abd315e26e6e1193af3af')
+
+build() {
+  cd "$pkgname-$pkgver"
+
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  # Upstream 1.8.x is autotools-only; do not switch to cmake.
+
+  # PGO: instrument -> train -> use (C-autotools tier).
+  # CFLAGS/LDFLAGS bake into the generated Makefile at ./configure time, so
+  # every phase below re-runs ./configure and then make clean — make clean
+  # alone never re-bakes flags. -fprofile-generate=<dir> and
+  # -fprofile-use=<dir> must name the SAME directory: profiles are looked up
+  # as <dir>/<mangled-object-path>.gcda, so a bare generate paired with
+  # use=<dir> misses every profile and silently compiles a profile-less build.
+  local _pgo_dir="$PWD/pgo-profiles"
+  mkdir -p "$_pgo_dir"
+  local _final_cflags="$CFLAGS"
+  local _final_ldflags="$LDFLAGS"
+
+  # Phase 1 (instrument) drops -flto: generate-mode bookkeeping and LTO
+  # whole-program codegen interact badly, and the Rust family drops LTO for
+  # the same reason. Phase 2 restores the host flags untouched, so the
+  # shipped build is LTO + profile-used and the fallback is LTO-only.
+  local _gen_cflags="" _gen_ldflags="" _flag
+  for _flag in $_final_cflags; do
+    case "$_flag" in
+      -flto*) ;;
+      *) _gen_cflags+=" $_flag" ;;
+    esac
+  done
+  for _flag in $_final_ldflags; do
+    case "$_flag" in
+      -flto*) ;;
+      *) _gen_ldflags+=" $_flag" ;;
+    esac
+  done
+
+  # Phase 1: instrumented build.
+  export CFLAGS="${_gen_cflags# } -fprofile-generate=$_pgo_dir"
+  export LDFLAGS="${_gen_ldflags# } -fprofile-generate=$_pgo_dir"
+  ./configure --prefix=/usr
+  make
+
+  # Training run: the upstream suite is the broadest coverage (parser,
+  # bytecode compiler, VM, JV stack, regex); the -n filter loop adds hot
+  # serialization, reduce, string and format paths. A failing trainer is
+  # tolerated — the floor guard below turns thin profiles into a plain build.
+  make check || true
+  local _filter
+  for _filter in \
+    '[range(3000)] | map(select(. % 3 == 0) | . * 2) | add' \
+    '{meta: "train", nums: [range(100)]} | tojson | fromjson | .nums | length' \
+    '"the quick brown fox" | test("[qQ]uick") | tostring' \
+    'split("a,b,c,d,e"; ",") | map(ascii_upcase) | join("-")' \
+    '[[1, 2], [3, 4]] | flatten | reduce .[] as $x (0; . + $x)' \
+    ; do
+    ./jq -n "$_filter" >/dev/null 2>&1 || true
+  done
+
+  # Floor guard: pgo_min_gcda ≈ the minimum distinct translation units the
+  # training must touch before a profile is worth trusting; at or below it
+  # the profile is too thin and the recipe falls back to a plain (LTO-only)
+  # build rather than shipping an empty-profile binary.
+  local pgo_min_gcda=15
+  local _gcda_count
+  _gcda_count="$(find "$_pgo_dir" -name '*.gcda' 2>/dev/null | wc -l)"
+  if (( _gcda_count < pgo_min_gcda )); then
+    warning "PGO produced only %d gcda files — rebuilding plain (LTO only)" "$_gcda_count"
+    export CFLAGS="$_final_cflags"
+    export LDFLAGS="$_final_ldflags"
+    ./configure --prefix=/usr
+    make clean
+    make
+  else
+    msg "PGO profile: %d gcda files — rebuilding with profile" "$_gcda_count"
+    # Phase 2: profile-used build. Tolerance flags are load-bearing:
+    # -Wno-error=missing-profile keeps a TU the training never ran (or a
+    # configure probe) a warning instead of a hard error;
+    # -Wno-error=coverage-mismatch downgrades the arc-count mismatch GCC
+    # otherwise errors on — those functions compile without profile data,
+    # everything else keeps the real profile, and the payload stays
+    # uninstrumented either way. No -fprofile-correction: the house pattern
+    # (cmake-git, glib2-git) does not use it.
+    export CFLAGS="$_final_cflags -fprofile-use=$_pgo_dir -Wno-error=missing-profile -Wno-error=coverage-mismatch"
+    export LDFLAGS="$_final_ldflags -fprofile-use=$_pgo_dir"
+    ./configure --prefix=/usr
+    if grep -q -- '-fprofile-generate' Makefile; then
+      error "phase-2 configure left -fprofile-generate in Makefile"
+      return 1
+    fi
+    make clean
+    make
+  fi
+}
+
+check() {
+  make -C "$pkgname-$pkgver" check
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  make DESTDIR="${pkgdir}" prefix=/usr install
+  install -Dm644 COPYING "${pkgdir}/usr/share/licenses/${pkgname}/COPYING"
+
+  # Fatal shared gate (lib/pgo.sh) — last statement on purpose: nothing may
+  # be added to $pkgdir after the payload is verified.
+  verify_no_profile_instrumentation "$pkgdir"
+}

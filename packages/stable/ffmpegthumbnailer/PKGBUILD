@@ -1,0 +1,36 @@
+# Maintainer: George Hu <integral@archlinux.org>
+# Contributor: Ronald van Haren <ronald.archlinux.org>
+# Contributor: boromil@gmail.com
+
+pkgname=ffmpegthumbnailer
+pkgver=2.3.1
+pkgrel=1
+pkgdesc="Lightweight video thumbnailer that can be used by file managers"
+url="https://github.com/dirkvdb/ffmpegthumbnailer"
+license=('GPL-2.0-or-later')
+arch=('x86_64')
+depends=('ffmpeg' 'libjpeg-turbo' 'libpng')
+makedepends=('cmake')
+optdepends=('gvfs: support for gio uris')
+source=("${pkgname}-${pkgver}.tar.gz::${url}/archive/v${pkgver}.tar.gz")
+sha256sums=('0691647dc054179c358794c643a0968f796d23c015d02283e6ce2cf4173d2e0a')
+
+build() {
+  cmake -B build \
+    -S "${pkgname}-${pkgver}" \
+    -D CMAKE_INSTALL_PREFIX=/usr \
+    -D ENABLE_GIO=ON \
+    -D ENABLE_THUMBNAILER=ON \
+    -D ENABLE_AUDIO_THUMBNAILER=ON
+
+  cmake --build build
+}
+
+check() {
+  ctest --test-dir build --output-on-failure
+}
+
+package() {
+  DESTDIR="${pkgdir}" cmake --install build
+  install -Dm644 "${pkgname}-${pkgver}"/COPYING -t "${pkgdir}/usr/share/licenses/${pkgname}/"
+}

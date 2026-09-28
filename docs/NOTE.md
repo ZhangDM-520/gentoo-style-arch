@@ -36,6 +36,87 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-09-28 — utility batch (17 leaf recipes) and the C-autotools / Go / ripgrep PGO tiers
+
+Symptom — the 2026-09-27 `trash-put` hang showed the set ships no trash-cli
+while Arch extra pins the affected 0.24.5.26, and beyond it the desktop/dev
+utility layer (clipboard, notification, mime, brightness, jq/curl/file/rsync,
+ripgrep/fd/fzf) had no recipes at all; PGO coverage stopped at the
+meson/CMake/Rust families. Root cause (trash-cli hang) — upstream 0.24.x
+retries forever on hard errno values; fixed by `e62b15d085` (HARD_ERRNOS),
+present in 0.26.9.14, absent from Arch extra's 0.24.5.26.
+
+Fix — 17 release-tracked recipes under `packages/stable/`, every record
+`id|packages/stable/<id>|stable|` (empty edges, no tags — true leaves, no
+incoming edges either): trash-cli 0.26.9.14 (pure Python; unsigned
+lightweight tag → checksum-pin, no `validpgpkeys`; pytest `check()` with the
+upstream `mock`→`unittest.mock` sed; shtab completions for all six commands
+including `trash-rm`, which Arch omits); desktop glue (xdg-utils 1.2.1 — pure
+shell, `options=(!lto !strip !debug)` as a non-codegen signal — libnotify
+0.8.8, wl-clipboard 2.3.0, shared-mime-info 2.5.1 + `30-update-mime-database.hook`
+(FS#72858), desktop-file-utils 0.28 + hook, xdg-user-dirs 0.20, playerctl
+2.4.1, brightnessctl 0.5.1, ffmpegthumbnailer 2.3.1); dev glue (jq 1.8.2,
+curl 8.22.0 as the three-way `pkgbase` split curl/libcurl-compat/libcurl-gnutls,
+file 5.48, rsync 3.5.1); Rust/Go CLIs (ripgrep 15.2.0, fd 10.5.0, fzf 0.74.4).
+
+PGO wave 2 — three tiers, each with a plain-build fallback and
+`verify_no_profile_instrumentation` as the LAST `package()` statement:
+ripgrep joins the Rust family (mold-git/niri-spicy-git pattern, `-Cprofile-generate`
++ LTO off → training → `llvm-profdata merge` → `-Cprofile-use` + fat LTO +
+CGU=1 + strip; upstream benchsuite corpora are multi-GB external, so training
+is the tree-based fallback — 11 runs, 22 `.profraw`; floor `pgo_min_profraw=0`,
+fat-LTO plain fallback). jq/file/rsync open the C-autotools family: every
+phase re-runs `./configure`, phase 1 strips `-flto*` and uses symmetric
+`-fprofile-generate=<dir>`, training is `make check` plus filter/sweep/tree-copy
+loops (gcda 23/25/119; floors `pgo_min_gcda` 15/15/20), phase 2 restores LTO +
+`-fprofile-use=<dir> -Wno-error=missing-profile -Wno-error=coverage-mismatch`;
+rsync keeps Fedora's rhbz#1898912 LTO history as the escape-hatch comment, and
+LTO+PGO builds fine on GCC 17. fzf is the first Go flavor: upstream bench
+suite + `fzf --profile-cpu` filter runs over a 200k-line list, merged via
+`go tool pprof -proto` into `$srcdir/cpu.pprof`, wired as
+`GOFLAGS+=-pgo=$srcdir/cpu.pprof`; floor `pgo_min_samples=500` (from
+`go tool pprof -top` "Total samples") with `-pgo=off` fallback — 3528 samples
+achieved. The recipe states the honest caveat: the profile over-represents
+micro-benchmarks versus interactive TUI use; it represents the batch-matching
+hot path.
+
+Signatures — the subkey rule worked as documented: rsync's signature is by Zen
+Dodd's signing subkey resolving to primary `C0E10545` (= Arch's
+`validpgpkeys`), and fd's commit is web-flow-signed. `file` 5.48's Zoulas key
+**expired 2026-08-15** — the signature predates the expiry, so makepkg warns
+EXPKEYSIG and still verifies; a future bump may need a refreshed key.
+libnotify/playerctl/fzf carry `#signed`; fzf's Junegunn Choi fingerprints had
+to enter the host keyring first (machine prerequisite for rebuilds).
+
+Host — one cumulative `IgnorePkg =` line (19 names) added inside `[options]` of
+`/etc/pacman.conf` (backup `/etc/pacman.conf.20260928-utilities.bak`).
+Known skew — trash-cli's 3 `test_help` assertions fail against shtab ≥ 1.6
+(help text lists more shells than upstream hardcodes): upstream brittleness,
+suite left full and documented in the recipe; the host's `BUILDENV=(!check)`
+makes makepkg skip `check()` here.
+
+Validation — `fish build-all.fish --list`: 145 recipes (git 42, stable 44,
+core 39, misc 1, app 22 — 148 memberships, the three `stable,core` records
+counted twice). `tests/pgo-transition.sh` gained a 4th `style` column
+(meson/autotools) and passes 8/8; new fixtures `tests/ripgrep-pgo.sh` and
+`tests/fzf-pgo.sh` pass. Fixture battery 41/42: only `recipe-sources.sh`
+fails, with 6 `untracked local source`/`untracked install script` rows for the
+batch's new patch/hook/conf/install files — the batch is not yet committed and
+the fixture's criterion is `git ls-files`, so `git add`/commit clears it.
+`lib/pgo.sh` deliberately unchanged —
+the C-autotools family shares its `.gcda` predicate and Go leaks none of the
+literals it covers (the gate trivially passes there).
+
+Durable rule — `-fprofile-generate=<dir>` and `-fprofile-use=<dir>` must name
+the SAME directory on BOTH sides: a bare `-fprofile-generate` plus
+`-fprofile-use=<dir>` silently misses every profile (GCC probe — the counters
+land where the use phase does not look). A PGO floor decides
+profile-used-versus-plain-fallback, so changing one is a behavioural change
+(MEMORY §4). A new PGO family earns a fixture and touches `lib/pgo.sh` only
+when its leak shapes are new. An expired maintainer key whose signature
+predates the expiry is a warning, not a failure: keep `#signed`/`validpgpkeys`,
+never `--skippgpcheck`, and record the expiry plus the re-key contingency.
+
 ## 2026-09-27 — `app` group wired (22 members), `third-party` retired, `app-cluster` prompt rows
 
 Symptom — the `app` group sat at 0 members while some 20 desktop
