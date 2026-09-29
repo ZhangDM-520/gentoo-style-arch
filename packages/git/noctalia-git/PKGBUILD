@@ -2,8 +2,8 @@
 
 pkgname=noctalia-git
 _pkgname=noctalia
-pkgver=5.1.0.r5570.g61aa22730
-pkgrel=2
+pkgver=5.2.0.r5671.g368755604
+pkgrel=3
 pkgdesc='A sleek, customizable desktop shell crafted for Wayland'
 arch=('x86_64' 'aarch64')
 url='https://github.com/noctalia-dev/noctalia'
@@ -64,13 +64,19 @@ conflicts=('noctalia' 'noctalia-bin')
 source=("${_pkgname}::git+${url}.git#branch=main"
         0001-idle-lock-resume-and-inhibit-tracking.patch)
 sha256sums=('SKIP'
-            '20c1ce43b4c1dc20324c49b68cc1d6696fecda3e3d9017f97c7160c7657d7706')
+            'b4ecd6ad23284498079095d815889c02ebf52fa81c3c685c7d32700744793bfa')
 
 pkgver() {
   cd "${_pkgname}"
 
+  # Upstream moved the version out of meson.build into a VERSION file (meson reads
+  # `version: files('VERSION')` now), and the sed below stopped matching, producing an
+  # empty prefix like `.r5671.g…`. Read whichever of the two layouts is present.
   local version
   version="$(sed -n "s/^  version: '\([^']*\)',/\1/p" meson.build)"
+  if [ -z "${version}" ] && [ -f VERSION ]; then
+    version="$(<VERSION)"
+  fi
   printf '%s.r%s.g%s' "${version}" "$(git rev-list --count HEAD)" "$(git rev-parse --short=9 HEAD)"
 }
 
@@ -80,7 +86,11 @@ prepare() {
   # Locking must not undo the idle chain. Re-arming notifications ran the resume action of every
   # already-idled behaviour, and screen_off's resume action is PowerOnMonitors - so the panel lit
   # back up the moment the session locked, then had to wait out the blanking timeout again.
-  # Candidate upstream fix, PR #4002 (fixes #4190); drop this once it is merged.
+  # Candidate upstream fix, PR #4002 (fixes #4190), snapshotted from its head 9d530d40 as a
+  # code-only diff — the PR's docs/user/services/idle.mdx hunks are excluded. Refresh the
+  # snapshot whenever #4002 gains commits (pre-flight `git apply -3` against current main first:
+  # this source floats on #branch=main); drop the patch, its source/sha256sums entry and this
+  # prepare() once #4002 merges. The -dirty version suffix is the reminder that the patch is in.
   # Verified on niri 26.04: /sys/class/drm/<connector>/dpms goes On at the lock without it.
   git apply -3 ../0001-idle-lock-resume-and-inhibit-tracking.patch
 }

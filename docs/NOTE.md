@@ -36,6 +36,66 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-09-30 — noctalia patch snapshot refreshed to PR #4002 head `9d530d40` (timer-reset fix included)
+
+- **Trigger**: the PR follow-ups. After our 2026-09-22 snapshot,
+  **noctalia-dev/noctalia#4002** gained two commits on 2026-09-28 —
+  **b95dce90** `fix(idle): don't reset waiting behaviors without locked_timeout
+  on lock` and **9d530d40** `docs(idle): document locked_timeout and its scope`
+  — prompted by BBaoVanC/TheSkyentist reporting that the lock re-armed *every*
+  behavior and wiped in-flight countdowns (a regression from upstream #3388).
+  Our `0001-idle-lock-resume-and-inhibit-tracking.patch` froze the 2026-09-22
+  diff, so it carried the reset regression.
+- **Change**: the snapshot is now PR head `9d530d40`'s diff **code-only** —
+  the `docs/user/services/idle.mdx` hunks are excluded (deviation from the
+  2026-09-22 "diff unchanged" wording: the docs are upstream's, the patch
+  carries the behavioural fix).   `sha256sums` refreshed to `b4ecd6ad…4793bfa`; static `pkgver`/`pkgrel` set
+  to `5.2.0.r5671.g368755604-3` (see the pkgver note below for the `-3` and
+  where that pair comes from); the `prepare()` comment now
+  carries the full contract (provenance, code-only rule, refresh trigger,
+  pre-flight requirement, removal on merge). PR #4002 and issue #4190 are both
+  still open, so the patch stays.
+- **pkgver() drift fixed in passing** (separate defect the acceptance build
+  exposed): upstream moved `version:` from a meson string to `files('VERSION')`,
+  the recipe's `sed` matched nothing, and the archive came out
+  `noctalia-git-.r5671.g368755604-1` — an empty version prefix with zero build
+  errors. `pkgver()` now falls back to the `VERSION` file (verified against the
+  build tree: yields `5.2.0.r5671.g368755604`). The installed package keeps the
+  odd prefix until the next rebuild. Related mechanism worth knowing: when
+  `pkgver()` moves the version, **makepkg itself** rewrites the static
+  `pkgver=` line and resets `pkgrel=1` in a VCS PKGBUILD (lane log
+  `==> Updated version: …`) — which is exactly how the 2026-09-23 PGO-fix
+  bump got eaten during the acceptance build, and why `tests/noctalia-pgo.sh`
+  asserts `pkgrel >= 2`. This change restores the bump as `pkgrel=3`.
+- **Validation**:
+  - `git apply -3 --check` against a fresh clone of upstream
+    `main@368755604`: clean, zero offsets/fuzz — the three files' preimage
+    blobs are unchanged upstream since the patch base.
+  - Recipe checklist: `bash -n`, `makepkg --printsrcinfo` in sync,
+    `--audit`/`--list`, dry-runs for git/stable/core (42/44/39 packages), full
+    fixture battery **42/42** (`noctalia-pgo.sh` included). The audit's 18 lint
+    findings are pre-existing and non-noctalia.
+  - Acceptance build+install: `fish build-all.fish --no-deps -i noctalia-git`
+    (11m47s, run-record ok), patch applied into the build tree, binary
+    `v5.2.0-52-g368755604302-dirty`, baked `.gcda` count 0.
+  - **Behavioural A/B on this host (niri)** with a test chain
+    (dim 10 s → screen-off 15 s → lock 20 s, plus a `probe` at 30 s and a
+    `locked-probe` with `locked_timeout = 5`): on the new binary dpms goes Off
+    at dim+5.1 and **stays Off across the lock** (dim+10.1), and `dim`'s
+    resume_command does **not** replay at lock — the original bug stays fixed;
+    `locked-probe` fires 5.08 s after the lock-time re-arm (the `locked_timeout`
+    switch works); `probe` fires at dim+20.0, i.e. its countdown **survives**
+    the lock. Control: the previous binary's cycle fired `probe` at
+    *lock+30.07 s* — exactly the reset regression b95dce90 fixes. Shell
+    restarted the niri way; the `nri-idle` user policy was restored afterwards
+    and verified live (`nri-idle status`).
+- **Durable rule**: the snapshot tracks PR #4002's head as a **code-only** diff
+  and is refreshed whenever #4002 gains commits; every refresh is pre-flighted
+  with `git apply -3` against current `main` first (the recipe floats on
+  `#branch=main`); patch + `source`/`sha256sums` entry + `prepare()` are
+  deleted once #4002 merges — the `-dirty` version suffix is the reminder the
+  patch is in.
+
 ## 2026-09-29 — krita-git generate failure: openexr 3.5's `zstd CONFIG` dependency vs. Makefile-built zstd-git
 
 Symptom — `krita-git` (r66780) died in `build()` at the CMake **generate**

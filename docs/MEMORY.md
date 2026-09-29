@@ -712,6 +712,21 @@ constant, not a baked path).
 
 ## 6. Pitfall digest (full details: NOTE.md sections of same dates)
 
+- **A VCS `pkgver()` that parses upstream build metadata is a silent-drift
+  hazard** (2026-09-30, noctalia-git): upstream moved `version:` out of
+  `meson.build` into a `VERSION` file (`version: files('VERSION')`), the
+  recipe's `sed` matched nothing, and the build produced
+  `noctalia-git-.r5671.g368755604-1` — an empty version prefix and zero build
+  errors. The archive name and `pacman -Qi` are the only witnesses. `pkgver()`
+  now falls back to the `VERSION` file. Rule: a `pkgver()` that greps upstream
+  metadata is a parsing contract with upstream; when a rebuilt archive's name
+  looks wrong, run `pkgver()` against the source tree before trusting anything
+  downstream, and prefer an upstream version *file* over parsing build scripts.
+  Related: when `pkgver()` moves the version, **makepkg** rewrites the static
+  `pkgver=` line and resets `pkgrel=1` in the PKGBUILD itself (lane log
+  `==> Updated version: …`) — so a committed `pkgver=`/`pkgrel=` pair is a
+  record of the last build, not a hand-managed value.
+
 - **openexr ≥ 3.5 resolves zstd via `find_dependency(zstd CONFIG)`**
   (2026-09-29, krita-git generate failure): zstd's Makefile install ships no
   CMake package config, so config-mode OpenEXR resolution fails and every

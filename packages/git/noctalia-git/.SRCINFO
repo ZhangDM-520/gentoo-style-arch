@@ -1,7 +1,7 @@
 pkgbase = noctalia-git
 	pkgdesc = A sleek, customizable desktop shell crafted for Wayland
-	pkgver = 5.1.0.r5570.g61aa22730
-	pkgrel = 2
+	pkgver = 5.2.0.r5671.g368755604
+	pkgrel = 3
 	url = https://github.com/noctalia-dev/noctalia
 	arch = x86_64
 	arch = aarch64
@@ -52,6 +52,6 @@ pkgbase = noctalia-git
 	source = noctalia::git+https://github.com/noctalia-dev/noctalia.git#branch=main
 	source = 0001-idle-lock-resume-and-inhibit-tracking.patch
 	sha256sums = SKIP
-	sha256sums = 20c1ce43b4c1dc20324c49b68cc1d6696fecda3e3d9017f97c7160c7657d7706
+	sha256sums = b4ecd6ad23284498079095d815889c02ebf52fa81c3c685c7d32700744793bfa
 
 pkgname = noctalia-git
