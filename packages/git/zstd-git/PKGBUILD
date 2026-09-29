@@ -74,4 +74,46 @@ package() {
     make PREFIX="/usr" DESTDIR="$pkgdir/" install
     install -D -m755 contrib/pzstd/pzstd "$pkgdir/usr/bin/pzstd"
     install -D -m644 LICENSE "${pkgdir}/usr/share/licenses/${_pkgname}/LICENSE"
+
+    # zstd's Makefile install ships no CMake package config (only the CMake
+    # build's install(EXPORT) generates one), but openexr >= 3.5 resolves zstd
+    # with find_dependency(zstd CONFIG) and fails its whole config load without
+    # it — which pushed krita's FindOpenEXR onto its broken manual fallback
+    # (Imath_INCLUDE_DIR-NOTFOUND, 2026-09-29). Install an equivalent config by
+    # hand so CONFIG-mode consumers of OpenEXR keep working.
+    install -d "$pkgdir/usr/lib/cmake/zstd"
+    cat > "$pkgdir/usr/lib/cmake/zstd/zstdConfig.cmake" <<'EOF'
+# Hand-written stand-in for upstream's CMake-build-generated zstdConfig.cmake;
+# this recipe installs via the Makefile, which ships no package config.
+# Mirrors upstream's exported targets: zstd::libzstd_shared (what OpenEXR
+# links) and zstd::libzstd. No zstd::libzstd_static — shared libs only here.
+if(NOT TARGET zstd::libzstd_shared)
+  add_library(zstd::libzstd_shared SHARED IMPORTED)
+  get_filename_component(_zstd_prefix "${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
+  set_target_properties(zstd::libzstd_shared PROPERTIES
+    IMPORTED_LOCATION "${_zstd_prefix}/lib/libzstd.so"
+    INTERFACE_INCLUDE_DIRECTORIES "${_zstd_prefix}/include")
+  unset(_zstd_prefix)
+endif()
+
+if(NOT TARGET zstd::libzstd)
+  add_library(zstd::libzstd INTERFACE IMPORTED)
+  set_target_properties(zstd::libzstd PROPERTIES
+    INTERFACE_LINK_LIBRARIES zstd::libzstd_shared)
+endif()
+EOF
+    # SameMajorVersion semantics, matching upstream's write_basic_package_version_file
+    cat > "$pkgdir/usr/lib/cmake/zstd/zstdConfigVersion.cmake" <<EOF
+set(PACKAGE_VERSION "${pkgver%%.r*}")
+if(PACKAGE_FIND_VERSION VERSION_GREATER PACKAGE_VERSION)
+  set(PACKAGE_VERSION_COMPATIBLE FALSE)
+elseif(NOT PACKAGE_FIND_VERSION_MAJOR EQUAL ${pkgver%%.*})
+  set(PACKAGE_VERSION_COMPATIBLE FALSE)
+else()
+  set(PACKAGE_VERSION_COMPATIBLE TRUE)
+  if(PACKAGE_FIND_VERSION VERSION_EQUAL PACKAGE_VERSION)
+    set(PACKAGE_VERSION_EXACT TRUE)
+  endif()
+endif()
+EOF
 }

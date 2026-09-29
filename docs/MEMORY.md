@@ -712,6 +712,17 @@ constant, not a baked path).
 
 ## 6. Pitfall digest (full details: NOTE.md sections of same dates)
 
+- **openexr ≥ 3.5 resolves zstd via `find_dependency(zstd CONFIG)`**
+  (2026-09-29, krita-git generate failure): zstd's Makefile install ships no
+  CMake package config, so config-mode OpenEXR resolution fails and every
+  bundled find-module falls into its fallback path — krita's fell over on an
+  upstream `ImfConfig.h`/`ImathConfig.h` typo and leaked
+  `Imath_INCLUDE_DIR-NOTFOUND` into an imported target. `zstd-git` `package()`
+  now installs a hand-written `/usr/lib/cmake/zstd/` config
+  (`zstd::libzstd_shared`) — keep it when touching the recipe. Rule: a
+  Makefile-built provider of a CONFIG-mode dependency must ship its CMake
+  package config.
+
 - **shtab ≥ 1.6 outgrew upstream's hard-coded shell list** (2026-09-28,
   trash-cli `check()`): 3 `test_help` assertions fail because shtab's help
   text lists more shells than upstream's expectations hardcode — upstream

@@ -62,6 +62,16 @@ prepare() {
 	# fails to compile. Drop when upstream fixes it.
 	sed -i 's/class=" QWidget"/class="QWidget"/' \
 		"${_pkgname}/plugins/assistants/Assistants/AssistantsToolOptions.ui"
+
+	# FindOpenEXR.cmake's manual Imath lookup searches for ImfConfig.h (an
+	# OpenEXR header name); Imath ships ImathConfig.h, so Imath_INCLUDE_DIR
+	# stays NOTFOUND and leaks verbatim into OpenEXR::OpenEXR's
+	# INTERFACE_INCLUDE_DIRECTORIES, failing CMake generate. That fallback only
+	# runs when OpenEXR's config load fails (hit 2026-09-29 via openexr 3.5
+	# needing find_dependency(zstd CONFIG)); rewrite the lookup to the real
+	# header name. Drop when upstream fixes it.
+	sed -i 's/ImfConfig\.h/ImathConfig.h/g' \
+		"${_pkgname}/cmake/modules/FindOpenEXR.cmake"
 }
 
 build() {

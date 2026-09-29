@@ -36,6 +36,63 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-09-29 — krita-git generate failure: openexr 3.5's `zstd CONFIG` dependency vs. Makefile-built zstd-git
+
+Symptom — `krita-git` (r66780) died in `build()` at the CMake **generate**
+step: dozens of `Target "kritaui" contains relative path in its
+INTERFACE_INCLUDE_DIRECTORIES: "Imath_INCLUDE_DIR-NOTFOUND"`, plus
+`Imported target "OpenEXR::OpenEXR" includes non-existent path`
+(`.state/logs/krita-git.log` in the `~/Workspace` clone). The previous krita
+attempt (09-06/09-07) had passed configure and died later on the uic issue.
+
+Root cause — three stacked facts, each reproduced:
+1. CachyOS shipped `openexr 3.5.1-1.1` on 09-26; its `OpenEXRConfig.cmake`
+   now runs `find_dependency(zstd CONFIG)` unconditionally.
+2. `zstd-git` builds with zstd's Makefile, whose `make install` ships no CMake
+   package config (only the CMake build's `install(EXPORT)` generates one), so
+   config-mode OpenEXR resolution fails: a standalone probe reported
+   `OpenEXR_FOUND=0 ver=3.5.1`, `zstd_FOUND=0`, and "OpenEXR could not be
+   found because dependency zstd could not be found".
+3. krita's bundled `cmake/modules/FindOpenEXR.cmake` then falls into its
+   manual-lookup branch, which searches for `ImfConfig.h` (OpenEXR's header
+   name) where Imath ships `ImathConfig.h` → `Imath_INCLUDE_DIR` stays
+   `NOTFOUND` and is spliced verbatim into the hand-created `OpenEXR::OpenEXR`
+   imported target's interface includes → generate fails. A/B probe of the
+   module: unpatched yields `OpenEXR_INCLUDE_DIRS=/usr/include/OpenEXR;Imath_INCLUDE_DIR-NOTFOUND`,
+   patched yields `/usr/include/OpenEXR;/usr/include/Imath`.
+
+Fix —
+- `zstd-git` `package()` installs a hand-written
+  `/usr/lib/cmake/zstd/zstdConfig.cmake` (+ `zstdConfigVersion.cmake`,
+  SameMajorVersion) defining `zstd::libzstd_shared` (the name OpenEXR's
+  exported targets link) and a `zstd::libzstd` alias; no
+  `zstd::libzstd_static`, the package ships shared libs only. The Makefile
+  build cannot emit upstream's `install(EXPORT)` files and a second CMake
+  build just for config files would fight the PGO phases.
+- `krita-git` `prepare()` rewrites `ImfConfig.h` → `ImathConfig.h` in the
+  bundled FindOpenEXR.cmake (six refs, Imath block only), same
+  drop-when-upstream-fixes convention as the uic `QWidget` sed above it.
+
+Validation — rebuilt and installed `zstd-git` via
+`fish build-all.fish --no-deps --forceinstall` (success, 1m33s; archive
+contains both cmake files, `pacman -Ql zstd-git | grep cmake` confirms).
+Probe after install: `find_package(OpenEXR NO_MODULE)` → `OpenEXR_FOUND=1
+ver=3.5.1`, `zstd_FOUND=1 ver=1.5.7` (Imath/openjph/libdeflate all found).
+Fallback seam proven by the A/B above. Fixtures: `bash tests/run-all.sh` 40/42
+— the two `-i` install fixtures (`install-archive-guard`, `sudo-keepalive`)
+failed only while an external pacman transaction held `db.lck` (the builder's
+install preflight), and both re-ran PASS lock-free. **Non-claim:** krita
+itself was not recompiled; the seam is verified at generate level only — the
+next real `--no-deps krita-git` build is the end-to-end follow-up.
+
+Durable rule — a Makefile-built (or otherwise config-less) provider of a
+library that CMake consumers resolve via CONFIG mode must ship the CMake
+package config: one consumer's `find_dependency` failure silently degrades
+every downstream find-module into its fallback path. And when a CMake generate
+error shows a `Foo_INCLUDE_DIR-NOTFOUND` *string* as a relative path, the
+producer is a hand-rolled find-module fallback — read that module first, not
+the consumer's CMakeLists.
+
 ## 2026-09-28 — real build of the utility batch: bare-repo VCS, keyring imports, the curl split conflict, and the sync pkgrel downgrade
 
 Symptom — the first real `--no-deps -i` pass over the 17 new stable recipes
