@@ -37,7 +37,7 @@ rather than granting it.
 | `docs/portability.md` | Intensity profiles and their formulas, `GSA_*` overrides, CPU-tuning policy. |
 | `CONTRIBUTING.md` | Recipe-change checklist, trimming standard, source-verification rules. |
 | `SECURITY.md` | Trust model (a recipe executes arbitrary shell), safe-operation rules, what must never be committed. |
-| `CONTEXT.md` | The project's own vocabulary: recipe, topology record, build-order edge, coupled batch, lane, run record, continuation, deferral — each with the terms to avoid (e.g. "dependency" means a pacman dependency, never a build-order edge). |
+| `CONTEXT.md` | The project's own vocabulary: recipe, topology record, build-order edge, consumer expansion, coupled batch, lane, run record, continuation, deferral — each with the terms to avoid (e.g. "dependency" means a pacman dependency, never a build-order edge). |
 | `docs/adr/` | One decision record per seam that fought back: the shared PGO gate (`0001`), the one-record topology (`0002`), the run record (`0003`). Read the matching ADR before re-opening a decision. |
 
 `docs/NOTE.md` is the long chronological file (newest section first): grep a
@@ -169,18 +169,26 @@ bare-repo and makepkg VCS operations. Prefix those with `GIT_CONFIG_COUNT=0`
 
 ### Selection semantics
 
-A bare package name is **not** a leaf build: it expands the whole transitive
-dependency chain, so `build-all.fish niri-spicy-git` also rebuilds llvm, rust,
-mesa and everything between. `--no-deps` is the only way to rebuild one package
-whose installed dependencies are known current.
+A selection of X — positional ref, `-g` group member, or app-prompt row —
+expands to X plus its transitive **consumers** (reverse build-order edges: a
+record `id|path|groups|edges` listing B in `edges` consumes B), so
+`build-all.fish glib2-git` also rebuilds gtk4-git, networkmanager, fcitx5-git
+and everything else that must build after glib2-git. Rebuilding X cannot break
+what X consumes; the ABI risk is X's consumers. Upstream expansion is gone:
+prerequisites are assumed installed and current, so a consumer's other
+prerequisites are never pulled in (the same soundness `--no-deps` always made)
+— bootstrap and fresh builds use `-g` group runs. `--no-deps` rebuilds exactly
+the named packages, nothing else: a consumer-free name is already a leaf, and
+`--no-deps` is what keeps a consumer-bearing name leaf.
 
-The `app` group is the exception that proves the rule: `-g app` is a leaf
-selection by construction — a TTY build or `-n` run first prompts to
+The `app` group is where the prompt lives, not an expansion exception —
+selections expand consumers here like everywhere else (app packages typically
+have none). A TTY build or `-n` run first prompts to
 multi-select (all unchecked + Enter = build every app, any checked = build only
 those, `q` aborts non-zero), non-TTY runs and `-l` silently take the whole
-group, and the group's members are never run through `expand_deps`, so an app
-package's local dependency edge must not drag its dependency chain into the
-run. The prompt is a filter layer in front of the normal pipeline: whatever it
+group. A group run can reach across groups through consumers — `-g git` may
+add app consumers via `glib2-git`. The prompt is a filter layer in front of the
+normal pipeline: whatever it
 returns becomes the group's contribution to the selection and every later step
 (topo sort, ranges, lanes) is the existing code. Records sharing an
 `app-cluster=<name>` topology tag present as ONE prompt row
@@ -202,7 +210,8 @@ is never auto-corrected, it is reported with the nearest candidates.
 
 `-g` takes repeats or commas (`-g git -g core` / `-g git,core`) and dedupes the
 union, so group *and* explicit package selections can be combined in one run.
-Ranges index the **selection** in dependency order and may be open-ended (`22..`,
+Ranges index the **selection** in build order (each package before its
+consumers) and may be open-ended (`22..`,
 `..15`), but a range still needs a `-g` or package selection to anchor it — read
 `-l -g git` (not a bare `-l`, which lists the whole set in a different order)
 before choosing one.
@@ -275,8 +284,8 @@ Four modules, deliberately separated (`docs/architecture.md`):
    The five group names are stated once (`_GROUP_NAMES`) and nothing outside
    that roster is readable; any other file in `config/` is unreachable state
    that silently goes stale — `tests/project.sh` fails on it.
-3. **Builder** — `build-all.fish` resolves IDs, expands and topologically sorts
-   dependencies, dispatches isolated fish child processes as lanes, serializes
+3. **Builder** — `build-all.fish` resolves IDs, expands consumers and sorts
+   by build order, dispatches isolated fish child processes as lanes, serializes
    pacman transactions, owns the dashboard, and reports per-package logs.
 4. **Runtime state** — split by owner. `.state/` (or `GSA_STATE_DIR`) holds
    builder-owned logs, lane results, and the pacman mutex. makepkg's own
@@ -285,7 +294,7 @@ Four modules, deliberately separated (`docs/architecture.md`):
 
 Consequences worth internalising:
 
-- The loader validates every topology record, the group roster, the dependency
+- The loader validates every topology record, the group roster, the build-order
   graph, and a complete topological sort on **every** invocation. One malformed
   record breaks `--list`, `--help`, and every build, not just the affected
   package.

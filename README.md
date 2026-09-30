@@ -37,10 +37,10 @@ live under `packages/core/`, `autofdo-git` and `libclc-git` come from
 | `stable` | 44 | Stock-name packages synchronized with Arch repositories (grew 27 → 44 with the 2026-09-28 leaf-utility batch) |
 | `core` | 39 | Heavy, ABI-coupled, source-heavy, and ROCm packages |
 | `misc` | 1 | Optional CachyOS kernel recipe |
-| `app` | 22 | Optional applications; a TTY build/`-n` run prompts to multi-select (all unchecked + Enter = build all; records sharing an `app-cluster` tag toggle as one row), leaf builds with no dependency expansion |
+| `app` | 22 | Optional applications; a TTY build/`-n` run prompts to multi-select (all unchecked + Enter = build all; records sharing an `app-cluster` tag toggle as one row); leaf builds — app packages typically have no consumers to expand |
 
 Package records — the ID-to-path binding, group membership, the local
-dependency graph, and coupled-batch tags — are declarative, one record per
+build-order graph, and coupled-batch tags — are declarative, one record per
 package in `config/topology.conf` (`id|path|groups|edges[|tags]`); do not
 infer build order from directory names.
 
@@ -73,12 +73,16 @@ tools/go-modcache-check.sh             # is the Go module cache intact?
 ```
 
 Build a selected group or package. Selection is mandatory; a bare invocation
-never starts an unattended full rebuild:
+never starts an unattended full rebuild. A selection expands to the named
+packages plus their transitive consumers — the packages that must rebuild
+after them — in build order; prerequisites are assumed installed and current.
+`--no-deps` rebuilds exactly what is named:
 
 ```sh
 fish build-all.fish --group git
 fish build-all.fish --group core
-fish build-all.fish --no-deps niri-spicy-git
+fish build-all.fish glib2-git               # glib2-git and its consumers
+fish build-all.fish --no-deps glib2-git     # glib2-git alone
 ```
 
 Use `--install` only when the immediately installed package state is desired.

@@ -311,10 +311,11 @@ printf 'dashboard fixture: PASS\n'
         exit 1
     }
 
-    # A chain p1 -> p2 -> p3 (so a bare name expands into a chain AND the
-    # failure case's counts are deterministic: p1 succeeds, p2 fails, p3 is
-    # never started). The trivial stubs from the helper: makepkg fails on
-    # GSA_FAKE_FAIL_PACKAGE and touches an archive otherwise.
+    # A chain p1 -> p2 -> p3 (p2 consumes p1; p3 consumes p2 — so a bare name
+    # grows into its CONSUMERS and the failure case's counts are
+    # deterministic: p1 succeeds, p2 fails, p3 is never started). The trivial
+    # stubs from the helper: makepkg fails on GSA_FAKE_FAIL_PACKAGE and
+    # touches an archive otherwise.
     ws=$fixture/ws
     make_workspace "$ws" 1 2 low
     for id in p1 p2 p3; do
@@ -380,7 +381,7 @@ printf 'dashboard fixture: PASS\n'
 
     # P4 — the selection listing and its index note.
     prose --allow-broken-rustc --no-deps --no-sync -l -g git
-    has 'Selected packages in dependency order (3)'
+    has 'Selected packages in build order (3)'
     has 'Ranges index this list'
 
     # P5 — an over-long range clamps and says so.
@@ -393,12 +394,18 @@ printf 'dashboard fixture: PASS\n'
     has 'matched recipe'
     has 'case-sensitive'
 
-    # P7 — a bare name grows into its chain and says so; --no-deps stays
-    # silent and single.
+    # P7 — a bare name grows into its CONSUMERS and says so; --no-deps stays
+    # silent and single. p3 consumes p2, so bare p2 = p2 p3 — the same
+    # "added 1 of the 2" count as the old chain growth, with the order
+    # flipped: the named package first, its consumer after.
     prose --allow-broken-rustc --no-sync -n p2
-    has 'dependency expansion added 1 of the 2 selected packages'
+    has 'consumer expansion added 1 of the 2 selected packages'
+    seq7=$(sed -n '/Build order (dry run):/,/^Total:/p' <<<"$out" \
+        | sed -n 's/^ *[0-9][0-9]*\. //p' | tr '\n' ' ')
+    [[ $seq7 == 'p2 p3 ' ]] \
+        || fail "bare p2 listed [$seq7], want [p2 p3] (its consumers in build order)"
     prose --allow-broken-rustc --no-deps --no-sync -n --no-deps p2
-    hasnt 'dependency expansion added'
+    hasnt 'consumer expansion added'
 
     printf 'prose rendering fixture: PASS (summary counts, outcome lines, headers, notes)\n'
 )

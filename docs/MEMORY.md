@@ -127,7 +127,9 @@
 12. **Mandatory selection + keystone discipline** (2026-09-07): build-all.fish
     has NO default action — always pass `-g` and/or package names. For
     ABI-coupled core updates use `-g core` (auto-installs the merged core set);
-    for leaf rebuilds use `--no-deps`. New `_DEPS` edges are
+    for leaf rebuilds use `--no-deps` — a selection expands to the package's
+    consumers, so a consumer-free name is already a leaf while `--no-deps` is
+    what keeps a consumer-bearing name leaf. New `_DEPS` edges are
     added ONLY after verification against `pacman -Qi Depends` (noctalia has
     NO qt6-declarative dep; NM-openvpn reaches ssl only via libnm).
 13. **llvm-libs-git never moves alone** (2026-09-07 incident): LLVM snapshots
@@ -292,7 +294,8 @@
 - The logical groups are `git`, `stable`, `core`, `misc` and `app` (the
   optional-applications group: on a TTY a build/`-n` run prompts to
   multi-select them, non-TTY runs take the whole list, and app members are
-  leaf builds whose dependency chain is never expanded). `app` membership is
+  leaf builds — consumer expansion applies like everywhere else, but app
+  packages typically have no consumers). `app` membership is
   EXCLUSIVE — wiring a record into `app` replaces its previous group (22
   members as of the 2026-09-27 wiring; `qt5ct`/`qt6ct` thereby left `core`,
   while their `abi=must` tags are untouched — a Qt ABI batch must name them
@@ -327,9 +330,12 @@
 ### build-all.fish
 
 Selection is mandatory. The builder loads and validates the declarative
-package map, groups, and dependency graph before handling command-line
-arguments. It accepts package IDs, expands local dependencies, sorts them
-topologically, and rejects cycles or missing records.
+package map, groups, and build-order graph before handling command-line
+arguments. It accepts package IDs, expands consumers (reverse build-order
+edges: a record's `edges` field names what it consumes), sorts them in build
+order, and rejects cycles or missing records. Prerequisites are assumed
+installed and current — nothing upstream is pulled in; bootstrap and fresh
+builds use `-g` group runs.
 
 `--intensity xhigh` is the default automatic plan. It derives bounded lanes
 and a global normal-lane job budget from CPU threads and available memory;
@@ -1076,8 +1082,8 @@ constant, not a baked path).
   `libstdc++-snapshot` → `gcc-snapshot`), each announced by `_ref_form_note`.
   The index comes from the committed `.SRCINFO` files (218 names, none shared by
   two recipes, no unexpanded variables), never from PKGBUILD evaluation. A
-  **typo is never auto-corrected** — a wrong guess builds a whole dependency
-  chain — it is reported with up to three candidates, ranked by an awk
+  **typo is never auto-corrected** — a wrong guess rebuilds a package plus its
+  consumers — it is reported with up to three candidates, ranked by an awk
   Levenshtein sweep (fish costs ~0.4 s per token for the same answer).
   Separately: a **range indexes the selection**, so read `-l -g GROUP` before
   choosing one — `-l` now honours the selection and `-n` with none covers the

@@ -120,6 +120,56 @@ dependency edges, and incident root causes are unaffected by the renames.
   deleted once #4002 merges — the `-dirty` version suffix is the reminder the
   patch is in.
 
+## 2026-09-30 — selection expansion flipped: consumers, not the dependency chain
+
+Symptom — a bare package selection expanded its **upstream** build-order
+chain (`build-all.fish niri-spicy-git` also rebuilt llvm-git, rust-git,
+mesa-git — everything niri *consumes*). Wrong risk direction: rebuilding X
+cannot break what X consumes — to `dbus`, `pipewire` is only an ABI consumer,
+so building X alone is harmless to its prerequisites. The ABI risk lives in
+X's **consumers**.
+
+Decision (user-confirmed) — a selection means **X + its transitive consumers**
+(reverse build-order edges). Upstream expansion is removed: prerequisites are
+assumed installed and current, and bootstrap/fresh builds use `-g` group runs.
+`--no-deps` keeps its leaf-only meaning (the escape hatch that keeps a
+consumer-bearing name leaf). Group selections and app-prompt rows expand
+consumers too (uniformly — the old "app never expands" exception is gone; app
+packages typically have no consumers). Blast radius on the real topology:
+53 of 146 records have ≥1 consumer, closures up to 21 (`glib2-git`), while the
+old upstream closures maxed at 8 — the cost profile inverted, and 64% of
+records got *cheaper* (consumer-free = already leaf).
+
+Fix — `read_topology_config` now builds a reverse-adjacency cache
+(`_CONSUMER_INDEX`, the `_pkgname_index` shape); `expand_deps` became
+`expand_consumers` (BFS over consumers); all selection forms funnel through
+one closure before `topo_sort`. Reused unchanged: topological sort (X before
+its consumers), lanes, `-i` install-before-dependents, deferral, the
+`abi=must/should` gate (still the backstop refusing `--no-deps`/group runs
+that omit an installed `abi=must` batch member), and the run
+record/continuation (a consumer-closed selection re-expands idempotently on
+resume). `-l` now heads `Selected packages in build order (N)` and the
+accounting line reads `consumer expansion added N of the M selected packages`
+(CONTEXT discipline: never "dependency" for build-order relations).
+
+Validation — `fish -n` clean; real-topology dry runs: `-n niri-spicy-git` → 1
+(was 3), `-n mold-git` → 1, `-n pipewire` → `pipewire, wireplumber`,
+`-n glib2-git` → 22 rows (glib2-git first), `--no-deps glib2-git` → 1,
+`-l -g git` → 66 (cross-group consumers included); fixture pins rewritten in
+`tests/project.sh` (new `consumer-expansion` section: 2-hop chain, cross-group
+pull, leaf, idempotent continuation), `tests/abi-batch-policy.sh` (B1 re-pinned
+to `--no-deps llvm-git`; D now consumer-direction), `tests/app-group.sh`,
+`tests/dashboard.sh`; full battery `bash tests/run-all.sh` **42/42**, `--audit`
+rc 0.
+
+Durable rule — **expand along the risk, not the recipe**: a rebuild's blast
+radius is its consumers, so a selection is "X + everything at ABI risk from
+X's rebuild"; what X consumes is a build-order fact (`topo_sort`, `-i`), not
+something to rebuild. Recorded edges are pruned local build-order edges, so
+consumer closures are a *lower* bound on real ABI risk — the `abi=` coupled
+batch tags remain the expression of risk the graph cannot show (e.g.
+`mesa-git` is `abi=should` with zero recorded consumers).
+
 ## 2026-09-29 — krita-git generate failure: openexr 3.5's `zstd CONFIG` dependency vs. Makefile-built zstd-git
 
 Symptom — `krita-git` (r66780) died in `build()` at the CMake **generate**

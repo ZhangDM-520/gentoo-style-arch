@@ -7,8 +7,9 @@ it, and add one record to `config/topology.conf`:
 `id|path|groups|edges[|tags]`. The record is the only place that binds a
 package ID to a filesystem path. `groups` is a comma list over the five group
 names (`git, stable, core, misc, app`), `edges` is the comma
-list of local build-order dependencies (a record ending in a bare `|` is a
-deliberate no-edge record), and `tags` carries coupled-batch policy
+list of the packages this one consumes (its local build-order edges — a record
+ending in a bare `|` is a deliberate no-edge record), and `tags` carries
+coupled-batch policy
 (`abi=must` / `abi=should`, see "Updating coupled stacks") and the optional
 `app-cluster=<name>` prompt-cluster tag (see "The app group"). The loader
 validates every record on every invocation and one malformed record breaks
@@ -36,8 +37,10 @@ appends double-count at the first bump.
 
 ## The app group
 
-`app` is a real group with leaf-build semantics: a record wired into it
-carries `app` **alone** — membership replaces the record's previous group.
+`app` is a real group whose members are leaf packages — a selection of one
+expands to nothing beyond it, because app packages typically have no consumers.
+A record wired into it carries `app` **alone** — membership replaces the
+record's previous group.
 The 2026-09-27 wiring moved 22 records in; `qt5ct`/`qt6ct` thereby left
 `core`, and the `third-party` group retired at the same time (its two
 recipes relocated to `packages/stable/`). Leaving a group does not touch
@@ -85,10 +88,13 @@ llvm-snapshot bump later (`prepare()`'s `cargo fetch` hit the undefined
 `cl::ParseCommandLineOptions` symbol). A recipe that gains a `cargo`/`rustc`
 invocation in ANY phase (prepare/build/check/package) must gain a `rust-git`
 edge in the same change, and `fish build-all.fish --audit` now flags violations
-of that (toolchain lint). With the edge in place a bare `mold-git` selection
-chain-expands to **three** packages — `llvm-git`, `rust-git`, `mold-git` —
-because the pre-existing `rust-git → llvm-git` edge transitively pulls llvm-git
-in; the ordering guarantee that matters is rust-git before mold-git.
+of that (toolchain lint). With the edge in place the guarantee it buys is
+build order — `rust-git` before `mold-git` whenever both are selected. The
+consumer direction is what a bare `llvm-git` selection exercises: it expands
+to its consumers in build order — `rust-git`, `spirv-llvm-translator-git`,
+`mesa-git`, `openshadinglanguage`, then each of *their* consumers such as
+`mold-git` — while a bare `mold-git` selection is just `mold-git`, its
+prerequisite `rust-git` assumed current.
 
 For VCS (`-git`) pairs the drift is subtler: a consumer that fetches new
 upstream can start requiring a provider version that a `-s` skip kept stale

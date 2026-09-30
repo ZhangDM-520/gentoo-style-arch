@@ -235,6 +235,7 @@ set -g _GROUP_NAMES git stable core misc app
 set -g _PACKAGE_MAP
 set -g _PACKAGE_IDS
 set -g _DEPS
+set -g _CONSUMER_INDEX
 set -g _TAGS
 set -g _GROUP_git
 set -g _GROUP_stable
@@ -399,6 +400,7 @@ function read_topology_config
     set -g _PACKAGE_MAP
     set -g _PACKAGE_IDS
     set -g _DEPS
+    set -g _CONSUMER_INDEX
     set -g _TAGS
     for group_name in $_GROUP_NAMES
         assign_group "$group_name"
@@ -512,7 +514,11 @@ function read_topology_config
     end
 
     # Now every id is known: validate edge targets and publish _DEPS in the
-    # id:dep,... shape topo_sort/expand_deps/deps_of split on.
+    # id:dep,... shape topo_sort/deps_of split on. The same pass publishes the
+    # reverse adjacency _CONSUMER_INDEX (target|consumer pairs, the
+    # _pkgname_index shape): selection expansion walks CONSUMERS — the set at
+    # ABI risk when a package rebuilds — and that walk needs "who consumes
+    # this" lookup on every node, which scanning _DEPS forward cannot answer.
     for entry in $raw_edges
         set -l parts (string split -m 1 ':' -- "$entry")
         set -l pkg "$parts[1]"
@@ -524,6 +530,7 @@ function read_topology_config
                 return 1
             end
             set -a record_edges "$dep"
+            set -a _CONSUMER_INDEX "$dep|$pkg"
         end
         set -a _DEPS (printf '%s:%s' "$pkg" (string join ',' $record_edges))
     end
@@ -715,9 +722,14 @@ function topo_sort -a pkgs_str
     test (count $_TOPO_BLOCKED) -eq 0
 end
 
-# ─── Expand dependencies ─────────────────────────────────────────────────────
-function expand_deps
-    # Expand a package list to include all transitive dependencies from _DEPS
+# ─── Expand to consumers ─────────────────────────────────────────────────────
+# A selection expands DOWNSTREAM, never upstream: the seed plus every package
+# that transitively consumes it over topology edges — exactly the set left at
+# ABI risk when the seed rebuilds. What a package consumes is deliberately NOT
+# pulled in: those inputs must already be current in the system (that is the
+# --no-deps contract extended to every run), or a rebuild would quietly hide
+# stale inputs behind a full-chain build.
+function expand_consumers
     set -l result
     set -l queue $argv
 
@@ -739,24 +751,29 @@ function expand_deps
 
         set -a result $pkg
 
-        # Find deps of this pkg from _DEPS
-        for entry in $_DEPS
-            set -l parts (string split ':' $entry -m 2)
-            if test "$parts[1]" = "$pkg" -a -n "$parts[2]"
-                for dep in (string split ',' $parts[2])
-                    if package_path "$dep" >/dev/null
-                        set -a queue $dep
-                    else
-                        ui_error "missing local dependency: $pkg -> $dep" >&2
-                        return 1
-                    end
+        # Every record that lists $pkg among its edges consumes it: pull the
+        # consumer side of each reverse-adjacency pair (built once by
+        # read_topology_config).
+        for entry in $_CONSUMER_INDEX
+            set -l parts (string split '|' -- "$entry")
+            if test "$parts[1]" = "$pkg"
+                set -l consumer "$parts[2]"
+                if package_path "$consumer" >/dev/null
+                    set -a queue $consumer
+                else
+                    ui_error "missing local dependency: $consumer -> $pkg" >&2
+                    return 1
                 end
-                break
             end
         end
     end
 
-    printf '%s\n' $result
+    # Same empty-input trap as topo_sort: printf with no arguments still runs
+    # the format once, so an empty closure must print nothing — not a phantom
+    # empty member.
+    if test (count $result) -gt 0
+        printf '%s\n' $result
+    end
 end
 
 # Read one PKGBUILD assignment as a VALUE, not as text.
@@ -2923,7 +2940,8 @@ end
 # .SRCINFO name index is collision-free (no name is shared by two recipes), so
 # neither can select the wrong recipe, and _ref_form_note announces every
 # substitution. A typo is deliberately NOT auto-corrected — a wrong guess would
-# build a whole dependency chain — it is reported with _report_unknown_ref.
+# build the wrong package and its whole consumer closure — it is reported with
+# _report_unknown_ref.
 
 # "name|recipe-id" for every pacman package name the recipes build, read from
 # the committed .SRCINFO files. Committed metadata means no PKGBUILD
@@ -5454,10 +5472,12 @@ function usage
     echo "                    auto-enables -i (installs immediately, rule 11)"
     echo "                    app = optional applications; on a TTY a build or -n run"
     echo "                    prompts to multi-select (all unchecked = build every app);"
-    echo "                    non-TTY and -l build/list the whole group. App packages are"
-    echo "                    leaf builds — their dependency chain is never rebuilt."
-    echo "  -l, --list        List packages and their dependency order. Honours a"
-    echo "                    selection: '-l -g git' prints the 56 git packages, and"
+    echo "                    non-TTY and -l build/list the whole group. App packages"
+    echo "                    typically have no consumers, so an app selection usually"
+    echo "                    stays leaf-only — but it expands like any other selection."
+    echo "  -l, --list        List packages and their build order. Honours a"
+    echo "                    selection: '-l -g git' prints the git selection — its"
+    echo "                    members plus their consumers — and"
     echo "                    the indices it prints are exactly what a range selects."
     echo "                    With no selection it lists all packages."
     echo "  -n, --dry-run     Show build order without building. Honours a selection,"
@@ -5490,7 +5510,7 @@ function usage
     echo ""
     echo "Build options (apply when a build is actually started):"
     echo "  -i, --install     Install each package IMMEDIATELY after it builds,"
-    echo "                    in dependency order (pacman -U --noconfirm --ask 4 —"
+    echo "                    in build order (pacman -U --noconfirm --ask 4 —"
     echo "                    unattended). Install failure aborts the run."
     echo "                    Lane installs run as 'sudo -n': the dispatcher keeps"
     echo "                    the cached credential warm (never prompts — an expired"
@@ -5507,8 +5527,7 @@ function usage
     echo "  -fi, --forceinstall"
     echo "                    Same as -i, but ALWAYS runs pacman -U — no same-version"
     echo "                    sanity check. Implies -i, so it works with or without it."
-    echo "  --no-deps         Build ONLY the named packages — skip dependency-chain"
-    echo "                    expansion (leaf rebuild with known-current deps)"
+    echo "  --no-deps         Build only what you named (no consumer expansion)"
     echo "  -c, --clean       Clean build artifacts before building"
     echo "  -s, --skip        Skip packages where .pkg.tar.zst is newer than PKGBUILD"
     echo "  --no-sync          Don't auto-update stable package versions from repos."
@@ -5545,8 +5564,9 @@ function usage
     echo "               GSA_CPU_THREADS, GSA_MEMORY_GIB, GSA_TARGET_CPU"
     echo "               override runtime state, parallelism, and optional CPU tuning."
     echo ""
-    echo "Package references (a bare name is not a leaf build — it expands the"
-    echo "whole dependency chain; use --no-deps for one package):"
+    echo "Package references (a bare name is not a leaf build — it expands to"
+    echo "its transitive consumers, the packages at ABI risk when it rebuilds;"
+    echo "use --no-deps for one package):"
     echo "  mesa-git              Recipe ID"
     echo "  packages/git/mesa-git Recipe path"
     echo "  MESA-GIT              Case-variant ID (matched, and reported)"
@@ -5559,7 +5579,7 @@ function usage
     echo "  22..38            Build packages 22 through 38 of the SELECTION"
     echo "  22..              Build from package 22 to the end"
     echo "  ..15              Build from the start through package 15"
-    echo "  Indices address the selection in dependency order — the list"
+    echo "  Indices address the selection in build order — the list"
     echo "  'build-all.fish -l -g GROUP' prints, not the whole-set order that a"
     echo "  bare '-l' prints."
     echo ""
@@ -5573,9 +5593,9 @@ function usage
     echo "  build-all.fish -l -g git            List the git group with the indices that"
     echo "                                      its ranges address"
     echo "  build-all.fish --no-deps niri-spicy-git"
-    echo "                                      Rebuild ONE package, skip its dep chain"
-    echo "  build-all.fish niri-spicy-git       Rebuild it + its whole dep chain (llvm, rust,"
-    echo "                                      mesa, ...) — use --no-deps to avoid this"
+    echo "                                      Rebuild ONE package — build only what you named"
+    echo "  build-all.fish glib2-git            Rebuild it + its 21 consumers (gtk4-git,"
+    echo "                                      gimp-git, …) — use --no-deps to avoid this"
     echo "  build-all.fish -g git 22..38        Build packages 22-38 of the git group"
     echo "  build-all.fish -n -g core           Dry-run: show the core build order"
     echo "  build-all.fish -n                   Show full build order (dry run)"
@@ -5601,14 +5621,14 @@ function usage
             case misc
                 set desc "Auxiliary packages"
             case app
-                set desc "Optional applications — leaf builds: dependency chain is never expanded, no auto -i"
+                set desc "Optional applications — typically no consumers, no auto -i"
         end
         printf '  %-12s %s (%s packages)\n' "$group_name" "$desc" (count $members)
     end
 end
 
 # ─── List packages ───────────────────────────────────────────────────────────
-# Print a selection in dependency order. The first argument is the whole-set
+# Print a selection in build order. The first argument is the whole-set
 # flag: 1 is the `-l` with no selection listing, which keeps the original
 # heading and group footer byte-for-byte. Otherwise the selection is named, and
 # the footer states what the printed indices are for — a range indexes THIS
@@ -5616,9 +5636,9 @@ end
 function list_packages -a all_flag
     set -l sorted_list $argv[2..-1]
     if test "$all_flag" = 1
-        echo "All packages in dependency order:"
+        echo "All packages in build order:"
     else
-        echo "Selected packages in dependency order ("(count $sorted_list)"):"
+        echo "Selected packages in build order ("(count $sorted_list)"):"
     end
     echo ""
     set -l i 1
@@ -5686,7 +5706,7 @@ end
 #   N     toggle entry N          'a' check all
 #   'c'   clear all               empty Enter confirm
 #   'q'   abort the run
-# Anything else re-renders with a notice. Display order is dependency order
+# Anything else re-renders with a notice. Display order is build order
 # (topo_sort over just these members), so the menu reads like the build.
 #
 # stdout is the data channel (chosen IDs, one per line) — the menu, notices
@@ -5968,9 +5988,9 @@ function main
     if test (count $packages) -gt 0 -o (count $groups) -gt 0
         set selection_given 1
     end
-    # What was asked for, before dependency expansion. `$sorted` minus this set
+    # What was asked for, before consumer expansion. `$sorted` minus this set
     # is what the expansion added, reported for builds and dry runs: a bare name
-    # can silently become a 40-package run.
+    # can silently become a whole consumer-closure run.
     set -l requested
     set -l build_list
     if test (count $packages) -gt 0
@@ -6018,31 +6038,11 @@ function main
                     ui_warning "-g core: enabling -i (immediate per-package install) — core rebuilds without installs compile against old ABIs"
                 end
             end
-            set build_list $build_list $gl
             set -a requested $gl
         end
-        # Positional packages may be combined with groups
-        if test (count $packages) -gt 0
-            set -a requested $packages
-            for pkg in $packages
-                set -l pkg_path (package_path "$pkg")
-                if test -z "$pkg_path"; or not test -f "$pkg_path/PKGBUILD"
-                    _report_unknown_ref "$pkg"
-                    return 1
-                end
-            end
-            if test $no_deps_flag -eq 1
-                set build_list $build_list $packages
-            else
-                set -l expanded (expand_deps $packages)
-                if test $status -ne 0
-                    return 1
-                end
-                set build_list $build_list $expanded
-            end
-        end
-        set build_list (printf '%s\n' $build_list | awk '!seen[$0]++')
-    else if test (count $packages) -gt 0
+    end
+    # Positional packages may be combined with groups
+    if test (count $packages) -gt 0
         # Validate specified packages
         for pkg in $packages
             set -l pkg_path (package_path "$pkg")
@@ -6051,13 +6051,20 @@ function main
                 return 1
             end
         end
-        # Expand to include transitive local dependencies — unless --no-deps:
-        # build exactly the named packages (leaf rebuild with known-current deps).
         set -a requested $packages
+    end
+    if test (count $requested) -gt 0
+        set requested (printf '%s\n' $requested | awk '!seen[$0]++')
+    end
+    # Every selection form — positional refs, group members and app-prompt rows
+    # alike — expands to ONE consumer closure over the whole request unless
+    # --no-deps. The direction is consumers only (see expand_consumers): what
+    # the request consumes is never pulled in.
+    if test (count $groups) -gt 0 -o (count $packages) -gt 0
         if test $no_deps_flag -eq 1
-            set build_list $packages
+            set build_list $requested
         else
-            set -l expanded (expand_deps $packages)
+            set -l expanded (expand_consumers $requested)
             if test $status -ne 0
                 return 1
             end
@@ -6091,7 +6098,7 @@ function main
     end
 
     # Apply range filters (e.g. 22..38, 22.., ..15). Indices address the
-    # SELECTION in dependency order — the list `-l -g GROUP` prints, which is
+    # SELECTION in build order — the list `-l -g GROUP` prints, which is
     # not the whole-set order a bare `-l` prints. Naming the bounds on a miss is
     # the difference between a typo and an unexplained empty build.
     if test (count $ranges) -gt 0
@@ -6120,7 +6127,7 @@ function main
                     set -a list_args -g $g
                 end
                 set -a list_args $packages
-                echo "  Indices address the selection in dependency order; see them with:"
+                echo "  Indices address the selection in build order; see them with:"
                 echo "    build-all.fish "(string join ' ' -- $list_args)
                 return 1
             end
@@ -6216,7 +6223,7 @@ function main
         return 0
     end
 
-    # How much of this selection came from dependency expansion rather than the
+    # How much of this selection came from consumer expansion rather than the
     # request itself. Reported for builds and dry runs (the preview is where it
     # matters most); a listing already shows the whole set, so it stays quiet.
     set -l added_deps 0
@@ -6224,7 +6231,7 @@ function main
         contains "$pkg" $requested; or set added_deps (math $added_deps + 1)
     end
     if test $added_deps -gt 0; and test "$selection_given" = 1
-        ui_info "dependency expansion added $added_deps of the "(count $sorted)" selected packages (--no-deps builds only what you named)"
+        ui_info "consumer expansion added $added_deps of the "(count $sorted)" selected packages (--no-deps builds only what you named)"
     end
 
     # Dry run

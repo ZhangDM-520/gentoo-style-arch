@@ -22,13 +22,21 @@ _Avoid_: map entry, dependency record (names for the pre-2026-09-26 four-file sp
 
 **Group**:
 A logical scheduling class (git, stable, core, misc, app) with
-scheduling semantics such as core-runs-alone and app-is-leaf. Deliberately
+scheduling semantics such as core-runs-alone and the app multi-select prompt.
+Deliberately
 overlaps physical layout.
 _Avoid_: category (that is the directory layout)
 
 **Build-order edge**:
 The fact "this package must build after that one". Not a package dependency.
 _Avoid_: dependency (pacman dependencies are a different concept)
+
+**Consumer expansion**:
+Selecting a package also selects everything that must rebuild after it — its
+transitive consumers, reached by reversing build-order edges (if A lists B in
+its `edges`, A consumes B). Prerequisites are never expanded: they are assumed
+installed and current.
+_Avoid_: dependency chain, downstream deps
 
 **Coupled batch**:
 A set of packages whose ABIs must move in the same rebuild pass, declared as

@@ -22,9 +22,14 @@ fish build-all.fish --dry-run --group core
 fish build-all.fish --group git --intensity xhigh
 ```
 
-The builder refuses an empty selection. `--no-deps` is for a deliberately
-scoped leaf rebuild whose installed dependencies are already known to be
-current; ordinary package arguments expand the local dependency graph.
+The builder refuses an empty selection. Every selection expands to the named
+packages plus their transitive consumers — the packages that must rebuild
+after them — because rebuilding a package cannot break what it consumes, while
+its consumers carry the ABI risk. Prerequisites are assumed installed and
+current, so nothing upstream is pulled in; bootstrap and fresh builds use `-g`
+group runs. `--no-deps` is for a deliberately scoped leaf rebuild of exactly
+the named packages, whose installed prerequisites are already known to be
+current.
 
 ## Installation modes
 
@@ -39,7 +44,7 @@ unsafe.
 pacman transaction, so it cannot honour the install-before-dependents rule:
 use it only to re-install a set that does not depend on each other (for
 example after `--cleanup`, or with `--overwrite`), never as a substitute for
-`--install` in a run that builds a dependency chain.
+`--install` in a run whose packages are chained in build order.
 
 Root-supervisor mode is:
 

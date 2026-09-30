@@ -14,7 +14,7 @@ set -euo pipefail
 # `-g gti` printed NOTHING at all - resolve_group wrote its diagnostic to a
 # stdout the caller was capturing with a command substitution.
 #
-# The listings are the other half. A range indexes the SELECTION in dependency
+# The listings are the other half. A range indexes the SELECTION in build
 # order, but `--list` printed the whole-set order, so `-l` index 22
 # (vscodium-insiders-git) and `-g git 22..24` (ninja-git, mesa-git,
 # niri-spicy-git) were different packages with nothing saying so. `-l` now
@@ -97,7 +97,7 @@ rows() { # print the numbered rows of $out, as bare package names
 # The scrape is self-pinning: if its match count drifts from the number of
 # calls this file actually carries, a call was added/indented without updating
 # the expectation below (or a non-call line started imitating one).
-expected_invocations=20
+expected_invocations=21
 scanned_invocations=$(grep -c -E '^(run|run_split) ' "${BASH_SOURCE[0]}")
 [[ $scanned_invocations -eq $expected_invocations ]] ||
     fail "self-scan found $scanned_invocations column-0 run/run_split calls, expected $expected_invocations (new calls must start at column 0 and bump this count)"
@@ -244,19 +244,33 @@ run -n -g git 38..22
 require_fail 'the reversed range 38..22'
 require_in 'the reversed range 38..22' 'empty'
 
-# --- a bare name that grows into a dependency chain says so ----------------
-# Growth is DATA (more rows than the named recipe), and --no-deps is exactly
-# one row (the note wording lives in the prose section).
+# --- a bare name grows into its CONSUMERS; a consumer-free one stays single --
+# Growth is DATA: the selection of X is X plus its transitive CONSUMERS over
+# the topology edges (a record's edges field lists what IT consumes), and
+# upstream is never pulled in. --no-deps is exactly one row (the note wording
+# lives in the prose section). niri-spicy-git has no consumers in the
+# committed topology, so the growth case is glib2-git instead — 21 transitive
+# consumers, glib2-git itself listed first.
 run -n niri-spicy-git
 require_ok 'the bare name niri-spicy-git'
 niri_rows=$(rows | wc -l)
-[[ $niri_rows -gt 1 ]] ||
-    fail "a bare niri-spicy-git listed $niri_rows row(s) - the dependency chain did not expand"
+[[ $niri_rows -eq 1 ]] ||
+    fail "a bare niri-spicy-git listed $niri_rows row(s) - it has no consumers, expected exactly 1"
+[[ $(rows) == 'niri-spicy-git' ]] ||
+    fail "a bare niri-spicy-git listed [$(rows | tr '\n' ' ')], not exactly niri-spicy-git"
 
 run -n --no-deps niri-spicy-git
 require_ok 'the bare name with --no-deps'
 [[ $(rows) == 'niri-spicy-git' ]] ||
     fail "--no-deps niri-spicy-git listed [$(rows | tr '\n' ' ')], not exactly niri-spicy-git"
+
+run -n glib2-git
+require_ok 'the bare name glib2-git'
+glib2_rows=$(rows | wc -l)
+[[ $glib2_rows -eq 22 ]] ||
+    fail "a bare glib2-git listed $glib2_rows row(s) - expected 22 (glib2-git + its 21 transitive consumers)"
+[[ $(rows | sed -n 1p) == 'glib2-git' ]] ||
+    fail "a bare glib2-git does not list glib2-git first: [$(rows | head -3 | tr '\n' ' ')]"
 
 printf 'cli hints fixture: PASS (%s recipes, %s-row selection indexed, extra forms announced)\n' \
     "$recipes" "$git_rows"
@@ -316,4 +330,120 @@ if ! grep -ve '^#' <<<"$topo" | awk -F'|' 'NF != 5 { exit 1 }'; then
 fi
 
 printf 'project configuration fixture: PASS\n'
+)
+
+# ==== consumer-expansion ====
+# Selection of X = X + its transitive CONSUMERS over the topology edges: a
+# record's edges field lists what IT consumes, so the consumers of B are the
+# records listing B — and upstream is never expanded. The real-topology shape
+# is pinned above (glib2-git grows into its 21 consumers, niri-spicy-git has
+# none); this section pins the SEMANTICS synthetically, on a two-hop chain
+# x <- c1 <- c2 (c1 consumes x, c2 consumes c1) whose consumers sit in OTHER
+# groups than x, plus a consumer-free lone — so every case below can only
+# pass when expansion walks the edges in the consumer direction.
+(
+    source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
+    fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-consumer-expansion.XXXXXX")
+    trap 'rm -rf -- "$fixture"' EXIT
+
+    fail() {
+        printf 'consumer expansion fixture: %s\n' "$1" >&2
+        exit 1
+    }
+
+    ws=$fixture/ws
+    make_workspace "$ws" 1 2 low
+    add_package "$ws" x "$gsa_meta_any" git
+    add_package "$ws" c1 "$gsa_meta_any" misc
+    add_package "$ws" c2 "$gsa_meta_any" core
+    add_package "$ws" lone "$gsa_meta_any" git
+    set_topology_record "$ws" c1 misc 'x'
+    set_topology_record "$ws" c2 core 'c1'
+    stub_makepkg "$ws"
+    stub_sudo "$ws"
+    stub_pacman "$ws"
+
+    dry_rows() { # stdin: a dry-run capture -> its numbered rows, one per line
+        sed -n '/Build order (dry run):/,/^Total:/p' | sed -n 's/^ *[0-9][0-9]*\. //p'
+    }
+
+    # a. bare X pulls its transitive CONSUMERS (2 hops) in build order, X
+    # first — never the upstream chain the old semantics grew into.
+    run_builder fish "$ws/build-all.fish" -n x
+    [[ $FIXTURE_RC -eq 0 ]] || fail "a: dry run of bare x failed: $FIXTURE_OUTPUT"
+    rows_a=$(dry_rows <<<"$FIXTURE_OUTPUT")
+    expected_a=$'x\nc1\nc2'
+    [[ $rows_a == "$expected_a" ]] ||
+        fail "a: bare x listed [$(echo "$rows_a" | tr '\n' ' ')], want [x c1 c2] (transitive consumers in build order, x first)"
+
+    # b. --no-deps is leaf-only: exactly the named package.
+    run_builder fish "$ws/build-all.fish" -n --no-deps x
+    [[ $FIXTURE_RC -eq 0 ]] || fail "b: dry run of --no-deps x failed: $FIXTURE_OUTPUT"
+    rows_b=$(dry_rows <<<"$FIXTURE_OUTPUT")
+    [[ $rows_b == x ]] ||
+        fail "b: --no-deps x listed [$(echo "$rows_b" | tr '\n' ' ')], want exactly [x]"
+
+    # c. a group selection expands consumers too, even across groups: -g git
+    # holds x and lone only, but x's consumers c1 (misc) and c2 (core) must
+    # ride in — the chain in build order, lone unordered against it.
+    run_builder fish "$ws/build-all.fish" -n -g git
+    [[ $FIXTURE_RC -eq 0 ]] || fail "c: dry run of -g git failed: $FIXTURE_OUTPUT"
+    rows_c=$(dry_rows <<<"$FIXTURE_OUTPUT")
+    set_c=$(printf '%s\n' "$rows_c" | sort | tr '\n' ' ')
+    [[ $set_c == 'c1 c2 lone x ' ]] ||
+        fail "c: -g git selected [$set_c], want [c1 c2 lone x] (cross-group consumers pulled)"
+    [[ $rows_c == *x*c1*c2* ]] ||
+        fail "c: the chain is not in build order within [$(echo "$rows_c" | tr '\n' ' ')]"
+
+    # d. a consumer-free selection stays exactly one row.
+    run_builder fish "$ws/build-all.fish" -n lone
+    [[ $FIXTURE_RC -eq 0 ]] || fail "d: dry run of bare lone failed: $FIXTURE_OUTPUT"
+    rows_d=$(dry_rows <<<"$FIXTURE_OUTPUT")
+    [[ $rows_d == lone ]] ||
+        fail "d: bare lone listed [$(echo "$rows_d" | tr '\n' ' ')], want exactly [lone]"
+
+    # e. continuation idempotence (the tests/resume-command.sh surface): a
+    # consumer-expanded run that fails midway hands the run record's remaining
+    # set to the resume command, and re-expanding that set must give back
+    # exactly the same set — no growth, and no upstream x returning.
+    run_builder env \
+        PATH="$ws/bin:$PATH" \
+        GSA_STATE_DIR="$ws/state" \
+        GSA_FAKE_PACMAN_LOG="$ws/pacman.log" \
+        GSA_FAKE_FAIL_PACKAGE=c1 \
+        GSA_CPU_THREADS=8 \
+        GSA_MEMORY_GIB=16 \
+        fish "$ws/build-all.fish" --no-sync --allow-broken-rustc x
+    [[ $FIXTURE_RC -ne 0 ]] || fail "e: the failing run unexpectedly succeeded: $FIXTURE_OUTPUT"
+    [[ $(rr_scalar order <<<"$FIXTURE_OUTPUT") == 'x c1 c2' ]] ||
+        fail "e: first run recorded order [$(rr_scalar order <<<"$FIXTURE_OUTPUT")], want [x c1 c2]"
+    [[ $(rr_row c1 status <<<"$FIXTURE_OUTPUT") == failed ]] ||
+        fail "e: c1 row is not failed: $(rr_row c1 <<<"$FIXTURE_OUTPUT")"
+    [[ $(rr_row c2 status <<<"$FIXTURE_OUTPUT") == never-started ]] ||
+        fail "e: c2 row is not never-started: $(rr_row c2 <<<"$FIXTURE_OUTPUT")"
+    remaining=$(rr_remaining <<<"$FIXTURE_OUTPUT" | tr '\n' ' ')
+    remaining=${remaining% }
+    [[ $remaining == 'c1 c2' ]] ||
+        fail "e: resume set is [$remaining], want [c1 c2]"
+    resume_cmd=$(grep '^  build-all\.fish ' <<<"$FIXTURE_OUTPUT" | head -1)
+    [[ -n $resume_cmd ]] || fail "e: no resume command in the failure summary: $FIXTURE_OUTPUT"
+    [[ "$resume_cmd" == *" $remaining" ]] ||
+        fail "e: resume command does not end with the resume set [$remaining]: $resume_cmd"
+    [[ $resume_cmd != *--no-deps* ]] ||
+        fail "e: resume command invented --no-deps (re-expansion must happen): $resume_cmd"
+    resume_args=${resume_cmd#*build-all.fish }
+    run_builder env \
+        PATH="$ws/bin:$PATH" \
+        GSA_STATE_DIR="$ws/state" \
+        GSA_FAKE_PACMAN_LOG="$ws/pacman.log" \
+        GSA_CPU_THREADS=8 \
+        GSA_MEMORY_GIB=16 \
+        fish "$ws/build-all.fish" $resume_args
+    [[ $FIXTURE_RC -eq 0 ]] || fail "e: the resumed run failed: $FIXTURE_OUTPUT"
+    [[ $(rr_scalar order <<<"$FIXTURE_OUTPUT") == 'c1 c2' ]] ||
+        fail "e: resume re-expanded to [$(rr_scalar order <<<"$FIXTURE_OUTPUT")], want [c1 c2] (same remaining set — no growth, no upstream x)"
+    [[ $(rr_scalar outcome <<<"$FIXTURE_OUTPUT") == success ]] ||
+        fail "e: resumed run outcome is not success: $FIXTURE_OUTPUT"
+
+    printf 'consumer expansion fixture: PASS (2-hop chain, cross-group consumer, idempotent continuation)\n'
 )

@@ -14,8 +14,9 @@ Gentoo_Style_Arch has four deliberately separate modules:
    package ID to its recipe path — the only place that binding exists —
    `groups` states group membership as a comma list over the five logical
    groups (`git, stable, core, misc, app`; the roster is stated
-   once, in the builder), `edges` is the comma list of local build-order
-   dependencies (a lone `id|path|groups|` is a deliberate no-edge record),
+   once, in the builder), `edges` is the comma list of packages this one
+   consumes — its local build-order edges (a lone `id|path|groups|` is a
+   deliberate no-edge record),
    and `tags` carries coupled-batch policy (`abi=must` / `abi=should`) and
    the optional `app-cluster=<name>` prompt-cluster tag.
    `config/build-defaults.conf` stays separate: lanes/jobs/intensity and the
@@ -25,7 +26,7 @@ Gentoo_Style_Arch has four deliberately separate modules:
    never parses `config/` itself. It is declarative so maintainers can review
    graph changes without editing scheduler implementation.
 3. **Builder** in `build-all.fish` is the operational interface. It resolves
-   package IDs, expands and sorts dependencies, dispatches isolated lanes,
+   package IDs, expands consumers and sorts by build order, dispatches isolated lanes,
    serializes pacman transactions, owns the interactive dashboard, and
    reports failures through per-package logs.
 4. **Runtime state** is split in two by who owns it. Under `.state/` (or
@@ -41,7 +42,7 @@ checkout; the first build populates it. A populated non-Git directory is never
 silently replaced.
 
 The scheduler's interface includes more than its flags: package selection is
-mandatory, dependency order is meaningful, `--install` installs before a
+mandatory, build order is meaningful, `--install` installs before a
 dependent build starts, core packages run alone, and failures stop new
 dispatches while draining existing lanes. These invariants are part of the
 maintainer contract. The failure-stop invariant has one named amendment: a

@@ -9,14 +9,16 @@ set -euo pipefail
 #      builder's five names — git, stable, core, misc, app)
 #   2. an app group with NO member refuses with a targeted hint (no phantom member)
 #   3. non-TTY -n -g app builds the whole group and says the prompt was
-#      skipped; the group is a LEAF selection — a local dependency edge to a
-#      non-app workspace package must NOT pull that package into the run
+#      skipped; the group's edges never pull upstream — a local dependency
+#      edge to a non-app workspace package must NOT drag that package into
+#      the run (expansion walks consumers only)
 #   4. -l never prompts (a prompt on a PTY with no input would abort/hang,
 #      so exit 0 with the whole group proves silence)
-#   5. on a PTY: Enter = whole group, numbers = only the checked subset,
-#      q = non-zero abort
+#   5. on a PTY: Enter = whole group, numbers = the checked subset (plus its
+#      consumers), q = non-zero abort
 #   6. -g app combined with -g git: the filter touches only the app portion
-#   7. a REAL build prompts too and builds only the checked subset
+#   7. a REAL build prompts too and builds the checked subset plus its
+#      consumers
 #   8. app-cluster=<name> members share ONE toggle row labelled
 #      '<name> [member ids]' (a cluster member never renders its own row);
 #      toggling that row checks/clears EVERY member at once, and the
@@ -51,8 +53,9 @@ for pair in "git:gitp1" "misc:extdep" "app:app1 app2 app3"; do
     done
 done
 
-# app2 depends on extdep (a NON-app workspace package: must never be pulled
-# in) and app3 depends on app2 (in-group edge: fixes dependency order).
+# app2 consumes extdep (a NON-app workspace package — upstream, must never be
+# pulled in) and app3 consumes app2 (in-group edge: fixes build order, and
+# makes app3 a consumer a checked app2 must pull along).
 set_topology_record "$fixture" app2 app 'extdep'
 set_topology_record "$fixture" app3 app 'app2'
 
@@ -116,7 +119,7 @@ menu_rows() {
 # Same numbered rows as a `-l` listing prints (the listing has no run record:
 # listing/dry-run runs never start a build, so the rows ARE the data channel).
 listed_seq() {
-    sed -n '/Selected packages in dependency order/,$p' "$1" \
+    sed -n '/Selected packages in build order/,$p' "$1" \
         | grep -E '^ +[0-9]+\. ' | awk '{print $2}' | tr -d '\r'
 }
 
@@ -156,7 +159,7 @@ set_topology_record "$fixture" app1 app ''
 set_topology_record "$fixture" app2 app 'extdep'
 set_topology_record "$fixture" app3 app 'app2'
 
-# ── 3. Non-TTY: whole group, prompt skipped, NO dependency expansion ────────
+# ── 3. Non-TTY: whole group, prompt skipped, upstream never pulled ─────────
 run_quiet "$fixture/o3" -n -g app \
     || fail "non-TTY -n -g app failed" "$fixture/o3"
 grep -q 'prompt skipped' "$fixture/o3" \
@@ -201,14 +204,17 @@ seq5=$(order_seq "$fixture/o5")
 [ "$seq5" = "$expected3" ] \
     || fail "Enter should build the whole group, got [$(echo "$seq5" | tr '\n' ' ')]" "$fixture/o5"
 
-# ── 6. PTY + toggle: only the checked subset ────────────────────────────────
+# ── 6. PTY + toggle: only the checked subset — plus its consumers ──────────
+# Row 2 checks app2; app3 consumes app2, so consumer expansion carries it
+# along (app2 first). The menu still renders only the group's own rows.
 run_pty '2\n\n' "$fixture/o6" "$fixture/state-6" -n -g app \
     || fail "PTY -n -g app with toggle input failed" "$fixture/o6"
 grep -qF '[x]' "$fixture/o6" \
     || fail "toggled menu entry did not render as checked" "$fixture/o6"
 seq6=$(order_seq "$fixture/o6")
-[ "$seq6" = "app2" ] \
-    || fail "checked-only preview wrong: got [$(echo "$seq6" | tr '\n' ' ')], want [app2]" "$fixture/o6"
+expected6=$(printf 'app2\napp3')
+[ "$seq6" = "$expected6" ] \
+    || fail "checked-only preview wrong: got [$(echo "$seq6" | tr '\n' ' ')], want [app2 app3]" "$fixture/o6"
 
 # ── 7. PTY + q: abort with non-zero ─────────────────────────────────────────
 if run_pty 'q\n' "$fixture/o7" "$fixture/state-7" -n -g app; then
@@ -225,7 +231,7 @@ expected8=$(printf 'app1\ngitp1')
 [ "$seq8" = "$expected8" ] \
     || fail "combined selection wrong: got [$(echo "$seq8" | tr '\n' ' ')], want [app1 gitp1]" "$fixture/o8"
 
-# ── 9. Real build prompts too, and builds only the checked subset ───────────
+# ── 9. Real build prompts too, and builds the checked subset + consumers ────
 run_pty '2\n\n' "$fixture/o9" "$fixture/state-9" \
     -g app --allow-broken-rustc --no-sync \
     || fail "PTY build -g app with toggle input failed" "$fixture/o9"
@@ -233,9 +239,10 @@ grep -q 'choose what to build' "$fixture/o9" \
     || fail "real build did not prompt" "$fixture/o9"
 # The real build emits a run record (PTY capture — the parsers strip the
 # slave's \r): the prompt's answer decided the SELECTION, and the record says
-# what that selection was and what happened to it.
-[ "$(rr_scalar order <"$fixture/o9")" = "app2" ] \
-    || fail "recorded selection is not exactly app2: $(rr_scalar order <"$fixture/o9")" "$fixture/o9"
+# what that selection was and what happened to it. Checked app2 expands to
+# app2 + its consumer app3 (app3's edge names app2).
+[ "$(rr_scalar order <"$fixture/o9")" = "app2 app3" ] \
+    || fail "recorded selection is not exactly app2 app3 (checked app2 plus its consumer app3): $(rr_scalar order <"$fixture/o9")" "$fixture/o9"
 [ "$(rr_scalar outcome <"$fixture/o9")" = "success" ] \
     || fail "recorded outcome is not success: $(rr_scalar outcome <"$fixture/o9")" "$fixture/o9"
 [ "$(rr_row app2 status <"$fixture/o9")" = "succeeded" ] \
@@ -244,11 +251,17 @@ grep -q 'choose what to build' "$fixture/o9" \
     || fail "app2 row rc is not 0: $(rr_row app2 <"$fixture/o9")" "$fixture/o9"
 [ "$(rr_row app2 reason <"$fixture/o9")" = "ok" ] \
     || fail "app2 row reason is not ok: $(rr_row app2 <"$fixture/o9")" "$fixture/o9"
+[ "$(rr_row app3 status <"$fixture/o9")" = "succeeded" ] \
+    || fail "app3 row is not succeeded: $(rr_row app3 <"$fixture/o9")" "$fixture/o9"
 [ -f "$fixture/state-9/logs/app2.log" ] \
     || fail "checked package app2 was not built" "$fixture/o9"
-for unbuilt in app1 app3 extdep gitp1; do
+# app3 rides in as app2's CONSUMER; everything else — including extdep, which
+# is app2's UPSTREAM — must stay unbuilt.
+[ -f "$fixture/state-9/logs/app3.log" ] \
+    || fail "consumer app3 was not built alongside checked app2" "$fixture/o9"
+for unbuilt in app1 extdep gitp1; do
     [ -f "$fixture/state-9/logs/$unbuilt.log" ] \
-        && fail "unchecked package $unbuilt was built" "$fixture/o9"
+        && fail "unselected package $unbuilt was built" "$fixture/o9"
 done
 
 # ── 10. app-cluster: ONE shared row, and toggling it selects every member ───

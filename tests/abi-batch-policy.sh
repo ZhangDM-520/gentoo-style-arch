@@ -18,13 +18,17 @@ set -euo pipefail
 #      abi=must batch anchor (llvm-git) while an installed abi=must batch
 #      member (rust-git) is omitted is refused up front; the read-only modes
 #      (-n, -l) stay unaffected. Batch membership is topology data — the
-#      tags field (abi=must / abi=should) plus the edge direction.
+#      tags field (abi=must / abi=should) plus the edge direction. Since
+#      consumer expansion landed, a bare llvm-git can never omit its member
+#      (rust-git consumes llvm-git and rides in automatically), so the
+#      refusal is reachable only through --no-deps.
 #   C. Dispatcher probe: with -i, a successful lane for llvm-git re-runs
 #      check_rustc_sanity BEFORE anything else dispatches; a failing probe
 #      stops dispatch, drains in-flight lanes and exits non-zero.
 #   D. Repo policy: config/topology.conf declares mold-git's rust-git edge
 #      (the missing edge that let a cargo recipe dispatch before rust-git),
-#      the edge actually orders a mold-git selection, and the llvm-git /
+#      a bare-name selection pulls its abi-coupled partner in build order
+#      (llvm-git before its consumer rust-git), and the llvm-git /
 #      rust-git batch membership is recorded as tags. Read through the
 #      builder's --topology data channel — the same interface
 #      tests/srcinfo-freshness.sh consumes.
@@ -171,8 +175,13 @@ run_env_b() {
         fish "$dir_b/build-all.fish" "$@"
 }
 
-# B1: the real build must be refused before anything is built.
-run_env_b llvm-git
+# B1: the real build must be refused before anything is built. A bare
+# llvm-git can no longer reach this gate — consumer expansion pulls in its
+# batch partner rust-git automatically (that is the feature; the direction is
+# pinned in D below) — so the refusal is re-pinned on --no-deps llvm-git: the
+# leaf-only selection that names the anchor WITHOUT its mandatory member. The
+# gate itself is an unchanged backstop: same message, nothing built.
+run_env_b --no-deps llvm-git
 if [[ $FIXTURE_RC -eq 0 ]]; then
     printf 'B1: llvm-git WITHOUT rust-git was allowed to build:\n%s\n' "$FIXTURE_OUTPUT" >&2
     exit 1
@@ -352,12 +361,15 @@ for id in llvm-git rust-git; do
     fi
 done
 
-# The edge must actually order the batch: a mold-git selection expands to
-# include rust-git, and rust-git builds BEFORE mold-git.
-run_builder env GSA_STATE_DIR="$fixture/state-d" \
-    fish "$root/build-all.fish" -n mold-git
+# The batch must actually order a bare-name selection in CONSUMER direction:
+# selecting X pulls X's transitive consumers, X first. rust-git consumes
+# llvm-git (its edge is the batch's member->anchor direction), so bare
+# llvm-git pulls rust-git in and llvm-git builds BEFORE it. The pair runs on
+# B1's synthetic topology — where the batch is exactly these two — because
+# the committed tree's llvm-git carries more consumers than the pair.
+run_env_b -n llvm-git
 if [[ $FIXTURE_RC -ne 0 ]]; then
-    printf 'D: dry run of mold-git failed:\n%s\n' "$FIXTURE_OUTPUT" >&2
+    printf 'D: dry run of bare llvm-git failed:\n%s\n' "$FIXTURE_OUTPUT" >&2
     exit 1
 fi
 idx_of() { # $1 = package id; prints its 1-based order index or nothing
@@ -365,14 +377,14 @@ idx_of() { # $1 = package id; prints its 1-based order index or nothing
         <<<"$FIXTURE_OUTPUT" | head -1
 }
 rust_idx=$(idx_of rust-git)
-mold_idx=$(idx_of mold-git)
-if [[ -z ${rust_idx:-} || -z ${mold_idx:-} ]]; then
-    printf 'D: a mold-git selection does not expand to rust-git:\n%s\n' "$FIXTURE_OUTPUT" >&2
+llvm_idx=$(idx_of llvm-git)
+if [[ -z ${rust_idx:-} || -z ${llvm_idx:-} ]]; then
+    printf 'D: a bare llvm-git selection does not expand to its consumer rust-git:\n%s\n' "$FIXTURE_OUTPUT" >&2
     exit 1
 fi
-if ((rust_idx >= mold_idx)); then
-    printf 'D: rust-git (index %s) does not build before mold-git (index %s):\n%s\n' \
-        "$rust_idx" "$mold_idx" "$FIXTURE_OUTPUT" >&2
+if ((llvm_idx >= rust_idx)); then
+    printf 'D: llvm-git (index %s) does not build before its consumer rust-git (index %s):\n%s\n' \
+        "$llvm_idx" "$rust_idx" "$FIXTURE_OUTPUT" >&2
     exit 1
 fi
 
