@@ -36,6 +36,30 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-09-30 — `libldacdec` recipe (stable) + the `pipewire → libldacdec` build-order edge
+
+- **What**: new leaf recipe `packages/stable/libldacdec` (Apache-2.0, AUR-derived,
+  pinned commits `c90094b15e25` libldacdec + `e8ff0f96f26b` android libldac
+  submodule): the reverse-engineered unofficial LDAC Bluetooth **decoder**
+  library. Installs `libldacBT_dec.so`, `ldac/ldacBT_dec.h`, `ldacBT-dec.pc`;
+  `provides=(libldacBT_dec.so)` (bare soname stem, rule 4).
+- **Edge `pipewire → libldacdec`** (new topology record + pipewire edge list):
+  the pipewire recipe now builds with `-D bluez5-codec-ldac-dec=enabled`, so
+  libldacdec is a pipewire makedepends and a `pipewire-audio` runtime depend
+  (`libldacdec libldacBT_dec.so`) — libldacdec must build first.
+- **Build fix kept from the working AUR recipe**: upstream's Makefile links
+  `libldacdec.so` with a dangling `-lldacdec` self-reference — GNU ld silently
+  accepts the not-yet-written output file, mold fails `library not found:
+  ldacdec`. `make libldacdec.so LDLIBS='-lm -lsndfile'` first (self-reference
+  dropped), then `make ldacdec` against the finished library; the two-step
+  order is the fix. `patchelf --set-soname libldacBT_dec.so` + rename make the
+  recorded soname match the installed name.
+- **Decision**: no `.nvchecker.toml` — upstream publishes no tags and the
+  recipe pins commits, so there is no version stream to track (the metadata is
+  optional per `docs/architecture.md`; a config with nothing to track is dead
+  weight). `libldacdec` added to the host's `/etc/pacman.conf` IgnorePkg
+  closure (rule 9).
+
 ## 2026-09-30 — noctalia patch snapshot refreshed to PR #4002 head `9d530d40` (timer-reset fix included)
 
 - **Trigger**: the PR follow-ups. After our 2026-09-22 snapshot,
