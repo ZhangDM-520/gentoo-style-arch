@@ -4074,3 +4074,18 @@ and §6, and the commit/version identifiers of each fix are kept inline.
   prebuilt-Electron packaging workflow — only the native Node addons are
   compiled. Rule: optimize only the native compilation path; do not force
   LTO or invent a PGO phase for packaging work.
+
+## 2026-09-30 — `build-all.fish` VCS-anchor guard fix + 1.6.9/0.5.18 re-anchors
+- **Guard bug (fixed)**: `vcs_source_sum` located the checkout by `source_filename`
+  (`pipewire.git`), but makepkg's `get_filename` strips a trailing `.git` from VCS URLs, so the
+  clone lands in `pipewire` — the guard reported "the VCS checkout was not available to recompute
+  Arch's b2 against" no matter how healthy the clone was. Candidates now try both spellings.
+- **Silent-failure coupling (fixed)**: `git archive | b2sum` hashed empty stdin when git failed
+  (e.g. the host's injected `safe.bareRepository=explicit` breaking bare-repo archive), yielding
+  the b2 of nothing and a confident wrong-sum verdict. The archive now goes to a temp file and a
+  git failure is honestly reported as "could not reproduce" (case 2).
+- **Re-anchors**: version-sync had moved pipewire to 1.6.9-1 and would have moved wireplumber to
+  0.5.18-1, resetting pkgrel; local deltas are re-stamped per convention as `1.1` (pipewire
+  1.6.9-1.1, wireplumber 0.5.18-1.1). Sums refreshed with `updpkgsums` and verified byte-identical
+  to the b2 Arch publishes for each VCS source (`git archive` of the tag): pipewire `85867001…`,
+  wireplumber `eea6a3e0…`.

@@ -1092,9 +1092,20 @@ function vcs_source_sum -a dir entry alg
     end
     set -l val (string replace -r '^[^=]*=' '' -- $frag)
     set -l name (source_filename $entry); or return 1
+    # makepkg's get_filename strips a trailing .git from a VCS URL (the clone
+    # of …/pipewire.git lands in 'pipewire'), while source_filename keeps the
+    # URL spelling the official map is keyed by — try both spellings, or the
+    # checkout is "not available" no matter how healthy it is (2026-09-30).
+    set -l name_stripped (string replace -r '\.git$' '' -- $name)
     set -l cands "$dir/$name"
+    if test "$name_stripped" != "$name"
+        set -a cands "$dir/$name_stripped"
+    end
     if set -q SRCDEST; and test -n "$SRCDEST"
         set -a cands "$SRCDEST/$name"
+        if test "$name_stripped" != "$name"
+            set -a cands "$SRCDEST/$name_stripped"
+        end
     end
     set -l repo ""
     for cand in $cands
@@ -1106,7 +1117,16 @@ function vcs_source_sum -a dir entry alg
     if test -z "$repo"
         return 1
     end
-    set -l sum (git -c core.abbrev=no -C "$repo" archive --format tar "$val" 2>/dev/null | command "$alg"sum | string replace -r '\s+.*$' '')
+    set -l sum_file (mktemp); or return 2
+    # The archive is written to a file, not piped: a failing git would
+    # otherwise hash empty stdin and report a confident wrong sum. Any git
+    # failure (incl. host git hardening on bare repos) is case 2, not a value.
+    if not git -c core.abbrev=no -C "$repo" archive --format tar "$val" >"$sum_file" 2>/dev/null
+        rm -f -- "$sum_file"
+        return 2
+    end
+    set -l sum (command "$alg"sum <"$sum_file" | string replace -r '\s+.*$' '')
+    rm -f -- "$sum_file"
     if test -z "$sum"
         return 2
     end
