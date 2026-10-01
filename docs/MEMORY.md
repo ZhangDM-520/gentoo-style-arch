@@ -867,15 +867,30 @@ constant, not a baked path).
   Rust-side fat LTO in bootstrap.toml is unrelated and stays.
   `tests/rust-recipe.sh` pins the option in PKGBUILD and .SRCINFO.
 
-- **`-s` on a VCS recipe cannot see upstream movement** (2026-09-25,
-  vulkan-pair): the skip predicate is archive-mtime ≥ PKGBUILD-mtime, and a
-  PKGBUILD does not change when upstream does — a `-s -i` batch skipped
-  `vulkan-headers-git` at 1.4.363 while `vulkan-icd-loader-git` fetched
-  v1.4.364, whose CMake requires VulkanHeaders ≥ `${PROJECT_VERSION}`
-  ("not compatible with the version requested"). Rebuild coupled VCS pairs
-  together with `-i` and without `-s`; the loader now carries
-  `vulkan-headers>=1:${pkgver%%.r*}` so a stale provider fails at the
-  dependency check instead (fixture `tests/vulkan-pair.sh`).
+- **VCS `-s` freshness includes each declared source ref** (approved
+  2026-10-01; the 2026-09-25 vulkan-pair incident): retain the
+  archive-mtime ≥ PKGBUILD-mtime gate, then skip a VCS archive only when
+  every declared source ref still resolves to the actual revision recorded
+  for that archive after a successful build. Check Git, SVN, Mercurial, and
+  Bazaar refs individually; never compare a shared checkout or unrelated
+  repository `HEAD`. A moved ref follows the normal build/install path. If
+  the remote or per-archive baseline cannot be determined, abort clearly —
+  do not silently skip or fall back to a build. Non-VCS recipes retain the
+  mtime-only behavior, and `-s -i` still sends a genuinely skipped archive
+  through the existing install path. A VCS archive without a baseline must
+  first be rebuilt successfully without `-s`.
+
+  Historical case: `-s -i` skipped `vulkan-headers-git` at 1.4.363 while
+  `vulkan-icd-loader-git` fetched v1.4.364, whose CMake required
+  VulkanHeaders ≥ `${PROJECT_VERSION}` ("not compatible with the version
+  requested"). The incident-time recovery was to rebuild the pair with `-i`
+  and without `-s`; that workaround is superseded by the rule above. The
+  loader's versioned makedepends
+  (`vulkan-headers>=1:${pkgver%%.r*}`) still makes a stale provider fail at
+  the dependency check instead of inside the consumer's build
+  (`tests/vulkan-pair.sh`). The no-`-s` workaround is now needed only for
+  pre-metadata VCS archives; one successful build without `-s` records the
+  baseline for subsequent resumes.
 - **Self-consistent is not verified** (2026-09-20, audit): `sync_stable_version`
   bumps a `packages/stable` recipe to the repo's `pkgver`/`pkgrel` and
   deliberately does not refresh `sha256sums`, so `build_package` added

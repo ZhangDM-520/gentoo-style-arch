@@ -36,6 +36,41 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-01 — upstream-aware `-s` skip contract
+
+- **Symptom**: the 2026-09-25 Vulkan pair showed that an mtime-only `-s` could
+  skip a VCS provider archive after upstream had moved, leaving a consumer to
+  build against a mismatched version.
+- **Root cause**: archive and `PKGBUILD` mtimes do not identify which VCS
+  revisions produced an archive, and a shared source checkout or unrelated
+  repository `HEAD` is not a reliable per-archive baseline.
+- **Fix**: retained the mtime gate, then added an ignored per-archive revision
+  record for each VCS source and a selected-ref query before skipping. Git,
+  SVN, Mercurial, and Bazaar are covered; a moved ref follows the normal
+  build/install path, while a missing baseline or unavailable remote aborts
+  explicitly. Non-VCS behavior and a genuine `-s -i` install remain unchanged.
+  `-c` and `-cc` remove revision records with their archives. The historical
+  no-`-s` workaround below is now limited to pre-metadata VCS archives.
+- **Validation**: `fish -n build-all.fish`, `bash -n tests/skip-upstream.sh`,
+  and `bash tests/skip-upstream.sh` passed. The focused fixture covers an
+  advanced branch, default HEAD, an unchanged and then moved annotated tag,
+  missing baseline, unreachable remote, PKGBUILD-mtime staleness, skipped
+  `-s -i`, SVN/Hg/Bazaar adapters, and `-c`/`-cc` metadata cleanup. A mutation
+  probe disabled the upstream comparison in a temporary builder copy; the
+  advanced-branch assertion failed as expected. `--audit`, `--list`, and
+  dry-runs for `git`, `stable`, and `core` exited 0 (`--audit` is report-only).
+  The full battery reported 43 passed and one failure:
+  `stable-sync-checksums.sh`'s newly added AUR-sync case failed because the
+  concurrent, uncommitted `version-sync=nvchecker` worktree changes add its
+  fixture and tag selector but not the `build-all.fish` resolver/build call it
+  expects.
+  Running that fixture directly reproduced the same `AUR pkgver was not
+  applied` failure; those unrelated changes were left untouched.
+- **Rule**: compare a source's selected ref, not a shared checkout's unrelated
+  `HEAD`. Do not treat missing baseline or remote state as a skip or silently
+  start a build. Older VCS archives without a baseline need one successful
+  build without `-s` before a later resume can skip them.
+
 ## 2026-10-01 — ABI severity with non-ABI topology tags
 
 - **Symptom**: a real `-i` run with an ABI anchor and an `app-cluster`-only
@@ -1243,11 +1278,13 @@ entries append here as they land.
   `pacman -Q vulkan-headers-git vulkan-icd-loader-git` both ≥ 1.4.364; new
   fixture `tests/vulkan-pair.sh` passes; `--audit`/`--list` and the full
   battery green.
-- **Rule**: never resume a coupled VCS pair with `-s` when a consumer may
-  have moved upstream — rebuild provider and consumer together with `-i`
-  (docs/maintainer-guide.md "Updating coupled stacks"). When upstream
-  enforces a version requirement, version-pin the consumer's makedepends to
-  the provider and keep both sides' epochs in step.
+- **Rule at the time**: while `-s` was mtime-only, avoid resuming a coupled
+  VCS pair when a consumer may have moved upstream — rebuild provider and
+  consumer together with `-i` (docs/maintainer-guide.md "Updating coupled
+  stacks"). This incident-time workaround is superseded by the approved
+  upstream-aware contract in the 2026-10-01 entry near the top of this
+  journal. When upstream enforces a version requirement, version-pin the
+  consumer's makedepends to the provider and keep both sides' epochs in step.
 
 ## 2026-09-25 (install skip) — `-s -i` re-ran `pacman -U` for packages already installed at the built version; `-i` now checks, `-fi` forces
 

@@ -96,14 +96,25 @@ to its consumers in build order — `rust-git`, `spirv-llvm-translator-git`,
 `mold-git` — while a bare `mold-git` selection is just `mold-git`, its
 prerequisite `rust-git` assumed current.
 
-For VCS (`-git`) pairs the drift is subtler: a consumer that fetches new
-upstream can start requiring a provider version that a `-s` skip kept stale
-(the skip compares archive mtime to the PKGBUILD, which does not change when
-upstream does). Rebuild such a pair together with `-i` and **without** `-s`
-(vulkan-headers-git → vulkan-icd-loader-git, 2026-09-25), and keep the
-consumer's versioned makedepends (`vulkan-headers>=1:<pkgver base>`) in step
-with the provider's versioned provide so a stale provider fails at the
-dependency check instead of inside the consumer's build.
+The 2026-09-25 Vulkan pair exposed this drift: an mtime-only `-s` could keep
+`vulkan-headers-git` at 1.4.363 while `vulkan-icd-loader-git` fetched
+v1.4.364 and required newer headers. The historical recovery was to rebuild
+the pair with `-i` and without `-s`; that workaround is superseded by the
+approved upstream-aware `-s` contract. Keep the consumer's versioned
+makedepends (`vulkan-headers>=1:<pkgver base>`) aligned with the provider's
+versioned provide so dependency resolution rejects a stale provider before
+the consumer build.
+
+For a VCS recipe, `-s` may skip only after its existing archive-mtime versus
+`PKGBUILD`-mtime check passes and each source's declared ref matches the
+actual per-archive revision baseline captured by a successful build. Resolve
+the selected ref for Git, SVN, Mercurial, and Bazaar sources, not an unrelated
+`HEAD` in a shared checkout. A moved ref follows the normal build path (and
+immediate installation when `-i` is enabled). If a remote or baseline cannot
+be determined, fail clearly; do not silently skip or build. Older VCS
+archives without a baseline need one successful build without `-s` before
+they can be skipped. Non-VCS recipes remain mtime-only, and `-s -i` still
+installs a genuinely skipped archive through the existing path.
 
 ## Documentation history
 

@@ -1024,6 +1024,376 @@ function source_filename -a entry
     echo $name
 end
 
+# The protocol, URL, and selected ref from an expanded VCS source entry.
+# Return one item per line so values containing spaces remain intact.
+function vcs_source_ref_info -a entry
+    set -l protocol (source_vcs "$entry"); or return 1
+    set -l raw (source_url "$entry"); or return 1
+    set raw (string replace -r '^(git|svn|hg|bzr)\+' '' -- "$raw")
+    set -l parts (string split -m 1 '#' -- "$raw")
+    set -l url "$parts[1]"
+    set -l fragment ""
+    if test (count $parts) -gt 1
+        set fragment "$parts[2]"
+    end
+    set url (string replace -r '\?signed$' '' -- "$url")
+    set fragment (string replace -r '\?signed$' '' -- "$fragment")
+
+    set -l ref_kind default
+    set -l ref_value -
+    if test -n "$fragment"
+        if string match -q '*=*' -- "$fragment"
+            set ref_kind (string replace -r '=.*$' '' -- "$fragment")
+            set ref_value (string replace -r '^[^=]*=' '' -- "$fragment")
+        else
+            set ref_kind revision
+            set ref_value "$fragment"
+        end
+    end
+    printf '%s\n' "$protocol" "$url" "$ref_kind" "$ref_value"
+end
+
+# Hash the expanded entry so revision records never expose credential-bearing URLs.
+function vcs_source_key -a entry
+    set -l key (printf '%s' "$entry" | sha256sum 2>/dev/null | cut -d ' ' -f1)
+    string match -qr '^[0-9a-f]{64}$' -- "$key"; or return 1
+    echo "$key"
+end
+
+# Locate makepkg's VCS checkout. Git strips .git from its default source name;
+# honor both spellings and an explicit SRCDEST override.
+function vcs_source_checkout -a pkg_path entry
+    set -l name (source_filename "$entry"); or return 1
+    set -l names "$name"
+    set -l stripped (string replace -r '\.git$' '' -- "$name")
+    if test "$stripped" != "$name"
+        set -a names "$stripped"
+    end
+    set -l roots "$pkg_path"
+    if set -q SRCDEST; and test -n "$SRCDEST"
+        set -a roots "$SRCDEST"
+    end
+    for root in $roots
+        for candidate_name in $names
+            set -l candidate "$root/$candidate_name"
+            if test -d "$candidate"
+                echo "$candidate"
+                return 0
+            end
+        end
+    end
+    return 1
+end
+
+function vcs_local_revision -a protocol checkout
+    switch "$protocol"
+        case git
+            env GIT_CONFIG_COUNT=0 git -c safe.bareRepository=all -C "$checkout" rev-parse --verify HEAD 2>/dev/null
+        case svn
+            command svn info --show-item revision "$checkout" 2>/dev/null
+        case hg
+            command hg --cwd "$checkout" log -r . --template '{node}' 2>/dev/null
+        case bzr
+            command bzr version-info --custom '--template={revision_id}' "$checkout" 2>/dev/null
+        case '*'
+            return 1
+    end
+end
+
+# Resolve the selected upstream ref, not an unrelated repository HEAD. Fixed
+# Git commits and numeric SVN revisions are immutable inputs.
+function vcs_remote_revision -a protocol url ref_kind ref_value
+    switch "$protocol"
+        case git
+            switch "$ref_kind"
+                case commit
+                    string match -qr '^[0-9a-fA-F]{7,64}$' -- "$ref_value"; or return 1
+                    echo (string lower -- "$ref_value")
+                    return 0
+                case branch
+                    set -l target "$ref_value"
+                    if not string match -q 'refs/heads/*' -- "$target"
+                        set target "refs/heads/$target"
+                    end
+                    set -l rows (env GIT_CONFIG_COUNT=0 GIT_TERMINAL_PROMPT=0 git \
+                        -c safe.bareRepository=all ls-remote --exit-code "$url" "$target" 2>/dev/null)
+                    for row in $rows
+                        set -l fields (string split \t -- "$row")
+                        if test (count $fields) -eq 2; and test "$fields[2]" = "$target"
+                            string match -qr '^[0-9a-fA-F]{40,64}$' -- "$fields[1]"; or return 1
+                            echo (string lower -- "$fields[1]")
+                            return 0
+                        end
+                    end
+                    return 1
+                case tag
+                    set -l target "$ref_value"
+                    if not string match -q 'refs/tags/*' -- "$target"
+                        set target "refs/tags/$target"
+                    end
+                    set -l peeled "$target^{}"
+                    set -l rows (env GIT_CONFIG_COUNT=0 GIT_TERMINAL_PROMPT=0 git \
+                        -c safe.bareRepository=all ls-remote --exit-code "$url" "$target" "$peeled" 2>/dev/null)
+                    set -l tag_revision ""
+                    set -l peeled_revision ""
+                    for row in $rows
+                        set -l fields (string split \t -- "$row")
+                        if test (count $fields) -eq 2
+                            if test "$fields[2]" = "$target"
+                                set tag_revision "$fields[1]"
+                            else if test "$fields[2]" = "$peeled"
+                                set peeled_revision "$fields[1]"
+                            end
+                        end
+                    end
+                    set -l revision "$peeled_revision"
+                    if test -z "$revision"
+                        set revision "$tag_revision"
+                    end
+                    string match -qr '^[0-9a-fA-F]{40,64}$' -- "$revision"; or return 1
+                    echo (string lower -- "$revision")
+                    return 0
+                case default
+                    set -l rows (env GIT_CONFIG_COUNT=0 GIT_TERMINAL_PROMPT=0 git \
+                        -c safe.bareRepository=all ls-remote --symref --exit-code "$url" HEAD 2>/dev/null)
+                    for row in $rows
+                        set -l fields (string split \t -- "$row")
+                        if test (count $fields) -eq 2; and test "$fields[2]" = HEAD
+                            if string match -qr '^[0-9a-fA-F]{40,64}$' -- "$fields[1]"
+                                echo (string lower -- "$fields[1]")
+                                return 0
+                            end
+                        end
+                    end
+                    return 1
+                case '*'
+                    return 1
+            end
+        case svn
+            if test "$ref_kind" != default; and test "$ref_kind" != revision
+                return 1
+            end
+            if test "$ref_kind" = default
+                set ref_value HEAD
+            end
+            if test "$ref_value" != HEAD; and string match -qr '^[0-9]+$' -- "$ref_value"
+                echo "$ref_value"
+                return 0
+            end
+            set -l revision (command svn --non-interactive info --show-item revision \
+                --revision "$ref_value" "$url" 2>/dev/null)
+            string match -qr '^[0-9]+$' -- "$revision"; or return 1
+            echo "$revision"
+            return 0
+        case hg
+            if test "$ref_kind" != default; and test "$ref_kind" != branch \
+                and test "$ref_kind" != revision; and test "$ref_kind" != tag
+                return 1
+            end
+            if test "$ref_kind" = default
+                set ref_value default
+            end
+            set -l revision (command hg --config ui.interactive=False identify \
+                --template '{node}' --rev "$ref_value" "$url" 2>/dev/null)
+            string match -qr '^[0-9a-fA-F]{40,64}$' -- "$revision"; or return 1
+            echo (string lower -- "$revision")
+            return 0
+        case bzr
+            if test "$ref_kind" != default; and test "$ref_kind" != revision
+                return 1
+            end
+            set -l args version-info --custom '--template={revision_id}'
+            if test "$ref_kind" = revision
+                set -a args "--revision=$ref_value"
+            end
+            set -a args "$url"
+            set -l revision (command bzr $args 2>/dev/null)
+            test -n "$revision"; or return 1
+            echo "$revision"
+            return 0
+        case '*'
+            return 1
+    end
+end
+
+# Store one revision record for every distinct VCS source used by an archive.
+# The sidecar is ignored by the existing *.pkg.tar.* rule and replaced atomically.
+function record_vcs_archive_revisions -a pkg_path archive
+    set -g _VCS_REVISION_ERROR ""
+    set -l manifest "$archive.gsa-vcs-revisions"
+    set -l entries
+    set -l keys
+    for entry in (pkgbuild_array "$pkg_path" source)
+        set -l protocol (source_vcs "$entry")
+        or continue
+        set -l key (vcs_source_key "$entry")
+        if test -z "$key"
+            set -g _VCS_REVISION_ERROR "cannot identify a VCS source entry"
+            return 1
+        end
+        if contains -- "$key" $keys
+            continue
+        end
+        set -a keys "$key"
+        set -a entries "$entry"
+    end
+
+    if test (count $entries) -eq 0
+        if test -e "$manifest"; and not rm -f -- "$manifest"
+            set -g _VCS_REVISION_ERROR "cannot remove stale VCS revision metadata"
+            return 1
+        end
+        return 0
+    end
+
+    # The archive changed; invalidate any old record before collecting its new
+    # revisions so a failed capture cannot make the replacement look current.
+    if test -e "$manifest"; and not rm -f -- "$manifest"
+        set -g _VCS_REVISION_ERROR "cannot replace VCS revision metadata"
+        return 1
+    end
+    set -l temporary (mktemp "$manifest.tmp.XXXXXX" 2>/dev/null)
+    if test -z "$temporary"
+        set -g _VCS_REVISION_ERROR "cannot create VCS revision metadata"
+        return 1
+    end
+    if not printf 'gsa-vcs-revisions\t1\n' >"$temporary"
+        rm -f -- "$temporary"
+        set -g _VCS_REVISION_ERROR "cannot write VCS revision metadata"
+        return 1
+    end
+
+    for entry in $entries
+        set -l info (vcs_source_ref_info "$entry")
+        if test (count $info) -ne 4
+            rm -f -- "$temporary"
+            set -g _VCS_REVISION_ERROR "cannot parse a VCS source ref"
+            return 1
+        end
+        set -l checkout (vcs_source_checkout "$pkg_path" "$entry")
+        if test -z "$checkout"
+            rm -f -- "$temporary"
+            set -l name (source_filename "$entry")
+            set -g _VCS_REVISION_ERROR "missing local checkout for $name"
+            return 1
+        end
+        set -l revision (vcs_local_revision "$info[1]" "$checkout")
+        if test -z "$revision"
+            rm -f -- "$temporary"
+            set -l name (source_filename "$entry")
+            set -g _VCS_REVISION_ERROR "cannot read the built revision for $name"
+            return 1
+        end
+        set -l key (vcs_source_key "$entry")
+        if test -z "$key"; or not printf '%s\t%s\t%s\n' "$key" "$info[1]" "$revision" >>"$temporary"
+            rm -f -- "$temporary"
+            set -g _VCS_REVISION_ERROR "cannot write VCS revision metadata"
+            return 1
+        end
+    end
+
+    if not mv -f -- "$temporary" "$manifest"
+        rm -f -- "$temporary"
+        set -g _VCS_REVISION_ERROR "cannot publish VCS revision metadata"
+        return 1
+    end
+    if test "$_ROOT_MODE" = "1"; and not chown "$_BUILD_USER": "$manifest"
+        set -g _VCS_REVISION_ERROR "cannot restore VCS revision metadata ownership"
+        return 1
+    end
+    return 0
+end
+
+# Return 0 when a VCS archive is current, 1 when a selected ref moved, and 2
+# when freshness cannot be established. Unknown state never becomes a skip.
+function vcs_archive_is_current -a pkg_path archive
+    set -g _VCS_REVISION_ERROR ""
+    set -l entries
+    set -l keys
+    for entry in (pkgbuild_array "$pkg_path" source)
+        set -l protocol (source_vcs "$entry")
+        or continue
+        set -l key (vcs_source_key "$entry")
+        if test -z "$key"
+            set -g _VCS_REVISION_ERROR "cannot identify a VCS source entry"
+            return 2
+        end
+        if contains -- "$key" $keys
+            continue
+        end
+        set -a keys "$key"
+        set -a entries "$entry"
+    end
+    if test (count $entries) -eq 0
+        return 0
+    end
+
+    set -l manifest "$archive.gsa-vcs-revisions"
+    if not test -f "$manifest"
+        set -g _VCS_REVISION_ERROR "no recorded VCS baseline for "(basename "$archive")
+        return 2
+    end
+    set -l manifest_count (awk -F '\t' '
+        NR == 1 {
+            if ($0 != "gsa-vcs-revisions\t1") bad = 1
+            next
+        }
+        NF != 3 || length($1) != 64 || $1 !~ /^[0-9a-f]+$/ ||
+            $2 !~ /^(git|svn|hg|bzr)$/ || $3 == "" { bad = 1; next }
+        { count++ }
+        END {
+            if (bad) exit 1
+            printf "%d\n", count + 0
+        }
+    ' "$manifest" 2>/dev/null)
+    set -l expected_count (count $entries)
+    if test -z "$manifest_count"; or test "$manifest_count" != "$expected_count"
+        set -g _VCS_REVISION_ERROR "VCS baseline is missing, malformed, or belongs to different sources"
+        return 2
+    end
+
+    for entry in $entries
+        set -l info (vcs_source_ref_info "$entry")
+        set -l key (vcs_source_key "$entry")
+        if test (count $info) -ne 4; or test -z "$key"
+            set -g _VCS_REVISION_ERROR "cannot parse a VCS source ref"
+            return 2
+        end
+        set -l fields (awk -F '\t' -v key="$key" \
+            '$1 == key { print $2; print $3 }' "$manifest" 2>/dev/null)
+        if test (count $fields) -ne 2; or test "$fields[1]" != "$info[1]"
+            set -l name (source_filename "$entry")
+            set -g _VCS_REVISION_ERROR "VCS baseline does not match source $name"
+            return 2
+        end
+        set -l current (vcs_remote_revision "$info[1]" "$info[2]" "$info[3]" "$info[4]")
+        if test -z "$current"
+            set -l name (source_filename "$entry")
+            set -g _VCS_REVISION_ERROR "cannot query upstream revision for $name"
+            return 2
+        end
+        if test "$info[1]" = git; and test "$info[3]" = commit
+            if not string match -q "$current*" -- "$fields[2]"
+                set -l name (source_filename "$entry")
+                set -g _VCS_REVISION_ERROR "pinned Git commit does not match source $name"
+                return 1
+            end
+        else if test "$fields[2]" != "$current"
+            set -l name (source_filename "$entry")
+            set -g _VCS_REVISION_ERROR "selected upstream ref moved for source $name"
+            return 1
+        end
+    end
+    return 0
+end
+
+# Snapshot archive path, nanosecond mtime, and size so records are written only
+# for files makepkg actually replaced (including split outputs).
+function package_archive_snapshot -a pkg_path
+    find "$pkg_path" -maxdepth 1 -type f -name '*.pkg.tar.zst' \
+        -printf '%p\t%T@\t%s\n' 2>/dev/null
+end
+
 # The pkgver a .SRCINFO declares for its pkgbase, or nothing when it has none.
 function srcinfo_pkgver -a srcinfo
     for line in (cat "$srcinfo" 2>/dev/null)
@@ -1725,13 +2095,19 @@ end
 function cleanup_pkgs
     set -l pkgs (find "$SCRIPT_DIR/packages" -type f -name '*.pkg.tar.zst' \
         -not -path '*/src/*' -not -path '*/pkg/*' 2>/dev/null | sort)
-    if test (count $pkgs) -eq 0
-        echo "No built packages to remove."
+    set -l manifests (find "$SCRIPT_DIR/packages" -type f -name '*.pkg.tar.zst.gsa-vcs-revisions' \
+        -not -path '*/src/*' -not -path '*/pkg/*' 2>/dev/null | sort)
+    if test (count $pkgs) -eq 0; and test (count $manifests) -eq 0
+        echo "No built packages or VCS revision metadata to remove."
         return 0
     end
-    set -l size (du -ch $pkgs | tail -1 | cut -f1)
-    echo "Removing "(count $pkgs)" package archives ("$size")"
-    if not rm -v -- $pkgs
+    set -l size 0
+    if test (count $pkgs) -gt 0
+        set size (du -ch $pkgs | tail -1 | cut -f1)
+    end
+    set -l targets $pkgs $manifests
+    echo "Removing "(count $pkgs)" package archives ("$size") and "(count $manifests)" VCS revision records"
+    if not rm -v -- $targets
         ui_error "failed to remove one or more package archives"
         return 1
     end
@@ -3164,7 +3540,9 @@ function build_package -a package_id install_flag clean_flag skip_flag no_sync_f
             ui_error "failed to clean build artifacts for $pkg_name"
             return 1
         end
-        if not find "$pkg_path" -maxdepth 1 -name '*.pkg.tar.zst' -delete 2>/dev/null
+        if not find "$pkg_path" -maxdepth 1 \
+            \( -name '*.pkg.tar.zst' -o -name '*.pkg.tar.zst.gsa-vcs-revisions' \) \
+            -delete 2>/dev/null
             ui_error "failed to remove old package archives for $pkg_name"
             return 1
         end
@@ -3179,16 +3557,27 @@ function build_package -a package_id install_flag clean_flag skip_flag no_sync_f
             set -l pkg_time (stat -c %Y "$pkg_path/PKGBUILD" 2>/dev/null)
             set -l built_time (stat -c %Y "$latest_pkg" 2>/dev/null)
             if test -n "$pkg_time" -a -n "$built_time" -a "$built_time" -ge "$pkg_time"
+                vcs_archive_is_current "$pkg_path" "$latest_pkg"
+                set -l freshness_status $status
+                if test $freshness_status -eq 2
+                    ui_error "$pkg_name: --skip cannot verify upstream VCS freshness: $_VCS_REVISION_ERROR"
+                    return 1
+                end
+                if test $freshness_status -eq 0
+                    if test "$_BUILD_QUIET" != "1"
+                        ui_info "$pkg_name: already built ($(basename $latest_pkg))"
+                    end
+                    # -s + -i: the skip path installs too — topo order must
+                    # hold for already-built packages just the same.
+                    # ($log_file isn't defined yet — use the canonical path.)
+                    if test "$install_flag" = "1"
+                        install_pkgs_now (package_log_file "$package_id") 1 $force_install_flag (list_split_pkgs "$pkg_path"); or return 1
+                    end
+                    return 0
+                end
                 if test "$_BUILD_QUIET" != "1"
-                    ui_info "$pkg_name: already built ($(basename $latest_pkg))"
+                    ui_info "$pkg_name: upstream VCS ref moved; rebuilding"
                 end
-                # -s + -i: the skip path installs too — topo order must hold
-                # for already-built packages just the same.
-                # ($log_file isn't defined yet here — use the canonical path.)
-                if test "$install_flag" = "1"
-                    install_pkgs_now (package_log_file "$package_id") 1 $force_install_flag (list_split_pkgs "$pkg_path"); or return 1
-                end
-                return 0
             end
         end
     end
@@ -3356,6 +3745,7 @@ function build_package -a package_id install_flag clean_flag skip_flag no_sync_f
             ui_error "$pkg_name: BUILD FAILED (rc=$rc)"
             echo "  Log: $log_file"
             ui_warning "Last lines:"
+    set -l archive_snapshot_before (package_archive_snapshot "$pkg_path")
             print_log_tail "$log_file"
         end
         return 1
@@ -3393,6 +3783,33 @@ end
 #   pacman can contend on its database lock.
 # - Lane supervisors use isolated sessions and redirect their complete
 #   stdout/stderr stream to the package log; only the parent renders status.
+    set -l archive_snapshot_after (package_archive_snapshot "$pkg_path")
+    set -l changed_archives
+    set -l archive_revision_error ""
+    for after_row in $archive_snapshot_after
+        set -l after_fields (string split \t -- "$after_row")
+        if test (count $after_fields) -ne 3
+            set archive_revision_error "cannot inspect package archive after building"
+            continue
+        end
+        set -l old_mtime ""
+        set -l old_size ""
+        for before_row in $archive_snapshot_before
+            set -l before_fields (string split \t -- "$before_row")
+            if test (count $before_fields) -eq 3; and test "$before_fields[1]" = "$after_fields[1]"
+                set old_mtime "$before_fields[2]"
+                set old_size "$before_fields[3]"
+                break
+            end
+        end
+        if test -z "$old_mtime"; or test "$old_mtime" != "$after_fields[2]"; or test "$old_size" != "$after_fields[3]"
+            set -a changed_archives "$after_fields[1]"
+            if test -e "$after_fields[1].gsa-vcs-revisions"; \
+                and not rm -f -- "$after_fields[1].gsa-vcs-revisions"
+                set archive_revision_error "cannot invalidate the old VCS revision record for "(basename "$after_fields[1]")
+            end
+        end
+    end
 # - Result protocol: each lane job writes "pkgdir rc seconds" to its result
 #   file; the dispatcher polls those files every 0.5 s.
 # - lanes=1 preserves the old sequential semantics exactly (strict topo order).
@@ -3411,6 +3828,11 @@ function deps_of -a pkg
             return
         end
     end
+    if test -n "$archive_revision_error"
+        ui_error "$pkg_name: $archive_revision_error"
+        return 1
+    end
+
 end
 
 # ─── Topology tags (the record's tags field) ─────────────────────────────────
@@ -3421,6 +3843,13 @@ end
 # main consumes it. package_app_cluster is the app prompt's seam.
 # package_abi_severity PKG → must | should | none
 function package_abi_severity -a pkg
+    for archive in $changed_archives
+        if not record_vcs_archive_revisions "$pkg_path" "$archive"
+            ui_error "$pkg_name: build succeeded but VCS revisions could not be recorded for "(basename "$archive")": $_VCS_REVISION_ERROR"
+            return 1
+        end
+    end
+
     for entry in $_TAGS
         set -l parts (string split '|' -- "$entry")
         test "$parts[1]" = "$pkg"; or continue
@@ -5531,7 +5960,8 @@ function usage
     echo "                    sanity check. Implies -i, so it works with or without it."
     echo "  --no-deps         Build only what you named (no consumer expansion)"
     echo "  -c, --clean       Clean build artifacts before building"
-    echo "  -s, --skip        Skip packages where .pkg.tar.zst is newer than PKGBUILD"
+    echo "  -s, --skip        Skip fresh archives only when each VCS source ref matches"
+    echo "                    its recorded revision; missing baselines/remotes abort."
     echo "  --no-sync          Don't auto-update stable package versions from repos."
     echo "                     The default sync rewrites pkgver/pkgrel in place. When a"
     echo "                     source=() URL moves with the version, the recipe's checksums"

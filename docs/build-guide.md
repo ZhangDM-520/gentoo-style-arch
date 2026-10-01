@@ -9,8 +9,10 @@ plus `sudo` unless you run as root supervisor) and `base-devel` for the
 recipes themselves. A working compiler, enough disk space, and the package
 dependencies named by the selected recipes are also required.
 
-`--audit` and `--link-sources` are the only modes that need `rg`/`git`, so a
-minimal system can still build and install without them.
+`--audit` needs `rg`, and `--link-sources` needs `git`. The upstream-aware
+`-s/--skip` check also needs the client for each declared source protocol
+(`git`, `svn`, `hg`, or `bzr`) and access to its remote when a selected recipe
+has VCS sources; a non-VCS recipe keeps the mtime-only skip check.
 
 ## Inspect, dry-run, then build
 
@@ -58,6 +60,25 @@ invoking user is rejected. Runtime-state ownership is settled at write time:
 the supervisor repairs wrong owners (announced), creates every state file as
 the invoking user — never as root — and a run killed mid-flight can no longer
 leave logs that poison the next one.
+
+### Skip and resume
+
+`-s/--skip` keeps the archive-mtime versus `PKGBUILD`-mtime check. For
+non-VCS recipes, that remains the full freshness check. For a VCS recipe, it
+is only the first gate: the builder compares the actual source revisions
+recorded for that archive after a successful build with the current remote
+revision of each VCS source's declared ref (`git`, `svn`, `hg`, or `bzr`).
+Every declared ref must still match before the archive can be skipped. A
+moved ref makes the archive stale and the package follows the ordinary build
+path. Resolve the declared ref, not an unrelated repository `HEAD` or the
+mutable shared source checkout.
+
+If a remote cannot be queried or an archive has no recorded revision
+baseline, the builder stops with a clear error rather than skipping or
+silently falling back to a build. An older VCS archive without a baseline
+must first be rebuilt successfully without `-s`. On a genuine skip,
+`-s -i` continues through the existing install path; if a declared ref moved,
+the package builds normally and `-i` installs the new result as usual.
 
 ### Stable version sync and checksum verification
 

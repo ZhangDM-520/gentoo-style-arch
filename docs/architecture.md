@@ -31,10 +31,12 @@ Gentoo_Style_Arch has four deliberately separate modules:
    reports failures through per-package logs.
 4. **Runtime state** is split in two by who owns it. Under `.state/` (or
    `GSA_STATE_DIR`) the builder keeps its own state: `logs/`, the pacman
-   mutex, and the lane result files. `makepkg` state — source mirrors, `src/`,
-   `pkg/`, and package archives — lands **beside each recipe**, because
-   `SRCDEST`/`PKGDEST` default to `$startdir`. Both classes are ignored by Git
-   and are absent from a clean checkout.
+   mutex, and lane result files. Per-archive VCS revision records live beside
+   their package archives so they stay associated with the built artifact.
+   `makepkg` state — source mirrors, `src/`, `pkg/`, and package archives —
+   lands **beside each recipe**, because `SRCDEST`/`PKGDEST` default to
+   `$startdir`. Both classes are ignored by Git and are absent from a clean
+   checkout.
 
 The source-sharing seam is intentionally between a recipe's VCS source name
 and its runtime mirror. A missing canonical mirror is valid on a clean
