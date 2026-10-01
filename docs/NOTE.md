@@ -36,6 +36,40 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-01 — split `glibc-git` package integration
+
+- **Change**: added one `packages/core/glibc-git` recipe with the matched
+  `glibc-git`, `lib32-glibc-git`, and `glibc-locales-git` outputs, versioned
+  compatibility provides, and the approved build-order chain
+  `linux-api-headers -> glibc-git -> gcc-snapshot`. Updated the static README
+  counts and split-name fixture coverage.
+- **Selection policy**: logical `core` membership is intentional even though
+  `-g core` auto-enables immediate installation and can replace the installed
+  system libc. This also installs the new libc before its consumer. The
+  `gcc-snapshot` edge deliberately triggers a costly same-pass rebuild:
+  GCC's split outputs require versioned `glibc>=2.40` and
+  `lib32-glibc>=2.40` providers, and the chosen policy rebuilds them against
+  the selected libc.
+- **Pitfall found**: the first local `check()` implementation omitted Arch's
+  syscall-restricted test exclusions. Added the pinned recipe's `_skip_test`
+  helper and 12 exclusions; a synthetic Makefile check confirmed the helper
+  removes only its target row. The locale `SUPPORTED` transform was also
+  exercised on a continuation row and produced the expected `locale charset`
+  output.
+- **Host boundary**: after explicit authorization, added the three output
+  names to `[options]` `IgnorePkg`, saved a pre-change backup, and verified
+  that `pacman-conf IgnorePkg` reads them. No glibc build, test-suite run,
+  package installation, or live-libc replacement was performed.
+- **Validation**: recipe syntax, generated `.SRCINFO` parity, and local asset
+  checksums passed; the focused package fixture and all 43 fixtures in
+  `bash tests/run-all.sh` passed. `--audit`, `--list`, and dry-runs for `core`,
+  `stable`, and `git` succeeded; the audit's report-only findings are
+  pre-existing and unrelated. The disposable-root safety rule and source
+  evidence are documented in
+  [`glibc-git-research.md`](glibc-git-research.md).
+- **Rule**: test libc packaging only in a disposable root; keep the native,
+  multilib, and locale outputs on one source revision and exact version.
+
 ## 2026-10-01 — `glibc-git` / `lib32-glibc-git` integration research
 
 - **Question**: how to add and optimize a rolling glibc and multilib pair
@@ -47,9 +81,11 @@ dependency edges, and incident root causes are unaffected by the renames.
   drop-in replacement. The topology choice for rebuilding `gcc-snapshot` with
   every glibc update is intentionally left open because it adds a heavy
   consumer build.
-- **Disposition**: research only; no recipe, topology, or host `IgnorePkg`
-  changes, and no build or install. The source-backed findings and proposed
-  wiring are in [`glibc-git-research.md`](glibc-git-research.md).
+- **Disposition at research completion**: research only; no recipe, topology,
+  or host `IgnorePkg` changes, and no build or install. The later
+  implementation is recorded in the entry immediately above. The
+  source-backed findings and proposed wiring are in
+  [`glibc-git-research.md`](glibc-git-research.md).
 
 ## 2026-09-30 — `libldacdec` recipe (stable) + the `pipewire → libldacdec` build-order edge
 

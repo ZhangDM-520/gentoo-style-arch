@@ -1,0 +1,56 @@
+#!/bin/sh
+# Adapted from Arch glibc packaging commit 2d1fceaab454b56fe64092986109207839f63e4d.
+
+set -e
+
+locale_gen=/etc/locale.gen
+locale_dir=/usr/share/i18n/locales
+local_locale_dir=/usr/local/share/i18n/locales
+failed=0
+
+if [ -n "${POSIXLY_CORRECT:-}" ]; then
+    unset POSIXLY_CORRECT
+fi
+
+[ -s "$locale_gen" ] || exit 0
+umask 022
+
+printf '%s\n' 'Generating locales...'
+while read -r locale charset || [ -n "${locale:-}" ]; do
+    case "${locale:-}" in
+        '' | \#*) continue ;;
+    esac
+
+    if [ -z "${charset:-}" ]; then
+        printf "error: Bad entry '%s'\n" "$locale" >&2
+        failed=1
+        continue
+    fi
+
+    locale_base=${locale%%.*}
+    locale_base=${locale_base%%@*}
+    locale_at=${locale#*@}
+    [ "$locale_at" != "$locale" ] && locale_at="@$locale_at" || locale_at=
+
+    printf '  %s.%s%s...' "$locale_base" "$charset" "$locale_at"
+
+    if [ -f "$local_locale_dir/$locale" ]; then
+        input="$local_locale_dir/$locale"
+    elif [ -f "$locale_dir/$locale" ]; then
+        input=$locale
+    else
+        input="$locale_base$locale_at"
+        [ ! -f "$local_locale_dir/$input" ] || input="$local_locale_dir/$input"
+    fi
+
+    if localedef -i "$input" -c -f "$charset" \
+        -A /usr/share/locale/locale.alias "$locale"; then
+        printf '%s\n' ' done'
+    else
+        printf '%s\n' ' failed' >&2
+        failed=1
+    fi
+done <"$locale_gen"
+
+printf '%s\n' 'Generation complete.'
+exit "$failed"

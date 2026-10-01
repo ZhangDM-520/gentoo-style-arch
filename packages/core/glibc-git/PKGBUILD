@@ -1,0 +1,262 @@
+# The split layout and transaction hooks follow Arch glibc packaging commit
+# 2d1fceaab454b56fe64092986109207839f63e4d; keep every output on one source pin.
+pkgbase=glibc-git
+pkgname=(glibc-git lib32-glibc-git glibc-locales-git)
+pkgver=2.44+r50+g1848099f063e
+_commit=1848099f063e99d4ffecbd7667766d54862398b9
+pkgrel=1
+pkgdesc='GNU C Library development snapshot'
+arch=(x86_64)
+url='https://www.gnu.org/software/libc'
+license=(GPL-2.0-or-later LGPL-2.1-or-later)
+makedepends=(gd git python)
+makedepends_x86_64=(lib32-gcc-libs)
+options=(staticlibs !lto)
+source=(
+  "glibc::git+https://forge.sourceware.org/glibc/glibc-mirror#commit=$_commit"
+  locale.gen.txt
+  locale-gen
+  lib32-glibc.conf
+  sdt.h
+  sdt-config.h
+  tunables.conf
+  shstk.conf
+  10-glibc-locale-gen.hook
+  10-glibc-remove-locale-archive.hook
+  11-glibc-ldconfig.hook
+  11-glibc-remove-ldconfig-cache.hook
+  12-glibc-iconvconfig.hook
+  12-glibc-remove-iconvconfig-cache.hook
+  12-lib32-glibc-iconvconfig.hook
+  12-lib32-glibc-remove-iconvconfig-cache.hook
+)
+b2sums=(
+  SKIP
+  d665b29e14a4293c5ee8dd548fa89d6bf9c2a72751da20904d71ce5c126d07160820c9642307c20c730fd67b8df03865c4fd9be44e17657172e1a6ad3bcbd267
+  9ffd7b3f5c3c4f636957e1ddbc671ed701fc4e95f1b49f06d6c54ffb67b591b4e3a55bd587ab2a488b859b29bfeb81bb28386f0928a0fb51ad629ed6a92fc82d
+  7c265e6d36a5c0dff127093580827d15519b6c7205c2e1300e82f0fb5b9dd00b6accb40c56581f18179c4fbbc95bd2bf1b900ace867a83accde0969f7b609f8a
+  7eae20953d93ceaaf3d71633e3a461981806fac7bff95fe9fc09c0b8947def06c7e6032a51f45872861c9eef62414ca01d43c1735ba9a9cfcd2ae6d4dced3df6
+  b709fa85ba7a34dbc37586cf6fbd417b8934464632936955c87a1c84ce3988b04640e26c86e1250df4fe69d64cae8ff01ae865a9bd8f202ae322b800717b0060
+  315cf92976714d88c60d23a3114e172f26ade1c1461bd2939b6842b03cd76ec63a3c867af5eab56f8c61d3f011158d69194ef1495e28ac47fd60b9f8bd76673c
+  05f35a997401dd9893551a114d3802d81831dd8889c217e736d63f9239db7010dc8a27966c4668b612a6ae93882f34aaf5e93b26f91d4a247afbb8699f5d6959
+  8ab98b8aa0590ec787eadeb8935443b72872c6c6fc4fd548e0cdbf63c463c0155ff9368a6f0adc9625f1dcdd938b20c27a05691321462fbc8cfe0e60ae44151d
+  a61dc4665ca71aa327ab39c8bdeeffa51a7ace4d178c63e58f3d7ade9f4571c7cafca8e5e22f438615852ad751311b3b127c53332e1658f2754554ea69199496
+  41a3b559364e0e427a2eda5c202ba25d3ebbbab475cc11f641f8f38108f3a304e0525a48cc8daa668b86d17c98db1f2dd3c104afaea0657776b253ab815e3bd0
+  317ffd6384ce48642093c535690d5a69636748760322423f652c38a9288fa3497bc9ae00a15f65a82ac241e9097a1b98f113b61ddad4ab3fb5f2175a5620244e
+  b0575d4647e4a0e1254572dfee694ced08b2b056e7baeabe9be1fc3aefa931c46ad00e7e09e5cff2170ccdbc2c126a622271dd32be0b6d1dc8151feaab998505
+  def4e0ebe297ec07f292457b6e88402eb6628cbbe721109df998a504656dad60fbf03f483298aeebf287ae9649146a354828037ad3a079aee01b20b2ef4a8c67
+  8a9b1da927ff4f5d59bffdc6647fdacc82a9bb28958cec643b9cac58e49e8014df424e6e0908de853c765aa789bbf6b735ab9b3905d870d39707568157425a44
+  dc3223eae3b465140e320c875f6fc8ffb221e34d93cad651851fdef7168e4ad697c2ce88901558c05c8626a0f07641660dbae2a0ca97e6559e0ed274221c1adc
+)
+
+pkgver() {
+  cd glibc
+  git describe --abbrev=12 --tags | sed 's/[^-]*-//;s/[^-]*-/&r/;s/-/+/g'
+}
+
+prepare() {
+  mkdir -p glibc-build lib32-glibc-build
+}
+
+build() {
+  local configure_flags=(
+    --prefix=/usr
+    --with-headers=/usr/include
+    --with-bugurl=https://gitlab.archlinux.org/archlinux/packaging/packages/glibc/-/issues
+    --enable-bind-now
+    --enable-fortify-source
+    --enable-kernel=4.4
+    --enable-multi-arch
+    --enable-stack-protector=strong
+    --enable-systemtap
+    --disable-nscd
+    --disable-profile
+    --disable-werror
+  )
+
+  CFLAGS=${CFLAGS/-Wp,-D_FORTIFY_SOURCE=3/}
+
+  (
+    cd glibc-build
+
+    printf '%s\n' \
+      'slibdir=/usr/lib' \
+      'rtlddir=/usr/lib' \
+      'sbindir=/usr/bin' \
+      'rootsbindir=/usr/bin' >>configparms
+
+    "$srcdir/glibc/configure" \
+      --libdir=/usr/lib \
+      --libexecdir=/usr/lib \
+      --enable-cet \
+      --enable-sframe \
+      "${configure_flags[@]}"
+
+    make -O
+    make info
+  )
+
+  if [[ $CARCH == x86_64 ]]; then
+    (
+      cd lib32-glibc-build
+      export CC='gcc -m32 -mstackrealign'
+      export CXX='g++ -m32 -mstackrealign'
+
+      CFLAGS=${CFLAGS/-fno-omit-frame-pointer -mno-omit-leaf-frame-pointer/}
+
+      printf '%s\n' \
+        'slibdir=/usr/lib32' \
+        'rtlddir=/usr/lib32' \
+        'sbindir=/usr/bin' \
+        'rootsbindir=/usr/bin' >>configparms
+
+      "$srcdir/glibc/configure" \
+        --host=i686-pc-linux-gnu \
+        --libdir=/usr/lib32 \
+        --libexecdir=/usr/lib32 \
+        "${configure_flags[@]}"
+
+      make -O
+    )
+
+    make -C "$srcdir/glibc/localedata" \
+      objdir="$srcdir/glibc-build" \
+      DESTDIR="$srcdir/locales" \
+      install-locale-files
+  fi
+}
+
+_skip_test() {
+  local test=$1
+  local file=$2
+  sed -i "/\b${test} /d" "$srcdir/glibc/$file"
+}
+
+check() (
+  cd glibc-build
+
+  sed -i 's/-Werror=format-security/-Wformat-security/' config.make
+  sed -i '/CFLAGS/s/-fno-plt//' config.make
+  sed -i '/CFLAGS/s/-fexceptions//' config.make
+
+  # These tests require syscall permissions blocked by the Arch build environment.
+  # The systemd-nspawn fix is --system-call-filter="@clock @memlock @pkey".
+  _skip_test tst-ldconfig-cache elf/Makefile
+  _skip_test tst-pthread-gdb-attach nptl/Makefile
+  _skip_test tst-pthread-gdb-attach-static nptl/Makefile
+  _skip_test test-errno-linux sysdeps/unix/sysv/linux/Makefile
+  _skip_test tst-mlock2 sysdeps/unix/sysv/linux/Makefile
+  _skip_test tst-ntp_gettime sysdeps/unix/sysv/linux/Makefile
+  _skip_test tst-ntp_gettimex sysdeps/unix/sysv/linux/Makefile
+  _skip_test tst-pkey sysdeps/unix/sysv/linux/Makefile
+  _skip_test tst-mseal-pkey sysdeps/unix/sysv/linux/Makefile
+  _skip_test tst-process_mrelease sysdeps/unix/sysv/linux/Makefile
+  _skip_test tst-shstk-legacy-1g sysdeps/x86_64/Makefile
+  _skip_test tst-adjtime time/Makefile
+
+  make -O check
+)
+
+_install_license() {
+  install -Dm644 "$srcdir/glibc/COPYING" \
+    "$pkgdir/usr/share/licenses/$pkgname/COPYING"
+  install -Dm644 "$srcdir/glibc/COPYING.LIB" \
+    "$pkgdir/usr/share/licenses/$pkgname/COPYING.LIB"
+}
+
+package_glibc-git() {
+  pkgdesc='GNU C Library development snapshot'
+  depends=('linux-api-headers>=4.10' tzdata filesystem)
+  optdepends=(
+    'gd: for memusagestat'
+    'perl: for mtrace'
+  )
+  provides=("glibc=$pkgver")
+  conflicts=(glibc)
+  backup=(
+    etc/gai.conf
+    etc/locale.gen
+    etc/tunables.conf
+    etc/tunables.conf.d/shstk.conf
+  )
+
+  make -C glibc-build DESTDIR="$pkgdir" install
+  rm -f "$pkgdir/etc/ld.so.cache"
+  rm -f "$pkgdir"/usr/bin/{tzselect,zdump,zic}
+
+  install -dm755 "$pkgdir/usr/lib/locale"
+  install -Dm644 "$srcdir/glibc/posix/gai.conf" "$pkgdir/etc/gai.conf"
+  install -Dm755 "$srcdir/locale-gen" "$pkgdir/usr/bin/locale-gen"
+  install -Dm644 "$srcdir/locale.gen.txt" "$pkgdir/etc/locale.gen"
+  sed -e '1,3d' -e 's|/| |g' -e 's|\\| |g' -e 's|^|#|g' \
+    "$srcdir/glibc/localedata/SUPPORTED" >>"$pkgdir/etc/locale.gen"
+  sed -e '1,3d' -e 's|/| |g' -e 's| \\||g' \
+    "$srcdir/glibc/localedata/SUPPORTED" >"$pkgdir/usr/share/i18n/SUPPORTED"
+
+  install -dm755 "$pkgdir/usr/lib/locale"
+  cp -r "$srcdir/locales/usr/lib/locale/C.utf8" -t "$pkgdir/usr/lib/locale"
+  sed -i '/#C\.UTF-8 /d' "$pkgdir/etc/locale.gen"
+
+  install -Dm644 "$srcdir/sdt.h" "$pkgdir/usr/include/sys/sdt.h"
+  install -Dm644 "$srcdir/sdt-config.h" "$pkgdir/usr/include/sys/sdt-config.h"
+
+  install -Dm644 "$srcdir/10-glibc-locale-gen.hook" \
+    "$pkgdir/usr/share/libalpm/hooks/10-glibc-locale-gen.hook"
+  install -Dm644 "$srcdir/10-glibc-remove-locale-archive.hook" \
+    "$pkgdir/usr/share/libalpm/hooks/10-glibc-remove-locale-archive.hook"
+  install -Dm644 "$srcdir/11-glibc-ldconfig.hook" \
+    "$pkgdir/usr/share/libalpm/hooks/11-glibc-ldconfig.hook"
+  install -Dm644 "$srcdir/11-glibc-remove-ldconfig-cache.hook" \
+    "$pkgdir/usr/share/libalpm/hooks/11-glibc-remove-ldconfig-cache.hook"
+  install -Dm644 "$srcdir/12-glibc-iconvconfig.hook" \
+    "$pkgdir/usr/share/libalpm/hooks/12-glibc-iconvconfig.hook"
+  install -Dm644 "$srcdir/12-glibc-remove-iconvconfig-cache.hook" \
+    "$pkgdir/usr/share/libalpm/hooks/12-glibc-remove-iconvconfig-cache.hook"
+  install -Dm644 "$srcdir/tunables.conf" "$pkgdir/etc/tunables.conf"
+  install -Dm644 "$srcdir/shstk.conf" "$pkgdir/etc/tunables.conf.d/shstk.conf"
+  _install_license
+}
+
+package_lib32-glibc-git() {
+  pkgdesc='GNU C Library (32-bit development snapshot)'
+  arch=(x86_64)
+  depends=("glibc-git=$pkgver")
+  provides=("lib32-glibc=$pkgver")
+  conflicts=(lib32-glibc)
+  options+=(!emptydirs)
+
+  cd lib32-glibc-build
+  make DESTDIR="$pkgdir" install
+  rm -rf -- \
+    "$pkgdir/etc" \
+    "$pkgdir/sbin" \
+    "$pkgdir/usr/bin" \
+    "$pkgdir/usr/sbin" \
+    "$pkgdir/usr/share" \
+    "$pkgdir/var"
+
+  find "$pkgdir/usr/include" -type f ! -name '*-32.h' -delete
+  install -d "$pkgdir/usr/lib"
+  ln -s ../lib32/ld-linux.so.2 "$pkgdir/usr/lib/ld-linux.so.2"
+  install -Dm644 "$srcdir/lib32-glibc.conf" \
+    "$pkgdir/etc/ld.so.conf.d/lib32-glibc.conf"
+  ln -s ../lib/locale "$pkgdir/usr/lib32/locale"
+
+  install -Dm644 "$srcdir/12-lib32-glibc-iconvconfig.hook" \
+    "$pkgdir/usr/share/libalpm/hooks/12-lib32-glibc-iconvconfig.hook"
+  install -Dm644 "$srcdir/12-lib32-glibc-remove-iconvconfig-cache.hook" \
+    "$pkgdir/usr/share/libalpm/hooks/12-lib32-glibc-remove-iconvconfig-cache.hook"
+  _install_license
+}
+
+package_glibc-locales-git() {
+  pkgdesc='Pregenerated locales for GNU C Library development snapshot'
+  depends=("glibc-git=$pkgver")
+  provides=("glibc-locales=$pkgver")
+  conflicts=(glibc-locales)
+
+  cp -r "$srcdir/locales/." "$pkgdir"
+  rm -r "$pkgdir/usr/lib/locale/C.utf8"
+  hardlink -c "$pkgdir/usr/lib/locale"
+  _install_license
+}

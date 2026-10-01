@@ -1,0 +1,76 @@
+pkgbase = glibc-git
+	pkgdesc = GNU C Library development snapshot
+	pkgver = 2.44+r50+g1848099f063e
+	pkgrel = 1
+	url = https://www.gnu.org/software/libc
+	arch = x86_64
+	license = GPL-2.0-or-later
+	license = LGPL-2.1-or-later
+	makedepends = gd
+	makedepends = git
+	makedepends = python
+	options = staticlibs
+	options = !lto
+	source = glibc::git+https://forge.sourceware.org/glibc/glibc-mirror#commit=1848099f063e99d4ffecbd7667766d54862398b9
+	source = locale.gen.txt
+	source = locale-gen
+	source = lib32-glibc.conf
+	source = sdt.h
+	source = sdt-config.h
+	source = tunables.conf
+	source = shstk.conf
+	source = 10-glibc-locale-gen.hook
+	source = 10-glibc-remove-locale-archive.hook
+	source = 11-glibc-ldconfig.hook
+	source = 11-glibc-remove-ldconfig-cache.hook
+	source = 12-glibc-iconvconfig.hook
+	source = 12-glibc-remove-iconvconfig-cache.hook
+	source = 12-lib32-glibc-iconvconfig.hook
+	source = 12-lib32-glibc-remove-iconvconfig-cache.hook
+	b2sums = SKIP
+	b2sums = d665b29e14a4293c5ee8dd548fa89d6bf9c2a72751da20904d71ce5c126d07160820c9642307c20c730fd67b8df03865c4fd9be44e17657172e1a6ad3bcbd267
+	b2sums = 9ffd7b3f5c3c4f636957e1ddbc671ed701fc4e95f1b49f06d6c54ffb67b591b4e3a55bd587ab2a488b859b29bfeb81bb28386f0928a0fb51ad629ed6a92fc82d
+	b2sums = 7c265e6d36a5c0dff127093580827d15519b6c7205c2e1300e82f0fb5b9dd00b6accb40c56581f18179c4fbbc95bd2bf1b900ace867a83accde0969f7b609f8a
+	b2sums = 7eae20953d93ceaaf3d71633e3a461981806fac7bff95fe9fc09c0b8947def06c7e6032a51f45872861c9eef62414ca01d43c1735ba9a9cfcd2ae6d4dced3df6
+	b2sums = b709fa85ba7a34dbc37586cf6fbd417b8934464632936955c87a1c84ce3988b04640e26c86e1250df4fe69d64cae8ff01ae865a9bd8f202ae322b800717b0060
+	b2sums = 315cf92976714d88c60d23a3114e172f26ade1c1461bd2939b6842b03cd76ec63a3c867af5eab56f8c61d3f011158d69194ef1495e28ac47fd60b9f8bd76673c
+	b2sums = 05f35a997401dd9893551a114d3802d81831dd8889c217e736d63f9239db7010dc8a27966c4668b612a6ae93882f34aaf5e93b26f91d4a247afbb8699f5d6959
+	b2sums = 8ab98b8aa0590ec787eadeb8935443b72872c6c6fc4fd548e0cdbf63c463c0155ff9368a6f0adc9625f1dcdd938b20c27a05691321462fbc8cfe0e60ae44151d
+	b2sums = a61dc4665ca71aa327ab39c8bdeeffa51a7ace4d178c63e58f3d7ade9f4571c7cafca8e5e22f438615852ad751311b3b127c53332e1658f2754554ea69199496
+	b2sums = 41a3b559364e0e427a2eda5c202ba25d3ebbbab475cc11f641f8f38108f3a304e0525a48cc8daa668b86d17c98db1f2dd3c104afaea0657776b253ab815e3bd0
+	b2sums = 317ffd6384ce48642093c535690d5a69636748760322423f652c38a9288fa3497bc9ae00a15f65a82ac241e9097a1b98f113b61ddad4ab3fb5f2175a5620244e
+	b2sums = b0575d4647e4a0e1254572dfee694ced08b2b056e7baeabe9be1fc3aefa931c46ad00e7e09e5cff2170ccdbc2c126a622271dd32be0b6d1dc8151feaab998505
+	b2sums = def4e0ebe297ec07f292457b6e88402eb6628cbbe721109df998a504656dad60fbf03f483298aeebf287ae9649146a354828037ad3a079aee01b20b2ef4a8c67
+	b2sums = 8a9b1da927ff4f5d59bffdc6647fdacc82a9bb28958cec643b9cac58e49e8014df424e6e0908de853c765aa789bbf6b735ab9b3905d870d39707568157425a44
+	b2sums = dc3223eae3b465140e320c875f6fc8ffb221e34d93cad651851fdef7168e4ad697c2ce88901558c05c8626a0f07641660dbae2a0ca97e6559e0ed274221c1adc
+	makedepends_x86_64 = lib32-gcc-libs
+
+pkgname = glibc-git
+	pkgdesc = GNU C Library development snapshot
+	depends = linux-api-headers>=4.10
+	depends = tzdata
+	depends = filesystem
+	optdepends = gd: for memusagestat
+	optdepends = perl: for mtrace
+	provides = glibc=2.44+r50+g1848099f063e
+	conflicts = glibc
+	backup = etc/gai.conf
+	backup = etc/locale.gen
+	backup = etc/tunables.conf
+	backup = etc/tunables.conf.d/shstk.conf
+
+pkgname = lib32-glibc-git
+	pkgdesc = GNU C Library (32-bit development snapshot)
+	arch = x86_64
+	depends = glibc-git=2.44+r50+g1848099f063e
+	provides = lib32-glibc=2.44+r50+g1848099f063e
+	conflicts = lib32-glibc
+	options = staticlibs
+	options = !lto
+	options = !emptydirs
+
+pkgname = glibc-locales-git
+	pkgdesc = Pregenerated locales for GNU C Library development snapshot
+	depends = glibc-git=2.44+r50+g1848099f063e
+	provides = glibc-locales=2.44+r50+g1848099f063e
+	conflicts = glibc-locales

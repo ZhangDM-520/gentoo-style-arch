@@ -1,0 +1,3 @@
+# Configuration file for locale-gen.
+#
+# Uncomment entries listed in /usr/share/i18n/SUPPORTED to generate locales.

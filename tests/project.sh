@@ -4,7 +4,7 @@ set -euo pipefail
 # The builder's package-reference resolution and its two read-only listings.
 #
 # Resolution accepts four forms, and the two new ones are exact lookups against
-# the committed .SRCINFO index (218 distinct pacman names, none shared by two
+# the committed .SRCINFO index (221 distinct pacman names, none shared by two
 # recipes), never guesses: a case-variant recipe ID and a pacman package name -
 # including a split output - resolve to the recipe that builds them, and each
 # substitution is announced. A typo is deliberately NOT auto-corrected: a wrong

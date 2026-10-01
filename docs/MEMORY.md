@@ -118,6 +118,10 @@
     `-fi/--forceinstall` implies `-i` and bypasses the check (always runs
     `pacman -U`); `-ia` remains unaffected. Pinned by
     `tests/install-archive-guard.sh` cases C–H.
+    A glibc replacement is not a live-root build/test: the test suite can use
+    the installed C library, and package hooks rewrite locale, linker, and
+    iconv caches. Build, test, and install it only in a disposable VM or
+    chroot; verify both native and 32-bit loader behavior there.
     Those installs are background jobs with no tty, so the dispatcher owns
     sudo liveness (see build-guide.md "sudo during --install"): it must never
     infer "installs are impossible" from `sudo -v` alone — a `NOPASSWD`

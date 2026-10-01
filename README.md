@@ -23,11 +23,11 @@ verification.
 
 ## What is included
 
-The current set has 145 recipe directories and 148 group memberships (counts
+The current set has 146 recipe directories and 149 group memberships (counts
 from the `groups` fields in `config/topology.conf`, cross-checked with `fish
 build-all.fish --list -g <group>`). The counts differ because `hip-runtime`,
 `hsa-rocr` and `openssl` are `stable,core` records counted in both groups;
-`core` is a logical build group whose 39 members span the physical layout: 34
+`core` is a logical build group whose 40 members span the physical layout: 35
 live under `packages/core/`, `autofdo-git` and `libclc-git` come from
 `packages/git/`, and the three `stable,core` members from `packages/stable/`:
 
@@ -35,7 +35,7 @@ live under `packages/core/`, `autofdo-git` and `libclc-git` come from
 | --- | ---: | --- |
 | `git` | 42 | Top-level development and rolling packages |
 | `stable` | 44 | Stock-name packages synchronized with Arch repositories (grew 27 → 44 with the 2026-09-28 leaf-utility batch) |
-| `core` | 39 | Heavy, ABI-coupled, source-heavy, and ROCm packages |
+| `core` | 40 | Heavy, ABI-coupled, source-heavy, and ROCm packages |
 | `misc` | 1 | Optional CachyOS kernel recipe |
 | `app` | 22 | Optional applications; a TTY build/`-n` run prompts to multi-select (all unchecked + Enter = build all; records sharing an `app-cluster` tag toggle as one row); leaf builds — app packages typically have no consumers to expand |
 

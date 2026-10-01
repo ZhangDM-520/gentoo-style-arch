@@ -373,8 +373,9 @@ closure so normal repository upgrades do not replace the locally maintained
 outputs. This is a host configuration step, not a repository file change.
 Regenerate and commit `.SRCINFO`; update the static group/recipe counts in
 `README.md` and the descriptive package-name count in `tests/project.sh` from
-the resulting metadata. No such host or recipe changes were made for this
-research.
+the resulting metadata. At the completion of the research phase, no such host
+or recipe changes had been made; the later implementation is recorded in
+[`docs/NOTE.md`](NOTE.md#2026-10-01--split-glibc-git-package-integration).
 [`docs/MEMORY.md` IgnorePkg rule](MEMORY.md#1-golden-rules-violations-caused-real-breakage),
 [`tests/recipe-contract.sh` IgnorePkg lint](../tests/recipe-contract.sh),
 [`README.md`](../README.md#what-is-included),
