@@ -889,11 +889,13 @@ constant, not a baked path).
   for that archive after a successful build. Check Git, SVN, Mercurial, and
   Bazaar refs individually; never compare a shared checkout or unrelated
   repository `HEAD`. A moved ref follows the normal build/install path. If
-  the remote or per-archive baseline cannot be determined, abort clearly —
-  do not silently skip or fall back to a build. Non-VCS recipes retain the
-  mtime-only behavior, and `-s -i` still sends a genuinely skipped archive
-  through the existing install path. A VCS archive without a baseline must
-  first be rebuilt successfully without `-s`.
+  the selected ref cannot be parsed or resolved, abort clearly before
+  `makepkg`; do not silently skip or build against unknown upstream state. If
+  the per-archive baseline is missing, malformed, or mismatched, resolve every
+  selected ref and rebuild once to record the revisions actually used; never
+  infer that the current ref produced the old archive. Non-VCS recipes retain
+  the mtime-only behavior, and `-s -i` still sends a genuinely skipped archive
+  through the existing install path.
 
   Historical case: `-s -i` skipped `vulkan-headers-git` at 1.4.363 while
   `vulkan-icd-loader-git` fetched v1.4.364, whose CMake required
@@ -903,9 +905,8 @@ constant, not a baked path).
   loader's versioned makedepends
   (`vulkan-headers>=1:${pkgver%%.r*}`) still makes a stale provider fail at
   the dependency check instead of inside the consumer's build
-  (`tests/vulkan-pair.sh`). The no-`-s` workaround is now needed only for
-  pre-metadata VCS archives; one successful build without `-s` records the
-  baseline for subsequent resumes.
+  (`tests/vulkan-pair.sh`). Pre-metadata VCS archives now take one
+  selected-ref-checked `-s` rebuild before later resumes can skip them.
 - **Self-consistent is not verified** (2026-09-20, audit): `sync_stable_version`
   bumps a `packages/stable` recipe to the repo's `pkgver`/`pkgrel` and
   deliberately does not refresh `sha256sums`, so `build_package` added

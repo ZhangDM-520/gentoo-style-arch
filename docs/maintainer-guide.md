@@ -128,11 +128,14 @@ For a VCS recipe, `-s` may skip only after its existing archive-mtime versus
 actual per-archive revision baseline captured by a successful build. Resolve
 the selected ref for Git, SVN, Mercurial, and Bazaar sources, not an unrelated
 `HEAD` in a shared checkout. A moved ref follows the normal build path (and
-immediate installation when `-i` is enabled). If a remote or baseline cannot
-be determined, fail clearly; do not silently skip or build. Older VCS
-archives without a baseline need one successful build without `-s` before
-they can be skipped. Non-VCS recipes remain mtime-only, and `-s -i` still
-installs a genuinely skipped archive through the existing path.
+immediate installation when `-i` is enabled). If a selected ref cannot be
+parsed or resolved, fail clearly before `makepkg`; do not skip or build against
+unknown upstream state. When an archive has no usable baseline, resolve every
+selected ref and perform one normal build to record the actual revisions used
+for its replacement. Never infer that the current ref produced the old
+archive. A later `-s` can skip the rebuilt archive. Non-VCS recipes remain
+mtime-only, and `-s -i` installs a genuinely skipped archive through the
+existing path.
 
 ## Documentation history
 

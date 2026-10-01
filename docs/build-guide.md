@@ -73,12 +73,15 @@ moved ref makes the archive stale and the package follows the ordinary build
 path. Resolve the declared ref, not an unrelated repository `HEAD` or the
 mutable shared source checkout.
 
-If a remote cannot be queried or an archive has no recorded revision
-baseline, the builder stops with a clear error rather than skipping or
-silently falling back to a build. An older VCS archive without a baseline
-must first be rebuilt successfully without `-s`. On a genuine skip,
-`-s -i` continues through the existing install path; if a declared ref moved,
-the package builds normally and `-i` installs the new result as usual.
+If an archive has no usable revision baseline, `-s` never assumes that the
+current upstream ref produced it. The builder first checks that each declared
+ref can be parsed and resolved, then performs one normal build to record the
+actual source revisions used for the replacement archive. A later `-s` can
+skip it normally. If a ref cannot be resolved, the builder stops before
+`makepkg`; it does not skip the archive or begin an unverified migration. A
+valid baseline whose ref moved follows the normal build path. On a genuine
+skip, `-s -i` continues through the existing install path; a one-time legacy
+rebuild follows the normal build/install path.
 
 ### Stable version sync and checksum verification
 

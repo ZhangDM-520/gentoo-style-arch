@@ -36,6 +36,34 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-01 — legacy VCS archive baseline recovery
+
+- **Symptom**: `-s` refused existing VCS archives created before per-archive
+  revision records with `no recorded VCS baseline`, making the first resume
+  after the upstream-aware skip change unusable. No actual `cairo-git` archive
+  was present for a host-side probe; the synthetic fresh-archive fixture
+  reproduced the exact refusal with a reachable local Git ref.
+- **Root cause**: the initial fail-closed path treated absent build provenance
+  the same as an unresolvable upstream ref. An archive's timestamp cannot
+  identify which revision produced it, so adopting the current remote ref would
+  create a false baseline.
+- **Fix**: when a VCS archive has no usable revision record, `-s` first checks
+  that every selected ref can be parsed and resolved. If any cannot, it refuses
+  before `makepkg`; otherwise it does not skip the old archive and runs one
+  normal build, recording the actual local revisions only after success.
+  Future skips use that record. No current ref is attributed to the old
+  archive.
+- **Validation**: the new legacy-archive assertion went red first with the
+  reported missing-baseline error. After the fix, `fish -n build-all.fish`,
+  `bash -n tests/skip-upstream.sh`, and `bash tests/skip-upstream.sh` passed;
+  the fixture covers one-time rebuild/record/re-skip, malformed-record
+  recovery, and refusal before `makepkg` when the baseline is absent and the
+  remote is unreachable. `bash tests/run-all.sh` passed all 44 fixtures.
+- **Rule**: an archive without a trustworthy VCS revision record is not
+  skippable; migrate it with one successful build after selected refs are
+  resolvable. Unknown or unreachable refs still fail closed. Non-VCS mtime
+  behavior and normal baseline-backed `-s -i` skips remain unchanged.
+
 ## 2026-10-01 — explicit nvchecker build-time version sync
 
 - **Symptom**: `nvcheck.sh` could report newer versions, but a normal build
@@ -97,10 +125,11 @@ dependency edges, and incident root causes are unaffected by the renames.
 - **Fix**: retained the mtime gate, then added an ignored per-archive revision
   record for each VCS source and a selected-ref query before skipping. Git,
   SVN, Mercurial, and Bazaar are covered; a moved ref follows the normal
-  build/install path, while a missing baseline or unavailable remote aborts
-  explicitly. Non-VCS behavior and a genuine `-s -i` install remain unchanged.
-  `-c` and `-cc` remove revision records with their archives. The historical
-  no-`-s` workaround below is now limited to pre-metadata VCS archives.
+  build/install path. At initial rollout, a missing baseline and an unavailable
+  remote both aborted; the legacy-archive follow-up above replaces only the
+  missing/unusable-baseline path with a one-time rebuild after ref resolution.
+  Remote-resolution failures still abort. `-c` and `-cc` remove revision
+  records with their archives.
 - **Validation**: `fish -n build-all.fish`, `bash -n tests/skip-upstream.sh`,
   and `bash tests/skip-upstream.sh` passed. The focused fixture covers an
   advanced branch, default HEAD, an unchanged and then moved annotated tag,
@@ -119,10 +148,11 @@ dependency edges, and incident root causes are unaffected by the renames.
   sync fixture now passes, and the complete suite reports 44/44. The interim
   failure was sequencing between the parallel workstreams; the VCS `-s`
   changes were preserved.
-- **Rule**: compare a source's selected ref, not a shared checkout's unrelated
-  `HEAD`. Do not treat missing baseline or remote state as a skip or silently
-  start a build. Older VCS archives without a baseline need one successful
-  build without `-s` before a later resume can skip them.
+- **Initial rule**: compare a source's selected ref, not a shared checkout's
+  unrelated `HEAD`. The original rollout required older VCS archives to be
+  rebuilt without `-s`; the follow-up above supersedes that migration
+  instruction. Never skip an unknown baseline or infer one from the current
+  remote ref.
 
 ## 2026-10-01 — ABI severity with non-ABI topology tags
 

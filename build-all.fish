@@ -1631,8 +1631,28 @@ function record_vcs_archive_revisions -a pkg_path archive
     return 0
 end
 
-# Return 0 when a VCS archive is current, 1 when a selected ref moved, and 2
-# when freshness cannot be established. Unknown state never becomes a skip.
+# Confirm every selected source ref can be resolved before rebuilding an
+# archive whose saved baseline is missing or unusable.
+function vcs_selected_refs_queryable
+    for entry in $argv
+        set -l info (vcs_source_ref_info "$entry")
+        if test (count $info) -ne 4
+            set -g _VCS_REVISION_ERROR "cannot parse a VCS source ref"
+            return 1
+        end
+        set -l current (vcs_remote_revision "$info[1]" "$info[2]" "$info[3]" "$info[4]")
+        if test -z "$current"
+            set -l name (source_filename "$entry")
+            set -g _VCS_REVISION_ERROR "cannot query upstream revision for $name"
+            return 1
+        end
+    end
+    return 0
+end
+
+# Return 0 when a VCS archive is current, 1 when a selected ref moved, 2 when
+# its current state cannot be established, and 3 when a rebuild can establish
+# a missing or unusable baseline.
 function vcs_archive_is_current -a pkg_path archive
     set -g _VCS_REVISION_ERROR ""
     set -l entries
@@ -1657,8 +1677,11 @@ function vcs_archive_is_current -a pkg_path archive
 
     set -l manifest "$archive.gsa-vcs-revisions"
     if not test -f "$manifest"
+        if not vcs_selected_refs_queryable $entries
+            return 2
+        end
         set -g _VCS_REVISION_ERROR "no recorded VCS baseline for "(basename "$archive")
-        return 2
+        return 3
     end
     set -l manifest_count (awk -F '\t' '
         NR == 1 {
@@ -1675,8 +1698,11 @@ function vcs_archive_is_current -a pkg_path archive
     ' "$manifest" 2>/dev/null)
     set -l expected_count (count $entries)
     if test -z "$manifest_count"; or test "$manifest_count" != "$expected_count"
+        if not vcs_selected_refs_queryable $entries
+            return 2
+        end
         set -g _VCS_REVISION_ERROR "VCS baseline is missing, malformed, or belongs to different sources"
-        return 2
+        return 3
     end
 
     for entry in $entries
@@ -1689,9 +1715,12 @@ function vcs_archive_is_current -a pkg_path archive
         set -l fields (awk -F '\t' -v key="$key" \
             '$1 == key { print $2; print $3 }' "$manifest" 2>/dev/null)
         if test (count $fields) -ne 2; or test "$fields[1]" != "$info[1]"
+            if not vcs_selected_refs_queryable $entries
+                return 2
+            end
             set -l name (source_filename "$entry")
             set -g _VCS_REVISION_ERROR "VCS baseline does not match source $name"
-            return 2
+            return 3
         end
         set -l current (vcs_remote_revision "$info[1]" "$info[2]" "$info[3]" "$info[4]")
         if test -z "$current"
@@ -4102,7 +4131,11 @@ function build_package -a package_id install_flag clean_flag skip_flag no_sync_f
                     return 0
                 end
                 if test "$_BUILD_QUIET" != "1"
-                    ui_info "$pkg_name: upstream VCS ref moved; rebuilding"
+                    if test $freshness_status -eq 3
+                        ui_info "$pkg_name: $_VCS_REVISION_ERROR; rebuilding once to record a baseline"
+                    else
+                        ui_info "$pkg_name: upstream VCS ref moved; rebuilding"
+                    end
                 end
             end
         end
@@ -6520,7 +6553,8 @@ function usage
     echo "  --no-deps         Build only what you named (no consumer expansion)"
     echo "  -c, --clean       Clean build artifacts before building"
     echo "  -s, --skip        Skip fresh archives only when each VCS source ref matches"
-    echo "                    its recorded revision; missing baselines/remotes abort."
+    echo "                    its recorded revision; an unusable baseline rebuilds"
+    echo "                    once if refs resolve; unresolved refs are refused."
     echo "  --no-sync         Don't auto-update stable or opted-in recipe versions."
     echo "                    Stable recipes use pacman -Si; only a record tagged"
     echo "                    version-sync=nvchecker uses its .nvchecker.toml provider."

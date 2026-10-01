@@ -271,6 +271,10 @@ init_git_remote "$branch_dir/repository"
 branch_remote=$branch_dir/repository/remote.git
 branch_work=$branch_dir/repository/work
 make_vcs_workspace "$branch_dir/workspace" "$branch_remote" branch main
+skip_help=$(fish "$branch_dir/workspace/build-all.fish" --help 2>/dev/null) ||
+    fail 'builder help command failed'
+grep -Fq -- 'an unusable baseline rebuilds' <<<"$skip_help" ||
+    fail 'builder help does not describe legacy VCS baseline recovery'
 
 run_case "$branch_dir/workspace" p1
 expect_success 'initial branch build'
@@ -300,14 +304,41 @@ run_case "$branch_dir/workspace" -s p1
 expect_success 'newer PKGBUILD mtime'
 assert_makepkg_count "$branch_dir/workspace" 3 'newer PKGBUILD mtime'
 
-# A pre-existing archive with no successful-build revision record is not a
-# usable skip baseline, even while its selected remote ref is reachable.
+# A fresh legacy archive cannot be trusted without a recorded build revision.
+# Rebuild once after confirming the selected refs are reachable, then skip it
+# normally on later runs.
 missing_dir=$fixture/missing-baseline
 init_git_remote "$missing_dir/repository"
-make_vcs_workspace "$missing_dir/workspace" "$missing_dir/repository/remote.git" branch main
-: >"$missing_dir/workspace/packages/p1/p1-1.0.0-1-any.pkg.tar.zst"
+missing_remote=$missing_dir/repository/remote.git
+make_vcs_workspace "$missing_dir/workspace" "$missing_remote" branch main
+archive=$missing_dir/workspace/packages/p1/p1-1.0.0-1-any.pkg.tar.zst
+: >"$archive"
 run_case "$missing_dir/workspace" -s p1
-expect_freshness_refusal "$missing_dir/workspace" 0 'missing baseline' 'baseline|revision|upstream'
+expect_success 'legacy archive rebuilds once to record its baseline'
+assert_makepkg_count "$missing_dir/workspace" 1 'legacy archive rebuild'
+[[ -f $archive.gsa-vcs-revisions ]] ||
+    fail 'legacy archive rebuild did not record its VCS baseline'
+run_case "$missing_dir/workspace" -s p1
+expect_success 'legacy archive skips after recording its baseline'
+assert_makepkg_count "$missing_dir/workspace" 1 'legacy archive subsequent skip'
+printf 'malformed VCS baseline\n' >"$archive.gsa-vcs-revisions"
+run_case "$missing_dir/workspace" -s p1
+expect_success 'malformed legacy baseline triggers a rebuild'
+assert_makepkg_count "$missing_dir/workspace" 2 'malformed legacy baseline rebuild'
+grep -Fq $'gsa-vcs-revisions\t1' "$archive.gsa-vcs-revisions" ||
+    fail 'malformed legacy baseline was not replaced after rebuilding'
+
+# A missing baseline does not license a skip or a build when upstream cannot
+# be queried; the refusal must happen before makepkg.
+legacy_offline_dir=$fixture/missing-baseline-offline
+init_git_remote "$legacy_offline_dir/repository"
+legacy_offline_remote=$legacy_offline_dir/repository/remote.git
+make_vcs_workspace "$legacy_offline_dir/workspace" "$legacy_offline_remote" branch main
+: >"$legacy_offline_dir/workspace/packages/p1/p1-1.0.0-1-any.pkg.tar.zst"
+mv "$legacy_offline_remote" "$legacy_offline_dir/repository/remote.offline"
+run_case "$legacy_offline_dir/workspace" -s p1
+expect_freshness_refusal "$legacy_offline_dir/workspace" 0 \
+    'unreachable legacy upstream' 'cannot query|upstream|remote'
 
 # A previously recorded baseline cannot be used when the selected remote ref
 # is no longer queryable; the failure must happen before another makepkg run.
