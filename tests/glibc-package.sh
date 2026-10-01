@@ -45,8 +45,8 @@ exact_dep=$(printf '\tdepends = glibc-git=%s' "$pkgver")
 topology=$(fish "$builder" --topology) || fail 'builder --topology failed'
 grep -Fqx 'glibc-git|packages/core/glibc-git|core|linux-api-headers|' \
     <<<"$topology" || fail 'glibc-git topology row or linux-api-headers edge is missing'
-grep -Fqx 'gcc-snapshot|packages/core/gcc-snapshot|core|glibc-git|' \
-    <<<"$topology" || fail 'gcc-snapshot does not consume glibc-git in topology'
+grep -Fqx 'gcc-snapshot|packages/core/gcc-snapshot|core|glibc-git|version-sync=nvchecker' \
+    <<<"$topology" || fail 'gcc-snapshot topology row, edge, or version-sync opt-in is missing'
 
 for pkgname in lib32-glibc-git glibc-locales-git; do
     output=$(fish "$builder" --dry-run --no-deps "$pkgname" 2>&1) ||

@@ -36,6 +36,56 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-01 — explicit nvchecker build-time version sync
+
+- **Symptom**: `nvcheck.sh` could report newer versions, but a normal build
+  still took its version from `pacman -Si` (or did not sync a `core` recipe at
+  all). The first opted-in AUR fixture reproduced this as
+  `aur-sync: the AUR pkgver was not applied to the core recipe`.
+- **Root cause**: tracker files were report-only; file presence alone was not
+  a safe build-time opt-in, and the builder had no section/provider identity to
+  pair a resolved version with trustworthy source metadata. Rewriting
+  `pkgver` without a provider check would leave the same checksum gap as the
+  old stable path. The real Zen recipe also separates its topology ID
+  (`zen-browser-pgo`), pkgname/config section (`zen-browser`), local
+  `name::url` filename, and GitHub asset filename.
+- **Fix**: added the validated `version-sync=nvchecker` topology opt-in and
+  read provider/identity and one resolved section through `tools/nvcheck.sh`.
+  Resolver state is disposable and outside the repository and
+  `NVCHECK_STATE_DIR`. Untagged recipes keep the Arch `pacman -Si` path;
+  `--no-sync` suppresses both paths. AUR `.SRCINFO` must match the configured
+  pkgbase, resolved pkgver, and expanded source array before its pkgrel/epoch
+  or sums are used. GitHub release digests match the configured repo, tag, and
+  remote URL basename, even when makepkg stores the file under a `name::url`
+  override. A provider with no checksum uses the loud fetch-only path;
+  unavailable/mismatched metadata defers with the original recipe restored,
+  while a published-checksum disagreement stops the run and restores it.
+  GitHub pkgrel resets only on pkgver movement; AUR pkgrel/epoch come from
+  matching `.SRCINFO` on a new version, and equal-version AUR metadata cannot
+  lower a local pkgrel. The per-package log is opened before sync so provider
+  failures survive in the log and the run-level sync summary.
+- **Pitfall**: Fish rejects Bash-style heredoc syntax inside `build-all.fish`.
+  Keep JSON/TOML parsing in the Bash `nvcheck.sh` CLI seams rather than
+  embedding Python heredocs in the Fish scheduler.
+- **Validation**: `fish -n build-all.fish`; `bash -n` for the resolver and
+  focused fixtures; `bash tests/nvcheck-aggregator.sh`;
+  `bash tests/stable-sync-checksums.sh` (31 scenarios); `bash tests/project.sh`,
+  `bash tests/abi-batch-policy.sh`, and `bash tests/glibc-package.sh` all pass.
+  Ten temporary mutation probes were killed by the intended assertions for
+  checksum mismatch, AUR source matching/fetch-only/pkgrel, GitHub pkgrel,
+  `--no-sync`, deferral status, and Zen section/asset-name mapping. The final
+  full suite reported 44 fixtures passed; `srcinfo-freshness.sh` passed for
+  147 recipes and GCC snapshot `.SRCINFO` matched `makepkg --printsrcinfo`.
+  `--audit` exited 0 (report-only; it still lists existing legacy-doc,
+  toolchain-edge, and hand-versioned-soname findings), and `--list` plus
+  `--dry-run` for `stable`, `core`, and `git` exited 0. No live provider query,
+  package build, or installation was run.
+- **Rule**: only the topology tag opts in. Read the source from that exact
+  tracker section; require provider metadata to describe the rewritten recipe;
+  verify any published digest, and label every fetch-only refresh. Retry
+  provider outages, restore on metadata races or integrity failures, and leave
+  the untagged Arch path unchanged.
+
 ## 2026-10-01 — upstream-aware `-s` skip contract
 
 - **Symptom**: the 2026-09-25 Vulkan pair showed that an mtime-only `-s` could
@@ -65,7 +115,10 @@ dependency edges, and incident root causes are unaffected by the renames.
   fixture and tag selector but not the `build-all.fish` resolver/build call it
   expects.
   Running that fixture directly reproduced the same `AUR pkgver was not
-  applied` failure; those unrelated changes were left untouched.
+  applied` failure. Follow-up after the provider integration above: the focused
+  sync fixture now passes, and the complete suite reports 44/44. The interim
+  failure was sequencing between the parallel workstreams; the VCS `-s`
+  changes were preserved.
 - **Rule**: compare a source's selected ref, not a shared checkout's unrelated
   `HEAD`. Do not treat missing baseline or remote state as a skip or silently
   start a build. Older VCS archives without a baseline need one successful

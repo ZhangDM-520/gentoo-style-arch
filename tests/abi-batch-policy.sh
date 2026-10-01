@@ -399,10 +399,12 @@ add_meta_package "$dir_e" llvm-git ''
 add_meta_package "$dir_e" fcitx5-git ''
 add_meta_package "$dir_e" fcitx5-qt-git ''
 add_meta_package "$dir_e" untagged-app ''
+add_meta_package "$dir_e" versioned-app ''
 set_topology_record "$dir_e" llvm-git core '' 'abi=must'
 set_topology_record "$dir_e" fcitx5-git app '' 'app-cluster=fcitx5'
 set_topology_record "$dir_e" fcitx5-qt-git app 'llvm-git' 'abi=should,app-cluster=fcitx5'
 set_topology_record "$dir_e" untagged-app app ''
+set_topology_record "$dir_e" versioned-app app '' 'version-sync=nvchecker'
 stub_sudo "$dir_e"
 stub_pacman "$dir_e"
 stub_makepkg "$dir_e"
@@ -418,10 +420,10 @@ run_env_e() {
 }
 
 # The ABI member stays outside the --no-deps selection, so the installed
-# abi=should candidate is reported. Both the cluster-only and untagged records
-# must be treated as severity `none` at the same gate.
+# abi=should candidate is reported. The cluster-only, version-sync-only and
+# untagged records must be treated as severity `none` at the same gate.
 run_env_e --no-deps -i --no-sync --allow-broken-rustc \
-    llvm-git fcitx5-git untagged-app
+    llvm-git fcitx5-git untagged-app versioned-app
 if [[ $FIXTURE_RC -ne 0 ]]; then
     printf 'E: real build with a cluster-only tag failed (rc=%d):\n%s\n' \
         "$FIXTURE_RC" "$FIXTURE_OUTPUT" >&2
@@ -442,7 +444,7 @@ if [[ $(rr_scalar outcome <<<"$FIXTURE_OUTPUT") != success ]]; then
     printf 'E: run record did not report success:\n%s\n' "$FIXTURE_OUTPUT" >&2
     exit 1
 fi
-for pkg in llvm-git fcitx5-git untagged-app; do
+for pkg in llvm-git fcitx5-git untagged-app versioned-app; do
     if [[ $(rr_row "$pkg" status <<<"$FIXTURE_OUTPUT") != succeeded ]]; then
         printf 'E: selected package %s did not succeed:\n%s\n' \
             "$pkg" "$FIXTURE_OUTPUT" >&2

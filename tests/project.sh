@@ -275,6 +275,51 @@ glib2_rows=$(rows | wc -l)
 printf 'cli hints fixture: PASS (%s recipes, %s-row selection indexed, extra forms announced)\n' \
     "$recipes" "$git_rows"
 
+# ==== version-sync topology tag ====
+(
+    source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
+    fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-version-sync-topology.XXXXXX")
+    trap 'rm -rf -- "$fixture"' EXIT
+
+    fail() {
+        printf 'version-sync topology fixture: %s\n' "$1" >&2
+        exit 1
+    }
+
+    ws=$fixture/ws
+    make_workspace "$ws" 1 2 low
+    add_package "$ws" versioned "$gsa_meta_any" misc
+    set_topology_record "$ws" versioned misc '' 'version-sync=nvchecker'
+
+    run_builder fish "$ws/build-all.fish" --topology
+    [[ $FIXTURE_RC -eq 0 ]] ||
+        fail "the supported version-sync tag was rejected: $FIXTURE_OUTPUT"
+    grep -Fqx 'versioned|packages/versioned|misc||version-sync=nvchecker' \
+        <<<"$FIXTURE_OUTPUT" ||
+        fail "--topology did not round-trip the supported tag: $FIXTURE_OUTPUT"
+
+    run_builder fish "$ws/build-all.fish" --list
+    [[ $FIXTURE_RC -eq 0 ]] ||
+        fail "--list rejected the supported version-sync tag: $FIXTURE_OUTPUT"
+
+    set_topology_record "$ws" versioned misc '' 'version-sync=unsupported'
+    run_builder fish "$ws/build-all.fish" --list
+    [[ $FIXTURE_RC -ne 0 ]] ||
+        fail "an unsupported version-sync provider was accepted"
+    [[ $FIXTURE_OUTPUT == *'unknown tag in topology record versioned: version-sync=unsupported'* ]] ||
+        fail "an unsupported provider was not named: $FIXTURE_OUTPUT"
+
+    set_topology_record "$ws" versioned misc '' \
+        'version-sync=nvchecker,version-sync=nvchecker'
+    run_builder fish "$ws/build-all.fish" --list
+    [[ $FIXTURE_RC -ne 0 ]] ||
+        fail "a duplicate version-sync tag was accepted"
+    [[ $FIXTURE_OUTPUT == *'version-sync=nvchecker appears twice in the tags field of topology record versioned'* ]] ||
+        fail "the duplicate version-sync tag was not named: $FIXTURE_OUTPUT"
+
+    printf 'version-sync topology fixture: PASS\n'
+)
+
 # ==== project-config.sh ====
 (
 
@@ -326,6 +371,15 @@ fi
 if ! grep -ve '^#' <<<"$topo" | awk -F'|' 'NF != 5 { exit 1 }'; then
     printf -- '--topology emitted a record without exactly five pipe fields:\n%s\n' \
         "$topo" >&2
+    exit 1
+fi
+
+sync_ids=$(awk -F'|' 'index("," $5 ",", ",version-sync=nvchecker,") { print $1 }' \
+    <<<"$topo" | sort)
+expected_sync_ids=$'bettbox\ngcc-snapshot\nzen-browser-pgo'
+if [[ $sync_ids != "$expected_sync_ids" ]]; then
+    printf 'version-sync topology opt-in is [%s], expected only [%s]\n' \
+        "$(tr '\n' ' ' <<<"$sync_ids")" "$(tr '\n' ' ' <<<"$expected_sync_ids")" >&2
     exit 1
 fi
 

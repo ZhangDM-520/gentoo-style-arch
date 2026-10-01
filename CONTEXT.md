@@ -20,6 +20,12 @@ The single per-package statement of topology facts: identity, recipe path,
 group membership, build-order edges, and coupled-batch tags.
 _Avoid_: map entry, dependency record (names for the pre-2026-09-26 four-file split)
 
+**Version-sync opt-in**:
+The validated `version-sync=nvchecker` topology tag that selects a recipe's
+build-time provider from its `.nvchecker.toml`; the file's presence alone is
+not an opt-in.
+_Avoid_: tracker presence means auto-sync
+
 **Group**:
 A logical scheduling class (git, stable, core, misc, app) with
 scheduling semantics such as core-runs-alone and the app multi-select prompt.

@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# A stable recipe tracks the Arch repository version: sync_stable_version
-# rewrites pkgver/pkgrel in place from `pacman -Si`, and the committed sums are
-# deliberately left describing the previous version.
+# Stable recipes track the Arch repository version, while explicitly tagged
+# recipes may track an upstream source through `.nvchecker.toml`. The builder
+# rewrites pkgver/pkgrel in place, and the committed sums may still describe the
+# previous version.
 #
 # Two tempting ways out of the resulting staleness are both wrong. Re-hashing the
 # fetch (updpkgsums on its own) records whatever arrived, verifying nothing.
@@ -52,9 +53,27 @@ set -euo pipefail
 #      its own revision, e.g. ripgrep's pkgrel 2 over the repo's 1) and is
 #      never rewritten back to the repo value — only a repo pkgrel actually
 #      ahead is synced (case 7's pkgrel-only variant pins that direction).
+#  15. an opted-in core recipe resolves its AUR version and uses the matching
+#      AUR .SRCINFO pkgrel/checksum, without leaking nvchecker state into recipes.
+#  16. GitHub release digests anchor changed assets and reset pkgrel on version
+#      movement; a git-source tracker resolves its GitHub repository too.
+#  17. a GitHub release without an asset digest follows the loud fetch-only path.
+#  18. a GitHub digest mismatch refuses the run and restores the original recipe.
+#  19. unavailable GitHub metadata defers and restores the original recipe.
+#  20. an nvchecker failure does not fall back to the Arch provider.
+#  21-22. AUR version/source races never apply mismatched metadata.
+#  23. --no-sync skips the resolver, provider metadata, and recipe rewrites.
+#  24-25. AUR pkgrel adopts an upstream increase but never lowers a local
+#        revision at the same pkgver.
+#  26. GitHub keeps pkgrel when pkgver is unchanged.
+#  27-28. gcc-snapshot maps supported dates into _pkgver and rejects bad formats.
+#  29-30. AUR missing sums are loud fetch-only; a published checksum mismatch
+#        refuses and restores the recipe.
+#  31. Zen's recipe ID/pkgname difference and local source filename override
+#        still select the correct config section and GitHub asset digest.
 #
-# All four collaborators (pacman, curl, updpkgsums, makepkg) are stubs on PATH,
-# so this runs with no network and never builds anything.
+# All external collaborators (pacman, curl, updpkgsums, makepkg, nvchecker) are
+# stubs on PATH, so this runs with no network and never builds anything.
 
 source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-stable-sync.XXXXXX")
@@ -119,6 +138,11 @@ make_case_workspace() {
         printf 'source=("%s")\n' "$source_entry"
         printf '%s\n' "$sum_lines"
     } >"$dir/packages/stable/s1/PKGBUILD"
+    cat >"$dir/packages/stable/s1/.nvchecker.toml" <<'EOF'
+[s1]
+source = "github"
+github = "example/s1"
+EOF
 
     printf '%s\n' "$repo_full" >"$dir/fake/repo_version"
 
@@ -140,17 +164,32 @@ EOF
     # fake/srcinfo_tag, which is absent (404) unless a case sets it.
     cat >"$dir/bin/curl" <<'EOF'
 #!/usr/bin/env bash
-out=""; url=""
+out=""; url=""; write_out=""
 while (($#)); do
     case $1 in
-        -o) out=$2; shift 2 ;;
+        -o|--output) out=$2; shift 2 ;;
+        -w|--write-out) write_out=$2; shift 2 ;;
         --max-time|--connect-timeout) shift 2 ;;
         -*) shift ;;
         *) url=$1; shift ;;
     esac
 done
 printf '%s\n' "$url" >>"$GSA_FAKE_DIR/curl_calls"
-if [[ $url == */raw/main/* ]]; then
+if [[ $url == *api.github.com/repos/*/releases/tags/* ]]; then
+    tag=${url##*/}
+    answer=$GSA_FAKE_DIR/github_release.$tag.json
+    http_status=${GSA_FAKE_GITHUB_STATUS:-200}
+    if [[ ! -s $answer && $http_status == 200 ]]; then
+        http_status=404
+    fi
+    if [[ $http_status == 200 ]]; then
+        cp -- "$answer" "$out"
+    fi
+    [[ $write_out != '%{http_code}' ]] || printf '%s' "$http_status"
+    exit 0
+elif [[ $url == *aur.archlinux.org/cgit/aur.git/plain/.SRCINFO* ]]; then
+    answer=$GSA_FAKE_DIR/aur_srcinfo
+elif [[ $url == */raw/main/* ]]; then
     answer=$GSA_FAKE_DIR/srcinfo
 else
     answer=$GSA_FAKE_DIR/srcinfo_tag
@@ -232,6 +271,22 @@ set_official_srcinfo() {
     } >"$dir/fake/srcinfo"
 }
 
+# AUR .SRCINFO uses the same pkgbase-level source/checksum representation as
+# Arch's, but the package version is its own authority.
+set_aur_srcinfo() {
+    local dir=$1 base=$2 ver=$3 rel=$4 source_entry=$5 checksum=$6
+    {
+        printf 'pkgbase = %s\n' "$base"
+        printf '\tpkgver = %s\n' "$ver"
+        printf '\tpkgrel = %s\n' "$rel"
+        if [[ -n ${7:-} ]]; then printf '\tepoch = %s\n' "$7"; fi
+        printf '\tarch = any\n'
+        printf '\tsource = %s\n' "$source_entry"
+        printf '\tsha256sums = %s\n\n' "$checksum"
+        printf 'pkgname = %s\n' "$base"
+    } >"$dir/fake/aur_srcinfo"
+}
+
 # $1 = dir · $2 = the file "updpkgsums" will fetch, or 'none'
 set_delivery() {
     local dir=$1 payload=$2
@@ -246,15 +301,21 @@ set_delivery() {
 run_build() {
     local dir=$1 label=$2 expect=$3
     shift 3
+    local package_id=${GSA_FAKE_PACKAGE_ID:-s1}
     set +e
     output=$(
         PATH="$dir/bin:$PATH" \
         GSA_STATE_DIR="$dir/state" \
+        NVCHECK_STATE_DIR="$dir/nvcheck-state" \
         GSA_FAKE_DIR="$dir/fake" \
+        GSA_FAKE_NVCHECK_VERSION="${GSA_FAKE_NVCHECK_VERSION:-}" \
+        GSA_FAKE_NVCHECK_KEY="${GSA_FAKE_NVCHECK_KEY:-s1}" \
+        GSA_FAKE_NVCHECK_FAIL="${GSA_FAKE_NVCHECK_FAIL:-0}" \
+        GSA_FAKE_GITHUB_STATUS="${GSA_FAKE_GITHUB_STATUS:-200}" \
         GSA_CPU_THREADS=4 \
         GSA_MEMORY_GIB=8 \
         fish "$dir/build-all.fish" --allow-broken-rustc --no-deps \
-            --intensity low s1 "$@" 2>&1
+            --intensity low "$package_id" "$@" 2>&1
     )
     rc=$?
     set -e
@@ -269,6 +330,123 @@ run_build() {
 pkgfile() { printf '%s/packages/stable/s1/PKGBUILD' "$1"; }
 recipe_log() { printf '%s/state/logs/s1.log' "$1"; }
 
+# The external-sync path still uses the real resolver. Only nvchecker itself is
+# stubbed; it writes the configured key into the resolver's temporary newver file.
+make_nvchecker_stub() {
+    local dir=$1
+    mkdir -p "$dir/tools"
+    cp -- "$gsa_repo_root/tools/nvcheck.sh" "$dir/tools/nvcheck.sh"
+    cat >"$dir/bin/nvchecker" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ ${GSA_FAKE_NVCHECK_FAIL:-0} == 1 ]]; then
+    printf 'fake nvchecker: requested failure\n' >&2
+    exit 1
+fi
+config=""
+while (($#)); do
+    case $1 in
+        -c|--config) config=$2; shift 2 ;;
+        *) shift ;;
+    esac
+done
+[[ -n $config ]] || exit 2
+newver=$(sed -n 's/^[[:space:]]*newver[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$config" | head -n1)
+[[ -n $newver ]] || exit 2
+printf '%s\n' "$config" >>"$GSA_FAKE_DIR/nvchecker_calls"
+printf '{"%s":"%s"}\n' "$GSA_FAKE_NVCHECK_KEY" "$GSA_FAKE_NVCHECK_VERSION" >"$newver"
+EOF
+    chmod +x "$dir/bin/nvchecker"
+}
+
+opt_in_nvchecker() { # $1 = workspace · $2 = id · $3 = path · $4 = group
+    local dir=$1 id=$2 path=$3 group=$4
+    sed -i "\|^$id|d" "$dir/config/topology.conf"
+    printf '%s|%s|%s||version-sync=nvchecker\n' "$id" "$path" "$group" \
+        >>"$dir/config/topology.conf"
+}
+
+set_github_release() { # $1 = workspace · $2 = tag · $3 = asset · $4 = sha256|none
+    local dir=$1 tag=$2 asset=$3 digest=$4
+    local digest_json=null
+    if [[ $digest != none ]]; then
+        digest_json="\"sha256:$digest\""
+    fi
+    cat >"$dir/fake/github_release.$tag.json" <<EOF
+{
+  "tag_name": "$tag",
+  "assets": [
+    {"name": "$asset", "digest": $digest_json}
+  ]
+}
+EOF
+}
+
+make_aur_version_workspace() { # $1 = workspace
+    local dir=$1
+    make_case_workspace "$dir" '99.0.0-1'
+    mkdir -p "$dir/packages/core"
+    mv -- "$dir/packages/stable/s1" "$dir/packages/core/s1"
+    opt_in_nvchecker "$dir" s1 packages/core/s1 core
+    cat >"$dir/packages/core/s1/.nvchecker.toml" <<'EOF'
+[s1]
+source = "aur"
+aur = "s1"
+strip_release = true
+EOF
+    make_nvchecker_stub "$dir"
+}
+
+make_gcc_version_workspace() { # $1 = workspace
+    local dir=$1
+    make_case_workspace "$dir" '99.0.0-1'
+    mkdir -p "$dir/packages/core"
+    mv -- "$dir/packages/stable/s1" "$dir/packages/core/gcc-snapshot"
+    sed -i '/^s1|/d' "$dir/config/topology.conf"
+    printf 'gcc-snapshot|packages/core/gcc-snapshot|core||version-sync=nvchecker\n' \
+        >>"$dir/config/topology.conf"
+    cat >"$dir/packages/core/gcc-snapshot/PKGBUILD" <<'EOF'
+pkgbase=gcc-snapshot
+pkgname=(gcc-snapshot)
+pkgver=17.0.0.snapshot20260920
+if [[ $pkgver =~ ^([0-9]+)\.0\.0\.snapshot([0-9]{8})$ ]]; then
+    _pkgver="${BASH_REMATCH[1]}-${BASH_REMATCH[2]}"
+else
+    printf 'gcc-snapshot: unsupported pkgver format: %s\n' "$pkgver" >&2
+    exit 1
+fi
+pkgrel=1
+arch=(any)
+source=("https://example.invalid/gcc-${_pkgver}.tar.xz")
+sha256sums=('0000000000000000000000000000000000000000000000000000000000000000')
+EOF
+    cat >"$dir/packages/core/gcc-snapshot/.nvchecker.toml" <<'EOF'
+[gcc-snapshot]
+source = "aur"
+aur = "gcc-snapshot"
+strip_release = true
+EOF
+    make_nvchecker_stub "$dir"
+}
+
+make_zen_version_workspace() { # $1 = workspace
+    local dir=$1
+    local source_entry='zen-source-$pkgver.tar.zst::https://github.com/zen-browser/desktop/releases/download/$pkgver/zen.source.tar.zst'
+    make_case_workspace "$dir" '99.0.0-1' "$source_entry"
+    mv -- "$dir/packages/stable/s1" "$dir/packages/stable/zen-browser-pgo"
+    sed -i '/^s1|/d' "$dir/config/topology.conf"
+    printf 'zen-browser-pgo|packages/stable/zen-browser-pgo|stable||version-sync=nvchecker\n' \
+        >>"$dir/config/topology.conf"
+    sed -i 's/^pkgname=s1$/pkgname=zen-browser/' \
+        "$dir/packages/stable/zen-browser-pgo/PKGBUILD"
+    cat >"$dir/packages/stable/zen-browser-pgo/.nvchecker.toml" <<'EOF'
+[zen-browser]
+source = "github"
+github = "zen-browser/desktop"
+EOF
+    make_nvchecker_stub "$dir"
+}
+
 # ─── Case 1: anchored and verified — the happy path ─────────────────────────
 dir="$fixture/anchor"
 make_case_workspace "$dir" "$repo_version-1"
@@ -276,6 +454,7 @@ set_official_srcinfo "$dir" "$repo_version" \
     "	source = https://example.invalid/s1-$repo_version.tar.gz" \
     "	sha256sums = $published_sha"
 set_delivery "$dir" "$published_payload"
+make_nvchecker_stub "$dir"
 run_build "$dir" 'anchor' 0
 
 # Preconditions: the sync happened, and so did the anchoring — otherwise every
@@ -285,6 +464,8 @@ grep -q "^pkgver=$repo_version$" "$(pkgfile "$dir")" \
 [[ -s $dir/fake/curl_calls ]] || fail 'no official .SRCINFO was fetched, so nothing was anchored to'
 [[ -s $dir/fake/updpkgsums_calls ]] || fail 'the sums were never rewritten'
 [[ -s $dir/fake/makepkg_argv ]] || fail 'makepkg never ran on the success path'
+[[ ! -s $dir/fake/nvchecker_calls ]] \
+    || fail 'an untagged .nvchecker.toml redirected the Arch version provider'
 
 # The weakening is gone: the build is checksum-verified, not skipped.
 if grep -q -- '--skipchecksums' "$dir/fake/makepkg_argv"; then
@@ -394,7 +575,7 @@ grep -q 'attested by nothing but the fetch' "$(recipe_log "$dir")" \
 grep -q "^sha256sums=('$published_sha')$" "$(pkgfile "$dir")" \
     || fail 'unanchored: the recipe does not carry the refreshed sum'
 # The run-level surface: the owner must be told what to review and commit.
-grep -q 'Synced with the repo this run' "$dir/out.txt" \
+grep -q 'Version and checksum sync this run' "$dir/out.txt" \
     || fail 'the run summary does not list the synced recipe as uncommitted work'
 grep -q 'refresh-only' "$dir/out.txt" \
     || fail 'the run summary does not flag the fetch-only refresh'
@@ -624,5 +805,352 @@ fi
 if [[ -s $dir/state/synced.list ]]; then
     fail 'pkgrel-ahead: the run witness lists a recipe the sync must not have touched'
 fi
+
+# ─── Case 15: opted-in core recipes use AUR metadata as the version source ──
+# The AUR .SRCINFO must agree with the version returned by nvchecker and is the
+# checksum authority for the moved custom-upstream source.
+dir="$fixture/aur-sync"
+make_case_workspace "$dir" '99.0.0-1'
+mkdir -p "$dir/packages/core"
+mv -- "$dir/packages/stable/s1" "$dir/packages/core/s1"
+sed -i '/^s1|/d' "$dir/config/topology.conf"
+printf 's1|packages/core/s1|core||version-sync=nvchecker\n' \
+    >>"$dir/config/topology.conf"
+cat >"$dir/packages/core/s1/.nvchecker.toml" <<'EOF'
+[s1]
+source = "aur"
+aur = "s1"
+strip_release = true
+EOF
+make_nvchecker_stub "$dir"
+set_aur_srcinfo "$dir" s1 "$repo_version" 3 \
+    "https://example.invalid/s1-$repo_version.tar.gz" "$published_sha" 1
+set_delivery "$dir" "$published_payload"
+GSA_FAKE_NVCHECK_VERSION="$repo_version" run_build "$dir" 'aur-sync' 0
+
+grep -q "^pkgver=$repo_version$" "$dir/packages/core/s1/PKGBUILD" \
+    || fail 'aur-sync: the AUR pkgver was not applied to the core recipe'
+grep -q '^pkgrel=3$' "$dir/packages/core/s1/PKGBUILD" \
+    || fail 'aur-sync: pkgrel was not taken from the matching AUR .SRCINFO'
+grep -q '^epoch=1$' "$dir/packages/core/s1/PKGBUILD" \
+    || fail 'aur-sync: epoch was not taken from the matching AUR .SRCINFO'
+grep -q "1:$repo_version-3" "$dir/out.txt" \
+    || fail 'aur-sync: the run summary omitted the synced epoch'
+[[ -s $dir/fake/nvchecker_calls ]] \
+    || fail 'aur-sync: the .nvchecker.toml resolver was not called'
+[[ -s $dir/fake/curl_calls ]] \
+    || fail 'aur-sync: no AUR checksum metadata was fetched'
+grep -q 'aur.archlinux.org/cgit/aur.git/plain/.SRCINFO' "$dir/fake/curl_calls" \
+    || fail 'aur-sync: the checksum authority was not fetched from AUR'
+grep -q "^sha256sums=('$published_sha')$" "$dir/packages/core/s1/PKGBUILD" \
+    || fail 'aur-sync: the fetched source was not anchored to the AUR checksum'
+grep -q 're-anchored to AUR' "$dir/state/logs/s1.log" \
+    || fail 'aur-sync: the package log does not name the AUR checksum authority'
+[[ -s $dir/fake/makepkg_argv ]] \
+    || fail 'aur-sync: makepkg did not run after successful AUR verification'
+if find "$dir/packages" \( -name old_ver.json -o -name new_ver.json \) | grep -q .; then
+    fail 'aur-sync: nvchecker state leaked into a recipe directory'
+fi
+
+# ─── Case 16: GitHub release digests anchor changed assets ───────────────────
+dir="$fixture/github-digest"
+github_source='https://github.com/example/s1/releases/download/$pkgver/s1-$pkgver.tar.gz'
+make_case_workspace "$dir" '99.0.0-1' "$github_source"
+opt_in_nvchecker "$dir" s1 packages/stable/s1 stable
+cat >"$dir/packages/stable/s1/.nvchecker.toml" <<'EOF'
+[s1]
+source = "github"
+github = "example/s1"
+EOF
+sed -i 's/^pkgrel=1$/pkgrel=4/' "$(pkgfile "$dir")"
+make_nvchecker_stub "$dir"
+set_github_release "$dir" "$repo_version" "s1-$repo_version.tar.gz" "$published_sha"
+set_delivery "$dir" "$published_payload"
+GSA_FAKE_NVCHECK_VERSION="$repo_version" run_build "$dir" 'github-digest' 0
+
+grep -q "^pkgver=$repo_version$" "$(pkgfile "$dir")" \
+    || fail 'github-digest: the resolved GitHub version was not applied'
+grep -q '^pkgrel=1$' "$(pkgfile "$dir")" \
+    || fail 'github-digest: pkgrel was not reset for a changed pkgver'
+grep -q "^sha256sums=('$published_sha')$" "$(pkgfile "$dir")" \
+    || fail 'github-digest: the fetched source was not anchored to the release digest'
+grep -q 're-anchored to GitHub example/s1' "$(recipe_log "$dir")" \
+    || fail 'github-digest: the log does not identify the GitHub checksum authority'
+grep -q 'Version and checksum sync this run' "$dir/out.txt" \
+    || fail 'github-digest: the run summary does not use the provider-aware heading'
+grep -q 'synced with GitHub example/s1' "$dir/out.txt" \
+    || fail 'github-digest: the run summary omits the version provider'
+
+# ─── Case 17: absent GitHub digest is explicit fetch-only, never a false anchor
+dir="$fixture/github-fetch-only"
+make_case_workspace "$dir" '99.0.0-1' "$github_source"
+opt_in_nvchecker "$dir" s1 packages/stable/s1 stable
+cat >"$dir/packages/stable/s1/.nvchecker.toml" <<'EOF'
+[s1]
+source = "git"
+git = "https://github.com/example/s1.git"
+EOF
+make_nvchecker_stub "$dir"
+set_github_release "$dir" "v$repo_version" "s1-$repo_version.tar.gz" none
+set_delivery "$dir" "$published_payload"
+GSA_FAKE_NVCHECK_VERSION="$repo_version" run_build "$dir" 'github-fetch-only' 0
+
+grep -q "^pkgver=$repo_version$" "$(pkgfile "$dir")" \
+    || fail 'github-fetch-only: the git-source tracker did not resolve its version'
+grep -q 'NOT anchored' "$(recipe_log "$dir")" \
+    || fail 'github-fetch-only: the log does not disclose the missing upstream digest'
+grep -q 'fetch-only sums: review before committing' "$dir/out.txt" \
+    || fail 'github-fetch-only: the run summary does not request review'
+grep -q "^sha256sums=('$published_sha')$" "$(pkgfile "$dir")" \
+    || fail 'github-fetch-only: the fetched checksum was not refreshed'
+
+# ─── Case 18: a published GitHub digest mismatch refuses and rolls back ─────
+dir="$fixture/github-mismatch"
+make_case_workspace "$dir" '99.0.0-1' "$github_source"
+opt_in_nvchecker "$dir" s1 packages/stable/s1 stable
+cat >"$dir/packages/stable/s1/.nvchecker.toml" <<'EOF'
+[s1]
+source = "github"
+github = "example/s1"
+EOF
+make_nvchecker_stub "$dir"
+set_github_release "$dir" "$repo_version" "s1-$repo_version.tar.gz" "$published_sha"
+set_delivery "$dir" "$tampered_payload"
+cp -- "$(pkgfile "$dir")" "$dir/fake/PKGBUILD.original"
+GSA_FAKE_NVCHECK_VERSION="$repo_version" run_build "$dir" 'github-mismatch' fail
+
+cmp -s "$dir/fake/PKGBUILD.original" "$(pkgfile "$dir")" \
+    || fail 'github-mismatch: the original PKGBUILD was not restored'
+[[ ! -s $dir/fake/makepkg_argv ]] \
+    || fail 'github-mismatch: makepkg ran despite a published-digest disagreement'
+grep -q 'source does not match' "$dir/out.txt" \
+    || fail 'github-mismatch: the integrity refusal was not reported'
+grep -q '^s1 failed ' "$dir/out.txt" \
+    || fail 'github-mismatch: the run record did not classify the mismatch as failure'
+
+# ─── Case 19: unavailable GitHub metadata defers and rolls back ──────────────
+dir="$fixture/github-unavailable"
+make_case_workspace "$dir" '99.0.0-1' "$github_source"
+opt_in_nvchecker "$dir" s1 packages/stable/s1 stable
+cat >"$dir/packages/stable/s1/.nvchecker.toml" <<'EOF'
+[s1]
+source = "github"
+github = "example/s1"
+EOF
+make_nvchecker_stub "$dir"
+set_delivery "$dir" "$published_payload"
+cp -- "$(pkgfile "$dir")" "$dir/fake/PKGBUILD.original"
+GSA_FAKE_GITHUB_STATUS=503 GSA_FAKE_NVCHECK_VERSION="$repo_version" \
+    run_build "$dir" 'github-unavailable' fail
+
+cmp -s "$dir/fake/PKGBUILD.original" "$(pkgfile "$dir")" \
+    || fail 'github-unavailable: the original PKGBUILD was not restored'
+[[ ! -s $dir/fake/updpkgsums_calls && ! -s $dir/fake/makepkg_argv ]] \
+    || fail 'github-unavailable: source refresh or build ran without provider metadata'
+grep -qi 'GitHub.*metadata' "$dir/out.txt" \
+    || fail 'github-unavailable: the provider failure was not reported'
+grep -q '^s1 deferred 99 ' "$dir/out.txt" \
+    || fail 'github-unavailable: the run record did not classify the outage as deferred'
+
+# ─── Case 20: an nvchecker failure does not fall back to Arch ────────────────
+dir="$fixture/nvchecker-unavailable"
+make_case_workspace "$dir" '99.0.0-1'
+opt_in_nvchecker "$dir" s1 packages/stable/s1 stable
+make_nvchecker_stub "$dir"
+cp -- "$(pkgfile "$dir")" "$dir/fake/PKGBUILD.original"
+GSA_FAKE_NVCHECK_FAIL=1 run_build "$dir" 'nvchecker-unavailable' fail
+
+cmp -s "$dir/fake/PKGBUILD.original" "$(pkgfile "$dir")" \
+    || fail 'nvchecker-unavailable: the recipe changed after its provider failed'
+[[ ! -s $dir/fake/curl_calls && ! -s $dir/fake/makepkg_argv ]] \
+    || fail 'nvchecker-unavailable: the builder fell back to Arch or built without a version'
+grep -q 'nvchecker failed' "$dir/out.txt" \
+    || fail 'nvchecker-unavailable: the resolver failure was not reported'
+grep -q '^s1 deferred 99 ' "$dir/out.txt" \
+    || fail 'nvchecker-unavailable: the run record did not classify the failure as deferred'
+
+# ─── Case 21: stale AUR version metadata cannot authorize a different version
+dir="$fixture/aur-version-race"
+make_aur_version_workspace "$dir"
+set_aur_srcinfo "$dir" s1 "$staged_version" 3 \
+    "https://example.invalid/s1-$staged_version.tar.gz" "$published_sha"
+set_delivery "$dir" none
+cp -- "$dir/packages/core/s1/PKGBUILD" "$dir/fake/PKGBUILD.original"
+GSA_FAKE_NVCHECK_VERSION="$repo_version" run_build "$dir" 'aur-version-race' fail
+
+cmp -s "$dir/fake/PKGBUILD.original" "$dir/packages/core/s1/PKGBUILD" \
+    || fail 'aur-version-race: a version-mismatched AUR .SRCINFO changed the recipe'
+[[ ! -s $dir/fake/makepkg_argv ]] \
+    || fail 'aur-version-race: makepkg ran with a mismatched AUR version'
+grep -q '^s1 deferred 99 ' "$dir/out.txt" \
+    || fail 'aur-version-race: the run record did not classify the metadata race as deferred'
+
+# ─── Case 22: AUR source metadata must match the rewritten recipe exactly ───
+dir="$fixture/aur-source-race"
+make_aur_version_workspace "$dir"
+set_aur_srcinfo "$dir" s1 "$repo_version" 3 \
+    "https://example.invalid/not-s1-$repo_version.tar.gz" "$published_sha"
+set_delivery "$dir" "$published_payload"
+cp -- "$dir/packages/core/s1/PKGBUILD" "$dir/fake/PKGBUILD.original"
+GSA_FAKE_NVCHECK_VERSION="$repo_version" run_build "$dir" 'aur-source-race' fail
+
+cmp -s "$dir/fake/PKGBUILD.original" "$dir/packages/core/s1/PKGBUILD" \
+    || fail 'aur-source-race: the recipe was not restored after an AUR source mismatch'
+[[ ! -s $dir/fake/updpkgsums_calls && ! -s $dir/fake/makepkg_argv ]] \
+    || fail 'aur-source-race: a mismatched AUR source was fetched or built'
+grep -q '^s1 deferred 99 ' "$dir/out.txt" \
+    || fail 'aur-source-race: the run record did not classify the source mismatch as deferred'
+
+# ─── Case 23: --no-sync suppresses every external provider operation ─────────
+dir="$fixture/no-sync"
+make_case_workspace "$dir" '99.0.0-1'
+opt_in_nvchecker "$dir" s1 packages/stable/s1 stable
+make_nvchecker_stub "$dir"
+cp -- "$(pkgfile "$dir")" "$dir/fake/PKGBUILD.original"
+GSA_FAKE_NVCHECK_FAIL=1 GSA_FAKE_NVCHECK_VERSION="$repo_version" \
+    run_build "$dir" 'no-sync' 0 --no-sync
+
+cmp -s "$dir/fake/PKGBUILD.original" "$(pkgfile "$dir")" \
+    || fail 'no-sync: the opted-in recipe changed despite --no-sync'
+[[ ! -s $dir/fake/nvchecker_calls && ! -s $dir/fake/curl_calls ]] \
+    || fail 'no-sync: an external provider was queried'
+[[ -s $dir/fake/makepkg_argv ]] \
+    || fail 'no-sync: the recipe did not continue through the ordinary build path'
+
+# ─── Case 24: matching AUR metadata cannot lower a local pkgrel ─────────────
+dir="$fixture/aur-pkgrel"
+make_aur_version_workspace "$dir"
+sed -i 's/^pkgver=.*/pkgver=2.0.0/; s/^pkgrel=1$/pkgrel=5/' \
+    "$dir/packages/core/s1/PKGBUILD"
+set_aur_srcinfo "$dir" s1 "$repo_version" 3 \
+    "https://example.invalid/s1-$repo_version.tar.gz" "$published_sha"
+set_delivery "$dir" none
+GSA_FAKE_NVCHECK_VERSION="$repo_version" run_build "$dir" 'aur-pkgrel' 0
+
+grep -q "^pkgver=$repo_version$" "$dir/packages/core/s1/PKGBUILD" \
+    || fail 'aur-pkgrel: the recipe pkgver changed unexpectedly'
+grep -q '^pkgrel=5$' "$dir/packages/core/s1/PKGBUILD" \
+    || fail 'aur-pkgrel: the AUR pkgrel lowered a local revision'
+[[ ! -s $dir/fake/updpkgsums_calls ]] \
+    || fail 'aur-pkgrel: unchanged sources were unnecessarily refreshed'
+
+# ─── Case 25: AUR pkgrel catches up at the same pkgver ──────────────────────
+dir="$fixture/aur-pkgrel-ahead"
+make_aur_version_workspace "$dir"
+sed -i 's/^pkgver=.*/pkgver=2.0.0/' "$dir/packages/core/s1/PKGBUILD"
+set_aur_srcinfo "$dir" s1 "$repo_version" 3 \
+    "https://example.invalid/s1-$repo_version.tar.gz" "$published_sha"
+set_delivery "$dir" none
+GSA_FAKE_NVCHECK_VERSION="$repo_version" run_build "$dir" 'aur-pkgrel-ahead' 0
+
+grep -q '^pkgrel=3$' "$dir/packages/core/s1/PKGBUILD" \
+    || fail 'aur-pkgrel-ahead: a newer AUR pkgrel at the same pkgver was ignored'
+[[ ! -s $dir/fake/updpkgsums_calls ]] \
+    || fail 'aur-pkgrel-ahead: unchanged sources were unnecessarily refreshed'
+
+# ─── Case 26: a GitHub provider retains pkgrel at the same pkgver ───────────
+dir="$fixture/github-pkgrel"
+make_case_workspace "$dir" '99.0.0-1'
+opt_in_nvchecker "$dir" s1 packages/stable/s1 stable
+sed -i 's/^pkgver=.*/pkgver=2.0.0/; s/^pkgrel=1$/pkgrel=7/' "$(pkgfile "$dir")"
+make_nvchecker_stub "$dir"
+GSA_FAKE_NVCHECK_VERSION="$repo_version" run_build "$dir" 'github-pkgrel' 0
+
+grep -q "^pkgver=$repo_version$" "$(pkgfile "$dir")" \
+    || fail 'github-pkgrel: the recipe pkgver changed unexpectedly'
+grep -q '^pkgrel=7$' "$(pkgfile "$dir")" \
+    || fail 'github-pkgrel: an unchanged pkgver reset the local pkgrel'
+
+# ─── Case 27: gcc-snapshot follows its date-derived source URL ───────────────
+dir="$fixture/gcc-snapshot"
+gcc_new_version=17.0.0.snapshot20260921
+gcc_new_source=https://example.invalid/gcc-17-20260921.tar.xz
+make_gcc_version_workspace "$dir"
+set_aur_srcinfo "$dir" gcc-snapshot "$gcc_new_version" 3 \
+    "$gcc_new_source" "$published_sha"
+set_delivery "$dir" "$published_payload"
+GSA_FAKE_PACKAGE_ID=gcc-snapshot GSA_FAKE_NVCHECK_KEY=gcc-snapshot \
+    GSA_FAKE_NVCHECK_VERSION="$gcc_new_version" \
+    run_build "$dir" 'gcc-snapshot' 0
+
+grep -q "^pkgver=$gcc_new_version$" "$dir/packages/core/gcc-snapshot/PKGBUILD" \
+    || fail 'gcc-snapshot: the AUR pkgver was not applied'
+[[ -f $dir/packages/core/gcc-snapshot/gcc-17-20260921.tar.xz ]] \
+    || fail 'gcc-snapshot: the new pkgver did not map into the snapshot source path'
+grep -q "^sha256sums=('$published_sha')$" \
+    "$dir/packages/core/gcc-snapshot/PKGBUILD" \
+    || fail 'gcc-snapshot: the AUR checksum did not anchor its moved source'
+
+# ─── Case 28: an unsupported gcc-snapshot mapping is rejected and rolled back
+dir="$fixture/gcc-snapshot-invalid"
+gcc_bad_version=17.0.0.snapshotbad
+make_gcc_version_workspace "$dir"
+set_aur_srcinfo "$dir" gcc-snapshot "$gcc_bad_version" 3 \
+    https://example.invalid/gcc-17-bad.tar.xz "$published_sha"
+set_delivery "$dir" "$published_payload"
+cp -- "$dir/packages/core/gcc-snapshot/PKGBUILD" "$dir/fake/PKGBUILD.original"
+GSA_FAKE_PACKAGE_ID=gcc-snapshot GSA_FAKE_NVCHECK_KEY=gcc-snapshot \
+    GSA_FAKE_NVCHECK_VERSION="$gcc_bad_version" \
+    run_build "$dir" 'gcc-snapshot-invalid' fail
+
+cmp -s "$dir/fake/PKGBUILD.original" "$dir/packages/core/gcc-snapshot/PKGBUILD" \
+    || fail 'gcc-snapshot-invalid: the unsupported version was not rolled back'
+[[ ! -s $dir/fake/updpkgsums_calls && ! -s $dir/fake/makepkg_argv ]] \
+    || fail 'gcc-snapshot-invalid: source refresh or build ran with an invalid mapping'
+
+# ─── Case 29: AUR entries without checksums are loud fetch-only ─────────────
+dir="$fixture/aur-fetch-only"
+make_aur_version_workspace "$dir"
+set_aur_srcinfo "$dir" s1 "$repo_version" 3 \
+    "https://example.invalid/s1-$repo_version.tar.gz" SKIP
+set_delivery "$dir" "$published_payload"
+GSA_FAKE_NVCHECK_VERSION="$repo_version" run_build "$dir" 'aur-fetch-only' 0
+
+grep -q "^sha256sums=('$published_sha')$" "$dir/packages/core/s1/PKGBUILD" \
+    || fail 'aur-fetch-only: the fetched checksum was not refreshed'
+grep -q 'NOT anchored' "$dir/state/logs/s1.log" \
+    || fail 'aur-fetch-only: the package log hid the missing AUR checksum'
+grep -q 'fetch-only sums: review before committing' "$dir/out.txt" \
+    || fail 'aur-fetch-only: the run summary omitted the review instruction'
+
+# ─── Case 30: an AUR checksum mismatch refuses and rolls back ────────────────
+dir="$fixture/aur-mismatch"
+make_aur_version_workspace "$dir"
+set_aur_srcinfo "$dir" s1 "$repo_version" 3 \
+    "https://example.invalid/s1-$repo_version.tar.gz" "$published_sha"
+set_delivery "$dir" "$tampered_payload"
+cp -- "$dir/packages/core/s1/PKGBUILD" "$dir/fake/PKGBUILD.original"
+GSA_FAKE_NVCHECK_VERSION="$repo_version" run_build "$dir" 'aur-mismatch' fail
+
+cmp -s "$dir/fake/PKGBUILD.original" "$dir/packages/core/s1/PKGBUILD" \
+    || fail 'aur-mismatch: the original recipe was not restored'
+[[ ! -s $dir/fake/makepkg_argv ]] \
+    || fail 'aur-mismatch: makepkg ran despite a published AUR checksum disagreement'
+grep -q 'AUR published checksum' "$dir/out.txt" \
+    || fail 'aur-mismatch: the AUR integrity refusal was not reported'
+grep -q '^s1 failed ' "$dir/out.txt" \
+    || fail 'aur-mismatch: the run record did not classify the checksum mismatch as failure'
+
+# ─── Case 31: Zen's tracker key and asset name differ from its recipe ID ───
+dir="$fixture/zen-browser"
+make_zen_version_workspace "$dir"
+zen_recipe="$dir/packages/stable/zen-browser-pgo"
+sed -i 's/^pkgrel=1$/pkgrel=4/' "$zen_recipe/PKGBUILD"
+set_github_release "$dir" "$repo_version" "zen.source.tar.zst" "$published_sha"
+set_delivery "$dir" "$published_payload"
+GSA_FAKE_PACKAGE_ID=zen-browser-pgo GSA_FAKE_NVCHECK_KEY=zen-browser \
+    GSA_FAKE_NVCHECK_VERSION="$repo_version" run_build "$dir" 'zen-browser' 0
+
+grep -q "^pkgver=$repo_version$" "$zen_recipe/PKGBUILD" \
+    || fail 'zen-browser: the pkgname-matched nvchecker section was not resolved'
+grep -q '^pkgrel=1$' "$zen_recipe/PKGBUILD" \
+    || fail 'zen-browser: pkgrel was not reset for the new version'
+[[ -f $zen_recipe/zen-source-$repo_version.tar.zst ]] \
+    || fail 'zen-browser: makepkg did not use the local source filename override'
+grep -q "^sha256sums=('$published_sha')$" "$zen_recipe/PKGBUILD" \
+    || fail 'zen-browser: the remote GitHub asset digest did not anchor the override file'
+grep -q 're-anchored to GitHub zen-browser/desktop' \
+    "$dir/state/logs/zen-browser-pgo.log" \
+    || fail 'zen-browser: the log does not name its GitHub checksum authority'
 
 printf 'stable-sync fixture: PASS\n'

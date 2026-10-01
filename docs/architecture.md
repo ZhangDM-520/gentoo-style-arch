@@ -17,8 +17,10 @@ Gentoo_Style_Arch has four deliberately separate modules:
    once, in the builder), `edges` is the comma list of packages this one
    consumes — its local build-order edges (a lone `id|path|groups|` is a
    deliberate no-edge record),
-   and `tags` carries coupled-batch policy (`abi=must` / `abi=should`) and
-   the optional `app-cluster=<name>` prompt-cluster tag.
+   and `tags` carries coupled-batch policy (`abi=must` / `abi=should`), the
+   optional `app-cluster=<name>` prompt-cluster tag, and the explicit
+   `version-sync=nvchecker` provider opt-in. A tracker file by itself does not
+   change a recipe's build-time version source.
    `config/build-defaults.conf` stays separate: lanes/jobs/intensity and the
    memory budgets are knobs, not topology. The loader resolves every record
    on EVERY invocation and one malformed record breaks every command; the
@@ -26,9 +28,10 @@ Gentoo_Style_Arch has four deliberately separate modules:
    never parses `config/` itself. It is declarative so maintainers can review
    graph changes without editing scheduler implementation.
 3. **Builder** in `build-all.fish` is the operational interface. It resolves
-   package IDs, expands consumers and sorts by build order, dispatches isolated lanes,
-   serializes pacman transactions, owns the interactive dashboard, and
-   reports failures through per-package logs.
+   package IDs, expands consumers and sorts by build order, dispatches isolated
+   lanes, serializes pacman transactions, owns the interactive dashboard, and
+   reports failures through per-package logs. Stable recipes use Arch metadata
+   unless their topology record explicitly selects an nvchecker provider.
 4. **Runtime state** is split in two by who owns it. Under `.state/` (or
    `GSA_STATE_DIR`) the builder keeps its own state: `logs/`, the pacman
    mutex, and lane result files. Per-archive VCS revision records live beside

@@ -82,16 +82,53 @@ the package builds normally and `-i` installs the new result as usual.
 
 ### Stable version sync and checksum verification
 
-`packages/stable` recipes track the Arch repository version and are updated
-automatically before they build: the builder reads the repo's version with
-`pacman -Si` and rewrites `pkgver`/`pkgrel` in the recipe **in place** when the
-repo is newer. A downgrade is never written: a higher content `pkgver` is kept,
-and at equal `pkgver` a local `pkgrel` **ahead** of the repo is a deliberate
-bump (a PGO wave marks its own revision — ripgrep's `pkgrel=2` over the repo's
-1) and is kept too; only a repo `pkgrel` actually ahead is adopted, and a
-`pkgver` move resets `pkgrel` to the repo's. A `pkgver()`-driven recipe is
-skipped entirely. The edit is left in the working tree for you to commit, and
-the committed `.SRCINFO` and sums stay stale until you refresh and commit them.
+Untagged `packages/stable` recipes track the Arch repository version and are
+updated automatically before they build: the builder reads the repo's version
+with `pacman -Si` and rewrites `pkgver`/`pkgrel` in the recipe **in place** when
+the repo is newer. A downgrade is never written: a higher content `pkgver` is
+kept, and at equal `pkgver` a local `pkgrel` **ahead** of the repo is a
+deliberate bump (a PGO wave marks its own revision — ripgrep's `pkgrel=2` over
+the repo's 1) and is kept too; only a repo `pkgrel` actually ahead is adopted,
+and a `pkgver` move resets `pkgrel` to the repo's. A `pkgver()`-driven recipe
+is skipped entirely. The edit is left in the working tree for you to commit,
+uncommitted. When a source URL moves, the builder refreshes its checksum and
+`.SRCINFO` from the official anchor; when no source moves, the committed sums
+remain valid, though the `.SRCINFO` may need regeneration after a version-field
+change. Review the diff before committing.
+
+#### Explicit nvchecker providers
+
+Build-time nvchecker is opt-in through the validated topology tag
+`version-sync=nvchecker`; an existing `.nvchecker.toml` alone does not change
+the version source. Run `fish build-all.fish --topology` to inspect which
+records currently opt in. The builder reads the provider from the selected
+config section, then runs only that section with temporary
+`old_ver.json`/`new_ver.json` state outside the repository and
+`NVCHECK_STATE_DIR`. This path requires `nvchecker` and Python 3.11+; moved
+sources also require `curl` and `updpkgsums`.
+
+GitHub packages reset `pkgrel` to 1 only when `pkgver` moves and retain a local
+`pkgrel` at the same version. AUR packages use the matching `.SRCINFO` for
+`pkgrel` and `epoch` on a new version; at equal `pkgver`, the upstream
+`pkgrel` may move forward but never lowers a local revision. The snapshot
+recipe derives `_pkgver` from its strict `pkgver` date format, so the source
+URL moves with the selected snapshot and unsupported formats fail closed.
+
+For moved GitHub release assets, a published asset digest is matched to the
+configured repository, release tag, and filename, then verified against the
+fetched bytes. For `name::url` sources, the remote URL basename selects the
+release asset while `name` still identifies the local fetched file. A release
+without a matching digest uses the existing loud
+fetch-only path; the log and run summary do not describe its refreshed hash as
+upstream verification. AUR `.SRCINFO` must match the configured `pkgbase`, the
+resolved `pkgver`, and the recipe's expanded source array before its checksums
+can anchor a build; `SKIP` entries follow the same fetch-only rule. Provider/
+network failures and AUR metadata races defer the package; a published-checksum
+disagreement stops the run as an integrity failure. Rewrites are rolled back
+on a failed version mapping, metadata match, or checksum check.
+
+`--no-sync` disables both the default Arch query and every opted-in nvchecker
+query/checksum refresh; it builds the committed recipe version and sums as-is.
 
 A rewrite that moves **`pkgver`** can move the `source=()` URLs with it, so the
 committed sums can end up describing the previous version and `makepkg` would
@@ -113,8 +150,8 @@ their committed sums still verify. Only `linux-api-headers` and
 expanded `source=()` array around the rewrite and only acts when an entry
 actually changed; otherwise the build runs against the committed sums.
 
-For the entries that moved, the sums are re-anchored to the **official Arch
-packaging repo**:
+For moved entries in the untagged Arch path, the sums are re-anchored to the
+**official Arch packaging repo**:
 
 1. Fetch `https://gitlab.archlinux.org/archlinux/packaging/packages/<pkgbase
    or split pkgname>/-/raw/<ref>/.SRCINFO` — the same authority the version came
@@ -199,18 +236,20 @@ At the end of every run that touched the tree, the sync's dispositions are
 printed at run level — a run never commits; that stays the maintainer's:
 
 ```
-Synced with the repo this run (uncommitted — review with 'git diff', then commit):
-  <pkg>: <old-ver> → <new-ver> (synced with repo)
-  <pkg>: checksums refreshed at <ver> — <n> anchored to official <pub>, <m> refresh-only (fetch-only sums: review before committing)
+Version and checksum sync this run (uncommitted — review with 'git diff', then commit):
+  <pkg>: <old-ver> → <new-ver> (synced with <Arch repo, AUR, or GitHub>)
+  <pkg>: checksums refreshed at <ver> — <n> anchored to <provider>, <m> refresh-only (fetch-only sums: review before committing)
 ```
 
-`--no-sync` avoids the whole path: no rewrite, no anchoring, no refusal, no
-refresh-only record, and the committed version and sums build as-is, at the
-cost of not tracking the repo version. **`--skipchecksums` is never passed by
-the builder.** Every refusal carries the same recovery line: refresh by hand
-with `updpkgsums` in the recipe, then commit and rebuild — which is exactly
-what the sync now runs itself for refresh-only entries; the manual step
-remains the remedy when no official document can anchor the recipe at all.
+`--no-sync` avoids both sync paths: no provider lookup or rewrite, no
+anchoring, no refusal, and no refresh-only record. The committed version and
+sums build as-is, at the cost of not tracking Arch or opted-in upstream
+versions. **`--skipchecksums` is never passed by
+the builder.** In the default Arch path, a missing official document carries
+the manual `updpkgsums` recovery line. An opted-in provider outage or AUR
+metadata race instead defers for a retry; never clear it by treating a
+fetch-generated hash as provider verification. A published-checksum mismatch
+stops the run and restores the original recipe.
 Signature verification is a separate check throughout — it is enforced
 wherever the recipe has a `validpgpkeys` source, and 13 of the 28
 `packages/stable` recipes anchor authenticity that way rather than by checksum.

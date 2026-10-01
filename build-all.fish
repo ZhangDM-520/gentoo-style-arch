@@ -467,18 +467,18 @@ function read_topology_config
         end
         # tags: closed vocabulary, no repeats. Unknown tags are refused, not
         # ignored — a typo'd batch tag would silently disable the batch gate.
-        # Vocabulary: abi=must, abi=should (batch relation) and
-        # app-cluster=<name> (the app prompt's shared toggle row; its name
-        # charset matches a record id). Like the abi tags, app-cluster is
-        # accepted on ANY group's record — the loader validates tags by their
-        # own semantics, never by group membership; outside the app prompt
-        # (i.e. on a non-app record) it is simply inert.
+        # Vocabulary: abi=must, abi=should (batch relation),
+        # app-cluster=<name> (the app prompt's shared toggle row), and
+        # version-sync=nvchecker (explicit version-source opt-in). Like the
+        # abi tags, app-cluster and version-sync are accepted on ANY group's
+        # record — the loader validates tags by their own semantics, never by
+        # group membership; outside their owning seam they are inert.
         set -l record_tags
         if test (count $fields) -eq 5
             for tag in (string split ',' -- "$fields[5]")
                 test -n "$tag"; or continue
-                if not contains "$tag" abi=must abi=should; and not string match -qr '^app-cluster=[A-Za-z0-9._+-]+$' -- "$tag"
-                    ui_error "unknown tag in topology record $id: $tag (allowed: abi=must,abi=should,app-cluster=<name>)"
+                if not contains "$tag" abi=must abi=should version-sync=nvchecker; and not string match -qr '^app-cluster=[A-Za-z0-9._+-]+$' -- "$tag"
+                    ui_error "unknown tag in topology record $id: $tag (allowed: abi=must,abi=should,app-cluster=<name>,version-sync=nvchecker)"
                     return 1
                 end
                 if contains "$tag" $record_tags
@@ -807,6 +807,21 @@ function pkgbuild_array -a pkg_path name
     bash -c 'source "$1" >/dev/null 2>&1; eval "printf \"%s\n\" \"\${$2[@]}\""' _ "$pkg_path/PKGBUILD" "$name" 2>/dev/null
 end
 
+function pkgbuild_base -a pkg_path
+    set -l pkgbase (pkgbuild_var "$pkg_path" pkgbase)
+    if test -z "$pkgbase"
+        set -l names (pkgbuild_array "$pkg_path" pkgname)
+        set -l names_status $status
+        if test $names_status -eq 0; and test (count $names) -eq 1
+            set pkgbase "$names[1]"
+        end
+    end
+    if test -z "$pkgbase"
+        set pkgbase (basename "$pkg_path")
+    end
+    echo "$pkgbase"
+end
+
 # ─── Sync stable package version with Arch repos ─────────────────────────────
 # Return contract (build_package switches on it):
 #   0 = nothing to do — not a stable recipe, already current, or the repo
@@ -956,6 +971,318 @@ function sync_stable_version -a pkg_path
         >>"$_STATE_DIR/synced.list" 2>/dev/null
 
     if test $pkgver_changed -eq 1
+        return 1
+    end
+    return 3
+end
+
+function remove_version_sync_temp -a tmp
+    if test -n "$tmp"; and test -d "$tmp"
+        rm -rf -- "$tmp"
+    end
+end
+
+function restore_version_sync_recipe -a pkg_path original tmp
+    set -l restore_status 0
+    if not cp -p -- "$original" "$pkg_path/PKGBUILD"
+        ui_error "$(basename "$pkg_path"): could not restore $pkg_path/PKGBUILD after version sync"
+        set restore_status 1
+    end
+    remove_version_sync_temp "$tmp"
+    return $restore_status
+end
+
+function sync_nvchecker_version -a package_id pkg_path
+    set -l pkg_name "$package_id"
+    set -l pkgbase (pkgbuild_base "$pkg_path")
+    set -l config "$pkg_path/.nvchecker.toml"
+    set -l resolver "$SCRIPT_DIR/tools/nvcheck.sh"
+    if not test -f "$config"; or not test -f "$resolver"
+        ui_error "$pkg_name: the opted-in nvchecker config or resolver is missing"
+        return $lane_outcome_defer
+    end
+
+    set -l repository_root (cd "$SCRIPT_DIR" 2>/dev/null && pwd -P)
+    set -l tmp_base /tmp
+    if set -q TMPDIR; and test -n "$TMPDIR"
+        set tmp_base "$TMPDIR"
+    end
+    set tmp_base (cd -- "$tmp_base" 2>/dev/null && pwd -P)
+    if test -z "$repository_root"; or test -z "$tmp_base"
+        ui_error "$pkg_name: cannot resolve a safe version-sync temporary directory"
+        return $lane_outcome_defer
+    end
+    if test "$tmp_base" = "$repository_root"; or string match -q "$repository_root/*" -- "$tmp_base"
+        ui_error "$pkg_name: TMPDIR must be outside the repository for version sync"
+        return $lane_outcome_defer
+    end
+    set -l tmp (mktemp -d "$tmp_base/gsa-version-sync.XXXXXXXX" 2>/dev/null)
+    if test $status -ne 0; or test -z "$tmp"
+        ui_error "$pkg_name: cannot create isolated version-sync state"
+        return $lane_outcome_defer
+    end
+    set -l tmp_created "$tmp"
+    set tmp (cd "$tmp" 2>/dev/null && pwd -P)
+    if test -z "$tmp"
+        ui_error "$pkg_name: cannot resolve isolated version-sync state"
+        remove_version_sync_temp "$tmp_created"
+        return $lane_outcome_defer
+    end
+    set -l original "$tmp/PKGBUILD.original"
+    if not cp -p -- "$pkg_path/PKGBUILD" "$original"
+        ui_error "$pkg_name: cannot snapshot PKGBUILD before version sync"
+        remove_version_sync_temp "$tmp"
+        return 2
+    end
+
+    set -l provider_info (bash "$resolver" --provider "$config" "$pkgbase" 2>"$tmp/provider.err")
+    set -l provider_status $status
+    if test $provider_status -ne 0; or test (count $provider_info) -ne 2
+        ui_error "$pkg_name: cannot read its nvchecker provider metadata"
+        if test -s "$tmp/provider.err"
+            sed 's/^/  /' "$tmp/provider.err"
+        end
+        remove_version_sync_temp "$tmp"
+        return $lane_outcome_defer
+    end
+    set -l provider "$provider_info[1]"
+    set -l provider_id "$provider_info[2]"
+
+    set -l new_pkgver (env TMPDIR="$tmp" bash "$resolver" --resolve "$config" "$pkgbase" 2>"$tmp/resolve.err")
+    set -l resolve_status $status
+    if test $resolve_status -ne 0; or test (count $new_pkgver) -ne 1
+        ui_error "$pkg_name: nvchecker could not resolve a version from $provider_id"
+        if test -s "$tmp/resolve.err"
+            sed 's/^/  /' "$tmp/resolve.err"
+        end
+        remove_version_sync_temp "$tmp"
+        return $lane_outcome_defer
+    end
+    if not string match -qr '^[A-Za-z0-9._+]+$' -- "$new_pkgver"
+        ui_error "$pkg_name: refusing unsupported upstream pkgver format '$new_pkgver'"
+        remove_version_sync_temp "$tmp"
+        return 4
+    end
+
+    set -l aur_srcinfo ""
+    set -l aur_pkgrel ""
+    set -l aur_epoch 0
+    if test "$provider" = aur
+        if not type -q curl
+            ui_error "$pkg_name: cannot read AUR metadata because curl is missing"
+            remove_version_sync_temp "$tmp"
+            return $lane_outcome_defer
+        end
+        set aur_srcinfo "$tmp/aur.SRCINFO"
+        if not curl -fsSL --max-time 60 --connect-timeout 10 -o "$aur_srcinfo" \
+            "https://aur.archlinux.org/cgit/aur.git/plain/.SRCINFO?h=$provider_id" \
+            2>"$tmp/aur-curl.err"
+            ui_error "$pkg_name: AUR .SRCINFO for $provider_id is unavailable"
+            if test -s "$tmp/aur-curl.err"
+                sed 's/^/  /' "$tmp/aur-curl.err"
+            end
+            remove_version_sync_temp "$tmp"
+            return $lane_outcome_defer
+        end
+        set -l aur_pkgbase (srcinfo_pkgbase "$aur_srcinfo")
+        set -l aur_pkgver (srcinfo_pkgver "$aur_srcinfo")
+        if test "$aur_pkgbase" != "$provider_id"; or test "$aur_pkgbase" != "$pkgbase"; or test "$aur_pkgver" != "$new_pkgver"
+            ui_error "$pkg_name: AUR .SRCINFO changed or disagrees with nvchecker (expected $provider_id $new_pkgver, got $aur_pkgbase $aur_pkgver)"
+            remove_version_sync_temp "$tmp"
+            return $lane_outcome_defer
+        end
+        set aur_pkgrel (srcinfo_pkgrel "$aur_srcinfo")
+        set -l aur_pkgrel_status $status
+        set aur_epoch (srcinfo_epoch "$aur_srcinfo")
+        if test $aur_pkgrel_status -ne 0; or not string match -qr '^[A-Za-z0-9._+]+$' -- "$aur_pkgrel"; or not string match -qr '^[0-9]+$' -- "$aur_epoch"
+            ui_error "$pkg_name: AUR .SRCINFO has an invalid pkgrel or epoch"
+            remove_version_sync_temp "$tmp"
+            return $lane_outcome_defer
+        end
+    end
+
+    set -l cur_pkgver (pkgbuild_var "$pkg_path" pkgver)
+    set -l cur_pkgrel (pkgbuild_var "$pkg_path" pkgrel)
+    set -l cur_epoch (pkgbuild_var "$pkg_path" epoch)
+    if test -z "$cur_pkgrel"
+        set cur_pkgrel 1
+    end
+    if test -z "$cur_epoch"
+        set cur_epoch 0
+    end
+    if test -z "$cur_pkgver"; or not string match -qr '^[A-Za-z0-9._+]+$' -- "$cur_pkgver"; or not string match -qr '^[A-Za-z0-9._+]+$' -- "$cur_pkgrel"; or not string match -qr '^[0-9]+$' -- "$cur_epoch"
+        ui_error "$pkg_name: the current PKGBUILD version metadata is invalid"
+        remove_version_sync_temp "$tmp"
+        return 4
+    end
+    if not type -q vercmp
+        ui_error "$pkg_name: cannot compare versions because vercmp is missing"
+        remove_version_sync_temp "$tmp"
+        return $lane_outcome_defer
+    end
+    set -l version_order (vercmp "$cur_pkgver" "$new_pkgver")
+    if test $status -ne 0
+        ui_error "$pkg_name: vercmp could not compare $cur_pkgver and $new_pkgver"
+        remove_version_sync_temp "$tmp"
+        return $lane_outcome_defer
+    end
+    if test $version_order -gt 0
+        remove_version_sync_temp "$tmp"
+        return 0
+    end
+
+    set -l new_pkgrel "$cur_pkgrel"
+    set -l new_epoch "$cur_epoch"
+    if test "$provider" = aur
+        if test $version_order -lt 0
+            set new_pkgrel "$aur_pkgrel"
+            set new_epoch "$aur_epoch"
+        else
+            set -l release_order (vercmp "$cur_pkgrel" "$aur_pkgrel")
+            if test $release_order -lt 0
+                set new_pkgrel "$aur_pkgrel"
+            end
+            if test "$aur_epoch" -gt "$cur_epoch"
+                set new_epoch "$aur_epoch"
+            end
+        end
+    else if test "$provider" = github; and test $version_order -lt 0
+        set new_pkgrel 1
+    end
+
+    if not test -f "$pkg_path/PKGBUILD"; or not grep -q '^pkgver=' "$pkg_path/PKGBUILD"; or not grep -q '^pkgrel=' "$pkg_path/PKGBUILD"
+        ui_error "$pkg_name: PKGBUILD must define literal pkgver and pkgrel fields for version sync"
+        remove_version_sync_temp "$tmp"
+        return 4
+    end
+    set -l pkgver_changed 0
+    if test "$cur_pkgver" != "$new_pkgver"
+        set pkgver_changed 1
+    end
+    set -l metadata_changed 0
+    if test "$pkgver_changed" -eq 1; or test "$cur_pkgrel" != "$new_pkgrel"; or test "$cur_epoch" != "$new_epoch"
+        set metadata_changed 1
+    end
+    set -l sources_before (pkgbuild_array "$pkg_path" source)
+    if test $status -ne 0
+        ui_error "$pkg_name: cannot evaluate the current PKGBUILD source array"
+        remove_version_sync_temp "$tmp"
+        return 4
+    end
+
+    if test "$metadata_changed" -eq 1
+        if not sed -i "s/^pkgver=.*/pkgver=$new_pkgver/" "$pkg_path/PKGBUILD"
+            ui_error "$pkg_name: could not update pkgver"
+            restore_version_sync_recipe "$pkg_path" "$original" "$tmp"
+            return 2
+        end
+        if not sed -i "s/^pkgrel=.*/pkgrel=$new_pkgrel/" "$pkg_path/PKGBUILD"
+            ui_error "$pkg_name: could not update pkgrel"
+            restore_version_sync_recipe "$pkg_path" "$original" "$tmp"
+            return 2
+        end
+        if grep -q '^epoch=' "$pkg_path/PKGBUILD"
+            if not sed -i "s/^epoch=.*/epoch=$new_epoch/" "$pkg_path/PKGBUILD"
+                ui_error "$pkg_name: could not update epoch"
+                restore_version_sync_recipe "$pkg_path" "$original" "$tmp"
+                return 2
+            end
+        else if test "$new_epoch" -ne 0
+            if not sed -i "/^pkgrel=.*/a epoch=$new_epoch" "$pkg_path/PKGBUILD"
+                ui_error "$pkg_name: could not add epoch"
+                restore_version_sync_recipe "$pkg_path" "$original" "$tmp"
+                return 2
+            end
+        end
+        if not rm -rf -- "$pkg_path/src" "$pkg_path/pkg" "$pkg_path/build"
+            ui_error "$pkg_name: could not clear artifacts after version sync"
+            restore_version_sync_recipe "$pkg_path" "$original" "$tmp"
+            return 2
+        end
+    end
+
+    set -l sources_after (pkgbuild_array "$pkg_path" source)
+    if test $status -ne 0
+        ui_error "$pkg_name: resolved pkgver cannot be evaluated by its PKGBUILD; the recipe was restored"
+        restore_version_sync_recipe "$pkg_path" "$original" "$tmp"
+        return 4
+    end
+    if test "$provider" = aur; and not srcinfo_matches_sources "$aur_srcinfo" "$pkg_path"
+        ui_error "$pkg_name: AUR .SRCINFO sources do not exactly match the rewritten recipe; the recipe was restored"
+        restore_version_sync_recipe "$pkg_path" "$original" "$tmp"
+        return $lane_outcome_defer
+    end
+
+    set -l moved_sources
+    set -l source_count (count $sources_after)
+    if test (count $sources_before) -gt $source_count
+        set source_count (count $sources_before)
+    end
+    set -l source_index 1
+    while test $source_index -le $source_count
+        set -l before ""
+        set -l after ""
+        if test $source_index -le (count $sources_before)
+            set before "$sources_before[$source_index]"
+        end
+        if test $source_index -le (count $sources_after)
+            set after "$sources_after[$source_index]"
+        end
+        if test "$before" != "$after"; and test -n "$after"
+            set -a moved_sources "$after"
+        end
+        set source_index (math $source_index + 1)
+    end
+
+    if test (count $moved_sources) -gt 0
+        anchor_sums_from_provider "$pkg_path" "$provider" "$provider_id" "$aur_srcinfo" $moved_sources
+        set -l anchor_status $status
+        switch $anchor_status
+            case 0
+                # The checksum pipeline also refreshes a committed .SRCINFO.
+            case 1
+                refresh_package_srcinfo "$pkg_path" "version metadata was synced"
+            case 4
+                restore_version_sync_recipe "$pkg_path" "$original" "$tmp"
+                return 4
+            case 2 3
+                restore_version_sync_recipe "$pkg_path" "$original" "$tmp"
+                return $lane_outcome_defer
+            case '*'
+                ui_error "$pkg_name: unexpected checksum-anchor result $anchor_status"
+                restore_version_sync_recipe "$pkg_path" "$original" "$tmp"
+                return 2
+        end
+    else if test "$metadata_changed" -eq 1
+        refresh_package_srcinfo "$pkg_path" "version metadata was synced"
+    end
+
+    if test "$metadata_changed" -eq 0
+        remove_version_sync_temp "$tmp"
+        return 0
+    end
+    set -l provider_label "$provider_id"
+    if test "$provider" = aur
+        set provider_label "AUR $provider_id"
+    else
+        set provider_label "GitHub $provider_id"
+    end
+    set -l old_version "$cur_pkgver-$cur_pkgrel"
+    set -l new_version "$new_pkgver-$new_pkgrel"
+    if test "$cur_epoch" -ne 0
+        set old_version "$cur_epoch:$old_version"
+    end
+    if test "$new_epoch" -ne 0
+        set new_version "$new_epoch:$new_version"
+    end
+    if test "$_BUILD_QUIET" != "1"
+        ui_info "$pkgbase: $old_version → $new_version (synced with $provider_label)"
+    end
+    printf '%s: %s → %s (synced with %s)\n' \
+        "$pkgbase" "$old_version" "$new_version" "$provider_label" \
+        >>"$_STATE_DIR/synced.list" 2>/dev/null
+    remove_version_sync_temp "$tmp"
+    if test "$pkgver_changed" -eq 1
         return 1
     end
     return 3
@@ -1408,18 +1735,76 @@ function srcinfo_pkgver -a srcinfo
     return 1
 end
 
-# The official checksums for one recipe as "<file>\t<algorithm>\t<value>", read
-# from the *pkgbase* section of a .SRCINFO.
+function srcinfo_base_value -a srcinfo field
+    for line in (cat "$srcinfo" 2>/dev/null)
+        if string match -qr '^\s*pkgname\s*=' -- "$line"
+            break
+        end
+        if string match -qr -- "^\s*$field\s*=" "$line"
+            echo (string replace -r -- "^\s*$field\s*=\s*" '' "$line")
+            return 0
+        end
+    end
+    return 1
+end
+
+function srcinfo_pkgbase -a srcinfo
+    srcinfo_base_value "$srcinfo" pkgbase
+end
+
+function srcinfo_pkgrel -a srcinfo
+    srcinfo_base_value "$srcinfo" pkgrel
+end
+
+function srcinfo_epoch -a srcinfo
+    set -l epoch (srcinfo_base_value "$srcinfo" epoch)
+    if test -z "$epoch"
+        echo 0
+    else
+        echo $epoch
+    end
+end
+
+function srcinfo_base_sources -a srcinfo
+    for line in (cat "$srcinfo" 2>/dev/null)
+        if string match -qr '^\s*pkgname\s*=' -- "$line"
+            break
+        end
+        if string match -qr '^\s*source\s*=' -- "$line"
+            echo (string replace -r '^\s*source\s*=\s*' '' -- "$line")
+        end
+    end
+end
+
+function srcinfo_matches_sources -a srcinfo pkg_path
+    set -l published_sources (srcinfo_base_sources "$srcinfo")
+    set -l recipe_sources (pkgbuild_array "$pkg_path" source)
+    set -l recipe_status $status
+    if test $recipe_status -ne 0; or test (count $published_sources) -ne (count $recipe_sources)
+        return 1
+    end
+    set -l i 1
+    while test $i -le (count $recipe_sources)
+        if test "$published_sources[$i]" != "$recipe_sources[$i]"
+            return 1
+        end
+        set i (math $i + 1)
+    end
+    return 0
+end
+
+# Checksum map for one recipe as "<file>\t<algorithm>\t<value>", read from
+# the *pkgbase* section of a .SRCINFO.
 #
 # makepkg writes .SRCINFO with every `source =` line in order, then each checksum
 # array in order, and it is already brace-expanded — so it is both easier and
-# safer to read than the official PKGBUILD, which would have to be *executed* to
+# safer to read than a provider PKGBUILD, which would have to be *executed* to
 # be expanded. Sources and sums only line up *within* one algorithm, though:
-# Arch publishes the same file list once per algorithm (fish has one source with
-# both a sha512 and a b2 sum), so the flat list is not aligned. Only the first
-# contiguous run of one algorithm is used, and the function returns 1 unless that
-# run is exactly as long as the source list, so an unparseable file can never be
-# anchored to.
+# Arch and AUR publish the same file list once per algorithm (fish has one
+# source with both a sha512 and a b2 sum), so the flat list is not aligned. Only
+# the first contiguous run of one algorithm is used, and the function returns 1
+# unless that run is exactly as long as the source list, so an unparseable file
+# can never be anchored to.
 function srcinfo_sum_map -a srcinfo
     set -l srcs
     set -l algos
@@ -1461,12 +1846,99 @@ function srcinfo_sum_map -a srcinfo
     end
 end
 
+function github_release_checksum_map -a repo pkgver tmp map_file tag_file
+    if not type -q python3
+        ui_error "$repo: Python 3 is required to read GitHub release metadata"
+        return 2
+    end
+    set -l found_release 0
+    for tag in "$pkgver" "v$pkgver"
+        set -l response "$tmp/github-release-$tag.json"
+        set -l http_code (curl --silent --show-error --location \
+            --max-time 60 --connect-timeout 10 --output "$response" \
+            --write-out '%{http_code}' \
+            "https://api.github.com/repos/$repo/releases/tags/$tag" \
+            2>"$tmp/github-curl.err")
+        set -l curl_status $status
+        if test $curl_status -ne 0
+            ui_error "$repo: GitHub release metadata request failed for tag $tag (curl exit $curl_status)"
+            if test -s "$tmp/github-curl.err"
+                tail -5 "$tmp/github-curl.err" | sed 's/^/  /'
+            end
+            return 2
+        end
+        if test "$http_code" = 404
+            continue
+        end
+        if test "$http_code" != 200
+            ui_error "$repo: GitHub release metadata for tag $tag returned HTTP $http_code"
+            return 2
+        end
+        if not bash "$SCRIPT_DIR/tools/nvcheck.sh" --release-digests "$response" "$tag" \
+            >"$map_file" 2>"$tmp/github-json.err"
+        then
+            ui_error "$repo: cannot read GitHub release metadata for tag $tag"
+            if test -s "$tmp/github-json.err"
+                sed 's/^/  /' "$tmp/github-json.err"
+            end
+            return 2
+        end
+        printf '%s\n' "$tag" >"$tag_file"
+        set found_release 1
+        break
+    end
+    if test $found_release -eq 0
+        printf '' >"$map_file"
+        printf '' >"$tag_file"
+    end
+    return 0
+end
+
+function github_source_matches_release -a entry repo tag
+    if test -z "$tag"
+        return 1
+    end
+    set -l url (source_url "$entry"); or return 1
+    set url (string replace -r '[?#].*$' '' -- "$url")
+    string match -q "https://github.com/$repo/releases/download/$tag/*" -- "$url"
+end
+
+function github_release_asset_name -a entry
+    set -l url (source_url "$entry"); or return 1
+    set url (string replace -r '[?#].*$' '' -- "$url")
+    set -l name (string replace -r '^.*/' '' -- "$url")
+    if test -z "$name"
+        return 1
+    end
+    echo "$name"
+end
+
+function refresh_package_srcinfo -a pkg_path reason
+    if not test -f "$pkg_path/.SRCINFO"
+        return 0
+    end
+    set -l pkg_name (basename "$pkg_path")
+    set -l run_as env
+    if test "$_ROOT_MODE" = "1"
+        set run_as sudo -u "$_BUILD_USER" env HOME=$_BUILD_HOME
+    end
+    if $run_as makepkg --printsrcinfo --dir "$pkg_path" >"$pkg_path/.SRCINFO.tmp" 2>/dev/null
+        if not mv -f -- "$pkg_path/.SRCINFO.tmp" "$pkg_path/.SRCINFO"
+            rm -f -- "$pkg_path/.SRCINFO.tmp"
+            ui_warning "$pkg_name: $reason but the refreshed .SRCINFO could not replace the committed file"
+        end
+    else
+        rm -f -- "$pkg_path/.SRCINFO.tmp"
+        ui_warning "$pkg_name: $reason but the committed .SRCINFO could not be refreshed; regenerate it with 'makepkg --printsrcinfo > .SRCINFO'"
+    end
+end
+
 # makepkg's own checksum for one VCS source: it hashes `git archive --format tar
-# <tag>` of the checkout, so the value is reproducible on any machine and Arch's
-# published value is a cross-check rather than a local echo. Prints nothing and
-# returns 1 when there is nothing to recompute yet (no checkout, or a fragment
-# makepkg itself would answer SKIP for); returns 2 when the recomputation was
-# attempted and failed.
+# <tag>` of the checkout, so the value is reproducible on any machine and the
+# provider's published value is a cross-check rather than a local echo. Prints
+# nothing and returns 1 when there is nothing to recompute yet (no checkout, or
+# a fragment makepkg itself would answer SKIP for); returns 2 when the
+# recomputation was attempted and failed.
 function vcs_source_sum -a dir entry alg
     set -l url (source_url $entry); or return 1
     if not string match -q '*#*' -- $url
@@ -1481,7 +1953,7 @@ function vcs_source_sum -a dir entry alg
     set -l name (source_filename $entry); or return 1
     # makepkg's get_filename strips a trailing .git from a VCS URL (the clone
     # of …/pipewire.git lands in 'pipewire'), while source_filename keeps the
-    # URL spelling the official map is keyed by — try both spellings, or the
+    # URL spelling the provider map is keyed by — try both spellings, or the
     # checkout is "not available" no matter how healthy it is (2026-09-30).
     set -l name_stripped (string replace -r '\.git$' '' -- $name)
     set -l cands "$dir/$name"
@@ -1520,60 +1992,63 @@ function vcs_source_sum -a dir entry alg
     echo $sum
 end
 
-# ─── Re-anchor a synced recipe's checksums to the official Arch ones ─────────
-# sync_stable_version rewrites pkgver from the repos, which moves any source=()
-# entry spelling the version out. The committed sums then describe the previous
-# version and makepkg would reject the freshly fetched sources. Two tempting ways
-# out are both wrong: re-hashing the download alone (updpkgsums by itself)
-# records whatever arrived and verifies nothing, and --skipchecksums builds it
-# unverified. So the sums are re-anchored to the value *Arch* published for that
-# version and the fetched bytes are checked against it — automatically, because
-# the official packaging repo is the same source of truth the version itself was
-# synced from.
+# ─── Re-anchor moved sources to the selected version provider ────────────────
+# A provider version can move a source=() URL away from the bytes described by
+# the committed sums. Never treat updpkgsums alone as verification: use a
+# provider-published checksum when available, and otherwise report the existing
+# loud fetch-only policy.
 #
-# One class is deliberately different (2026-09-24): an entry the official
-# .SRCINFO publishes NO checksum for (SKIP, or no entry at all) cannot be
-# anchored to anything Arch published — but refusing the recipe there parked a
-# whole dispatch over one entry, and the refusal itself told the maintainer to
-# run 'updpkgsums' by hand. The sync now runs exactly that command itself and
-# records each such entry LOUDLY as refresh-only: nothing official attests
-# these values, so the log and the run summary name every one and say what
-# does stand behind it (PGP for a detached signature — the signature entry is
-# already outside this list via source_filename —, #tag/#commit for a VCS
-# source, TLS for a plain download). Entries Arch DOES publish keep the full
-# anchor-or-refuse treatment: verified against Arch after the write, a
-# disagreement refuses and restores. That half is not weakened.
+# When a provider publishes no checksum for an entry, refresh it loudly as
+# fetch-only instead of claiming the new hash is an anchor. The log and the run
+# summary name every such entry and the remaining attestation (PGP for a
+# detached signature — already outside this list via source_filename —,
+# #tag/#commit for a VCS source, TLS for a plain download). Published values
+# remain anchor-or-refuse: verify them after writing and restore on disagreement.
 #
-# Only the entries that actually moved are anchored. A pkgver rewrite that leaves
-# source=() alone — 26 of the 28 stable recipes pin literal versions in their
-# URLs — leaves the committed sums valid, so refusing those builds would be a
-# false alarm, and so would re-hashing them.
+# The caller passes only moved entries. In the default Arch path, a pkgver
+# rewrite that leaves source=() alone — 26 of the 28 stable recipes pin literal
+# versions in their URLs — leaves the committed sums valid, so refusing those
+# builds would be a false alarm, and so would re-hashing them.
 #
 # updpkgsums does the writing, so the recipe keeps its own formatting and its own
-# choice of algorithm; the values are then verified against Arch's, whatever
-# algorithm those are in, and the check is per-file so a disagreement names the
-# file. Every path fails closed, restoring the recipe where it was already
-# rewritten.
+# choice of algorithm; the values are then verified against the selected
+# provider's, whatever algorithm it publishes, and the check is per-file so a
+# disagreement names the file. Every path fails closed, restoring the recipe
+# where it was already rewritten.
 #
 # Return: 0 = anchored (and any refresh-only entries recorded) · 1 = nothing
-#         to anchor · 2 = could not fetch/write/verify (recipe restored) ·
-#         3 = no official document at our version (recipe untouched) ·
-#         4 = a source disagrees with Arch's checksum (recipe restored)
-function anchor_sums_from_official -a pkg_path
+#         to anchor · 2 = provider/fetch/write failure · 3 = no matching
+#         provider metadata · 4 = a source disagrees with a published checksum.
+function anchor_sums_from_provider -a pkg_path provider provider_id provider_file
     set -l pkg_name (basename "$pkg_path")
     set -l pkgbase (pkgbuild_var "$pkg_path" pkgbase)
     if test -z "$pkgbase"
-        set pkgbase $pkg_name
+        if test "$provider" = aur
+            set pkgbase (pkgbuild_base "$pkg_path")
+        else
+            set pkgbase $pkg_name
+        end
     end
     set -l pkgver (pkgbuild_var "$pkg_path" pkgver)
     set -l pkgrel (pkgbuild_var "$pkg_path" pkgrel)
     set -l refuse_manual "  Refresh them by hand — 'updpkgsums' in that recipe, commit, rebuild. '--no-sync' builds the committed version as-is."
+    set -l authority_phrase "the official"
+    set -l checksum_owner "Arch"
+    if test "$provider" = aur
+        set authority_phrase "AUR"
+        set checksum_owner "AUR"
+        set refuse_manual "  No package was built; the recipe was restored. Retry when AUR metadata is available, or use '--no-sync' to build the committed version and sums. Do not treat a fetched hash as an upstream anchor."
+    else if test "$provider" = github
+        set authority_phrase "GitHub"
+        set checksum_owner "GitHub"
+        set refuse_manual "  No package was built; the recipe was restored. Retry when GitHub metadata is available, or use '--no-sync' to build the committed version and sums. Do not treat a fetched hash as an upstream anchor."
+    end
 
     # Which of the moved sources a checksum published elsewhere can describe at
     # all: an in-tree file was not downloaded and a signature file gets SKIP.
     set -l anchor_names
     set -l anchor_entries
-    for e in $argv[2..-1]
+    for e in $argv[5..-1]
         if test -z (source_url $e)
             continue
         end
@@ -1592,7 +2067,11 @@ function anchor_sums_from_official -a pkg_path
     end
 
     if not type -q curl
-        ui_error "$pkg_name: refusing to build — pkgver was synced to $pkgver-$pkgrel and 'curl' is missing, so the official checksums cannot be read"
+        if test "$provider" = arch
+            ui_error "$pkg_name: refusing to build — pkgver was synced to $pkgver-$pkgrel and 'curl' is missing, so the official checksums cannot be read"
+        else
+            ui_error "$pkg_name: refusing to build — pkgver was synced to $pkgver-$pkgrel and 'curl' is missing, so provider checksum metadata cannot be read"
+        end
         echo "$refuse_manual"
         return 2
     end
@@ -1604,87 +2083,129 @@ function anchor_sums_from_official -a pkg_path
 
     set -l tmp (mktemp -d)
 
-    # Which official packaging repo carries this recipe, at which revision. The
-    # pkgbase is usually right; some recipes follow a name Arch does not have
-    # (hip-runtime lives under hip), so each split pkgname is tried as well.
-    # `main` comes first, and the version's own tag is the fallback for when the
-    # packaging repo has already moved past the version the repos carry (bash's
-    # main is 5.3.20 while the repos serve 5.3.15). A revision whose pkgver is
-    # not ours is no anchor at all: it describes different files.
     set -l srcinfo ""
-    set -l published ""
-    set -l tried
-    set -l seen_pkg ""
-    set -l seen_ver ""
-    for c in $pkgbase (pkgbuild_array "$pkg_path" pkgname)
-        if test -z "$c"
-            continue
-        end
-        if contains -- $c $tried
-            continue
-        end
-        set -a tried $c
-        for r in main "$pkgver-$pkgrel"
-            set -l f "$tmp/$c-$r.SRCINFO"
-            if not curl -fsSL --max-time 60 -o "$f" "https://gitlab.archlinux.org/archlinux/packaging/packages/$c/-/raw/$r/.SRCINFO" 2>/dev/null
-                continue
-            end
-            if not test -s "$f"
-                continue
-            end
-            # A revision that does not carry our pkgver is no anchor: it
-            # describes different files. A failed fetch can still leave a body
-            # behind (a 404 page passes `test -s`), so an unreadable pkgver has
-            # to be a clean mismatch rather than a comparison with nothing.
-            set -l v (srcinfo_pkgver "$f")
-            if test -z "$v"
-                continue
-            end
-            if test "$v" = "$pkgver"
-                set srcinfo "$f"
-                set published "$c"
-                break
-            end
-            set seen_pkg "$c"
-            set seen_ver "$v"
-        end
-        if test -n "$published"
-            break
-        end
-    end
-    if test -z "$published"
-        if test -n "$seen_ver"
-            ui_error "$pkg_name: refusing to build — pkgver was synced to $pkgver-$pkgrel, but the official packaging repo carries $seen_ver"
-            echo "  (read from the .SRCINFO of the official $seen_pkg packaging repo; anchoring to another version's checksums would describe different files)"
-        else
-            ui_error "$pkg_name: refusing to build — pkgver was synced to $pkgver-$pkgrel, and the official Arch packaging repo carries no revision of $pkgbase at that version to anchor the checksums to"
-        end
-        echo "$refuse_manual"
-        rm -rf -- "$tmp"
-        return 3
-    end
-
+    set -l published "$provider_id"
     set -l map "$tmp/map"
-    srcinfo_sum_map "$srcinfo" >"$map"
-    if test $status -ne 0; or not test -s "$map"
-        ui_error "$pkg_name: refusing to build — the official .SRCINFO for $published does not line its sources up with its checksums, so it cannot be used as an anchor"
-        echo "$refuse_manual"
-        rm -rf -- "$tmp"
-        return 3
+    set -l release_tag ""
+    switch "$provider"
+        case arch
+            # The pkgbase is usually right; some recipes follow a name Arch
+            # does not (hip-runtime lives under hip), so try split names too.
+            # `main` comes first; the version's own tag is the fallback when
+            # the packaging repo has moved past the repo version.
+            set -l tried
+            set -l seen_pkg ""
+            set -l seen_ver ""
+            for c in $pkgbase (pkgbuild_array "$pkg_path" pkgname)
+                if test -z "$c"
+                    continue
+                end
+                if contains -- $c $tried
+                    continue
+                end
+                set -a tried $c
+                for r in main "$pkgver-$pkgrel"
+                    set -l f "$tmp/$c-$r.SRCINFO"
+                    if not curl -fsSL --max-time 60 -o "$f" "https://gitlab.archlinux.org/archlinux/packaging/packages/$c/-/raw/$r/.SRCINFO" 2>/dev/null
+                        continue
+                    end
+                    if not test -s "$f"
+                        continue
+                    end
+                    # A revision that does not carry our pkgver is no anchor:
+                    # it describes different files.
+                    set -l v (srcinfo_pkgver "$f")
+                    if test -z "$v"
+                        continue
+                    end
+                    if test "$v" = "$pkgver"
+                        set srcinfo "$f"
+                        set published "$c"
+                        break
+                    end
+                    set seen_pkg "$c"
+                    set seen_ver "$v"
+                end
+                if test -n "$srcinfo"
+                    break
+                end
+            end
+            if test -z "$srcinfo"
+                if test -n "$seen_ver"
+                    ui_error "$pkg_name: refusing to build — pkgver was synced to $pkgver-$pkgrel, but the official packaging repo carries $seen_ver"
+                    echo "  (read from the .SRCINFO of the official $seen_pkg packaging repo; anchoring to another version's checksums would describe different files)"
+                else
+                    ui_error "$pkg_name: refusing to build — pkgver was synced to $pkgver-$pkgrel, and the official Arch packaging repo carries no revision of $pkgbase at that version to anchor the checksums to"
+                end
+                echo "$refuse_manual"
+                rm -rf -- "$tmp"
+                return 3
+            end
+            srcinfo_sum_map "$srcinfo" >"$map"
+            set -l map_status $status
+            if test $map_status -ne 0; or not test -s "$map"
+                ui_error "$pkg_name: refusing to build — the official .SRCINFO for $published does not line its sources up with its checksums, so it cannot be used as an anchor"
+                echo "$refuse_manual"
+                rm -rf -- "$tmp"
+                return 3
+            end
+        case aur
+            set srcinfo "$provider_file"
+            if not test -s "$srcinfo"; or test (srcinfo_pkgbase "$srcinfo") != "$provider_id"; or test (srcinfo_pkgbase "$srcinfo") != "$pkgbase"; or test (srcinfo_pkgver "$srcinfo") != "$pkgver"
+                ui_error "$pkg_name: refusing to build — the AUR .SRCINFO for $provider_id does not match pkgbase $pkgbase and pkgver $pkgver"
+                echo "$refuse_manual"
+                rm -rf -- "$tmp"
+                return 3
+            end
+            if not srcinfo_matches_sources "$srcinfo" "$pkg_path"
+                ui_error "$pkg_name: refusing to build — the AUR .SRCINFO sources for $provider_id do not exactly match the rewritten recipe"
+                echo "$refuse_manual"
+                rm -rf -- "$tmp"
+                return 3
+            end
+            srcinfo_sum_map "$srcinfo" >"$map"
+            set -l map_status $status
+            if test $map_status -ne 0
+                ui_error "$pkg_name: refusing to build — the AUR .SRCINFO for $provider_id does not line its sources up with its checksums"
+                echo "$refuse_manual"
+                rm -rf -- "$tmp"
+                return 3
+            end
+        case github
+            set -l tag_file "$tmp/release-tag"
+            github_release_checksum_map "$provider_id" "$pkgver" "$tmp" "$map" "$tag_file"
+            if test $status -ne 0
+                echo "$refuse_manual"
+                rm -rf -- "$tmp"
+                return 2
+            end
+            set release_tag (cat "$tag_file" 2>/dev/null)
+        case '*'
+            ui_error "$pkg_name: refusing to build — unsupported version sync provider '$provider'"
+            rm -rf -- "$tmp"
+            return 2
     end
 
-    # Grade before writing. An entry the official file does not cover cannot be
-    # anchored to anything Arch published — no longer a refusal (2026-09-24):
-    # the documented manual remedy was always 'updpkgsums in that recipe', and
-    # the sync runs that itself, recording the entries as refresh-only below.
-    # Entries the official file DOES cover are still verified against Arch's
-    # value after the write (the verification loop further down); that half is
-    # unchanged — a disagreement still refuses and restores.
+    # Grade before writing. An entry the provider does not cover cannot be
+    # anchored to a published value, so it follows the loud refresh-only path.
+    # A published digest is still verified after the write; a disagreement
+    # refuses and restores.
     set -l refresh_only
-    for fn in $anchor_names
-        if not grep -qF -- (printf '%s\t' $fn) "$map"
+    set -l anchor_index 1
+    while test $anchor_index -le (count $anchor_names)
+        set -l fn $anchor_names[$anchor_index]
+        set -l entry $anchor_entries[$anchor_index]
+        if test "$provider" = github
+            set -l asset_name (github_release_asset_name "$entry")
+            if test -z "$asset_name"; or not github_source_matches_release "$entry" "$provider_id" "$release_tag"
+                set -a refresh_only $fn
+            else if not grep -qF -- (printf '%s\t' "$asset_name") "$map"
+                set -a refresh_only $fn
+            end
+        else if not grep -qF -- (printf '%s\t' $fn) "$map"
             set -a refresh_only $fn
         end
+        set anchor_index (math $anchor_index + 1)
     end
 
     if not cp -- "$pkg_path/PKGBUILD" "$tmp/PKGBUILD.orig"
@@ -1720,10 +2241,11 @@ function anchor_sums_from_official -a pkg_path
         return 2
     end
 
-    # Verify the fetched sources against Arch's values. This is the step that
-    # makes the refresh an anchor rather than a rubber stamp, and it is why the
-    # algorithm does not have to match: Arch's hash is checked against the
-    # artifact, and the artifact is what the recipe's own hash now describes.
+    # Verify the fetched sources against the provider's values. This is the step
+    # that makes the refresh an anchor rather than a rubber stamp, and it is why
+    # the algorithm does not have to match: the published hash is checked
+    # against the artifact, and the artifact is what the recipe's own hash now
+    # describes.
     # A VCS checkout is hashed the way makepkg hashes it (git archive of the
     # tag), because there is no file to run sha256sum on.
     set -l bad
@@ -1731,15 +2253,19 @@ function anchor_sums_from_official -a pkg_path
         set -l fn $anchor_names[$i]
         # Refresh-only entries have no published value to compare against —
         # they were recorded as fetch-only above; only anchored entries are
-        # verified against Arch here.
+        # verified against the selected provider here.
         if contains -- $fn $refresh_only
             continue
         end
         set -l e $anchor_entries[$i]
-        set -l alg (awk -F'\t' -v f="$fn" '$1==f{print $2}' "$map")
-        set -l want (awk -F'\t' -v f="$fn" '$1==f{print $3}' "$map")
+        set -l map_name "$fn"
+        if test "$provider" = github
+            set map_name (github_release_asset_name "$e")
+        end
+        set -l alg (awk -F'\t' -v f="$map_name" '$1==f{print $2}' "$map")
+        set -l want (awk -F'\t' -v f="$map_name" '$1==f{print $3}' "$map")
         if not contains -- $alg sha256 sha512 md5 b2
-            set -a bad "$fn: Arch publishes an algorithm this check does not know ('$alg')"
+            set -a bad "$fn: $checksum_owner publishes an algorithm this check does not know ('$alg')"
             continue
         end
         set -l got ""
@@ -1747,10 +2273,10 @@ function anchor_sums_from_official -a pkg_path
             set got (vcs_source_sum "$pkg_path" "$e" "$alg")
             switch $status
                 case 1
-                    set -a bad "$fn: the VCS checkout was not available to recompute Arch's $alg against"
+                    set -a bad "$fn: the VCS checkout was not available to recompute $checksum_owner's $alg against"
                     continue
                 case 2
-                    set -a bad "$fn: 'git archive' could not reproduce the $alg Arch publishes for this checkout"
+                    set -a bad "$fn: 'git archive' could not reproduce the $alg $checksum_owner publishes for this checkout"
                     continue
             end
         else
@@ -1761,20 +2287,26 @@ function anchor_sums_from_official -a pkg_path
                 set file "$SRCDEST/$fn"
             end
             if test -z "$file"
-                set -a bad "$fn: not fetched into the recipe or \$SRCDEST, so Arch's checksum could not be applied to it"
+                set -a bad "$fn: not fetched into the recipe or \$SRCDEST, so $checksum_owner's checksum could not be applied to it"
                 continue
             end
             set got (command "$alg"sum "$file" | string replace -r '\s+.*$' '')
         end
         if test "$got" != "$want"
-            set -a bad "$fn: Arch's $alg is $want, the fetched source hashes to $got"
+            set -a bad "$fn: $checksum_owner's $alg is $want, the fetched source hashes to $got"
         end
     end
     if test (count $bad) -gt 0
         cp --force -- "$tmp/PKGBUILD.orig" "$pkg_path/PKGBUILD"
-        ui_error "$pkg_name: refusing to build — a source does not match the official Arch checksum"
-        printf '  %s\n' $bad
-        echo "  Nothing was built or installed and the recipe was restored. A source that disagrees with Arch's published checksum is a different source, not a stale sum."
+        if test "$provider" = arch
+            ui_error "$pkg_name: refusing to build — a source does not match the official Arch checksum"
+            printf '  %s\n' $bad
+            echo "  Nothing was built or installed and the recipe was restored. A source that disagrees with Arch's published checksum is a different source, not a stale sum."
+        else
+            ui_error "$pkg_name: refusing to build — a source does not match the $checksum_owner published checksum"
+            printf '  %s\n' $bad
+            echo "  Nothing was built or installed and the recipe was restored. A source that disagrees with $checksum_owner's published checksum is a different source, not a stale sum."
+        end
         rm -rf -- "$tmp"
         return 4
     end
@@ -1787,35 +2319,29 @@ function anchor_sums_from_official -a pkg_path
     set -l n_refresh (count $refresh_only)
     set -l n_anchored (math (count $anchor_names) - $n_refresh)
     if test $n_refresh -gt 0
-        ui_warning "$pkg_name: official $published $pkgver publishes no checksum for (refreshed from the fetch, NOT anchored):"
+        ui_warning "$pkg_name: $authority_phrase $published $pkgver publishes no checksum for (refreshed from the fetch, NOT anchored):"
         printf '  %s\n' $refresh_only
         echo "  Attestation: a detached signature is PGP-verified against the anchored payload at build time, a VCS source is pinned by its #tag/#commit, and a plain download is attested by nothing but the fetch (TLS). Review these sums before committing; '--no-sync' builds the committed version as-is."
     end
 
-    # The sums are part of the committed .SRCINFO too. Refresh it when the
-    # recipe ships one, so a synced-and-anchored recipe does not leave a stale
-    # .SRCINFO pinning the previous version's checksums (srcinfo-freshness.sh).
-    if test -f "$pkg_path/.SRCINFO"
-        if $run_as makepkg --printsrcinfo --dir "$pkg_path" >"$pkg_path/.SRCINFO.tmp" 2>/dev/null
-            mv -f -- "$pkg_path/.SRCINFO.tmp" "$pkg_path/.SRCINFO"
-        else
-            rm -f -- "$pkg_path/.SRCINFO.tmp"
-            ui_warning "$pkg_name: the checksums were re-anchored but the committed .SRCINFO could not be refreshed; regenerate it with 'makepkg --printsrcinfo > .SRCINFO'"
-        end
-    end
+    refresh_package_srcinfo "$pkg_path" "the source checksums were updated"
 
     if test $n_anchored -gt 0
-        ui_info "$pkg_name: checksums re-anchored to the official $published $pkgver checksums, and verified against the fetched sources"
+        ui_info "$pkg_name: checksums re-anchored to $authority_phrase $published $pkgver checksums, and verified against the fetched sources"
     else
-        ui_info "$pkg_name: checksums refreshed for $pkgver — official $published publishes no checksum for any moved source"
+        ui_info "$pkg_name: checksums refreshed for $pkgver — $authority_phrase $published publishes no checksum for any moved source"
     end
-    set -l synced_note "$pkg_name: checksums re-anchored to official $published $pkgver"
+    set -l synced_note "$pkg_name: checksums re-anchored to $authority_phrase $published $pkgver"
     if test $n_refresh -gt 0
-        set synced_note "$pkg_name: checksums refreshed at $pkgver — $n_anchored anchored to official $published, $n_refresh refresh-only (fetch-only sums: review before committing)"
+        set synced_note "$pkg_name: checksums refreshed at $pkgver — $n_anchored anchored to $authority_phrase $published, $n_refresh refresh-only (fetch-only sums: review before committing)"
     end
     printf '%s\n' "$synced_note" >>"$_STATE_DIR/synced.list" 2>/dev/null
     rm -rf -- "$tmp"
     return 0
+end
+
+function anchor_sums_from_official -a pkg_path
+    anchor_sums_from_provider "$pkg_path" arch "" "" $argv[2..-1]
 end
 
 # ─── List built package files for a PKGBUILD (all splits, current version) ───
@@ -3582,26 +4108,60 @@ function build_package -a package_id install_flag clean_flag skip_flag no_sync_f
         end
     end
 
-    # Sync stable recipes with the latest Arch repository version.
+    if not ensure_state_dirs
+        return 1
+    end
+    set -l log_file (package_log_file "$package_id")
+    # Initialize the package log before sync so provider errors and checksum
+    # decisions survive; later makepkg and install output append to this file.
+    if not ensure_log_writable "$log_file"
+        ui_error "cannot write build log: $log_file"
+        return 1
+    end
+    if not printf '' >"$log_file"
+        ui_error "cannot write build log: $log_file"
+        return 1
+    end
+
+    # An explicit topology opt-in selects nvchecker; every other stable recipe
+    # keeps the existing Arch repository behavior.
     #
-    # What makes the committed sums stale is not the version number but a moved
-    # *source*: 26 of the 28 stable recipes pin a literal version inside their
-    # source=() URLs, so a pkgver rewrite leaves them fetching exactly what they
-    # fetched before and their sums still verify. Only linux-api-headers and
-    # linux-firmware spell the version into a URL. Diffing the array around the
-    # rewrite is therefore the precise signal, and treating every pkgver bump as
-    # stale would refuse builds whose sums were never in question.
+    # In the default Arch path, what makes committed sums stale is not the
+    # version number but a moved *source*: 26 of the 28 stable recipes pin a
+    # literal version inside their source=() URLs, so a pkgver rewrite leaves
+    # them fetching exactly what they fetched before and their sums still
+    # verify. Only linux-api-headers and linux-firmware spell the version into a
+    # URL. Diffing the array around the rewrite is therefore the precise signal,
+    # and treating every pkgver bump as stale would refuse builds whose sums
+    # were never in question.
     set -l sources_before (pkgbuild_array "$pkg_path" source)
+    set -l external_sync 0
     if test "$no_sync_flag" != "1"
-        sync_stable_version "$pkg_path"
-        switch $status
-            case 0 1 3
-                # 1 = pkgver moved, 3 = only pkgrel/epoch moved; the source diff
-                # below is what decides, since neither answer implies the sources
-                # moved.
-            case '*'
-                ui_error "failed to synchronize stable metadata for $pkg_name"
-                return 1
+        set -l version_provider (package_version_sync_provider "$package_id")
+        if test "$version_provider" = nvchecker
+            sync_nvchecker_version "$package_id" "$pkg_path"
+            set -l sync_status $status
+            switch $sync_status
+                case 0 1 3
+                    # Source changes and checksum anchoring are handled by the
+                    # opted-in provider path as one rollback boundary.
+                case $lane_outcome_defer
+                    return $lane_outcome_defer
+                case '*'
+                    ui_error "failed to synchronize upstream metadata for $pkg_name"
+                    return 1
+            end
+            set external_sync 1
+        else
+            sync_stable_version "$pkg_path"
+            switch $status
+                case 0 1 3
+                    # 1 = pkgver moved, 3 = only pkgrel/epoch moved; the source
+                    # diff below decides whether the sums need re-anchoring.
+                case '*'
+                    ui_error "failed to synchronize stable metadata for $pkg_name"
+                    return 1
+            end
         end
     end
     set -l sources_after (pkgbuild_array "$pkg_path" source)
@@ -3616,7 +4176,7 @@ function build_package -a package_id install_flag clean_flag skip_flag no_sync_f
         end
     end
     set -l stale_sums 0
-    if test (count $moved_sources) -gt 0
+    if test (count $moved_sources) -gt 0; and test $external_sync -eq 0
         set stale_sums 1
     end
 
@@ -3624,37 +4184,17 @@ function build_package -a package_id install_flag clean_flag skip_flag no_sync_f
         ui_heading "Building: $pkg_name"
     end
 
-    if not ensure_state_dirs
-        return 1
-    end
-    set -l log_file (package_log_file "$package_id")
-    # Settle ownership/openability BEFORE the first open (see
-    # ensure_log_writable); the truncate below stays as the probe that names
-    # the file if a write still cannot be made — it must never be the first
-    # touch of a poisoned log. The makepkg redirects and install_pkgs_now's
-    # appends below all reuse this open file, so they are covered here.
-    if not ensure_log_writable "$log_file"
-        ui_error "cannot write build log: $log_file"
-        return 1
-    end
-    # Lane supervisors append their own diagnostics to this same log. Truncate
-    # it once here, then append every build stream so the outer redirection
-    # cannot be reordered by a later makepkg redirection.
-    if not printf '' >"$log_file"
-        ui_error "cannot write build log: $log_file"
-        return 1
-    end
-
     # Build
     set -l makepkg_args -sf --noconfirm
     if test $stale_sums -eq 1
-        # The sync moved a source URL, so the committed sums now describe the
-        # previous version. They are re-anchored to the official Arch checksums
-        # and the fetched sources are verified against those — not skipped (which
-        # builds unverified sources), and for an entry Arch publishes, never
-        # re-hashed from the fetch alone either (an entry Arch publishes NO
-        # checksum for is refreshed at sync time and recorded as fetch-only —
-        # anchor_sums_from_official's header carries the full trust model).
+        # The default Arch sync moved a source URL, so the committed sums now
+        # describe the previous version. They are re-anchored to the official
+        # Arch checksums and the fetched sources are verified against those —
+        # not skipped (which builds unverified sources), and for an entry Arch
+        # publishes, never re-hashed from the fetch alone either (an entry Arch
+        # publishes NO checksum for is refreshed at sync time and recorded as
+        # fetch-only — anchor_sums_from_official's header carries the trust
+        # model).
         #
         # Neither the anchoring nor a refusal may be silent: build_package is
         # only ever called quiet (every lane redirects its stdout/stderr into
@@ -3685,6 +4225,7 @@ function build_package -a package_id install_flag clean_flag skip_flag no_sync_f
     # Full redirect to the log (2026-09-07): 'tee' to a lagging terminal
     # backpressures compiler output; file-only logging is cheaper and keeps
     # the terminal readable. Failure tails are printed by the caller.
+    set -l archive_snapshot_before (package_archive_snapshot "$pkg_path")
     set -l start_s (date +%s)
     if test "$_BUILD_QUIET" != "1"
         echo "  makepkg $makepkg_args | log: $log_file"
@@ -3722,6 +4263,33 @@ function build_package -a package_id install_flag clean_flag skip_flag no_sync_f
         makepkg $makepkg_args >>"$log_file" 2>&1
     end
     set -l rc $status
+    set -l archive_snapshot_after (package_archive_snapshot "$pkg_path")
+    set -l changed_archives
+    set -l archive_revision_error ""
+    for after_row in $archive_snapshot_after
+        set -l after_fields (string split \t -- "$after_row")
+        if test (count $after_fields) -ne 3
+            set archive_revision_error "cannot inspect package archive after building"
+            continue
+        end
+        set -l old_mtime ""
+        set -l old_size ""
+        for before_row in $archive_snapshot_before
+            set -l before_fields (string split \t -- "$before_row")
+            if test (count $before_fields) -eq 3; and test "$before_fields[1]" = "$after_fields[1]"
+                set old_mtime "$before_fields[2]"
+                set old_size "$before_fields[3]"
+                break
+            end
+        end
+        if test -z "$old_mtime"; or test "$old_mtime" != "$after_fields[2]"; or test "$old_size" != "$after_fields[3]"
+            set -a changed_archives "$after_fields[1]"
+            if test -e "$after_fields[1].gsa-vcs-revisions"; \
+                and not rm -f -- "$after_fields[1].gsa-vcs-revisions"
+                set archive_revision_error "cannot invalidate the old VCS revision record for "(basename "$after_fields[1]")
+            end
+        end
+    end
     if not popd >/dev/null
         ui_error "cannot restore working directory after building $pkg_name"
         return 1
@@ -3740,15 +4308,26 @@ function build_package -a package_id install_flag clean_flag skip_flag no_sync_f
         end
     end
 
+    if test -n "$archive_revision_error"
+        ui_error "$pkg_name: $archive_revision_error"
+        return 1
+    end
+
     if test $rc -ne 0
         if test "$_BUILD_QUIET" != "1"
             ui_error "$pkg_name: BUILD FAILED (rc=$rc)"
             echo "  Log: $log_file"
             ui_warning "Last lines:"
-    set -l archive_snapshot_before (package_archive_snapshot "$pkg_path")
             print_log_tail "$log_file"
         end
         return 1
+    end
+
+    for archive in $changed_archives
+        if not record_vcs_archive_revisions "$pkg_path" "$archive"
+            ui_error "$pkg_name: build succeeded but VCS revisions could not be recorded for "(basename "$archive")": $_VCS_REVISION_ERROR"
+            return 1
+        end
     end
 
     if test "$_BUILD_QUIET" != "1"
@@ -3783,33 +4362,6 @@ end
 #   pacman can contend on its database lock.
 # - Lane supervisors use isolated sessions and redirect their complete
 #   stdout/stderr stream to the package log; only the parent renders status.
-    set -l archive_snapshot_after (package_archive_snapshot "$pkg_path")
-    set -l changed_archives
-    set -l archive_revision_error ""
-    for after_row in $archive_snapshot_after
-        set -l after_fields (string split \t -- "$after_row")
-        if test (count $after_fields) -ne 3
-            set archive_revision_error "cannot inspect package archive after building"
-            continue
-        end
-        set -l old_mtime ""
-        set -l old_size ""
-        for before_row in $archive_snapshot_before
-            set -l before_fields (string split \t -- "$before_row")
-            if test (count $before_fields) -eq 3; and test "$before_fields[1]" = "$after_fields[1]"
-                set old_mtime "$before_fields[2]"
-                set old_size "$before_fields[3]"
-                break
-            end
-        end
-        if test -z "$old_mtime"; or test "$old_mtime" != "$after_fields[2]"; or test "$old_size" != "$after_fields[3]"
-            set -a changed_archives "$after_fields[1]"
-            if test -e "$after_fields[1].gsa-vcs-revisions"; \
-                and not rm -f -- "$after_fields[1].gsa-vcs-revisions"
-                set archive_revision_error "cannot invalidate the old VCS revision record for "(basename "$after_fields[1]")
-            end
-        end
-    end
 # - Result protocol: each lane job writes "pkgdir rc seconds" to its result
 #   file; the dispatcher polls those files every 0.5 s.
 # - lanes=1 preserves the old sequential semantics exactly (strict topo order).
@@ -3828,28 +4380,16 @@ function deps_of -a pkg
             return
         end
     end
-    if test -n "$archive_revision_error"
-        ui_error "$pkg_name: $archive_revision_error"
-        return 1
-    end
-
 end
 
 # ─── Topology tags (the record's tags field) ─────────────────────────────────
 # The vocabulary is closed and loader-validated: abi=must (batch anchor or
 # mandatory member), abi=should (same-pass candidate) and app-cluster=<name>
-# (members sharing the name render as ONE app-prompt toggle row). These
-# helpers turn the abi tags + edge graph into the batch relation; the gate in
-# main consumes it. package_app_cluster is the app prompt's seam.
+# (members sharing the name render as ONE app-prompt toggle row), plus the
+# version-sync=nvchecker provider opt-in. These helpers expose each tag only to
+# its owning seam.
 # package_abi_severity PKG → must | should | none
 function package_abi_severity -a pkg
-    for archive in $changed_archives
-        if not record_vcs_archive_revisions "$pkg_path" "$archive"
-            ui_error "$pkg_name: build succeeded but VCS revisions could not be recorded for "(basename "$archive")": $_VCS_REVISION_ERROR"
-            return 1
-        end
-    end
-
     for entry in $_TAGS
         set -l parts (string split '|' -- "$entry")
         test "$parts[1]" = "$pkg"; or continue
@@ -3861,6 +4401,25 @@ function package_abi_severity -a pkg
         else
             echo none
         end
+        return
+    end
+    echo none
+end
+
+# package_version_sync_provider PKG → nvchecker | none.
+# The topology tag is the opt-in; a recipe config alone does not select a
+# version provider.
+function package_version_sync_provider -a pkg
+    for entry in $_TAGS
+        set -l parts (string split '|' -- "$entry")
+        test "$parts[1]" = "$pkg"; or continue
+        for tag in (string split ',' -- "$parts[2]")
+            if test "$tag" = version-sync=nvchecker
+                echo nvchecker
+                return
+            end
+        end
+        echo none
         return
     end
     echo none
@@ -3933,7 +4492,7 @@ function package_log_file -a pkg
     echo "$LOG_DIR/"(basename "$pkg")".log"
 end
 
-# What this run rewrote in the tree through the stable sync, as run-level
+# What this run rewrote in the tree through version/checksum sync, as run-level
 # witness: a run never commits (the disposition of these edits is the owner's),
 # so the end-of-run summary must name every recipe whose PKGBUILD the sync or
 # the sum refresh touched — otherwise the dirty tree has only a per-package
@@ -3944,7 +4503,7 @@ function print_synced_notes
     if not test -s "$f"
         return 0
     end
-    echo "Synced with the repo this run (uncommitted — review with 'git diff', then commit):"
+    echo "Version and checksum sync this run (uncommitted — review with 'git diff', then commit):"
     sed 's/^/  /' "$f"
 end
 
@@ -5962,24 +6521,13 @@ function usage
     echo "  -c, --clean       Clean build artifacts before building"
     echo "  -s, --skip        Skip fresh archives only when each VCS source ref matches"
     echo "                    its recorded revision; missing baselines/remotes abort."
-    echo "  --no-sync          Don't auto-update stable package versions from repos."
-    echo "                     The default sync rewrites pkgver/pkgrel in place. When a"
-    echo "                     source=() URL moves with the version, the recipe's checksums"
-    echo "                     are re-anchored to the value Arch published for that version"
-    echo "                     (the official packaging repo's .SRCINFO) and the fetched"
-    echo "                     sources are verified against it — never skipped, and for an"
-    echo "                     entry Arch publishes, never re-hashed from the fetch alone."
-    echo "                     An entry Arch publishes NO checksum for (SKIP or absent) is"
-    echo "                     instead refreshed by updpkgsums at sync time — the old"
-    echo "                     manual remedy, now automatic — and recorded per entry in"
-    echo "                     the log and the run summary as fetch-only, for you to"
-    echo "                     review before committing. With no official revision at"
-    echo "                     that version the recipe cannot be classified at all: it"
-    echo "                     REFUSES, restores the recipe, and the run DEFERS it —"
-    echo "                     parked with its recovery lines in the summary while the"
-    echo "                     rest of the dispatch continues. A bump that leaves"
-    echo "                     source=() alone builds against the committed sums unchanged."
-    echo "                     See docs/build-guide.md."
+    echo "  --no-sync         Don't auto-update stable or opted-in recipe versions."
+    echo "                    Stable recipes use pacman -Si; only a record tagged"
+    echo "                    version-sync=nvchecker uses its .nvchecker.toml provider."
+    echo "                    Moved sources are checked against published provider sums;"
+    echo "                    missing GitHub digests are labelled fetch-only. Provider"
+    echo "                    outages defer, while checksum mismatches stop the run and"
+    echo "                    restore PKGBUILD. See docs/build-guide.md."
     echo "  --lanes N|auto     Run N makepkg lanes, or choose from CPU/RAM (default "(string join '' -- "$_DEFAULT_LANES")"). Interactive"
     echo "                    terminals get a compact dashboard with active log tails;"
     echo "                    pipes use plain output. Packages start as soon as deps are installed;"

@@ -236,7 +236,8 @@ for runs that compile no Rust, not a way past a real ABI mismatch.
 
 The remaining build-time flags: `-s`/`--skip` (skip a package whose
 `.pkg.tar.zst` is newer than its `PKGBUILD` — the resume idiom), `--no-sync`
-(stop auto-updating stable versions from the repos), `--intensity LEVEL`
+(skip the Arch version query and every explicitly opted-in nvchecker provider),
+`--intensity LEVEL`
 (`low`…`max`, default `xhigh`), `--lanes`, `--jobs`. Note the short-flag
 overloads: `-s` is *not* install, `-l` is `--list`, `-n` is `--dry-run`, and
 the three wipe strengths are `-c`/`--clean` (`src/`, `pkg/`, `build/` and the
@@ -275,8 +276,10 @@ Four modules, deliberately separated (`docs/architecture.md`):
    retired 2026-09-27 and its two recipes moved to `packages/stable/`) and local
    build-order edges (a trailing empty `edges` field is a deliberate no-edge
    record) live in the same record, as do optional `abi=must`/`abi=should`
-   coupled-batch tags consumed by the generic batch gate and the
-   `app-cluster=<name>` prompt-cluster tag. Tooling reads
+   coupled-batch tags consumed by the generic batch gate, the
+   `app-cluster=<name>` prompt-cluster tag, and the validated
+   `version-sync=nvchecker` build-time provider opt-in. A `.nvchecker.toml`
+   without that tag remains report-only. Tooling reads
    topology through the builder's `--topology` data channel, never by parsing
    `config/` directly. `build-defaults.conf` holds the GiB-per-job
    baselines (`memory_per_job_gib`, `core_memory_per_job_gib`,

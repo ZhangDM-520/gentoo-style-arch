@@ -10,10 +10,11 @@ names (`git, stable, core, misc, app`), `edges` is the comma
 list of the packages this one consumes (its local build-order edges — a record
 ending in a bare `|` is a deliberate no-edge record), and `tags` carries
 coupled-batch policy
-(`abi=must` / `abi=should`, see "Updating coupled stacks") and the optional
-`app-cluster=<name>` prompt-cluster tag (see "The app group"). The loader
-validates every record on every invocation and one malformed record breaks
-every command — and names the offender.
+(`abi=must` / `abi=should`, see "Updating coupled stacks"), the optional
+`app-cluster=<name>` prompt-cluster tag (see "The app group"), and the explicit
+`version-sync=nvchecker` provider opt-in (see "Version-synced external
+releases"). The loader validates every record on every invocation and one
+malformed record breaks every command — and names the offender.
 
 Keep `.SRCINFO` synchronized:
 
@@ -34,6 +35,23 @@ does both, and `tests/kernel-recipes.sh` pins it. Never grow `b2sums` with
 per-knob `b2sums+=(…)` appends next to each `source+=(…)`: `updpkgsums`
 rewrites the whole assignment as a literal on every version bump, so the
 appends double-count at the first bump.
+
+## Version-synced external releases
+
+The `version-sync=nvchecker` topology tag is the only switch that routes a
+build-time version update through a recipe's `.nvchecker.toml`; other configs
+remain report-only. Use `fish build-all.fish --topology` to inspect the
+validated opt-in records rather than inferring them from recipe paths.
+
+Before adding an opt-in, pin the provider's identity in the matching tracker
+section and ensure the recipe's version format can be applied safely. For AUR,
+the fetched `.SRCINFO` must match `pkgbase`, `pkgver`, and the expanded source
+array before it can supply pkgrel/epoch or checksum anchors. For GitHub, a
+release digest anchors only the configured repo/tag/asset; absent digests are
+reported as fetch-only. Provider outages defer the package, while a checksum
+mismatch refuses the run and restores the recipe. `--no-sync` bypasses all
+provider lookups and edits; see `docs/build-guide.md` for the full trust and
+recovery contract.
 
 ## The app group
 

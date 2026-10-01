@@ -239,10 +239,25 @@
     **If the builder lowers a guard for a build, the log and the artifact must
     say so** — a weakening that leaves no record is indistinguishable from a
     bug (a refresh-only sum is exactly such a disclosed lowering: named in the
-    package log and in the run-level `Synced with the repo this run` summary,
+    package log and in the run-level `Version and checksum sync this run` summary,
     never silent). **And if the builder auto-updates a value, the new value must be checked
     against a source the builder did not itself produce** — self-consistent is
     not verified.
+    Since 2026-10-01, the Arch path remains the default for untagged recipes;
+    only a validated `version-sync=nvchecker` topology tag selects an external
+    provider (`.nvchecker.toml` presence alone is not opt-in). The resolver runs
+    one config section with disposable state outside the repo and normal
+    `NVCHECK_STATE_DIR`. AUR `.SRCINFO` must match provider pkgbase, resolved
+    pkgver, and the recipe's expanded sources before it supplies pkgrel/epoch
+    or checksums; at equal pkgver, never lower a local pkgrel. For GitHub, bind
+    an asset digest to the configured repository, release tag and remote URL
+    basename (not a `name::url` local override);
+    when no digest is published, label refreshed sums fetch-only. Provider
+    outages and AUR metadata races defer and restore rewrites; a published
+    checksum mismatch stops the run and restores the recipe. Unsupported
+    version mappings refuse. `--no-sync` suppresses Arch and nvchecker lookups,
+    rewrites and checksum refreshes. Open the package log before sync so
+    provider errors and anchor decisions survive the build path.
 19. **Runtime state is owned at WRITE time** (09-23 log-ownership incident):
     root mode's logs/locks/dirs are opened by the SUPERVISOR's shell, so
     repair-at-package-exit had a crash window: a killed root run left its
@@ -918,7 +933,7 @@ constant, not a baked path).
   entry Arch publishes NO checksum for is refreshed by that same `updpkgsums`
   run and recorded LOUDLY as fetch-only — the manual remedy it used to
   prescribe, automated, with the review/commit instruction in the run-level
-  `Synced with the repo this run` summary; with no official document the
+  `Version and checksum sync this run` summary; with no official document the
   recipe refuses, restores, and is DEFERRED — parked with a named marker and
   its recovery lines while the dispatch continues, its dependents held back
   and labelled `waits on a deferred package`.
