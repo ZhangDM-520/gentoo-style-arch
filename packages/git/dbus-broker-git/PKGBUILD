@@ -92,7 +92,7 @@ build() {
     -D b_ndebug=true
   )
 
-  meson setup "$pkgbase" build \
+  meson setup --wipe "$pkgbase" build \
     --prefix /usr \
     --libexecdir lib \
     --sbindir bin \

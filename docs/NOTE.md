@@ -36,6 +36,29 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-01 — dbus-broker stale Meson Rust option state
+
+- **Symptom**: rebuilding `dbus-broker-git` failed while Ninja regenerated the
+  Meson build files, with `KeyError: 'Tried to access nonexistant project
+  parent option b_freestanding.'` from Rust compiler option initialization.
+  A clean setup of the same prepared source and recipe options succeeded.
+- **Root cause**: the retained Meson CoreData lacked the Rust base option
+  `b_freestanding`, which `RustCompiler.init_from_options()` reads. The recipe
+  reused `$srcdir/build` across VCS source refreshes, so automatic regeneration
+  encountered incomplete cached option state.
+- **Fix**: `dbus-broker-git` now uses `meson setup --wipe` with the complete
+  recipe option set before compiling, so setup rebuilds that cached state.
+- **Validation**: `tests/dbus-broker-meson.sh` models stale option state at the
+  PKGBUILD `build()` seam and its inline Meson stub emits the exact captured
+  KeyError before the change; it passes after. A real no-compile Meson setup
+  with `--wipe` and the prepared source/options succeeded. Recipe syntax and
+  `.SRCINFO` checks passed, as did all 45 fixtures; no package build or
+  installation was run.
+- **Rule**: when a VCS recipe reuses a Meson build directory across source
+  refreshes, wipe it before setup if cached compiler options can become stale.
+  Capture the first failing log: a later regeneration retry may pass after
+  state has changed.
+
 ## 2026-10-01 — legacy VCS archive baseline recovery
 
 - **Symptom**: `-s` refused existing VCS archives created before per-archive
