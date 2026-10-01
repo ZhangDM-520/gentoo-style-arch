@@ -36,6 +36,29 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-01 — ABI severity with non-ABI topology tags
+
+- **Symptom**: a real `-i` run with an ABI anchor and an `app-cluster`-only
+  selected package printed `test: Missing argument at index 3` in both the
+  ABI-dependent scan and anchor check, yet reported a successful run record.
+  Dry-runs did not enter the failing gate.
+- **Root cause**: `_TAGS` stores all valid tags, so
+  `package_abi_severity` matched the app-cluster record and returned without
+  output when it had no ABI severity. Callers compare that result with
+  `must`, `should`, or `none`; the empty result made fish's `test` invocation
+  incomplete.
+- **Fix**: return `none` for a matched record with no ABI tag, preserving the
+  shared tag index and the separate optional app-cluster lookup. Added a
+  stubbed real-run regression case combining ABI, app-cluster-only, untagged,
+  and mixed-tag records.
+- **Validation**: section E reproduced both diagnostics before the fix and
+  passes afterward. Post-fix checks passed: `fish -n build-all.fish`,
+  `bash -n tests/abi-batch-policy.sh`, `bash tests/abi-batch-policy.sh`,
+  `bash tests/app-group.sh`, and `bash tests/run-all.sh` (43 fixtures).
+- **Rule**: helpers over a shared topology-tag field must return their complete
+  contract even when a record contains only another valid tag; dry-runs do
+  not substitute for exercising real scheduler gates.
+
 ## 2026-10-01 — split `glibc-git` package integration
 
 - **Change**: added one `packages/core/glibc-git` recipe with the matched

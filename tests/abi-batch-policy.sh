@@ -388,4 +388,66 @@ if ((llvm_idx >= rust_idx)); then
     exit 1
 fi
 
+# ─── E. Non-ABI tags keep the severity result at `none` ─────────────────────
+# _TAGS carries app-cluster tags as well as ABI tags. A cluster-only record is
+# valid and must not produce an empty package_abi_severity result during the
+# real-build ABI gate. The combined record below pins that its ABI severity is
+# still used when an app-cluster tag is also present.
+dir_e="$fixture/non-abi-tags"
+make_workspace "$dir_e" 1 2 low
+add_meta_package "$dir_e" llvm-git ''
+add_meta_package "$dir_e" fcitx5-git ''
+add_meta_package "$dir_e" fcitx5-qt-git ''
+add_meta_package "$dir_e" untagged-app ''
+set_topology_record "$dir_e" llvm-git core '' 'abi=must'
+set_topology_record "$dir_e" fcitx5-git app '' 'app-cluster=fcitx5'
+set_topology_record "$dir_e" fcitx5-qt-git app 'llvm-git' 'abi=should,app-cluster=fcitx5'
+set_topology_record "$dir_e" untagged-app app ''
+stub_sudo "$dir_e"
+stub_pacman "$dir_e"
+stub_makepkg "$dir_e"
+
+run_env_e() {
+    run_builder env \
+        PATH="$dir_e/bin:$PATH" \
+        GSA_STATE_DIR="$dir_e/state" \
+        GSA_FAKE_PACMAN_LOG="$dir_e/pacman.log" \
+        GSA_CPU_THREADS=8 \
+        GSA_MEMORY_GIB=16 \
+        fish "$dir_e/build-all.fish" "$@"
+}
+
+# The ABI member stays outside the --no-deps selection, so the installed
+# abi=should candidate is reported. Both the cluster-only and untagged records
+# must be treated as severity `none` at the same gate.
+run_env_e --no-deps -i --no-sync --allow-broken-rustc \
+    llvm-git fcitx5-git untagged-app
+if [[ $FIXTURE_RC -ne 0 ]]; then
+    printf 'E: real build with a cluster-only tag failed (rc=%d):\n%s\n' \
+        "$FIXTURE_RC" "$FIXTURE_OUTPUT" >&2
+    exit 1
+fi
+if grep -Fq 'test: Missing argument at index 3' <<<"$FIXTURE_OUTPUT"; then
+    printf 'E: non-ABI tags produced an empty ABI severity:\n%s\n' \
+        "$FIXTURE_OUTPUT" >&2
+    exit 1
+fi
+if ! grep -Fq 'same-pass candidates not in this selection: fcitx5-qt-git' \
+    <<<"$FIXTURE_OUTPUT"; then
+    printf 'E: combined app-cluster/abi=should member was not preserved as a candidate:\n%s\n' \
+        "$FIXTURE_OUTPUT" >&2
+    exit 1
+fi
+if [[ $(rr_scalar outcome <<<"$FIXTURE_OUTPUT") != success ]]; then
+    printf 'E: run record did not report success:\n%s\n' "$FIXTURE_OUTPUT" >&2
+    exit 1
+fi
+for pkg in llvm-git fcitx5-git untagged-app; do
+    if [[ $(rr_row "$pkg" status <<<"$FIXTURE_OUTPUT") != succeeded ]]; then
+        printf 'E: selected package %s did not succeed:\n%s\n' \
+            "$pkg" "$FIXTURE_OUTPUT" >&2
+        exit 1
+    fi
+done
+
 printf 'abi-batch-policy fixture: PASS\n'

@@ -3429,6 +3429,8 @@ function package_abi_severity -a pkg
             echo must
         else if contains abi=should $tags
             echo should
+        else
+            echo none
         end
         return
     end
