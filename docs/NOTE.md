@@ -36,6 +36,21 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-01 — `glibc-git` / `lib32-glibc-git` integration research
+
+- **Question**: how to add and optimize a rolling glibc and multilib pair
+  without violating the project's recipe, ABI, or host-safety contracts.
+- **Finding / pitfall**: current Arch packaging builds `glibc`,
+  `lib32-glibc`, and `glibc-locales` from one pinned source revision and exact
+  version. The existing GCC snapshot requires versioned `glibc` and
+  `lib32-glibc` providers (`>=2.40`), so unversioned `provides` would not be a
+  drop-in replacement. The topology choice for rebuilding `gcc-snapshot` with
+  every glibc update is intentionally left open because it adds a heavy
+  consumer build.
+- **Disposition**: research only; no recipe, topology, or host `IgnorePkg`
+  changes, and no build or install. The source-backed findings and proposed
+  wiring are in [`glibc-git-research.md`](glibc-git-research.md).
+
 ## 2026-09-30 — `libldacdec` recipe (stable) + the `pipewire → libldacdec` build-order edge
 
 - **What**: new leaf recipe `packages/stable/libldacdec` (Apache-2.0, AUR-derived,
