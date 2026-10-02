@@ -31,7 +31,7 @@ fail() {
 }
 
 make_workspace "$fixture" auto auto xhigh
-add_package "$fixture" p1
+add_package "$fixture" p1 $'pkgver=1.0\npkgrel=1\narch=(x86_64)'
 
 cat >"$fixture/bin/makepkg" <<'EOF'
 #!/usr/bin/env bash

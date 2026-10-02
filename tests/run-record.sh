@@ -41,7 +41,7 @@ fail() {
 }
 
 STATUSES='succeeded failed deferred blocked never-started interrupted'
-REASONS='ok build-failed lane-lost log-unwritable anchoring-refused waits-on-deferred never-ready dispatch-stopped preflight-refused interrupted-before-start interrupted-mid-build'
+REASONS='ok build-failed lane-lost log-unwritable anchoring-refused upstream-unverified waits-on-deferred never-ready dispatch-stopped preflight-refused interrupted-before-start interrupted-mid-build'
 seen_statuses=$fixture/seen-statuses
 : >"$seen_statuses"
 

@@ -34,8 +34,11 @@ Gentoo_Style_Arch has four deliberately separate modules:
    unless their topology record explicitly selects an nvchecker provider.
 4. **Runtime state** is split in two by who owns it. Under `.state/` (or
    `GSA_STATE_DIR`) the builder keeps its own state: `logs/`, the pacman
-   mutex, and lane result files. Per-archive VCS revision records live beside
-   their package archives so they stay associated with the built artifact.
+   mutex, lane result files, and per-recipe GCC identity records under
+   `toolchains/`. A missing or changed identity invalidates that recipe's
+   incremental build tree before skip decisions. Per-archive VCS revision
+   records live beside their package archives so they stay associated with the
+   built artifact.
    `makepkg` state — source mirrors, `src/`, `pkg/`, and package archives —
    lands **beside each recipe**, because `SRCDEST`/`PKGDEST` default to
    `$startdir`. Both classes are ignored by Git and are absent from a clean
@@ -50,13 +53,15 @@ The scheduler's interface includes more than its flags: package selection is
 mandatory, build order is meaningful, `--install` installs before a
 dependent build starts, core packages run alone, and failures stop new
 dispatches while draining existing lanes. These invariants are part of the
-maintainer contract. The failure-stop invariant has one named amendment: a
-recipe whose checksum anchoring is refused is *deferred*, not failed — its
-lane exits with rc 99 (`_ANCHOR_DEFER_RC`, the only path that emits it), the
-run record gives the package the `deferred` status (rc 99, reason
-`anchoring-refused`), dispatch continues while its dependents are held back as
-`blocked` (reason `waits-on-deferred`), and the run still exits non-zero with
-the parked recipes in the resume command. A run stopped by a signal classifies
+maintainer contract. The failure-stop invariant has two named amendments: a
+recipe whose checksum anchoring is refused, and a `-s` recipe whose upstream
+never answers its ref query after transport retries, are *deferred*, not
+failed — their lane exits with rc 99 (`lane_outcome_defer`, the only path that
+emits it), the run record gives the package the `deferred` status (rc 99,
+reason `anchoring-refused` or `upstream-unverified`), dispatch continues while
+its dependents are held back as `blocked` (reason `waits-on-deferred`), and
+the run still exits non-zero with the parked recipes in the resume command.
+A run stopped by a signal classifies
 what it started as `interrupted` (reason `interrupted-mid-build`) and what
 never launched as `never-started` (reason `interrupted-before-start`); it
 prints the same summary, run record and continuation suggestion any completed

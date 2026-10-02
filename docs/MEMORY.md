@@ -78,6 +78,16 @@
    `--mandir`/`--docdir`/`--datadir`, `CMAKE_USE_SYSTEM_*` and `-fuse-ld=mold`,
    and deleting it silently reprefixed one payload to `/usr/local` with bundled
    dependencies.
+   GCC LTO objects are tied to their producing compiler build. The builder
+   records the GCC version line per recipe under `.state/toolchains/` (or
+   `GSA_STATE_DIR`) and, on missing/drifted state, removes `src/`, `pkg/`,
+   `build/`, and matching archives before the `-s` check. It advances the
+   marker only after a successful build and VCS revision recording. This
+   rebuilds selected recipes once on compiler drift without scanning or
+   bulk-cleaning every package tree; preserve the state directory across
+   resumes. With `-s`, resolve a current-mtime VCS archive's refs before the
+   automatic clean so an unreachable ref still refuses before its archive and
+   baseline are removed.
 7. **Don't touch in-progress builds**: check running makepkg processes and
    runtime log mtimes before rebuilding a package someone else is on.
    Never run two heavy builds concurrently (OOM).
@@ -118,6 +128,12 @@
     `-fi/--forceinstall` implies `-i` and bypasses the check (always runs
     `pacman -U`); `-ia` remains unaffected. Pinned by
     `tests/install-archive-guard.sh` cases C–H.
+    Archive discovery evaluates `pkgver` and `pkgrel` as PKGBUILD shell
+    values, including makepkg's post-build VCS `pkgver()` result. Unknown
+    version metadata makes no archive eligible: checked `-i` refuses and
+    `-ia` warns/no-ops. Never restore the glob-all fallback. This uses the
+    same executable-recipe trust model as the existing PKGBUILD array reader;
+    `-ia` evaluates recipes that have package archives.
     A glibc replacement is not a live-root build/test: the test suite can use
     the installed C library, and package hooks rewrite locale, linker, and
     iconv caches. Build, test, and install it only in a disposable VM or
@@ -889,8 +905,13 @@ constant, not a baked path).
   for that archive after a successful build. Check Git, SVN, Mercurial, and
   Bazaar refs individually; never compare a shared checkout or unrelated
   repository `HEAD`. A moved ref follows the normal build/install path. If
-  the selected ref cannot be parsed or resolved, abort clearly before
-  `makepkg`; do not silently skip or build against unknown upstream state. If
+  the selected ref cannot be parsed, or upstream does not answer a Git ref
+  query even after the transport retries (0.5 s/1 s, 3 attempts; a completed
+  `ls-remote` "no such ref" answer is not retried), PARK the recipe before
+  `makepkg` — defer, lane rc 99, run-record reason `upstream-unverified` —
+  never fail the run over an unverifiable upstream and never silently skip
+  or build against unknown state (2026-10-02). Only a positively confirmed
+  ref-equals-baseline may skip or install. If
   the per-archive baseline is missing, malformed, or mismatched, resolve every
   selected ref and rebuild once to record the revisions actually used; never
   infer that the current ref produced the old archive. Non-VCS recipes retain
@@ -907,6 +928,19 @@ constant, not a baked path).
   the dependency check instead of inside the consumer's build
   (`tests/vulkan-pair.sh`). Pre-metadata VCS archives now take one
   selected-ref-checked `-s` rebuild before later resumes can skip them.
+- **The recorded VCS baseline is read from the build's `$srcdir` working
+  copy** (2026-10-02, xdg-utils incident): `vcs_source_checkout` probes
+  `<recipe>/src/<name{,.git-stripped}>` first, then the package root, then an
+  exported `SRCDEST` — never the reverse. `$startdir/src` is where
+  `extract_git` materialises the tree `build()`/`package()` `cd` into, and
+  the path needs no environment (`sudo` env_reset strips `SRCDEST` from the
+  recorder exactly in the root-supervisor runs); a mirror in `SRCDEST` or at
+  the package root carries the remote's default HEAD, not the built ref, so
+  recording from it would mint a manifest for a revision the archive never
+  contained. A checkout that exists nowhere stays a loud post-build failure —
+  never record an "unknown" for a file whose consumers decide `-s` skips from
+  it. Pinned by `tests/skip-upstream.sh`'s srcdir sections (decoy priority +
+  hermetic `SRCDEST`).
 - **Self-consistent is not verified** (2026-09-20, audit): `sync_stable_version`
   bumps a `packages/stable` recipe to the repo's `pkgver`/`pkgrel` and
   deliberately does not refresh `sha256sums`, so `build_package` added

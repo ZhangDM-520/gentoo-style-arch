@@ -23,8 +23,12 @@ set -euo pipefail
 #      (rust-git consumes llvm-git and rides in automatically), so the
 #      refusal is reachable only through --no-deps.
 #   C. Dispatcher probe: with -i, a successful lane for llvm-git re-runs
-#      check_rustc_sanity BEFORE anything else dispatches; a failing probe
-#      stops dispatch, drains in-flight lanes and exits non-zero.
+#      check_rustc_sanity BEFORE anything else dispatches. Since 2026-10-02 a
+#      failing probe FORCE-BUILDS the at-risk chain (remediation-by-rebuild,
+#      see tests/toolchain-remediation.sh); this workspace has no identifiable
+#      remediation chain at all (no rust-git package, no core group), so it
+#      pins the remaining refusal: stop dispatch, drain in-flight lanes, exit
+#      non-zero.
 #   D. Repo policy: config/topology.conf declares mold-git's rust-git edge
 #      (the missing edge that let a cargo recipe dispatch before rust-git),
 #      a bare-name selection pulls its abi-coupled partner in build order
@@ -242,8 +246,9 @@ set_topology_record "$dir_c" p2 git 'llvm-git'
 stub_sudo "$dir_c"
 
 # The stub build: llvm-git's build "installs" a new LLVM by creating the skew
-# marker; p2's build compiles Rust and dies once the marker exists. The
-# builder must stop dispatch BEFORE p2 is ever started.
+# marker; p2's build compiles Rust and dies once the marker exists. This
+# workspace offers no remediation chain (no rust-git package, no core group),
+# so the builder must refuse — stop dispatch BEFORE p2 is ever started.
 cat >"$dir_c/bin/makepkg" <<'EOF'
 #!/usr/bin/env bash
 set -u
@@ -408,6 +413,17 @@ set_topology_record "$dir_e" versioned-app app '' 'version-sync=nvchecker'
 stub_sudo "$dir_e"
 stub_pacman "$dir_e"
 stub_makepkg "$dir_e"
+# Hermetic probe subject: section E runs -i, so the mid-run sanity probe
+# re-runs after llvm-git's lane. It must not depend on the HOST's rustc — a
+# machine in the exact broken state the guard exists for would fail this
+# unrelated subject (and does). A trivially working stub keeps E about
+# non-ABI tags; the probe's own behaviour is pinned in section C and in
+# tests/toolchain-remediation.sh.
+cat >"$dir_e/bin/rustc" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "$dir_e/bin/rustc"
 
 run_env_e() {
     run_builder env \

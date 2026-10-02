@@ -166,11 +166,15 @@ set -g _RL_DEFERRED
 #   ok      0    build (and requested install) succeeded
 #   failed  1    build or install failed — build_package collapses makepkg's
 #                own rc to 1, so the compiler's number lives only in the log
-#   defer   99   anchoring was refused: PARK the recipe, keep dispatching
-#                (build_package returns it only from the anchor branch, before
-#                makepkg ever runs; run_lanes turns it into a deferral instead
-#                of a failed build — 2026-09-24). Clear of flock's 75 and the
-#                lane-lost 125; no other path emits it.
+#   defer   99   the lane PARKED the recipe and kept dispatching: anchoring
+#                refused (build_package's anchor branch) or the -s freshness
+#                refusal when upstream did not answer (rc-2 → defer,
+#                2026-10-02 — reason travels as the wire's optional 4th
+#                field, legacy writers default to anchoring-refused).
+#                run_lanes turns it into a deferral instead of a failed
+#                build; both sources return before makepkg ever runs.
+#                Clear of flock's 75 and the lane-lost 125; no other path
+#                emits it.
 #   lost    125  lane supervisor produced no valid result (reap anomaly, or a
 #                result write that failed)
 #   hup     129  lane child killed by SIGHUP (honest result written first)
@@ -776,26 +780,62 @@ function expand_consumers
     end
 end
 
-# Read one PKGBUILD assignment as a VALUE, not as text.
-#
-# The shape used here until 2026-09-20 — `grep -m1 '^pkgver=' | cut -d= -f2 |
-# string trim -c "'"` — keeps any trailing comment (`pkgver=1.0.0 # bump` is
-# legal PKGBUILD syntax) and keeps double quotes. Downstream the value then
-# merely stops matching, which is silent: list_split_pkgs found no archive and
-# install_pkgs_now called the empty list a success, so `-i` printed "All builds
-# succeeded!" without pacman ever running. Version *comparisons* are the other
-# half — a trailing comment made cur_pkgver differ from the repo version on
-# every run, so an already-current stable recipe was rewritten each time, and
-# the garbage operand reached vercmp, which the never-downgrade guard rests on.
-# tests/install-archive-guard.sh pins the install half.
-#
-# Only an unquoted '#' starts a comment (`x=1#2` is a single word in bash), so
-# the strip requires whitespace first. Every stage is fed by the pipeline
-# above it — none of them may fall back to reading stdin, which in an
-# interactive run is the terminal. A variable that is absent prints nothing,
-# so `test -n` is false exactly as it was with the old pipeline.
+# _DEFER_WAITER_CAP — how many packages may wait on one parked recipe before
+# the wait costs more than a build attempt ("few packages definitely could
+# wait", owner 2026-10-02). Above it, or when the consumer closure cannot be
+# resolved, unverifiable freshness falls back to a normal build attempt.
+set -g _DEFER_WAITER_CAP 3
+
+# unverifiable_defer_plan PKG_ID → prints `defer` or `build`: may this recipe
+# park on an unverifiable upstream, or must we try a normal build? Park only
+# when the consumer chain can absorb the wait: nothing consumes the package,
+# or at most _DEFER_WAITER_CAP transitive consumers (the dispatcher honestly
+# parks those as waits-on-deferred). This keeps one parked recipe from
+# silently breaking the packages that consume it.
+function unverifiable_defer_plan -a pkg
+    if test (count $_CONSUMER_INDEX) -eq 0
+        if not read_topology_config
+            # No topology, no honest parking plan.
+            echo build
+            return 0
+        end
+    end
+    set -l closure (expand_consumers $pkg)
+    if test $status -ne 0
+        # Unresolvable consumer chain: fall back to building.
+        echo build
+        return 0
+    end
+    set -l waiters (math (count $closure) - 1)
+    if test $waiters -le $_DEFER_WAITER_CAP
+        echo defer
+    else
+        echo build
+    end
+end
+
+# Read PKGBUILD scalars through Bash like arrays; values may depend on earlier
+# shell assignments.
 function pkgbuild_var -a pkg_path var
-    grep -m1 "^$var=" "$pkg_path/PKGBUILD" 2>/dev/null | string replace -r '^[^=]*=' '' | string replace -r '[[:space:]]+#.*$' '' | string trim -c "\"'"
+    bash -c '
+        [[ $2 =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || exit 2
+        __gsa_pkgbuild_var_name=$2
+        readonly __gsa_pkgbuild_var_name
+        cd "$1" || exit 1
+        source ./PKGBUILD >/dev/null 2>&1 || exit $?
+        declare -p "$__gsa_pkgbuild_var_name" >/dev/null 2>&1 || exit 0
+        printf "%s\n" "${!__gsa_pkgbuild_var_name}"
+    ' _ "$pkg_path" "$var" 2>/dev/null
+end
+
+# Read the archive-selection version pair once; makepkg writes pkgver()'s
+# resolved value back to PKGBUILD, which keeps discovery aligned with its archive.
+function pkgbuild_version -a pkg_path
+    bash -c '
+        cd "$1" || exit 1
+        source ./PKGBUILD >/dev/null 2>&1 || exit $?
+        printf "pkgver=%s\npkgrel=%s\n" "${pkgver-}" "${pkgrel-}"
+    ' _ "$pkg_path" 2>/dev/null
 end
 
 # Print an *expanded* PKGBUILD array, one element per line. Sourcing is the only
@@ -1387,8 +1427,20 @@ function vcs_source_key -a entry
     echo "$key"
 end
 
-# Locate makepkg's VCS checkout. Git strips .git from its default source name;
-# honor both spellings and an explicit SRCDEST override.
+# Locate the checkout makepkg actually compiled from. The authoritative root
+# is $srcdir ($startdir/src/<name>): download_git keeps only the mirror in
+# SRCDEST, extract_git clones the working copy into $srcdir, and
+# build()/package() cd into it — so the src/ probe needs no environment at
+# all, which matters because sudo's env_reset strips SRCDEST from the
+# recorder's own environment in root-supervisor runs (2026-10-02 xdg-utils:
+# 'missing local checkout' after a green build, the checkout one directory
+# deeper in src/ the whole time). A mirror — in SRCDEST, or at the package
+# root when SRCDEST defaults to $startdir — is a download cache whose HEAD is
+# the remote's default branch, not the built ref (measured: mirror HEAD
+# 03707c1f while the archive was compiled from 356c380a), so the package-root
+# and SRCDEST roots are fallbacks only, tried when src/ has no working copy.
+# Git strips .git from its default source name; honor both spellings in
+# every root.
 function vcs_source_checkout -a pkg_path entry
     set -l name (source_filename "$entry"); or return 1
     set -l names "$name"
@@ -1396,7 +1448,7 @@ function vcs_source_checkout -a pkg_path entry
     if test "$stripped" != "$name"
         set -a names "$stripped"
     end
-    set -l roots "$pkg_path"
+    set -l roots "$pkg_path/src" "$pkg_path"
     if set -q SRCDEST; and test -n "$SRCDEST"
         set -a roots "$SRCDEST"
     end
@@ -1427,6 +1479,44 @@ function vcs_local_revision -a protocol checkout
     end
 end
 
+# git_ls_remote [git-ls-remote args...] — one Git upstream query with a
+# transport classifier and bounded retry. The exit status separates a
+# COMPLETED query (0 = match, 2 = clean "no such ref" under --exit-code —
+# never retried, an answer does not change on repetition) from a transport
+# failure (anything else: TLS, timeout, dead host — no answer at all, the
+# only retryable class; measured 2026-10-02: repo.or.cz answered 1 of 3
+# attempts within a minute, so one shot is not an oracle for "upstream is
+# gone"). 3 attempts, 0.5 s then 1 s backoff. Exhaustion returns the failing
+# status with no rows; callers keep treating "no rows" as unresolvable.
+# A persistent condition that LOOKS like transport (expired credentials,
+# proxy 403) is retried and then fails the same way — the classifier only
+# gates retries, never trust, so a misclassification costs latency, never a
+# skip decision. Args are passed through verbatim so option order
+# (--symref before the URL) stays the caller's.
+function git_ls_remote_quiet
+    set -l attempt 1
+    while true
+        set -l rows (env GIT_CONFIG_COUNT=0 GIT_TERMINAL_PROMPT=0 git \
+            -c safe.bareRepository=all ls-remote $argv 2>/dev/null)
+        set -l query_status $status
+        if test $query_status -eq 0; or test $query_status -eq 2; or test $attempt -ge 4
+            printf '%s\n' $rows
+            return $query_status
+        end
+        # Flaky upstreams (repo.or.cz drops ~half of TLS handshakes from some
+        # networks) need a window in seconds, not milliseconds (2026-10-02).
+        switch $attempt
+            case 1
+                sleep 2
+            case 2
+                sleep 5
+            case 3
+                sleep 10
+        end
+        set attempt (math $attempt + 1)
+    end
+end
+
 # Resolve the selected upstream ref, not an unrelated repository HEAD. Fixed
 # Git commits and numeric SVN revisions are immutable inputs.
 function vcs_remote_revision -a protocol url ref_kind ref_value
@@ -1442,8 +1532,7 @@ function vcs_remote_revision -a protocol url ref_kind ref_value
                     if not string match -q 'refs/heads/*' -- "$target"
                         set target "refs/heads/$target"
                     end
-                    set -l rows (env GIT_CONFIG_COUNT=0 GIT_TERMINAL_PROMPT=0 git \
-                        -c safe.bareRepository=all ls-remote --exit-code "$url" "$target" 2>/dev/null)
+                    set -l rows (git_ls_remote_quiet --exit-code "$url" "$target")
                     for row in $rows
                         set -l fields (string split \t -- "$row")
                         if test (count $fields) -eq 2; and test "$fields[2]" = "$target"
@@ -1459,8 +1548,7 @@ function vcs_remote_revision -a protocol url ref_kind ref_value
                         set target "refs/tags/$target"
                     end
                     set -l peeled "$target^{}"
-                    set -l rows (env GIT_CONFIG_COUNT=0 GIT_TERMINAL_PROMPT=0 git \
-                        -c safe.bareRepository=all ls-remote --exit-code "$url" "$target" "$peeled" 2>/dev/null)
+                    set -l rows (git_ls_remote_quiet --exit-code "$url" "$target" "$peeled")
                     set -l tag_revision ""
                     set -l peeled_revision ""
                     for row in $rows
@@ -1481,8 +1569,7 @@ function vcs_remote_revision -a protocol url ref_kind ref_value
                     echo (string lower -- "$revision")
                     return 0
                 case default
-                    set -l rows (env GIT_CONFIG_COUNT=0 GIT_TERMINAL_PROMPT=0 git \
-                        -c safe.bareRepository=all ls-remote --symref --exit-code "$url" HEAD 2>/dev/null)
+                    set -l rows (git_ls_remote_quiet --symref --exit-code "$url" HEAD)
                     for row in $rows
                         set -l fields (string split \t -- "$row")
                         if test (count $fields) -eq 2; and test "$fields[2]" = HEAD
@@ -1652,7 +1739,8 @@ end
 
 # Return 0 when a VCS archive is current, 1 when a selected ref moved, 2 when
 # its current state cannot be established, and 3 when a rebuild can establish
-# a missing or unusable baseline.
+# a missing or unusable baseline. Both -s callers defer (rc 99) on 2 — an
+# unverifiable upstream must neither fail the run nor license a skip.
 function vcs_archive_is_current -a pkg_path archive
     set -g _VCS_REVISION_ERROR ""
     set -l entries
@@ -1974,6 +2062,11 @@ function vcs_source_sum -a dir entry alg
         return 1
     end
     set -l frag (string replace -r '^[^#]*#' '' -- $url)
+    # makepkg appends verification flags to the fragment (#tag=v262?signed);
+    # the ref name itself must never carry them or `git archive` looks up a
+    # ref that cannot exist and the anchor reports a false checksum mismatch
+    # (2026-10-02, systemd). Same rule as the shared source parser.
+    set frag (string replace -r '\?signed$' '' -- $frag)
     set -l kind (string replace -r '=.*$' '' -- $frag)
     if test "$kind" != tag; and test "$kind" != commit
         return 1
@@ -2375,18 +2468,30 @@ end
 
 # ─── List built package files for a PKGBUILD (all splits, current version) ───
 # Multi-split packages (e.g. linux-firmware) produce several *.pkg.tar.zst —
-# "ls -t | head -1" would install only one split. Filter by current
+# "ls -t | head -1" would install only one split. Filter by the evaluated
 # pkgver-pkgrel so stale packages from previous builds are never installed.
 function list_split_pkgs -a pkg_path
-    set -l pv (pkgbuild_var "$pkg_path" pkgver)
-    set -l pr (pkgbuild_var "$pkg_path" pkgrel)
+    set -l any_archive (find "$pkg_path" -maxdepth 1 -type f \
+        -name '*.pkg.tar.zst' -print -quit 2>/dev/null)
+    if test -z "$any_archive"
+        return 0
+    end
+    set -l metadata (pkgbuild_version "$pkg_path")
+    set -l metadata_status $status
+    if test $metadata_status -ne 0; or test (count $metadata) -ne 2
+        ui_error "$(basename "$pkg_path"): could not evaluate pkgver/pkgrel for archive discovery" >&2
+        return 0
+    end
+    set -l pv (string replace -r '^pkgver=' '' -- "$metadata[1]")
+    set -l pr (string replace -r '^pkgrel=' '' -- "$metadata[2]")
     # find (not fish globs): an unmatched glob is a FATAL error in fish, and
     # 2>/dev/null does not suppress it. find -name returns 0 with no matches.
-    if test -n "$pv" -a -n "$pr"
-        find "$pkg_path" -maxdepth 1 -name "*$pv-$pr-*.pkg.tar.zst" 2>/dev/null | sort
-        return
+    # Unknown version metadata cannot prove an archive current; never broaden
+    # discovery to every archive when the version-specific pattern is unknown.
+    if test -z "$pv" -o -z "$pr"
+        return 0
     end
-    find "$pkg_path" -maxdepth 1 -name '*.pkg.tar.zst' 2>/dev/null | sort
+    find "$pkg_path" -maxdepth 1 -name "*$pv-$pr-*.pkg.tar.zst" 2>/dev/null | sort
 end
 
 # ─── Workspace-wide built-package helpers ────────────────────────────────────
@@ -2432,10 +2537,9 @@ function install_all
     end
     set -l pkgs (find_built_pkgs)
     if test (count $pkgs) -eq 0
-        # Entry-level UX: -ia installs "whatever exists", so nothing built is
-        # a no-op, not the refusal -i's empty list is (there, silence was the
-        # 2026-09-20 bug — install_plan still refuses an empty checked plan).
-        ui_warning "No built packages found."
+        # Force mode remains a no-op when no archive can be identified at its
+        # PKGBUILD's current evaluated pkgver-pkgrel.
+        ui_warning "No eligible built packages found."
         return 0
     end
     ui_heading "Installing "(count $pkgs)" packages"
@@ -3626,12 +3730,9 @@ function install_plan -a mode
     set -l archives $argv[2..-1]
     if test (count $archives) -eq 0
         # An empty list is NOT success on the -i path. It means discovery
-        # found no archive for the current pkgver-pkgrel, and returning 0
-        # here is what let `-i` print "All builds succeeded!" without pacman
-        # ever running (2026-09-20: a trailing comment on pkgver= made
-        # list_split_pkgs return nothing). Installing nothing also leaves the
-        # system on the old version while later packages compile against it —
-        # precisely the failure the -i ordering exists to prevent.
+        # found no archive for the current evaluated pkgver-pkgrel, or could
+        # not establish one; installing nothing leaves later packages
+        # compiling against the old system version.
         # tests/install-archive-guard.sh pins both halves.
         if test "$mode" = force
             echo 'noop empty-list'
@@ -4064,11 +4165,50 @@ function canonicalize_pkg_ref -a pkg
     echo "$pkg"
 end
 
+# GCC LTO bytecode is tied to the compiler build that emitted it. Keep one
+# identity per recipe in builder state so only affected incremental trees need
+# cleaning after a toolchain upgrade.
+function package_toolchain_state_matches -a package_id pkg_path gcc_identity
+    set -l state_file "$_STATE_DIR/toolchains/$package_id"
+    if not test -f "$state_file"
+        return 1
+    end
+    set -l saved (cat "$state_file" 2>/dev/null)
+    if test (count $saved) -ne 2
+        return 1
+    end
+    test "$saved[1]" = "$pkg_path" -a "$saved[2]" = "$gcc_identity"
+end
+
+function record_package_toolchain -a package_id pkg_path gcc_identity
+    set -l state_dir "$_STATE_DIR/toolchains"
+    set -l state_file "$state_dir/$package_id"
+    set -l temporary "$state_file.tmp.$fish_pid"
+    set -l run_as env
+    if test "$_ROOT_MODE" = "1"
+        set run_as sudo -u "$_BUILD_USER" env HOME=$_BUILD_HOME
+    end
+    if not $run_as mkdir -p "$state_dir"
+        ui_error "$package_id: cannot create compiler state directory: $state_dir"
+        return 1
+    end
+    if not $run_as sh -c 'printf "%s\n%s\n" "$1" "$2" >"$3" && mv -f -- "$3" "$4"' \
+        sh "$pkg_path" "$gcc_identity" "$temporary" "$state_file"
+        $run_as rm -f -- "$temporary" 2>/dev/null
+        ui_error "$package_id: cannot record GCC build identity: $state_file"
+        return 1
+    end
+    return 0
+end
+
 # ─── Build a single package ──────────────────────────────────────────────────
 function build_package -a package_id install_flag clean_flag skip_flag no_sync_flag quiet_flag force_install_flag
     # quiet_flag=1: background lane mode — no human echoes; everything goes to
     # the per-package log; the parent dispatcher renders lane state.
     set -g _BUILD_QUIET (test "$quiet_flag" = "1"; and echo 1; or echo 0)
+    # Why the current invocation defers, when it names one; reset per package
+    # so a lane process can never leak a previous run's reason onto the wire.
+    set -g _DEFER_REASON ""
     # -fi/--forceinstall now rides as the FORCE_FLAG argument to
     # install_pkgs_now alongside this one — the install pipeline reads its
     # mode/sink from arguments, never from a hidden global.
@@ -4086,10 +4226,64 @@ function build_package -a package_id install_flag clean_flag skip_flag no_sync_f
         return 1
     end
 
-    # Clean if requested (before skip check — clean forces rebuild)
-    if test "$clean_flag" = "1"
+    set -l gcc_identity "gcc unavailable"
+    if type -q gcc
+        set -l gcc_version (env LC_ALL=C gcc --version 2>/dev/null)
+        set -l gcc_status $status
+        if test $gcc_status -ne 0; or test (count $gcc_version) -eq 0; or test -z "$gcc_version[1]"
+            ui_error "$pkg_name: could not determine the GCC build identity"
+            return 1
+        end
+        set gcc_identity "$gcc_version[1]"
+    end
+    set -l toolchain_mismatch 0
+    if not package_toolchain_state_matches "$package_id" "$pkg_path" "$gcc_identity"
+        set toolchain_mismatch 1
+    end
+
+    # A drift clean deletes the archive and its VCS baseline. Resolve a
+    # potentially skippable archive first so an unreachable ref still refuses
+    # before makepkg rather than being hidden by that automatic clean.
+    if test "$toolchain_mismatch" = "1"; and test "$clean_flag" != "1"; and test "$skip_flag" = "1"
+        set -l candidate (find "$pkg_path" -maxdepth 1 -name '*.pkg.tar.zst' \
+            -printf '%T@\t%p\n' 2>/dev/null | sort -rn | head -1 | cut -f2-)
+        if test -n "$candidate"
+            set -l pkg_time (stat -c %Y "$pkg_path/PKGBUILD" 2>/dev/null)
+            set -l built_time (stat -c %Y "$candidate" 2>/dev/null)
+            if test -n "$pkg_time" -a -n "$built_time" -a "$built_time" -ge "$pkg_time"
+                vcs_archive_is_current "$pkg_path" "$candidate"
+                set -l freshness_status $status
+                if test $freshness_status -eq 2
+                    # rc 2 = freshness cannot be established (transport
+                    # retries exhausted inside the query). Owner semantics
+                    # (2026-10-02): -s may skip ONLY on verified-unchanged.
+                    # Unverifiable parks the recipe ONLY when its consumer
+                    # chain can absorb the wait (few or no waiters); else it
+                    # falls back to a normal build attempt. Never fail.
+                    ui_error "$pkg_name: --skip cannot verify upstream VCS freshness: $_VCS_REVISION_ERROR"
+                    switch (unverifiable_defer_plan "$package_id")
+                        case defer
+                            set -g _DEFER_REASON upstream-unverified
+                            ui_error "$pkg_name: consumer chain can absorb the wait — parking this recipe (deferred)"
+                            echo "  Nothing was built or installed; dependents wait (waits-on-deferred)."
+                            return $lane_outcome_defer
+                        case '*'
+                            ui_error "$pkg_name: consumers cannot wait — falling back to a normal build attempt"
+                    end
+                end
+            end
+        end
+    end
+
+    # An unknown or changed compiler invalidates incremental objects. Use the
+    # same clean path as -c before considering an otherwise-current -s archive.
+    if test "$clean_flag" = "1" -o "$toolchain_mismatch" = "1"
         if test "$_BUILD_QUIET" != "1"
-            ui_info "Cleaning build artifacts for $pkg_name..."
+            if test "$toolchain_mismatch" = "1"
+                ui_info "$pkg_name: GCC build identity missing or changed; cleaning cached build artifacts"
+            else
+                ui_info "Cleaning build artifacts for $pkg_name..."
+            end
         end
         if not rm -rf -- "$pkg_path/src" "$pkg_path/pkg" "$pkg_path/build"
             ui_error "failed to clean build artifacts for $pkg_name"
@@ -4115,8 +4309,19 @@ function build_package -a package_id install_flag clean_flag skip_flag no_sync_f
                 vcs_archive_is_current "$pkg_path" "$latest_pkg"
                 set -l freshness_status $status
                 if test $freshness_status -eq 2
+                    # Same contract as the toolchain pre-check above (owner
+                    # semantics 2026-10-02): park when the consumer chain
+                    # can absorb the wait, else fall back to a normal build.
                     ui_error "$pkg_name: --skip cannot verify upstream VCS freshness: $_VCS_REVISION_ERROR"
-                    return 1
+                    switch (unverifiable_defer_plan "$package_id")
+                        case defer
+                            set -g _DEFER_REASON upstream-unverified
+                            ui_error "$pkg_name: consumer chain can absorb the wait — parking this recipe (deferred)"
+                            echo "  Nothing was built or installed; dependents wait (waits-on-deferred)."
+                            return $lane_outcome_defer
+                        case '*'
+                            ui_error "$pkg_name: consumers cannot wait — falling back to a normal build attempt"
+                    end
                 end
                 if test $freshness_status -eq 0
                     if test "$_BUILD_QUIET" != "1"
@@ -4145,15 +4350,19 @@ function build_package -a package_id install_flag clean_flag skip_flag no_sync_f
         return 1
     end
     set -l log_file (package_log_file "$package_id")
-    # Initialize the package log before sync so provider errors and checksum
-    # decisions survive; later makepkg and install output append to this file.
+    # The log is opened FRESH per attempt by the dispatcher (it truncates
+    # before spawning this lane) and every writer appends — including this
+    # lane's own stdout/stderr (O_APPEND). Never truncate here again: this
+    # point sits AFTER the skip/freshness decision messages, and a mid-stream
+    # truncate both destroys them and races the append-only writers (2026-10-02
+    # T4 finding). Provider errors and checksum decisions all append below.
     if not ensure_log_writable "$log_file"
         ui_error "cannot write build log: $log_file"
         return 1
     end
-    if not printf '' >"$log_file"
-        ui_error "cannot write build log: $log_file"
-        return 1
+    if test "$toolchain_mismatch" = "1"
+        printf 'GCC build identity missing or changed; cached build artifacts were cleaned before this build.\nGCC: %s\n' \
+            "$gcc_identity" >>"$log_file"
     end
 
     # An explicit topology opt-in selects nvchecker; every other stable recipe
@@ -4363,6 +4572,11 @@ function build_package -a package_id install_flag clean_flag skip_flag no_sync_f
         end
     end
 
+    if not record_package_toolchain "$package_id" "$pkg_path" "$gcc_identity"
+        ui_error "$pkg_name: build succeeded but its GCC build identity could not be recorded"
+        return 1
+    end
+
     if test "$_BUILD_QUIET" != "1"
         ui_success "$pkg_name: build succeeded ("(fmt_dur $dur)")"
     end
@@ -4564,22 +4778,23 @@ function log_ownership_hint
 end
 
 function ensure_state_dirs
-    if not mkdir -p "$_STATE_DIR" "$LOG_DIR"
-        ui_error "cannot create log directory: $LOG_DIR"
+    if not mkdir -p "$_STATE_DIR" "$LOG_DIR" "$_STATE_DIR/toolchains"
+        ui_error "cannot create builder state directories: $_STATE_DIR"
         log_ownership_hint
         return 1
     end
     if test "$_ROOT_MODE" = "1"
         # One sweep repairs directories AND files an earlier interrupted root
         # run left behind. Idempotent, and the tree is small (logs + lock +
-        # shim); build_package already pays an equal chown -R per package.
+        # shim + per-recipe toolchain identities); build_package already pays
+        # an equal chown -R per package.
         if not chown -R "$_BUILD_USER": "$_STATE_DIR" 2>/dev/null
             ui_error "cannot restore ownership of runtime state: $_STATE_DIR"
             log_ownership_hint
             return 1
         end
-    else if not test -w "$LOG_DIR"
-        ui_error "cannot write log directory: $LOG_DIR"
+    else if not test -w "$LOG_DIR"; or not test -w "$_STATE_DIR/toolchains"
+        ui_error "cannot write builder state directories: $_STATE_DIR"
         log_ownership_hint
         return 1
     end
@@ -4929,18 +5144,21 @@ end
 # so a dead credential fails fast instead of hanging an unattended run.
 
 # ─── Lane result codec: the process boundary's one format ────────────────────
-# One wire line: `pkg rc dur`, three space-separated fields. encode/decode are
-# THE pair that defines it — the producer (write_lane_result) and the consumer
-# (run_lanes' reap) both go through them, so the format has one home and one
-# test surface. decode enforces shape AND identity (field 1 must equal the
-# expected package), so a stale result file from another child can never be
-# misread as this one's outcome. The rc field carries the lane_outcome_*
-# vocabulary (see its block at the top of this file).
+# One wire line: `pkg rc dur [reason]`, space-separated — the reason rides
+# only on deferrals that carry one. encode/decode are THE pair that defines
+# it — the producer (write_lane_result) and the consumer (run_lanes' reap)
+# both go through them, so the format has one home and one test surface.
+# decode enforces shape AND identity (field 1 must equal the expected
+# package), so a stale result file from another child can never be misread as
+# this one's outcome. The rc field carries the lane_outcome_* vocabulary (see
+# its block at the top of this file). A legacy 3-field line decodes to three
+# lines; consumers fall back to the row grammar's default reason
+# (anchoring-refused) when there is no fourth.
 
-# lane_result_encode PKG RC DUR → the wire line on stdout; fails on an empty
-# pkg (identity is mandatory) or a non-numeric rc/dur (the outcome vocabulary
-# is numeric by construction).
-function lane_result_encode -a pkg rc dur
+# lane_result_encode PKG RC DUR [REASON] → the wire line on stdout; fails on
+# an empty pkg (identity is mandatory), a non-numeric rc/dur (the outcome
+# vocabulary is numeric by construction), or a malformed reason token.
+function lane_result_encode -a pkg rc dur reason
     if test -z "$pkg"
         return 1
     end
@@ -4950,12 +5168,20 @@ function lane_result_encode -a pkg rc dur
     if not string match -qr '^[0-9]+$' -- "$dur"
         return 1
     end
+    if test -n "$reason"
+        if not string match -qr '^[a-z0-9][a-z0-9-]*$' -- "$reason"
+            return 1
+        end
+        printf '%s %s %s %s\n' "$pkg" "$rc" "$dur" "$reason"
+        return 0
+    end
     printf '%s %s %s\n' "$pkg" "$rc" "$dur"
 end
 
-# lane_result_decode EXPECTED_PKG LINE → three lines (pkg, rc, dur) for fish
-# command substitution, which splits on newlines only; fails on any shape,
-# identity or numeric mismatch. Callers treat failure as "no valid result".
+# lane_result_decode EXPECTED_PKG LINE → three lines (pkg, rc, dur), plus a
+# fourth (reason) when the wire carried one, for fish command substitution,
+# which splits on newlines only; fails on any shape, identity or numeric
+# mismatch. Callers treat failure as "no valid result".
 function lane_result_decode -a expected_pkg result_line
     set -l fields
     for field in (string split ' ' -- "$result_line")
@@ -4963,7 +5189,7 @@ function lane_result_decode -a expected_pkg result_line
             set -a fields "$field"
         end
     end
-    if test (count $fields) -ne 3
+    if test (count $fields) -ne 3; and test (count $fields) -ne 4
         return 1
     end
     if test "$fields[1]" != "$expected_pkg"
@@ -4975,14 +5201,21 @@ function lane_result_decode -a expected_pkg result_line
     if not string match -qr '^[0-9]+$' -- "$fields[3]"
         return 1
     end
+    if test (count $fields) -eq 4
+        if not string match -qr '^[a-z0-9][a-z0-9-]*$' -- "$fields[4]"
+            return 1
+        end
+        printf '%s\n%s\n%s\n%s\n' "$fields[1]" "$fields[2]" "$fields[3]" "$fields[4]"
+        return 0
+    end
     printf '%s\n' "$fields[1]" "$fields[2]" "$fields[3]"
 end
 
-# write_lane_result RESULT_FILE PKG RC DUR — the producer side of the codec:
-# encode, then publish atomically. The `pkg rc dur` line and the atomic mv
+# write_lane_result RESULT_FILE PKG RC DUR [REASON] — the producer side of
+# the codec: encode, then publish atomically. The wire line and the atomic mv
 # contract are unchanged.
-function write_lane_result -a result_file pkg rc dur
-    set -l line (lane_result_encode "$pkg" "$rc" "$dur")
+function write_lane_result -a result_file pkg rc dur reason
+    set -l line (lane_result_encode "$pkg" "$rc" "$dur" "$reason")
     if test (count $line) -ne 1
         return 1
     end
@@ -5306,6 +5539,71 @@ function check_rustc_sanity
     return 0
 end
 
+# probe_refusal_text — the recovery prose for the ONLY remaining probe refusal
+# path (2026-10-02 owner rule): a toolchain sanity-probe failure whose
+# remediation cannot be built (no chain identifiable) or whose remediation
+# build itself failed. Pure printing — the caller sets the abort state. A
+# failing probe alone no longer refuses; refusal is remediation failure.
+function probe_refusal_text
+    echo "  The selection must rebuild rust-git in the same pass before anything"
+    echo "  else compiles with rustc — stopping dispatch, draining in-flight lanes."
+    echo "  Recovery: rebuild rust-git in the same run (add rust-git to the selection"
+    echo "  and resume with -s -i), or follow the check_rustc_sanity recovery text"
+    echo "  above (downgrade-rebuild llvm-libs at the snapshot rust-git was built"
+    echo "  against)."
+end
+
+# toolchain_remediation_plan TOOLCHAIN_PKG BROKEN_CONSUMER — the force-build
+# chain that reconciles the at-risk chain after a sanity-probe failure (owner
+# rule 2026-10-02: remediation-by-rebuild, never abort-while-remediable).
+# Prints ONE kind line ('narrow' or 'core') followed by the chain, one package
+# id per line. Narrow identification: BROKEN_CONSUMER (the consumer the probe
+# implicates — rust-git for the rustc probe; any tool-clang/llvm consumer for a
+# future clang-side probe) is a known package AND a consumer of TOOLCHAIN_PKG
+# in the topology's ABI direction (expand_consumers/_CONSUMER_INDEX). When the
+# broken consumer cannot be identified narrowly — unknown package, not a
+# consumer of the toolchain package, or the consumer walk itself fails — the
+# plan degrades to the WHOLE core group: the general tool-clang/llvm consumer
+# chain, not just rustc. A bare kind line with no chain means remediation is
+# impossible and the caller keeps the refusal contract.
+function toolchain_remediation_plan -a toolchain_pkg broken_consumer
+    if test (count $_CONSUMER_INDEX) -eq 0
+        read_topology_config
+    end
+    set -l closure (expand_consumers "$toolchain_pkg")
+    set -l closure_rc $status
+    if test $closure_rc -eq 0; and test -n "$broken_consumer"
+        if package_path "$broken_consumer" >/dev/null
+            if contains "$broken_consumer" $closure
+                printf '%s\n' narrow "$broken_consumer"
+                return 0
+            end
+        end
+    end
+    printf '%s\n' core
+    for pkg in $_GROUP_core
+        printf '%s\n' "$pkg"
+    end
+    return 0
+end
+
+# force_queue_packages PKG... → prints how many ids it added. Makes
+# remediation targets dispatchable mid-run through the EXISTING dispatch
+# machinery: membership in $_lane_sorted is what pick_next_ready walks and
+# $_RR_ORDER is what run_record_finalize keeps rows for. Ids already queued
+# keep their position (topological order before anything appended).
+function force_queue_packages
+    set -l added 0
+    for pkg in $argv
+        if not contains "$pkg" $_lane_sorted
+            set -a _lane_sorted "$pkg"
+            set -a _RR_ORDER "$pkg"
+            set added (math $added + 1)
+        end
+    end
+    echo $added
+end
+
 # True when $pkg transitively depends (within the build list) on a recipe this
 # run deferred — used to label unstarted packages honestly: waiting on a
 # parked recipe is not the dependency cycle the old message claimed. The graph
@@ -5331,14 +5629,34 @@ end
 function pick_next_ready -a solo_ok
     # Print the first unstarted package whose workspace deps are all done.
     # solo_ok=0 skips core-group packages (they are only dispatched solo).
+    # argv[2..] = optional RESTRICT set: the toolchain-remediation force queue
+    # (2026-10-02). With a restrict set the pick is FORCE semantics — a queued
+    # package may dispatch again even though an earlier attempt already landed
+    # in _lane_started/_lane_done (the rebuild is the point) — but never while
+    # an earlier lane for it is still in flight (no double dispatch), and a
+    # dependency that is itself queued for rebuild must be rebuilt first.
+    set -l restrict $argv[2..-1]
+    set -l force_mode 0
+    if test (count $restrict) -gt 0
+        set force_mode 1
+    end
     for pkg in $_lane_sorted
-        if test (count $_lane_started) -gt 0; and contains "$pkg" $_lane_started
-            continue
-        end
-        # Defensive: _lane_started is a superset of _lane_done in run_lanes,
-        # but never re-dispatch a completed package even if that breaks.
-        if test (count $_lane_done) -gt 0; and contains "$pkg" $_lane_done
-            continue
+        if test $force_mode -eq 1
+            if not contains "$pkg" $restrict
+                continue
+            end
+            if test (count $_lane_started) -gt 0; and contains "$pkg" $_lane_started; and not contains "$pkg" $_lane_done
+                continue
+            end
+        else
+            if test (count $_lane_started) -gt 0; and contains "$pkg" $_lane_started
+                continue
+            end
+            # Defensive: _lane_started is a superset of _lane_done in run_lanes,
+            # but never re-dispatch a completed package even if that breaks.
+            if test (count $_lane_done) -gt 0; and contains "$pkg" $_lane_done
+                continue
+            end
         end
         set -l ok 1
         for dep in (deps_of $pkg)
@@ -5346,6 +5664,15 @@ function pick_next_ready -a solo_ok
             # them, the readiness check must too (they will never be "done").
             if not contains "$dep" $_lane_sorted
                 continue
+            end
+            # A remediation rebuild of the dep comes first: the dep being in
+            # _lane_done from an earlier attempt says nothing about the state
+            # the forced rebuild is reconciling to.
+            if test $force_mode -eq 1
+                if contains "$dep" $_REMED_PENDING; or contains "$dep" $_REMED_ACTIVE
+                    set ok 0
+                    break
+                end
             end
             # A deferred dep IS in _lane_done (the lane finished, parked), but
             # its package was never built or installed — dispatching the
@@ -5455,7 +5782,14 @@ function lane_job -a pkg_id result_file total_jobs install_flag clean_flag skip_
     build_package $pkg_id $install_flag $clean_flag $skip_flag $no_sync_flag 1 $force_install_flag
     set -l rc $status
     set -l dur (math (date +%s) - $start_s)
-    if not write_lane_result "$result_file" "$pkg_id" "$rc" "$dur"
+    # A deferral carries WHY it parked when build_package named one (the
+    # anchor branch stays silent and keeps the legacy default); every other
+    # outcome has no reason field.
+    set -l defer_reason ""
+    if test "$rc" = "$lane_outcome_defer"; and set -q _DEFER_REASON
+        set defer_reason "$_DEFER_REASON"
+    end
+    if not write_lane_result "$result_file" "$pkg_id" "$rc" "$dur" "$defer_reason"
         echo "✗ lane result write failed: $result_file" >&2
         # No valid result ⇒ the dispatcher classifies this lane as lost.
         exit $lane_outcome_lost
@@ -5586,6 +5920,17 @@ function run_lanes -a lanes jobs_override intensity_level install_flag clean_fla
     set -l deferred
     set -l sudo_stopped 0
     set -l probe_stopped 0
+    # Toolchain sanity-probe remediation (owner rule 2026-10-02): a failing
+    # mid-run probe no longer aborts the dispatch — it FORCE-BUILDS the
+    # at-risk chain (toolchain_remediation_plan) and refuses only if that
+    # remediation build fails (or reconciles nothing). probe_remediating gates
+    # dispatch to the remediation queue; the _REMED_* lists are globals so
+    # pick_next_ready's force mode can order rebuilds against each other.
+    set -l probe_remediating 0
+    set -l remediation_phase ""
+    set -g _REMED_PENDING
+    set -g _REMED_ACTIVE
+    set -g _REMED_ATTEMPTED
     # -i preflight: decide whether installs are possible BEFORE the first hour
     # of building is spent on packages that could never be installed. No prompt
     # belongs here or anywhere: every privilege escalation is `sudo -n`, so a
@@ -5672,7 +6017,7 @@ function run_lanes -a lanes jobs_override intensity_level install_flag clean_fla
                 set -l decoded
                 if test (count $res_raw) -gt 0
                     set decoded (lane_result_decode "$expected_pkg" "$res_raw[1]")
-                    if test (count $decoded) -eq 3
+                    if test (count $decoded) -ge 3
                         set result_ready 1
                     else
                         set result_malformed 1
@@ -5697,7 +6042,7 @@ function run_lanes -a lanes jobs_override intensity_level install_flag clean_fla
                     set res_raw (cat "$rf" 2>/dev/null)
                     if test (count $res_raw) -gt 0
                         set decoded (lane_result_decode "$expected_pkg" "$res_raw[1]")
-                        if test (count $decoded) -eq 3
+                        if test (count $decoded) -ge 3
                             set result_ready 1
                         else
                             set result_malformed 1
@@ -5708,12 +6053,16 @@ function run_lanes -a lanes jobs_override intensity_level install_flag clean_fla
                 set -l p "$expected_pkg"
                 set -l rc $lane_outcome_lost
                 set -l dur (math (date +%s) - $lane_start[$i])
+                set -l wire_reason ""
                 if test $result_ready -eq 1
                     # The codec's decode splits the wire line on newlines
                     # (fish command substitution splits on newlines only).
                     set p $decoded[1]
                     set rc $decoded[2]
                     set dur $decoded[3]
+                    if test (count $decoded) -ge 4
+                        set wire_reason $decoded[4]
+                    end
                 else
                     set -l log_file (package_log_file "$p")
                     # Reap forensics (2026-09-23: the raw symptom was a bare
@@ -5761,6 +6110,16 @@ function run_lanes -a lanes jobs_override intensity_level install_flag clean_fla
                 end
 
                 set -a _lane_done $p
+                # Toolchain remediation bookkeeping (2026-10-02): a
+                # force-built remediation package's outcome decides the
+                # remediation, not the run — track its reap before the
+                # classification switch dispatches on it.
+                set -l is_remediation 0
+                if test $probe_remediating -eq 1; and test (count $_REMED_ACTIVE) -gt 0; and contains "$p" $_REMED_ACTIVE
+                    set is_remediation 1
+                    set -e _REMED_ACTIVE[(contains --index -- "$p" $_REMED_ACTIVE)]
+                    set -a _REMED_ATTEMPTED "$p"
+                end
                 # Classify through the lane_outcome_* vocabulary — one switch
                 # on the codec's rc: the enum names decide, the wire's raw
                 # number never leaks a decision. The default carries every
@@ -5775,36 +6134,122 @@ function run_lanes -a lanes jobs_override intensity_level install_flag clean_fla
                         # preflight passed at run START, and this run's own
                         # llvm install can break the system rustc after that.
                         # Re-probe after a successful -i lane for llvm-git /
-                        # llvm-libs-git, BEFORE anything else dispatches. Failure
-                        # is a real ABI mismatch — even --allow-broken-rustc is
-                        # documented as "not a way past" one — so it takes the
-                        # stop-dispatch contract: stop starting lanes, drain the
-                        # in-flight ones, exit non-zero. Once, not per package.
-                        if test $install_flag -eq 1; and test $probe_stopped -eq 0
+                        # llvm-libs-git, BEFORE anything else dispatches.
+                        # Failure is a real ABI mismatch — even
+                        # --allow-broken-rustc is documented as "not a way
+                        # past" one — but since the 2026-10-02 owner rule it
+                        # takes the REMEDIATION contract, not the stop-dispatch
+                        # one: FORCE-BUILD the at-risk chain (first rust-git,
+                        # or the whole core group when the broken consumer
+                        # cannot be identified narrowly) and refuse only when
+                        # that remediation build fails too. The probe stays
+                        # loud; it no longer refuses builds while remediation
+                        # is possible. Once per remediation cycle, not per
+                        # package (a remediation re-install re-probes through
+                        # the completion path below, never re-triggers here).
+                        if test $install_flag -eq 1; and test $probe_stopped -eq 0; and test $probe_remediating -eq 0
                             if contains "$p" llvm-git llvm-libs-git
                                 if not check_rustc_sanity
                                     ui_error "rustc sanity probe failed after $p was installed — this run's own llvm install broke rustc"
-                                    echo "  The selection must rebuild rust-git in the same pass before anything"
-                                    echo "  else compiles with rustc — stopping dispatch, draining in-flight lanes."
-                                    echo "  Recovery: rebuild rust-git in the same run (add rust-git to the selection"
-                                    echo "  and resume with -s -i), or follow the check_rustc_sanity recovery text"
-                                    echo "  above (downgrade-rebuild llvm-libs at the snapshot rust-git was built"
-                                    echo "  against)."
-                                    set probe_stopped 1
-                                    set stop_starting 1
-                                    set -g _DASHBOARD_LAST_EVENT "$_UI_ICON_ERROR rustc probe failed after $p"
+                                    echo "  Toolchain risk detected for the tool-clang/llvm consumer chain — not"
+                                    echo "  just rustc. Owner rule 2026-10-02: the builder FORCE-BUILDS the at-risk"
+                                    echo "  chain to reconcile it — first rust-git (rust), or the whole core group"
+                                    echo "  when the broken consumer cannot be identified narrowly — and refuses"
+                                    echo "  only if that remediation build also fails. This probe stays loud but"
+                                    echo "  does not refuse builds while remediation is possible."
+                                    set -l plan (toolchain_remediation_plan "$p" rust-git)
+                                    set -l plan_kind ""
+                                    set -l plan_chain
+                                    if test (count $plan) -ge 2
+                                        set plan_kind $plan[1]
+                                        set plan_chain $plan[2..-1]
+                                    end
+                                    if test (count $plan_chain) -eq 0
+                                        ui_error "no force-build remediation chain is identifiable for $p — refusing to continue"
+                                        probe_refusal_text
+                                        set probe_stopped 1
+                                        set stop_starting 1
+                                        set -g _DASHBOARD_LAST_EVENT "$_UI_ICON_ERROR rustc probe failed after $p"
+                                    else
+                                        set probe_remediating 1
+                                        set remediation_phase $plan_kind
+                                        set _REMED_PENDING $plan_chain
+                                        set _REMED_ACTIVE
+                                        set _REMED_ATTEMPTED
+                                        set total (math $total + (force_queue_packages $_REMED_PENDING))
+                                        ui_warning "toolchain remediation (phase $remediation_phase): force-building "(string join ', ' $_REMED_PENDING)" to reconcile the at-risk chain before anything else compiles"
+                                        set -g _DASHBOARD_LAST_EVENT "$_UI_ICON_WARN toolchain remediation: rebuild $plan_chain"
+                                    end
                                 end
                             end
                         end
+                        # Remediation completion: the whole force-built chain
+                        # has landed — re-probe. Pass: reconciled, resume
+                        # dispatch. Still failing after the narrow consumer:
+                        # escalate to the whole core group (the general
+                        # tool-clang/llvm consumer chain, not just rustc).
+                        # Still failing after that, or a failed remediation
+                        # build: the refusal contract.
+                        if test $is_remediation -eq 1; and test (count $_REMED_PENDING) -eq 0; and test (count $_REMED_ACTIVE) -eq 0
+                            if check_rustc_sanity
+                                ui_success "toolchain remediation reconciled the at-risk chain (rebuilt "(string join ', ' $_REMED_ATTEMPTED)") — rustc sanity probe passes, resuming dispatch"
+                                set probe_remediating 0
+                                set remediation_phase ""
+                                set _REMED_ATTEMPTED
+                            else if test "$remediation_phase" = narrow
+                                ui_error "remediation by "(string join ', ' $_REMED_ATTEMPTED)" was insufficient — the tool-clang/llvm consumer chain is still broken"
+                                echo "  Escalating to a full core-group force-build (owner rule 2026-10-02)."
+                                set remediation_phase core
+                                set _REMED_PENDING
+                                for rp in $_GROUP_core
+                                    if not contains "$rp" $_REMED_ATTEMPTED
+                                        set -a _REMED_PENDING "$rp"
+                                    end
+                                end
+                                if test (count $_REMED_PENDING) -eq 0
+                                    ui_error "core-group remediation has nothing left to force-build — refusing to continue"
+                                    probe_refusal_text
+                                    set probe_stopped 1
+                                    set stop_starting 1
+                                    set -g _DASHBOARD_LAST_EVENT "$_UI_ICON_ERROR toolchain remediation exhausted after $p"
+                                else
+                                    set total (math $total + (force_queue_packages $_REMED_PENDING))
+                                    ui_warning "toolchain remediation (phase core): force-building "(string join ', ' $_REMED_PENDING)
+                                    set -g _DASHBOARD_LAST_EVENT "$_UI_ICON_WARN toolchain remediation: core rebuild $_REMED_PENDING"
+                                end
+                            else
+                                ui_error "core-group remediation rebuilt "(string join ', ' $_REMED_ATTEMPTED)" and the sanity probe still fails — refusing to continue"
+                                probe_refusal_text
+                                set probe_stopped 1
+                                set stop_starting 1
+                                set -g _DASHBOARD_LAST_EVENT "$_UI_ICON_ERROR toolchain remediation failed after $p"
+                            end
+                        end
                     case defer
-                        # Anchoring refused and build_package parked the recipe:
-                        # NOT a failed build. Dispatch keeps going; dependents of
-                        # $p are held back by pick_next_ready; $p stays out of
-                        # succeeded+failed so it lands in the resume command.
+                        # The lane parked the recipe — anchoring refused, or
+                        # the -s freshness refusal when upstream never
+                        # answered (wire reason; legacy 3-field results keep
+                        # the anchoring default): NOT a failed build. Dispatch
+                        # keeps going; dependents of $p are held back by
+                        # pick_next_ready; $p stays out of succeeded+failed so
+                        # it lands in the resume command.
                         set -a deferred $p
                         set -a _lane_deferred $p
-                        run_record_row "$p" deferred $rc $dur anchoring-refused
+                        set -l row_reason "$wire_reason"
+                        if test -z "$row_reason"
+                            set row_reason anchoring-refused
+                        end
+                        run_record_row "$p" deferred $rc $dur $row_reason
                         set -g _DASHBOARD_LAST_EVENT "$_UI_ICON_WARN deferred $p"
+                        # A parked remediation build cannot reconcile anything
+                        # (2026-10-02): remediation failed ⇒ the refusal contract.
+                        if test $is_remediation -eq 1
+                            ui_error "toolchain remediation build for $p was deferred — the at-risk chain cannot be reconciled; refusing to continue"
+                            probe_refusal_text
+                            set probe_stopped 1
+                            set stop_starting 1
+                            set -g _DASHBOARD_LAST_EVENT "$_UI_ICON_ERROR remediation deferred $p"
+                        end
                     case '*'
                         set -a failed $p
                         set stop_starting 1
@@ -5819,6 +6264,15 @@ function run_lanes -a lanes jobs_override intensity_level install_flag clean_fla
                         if test "$result_ready" = "1"
                             set -g _DASHBOARD_LAST_EVENT "$_UI_ICON_ERROR failed $p"
                         end
+                        # A failed remediation build is the one refusal left
+                        # (owner rule 2026-10-02): refuse and drain — the probe
+                        # failure alone never does.
+                        if test $is_remediation -eq 1
+                            ui_error "toolchain remediation build for $p failed — the at-risk chain could not be reconciled; refusing to continue"
+                            probe_refusal_text
+                            set probe_stopped 1
+                            set -g _DASHBOARD_LAST_EVENT "$_UI_ICON_ERROR remediation failed $p"
+                        end
                 end
                 set -g _DASHBOARD_LANE_BUSY $lane_busy
                 set -g _DASHBOARD_LANE_PKG $lane_pkg
@@ -5832,8 +6286,12 @@ function run_lanes -a lanes jobs_override intensity_level install_flag clean_fla
                             # The named error and its recovery lines live in the
                             # log; the run summary tails it — this line only has
                             # to park the recipe visibly without breaking pipes.
-                            printf "  %s %s: DEFERRED (anchoring refused) — log: %s\n" \
-                                "$_UI_ICON_WARN" $p (package_log_file "$p")
+                            set -l why (run_record_field "$p" reason)
+                            if test -z "$why"
+                                set why anchoring-refused
+                            end
+                            printf "  %s %s: DEFERRED (%s) — log: %s\n" \
+                                "$_UI_ICON_WARN" $p "$why" (package_log_file "$p")
                         case '*'
                             set -l log_file (package_log_file "$p")
                             printf "  %s %s: BUILD FAILED (rc=%s, %s) — log: %s\n" \
@@ -5892,6 +6350,19 @@ function run_lanes -a lanes jobs_override intensity_level install_flag clean_fla
                 if test $lane_busy[$i] -eq 1
                     continue
                 end
+                # Toolchain remediation gates dispatch (2026-10-02): while the
+                # force queue is being rebuilt, ONLY its targets start — they
+                # must reconcile the system before anything else compiles
+                # against it — and with an empty queue every lane waits for
+                # the in-flight remediation to land. Non-remediation work is
+                # held back, never refused.
+                set -l restrict
+                if test $probe_remediating -eq 1
+                    set restrict $_REMED_PENDING
+                    if test (count $restrict) -eq 0
+                        continue
+                    end
+                end
                 set -l other_busy 0
                 set -l other_solo 0
                 for j in (seq $lanes)
@@ -5909,9 +6380,9 @@ function run_lanes -a lanes jobs_override intensity_level install_flag clean_fla
                 end
                 # Core = solo: needs every lane idle; otherwise fall back to
                 # the first ready NON-core package so nothing idles needlessly.
-                set -l next (pick_next_ready 1)
+                set -l next (pick_next_ready 1 $restrict)
                 if test -n "$next"; and contains "$next" $_GROUP_core; and test $other_busy -eq 1
-                    set next (pick_next_ready 0)
+                    set next (pick_next_ready 0 $restrict)
                 end
                 if test -z "$next"
                     continue
@@ -5950,10 +6421,22 @@ function run_lanes -a lanes jobs_override intensity_level install_flag clean_fla
                 # Capture the complete child process boundary, not only the
                 # makepkg call, so hooks/signals can never corrupt the dashboard.
                 # The payload shape is lane_argv's (the handler validates the
-                # same description via lane_argv_check).
+                # same description via lane_argv_check). A remediation
+                # FORCE-build (2026-10-02) reconciles the system NOW: it may
+                # not freshness-skip under -s and its install may not be
+                # same-version-refused — the existing skip/force lane flags
+                # express both overrides; no new lane machinery.
+                set -l lane_skip $skip_flag
+                set -l lane_force_install $force_install_flag
+                if test $probe_remediating -eq 1; and contains "$next" $_REMED_PENDING
+                    set lane_skip 0
+                    set lane_force_install 1
+                    set -e _REMED_PENDING[(contains --index -- "$next" $_REMED_PENDING)]
+                    set -a _REMED_ACTIVE "$next"
+                end
                 setsid --wait fish "$SCRIPT_DIR/build-all.fish" --lane-job \
                     (lane_argv "$next" "$rf" $jobs $install_flag $clean_flag \
-                        $skip_flag $no_sync_flag $force_install_flag) >>"$child_log" 2>&1 &
+                        $lane_skip $no_sync_flag $lane_force_install) >>"$child_log" 2>&1 &
                 set lane_pid[$i] $last_pid
                 set -a _ACTIVE_LANE_PIDS $last_pid
                 set -a _ACTIVE_LANE_PKGS $next
@@ -5978,6 +6461,16 @@ function run_lanes -a lanes jobs_override intensity_level install_flag clean_fla
             end
         end
         if test $active -eq 0
+            # Remediation stalled: its force queue is non-empty but nothing
+            # dispatched (unmet dependency inside the queue). That is a failed
+            # remediation as far as the owner rule is concerned — refuse.
+            if test $probe_remediating -eq 1; and test (count $_REMED_PENDING) -gt 0
+                ui_error "toolchain remediation stalled — "(string join ', ' $_REMED_PENDING)" cannot be dispatched; refusing to continue"
+                probe_refusal_text
+                set probe_stopped 1
+                set stop_starting 1
+                set -g _DASHBOARD_LAST_EVENT "$_UI_ICON_ERROR remediation stalled"
+            end
             if test $stop_starting -eq 1
                 break
             end
@@ -6076,8 +6569,12 @@ function run_lanes -a lanes jobs_override intensity_level install_flag clean_fla
     end
     if test "$_OUTPUT_INTERACTIVE" = "1"; and test (count $deferred) -gt 0
         for p in $deferred
-            printf "  %s %s: DEFERRED (anchoring refused) — log: %s\n" \
-                "$_UI_ICON_WARN" $p (package_log_file "$p")
+            set -l why (run_record_field "$p" reason)
+            if test -z "$why"
+                set why anchoring-refused
+            end
+            printf "  %s %s: DEFERRED (%s) — log: %s\n" \
+                "$_UI_ICON_WARN" $p "$why" (package_log_file "$p")
         end
     end
 
@@ -6113,14 +6610,17 @@ end
 # Row grammar (internal): pkg|status|rc|dur|reason — exactly one row per
 # package, in topological order after finalize. status ∈ {succeeded, failed,
 # deferred, blocked, never-started, interrupted} ("deferred" NAMES the lane
-# rc-99 _ANCHOR_DEFER_RC amendment: anchoring refused parks the recipe, it is
-# not a failed build). rc and dur are integers (dur in seconds) or '-' when
+# rc-99 _ANCHOR_DEFER_RC amendment: a parked recipe, not a failed build —
+# either anchoring refusal or a named freshness refusal; the reason token
+# says which). rc and dur are integers (dur in seconds) or '-' when
 # the package never produced one. reason is a kebab-case token:
 #   ok                   succeeded
 #   build-failed         lane ran, makepkg/exits non-zero (rc is in the row)
 #   lane-lost            reap anomaly: no valid lane result (rc=125)
 #   log-unwritable       dispatch refused: the package log could not be opened
-#   anchoring-refused    deferred (rc=99)
+#   anchoring-refused    deferred (rc=99): checksum anchoring refused
+#   upstream-unverified  deferred (rc=99): -s could not confirm the recorded
+#                        refs against upstream after transport retries
 #   waits-on-deferred    blocked on a parked recipe
 #   never-ready          blocked: dependency cycle or missing dep
 #   dispatch-stopped     never started: dispatch stopped, lanes drained
@@ -6554,7 +7054,10 @@ function usage
     echo "  -c, --clean       Clean build artifacts before building"
     echo "  -s, --skip        Skip fresh archives only when each VCS source ref matches"
     echo "                    its recorded revision; an unusable baseline rebuilds"
-    echo "                    once if refs resolve; unresolved refs are refused."
+    echo "                    once if refs resolve. A ref upstream cannot answer even"
+    echo "                    after transport retries parks that recipe (deferred:"
+    echo "                    nothing is skipped or built, the rest of the run"
+    echo "                    continues, exit stays non-zero)."
     echo "  --no-sync         Don't auto-update stable or opted-in recipe versions."
     echo "                    Stable recipes use pacman -Si; only a record tagged"
     echo "                    version-sync=nvchecker uses its .nvchecker.toml provider."

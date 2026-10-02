@@ -207,6 +207,7 @@ EOF
 #!/usr/bin/env bash
 dir=$(pwd)
 set -e
+set -o pipefail   # a failed git archive must fail the shim, never hash empty input
 printf '%s\n' "$dir" >>"$GSA_FAKE_DIR/updpkgsums_calls"
 [[ -s $GSA_FAKE_DIR/deliver ]] || exit 1          # nothing to fetch
 
@@ -225,7 +226,7 @@ for alg in "${algos[@]}"; do
     for e in "${sources[@]}"; do
         f=$(file_of "$e")
         if [[ $e == *git+* ]]; then
-            tag=${e##*#}; tag=${tag##*=}
+            tag=${e##*#}; tag=${tag%%\?*}; tag=${tag##*=}
             if [[ ! -d $dir/$f ]]; then
                 mkdir -p "$dir/$f"
                 git -C "$dir/$f" init -q .
@@ -752,6 +753,33 @@ grep -q "^sha512sums=('$published_vcs')$" "$(pkgfile "$dir")" \
     || fail 'vcs: the checkout was not anchored to the git-archive value'
 grep -q 're-anchored to the official' "$(recipe_log "$dir")" \
     || fail 'vcs: the log does not record that the checkout was anchored'
+
+# ─── Case 10b: a `?signed` fragment flag must not leak into the ref name ─────
+# makepkg appends verification flags to the fragment (#tag=$pkgver?signed).
+# The archive must be recomputed from the bare ref: treating the flag as part
+# of the ref makes `git archive` fail and the anchor refuse a perfectly good
+# checkout with a bogus checksum-mismatch verdict (2026-10-02, systemd).
+dir="$fixture/vcs-signed"
+make_case_workspace "$dir" "$repo_version-1" \
+    's1git::git+https://example.invalid/s1.git#tag=$pkgver?signed' \
+    "sha512sums=('$staged_sum')"
+checkout="$dir/packages/stable/s1/s1git"
+mkdir -p "$checkout"
+git -C "$checkout" init -q .
+printf 'checkout of %s\n' "$repo_version" >"$checkout/f.txt"
+git -C "$checkout" add -A
+git -C "$checkout" -c user.email=t@t -c user.name=t commit -qm "$repo_version"
+git -C "$checkout" -c user.email=t@t -c user.name=t tag "$repo_version"
+published_vcs=$(git -c core.abbrev=no -C "$checkout" archive --format tar "$repo_version" | sha512sum | awk '{print $1}')
+set_official_srcinfo "$dir" "$repo_version" \
+    $'\tsource = s1git::git+https://example.invalid/s1.git#tag='"$repo_version" \
+    $'\tsha512sums = '"$published_vcs"
+set_delivery "$dir" "$published_payload"
+run_build "$dir" 'vcs-signed' 0
+grep -q "^sha512sums=('$published_vcs')$" "$(pkgfile "$dir")" \
+    || fail 'vcs-signed: the ?signed checkout was not anchored to the git-archive value'
+grep -q 're-anchored to the official' "$(recipe_log "$dir")" \
+    || fail 'vcs-signed: the log does not record that the checkout was anchored'
 
 # ─── Case 11: --no-sync disables the whole path ─────────────────────────────
 dir="$fixture/no-sync"

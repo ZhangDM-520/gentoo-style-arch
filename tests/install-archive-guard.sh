@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Regression fixture for the 2026-09-20 `-i` defects (see docs/MEMORY.md):
+# Regression fixture for install archive discovery and its refusal semantics:
 #
-#  1. list_split_pkgs read `pkgver=` with `grep | cut`, which keeps a trailing
-#     PKGBUILD comment. The value then matched no archive, so the find returned
-#     nothing — and install_pkgs_now treated "no arguments" as success.
-#  2. install_pkgs_now returned 0 for an empty package list, so `-i` reported
-#     "All builds succeeded!" without pacman ever being invoked.
+#  1. list_split_pkgs must use the expanded PKGBUILD value, not assignment text.
+#  2. A VCS pkgver() result is the current version after makepkg updates it.
+#  3. Unknown version metadata must not broaden discovery to every archive.
+#  4. A genuinely missing archive must fail checked install, never report success.
 #
 # The invariant this fixture enforces is behavioural, not textual: a run that
 # reports success under `-i` must have actually installed something. Case B
@@ -34,7 +33,14 @@ set -u
 # A real makepkg writes $pkgname-$pkgver-$pkgrel-$arch.pkg.tar.zst into
 # $startdir. GSA_FAKE_NO_ARCHIVE models "build succeeded, archive absent".
 if [[ "${GSA_FAKE_NO_ARCHIVE:-0}" != 1 ]]; then
-    : >"$PWD/p1-1.0.0-1-any.pkg.tar.zst"
+    archive=${GSA_FAKE_ARCHIVE_NAME:-p1-1.0.0-1-any.pkg.tar.zst}
+    if [[ "${GSA_FAKE_CALL_PKGVER:-0}" == 1 ]]; then
+        resolved_pkgver=$(bash -c 'source "$1" >/dev/null 2>&1 && pkgver' _ "$PWD/PKGBUILD")
+        [[ -n $resolved_pkgver ]] || exit 1
+        sed -i "s/^pkgver=.*/pkgver=$resolved_pkgver/" "$PWD/PKGBUILD"
+        archive="p1-$resolved_pkgver-1-any.pkg.tar.zst"
+    fi
+    : >"$PWD/$archive"
 fi
 # Invocation counter: the -s cases must observe that a SKIPPED build never
 # reaches makepkg — the lane's "already built" line is silent in quiet mode.
@@ -119,6 +125,41 @@ fi
 if ! grep -F 'p1-1.0.0-1-any.pkg.tar.zst' "$dir_a/pacman.log" >/dev/null; then
     printf 'case A: pacman ran without the built archive: %s\n' \
         "$(cat "$dir_a/pacman.log")" >&2
+    exit 1
+fi
+
+# Case A2: a legal shell expression is metadata, not a filename pattern.
+dir_expr="$fixture/case-shell-pkgver"
+make_case_workspace "$dir_expr" $'_basever=5.3.15\n_patchlevel=2\npkgver=${_basever}.${_patchlevel}\npkgrel=1\narch=(any)'
+if ! run_case "$dir_expr" GSA_FAKE_ARCHIVE_NAME='p1-5.3.15.2-1-any.pkg.tar.zst'; then
+    printf 'case A2: builder did not expand a shell-valued pkgver:\n%s\n' \
+        "$FIXTURE_OUTPUT" >&2
+    exit 1
+fi
+if ! grep -F 'p1-5.3.15.2-1-any.pkg.tar.zst' "$dir_expr/pacman.log" >/dev/null; then
+    printf 'case A2: pacman ran without the archive for the expanded pkgver:\n%s\n' \
+        "$(cat "$dir_expr/pacman.log" 2>/dev/null || true)" >&2
+    exit 1
+fi
+
+# Case A3: makepkg resolves pkgver() during the build and updates the PKGBUILD.
+# A stale archive for the pre-build pkgver must not be installed alongside it.
+dir_vcs="$fixture/case-vcs-pkgver"
+make_case_workspace "$dir_vcs" $'pkgver=1.0.0\npkgrel=1\narch=(any)\npkgver() { echo 2.0.r7.gabc123; }'
+: >"$dir_vcs/packages/p1/p1-1.0.0-1-any.pkg.tar.zst"
+if ! run_case "$dir_vcs" GSA_FAKE_CALL_PKGVER=1; then
+    printf 'case A3: builder did not use the makepkg-resolved VCS pkgver:\n%s\n' \
+        "$FIXTURE_OUTPUT" >&2
+    exit 1
+fi
+if ! grep -F 'p1-2.0.r7.gabc123-1-any.pkg.tar.zst' "$dir_vcs/pacman.log" >/dev/null; then
+    printf 'case A3: pacman did not receive the post-build pkgver archive:\n%s\n' \
+        "$(cat "$dir_vcs/pacman.log" 2>/dev/null || true)" >&2
+    exit 1
+fi
+if grep -F 'p1-1.0.0-1-any.pkg.tar.zst' "$dir_vcs/pacman.log" >/dev/null; then
+    printf 'case A3: pacman received a stale pre-build pkgver archive:\n%s\n' \
+        "$(cat "$dir_vcs/pacman.log")" >&2
     exit 1
 fi
 
@@ -300,6 +341,52 @@ if [[ "$h_runs" != 1 ]]; then
     exit 1
 fi
 assert_u "$dir_h" 'case H'
+
+# Case J: no version metadata means no archive is eligible for -ia. The
+# unversioned glob-all fallback would let a stale archive bypass the guard.
+dir_j="$fixture/case-unknown-version"
+make_case_workspace "$dir_j" ""
+: >"$dir_j/packages/p1/p1-1.0.0-1-any.pkg.tar.zst"
+builder_args=(-ia)
+if ! run_case "$dir_j"; then
+    printf 'case J: -ia failed instead of treating unknown-version archives as ineligible:\n%s\n' \
+        "$FIXTURE_OUTPUT" >&2
+    exit 1
+fi
+if grep -q -- 'pacman -U' "$dir_j/pacman.log" 2>/dev/null; then
+    printf 'case J: -ia installed an archive despite missing pkgver/pkgrel:\n%s\n' \
+        "$(cat "$dir_j/pacman.log")" >&2
+    exit 1
+fi
+if ! grep -q 'No eligible built packages found' <<<"$FIXTURE_OUTPUT"; then
+    printf 'case J: unknown-version archive was not reported as ineligible:\n%s\n' \
+        "$FIXTURE_OUTPUT" >&2
+    exit 1
+fi
+builder_args=(-i p1)
+
+# Case K: a PKGBUILD evaluation diagnostic must stay on stderr, not become an
+# archive argument through list_split_pkgs' command-substitution caller.
+dir_k="$fixture/case-invalid-pkgbuild"
+make_case_workspace "$dir_k" $'pkgver=1.0.0\nif then'
+: >"$dir_k/packages/p1/p1-1.0.0-1-any.pkg.tar.zst"
+builder_args=(-ia)
+if ! run_case "$dir_k"; then
+    printf 'case K: -ia failed on an invalid recipe instead of rejecting its archive:\n%s\n' \
+        "$FIXTURE_OUTPUT" >&2
+    exit 1
+fi
+if grep -q -- 'pacman -U' "$dir_k/pacman.log" 2>/dev/null; then
+    printf 'case K: a PKGBUILD evaluation diagnostic reached pacman as an archive:\n%s\n' \
+        "$(cat "$dir_k/pacman.log")" >&2
+    exit 1
+fi
+if ! grep -q 'could not evaluate pkgver/pkgrel for archive discovery' <<<"$FIXTURE_OUTPUT"; then
+    printf 'case K: PKGBUILD evaluation failure was not reported:\n%s\n' \
+        "$FIXTURE_OUTPUT" >&2
+    exit 1
+fi
+builder_args=(-i p1)
 
 # ─── The --install-decide seam: decisions without execution ──────────────────
 # 2026-09-26 plan+executor split: install_plan computes the transaction plan

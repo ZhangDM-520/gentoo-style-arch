@@ -38,7 +38,7 @@ make_workspace "$fixture" auto auto xhigh
 
 ids=(p1 p2 p3 p4)
 for id in "${ids[@]}"; do
-    add_package "$fixture" "$id"
+    add_package "$fixture" "$id" $'pkgver=1.0\npkgrel=1\narch=(x86_64)'
 done
 
 cat >"$fixture/bin/makepkg" <<'EOF'

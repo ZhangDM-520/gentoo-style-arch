@@ -11,6 +11,11 @@ them, especially when the source or maintainer is unfamiliar.
   the documented root-supervisor behavior is needed for long install runs.
 - `--install` invokes `pacman -U`; inspect the selected package list first and
   keep the system package database backed up.
+- The builder reads PKGBUILD scalar and array metadata by sourcing the recipe
+  in Bash subprocesses. `--installall` may evaluate top-level code from each
+  recipe with an existing package archive while discovering eligible
+  `pkgver-pkgrel` outputs; this is not a sandbox and does not run only
+  declarative assignments.
 - The builder serializes its own pacman transactions but never deletes
   `/var/lib/pacman/db.lck`. Investigate the owning process or stale lock
   manually.

@@ -44,6 +44,10 @@
 #   GSA_FAKE_DURATIONS         scheduler-core-solo: per-package duration table
 #   GSA_FAKE_FAIL_PACKAGE      trivial makepkg stub: package id whose build must
 #                              fail (was GSA_FAIL_PACKAGE)
+#   GSA_FAKE_GCC_VERSION       toolchain-drift's gcc stub: reported compiler
+#                              identity used to detect build-tree drift
+#   GSA_FAKE_INSTALLED_DIR     pacman stub: "$DIR/<pkg>" existing = `pacman -Q
+#                              <pkg>` answers installed (toolchain-remediation)
 #   GSA_FAKE_LANE_INTERVALS    scheduler-core-solo: START/END timestamp log
 #   GSA_FAKE_LANE_MARKER       dashboard makepkg stub: lane-child PID log
 #                              (was GSA_LANE_MARKER)
@@ -64,6 +68,10 @@
 #                              covers pgo-payload-guard's same-purpose stub)
 #   GSA_FAKE_PACMAN_RC         install-archive-guard pacman stub: exit status
 #                              (was GSA_FIXTURE_PACMAN_RC)
+#   GSA_FAKE_ARCHIVE_NAME      install-archive-guard makepkg stub: archive name
+#                              for shell-expanded pkgver coverage
+#   GSA_FAKE_CALL_PKGVER       install-archive-guard makepkg stub: run pkgver()
+#                              and model makepkg's updated PKGBUILD version
 #   GSA_FAKE_PGREP_HOLDER      pgrep stub: THE pid "holding" the lock/db
 #                              (local-db-repair, signal-abort-lock)
 #   GSA_FAKE_QI                install-archive-guard pacman stub: `pacman -Qi`

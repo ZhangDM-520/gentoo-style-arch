@@ -42,11 +42,14 @@ compiling against an older ABI. Core selection automatically enables
 immediate installation because its ABI coupling makes a collective install
 unsafe.
 
-`--installall` (`-ia`) installs every archive in the workspace in **one**
-pacman transaction, so it cannot honour the install-before-dependents rule:
-use it only to re-install a set that does not depend on each other (for
-example after `--cleanup`, or with `--overwrite`), never as a substitute for
-`--install` in a run whose packages are chained in build order.
+`--installall` (`-ia`) installs every discoverable archive whose filename
+matches its recipe's evaluated current `pkgver-pkgrel` in **one** pacman
+transaction. Archives with stale versions or unknown version metadata are not
+eligible; no eligible archives is a no-op. Because the transaction cannot
+honour the install-before-dependents rule, use it only to re-install a set that
+does not depend on each other (for example after `--cleanup`, or with
+`--overwrite`), never as a substitute for `--install` in a run whose packages
+are chained in build order.
 
 Root-supervisor mode is:
 
@@ -63,23 +66,44 @@ leave logs that poison the next one.
 
 ### Skip and resume
 
-`-s/--skip` keeps the archive-mtime versus `PKGBUILD`-mtime check. For
-non-VCS recipes, that remains the full freshness check. For a VCS recipe, it
-is only the first gate: the builder compares the actual source revisions
-recorded for that archive after a successful build with the current remote
-revision of each VCS source's declared ref (`git`, `svn`, `hg`, or `bzr`).
-Every declared ref must still match before the archive can be skipped. A
-moved ref makes the archive stale and the package follows the ordinary build
-path. Resolve the declared ref, not an unrelated repository `HEAD` or the
-mutable shared source checkout.
+Before any `-s/--skip` decision, the builder compares the recipe's recorded
+GCC identity with the current `gcc --version` build line. A missing or changed
+identity removes that recipe's `src/`, `pkg/`, and `build/` trees, its package
+archives, and their VCS revision records, then rebuilds even if `-s` was
+requested. The marker is written only after a successful build and VCS
+revision recording, so a failed attempt is cleaned again on retry. Markers are
+under `.state/toolchains/` (or `GSA_STATE_DIR`); changing the state directory
+intentionally causes a one-time clean for each selected recipe. This is
+per-recipe state, not a scan or bulk cleanup of the workspace.
+When `-s` has a current-mtime VCS archive, the selected refs are resolved
+before this automatic clean; an unreachable ref still refuses before the
+archive and its baseline are removed.
+
+After that check, `-s/--skip` keeps the archive-mtime versus
+`PKGBUILD`-mtime predicate. For non-VCS recipes, that remains the full
+freshness check. For a VCS recipe, it is only the first gate: the builder
+compares the actual source revisions recorded for that archive after a
+successful build with the current remote revision of each VCS source's
+declared ref (`git`, `svn`, `hg`, or `bzr`). Every declared ref must still
+match before the archive can be skipped. A moved ref makes the archive stale
+and the package follows the ordinary build path. Resolve the declared ref, not
+an unrelated repository `HEAD` or the mutable shared source checkout.
 
 If an archive has no usable revision baseline, `-s` never assumes that the
 current upstream ref produced it. The builder first checks that each declared
 ref can be parsed and resolved, then performs one normal build to record the
 actual source revisions used for the replacement archive. A later `-s` can
 skip it normally. If a ref cannot be resolved, the builder stops before
-`makepkg`; it does not skip the archive or begin an unverified migration. A
-valid baseline whose ref moved follows the normal build path. On a genuine
+`makepkg`; it does not skip the archive or begin an unverified migration.
+Git ref queries classify transport failures by `ls-remote` exit status: 0/2
+are completed answers (2 = clean "no such ref", never retried), anything
+else is retried 3 times (0.5 s/1 s backoff). If upstream still does not
+answer, the recipe is *deferred* (lane rc 99, run-record reason
+`upstream-unverified`): nothing is skipped, built, or installed, dependents
+wait, the rest of the run continues, and the run exits non-zero — an
+unverifiable upstream parks one recipe, it never fails the run and never
+licenses a skip (2026-10-02, `docs/NOTE.md`). A valid baseline whose ref
+moved follows the normal build path. On a genuine
 skip, `-s -i` continues through the existing install path; a one-time legacy
 rebuild follows the normal build/install path.
 
@@ -289,8 +313,9 @@ expiry altogether: installs run as root and `makepkg` still builds as you.
 ## Runtime state and cleanup
 
 Builder state is under `.state/` by default. Set `GSA_STATE_DIR` to put logs,
-lane results, and lock files elsewhere. makepkg source mirrors and
-archives follow its `SRCDEST`/`PKGDEST` configuration:
+lane results, lock files, and per-recipe toolchain identities elsewhere.
+makepkg source mirrors and archives follow its `SRCDEST`/`PKGDEST`
+configuration:
 
 ```sh
 GSA_STATE_DIR="$HOME/.local/state/gentoo-style-arch" \
@@ -351,9 +376,10 @@ never produced one. The status enum, with its reasons:
 - `succeeded` — `ok`.
 - `failed` — `build-failed` (lane ran, rc is in the row), `lane-lost` (reap
   anomaly, rc 125), `log-unwritable` (dispatch refused: log not openable).
-- `deferred` — rc **99**, reason `anchoring-refused`: checksum anchoring was
-  impossible, the recipe is parked rather than failed, dispatch continues and
-  its dependents wait. Not a failed build.
+- `deferred` — rc **99**, reason `anchoring-refused` (checksum anchoring was
+  impossible) or `upstream-unverified` (`-s` could not confirm the recorded
+  refs: transport retries exhausted): the recipe is parked rather than failed,
+  dispatch continues and its dependents wait. Not a failed build.
 - `blocked` — `waits-on-deferred` (dependent of a parked recipe) or
   `never-ready` (dependency cycle / missing dep).
 - `never-started` — `dispatch-stopped`, `preflight-refused`, or

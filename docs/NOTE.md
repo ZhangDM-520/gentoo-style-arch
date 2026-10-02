@@ -36,6 +36,203 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-02 — one unqueryable upstream aborted a whole run (-s freshness defer)
+
+- **Symptom**: a 147-package `-s` run built 16, failed 1, and left 131
+  `never-started` — all because `libisl-git`'s upstream was momentarily
+  unreachable. The `-s` skip path verifies every selected VCS ref before
+  trusting an existing archive; when `git ls-remote` died at the transport
+  level (TLS `unexpected eof while reading`, measured 2 failures in 3
+  consecutive attempts against `repo.or.cz/isl.git` within one minute while
+  `github.com` answered first try), `vcs_remote_revision` returned empty,
+  `vcs_archive_is_current` returned 2 ("cannot establish"), both `-s`
+  callers mapped that to `ui_error … return 1`, the lane decoded it as a
+  *failed build*, and the fail-fast dispatcher stopped dispatching. Evidence:
+  `.state/logs/libisl-git.log` carried the refusal line.
+- **Root cause**: rc 2 conflates "cannot establish" with "bad package", and
+  one shot of `git ls-remote` is not an oracle for "upstream is gone" — the
+  transport failure was intermittent, not a moved ref (rc 1) and not a
+  completed query (ls-remote exit 2 = clean "no such ref").
+- **Fix** (all in `build-all.fish`):
+  1. `git_ls_remote_quiet` wraps the three Git queries in
+     `vcs_remote_revision` with a transport classifier on the exit status —
+     0/2 are *answers* (never retried), anything else is a transport failure,
+     retried 3 attempts with 0.5 s/1 s backoff.
+  2. Both rc-2 sites in `build_package` (toolchain pre-check and main skip
+     check) now `return $lane_outcome_defer` with reason
+     `upstream-unverified` instead of `return 1`: the recipe is PARKED, not
+     failed — nothing is skipped, built or installed, dependents wait
+     (`waits-on-deferred`), dispatch continues, the run still exits non-zero
+     and the package lands in the resume command. This is the same defer
+     channel AUR/nvchecker/anchoring outages already use (lane rc 99).
+  3. The lane-result wire gained an optional 4th field, the defer reason
+     (`lane_result_encode/decode` accept legacy 3-field lines; the dispatcher
+     falls back to `anchoring-refused`), so the run record says
+     `upstream-unverified` instead of a false `anchoring-refused`, and the
+     DEFERRED markers print the actual reason.
+  The fail-closed invariant is untouched: an archive is skipped (and
+  installed under `-s -i`) ONLY when every declared ref was positively
+  confirmed equal to its recorded baseline. Deliberate give-up: liveness —
+  an outage outlasting the ~1.5 s retry window parks that package for this
+  run rather than guessing. A misclassified *persistent* transport error
+  (expired credentials, proxy 403) costs only the backoff seconds because
+  both classifier branches converge on defer; no branch can reach "skip".
+- **Out of scope, deliberately**: the sibling seam — makepkg's own download
+  failing (e.g. `curl: (35) TLS connect error` against ftp.astron.com) — still
+  fails the package and stops dispatch. Classifying *those* failures means
+  parsing makepkg output that also carries checksum/PGP integrity failures,
+  which must never be retried or deferred into success; a wrong parse
+  direction there is a security regression, while the skip path reads a
+  first-party exit code. On any `-s` run with an existing archive the
+  freshness query runs first, so the fix lands before makepkg is invoked.
+  A first build (no archive) or a non-`-s` run never enters this check.
+  Follow-up candidate: a curl retry in makepkg's `DLAGENTS`.
+- **Validation**: `fish -n build-all.fish`; new sections in
+  `tests/skip-upstream.sh` (flake-then-good skip, flake-then-moved rebuild,
+  persistent-failure defer with dispatch continuation, held dependent, and
+  the no-stale-install vector — `-s -i` with the ref moved and ls-remote
+  always failing must end `p1 deferred 99 … upstream-unverified` with no
+  `pacman -U` line for p1); `tests/run-record.sh`'s reason vocabulary gained
+  `upstream-unverified`. Full battery green except the pre-existing
+  `srcinfo-freshness.sh` failure (`packages/stable/xdg-user-dirs`: PKGBUILD
+  modified in the dirty worktree, `.SRCINFO` not regenerated — predates this
+  change).
+- **Durable rule**: rc 2 ("cannot establish") defers, it never fails and
+  never skips. Transport failures are retried; a completed "ref absent"
+  answer is not. Only a positively confirmed ref==baseline may skip/install.
+
+
+
+- **Symptom**: in a real 6-lane `-i` run, `xdg-utils` built cleanly
+  (`xdg-utils-1.2.1-2-any.pkg.tar.zst`; makepkg log ended `Finished making:
+  xdg-utils 1.2.1-2`) and the run then failed the package with
+  `build succeeded but VCS revisions could not be recorded …: missing local
+  checkout for xdg-utils.git`, which stopped dispatch (17 built, 1 failed,
+  130 remaining). Measured on disk after the failure:
+  `packages/stable/xdg-utils/src/xdg-utils` was a git checkout at exactly
+  `356c380ad6fecc9ce6bea1f6a77986ba67402c80`, the pinned commit the build
+  had just compiled.
+- **Root cause**: `vcs_source_checkout` probed only `$pkg_path/<name>`,
+  `$pkg_path/<name minus .git>` and — when `SRCDEST` happened to be exported
+  into the *recorder's own* environment — `$SRCDEST/<name>`. Real makepkg
+  keeps only the mirror in `SRCDEST` (`download_git`: `git clone --mirror`)
+  and materialises the working copy that `build()`/`package()` `cd` into
+  under `$srcdir` (`extract_git` clones into `$startdir/src/<name>`); `src/`
+  was never a candidate. Two failure modes follow. With
+  `SRCDEST=… sudo fish build-all.fish …`, sudo's env_reset strips `SRCDEST`
+  before fish starts (measured UNSET), so no root matched and the recorder
+  failed loudly *after* a green build — the observed incident. With `SRCDEST`
+  exported (this host's fish exports `~/.makepkg.conf`'s value), the probe
+  could instead find the SRCDEST mirror and record its HEAD: a download cache
+  whose HEAD is the remote's default branch, not the built ref (measured:
+  `~/.cache/gsa-src/xdg-utils` HEAD `03707c1f…` vs built `356c380a…`) — a
+  manifest naming a revision the archive never contained. The same
+  mirror-at-the-package-root conflation exists wherever `SRCDEST` defaults to
+  `$startdir`; `noctalia-git` and `vencord-git` passed only because their
+  package-root clones' HEADs happened to equal the built revisions.
+- **Fix**: `vcs_source_checkout` now probes
+  `$pkg_path/src/<name{,.git-stripped}>` first, then `$pkg_path`, then an
+  exported `$SRCDEST`, first existing directory wins. `$startdir/src` is
+  derived from the recipe path alone: it needs no environment and cannot
+  disagree with makepkg's layout, which answers both the env_reset and the
+  mirror-authority problems at once. The probe stays `-d`-only (the
+  svn/hg/bzr fixture checkouts are plain directories); `source_filename`
+  semantics, the signature-entry skip, and `vcs_local_revision`/
+  `vcs_remote_revision` are untouched. The post-build failure remains a hard
+  failure — see the rule.
+- **Validation**: `tests/skip-upstream.sh` gained two sections whose fake
+  makepkg materialises the checkout the way real `extract_git` does — under
+  `$PWD/src/<name>`, not at the package root the old probe searched: an
+  `upstream::`-override workspace asserting the manifest equals the `src/`
+  revision against same-named decoys at the package root and in a hermetic
+  `SRCDEST` (`$workspace/makepkg-srcdest`), both sanity-pinned at an older
+  revision, plus `-s` skip parity; and a no-override `…/remote.git` workspace
+  (the xdg-utils entry shape: `source_filename` keeps `.git`, makepkg strips
+  it) with the same assertions. Both sections failed against the pre-fix
+  builder with the incident's exact error (`missing local checkout for
+  upstream`) and pass after the fix — red first, then green. The fixture's
+  `SRCDEST` is now hermetic for every case, so the host source cache can
+  never decide a fixture outcome. After the fix: `fish -n`, `--audit`,
+  `--list`, dry-runs for `git`/`core`/`stable` all rc 0; full battery 46/46.
+  `install-archive-guard.sh` and `toolchain-drift.sh` (round-1) stayed green.
+  The battery started 43/46: pre-existing drift from the 2026-10-01/02 builds
+  and a 20:42 pkgrel walk-back — regenerated the stale `.SRCINFO`s of
+  `logseq-desktop-git`, `noctalia-git`, `vencord-git`, `bash`, and restored
+  `noctalia-git`'s `pkgrel` to 3 (the committed `tests/noctalia-pgo.sh` pin
+  from the 2026-09-23 PGO incident; makepkg's `pkgver()` writeback to
+  `5.2.0.r5684.g30415127e` stays).
+- **Rule**: the revision recorded in `*.gsa-vcs-revisions` is the HEAD of the
+  working copy the build compiled — `$startdir/src/<name>` — never a
+  download-root mirror; the package-root and `SRCDEST` probes are fallbacks
+  for layouts that leave no `src/` copy. If no root yields a checkout, keep
+  failing loudly instead of recording an "unknown": the manifest is the `-s`
+  skip credential, and a placeholder would either never match a queried
+  revision (permanent rebuild loop behind a parseable file) or, worse, be
+  shaped to match one (an unverified skip). A recorder failure currently
+  returns 1 and therefore stops dispatch; `lane_outcome_defer` (exit 99:
+  park the package, keep dispatching) is the repo's existing vocabulary for
+  that disposition — recorded as a follow-up, deliberately not changed here.
+
+## 2026-10-01 — evaluated install versions and GCC LTO build-tree drift
+
+- **Symptoms**: checked `-i` refused a freshly built archive when `pkgver`
+  referenced earlier PKGBUILD variables. Separately, an incremental LTO link
+  failed after a GCC snapshot change; the affected source tree contained
+  objects emitted by different compiler builds.
+- **Root causes**: `pkgbuild_var` scraped assignment text, so a valid shell
+  expression remained literal and matched no archive. When version metadata
+  was empty, `list_split_pkgs` instead selected every archive, which could
+  install stale output. VCS `pkgver()` results are refreshed during makepkg,
+  so the pre-build value is not the install-time version. The builder also had
+  no record of which GCC build had produced each incremental tree. The
+  available object evidence establishes compiler drift, but does not prove
+  whether an all-old tree alone would fail under the new `lto1`.
+- **Decisions and fix**:
+  - Read PKGBUILD scalar metadata by sourcing it in Bash, matching the
+    existing `pkgbuild_array` contract rather than implementing an incomplete
+    shell parser. Archive discovery evaluates one version pair per recipe and
+    only sources recipes that have an archive; `-ia` therefore still executes
+    top-level code from archive-bearing PKGBUILDs and is not a sandbox.
+    Evaluation failures are sent to stderr because archive discovery runs
+    inside command substitution; case K pins that diagnostics do not become
+    pacman archive arguments.
+  - Match archives against the evaluated `pkgver-pkgrel` after makepkg's VCS
+    `pkgver()` update. Remove the glob-all fallback: unknown version metadata
+    makes no archive eligible (`-i` refuses an empty plan; `-ia` warns and
+    no-ops). This chooses stale-output safety over installing an unversioned
+    archive.
+  - Record the GCC version line and recipe path per package under
+    `.state/toolchains/`. A missing or changed identity uses the existing
+    clean path before `-s`, removing `src/`, `pkg/`, `build/`, archives, and
+    VCS revision sidecars. Record only after a successful build and revision
+    recording; a failed build must clean again on retry. When `-s` has a
+    current-mtime VCS archive, resolve its refs before deleting its archive
+    and baseline, preserving the existing refusal for unreachable sources.
+    This avoids a whole-workspace scan or bulk wipe.
+    The key is GCC's reported version line rather than a binary hash; it
+    detects snapshot identifiers carried in that line, not a same-line rebuild
+    or a non-GCC compiler change.
+- **Validation**: the shell-expression and GCC-drift fixtures were observed
+  failing before their builder fixes. The VCS fixture caught the initial
+  pre-clean regression and passed after the ref preflight was added. Focused
+  archive, toolchain-drift, upstream-skip, mutex, and sudo-keepalive fixtures
+  pass; a temporary mutation restoring glob-all discovery was killed by
+  install-archive case J. Fish/Bash syntax, workspace audit/list, and dry-runs
+  for `git`, `stable`, and `core` pass. The full battery reports 44 passed and
+  two failures: `nvcheck-aggregator.sh` cannot traverse pre-existing ignored
+  build-output directories, and `srcinfo-freshness.sh` finds ten recipes
+  whose PKGBUILDs were already dirty at task start while their `.SRCINFO`
+  remains stale. Neither condition was changed here. No real package build,
+  package installation, or zsh cleanup was run.
+- **Rule**: never derive a package archive pattern from PKGBUILD assignment
+  text or install all archives when the version is unknown. A compiler
+  identity belongs to each recipe's runtime state; on drift, clean that
+  selected recipe before any skip decision, and do not advance the identity
+  on failure. The next selected `app,stable,git,core` run can clean/rebuild
+  each recipe as it reaches it; unselected groups remain untouched. Whether
+  an all-old object tree fails under a newer GCC remains unproven, but the
+  identity guard safely covers that possibility as well as mixed generations.
+
 ## 2026-10-01 — dbus-broker stale Meson Rust option state
 
 - **Symptom**: rebuilding `dbus-broker-git` failed while Ninja regenerated the
