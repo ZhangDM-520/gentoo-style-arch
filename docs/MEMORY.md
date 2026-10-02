@@ -753,6 +753,41 @@ constant, not a baked path).
 
 ## 6. Pitfall digest (full details: NOTE.md sections of same dates)
 
+- **Mold cannot build this glibc recipe — the recipe pins bfd, only for
+  itself** (2026-10-03, glibc-git; three measured defects): (1) the
+  `librtld.mk` member parse matches GNU-ld/lld map lines only; mold map lines
+  (`0x…`) yield zero rows → empty `rtld-subdirs` → the opaque
+  `rtld-Rules:40` "subroutine of elf/Makefile" stop. (2) mold's `-r`
+  relocatable link drops symbol versions from the output symtab: glibc's
+  compat/default pairs (`forkpty@GLIBC_2.2.5` + `forkpty@@GLIBC_2.34`)
+  collapse into duplicate unversioned rows at the same offset, breaking every
+  later link. (3) mold's `-shared` links drop map-assigned **default**
+  versions: a version script splitting one unversioned input symbol across
+  nodes must emit `sym@@old` + `sym@new` (Arch's installed lib32 oracle has
+  `open64@@GLIBC_2.1` + `open64@GLIBC_2.2`); mold emitted only the compat
+  row, an ABI defect that failed here merely because a later unversioned
+  reference could not bind. The recipe therefore appends `-fuse-ld=bfd` to
+  `LDFLAGS` in `build()` (appended last: gcc takes the last `-fuse-ld=`), and
+  the patch guards the parse (named remediation), makes the map depend on its
+  makefile, and pins the one `$(CC)`-direct link past LDFLAGS. Rules: a
+  recipe parsing a tool-produced map/depfile owns the producing side of the
+  seam — pin the format at the producer instead of extending a parse to
+  private formats (mold's map format is undocumented); treat linker choice as
+  a per-recipe decision (never `/etc/makepkg.conf`, shared system state, one
+  line flips all 145 recipes), and verify artifact *symbol version tables*
+  against an installed oracle, not just link success; makefile-generated
+  artifacts depend on their defining makefile (and when a prerequisite joins
+  `$^`, name the inputs explicitly); upstream-source patches apply with
+  `--fuzz=0` plus verbatim greps; `prepare()` purges generated link
+  intermediates after a rule change (make never revisits an up-to-date
+  corrupt file). Related pitfall same day: a git-sourced glibc has no
+  top-level `COPYING` (release tarballs add it) — the recipe's
+  `_install_license` installs the tree's `COPYINGv2/COPYINGv3/
+  COPYING.LESSERv2/COPYING.LIB` explicitly. Patch
+  `packages/core/glibc-git/0001-bfd-relocatable-links-*.patch` needs
+  refreshing if a `_commit` bump changes the glibc Makefiles — `prepare()`
+  fails loudly, by design.
+
 - **A VCS `pkgver()` that parses upstream build metadata is a silent-drift
   hazard** (2026-09-30, noctalia-git): upstream moved `version:` out of
   `meson.build` into a `VERSION` file (`version: files('VERSION')`), the

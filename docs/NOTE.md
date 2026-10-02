@@ -36,6 +36,70 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-03 — glibc-git vs mold: map parse and `-r` symbol versions
+
+- **Symptom**: `glibc-git` `build()` died at `elf/rtld-libc.a` with
+  `rtld-Rules:40: *** This makefile is a subroutine of elf/Makefile not to be
+  used directly. Stop.` (`.state/logs/glibc-git.log`, make rc=1); the
+  generated `elf/librtld.mk` was the single line `rtld-subdirs =`. With that
+  seam fixed, a second failure surfaced at the `libc.so` link: `multiple
+  definition of 'forkpty' … libc_pic.os.clean … first defined here`, both
+  definitions at the same file offset — and mold aborted on the same input
+  with a Rust panic (`input_files.rs: unwrap on None`).
+- **Root cause** (two mold incompatibilities in glibc's internal
+  *composition* links):
+  1. the `$(objpfx)librtld.mk` rule parses the `librtld.map` link map with a
+     sed whose address skip `^[0-9a-f ]*` matches GNU-ld/lld map lines only;
+     mold map lines (`0x<addr> <size> <align> …(<m>.os):(<sect>)`) defeat the
+     skip → 0 rows (measured; the map held 97 unique members) → empty
+     `rtld-subdirs` → the opaque `rtld-Rules` stop. The same inputs
+     re-linked `-fuse-ld=bfd` parse to the identical 97-member set.
+  2. mold's `-r` relocatable link drops symbol versions from the output
+     symtab: glibc's compat/default pairs (`forkpty@GLIBC_2.2.5` +
+     `forkpty@@GLIBC_2.34`) collapse into duplicate *unversioned* rows at
+     the same offset (`readelf -sW`: bfd `-r` keeps both versioned rows,
+     mold `-r` emits two identical bare rows), and the corrupt intermediate
+     breaks every later link. Verified separately that mold's final
+     `-shared` link over a clean input *does* preserve versions through the
+     version script — only the `-r` composition path is wrong.
+- **Fix** (recipe-local `0001-bfd-relocatable-links-and-librtld-parse-guard.patch`,
+  applied in `prepare()`): every relocatable *composition* link runs
+  `-fuse-ld=bfd` (`reloc-link` in elf/Makefile — which also fixes the map
+  format feeding the parse — plus `Makerules` `libc_pic.os`, `csu/Makefile`
+  `link-relocatable`, and the top `Makefile` static-libc check); *artifact*
+  links keep the host linker. The map rule depends on `Makefile` (a re-run
+  cannot serve a map from a previous rule; the link names its inputs
+  explicitly since `$^` would then grow `Makefile`), the parse asserts its
+  own precondition with a named remediation, `prepare()` applies with
+  `--fuzz=0` plus a verbatim spot grep, and purges generated composition
+  intermediates — make never revisits an up-to-date corrupt file. Both
+  `glibc-build` and `lib32-glibc-build` share `src/glibc`, so one patch
+  covers both seams.
+- **Validation**: fixture battery green in this run (count in REPORT.md);
+  `GIT_CONFIG_COUNT=0 fish build-all.fish --no-deps glibc-git` built through
+  `package()`; both build trees' `elf/librtld.mk` end in non-empty
+  `rtld-subdirs = …`; the built `libc.so` dyn-syms carry both version rows
+  (`forkpty@GLIBC_2.2.5`, `forkpty@@GLIBC_2.34`).
+- **Rule**: a recipe parsing a tool-produced map/depfile owns the producing
+  side of the seam — pin the format at the producer instead of extending a
+  parse to private formats (mold's map format is undocumented). A mold `-r`
+  link silently corrupts versioned symbol tables: keep `-fuse-ld=bfd` on
+  relocatable composition links, never on artifact links. Upstream-source
+  patches apply with `--fuzz=0` plus a verbatim grep, makefile-generated
+  artifacts depend on their defining makefile (and when a prerequisite joins
+  `$^`, name the inputs explicitly), and `prepare()` purges generated
+  intermediates after a rule change. Never reconcile linker choice in
+  `/etc/makepkg.conf` (shared system state; one line flips all 145 recipes).
+- **Environment note** (not the recipe's defect): the host's fish defines an
+  `rm` "fast trash" wrapper (`~/.config/fish/functions/rm.fish`), so the
+  builder's toolchain-drift cleanup (`rm -rf src pkg build`) trashes instead
+  of deleting; a `pkg/` dir arriving at mode 0111 then collided with 0111
+  placeholders in `~/.local/share/Trash/files/` and the cleanup aborted with
+  `mv: cannot move … Permission denied` / `rm: cannot trash …` before any
+  build. Workaround: remove the empty `pkg/` (repo-side) before retrying;
+  the missing `.state/toolchains/glibc-git` marker makes every failed-build
+  retry wipe build state until one build succeeds.
+
 ## 2026-10-02 — one unqueryable upstream aborted a whole run (-s freshness defer)
 
 - **Symptom**: a 147-package `-s` run built 16, failed 1, and left 131

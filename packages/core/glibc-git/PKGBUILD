@@ -29,6 +29,7 @@ source=(
   12-glibc-remove-iconvconfig-cache.hook
   12-lib32-glibc-iconvconfig.hook
   12-lib32-glibc-remove-iconvconfig-cache.hook
+  0001-bfd-relocatable-links-and-librtld-parse-guard.patch
 )
 b2sums=(
   SKIP
@@ -47,6 +48,7 @@ b2sums=(
   def4e0ebe297ec07f292457b6e88402eb6628cbbe721109df998a504656dad60fbf03f483298aeebf287ae9649146a354828037ad3a079aee01b20b2ef4a8c67
   8a9b1da927ff4f5d59bffdc6647fdacc82a9bb28958cec643b9cac58e49e8014df424e6e0908de853c765aa789bbf6b735ab9b3905d870d39707568157425a44
   dc3223eae3b465140e320c875f6fc8ffb221e34d93cad651851fdef7168e4ad697c2ce88901558c05c8626a0f07641660dbae2a0ca97e6559e0ed274221c1adc
+  2e00b7cb07a7da9fa7bad498cafb31d5abfc6008ac1c87e9837e903681ab02c0a0ad092f35d5cfd9f4761e54a3cf3a3ca8f4bcca1a521f9adf137dda933b14f9
 )
 
 pkgver() {
@@ -56,6 +58,35 @@ pkgver() {
 
 prepare() {
   mkdir -p glibc-build lib32-glibc-build
+
+  # elf/Makefile derives the rtld object set by parsing the librtld link map;
+  # the patch guards that parse and pins the one $(CC)-direct link past the
+  # recipe's LDFLAGS pin. Both build trees share this source tree: one patch
+  # covers glibc-build and lib32-glibc-build.
+  patch -Np1 --fuzz=0 -d glibc \
+    -i "$srcdir/0001-bfd-relocatable-links-and-librtld-parse-guard.patch"
+
+  # patch can succeed at the wrong offset; assert the contract lines verbatim.
+  grep -qF '$(objpfx)librtld.map: $(objpfx)dl-allobjs.os $(common-objpfx)libc_pic.a Makefile' \
+    glibc/elf/Makefile &&
+    grep -qF 'rtld: remediation: if the map format changed' glibc/elf/Makefile &&
+    grep -qF '$(CC) -fuse-ld=bfd -nostdlib -nostartfiles -r -o $@ $^' glibc/csu/Makefile || {
+      echo 'ERROR: 0001-bfd-relocatable-links-and-librtld-parse-guard.patch did not land on the librtld map/parse seam; refresh it against the glibc Makefiles' >&2
+      return 1
+    }
+
+  # Generated link intermediates may predate the bfd pin (mold corrupts
+  # versioned symtabs in -r output and drops map-assigned default versions in
+  # -shared output, and make never revisits an up-to-date file): drop them so
+  # the pinned rules regenerate them. The artifacts they feed go with them.
+  local _dir
+  for _dir in glibc-build lib32-glibc-build; do
+    rm -f "$_dir"/libc_pic.os "$_dir"/libc_pic.opts "$_dir"/libc_pic.os.clean \
+      "$_dir"/libc.so "$_dir"/elf/dl-allobjs.os "$_dir"/elf/librtld.map \
+      "$_dir"/elf/librtld.mapT "$_dir"/elf/librtld.mapT.o "$_dir"/elf/librtld.mk \
+      "$_dir"/elf/librtld.mkT "$_dir"/elf/rtld-libc.a "$_dir"/elf/librtld.os \
+      "$_dir"/elf/librtld.os.map "$_dir"/elf/ld.so "$_dir"/elf/ld.so.new
+  done
 }
 
 build() {
@@ -75,6 +106,15 @@ build() {
   )
 
   CFLAGS=${CFLAGS/-Wp,-D_FORTIFY_SOURCE=3/}
+
+  # mold cannot build this package correctly: its link map defeats the
+  # librtld member parse, its -r links drop symbol versions from the output
+  # symtab, and its -shared links drop map-assigned default versions (missing
+  # ABI rows — e.g. open64@@GLIBC_2.1 in the 32-bit libc.so, measured against
+  # the installed Arch lib32 oracle). Glibc builds with bfd; every other
+  # recipe keeps the host's linker. Appended last: gcc takes the last
+  # -fuse-ld= on its command line.
+  LDFLAGS+=" -fuse-ld=bfd"
 
   (
     cd glibc-build
@@ -158,8 +198,15 @@ check() (
 )
 
 _install_license() {
-  install -Dm644 "$srcdir/glibc/COPYING" \
-    "$pkgdir/usr/share/licenses/$pkgname/COPYING"
+  # The git tree carries the versioned COPYING files; release tarballs add
+  # the legacy COPYING name this used to install. Explicit names so upstream
+  # drift fails loudly instead of silently skipping.
+  install -Dm644 "$srcdir/glibc/COPYINGv2" \
+    "$pkgdir/usr/share/licenses/$pkgname/COPYINGv2"
+  install -Dm644 "$srcdir/glibc/COPYINGv3" \
+    "$pkgdir/usr/share/licenses/$pkgname/COPYINGv3"
+  install -Dm644 "$srcdir/glibc/COPYING.LESSERv2" \
+    "$pkgdir/usr/share/licenses/$pkgname/COPYING.LESSERv2"
   install -Dm644 "$srcdir/glibc/COPYING.LIB" \
     "$pkgdir/usr/share/licenses/$pkgname/COPYING.LIB"
 }

@@ -27,6 +27,7 @@ pkgbase = glibc-git
 	source = 12-glibc-remove-iconvconfig-cache.hook
 	source = 12-lib32-glibc-iconvconfig.hook
 	source = 12-lib32-glibc-remove-iconvconfig-cache.hook
+	source = 0001-bfd-relocatable-links-and-librtld-parse-guard.patch
 	b2sums = SKIP
 	b2sums = d665b29e14a4293c5ee8dd548fa89d6bf9c2a72751da20904d71ce5c126d07160820c9642307c20c730fd67b8df03865c4fd9be44e17657172e1a6ad3bcbd267
 	b2sums = 9ffd7b3f5c3c4f636957e1ddbc671ed701fc4e95f1b49f06d6c54ffb67b591b4e3a55bd587ab2a488b859b29bfeb81bb28386f0928a0fb51ad629ed6a92fc82d
@@ -43,6 +44,7 @@ pkgbase = glibc-git
 	b2sums = def4e0ebe297ec07f292457b6e88402eb6628cbbe721109df998a504656dad60fbf03f483298aeebf287ae9649146a354828037ad3a079aee01b20b2ef4a8c67
 	b2sums = 8a9b1da927ff4f5d59bffdc6647fdacc82a9bb28958cec643b9cac58e49e8014df424e6e0908de853c765aa789bbf6b735ab9b3905d870d39707568157425a44
 	b2sums = dc3223eae3b465140e320c875f6fc8ffb221e34d93cad651851fdef7168e4ad697c2ce88901558c05c8626a0f07641660dbae2a0ca97e6559e0ed274221c1adc
+	b2sums = 2e00b7cb07a7da9fa7bad498cafb31d5abfc6008ac1c87e9837e903681ab02c0a0ad092f35d5cfd9f4761e54a3cf3a3ca8f4bcca1a521f9adf137dda933b14f9
 	makedepends_x86_64 = lib32-gcc-libs
 
 pkgname = glibc-git

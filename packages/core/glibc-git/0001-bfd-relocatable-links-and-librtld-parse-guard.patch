@@ -1,0 +1,66 @@
+Subject: elf: guard the librtld map parse; keep the csu relocatable link sound
+
+librtld.mk derives the rtld object set by parsing the librtld.map link map.
+The parse matches GNU-ld (and, since eb06601bb4, lld) map lines; a map from
+another linker yields zero rows, an empty `rtld-subdirs`, and the opaque
+rtld-Rules error.  The recipe pins the build to -fuse-ld=bfd (see PKGBUILD:
+mold's map defeats this parse, its -r links drop symbol versions, and its
+-shared links drop map-assigned default versions).  Make the map depend on
+the makefile that defines its rule so a re-run cannot serve a map from a
+previous rule (the link names its inputs explicitly, since $^ would then
+grow Makefile), and check the parse precondition where a remediation exists,
+naming the remedy instead of refusing cryptically.
+
+The csu link-relocatable define calls $(CC) directly and would otherwise
+bypass the recipe's LDFLAGS pin; give it the same -fuse-ld=bfd.
+--- a/elf/Makefile
++++ b/elf/Makefile
+@@ -1618,13 +1618,18 @@
+ rtld-stubbed-symbols += __stack_chk_fail __stack_chk_fail_local
+ endif
+ 
+-$(objpfx)librtld.map: $(objpfx)dl-allobjs.os $(common-objpfx)libc_pic.a
++# The map is the input to the $(objpfx)librtld.mk member parse below, which
++# matches GNU-ld and lld map lines (the recipe pins -fuse-ld=bfd). Depend
++# on Makefile so a re-run cannot serve a map generated under a previous
++# rule; the link names its inputs explicitly because $^ would then match
++# Makefile too.
++$(objpfx)librtld.map: $(objpfx)dl-allobjs.os $(common-objpfx)libc_pic.a Makefile
+ 	@-rm -f $@T
+ 	for symbol in $(rtld-stubbed-symbols); do \
+ 		echo ".globl $$symbol"; \
+ 		echo "$$symbol:"; \
+ 	done | $(CC) -o $@T.o $(ASFLAGS) -c -x assembler -
+-	$(reloc-link) -o $@.o $@T.o '-Wl,-(' $^ $(gnulib) '-Wl,-)' -Wl,-Map,$@T
++	$(reloc-link) -o $@.o $@T.o '-Wl,-(' $(objpfx)dl-allobjs.os $(common-objpfx)libc_pic.a $(gnulib) '-Wl,-)' -Wl,-Map,$@T
+ 	rm -f %@T.o $@.o
+ 	mv -f $@T $@
+ 
+@@ -1646,6 +1651,13 @@
+ 	  *) echo "Wasn't expecting $$lib($$file)" >&2; exit 1 ;; \
+ 	  esac; \
+ 	done > $@T
++	@if ! grep -q '^rtld-[^ ]* +=' $@T; then \
++	  echo "rtld: link map parse matched no archive members from $<" >&2; \
++	  echo "rtld: expected map lines like $(common-objpfx)libc_pic.a(<member>.os)" >&2; \
++	  echo "rtld: the recipe pins -fuse-ld=bfd (GNU-ld map format)" >&2; \
++	  echo "rtld: remediation: if the map format changed, extend the parse in elf/Makefile" >&2; \
++	  rm -f $@T; exit 1; \
++	fi
+ 	echo rtld-subdirs = `LC_ALL=C sed 's/^rtld-\([^ ]*\).*$$/\1/' $@T \
+ 			     | LC_ALL=C sort -u` >> $@T
+ 	mv -f $@T $@
+--- a/csu/Makefile
++++ b/csu/Makefile
+@@ -173,8 +173,10 @@
+ # Make these in the lib pass so they're available in time to link things with.
+ subdir_lib: $(extra-objs:%=$(objpfx)%)
+ 
++# -fuse-ld=bfd: this $(CC) link bypasses LDFLAGS, and a relocatable link
++# must keep symbol versions (mold's -r drops them).
+ define link-relocatable
+-$(CC) -nostdlib -nostartfiles -r -o $@ $^
++$(CC) -fuse-ld=bfd -nostdlib -nostartfiles -r -o $@ $^
+ endef
+ 
+ ifndef start-installed-name-rule
