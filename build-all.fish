@@ -998,7 +998,7 @@ function sync_stable_version -a pkg_path
     end
 
     # Clean stale source/build artifacts
-    if not rm -rf -- "$pkg_path/src" "$pkg_path/pkg" "$pkg_path/build"
+    if not command rm -rf -- "$pkg_path/src" "$pkg_path/pkg" "$pkg_path/build"
         return 2
     end
 
@@ -1018,7 +1018,7 @@ end
 
 function remove_version_sync_temp -a tmp
     if test -n "$tmp"; and test -d "$tmp"
-        rm -rf -- "$tmp"
+        command rm -rf -- "$tmp"
     end
 end
 
@@ -1234,7 +1234,7 @@ function sync_nvchecker_version -a package_id pkg_path
                 return 2
             end
         end
-        if not rm -rf -- "$pkg_path/src" "$pkg_path/pkg" "$pkg_path/build"
+        if not command rm -rf -- "$pkg_path/src" "$pkg_path/pkg" "$pkg_path/build"
             ui_error "$pkg_name: could not clear artifacts after version sync"
             restore_version_sync_recipe "$pkg_path" "$original" "$tmp"
             return 2
@@ -2260,7 +2260,7 @@ function anchor_sums_from_provider -a pkg_path provider provider_id provider_fil
                     ui_error "$pkg_name: refusing to build — pkgver was synced to $pkgver-$pkgrel, and the official Arch packaging repo carries no revision of $pkgbase at that version to anchor the checksums to"
                 end
                 echo "$refuse_manual"
-                rm -rf -- "$tmp"
+                command rm -rf -- "$tmp"
                 return 3
             end
             srcinfo_sum_map "$srcinfo" >"$map"
@@ -2268,7 +2268,7 @@ function anchor_sums_from_provider -a pkg_path provider provider_id provider_fil
             if test $map_status -ne 0; or not test -s "$map"
                 ui_error "$pkg_name: refusing to build — the official .SRCINFO for $published does not line its sources up with its checksums, so it cannot be used as an anchor"
                 echo "$refuse_manual"
-                rm -rf -- "$tmp"
+                command rm -rf -- "$tmp"
                 return 3
             end
         case aur
@@ -2276,13 +2276,13 @@ function anchor_sums_from_provider -a pkg_path provider provider_id provider_fil
             if not test -s "$srcinfo"; or test (srcinfo_pkgbase "$srcinfo") != "$provider_id"; or test (srcinfo_pkgbase "$srcinfo") != "$pkgbase"; or test (srcinfo_pkgver "$srcinfo") != "$pkgver"
                 ui_error "$pkg_name: refusing to build — the AUR .SRCINFO for $provider_id does not match pkgbase $pkgbase and pkgver $pkgver"
                 echo "$refuse_manual"
-                rm -rf -- "$tmp"
+                command rm -rf -- "$tmp"
                 return 3
             end
             if not srcinfo_matches_sources "$srcinfo" "$pkg_path"
                 ui_error "$pkg_name: refusing to build — the AUR .SRCINFO sources for $provider_id do not exactly match the rewritten recipe"
                 echo "$refuse_manual"
-                rm -rf -- "$tmp"
+                command rm -rf -- "$tmp"
                 return 3
             end
             srcinfo_sum_map "$srcinfo" >"$map"
@@ -2290,7 +2290,7 @@ function anchor_sums_from_provider -a pkg_path provider provider_id provider_fil
             if test $map_status -ne 0
                 ui_error "$pkg_name: refusing to build — the AUR .SRCINFO for $provider_id does not line its sources up with its checksums"
                 echo "$refuse_manual"
-                rm -rf -- "$tmp"
+                command rm -rf -- "$tmp"
                 return 3
             end
         case github
@@ -2298,13 +2298,13 @@ function anchor_sums_from_provider -a pkg_path provider provider_id provider_fil
             github_release_checksum_map "$provider_id" "$pkgver" "$tmp" "$map" "$tag_file"
             if test $status -ne 0
                 echo "$refuse_manual"
-                rm -rf -- "$tmp"
+                command rm -rf -- "$tmp"
                 return 2
             end
             set release_tag (cat "$tag_file" 2>/dev/null)
         case '*'
             ui_error "$pkg_name: refusing to build — unsupported version sync provider '$provider'"
-            rm -rf -- "$tmp"
+            command rm -rf -- "$tmp"
             return 2
     end
 
@@ -2332,7 +2332,7 @@ function anchor_sums_from_provider -a pkg_path provider provider_id provider_fil
 
     if not cp -- "$pkg_path/PKGBUILD" "$tmp/PKGBUILD.orig"
         ui_error "$pkg_name: cannot back up $pkg_path/PKGBUILD before refreshing the checksums"
-        rm -rf -- "$tmp"
+        command rm -rf -- "$tmp"
         return 2
     end
 
@@ -2341,7 +2341,7 @@ function anchor_sums_from_provider -a pkg_path provider provider_id provider_fil
     # what fetches the sources that step 2 below then verifies.
     if not pushd "$pkg_path" >/dev/null
         ui_error "$pkg_name: cannot enter $pkg_path to refresh the checksums"
-        rm -rf -- "$tmp"
+        command rm -rf -- "$tmp"
         return 2
     end
     # updpkgsums shells out to makepkg, which refuses to run as root (it exits
@@ -2359,7 +2359,7 @@ function anchor_sums_from_provider -a pkg_path provider provider_id provider_fil
         ui_error "$pkg_name: refusing to build — 'updpkgsums' could not refresh the checksums (exit $upd_rc); the recipe was restored"
         tail -5 "$tmp/updpkgsums.log" 2>/dev/null | sed 's/^/  /'
         echo "$refuse_manual"
-        rm -rf -- "$tmp"
+        command rm -rf -- "$tmp"
         return 2
     end
 
@@ -2429,7 +2429,7 @@ function anchor_sums_from_provider -a pkg_path provider provider_id provider_fil
             printf '  %s\n' $bad
             echo "  Nothing was built or installed and the recipe was restored. A source that disagrees with $checksum_owner's published checksum is a different source, not a stale sum."
         end
-        rm -rf -- "$tmp"
+        command rm -rf -- "$tmp"
         return 4
     end
 
@@ -2458,7 +2458,7 @@ function anchor_sums_from_provider -a pkg_path provider provider_id provider_fil
         set synced_note "$pkg_name: checksums refreshed at $pkgver — $n_anchored anchored to $authority_phrase $published, $n_refresh refresh-only (fetch-only sums: review before committing)"
     end
     printf '%s\n' "$synced_note" >>"$_STATE_DIR/synced.list" 2>/dev/null
-    rm -rf -- "$tmp"
+    command rm -rf -- "$tmp"
     return 0
 end
 
@@ -4285,7 +4285,7 @@ function build_package -a package_id install_flag clean_flag skip_flag no_sync_f
                 ui_info "Cleaning build artifacts for $pkg_name..."
             end
         end
-        if not rm -rf -- "$pkg_path/src" "$pkg_path/pkg" "$pkg_path/build"
+        if not command rm -rf -- "$pkg_path/src" "$pkg_path/pkg" "$pkg_path/build"
             ui_error "failed to clean build artifacts for $pkg_name"
             return 1
         end
