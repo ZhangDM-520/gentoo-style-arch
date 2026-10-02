@@ -311,6 +311,14 @@
     Pinned by `tests/install-archive-guard.sh`, `tests/pgo-payload-guard.sh`
     and `tests/run-record.sh`.
 
+20. **Packaged venvs use runtime paths, never build or staging paths**
+    (2026-10-02 hermes-agent-git): rewrite source-tree references in launchers
+    and metadata to the final runtime prefix (not makepkg's temporary
+    `$pkgdir`), and fail the package if a build-source reference remains
+    anywhere in the venv. hermes installs EDITABLE — upstream's `setup.py`
+    refuses wheels outside a Nix build — so the rewrite must cover the
+    editable finder and `.pth`, with build-time `__pycache__` stripped first.
+
 ## 2. Workspace overview
 
 - The public tree is `Gentoo_Style_Arch/`; recipes live under

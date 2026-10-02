@@ -317,6 +317,45 @@ and never document behaviour the tree does not have.
   park the package, keep dispatching) is the repo's existing vocabulary for
   that disposition — recorded as a follow-up, deliberately not changed here.
 
+## 2026-10-02 — hermes-agent-git packaged CLI missed its project modules
+
+- **Symptom**: `/usr/bin/hermes --version` failed at startup with
+  `ModuleNotFoundError: No module named 'hermes_cli'`; invoking `hermes` by
+  name was not a reproduction because the shell found a separate user install
+  first.
+- **Root cause**: `uv sync --no-install-project` kept the project packages
+  only in the source checkout, while the hand-written wrapper used Python
+  isolated mode to execute `cli.py` directly. The copied venv also rewrote
+  shebangs to makepkg's temporary staging prefix, not the final `/usr/lib`
+  runtime path.
+- **Fix**: upstream's `setup.py` refuses wheel builds outside a Nix build
+  (`HERMES_NIX_BUILD`), so the only supported shape is an EDITABLE install —
+  confirmed against upstream's own installer output (`__editable__*.pth`).
+  Build with `uv sync --editable`, expose upstream's `hermes`, `hermes-agent`,
+  and `hermes-acp` console scripts, strip build-time `__pycache__` (binary,
+  unrewritable), then rewrite every venv source reference (launchers, install
+  metadata, the editable finder) to the runtime prefix and reject the payload
+  if any build-source path remains.
+- **Validation**: the exact `/usr/bin/hermes --version` failure was reproduced.
+  PKGBUILD syntax, generated `.SRCINFO`, the recipe-contract/source/SRCINFO/
+  nvchecker gates, live topology loading, and all focused upstream memory,
+  review, and updater suites passed. The dashboard suite initially tripped its
+  home-I/O guard because the inherited PATH found the separate user install;
+  all 43 tests passed when rerun with a system-only PATH. The full repository
+  battery had 44 passes and the known host rustc/LLVM-skew failure in
+  `abi-batch-policy.sh`; that failure was not pursued, as it is unrelated to
+  this recipe. Package `2026.10.02.051006.g0a374d1-1` built and installed via
+  `pacman -U`; `/usr/bin/hermes --version` runs (`Install method: pacman`),
+  `hermes update` refuses with the pacman remediation, and a post-install path
+  scan found no build-source references. The packaged CLI's stricter YAML
+  parser also surfaced a duplicate `title_generation` block in the user's live
+  config (blocks merged, backup kept).
+- **Rule**: a venv shipped inside a package must map source and staging paths
+  to the final runtime root and verify no build-source references remain
+  before producing the archive. For hermes specifically the install is
+  EDITABLE (upstream refuses wheels outside Nix), so that verification must
+  cover the editable finder and `.pth`; strip build-time `__pycache__` first —
+  bytecode is binary and cannot be rewritten.
 ## 2026-10-01 — evaluated install versions and GCC LTO build-tree drift
 
 - **Symptoms**: checked `-i` refused a freshly built archive when `pkgver`
