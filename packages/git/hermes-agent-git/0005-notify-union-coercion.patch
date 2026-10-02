@@ -1,0 +1,154 @@
+# Rationale: Coerce stringified values against anyOf/oneOf union branches in the shared
+# coercer so every advertised union shape works (docs advertise notify=true, terminal's
+# notify is anyOf: [boolean, array<string>]). Re-targeted to current main: the test file
+# moves tests/agent/ -> tests/tools/ next to the tools/ implementation it exercises.
+diff --git a/tests/tools/test_notify_on_complete.py b/tests/tools/test_notify_on_complete.py
+index 35922265451..9b4fd334f18 100644
+--- a/tests/tools/test_notify_on_complete.py
++++ b/tests/tools/test_notify_on_complete.py
+@@ -194,6 +194,23 @@ class TestCheckpointNotify:
+ 
+ class TestTerminalSchema:
+ 
++    def test_stringified_notify_true_dispatches_to_notify_on_complete(self):
++        """End-to-end: a model emitting notify="true" (JSON string) is repaired
++        by the shared arg coercer before _handle_terminal validates it, so the
++        terminal_tool call receives notify_on_complete=True instead of the
++        validator's "notify must be true/false" rejection."""
++        from tools.terminal_tool import _handle_terminal
++        from tools.arg_coercion import coerce_tool_args
++        args = coerce_tool_args(
++            "terminal",
++            {"command": "echo hi", "background": True, "notify": "true"},
++        )
++        assert args["notify"] is True, f"coercion must yield native True, got {args['notify']!r}"
++        with patch("tools.terminal_tool.terminal_tool", return_value='{"ok":true}') as mock_tt:
++            _handle_terminal(args, task_id="t1")
++            assert mock_tt.called, "validator must accept the coerced notify"
++            _, kwargs = mock_tt.call_args
++        assert kwargs["notify_on_complete"] is True
+ 
+     def test_cut_completion_says_so_and_points_at_the_log(self):
+         """The rendered notice names the cut and the process log; a whole output renders as before."""
+diff --git a/tests/agent/test_tool_arg_coercion.py b/tests/tools/test_tool_arg_coercion.py
+similarity index 84%
+rename from tests/agent/test_tool_arg_coercion.py
+rename to tests/tools/test_tool_arg_coercion.py
+index 459d1c69203..5a6e7d9030b 100644
+--- a/tests/agent/test_tool_arg_coercion.py
++++ b/tests/tools/test_tool_arg_coercion.py
+@@ -132,6 +132,32 @@ class TestCoerceToolArgs:
+     def test_empty_args(self):
+         assert coerce_tool_args("test_tool", {}) == {}
+ 
++    def test_union_boolean_or_array_property_coerces_in_branch_order(self):
++        """A property typed ``anyOf: [boolean, array<string>]`` (terminal's
++        ``notify``) must coerce a stringified value against the branches in
++        schema order: the boolean branch claims "true" before the array branch
++        could wrap it as a pattern, a JSON array string parses natively, and a
++        bare pattern string still wraps into a one-element list."""
++        schema = self._mock_schema({
++            "notify": {
++                "anyOf": [
++                    {"type": "boolean"},
++                    {"type": "array", "items": {"type": "string"}},
++                ],
++            },
++        })
++        with patch("tools.arg_coercion.registry.get_schema", return_value=schema):
++            out = coerce_tool_args("test_tool", {"notify": "true"})
++            assert out["notify"] is True, f'"true" must coerce to True, got {out["notify"]!r}'
++
++            out = coerce_tool_args("test_tool", {"notify": '["a"]'})
++            assert out["notify"] == ["a"]
++            assert isinstance(out["notify"], list)
++
++            out = coerce_tool_args("test_tool", {"notify": "Application startup complete"})
++            assert out["notify"] == ["Application startup complete"]
++            assert isinstance(out["notify"], list)
++
+ 
+ 
+ 
+diff --git a/tools/arg_coercion.py b/tools/arg_coercion.py
+index 5410ace9ac1..aadd33e2107 100644
+--- a/tools/arg_coercion.py
++++ b/tools/arg_coercion.py
+@@ -69,9 +69,12 @@ def coerce_tool_args(tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
+             if (expected == "array" and is_container) or (expected == "object" and isinstance(value, dict)):
+                 args[key] = _normalize_json_strings_for_schema(value, prop_schema)
+             continue
+-        if not expected and not _schema_allows_null(prop_schema):
+-            continue
+-        coerced = _coerce_value(value, expected, schema=prop_schema)
++        if not expected or isinstance(expected, list):
++            # No single top-level type: coerce against the union branches
++            # (anyOf/oneOf or list-form type) in schema branch order.
++            coerced = _coerce_union_value(value, prop_schema)
++        else:
++            coerced = _coerce_value(value, expected, schema=prop_schema)
+         if coerced is not value:
+             args[key] = coerced
+             if isinstance(coerced, (list, tuple, dict)):
+@@ -137,6 +140,61 @@ def _normalize_json_strings_for_schema(value: Any, schema: Any) -> Any:
+     return value
+ 
+ 
++def _union_branch_kinds(schema: Any) -> list:
++    """JSON type names declared by *schema* (``type`` plus anyOf/oneOf/allOf branches), in branch order, deduplicated."""
++    kinds = []
++
++    def walk(node: Any) -> None:
++        if not isinstance(node, dict):
++            return
++        t = node.get("type")
++        if isinstance(t, str):
++            kinds.append(t)
++        elif isinstance(t, list):
++            kinds.extend(x for x in t if isinstance(x, str))
++        for union_key in ("anyOf", "oneOf", "allOf"):
++            branches = node.get(union_key)
++            if isinstance(branches, list):
++                for branch in branches:
++                    walk(branch)
++
++    walk(schema)
++    seen = set()
++    return [k for k in kinds if not (k in seen or seen.add(k))]
++
++
++def _coerce_union_value(value: str, schema: Any) -> Any:
++    """Coerce *value* when the schema declares no single top-level ``type``
++    (anyOf/oneOf or list-form ``type``) — coerce against every branch in
++    schema branch order. A boolean branch claims ``"true"`` before an array
++    branch could wrap it as a bare pattern string; an array branch still
++    JSON-parses ``'["a"]'`` and falls back to the bare-string → one-element
++    list wrap when no string branch already keeps the string. The original
++    string is returned when no branch claims the value."""
++    if _schema_allows_null(schema) and value.strip().lower() == "null":
++        return None
++
++    for kind in _union_branch_kinds(schema):
++        if kind in ("string", "null"):
++            continue  # a native string already satisfies "string"; "null" handled above
++        if not _schema_accepts_kind(schema, kind):
++            continue
++        if kind == "array":
++            parsed = _coerce_json(value, list)
++            if parsed is not value:
++                return parsed
++            if _schema_accepts_kind(schema, "string"):
++                continue  # the bare string already satisfies a "string" branch — keep it
++            logger.info("coerce_tool_args: wrapped bare string in union array branch")
++            return [value]
++        coercer = _SCALAR_COERCERS.get(kind)
++        if coercer is not None:
++            coerced = coercer(value)
++            if coerced is not value:
++                return coerced
++    return value
++
++
+ def _coerce_value(value: str, expected_type, schema: dict | None = None):
+     """Coerce string *value* to *expected_type* (str or union list); original on failure."""
+     if _schema_allows_null(schema) and value.strip().lower() == "null":

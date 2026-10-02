@@ -1,0 +1,476 @@
+# Rationale: Mark pacman-owned trees so every update surface refuses in-place mutation, reports pacman remediation, and exposes the packaged version without inventing a source SHA.
+
+diff --git a/hermes_cli/config.py b/hermes_cli/config.py
+index 49a2980a..a5885516 100644
+--- a/hermes_cli/config.py
++++ b/hermes_cli/config.py
+@@ -253,7 +253,9 @@ def get_managed_update_command() -> Optional[str]:
+ # "apt" is the Termux APT distribution identifier, not a generic Debian/Ubuntu signal; another
+ # APT distribution needs its own method. "home-manager" is listed because the managed marker can
+ # return it and a stamp must name every method this function returns.
+-_SUPPORTED_INSTALL_METHODS = frozenset({"apt", "docker", "nix", "nixos", "home-manager", "git", "unknown"})
++_SUPPORTED_INSTALL_METHODS = frozenset(
++    {"apt", "docker", "nix", "nixos", "home-manager", "git", "pacman", "unknown"}
++)
+ 
+ 
+ def _install_method_stamp(path: Path) -> Optional[str]:
+@@ -265,7 +267,7 @@ def _install_method_stamp(path: Path) -> Optional[str]:
+ 
+ 
+ def detect_install_method(project_root: Optional[Path] = None) -> str:
+-    """Detect how Hermes was installed: apt/docker/nix/nixos/home-manager/git/unknown.
++    """Detect how Hermes was installed: apt/docker/nix/nixos/home-manager/git/pacman/unknown.
+     Order: code-scoped ``<install tree>/.install_method`` stamp (authoritative) -> legacy
+     ``$HERMES_HOME/.install_method`` -> managed marker -> /nix/store path -> .git dir -> unknown.
+     The stamp lives next to the code because HERMES_HOME is shared data: a container and a host
+@@ -331,6 +333,7 @@ def is_nix_install_method(method: str) -> bool:
+ _UPDATE_COMMAND_BY_METHOD = {
+     "docker": "docker pull nousresearch/hermes-agent:latest",
+     "apt": "pkg upgrade hermes-agent",  # "apt" == Termux APT by contract; uses Termux's `pkg`.
++    "pacman": "sudo pacman -Syu hermes-agent-git",
+ }
+ 
+ 
+diff --git a/hermes_cli/steward.py b/hermes_cli/steward.py
+index 5db757f0..6724f328 100644
+--- a/hermes_cli/steward.py
++++ b/hermes_cli/steward.py
+@@ -30,6 +30,7 @@ STEWARD_DESKTOP = "desktop-app"
+ STEWARD_DOCKER = "docker"
+ STEWARD_NIX = "nix"
+ STEWARD_APT_TERMUX = "apt-termux"
++STEWARD_PACMAN = "pacman"
+ 
+ # What `hermes update` says in a sealed tree, per steward — the refusal
+ # table shared by the update admission gate. The fallback covers stewards
+@@ -114,6 +115,15 @@ _STEWARD_UNINSTALL_MESSAGES = {
+         _STEWARD_DELETE_DATA_PREAMBLE +
+         _STEWARD_DELETE_DATA_CLI
+     ),
++    STEWARD_PACMAN: (
++        "✗ This Hermes was installed by pacman.\n"
++        "\n"
++        "Remove the package with:\n"
++        "  sudo pacman -Rns hermes-agent-git\n"
++        "\n" +
++        _STEWARD_DELETE_DATA_PREAMBLE +
++        _STEWARD_DELETE_DATA_CLI
++    ),
+ }
+ 
+ _STEWARD_MANAGED_BY_DESKTOP = "✗ Hermes is managed by the desktop app.\n"
+@@ -159,6 +169,15 @@ _STEWARD_UNINSTALL_FALLBACK = (
+ 
+ def steward_update_message(steward: str) -> str:
+     """The `hermes update` refusal text for a sealed tree."""
++    if steward == STEWARD_PACMAN:
++        from hermes_cli.config import recommended_update_command_for_method
++
++        return (
++            "✗ This Hermes install is managed by pacman.\n"
++            "\n"
++            "Update it with:\n"
++            f"  {recommended_update_command_for_method('pacman')}"
++        )
+     message = STEWARD_UPDATE_MESSAGES.get(steward)
+     if message is not None:
+         return message
+diff --git a/hermes_cli/update_contract.py b/hermes_cli/update_contract.py
+index 18c64ade..a7fc7b0b 100644
+--- a/hermes_cli/update_contract.py
++++ b/hermes_cli/update_contract.py
+@@ -12,7 +12,9 @@ from dataclasses import dataclass
+ from pathlib import Path
+ from typing import Callable, Optional
+ 
+-from hermes_cli.steward import STEWARD_APT_TERMUX, STEWARD_DESKTOP, STEWARD_DOCKER, STEWARD_NIX
++from hermes_cli.steward import (
++    STEWARD_APT_TERMUX, STEWARD_DESKTOP, STEWARD_DOCKER, STEWARD_NIX, STEWARD_PACMAN,
++)
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -31,7 +33,7 @@ def is_commit_build(project_root: Path) -> bool:
+ class UpdateRefusal:
+     """Why an in-place update is refused, and what to run instead."""
+ 
+-    code: str              # image-marker | image-marker-invalid | docker | nix | apt | desktop-app | <steward>
++    code: str              # image-marker | image-marker-invalid | docker | nix | apt | pacman | desktop-app | <steward>
+     message: str           # full user-facing text (multi-line ok)
+     update_command: str    # the one-line remediation command
+ 
+@@ -55,6 +57,7 @@ _STEWARD_UPDATE_METHODS: dict[str, str] = {
+     STEWARD_DOCKER: "docker",
+     STEWARD_NIX: "nix",
+     STEWARD_APT_TERMUX: "apt",
++    STEWARD_PACMAN: "pacman",
+ }
+ 
+ 
+@@ -141,6 +144,11 @@ def evaluate_update_admission(project_root: Path) -> Optional[UpdateRefusal]:
+             return _refusal("docker", method)
+         if is_nix_install_method(method) or method == "apt":
+             return _refusal(method if method == "apt" else "nix", method)
++        if method == "pacman":
++            return _refusal("pacman", method, lambda command: (
++                "This Hermes install is managed by pacman. Update it with:\n"
++                f"    {command}"
++            ))
+     except Exception as exc:
+         logger.debug("Install-method admission check failed: %s", exc)
+     return None
+diff --git a/hermes_cli/update_inventory.py b/hermes_cli/update_inventory.py
+index a5762a51..eb110841 100644
+--- a/hermes_cli/update_inventory.py
++++ b/hermes_cli/update_inventory.py
+@@ -36,7 +36,7 @@ class RuntimeRecord:
+ class UpdatePlan:
+     """The full pre-update picture: install shape + runtimes + actions."""
+ 
+-    install_method: str = "unknown"       # git | docker | nix | apt | ...
++    install_method: str = "unknown"       # git | docker | nix | apt | pacman | ...
+     updatable_in_place: bool = True
+     update_mechanism: str = "hermes update"
+     expected_sha: Optional[str] = None    # current checkout HEAD (pre-pull)
+diff --git a/hermes_cli/version_info.py b/hermes_cli/version_info.py
+index fd0c38ff..15c36531 100644
+--- a/hermes_cli/version_info.py
++++ b/hermes_cli/version_info.py
+@@ -32,7 +32,7 @@ class VersionInfo:
+     source: Literal["build", "commit-build", "ci", "docker", "fallback", "git", "local", "nix", "unknown"]
+     dirty: bool = False
+     commit_date: int | None = None
+-    distribution: Literal["docker", "nix", "desktop-app"] | None = None
++    distribution: Literal["docker", "nix", "desktop-app", "pacman"] | None = None
+ 
+     @property
+     def display_version(self) -> str:
+@@ -136,7 +136,7 @@ def _stamp_version_info() -> VersionInfo | None:
+     except (OSError, json.JSONDecodeError):
+         return None
+ 
+-    if not isinstance(data, dict) or "commit" not in data:
++    if not isinstance(data, dict) or ("commit" not in data and data.get("distribution") != "pacman"):
+         return None
+ 
+     # updateMechanism is required in every stamp. A stamp without it means
+@@ -159,6 +159,17 @@ def _stamp_version_info() -> VersionInfo | None:
+ 
+     commit = data.get("commit") or None
+     if not commit or set(commit) == {"0"}:
++        if data.get("distribution") == "pacman":
++            base_version = data.get("baseVersion")
++            display_version = data.get("displayVersion")
++            if not isinstance(base_version, str) or not base_version:
++                return None
++            if not isinstance(display_version, str) or not display_version:
++                display_version = base_version
++            return VersionInfo(
++                base_version, display_version, None, None, None, "build",
++                distribution="pacman",
++            )
+         # All-zero placeholder = fallback stamp, not real provenance.
+         return None
+     stamp_source = str(data.get("source") or "")
+@@ -181,7 +192,7 @@ def _stamp_version_info() -> VersionInfo | None:
+         else "build"
+     )
+     distribution = data.get("distribution")
+-    if distribution not in {"docker", "nix", "desktop-app"}:
++    if distribution not in {"docker", "nix", "desktop-app", "pacman"}:
+         distribution = None
+ 
+     commit_date = data.get("commitDate")
+diff --git a/hermes_cli/web_routers/actions.py b/hermes_cli/web_routers/actions.py
+index 966662c5..4d198eb1 100644
+--- a/hermes_cli/web_routers/actions.py
++++ b/hermes_cli/web_routers/actions.py
+@@ -60,6 +60,7 @@ _MANAGED_EXTERNALLY_MESSAGE = "Hermes updates are managed outside this dashboard
+ _UPDATE_REFUSAL_ERROR_CODES = {
+     "docker": "docker_update_unsupported", "image-marker": "docker_update_unsupported",
+     "image-marker-invalid": "docker_update_unsupported", "apt": "apt_update_required",
++    "pacman": "pacman_update_required",
+     "nix": "nix_update_unsupported",
+ }
+ 
+@@ -257,6 +258,10 @@ async def update_hermes():
+ _NON_APPLYABLE_MESSAGES = {
+     "docker": format_docker_update_message,
+     "apt": lambda: "Hermes is managed by Termux APT; run `pkg upgrade hermes-agent`.",
++    "pacman": lambda: (
++        "Hermes is managed by pacman; run "
++        f"`{recommended_update_command_for_method('pacman')}`."
++    ),
+ }
+ 
+ 
+@@ -264,7 +269,7 @@ _NON_APPLYABLE_MESSAGES = {
+ async def check_hermes_update(force: bool = False, profile: Optional[str] = None):
+     """Report whether a Hermes update is available, without applying it.
+ 
+-    Returns install_method ('apt'|'git'|'docker'|'nix'|'nixos'|'unknown'),
++    Returns install_method ('apt'|'git'|'docker'|'nix'|'nixos'|'pacman'|'unknown'),
+     current_version, behind (commits behind, 0 = up to date, -1 = unknown count,
+     null = check could not run), update_available, can_apply (git only — the
+     dashboard button can apply in place), update_command, message (guidance for
+diff --git a/tests/hermes_cli/test_cmd_update_docker.py b/tests/hermes_cli/test_cmd_update_docker.py
+index a136a759..ef3ba652 100644
+--- a/tests/hermes_cli/test_cmd_update_docker.py
++++ b/tests/hermes_cli/test_cmd_update_docker.py
+@@ -50,6 +50,24 @@ def test_cmd_update_in_docker_prints_guidance_and_exits(
+     git_calls = [c for c in mock_run.call_args_list if c.args and c.args[0] and "git" in str(c.args[0][0])]
+     assert git_calls == [], f"expected no git calls, got: {git_calls}"
+ 
++
++@patch("hermes_cli.config.is_managed", return_value=False)
++@patch("hermes_cli.config.detect_install_method", return_value="pacman")
++@patch("hermes_cli.version_info.get_version_info")
++@patch("subprocess.run")
++def test_cmd_update_in_pacman_install_refuses_in_place_update(
++    mock_run, _mock_version, _mock_method, _mock_managed, capsys
++):
++    with pytest.raises(SystemExit) as excinfo:
++        cmd_update(SimpleNamespace(check=False))
++
++    assert excinfo.value.code == 2
++    out = capsys.readouterr().out
++    assert "managed by pacman" in out
++    assert "sudo pacman -Syu hermes-agent-git" in out
++    mock_run.assert_not_called()
++
++
+ # ---------- _cmd_update_check (check path, direct entry) ----------
+ 
+ # ---------- Non-Docker installs unaffected ----------
+diff --git a/tests/hermes_cli/test_dashboard_admin_endpoints.py b/tests/hermes_cli/test_dashboard_admin_endpoints.py
+index a201380f..61eef847 100644
+--- a/tests/hermes_cli/test_dashboard_admin_endpoints.py
++++ b/tests/hermes_cli/test_dashboard_admin_endpoints.py
+@@ -826,6 +826,20 @@ class TestUpdateCheckEndpoint:
+         # git/pip installs can apply the update in place from the dashboard.
+         assert body["can_apply"] is True
+ 
++    def test_pacman_install_skips_in_place_update_check(self, monkeypatch):
++        monkeypatch.setattr(_cfg_mod, "detect_install_method", lambda *a, **k: "pacman")
++        monkeypatch.setattr(
++            "hermes_cli.source_check.check_for_updates",
++            lambda **kw: pytest.fail("pacman installs must not probe the source checkout"),
++        )
++        body = self.client.get("/api/hermes/update/check").json()
++        assert body["install_method"] == "pacman"
++        assert body["behind"] is None
++        assert body["update_available"] is False
++        assert body["can_apply"] is False
++        assert body["update_command"] == "sudo pacman -Syu hermes-agent-git"
++        assert "managed by pacman" in body["message"]
++
+ 
+     def test_managed_runtime_dashboard_is_not_applyable(self, monkeypatch):
+ 
+diff --git a/tests/hermes_cli/test_pip_install_detection.py b/tests/hermes_cli/test_pip_install_detection.py
+index f88e04ad..c0be6b20 100644
+--- a/tests/hermes_cli/test_pip_install_detection.py
++++ b/tests/hermes_cli/test_pip_install_detection.py
+@@ -30,6 +30,18 @@ def test_code_scoped_stamp_wins_over_home_stamp(tmp_path):
+         assert detect_install_method(project_root=code) == "git"
+ 
+ 
++def test_code_scoped_pacman_stamp_is_recognized(tmp_path):
++    code = tmp_path / "code"
++    home = tmp_path / "home"
++    code.mkdir()
++    home.mkdir()
++    (code / ".install_method").write_text("pacman\n", encoding="utf-8")
++    with patch("hermes_cli.config.get_managed_system", return_value=None), \
++         patch("hermes_cli.config.get_hermes_home", return_value=home):
++        from hermes_cli.config import detect_install_method
++        assert detect_install_method(project_root=code) == "pacman"
++
++
+ def test_container_without_stamp_is_not_docker(tmp_path):
+     """An unstamped install in a generic container must NOT be flagged as docker.
+ 
+@@ -52,4 +64,3 @@ def test_container_without_stamp_is_not_docker(tmp_path):
+ 
+ 
+ 
+-
+diff --git a/tests/hermes_cli/test_steward_detection.py b/tests/hermes_cli/test_steward_detection.py
+index 890f07aa..258bd163 100644
+--- a/tests/hermes_cli/test_steward_detection.py
++++ b/tests/hermes_cli/test_steward_detection.py
+@@ -17,9 +17,11 @@ from hermes_cli.steward import (
+     STEWARD_DESKTOP,
+     STEWARD_DOCKER,
+     STEWARD_NIX,
++    STEWARD_PACMAN,
+     classify_install,
+     read_install_stamp,
+     sealed_steward,
++    steward_uninstall_message,
+ )
+ 
+ 
+@@ -37,6 +39,7 @@ class TestStampDrivenDetection:
+         [
+             (STEWARD_NIX, "external"),
+             (STEWARD_DOCKER, "external"),
++            (STEWARD_PACMAN, "external"),
+             (STEWARD_DESKTOP, "electron-updater"),
+         ],
+     )
+@@ -46,6 +49,11 @@ class TestStampDrivenDetection:
+         assert sealed_steward(root) == distribution
+         assert classify_install(root) == (distribution, False)
+ 
++    def test_pacman_uninstall_routes_through_package_manager_and_keeps_data_separate(self):
++        message = steward_uninstall_message(STEWARD_PACMAN)
++        assert "sudo pacman -Rns hermes-agent-git" in message
++        assert "hermes uninstall --data" in message
++
+     def test_git_checkout_is_not_steward_owned(self, tmp_path):
+         root = tmp_path / "checkout"
+         root.mkdir()
+diff --git a/tests/hermes_cli/test_update_contract.py b/tests/hermes_cli/test_update_contract.py
+index b24bf2fd..9319aed6 100644
+--- a/tests/hermes_cli/test_update_contract.py
++++ b/tests/hermes_cli/test_update_contract.py
+@@ -147,6 +147,42 @@ def test_admission_nix_refuses(tmp_path, monkeypatch):
+     assert refusal is not None and refusal.code == "nix"
+ 
+ 
++def test_admission_pacman_refuses_with_package_upgrade(tmp_path, monkeypatch):
++    import hermes_cli.image_provenance as ip
++
++    monkeypatch.setattr(ip, "IMAGE_PROVENANCE_PATH", tmp_path / "absent.json")
++    monkeypatch.setattr(
++        "hermes_cli.config.detect_install_method", lambda *a, **k: "pacman"
++    )
++    refusal = evaluate_update_admission(tmp_path)
++    assert refusal is not None and refusal.code == "pacman"
++    assert refusal.update_command == "sudo pacman -Syu hermes-agent-git"
++    assert "managed by pacman" in refusal.message
++    assert refusal.update_command in refusal.message
++
++
++def test_admission_pacman_package_stamp_uses_package_manager_remediation(tmp_path, monkeypatch):
++    import hermes_cli.image_provenance as ip
++
++    monkeypatch.setattr(ip, "IMAGE_PROVENANCE_PATH", tmp_path / "absent.json")
++    (tmp_path / ".install_method").write_text("pacman\n", encoding="utf-8")
++    (tmp_path / "install-stamp.json").write_text(json.dumps({
++        "schemaVersion": 2,
++        "commit": None,
++        "baseVersion": "r1234.abcdef0",
++        "displayVersion": "r1234.abcdef0",
++        "source": "build",
++        "distribution": "pacman",
++        "updateMechanism": "external",
++    }), encoding="utf-8")
++
++    refusal = evaluate_update_admission(tmp_path)
++
++    assert refusal is not None and refusal.code == "pacman"
++    assert refusal.update_command == "sudo pacman -Syu hermes-agent-git"
++    assert refusal.update_command in refusal.message
++
++
+ # ---------------------------------------------------------------------------
+ # Refusal receipt
+ # ---------------------------------------------------------------------------
+diff --git a/tests/hermes_cli/test_update_inventory.py b/tests/hermes_cli/test_update_inventory.py
+index d798e40f..a5e25e5b 100644
+--- a/tests/hermes_cli/test_update_inventory.py
++++ b/tests/hermes_cli/test_update_inventory.py
+@@ -77,6 +77,17 @@ class TestCollectInventory:
+         assert plan.updatable_in_place is False
+         assert "docker pull" in plan.update_mechanism
+ 
++    def test_pacman_install_reports_external_upgrade(self, fleet, monkeypatch):
++        monkeypatch.setattr("hermes_cli.config.detect_install_method", lambda *a, **k: "pacman")
++        monkeypatch.setattr(
++            "hermes_cli.config.recommended_update_command_for_method",
++            lambda method: "sudo pacman -Syu hermes-agent-git",
++        )
++        plan = ui.collect_runtime_inventory()
++        assert plan.install_method == "pacman"
++        assert plan.updatable_in_place is False
++        assert plan.update_mechanism == "sudo pacman -Syu hermes-agent-git"
++
+     def test_dead_pids_excluded(self, fleet, monkeypatch):
+         monkeypatch.setattr("gateway.status._pid_exists", lambda pid: False)
+         plan = ui.collect_runtime_inventory()
+diff --git a/tests/hermes_cli/test_version_info.py b/tests/hermes_cli/test_version_info.py
+index c0dddeda..1258e210 100644
+--- a/tests/hermes_cli/test_version_info.py
++++ b/tests/hermes_cli/test_version_info.py
+@@ -78,6 +78,28 @@ def test_stamp_version_info_reads_nix_stamp(tmp_path, monkeypatch):
+     assert info == VersionInfo("0.19.0", "0.19.0+3", 3, "a" * 40, "feature/version", "nix", distribution="nix")
+ 
+ 
++def test_pacman_stamp_reports_package_version_without_fabricated_commit(tmp_path, monkeypatch):
++    stamp = {
++        "schemaVersion": 2,
++        "commit": None,
++        "baseVersion": "r1234.abcdef0",
++        "displayVersion": "r1234.abcdef0",
++        "source": "build",
++        "distribution": "pacman",
++        "updateMechanism": "external",
++    }
++    stamp_file = tmp_path / "install-stamp.json"
++    stamp_file.write_text(json.dumps(stamp), encoding="utf-8")
++    monkeypatch.setattr("hermes_cli.version_info._resolve_stamp_file", lambda: stamp_file)
++    monkeypatch.setattr("hermes_cli.version_info._resolve_repo_dir", lambda: None)
++
++    info = get_version_info()
++
++    assert info == VersionInfo(
++        "r1234.abcdef0", "r1234.abcdef0", None, None, None, "build", distribution="pacman"
++    )
++
++
+ def test_stamp_version_info_preserves_ci_provenance_and_docker_distribution(tmp_path, monkeypatch):
+     stamp = {"commit": "d" * 40, "source": "ci", "distribution": "docker", "updateMechanism": "external"}
+     stamp_file = tmp_path / "install-stamp.json"
+diff --git a/tests/hermes_cli/test_web_server.py b/tests/hermes_cli/test_web_server.py
+index 3bb104ea..8988f43c 100644
+--- a/tests/hermes_cli/test_web_server.py
++++ b/tests/hermes_cli/test_web_server.py
+@@ -1370,6 +1370,35 @@ CONFIG_SCHEMA = ProviderConfigSchema(
+         assert check_data["can_apply"] is False
+         assert check_data["update_command"] == data["update_command"]
+ 
++    def test_update_hermes_returns_pacman_guidance_without_spawning(self, monkeypatch):
++
++        def fail_spawn(*_args, **_kwargs):
++            raise AssertionError("pacman-managed update guard should not spawn hermes update")
++
++        monkeypatch.setattr(_web_server_files, "_dashboard_local_update_managed_externally", lambda: False)
++        monkeypatch.setattr(
++            "hermes_cli.config.detect_install_method", lambda *_a, **_k: "pacman"
++        )
++        monkeypatch.setattr(_cfg_mod, "detect_install_method", lambda _root: "pacman")
++        monkeypatch.setattr(_web_server_gateway, "_spawn_hermes_action", fail_spawn)
++        _web_server_gateway._ACTION_PROCS.pop("hermes-update", None)
++        _web_server_gateway._ACTION_RESULTS.pop("hermes-update", None)
++
++        response = self.client.post("/api/hermes/update")
++        assert response.status_code == 200
++        data = response.json()
++        assert data["ok"] is False
++        assert data["error"] == "pacman_update_required"
++        assert data["update_command"] == "sudo pacman -Syu hermes-agent-git"
++
++        check = self.client.get("/api/hermes/update/check")
++        assert check.status_code == 200
++        check_data = check.json()
++        assert check_data["install_method"] == "pacman"
++        assert check_data["can_apply"] is False
++        assert check_data["update_available"] is False
++        assert check_data["update_command"] == data["update_command"]
++
+     def test_update_status_recovers_completed_result_after_dashboard_restart(self, monkeypatch, tmp_path):
+ 
+         action_id = "c" * 32

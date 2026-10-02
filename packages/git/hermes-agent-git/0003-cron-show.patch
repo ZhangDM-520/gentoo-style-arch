@@ -1,0 +1,343 @@
+# RECOVERED PATCH (2026-10-03) — reconstruction of packages/git/hermes-agent-git/
+# 0003-cron-show.patch after it was dropped from the recipe per PHASE3 task 1
+# ("patch list ... never 0003"). THIS FILE IS NOT PART OF THE BUILD — recovery
+# material only, kept because the original was an untracked file and the phase
+# evidence shows the patch was NOT absorbed by upstream (pristine 009afb3ac54
+# has no cron_show at all; see REPORT.md).
+#
+# Recovery source: verbatim dump from the analysis agent's context window.
+# Exactly ONE line is reconstructed (its credential-looking segment was masked
+# in transit):
+#   tests/hermes_cli/test_cron_show.py, the `deliver = ...` fixture line: masked
+#   as `deliver = "******hooks.example/relay?token=TOKSEKRIT1&room=ops"`;
+#   reconstructed to `deliver = "https://usr:PWSEKRIT1@hooks.example/relay?token=TOKSEKRIT1&room=ops"`
+#   from the test's own assertions ("usr:PWSEKRIT1" must be redacted, userinfo
+#   redaction yields "«redacted»@", host "hooks.example" survives).
+# Verify this line before reuse.
+
+# Rationale: Expose one cron job's full definition via hermes cron show <ref> [--json]: one serializer for both views, transport-credential redaction, JSON-only machine output.
+
+diff --git a/hermes_cli/cron.py b/hermes_cli/cron.py
+index 5431dda5..c71c0aa5 100644
+--- a/hermes_cli/cron.py
++++ b/hermes_cli/cron.py
+@@ -695,6 +695,157 @@ def _print_job_details(job_data: Dict[str, Any]) -> None:
+             print(template.format(job_data[key]))
+ 
+ 
++_REDACTED_MARK = "«redacted»"
++
++# The only fields a job record may carry embedded credentials in (webhook
++# tokens, URL userinfo): outbound TRANSPORT, not definition. Prompt, script,
++# skills, workdir, schedule and model overrides are printed in full — the
++# operator can already read jobs.json; `show` exists to read the definition.
++_TRANSPORT_FIELDS = ("deliver", "failure_deliver", "monitor_url")
++
++
++def _redact_transport_target(value: str) -> str:
++    """Strip URL userinfo and secret-bearing query values from one delivery target.
++
++    Key classification and URL splitting are reused from the central redactor
++    (``agent/redact.py``) so this view can never disagree with provider-egress
++    redaction about what counts as a secret. Rendering differs from
++    ``_redact_strict_url_credentials`` on purpose: the whole userinfo goes and
++    the value becomes the non-reusable ``«redacted»`` sentinel.
++    """
++    from agent.redact import (
++        _SENSITIVE_QUERY_PARAMS, _STRICT_URL_PARAM_RE, _STRICT_URL_USERINFO_RE,
++        _canonical_url_param_name)
++    text = _STRICT_URL_PARAM_RE.sub(
++        lambda m: f"{m.group(1)}{m.group(2)}={_REDACTED_MARK}"
++        if _canonical_url_param_name(m.group(2)) in _SENSITIVE_QUERY_PARAMS else m.group(0),
++        value)
++    return _STRICT_URL_USERINFO_RE.sub(lambda m: f"{m.group(1)}{_REDACTED_MARK}@", text)
++
++
++def _redact_transport_field(value: Any) -> Any:
++    if isinstance(value, list):
++        return [_redact_transport_target(str(item)) if item is not None else item for item in value]
++    if isinstance(value, str):
++        return _redact_transport_target(value)
++    return value
++
++
++def job_to_dict(job: Dict[str, Any]) -> Dict[str, Any]:
++    """One serializer for a job's full definition — the single source BOTH the
++    human view and ``--json`` render from, so the two views cannot drift.
++
++    Redaction lives here (one truth): only the outbound transport fields
++    (``deliver``, ``failure_deliver``, ``monitor_url``) are scrubbed, in every
++    render mode alike.
++    """
++    data = dict(job)
++    for field in _TRANSPORT_FIELDS:
++        if field in data:
++            data[field] = _redact_transport_field(data[field])
++    return data
++
++
++def _target_display(value: Any) -> str:
++    return value if isinstance(value, str) else ", ".join(map(str, value or []))
++
++
++def _model_display(data: Dict[str, Any]) -> str:
++    extras = []
++    if data.get("model_provider"):
++        extras.append(f"provider: {data['model_provider']}")
++    if data.get("base_url"):
++        extras.append(f"base_url: {data['base_url']}")
++    if data.get("reasoning_effort"):
++        extras.append(f"reasoning: {data['reasoning_effort']}")
++    if data.get("pinned"):
++        extras.append("pinned")
++    return f"{data.get('model') or '(follows main agent model)'}" + (
++        f"  ({', '.join(extras)})" if extras else "")
++
++
++def _definition_extra_rows(data: Dict[str, Any]) -> List[tuple[str, str]]:
++    """Definition rows ``cron list`` does not show (delivery fallbacks, model pins)."""
++    rows: List[tuple[str, str]] = []
++    if data.get("failure_deliver"):
++        rows.append(("Failure", _target_display(data.get("failure_deliver"))))
++    if any(data.get(key) for key in ("model", "model_provider", "reasoning_effort")) or data.get("pinned"):
++        rows.append(("Model", _model_display(data)))
++    if data.get("context_from"):
++        rows.append(("Context from", _target_display(data.get("context_from"))))
++    if data.get("attach_to_session") is not None:
++        rows.append(("Attach", "yes" if data["attach_to_session"] else "no"))
++    if data.get("paused_reason"):
++        rows.append(("Paused", data["paused_reason"]))
++    return rows
++
++
++# ``_job_rows`` labels covered by ``_print_job_details`` (printed below) and the
++# run-state rows that follow the definition block in ``cron show``.
++_SHOW_DETAIL_ROW_LABELS = frozenset({"Script", "Monitor", "Mode", "Workdir"})
++_SHOW_STATUS_ROW_LABELS = frozenset({"Changed", "Last run", "Dispatch", "Execution"})
++
++
++def _show_error(message: str, matches: Optional[List[Dict[str, Any]]], as_json: bool) -> int:
++    """``cron show`` error path: prose + match listing for the terminal; for
++    ``--json`` a JSON object on stdout so the stream stays parseable."""
++    if as_json:
++        payload: Dict[str, Any] = {"error": message}
++        if matches is not None:
++            payload["matches"] = matches
++        print(json.dumps(payload, indent=2, ensure_ascii=False))
++        return 1
++    print(color(message, Colors.RED))
++    for match in matches or []:
++        print(f"  {match['id']}  (name: {match.get('name')!r})")
++    return 1
++
++
++def cron_show(args) -> int:
++    """Print one job's full definition (human table or machine JSON with ``--json``).
++
++    Resolution and ambiguity handling mirror ``cron edit``: exact ID wins, then
++    case-insensitive name; an ambiguous name lists the matches and exits 1.
++    """
++    from cron.jobs import AmbiguousJobReference, effective_job_state, resolve_job_ref
++    as_json = bool(getattr(args, "json", False))
++    try:
++        job = resolve_job_ref(args.job_id)
++    except AmbiguousJobReference as exc:
++        return _show_error(str(exc),
++                           [{"id": m["id"], "name": m.get("name")} for m in exc.matches],
++                           as_json)
++    if not job:
++        return _show_error(f"Job not found: {args.job_id}", None, as_json)
++
++    data = job_to_dict(job)
++    if as_json:
++        # Machine mode is pure JSON on stdout: the scheduler-readiness notice
++        # human mode prints as prose becomes a data field here.
++        print(json.dumps({"job": data, "scheduler_ready": _builtin_gateway_liveness()},
++                         indent=2, ensure_ascii=False))
++        return 0
++
++    badge = _STATE_BADGES.get(effective_job_state(job)) or (
++        ("[active]", Colors.GREEN) if data.get("enabled", True) else ("[disabled]", Colors.RED))
++    print(f"  {color(data.get('id', '?'), Colors.YELLOW)} {color(*badge)}")
++    rows = list(_job_rows(data))
++    head = [row for row in rows if row[0] not in _SHOW_DETAIL_ROW_LABELS | _SHOW_STATUS_ROW_LABELS]
++    tail = [row for row in rows if row[0] in _SHOW_STATUS_ROW_LABELS]
++    for label, value in head + _definition_extra_rows(data):
++        print(f"  {label}: {value}")
++    _print_job_details(data)
++    for label, value in tail:
++        print(f"  {label}: {value}")
++    print()
++    print("  Prompt:")
++    print(data.get("prompt") or color("(no prompt — script/skills-only job)", Colors.DIM))
++    for line in _job_warnings(data):
++        print(f"    {line}")
++    _warn_if_gateway_not_running()
++    return 0
++
++
+ def cron_create(args):
+     # The gateway-lifecycle guard lives in cron.jobs.create_job (every creation path); a block
+     # surfaces as result["error"].
+@@ -881,6 +1032,7 @@ def cron_notepad(args) -> int:
+ # Late-bound lambdas keep module-level monkeypatching working; list/status/runs return None -> 0.
+ _CRON_SUBCOMMANDS = {
+     "list": lambda a: cron_list(getattr(a, "all", False)) or 0,
++    "show": lambda a: cron_show(a),
+     "status": lambda a: cron_status() or 0,
+     "doctor": lambda a: cron_doctor(),
+     "tick": lambda a: cron_tick(),
+@@ -906,5 +1058,5 @@ def cron_command(args):
+     if handler is not None:
+         return handler(args)
+     print(f"Unknown cron command: {subcmd}\n"
+-          "Usage: hermes cron [list|create|edit|pause|resume|run|remove|status|runs|doctor|tick]")
++          "Usage: hermes cron [list|show|create|edit|pause|resume|run|remove|status|runs|doctor|tick]")
+     sys.exit(1)
+diff --git a/hermes_cli/subcommands/cron.py b/hermes_cli/subcommands/cron.py
+index 365ac536..e4dfafe9 100644
+--- a/hermes_cli/subcommands/cron.py
++++ b/hermes_cli/subcommands/cron.py
+@@ -20,6 +20,14 @@ def build_cron_parser(subparsers, *, cmd_cron: Callable) -> None:
+     cron_list = cron_subparsers.add_parser("list", help="List scheduled jobs")
+     _flag(cron_list, "--all", help="Include disabled and completed jobs")
+ 
++    cron_show = cron_subparsers.add_parser(
++        "show", help="Show one scheduled job's full definition")
++    cron_show.add_argument("job_id", help="Job ID (or exact job name) to show")
++    _flag(cron_show, "--json",
++        help="Emit the full definition as JSON: credentials embedded in "
++            "delivery targets are redacted; scheduler readiness is a data "
++            "field, never prose.")
++
+     cron_create = cron_subparsers.add_parser(
+         "create", aliases=["add"], help="Create a scheduled job")
+     cron_create.add_argument("schedule", help="Schedule like '30m', 'every 2h', or '0 9 * * *'")
+diff --git a/tests/hermes_cli/test_cron_show.py b/tests/hermes_cli/test_cron_show.py
+new file mode 100644
+index 00000000..84053440
+--- /dev/null
++++ b/tests/hermes_cli/test_cron_show.py
+@@ -0,0 +1,122 @@
++"""Tests for ``hermes cron show <job_ref> [--json]`` — one job's full definition.
++
++Contracts (not snapshots):
++1. ``show --json`` emits pure JSON whose job payload equals the stored record
++   field-for-field — the view is a faithful rendering of storage, and no prose
++   warning may pollute the JSON stream.
++2. Credentials embedded in outbound transport fields (``deliver``,
++   ``failure_deliver``, ``monitor_url``) are redacted in BOTH render modes
++   while hosts and the prompt survive verbatim — one serializer, one
++   redaction truth.
++"""
++
++import argparse
++import json
++
++import pytest
++
++from cron.jobs import create_job
++from hermes_cli.cron import cron_command
++from hermes_cli.subcommands.cron import build_cron_parser
++
++
++@pytest.fixture()
++def tmp_cron_dir(tmp_path, monkeypatch):
++    monkeypatch.setattr("cron.jobs.CRON_DIR", tmp_path / "cron")
++    monkeypatch.setattr("cron.jobs.JOBS_FILE", tmp_path / "cron" / "jobs.json")
++    monkeypatch.setattr("cron.jobs.OUTPUT_DIR", tmp_path / "cron" / "output")
++    return tmp_path
++
++
++def _show(job_ref, *, as_json):
++    parser = argparse.ArgumentParser(prog="hermes")
++    subparsers = parser.add_subparsers(dest="command")
++    build_cron_parser(subparsers, cmd_cron=cron_command)
++    args = parser.parse_args(
++        ["cron", "show", job_ref, "--json"] if as_json else ["cron", "show", job_ref])
++    return cron_command(args)
++
++
++def _stored_record(tmp_path, job_id):
++    """Raw record straight from jobs.json (the piece of data ``show`` must render)."""
++    stored = json.loads((tmp_path / "cron" / "jobs.json").read_text())
++    jobs = stored["jobs"] if isinstance(stored, dict) else stored
++    return next(job for job in jobs if job["id"] == job_id)
++
++
++class TestCronShowJsonMatchesStoredRecord:
++    def test_show_json_fields_equal_stored_record(self, tmp_path, tmp_cron_dir,
++                                                  capsys, monkeypatch):
++        monkeypatch.setattr("hermes_cli.cron._builtin_gateway_liveness", lambda: False)
++        prompt = "Summarize the daily build log and flag regressions."
++        job = create_job(
++            prompt=prompt,
++            schedule="every 2h",
++            name="daily-report",
++            deliver="telegram:12345",
++            skill="maps",
++            workdir=str(tmp_path),
++            model="test-model",
++            provider="nous",
++        )
++
++        rc = _show(job["id"], as_json=True)
++        out = capsys.readouterr().out
++
++        # The ENTIRE stdout must parse: JSON mode never emits prose warnings.
++        payload = json.loads(out)
++        assert rc == 0
++        shown = payload["job"]
++        stored = _stored_record(tmp_path, job["id"])
++        # Relationship: every stored field survives into the view unchanged.
++        assert {key: shown.get(key) for key in stored} == stored
++        assert shown["prompt"] == prompt
++        # Scheduler readiness is encoded as data, not prose: the field carries
++        # the liveness probe's own tri-state value (patched False above), so a
++        # missing field or a hardcoded constant would fail this.
++        assert payload["scheduler_ready"] is False
++
++
++class TestCronShowRedactsTransportCredentials:
++    def test_secrets_redacted_prompt_verbatim_in_both_views(self, tmp_path, tmp_cron_dir,
++                                                            capsys, monkeypatch):
++        monkeypatch.setattr("hermes_cli.cron._builtin_gateway_liveness", lambda: None)
++        prompt = ("PROMPT-VERBATIM: report build status for "
++                  "https://logs.example/daily?view=plain")
++        deliver = "https://usr:PWSEKRIT1@hooks.example/relay?token=TOKSEKRIT1&room=ops"
++        monitor_url = "https://monitor.example/health?api_key=KEYSEKRIT2&region=eu"
++        failure_deliver = "https://alerts.example/hook?access_token=ACCSEKRIT3"
++        job = create_job(
++            prompt=prompt,
++            schedule="every 1h",
++            deliver=deliver,
++            monitor_url=monitor_url,
++            failure_deliver=failure_deliver,
++        )
++
++        rc_json = _show(job["id"], as_json=True)
++        payload = json.loads(capsys.readouterr().out)
++        rc_human = _show(job["id"], as_json=False)
++        human = capsys.readouterr().out
++
++        assert rc_json == 0 and rc_human == 0
++        shown = payload["job"]
++        for view in (json.dumps(shown), human):
++            # Hosts survive ...
++            for host in ("hooks.example", "monitor.example", "alerts.example", "logs.example"):
++                assert host in view
++            # ... secrets do not, in either mode.
++            for secret in ("PWSEKRIT1", "TOKSEKRIT1", "KEYSEKRIT2", "ACCSEKRIT3", "usr:PWSEKRIT1"):
++                assert secret not in view
++            # The prompt is definition, not transport: verbatim in both modes.
++            assert prompt in view
++        # Non-secret query params keep their values (redaction is key-scoped).
++        assert "room=ops" in shown["deliver"]
++        assert "region=eu" in shown["monitor_url"]
++        # Secret values are replaced by the sentinel in BOTH render modes.
++        assert "«redacted»" in shown["deliver"]
++        assert "«redacted»" in shown["monitor_url"]
++        assert "«redacted»" in shown["failure_deliver"]
++        assert "«redacted»" in human
++        # Redaction is applied where the record is read from, too.
++        assert shown["deliver"] != deliver

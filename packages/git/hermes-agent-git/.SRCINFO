@@ -1,0 +1,26 @@
+pkgbase = hermes-agent-git
+	pkgdesc = CLI AI agent with a TUI and web dashboard (Git main)
+	pkgver = 2026.10.02.051006.g0a374d1
+	pkgrel = 1
+	url = https://github.com/NousResearch/hermes-agent
+	arch = x86_64
+	license = MIT
+	makedepends = git
+	makedepends = npm
+	makedepends = uv
+	depends = nodejs
+	depends = python>=3.14
+	provides = hermes-agent=2026.10.02.051006.g0a374d1
+	conflicts = hermes-agent
+	source = hermes-agent::git+https://github.com/NousResearch/hermes-agent.git#branch=main
+	source = 0001-unattended-memory-audit.patch
+	source = 0002-pacman-update-policy.patch
+	source = 0004-interrupted-turn-recovery-marker.patch
+	source = 0005-notify-union-coercion.patch
+	sha256sums = SKIP
+	sha256sums = 5e2c883ccc8eadb50e906d8f7f2a969e6433e81453d680ce321c461e1d024cd3
+	sha256sums = 099bcd12fcec97707f20d219f41619b752115068bd7463c56acbdc5482815a41
+	sha256sums = 9bddb73ed18c709fd49dd93632dd9f43477a3136954e934c0f04b1ac0f206015
+	sha256sums = da27a1452957e75e622e97f989fa63f8edafc3f6895b2533338b5cc8158a35c5
+
+pkgname = hermes-agent-git

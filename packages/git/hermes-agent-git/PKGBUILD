@@ -1,0 +1,159 @@
+pkgname=hermes-agent-git
+pkgver=2026.10.02.183545.gc9ea214
+pkgrel=1
+pkgdesc='CLI AI agent with a TUI and web dashboard (Git main)'
+arch=('x86_64')
+url='https://github.com/NousResearch/hermes-agent'
+license=('MIT')
+depends=('nodejs' 'python>=3.14')
+makedepends=('git' 'npm' 'uv')
+provides=("hermes-agent=$pkgver")
+conflicts=('hermes-agent')
+source=(
+  'hermes-agent::git+https://github.com/NousResearch/hermes-agent.git#branch=main'
+  '0001-unattended-memory-audit.patch'
+  '0002-pacman-update-policy.patch'
+  '0003-cron-show.patch'
+  '0004-interrupted-turn-recovery-marker.patch'
+  '0005-notify-union-coercion.patch'
+)
+sha256sums=(
+  'SKIP'
+  '5e2c883ccc8eadb50e906d8f7f2a969e6433e81453d680ce321c461e1d024cd3'
+  '099bcd12fcec97707f20d219f41619b752115068bd7463c56acbdc5482815a41'
+  'af96bd05e2236e95a2a70cdf6a225abd60a83cd8547c1aa45769b9f0da3fa10a'
+  '9bddb73ed18c709fd49dd93632dd9f43477a3136954e934c0f04b1ac0f206015'
+  'da27a1452957e75e622e97f989fa63f8edafc3f6895b2533338b5cc8158a35c5'
+)
+
+pkgver() {
+  cd "$srcdir/hermes-agent"
+  printf '%s.g%s' \
+    "$(TZ=UTC GIT_CONFIG_COUNT=0 git show -s --format=%cd --date=format:%Y.%m.%d.%H%M%S HEAD)" \
+    "$(GIT_CONFIG_COUNT=0 git rev-parse --short=7 HEAD)"
+}
+
+prepare() {
+  local patch
+  cd "$srcdir/hermes-agent"
+  # makepkg resets tracked state between builds but leaves untracked files
+  # behind — patches that CREATE files (tests, scripts) then fail with
+  # "already exists in working directory" on every rebuild. Clean them first.
+  GIT_CONFIG_COUNT=0 git clean -fdq
+  for patch in \
+    "$srcdir/0001-unattended-memory-audit.patch" \
+    "$srcdir/0002-pacman-update-policy.patch" \
+    "$srcdir/0003-cron-show.patch" \
+    "$srcdir/0004-interrupted-turn-recovery-marker.patch" \
+    "$srcdir/0005-notify-union-coercion.patch"
+  do
+    if ! GIT_CONFIG_COUNT=0 git apply --check "$patch"; then
+      error "upstream context drift in ${patch##*/}"
+      return 1
+    fi
+    if ! GIT_CONFIG_COUNT=0 git apply "$patch"; then
+      error "failed to apply ${patch##*/}"
+      return 1
+    fi
+  done
+}
+
+build() {
+  local root="$srcdir/hermes-agent"
+  cd "$root"
+
+  export UV_PROJECT_ENVIRONMENT="$root/.venv"
+  # Editable is upstream's ONLY supported install shape (setup.py refuses wheels
+  # outside a Nix build). The editable finder's srcdir references are covered by
+  # the hard-verify rewrite in package(), which fails the build if any survive.
+  uv sync --locked --python /usr/bin/python3.14 --extra all --editable
+
+  node scripts/build/node-deps.mjs \
+    --source "$root" --workspace ui-tui --workspace web --reuse
+  node scripts/build/tui.mjs
+  node scripts/build/web.mjs \
+    --source "$root" --icons "$root" --out "$root/hermes_cli/web_dist"
+}
+
+package() {
+  local source="$srcdir/hermes-agent"
+  local install_root="$pkgdir/usr/lib/hermes-agent"
+  local installed_venv="$install_root/.venv"
+  local runtime_root='/usr/lib/hermes-agent'
+  local runtime_venv="$runtime_root/.venv"
+  local entrypoint
+
+  install -d "$install_root"
+  set -o pipefail
+  tar -C "$source" --exclude-vcs --exclude='node_modules' --exclude='*/node_modules' -cf - . |
+    tar -C "$install_root" -xpf -
+
+  if [[ -e "$install_root/.git" ]] ||
+    find "$install_root" -type d -name node_modules -print -quit | grep -q .
+  then
+    error 'refusing to package Git metadata or Node workspaces'
+    return 1
+  fi
+
+  # Build-time bytecode caches embed build paths, are binary (unrewritable), and
+  # are regenerable — strip them so the hard-verify below checks real references.
+  find "$installed_venv" -type d -name __pycache__ -prune -exec rm -rf {} +
+
+  # Rewrite source paths in launchers and install metadata to the runtime tree.
+  /usr/bin/python3.14 - "$installed_venv" "$source" "$runtime_root" <<'PY'
+from pathlib import Path
+import os
+import sys
+
+venv, source, runtime = map(Path, sys.argv[1:])
+runtime_path = os.fsencode(runtime)
+runtime_uri = runtime.as_uri().encode()
+source_paths = {source.absolute(), source.resolve()}
+replacements = tuple(
+    replacement
+    for path in sorted(source_paths, key=lambda item: len(os.fspath(item)), reverse=True)
+    for replacement in (
+        (path.as_uri().encode(), runtime_uri),
+        (os.fsencode(path), runtime_path),
+    )
+)
+markers = tuple(old for old, _ in replacements)
+leftovers = []
+
+for path in venv.rglob("*"):
+    if path.is_symlink() or not path.is_file():
+        continue
+    content = path.read_bytes()
+    if not any(marker in content for marker in markers):
+        continue
+    if b"\0" in content:
+        leftovers.append(str(path))
+        continue
+    for old, new in replacements:
+        content = content.replace(old, new)
+    path.write_bytes(content)
+    if any(marker in content for marker in markers):
+        leftovers.append(str(path))
+
+if leftovers:
+    raise SystemExit(
+        "unrewritable build-source paths in packaged venv: "
+        + ", ".join(leftovers)
+    )
+print("verified: no build-source paths remain in packaged venv")
+PY
+
+  printf 'pacman\n' > "$install_root/.install_method"
+  printf '{\n  "schemaVersion": 2,\n  "commit": null,\n  "baseVersion": "%s",\n  "displayVersion": "%s",\n  "source": "build",\n  "distribution": "pacman",\n  "updateMechanism": "external",\n  "payload": "bootstrap"\n}\n' "$pkgver" "$pkgver" > "$install_root/install-stamp.json"
+
+  install -Dm644 "$install_root/LICENSE" \
+    "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -d "$pkgdir/usr/bin"
+  for entrypoint in hermes hermes-agent hermes-acp; do
+    if [[ ! -x "$installed_venv/bin/$entrypoint" ]]; then
+      error "uv did not create the $entrypoint console script"
+      return 1
+    fi
+    ln -s "$runtime_venv/bin/$entrypoint" "$pkgdir/usr/bin/$entrypoint"
+  done
+}

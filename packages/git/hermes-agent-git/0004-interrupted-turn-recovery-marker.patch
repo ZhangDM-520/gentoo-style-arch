@@ -1,0 +1,318 @@
+# Rationale: Honest interrupted-turn handoff, re-targeted to current main. The resume and
+# tool-tail notes now defer per-call to the [Orphan recovery: ...] device (agent/replay_cleanup)
+# instead of the blanket 'skip any unfinished work' instruction. The argued structural test
+# rewrite is kept (behavior contracts, not prose). No JSON hermes_recovery marker: upstream's
+# per-call notices already classify the effect; see REPORT.md for the tool_executor residual.
+diff --git a/gateway/run.py b/gateway/run.py
+index 016e1d67623..427842d3b58 100644
+--- a/gateway/run.py
++++ b/gateway/run.py
+@@ -1045,19 +1045,27 @@ def build_resume_recovery_note(
+     reason_phrase = (
+         "a gateway restart" if reason == "restart_timeout"
+         else "a gateway shutdown" if reason == "shutdown_timeout" else "a gateway interruption")
++    # Per-call, not blanket: a result row with real content was PERSISTED, hence
++    # executed; only a result reading [Orphan recovery: ...] (agent/replay_cleanup's
++    # _orphan_recovery on a tool-result row) is synthesized, and its own wording
++    # says which kind — so the note defers to each result's classification instead
++    # of a blanket "skip any unfinished work" instruction that misdescribes both.
++    defer_to_per_call = (
++        "Tool results with real content in the history have already executed — do not re-run them. "
++        "A result reading [Orphan recovery: ...] is synthesized for a call whose result never "
++        "arrived: 'effect is UNKNOWN' means inspect current state before any retry; 'did not "
++        "complete' means the redo is safe. Judge each interrupted call by its own result — "
++        "never blanket-skip or blanket-replay the interrupted work."
++    )
+     if message:
+         resume_guidance = (
+             "Address the user's NEW message below FIRST and focus on what the user is asking now.")
+-        tail_guidance = (
+-            "Do NOT re-execute old tool calls — skip any unfinished work from the conversation history."
+-        )
++        tail_guidance = defer_to_per_call
+     elif interactive:
+         resume_guidance = (
+             "Report to the user that the session was restored "
+             "successfully and ask what they would like to do next.")
+-        tail_guidance = (
+-            "Do NOT re-execute old tool calls — skip any unfinished work from the conversation history."
+-        )
++        tail_guidance = defer_to_per_call
+     else:
+         resume_guidance = (
+             "No user is present on this non-interactive platform, "
+@@ -1066,7 +1074,11 @@ def build_resume_recovery_note(
+             "CONTINUE the interrupted task to completion.")
+         tail_guidance = (
+             "Do NOT re-run tool calls whose results already "
+-            "appear in the history — resume from the first step that has no recorded result.")
++            "appear in the history — resume from the first step that has no recorded result. "
++            "A result reading [Orphan recovery: ...] is synthesized for a call whose result "
++            "never arrived: 'effect is UNKNOWN' means inspect current state before any retry; "
++            "'did not complete' means the redo is safe. Judge each interrupted call by its own "
++            "result — never blanket-skip or blanket-replay the interrupted work.")
+     return (
+         f"[System note: The previous turn was interrupted by "
+         f"{reason_phrase}; the gateway is now back online. "
+diff --git a/gateway/run_turn_runner.py b/gateway/run_turn_runner.py
+index a587e2e67a6..ec861c00b66 100644
+--- a/gateway/run_turn_runner.py
++++ b/gateway/run_turn_runner.py
+@@ -1650,8 +1650,13 @@ class TurnRunner:
+             ctx.message = (
+                 "[System note: A new message has arrived. The conversation "
+                 "history contains pending tool outputs from an interrupted turn. "
+-                "IGNORE those pending results. Address the user's NEW message "
+-                "below FIRST. Do NOT re-execute old tool calls from the history.]\n\n"
++                "Address the user's NEW message below FIRST. Tool results with real "
++                "content in the history have already executed — do not re-run them. "
++                "A result reading [Orphan recovery: ...] is synthesized for a call whose "
++                "result never arrived: 'effect is UNKNOWN' means inspect current state "
++                "before any retry; 'did not complete' means the redo is safe. Judge each "
++                "interrupted call by its own result — never blanket-skip or blanket-replay "
++                "the interrupted work.]\n\n"
+                 + ctx.message
+             )
+         self._prepend_pending_note("_pending_skills_reload_notes")
+diff --git a/tests/agent/test_replay_cleanup.py b/tests/agent/test_replay_cleanup.py
+index adb0a640b80..c9f01997391 100644
+--- a/tests/agent/test_replay_cleanup.py
++++ b/tests/agent/test_replay_cleanup.py
+@@ -215,3 +215,93 @@ def test_untrustworthy_confirmation_stamp_fails_closed():
+         out = canonicalize_replay_history(row, now=10_000.0)
+         assert "EXPIRED" in out[0]["content"] and "api_content" not in out[0], untrusted
+     assert canonicalize_replay_history([{"role": "user", "content": "confirm reboot"}], now=1e9)[0]["content"] == "confirm reboot"
++
++
++# --- Orphan-recovery notices as the interrupted-turn handoff (per-call, not blanket) ---
++
++
++def _orphan_notice(content):
++    """The synthesized ``[Orphan recovery: ...]`` device, or None for a real result.
++
++    Presence/absence is the executed-vs-not distinction; the notice's own wording
++    classifies the effect (``UNKNOWN`` vs ``did not complete``)."""
++    for line in str(content).splitlines():
++        if line.strip().startswith("[Orphan recovery:"):
++            return line.strip()
++    return None
++
++
++def test_orphan_notice_is_per_call_and_double_canonicalization_is_byte_stable():
++    """Invariant A: a dangling side-effecting batch is answered by synthesized tool
++    results carrying the ``[Orphan recovery: ...]`` device, paired by the correct
++    ``tool_call_id`` and classified per call; applying canonicalization twice is
++    byte-identical (the send path re-runs it per request — cache/idempotence safety)."""
++    now = 10_000.0
++    history = [
++        _user("restart the container"),
++        {
++            "role": "assistant",
++            "content": "",
++            "tool_calls": [
++                {"id": "c1", "type": "function", "function": {"name": "terminal", "arguments": "{}"}},
++                {"id": "c2", "type": "function", "function": {"name": "read_file", "arguments": "{}"}},
++            ],
++        },
++    ]
++    once = canonicalize_replay_history(history, now=now)
++
++    assert [m["role"] for m in once] == ["user", "assistant", "tool", "tool"]
++    first, second = once[2], once[3]
++    # The device rides the tool-result row (a role the model never authors), keyed per call.
++    assert (first["tool_call_id"], second["tool_call_id"]) == ("c1", "c2")
++    assert "UNKNOWN" in _orphan_notice(first["content"])
++    assert first["effect_disposition"] == "unknown"
++    assert "did not complete" in _orphan_notice(second["content"])
++    assert second["effect_disposition"] == "none"
++
++    once_bytes = json.dumps(once, sort_keys=True)
++    twice = canonicalize_replay_history(once, now=now)
++    assert json.dumps(twice, sort_keys=True) == once_bytes, (
++        "re-applying canonicalization must be a byte-stable no-op — the same history "
++        "serializes identically on every send-path request"
++    )
++
++
++def test_orphan_notice_distinguishes_executed_from_unknown_per_call():
++    """Invariant B: a persisted (executed) result carries NO recovery notice, so
++    notice presence is the executed-vs-not distinction; inside a kept interrupted
++    block each result is classified per its own call — side-effecting → ``unknown``,
++    read-only → ``none`` — never a per-turn banner."""
++    now = 10_000.0
++    history = [
++        _user("run it"),
++        {
++            "role": "assistant",
++            "content": "",
++            "tool_calls": [
++                {"id": "c1", "type": "function", "function": {"name": "terminal", "arguments": "{}"}},
++                {"id": "c2", "type": "function", "function": {"name": "read_file", "arguments": "{}"}},
++                {"id": "c3", "type": "function", "function": {"name": "read_file", "arguments": "{}"}},
++            ],
++        },
++        {"role": "tool", "tool_call_id": "c1",
++         "content": '{"exit_code": 130, "output": "[Command interrupted]"}'},
++        {"role": "tool", "tool_call_id": "c2",
++         "content": '{"exit_code": -1, "output": "[execution interrupted]"}'},
++        {"role": "tool", "tool_call_id": "c3", "content": "ready"},
++    ]
++    out = canonicalize_replay_history(history, now=now)
++
++    # Alternation preserved: rewritten results stay adjacent to their call.
++    assert [m["role"] for m in out] == ["user", "assistant", "tool", "tool", "tool"]
++    side_effect, read_only, executed = out[2], out[3], out[4]
++
++    assert "UNKNOWN" in _orphan_notice(side_effect["content"])
++    assert side_effect["effect_disposition"] == "unknown"
++    assert "did not complete" in _orphan_notice(read_only["content"])
++    assert read_only["effect_disposition"] == "none"
++
++    # Executed result: no notice, content untouched — absence IS the executed signal.
++    assert _orphan_notice(executed["content"]) is None
++    assert executed["content"] == "ready"
++    assert "effect_disposition" not in executed
+diff --git a/tests/gateway/test_auto_continue.py b/tests/gateway/test_auto_continue.py
+index 8f4871a5a48..a3b9eb7d75a 100644
+--- a/tests/gateway/test_auto_continue.py
++++ b/tests/gateway/test_auto_continue.py
+@@ -16,16 +16,43 @@ def _simulate_auto_continue(agent_history: list, user_message: str) -> str:
+     """
+     message = user_message
+     if agent_history and agent_history[-1].get("role") == "tool":
++        # Mirrors gateway/run_turn_runner.py's tool-tail note (kept in sync by the
++        # same patch). Per-call, not blanket: the note defers to each result's own
++        # [Orphan recovery: ...] status instead of a blanket "skip any unfinished
++        # work" instruction that misdescribes synthesized rows.
+         message = (
+             "[System note: A new message has arrived. The conversation "
+             "history contains pending tool outputs from an interrupted turn. "
+-            "IGNORE those pending results. Address the user's NEW message "
+-            "below FIRST. Do NOT re-execute old tool calls from the history.]\n\n"
++            "Address the user's NEW message below FIRST. Tool results with real "
++            "content in the history have already executed — do not re-run them. "
++            "A result reading [Orphan recovery: ...] is synthesized for a call whose "
++            "result never arrived: 'effect is UNKNOWN' means inspect current state "
++            "before any retry; 'did not complete' means the redo is safe. Judge each "
++            "interrupted call by its own result — never blanket-skip or blanket-replay "
++            "the interrupted work.]\n\n"
+             + message
+         )
+     return message
+ 
+ 
++class TestAutoDetection:
++    def test_tool_tail_note_is_per_call_not_blanket(self):
++        history = [{"role": "tool", "content": "x"}]
++        result = _simulate_auto_continue(history, "what happened?")
++        assert "[System note:" in result
++        assert "interrupted" in result
++        assert "NEW message" in result
++        assert "pending tool outputs" in result
++        # Plan-argued rewrite: the old blanket "Do NOT re-execute ... skip any
++        # unfinished work" prose encoded the defective behavior — blanket,
++        # model-optional, and wrong in the dispatch-vs-persist gap. The note now
++        # defers to each result's own [Orphan recovery: ...] status.
++        assert "Do NOT re-execute old tool calls" not in result
++        assert "skip any unfinished work" not in result
++        assert "[Orphan recovery:" in result
++        assert "what happened?" in result
++
++
+ 
+ 
+ class TestInterruptedReplayFiltering:
+@@ -55,6 +82,10 @@ class TestInterruptedReplayFiltering:
+         assert agent_history[-1]["role"] == "tool"
+         assert agent_history[-1]["tool_call_id"] == "call_1"
+         assert agent_history[-1]["effect_disposition"] == "unknown"
++        # Structural contract: the [Orphan recovery: ...] device rides the rewritten
++        # result for call_1 and its wording classifies the effect per call.
++        assert agent_history[-1]["content"].startswith("[Orphan recovery:")
++        assert "UNKNOWN" in agent_history[-1]["content"]
+ 
+ 
+     def test_dangling_unanswered_side_effect_is_replayed_as_unknown(self):
+@@ -91,5 +122,8 @@ class TestInterruptedReplayFiltering:
+         assert agent_history[-1]["role"] == "tool"
+         assert agent_history[-1]["tool_call_id"] == "call_1"
+         assert agent_history[-1]["effect_disposition"] == "unknown"
++        # Structural contract: the device also closes the dangling pair for call_1.
++        assert agent_history[-1]["content"].startswith("[Orphan recovery:")
++        assert "UNKNOWN" in agent_history[-1]["content"]
+ 
+ 
+diff --git a/tests/gateway/test_restart_resume_pending.py b/tests/gateway/test_restart_resume_pending.py
+index c7ef176fbe6..d87c9d9ed2d 100644
+--- a/tests/gateway/test_restart_resume_pending.py
++++ b/tests/gateway/test_restart_resume_pending.py
+@@ -160,11 +160,19 @@ def _simulate_note_injection(
+         # gateway/run.py so tests exercise the actual strings.
+         message = build_resume_recovery_note(reason, message)
+     elif has_fresh_tool_tail:
++        # Mirrors gateway/run_turn_runner.py's tool-tail note (kept in sync by the
++        # same patch). Per-call, not blanket: defers to each result's own
++        # [Orphan recovery: ...] status instead of a blanket instruction.
+         message = (
+             "[System note: A new message has arrived. The conversation "
+             "history contains pending tool outputs from an interrupted turn. "
+-            "IGNORE those pending results. Address the user's NEW message "
+-            "below FIRST. Do NOT re-execute old tool calls from the history.]\n\n"
++            "Address the user's NEW message below FIRST. Tool results with real "
++            "content in the history have already executed — do not re-run them. "
++            "A result reading [Orphan recovery: ...] is synthesized for a call whose "
++            "result never arrived: 'effect is UNKNOWN' means inspect current state "
++            "before any retry; 'did not complete' means the redo is safe. Judge each "
++            "interrupted call by its own result — never blanket-skip or blanket-replay "
++            "the interrupted work.]\n\n"
+             + message
+         )
+ 
+@@ -276,6 +284,8 @@ class TestResumePendingSystemNote:
+         assert "skip any unfinished work" not in note
+         # But still guards against re-running already-recorded tool calls.
+         assert "already appear in the history" in note
++        # Per-call deference to the [Orphan recovery: ...] device is present.
++        assert "[Orphan recovery:" in note
+ 
+ 
+ 
+@@ -340,6 +350,18 @@ class TestResumePendingSystemNote:
+         result = _simulate_note_injection(history, "ping", resume_entry=None)
+         assert "[System note:" in result
+         assert "pending tool outputs" in result
++        # Plan-argued rewrite: blanket "Do NOT re-execute"/"IGNORE those pending
++        # results" prose encoded the defective behavior; the note defers to each
++        # result's own [Orphan recovery: ...] status.
++        assert "Do NOT re-execute" not in result
++        assert "[Orphan recovery:" in result
++        # Structural contract: a persisted real result carries NO recovery notice —
++        # absence is the machine-readable executed signal.
++        from agent.replay_cleanup import canonicalize_replay_history
++
++        replay = canonicalize_replay_history(history, now=10_000.0)
++        assert replay[-1]["content"] == "result"
++        assert "Orphan recovery" not in replay[-1]["content"]
+ 
+     def test_stale_resume_pending_does_not_inject_restart_note(self):
+         """Old restart markers must not revive an unrelated stale task.
+@@ -454,6 +476,9 @@ class TestResumePendingSystemNote:
+         )
+         assert "[System note:" in result
+         assert "pending tool outputs" in result
++        # Per-call deference, not the blanket prose.
++        assert "Do NOT re-execute" not in result
++        assert "[Orphan recovery:" in result
+ 
+     def test_legacy_history_without_timestamps_still_injects(self):
+         """Transcripts predating timestamp persistence must keep the old
+@@ -467,6 +492,9 @@ class TestResumePendingSystemNote:
+         result = _simulate_note_injection(history, "ping", resume_entry=None)
+         assert "[System note:" in result
+         assert "pending tool outputs" in result
++        # Per-call deference, not the blanket prose.
++        assert "Do NOT re-execute" not in result
++        assert "[Orphan recovery:" in result
+ 
+ 
+ # ---------------------------------------------------------------------------
