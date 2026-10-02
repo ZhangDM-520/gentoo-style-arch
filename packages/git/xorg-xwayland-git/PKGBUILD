@@ -7,8 +7,8 @@
 source "$startdir/../../../lib/pgo.sh"
 
 pkgname=xorg-xwayland-git
-pkgver=24.1.13.r1181.g306071c0b
-pkgrel=2
+pkgver=24.1.13.r1187.gb125b19fc
+pkgrel=1
 arch=('x86_64')
 license=(
   LicenseRef-Adobe-Display-PostScript

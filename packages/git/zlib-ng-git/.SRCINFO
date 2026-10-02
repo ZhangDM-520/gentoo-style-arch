@@ -1,6 +1,6 @@
 pkgbase = zlib-ng-git
 	pkgdesc = zlib replacement with optimizations for next generation systems
-	pkgver = 2.3.1.r582.gg9e60980e
+	pkgver = 2.3.1.r592.gga7f51090
 	pkgrel = 1
 	url = https://github.com/zlib-ng/zlib-ng
 	arch = x86_64

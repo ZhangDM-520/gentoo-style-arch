@@ -1,7 +1,7 @@
 # Maintainer: Chocobo1 <chocobo1 AT archlinux DOT net>
 
 pkgname=jemalloc-git
-pkgver=5.4.0.r11.gdc7cfbc1
+pkgver=5.4.0.r35.g344b5eb3
 pkgrel=1
 pkgdesc="General purpose malloc implementation"
 arch=('i686' 'x86_64')

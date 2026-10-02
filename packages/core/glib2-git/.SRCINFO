@@ -1,7 +1,7 @@
 pkgbase = glib2-git
 	pkgdesc = Low level core library
-	pkgver = 2.90.0.r17.g50d402c
-	pkgrel = 2
+	pkgver = 2.90.0.r58.g404a679
+	pkgrel = 1
 	url = https://gitlab.gnome.org/GNOME/glib
 	arch = x86_64
 	license = LGPL-2.1-or-later

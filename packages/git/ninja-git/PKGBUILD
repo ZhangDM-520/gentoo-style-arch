@@ -6,7 +6,7 @@
 
 pkgname=ninja-git
 epoch=2
-pkgver=1.13.2.r194.gc8b233e8
+pkgver=1.13.2.r196.g4e4df1e5
 pkgrel=1
 pkgdesc='Small build system with a focus on speed'
 arch=(x86_64)

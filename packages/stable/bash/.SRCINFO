@@ -1,7 +1,7 @@
 pkgbase = bash
 	pkgdesc = The GNU Bourne Again shell
-	pkgver = 5.3.15
-	pkgrel = 1
+	pkgver = 5.3.20
+	pkgrel = 2
 	url = https://www.gnu.org/software/bash/bash.html
 	install = bash.install
 	arch = x86_64

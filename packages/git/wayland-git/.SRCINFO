@@ -1,6 +1,6 @@
 pkgbase = wayland-git
 	pkgdesc = A computer display server protocol (git version)
-	pkgver = 1.26.0.r13.g381af21
+	pkgver = 1.26.0.r14.g1bd29e0
 	pkgrel = 1
 	url = https://wayland.freedesktop.org/
 	arch = x86_64
@@ -20,5 +20,5 @@ pkgname = wayland-git
 	provides = libwayland-cursor.so
 	provides = libwayland-egl.so
 	provides = libwayland-server.so
-	provides = wayland=1.26.0.r13.g381af21
+	provides = wayland=1.26.0.r14.g1bd29e0
 	conflicts = wayland

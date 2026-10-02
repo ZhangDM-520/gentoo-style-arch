@@ -1,7 +1,7 @@
 pkgbase = xdg-user-dirs
 	pkgdesc = Manage user directories like ~/Desktop and ~/Music
 	pkgver = 0.20
-	pkgrel = 1.1
+	pkgrel = 1.2
 	url = https://www.freedesktop.org/wiki/Software/xdg-user-dirs
 	install = xdg-user-dirs.install
 	arch = x86_64

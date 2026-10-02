@@ -2,7 +2,7 @@
 # Contributor: Luís Ferreira <contact@lsferreira.net>
 _pkgname=vulkan-headers
 pkgname=$_pkgname-git
-pkgver=1.4.363.r0.g6802bb4
+pkgver=1.4.365.r0.gc468508
 pkgrel=1
 pkgdesc="Vulkan header files and API registry"
 arch=('any')

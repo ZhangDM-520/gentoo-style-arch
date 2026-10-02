@@ -6,7 +6,7 @@
 
 _pkgbase=mimalloc
 pkgname=mimalloc-git
-pkgver=3.5.3.r39.g52444dc1
+pkgver=3.5.4.r0.gf8401bef
 pkgrel=1
 pkgdesc='General-purpose allocator with excellent performance characteristics'
 arch=('x86_64')

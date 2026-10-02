@@ -4,7 +4,7 @@
 # Contributor: Jacek Szafarkiewicz <szafar at linux dot pl>
 
 pkgname=zlib-ng-git
-pkgver=2.3.1.r582.gg9e60980e
+pkgver=2.3.1.r596.gg8b61b4ef
 pkgrel=1
 pkgdesc='zlib replacement with optimizations for next generation systems'
 url='https://github.com/zlib-ng/zlib-ng'

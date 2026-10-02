@@ -2,8 +2,8 @@
 
 pkgname=noctalia-git
 _pkgname=noctalia
-pkgver=5.2.0.r5671.g368755604
-pkgrel=3
+pkgver=5.2.1.r5688.g6ef43e2bf
+pkgrel=2
 pkgdesc='A sleek, customizable desktop shell crafted for Wayland'
 arch=('x86_64' 'aarch64')
 url='https://github.com/noctalia-dev/noctalia'

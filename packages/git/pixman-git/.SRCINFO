@@ -1,6 +1,6 @@
 pkgbase = pixman-git
 	pkgdesc = Library for pixel manipulation
-	pkgver = 0.46.4.r44.g68160c2
+	pkgver = 0.46.4.r62.g23037d9
 	pkgrel = 1
 	url = https://www.pixman.org/
 	arch = i686
@@ -10,7 +10,7 @@ pkgbase = pixman-git
 	makedepends = libpng
 	makedepends = meson
 	depends = glibc
-	provides = pixman=0.46.4.r44.g68160c2
+	provides = pixman=0.46.4.r62.g23037d9
 	provides = libpixman-1.so=0-64
 	conflicts = pixman
 	options = staticlibs

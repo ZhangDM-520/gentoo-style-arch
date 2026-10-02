@@ -8,8 +8,8 @@
 pkgname=bash
 _basever=5.3
 _patchlevel=15
-pkgver=${_basever}.${_patchlevel}
-pkgrel=1
+pkgver=5.3.20
+pkgrel=2
 pkgdesc='The GNU Bourne Again shell'
 arch=(x86_64)
 license=('GPL-3.0-or-later')

@@ -9,8 +9,8 @@
 
 pkgname=vencord-git
 _pkgname=Vencord
-pkgver=1.15.6.r4.g59a542865
-pkgrel=3
+pkgver=1.15.9.r0.g7f0c10cc2
+pkgrel=1
 pkgdesc='The cutest Discord client mod (git build)'
 arch=('any')
 url="https://github.com/Vendicated/${_pkgname}"

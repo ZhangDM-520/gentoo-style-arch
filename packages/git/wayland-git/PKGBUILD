@@ -4,7 +4,7 @@
 
 pkgbase=wayland-git
 pkgname=('wayland-git')
-pkgver=1.26.0.r13.g381af21
+pkgver=1.26.0.r14.g1bd29e0
 pkgrel=1
 pkgdesc='A computer display server protocol (git version)'
 arch=('x86_64')

@@ -1,6 +1,6 @@
 pkgbase = ninja-git
 	pkgdesc = Small build system with a focus on speed
-	pkgver = 1.13.2.r194.gc8b233e8
+	pkgver = 1.13.2.r196.g4e4df1e5
 	pkgrel = 1
 	epoch = 2
 	url = https://ninja-build.org/
@@ -11,7 +11,7 @@ pkgbase = ninja-git
 	makedepends = python
 	makedepends = re2c
 	depends = gcc-libs
-	provides = ninja=1.13.2.r194.gc8b233e8
+	provides = ninja=1.13.2.r196.g4e4df1e5
 	conflicts = ninja
 	source = git+https://github.com/ninja-build/ninja.git
 	md5sums = SKIP

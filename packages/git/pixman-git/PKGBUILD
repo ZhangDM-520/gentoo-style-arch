@@ -5,7 +5,7 @@
 # Contributor: Alexander Baldeck <alexander@archlinux.org>
 
 pkgname=pixman-git
-pkgver=0.46.4.r44.g68160c2
+pkgver=0.46.4.r62.g23037d9
 pkgrel=1
 pkgdesc="Library for pixel manipulation"
 arch=('i686' 'x86_64')
