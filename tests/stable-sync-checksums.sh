@@ -1181,4 +1181,38 @@ grep -q 're-anchored to GitHub zen-browser/desktop' \
     "$dir/state/logs/zen-browser-pgo.log" \
     || fail 'zen-browser: the log does not name its GitHub checksum authority'
 
+# ─── Case 32: a source that never arrived is ABSENT, not disagreeing ─────────
+# A fetch that leaves the tarball nowhere in the recipe dir or $SRCDEST is a
+# reconcilable environment state, not evidence of a different source. The
+# fatal "does not match the official Arch checksum" verdict — and the
+# dispatch drain that follows it — killed a 147-package run over one missing
+# download on 2026-10-03 (81 built, 65 never started). Owner semantics: park
+# when the consumer chain can absorb the wait, else fall back to a normal
+# build attempt (makepkg fetches and checks the recipe sums itself). Never
+# fail-fast on an absence. Case 2 keeps its teeth: a source that DISAGREES
+# still refuses.
+dir="$fixture/absent-source"
+make_case_workspace "$dir" "$repo_version-1"
+set_official_srcinfo "$dir" "$repo_version" \
+    "\tsource = https://example.invalid/s1-$repo_version.tar.gz" \
+    "\tsha256sums = $published_sha"
+# no set_delivery: the tarball never arrives anywhere
+run_build "$dir" 'absent-source' fail
+
+[[ -s $dir/fake/curl_calls ]] || fail 'no official .SRCINFO was fetched: this case is vacuous'
+if grep -q 'does not match the official Arch checksum' "$(recipe_log "$dir")"; then
+    fail 'a source that never arrived was condemned as a disagreeing source'
+fi
+grep -q '^s1 deferred 99 ' "$dir/out.txt" \
+    || fail 'absent-source: the run record did not classify the absence as deferred'
+grep -q 'the rest of the dispatch continued' "$dir/out.txt" \
+    || fail 'absent-source: the deferral still drains the dispatch (the run-1 harm)'
+if [[ -s $dir/fake/makepkg_argv ]]; then
+    fail 'a parked recipe was built anyway'
+fi 
+
+  # (case 33 — provider-path absence pin — deferred to follow-up: the AUR/GitHub
+  #  integrity sites refuse through their own checks (case 30's 'AUR published
+  #  checksum'), so the provider-branch pin needs that site mapping first.
+  #  The builder-side classification itself is fixed and covered by case 32.)
 printf 'stable-sync fixture: PASS\n'

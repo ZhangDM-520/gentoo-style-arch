@@ -2371,6 +2371,10 @@ function anchor_sums_from_provider -a pkg_path provider provider_id provider_fil
     # A VCS checkout is hashed the way makepkg hashes it (git archive of the
     # tag), because there is no file to run sha256sum on.
     set -l bad
+    # A failure here can be an ABSENCE (source not fetched / VCS checkout
+    # unavailable — the anchor is unverifiable) or a DISAGREEMENT (the fetched
+    # bytes hash differently — a different source). Only disagreements are fatal.
+    set -l environmental_only 1
     for i in (seq (count $anchor_names))
         set -l fn $anchor_names[$i]
         # Refresh-only entries have no published value to compare against —
@@ -2388,6 +2392,7 @@ function anchor_sums_from_provider -a pkg_path provider provider_id provider_fil
         set -l want (awk -F'\t' -v f="$map_name" '$1==f{print $3}' "$map")
         if not contains -- $alg sha256 sha512 md5 b2
             set -a bad "$fn: $checksum_owner publishes an algorithm this check does not know ('$alg')"
+            set environmental_only 0
             continue
         end
         set -l got ""
@@ -2399,6 +2404,7 @@ function anchor_sums_from_provider -a pkg_path provider provider_id provider_fil
                     continue
                 case 2
                     set -a bad "$fn: 'git archive' could not reproduce the $alg $checksum_owner publishes for this checkout"
+                    set environmental_only 0
                     continue
             end
         else
@@ -2416,10 +2422,32 @@ function anchor_sums_from_provider -a pkg_path provider provider_id provider_fil
         end
         if test "$got" != "$want"
             set -a bad "$fn: $checksum_owner's $alg is $want, the fetched source hashes to $got"
+            set environmental_only 0
         end
     end
     if test (count $bad) -gt 0
         cp --force -- "$tmp/PKGBUILD.orig" "$pkg_path/PKGBUILD"
+        if test $environmental_only -eq 1
+            # Every entry is an absence, not a disagreement: the anchor could not
+            # be checked because the source never arrived. Owner semantics
+            # (2026-10-03): park when the consumer chain can absorb the wait, else
+            # fall back to a normal build attempt (makepkg fetches and verifies
+            # against the recipe sums itself). Never fail-fast on a reconcilable
+            # fetch hazard.
+            printf '  %s\n' $bad
+            switch (unverifiable_defer_plan (basename "$pkg_path"))
+                case defer
+                    set -g _DEFER_REASON source-unfetchable
+                    ui_error "$pkg_name: sources absent at anchoring time — consumer chain can absorb the wait — parking this recipe (deferred)"
+                    echo "  Nothing was built or installed; dependents wait (waits-on-deferred)."
+                    command rm -rf -- "$tmp"
+                    return $lane_outcome_defer
+                case '*'
+                    ui_error "$pkg_name: sources absent at anchoring time — consumers cannot wait — falling back to a normal build attempt (makepkg fetches; the official-anchor check is skipped this run)"
+            end
+            command rm -rf -- "$tmp"
+            return 3
+        end
         if test "$provider" = arch
             ui_error "$pkg_name: refusing to build — a source does not match the official Arch checksum"
             printf '  %s\n' $bad
@@ -6873,7 +6901,8 @@ function print_run_summary -a outcome
             else if test "$blocked" -eq 0; and test (count $deferred) -eq 0; and test -n "$sudo_note"
                 ui_warning "Stopped early — $sudo_note."
             else if test (count $deferred) -gt 0
-                ui_warning "(count $deferred) recipe(s) deferred — the rest of the dispatch continued; the parked recipes below were not built."
+                set -l deferred_count (count $deferred)
+                ui_warning "$deferred_count recipe(s) deferred — the rest of the dispatch continued; the parked recipes below were not built."
                 if test -n "$sudo_note"
                     ui_warning "Stopped early — $sudo_note."
                 end
