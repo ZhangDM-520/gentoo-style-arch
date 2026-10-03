@@ -750,6 +750,74 @@ grep -Fq 'upstream moved 3 commit(s) < tolerance 5 — treating upstream as curr
     <<<"$override_diagnostics" ||
     fail 'the garbage-tolerance run did not fall back to the default 5:'$'\n'"$override_diagnostics"
 
+# ─── ABI providers: never rebuild a matched ABI provider on mere movement ───
+# Owner rule (2026-10-03): "not building the already built abi provider which
+# is extremely heavy" — llvm-git is the matched ABI provider: rebuilding it
+# invalidates every dependent's ABI (rust must rebuild after it: the owner's
+# cascade rule) and costs hours, while llvm-project lands dozens of commits an
+# hour, so NO tolerance can ever rescue it. A recipe carrying a .gsa-abi-provider
+# marker is therefore WAIVED on any upstream movement — the verdict is
+# "freshness waived", not "tolerated" — loudly, with the claim on the
+# run-record row. The exemption is only the -s skip check: a missing baseline
+# still rebuilds once, and an explicit build rebuilds normally.
+
+# 30 commits of movement (far past the tolerance): the skip HOLDS — the -s run
+# runs makepkg 0 times — and the waiver line names the recipe and the count.
+abi_dir=$fixture/abi-provider
+init_git_remote "$abi_dir/repository"
+abi_work=$abi_dir/repository/work
+make_vcs_workspace "$abi_dir/workspace" "$abi_dir/repository/remote.git" branch main
+printf 'fixture rationale: matched ABI provider\n' >"$abi_dir/workspace/packages/p1/.gsa-abi-provider"
+run_case "$abi_dir/workspace" p1
+expect_success 'abi-provider initial build'
+assert_makepkg_count "$abi_dir/workspace" 1 'abi-provider initial build'
+advance_main "$abi_work" 'abi upstream churn' 30
+run_case "$abi_dir/workspace" -s p1
+expect_success 'marked recipe waives thirty commits of movement'
+assert_makepkg_count "$abi_dir/workspace" 1 'marked recipe: the -s run must run makepkg 0 times'
+grep -Eq '^p1 succeeded 0 [0-9]+ abi-provider-waived$' <<<"$FIXTURE_OUTPUT" ||
+    fail "marked row is not 'succeeded … abi-provider-waived':"$'\n'"$FIXTURE_OUTPUT"
+if grep -Eq '^p1 succeeded 0 [0-9]+ (ok|freshness-waived)$' <<<"$FIXTURE_OUTPUT"; then
+    fail 'an ABI-provider skip claimed ok or a mere tolerance waiver:'$'\n'"$FIXTURE_OUTPUT"
+fi
+abi_diagnostics=$(diagnostics_with_logs "$abi_dir/workspace")
+grep -Fq 'upstream moved 30 commit(s) — p1 is an ABI provider; freshness waived (rebuild only on measured skew or an explicit build)' \
+    <<<"$abi_diagnostics" ||
+    fail 'the ABI waiver line does not name the recipe and the commit count:'$'\n'"$abi_diagnostics"
+# The exemption is only the skip check: an explicit build rebuilds normally.
+run_case "$abi_dir/workspace" p1
+expect_success 'explicit build still rebuilds a marked recipe'
+assert_makepkg_count "$abi_dir/workspace" 2 'explicit build must rebuild despite the marker'
+
+# Control: the SAME recipe shape without the marker and the same 30 commits of
+# movement must rebuild — the marker is what waives, not the distance.
+abi_ctrl_dir=$fixture/abi-control
+init_git_remote "$abi_ctrl_dir/repository"
+abi_ctrl_work=$abi_ctrl_dir/repository/work
+make_vcs_workspace "$abi_ctrl_dir/workspace" "$abi_ctrl_dir/repository/remote.git" branch main
+run_case "$abi_ctrl_dir/workspace" p1
+expect_success 'abi-control initial build'
+assert_makepkg_count "$abi_ctrl_dir/workspace" 1 'abi-control initial build'
+advance_main "$abi_ctrl_work" 'abi control churn' 30
+run_case "$abi_ctrl_dir/workspace" -s p1
+expect_success 'unmarked recipe rebuilds after thirty commits'
+assert_makepkg_count "$abi_ctrl_dir/workspace" 2 'the MARKER is what waives: an unmarked 30-commit move must rebuild'
+
+# A marked recipe with no recorded baseline still rebuilds once (rc 3 is not
+# waived — the waiver is purely the movement verdict).
+abi_base_dir=$fixture/abi-missing-baseline
+init_git_remote "$abi_base_dir/repository"
+make_vcs_workspace "$abi_base_dir/workspace" "$abi_base_dir/repository/remote.git" branch main
+printf 'fixture rationale: matched ABI provider\n' >"$abi_base_dir/workspace/packages/p1/.gsa-abi-provider"
+: >"$abi_base_dir/workspace/packages/p1/p1-1.0.0-1-any.pkg.tar.zst"
+run_case "$abi_base_dir/workspace" -s p1
+expect_success 'marked recipe rebuilds once on a missing baseline'
+assert_makepkg_count "$abi_base_dir/workspace" 1 'marked missing-baseline rebuild (rc 3 path intact)'
+grep -Eq '^p1 succeeded 0 [0-9]+ ok$' <<<"$FIXTURE_OUTPUT" ||
+    fail "marked missing-baseline rebuild row is not 'succeeded … ok':"$'\n'"$FIXTURE_OUTPUT"
+[[ -f $abi_base_dir/workspace/packages/p1/p1-1.0.0-1-any.pkg.tar.zst.gsa-vcs-revisions ]] ||
+    fail 'the marked rebuild did not record its VCS baseline'
+
 # The other VCS adapters use fixture-side command stubs, so this coverage needs
 # neither public network access nor optional host clients.
 for protocol in svn hg bzr; do

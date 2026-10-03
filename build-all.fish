@@ -1762,26 +1762,54 @@ function vcs_skip_tolerance_resolve
     return 0
 end
 
-# vcs_git_advance_distance URL REFSPEC BASELINE TIP TOLERANCE → the commit
+# The fetch refspec for a selected Git ref — one home for the ref-kind →
+# refspec mapping shared by the advance probes (vcs_remote_revision keeps its
+# own ls-remote argument shapes).
+function vcs_git_fetch_refspec -a ref_kind ref_value
+    switch "$ref_kind"
+        case default
+            echo HEAD
+        case branch
+            if string match -q 'refs/heads/*' -- "$ref_value"
+                echo "$ref_value"
+            else
+                echo "refs/heads/$ref_value"
+            end
+        case tag
+            if string match -q 'refs/tags/*' -- "$ref_value"
+                echo "$ref_value"
+            else
+                echo "refs/tags/$ref_value"
+            end
+        case '*'
+            return 1
+    end
+end
+
+# vcs_git_advance_distance URL REFSPEC BASELINE TIP DEPTH → the commit
 # distance from BASELINE to TIP on stdout (rc 0), or rc 1 when it cannot be
 # measured (no output).
-# Rationale (the shallow-window trick): -s only needs to separate "fewer than
-# tolerance new commits" from "tolerance or more", never an exact count beyond
-# that, so one bounded shallow fetch into a scratch bare repo answers it
-# without cloning the world. --depth=tolerance+1 fetches the tip and its
-# tolerance nearest ancestors — exactly the window in which a distance BELOW
-# the tolerance is measurable (measured 2026-10-03: with --depth=6 a baseline
-# 5 back counts 5; 10 back is absent and `rev-list --count` fails with
-# "Invalid revision range"). That failure MEANS the distance exceeds the
-# window and must be treated as >= tolerance (rebuild), never as a skip. The
-# same conservative direction covers rewritten history or a force-moved tag:
-# such a baseline is not an ancestor of the new tip, so it is not in the fetch
-# window either. A fetch that never succeeds (after the same bounded transport
-# retries as git_ls_remote_quiet — the tip query already worked, so a fetch
-# failure is likely another flake) is likewise unmeasurable, hence >= tolerance:
-# the waiver needs PROOF that the advance is small; nothing else may lower the
+# Rationale (the shallow-window trick): callers only need bounded questions
+# about the advance ("fewer than tolerance new commits?" / "what may we CLAIM
+# about the count?"), so one bounded shallow fetch into a scratch bare repo
+# answers without cloning the world. --depth=DEPTH fetches the tip and its
+# DEPTH-1 nearest ancestors — exactly the distances 1..DEPTH-1 are measurable
+# (measured 2026-10-03: with --depth=6 a baseline 5 back counts 5; 10 back is
+# absent and `rev-list --count` fails with "Invalid revision range"). DEPTH is
+# caller-chosen: the tolerance path wants tolerance+1 (the boundary AT the
+# tolerance must count), the ABI-provider path wants a wider informational
+# window (its verdict is already fixed; the count is for the loud line).
+# --filter=tree:0 keeps the fetch commits-only where the server honours
+# partial-clone filters (e.g. GitHub); servers that ignore it fetch the window's
+# trees and still work. A failing `rev-list` MEANS the distance exceeds the
+# window (or history was rewritten — the baseline is not a recent ancestor of
+# the new tip, so it is not in the fetch window either) and the caller must
+# treat it as ">= the window", never as a small move. A fetch that never
+# succeeds (after the same bounded transport retries as git_ls_remote_quiet —
+# the tip query already worked, so a fetch failure is likely another flake) is
+# likewise unmeasurable: a waiver needs PROOF; nothing else may lower the
 # verification.
-function vcs_git_advance_distance -a url refspec baseline tip tolerance
+function vcs_git_advance_distance -a url refspec baseline tip depth
     # mktemp -d honours $TMPDIR by itself (GNU coreutils).
     set -l scratch (mktemp -d 2>/dev/null)
     if test -z "$scratch"
@@ -1793,7 +1821,7 @@ function vcs_git_advance_distance -a url refspec baseline tip tolerance
     if env GIT_CONFIG_COUNT=0 GIT_TERMINAL_PROMPT=0 git init --bare -q "$repo" 2>/dev/null
         while test $attempt -le 3
             if env GIT_CONFIG_COUNT=0 GIT_TERMINAL_PROMPT=0 git -C "$repo" \
-                fetch -q --depth=(math "$tolerance" + 1) --no-tags \
+                fetch -q --depth="$depth" --filter=tree:0 --no-tags \
                 "$url" "$refspec" 2>/dev/null
                 set fetched 1
                 break
@@ -1820,17 +1848,35 @@ function vcs_git_advance_distance -a url refspec baseline tip tolerance
     return 0
 end
 
+# The informational measurement window for ABI-provider freshness waivers: how
+# much upstream movement a marked recipe's loud line can count exactly. 64
+# absorbs days of llvm-project movement ("dozens of commits an hour") while
+# staying a bounded, commits-only fetch where the server honours
+# --filter=tree:0; past it the line names the window instead of inventing a
+# count — the verdict (waived) is identical either way.
+set -g _VCS_ABI_ADVANCE_WINDOW 64
+
+# The marker that makes a recipe an ABI provider: an (empty or one-line
+# rationale) `.gsa-abi-provider` file in the recipe directory. One home for
+# the predicate so every future call site reads the marker the same way.
+function vcs_abi_provider_marked -a pkg_path
+    test -e "$pkg_path/.gsa-abi-provider"
+end
+
 # Return 0 when a VCS archive is current — including when a moved Git ref is
-# within the freshness tolerance, in which case _FRESHNESS_WAIVER names the
-# waiver (a waived-freshness skip is not the same claim as an untouched one).
+# within the freshness tolerance, or when the recipe is an ABI provider (see
+# below), in which case _FRESHNESS_WAIVER names the waiver line(s) and
+# _FRESHNESS_WAIVER_REASON the claim (freshness-waived / abi-provider-waived —
+# a waived-freshness skip is not the same claim as an untouched one).
 # Return 1 when a selected ref moved past the tolerance, 2 when its current
 # state cannot be established, and 3 when a rebuild can establish a missing or
 # unusable baseline. Both -s callers defer (rc 99) on 2 — an unverifiable
-# upstream must neither fail the run nor license a skip. The tolerance only
-# softens the 0/1 boundary; 2 and 3 are untouched.
+# upstream must neither fail the run nor license a skip. The tolerance and the
+# ABI-provider waiver only soften the 0/1 boundary; 2 and 3 are untouched.
 function vcs_archive_is_current -a pkg_path archive
     set -g _VCS_REVISION_ERROR ""
-    set -g _FRESHNESS_WAIVER ""
+    set -g _FRESHNESS_WAIVER
+    set -g _FRESHNESS_WAIVER_REASON ""
     set -l entries
     set -l keys
     for entry in (pkgbuild_array "$pkg_path" source)
@@ -1912,6 +1958,40 @@ function vcs_archive_is_current -a pkg_path archive
             end
         else if test "$fields[2]" != "$current"
             set -l name (source_filename "$entry")
+            # ABI-provider waiver (owner rule 2026-10-03: "not building the
+            # already built abi provider which is extremely heavy"): a recipe
+            # marked .gsa-abi-provider is the matched ABI provider of its
+            # consumer chain — rebuilding it invalidates every dependent's ABI
+            # (rust must rebuild after it: the owner's cascade rule) and costs
+            # hours, while its upstream moves far faster than any tolerance can
+            # absorb (llvm-project lands dozens of commits an hour). For such a
+            # recipe mere upstream movement NEVER rebuilds: the verdict is
+            # "freshness waived", not "tolerated" — any distance, any VCS kind
+            # (svn/hg/bzr have no commit distance and waive the same way).
+            # Purely the 0/1 boundary for marked recipes: an unusable/missing
+            # baseline (rc 3) still rebuilds once to record it, an unverifiable
+            # upstream (rc 2) still defers, a mismatched pinned commit is local
+            # inconsistency (not movement) and still rebuilds — and only -s is
+            # exempt: an explicit build rebuilds normally.
+            if vcs_abi_provider_marked "$pkg_path"
+                set -l abi_id (basename "$pkg_path")
+                set -l moved_claim "upstream revision moved"
+                if test "$info[1]" = git; and test "$info[3]" != commit
+                    set -l refspec (vcs_git_fetch_refspec "$info[3]" "$info[4]")
+                    set -l distance (vcs_git_advance_distance "$info[2]" "$refspec" \
+                        "$fields[2]" "$current" "$_VCS_ABI_ADVANCE_WINDOW")
+                    if string match -qr '^[1-9][0-9]*$' -- "$distance"
+                        set moved_claim "upstream moved $distance commit(s)"
+                    else
+                        # Never invent a count the window could not measure
+                        # (rewritten history reads unmeasurable too).
+                        set moved_claim "upstream moved past the measurement window ($_VCS_ABI_ADVANCE_WINDOW commits)"
+                    end
+                end
+                set -a _FRESHNESS_WAIVER "$moved_claim — $abi_id is an ABI provider; freshness waived (rebuild only on measured skew or an explicit build)"
+                set -g _FRESHNESS_WAIVER_REASON abi-provider-waived
+                continue
+            end
             # Freshness tolerance (owner design 2026-10-03): a handful of new
             # upstream commits is noise for a CONSUMER of llvm/rust/qt6, so -s
             # waives the rebuild while the measured advance stays strictly
@@ -1926,26 +2006,13 @@ function vcs_archive_is_current -a pkg_path archive
             if test "$info[1]" = git; and test "$info[3]" != commit
                 vcs_skip_tolerance_resolve
                 set -l tolerance "$_VCS_SKIP_TOLERANCE"
-                set -l refspec ""
-                switch "$info[3]"
-                    case default
-                        set refspec HEAD
-                    case branch
-                        set refspec "$info[4]"
-                        if not string match -q 'refs/heads/*' -- "$refspec"
-                            set refspec "refs/heads/$refspec"
-                        end
-                    case tag
-                        set refspec "$info[4]"
-                        if not string match -q 'refs/tags/*' -- "$refspec"
-                            set refspec "refs/tags/$refspec"
-                        end
-                end
+                set -l refspec (vcs_git_fetch_refspec "$info[3]" "$info[4]")
                 set -l distance (vcs_git_advance_distance "$info[2]" "$refspec" \
-                    "$fields[2]" "$current" "$tolerance")
+                    "$fields[2]" "$current" (math "$tolerance" + 1))
                 if string match -qr '^[1-9][0-9]*$' -- "$distance"
                     and test "$distance" -lt "$tolerance"
-                    set -g _FRESHNESS_WAIVER "upstream moved $distance commit(s) < tolerance $tolerance — treating $name as current"
+                    set -a _FRESHNESS_WAIVER "upstream moved $distance commit(s) < tolerance $tolerance — treating $name as current"
+                    set -g _FRESHNESS_WAIVER_REASON freshness-waived
                     continue
                 end
             end
@@ -4477,14 +4544,17 @@ function build_package -a package_id install_flag clean_flag skip_flag no_sync_f
                     end
                 end
                 if test $freshness_status -eq 0
-                    if test -n "$_FRESHNESS_WAIVER"
+                    if test (count $_FRESHNESS_WAIVER) -gt 0
                         # LOUD on purpose (never lower verification silently):
                         # this skip is a freshness WAIVER, not an untouched
-                        # archive, and the named line — unguarded, so it lands
-                        # in the per-package log in lane mode too — says exactly
-                        # what was waived. The run record row carries it as the
-                        # reason freshness-waived.
-                        ui_info "$_FRESHNESS_WAIVER"
+                        # archive, and the named line(s) — unguarded, so they
+                        # land in the per-package log in lane mode too — say
+                        # exactly what was waived. The run record row carries
+                        # the claim as its reason (freshness-waived /
+                        # abi-provider-waived).
+                        for waiver_line in $_FRESHNESS_WAIVER
+                            ui_info "$waiver_line"
+                        end
                     end
                     if test "$_BUILD_QUIET" != "1"
                         ui_info "$pkg_name: already built ($(basename $latest_pkg))"
@@ -4513,7 +4583,8 @@ function build_package -a package_id install_flag clean_flag skip_flag no_sync_f
     # source before a later one moved past tolerance, and the toolchain
     # pre-check's probe before a drift clean — so drop the waiver here or the
     # built package's ok row would claim a skip that never happened.
-    set -g _FRESHNESS_WAIVER ""
+    set -g _FRESHNESS_WAIVER
+    set -g _FRESHNESS_WAIVER_REASON ""
 
     if not ensure_state_dirs
         return 1
@@ -5955,12 +6026,16 @@ function lane_job -a pkg_id result_file total_jobs install_flag clean_flag skip_
     # anchor branch stays silent and keeps the legacy default); an ok outcome
     # carries the freshness waiver when -s skipped on one (a waived-freshness
     # skip is not the same claim as an untouched archive — the run record row
-    # must say which happened); every other outcome has no reason field.
+    # must say which happened: freshness-waived or abi-provider-waived); every
+    # other outcome has no reason field.
     set -l lane_reason ""
     if test "$rc" = "$lane_outcome_defer"; and set -q _DEFER_REASON
         set lane_reason "$_DEFER_REASON"
-    else if test "$rc" = "$lane_outcome_ok"; and set -q _FRESHNESS_WAIVER; and test -n "$_FRESHNESS_WAIVER"
-        set lane_reason freshness-waived
+    else if test "$rc" = "$lane_outcome_ok"; and set -q _FRESHNESS_WAIVER; and test (count $_FRESHNESS_WAIVER) -gt 0
+        set lane_reason "$_FRESHNESS_WAIVER_REASON"
+        if test -z "$lane_reason"
+            set lane_reason freshness-waived
+        end
     end
     if not write_lane_result "$result_file" "$pkg_id" "$rc" "$dur" "$lane_reason"
         echo "✗ lane result write failed: $result_file" >&2
@@ -6809,6 +6884,10 @@ end
 #                        GSA_VCS_SKIP_TOLERANCE commits (default 5). The named
 #                        waiver line lives in the package log; the row's
 #                        reason keeps the waiver from claiming to be ok.
+#   abi-provider-waived  succeeded WITHOUT building: -s skipped an archive of
+#                        a recipe marked .gsa-abi-provider (e.g. llvm-git) —
+#                        mere upstream movement can never rebuild a matched
+#                        ABI provider. Same loud-line plumbing as above.
 #   build-failed         lane ran, makepkg/exits non-zero (rc is in the row)
 #   lane-lost            reap anomaly: no valid lane result (rc=125)
 #   log-unwritable       dispatch refused: the package log could not be opened
@@ -7257,7 +7336,11 @@ function usage
     echo "                    named freshness waiver, recorded as the row reason"
     echo "                    freshness-waived; GSA_VCS_SKIP_TOLERANCE overrides"
     echo "                    the 5, positive integers only); 5 or more commits"
-    echo "                    rebuilds. A ref upstream cannot answer even"
+    echo "                    rebuilds. A recipe marked .gsa-abi-provider (an ABI"
+    echo "                    provider, e.g. llvm-git) skips on ANY upstream"
+    echo "                    movement (loudly, row reason abi-provider-waived:"
+    echo "                    rebuilding it invalidates every dependent's ABI)."
+    echo "                    A ref upstream cannot answer even"
     echo "                    after transport retries parks that recipe (deferred:"
     echo "                    nothing is skipped or built, the rest of the run"
     echo "                    continues, exit stays non-zero)."

@@ -1,0 +1,1 @@
+Matched ABI provider of the tool-clang/llvm consumer chain: rebuilding invalidates every dependent's ABI (rust must rebuild after it), and llvm-project lands dozens of commits an hour, so upstream movement alone must never trigger the rebuild (owner rule 2026-10-03).
