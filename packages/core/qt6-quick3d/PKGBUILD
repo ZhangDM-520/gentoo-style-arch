@@ -4,7 +4,7 @@
 
 pkgname=qt6-quick3d
 # placeholder — overridden by pkgver() (git describe on dev branch)
-pkgver=6.13.0_r5516.gbc81cf8b6
+pkgver=6.13.0_r5540.ga1a3e7f33
 pkgrel=1
 arch=(x86_64)
 url='https://www.qt.io'
@@ -31,8 +31,24 @@ makedepends=(assimp
 optdepends=('assimp: assimp import plugin')
 groups=(qt6)
 _pkgfn=${pkgname/6-/}
-source=(git+https://code.qt.io/qt/$_pkgfn#branch=dev)
-sha256sums=('SKIP')
+# 0001-bridge-*.patch is a TEMPORARY BRIDGE: it adapts us to qtbase 2beefb38db9's
+# QRhiShaderResourceBinding::Data rework (stex moved out of u, count() method,
+# QVarLengthArray texSamplers) until qtquick3d upstream does. DROP IT then.
+source=(git+https://code.qt.io/qt/$_pkgfn#branch=dev
+        0001-bridge-QRhiShaderResourceBinding-Data-stex-rework.patch)
+sha256sums=('SKIP'
+            '11af14441050a1f24749c174a5914c1c4c553f59b4af32f3bc82ba8428b8951f')
+
+prepare() {
+  # TEMPORARY BRIDGE — same rationale as the patch header; drop both together.
+  patch -Np1 --fuzz=0 -d "$_pkgfn" \
+    -i "$srcdir/0001-bridge-QRhiShaderResourceBinding-Data-stex-rework.patch"
+
+  # patch can succeed at the wrong offset; assert the contract lines verbatim.
+  grep -qF 'd->stex.texSamplers.resize(1);' "$_pkgfn"/src/runtimerender/qssgrhicontext.cpp
+  grep -qF 'd->stex.texSamplers[0].sampler = sampler;' "$_pkgfn"/src/runtimerender/qssgrhicontext.cpp
+  ! grep -qF 'u.stex' "$_pkgfn"/src/runtimerender/qssgrhicontext.cpp
+}
 
 build() {
   cmake -B build -S $_pkgfn -G Ninja \

@@ -1,0 +1,49 @@
+# Rationale: llvm 24 dropped #include "llvm-c/Target.h" from llvm-c/TargetMachine.h
+# (verified present in release/23.x; llvm 24 pulls only Core/ExternC/Types/Visibility),
+# so the LLVMInitializeAMDGPU*() declarations are no longer visible through mesa's
+# include chain and the build dies on -Werror=implicit-function-declaration.  The
+# declarations are intact: llvm-c/Target.h itself macro-mints them (LLVM_TARGET /
+# LLVM_ASM_PRINTER / LLVM_ASM_PARSER / LLVM_DISASSEMBLER expanded over llvm/Config/*.def,
+# contract identical in 23 and 24, AMDGPU listed in all four; libLLVM exports them
+# @@LLVM_24.0).  Including llvm-c/Target.h explicitly is therefore the mechanism the
+# header intends and is version-agnostic -- no LLVM_VERSION_MAJOR guard needed: on older
+# llvm trees (MESA_WHICH_LLVM 1/3/4) the include is an include-guard no-op where
+# TargetMachine.h still pulls it, and equally self-sufficient where it does not.
+# Per-hunk decisions against the clean extract (8fc4981d2d2): exactly three C TUs call
+# the per-target inits, each relying on the dropped transitive include -- one include is
+# added per TU at its existing llvm-c cluster: ac_llvm_util.c at its llvm-c block (the 6
+# init calls in ac_init_llvm_target), radv_physical_device.c and si_gfx_screen.c (the
+# disk_cache_get_function_identifier(&LLVMInitializeAMDGPUTargetInfo) uses) inside their
+# existing #if AMD_LLVM_AVAILABLE guard next to llvm-c/TargetMachine.h so non-LLVM
+# configurations see nothing new.  clc_helpers.cpp already includes llvm-c/Target.h.
+
+--- a/src/amd/llvm/ac_llvm_util.c
++++ b/src/amd/llvm/ac_llvm_util.c
+@@ -10,6 +10,7 @@
+ 
+ #include <llvm-c/Core.h>
+ #include <llvm-c/Support.h>
++#include <llvm-c/Target.h>
+ 
+ #include "c11/threads.h"
+ #include "ac_llvm_util.h"
+--- a/src/amd/vulkan/radv_physical_device.c
++++ b/src/amd/vulkan/radv_physical_device.c
+@@ -45,6 +45,7 @@
+ 
+ #if AMD_LLVM_AVAILABLE
+ #include <llvm-c/TargetMachine.h>
++#include <llvm-c/Target.h>
+ #endif
+ 
+ #ifdef _WIN32
+--- a/src/gallium/drivers/radeonsi/gfx/si_gfx_screen.c
++++ b/src/gallium/drivers/radeonsi/gfx/si_gfx_screen.c
+@@ -18,6 +18,7 @@
+ 
+ #if AMD_LLVM_AVAILABLE
+ #include <llvm-c/TargetMachine.h>
++#include <llvm-c/Target.h>
+ #endif
+ 
+ #include <xf86drm.h>

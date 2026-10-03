@@ -1,0 +1,37 @@
+# TEMPORARY BRIDGE — DROP THIS when qtquick3d upstream adapts.
+#
+# Rationale: bridge for qtbase 2beefb38db9's QRhiShaderResourceBinding::Data
+# rework (stex moved out of u, count() method, QVarLengthArray texSamplers);
+# qtquick3d upstream has not adapted yet — DROP THIS when it does.
+#
+# Base revision: qtquick3d dev a1a3e7f33 (6.13.0_r5540).
+# Mapping: `d->u.stex.count = 1` (writable count field) becomes
+# `d->stex.texSamplers.resize(1)` (count() derives from size()); the
+# texSamplers element assignments move from `u.stex` to `stex` unchanged.
+# The only old-shape sites in the whole module are the three lines in
+# QSSGRhiShaderResourceBindingList::addTexture (u.ubuf/u.simage/u.sbuf are
+# unchanged by the rework).
+
+diff --git a/src/runtimerender/qssgrhicontext.cpp b/src/runtimerender/qssgrhicontext.cpp
+index 451c7cb6e..1c8f765ca 100644
+--- a/src/runtimerender/qssgrhicontext.cpp
++++ b/src/runtimerender/qssgrhicontext.cpp
+@@ -1803,15 +1803,15 @@ void QSSGRhiShaderResourceBindingList::addTexture(int binding, QRhiShaderResourc
+     if (!d)
+         return;
+     h ^= qintptr(tex) ^ qintptr(sampler);
+     d->binding = binding;
+     d->stage = stage;
+     d->type = QRhiShaderResourceBinding::SampledTexture;
+-    d->u.stex.count = 1;
+-    d->u.stex.texSamplers[0].tex = tex;
+-    d->u.stex.texSamplers[0].sampler = sampler;
++    d->stex.texSamplers.resize(1);
++    d->stex.texSamplers[0].tex = tex;
++    d->stex.texSamplers[0].sampler = sampler;
+ }
+ 
+ void QSSGRhiShaderResourceBindingList::addImageLoad(int binding, QRhiShaderResourceBinding::StageFlags stage, QRhiTexture *tex, int level)
+ {
+     auto *d = newBinding();
+     if (!d)
