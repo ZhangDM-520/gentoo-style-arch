@@ -49,6 +49,65 @@ _pgo_fail() {
   exit 1
 }
 
+# ---------------------------------------------------------------------------
+# Training bound — the second shared PGO seam (added 2026-10-03 after the
+# gtk4-git training run OOM-killed a whole build unit: 583 spawn/crash cycles
+# in 26 s, one systemd-coredump spawn per crash, zero profile written).
+#
+#     pgo_train_meson [--display-suite] <builddir> <budget-seconds> [meson test args...]
+#
+# Recipes call this instead of a hand-rolled `timeout … meson test … || true`
+# line (eight near-identical copies existed; copy-paste is the recurrence
+# engine this module exists to kill). The call is failure-guarded by
+# construction: a training run may never fail the build — a thin profile is
+# the recipe's floor guard problem, not a build error.
+#
+# The bounds, and what each one measured to be load-bearing:
+#   * wall budget via `timeout -k 5 <budget>` — bounds the run's duration;
+#   * `--num-processes 4` — caps CONCURRENT test processes (meson's default
+#     is nproc-driven and instantiated ~24 GTK processes at once in the
+#     incident). Measured per abort cycle: ~43 MB RSS, 269 major faults,
+#     ~35k file-input blocks (~17 MB read) — the marginal cost is churn rate
+#     and fault/IO pressure, not per-cycle footprint;
+#   * `ulimit -c 0` in the subtree — each SIGABRT otherwise enters the
+#     kernel core pipeline and spawns systemd-coredump (measured: exactly
+#     one handler per crash, 24/24 at repro scale). A crash-churning suite
+#     turns that into hundreds of handler spawns per minute;
+#   * `--no-rebuild` — training never triggers surprise compiles inside the
+#     budget (house precedent: systemd, util-linux, wayland, libinput).
+#
+# `--display-suite`: when the host exposes no display but ships xvfb-run, the
+# suite runs under `xvfb-run -a -s '-nolisten local'` (the display-suite
+# convention of packages/stable/libnotify and zen-browser-pgo) so
+# display-dependent tests actually execute and write profiles instead of
+# aborting at gtk_init with zero output. Without either, the run stays
+# bounded; the recipe's floor guard decides the profile's fate.
+pgo_display_available() {
+  test -n "${DISPLAY:-}" || test -n "${WAYLAND_DISPLAY:-}" ||
+    command -v xvfb-run >/dev/null 2>&1
+}
+
+pgo_train_meson() {
+  local _display_suite=0
+  if test "${1:-}" = --display-suite; then
+    _display_suite=1
+    shift
+  fi
+  local _dir="$1" _budget="$2"
+  shift 2
+  (
+    ulimit -c 0 2>/dev/null || true
+    local _run=(timeout -k 5 "$_budget" meson test -C "$_dir"
+      --num-processes 4 --no-rebuild --print-errorlogs "$@")
+    if test "$_display_suite" = 1 && test -z "${DISPLAY:-}" &&
+      test -z "${WAYLAND_DISPLAY:-}" && command -v xvfb-run >/dev/null 2>&1; then
+      _run=(xvfb-run -a -s '-nolisten local' "${_run[@]}")
+    fi
+    "${_run[@]}"
+  ) || true
+  return 0
+}
+
 verify_no_profile_instrumentation() {
   local _root="$1"
   shift

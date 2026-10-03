@@ -9,7 +9,7 @@ source "$startdir/../../../lib/pgo.sh"
 
 _pkgname="gtk4"
 pkgbase="$_pkgname-git"
-pkgver=4.25.r11.g57f569a
+pkgver=4.25.r94.gb9cd929
 pkgrel=1
 pkgdesc="GObject-based multi-platform GUI toolkit"
 url="https://gitlab.gnome.org/GNOME/gtk"
@@ -136,8 +136,19 @@ build() {
   arch-meson "$_pkgsrc" build "${meson_options[@]}" -Db_lto=false
   meson compile -C build
 
-  # Phase 2: training — run test suite
-  timeout -k 5 120 meson test -C build --print-errorlogs || true
+  # Phase 2: training — bounded run (lib/pgo.sh): wall budget, capped test
+  # parallelism, no core dumps (each abort otherwise spawns
+  # systemd-coredump). Headless, the gsk-compare rows (8240 of 9665 tests)
+  # abort at gtk_init and write zero profiles (measured 2026-10-03) and are
+  # scheduled first — drop them so the budget stops feeding the spawn/crash
+  # storm that OOM-killed the build unit; the remaining rows are then at
+  # worst a bounded version of the same churn. With a display the render
+  # rows are the profile input worth having: run the full suite.
+  if pgo_display_available; then
+    pgo_train_meson --display-suite build 120
+  else
+    pgo_train_meson build 120 --no-suite gsk-compare
+  fi
 
   # Phase 3: verify profile quality
   local _gcda_count

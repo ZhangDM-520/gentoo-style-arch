@@ -2,6 +2,11 @@
 # Contributor: Joel Teichroeb <joel@teichroeb.net>
 # Contributor: Scimmia
 
+# Shared PGO module — payload gate at the end of the package function plus
+# the bounded training runner. A missing module fails at parse time on
+# purpose.
+source "$startdir/../../../lib/pgo.sh"
+
 pkgbase=wayland-git
 pkgname=('wayland-git')
 pkgver=1.26.0.r14.g1bd29e0
@@ -41,7 +46,7 @@ build() {
         meson compile -C build
 
         msg "PGO Phase 2: training with test suite"
-        timeout -k 5 120 meson test -C build --no-rebuild --print-errorlogs 2>/dev/null || true
+        pgo_train_meson build 120
 
         local gcda_count=$(find build -name '*.gcda' 2>/dev/null | wc -l)
         if (( gcda_count < 10 )); then
@@ -74,4 +79,6 @@ package_wayland-git() {
 
     meson install -C build --destdir "$pkgdir"
     install -D -m644 wayland/COPYING "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+
+    verify_no_profile_instrumentation "$pkgdir"
 }

@@ -1,6 +1,10 @@
 # Maintainer: Vincent Grande <shoober420@gmail.com>
 # Contributor: Andreas Radke <andyrtr@archlinux.org>
 
+# Shared PGO module — payload gate at the end of package() plus the bounded
+# training runner. A missing module fails at parse time on purpose.
+source "$startdir/../../../lib/pgo.sh"
+
 pkgname=libinput-git
 pkgver=1.32.0.r0.g5cf833b5
 pkgrel=1
@@ -43,7 +47,7 @@ build() {
     meson compile -C build
 
     msg "PGO Phase 2: training with test suite"
-    timeout -k 5 120 meson test -C build --no-rebuild --print-errorlogs 2>/dev/null || true
+    pgo_train_meson build 120
 
     local gcda_count=$(find build -name '*.gcda' 2>/dev/null | wc -l)
     if (( gcda_count < 10 )); then
@@ -75,4 +79,6 @@ package() {
 
   install -Dvm644 libinput/COPYING \
     "$pkgdir/usr/share/licenses/libinput/LICENSE"
+
+  verify_no_profile_instrumentation "$pkgdir"
 }

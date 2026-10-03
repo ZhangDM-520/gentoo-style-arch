@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tests/pgo-lib.sh — lib/pgo.sh, the shared PGO payload gate.
 #
-# Two sections:
+# Three sections:
 #   1. module behaviour — subshell exit-status assertions over synthetic
 #      payloads. The gate is FATAL by design (`exit 1` on any leak), so every
 #      assertion runs it in a subshell and checks the subshell's status.
@@ -10,6 +10,9 @@
 #      PKGBUILD defines the interface. This is the clean-checkout test that
 #      tests/recipe-sources.sh cannot make: a helper sourced from a PKGBUILD
 #      is invisible to it.
+#   3. training bound — `pgo_train_meson`'s failure guard, bounded invocation
+#      shape, core-dump suppression, display-suite handling, and the recipes'
+#      routing of their training step through it.
 #
 # Non-mutating and $TMPDIR-scoped like every fixture.
 set -euo pipefail
@@ -176,5 +179,141 @@ done
 while IFS= read -r pkgbuild; do
     fail "${pkgbuild#"$root"/}: defines verify_no_profile_instrumentation inline — source lib/pgo.sh instead"
 done < <(grep -lE '^[[:space:]]*verify_no_profile_instrumentation\(\)' "$root"/packages/*/*/PKGBUILD)
+
+# --- 3. training bound: pgo_train_meson ------------------------------------
+# A training run may never fail the build (the contract tests/fzf-pgo.sh pins
+# for the Go family), and it must not turn into a spawn storm: the 2026-10-03
+# gtk4-git incident ran 583 display-abort cycles in 26 s at meson's default
+# parallelism, one systemd-coredump spawn per crash, zero profiles written.
+(
+    train_work=$(mktemp -d "${TMPDIR:-/tmp}/gsa-pgo-train.XXXXXX")
+    trap 'rm -rf -- "$train_work"' EXIT
+    fail() { printf 'pgo-lib train: %s\n' "$*" >&2; exit 1; }
+
+    mkdir -p "$train_work/bin" "$train_work/novfb"
+    cat >"$train_work/bin/meson" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'ulimit-c=%s\n' "$(ulimit -c)" >>"$GSA_STUB_LOG"
+printf 'meson %s\n' "$*" >>"$GSA_STUB_LOG"
+exit "${GSA_STUB_MESON_RC:-0}"
+EOF
+    chmod +x "$train_work/bin/meson"
+    cat >"$train_work/bin/timeout" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'timeout %s\n' "$*" >>"$GSA_STUB_LOG"
+if test "${GSA_STUB_TIMEOUT_RC:-0}" -ne 0; then
+    exit "$GSA_STUB_TIMEOUT_RC"
+fi
+shift 3
+exec "$@"
+EOF
+    chmod +x "$train_work/bin/timeout"
+    cat >"$train_work/bin/xvfb-run" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'xvfb-run %s\n' "$*" >>"$GSA_STUB_LOG"
+while test $# -gt 0; do
+    case "$1" in
+        -a) shift ;;
+        -s) shift 2 ;;
+        *) break ;;
+    esac
+done
+exec "$@"
+EOF
+    chmod +x "$train_work/bin/xvfb-run"
+    cp "$train_work/bin/meson" "$train_work/bin/timeout" "$train_work/novfb/"
+
+    source "$module"
+    export GSA_STUB_LOG="$train_work/log"
+
+    # Bounded invocation shape: wall budget, capped test parallelism, no
+    # surprise compiles — and the recipe's own test arguments pass through.
+    : >"$GSA_STUB_LOG"
+    (export PATH="$train_work/bin:$PATH"
+        pgo_train_meson builddir 120 --no-suite gsk-compare)
+    grep -q 'timeout -k 5 120 meson test -C builddir --num-processes 4 --no-rebuild --print-errorlogs --no-suite gsk-compare' "$GSA_STUB_LOG" ||
+        fail "bounded invocation shape wrong: $(cat "$GSA_STUB_LOG")"
+    grep -q '^ulimit-c=0$' "$GSA_STUB_LOG" ||
+        fail "training subtree must disable core dumps: $(cat "$GSA_STUB_LOG")"
+
+    # Failure guard: neither a failing suite nor a timeout kill may fail the
+    # build.
+    : >"$GSA_STUB_LOG"
+    rc=0
+    (export PATH="$train_work/bin:$PATH" GSA_STUB_MESON_RC=1
+        pgo_train_meson build 120) || rc=$?
+    test "$rc" -eq 0 ||
+        fail "a failing training run must not fail the build (rc=$rc)"
+    : >"$GSA_STUB_LOG"
+    rc=0
+    (export PATH="$train_work/bin:$PATH" GSA_STUB_TIMEOUT_RC=124
+        pgo_train_meson build 120) || rc=$?
+    test "$rc" -eq 0 ||
+        fail "a timeout kill must not fail the build (rc=$rc)"
+
+    # --display-suite prefers xvfb-run when the host has no display, and runs
+    # plain when a display exists (or nothing can provide one).
+    : >"$GSA_STUB_LOG"
+    (unset DISPLAY WAYLAND_DISPLAY
+        export PATH="$train_work/bin:$PATH"
+        pgo_train_meson --display-suite build 120)
+    grep -q '^xvfb-run ' "$GSA_STUB_LOG" ||
+        fail "display suite must run under xvfb-run on a displayless host: $(cat "$GSA_STUB_LOG")"
+    : >"$GSA_STUB_LOG"
+    (unset DISPLAY WAYLAND_DISPLAY
+        export PATH="$train_work/novfb:$PATH"
+        pgo_train_meson --display-suite build 120)
+    if grep -q '^xvfb-run ' "$GSA_STUB_LOG"; then
+        fail "xvfb-run used although absent: $(cat "$GSA_STUB_LOG")"
+    fi
+    grep -q '^meson test ' "$GSA_STUB_LOG" ||
+        fail "display suite must still run (bounded) without any display: $(cat "$GSA_STUB_LOG")"
+    : >"$GSA_STUB_LOG"
+    (export DISPLAY=:0 PATH="$train_work/bin:$PATH"
+        pgo_train_meson --display-suite build 120)
+    if grep -q '^xvfb-run ' "$GSA_STUB_LOG"; then
+        fail "real display must not be shadowed by xvfb-run: $(cat "$GSA_STUB_LOG")"
+    fi
+
+    # pgo_display_available: a display or a virtual-display tool counts.
+    (unset DISPLAY WAYLAND_DISPLAY
+        export PATH="$train_work/novfb:$PATH"
+        pgo_display_available) &&
+        fail "pgo_display_available: true on a displayless host without xvfb-run"
+    (unset DISPLAY WAYLAND_DISPLAY
+        export PATH="$train_work/bin:$PATH"
+        pgo_display_available) ||
+        fail "pgo_display_available: false although xvfb-run exists"
+
+    # Recipe wiring: the surveyed build()-embedded meson training sites (the
+    # gtk4 incident and its sibling chain) route through the bounded runner —
+    # a hand-rolled `timeout … meson test` line next to it would silently
+    # reintroduce the storm.
+    for rel in packages/core/glib2-git packages/core/gtk4-git \
+        packages/git/cairo-git packages/git/gtk3-git \
+        packages/git/libinput-git packages/git/pixman-git \
+        packages/git/wayland-git packages/git/xorg-xwayland-git; do
+        pkb="$root/$rel/PKGBUILD"
+        grep -qE 'pgo_train_meson( --display-suite)? [^ ]+ [0-9]+' "$pkb" ||
+            fail "$rel: training is not routed through pgo_train_meson <builddir> <budget>"
+        if grep -nE 'timeout .*meson test' "$pkb"; then
+            fail "$rel: hand-rolled training invocation survives next to pgo_train_meson"
+        fi
+    done
+
+    # gtk4-git's measured storm class is excluded headless (8240 of 9665 rows
+    # abort at gtk_init and write zero profiles) while a display gets the
+    # full suite.
+    pkb="$root/packages/core/gtk4-git/PKGBUILD"
+    grep -q 'pgo_display_available' "$pkb" ||
+        fail "gtk4-git: display selection missing"
+    grep -qE -- '--no-suite gsk-compare( |$)' "$pkb" ||
+        fail "gtk4-git: headless storm class (gsk-compare) is not excluded"
+
+    printf 'PGO training bound fixture: PASS\n'
+)
 
 printf 'PGO shared gate fixture: PASS (%d consuming recipe(s))\n' "${#consumers[@]}"

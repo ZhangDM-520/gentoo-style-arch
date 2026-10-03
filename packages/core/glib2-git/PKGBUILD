@@ -16,7 +16,7 @@ pkgname=(
   glib2-git
   glib2-devel-git
 )
-pkgver=2.90.0.r58.g404a679
+pkgver=2.90.0.r60.g36c60f0
 pkgrel=1
 pkgdesc="Low level core library"
 url="https://gitlab.gnome.org/GNOME/glib"
@@ -122,8 +122,8 @@ build() {
   arch-meson glib build "${meson_options[@]}" -Db_lto=false
   meson compile -C build
 
-  # Phase 2: training — run test suite
-  timeout -k 5 300 meson test -C build --no-suite flaky --no-suite slow --print-errorlogs || true
+  # Phase 2: training — bounded run (lib/pgo.sh)
+  pgo_train_meson build 300 --no-suite flaky --no-suite slow
 
   # Phase 3: verify profile quality
   local _gcda_count

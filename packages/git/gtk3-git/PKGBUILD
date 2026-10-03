@@ -114,8 +114,9 @@ build() {
       -Db_lto=false
   meson compile -C build
 
-  # Phase 2: training — run test suite
-  timeout -k 5 120 meson test -C build --print-errorlogs || true
+  # Phase 2: training — bounded run (lib/pgo.sh); display-class suite like
+  # gtk4-git, so prefer a virtual display when the host has none.
+  pgo_train_meson --display-suite build 120
 
   # Phase 3: verify profile quality
   local _gcda_count
