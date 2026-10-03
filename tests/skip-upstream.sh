@@ -32,11 +32,17 @@ init_git_remote() { # $1 = isolated root; creates remote.git and work/
     git_fixture -C "$work" push --set-upstream origin main >/dev/null
 }
 
-advance_main() { # $1 = local worktree; $2 = commit message and file content
-    local work=$1 message=$2
-    printf '%s\n' "$message" >>"$work/source.txt"
-    git_fixture -C "$work" add source.txt
-    git_fixture -C "$work" commit -m "$message" >/dev/null
+advance_main() { # $1 = local worktree; $2 = commit message and file content;
+    # $3 = commit count (default 1). A caller that expects a REBUILD must move
+    # at least the freshness tolerance (5) commits: -s deliberately waives
+    # moves below it (see the freshness-tolerance section).
+    local work=$1 message=$2 count=${3:-1}
+    local i
+    for ((i = 1; i <= count; i++)); do
+        printf '%s\n' "$message $i" >>"$work/source.txt"
+        git_fixture -C "$work" add source.txt
+        git_fixture -C "$work" commit -m "$message $i" >/dev/null
+    done
     git_fixture -C "$work" push origin main >/dev/null
 }
 
@@ -294,6 +300,15 @@ assert_makepkg_count() { # $1 = workspace; $2 = expected; $3 = label
     [[ $got == "$2" ]] || fail "$3: makepkg ran $got times, expected $2"
 }
 
+diagnostics_with_logs() { # $1 = workspace — the captured run output plus every
+    # package log: the lane's stdout IS its log, so decision lines a quiet
+    # lane printed live there (the idiom expect_unverifiable_defer uses).
+    printf '%s\n' "$FIXTURE_OUTPUT"
+    if [[ -d $1/state/logs ]]; then
+        find "$1/state/logs" -maxdepth 1 -type f -exec cat {} + 2>/dev/null || true
+    fi
+}
+
 expect_unverifiable_defer() { # $1 = workspace; $2 = prior makepkg count; $3 = label; $4 = diagnostic regex
     local dir=$1 want_count=$2 label=$3 words=$4 diagnostics=$FIXTURE_OUTPUT
     if ((FIXTURE_RC == 0)); then
@@ -340,7 +355,10 @@ grep -q -- 'pacman -U' "$branch_dir/workspace/pacman.log" ||
 grep -Fq 'p1-1.0.0-1-any.pkg.tar.zst' "$branch_dir/workspace/pacman.log" ||
     fail 'unchanged branch -s -i installed without the existing archive'
 
-advance_main "$branch_work" 'advanced selected branch'
+# The rebuild trigger below must clear the freshness tolerance (-s waives
+# moves of fewer than 5 commits by design); the case still pins "a moved
+# selected ref rebuilds".
+advance_main "$branch_work" 'advanced selected branch' 5
 run_case "$branch_dir/workspace" -s p1
 expect_success 'advanced selected branch'
 assert_makepkg_count "$branch_dir/workspace" 2 'advanced selected branch'
@@ -469,7 +487,9 @@ install_lsremote_stub "$moved_dir/workspace"
 run_case "$moved_dir/workspace" p1
 expect_success 'flaky-moved initial build'
 assert_makepkg_count "$moved_dir/workspace" 1 'flaky-moved initial build'
-advance_main "$moved_work" 'advanced while transport was flaky'
+# The move clears the freshness tolerance (5 commits): a waivable move would
+# skip BY DESIGN, so it cannot pin "the retry surfaces the move as a rebuild".
+advance_main "$moved_work" 'advanced while transport was flaky' 5
 printf 'once' >"$moved_dir/workspace/lsremote.mode"
 run_case "$moved_dir/workspace" -s p1
 expect_success 'flaky transport still detects a moved ref'
@@ -603,6 +623,10 @@ advance_main "$pinned_work" 'unrelated main branch movement'
 run_case "$pinned_dir/workspace" -s p1
 expect_success 'unrelated branch movement for pinned source'
 assert_makepkg_count "$pinned_dir/workspace" 1 'unrelated branch movement for pinned source'
+# A moved pin is a Git advance like any other: the re-tag below lands 6
+# commits past the recorded baseline — past the freshness tolerance — so the
+# rebuild must happen (a waivable move would skip by design).
+advance_main "$pinned_work" 'tag retag groundwork' 5
 git_fixture -C "$pinned_work" tag --force -a v1.0.0 -m 'moved fixture release tag'
 git_fixture -C "$pinned_work" push --force origin refs/tags/v1.0.0 >/dev/null
 run_case "$pinned_dir/workspace" -s p1
@@ -618,10 +642,113 @@ expect_success 'initial default-HEAD build'
 run_case "$default_dir/workspace" -s p1
 expect_success 'unchanged default HEAD'
 assert_makepkg_count "$default_dir/workspace" 1 'unchanged default HEAD'
-advance_main "$default_dir/repository/work" 'advanced default HEAD'
+# 5 commits: past the freshness tolerance, so the move still rebuilds.
+advance_main "$default_dir/repository/work" 'advanced default HEAD' 5
 run_case "$default_dir/workspace" -s p1
 expect_success 'advanced default HEAD'
 assert_makepkg_count "$default_dir/workspace" 2 'advanced default HEAD'
+
+# ─── Freshness tolerance: -s must not rebuild over a handful of commits ─────
+# Owner design (2026-10-03): "a fewer than 5 commits is senseless especially
+# for these heavy packages since we aren't actively participating in
+# development in these important projects" — we are CONSUMERS of llvm/rust/qt6,
+# not their developers. A measured advance strictly BELOW the tolerance (default
+# 5, overridable via GSA_VCS_SKIP_TOLERANCE) keeps the skip and says so LOUDLY;
+# at the tolerance (the boundary is AT 5) and beyond — including past the
+# shallow measurement window — the rebuild happens exactly as before. Each case
+# owns its own workspace so "moves N commits" is measured from the recorded
+# baseline without cross-case arithmetic.
+
+# 3 commits (< 5): the skip HOLDS — the -s run runs makepkg 0 times — and the
+# waiver is a named line plus a freshness-waived run-record row, never a silent
+# lowering of verification.
+tolerance_dir=$fixture/freshness-tolerance
+init_git_remote "$tolerance_dir/repository"
+tolerance_work=$tolerance_dir/repository/work
+make_vcs_workspace "$tolerance_dir/workspace" "$tolerance_dir/repository/remote.git" branch main
+run_case "$tolerance_dir/workspace" p1
+expect_success 'tolerance initial build'
+assert_makepkg_count "$tolerance_dir/workspace" 1 'tolerance initial build'
+advance_main "$tolerance_work" 'tolerance noise' 3
+run_case "$tolerance_dir/workspace" -s p1
+expect_success 'three-commit advance keeps the skip'
+assert_makepkg_count "$tolerance_dir/workspace" 1 'three-commit advance: the -s run must run makepkg 0 times'
+grep -Eq '^p1 succeeded 0 [0-9]+ freshness-waived$' <<<"$FIXTURE_OUTPUT" ||
+    fail "three-commit advance row is not 'succeeded … freshness-waived':"$'\n'"$FIXTURE_OUTPUT"
+if grep -Eq '^p1 succeeded 0 [0-9]+ ok$' <<<"$FIXTURE_OUTPUT"; then
+    fail 'a waived-freshness skip claimed the plain ok row:'$'\n'"$FIXTURE_OUTPUT"
+fi
+grep -Fq 'SKIPPED (freshness-waived)' <<<"$FIXTURE_OUTPUT" ||
+    fail 'the run output does not name the freshness waiver:'$'\n'"$FIXTURE_OUTPUT"
+tolerance_diagnostics=$(diagnostics_with_logs "$tolerance_dir/workspace")
+grep -Fq 'upstream moved 3 commit(s) < tolerance 5 — treating upstream as current' \
+    <<<"$tolerance_diagnostics" ||
+    fail 'three-commit advance did not print the named freshness waiver line:'$'\n'"$tolerance_diagnostics"
+
+# Exactly 5: the boundary is AT the tolerance — rebuild (makepkg runs once).
+boundary_dir=$fixture/freshness-boundary
+init_git_remote "$boundary_dir/repository"
+boundary_work=$boundary_dir/repository/work
+make_vcs_workspace "$boundary_dir/workspace" "$boundary_dir/repository/remote.git" branch main
+run_case "$boundary_dir/workspace" p1
+expect_success 'boundary initial build'
+assert_makepkg_count "$boundary_dir/workspace" 1 'boundary initial build'
+advance_main "$boundary_work" 'tolerance boundary' 5
+run_case "$boundary_dir/workspace" -s p1
+expect_success 'exactly five commits rebuilds'
+assert_makepkg_count "$boundary_dir/workspace" 2 'the boundary is AT 5: exactly five commits must rebuild'
+grep -Eq '^p1 succeeded 0 [0-9]+ ok$' <<<"$FIXTURE_OUTPUT" ||
+    fail "five-commit rebuild row is not 'succeeded … ok':"$'\n'"$FIXTURE_OUTPUT"
+
+# 10 commits: past the fetch window (depth = tolerance + 1 = 6), where the
+# baseline is unreachable in the probe repo — that failure must read as
+# ">= tolerance", i.e. rebuild, never as a skip.
+far_dir=$fixture/freshness-far
+init_git_remote "$far_dir/repository"
+far_work=$far_dir/repository/work
+make_vcs_workspace "$far_dir/workspace" "$far_dir/repository/remote.git" branch main
+run_case "$far_dir/workspace" p1
+expect_success 'far initial build'
+assert_makepkg_count "$far_dir/workspace" 1 'far initial build'
+advance_main "$far_work" 'past the measurement window' 10
+run_case "$far_dir/workspace" -s p1
+expect_success 'ten-commit advance rebuilds'
+assert_makepkg_count "$far_dir/workspace" 2 'ten-commit advance must rebuild (baseline outside the fetch window)'
+grep -Eq '^p1 succeeded 0 [0-9]+ ok$' <<<"$FIXTURE_OUTPUT" ||
+    fail "ten-commit rebuild row is not 'succeeded … ok':"$'\n'"$FIXTURE_OUTPUT"
+
+# GSA_VCS_SKIP_TOLERANCE overrides the default (positive integers only); a
+# garbage value falls back to the default 5, LOUDLY.
+override_dir=$fixture/freshness-override
+init_git_remote "$override_dir/repository"
+override_work=$override_dir/repository/work
+make_vcs_workspace "$override_dir/workspace" "$override_dir/repository/remote.git" branch main
+run_case "$override_dir/workspace" p1
+expect_success 'override initial build'
+assert_makepkg_count "$override_dir/workspace" 1 'override initial build'
+advance_main "$override_work" 'override noise' 1
+GSA_VCS_SKIP_TOLERANCE=2 run_case "$override_dir/workspace" -s p1
+expect_success 'tolerance 2 waives a one-commit move'
+assert_makepkg_count "$override_dir/workspace" 1 'tolerance 2 must waive a one-commit move'
+override_diagnostics=$(diagnostics_with_logs "$override_dir/workspace")
+grep -Fq 'upstream moved 1 commit(s) < tolerance 2 — treating upstream as current' \
+    <<<"$override_diagnostics" ||
+    fail 'tolerance 2 waiver line is missing or names the wrong tolerance:'$'\n'"$override_diagnostics"
+advance_main "$override_work" 'override boundary' 1
+GSA_VCS_SKIP_TOLERANCE=2 run_case "$override_dir/workspace" -s p1
+expect_success 'tolerance 2 boundary rebuilds'
+assert_makepkg_count "$override_dir/workspace" 2 'the override boundary is AT 2: two commits must rebuild'
+advance_main "$override_work" 'garbage knob' 3
+GSA_VCS_SKIP_TOLERANCE=banana run_case "$override_dir/workspace" -s p1
+expect_success 'garbage tolerance falls back to the default'
+assert_makepkg_count "$override_dir/workspace" 2 'a garbage tolerance must not shrink the default below 5'
+override_diagnostics=$(diagnostics_with_logs "$override_dir/workspace")
+grep -Fq "GSA_VCS_SKIP_TOLERANCE='banana' is not a positive integer — using the default 5" \
+    <<<"$override_diagnostics" ||
+    fail 'a garbage tolerance was not rejected loudly:'$'\n'"$override_diagnostics"
+grep -Fq 'upstream moved 3 commit(s) < tolerance 5 — treating upstream as current' \
+    <<<"$override_diagnostics" ||
+    fail 'the garbage-tolerance run did not fall back to the default 5:'$'\n'"$override_diagnostics"
 
 # The other VCS adapters use fixture-side command stubs, so this coverage needs
 # neither public network access nor optional host clients.
@@ -725,7 +852,7 @@ for decoy in "$src_layout_pkg/upstream" "$src_layout/workspace/makepkg-srcdest/u
         fail "decoy at $decoy is at $decoy_rev, expected $rev1"
 done
 
-advance_main "$src_layout_work" 'advanced selected branch'
+advance_main "$src_layout_work" 'advanced selected branch' 5
 GSA_FAKE_VCS_LAYOUT=srcdir run_case "$src_layout/workspace" -s p1
 expect_success 'srcdir-layout advanced selected branch'
 assert_makepkg_count "$src_layout/workspace" 2 'srcdir-layout advanced selected branch'

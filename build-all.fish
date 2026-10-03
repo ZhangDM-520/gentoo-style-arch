@@ -1737,12 +1737,100 @@ function vcs_selected_refs_queryable
     return 0
 end
 
-# Return 0 when a VCS archive is current, 1 when a selected ref moved, 2 when
-# its current state cannot be established, and 3 when a rebuild can establish
-# a missing or unusable baseline. Both -s callers defer (rc 99) on 2 — an
-# unverifiable upstream must neither fail the run nor license a skip.
+# The freshness tolerance: how many upstream commits a recorded baseline may
+# trail a moving Git ref before -s stops waiving the rebuild. GSA_VCS_SKIP_TOLERANCE
+# overrides the default 5; the value must be a positive integer and anything
+# else falls back to the default LOUDLY (a silently ignored knob would make
+# skip decisions unexplainable). Resolved once per process into a global
+# (command substitution would run in a subshell and lose the memo).
+# Rationale (owner design 2026-10-03): we are CONSUMERS of llvm/rust/qt6, not
+# their developers — rebuilding a 2-hour package because upstream landed two
+# commits is pure waste.
+function vcs_skip_tolerance_resolve
+    if set -q _VCS_SKIP_TOLERANCE
+        return 0
+    end
+    set -l tolerance 5
+    if set -q GSA_VCS_SKIP_TOLERANCE
+        if string match -qr '^[1-9][0-9]*$' -- "$GSA_VCS_SKIP_TOLERANCE"
+            set tolerance "$GSA_VCS_SKIP_TOLERANCE"
+        else
+            ui_warning "GSA_VCS_SKIP_TOLERANCE='$GSA_VCS_SKIP_TOLERANCE' is not a positive integer — using the default $tolerance"
+        end
+    end
+    set -g _VCS_SKIP_TOLERANCE "$tolerance"
+    return 0
+end
+
+# vcs_git_advance_distance URL REFSPEC BASELINE TIP TOLERANCE → the commit
+# distance from BASELINE to TIP on stdout (rc 0), or rc 1 when it cannot be
+# measured (no output).
+# Rationale (the shallow-window trick): -s only needs to separate "fewer than
+# tolerance new commits" from "tolerance or more", never an exact count beyond
+# that, so one bounded shallow fetch into a scratch bare repo answers it
+# without cloning the world. --depth=tolerance+1 fetches the tip and its
+# tolerance nearest ancestors — exactly the window in which a distance BELOW
+# the tolerance is measurable (measured 2026-10-03: with --depth=6 a baseline
+# 5 back counts 5; 10 back is absent and `rev-list --count` fails with
+# "Invalid revision range"). That failure MEANS the distance exceeds the
+# window and must be treated as >= tolerance (rebuild), never as a skip. The
+# same conservative direction covers rewritten history or a force-moved tag:
+# such a baseline is not an ancestor of the new tip, so it is not in the fetch
+# window either. A fetch that never succeeds (after the same bounded transport
+# retries as git_ls_remote_quiet — the tip query already worked, so a fetch
+# failure is likely another flake) is likewise unmeasurable, hence >= tolerance:
+# the waiver needs PROOF that the advance is small; nothing else may lower the
+# verification.
+function vcs_git_advance_distance -a url refspec baseline tip tolerance
+    # mktemp -d honours $TMPDIR by itself (GNU coreutils).
+    set -l scratch (mktemp -d 2>/dev/null)
+    if test -z "$scratch"
+        return 1
+    end
+    set -l repo "$scratch/repo.git"
+    set -l fetched 0
+    set -l attempt 1
+    if env GIT_CONFIG_COUNT=0 GIT_TERMINAL_PROMPT=0 git init --bare -q "$repo" 2>/dev/null
+        while test $attempt -le 3
+            if env GIT_CONFIG_COUNT=0 GIT_TERMINAL_PROMPT=0 git -C "$repo" \
+                fetch -q --depth=(math "$tolerance" + 1) --no-tags \
+                "$url" "$refspec" 2>/dev/null
+                set fetched 1
+                break
+            end
+            switch $attempt
+                case 1
+                    sleep 2
+                case 2
+                    sleep 5
+            end
+            set attempt (math $attempt + 1)
+        end
+    end
+    set -l distance ""
+    if test $fetched -eq 1
+        set distance (env GIT_CONFIG_COUNT=0 git -C "$repo" \
+            rev-list --count "$baseline..$tip" 2>/dev/null)
+    end
+    rm -rf -- "$scratch"
+    if not string match -qr '^[1-9][0-9]*$' -- "$distance"
+        return 1
+    end
+    echo "$distance"
+    return 0
+end
+
+# Return 0 when a VCS archive is current — including when a moved Git ref is
+# within the freshness tolerance, in which case _FRESHNESS_WAIVER names the
+# waiver (a waived-freshness skip is not the same claim as an untouched one).
+# Return 1 when a selected ref moved past the tolerance, 2 when its current
+# state cannot be established, and 3 when a rebuild can establish a missing or
+# unusable baseline. Both -s callers defer (rc 99) on 2 — an unverifiable
+# upstream must neither fail the run nor license a skip. The tolerance only
+# softens the 0/1 boundary; 2 and 3 are untouched.
 function vcs_archive_is_current -a pkg_path archive
     set -g _VCS_REVISION_ERROR ""
+    set -g _FRESHNESS_WAIVER ""
     set -l entries
     set -l keys
     for entry in (pkgbuild_array "$pkg_path" source)
@@ -1824,6 +1912,43 @@ function vcs_archive_is_current -a pkg_path archive
             end
         else if test "$fields[2]" != "$current"
             set -l name (source_filename "$entry")
+            # Freshness tolerance (owner design 2026-10-03): a handful of new
+            # upstream commits is noise for a CONSUMER of llvm/rust/qt6, so -s
+            # waives the rebuild while the measured advance stays strictly
+            # below the tolerance (vcs_skip_tolerance_resolve). Git only: the
+            # measurement is a commit distance, which svn/hg/bzr revisions do
+            # not have — those keep exact-match as the conservative default.
+            # Pinned Git commits are immutable inputs and cannot advance at
+            # all. The waiver never lowers verification silently: no measured
+            # distance strictly below the tolerance (see
+            # vcs_git_advance_distance's unmeasurable = >= tolerance contract)
+            # means no skip.
+            if test "$info[1]" = git; and test "$info[3]" != commit
+                vcs_skip_tolerance_resolve
+                set -l tolerance "$_VCS_SKIP_TOLERANCE"
+                set -l refspec ""
+                switch "$info[3]"
+                    case default
+                        set refspec HEAD
+                    case branch
+                        set refspec "$info[4]"
+                        if not string match -q 'refs/heads/*' -- "$refspec"
+                            set refspec "refs/heads/$refspec"
+                        end
+                    case tag
+                        set refspec "$info[4]"
+                        if not string match -q 'refs/tags/*' -- "$refspec"
+                            set refspec "refs/tags/$refspec"
+                        end
+                end
+                set -l distance (vcs_git_advance_distance "$info[2]" "$refspec" \
+                    "$fields[2]" "$current" "$tolerance")
+                if string match -qr '^[1-9][0-9]*$' -- "$distance"
+                    and test "$distance" -lt "$tolerance"
+                    set -g _FRESHNESS_WAIVER "upstream moved $distance commit(s) < tolerance $tolerance — treating $name as current"
+                    continue
+                end
+            end
             set -g _VCS_REVISION_ERROR "selected upstream ref moved for source $name"
             return 1
         end
@@ -4352,6 +4477,15 @@ function build_package -a package_id install_flag clean_flag skip_flag no_sync_f
                     end
                 end
                 if test $freshness_status -eq 0
+                    if test -n "$_FRESHNESS_WAIVER"
+                        # LOUD on purpose (never lower verification silently):
+                        # this skip is a freshness WAIVER, not an untouched
+                        # archive, and the named line — unguarded, so it lands
+                        # in the per-package log in lane mode too — says exactly
+                        # what was waived. The run record row carries it as the
+                        # reason freshness-waived.
+                        ui_info "$_FRESHNESS_WAIVER"
+                    end
                     if test "$_BUILD_QUIET" != "1"
                         ui_info "$pkg_name: already built ($(basename $latest_pkg))"
                     end
@@ -4373,6 +4507,13 @@ function build_package -a package_id install_flag clean_flag skip_flag no_sync_f
             end
         end
     end
+
+    # A waiver only ever describes a SKIP. Every path that reaches this point
+    # actually builds — including one whose freshness probe waived an earlier
+    # source before a later one moved past tolerance, and the toolchain
+    # pre-check's probe before a drift clean — so drop the waiver here or the
+    # built package's ok row would claim a skip that never happened.
+    set -g _FRESHNESS_WAIVER ""
 
     if not ensure_state_dirs
         return 1
@@ -5811,13 +5952,17 @@ function lane_job -a pkg_id result_file total_jobs install_flag clean_flag skip_
     set -l rc $status
     set -l dur (math (date +%s) - $start_s)
     # A deferral carries WHY it parked when build_package named one (the
-    # anchor branch stays silent and keeps the legacy default); every other
-    # outcome has no reason field.
-    set -l defer_reason ""
+    # anchor branch stays silent and keeps the legacy default); an ok outcome
+    # carries the freshness waiver when -s skipped on one (a waived-freshness
+    # skip is not the same claim as an untouched archive — the run record row
+    # must say which happened); every other outcome has no reason field.
+    set -l lane_reason ""
     if test "$rc" = "$lane_outcome_defer"; and set -q _DEFER_REASON
-        set defer_reason "$_DEFER_REASON"
+        set lane_reason "$_DEFER_REASON"
+    else if test "$rc" = "$lane_outcome_ok"; and set -q _FRESHNESS_WAIVER; and test -n "$_FRESHNESS_WAIVER"
+        set lane_reason freshness-waived
     end
-    if not write_lane_result "$result_file" "$pkg_id" "$rc" "$dur" "$defer_reason"
+    if not write_lane_result "$result_file" "$pkg_id" "$rc" "$dur" "$lane_reason"
         echo "✗ lane result write failed: $result_file" >&2
         # No valid result ⇒ the dispatcher classifies this lane as lost.
         exit $lane_outcome_lost
@@ -6156,8 +6301,19 @@ function run_lanes -a lanes jobs_override intensity_level install_flag clean_fla
                 switch (lane_outcome_name $rc)
                     case ok
                         set -a succeeded $p
-                        run_record_row "$p" succeeded 0 $dur ok
-                        set -g _DASHBOARD_LAST_EVENT "$_UI_ICON_OK completed $p"
+                        # A skip accepted on a freshness waiver is not the same
+                        # claim as an untouched archive: the wire's reason names
+                        # it on the row (the empty wire keeps the legacy ok).
+                        set -l ok_row_reason ok
+                        if test -n "$wire_reason"
+                            set ok_row_reason "$wire_reason"
+                        end
+                        run_record_row "$p" succeeded 0 $dur $ok_row_reason
+                        if test -n "$wire_reason"
+                            set -g _DASHBOARD_LAST_EVENT "$_UI_ICON_OK completed $p ($wire_reason)"
+                        else
+                            set -g _DASHBOARD_LAST_EVENT "$_UI_ICON_OK completed $p"
+                        end
                         # Mid-run ABI-skew probe (2026-09-25 incident): the
                         # preflight passed at run START, and this run's own
                         # llvm install can break the system rustc after that.
@@ -6309,7 +6465,12 @@ function run_lanes -a lanes jobs_override intensity_level install_flag clean_fla
                 if test "$_OUTPUT_INTERACTIVE" != "1"
                     switch (lane_outcome_name $rc)
                         case ok
-                            printf "  %s %s (%s)\n" "$_UI_ICON_OK" $p (fmt_dur $dur)
+                            if test -n "$wire_reason"
+                                printf "  %s %s (%s) — SKIPPED (%s) — log: %s\n" \
+                                    "$_UI_ICON_OK" $p (fmt_dur $dur) "$wire_reason" (package_log_file "$p")
+                            else
+                                printf "  %s %s (%s)\n" "$_UI_ICON_OK" $p (fmt_dur $dur)
+                            end
                         case defer
                             # The named error and its recovery lines live in the
                             # log; the run summary tails it — this line only has
@@ -6643,6 +6804,11 @@ end
 # says which). rc and dur are integers (dur in seconds) or '-' when
 # the package never produced one. reason is a kebab-case token:
 #   ok                   succeeded
+#   freshness-waived     succeeded WITHOUT building: -s skipped an archive
+#                        whose selected Git ref moved fewer than
+#                        GSA_VCS_SKIP_TOLERANCE commits (default 5). The named
+#                        waiver line lives in the package log; the row's
+#                        reason keeps the waiver from claiming to be ok.
 #   build-failed         lane ran, makepkg/exits non-zero (rc is in the row)
 #   lane-lost            reap anomaly: no valid lane result (rc=125)
 #   log-unwritable       dispatch refused: the package log could not be opened
@@ -6941,6 +7107,9 @@ function print_run_summary -a outcome
     set -l ambient
     set -q GSA_TARGET_CPU; and set -a ambient GSA_TARGET_CPU
     set -q GSA_STATE_DIR; and set -a ambient GSA_STATE_DIR
+    # GSA_VCS_SKIP_TOLERANCE changes -s skip decisions at run time, so a
+    # continuation must see the same value (never baked into the command).
+    set -q GSA_VCS_SKIP_TOLERANCE; and set -a ambient GSA_VCS_SKIP_TOLERANCE
     if test (count $ambient) -gt 0
         ui_warning "ambient environment: "(string join ' ' $ambient)" — the continuation must run in the same env (never baked into the command)"
     end
@@ -7083,7 +7252,12 @@ function usage
     echo "  -c, --clean       Clean build artifacts before building"
     echo "  -s, --skip        Skip fresh archives only when each VCS source ref matches"
     echo "                    its recorded revision; an unusable baseline rebuilds"
-    echo "                    once if refs resolve. A ref upstream cannot answer even"
+    echo "                    once if refs resolve. A Git ref that ADVANCED still"
+    echo "                    skips while the move is fewer than 5 commits (a loud,"
+    echo "                    named freshness waiver, recorded as the row reason"
+    echo "                    freshness-waived; GSA_VCS_SKIP_TOLERANCE overrides"
+    echo "                    the 5, positive integers only); 5 or more commits"
+    echo "                    rebuilds. A ref upstream cannot answer even"
     echo "                    after transport retries parks that recipe (deferred:"
     echo "                    nothing is skipped or built, the rest of the run"
     echo "                    continues, exit stays non-zero)."
@@ -7107,7 +7281,8 @@ function usage
     echo "                    Skip the rustc sanity probe (llvm-ABI-skew guard); only"
     echo "                    for runs that don't compile Rust"
     echo "  Environment: GSA_STATE_DIR, GSA_LANES, GSA_JOBS, GSA_INTENSITY,"
-    echo "               GSA_CPU_THREADS, GSA_MEMORY_GIB, GSA_TARGET_CPU"
+    echo "               GSA_CPU_THREADS, GSA_MEMORY_GIB, GSA_TARGET_CPU,"
+    echo "               GSA_VCS_SKIP_TOLERANCE"
     echo "               override runtime state, parallelism, and optional CPU tuning."
     echo ""
     echo "Package references (a bare name is not a leaf build — it expands to"
