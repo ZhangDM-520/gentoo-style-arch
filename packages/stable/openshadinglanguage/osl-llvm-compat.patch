@@ -1,18 +1,18 @@
 diff -ruN a/src/cmake/externalpackages.cmake b/src/cmake/externalpackages.cmake
---- a/src/cmake/externalpackages.cmake	2026-04-02 14:12:59.000000000 +0800
-+++ b/src/cmake/externalpackages.cmake	2026-09-26 02:06:49.810522618 +0800
+--- a/src/cmake/externalpackages.cmake	2026-09-08 00:59:49.000000000 +0800
++++ b/src/cmake/externalpackages.cmake	2026-10-03 09:39:51.259231811 +0800
 @@ -58,7 +58,7 @@
  # LLVM library setup
  checked_find_package (LLVM REQUIRED
                        VERSION_MIN 14.0
--                      VERSION_MAX 22.9
+-                      VERSION_MAX 23.9
 +                      VERSION_MAX 24.9
                        PRINT LLVM_SYSTEM_LIBRARIES CLANG_LIBRARIES
                              LLVM_SHARED_MODE)
  # ensure include directory is added (in case of non-standard locations
 diff -ruN a/src/liboslexec/llvm_passes.h b/src/liboslexec/llvm_passes.h
---- a/src/liboslexec/llvm_passes.h	2026-04-02 14:12:59.000000000 +0800
-+++ b/src/liboslexec/llvm_passes.h	2026-09-26 02:06:49.810738131 +0800
+--- a/src/liboslexec/llvm_passes.h	2026-09-08 00:59:49.000000000 +0800
++++ b/src/liboslexec/llvm_passes.h	2026-10-03 09:39:51.259314043 +0800
 @@ -380,7 +380,7 @@
  // New pass manager adapter
  template<int WidthT>
@@ -23,17 +23,9 @@ diff -ruN a/src/liboslexec/llvm_passes.h b/src/liboslexec/llvm_passes.h
      PreventBitMasksFromBeingLiveinsToBasicBlocks<WidthT> m_pass;
  
 diff -ruN a/src/liboslexec/llvm_util.cpp b/src/liboslexec/llvm_util.cpp
---- a/src/liboslexec/llvm_util.cpp	2026-04-02 14:12:59.000000000 +0800
-+++ b/src/liboslexec/llvm_util.cpp	2026-09-26 02:07:32.701824702 +0800
-@@ -78,7 +78,6 @@
- #include <llvm/Transforms/Scalar.h>
- #include <llvm/Transforms/Scalar/GVN.h>
- #include <llvm/Transforms/Utils.h>
--#include <llvm/Transforms/Utils/UnifyFunctionExitNodes.h>
- 
- #include <llvm/Support/DynamicLibrary.h>
- 
-@@ -1536,8 +1535,18 @@
+--- a/src/liboslexec/llvm_util.cpp	2026-09-08 00:59:49.000000000 +0800
++++ b/src/liboslexec/llvm_util.cpp	2026-10-03 09:39:51.270112932 +0800
+@@ -1545,8 +1545,18 @@
      // faster). Since we call the option "jit_fma", we interpret that as
      // switching between Strict and Standard. We will need some other control
      // if we ever want full "Fast" mode.
@@ -52,29 +44,12 @@ diff -ruN a/src/liboslexec/llvm_util.cpp b/src/liboslexec/llvm_util.cpp
      // Unfortunately enabling UnsafeFPMath allows reciprocals, which we don't want for divides
      // To match results for existing unit tests we might need to disable UnsafeFPMath
      // TODO: investigate if reciprocals can be disabled by other means.
-@@ -1548,22 +1557,44 @@
-     // control is now handled via per-instruction fast-math flags in IR.
-     options.UnsafeFPMath = false;
- #endif
-+#if OSL_LLVM_VERSION < 230
-+    // NoInfsFPMath, NoNaNsFPMath, and NoSignedZerosFPMath were removed from
-+    // TargetOptions in LLVM 23; like UnsafeFPMath before them, FP math
-+    // control is now handled via per-instruction fast-math flags in IR.
-+    // The values we set here all matched LLVM's own defaults, so simply
-+    // dropping them for LLVM 23+ preserves the existing behavior.
-+    //
-     // Since there are OSL language functions isinf and isnan,
-     // we cannot assume there will not be infs and NANs
-     options.NoInfsFPMath = false;
-     options.NoNaNsFPMath = false;
--    // We will not be setting up any exception handling for FP math
--    options.NoTrappingFPMath = true;
-     // Debatable, but perhaps some tests care about the sign of +0 vs. -0
+@@ -1572,15 +1582,29 @@
      options.NoSignedZerosFPMath = false;
-+#endif
-+    // We will not be setting up any exception handling for FP math
+ #endif
+     // We will not be setting up any exception handling for FP math
 +#if OSL_LLVM_VERSION < 240
-+    options.NoTrappingFPMath = true;
+     options.NoTrappingFPMath = true;
 +#endif
 +#if OSL_LLVM_VERSION < 240
 +    // HonorSignDependentRoundingFPMathOption was removed from TargetOptions
@@ -99,7 +74,7 @@ diff -ruN a/src/liboslexec/llvm_util.cpp b/src/liboslexec/llvm_util.cpp
  #if OSL_LLVM_VERSION < 190
      options.RelaxELFRelocations = false;
  #endif
-@@ -1805,7 +1836,12 @@
+@@ -1822,7 +1846,12 @@
      if (m_nvptx_target_machine == nullptr) {
          llvm::Triple ModuleTriple(module()->getTargetTriple());
          llvm::TargetOptions options;
@@ -112,16 +87,10 @@ diff -ruN a/src/liboslexec/llvm_util.cpp b/src/liboslexec/llvm_util.cpp
          // N.B. 'Standard' only allow fusion of 'blessed' ops (currently just
          // fmuladd). To truly disable FMA and never fuse FP-ops, we need to
          // instead use llvm::FPOpFusion::Strict.
-@@ -1814,11 +1850,31 @@
-         // control is now handled via per-instruction fast-math flags in IR.
-         options.UnsafeFPMath = 1;
+@@ -1837,9 +1866,25 @@
+         options.NoInfsFPMath = 1;
+         options.NoNaNsFPMath = 1;
  #endif
-+#if OSL_LLVM_VERSION < 230
-+        // Removed from TargetOptions in LLVM 23; fast-math relaxations are
-+        // now expressed with per-instruction fast-math flags in IR.
-         options.NoInfsFPMath                           = 1;
-         options.NoNaNsFPMath                           = 1;
-+#endif
 +#if OSL_LLVM_VERSION < 240
 +        // Removed from TargetOptions in LLVM 24 (see make_jit_execengine).
          options.HonorSignDependentRoundingFPMathOption = 0;
@@ -144,7 +113,7 @@ diff -ruN a/src/liboslexec/llvm_util.cpp b/src/liboslexec/llvm_util.cpp
          options.NoZerosInBSS          = 0;
          options.GuaranteedTailCallOpt = 0;
          options.UseInitArray          = 0;
-@@ -2315,7 +2371,7 @@
+@@ -2336,7 +2381,7 @@
              case 16: {
                  // MUST BE THE FINAL PASS!
                  m_new_pass_manager->module_pass_manager.addPass(
@@ -153,7 +122,7 @@ diff -ruN a/src/liboslexec/llvm_util.cpp b/src/liboslexec/llvm_util.cpp
                          NewPreventBitMasksFromBeingLiveinsToBasicBlocks<16>(
                              context())));
                  break;
-@@ -2323,7 +2379,7 @@
+@@ -2344,7 +2389,7 @@
              case 8: {
                  // MUST BE THE FINAL PASS!
                  m_new_pass_manager->module_pass_manager.addPass(
@@ -162,7 +131,7 @@ diff -ruN a/src/liboslexec/llvm_util.cpp b/src/liboslexec/llvm_util.cpp
                          NewPreventBitMasksFromBeingLiveinsToBasicBlocks<8>(
                              context())));
                  break;
-@@ -2331,7 +2387,7 @@
+@@ -2352,7 +2397,7 @@
              case 4:
                  // MUST BE THE FINAL PASS!
                  m_new_pass_manager->module_pass_manager.addPass(
@@ -171,3 +140,22 @@ diff -ruN a/src/liboslexec/llvm_util.cpp b/src/liboslexec/llvm_util.cpp
                          NewPreventBitMasksFromBeingLiveinsToBasicBlocks<4>(
                              context())));
                  break;
+@@ -4051,6 +4096,10 @@
+     // the very beginning of a function. To do that we save the current
+     // insertion point, change it to the beginning of the function, emit the
+     // alloca, then restore the insertion point to where it was previously.
++    // LLVM 24 replaced IRBuilderBase::InsertPoint (which had isSet()) with
++    // a bare BasicBlock::iterator alias, so the insertion-point check has to
++    // happen here at save time rather than on the saved point below.
++    OSL_ASSERT(m_builder->GetInsertBlock());
+     auto previousIP = m_builder->saveIP();
+ 
+     llvm::BasicBlock* entry_block = &current_function()->getEntryBlock();
+@@ -4062,7 +4111,6 @@
+     if (align > 0) {
+         allocainst->setAlignment(llvm::Align(align));
+     }
+-    OSL_ASSERT(previousIP.isSet());
+     m_builder->restoreIP(previousIP);
+ 
+     return allocainst;

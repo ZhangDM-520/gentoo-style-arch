@@ -1,7 +1,7 @@
 pkgbase = openshadinglanguage
 	pkgdesc = Advanced shading language for production GI renderers
-	pkgver = 1.15.3.0
-	pkgrel = 1.1
+	pkgver = 1.15.7.0
+	pkgrel = 1.2
 	url = https://github.com/imageworks/OpenShadingLanguage
 	arch = x86_64
 	license = BSD-3-Clause
@@ -26,9 +26,9 @@ pkgbase = openshadinglanguage
 	depends = llvm-libs
 	depends = libstdc++
 	optdepends = python: the Python module
-	source = openshadinglanguage-1.15.3.0.tar.gz::https://github.com/AcademySoftwareFoundation/OpenShadingLanguage/archive/refs/tags/v1.15.3.0.tar.gz
+	source = openshadinglanguage-1.15.7.0.tar.gz::https://github.com/AcademySoftwareFoundation/OpenShadingLanguage/archive/refs/tags/v1.15.7.0.tar.gz
 	source = osl-llvm-compat.patch
-	sha512sums = 269ac2e502966d71bb29c56bb7d17984aa01eb77d7637bf17e0f7f7997998c7f0a0ee0af5b16d39c81dfcc5ccbb20de6cdbd7c08e6a08263f5e1c3a5a1232138
-	sha512sums = dec762e5fec030c0aa770fee1ab1324e99a4d6a6151215c01cc6fafd4201a9350ee27d004ced61b116da4113115299be0deaeb1a5bcaf51c20bb1a4570d2b5ba
+	sha512sums = 38f75b9ee90b90cead708642f47a494aadd4bc1d776385e91a495cd28d26ff5d867a29ae2559baa5268c9e7f9ef27a514d37f1609124f8ef3cca36b37caa2d8f
+	sha512sums = 4240f25fbea0ad3ea4499e75ebb1defaf22ac27828670be224b5eaedea6e40eb1a9d48c715b527fc1363c5bb1e279dd2f3666c5271d72c18c292575b55f9866d
 
 pkgname = openshadinglanguage

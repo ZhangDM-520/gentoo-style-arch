@@ -1,8 +1,8 @@
 # Maintainer: Sven-Hendrik Haase <svenstaro@archlinux.org>
 
 pkgname=openshadinglanguage
-pkgver=1.15.3.0
-pkgrel=1.1
+pkgver=1.15.7.0
+pkgrel=1.2
 pkgdesc="Advanced shading language for production GI renderers"
 arch=('x86_64')
 url="https://github.com/imageworks/OpenShadingLanguage"
@@ -13,18 +13,30 @@ makedepends=('cmake' 'python' 'llvm' 'ninja' 'git' 'pybind11')
 optdepends=('python: the Python module')
 source=($pkgname-$pkgver.tar.gz::https://github.com/AcademySoftwareFoundation/OpenShadingLanguage/archive/refs/tags/v${pkgver}.tar.gz
         osl-llvm-compat.patch)
-sha512sums=('269ac2e502966d71bb29c56bb7d17984aa01eb77d7637bf17e0f7f7997998c7f0a0ee0af5b16d39c81dfcc5ccbb20de6cdbd7c08e6a08263f5e1c3a5a1232138'
-            'dec762e5fec030c0aa770fee1ab1324e99a4d6a6151215c01cc6fafd4201a9350ee27d004ced61b116da4113115299be0deaeb1a5bcaf51c20bb1a4570d2b5ba')
+sha512sums=('38f75b9ee90b90cead708642f47a494aadd4bc1d776385e91a495cd28d26ff5d867a29ae2559baa5268c9e7f9ef27a514d37f1609124f8ef3cca36b37caa2d8f'
+            '4240f25fbea0ad3ea4499e75ebb1defaf22ac27828670be224b5eaedea6e40eb1a9d48c715b527fc1363c5bb1e279dd2f3666c5271d72c18c292575b55f9866d')
 prepare() {
   cd OpenShadingLanguage-$pkgver
 
-  # Backport of upstream LLVM 23 support (2e43fc367) adapted to 1.15.3.0,
-  # with the LLVM version gate extended to 24.x for system llvm-git 24.
-  # Also guards the TargetOptions fields removed in the LLVM 24 cycle:
-  # AllowFPOpFusion/llvm::FPOpFusion (llvm/llvm-project PR #222683, FP
-  # contraction is now driven by the per-instruction 'contract' fast-math
-  # flag) and HonorSignDependentRoundingFPMathOption (PR #222027, superseded
-  # by strictfp).
+  # Openshadinglanguage 1.15.7.0 upstream already carries the LLVM 22/23
+  # TargetOptions guards (UnsafeFPMath <220, NoInfs/NoNaNs/NoSignedZeros <230).
+  # This patch completes the port to system llvm-git 24: it extends the
+  # checked_find_package LLVM version gate (23.9 -> 24.9) and guards the
+  # TargetOptions fields removed in the LLVM 24 cycle -- AllowFPOpFusion/
+  # llvm::FPOpFusion (llvm/llvm-project PR #222683; FP contraction is now
+  # driven by the per-instruction 'contract' fast-math flag, which OSL never
+  # sets), NoTrappingFPMath, HonorSignDependentRoundingFPMathOption (PR
+  # #222027, superseded by strictfp) and FloatABIType. NoTrappingFPMath,
+  # HonorSignDependentRoundingFPMathOption and FloatABIType were set to
+  # LLVM's own defaults, and the fusion choice is inert because OSL emits
+  # neither llvm.fmuladd nor the 'contract' fast-math flag (verified against
+  # the 1.15.7.0 source), so dropping the assignments is behavior-neutral
+  # on LLVM 24+.
+  # It also updates the new-PM pass plumbing for LLVM 24: the pass derives
+  # from llvm::OptionalPassInfoMixin and createModuleToFunctionPassAdaptor is
+  # llvm::-qualified, and op_alloca's insertion-point assertion moves to save
+  # time (IRBuilderBase::InsertPoint became a bare BasicBlock::iterator alias
+  # in LLVM 24, losing isSet()).
   patch -Np1 < "$srcdir"/osl-llvm-compat.patch
 }
 
