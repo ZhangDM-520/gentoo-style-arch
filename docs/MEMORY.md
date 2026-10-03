@@ -319,6 +319,22 @@
     refuses wheels outside a Nix build — so the rewrite must cover the
     editable finder and `.pth`, with build-time `__pycache__` stripped first.
 
+21. **Group membership has membership tests** (2026-10-04 build-tools
+    migration): (a) a package consumed by multiple packages (≥2 build-order
+    consumers) is an ABI-coupled hub and carries `core` — exception:
+    `app-cluster` members like `fcitx5-git`, whose consumers are all their own
+    cluster siblings, stay `app`; (b) compile toolchains carry
+    `core,build-tools`; (c) `build-tools` is a dispatch-priority class only —
+    within a run its members dispatch before all other ready packages but the
+    band never overrides build-order edges, plan/`--list`/run-record/range
+    order stays topological build order, membership is always dual
+    `core,build-tools`, and `-g build-tools` does not auto-enable `-i`
+    (auto-install still keys on `core`); (d) group moves never touch
+    `abi=`/`app-cluster=` tags (`qt5ct`/`qt6ct` precedent: keep `abi=must`
+    while leaving `core`); (e) a recipe invoking cargo/rustc must declare a
+    `rust-git` build-order edge (ripgrep and fd gained theirs 2026-10-04) —
+    `fish build-all.fish --audit` lints such gaps.
+
 ## 2. Workspace overview
 
 - The public tree is `Gentoo_Style_Arch/`; recipes live under
@@ -327,7 +343,9 @@
   `packages/stable/` as pure renames).
 - `config/topology.conf` is the ONE topology source: one record per package,
   `id|path|groups|edges[|tags]` — the only id→path binding, group membership
-  (comma list ⊂ the five names `git,stable,core,misc,app`, roster stated once
+  (comma list ⊂ the six names `git`, `stable`, `core`, `misc`, `app`,
+  `build-tools`, roster
+  stated once
   in `_GROUP_NAMES`), local
   build-order edges (a trailing empty `edges` field is the deliberate no-edge
   statement; records ALWAYS exist, so the old map⊆deps asymmetry is gone),
@@ -348,7 +366,9 @@
   recipe** (`SRCDEST`/`PKGDEST` default to `$startdir`), which is why the
   recipe directories carry ignore rules; both classes are ignored runtime
   state.
-- The logical groups are `git`, `stable`, `core`, `misc` and `app` (the
+- The logical groups are `git`, `stable`, `core`, `misc`, `app` and
+  `build-tools` (the dispatch-priority class — membership rules and dispatch
+  semantics: rule 21; `app` is the
   optional-applications group: on a TTY a build/`-n` run prompts to
   multi-select them, non-TTY runs take the whole list, and app members are
   leaf builds — consumer expansion applies like everywhere else, but app
@@ -373,14 +393,16 @@
   packages whose ABI must be rebuilt and installed as one batch.
 - **Leaf-utility class** (2026-09-28, 17 recipes under `packages/stable/`):
   release-tracked utilities whose topology records are
-  `id|packages/stable/<id>|stable|` — empty edges, no tags, and no incoming
-  edges: trash-cli (ships the 2026-09-27 hang fix, §6), desktop glue
+  `id|packages/stable/<id>|stable|` — no tags and no incoming edges (edges
+  empty except ripgrep and fd, which carry a `rust-git` build-order edge —
+  rule 21): trash-cli (ships the 2026-09-27 hang fix, §6), desktop glue
   (xdg-utils, libnotify, wl-clipboard, shared-mime-info, desktop-file-utils,
   xdg-user-dirs, playerctl, brightnessctl, ffmpegthumbnailer), dev glue (jq,
   the curl/libcurl-compat/libcurl-gnutls three-way split, file, rsync) and
   Rust/Go CLIs (ripgrep, fd, fzf). This is the class to extend for further
   utility gaps (stretch: ghostscript/tesseract, §5) — one recipe plus one
-  edge-free topology record per gap.
+  topology record per gap (edge-free unless the recipe invokes cargo/rustc —
+  rule 21).
 - No upstream checkout, package archive, downloaded signature, PGP cache,
   encrypted CI artifact, or host profile belongs in the public tree.
 

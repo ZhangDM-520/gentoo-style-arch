@@ -27,11 +27,19 @@ not an opt-in.
 _Avoid_: tracker presence means auto-sync
 
 **Group**:
-A logical scheduling class (git, stable, core, misc, app) with
-scheduling semantics such as core-runs-alone and the app multi-select prompt.
-Deliberately
+A logical scheduling class (git, stable, core, misc, app, build-tools) with
+scheduling semantics such as core-runs-alone, the build-tools dispatch band,
+and the app multi-select prompt. Deliberately
 overlaps physical layout.
 _Avoid_: category (that is the directory layout)
+
+**build-tools group**:
+The dispatch-priority class: within a run its members are dispatched before
+all other ready packages, but the band never overrides build-order edges and
+the plan, `--list`, run-record and range order stay topological build order.
+Membership is always dual `core,build-tools`.
+_Avoid_: toolchain dependency (that is a build-order edge; build-tools is
+scheduling, not dependency)
 
 **Build-order edge**:
 The fact "this package must build after that one". Not a package dependency.

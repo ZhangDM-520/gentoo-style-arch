@@ -17,9 +17,9 @@ if (($# == 0)); then
     while read -r pkg proj recipe style; do
         bash "${BASH_SOURCE[0]}" "$pkg" "$proj" "$recipe" "$style" || status=1
     done <<'PAIRS'
-cairo-git cairo packages/git/cairo-git meson
+cairo-git cairo packages/core/cairo-git meson
 glib2-git glib packages/core/glib2-git meson
-gtk3-git gtk packages/git/gtk3-git meson
+gtk3-git gtk packages/core/gtk3-git meson
 gtk4-git gtk packages/core/gtk4-git meson
 xorg-xwayland-git xserver packages/git/xorg-xwayland-git meson
 jq jq-1.8.2 packages/stable/jq autotools

@@ -229,13 +229,18 @@ end
 
 # ─── Project configuration ───────────────────────────────────────────────────
 # The group roster is stated ONCE, here. Group membership lives in each
-# topology record's groups field; only these five names are readable anywhere
+# topology record's groups field; only these six names are readable anywhere
 # (loader validation, resolve_group, usage, diagnostics all derive from this
 # list). Group variables are _GROUP_<name with '-' as '_'>.
 # 2026-09-27: third-party retired — its members moved to app; `-g third-party`
 # now fails through the unknown-group path (its members' recipes were never
 # reachable through the group name again).
-set -g _GROUP_NAMES git stable core misc app
+# 2026-10-04: build-tools added — a dispatch-first SCHEDULING class with
+# exactly one behavioural effect (the lane dispatcher picks its ready members
+# before all other ready packages, never over build-order edges), dual with
+# core: every member also carries core, so core's solo/auto-install semantics
+# apply unchanged.
+set -g _GROUP_NAMES git stable core misc app build-tools
 set -g _PACKAGE_MAP
 set -g _PACKAGE_IDS
 set -g _DEPS
@@ -246,6 +251,7 @@ set -g _GROUP_stable
 set -g _GROUP_core
 set -g _GROUP_misc
 set -g _GROUP_app
+set -g _GROUP_build_tools
 set -g _DEFAULT_LANES auto
 set -g _DEFAULT_JOBS auto
 set -g _DEFAULT_INTENSITY xhigh
@@ -3489,8 +3495,9 @@ end
 # One implementation per rule, two consumers: audit_workspace renders these
 # into --audit's report and the hidden --audit-lint seam (bottom of this file)
 # runs one of them against the loaded workspace. tests/recipe-contract.sh is
-# the gating walker. All three lints are REPORT-ONLY everywhere: a finding
-# never changes an exit status. Inputs are the committed .SRCINFO files — the
+# the gating walker for provides/purged/ignorepkg, tests/swap-completeness.sh
+# for swap. All four lints are REPORT-ONLY everywhere: a finding never
+# changes an exit status. Inputs are the committed .SRCINFO files — the
 # same metadata install/depends decisions read — PKGBUILD is never evaluated.
 #
 # Rules (docs/MEMORY.md provides discipline + purged tools + IgnorePkg closure):
@@ -3508,6 +3515,14 @@ end
 #              line inside a repo section — or before any section — is
 #              dropped. An [options] Include cannot be followed here, so it
 #              is reported instead of silently under-counting the closure.
+#   swap       the stock→house swap must be COMPLETE: a pkgname with a VCS
+#              suffix (-git/-svn/-hg/-snapshot) must provide AND conflict its
+#              stock counterpart (strip the suffix), so pacman's `--ask 4`
+#              conflict removal actually replaces the stock package and
+#              dependents of the stock name resolve to this build. Empty
+#              provides/conflicts entries are flagged outright — a split
+#              output's unset array slot ships as `provides = `, metadata
+#              that names nothing. Names only, any version satisfies.
 
 # Bare soname stem for a provide NAME ('libfoo.so' or 'libfoo.so.1.2' →
 # 'libfoo.so'); prints nothing when the name is not soname-shaped.
@@ -3658,6 +3673,81 @@ function audit_lint_ignorepkg -a conf
     for name in $names
         contains -- "$name" $ignored; and continue
         set -a findings "ignorepkg: $name is not in the IgnorePkg closure of $conf"
+    end
+    if test (count $findings) -gt 0
+        printf '%s\n' $findings | sort -u
+    end
+    return 0
+end
+
+function audit_lint_swap
+    set -l findings
+    for entry in $_PACKAGE_MAP
+        set -l fields (string split '|' -- "$entry")
+        set -l srcinfo "$SCRIPT_DIR/$fields[2]/.SRCINFO"
+        test -f "$srcinfo"; or continue
+        # Section walk over the committed .SRCINFO: `pkgbase`/`pkgname` lines
+        # at column 0 switch the section, every INDENTED field belongs to the
+        # section above it. pkgbase-section metadata is effective for EVERY
+        # output (makepkg merges it into each pkgname — cmake-git's shape),
+        # a pkgname-section field only for that output. Entries are stored as
+        # handle|name (handle '' = pkgbase section) with the version suffix
+        # already stripped, so `provides = cmake=4.4.3…` matches `cmake`.
+        set -l base_section 1
+        set -l section ''
+        set -l outputs
+        set -l provide_keys
+        set -l conflict_keys
+        for raw in (cat "$srcinfo" 2>/dev/null)
+            set -l line (string replace -r '\r$' '' -- "$raw")
+            set -l h (string match -r -g '^(pkgbase|pkgname) = (.+)$' -- "$line")
+            if test (count $h) -ge 2
+                set section $h[2]
+                set base_section 0
+                if test "$h[1]" = pkgname
+                    set -a outputs "$h[2]"
+                else
+                    set base_section 1
+                end
+                continue
+            end
+            set -l handle ''
+            test $base_section -eq 0; and set handle "$section"
+            if string match -qr '^[[:space:]]+provides[[:space:]]*=' -- "$line"
+                set -l value (string replace -r '^[[:space:]]+provides[[:space:]]*=[[:space:]]*' '' -- "$line")
+                if test -z "$value"
+                    set -a findings "swap: $section: empty provides entry — declare the stock counterpart or drop the entry"
+                else
+                    set -a provide_keys "$handle|"(string replace -r '[=<>].*$' '' -- "$value")
+                end
+                continue
+            end
+            if string match -qr '^[[:space:]]+conflicts[[:space:]]*=' -- "$line"
+                set -l value (string replace -r '^[[:space:]]+conflicts[[:space:]]*=[[:space:]]*' '' -- "$line")
+                if test -z "$value"
+                    set -a findings "swap: $section: empty conflicts entry — declare the stock counterpart or drop the entry"
+                else
+                    set -a conflict_keys "$handle|"(string replace -r '[=<>].*$' '' -- "$value")
+                end
+            end
+        end
+        for name in $outputs
+            set -l stock (string replace -r -- '-(git|svn|hg|snapshot)$' '' "$name")
+            if test "$stock" = "$name"
+                continue
+            end
+            # A soname-shaped counterpart (`libfoo.so…`) is a provide of a
+            # library, never a stock package name — nothing to swap.
+            if string match -q '*.so*' -- "$stock"
+                continue
+            end
+            if not contains -- "|$stock" $provide_keys; and not contains -- "$name|$stock" $provide_keys
+                set -a findings "swap: $name: stock counterpart '$stock' missing from provides — declare provides=('$stock=\${pkgver}')"
+            end
+            if not contains -- "|$stock" $conflict_keys; and not contains -- "$name|$stock" $conflict_keys
+                set -a findings "swap: $name: stock counterpart '$stock' missing from conflicts — declare conflicts=('$stock')"
+            end
+        end
     end
     if test (count $findings) -gt 0
         printf '%s\n' $findings | sort -u
@@ -3833,6 +3923,17 @@ function audit_workspace
         echo "  none"
     else
         for finding in $ignorepkg_findings
+            echo "  $finding"
+        end
+    end
+
+    echo ""
+    echo "Stock→house swap:"
+    set -l swap_findings (audit_lint_swap)
+    if test (count $swap_findings) -eq 0
+        echo "  none"
+    else
+        for finding in $swap_findings
             echo "  $finding"
         end
     end
@@ -6188,19 +6289,28 @@ function waits_on_deferred -a pkg
 end
 
 function pick_next_ready -a solo_ok
-    # Print the first unstarted package whose workspace deps are all done.
-    # solo_ok=0 skips core-group packages (they are only dispatched solo).
-    # argv[2..] = optional RESTRICT set: the toolchain-remediation force queue
-    # (2026-10-02). With a restrict set the pick is FORCE semantics — a queued
-    # package may dispatch again even though an earlier attempt already landed
-    # in _lane_started/_lane_done (the rebuild is the point) — but never while
-    # an earlier lane for it is still in flight (no double dispatch), and a
-    # dependency that is itself queued for rebuild must be rebuilt first.
+    # Print the next package to dispatch. Readiness is decided FIRST and wins
+    # always: unstarted, every in-list dep done (external deps ignored), no
+    # deferred dep, and the solo_ok=0 core skip (core packages are only
+    # dispatched solo). Two pick policies then coexist over the ready set:
+    # - force_mode: argv[2..] = optional RESTRICT set, the toolchain-
+    #   remediation force queue (2026-10-02). With a restrict set the pick is
+    #   FORCE semantics — a queued package may dispatch again even though an
+    #   earlier attempt already landed in _lane_started/_lane_done (the
+    #   rebuild is the point) — but never while an earlier lane for it is
+    #   still in flight (no double dispatch), and a dependency that is itself
+    #   queued for rebuild must be rebuilt first.
+    # - the build-tools band (2026-10-04 — the group's ONE behavioural
+    #   effect): among packages ready NOW, its members are picked before all
+    #   other ready packages, and within each band the topo order of
+    #   $_lane_sorted is kept. The band therefore reorders pickable
+    #   candidates only — never a package past a prerequisite/deferred wait.
     set -l restrict $argv[2..-1]
     set -l force_mode 0
     if test (count $restrict) -gt 0
         set force_mode 1
     end
+    set -l fallback ""
     for pkg in $_lane_sorted
         if test $force_mode -eq 1
             if not contains "$pkg" $restrict
@@ -6253,7 +6363,19 @@ function pick_next_ready -a solo_ok
         if test $solo_ok -eq 0; and contains "$pkg" $_GROUP_core
             continue
         end
-        echo $pkg
+        # Build-tools membership is dual with core, so under solo_ok=0 such a
+        # member is already skipped above — the band is a no-op on the
+        # non-core fallback and core's solo rule stays untouched.
+        if contains "$pkg" $_GROUP_build_tools
+            echo $pkg
+            return 0
+        end
+        if test -z "$fallback"
+            set fallback $pkg
+        end
+    end
+    if test -n "$fallback"
+        echo $fallback
         return 0
     end
     return 1
@@ -7747,6 +7869,8 @@ function usage
                 set desc "Auxiliary packages"
             case app
                 set desc "Optional applications — typically no consumers, no auto -i"
+            case build-tools
+                set desc "Scheduling class — ready members dispatch before all other ready packages (never over build-order edges); dual with core"
         end
         printf '  %-12s %s (%s packages)\n' "$group_name" "$desc" (count $members)
     end
@@ -8691,26 +8815,26 @@ end
 # Hidden fixture seam (same precedent as --stale-lock-check/--local-db-check):
 # run ONE workspace-audit lint against the loaded workspace — no build, no
 # network, no host state beyond the pacman.conf the caller names.
-#   fish build-all.fish --audit-lint <provides|purged|ignorepkg> [pacman-conf]
+#   fish build-all.fish --audit-lint <provides|purged|ignorepkg|swap> [pacman-conf]
 # Output: one finding line per finding (prefix `provides: `/`purged: `/
-# `ignorepkg: `) followed by `audit-lint <name>: clean`, `audit-lint <name>:
-# N finding(s)` or `audit-lint ignorepkg: skipped`. rc 0 = the lint RAN — a
-# finding never changes the exit status (report-only, the same contract
-# --audit has) — 2 = usage. No GSA_* test knob.
+# `ignorepkg: `/`swap: `) followed by `audit-lint <name>: clean`,
+# `audit-lint <name>: N finding(s)` or `audit-lint ignorepkg: skipped`.
+# rc 0 = the lint RAN — a finding never changes the exit status (report-only,
+# the same contract --audit has) — 2 = usage. No GSA_* test knob.
 if test (count $argv) -gt 0; and test "$argv[1]" = --audit-lint
     if test (count $argv) -lt 2; or test (count $argv) -gt 3
-        echo "Error: --audit-lint expects <provides|purged|ignorepkg> and an optional pacman.conf path" >&2
+        echo "Error: --audit-lint expects <provides|purged|ignorepkg|swap> and an optional pacman.conf path" >&2
         exit 2
     end
     switch $argv[2]
-        case provides purged
+        case provides purged swap
             if test (count $argv) -ne 2
                 echo "Error: --audit-lint $argv[2] takes no pacman.conf path" >&2
                 exit 2
             end
         case ignorepkg
         case '*'
-            echo "Error: --audit-lint expects provides, purged or ignorepkg" >&2
+            echo "Error: --audit-lint expects provides, purged, ignorepkg or swap" >&2
             exit 2
     end
     set -l lint_findings
@@ -8721,6 +8845,8 @@ if test (count $argv) -gt 0; and test "$argv[1]" = --audit-lint
             set lint_findings (audit_lint_purged)
         case ignorepkg
             set lint_findings (audit_lint_ignorepkg "$argv[3]")
+        case swap
+            set lint_findings (audit_lint_swap)
     end
     for finding in $lint_findings
         echo "$finding"

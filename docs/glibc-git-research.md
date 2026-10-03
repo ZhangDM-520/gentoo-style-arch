@@ -348,7 +348,7 @@ run alone and core selection automatically enables immediate installation
 before consumers build. That is appropriate only if selecting `-g core` is
 intended to install this system libc.
 [`config/topology.conf` record format and ABI tags](../config/topology.conf#L1-L19),
-[`linux-api-headers/PKGBUILD`](../packages/stable/linux-api-headers/PKGBUILD#L6-L16),
+[`linux-api-headers/PKGBUILD`](../packages/core/linux-api-headers/PKGBUILD#L6-L16),
 [`docs/build-guide.md` installation modes](build-guide.md#installation-modes),
 [`README.md` group definitions](../README.md#what-is-included)
 
@@ -365,7 +365,7 @@ local `systemd` recipe lists `lib32-gcc-libs` as a makedepends while its
 topology row has no `gcc-snapshot` edge.
 [`gcc-snapshot` topology row](../config/topology.conf#L29),
 [`systemd` topology row](../config/topology.conf#L87),
-[`systemd/PKGBUILD`](../packages/stable/systemd/PKGBUILD#L30-L33),
+[`systemd/PKGBUILD`](../packages/core/systemd/PKGBUILD#L30-L33),
 [`docs/maintainer-guide.md` coupled-stack rules](maintainer-guide.md#updating-coupled-stacks)
 
 Every split `pkgname` must be added to the host's `[options]` `IgnorePkg`

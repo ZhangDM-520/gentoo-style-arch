@@ -9,7 +9,7 @@ set -euo pipefail
 # run start and was never re-run, and recipes that compile Rust could be
 # dispatched before rust-git in a coupled batch.
 #
-# Four policy seams are pinned here, one section each:
+# Six policy seams are pinned here, one section each:
 #
 #   A. --audit toolchain lint: a recipe whose PKGBUILD invokes cargo/rustc
 #      must name rust-git in its topology record's edges field (rust-git
@@ -36,6 +36,18 @@ set -euo pipefail
 #      rust-git batch membership is recorded as tags. Read through the
 #      builder's --topology data channel — the same interface
 #      tests/srcinfo-freshness.sh consumes.
+#   E. Non-ABI tags: app-cluster/version-sync-only records keep the ABI
+#      severity result at `none` at the real-build gate.
+#   F. Grouping policy: the committed topology's group discipline
+#      (docs/MEMORY.md §1 rule 21) — every compile-toolchain record carries
+#      core,build-tools; every package with ≥2 edge-consumers carries core
+#      (explicit allow-list for app-cluster exceptions); ripgrep and fd
+#      declare a rust-git edge; groups stay inside the six-name roster and
+#      build-tools is always dual with core. These checks read the topology
+#      RECORDS raw (the id|path|groups|edges[|tags] lines) from the optional
+#      $1 path — default config/topology.conf — so a falsification run points
+#      them at a scratch copy with one flipped record; the repo file is
+#      never mutated.
 #
 # Synthetic workspaces + PATH stubs only; nothing real is built or installed.
 #
@@ -467,5 +479,126 @@ for pkg in llvm-git fcitx5-git untagged-app versioned-app; do
         exit 1
     fi
 done
+
+# ─── F. grouping policy: hub/toolchain membership in the topology records ───
+# docs/MEMORY.md §1 rule 21 membership tests, one pin per sub-check:
+#   a. the compile-toolchain set carries BOTH core and build-tools;
+#   b. a package with ≥2 edge-consumers (a record listing X in edges consumes
+#      X) carries core, except the explicit allow-list below;
+#   c. ripgrep and fd declare a rust-git edge (rule 21(e) — the toolchain-edge
+#      discipline the builder's --audit lint checks);
+#   d. every group named in a record is one of the six roster names, and
+#      build-tools is always dual with core.
+# The checks read the topology RECORDS themselves — the raw
+# id|path|groups|edges[|tags] lines of ${1:-$root/config/topology.conf} — so
+# each assertion below owns its own failure message and the optional $1 lets
+# a falsification run point them at a scratch copy with one flipped record
+# (the repo config is never written). D reads the builder's normalized
+# --topology view; F deliberately reads the two record fields the policy
+# names: groups and edges.
+topo_conf=${1:-$root/config/topology.conf}
+[[ -f $topo_conf ]] || fail "F: topology file not found: $topo_conf"
+
+# A record is exactly id|path|groups|edges[|tags]; reject any other shape so
+# a malformed line can never silently dodge the field checks below.
+bad_shape=$(awk -F'|' '
+    /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
+    NF < 4 || NF > 5 { print NR ": " $0 }' "$topo_conf")
+[[ -z $bad_shape ]] \
+    || fail "F: record is not id|path|groups|edges[|tags]: $bad_shape"
+
+record_field() { # $1 = id, $2 = field number (3 = groups, 4 = edges)
+    awk -F'|' -v id="$1" -v f="$2" '$1 == id { print $f }' "$topo_conf"
+}
+
+has_member() { # $1 = comma list (groups or edges field), $2 = wanted member
+    local item
+    local IFS=,
+    for item in $1; do
+        if [[ $item == "$2" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+# a. compile toolchains carry core,build-tools. The set is hard-coded on
+# purpose — the toolchain records of the 2026-10-04 migration (docs/NOTE.md);
+# a new toolchain record means adding its id here.
+toolchain_set=(
+    cmake-git gcc-snapshot llvm-git meson-git mold-git qt5-tools qt6-tools
+    rocm-llvm rust-git spirv-llvm-translator-git autofdo-git libclc-git
+    ninja-git wayland-git rust-bindgen-git ccache
+)
+for id in "${toolchain_set[@]}"; do
+    groups=$(record_field "$id" 3)
+    [[ -n $groups ]] || fail "F: toolchain record $id is missing from $topo_conf"
+    for want in core build-tools; do
+        has_member "$groups" "$want" \
+            || fail "F: toolchain $id does not carry $want (groups: $groups)"
+    done
+done
+
+# b. the hub rule: ≥2 edge-consumers ⇒ core. Explicit allow-list (fixture
+# data, one line per exception naming its reason):
+hub_rule_exempt=(
+    'fcitx5-git' # app-cluster exception: its five consumers are all its own app-cluster=fcitx5 siblings
+)
+exempt_hub() { # $1 = package id — is it on the hub-rule allow-list?
+    local x
+    for x in "${hub_rule_exempt[@]}"; do
+        if [[ $x == "$1" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+while read -r id consumers; do
+    if exempt_hub "$id"; then
+        continue
+    fi
+    groups=$(record_field "$id" 3)
+    has_member "$groups" core \
+        || fail "F: $id has $consumers edge-consumers but does not carry core (groups: $groups)"
+done < <(awk -F'|' '
+    /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
+    { n = split($4, e, ",")
+      for (i = 1; i <= n; i++) if (e[i] != "") consumers[e[i]]++ }
+    END { for (id in consumers) if (consumers[id] >= 2) print id, consumers[id] }
+' "$topo_conf" | sort)
+
+# c. toolchain-edge discipline: the two committed cargo recipes name rust-git
+# (this is the gap --audit flags; D pins mold-git's edge through --topology).
+for id in ripgrep fd; do
+    [[ -n $(record_field "$id" 1) ]] \
+        || fail "F: no $id record in $topo_conf"
+    edges=$(record_field "$id" 4)
+    has_member "$edges" rust-git \
+        || fail "F: $id declares no rust-git edge (edges: ${edges:-<empty>})"
+done
+
+# d. the roster is closed at the six names, and build-tools is ALWAYS dual
+# with core (membership is core,build-tools — never build-tools alone).
+roster='git,stable,core,misc,app,build-tools'
+offenders=$(awk -F'|' -v roster="$roster" '
+    /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
+    { n = split($3, g, ",")
+      for (i = 1; i <= n; i++) {
+          ok = 0
+          m = split(roster, r, ",")
+          for (j = 1; j <= m; j++) if (g[i] == r[j]) ok = 1
+          if (!ok) printf "%s names group '\''%s'\''\n", $1, g[i]
+      } }' "$topo_conf")
+[[ -z $offenders ]] || fail "F: group outside the roster $roster: $offenders"
+offenders=$(awk -F'|' '
+    /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
+    { n = split($3, g, ","); bt = 0; core = 0
+      for (i = 1; i <= n; i++) {
+          if (g[i] == "build-tools") bt = 1
+          if (g[i] == "core") core = 1
+      }
+      if (bt && !core) print $1 }' "$topo_conf")
+[[ -z $offenders ]] \
+    || fail "F: build-tools without core (membership is always dual core,build-tools): $offenders"
 
 printf 'abi-batch-policy fixture: PASS\n'

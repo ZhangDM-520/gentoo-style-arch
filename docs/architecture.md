@@ -12,8 +12,8 @@ Gentoo_Style_Arch has four deliberately separate modules:
 2. **Topology** is one declarative file, `config/topology.conf`: one record
    per package, `id|path|groups|edges[|tags]`. The `id|path` pair binds the
    package ID to its recipe path — the only place that binding exists —
-   `groups` states group membership as a comma list over the five logical
-   groups (`git, stable, core, misc, app`; the roster is stated
+   `groups` states group membership as a comma list over the six logical
+   groups (`git, stable, core, misc, app, build-tools`; the roster is stated
    once, in the builder), `edges` is the comma list of packages this one
    consumes — its local build-order edges (a lone `id|path|groups|` is a
    deliberate no-edge record),
@@ -52,7 +52,11 @@ silently replaced.
 The scheduler's interface includes more than its flags: package selection is
 mandatory, build order is meaningful, `--install` installs before a
 dependent build starts, core packages run alone, and failures stop new
-dispatches while draining existing lanes. These invariants are part of the
+dispatches while draining existing lanes. The `build-tools` dispatch band
+(2026-10-04) is one more scheduler invariant: within a run, `build-tools`
+members are dispatched before all other ready packages, but the band never
+overrides build-order edges, and plan/`--list`/run-record/range order stays
+topological build order. These invariants are part of the
 maintainer contract. The failure-stop invariant has two named amendments: a
 recipe whose checksum anchoring is refused, and a `-s` recipe whose upstream
 never answers its ref query after transport retries, are *deferred*, not

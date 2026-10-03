@@ -15,8 +15,8 @@ credentials, downloaded sources, or generated build output to this journal.
 The workspace was reorganized twice; entries keep whatever names were true when
 they were written. Current names are `packages/<category>/<package-id>/` with
 categories `git`, `stable`, `core`, `misc` (the `third-party` category was
-retired 2026-09-27), and logical groups `git`, `stable`, `core`, `misc`, `app`
-(stated in `config/topology.conf`).
+retired 2026-09-27), and logical groups `git`, `stable`, `core`, `misc`,
+`app`, `build-tools` (stated in `config/topology.conf`).
 
 | In older entries | Was | Now |
 | --- | --- | --- |
@@ -26,6 +26,7 @@ retired 2026-09-27), and logical groups `git`, `stable`, `core`, `misc`, `app`
 | `.3rdP/` | third-party application recipes | `packages/stable/` — directory retired 2026-09-27 (group `third-party` retired with it; the recipes are `app` members) |
 | `.Misc/` | auxiliary recipes | `packages/misc/` |
 | `-g static`, `-g heavy`, `-g critical`, `-g rocm` | four separate groups | `-g stable` and `-g core` (2026-09-15); `core` auto-enables `-i` |
+| `git,stable,core,misc,app` (five-name roster) | the logical-group roster before 2026-10-04 | six names — `build-tools` added 2026-10-04 |
 | `-si`, `--sepinstall` | the separated-install flag | removed 2026-09-17 — `-i`/`--install` is the only spelling |
 | `--installall` at end of run | the old collective install | `-ia` remains as a one-transaction escape hatch; a normal run installs per package with `-i` |
 | `tests/*-pgo-transition.sh` (five 6-line wrappers) | one wrapper per PGO recipe | folded into `tests/pgo-transition.sh` (no args = all five pairs) on 2026-09-24 |
@@ -35,6 +36,58 @@ retired 2026-09-27), and logical groups `git`, `stable`, `core`, `misc`, `app`
 So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
+
+## 2026-10-04 — build-tools dispatch class and the core membership migration
+
+- **Symptom**: the grouping audit found multi-consumer ABI hubs and compile
+  toolchains sitting outside `core`; toolchain long-poles (cmake-git,
+  gcc-snapshot, llvm-git, …) queued behind unrelated work; `ripgrep` and `fd`
+  had no `rust-git` build-order edge despite invoking cargo/rustc (`--audit`
+  flags such gaps).
+- **Root cause**: no dispatch-priority class existed — the five-name roster
+  had no way to say "schedule this early" — and membership had drifted from
+  `core`'s stated purpose because the docs described core's role but never
+  stated a membership test.
+- **Fix**: added the sixth group `build-tools` (roster
+  `git,stable,core,misc,app,build-tools`, `_GROUP_NAMES` in
+  `build-all.fish:239`) — a dispatch-first SCHEDULING class: within a run its
+  members are dispatched before all other ready packages, but the band never
+  overrides build-order edges; plan/`--list`/run-record/range order stays
+  topological BUILD order (the ranges contract) even though actual dispatch
+  may start build-tools members earlier. `-g build-tools` does not auto-enable
+  `-i` (auto-install still keys on `core`). Membership is always dual
+  `core,build-tools`. Full physical + logical migration of 13 recipes into
+  `core` the same day — directories `packages/{git,stable}/<id>` →
+  `packages/core/<id>` for cairo-git, pango-git, polkit-git, gtk3-git,
+  babl-git, libdrm-git, ninja-git, wayland-git, rust-bindgen-git, dbus,
+  systemd, linux-api-headers, ccache: the 9 hubs are `core`, and
+  ninja-git/wayland-git/rust-bindgen-git/ccache are `core,build-tools`;
+  autofdo-git and libclc-git stay physically under `packages/git/`
+  (`core,build-tools`), and openssl/hip-runtime/hsa-rocr stay `stable,core`
+  under `packages/stable/`. 16 toolchain records now carry
+  `core,build-tools`: cmake-git, gcc-snapshot, llvm-git, meson-git, mold-git,
+  qt5-tools, qt6-tools, rocm-llvm, rust-git, spirv-llvm-translator-git,
+  autofdo-git, libclc-git, ninja-git, wayland-git, rust-bindgen-git, ccache.
+  The `ripgrep` and `fd` topology records gained `rust-git` build-order edges.
+  `fcitx5-git` stays `app` as the documented hub-rule exception: its five
+  edge-consumers are all its own `app-cluster=fcitx5` siblings
+  (`config/topology.conf:102-106`).
+- **Validation**: `tests/scheduler-dispatch-order.sh` proves the dispatch band
+  with a red-first fixture; `tests/abi-batch-policy.sh` pins the
+  grouping-policy cases — its hub pin caught `libdrm-git` (2 consumers) having
+  been dropped from the migration list mid-plan, and the fixture's refusal to
+  pass is what forced the correction; the full battery `bash tests/run-all.sh`;
+  `fish build-all.fish --audit` and `fish build-all.fish --list`; dry-run
+  sweeps over the migrated recipes.
+- **Durable rules** (now `MEMORY.md` §1 rule 21): (a) a package consumed by
+  multiple packages (≥2 build-order consumers) is an ABI-coupled hub and
+  carries `core` — exception: `app-cluster` members like `fcitx5-git` whose
+  consumers are all cluster siblings; (b) compile toolchains carry
+  `core,build-tools`; (c) `build-tools` is dispatch priority only — the band
+  never overrides build-order edges, membership is always dual
+  `core,build-tools`, and group moves never touch `abi=`/`app-cluster=` tags
+  (qt5ct/qt6ct precedent: keep `abi=must` while leaving `core`); (d) a recipe
+  invoking cargo/rustc must declare a `rust-git` build-order edge.
 
 ## 2026-10-03 — openshadinglanguage 1.15.7.0: version-sync bump left osl-llvm-compat.patch version-stale
 
@@ -180,6 +233,71 @@ and never document behaviour the tree does not have.
   the missing `.state/toolchains/glibc-git` marker makes every failed-build
   retry wipe build state until one build succeeds.
 
+## 2026-10-03 — shared-library inventory and rebuild-consumer audit
+
+- **Question**: identify the project's current library recipes, compare them
+  with installed pacman providers, and trace the consumers that would need to
+  rebuild if more libraries became project recipes.
+- **Method**: used `fish build-all.fish -l` as the recipe inventory, compared
+  committed `.SRCINFO` `provides`/dependency fields with read-only
+  `pacman -Qi`, and checked package payloads with `pacman -Qlq`. A package-name
+  prefix search alone is incomplete: many libraries use names such as
+  `glib2-git`, while some `lib*` packages do not ship ELF shared objects.
+- **Inventory**: the live list returned 148 records and group counts of git
+  42, stable 45, core 40, misc 1, app 23. The README counts were two recipes
+  and two group memberships behind; they are now aligned with that listing.
+  Committed soname `provides` cover 85 unique capabilities across 39 recipe
+  IDs, and their package outputs were installed in the queried system.
+- **Metadata gap**: `libdrm-git`, `libinput-git`, and `libime-git` each ship
+  ELF `.so` files, but their `.SRCINFO` and installed package metadata provide
+  only package-name aliases (`libdrm`, `libinput`, `libime`), not bare soname
+  capabilities. `libclc-git` ships `libclc.bc`, not a shared object. The three
+  ELF packages need review against the existing soname-provides rule in
+  `MEMORY.md` §1.
+- **Installed provider gaps**: project recipes directly require 53 sonames
+  with installed host providers but no provider recipe in this tree (88
+  package/field references). The largest consumer groups are `pipewire` (21),
+  `curl` (10), `openssh` and `openvpn` (5 each), `udisks2` (4), and `dbus`,
+  `dbus-broker`, and `dbus-broker-git` (3 each). Other affected consumers are
+  `file`, `rsync`, `rust-git`, `util-linux`, `bash`, `ccache`, `cmake-git`,
+  `glib2-git`, and `linux-tools`. The separate package capabilities `libgl`
+  and `libegl` come from `libglvnd` (used by seven and one recipe IDs
+  respectively); `libltdl` comes from `libtool` and is used by `imagemagick`.
+  For PipeWire's external audio/codec/device libraries, the direct consumer is
+  `pipewire`; its existing downstream edge brings `wireplumber` into the same
+  selection.
+- **Selection gap**: pacman dependencies are not the builder's consumer graph.
+  Direct `.SRCINFO` soname references show 25 in-tree provider/consumer pairs
+  without a topology edge. Read-only dry-runs confirmed the practical effect:
+  `zstd-git` selected only itself despite `ccache`, `curl`, and `file` linking
+  its soname; `libinput-git` selected only itself despite `niri-spicy-git` and
+  the Qt bases depending on it; `libdrm-git` selected `libva-git` and
+  `xorg-xwayland-git` but not its HSA, Mesa, or Qt 6 consumers. A new library
+  recipe must therefore get an intentional edge from each relevant direct
+  consumer; the builder then expands that consumer's declared downstream
+  edges. Do not add every pacman dependency mechanically: the topology is
+  curated, and some system-library relationships are cyclic.
+- **Pitfall**: `.SRCINFO` fields are indented. A search anchored as
+  `^provides` silently misses them; allow leading whitespace when auditing
+  recipe metadata.
+- **Disposition**: investigation and README count correction only. No recipe,
+  topology, build, or install changes were made. Before wiring additional
+  D-Bus consumers, resolve the already-queued choice between the duplicate
+  `dbus-broker` and `dbus-broker-git` recipes.
+- **Re-verification (fleet re-run, later same day)**: independent sub-agent
+  passes reproduced every figure above (148 records, the three alias-only
+  provides at `libdrm-git/.SRCINFO:16`, `libinput-git/.SRCINFO:21`,
+  `libime-git/.SRCINFO:15`; `fish build-all.fish -n zstd-git` still expands to
+  1 package) and added host-side scale: 1748 installed packages, 1139 shipping
+  `/usr/lib/**/*.so*` (10 881 files), 139 built locally ("Unknown Packager"),
+  and 105 project recipes verified as ELF-shipping (39 with bare-soname
+  provides). New detail: `core/qt6-base-git/.SRCINFO:80` has an empty
+  `provides = ` line on the split output `qt6-xcb-private-headers-git` —
+  cosmetic metadata oddity, no known consumer impact. Counts of unshipped
+  capabilities refined: 53 of 77 referenced sonames and ~170 `lib*` aliases
+  have no in-tree provider; if package-name aliases are counted, unedged
+  provider/consumer pairs balloon to 230 (the "25" figure is the soname-scope
+  count).
 ## 2026-10-02 — one unqueryable upstream aborted a whole run (-s freshness defer)
 
 - **Symptom**: a 147-package `-s` run built 16, failed 1, and left 131

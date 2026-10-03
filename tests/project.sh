@@ -392,7 +392,7 @@ fi
 
 # config/ holds exactly the two files the builder reads: topology.conf (THE
 # topology source — one record per package, id|path|groups|edges[|tags]) and
-# build-defaults.conf. The five-group roster is stated once, in the builder's
+# build-defaults.conf. The six-group roster is stated once, in the builder's
 # group names; nothing else in config/ is reachable state, so a stray file
 # would silently go stale. A run of --list above already proved both files
 # load, so only the directory's contents need checking here.

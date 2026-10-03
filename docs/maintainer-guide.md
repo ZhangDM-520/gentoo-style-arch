@@ -5,8 +5,8 @@
 Place a clean recipe directory under the physical category that best describes
 it, and add one record to `config/topology.conf`:
 `id|path|groups|edges[|tags]`. The record is the only place that binds a
-package ID to a filesystem path. `groups` is a comma list over the five group
-names (`git, stable, core, misc, app`), `edges` is the comma
+package ID to a filesystem path. `groups` is a comma list over the six group
+names (`git, stable, core, misc, app, build-tools`), `edges` is the comma
 list of the packages this one consumes (its local build-order edges — a record
 ending in a bare `|` is a deliberate no-edge record), and `tags` carries
 coupled-batch policy
@@ -15,6 +15,16 @@ coupled-batch policy
 `version-sync=nvchecker` provider opt-in (see "Version-synced external
 releases"). The loader validates every record on every invocation and one
 malformed record breaks every command — and names the offender.
+
+Group membership rules (2026-10-04): a package consumed by multiple packages
+(≥2 build-order consumers) is an ABI-coupled hub and carries `core` — the
+exception is `app-cluster` members like `fcitx5-git`, whose only consumers are
+their own cluster siblings; compile toolchains carry `core,build-tools`
+(dispatch-priority semantics in `docs/architecture.md`); `app` membership
+stays exclusive — wiring a record into `app` replaces its previous group.
+Group moves never touch `abi=`/`app-cluster=` tags (`qt5ct`/`qt6ct` keep
+`abi=must` after leaving `core`). A recipe invoking cargo/rustc must declare a
+`rust-git` build-order edge; `fish build-all.fish --audit` lints such gaps.
 
 Keep `.SRCINFO` synchronized:
 

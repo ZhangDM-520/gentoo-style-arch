@@ -6,7 +6,7 @@ set -euo pipefail
 # Pins (decisions recorded in docs/NOTE.md 2026-09-23):
 #   1. loader demands config/topology.conf (a missing file = error; group
 #      membership rides in each record's groups field, and the roster is the
-#      builder's five names — git, stable, core, misc, app)
+#      builder's six names — git, stable, core, misc, app, build-tools)
 #   2. an app group with NO member refuses with a targeted hint (no phantom member)
 #   3. non-TTY -n -g app builds the whole group and says the prompt was
 #      skipped; the group's edges never pull upstream — a local dependency
@@ -123,7 +123,7 @@ listed_seq() {
         | grep -E '^ +[0-9]+\. ' | awk '{print $2}' | tr -d '\r'
 }
 
-# ── 1. Loader: a missing topology file is an error; the roster is five names ─
+# ── 1. Loader: a missing topology file is an error; the roster is six names ─
 mv "$fixture/config/topology.conf" "$fixture/topology.conf.bak"
 if run_quiet "$fixture/o1" --list; then
     fail "loader accepted a workspace without config/topology.conf" "$fixture/o1"
@@ -131,14 +131,14 @@ fi
 grep -q 'topology not found:' "$fixture/o1" \
     || fail "loader error does not name the missing config/topology.conf" "$fixture/o1"
 mv "$fixture/topology.conf.bak" "$fixture/config/topology.conf"
-# The loader's roster wording is its own closed five-name list — pin the text
+# The loader's roster wording is its own closed six-name list — pin the text
 # it prints, not just "some roster".
 set_topology_record "$fixture" gitp1 '' ''
 if run_quiet "$fixture/o1g" --list; then
     fail "loader accepted a record naming no group" "$fixture/o1g"
 fi
-grep -q 'names no group (allowed: git,stable,core,misc,app)' "$fixture/o1g" \
-    || fail "loader roster wording is not the five-name list" "$fixture/o1g"
+grep -qF 'names no group (allowed: git,stable,core,misc,app,build-tools)' "$fixture/o1g" \
+    || fail "loader roster wording is not the six-name list" "$fixture/o1g"
 set_topology_record "$fixture" gitp1 git ''
 
 # ── 2. Empty app membership: refuse with a hint, never a phantom member ─────
