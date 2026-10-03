@@ -1,6 +1,6 @@
 pkgbase = qt6-languageserver
 	pkgdesc = An implementation of the Language Server Protocol
-	pkgver = 6.13.0_r653.g146b9ac
+	pkgver = 6.13.0_r654.g9ecf481
 	pkgrel = 1
 	url = https://www.qt.io
 	arch = x86_64

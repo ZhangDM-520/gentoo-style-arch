@@ -1,6 +1,6 @@
 pkgbase = qt6-positioning
 	pkgdesc = Provides access to position, satellite and area monitoring classes
-	pkgver = 6.13.0_r4381.gfd7030e6
+	pkgver = 6.13.0_r4385.g793ef50c
 	pkgrel = 1
 	url = https://www.qt.io
 	arch = x86_64

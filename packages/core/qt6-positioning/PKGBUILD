@@ -3,7 +3,7 @@
 
 pkgname=qt6-positioning
 # placeholder — overridden by pkgver() (git describe on dev branch)
-pkgver=6.13.0_r4381.gfd7030e6
+pkgver=6.13.0_r4385.g793ef50c
 pkgrel=1
 arch=(x86_64)
 url='https://www.qt.io'

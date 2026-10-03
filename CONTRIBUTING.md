@@ -128,6 +128,12 @@ gate, and the scheduler's resource profiles, so run the whole battery rather
 than only the file matching the recipe you touched — the map-format change of
 2026-09-17 was caught by two unrelated recipe fixtures.
 
+Install behaviour has a dedicated entry point: the hidden
+`--install-decide <checked|force>` seam prints `install_plan`'s rows
+(`install`/`skip`/`refuse`/`noop`) and exits 0 for an executable plan, 1 for a
+refusal, 2 for bad usage — fixtures assert those rows and statuses, never
+rendered output.
+
 `--audit` also reports installed files under a PGO recipe that still carry a
 baked `.gcda` path, and names PGO recipes that are not installed at all, so it
 is the quickest way to spot a stale install that predates a recipe fix.

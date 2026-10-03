@@ -1,6 +1,6 @@
 pkgbase = qt6-serialport
 	pkgdesc = Provides access to hardware and virtual serial ports
-	pkgver = 6.13.0_r2285.g9d8f025b
+	pkgver = 6.13.0_r2291.gf64fdd97
 	pkgrel = 1
 	url = https://www.qt.io
 	arch = x86_64

@@ -1,7 +1,7 @@
 pkgbase = udisks2
 	pkgdesc = Daemon, tools and libraries to access and manipulate disks, storage devices and technologies
 	pkgver = 2.11.2
-	pkgrel = 1.1
+	pkgrel = 1.2
 	url = https://www.freedesktop.org/wiki/Software/udisks/
 	arch = x86_64
 	license = GPL-2.0-or-later

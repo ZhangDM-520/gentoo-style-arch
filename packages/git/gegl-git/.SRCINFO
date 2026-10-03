@@ -1,6 +1,6 @@
 pkgbase = gegl-git
 	pkgdesc = Graph based image processing framework
-	pkgver = 0.4.73.r11479.446cc249b
+	pkgver = 0.4.73.r11485.75214d1e6
 	pkgrel = 1
 	url = https://www.gegl.org
 	arch = i686

@@ -7,7 +7,7 @@ pkgbase=$_pkgname-git
 # qt4 split removed 2026-09-07: qt4 not installed (EOL toolkit, would need a
 # monster AUR build) — no qt4 apps on this system need an im module.
 pkgname=(fcitx5-qt5-git fcitx5-qt6-git)
-pkgver=5.1.16.r0.g1157500
+pkgver=5.1.16.r1.g0285a5d
 pkgrel=1
 pkgdesc="Fcitx Qt Library"
 arch=('x86_64')

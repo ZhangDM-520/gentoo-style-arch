@@ -51,6 +51,18 @@ does not depend on each other (for example after `--cleanup`, or with
 `--overwrite`), never as a substitute for `--install` in a run whose packages
 are chained in build order.
 
+Install decisions are fail-closed and computed once: an empty archive list is
+a refusal under `--install` (`refuse empty-list` — a run that installs nothing
+would leave later packages compiling against the old system version) and a
+no-op under `--installall`; a PGO archive that still carries a baked
+`.gcda`/`.profraw` destination is refused (`refuse pgo-*`) before anything is
+written into `/usr`. To see exactly what a run would decide without touching
+pacman, sudo or the build, ask the hidden seam directly:
+
+```sh
+fish build-all.fish --install-decide checked <archive...>   # rc 0 plan / 1 refusal / 2 bad usage
+```
+
 Root-supervisor mode is:
 
 ```sh

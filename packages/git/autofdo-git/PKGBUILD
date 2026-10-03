@@ -4,8 +4,8 @@
 
 _pkgname=autofdo
 pkgname=${_pkgname}-git
-pkgver=0.30.1.r17.gc9fa188
-pkgrel=6
+pkgver=0.30.1.r20.gf95d1a1
+pkgrel=1
 pkgdesc='Tool to generate LLVM Propeller profiles from perf.data'
 arch=('x86_64')
 url='https://github.com/google/autofdo'

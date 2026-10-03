@@ -3,7 +3,7 @@
 
 _pkgname=xwayland-satellite
 pkgname="$_pkgname-git"
-pkgver=0.8.2.r16.g63cdf17
+pkgver=0.8.2.r17.gb5690b5
 pkgrel=1
 pkgdesc="Xwayland outside your Wayland - git version"
 arch=(x86_64)

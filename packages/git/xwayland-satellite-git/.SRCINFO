@@ -1,6 +1,6 @@
 pkgbase = xwayland-satellite-git
 	pkgdesc = Xwayland outside your Wayland - git version
-	pkgver = 0.8.2.r16.g63cdf17
+	pkgver = 0.8.2.r17.gb5690b5
 	pkgrel = 1
 	url = https://github.com/Supreeeme/xwayland-satellite
 	arch = x86_64

@@ -3,7 +3,7 @@
 
 pkgname=qt6-languageserver
 # placeholder — overridden by pkgver() (git describe on dev branch)
-pkgver=6.13.0_r653.g146b9ac
+pkgver=6.13.0_r654.g9ecf481
 pkgrel=1
 arch=(x86_64)
 url='https://www.qt.io'

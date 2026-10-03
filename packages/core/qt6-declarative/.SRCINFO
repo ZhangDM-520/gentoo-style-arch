@@ -1,6 +1,6 @@
 pkgbase = qt6-declarative
 	pkgdesc = Classes for QML and JavaScript languages
-	pkgver = 6.13.0_r39580.g1171fd3c02
+	pkgver = 6.13.0_r39629.g2d2eb7860f
 	pkgrel = 1
 	url = https://www.qt.io
 	arch = x86_64

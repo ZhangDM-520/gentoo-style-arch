@@ -1,0 +1,12 @@
+# Version tracker for the CachyOS release-candidate kernel channel this recipe
+# follows (docs/NOTE.md: the rc channel is pinned deliberately, for the
+# sched_ext hardlockup fix in 7.3-rc1).
+#
+# The AUR package is `linux-cachyos-rc`, NOT `linux-cachyos`: the unprefixed
+# name tracks the stable channel (7.2.x). Its .SRCINFO pkgver is `7.3.rc5-1`;
+# strip_release drops the pkgrel and yields `7.3.rc5`, exactly the recipe's
+# `pkgver=${_major}.${_rcver}` shape (`7.3.rc3` — a DOT between major and rc).
+[linux-cachyos]
+source = "aur"
+aur = "linux-cachyos-rc"
+strip_release = true

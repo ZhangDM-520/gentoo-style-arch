@@ -3,7 +3,7 @@
 
 pkgname=qt6-serialport
 # placeholder — overridden by pkgver() (git describe on dev branch)
-pkgver=6.13.0_r2285.g9d8f025b
+pkgver=6.13.0_r2291.gf64fdd97
 pkgrel=1
 arch=(x86_64)
 url='https://www.qt.io'

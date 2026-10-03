@@ -1,6 +1,6 @@
 pkgbase = cmake-git
 	pkgdesc = A cross-platform open-source make system
-	pkgver = 4.4.3.1259.g9cf50be4ce
+	pkgver = 4.4.4.1233.g5c710a430e
 	pkgrel = 1
 	url = http://www.cmake.org/
 	arch = x86_64
@@ -15,7 +15,7 @@ pkgbase = cmake-git
 	depends = libuv
 	depends = rhash
 	depends = cppdap
-	provides = cmake=4.4.3.1259.g9cf50be4ce
+	provides = cmake=4.4.4.1233.g5c710a430e
 	conflicts = cmake
 	source = git+https://gitlab.kitware.com/cmake/cmake.git
 	source = cmake-cppflags.patch

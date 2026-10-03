@@ -862,6 +862,299 @@ function pkgbuild_base -a pkg_path
     echo "$pkgbase"
 end
 
+# Raw text of the first top-level `pkgver=` assignment, unevaluated. Empty when
+# the recipe has no such line (a pkgver() function, which the sync paths skip).
+function pkgbuild_pkgver_rhs -a pkg_path
+    bash -c '
+        while IFS= read -r line; do
+            case "$line" in
+                pkgver=*)
+                    printf "%s\n" "${line#pkgver=}"
+                    exit 0
+                    ;;
+            esac
+        done <"$1/PKGBUILD"
+        exit 1
+    ' _ "$pkg_path" 2>/dev/null
+end
+
+# pkgbuild_pkgver_plan PKG_PATH TARGET
+# Plan the bump of a COMPUTED pkgver (pkgver=${_major}.${_rcver}): print one
+# `var=newvalue` row per variable assignment that must move for the expression
+# to evaluate to TARGET. Every other referenced variable keeps its current
+# value — the expression itself is never rewritten. The target is matched
+# against the expression's literal/variable segmentation and the assignment is
+# chosen by (1) keeping the most variables unchanged, then (2) the smallest
+# total edit distance to their current values: a plain rc bump moves only
+# _rcver, while a channel change lands on the split closest to what is there.
+# Exit: 0 planned (zero rows = already at TARGET) · 2 the expression is not a
+# literal-and-${var} construction (command substitution, exotic parameter
+# expansion, or it references pkgver/pkgrel/epoch) · 3 a referenced variable
+# has no single plain-literal assignment line to rewrite · 4 TARGET cannot be
+# expressed through the expression at all.
+function pkgbuild_pkgver_plan -a pkg_path target
+    bash -c '
+pkg_path=$1
+target=$2
+rhs=""
+while IFS= read -r line; do
+    case "$line" in
+        pkgver=*) rhs=${line#pkgver=}; break ;;
+    esac
+done <"$pkg_path/PKGBUILD"
+[[ -n $rhs ]] || exit 2
+case "$rhs" in
+    \"*\") rhs=${rhs#\"}; rhs=${rhs%\"} ;;
+esac
+
+# Tokenize into literal and variable segments. Anything beyond $var/${var}
+# (command substitution, other parameter expansions) is refused, never guessed.
+segs=()
+seg_vars=()
+lit=""
+i=0
+len=${#rhs}
+while ((i < len)); do
+    ch=${rhs:i:1}
+    if [[ $ch == "$" ]]; then
+        j=$((i + 1))
+        if ((j < len)) && [[ ${rhs:j:1} == "{" ]]; then
+            j=$((j + 1))
+            name=""
+            while ((j < len)) && [[ ${rhs:j:1} == [A-Za-z0-9_] ]]; do
+                name+=${rhs:j:1}
+                j=$((j + 1))
+            done
+            if [[ -z $name || ${rhs:j:1} != "}" ]]; then exit 2; fi
+            end=$((j + 1))
+        else
+            name=""
+            while ((j < len)) && [[ ${rhs:j:1} == [A-Za-z0-9_] ]]; do
+                name+=${rhs:j:1}
+                j=$((j + 1))
+            done
+            [[ -n $name ]] || exit 2
+            end=$j
+        fi
+        [[ $name == [A-Za-z_]* ]] || exit 2
+        case "$name" in pkgver | pkgrel | epoch) exit 2 ;; esac
+        if [[ -n $lit ]]; then segs+=("L$lit"); lit=""; fi
+        segs+=("V$name")
+        seg_vars+=("$name")
+        i=$end
+    elif [[ $ch == "\`" ]]; then
+        exit 2
+    else
+        lit+=$ch
+        i=$((i + 1))
+    fi
+done
+[[ -n $lit ]] && segs+=("L$lit")
+has_var=0
+for s in "${segs[@]}"; do [[ $s == V* ]] && has_var=1; done
+((has_var)) || exit 2
+
+cd "$pkg_path" || exit 2
+source ./PKGBUILD >/dev/null 2>&1 || exit 2
+declare -A cur=()
+var_order=()
+for name in "${seg_vars[@]}"; do
+    [[ -z ${cur[$name]+x} ]] || continue
+    var_order+=("$name")
+    eval "cur[\$name]=\${$name-}"
+    # Bumping means rewriting the assignment line, so it must exist exactly
+    # once and hold a plain literal — a computed assignment is not ours to edit.
+    [[ $(grep -c "^$name=" PKGBUILD) == 1 ]] || exit 3
+    assign=$(grep -m1 "^$name=" PKGBUILD)
+    val=${assign#*=}
+    case "$val" in
+        \"*\") val=${val#\"}; val=${val%\"} ;;
+    esac
+    [[ $val =~ ^[A-Za-z0-9._+-]*$ ]] || exit 3
+done
+
+# Enumerate every assignment of the expression that evaluates to TARGET.
+# A variable runs up to the next literal (or the end), so candidates are
+# bounded by that literal"s occurrences — never a combinatorial blow-up.
+sep=$(printf "\037")
+declare -a sols=()
+solve() {
+    local idx=$1 pos=$2 prefix=$3
+    local tlen=${#target}
+    if ((idx == ${#segs[@]})); then
+        ((pos == tlen)) && sols+=("$prefix")
+        return 0
+    fi
+    local seg=${segs[idx]}
+    if [[ $seg == L* ]]; then
+        local text=${seg#L}
+        [[ ${target:pos:${#text}} == "$text" ]] || return 0
+        solve $((idx + 1)) $((pos + ${#text})) "$prefix"
+        return 0
+    fi
+    local nextlit=""
+    if ((idx + 1 < ${#segs[@]})) && [[ ${segs[idx+1]} == L* ]]; then
+        nextlit=${segs[idx+1]#L}
+    fi
+    if [[ -z $nextlit ]]; then
+        if ((idx + 1 == ${#segs[@]})); then
+            ((pos < tlen)) || return 0
+            solve $((idx + 1)) $tlen "$prefix$sep${target:pos}"
+        else
+            local k
+            for ((k = pos + 1; k <= tlen; k++)); do
+                solve $((idx + 1)) $k "$prefix$sep${target:pos:k-pos}"
+            done
+        fi
+        return 0
+    fi
+    local nl=${#nextlit} o
+    for ((o = 1; pos + o + nl <= tlen; o++)); do
+        [[ ${target:pos+o:nl} == "$nextlit" ]] || continue
+        solve $((idx + 1)) $((pos + o)) "$prefix$sep${target:pos:o}"
+    done
+}
+solve 0 0 ""
+((${#sols[@]})) || exit 4
+
+lev() {
+    local a=$1 b=$2 i j
+    local -a prev currow
+    for ((j = 0; j <= ${#b}; j++)); do prev[j]=$j; done
+    for ((i = 1; i <= ${#a}; i++)); do
+        currow[0]=$i
+        for ((j = 1; j <= ${#b}; j++)); do
+            local cost=1
+            [[ ${a:i-1:1} == "${b:j-1:1}" ]] && cost=0
+            local m=$((prev[j] + 1))
+            ((currow[j-1] + 1 < m)) && m=$((currow[j-1] + 1))
+            ((prev[j-1] + cost < m)) && m=$((prev[j-1] + cost))
+            currow[j]=$m
+        done
+        prev=("${currow[@]}")
+    done
+    printf "%s\n" "${prev[${#b}]}"
+}
+
+declare -A best=()
+have_best=0
+best_unchanged=-1
+best_dist=1000000
+for sol in "${sols[@]}"; do
+    body=${sol#"$sep"}
+    IFS=$sep read -r -a vals <<<"$body"
+    ((${#vals[@]} == ${#seg_vars[@]})) || continue
+    declare -A newval=()
+    ok=1
+    for ((k = 0; k < ${#seg_vars[@]}; k++)); do
+        name=${seg_vars[k]}
+        v=${vals[k]}
+        if [[ -n ${newval[$name]+x} && ${newval[$name]} != "$v" ]]; then ok=0; break; fi
+        newval[$name]=$v
+    done
+    ((ok)) || continue
+    unchanged=0
+    dist=0
+    for name in "${var_order[@]}"; do
+        if [[ ${cur[$name]} == "${newval[$name]}" ]]; then
+            unchanged=$((unchanged + 1))
+        else
+            d=$(lev "${cur[$name]}" "${newval[$name]}")
+            dist=$((dist + d))
+        fi
+    done
+    if ((unchanged > best_unchanged)) || { ((unchanged == best_unchanged)) && ((dist < best_dist)); }; then
+        have_best=1
+        best_unchanged=$unchanged
+        best_dist=$dist
+        best=()
+        for name in "${var_order[@]}"; do best[$name]=${newval[$name]}; done
+    fi
+done
+((have_best)) || exit 4
+
+for name in "${var_order[@]}"; do
+    [[ ${cur[$name]} == "${best[$name]}" ]] && continue
+    printf "%s=%s\n" "$name" "${best[$name]}"
+done
+exit 0
+' _ "$pkg_path" "$target"
+end
+
+# apply_pkgver_version PKG_PATH NEW_PKGVER — rewrite a recipe's version.
+# A literal `pkgver=` line is rewritten in place: the historical behaviour,
+# unchanged. A COMPUTED `pkgver=${var}...` expression is never clobbered with a
+# literal (that silently pins the version and defeats the variable tracking,
+# the pkgver()-override hazard in reverse); instead the variables the
+# expression expands are bumped so it evaluates to NEW_PKGVER. Handles any
+# pkgver=${var} recipe, not one package's shape.
+# Return: 0 applied (or nothing to do) · 2 the write failed (the caller owns
+# restore semantics) · 3 unsupported pkgver expression · 4 NEW_PKGVER cannot be
+# expressed through it · 5 a referenced variable cannot be rewritten.
+function apply_pkgver_version -a pkg_path new_pkgver
+    set -l pkg_name (basename "$pkg_path")
+    set -l rhs (pkgbuild_pkgver_rhs "$pkg_path")
+
+    # Computed iff bash would expand it: anything outside a single-quoted RHS
+    # that carries $ or a command substitution. Everything else is a literal
+    # line and keeps the historical rewrite byte for byte.
+    set -l computed 0
+    if not string match -q "'*'" -- "$rhs"
+        if string match -q '*$*' -- "$rhs"; or string match -q '*`*' -- "$rhs"
+            set computed 1
+        end
+    end
+
+    if test $computed -eq 0
+        if not sed -i "s/^pkgver=.*/pkgver=$new_pkgver/" "$pkg_path/PKGBUILD"
+            return 2
+        end
+        return 0
+    end
+
+    # Computed: touch nothing unless the version must actually move.
+    set -l cur_pkgver (pkgbuild_var "$pkg_path" pkgver)
+    if test "$cur_pkgver" = "$new_pkgver"
+        return 0
+    end
+
+    set -l plan (pkgbuild_pkgver_plan "$pkg_path" "$new_pkgver")
+    set -l plan_status $status
+    switch $plan_status
+        case 0
+            ;
+        case 2
+            ui_error "$pkg_name: pkgver is computed by an expression this version sync cannot rewrite (only literal-and-\${var} constructions are); bump its variables by hand"
+            return 3
+        case 3
+            ui_error "$pkg_name: a pkgver variable has no single plain-literal assignment line to rewrite; bump it by hand"
+            return 5
+        case 4
+            ui_error "$pkg_name: upstream version $new_pkgver cannot be expressed through this recipe's pkgver expression; the recipe keeps its current version"
+            return 4
+        case '*'
+            ui_error "$pkg_name: could not evaluate the recipe's pkgver expression"
+            return 3
+    end
+
+    for row in $plan
+        set -l pair (string split -m 1 = -- "$row")
+        if test (count $pair) -ne 2; or not string match -qr '^[A-Za-z_][A-Za-z0-9_]*$' -- "$pair[1]"
+            ui_error "$pkg_name: version sync produced an invalid variable rewrite"
+            return 3
+        end
+        if not string match -qr '^[A-Za-z0-9._+]+$' -- "$pair[2]"
+            ui_error "$pkg_name: version sync produced an unsupported value for $pair[1]"
+            return 3
+        end
+        if not sed -i "s/^$pair[1]=.*/$pair[1]=$pair[2]/" "$pkg_path/PKGBUILD"
+            ui_error "$pkg_name: could not update $pair[1] for the computed pkgver"
+            return 2
+        end
+    end
+    return 0
+end
+
 # ─── Sync stable package version with Arch repos ─────────────────────────────
 # Return contract (build_package switches on it):
 #   0 = nothing to do — not a stable recipe, already current, or the repo
@@ -980,8 +1273,12 @@ function sync_stable_version -a pkg_path
     end
 
     # Update pkgver/pkgrel (+ epoch when the repo carries one — never inside pkgver,
-    # makepkg rejects colons there)
-    if not sed -i "s/^pkgver=.*/pkgver=$repo_pkgver/" "$pkg_path/PKGBUILD"
+    # makepkg rejects colons there). A computed pkgver=${var} recipe gets its
+    # version variables bumped instead of the expression being overwritten with
+    # a literal (apply_pkgver_version); a literal pkgver= line is rewritten
+    # exactly as before.
+    apply_pkgver_version "$pkg_path" "$repo_pkgver"
+    if test $status -ne 0
         return 2
     end
     if not sed -i "s/^pkgrel=.*/pkgrel=$repo_pkgrel/" "$pkg_path/PKGBUILD"
@@ -1075,8 +1372,21 @@ function sync_nvchecker_version -a package_id pkg_path
         return 2
     end
 
-    set -l provider_info (bash "$resolver" --provider "$config" "$pkgbase" 2>"$tmp/provider.err")
+    set -l sync_key "$pkgbase"
+    set -l provider_info (bash "$resolver" --provider "$config" "$sync_key" 2>"$tmp/provider.err")
     set -l provider_status $status
+    if test $provider_status -ne 0; and test "$package_id" != "$pkgbase"
+        # A tracker section may be named for the recipe's topology id instead
+        # of its pkgbase: pkgbase is flavor-derived for some recipes
+        # (linux-cachyos evaluates to linux-cachyos-rt-bore-lto from its
+        # scheduler knobs) while the recipe identity is stable. pkgbase is
+        # tried first, so a conventional section resolves exactly as before.
+        set provider_info (bash "$resolver" --provider "$config" "$package_id" 2>"$tmp/provider.err")
+        set provider_status $status
+        if test $provider_status -eq 0
+            set sync_key "$package_id"
+        end
+    end
     if test $provider_status -ne 0; or test (count $provider_info) -ne 2
         ui_error "$pkg_name: cannot read its nvchecker provider metadata"
         if test -s "$tmp/provider.err"
@@ -1088,7 +1398,7 @@ function sync_nvchecker_version -a package_id pkg_path
     set -l provider "$provider_info[1]"
     set -l provider_id "$provider_info[2]"
 
-    set -l new_pkgver (env TMPDIR="$tmp" bash "$resolver" --resolve "$config" "$pkgbase" 2>"$tmp/resolve.err")
+    set -l new_pkgver (env TMPDIR="$tmp" bash "$resolver" --resolve "$config" "$sync_key" 2>"$tmp/resolve.err")
     set -l resolve_status $status
     if test $resolve_status -ne 0; or test (count $new_pkgver) -ne 1
         ui_error "$pkg_name: nvchecker could not resolve a version from $provider_id"
@@ -1211,10 +1521,21 @@ function sync_nvchecker_version -a package_id pkg_path
     end
 
     if test "$metadata_changed" -eq 1
-        if not sed -i "s/^pkgver=.*/pkgver=$new_pkgver/" "$pkg_path/PKGBUILD"
+        # A literal pkgver= line is rewritten in place; a computed
+        # pkgver=${var}... expression has its variables bumped instead (e.g.
+        # _rcver=rc3 → _rcver=rc5), never clobbered with a literal.
+        apply_pkgver_version "$pkg_path" "$new_pkgver"
+        set -l pkgver_write_status $status
+        if test $pkgver_write_status -eq 2
             ui_error "$pkg_name: could not update pkgver"
             restore_version_sync_recipe "$pkg_path" "$original" "$tmp"
             return 2
+        else if test $pkgver_write_status -ne 0
+            # The computed-pkgver planner refused (unsupported expression, an
+            # unrewritable variable, or the version is not expressible through
+            # the recipe's pkgver expression) and already said why.
+            restore_version_sync_recipe "$pkg_path" "$original" "$tmp"
+            return 4
         end
         if not sed -i "s/^pkgrel=.*/pkgrel=$new_pkgrel/" "$pkg_path/PKGBUILD"
             ui_error "$pkg_name: could not update pkgrel"

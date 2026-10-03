@@ -77,6 +77,11 @@ means no drift between what a human sees and what a script parses: the
 dashboard, the summary and the machine block are views of the same rows, not
 three parallel accounts of the run.
 
+The install path is one deep module in the same sense: `install_plan` decides
+once (silent rows) and `install_execute` renders and transacts, and the hidden
+`--install-decide` seam prints those same rows for fixtures — the decision
+surface is testable without pacman, sudo or a build.
+
 The install path also owns one payload invariant: a package built from a
 recipe that instruments with `-fprofile-generate` is refused if its archive
 still carries an absolute `.gcda` destination. The verification *code*

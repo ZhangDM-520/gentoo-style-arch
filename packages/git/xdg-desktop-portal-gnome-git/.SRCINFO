@@ -1,6 +1,6 @@
 pkgbase = xdg-desktop-portal-gnome-git
 	pkgdesc = A backend implementation for xdg-desktop-portal for the GNOME desktop environment
-	pkgver = 51.0+1+g552906b
+	pkgver = 51.0+2+ga4f6ed6
 	pkgrel = 1
 	url = https://gitlab.gnome.org/GNOME/xdg-desktop-portal-gnome
 	arch = x86_64

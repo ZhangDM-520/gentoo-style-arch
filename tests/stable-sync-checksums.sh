@@ -71,6 +71,15 @@ set -euo pipefail
 #        refuses and restores the recipe.
 #  31. Zen's recipe ID/pkgname difference and local source filename override
 #        still select the correct config section and GitHub asset digest.
+#  34. a computed pkgver=${var} recipe gets its VERSION VARIABLES bumped
+#        (_rcver=rc3 → _rcver=rc5 — never a literal pkgver write over the
+#        expression), its moved source re-anchored, and its committed .SRCINFO
+#        refreshed in lockstep.
+#  35. a computed pkgver expression the planner cannot rewrite (command
+#        substitution) refuses and rolls back — the historical rewrite would
+#        have clobbered the expression with a literal.
+#  36. a tracker section named for the recipe id still resolves when the
+#        pkgbase carries a flavor suffix.
 #
 # All external collaborators (pacman, curl, updpkgsums, makepkg, nvchecker) are
 # stubs on PATH, so this runs with no network and never builds anything.
@@ -248,10 +257,38 @@ EOF
     chmod +x "$dir/bin/updpkgsums"
 
     # Records the argv it was invoked with; on every refusal path it must never
-    # be created at all.
+    # be created at all. --printsrcinfo is pure metadata — the version sync
+    # refreshes the committed .SRCINFO through it — so it models makepkg's
+    # .SRCINFO shape from the recipe instead of building anything. The
+    # computed-pkgver case asserts .SRCINFO consistency by regenerating through
+    # this same code path and diffing.
     cat >"$dir/bin/makepkg" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$GSA_FAKE_DIR/makepkg_argv"
+for arg in "$@"; do
+    if [[ $arg == --printsrcinfo ]]; then
+        dir=$PWD
+        args=("$@")
+        for ((i = 0; i < ${#args[@]}; i++)); do
+            [[ ${args[i]} == --dir ]] && dir=${args[i + 1]}
+        done
+        bash -c '
+            cd "$1" || exit 1
+            source ./PKGBUILD >/dev/null 2>&1 || exit 1
+            printf "pkgbase = %s\n" "${pkgbase:-${pkgname[0]}}"
+            printf "\tpkgver = %s\n" "$pkgver"
+            printf "\tpkgrel = %s\n" "$pkgrel"
+            for s in "${source[@]}"; do printf "\tsource = %s\n" "$s"; done
+            for alg in sha256sums sha512sums b2sums md5sums; do
+                declare -p "$alg" >/dev/null 2>&1 || continue
+                eval "vals=(\"\${$alg[@]}\")"
+                for v in "${vals[@]}"; do printf "\t%s = %s\n" "$alg" "$v"; done
+            done
+            printf "pkgname = %s\n" "${pkgname[0]}"
+        ' _ "$dir"
+        exit 0
+    fi
+done
 printf 'fake makepkg: %s\n' "$*"
 exit 0
 EOF
@@ -1215,4 +1252,130 @@ fi
   #  integrity sites refuse through their own checks (case 30's 'AUR published
   #  checksum'), so the provider-branch pin needs that site mapping first.
   #  The builder-side classification itself is fixed and covered by case 32.)
+
+# ─── Case 34: a computed pkgver bumps its variables, not a literal write ────
+# linux-cachyos declares pkgver=${_major}.${_rcver} (the kernel recipe's exact
+# shape). A version-sync bump must move _rcver=rc3 → _rcver=rc5 and leave the
+# expression, _major and _tagrel alone: writing pkgver=<new> literally would
+# pin the version and orphan the variables the rest of the recipe derives from
+# (_srctag, _stable). The bump moves source=(), so the same run must re-anchor
+# the sums to the provider checksum and refresh the committed .SRCINFO.
+dir="$fixture/computed-pkgver"
+make_aur_version_workspace "$dir"
+cat >"$dir/packages/core/s1/PKGBUILD" <<'EOF'
+pkgname=s1
+_major=2.0
+_rcver=rc1
+_tagrel=4
+pkgver=${_major}.${_rcver}
+pkgrel=1
+arch=(any)
+source=("https://example.invalid/s1-${_major}-${_rcver}-${_tagrel}.tar.gz")
+sha256sums=('0000000000000000000000000000000000000000000000000000000000000000')
+EOF
+recipe="$dir/packages/core/s1"
+GSA_FAKE_DIR="$dir/fake" "$dir/bin/makepkg" --printsrcinfo --dir "$recipe" \
+    >"$recipe/.SRCINFO" 2>/dev/null
+: >"$dir/fake/makepkg_argv" # the pre-generation call is setup, not the run
+set_aur_srcinfo "$dir" s1 "2.0.rc2" 1 \
+    "https://example.invalid/s1-2.0-rc2-4.tar.gz" "$published_sha"
+set_delivery "$dir" "$published_payload"
+GSA_FAKE_NVCHECK_VERSION="2.0.rc2" run_build "$dir" 'computed-pkgver' 0
+
+# (a) the version moved through the VARIABLES
+grep -q '^_rcver=rc2$' "$recipe/PKGBUILD" \
+    || fail 'computed-pkgver: _rcver was not bumped to rc2'
+grep -Fqx 'pkgver=${_major}.${_rcver}' "$recipe/PKGBUILD" \
+    || fail 'computed-pkgver: the pkgver expression was not kept intact'
+if grep -q '^pkgver=2\.0\.rc2$' "$recipe/PKGBUILD"; then
+    fail 'computed-pkgver: a literal pkgver=2.0.rc2 was written over the expression'
+fi
+grep -q '^_major=2\.0$' "$recipe/PKGBUILD" \
+    || fail 'computed-pkgver: _major moved although only _rcver had to'
+grep -q '^_tagrel=4$' "$recipe/PKGBUILD" \
+    || fail 'computed-pkgver: _tagrel moved although it is not part of pkgver'
+# The checksum contract is source-shaped, not rewrite-shaped: the moved source
+# must be re-anchored to the provider's published checksum and verified against
+# the fetched bytes — never left with the previous version's sum.
+[[ -s $dir/fake/updpkgsums_calls ]] \
+    || fail 'computed-pkgver: the moved source never refreshed its sums'
+grep -q "^sha256sums=('$published_sha')$" "$recipe/PKGBUILD" \
+    || fail 'computed-pkgver: the moved source was not anchored to the AUR checksum'
+grep -q 're-anchored to AUR' "$dir/state/logs/s1.log" \
+    || fail 'computed-pkgver: the log does not name the AUR checksum authority'
+[[ -s $dir/fake/makepkg_argv ]] \
+    || fail 'computed-pkgver: the recipe did not continue to the build'
+# (b) the committed .SRCINFO was refreshed in lockstep with the bump
+grep -q 'pkgver = 2.0.rc2' "$recipe/.SRCINFO" \
+    || fail 'computed-pkgver: the committed .SRCINFO still pins the old version'
+grep -q 's1-2.0-rc2-4.tar.gz' "$recipe/.SRCINFO" \
+    || fail 'computed-pkgver: the committed .SRCINFO still names the old source'
+GSA_FAKE_DIR="$dir/fake" "$dir/bin/makepkg" --printsrcinfo --dir "$recipe" \
+    >"$dir/fake/srcinfo.regen" 2>/dev/null
+diff -u "$dir/fake/srcinfo.regen" "$recipe/.SRCINFO" >/dev/null \
+    || fail 'computed-pkgver: the committed .SRCINFO is not consistent with the bumped recipe'
+
+# ─── Case 35: a pkgver expression the planner cannot rewrite is refused ─────
+# The planner only moves plain variable assignments. Command substitution
+# inside pkgver is not its business — and the historical rewrite would have
+# CLOBBERED the expression with a literal, silently pinning the version. The
+# refusal must leave the recipe byte-identical and fail the package loudly.
+dir="$fixture/computed-pkgver-unsupported"
+make_aur_version_workspace "$dir"
+cat >"$dir/packages/core/s1/PKGBUILD" <<'EOF'
+pkgname=s1
+_major=2.0
+_rcver=rc1
+pkgver=${_major}.$(printf 'rc1')
+pkgrel=1
+arch=(any)
+source=("https://example.invalid/s1-${_major}.${_rcver}.tar.gz")
+sha256sums=('0000000000000000000000000000000000000000000000000000000000000000')
+EOF
+set_aur_srcinfo "$dir" s1 "2.0.rc2" 1 \
+    "https://example.invalid/s1-2.0.rc2.tar.gz" "$published_sha"
+set_delivery "$dir" "$published_payload"
+cp -- "$dir/packages/core/s1/PKGBUILD" "$dir/fake/PKGBUILD.original"
+GSA_FAKE_NVCHECK_VERSION="2.0.rc2" \
+    run_build "$dir" 'computed-pkgver-unsupported' fail
+
+cmp -s "$dir/fake/PKGBUILD.original" "$dir/packages/core/s1/PKGBUILD" \
+    || fail 'computed-pkgver-unsupported: the recipe changed despite the refusal'
+[[ ! -s $dir/fake/updpkgsums_calls && ! -s $dir/fake/makepkg_argv ]] \
+    || fail 'computed-pkgver-unsupported: sums or build ran after the refusal'
+grep -q 'expression this version sync cannot rewrite' "$dir/out.txt" \
+    || fail 'computed-pkgver-unsupported: the refusal does not name the unsupported expression'
+grep -q '^s1 failed ' "$dir/out.txt" \
+    || fail 'computed-pkgver-unsupported: the run record did not classify the refusal as failure'
+
+# ─── Case 36: a tracker section named for the recipe id resolves ────────────
+# pkgbase is flavor-derived for some recipes (linux-cachyos evaluates to
+# linux-cachyos-rt-bore-lto from its scheduler knobs) while its tracker file
+# follows the stable recipe identity. The section is looked up by pkgbase first
+# (case 31 pins that path for a pkgname-derived pkgbase), then by the recipe
+# id, so a flavored pkgbase never makes its own tracker unreachable.
+dir="$fixture/section-by-id"
+make_case_workspace "$dir" '99.0.0-1' "https://example.invalid/s1-static.tar.gz"
+opt_in_nvchecker "$dir" s1 packages/stable/s1 stable
+cat >"$(pkgfile "$dir")" <<'EOF'
+pkgbase=s1-flavored
+pkgname=(s1-flavored)
+pkgver=1.0.0
+pkgrel=1
+arch=(any)
+source=("https://example.invalid/s1-static.tar.gz")
+sha256sums=('0000000000000000000000000000000000000000000000000000000000000000')
+EOF
+cat >"$dir/packages/stable/s1/.nvchecker.toml" <<'EOF'
+[s1]
+source = "github"
+github = "example/s1"
+EOF
+make_nvchecker_stub "$dir"
+GSA_FAKE_NVCHECK_VERSION="$repo_version" run_build "$dir" 'section-by-id' 0
+
+grep -q "^pkgver=$repo_version$" "$(pkgfile "$dir")" \
+    || fail 'section-by-id: the id-named tracker section was not resolved for a flavored pkgbase'
+grep -q 'synced with GitHub example/s1' "$dir/out.txt" \
+    || fail 'section-by-id: the resolved version provider was not reported'
 printf 'stable-sync fixture: PASS\n'

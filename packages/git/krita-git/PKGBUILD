@@ -8,7 +8,7 @@
 
 _pkgname=krita
 pkgname=${_pkgname}-git
-pkgver=6.1.0.prealpha.r66759.a5f9a06
+pkgver=6.1.0.prealpha.r66801.351297c
 pkgrel=1
 pkgdesc='A full-featured free digital painting studio. Qt 6 git version.'
 arch=('x86_64')

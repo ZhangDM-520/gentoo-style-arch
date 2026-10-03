@@ -296,6 +296,20 @@
     measured: `flock -x` succeeds on root-owned 0644 and 0444 files). Pinned by
     `tests/log-ownership.sh` (both halves — the unprivileged quarantine and
     the root-repair section).
+20. **One install decision, one seam**: `install_plan` computes the
+    transaction plan once as silent rows (`install`/`skip`/`refuse`/`noop`)
+    and only `install_execute` renders and runs the single `pacman -U`
+    transaction — deciding again inside a render or execution path is what
+    produced five divergent decision sites (NOTE.md, feature record wave 2).
+    Decisions are fail-closed: an empty archive list is `refuse empty-list`
+    under `--install` (rc 1) and `noop empty-list` under `--installall`, and a
+    `-fprofile-generate` archive still carrying a baked `.gcda`/`.profraw`
+    destination is `refuse pgo-*` via `pgo_payload_refusals`. Assert install
+    behaviour through the hidden `--install-decide <checked|force>` seam (the
+    plan rows on stdout, rc 0 plan / 1 refusal / 2 bad usage — no pacman
+    transaction, sudo, flock or makepkg), never by scraping rendered output.
+    Pinned by `tests/install-archive-guard.sh`, `tests/pgo-payload-guard.sh`
+    and `tests/run-record.sh`.
 
 ## 2. Workspace overview
 

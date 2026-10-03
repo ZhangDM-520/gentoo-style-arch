@@ -3,7 +3,7 @@
 
 pkgname=qt6-webchannel
 # placeholder — overridden by pkgver() (git describe on dev branch)
-pkgver=6.13.0_r1166.gf08a6df
+pkgver=6.13.0_r1169.g1399230
 pkgrel=1
 arch=(x86_64)
 url='https://www.qt.io'

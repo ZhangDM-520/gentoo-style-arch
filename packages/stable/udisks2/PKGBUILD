@@ -8,7 +8,7 @@ pkgname=(
 )
 # udisks2-lvm2 split removed 2026-09-04: no LVM volumes on this machine.
 pkgver=2.11.2
-pkgrel=1.1
+pkgrel=1.2
 pkgdesc="Daemon, tools and libraries to access and manipulate disks, storage devices and technologies"
 arch=(x86_64)
 url="https://www.freedesktop.org/wiki/Software/udisks/"

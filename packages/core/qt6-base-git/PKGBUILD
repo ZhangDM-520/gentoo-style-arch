@@ -7,7 +7,7 @@
 pkgbase=qt6-base-git
 pkgname=(qt6-base-git
          qt6-xcb-private-headers-git)
-pkgver=6.12.0_r81448.g71794df97d3
+pkgver=6.12.0_r82007.g2beefb38db9
 pkgrel=1
 arch=($CARCH)
 url='https://www.qt.io'

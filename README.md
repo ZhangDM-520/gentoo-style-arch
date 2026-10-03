@@ -88,7 +88,11 @@ fish build-all.fish --no-deps glib2-git     # glib2-git alone
 Use `--install` only when the immediately installed package state is desired.
 A package whose exact version is already installed (with an install date not
 older than its archive) skips its transaction; `--forceinstall` implies
-`--install` and always installs. Unprivileged runs use `sudo` for each
+`--install` and always installs. Install decisions are fail-closed — a run
+whose discovery yields no archive refuses to install nothing, and PGO
+archives carrying a baked profile destination are refused — and
+`fish build-all.fish --install-decide <checked|force> <archive...>` prints
+exactly what would be decided (rc 0 plan / 1 refusal / 2 bad usage). Unprivileged runs use `sudo` for each
 transaction; long runs are generally more reliable when the supervisor is
 started as:
 

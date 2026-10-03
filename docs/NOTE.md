@@ -36,6 +36,86 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-03 — openshadinglanguage 1.15.7.0: version-sync bump left osl-llvm-compat.patch version-stale
+
+Symptom: `prepare()` failed `Hunk #1 FAILED at 58.` on a clean extract of the
+1.15.7.0 tarball; on a stale half-patched `src/` the same failure misreported as
+`Reversed (or previously applied) patch detected!  8 out of 8 hunks ignored`.
+After the patch was rebased, the first live build then failed one step later in
+`build()`: `llvm_util.cpp: error: 'class llvm::ilist_iterator_w_bits<...>' has
+no member named 'isSet'` in `op_alloca`.
+
+Root cause: the tree's version sync bumped the recipe 1.15.3.0 → 1.15.7.0 while
+`osl-llvm-compat.patch` was still written against 1.15.3.0 sources. Measured
+against a clean 1.15.7.0 extract, the patch mixed three fates: hunks upstream
+had absorbed (the `< 220` UnsafeFPMath / `< 230` NoInfs-NoNaNs-NoSignedZeros
+guards, and the UnifyFunctionExitNodes include removal — 1.15.7.0 no longer
+references that header at all), hunks still load-bearing (VERSION_MAX
+23.9 → 24.9, and the LLVM-24 TargetOptions removals AllowFPOpFusion/FPOpFusion,
+NoTrappingFPMath, HonorSignDependentRoundingFPMathOption, FloatABIType — all
+four confirmed absent from the installed llvm-git 24 headers), and stale
+context. Two further LLVM-24 API changes surfaced only at compile time:
+`llvm::PassInfoMixin` moved to `llvm::detail` (the pass must derive from
+`llvm::OptionalPassInfoMixin`, verified by negative compile), and
+`IRBuilderBase::InsertPoint` became `using InsertPoint = BasicBlock::iterator`
+(IRBuilder.h:245), losing `isSet()`.
+
+Fix: refreshed the patch against a clean 1.15.7.0 extract — dropped the
+absorbed hunks, rebased the load-bearing ones, kept the new-PM plumbing hunks
+(`OptionalPassInfoMixin` + `llvm::`-qualified `createModuleToFunctionPassAdaptor`
+calls), and relocated `op_alloca`'s insertion-point assertion to save time
+(`OSL_ASSERT(m_builder->GetInsertBlock())` before `saveIP()`) so it stays
+expressible on every LLVM version. sha512sums[1] updated with the new patch
+bytes and `.SRCINFO` regenerated in the same change.
+
+Validation: `makepkg -o` from a clean extract (both sha512 entries "Passed",
+all 3 files patch with zero failed/skipped hunks, "Sources are ready"); the
+patched tree compared byte-identical to the intended result; `ninja` resume of
+the launcher's failed lane tree compiles and links the build() surface;
+`tests/stable-sync-checksums.sh` PASS; fixture battery green except the three
+known campaign-contention failures.
+
+Rules: (1) a version-sync bump of a recipe carrying patches must re-verify the
+patch against the new source from a **clean** extract — `command rm -rf src
+pkg` first, because a stale half-patched `src/` turns a failed application into
+the misleading "Reversed (or previously applied)" message; decide hunk fate
+from the new source, not from which patch lines survive. (2) prepare() passing
+is not build() passing: an LLVM-snapshot bump can break compile-time APIs
+(`isSet()`, `PassInfoMixin`) that only a compile exercises.
+
+## 2026-10-03 — install-pipeline docs pass: verify a status claim against artifacts first
+
+Symptom — a session briefing reported the `--install` decision-pipeline work
+as "54/54 tests green, pending docs", naming `tests/install-refusals.sh`,
+`tests/pgo-input.sh`, `install_pending_refuses` and a `pgo_min_samples`
+config knob. None of those names exist in this tree, in any commit (pickaxe
+across all refs), in any session store, or anywhere on the filesystem, and
+the briefing's score card mixed in another project's test areas. A session
+working in the same checkout committed `9c3eeae` mid-investigation, so the
+tree moved while it was being measured.
+
+Root cause — a status report was taken at face value before checking it
+against artifacts; the named work product either lived in a different
+workspace or was never real here. Writing the briefed docs verbatim would
+have documented behaviour that does not exist.
+
+Fix — documented only what the code verifiably does: the one-plan/one-
+executor split (`install_plan`/`install_execute`), the fail-closed rows
+(`refuse empty-list` checked / `noop empty-list` force, `refuse pgo-*` from
+`pgo_payload_refusals`), and the hidden `--install-decide <checked|force>`
+seam — in MEMORY §1 rule 20, build-guide (Installation modes), architecture
+(install path), maintainer-guide (changing install behaviour), README and
+CONTRIBUTING (Validation).
+
+Validation — seam exit codes measured live (force-empty `noop` → 0,
+checked-empty `refuse` → 1, bad/missing mode → 2); claims match
+`build-all.fish` (`install_plan` rows + the `--install-decide` dispatch);
+`bash tests/run-all.sh` → PASS (47 fixture(s)) after the edits.
+
+Durable rule — a claimed test score or "done" status is not evidence;
+measure the artifact (files, `git log -S`, seam output) before acting on it,
+and never document behaviour the tree does not have.
+
 ## 2026-10-03 — glibc-git vs mold: map parse and `-r` symbol versions
 
 - **Symptom**: `glibc-git` `build()` died at `elf/rtld-libc.a` with

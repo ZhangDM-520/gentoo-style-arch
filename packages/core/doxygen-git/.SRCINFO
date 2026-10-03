@@ -1,6 +1,6 @@
 pkgbase = doxygen-git
 	pkgdesc = A documentation system for C++, C, Java, IDL and PHP - git version
-	pkgver = 1.18.0.r116.gae4c4026
+	pkgver = 1.18.0.r182.gd4fe2eb0
 	pkgrel = 1
 	url = http://www.doxygen.org
 	arch = i686
@@ -14,7 +14,7 @@ pkgbase = doxygen-git
 	makedepends = python
 	depends = gcc-libs
 	optdepends = graphviz: enable dot support
-	provides = doxygen=1.18.0.r116.gae4c4026
+	provides = doxygen=1.18.0.r182.gd4fe2eb0
 	conflicts = doxygen
 	replaces = doxygen-svn
 	source = doxygen-git::git+https://github.com/doxygen/doxygen.git

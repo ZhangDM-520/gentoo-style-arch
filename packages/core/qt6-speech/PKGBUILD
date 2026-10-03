@@ -3,7 +3,7 @@
 
 pkgname=qt6-speech
 # placeholder — overridden by pkgver() (git describe on dev branch)
-pkgver=6.13.0_r1062.g383cc05
+pkgver=6.13.0_r1065.gd62ec4d
 pkgrel=1
 arch=(x86_64)
 url='https://www.qt.io'

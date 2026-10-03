@@ -1,6 +1,6 @@
 pkgbase = libdex-git
 	pkgdesc = A library supporting Deferred Execution (git build)
-	pkgver = 1.2.0.r1.g8256124
+	pkgver = 1.2.0.r13.gdd075ea
 	pkgrel = 1
 	url = https://gitlab.gnome.org/GNOME/libdex
 	arch = x86_64

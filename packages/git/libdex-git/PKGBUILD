@@ -1,7 +1,7 @@
 # Maintainer: auto-generated
 pkgname=libdex-git
 _pkgname=libdex
-pkgver=1.2.0.r1.g8256124
+pkgver=1.2.0.r13.gdd075ea
 pkgrel=1
 pkgdesc="A library supporting Deferred Execution (git build)"
 arch=('x86_64')

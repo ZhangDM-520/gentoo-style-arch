@@ -84,6 +84,12 @@ batch. ROCm and stock-name replacement packages may require immediate
 installation before the next consumer starts. Verify the installed ABI,
 provides, and dependency closure rather than trusting version strings alone.
 
+Changing install behaviour means changing `install_plan`'s rows — never
+introducing a second decision in a render or execution path — and pinning the
+change with a fixture that asserts the hidden `--install-decide
+<checked|force>` rows (`install`/`skip`/`refuse`/`noop`, rc 0 plan / 1 refusal
+/ 2 bad usage) instead of rendered prose.
+
 Coupled-batch membership is topology data, in the record's `tags` field:
 `abi=must` marks the ABI origin (llvm-git, the Qt base packages) and the
 modules that must rebuild with it; `abi=should` marks same-pass candidates

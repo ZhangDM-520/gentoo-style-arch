@@ -97,7 +97,7 @@ rows() { # print the numbered rows of $out, as bare package names
 # The scrape is self-pinning: if its match count drifts from the number of
 # calls this file actually carries, a call was added/indented without updating
 # the expectation below (or a non-call line started imitating one).
-expected_invocations=21
+expected_invocations=22
 scanned_invocations=$(grep -c -E '^(run|run_split) ' "${BASH_SOURCE[0]}")
 [[ $scanned_invocations -eq $expected_invocations ]] ||
     fail "self-scan found $scanned_invocations column-0 run/run_split calls, expected $expected_invocations (new calls must start at column 0 and bump this count)"
@@ -193,14 +193,69 @@ require_fail 'the mistyped option --intenstiy'
 require_in 'the mistyped option --intenstiy' "'--intensity'"
 
 # --- a range indexes the selection, and the listing says which -------------
-recipes=$(find "$root/packages" -mindepth 3 -maxdepth 3 -name .SRCINFO | wc -l)
+# The in-scope set is the ENABLED topology records, read through the builder's
+# --topology data channel (one reader, one truth — the seam
+# tests/srcinfo-freshness.sh and the project configuration section below
+# consume), never a second parser of config/ and never a bare .SRCINFO count:
+# a count cannot tell an intentional scope exclusion from an accidental
+# comment-out. The listing covers exactly the in-scope set; on-disk recipe
+# dirs are reconciled against it symmetrically below, so the two sets cannot
+# drift and stay "accidentally equal".
+run_split --topology
+[[ $rc -eq 0 ]] || fail "--topology exited $rc: $out_stderr"
+mapfile -t topo_paths < <(grep -v '^#' <<<"$out_stdout" | cut -d'|' -f2 | sort)
+[[ ${#topo_paths[@]} -gt 0 ]] || fail "--topology listed no in-scope recipes"
+
+mapfile -t recipe_paths < <(
+    cd "$root" || exit 1
+    find packages -mindepth 3 -maxdepth 3 -name .SRCINFO |
+        sed 's|/\.SRCINFO$||' | sort
+)
+recipes=${#recipe_paths[@]}
 [[ $recipes -gt 0 ]] || fail "no recipe .SRCINFO files found under $root/packages"
 
+# Recipes deliberately out of scope: present on disk WITH their .SRCINFO (so a
+# deliberate invocation can still build them) but carrying no enabled topology
+# record. This is a decision list, not a parsed one: deriving exclusions from
+# `# id|...` comment syntax would make an accidental comment-out look
+# sanctioned. Each entry duplicates the dated decision recorded beside the
+# commented-out record in config/topology.conf, and every drift between the
+# two is loud in exactly one direction (re-enable -> "both excluded and in the
+# topology"; drop the entry -> "neither in the topology nor excluded"; add a
+# new excluded recipe without an entry -> same).
+excluded_paths=$'packages/misc/linux-cachyos'
+
+declare -A topo_set=() recipe_set=() excluded_set=()
+for p in "${topo_paths[@]}"; do topo_set["$p"]=1; done
+for p in "${recipe_paths[@]}"; do recipe_set["$p"]=1; done
+while IFS= read -r p; do
+    [[ -n $p ]] && excluded_set["$p"]=1
+done <<<"$excluded_paths"
+
+for p in "${!excluded_set[@]}"; do
+    [[ -n ${recipe_set[$p]:-} ]] ||
+        fail "excluded recipe '$p' is not a .SRCINFO-bearing recipe dir - fix the exclusion list"
+    [[ -z ${topo_set[$p]:-} ]] ||
+        fail "recipe '$p' is both excluded and in the topology - pick one"
+done
+for p in "${topo_paths[@]}"; do
+    [[ -n ${recipe_set[$p]:-} ]] ||
+        fail "in-scope recipe '$p' has no .SRCINFO - pacman-name resolution would silently miss it"
+done
+unaccounted=()
+for p in "${recipe_paths[@]}"; do
+    [[ -n ${topo_set[$p]:-} || -n ${excluded_set[$p]:-} ]] && continue
+    unaccounted+=("$p")
+done
+[[ ${#unaccounted[@]} -eq 0 ]] ||
+    fail "recipe dirs neither in the topology nor excluded: ${unaccounted[*]} - an accidental comment-out looks exactly like this"
+
+in_scope=${#topo_paths[@]}
 run -l
 require_ok 'the whole-set listing'
 all_rows=$(rows | wc -l)
-[[ $all_rows -eq $recipes ]] ||
-    fail "the whole-set listing has $all_rows rows but there are $recipes recipes"
+[[ $all_rows -eq $in_scope ]] ||
+    fail "the whole-set listing has $all_rows rows but the topology has $in_scope in-scope recipes ($recipes recipe dirs on disk, ${#excluded_set[@]} excluded)"
 
 run -n
 require_ok 'a bare -n'
@@ -272,8 +327,8 @@ glib2_rows=$(rows | wc -l)
 [[ $(rows | sed -n 1p) == 'glib2-git' ]] ||
     fail "a bare glib2-git does not list glib2-git first: [$(rows | head -3 | tr '\n' ' ')]"
 
-printf 'cli hints fixture: PASS (%s recipes, %s-row selection indexed, extra forms announced)\n' \
-    "$recipes" "$git_rows"
+printf 'cli hints fixture: PASS (%s recipes on disk: %s in scope, %s excluded; %s-row selection indexed, extra forms announced)\n' \
+    "$recipes" "$in_scope" "${#excluded_set[@]}" "$git_rows"
 
 # ==== version-sync topology tag ====
 (

@@ -6,7 +6,7 @@
 
 pkgbase=pyside6-git
 pkgname=pyside6-git
-pkgver=6.12.0.r12455.g1fba41dfd
+pkgver=6.12.0.r12518.g7fcec1b26
 pkgrel=1
 pkgdesc='Python/C++ Qt6 bindings (shiboken6 + PySide6) from pyside-setup dev, built against qt6-base-git'
 arch=(x86_64)

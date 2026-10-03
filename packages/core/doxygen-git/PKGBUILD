@@ -1,6 +1,6 @@
 # Maintainer: Wouter Haffmans <wouter@simply-life.net>
 pkgname=doxygen-git
-pkgver=1.18.0.r116.gae4c4026
+pkgver=1.18.0.r182.gd4fe2eb0
 pkgrel=1
 pkgdesc="A documentation system for C++, C, Java, IDL and PHP - git version"
 arch=('i686' 'x86_64')

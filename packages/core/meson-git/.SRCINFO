@@ -1,6 +1,6 @@
 pkgbase = meson-git
 	pkgdesc = SCons-like build system that uses python as a front-end language and Ninja as a building backend
-	pkgver = 1.12.0.r383.ebfc3a589
+	pkgver = 1.12.0.r395.db12230ef
 	pkgrel = 1
 	url = http://mesonbuild.com/
 	arch = any
@@ -16,7 +16,7 @@ pkgbase = meson-git
 	depends = ninja
 	depends = python
 	depends = python-tqdm
-	provides = meson=1.12.0.r383.ebfc3a589
+	provides = meson=1.12.0.r395.db12230ef
 	conflicts = meson
 	source = git+https://github.com/mesonbuild/meson
 	source = arch-meson

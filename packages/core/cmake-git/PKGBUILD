@@ -13,7 +13,7 @@
 source "$startdir/../../../lib/pgo.sh"
 
 pkgname=cmake-git
-pkgver=4.4.3.1259.g9cf50be4ce
+pkgver=4.4.4.1233.g5c710a430e
 pkgrel=1
 pkgdesc='A cross-platform open-source make system'
 arch=('x86_64')
