@@ -1,0 +1,66 @@
+# Maintainer: Chocobo1 <chocobo1 AT archlinux DOT net>
+# Contributor: Levente Polyak <anthraxx[at]archlinux[dot]org>
+# Contributor: Tobias Powalowski <tpowa@archlinux.org>
+# Contributor: Daniel Micay <danielmicay@gmail.com>
+# Contributor: Lex Black <autumn-wind at web dot de>
+#
+# git build adapted from AUR libseccomp-git (reference only) + stock Arch
+# libseccomp: tracks upstream master directly. The stock python-libseccomp
+# split is NOT superseded (python bindings are skipped here).
+
+pkgname=libseccomp-git
+_pkgname=libseccomp
+pkgver=2.5.4.r126.gf1c3196
+pkgrel=1
+pkgdesc="Enhanced seccomp library (git build)"
+arch=('x86_64')
+url="https://github.com/seccomp/libseccomp"
+license=('LGPL-2.1-only')
+depends=('glibc')
+makedepends=('git' 'gperf')
+provides=("libseccomp=$pkgver" 'libseccomp.so')
+conflicts=('libseccomp')
+# v2.x release tags are signed; this recipe tracks master so there is no
+# pinned tag to verify — fingerprints kept for documentation only, taken from
+# the stock Arch PKGBUILD (upstream-published release signers).
+validpgpkeys=(
+  '7100AADFAE6E6E940D2E0AD655E45A5AE8CA7C8A' # Paul Moore <paul@paul-moore.com>
+  '47A68FCE37C7D7024FD65E11356CE62C2B524099' # Tom Hromatka <tom.hromatka@oracle.com>
+)
+source=("git+https://github.com/seccomp/${_pkgname}.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$_pkgname"
+
+  local _tag _rev _hash
+  _tag=$(git tag -l --sort -v:refname | head -n1)
+  _rev=$(git rev-list --count "$_tag"..HEAD)
+  _hash=$(git rev-parse --short HEAD)
+  printf "%s.r%s.g%s" "$_tag" "$_rev" "$_hash" | sed 's/^v//'
+}
+
+prepare() {
+  cd "$_pkgname"
+  # stock backports 614530bc (gcc-15 strict-aliasing fix) onto the release
+  # tag; tracking master supersedes that cherry-pick
+  autoreconf -fiv
+}
+
+build() {
+  cd "$_pkgname"
+
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  ./configure --prefix=/usr
+  make -j"${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package() {
+  cd "$_pkgname"
+
+  make DESTDIR="$pkgdir" install
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

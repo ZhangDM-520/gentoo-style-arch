@@ -1,0 +1,37 @@
+pkgbase = libxml2-git
+	pkgdesc = XML C parser and toolkit (git build)
+	pkgver = 2.15.0.r129.gc43dc98d
+	pkgrel = 1
+	url = https://gitlab.gnome.org/GNOME/libxml2/-/wikis/home
+	arch = x86_64
+	license = MIT
+	makedepends = docbook-xsl
+	makedepends = doxygen
+	makedepends = git
+	makedepends = meson
+	makedepends = python
+	depends = bash
+	depends = glibc
+	depends = icu
+	depends = readline
+	depends = zlib
+	source = git+https://gitlab.gnome.org/GNOME/libxml2.git
+	b2sums = SKIP
+
+pkgname = libxml2-git
+	depends = bash
+	depends = glibc
+	depends = icu
+	depends = readline
+	depends = zlib
+	depends = libicuuc.so
+	optdepends = python: Python bindings
+	provides = libxml2=2.15.0.r129.gc43dc98d
+	provides = libxml2.so
+	conflicts = libxml2
+
+pkgname = libxml2-docs-git
+	pkgdesc = XML C parser and toolkit - documentation (git build)
+	depends = 
+	provides = libxml2-docs=2.15.0.r129.gc43dc98d
+	conflicts = libxml2-docs

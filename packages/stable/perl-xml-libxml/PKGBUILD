@@ -1,0 +1,43 @@
+# Maintainer: Felix Yan <felixonmars@archlinux.org>
+# Contributor: Jonathan Steel <jsteel@aur.archlinux.org>
+# Contributor: Justin "juster" Davis <jrcd83@gmail.com>
+# Contributor: François Charette <francois.archlinux.org>
+
+pkgname=perl-xml-libxml
+pkgver=2.0213
+pkgrel=1
+pkgdesc="Interface to the libxml library"
+arch=('x86_64')
+url="https://search.cpan.org/dist/XML-LibXML"
+license=('Artistic-1.0-Perl' 'GPL-1.0-or-later')
+depends=('perl-alien-libxml2' 'perl-xml-sax' 'perl-xml-namespacesupport')
+# trim: test suite (make test below) — its perl-test-*/perl-cpan-changes/
+# perl-uri checkdepends are dropped together with it
+provides=('perl-libxml' 'perl-xml-libxml-common')
+# house: stock replaces=('perl-libxml' 'perl-xml-libxml-common') dropped —
+# upgrade-in-place takes no conflicts/replaces; provides= above keeps the
+# retired names resolvable
+options=('!emptydirs')
+install=perl-xml-libxml.install
+source=(
+  https://www.cpan.org/authors/id/T/TO/TODDR/XML-LibXML-$pkgver.tar.gz
+)
+sha512sums=('669446176a90f784017576436bee4952c110953b5198e8ad043af9507e97e93bacfc0b29c201bff03322dba77336e4680156052d356c7026c1b804c3f310d8ce')
+
+build() {
+  cd XML-LibXML-$pkgver
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  perl Makefile.PL INSTALLDIRS=vendor
+  make -j"${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package() {
+  cd XML-LibXML-$pkgver
+  # trim: perl man3/pod docs (doc_install) — the module payload is kept
+  make pure_install DESTDIR="$pkgdir"/
+  install -Dm644 LICENSE "$pkgdir"/usr/share/licenses/$pkgname/LICENSE
+}

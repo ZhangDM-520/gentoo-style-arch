@@ -1,0 +1,45 @@
+# Maintainer: Peter Jung <ptr1337@cachyos.org>
+# Contributor: George Rawlinson <grawlinson@archlinux.org>
+
+pkgname=libpfm
+pkgver=4.14.1
+pkgrel=1
+pkgdesc='Library to encode performance events for use by perf tool'
+arch=('x86_64')
+url='https://perfmon2.sourceforge.net'
+license=('MIT')
+depends=(
+  glibc
+)
+makedepends=(
+  git
+)
+provides=(libpfm.so)
+source=("$pkgname::git+https://git.code.sf.net/p/perfmon2/libpfm4#tag=v$pkgver"
+        'fix-c23-strpbrk.patch')
+b2sums=('e374c8d1ca79c3645386c78758ebe44f58291dc79540f2007fa4da150816192c16f3337d4b823c01dbf6c2bd455d6ee58a90fb231944240346f81f83009157fe'
+        '6552134ec8f0de7e57ea243754e59a3084f7f10f0d2825a0e6eb04cb97bdeebcad0260a479ea70723fd1afdf1ccfe3e16a31af0f30e6e0d623273b96f3f773df')
+
+prepare() {
+  cd "$pkgname"
+
+  patch -Np1 -i "$srcdir/fix-c23-strpbrk.patch"
+}
+
+build() {
+  cd "$pkgname"
+
+  make PREFIX=/usr
+}
+
+package() {
+  cd "$pkgname"
+
+  make DESTDIR="$pkgdir" PREFIX=/usr install
+
+  # trim: generated man3 API pages (100+) — docs not shipped
+  rm -rf "$pkgdir"/usr/share/man
+
+  # license
+  install -vDm644 -t "$pkgdir/usr/share/licenses/$pkgname" COPYING
+}

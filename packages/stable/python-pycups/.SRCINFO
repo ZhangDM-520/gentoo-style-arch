@@ -1,0 +1,16 @@
+pkgbase = pycups
+	pkgdesc = Python bindings for libcups
+	pkgver = 2.0.4
+	pkgrel = 4
+	url = https://github.com/OpenPrinting/pycups
+	arch = x86_64
+	license = GPL-2.0-or-later
+	makedepends = python-setuptools
+	depends = libcups
+	depends = python
+	depends = glibc
+	provides = pycups
+	source = python-pycups-2.0.4.tar.gz::https://github.com/OpenPrinting/pycups/archive/v2.0.4.tar.gz
+	sha256sums = 31d9cf62df7884fe430d11970a8c9278282a47a0ff6b1529c58c7d26e8eb4789
+
+pkgname = python-pycups

@@ -1,0 +1,49 @@
+# Maintainer: Christian Hesse <mail@eworm.de>
+# Contributor: lucck <lucck@ep.com.pl>
+# Contributor: aksr <aksr at t-com dot me>
+
+pkgname=udftools
+pkgver=2.3
+pkgrel=3
+pkgdesc='Linux tools for UDF filesystems and DVD/CD-R(W) drives'
+url='https://github.com/pali/udftools'
+arch=('x86_64')
+license=('GPL')
+depends=('ncurses' 'readline')
+makedepends=('systemd')
+source=("https://github.com/pali/$pkgname/releases/download/$pkgver/$pkgname-${pkgver}.tar.gz")
+sha256sums=('750dcf5c797765eb42265e0a56d1a99f97f94b7f6f4534263a5410503f0caf59')
+
+prepare() {
+  cd "$srcdir/$pkgname-$pkgver"
+
+  sed -i 's|/lib/|$(libdir)/|' pktsetup/Makefile.am
+  autoreconf -fi
+}
+
+build() {
+  cd "$srcdir/$pkgname-$pkgver"
+
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  ./configure \
+    --prefix=/usr \
+    --mandir=/usr/share/man \
+    --sbindir=/usr/bin
+  make -j"${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package() {
+  cd "$srcdir/$pkgname-$pkgver"
+
+  make DESTDIR="$pkgdir" install
+
+  # trim: man pages (Class B trim standard docs payload)
+  rm -rf "$pkgdir"/usr/share/man
+
+  install -Dm644 COPYING "$pkgdir/usr/share/licenses/$pkgname/COPYING"
+}
+

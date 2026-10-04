@@ -1,0 +1,37 @@
+# Maintainer: Sven-Hendrik Haase <svenstaro@archlinux.org>
+# Contributor: Auguste <auguste@gmail.com>
+# Contributor: Jose Negron <josenj.arch@mailnull.com>
+
+pkgname=libharu
+pkgver=2.4.6
+pkgrel=1
+pkgdesc="C library for generating PDF documents"
+arch=('x86_64')
+url="https://github.com/libharu/libharu"
+license=(custom:ZLIB)
+depends=('libpng' 'zlib')
+makedepends=('cmake')
+provides=('libhpdf.so')
+source=(${url}/archive/v${pkgver}/${pkgname}-${pkgver}.tar.gz)
+sha512sums=('c16b1770cd06ffb3d02649de2f4a9e84ca2c42d82183194e01802bf8c6745609a176185d00e37bb06cae9b3245c154cf7e267e47bd71b3b9aa572c28214fec69')
+
+build() {
+  # House style: mold linker when available (CMake reads LDFLAGS at cache init)
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  cmake -B build -S ${pkgname}-${pkgver} \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DLIBHPDF_STATIC=OFF
+  make -C build
+}
+
+package() {
+  make -C build DESTDIR="${pkgdir}" install
+  install -Dm755 build/src/libhpdf.so "${pkgdir}"/usr/lib/libhpdf.so
+  # trim: /usr/share/doc (CHANGES/README + the bindings demo sources — demos)
+  rm -rf "${pkgdir}"/usr/share/doc
+  install -Dm644 ${pkgname}-${pkgver}/LICENSE "${pkgdir}"/usr/share/licenses/${pkgname}/LICENSE
+}

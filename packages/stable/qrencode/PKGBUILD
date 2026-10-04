@@ -1,0 +1,53 @@
+# Maintainer: Florian Pritz< flo@xinu.at>
+# Contributor: Dany Martineau <dany.luc.martineau@gmail.com>
+
+pkgname=qrencode
+pkgver=4.1.1
+pkgrel=4
+pkgdesc='C library for encoding data in a QR Code symbol.'
+arch=('x86_64')
+depends=('libpng')
+provides=('libqrencode.so')
+# trim: sdl2 (test harness only — check()/make check dropped)
+makedepends=('git')
+url='https://fukuchi.org/works/qrencode/'
+license=('GPL')
+source=("qrencode::git+https://github.com/fukuchi/libqrencode#tag=v${pkgver}")
+sha256sums=('0151f34aa6996aefb0a3d011ce050bf32c70c5644055d8c82dcaa8044332ad35')
+
+prepare() {
+  cd "${srcdir}/${pkgname}"
+
+  autoreconf -fi
+}
+
+build() {
+  cd "${srcdir}/${pkgname}"
+
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  ./configure \
+    --prefix=/usr
+
+  make
+}
+
+# trim: upstream test suite (check()/make check) — no tests are run
+
+package() {
+  cd "${srcdir}/${pkgname}"
+
+  make prefix="$pkgdir/usr" install
+
+  # trim: man pages (qrencode(1)) — docs are not part of the maintained target
+  rm -rf "$pkgdir"/usr/share/man
+
+  # license: ship upstream licence text (GPL)
+  local _l
+  for _l in COPYING COPYING.LESSER LICENSE; do
+    if [[ -f $_l ]]; then install -Dm644 $_l -t "$pkgdir/usr/share/licenses/$pkgname/"; fi
+  done
+}

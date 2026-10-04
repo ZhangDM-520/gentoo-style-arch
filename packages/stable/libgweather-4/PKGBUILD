@@ -1,0 +1,80 @@
+# Maintainer: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
+# Contributor: Jan de Groot <jgc@archlinux.org>
+
+pkgbase=libgweather-4
+pkgname=(
+  libgweather-4
+)
+# trim: the libgweather-4-docs split is dropped — the gi-docgen API docs are
+# not shipped (gtk_doc=false in build()); only the library output stays
+pkgver=4.6.0
+pkgrel=1
+pkgdesc="Location and timezone database and weather-lookup library"
+url="https://gitlab.gnome.org/GNOME/libgweather"
+arch=(x86_64)
+license=(GPL-2.0-or-later)
+depends=(
+  dconf
+  geocode-glib-2
+  glib2
+  glibc
+  gweather-locations
+  json-glib
+  libgcc
+  libsoup3
+  libxml2
+)
+# trim: gi-docgen (makedepends) went with the libgweather-4-docs split (docs)
+makedepends=(
+  git
+  glib2-devel
+  gobject-introspection
+  meson
+  python-gobject
+  vala
+)
+checkdepends=(python-pylint)
+source=(
+  "git+https://gitlab.gnome.org/GNOME/libgweather.git?signed#tag=$pkgver"
+)
+b2sums=('79f01af988bc984b361e1e1565b26c7b5826618660c3318b3f1783f57e8175475c798605a42536df7f5250369083206a93969ab9e2b381e16761898e5c19ac42')
+validpgpkeys=(
+  53EF3DC3B63E2899271BD26322E8091EEA11BBB7 # Emmanuele Bassi (GNOME) <ebassi@gnome.org>
+)
+
+prepare() {
+  cd libgweather
+}
+
+build() {
+  local meson_options=(
+    # trim: gi-docgen API docs — Class B trim standard (docs)
+    -D gtk_doc=false
+  )
+
+  # House style: mold linker when available (arch-meson consumes LDFLAGS env)
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  arch-meson libgweather build "${meson_options[@]}"
+  meson compile -C build -j "${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+check() {
+  meson test -C build --print-errorlogs
+}
+
+package_libgweather-4() {
+  provides=(libgweather-4.so)
+
+  meson install -C build --destdir "$pkgdir"
+
+  # license: ship the upstream GPL-2.0-or-later text
+  local _l
+  for _l in COPYING COPYING.gpl-2.0 LICENSE; do
+    if [[ -f libgweather/$_l ]]; then install -Dm644 "libgweather/$_l" -t "$pkgdir/usr/share/licenses/$pkgname/"; fi
+  done
+}
+
+# vim:set sw=2 sts=-1 et:

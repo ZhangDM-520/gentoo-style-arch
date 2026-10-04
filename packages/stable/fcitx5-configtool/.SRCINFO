@@ -1,0 +1,37 @@
+pkgbase = fcitx5-configtool
+	pkgdesc = Configuration Tool for Fcitx5
+	pkgver = 5.1.16
+	pkgrel = 2
+	url = https://github.com/fcitx/fcitx5-configtool
+	arch = x86_64
+	groups = fcitx5-im
+	license = GPL-2.0-or-later
+	license = LGPL-2.1-or-later
+	makedepends = git
+	makedepends = extra-cmake-modules
+	makedepends = kcmutils
+	makedepends = kdeclarative
+	makedepends = kirigami
+	makedepends = ksvg
+	makedepends = libplasma
+	makedepends = ninja
+	makedepends = python
+	depends = fcitx5
+	depends = fcitx5-qt
+	depends = kdbusaddons
+	depends = kwidgetsaddons
+	depends = kitemviews
+	depends = kwindowsystem
+	optdepends = kcmutils: for KCM support
+	optdepends = kdeclarative: for KCM support
+	optdepends = kirigami: for KCM support
+	optdepends = ksvg: for KCM support
+	optdepends = libplasma: for fcitx5-plasma-theme-generator
+	provides = fcitx5-config-qt
+	provides = kcm-fcitx5
+	provides = libFcitx5Migrator.so
+	source = git+https://github.com/fcitx/fcitx5-configtool.git#tag=5.1.16?signed
+	validpgpkeys = 2CC8A0609AD2A479C65B6D5C8E8B898CBF2412F9
+	sha512sums = 6592fb43ab2483c0275c2f90d3ddeea109394f279e3f8136e75f5fc598152be17a0ef5a752efb0442b4ee1c158a71d9bd59f8e69dfa67427a7288eac3530ea8f
+
+pkgname = fcitx5-configtool

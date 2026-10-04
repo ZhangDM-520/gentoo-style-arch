@@ -1,0 +1,88 @@
+# Maintainer: Chocobo1 <chocobo1 AT archlinux DOT net>
+# Maintainer: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
+# Maintainer: Levente Polyak <anthraxx[at]archlinux[dot]org>
+# Contributor: Jan de Groot <jgc@archlinux.org>
+# Contributor: John Proctor <jproctor@prium.net>
+
+# git recipe tracking the upstream GNOME libxml2 VCS (AUR libxml2-git used as
+# reference only). Mirrors the stock libxml2 pkgbase split — libxml2-git
+# supersedes stock libxml2, libxml2-docs-git supersedes stock libxml2-docs.
+
+pkgbase=libxml2-git
+pkgname=(
+  libxml2-git
+  libxml2-docs-git
+)
+pkgver=2.15.0.r129.gc43dc98d
+pkgrel=1
+pkgdesc='XML C parser and toolkit (git build)'
+url='https://gitlab.gnome.org/GNOME/libxml2/-/wikis/home'
+arch=('x86_64')
+license=('MIT')
+depends=(
+  bash
+  glibc
+  icu
+  readline
+  zlib
+)
+makedepends=(
+  docbook-xsl
+  doxygen
+  git
+  meson
+  python
+)
+source=('git+https://gitlab.gnome.org/GNOME/libxml2.git')
+b2sums=('SKIP')
+
+pkgver() {
+  cd libxml2
+  git describe --long --tags | sed 's/\([^-]*-g\)/r\1/;s/-/./g;s/^v//'
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  local meson_options=(
+    -D b_lto=true
+    -D b_ndebug=true
+    -D icu=enabled
+    -D legacy=enabled
+  )
+
+  arch-meson libxml2 build "${meson_options[@]}"
+  meson compile -C build -j "${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+}
+
+# no check(): stock runs 'meson test' against the W3C xmlts conformance suite
+# fetched as an extra source payload; not carried in this git recipe
+
+package_libxml2-git() {
+  depends+=(libicuuc.so)
+  optdepends=('python: Python bindings')
+  provides=("libxml2=$pkgver" 'libxml2.so')
+  conflicts=('libxml2')
+
+  meson install -C build --destdir "$pkgdir"
+  install -Dm644 libxml2/libxml.m4 -t "$pkgdir/usr/share/aclocal"
+
+  # Split docs
+  mkdir -p doc/usr/share
+  mv "$pkgdir"/usr/share/doc -t doc/usr/share
+
+  install -Dm644 libxml2/Copyright -t "$pkgdir/usr/share/licenses/$pkgname/"
+}
+
+package_libxml2-docs-git() {
+  pkgdesc='XML C parser and toolkit - documentation (git build)'
+  depends=()
+  provides=("libxml2-docs=$pkgver")
+  conflicts=('libxml2-docs')
+
+  mv doc/* "$pkgdir"/
+
+  install -Dm644 libxml2/Copyright -t "$pkgdir/usr/share/licenses/$pkgname/"
+}

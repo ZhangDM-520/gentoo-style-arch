@@ -1,0 +1,88 @@
+# Maintainer: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
+# Contributor: Jan de Groot <jgc@archlinux.org>
+
+pkgbase=libsoup3
+pkgname=(
+  libsoup3
+)
+pkgver=3.8.0
+pkgrel=1
+pkgdesc="HTTP client/server library for GNOME"
+url="https://libsoup.gnome.org/"
+arch=(x86_64)
+license=(LGPL-2.0-or-later)
+depends=(
+  brotli
+  glib-networking
+  glib2
+  glibc
+  krb5
+  libnghttp2
+  libpsl
+  libsysprof-capture
+  sqlite
+  zlib
+  zstd
+)
+# trim: libsoup3-docs split (gi-docgen API docs) dropped together with its
+# gi-docgen makedep and the doc-stash paths in package_libsoup3(); the unit
+# tests (tests=false below) are dropped with their checkdepends (apache,
+# php-apache) and the python-quart test-server helper.
+makedepends=(
+  git
+  glib2-devel
+  gobject-introspection
+  meson
+  samba
+  vala
+)
+source=(
+  "git+https://gitlab.gnome.org/GNOME/libsoup.git#tag=$pkgver"
+  0001-tests-Remove-AuthDigestQop-none.patch
+)
+b2sums=('140707e698a031d9c801d33c1c5439d04b7bb12490a4aa63d013e388a56e8ef68e569b16d1181388ba9e5943932149bf1371ddc21034615664de29a0bb7359ae'
+        '0ae74e19f3764bc4f02fe2de2099182e0aa37d7b0fce36e67f25076b314b363c055c5accb4c54f18f859b27484d038d20ed5d031c38a8c2f252e35d23cb86079')
+
+prepare() {
+  cd libsoup
+
+  # Fix tests
+  git apply -3 ../0001-tests-Remove-AuthDigestQop-none.patch
+}
+
+build() {
+  # House style: mold linker when available
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+  local meson_options=(
+    -D autobahn=disabled
+    # trim: gi-docgen API docs and unit tests — see trim note above
+    -D docs=disabled
+    -D tests=false
+  )
+
+  arch-meson libsoup build "${meson_options[@]}"
+  meson compile -C build -j "${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package_libsoup3() {
+  depends+=(
+    libbrotlidec.so
+    libgssapi_krb5.so
+    libg{lib,object,io}-2.0.so
+    libpsl.so
+  )
+  optdepends=('samba: Windows Domain SSO')
+  provides+=(libsoup-3.0.so)
+
+  meson install -C build --destdir "$pkgdir"
+
+  # trim: locale catalogues (i18n; nothing reads them at run time)
+  rm -rf "$pkgdir"/usr/share/locale
+
+  # license: ship upstream licence text (LGPL-2.0-or-later)
+  install -Dm644 libsoup/COPYING -t "$pkgdir/usr/share/licenses/$pkgname/"
+}
+
+# vim:set sw=2 sts=-1 et:

@@ -1,0 +1,20 @@
+#!/bin/sh
+
+post_install() {
+    printf '%s\n' "==> Run 'pkgfile --update' to initialize the database"
+}
+
+post_remove() {
+    # the cache dir might not be removed, notify the user
+    if [ -d 'var/cache/pkgfile' ]
+    then
+        printf '%s\n' '==> /var/cache/pkgfile has not been removed'
+    fi
+}
+
+post_upgrade() {
+    if [ "$(vercmp 24-1 "$2")" -eq '1' ]
+    then
+        printf '%s\n' "==> Database format has changed, run 'pkgfile --update' to refresh it"
+    fi
+}

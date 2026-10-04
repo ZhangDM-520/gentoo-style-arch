@@ -10,7 +10,7 @@ license=('BSD')
 depends=('glibc' 'sh')
 makedepends=('git')  # docbook-xsl dropped 2026-09-04: man pages ship pregenerated
 optdepends=('perl: for running jeprof')
-provides=("jemalloc=$pkgver" 'libjemalloc.so=2-64')
+provides=("jemalloc=$pkgver" 'libjemalloc.so')
 conflicts=('jemalloc')
 source=("git+https://github.com/jemalloc/jemalloc.git")
 sha256sums=('SKIP')

@@ -1,0 +1,204 @@
+# Maintainer: Antonio Rojas <arojas@archlinux.org>
+# Contributor: Ray Rashif <schiv@archlinux.org>
+# Contributor: Tobias Powalowski <tpowa@archlinux.org>
+
+pkgname=opencv
+# trim: opencv-samples, python-opencv, opencv-cuda and python-opencv-cuda
+# split outputs dropped (this single-output recipe packages only opencv)
+provides=(libopencv_alphamat.so libopencv_bgsegm.so libopencv_bioinspired.so
+          libopencv_calib.so libopencv_ccalib.so libopencv_core.so
+          libopencv_cvv.so libopencv_datasets.so libopencv_dnn_objdetect.so
+          libopencv_dnn.so libopencv_dnn_superres.so libopencv_dpm.so
+          libopencv_face.so libopencv_features.so libopencv_flann.so
+          libopencv_freetype.so libopencv_fuzzy.so libopencv_gapi.so
+          libopencv_geometry.so libopencv_hdf.so libopencv_hfs.so
+          libopencv_highgui.so libopencv_img_hash.so libopencv_imgcodecs.so
+          libopencv_imgproc.so
+          libopencv_intensity_transform.so libopencv_line_descriptor.so
+          libopencv_ml.so libopencv_objdetect.so libopencv_optflow.so
+          libopencv_phase_unwrapping.so libopencv_photo.so libopencv_plot.so
+          libopencv_ptcloud.so libopencv_quality.so libopencv_rapid.so
+          libopencv_reg.so libopencv_rgbd.so libopencv_saliency.so
+          libopencv_shape.so libopencv_signal.so libopencv_stereo.so
+          libopencv_stitching.so libopencv_structured_light.so
+          libopencv_superres.so libopencv_surface_matching.so libopencv_text.so
+          libopencv_tracking.so libopencv_videoio.so libopencv_video.so
+          libopencv_videostab.so libopencv_viz.so libopencv_wechat_qrcode.so
+          libopencv_xfeatures2d.so libopencv_ximgproc.so libopencv_xobjdetect.so
+          libopencv_xphoto.so libopencv_xstereo.so)
+pkgver=5.0.0
+pkgrel=12
+pkgdesc='Open Source Computer Vision Library'
+arch=(x86_64)
+license=(Apache-2.0)
+url='https://opencv.org/'
+depends=(abseil-cpp
+         cblas
+         ffmpeg
+         freetype2
+         glib2
+         glibc
+         gst-plugins-base
+         gst-plugins-base-libs
+         gstreamer
+         harfbuzz
+         lapack
+         libdc1394
+         libgcc
+         libglvnd
+         libjpeg-turbo
+         libjxl
+         libpng
+         libstdc++
+         libtiff
+         libwebp
+         openexr
+         openjpeg2
+         verdict
+         protobuf
+         tbb
+         zlib)
+# trim: cuda/cudnn dropped together with the opencv-cuda and
+# python-opencv-cuda split outputs (the build-cuda tree is not built)
+makedepends=(ant
+             cmake
+             eigen
+             fast_float
+             fmt
+             git
+             glew
+             hdf5
+             java-environment
+             lapacke
+             mesa
+             nlohmann-json
+             openmpi
+             pugixml
+             python-numpy
+             python-setuptools
+             qt6-5compat
+             vtk)
+# trim: the 'opencv-samples' optdepend dropped with the opencv-samples split output
+optdepends=('vtk: for the viz module'
+            'glew: for the viz module'
+            'qt6-base: for the HighGUI module'
+            'hdf5: for the HDF5 module'
+            'opencl-icd-loader: For coding with OpenCL'
+            'java-runtime: Java interface')
+source=(git+https://github.com/opencv/opencv#tag=$pkgver
+        git+https://github.com/opencv/opencv_contrib#tag=$pkgver
+        vtk9.patch
+        fix-cuda-flags.patch
+        fix-std.patch
+        fix-dnn-umat-dimensions.patch
+        ffmpeg-9.patch)
+sha256sums=('e123822b57aa5b1cec7802cb53b302ab181a32f91a61060079a65a2fc4de1efe'
+            'b5ee0c286208a092199afe457093c601c73f9efc41c88e8fa0ee821985300c33'
+            'f35a2d4ea0d6212c7798659e59eda2cb0b5bc858360f7ce9c696c77d3029668e'
+            '95472ecfc2693c606f0dd50be2f012b4d683b7b0a313f51484da4537ab8b2bfe'
+            'c05fe7572ee5193cf3de7f02a500f446f3457ec20c315590a326bf1bfb5552cc'
+            'cffe99e96f3b1e7fe15601d6eb02d2ea50b461134a0bfcce2e763327ea45157b'
+            '6246d08c2e272bc30bfcd8bc576e04504f238404823927f98f4def7d212eed74')
+
+prepare() {
+  pushd opencv
+  patch -p1 < ../vtk9.patch # Don't require all vtk optdepends
+  # https://github.com/opencv/opencv/issues/27223
+  # https://bugreports.qt.io/browse/QTBUG-134774
+  sed -i 's/add_definitions(${Qt${QT_VERSION_MAJOR}${dt_dep}_DEFINITIONS})/link_libraries(${Qt${QT_VERSION_MAJOR}${dt_dep}})/' modules/highgui/CMakeLists.txt
+  # OpenCV passes all CXXFLAGS to nvcc through -Xcompiler, which does not work for '-Wp,something' flags
+  # We remove the -Xcompiler and pass our CXXFLAGS through cmake's CUDAFLAGS
+  patch -p1 < ../fix-cuda-flags.patch
+  git cherry-pick -n a18356853d99a67e432e818cf0328b4690d68833 # https://github.com/opencv/opencv/issues/29292
+#  git cherry-pick -n 142801f769ed4946a161f62738bac5a5fe56a60f # https://github.com/opencv/opencv/issues/29291
+#  git cherry-pick -n 883f8d83ae1463a5f486ace784762e8c42e7ea7d # https://github.com/opencv/opencv/issues/29471
+  patch -p1 < ../fix-dnn-umat-dimensions.patch # Fix face recognition in digikam
+  patch -p1 < ../ffmpeg-9.patch # Fix build with FFmpeg 9
+  popd
+
+  pushd opencv_contrib
+  patch -p1 < ../fix-std.patch
+}
+
+build() {
+  export JAVA_HOME="/usr/lib/jvm/default"
+
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  local cmake_options=(
+    -DWITH_OPENCL=ON
+    -DWITH_OPENGL=ON
+    -DOpenGL_GL_PREFERENCE=LEGACY
+    -DWITH_TBB=ON
+    -DWITH_VULKAN=ON
+    -DWITH_QT=ON
+    -DWITH_JPEGXL=ON
+    -DBUILD_TESTS=OFF
+    -DBUILD_PERF_TESTS=OFF
+    # trim: examples disabled with the opencv-samples split output
+    -DBUILD_EXAMPLES=OFF
+#    -DBUILD_PROTOBUF=OFF
+#    -DPROTOBUF_UPDATE_FILES=ON
+    -DINSTALL_C_EXAMPLES=OFF
+    -DINSTALL_PYTHON_EXAMPLES=OFF
+    -DCMAKE_INSTALL_PREFIX=/usr
+    -DOPENCV_EXTRA_MODULES_PATH="$srcdir"/opencv_contrib/modules
+    -DOPENCV_SKIP_PYTHON_LOADER=ON
+    # cmake's FindLAPACK doesn't add cblas to LAPACK_LIBRARIES, so we need to specify them manually
+    -DLAPACK_LIBRARIES="/usr/lib/liblapack.so;/usr/lib/libblas.so;/usr/lib/libcblas.so"
+    -DLAPACK_CBLAS_H=/usr/include/cblas.h
+    -DLAPACK_LAPACKE_H=/usr/include/lapacke.h
+    -DOPENCV_GENERATE_PKGCONFIG=ON
+    -DOPENCV_ENABLE_NONFREE=ON
+    -DOPENCV_JNI_INSTALL_PATH=lib
+    -DOPENCV_GENERATE_SETUPVARS=OFF
+    -DEIGEN_INCLUDE_PATH=/usr/include/eigen3
+    -Dprotobuf_MODULE_COMPATIBLE=ON
+    -DHDF5_NO_FIND_PACKAGE_CONFIG_FILE=ON
+  )
+
+  if [[ ${CARCH} == x86_64* ]]; then
+    cmake_options+=(
+      -DCPU_BASELINE_DISABLE=SSE3
+      -DCPU_BASELINE_REQUIRE=SSE2
+    )
+  fi
+
+  cmake -B build -S $pkgname "${cmake_options[@]}" \
+    -DBUILD_WITH_DEBUG_INFO=ON
+  cmake --build build
+
+  # trim: the build-cuda tree (cuda_archs list, CUDAFLAGS handling and the
+  # second cmake run) dropped together with the opencv-cuda and
+  # python-opencv-cuda split outputs
+}
+
+package_opencv() {
+  DESTDIR="$pkgdir" cmake --install build
+
+  # trim: examples/samples — opencv-samples split output dropped together
+  # with its staging; no sample tree ships in this output
+  rm -rf "$pkgdir"/usr/share/opencv5/samples
+
+  # Add java symlinks expected by some binary blobs
+  ln -sr "$pkgdir"/usr/share/java/{opencv5/opencv-${pkgver//./},opencv}.jar
+  ln -sr "$pkgdir"/usr/lib/{libopencv_java${pkgver//./},libopencv_java}.so
+
+  # Split Python bindings
+  # trim: python bindings payload dropped together with the python-opencv
+  # and python-opencv-cuda split outputs
+  rm -r "$pkgdir"/usr/lib/python3*
+
+  # trim: docs/man/locales — lean consumer-rebuild recipe, docs not shipped
+  rm -rf "$pkgdir"/usr/share/doc "$pkgdir"/usr/share/man "$pkgdir"/usr/share/locale
+
+  install -Dm644 opencv/LICENSE -t "$pkgdir"/usr/share/licenses/$pkgname/
+}
+
+# trim: dropped the opencv-samples, python-opencv, opencv-cuda and
+# python-opencv-cuda split outputs with their depends/provides/conflicts/
+# options and install paths TOGETHER (this single-output recipe packages
+# only opencv)

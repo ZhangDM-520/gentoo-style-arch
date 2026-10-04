@@ -1,0 +1,104 @@
+# Maintainer: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
+# Maintainer: Fabian Bornschein <fabiscafe@archlinux.org>
+
+pkgname=localsearch
+pkgver=3.12.0
+pkgrel=1
+pkgdesc="Filesystem indexer and metadata extractor"
+url="https://gnome.pages.gitlab.gnome.org/localsearch/"
+arch=(x86_64)
+license=(GPL-2.0-or-later)
+depends=(
+  dconf
+  exempi
+  ffmpeg
+  gexiv2
+  giflib
+  glib2
+  glibc
+  gst-plugins-base-libs
+  gstreamer
+  gupnp-dlna
+  icu
+  libcue
+  libexif
+  libgcc
+  libgsf
+  libgudev
+  libgxps
+  libiptcdata
+  libjpeg-turbo
+  libmediainfo
+  libosinfo
+  libpng
+  libseccomp
+  libstdc++
+  libtiff
+  libwebp
+  libxml2
+  libzip
+  poppler-glib
+  tinysparql
+  totem-plparser
+  upower
+)
+makedepends=(
+  asciidoc
+  bash
+  git
+  glib2-devel
+  gobject-introspection
+  meson
+  python
+  python-dbusmock
+  python-gobject
+)
+source=("git+https://gitlab.gnome.org/GNOME/localsearch.git#tag=${pkgver/[a-z]/.&}")
+b2sums=('f72e010830ec9a6362a5c265d9322c886ad67f842fd19df48f24e001da57292076c32141e6487b338d461226b7a503fd9940626f8ad56540b1942fd8b4cc6529')
+
+prepare() {
+  cd localsearch
+}
+
+build() {
+  local meson_options=(
+    -D landlock=enabled
+    -D tests_tap_protocol=true
+  )
+
+  arch-meson localsearch build "${meson_options[@]}"
+
+  # House style: mold linker when available (arch-meson consumes LDFLAGS env)
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  meson compile -C build
+}
+
+# trim: the _pick() split-output helper dropped together with the
+# localsearch-testutils split output (only consumer of _pick)
+
+package_localsearch() {
+  depends+=(libtinysparql-3.0.so)
+  # trim: the pinned tracker3-miners provide and its replaces/conflicts are
+  # dropped (house standard: bare soname provides only, never pinned; no
+  # conflicts/replaces for same-name upgrade-in-place)
+  provides=('libtracker-extract.so' 'libtracker-extract-zip.so')
+
+  meson install -C build --no-rebuild --destdir "$pkgdir"
+
+  # trim: localsearch-testutils split output dropped together with its
+  # _pick path and package(); the test utilities are not shipped
+  rm -rf "$pkgdir"/usr/lib/localsearch-3.0/trackertestutils
+
+  # trim: docs/man/locales — lean consumer-rebuild recipe, docs not shipped
+  rm -rf "$pkgdir"/usr/share/doc "$pkgdir"/usr/share/man "$pkgdir"/usr/share/locale
+
+  install -Dm644 localsearch/COPYING -t "$pkgdir"/usr/share/licenses/$pkgname/
+}
+
+# trim: dropped the localsearch-testutils split output (this single-output
+# recipe packages only localsearch)
+
+# vim:set sw=2 sts=-1 et:

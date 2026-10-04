@@ -11,7 +11,7 @@ pkgbase = xz-git
 	makedepends = git
 	makedepends = tar
 	depends = sh
-	provides = liblzma.so=5-64
+	provides = liblzma.so
 	provides = xz=5.8.4
 	conflicts = xz
 	source = xz-git::git+https://github.com/tukaani-project/xz.git

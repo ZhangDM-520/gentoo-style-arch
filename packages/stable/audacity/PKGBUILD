@@ -1,0 +1,247 @@
+# Maintainer: David Runge <dvzrv@archlinux.org>
+# Maintainer: Christian Heusel <gromit@archlinux.org>
+# Contributor: Eric Bélanger <eric@archlinux.org>
+
+_name=Audacity
+# Per-output recipe: ships the audacity output of the pkgbase; the
+# audacity-docs split is trimmed (docs).
+# trim: dropped split audacity-docs together with its package_*() function,
+# its license decl (CC-BY-3.0 manual) and its /usr/share/doc/$pkgbase/html
+# staging path; the audacity-manual tarball stays in source=() as delivered
+# (unused — source=() kept complete)
+pkgbase=audacity
+pkgname=(
+  audacity
+)
+pkgver=3.7.9
+pkgrel=1
+epoch=1
+pkgdesc="A program that lets you manipulate digital audio waveforms"
+arch=(x86_64)
+url="https://audacityteam.org"
+license=(GPL-3.0-or-later)
+makedepends=(
+  alsa-lib
+  chrpath
+  cmake
+  catch2-v2
+  ffmpeg
+  flac
+  gcc-libs
+  gdk-pixbuf2
+  glib2
+  glibc
+  gtk3
+  gtkmm3
+  jack
+  lame
+  libid3tag
+  libogg
+  libsbsms
+  libsndfile
+  libsoxr
+  libvorbis
+  libxkbcommon-x11
+  lilv
+  lv2
+  mpg123
+  opus
+  opusfile
+  portaudio
+  portmidi
+  portsmf
+  python
+  rapidjson
+  soundtouch
+  sqlite
+  suil
+  twolame
+  vamp-plugin-sdk
+  vst3sdk
+  wavpack
+  wxwidgets-gtk3
+  xcb-util
+  xcb-util-cursor
+  xcb-util-keysyms
+)
+source=(
+  https://github.com/audacity/audacity/archive/refs/tags/$_name-$pkgver.tar.gz
+  https://github.com/$pkgbase/$pkgbase/releases/download/$_name-3.7.6/$pkgbase-manual-3.7.6.tar.gz
+  audacity_3_4_2_enable_tests_without_conan.patch
+)
+sha512sums=('231bc76fd1b0e8dd46f294d1b410ee899bc0c285ee62d61a5c6b381d0568e5d0e567b40ab022678841f957aef9ba6fc690ea56c910b3bf4b533b50344651f9ad'
+            '01244546bffb6622270b6531122dd4ced3eeba2ef3af89178997484b70e1526e9c1852adab21e1670f99a60913641a76ebf722e68086ffb9116febbc7d2b270d'
+            'ab92475e599fd4345d33a7ae6cd47231ab614b92ca9a71e732a073b31ec18ad92f3d1384183b0821e75b4ba1bb4987c5369c1398604d6c4ea01a20f94fb7b976')
+b2sums=('cf034d088b7a648096cc4a4af1d5f782c9a2074ece55eaaf203d076182fd9e3c562267dde6578c2ef451c4ce380f7c0b5586d96bbaf3152baf65f3b4785bebf5'
+        '9b6f672cfd54f1b87a97d8ae03348b729500b1a4e75b618906f221782c343e6b4d0e3aef7a259d4ff23acd2ed21e8c33c82ac589b31ee200b4152b84162b043f'
+        '0c176336ca8df12f443e6935e8293afa3408e0e7b6a290417007bbbc0500c8eb8716ae3265665a80d85d689f9b369e5edf7986e8507288af77e8eea4ebedd624')
+
+prepare() {
+    cd "$pkgname-$_name-$pkgver"
+    # https://github.com/audacity/audacity/discussions/5841#discussioncomment-8138725
+    patch --forward --strip=1 --input="${srcdir}/audacity_3_4_2_enable_tests_without_conan.patch"
+}
+
+build() {
+  # House style: mold linker when available (CMake reads LDFLAGS at cache init)
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  local cmake_options=(
+    -B build
+    -D CMAKE_BUILD_TYPE=None
+    -D CMAKE_INSTALL_PREFIX=/usr
+    -D AUDACITY_BUILD_LEVEL=2
+    -D audacity_conan_enabled=OFF
+    -D audacity_has_networking=OFF
+    -D audacity_has_crashreports=OFF
+    -D audacity_has_updates_check=OFF
+    -D audacity_has_sentry_reporting=OFF
+    -D audacity_lib_preference=system
+    -D audacity_obey_system_dependencies=ON
+    -D audacity_use_vst3sdk=system
+    -D audacity_has_tests=ON
+    -S $pkgname-$_name-$pkgver
+    -W no-dev
+  )
+
+  export VST3SDK='/usr/src/vst3sdk'
+  export CFLAGS+=" -DNDEBUG -std=gnu17"
+  export CXXFLAGS+=" -DNDEBUG"
+  cmake "${cmake_options[@]}"
+  cmake --build build --verbose --parallel "${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+}
+
+check() {
+  # disable two tests which do not work without an alsa/jack instance
+  ctest --test-dir build --output-on-failure --exclude-regex "lib-stretching-sequence|journal_sanity"
+}
+
+package_audacity() {
+  groups=(pro-audio)
+  depends=(
+    alsa-lib libasound.so
+    expat
+    flac libFLAC.so libFLAC++.so
+    glibc
+    gdk-pixbuf2 libgdk_pixbuf-2.0.so
+    glib2 libglib-2.0.so libgobject-2.0.so
+    gtk3 libgdk-3.so libgtk-3.so
+    hicolor-icon-theme
+    jack  # likely dlopen'ed
+    lame  # likely dlopen'ed
+    libgcc
+    libid3tag libid3tag.so
+    libogg libogg.so
+    libsbsms libsbsms.so
+    libsndfile libsndfile.so
+    libsoxr
+    libstdc++
+    libvorbis libvorbis.so libvorbisenc.so libvorbisfile.so
+    libx11
+    lilv liblilv-0.so
+    mpg123 libmpg123.so
+    opus libopus.so
+    opusfile
+    portaudio libportaudio.so
+    portmidi libportmidi.so
+    portsmf libportSMF.so
+    soundtouch
+    sqlite libsqlite3.so
+    suil libsuil-0.so
+    twolame libtwolame.so
+    util-linux-libs
+    wxwidgets-gtk3
+    vamp-plugin-sdk libvamp-hostsdk.so
+    wavpack
+    wxwidgets-common
+  )
+  optdepends=(
+    'audacity-docs: for documentation'
+    'ffmpeg: for additional import/export capabilities'
+  )
+  provides=(
+    ladspa-host
+    lv2-host
+    vamp-host
+    vst-host
+    vst3-host
+    lib-audacity-application-logic.so
+    lib-audio-devices.so
+    lib-audio-graph.so
+    lib-audio-io.so
+    lib-basic-ui.so
+    lib-builtin-effects.so
+    lib-channel.so
+    lib-command-parameters.so
+    lib-components.so
+    lib-concurrency.so
+    lib-crypto.so
+    lib-dynamic-range-processor.so
+    lib-effects.so
+    lib-exceptions.so
+    lib-export-ui.so
+    lib-ffmpeg-support.so
+    lib-fft.so
+    lib-file-formats.so
+    lib-files.so
+    lib-graphics.so
+    lib-import-export.so
+    lib-ipc.so
+    lib-label-track.so
+    lib-ladspa.so
+    lib-lv2.so
+    lib-math.so
+    lib-menus.so
+    lib-mixer.so
+    lib-module-manager.so
+    lib-music-information-retrieval.so
+    lib-note-track.so
+    lib-numeric-formats.so
+    lib-nyquist-effects.so
+    lib-playable-track.so
+    lib-preference-pages.so
+    lib-preferences.so
+    lib-project-file-io.so
+    lib-project-history.so
+    lib-project-rate.so
+    lib-project.so
+    lib-realtime-effects.so
+    lib-registries.so
+    lib-sample-track.so
+    lib-screen-geometry.so
+    lib-shuttlegui.so
+    lib-snapping.so
+    lib-sqlite-helpers.so
+    lib-stretching-sequence.so
+    lib-strings.so
+    lib-string-utils.so
+    lib-tags.so
+    lib-theme-resources.so
+    lib-theme.so
+    lib-time-and-pitch.so
+    lib-time-frequency-selection.so
+    lib-time-track.so
+    lib-track-selection.so
+    lib-track.so
+    lib-transactions.so
+    lib-utility.so
+    lib-uuid.so
+    lib-viewport.so
+    lib-vst3.so
+    lib-vst.so
+    lib-wave-track-fft.so
+    lib-wave-track-paint.so
+    lib-wave-track-settings.so
+    lib-wave-track.so
+    lib-wx-init.so
+    lib-wx-wrappers.so
+    lib-xml.so
+  )
+
+
+  DESTDIR="$pkgdir" cmake --install build
+  install -vDm 644 $pkgname-$_name-$pkgver/lib-src/libnyquist/nyquist/license.txt "$pkgdir/usr/share/licenses/$pkgname/LICENSE.nyquist"
+  install -vDm 644 $pkgname-$_name-$pkgver/LICENSE.txt "$pkgdir/usr/share/licenses/$pkgname/LICENSE.txt"
+}

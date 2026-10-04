@@ -1,0 +1,23 @@
+pkgbase = cifs-utils
+	pkgdesc = CIFS filesystem user-space tools
+	pkgver = 7.8
+	pkgrel = 1
+	url = https://wiki.samba.org/index.php/LinuxCIFS_utils
+	arch = x86_64
+	license = GPL-3.0-or-later
+	makedepends = git
+	makedepends = python-docutils
+	depends = keyutils
+	depends = krb5
+	depends = pam
+	depends = libcap-ng
+	depends = libwbclient
+	depends = talloc
+	optdepends = python: for smb2-quota and smbinfo script
+	source = git+https://git.samba.org/cifs-utils.git?signed#tag=cifs-utils-7.8
+	validpgpkeys = C699981A31F338706C817650DF5BA9D30642D5A0
+	validpgpkeys = E9FB2EF297488ED584FC3A4B8A2CBD7007724F51
+	validpgpkeys = F2D066D1E8C2D888248F7A7C627A8E85F6858D07
+	b2sums = 24601b33c060bcbc90205733f4f9c9deec794f544b7652f3e6480a72a4b0657216255dd20e5ad2e9e9a5ffee0ccbb2ab841325dc6b085edad159bfd4c0a97be2
+
+pkgname = cifs-utils

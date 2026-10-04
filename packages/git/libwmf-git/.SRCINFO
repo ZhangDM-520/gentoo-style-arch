@@ -1,0 +1,27 @@
+pkgbase = libwmf-git
+	pkgdesc = A library for reading vector images in Microsoft's native Windows Metafile Format (git build)
+	pkgver = 0.2.16.r0.ga916f30
+	pkgrel = 1
+	url = https://github.com/caolanm/libwmf
+	arch = x86_64
+	license = LGPL-2.1-or-later
+	makedepends = git
+	makedepends = gtk2
+	makedepends = libxt
+	depends = expat
+	depends = freetype2
+	depends = glibc
+	depends = libjpeg-turbo
+	depends = libpng
+	depends = libx11
+	depends = zlib
+	optdepends = gdk-pixbuf2: for pixbuf loader
+	provides = libwmf=0.2.16.r0.ga916f30
+	provides = libwmf-0.2.so
+	provides = libwmflite-0.2.so
+	conflicts = libwmf
+	options = staticlibs
+	source = git+https://github.com/caolanm/libwmf.git
+	b2sums = SKIP
+
+pkgname = libwmf-git

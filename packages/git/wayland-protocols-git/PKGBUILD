@@ -1,0 +1,40 @@
+# Maintainer: auto-generated (Class A upstream-VCS recipe)
+# Contributor: Gennadiy Mykhailiuta <gmykhailiuta@gmail.com> (AUR wayland-protocols-git reference)
+# Contributor: Emmanuel Gil Peyrot <emmanuel.peyrot@collabora.com>
+# Contributor: Sébastien Luttringer <seblu@seblu.net> (stock wayland-protocols)
+
+pkgname=wayland-protocols-git
+pkgver=1.49.r5.gaa62366
+pkgrel=1
+pkgdesc='Wayland protocols that add functionalities not available in the core protocol (git build)'
+arch=('any')
+url='https://wayland.freedesktop.org/'
+license=('MIT')
+makedepends=('git' 'wayland' 'meson')
+conflicts=('wayland-protocols')
+provides=("wayland-protocols=$pkgver")
+# data-only package — no shared libs, no soname provides. Stock verifies
+# signed release tarballs; git master carries no verifiable signed tag for a
+# ?signed source (makepkg would run `git verify-commit HEAD`) — tracked
+# unsigned, no --skippgpcheck
+source=('wayland-protocols::git+https://gitlab.freedesktop.org/wayland/wayland-protocols.git')
+b2sums=('SKIP')
+
+pkgver() {
+  cd wayland-protocols
+  git describe --long --tags | sed 's/\([^-]*-g\)/r\1/;s/-/./g'
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  arch-meson wayland-protocols build
+  meson compile -C build
+}
+
+package() {
+  meson install -C build --destdir "$pkgdir"
+  install -Dm644 wayland-protocols/COPYING -t "$pkgdir/usr/share/licenses/$pkgname/"
+}

@@ -1,0 +1,74 @@
+# Maintainer: David Runge <dvzrv@archlinux.org>
+
+pkgname=lsp-plugins-lv2
+_dir=lsp-plugins
+pkgver=1.2.35
+pkgrel=1
+pkgdesc="Collection of open-source plugins - LV2"
+arch=(x86_64)
+url="https://lsp-plug.in"
+_url="https://github.com/lsp-plugins/lsp-plugins/"
+license=(LGPL-3.0-or-later)
+depends=(
+  cairo
+  fontconfig
+  freetype2
+  glibc
+  libglvnd libGL.so
+  libsndfile libsndfile.so
+  libstdc++
+  libx11
+  libxrandr
+  lv2-host
+)
+makedepends=(
+  fontconfig
+  freetype2
+  gcc-libs
+  lv2
+)
+groups=(lv2-plugins)
+# trim: the stock lsp-plugins pkgbase splits into clap/docs/gst/ladspa/
+# standalone/vst/vst3 plugin formats and liblsp-{audio-jack,audio-pipewire,
+# r3d-glx}-lib shared libs — only the LV2 target is built here, so the
+# format features (clap gst jack ladspa launcher pipewire standalone vst2
+# vst3 xdg) and their split-only deps (gstreamer gst-plugins-base jack
+# ladspa libpipewire hicolor-icon-theme) are dropped together with the
+# _pick/install split machinery and the php docs makedep (doc feature)
+source=($_url/releases/download/$pkgver/$_dir-src-$pkgver.tar.gz)
+sha512sums=('9cdbe7492989b7fd3326d5abcf8df49de18c4d378f78f62c96b0ca0c29a91c972754c129e9d750a324a0980697699969614b322f51c4a7761b74bb3fb58f804f')
+b2sums=('1dd5b67836d81c41068641b10c2ab2cd388c2b8116bf36d5026bf292cd2a59d4e21012a2ec3331df23e495461c819696c90525ffe9abd92340a67d56543cac1c')
+
+build() {
+  local config_options=(
+    config
+    VERBOSE=1
+    ARTIFACT_EXPORT_HEADERS=1
+    FEATURES='lv2 ui'
+    PREFIX=/usr
+    -C $_dir
+  )
+
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  make "${config_options[@]}"
+  make VERBOSE=1 -j"${GSA_BUILD_JOBS:-$(nproc)}" -C $_dir
+}
+
+# trim: upstream check() (lv2lint plugin linting of every plugin URI) with
+# its jq/lv2lint checkdepends — test machinery not shipped in this recipe
+package() {
+  make FEATURES='lv2 ui' PREFIX=/usr DESTDIR="$pkgdir" install -C $_dir
+
+  # trim: keep only the stock lsp-plugins-lv2 payload (usr/lib/lv2) —
+  # exported plugin-framework headers/libs/.pc files belong to the dropped
+  # liblsp-*-lib splits and must not collide with those stock packages
+  find "$pkgdir" -mindepth 1 -maxdepth 1 -not -name usr -exec rm -rf {} +
+  find "$pkgdir/usr" -mindepth 1 -maxdepth 1 -not -name lib -exec rm -rf {} +
+  find "$pkgdir/usr/lib" -mindepth 1 -maxdepth 1 -not -name lv2 -exec rm -rf {} +
+
+  install -Dm644 -t "$pkgdir/usr/share/licenses/$pkgname/" $_dir/{COPYING,COPYING.LESSER}
+}

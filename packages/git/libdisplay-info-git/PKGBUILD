@@ -1,0 +1,38 @@
+# Maintainer: auto-generated
+# Contributor: Eric Engestrom <aur [at] engestrom [dot] ch> (AUR libdisplay-info-git)
+
+pkgname=libdisplay-info-git
+_pkgname=libdisplay-info
+pkgver=0.4.0.r11.g62a9346
+pkgrel=1
+pkgdesc="EDID and DisplayID library (git build)"
+arch=('x86_64')
+url="https://gitlab.freedesktop.org/emersion/libdisplay-info"
+license=('MIT')
+depends=('glibc')
+makedepends=('git' 'hwdata' 'meson' 'ninja' 'python')
+provides=("libdisplay-info=$pkgver" 'libdisplay-info.so')
+conflicts=('libdisplay-info')
+source=("git+$url")
+b2sums=('SKIP')
+
+pkgver() {
+  cd "$_pkgname"
+  git describe --long --tags --abbrev=7 | sed 's/\([^-]*-g\)/r\1/;s/-/./g;s/^v//'
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  local _jobs="${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+
+  arch-meson "$_pkgname" build
+  meson compile -C build -j "$_jobs"
+}
+
+package() {
+  meson install -C build --destdir "$pkgdir"
+  install -Dm644 "$_pkgname/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

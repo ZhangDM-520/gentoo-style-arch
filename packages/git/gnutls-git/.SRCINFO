@@ -1,0 +1,36 @@
+pkgbase = gnutls-git
+	pkgdesc = A secure communications library implementing the SSL, TLS and DTLS protocols and technologies around them (git build)
+	pkgver = 3.8.9.r2.g5c1a38f7e
+	pkgrel = 1
+	url = https://www.gnutls.org/
+	arch = x86_64
+	license = LGPL-2.1-or-later AND GPL-3.0-or-later
+	makedepends = autogen
+	makedepends = git
+	makedepends = gperf
+	makedepends = gtk-doc
+	makedepends = p11-kit
+	makedepends = rsync
+	makedepends = wget
+	depends = brotli
+	depends = glibc
+	depends = leancrypto
+	depends = libidn2
+	depends = libp11-kit
+	depends = libtasn1
+	depends = libunistring
+	depends = nettle
+	depends = readline
+	depends = zlib
+	depends = zstd
+	optdepends = tpm2-tss: support for TPM2 wrapped keys
+	provides = gnutls=3.8.9.r2.g5c1a38f7e
+	provides = libgnutls.so
+	conflicts = gnutls
+	options = !zipman
+	backup = etc/gnutls/config
+	backup = etc/modules-load.d/gnutls.conf
+	source = git+https://gitlab.com/gnutls/gnutls.git
+	b2sums = SKIP
+
+pkgname = gnutls-git

@@ -1,0 +1,68 @@
+# Maintainer: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
+# Contributor: Balló György <ballogyor+arch at gmail dot com>
+
+pkgname=libhandy
+pkgver=1.8.3
+pkgrel=2
+pkgdesc="GTK 3 UI elements for mobile devices"
+url="https://gitlab.gnome.org/GNOME/libhandy"
+arch=(x86_64)
+license=(LGPL-2.1-or-later)
+depends=(
+  at-spi2-core
+  cairo
+  fribidi
+  libgcc
+  gdk-pixbuf2
+  glib2
+  glibc
+  gtk3
+  pango
+)
+makedepends=(
+  git
+  glade
+  glib2-devel
+  gobject-introspection
+  meson
+  vala
+)
+provides=(libhandy-1.so)
+source=("git+https://gitlab.gnome.org/GNOME/libhandy.git#tag=$pkgver")
+b2sums=('d2263077f17d787be1930701b7c7d274d7c5d10358d87a8029881ebe4cc8435d0d00cbafadfb5bf8690655c6813aeea4ac2c95b38c619bbe8081fccf722ca056')
+
+prepare() {
+  cd libhandy
+}
+
+build() {
+  # trim: gi-docgen API docs (gtk_doc=false, gi-docgen makedep dropped) —
+  # Class B trim standard (docs); the libhandy-docs split went with them
+  local meson_options=(
+    -D gtk_doc=false
+  )
+
+  # House style: mold linker when available (arch-meson consumes LDFLAGS env)
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  arch-meson libhandy build "${meson_options[@]}"
+  meson compile -C build -j "${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+}
+
+# trim: check() test suite (xvfb dbus-run-session meson test) together with
+# the xorg-server-xvfb checkdepends — Class B trim standard (tests)
+
+package() {
+  meson install -C build --destdir "$pkgdir"
+
+  # trim: locales and doc payload — Class B trim standard (locale/docs);
+  # the libhandy-docs split and its doc-move machinery went with the docs
+  rm -rf "$pkgdir"/usr/share/locale "$pkgdir"/usr/share/doc
+
+  # license: ship upstream licence text (LGPL-2.1-or-later)
+  install -Dm644 libhandy/COPYING -t "$pkgdir"/usr/share/licenses/$pkgname/
+}
+
+# vim:set sw=2 sts=-1 et:

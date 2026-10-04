@@ -1,0 +1,121 @@
+# Maintainer: Levente Polyak <anthraxx[at]archlinux[dot]org>
+# Maintainer: Anatol Pomozov <anatol.pomozov@gmail.com>
+# Maintainer: Christian Heusel <gromit@archlinux.org>
+# Contributor: Allan McRae <allan@archlinux.org>
+# Contributor: Jan de Groot <jgc@archlinux.org>
+
+pkgbase=gdb
+# gdb-common is a package that contains files common for all cross compiled versions
+# of gdb (for arm/avr/...)
+pkgname=(gdb gdb-common)
+pkgver=18.1
+pkgrel=1
+pkgdesc='The GNU Debugger'
+arch=(x86_64)
+url='https://www.gnu.org/software/gdb/'
+license=(GPL-3.0-or-later LGPL-3.0-or-later)
+makedepends=(
+  bash
+  boost
+  expat
+  glibc
+  gmp
+  guile
+  libgcc
+  mpfr
+  ncurses
+  python
+  readline
+  source-highlight
+  # trim: texinfo (gdb manual/info + generated man pages — docs)
+  xxhash
+  xz
+  zstd
+)
+source=(https://ftp.gnu.org/gnu/gdb/${pkgname}-${pkgver}.tar.xz{,.sig})
+sha1sums=('129db232e869bc23c37fef6be54710728e8f7e39'
+          'SKIP')
+b2sums=('9cf68cd96ecd1b2f51235f80f30d4024eadea7e11fe8af1cde0103176c622b770d79fde2205739fad8fe314ffecddd450626976e1897b04899027d0d88f30e1d'
+        'SKIP')
+validpgpkeys=('F40ADB902B24264AA42E50BF92EDB04BFF325CF3') # Joel Brobecker
+
+build() {
+  cd gdb-$pkgver
+
+  mkdir -p build && cd build
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+  ../configure \
+    --prefix=/usr \
+    --disable-nls \
+    --enable-source-highlight \
+    --enable-tui \
+    --enable-targets=all \
+    --enable-languages=all \
+    --enable-multilib \
+    --enable-interwork \
+    --with-system-readline \
+    --with-python=/usr/bin/python \
+    --with-system-gdbinit=/etc/gdb/gdbinit
+  make
+}
+
+package_gdb-common() {
+  depends=(python guile)
+
+  cd gdb-$pkgver/build
+  make -C gdb/data-directory DESTDIR="$pkgdir" install
+
+  install -Dm644 ../COPYING ../COPYING3 ../COPYING.LIB ../COPYING3.LIB -t "$pkgdir/usr/share/licenses/$pkgname/"
+}
+
+package_gdb() {
+  depends=(
+    bash
+    boost-libs
+    expat
+    libgcc
+    libstdc++
+    gdb-common=$pkgver
+    glibc
+    gmp
+    guile
+    libelf
+    liblzma.so
+    libmpfr.so
+    libncursesw.so
+    libreadline.so
+    libxxhash.so
+    libzstd.so
+    mpfr
+    ncurses
+    python
+    readline
+    source-highlight
+    xxhash
+    xz
+    zstd
+  )
+  backup=(etc/gdb/gdbinit)
+
+  cd gdb-$pkgver/build
+  make -C gdb DESTDIR="$pkgdir" install
+  make -C gdbserver DESTDIR="$pkgdir" install
+
+  # install "custom" system gdbinit
+  install -dm 755 "$pkgdir/etc/gdb"
+  touch "$pkgdir/etc/gdb/gdbinit"
+
+  # comes from gdb-common
+  rm -r "$pkgdir/usr/share/gdb/"
+
+  # trim: info manual + generated man pages (docs; pairs with the dropped
+  # texinfo makedep)
+  rm -rf "$pkgdir/usr/share/info" "$pkgdir/usr/share/man"
+
+  install -Dm644 ../COPYING ../COPYING3 ../COPYING.LIB ../COPYING3.LIB -t "$pkgdir/usr/share/licenses/$pkgname/"
+}
+
+# vim: ts=2 sw=2 et:

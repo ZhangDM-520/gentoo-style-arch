@@ -1,0 +1,23 @@
+pkgbase = libxslt-git
+	pkgdesc = XML stylesheet transformation library (git build)
+	pkgver = 1.1.45.r1.gec95343
+	pkgrel = 1
+	url = https://gitlab.gnome.org/GNOME/libxslt/-/wikis/home
+	arch = x86_64
+	license = MIT
+	makedepends = git
+	makedepends = python
+	depends = bash
+	depends = glibc
+	depends = libgcrypt
+	depends = libxml2
+	depends = xz
+	provides = libxslt=1.1.45.r1.gec95343
+	provides = libexslt.so
+	provides = libxslt.so
+	conflicts = libxslt
+	conflicts = libxslt-docs
+	source = git+https://gitlab.gnome.org/GNOME/libxslt.git
+	b2sums = SKIP
+
+pkgname = libxslt-git

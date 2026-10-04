@@ -1,0 +1,227 @@
+# Maintainer: Daniel Bermond <dbermond@archlinux.org>
+# Contributor: Kamran Mackey <kamranm1200@gmail.com>
+# Contributor: richteer <richteer at lastprime.net>
+# Contributor: DrZaius <lou at fakeoutdoorsman.com>
+# Recipe adapted for the gentoo-style-arch fleet; tracks upstream VCS directly.
+# The AUR package of the same name was used as a reference only.
+
+pkgname=ffmpeg-git
+pkgver=8.2.r125668.g70a5df6d27
+pkgrel=1
+pkgdesc='Complete solution to record, convert and stream audio and video (git version)'
+arch=('x86_64')
+url='https://ffmpeg.org/'
+license=('GPL-3.0-or-later')
+depends=(
+  alsa-lib
+  aom
+  bzip2
+  cairo
+  dav1d
+  fontconfig
+  freetype2
+  fribidi
+  glib2
+  glibc
+  gmp
+  gnutls
+  gsm
+  harfbuzz
+  jack
+  lame
+  lcms2
+  libass
+  libavc1394
+  libbluray
+  libbs2b
+  libdrm
+  libdvdnav
+  libdvdread
+  libgcc
+  libiec61883
+  libjxl
+  libmodplug
+  libopenmpt
+  libplacebo
+  libpulse
+  libraw1394
+  librsvg
+  libsoxr
+  libssh
+  libtheora
+  libva
+  libvdpau
+  libvpl
+  libvpx
+  libwebp
+  libx11
+  libxcb
+  libxext
+  libxml2
+  libxv
+  ocl-icd
+  opencore-amr
+  openjpeg2
+  opus
+  rav1e
+  rubberband
+  sdl2
+  snappy
+  speex
+  srt
+  svt-av1
+  v4l-utils
+  vid.stab
+  vmaf
+  vulkan-icd-loader
+  x264
+  x265
+  xvidcore
+  xz
+  zeromq
+  zimg
+  zlib
+)
+makedepends=(
+  amf-headers
+  avisynthplus
+  clang
+  ffnvcodec-headers
+  frei0r-plugins
+  git
+  glslang
+  ladspa
+  libgl
+  nasm
+  opencl-headers
+  spirv-headers
+  vapoursynth
+  vulkan-headers
+)
+optdepends=(
+  'avisynthplus: for AviSynthPlus support'
+  'frei0r-plugins: for Frei0r video effects support'
+  'ladspa: for LADSPA filters'
+  'nvidia-utils: for NVIDIA NVDEC/NVENC support'
+  'vapoursynth: for VapourSynth demuxer support'
+  'vpl-runtime: for Intel Quick Sync Video'
+)
+provides=(
+  "ffmpeg=$pkgver"
+  libavcodec.so
+  libavdevice.so
+  libavfilter.so
+  libavformat.so
+  libavutil.so
+  libpostproc.so
+  libswresample.so
+  libswscale.so
+)
+conflicts=('ffmpeg')
+# the AUR reference's 040-ffmpeg-add-av_stream_get_first_dts-for-chromium.patch
+# is a chromium consumer shim, not upstream material — not carried
+source=('git+https://git.ffmpeg.org/ffmpeg.git')
+b2sums=('SKIP')
+
+pkgver() {
+  cd ffmpeg
+
+  # release tags are n8.2 style; version tag + rev-count + hash (house style)
+  printf '%s.r%s.g%s' \
+    "$(git describe --tags --abbrev=0 | sed 's/^n//')" \
+    "$(git rev-list --count HEAD)" \
+    "$(git rev-parse --short HEAD)"
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  cd ffmpeg
+
+  # fix build with v4l2-utils 1.30 with gcc 14 and later
+  export CFLAGS+=' -Wno-error=incompatible-pointer-types'
+
+  ./configure \
+      --prefix='/usr' \
+      --disable-debug \
+      --disable-static \
+      --disable-stripping \
+      --enable-amf \
+      --enable-avisynth \
+      --enable-cuda-llvm \
+      --enable-lto \
+      --enable-fontconfig \
+      --enable-frei0r \
+      --enable-gmp \
+      --enable-gnutls \
+      --enable-gpl \
+      --enable-ladspa \
+      --enable-lcms2 \
+      --enable-libaom \
+      --enable-libass \
+      --enable-libbluray \
+      --enable-libbs2b \
+      --enable-libdav1d \
+      --enable-libdrm \
+      --enable-libdvdnav \
+      --enable-libdvdread \
+      --enable-libfreetype \
+      --enable-libfribidi \
+      --enable-libgsm \
+      --enable-libharfbuzz \
+      --enable-libiec61883 \
+      --enable-libjack \
+      --enable-libjxl \
+      --enable-libmodplug \
+      --enable-libmp3lame \
+      --enable-libopencore_amrnb \
+      --enable-libopencore_amrwb \
+      --enable-libopenjpeg \
+      --enable-libopenmpt \
+      --enable-libopus \
+      --enable-libplacebo \
+      --enable-libpulse \
+      --enable-librav1e \
+      --enable-librsvg \
+      --enable-librubberband \
+      --enable-libsnappy \
+      --enable-libsoxr \
+      --enable-libspeex \
+      --enable-libsrt \
+      --enable-libssh \
+      --enable-libsvtav1 \
+      --enable-libtheora \
+      --enable-libv4l2 \
+      --enable-libvidstab \
+      --enable-libvmaf \
+      --enable-libvorbis \
+      --enable-libvpl \
+      --enable-libvpx \
+      --enable-libwebp \
+      --enable-libx264 \
+      --enable-libx265 \
+      --enable-libxcb \
+      --enable-libxml2 \
+      --enable-libxvid \
+      --enable-libzimg \
+      --enable-libzmq \
+      --enable-nvdec \
+      --enable-nvenc \
+      --enable-opencl \
+      --enable-opengl \
+      --enable-shared \
+      --enable-vapoursynth \
+      --enable-version3 \
+      --enable-vulkan
+  make -j"${GSA_BUILD_JOBS:-$(nproc)}"
+  make tools/qt-faststart
+}
+
+package() {
+  make -C ffmpeg DESTDIR="$pkgdir" install
+  install -Dm755 ffmpeg/tools/qt-faststart -t "${pkgdir}/usr/bin"
+
+  install -Dm644 ffmpeg/COPYING.GPLv3 -t "${pkgdir}/usr/share/licenses/${pkgname}"
+}

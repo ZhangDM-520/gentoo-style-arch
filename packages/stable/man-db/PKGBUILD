@@ -1,0 +1,80 @@
+# Maintainer: Andreas Radke <andyrtr@archlinux.org>
+# Contributor: Sergej Pupykin <sergej@aur.archlinux.org>
+
+pkgname=man-db
+pkgver=2.13.1
+pkgrel=2
+pkgdesc="A utility for reading man pages"
+arch=('x86_64')
+url="https://gitlab.com/man-db/man-db"
+license=('GPL-2.0-or-later AND GPL-3.0-or-later')
+depends=( 'bash' 'gdbm' 'zlib' 'groff' 'libpipeline' 'less' 'libseccomp' 'glibc')
+# trim: po4a makedep (purged system tool — MEMORY rule 8) together with the
+# po4a translated-man stage — NLS/translations are disabled in build() and the
+# translated man/locale outputs are trimmed in package() below
+makedepends=()
+optdepends=('gzip') # covered by virtual "base" package
+backup=('etc/man_db.conf')
+provides=('man')
+source=(#https://savannah.nongnu.org/download/man-db/$pkgname-$pkgver.tar.xz{,.asc}
+        # fallback should be used within first 24h after a release
+        https://download-mirror.savannah.gnu.org/releases/man-db/$pkgname-$pkgver.tar.xz{,.asc}
+        $pkgname-remove-cache.hook
+)
+validpgpkeys=('AC0A4FF12611B6FCCF01C111393587D97D86500B') # Colin Watson <cjwatson@debian.org>
+sha512sums=('9b39f512fe940e648ca7f47803f42e473064253b67eb96995d28da30fd322de31a4466bf821e9391e6041af2318a6d2c2d74102b73f4b42a63966b41d2df0578'
+            'SKIP'
+            '5aec4f7d1c8cfacd23287dd60905cb27ff36b9e7ff38be9d7d98537678ec2c402330b453f1475c545261c13dc8b3d02cf4c76d7d12af30b8992cd1c53da1b5f5')
+
+build() {
+  cd ${pkgname}-${pkgver}
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+  # trim: po4a translated man pages + gettext NLS (po4a is a purged system
+  # tool — MEMORY rule 8): --disable-nls empties upstream MAN_SUBDIRS
+  # (m4/man-linguas.m4) so the po4a stage and the translated man/locale
+  # outputs are never built or installed
+  ./configure --prefix=/usr \
+    --sbindir=/usr/bin \
+    --sysconfdir=/etc \
+    --libexecdir=/usr/lib \
+    --with-systemdsystemunitdir=/usr/lib/systemd/system \
+    --with-snapdir=/var/lib/snapd/snap \
+    --with-db=gdbm \
+    --disable-setuid \
+    --enable-cache-owner=root \
+    --enable-mandirs=GNU \
+    --with-sections="1 1p n l 8 3 3p 0 0p 2 3type 5 4 9 6 7" \
+    --disable-nls
+  make
+}
+
+# trim: upstream test suite (check()) — not run for this recipe;
+# the shipped man pages are kept (this is the man implementation)
+
+package() {
+  cd ${pkgname}-${pkgver}
+  make DESTDIR=${pkgdir} install
+
+  # trim: translated man pages (usr/share/man/<lang>/) + NLS locale catalogs —
+  # pairs with the dropped po4a makedep (po4a is a purged system tool);
+  # --disable-nls keeps them unbuilt and these paths are cleared so no
+  # translation payload ships. English man pages are kept (this is the man
+  # implementation)
+  rm -rf "${pkgdir}/usr/share/locale"
+  find "${pkgdir}/usr/share/man" -mindepth 1 -maxdepth 1 -type d ! -name 'man*' -exec rm -rf {} +
+
+  # part of groff pkg
+  rm -f "${pkgdir}/usr/bin/zsoelim"
+
+  install -d -m755 "${pkgdir}/usr/lib/systemd/system/timers.target.wants"
+  ln -s ../man-db.timer "${pkgdir}/usr/lib/systemd/system/timers.target.wants/man-db.timer"
+  install -vDm 644 ../$pkgname-remove-cache.hook -t "$pkgdir/usr/share/libalpm/hooks/"
+
+  # license: ship the upstream GPL texts
+  # (license=('GPL-2.0-or-later AND GPL-3.0-or-later'))
+  install -Dm644 COPYING docs/COPYING.GPLv2 docs/COPYING.LIB \
+    -t "$pkgdir/usr/share/licenses/$pkgname/"
+}

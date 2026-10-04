@@ -1,0 +1,52 @@
+# Maintainer: AndyRTR <andyrtr@archlinux.org>
+
+pkgname=libwpd
+pkgver=0.10.3
+pkgrel=6
+pkgdesc="Library for importing WordPerfect (tm) documents"
+arch=('x86_64')
+url="https://libwpd.sourceforge.net/"
+license=('LGPL-2.1-or-later OR MPL-2.0')
+depends=('librevenge' 'glibc' 'libstdc++' 'libgcc')
+makedepends=('libgsf>=1.14.26' 'boost')
+# trim: doxygen (makedepends) — the doxygen API docs are not shipped;
+# --without-docs in build() disables docs/doxygen for good
+# trim: options=('!emptydirs') — no load-bearing empty directory payload
+source=(https://downloads.sourceforge.net/sourceforge/${pkgname}/${pkgname}-${pkgver}.tar.xz
+        libwpd-gcc11.patch)
+sha1sums=('c1254f05b2318c160d836e5583c221386db50dd2'
+          '9a91b8cd6252b610e72769efd1dd26f8a0b81285')
+sha256sums=('2465b0b662fdc5d4e3bebcdc9a79027713fb629ca2bff04a3c9251fdec42dd09'
+            '7612c36e5e16df2b786fc4c905f096a6e7d600aade292e91950607bfbfba6c32')
+
+prepare() {
+  cd ${pkgname}-${pkgver}
+  patch -Np1 -i ../libwpd-gcc11.patch
+  autoreconf -vfi
+}
+
+build() {
+  cd ${pkgname}-${pkgver}
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+  ./configure --prefix=/usr --disable-static --without-docs
+  sed -i -e 's/ -shared / -Wl,-O1,--as-needed\0/g' libtool
+  make
+}
+
+check() {
+  cd $pkgname-$pkgver
+  make check
+}
+
+package() {
+  cd ${pkgname}-${pkgver}
+  provides=(libwpd-0.10.so)
+
+  make DESTDIR="${pkgdir}" install
+  # trim: doxygen API docs — never built (--without-docs)
+  rm -rf "$pkgdir"/usr/share/doc
+  install -Dm644 COPYING.{LGPL,MPL} -t "$pkgdir"/usr/share/licenses/$pkgname/
+}

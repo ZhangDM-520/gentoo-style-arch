@@ -1,0 +1,98 @@
+# Maintainer: David Runge <dvzrv@archlinux.org>
+
+pkgname=zam-plugins-lv2
+pkgver=4.5
+pkgrel=1
+_dir=zam-plugins
+pkgdesc="Collection of audio plugins for high-quality processing - LV2 plugins"
+arch=(x86_64)
+url="https://github.com/zamaudio/zam-plugins"
+license=(GPL-2.0-or-later)
+depends=(
+  dbus libdbus-1.so
+  fftw libfftw3f.so
+  glibc
+  libgcc libgcc_s.so
+  libglvnd libGL.so
+  libsamplerate libsamplerate.so
+  libstdc++ libstdc++.so
+  libx11
+  libxext
+  lv2-host
+  zita-convolver libzita-convolver.so
+)
+makedepends=(
+  fftw
+  glibc
+  git
+  jack
+  ladspa
+  libgcc
+  libglvnd
+  libsamplerate
+  libstdc++
+  libx11
+  lv2
+  zita-convolver
+)
+groups=(lv2-plugins pro-audio)
+# trim: the stock zam-plugins pkgbase splits into clap/ladspa/standalone/
+# vst/vst3 formats + LV2 — only the LV2 target is delivered here. The
+# gendesk desktop generation and the zam-plugins.{directory,menu} assets go
+# with the dropped standalone split (the stock _pick/install split machinery
+# goes too); jack/ladspa makedeps stay because the upstream per-plugin
+# Makefiles hardcode TARGETS += jack ladspa lv2_sep vst2 vst3 clap au and
+# those formats are still compiled (just not installed)
+source=(
+  "git+$url?signed#tag=$pkgver"
+  git+https://github.com/distrho/dpf.git
+  distrho-pugl::git+https://github.com/distrho/pugl.git
+)
+sha512sums=('731c746fcf8ca8add219854ae597092e4165bacc2be87ebcf7872248b580e71721c53b1a7b5ff1bda4870ac7c299c763246ca1c68a0d9382e4be67d6e072f1b9'
+            'SKIP'
+            'SKIP')
+b2sums=('91a48320efd273c56a826d172ec97a6bc086fdb45eb4d30ca311f24475d48366e68fa15f25efcb503cce80d37d9ae33f68989f81a75e6da5d5ee27da0d0b495f'
+        'SKIP'
+        'SKIP')
+validpgpkeys=('B86F8ABAEDB92DF68AE2BE40577C1739585FA920') # Damien Zammit <damien@zammit.org>
+
+prepare() {
+  cd $_dir
+  git submodule init
+  git config submodule.dpf.url "$srcdir/dpf"
+  git -c protocol.file.allow=always submodule update
+  cd dpf
+  git submodule init
+  git config submodule.dgl/src/pugl-upstream.url "$srcdir/distrho-pugl"
+  git -c protocol.file.allow=always submodule update
+}
+
+build() {
+  cd $_dir
+
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  export HAVE_ZITA_CONVOLVER=true
+  make -j"${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package() {
+  cd $_dir
+  make DESTDIR="$pkgdir/" PREFIX=/usr install
+
+  # have find-libdeps resolve dependencies properly:
+  # https://gitlab.archlinux.org/archlinux/devtools/-/issues/102
+  find "$pkgdir" -type f \( -iname "*.clap" -or -iname "*.so" \) -exec chmod +x {} +
+
+  # trim: keep only the stock zam-plugins-lv2 payload (usr/lib/lv2) — the
+  # clap/ladspa/standalone/vst/vst3 outputs of the dropped splits (usr/bin,
+  # usr/lib/{clap,ladspa,vst,vst3}) are not shipped
+  find "$pkgdir" -mindepth 1 -maxdepth 1 -not -name usr -exec rm -rf {} +
+  find "$pkgdir/usr" -mindepth 1 -maxdepth 1 -not -name lib -exec rm -rf {} +
+  find "$pkgdir/usr/lib" -mindepth 1 -maxdepth 1 -not -name lv2 -exec rm -rf {} +
+
+  install -Dm644 -t "$pkgdir/usr/share/licenses/$pkgname/" $_dir/{COPYING,NOTICE.DPF,NOTICE.SFZero}
+}

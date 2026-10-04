@@ -1,0 +1,52 @@
+# Maintainer: Stéphane Gaudreault <stephane@archlinux.org>
+# Maintainer: Tobias Powalowski <tpowa@archlinux.org>
+# Contributor: Aaron Griffin <aaron@archlinux.org>
+
+pkgname=iputils
+# Commit date + git rev-parse --short origin/master
+_rev=6e1cb14
+pkgver=20250605
+pkgrel=1
+pkgdesc="Network monitoring tools, including ping"
+arch=('x86_64')
+license=('BSD-3-Clause' 'GPL-2.0-or-later')
+url="https://github.com/iputils/iputils"
+depends=(
+  libcap
+  libidn2
+)
+makedepends=(
+  docbook-xsl
+  git
+  iproute
+  meson
+  perl-sgmls
+  systemd
+)
+# trim: stock conflicts=(arping netkit-base) + replaces=(netkit-base) — house
+# recipes carry no conflicts/replaces (the old netkit-base rename is settled)
+source=("git+https://github.com/iputils/iputils.git#tag=${pkgver}?signed")
+validpgpkeys=('2016FEA4858B1C36B32E833AC0DEC2EE72F33A5F') # Petr Vorel
+b2sums=('f77ff1c2a8f57095d70bc5d5b027757875d86992dd625ef7a14f79aa87b7953137b34bfbe42f34cdf802b615f56897151215d327d32124577eb120f6ed3978e5')
+
+build() {
+  mkdir -p build
+  cd build
+  # House style: mold linker when available (runtime-guarded, no output effect).
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+  arch-meson ../$pkgname 
+  ninja -j"${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package() {
+  cd build
+  DESTDIR="$pkgdir" ninja install
+
+  # trim: man pages (man8 arping/clockdiff/ping/tracepath) (docs) — not
+  # shipped; the docbook machinery that renders them stays in the build
+  rm -rf "$pkgdir"/usr/share/man
+
+  install -vDm 644 "../$pkgname/Documentation/LICENSE.BSD3" -t "$pkgdir/usr/share/licenses/$pkgname"
+}

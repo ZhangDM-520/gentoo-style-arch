@@ -1,0 +1,54 @@
+# Maintainer: Andreas Radke <andyrtr@archlinux.org>
+# Contributor: Jake Leahy <jake (at) leahy (dot) dev
+
+pkgname=pdfio
+pkgver=1.6.5
+pkgrel=1
+pkgdesc="Simple C library for reading and writing PDF files"
+arch=('x86_64')
+url="https://github.com/michaelrsweet/pdfio"
+license=('Apache-2.0 WITH LLVM-exception')
+depends=('libpng' 'zlib' 'glibc')
+provides=('libpdfio.so')
+# libwebp is mentioned in INSTALL.md master branch but not yet to be found in configure/Make
+# makedepends=('libwebp')
+source=("pdfio-$pkgver.tar.gz::https://github.com/michaelrsweet/pdfio/releases/download/v$pkgver/pdfio-$pkgver.tar.gz"
+        "pdfio-$pkgver.tar.gz.sig::https://github.com/michaelrsweet/pdfio/releases/download/v$pkgver/pdfio-$pkgver.tar.gz.sig")
+sha256sums=('2b9e1db7c4a72cbc896098a6682a1e51fc2bfb979f00bec8bb515ee79c338084'
+            'SKIP')
+validpgpkeys=('9086C3CDC66C3F563CF8F405BE67C75EC81F3244') # Michael R Sweet <msweet@msweet.org>
+
+prepare() {
+  cd "$pkgname-$pkgver"
+  autoreconf -vfi
+}
+
+build() {
+  cd "$pkgname-$pkgver"
+
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  # The build system uses only DSOFLAGS but not LDFLAGS to build some libraries.
+  export DSOFLAGS=${LDFLAGS}
+
+  ./configure --prefix=/usr \
+    --enable-shared \
+    --disable-static
+  #--help
+  make
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  make DESTDIR="$pkgdir" install
+
+  # trim: API docs + man pages (/usr/share/doc with the shipped markdown docs,
+  # man3) — this recipe ships the shared lib + headers only
+  rm -rf "$pkgdir"/usr/share/doc "$pkgdir"/usr/share/man
+
+  # add license + exception
+  install -m644 -Dt "${pkgdir}/usr/share/licenses/${pkgname}" {LICENSE,NOTICE}
+}

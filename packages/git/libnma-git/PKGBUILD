@@ -1,0 +1,129 @@
+# Maintainer: Solomon Choina <shlomochoina@gmail.com>
+# Maintainer: Vitaly Ankh <vitalyankh@gmail.com>
+# Contributor: Pellegrino Prevete <pellegrinoprevete@gmail.com>
+# Class A git recipe: tracks upstream GNOME libnma git directly (HEAD).
+# AUR libnma-git and stock libnma are REFERENCES ONLY. The AUR reference is
+# stale/incorrect in places (its libnma-gtk4 output conflicts with the
+# nonexistent "libnma-gtk3"; stock name is libnma-gtk4) — stock split shape
+# (libnma-common / libnma / libnma-gtk4) reproduced with correct names.
+
+pkgbase=libnma-git
+pkgname=(libnma-common-git libnma-git libnma-gtk4-git)
+pkgver=1.10.6.r0.g513be68b39
+pkgrel=1
+pkgdesc="NetworkManager GUI client library (git build)"
+arch=('x86_64')
+url="https://gitlab.gnome.org/GNOME/libnma"
+license=('GPL-2.0-or-later' 'LGPL-2.1-or-later')
+makedepends=(
+  dconf
+  gcr-4
+  git
+  gobject-introspection
+  gtk-doc
+  gtk3
+  gtk4
+  iso-codes
+  libnm
+  meson
+  mobile-broadband-provider-info
+  vala
+)
+source=('git+https://gitlab.gnome.org/GNOME/libnma.git')
+b2sums=('SKIP')
+
+pkgver() {
+  cd libnma
+  git describe --long --tags | sed 's/\([^-]*-g\)/r\1/;s/-/./g'
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  local meson_options=(
+    -D libnma_gtk4=true
+  )
+
+  arch-meson libnma build "${meson_options[@]}"
+  meson compile -C build
+}
+
+check() {
+  meson test -C build --print-errorlogs
+}
+
+_pick() {
+  local p="$1" f d; shift
+  for f; do
+    d="$srcdir/$p/${f#$pkgdir/}"
+    mkdir -p "$(dirname "$d")"
+    mv "$f" "$d"
+    rmdir -p --ignore-fail-on-non-empty "$(dirname "$f")"
+  done
+}
+
+package_libnma-common-git() {
+  pkgdesc="NetworkManager GUI client library (common files; git build)"
+  depends=(
+    dconf
+    gcr-4
+    iso-codes
+    libnm
+    mobile-broadband-provider-info
+  )
+  # stock output superseded: libnma-common
+  provides=("libnma-common=$pkgver")
+  conflicts=('libnma-common')
+
+  meson install -C build --destdir "$pkgdir"
+
+  cd "$pkgdir"
+
+  _pick gtk3 usr/lib/libnma.so*
+  _pick gtk3 usr/lib/pkgconfig/libnma.pc
+  _pick gtk3 usr/lib/girepository-1.0/NMA-*
+  _pick gtk3 usr/share/gir-1.0/NMA-*
+  _pick gtk3 usr/share/vala/vapi/libnma.*
+
+  _pick gtk4 usr/lib/libnma-gtk4.so*
+  _pick gtk4 usr/lib/pkgconfig/libnma-gtk4.pc
+  _pick gtk4 usr/lib/girepository-1.0/NMA4-*
+  _pick gtk4 usr/share/gir-1.0/NMA4-*
+  _pick gtk4 usr/share/vala/vapi/libnma-gtk4.*
+
+  # Moved to network-manager-applet 1.30.0
+  # https://bugs.archlinux.org/task/76489
+  rm usr/share/glib-2.0/schemas/org.gnome.nm-applet.gschema.xml
+
+  install -Dm644 "$srcdir/libnma/COPYING" "$srcdir/libnma/COPYING.LGPL" \
+    -t "usr/share/licenses/$pkgname"
+}
+
+package_libnma-git() {
+  pkgdesc="NetworkManager GUI client library (GTK3; git build)"
+  depends=("libnma-common-git=$pkgver-$pkgrel" gtk3)
+  # stock output superseded: libnma
+  # soname shipped: libnma.so.0
+  provides=("libnma=$pkgver" 'libnma.so')
+  conflicts=('libnma')
+
+  mv gtk3/* "$pkgdir"
+  install -Dm644 "$srcdir/libnma/COPYING" "$srcdir/libnma/COPYING.LGPL" \
+    -t "$pkgdir/usr/share/licenses/$pkgname"
+}
+
+package_libnma-gtk4-git() {
+  pkgdesc="NetworkManager GUI client library (GTK4; git build)"
+  depends=("libnma-common-git=$pkgver-$pkgrel" gtk4)
+  # stock output superseded: libnma-gtk4 (AUR reference's "libnma-gtk3"
+  # conflicts entry is wrong and was fixed here)
+  # soname shipped: libnma-gtk4.so.0
+  provides=("libnma-gtk4=$pkgver" 'libnma-gtk4.so')
+  conflicts=('libnma-gtk4')
+
+  mv gtk4/* "$pkgdir"
+  install -Dm644 "$srcdir/libnma/COPYING" "$srcdir/libnma/COPYING.LGPL" \
+    -t "$pkgdir/usr/share/licenses/$pkgname"
+}

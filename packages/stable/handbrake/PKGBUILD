@@ -1,0 +1,98 @@
+# Maintainer: T.J. Townsend <blakkheim@archlinux.org>
+# Contributor: Evangelos Foutras <foutrelis@archlinux.org>
+# Contributor: Giovanni Scafora <giovanni@archlinux.org>
+# Contributor: Sebastien Piccand <sebcactus gmail com>
+
+pkgname=('handbrake' 'handbrake-cli')
+pkgver=1.11.2
+pkgrel=1
+arch=('x86_64')
+url="https://handbrake.fr/"
+license=('GPL-2.0-only')
+_commondeps=(
+  'libxml2'
+  'libass'
+  'libvorbis'
+  'opus'
+  'speex'
+  'libtheora'
+  'lame'
+  'x264'
+  'jansson'
+  'libvpx'
+  'libva'
+  'numactl'
+  'bzip2'
+  'libgcc'
+  'libstdc++'
+  'zlib'
+  'xz'
+  'libjpeg-turbo'
+)
+_guideps=('gst-plugins-base' 'gtk4' 'librsvg')
+# git included as a build dependency for bundled x265 to work
+# https://bugs.freebsd.org/bugzilla/show_bug.cgi?id=275546#c0
+makedepends=('python' 'nasm' 'wget' 'cmake' 'meson' 'git' 'clang'
+             "${_commondeps[@]}" "${_guideps[@]}")
+options=('!lto') # https://bugs.archlinux.org/task/72600
+source=("git+https://github.com/HandBrake/HandBrake.git?signed#tag=${pkgver}")
+sha256sums=('c300160d7a6062dbdecbfb82e38e11692edf371b9e766541b043b61d0cfc8610')
+validpgpkeys=('1629C061B3DDE7EB4AE34B81021DB8B44E4A8645' # HandBrake Team <developers@handbrake.fr>
+              'D57F6026431D68DFFB942F0D5759C8A0D1C34D47' # Damiano Galassi <damiog@gmail.com>
+)
+
+build() {
+  cd HandBrake
+
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  ./configure \
+    --prefix=/usr \
+    --enable-qsv \
+    --enable-vce \
+    --enable-nvdec
+  make -C build -j"${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+}
+
+package_handbrake() {
+  pkgdesc="Multithreaded video transcoder"
+  depends=('desktop-file-utils' 'hicolor-icon-theme'
+           "${_commondeps[@]}" "${_guideps[@]}")
+  optdepends=('gst-plugins-good: for video previews'
+              'gst-libav: for video previews'
+              'gvfs: for CD/DVD drive access'
+              'intel-media-sdk: Intel QuickSync support'
+              'libdvdcss: for decoding encrypted DVDs')
+
+  cd HandBrake/build
+
+  make DESTDIR="$pkgdir" install
+  rm "$pkgdir/usr/bin/HandBrakeCLI"
+  # trim: man/locales — lean consumer-rebuild recipe
+  rm -rf "$pkgdir/usr/share/man" "$pkgdir/usr/share/locale"
+  # license: ship upstream licence text (GPL-2.0-only)
+  local _l
+  for _l in COPYING LICENSE; do
+    if [[ -f ../$_l ]]; then install -Dm644 ../$_l -t "$pkgdir/usr/share/licenses/$pkgname/"; fi
+  done
+}
+
+package_handbrake-cli() {
+  pkgdesc="Multithreaded video transcoder (CLI)"
+  depends=("${_commondeps[@]}")
+  optdepends=('intel-media-sdk: Intel QuickSync support'
+              'libdvdcss: for decoding encrypted DVDs')
+
+  cd HandBrake/build
+  install -D HandBrakeCLI "$pkgdir/usr/bin/HandBrakeCLI"
+  # license: ship upstream licence text (GPL-2.0-only)
+  local _l
+  for _l in COPYING LICENSE; do
+    if [[ -f ../$_l ]]; then install -Dm644 ../$_l -t "$pkgdir/usr/share/licenses/$pkgname/"; fi
+  done
+}
+
+# vim:set ts=2 sw=2 et:

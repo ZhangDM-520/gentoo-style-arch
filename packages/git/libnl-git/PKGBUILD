@@ -1,0 +1,53 @@
+# Maintainer: Chocobo1 <chocobo1 AT archlinux DOT net>
+# Class A git recipe: tracks upstream thom311/libnl git directly (HEAD).
+# AUR libnl-git and stock libnl are REFERENCES ONLY.
+
+pkgname=libnl-git
+pkgver=3.12.0.r0.g655a638d4e
+pkgrel=1
+pkgdesc="A collection of libraries providing APIs to netlink protocol based Linux kernel interfaces (git build)"
+arch=('x86_64')
+url="https://www.infradead.org/~tgr/libnl/"
+license=('LGPL-2.1-only')
+depends=('glibc' 'libgcc' 'libgcc_s.so')
+makedepends=('git')
+# sonames shipped: libnl-3.so.200, libnl-cli-3.so.200, libnl-genl-3.so.200,
+# libnl-idiag-3.so.200, libnl-nf-3.so.200, libnl-route-3.so.200,
+# libnl-xfrm-3.so.200
+provides=("libnl=$pkgver"
+          'libnl-3.so' 'libnl-cli-3.so' 'libnl-genl-3.so' 'libnl-idiag-3.so'
+          'libnl-nf-3.so' 'libnl-route-3.so' 'libnl-xfrm-3.so')
+conflicts=('libnl')
+backup=('etc/libnl/classid' 'etc/libnl/pktloc')
+source=("git+https://github.com/thom311/libnl.git")
+b2sums=('SKIP')
+
+pkgver() {
+  cd libnl
+  git describe --long --tags | sed 's/^libnl//;s/\([^-]*-g\)/r\1/;s/[_-]/./g'
+}
+
+build() {
+  cd libnl
+
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  ./autogen.sh
+  ./configure \
+    --prefix=/usr \
+    --sysconfdir=/etc \
+    --sbindir=/usr/bin \
+    --disable-static
+  make
+}
+
+check() {
+  make -C libnl check
+}
+
+package() {
+  make -C libnl DESTDIR="$pkgdir" install
+  install -Dm644 libnl/COPYING -t "$pkgdir/usr/share/licenses/$pkgname"
+}

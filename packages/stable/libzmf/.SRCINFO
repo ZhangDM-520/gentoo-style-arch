@@ -1,0 +1,22 @@
+pkgbase = libzmf
+	pkgdesc = a library for import of Zoner drawing and bitmap files
+	pkgver = 0.0.2
+	pkgrel = 20
+	url = https://wiki.documentfoundation.org/DLP/Libraries/libzmf
+	arch = x86_64
+	license = MPL-2.0
+	makedepends = boost
+	depends = librevenge
+	depends = libpng
+	depends = zlib
+	depends = icu
+	depends = glibc
+	depends = libstdc++
+	depends = libgcc
+	provides = libzmf-0.0.so
+	source = https://dev-www.libreoffice.org/src/libzmf/libzmf-0.0.2.tar.xz
+	source = doxygen-1.14.patch
+	sha256sums = 27051a30cb057fdb5d5de65a1f165c7153dc76e27fe62251cbb86639eb2caf22
+	sha256sums = aa70e940c77124ac3bd9e5197b323b409551a95ae5098b3872d869025d0bccf9
+
+pkgname = libzmf

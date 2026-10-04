@@ -1,0 +1,54 @@
+# Maintainer: Alexander F. Rødseth <xyproto@archlinux.org>
+# Maintainer: Carl Smedstad <carsme@archlinux.org>
+# Contributor: Roman Kyrylych <roman@archlinux.org>
+# Contributor: Tom Killian <tomk@runbox.com>
+# Contributor: Daniel J Griffiths <ghost1227@archlinux.us>
+
+pkgname=libnewt
+pkgver=0.52.25
+_pkgver=${pkgver//./-}
+pkgrel=2
+_tclver=8.6
+pkgdesc="Not Erik's Windowing Toolkit - text mode windowing with slang"
+arch=(x86_64)
+url='https://pagure.io/newt'
+license=(GPL-2.0-only)
+depends=(
+  glibc
+  gpm
+  popt
+  slang
+)
+makedepends=(
+  "tcl>=$_tclver"
+  python
+)
+optdepends=(
+  'python: libnewt support with the _snack module'
+  'tcl: whiptcl support'
+)
+provides=(libnewt.so)
+source=("https://pagure.io/newt/archive/r$_pkgver/newt-r$_pkgver.tar.gz")
+b2sums=('d6bdc09589e409687cc56a0a7e4e3d943e8026c769d9f95ef1e9af693b51c818af32700270d117c5796b52ed3f14417753e6db1e7377118054960721c3b9bb15')
+
+prepare() {
+  cd "newt-r$_pkgver"
+  echo '#define USE_INTERP_RESULT 1' >> config.h
+  sed -i "s:tcl8.4:tcl$_tclver:" Makefile.in
+
+  ./autogen.sh
+}
+
+build() {
+  cd "newt-r$_pkgver"
+  ./configure --prefix=/usr --with-gpm-support
+  make
+}
+
+package() {
+  DESTDIR=$pkgdir make -C "newt-r$_pkgver" install
+  # trim: gettext translations (share/locale) and whiptail man page (man1) —
+  # docs/locales not shipped
+  rm -rf "$pkgdir"/usr/share/locale "$pkgdir"/usr/share/man
+  install -Dm644 "newt-r$_pkgver"/COPYING -t "$pkgdir"/usr/share/licenses/$pkgname/
+}

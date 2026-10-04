@@ -1,0 +1,16 @@
+pkgbase = libtommath-git
+	pkgdesc = Highly optimized and portable routines for integer based number theoretic applications (git build)
+	pkgver = r0.g00000000
+	pkgrel = 1
+	url = https://www.libtom.net/
+	arch = x86_64
+	license = Unlicense
+	makedepends = git
+	depends = glibc
+	provides = libtommath=r0.g00000000
+	provides = libtommath.so
+	conflicts = libtommath
+	source = libtommath::git+https://github.com/libtom/libtommath.git
+	sha256sums = SKIP
+
+pkgname = libtommath-git

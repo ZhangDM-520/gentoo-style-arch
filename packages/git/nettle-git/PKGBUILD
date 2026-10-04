@@ -1,0 +1,46 @@
+# Maintainer: auto-generated (Class A upstream-VCS recipe)
+# Contributor: Chocobo1 <chocobo1 AT archlinux DOT net> (AUR nettle-git reference)
+# Contributor: Andreas Radke <andyrtr@archlinux.org> (stock nettle)
+
+pkgname=nettle-git
+pkgver=4.0.r42.gaa32f0f
+pkgrel=1
+pkgdesc="A low-level cryptographic library (git build)"
+arch=('x86_64')
+url="https://www.lysator.liu.se/~nisse/nettle/"
+license=('LGPL-3.0-or-later OR GPL-2.0-or-later')
+depends=('glibc' 'gmp')
+makedepends=('git')
+provides=("nettle=$pkgver" 'libhogweed.so' 'libnettle.so')
+# bare soname entries kept from stock; at tip 2026-10 the ABI is
+# libnettle.so.9 + libhogweed.so.7 (LIBNETTLE_MAJOR=9/LIBHOGWEED_MAJOR=7) —
+# pacman 7.1 derives versioned provides from the bare entries
+conflicts=('nettle')
+source=('nettle::git+https://git.lysator.liu.se/nettle/nettle.git')
+b2sums=('SKIP')
+
+pkgver() {
+  cd nettle
+  # upstream tags look like nettle_4.0_release_20260205 — strip the prefix/date
+  git describe --long --tags | sed 's/^[_a-z]*\([0-9.]*\)[^-]*/\1/;s/\([^-]*-g\)/r\1/;s/-/./g'
+}
+
+build() {
+  cd nettle
+
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  ./.bootstrap
+  ./configure \
+    --prefix=/usr \
+    --disable-documentation
+  make -j"${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package() {
+  cd nettle
+  make DESTDIR="$pkgdir" install
+  install -Dm644 COPYING.LESSERv3 COPYINGv2 -t "$pkgdir/usr/share/licenses/$pkgname/"
+}

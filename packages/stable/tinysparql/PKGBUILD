@@ -1,0 +1,90 @@
+# Maintainer: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
+# Maintainer: Fabian Bornschein <fabiscafe@archlinux.org>
+# Contributor: Sergej Pupykin <pupykin.s+arch@gmail.com>
+# Contributor: Alexander Fehr <pizzapunk gmail com>
+
+pkgbase=tinysparql
+pkgname=tinysparql
+pkgver=3.12.0
+pkgrel=1
+pkgdesc="Low-footprint RDF triple store with SPARQL 1.1 interface"
+url="https://tinysparql.org/"
+arch=(x86_64)
+license=(GPL-2.0-or-later)
+depends=(
+  avahi
+  glib2
+  glibc
+  icu
+  json-glib
+  libgcc
+  libsoup3
+  libstemmer
+  libxml2
+  sqlite
+)
+# trim: the tinysparql-docs split is dropped together with its docs staging
+# path and the gi-docgen makedep (docs disabled below); the asciidoc makedep
+# and the man-db checkdep go with the man pages (man disabled below)
+makedepends=(
+  bash-completion
+  dbus
+  git
+  glib2-devel
+  gobject-introspection
+  meson
+  python-dbus
+  python-gobject
+  python-tappy
+  systemd
+  vala
+)
+source=("git+https://gitlab.gnome.org/GNOME/tinysparql.git#tag=${pkgver/[a-z]/.&}")
+b2sums=('0a45bb06e361fce6244340e27943bc987a6ea913ddcc39f5a496f7d9db01cb0d083f7c4b25dad3d7da461cd16b7d6b0fa7fd0e09a342d18e65731f720897af7d')
+# trim: stock pinned tracker3= provide and the conflicts/replaces entries
+# dropped per house standard (bare soname provides only; no conflicts/replaces)
+
+prepare() {
+  cd $pkgname
+}
+
+build() {
+  local meson_options=(
+    -D tests_tap_protocol=true
+    # trim: gtk-doc API docs (tinysparql-docs split dropped) and man pages
+    -D docs=false
+    -D man=false
+  )
+
+  # House style: mold linker when available (arch-meson consumes LDFLAGS env)
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  arch-meson tinysparql build "${meson_options[@]}"
+  meson compile -C build -j "${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+}
+
+check() {
+  dbus-run-session meson test -C build --print-errorlogs -t 3
+}
+
+package_tinysparql() {
+  provides=(
+    libtinysparql-3.0.so
+  )
+
+  meson install -C build --no-rebuild --destdir "$pkgdir"
+
+  # trim: drop locales and any doc leftovers (the tinysparql-docs split is
+  # dropped)
+  rm -rf "$pkgdir/usr/share/locale" "$pkgdir/usr/share/doc"
+
+  # license: ship upstream licence text (GPL-2.0-or-later)
+  local _l
+  for _l in COPYING COPYING.GPL LICENSE; do
+    if [[ -f tinysparql/$_l ]]; then install -Dm644 "tinysparql/$_l" -t "$pkgdir/usr/share/licenses/$pkgname/"; fi
+  done
+}
+
+# vim:set sw=2 sts=-1 et:

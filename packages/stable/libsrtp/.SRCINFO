@@ -1,0 +1,19 @@
+pkgbase = libsrtp
+	pkgdesc = Library for SRTP (Secure Realtime Transport Protocol)
+	pkgver = 2.8.1
+	pkgrel = 1
+	epoch = 1
+	url = https://github.com/cisco/libsrtp
+	arch = x86_64
+	license = BSD-3-Clause
+	makedepends = git
+	makedepends = libpcap
+	makedepends = meson
+	depends = glibc
+	depends = nspr
+	depends = nss
+	provides = libsrtp2.so
+	source = git+https://github.com/cisco/libsrtp#tag=v2.8.1
+	b2sums = 851f9819e298063ba708eb7967a184829a9189befa2420e539efbc453441113ebda6d2da119ecc1652273c2232c88ea3666608e4ea00e1f4c0ad37c26fa775c6
+
+pkgname = libsrtp

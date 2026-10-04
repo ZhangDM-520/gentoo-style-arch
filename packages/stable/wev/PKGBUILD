@@ -1,0 +1,38 @@
+# Maintainer: Brett Cornwall <ainola@archlinux.org>
+# Contributor: Thayne McCombs <astrothayne at gmail dot com>
+
+pkgname=wev
+pkgver=1.1.0
+pkgrel=1
+pkgdesc="A tool for debugging wayland events on a Wayland window, analagous to the X11 tool xev"
+url='https://git.sr.ht/~sircmpwn/wev'
+license=('MIT')
+arch=('x86_64')
+depends=('wayland' 'libxkbcommon')
+makedepends=('scdoc' 'wayland-protocols')
+source=("$pkgname-$pkgver.tar.gz::https://git.sr.ht/~sircmpwn/wev/archive/$pkgver.tar.gz")
+b2sums=('2e2a232d33ec274e5d9afa4ea3f11a13eb3f91e7ba1faddd6b324dc6ef93ecf71ffae81fd4f50ab9f48b4aaae68f498302b2799dd5aa688c73aef3cfa54e36c1')
+
+build() {
+    cd "$pkgname-$pkgver"
+
+    # House style: mold linker when available (LDFLAGS is folded into the
+    # compile line below, so it reaches the link too)
+    local _mold=""
+    command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+    export LDFLAGS+=" ${_mold}"
+
+    # LDFLAGS are not respected
+    make -j"${GSA_BUILD_JOBS:-$(nproc)}" CFLAGS="$CFLAGS $LDFLAGS"
+}
+
+package() {
+    cd "$pkgname-$pkgver"
+    make DESTDIR="$pkgdir/" PREFIX=/usr MANDIR=/usr/share/man install
+
+    # trim: man pages (Class B trim standard docs payload; scdoc stays a
+    # makedep — the man page is part of the upstream default build target)
+    rm -rf "$pkgdir"/usr/share/man
+
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

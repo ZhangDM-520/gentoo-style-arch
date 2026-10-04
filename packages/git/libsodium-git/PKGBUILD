@@ -1,0 +1,52 @@
+# Maintainer: Chocobo1 <chocobo1 AT archlinux DOT net>
+# Previous maintainer: Boohbah <boohbah at gmail.com>
+# Contributor: sekret <sekret at posteo.se>
+# Contributor: Felix Yan <felixonmars@archlinux.org>
+# Contributor: namelessjon <jonathan.stott@gmail.com>
+# Contributor: Alessio Sergi <asergi at archlinux dot us>
+#
+# git build adapted from AUR libsodium-git (reference only) + stock Arch
+# libsodium: tracks upstream master directly (stock pins signed *-RELEASE
+# tags).
+
+pkgname=libsodium-git
+pkgver=1.0.18.r575.g66a68f09
+pkgrel=1
+pkgdesc="A modern, portable, easy to use crypto library (git build)"
+arch=('x86_64')
+url="https://libsodium.org/"
+license=('custom:ISC')
+depends=('glibc')
+makedepends=('git')
+provides=("libsodium=$pkgver" 'libsodium.so')
+conflicts=('libsodium')
+# x.y.z-RELEASE tags are signed; this recipe tracks master so there is no
+# pinned tag to verify — fingerprint kept for documentation only, taken from
+# the stock Arch PKGBUILD (upstream-published release signer).
+validpgpkeys=('54A2B8892CC3D6A597B92B6C210627AABA709FE1') # Frank Denis
+source=("git+https://github.com/jedisct1/libsodium.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$pkgname"
+  git describe --long --tags | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g'
+}
+
+build() {
+  cd "$pkgname"
+
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  ./autogen.sh -s
+  ./configure --prefix=/usr
+  make -j"${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package() {
+  cd "$pkgname"
+
+  make DESTDIR="$pkgdir" install
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

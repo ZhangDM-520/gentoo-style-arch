@@ -1,0 +1,44 @@
+# Maintainer: Balló György <ballogyor+arch at gmail dot com>
+
+pkgname=zint
+pkgver=2.16.0
+pkgrel=2
+pkgdesc='Barcode encoding library supporting over 50 symbologies'
+arch=(x86_64)
+url='https://zint.org.uk/'
+license=(GPL-3.0-or-later)
+depends=(glibc)
+makedepends=(cmake
+             git)
+provides=(libzint.so)
+source=(git+https://github.com/zint/zint#tag=$pkgver)
+sha256sums=('0bd39dbba01db925e9c50fcd282b36377b9b748a3f0ea9fbc890ccb37b448d4c')
+
+build() {
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  # trim: zint-qt split dropped (Qt6 GUI; its qt6-svg/qt6-tools makedepends go
+  # with it) — hence -DZINT_QT6=OFF, so no Qt6 backend/frontend is built
+  cmake -B build -S zint \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DZINT_QT6=OFF
+  cmake --build build --parallel "${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+# trim: dropped the zint-qt split output (Qt6 GUI) with its depends (libgcc
+# libstdc++ qt6-base qt6-svg qt6-tools zint), its install paths and the
+# install-check rm paths that un-picked its files from the zint output
+
+package_zint() {
+  depends+=(libpng)
+  DESTDIR="$pkgdir" cmake --install build
+
+  # trim: man pages (docs/man — nothing reads them at run time)
+  rm -rf "$pkgdir/usr/share/man"
+
+  # license: ship the upstream GPL-3.0-or-later text
+  install -Dm644 zint/LICENSE -t "$pkgdir/usr/share/licenses/$pkgname/"
+}

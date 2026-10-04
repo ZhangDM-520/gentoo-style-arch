@@ -1,0 +1,26 @@
+pkgbase = kvantum-qt5
+	pkgdesc = SVG-based theme engine for Qt5
+	pkgver = 1.1.8
+	pkgrel = 1
+	url = https://github.com/tsujan/Kvantum
+	arch = x86_64
+	license = GPL-3.0-or-later
+	makedepends = cmake
+	makedepends = git
+	makedepends = qt5-svg
+	makedepends = qt5-tools
+	makedepends = qt5-x11extras
+	depends = glibc
+	depends = libgcc
+	depends = libstdc++
+	depends = libx11
+	depends = kvantum
+	depends = qt5-base
+	depends = qt5-svg
+	depends = qt5-x11extras
+	provides = libkvantum.so
+	source = git+https://github.com/tsujan/Kvantum#tag=V1.1.8?signed
+	validpgpkeys = 19DFDF3A579BD509DBB572D8BE793007AD22DF7E
+	sha256sums = c407e9fb1e9e985b3af78d7535445da31f03473387b1c45b4c810883b8c27ec6
+
+pkgname = kvantum-qt5

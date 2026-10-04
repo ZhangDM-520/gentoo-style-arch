@@ -1,0 +1,79 @@
+# Maintainer: Alexander Epaneshnikov <alex19ep@archlinux.org>
+# Contributor: Vincent Grande <shoober420@gmail.com>
+# Contributor: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
+# Contributor: Ionut Biru <ibiru@archlinux.org>
+# Recipe adapted for the gentoo-style-arch fleet; tracks upstream VCS directly.
+# The AUR package of the same name was used as a reference only.
+
+pkgname=at-spi2-core-git
+pkgver=2.52.0.r13.g13be6f0ed
+pkgrel=1
+pkgdesc="Protocol definitions and daemon for D-Bus at-spi (git build)"
+url="https://gitlab.gnome.org/GNOME/at-spi2-core"
+arch=('x86_64')
+# Upstream meson.build declares LGPLv2.1+ and root COPYING is LGPL-2.1
+# (the AUR/stock metadata says GPL-2 — follows upstream here)
+license=('LGPL-2.1-or-later')
+depends=(
+  dbus
+  glib2
+  gsettings-desktop-schemas
+  libx11
+  libxml2
+  libxtst
+  systemd
+  xorg-xprop
+)
+makedepends=(
+  dbus-broker
+  git
+  gobject-introspection
+  glib2-devel
+  meson
+)
+optdepends=('dbus-broker: Alternative bus implementation')
+provides=(
+  "at-spi2-core=$pkgver"
+  "at-spi2-atk=$pkgver"
+  "atk=$pkgver"
+  libatk-1.0.so
+  libatk-bridge-2.0.so
+  libatspi.so
+)
+conflicts=(
+  at-spi2-core
+  at-spi2-atk
+  atk
+)
+source=("git+https://gitlab.gnome.org/GNOME/at-spi2-core.git")
+b2sums=('SKIP')
+
+pkgver() {
+  cd at-spi2-core
+  git describe --long --tags | sed 's/^AT_SPI2_CORE_//;s/\([^-]*-g\)/r\1/;s/_/-/g;s/-/./g'
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  local meson_options=(
+    # fleet session bus is dbus-broker (AUR reference default)
+    -D default_bus=dbus-broker
+    # docs split dropped: no gi-docgen/sphinx output (libdex-git precedent)
+    -D docs=false
+  )
+
+  arch-meson at-spi2-core build "${meson_options[@]}"
+  meson compile -C build -j "${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+# check() dropped: the meson suite wants an installed at-spi2-core stack
+# (the AUR reference pulls stock at-spi2-core as checkdepends)
+
+package() {
+  meson install -C build --destdir "$pkgdir"
+
+  install -Dm644 at-spi2-core/COPYING -t "$pkgdir/usr/share/licenses/$pkgname"
+}

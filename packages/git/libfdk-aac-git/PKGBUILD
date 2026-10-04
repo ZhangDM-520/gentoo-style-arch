@@ -1,0 +1,42 @@
+# Maintainer: auto-generated
+# AUR reference: libfdk-aac-git (Maintainer: Chocobo1 <chocobo1 AT archlinux DOT net>)
+pkgname=libfdk-aac-git
+_pkgname=fdk-aac
+pkgver=2.0.3.r146.g2ef9a14
+pkgrel=1
+pkgdesc="Modified library of Fraunhofer AAC decoder and encoder (git build)"
+arch=('x86_64')
+url="https://github.com/mstorsjo/fdk-aac"
+license=('LicenseRef-libfdk-aac')
+depends=('glibc')
+makedepends=('git' 'cmake')
+provides=("libfdk-aac=$pkgver" 'libfdk-aac.so')
+conflicts=('libfdk-aac')
+options=('staticlibs')
+# AUR reference pulls git.code.sf.net/p/opencore-amr/fdk-aac; per house policy we
+# track the upstream VCS github.com/mstorsjo/fdk-aac (canonical mirror, same tree)
+source=("git+https://github.com/mstorsjo/fdk-aac.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$_pkgname"
+  git describe --long --tags | sed 's/\([^-]*-g\)/r\1/;s/-/./g;s/^v//g'
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  # CMAKE_BUILD_TYPE=None: makepkg.conf owns the opt level (no hard-coded -O3)
+  cmake -B _build -S "$_pkgname" \
+    -DCMAKE_BUILD_TYPE=None \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DCMAKE_INSTALL_LIBDIR=lib
+  cmake --build _build
+}
+
+package() {
+  DESTDIR="$pkgdir" cmake --install _build
+  install -Dm644 "$_pkgname/NOTICE" -t "$pkgdir/usr/share/licenses/$pkgname"
+}

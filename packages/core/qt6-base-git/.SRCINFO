@@ -77,5 +77,5 @@ pkgname = qt6-xcb-private-headers-git
 	pkgdesc = Private headers for Qt6 Xcb
 	depends = qt6-base-git=6.12.0_r82007.g2beefb38db9
 	optdepends = 
-	provides = 
-	conflicts = 
+	provides = qt6-xcb-private-headers
+	conflicts = qt6-xcb-private-headers

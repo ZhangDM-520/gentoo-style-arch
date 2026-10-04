@@ -1,0 +1,47 @@
+# Maintainer: Orhun Parmaksız <orhun@archlinux.org>
+# Maintainer: Carl Smedstad <carsme@archlinux.org>
+# Contributor: BrainDamage
+
+pkgname=libsixel
+pkgver=1.10.5
+pkgrel=1
+pkgdesc="Provides a codec for DEC SIXEL graphics and some converter programs"
+arch=('x86_64')
+url="https://github.com/libsixel/libsixel"
+license=('MIT')
+depends=(
+  'curl'
+  'gdk-pixbuf2'
+  'glib2'
+  'glibc'
+  'libjpeg-turbo'
+  'libpng'
+)
+makedepends=('meson')
+provides=('libsixel.so')
+source=("$url/archive/v$pkgver/$pkgname-$pkgver.tar.gz")
+sha256sums=('b6654928bd423f92e6da39eb1f40f10000ae2cc6247247fc1882dcff6acbdfc8')
+
+build() {
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  # trim: tests (meson test suite — check() dropped, -Dtests=disabled)
+  arch-meson "$pkgname-$pkgver" build \
+    -Dtests=disabled \
+    -Dlibcurl=enabled \
+    -Dgdk-pixbuf2=enabled
+
+  meson compile -C build -j "${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package() {
+  meson install -C build --destdir "${pkgdir}"
+
+  # trim: man pages + docs (converter man pages and README docs)
+  rm -rf "${pkgdir}/usr/share/man" "${pkgdir}/usr/share/doc"
+
+  install -Dvm 644 "${pkgname}-${pkgver}/LICENSE" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+}

@@ -1,0 +1,23 @@
+pkgbase = coin-or-coinutils
+	pkgdesc = COIN-OR collection of utility classes
+	pkgver = 2.11.13
+	pkgrel = 2
+	url = https://github.com/coin-or/CoinUtils
+	arch = x86_64
+	groups = coin-or
+	license = EPL-2.0
+	makedepends = gcc-fortran
+	makedepends = git
+	depends = blas
+	depends = bzip2
+	depends = coin-or-data-sample
+	depends = glibc
+	depends = glpk
+	depends = libgcc
+	depends = libstdc++
+	depends = zlib
+	provides = libCoinUtils.so
+	source = git+https://github.com/coin-or/CoinUtils#tag=releases/2.11.13
+	sha256sums = db83271f4f0bc489a75278ff4128a79e450035f0405873ec787d52ca6cbab6b4
+
+pkgname = coin-or-coinutils

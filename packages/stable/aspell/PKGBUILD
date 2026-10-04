@@ -1,0 +1,62 @@
+# Maintainer: Felix Yan <felixonmars@archlinux.org>
+# Contributor: Jochem Kossen <j.kossen@home.nl>
+# Contributor: dorphell <dorphell@archlinux.org>
+# Contributor: Thayer Williams <thayer@archlinux.org>
+# Contributor: Daniel J Griffiths <ghost1227@archlinux.us>
+
+pkgname=aspell
+pkgver=0.60.8.2
+_pkgmajorver=0.60
+pkgrel=2
+pkgdesc="A spell checker designed to eventually replace Ispell"
+arch=('x86_64')
+url="http://aspell.net/"
+license=('LGPL-2.0-or-later AND LGPL-2.1-only AND GPL-2.0-or-later AND BSD-2-Clause')
+depends=('glibc' 'libstdc++' 'ncurses')
+optdepends=('perl: to import old dictionaries')
+provides=(libaspell.so libpspell.so)
+source=(
+  "https://github.com/GNUAspell/aspell/archive/rel-$pkgver.tar.gz"
+)
+sha512sums=('ff379222ef33b4ffcca68fbcc0350004e9490add7ecbe13e73b16db961167db19c427731e0d7f8d465f1c78d2ea8aa07738de8c531a7a25e518d3cf4a604a96c')
+b2sums=('508ec5d8ca46b042d98a8c34e2065c4468f3d6dd5f1aa4d756ecfae91a82ead5c15252f0bcfdee479545c4808cb39896efb3f634ffe02c6bd8040f46dcb3cf04')
+
+prepare() {
+  cd $pkgname-rel-$pkgver
+  PERL_USE_UNSAFE_INC=1 ./autogen
+}
+
+build() {
+  cd $pkgname-rel-$pkgver
+
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  ./configure --prefix=/usr --sysconfdir=/etc
+
+  # prevent excessive overlinking due to libtool
+  sed -i -e 's/ -shared / -Wl,-O1,--as-needed\0/g' libtool
+  make -j"${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+}
+
+package() {
+  depends+=(libncursesw.so)
+
+  cd $pkgname-rel-$pkgver
+  make DESTDIR="$pkgdir" install
+  ln -s $pkgname-$_pkgmajorver "$pkgdir"/usr/lib/$pkgname
+
+  # trim: drop the generated info manual and man pages (this recipe ships
+  # the libaspell/libpspell libraries + the aspell command-line tools)
+  rm -rf "$pkgdir/usr/share/info" "$pkgdir/usr/share/man" "$pkgdir/usr/share/doc"
+
+  # license: ship upstream licence texts (LGPL-2.0-or-later, LGPL-2.1-only,
+  # GPL-2.0-or-later, BSD-2-Clause) — the affix speller license is kept verbatim
+  install -Dm644 modules/speller/default/affix.license "$pkgdir"/usr/share/licenses/$pkgname/affix.license
+  local _l
+  for _l in COPYING COPYING.GPL COPYING.LGPL LICENSE; do
+    if [[ -f $_l ]]; then install -Dm644 "$_l" -t "$pkgdir/usr/share/licenses/$pkgname/"; fi
+  done
+}

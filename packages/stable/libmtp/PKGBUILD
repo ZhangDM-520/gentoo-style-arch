@@ -1,0 +1,54 @@
+# Maintainer: Antonio Rojas <arojas@archlinux.org>
+# Contributor: Tom Gundersen <teg@jklm.no>
+# Contributor: damir <damir@archlinux.org>
+# Contributor: Kevin Edmonds <edmondskevin@hotmail.com>
+
+pkgname=libmtp
+pkgver=1.1.23
+pkgrel=1
+pkgdesc='Library implementation of the Media Transfer Protocol'
+arch=(x86_64)
+url='http://libmtp.sourceforge.net'
+license=(LGPL-2.1-or-later)
+depends=(glibc
+         libgcrypt
+         libusb)
+# trim: doxygen (makedepends) dropped — it only generated the API HTML docs,
+# which this recipe does not ship (docs); the doc/makefile skips cleanly
+# without doxygen (HAVE_DOXYGEN)
+source=(https://downloads.sourceforge.net/$pkgname/$pkgname-$pkgver.tar.gz{,.asc})
+sha256sums=('74a2b6e8cb4a0304e95b995496ea3ac644c29371649b892b856e22f12a0bdeed'
+            'SKIP')
+validpgpkeys=(7C4AFD61D8AAE7570796A5172209D6902F969C95) # Marcus Meißner <meissner@suse.de>
+
+build() {
+  cd $pkgname-$pkgver
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+  ./configure \
+    --prefix=/usr \
+    --with-udev=/usr/lib/udev
+  make -j"${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+check() {
+  cd $pkgname-$pkgver
+  make -k check
+}
+
+package() {
+  provides=(libmtp.so)
+
+  cd $pkgname-$pkgver
+  make DESTDIR="$pkgdir" install
+
+  # trim: the static man3 API pages (doc/man/man3) are not installed (man) —
+  # they went together with the doxygen makedep above
+  # license: ship the upstream LGPL-2.1-or-later text
+  local _l
+  for _l in COPYING COPYING.LGPL LICENSE; do
+    if [[ -f $_l ]]; then install -Dm644 "$_l" -t "$pkgdir/usr/share/licenses/$pkgname/"; fi
+  done
+}

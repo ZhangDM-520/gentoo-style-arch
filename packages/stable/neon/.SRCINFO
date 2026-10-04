@@ -1,0 +1,20 @@
+pkgbase = neon
+	pkgdesc = HTTP/1.1 and WebDAV client library
+	pkgver = 0.37.1
+	pkgrel = 1
+	url = https://notroj.github.io/neon/
+	arch = x86_64
+	license = LGPL-2.0-or-later
+	makedepends = git
+	depends = ca-certificates
+	depends = expat
+	depends = glibc
+	depends = krb5
+	depends = openssl
+	depends = zlib
+	provides = libneon.so
+	source = git+https://github.com/notroj/neon.git#tag=0.37.1
+	validpgpkeys = 190555472DCC589BEF01609C608A86DF9833CC49
+	b2sums = 51b19f2d5a506d16bc1b0b76bcddc43d8960fc785499317e93570e7877884e48ae900d9a06dcc1943bb4c72213b6990c11a58caa47c76a17178f588516717e51
+
+pkgname = neon

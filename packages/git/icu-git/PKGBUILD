@@ -1,0 +1,52 @@
+# Maintainer: Chocobo1 <chocobo1 AT archlinux DOT net>
+# Recipe adapted for the gentoo-style-arch fleet; tracks upstream VCS directly.
+# The AUR package of the same name was used as a reference only.
+
+pkgname=icu-git
+pkgver=78.2.r97.g7df0d91df7a
+pkgrel=1
+pkgdesc="International Components for Unicode library (git build)"
+arch=('x86_64')
+url="https://icu.unicode.org/"
+license=('LicenseRef-icu')
+depends=('glibc' 'libgcc' 'libstdc++' 'sh')
+makedepends=('git')
+provides=("icu=$pkgver" 'libicudata.so' 'libicui18n.so' 'libicuio.so' 'libicutu.so' 'libicuuc.so')
+conflicts=('icu')
+source=("git+https://github.com/unicode-org/icu.git")
+b2sums=('SKIP')
+
+pkgver() {
+  cd icu
+
+  # upstream release tags are release-78-2 style
+  _tag=$(git tag -l --sort -v:refname | grep -E '^release-[0-9.-]+$' | head -n1)
+  _rev=$(git rev-list --count "$_tag"..HEAD)
+  _hash=$(git rev-parse --short HEAD)
+  printf "%s.r%s.g%s" "$_tag" "$_rev" "$_hash" | sed 's/^release-//;s/-/./g'
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  cd icu/icu4c/source
+
+  export \
+    CC=gcc \
+    CXX=g++
+  ./configure \
+    --prefix="/usr" \
+    --sbindir="/usr/bin" \
+    --sysconfdir="/etc"
+  make -j"${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package() {
+  cd icu/icu4c/source
+
+  make DESTDIR="$pkgdir" install
+
+  install -Dm644 "$srcdir/icu/icu4c/LICENSE" -t "$pkgdir/usr/share/licenses/$pkgname"
+}

@@ -1,0 +1,46 @@
+# Maintainer: auto-generated
+# AUR reference: libglvnd-git (Maintainer: Chocobo1 <chocobo1 AT archlinux DOT net>)
+pkgname=libglvnd-git
+_pkgname=libglvnd
+pkgver=1.7.0.r10.g908086d
+pkgrel=1
+pkgdesc="The GL Vendor-Neutral Dispatch library (git build)"
+arch=('x86_64')
+url="https://gitlab.freedesktop.org/glvnd/libglvnd"
+license=('custom:BSD-like')
+depends=('glibc' 'libxext' 'mesa' 'opengl-driver')
+makedepends=('git' 'meson' 'libx11' 'python' 'xorgproto')
+# virtuals libgl/libegl/libgles kept (stock provides them); bare soname stems
+# listed per shipped shared lib (pacman 7.1 derives versioned soname provides)
+provides=("libglvnd=$pkgver" 'libgl' 'libegl' 'libgles'
+          'libEGL.so' 'libGL.so' 'libGLdispatch.so'
+          'libGLESv2.so' 'libGLX.so' 'libOpenGL.so')
+conflicts=('libglvnd')
+source=("git+https://gitlab.freedesktop.org/glvnd/libglvnd.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$_pkgname"
+  git describe --long --tags | sed 's/\([^-]*-g\)/r\1/;s/-/./g;s/^v//g'
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  arch-meson "$_pkgname" build \
+    -D gles1=false \
+    -D b_lto=true \
+    -D b_ndebug=true
+  meson compile -C build
+}
+
+package() {
+  meson install -C build --destdir "$pkgdir"
+
+  # upstream keeps the license text inside README.md (no standalone file)
+  sed -n '/Copyright (c) 2013, NVIDIA/,/DEALINGS IN THE MATERIALS./p' \
+    "$_pkgname/README.md" > LICENSE
+  install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

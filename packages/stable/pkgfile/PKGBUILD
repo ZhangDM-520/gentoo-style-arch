@@ -1,0 +1,51 @@
+# Maintainer : Daniel Bermond <dbermond@archlinux.org>
+# Contributor: Dave Reisner <d@falconindy.com>
+
+pkgname=pkgfile
+pkgver=26
+pkgrel=1
+pkgdesc='A tool to search for files in official repository packages'
+arch=('x86_64')
+url='https://github.com/falconindy/pkgfile/'
+license=('MIT')
+depends=(
+    'curl'
+    'glibc'
+    'libarchive'
+    'libgcc'
+    'libstdc++'
+    'pacman'
+    'pcre'
+    'systemd-libs')
+makedepends=(
+    'git'
+    'meson')
+checkdepends=(
+    'gtest'
+    'python')
+install=pkgfile.install
+source=("git+https://github.com/falconindy/pkgfile.git#tag=v${pkgver}?signed")
+sha256sums=('e09965c7a6abef75d7fb4e572eedae31aa87b171dbc7f47f7c162d796f17f879')
+validpgpkeys=('487EACC08557AD082088DABA1EB2638FF56C0C53') # Dave Reisner <d@falconindy.com>
+
+build() {
+    # House style: mold linker when available (runtime-guarded, no output effect).
+    local _mold=""
+    command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+    export LDFLAGS+=" ${_mold}"
+    arch-meson "$pkgname" build
+    meson compile -C build --jobs "${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+check() {
+    meson test -C build --print-errorlogs
+}
+
+package() {
+    meson install -C build --destdir "$pkgdir"
+
+    # trim: man pages (man8 pkgfile, man8 pkgfile-update) (docs) — not shipped
+    rm -rf "$pkgdir"/usr/share/man
+
+    install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname/"
+}

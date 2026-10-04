@@ -1,0 +1,22 @@
+pkgbase = libxft-git
+	pkgdesc = FreeType-based font drawing library for X (git build)
+	pkgver = 2.3.9.r3.g6b333a3
+	pkgrel = 1
+	url = https://gitlab.freedesktop.org/xorg/lib/libxft
+	arch = x86_64
+	license = HPND-sell-variant
+	makedepends = git
+	makedepends = xorg-util-macros
+	depends = fontconfig
+	depends = freetype2
+	depends = glibc
+	depends = libx11
+	depends = libxrender
+	depends = xorgproto
+	provides = libxft=2.3.9.r3.g6b333a3
+	provides = libXft.so
+	conflicts = libxft
+	source = git+https://gitlab.freedesktop.org/xorg/lib/libxft.git
+	b2sums = SKIP
+
+pkgname = libxft-git

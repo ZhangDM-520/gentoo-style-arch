@@ -12,7 +12,7 @@ pkgbase = zstd-git
 	depends = zlib
 	depends = lz4
 	provides = zstd
-	provides = libzstd.so=1-64
+	provides = libzstd.so
 	conflicts = zstd
 	source = git+https://github.com/facebook/zstd.git#branch=release
 	md5sums = SKIP

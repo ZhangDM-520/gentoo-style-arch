@@ -1,0 +1,53 @@
+# Maintainer: auto-generated
+# Contributor: Dmitry Kharitonov <arch[at]nano-model[dot]com> (AUR libbs2b-git)
+# Contributor: Kyle Bloss <kylebloss[at]pelpix[dot]info> (AUR libbs2b-git)
+# Contributor: Panagiotis Papadopoulos pano_90 AT gmx DOT net (AUR libbs2b-git / stock)
+
+pkgname=libbs2b-git
+_pkgname=libbs2b
+pkgver=r75.g5ca2d59
+pkgrel=1
+pkgdesc="Bauer stereophonic-to-binaural DSP effect library (git build)"
+arch=('x86_64')
+url="https://github.com/alexmarsev/libbs2b"
+license=('MIT')
+depends=('glibc' 'libsndfile' 'libstdc++')
+makedepends=('git')
+provides=("libbs2b=$pkgver" 'libbs2b.so')
+conflicts=('libbs2b')
+# NOTE: upstream has no release tags — pkgver is rev-count based (like seatd-git)
+# and therefore vercmps below stock 3.1.0 despite being newer code.
+source=("git+https://github.com/alexmarsev/${_pkgname}.git")
+b2sums=('SKIP')
+
+pkgver() {
+  cd "$_pkgname"
+  printf 'r%s.g%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+prepare() {
+  cd "$_pkgname"
+  # dist-lzma is rejected by modern automake (stock libbs2b)
+  sed -i 's/dist-lzma/dist-xz/g' configure.ac
+  autoreconf -fvi
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  local _jobs="${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+
+  cd "$_pkgname"
+  # stock's formatsecurity.diff fix is already merged upstream (verified at r75);
+  # stock's libtool -Wl,-O1 sed is dropped (opt level belongs to makepkg.conf)
+  ./configure --prefix=/usr --sysconfdir=/etc --localstatedir=/var
+  make -j "$_jobs"
+}
+
+package() {
+  cd "$_pkgname"
+  make DESTDIR="$pkgdir" install
+  install -Dm644 COPYING "$pkgdir/usr/share/licenses/$pkgname/COPYING"
+}

@@ -1,0 +1,48 @@
+# Maintainer: Antonio Rojas <arojas@archlinux.org>
+# Maintainer: Jaroslav Lichtblau <svetlemodry@archlinux.org>
+# Contributor: Felix Yan <felixonmars@archlinux.org>
+# Contributor: Andrea Scarpino <andrea@archlinux.org>
+# Contributor: trya <tryagainprod@gmail.com>
+
+pkgbase=quazip
+pkgname=(quazip-qt6)
+pkgver=1.7.2
+pkgrel=1
+pkgdesc='C++ wrapper for the ZIP/UNZIP C package'
+url='https://stachenov.github.io/quazip/'
+license=(LGPL-2.1-or-later)
+arch=(x86_64)
+depends=(bzip2
+         glibc
+         libgcc
+         libstdc++
+         qt6-base
+         qt6-5compat
+         zlib)
+makedepends=(cmake
+             git)
+source=(git+https://github.com/stachenov/quazip#tag=v$pkgver)
+sha256sums=('0c8cdc7a5a587f8c544ca73b47b29cb6741f6b61181f3e2b519dbb2746b79164')
+
+build() {
+  # House style: mold linker when available (CMake reads LDFLAGS at cache init)
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+  cmake -B build -S $pkgbase \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DQUAZIP_QT_MAJOR_VERSION=6
+  cmake --build build
+}
+
+package_quazip-qt6() {
+  provides=(libquazip1-qt6.so)
+
+  DESTDIR="$pkgdir" cmake --install build
+
+  # license: ship upstream licence text (LGPL-2.1-or-later)
+  local _l
+  for _l in COPYING COPYING.LESSER; do
+    if [[ -f $pkgbase/$_l ]]; then install -Dm644 $pkgbase/$_l -t "$pkgdir/usr/share/licenses/$pkgname/"; fi
+  done
+}

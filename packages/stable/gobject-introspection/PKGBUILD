@@ -1,0 +1,151 @@
+# Maintainer: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
+# Maintainer: Fabian Bornschein <fabiscafe@archlinux.org>
+# Contributor: Jan de Groot <jgc@archlinux.org>
+
+# Source-dedupe merge: this is the single pkgbase for all three
+# gobject-introspection split outputs. It replaces the former duplicate recipe
+# packages/stable/libgirepository (byte-identical source pins: same tag pins
+# and the same unpinned gobject-introspection-tests checkout); its check()/
+# enabled test run folds into the test-suite trim in build() below.
+
+pkgbase=gobject-introspection
+pkgname=(
+  gobject-introspection
+  gobject-introspection-runtime
+  libgirepository
+)
+pkgver=1.86.0
+pkgrel=2
+pkgdesc="Introspection system for GObject-based libraries"
+url="https://gi.readthedocs.io/en/latest/"
+arch=(x86_64)
+license=(
+  GPL-2.0-or-later
+  LGPL-2.0-or-later
+)
+_glibver=2.86.3
+makedepends=(
+  "glib2=$_glibver"
+  cairo
+  git
+  glibc
+  # trim: gtk-doc fed the gtk_doc API reference and python-sphinx the
+  # docs/website — both trimmed below; doctool keeps its python-markdown/
+  # python-mako runtime needs
+  libffi
+  libffi
+  meson
+  python
+  python-mako
+  python-markdown
+  python-setuptools
+)
+source=(
+  "git+https://gitlab.gnome.org/GNOME/gobject-introspection.git#tag=$pkgver"
+  "git+https://gitlab.gnome.org/GNOME/glib.git?signed#tag=$_glibver"
+  "git+https://gitlab.gnome.org/GNOME/gobject-introspection-tests.git"
+)
+b2sums=('46007e1c426ebfde0d94b84398a1d99e0fc516f1b5a78590d0d1ddec76b90d19a9c6f4f9959a6d243cbb3601390763bbdd7d05d1d1c3d4fb9746f453b40ea849'
+        'c384d8196e7966261d78245b59a0d14a061d49f7fb15faebd6e10527eb58c2893bffaee30f894b45feaeb1e1d8ccfc65e79958c42458b298e1e9675f68202780'
+        'SKIP')
+validpgpkeys=(
+  923B7025EE03C1C59F42684CF0942E894B2EAFA0  # Philip Withnall <philip@tecnocode.co.uk>
+  D4C501DA48EB797A081750939449C2F50996635F  # Marco Trevisan <marco@trevi.me>
+)
+
+prepare() {
+  cd $pkgbase
+
+  git submodule init
+  git submodule set-url gobject-introspection-tests "$srcdir/gobject-introspection-tests"
+  git -c protocol.file.allow=always -c protocol.allow=never submodule update
+}
+
+build() {
+  local meson_options=(
+    -D glib_src_dir="$srcdir/glib"
+    # trim: gtk_doc API reference (docs) and the test suite — the
+    # gobject-introspection-tests source and its prepare() wiring stay in
+    # source=() but no longer gate anything; the glib checkout still feeds the
+    # GIRepository-2.0 gir/typelib built below
+    -D gtk_doc=false
+    -D tests=false
+  )
+
+  # House style: mold linker when available (arch-meson consumes LDFLAGS env)
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  arch-meson $pkgbase build "${meson_options[@]}"
+  meson compile -C build -j "${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+_pick() {
+  local p="$1" f d; shift
+  for f; do
+    d="$srcdir/$p/${f#$pkgdir/}"
+    mkdir -p "$(dirname "$d")"
+    mv "$f" "$d"
+    rmdir -p --ignore-fail-on-non-empty "$(dirname "$f")"
+  done
+}
+
+package_gobject-introspection() {
+  depends=(
+    "gobject-introspection-runtime=$pkgver-$pkgrel"
+    "libgirepository=$pkgver-$pkgrel"
+    glib2
+    glibc
+    libffi
+    python
+    python-mako
+    python-markdown
+    python-setuptools
+  )
+
+  meson install -C build --destdir "$pkgdir"
+
+  cd "$pkgdir"
+
+  python -m compileall -d /usr/lib/$pkgbase usr/lib/$pkgbase
+  python -O -m compileall -d /usr/lib/$pkgbase usr/lib/$pkgbase
+
+  _pick libg usr/include/gobject-introspection-1.0
+  _pick libg usr/lib/libgirepository-1.0.so*
+  _pick libg usr/lib/pkgconfig/gobject-introspection*-1.0.pc
+  _pick libg usr/lib/girepository-1.0/GIRepository-2.0.typelib
+  _pick libg usr/share/gir-1.0/GIRepository-2.0.gir
+  # trim: usr/share/gtk-doc (gtk_doc API reference, see build())
+  # house: licences re-homed to /usr/share/licenses (stock installs none)
+  install -Dm644 "$srcdir/$pkgbase"/COPYING{,.GPL,.LGPL} -t "$pkgdir"/usr/share/licenses/$pkgname/
+
+  _pick runtime usr/lib/girepository-1.0
+}
+
+package_gobject-introspection-runtime() {
+  pkgdesc+=" - runtime"
+  depends=("libgirepository=$pkgver-$pkgrel")
+
+  mv runtime/* "$pkgdir"
+  # house: licences re-homed to /usr/share/licenses (stock installs none)
+  install -Dm644 "$srcdir/$pkgbase"/COPYING{,.GPL,.LGPL} -t "$pkgdir"/usr/share/licenses/$pkgname/
+}
+
+package_libgirepository() {
+  pkgdesc+=" - runtime library"
+  depends=(
+    glib2
+    glibc
+    libffi
+    libffi.so
+    libg{lib,object,module}-2.0.so
+  )
+  provides=(libgirepository-1.0.so)
+
+  mv libg/* "$pkgdir"
+  # house: licences re-homed to /usr/share/licenses (stock installs none)
+  install -Dm644 "$srcdir/$pkgbase"/COPYING{,.GPL,.LGPL} -t "$pkgdir"/usr/share/licenses/$pkgname/
+}
+
+# vim:set sw=2 sts=-1 et:

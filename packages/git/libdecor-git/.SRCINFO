@@ -1,0 +1,22 @@
+pkgbase = libdecor-git
+	pkgdesc = Client-side decorations library for Wayland clients (git build)
+	pkgver = 0.2.5.r0.g149c6f0
+	pkgrel = 1
+	url = https://gitlab.freedesktop.org/libdecor/libdecor
+	arch = x86_64
+	license = MIT
+	makedepends = git
+	makedepends = gtk3
+	makedepends = meson
+	makedepends = ninja
+	makedepends = wayland-protocols
+	depends = dbus
+	depends = pango
+	depends = wayland
+	provides = libdecor=0.2.5.r0.g149c6f0
+	provides = libdecor-0.so
+	conflicts = libdecor
+	source = libdecor::git+https://gitlab.freedesktop.org/libdecor/libdecor.git#branch=libdecor-0.2
+	b2sums = SKIP
+
+pkgname = libdecor-git

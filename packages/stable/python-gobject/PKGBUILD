@@ -1,0 +1,79 @@
+# Maintainer: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
+# Maintainer: Fabian Bornschein <fabiscafe@archlinux.org>
+# Contributor: Ionut Biru <ibiru@archlinux.org>
+
+pkgbase=pygobject
+pkgname=(
+  python-gobject
+  # trim: python-gobject-docs split (sphinx HTML docs) — dropped together with
+  # its makedepends and package_python-gobject-docs() below
+)
+pkgver=3.58.0
+pkgrel=1
+pkgdesc="Python bindings for GLib/GObject/GIO/GTK"
+url="https://pygobject.gnome.org/"
+arch=(x86_64)
+license=(LGPL-2.1-or-later)
+depends=(
+  glib2
+  glibc
+  gobject-introspection-runtime
+  libffi
+  python
+)
+makedepends=(
+  git
+  gobject-introspection
+  meson
+  python-cairo
+  python-setuptools
+  # trim: python-pydata-sphinx-theme/python-sphinx/python-sphinx-copybutton
+  # fed the python-gobject-docs split — dropped together with the split below
+)
+# trim: test suite (xvfb pytest below is gone) — its gdk-pixbuf2/gtk4/
+# python-pytest/xorg-server-xvfb checkdepends are dropped together with it
+optdepends=('python-cairo: Cairo bindings')
+source=(
+  "git+https://gitlab.gnome.org/GNOME/pygobject.git?signed#tag=$pkgver"
+  "git+https://gitlab.gnome.org/GNOME/gobject-introspection-tests.git#commit=53e6bc978d5011f22d0a27cca49a94b19816ca7d"
+  "git+https://github.com/python/pythoncapi-compat#commit=22811c3f0e69908894d2bd724f572b32667f2141"
+)
+b2sums=('009f5340c0834cce96c169de37c59a8404df5dc98b376682488e56bb87fbfebb3ee4b1524a10c5f7d9e073550badebd24d9a68f9b81d38ffbc097b8807889de7'
+        '331ab5a17f2f113ea8f95e5c202e0cfca0d37e9d4029a81f352506a8444f45de539d12711dbee8ef3d4f355d9cef9bf281515c558008fd880d7644d1d9fc0356'
+        '6ff1699812c68bbfe129906da84cec73102d9f1a83975a13a8325341808a71fc73b75e0a8cb532b68dbb7f174bca6d0fb83d48f834e72e74b28fb71a51a8491b')
+validpgpkeys=(
+  0EBF782C5D53F7E5FB02A66746BD761F7A49B0EC # Christoph Reiter <reiter.christoph@gmail.com>
+  12B7C9847B4AD5787318A831A61779569ADCE5E6 # Arjan Molenaar <gaphor@gmail.com>
+)
+
+prepare() {
+  cd pygobject
+}
+
+build() {
+  # Inject subprojects
+  export MESON_PACKAGE_CACHE_DIR="$srcdir"
+
+  # House style: mold linker when available (arch-meson consumes LDFLAGS env)
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  arch-meson pygobject build
+  meson compile -C build -j "${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package_python-gobject() {
+  provides=("pygobject-devel=$pkgver")
+  # house: stock conflicts=(pygobject-devel) + replaces=(pygobject-devel<=3.36.1-1)
+  # dropped — upgrade-in-place takes no conflicts/replaces
+
+  meson install -C build --destdir "$pkgdir"
+  python -m compileall -d /usr/lib "$pkgdir/usr/lib"
+  python -O -m compileall -d /usr/lib "$pkgdir/usr/lib"
+  # house: licence re-homed to /usr/share/licenses (stock installs none)
+  install -Dm644 pygobject/COPYING "$pkgdir"/usr/share/licenses/$pkgname/COPYING
+}
+
+
+# vim:set sw=2 sts=-1 et:

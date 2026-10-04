@@ -1,0 +1,21 @@
+pkgbase = libteam
+	pkgdesc = Library for controlling team network device
+	pkgver = 1.32
+	pkgrel = 3
+	url = https://libteam.org/
+	arch = x86_64
+	license = LGPL-2.1-or-later
+	makedepends = git
+	depends = bash
+	depends = glibc
+	depends = jansson
+	depends = libdaemon
+	depends = libdbus
+	depends = libnl
+	depends = zeromq
+	source = git+https://github.com/jpirko/libteam#tag=v1.32
+	b2sums = a2d17fefbe2482241bd722b7f8f4904484838207330dc93819233f98e064d4fc06c3aea908680bf10eccc1d9e1bd339605eb91a29e8dbb4df109ea1ae8aaecf5
+
+pkgname = libteam
+	provides = libteam.so
+	provides = libteamdctl.so

@@ -1,0 +1,101 @@
+# Maintainer: Fabian Bornschein <fabiscafe@archlinux.org>
+# Maintainer: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
+# Contributor: Jan de Groot <jgc@archlinux.org>
+
+pkgbase=evince
+# trim: evince-lib-docs split (gi-docgen API docs) — dropped with its _pick
+# machinery below and the docs options in build()
+pkgname=(
+  evince
+)
+pkgver=48.4
+pkgrel=2
+epoch=1
+pkgdesc="Document viewer (PDF, PostScript, XPS, djvu, dvi, tiff, cbr, cbz, cb7, cbt)"
+url="https://gitlab.gnome.org/GNOME/evince"
+arch=(x86_64)
+license=(GPL-2.0-or-later)
+depends=(
+  at-spi2-core
+  cairo
+  dconf
+  djvulibre
+  exempi
+  gdk-pixbuf2
+  glib2
+  glibc
+  gnome-desktop
+  gsettings-desktop-schemas
+  gsfonts
+  gspell
+  gst-plugins-base-libs
+  gstreamer
+  gtk3
+  gvfs
+  hicolor-icon-theme
+  libarchive
+  libgcc
+  libgxps
+  libhandy
+  libsecret
+  libspectre
+  libsynctex
+  libtiff
+  libxml2
+  pango
+  poppler-glib
+)
+makedepends=(
+  appstream
+  # trim: gi-docgen (API reference docs) + yelp-tools (user help) — see the
+  # -D gtk_doc=false/-D user_doc=false pair in build()
+  git
+  glib2-devel
+  gobject-introspection
+  meson
+  texlive-bin
+)
+source=(
+  "git+https://gitlab.gnome.org/GNOME/evince.git?signed#tag=${pkgver/[a-z]/.&}"
+)
+b2sums=('8270950b1ee6ed489b2f018a29dde676303a8ac195aae810d09f6a6ff9d3f5f44292eadc4b4d5fe59d82c333f4bdb4e69c938a1e1ff92c808ea373dd7b1d161a')
+validpgpkeys=(
+  3289FDCF12AC2321BB41E9EF342B349ED9FE78F0 # Germán Poo-Caamaño <gpoo@gnome.org>
+)
+
+prepare() {
+  cd evince
+}
+
+build() {
+  local meson_options=(
+    -D ps=enabled
+    # trim: gi-docgen API reference + yelp user help (docs) — pairs with the
+    # dropped gi-docgen/yelp-tools makedeps and the dropped evince-lib-docs
+    -D gtk_doc=false
+    -D user_doc=false
+  )
+
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  arch-meson evince build "${meson_options[@]}"
+  meson compile -C build
+}
+
+check() {
+  meson test -C build --print-errorlogs
+}
+
+package_evince() {
+  provides=(libev{document,view}3.so)
+  optdepends=('texlive-bin: DVI support')
+
+  meson install -C build --destdir "$pkgdir"
+
+  install -Dm644 evince/COPYING -t "$pkgdir"/usr/share/licenses/$pkgname/
+}
+
+# vim:set sw=2 sts=-1 et:

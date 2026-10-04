@@ -10,7 +10,7 @@ pkgbase = lz4-git
 	makedepends = git
 	depends = glibc
 	provides = lz4=1:1.10.0.r321.g0774d055
-	provides = liblz4.so=1-64
+	provides = liblz4.so
 	conflicts = lz4
 	options = staticlibs
 	source = git+https://github.com/lz4/lz4.git

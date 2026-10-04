@@ -1,0 +1,92 @@
+# Maintainer: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
+# Contributor: Ionut Biru <ibiru@archlinux.org>
+
+pkgname=accountsservice
+pkgver=26.27.3
+pkgrel=1
+pkgdesc="D-Bus interface for user account query and manipulation"
+url="https://gitlab.freedesktop.org/accountsservice/accountsservice"
+arch=(x86_64)
+license=(GPL-3.0-or-later)
+depends=(
+  glib2
+  glibc
+  json-c
+  libgcc
+  libxcrypt
+  polkit
+  shadow
+  systemd
+)
+# trim: gtk-doc API docs and the docbook man pages are disabled below — the
+# gtk-doc/docbook-xsl/xmlto makedepends go with them
+makedepends=(
+  git
+  glib2-devel
+  gobject-introspection
+  meson
+  vala
+)
+checkdepends=(
+  glibc-locales
+  python-dbusmock
+  python-gobject
+)
+source=(
+  "git+$url.git#tag=$pkgver"
+  accounts-daemon-restart.hook
+  0001-tests-Drop-check-format-test.patch
+)
+b2sums=('8d69d3238ebe41733f32c39e752826ebff06b084f848f1a8fe3cc93d733a400dab2039fd747b8487b145a11d9ad745dce1d9f6f05389e2b8e0961b156f88c599'
+        '62f69bafdfc08a9a43c3d2bd8e66461960603a91826d1b42001eb6f320e4b6b39bbe99fa715c08a995c295bf0626a88e35b2ef4f0fc96ff4ced6dfe805f1a2a2'
+        'e59a6c0d092a28d34cc9f7260aa58cbe73e2a4d5d303f5676fcc929764cd1158e59c330cbd0115e895ca0cae52ed31e4f3ad2e2549fb7dbf618bf8327f1c438d')
+
+prepare() {
+  cd $pkgname
+
+  # Fix build with patches
+  git apply -3 ../0001-tests-Drop-check-format-test.patch
+}
+
+build() {
+  local meson_options=(
+    -D admin_group=wheel
+    # trim: man pages (docbook) and gtk-doc API docs
+    -D docbook=false
+    -D gtk_doc=false
+  )
+
+  # House style: mold linker when available (arch-meson consumes LDFLAGS env)
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  arch-meson $pkgname build "${meson_options[@]}"
+  meson compile -C build -j "${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+}
+
+check() {
+  meson test -C build --print-errorlogs
+}
+
+package() {
+  depends+=(
+    libcrypt.so
+    libg{lib,object,io}-2.0.so
+    libsystemd.so
+  )
+  provides+=(libaccountsservice.so)
+
+  meson install -C build --destdir "$pkgdir"
+
+  install -Dt "$pkgdir/usr/share/libalpm/hooks" -m644 *.hook
+  install -d "$pkgdir/usr/share/accountsservice/interfaces"
+
+  # license: ship upstream licence text (GPL-3.0-or-later)
+  local _l
+  for _l in COPYING LICENSE; do
+    if [[ -f $pkgname/$_l ]]; then install -Dm644 "$pkgname/$_l" -t "$pkgdir/usr/share/licenses/$pkgname/"; fi
+  done
+}
+
+# vim:set sw=2 sts=-1 et:

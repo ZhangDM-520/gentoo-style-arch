@@ -1,0 +1,43 @@
+# Maintainer:
+# Contributor: Jan de Groot <jgc@archlinux.org>
+
+pkgname=libvdpau
+pkgver=1.5
+pkgrel=4
+pkgdesc='Nvidia VDPAU library'
+arch=(x86_64)
+url='https://www.freedesktop.org/wiki/Software/VDPAU/'
+license=(MIT)
+depends=(
+  glibc
+  libx11
+  libxext
+)
+makedepends=(
+  git
+  meson
+  xorgproto
+)
+optdepends=(
+  'libvdpau-va-gl: driver using VAAPI'
+  'nvidia-utils: driver for NVIDIA'
+)
+provides=(libvdpau.so libvdpau_trace.so)
+source=("git+https://gitlab.freedesktop.org/vdpau/libvdpau.git#tag=$pkgver")
+b2sums=(d8f0e7d6290d51fd764f2c29443fef52aea8a6ae5c3c3a91ca2a9ed788cd74972189c20095c239b0aab3dcece54acc320be95dfe5ec65902381b8f3bfe80ac3a)
+
+build() {
+  # trim: doxygen API docs (-D documentation=false — docs; stock 'auto' builds
+  # them when doxygen+dot are present)
+  arch-meson $pkgname build -D documentation=false
+  meson compile -C build
+}
+
+# trim: upstream meson test suite (check()) — not run for this recipe
+
+package() {
+  meson install -C build --destdir "$pkgdir"
+  install -Dm644 libvdpau/COPYING -t "$pkgdir/usr/share/licenses/$pkgname/"
+}
+
+# vim:set sw=2 sts=-1 et:

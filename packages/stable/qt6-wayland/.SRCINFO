@@ -1,0 +1,35 @@
+pkgbase = qt6-wayland
+	pkgdesc = Provides APIs for Wayland
+	pkgver = 6.12.0
+	pkgrel = 1
+	url = https://www.qt.io
+	arch = x86_64
+	groups = qt6
+	license = GPL-3.0-only
+	license = LGPL-3.0-only
+	license = LicenseRef-Qt-Commercial
+	license = Qt-GPL-exception-1.0
+	makedepends = cmake
+	makedepends = git
+	makedepends = ninja
+	makedepends = vulkan-headers
+	depends = glibc
+	depends = libglvnd
+	depends = libstdc++
+	depends = libxkbcommon
+	depends = qt6-base
+	depends = qt6-declarative
+	depends = qt6-svg
+	depends = wayland
+	provides = libQt6WaylandClient.so
+	provides = libQt6WaylandCompositor.so
+	provides = libQt6WaylandCompositorIviapplication.so
+	provides = libQt6WaylandCompositorPresentationTime.so
+	provides = libQt6WaylandCompositorWLShell.so
+	provides = libQt6WaylandCompositorXdgShell.so
+	provides = libQt6WaylandEglClientHwIntegration.so
+	provides = libQt6WaylandEglCompositorHwIntegration.so
+	source = git+https://code.qt.io/qt/qtwayland#tag=v6.12.0
+	sha256sums = ad1886ab73c1a0bf1a4b544f348b500851dab61e6aa58724da569e95985f6090
+
+pkgname = qt6-wayland

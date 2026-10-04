@@ -1,0 +1,60 @@
+# Maintainer: Antonio Rojas <arojas@archlinux.org>
+# Contributor: tikysal <tikysal@gmail.com>
+# Derived from Daniel Ehlers'
+
+pkgname=coin-or-coinutils
+pkgver=2.11.13
+pkgrel=2
+pkgdesc='COIN-OR collection of utility classes'
+arch=(x86_64)
+url='https://github.com/coin-or/CoinUtils'
+license=(EPL-2.0)
+depends=(blas
+         bzip2
+         coin-or-data-sample
+         glibc
+         glpk
+         libgcc
+         libstdc++
+         zlib)
+makedepends=(gcc-fortran
+             git)
+# trim: doxygen (makedepends) + the generated API docs go together (docs)
+groups=(coin-or)
+# House standard: bare soname provide per ELF output (never pinned).
+provides=(libCoinUtils.so)
+source=(git+https://github.com/coin-or/CoinUtils#tag=releases/$pkgver)
+sha256sums=('db83271f4f0bc489a75278ff4128a79e450035f0405873ec787d52ca6cbab6b4')
+
+build() {
+  cd CoinUtils
+
+  # House style: mold linker when available
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  ./configure \
+    --prefix=/usr \
+    --with-blas-lib='-lblas' \
+    --with-lapack-lib='-llapack' \
+    --with-glpk-lib='-lglpk' \
+    --enable-dependency-linking
+  make -j"${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+# trim: test suite (check()/make test) dropped (Class B tests)
+
+package() {
+  cd CoinUtils
+  make DESTDIR="$pkgdir" install
+
+  # trim: doxygen API doc payload if the stock install produced it (docs)
+  rm -rf "$pkgdir/usr/share/coin/doc"
+
+  # license: ship the upstream licence text(s) (EPL-2.0)
+  local _l
+  for _l in COPYING LICENSE; do
+    [[ -f $_l ]] && install -Dm644 "$_l" -t "$pkgdir/usr/share/licenses/$pkgname/"
+  done
+}

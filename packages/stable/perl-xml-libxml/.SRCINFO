@@ -1,0 +1,19 @@
+pkgbase = perl-xml-libxml
+	pkgdesc = Interface to the libxml library
+	pkgver = 2.0213
+	pkgrel = 1
+	url = https://search.cpan.org/dist/XML-LibXML
+	install = perl-xml-libxml.install
+	arch = x86_64
+	license = Artistic-1.0-Perl
+	license = GPL-1.0-or-later
+	depends = perl-alien-libxml2
+	depends = perl-xml-sax
+	depends = perl-xml-namespacesupport
+	provides = perl-libxml
+	provides = perl-xml-libxml-common
+	options = !emptydirs
+	source = https://www.cpan.org/authors/id/T/TO/TODDR/XML-LibXML-2.0213.tar.gz
+	sha512sums = 669446176a90f784017576436bee4952c110953b5198e8ad043af9507e97e93bacfc0b29c201bff03322dba77336e4680156052d356c7026c1b804c3f310d8ce
+
+pkgname = perl-xml-libxml

@@ -1,0 +1,72 @@
+# Maintainer: Lukas Fleischer <lfleischer@archlinux.org>
+# Contributor: Gaetan Bisson <bisson@archlinux.org>
+# Contributor: kevin <kevin@archlinux.org>
+# Contributor: John Proctor <jproctor@prium.net>
+
+pkgname=graphviz
+pkgver=16.1.0
+pkgrel=1
+pkgdesc='Graph visualization software'
+url='https://www.graphviz.org/'
+license=('EPL')
+arch=('x86_64')
+depends=('libltdl' 'gd' 'librsvg' 'ghostscript' 'pango' 'gts' 'gsfonts')
+# bare soname provides for every sonamed ELF output (core libs + gvplugin
+# loadable plugins); the swig/luarocks binding modules carry no sonames
+provides=('libcdt.so' 'libcgraph.so' 'libgvc.so' 'libgvpr.so' 'libpathplan.so' 'libxdot.so'
+          'libgvplugin_core.so' 'libgvplugin_dot_layout.so' 'libgvplugin_gd.so'
+          'libgvplugin_gs.so' 'libgvplugin_kitty.so' 'libgvplugin_neato_layout.so'
+          'libgvplugin_pango.so' 'libgvplugin_rsvg.so' 'libgvplugin_vt.so'
+          'libgvplugin_webp.so' 'libgvplugin_xlib.so')
+makedepends=('swig' 'mono' 'guile' 'lua' 'perl' 'python' 'r' 'tk' 'qt6-base')
+optdepends=('mono: sharp bindings'
+            'guile: guile bindings'
+            'lua: lua bindings'
+            'perl: perl bindings'
+            'python: python bindings'
+            'r: r bindings'
+            'tcl: tcl bindings'
+            'qt6-base: gvedit'
+            'xterm: vimdot')
+source=("https://gitlab.com/graphviz/graphviz/-/archive/$pkgver/$pkgname-$pkgver.tar.gz")
+sha256sums=('1e028b2b3e84e946c1d3e8c47590f8f0741bba1041fe6eff36eee87e598ea249')
+b2sums=('dabed4c1dd0b87f17da65035e411671a85a40f8ba8fcfd7ace53236d616779c76eadb4bf2531b27d450be09eab92bd725045735a833670b56392fdd62986427a')
+install='graphviz.install'
+
+prepare() {
+	cd "${srcdir}/${pkgname}-${pkgver}"
+	./autogen.sh NOCONFIG
+}
+
+build() {
+	cd "${srcdir}/${pkgname}-${pkgver}"
+
+	export LIBPOSTFIX=/
+	export CXXFLAGS+=' -fPIC -fpermissive'
+
+	# House style: mold linker when available
+	local _mold=""
+	command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+	export LDFLAGS+=" ${_mold}"
+
+	./configure --prefix=/usr --enable-python3=yes --disable-python --enable-lefty
+        sed -i -e 's/ -shared / -Wl,-O1,--as-needed\0/g' libtool # Fix overlinking
+	make
+}
+
+package() {
+	cd "${srcdir}/${pkgname}-${pkgver}"
+
+	make DESTDIR="${pkgdir}" install
+
+	# trim: man pages (docs) — stock dot2gxl man-symlink fix dropped together
+	# with its /usr/share/man inputs
+	rm -rf "${pkgdir}"/usr/share/man
+
+	install -Dm644 LICENSE -t "${pkgdir}"/usr/share/licenses/$pkgname/
+
+	# Deduplicates TCL libraries
+	cd "${pkgdir}/usr/lib/tcl8.6"
+	rm -fr graphviz
+	ln -s ../graphviz/tcl graphviz
+}

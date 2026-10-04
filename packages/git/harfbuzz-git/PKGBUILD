@@ -1,0 +1,92 @@
+# Maintainer: éclairevoyant
+# Contributor: Vincent Grande (shoober420) <shoober420 at gmail dot com>
+# Contributor: Jan Alexander Steffens (heftig) <heftig at archlinux dot org>
+# Contributor: Jan de Groot <jgc at archlinux dot org>
+# Recipe adapted for the gentoo-style-arch fleet; tracks upstream VCS directly.
+# The AUR package of the same name was used as a reference only.
+
+pkgname=harfbuzz-git
+pkgver=8.0.1.r1.5a65ede5d
+pkgrel=1
+pkgdesc="OpenType text shaping engine (git build)"
+url="https://github.com/harfbuzz/harfbuzz"
+arch=('x86_64')
+license=('MIT')
+depends=(
+  cairo
+  chafa
+  freetype2
+  glib2
+  graphite
+  icu
+)
+makedepends=(
+  cairo
+  chafa
+  freetype2
+  git
+  glib2
+  gobject-introspection
+  graphite
+  gtk-doc
+  icu
+  meson
+  python
+  ragel
+)
+# stock Arch splits harfbuzz-cairo/-icu/-utils/-docs; this recipe ships one
+# monolithic output and provides the split names + every shipped soname
+provides=(
+  "harfbuzz=$pkgver"
+  "harfbuzz-cairo=$pkgver"
+  "harfbuzz-icu=$pkgver"
+  "harfbuzz-utils=$pkgver"
+  "harfbuzz-docs=$pkgver"
+  libharfbuzz.so
+  libharfbuzz-subset.so
+  libharfbuzz-gobject.so
+  libharfbuzz-cairo.so
+  libharfbuzz-icu.so
+)
+conflicts=(
+  harfbuzz
+  harfbuzz-cairo
+  harfbuzz-icu
+  harfbuzz-utils
+  harfbuzz-docs
+)
+source=("git+https://github.com/harfbuzz/harfbuzz.git")
+b2sums=('SKIP')
+
+pkgver() {
+  git -C harfbuzz describe --long --tags | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g'
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  # Harfbuzz wants no exceptions
+  CFLAGS="${CFLAGS/-fexceptions/}"
+  CXXFLAGS="${CXXFLAGS/-fexceptions/}"
+
+  local meson_options=(
+    -D graphite2=enabled
+  )
+
+  arch-meson harfbuzz build "${meson_options[@]}"
+  meson compile -C build -j "${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+check() {
+  mkdir -p tmp
+  TMPDIR="$PWD/tmp" meson test -C build --print-errorlogs
+  rm -r tmp
+}
+
+package() {
+  meson install -C build --destdir "$pkgdir"
+
+  install -Dt "$pkgdir/usr/share/licenses/$pkgname" -m644 harfbuzz/COPYING
+}

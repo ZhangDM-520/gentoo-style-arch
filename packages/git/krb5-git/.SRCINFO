@@ -1,0 +1,36 @@
+pkgbase = krb5-git
+	pkgdesc = The Kerberos network authentication system (git build)
+	pkgver = 1.22.2.r98.g82a4224f0
+	pkgrel = 1
+	url = https://web.mit.edu/kerberos/
+	arch = x86_64
+	license = custom
+	makedepends = git
+	makedepends = perl
+	depends = bash
+	depends = e2fsprogs
+	depends = glibc
+	depends = keyutils
+	depends = libldap
+	depends = libverto-module-base
+	depends = lmdb
+	depends = openssl
+	provides = krb5=1.22.2.r98.g82a4224f0
+	provides = libgssapi_krb5.so
+	provides = libgssrpc.so
+	provides = libk5crypto.so
+	provides = libkadm5clnt_mit.so
+	provides = libkadm5srv_mit.so
+	provides = libkdb5.so
+	provides = libkdb_ldap.so
+	provides = libkrad.so
+	provides = libkrb5.so
+	provides = libkrb5support.so
+	conflicts = krb5
+	options = !emptydirs
+	backup = etc/krb5.conf
+	backup = var/lib/krb5kdc/kdc.conf
+	source = git+https://github.com/krb5/krb5.git
+	b2sums = SKIP
+
+pkgname = krb5-git

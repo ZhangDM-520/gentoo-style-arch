@@ -1,0 +1,40 @@
+# Maintainer: auto-generated
+# AUR reference: libepoxy-git (Maintainer: Christoph Haag <christoph.haag@collabora.com>,
+# Contributor: Laurent Carlier <lordheavym@gmail.com>)
+pkgname=libepoxy-git
+_pkgname=libepoxy
+pkgver=1.5.10.r0.g34ecb90
+pkgrel=1
+pkgdesc="Library handling OpenGL function pointer management (git build)"
+arch=('x86_64')
+url="https://github.com/anholt/libepoxy"
+license=('MIT')
+depends=('glibc' 'libglvnd' 'libx11')
+# doxygen/graphviz dropped with docs=false below (doc trim; AUR ref builds docs=true)
+makedepends=('git' 'meson' 'python' 'libx11' 'xorgproto')
+provides=("libepoxy=$pkgver" 'libepoxy.so')
+conflicts=('libepoxy')
+source=("git+https://github.com/anholt/libepoxy.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$_pkgname"
+  git describe --long --tags | sed 's/\([^-]*-g\)/r\1/;s/-/./g;s/^v//g'
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  arch-meson "$_pkgname" build \
+    -D docs=false \
+    -D b_lto=true \
+    -D b_ndebug=true
+  meson compile -C build
+}
+
+package() {
+  meson install -C build --destdir "$pkgdir"
+  install -Dm644 "$_pkgname/COPYING" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

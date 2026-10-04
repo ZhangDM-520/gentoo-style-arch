@@ -1,0 +1,26 @@
+pkgbase = qt6-5compat
+	pkgdesc = Module that contains unsupported Qt 5 APIs
+	pkgver = 6.12.0
+	pkgrel = 1
+	url = https://www.qt.io
+	arch = x86_64
+	groups = qt6
+	license = GPL-3.0-only
+	license = LGPL-3.0-only
+	license = LicenseRef-Qt-Commercial
+	license = Qt-GPL-exception-1.0
+	makedepends = cmake
+	makedepends = git
+	makedepends = ninja
+	makedepends = qt6-declarative
+	depends = glibc
+	depends = icu
+	depends = libstdc++
+	depends = qt6-base
+	depends = qt6-shadertools
+	optdepends = qt6-declarative: for QtGraphicalEffects
+	provides = libQt6Core5Compat.so
+	source = git+https://code.qt.io/qt/qt5compat#tag=v6.12.0
+	sha256sums = a636bd930b123d012d8eed399309b854936a3c76537573311cf5a637d6ec43e5
+
+pkgname = qt6-5compat

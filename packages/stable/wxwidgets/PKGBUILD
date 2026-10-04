@@ -1,0 +1,171 @@
+# Maintainer: Antonio Rojas <arojas@archlinux.org>
+# Contributor: Eric Bélanger <eric@archlinux.org>
+
+# Merged recipe: this is the single pkgbase for the pinned wxWidgets tag, so
+# the tag is cloned and the stock three-tree build (build-base/build-gtk3/
+# build-qt5) runs exactly once. It replaces the former per-output recipes
+# packages/stable/{wxwidgets-common,wxwidgets-gtk3}. The qt5-base makedep is
+# consumed by the build-qt5 tree that feeds package_wxwidgets-common (stock
+# split separation, kept verbatim) — not by a wxqt output.
+# trim: the stock wxwidgets-qt5 split is dropped together with its depends and
+# its package_*() install path (its build-qt5 tree still feeds
+# package_wxwidgets-common), the stock-commented wxwidgets-gtk4 split and its
+# build-gtk4 tree stay dropped with their build/install paths, and the stock
+# conflicts=(wxgtk-common)/replaces=(wxgtk-common) entries are dropped per
+# house standard (no conflicts/replaces)
+pkgbase=wxwidgets
+pkgname=(wxwidgets-common
+         wxwidgets-gtk3)
+pkgver=3.2.11
+pkgrel=2
+arch=(x86_64)
+url='https://wxwidgets.org'
+license=(custom:wxWindows)
+makedepends=(cmake
+             git
+             glu
+             gst-plugins-base
+             libmspack
+             libnotify
+             nanosvg
+             qt5-base
+             sdl2
+             webkit2gtk-4.1)
+source=(git+https://github.com/wxWidgets/wxWidgets#tag=v$pkgver)
+sha256sums=('c693bc1b8369f564568f69813d2057586d04d2216b3acd2e5a1988df661bfce6')
+
+build() {
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  cmake -B build-base -S wxWidgets \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DCMAKE_BUILD_TYPE=None \
+    -DwxUSE_GUI=OFF \
+    -DwxUSE_REGEX=sys \
+    -DwxUSE_ZLIB=sys \
+    -DwxUSE_EXPAT=sys \
+    -DwxUSE_LIBJPEG=sys \
+    -DwxUSE_LIBPNG=sys \
+    -DwxUSE_LIBTIFF=sys \
+    -DwxUSE_LIBLZMA=sys \
+    -DwxUSE_NANOSVG=sys \
+    -DwxUSE_LIBMSPACK=ON \
+    -DwxUSE_PRIVATE_FONTS=ON
+  cmake --build build-base --parallel "${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+
+  cmake -B build-gtk3 -S wxWidgets \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DCMAKE_BUILD_TYPE=None \
+    -DwxBUILD_TOOLKIT=gtk3 \
+    -DwxUSE_OPENGL=ON \
+    -DwxUSE_REGEX=sys \
+    -DwxUSE_ZLIB=sys \
+    -DwxUSE_EXPAT=sys \
+    -DwxUSE_LIBJPEG=sys \
+    -DwxUSE_LIBPNG=sys \
+    -DwxUSE_LIBTIFF=sys \
+    -DwxUSE_LIBLZMA=sys \
+    -DwxUSE_NANOSVG=sys \
+    -DwxUSE_LIBMSPACK=ON \
+    -DwxUSE_PRIVATE_FONTS=ON \
+    -DwxUSE_GTKPRINT=ON \
+    -DwxUSE_HOTKEY=ON
+  cmake --build build-gtk3 --parallel "${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+
+  cmake -B build-qt5 -S wxWidgets \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DCMAKE_BUILD_TYPE=None \
+    -DwxBUILD_TOOLKIT=qt \
+    -DwxUSE_OPENGL=ON \
+    -DwxUSE_REGEX=sys \
+    -DwxUSE_ZLIB=sys \
+    -DwxUSE_EXPAT=sys \
+    -DwxUSE_LIBJPEG=sys \
+    -DwxUSE_LIBPNG=sys \
+    -DwxUSE_LIBTIFF=sys \
+    -DwxUSE_LIBLZMA=sys \
+    -DwxUSE_NANOSVG=sys \
+    -DwxUSE_LIBMSPACK=ON \
+    -DwxUSE_PRIVATE_FONTS=ON \
+    -DwxUSE_HOTKEY=ON
+  cmake --build build-qt5 --parallel "${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+}
+
+package_wxwidgets-common() {
+  pkgdesc='Common libraries and headers for wxwidgets'
+  depends=(curl
+           glib2
+           glibc
+           expat
+           libgcc
+           libsecret
+           libstdc++
+           pcre2
+           xz
+           zlib)
+  provides=(libwx_baseu-3.2.so
+            libwx_baseu_net-3.2.so
+            libwx_baseu_xml-3.2.so)
+
+  DESTDIR="$pkgdir" cmake --install build-qt5
+  DESTDIR="$pkgdir" cmake --install build-gtk3
+  DESTDIR="$pkgdir" cmake --install build-base
+  rm -r "$pkgdir"/usr/lib/{cmake,wx/{3*,include,config/{gtk*,qt*}},libwx_{gtk,qt}*}
+  install -Dm644 wxWidgets/wxwin.m4 -t "$pkgdir"/usr/share/aclocal
+  mv "$pkgdir"/usr/bin/wx-config{,-base} # Conflicts with wx-gtk3
+
+  install -Dm644 wxWidgets/docs/licence.txt "$pkgdir"/usr/share/licenses/$pkgname/LICENSE
+}
+
+package_wxwidgets-gtk3() {
+  pkgdesc='GTK+3 implementation of wxWidgets API for GUI'
+  depends=(bash
+           cairo
+           fontconfig
+           gdk-pixbuf2
+           glib2
+           glibc
+           gst-plugins-bad-libs
+           gstreamer
+           gtk3
+           libgcc
+           libglvnd
+           libjpeg-turbo
+           libnotify
+           libmspack
+           libpng
+           libsm # cmake target
+           libstdc++
+           libtiff
+           libx11
+           libxkbcommon
+           libxtst
+           pango
+           sdl2
+           wayland
+           wxwidgets-common=$pkgver-$pkgrel)
+  optdepends=('webkit2gtk-4.1: for webview support')
+  provides=(libwx_gtk3u_adv-3.2.so
+            libwx_gtk3u_aui-3.2.so
+            libwx_gtk3u_core-3.2.so
+            libwx_gtk3u_gl-3.2.so
+            libwx_gtk3u_html-3.2.so
+            libwx_gtk3u_media-3.2.so
+            libwx_gtk3u_propgrid-3.2.so
+            libwx_gtk3u_qa-3.2.so
+            libwx_gtk3u_ribbon-3.2.so
+            libwx_gtk3u_richtext-3.2.so
+            libwx_gtk3u_stc-3.2.so
+            libwx_gtk3u_webview-3.2.so
+            libwx_gtk3u_xrc-3.2.so)
+
+  DESTDIR="$pkgdir" cmake --install build-gtk3
+  # stock split-separation: headers/base libs/locales/wxrc belong to the
+  # wxwidgets-common output (kept verbatim)
+  rm -r "$pkgdir"/usr/{include,lib/libwx_base*,share,bin/wxrc*}
+  
+  install -Dm644 wxWidgets/docs/licence.txt "$pkgdir"/usr/share/licenses/$pkgname/LICENSE
+}

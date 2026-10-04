@@ -1,0 +1,56 @@
+# Maintainer: AndyRTR <andyrtr@archlinux.org>
+# Contributor: Judd Vinet <jvinet@zeroflux.org>
+# Contributor: Tom Newsom <Jeepster@gmx.co.uk>
+
+pkgname=unixodbc
+pkgver=2.3.14
+pkgrel=1
+pkgdesc="ODBC is an open specification for providing application developers with a predictable API with which to access Data Sources"
+arch=('x86_64')
+license=('GPL-2.0-or-later' 'LGPL-2.1-or-later')
+url="http://www.unixodbc.org/"
+backup=('etc/odbc.ini' 'etc/odbcinst.ini')
+depends=('readline' 'libltdl' 'glibc')
+provides=('libodbc.so' 'libodbccr.so' 'libodbcinst.so')
+source=(#ftp://ftp.unixodbc.org/pub/unixODBC/unixODBC-$pkgver.tar.gz
+        https://github.com/lurcher/unixODBC/releases/download/v${pkgver}/unixODBC-${pkgver}.tar.gz)
+sha256sums=('4e2814de3e01fc30b0b9f75e83bb5aba91ab0384ee951286504bb70205524771')
+
+prepare() {
+    cd unixODBC-${pkgver}
+    autoreconf -vfi
+}
+
+build() {
+    cd unixODBC-${pkgver}
+
+    # House style: mold linker when available
+    local _mold=""
+    command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+    export LDFLAGS+=" ${_mold}"
+
+    ./configure --prefix=/usr --sysconfdir=/etc
+    sed -i -e 's/ -shared / -Wl,-O1,--as-needed\0/g' libtool
+    make -j"${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+}
+
+check() {
+    cd unixODBC-${pkgver}
+    make -k check
+}
+
+package() {
+    cd unixODBC-${pkgver}
+    make DESTDIR="${pkgdir}" install
+    touch "$pkgdir"/etc/{odbc,odbcinst}.ini
+
+    # trim: drop the bundled docs/man pages (this recipe ships the ODBC
+    # libraries and command-line tools only)
+    rm -rf "$pkgdir/usr/share/doc" "$pkgdir/usr/share/man" "$pkgdir/usr/share/info"
+
+    # license: ship upstream licence text(s) (GPL-2.0-or-later, LGPL-2.1-or-later)
+    local _l
+    for _l in COPYING COPYING.GPL COPYING.LGPL COPYING.LIB LICENSE; do
+      if [[ -f $_l ]]; then install -Dm644 "$_l" -t "$pkgdir/usr/share/licenses/$pkgname/"; fi
+    done
+}

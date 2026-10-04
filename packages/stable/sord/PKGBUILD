@@ -1,0 +1,58 @@
+# Maintainer: David Runge <dvzrv@archlinux.org>
+# Contributor: Ray Rashif <schiv@archlinux.org>
+# Contributor: speps <speps at aur dot archlinux dot org>
+
+# trim: the sord-docs split (doxygen/sphinx API docs) is dropped — this recipe
+# ships the library and tools only; its docs build is disabled in build() and
+# its _pick path, depends and doc installs went with it.
+pkgbase=sord
+pkgname=(sord)
+pkgver=0.16.22
+pkgrel=1
+pkgdesc="A lightweight C library for storing RDF data in memory"
+arch=(x86_64)
+url="https://drobilla.net/software/sord.html"
+license=(ISC)
+makedepends=(
+  glibc
+  meson
+  pcre2
+  serd
+  zix
+)
+source=(https://download.drobilla.net/$pkgname-$pkgver.tar.xz{,.sig})
+sha512sums=('3821500f810e3b1cdbd763db419445c931d8b61de571f475646f11a5740c521c93c47ecab2e81a580a0d94bf432faa0de78fe3be1138c87bf9baca8fe23bb0cd'
+            'SKIP')
+b2sums=('82745bcaf18282c6aa4d36327f658191fcf61f8a3e9c822ecee1e98ae2e9c11c0654d42a4a0746e76a8ac72624a01fd47a14e9ccf14ee7e78728ee82cdcbdb0f'
+        'SKIP')
+validpgpkeys=('907D226E7E13FA337F014A083672782A9BF368F3') # David Robillard <d@drobilla.net>
+
+build() {
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  # trim: docs=disabled drops the doxygen/sphinx API docs (sord-docs split)
+  arch-meson $pkgname-$pkgver build -D docs=disabled
+  meson compile -C build
+}
+
+check() {
+  meson test -C build
+}
+
+package() {
+  depends=(
+    glibc
+    pcre2
+    serd libserd-0.so
+    zix libzix-0.so
+  )
+  provides=(libsord-0.so)
+
+  meson install -C build --destdir "$pkgdir"
+  # trim: /usr/share/doc (API docs plus the AUTHORS/NEWS/README copies — docs)
+  rm -rf "$pkgdir"/usr/share/doc
+  install -vDm 644 $pkgname-$pkgver/LICENSES/*.txt -t "$pkgdir/usr/share/licenses/$pkgname/"
+}

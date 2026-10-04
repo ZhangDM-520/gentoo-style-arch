@@ -1,0 +1,51 @@
+# Maintainer: Andreas Radke <andyrtr@archlinux.org>
+
+pkgname=librevenge
+pkgver=0.0.6
+pkgrel=1
+pkgdesc="library for REVerses ENGineered formats filters"
+arch=('x86_64')
+url="https://sf.net/p/libwpd/librevenge/"
+# src/lib/RVNGOLEStream.{h,cpp} are BSD
+license=('LGPL-2.1-or-later OR MPL-2.0' 'BSD-3-Clause')
+depends=('zlib' 'glibc' 'libstdc++' 'libgcc')
+makedepends=('boost' 'cppunit')
+# trim: doxygen (makedepends) — the doxygen API docs are not shipped;
+# --without-docs in build() disables docs/doxygen for good
+source=(https://sourceforge.net/projects/libwpd/files/librevenge/$pkgname-$pkgver/$pkgname-$pkgver.tar.xz)
+sha256sums=('19eacf5ce55d7fe6a990a45142589cdf7da0c7b68701797f133482cb44f189fa')
+
+prepare() {
+  cd $pkgname-$pkgver
+  autoreconf -fiv
+}
+
+build() {
+  cd $pkgname-$pkgver
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+  ./configure --prefix=/usr --disable-werror --without-docs
+  sed -i -e 's/ -shared / -Wl,-O1,--as-needed\0/g' libtool
+  make
+}
+
+check() {
+  cd $pkgname-$pkgver
+  make check
+}
+
+package() {
+  cd $pkgname-$pkgver
+  provides=(
+    librevenge-0.0.so
+    librevenge-generics-0.0.so
+    librevenge-stream-0.0.so
+  )
+
+  make DESTDIR="$pkgdir/" install
+  # trim: doxygen API docs — never built (--without-docs)
+  rm -rf "$pkgdir"/usr/share/doc
+  install -D -m644 COPYING.{LGPL,MPL} -t "${pkgdir}/usr/share/licenses/${pkgname}/"
+}

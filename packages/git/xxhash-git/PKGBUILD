@@ -1,0 +1,57 @@
+# Maintainer: auto-generated (Class A upstream-VCS recipe)
+# Contributor: Chocobo1 <chocobo1 AT archlinux DOT net> (AUR xxhash-git reference)
+# Contributor: Maxime Gauduin <alucryd@archlinux.org> (stock xxhash)
+# Contributor: Fabien Dubosson <fabien.dubosson@gmail.com>
+# Contributor: Konstantin Gizdov <kge@archlinux.org>
+
+pkgname=xxhash-git
+pkgver=0.8.4.r5.680bf46
+pkgrel=1
+pkgdesc='Extremely fast non-cryptographic hash algorithm (git build)'
+arch=('x86_64')
+url=https://cyan4973.github.io/xxHash/
+license=(
+  BSD-2-Clause
+  GPL-2.0-only
+)
+# LICENSE: xxHash library is BSD-2-Clause, the xxhsum CLI is GPL-2.0
+# (stock declares the pair as BSD/GPL2)
+depends=(glibc)
+makedepends=(git)
+provides=("xxhash=$pkgver" 'libxxhash.so')
+# bare libxxhash.so: pacman 7.1 derives libxxhash.so=0-64 (soname
+# libxxhash.so.0)
+conflicts=('xxhash')
+# upstream's default branch is 'dev' — tracked explicitly; stock pins the
+# release tag (#tag=v$pkgver) and AUR xxhash-git tracks the default branch
+source=('xxHash::git+https://github.com/Cyan4973/xxHash.git#branch=dev')
+b2sums=('SKIP')
+
+pkgver() {
+  cd xxHash
+  # 'dev' is periodically rebased: the v0.8.x release tags are not its
+  # ancestors (git describe only reaches v0.7.4 there), so use latest-tag +
+  # revcount (AUR reference style) instead of git describe
+  local _tag _rev _hash
+  _tag=$(git tag -l --sort -v:refname | grep -E '^v[0-9.]+$' | head -n1)
+  _rev=$(git rev-list --count "$_tag"..HEAD)
+  _hash=$(git rev-parse --short HEAD)
+  printf '%s.r%s.g%s' "${_tag#v}" "$_rev" "$_hash"
+}
+
+build() {
+  cd xxHash
+
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  # DISPATCH=1: runtime CPU dispatch (kept from stock)
+  make PREFIX=/usr DISPATCH=1 -j"${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package() {
+  cd xxHash
+  make PREFIX=/usr DISPATCH=1 DESTDIR="$pkgdir" install
+  install -Dm 644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname/"
+}

@@ -1,0 +1,43 @@
+# Maintainer: Chocobo1 <chocobo1 AT archlinux DOT net>
+
+# git recipe tracking upstream libwmf VCS (AUR libwmf-git used as reference
+# only)
+
+pkgname=libwmf-git
+pkgver=0.2.16.r0.ga916f30
+pkgrel=1
+pkgdesc="A library for reading vector images in Microsoft's native Windows Metafile Format (git build)"
+arch=('x86_64')
+url='https://github.com/caolanm/libwmf'
+license=('LGPL-2.1-or-later')
+depends=('expat' 'freetype2' 'glibc' 'libjpeg-turbo' 'libpng' 'libx11' 'zlib')
+makedepends=('git' 'gtk2' 'libxt')
+optdepends=('gdk-pixbuf2: for pixbuf loader')
+# bare soname provides for the shipped libs: libwmf-0.2.so.7, libwmflite-0.2.so.7
+provides=("libwmf=$pkgver" 'libwmf-0.2.so' 'libwmflite-0.2.so')
+conflicts=('libwmf')
+options=('staticlibs')
+source=('git+https://github.com/caolanm/libwmf.git')
+b2sums=('SKIP')
+
+pkgver() {
+  cd libwmf
+  git describe --long --tags | sed 's/\([^-]*-g\)/r\1/;s/-/./g;s/^v//'
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  cd libwmf
+  autoreconf -fi
+  ./configure --prefix=/usr
+  make -j"${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+}
+
+package() {
+  cd libwmf
+  make DESTDIR="$pkgdir" install
+  install -Dm644 COPYING -t "$pkgdir/usr/share/licenses/$pkgname/"
+}

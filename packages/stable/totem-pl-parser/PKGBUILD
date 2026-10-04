@@ -1,0 +1,81 @@
+# Maintainer: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
+# Contributor: Jan de Groot <jgc@archlinux.org>
+
+pkgname=totem-pl-parser
+pkgver=3.26.7
+pkgrel=1
+pkgdesc="Simple GObject-based library to parse and save a host of playlist formats"
+url="https://gitlab.gnome.org/GNOME/totem-pl-parser"
+license=(LGPL-2.0-or-later)
+arch=(x86_64)
+depends=(
+  glib2
+  glibc
+  libarchive
+  libgcc
+  libgcrypt
+  libxml2
+  uchardet
+)
+# trim: gtk-doc makedep dropped with the API docs (disabled below)
+makedepends=(
+  git
+  glib2-devel
+  gobject-introspection
+  meson
+)
+checkdepends=(
+  dbus
+  gvfs
+  shared-mime-info
+)
+provides=(
+  libtotem-plparser{,-mini}.so
+)
+source=("git+https://gitlab.gnome.org/GNOME/totem-pl-parser.git#tag=$pkgver")
+b2sums=('e258bc354dc5d5732dc432c1c4e7ac99f17039d0423d149408d50673858adb8b6428019ec90c0291647c56e6c6f4d4d6e7e3792c1fa9ec117e5c15d19404048b')
+# trim: stock pinned totem-plparser=$pkgver-$pkgrel provide and the
+# conflicts=(totem-plparser)/replaces=() entries dropped per house standard
+# (bare soname provides only; no conflicts/replaces)
+
+prepare() {
+  cd $pkgname
+}
+
+build() {
+  local meson_options=(
+    # trim: gtk-doc API docs
+    -D enable-gtk-doc=false
+    -D enable-libarchive=yes
+    -D enable-libgcrypt=yes
+    -D enable-uchardet=yes
+  )
+
+  # House style: mold linker when available (arch-meson consumes LDFLAGS env)
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  arch-meson $pkgname build "${meson_options[@]}"
+  meson compile -C build -j "${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+}
+
+check() {
+  GIO_USE_VOLUME_MONITOR=unix \
+    dbus-run-session meson test -C build --print-errorlogs
+}
+
+package() {
+  meson install -C build --destdir "$pkgdir"
+
+  # trim: drop locales (this recipe ships the playlist parser libraries)
+  rm -rf "$pkgdir/usr/share/locale"
+
+  # license: ship upstream licence text (LGPL-2.0-or-later)
+  local _l
+  for _l in COPYING COPYING.LIB LICENSE; do
+    if [[ -f $pkgname/$_l ]]; then install -Dm644 "$pkgname/$_l" -t "$pkgdir/usr/share/licenses/$pkgname/"; fi
+  done
+}
+
+# vim:set sw=2 sts=-1 et:

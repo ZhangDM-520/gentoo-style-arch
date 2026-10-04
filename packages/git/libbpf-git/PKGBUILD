@@ -1,0 +1,41 @@
+# Maintainer: auto-generated
+# Contributor: Chocobo1 <chocobo1 AT archlinux DOT net> (AUR libbpf-git)
+# Contributor: Adrian Bacircea <adrian.bacircea@gmail.com> (AUR libbpf-git)
+# Contributor: Levente Polyak <anthraxx[at]hexerise[dot]org> (stock Arch libbpf)
+
+pkgname=libbpf-git
+_pkgname=libbpf
+pkgver=1.7.0.r138.g85c0d57
+pkgrel=1
+pkgdesc="Library for loading eBPF programs and reading and manipulating eBPF objects from user-space (git build)"
+arch=('x86_64')
+url="https://github.com/libbpf/libbpf"
+license=('LGPL-2.1-only OR BSD-2-Clause')
+depends=('glibc' 'libelf' 'linux-api-headers' 'zlib')
+makedepends=('git')
+provides=("libbpf=$pkgver" 'libbpf.so')
+conflicts=('libbpf')
+source=("git+https://github.com/libbpf/${_pkgname}.git")
+b2sums=('SKIP')
+
+pkgver() {
+  cd "$_pkgname"
+  git describe --long --tags | sed 's/\([^-]*-g\)/r\1/;s/-/./g;s/^v//'
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  local _jobs="${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+
+  cd "$_pkgname"
+  make -C src -j "$_jobs"
+}
+
+package() {
+  cd "$_pkgname"
+  make -C src DESTDIR="$pkgdir" LIBSUBDIR=lib install
+  install -Dm644 LICENSE.BSD-2-Clause LICENSE.LGPL-2.1-only -t "$pkgdir/usr/share/licenses/$pkgname"
+}

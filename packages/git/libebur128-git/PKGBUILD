@@ -1,0 +1,41 @@
+# Maintainer: auto-generated
+# AUR reference: libebur128-git (Maintainer: Chocobo1 <chocobo1 AT archlinux DOT net>)
+pkgname=libebur128-git
+_pkgname=libebur128
+pkgver=1.2.6.r0.g67b33ab
+pkgrel=1
+pkgdesc="A library implementing the EBU R128 loudness standard (git build)"
+arch=('x86_64')
+url="https://github.com/jiixyj/libebur128"
+license=('MIT')
+depends=('glibc')
+makedepends=('git' 'cmake')
+provides=("libebur128=$pkgver" 'libebur128.so')
+conflicts=('libebur128')
+options=('staticlibs')
+source=("git+https://github.com/jiixyj/libebur128.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$_pkgname"
+  git describe --long --tags | sed 's/\([^-]*-g\)/r\1/;s/-/./g;s/^v//g'
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  # CMAKE_BUILD_TYPE=None: makepkg.conf owns the opt level (no hard-coded -O3;
+  # the AUR reference's "Release" would inject one)
+  cmake -B _build -S "$_pkgname" \
+    -DCMAKE_BUILD_TYPE=None \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DCMAKE_INSTALL_LIBDIR=lib
+  cmake --build _build
+}
+
+package() {
+  DESTDIR="$pkgdir" cmake --install _build
+  install -Dm644 "$_pkgname/COPYING" -t "$pkgdir/usr/share/licenses/$pkgname"
+}

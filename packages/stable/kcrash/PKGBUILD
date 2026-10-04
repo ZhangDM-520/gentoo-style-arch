@@ -1,0 +1,55 @@
+# Maintainer: Felix Yan <felixonmars@archlinux.org>
+# Maintainer: Antonio Rojas <arojas@archlinux.org>
+# Contributor: Andrea Scarpino <andrea@archlinux.org>
+
+pkgname=kcrash
+pkgver=6.30.0
+pkgrel=1
+pkgdesc='Support for application crash analysis and bug report from apps'
+arch=(x86_64)
+url='https://develop.kde.org/products/frameworks/'
+license=(LGPL-2.0-only LGPL-3.0-only)
+depends=(libgcc
+         libstdc++
+         glibc
+         kcoreaddons
+         libx11
+         qt6-base)
+makedepends=(doxygen
+             extra-cmake-modules
+             qt6-tools)
+optdepends=('drkonqi: KDE crash handler application')
+groups=(kf6)
+provides=(libKF6Crash.so)
+source=(https://download.kde.org/stable/frameworks/${pkgver%.*}/$pkgname-$pkgver.tar.xz{,.sig})
+sha256sums=('b17f8242309e1502119c48b1ef5059a396a3068596a84fb79fdef6d9e2cd4f49'
+            'SKIP')
+validpgpkeys=(53E6B47B45CEA3E0D5B7457758D0EE648A48B3BB # David Faure <faure@kde.org>
+              90A968ACA84537CC27B99EAF2C8DF587A6D4AAC1 # Nicolas Fella <nicolas.fella@kde.org>
+              )
+
+build() {
+  # House style: mold linker when available (CMake reads LDFLAGS at cache init)
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  cmake -B build -S $pkgname-$pkgver \
+    -DCMAKE_INSTALL_LIBEXECDIR=lib \
+    -DBUILD_TESTING=OFF
+  cmake --build build --parallel "${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package() {
+  DESTDIR="$pkgdir" cmake --install build
+
+  # license: ship the upstream LGPL-2.0-only/LGPL-3.0-only texts
+  local _lic
+  for _lic in LICENSE LICENSES COPYING COPYING.LGPL-2.0 COPYING.LGPL-3.0; do
+    if [[ -f $pkgname-$pkgver/$_lic ]]; then
+      install -Dm644 "$pkgname-$pkgver/$_lic" -t "$pkgdir/usr/share/licenses/$pkgname/"
+    elif [[ -d $pkgname-$pkgver/$_lic ]]; then
+      cp -a "$pkgname-$pkgver/$_lic" "$pkgdir/usr/share/licenses/$pkgname/"
+    fi
+  done
+}

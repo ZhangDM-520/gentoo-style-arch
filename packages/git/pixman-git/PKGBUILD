@@ -17,7 +17,7 @@ url="https://www.pixman.org/"
 license=('MIT')
 depends=('glibc')
 makedepends=('git' 'libpng' 'meson')
-provides=("pixman=$pkgver" 'libpixman-1.so=0-64')
+provides=("pixman=$pkgver" 'libpixman-1.so')
 conflicts=('pixman')
 options=('staticlibs')
 source=("git+https://gitlab.freedesktop.org/pixman/pixman")

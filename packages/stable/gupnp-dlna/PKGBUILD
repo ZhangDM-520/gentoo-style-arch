@@ -1,0 +1,58 @@
+# Maintainer: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
+# Contributor: Balló György <ballogyor+arch at gmail dot com>
+
+pkgname=gupnp-dlna
+pkgver=0.12.0
+pkgrel=5
+pkgdesc="Library to ease DLNA-related bits for applications using gupnp"
+url="https://wiki.gnome.org/Projects/GUPnP"
+arch=(x86_64)
+license=(LGPL-2.1-or-later)
+depends=(
+  glib2
+  glibc
+  gst-plugins-base-libs
+  gstreamer
+  libxml2
+)
+makedepends=(
+  git
+  gobject-introspection
+  meson
+  vala
+)
+# trim: check() (meson test) — Class B trim standard (tests)
+source=("git+https://gitlab.gnome.org/GNOME/gupnp-dlna.git#tag=gupnp-dlna-$pkgver")
+b2sums=('26285bacd5da668fa539deb2aa2d25ed0495fe6537dbbf90e37923874bd25233a8fe7047b1e2b2e8f62e12d5482ca46611b26c835181ce74589bb10c58ee860f')
+
+prepare() {
+  cd $pkgname
+}
+
+build() {
+  local meson_options=(
+    # trim: the gtk-doc API reference (docs) — pairs with the dropped
+    # gtk-doc makedep
+    -D gtk_doc=false
+  )
+
+  # House style: mold linker when available (arch-meson consumes LDFLAGS env)
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  arch-meson $pkgname build "${meson_options[@]}"
+  meson compile -C build -j "${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+}
+
+package() {
+  depends+=(libg{lib,object}-2.0.so)
+  provides+=(libgupnp-dlna{,-gst}-2.0.so)
+
+  meson install -C build --destdir "$pkgdir"
+
+  # license: ship the upstream LGPL-2.1-or-later (COPYING) text
+  install -Dm644 $pkgname/COPYING -t "$pkgdir/usr/share/licenses/$pkgname/"
+}
+
+# vim:set sw=2 sts=-1 et:

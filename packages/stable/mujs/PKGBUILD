@@ -1,0 +1,43 @@
+# Maintainer: Daniel Bermond <dbermond@archlinux.org>
+
+pkgname=mujs
+pkgver=1.3.10
+pkgrel=1
+pkgdesc='An embeddable Javascript interpreter in C'
+arch=('x86_64')
+url='https://mujs.com/'
+license=('ISC')
+depends=(
+    'glibc'
+    'readline')
+# house: bare provide per ELF output — install-shared ships libmujs.so
+# without a SONAME, so consumer DT_NEEDED entries carry the file name
+provides=('libmujs.so')
+makedepends=('python')
+source=("https://mujs.com/downloads/mujs-${pkgver}.tar.gz"
+        '010-mujs-use-arch-flags.patch')
+sha256sums=('6e36c15dbb84ff859320297c900852f241b131a7b6ddaea669ac9a65bd75571c'
+            '711d596fb6f473acfec4a618990389a7911defbfec49018f12c97b3d35ed5491')
+
+prepare() {
+    patch -d "${pkgname}-${pkgver}" -Np1 -i "${srcdir}/010-mujs-use-arch-flags.patch"
+}
+
+build() {
+    # House style: mold linker when available (the 010 patch feeds LDFLAGS to
+    # every link line).
+    local _mold=""
+    command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+    export LDFLAGS+=" ${_mold}"
+
+    # OPTIM='': upstream hard-codes OPTIM=-O3 — neutralised (a removal, not an
+    # appended flag) so makepkg.conf owns the opt level
+    make -C "${pkgname}-${pkgver}" -j"${GSA_BUILD_JOBS:-$(nproc)}" prefix='/usr' OPTIM='' release
+}
+
+package() {
+    make -C "${pkgname}-${pkgver}" DESTDIR="$pkgdir" prefix='/usr' install-shared
+    # trim: upstream docs under docs/ (HTML/text docs); the licence is
+    # re-homed to /usr/share/licenses below
+    install -D -m644 "${pkgname}-${pkgver}/COPYING" "${pkgdir}/usr/share/licenses/mujs/LICENSE"
+}

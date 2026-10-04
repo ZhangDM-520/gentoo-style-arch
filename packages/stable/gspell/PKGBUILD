@@ -1,0 +1,76 @@
+# Maintainer: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
+# Contributor: Jan de Groot <jgc@archlinux.org>
+
+pkgbase=gspell
+# trim: the gspell-docs split (gtk-doc API reference) is dropped together
+# with its docs staging path and the gtk-doc makedep (gtk_doc=false below)
+pkgname=(
+  gspell
+)
+pkgver=1.14.5
+pkgrel=1
+pkgdesc="Spell-checking library for GTK applications"
+url="https://gitlab.gnome.org/GNOME/gspell"
+arch=(x86_64)
+license=(LGPL-2.1-or-later)
+depends=(
+  enchant
+  glib2
+  glibc
+  gtk3
+  icu
+)
+makedepends=(
+  git
+  glib2-devel
+  gobject-introspection
+  meson
+  vala
+)
+# trim: check() and its checkdepends (aspell/hspell/hunspell/hunspell-en_us/
+# libvoikko/nuspell/xorg-server-xvfb enchant backends for the unit tests) —
+# Class B trim standard (tests)
+source=("git+https://gitlab.gnome.org/GNOME/gspell.git#tag=$pkgver")
+b2sums=('3f02b9d230bc83541b8849e9a8d772bf9a70ff75c29c36f56630f2a0526c0dd2d1e7055297a038b4889c7c6703001186cf95cf7797e32c01635e33d005e403cd')
+
+prepare() {
+  cd gspell
+}
+
+build() {
+  local meson_options=(
+    -D install_tests=false
+    # trim: the gspell-app demo and the unit test suite (demos/tests)
+    -D gspell_app=false
+    -D tests=false
+    # trim: the gtk-doc API reference (docs) — pairs with the dropped
+    # gspell-docs split and the gtk-doc makedep
+    -D gtk_doc=false
+  )
+
+  # House style: mold linker when available (arch-meson consumes LDFLAGS env)
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  arch-meson gspell build "${meson_options[@]}"
+  meson compile -C build -j "${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+}
+
+package_gspell() {
+  depends+=(
+    libenchant-2.so
+    libgtk-3.so
+    libg{lib,object,io}-2.0.so
+    libicuuc.so
+    libpango-1.0.so
+  )
+  provides+=("libgspell-${pkgver%%.*}.so")
+
+  meson install -C build --destdir "$pkgdir"
+
+  # license: ship the upstream LGPL-2.1-or-later text (LICENSES/)
+  install -Dm644 gspell/LICENSES/* -t "$pkgdir/usr/share/licenses/$pkgname/"
+}
+
+# vim:set sw=2 sts=-1 et:

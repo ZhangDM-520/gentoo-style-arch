@@ -1,0 +1,50 @@
+# Maintainer: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
+
+pkgname=libndp
+pkgver=1.9
+pkgrel=1
+pkgdesc="Library for Neighbor Discovery Protocol"
+url="http://libndp.org/"
+arch=(x86_64)
+license=(LGPL-2.1-or-later)
+depends=(
+  glibc
+)
+makedepends=(git)
+provides=(libndp.so)
+source=("git+https://github.com/jpirko/libndp#tag=v$pkgver")
+b2sums=('150f2bc4d0e67c44a694f6c6d0fb7f6927f7af2a8467b39fd77a41c0f5abb9df28d99432e444cff7328d0c8cd514516216d777cc416cfed3bb4cfa62007d6173')
+
+prepare() {
+  cd libndp
+  ./autogen.sh
+}
+
+build() {
+  local configure_options=(
+    --prefix=/usr
+    --sysconfdir=/etc
+    --localstatedir=/var
+    --libexecdir=/usr/lib
+    --disable-static
+  )
+
+  cd libndp
+  ./configure "${configure_options[@]}"
+  make
+}
+
+check() {
+  cd libndp
+  make check
+}
+
+package() {
+  cd libndp
+  make DESTDIR="$pkgdir" install
+  # trim: man pages (man8/ndptool) — docs not shipped
+  rm -rf "$pkgdir"/usr/share/man
+  install -Dm644 COPYING -t "$pkgdir"/usr/share/licenses/$pkgname/
+}
+
+# vim:set sw=2 sts=-1 et:

@@ -1,0 +1,48 @@
+# Maintainer: Madotsuki <madotsuki@national.shitposting.agency>
+# Contributor: Giovanni Scafora <giovanni@archlinux.org>
+# Contributor: suasageandeggs <s_stoakley@hotmail.co.uk>
+# Contributor: Michael Fellinger <manveru@weez-int.com>
+#
+# git build adapted from AUR libtommath-git (reference only) + stock Arch
+# libtommath: tracks upstream master directly (stock pins v-tags). Build
+# follows stock's makefile.shared (the AUR reference `make` produced the
+# static-only surface).
+
+pkgname=libtommath-git
+pkgver=r0.g00000000
+pkgrel=1
+pkgdesc='Highly optimized and portable routines for integer based number theoretic applications (git build)'
+url='https://www.libtom.net/'
+arch=('x86_64')
+license=('Unlicense')
+depends=('glibc')
+makedepends=('git')
+provides=("libtommath=$pkgver" 'libtommath.so')
+conflicts=('libtommath')
+source=("libtommath::git+https://github.com/libtom/libtommath.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd libtommath
+  printf 'r%s.%s' \
+    $(git rev-list --count HEAD) \
+    $(git rev-parse HEAD | head -c10)
+}
+
+build() {
+  cd libtommath
+
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  make -f makefile.shared IGNORE_SPEED=1 -j"${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package() {
+  cd libtommath
+
+  make -f makefile.shared PREFIX=/usr DESTDIR="$pkgdir" INSTALL_GROUP=root install
+
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

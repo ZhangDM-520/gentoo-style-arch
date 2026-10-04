@@ -1,0 +1,458 @@
+# Maintainer: Tobias Powalowski <tpowa@archlinux.org>
+# Contributor: judd <jvinet@zeroflux.org>
+# Contributor: Michael Hansen <zrax0111 gmail com>
+# Contributor: Marco A Rojas <marquicus at gmail.com>
+# Contributor: Netanel Shine <netanel at archlinux.org.il >
+# Contributor: ngoonee <ngoonee.talk@gmail.com>
+# Contributor: Adam Russell <adamlr6+arch@gmail.com>
+# Contributor: Dhananjay Sathe <dhananjaysathe@gmail.com>
+
+# Merged recipe: this is the single pkgbase for the samba release tarball, so
+# samba is configured and built exactly once. It replaces the former
+# per-output recipes packages/stable/{ldb,smbclient}. The stock libwbclient
+# split is defined here too — smbclient depends on it and it was left dangling
+# by the per-output recipes.
+# trim: the samba server split is dropped together with its per-split deps,
+# its staging moves, and its install-check paths (install=samba.install,
+# backup=(...)) and the tmpfiles/logrotate/pam install paths — the
+# samba.logrotate/samba.pam/samba.tmpfiles assets stay in source=() as
+# delivered (unused — source=() kept complete)
+pkgbase=samba
+pkgname=('libwbclient' 'ldb' 'smbclient')
+pkgver=4.25.0
+pkgrel=1
+arch=(x86_64)
+url="https://www.samba.org"
+license=('GPL-3.0-or-later')
+makedepends=(
+  acl
+  dateutils
+  dbus
+  docbook-xsl
+  glusterfs
+  gnutls
+  jansson
+  krb5
+  libbsd
+  libcap
+  libcups
+  libldap
+  libnsl
+  libtirpc
+  liburing
+  pam
+  perl-json
+  perl-parse-yapp
+  pkg-config
+  popt
+  python
+  python-dnspython
+  python-markdown
+  readline
+  rpcsvc-proto
+  systemd
+  talloc
+  tdb
+  tevent
+)
+epoch=2
+source=(
+  https://download.samba.org/samba/ftp/stable/${pkgbase}-${pkgver}.tar{.gz,.asc}
+  samba.logrotate
+  samba.pam
+  samba.tmpfiles
+)
+validpgpkeys=('81F5E2832BD2545A1897B713AA99442FB680B620') #Samba Distribution Verification Key <samba-bugs@samba.org>
+b2sums=('556455a628732a084826f2cf180c75071ad5f89f0bf8a0e728d79a450e0c1cbab6ba5869ec48816b2a886ad5b6d4db1a18a31d80ba7dc2f7972f4f0e470f67fb'
+        'SKIP'
+        '72ecb413ca3499af984a0bb391f96e678a24a19d8e5c96050ba227878f0770f03466ac7a0ee328416e08204e92e9d16ec22d63ef25b53c20d957a17221cd3a98'
+        '3eab84d332d96678fe6e435ee243c8f1a82b838f601d61d3604d11e918aed7a62202edca5e476c4b9031ed284570e6fcd6c659cfdbd9624aa0019d3233755f81'
+        'e1f49e14d34cf1a48378cad9f427215101ff55b2461340e0dc2376192f07c45fc238463a07672348c0823e3aa7892c83a939a7d358aabac818e2108ca2c1900f')
+
+### UNINSTALL dmapi package before building!!!
+
+# Use samba-pkg as a staging directory for the split packages
+# (This is so RPATHS and symlinks are generated correctly via
+# make install, but the otherwise unsplit pieces can be split)
+
+build() {
+# House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+_samba4_idmap_modules=idmap_ad,idmap_rid,idmap_adex,idmap_hash,idmap_tdb2
+_samba4_pdb_modules=pdb_tdbsam,pdb_ldap,pdb_ads,pdb_smbpasswd,pdb_wbc_sam,pdb_samba4
+_samba4_auth_modules=auth_unix,auth_wbc,auth_server,auth_netlogond,auth_script,auth_samba4
+_pkgsrc="${srcdir}"/samba-pkg
+  rm -rf ${_pkgsrc}
+  cd ${pkgbase}-${pkgver}
+  ./configure --enable-fhs \
+    --prefix=/usr \
+    --sysconfdir=/etc \
+    --sbindir=/usr/bin \
+    --libdir=/usr/lib \
+    --libexecdir=/usr/lib/samba \
+    --localstatedir=/var \
+    --with-configdir=/etc/samba \
+    --with-lockdir=/var/cache/samba \
+    --with-sockets-dir=/run/samba \
+    --with-piddir=/run \
+    --with-ads \
+    --with-ldap \
+    --with-winbind \
+    --with-acl-support \
+    --with-systemd \
+    --systemd-install-services \
+    --with-pam \
+    --with-pammodulesdir=/usr/lib/security \
+    --private-libraries='!ldb' \
+    --bundled-libraries='!tdb,!talloc,!pytalloc-util,!tevent,!popt,!pyldb-util' \
+    --with-shared-modules="${_samba4_idmap_modules},${_samba4_pdb_modules},${_samba4_auth_modules},vfs_io_uring" \
+    --disable-rpath-install \
+    --with-profiling-data
+  # Add this to the options once it's working...
+  #--with-system-mitkrb5 /opt/heimdal
+  
+  make -j"${GSA_BUILD_JOBS:-$(nproc)}"
+  make DESTDIR="${_pkgsrc}/" install
+
+  # This gets skipped somehow
+  if [ ! -e "${_pkgsrc}"/usr/bin/smbtar ]; then
+      install -m755 "${srcdir}"/samba-${pkgver}/source3/script/smbtar "${_pkgsrc}"/usr/bin/
+  fi
+}
+
+package_libwbclient() {
+pkgdesc="winbind client library"
+depends=(
+  libbsd
+)
+provides=(libwbclient.so)
+_pkgsrc="${srcdir}"/samba-pkg
+
+  install -d -m755 "${pkgdir}"/usr/lib
+  for lib in "${_pkgsrc}"/usr/lib/libwbclient.so*; do
+    mv ${lib} "${pkgdir}"/usr/lib/
+  done
+  install -d -m755 "${pkgdir}"/usr/lib/pkgconfig
+  mv "${_pkgsrc}"/usr/lib/pkgconfig/wbclient.pc "${pkgdir}"/usr/lib/pkgconfig/
+  install -d -m755 "${pkgdir}"/usr/include/samba-4.0
+  mv "${_pkgsrc}"/usr/include/samba-4.0/wbclient.h "${pkgdir}"/usr/include/samba-4.0/
+
+  # license: ship the upstream GPL-3.0-or-later text
+  local _lic
+  for _lic in LICENSE COPYING; do
+    if [[ -f ${srcdir}/samba-${pkgver}/$_lic ]]; then
+      install -Dm644 "${srcdir}/samba-${pkgver}/$_lic" -t "${pkgdir}/usr/share/licenses/$pkgname/"
+    fi
+  done
+}
+
+package_ldb() {
+pkgdesc='Schema-less, ldap like, API and database'
+url="https://ldb.samba.org/"
+depends=(
+  libtevent.so
+  lmdb
+  popt
+  talloc
+  tdb
+  libtdb.so
+)
+optdepends=(
+  'python: for python bindings'
+)
+_ldb_bins=(
+  ldbadd
+  ldbdel
+  ldbedit
+  ldbmodify
+  ldbrename
+  ldbsearch
+)
+_ldb_headers=(
+  ldb.h
+  ldb_errors.h
+  ldb_handlers.h
+  ldb_module.h
+  ldb_version.h
+)
+provides=(libldb.so)
+_pkgsrc="${srcdir}"/samba-pkg
+
+  local site_packages=$(python -c "import site; print(site.getsitepackages()[0])")
+  install -d -m755 "${pkgdir}"/usr/bin
+  for bin in ${_ldb_bins[@]}; do
+    mv "${_pkgsrc}"/usr/bin/${bin} "${pkgdir}"/usr/bin/
+  done
+  install -d -m755 "${pkgdir}"/usr/lib
+  for lib in "${_pkgsrc}"/usr/lib/libldb*; do
+    mv ${lib} "${pkgdir}"/usr/lib/
+  done
+  install -d -m755 "${pkgdir}"/usr/lib/samba
+  mv "${_pkgsrc}"/usr/lib/samba/ldb "${pkgdir}"/usr/lib/samba
+  install -d -m755 "${pkgdir}"/usr/lib/pkgconfig
+  mv "${_pkgsrc}"/usr/lib/pkgconfig/ldb.pc "${pkgdir}"/usr/lib/pkgconfig/
+  install -d -m755 "${pkgdir}"/usr/include/samba-4.0
+  for headers in ${_ldb_headers[@]}; do
+    mv "${_pkgsrc}"/usr/include/samba-4.0/${headers} "${pkgdir}"/usr/include/samba-4.0/
+  done
+  install -d -m755 "${pkgdir}${site_packages}/"
+  mv "${_pkgsrc}${site_packages}/"{_ldb_text.py,ldb.cpython-$(python -c 'import sys; print("".join(map(str, sys.version_info[:2])))')-$CARCH-linux-gnu.so} \
+    "${pkgdir}${site_packages}/"
+
+  # trim: the ldbadd/ldbdel/... man1 and the man3 API pages (man not shipped)
+  rm -rf "${pkgdir}"/usr/share/man
+
+  # license: ship the upstream GPL-3.0-or-later text
+  local _lic
+  for _lic in LICENSE COPYING; do
+    if [[ -f ${srcdir}/samba-${pkgver}/$_lic ]]; then
+      install -Dm644 "${srcdir}/samba-${pkgver}/$_lic" -t "${pkgdir}/usr/share/licenses/ldb/"
+    fi
+  done
+}
+
+package_smbclient() {
+pkgdesc="Tools to access a server's filespace and printers via SMB"
+depends=(
+  cifs-utils
+  gnutls
+  icu
+  jansson
+  "ldb=$epoch:$pkgver-$pkgrel"
+  libarchive
+  libbsd
+  libcups
+  libldap
+  libldb.so
+  libnsl
+  libreadline.so
+  libtdb.so
+  libtevent.so
+  "libwbclient=$epoch:$pkgver-$pkgrel"
+  popt
+  python
+  readline
+  talloc
+  tdb
+  tevent
+)
+optdepends=(
+  'python-dnspython: samba_dnsupdate and samba_upgradedns in AD setup'
+  'python-markdown: for samba-tool domain schemeupgrade'
+  'glusterfs: for vfs_glusterfs support'
+)
+provides=(
+  libad-claims-private-samba.so
+  libaddns-private-samba.so
+  libads-private-samba.so
+  libasn1-private-samba.so
+  libasn1util-private-samba.so
+  libauth4-private-samba.so
+  libauthkrb5-private-samba.so
+  libauthn-policy-util-private-samba.so
+  libauth-private-samba.so
+  libauth-unix-token-private-samba.so
+  libCHARSET3-private-samba.so
+  libcliauth-private-samba.so
+  libcli-cldap-private-samba.so
+  libclidns-private-samba.so
+  libcli-ldap-common-private-samba.so
+  libcli-ldap-private-samba.so
+  libcli-nbt-private-samba.so
+  libcli-smb-common-private-samba.so
+  libcli-spoolss-private-samba.so
+  libcluster-private-samba.so
+  libcmdline-contexts-private-samba.so
+  libcmdline-private-samba.so
+  libcmocka-private-samba.so
+  libcom-err-private-samba.so
+  libcommon-auth-private-samba.so
+  libdb-glue-private-samba.so
+  libdbwrap-private-samba.so
+  libdcerpc-binding.so
+  libdcerpc-pkt-auth-private-samba.so
+  libdcerpc-samba4-private-samba.so
+  libdcerpc-samba-private-samba.so
+  libdcerpc-samr.so
+  libdcerpc-server-core.so
+  libdcerpc-server.so
+  libdcerpc.so
+  libdfs-server-ad-private-samba.so
+  libdlz-bind9-for-torture-private-samba.so
+  libdnsserver-common-private-samba.so
+  libdsdb-garbage-collect-tombstones-private-samba.so
+  libdsdb-module-private-samba.so
+  libevents-private-samba.so
+  libflag-mapping-private-samba.so
+  libgenrand-private-samba.so
+  libgensec-private-samba.so
+  libgpext-private-samba.so
+  libgpo-private-samba.so
+  libgse-private-samba.so
+  libgssapi-private-samba.so
+  libgss-preauth-private-samba.so
+  libhcrypto-private-samba.so
+  libhdb-private-samba.so
+  libHDB-SAMBA4-private-samba.so
+  libheimbase-private-samba.so
+  libheimntlm-private-samba.so
+  libhttp-private-samba.so
+  libhx509-private-samba.so
+  libidmap-private-samba.so
+  libinterfaces-private-samba.so
+  libiov-buf-private-samba.so
+  libkdc-private-samba.so
+  libkrb5-private-samba.so
+  libkrb5samba-private-samba.so
+  libldb-cmdline-private-samba.so
+  libldb-key-value-private-samba.so
+  libldb-mdb-int-private-samba.so
+  libldbsamba-private-samba.so
+  libldb-tdb-err-map-private-samba.so
+  libldb-tdb-int-private-samba.so
+  liblibcli-lsa3-private-samba.so
+  liblibcli-netlogon3-private-samba.so
+  liblibsmb-private-samba.so
+  libLIBWBCLIENT-OLD-private-samba.so
+  libmessages-dgm-private-samba.so
+  libmessages-util-private-samba.so
+  libMESSAGING-private-samba.so
+  libMESSAGING-SEND-private-samba.so
+  libmscat-private-samba.so
+  libmsghdr-private-samba.so
+  libmsrpc3-private-samba.so
+  libndr-krb5pac.so
+  libndr-nbt.so
+  libndr-samba4-private-samba.so
+  libndr-samba-private-samba.so
+  libndr.so
+  libndr-standard.so
+  libnetapi.so
+  libnetif-private-samba.so
+  libnet-keytab-private-samba.so
+  libnpa-tstream-private-samba.so
+  libnss-info-private-samba.so
+  libnss_winbind.so
+  libnss_wins.so
+  libpac-private-samba.so
+  libposix-eadb-private-samba.so
+  libprinter-driver-private-samba.so
+  libprinting-migrate-private-samba.so
+  libprocess-model-private-samba.so
+  libpyldb-util.cpython-314-x86-64-linux-gnu-private-samba.so
+  libquic-private-samba.so
+  libREG-FULL-private-samba.so
+  libregistry-private-samba.so
+  libreplace-private-samba.so
+  libroken-private-samba.so
+  libRPC-SERVER-LOOP-private-samba.so
+  libRPC-WORKER-private-samba.so
+  libsamba3-util-private-samba.so
+  libsamba-cluster-support-private-samba.so
+  libsamba-credentials.so
+  libsamba-debug-private-samba.so
+  libsamba-errors.so
+  libsamba-hostconfig.so
+  libsamba-modules-private-samba.so
+  libsamba-net-join.cpython-314-x86-64-linux-gnu-private-samba.so
+  libsamba-net-private-samba.so
+  libsamba-passdb.so
+  libsamba-policy.so
+  libsamba-python.cpython-314-x86-64-linux-gnu-private-samba.so
+  libsamba-security-private-samba.so
+  libsamba-security-trusts-private-samba.so
+  libsamba-sockets-private-samba.so
+  libsamba-util.so
+  libsamdb-common-private-samba.so
+  libsamdb.so
+  libscavenge-dns-records-private-samba.so
+  libsecrets3-private-samba.so
+  libserver-id-db-private-samba.so
+  libserver-role-private-samba.so
+  libservice-private-samba.so
+  libshares-private-samba.so
+  libsmbclient-raw-private-samba.so
+  libsmbclient.so
+  libsmbconf.so
+  libsmbd-base-private-samba.so
+  libsmbd-shim-private-samba.so
+  libsmbldaphelper-private-samba.so
+  libsmbldap.so
+  libsmbpasswdparser-private-samba.so
+  libsocket-blocking-private-samba.so
+  libstable-sort-private-samba.so
+  libsys-rw-private-samba.so
+  libtalloc-report-printf-private-samba.so
+  libtalloc-report-private-samba.so
+  libtdb-wrap-private-samba.so
+  libtevent-util.so
+  libtime-basic-private-samba.so
+  libtorture-private-samba.so
+  libutil-crypt-private-samba.so
+  libutil-reg-private-samba.so
+  libutil-setid-private-samba.so
+  libutil-tdb-private-samba.so
+  libwind-private-samba.so
+  libxattr-tdb-private-samba.so
+)
+_smbclient_bins=(
+  smbclient
+  rpcclient
+  smbspool
+  smbtree
+  smbcacls
+  smbcquotas
+  smbget
+  net
+  nmblookup
+  smbtar
+)
+_pkgsrc="${srcdir}"/samba-pkg
+
+  install -d -m755 "${pkgdir}"/usr/bin
+  for bin in ${_smbclient_bins[@]}; do
+    mv "${_pkgsrc}"/usr/bin/${bin} "${pkgdir}"/usr/bin/
+  done
+
+  # smbclient binaries link to the majority of the samba
+  # libs, so this is a shortcut instead of resolving the
+  # whole dependency tree by hand
+  install -d -m755 "${pkgdir}"/usr/lib
+  for lib in "${_pkgsrc}"/usr/lib/lib*.so*; do
+    # trim: the libwbclient/ldb split payloads (owned by their sibling
+    # outputs) are left in staging instead of being scooped up here
+    case "${lib}" in
+      *libwbclient.so*|*libldb.so*) continue ;;
+    esac
+    mv ${lib} "${pkgdir}"/usr/lib/
+  done
+
+  install -d -m755 "${pkgdir}"/usr/lib/samba
+  for lib in "${_pkgsrc}"/usr/lib/samba/lib*.so*; do
+    mv ${lib} "${pkgdir}"/usr/lib/samba/
+  done
+
+  install -d -m755 "${pkgdir}"/usr/lib/pkgconfig
+  mv "${_pkgsrc}"/usr/lib/pkgconfig/smbclient.pc "${pkgdir}"/usr/lib/pkgconfig/
+  mv "${_pkgsrc}"/usr/lib/pkgconfig/netapi.pc "${pkgdir}"/usr/lib/pkgconfig/
+
+  # trim: man pages (docs) — not shipped in this lean consumer-rebuild recipe
+  # (stock moved man1/man7/man8 pages for the client tools here)
+
+  install -d -m755 "${pkgdir}"/usr/include/samba-4.0
+  mv "${_pkgsrc}"/usr/include/samba-4.0/libsmbclient.h "${pkgdir}"/usr/include/samba-4.0/
+  mv "${_pkgsrc}"/usr/include/samba-4.0/netapi.h "${pkgdir}"/usr/include/samba-4.0/
+
+  mkdir -p "${pkgdir}"/usr/lib/cups/backend
+  ln -sf /usr/bin/smbspool "${pkgdir}"/usr/lib/cups/backend/smb
+
+  # license: ship the upstream GPL-3.0-or-later text
+  for _lic in LICENSE COPYING; do
+    if [ -e "${srcdir}/samba-${pkgver}/$_lic" ]; then
+      install -Dm644 "${srcdir}/samba-${pkgver}/$_lic" -t "${pkgdir}/usr/share/licenses/$pkgname/"
+    fi
+  done
+}

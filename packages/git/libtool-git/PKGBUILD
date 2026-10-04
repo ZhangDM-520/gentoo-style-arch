@@ -1,0 +1,77 @@
+# Maintainer: Eric Engestrom <aur [at] engestrom [dot] ch>
+# Contributor: Allan McRae <allan@archlinux.org>
+# Contributor: judd <jvinet@zeroflux.org>
+
+# NOTE: requires rebuilt with each new gcc version
+#
+# git recipe tracking GNU libtool's savannah VCS (AUR libtool-git used as
+# reference only). The stock libtool pkgbase splits a lib32-libltdl output
+# which is NOT superseded here (64-bit-only recipe); stock's libtool output
+# and its libltdl/libtool-multilib capabilities are superseded below.
+
+pkgname=libtool-git
+pkgver=2.6.2.r4.g4f47d556
+pkgrel=1
+pkgdesc='A generic library support script (git build)'
+arch=('x86_64')
+url='https://www.gnu.org/software/libtool'
+license=('LGPL-2.0-or-later WITH Libtool-exception')
+depends=('sh' 'tar' 'glibc')
+makedepends=('git' 'glibc' 'help2man')
+checkdepends=('gcc-fortran')
+# the capability consumers link against is libltdl — stock libtool provides
+# it as libltdl=$pkgver; bare libltdl.so for the shipped soname (libltdl.so.7)
+provides=("libtool=$pkgver" "libltdl=$pkgver" "libtool-multilib=$pkgver" 'libltdl.so')
+conflicts=('libtool' 'libltdl' 'libtool-multilib')
+# gnulib + its bootstrap module set are libtool's git submodules; injected
+# as separate sources the same way stock Arch does (./bootstrap needs them)
+source=('git+https://git.savannah.gnu.org/git/libtool.git'
+        'git+https://git.savannah.gnu.org/git/gnulib.git'
+        'gnulib-bootstrap::git+https://github.com/gnulib-modules/bootstrap.git')
+b2sums=('SKIP' 'SKIP' 'SKIP')
+
+pkgver() {
+  cd libtool
+  git describe --long --tags | sed 's/\([^-]*-g\)/r\1/;s/-/./g;s/^v//'
+}
+
+prepare() {
+  cd libtool
+
+  git submodule init
+  git config --local submodule.gnulib.url "$srcdir"/gnulib
+  git config --local submodule.gl-mod/bootstrap.url "$srcdir"/gnulib-bootstrap
+  git -c protocol.file.allow=always submodule update
+
+  ./bootstrap
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  cd libtool
+  # stock passes /usr/lib /usr/lib32 for its lib32-libltdl output; this
+  # recipe is 64-bit only
+  ./configure --prefix=/usr lt_cv_sys_lib_dlsearch_path_spec="/usr/lib"
+  make -j"${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+}
+
+check() {
+  cd libtool
+  make check gl_public_submodule_commit=
+}
+
+package() {
+  cd libtool
+  make DESTDIR="$pkgdir" install
+
+  # Upstream git carries no license texts; ./bootstrap materializes the
+  # canonical gnulib copies (doc/COPYINGv2 = GPL-2.0 text,
+  # libltdl/COPYING.LIB = LGPL-2.1 text). 'make install' only puts
+  # libltdl/COPYING.LIB under /usr/share/libtool/, so install both under
+  # the license directory as well.
+  install -Dm644 doc/COPYINGv2 "$pkgdir/usr/share/licenses/$pkgname/COPYINGv2"
+  install -Dm644 libltdl/COPYING.LIB "$pkgdir/usr/share/licenses/$pkgname/COPYING.LIB"
+}

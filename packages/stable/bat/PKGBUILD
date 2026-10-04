@@ -1,0 +1,61 @@
+# Maintainer: Alexander F. Rødseth <xyproto@archlinux.org>
+# Maintainer: Caleb Maclennan <caleb@alerque.com>
+# Contributor: Wesley Moore <wes@wezm.net>
+
+pkgname=bat
+pkgver=0.26.1
+pkgrel=3
+pkgdesc='Cat clone with syntax highlighting and git integration'
+arch=(x86_64)
+url='https://github.com/sharkdp/bat'
+license=('Apache-2.0 OR MIT')
+depends=(libgcc glibc libgit2 oniguruma zlib)
+makedepends=(git rust)
+source=("git+$url.git#tag=v$pkgver")
+b2sums=('ceaf51697a1938080c5d8ac51150b0dbe3878909091dde1e35dd3955a7d951c6b8aac5685eb1d1aa345f330b4a27a5ade60aafec35faa63c63620939c6ad4118')
+
+prepare() {
+  cd "$pkgname"
+  cargo fetch --locked --target "$(rustc --print host-tuple)"
+}
+
+build() {
+  cd "$pkgname"
+  export LIBGIT2_NO_VENDOR=1
+  export RUSTONIG_DYNAMIC_LIBONIG=1
+  cargo build --frozen --release -j "${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+check() {
+  cd "$pkgname"
+  export LIBGIT2_NO_VENDOR=1
+  export RUSTONIG_DYNAMIC_LIBONIG=1
+  cargo test --locked --release -j "${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package() {
+  cd "$pkgname"
+  depends+=(libgit2.so)
+  install -Dm755 "target/release/$pkgname" "$pkgdir/usr/bin/$pkgname"
+
+  # Package licenses
+  install -Dm644 -t "$pkgdir/usr/share/licenses/$pkgname/" LICENSE-APACHE LICENSE-MIT
+
+  cd target/release/build
+
+  # trim: man page (docs) — not part of the maintained target; the stock
+  # bat.1 find/install is dropped here (completions below are kept)
+  rm -rf "$pkgdir"/usr/share/man
+
+  # Find and package the bash completion file
+  find . -name bat.bash -type f -exec install -Dm644 {} \
+    "$pkgdir/usr/share/bash-completion/completions/bat" \;
+
+  # Find and package the zsh completion file (not in zsh-completions yet)
+  find . -name bat.zsh -type f -exec install -Dm644 {} \
+    "$pkgdir/usr/share/zsh/site-functions/_bat" \;
+
+  # Find and package the fish completion file
+  find . -name bat.fish -type f -exec install -Dm644 {} \
+    "$pkgdir/usr/share/fish/vendor_completions.d/bat.fish" \;
+}

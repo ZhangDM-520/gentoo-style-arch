@@ -1,0 +1,205 @@
+# Maintainer: Christian Hesse <eworm@archlinux.org>
+
+# ➡️ The mariadb package will be latest stable (GA / General Availability)
+#   release, regardless of rolling or long-term release.
+# ➡️ The mariadb-lts package will be latest long-term release not packaged
+#   in mariadb. So mariadb-lts will always be behind mariadb.
+# https://mariadb.com/kb/en/mariadb-server-release-dates/
+#
+# trim: dropped splits mariadb-clients/mariadb/mariadb-mytop/mariadb-pam —
+#       this recipe delivers only the mariadb-libs output (upgrade-in-place of
+#       the stock split); their package_* functions and install paths were
+#       removed together with them (mariadb.install + the service .conf
+#       installs belong to the dropped mariadb split; the two .conf sources
+#       stay in source=() untouched per source-preservation house rule)
+
+pkgbase=mariadb-libs
+pkgname=(
+  'mariadb-libs'
+)
+pkgdesc='Fast SQL database server, derived from MySQL'
+pkgver=13.0.2
+pkgrel=2
+arch=('x86_64')
+license=('GPL-2.0-only')
+url='https://mariadb.org/'
+makedepends=('git' 'boost' 'bzip2' 'cmake' 'cracklib' 'curl' 'jemalloc' 'judy' 'krb5' 'liburing'
+             'libxcrypt' 'libxml2' 'lz4' 'openssl' 'pcre2' 'systemd' 'zlib' 'zstd' 'xz')
+validpgpkeys=('177F4010FE56CA3336300305F1656F24C74CD1D8') # MariaDB Signing Key <signing-key@mariadb.org>
+source=("mariadb::git+https://github.com/MariaDB/server.git?signed#tag=mariadb-${pkgver}"
+        'git+https://github.com/codership/wsrep-lib.git'
+	'git+https://github.com/duckdb/duckdb.git'
+        'git+https://github.com/facebook/rocksdb.git'
+        'git+https://github.com/mariadb-corporation/libmarias3.git'
+        'git+https://github.com/mariadb-corporation/mariadb-columnstore-engine.git'
+        'git+https://github.com/MariaDB/mariadb-connector-c.git'
+        'git+https://github.com/wolfSSL/wolfssl.git'
+        '0001-arch-specific.patch'
+        'mariadb-Environment-jemalloc.conf'
+        'mariadb-PrivateTmp.conf')
+sha256sums=('e61fb5649750e521708fa8331a364cfd1146e667d360694bd4cbc791a99f8f1b'
+            'SKIP'
+            'SKIP'
+            'SKIP'
+            'SKIP'
+            'SKIP'
+            'SKIP'
+            'SKIP'
+            '0420cd146f3bb50801e0642d1f8d10a138cc5f4c3113e09fd82ab1fc67b6f3de'
+            '8ca7ed2d3b2d91a54f781ec9dbf8e9b8941c00686d2a3f9ece0adb9c4fb68009'
+            'b3df8d27b443d4d6ae40f8c0544ee765e618b56bed801e14433f0da0f774a6f2')
+
+prepare() {
+  cd mariadb/
+
+  # setup git submodules
+  git config --file=.gitmodules submodule.extra/wolfssl/wolfssl.url ../wolfssl/
+  git config --file=.gitmodules submodule.libmariadb.url ../mariadb-connector-c/
+  git config --file=.gitmodules submodule.storage/columnstore/columnstore.url ../mariadb-columnstore-engine/
+  git config --file=.gitmodules submodule.storage/duckdb/third_parties/duckdb.url ../duckdb/
+  git config --file=.gitmodules submodule.storage/maria/libmarias3.url ../libmarias3/
+  git config --file=.gitmodules submodule.storage/rocksdb/rocksdb.url ../rocksdb/
+  git config --file=.gitmodules submodule.wsrep-lib.url ../wsrep-lib/
+  git submodule init
+  git -c protocol.file.allow=always submodule update
+
+  # Arch Linux specific patches:
+  #  * enable PrivateTmp for a little bit more security
+  #  * force preloading jemalloc for memory management
+  #  * make systemd-tmpfiles create MYSQL_DATADIR
+  patch -Np1 < ../0001-arch-specific.patch
+
+  # CONC-821: Avoid resetting length pointer for variable-length types in mysql_stmt_bind_result
+  cd libmariadb
+  git cherry-pick -n \
+    'ead038dc8a2b3d7819f87af33e14f105325f8cf9'
+}
+
+build() {
+  local _cmake_options=(
+    # build options
+    -DCOMPILATION_COMMENT="Arch Linux"
+    -DCMAKE_BUILD_TYPE=RelWithDebInfo
+    #-DCMAKE_BUILD_TYPE=Debug
+    #-DMYSQL_MAINTAINER_MODE=WARN
+    -Wno-dev
+
+    # file paths
+    # /etc
+    -DINSTALL_SYSCONFDIR=/etc
+    -DINSTALL_SYSCONF2DIR=/etc/my.cnf.d
+    # /run
+    -DINSTALL_RUNDIR=/run
+    -DINSTALL_UNIX_ADDRDIR=/run/mysqld/mysqld.sock
+    # /usr
+    -DCMAKE_INSTALL_PREFIX=/usr
+    # /usr/bin /usr/include
+    -DINSTALL_SCRIPTDIR=bin
+    -DINSTALL_INCLUDEDIR=include/mysql
+    # /usr/lib
+    -DINSTALL_PLUGINDIR=lib/mysql/plugin
+    -DINSTALL_SYSTEMD_UNITDIR=lib/systemd/system/
+    -DINSTALL_SYSTEMD_SYSUSERSDIR=lib/sysusers.d/
+    -DINSTALL_SYSTEMD_TMPFILESDIR=lib/tmpfiles.d/
+    # /usr/share
+    -DINSTALL_SHAREDIR=share
+    -DINSTALL_SUPPORTFILESDIR=share/mysql
+    -DINSTALL_MYSQLSHAREDIR=share/mysql
+    -DINSTALL_DOCREADMEDIR=share/doc/mariadb
+    -DINSTALL_DOCDIR=share/doc/mariadb
+    -DINSTALL_MANDIR=share/man
+    # /var
+    -DMYSQL_DATADIR=/var/lib/mysql
+
+    # default settings
+    -DDEFAULT_CHARSET=utf8mb4
+    -DDEFAULT_COLLATION=utf8mb4_unicode_ci
+
+    #    /\    WARNING: This option is kind of insane... One expects that AUTO does allow the
+    #   /\7\     build system to decide. Actually this is not true: Every value (ON / AUTO / OFF)
+    #  /_()_\    sets different default values for the build. Let's go with the most secure,
+    #            should be possible to enable at run time for all components.
+    -DENABLED_LOCAL_INFILE=OFF
+
+    # features
+    -DPLUGIN_EXAMPLE=NO
+    -DPLUGIN_FEDERATED=NO
+    -DPLUGIN_FEEDBACK=NO
+    -DWITH_EMBEDDED_SERVER=ON
+    -DWITH_EXTRA_CHARSETS=complex
+    -DWITH_JEMALLOC=ON
+    -DWITH_LIBWRAP=OFF
+    -DWITH_PCRE2=system
+    -DWITH_READLINE=ON
+    -DWITH_SSL=system
+    -DWITH_SYSTEMD=yes
+    -DWITH_UNIT_TESTS=OFF
+    -DWITH_ZLIB=system
+  )
+
+  # this uses malloc_usable_size, which is incompatible with fortification level 3
+  export CFLAGS="${CFLAGS/_FORTIFY_SOURCE=3/_FORTIFY_SOURCE=2}"
+  export CXXFLAGS="${CXXFLAGS/_FORTIFY_SOURCE=3/_FORTIFY_SOURCE=2}"
+
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  mkdir build
+  cd build
+
+  cmake ../mariadb/ "${_cmake_options[@]}"
+
+  make -j"${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+# trim: check() (test suite — stock already kept it disabled)
+
+package_mariadb-libs() {
+  pkgdesc='MariaDB libraries'
+  depends=('liburing' 'liburing.so'
+           'libxcrypt' 'libcrypt.so'
+           'openssl' 'libcrypto.so' 'libssl.so'
+           'pcre2' 'libpcre2-8.so'
+           'zlib' 'libz.so'
+           'zstd' 'libzstd.so')
+  optdepends=('krb5: for gssapi authentication')
+  # conflicts/replaces dropped (house rule)
+  provides=('libmariadbclient'
+	    'mariadb-connector-c'
+	    'libmariadb.so'
+	    'libmariadbd.so')
+
+  cd build
+
+  for dir in libmariadb libmysqld libservices include; do
+    make -C "${dir}" DESTDIR="${pkgdir}" install
+  done
+
+  # remove static libraries
+  rm "${pkgdir}"/usr/lib/*.a
+
+  # remove man pages
+  rm -r "${pkgdir}"/usr/share/man
+
+  ln -s mariadb_config "${pkgdir}"/usr/bin/mariadb-config
+  ln -s mariadb_config "${pkgdir}"/usr/bin/mysql_config
+
+  # trim: man pages (mariadb_config.1 + its symlinks — docs)
+  # (stock installed mariadb_config.1 here after wiping man pages)
+
+  install -D -m0644 support-files/mariadb.pc "${pkgdir}"/usr/share/pkgconfig/mariadb.pc
+  install -D -m0644 "${srcdir}"/mariadb/support-files/mysql.m4 "${pkgdir}"/usr/share/aclocal/mysql.m4
+
+  # license: ship upstream licence text(s) (GPL-2.0-only)
+  cd "$srcdir/mariadb"
+  local _l
+  for _l in COPYING COPYING.thirdparty README.md; do
+    [[ -f $_l ]] && install -Dm644 "$_l" -t "$pkgdir/usr/share/licenses/$pkgname/"
+  done
+}
+
+# trim: package_mariadb-clients(), package_mariadb(), package_mariadb-mytop()
+#       and package_mariadb-pam() (dropped splits) removed together with
+#       their install/depends paths

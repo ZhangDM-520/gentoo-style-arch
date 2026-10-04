@@ -1,0 +1,94 @@
+# Maintainer: auto-generated (Class A upstream-VCS recipe)
+# Contributor: Chocobo1 <chocobo1 AT archlinux DOT net> (AUR pcre2-git reference)
+# Contributor: Felix Yan <felixonmars@archlinux.org> (stock pcre2)
+# Contributor: Allan McRae <allan@archlinux.org>
+# Contributor: Eric Belanger <eric@archlinux.org>
+# Contributor: John Proctor <jproctor@prium.net>
+
+pkgname=pcre2-git
+pkgver=10.49.r117.g896f707
+pkgrel=1
+pkgdesc='A library that implements Perl 5-style regular expressions. 2nd version (git build)'
+arch=('x86_64')
+url='https://github.com/PCRE2Project/pcre2'
+license=(
+  BSD-2-Clause
+  'BSD-3-Clause WITH PCRE2-exception'
+)
+depends=(
+  bzip2
+  glibc
+  readline
+  zlib
+)
+makedepends=(git)
+optdepends=('sh: for pcre2-config')
+provides=("pcre2=$pkgver" libpcre2-{8,16,32,posix}.so)
+# bare soname entries kept from stock (sonames libpcre2-{8,16,32}.so.0 +
+# libpcre2-posix.so.3); pacman 7.1 derives versioned provides from them
+conflicts=('pcre2')
+options=(staticlibs)
+# stock verifies signed release tags (?signed#tag=pcre2-$pkgver, validpgpkeys:
+# Philip Hazel, Nicholas Wilson) and pulls deps/sljit as a pinned submodule —
+# master-tracking has no tag to pin/verify (makepkg would run
+# `git verify-commit HEAD` for ?signed on unsigned commits); tracked unsigned,
+# sljit tracked as its own git source like stock
+source=(
+  pcre2::git+https://github.com/PCRE2Project/pcre2.git
+  sljit::git+https://github.com/zherczeg/sljit.git
+)
+b2sums=('SKIP'
+        'SKIP')
+
+pkgver() {
+  cd pcre2
+  git describe --long --tags | sed 's/^pcre2-//;s/\([^-]*-g\)/r\1/;s/-/./g'
+}
+
+prepare() {
+  cd pcre2
+
+  # stock's offline submodule wiring (avoids network during build)
+  git submodule init
+  git config submodule."deps/sljit".url ../sljit
+  git -c protocol.file.allow=always submodule update
+
+  ./autogen.sh
+
+  # extract licenses (stock)
+  cp -v deps/sljit/LICENSE ../BSD-2-Clause.txt
+  sed -n '70,94p' LICENCE.md > ../BSD-3-Clause.txt
+  sed -n '100,104p' LICENCE.md > ../PCRE2-exception.txt
+}
+
+build() {
+  cd pcre2
+
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  local configure_options=(
+    --enable-jit
+    --enable-pcre2-16
+    --enable-pcre2-32
+    --enable-pcre2grep-libbz2
+    --enable-pcre2grep-libz
+    --enable-pcre2test-libreadline
+    --prefix=/usr
+  )
+
+  # fat LTO objects for the shipped static libs (kept from stock; not an
+  # -O3/-march/-mtune flag)
+  CFLAGS+=" -ffat-lto-objects"
+  CXXFLAGS+=" -ffat-lto-objects"
+
+  ./configure "${configure_options[@]}"
+  make -j"${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package() {
+  make DESTDIR="$pkgdir" install -C pcre2
+
+  install -Dm644 ./*.txt -t "$pkgdir/usr/share/licenses/$pkgname/"
+}

@@ -1,0 +1,38 @@
+pkgbase = libwebp-git
+	pkgdesc = WebP image codec library (git build)
+	pkgver = 1.6.0.r293.ga1d89ff2
+	pkgrel = 1
+	url = https://developers.google.com/speed/webp/
+	arch = x86_64
+	license = BSD-3-Clause
+	makedepends = cmake
+	makedepends = git
+	makedepends = giflib
+	makedepends = libjpeg-turbo
+	makedepends = libpng
+	makedepends = libtiff
+	makedepends = ninja
+	depends = glibc
+	source = git+https://chromium.googlesource.com/webm/libwebp
+	b2sums = SKIP
+
+pkgname = libwebp-git
+	optdepends = libwebp-utils-git: WebP conversion and inspection tools
+	provides = libwebp=1.6.0.r293.ga1d89ff2
+	provides = libsharpyuv.so
+	provides = libwebp.so
+	provides = libwebpdecoder.so
+	provides = libwebpdemux.so
+	provides = libwebpmux.so
+	conflicts = libwebp
+
+pkgname = libwebp-utils-git
+	pkgdesc = WebP conversion and inspection tools (git build)
+	depends = giflib
+	depends = glibc
+	depends = libjpeg-turbo
+	depends = libpng
+	depends = libtiff
+	depends = libwebp-git
+	provides = libwebp-utils=1.6.0.r293.ga1d89ff2
+	conflicts = libwebp-utils

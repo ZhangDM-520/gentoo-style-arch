@@ -1,0 +1,21 @@
+pkgbase = libxpm-git
+	pkgdesc = X11 pixmap library (git build)
+	pkgver = 3.5.19.r3.g58eb875
+	pkgrel = 1
+	url = https://xorg.freedesktop.org/
+	arch = x86_64
+	license = MIT
+	license = X11-distribute-modifications-variant
+	makedepends = git
+	makedepends = xorg-util-macros
+	depends = libxt
+	depends = libxext
+	depends = libx11
+	depends = glibc
+	provides = libxpm=3.5.19.r3.g58eb875
+	provides = libXpm.so
+	conflicts = libxpm
+	source = git+https://gitlab.freedesktop.org/xorg/lib/libxpm.git
+	b2sums = SKIP
+
+pkgname = libxpm-git

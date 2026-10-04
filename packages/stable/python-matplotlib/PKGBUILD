@@ -1,0 +1,98 @@
+# Maintainer: Jakub Klinkovský <lahwaacz at archlinux dot org>
+# Maintainer: Felix Yan <felixonmars@archlinux.org>
+# Maintainer: Bruno Pagani <archange@archlinux.org>
+# Contributor: Stéphane Gaudreault <stephane@archlinux.org>
+# Contributor: Stefan Husmann <stefan-husmann@t-online.de>
+# Contributor: Angel 'angvp' Velasquez <angvp[at]archlinux.com.ve>
+# Contributor: Douglas Soares de Andrade <dsa@aur.archlinux.org>
+
+pkgname=python-matplotlib
+pkgver=3.11.2
+pkgrel=1
+pkgdesc="A python plotting library, making publication quality plots"
+arch=(x86_64)
+url="https://matplotlib.org"
+license=(PSF-2.0 MIT CC0-1.0 OFL-1.1 Bitstream-Vera LicenseRef-Public-Domain)
+depends=(
+  glibc
+  freetype2
+  libgcc
+  libstdc++
+  python
+  python-contourpy
+  python-cycler
+  python-dateutil
+  python-fonttools
+  python-kiwisolver
+  python-numpy
+  python-packaging
+  python-pillow
+  python-pyparsing
+  qhull
+)
+optdepends=(
+  'tk: Tk{Agg,Cairo} backends'
+  'pyside6: alternative for Qt6{Agg,Cairo} backends'
+  'python-pyqt6: Qt6{Agg,Cairo} backends'
+  'python-gobject: for GTK{3,4}{Agg,Cairo} backend'
+  'python-wxpython: WX{Agg,Cairo} backend'
+  'python-cairo: {GTK{3,4},Qt{5,6},Tk,WX}Cairo backends'
+  'python-cairocffi: alternative for Cairo backends'
+  'python-tornado: WebAgg backend'
+  'ffmpeg: for saving movies'
+  'imagemagick: for saving animated gifs'
+  'ghostscript: usetex dependencies'
+  'texlive-binextra: usetex dependencies'
+  'texlive-fontsrecommended: usetex dependencies'
+  'texlive-latexrecommended: usetex usage with pdflatex'
+  'python-certifi: https support'
+)
+makedepends=(
+  git
+  meson-python
+  pybind11
+  python-build
+  python-certifi
+  python-installer
+  python-setuptools-scm
+  python-wheel
+)
+source=(git+https://github.com/matplotlib/matplotlib.git?signed#tag=v${pkgver})
+b2sums=('c63345866dc4223ec6d3d31ac0a6c930a38c69441ea3133c611aa03ef587b377e2924528981311dfeb2d3b8f84c10fae9a465ca9453adda8965052d90029a239')
+validpgpkeys=(23CAB59E3332F94D26BEF0378D86E7FAE5EB0C10  # Elliott Sales de Andrade <quantum.analyst@gmail.com>
+              EB8322187FD451192E430A7279B3FEC456F12599) # Kyle Sunden <contact@ksunden.space>
+
+prepare() {
+  cd matplotlib
+
+  # Allow to use new setuptools-scm
+  sed -i 's|"setuptools_scm>=7,<10"|"setuptools_scm"|' pyproject.toml
+}
+
+build() {
+  cd matplotlib
+  # House style: mold linker when available (the extension link lines consume
+  # LDFLAGS from the environment).
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  export SETUPTOOLS_SCM_PRETEND_VERSION=${pkgver}
+  python -m build --wheel --no-isolation \
+    -C setup-args=-Dsystem-freetype=true \
+    -C setup-args=-Dsystem-qhull=true
+}
+
+# trim: upstream image-comparison test suite (xvfb pytest) — its heavy
+# checkdepends (ffmpeg/ghostscript/gtk4/inkscape/jupyter/pyside6/qt6-svg/
+# texlive/tk/fonts/...) are dropped together with it
+
+package() {
+  cd matplotlib
+  export SETUPTOOLS_SCM_PRETEND_VERSION=${pkgver}
+  python -m installer --destdir="${pkgdir}" dist/*.whl
+  # Install license files
+  install -vDm 644 LICENSE/* -t "${pkgdir}"/usr/share/licenses/${pkgname}/
+  # Remove tests
+  rm -r "${pkgdir}"$(python -c "import site; print(site.getsitepackages()[0])")/{matplotlib,mpl_toolkits/*}/tests/
+}

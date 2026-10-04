@@ -42,8 +42,12 @@ check() {
 
 package() {
     pkgdesc+=" (zlib compat)"
-    provides=('zlib' 'libz.so=1-64')
+    provides=('zlib' 'libz.so')
     conflicts=(zlib)
+    # Name-level swap metadata (house rule): the stock zlib-ng-compat must be
+    # replaced by this build and its dependents must resolve here (2026-10-04).
+    provides+=("zlib-ng-compat=$pkgver")
+    conflicts+=('zlib-ng-compat')
 
     DESTDIR="${pkgdir}" cmake --install build
     install -Dm644 zlib-ng/LICENSE.md -t "${pkgdir}/usr/share/licenses/${pkgname}"

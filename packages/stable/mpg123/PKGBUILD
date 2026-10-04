@@ -1,0 +1,61 @@
+# Maintainer: Levente Polyak <anthraxx[at]archlinux[dot]org>
+# Contributor: Eric Bélanger <eric@archlinux.org>
+
+pkgname=mpg123
+pkgver=1.33.7
+pkgrel=1
+pkgdesc='Console based real time MPEG Audio Player for Layer 1, 2 and 3'
+url='https://mpg123.de/'
+arch=('x86_64')
+license=('LGPL-2.1-only')
+depends=('alsa-lib' 'glibc')
+makedepends=('jack' 'libpulse' 'sdl2-compat')
+optdepends=(
+  'sdl2-compat: for sdl audio support'
+  'jack: for jack audio support'
+  'libpulse: for pulse audio support'
+  'perl: for conplay'
+)
+# bare soname provides per ELF output: 3 linkable libs (sonames
+# libmpg123.so.0/libout123.so.0/libsyn123.so.0) + 6 output driver modules
+# (filename SONAMEs)
+provides=(lib{mpg,out,syn}123.so
+          output_{alsa,dummy,jack,oss,pulse,sdl}.so)
+source=(https://downloads.sourceforge.net/sourceforge/mpg123/mpg123-${pkgver}.tar.bz2{,.sig})
+sha512sums=('694743802bb7be0f4a39bf62e681ae0bfed769cb87dc6c5b6fb5f9245966631efb5c5b9bd58588f7af55ced5d020f97c8a54993e71b5295bc45ebd152473f40e'
+            'SKIP')
+validpgpkeys=('D021FF8ECF4BE09719D61A27231C4CBC60D5CAFE')
+
+build() {
+  cd mpg123-${pkgver}
+
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  ./configure \
+    --prefix=/usr \
+    --enable-int-quality \
+    --with-audio="alsa oss sdl jack pulse"
+  # https://bugzilla.gnome.org/show_bug.cgi?id=655517
+  sed -i -e 's/ -shared / -Wl,-O1,--as-needed\0/g' libtool
+  make -j"${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package() {
+  cd mpg123-${pkgver}
+  make DESTDIR="${pkgdir}" install
+  install -Dm 755 scripts/conplay -t "${pkgdir}/usr/bin"
+
+  # trim: man pages + docs
+  rm -rf "${pkgdir}/usr/share/man" "${pkgdir}/usr/share/doc"
+
+  # license: ship upstream licence text(s) (LGPL-2.1-only)
+  local _l
+  for _l in COPYING COPYING.LIB LICENSE; do
+    [[ -f $_l ]] && install -Dm644 "$_l" -t "$pkgdir/usr/share/licenses/$pkgname/"
+  done
+}
+
+# vim:set sw=2 sts=-1 et:

@@ -1,0 +1,146 @@
+# Maintainer: AndyRTR <andyrtr@archlinux.org>
+# Maintainer: Tobias Powalowski <tpowa@archlinux.org>
+# Contributor: John Proctor <jproctor@prium.net>
+# Contributor: dibblethewrecker <dibblethewrecker.at.jiwe.org>
+# Contributor: abelstr <abel@pinklf.eu>
+# Contributor: Marco Lima <cipparello gmail com>
+
+# Source-dedupe merge: this is the single pkgbase for both nfs-utils and
+# nfsidmap. It replaces the former subset-duplicate recipe packages/stable/nfsidmap
+# (same upstream tarball, subset output); its doc-payload trim is folded into
+# the removals below.
+
+pkgbase=nfs-utils
+pkgname=('nfs-utils' 'nfsidmap')
+pkgver=3.1.1
+pkgrel=1
+arch=('x86_64')
+url='http://nfs.sourceforge.net'
+license=('GPL-2.0-or-later')
+makedepends=('libevent' 'sqlite' 'rpcsvc-proto' 'device-mapper' 'libnl')
+# http://git.linux-nfs.org/?p=steved/nfs-utils.git;a=summary
+source=(https://www.kernel.org/pub/linux/utils/${pkgname}/${pkgver}/${pkgname}-${pkgver}.tar.{xz,sign}
+        exports
+        nfs-utils.sysusers)
+# https://mirrors.edge.kernel.org/pub/linux/utils/nfs-utils/2.8.5/sha256sums.asc
+sha256sums=('7dbc05eb8b32828b322872b759a62cb3979cb4118f344dd8616813d1390e84e0'
+            'SKIP'
+            'b8238b74179f7e1626db2b637671ddc17288a1c5b7692954ae6d2fbb1be3788d'
+            '61a3fbe55e30bc9c5da17a76e772c8be1cc695e0142a144c15f0f9aa46ab9ce0')
+validpgpkeys=('E1B71E339E20A10A676F7CB69AFB1D681A125177') # Steve Dickson
+
+prepare() {
+  cd "${pkgbase}"-${pkgver}
+  # fix hardcoded sbin/libexec path to our needs
+  sed -i "s|sbindir = /sbin|sbindir = /usr/bin|g" utils/*/Makefile.am
+  sed -i "s|sbin|bin|" utils/nfsidmap/id_resolver.conf
+  sed -i "s|libexec|bin|" tools/nfsrahead/99-nfs.rules
+  autoreconf -vfi
+}
+
+build() {
+  cd "${pkgbase}"-${pkgver}
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+  ./configure --prefix=/usr \
+    --sbindir=/usr/bin \
+    --sysconfdir=/etc \
+    --libexecdir=/usr/bin \
+    --with-statedir=/var/lib/nfs \
+    --with-statdpath=/var/lib/nfs/statd \
+    --with-start-statd=/usr/bin/start-statd \
+    --enable-nfsv4server \
+    --enable-gss \
+    --without-tcp-wrappers \
+    --enable-ipv6 \
+    --enable-libmount-mount \
+    --enable-mountconfig \
+    --with-systemd
+  sed -i -e 's/ -shared / -Wl,-O1,--as-needed\0/g' libtool
+  make -j"${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+}
+
+check() {
+  cd "${pkgbase}"-${pkgver}
+  #make -k check || /bin/true
+  make check
+}
+
+package_nfs-utils() {
+
+  pkgdesc="Support programs for Network File Systems"
+  backup=(etc/{exports,nfs.conf,nfsmount.conf}
+          var/lib/nfs/{etab,rmtab})
+  # sibling output pinned name=$pkgver-$pkgrel (qemu-system-x86 precedent)
+  depends=('rpcbind' nfsidmap=$pkgver-$pkgrel 'gssproxy' 'libevent' 'device-mapper'
+           'libxml2' 'libtirpc' 'e2fsprogs' 'keyutils' 'util-linux-libs'
+           'libnl' 'krb5' 'libcap' 'glibc' 'libgcc' 'sh' 'readline')
+  optdepends=('sqlite: for nfsdcltrack and fsidd usage'
+              'python: for rpcctl, nfsiostat, nfsdclnts and mountstats usage')
+
+  cd "${pkgbase}"-${pkgver}
+  make DESTDIR="$pkgdir" install
+ 
+  install -D -m 644 utils/mount/nfsmount.conf "$pkgdir"/etc/nfsmount.conf
+  install -D -m 644 nfs.conf "$pkgdir"/etc/nfs.conf
+
+  # trim: docs — the stock /usr/share/doc install (README, NEWS,
+  # systemd/README.systemd) is not shipped in this recipe
+
+  # empty exports file  
+  install -D -m 644 ../exports "$pkgdir"/etc/exports
+
+  # config file for idmappers in newer kernels
+  install -D -m 644 utils/nfsidmap/id_resolver.conf "$pkgdir"/etc/request-key.d/id_resolver.conf
+
+  mkdir "$pkgdir"/etc/exports.d
+  mkdir -m 555 "$pkgdir"/var/lib/nfs/rpc_pipefs
+  mkdir "$pkgdir"/var/lib/nfs/v4recovery
+
+  # systemd sysusers - FS#75536
+  install -D -m 644 ../nfs-utils.sysusers "${pkgdir}"/usr/lib/sysusers.d/rpcuser.conf
+  chown -Rv 34:34 "${pkgdir}"/var/lib/nfs/statd
+  chmod -R 700 "${pkgdir}"/var/lib/nfs/statd
+  chmod 644 "${pkgdir}"/var/lib/nfs/statd/state
+
+  # nfsidmap cleanup
+  rm -vrf "$pkgdir"/usr/include #/nfsid*
+  rm -vrf "$pkgdir"/usr/lib/libnfsidmap*
+  rm -vrf "$pkgdir"/usr/lib/pkgconfig #/libnfsidmap.pc
+  # trim: man/doc — lean consumer-rebuild recipe (pairs with the stock man3/
+  # idmapd.conf targeted removals above, which this replaces); /usr/share/doc
+  # removal enforces the docs trim noted above
+  rm -rf "$pkgdir"/usr/share/man "$pkgdir"/usr/share/doc "$pkgdir"/usr/share/locale "$pkgdir"/usr/share/info
+
+  # license: ship upstream licence text (GPL-2.0-or-later)
+  local _l
+  for _l in COPYING COPYING.GPLv2 LICENSE; do
+    if [[ -f $_l ]]; then install -Dm644 "$_l" -t "$pkgdir/usr/share/licenses/${pkgname}/"; fi
+  done
+}
+
+package_nfsidmap() {
+
+  pkgdesc="Library to help mapping IDs, mainly for NFSv4"
+  backup=(etc/idmapd.conf)
+  depends=('libldap' 'krb5' 'glibc')
+  # bare soname provides per ELF output (never pinned)
+  provides=('libnfsidmap.so')
+
+  cd "${pkgbase}"-${pkgver}
+  make -C support  DESTDIR="$pkgdir" install
+  
+  # part of -utils pkg
+  rm -v "$pkgdir"/usr/bin/fsidd
+  rmdir -v "$pkgdir"/usr/bin
+
+  # config file  
+  install -D -m 644 support/nfsidmap/idmapd.conf "$pkgdir"/etc/idmapd.conf
+  # trim: man/doc/locales payload — lean consumer-rebuild recipe
+  # (docs/man/locales; doc drop unioned in from the retired nfsidmap recipe)
+  rm -rf "$pkgdir"/usr/share/man "$pkgdir"/usr/share/doc "$pkgdir"/usr/share/locale
+  # license
+  install -Dm644 support/nfsidmap/COPYING $pkgdir/usr/share/licenses/nfsidmap/LICENSE
+}

@@ -1,0 +1,69 @@
+# Maintainer: Fabian Bornschein <fabiscafe@archlinux.org>
+# Maintainer: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
+# Contributor: Ionut Biru <ibiru@archlinux.org>
+
+pkgname=gnome-calculator
+pkgver=51.0
+pkgrel=1
+pkgdesc="GNOME Scientific calculator"
+url="https://apps.gnome.org/Calculator"
+arch=(x86_64)
+license=(GPL-3.0-or-later)
+depends=(
+  dconf
+  glib2
+  glibc
+  gmp
+  gtk4
+  gtksourceview5
+  hicolor-icon-theme
+  libadwaita
+  libgee
+  libmpc
+  libsoup3
+  libxml2
+  mpfr
+)
+makedepends=(
+  blueprint-compiler
+  git
+  gobject-introspection
+  meson
+  vala
+  yelp-tools
+)
+# House standard: bare soname provides per ELF output (never pinned) — stock kept.
+provides=(
+  libgcalc-2.so
+  libgci-1.so
+)
+groups=(gnome)
+source=("git+https://gitlab.gnome.org/GNOME/gnome-calculator.git#tag=${pkgver/[a-z]/.&}")
+b2sums=('b456e4da55214c81adee7b992cabc49e51066ca965e97661c5c6e3999862010aec97fe0d3c755248d0bd75efd5124e156e344805043da01bab2d14f7cdaad199')
+
+build() {
+  # House style: mold linker when available
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  arch-meson $pkgname build
+  meson compile -C build -j "${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+# trim: check() test suite (meson test) dropped (Class B tests)
+
+package() {
+  meson install -C build --no-rebuild --destdir "$pkgdir"
+
+  # trim: gettext locales (locales); GNOME help pages kept (yelp-tools builds
+  #       them, no docs knob upstream)
+  rm -rf "$pkgdir/usr/share/locale"
+
+  # license: ship the upstream licence text(s) (GPL-3.0-or-later)
+  cd $pkgname
+  local _l
+  for _l in COPYING COPYING.GPL LICENSE; do
+    [[ -f $_l ]] && install -Dm644 "$_l" -t "$pkgdir/usr/share/licenses/$pkgname/"
+  done
+}

@@ -1,0 +1,20 @@
+pkgbase = minizip-ng
+	pkgdesc = Fork of the popular zip manipulation library found in the zlib distribution
+	pkgver = 4.2.2
+	pkgrel = 1
+	url = https://github.com/zlib-ng/minizip-ng
+	arch = x86_64
+	license = Zlib
+	makedepends = cmake
+	makedepends = git
+	depends = bzip2
+	depends = glibc
+	depends = openssl
+	depends = xz
+	depends = zlib-ng
+	depends = zstd
+	provides = libminizip-ng.so
+	source = git+https://github.com/zlib-ng/minizip-ng#tag=4.2.2
+	sha256sums = 3564e2aa171fb6556607d5c08c753c78e488c8e9342c166901f445f5415ed05b
+
+pkgname = minizip-ng

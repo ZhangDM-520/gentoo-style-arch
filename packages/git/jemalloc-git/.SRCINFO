@@ -11,7 +11,7 @@ pkgbase = jemalloc-git
 	depends = sh
 	optdepends = perl: for running jeprof
 	provides = jemalloc=5.4.0.r38.g250120f2
-	provides = libjemalloc.so=2-64
+	provides = libjemalloc.so
 	conflicts = jemalloc
 	source = git+https://github.com/jemalloc/jemalloc.git
 	sha256sums = SKIP

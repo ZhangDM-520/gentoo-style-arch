@@ -1,0 +1,61 @@
+# Maintainer: Balló György <ballogyor+arch at gmail dot com>
+# Contributor: Jan de Groot <jgc@archlinux.org>
+# Contributor: André Klitzing <aklitzing@online.de>
+
+pkgname=exempi
+pkgver=2.6.6
+pkgrel=3
+pkgdesc='Library to parse XMP metadata'
+arch=(x86_64)
+url='https://libopenraw.freedesktop.org/exempi/'
+license=(BSD-3-Clause)
+depends=(
+  expat
+  glibc
+  libgcc
+  libstdc++
+  zlib
+)
+makedepends=(
+  boost
+  git
+)
+# House standard: bare soname provide per ELF output (never pinned).
+# Upstream soname is libexempi.so.8.
+provides=(libexempi.so)
+source=("git+https://gitlab.freedesktop.org/libopenraw/$pkgname.git#tag=$pkgver")
+b2sums=(aeaded22cfd41a51eebd6575cf3b701f78c883b06b060117734b51e1b23191a1a04e6a71858787b57ca841a82750394709159d44faa40a8a09f39b50414ff071)
+validpgpkeys=(6C44DB3E0BF3EAF5B433239A5FEE05E6A56E15A3) # Hubert Figuiere
+
+prepare() {
+  cd $pkgname
+  autoreconf -fiv
+}
+
+build() {
+  cd $pkgname
+
+  # House style: mold linker when available
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  ./configure \
+    --prefix=/usr \
+    --sysconfdir=/etc \
+    --localstatedir=/var \
+    --disable-unittest
+  make -j"${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+# trim: test suite (check()/make check) dropped (Class B tests)
+
+package() {
+  cd $pkgname
+  make DESTDIR="$pkgdir" install
+
+  # trim: doc payload if the stock install produced it (docs)
+  rm -rf "$pkgdir/usr/share/doc"
+
+  install -Dm644 -t "$pkgdir/usr/share/licenses/$pkgname/" COPYING
+}

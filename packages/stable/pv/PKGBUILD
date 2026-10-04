@@ -1,0 +1,44 @@
+# Maintainer: Lukas Fleischer <lfleischer@archlinux.org>
+# Maintainer: Caleb Maclennan <caleb@alerque.com>
+# Contributor: Kaiting Chen <kaitocracy@gmail.com>
+# Contributor: Aaron Schaefer <aaron@elasticdog.com>
+
+pkgname=pv
+pkgver=1.12.0
+pkgrel=1
+pkgdesc='A terminal-based tool for monitoring the progress of data through a pipeline'
+arch=(x86_64)
+url="https://www.ivarch.com/programs/$pkgname.shtml"
+# _url="https://codeberg.org/a-j-wood/$pkgname"
+# _url="https://github.com/a-j-wood/$pkgname"
+license=('GPL-3.0-or-later')
+depends=(glibc)
+_archive="$pkgname-$pkgver"
+source=("${url%/*}/sources/$_archive.tar.gz"
+        "$_archive.tar.gz.sig::${url%/*}/sources/$_archive.tar.gz.txt")
+# source=("$_url/releases/download/v$pkgver/$_archive.tar.gz")
+sha256sums=('31fdbdb449c7143cd2968567bef7599e9f031950e6158ee7bb76e40aebf6ffb8'
+            'SKIP')
+validpgpkeys=(D8FF44A79CC8A61EF694FA7EB883E01314DA8E84  # https://ivarch.com/public-key.txt
+              2189D5C29F041F2277AFD50AC1596BA33FC56F51  # andrew.wood@ivarch.com
+              4267B4F90F2678A112169BD61D1EF7581B45E9A0) # https://codeberg.org/a-j-wood.gpg
+
+build() {
+	cd "$_archive"
+	# House style: mold linker when available (runtime-guarded, no output effect).
+	local _mold=""
+	command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+	export LDFLAGS+=" ${_mold}"
+	./configure --prefix=/usr
+	make -j"${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package() {
+	cd "$_archive"
+	make DESTDIR="$pkgdir" install
+
+	# trim: man page (man1 pv) (docs) — not shipped
+	rm -rf "$pkgdir"/usr/share/man
+
+	install -Dm0644 -t "$pkgdir/usr/share/licenses/$pkgname/" docs/COPYING
+}

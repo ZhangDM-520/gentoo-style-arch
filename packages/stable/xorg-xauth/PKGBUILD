@@ -1,0 +1,45 @@
+# Maintainer: Andreas Radke <andyrtr@archlinux.org>
+
+pkgname=xorg-xauth
+pkgver=1.1.5
+pkgrel=1
+pkgdesc="X.Org authorization settings program"
+arch=(x86_64)
+license=('MIT-open-group')
+url="https://gitlab.freedesktop.org/xorg/app/xauth"
+depends=('libxmu' 'libxau' 'libxext' 'libx11' 'glibc')
+makedepends=('xorg-util-macros')
+groups=('xorg-apps' 'xorg')
+source=(https://xorg.freedesktop.org/releases/individual/app/xauth-${pkgver}.tar.xz{,.sig})
+sha512sums=('df94b59de49ced2490351b7ab42d56d3ef92077891b8ba7a73c53b6babb1facd250d934b82f36ee1ddc355dffefb8f52914d30893c9d578711264f82e9bf3cb9'
+            'SKIP')
+#validpgpkeys=('3BB639E56F861FA2E86505690FDD682D974CA72A') # Matt Turner <mattst88@gmail.com>
+#validpgpkeys+=('995ED5C8A6138EB0961F18474C09DD83CAAA50B2') # "Adam Jackson <ajax@nwnk.net>"
+# validpgpkeys=('4A193C06D35E7C670FA4EF0BA2FB9E081F2D130E') # "Alan Coopersmith <alan.coopersmith@oracle.com>"
+validpgpkeys=('3AB285232C46AE43D8E192F4DAB0F78EA6E7E2D2') # Alan Coopersmith <alan.coopersmith@oracle.com>                                                                                   
+
+build() {
+  cd xauth-${pkgver}
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+  ./configure --prefix=/usr
+  make -j"${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+check() {
+  cd xauth-${pkgver}
+  make check
+}
+
+package() {
+  cd xauth-${pkgver}
+  make DESTDIR="${pkgdir}" install
+
+  # trim: man pages (docs) — not part of the maintained target
+  rm -rf "${pkgdir}"/usr/share/man
+
+  install -d -m755 "${pkgdir}/usr/share/licenses/${pkgname}"
+  install -m644 COPYING "${pkgdir}/usr/share/licenses/${pkgname}/"
+}

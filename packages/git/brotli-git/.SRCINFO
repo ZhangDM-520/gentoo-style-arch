@@ -1,0 +1,19 @@
+pkgbase = brotli-git
+	pkgdesc = Brotli compression library (git build)
+	pkgver = 1.2.0.r25.g61af0e5
+	pkgrel = 1
+	url = https://github.com/google/brotli
+	arch = x86_64
+	license = MIT
+	makedepends = cmake
+	makedepends = git
+	depends = glibc
+	provides = brotli=1.2.0.r25.g61af0e5
+	provides = libbrotlicommon.so
+	provides = libbrotlidec.so
+	provides = libbrotlienc.so
+	conflicts = brotli
+	source = git+https://github.com/google/brotli.git
+	b2sums = SKIP
+
+pkgname = brotli-git

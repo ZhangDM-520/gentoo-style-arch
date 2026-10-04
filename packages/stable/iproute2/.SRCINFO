@@ -1,0 +1,30 @@
+pkgbase = iproute2
+	pkgdesc = IP Routing Utilities
+	pkgver = 7.2.0
+	pkgrel = 1
+	url = https://git.kernel.org/pub/scm/network/iproute2/iproute2.git
+	arch = x86_64
+	license = GPL-2.0-or-later
+	makedepends = git
+	makedepends = db
+	makedepends = linux-atm
+	makedepends = iptables
+	depends = glibc
+	depends = libxtables.so
+	depends = libcap
+	depends = libcap.so
+	depends = libelf
+	depends = libbpf
+	depends = libbpf.so
+	optdepends = db: userspace arp daemon
+	optdepends = linux-atm: ATM support
+	optdepends = python: for routel
+	provides = iproute
+	options = !emptydirs
+	source = git+https://git.kernel.org/pub/scm/network/iproute2/iproute2.git#tag=v7.2.0
+	source = 0001-make-iproute2-fhs-compliant.patch
+	validpgpkeys = 9F6FC345B05BE7E766B83C8F80A77F6095CDE47E
+	sha256sums = 8b9f2d5bfb14de8ad18f8009bd4bb5b485e91a1523ababaa2e363c051b77bcbd
+	sha256sums = 758b82bd61ed7512d215efafd5fab5ae7a28fbfa6161b85e2ce7373285e56a5d
+
+pkgname = iproute2

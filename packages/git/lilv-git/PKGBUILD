@@ -1,0 +1,132 @@
+# Maintainer: auto-generated (Class A upstream-VCS recipe)
+# Contributor: Christopher Arndt <aur -at- chrisarndt -dot- de> (AUR lilv-git reference)
+# Contributor: prettyvanilla <prettyvanilla@posteo.at>
+# Contributor: SpepS <dreamspepser at yahoo dot it>
+# Contributor: David Runge <dvzrv@archlinux.org> (stock lilv)
+# Contributor: Christian Heusel <gromit@archlinux.org>
+# Contributor: Ray Rashif <schiv@archlinux.org>
+# Contributor: speps <speps at aur dot archlinux dot org>
+
+pkgbase=lilv-git
+pkgname=(
+  lilv-git
+  lilv-tools-git
+  python-lilv-git
+)
+pkgver=0.28.1.r1706.4b8f300
+pkgrel=1
+pkgdesc="A C library interface to the LV2 plug-in standard (git build)"
+arch=('x86_64')
+url="https://gitlab.com/lv2/lilv"
+license=(
+  '0BSD OR ISC'
+  ISC
+)
+# stock's doxygen/python-sphinx*/python-sphinxygen makedeps dropped with the
+# lilv-docs output; swig/python kept for the python-lilv output
+makedepends=(
+  git
+  libsndfile
+  lv2
+  meson
+  python
+  serd
+  sord
+  sratom
+  swig
+  zix
+)
+source=('lilv::git+https://gitlab.com/lv2/lilv.git')
+b2sums=('SKIP')
+
+pkgver() {
+  cd lilv
+  # lilv upstream has no usable release tags on master (newest is v0.5.0);
+  # meson.build version + revcount, adapted from the AUR reference
+  local ver
+  ver=$(grep -E "^\s+version: '[0-9]+\.[0-9]+\.[0-9]+'" meson.build | cut -d "'" -f 2)
+  printf '%s.r%s.%s' "$ver" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  arch-meson lilv build
+  meson compile -C build
+}
+
+_pick() {
+  local p="$1" f d; shift
+  for f; do
+    d="$srcdir/$p/${f#$pkgdir/}"
+    mkdir -p "$(dirname "$d")"
+    mv "$f" "$d"
+    rmdir -p --ignore-fail-on-non-empty "$(dirname "$f")"
+  done
+}
+
+package_lilv-git() {
+  depends=(
+    glibc
+    lv2
+    serd libserd-0.so
+    sord libsord-0.so
+    sratom libsratom-0.so
+    zix libzix-0.so
+  )
+  optdepends=(
+    'lilv-tools-git: CLI tools (lv2apply, lv2ls, ...)'
+    'python-lilv-git: Python bindings'
+  )
+  provides=("lilv=$pkgver" 'liblilv-0.so')
+  # bare liblilv-0.so: pacman 7.1 auto-derives liblilv-0.so=0-64 (soname
+  # liblilv-0.so.0); stock's lilv-docs output is dropped (docs payload removed
+  # below) and conflicted, not provided (classb sqlite-doc precedent)
+  conflicts=('lilv' 'lilv-docs')
+
+  meson install -C build --destdir "$pkgdir"
+
+  # bash completion into /usr/share, not /etc (upstream work item 15, stock)
+  install -Dm644 "$pkgdir/etc/bash_completion.d/lilv" -t "$pkgdir/usr/share/bash-completion/completions/"
+  rm -rf "$pkgdir/etc"
+
+  (
+    cd "$pkgdir"
+    _pick _tools usr/bin/ usr/share/man/man1/ usr/share/bash-completion/
+    _pick _python usr/lib/python*
+    # stock moves these into lilv-docs; docs split dropped
+    rm -rf usr/share/doc
+  )
+
+  install -Dm644 lilv/LICENSES/* -t "$pkgdir/usr/share/licenses/$pkgname/"
+}
+
+package_lilv-tools-git() {
+  pkgdesc="Lilv CLI tools (git build)"
+  depends=(
+    glibc
+    libsndfile libsndfile.so
+    "lilv-git=$pkgver-$pkgrel" liblilv-0.so
+  )
+  provides=("lilv-tools=$pkgver")
+  conflicts=('lilv-tools')
+
+  mv _tools/* "$pkgdir"
+  install -Dm644 lilv/LICENSES/* -t "$pkgdir/usr/share/licenses/$pkgname/"
+}
+
+package_python-lilv-git() {
+  pkgdesc="Python interface for Lilv (git build)"
+  depends=(
+    "lilv-git=$pkgver-$pkgrel"
+    python
+    python-numpy
+  )
+  provides=("python-lilv=$pkgver")
+  conflicts=('python-lilv')
+
+  mv _python/* "$pkgdir"
+  install -Dm644 lilv/LICENSES/* -t "$pkgdir/usr/share/licenses/$pkgname/"
+}

@@ -37,6 +37,280 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-04 — builder latency regression at 653-record scale
+
+- **Symptom**: once the roster reached 653 records / 3373 edges, `fish
+  build-all.fish --list` and `--audit` went from interactive to minutes per
+  invocation.
+- **Root cause**: the loader re-validates the whole record map, edge graph and
+  topological sort on EVERY invocation, and the fish-side list scans grow
+  quadratically with roster size — harmless at 148 records, pathological at
+  653. The roster grew ~4x between two measurement points and no
+  scale-sensitive path was re-measured across that jump.
+- **Fix**: profiled with `fish --profile`, then rewrote the hot paths —
+  `topo_sort` is now an order-identical O(V+E) Kahn sort with one record
+  parse and precomputed reverse adjacency (was O(V×E): millions of
+  `string split`/equality scans across 653 ids × 3373 edges, run twice per
+  invocation — full-graph validation plus selection); the closure lint
+  batches `readelf` invocations (256-path argv-safe chunks, same regexes)
+  and indexes provides by name instead of nested scans; the exposure loop
+  hoists its `count` guard; the provides/purged lints take one tagged `sed`
+  pass per record instead of 5+2 forks. Behaviour unchanged: no seam, flag
+  or output format was touched.
+- **Validation**: 3-run means before/after — `--list` 152.3 s → 3.9 s,
+  `--audit` 415.6 s → 113.7 s; independent re-measurement 5.06 s / 114.9 s.
+  Byte-identity proven by diffing fresh runs against pre-change baselines
+  (`--list` 662 lines, `--audit` 10,937 lines, diff rc=0), plus 300
+  randomized old-vs-new `topo_sort` differential cases. Fixture battery
+  green apart from the two pre-existing failures unrelated to the rewrite
+  (`recipe-sources.sh` untracked local assets, resolved when the recipes
+  were committed; `srcinfo-freshness.sh` stale `.SRCINFO` in three
+  owner-edited recipes).
+- **Durable rules** (MEMORY.md §1 rule 26): measure scale-sensitive
+  validation paths after any roster-size jump (per-invocation map/graph/sort
+  re-validation and the O(n²) fish list scans are the known hot paths), and
+  never pin wall-times in fixture expectations — topology-derived sizes are
+  computed from records, and timing assertions would block the perf work.
+
+## 2026-10-04 — IgnorePkg write half: `--register-ignorepkg`
+
+- **Symptom**: rule 9's IgnorePkg closure had only a read-only audit —
+  registering the workspace pkgname universe in `/etc/pacman.conf` stayed a
+  manual edit carrying the `[options]`-vs-repo-section trap, with no
+  verification that the result was complete.
+- **Root cause**: the read half (`--audit-lint ignorepkg`) was gated first
+  (2026-09-26); the write half was left manual until its refusal vocabulary
+  existed.
+- **Fix**: `fish build-all.fish --register-ignorepkg [<path>]` computes the
+  universe (pkgbase + every pkgname of each committed `.SRCINFO` — never a
+  PKGBUILD grep, the kernel hides its names) and appends the missing names as
+  cumulative `IgnorePkg =` lines inside `[options]` only, after the last
+  existing IgnorePkg line there or before the next section header. The parser
+  is pacman-exact: lines accumulate, whitespace-split, only inside `[options]`;
+  a repo-section line is dropped by pacman and warned about loudly here. rc 0
+  = the closure is complete afterwards (nothing-to-append counts), 1 =
+  refusal with nothing changed (missing/stale `.SRCINFO` named as the blocker;
+  target not writable and `sudo -n` unavailable — the builder never prompts;
+  or the post-check caught a write that did not land), 2 = usage. Idempotent,
+  dated pre-image backups that must match byte-for-byte before a re-run
+  writes over one.
+- **Validation**: `tests/ignorepkg-register.sh` 9/9 including falsification —
+  a missing/stale `.SRCINFO` blocks the write loudly, and a non-writable conf
+  with dead sudo exits rc 1 byte-identical.
+- **Durable rules** (MEMORY.md §1 rule 9): auto-register never auto-trusts —
+  any unverifiable universe refuses rather than writing a partial closure;
+  the post-write `comm -23` verification is part of the seam, not optional.
+
+## 2026-10-04 — purged-tools trim discipline: libuv-git docs, man-db NLS
+
+- **Symptom**: two recipes still routed features through purged system tools
+  — libuv-git built man pages via python-sphinx, man-db translated pages via
+  po4a — and neither recipe had trimmed the corresponding outputs.
+- **Root cause**: the 2026-09-26 purged-tools lint blocks *reintroduction* of
+  the tools, but a recipe whose feature predates the purge kept the
+  feature+output pair that needs them.
+- **Fix**: trimmed feature AND output together, `# trim:` annotated at each
+  removal site — libuv-git: the sphinx man-page docs stage and the
+  `man1/libuv.1` install path; man-db: po4a translated man pages + gettext
+  NLS and the `usr/share/man/<lang>/` + locale catalog trees.
+- **Validation**: `fish build-all.fish --audit-lint purged` clean over every
+  committed `.SRCINFO`; each trim annotation sits next to the removal it
+  explains.
+- **Durable rules** (MEMORY.md §1 rule 8): when a purged tool is a recipe's
+  only route to a feature, trim the feature and its output together and say
+  why in the recipe — dropping only the tool leaves a build that dies looking
+  for it, dropping only the output leaves the stage that produces it.
+
+## 2026-10-04 — provides normalization: bare soname provides only
+
+- **Symptom**: `--audit-lint provides` flagged 15 hand-versioned soname
+  provides across 10 recipes (a soname capability spelled with a version),
+  tracked until now as known debt in the recipe-contract ratchet.
+- **Root cause**: makepkg auto-versions a bare soname provide —
+  `provides=(libfoo.so)` ships as a versioned `libfoo.so=…` capability in
+  `.PKGINFO` derived from the package version — so hand-spelled versions
+  duplicate that derivation and drift from it.
+- **Fix**: all 15 reduced to bare stems; the ratchet list emptied and became
+  a strict gate. Versioned NAME provides are a different capability kind and
+  stay legal and lint-prescribed: `shelly=${pkgver}` (2026-10-04) and the
+  toolchain pattern `meson=${pkgver}` (rule 4).
+- **Validation**: `fish build-all.fish --audit-lint provides` clean;
+  `tests/provides-audit.sh` pins the bare-stem rule and
+  `tests/recipe-contract.sh` keeps the emptied ratchet strict.
+- **Durable rules** (MEMORY.md §1 rule 4): bare soname provides only — never
+  hand-version a soname; a versioned provide is for a NAME capability whose
+  consumers constrain it by version.
+
+## 2026-10-04 — fleet-session incidents: result ordering, idle agents, unverified .SRCINFO, two /tmp wipes
+
+- **Symptom**: a multi-agent ingestion/wiring campaign produced duplicated work
+  (record rows 91–120 written twice), agents that looked finished but reported
+  nothing, 28 recipe directories that shipped without a committed `.SRCINFO`
+  despite their author self-reporting validation, agents dying mid-work on
+  transient model-HTTP failures, and — twice — total loss of `/tmp` prep
+  artifacts (once a reboot, once a PC crash).
+- **Root cause**: (1) task results do not return in call order, and cap
+  rejections silently hit the *last* submitted calls, so a naive dispatch loop
+  re-sent work it believed had been dropped; (2) `idle` is not `done` — an
+  agent can end a turn with zero output *or* with complete artifacts and an
+  empty report; (3) self-reported "validation passed" was trusted without
+  checking the artifact it claimed; (4) `/tmp` was treated as durable scratch
+  and mirrored only "before expected reboots".
+- **Fix**: the duplicated rows were reconciled by integrity re-verification and
+  an edge-union RECORD merge (never a last-writer-wins overwrite); completion
+  was reconciled **by artifacts only** — an agent counts as done when its
+  deliverable files exist and verify, regardless of report text or arrival
+  order; the 28 directories were caught by a `.SRCINFO` presence sweep and
+  regenerated; HTTP-killed agents were retried only after verifying and
+  resuming their partial state; after the second wipe, every artifact written
+  under `/tmp` is copied to session state at write time.
+- **Validation**: rows 91–120 re-verified and merged with no divergent edges;
+  `.SRCINFO` sweep now reports 653/653 recipe directories covered; retried
+  agents converged without redoing verified partial work. These are process
+  rules, validated by re-sweep rather than by fixture.
+- **Durable rules** (MEMORY.md §1 rule 22): a) **mirror every `/tmp` artifact to
+  session storage at the moment it is written**, not before expected reboots —
+  the first mirror saved the session records but later prep artifacts
+  (source-merge and wiring plans, host-closure plan, docs draft, merge-map)
+  died with the crash; b) reconcile fleet work by artifacts, never by task
+  result order or `idle` status; treat cap rejections as "resend after
+  artifact check", never as "lost"; c) never accept self-reported validation —
+  require the artifact (committed `.SRCINFO` regenerated with
+  `makepkg --printsrcinfo`) before marking a recipe done; d) retry
+  HTTP-killed agents only after inspecting partial state.
+
+## 2026-10-04 — topology wiring: 653 records, 3373 acyclic edges
+
+- **Symptom**: the recipe tree had no machine-checked build-order topology;
+  merged split recipes had unclear identity, and superseding pairs (X replaced
+  by X-git) had no wiring.
+- **Root cause**: topology coverage had been maintained by hand and lagged the
+  recipe set; alias records looked like a cheap way to keep old names
+  addressable.
+- **Fix**: wired `config/topology.conf` to **653 records = 653 recipe paths**
+  (option b: **no alias records** — an alias record would make the scheduler
+  rebuild a merged recipe once per alias; `--package <old-output>` addressing is
+  kept by pkgname/split-output lookup instead). **3373 acyclic edges** verified,
+  1218 of them newly added, including the X→X-git supersession mapping; 5 edges
+  deferred (systemd↔util-linux mutual coupling, plus 4 gcc-snapshot edges
+  pending the deferral count). README recipe/group counts aligned to 653/707.
+  The supersession mapping was generated as X→X-git edges wherever a git
+  recipe replaces a stock-name recipe, so a selection of the old name still
+  schedules its replacement in the right order.
+- **Validation**: acyclicity checked over the full 3373-edge graph; record
+  count equals recipe-directory count (653 = 653); supersession edges
+  spot-checked against the Class A/B provider split. The loader's full-map
+  validation was exercised over the landed file at the 653-record scale
+  afterwards (see the latency entry — correctness green, performance the open
+  item).
+- **Durable rules** (MEMORY.md §1 rule 24): merged recipes get exactly one
+  record; old split-output names stay addressable through pkgname lookup,
+  never through alias records; supersession is expressed as X→X-git edges, not
+  by deleting X's record.
+- **Open (tracked in MEMORY.md §5)**: ABI-libs-vs-core dual membership (Q2);
+  which side of the portal cycle to break (Q6); gcc-snapshot deferral count
+  (Q7); provides/soname mapping scope (Q8).
+
+## 2026-10-04 — source-merge: 32 same-upstream clusters, 8 merges executed
+
+- **Symptom**: many recipes fetched the same upstream tree independently —
+  redundant downloads and redundant builds, and some split sets drifted from
+  their stock counterparts.
+- **Root cause**: recipes were created one package at a time; no policy existed
+  for recipes sharing one upstream release tarball.
+- **Fix**: a 687-`.SRCINFO` scan found **32 same-upstream clusters**, triaged
+  as MERGE=12 (→10 buildable groups), SHARED-SRCDEST=9, KEEP=11. Executed:
+  **gstreamer 8→1** (25 outputs; a `gst-libav` provides-clobber fixed; 60
+  sibling pins `name=$pkgver-$pkgrel` following the qemu precedent), **vlc
+  19→1** (53 outputs; 25 unreferenced stock splits trimmed and annotated),
+  **poppler 3→1**, **qemu dedupe** (83 outputs verified byte-identical),
+  **samba** (new `libwbclient` output; `$epoch:` pins), **transmission 2**,
+  **wxwidgets 2** (build-compat upheld), **gobject-introspection 3** (pin
+  check passed; python-gobject tests-commit mismatch demoted that pair to
+  cluster-17 SHARED-SRCDEST scope), **nfs-utils 2**,
+  **libspeechd/speech-dispatcher 2** (+5 `spd_*` provides). ~34 redundant
+  builds removed or rebuilt. SHARED-SRCDEST link-sources estimated at 15–30 GB
+  (llvm×3, gnulib×7 with an **unpinned-HEAD caveat**, ROCm, …).
+- **Validation**: merged output counts match the pre-merge split inventories
+  (gstreamer 25, vlc 53, qemu 83); provides of replaced splits preserved;
+  sibling pin formula re-checked against qemu.
+- **Durable rules** (MEMORY.md §1 rule 24): clusters merge only into one
+  buildable recipe with one record; sibling outputs pin `name=$pkgver-$pkgrel`
+  (qemu precedent: a merged split set's outputs must move as one version, or
+  pacman sees unsatisfiable exact pins between siblings); when a merge
+  candidate's tests pin a different commit than its source, demote it to
+  SHARED-SRCDEST rather than force the merge; shared unpinned HEADs are a
+  documented reproducibility caveat, not free disk savings.
+
+## 2026-10-03→04 — library ingestion, stock-swap hardening, and the 5-layer ABI-drift guard
+
+- **Symptom**: project library recipes were incomplete against the host, and
+  the stock→house swap path could silently confirm package removals and ship
+  provides that drifted from the stock packages they replace.
+- **Root cause**: no ingestion pipeline for providers/consumers; `pacman -U
+  --noconfirm --ask 4` auto-confirms `ALPM_QUESTION_CONFLICT_PKG` (bit 1<<2),
+  so conflict removals proceed without a human; provides live in `.PKGINFO`
+  and only a real rebuild updates them.
+- **Fix (ingestion)**: 193 provider recipes — Class B 86 (stable/paru `-G`
+  seeded from the repo/aur snapshot) and Class A 107 (git/upstream-VCS, built
+  from upstream) — each Class A recipe carrying versioned
+  `provides=(<stock>=$pkgver)` plus `conflicts=(<stock>)` so a stock package is
+  both satisfied and displaced atomically; 347 ABI-exposed consumer recipes
+  derived from 464 audited targets, with 35 user-approved Tier-2 exclusions
+  recorded in `config/abi-exclusions.conf` (Tier-1 ABI exposure is never
+  excludable).
+  Anomalies parked rather than papered over: libmypaint soname drift (its
+  shipped soname no longer matches the stock provide consumers bind to);
+  nspr/nss hg `pkgver` sorts below stock, so versioned provides would satisfy
+  nothing until rebased; opus-git lacks the DRED/OSCE/DeepPLC feature set the
+  stock build carries, so it is not a drop-in replacement; spandsp resolves to
+  the FreeSWITCH fork rather than the classic library (explicit sign-off
+  wanted before it becomes the house provider); and `keys/*.asc` falls in a
+  gitignore gap — key material for offline verification is currently neither
+  clearly tracked nor clearly ignored (negation decision pending).
+- **Fix (swap hardening)**: the `--ask 4` verdict is now treated as *confirm
+  removals*, never as safety: the question bit `ALPM_QUESTION_CONFLICT_PKG`
+  is 1<<2 = 4, so `--ask 4` answers "yes, remove the conflicting stock
+  package" automatically on every conflict. Hardening therefore moved consent
+  into the plan instead of the flag: the qt6-base-git `${pkgname[1]}` fix
+  (wrong output name in the swap set), zlib-ng-compat-git provides/conflicts
+  (it must own the zlib provides it replaces), an `audit_lint_swap` lint over
+  every swap pair, and fixtures `swap-completeness` (every stock name in a
+  swap family is covered by exactly one house output) and
+  `install-conflict-ask` (pins the `--ask 4` auto-confirm behaviour so a
+  future pacman change cannot silently alter it). Swap-lint debt remains on
+  `niri-spicy-git` and `vscodium-insiders-git`.
+- **Fix (ABI-drift guard — finished and independently verified)**: five layers
+  — (1) closure lint (`audit_lint_abi_closure`): refuse a selection whose
+  dependency closure contains a known-broken provider/consumer pairing;
+  (2) `abi_batch_dependents` batch expansion, gated at the abi-batch gate:
+  pulling an ABI origin expands to its coupled dependents so the rebuild batch
+  cannot be chosen piecemeal; (3) `abi_provide_refusals` — a **fatal
+  install-time `.PKGINFO` provide-diff refusal inside the install plan, wired
+  right behind the PGO gate and before the force branch** — the built
+  artifact's provides are diffed against the expected stock provides and any
+  drift aborts the transaction rather than being waived by `-fi`/`-ia`;
+  (4) `install_needed_probe`: post-install NEEDED probe — every installed
+  consumer's ELF NEEDED entries must resolve in the new closure; (5)
+  `audit_lint_abi_exposure` exposure audit: the full consumer-exposure
+  inventory is re-checked against what actually shipped. All layers resolve
+  through `read_abi_exclusions`, the strict loader over
+  `config/abi-exclusions.conf` (`id|reason|review-by`, 35 user-approved
+  Tier-2 entries) run on every invocation, and one fixture per layer —
+  `abi-closure-lint`, `abi-drift-install`, `abi-postinstall-probe`,
+  `abi-exposure-audit` — plus the `abi-batch-policy` extension covering the
+  batch-expansion layer.
+- **Validation**: ingestion counts reconciled (193 + 347 + 35 exclusions =
+  464-target audit closure); guard battery green and independently re-run —
+  abi fixtures 5/5, install fixtures 4/4.
+- **Durable rules** (MEMORY.md §1 rules 23 and 25): never pass `--ask 4`
+  casually — it confirms conflict removals; every Class A provider declares
+  versioned stock provides and stock conflicts; provides changes require a
+  real rebuild (`makepkg -Rf` only repackages); install planning refuses
+  provide-diff drift *before* any force branch; unlisted ABI exclusions must
+  be user-approved and land in `config/abi-exclusions.conf` with a reason and
+  a review-by date.
+
 ## 2026-10-04 — build-tools dispatch class and the core membership migration
 
 - **Symptom**: the grouping audit found multi-consumer ABI hubs and compile

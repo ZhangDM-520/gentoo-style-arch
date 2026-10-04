@@ -19,7 +19,7 @@ makedepends=(git)
 provides=(
   isl
   libisl
-  libisl.so=23-64
+  libisl.so
 )
 conflicts=(isl libisl)
 source=(isl::git+https://repo.or.cz/isl.git#tag=isl-$pkgver)

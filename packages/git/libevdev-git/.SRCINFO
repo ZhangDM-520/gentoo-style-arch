@@ -1,0 +1,17 @@
+pkgbase = libevdev-git
+	pkgdesc = Wrapper library for evdev devices (git build)
+	pkgver = 1.13.7.r0.gdb0d427
+	pkgrel = 1
+	url = https://www.freedesktop.org/wiki/Software/libevdev/
+	arch = x86_64
+	license = MIT
+	makedepends = git
+	depends = glibc
+	provides = libevdev=1.13.7.r0.gdb0d427
+	provides = libevdev.so
+	conflicts = libevdev
+	options = staticlibs
+	source = git+https://gitlab.freedesktop.org/libevdev/libevdev.git
+	sha256sums = SKIP
+
+pkgname = libevdev-git

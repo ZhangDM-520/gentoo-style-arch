@@ -1,0 +1,14 @@
+pkgbase = qrencode
+	pkgdesc = C library for encoding data in a QR Code symbol.
+	pkgver = 4.1.1
+	pkgrel = 4
+	url = https://fukuchi.org/works/qrencode/
+	arch = x86_64
+	license = GPL
+	makedepends = git
+	depends = libpng
+	provides = libqrencode.so
+	source = qrencode::git+https://github.com/fukuchi/libqrencode#tag=v4.1.1
+	sha256sums = 0151f34aa6996aefb0a3d011ce050bf32c70c5644055d8c82dcaa8044332ad35
+
+pkgname = qrencode

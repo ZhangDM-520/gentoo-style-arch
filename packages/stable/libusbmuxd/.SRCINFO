@@ -1,0 +1,17 @@
+pkgbase = libusbmuxd
+	pkgdesc = Client library to multiplex connections from and to iOS devices
+	pkgver = 2.1.1
+	pkgrel = 2
+	url = https://libimobiledevice.org/
+	arch = x86_64
+	license = GPL-2.0-or-later AND LGPL-2.1-or-later
+	makedepends = git
+	depends = glibc
+	depends = libgcc
+	depends = libimobiledevice-glue
+	depends = libplist
+	provides = libusbmuxd-2.0.so
+	source = git+https://github.com/libimobiledevice/libusbmuxd.git#tag=2.1.1
+	b2sums = 5f9be6c160946253442ba824065e48fd59b8a7cef5a9d54590e86dddf971389115efcce896a55fe49db8ff28663c5dfdc5a5d6b6402d2f6785e6cc46268ca0e8
+
+pkgname = libusbmuxd

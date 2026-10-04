@@ -1,0 +1,49 @@
+# Maintainer: auto-generated
+# Contributor: Robert Tari <robert at tari dot in> (stock Arch libayatana-appindicator)
+
+pkgname=libayatana-appindicator-git
+_pkgname=libayatana-appindicator
+pkgver=0.6.0.r1.geaa41f5
+pkgrel=1
+pkgdesc="Ayatana Application Indicators shared library (git build)"
+arch=('x86_64')
+url="https://github.com/AyatanaIndicators/libayatana-appindicator"
+license=('GPL-3.0-only')
+depends=('glib2' 'glibc' 'gtk3' 'libdbusmenu-glib' 'libdbusmenu-gtk3' 'libgcc')
+makedepends=('cmake' 'git' 'glib2-devel' 'gobject-introspection' 'vala')
+provides=("libayatana-appindicator=$pkgver" 'libayatana-appindicator3.so')
+conflicts=('libayatana-appindicator')
+# NOTE: upstream labels this GTK/DBusMenu implementation OBSOLETE in favour of
+# libayatana-appindicator-glib (the only AUR -git variant, which is what the
+# fleet reference pointed at), but the glib rewrite ships
+# libayatana-appindicator-glib.so.2 and is NOT ABI-compatible with stock's
+# libayatana-appindicator3.so.1 — this recipe tracks the stock upstream so the
+# stock ABI surface survives the swap. Stock's two unmerged PR patches
+# (vendorize-indicator #6, systray-fallback #7) are not reproduced here.
+source=("git+https://github.com/AyatanaIndicators/${_pkgname}")
+b2sums=('SKIP')
+
+pkgver() {
+  cd "$_pkgname"
+  git describe --long --tags | sed 's/\([^-]*-g\)/r\1/;s/-/./g;s/^v//'
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  local _jobs="${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+
+  cmake -B build -S "$_pkgname" \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DCMAKE_BUILD_TYPE=None \
+    -DENABLE_BINDINGS_MONO=OFF \
+    -DENABLE_GTKDOC=OFF
+  cmake --build build -j "$_jobs"
+}
+
+package() {
+  DESTDIR="$pkgdir" cmake --install build
+  install -Dm644 "$_pkgname/COPYING" "$pkgdir/usr/share/licenses/$pkgname/COPYING"
+}

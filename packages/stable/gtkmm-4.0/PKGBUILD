@@ -1,0 +1,83 @@
+# Maintainer: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
+# Contributor: Ionut Biru <ibiru@archlinux.org>
+
+pkgbase=gtkmm-4.0
+# trim: the gtkmm-4.0-docs split (API/devhelp docs) is dropped together with
+# its docs staging path and the cairomm-1.16-docs/glibmm-2.68-docs/
+# libsigc++-3.0-docs/pangomm-2.48-docs makedepends (documentation disabled
+# below)
+pkgname=(
+  gtkmm-4.0
+)
+pkgver=4.24.0
+pkgrel=1
+pkgdesc="C++ bindings for GTK 4"
+url="https://www.gtkmm.org/"
+arch=(x86_64)
+license=(LGPL-2.1-or-later)
+depends=(
+  cairo
+  cairomm-1.16
+  gdk-pixbuf2
+  glib2
+  glibc
+  glibmm-2.68
+  graphene
+  gtk4
+  libgcc
+  libsigc++-3.0
+  libstdc++
+  pangomm-2.48
+  vulkan-icd-loader
+)
+makedepends=(
+  git
+  meson
+  mm-common
+)
+# trim: check() and its xorg-server-xvfb checkdepends (xvfb-run test suite) —
+# Class B trim standard (tests)
+options=(!emptydirs)
+source=("git+https://gitlab.gnome.org/GNOME/gtkmm.git#tag=$pkgver")
+b2sums=('3b102b2edae0bfcc6adc56e433b8eb5be72cf63479f5db894571506d9501cc5934dc90bd06f689f6d15f1f28bbee097482418806860949757a952dafbfc42944')
+
+prepare() {
+  cd gtkmm
+}
+
+build() {
+  local meson_options=(
+    -D maintainer-mode=true
+    # trim: docs/demos/tests (the gtkmm-4.0-docs split is dropped; the demo
+    # and test programs are not shipped) — Class B trim standard
+    -D build-documentation=false
+    -D build-demos=false
+    -D build-tests=false
+  )
+
+  # House style: mold linker when available (arch-meson consumes LDFLAGS env)
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  arch-meson gtkmm build "${meson_options[@]}"
+  meson compile -C build -j "${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+}
+
+package_gtkmm-4.0() {
+  depends+=(
+    libcairomm-1.16.so
+    libglibmm-2.68.so
+    libpangomm-2.48.so
+    libsigc-3.0.so
+  )
+  provides=(libgtkmm-4.0.so)
+
+  meson install -C build --no-rebuild --destdir "$pkgdir"
+
+  # license: ship the upstream LGPL-2.1-or-later (COPYING) and the tools
+  # licence (COPYING.tools) texts
+  install -Dm644 gtkmm/COPYING gtkmm/COPYING.tools -t "$pkgdir/usr/share/licenses/$pkgname/"
+}
+
+# vim:set sw=2 sts=-1 et:

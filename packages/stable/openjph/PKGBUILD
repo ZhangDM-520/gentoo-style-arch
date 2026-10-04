@@ -1,0 +1,58 @@
+# Maintainer: Daniel Bermond <dbermond@archlinux.org>
+
+pkgbase=openjph
+# trim: stock split openjph-doc dropped (docs) — see the build() trim note
+pkgname=(
+    'openjph')
+pkgver=0.32.0
+pkgrel=1
+pkgdesc='Open-source implementation of JPEG2000 Part-15'
+arch=('x86_64')
+url='https://github.com/aous72/OpenJPH/'
+license=('BSD-2-Clause')
+makedepends=(
+    'cmake'
+    'git'
+    'libtiff')
+source=("git+https://github.com/aous72/OpenJPH#tag=$pkgver")
+sha256sums=('08bdab8ec90f7fd930c310aaafad2ae5a1c59288a91420edb218738a86b26aa7')
+
+build() {
+    # trim: the openjph-doc split (docs: doxygen HTML) went together with the
+    # doxygen makedepends and the doxygen invocation below — Class B trim
+    # standard (docs/dropped split)
+
+    # House style: mold linker when available (cmake consumes LDFLAGS env)
+    local _mold=""
+    command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+    export LDFLAGS+=" ${_mold}"
+
+    cmake -B build -S OpenJPH \
+        -G 'Unix Makefiles' \
+        -DCMAKE_BUILD_TYPE:STRING='None' \
+        -DCMAKE_INSTALL_PREFIX:PATH='/usr' \
+        -DOJPH_BUILD_TESTS:BOOL='ON' \
+        -Wno-dev
+    cmake --build build --parallel "${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+# trim: check() test suite (ctest) together with the expat checkdepends —
+# Class B trim standard (tests)
+
+package_openjph() {
+    depends=(
+        'glibc'
+        'libgcc'
+        'libstdc++'
+        'libtiff')
+    # House standard: bare soname provide per ELF output (never pinned).
+    # Upstream soname is libopenjph.so.0.32.
+    provides=('libopenjph.so')
+
+    DESTDIR="$pkgdir" cmake --install build
+
+    # trim: any doc payload left by cmake --install — Class B trim (docs)
+    rm -rf "$pkgdir"/usr/share/doc
+
+    install -D -m644 OpenJPH/LICENSE -t "${pkgdir}/usr/share/licenses/${pkgname}"
+}

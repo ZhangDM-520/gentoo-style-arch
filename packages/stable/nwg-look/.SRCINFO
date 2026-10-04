@@ -1,0 +1,24 @@
+pkgbase = nwg-look
+	pkgdesc = GTK settings editor adapted to work on wlroots-based compositors
+	pkgver = 1.1.2
+	pkgrel = 1
+	url = https://github.com/nwg-piotr/nwg-look
+	arch = x86_64
+	license = MIT
+	makedepends = go
+	depends = glibc
+	depends = gtk3
+	depends = at-spi2-core
+	depends = cairo
+	depends = fontconfig
+	depends = freetype2
+	depends = gdk-pixbuf2
+	depends = glib2
+	depends = harfbuzz
+	depends = pango
+	depends = zlib
+	depends = xcur2png
+	source = https://github.com/nwg-piotr/nwg-look/archive/v1.1.2/nwg-look-1.1.2.tar.gz
+	sha256sums = 2db9bf20042beec0e9e9bba5769c08e34197e3a0da595b743c39b384aa0e0af0
+
+pkgname = nwg-look

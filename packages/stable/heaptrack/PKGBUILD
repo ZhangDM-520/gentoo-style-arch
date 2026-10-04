@@ -1,0 +1,74 @@
+# Maintainer: Antonio Rojas <arojas@archlinux.org>
+
+pkgname=heaptrack
+pkgver=1.5.0
+pkgrel=11
+arch=(x86_64)
+pkgdesc='A heap memory profiler for Linux'
+url='https://apps.kde.org/heaptrack/'
+license=(LGPL-2.1-or-later)
+depends=(boost-libs
+         glibc
+         kcolorscheme
+         kconfig
+         kconfigwidgets
+         kcoreaddons
+         kdiagram
+         ki18n
+         kiconthemes
+         kio
+         kwidgetsaddons
+         libelf
+         libgcc
+         libstdc++
+         libunwind
+         qt6-base
+         qt6-svg
+         sh
+         threadweaver)
+makedepends=(boost
+             extra-cmake-modules
+             kitemmodels)
+source=(https://download.kde.org/stable/$pkgname/$pkgver/$pkgname-$pkgver.tar.xz{,.sig}
+        https://invent.kde.org/sdk/heaptrack/-/commit/c6c45f3455a652c38aefa402aece5dafa492e8ab.patch
+        https://invent.kde.org/sdk/heaptrack/-/commit/38fd1d7b0ff53a35ed7c4ef241c21c8c06e1efb2.patch
+        https://invent.kde.org/sdk/heaptrack/-/commit/2de688e02fbc5ff96fcf29ad3af962e8035824eb.patch
+        https://invent.kde.org/sdk/heaptrack/-/commit/99348321819fe8efb3771b2dcd9aaffbc598b271.patch)
+sha256sums=('a278d9d8f91e8bfb8a1c2f5b73eecab47fd45d0693f5dbea637536413cec2ea5'
+            'SKIP'
+            'ccc16118ee25a0ac71d419c7c4176768f162c1c0f6dde3e5238d242e676bc1cf'
+            'c1111a5792c09ffff2c7c1dbfc6c2b95c995277532ccd1178ff38ad66c3db22a'
+            'ba7b9ebfd9eb0ac6ffaae4dc08fa1f2315b7d150c7e4e4c76a12a531305790c7'
+            '308b9cd0bb84aaf51f5a393bdc5a7945ea3d9f8f36e6abb747674b81fb5a40a5')
+validpgpkeys=(3D8568869097C65C98F8D2760C0EB212CD1D1393
+              C51B45A532F17FA401D099A0A0C6B72C4F1C5E7C) # Milian Wolff <mail@milianw.de>
+
+prepare() {
+  cd $pkgname-$pkgver
+  patch -p1 -i ../c6c45f3455a652c38aefa402aece5dafa492e8ab.patch # fix unwind since GCC 14
+  patch -p1 -i ../38fd1d7b0ff53a35ed7c4ef241c21c8c06e1efb2.patch # fix build for Qt6
+  patch -p1 -i ../2de688e02fbc5ff96fcf29ad3af962e8035824eb.patch # Support KF6 kdiagram
+  patch -p1 -i ../99348321819fe8efb3771b2dcd9aaffbc598b271.patch # Fix build with boost 1.89
+}
+
+build() {
+  # House style: mold linker when available (cmake consumes LDFLAGS at
+  # configure time).
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  cmake -B build -S $pkgname-$pkgver \
+   -DCMAKE_INSTALL_PREFIX=/usr \
+   -DBUILD_TESTING=OFF \
+   -DHEAPTRACK_USE_QT6=ON \
+   -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+  cmake --build build --parallel "${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package(){
+  DESTDIR="$pkgdir" cmake --install build
+  # house: upstream LICENSES/ re-homed to /usr/share/licenses (stock installs
+  # none) — the full set also covers the bundled 3rdparty code
+  install -Dm644 $pkgname-$pkgver/LICENSES/* -t "$pkgdir"/usr/share/licenses/$pkgname/
+}

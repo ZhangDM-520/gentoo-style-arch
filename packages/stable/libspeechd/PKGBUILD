@@ -1,0 +1,102 @@
+# Maintainer: Alexander Epaneshnikov <alex19ep@archlinux.org>
+# Maintainer: Sven-Hendrik Haase <svenstaro@archlinux.org>
+
+# Source-dedupe merge: this is the single pkgbase for both speech-dispatcher
+# and libspeechd. It replaces the former subset-duplicate recipe
+# packages/stable/speech-dispatcher (same upstream tarball, subset output); its
+# spd_* module provides and doc-payload trim are folded into the split below.
+
+pkgbase=speech-dispatcher
+pkgname=(speech-dispatcher libspeechd)
+pkgver=0.12.1
+pkgrel=3
+arch=('x86_64')
+pkgdesc="High-level device independent layer for speech synthesis interface"
+url='http://www.freebsoft.org/speechd'
+license=('GPL2' 'FDL')
+makedepends=('glib2' 'intltool' 'espeak-ng' 'libtool' 'python-pyxdg' 'dotconf'
+             'libpulse' "libpipewire" 'libao')
+source=("https://github.com/brailcom/speechd/releases/download/${pkgver}/speech-dispatcher-${pkgver}.tar.gz")
+sha512sums=('f386bb25d80e85153db4907c5adece519a86084676a39f958a4f56e53bb957cb9b1232c4e648e73ef8dc5d1ab8e0cd64a5e0d151775fdd8f3b175f47f4864422')
+
+build() {
+  cd ${pkgname}-${pkgver}
+
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  ./configure --prefix=/usr --sysconfdir=/etc \
+    --disable-static \
+    --libexecdir=/usr/lib/speech-dispatcher/ \
+    --with-ibmtts=no --with-kali=no --with-baratinoo=no \
+    --with-voxin=no --without-flite
+  make -j"${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package_speech-dispatcher() {
+  # bare soname provides per ELF output: 5 spd_* dlopen modules (filename
+  # SONAMEs); the libspeechd.so library is provided by the libspeechd split
+  provides=(spd_{alsa,libao,oss,pipewire,pulse}.so)
+  depends=("libspeechd=$pkgver-$pkgrel" 'python-pyxdg' 'dotconf' 'libpulse' 'libao')
+  optdepends=('festival: Speech output using Festival'
+              'espeak-ng: Speech output using ESpeak-ng'
+              'pulseaudio: PulseAudio support'
+              'pipewire: Pipewire support')
+  backup=('etc/speech-dispatcher/clients/emacs.conf'
+          'etc/speech-dispatcher/modules/dtk-generic.conf'
+          'etc/speech-dispatcher/modules/epos-generic.conf'
+          'etc/speech-dispatcher/modules/espeak-ng.conf'
+          'etc/speech-dispatcher/modules/espeak-ng-mbrola.conf'
+          'etc/speech-dispatcher/modules/espeak-ng-mbrola-generic.conf'
+          'etc/speech-dispatcher/modules/festival.conf'
+          'etc/speech-dispatcher/modules/llia_phon-generic.conf'
+          'etc/speech-dispatcher/modules/mary-generic.conf'
+          'etc/speech-dispatcher/modules/swift-generic.conf'
+          'etc/speech-dispatcher/speechd.conf')
+  install=speech-dispatcher.install
+
+  cd ${pkgname}-${pkgver}
+  make DESTDIR="${pkgdir}" install
+
+  # trim: man pages, info docs, doc payload and locale catalogs are not
+  # shipped (docs/man/locales) — Class B trim standard
+  rm -rf "${pkgdir}"/usr/share/man "${pkgdir}"/usr/share/info "${pkgdir}"/usr/share/doc "${pkgdir}"/usr/share/locale
+
+  rm "${pkgdir}/etc/speech-dispatcher/modules/cicero.conf"
+  rm "${pkgdir}/etc/speech-dispatcher/modules/espeak.conf"
+  rm "${pkgdir}/etc/speech-dispatcher/modules/espeak-mbrola-generic.conf"
+  rm "${pkgdir}/etc/speech-dispatcher/modules/flite.conf"
+  rm "${pkgdir}/usr/lib/speech-dispatcher/speech-dispatcher-modules/sd_cicero"
+
+  sed -i 's|includedir=.*|includedir=${prefix}/include/speech-dispatcher|g' "${pkgdir}/usr/lib/pkgconfig/speech-dispatcher.pc"
+
+  mkdir -p "${srcdir}"/libspeechd/usr/lib
+  mv "${pkgdir}"/usr/include "${srcdir}"/libspeechd/usr
+  mv "${pkgdir}"/usr/lib/libspeechd*so* "${srcdir}"/libspeechd/usr/lib
+  mv "${pkgdir}/usr/lib/pkgconfig" "${srcdir}/libspeechd/usr/lib"
+
+  # license: ship the upstream GPL + FDL texts (doc/fdl.txt unioned in from
+  # the retired speech-dispatcher recipe)
+  local _l
+  for _l in COPYING COPYING.gpl-2.0 doc/fdl.txt LICENSE; do
+    if [[ -f "${srcdir}"/${pkgbase}-${pkgver}/$_l ]]; then install -Dm644 "${srcdir}"/${pkgbase}-${pkgver}/"$_l" -t "$pkgdir/usr/share/licenses/$pkgname/"; fi
+  done
+}
+
+package_libspeechd() {
+  depends=('glib2' 'libtool')
+  provides=(libspeechd.so)
+  mkdir -p "${pkgdir}"/usr/lib
+
+  mv "${srcdir}"/libspeechd/usr/include "${pkgdir}"/usr
+  mv "${srcdir}"/libspeechd/usr/lib/* "${pkgdir}"/usr/lib
+
+  # license: ship the upstream GPL + FDL texts (doc/fdl.txt unioned in from
+  # the retired speech-dispatcher recipe)
+  local _l
+  for _l in COPYING COPYING.gpl-2.0 doc/fdl.txt LICENSE; do
+    if [[ -f "${srcdir}"/${pkgbase}-${pkgver}/$_l ]]; then install -Dm644 "${srcdir}"/${pkgbase}-${pkgver}/"$_l" -t "$pkgdir/usr/share/licenses/$pkgname/"; fi
+  done
+}

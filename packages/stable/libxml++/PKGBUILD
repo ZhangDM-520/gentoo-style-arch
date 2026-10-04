@@ -1,0 +1,69 @@
+# Maintainer: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
+# Contributor: damir <damir@archlinux.org>
+
+pkgbase=libxml++
+# trim: stock split libxml++-docs dropped (docs) — see the build() trim note
+pkgname=(
+  libxml++
+)
+pkgver=3.2.6
+pkgrel=1
+pkgdesc="C++ bindings to libxml2"
+url="https://libxmlplusplus.github.io/libxmlplusplus/"
+arch=(x86_64)
+license=(LGPL-2.1-or-later)
+depends=(
+  glibc
+  glibmm
+  libgcc
+  libstdc++
+  libxml2
+)
+makedepends=(
+  git
+  meson
+  mm-common
+)
+# !emptydirs is load-bearing for payload parity with stock (drops the empty
+# dirs meson install leaves behind)
+options=(!emptydirs)
+source=("git+https://github.com/libxmlplusplus/libxmlplusplus#tag=$pkgver")
+b2sums=('9a65793b4976d34ab6cec526d4bbcc4ed4e829abb03bb2c4379e19b858533cd821e3390d608f283d50fe4238b5ba010ef7c909fb9d511c624c848b1f5253e5ab')
+
+prepare() {
+  cd libxmlplusplus
+}
+
+build() {
+  # trim: the libxml++-docs split (docs: devhelp/doc payload) went together
+  # with the glibmm-docs makedepends and the docs staging/relocation paths in
+  # the split functions below — Class B trim standard (docs/dropped split)
+  local meson_options=(
+    -D maintainer-mode=true
+  )
+
+  # House style: mold linker when available (arch-meson consumes LDFLAGS env)
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  arch-meson libxmlplusplus build "${meson_options[@]}"
+  meson compile -C build -j "${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+}
+
+# trim: check() test suite (meson test) — Class B trim standard (tests)
+
+# Do not remove the space before the () or commitpkg will
+# accidentally to run this function on the system (!!!) 
+package_libxml++ () {
+  provides=(libxml++-3.0.so)
+
+  meson install -C build --destdir "$pkgdir"
+
+  # trim: devhelp/doc/locale payload — Class B trim standard (docs/locales)
+  rm -rf "$pkgdir"/usr/share/{devhelp,doc,locale}
+
+  install -Dm644 libxmlplusplus/COPYING -t "$pkgdir"/usr/share/licenses/$pkgname/
+}
+
+# vim:set sw=2 sts=-1 et:

@@ -1,0 +1,56 @@
+pkgbase = lilv-git
+	pkgdesc = A C library interface to the LV2 plug-in standard (git build)
+	pkgver = 0.28.1.r1706.4b8f300
+	pkgrel = 1
+	url = https://gitlab.com/lv2/lilv
+	arch = x86_64
+	license = 0BSD OR ISC
+	license = ISC
+	makedepends = git
+	makedepends = libsndfile
+	makedepends = lv2
+	makedepends = meson
+	makedepends = python
+	makedepends = serd
+	makedepends = sord
+	makedepends = sratom
+	makedepends = swig
+	makedepends = zix
+	source = lilv::git+https://gitlab.com/lv2/lilv.git
+	b2sums = SKIP
+
+pkgname = lilv-git
+	depends = glibc
+	depends = lv2
+	depends = serd
+	depends = libserd-0.so
+	depends = sord
+	depends = libsord-0.so
+	depends = sratom
+	depends = libsratom-0.so
+	depends = zix
+	depends = libzix-0.so
+	optdepends = lilv-tools-git: CLI tools (lv2apply, lv2ls, ...)
+	optdepends = python-lilv-git: Python bindings
+	provides = lilv=0.28.1.r1706.4b8f300
+	provides = liblilv-0.so
+	conflicts = lilv
+	conflicts = lilv-docs
+
+pkgname = lilv-tools-git
+	pkgdesc = Lilv CLI tools (git build)
+	depends = glibc
+	depends = libsndfile
+	depends = libsndfile.so
+	depends = lilv-git=0.28.1.r1706.4b8f300-1
+	depends = liblilv-0.so
+	provides = lilv-tools=0.28.1.r1706.4b8f300
+	conflicts = lilv-tools
+
+pkgname = python-lilv-git
+	pkgdesc = Python interface for Lilv (git build)
+	depends = lilv-git=0.28.1.r1706.4b8f300-1
+	depends = python
+	depends = python-numpy
+	provides = python-lilv=0.28.1.r1706.4b8f300
+	conflicts = python-lilv

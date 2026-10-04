@@ -1,0 +1,28 @@
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index 5a949f3..965ae5a 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -1,12 +1,5 @@
+-include(GoogleTest)
+-
+-set(BUILD_GMOCK OFF CACHE BOOL "" FORCE)
+-set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
+-mark_as_advanced(BUILD_GMOCK INSTALL_GTEST GTEST_HAS_ABSL)
+-
+-set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+-
+-add_subdirectory("${PROJECT_SOURCE_DIR}/src/3rdparty/googletest" "test/3rdparty/googletest")
++find_package(GTest REQUIRED)
++find_package(Threads REQUIRED)
+ 
+ add_executable(all_tests 
+   $<TARGET_OBJECTS:chromaprint_objs>
+@@ -36,7 +29,7 @@ add_executable(all_tests
+ )
+ 
+ target_include_directories(all_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+-target_link_libraries(all_tests PRIVATE chromaprint gtest gtest_main)
++target_link_libraries(all_tests PRIVATE chromaprint GTest::GTest GTest::Main Threads::Threads)
+ 
+ if(BUILD_TOOLS)
+   target_sources(all_tests PRIVATE ../src/audio/ffmpeg_audio_reader_test.cpp)

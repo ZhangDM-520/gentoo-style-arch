@@ -1,0 +1,1558 @@
+# Maintainer: Levente Polyak <anthraxx[at]archlinux[dot]org>
+# Contributor: Giovanni Scafora <giovanni@archlinux.org>
+# Contributor: Sarah Hay <sarahhay@mb.sympatico.ca>
+# Contributor: Martin Sandsmark <martin.sandsmark@kde.org>
+
+# Split-output recipe: this is the single pkgbase for every VLC 3.0.23 split
+# output this repo ships plus every split output the cluster's depends
+# reference, so the vlc tree is cloned, configured and built exactly once.
+# It replaces the former per-output recipes packages/stable/{vlc-gui-qt,
+# vlc-plugin-aalib, vlc-plugin-archive, vlc-plugin-caca, vlc-plugin-ffmpeg,
+# vlc-plugin-freetype, vlc-plugin-gnutls, vlc-plugin-jack, vlc-plugin-jpeg,
+# vlc-plugin-notify, vlc-plugin-opus, vlc-plugin-png, vlc-plugin-pulse,
+# vlc-plugin-sftp, vlc-plugin-svg, vlc-plugin-xml, vlc-plugins-extra,
+# vlc-plugins-video-output, vlc-plugins-visualization}.
+
+pkgbase=vlc
+pkgname=(
+  libvlc   # first: its package function runs the one make install below
+  vlc-cli
+  vlc-gui-qt
+  vlc-plugin-aalib
+  vlc-plugin-aom
+  vlc-plugin-archive
+  vlc-plugin-aribb24
+  vlc-plugin-aribb25
+  vlc-plugin-ass
+  vlc-plugin-avahi
+  vlc-plugin-bluray
+  vlc-plugin-caca
+  vlc-plugin-cddb
+  vlc-plugin-chromecast
+  vlc-plugin-dca
+  vlc-plugin-dvb
+  vlc-plugin-dvd
+  vlc-plugin-ffmpeg
+  vlc-plugin-freetype
+  vlc-plugin-gme
+  vlc-plugin-gnutls
+  vlc-plugin-jack
+  vlc-plugin-jpeg
+  vlc-plugin-kate
+  vlc-plugin-libsecret
+  vlc-plugin-lirc
+  vlc-plugin-live555
+  vlc-plugin-lua
+  vlc-plugin-mad
+  vlc-plugin-mdns
+  vlc-plugin-modplug
+  vlc-plugin-mpeg2
+  vlc-plugin-mtp
+  vlc-plugin-musepack
+  vlc-plugin-nfs
+  vlc-plugin-notify
+  vlc-plugin-opus
+  vlc-plugin-png
+  vlc-plugin-pulse
+  vlc-plugin-samplerate
+  vlc-plugin-sdl
+  vlc-plugin-sftp
+  vlc-plugin-soxr
+  vlc-plugin-srt
+  vlc-plugin-svg
+  vlc-plugin-udev
+  vlc-plugin-upnp
+  vlc-plugin-xml
+  vlc-plugin-zvbi
+  vlc-plugins-base
+  vlc-plugins-extra
+  vlc-plugins-video-output
+  vlc-plugins-visualization
+)
+pkgver=3.0.23_2
+pkgrel=16
+pkgdesc='Free and open source cross-platform multimedia player and framework'
+url=https://www.videolan.org/vlc/
+arch=(x86_64)
+license=(
+  GPL-2.0-or-later
+  LGPL-2.1-or-later
+)
+makedepends=(
+  a52dec
+  aalib
+  abseil-cpp
+  alsa-lib
+  aom
+  aribb24
+  aribb25
+  avahi
+  bash
+  cairo
+  dav1d
+  dbus
+  faad2
+  ffmpeg
+  flac
+  fluidsynth
+  fontconfig
+  freetype2
+  fribidi
+  gdk-pixbuf2
+  git
+  glib2
+  glibc
+  gnutls
+  gst-plugins-base-libs
+  gtk3
+  harfbuzz
+  hicolor-icon-theme
+  jack
+  libarchive
+  libass
+  libavc1394
+  libbluray
+  libcaca
+  libcddb
+  libdc1394
+  libdca
+  libdvbpsi
+  libdvdcss
+  libdvdnav
+  libdvdread
+  libgcc
+  libglvnd
+  libgme
+  libgoom2
+  libjpeg-turbo
+  libkate
+  libmad
+  libmatroska
+  libmicrodns
+  libmodplug
+  libmpcdec
+  libmpeg2
+  libmtp
+  libnfs
+  libnotify
+  libogg
+  libpng
+  libproxy
+  libpulse
+  librsvg
+  libsamplerate
+  libsecret
+  libshout
+  libsoxr
+  libssh2
+  libstdc++
+  libtheora
+  libtiger
+  libupnp
+  libva
+  libvorbis
+  libvpx
+  libx11
+  libxcb
+  libxinerama
+  libxml2
+  libxpm
+  lirc
+  live-media
+  lua51
+  mesa
+  mpg123
+  opus
+  pcsclite
+  projectm
+  protobuf
+  qt5-base
+  qt5-svg
+  qt5-x11extras
+  sdl12-compat
+  sdl_image
+  smbclient
+  speex
+  speexdsp
+  srt
+  systemd-libs
+  taglib
+  twolame
+  wayland
+  wayland-protocols
+  x264
+  x265
+  xcb-util-keysyms
+  xosd
+  zlib
+  zvbi
+)
+# trim: stock options=(!emptydirs) not load-bearing here — the merged
+# package_*() functions move explicit files only, leaving no empty dirs
+source=(
+  "git+https://code.videolan.org/videolan/vlc.git#tag=${pkgver//_/-}"
+  update-vlc-plugin-cache.hook
+  0001-Use-reproducible-data-for-build-user-and-host.patch
+  0002-Adjust-hardcoded-font-paths-for-ttf-dejavu.patch
+  0003-Adjust-includes-for-build-with-gstreamer-1.28.patch
+)
+sha512sums=('7a8700de9b8c458474c6d43df5306f2d59ead93a665d64ebf7d4d0b38b378abc18e065c47fa04f85ff1ea51b3aff59bf6a6d6ac346991c4cf0ad78a3d9169150'
+            'b247510ffeadfd439a5dadd170c91900b6cdb05b5ca00d38b1a17c720ffe5a9f75a32e0cb1af5ebefdf1c23c5acc53513ed983a736e8fa30dd8fad237ef49dd3'
+            '9d72267ac97c998a12435041ed9ff6010f422d21505b8074ebb54bc6c8ee56532e0706489415fa725c541a5271f36db1614c11ec3c82dd354c36af97c82972ad'
+            'f5452e7fdbaa273f088e3accaea46687ff7dd8479a89e266987208aff8ddae2a0bb87bd0a602508d1a7f7d7fc9447e9c69eb0e3f84de9643d6213757e9a7cfb5'
+            '232f5595356a9864f89caf36f7ff3d81ba58b9f76b2a39c5540837b705e21a7a8c6ae2980303d6ba8bc589f4664db2fe25956b1d7f8f420c4b216f354866715c')
+b2sums=('7408f02525e27a9078cae120156ca0821cc898aa8e655e04af2d085fe1d59ef33b549a3bc628ceb208e14cc2dd5c1a1b21ec8f68c7379b065bca89c9fb882c83'
+        'fece25c3d56af403962b82e1ac91d1b06791ec2cc282d23c91d2608c8614145596f02e00457047ea688c30bf11f422bcc4748f08ec10a70cd5e79c417bf1eda1'
+        '8f5568fe8c378b266c4de91070aa262f632d074801bae61cdc160873b4a22f12805a5469905b92c27af0861c80e81a541d0fdf72c5f10d1436cc25086327faea'
+        '59f6ac6b3890667c08a6d4772ffc9d9be70443588e3407ef0f8f89f5b9e2f55d14915c0a136b47c27236a18f1679c8aef12c61cf5ef52345818a31d94a50f7d2'
+        'c94a9744d844cfc5cec0c5de616fced2f36fbffdda2689a5fa75ed2450220fe79d69b946caad120631a160549130e1b2286067d0eb1db17083c35fd1d1cea0db')
+
+prepare() {
+  cd $pkgbase
+
+  local src
+  for src in "${source[@]}"; do
+    src="${src%%::*}"
+    src="${src##*/}"
+    [[ $src = *.patch ]] || continue
+    echo "Applying patch $src..."
+    patch -Np1 < "../$src"
+  done
+
+  autoreconf -fiv
+}
+
+build() {
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  local configure_options=(
+    --disable-chromaprint
+    --disable-fdkaac
+    --disable-kwallet
+    --disable-libgcrypt
+    --disable-libplacebo
+    --disable-opencv
+    --disable-rpath
+    --disable-schroedinger
+    --disable-sndio
+    --disable-update-check
+    --enable-a52
+    --enable-aa
+    --enable-alsa
+    --enable-aom
+    --enable-archive
+    --enable-aribsub
+    --enable-aribcam
+    --enable-avahi
+    --enable-avcodec
+    --enable-avformat
+    --enable-bluray
+    --enable-caca
+    --enable-chromecast
+    --enable-dav1d
+    --enable-dc1394
+    --enable-dca
+    --enable-dv1394
+    --enable-dvbpsi
+    --enable-dvdnav
+    --enable-dvdread
+    --enable-faad
+    --enable-flac
+    --enable-fluidsynth
+    --enable-fontconfig
+    --enable-freetype
+    --enable-fribidi
+    --enable-gnutls
+    --enable-gme
+    --enable-goom
+    --enable-gst-decode
+    --enable-harfbuzz
+    --enable-jack
+    --enable-jpeg
+    --enable-kate
+    --enable-libass
+    --enable-libcddb
+    --enable-libmpeg2
+    --enable-libva
+    --enable-libxml2
+    --enable-lirc
+    --enable-live555
+    --enable-mad
+    --enable-matroska
+    --enable-mod
+    --enable-mpc
+    --enable-mpg123
+    --enable-microdns
+    --enable-mtp
+    --enable-ncurses
+    --enable-nfs
+    --enable-nls
+    --enable-notify
+    --enable-ogg
+    --enable-oggspots
+    --enable-opus
+    --enable-png
+    --enable-postproc
+    --enable-projectm
+    --enable-pulse
+    --enable-qt
+    --enable-realrtsp
+    --enable-samplerate
+    --enable-sdl-image
+    --enable-secret
+    --enable-sftp
+    --enable-shout
+    --enable-skins2
+    --enable-smbclient
+    --enable-soxr
+    --enable-speex
+    --enable-srt
+    --enable-svg
+    --enable-svgdec
+    --enable-taglib
+    --enable-tiger
+    --enable-twolame
+    --enable-upnp
+    --enable-vcd
+    --enable-vdpau
+    --enable-vlc
+    --enable-vorbis
+    --enable-vpx
+    --enable-wayland
+    --enable-x264
+    --enable-x265
+    --enable-zvbi
+    --prefix=/usr
+    --sysconfdir=/etc
+    --with-kde-solid=/usr/share/solid/actions/
+  )
+
+  cd $pkgbase
+
+  # VLC still relies on an old lua version for its scripts (and compat for external scripts)
+  export LUAC=/usr/bin/luac5.1
+
+  ./configure "${configure_options[@]}"
+
+  # prevent excessive overlinking due to libtool
+  sed -i -e 's/ -shared / -Wl,-O1,--as-needed\0/g' libtool
+  make -j"${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+# trim: stock split outputs vlc, vlc-gui-ncurses, vlc-gui-skins2,
+# vlc-plugins-all and vlc-plugin-{a52dec,alsa,dav1d,dbus,dbus-screensaver,
+# faad2,firewire,flac,fluidsynth,gstreamer,inflate,journal,matroska,mpg123,
+# ogg,shout,smb,speex,tag,theora,twolame,vorbis,vpx,x264,x265} dropped from
+# the output set (user decision: ship the 19 folded outputs plus every
+# output the cluster's depends reference) — their payload stays behind in
+# $srcdir/root and is never moved
+# trim: stock vlc split payload (desktop entry, hicolor app icons, locale
+# catalogues, docs, KDE solid actions and utils scripts) dropped together
+# with the vlc output itself
+# trim: stock static library usr/lib/vlc/libcompat.a dropped (nothing links
+# it)
+# trim: stock utils script usr/share/vlc/utils/gnome-vlc-default.sh dropped
+# (incompatible with GNOME >= 3)
+# trim: stock developer example project usr/share/doc/vlc/libvlc dropped
+# (docs)
+# trim: stock compiled-in images usr/share/vlc/vlc.ico and the hicolor
+# icon payload dropped (nothing references them without the vlc output)
+# trim: stock plugin registry usr/lib/vlc/plugins/plugins.dat dropped —
+# libvlc ships an empty one that its ALPM hook regenerates
+# trim: stock libtool leftovers usr/lib/vlc/**.la dropped (only the .so
+# plugin payloads ship)
+# trim: stock conflicts/replaces=(vlc-plugin),
+# replaces=(vlc-plugin-quicksync) and replaces=(vlc-plugin-kwallet) dropped
+# — house standard (no conflicts/replaces)
+
+_install() {
+  local src dir
+  for src in "${files[@]}"; do
+    dir="$pkgdir/$(dirname "$src")"
+    mkdir -p "$dir"
+    mv -v "$src" "$dir"
+  done
+
+  # license: COPYING (GPL-2.0-or-later) + COPYING.LIB (LGPL-2.1-or-later)
+  install -Dm644 "$srcdir/$pkgbase"/{COPYING,COPYING.LIB} -t "$pkgdir/usr/share/licenses/$pkgname/"
+}
+
+package_libvlc() {
+  pkgdesc+=" - library"
+  provides=(
+    libvlc.so
+    libvlccore.so
+  )
+  depends=(
+    dbus
+    glibc
+    libgcc
+  )
+
+  make -C $pkgbase DESTDIR="$srcdir/root" install
+
+  cd root; local files=(
+    usr/include
+    usr/lib/libvlc*
+    usr/lib/pkgconfig/{libvlc,vlc-plugin}.pc
+    usr/lib/vlc/vlc-cache-gen
+  ); _install
+
+  # install ALPM hook to update the VLC plugin cache when /usr/lib/vlc/plugins/ is altered
+  install -Dm644 "$srcdir/update-vlc-plugin-cache.hook" -t "$pkgdir/usr/share/libalpm/hooks/"
+  # create an empty plugin cache, so that the ALPM hook can write to it
+  install -vdm 755 "$pkgdir/usr/lib/vlc/plugins/"
+  touch "$pkgdir/usr/lib/vlc/plugins/plugins.dat"
+}
+
+package_vlc-cli() {
+  pkgdesc+=" - command line interface"
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlc.so
+    vlc-plugins-base=$pkgver-$pkgrel
+    bash
+    glibc
+  )
+  optdepends=(
+    'vlc-plugin-lua: for Lua scripting plugins'
+  )
+
+  cd root; local files=(
+    usr/bin/{vlc,cvlc,rvlc,vlc-wrapper}
+    usr/share/man/man1/vlc{,-wrapper}.1*
+  ); _install
+}
+
+package_vlc-gui-qt() {
+  pkgdesc+=" - Qt GUI"
+  provides=(
+    libqt_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    vlc-cli=$pkgver-$pkgrel
+    vlc-plugin-lua=$pkgver-$pkgrel
+    vlc-plugin-pulse=$pkgver-$pkgrel
+    vlc-plugins-base=$pkgver-$pkgrel
+    vlc-plugins-video-output=$pkgver-$pkgrel
+    bash
+    glibc
+    libgcc
+    libstdc++
+    libx11
+    qt5-base
+    qt5-svg
+    qt5-x11extras
+    qt5-wayland
+    wayland
+  )
+  optdepends=(
+    'vlc-plugin-libsecret: for libsecret/gnome-keyring support on Gnome'
+    'vlc-plugin-notify: for notification support'
+    'vlc-plugins-extra: for extra plugins'
+    'vlc-plugins-visualization: for visualization plugins'
+  )
+
+  cd root; local files=(
+    usr/bin/qvlc
+    usr/lib/vlc/plugins/gui/libqt_plugin.so
+  ); _install
+}
+
+package_vlc-plugin-aalib() {
+  pkgdesc+=" - ASCII art video output plugin"
+  provides=(
+    libaa_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    vlc-plugins-base=$pkgver-$pkgrel
+    aalib
+    glibc
+    libx11
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/plugins/video_output/libaa_plugin.so
+  ); _install
+}
+
+package_vlc-plugin-aom() {
+  pkgdesc+=" - AOM AV1 plugin"
+  provides=(
+    libaom_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    vlc-plugins-base=$pkgver-$pkgrel
+    aom
+    glibc
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/plugins/codec/libaom_plugin.so
+  ); _install
+}
+
+package_vlc-plugin-archive() {
+  pkgdesc+=" - stream extractor plugin"
+  provides=(
+    libarchive_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    glibc
+    libarchive
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/plugins/stream_extractor/libarchive_plugin.so
+  ); _install
+}
+
+package_vlc-plugin-aribb24() {
+  pkgdesc+=" - ARIB STD-B24 plugins"
+  provides=(
+    libaribsub_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    vlc-plugins-base=$pkgver-$pkgrel
+    aribb24
+    glibc
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/plugins/codec/libaribsub_plugin.so
+  ); _install
+}
+
+package_vlc-plugin-aribb25() {
+  pkgdesc+=" - ARIB STD-B25 plugin"
+  provides=(
+    libaribcam_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    vlc-plugins-base=$pkgver-$pkgrel
+    aribb25
+    glibc
+    pcsclite
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/plugins/stream_filter/libaribcam_plugin.so
+  ); _install
+}
+
+package_vlc-plugin-ass() {
+  pkgdesc+=" - SSA/ASS subtitle plugin"
+  provides=(
+    liblibass_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    vlc-plugins-base=$pkgver-$pkgrel
+    glibc
+    libass
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/plugins/codec/liblibass_plugin.so
+  ); _install
+}
+
+package_vlc-plugin-avahi() {
+  pkgdesc+=" - mDNS/DNS-SD plugin"
+  provides=(
+    libavahi_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    vlc-plugins-base=$pkgver-$pkgrel
+    avahi
+    glibc
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/plugins/services_discovery/libavahi_plugin.so
+  ); _install
+}
+
+package_vlc-plugin-bluray() {
+  pkgdesc+=" - Blu-ray plugin"
+  provides=(
+    liblibbluray_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    vlc-plugins-base=$pkgver-$pkgrel
+    glibc
+    libbluray
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/plugins/access/liblibbluray_plugin.so
+  ); _install
+}
+
+package_vlc-plugin-caca() {
+  pkgdesc+=" - Color ASCII art video output plugin"
+  provides=(
+    libcaca_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    vlc-plugins-base=$pkgver-$pkgrel
+    glibc
+    libcaca
+    libx11
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/plugins/video_output/libcaca_plugin.so
+  ); _install
+}
+
+package_vlc-plugin-cddb() {
+  pkgdesc+=" - CDDB plugin"
+  provides=(
+    libcdda_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    vlc-plugins-base=$pkgver-$pkgrel
+    glibc
+    libcddb
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/plugins/access/libcdda_plugin.so
+  ); _install
+}
+
+package_vlc-plugin-chromecast() {
+  pkgdesc+=" - Chromecast plugin"
+  provides=(
+    libstream_out_chromecast_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    vlc-plugins-base=$pkgver-$pkgrel
+    abseil-cpp
+    glibc
+    libgcc
+    libstdc++
+    protobuf
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/plugins/stream_out/libstream_out_chromecast_plugin.so
+  ); _install
+}
+
+package_vlc-plugin-dca() {
+  pkgdesc+=" - DTS Coherent Acoustics plugin"
+  provides=(
+    libdca_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    vlc-plugins-base=$pkgver-$pkgrel
+    glibc
+    libdca
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/plugins/codec/libdca_plugin.so
+  ); _install
+}
+
+package_vlc-plugin-dvb() {
+  pkgdesc+=" - DVB plugins"
+  provides=(
+    libdvb_plugin.so
+    libts_plugin.so
+    libmux_ts_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    vlc-plugins-base=$pkgver-$pkgrel
+    aribb24
+    glibc
+    libdvbpsi
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/plugins/access/libdvb_plugin.so
+    usr/lib/vlc/plugins/demux/libts_plugin.so
+    usr/lib/vlc/plugins/mux/libmux_ts_plugin.so
+  ); _install
+}
+
+package_vlc-plugin-dvd() {
+  pkgdesc+=" - DVD plugins"
+  provides=(
+    libdvdnav_plugin.so
+    libdvdread_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    vlc-plugins-base=$pkgver-$pkgrel
+    glibc
+    libdvdnav
+    libdvdread
+  )
+  optdepends=(
+    'libdvdcss: for decoding encrypted DVDs'
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/plugins/access/libdvdnav_plugin.so
+    usr/lib/vlc/plugins/access/libdvdread_plugin.so
+  ); _install
+}
+
+package_vlc-plugin-ffmpeg() {
+  pkgdesc+=" - FFMPEG plugins"
+  provides=(
+    libavio_plugin.so
+    libavcodec_plugin.so
+    libvaapi_drm_plugin.so
+    libvaapi_plugin.so
+    libavformat_plugin.so
+    libpacketizer_avparser_plugin.so
+    libvdpau_avcodec_plugin.so
+    libswscale_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    vlc-plugins-base=$pkgver-$pkgrel
+    vlc-plugins-video-output=$pkgver-$pkgrel libvlc_vdpau.so
+    ffmpeg libavcodec.so libavformat.so libavutil.so libswscale.so
+    glibc
+    libva
+    libx11
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/plugins/access/libavio_plugin.so
+    usr/lib/vlc/plugins/codec/libavcodec_plugin.so
+    usr/lib/vlc/plugins/codec/libvaapi_drm_plugin.so
+    usr/lib/vlc/plugins/codec/libvaapi_plugin.so
+    usr/lib/vlc/plugins/demux/libavformat_plugin.so
+    usr/lib/vlc/plugins/packetizer/libpacketizer_avparser_plugin.so
+    usr/lib/vlc/plugins/vdpau/libvdpau_avcodec_plugin.so
+    usr/lib/vlc/plugins/video_chroma/libswscale_plugin.so
+  ); _install
+}
+
+package_vlc-plugin-freetype() {
+  pkgdesc+=" - subtitle and on screen display text rendering support"
+  provides=(
+    libfreetype_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    vlc-plugins-base=$pkgver-$pkgrel
+    fontconfig
+    freetype2
+    fribidi
+    glibc
+    harfbuzz
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/plugins/text_renderer/libfreetype_plugin.so
+  ); _install
+}
+
+package_vlc-plugin-gme() {
+  pkgdesc+=" - Game music emulation plugin"
+  provides=(
+    libgme_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    vlc-plugins-base=$pkgver-$pkgrel
+    glibc
+    libgme
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/plugins/demux/libgme_plugin.so
+  ); _install
+}
+
+package_vlc-plugin-gnutls() {
+  pkgdesc+=" - GnuTLS plugin"
+  provides=(
+    libgnutls_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    glibc
+    gnutls
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/plugins/misc/libgnutls_plugin.so
+  ); _install
+}
+
+package_vlc-plugin-jack() {
+  pkgdesc+=" - JACK plugin"
+  provides=(
+    libaccess_jack_plugin.so
+    libjack_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    vlc-plugins-base=$pkgver-$pkgrel
+    glibc
+    jack libjack.so
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/plugins/access/libaccess_jack_plugin.so
+    usr/lib/vlc/plugins/audio_output/libjack_plugin.so
+  ); _install
+}
+
+package_vlc-plugin-jpeg() {
+  pkgdesc+=" - JPEG plugin"
+  provides=(
+    libjpeg_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    glibc
+    libjpeg-turbo
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/plugins/codec/libjpeg_plugin.so
+  ); _install
+}
+
+package_vlc-plugin-kate() {
+  pkgdesc+=" - kate plugin"
+  provides=(
+    libkate_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    vlc-plugins-base=$pkgver-$pkgrel
+    glibc
+    libkate
+    libtiger
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/plugins/codec/libkate_plugin.so
+  ); _install
+}
+
+package_vlc-plugin-libsecret() {
+  pkgdesc+=" - libsecret/gnome-keyring/kwallet plugin"
+  provides=(
+    libsecret_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    vlc-plugins-base=$pkgver-$pkgrel
+    glib2
+    glibc
+    libsecret
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/plugins/keystore/libsecret_plugin.so
+  ); _install
+}
+
+package_vlc-plugin-lirc() {
+  pkgdesc+=" - Infrared remote control plugin"
+  provides=(
+    liblirc_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    vlc-plugins-base=$pkgver-$pkgrel
+    glibc
+    lirc
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/plugins/control/liblirc_plugin.so
+  ); _install
+}
+
+package_vlc-plugin-live555() {
+  pkgdesc+=" - live555 RTP/RSTP client plugin"
+  provides=(
+    liblive555_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    vlc-plugins-base=$pkgver-$pkgrel
+    glibc
+    libgcc
+    libstdc++
+    live-media
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/plugins/access/liblive555_plugin.so
+  ); _install
+}
+
+package_vlc-plugin-lua() {
+  pkgdesc+=" - Lua scripting plugins"
+  provides=(
+    liblua_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    vlc-plugins-base=$pkgver-$pkgrel
+    glibc
+    libgcc
+    lua51
+  )
+  optdepends=(
+    'lua-socket: for http interface'
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/lua/
+    usr/lib/vlc/plugins/lua/
+    usr/share/vlc/lua/
+    usr/share/doc/vlc/lua/
+  ); _install
+}
+
+package_vlc-plugin-mad() {
+  pkgdesc+=" - MPEG Audio Decoder plugin"
+  provides=(
+    libmad_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    vlc-plugins-base=$pkgver-$pkgrel
+    glibc
+    libmad
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/plugins/audio_filter/libmad_plugin.so
+  ); _install
+}
+
+package_vlc-plugin-mdns() {
+  pkgdesc+=" - mDNS plugin"
+  provides=(
+    libmicrodns_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    vlc-plugins-base=$pkgver-$pkgrel
+    glibc
+    libmicrodns
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/plugins/services_discovery/libmicrodns_plugin.so
+  ); _install
+}
+
+package_vlc-plugin-modplug() {
+  pkgdesc+=" - MOD plugin"
+  provides=(
+    libmod_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    vlc-plugins-base=$pkgver-$pkgrel
+    glibc
+    libmodplug
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/plugins/demux/libmod_plugin.so
+  ); _install
+}
+
+package_vlc-plugin-mpeg2() {
+  pkgdesc+=" - MPEG2 plugin"
+  provides=(
+    liblibmpeg2_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    vlc-plugins-base=$pkgver-$pkgrel
+    glibc
+    libmpeg2
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/plugins/codec/liblibmpeg2_plugin.so
+  ); _install
+}
+
+package_vlc-plugin-mtp() {
+  pkgdesc+=" - MTP plugins"
+  provides=(
+    libaccess_mtp_plugin.so
+    libmtp_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    vlc-plugins-base=$pkgver-$pkgrel
+    glibc
+    libmtp
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/plugins/access/libaccess_mtp_plugin.so
+    usr/lib/vlc/plugins/services_discovery/libmtp_plugin.so
+  ); _install
+}
+
+package_vlc-plugin-musepack() {
+  pkgdesc+=" - MusePack plugin"
+  provides=(
+    libmpc_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    vlc-plugins-base=$pkgver-$pkgrel
+    glibc
+    libmpcdec
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/plugins/demux/libmpc_plugin.so
+  ); _install
+}
+
+package_vlc-plugin-nfs() {
+  pkgdesc+=" - NFS plugin"
+  provides=(
+    libnfs_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    vlc-plugins-base=$pkgver-$pkgrel
+    glibc
+    libnfs
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/plugins/access/libnfs_plugin.so
+  ); _install
+}
+
+package_vlc-plugin-notify() {
+  pkgdesc+=" - notification plugin"
+  provides=(
+    libnotify_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    vlc-plugins-base=$pkgver-$pkgrel
+    gdk-pixbuf2
+    glib2
+    glibc
+    gtk3
+    libnotify
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/plugins/notify/libnotify_plugin.so
+  ); _install
+}
+
+package_vlc-plugin-opus() {
+  pkgdesc+=" - Opus plugin"
+  provides=(
+    libopus_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    glibc
+    opus
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/plugins/codec/libopus_plugin.so
+  ); _install
+}
+
+package_vlc-plugin-png() {
+  pkgdesc+=" - PNG plugin"
+  provides=(
+    libpng_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    glibc
+    libpng
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/plugins/codec/libpng_plugin.so
+  ); _install
+}
+
+package_vlc-plugin-pulse() {
+  pkgdesc+=" - PulseAudio plugins"
+  provides=(
+    libvlc_pulse.so
+    libpulsesrc_plugin.so
+    libpulse_plugin.so
+    libpulselist_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    vlc-plugins-base=$pkgver-$pkgrel
+    glibc
+    libpulse
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/libvlc_pulse.so*
+    usr/lib/vlc/plugins/access/libpulsesrc_plugin.so
+    usr/lib/vlc/plugins/audio_output/libpulse_plugin.so
+    usr/lib/vlc/plugins/services_discovery/libpulselist_plugin.so
+  ); _install
+}
+
+package_vlc-plugin-samplerate() {
+  pkgdesc+=" - samplerate plugin"
+  provides=(
+    libsamplerate_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    vlc-plugins-base=$pkgver-$pkgrel
+    glibc
+    libsamplerate
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/plugins/audio_filter/libsamplerate_plugin.so
+  ); _install
+}
+
+package_vlc-plugin-sdl() {
+  pkgdesc+=" - SDL plugin"
+  provides=(
+    libsdl_image_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    vlc-plugins-base=$pkgver-$pkgrel
+    glibc
+    sdl12-compat
+    sdl_image
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/plugins/codec/libsdl_image_plugin.so
+  ); _install
+}
+
+package_vlc-plugin-sftp() {
+  pkgdesc+=" - SFTP plugin"
+  provides=(
+    libsftp_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    vlc-plugins-base=$pkgver-$pkgrel
+    glibc
+    libssh2
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/plugins/access/libsftp_plugin.so
+  ); _install
+}
+
+package_vlc-plugin-soxr() {
+  pkgdesc+=" - SoX Resampler plugin"
+  provides=(
+    libsoxr_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    vlc-plugins-base=$pkgver-$pkgrel
+    glibc
+    libsoxr
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/plugins/audio_filter/libsoxr_plugin.so
+  ); _install
+}
+
+package_vlc-plugin-srt() {
+  pkgdesc+=" - SRT subtitle file support"
+  provides=(
+    libaccess_srt_plugin.so
+    libaccess_output_srt_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    vlc-plugins-base=$pkgver-$pkgrel
+    glibc
+    srt
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/plugins/access/libaccess_srt_plugin.so
+    usr/lib/vlc/plugins/access_output/libaccess_output_srt_plugin.so
+  ); _install
+}
+
+package_vlc-plugin-svg() {
+  pkgdesc+=" - SVG plugins"
+  provides=(
+    libsvgdec_plugin.so
+    libsvg_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    vlc-plugins-base=$pkgver-$pkgrel
+    cairo
+    glib2
+    glibc
+    librsvg
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/plugins/codec/libsvgdec_plugin.so
+    usr/lib/vlc/plugins/text_renderer/libsvg_plugin.so
+  ); _install
+}
+
+package_vlc-plugin-udev() {
+  pkgdesc+=" - udev plugin"
+  provides=(
+    libudev_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    vlc-plugins-base=$pkgver-$pkgrel
+    alsa-lib
+    glibc
+    systemd-libs
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/plugins/services_discovery/libudev_plugin.so
+  ); _install
+}
+
+package_vlc-plugin-upnp() {
+  pkgdesc+=" - UPnP plugin"
+  provides=(
+    libupnp_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    vlc-plugins-base=$pkgver-$pkgrel
+    glibc
+    libgcc
+    libstdc++
+    libupnp
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/plugins/services_discovery/libupnp_plugin.so
+  ); _install
+}
+
+package_vlc-plugin-xml() {
+  pkgdesc+=" - XML plugin"
+  provides=(
+    libxml_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    glibc
+    libxml2
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/plugins/misc/libxml_plugin.so
+  ); _install
+}
+
+package_vlc-plugin-zvbi() {
+  pkgdesc+=" - VBI plugins"
+  provides=(
+    liblinsys_sdi_plugin.so
+    libv4l2_plugin.so
+    libzvbi_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    vlc-plugins-base=$pkgver-$pkgrel
+    glibc
+    zvbi
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/plugins/access/liblinsys_sdi_plugin.so
+    usr/lib/vlc/plugins/access/libv4l2_plugin.so
+    usr/lib/vlc/plugins/codec/libzvbi_plugin.so
+  ); _install
+}
+
+package_vlc-plugins-base() {
+  pkgdesc+=" - base plugins"
+  provides=(
+    lib{access_concat,access_imem,access_mms,access_realrtsp,attachment,dtv,filesystem,ftp,http,https,idummy,imem,rist,rtp,satip,sdp,shm,tcp,timecode,udp,vcd,vdr}_plugin.so
+    libaccess_output_{dummy,file,http,rist,udp}_plugin.so
+    lib{audio_format,audiobargraph_a,chorus_flanger,compressor,dolby_surround_decoder,equalizer,gain,headphone_channel_mixer,karaoke,mono,normvol,param_eq,remap,scaletempo_pitch,scaletempo,simple_channel_mixer,spatializer,stereo_widen,tospdif,trivial_channel_mixer,ugly_resampler}_plugin.so
+    lib{float,integer}_mixer_plugin.so
+    lib{adummy,afile,amem}_plugin.so
+    lib{adpcm,aes3,araw,cc,cdg,cvdsub,ddummy,dvbsub,edummy,g711,lpcm,oggspots,rawvideo,rtpvideo,scte18,scte27,spdif,spudec,stl,subsdec,substx3g,subsusf,svcdsub,t140,telx,textst,ttml,uleaddvaudio,webvtt,xwd}_plugin.so
+    lib{dummy,gestures,hotkeys,motion,netsync,oldrc}_plugin.so
+    lib{adaptive,aiff,asf,au,avi,caf,demux_cdg,demux_chromecast,demux_stl,demuxdump,diracsys,directory_demux,dmxmus,es,flacsys,h26x,image,mjpeg,mp4,mpgv,noseek,nsc,nsv,nuv,playlist,ps,pva,rawaud,rawdv,rawvid,real,smf,subtitle,tta,ty,vc1,vobsub,voc,wav,xa}_plugin.so
+    lib{file_keystore,memory_keystore}_plugin.so
+    lib{console_logger,file_logger,syslog}_plugin.so
+    libfolder_plugin.so
+    lib{addonsfsstorage,addonsvorepository,audioscrobbler,export,fingerprinter,logger,stats,vod_rtsp,xdg_screensaver}_plugin.so
+    libmux_{asf,avi,dummy,mp4,mpjpeg,ps,wav}_plugin.so
+    libpacketizer_{a52,av1,copy,dirac,dts,flac,h264,hevc,mlp,mpeg4audio,mpeg4video,mpegaudio,mpegvideo,vc1}_plugin.so
+    lib{mediadirs,podcast,sap}_plugin.so
+    lib{audiobargraph_v,dynamicoverlay,logo,marq,mosaic,rss,subsdelay}_plugin.so
+    lib{adf,cache_block,cache_read,decomp,hds,prefetch,record,skiptags}_plugin.so
+    libstream_out_{autodel,bridge,cycle,delay,description,display,dummy,duplicate,es,gather,mosaic_bridge,record,rtp,setid,smem,standard,stats,transcode}_plugin.so
+    libtdummy_plugin.so
+    lib{chain,grey_yuv,i420_10_p010,i420_nv12,i420_rgb_mmx,i420_rgb_sse2,i420_rgb,i420_yuy2_mmx,i420_yuy2_sse2,i420_yuy2,i422_i420,i422_yuy2_mmx,i422_yuy2_sse2,i422_yuy2,rv32,yuvp,yuy2_i420,yuy2_i422}_plugin.so
+    lib{adjust,alphamask,anaglyph,antiflicker,ball,blend,blendbench,bluescreen,canvas,colorthres,croppadd,deinterlace,edgedetection,erase,extract,fps,freeze,gaussianblur,gradfun,gradient,grain,hqdn3d,invert,magnify,mirror,motionblur,motiondetect,oldmovie,posterize,psychedelic,puzzle,ripple,rotate,scale,scene,sepia,sharpen,transform,vhs,wave}_plugin.so
+    lib{fb,vdummy,vmem,yuv}_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    vlc-plugin-archive=$pkgver-$pkgrel
+    vlc-plugin-gnutls=$pkgver-$pkgrel
+    vlc-plugin-jpeg=$pkgver-$pkgrel
+    vlc-plugin-opus=$pkgver-$pkgrel
+    vlc-plugin-png=$pkgver-$pkgrel
+    vlc-plugin-xml=$pkgver-$pkgrel
+    glibc
+    libgcc
+    libstdc++
+    zlib
+  )
+  # trim: stock depends vlc-plugin-a52dec dropped — that split is outside
+  #   the merged output set (not shipped today, referenced by no depends)
+  # trim: stock depends vlc-plugin-alsa dropped — that split is outside
+  #   the merged output set (not shipped today, referenced by no depends)
+  # trim: stock depends vlc-plugin-dav1d dropped — that split is outside
+  #   the merged output set (not shipped today, referenced by no depends)
+  # trim: stock depends vlc-plugin-dbus dropped — that split is outside
+  #   the merged output set (not shipped today, referenced by no depends)
+  # trim: stock depends vlc-plugin-dbus-screensaver dropped — that split is
+  #   outside the merged output set (not shipped today, referenced by no
+  #   depends)
+  # trim: stock depends vlc-plugin-faad2 dropped — that split is outside
+  #   the merged output set (not shipped today, referenced by no depends)
+  # trim: stock depends vlc-plugin-flac dropped — that split is outside
+  #   the merged output set (not shipped today, referenced by no depends)
+  # trim: stock depends vlc-plugin-inflate dropped — that split is outside
+  #   the merged output set (not shipped today, referenced by no depends)
+  # trim: stock depends vlc-plugin-journal dropped — that split is outside
+  #   the merged output set (not shipped today, referenced by no depends)
+  # trim: stock depends vlc-plugin-matroska dropped — that split is outside
+  #   the merged output set (not shipped today, referenced by no depends)
+  # trim: stock depends vlc-plugin-mpg123 dropped — that split is outside
+  #   the merged output set (not shipped today, referenced by no depends)
+  # trim: stock depends vlc-plugin-ogg dropped — that split is outside
+  #   the merged output set (not shipped today, referenced by no depends)
+  # trim: stock depends vlc-plugin-shout dropped — that split is outside
+  #   the merged output set (not shipped today, referenced by no depends)
+  # trim: stock depends vlc-plugin-speex dropped — that split is outside
+  #   the merged output set (not shipped today, referenced by no depends)
+  # trim: stock depends vlc-plugin-tag dropped — that split is outside
+  #   the merged output set (not shipped today, referenced by no depends)
+  # trim: stock depends vlc-plugin-theora dropped — that split is outside
+  #   the merged output set (not shipped today, referenced by no depends)
+  # trim: stock depends vlc-plugin-twolame dropped — that split is outside
+  #   the merged output set (not shipped today, referenced by no depends)
+  # trim: stock depends vlc-plugin-vorbis dropped — that split is outside
+  #   the merged output set (not shipped today, referenced by no depends)
+  # trim: stock depends vlc-plugin-vpx dropped — that split is outside
+  #   the merged output set (not shipped today, referenced by no depends)
+
+  cd root; local files=(
+    usr/lib/vlc/plugins/access/{libaccess_concat,libaccess_imem,libaccess_mms,libaccess_realrtsp,libattachment,libdtv,libfilesystem,libftp,libhttp,libhttps,libidummy,libimem,librist,librtp,libsatip,libsdp,libshm,libtcp,libtimecode,libudp,libvcd,libvdr}_plugin.so
+    usr/lib/vlc/plugins/access_output/{libaccess_output_dummy,libaccess_output_file,libaccess_output_http,libaccess_output_rist,libaccess_output_udp}_plugin.so
+    usr/lib/vlc/plugins/audio_filter/{libaudio_format,libaudiobargraph_a,libchorus_flanger,libcompressor,libdolby_surround_decoder,libequalizer,libgain,libheadphone_channel_mixer,libkaraoke,libmono,libnormvol,libparam_eq,libremap,libscaletempo_pitch,libscaletempo,libsimple_channel_mixer,libspatializer,libstereo_widen,libtospdif,libtrivial_channel_mixer,libugly_resampler}_plugin.so
+    usr/lib/vlc/plugins/audio_mixer/{libfloat_mixer,libinteger_mixer}_plugin.so
+    usr/lib/vlc/plugins/audio_output/{libadummy,libafile,libamem}_plugin.so
+    usr/lib/vlc/plugins/codec/{libadpcm,libaes3,libaraw,libcc,libcdg,libcvdsub,libddummy,libdvbsub,libedummy,libg711,liblpcm,liboggspots,librawvideo,librtpvideo,libscte18,libscte27,libspdif,libspudec,libstl,libsubsdec,libsubstx3g,libsubsusf,libsvcdsub,libt140,libtelx,libtextst,libttml,libuleaddvaudio,libwebvtt,libxwd}_plugin.so
+    usr/lib/vlc/plugins/control/{libdummy,libgestures,libhotkeys,libmotion,libnetsync,liboldrc}_plugin.so
+    usr/lib/vlc/plugins/demux/{libadaptive,libaiff,libasf,libau,libavi,libcaf,libdemux_cdg,libdemux_chromecast,libdemux_stl,libdemuxdump,libdiracsys,libdirectory_demux,libdmxmus,libes,libflacsys,libh26x,libimage,libmjpeg,libmp4,libmpgv,libnoseek,libnsc,libnsv,libnuv,libplaylist,libps,libpva,librawaud,librawdv,librawvid,libreal,libsmf,libsubtitle,libtta,libty,libvc1,libvobsub,libvoc,libwav,libxa}_plugin.so
+    usr/lib/vlc/plugins/keystore/{libfile_keystore,libmemory_keystore}_plugin.so
+    usr/lib/vlc/plugins/logger/{libconsole_logger,libfile_logger,libsyslog}_plugin.so
+    usr/lib/vlc/plugins/meta_engine/libfolder_plugin.so
+    usr/lib/vlc/plugins/misc/{libaddonsfsstorage,libaddonsvorepository,libaudioscrobbler,libexport,libfingerprinter,liblogger,libstats,libvod_rtsp,libxdg_screensaver}_plugin.so
+    usr/lib/vlc/plugins/mux/{libmux_asf,libmux_avi,libmux_dummy,libmux_mp4,libmux_mpjpeg,libmux_ps,libmux_wav}_plugin.so
+    usr/lib/vlc/plugins/packetizer/{libpacketizer_a52,libpacketizer_av1,libpacketizer_copy,libpacketizer_dirac,libpacketizer_dts,libpacketizer_flac,libpacketizer_h264,libpacketizer_hevc,libpacketizer_mlp,libpacketizer_mpeg4audio,libpacketizer_mpeg4video,libpacketizer_mpegaudio,libpacketizer_mpegvideo,libpacketizer_vc1}_plugin.so
+    usr/lib/vlc/plugins/services_discovery/{libmediadirs,libpodcast,libsap}_plugin.so
+    usr/lib/vlc/plugins/spu/{libaudiobargraph_v,libdynamicoverlay,liblogo,libmarq,libmosaic,librss,libsubsdelay}_plugin.so
+    usr/lib/vlc/plugins/stream_filter/{libadf,libcache_block,libcache_read,libdecomp,libhds,libprefetch,librecord,libskiptags}_plugin.so
+    usr/lib/vlc/plugins/stream_out/{libstream_out_autodel,libstream_out_bridge,libstream_out_cycle,libstream_out_delay,libstream_out_description,libstream_out_display,libstream_out_dummy,libstream_out_duplicate,libstream_out_es,libstream_out_gather,libstream_out_mosaic_bridge,libstream_out_record,libstream_out_rtp,libstream_out_setid,libstream_out_smem,libstream_out_standard,libstream_out_stats,libstream_out_transcode}_plugin.so
+    usr/lib/vlc/plugins/text_renderer/libtdummy_plugin.so
+    usr/lib/vlc/plugins/video_chroma/{libchain,libgrey_yuv,libi420_10_p010,libi420_nv12,libi420_rgb_mmx,libi420_rgb_sse2,libi420_rgb,libi420_yuy2_mmx,libi420_yuy2_sse2,libi420_yuy2,libi422_i420,libi422_yuy2_mmx,libi422_yuy2_sse2,libi422_yuy2,librv32,libyuvp,libyuy2_i420,libyuy2_i422}_plugin.so
+    usr/lib/vlc/plugins/video_filter/{libadjust,libalphamask,libanaglyph,libantiflicker,libball,libblend,libblendbench,libbluescreen,libcanvas,libcolorthres,libcroppadd,libdeinterlace,libedgedetection,liberase,libextract,libfps,libfreeze,libgaussianblur,libgradfun,libgradient,libgrain,libhqdn3d,libinvert,libmagnify,libmirror,libmotionblur,libmotiondetect,liboldmovie,libposterize,libpsychedelic,libpuzzle,libripple,librotate,libscale,libscene,libsepia,libsharpen,libtransform,libvhs,libwave}_plugin.so
+    usr/lib/vlc/plugins/video_output/{libfb,libvdummy,libvmem,libyuv}_plugin.so
+  ); _install
+}
+
+package_vlc-plugins-extra() {
+  pkgdesc+=" - extra plugins"
+  provides=(
+    liblinsys_hdsdi_plugin.so
+    libxcb_screen_plugin.so
+  )
+  depends=(
+    vlc-plugin-aalib=$pkgver-$pkgrel
+    vlc-plugin-aom=$pkgver-$pkgrel
+    vlc-plugin-aribb24=$pkgver-$pkgrel
+    vlc-plugin-aribb25=$pkgver-$pkgrel
+    vlc-plugin-ass=$pkgver-$pkgrel
+    vlc-plugin-avahi=$pkgver-$pkgrel
+    vlc-plugin-bluray=$pkgver-$pkgrel
+    vlc-plugin-caca=$pkgver-$pkgrel
+    vlc-plugin-cddb=$pkgver-$pkgrel
+    vlc-plugin-chromecast=$pkgver-$pkgrel
+    vlc-plugin-dca=$pkgver-$pkgrel
+    vlc-plugin-dvb=$pkgver-$pkgrel
+    vlc-plugin-dvd=$pkgver-$pkgrel
+    vlc-plugin-ffmpeg=$pkgver-$pkgrel
+    vlc-plugin-freetype=$pkgver-$pkgrel
+    vlc-plugin-gme=$pkgver-$pkgrel
+    vlc-plugin-kate=$pkgver-$pkgrel
+    vlc-plugin-lirc=$pkgver-$pkgrel
+    vlc-plugin-live555=$pkgver-$pkgrel
+    vlc-plugin-mad=$pkgver-$pkgrel
+    vlc-plugin-mdns=$pkgver-$pkgrel
+    vlc-plugin-modplug=$pkgver-$pkgrel
+    vlc-plugin-mpeg2=$pkgver-$pkgrel
+    vlc-plugin-mtp=$pkgver-$pkgrel
+    vlc-plugin-musepack=$pkgver-$pkgrel
+    vlc-plugin-nfs=$pkgver-$pkgrel
+    vlc-plugin-samplerate=$pkgver-$pkgrel
+    vlc-plugin-sdl=$pkgver-$pkgrel
+    vlc-plugin-sftp=$pkgver-$pkgrel
+    vlc-plugin-soxr=$pkgver-$pkgrel
+    vlc-plugin-srt=$pkgver-$pkgrel
+    vlc-plugin-udev=$pkgver-$pkgrel
+    vlc-plugin-upnp=$pkgver-$pkgrel
+    vlc-plugin-zvbi=$pkgver-$pkgrel
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    vlc-plugins-base=$pkgver-$pkgrel
+    glibc
+    libxcb
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/plugins/access/liblinsys_hdsdi_plugin.so
+    usr/lib/vlc/plugins/access/libxcb_screen_plugin.so
+  ); _install
+}
+
+package_vlc-plugins-video-output() {
+  pkgdesc+=" - video output plugins"
+  provides=(
+    libvlc_xcb_events.so
+    libvlc_vdpau.so
+    libxcb_hotkeys_plugin.so
+    libxcb_apps_plugin.so
+    libvaapi_filters_plugin.so
+    libvdpau_adjust_plugin.so
+    libvdpau_chroma_plugin.so
+    libvdpau_deinterlace_plugin.so
+    libvdpau_display_plugin.so
+    libvdpau_sharpen_plugin.so
+    libegl_wl_plugin.so
+    libegl_x11_plugin.so
+    libflaschen_plugin.so
+    libgl_plugin.so
+    libglconv_vaapi_drm_plugin.so
+    libglconv_vaapi_wl_plugin.so
+    libglconv_vaapi_x11_plugin.so
+    libglconv_vdpau_plugin.so
+    libglx_plugin.so
+    libwl_shell_plugin.so
+    libwl_shm_plugin.so
+    libxcb_window_plugin.so
+    libxcb_x11_plugin.so
+    libxcb_xv_plugin.so
+    libxdg_shell_plugin.so
+    libclone_plugin.so
+    libpanoramix_plugin.so
+    libwall_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    glibc
+    libgcc
+    libglvnd
+    libva
+    libx11
+    libxcb
+    wayland
+    xcb-util-keysyms
+  )
+  optdepends=(
+    'libva-intel-driver: for Intel VA-API drivers'
+    'libva-mesa-driver: for open-source VA-API drivers'
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/libvlc_vdpau.so*
+    usr/lib/vlc/libvlc_xcb_events.so*
+    usr/lib/vlc/plugins/control/libxcb_hotkeys_plugin.so
+    usr/lib/vlc/plugins/services_discovery/libxcb_apps_plugin.so
+    usr/lib/vlc/plugins/vaapi/libvaapi_filters_plugin.so
+    usr/lib/vlc/plugins/vdpau/{libvdpau_adjust,libvdpau_chroma,libvdpau_deinterlace,libvdpau_display,libvdpau_sharpen}_plugin.so
+    usr/lib/vlc/plugins/video_output/{libegl_wl,libegl_x11,libflaschen,libgl,libglconv_vaapi_drm,libglconv_vaapi_wl,libglconv_vaapi_x11,libglconv_vdpau,libglx,libwl_shell,libwl_shm,libxcb_window,libxcb_x11,libxcb_xv,libxdg_shell}_plugin.so
+    usr/lib/vlc/plugins/video_splitter/{libclone,libpanoramix,libwall}_plugin.so
+  ); _install
+}
+
+package_vlc-plugins-visualization() {
+  pkgdesc+=" - visualization plugins"
+  provides=(
+    libvisual_plugin.so
+    libprojectm_plugin.so
+    libgoom_plugin.so
+    libglspectrum_plugin.so
+  )
+  depends=(
+    libvlc=$pkgver-$pkgrel libvlccore.so
+    glibc
+    libgcc
+    libglvnd
+    libgoom2
+    libstdc++
+    projectm
+    ttf-dejavu
+  )
+
+  cd root; local files=(
+    usr/lib/vlc/plugins/visualization/{libvisual,libprojectm,libgoom,libglspectrum}_plugin.so
+  ); _install
+}
+
+# vim:set sw=2 sts=-1 et:

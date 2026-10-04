@@ -1,0 +1,187 @@
+# Maintainer: Juergen Hoetzel <juergen@archlinux.org>
+# Maintainer: Frederik Schwan <freswa at archlinux dot org>
+# Contributor: Jaroslav Lichtblau <svetlemodry@archlinux.org>
+# Contributor: Renchi Raju <renchi@green.tam.uiuc.edu>
+
+pkgbase=emacs
+pkgname=(emacs emacs-nox emacs-wayland)
+pkgver=31.1
+pkgrel=2
+arch=('x86_64')
+url='https://www.gnu.org/software/emacs/emacs.html'
+license=(GPL-3.0-or-later)
+depends=(
+  gmp
+  gnutls
+  lcms2
+  libgccjit
+  libotf
+  libpng
+  zlib
+)
+makedepends=(
+  gtk3
+  libgccjit
+  tree-sitter
+)
+source=(
+  https://ftp.gnu.org/gnu/emacs/${pkgname}-${pkgver}.tar.xz{,.sig}
+  01_all_treesit-0.26.patch
+  02_all_ts-query-pred.patch
+)
+b2sums=('c9f8cf37553c0e2913eb12d7e069735c23baca3b725332f17b4b4784d1e4987c9ae098dae669e65e49fa01d8b9a63e518b210640892216e0a9ae02e51f3d0581'
+        'SKIP'
+        '6a4a556ff6e47234c34e6d9b47fd7b51b47f0b66a4a1e6672b604555d48275de7c06afd105b9c4abf9a34eb1fc2148178e97434b9ae92b0345137dc849d5895c'
+        '6f54ca35f5703a248a3db3b39d9666ee28424cdb7240bd0c7a612f387e1cedf9142b6f5b54d00f11b63b97f28d18d763c47b664c36be00e7b07e17cb741712b1')
+validpgpkeys=(
+  '17E90D521672C04631B1183EE78DAE0F3115E06B'  # Eli Zaretskii <eliz@gnu.org>
+  'CEA1DE21AB108493CC9C65742E82323B8F4353EE'  # Stefan Kangas <stefankangas@gmail.com>
+  '8DC2487E51ABDD90B5C4753F0F56D0553B6D411B'  # Sean Whitton <spwhitton@spwhitton.name>
+) 
+
+prepare() {
+  cp --reflink=auto -ar ${pkgname}-${pkgver} ${pkgbase}-${pkgver}-nox
+  cp --reflink=auto -ar ${pkgname}-${pkgver} ${pkgbase}-${pkgver}-wayland
+}
+
+build() {
+  local _confflags=(
+    --sysconfdir=/etc
+    --prefix=/usr
+    --libexecdir=/usr/lib
+    --localstatedir=/var
+    --disable-build-details
+    --with-cairo
+    --with-harfbuzz
+    --with-libsystemd
+    --with-modules
+    --with-native-compilation=aot
+    --with-tree-sitter
+  )
+
+  export ac_cv_lib_gif_EGifPutExtensionLast=yes
+
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  cd ${pkgname}-${pkgver}
+  ./configure \
+    --with-x-toolkit=gtk3 \
+    "${_confflags[@]}"
+  make -j"${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+
+  cd ../${pkgbase}-${pkgver}-nox
+  ./configure \
+    --without-x \
+    --without-sound \
+    "${_confflags[@]}"
+  make -j"${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+
+  cd ../${pkgbase}-${pkgver}-wayland
+  ./configure \
+    --with-pgtk \
+    "${_confflags[@]}"
+  make bootstrap -j"${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+}
+
+# license shim for the three splits: ship upstream licence text (GPL-3.0-or-later)
+_emacs_licenses() {
+  local _l
+  for _l in COPYING COPYING.GPLv3 COPYING.LESSER LICENSE; do
+    if [[ -f $1/$_l ]]; then install -Dm644 "$1/$_l" -t "$2"; fi
+  done
+}
+
+package_emacs() {
+  pkgdesc='The extensible, customizable, self-documenting real-time display editor'
+  depends+=(
+    libacl.so
+    libdbus-1.so
+    libfontconfig.so
+    libfreetype.so
+    libgdk-3.so
+    libgdk_pixbuf-2.0.so
+    libgif.so
+    libgio-2.0.so
+    libglib-2.0.so
+    libgobject-2.0.so
+    libgtk-3.so
+    libharfbuzz.so
+    libtree-sitter.so
+  )
+  # trim: replaces — house standard drops stock
+  # replaces=(emacs-nativecomp)
+
+  cd ${pkgname}-${pkgver}
+  make DESTDIR="${pkgdir}" install
+
+  # fix user/root permissions on usr/share files
+  chown -R root:root "${pkgdir}/usr/share/emacs/${pkgver}"
+  # trim: man/info/locales — lean consumer-rebuild recipe (the elisp tree in
+  # /usr/share/emacs stays — it is the editor's runtime payload)
+  rm -rf "${pkgdir}/usr/share/man" "${pkgdir}/usr/share/info" "${pkgdir}/usr/share/locale"
+  _emacs_licenses "${pkgname}-${pkgver}" "${pkgdir}/usr/share/licenses/${pkgname}"
+}
+
+package_emacs-nox() {
+  pkgdesc='The extensible, customizable, self-documenting real-time display editor without X11 support'
+  depends=(
+    gmp
+    gnutls
+    hicolor-icon-theme
+    lcms2
+    libacl.so
+    libdbus-1.so
+    libgccjit
+    libncursesw.so
+    libsystemd.so
+    libtree-sitter.so
+    libxml2.so
+    zlib
+  )
+  provides=(emacs)
+  # trim: conflicts — house standard drops stock
+  # conflicts=(emacs)
+
+  cd ${pkgbase}-${pkgver}-nox
+  make DESTDIR="${pkgdir}" install
+
+  # fix user/root permissions on usr/share files
+  chown -R root:root "${pkgdir}/usr/share/emacs/${pkgver}"
+  # trim: man/info/locales — lean consumer-rebuild recipe
+  rm -rf "${pkgdir}/usr/share/man" "${pkgdir}/usr/share/info" "${pkgdir}/usr/share/locale"
+  _emacs_licenses "${pkgbase}-${pkgver}-nox" "${pkgdir}/usr/share/licenses/${pkgname}"
+}
+
+package_emacs-wayland() {
+  pkgdesc='The extensible, customizable, self-documenting real-time display editor with PGTK enabled'
+  depends+=(
+    libacl.so
+    libdbus-1.so
+    libfontconfig.so
+    libfreetype.so
+    libgdk-3.so
+    libgdk_pixbuf-2.0.so
+    libgif.so
+    libgio-2.0.so
+    libglib-2.0.so
+    libgobject-2.0.so
+    libgtk-3.so
+    libharfbuzz.so
+    libtree-sitter.so
+  )
+  provides=(emacs)
+  # trim: conflicts — house standard drops stock
+  # conflicts=(emacs)
+
+  cd ${pkgbase}-${pkgver}-wayland
+  make DESTDIR="${pkgdir}" install
+
+  # fix user/root permissions on usr/share files
+  chown -R root:root "${pkgdir}/usr/share/emacs/${pkgver}"
+  # trim: man/info/locales — lean consumer-rebuild recipe
+  rm -rf "${pkgdir}/usr/share/man" "${pkgdir}/usr/share/info" "${pkgdir}/usr/share/locale"
+  _emacs_licenses "${pkgbase}-${pkgver}-wayland" "${pkgdir}/usr/share/licenses/${pkgname}"
+}

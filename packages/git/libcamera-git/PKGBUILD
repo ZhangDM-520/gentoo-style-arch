@@ -1,0 +1,67 @@
+# Maintainer: auto-generated
+# Contributor: Gennadiy Mykhailiuta <gmykhailiuta@gmail.com> (AUR libcamera-git)
+# Contributor: Sourav Das <souravdas142@gmail.com> (AUR libcamera-git)
+
+pkgname=libcamera-git
+_pkgname=libcamera
+pkgver=0.7.2.r159.gc0049ea06
+pkgrel=1
+pkgdesc="A complex camera support library for Linux, Android, and ChromeOS (git build)"
+arch=('x86_64')
+url="https://libcamera.org/"
+license=(
+  Apache-2.0
+  CC0-1.0
+  'GPL-2.0-only WITH Linux-syscall-note'
+  GPL-2.0-or-later
+  LGPL-2.1-or-later
+  'GPL-2.0-or-later WITH Linux-syscall-note OR BSD-3-Clause'
+  'GPL-2.0-or-later WITH Linux-syscall-note OR MIT'
+)
+depends=('glibc' 'gnutls' 'libelf' 'libgcc' 'libstdc++' 'libunwind' 'libyaml' 'libyuv' 'sh' 'systemd-libs')
+makedepends=('cmake' 'git' 'meson' 'ninja' 'python-jinja' 'python-ply' 'python-pyyaml')
+# Delivers stock libcamera + libcamera-ipa (usr/lib/libcamera/ IPA modules and
+# v4l2 compat layer, stock's -ipa split). Stock -tools/-docs/gst-plugin/python
+# splits are dropped and not even built (see meson options below).
+provides=("libcamera=$pkgver" 'libcamera-ipa' 'libcamera.so' 'libcamera-base.so')
+conflicts=('libcamera' 'libcamera-ipa')
+# upstream moved hosting: git.libcamera.org redirects to freedesktop gitlab
+source=("git+https://gitlab.freedesktop.org/camera/${_pkgname}.git")
+b2sums=('SKIP')
+
+pkgver() {
+  cd "$_pkgname"
+  git describe --long --tags | sed 's/\([^-]*-g\)/r\1/;s/-/./g;s/^v//'
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  local _jobs="${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+
+  # stock enables v4l2/test; tests and the tool/app/plugin/bindings options are
+  # newer than the stale AUR reference — disabled here to keep the qt/gst/docs
+  # makedeps out (docs/tests trimmed per house style)
+  arch-meson "$_pkgname" build \
+    -D v4l2=enabled \
+    -D tracing=disabled \
+    -D test=false \
+    -D documentation=disabled \
+    -D cam=disabled \
+    -D cam-output-kms=disabled \
+    -D cam-output-sdl2=disabled \
+    -D cam-jpeg=disabled \
+    -D apps-output-dng=disabled \
+    -D qcam=disabled \
+    -D lc-compliance=disabled \
+    -D gstreamer=disabled \
+    -D pycamera=disabled
+  meson compile -C build -j "$_jobs"
+}
+
+package() {
+  meson install -C build --destdir "$pkgdir"
+  install -Dm644 "$_pkgname/LICENSES/"{BSD-3-Clause,Linux-syscall-note,MIT}.txt -t "$pkgdir/usr/share/licenses/$pkgname/"
+}

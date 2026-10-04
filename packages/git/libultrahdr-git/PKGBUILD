@@ -1,0 +1,47 @@
+# Maintainer: Daniel Bermond <dbermond@archlinux.org>
+
+# git recipe tracking upstream Google libultrahdr VCS (AUR libultrahdr-git
+# used as reference only)
+
+pkgname=libultrahdr-git
+pkgver=2.0.2.r32.g66821e0
+pkgrel=1
+pkgdesc='Codec for the Ultra HDR format (git build)'
+arch=('x86_64')
+url='https://github.com/google/libultrahdr'
+license=('Apache-2.0')
+depends=('glibc' 'libgcc' 'libjpeg-turbo' 'libstdc++')
+makedepends=('cmake' 'git')
+provides=("libultrahdr=$pkgver" 'libuhdr.so')
+conflicts=('libultrahdr')
+source=('git+https://github.com/google/libultrahdr.git')
+b2sums=('SKIP')
+
+pkgver() {
+  cd libultrahdr
+  git describe --long --tags | sed 's/\([^-]*-g\)/r\1/;s/-/./g;s/^v//'
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  # tests are left off: upstream pulls googletest via FetchContent at
+  # configure time (no network fetches from builds) and the suite needs it
+  cmake -B build -S libultrahdr \
+    -G 'Unix Makefiles' \
+    -D CMAKE_BUILD_TYPE=None \
+    -D CMAKE_INSTALL_PREFIX=/usr \
+    -D UHDR_BUILD_TESTS=OFF \
+    -Wno-dev
+  cmake --build build --parallel "${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+}
+
+package() {
+  DESTDIR="$pkgdir" cmake --install build
+  # upstream CMake does not install the bundled ultrahdr_app CLI (stock
+  # Arch ships it in the libultrahdr output)
+  install -Dm755 build/ultrahdr_app -t "$pkgdir/usr/bin"
+  install -Dm644 libultrahdr/LICENSE -t "$pkgdir/usr/share/licenses/$pkgname/"
+}

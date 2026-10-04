@@ -1,0 +1,21 @@
+pkgbase = libabw
+	pkgdesc = a library that parses the file format of AbiWord documents
+	pkgver = 0.1.4
+	pkgrel = 1
+	url = https://wiki.documentfoundation.org/DLP/Libraries/libabw
+	arch = x86_64
+	license = MPL-2.0
+	makedepends = doxygen
+	makedepends = gperf
+	makedepends = boost
+	depends = librevenge
+	depends = libxml2
+	depends = zlib
+	depends = glibc
+	depends = libstdc++
+	depends = libgcc
+	provides = libabw-0.1.so
+	source = https://dev-www.libreoffice.org/src/libabw/libabw-0.1.4.tar.xz
+	sha256sums = fa2685a3440da6e03a66a778480d93cb95f6064e4541e58e37397680760fd6a0
+
+pkgname = libabw

@@ -1,0 +1,69 @@
+# Maintainer: auto-generated
+# Contributor: éclairevoyant (AUR colord-git)
+# Contributor: Jan Alexander Steffens (heftig) <jan dot steffens at gmail dot com> (AUR colord-git / stock)
+
+pkgname=libcolord-git
+_pkgname=colord
+pkgver=1.4.8.r16.g56ccc23
+pkgrel=1
+pkgdesc="System daemon for managing color devices (client library, git build)"
+arch=('x86_64')
+url="https://www.freedesktop.org/software/colord/"
+license=('GPL-2.0-or-later')
+depends=('glib2' 'glibc' 'lcms2' 'libgcc' 'systemd-libs')
+makedepends=('git' 'gobject-introspection' 'libgusb' 'libgudev' 'meson' 'ninja' 'sqlite')
+provides=("libcolord=$pkgver" 'libcolord.so' 'libcolordcompat.so')
+conflicts=('libcolord')
+source=("git+https://github.com/hughsie/${_pkgname}")
+b2sums=('SKIP')
+# colord release tags are signed by Richard Hughes (stock pins ?signed#tag=);
+# branch HEAD is tracked, so nothing is pinned here.
+#validpgpkeys=('163EB50119225DB3DF8F49EA17ACBA8DFA970E17') # Richard Hughes <richard@hughsie.com>
+
+pkgver() {
+  cd "$_pkgname"
+  git describe --long --tags | sed 's/\([^-]*-g\)/r\1/;s/-/./g;s/^v//'
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  local _jobs="${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+
+  # -D daemon=false is upstream's newer option (absent in the stale AUR
+  # reference): builds only the client library + libcolordcompat and skips the
+  # daemon/polkit/udev/systemd/sane machinery of the colord/colord-sane splits
+  arch-meson "$_pkgname" build \
+    -D daemon=false \
+    -D libcolordcompat=true \
+    -D introspection=true \
+    -D vapi=false \
+    -D docs=false \
+    -D man=false \
+    -D tests=false \
+    -D print_profiles=false \
+    -D sane=false \
+    -D bash_completion=false \
+    -D udev_rules=false \
+    -D systemd=false \
+    -D argyllcms_sensor=false \
+    -D session_example=false
+  meson compile -C build -j "$_jobs"
+}
+
+package() {
+  # ship exactly stock libcolord's file set (the client-library split)
+  DESTDIR="$srcdir/dest" meson install -C build
+
+  local _dest="$srcdir/dest"
+  install -dm755 "$pkgdir/usr/include" "$pkgdir/usr/lib/pkgconfig" \
+    "$pkgdir/usr/lib/girepository-1.0" "$pkgdir/usr/share/gir-1.0"
+  cp -a "$_dest/usr/include/colord-1" "$pkgdir/usr/include/"
+  cp -a "$_dest/usr/lib/"libcolord*.so* "$pkgdir/usr/lib/"
+  cp -a "$_dest/usr/lib/pkgconfig/colord.pc" "$pkgdir/usr/lib/pkgconfig/"
+  cp -a "$_dest/usr/lib/girepository-1.0/Colord-1.0.typelib" "$pkgdir/usr/lib/girepository-1.0/"
+  cp -a "$_dest/usr/share/gir-1.0/Colord-1.0.gir" "$pkgdir/usr/share/gir-1.0/"
+  install -Dm644 "$_pkgname/COPYING" "$pkgdir/usr/share/licenses/$pkgname/COPYING"
+}

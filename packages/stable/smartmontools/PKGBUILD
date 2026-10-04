@@ -1,0 +1,68 @@
+# Maintainer: Giovanni Scafora <giovanni@archlinux.org>
+# Contributor: Jeff Mickey <jeff@archlinux.org>
+# Contributor: Jani Talikka <jani.talikka@gmail.com>
+# Contributor: Ralf Barth <archlinux.org@haggy.org>
+
+pkgname=smartmontools
+pkgver=7.5
+pkgrel=1
+pkgdesc='Control and monitor S.M.A.R.T. enabled ATA and SCSI Hard Drives'
+url='https://www.smartmontools.org/'
+license=('GPL-2.0-or-later')
+arch=('x86_64')
+depends=('bash'
+         'glibc'
+         'libgcc' 'libgcc_s.so'
+         'libcap-ng' 'libcap-ng.so'
+         'libstdc++' 'libstdc++.so'
+         'systemd-libs' 'libsystemd.so')
+makedepends=('systemd')
+optdepends=('s-nail: to get mail alerts to work')
+backup=('etc/smartd.conf'
+        'etc/conf.d/smartd')
+validpgpkeys=('0C9577FD2C4CFCB4B9A599640A30812EFF3AEFF5') # Smartmontools Signing Key (through 2025) <smartmontools-support@listi.jpberlin.de>
+source=("https://downloads.sourceforge.net/sourceforge/${pkgname}/${pkgname}-${pkgver}.tar.gz"{,.asc}
+        'smartd.conf')
+sha256sums=('690b83ca331378da9ea0d9d61008c4b22dde391387b9bbad7f29387f2595f76e'
+            'SKIP'
+            'c2c0f2f6b4a3f3d76da1c7706139297aef6e3f2a705eb7fdd800544812427c74')
+
+build() {
+  cd "${srcdir}/${pkgname}-${pkgver}"
+
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  ./configure \
+    --prefix=/usr \
+    --sbindir=/usr/bin \
+    --sysconfdir=/etc \
+    --with-drivedbdir \
+    --with-libcap-ng=yes \
+    --with-libsystemd=yes \
+    --with-systemdsystemunitdir=/usr/lib/systemd/system \
+    --with-systemdenvfile=/etc/conf.d/smartd \
+    --with-smartdscriptdir=/usr/share/smartmontools \
+    --with-smartdplugindir=/usr/share/smartmontools/smartd_warning.d
+
+  make -j"${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package() {
+  cd "${srcdir}/${pkgname}-${pkgver}"
+
+  sed -i -e "s:sysconfig/smartmontools:conf.d/smartd:g" smartd.service
+  sed -i -e "s:smartd_opts:SMARTD_ARGS:g" smartd.service
+
+  make DESTDIR="${pkgdir}" install
+
+  rm -rf "${pkgdir}"/etc/rc.d
+
+  # trim: man pages (Class B trim standard docs payload)
+  rm -rf "${pkgdir}"/usr/share/man
+
+  install -D -m0644 "${srcdir}"/smartd.conf "${pkgdir}/etc/conf.d/smartd"
+  install -Dm644 COPYING "${pkgdir}/usr/share/licenses/${pkgname}/COPYING"
+}

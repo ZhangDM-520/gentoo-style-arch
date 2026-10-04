@@ -1,0 +1,71 @@
+# Maintainer: auto-generated
+# AUR reference: libheif-git (Maintainer: Daniel Bermond <dbermond@archlinux.org>)
+pkgname=libheif-git
+_pkgname=libheif
+pkgver=1.23.5.r6.gd035da94
+pkgrel=1
+pkgdesc="HEIF and AVIF file format decoder and encoder (git build)"
+arch=('x86_64')
+url="https://github.com/strukturag/libheif/"
+license=('LGPL-3.0-or-later' 'MIT')
+depends=('aom' 'gcc-libs' 'glibc' 'libde265' 'libjpeg-turbo' 'libpng'
+         'libstdc++' 'libtiff' 'libwebp' 'openh264' 'x264' 'x265')
+makedepends=('git' 'cmake' 'dav1d' 'ffmpeg' 'openjpeg2' 'rav1e' 'svt-av1')
+optdepends=(
+    'dav1d: AV1 decoding'
+    'ffmpeg: hardware decode (plugin)'
+    'openjpeg2: JPEG2000 decoding'
+    'rav1e: AV1 encoding'
+    'svt-av1: AV1 encoding')
+provides=("libheif=$pkgver" 'libheif.so')
+conflicts=('libheif')
+source=("git+https://github.com/strukturag/libheif.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$_pkgname"
+  git describe --long --tags | sed 's/\([^-]*-g\)/r\1/;s/-/./g;s/^v//g'
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  # CMAKE_BUILD_TYPE=None: makepkg.conf owns the opt level (no hard-coded -O3).
+  # AUR ref disables AOM; stock libheif depends on aom, so its decoder/encoder
+  # are enabled here to supersede stock feature-for-feature.
+  cmake -B build -S "$_pkgname" \
+    -DCMAKE_BUILD_TYPE=None \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DCMAKE_INSTALL_LIBDIR=lib \
+    -DBUILD_TESTING=OFF \
+    -DWITH_AOM_DECODER=ON \
+    -DWITH_AOM_ENCODER=ON \
+    -DWITH_DAV1D=ON \
+    -DWITH_RAV1E=ON \
+    -DWITH_SvtEnc=ON \
+    -DWITH_FFMPEG_DECODER=ON \
+    -DWITH_FFMPEG_DECODER_PLUGIN=ON \
+    -DWITH_OpenJPEG_DECODER=ON \
+    -DWITH_KVAZAAR=OFF \
+    -DWITH_GDK_PIXBUF=OFF \
+    -Wno-dev
+  cmake --build build
+
+  # MIT license blocks for the executable tools (upstream ships them embedded
+  # in the tool sources; libheif itself is LGPL-3.0-or-later)
+  local _tool
+  for _tool in dec enc info thumbnailer; do
+    sed -n '/MIT[[:space:]]License$/,/^[[:space:]]*SOFTWARE\.$/p' \
+      "$_pkgname/examples/heif_${_tool}.cc" > "build/LICENSE-${_tool}-tool"
+    sed -i 's/^[[:space:]]*//' "build/LICENSE-${_tool}-tool"
+  done
+}
+
+package() {
+  DESTDIR="$pkgdir" cmake --install build
+  install -Dm644 "$_pkgname/COPYING" "$pkgdir/usr/share/licenses/$pkgname/COPYING"
+  install -Dm644 build/LICENSE-{dec,enc,info,thumbnailer}-tool \
+    -t "$pkgdir/usr/share/licenses/$pkgname"
+}

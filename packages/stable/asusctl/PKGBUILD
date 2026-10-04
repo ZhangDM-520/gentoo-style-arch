@@ -1,0 +1,89 @@
+# Maintainer: DeepChirp <deepchirp@archlinux.org>
+# Contributor: Mahdi Sarikhani <mahdisarikhani@outlook.com>
+# Contributor: Fabian Bornschein <fabiscafe@archlinux.org>
+# Contributor: Static_Rocket
+
+pkgbase=asusctl
+pkgname=(asusctl rog-control-center)
+pkgver=6.5.0
+pkgrel=1
+pkgdesc="Daemon and tools to control your ASUS ROG laptop"
+arch=('x86_64')
+url="https://asus-linux.org"
+license=('MPL-2.0')
+makedepends=('cargo' 'fontconfig')
+checkdepends=('clang' 'sdl2')
+source=("${pkgbase}-${pkgver}.tar.gz::https://github.com/OpenGamingCollective/asusctl/archive/${pkgver}.tar.gz")
+sha256sums=('edceeab080df670a3851af9815c082949e5c0d14be20fc41216d4a7e84d8fca8')
+
+prepare() {
+    cd "${pkgbase}-${pkgver}"
+
+    cargo fetch --locked --target host-tuple
+}
+
+build() {
+    cd "${pkgbase}-${pkgver}"
+
+    export CARGO_PROFILE_RELEASE_LTO=true
+    export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
+    cargo build --frozen --release -j "${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+check() {
+    cd "${pkgbase}-${pkgver}"
+
+    cargo test --workspace --frozen -j "${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package_asusctl() {
+    pkgdesc="An utility for Linux to control many aspects of various ASUS laptops"
+    depends=(
+        "glibc"
+        "libgcc"
+        "libusb"
+        "systemd-libs"
+    )
+    optdepends=(
+        'rog-control-center: graphical user interface for asusctl'
+    )
+    install=asusctl.install
+
+    cd "${pkgbase}-${pkgver}"
+
+    make DESTDIR="${pkgdir}" \
+        install-asusctl \
+        install-asusd \
+        install-asusd_user \
+        install-asus-shutdown \
+        install-data-asusd \
+        install-data-asusd_user
+
+    # trim: man pages (docs) — not part of the maintained target
+    rm -rf "${pkgdir}"/usr/share/man
+
+    install -Dm644 LICENSE -t "${pkgdir}/usr/share/licenses/asusctl/"
+}
+
+package_rog-control-center() {
+    pkgdesc="Graphical user interface for asusctl"
+    depends=(
+        "asusctl=${pkgver}"
+        "fontconfig"
+        "glibc"
+        "hicolor-icon-theme"
+        "libgcc"
+        "systemd-libs"
+    )
+
+    cd "${pkgbase}-${pkgver}"
+
+    make DESTDIR="${pkgdir}" \
+        install-rog_gui \
+        install-data-rog_gui
+
+    # trim: man pages (docs) — not part of the maintained target
+    rm -rf "${pkgdir}"/usr/share/man
+
+    install -Dm644 LICENSE -t "${pkgdir}/usr/share/licenses/rog-control-center/"
+}

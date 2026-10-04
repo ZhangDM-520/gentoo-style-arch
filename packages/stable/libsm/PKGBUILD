@@ -1,0 +1,38 @@
+# Maintainer: Andreas Radke <andyrtr@archlinux.org>
+# Contributor: Jan de Groot <jgc@archlinux.org>
+
+pkgname=libsm
+pkgver=1.2.6
+pkgrel=1
+pkgdesc="X11 Session Management library"
+arch=('x86_64')
+license=('MIT' 'MIT-open-group')
+url="https://xorg.freedesktop.org/"
+depends=('libice' 'util-linux-libs' 'xorgproto' 'glibc')
+makedepends=('xorg-util-macros' 'xtrans')
+source=(${url}/releases/individual/lib/libSM-${pkgver}.tar.xz{,.sig})
+sha512sums=('e544a1dc49a03390f76af35837bfd01f749b806d88d3ee806f20311c47ff53d0aeea4744feb875958031b17d50b57a89dcc41d81241c09333c88b268c44653a7'
+            'SKIP')
+validpgpkeys=('4A193C06D35E7C670FA4EF0BA2FB9E081F2D130E') # Alan Coopersmith <alanc@freedesktop.org>
+
+build() {
+  cd libSM-${pkgver}
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+  ./configure --prefix=/usr --sysconfdir=/etc
+  make
+}
+
+package() {
+  cd libSM-${pkgver}
+  provides=(libSM.so)
+
+  make DESTDIR="${pkgdir}" install
+  # trim: DocBook reference docs (doc/ SMlib.xml + xsmp.xml) — Class B
+  # trim standard (docs payload)
+  rm -rf "$pkgdir"/usr/share/doc
+
+  install -Dm644 COPYING "${pkgdir}/usr/share/licenses/${pkgname}/COPYING"
+}

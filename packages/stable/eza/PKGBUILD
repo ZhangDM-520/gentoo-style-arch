@@ -1,0 +1,72 @@
+# Maintainer: kpcyrd <kpcyrd[at]archlinux[dot]org>
+# Maintainer: Caleb Maclennan <caleb@alerque.com>
+# Maintainer: Orhun Parmaksız <orhun@archlinux.org>
+
+pkgname=eza
+pkgver=0.23.5
+pkgrel=2
+pkgdesc="A modern replacement for ls (community fork of exa)"
+url="https://github.com/eza-community/$pkgname"
+arch=(x86_64)
+license=(EUPL-1.2)
+provides=(exa)
+# trim: stock's conflicts/replaces=(exa) — house recipes carry no
+# conflicts/replaces; the exa rename is long settled and provides=(exa) keeps
+# the virtual capability for old consumers
+depends=(glibc # libc.so libm.so
+         libgcc libgcc_s.so
+         libgit2 libgit2.so)
+makedepends=(cargo)
+_archive="$pkgname-$pkgver"
+source=("$url/archive/refs/tags/v$pkgver/$_archive.tar.gz")
+sha256sums=('bbf179f2611c904014431740b559e8055276c12fcf978a7e31c271663548337f')
+b2sums=('dd5c8d231210000db2a9bbe3d4063eb1b6a00fd3336c8424861664250dd2948a4d3b1f3d2fd0a4966b0ef68151c26bf8e3236f1a64142c9ab960cf20e62cb2e3')
+
+_srcenv() {
+	cd "$_archive"
+	export CARGO_HOME="$srcdir"
+	# House job budget (the builder exports GSA_BUILD_JOBS).
+	export CARGO_BUILD_JOBS="${GSA_BUILD_JOBS:-$(nproc)}"
+	export CARGO_PROFILE_RELEASE_DEBUG=2
+	export CARGO_PROFILE_RELEASE_STRIP=false
+	export CARGO_PROFILE_RELEASE_LTO=true
+	export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
+	# CARGO_PROFILE_RELEASE_OPT_LEVEL dropped (house: optimization is owned by
+	# the environment/makepkg.conf — cargo's release default already applies)
+	CFLAGS+=' -ffat-lto-objects'
+	# House style: mold linker when available (runtime-guarded, no output effect).
+	command -v mold >/dev/null 2>&1 && RUSTFLAGS+=' -C link-arg=-fuse-ld=mold'
+	# Make sure the build fails if our system libgit2 is out
+	# of range rather than silently starting to vendor it.
+	export LIBGIT2_NO_VENDOR=1
+}
+
+prepare() {
+	_srcenv
+	cargo fetch --locked --target host-tuple
+}
+
+build() {
+	_srcenv
+	cargo build --frozen --release
+}
+
+check() {
+	_srcenv
+	cargo test --frozen --release
+	target/release/eza -la
+}
+
+package() {
+	cd "$_archive"
+	install -Dm0755 -t "$pkgdir/usr/bin/" "target/release/$pkgname"
+	ln -s "$pkgname" "$pkgdir/usr/bin/exa"
+
+	install -Dm0644 -t "$pkgdir/usr/share/bash-completion/completions/" "completions/bash/$pkgname"
+	install -Dm0644 -t "$pkgdir/usr/share/zsh/site-functions/" "completions/zsh/_$pkgname"
+	install -Dm0644 -t "$pkgdir/usr/share/fish/vendor_completions.d/" "completions/fish/$pkgname.fish"
+
+	# trim: man pages (man1 eza.1 + man5 eza_colors.5/eza_colors-explanation.5)
+	# and the pandoc makedep that generated them — docs not shipped
+	install -Dm0644 -t "$pkgdir/usr/share/licenses/$pkgname/" LICENSE.txt
+}

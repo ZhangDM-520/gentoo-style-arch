@@ -1,0 +1,48 @@
+# Maintainer: Tobias Powalowski <tpowa@archlinux.org>
+# Contributor: Tom Newsom <Jeepster@gmx.co.uk>
+
+pkgname=gawk
+pkgver=5.4.1
+pkgrel=1
+pkgdesc="GNU version of awk"
+arch=('x86_64')
+url="https://www.gnu.org/software/gawk/"
+license=('GPL-3.0-or-later')
+depends=('sh' 'glibc' 'mpfr')
+# Stock virtual provide kept (unpinned, load-bearing). No soname provide: gawk
+# ships only dlopened extension modules under /usr/lib/gawk (no DT_SONAME).
+provides=('awk')
+source=(https://ftp.gnu.org/pub/gnu/${pkgname}/${pkgname}-${pkgver}.tar.gz{,.sig}
+)
+validpgpkeys=('D1967C63788713177D861ED7DF597815937EC0D2') # Arnold Robbins
+b2sums=('657cc8fcf0e51e2637b456a209c676a05d37f2740522e3fde8b7ff04fbb98019baed2b353269f822ee638e45a2770b9fa8fd3f66f95dd2e63c4e41e90c9dd682'
+        'SKIP')
+
+build() {
+  cd ${pkgname}-${pkgver}
+
+  # House style: mold linker when available
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  ./configure --prefix=/usr --libexecdir=/usr/lib --sysconfdir=/etc --without-libsigsegv
+  make -j"${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+# trim: test suite (check()/make check) dropped (Class B tests)
+
+package() {
+  cd ${pkgname}-${pkgver}
+  make DESTDIR="${pkgdir}" install
+
+  # trim: man pages (gawk.1 etc.) + info manual + gettext locales
+  #       (man/info/locales)
+  rm -rf "$pkgdir/usr/share/man" "$pkgdir/usr/share/info" "$pkgdir/usr/share/locale"
+
+  # license: ship the upstream licence text(s) (GPL-3.0-or-later)
+  local _l
+  for _l in COPYING LICENSE; do
+    [[ -f $_l ]] && install -Dm644 "$_l" -t "$pkgdir/usr/share/licenses/$pkgname/"
+  done
+}

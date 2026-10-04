@@ -1,0 +1,90 @@
+# Maintainer: Chocobo1 <chocobo1 AT archlinux DOT net>
+# Recipe adapted for the gentoo-style-arch fleet; tracks upstream VCS directly.
+# The AUR package of the same name was used as a reference only.
+
+pkgbase=elfutils-git
+pkgname=(elfutils-git libelf-git)
+pkgver=0.194.r34.g9129bee5
+pkgrel=1
+pkgdesc="Utilities and libraries to handle ELF object files and DWARF debugging information (git build)"
+arch=('x86_64')
+url="https://sourceware.org/elfutils/"
+license=('GPL-2.0-or-later AND GPL-3.0-or-later AND LGPL-3.0-or-later')
+depends=('glibc' 'libgcc' 'libstdc++' 'json-c' 'libarchive.so' 'libbz2.so' 'libcurl.so' 'liblzma.so' 'libmicrohttpd.so' 'libsqlite3.so' 'libz.so' 'libzstd.so' 'sh')
+makedepends=('bzip2' 'curl' 'git' 'libarchive' 'libmicrohttpd' 'sqlite' 'xz' 'zlib' 'zstd')
+options=('staticlibs')
+source=("git+https://sourceware.org/git/elfutils.git")
+b2sums=('SKIP')
+
+pkgver() {
+  cd elfutils
+
+  git describe --long --tags | sed 's/^elfutils-//;s/\([^-]*-g\)/r\1/;s/-/./g'
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  cd elfutils
+
+  autoreconf -fi
+  CFLAGS="$CFLAGS -ffat-lto-objects -g" \
+  CXXFLAGS="$CXXFLAGS -ffat-lto-objects -g" \
+  ./configure \
+    --prefix="/usr" \
+    --program-prefix="eu-" \
+    --enable-deterministic-archives \
+    --enable-maintainer-mode
+  make -j"${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+_pick() {
+  local p="$1" f d; shift
+  for f; do
+    d="$srcdir/$p/${f#$pkgdir/}"
+    mkdir -p "$(dirname "$d")"
+    mv "$f" "$d"
+    rmdir -p --ignore-fail-on-non-empty "$(dirname "$f")"
+  done
+}
+
+package_elfutils-git() {
+  pkgdesc="Utilities and libraries to handle ELF object files and DWARF debugging information (git build)"
+  depends=('glibc' 'libelf-git' 'libgcc' 'libstdc++' 'json-c' 'libarchive.so' 'libbz2.so' 'libcurl.so' 'liblzma.so' 'libmicrohttpd.so' 'libsqlite3.so' 'libz.so' 'libzstd.so' 'sh')
+  provides=("elfutils=$pkgver" "debuginfod=$pkgver" 'libdw.so' 'libasm.so' 'libdebuginfod.so')
+  conflicts=('elfutils' 'debuginfod')
+
+  make -C elfutils DESTDIR="$pkgdir" install
+
+  # libelf moves to the libelf-git output (stock Arch 'libelf' split)
+  _pick libelf \
+    "$pkgdir"/usr/lib/libelf.so* \
+    "$pkgdir"/usr/lib/libelf.a \
+    "$pkgdir"/usr/lib/pkgconfig/libelf.pc \
+    "$pkgdir"/usr/include/libelf.h \
+    "$pkgdir"/usr/include/gelf.h \
+    "$pkgdir"/usr/include/nlist.h
+
+  # upstream installs its own elf.h only when the system lacks one;
+  # glibc-git owns /usr/include/elf.h in the fleet — hand it over only if present
+  if [ -e "$pkgdir/usr/include/elf.h" ]; then
+    _pick libelf "$pkgdir"/usr/include/elf.h
+  fi
+
+  install -Dm644 elfutils/COPYING elfutils/COPYING-GPLV2 elfutils/COPYING-LGPLV3 \
+    -t "$pkgdir/usr/share/licenses/$pkgname"
+}
+
+package_libelf-git() {
+  pkgdesc="Libraries to handle ELF object files (git build)"
+  depends=('glibc')
+  provides=("libelf=$pkgver" 'libelf.so')
+  conflicts=('libelf')
+  backup=()
+
+  mv "$srcdir"/libelf/* "$pkgdir"
+
+  install -Dm644 elfutils/COPYING-LGPLV3 -t "$pkgdir/usr/share/licenses/$pkgname"
+}

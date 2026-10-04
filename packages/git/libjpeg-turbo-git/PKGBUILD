@@ -1,0 +1,46 @@
+# Maintainer: auto-generated
+# AUR reference: libjpeg-turbo-git (Maintainer: Chocobo1 <chocobo1 AT archlinux DOT net>)
+pkgname=libjpeg-turbo-git
+_pkgname=libjpeg-turbo
+pkgver=3.2.0.r2.g8a99315b
+pkgrel=1
+pkgdesc="JPEG codec with SIMD accelerated compression and decompression (git build)"
+arch=('x86_64')
+url="https://libjpeg-turbo.org/"
+license=('BSD-3-Clause' 'IJG')
+depends=('glibc')
+makedepends=('git' 'cmake' 'nasm')
+provides=("libjpeg-turbo=$pkgver" 'libjpeg.so' 'libturbojpeg.so')
+conflicts=('libjpeg-turbo')
+options=('staticlibs')
+source=("git+https://github.com/libjpeg-turbo/libjpeg-turbo.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$_pkgname"
+  git describe --long --tags | sed 's/\([^-]*-g\)/r\1/;s/-/./g;s/^v//g'
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  # CMAKE_BUILD_TYPE=None: makepkg.conf owns the opt level (no hard-coded -O3);
+  # -ffat-lto-objects kept: static + shared objects must both stay usable
+  CFLAGS="$CFLAGS -ffat-lto-objects" \
+  CXXFLAGS="$CXXFLAGS -ffat-lto-objects" \
+  cmake -B _build -S "$_pkgname" \
+    -DCMAKE_BUILD_TYPE=None \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DCMAKE_INSTALL_LIBDIR=lib \
+    -DWITH_JPEG8=1
+  cmake --build _build
+}
+
+package() {
+  DESTDIR="$pkgdir" cmake --install _build
+  # required by other software (stock installs it too)
+  install -Dm644 "$_pkgname/src/jpegint.h" "$pkgdir/usr/include/jpegint.h"
+  install -Dm644 "$_pkgname/LICENSE.md" -t "$pkgdir/usr/share/licenses/$pkgname"
+}

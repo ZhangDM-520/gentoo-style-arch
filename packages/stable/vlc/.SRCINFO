@@ -1,0 +1,1017 @@
+pkgbase = vlc
+	pkgdesc = Free and open source cross-platform multimedia player and framework
+	pkgver = 3.0.23_2
+	pkgrel = 16
+	url = https://www.videolan.org/vlc/
+	arch = x86_64
+	license = GPL-2.0-or-later
+	license = LGPL-2.1-or-later
+	makedepends = a52dec
+	makedepends = aalib
+	makedepends = abseil-cpp
+	makedepends = alsa-lib
+	makedepends = aom
+	makedepends = aribb24
+	makedepends = aribb25
+	makedepends = avahi
+	makedepends = bash
+	makedepends = cairo
+	makedepends = dav1d
+	makedepends = dbus
+	makedepends = faad2
+	makedepends = ffmpeg
+	makedepends = flac
+	makedepends = fluidsynth
+	makedepends = fontconfig
+	makedepends = freetype2
+	makedepends = fribidi
+	makedepends = gdk-pixbuf2
+	makedepends = git
+	makedepends = glib2
+	makedepends = glibc
+	makedepends = gnutls
+	makedepends = gst-plugins-base-libs
+	makedepends = gtk3
+	makedepends = harfbuzz
+	makedepends = hicolor-icon-theme
+	makedepends = jack
+	makedepends = libarchive
+	makedepends = libass
+	makedepends = libavc1394
+	makedepends = libbluray
+	makedepends = libcaca
+	makedepends = libcddb
+	makedepends = libdc1394
+	makedepends = libdca
+	makedepends = libdvbpsi
+	makedepends = libdvdcss
+	makedepends = libdvdnav
+	makedepends = libdvdread
+	makedepends = libgcc
+	makedepends = libglvnd
+	makedepends = libgme
+	makedepends = libgoom2
+	makedepends = libjpeg-turbo
+	makedepends = libkate
+	makedepends = libmad
+	makedepends = libmatroska
+	makedepends = libmicrodns
+	makedepends = libmodplug
+	makedepends = libmpcdec
+	makedepends = libmpeg2
+	makedepends = libmtp
+	makedepends = libnfs
+	makedepends = libnotify
+	makedepends = libogg
+	makedepends = libpng
+	makedepends = libproxy
+	makedepends = libpulse
+	makedepends = librsvg
+	makedepends = libsamplerate
+	makedepends = libsecret
+	makedepends = libshout
+	makedepends = libsoxr
+	makedepends = libssh2
+	makedepends = libstdc++
+	makedepends = libtheora
+	makedepends = libtiger
+	makedepends = libupnp
+	makedepends = libva
+	makedepends = libvorbis
+	makedepends = libvpx
+	makedepends = libx11
+	makedepends = libxcb
+	makedepends = libxinerama
+	makedepends = libxml2
+	makedepends = libxpm
+	makedepends = lirc
+	makedepends = live-media
+	makedepends = lua51
+	makedepends = mesa
+	makedepends = mpg123
+	makedepends = opus
+	makedepends = pcsclite
+	makedepends = projectm
+	makedepends = protobuf
+	makedepends = qt5-base
+	makedepends = qt5-svg
+	makedepends = qt5-x11extras
+	makedepends = sdl12-compat
+	makedepends = sdl_image
+	makedepends = smbclient
+	makedepends = speex
+	makedepends = speexdsp
+	makedepends = srt
+	makedepends = systemd-libs
+	makedepends = taglib
+	makedepends = twolame
+	makedepends = wayland
+	makedepends = wayland-protocols
+	makedepends = x264
+	makedepends = x265
+	makedepends = xcb-util-keysyms
+	makedepends = xosd
+	makedepends = zlib
+	makedepends = zvbi
+	source = git+https://code.videolan.org/videolan/vlc.git#tag=3.0.23-2
+	source = update-vlc-plugin-cache.hook
+	source = 0001-Use-reproducible-data-for-build-user-and-host.patch
+	source = 0002-Adjust-hardcoded-font-paths-for-ttf-dejavu.patch
+	source = 0003-Adjust-includes-for-build-with-gstreamer-1.28.patch
+	sha512sums = 7a8700de9b8c458474c6d43df5306f2d59ead93a665d64ebf7d4d0b38b378abc18e065c47fa04f85ff1ea51b3aff59bf6a6d6ac346991c4cf0ad78a3d9169150
+	sha512sums = b247510ffeadfd439a5dadd170c91900b6cdb05b5ca00d38b1a17c720ffe5a9f75a32e0cb1af5ebefdf1c23c5acc53513ed983a736e8fa30dd8fad237ef49dd3
+	sha512sums = 9d72267ac97c998a12435041ed9ff6010f422d21505b8074ebb54bc6c8ee56532e0706489415fa725c541a5271f36db1614c11ec3c82dd354c36af97c82972ad
+	sha512sums = f5452e7fdbaa273f088e3accaea46687ff7dd8479a89e266987208aff8ddae2a0bb87bd0a602508d1a7f7d7fc9447e9c69eb0e3f84de9643d6213757e9a7cfb5
+	sha512sums = 232f5595356a9864f89caf36f7ff3d81ba58b9f76b2a39c5540837b705e21a7a8c6ae2980303d6ba8bc589f4664db2fe25956b1d7f8f420c4b216f354866715c
+	b2sums = 7408f02525e27a9078cae120156ca0821cc898aa8e655e04af2d085fe1d59ef33b549a3bc628ceb208e14cc2dd5c1a1b21ec8f68c7379b065bca89c9fb882c83
+	b2sums = fece25c3d56af403962b82e1ac91d1b06791ec2cc282d23c91d2608c8614145596f02e00457047ea688c30bf11f422bcc4748f08ec10a70cd5e79c417bf1eda1
+	b2sums = 8f5568fe8c378b266c4de91070aa262f632d074801bae61cdc160873b4a22f12805a5469905b92c27af0861c80e81a541d0fdf72c5f10d1436cc25086327faea
+	b2sums = 59f6ac6b3890667c08a6d4772ffc9d9be70443588e3407ef0f8f89f5b9e2f55d14915c0a136b47c27236a18f1679c8aef12c61cf5ef52345818a31d94a50f7d2
+	b2sums = c94a9744d844cfc5cec0c5de616fced2f36fbffdda2689a5fa75ed2450220fe79d69b946caad120631a160549130e1b2286067d0eb1db17083c35fd1d1cea0db
+
+pkgname = libvlc
+	pkgdesc = Free and open source cross-platform multimedia player and framework - library
+	depends = dbus
+	depends = glibc
+	depends = libgcc
+	provides = libvlc.so
+	provides = libvlccore.so
+
+pkgname = vlc-cli
+	pkgdesc = Free and open source cross-platform multimedia player and framework - command line interface
+	depends = libvlc=3.0.23_2-16
+	depends = libvlc.so
+	depends = vlc-plugins-base=3.0.23_2-16
+	depends = bash
+	depends = glibc
+	optdepends = vlc-plugin-lua: for Lua scripting plugins
+
+pkgname = vlc-gui-qt
+	pkgdesc = Free and open source cross-platform multimedia player and framework - Qt GUI
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = vlc-cli=3.0.23_2-16
+	depends = vlc-plugin-lua=3.0.23_2-16
+	depends = vlc-plugin-pulse=3.0.23_2-16
+	depends = vlc-plugins-base=3.0.23_2-16
+	depends = vlc-plugins-video-output=3.0.23_2-16
+	depends = bash
+	depends = glibc
+	depends = libgcc
+	depends = libstdc++
+	depends = libx11
+	depends = qt5-base
+	depends = qt5-svg
+	depends = qt5-x11extras
+	depends = qt5-wayland
+	depends = wayland
+	optdepends = vlc-plugin-libsecret: for libsecret/gnome-keyring support on Gnome
+	optdepends = vlc-plugin-notify: for notification support
+	optdepends = vlc-plugins-extra: for extra plugins
+	optdepends = vlc-plugins-visualization: for visualization plugins
+	provides = libqt_plugin.so
+
+pkgname = vlc-plugin-aalib
+	pkgdesc = Free and open source cross-platform multimedia player and framework - ASCII art video output plugin
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = vlc-plugins-base=3.0.23_2-16
+	depends = aalib
+	depends = glibc
+	depends = libx11
+	provides = libaa_plugin.so
+
+pkgname = vlc-plugin-aom
+	pkgdesc = Free and open source cross-platform multimedia player and framework - AOM AV1 plugin
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = vlc-plugins-base=3.0.23_2-16
+	depends = aom
+	depends = glibc
+	provides = libaom_plugin.so
+
+pkgname = vlc-plugin-archive
+	pkgdesc = Free and open source cross-platform multimedia player and framework - stream extractor plugin
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = glibc
+	depends = libarchive
+	provides = libarchive_plugin.so
+
+pkgname = vlc-plugin-aribb24
+	pkgdesc = Free and open source cross-platform multimedia player and framework - ARIB STD-B24 plugins
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = vlc-plugins-base=3.0.23_2-16
+	depends = aribb24
+	depends = glibc
+	provides = libaribsub_plugin.so
+
+pkgname = vlc-plugin-aribb25
+	pkgdesc = Free and open source cross-platform multimedia player and framework - ARIB STD-B25 plugin
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = vlc-plugins-base=3.0.23_2-16
+	depends = aribb25
+	depends = glibc
+	depends = pcsclite
+	provides = libaribcam_plugin.so
+
+pkgname = vlc-plugin-ass
+	pkgdesc = Free and open source cross-platform multimedia player and framework - SSA/ASS subtitle plugin
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = vlc-plugins-base=3.0.23_2-16
+	depends = glibc
+	depends = libass
+	provides = liblibass_plugin.so
+
+pkgname = vlc-plugin-avahi
+	pkgdesc = Free and open source cross-platform multimedia player and framework - mDNS/DNS-SD plugin
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = vlc-plugins-base=3.0.23_2-16
+	depends = avahi
+	depends = glibc
+	provides = libavahi_plugin.so
+
+pkgname = vlc-plugin-bluray
+	pkgdesc = Free and open source cross-platform multimedia player and framework - Blu-ray plugin
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = vlc-plugins-base=3.0.23_2-16
+	depends = glibc
+	depends = libbluray
+	provides = liblibbluray_plugin.so
+
+pkgname = vlc-plugin-caca
+	pkgdesc = Free and open source cross-platform multimedia player and framework - Color ASCII art video output plugin
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = vlc-plugins-base=3.0.23_2-16
+	depends = glibc
+	depends = libcaca
+	depends = libx11
+	provides = libcaca_plugin.so
+
+pkgname = vlc-plugin-cddb
+	pkgdesc = Free and open source cross-platform multimedia player and framework - CDDB plugin
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = vlc-plugins-base=3.0.23_2-16
+	depends = glibc
+	depends = libcddb
+	provides = libcdda_plugin.so
+
+pkgname = vlc-plugin-chromecast
+	pkgdesc = Free and open source cross-platform multimedia player and framework - Chromecast plugin
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = vlc-plugins-base=3.0.23_2-16
+	depends = abseil-cpp
+	depends = glibc
+	depends = libgcc
+	depends = libstdc++
+	depends = protobuf
+	provides = libstream_out_chromecast_plugin.so
+
+pkgname = vlc-plugin-dca
+	pkgdesc = Free and open source cross-platform multimedia player and framework - DTS Coherent Acoustics plugin
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = vlc-plugins-base=3.0.23_2-16
+	depends = glibc
+	depends = libdca
+	provides = libdca_plugin.so
+
+pkgname = vlc-plugin-dvb
+	pkgdesc = Free and open source cross-platform multimedia player and framework - DVB plugins
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = vlc-plugins-base=3.0.23_2-16
+	depends = aribb24
+	depends = glibc
+	depends = libdvbpsi
+	provides = libdvb_plugin.so
+	provides = libts_plugin.so
+	provides = libmux_ts_plugin.so
+
+pkgname = vlc-plugin-dvd
+	pkgdesc = Free and open source cross-platform multimedia player and framework - DVD plugins
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = vlc-plugins-base=3.0.23_2-16
+	depends = glibc
+	depends = libdvdnav
+	depends = libdvdread
+	optdepends = libdvdcss: for decoding encrypted DVDs
+	provides = libdvdnav_plugin.so
+	provides = libdvdread_plugin.so
+
+pkgname = vlc-plugin-ffmpeg
+	pkgdesc = Free and open source cross-platform multimedia player and framework - FFMPEG plugins
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = vlc-plugins-base=3.0.23_2-16
+	depends = vlc-plugins-video-output=3.0.23_2-16
+	depends = libvlc_vdpau.so
+	depends = ffmpeg
+	depends = libavcodec.so
+	depends = libavformat.so
+	depends = libavutil.so
+	depends = libswscale.so
+	depends = glibc
+	depends = libva
+	depends = libx11
+	provides = libavio_plugin.so
+	provides = libavcodec_plugin.so
+	provides = libvaapi_drm_plugin.so
+	provides = libvaapi_plugin.so
+	provides = libavformat_plugin.so
+	provides = libpacketizer_avparser_plugin.so
+	provides = libvdpau_avcodec_plugin.so
+	provides = libswscale_plugin.so
+
+pkgname = vlc-plugin-freetype
+	pkgdesc = Free and open source cross-platform multimedia player and framework - subtitle and on screen display text rendering support
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = vlc-plugins-base=3.0.23_2-16
+	depends = fontconfig
+	depends = freetype2
+	depends = fribidi
+	depends = glibc
+	depends = harfbuzz
+	provides = libfreetype_plugin.so
+
+pkgname = vlc-plugin-gme
+	pkgdesc = Free and open source cross-platform multimedia player and framework - Game music emulation plugin
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = vlc-plugins-base=3.0.23_2-16
+	depends = glibc
+	depends = libgme
+	provides = libgme_plugin.so
+
+pkgname = vlc-plugin-gnutls
+	pkgdesc = Free and open source cross-platform multimedia player and framework - GnuTLS plugin
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = glibc
+	depends = gnutls
+	provides = libgnutls_plugin.so
+
+pkgname = vlc-plugin-jack
+	pkgdesc = Free and open source cross-platform multimedia player and framework - JACK plugin
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = vlc-plugins-base=3.0.23_2-16
+	depends = glibc
+	depends = jack
+	depends = libjack.so
+	provides = libaccess_jack_plugin.so
+	provides = libjack_plugin.so
+
+pkgname = vlc-plugin-jpeg
+	pkgdesc = Free and open source cross-platform multimedia player and framework - JPEG plugin
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = glibc
+	depends = libjpeg-turbo
+	provides = libjpeg_plugin.so
+
+pkgname = vlc-plugin-kate
+	pkgdesc = Free and open source cross-platform multimedia player and framework - kate plugin
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = vlc-plugins-base=3.0.23_2-16
+	depends = glibc
+	depends = libkate
+	depends = libtiger
+	provides = libkate_plugin.so
+
+pkgname = vlc-plugin-libsecret
+	pkgdesc = Free and open source cross-platform multimedia player and framework - libsecret/gnome-keyring/kwallet plugin
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = vlc-plugins-base=3.0.23_2-16
+	depends = glib2
+	depends = glibc
+	depends = libsecret
+	provides = libsecret_plugin.so
+
+pkgname = vlc-plugin-lirc
+	pkgdesc = Free and open source cross-platform multimedia player and framework - Infrared remote control plugin
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = vlc-plugins-base=3.0.23_2-16
+	depends = glibc
+	depends = lirc
+	provides = liblirc_plugin.so
+
+pkgname = vlc-plugin-live555
+	pkgdesc = Free and open source cross-platform multimedia player and framework - live555 RTP/RSTP client plugin
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = vlc-plugins-base=3.0.23_2-16
+	depends = glibc
+	depends = libgcc
+	depends = libstdc++
+	depends = live-media
+	provides = liblive555_plugin.so
+
+pkgname = vlc-plugin-lua
+	pkgdesc = Free and open source cross-platform multimedia player and framework - Lua scripting plugins
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = vlc-plugins-base=3.0.23_2-16
+	depends = glibc
+	depends = libgcc
+	depends = lua51
+	optdepends = lua-socket: for http interface
+	provides = liblua_plugin.so
+
+pkgname = vlc-plugin-mad
+	pkgdesc = Free and open source cross-platform multimedia player and framework - MPEG Audio Decoder plugin
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = vlc-plugins-base=3.0.23_2-16
+	depends = glibc
+	depends = libmad
+	provides = libmad_plugin.so
+
+pkgname = vlc-plugin-mdns
+	pkgdesc = Free and open source cross-platform multimedia player and framework - mDNS plugin
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = vlc-plugins-base=3.0.23_2-16
+	depends = glibc
+	depends = libmicrodns
+	provides = libmicrodns_plugin.so
+
+pkgname = vlc-plugin-modplug
+	pkgdesc = Free and open source cross-platform multimedia player and framework - MOD plugin
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = vlc-plugins-base=3.0.23_2-16
+	depends = glibc
+	depends = libmodplug
+	provides = libmod_plugin.so
+
+pkgname = vlc-plugin-mpeg2
+	pkgdesc = Free and open source cross-platform multimedia player and framework - MPEG2 plugin
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = vlc-plugins-base=3.0.23_2-16
+	depends = glibc
+	depends = libmpeg2
+	provides = liblibmpeg2_plugin.so
+
+pkgname = vlc-plugin-mtp
+	pkgdesc = Free and open source cross-platform multimedia player and framework - MTP plugins
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = vlc-plugins-base=3.0.23_2-16
+	depends = glibc
+	depends = libmtp
+	provides = libaccess_mtp_plugin.so
+	provides = libmtp_plugin.so
+
+pkgname = vlc-plugin-musepack
+	pkgdesc = Free and open source cross-platform multimedia player and framework - MusePack plugin
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = vlc-plugins-base=3.0.23_2-16
+	depends = glibc
+	depends = libmpcdec
+	provides = libmpc_plugin.so
+
+pkgname = vlc-plugin-nfs
+	pkgdesc = Free and open source cross-platform multimedia player and framework - NFS plugin
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = vlc-plugins-base=3.0.23_2-16
+	depends = glibc
+	depends = libnfs
+	provides = libnfs_plugin.so
+
+pkgname = vlc-plugin-notify
+	pkgdesc = Free and open source cross-platform multimedia player and framework - notification plugin
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = vlc-plugins-base=3.0.23_2-16
+	depends = gdk-pixbuf2
+	depends = glib2
+	depends = glibc
+	depends = gtk3
+	depends = libnotify
+	provides = libnotify_plugin.so
+
+pkgname = vlc-plugin-opus
+	pkgdesc = Free and open source cross-platform multimedia player and framework - Opus plugin
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = glibc
+	depends = opus
+	provides = libopus_plugin.so
+
+pkgname = vlc-plugin-png
+	pkgdesc = Free and open source cross-platform multimedia player and framework - PNG plugin
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = glibc
+	depends = libpng
+	provides = libpng_plugin.so
+
+pkgname = vlc-plugin-pulse
+	pkgdesc = Free and open source cross-platform multimedia player and framework - PulseAudio plugins
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = vlc-plugins-base=3.0.23_2-16
+	depends = glibc
+	depends = libpulse
+	provides = libvlc_pulse.so
+	provides = libpulsesrc_plugin.so
+	provides = libpulse_plugin.so
+	provides = libpulselist_plugin.so
+
+pkgname = vlc-plugin-samplerate
+	pkgdesc = Free and open source cross-platform multimedia player and framework - samplerate plugin
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = vlc-plugins-base=3.0.23_2-16
+	depends = glibc
+	depends = libsamplerate
+	provides = libsamplerate_plugin.so
+
+pkgname = vlc-plugin-sdl
+	pkgdesc = Free and open source cross-platform multimedia player and framework - SDL plugin
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = vlc-plugins-base=3.0.23_2-16
+	depends = glibc
+	depends = sdl12-compat
+	depends = sdl_image
+	provides = libsdl_image_plugin.so
+
+pkgname = vlc-plugin-sftp
+	pkgdesc = Free and open source cross-platform multimedia player and framework - SFTP plugin
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = vlc-plugins-base=3.0.23_2-16
+	depends = glibc
+	depends = libssh2
+	provides = libsftp_plugin.so
+
+pkgname = vlc-plugin-soxr
+	pkgdesc = Free and open source cross-platform multimedia player and framework - SoX Resampler plugin
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = vlc-plugins-base=3.0.23_2-16
+	depends = glibc
+	depends = libsoxr
+	provides = libsoxr_plugin.so
+
+pkgname = vlc-plugin-srt
+	pkgdesc = Free and open source cross-platform multimedia player and framework - SRT subtitle file support
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = vlc-plugins-base=3.0.23_2-16
+	depends = glibc
+	depends = srt
+	provides = libaccess_srt_plugin.so
+	provides = libaccess_output_srt_plugin.so
+
+pkgname = vlc-plugin-svg
+	pkgdesc = Free and open source cross-platform multimedia player and framework - SVG plugins
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = vlc-plugins-base=3.0.23_2-16
+	depends = cairo
+	depends = glib2
+	depends = glibc
+	depends = librsvg
+	provides = libsvgdec_plugin.so
+	provides = libsvg_plugin.so
+
+pkgname = vlc-plugin-udev
+	pkgdesc = Free and open source cross-platform multimedia player and framework - udev plugin
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = vlc-plugins-base=3.0.23_2-16
+	depends = alsa-lib
+	depends = glibc
+	depends = systemd-libs
+	provides = libudev_plugin.so
+
+pkgname = vlc-plugin-upnp
+	pkgdesc = Free and open source cross-platform multimedia player and framework - UPnP plugin
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = vlc-plugins-base=3.0.23_2-16
+	depends = glibc
+	depends = libgcc
+	depends = libstdc++
+	depends = libupnp
+	provides = libupnp_plugin.so
+
+pkgname = vlc-plugin-xml
+	pkgdesc = Free and open source cross-platform multimedia player and framework - XML plugin
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = glibc
+	depends = libxml2
+	provides = libxml_plugin.so
+
+pkgname = vlc-plugin-zvbi
+	pkgdesc = Free and open source cross-platform multimedia player and framework - VBI plugins
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = vlc-plugins-base=3.0.23_2-16
+	depends = glibc
+	depends = zvbi
+	provides = liblinsys_sdi_plugin.so
+	provides = libv4l2_plugin.so
+	provides = libzvbi_plugin.so
+
+pkgname = vlc-plugins-base
+	pkgdesc = Free and open source cross-platform multimedia player and framework - base plugins
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = vlc-plugin-archive=3.0.23_2-16
+	depends = vlc-plugin-gnutls=3.0.23_2-16
+	depends = vlc-plugin-jpeg=3.0.23_2-16
+	depends = vlc-plugin-opus=3.0.23_2-16
+	depends = vlc-plugin-png=3.0.23_2-16
+	depends = vlc-plugin-xml=3.0.23_2-16
+	depends = glibc
+	depends = libgcc
+	depends = libstdc++
+	depends = zlib
+	provides = libaccess_concat_plugin.so
+	provides = libaccess_imem_plugin.so
+	provides = libaccess_mms_plugin.so
+	provides = libaccess_realrtsp_plugin.so
+	provides = libattachment_plugin.so
+	provides = libdtv_plugin.so
+	provides = libfilesystem_plugin.so
+	provides = libftp_plugin.so
+	provides = libhttp_plugin.so
+	provides = libhttps_plugin.so
+	provides = libidummy_plugin.so
+	provides = libimem_plugin.so
+	provides = librist_plugin.so
+	provides = librtp_plugin.so
+	provides = libsatip_plugin.so
+	provides = libsdp_plugin.so
+	provides = libshm_plugin.so
+	provides = libtcp_plugin.so
+	provides = libtimecode_plugin.so
+	provides = libudp_plugin.so
+	provides = libvcd_plugin.so
+	provides = libvdr_plugin.so
+	provides = libaccess_output_dummy_plugin.so
+	provides = libaccess_output_file_plugin.so
+	provides = libaccess_output_http_plugin.so
+	provides = libaccess_output_rist_plugin.so
+	provides = libaccess_output_udp_plugin.so
+	provides = libaudio_format_plugin.so
+	provides = libaudiobargraph_a_plugin.so
+	provides = libchorus_flanger_plugin.so
+	provides = libcompressor_plugin.so
+	provides = libdolby_surround_decoder_plugin.so
+	provides = libequalizer_plugin.so
+	provides = libgain_plugin.so
+	provides = libheadphone_channel_mixer_plugin.so
+	provides = libkaraoke_plugin.so
+	provides = libmono_plugin.so
+	provides = libnormvol_plugin.so
+	provides = libparam_eq_plugin.so
+	provides = libremap_plugin.so
+	provides = libscaletempo_pitch_plugin.so
+	provides = libscaletempo_plugin.so
+	provides = libsimple_channel_mixer_plugin.so
+	provides = libspatializer_plugin.so
+	provides = libstereo_widen_plugin.so
+	provides = libtospdif_plugin.so
+	provides = libtrivial_channel_mixer_plugin.so
+	provides = libugly_resampler_plugin.so
+	provides = libfloat_mixer_plugin.so
+	provides = libinteger_mixer_plugin.so
+	provides = libadummy_plugin.so
+	provides = libafile_plugin.so
+	provides = libamem_plugin.so
+	provides = libadpcm_plugin.so
+	provides = libaes3_plugin.so
+	provides = libaraw_plugin.so
+	provides = libcc_plugin.so
+	provides = libcdg_plugin.so
+	provides = libcvdsub_plugin.so
+	provides = libddummy_plugin.so
+	provides = libdvbsub_plugin.so
+	provides = libedummy_plugin.so
+	provides = libg711_plugin.so
+	provides = liblpcm_plugin.so
+	provides = liboggspots_plugin.so
+	provides = librawvideo_plugin.so
+	provides = librtpvideo_plugin.so
+	provides = libscte18_plugin.so
+	provides = libscte27_plugin.so
+	provides = libspdif_plugin.so
+	provides = libspudec_plugin.so
+	provides = libstl_plugin.so
+	provides = libsubsdec_plugin.so
+	provides = libsubstx3g_plugin.so
+	provides = libsubsusf_plugin.so
+	provides = libsvcdsub_plugin.so
+	provides = libt140_plugin.so
+	provides = libtelx_plugin.so
+	provides = libtextst_plugin.so
+	provides = libttml_plugin.so
+	provides = libuleaddvaudio_plugin.so
+	provides = libwebvtt_plugin.so
+	provides = libxwd_plugin.so
+	provides = libdummy_plugin.so
+	provides = libgestures_plugin.so
+	provides = libhotkeys_plugin.so
+	provides = libmotion_plugin.so
+	provides = libnetsync_plugin.so
+	provides = liboldrc_plugin.so
+	provides = libadaptive_plugin.so
+	provides = libaiff_plugin.so
+	provides = libasf_plugin.so
+	provides = libau_plugin.so
+	provides = libavi_plugin.so
+	provides = libcaf_plugin.so
+	provides = libdemux_cdg_plugin.so
+	provides = libdemux_chromecast_plugin.so
+	provides = libdemux_stl_plugin.so
+	provides = libdemuxdump_plugin.so
+	provides = libdiracsys_plugin.so
+	provides = libdirectory_demux_plugin.so
+	provides = libdmxmus_plugin.so
+	provides = libes_plugin.so
+	provides = libflacsys_plugin.so
+	provides = libh26x_plugin.so
+	provides = libimage_plugin.so
+	provides = libmjpeg_plugin.so
+	provides = libmp4_plugin.so
+	provides = libmpgv_plugin.so
+	provides = libnoseek_plugin.so
+	provides = libnsc_plugin.so
+	provides = libnsv_plugin.so
+	provides = libnuv_plugin.so
+	provides = libplaylist_plugin.so
+	provides = libps_plugin.so
+	provides = libpva_plugin.so
+	provides = librawaud_plugin.so
+	provides = librawdv_plugin.so
+	provides = librawvid_plugin.so
+	provides = libreal_plugin.so
+	provides = libsmf_plugin.so
+	provides = libsubtitle_plugin.so
+	provides = libtta_plugin.so
+	provides = libty_plugin.so
+	provides = libvc1_plugin.so
+	provides = libvobsub_plugin.so
+	provides = libvoc_plugin.so
+	provides = libwav_plugin.so
+	provides = libxa_plugin.so
+	provides = libfile_keystore_plugin.so
+	provides = libmemory_keystore_plugin.so
+	provides = libconsole_logger_plugin.so
+	provides = libfile_logger_plugin.so
+	provides = libsyslog_plugin.so
+	provides = libfolder_plugin.so
+	provides = libaddonsfsstorage_plugin.so
+	provides = libaddonsvorepository_plugin.so
+	provides = libaudioscrobbler_plugin.so
+	provides = libexport_plugin.so
+	provides = libfingerprinter_plugin.so
+	provides = liblogger_plugin.so
+	provides = libstats_plugin.so
+	provides = libvod_rtsp_plugin.so
+	provides = libxdg_screensaver_plugin.so
+	provides = libmux_asf_plugin.so
+	provides = libmux_avi_plugin.so
+	provides = libmux_dummy_plugin.so
+	provides = libmux_mp4_plugin.so
+	provides = libmux_mpjpeg_plugin.so
+	provides = libmux_ps_plugin.so
+	provides = libmux_wav_plugin.so
+	provides = libpacketizer_a52_plugin.so
+	provides = libpacketizer_av1_plugin.so
+	provides = libpacketizer_copy_plugin.so
+	provides = libpacketizer_dirac_plugin.so
+	provides = libpacketizer_dts_plugin.so
+	provides = libpacketizer_flac_plugin.so
+	provides = libpacketizer_h264_plugin.so
+	provides = libpacketizer_hevc_plugin.so
+	provides = libpacketizer_mlp_plugin.so
+	provides = libpacketizer_mpeg4audio_plugin.so
+	provides = libpacketizer_mpeg4video_plugin.so
+	provides = libpacketizer_mpegaudio_plugin.so
+	provides = libpacketizer_mpegvideo_plugin.so
+	provides = libpacketizer_vc1_plugin.so
+	provides = libmediadirs_plugin.so
+	provides = libpodcast_plugin.so
+	provides = libsap_plugin.so
+	provides = libaudiobargraph_v_plugin.so
+	provides = libdynamicoverlay_plugin.so
+	provides = liblogo_plugin.so
+	provides = libmarq_plugin.so
+	provides = libmosaic_plugin.so
+	provides = librss_plugin.so
+	provides = libsubsdelay_plugin.so
+	provides = libadf_plugin.so
+	provides = libcache_block_plugin.so
+	provides = libcache_read_plugin.so
+	provides = libdecomp_plugin.so
+	provides = libhds_plugin.so
+	provides = libprefetch_plugin.so
+	provides = librecord_plugin.so
+	provides = libskiptags_plugin.so
+	provides = libstream_out_autodel_plugin.so
+	provides = libstream_out_bridge_plugin.so
+	provides = libstream_out_cycle_plugin.so
+	provides = libstream_out_delay_plugin.so
+	provides = libstream_out_description_plugin.so
+	provides = libstream_out_display_plugin.so
+	provides = libstream_out_dummy_plugin.so
+	provides = libstream_out_duplicate_plugin.so
+	provides = libstream_out_es_plugin.so
+	provides = libstream_out_gather_plugin.so
+	provides = libstream_out_mosaic_bridge_plugin.so
+	provides = libstream_out_record_plugin.so
+	provides = libstream_out_rtp_plugin.so
+	provides = libstream_out_setid_plugin.so
+	provides = libstream_out_smem_plugin.so
+	provides = libstream_out_standard_plugin.so
+	provides = libstream_out_stats_plugin.so
+	provides = libstream_out_transcode_plugin.so
+	provides = libtdummy_plugin.so
+	provides = libchain_plugin.so
+	provides = libgrey_yuv_plugin.so
+	provides = libi420_10_p010_plugin.so
+	provides = libi420_nv12_plugin.so
+	provides = libi420_rgb_mmx_plugin.so
+	provides = libi420_rgb_sse2_plugin.so
+	provides = libi420_rgb_plugin.so
+	provides = libi420_yuy2_mmx_plugin.so
+	provides = libi420_yuy2_sse2_plugin.so
+	provides = libi420_yuy2_plugin.so
+	provides = libi422_i420_plugin.so
+	provides = libi422_yuy2_mmx_plugin.so
+	provides = libi422_yuy2_sse2_plugin.so
+	provides = libi422_yuy2_plugin.so
+	provides = librv32_plugin.so
+	provides = libyuvp_plugin.so
+	provides = libyuy2_i420_plugin.so
+	provides = libyuy2_i422_plugin.so
+	provides = libadjust_plugin.so
+	provides = libalphamask_plugin.so
+	provides = libanaglyph_plugin.so
+	provides = libantiflicker_plugin.so
+	provides = libball_plugin.so
+	provides = libblend_plugin.so
+	provides = libblendbench_plugin.so
+	provides = libbluescreen_plugin.so
+	provides = libcanvas_plugin.so
+	provides = libcolorthres_plugin.so
+	provides = libcroppadd_plugin.so
+	provides = libdeinterlace_plugin.so
+	provides = libedgedetection_plugin.so
+	provides = liberase_plugin.so
+	provides = libextract_plugin.so
+	provides = libfps_plugin.so
+	provides = libfreeze_plugin.so
+	provides = libgaussianblur_plugin.so
+	provides = libgradfun_plugin.so
+	provides = libgradient_plugin.so
+	provides = libgrain_plugin.so
+	provides = libhqdn3d_plugin.so
+	provides = libinvert_plugin.so
+	provides = libmagnify_plugin.so
+	provides = libmirror_plugin.so
+	provides = libmotionblur_plugin.so
+	provides = libmotiondetect_plugin.so
+	provides = liboldmovie_plugin.so
+	provides = libposterize_plugin.so
+	provides = libpsychedelic_plugin.so
+	provides = libpuzzle_plugin.so
+	provides = libripple_plugin.so
+	provides = librotate_plugin.so
+	provides = libscale_plugin.so
+	provides = libscene_plugin.so
+	provides = libsepia_plugin.so
+	provides = libsharpen_plugin.so
+	provides = libtransform_plugin.so
+	provides = libvhs_plugin.so
+	provides = libwave_plugin.so
+	provides = libfb_plugin.so
+	provides = libvdummy_plugin.so
+	provides = libvmem_plugin.so
+	provides = libyuv_plugin.so
+
+pkgname = vlc-plugins-extra
+	pkgdesc = Free and open source cross-platform multimedia player and framework - extra plugins
+	depends = vlc-plugin-aalib=3.0.23_2-16
+	depends = vlc-plugin-aom=3.0.23_2-16
+	depends = vlc-plugin-aribb24=3.0.23_2-16
+	depends = vlc-plugin-aribb25=3.0.23_2-16
+	depends = vlc-plugin-ass=3.0.23_2-16
+	depends = vlc-plugin-avahi=3.0.23_2-16
+	depends = vlc-plugin-bluray=3.0.23_2-16
+	depends = vlc-plugin-caca=3.0.23_2-16
+	depends = vlc-plugin-cddb=3.0.23_2-16
+	depends = vlc-plugin-chromecast=3.0.23_2-16
+	depends = vlc-plugin-dca=3.0.23_2-16
+	depends = vlc-plugin-dvb=3.0.23_2-16
+	depends = vlc-plugin-dvd=3.0.23_2-16
+	depends = vlc-plugin-ffmpeg=3.0.23_2-16
+	depends = vlc-plugin-freetype=3.0.23_2-16
+	depends = vlc-plugin-gme=3.0.23_2-16
+	depends = vlc-plugin-kate=3.0.23_2-16
+	depends = vlc-plugin-lirc=3.0.23_2-16
+	depends = vlc-plugin-live555=3.0.23_2-16
+	depends = vlc-plugin-mad=3.0.23_2-16
+	depends = vlc-plugin-mdns=3.0.23_2-16
+	depends = vlc-plugin-modplug=3.0.23_2-16
+	depends = vlc-plugin-mpeg2=3.0.23_2-16
+	depends = vlc-plugin-mtp=3.0.23_2-16
+	depends = vlc-plugin-musepack=3.0.23_2-16
+	depends = vlc-plugin-nfs=3.0.23_2-16
+	depends = vlc-plugin-samplerate=3.0.23_2-16
+	depends = vlc-plugin-sdl=3.0.23_2-16
+	depends = vlc-plugin-sftp=3.0.23_2-16
+	depends = vlc-plugin-soxr=3.0.23_2-16
+	depends = vlc-plugin-srt=3.0.23_2-16
+	depends = vlc-plugin-udev=3.0.23_2-16
+	depends = vlc-plugin-upnp=3.0.23_2-16
+	depends = vlc-plugin-zvbi=3.0.23_2-16
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = vlc-plugins-base=3.0.23_2-16
+	depends = glibc
+	depends = libxcb
+	provides = liblinsys_hdsdi_plugin.so
+	provides = libxcb_screen_plugin.so
+
+pkgname = vlc-plugins-video-output
+	pkgdesc = Free and open source cross-platform multimedia player and framework - video output plugins
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = glibc
+	depends = libgcc
+	depends = libglvnd
+	depends = libva
+	depends = libx11
+	depends = libxcb
+	depends = wayland
+	depends = xcb-util-keysyms
+	optdepends = libva-intel-driver: for Intel VA-API drivers
+	optdepends = libva-mesa-driver: for open-source VA-API drivers
+	provides = libvlc_xcb_events.so
+	provides = libvlc_vdpau.so
+	provides = libxcb_hotkeys_plugin.so
+	provides = libxcb_apps_plugin.so
+	provides = libvaapi_filters_plugin.so
+	provides = libvdpau_adjust_plugin.so
+	provides = libvdpau_chroma_plugin.so
+	provides = libvdpau_deinterlace_plugin.so
+	provides = libvdpau_display_plugin.so
+	provides = libvdpau_sharpen_plugin.so
+	provides = libegl_wl_plugin.so
+	provides = libegl_x11_plugin.so
+	provides = libflaschen_plugin.so
+	provides = libgl_plugin.so
+	provides = libglconv_vaapi_drm_plugin.so
+	provides = libglconv_vaapi_wl_plugin.so
+	provides = libglconv_vaapi_x11_plugin.so
+	provides = libglconv_vdpau_plugin.so
+	provides = libglx_plugin.so
+	provides = libwl_shell_plugin.so
+	provides = libwl_shm_plugin.so
+	provides = libxcb_window_plugin.so
+	provides = libxcb_x11_plugin.so
+	provides = libxcb_xv_plugin.so
+	provides = libxdg_shell_plugin.so
+	provides = libclone_plugin.so
+	provides = libpanoramix_plugin.so
+	provides = libwall_plugin.so
+
+pkgname = vlc-plugins-visualization
+	pkgdesc = Free and open source cross-platform multimedia player and framework - visualization plugins
+	depends = libvlc=3.0.23_2-16
+	depends = libvlccore.so
+	depends = glibc
+	depends = libgcc
+	depends = libglvnd
+	depends = libgoom2
+	depends = libstdc++
+	depends = projectm
+	depends = ttf-dejavu
+	provides = libvisual_plugin.so
+	provides = libprojectm_plugin.so
+	provides = libgoom_plugin.so
+	provides = libglspectrum_plugin.so

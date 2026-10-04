@@ -11,7 +11,7 @@ pkgbase = pixman-git
 	makedepends = meson
 	depends = glibc
 	provides = pixman=0.46.4.r63.gf227dcb
-	provides = libpixman-1.so=0-64
+	provides = libpixman-1.so
 	conflicts = pixman
 	options = staticlibs
 	source = git+https://gitlab.freedesktop.org/pixman/pixman

@@ -1,0 +1,19 @@
+pkgbase = libssh2-git
+	pkgdesc = A library implementing the SSH2 protocol as defined by Internet Drafts (git build)
+	pkgver = 1.11.1.r111.g723b7017
+	pkgrel = 1
+	url = https://www.libssh2.org/
+	arch = x86_64
+	license = BSD-3-Clause
+	makedepends = git
+	depends = glibc
+	depends = openssl
+	depends = zlib
+	provides = libssh2=1.11.1.r111.g723b7017
+	provides = libssh2.so
+	conflicts = libssh2
+	source = git+https://github.com/libssh2/libssh2.git
+	validpgpkeys = 27EDEAF22F3ABCEB50DB9A125CC908FDB71E12C2
+	sha256sums = SKIP
+
+pkgname = libssh2-git

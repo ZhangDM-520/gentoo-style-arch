@@ -1,0 +1,49 @@
+# Maintainer: AndyRTR <andyrtr@archlinux.org>
+# Contributor: Thomas Arnhold <thomas at arnhold dot org>
+
+pkgname=libe-book
+pkgver=0.1.4
+pkgrel=1
+pkgdesc="Library for import of reflowable e-book formats."
+arch=('x86_64')
+url="https://sourceforge.net/projects/libebook/"
+license=('MPL-2.0')
+depends=('librevenge' 'libxml2' 'liblangtag'
+         'zlib' 'icu' 'glibc' 'libstdc++' 'libgcc')
+makedepends=('gperf' 'boost' 'cppunit' 'doxygen')
+provides=('libe-book-0.1.so')
+source=(https://sourceforge.net/projects/${pkgname//-/}/files//${pkgname}-${pkgver}/${pkgname}-${pkgver}.tar.xz)
+sha1sums=('67a9d18a73681fe733c68981a0f8d1763f4e0f8b')
+sha256sums=('104b7e791b6632745898e9b6a0037b7540235771a4d8c3bde2c764466ad912f1')
+
+prepare() {
+  cd "${pkgname}"-${pkgver}
+  autoreconf -vfi
+}
+
+build() {
+  cd "${pkgname}"-${pkgver}
+  ./configure --prefix=/usr
+  sed -i -e 's/ -shared / -Wl,-O1,--as-needed\0/g' libtool
+  make
+}
+
+check() {
+  cd "${pkgname}"-${pkgver}
+  make check
+}
+
+package() {
+  cd "${pkgname}"-${pkgver}
+  make DESTDIR="$pkgdir" install
+
+  # trim: drop the doxygen API docs and man pages (this library recipe ships
+  # only the shared library + headers)
+  rm -rf "$pkgdir/usr/share/doc" "$pkgdir/usr/share/man" "$pkgdir/usr/share/info"
+
+  # license: ship upstream licence text(s) (MPL-2.0)
+  local _l
+  for _l in COPYING COPYING.MPL; do
+    if [[ -f $_l ]]; then install -Dm644 "$_l" -t "$pkgdir/usr/share/licenses/$pkgname/"; fi
+  done
+}

@@ -110,9 +110,12 @@ gsa_meta_any=$'pkgver=1.0.0\npkgrel=1\narch=(any)'
 # topology record and a full topological sort on EVERY invocation (--list,
 # --audit, --help), so a fixture workspace must be complete or every run fails
 # in the loader. Creates config/build-defaults.conf (lanes/jobs/intensity
-# parameterised; the memory numbers are the fixtures' shared constants) and an
+# parameterised; the memory numbers are the fixtures' shared constants), an
 # empty config/topology.conf (the header comment only — a valid empty
-# topology), plus packages/ and bin/ for the fixture to fill.
+# topology) and an empty config/abi-exclusions.conf (header only — a valid
+# empty ABI-guard exception registry; the loader tolerates its ABSENCE but a
+# fixture that wants to EXERCISE the registry writes entries here), plus
+# packages/ and bin/ for the fixture to fill.
 # Fixture-specific records and anything after that belong to the fixture.
 make_workspace() {
     local dir=$1 lanes=${2:-auto} jobs=${3:-auto} intensity=${4:-xhigh}
@@ -130,6 +133,10 @@ EOF
     cat >"$dir/config/topology.conf" <<'EOF'
 # One record per package: id|path|groups|edges[|tags]
 # (a lone id|path|groups| is a deliberate no-edge record)
+EOF
+    cat >"$dir/config/abi-exclusions.conf" <<'EOF'
+# ABI-guard exception registry: id|reason|review-by (format doc in
+# config/abi-exclusions.conf of the real repo; empty registry here)
 EOF
 }
 

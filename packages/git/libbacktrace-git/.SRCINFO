@@ -1,0 +1,19 @@
+pkgbase = libbacktrace-git
+	pkgdesc = Library to produce symbolic backtraces (git build)
+	pkgver = r136.g0b9b49c
+	pkgrel = 1
+	url = https://github.com/ianlancetaylor/libbacktrace
+	arch = x86_64
+	license = BSD-3-Clause
+	makedepends = git
+	makedepends = libunwind
+	depends = glibc
+	depends = libgcc
+	depends = zlib
+	provides = libbacktrace=r136.g0b9b49c
+	provides = libbacktrace.so
+	conflicts = libbacktrace
+	source = git+https://github.com/ianlancetaylor/libbacktrace
+	b2sums = SKIP
+
+pkgname = libbacktrace-git

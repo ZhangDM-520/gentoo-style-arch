@@ -1,0 +1,70 @@
+# Maintainer: Felix Yan <felixonmars@archlinux.org>
+
+pkgbase=volume_key
+pkgname=volume_key
+pkgver=0.3.12
+pkgrel=12
+pkgdesc="A library for manipulating storage volume encryption keys and storing them separately from volumes to handle forgotten passphrases"
+arch=('x86_64')
+url="https://pagure.io/volume_key"
+license=('GPL2')
+provides=('libvolume_key.so')
+makedepends=(
+  'cryptsetup'
+  'glib2'
+  'glibc'
+  'gpgme'
+  'nspr'
+  'nss'
+  'util-linux-libs'
+)
+# trim: the python-volume_key split is dropped together with its _pick
+# helper/path, its split-install path, its optdepends entry and the
+# python/python-setuptools/swig makedepends (and the python3-config CFLAGS
+# bit in build()) — this recipe ships the C library + volume_key tool only
+source=("https://releases.pagure.org/volume_key/volume_key-$pkgver.tar.xz")
+sha512sums=('d056154c9b9d23e4eb661946dd59ed97e116903a3afcff9d9e29258408082f33dcbb69958724143f6bf191a3da488a03b6c02af287790990ed6459e29d66553c')
+b2sums=('4a0424d51878855c69bdf969b616f3a563074976ad7b07aa848140266d97f66de9c52e1a6ed8913df93077d5966c3ab99afc78c3b22c410f1eadf5447ca2f416')
+
+prepare() {
+  cd $pkgname-$pkgver
+  autoreconf -fiv
+}
+
+build() {
+  cd $pkgname-$pkgver
+
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  ./configure --prefix=/usr
+  # prevent excessive overlinking due to libtool
+  sed -i -e 's/ -shared / -Wl,-O1,--as-needed\0/g' libtool
+  make -j"${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+}
+
+package_volume_key() {
+  depends=(
+    'cryptsetup'
+    'glib2'
+    'glibc'
+    'gpgme'
+    'nspr'
+    'nss'
+    'util-linux-libs'
+  )
+
+  make DESTDIR="$pkgdir" install -C $pkgname-$pkgver
+
+  # trim: drop the bundled docs/man pages (this recipe ships the C library +
+  # volume_key command-line tool only)
+  rm -rf "$pkgdir/usr/share/doc" "$pkgdir/usr/share/man" "$pkgdir/usr/share/info"
+
+  # license: ship upstream licence text (GPL-2.0)
+  local _l
+  for _l in COPYING COPYING.GPL LICENSE; do
+    if [[ -f $pkgname-$pkgver/$_l ]]; then install -Dm644 "$pkgname-$pkgver/$_l" -t "$pkgdir/usr/share/licenses/$pkgname/"; fi
+  done
+}

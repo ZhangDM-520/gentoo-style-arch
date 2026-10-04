@@ -1,0 +1,167 @@
+# Maintainer: Peter Mattern <pmattern at arcor dot de>
+# Contributor: Chris Severance aur.severach aATt spamgourmet dott com
+# Contributor: lilac
+# Contributor: Andreas Radke <andyrtr@archlinux.org>
+# Recipe adapted for the gentoo-style-arch fleet; tracks upstream VCS directly.
+# The AUR package of the same name was used as a reference only.
+
+pkgbase=cups-git
+pkgname=(cups-git libcups-git)
+pkgver=2.4.3.r351.gefb31d1a9
+pkgrel=1
+pkgdesc="OpenPrinting CUPS. VCS package providing client libraries, headers and daemon."
+arch=('x86_64')
+license=('Apache-2.0 WITH LLVM-exception AND BSD-3-Clause AND Zlib AND BSD-2-Clause')
+url="https://openprinting.github.io/cups/"
+depends=('avahi' 'bash' 'gnutls' 'hicolor-icon-theme' 'systemd' 'zlib')
+makedepends=('autoconf' 'colord' 'git' 'libusb')
+optdepends=(
+  'colord: for ICC color profile support'
+  'libusb: for usb printer backend'
+  'logrotate: for logfile rotation support'
+)
+install=cups.install
+source=("git+https://github.com/OpenPrinting/cups.git"
+        cups.logrotate
+        cups.pam
+        cups.sysusers)
+b2sums=('SKIP'
+        '17eca94fad633a55db64dba871cf0ce35fe8f9d4ec4074c5b9dad434b819ed567d6abc7d5a6ddf9df643edc38259b35ed4ae3dbd71d0236501d2d14664a01565'
+        '3eab84d332d96678fe6e435ee243c8f1a82b838f601d61d3604d11e918aed7a62202edca5e476c4b9031ed284570e6fcd6c659cfdbd9624aa0019d3233755f81'
+        '5e10f999b326a64df119e33d394b8adc9254e037135583633daec5b79b934ba082ff61713d98432e60d807cac6d98dbb3242f52405f7743d3a384812b1050d66')
+
+pkgver() {
+  cd cups
+  git describe --long --tags | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g'
+}
+
+prepare() {
+  cd cups
+
+  # the git tree ships no generated configure — rebuild it in place
+  # (the AUR reference did the same). The old AUR bugfix patches
+  # (statedir/freebind/guid) targeted 2.4.0-era trees and are not carried.
+  aclocal -I config-scripts
+  autoconf -I config-scripts
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  cd cups
+
+  # The build system uses only DSOFLAGS but not LDFLAGS to build some libraries.
+  export DSOFLAGS=${LDFLAGS}
+
+  # use fixed cups user (id 209) since systemd adds "lp" group without a fixed id
+  ./configure --prefix=/usr \
+     --sysconfdir=/etc \
+     --localstatedir=/var \
+     --sbindir=/usr/bin \
+     --libdir=/usr/lib \
+     --with-logdir=/var/log/cups \
+     --with-docdir=/usr/share/cups/doc \
+     --with-exe-file-perm=0755 \
+     --with-cups-user=209 \
+     --with-cups-group=209 \
+     --with-max-log-size=0 \
+     --enable-pam=yes \
+     --enable-raw-printing \
+     --enable-dbus=yes \
+     --with-tls=gnutls \
+     --with-dbusdir=/usr/share/dbus-1 \
+     --enable-relro \
+     --enable-libpaper \
+     --with-optim="$CFLAGS"
+  make -j"${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+_pick() {
+  local p="$1" f d; shift
+  for f; do
+    d="$srcdir/$p/${f#$pkgdir/}"
+    mkdir -p "$(dirname "$d")"
+    mv "$f" "$d"
+    rmdir -p --ignore-fail-on-non-empty "$(dirname "$f")"
+  done
+}
+
+package_cups-git() {
+  pkgdesc="OpenPrinting CUPS. Monolithic VCS package providing daemon, headers and client libraries."
+  depends=('avahi' 'bash' 'gnutls' 'hicolor-icon-theme' 'libcups-git' 'systemd' 'zlib')
+  provides=("cups=$pkgver")
+  conflicts=('cups')
+  backup=(etc/cups/cupsd.conf
+          etc/cups/snmp.conf
+          etc/cups/printers.conf
+          etc/cups/classes.conf
+          etc/cups/cups-files.conf
+          etc/cups/subscriptions.conf
+          etc/logrotate.d/cups
+          etc/pam.d/cups)
+
+  make -C cups BUILDROOT="$pkgdir" install-headers install-libs install-data install-exec
+
+  # client libraries/headers split out to libcups-git (stock Arch 'libcups' split)
+  _pick libcups \
+    "$pkgdir"/usr/lib/libcups.so* \
+    "$pkgdir"/usr/lib/libcupsimage.so* \
+    "$pkgdir"/usr/include/cups \
+    "$pkgdir"/usr/lib/pkgconfig/cups.pc \
+    "$pkgdir"/usr/lib/pkgconfig/cupsimage.pc \
+    "$pkgdir"/usr/bin/cups-config
+
+  # kill the sysv stuff
+  rm -rf "$pkgdir"/etc/rc*.d
+  rm -rf "$pkgdir"/etc/init.d
+  install -Dm644 "$srcdir"/cups.logrotate "$pkgdir"/etc/logrotate.d/cups
+  install -Dm644 "$srcdir"/cups.pam "$pkgdir"/etc/pam.d/cups
+
+  # fix perms on /var/spool and /etc
+  chmod 755 "$pkgdir"/var/spool
+  chmod 755 "$pkgdir"/etc
+
+  # use cups group FS#36769
+  install -Dm644 "$srcdir"/cups.sysusers "$pkgdir"/usr/lib/sysusers.d/$pkgname.conf
+  sed -i "s:#User 209:User 209:" "$pkgdir"/etc/cups/cups-files.conf{,.default}
+  sed -i "s:#Group 209:Group 209:" "$pkgdir"/etc/cups/cups-files.conf{,.default}
+
+  # install ssl directory where to store the certs, solves some samba issues
+  install -dm700 -g 209 "$pkgdir"/etc/cups/ssl
+  # remove directory from package, it will be recreated at each server start
+  rm -rf "$pkgdir"/run
+
+  # create config files that get filled by cupsd
+  touch "$pkgdir"/etc/cups/printers.conf
+  touch "$pkgdir"/etc/cups/classes.conf
+  touch "$pkgdir"/etc/cups/subscriptions.conf
+  chgrp -R 209 "$pkgdir"/etc/cups
+
+  # fix .desktop file
+  sed -i 's|^Exec=htmlview http://localhost:631/|Exec=xdg-open http://localhost:631/|g' "$pkgdir"/usr/share/applications/cups.desktop
+
+  # compress some driver files, adopted from Fedora
+  find "$pkgdir"/usr/share/cups/model -name "*.ppd" | xargs gzip -n9f
+
+  # comment out removed filters that are now part of cups-filters
+  perl -p -i -e 's:^(.*\s+bannertops\s*)$:#\1:' "$pkgdir"/usr/share/cups/mime/mime.convs
+
+  # comment out unnecessary PageLogFormat entry
+  sed -i -e 's:PageLogFormat:#PageLogFormat:' "$pkgdir"/etc/cups/cupsd.conf*
+
+  install -Dm644 "$srcdir"/cups/NOTICE -t "$pkgdir/usr/share/licenses/$pkgname"
+}
+
+package_libcups-git() {
+  pkgdesc="OpenPrinting CUPS - client libraries and headers (git build)"
+  depends=('glibc' 'gnutls' 'zlib')
+  provides=("libcups=$pkgver" 'libcups.so' 'libcupsimage.so')
+  conflicts=('libcups')
+  backup=()
+
+  mv "$srcdir"/libcups/* "$pkgdir"
+
+  install -Dm644 "$srcdir"/cups/NOTICE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

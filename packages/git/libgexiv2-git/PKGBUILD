@@ -1,0 +1,40 @@
+# Maintainer: auto-generated
+# AUR reference: libgexiv2-git (Maintainer: Alexander F. Rødseth <xyproto@archlinux.org>,
+# Contributor: Ionut Biru <ibiru@archlinux.org>)
+pkgname=libgexiv2-git
+_pkgname=gexiv2
+pkgver=0.14.7.r6.g002edd1
+pkgrel=1
+pkgdesc="GObject-based wrapper around the Exiv2 library (git build)"
+arch=('x86_64')
+url="https://gitlab.gnome.org/GNOME/gexiv2"
+license=('GPL-2.0-or-later')
+# stock pkgbase gexiv2 splits gexiv2-common off; left stock (not superseded here)
+depends=('exiv2' 'gcc-libs' 'glib2' 'glibc')
+makedepends=('git' 'meson' 'glib2-devel' 'gobject-introspection' 'python-gobject' 'vala')
+provides=("libgexiv2=$pkgver" 'libgexiv2.so')
+conflicts=('libgexiv2')
+source=("git+https://gitlab.gnome.org/GNOME/gexiv2.git")
+b2sums=('SKIP')
+
+pkgver() {
+  cd "$_pkgname"
+  # upstream tags look like gexiv2-0.14.7
+  git describe --long --tags | sed 's/^gexiv2-//;s/\([^-]*-g\)/r\1/;s/-/./g'
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  arch-meson "$_pkgname" build \
+    -D b_lto=true \
+    -D b_ndebug=true
+  meson compile -C build
+}
+
+package() {
+  meson install -C build --destdir "$pkgdir"
+  install -Dm644 "$_pkgname/COPYING" -t "$pkgdir/usr/share/licenses/$pkgname"
+}

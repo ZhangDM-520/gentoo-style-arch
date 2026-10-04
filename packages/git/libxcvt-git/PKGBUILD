@@ -1,0 +1,41 @@
+# git recipe tracking the upstream xorg libxcvt VCS (AUR libxcvt-git used as
+# reference only)
+
+pkgname=libxcvt-git
+pkgver=0.1.3.r8.g049b79b
+pkgrel=1
+pkgdesc='Library providing a standalone version of the X server implementation of the VESA CVT standard timing modelines generator (git build)'
+arch=('x86_64')
+url='https://gitlab.freedesktop.org/xorg/lib/libxcvt'
+license=('MIT' 'HPND-sell-variant')
+depends=('glibc')
+makedepends=('git' 'meson')
+provides=("libxcvt=$pkgver" 'libxcvt.so')
+conflicts=('libxcvt')
+source=('git+https://gitlab.freedesktop.org/xorg/lib/libxcvt.git')
+b2sums=('SKIP')
+
+pkgver() {
+  cd libxcvt
+  git describe --long --tags | sed 's/^libxcvt-//;s/\([^-]*-g\)/r\1/;s/-/./g'
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  arch-meson libxcvt build \
+    -D b_lto=true \
+    -D b_ndebug=true
+  meson compile -C build -j "${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+}
+
+check() {
+  meson test -C build --print-errorlogs
+}
+
+package() {
+  meson install -C build --destdir "$pkgdir"
+  install -Dm644 libxcvt/COPYING -t "$pkgdir/usr/share/licenses/$pkgname/"
+}

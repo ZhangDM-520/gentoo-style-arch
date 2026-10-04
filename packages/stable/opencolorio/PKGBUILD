@@ -1,0 +1,54 @@
+# Maintainer: Sven-Hendrik Haase <svenstaro@archlinux.org>
+# Contributor: Dumitru Ursu <dima@ceata.org>
+
+pkgname=opencolorio
+pkgver=2.5.1
+pkgrel=2
+pkgdesc="A color management framework for visual effects and animation"
+arch=('x86_64')
+url="https://opencolorio.org"
+license=('BSD-3-Clause')
+depends=('freeglut' 'glew' 'lcms2' 'expat' 'yaml-cpp' 'imath' 'pystring' 'minizip-ng' 'openexr'
+         'glibc' 'libgcc' 'libstdc++' 'glu')
+makedepends=('cmake' 'python' 'pybind11' 'ninja')
+provides=('libOpenColorIO.so')
+checkdepends=('openimageio')
+optdepends=('python: python bindings')
+source=($pkgname-$pkgver.tar.gz::https://github.com/AcademySoftwareFoundation/OpenColorIO/archive/v$pkgver.tar.gz)
+sha512sums=('93d370a96882523defbaeb3c546860bf08cb152e430ff28cf02a976d265f0785d92aed1ab69a44db9ae4fc220ab1adaf0c5c1ecd2426d6b192a48add4c479364')
+
+build() {
+  cd OpenColorIO-$pkgver
+
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  CXXFLAGS+=" -ffat-lto-objects"
+  cmake \
+    -GNinja \
+    -Bbuild \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DCMAKE_INSTALL_LIBDIR=lib \
+    -DCMAKE_SKIP_INSTALL_RPATH=YES \
+    -Wno-dev
+  ninja -C build -j "${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+check() {
+  cd OpenColorIO-$pkgver/build
+
+  # Currently broken
+  # ctest -E test_gpu
+}
+
+package() {
+  cd OpenColorIO-$pkgver
+
+  DESTDIR="$pkgdir" ninja -C build install
+  install -Dm644 LICENSE $pkgdir/usr/share/licenses/$pkgname/LICENSE
+}
+
+# vim:set ts=2 sw=2 et:

@@ -9,7 +9,7 @@ url="https://lz4.github.io/lz4/"
 license=('BSD-2-Clause' 'GPL-2.0-or-later')
 depends=('glibc')
 makedepends=('git')
-provides=("lz4=1:$pkgver" 'liblz4.so=1-64')
+provides=("lz4=1:$pkgver" 'liblz4.so')
 conflicts=('lz4')
 options=('staticlibs')
 source=("git+https://github.com/lz4/lz4.git")

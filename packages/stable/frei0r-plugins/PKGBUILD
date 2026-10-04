@@ -1,0 +1,50 @@
+# Maintainer: Balló György <ballogyor+arch at gmail dot com>
+# Contributor: Sergej Pupykin <pupykin.s+arch@gmail.com>
+
+pkgname=frei0r-plugins
+pkgver=3.6.0
+pkgrel=1
+pkgdesc='Collection of video effect plugins'
+arch=(x86_64)
+url='https://frei0r.dyne.org/'
+license=(GPL-2.0-or-later)
+depends=(
+  cairo
+  gavl
+  glibc
+  libgcc
+  libglvnd
+  libstdc++
+  opencv
+)
+makedepends=(
+  cmake
+  git
+)
+source=("git+https://github.com/dyne/frei0r#tag=v$pkgver"
+         opencv-5.patch)
+b2sums=('66b143abc8807d4d64e32ceefd939b537a18c0534ad559f2d53f2cbfc33c722ba620432b9679a5fa1dcc8c3ad2fe0e999ac352c6464df991be771aa1fd59f492'
+        '8a4d4b1e87b5c5ba553a687dc74d6d8b7af1566fba5ed59175cc9867894f0776442acfff8d0dbebe5b72a1f23ad8de80bd8853bfc4f024a250e6c666b28b5384')
+validpgpkeys=(6113D89CA825C5CEDD02C87273B35DA54ACB7D10) # Denis Roio (Jaromil)
+
+prepare() {
+  patch -d frei0r -p1 < opencv-5.patch
+}
+
+build() {
+  # House style: mold linker when available (cmake consumes LDFLAGS at
+  # configure time).
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  cmake -S frei0r -B build \
+    -DCMAKE_INSTALL_PREFIX=/usr
+  cmake --build build --parallel "${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package() {
+  DESTDIR="$pkgdir" cmake --install build
+  # house: licence re-homed to /usr/share/licenses (stock installs none)
+  install -Dm644 frei0r/COPYING "$pkgdir"/usr/share/licenses/$pkgname/COPYING
+}

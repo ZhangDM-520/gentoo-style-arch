@@ -1,0 +1,84 @@
+# Maintainer: Chocobo1 <chocobo1 AT archlinux DOT net>
+
+# git recipe tracking upstream libxcrypt VCS (AUR libxcrypt-git used as
+# reference only). Mirrors the stock libxcrypt pkgbase split: the
+# libxcrypt-git output supersedes stock libxcrypt (modern API, soname
+# libcrypt.so.2) and libxcrypt-compat-git supersedes stock libxcrypt-compat
+# (glibc legacy ABI, soname libcrypt.so.1) — the two sonames coexist.
+
+pkgbase=libxcrypt-git
+pkgname=(libxcrypt-git libxcrypt-compat-git)
+pkgver=4.5.2.r7.g174c24d
+pkgrel=1
+pkgdesc='Modern library for one-way hashing of passwords (git build)'
+arch=('x86_64')
+url='https://github.com/besser82/libxcrypt/'
+license=('LGPL')
+depends=('glibc')
+makedepends=('git')
+source=('git+https://github.com/besser82/libxcrypt.git')
+b2sums=('SKIP')
+
+pkgver() {
+  cd libxcrypt
+  git describe --long --tags | sed 's/\([^-]*-g\)/r\1/;s/-/./g;s/^v//'
+}
+
+prepare() {
+  cd libxcrypt
+  ./autogen.sh
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  # main build — modern API only (stock libxcrypt)
+  mkdir -p build-libxcrypt
+  cd build-libxcrypt
+  ../libxcrypt/configure \
+    --prefix=/usr \
+    --disable-static \
+    --enable-hashes=strong,glibc \
+    --enable-obsolete-api=no \
+    --disable-failure-tokens
+  make -j"${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+
+  # compat build — full glibc legacy API (stock libxcrypt-compat)
+  cd ..
+  mkdir -p build-libxcrypt-compat
+  cd build-libxcrypt-compat
+  ../libxcrypt/configure \
+    --prefix=/usr \
+    --disable-static \
+    --enable-hashes=strong,glibc \
+    --enable-obsolete-api=glibc \
+    --disable-failure-tokens
+  make -j"${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+}
+
+check() {
+  make -C build-libxcrypt check
+}
+
+package_libxcrypt-git() {
+  provides=("libxcrypt=$pkgver" 'libcrypt.so')
+  conflicts=('libxcrypt')
+
+  make -C build-libxcrypt DESTDIR="$pkgdir" install
+  install -Dm644 libxcrypt/COPYING.LIB -t "$pkgdir/usr/share/licenses/$pkgname/"
+}
+
+package_libxcrypt-compat-git() {
+  pkgdesc='Modern library for one-way hashing of passwords - legacy glibc API functions (git build)'
+  depends=('libxcrypt-git' 'glibc')
+  provides=("libxcrypt-compat=$pkgver" 'libcrypt.so')
+  conflicts=('libxcrypt-compat')
+
+  make -C build-libxcrypt-compat DESTDIR="$pkgdir" install
+
+  # headers, dev symlinks, pkgconfig and docs belong to the main output
+  rm -rf "$pkgdir"/usr/{include,lib/{lib*.so,pkgconfig},share}
+  install -Dm644 libxcrypt/COPYING.LIB -t "$pkgdir/usr/share/licenses/$pkgname/"
+}

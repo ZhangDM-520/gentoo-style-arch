@@ -1,0 +1,70 @@
+# Maintainer: Maxime Gauduin <alucryd@archlinux.org>
+# Contributor: Ray Rashif <schiv@archlinux.org>
+# Contributor:  Ionut Biru <ibiru@archlinux.org>
+# Contributor: Hugo Doria <hugo@archlinux.org>
+
+pkgname=lame
+pkgver=4.0
+pkgrel=1
+pkgdesc='A high quality MPEG Audio Layer III (MP3) encoder'
+arch=(x86_64)
+url=http://lame.sourceforge.net/
+license=(LGPL-2.0-only)
+depends=(
+  glibc
+  mpg123
+  ncurses
+)
+makedepends=(nasm)
+provides=(libmp3lame.so)
+source=(
+  https://sourceforge.net/projects/lame/files/lame/${pkgver}/lame-${pkgver}.tar.gz
+  lame-symbols.patch
+  lame-cbr-abr-quality-settings-clamp.patch
+)
+b2sums=('9e05275c28bc6d086011362f211edc2e2cd831429ca4d2daa1bc0ae7084ebd9bec3c3db93e1cab638570a9f624468372b9ff39f3dc9e7d0b105dbba7f248b2df'
+        'c8cc00f560515231dba1bf9393d056ecb11c2268bafae4923e8c2594b92de473b94e6e5cbef1e52b4843ddd36bb4e06ea6b24ac4a18aa682b2ab7c5ef6deb73c'
+        '217cf6611f13cb91997856c3af9c30b7c23fa3744126d27f71768001b6799a4a100c9c0baec34beb656fee1c8c519c86b1a9c549e2ea6befe197eb930f70caaa')
+
+prepare() {
+  cd lame-${pkgver}
+  patch -Np1 -i ../lame-symbols.patch
+  patch -Np1 -i ../lame-cbr-abr-quality-settings-clamp.patch
+  autoreconf -fiv -I /usr/share/gettext/m4
+
+}
+
+build() {
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  cd lame-${pkgver}
+  export CFLAGS+=" -Wno-implicit-function-declaration -Wno-incompatible-pointer-types"
+  ./configure \
+    --prefix=/usr \
+    --enable-nasm \
+    --enable-mp3rtp \
+    --enable-shared
+  make -j"${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+check() {
+  make test -C lame-${pkgver}
+}
+
+package() {
+  make DESTDIR="${pkgdir}" install -C lame-${pkgver}
+
+  # trim: man pages and bundled HTML docs (docs/man not shipped by this recipe)
+  rm -rf "${pkgdir}"/usr/share/{doc,man}
+
+  # license: ship the upstream LGPL-2.0-only text
+  local _lic
+  for _lic in LICENSE COPYING; do
+    if [[ -f lame-${pkgver}/$_lic ]]; then
+      install -Dm644 "lame-${pkgver}/$_lic" -t "${pkgdir}/usr/share/licenses/${pkgname}/"
+    fi
+  done
+}

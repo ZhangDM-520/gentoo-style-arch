@@ -15,5 +15,7 @@ pkgbase = zlib-ng-compat-git
 pkgname = zlib-ng-compat-git
 	pkgdesc = zlib replacement with optimizations for next generation systems (zlib compat)
 	provides = zlib
-	provides = libz.so=1-64
+	provides = libz.so
+	provides = zlib-ng-compat=2.3.1.r582.gg9e60980e
 	conflicts = zlib
+	conflicts = zlib-ng-compat

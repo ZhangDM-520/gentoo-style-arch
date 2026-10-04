@@ -1,0 +1,39 @@
+# Maintainer: AndyRTR <andyrtr@archlinux.org>
+# Contributorr: Brad Fanella <cesura@archlinux.org>
+# Contributor: Andrey Vihrov <andrey.vihrov at gmail.com>
+
+pkgname=libxpresent
+pkgver=1.0.2
+pkgrel=1
+pkgdesc="X Present Extension library"
+arch=('x86_64')
+url="https://gitlab.freedesktop.org/xorg/lib/libxpresent"
+license=('MIT')
+depends=('libxfixes' 'libxrandr' 'libxext' 'libx11' 'glibc' 'xorgproto')
+makedepends=('xorg-util-macros')
+# House standard: bare soname provide per ELF output (never pinned).
+# Upstream soname is libXpresent.so.1.
+provides=('libXpresent.so')
+source=(https://xorg.freedesktop.org/archive/individual/lib/libXpresent-${pkgver}.tar.xz{,.sig})
+sha512sums=('7e12c386e5d1404db359f8004a141223b4c08a138a5589d087537ca667e9dd5cdc190f170a5fa991c1f8dd022896bb07bff540e262a0d30d542a3faea06d8c93'
+            'SKIP')
+validpgpkeys=('3AB285232C46AE43D8E192F4DAB0F78EA6E7E2D2') #Alan Coopersmith <alan.coopersmith@oracle.com>
+
+build() {
+  cd libXpresent-${pkgver}
+
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  ./configure --prefix=/usr
+  sed -i -e 's/ -shared / -Wl,-O1,--as-needed\0/g' libtool
+  make -j"${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package() {
+  cd libXpresent-${pkgver}
+  make DESTDIR="${pkgdir}" install
+  install -D -m 0644 COPYING "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+}

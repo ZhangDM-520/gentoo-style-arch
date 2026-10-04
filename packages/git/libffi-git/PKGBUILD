@@ -1,0 +1,41 @@
+# Maintainer: auto-generated
+# AUR reference: libffi-git (Maintainer: Chocobo1 <chocobo1 AT archlinux DOT net>)
+pkgname=libffi-git
+_pkgname=libffi
+pkgver=3.8.0.r27.gac598b7f
+pkgrel=1
+pkgdesc="Portable foreign function interface library (git build)"
+arch=('x86_64')
+url="https://sourceware.org/libffi/"
+license=('MIT')
+depends=('glibc')
+makedepends=('git')
+provides=("libffi=$pkgver" 'libffi.so')
+conflicts=('libffi')
+options=('staticlibs')
+source=("git+https://github.com/libffi/libffi.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$_pkgname"
+  git describe --long --tags | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g'
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  cd "$_pkgname"
+  ./autogen.sh
+  ./configure \
+    --prefix=/usr \
+    --enable-pax_emutramp
+  make -j"${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+}
+
+package() {
+  cd "$_pkgname"
+  make DESTDIR="$pkgdir" install
+  install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

@@ -1,0 +1,18 @@
+pkgbase = libexif-git
+	pkgdesc = A library for parsing, editing and saving EXIF data (git build)
+	pkgver = 0.6.26.r0.g1ce27bb
+	pkgrel = 1
+	url = https://libexif.github.io/
+	arch = x86_64
+	license = LGPL-2.1-or-later
+	makedepends = git
+	makedepends = gettext
+	depends = glibc
+	provides = libexif=0.6.26.r0.g1ce27bb
+	provides = libexif.so
+	conflicts = libexif
+	options = staticlibs
+	source = git+https://github.com/libexif/libexif.git
+	sha256sums = SKIP
+
+pkgname = libexif-git

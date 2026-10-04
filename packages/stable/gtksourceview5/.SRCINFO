@@ -1,0 +1,30 @@
+pkgbase = gtksourceview5
+	pkgdesc = A text widget adding syntax highlighting and more to GNOME
+	pkgver = 5.22.0
+	pkgrel = 1
+	url = https://gitlab.gnome.org/GNOME/gtksourceview
+	arch = x86_64
+	license = LGPL-2.1-or-later
+	makedepends = git
+	makedepends = glib2-devel
+	makedepends = gobject-introspection
+	makedepends = meson
+	makedepends = vala
+	depends = cairo
+	depends = fontconfig
+	depends = fribidi
+	depends = gdk-pixbuf2
+	depends = glib2
+	depends = glibc
+	depends = graphene
+	depends = gtk4
+	depends = hicolor-icon-theme
+	depends = libgcc
+	depends = libxml2
+	depends = pango
+	depends = pcre2
+	source = git+https://gitlab.gnome.org/GNOME/gtksourceview.git#tag=5.22.0
+	b2sums = c82a97207d4f23b8685a4bc19593b743510c8c0941add3d8a8724e2be5c65a89b99adc665e02331d225cea689b8dbca4b6cdb36b9985b53a264b69dbf6e3a7c4
+
+pkgname = gtksourceview5
+	provides = libgtksourceview-5.so

@@ -1,0 +1,60 @@
+# Maintainer: David Runge <dvzrv@archlinux.org>
+# Maintainer: Felix Yan <felixonmars@archlinux.org>
+# Maintainer: Chocobo1 <chocobo1 AT archlinux DOT net>
+# Contributor: Dave Reisland <dreisner@archlinux.org>
+# Contributor: Angel Velasquez <angvp@archlinux.org>
+# Contributor: Sergej Pupykin <pupykin.s+mail.ru>
+# Contributor: Andrea Scarpino <ilploomo@gmail.com>
+#
+# git build adapted from AUR libssh2-git (reference only) + stock Arch libssh2:
+# tracks upstream master directly (stock pins signed release tags). Stock
+# backports CVE fixes (patch + cherry-picks) onto the 1.11.1 tag; every one of
+# them comes from an upstream master commit, so tracking master supersedes
+# those backports.
+
+pkgname=libssh2-git
+_pkgname=libssh2
+pkgver=1.11.1.r111.g723b7017
+pkgrel=1
+pkgdesc="A library implementing the SSH2 protocol as defined by Internet Drafts (git build)"
+arch=('x86_64')
+url="https://www.libssh2.org/"
+license=('BSD-3-Clause')
+depends=('glibc' 'openssl' 'zlib')
+makedepends=('git')
+provides=("libssh2=$pkgver" 'libssh2.so')
+conflicts=('libssh2')
+# libssh2-x.y.z release tags are signed; this recipe tracks master so there is
+# no pinned tag to verify — fingerprint kept for documentation only, taken
+# from the stock Arch PKGBUILD (upstream-published release signer).
+validpgpkeys=('27EDEAF22F3ABCEB50DB9A125CC908FDB71E12C2')   # Daniel Stenberg
+source=("git+https://github.com/libssh2/${_pkgname}.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$_pkgname"
+  git describe --long --tags | sed 's/^libssh2-//;s/\([^-]*-g\)/r\1/;s/-/./g'
+}
+
+prepare() {
+  cd "$_pkgname"
+  autoreconf -fiv
+}
+
+build() {
+  cd "$_pkgname"
+
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  ./configure --prefix=/usr --disable-docker-tests
+  make -j"${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package() {
+  cd "$_pkgname"
+
+  make DESTDIR="$pkgdir" install
+  install -Dm644 COPYING "$pkgdir/usr/share/licenses/$pkgname/COPYING"
+}

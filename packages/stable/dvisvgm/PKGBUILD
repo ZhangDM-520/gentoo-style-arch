@@ -1,0 +1,60 @@
+# Maintainer: Antonio Rojas <arojas@archlinux.org>
+
+pkgname=dvisvgm
+pkgver=3.6.1
+pkgrel=1
+pkgdesc='A fast DVI, EPS, and PDF to SVG converter'
+arch=(x86_64)
+url='https://dvisvgm.de/'
+license=(GPL-3.0-or-later)
+depends=(brotli
+         freetype2
+         ghostscript
+         glibc
+         libgcc
+         libstdc++
+         potrace
+         texlive-basic
+         texlive-bin
+         woff2
+         xxhash
+         zlib)
+optdepends=('mupdf-tools: to process PDF files')
+makedepends=(autoconf-archive
+             git
+             python)
+source=(git+https://github.com/mgieseki/dvisvgm#tag=$pkgver)
+sha256sums=('4dce7f3eedbd9c150010a7790649d0cbfbe2a4be6ef2cd1349d11df255894923')
+
+prepare() {
+  cd $pkgname
+  autoreconf -vi
+}
+
+build() {
+  cd $pkgname
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+  ./configure \
+    --prefix=/usr
+  make -j"${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+}
+
+check() {
+  cd $pkgname
+  make check
+}
+
+package() {
+  cd $pkgname
+  make DESTDIR="$pkgdir" install
+  # trim: man/locales/info — lean consumer-rebuild recipe
+  rm -rf "$pkgdir/usr/share/man" "$pkgdir/usr/share/locale" "$pkgdir/usr/share/info"
+  # license: ship upstream licence text (GPL-3.0-or-later)
+  local _l
+  for _l in COPYING COPYING.GPLv3 LICENSE; do
+    if [[ -f $_l ]]; then install -Dm644 "$_l" -t "$pkgdir/usr/share/licenses/$pkgname/"; fi
+  done
+}

@@ -1,0 +1,48 @@
+# Contributor: Flamelab <panosfilip@gmail.com>
+# Class A git recipe: tracks upstream KDE libkdcraw git directly (HEAD).
+# AUR libkdcraw-git and stock libkdcraw are REFERENCES ONLY. The AUR reference
+# is stale (Qt5/kdoctools, anongit.kde.org): upstream master is Qt6 — adapted
+# to stock's build shape (ECM + Qt6, BUILD_TESTING off, no kdoctools).
+
+pkgname=libkdcraw-git
+pkgver=26.08.1.r0.g3afdbfc37b
+pkgrel=1
+pkgdesc='A C++ interface used to decode RAW picture (git build)'
+arch=('x86_64')
+url='https://invent.kde.org/graphics/libkdcraw'
+# upstream REUSE tree ships LICENSES/GPL-2.0-or-later.txt + BSD-3-Clause.txt
+# (the BSD one covers the bundled FindLibRaw cmake module); stock declares
+# LGPL-2.0-or-later but no LGPL text exists upstream — adapted
+license=('GPL-2.0-or-later' 'BSD-3-Clause')
+depends=('glibc' 'libgcc' 'libraw' 'libstdc++' 'qt6-base')
+makedepends=('cmake' 'extra-cmake-modules' 'git')
+# soname shipped: libKDcrawQt6.so.5 (upstream OUTPUT_NAME KDcrawQt6)
+provides=("libkdcraw=$pkgver" 'libKDcrawQt6.so')
+conflicts=('libkdcraw')
+source=('git+https://invent.kde.org/graphics/libkdcraw.git')
+b2sums=('SKIP')
+
+pkgver() {
+  cd libkdcraw
+  git describe --long --tags | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g'
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  cmake -B build -S libkdcraw \
+    -DCMAKE_BUILD_TYPE:STRING='None' \
+    -DCMAKE_INSTALL_PREFIX:PATH='/usr' \
+    -DBUILD_TESTING:BOOL='OFF' \
+    -Wno-dev
+  cmake --build build
+}
+
+package() {
+  DESTDIR="$pkgdir" cmake --install build
+  install -Dm644 libkdcraw/LICENSES/GPL-2.0-or-later.txt \
+                 libkdcraw/LICENSES/BSD-3-Clause.txt \
+                 -t "${pkgdir}/usr/share/licenses/${pkgname}"
+}

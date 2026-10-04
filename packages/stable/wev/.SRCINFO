@@ -1,0 +1,15 @@
+pkgbase = wev
+	pkgdesc = A tool for debugging wayland events on a Wayland window, analagous to the X11 tool xev
+	pkgver = 1.1.0
+	pkgrel = 1
+	url = https://git.sr.ht/~sircmpwn/wev
+	arch = x86_64
+	license = MIT
+	makedepends = scdoc
+	makedepends = wayland-protocols
+	depends = wayland
+	depends = libxkbcommon
+	source = wev-1.1.0.tar.gz::https://git.sr.ht/~sircmpwn/wev/archive/1.1.0.tar.gz
+	b2sums = 2e2a232d33ec274e5d9afa4ea3f11a13eb3f91e7ba1faddd6b324dc6ef93ecf71ffae81fd4f50ab9f48b4aaae68f498302b2799dd5aa688c73aef3cfa54e36c1
+
+pkgname = wev

@@ -1,0 +1,19 @@
+pkgbase = acl-git
+	pkgdesc = Commands for manipulating POSIX access control lists (git build)
+	pkgver = 2.3.2.r7.g714d74b
+	pkgrel = 1
+	url = https://savannah.nongnu.org/projects/acl
+	arch = x86_64
+	license = GPL-2.0-or-later
+	license = LGPL-2.1-or-later
+	makedepends = git
+	depends = attr
+	depends = glibc
+	provides = acl=2.3.2.r7.g714d74b
+	provides = libacl.so
+	conflicts = acl
+	options = staticlibs
+	source = git+https://git.savannah.gnu.org/git/acl.git
+	b2sums = SKIP
+
+pkgname = acl-git

@@ -1,0 +1,20 @@
+pkgbase = libnewt
+	pkgdesc = Not Erik's Windowing Toolkit - text mode windowing with slang
+	pkgver = 0.52.25
+	pkgrel = 2
+	url = https://pagure.io/newt
+	arch = x86_64
+	license = GPL-2.0-only
+	makedepends = tcl>=8.6
+	makedepends = python
+	depends = glibc
+	depends = gpm
+	depends = popt
+	depends = slang
+	optdepends = python: libnewt support with the _snack module
+	optdepends = tcl: whiptcl support
+	provides = libnewt.so
+	source = https://pagure.io/newt/archive/r0-52-25/newt-r0-52-25.tar.gz
+	b2sums = d6bdc09589e409687cc56a0a7e4e3d943e8026c769d9f95ef1e9af693b51c818af32700270d117c5796b52ed3f14417753e6db1e7377118054960721c3b9bb15
+
+pkgname = libnewt

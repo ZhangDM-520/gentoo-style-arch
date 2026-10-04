@@ -1,0 +1,77 @@
+pkgbase = gnome-desktop
+	pkgdesc = Provides API shared by several apps on the GNOME desktop
+	pkgver = 51.0
+	pkgrel = 1
+	epoch = 1
+	url = https://gitlab.gnome.org/GNOME/gnome-desktop
+	arch = x86_64
+	license = GPL-2.0-or-later
+	license = LGPL-2.0-or-later
+	checkdepends = xorg-server-xvfb
+	makedepends = git
+	makedepends = glib2-devel
+	makedepends = gobject-introspection
+	makedepends = gtk3
+	makedepends = gtk4
+	makedepends = meson
+	makedepends = systemd
+	makedepends = yelp-tools
+	depends = bubblewrap
+	depends = cairo
+	depends = gdk-pixbuf2
+	depends = glib2
+	depends = glibc
+	depends = gsettings-desktop-schemas
+	depends = iso-codes
+	depends = libgcc
+	depends = libseccomp
+	depends = libxkbcommon
+	depends = systemd-libs
+	depends = xkeyboard-config
+	source = git+https://gitlab.gnome.org/GNOME/gnome-desktop.git#tag=51.0
+	source = git+https://github.com/nayuki/QR-Code-generator.git#commit=8329a7108fc22be3e1eec0a9f9318978579e3621
+	b2sums = 020fdca37b46b9ead69bbabd118247ae572f3741630c06545423df29cca936323c08ee158baf58b0288d7ee613c84736f3f80aff69004935529c5b6713a3fda5
+	b2sums = 6edb307fd99bf028177423b6c58925a276139b0f1f44d61026a9d59d0007984564eb187a8f5d612ba3d53f94b8b48eb5b5015eadb9d0b1f50554bdad1ef386a1
+
+pkgname = gnome-desktop-common
+	pkgdesc = Provides API shared by several apps on the GNOME desktop (common files)
+	depends = 
+
+pkgname = gnome-desktop
+	pkgdesc = Provides API shared by several apps on the GNOME desktop using GTK 3
+	depends = bubblewrap
+	depends = cairo
+	depends = gdk-pixbuf2
+	depends = glib2
+	depends = glibc
+	depends = gsettings-desktop-schemas
+	depends = iso-codes
+	depends = libgcc
+	depends = libseccomp
+	depends = libxkbcommon
+	depends = systemd-libs
+	depends = xkeyboard-config
+	depends = gnome-desktop-common=1:51.0-1
+	depends = gtk3
+	provides = libgnome-desktop-3.so
+
+pkgname = gnome-desktop-4
+	pkgdesc = Provides API shared by several apps on the GNOME desktop using GTK 4
+	depends = bubblewrap
+	depends = cairo
+	depends = gdk-pixbuf2
+	depends = glib2
+	depends = glibc
+	depends = gsettings-desktop-schemas
+	depends = iso-codes
+	depends = libgcc
+	depends = libseccomp
+	depends = libxkbcommon
+	depends = systemd-libs
+	depends = xkeyboard-config
+	depends = gnome-desktop-common=1:51.0-1
+	depends = gtk4
+	provides = libgnome-bg-4.so
+	provides = libgnome-desktop-4.so
+	provides = libgnome-qr-4.so
+	provides = libgnome-qr-gtk-4.so

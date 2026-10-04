@@ -1,0 +1,104 @@
+# Maintainer: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
+# Contributor: Jerome Leclanche <jerome@leclan.ch>
+# Contributor: Clément Démoulins <clement@archivel.fr>
+# Contributor: Daniel J Griffiths <ghost1227@archlinux.us>
+# Contributor: Corrado Primier <bardo@aur.archlinux.org>
+# Contributor: William Rea <willy@kinsl.com>
+# Contributor: Ben Morgan <neembi@gmail.com>
+#
+# git build adapted from AUR libpulse-git (pulseaudio-git split, reference
+# only) + stock Arch pulseaudio pkgbase: tracks pulseaudio master directly and
+# ships ONLY the stock `libpulse` output. The pulseaudio daemon outputs
+# (pulseaudio, pulseaudio-{zeroconf,lirc,jack,bluetooth,equalizer,rtp}) are
+# NOT superseded by this recipe and are discarded at package time.
+
+pkgname=libpulse-git
+_pkgname=pulseaudio
+pkgver=17.0.r38.gcba313d8f
+pkgrel=1
+pkgdesc="A featureful, general-purpose sound server (client library) (git build)"
+arch=('x86_64')
+url="https://www.freedesktop.org/wiki/Software/PulseAudio/"
+license=('LGPL-2.1-or-later')
+depends=('bash' 'dbus' 'glib2' 'glibc' 'libasyncns' 'libsndfile' 'libxcb' 'systemd-libs')
+optdepends=('pulse-native-provider: PulseAudio backend')
+# Full-tree build deps (stock Arch pulseaudio makedepends): meson configures
+# and builds the whole tree even though only the libpulse subset is shipped.
+makedepends=(
+  alsa-lib attr avahi bash bluez bluez-libs check dbus doxygen fftw git
+  glib2 gst-plugins-base gst-plugins-base-libs gst-plugins-good gstreamer
+  gtk3 jack2 libasyncns libcap libice libltdl libsm libsndfile libsoxr
+  libx11 libxcb libxtst lirc meson openssl orc python python-dbus
+  python-pyqt5 rtkit sbc speexdsp systemd systemd-libs tdb valgrind
+  webrtc-audio-processing-1 xmltoman
+)
+provides=("libpulse=$pkgver" 'libpulse-mainloop-glib.so' 'libpulse-simple.so' 'libpulse.so')
+conflicts=('libpulse')
+backup=('etc/pulse/client.conf')
+source=("git+https://gitlab.freedesktop.org/pulseaudio/pulseaudio.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$_pkgname"
+  git describe --long --tags | sed 's/\([^-]*-g\)/r\1/;s/-/./g;s/^v//'
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  # meson options mirror stock Arch pulseaudio (which also tracks master); the
+  # stock crash-fix patch is dropped — master already carries the fix
+  local meson_options=(
+    -D consolekit=disabled
+    -D elogind=disabled
+    -D pulsedsp-location='/usr/\$LIB/pulseaudio'
+    -D stream-restore-clear-old-devices=true
+    -D tcpwrap=disabled
+    -D udevrulesdir=/usr/lib/udev/rules.d
+  )
+
+  arch-meson "$_pkgname" build "${meson_options[@]}"
+  meson compile -C build
+}
+
+_pick() {
+  local p="$1" f d; shift
+  for f; do
+    # tolerate file-surface drift on master
+    [[ -e "$f" ]] || continue
+    d="$srcdir/$p/${f#$pkgdir/}"
+    mkdir -p "$(dirname "$d")"
+    mv "$f" "$d"
+    rmdir -p --ignore-fail-on-non-empty "$(dirname "$f")" 2>/dev/null || true
+  done
+}
+
+package() {
+  meson install -C build --destdir "$pkgdir"
+
+  cd "$pkgdir"
+
+  # Stock pkgbase split: keep exactly the libpulse output (mirrors stock's
+  # _pick list); whatever is left afterwards is daemon surface this recipe
+  # does not supersede and gets dropped.
+  _pick libpulse etc/pulse/client.conf
+  _pick libpulse usr/bin/pa{cat,ctl,dsp,mon,play,rec,record}
+  _pick libpulse usr/lib/libpulse{,-simple,-mainloop-glib}.so*
+  _pick libpulse usr/lib/cmake usr/lib/pkgconfig
+  _pick libpulse usr/lib/pulseaudio/libpulse{dsp,common-*}.so
+  _pick libpulse usr/include
+  _pick libpulse usr/share/man/man1/pa{cat,ctl,dsp,mon,play,rec,record}.1
+  _pick libpulse usr/share/man/man5/pulse-client.conf.5
+  _pick libpulse usr/share/bash-completion/completions/pa{cat,ctl,play,rec,record}
+  _pick libpulse usr/share/bash-completion/completions/pulseaudio
+  _pick libpulse usr/share/vala
+  _pick libpulse usr/share/zsh
+
+  find "$pkgdir" -mindepth 1 -delete
+
+  mv "$srcdir/libpulse"/* "$pkgdir"
+
+  install -Dm644 "$srcdir/$_pkgname/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

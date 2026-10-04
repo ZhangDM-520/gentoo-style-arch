@@ -1,0 +1,51 @@
+# Maintainer: Brett Cornwall <ainola@archlinux.org>
+# Maintainer: Robin Candau <antiz@archlinux.org>
+# Contributor: gilbus
+
+pkgname=swaylock
+pkgver=1.8.6
+pkgrel=1
+license=("MIT")
+pkgdesc="Screen locker for Wayland"
+makedepends=(
+    'meson'
+    'scdoc'
+    'wayland-protocols'
+    'git'
+)
+depends=(
+    'cairo'
+    'libxkbcommon'
+    'pam'
+    'wayland'
+    'gdk-pixbuf2'  # For images other than PNG
+)
+arch=('x86_64')
+url="https://github.com/swaywm/swaylock"
+backup=('etc/pam.d/swaylock')
+source=("git+$url.git#tag=v$pkgver?signed")
+sha256sums=('3f732a91188c2ad94efcba21aa86064cd3ec92e99b37d2fbe49c31b93a66abdc')
+validpgpkeys=(
+    "9DDA3B9FA5D58DD5392C78E652CB6609B22DA89A"  # Drew DeVault
+    "34FF9526CFEF0E97A340E2E40FDE7BE0E88F5E48"  # Simon Ser
+)
+
+build() {
+    # House style: mold linker when available
+    local _mold=""
+    command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+    export LDFLAGS+=" ${_mold}"
+
+    arch-meson "$pkgname" build
+    meson compile -C build -j "${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package() {
+    DESTDIR="$pkgdir/" ninja -C build install
+    install -Dm644 "$pkgname/LICENSE" -t "$pkgdir/usr/share/licenses/$pkgname"
+
+    # trim: man pages (docs) and the README doc copy — not part of the
+    # maintained target; the scdoc makedep stays (upstream meson builds the
+    # man page as part of the default target)
+    rm -rf "$pkgdir"/usr/share/man "$pkgdir"/usr/share/doc
+}

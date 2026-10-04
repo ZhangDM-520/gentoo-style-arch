@@ -1,0 +1,19 @@
+pkgbase = libseccomp-git
+	pkgdesc = Enhanced seccomp library (git build)
+	pkgver = 2.5.4.r126.gf1c3196
+	pkgrel = 1
+	url = https://github.com/seccomp/libseccomp
+	arch = x86_64
+	license = LGPL-2.1-only
+	makedepends = git
+	makedepends = gperf
+	depends = glibc
+	provides = libseccomp=2.5.4.r126.gf1c3196
+	provides = libseccomp.so
+	conflicts = libseccomp
+	source = git+https://github.com/seccomp/libseccomp.git
+	validpgpkeys = 7100AADFAE6E6E940D2E0AD655E45A5AE8CA7C8A
+	validpgpkeys = 47A68FCE37C7D7024FD65E11356CE62C2B524099
+	sha256sums = SKIP
+
+pkgname = libseccomp-git

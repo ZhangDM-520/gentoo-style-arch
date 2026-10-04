@@ -1,0 +1,41 @@
+# Maintainer: AndyRTR <andyrtr@archlinux.org>
+
+pkgname=libepubgen
+pkgver=0.1.1
+pkgrel=6
+pkgdesc="an EPUB generator for librevenge"
+arch=('x86_64')
+url="https://sourceforge.net/projects/libepubgen/"
+license=('MPL-2.0')
+depends=('librevenge' 'glibc' 'libstdc++' 'libgcc')
+# trim: cppunit/libxml2 feed the unit tests and doxygen the API docs (dropped
+# in build() below) — neither is pulled back in as a makedep
+makedepends=('boost')
+provides=('libepubgen-0.1.so')
+source=("https://sourceforge.net/projects/$pkgname/files/$pkgname-$pkgver/$pkgname-$pkgver.tar.xz")
+sha1sums=('48e81c60e173552fce77ce3b414e68b7d52a5301')
+sha256sums=('03e084b994cbeffc8c3dd13303b2cb805f44d8f2c3b79f7690d7e3fc7f6215ad')
+
+prepare() {
+  cd "$pkgname-$pkgver"
+  autoreconf -vfi
+}
+
+build() {
+	cd "$pkgname-$pkgver"
+	# House style: mold linker when available
+	local _mold=""
+	command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+	export LDFLAGS+=" ${_mold}"
+	# trim: unit tests (cppunit) and doxygen API docs — see makedepends note
+	./configure --prefix=/usr --disable-tests --without-docs
+	make
+}
+
+package() {
+	cd "$pkgname-$pkgver"
+	make DESTDIR="$pkgdir/" install
+	# trim: any doxygen HTML left under /usr/share/doc (docs)
+	rm -rf "$pkgdir"/usr/share/doc
+	install -Dm644 COPYING -t "$pkgdir"/usr/share/licenses/"$pkgname"/
+}

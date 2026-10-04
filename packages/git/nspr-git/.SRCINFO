@@ -1,0 +1,22 @@
+pkgbase = nspr-git
+	pkgdesc = Netscape Portable Runtime (hg build)
+	pkgver = 4.39beta1.r5.g3fa8e4d81657
+	pkgrel = 1
+	url = https://developer.mozilla.org/en-US/docs/Mozilla/Projects/NSPR
+	arch = x86_64
+	license = MPL-2.0
+	makedepends = mercurial
+	makedepends = zip
+	depends = glibc
+	depends = sh
+	provides = nspr=4.39beta1.r5.g3fa8e4d81657
+	provides = libnspr4.so
+	provides = libplc4.so
+	provides = libplds4.so
+	conflicts = nspr
+	source = nspr::hg+https://hg.mozilla.org/projects/nspr
+	source = 0002-configure.in-Remove-assembly-files-from-build.patch
+	b2sums = SKIP
+	b2sums = eec760670dfeac2d27cd41573bb97ee4e8251c54d80f2404bc4e32058511a3c63f37fe9f37bc6348a7d3cf0eaf5440bec1479ec38141d64d2e61137b67912be3
+
+pkgname = nspr-git

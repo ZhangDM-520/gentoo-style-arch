@@ -1,0 +1,34 @@
+# Maintainer: Andrea Scarpino <andrea@archlinux.org>
+# Contributor: nesl247 <nesl247@gmail.com>
+
+pkgbase=pycups
+pkgname=('python-pycups')
+pkgver=2.0.4
+pkgrel=4
+arch=('x86_64')
+url="https://github.com/OpenPrinting/pycups"
+license=('GPL-2.0-or-later')
+pkgdesc="Python bindings for libcups"
+depends=('libcups' 'python' 'glibc')
+makedepends=('python-setuptools')
+provides=('pycups')
+source=(${pkgname}-${pkgver}.tar.gz::https://github.com/OpenPrinting/pycups/archive/v${pkgver}.tar.gz)
+sha256sums=('31d9cf62df7884fe430d11970a8c9278282a47a0ff6b1529c58c7d26e8eb4789')
+
+build() {
+  cd ${pkgbase}-${pkgver}
+  # House style: mold linker when available (the extension link line consumes
+  # LDFLAGS from the environment).
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  python setup.py build
+}
+
+package() {
+  cd ${pkgbase}-${pkgver}
+  python setup.py install --root="${pkgdir}" --optimize=1
+  # house: licence re-homed to /usr/share/licenses (stock installs none)
+  install -Dm644 COPYING "$pkgdir"/usr/share/licenses/$pkgname/COPYING
+}

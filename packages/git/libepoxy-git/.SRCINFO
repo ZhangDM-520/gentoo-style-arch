@@ -1,0 +1,22 @@
+pkgbase = libepoxy-git
+	pkgdesc = Library handling OpenGL function pointer management (git build)
+	pkgver = 1.5.10.r0.g34ecb90
+	pkgrel = 1
+	url = https://github.com/anholt/libepoxy
+	arch = x86_64
+	license = MIT
+	makedepends = git
+	makedepends = meson
+	makedepends = python
+	makedepends = libx11
+	makedepends = xorgproto
+	depends = glibc
+	depends = libglvnd
+	depends = libx11
+	provides = libepoxy=1.5.10.r0.g34ecb90
+	provides = libepoxy.so
+	conflicts = libepoxy
+	source = git+https://github.com/anholt/libepoxy.git
+	sha256sums = SKIP
+
+pkgname = libepoxy-git

@@ -1,0 +1,22 @@
+pkgbase = freetype2-git
+	pkgdesc = Font rasterization library (git build)
+	pkgver = 2.14.3.r16.ga6d486002
+	pkgrel = 1
+	url = https://www.freetype.org/
+	arch = x86_64
+	license = FTL OR GPL-2.0-or-later
+	makedepends = git
+	makedepends = meson
+	depends = brotli
+	depends = bzip2
+	depends = glibc
+	depends = libpng
+	depends = zlib
+	provides = freetype2=2.14.3.r16.ga6d486002
+	provides = libfreetype.so
+	conflicts = freetype2
+	source = git+https://gitlab.freedesktop.org/freetype/freetype.git?signed
+	validpgpkeys = E30674707856409FF1948010BE6C3AAC63AD8E3F
+	b2sums = SKIP
+
+pkgname = freetype2-git

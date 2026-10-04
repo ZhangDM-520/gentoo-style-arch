@@ -7,8 +7,8 @@ pkgbase = liburing-git
 	arch = x86_64
 	license = LGPL2.1
 	provides = liburing
-	provides = liburing.so=2-64
-	provides = liburing-ffi.so=2-64
+	provides = liburing.so
+	provides = liburing-ffi.so
 	conflicts = liburing
 	conflicts = liburing.so
 	source = liburing-git::git+https://github.com/axboe/liburing.git

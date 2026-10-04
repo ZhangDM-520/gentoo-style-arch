@@ -1,0 +1,48 @@
+pkgbase = libnma-git
+	pkgdesc = NetworkManager GUI client library (git build)
+	pkgver = 1.10.6.r0.g513be68b39
+	pkgrel = 1
+	url = https://gitlab.gnome.org/GNOME/libnma
+	arch = x86_64
+	license = GPL-2.0-or-later
+	license = LGPL-2.1-or-later
+	makedepends = dconf
+	makedepends = gcr-4
+	makedepends = git
+	makedepends = gobject-introspection
+	makedepends = gtk-doc
+	makedepends = gtk3
+	makedepends = gtk4
+	makedepends = iso-codes
+	makedepends = libnm
+	makedepends = meson
+	makedepends = mobile-broadband-provider-info
+	makedepends = vala
+	source = git+https://gitlab.gnome.org/GNOME/libnma.git
+	b2sums = SKIP
+
+pkgname = libnma-common-git
+	pkgdesc = NetworkManager GUI client library (common files; git build)
+	depends = dconf
+	depends = gcr-4
+	depends = iso-codes
+	depends = libnm
+	depends = mobile-broadband-provider-info
+	provides = libnma-common=1.10.6.r0.g513be68b39
+	conflicts = libnma-common
+
+pkgname = libnma-git
+	pkgdesc = NetworkManager GUI client library (GTK3; git build)
+	depends = libnma-common-git=1.10.6.r0.g513be68b39-1
+	depends = gtk3
+	provides = libnma=1.10.6.r0.g513be68b39
+	provides = libnma.so
+	conflicts = libnma
+
+pkgname = libnma-gtk4-git
+	pkgdesc = NetworkManager GUI client library (GTK4; git build)
+	depends = libnma-common-git=1.10.6.r0.g513be68b39-1
+	depends = gtk4
+	provides = libnma-gtk4=1.10.6.r0.g513be68b39
+	provides = libnma-gtk4.so
+	conflicts = libnma-gtk4

@@ -1,0 +1,66 @@
+# Maintainer: David Runge <dvzrv@archlinux.org>
+# Contributor: Tobias Powalowski <tpowa@archlinux.org>
+# Contributor: Tom Gundersen <teg@jklm.no>
+# Contributor: Judd Vinet <jvinet@zeroflux.org>
+# Contributor: Curtis Campbell <curtisjamescampbell@hotmail.com>
+
+pkgname=usbutils
+pkgver=019
+pkgrel=1
+pkgdesc="A collection of USB tools to query connected USB devices"
+arch=(x86_64)
+url="https://git.kernel.org/pub/scm/linux/kernel/git/gregkh/usbutils.git/"
+license=(
+  GPL-2.0-only
+  GPL-2.0-or-later
+  GPL-3.0-only
+  LGPL-2.1-or-later
+  MIT
+)
+depends=(
+  glibc
+  hwdata
+)
+makedepends=(
+  libusb
+  meson
+  systemd
+)
+optdepends=(
+  'coreutils: for lsusb.py usage'
+  'python: for lsusb.py usage'
+  'sh: for usb-devices'
+)
+source=(https://www.kernel.org/pub/linux/utils/usb/usbutils/$pkgname-$pkgver.tar{.xz,.sign})
+sha512sums=('fb4acc570c2b71f90c51c2717dc80e844727c8fcfebb5d92c57145eb9d09cbd1f63cf405e07db76c3afaaf3fac87b90f3f512d0a7c4d50cb9e6f26438eca9390'
+            'SKIP')
+b2sums=('8267a36ec9670e83a0df5d5d34aee70d37e773ca25a20978cd6c99df29426e926af4308f97bb38463f50abdea2a764e98752bc4a5ca703bfcfdf9fcc361a7638'
+        'SKIP')
+validpgpkeys=('647F28654894E3BD457199BE38DBBDC86092693E')  # Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+build() {
+  # House style: mold linker when available (arch-meson consumes the LDFLAGS env)
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  arch-meson $pkgname-$pkgver build
+  meson compile -C build -j "${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package() {
+  depends+=(
+    libusb libusb-1.0.so
+    systemd-libs libudev.so
+  )
+
+  meson install -C build --destdir "$pkgdir"
+
+  install -vDm 755 build/usbreset -t "$pkgdir/usr/bin"
+
+  # trim: NEWS/README docs and man pages (Class B trim standard docs/man
+  # payload) — lsusb.py/usb-devices runtime scripts stay
+  rm -rf "$pkgdir"/usr/share/doc "$pkgdir"/usr/share/man
+
+  install -vDm 644 $pkgname-$pkgver/LICENSES/*.txt -t "$pkgdir/usr/share/licenses/$pkgname/"
+}

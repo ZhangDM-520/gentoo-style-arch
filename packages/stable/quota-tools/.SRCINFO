@@ -1,0 +1,22 @@
+pkgbase = quota-tools
+	pkgdesc = Tools to manage kernel-level quotas in Linux
+	pkgver = 4.11
+	pkgrel = 1
+	epoch = 1
+	url = https://sourceforge.net/projects/linuxquota/
+	arch = x86_64
+	license = GPL-2.0-or-later
+	makedepends = rpcsvc-proto
+	depends = dbus
+	depends = e2fsprogs
+	depends = glibc
+	depends = libldap
+	depends = libnl
+	depends = libtirpc
+	backup = etc/quotagrpadmins
+	backup = etc/quotatab
+	backup = etc/warnquota.conf
+	source = https://downloads.sourceforge.net/sourceforge/linuxquota/quota-4.11.tar.gz
+	sha256sums = 0a51b8f920254d8e83c34a4c3082b7d241f5d6fd65188afadf29859d5223ef78
+
+pkgname = quota-tools

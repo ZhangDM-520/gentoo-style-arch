@@ -1,0 +1,23 @@
+pkgbase = libfido2-git
+	pkgdesc = Library functionality for FIDO 2.0, including communication with a device over USB (git build)
+	pkgver = 1.17.0.r108.daeb325
+	pkgrel = 1
+	url = https://developers.yubico.com/libfido2/
+	arch = x86_64
+	license = BSD-2-Clause
+	makedepends = git
+	makedepends = cmake
+	depends = gcc-libs
+	depends = glibc
+	depends = openssl
+	depends = libcbor
+	depends = hidapi
+	depends = systemd-libs
+	depends = zlib
+	provides = libfido2=1.17.0.r108.daeb325
+	provides = libfido2.so
+	conflicts = libfido2
+	source = git+https://github.com/Yubico/libfido2.git
+	sha256sums = SKIP
+
+pkgname = libfido2-git

@@ -1,0 +1,115 @@
+# Maintainer: Sebastian Krzyszkowiak <dos@dosowisko.net>
+# Contributor: Ionut Biru <ionut@archlinux.ro>
+# Contributor: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
+# Class A git recipe: tracks upstream ModemManager git directly (HEAD).
+# AUR modemmanager-git and stock modemmanager are REFERENCES ONLY. The AUR
+# reference is stale (autotools + strict-filter.diff patch): upstream main is
+# meson — adapted to stock's meson build shape; the stock cherry-picks are
+# release-branch fixes already merged upstream.
+
+pkgbase=modemmanager-git
+pkgname=(modemmanager-git libmm-glib-git)
+pkgver=1.24.2.r0.g338ecc06f2
+pkgrel=1
+pkgdesc="Mobile broadband modem management service (git build)"
+arch=(x86_64)
+url="https://www.freedesktop.org/wiki/Software/ModemManager/"
+license=(GPL-2.0-or-later LGPL-2.1-or-later)
+depends=(
+  bash
+  glib2
+  glibc
+  hicolor-icon-theme
+  libgcc
+  libgudev
+  libmbim
+  libqmi
+  libqrtr-glib
+  mobile-broadband-provider-info
+  polkit
+  ppp
+  systemd-libs
+)
+makedepends=(
+  git
+  glib2
+  gobject-introspection
+  meson
+  vala
+)
+# trimmed vs stock: gtk-doc (docs) + its modemmanager-docs output, and
+# bash-completion (only needed to lint the shipped completion)
+source=("git+https://gitlab.freedesktop.org/mobile-broadband/ModemManager.git")
+b2sums=('SKIP')
+
+pkgver() {
+  cd ModemManager
+  git describe --long --tags | sed 's/\([^-]*-g\)/r\1/;s/-/./g;s/^v//'
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  local meson_options=(
+    -D dbus_policy_dir=/usr/share/dbus-1/system.d
+    -D dist_version="\"$pkgver-$pkgrel\""
+    # docs trimmed: stock ships a modemmanager-docs output; dropped here
+    -D gtk_doc=false
+    -D polkit=permissive
+    -D vapi=true
+  )
+
+  arch-meson ModemManager build "${meson_options[@]}"
+  meson compile -C build
+}
+
+_pick() {
+  local p="$1" f d; shift
+  for f; do
+    d="$srcdir/$p/${f#$pkgdir/}"
+    mkdir -p "$(dirname "$d")"
+    mv "$f" "$d"
+    rmdir -p --ignore-fail-on-non-empty "$(dirname "$f")"
+  done
+}
+
+package_modemmanager-git() {
+  pkgdesc="Mobile broadband modem management service (git build)"
+  license=(GPL-2.0-or-later)
+  depends+=("libmm-glib-git=$pkgver-$pkgrel")
+  optdepends=('usb_modeswitch: install if your modem shows up as a storage drive')
+  # stock output superseded: modemmanager
+  provides=("modemmanager=$pkgver")
+  conflicts=('modemmanager')
+
+  meson install -C build --destdir "$pkgdir"
+
+  cd "$pkgdir"
+  _pick libmm-glib usr/include
+  _pick libmm-glib usr/lib/girepository-1.0
+  _pick libmm-glib usr/lib/libmm-glib.so*
+  _pick libmm-glib usr/lib/pkgconfig
+  _pick libmm-glib usr/share/gir-1.0
+  _pick libmm-glib usr/share/vala
+
+  install -Dm644 "$srcdir/ModemManager/COPYING" -t "usr/share/licenses/$pkgname"
+}
+
+package_libmm-glib-git() {
+  pkgdesc="ModemManager library (git build)"
+  license=(LGPL-2.1-or-later)
+  depends=(
+    glib2
+    glibc
+    libgcc
+  )
+  # stock output superseded: libmm-glib
+  # soname shipped: libmm-glib.so.0
+  provides=("libmm-glib=$pkgver" 'libmm-glib.so')
+  conflicts=('libmm-glib')
+
+  mv "$srcdir"/libmm-glib/* "$pkgdir"
+  install -Dm644 "$srcdir/ModemManager/COPYING.LIB" -t "$pkgdir/usr/share/licenses/$pkgname"
+}

@@ -1,0 +1,93 @@
+# Maintainer: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
+# Contributor: Fabio 'Lolix' Loli <lolix@disroot.org> -> https://github.com/FabioLolix
+# Contributor: Lubosz Sarnecki <lubosz@gmail.com>
+# Contributor: Alexander Rødseth <rodseth@gmail.com>
+# Contributor: Jon Nordby <jononor@gmail.com>
+
+# git recipe tracking the upstream webm libwebp VCS (AUR libwebp-git used as
+# reference only). Mirrors the stock libwebp pkgbase split: the libwebp
+# output supersedes stock libwebp, the libwebp-utils-git output supersedes
+# stock libwebp-utils.
+
+pkgbase=libwebp-git
+pkgname=(libwebp-git libwebp-utils-git)
+pkgver=1.6.0.r293.ga1d89ff2
+pkgrel=1
+pkgdesc='WebP image codec library (git build)'
+arch=('x86_64')
+url='https://developers.google.com/speed/webp/'
+license=('BSD-3-Clause')
+depends=('glibc')
+makedepends=('cmake' 'git' 'giflib' 'libjpeg-turbo' 'libpng' 'libtiff' 'ninja')
+source=('git+https://chromium.googlesource.com/webm/libwebp')
+b2sums=('SKIP')
+
+pkgver() {
+  cd libwebp
+  git describe --long --tags | sed 's/\([^-]*-g\)/r\1/;s/-/./g;s/^v//'
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  # Stock Arch's CMake option set, minus its 0001-cmake-Install-anim-utils
+  # patch (stale for git HEAD — it only teaches the build to install the
+  # anim_diff/anim_dump helper programs).
+  local cmake_options=(
+    -D BUILD_SHARED_LIBS=ON
+    -D CMAKE_BUILD_TYPE=None
+    -D CMAKE_INSTALL_LIBDIR=/usr/lib
+    -D CMAKE_INSTALL_PREFIX=/usr
+    -D CMAKE_SKIP_INSTALL_RPATH=ON
+    -D WEBP_BUILD_CWEBP=ON
+    -D WEBP_BUILD_DWEBP=ON
+    -D WEBP_BUILD_EXTRAS=OFF
+    -D WEBP_BUILD_GIF2WEBP=ON
+    -D WEBP_BUILD_IMG2WEBP=ON
+    -D WEBP_BUILD_VWEBP=OFF
+  )
+
+  cmake -S libwebp -B build -G Ninja "${cmake_options[@]}"
+  cmake --build build --parallel "${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+}
+
+_pick() {
+  local p="$1" f d; shift
+  for f; do
+    d="$srcdir/$p/${f#$pkgdir/}"
+    mkdir -p "$(dirname "$d")"
+    mv "$f" "$d"
+    rmdir -p --ignore-fail-on-non-empty "$(dirname "$f")"
+  done
+}
+
+package_libwebp-git() {
+  optdepends=('libwebp-utils-git: WebP conversion and inspection tools')
+  provides=("libwebp=$pkgver"
+            'libsharpyuv.so'
+            'libwebp.so'
+            'libwebpdecoder.so'
+            'libwebpdemux.so'
+            'libwebpmux.so')
+  conflicts=('libwebp')
+
+  DESTDIR="$pkgdir" cmake --install build
+
+  _pick utils "$pkgdir"/usr/bin
+  _pick utils "$pkgdir"/usr/share/man/man1
+
+  install -Dt "$pkgdir/usr/share/licenses/$pkgname" -m644 libwebp/COPYING
+}
+
+package_libwebp-utils-git() {
+  pkgdesc='WebP conversion and inspection tools (git build)'
+  depends=('giflib' 'glibc' 'libjpeg-turbo' 'libpng' 'libtiff' 'libwebp-git')
+  provides=("libwebp-utils=$pkgver")
+  conflicts=('libwebp-utils')
+
+  mv utils/* "$pkgdir"/
+
+  install -Dt "$pkgdir/usr/share/licenses/$pkgname" -m644 libwebp/COPYING
+}

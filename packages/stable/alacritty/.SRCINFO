@@ -1,0 +1,32 @@
+pkgbase = alacritty
+	pkgdesc = A cross-platform, GPU-accelerated terminal emulator
+	pkgver = 0.17.0
+	pkgrel = 1
+	url = https://github.com/alacritty/alacritty
+	arch = x86_64
+	license = Apache-2.0
+	license = MIT
+	checkdepends = ttf-dejavu
+	makedepends = git
+	makedepends = rust
+	makedepends = cargo
+	makedepends = cmake
+	makedepends = ncurses
+	makedepends = desktop-file-utils
+	makedepends = gdb
+	makedepends = libxcb
+	makedepends = scdoc
+	depends = freetype2
+	depends = fontconfig
+	depends = libxi
+	depends = libxcursor
+	depends = libxkbcommon
+	depends = libxkbcommon-x11
+	depends = libxrandr
+	optdepends = ncurses: for alacritty terminfo database
+	source = git+https://github.com/alacritty/alacritty.git#tag=v0.17.0?signed
+	validpgpkeys = 4DAA67A9EA8B91FCC15B699C85CDAE3C164BA7B4
+	validpgpkeys = A56EF308A9F1256C25ACA3807EA8F8B94622A6A9
+	sha256sums = fa03da86b110adcaaf9f476ee5de8ce1e59b913b2cf4e5d0374bf70af9c092c7
+
+pkgname = alacritty

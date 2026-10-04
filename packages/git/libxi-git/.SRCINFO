@@ -1,0 +1,24 @@
+pkgbase = libxi-git
+	pkgdesc = X11 Input extension library (git build)
+	pkgver = 1.8.3.r1.g3a0adab
+	pkgrel = 1
+	url = https://www.x.org/wiki/
+	arch = x86_64
+	license = MIT-open-group
+	license = SMLNJ
+	license = MIT
+	makedepends = git
+	makedepends = xorg-util-macros
+	depends = glibc
+	depends = libx11
+	depends = libxext
+	depends = libxfixes
+	depends = xorgproto
+	provides = libxi=1.8.3.r1.g3a0adab
+	provides = libXi.so
+	conflicts = libxi
+	options = staticlibs
+	source = git+https://gitlab.freedesktop.org/xorg/lib/libxi.git
+	b2sums = SKIP
+
+pkgname = libxi-git

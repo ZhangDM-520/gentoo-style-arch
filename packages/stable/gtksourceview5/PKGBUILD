@@ -1,0 +1,72 @@
+# Maintainer: Fabian Bornschein <fabiscafe@archlinux.org>
+# Maintainer: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
+# Contributor: Balló György <ballogyor+arch at gmail dot com>
+# Contributor: Ionut Biru <ibiru@archlinux.org>
+
+pkgbase=gtksourceview5
+pkgname=(
+  gtksourceview5
+)
+pkgver=5.22.0
+pkgrel=1
+pkgdesc="A text widget adding syntax highlighting and more to GNOME"
+url="https://gitlab.gnome.org/GNOME/gtksourceview"
+arch=(x86_64)
+license=(LGPL-2.1-or-later)
+depends=(
+  cairo
+  fontconfig
+  fribidi
+  gdk-pixbuf2
+  glib2
+  glibc
+  graphene
+  gtk4
+  hicolor-icon-theme
+  libgcc
+  libxml2
+  pango
+  pcre2
+)
+# trim: gtksourceview5-docs split (gi-docgen API docs) dropped together with
+# its gi-docgen makedep and the doc-stash paths in package_gtksourceview5();
+# the upstream test suite (xvfb) is trimmed below as well.
+makedepends=(
+  git
+  glib2-devel
+  gobject-introspection
+  meson
+  vala
+)
+source=("git+https://gitlab.gnome.org/GNOME/gtksourceview.git#tag=$pkgver")
+b2sums=('c82a97207d4f23b8685a4bc19593b743510c8c0941add3d8a8724e2be5c65a89b99adc665e02331d225cea689b8dbca4b6cdb36b9985b53a264b69dbf6e3a7c4')
+
+prepare() {
+  cd gtksourceview
+}
+
+build() {
+  # House style: mold linker when available
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+  # trim: gi-docgen API docs (documentation=false; see trim note above)
+  arch-meson gtksourceview build -D documentation=false
+  meson compile -C build -j "${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+# trim: upstream meson test suite (tests; not run for this recipe)
+
+package_gtksourceview5() {
+  provides=(libgtksourceview-${pkgver%%.*}.so)
+
+  meson install -C build --no-rebuild --destdir "$pkgdir"
+
+  # trim: locale catalogues (i18n; nothing reads them at run time)
+  rm -rf "$pkgdir"/usr/share/locale
+
+  # license: ship upstream licence text (LGPL-2.1-or-later)
+  install -Dm644 gtksourceview/COPYING -t "$pkgdir/usr/share/licenses/$pkgname/"
+}
+
+# vim:set sw=2 sts=-1 et:

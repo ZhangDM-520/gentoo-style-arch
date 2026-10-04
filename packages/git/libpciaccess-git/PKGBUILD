@@ -1,0 +1,43 @@
+# Maintainer : Daniel Bermond <dbermond@archlinux.org>
+# Contributor: Det <nimetonmaili g-mail>
+# Contributor: Matt Parnell /ilikenwf <parwok@gmail.com>
+# Contributor: Jonathan <eyeswide@gmail.com>
+# Class A git recipe: tracks upstream xorg libpciaccess git directly (HEAD).
+# AUR libpciaccess-git and stock libpciaccess are REFERENCES ONLY.
+
+pkgname=libpciaccess-git
+pkgver=0.19.r0.g38e6f15f83
+pkgrel=1
+pkgdesc='X11 PCI access library (git build)'
+arch=('x86_64')
+url='https://gitlab.freedesktop.org/xorg/lib/libpciaccess/'
+license=('LicenseRef-libpciaccess')
+depends=('glibc' 'zlib')
+makedepends=('git' 'meson' 'xorg-util-macros')
+# soname shipped: libpciaccess.so.0
+provides=("libpciaccess=$pkgver" 'libpciaccess.so')
+conflicts=('libpciaccess')
+source=('git+https://gitlab.freedesktop.org/xorg/lib/libpciaccess.git')
+b2sums=('SKIP')
+
+pkgver() {
+    git -C libpciaccess describe --long --tags | sed 's/\([^-]*-g\)/r\1/;s/-/./g;s/^libpciaccess\.//;s/^v//'
+}
+
+build() {
+    if command -v mold >/dev/null 2>&1; then
+        export LDFLAGS+=" -fuse-ld=mold"
+    fi
+
+    arch-meson libpciaccess build
+    meson compile -C build
+}
+
+check() {
+    meson test -C build
+}
+
+package() {
+    meson install -C build --destdir "$pkgdir"
+    install -D -m644 libpciaccess/COPYING "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+}

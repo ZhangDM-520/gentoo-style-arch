@@ -1,0 +1,19 @@
+pkgbase = spandsp-git
+	pkgdesc = Low-level signal processing library for telephony (FreeSWITCH fork, git build)
+	pkgver = 3.1.1.r572.g8f1e164
+	pkgrel = 1
+	url = https://github.com/freeswitch/spandsp
+	arch = x86_64
+	license = LGPL-2.1-only
+	license = GPL-2.0-only
+	makedepends = git
+	depends = glibc
+	depends = libtiff
+	provides = spandsp=3.1.1.r572.g8f1e164
+	provides = libspandsp.so
+	conflicts = spandsp
+	conflicts = spandsp-docs
+	source = spandsp::git+https://github.com/freeswitch/spandsp.git
+	b2sums = SKIP
+
+pkgname = spandsp-git

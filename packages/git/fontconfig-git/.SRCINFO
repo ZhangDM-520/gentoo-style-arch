@@ -1,0 +1,29 @@
+pkgbase = fontconfig-git
+	pkgdesc = Library for configuring and customizing font access (git build)
+	pkgver = 2.14.1.r40.g842f09c
+	pkgrel = 1
+	url = https://www.freedesktop.org/wiki/Software/fontconfig/
+	install = fontconfig.install
+	arch = x86_64
+	license = custom:fontconfig
+	makedepends = git
+	makedepends = gperf
+	makedepends = meson
+	makedepends = python
+	depends = expat
+	depends = freetype2
+	provides = fontconfig=2.14.1.r40.g842f09c
+	provides = libfontconfig.so
+	conflicts = fontconfig
+	conflicts = fontconfig-docs
+	backup = etc/fonts/fonts.conf
+	source = git+https://gitlab.freedesktop.org/fontconfig/fontconfig.git
+	source = 40-fontconfig-config.hook
+	source = 40-fontconfig-config.script
+	source = fontconfig.hook
+	b2sums = SKIP
+	b2sums = b06b3f2b8c0c38139a9247c26a641e6dc01d50b530478dd14133175a603f60b0af901af16c9fcf1ce73d23786ea14bfdbacd39f1dcfd88f6382965ad22be1411
+	b2sums = 7fb63e76ab126bc0a7decfd74c53429ad1ce6d13de2f14037259616d8d4150b8fa4601c7f02b75918ccd5995d424816dc9d01a5fe7e39dc3dd1fcc83dfdb0fe8
+	b2sums = dfbf47c069c88da7687511356cef5bb94b7190e558a6f08390d6976fa7065ba7137ccb0a5ca1defdef655091afe74eb8a3d33fb9f3e0633409aa79f753ad276d
+
+pkgname = fontconfig-git

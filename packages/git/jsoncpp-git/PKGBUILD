@@ -1,0 +1,48 @@
+# Maintainer: auto-generated
+# Contributor: Chocobo1 <chocobo1 AT archlinux DOT net> (AUR jsoncpp-git)
+
+pkgname=jsoncpp-git
+_pkgname=jsoncpp
+pkgver=1.9.8.r14.g3347a4b
+pkgrel=1
+pkgdesc="C++ library for interacting with JSON (git build)"
+arch=('x86_64')
+url="https://github.com/open-source-parsers/jsoncpp"
+license=('MIT' 'custom:Public_Domain')
+depends=('glibc' 'libgcc' 'libstdc++')
+makedepends=('git' 'meson' 'ninja')
+provides=("jsoncpp=$pkgver" 'libjsoncpp.so')
+conflicts=('jsoncpp')
+source=("git+https://github.com/open-source-parsers/${_pkgname}.git")
+b2sums=('SKIP')
+
+pkgver() {
+  cd "$_pkgname"
+  git describe --long --tags | sed 's/\([^-]*-g\)/r\1/;s/-/./g;s/^v//'
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  local _jobs="${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+
+  # upstream gained a meson build after the stale AUR cmake recipe; stock
+  # jsoncpp now uses it too (shared + static builds, like stock)
+  arch-meson "$_pkgname" build --default-library shared -D tests=false
+  meson compile -C build -j "$_jobs"
+
+  CXXFLAGS="$CXXFLAGS -ffat-lto-objects" \
+    arch-meson "$_pkgname" build-static --default-library static -D tests=false
+  meson compile -C build-static -j "$_jobs"
+}
+
+package() {
+  DESTDIR="$pkgdir" meson install -C build
+  DESTDIR="$pkgdir" meson install -C build-static
+  # jsoncpp ships a broken CMake package config (stock jsoncpp):
+  # https://github.com/open-source-parsers/jsoncpp/issues/1568
+  rm -rf "$pkgdir/usr/lib/cmake"
+  install -Dm644 "$_pkgname/LICENSE" -t "$pkgdir/usr/share/licenses/$pkgname"
+}

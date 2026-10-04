@@ -1,0 +1,46 @@
+# Maintainer: Robin Candau <antiz@archlinux.org>
+# Contributor: Iyán Méndez Veiga <me (at) iyanmv (dot) com>
+# Contributor: Thomas Wucher <arch (at) thomaswucher (dot) de>
+
+pkgname=stress-ng
+pkgver=0.22.01
+pkgrel=1
+pkgdesc="Software to stress test a computer system in various selectable ways"
+url="https://github.com/ColinIanKing/stress-ng"
+arch=('x86_64')
+license=('GPL-2.0-or-later')
+depends=('acl' 'apparmor' 'gmp' 'judy' 'kmod' 'libbsd' 'libjpeg-turbo' 'lksctp-tools' 'mpfr' 'xxhash')
+optdepends=('intel-ipsec-mb: support for IPsec tests'
+	    'linux-headers: include some headers from the Arch kernel'
+	    'linux-lts-headers: include some headers from the LTS kernel'
+	    'linux-zen-headers: include some headers from the ZEN kernel'
+	    'linux-hardened-headers: include some headers from the HARDENED kernel')
+makedepends=('attr' 'eigen' 'keyutils' 'libaio' 'libcap' 'libgcrypt' 'libmd')
+source=("${pkgname}-${pkgver}.tar.gz::${url}/archive/refs/tags/V${pkgver}.tar.gz")
+b2sums=('42b39a9a9d85a60eebdb5f2d0aadcb32f190ba9f9bca7d6c4de1cd25e08ce032756eab6fd7d54116b53a8d4878a3cfdbebe0eb2f8da6260b3f41802652cbb0c4')
+
+prepare() {
+	cd "${pkgname}-${pkgver}"
+	make clean
+}
+
+build() {
+	cd "${pkgname}-${pkgver}"
+	# House style: mold linker when available
+	local _mold=""
+	command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+	export LDFLAGS+=" ${_mold}"
+	make -j"${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+}
+
+package() {
+	cd "${pkgname}-${pkgver}"
+	make DESTDIR="${pkgdir}" install
+	# trim: man — lean consumer-rebuild recipe
+	rm -rf "${pkgdir}"/usr/share/man
+	# license: ship upstream licence text (GPL-2.0-or-later)
+	local _l
+	for _l in COPYING COPYING.GPL LICENSE; do
+		if [[ -f $_l ]]; then install -Dm644 "$_l" -t "${pkgdir}/usr/share/licenses/${pkgname}/"; fi
+	done
+}

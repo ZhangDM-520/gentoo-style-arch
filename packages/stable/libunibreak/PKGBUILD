@@ -1,0 +1,34 @@
+# Maintainer: Sergej Pupykin <pupykin.s+arch@gmail.com>
+# Contributor: Orivej Desh <smpuj@bk.ru>
+
+pkgname=libunibreak
+pkgver=7.0
+pkgrel=1
+pkgdesc="An implementation of the line breaking algorithm as described in Unicode 5.2.0 Standard Annex 14, Revision 24"
+arch=("x86_64")
+url="https://github.com/adah1972/libunibreak/"
+license=("custom:zlib/libpng")
+depends=('glibc')
+replaces=('liblinebreak')
+source=("$pkgname-$pkgver.tar.gz::https://github.com/adah1972/libunibreak/archive/libunibreak_${pkgver//./_}.tar.gz")
+sha256sums=('e4cb1a0d9aebb129c9856ec75e3d98e675997e385cce4e0106ef8f68e09afaa3')
+
+build() {
+  cd "$srcdir/libunibreak-libunibreak_${pkgver//./_}"
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+  ./bootstrap
+  ./configure --prefix=/usr
+  make
+}
+
+package() {
+  cd "$srcdir/libunibreak-libunibreak_${pkgver//./_}"
+  provides=(libunibreak.so)
+
+  make DESTDIR="$pkgdir" install
+  rm -f "$pkgdir"/usr/lib/*.a
+  install -Dm644 LICENCE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

@@ -1,0 +1,9 @@
+# FETCHED-ONLY — source names this recipe fetches at build time and keeps out
+# of Git. One glob per line, matched against the source's basename; '#' lines
+# and blank lines are ignored.
+#
+# The gtk-doc fix patch below is fetched from its pull-request URL and lands
+# beside the recipe as build state only; root .gitignore does not cover
+# '*.patch' (recipes also carry committed local patches), so without this
+# marker a post-build sweep would see an untracked fetch artifact.
+libkeybinder3-gtk-doc.patch

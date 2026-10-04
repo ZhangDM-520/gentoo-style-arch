@@ -1,0 +1,22 @@
+pkgbase = powertop
+	pkgdesc = A tool to diagnose issues with power consumption and power management
+	pkgver = 2.16
+	pkgrel = 1
+	url = https://github.com/fenrus75/powertop/
+	changelog = powertop.changelog
+	arch = x86_64
+	license = GPL-2.0-only
+	makedepends = meson
+	makedepends = ninja
+	depends = libgcc
+	depends = libstdc++
+	depends = libnl
+	depends = ncurses
+	depends = libtracefs
+	depends = libtraceevent
+	depends = pciutils
+	optdepends = xorg-xset: for the --calibrate function
+	source = powertop-2.16.tar.gz::https://github.com/fenrus75/powertop/archive/v2.16.tar.gz
+	sha256sums = cf37e565b958a64f1e3086daeab82d7959566a372d01d40d3904cbca95cdf3d2
+
+pkgname = powertop

@@ -55,6 +55,16 @@
      needs; `java-runtime` is provided by every JDK and every full JRE. Same
      rule for `java-environment` (JDK), `libgl` (libglvnd), `cron`, etc.
      The 2026-09-18 logseq incident is the worked example.
+   - bare soname provides ONLY — never hand-version a soname: makepkg
+     auto-versions a bare `provides=(libfoo.so)` from the package version, so
+     a hand-spelled `libfoo.so=…` duplicates the derivation and drifts from
+     it (2026-10-04 provides normalization: 15 hand-versioned soname provides
+     across 10 recipes reduced to bare stems until `--audit-lint provides` was
+     clean; the recipe-contract ratchet emptied and became a strict gate). A
+     versioned provide is for a NAME capability whose consumers constrain it
+     by version — `shelly=${pkgver}` and the toolchain `meson=${pkgver}`
+     pattern. Check: `fish build-all.fish --audit-lint provides` +
+     `tests/provides-audit.sh`. (last reviewed 2026-10-04)
 5. **Qt private-API coupling**: qt6/qt5-base-git update ⇒ rebuild ALL coupled
    all coupled Qt modules in the SAME pass; verify private tags
    (`nm -D --undefined-only | grep QtPrivate_`); never `-Syu` fresh base-git
@@ -96,7 +106,16 @@
    Never reintroduce via makedepends — makepkg reinstalls them silently;
    grep remaining makedeps after every trim. Since 2026-09-26 `--audit`
    enforces this with an exact-name lint over makedepends/checkdepends of
-   every committed `.SRCINFO` (seam: `--audit-lint purged`).
+   every committed `.SRCINFO` (seam: `--audit-lint purged`). Trim discipline
+   (2026-10-04 libuv-git/man-db breakage): when a purged tool is a recipe's
+   only route to a feature, trim the feature AND its output together,
+   `# trim:`-annotated at each removal site — libuv-git dropped its
+   python-sphinx man-page docs stage and the `man1/libuv.1` install path,
+   man-db dropped po4a translations with the `usr/share/man/<lang>/` + NLS
+   locale trees. Dropping only the tool leaves a build that dies looking for
+   it; dropping only the output leaves the stage that produces it. Check:
+   `fish build-all.fish --audit-lint purged` + the `# trim:` annotations at
+   every removal site. (last reviewed 2026-10-04)
 9. **IgnorePkg closure**: every workspace pkgname must be in /etc/pacman.conf
    IgnorePkg (cumulative repeated `IgnorePkg =` lines, all inside
    `[options]` — a line in a repo section is silently dropped). Verify by
@@ -109,6 +128,23 @@
    /etc/pacman.conf directly with the same [options]-cumulative semantics
    and skips only when the conf is unreadable (seam: `--audit-lint ignorepkg
    [conf]`; it informs, never blocks a build).
+   Write half since 2026-10-04 (`fish build-all.fish --register-ignorepkg
+   [<path>]`): computes the pkgbase+pkgname universe from the committed
+   `.SRCINFO`s (never a PKGBUILD grep) and appends the missing names as
+   cumulative `IgnorePkg =` lines inside `[options]` only, using the
+   pacman-exact parse (a repo-section line is dropped by pacman and warned
+   about loudly). rc 0 = the closure is complete afterwards
+   (nothing-to-append counts), 1 = refusal with nothing changed (a
+   missing/stale `.SRCINFO` is named as the blocker; target not writable with
+   `sudo -n` unavailable — the builder never prompts; or the post-check caught
+   a write that did not land), 2 = usage. Idempotent, dated pre-image backups
+   that must match byte-for-byte before a re-run writes over one. Auto-register
+   never auto-trusts: any unverifiable universe refuses rather than writing a
+   partial closure, and the post-write `comm -23` verification is part of the
+   seam. Check: `fish build-all.fish --register-ignorepkg` then
+   `fish build-all.fish --audit-lint ignorepkg`, pinned by
+   `tests/ignorepkg-register.sh` (9/9 with falsification).
+   (last reviewed 2026-10-04)
 10. **Logs**: append one `## YYYY-MM-DD — topic` section per incident to
     NOTE.md: symptom → root cause → fix → rule.
 11. **Install-before-dependents-compile**: never build-then-install-collectively.
@@ -334,6 +370,113 @@
     while leaving `core`); (e) a recipe invoking cargo/rustc must declare a
     `rust-git` build-order edge (ripgrep and fd gained theirs 2026-10-04) —
     `fish build-all.fish --audit` lints such gaps.
+22. **Multi-agent fleet work is reconciled by artifacts** (2026-10-04 fleet
+    incidents: duplicated record rows 91–120, empty-report agents, 28 recipe
+    dirs without committed `.SRCINFO` after self-reported success, two total
+    `/tmp` prep wipes): (a) mirror every artifact written under `/tmp` to
+    session storage at the MOMENT it is written — "mirror before a suspected
+    reboot" loses everything created after the last mirror; (b) reconcile
+    completion by deliverable files that exist and verify, never by task
+    result order (results do not return in call order and cap rejections hit
+    the last submitted calls) or by `idle` status (an agent can end a turn
+    with zero output or with complete artifacts and an empty report) — a cap
+    rejection means "resend after artifact check", never "lost"; merge
+    divergent record writes by edge-union after integrity re-check, never
+    last-writer-wins; (c) never accept self-reported validation — a recipe is
+    done only when its committed `.SRCINFO` regenerates clean
+    (`makepkg --printsrcinfo` diff); (d) retry HTTP-killed agents only after
+    inspecting and resuming their partial state. Check: `.SRCINFO`
+    presence+freshness sweep over every recipe directory (653/653 after the
+    2026-10-04 sweep).
+23. **Swap/ABI install contract** (2026-10-03→04 ingestion hardening):
+    `pacman -U --noconfirm --ask 4` auto-confirms
+    `ALPM_QUESTION_CONFLICT_PKG` (1<<2) — treat `--ask 4` as *removal
+    consent*, never as safety, and move consent into the plan instead of the
+    flag. A Class A provider declares `provides=(<stock>=$pkgver)` +
+    `conflicts=(<stock>)` so the stock package is satisfied and displaced
+    atomically. The install plan refuses `.PKGINFO` provide-diff drift before
+    the force branch, so `-fi`/`-ia` cannot route around it. Tier-2 ABI
+    exclusions live in `config/abi-exclusions.conf` (35, user-approved;
+    Tier-1 exposure is never excludable). Breakage: the swap path silently
+    confirmed removals and could ship provides drifting from the stock
+    packages they replace. Check: `fish build-all.fish --audit-lint swap`,
+    `bash tests/swap-completeness.sh`, `bash tests/install-conflict-ask.sh`.
+    Swap-lint debt remains on `niri-spicy-git` and `vscodium-insiders-git`.
+24. **Source-merge and topology identity** (2026-10-04 source-merge +
+    wiring campaigns): a same-upstream cluster merges only into ONE buildable
+    recipe with ONE topology record — an alias record would make the
+    scheduler rebuild a merged recipe once per alias, so old split-output
+    names stay addressable through pkgname lookup only; supersession is
+    expressed as X→X-git edges, never by deleting X's record. Merged split
+    sets pin siblings `name=$pkgver-$pkgrel` (qemu precedent: outputs must
+    move as one version or pacman sees unsatisfiable exact pins between
+    siblings). Unreferenced stock splits are trimmed AND `# trim:`-annotated;
+    a candidate whose tests pin a different commit than its source demotes to
+    SHARED-SRCDEST rather than force-merges; shared unpinned HEADs (gnulib×7)
+    are a documented reproducibility caveat, not free disk savings.
+    Breakage: split sets drifted from their stock counterparts and sibling
+    pins went unsatisfiable before the policy existed. Check:
+    `fish build-all.fish --topology` (one record per merged id) +
+    `bash tests/recipe-contract.sh`.
+25. **ABI closure guard — ten quotable rules** (2026-10-03→04 guard, finished
+    and independently re-run: abi fixtures 5/5, install fixtures 4/4; seams
+    `audit_lint_abi_closure`, `abi_batch_dependents`,
+    `abi_provide_refusals`, `install_needed_probe`,
+    `audit_lint_abi_exposure`, `read_abi_exclusions`):
+    (a) bare soname provides only — makepkg auto-versions them; hand-versioned
+    soname provides are forbidden (breakage: 15 of them across 10 recipes,
+    rule 4's normalization);
+    (b) every DT_NEEDED of a workspace output resolves via a workspace
+    provide, an expected base-system soname, or an exclusions entry —
+    findings name the provider/consumer pair (breakage: the 2026-10-03 audit's
+    53 host-only sonames and the ELF packages shipping without bare soname
+    provides);
+    (c) a provider whose bare-stem provide set changes vs installed stock
+    rebuilds its FULL in-tree consumer closure in one selection (breakage:
+    09-06 rust-git compiled against a minimal llvm-git mid-run);
+    (d) never install a moving/removed soname provide with part of its
+    consumer closure outside the transaction — build the complete set (`-ia`)
+    (breakage: 2026-09-25, the run's own llvm-git install broke rustc after
+    preflight had passed);
+    (e) the post-install NEEDED probe aborts loudly naming member + soname
+    (breakage: a landed transaction with unresolvable sonames used to let
+    every later package compile against a broken system);
+    (f) the exclusions registry is strict-loader `id|reason|review-by`
+    (`config/abi-exclusions.conf`, 35 entries, loaded on every invocation)
+    and entries are reviewed before their review-by (breakage: silent gaps
+    are exactly what the guard exists to prevent);
+    (g) the exposure audit maps provider → exposed installed consumers
+    whenever the soname surface differs from stock (breakage: libmypaint
+    shipped a soname no stock-provide consumer binds to, invisible until
+    audited);
+    (h) a refusing install plan (PGO/ABI/empty-list) is pacman-free end to
+    end, and unreadable `.PKGINFO` archives are skipped, never probed
+    (breakage: any early pacman call is a silent `--ask 4` consent path);
+    (i) a package with ≥2 edge-consumers carries `core` (rule 21(a)) — the
+    203-id Q2-open register in `tests/abi-batch-policy.sh` is written debt,
+    not policy (breakage: the hub pin caught `libdrm-git` dropped from the
+    migration list mid-plan);
+    (j) fixture expectations about topology-derived sizes are computed from
+    records, never pinned counts (breakage: the same hub pin worked only
+    because it re-derived its expectation).
+    Check: `fish build-all.fish --audit` (closure/provides/swap/exposure
+    lints) + `bash tests/abi-closure-lint.sh tests/abi-batch-policy.sh
+    tests/abi-drift-install.sh tests/abi-postinstall-probe.sh
+    tests/abi-exposure-audit.sh`.
+26. **Measure scale-sensitive validation after every roster-size jump**
+    (2026-10-04 latency regression): the loader re-validates the whole
+    record map, edge graph and sort on EVERY invocation and the fish list
+    scans grow quadratically — at 653 records `--list`/`--audit` cost
+    minutes where 148 records were instant. The roster grew ~4x between
+    measurements and no validation path was re-measured across the jump.
+    The hot paths were since rewritten (`topo_sort` is O(V+E); `--list`
+    ~5 s at 653 records — see NOTE.md's same-dated latency entry), so the
+    remaining risk is the *next* roster jump, not these loops. Re-time
+    `fish build-all.fish --list` after any roster growth, and never pin
+    wall-times in fixture
+    expectations — timing assertions block the very perf work that removes
+    the latency. Check: `time fish build-all.fish --list` at the current
+    roster size.
 
 ## 2. Workspace overview
 
@@ -783,6 +926,32 @@ going stale.
   2026-09-28 utilities batch): leaf-utility recipes in the §2 class, claimed
   here only so the print/OCR gap is visible; drop this item if the gap stops
   mattering.
+- **`keys/*.asc` gitignore gap** (2026-10-04 ingestion): key material for
+  offline source verification is currently neither clearly tracked nor
+  clearly ignored. Decide — a gitignore negation that keeps the keys tracked,
+  or staying ignored with verification keys sourced elsewhere.
+- **gst-libav `gst-ffmpeg=$pkgver` provide deviation** (2026-10-04
+  source-merge): the merged gstreamer recipe maps the stock name with a
+  deliberate-looking version mapping. Confirm it against stock, or align it.
+- **gnulib unpinned HEAD** (2026-10-04 source-merge): the 7-recipe
+  SHARED-SRCDEST gnulib cluster links a moving HEAD — pin to a commit, or
+  keep the documented reproducibility caveat deliberately.
+- **spandsp sign-off** (2026-10-03→04 ingestion): it resolves to the
+  FreeSWITCH fork rather than the classic library; explicit sign-off wanted
+  before it becomes the house provider.
+- **Q2 — ABI-libs vs core dual membership** (2026-10-04 wiring): the 203-id
+  Q2-open register in `tests/abi-batch-policy.sh` is the written debt backing
+  this; narrow it in the same change the decision lands in.
+- **Q6 — portal-cycle break side** (2026-10-04 wiring): decide which side of
+  the portal dependency cycle the deferred edges break on.
+- **Q7 — gcc-snapshot deferral count** (2026-10-04 wiring): settle the
+  deferral count so the 4 deferred gcc-snapshot edges can land.
+- **Q8 — provides/soname mapping scope** (2026-10-04 wiring): decide how far
+  the provides↔soname mapping is expected to reach.
+- **Residual ingestion debts** (2026-10-04 fleet): 3 stale `.SRCINFO`s —
+  gcc-snapshot, hermes-agent-git, zen-browser-pgo — await their recipe owner
+  (rule 22(c): no self-reported validation); recipe-sources untracked-asset
+  noise resolves at commit, no action beyond the commit.
 
 Queue items deleted as done in earlier passes (each verified, not assumed):
 the `-Rns hyperv intel-speed-select x86_energy_perf_policy` batch and

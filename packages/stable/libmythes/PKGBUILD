@@ -1,0 +1,39 @@
+# Maintainer: AndyRTR <andyrtr@archlinux.org>
+
+pkgname=libmythes
+pkgver=1.2.6
+pkgrel=1
+epoch=1
+pkgdesc="a simple thesaurus"
+arch=('x86_64')
+url="https://github.com/hunspell/mythes"
+license=('BSD-3-Clause-Modification' 'MIT')
+depends=('glibc' 'libstdc++' 'libgcc' 'perl')
+makedepends=('hunspell')
+provides=('mythes' 'libmythes-1.2.so')
+source=(https://github.com/hunspell/mythes/releases/download/v${pkgver}/mythes-${pkgver}.tar.xz)
+sha256sums=('97bd2ba5738aebdba1bc31f30f1be42f1404386c94105ad5990d839a1311c8a5')
+
+build() {
+  cd "${pkgname/lib/}"-$pkgver
+  ./configure --prefix=/usr --disable-static
+  sed -i -e 's/ -shared / -Wl,-O1,--as-needed\0/g' libtool
+  make
+}
+
+check() {
+  cd "${pkgname/lib/}"-$pkgver
+  make check
+  # run the example program:
+  ./example th_en_US_new.idx th_en_US_new.dat checkme.lst
+  # run the example program with stemming and morphological generation:
+  # e.g. to check mouse, mice, rodents, eats, eaten, ate, eating etc. words
+  ./example morph.idx morph.dat morph.lst morph.aff morph.dic
+}
+
+package() {
+  cd "${pkgname/lib/}"-$pkgver
+  make DESTDIR="$pkgdir" install
+  # license
+  install -Dm644 "${srcdir}"/${pkgname/lib/}-$pkgver/COPYING "$pkgdir"/usr/share/licenses/$pkgname/COPYING
+}

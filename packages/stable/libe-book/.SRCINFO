@@ -1,0 +1,25 @@
+pkgbase = libe-book
+	pkgdesc = Library for import of reflowable e-book formats.
+	pkgver = 0.1.4
+	pkgrel = 1
+	url = https://sourceforge.net/projects/libebook/
+	arch = x86_64
+	license = MPL-2.0
+	makedepends = gperf
+	makedepends = boost
+	makedepends = cppunit
+	makedepends = doxygen
+	depends = librevenge
+	depends = libxml2
+	depends = liblangtag
+	depends = zlib
+	depends = icu
+	depends = glibc
+	depends = libstdc++
+	depends = libgcc
+	provides = libe-book-0.1.so
+	source = https://sourceforge.net/projects/libebook/files//libe-book-0.1.4/libe-book-0.1.4.tar.xz
+	sha1sums = 67a9d18a73681fe733c68981a0f8d1763f4e0f8b
+	sha256sums = 104b7e791b6632745898e9b6a0037b7540235771a4d8c3bde2c764466ad912f1
+
+pkgname = libe-book

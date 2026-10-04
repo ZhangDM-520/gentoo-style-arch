@@ -1,0 +1,76 @@
+# Maintainer: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
+# Contributor: Jan de Groot <jgc@archlinux.org>
+# Contributor: Silvio Knizek (killermoehre)
+
+pkgname=gnome-disk-utility
+pkgver=51beta
+pkgrel=2
+pkgdesc="Disk Management Utility for GNOME"
+url="https://apps.gnome.org/DiskUtility/"
+arch=(x86_64)
+license=(GPL-2.0-or-later)
+depends=(
+  dconf
+  glib2
+  glibc
+  gtk4
+  hicolor-icon-theme
+  libadwaita
+  libdvdread
+  libgcc
+  libnotify
+  libpwquality
+  libsecret
+  pango
+  systemd-libs
+  udisks2
+  xz
+)
+makedepends=(
+  appstream
+  blueprint-compiler
+  cargo
+  docbook-xsl
+  git
+  glib2-devel
+  meson
+)
+groups=(gnome)
+source=(
+  "git+https://gitlab.gnome.org/GNOME/gnome-disk-utility.git#tag=${pkgver/[a-z]/.&}"
+)
+b2sums=('1c544f401a7c6864550f286918f5bbd7031335e9433a2a2b0ee5b53d6c3dafb2ee296ea96973b62edb617040d78f9d643129d1a0160d32da9f40a6d8c8ea886b')
+
+# Use debug
+export CARGO_PROFILE_RELEASE_DEBUG=2 CARGO_PROFILE_RELEASE_STRIP=false
+
+# Use LTO
+export CARGO_PROFILE_RELEASE_LTO=true CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
+
+prepare() {
+  cd $pkgname
+
+  CARGO_HOME="$srcdir/build/cargo-home" \
+    cargo fetch --locked --target host-tuple
+}
+
+build() {
+  arch-meson $pkgname build
+  meson compile -C build -j "${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+check() {
+  meson test -C build --print-errorlogs
+}
+
+package() {
+  meson install -C build --no-rebuild --destdir "$pkgdir"
+
+  # trim: man pages + GNOME help pages + translations (docs/locales) — not
+  # part of the maintained target
+  rm -rf "$pkgdir"/usr/share/help "$pkgdir"/usr/share/man "$pkgdir"/usr/share/locale
+
+  install -Dm644 "$pkgname/COPYING" -t "$pkgdir/usr/share/licenses/$pkgname/"
+}
+
+# vim:set sw=2 sts=-1 et:

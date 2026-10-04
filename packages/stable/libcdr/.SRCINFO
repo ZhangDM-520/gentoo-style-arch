@@ -1,0 +1,24 @@
+pkgbase = libcdr
+	pkgdesc = CorelDraw file format importer library for LibreOffice
+	pkgver = 0.1.9
+	pkgrel = 1
+	url = https://wiki.documentfoundation.org/DLP/Libraries/libcdr
+	arch = x86_64
+	license = MPL-2.0
+	license = LicenseRef-libcdr-Public-Domain
+	makedepends = libwpg
+	makedepends = boost
+	makedepends = doxygen
+	makedepends = cppunit
+	depends = lcms2
+	depends = icu
+	depends = librevenge
+	depends = zlib
+	depends = glibc
+	depends = libstdc++
+	depends = libgcc
+	provides = libcdr-0.1.so
+	source = https://dev-www.libreoffice.org/src/libcdr/libcdr-0.1.9.tar.xz
+	sha256sums = f7bb6abdd7f226820f288a93dd8d07759833c0250d9e202af90f9b312c4665a3
+
+pkgname = libcdr

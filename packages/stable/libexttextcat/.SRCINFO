@@ -1,0 +1,16 @@
+pkgbase = libexttextcat
+	pkgdesc = N-Gram-Based Text Categorization library primarily intended for language guessing
+	pkgver = 3.4.8
+	pkgrel = 1
+	url = https://wiki.documentfoundation.org/Libexttextcat
+	arch = x86_64
+	license = BSD-3-Clause
+	depends = glibc
+	provides = libtextcat
+	provides = libexttextcat-2.0.so
+	source = https://dev-www.libreoffice.org/src/libexttextcat-3.4.8.tar.xz
+	source = Fix-type-mismatch-between-declaration-and-definition.patch
+	sha256sums = 93eb89fd4fc8f565806354e100e778b3ac9a24e5fc04c24e6a83fb1e9b6c9d59
+	sha256sums = 35b39e2e84aff6e2856e527c1fdbe08a75fa9266c2495fde7c4409c3464a84df
+
+pkgname = libexttextcat

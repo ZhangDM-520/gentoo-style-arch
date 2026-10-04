@@ -1,0 +1,80 @@
+# Maintainer: Felix Yan <felixonmars@archlinux.org>
+# Contributor: Thomas Baechler <thomas@archlinux.org>
+
+pkgname=ppp
+pkgver=2.5.4
+pkgrel=1
+pkgdesc="A daemon which implements the Point-to-Point Protocol for dial-up networking"
+arch=(x86_64)
+url="https://www.samba.org/ppp/"
+license=('GPL-2.0-or-later' 'BSD-3-Clause')
+depends=('glibc' 'libpcap' 'libxcrypt' 'openssl')
+makedepends=('git')
+backup=(etc/ppp/{chap-secrets,ip-down,ip-down.d/00-dns.sh,ip-up,ip-up.d/00-dns.sh,ipv6-down,ipv6-up,ipv6-up.d/00-iface-config.sh,options,pap-secrets})
+source=(git+https://github.com/ppp-project/ppp.git?signed#tag=v$pkgver
+        options
+        ip-up
+        ip-down
+        ip-up.d.dns.sh
+        ip-down.d.dns.sh
+        ipv6-up
+        ipv6-down
+        ipv6-up.d.iface-config.sh
+        ppp.systemd)
+sha512sums=('1f11e86524935cdbffd363e49ed00f7417883aabe64f9bd42fc45feb59380709ea9ccfad11b2ef7d8ac5d654832cc40d1237f1c324e7698b04efdc061684e545'
+            '4324a9abe79b20735b87de2158bb73b6449415a4760f06a06b648dfb53517f8d9907b094a88d1b492b24c8720cfd9b17d491fbe236fbd51ba9042af60483b231'
+            'bdaaac792dd448ff31da6da2749d8c2f9c4e0311b1d4639de7c68038fcaa333cc28e25f5a6308de0ecb24b60b2e7284a811482df990da5f54d5581a746964f3c'
+            '92f3a5e383f2c888938e891ba831042e7f8c026b0ddf5ce8c3523d06ac32fa81742e638a4c665975cbc79868b98806d92574ee2ee8e034e33b065a90ee3ab28b'
+            '1636b2f8e3e0b0561aae9716e62c58cc7bee06aea0cdc163e64aba17da427810b7a12e4cea3d51b7a0b212fc2f4b7890f08d35d25165cd340b93241c9fe8842c'
+            '7ab85cd977333e89c1d184619a52fa46492db04760c86a44843607c68efc577a1715d0d1f827d6855184af0d87b4b4b02cf7e7102c798516238a45a3c8aa26ad'
+            '256941b220ad54119daf1c76237fecd0b2e9ede1d74b0950c45e373252ce20c1d4cd35a26b4d35f94ad2b7f49569fc9050c44731d672317994b562c750020326'
+            '1b8dc6300f746607c0cce835e69ed444f24ba81874ba061b2b0377f0b9c1cb41a383d6845b364dfabb249a461422972ba5010bacf55c5f85f5eb0d3c0f4c71cd'
+            '5b92a05bcf3ad4b7a88434546884e088069ce7c16a10c472589ca5ecc648f86ca02c2f608fb856ac6cb6ef14b508c2e0dec146c953128693bfb6c988f1963de8'
+            'a73ae90ed8b3df166123ed5b977869efb957cb9c78538ff067f230ada894741e77a72caa3f32c14319eb4d4ad739579411ec6a30d9c197bd397dae25b1d90355')
+validpgpkeys=('631E179E370CD727A7F2A33A9E4295D605F66CE9'  # Paul Mackerras (Signing key) <paulus@samba.org>
+              'DE8E01561D8276A4DBFAEFCC040F1D49EC9DBB8C'  # Paul Mackerras <paulus@ozlabs.org>
+              'BF454B7D76B69BD78AB9A4699D9AEA772C63719F') # Paul Mackerras <paulus@ozlabs.org>
+
+prepare() {
+  cd $pkgname
+
+  autoreconf -i
+}
+
+build() {
+  cd ppp
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+  ./configure --prefix=/usr --sbindir=/usr/bin --sysconfdir=/etc --runstatedir=/run \
+              --enable-systemd --enable-cbcp --enable-multilink
+  make
+}
+
+package() {
+  cd ppp
+  make DESTDIR="$pkgdir" install
+
+  install -Dm644 ../options -t "$pkgdir"/etc/ppp/
+  install -Dm755 ../ip-{up,down} -t "$pkgdir"/etc/ppp/
+  install -Dm755 ../ip-up.d.dns.sh   "$pkgdir"/etc/ppp/ip-up.d/00-dns.sh
+  install -Dm755 ../ip-down.d.dns.sh "$pkgdir"/etc/ppp/ip-down.d/00-dns.sh
+  install -Dm755 ../ipv6-{up,down} -t "$pkgdir"/etc/ppp/
+  install -dm755 "$pkgdir"/etc/ppp/ipv6-up.d
+  install -dm755 "$pkgdir"/etc/ppp/ipv6-down.d
+  install -m755 ../ipv6-up.d.iface-config.sh "$pkgdir"/etc/ppp/ipv6-up.d/00-iface-config.sh
+
+  install -Dm755 scripts/{pon,poff,plog,lcp_rtt_dump,lcp_rtt_exporter} -t "$pkgdir"/usr/bin/
+  # trim: man pages (pon.1 + the pppd(8)/pppstats(8) pages from make install)
+  # — docs are not part of the maintained target
+  install -dm755 "$pkgdir"/etc/ppp/peers
+  chmod 0755 "$pkgdir"/usr/lib/pppd/$pkgver/*.so
+
+  install -Dm644 "$srcdir"/ppp.systemd "$pkgdir"/usr/lib/systemd/system/ppp@.service
+
+  rm -rf "$pkgdir"/usr/share/man
+
+  install -Dm644 LICENSE.BSD -t "$pkgdir"/usr/share/licenses/$pkgname/
+  install -Dm644 LICENSE.GPL-2 -t "$pkgdir"/usr/share/licenses/$pkgname/
+}

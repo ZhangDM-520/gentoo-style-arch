@@ -1,0 +1,22 @@
+pkgbase = libx11-git
+	pkgdesc = Core X11 protocol client library (git build)
+	pkgver = 1.8.13.r12.g6d4432b
+	pkgrel = 1
+	url = https://www.x.org/wiki/
+	arch = x86_64
+	license = MIT AND X11
+	makedepends = git
+	makedepends = xorg-util-macros
+	makedepends = xtrans
+	depends = glibc
+	depends = libxcb
+	depends = xorgproto
+	provides = libx11=1.8.13.r12.g6d4432b
+	provides = libX11.so
+	provides = libX11-xcb.so
+	conflicts = libx11
+	options = staticlibs
+	source = git+https://gitlab.freedesktop.org/xorg/lib/libx11.git
+	b2sums = SKIP
+
+pkgname = libx11-git

@@ -9,7 +9,7 @@ set -euo pipefail
 # run start and was never re-run, and recipes that compile Rust could be
 # dispatched before rust-git in a coupled batch.
 #
-# Six policy seams are pinned here, one section each:
+# Seven policy seams are pinned here, one section each:
 #
 #   A. --audit toolchain lint: a recipe whose PKGBUILD invokes cargo/rustc
 #      must name rust-git in its topology record's edges field (rust-git
@@ -41,13 +41,20 @@ set -euo pipefail
 #   F. Grouping policy: the committed topology's group discipline
 #      (docs/MEMORY.md §1 rule 21) — every compile-toolchain record carries
 #      core,build-tools; every package with ≥2 edge-consumers carries core
-#      (explicit allow-list for app-cluster exceptions); ripgrep and fd
+#      (allow-lists: the rule 21(a) app-cluster exception, plus the Q2-open
+#      register — see section F(b) for the written justification); ripgrep and fd
 #      declare a rust-git edge; groups stay inside the six-name roster and
 #      build-tools is always dual with core. These checks read the topology
 #      RECORDS raw (the id|path|groups|edges[|tags] lines) from the optional
 #      $1 path — default config/topology.conf — so a falsification run points
 #      them at a scratch copy with one flipped record; the repo file is
 #      never mutated.
+#   G. ABI-drift batch tightening (the guard's layer 2): a provider whose
+#      soname-provides set (committed .SRCINFO bare stems) differs from the
+#      installed stock package's provides refuses a real build that omits an
+#      installed member of its in-tree consumer closure (--no-deps keeps the
+#      omission reachable); the complete closure builds, and an unchanged
+#      surface or an uninstalled consumer never gates.
 #
 # Synthetic workspaces + PATH stubs only; nothing real is built or installed.
 #
@@ -484,7 +491,8 @@ done
 # docs/MEMORY.md §1 rule 21 membership tests, one pin per sub-check:
 #   a. the compile-toolchain set carries BOTH core and build-tools;
 #   b. a package with ≥2 edge-consumers (a record listing X in edges consumes
-#      X) carries core, except the explicit allow-list below;
+#      X) carries core, except the two exception classes in F(b) below
+#      (rule 21(a) app-cluster exception; the Q2-open register);
 #   c. ripgrep and fd declare a rust-git edge (rule 21(e) — the toolchain-edge
 #      discipline the builder's --audit lint checks);
 #   d. every group named in a record is one of the six roster names, and
@@ -539,12 +547,90 @@ for id in "${toolchain_set[@]}"; do
     done
 done
 
-# b. the hub rule: ≥2 edge-consumers ⇒ core. Explicit allow-list (fixture
-# data, one line per exception naming its reason):
+# b. the hub rule: ≥2 edge-consumers ⇒ core. Two exception classes, each
+# entry naming its reason:
+#   - rule 21(a)'s app-cluster exception: a member whose consumers are all
+#     its own app-cluster siblings stays app;
+#   - the Q2-open register below — WRITTEN JUSTIFICATION for narrowing this
+#     pin's scope (an expectation may change only with written
+#     justification): rule 21(a) and this check were pinned on the
+#     2026-10-04 build-tools migration's CURATED build-order edge graph
+#     (144 records), where "a record listing X in edges consumes X"
+#     identified ABI hubs. The 2026-10-04 topology wiring then replaced
+#     that edge set with the FULL dependency/supersession graph (653
+#     records / 3373 edges, landed and verified; config/topology.conf is
+#     outside this fixture's write scope), so a raw reverse-edge count no
+#     longer identifies ABI-coupled hubs: 204 records have ≥2
+#     edge-consumers without carrying `core`, including nearly every
+#     shared library. Whether those records gain `core` dual membership is
+#     the wiring handoff's OPEN QUESTION Q2 ("ABI-libs vs core dual
+#     membership"), explicitly deferred to the docs/ABI-policy phase — not
+#     this fixture's decision to make. Until Q2 lands, every CURRENT
+#     violation is registered below (reason: Q2-open) so the pin keeps its
+#     teeth: a NEW ≥2-consumer record without `core` still fails until it
+#     carries `core` or its own written exception is added here. When Q2
+#     lands (the records gain `core`, or rule 21(a) is revised), delete the
+#     register and the bare pin binds again.
 hub_rule_exempt=(
     'fcitx5-git' # app-cluster exception: its five consumers are all its own app-cluster=fcitx5 siblings
 )
-exempt_hub() { # $1 = package id — is it on the hub-rule allow-list?
+# Q2-open hub-rule debt register (reason above, shared by every entry).
+# 203 ids as of the 2026-10-04 wiring (fcitx5-qt-git included: its consumers
+# are NOT all cluster siblings — fcitx5-configtool is stable).
+q2_open_hubs=(
+    acl-git alsa-lib appstream apr-util
+    at-spi2-core-git audit bash binutils
+    bluez-libs boost-libs brotli-git bzip2-git
+    coreutils cups-git curl dbus-broker
+    desktop-file-utils elfutils-git enchant exiv2
+    expat-git fcitx5-qt-git ffmpeg-git fftw
+    file fluidsynth-git fontconfig-git freetype2-git
+    gc gdbm-git gdk-pixbuf2-git gegl-git
+    gettext ghostscript git-git glu
+    gnutls-git gobject-introspection gstreamer harfbuzz-git
+    icu-git imagemagick jack2-git jansson-git
+    jemalloc-git jq kmod-git krb5-git
+    kwindowsystem ladspa lame lcms2
+    libarchive-git libass libbpf-git libbs2b-git
+    libcaca libcap libcap-ng-git libdc1394
+    libdex-git libebur128-git libedit libei-git
+    libepoxy-git libevdev-git libexif-git libfdk-aac-git
+    libffi-git libfido2-git libfreeaptx libgcrypt
+    libgexiv2-git libglvnd-git libgudev libheif-git
+    libidn2-git libinput-git libjpeg-turbo-git libjxl-git
+    liblc3-git libldac libldap libmypaint-git
+    libmysofa-git libnghttp2-git libnl-git libnotify
+    libpciaccess-git libplist-git libpng-git libproxy-git
+    libpsl-git libpulse-git libraw-git librsvg-git
+    libseccomp-git libsecret libsm libsndfile-git
+    libsodium-git libssh2-git libtiff-git libtirpc
+    libtool-git libunwind-git liburing-git libusb-git
+    libva-git libwebp-git libwmf-git libx11-git
+    libxcb-git libxcomposite libxcrypt-git libxcursor
+    libxdamage libxext-git libxfixes libxi-git
+    libxinerama libxkbcommon-git libxkbfile libxml2-git
+    libxmu libxpm-git libxrandr-git libxrender
+    libxshmfence libxslt-git libxss libxt
+    libxtst lilv-git lz4-git lzo
+    mariadb-libs mesa-git mpg123 ncurses-git
+    neon nettle-git networkmanager nodejs
+    nspr-git nss-git openal-git opencolorio
+    openimageio openjpeg2 openssh openxr
+    opus-git pam pcre2-git perl
+    pipewire pixman-git pkcs11-helper poppler
+    postgresql-libs python python-gobject python-lxml
+    qrencode qt5-wayland raptor readline-git
+    ripgrep rsync sbc sdl2-git
+    shadow shared-mime-info spandsp-git speech-dispatcher
+    sqlite subversion twolame udisks2
+    unixodbc unzip upower util-linux
+    vamp-plugin-sdk vulkan-headers-git vulkan-icd-loader-git wayland-protocols-git
+    webkit2gtk-4.1 webrtc-audio-processing-1 xcb-util xcb-util-cursor
+    xcb-util-image xcb-util-keysyms xcb-util-renderutil xcb-util-wm
+    xdg-desktop-portal-gtk-git xdg-utils xxhash-git xz-git
+    zip zlib-ng-compat-git zstd-git
+)
+exempt_hub() { # $1 = package id — is it on a hub-rule allow-list?
     local x
     for x in "${hub_rule_exempt[@]}"; do
         if [[ $x == "$1" ]]; then
@@ -553,8 +639,17 @@ exempt_hub() { # $1 = package id — is it on the hub-rule allow-list?
     done
     return 1
 }
+q2_registered() { # $1 = package id — is it in the Q2-open register?
+    local x
+    for x in "${q2_open_hubs[@]}"; do
+        if [[ $x == "$1" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
 while read -r id consumers; do
-    if exempt_hub "$id"; then
+    if exempt_hub "$id" || q2_registered "$id"; then
         continue
     fi
     groups=$(record_field "$id" 3)
@@ -600,5 +695,167 @@ offenders=$(awk -F'|' '
       if (bt && !core) print $1 }' "$topo_conf")
 [[ -z $offenders ]] \
     || fail "F: build-tools without core (membership is always dual core,build-tools): $offenders"
+
+# ─── G. layer 2: soname drift drags the consumer closure into the batch ────
+# The ABI-drift guard's batch half (build-all.fish, `ABI-drift guard layer
+# 2`): a provider whose soname-provides set (committed .SRCINFO bare stems)
+# differs from the installed stock package's provides must rebuild its FULL
+# in-tree consumer closure in the same selection. Pure gate logic — nothing
+# is dispatched before it decides — and it REFUSES (never silently expands)
+# an installed closure member left out of the selection. The consumer
+# relation is pinned in both halves here: a topology edge and a .SRCINFO
+# depend on the provider's soname provide.
+dir_g="$fixture/abi-drift"
+make_workspace "$dir_g" 1 2 low
+add_meta_package "$dir_g" libs-git ''
+add_meta_package "$dir_g" app-git ''
+set_topology_record "$dir_g" app-git git 'libs-git'
+{
+    printf 'pkgbase = libs-git\n'
+    printf 'pkgname = libs-git\n'
+    printf '\tprovides = libgreet.so\n'
+} >"$dir_g/packages/libs-git/.SRCINFO"
+{
+    printf 'pkgbase = app-git\n'
+    printf 'pkgname = app-git\n'
+    printf '\tdepends = libgreet.so\n'
+} >"$dir_g/packages/app-git/.SRCINFO"
+stub_sudo "$dir_g"
+
+# The stub makepkg: B's shape — a BUILD marker plus the trivial archive.
+cat >"$dir_g/bin/makepkg" <<'EOF'
+#!/usr/bin/env bash
+set -u
+id=$(basename "$PWD")
+printf 'BUILD %s\n' "$id" >>"${GSA_FAKE_MAKEPKG_LOG:?}"
+: >"$PWD/$id-1.0.0-1-any.pkg.tar.zst"
+exit 0
+EOF
+chmod +x "$dir_g/bin/makepkg"
+
+# The stub pacman: arguments arrive `pacman -Q -- NAME` / `pacman -Qi -- NAME`
+# (the builder passes `--` before names), so `--` is dropped before reading.
+# `-Qi libs` answers the INSTALLED STOCK surface from GSA_FAKE_QI_LIBS
+# (changed: `libold.so=1-64` against the house `libgreet.so`; unchanged:
+# `libgreet.so=1-64` — the auto-versioned form of the same bare stem, so the
+# STEM sets compare equal), and `-Q app-git` answers closure-member
+# membership from GSA_FAKE_APP_INSTALLED. Everything else is not installed.
+cat >"$dir_g/bin/pacman" <<'EOF'
+#!/usr/bin/env bash
+set -u
+printf 'pacman %s\n' "$*" >>"${GSA_FAKE_PACMAN_LOG:?}"
+args=()
+for a in "$@"; do
+    [[ $a == -- ]] && continue
+    args+=("$a")
+done
+case ${args[0]:-} in
+-Qi)
+    if [[ ${args[1]:-} == libs && -n ${GSA_FAKE_QI_LIBS:-} ]]; then
+        printf '%s\n' "$GSA_FAKE_QI_LIBS"
+        exit 0
+    fi
+    exit 1
+    ;;
+-Q)
+    if [[ ${args[1]:-} == app-git ]]; then
+        [[ ${GSA_FAKE_APP_INSTALLED:-0} == 1 ]] && exit 0
+    fi
+    exit 1
+    ;;
+esac
+exit 1
+EOF
+chmod +x "$dir_g/bin/pacman"
+
+run_env_g() {
+    run_builder env \
+        PATH="$dir_g/bin:$PATH" \
+        GSA_STATE_DIR="$dir_g/state" \
+        GSA_FAKE_PACMAN_LOG="$dir_g/pacman.log" \
+        GSA_FAKE_MAKEPKG_LOG="$dir_g/makepkg.log" \
+        GSA_FAKE_QI_LIBS="$GSA_FAKE_QI_LIBS" \
+        GSA_FAKE_APP_INSTALLED="$GSA_FAKE_APP_INSTALLED" \
+        GSA_CPU_THREADS=8 \
+        GSA_MEMORY_GIB=16 \
+        fish "$dir_g/build-all.fish" "$@"
+}
+
+qi_changed='Name : libs
+Version : 1-1
+Provides : libold.so=1-64'
+qi_unchanged='Name : libs
+Version : 1-1
+Provides : libgreet.so=1-64'
+
+# G1: changed surface + INSTALLED consumer omitted via --no-deps ⇒ the batch
+# refuses before anything is built, naming provider, reason and missing
+# member.
+GSA_FAKE_QI_LIBS=$qi_changed
+GSA_FAKE_APP_INSTALLED=1
+: >"$dir_g/makepkg.log"
+run_env_g --no-deps --no-sync --allow-broken-rustc libs-git
+if [[ $FIXTURE_RC -eq 0 ]]; then
+    printf 'G1: a drifted surface with an omitted installed consumer built:\n%s\n' \
+        "$FIXTURE_OUTPUT" >&2
+    exit 1
+fi
+for want in \
+    'refusing to build libs-git without app-git' \
+    'soname provides changed' \
+    'missing: app-git'; do
+    if ! grep -Fq "$want" <<<"$FIXTURE_OUTPUT"; then
+        printf 'G1: refusal message is missing %q:\n%s\n' "$want" "$FIXTURE_OUTPUT" >&2
+        exit 1
+    fi
+done
+if [[ -s "$dir_g/makepkg.log" ]]; then
+    printf 'G1: the refusal came after builds were dispatched:\n%s\n' \
+        "$(cat "$dir_g/makepkg.log")" >&2
+    exit 1
+fi
+
+# G2: the closure rebuilt in the same selection ⇒ clean batch, both build.
+: >"$dir_g/makepkg.log"
+run_env_g --no-deps --no-sync --allow-broken-rustc libs-git app-git
+if [[ $FIXTURE_RC -ne 0 ]] || ! grep -Fq 'All builds succeeded!' <<<"$FIXTURE_OUTPUT"; then
+    printf 'G2: the complete closure was refused or failed:\n%s\n' "$FIXTURE_OUTPUT" >&2
+    exit 1
+fi
+if ! grep -Fq 'BUILD libs-git' "$dir_g/makepkg.log" ||
+    ! grep -Fq 'BUILD app-git' "$dir_g/makepkg.log"; then
+    printf 'G2: not both packages reached the stub makepkg:\n%s\n' \
+        "$(cat "$dir_g/makepkg.log")" >&2
+    exit 1
+fi
+
+# G3: unchanged surface ⇒ no drift, no batch tightening: the provider builds
+# alone even with the consumer installed and omitted.
+GSA_FAKE_QI_LIBS=$qi_unchanged
+: >"$dir_g/makepkg.log"
+run_env_g --no-deps --no-sync --allow-broken-rustc libs-git
+if [[ $FIXTURE_RC -ne 0 ]] || grep -Fq 'refusing to build' <<<"$FIXTURE_OUTPUT"; then
+    printf 'G3: an unchanged surface must not gate:\n%s\n' "$FIXTURE_OUTPUT" >&2
+    exit 1
+fi
+if ! grep -Fq 'BUILD libs-git' "$dir_g/makepkg.log"; then
+    printf 'G3: libs-git did not build:\n%s\n' "$FIXTURE_OUTPUT" >&2
+    exit 1
+fi
+
+# G4: drifted surface but the consumer is NOT installed ⇒ nothing to
+# protect: the provider builds alone.
+GSA_FAKE_QI_LIBS=$qi_changed
+GSA_FAKE_APP_INSTALLED=0
+: >"$dir_g/makepkg.log"
+run_env_g --no-deps --no-sync --allow-broken-rustc libs-git
+if [[ $FIXTURE_RC -ne 0 ]] || grep -Fq 'refusing to build' <<<"$FIXTURE_OUTPUT"; then
+    printf 'G4: an uninstalled consumer must not gate:\n%s\n' "$FIXTURE_OUTPUT" >&2
+    exit 1
+fi
+if ! grep -Fq 'BUILD libs-git' "$dir_g/makepkg.log"; then
+    printf 'G4: libs-git did not build:\n%s\n' "$FIXTURE_OUTPUT" >&2
+    exit 1
+fi
 
 printf 'abi-batch-policy fixture: PASS\n'

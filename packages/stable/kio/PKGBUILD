@@ -1,0 +1,74 @@
+# Maintainer: Felix Yan <felixonmars@archlinux.org>
+# Maintainer: Antonio Rojas <arojas@archlinux.org>
+# Contributor: Andrea Scarpino <andrea@archlinux.org>
+
+pkgname=kio
+pkgver=6.30.0
+pkgrel=1
+pkgdesc='Resource and network access abstraction'
+arch=(x86_64)
+url='https://develop.kde.org/products/frameworks/'
+license=(LGPL-2.0-only LGPL-3.0-only)
+depends=(acl
+         libstdc++
+         glibc
+         karchive
+         kbookmarks
+         kcolorscheme
+         kcompletion
+         kconfig
+         kcoreaddons
+         kcrash
+         kdbusaddons
+         kguiaddons
+         ki18n
+         kiconthemes
+         kitemviews
+         kjobwidgets
+         kservice
+         kwallet
+         kwidgetsaddons
+         kwindowsystem
+         libxml2
+         libxslt
+         qt6-base
+         solid
+         util-linux-libs)
+# trim: doxygen + kdoctools dropped (API docs and the DocBook handbook are
+# not built — KF6DocTools is found non-REQUIRED and the docs/ subdirectory is
+# skipped when it is absent; kdoctools stays an optdepend for the help kioslave)
+makedepends=(extra-cmake-modules
+             qt6-tools)
+optdepends=('audiocd-kio: for accessing audio CDs'
+            'kded: proxy management and cookie storage'
+            'kdoctools: for the help kioslave'
+            'kio-extras: extra protocols support (sftp, fish and more)'
+            'kio-fuse: to mount remote filesystems via FUSE'
+            'switcheroo-control: hybrid GPU support')
+groups=(kf6)
+provides=(libKF6KIOCore.so libKF6KIOFileWidgets.so libKF6KIOGui.so libKF6KIOWidgets.so)
+source=(https://download.kde.org/stable/frameworks/${pkgver%.*}/$pkgname-$pkgver.tar.xz{,.sig})
+sha256sums=('c19cbd4878347b67a9e05ee6541083f51dd90f9e58ee245b4d7634e09f9c04b2'
+            'SKIP')
+validpgpkeys=(53E6B47B45CEA3E0D5B7457758D0EE648A48B3BB # David Faure <faure@kde.org>
+              90A968ACA84537CC27B99EAF2C8DF587A6D4AAC1 # Nicolas Fella <nicolas.fella@kde.org>
+              )
+
+build() {
+  cmake -B build -S $pkgname-$pkgver \
+    -DCMAKE_INSTALL_LIBEXECDIR=lib \
+    -DBUILD_TESTING=OFF
+  cmake --build build
+}
+
+package() {
+  DESTDIR="$pkgdir" cmake --install build
+
+  # license: ship the upstream LGPL texts
+  local _l
+  if [[ -d $pkgname-$pkgver/LICENSES ]]; then
+    for _l in "$pkgname-$pkgver"/LICENSES/*; do
+      install -Dm644 "$_l" -t "$pkgdir/usr/share/licenses/$pkgname/"
+    done
+  fi
+}

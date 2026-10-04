@@ -1,0 +1,77 @@
+# Maintainer: Torben <git at letorbi dot com>
+# Contributor: Vincent Grande <shoober420 at gmail dot com>
+# Contributor: Jan Alexander Steffens (heftig) <jan.steffens at gmail dot com>
+# Contributor: Ionut Biru <ibiru at archlinux dot org>
+# Recipe adapted for the gentoo-style-arch fleet; tracks upstream VCS directly.
+# The AUR package of the same name was used as a reference only.
+
+pkgname=gdk-pixbuf2-git
+pkgver=2.44.2.r1.gbeb152174
+pkgrel=1
+pkgdesc="An image loading library (git build)"
+url="https://wiki.gnome.org/Projects/GdkPixbuf"
+arch=('x86_64')
+license=('LGPL-2.1-or-later')
+depends=(
+  glib2
+  glibc
+  glycin
+  shared-mime-info
+)
+makedepends=(
+  git
+  glib2-devel
+  gobject-introspection
+  meson
+  python-docutils
+)
+provides=("gdk-pixbuf2=$pkgver" 'libgdk_pixbuf-2.0.so')
+conflicts=('gdk-pixbuf2')
+install=gdk-pixbuf2.install
+source=(
+  "git+https://gitlab.gnome.org/GNOME/gdk-pixbuf.git"
+  gdk-pixbuf-query-loaders.hook
+)
+b2sums=('SKIP'
+        '5a00d34888e207d70d02369015d029f4c0450fc5a02b4b257de8e5df04380dc550723f351433859224c96c3c6390896f2166673af65e8a09eb57024f5a34301b')
+
+pkgver() {
+  cd gdk-pixbuf
+
+  git describe --long --tags | sed 's/\([^-]*-g\)/r\1/;s/-/./g'
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  local meson_options=(
+    # option set follows the AUR/stock reference: classic format loaders are
+    # handled by glycin (gif/jpeg/png/tiff loaders disabled here)
+    -D android=disabled
+    -D builtin_loaders=all
+    -D documentation=false
+    -D gif=disabled
+    -D glycin=enabled
+    -D gtk_doc=false
+    -D installed_tests=false
+    -D introspection=enabled
+    -D jpeg=disabled
+    -D man=true
+    -D others=enabled
+    -D png=disabled
+    -D thumbnailer=disabled
+    -D tiff=disabled
+  )
+
+  arch-meson gdk-pixbuf build "${meson_options[@]}"
+  meson compile -C build -j "${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package() {
+  meson install -C build --destdir "$pkgdir"
+
+  install -Dt "$pkgdir/usr/share/libalpm/hooks" -m644 gdk-pixbuf-query-loaders.hook
+  install -Dm644 gdk-pixbuf/COPYING -t "$pkgdir/usr/share/licenses/$pkgname"
+}

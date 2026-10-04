@@ -1,0 +1,60 @@
+# Maintainer: Maxime Gauduin <alucryd@archlinux.org>
+# Contributor: Gaetan Bisson <bisson@archlinux.org>
+
+pkgname=libdc1394
+pkgver=2.2.7
+pkgrel=2
+pkgdesc='Library to control IEEE 1394 based cameras'
+arch=(x86_64)
+url='https://damien.douxchamps.net/ieee1394/libdc1394/'
+license=(LGPL-2.1-or-later)
+depends=(
+  glibc
+  libraw1394
+  libusb
+)
+makedepends=(
+  git
+  libxv
+  sdl
+)
+provides=(libdc1394.so)
+source=("$pkgname::git+https://git.code.sf.net/p/libdc1394/code#tag=V_${pkgver//./_}")
+b2sums=(2e4c03c6f7c96734230e452e9088abcc54907eabd81eebb0862f192e2d1c3c6d3f65d92a75cc95323f9bf4d1490b52043bbb0c1776619cac8cace44306e354d2)
+
+prepare() {
+  cd $pkgname
+  autoreconf -fiv
+}
+
+build() {
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  cd $pkgname
+  # trim: doxygen HTML API docs (doxygen makedep dropped along with
+  # --enable-doxygen-html and `make doc`) — docs not shipped
+  ./configure \
+    --prefix=/usr \
+    --sysconfdir=/etc \
+    --localstatedir=/var
+  make -j"${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package() {
+  cd $pkgname
+  make DESTDIR="$pkgdir" install
+
+  # trim: doxygen HTML API docs (docs/man not shipped)
+  rm -rf "$pkgdir"/usr/share/{doc,man}
+
+  # license: ship the upstream LGPL-2.1-or-later text
+  local _lic
+  for _lic in LICENSE COPYING; do
+    if [[ -f $pkgname/$_lic ]]; then
+      install -Dm644 "$pkgname/$_lic" -t "$pkgdir/usr/share/licenses/$pkgname/"
+    fi
+  done
+}

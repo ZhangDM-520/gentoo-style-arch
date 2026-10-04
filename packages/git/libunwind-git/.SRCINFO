@@ -11,11 +11,11 @@ pkgbase = libunwind-git
 	depends = xz
 	depends = zlib
 	provides = libunwind=1.8.3.r440.gd9e7b9a2
-	provides = libunwind.so=8-64
-	provides = libunwind-x86_64.so=8-64
-	provides = libunwind-coredump.so=0-64
-	provides = libunwind-ptrace.so=0-64
-	provides = libunwind-setjmp.so=0-64
+	provides = libunwind.so
+	provides = libunwind-x86_64.so
+	provides = libunwind-coredump.so
+	provides = libunwind-ptrace.so
+	provides = libunwind-setjmp.so
 	conflicts = libunwind
 	options = staticlibs
 	source = git+https://github.com/libunwind/libunwind.git

@@ -9,7 +9,7 @@ pkgbase = libisl-git
 	depends = glibc
 	provides = isl
 	provides = libisl
-	provides = libisl.so=23-64
+	provides = libisl.so
 	conflicts = isl
 	conflicts = libisl
 	source = isl::git+https://repo.or.cz/isl.git#tag=isl-0.28

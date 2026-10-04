@@ -1,0 +1,89 @@
+# Maintainer: Felix Yan <felixonmars@archlinux.org>
+# Maintainer: Antonio Rojas <arojas@archlinux.org>
+# Contributor: Andrea Scarpino <andrea@archlinux.org>
+
+pkgname=kio-extras
+pkgver=26.08.1
+pkgrel=2
+pkgdesc='Additional components to increase the functionality of KIO'
+arch=(x86_64)
+url='https://www.kde.org/'
+license=(LGPL-2.0-or-later)
+depends=(glibc
+         karchive
+         kcmutils
+         kconfig
+         kcoreaddons
+         kdbusaddons
+         kdnssd
+         kdsoap-qt6
+         kdsoap-ws-discovery-client
+         ki18n
+         kio
+         knotifications
+         kservice
+         kwidgetsaddons
+         libgcc
+         libimobiledevice
+         libkexiv2
+         libmtp
+         libplist
+         libproxy
+         libssh
+         libstdc++
+         libtirpc
+         libxcursor
+         plasma-activities
+         qt6-base
+         qt6-svg
+         ripgrep-all
+         sh
+         smbclient
+         solid
+         syntax-highlighting)
+# trim: kdoctools dropped (the BUILD_DOC=OFF switch below skips doc/ and the
+# DocBook handbook together with its kdoctools dependency)
+makedepends=(extra-cmake-modules
+             gperf
+             libappimage
+             openexr
+             plasma-activities-stats
+             qcoro
+             taglib)
+optdepends=('kimageformats: thumbnails for additional image formats'
+            'libappimage: AppImage thumbnails'
+            'openexr: EXR format thumbnails'
+            'perl: info kioslave'
+            'plasma-activities-stats: recently used kioslave'
+            'qt6-imageformats: thumbnails for additional image formats'
+            'taglib: audio file thumbnails')
+groups=(kde-applications
+        kde-network)
+provides=(libkioarchive6.so)
+source=(https://download.kde.org/stable/release-service/$pkgver/src/$pkgname-$pkgver.tar.xz{,.sig})
+sha256sums=('8050c3dd33fed06a60dda8205f4e0134d3aac95f0647b1d9c05419845341397c'
+            'SKIP')
+validpgpkeys=(CA262C6C83DE4D2FB28A332A3A6A4DB839EAA6D7  # Albert Astals Cid <aacid@kde.org>
+              F23275E4BF10AFC1DF6914A6DBD2CE893E2D1C87  # Christoph Feck <cfeck@kde.org>
+              D81C0CB38EB725EF6691C385BB463350D6EF31EF) # Heiko Becker <heiko.becker@kde.org>
+
+build() {
+  cmake -B build -S $pkgname-$pkgver \
+    -DLIBAPPIMAGE_LIBRARIES=libappimage.so \
+    -DCMAKE_INSTALL_LIBEXECDIR=lib \
+    -DBUILD_TESTING=OFF \
+    -DBUILD_DOC=OFF
+  cmake --build build
+}
+
+package() {
+  DESTDIR="$pkgdir" cmake --install build
+
+  # license: ship the upstream LGPL text
+  local _l
+  if [[ -d $pkgname-$pkgver/LICENSES ]]; then
+    for _l in "$pkgname-$pkgver"/LICENSES/*; do
+      install -Dm644 "$_l" -t "$pkgdir/usr/share/licenses/$pkgname/"
+    done
+  fi
+}

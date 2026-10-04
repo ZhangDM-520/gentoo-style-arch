@@ -1,0 +1,42 @@
+# Maintainer: AndyRTR <andyrtr@archlinux.org>
+# Contributor: Jan de Groot <jgc@archlinux.org>
+
+pkgname=libwpg
+pkgver=0.3.4
+pkgrel=3
+pkgdesc="Library for importing and converting Corel WordPerfect(tm) Graphics images."
+arch=('x86_64')
+url="https://libwpg.sourceforge.net/"
+license=('LGPL-2.1-or-later OR MPL-2.0')
+depends=('libwpd' 'perl' 'librevenge' 'glibc' 'libstdc++' 'libgcc')
+makedepends=('boost')
+# trim: doxygen (makedepends) — the doxygen API docs are not shipped;
+# --without-docs in build() disables docs/doxygen for good
+source=("https://downloads.sourceforge.net/libwpg/${pkgname}-${pkgver}.tar.xz")
+sha1sums=('335788f3fcef4c6d01b24b325cc07765d58c1da9')
+sha256sums=('b55fda9440d1e070630eb2487d8b8697cf412c214a27caee9df69cec7c004de3')
+
+build() {
+  cd ${pkgname}-${pkgver}
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+  ./configure --prefix=/usr --without-docs
+  make
+}
+
+check() {
+  cd ${pkgname}-${pkgver}
+  make check
+}
+
+package() {
+  cd ${pkgname}-${pkgver}
+  provides=(libwpg-0.3.so)
+
+  make DESTDIR="${pkgdir}" install
+  # trim: doxygen API docs — never built (--without-docs)
+  rm -rf "$pkgdir"/usr/share/doc
+  install -Dm644 COPYING.{LGPL,MPL} -t "$pkgdir"/usr/share/licenses/$pkgname/
+}

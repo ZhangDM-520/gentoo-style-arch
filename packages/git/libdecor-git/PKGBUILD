@@ -1,0 +1,43 @@
+# Maintainer: auto-generated
+# Contributor: taoky <me@taoky.moe> (AUR libdecor-git)
+# Contributor: Sven-Hendrik Haase <svenstaro@archlinux.org> (stock Arch libdecor)
+
+pkgname=libdecor-git
+_pkgname=libdecor
+pkgver=0.2.5.r0.g149c6f0
+pkgrel=1
+pkgdesc="Client-side decorations library for Wayland clients (git build)"
+arch=('x86_64')
+url="https://gitlab.freedesktop.org/libdecor/libdecor"
+license=('MIT')
+depends=('dbus' 'pango' 'wayland')
+makedepends=('git' 'gtk3' 'meson' 'ninja' 'wayland-protocols')
+provides=("libdecor=$pkgver" 'libdecor-0.so')
+conflicts=('libdecor')
+# Track the 0.2 stable-series branch: the 0.2.3-0.2.5 release tags live there
+# and are unreachable from master via git describe (same release-branch
+# rationale as zstd-git). master is newer development but versions as
+# 0.2.2.rN — below stock 0.2.5 — and its meson project() is still 0.2.2.
+source=("$_pkgname::git+https://gitlab.freedesktop.org/libdecor/${_pkgname}.git#branch=libdecor-0.2")
+b2sums=('SKIP')
+
+pkgver() {
+  cd "$_pkgname"
+  git describe --long --tags | sed 's/\([^-]*-g\)/r\1/;s/-/./g;s/^v//'
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  local _jobs="${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+
+  arch-meson "$_pkgname" build -D demo=false
+  meson compile -C build -j "$_jobs"
+}
+
+package() {
+  meson install -C build --destdir "$pkgdir"
+  install -Dm644 "$_pkgname/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

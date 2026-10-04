@@ -1,0 +1,41 @@
+# Maintainer: AndyRTR <andyrtr@archlinux.org>
+# Contributor: Jan de Groot <jgc@archlinux.org>
+
+pkgname=xorg-xrandr
+pkgver=1.5.4
+pkgrel=1
+pkgdesc="Primitive command line interface to RandR extension"
+arch=(x86_64)
+url="https://xorg.freedesktop.org/"
+license=('HPND-sell-variant')
+depends=('libxrandr' 'libx11' 'glibc')
+makedepends=('xorg-util-macros')
+groups=('xorg-apps' 'xorg')
+source=(https://xorg.freedesktop.org/archive/individual/app/xrandr-${pkgver}.tar.xz{,.sig})
+sha512sums=('2758615a3d212cc53540cd76199d7a03580702a7b776c430984db33c5368a19620cf54b7ac8e193a4c4036bc40373a933c01473d2f2ce982ce2c6b48379da5e5'
+            'SKIP')
+#validpgpkeys=('BD68A042C603DDAD9AA354B0F56ACC8F09BA9635') # Aaron Plattner <aplattner@nvidia.com>
+# validpgpkeys+=('3BB639E56F861FA2E86505690FDD682D974CA72A') # Matt Turner <mattst88@gmail.com>
+validpgpkeys=('3AB285232C46AE43D8E192F4DAB0F78EA6E7E2D2') # "Alan Coopersmith <alan.coopersmith@oracle.com>"
+
+build() {
+  cd "${srcdir}/xrandr-${pkgver}"
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+  ./configure --prefix=/usr
+  make -j"${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package() {
+  cd "${srcdir}/xrandr-${pkgver}"
+  make DESTDIR="${pkgdir}" install
+
+  # trim: man pages (docs) — not part of the maintained target
+  rm -rf "${pkgdir}"/usr/share/man
+
+  install -m755 -d "${pkgdir}/usr/share/licenses/${pkgname}"
+  install -m644 COPYING "${pkgdir}/usr/share/licenses/${pkgname}/"
+  rm -f "${pkgdir}/usr/bin/xkeystone"
+}

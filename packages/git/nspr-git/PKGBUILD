@@ -1,0 +1,86 @@
+# Maintainer: auto-generated (Class A upstream-VCS recipe)
+# Contributor: Marcell Meszaros < marcell.meszaros AT runbox.eu > (AUR nspr-hg reference)
+# Contributor: Franziskus Kiefer <franziskuskiefer@gmail.com>
+# Contributor: Jan Alexander Steffens (heftig) <heftig@archlinux.org> (stock nspr)
+# Contributor: Jan de Groot <jgc@archlinux.org>
+# Contributor: Alexander Baldeck <alexander@archlinux.org>
+
+pkgname=nspr-git
+pkgver=4.39beta1.r5.g3fa8e4d81657
+pkgrel=1
+pkgdesc="Netscape Portable Runtime (hg build)"
+arch=('x86_64')
+url="https://developer.mozilla.org/en-US/docs/Mozilla/Projects/NSPR"
+license=('MPL-2.0')
+depends=('glibc' 'sh')
+makedepends=('mercurial' 'zip')
+provides=("nspr=$pkgver" 'libnspr4.so' 'libplc4.so' 'libplds4.so')
+# bare soname entries (libnspr4.so/libplc4.so/libplds4.so have unversioned
+# sonames — nothing for pacman to auto-derive beyond the bare names)
+conflicts=('nspr')
+# UPSTREAM IS MERCURIAL (per batch policy). Stock Arch currently pins the
+# github.com/mozilla/nspr git mirror (#tag=NSPR_$pkgver_RTM) — this recipe
+# tracks the hg upstream directly instead (AUR nspr-hg reference). hg tip is
+# missing NSPR_4_40_RTM (mirror-only tag) and {latesttag} lands on a BETA tag,
+# so the derived $pkgver may sort below stock nspr 4.40 — versioned nspr deps
+# in consumers may need review (recorded in the classa-7 notes).
+source=('nspr::hg+https://hg.mozilla.org/projects/nspr'
+        '0002-configure.in-Remove-assembly-files-from-build.patch')
+b2sums=('SKIP'
+        'eec760670dfeac2d27cd41573bb97ee4e8251c54d80f2404bc4e32058511a3c63f37fe9f37bc6348a7d3cf0eaf5440bec1479ec38141d64d2e61137b67912be3')
+
+pkgver() {
+  cd nspr
+  hg log -r . --template '{latesttag}.r{latesttagdistance}.g{node|short}\n' \
+    | sed 's/^[a-zA-Z_]*//;s/_RTM//;s/_\([a-zA-Z][a-zA-Z0-9]\+\)/\1/;s/_/./g' \
+    | tr '[:upper:]' '[:lower:]'
+}
+
+prepare() {
+  cd nspr
+
+  # From stock nspr (gitlab.archlinux.org/archlinux/packaging/packages/nspr):
+  # remove obsolete hand-written assembly from the build. Still applies to hg
+  # tip (dry-run 2026-10).
+  # Stock's 0001-linux-prefer-GCC-provided-atomics...patch is DROPPED: it no
+  # longer applies to tip because tip already uses the GCC builtins it adds
+  # ("Use GCC built-in functions" in pr/include/md/_linux.h) — merged upstream.
+  patch -Np1 -i ../0002-configure.in-Remove-assembly-files-from-build.patch
+
+  autoreconf -fvi
+}
+
+build() {
+  cd nspr
+
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  local configure_options=(
+    --prefix=/usr
+    --libdir=/usr/lib
+    --includedir=/usr/include/nspr
+    --enable-optimize
+    --disable-debug
+    --enable-64bit
+  )
+
+  ./configure "${configure_options[@]}"
+  make -j"${GSA_BUILD_JOBS:-$(nproc)}" ${SOURCE_DATE_EPOCH:+
+    SH_NOW="${SOURCE_DATE_EPOCH}000000"
+    SH_DATE="$(date --utc --date="@$SOURCE_DATE_EPOCH" '+%Y-%m-%d %T')"
+  }
+}
+
+package() {
+  cd nspr
+  make DESTDIR="$pkgdir" install
+
+  ln -s nspr.pc "$pkgdir/usr/lib/pkgconfig/mozilla-nspr.pc"
+
+  rm -r "$pkgdir"/usr/bin/{compile-et.pl,prerr.properties} \
+        "$pkgdir"/usr/include/nspr/md
+
+  install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname/"
+}

@@ -1,0 +1,60 @@
+pkgbase = sysprof-git
+	pkgdesc = Kernel based performance profiler (git build)
+	pkgver = 3.40.0+1+g7353f8d
+	pkgrel = 1
+	url = https://apps.gnome.org/Sysprof/
+	arch = x86_64
+	license = GPL-3.0-or-later
+	makedepends = git
+	makedepends = glib2-devel
+	makedepends = meson
+	makedepends = yelp-tools
+	depends = cairo
+	depends = glib2
+	depends = glibc
+	depends = graphene
+	depends = gtk4
+	depends = hicolor-icon-theme
+	depends = json-glib
+	depends = libadwaita
+	depends = libdex
+	depends = libelf
+	depends = libgcc
+	depends = libpanel
+	depends = libstdc++
+	depends = libunwind
+	depends = pango
+	depends = polkit
+	depends = systemd-libs
+	source = git+https://gitlab.gnome.org/GNOME/sysprof.git
+	b2sums = SKIP
+
+pkgname = sysprof-git
+	groups = gnome-extra
+	depends = cairo
+	depends = glib2
+	depends = glibc
+	depends = graphene
+	depends = gtk4
+	depends = hicolor-icon-theme
+	depends = json-glib
+	depends = libadwaita
+	depends = libdex
+	depends = libelf
+	depends = libgcc
+	depends = libpanel
+	depends = libstdc++
+	depends = libunwind
+	depends = pango
+	depends = polkit
+	depends = systemd-libs
+	depends = libsysprof-capture-git=3.40.0+1+g7353f8d-1
+	provides = sysprof=3.40.0+1+g7353f8d
+	conflicts = sysprof
+
+pkgname = libsysprof-capture-git
+	pkgdesc = Kernel based performance profiler (git build) - capture library (git build)
+	license = BSD-2-Clause-Patent
+	depends = 
+	provides = libsysprof-capture=3.40.0+1+g7353f8d
+	conflicts = libsysprof-capture

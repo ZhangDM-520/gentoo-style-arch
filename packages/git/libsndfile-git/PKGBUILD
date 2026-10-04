@@ -1,0 +1,79 @@
+# Maintainer: David Runge <dvzrv@archlinux.org>
+# Maintainer: Chocobo1 <chocobo1 AT archlinux DOT net>
+#
+# git build adapted from AUR libsndfile-git (reference only) + stock Arch
+# libsndfile: tracks upstream master directly (stock pins release tarballs).
+# The stock CVE-2022-33065 backport patch is dropped — master carries the fix.
+
+pkgname=libsndfile-git
+_pkgname=libsndfile
+pkgver=1.2.2.r51.g52b803f5
+pkgrel=1
+pkgdesc="A C library for reading and writing files containing sampled audio data (git build)"
+arch=('x86_64')
+url="https://libsndfile.github.io/libsndfile/"
+license=('LGPL-2.1-or-later')
+depends=('glibc')
+makedepends=(
+  alsa-lib
+  cmake
+  flac
+  git
+  lame
+  libogg
+  libvorbis
+  mpg123
+  opus
+  python
+  sqlite
+)
+optdepends=('alsa-lib: for sndfile-play')
+provides=("libsndfile=$pkgver" 'libsndfile.so')
+conflicts=('libsndfile')
+source=("git+https://github.com/${_pkgname}/${_pkgname}.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$_pkgname"
+  git describe --long --tags | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g'
+}
+
+build() {
+  cd "$_pkgname"
+
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  local cmake_options=(
+    -B build
+    -D BUILD_SHARED_LIBS=ON
+    -D CMAKE_INSTALL_PREFIX=/usr
+    -D CMAKE_BUILD_TYPE=None
+    -D CMAKE_POLICY_VERSION_MINIMUM=3.5
+    -D ENABLE_EXTERNAL_LIBS=ON
+    -D ENABLE_MPEG=ON
+    -W no-dev
+  )
+
+  cmake "${cmake_options[@]}"
+  cmake --build build --parallel "${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package() {
+  cd "$_pkgname"
+
+  # same runtime deps stock computes from the enabled external-codec set
+  depends+=(
+    flac libFLAC.so
+    lame libmp3lame.so
+    libogg libogg.so
+    libvorbis libvorbis.so libvorbisenc.so
+    mpg123 libmpg123.so
+    opus libopus.so
+  )
+
+  DESTDIR="$pkgdir" cmake --install build
+
+  install -Dm644 COPYING "$pkgdir/usr/share/licenses/$pkgname/COPYING"
+}

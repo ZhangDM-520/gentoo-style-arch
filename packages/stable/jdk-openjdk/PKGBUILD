@@ -1,0 +1,522 @@
+# Maintainer: Levente Polyak <anthraxx[at]archlinux[dot]org>
+# Maintainer: Frederik Schwan <freswa at archlinux dot org>
+# Contributor: Guillaume ALAUX <guillaume@archlinux.org>
+
+# TODO add test, see about packaging jtreg and using it here
+
+# Full stock pkgbase delivered under this id for upgrade-in-place (single
+# target row) — qca-qt6 precedent. The install_*.sh files are install=()
+# assets of the kept outputs (not source=() assets) and are kept as
+# load-bearing local files.
+# trim: dropped split openjdk-doc (javadoc) together with its package_()
+# function, staging path, its pinned provide and the `docs` make target
+pkgbase=java-openjdk
+pkgname=(
+  jdk-openjdk
+  jre-openjdk
+  jre-openjdk-headless
+  openjdk-src
+)
+# on a majorver change, don't forget to update the misc files that come along this PKGBUILD
+_majorver=27
+_minorver=0
+_securityver=0
+_updatever=35
+# pkgver=${_majorver}.${_minorver}.${_securityver}.u${_updatever}
+pkgver=${_majorver}.u${_updatever}
+pkgrel=1
+# _git_tag=jdk-${_majorver}.${_minorver}.${_securityver}+${_updatever}
+_git_tag=jdk-${_majorver}+${_updatever}
+arch=('x86_64')
+url='https://openjdk.java.net/'
+license=('LicenseRef-Java')
+makedepends=(
+  "java-environment>=22"
+  alsa-lib
+  bash
+  cpio
+  freetype2
+  giflib
+  glibc
+  graphviz
+  harfbuzz
+  lcms2
+  libcups
+  libelf
+  libgcc
+  libjpeg-turbo
+  libnet
+  libpng
+  libstdc++
+  libx11
+  libxext
+  libxrandr
+  libxrender
+  libxt
+  libxtst
+  pandoc
+  unzip
+  zip
+)
+optdepends=(
+  'gvfs: open links e.g. hyperlinks'
+)             
+source=(
+  https://github.com/openjdk/jdk${_majorver}u/archive/${_git_tag}.tar.gz
+  freedesktop-java.desktop
+  freedesktop-jconsole.desktop
+  freedesktop-jshell.desktop
+)
+sha256sums=('b3c60f65d3b280eb51e2bec66fcac143e275fcf1ab6228e7fb27d26d572604ff'
+            'b86c1585ecd1ad90f70088a42ff95e9b7a2089d78db1f41233058f57d2ed0d62'
+            '13e1223e633440f185720371282e58befc289faa156d4a7233f8c19102311ef5'
+            '5673ab7e4d30678d71e513331c6cb03c1972210ba098f25e507974d4cb7ec4e4')
+
+case "${CARCH}" in
+  x86_64) _JARCH='x86_64';;
+  i686)   _JARCH='x86';;
+  riscv64)_JARCH='riscv64';;
+  aarch64) _JARCH='aarch64';;
+esac
+
+_jvmdir=/usr/lib/jvm/java-${_majorver}-openjdk
+_jdkdir=jdk${_majorver}u-${_git_tag//+/-}
+_imgdir=${_jdkdir}/build/linux-${_JARCH}-server-release/images
+
+_nonheadless=(
+  lib/libawt_xawt.so
+  lib/libjawt.so
+  lib/libjsound.so
+  lib/libsplashscreen.so
+)
+
+_commondeps=(
+  'java-runtime-common>=3'
+  ca-certificates-utils
+  freetype2
+  glibc
+  harfbuzz
+  lcms2
+  libfreetype.so
+  libgcc
+  libharfbuzz.so
+  libjpeg.so
+  libjpeg-turbo
+  liblcms2.so
+  libnet
+  libstdc++
+  nss
+)
+
+build() {
+  cd ${_jdkdir}
+
+  # remove -j from MAKEFLAGS to prevent build fail
+  local MAKEFLAG_J=$(echo ${MAKEFLAGS} | sed -En 's/.*-j([0-9]+).*/\1/p')
+  export MAKEFLAGS=${MAKEFLAGS/-j${MAKEFLAG_J}/}
+
+  # House: no -O3 — the stock CFLAGS/CXXFLAGS -O2→-O3 rewrite is dropped;
+  # stock comment was: Avoid optimization of HotSpot to be lowered from O3 to O2
+  local _CFLAGS="${CFLAGS} ${CPPFLAGS} -fcommon"
+  local _CXXFLAGS="${CXXFLAGS} ${CPPFLAGS} -fcommon"
+  local _LDFLAGS=${LDFLAGS}
+
+  # House style: mold linker when available (consumed via --with-extra-ldflags)
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  _LDFLAGS+=" ${_mold}"
+
+  # TODO: Should be rechecked for the next releases
+  # compiling with -fexceptions leads to:
+  # /usr/bin/ld: /build/java-openjdk/src/jdk17u-jdk-17.0.3-2/build/linux-x86_64-server-release/hotspot/variant-server/libjvm/objs/zPhysicalMemory.o: in function `ZList<ZMemory>::~ZList()':
+  # /build/java-openjdk/src/jdk17u-jdk-17.0.3-2/src/hotspot/share/gc/z/zList.hpp:54: undefined reference to `ZListNode<ZMemory>::~ZListNode()'
+  # collect2: error: ld returned 1 exit status
+  _CFLAGS=${_CFLAGS/-fexceptions/}
+  _CXXFLAGS=${_CXXFLAGS/-fexceptions/}
+
+  # CFLAGS, CXXFLAGS and LDFLAGS are ignored as shown by a warning
+  # in the output of ./configure unless used like such:
+  #  --with-extra-cflags="${CFLAGS}"
+  #  --with-extra-cxxflags="${CXXFLAGS}"
+  #  --with-extra-ldflags="${LDFLAGS}"
+  # See also paragraph "Configure Control Variables from "jdk${_majorver}-${_git_tag}/common/doc/building.md
+  unset CFLAGS
+  unset CXXFLAGS
+  unset LDFLAGS
+
+  if check_option "lto" "y"; then
+    jvm_features="zgc,shenandoahgc,link-time-opt"
+  else
+    jvm_features="zgc,shenandoahgc"
+  fi
+
+
+  bash configure \
+    --with-version-string="${_majorver}.${_minorver}.${_securityver}" \
+    --with-stdc++lib=dynamic \
+    --with-extra-cflags="${_CFLAGS}" \
+    --with-extra-cxxflags="${_CXXFLAGS}" \
+    --with-extra-ldflags="${_LDFLAGS}" \
+    --with-libjpeg=system \
+    --with-giflib=system \
+    --with-libpng=system \
+    --with-lcms=system \
+    --with-zlib=system \
+    --with-harfbuzz=system \
+    --with-jvm-features="${jvm_features}" \
+    --with-native-debug-symbols=internal \
+    --enable-unlimited-crypto \
+    --disable-warnings-as-errors \
+    --with-vendor-name="Arch Linux"
+
+  # trim: `docs` make target goes with the dropped openjdk-doc split
+  # (pandoc/graphviz makedeps kept: man-page/doc toolchain of the image build)
+  make JOBS="${GSA_BUILD_JOBS:-$(nproc)}" images legacy-jre-image
+
+  # https://bugs.openjdk.java.net/browse/JDK-8173610
+  find "${srcdir}/${_imgdir}" -iname '*.so' -exec chmod +x {} \;
+}
+
+check() {
+  cd ${_jdkdir}
+  # TODO package jtreg
+  # make -k check
+}
+
+package_jre-openjdk-headless() {
+  pkgdesc="OpenJDK Java ${_majorver} headless runtime environment"
+  depends=(
+    "${_commondeps[@]}"
+  )
+  optdepends=(
+    'java-rhino: for some JavaScript support'
+  )
+  # house: stock pinned virtual provides (java-runtime-headless=… etc.) dropped
+  # (bare soname provides only, never pinned) and stock conflicts=() dropped
+  # (no conflicts/replaces) — recorded in the recipe NOTE
+  provides=(
+    libawt_headless.so
+    libawt.so
+    libdt_socket.so
+    libextnet.so
+    libfontmanager.so
+    libinstrument.so
+    libj2gss.so
+    libj2pcsc.so
+    libj2pkcs11.so
+    libjavajpeg.so
+    libjava.so
+    libjdwp.so
+    libjimage.so
+    libjli.so
+    libjsig.so
+    libjsvml.so
+    libjvm.so
+    liblcms.so
+    libmanagement_agent.so
+    libmanagement_ext.so
+    libmanagement.so
+    libmlib_image.so
+    libnet.so
+    libnio.so
+    libprefs.so
+    librmi.so
+    libsctp.so
+    libsimdsort.so
+    libsyslookup.so
+    libverify.so
+    libzip.so
+  )
+  backup=(
+    etc/${pkgbase}/logging.properties
+    etc/${pkgbase}/management/jmxremote.access
+    etc/${pkgbase}/management/jmxremote.password.template
+    etc/${pkgbase}/management/management.properties
+    etc/${pkgbase}/net.properties
+    etc/${pkgbase}/security/java.policy
+    etc/${pkgbase}/security/java.security
+    etc/${pkgbase}/security/policy/README.txt
+    etc/${pkgbase}/security/policy/limited/default_US_export.policy
+    etc/${pkgbase}/security/policy/limited/default_local.policy
+    etc/${pkgbase}/security/policy/limited/exempt_local.policy
+    etc/${pkgbase}/security/policy/unlimited/default_US_export.policy
+    etc/${pkgbase}/security/policy/unlimited/default_local.policy
+    etc/${pkgbase}/sound.properties
+  )
+  install=install_jre-openjdk-headless.sh
+
+  cd ${_imgdir}/jre
+
+  install -dm 755 "${pkgdir}${_jvmdir}"
+
+  cp -a bin lib \
+    "${pkgdir}${_jvmdir}"
+
+  for f in "${_nonheadless[@]}"; do
+    rm "${pkgdir}${_jvmdir}/${f}"
+  done
+
+  # Conf
+  install -dm 755 "${pkgdir}/etc"
+  cp -r conf "${pkgdir}/etc/${pkgbase}"
+  ln -s /etc/${pkgbase} "${pkgdir}/${_jvmdir}/conf"
+
+  # Legal
+  install -dm 755 "${pkgdir}/usr/share/licenses"
+  cp -r legal "${pkgdir}/usr/share/licenses/${pkgbase}"
+  ln -s ${pkgbase} "${pkgdir}/usr/share/licenses/${pkgname}"
+  ln -s /usr/share/licenses/${pkgbase} "${pkgdir}/${_jvmdir}/legal"
+
+
+  # trim: man pages (docs) — man1 installs and the jvmdir/man symlink trimmed
+  # Link JKS keystore from ca-certificates-utils
+  rm -f "${pkgdir}${_jvmdir}/lib/security/cacerts"
+  ln -sf /etc/ssl/certs/java/cacerts "${pkgdir}${_jvmdir}/lib/security/cacerts"
+}
+
+package_jre-openjdk() {
+  pkgdesc="OpenJDK Java ${_majorver} full runtime environment"
+  depends=(
+    "${_commondeps[@]}"
+    giflib
+    libgif.so
+    libpng
+  )
+  optdepends=(
+    'alsa-lib: for basic sound support'
+    'gtk3: for the Gtk+ 3 look and feel - desktop usage'
+  )
+  # house: stock pinned virtual provides (java-runtime=… etc.) dropped (bare
+  # soname provides only, never pinned); stock conflicts=() dropped
+  provides=(
+    libawt_headless.so
+    libawt.so
+    libdt_socket.so
+    libextnet.so
+    libfontmanager.so
+    libinstrument.so
+    libj2gss.so
+    libj2pcsc.so
+    libj2pkcs11.so
+    libjavajpeg.so
+    libjava.so
+    libjdwp.so
+    libjimage.so
+    libjli.so
+    libjsig.so
+    libjsvml.so
+    libjvm.so
+    liblcms.so
+    libmanagement_agent.so
+    libmanagement_ext.so
+    libmanagement.so
+    libmlib_image.so
+    libnet.so
+    libnio.so
+    libprefs.so
+    librmi.so
+    libsctp.so
+    libsimdsort.so
+    libsyslookup.so
+    libverify.so
+    libzip.so
+    libawt_xawt.so
+    libjawt.so
+    libjsound.so
+    libsplashscreen.so
+  )
+  backup=(
+    etc/${pkgbase}/logging.properties
+    etc/${pkgbase}/management/jmxremote.access
+    etc/${pkgbase}/management/jmxremote.password.template
+    etc/${pkgbase}/management/management.properties
+    etc/${pkgbase}/net.properties
+    etc/${pkgbase}/security/java.policy
+    etc/${pkgbase}/security/java.security
+    etc/${pkgbase}/security/policy/README.txt
+    etc/${pkgbase}/security/policy/limited/default_US_export.policy
+    etc/${pkgbase}/security/policy/limited/default_local.policy
+    etc/${pkgbase}/security/policy/limited/exempt_local.policy
+    etc/${pkgbase}/security/policy/unlimited/default_US_export.policy
+    etc/${pkgbase}/security/policy/unlimited/default_local.policy
+    etc/${pkgbase}/sound.properties
+  )
+  install=install_jre-openjdk.sh
+
+  cd ${_imgdir}/jre
+
+  install -dm 755 "${pkgdir}${_jvmdir}"
+
+  cp -a bin lib \
+    "${pkgdir}${_jvmdir}"
+
+  for f in "${_nonheadless[@]}"; do
+    install -Dm 755 ${f} "${pkgdir}${_jvmdir}/${f}"
+  done
+
+  # Conf
+  install -dm 755 "${pkgdir}/etc"
+  cp -r conf "${pkgdir}/etc/${pkgbase}"
+  ln -s /etc/${pkgbase} "${pkgdir}/${_jvmdir}/conf"
+
+  # Legal
+  install -dm 755 "${pkgdir}/usr/share/licenses"
+  cp -r legal "${pkgdir}/usr/share/licenses/${pkgbase}"
+  ln -s ${pkgbase} "${pkgdir}/usr/share/licenses/${pkgname}"
+  ln -s /usr/share/licenses/${pkgbase} "${pkgdir}/${_jvmdir}/legal"
+
+
+  # trim: man pages (docs) — man1 installs and the jvmdir/man symlink trimmed
+  # Link JKS keystore from ca-certificates-utils
+  rm -f "${pkgdir}${_jvmdir}/lib/security/cacerts"
+  ln -sf /etc/ssl/certs/java/cacerts "${pkgdir}${_jvmdir}/lib/security/cacerts"
+
+  # Desktop files
+  for f in java; do
+    install -Dm 644 \
+      "${srcdir}/freedesktop-${f}.desktop" \
+      "${pkgdir}/usr/share/applications/${f}-${pkgbase}.desktop"
+  done
+}
+
+package_jdk-openjdk() {
+  pkgdesc="OpenJDK Java ${_majorver} development kit"
+  depends=(
+    "${_commondeps[@]}"
+    'java-environment-common=3'
+    ca-certificates-utils
+    freetype2
+    harfbuzz
+    hicolor-icon-theme
+    lcms2
+    libelf
+    libfreetype.so
+    libgif.so
+    libharfbuzz.so
+    libjpeg.so
+    libjpeg-turbo
+    liblcms2.so
+    libnet
+    libpng
+    nss
+  )
+  optdepends=(
+    'java-rhino: for some JavaScript support'
+    'alsa-lib: for basic sound support'
+    'gtk3: for the Gtk+ 3 look and feel - desktop usage'
+  )
+  # house: stock pinned virtual provides (java-environment=… etc.) dropped
+  # (bare soname provides only, never pinned); stock conflicts=() dropped
+  provides=(
+    libattach.so
+    libsaproc.so
+    libawt_headless.so
+    libawt.so
+    libdt_socket.so
+    libextnet.so
+    libfontmanager.so
+    libinstrument.so
+    libj2gss.so
+    libj2pcsc.so
+    libj2pkcs11.so
+    libjavajpeg.so
+    libjava.so
+    libjdwp.so
+    libjimage.so
+    libjli.so
+    libjsig.so
+    libjsvml.so
+    libjvm.so
+    liblcms.so
+    libmanagement_agent.so
+    libmanagement_ext.so
+    libmanagement.so
+    libmlib_image.so
+    libnet.so
+    libnio.so
+    libprefs.so
+    librmi.so
+    libsctp.so
+    libsimdsort.so
+    libsyslookup.so
+    libverify.so
+    libzip.so
+    libawt_xawt.so
+    libjawt.so
+    libjsound.so
+    libsplashscreen.so
+  )
+  backup=(
+    etc/${pkgbase}/logging.properties
+    etc/${pkgbase}/management/jmxremote.access
+    etc/${pkgbase}/management/jmxremote.password.template
+    etc/${pkgbase}/management/management.properties
+    etc/${pkgbase}/net.properties
+    etc/${pkgbase}/security/java.policy
+    etc/${pkgbase}/security/java.security
+    etc/${pkgbase}/security/policy/README.txt
+    etc/${pkgbase}/security/policy/limited/default_US_export.policy
+    etc/${pkgbase}/security/policy/limited/default_local.policy
+    etc/${pkgbase}/security/policy/limited/exempt_local.policy
+    etc/${pkgbase}/security/policy/unlimited/default_US_export.policy
+    etc/${pkgbase}/security/policy/unlimited/default_local.policy
+    etc/${pkgbase}/sound.properties
+  )
+  install=install_jdk-openjdk.sh
+
+  cd ${_imgdir}/jdk
+
+  install -dm 755 "${pkgdir}${_jvmdir}"
+
+  # trim: demos — the stock `demo` tree is not shipped
+  cp -a bin include jmods lib release\
+    "${pkgdir}${_jvmdir}"
+
+  rm "${pkgdir}${_jvmdir}/lib/src.zip"
+
+    # Conf
+  install -dm 755 "${pkgdir}/etc"
+  cp -r conf "${pkgdir}/etc/${pkgbase}"
+  ln -s /etc/${pkgbase} "${pkgdir}/${_jvmdir}/conf"
+
+  # Legal
+  install -dm 755 "${pkgdir}/usr/share/licenses"
+  cp -r legal "${pkgdir}/usr/share/licenses/${pkgbase}"
+  ln -s ${pkgbase} "${pkgdir}/usr/share/licenses/${pkgname}"
+  ln -s /usr/share/licenses/${pkgbase} "${pkgdir}/${_jvmdir}/legal"
+
+
+  # trim: man pages (docs) — man1 installs and the jvmdir/man symlink trimmed
+  # Link JKS keystore from ca-certificates-utils
+  rm -f "${pkgdir}${_jvmdir}/lib/security/cacerts"
+  ln -sf /etc/ssl/certs/java/cacerts "${pkgdir}${_jvmdir}/lib/security/cacerts"
+
+  # Icons
+  for s in 16 24 32 48; do
+    install -Dm 644 \
+      "${srcdir}/${_jdkdir}/src/java.desktop/unix/classes/sun/awt/X11/java-icon${s}.png" \
+      "${pkgdir}/usr/share/icons/hicolor/${s}x${s}/apps/java${_majorver}-openjdk.png"
+  done
+
+  # Desktop files
+  for f in jconsole java jshell; do
+    install -Dm 644 \
+      "${srcdir}/freedesktop-${f}.desktop" \
+      "${pkgdir}/usr/share/applications/${f}-${pkgbase}.desktop"
+  done
+}
+
+package_openjdk-src() {
+  pkgdesc="OpenJDK Java ${_majorver} sources"
+  # Depends on JDK to get license files
+  depends=("jdk${_majorver}-openjdk=${pkgver}-${pkgrel}")
+  # house: stock pinned provide openjdk${_majorver}-src=$pkgver-$pkgrel dropped
+  # (never pinned); no ELF output here
+
+  install -Dm 644 -t "${pkgdir}${_jvmdir}/lib" ${_imgdir}/jdk/lib/src.zip
+
+  install -dm 755 "${pkgdir}/usr/share/licenses"
+  ln -s ${pkgbase} "${pkgdir}/usr/share/licenses/${pkgname}"
+}
+
+# vim: ts=2 sw=2 et:

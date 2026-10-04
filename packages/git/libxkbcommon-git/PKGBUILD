@@ -1,0 +1,131 @@
+# Merged with official ABS libxkbcommon PKGBUILD by João, 2022/05/29 (all respective contributors apply herein)
+# Maintainer: João Figueiredo & chaotic-aur <islandc0der@chaotic.cx>
+# Maintainer: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
+# Contributor: Joel Teichroeb <joel@teichroeb.net>
+# Contributor: Daniel Micay <danielmicay@gmail.com>
+# Contributor: Mladen Pejakovic <pejakm@gmail.com>
+
+# git recipe tracking the upstream xkbcommon VCS (AUR libxkbcommon-git used as
+# reference only). Mirrors the stock libxkbcommon pkgbase split — the
+# libxkbcommon-git, libxkbcommon-x11-git and libxkbcommon-doc-git outputs
+# supersede stock libxkbcommon, libxkbcommon-x11 and libxkbcommon-doc.
+
+pkgbase=libxkbcommon-git
+pkgname=(
+  libxkbcommon-git
+  libxkbcommon-x11-git
+  libxkbcommon-doc-git
+)
+pkgver=1.14.0.beta2.r18.g66e702d
+pkgrel=1
+pkgdesc='Keymap handling library for toolkits and window systems (git build)'
+url='https://xkbcommon.org/'
+arch=('x86_64')
+license=('MIT')
+makedepends=(
+  bash-completion
+  doxygen
+  git
+  glibc
+  graphviz
+  libxcb
+  libxml2
+  meson
+  wayland
+  wayland-protocols
+  xkeyboard-config
+  xorgproto
+)
+checkdepends=(
+  libgl
+  xorg-server-xvfb
+)
+source=('git+https://github.com/xkbcommon/libxkbcommon.git')
+b2sums=('SKIP')
+
+pkgver() {
+  cd libxkbcommon
+  git describe --long --tags | sed 's/^xkbcommon-//;s/\([^-]*-g\)/r\1/;s/-/./g'
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  local meson_options=(
+    -D b_lto=true
+    -D b_ndebug=true
+    -D enable-docs=true
+  )
+
+  arch-meson libxkbcommon build "${meson_options[@]}"
+  meson compile -C build -j "${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+}
+
+check() {
+  xvfb-run -s '-nolisten local' meson test -C build --print-errorlogs
+}
+
+_pick() {
+  local p="$1" f d; shift
+  for f; do
+    d="$srcdir/$p/${f#$pkgdir/}"
+    mkdir -p "$(dirname "$d")"
+    mv "$f" "$d"
+    rmdir -p --ignore-fail-on-non-empty "$(dirname "$f")"
+  done
+}
+
+package_libxkbcommon-git() {
+  depends=(
+    glibc
+    libxml2
+    xkeyboard-config
+  )
+  optdepends=(
+    'libxkbcommon-x11-git: xkbcli interactive-x11'
+    'wayland: xkbcli interactive-wayland'
+  )
+  provides=("libxkbcommon=$pkgver" 'libxkbcommon.so' 'libxkbregistry.so')
+  conflicts=('libxkbcommon')
+
+  meson install -C build --destdir "$pkgdir"
+
+  _pick x11 "$pkgdir"/usr/lib/*x11*
+  _pick x11 "$pkgdir"/usr/lib/pkgconfig/*x11*
+  _pick x11 "$pkgdir"/usr/lib/xkbcommon/*x11*
+  _pick x11 "$pkgdir"/usr/include/xkbcommon/*x11*
+  _pick x11 "$pkgdir"/usr/share/man/man1/*x11*
+
+  _pick doc "$pkgdir"/usr/share/doc
+
+  install -Dt "$pkgdir/usr/share/licenses/$pkgname" -m644 libxkbcommon/LICENSE
+}
+
+package_libxkbcommon-x11-git() {
+  pkgdesc='Keyboard handling library using XKB data for X11 XCB clients (git build)'
+  depends=(
+    glibc
+    libxcb
+    libxkbcommon-git
+    libxkbcommon.so
+  )
+  provides=("libxkbcommon-x11=$pkgver" 'libxkbcommon-x11.so')
+  conflicts=('libxkbcommon-x11')
+
+  mv x11/* "$pkgdir"/
+
+  install -Dt "$pkgdir/usr/share/licenses/$pkgname" -m644 libxkbcommon/LICENSE
+}
+
+package_libxkbcommon-doc-git() {
+  pkgdesc='API documentation for libxkbcommon (git build)'
+  depends=()
+  provides=("libxkbcommon-doc=$pkgver")
+  conflicts=('libxkbcommon-doc')
+
+  mv doc/* "$pkgdir"/
+
+  install -Dt "$pkgdir/usr/share/licenses/$pkgname" -m644 libxkbcommon/LICENSE
+}

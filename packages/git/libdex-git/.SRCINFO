@@ -13,7 +13,7 @@ pkgbase = libdex-git
 	depends = libatomic
 	depends = liburing
 	provides = libdex
-	provides = libdex-1.so=1-64
+	provides = libdex-1.so
 	conflicts = libdex
 	source = git+https://gitlab.gnome.org/GNOME/libdex
 	b2sums = SKIP

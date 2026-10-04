@@ -1,0 +1,38 @@
+# Maintainer: AndyRTR <andyrtr@archlinux.org>
+
+pkgname=liblangtag
+pkgver=0.6.8
+pkgrel=1
+pkgdesc="interface library to access/deal with tags for identifying languages"
+arch=('x86_64')
+url="https://bitbucket.org/tagoh/liblangtag/wiki/Home"
+license=('LGPL-3.0-or-later' 'MPL-2.0')
+depends=('libxml2' 'glib2' 'glibc')
+makedepends=('gobject-introspection')
+optdepends=('gobject-introspection-runtime: use with liblangtag-gobject')
+provides=('liblangtag.so' 'liblangtag-gobject.so'
+          'liblangtag-ext-ldml-t.so' 'liblangtag-ext-ldml-u.so')
+source=(#https://bitbucket.org/tagoh/liblangtag/downloads/$pkgname-$pkgver.tar.bz2
+        # LibreOffice source - bitbucket doesn't offer it
+        https://gitlab.com/-/project/74684761/uploads/9f74bd278e6edfbf1093605d38fb7a97/liblangtag-0.6.8.tar.bz2
+)
+sha256sums=('a96975b79ddd8fef6d9295c083fe3f1afa1a8898a57235d4069255ade44e5cf2')
+
+build() {
+  cd "$pkgname-$pkgver"
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+  ./configure --prefix=/usr
+  sed -i -e 's/ -shared / -Wl,-O1,--as-needed\0/g' libtool
+  make
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  make DESTDIR="$pkgdir/" install
+  # trim: pre-generated gtk-doc HTML API reference (docs)
+  rm -rf "$pkgdir"/usr/share/gtk-doc
+  install -Dm644 COPYING -t "$pkgdir"/usr/share/licenses/$pkgname/
+}

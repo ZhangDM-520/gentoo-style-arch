@@ -1,0 +1,46 @@
+# Maintainer: Antonio Rojas <arojas@archlinux.org>
+# Contributor: Matt Harrison <matt@harrison.us.com>
+# Contributor: Erik van der Kolk <developer at smerik dot nl>
+# Contributor: Hong Xu
+
+pkgname=editorconfig-core-c
+pkgver=0.12.11
+pkgrel=1
+pkgdesc='EditorConfig core code written in C (for use by plugins supporting EditorConfig parsing)'
+arch=(x86_64)
+url='https://github.com/editorconfig/editorconfig-core-c'
+license=(BSD-3-Clause)
+depends=(glibc
+         pcre2)
+makedepends=(cmake
+             git)
+# trim: doxygen (makedepends) + BUILD_DOCUMENTATION (doxygen HTML + man pages)
+#       dropped together (docs); the tests/ git submodule is not fetched by the
+#       source checkout so the test suite never builds (Class B tests)
+# House standard: bare soname provide per ELF output (never pinned).
+provides=(libeditorconfig.so)
+source=(git+https://github.com/editorconfig/$pkgname#tag=v$pkgver)
+sha256sums=('fee3ac0305ed291e2a7d39d9979be1b4fe4f971350dcf4ee76b1d26f9e44de22')
+
+prepare() {
+  sed -e 's|-Werror||' -i $pkgname/src/CMakeLists.txt
+}
+
+build() {
+  # House style: mold linker when available
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  cmake -B build -S $pkgname \
+      -DCMAKE_INSTALL_PREFIX=/usr \
+      -DBUILD_DOCUMENTATION=OFF \
+      -DCMAKE_C_FLAGS="$CFLAGS -ffat-lto-objects"
+  cmake --build build -j "${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package() {
+  DESTDIR="$pkgdir" cmake --install build
+
+  install -Dm644 $pkgname/LICENSE -t "$pkgdir"/usr/share/licenses/$pkgname
+}

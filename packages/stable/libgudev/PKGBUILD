@@ -1,0 +1,63 @@
+# Maintainer: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
+# Contributor: Evangelos Foutras <foutrelis@archlinux.org>
+
+pkgname=libgudev
+pkgver=238
+pkgrel=3
+pkgdesc="GObject bindings for libudev"
+url="https://gitlab.gnome.org/GNOME/libgudev"
+arch=(x86_64)
+license=(LGPL-2.1-or-later)
+depends=(
+  glib2
+  glibc
+  libgcc
+  libsystemd
+)
+# trim: gtk-doc (API docs), umockdev + glibc-locales (the meson test suite,
+# disabled below) — none are pulled back in as makedeps
+makedepends=(
+  git
+  glib2-devel
+  gobject-introspection
+  meson
+  systemd
+  vala
+)
+source=("git+$url.git#tag=$pkgver")
+b2sums=('6da9512d87154fbd62aae044a39abd84bee451f5a21203180062c369ebedf2ee1bc7672408cf806918111397bc74be58314e6c3155e638137603d11012a4355f')
+
+prepare() {
+  cd libgudev
+}
+
+build() {
+  local meson_options=(
+    # trim: gtk-doc API docs (gtk-doc makedep dropped) and the umockdev test
+    # suite (tests makedeps dropped) — arch-meson forces --auto-features
+    # enabled, so the test feature needs an explicit off
+    -D gtk_doc=false
+    -D tests=disabled
+  )
+
+  # House style: mold linker when available (arch-meson consumes LDFLAGS env)
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  arch-meson libgudev build "${meson_options[@]}"
+  meson compile -C build
+}
+
+package() {
+  depends+=(
+    libg{lib,object}-2.0.so
+    libudev.so
+  )
+  provides+=(libgudev-1.0.so)
+
+  meson install -C build --destdir "$pkgdir"
+  install -Dm644 libgudev/COPYING -t "$pkgdir"/usr/share/licenses/$pkgname/
+}
+
+# vim:set sw=2 sts=-1 et:

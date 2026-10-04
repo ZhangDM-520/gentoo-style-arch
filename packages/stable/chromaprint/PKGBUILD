@@ -1,0 +1,58 @@
+# Maintainer: David Runge <dvzrv@archlinux.org>
+# Contributor: Gaetan Bisson <bisson@archlinux.org>
+# Contributor: Wieland Hoffmann <the_mineo@web.de>
+
+pkgname=chromaprint
+pkgver=1.6.1
+pkgrel=2
+pkgdesc="Library for extracting fingerprints from any audio source"
+url="https://acoustid.org/chromaprint"
+arch=('x86_64')
+license=('LGPL-2.1-or-later' 'MIT')
+depends=(glibc
+         libgcc
+         libstdc++)
+makedepends=(cmake
+             ffmpeg
+             git
+             gtest)
+provides=('libchromaprint.so')
+# upstream signs with DSA key: https://github.com/acoustid/chromaprint/issues/81
+source=(git+https://github.com/acoustid/chromaprint#tag=v$pkgver
+        chromaprint-use-system-gtest.patch)
+sha512sums=('23dd2b38a70c34b081bef7f4505dedda3980e0ef461a31b1769362e2fbd0631fd56de949712a5f1e82f219516cdad3f3c2d50e5a1995688c73bbbc3ccb95a696'
+            '2466d8b84fb72c3d6e2e53c2ec9619533774be75fbfb002c63d2d530775bf98189951c8467a652882280d77a8ef7f22488e2ab4ae1b5ddd70a4914143d9bc3a6')
+b2sums=('dbdd35f84c5bd79ffa4184138943675cc484df6a57c3aed5dfbcc4b86d07602f6b3a84f679eeb7b4874fb1625028d1e6bb216acf9550119885b1595b022a98e0'
+        '79b9b5d4f208e69322ec89b803e873c5d1412ce8fda83a3bae2a93d7036a24388a995820af2ec67f9485fe189d7780b81e15244c4589c62cf3757b2296161c47')
+
+prepare() {
+  patch -d $pkgname -p1 < chromaprint-use-system-gtest.patch
+}
+
+build() {
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  cmake -DCMAKE_INSTALL_PREFIX=/usr \
+        -DCMAKE_BUILD_TYPE='None' \
+        -DBUILD_TESTS=ON \
+        -DBUILD_TOOLS=ON \
+        -Wno-dev \
+        -B build \
+        -S $pkgname
+  cmake --build build --parallel "${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+}
+
+check() {
+  cmake --build build --target test
+}
+
+package() {
+  depends+=('libavcodec.so' 'libavformat.so' 'libavutil.so' 'libswresample.so')
+  DESTDIR="$pkgdir" cmake --install build
+  install -vDm 644 $pkgname/LICENSE.md -t "$pkgdir/usr/share/licenses/$pkgname"
+  # trim: drop the NEWS.txt/README.md doc payload (this recipe ships the
+  # libchromaprint library + the fingerprint tools only)
+}

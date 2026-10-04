@@ -16,18 +16,17 @@ license=('MIT')
 depends=('glibc' 'xz' 'zlib')
 makedepends=('git')  # texlive-core dropped 2026-09-05: latex is only used for optional PDF docs
 provides=("libunwind=$pkgver"
-          'libunwind.so=8-64'
-          'libunwind-x86_64.so=8-64'
-          'libunwind-coredump.so=0-64'
-          'libunwind-ptrace.so=0-64'
-          'libunwind-setjmp.so=0-64')
+          'libunwind.so'
+          'libunwind-x86_64.so'
+          'libunwind-coredump.so'
+          'libunwind-ptrace.so'
+          'libunwind-setjmp.so')
 conflicts=('libunwind')
 options=('staticlibs')
 # soname provides must be DECLARED explicitly (mirrors repo libunwind):
-# makepkg 7's autodeps is disabled globally (makepkg.conf) and PKGBUILD lint
-# rejects 'autodeps' in the options array; pacman does NOT derive soname
-# provides from package files at -U time. Without these, gimp's
-# 'libunwind.so=8-64' dep breaks on install. Bump on upstream soname change.
+# bare stems only — makepkg auto-versions each from the packaged ELF soname
+# at package time (house rule: never hand-pin the version). Without these,
+# gimp's 'libunwind.so=8-64' dep breaks on install.
 source=("git+https://github.com/libunwind/libunwind.git")
 sha256sums=('SKIP')
 

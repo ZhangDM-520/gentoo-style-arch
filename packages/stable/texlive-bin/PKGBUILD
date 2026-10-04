@@ -1,0 +1,218 @@
+# Maintainer: Antonio Rojas <arojas@archlinux.org>
+# Maintainer: Caleb Maclennan <caleb@alerque.com>
+# Contributor: Rémy Oudompheng <remy@archlinux.org>
+# Contributor: francois <francois.archlinux.org>
+
+# Full stock pkgbase delivered under this id for upgrade-in-place (single
+# target row; the libsynctex split is not a separate row) — qca-qt6 precedent
+pkgname=(texlive-bin libsynctex)
+pkgver=2026.0
+pkgrel=2
+license=(GPL-2.0-or-later)
+arch=(x86_64)
+makedepends=(bash
+             cairo
+             clisp
+             ffcall
+             fontconfig
+             freetype2
+             gd
+             git
+             glibc
+             gmp
+             graphite
+             harfbuzz
+             icu
+             libjpeg-turbo
+             libpaper
+             libpng
+             libsigsegv
+             libunistring
+             libx11
+             libxaw
+             libxmu
+             libxpm
+             libxt
+             mpfr
+             ncurses
+             perl
+             pixman
+             potrace
+             readline
+             subversion
+             zlib
+             zziplib)
+url='https://tug.org/texlive/'
+_commit=f26cc5ed05a1f784d1e694fe5b9cfc3ce992c03d
+source=(git+https://github.com/Tex-Live/texlive-source.git#commit=$_commit
+        ptex-debug-print.patch
+        lua-root.patch
+        b50e042b.patch)
+sha256sums=('f598cebd38804428d1ec6435d898cb3b7602f8430519540ce2f7925fab63f185'
+            'aa838f09003c62c2efb5770a8de66f99b409df049fbd65098d80fd1957d06c50'
+            'c2d6a8b14dd8197874c1d894e70df80ad076f28ee4d1cff81e3b7811d9264fb9'
+            '9ada4d69072d6a432fa4e0bd50928909cf5884e939b6c8ce2b158dadd9b5d326')
+
+prepare() {
+  cd texlive-source
+
+# bibtex-x needs kpathsea flags
+  sed -i '/AC_SEARCH_LIBS/a KPSE_KPATHSEA_FLAGS' texk/bibtex-x/configure.ac
+  (cd texk/bibtex-x && autoreconf)
+# t4ht expects to be un /usr/share/texmf/bin/t4ht (FS#27251)
+  sed -i s/SELFAUTOPARENT/TEXMFROOT/ texk/tex4htk/t4ht.c
+# remove spurious ptex "guessed encoding" print
+  patch -p1 -i ../ptex-debug-print.patch
+# Fix LUA_ROOT define
+  patch -p1 -i ../lua-root.patch
+# Fix build with GCC 16
+  patch -p1 -i ../b50e042b.patch
+}
+
+build() {
+  cd texlive-source
+
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  mkdir -p build
+  cd build
+  CFLAGS=${CFLAGS/FORTIFY_SOURCE=3/FORTIFY_SOURCE=2} # https://gitlab.archlinux.org/archlinux/packaging/packages/texlive-bin/-/issues/3 
+  ax_cv_c_float_words_bigendian=no \
+  ../configure --prefix=/usr -C \
+    --sysconfdir=/etc \
+    --datarootdir=/usr/share \
+    --datadir=/usr/share \
+    --mandir=/usr/share/man \
+    --disable-native-texlive-build \
+    --with-banner-add="/Arch Linux" \
+    --disable-multiplatform \
+    --disable-dialog \
+    --disable-psutils \
+    --disable-t1utils \
+    --disable-dvisvgm \
+    --disable-xz \
+    --enable-shared \
+    --disable-static \
+    --with-system-zlib \
+    --with-system-zziplib \
+    --with-system-pnglib \
+    --with-system-ncurses \
+    --with-system-t1lib \
+    --with-system-gd \
+    --with-system-freetype2 \
+    --with-system-pixman \
+    --with-system-cairo \
+    --with-system-harfbuzz \
+    --with-system-graphite \
+    --with-system-icu \
+    --with-system-gmp \
+    --with-system-mpfr \
+    --with-system-potrace \
+    --with-system-libpaper \
+    --with-freetype2-libdir=/usr/lib \
+    --with-freetype2-include=/usr/include/freetype2 \
+    --with-xdvi-x-toolkit=xaw \
+    --disable-dump-share \
+    --with-clisp-runtime=default \
+    --enable-xindy \
+    --disable-xindy-rules \
+    --disable-xindy-docs
+  # prevent excessive overlinking due to libtool
+  sed -i -e 's/ -shared / -Wl,-O1,--as-needed\0/g' libtool
+  make -j"${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package_libsynctex() {
+  pkgdesc='Library for synchronization between TeX files and resulting file'
+  depends=(glibc zlib)
+  provides=(libsynctex.so)
+
+  cd texlive-source/build
+  make -C texk/web2c DESTDIR="$pkgdir" \
+    install-data-am install-libLTLIBRARIES
+
+# remove docs included in texlive-doc
+  rm -r "$pkgdir"/usr/share/man
+
+  # license: upstream tree ships no root LICENSE/COPYING text (verified
+  # upstream) — install the upstream GPL text shipped in texk/bibtex-x
+  install -Dm644 "${srcdir}"/texlive-source/texk/bibtex-x/COPYING \
+    "${pkgdir}"/usr/share/licenses/${pkgname}/COPYING
+}
+
+package_texlive-bin() {
+  pkgdesc='TeX Live binaries'
+  depends=(bash
+           cairo
+           ffcall
+           fontconfig
+           freetype2
+           gd
+           glibc
+           gmp
+           graphite
+           harfbuzz
+           icu
+           libgcc
+           libpaper
+           libpng
+           libsigsegv
+           libstdc++
+           libsynctex
+           libunistring
+           libx11
+           libxaw
+           libxmu
+           libxpm
+           libxt
+           mpfr
+           ncurses
+           perl
+           pixman
+           potrace
+           readline
+           zlib
+           zziplib)
+  provides=(lcdf-typetools
+            libkpathsea.so
+            libptexenc.so
+            libtexlua53.so
+            libtexluajit.so
+            kpathsea
+            xindy)
+  optdepends=('psutils: to manipulate the output of dvips')
+
+  cd texlive-source
+# fixes for xindy
+  find utils/xindy -name Makefile -exec sed -i -e "s|^prefix =.\+$|prefix = $pkgdir/usr|" -e "s|^mandir =.\+$|mandir = \${prefix}/share/man|" -e "s|^datadir =.\+$|datadir = \${datarootdir}/texmf|" -e "s|^docdir =.\+$|docdir = \${datadir}/doc/xindy|" '{}' \;
+
+  cd build
+  make DESTDIR="$pkgdir" texmf="$pkgdir"/usr/share/texmf install
+  LD_PRELOAD="$pkgdir"/usr/lib/libkpathsea.so.6 \
+  make DESTDIR="$pkgdir" texlinks
+
+# remove stuff included in texlive-texmf
+  rm -r "$pkgdir"/usr/share/texmf-dist
+
+# remove docs included in texlive-doc
+  rm -r "$pkgdir"/usr/share/{info,man}
+
+# remove links to scripts
+  for _link in $(ls "$pkgdir"/usr/bin); do
+    [[ $(readlink -m "$pkgdir"/usr/bin/$_link) == */scripts/* ]] && _rmlinks+="$pkgdir/usr/bin/$_link "
+  done
+  rm $_rmlinks
+
+# remove libsynctex
+  rm "$pkgdir"/usr/include/synctex/*
+  rm "$pkgdir"/usr/lib/libsynctex.*
+  rm "$pkgdir"/usr/lib/pkgconfig/synctex.pc
+
+  # license: upstream tree ships no root LICENSE/COPYING text (verified
+  # upstream) — install the upstream GPL text shipped in texk/bibtex-x
+  install -Dm644 "${srcdir}"/texlive-source/texk/bibtex-x/COPYING \
+    "${pkgdir}"/usr/share/licenses/${pkgname}/COPYING
+}

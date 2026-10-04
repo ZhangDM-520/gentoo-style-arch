@@ -1,0 +1,21 @@
+pkgbase = liblangtag
+	pkgdesc = interface library to access/deal with tags for identifying languages
+	pkgver = 0.6.8
+	pkgrel = 1
+	url = https://bitbucket.org/tagoh/liblangtag/wiki/Home
+	arch = x86_64
+	license = LGPL-3.0-or-later
+	license = MPL-2.0
+	makedepends = gobject-introspection
+	depends = libxml2
+	depends = glib2
+	depends = glibc
+	optdepends = gobject-introspection-runtime: use with liblangtag-gobject
+	provides = liblangtag.so
+	provides = liblangtag-gobject.so
+	provides = liblangtag-ext-ldml-t.so
+	provides = liblangtag-ext-ldml-u.so
+	source = https://gitlab.com/-/project/74684761/uploads/9f74bd278e6edfbf1093605d38fb7a97/liblangtag-0.6.8.tar.bz2
+	sha256sums = a96975b79ddd8fef6d9295c083fe3f1afa1a8898a57235d4069255ade44e5cf2
+
+pkgname = liblangtag

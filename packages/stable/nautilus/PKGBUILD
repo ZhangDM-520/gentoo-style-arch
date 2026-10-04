@@ -1,0 +1,137 @@
+# Maintainer: Fabian Bornschein <fabiscafe@archlinux.org>
+# Maintainer: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
+# Contributor: Jan de Groot <jgc@archlinux.org>
+
+pkgbase=nautilus
+pkgname=(
+  nautilus
+  libnautilus-extension
+)
+pkgver=51.0.1
+pkgrel=2
+pkgdesc="Default file manager for GNOME"
+url="https://apps.gnome.org/Nautilus/"
+arch=(x86_64)
+license=(GPL-3.0-or-later)
+depends=(
+  cairo
+  dconf
+  gdk-pixbuf2
+  gexiv2
+  glib2
+  glibc
+  glycin
+  glycin-gtk4
+  gnome-autoar
+  gnome-desktop-4
+  graphene
+  gst-plugins-base-libs
+  gstreamer
+  gtk4
+  gvfs
+  hicolor-icon-theme
+  icu
+  libadwaita
+  libcloudproviders
+  libgcc
+  libportal
+  libportal-gtk4
+  libx11
+  localsearch
+  pango
+  tinysparql
+  wayland
+  xdg-user-dirs-gtk
+)
+makedepends=(
+  appstream
+  blueprint-compiler
+  git
+  glib2-devel
+  gobject-introspection
+  meson
+)
+# trim: libnautilus-extension-docs split dropped together with its gi-docgen
+# makedep and /usr/share/doc split-move path (API docs disabled below); the
+# weston/python-gobject test checkdepends go with the trimmed check() run
+source=(
+  "git+https://gitlab.gnome.org/GNOME/nautilus.git#tag=${pkgver/[a-z]/.&}"
+  "git+https://gitlab.gnome.org/GNOME/libgxdp.git#commit=df896e3412b749947bc6f62a91a1aac8e6b6d19b"
+)
+b2sums=('88b2c7d4915c4aa82aa8b787c51ce0047c1f541d4b74d93400857a6e70624d2232ba88da59fe22e53c8f13fd2896281c7deee844261d424187c8056789f8831f'
+        'f5bd238c316a55784f97b1b7c8b498d3dfa727375cf8a1bf61f4771e306232b36752df8f61edb8d8c5da7c5e1a7acd8c0e85a53725af56e9b18b8dd1a6f284e0')
+validpgpkeys=(
+  6B211753AC950672287226800538577822AE4B17 # António Fernandes <antoniof@gnome.org>
+  550660707A6F40376B9B9F8D504A78811E6160CC # Corey Berla <corey@berla.me>
+)
+
+prepare() {
+  cd nautilus
+}
+
+build() {
+  local meson_options=(
+    # trim: gi-docgen API docs (docs — the -docs split is dropped here)
+    -D docs=false
+    -D packagekit=false
+    -D selinux=false
+  )
+
+  # Inject libgxdp
+  export MESON_PACKAGE_CACHE_DIR="$srcdir"
+
+  # House style: mold linker when available (arch-meson consumes LDFLAGS env)
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  arch-meson nautilus build "${meson_options[@]}"
+  meson compile -C build -j "${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+}
+
+# trim: upstream weston/headless meson test run (tests) together with its
+# python-gobject/weston checkdepends
+
+_pick() {
+  local p="$1" f d; shift
+  for f; do
+    d="$srcdir/$p/${f#$pkgdir/}"
+    mkdir -p "$(dirname "$d")"
+    mv "$f" "$d"
+    rmdir -p --ignore-fail-on-non-empty "$(dirname "$f")"
+  done
+}
+
+package_nautilus() {
+  depends+=(libnautilus-extension.so)
+  groups=(gnome)
+
+  meson install -C build --no-rebuild --destdir "$pkgdir"
+
+  cd "$pkgdir"
+
+  _pick libne usr/include
+  _pick libne usr/lib/{girepository-1.0,libnautilus-extension*,pkgconfig}
+  _pick libne usr/share/gir-1.0
+
+  # trim: gettext locales (docs) — not shipped in this recipe
+  rm -rf usr/share/locale usr/share/doc
+
+  install -Dm644 "$srcdir"/nautilus/COPYING -t "$pkgdir/usr/share/licenses/$pkgname/"
+}
+
+package_libnautilus-extension() {
+  pkgdesc="Extension interface for Nautilus"
+  depends=(
+    glib2
+    glibc
+    libgcc
+  )
+  provides=(libnautilus-extension.so)
+
+  mv libne/* "$pkgdir"
+
+  install -Dm644 "$srcdir"/nautilus/COPYING -t "$pkgdir/usr/share/licenses/$pkgname/"
+}
+
+# vim:set sw=2 sts=-1 et:

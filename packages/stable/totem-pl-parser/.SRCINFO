@@ -1,0 +1,27 @@
+pkgbase = totem-pl-parser
+	pkgdesc = Simple GObject-based library to parse and save a host of playlist formats
+	pkgver = 3.26.7
+	pkgrel = 1
+	url = https://gitlab.gnome.org/GNOME/totem-pl-parser
+	arch = x86_64
+	license = LGPL-2.0-or-later
+	checkdepends = dbus
+	checkdepends = gvfs
+	checkdepends = shared-mime-info
+	makedepends = git
+	makedepends = glib2-devel
+	makedepends = gobject-introspection
+	makedepends = meson
+	depends = glib2
+	depends = glibc
+	depends = libarchive
+	depends = libgcc
+	depends = libgcrypt
+	depends = libxml2
+	depends = uchardet
+	provides = libtotem-plparser.so
+	provides = libtotem-plparser-mini.so
+	source = git+https://gitlab.gnome.org/GNOME/totem-pl-parser.git#tag=3.26.7
+	b2sums = e258bc354dc5d5732dc432c1c4e7ac99f17039d0423d149408d50673858adb8b6428019ec90c0291647c56e6c6f4d4d6e7e3792c1fa9ec117e5c15d19404048b
+
+pkgname = totem-pl-parser

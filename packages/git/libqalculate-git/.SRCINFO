@@ -1,0 +1,27 @@
+pkgbase = libqalculate-git
+	pkgdesc = Multi-purpose desktop calculator library (git build)
+	pkgver = r744.0262019
+	pkgrel = 1
+	url = https://qalculate.github.io/
+	arch = x86_64
+	license = GPL-2.0-only
+	makedepends = doxygen
+	makedepends = git
+	makedepends = intltool
+	depends = curl
+	depends = icu
+	depends = glibc
+	depends = gmp
+	depends = libgcc
+	depends = libstdc++
+	depends = libxml2
+	depends = mpfr
+	depends = readline
+	optdepends = gnuplot: for plotting support
+	provides = libqalculate=r744.0262019
+	provides = libqalculate.so
+	conflicts = libqalculate
+	source = git+https://github.com/Qalculate/libqalculate.git
+	b2sums = SKIP
+
+pkgname = libqalculate-git

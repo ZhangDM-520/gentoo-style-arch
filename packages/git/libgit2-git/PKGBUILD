@@ -1,0 +1,42 @@
+# Maintainer: auto-generated
+# AUR reference: libgit2-git (Maintainer: Daniel Micay <danielmicay@gmail.com>)
+pkgname=libgit2-git
+_pkgname=libgit2
+pkgver=1.9.7.r279.g935f85131
+pkgrel=1
+pkgdesc="A linkable library for Git (git build)"
+arch=('x86_64')
+url="https://libgit2.github.com/"
+license=('LicenseRef-GPL-2.0-only-with-linking-exception')
+# AUR ref depends on http-parser: stale; upstream switched to llhttp (stock dep)
+depends=('gcc-libs' 'glibc' 'llhttp' 'zlib' 'libssh2' 'openssl' 'pcre2')
+makedepends=('git' 'cmake')
+provides=("libgit2=$pkgver" 'libgit2.so')
+conflicts=('libgit2')
+source=("git+https://github.com/libgit2/libgit2.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$_pkgname"
+  git describe --long --tags | sed 's/\([^-]*-g\)/r\1/;s/-/./g;s/^v//g'
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  # CMAKE_BUILD_TYPE=None: makepkg.conf owns the opt level (no hard-coded -O3);
+  # AUR ref's -DTHREADSAFE=ON is stale (always-on in current upstream)
+  cmake -B build -S "$_pkgname" \
+    -DCMAKE_BUILD_TYPE=None \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DCMAKE_INSTALL_LIBDIR=lib \
+    -DBUILD_TESTS=OFF
+  cmake --build build
+}
+
+package() {
+  DESTDIR="$pkgdir" cmake --install build
+  install -Dm644 "$_pkgname/COPYING" -t "$pkgdir/usr/share/licenses/$pkgname"
+}

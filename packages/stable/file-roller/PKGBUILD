@@ -1,0 +1,96 @@
+# Maintainer: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
+# Maintainer: Fabian Bornschein <fabiscafe@archlinux.org>
+# Contributor: Jan de Groot <jgc@archlinux.org>
+
+pkgname=file-roller
+pkgver=44.7
+pkgrel=1
+pkgdesc="Create and modify archives"
+url="https://wiki.gnome.org/Apps/FileRoller"
+arch=(x86_64)
+license=(GPL-2.0-or-later)
+depends=(
+  dconf
+  glib2
+  glibc
+  gtk4
+  hicolor-icon-theme
+  json-glib
+  libadwaita
+  libarchive
+  libgcc
+  libnautilus-extension
+  pango
+)
+makedepends=(
+  7zip
+  arj
+  binutils
+  bzip3
+  cdrtools
+  cpio
+  dpkg
+  git
+  glib2-devel
+  lhasa
+  lrzip
+  meson
+  python
+  rpmextract
+  squashfs-tools
+  unace
+  unrar
+  unzip
+  yelp-tools
+  zip
+)
+optdepends=(
+  '7zip: 7z archive support'
+  'arj: arj archive support'
+  'binutils: ar archive support'
+  'bzip3: bzip3 compression support'
+  'cdrtools: ISO image support'
+  'cpio: cpio archive support'
+  'dpkg: deb archive support'
+  'lhasa: LHA/LZA archive support'
+  'lrzip: lrzip compression support'
+  'rpmextract: rpm archive support'
+  'squashfs-tools: squashfs image support'
+  'unace: ACE archive support'
+  'unrar: better RAR archive support'
+  'unzip: better ZIP archive support'
+  'zip: better ZIP archive support'
+)
+groups=(gnome-extra)
+source=("git+https://gitlab.gnome.org/GNOME/file-roller.git#tag=$pkgver")
+b2sums=('6f3a05d08c3f0f96e54b04e725e7cb90518e25614463017fdd53e816299ecb832aaa51de606975b650af30bd4a7021fd5dd111895de5a0634b733a8a60a8219a')
+
+prepare() {
+  cd $pkgname
+}
+
+build() {
+  # House style: mold linker when available (arch-meson consumes LDFLAGS env)
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  arch-meson $pkgname build
+  meson compile -C build -j "${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+}
+
+# trim: upstream meson test suite (tests) — not run in this recipe
+
+package() {
+  meson install -C build --destdir "$pkgdir"
+
+  # trim: gettext locales and the yelp help pages (docs) — yelp-tools stays a
+  # makedep because gnome.yelp() needs it at build time; only the installed
+  # output is dropped
+  rm -rf "$pkgdir/usr/share/locale" "$pkgdir/usr/share/help"
+
+  # license
+  install -Dm644 $pkgname/COPYING -t "$pkgdir/usr/share/licenses/$pkgname/"
+}
+
+# vim:set sw=2 sts=-1 et:

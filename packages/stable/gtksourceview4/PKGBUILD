@@ -1,0 +1,58 @@
+# Maintainer: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
+# Contributor: Balló György <ballogyor+arch at gmail dot com>
+# Contributor: Ionut Biru <ibiru@archlinux.org>
+
+pkgname=gtksourceview4
+pkgver=4.8.4
+pkgrel=2
+pkgdesc="A text widget adding syntax highlighting and more to GNOME"
+url="https://wiki.gnome.org/Projects/GtkSourceView"
+arch=(x86_64)
+license=(GPL)
+depends=(gtk3 libxml2)
+makedepends=(glib2-devel gobject-introspection vala glade yelp-tools git meson)
+checkdepends=(xorg-server-xvfb)
+provides=(libgtksourceview-${pkgver%%.*}.so)
+_commit=7fd3adb3134bbec167167bb6400e018e4f781eb9  # tags/4.8.4^0
+source=("git+https://gitlab.gnome.org/GNOME/gtksourceview.git#commit=$_commit")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd gtksourceview
+  git describe --tags | sed 's/[^-]*-g/r&/;s/-/+/g'
+}
+
+prepare() {
+  cd gtksourceview
+}
+
+build() {
+  local meson_options=(
+    -D glade_catalog=true
+    # trim: gtk-doc API docs (gtk-doc makedep dropped)
+    -D gtk_doc=false
+  )
+
+  arch-meson gtksourceview build "${meson_options[@]}"
+  meson compile -C build
+}
+
+check() {
+  dbus-run-session xvfb-run -s '-nolisten local' \
+    meson test -C build --print-errorlogs
+}
+
+package() {
+  meson install -C build --destdir "$pkgdir"
+
+  # trim: docs (gtk-doc API docs are disabled)
+  rm -rf "$pkgdir/usr/share/doc"
+
+  # license: ship the upstream GPL text
+  local _l
+  for _l in COPYING COPYING.GPL3; do
+    if [[ -f gtksourceview/$_l ]]; then install -Dm644 "gtksourceview/$_l" -t "$pkgdir/usr/share/licenses/$pkgname/"; fi
+  done
+}
+
+# vim:set sw=2 sts=-1 et:

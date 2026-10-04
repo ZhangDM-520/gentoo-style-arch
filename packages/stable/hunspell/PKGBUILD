@@ -1,0 +1,50 @@
+# Maintainer: Andreas Radke <andyrtr@archlinux.org>
+# Contributor: Hussam Al-Tayeb <ht990332@gmail.com>
+
+pkgname=hunspell
+pkgver=1.7.4
+pkgrel=1
+pkgdesc="Spell checker and morphological analyzer library and program"
+arch=('x86_64')
+url="https://github.com/hunspell/hunspell"
+license=('LGPL-2.1-or-later OR GPL-2.0-or-later OR MPL-1.1')
+depends=('readline' 'ncurses'  'glibc' 'libstdc++' 'libgcc' 'sh')
+optdepends=('perl: for ispellaff2myspell')
+provides=('libhunspell-1.7.so')
+source=(https://github.com/hunspell/hunspell/releases/download/v${pkgver}/hunspell-${pkgver}.tar.gz)
+sha256sums=('66ec82a577395fe9d471504267e6dd04615c76517c61af7c6b9c19e5e34e73c8')
+
+build() {
+  cd hunspell-$pkgver
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  ./configure --prefix=/usr \
+    --disable-static \
+    --with-ui \
+    --with-readline
+  sed -i -e 's/ -shared / -Wl,-O1,--as-needed\0/g' libtool
+  make -j"${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+# trim: check() test suite (make check) — Class B trim standard (tests)
+
+package() {
+  cd hunspell-$pkgver
+  make DESTDIR="$pkgdir" install
+
+  # trim: man pages, locales and doc payload — Class B trim standard
+  # (man/locale/docs)
+  rm -rf "$pkgdir"/usr/share/man "$pkgdir"/usr/share/locale "$pkgdir"/usr/share/doc
+
+  # license: ship upstream tri-license texts (LGPL-2.1-or-later OR
+  # GPL-2.0-or-later OR MPL-1.1)
+  install -Dm644 COPYING COPYING.LESSER COPYING.MPL -t "$pkgdir"/usr/share/licenses/$pkgname/
+
+  # add generic hunspell.so for development and projects not using pkgconfig flags - FS#30592
+  pushd "$pkgdir"/usr/lib
+  ln -s libhunspell-?.?.so libhunspell.so
+  popd
+}

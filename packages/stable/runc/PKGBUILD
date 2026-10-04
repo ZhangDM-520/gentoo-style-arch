@@ -1,0 +1,70 @@
+# Maintainer: Morten Linderud <foxboron@archlinux.org>
+# Maintainer: Frederik Schwan <freswa at archlinux dot org>
+# Contributor: Sébastien "Seblu" Luttringer
+
+pkgname=runc
+pkgver=1.5.2
+pkgrel=1
+pkgdesc='CLI tool for managing OCI compliant containers'
+arch=(x86_64)
+url='https://runc.io/'
+license=(Apache)
+provides=('oci-runtime')
+depends=(
+  libpathrs
+  libseccomp
+)
+makedepends=(
+  git
+  go
+)
+# trim: go-md2man (makedepends) went with the man pages below (docs)
+optdepends=(
+  'criu: checkpoint support'
+)
+options=(!lto)
+source=("${pkgname}-${pkgver}.tar.xz::https://github.com/opencontainers/runc/releases/download/v${pkgver}/runc-${pkgver}.tar.xz"
+        "${pkgname}-${pkgver}.tar.xz.sig::https://github.com/opencontainers/runc/releases/download/v${pkgver}/runc-${pkgver}.tar.xz.asc")
+validpgpkeys=(
+  "5F36C6C61B5460124A75F5A69E18AA267DDB8DB4"
+  "C9C370B246B09F6DBCFC744C34401015D1D2D386"
+  "C2428CD75720FACDCF76B6EA17DE5ECB75A1100E"
+)
+sha256sums=('46eba094e45fc37d96a1b1dc150971fe8d076d6e23bae09dd35443141bed31a1'
+            'SKIP')
+
+prepare() {
+  mkdir -p src/github.com/opencontainers
+  cp -r runc-${pkgver} src/github.com/opencontainers/runc
+}
+
+build() {
+  cd src/github.com/opencontainers/runc
+
+  # House style: mold linker when available (captured by CGO_LDFLAGS below)
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  export GOPATH="$srcdir"
+  export BUILDTAGS='seccomp apparmor'
+  export CGO_CPPFLAGS="${CPPFLAGS}"
+  export CGO_CFLAGS="${CFLAGS}"
+  export CGO_CXXFLAGS="${CXXFLAGS}"
+  export CGO_LDFLAGS="${LDFLAGS}"
+  export GOFLAGS="-trimpath -mod=readonly -modcacherw"
+
+  # trim: man pages (docs) — the 'man' make target is not built and the
+  # go-md2man makedep went with it
+  make -j"${GSA_BUILD_JOBS:-$(nproc)}" runc
+}
+
+package() {
+  cd src/github.com/opencontainers/runc
+
+  install -Dm755 runc "$pkgdir/usr/bin/runc"
+  install -Dm644 contrib/completions/bash/runc \
+    "$pkgdir/usr/share/bash-completion/completions/runc"
+
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

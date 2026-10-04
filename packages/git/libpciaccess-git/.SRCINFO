@@ -1,0 +1,19 @@
+pkgbase = libpciaccess-git
+	pkgdesc = X11 PCI access library (git build)
+	pkgver = 0.19.r0.g38e6f15f83
+	pkgrel = 1
+	url = https://gitlab.freedesktop.org/xorg/lib/libpciaccess/
+	arch = x86_64
+	license = LicenseRef-libpciaccess
+	makedepends = git
+	makedepends = meson
+	makedepends = xorg-util-macros
+	depends = glibc
+	depends = zlib
+	provides = libpciaccess=0.19.r0.g38e6f15f83
+	provides = libpciaccess.so
+	conflicts = libpciaccess
+	source = git+https://gitlab.freedesktop.org/xorg/lib/libpciaccess.git
+	b2sums = SKIP
+
+pkgname = libpciaccess-git

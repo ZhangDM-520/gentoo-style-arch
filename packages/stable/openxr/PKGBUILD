@@ -1,0 +1,53 @@
+# Maintainer: Sven-Hendrik Haase <svenstaro@archlinux.org>
+pkgname=openxr
+pkgver=1.1.60
+pkgrel=2
+pkgdesc='An open standard for virtual reality and augmented reality platforms and devices'
+arch=('x86_64')
+url='https://www.khronos.org/openxr/'
+depends=('jsoncpp' 'libx11' 'vulkan-icd-loader' 'libglvnd' 'libxrandr' 'libxxf86vm'
+         'libstdc++' 'libgcc' 'glibc')
+makedepends=('cmake' 'vulkan-headers' 'python' 'ninja' 'wayland' 'mesa')
+license=('Apache-2.0')
+provides=('libopenxr_loader.so')
+source=("https://github.com/KhronosGroup/OpenXR-SDK-Source/releases/download/release-${pkgver}/OpenXR-SDK-Source-release-${pkgver}.tar.gz"{,.asc})
+validpgpkeys=(45207B2B1E53E1F2755FF63CC5A2D593A61DBC9D)
+sha512sums=('cfb661729c7b79a2b8ad12b441fab1327814de020df987b8855e6e53b0a760651819fc08b10b46653e5cebac0167e0f089a1f05c494007f229f24ff1ef83c455'
+            'SKIP')
+
+build() {
+  cd OpenXR-SDK-Source-release-${pkgver}
+
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  cmake \
+    -GNinja \
+    -Bbuild \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DCMAKE_INSTALL_LIBDIR=lib \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DBUILD_TESTS=ON \
+    -DPRESENTATION_BACKEND=xlib \
+    -DDYNAMIC_LOADER=ON
+  ninja -C build -j "${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package() {
+  cd OpenXR-SDK-Source-release-${pkgver}
+
+  DESTDIR="$pkgdir" ninja -C build install
+
+  # trim: tool man pages and upstream docdir stub (runtime payload only)
+  rm -rf "$pkgdir/usr/share/man" "$pkgdir/usr/share/doc"
+
+  # license: ship upstream licence text(s) (Apache-2.0)
+  local _l
+  for _l in LICENSE LICENCE COPYING COPYRIGHT; do
+    if [[ -f $_l ]]; then
+      install -Dm644 "$_l" -t "$pkgdir/usr/share/licenses/$pkgname/"
+    fi
+  done
+}

@@ -1,0 +1,50 @@
+# Maintainer: Peter Züger <zueger.peter@icloud.com>
+# Contributor: Antonio Rojas <arojas@archlinux.org>
+# Contributor: Eric Bélanger <eric@archlinux.org>
+#
+# git build adapted from AUR libqalculate-git (reference only) + stock Arch
+# libqalculate: tracks upstream master directly (stock pins v-tags).
+
+pkgname=libqalculate-git
+_pkgname=libqalculate
+pkgver=r744.0262019
+pkgrel=1
+pkgdesc="Multi-purpose desktop calculator library (git build)"
+arch=('x86_64')
+url="https://qalculate.github.io/"
+license=('GPL-2.0-only')
+depends=('curl' 'icu' 'glibc' 'gmp' 'libgcc' 'libstdc++' 'libxml2' 'mpfr' 'readline')
+makedepends=('doxygen' 'git' 'intltool')
+optdepends=('gnuplot: for plotting support')
+provides=("libqalculate=$pkgver" 'libqalculate.so')
+conflicts=('libqalculate')
+source=('git+https://github.com/Qalculate/libqalculate.git')
+b2sums=('SKIP')
+
+pkgver() {
+  cd "$_pkgname"
+  git describe --long --tags | sed 's/\([^-]*-g\)/r\1/;s/-/./g;s/^v//'
+}
+
+prepare() {
+  cd "$_pkgname"
+  ./autogen.sh
+}
+
+build() {
+  cd "$_pkgname"
+
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  ./configure --prefix=/usr
+  make -j"${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package() {
+  cd "$_pkgname"
+
+  make DESTDIR="$pkgdir" install
+  install -Dm644 COPYING "$pkgdir/usr/share/licenses/$pkgname/COPYING"
+}

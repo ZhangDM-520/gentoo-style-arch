@@ -1,0 +1,99 @@
+# Maintainer: Antonio Rojas <arojas@archlinux.org>
+# Contributor: Jameson Pugh <imntreal@gmail.com>
+# Contributor: Tim Jester-Pfadt <t.jp<at>gmx.de>
+
+pkgbase=appstream
+pkgname=(appstream
+         appstream-qt)
+pkgver=1.2.1
+pkgrel=1
+pkgdesc='Provides a standard for creating app stores across distributions'
+arch=(x86_64)
+url='https://distributions.freedesktop.org/wiki/AppStream'
+license=(LGPL-2.1-or-later)
+depends=(cairo
+         curl
+         fontconfig
+         freetype2
+         glib2
+         glibc
+         libblake3
+         libfyaml
+         libgcc
+         libstemmer
+         libvips
+         libxml2
+         libxmlb
+         pango
+         systemd-libs
+         zstd)
+# trim: gi-docgen API docs and xsltproc/xmlto man pages trimmed at configure
+# below (-Dapidocs=false -Dinstall-docs=false -Dman=false) — gi-docgen and
+# xmlto are dropped with them. itstool stays: it feeds the metainfo
+# translations in data/meson.build, not the trimmed docs.
+makedepends=(bash-completion
+             git
+             glib2-devel
+             gobject-introspection
+             gperf
+             itstool
+             meson
+             qt6-tools
+             vala)
+source=(git+https://github.com/ximion/appstream#tag=v$pkgver?signed
+        update-appstream-cache.hook)
+sha256sums=('2429bf9e65957d69541394f7ab9c4512544e78fae1e14db658810f60becd5714'
+            'edc632e4a76ebe5efc76a56fe5f797e5c981cca6f2f0111c7ce0170d1330c788')
+validpgpkeys=(D33A3F0CA16B0ACC51A60738494C8A5FBF4DECEB) # Matthias Klumpp <matthias@tenstral.net>
+
+build() {
+  # House style: mold linker when available
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+  arch-meson appstream build \
+    -Dqt=true \
+    -Dvapi=true \
+    -Dcompose=true \
+    -Dapidocs=false \
+    -Dinstall-docs=false \
+    -Dman=false
+  meson compile -C build -j "${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package_appstream() {
+  provides=(libappstream.so
+            libappstream-compose.so)
+
+  meson install --destdir "$pkgdir" -C build
+
+# provided by -qt subpackage
+  rm -r "$pkgdir"/usr/{include/AppStreamQt,lib/cmake,lib/libAppStreamQt.*}
+
+  # trim: locale catalogues (i18n; nothing reads them at run time)
+  rm -rf "$pkgdir"/usr/share/locale
+
+  install -Dm644 update-appstream-cache.hook "$pkgdir"/usr/share/libalpm/hooks/90-update-appstream-cache.hook
+
+  # license: ship upstream licence text (LGPL-2.1-or-later)
+  install -Dm644 appstream/COPYING -t "$pkgdir/usr/share/licenses/$pkgname/"
+}
+
+package_appstream-qt() {
+  pkgdesc='Qt6 interface for AppStream'
+  depends=(appstream
+           glib2
+           glibc
+           libgcc
+           libstdc++
+           qt6-base)
+  provides=(libAppStreamQt.so)
+
+  meson install --destdir "$pkgdir" -C build
+
+# provided by appstream
+  rm -r "$pkgdir"/usr/{bin,include/appstream{,-compose},lib/{appstreamcli-compose,ascompose,girepository-1.0,libappstream*,pkgconfig},share}
+
+  # license: ship upstream licence text (LGPL-2.1-or-later)
+  install -Dm644 appstream/COPYING -t "$pkgdir/usr/share/licenses/$pkgname/"
+}

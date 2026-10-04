@@ -1,0 +1,84 @@
+# Maintainer: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
+# Contributor: Ionut Biru <ibiru@archlinux.org>
+
+pkgbase=gtkmm3
+# trim: the gtkmm3-docs split (API/devhelp docs) is dropped together with
+# its docs staging path and the atkmm-docs/cairomm-docs/glibmm-docs/
+# libsigc++-docs/pangomm-docs makedepends (documentation disabled below)
+pkgname=(
+  gtkmm3
+)
+pkgver=3.24.11
+pkgrel=1
+pkgdesc="C++ bindings for GTK+ 3"
+url="https://www.gtkmm.org/"
+arch=(x86_64)
+license=(LGPL-2.1-or-later)
+depends=(
+  atkmm
+  cairomm
+  gdk-pixbuf2
+  glib2
+  glibc
+  glibmm
+  gtk3
+  libgcc
+  libsigc++
+  libstdc++
+  pangomm
+)
+makedepends=(
+  git
+  meson
+  mm-common
+)
+# trim: check() and its xorg-server-xvfb checkdepends (xvfb-run test suite) —
+# Class B trim standard (tests)
+options=(!emptydirs)
+source=("git+https://gitlab.gnome.org/GNOME/gtkmm.git#tag=$pkgver")
+b2sums=('e6c2d3c9e0e307e5cb4ccaecd5b677c041fcced5c855fd59b2f4ade24ebaf2f1291ba8499e7f81212e9c0af2999419cacb786944e5a53d5de129e676073ed473')
+
+prepare() {
+  cd gtkmm
+}
+
+build() {
+  local meson_options=(
+    -D maintainer-mode=true
+    # trim: docs/demos/tests (the gtkmm3-docs split is dropped; the demo and
+    # test programs are not shipped) — Class B trim standard
+    -D build-documentation=false
+    -D build-demos=false
+    -D build-tests=false
+  )
+
+  # House style: mold linker when available (arch-meson consumes LDFLAGS env)
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  arch-meson gtkmm build "${meson_options[@]}"
+  meson compile -C build -j "${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+}
+
+package_gtkmm3() {
+  depends+=(
+    libatkmm-1.6.so
+    libcairomm-1.0.so
+    libglibmm-2.4.so
+    libpangomm-1.4.so
+    libsigc-2.0.so
+  )
+  provides=(
+    libgdkmm-3.0.so
+    libgtkmm-3.0.so
+  )
+
+  meson install -C build --destdir "$pkgdir"
+
+  # license: ship the upstream LGPL-2.1-or-later (COPYING) and the tools
+  # licence (COPYING.tools) texts
+  install -Dm644 gtkmm/COPYING gtkmm/COPYING.tools -t "$pkgdir/usr/share/licenses/$pkgname/"
+}
+
+# vim:set sw=2 sts=-1 et:

@@ -3,7 +3,7 @@ pkgbase=gcc-snapshot
 # libgccjit kept — emacs needs it). Dropped: ada/ga68/cobol/d/go/m2/objc/rust
 # frontends + their runtime libs, GPU offload (nvptx/amdgcn), vtable-verify.
 pkgname=({gcc,gcc-fortran,gcc-libs,libasan,libatomic,libgcc,libgccjit,libgfortran,libgomp,libitm,liblsan,libquadmath,libstdc++,libtsan,libubsan,lib32-gcc-libs,lto-dump}-snapshot)
-pkgver=17.0.0.snapshot20260920
+pkgver=17.0.0.snapshot20260927
 if [[ $pkgver =~ ^([0-9]+)\.0\.0\.snapshot([0-9]{8})$ ]]; then
   _pkgver="${BASH_REMATCH[1]}-${BASH_REMATCH[2]}"
 else

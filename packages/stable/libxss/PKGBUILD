@@ -1,0 +1,38 @@
+# Maintainer: Andreas Radke <andyrtr@archlinux.org>
+# Contributor: Jan de Groot <jgc@archlinux.org>
+# Contributor: Alexander Baldeck <alexander@archlinux.org>
+
+pkgname=libxss
+pkgver=1.2.5
+pkgrel=1
+pkgdesc="X11 Screen Saver extension library"
+arch=('x86_64')
+license=('X11')
+url="https://gitlab.freedesktop.org/xorg/lib/libxscrnsaver"
+depends=('libxext' 'libx11' 'glibc' 'xorgproto')
+makedepends=('xorg-util-macros')
+provides=('libXss.so')
+source=(https://xorg.freedesktop.org/releases/individual/lib/libXScrnSaver-${pkgver}.tar.xz{,.sig}
+       # "${url}/-/archive/libXScrnSaver-${pkgver}/libxscrnsaver-libXScrnSaver-${pkgver}.tar.bz2"
+)
+#https://gitlab.freedesktop.org/xorg/lib/libxscrnsaver/-/archive/libXScrnSaver-1.2.3/libxscrnsaver-libXScrnSaver-1.2.3.tar.bz2
+sha512sums=('1c0be0d15c5e7b50a3eb4a239e2c833c44b693b111c7f64c409f9abf8051356572acadebc8b295555683ff6bd4895acdbe32b15a538c971f15d8aa4e6b7fd51b'
+            'SKIP')
+validpgpkeys=('3AB285232C46AE43D8E192F4DAB0F78EA6E7E2D2') # "Alan Coopersmith <alan.coopersmith@oracle.com>"
+
+build() {
+  cd libXScrnSaver-${pkgver}
+  ./configure --prefix=/usr --sysconfdir=/etc
+  make
+}
+
+package() {
+  cd libXScrnSaver-${pkgver}
+  make DESTDIR="${pkgdir}" install
+
+  # trim: man3 API pages (docs; nothing reads them at build or run time)
+  rm -rf "${pkgdir}"/usr/share/man
+
+  install -m755 -d "${pkgdir}/usr/share/licenses/${pkgname}"
+  install -m644 COPYING "${pkgdir}/usr/share/licenses/${pkgname}/"
+}

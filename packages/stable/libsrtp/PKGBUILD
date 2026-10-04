@@ -1,0 +1,62 @@
+# Maintainer: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
+# Contributor: Sergej Pupykin <pupykin.s+arch@gmail.com>
+# Contributor: Yejun Yang <yejunx AT gmail DOT com>
+# Contributor: Michal Krenek <mikos@sg1.cz>
+
+pkgbase=libsrtp
+pkgname=(
+  libsrtp
+)
+# trim: the libsrtp-docs split is dropped (doxygen HTML API docs — docs);
+# only the library output stays
+pkgver=2.8.1
+pkgrel=1
+epoch=1
+pkgdesc="Library for SRTP (Secure Realtime Transport Protocol)"
+url="https://github.com/cisco/libsrtp"
+arch=(x86_64)
+license=(BSD-3-Clause)
+depends=(
+  glibc
+  nspr
+  nss
+)
+provides=("libsrtp${pkgver%%.*}.so")
+makedepends=(
+  git
+  libpcap
+  meson
+)
+# trim: doxygen (makedepends) went with the dropped libsrtp-docs split
+source=("git+https://github.com/cisco/libsrtp#tag=v$pkgver")
+b2sums=('851f9819e298063ba708eb7967a184829a9189befa2420e539efbc453441113ebda6d2da119ecc1652273c2232c88ea3666608e4ea00e1f4c0ad37c26fa775c6')
+
+prepare() {
+  cd libsrtp
+}
+
+build() {
+  local meson_options=(
+    -D crypto-library=nss
+    -D crypto-library-kdf=disabled
+  )
+
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+  arch-meson libsrtp build "${meson_options[@]}"
+  meson compile -C build
+  # trim: doxygen HTML (`meson compile -C build doc`) — never built for the
+  # dropped libsrtp-docs split
+}
+
+# trim: meson test suite (check() + procps-ng checkdepends — tests) — Class B
+# trim standard; nothing is shipped from it
+
+package() {
+  meson install -C build --destdir "$pkgdir"
+  install -Dt "$pkgdir/usr/share/licenses/$pkgname" -m644 libsrtp/LICENSE
+}
+
+# vim:set sw=2 sts=-1 et:

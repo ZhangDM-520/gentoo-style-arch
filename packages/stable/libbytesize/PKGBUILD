@@ -1,0 +1,53 @@
+# Maintainer: Balló György <ballogyor+arch at gmail dot com>
+# Contributor: Jan de Groot <jgc@archlinux.org>
+
+pkgname=libbytesize
+pkgver=2.12
+pkgrel=3
+pkgdesc='A tiny library providing a C "class" for working with arbitrary big sizes in bytes'
+arch=('x86_64')
+url="https://github.com/storaged-project/libbytesize"
+license=('LGPL-2.1-or-later')
+depends=('glibc' 'gmp' 'mpfr' 'pcre2')
+makedepends=('python')
+optdepends=('python: for Python bindings and for the bscalc command')
+provides=(libbytesize.so)
+source=("$pkgname-$pkgver.tar.gz::https://github.com/rhinstaller/libbytesize/archive/$pkgver.tar.gz")
+sha512sums=('2742e9ad9377295fce298a2b70a1a6b9859f36fea3b9ac74d2281b359a1419917c04e001bda1d999aa4f993733bb4d6f0e2a2c7ed3b0b89080140df7ee96fc6c')
+
+prepare() {
+  cd "$srcdir"/$pkgname-$pkgver
+  ./autogen.sh
+}
+
+build() {
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  cd "$srcdir"/$pkgname-$pkgver
+  ./configure --prefix=/usr
+  make -j"${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+check() {
+  cd "$srcdir"/$pkgname-$pkgver
+  make check TESTS=libbytesize_unittest.sh
+}
+
+package() {
+  cd "$srcdir"/$pkgname-$pkgver
+  make DESTDIR="$pkgdir" install
+
+  # trim: gettext translations and man pages (locales/man not shipped)
+  rm -rf "$pkgdir"/usr/share/{locale,man}
+
+  # license: ship the upstream LGPL-2.1-or-later text
+  local _lic
+  for _lic in LICENSE COPYING; do
+    if [[ -f $pkgname-$pkgver/$_lic ]]; then
+      install -Dm644 "$pkgname-$pkgver/$_lic" -t "$pkgdir/usr/share/licenses/$pkgname/"
+    fi
+  done
+}

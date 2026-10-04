@@ -1,0 +1,74 @@
+# Maintainer: Andreas Radke <andyrtr@archlinux.org>
+
+pkgname=libcupsfilters
+pkgver=2.2.1.r23.gdee3b387
+_commit=dee3b387c34707ecc9b9d40bb7cafd7f475612b0 # master 2026-09-25
+pkgrel=1
+pkgdesc="OpenPrinting CUPS Filters - contains all the code of the filters of the former cups-filters package as library functions"
+arch=('x86_64')
+url="https://github.com/OpenPrinting/libcupsfilters"
+license=('Apache-2.0 WITH LLVM-exception')
+# keep poppler for pdftoppm
+depends=('libcups' 'libexif' 'pdfio' 'libjxl' 'poppler'
+         'libjpeg-turbo' 'libpng' 'libtiff' 'lcms2'
+         'fontconfig' 'glibc' 'dbus')
+makedepends=(
+	'ghostscript'
+	'git' 
+#        'mupdf-tools' ???
+)
+checkdepends=('ttf-dejavu') # ttf-dejavu for make check
+source=(#"https://github.com/OpenPrinting/libcupsfilters/releases/download/$pkgver/$pkgname-$pkgver.tar.xz"
+        "git+https://github.com/OpenPrinting/libcupsfilters#commit=$_commit"
+        # libcupsfilters-PR167.patch::https://github.com/OpenPrinting/libcupsfilters/pull/167.patch
+        )
+sha256sums=('08b6896af0c9aabab6ad4b6d1ae768ff9aa1c1aac37aa1696f2af1f8df867bd1'
+            # 'fa77ba778dcbea8826edcf87c4d022a11c073d288b39a1eaf06e0eaf3376f525')
+)
+
+pkgver() {
+ cd $pkgname
+ git describe --tags | sed 's/-/.r/' | sed 's/-/./'
+}
+
+prepare() {
+  cd "$pkgname" #-$pkgver
+  # https://github.com/OpenPrinting/libcupsfilters/issues/209
+  # patch -Np1 -i ../libcupsfilters-PR167.patch
+  autoreconf -vfi
+}
+
+build() {
+  cd "$pkgname" #-$pkgver
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+  ./configure --prefix=/usr  \
+    --sysconfdir=/etc \
+    --sbindir=/usr/bin \
+    --localstatedir=/var \
+    --disable-mutool
+  make -j"${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+check() {
+  cd "$pkgname" #-$pkgver
+  make check
+}
+
+package() {
+  cd "$pkgname" #-$pkgver
+  provides+=(libcupsfilters.so)
+
+  make DESTDIR="$pkgdir/" install
+
+  # trim: docs (README/ABOUT-NLS/CHANGES tree under /usr/share/doc) — not part
+  # of the maintained consumer-rebuild target (library + headers kept)
+  rm -rf "$pkgdir"/usr/share/doc
+
+  # license
+  mkdir -p "${pkgdir}"/usr/share/licenses/${pkgname}
+  # install -m644 "${srcdir}"/${pkgname}-${pkgver}/{COPYING,NOTICE} "${pkgdir}"/usr/share/licenses/${pkgname}/
+  install -m644 "${srcdir}"/${pkgname}/{COPYING,LICENSE,NOTICE} "${pkgdir}"/usr/share/licenses/${pkgname}/
+}

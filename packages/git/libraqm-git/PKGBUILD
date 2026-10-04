@@ -1,0 +1,47 @@
+# Maintainer: Daniel Bermond < gmail-com: danielbermond >
+# Maintainer: Caleb Maclennan <caleb@alerque.com>
+#
+# git build adapted from AUR libraqm-git (reference only) + stock Arch libraqm:
+# tracks upstream master directly (stock pins v-tags). Docs are trimmed here
+# (-D docs=false, gtk-doc makedep dropped); stock keeps -D docs=true.
+
+_srcname=libraqm
+pkgname=libraqm-git
+pkgver=0.5.0.r27.gb51b28b
+pkgrel=1
+pkgdesc='A library that encapsulates the logic for complex text layout (git build)'
+arch=('x86_64')
+url='https://github.com/HOST-Oman/libraqm/'
+license=('MIT')
+depends=('freetype2' 'fribidi' 'glibc' 'harfbuzz')
+makedepends=('git' 'meson')
+provides=("libraqm=$pkgver" 'libraqm.so')
+conflicts=('libraqm')
+source=('git+https://github.com/HOST-Oman/libraqm.git')
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$_srcname"
+  git describe --long --tags | sed 's/\([^-]*-g\)/r\1/;s/-/./g;s/^v//'
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  local meson_options=(
+    # stock uses -D docs=true for its doc payload; house trims docs
+    -D docs=false
+    -D tests=false
+  )
+
+  arch-meson "$_srcname" build "${meson_options[@]}"
+  meson compile -C build
+}
+
+package() {
+  meson install -C build --destdir "$pkgdir"
+
+  install -Dm644 "$_srcname/COPYING" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

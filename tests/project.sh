@@ -304,8 +304,11 @@ require_in 'the reversed range 38..22' 'empty'
 # the topology edges (a record's edges field lists what IT consumes), and
 # upstream is never pulled in. --no-deps is exactly one row (the note wording
 # lives in the prose section). niri-spicy-git has no consumers in the
-# committed topology, so the growth case is glib2-git instead — 21 transitive
-# consumers, glib2-git itself listed first.
+# committed topology, so the growth case is glib2-git instead — its
+# transitive consumer closure, glib2-git itself listed first. The closure
+# SIZE is topology data (22 rows on the 2026-10-03 curated graph, 238 on the
+# wired 653-record dependency graph), so the expectation is DERIVED from the
+# raw records below — an independent reverse-edge BFS — never a pinned count.
 run -n niri-spicy-git
 require_ok 'the bare name niri-spicy-git'
 niri_rows=$(rows | wc -l)
@@ -321,9 +324,30 @@ require_ok 'the bare name with --no-deps'
 
 run -n glib2-git
 require_ok 'the bare name glib2-git'
+glib2_expected=$(awk -F'|' -v start=glib2-git '
+    /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
+    { n = split($4, e, ",")
+      for (i = 1; i <= n; i++) if (e[i] != "") kids[e[i]] = kids[e[i]] " " $1 }
+    END {
+        seen[start] = 1
+        do {
+            changed = 0
+            for (x in seen) if (!(x in expanded)) {
+                expanded[x] = 1
+                m = split(kids[x], ks, " ")
+                for (i = 1; i <= m; i++)
+                    if (ks[i] != "" && !(ks[i] in seen)) {
+                        seen[ks[i]] = 1
+                        changed = 1
+                    }
+            }
+        } while (changed)
+        for (x in seen) print x
+    }' "$root/config/topology.conf" | sort)
 glib2_rows=$(rows | wc -l)
-[[ $glib2_rows -eq 22 ]] ||
-    fail "a bare glib2-git listed $glib2_rows row(s) - expected 22 (glib2-git + its 21 transitive consumers)"
+glib2_want=$(wc -l <<<"$glib2_expected")
+[[ $(rows | sort) == "$glib2_expected" ]] ||
+    fail "a bare glib2-git listed $glib2_rows row(s), expected $glib2_want (glib2-git + its transitive consumers over the topology edges): $(comm -3 <(rows | sort) <(printf '%s\n' "$glib2_expected") | head -5 | tr '\n' ' ')"
 [[ $(rows | sed -n 1p) == 'glib2-git' ]] ||
     fail "a bare glib2-git does not list glib2-git first: [$(rows | head -3 | tr '\n' ' ')]"
 
@@ -390,13 +414,16 @@ if ! grep -F 'xorg-xwayland-git' <<<"$output" >/dev/null; then
     exit 1
 fi
 
-# config/ holds exactly the two files the builder reads: topology.conf (THE
-# topology source — one record per package, id|path|groups|edges[|tags]) and
-# build-defaults.conf. The six-group roster is stated once, in the builder's
-# group names; nothing else in config/ is reachable state, so a stray file
-# would silently go stale. A run of --list above already proved both files
-# load, so only the directory's contents need checking here.
-expected_files=(build-defaults.conf topology.conf)
+# config/ holds exactly the three files the builder reads: topology.conf (THE
+# topology source — one record per package, id|path|groups|edges[|tags]),
+# build-defaults.conf, and abi-exclusions.conf (the ABI-drift guard's
+# documented exception registry, wired in through read_abi_exclusions — same
+# strict-loader contract as topology.conf). The six-group roster is stated
+# once, in the builder's group names; nothing else in config/ is reachable
+# state, so a stray file would silently go stale. A run of --list above
+# already proved all three files load, so only the directory's contents need
+# checking here.
+expected_files=(abi-exclusions.conf build-defaults.conf topology.conf)
 mapfile -t config_files < <(
     find "$root/config" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort
 )
@@ -445,7 +472,8 @@ printf 'project configuration fixture: PASS\n'
 # Selection of X = X + its transitive CONSUMERS over the topology edges: a
 # record's edges field lists what IT consumes, so the consumers of B are the
 # records listing B — and upstream is never expanded. The real-topology shape
-# is pinned above (glib2-git grows into its 21 consumers, niri-spicy-git has
+# is derived above (glib2-git grows into its transitive consumer closure —
+# size is topology data, never a pinned count; niri-spicy-git has
 # none); this section pins the SEMANTICS synthetically, on a two-hop chain
 # x <- c1 <- c2 (c1 consumes x, c2 consumes c1) whose consumers sit in OTHER
 # groups than x, plus a consumer-free lone — so every case below can only

@@ -1,0 +1,93 @@
+# Maintainer:
+# Contributor: George Rawlinson <grawlinson@archlinux.org>
+
+# trim: the openldap server split (slapd + contrib slapd-modules + its
+# sysusers/tmpfiles) is dropped — this recipe ships the client libraries only
+# (the stock `libldap` output, upgrade-in-place). source=() is left complete as
+# delivered: openldap.sysusers/openldap.tmpfiles stay fetched but unused.
+pkgbase=openldap
+pkgname=libldap
+pkgver=2.7.1
+pkgrel=1
+arch=('x86_64')
+url="https://www.openldap.org/"
+license=('OLDAP-2.8')
+provides=('liblber.so' 'libldap.so')
+# trim: chrpath/unixodbc/libsodium/systemd/util-linux fed the dropped slapd
+# split (backends, argon2, systemd units, uuid helpers) — the client build
+# needs libtool + libsasl only
+makedepends=('libtool' 'libsasl')
+options=('!makeflags' 'emptydirs' '!lto')
+source=(
+  https://www.openldap.org/software/download/OpenLDAP/openldap-release/${pkgbase}-${pkgver}.tgz{,.asc}
+  openldap.tmpfiles
+  openldap.sysusers)
+sha256sums=('253db80f301258ea69cda1184766d57395b836aaabf41157eb0316eb0fac1341'
+            'SKIP'
+            '0be46138e53ff2fa6d4b4c06bfbdd2100426e0bd2ed29bf3419ade6b5974e9a0'
+            'e4af9009982808d04fd10bd5d9559cec193efc7a05c6807367473da33392edab')
+validpgpkeys=('3CE269B5398BC8B785645E987F67D5FD1CE1CBCE') # OpenLDAP Project <project@openldap.org> https://www.openldap.org/software/download/OpenLDAP/gpg-pubkey.txt
+
+prepare() {
+  cd ${pkgbase}-${pkgver}
+
+  # change perms from 0644 to 0755
+  sed -i 's|-m 644 $(LIBRARY)|-m 755 $(LIBRARY)|' libraries/{liblber,libldap}/Makefile.in
+}
+
+build() {
+  cd ${pkgbase}-${pkgver}
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+  autoconf
+  # trim: --disable-slapd drops the server (with its backends/overlays/argon2
+  # options, which configure then ignores) — the dropped openldap split's
+  # build half
+  ./configure \
+    --prefix=/usr \
+    --libexecdir=/usr/lib \
+    --sysconfdir=/etc \
+    --localstatedir=/var/lib/openldap \
+    --sbindir=/usr/bin \
+    --enable-dynamic \
+    --enable-syslog \
+    --enable-ipv6 \
+    --enable-local \
+    --with-cyrus-sasl \
+    --with-threads \
+    --disable-slapd
+
+  sed -i -e 's/ -shared / -Wl,-O1,--as-needed\0/g' libtool
+
+  make
+}
+
+package() {
+  pkgdesc="Lightweight Directory Access Protocol (LDAP) client libraries"
+  depends=(
+    'glibc'
+    'libsasl' 'libsasl2.so'
+    'openssl' 'libcrypto.so'
+  )
+  backup=('etc/openldap/ldap.conf')
+
+  cd ${pkgbase}-${pkgver}
+  # trim: doc/man/man3 + the ldap.conf.5 man page (man) — not shipped
+  for dir in include libraries ; do
+    pushd ${dir}
+    make DESTDIR="${pkgdir}" install
+    popd
+  done
+
+  # remove duplicate conf files
+  rm "${pkgdir}"/etc/openldap/*.default
+
+  # shared library versioning
+  ln -sf liblber.so "${pkgdir}"/usr/lib/liblber.so.2
+  ln -sf libldap.so "${pkgdir}"/usr/lib/libldap.so.2
+
+  # license
+  install -Dm644 -t "${pkgdir}/usr/share/licenses/${pkgname}" LICENSE
+}

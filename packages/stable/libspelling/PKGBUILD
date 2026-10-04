@@ -1,0 +1,79 @@
+# Maintainer: Fabian Bornschein <fabiscafe@archlinux.org>
+# Maintainer: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
+
+pkgbase=libspelling
+pkgname=(
+  libspelling
+)
+# trim: the libspelling-docs split is dropped — the gi-docgen API docs are not
+# shipped (docs=false in build()); only the library output stays
+pkgver=0.4.10
+pkgrel=1
+pkgdesc="Spellcheck library for GTK 4"
+url="https://gitlab.gnome.org/GNOME/libspelling"
+arch=(x86_64)
+license=(LGPL-2.1-or-later)
+depends=(
+  enchant
+  libgcc
+  glib2
+  glibc
+  gtk4
+  gtksourceview5
+  icu
+  pango
+)
+# trim: gi-docgen (makedepends) went with the libspelling-docs split (docs)
+makedepends=(
+  git
+  gobject-introspection
+  meson
+  vala
+)
+checkdepends=(
+  aspell
+  aspell-en
+  enchant
+  hspell
+  hunspell
+  nuspell
+  libvoikko
+)
+source=(
+  # libspelling tags use SSH signatures that makepkg doesn't understand
+  "git+https://gitlab.gnome.org/GNOME/libspelling.git#tag=$pkgver"
+)
+b2sums=('fd96e152bf7c5732fc6c8c84c0375edfdb6a05618856ab5ca467609e1849ac5fc2fa784c950883143a7a08aef2daedcc1f98997390324bf55e751981f53f7dc2')
+
+build() {
+  local meson_options=(
+    # trim: gi-docgen API docs — Class B trim standard (docs)
+    -D docs=false
+  )
+
+  # House style: mold linker when available (arch-meson consumes LDFLAGS env)
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  arch-meson $pkgname build "${meson_options[@]}"
+  meson compile -C build -j "${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+check() {
+  meson test -C build --print-errorlogs
+}
+
+package_libspelling() {
+  provides=(libspelling-1.so)
+
+  meson install -C build --destdir "$pkgdir"
+
+  # license: ship the upstream LGPL-2.1-or-later text
+  local _l
+  for _l in COPYING COPYING.LGPL LICENSE; do
+    if [[ -f libspelling/$_l ]]; then install -Dm644 "libspelling/$_l" -t "$pkgdir/usr/share/licenses/$pkgname/"; fi
+  done
+}
+
+# vim:set sw=2 sts=-1 et:

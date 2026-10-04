@@ -1,0 +1,50 @@
+# Maintainer: AndyRTR <andyrtr@archlinux.org>
+# Contributor: Bartłomiej Piotrowski <bpiotrowski@archlinux.org>
+# Contributor: ponsfoot <cabezon dot hashimoto at gmail dot com>
+# Contributor: philacs
+
+pkgname=libvisio
+pkgver=0.1.11
+pkgrel=1
+pkgdesc='Library providing ability to interpret and import visio diagrams'
+arch=('x86_64')
+url="https://wiki.documentfoundation.org/DLP/Libraries/libvisio"
+license=('MPL-2.0')
+depends=('libxml2' 'icu' 'librevenge'
+         'glibc' 'libstdc++' 'libgcc')
+makedepends=('boost' 'gperf' 'cppunit')
+# trim: doxygen (makedepends) — the doxygen API docs are not shipped;
+# --without-docs in build() disables docs/doxygen for good
+source=(https://dev-www.libreoffice.org/src/$pkgname/$pkgname-$pkgver.tar.xz)
+sha256sums=('2a6efd40b6d9dbcb70fba3be53112366882ba97b57151df3698dfa478c8d8dd3')
+
+prepare() {
+  cd $pkgname-$pkgver
+  autoreconf -fiv
+}
+
+build() {
+  cd $pkgname-$pkgver
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+  ./configure --prefix=/usr --without-docs
+  sed -i -e 's/ -shared / -Wl,-O1,--as-needed\0/g' libtool
+  make
+}
+
+check() {
+  cd $pkgname-$pkgver
+  make check
+}
+
+package() {
+  cd $pkgname-$pkgver
+  provides=(libvisio-0.1.so)
+
+  make DESTDIR="$pkgdir" install
+  # trim: doxygen API docs — never built (--without-docs)
+  rm -rf "$pkgdir"/usr/share/doc
+  install -Dm644 COPYING.MPL -t "$pkgdir"/usr/share/licenses/$pkgname/
+}

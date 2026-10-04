@@ -1,0 +1,53 @@
+# Maintainer: BlackIkeEagle <ike DOT devolder AT gmail DOT com>
+
+pkgname=libnfs
+pkgver=7.0.2
+pkgrel=2
+pkgdesc="client library for accessing NFS shares"
+arch=('x86_64')
+url="https://github.com/sahlberg/libnfs"
+license=('GPL')
+depends=('gnutls' 'krb5')
+makedepends=('cmake' 'ninja')
+# trim: docbook-xsl (makedepends) went with ENABLE_DOCUMENTATION=OFF below —
+# the man-page XML docs are not shipped (docs/man)
+options=('debug')
+source=(
+    "https://github.com/sahlberg/$pkgname/archive/$pkgname-$pkgver.tar.gz"
+)
+sha512sums=('722d7a65090153a9892749fc7b9513d86a75534f7ea49ad4ce18c3360c3740b0c7255e4510fd956215eb25f807fbdc668c1af0262a4cc87de678561198448f8b')
+
+#prepare() {
+    #cd "$pkgname-$pkgname-$pkgver"
+#}
+
+build() {
+    cd "$pkgname-$pkgname-$pkgver"
+
+    # House style: mold linker when available
+    local _mold=""
+    command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+    export LDFLAGS+=" ${_mold}"
+
+    cmake \
+        -DCMAKE_INSTALL_PREFIX=/usr \
+        -DENABLE_DOCUMENTATION=OFF \
+        -DENABLE_UTILS=ON \
+        -DENABLE_MULTITHREADING=ON \
+        -B build \
+        -G Ninja
+    ninja -j "${GSA_BUILD_JOBS:-$(nproc)}" -v -C build
+}
+
+package() {
+    provides=(libnfs.so)
+
+    cd "$pkgname-$pkgname-$pkgver"
+    DESTDIR="$pkgdir" ninja -v -C build install
+
+    # license: ship the upstream GPL text
+    local _l
+    for _l in COPYING COPYING.gpl-2.0 LICENSE; do
+        if [[ -f "$_l" ]]; then install -Dm644 "$_l" -t "$pkgdir/usr/share/licenses/$pkgname/"; fi
+    done
+}

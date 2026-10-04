@@ -1,0 +1,42 @@
+# Maintainer: AndyRTR <andyrtr@archlinux.org>
+# Contributor: megadriver <megadriver at gmx dot com>
+# Contributor: Luca Bennati <lucak3 AT gmail DOT com>
+
+pkgname=libcdr
+pkgver=0.1.9
+pkgrel=1
+pkgdesc="CorelDraw file format importer library for LibreOffice"
+arch=('x86_64')
+url="https://wiki.documentfoundation.org/DLP/Libraries/libcdr"
+# the only Public Domain source is src/lib/CDRColorProfiles.h
+license=('MPL-2.0' 'LicenseRef-libcdr-Public-Domain')
+depends=('lcms2' 'icu' 'librevenge'
+         'zlib' 'glibc' 'libstdc++' 'libgcc')
+makedepends=('libwpg' 'boost' 'doxygen' 'cppunit')
+provides=('libcdr-0.1.so')
+source=(https://dev-www.libreoffice.org/src/$pkgname/$pkgname-$pkgver.tar.xz)
+sha256sums=('f7bb6abdd7f226820f288a93dd8d07759833c0250d9e202af90f9b312c4665a3')
+
+build() {
+  cd $pkgname-$pkgver
+  ./configure --prefix=/usr
+  sed -i -e 's/ -shared / -Wl,-O1,--as-needed\0/g' libtool
+  make
+}
+
+check() {
+  cd $pkgname-$pkgver
+  make -k check
+}
+
+package() {
+  cd $pkgname-$pkgver
+  make DESTDIR="$pkgdir" install
+
+  # trim: drop the doxygen API docs and man pages (this library recipe ships
+  # only the shared library + headers)
+  rm -rf "$pkgdir/usr/share/doc" "$pkgdir/usr/share/man" "$pkgdir/usr/share/info"
+
+  install -d -m755 "${pkgdir}/usr/share/licenses/${pkgname}"
+  install -m644 COPYING.MPL "${pkgdir}/usr/share/licenses/${pkgname}/"
+}

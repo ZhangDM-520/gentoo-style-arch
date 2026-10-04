@@ -1,0 +1,62 @@
+# Maintainer: auto-generated (Class A upstream-VCS recipe)
+# Contributor: Chocobo1 <chocobo1 AT archlinux DOT net> (AUR libxslt-git reference)
+# Contributor: Jan Alexander Steffens (heftig) <heftig@archlinux.org> (stock libxslt)
+# Contributor: Eric Belanger <eric@archlinux.org>
+# Contributor: John Proctor <jproctor@prium.net>
+
+pkgname=libxslt-git
+pkgver=1.1.45.r1.gec95343
+pkgrel=1
+pkgdesc="XML stylesheet transformation library (git build)"
+arch=('x86_64')
+url="https://gitlab.gnome.org/GNOME/libxslt/-/wikis/home"
+license=('MIT')
+depends=('bash' 'glibc' 'libgcrypt' 'libxml2' 'xz')
+makedepends=('git' 'python')
+provides=("libxslt=$pkgver" 'libexslt.so' 'libxslt.so')
+# bare soname entries: libxslt.so=1-64 / libexslt.so=0-64 auto-derived by
+# pacman 7.1 (sonames libxslt.so.1, libexslt.so.0)
+# stock's libxslt-docs split is dropped (docs payload removed below); the name
+# is conflicted, NOT provided (classb sqlite-doc precedent) so no package can
+# resolve a docs dependency against a docs-less package
+conflicts=('libxslt' 'libxslt-docs')
+source=('git+https://gitlab.gnome.org/GNOME/libxslt.git')
+b2sums=('SKIP')
+
+pkgver() {
+  cd libxslt
+  git describe --long --tags | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g'
+}
+
+prepare() {
+  cd libxslt
+  NOCONFIGURE=1 ./autogen.sh
+}
+
+build() {
+  cd libxslt
+
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  ./configure \
+    --prefix=/usr \
+    --sysconfdir=/etc \
+    --localstatedir=/var \
+    --disable-static \
+    --with-python=/usr/bin/python
+  # kept verbatim from stock (link hygiene only — not an -O3/-march/-mtune flag)
+  sed -i -e 's/ -shared / -Wl,-O1,--as-needed\0/g' libtool
+  make -j"${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package() {
+  cd libxslt
+  make DESTDIR="$pkgdir" install
+
+  # stock splits /usr/share/doc + gtk-doc into libxslt-docs; dropped here
+  rm -rf "$pkgdir/usr/share/doc" "$pkgdir/usr/share/gtk-doc"
+
+  install -Dm644 Copyright -t "$pkgdir/usr/share/licenses/$pkgname/"
+}

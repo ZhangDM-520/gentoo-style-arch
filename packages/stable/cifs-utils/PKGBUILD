@@ -1,0 +1,73 @@
+# Maintainer: Tobias Powalowski <tpowa@archlinux.org>
+pkgname=cifs-utils
+pkgver=7.8
+pkgrel=1
+pkgdesc="CIFS filesystem user-space tools"
+arch=(x86_64)
+url="https://wiki.samba.org/index.php/LinuxCIFS_utils"
+license=('GPL-3.0-or-later')
+depends=(
+  keyutils
+  krb5
+  pam
+  libcap-ng
+  libwbclient  
+  talloc  
+)
+makedepends=(
+  git
+  python-docutils
+)
+optdepends=('python: for smb2-quota and smbinfo script')
+source=("git+https://git.samba.org/cifs-utils.git?signed#tag=${pkgname}-${pkgver}")
+validpgpkeys=(
+    C699981A31F338706C817650DF5BA9D30642D5A0 #cifs-utils Distribution Verification Key <cifs-utils@samba.org>
+    E9FB2EF297488ED584FC3A4B8A2CBD7007724F51 # Steve French <smfrench@gmail.com 
+    F2D066D1E8C2D888248F7A7C627A8E85F6858D07 # Pavel Shilovsky <pshilovsky@samba.org>
+)
+b2sums=('24601b33c060bcbc90205733f4f9c9deec794f544b7652f3e6480a72a4b0657216255dd20e5ad2e9e9a5ffee0ccbb2ab841325dc6b085edad159bfd4c0a97be2')
+
+prepare() {
+  cd "${srcdir}/${pkgname}"
+  # Fix install to honor DESTDIR
+  sed -e 's|cd \$(ROOTSBINDIR)|cd $(DESTDIR)$(ROOTSBINDIR)|g' -i Makefile.am
+  autoreconf -fiv
+}
+
+build() {
+  cd "${srcdir}/${pkgname}"
+
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  ./configure --prefix=/usr --sbindir=/usr/bin --enable-systemd
+  make -j"${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package() {
+  cd "${srcdir}/${pkgname}"
+  make DESTDIR="${pkgdir}" ROOTSBINDIR=/usr/bin install
+  mkdir -p "${pkgdir}"/etc/request-key.d
+  install -m 644 contrib/request-key.d/cifs.idmap.conf "${pkgdir}"/etc/request-key.d
+  install -m 644 contrib/request-key.d/cifs.spnego.conf "${pkgdir}"/etc/request-key.d
+  # set mount.cifs uid, to enable none root mounting form fstab
+  chmod +s "${pkgdir}"/usr/bin/mount.cifs
+  # fix idmap-plugin #42052
+  mkdir -p "${pkgdir}"/etc/cifs-utils
+  ln -s /usr/lib/cifs-utils/idmapwb.so "${pkgdir}"/etc/cifs-utils/idmap-plugin
+
+  # trim: man pages (docs) — python-docutils stays a makedep because rst2man
+  # renders them at build time; only the installed pages are dropped
+  rm -rf "${pkgdir}"/usr/share/man
+
+  # license
+  local _l
+  for _l in COPYING COPYING.GPL; do
+    if [[ -f ${srcdir}/${pkgname}/$_l ]]; then
+      install -Dm644 "${srcdir}/${pkgname}/$_l" -t "${pkgdir}/usr/share/licenses/${pkgname}/"
+    fi
+  done
+}
+

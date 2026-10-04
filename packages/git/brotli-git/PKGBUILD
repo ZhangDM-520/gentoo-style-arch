@@ -1,0 +1,46 @@
+# Maintainer: Chocobo1 <chocobo1 AT archlinux DOT net>
+# Recipe adapted for the gentoo-style-arch fleet; tracks upstream VCS directly.
+# The AUR package of the same name was used as a reference only.
+
+pkgname=brotli-git
+pkgver=1.2.0.r25.g61af0e5
+pkgrel=1
+pkgdesc="Brotli compression library (git build)"
+arch=('x86_64')
+url="https://github.com/google/brotli"
+license=('MIT')
+depends=('glibc')
+makedepends=('cmake' 'git')
+provides=("brotli=$pkgver" 'libbrotlicommon.so' 'libbrotlidec.so' 'libbrotlienc.so')
+conflicts=('brotli')
+source=("git+https://github.com/google/brotli.git")
+b2sums=('SKIP')
+
+pkgver() {
+  cd brotli
+
+  # upstream tags mix release and rc names; newest pure-version tag + rev-count
+  _tag=$(git tag -l --sort -v:refname | grep -E '^v?[0-9\.]+$' | head -n1)
+  _rev=$(git rev-list --count "$_tag"..HEAD)
+  _hash=$(git rev-parse --short HEAD)
+  printf "%s.r%s.g%s" "$_tag" "$_rev" "$_hash" | sed 's/^v//'
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  # CMAKE_BUILD_TYPE=None: makepkg.conf owns the opt level (no hard-coded -O3)
+  cmake -B _build -S brotli \
+    -DCMAKE_BUILD_TYPE=None \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DCMAKE_INSTALL_LIBDIR=lib
+  cmake --build _build --parallel "${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package() {
+  DESTDIR="$pkgdir" cmake --install _build
+
+  install -Dm644 brotli/LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

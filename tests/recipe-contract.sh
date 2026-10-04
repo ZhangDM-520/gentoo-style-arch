@@ -259,11 +259,9 @@ EOF
     run_builder fish "$root/build-all.fish" --audit-lint provides
     ((FIXTURE_RC == 0)) || fail "E: real-repo provides lint failed (rc=$FIXTURE_RC)"
 
-    # Known-debt ratchet (15 hand-pinned soname provides across 10 recipes):
-    # P2's fix is a one-line edit per recipe (bare-declare the stem), but those
-    # recipes are outside the change that introduced this gate. New debt fails
-    # here; removing debt shrinks the list — and an empty list ends the
-    # ratchet. P1/P3 must be empty NOW: the list is P2-only by construction.
+    # P2 debt cleared 2026-10-04: the list is empty and stays a strict gate —
+    # any NEW hand-pinned soname provide fails here (bare-declare the stem).
+    # P1/P3 must be empty too: all provides findings are forbidden now.
     sed -n "s/^provides: \([^:]*\): soname provide '\([^']*\)' is hand-versioned .*/\1: \2/p" \
         <<<"$FIXTURE_OUTPUT" | LC_ALL=C sort >"$tmp/p2.actual"
     if grep '^provides: ' <<<"$FIXTURE_OUTPUT" |
@@ -271,21 +269,6 @@ EOF
         fail "E: non-P2 provides finding on the real repo (P1/P3 must be empty): $FIXTURE_OUTPUT"
     fi
     cat >"$tmp/p2.expected" <<'EOF'
-jemalloc-git: libjemalloc.so=2-64
-libdex-git: libdex-1.so=1-64
-libisl-git: libisl.so=23-64
-libunwind-git: libunwind-coredump.so=0-64
-libunwind-git: libunwind-ptrace.so=0-64
-libunwind-git: libunwind-setjmp.so=0-64
-libunwind-git: libunwind-x86_64.so=8-64
-libunwind-git: libunwind.so=8-64
-liburing-git: liburing-ffi.so=2-64
-liburing-git: liburing.so=2-64
-lz4-git: liblz4.so=1-64
-pixman-git: libpixman-1.so=0-64
-xz-git: liblzma.so=5-64
-zlib-ng-compat-git: libz.so=1-64
-zstd-git: libzstd.so=1-64
 EOF
     LC_ALL=C sort -o "$tmp/p2.expected" "$tmp/p2.expected"
     diff -u "$tmp/p2.expected" "$tmp/p2.actual" >&2 ||

@@ -1,0 +1,137 @@
+# Maintainer: auto-generated
+# Contributor: Chocobo1 <chocobo1 AT archlinux DOT net> (AUR krb5-git)
+# Contributor: Levente Polyak <anthraxx[at]hexerise[dot]org> (stock Arch krb5)
+
+pkgname=krb5-git
+_pkgname=krb5
+pkgver=1.22.2.r98.g82a4224f0
+pkgrel=1
+pkgdesc="The Kerberos network authentication system (git build)"
+arch=('x86_64')
+url="https://web.mit.edu/kerberos/"
+license=('custom')
+depends=('bash' 'e2fsprogs' 'glibc' 'keyutils' 'libldap' 'libverto-module-base' 'lmdb' 'openssl')
+makedepends=('git' 'perl')
+provides=("krb5=$pkgver" 'libgssapi_krb5.so' 'libgssrpc.so' 'libk5crypto.so' 'libkadm5clnt_mit.so'
+          'libkadm5srv_mit.so' 'libkdb5.so' 'libkdb_ldap.so' 'libkrad.so' 'libkrb5.so' 'libkrb5support.so')
+conflicts=('krb5')
+backup=('etc/krb5.conf' 'var/lib/krb5kdc/kdc.conf')
+options=('!emptydirs')
+source=("git+https://github.com/krb5/${_pkgname}.git")
+b2sums=('SKIP')
+# Upstream release tags (krb5-*-final) are signed by the release team (stock
+# krb5 validpgpkeys below); branch HEAD is tracked, so nothing is pinned here.
+#validpgpkeys=('2C732B1C0DBEF678AB3AF606A32F17FD0055C305'  # Tom Yu <tlyu@mit.edu>
+#              'C4493CB739F4A89F9852CBC20CBA08575F8372DF') # Greg Hudson <ghudson@mit.edu>
+
+prepare() {
+  cd "$_pkgname"
+
+  # FS#25384 (stock krb5)
+  sed -i "/KRB5ROOT=/s/\/local//" src/util/ac_check_krb5.m4
+}
+
+pkgver() {
+  cd "$_pkgname"
+
+  local _tag _rev
+  _tag=$(git tag -l --sort -v:refname | grep -E '^krb5-[0-9.]+-final$' | head -n1)
+  _rev=$(git rev-list --count "$_tag"..HEAD)
+  printf "%s.r%s.g%s" "$_tag" "$_rev" "$(git rev-parse --short HEAD)" | sed 's/^krb5-//;s/-final//'
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  local _jobs="${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+
+  cd "$_pkgname/src"
+  # the git tree ships no pre-generated configure (stock builds release tarballs)
+  autoreconf -fi
+  export CFLAGS+=" -fPIC -fno-strict-aliasing -fstack-protector-all -std=gnu17"
+  export WARN_CFLAGS=""
+  ./configure --prefix=/usr \
+              --sbindir=/usr/bin \
+              --sysconfdir=/etc \
+              --localstatedir=/var/lib \
+              --enable-shared \
+              --with-system-et \
+              --with-system-ss \
+              --disable-rpath \
+              --without-tcl \
+              --enable-dns-for-realm \
+              --with-ldap \
+              --with-lmdb \
+              --with-system-verto
+  make -j "$_jobs"
+}
+
+package() {
+  cd "$_pkgname/src"
+  make DESTDIR="$pkgdir" EXAMPLEDIR=/usr/share/doc/$pkgname/examples install
+
+  # Fix FS#29889 (stock krb5)
+  install -Dm644 plugins/kdb/ldap/libkdb_ldap/kerberos.{ldif,schema} -t "$pkgdir/usr/share/doc/$pkgname/examples"
+
+  install -Dm644 config-files/krb5.conf -t "$pkgdir/etc"
+  install -Dm644 config-files/kdc.conf -t "$pkgdir/var/lib/krb5kdc"
+  install -Dm644 util/ac_check_krb5.m4 -t "$pkgdir/usr/share/aclocal"
+  install -Dm644 "$srcdir/$_pkgname/NOTICE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+
+  # systemd units copied verbatim from the stock Arch krb5 packaging
+  # (upgrade-in-place with stock krb5)
+  install -Dm644 /dev/stdin "$pkgdir/usr/lib/systemd/system/krb5-kadmind.service" <<'EOF'
+[Unit]
+Description=Kerberos 5 administration server
+
+[Service]
+ExecStart=/usr/bin/kadmind -nofork
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  install -Dm644 /dev/stdin "$pkgdir/usr/lib/systemd/system/krb5-kdc.service" <<'EOF'
+[Unit]
+Description=Kerberos 5 KDC
+
+[Service]
+ExecStart=/usr/bin/krb5kdc -n
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  install -Dm644 /dev/stdin "$pkgdir/usr/lib/systemd/system/krb5-kpropd.service" <<'EOF'
+[Unit]
+Description=Kerberos 5 propagation server
+
+[Service]
+ExecStart=/usr/bin/kpropd -S
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  install -Dm644 /dev/stdin "$pkgdir/usr/lib/systemd/system/krb5-kpropd.socket" <<'EOF'
+[Unit]
+Description=Kerberos 5 propagation server
+
+[Socket]
+ListenStream=754
+Accept=yes
+
+[Install]
+WantedBy=sockets.target
+EOF
+  install -Dm644 /dev/stdin "$pkgdir/usr/lib/systemd/system/krb5-kpropd@.service" <<'EOF'
+[Unit]
+Description=Kerberos 5 propagation server
+Conflicts=krb5-kpropd.service
+
+[Service]
+ExecStart=/usr/bin/kpropd
+StandardInput=socket
+StandardError=syslog
+EOF
+}

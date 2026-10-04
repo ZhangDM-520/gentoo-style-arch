@@ -1,0 +1,23 @@
+pkgbase = celluloid
+	pkgdesc = Simple media player, a GTK frontend for mpv
+	pkgver = 0.30
+	pkgrel = 2
+	url = https://celluloid-player.github.io/
+	arch = x86_64
+	license = GPL-3.0-or-later
+	makedepends = git
+	makedepends = glib2-devel
+	makedepends = meson
+	depends = dconf
+	depends = gdk-pixbuf2
+	depends = glib2
+	depends = glibc
+	depends = gtk4
+	depends = hicolor-icon-theme
+	depends = libadwaita
+	depends = libepoxy
+	depends = mpv
+	source = git+https://github.com/celluloid-player/celluloid.git#tag=v0.30
+	b2sums = 779e4a5d12e66d81ca74eb2ea56edf9b4f0952d3ff5279a4ca9d91619b3a2bc9fcfe1aa1d9415c714d3db609ef5a306d84a2b262c891220759059bbac1004d33
+
+pkgname = celluloid

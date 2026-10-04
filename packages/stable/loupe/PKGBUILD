@@ -1,0 +1,76 @@
+# Maintainer: Fabian Bornschein <fabiscafe@archlinux.org>
+# Maintainer: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
+
+pkgname=loupe
+pkgver=51.0
+pkgrel=1
+pkgdesc="A simple image viewer for GNOME"
+url="https://apps.gnome.org/Loupe/"
+arch=(x86_64)
+license=(GPL-3.0-or-later)
+groups=(gnome)
+depends=(
+  bubblewrap
+  cairo
+  dconf
+  fontconfig
+  glib2
+  glibc
+  glycin
+  graphene
+  gtk4
+  hicolor-icon-theme
+  lcms2
+  libadwaita
+  libgcc
+  libgweather-4
+  libseccomp
+)
+makedepends=(
+  git
+  itstool
+  meson
+  rust
+)
+source=(
+  "git+https://gitlab.gnome.org/GNOME/loupe.git?signed#tag=${pkgver/[a-z]/.&}"
+)
+b2sums=('d7c3d96b5f9290dbe862cf65277f41eb66f410156003acf55f2c4ddead997b67cc3de359dbfe0d80f6e4b5cc77028a643e70ccd76271f960bb4b9c217f583d07')
+validpgpkeys=(
+  4587A0EE1EE5478AAB82C0A93BA28A5559F08EBD # Sophie Herold <sophieherold@gnome.org>
+)
+
+# Use debug
+export CARGO_PROFILE_RELEASE_DEBUG=2 CARGO_PROFILE_RELEASE_STRIP=false
+
+# Use LTO
+export CARGO_PROFILE_RELEASE_LTO=true CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
+
+prepare() {
+  cd $pkgname
+
+  # Match CARGO_HOME in src/meson.build
+  CARGO_HOME="$srcdir/build/cargo-home" \
+    cargo fetch --locked --target host-tuple
+}
+
+build() {
+  arch-meson $pkgname build
+  meson compile -C build -j "${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+check() {
+  meson test -C build --no-rebuild --print-errorlogs
+}
+
+package() {
+  meson install -C build --no-rebuild --destdir "$pkgdir"
+
+  # trim: GNOME help pages + man pages + translations (docs/locales) — not
+  # part of the maintained target
+  rm -rf "$pkgdir"/usr/share/help "$pkgdir"/usr/share/man "$pkgdir"/usr/share/locale
+
+  install -Dm644 "$pkgname/COPYING.md" -t "$pkgdir/usr/share/licenses/$pkgname/"
+}
+
+# vim:set sw=2 sts=-1 et:

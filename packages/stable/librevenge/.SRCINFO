@@ -1,0 +1,21 @@
+pkgbase = librevenge
+	pkgdesc = library for REVerses ENGineered formats filters
+	pkgver = 0.0.6
+	pkgrel = 1
+	url = https://sf.net/p/libwpd/librevenge/
+	arch = x86_64
+	license = LGPL-2.1-or-later OR MPL-2.0
+	license = BSD-3-Clause
+	makedepends = boost
+	makedepends = cppunit
+	depends = zlib
+	depends = glibc
+	depends = libstdc++
+	depends = libgcc
+	source = https://sourceforge.net/projects/libwpd/files/librevenge/librevenge-0.0.6/librevenge-0.0.6.tar.xz
+	sha256sums = 19eacf5ce55d7fe6a990a45142589cdf7da0c7b68701797f133482cb44f189fa
+
+pkgname = librevenge
+	provides = librevenge-0.0.so
+	provides = librevenge-generics-0.0.so
+	provides = librevenge-stream-0.0.so

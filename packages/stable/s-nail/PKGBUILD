@@ -1,0 +1,57 @@
+# Maintainer: Gaetan Bisson <bisson@archlinux.org>
+# Contributor: Stéphane Gaudreault <stephane@archlinux.org>
+# Contributor: Sergej Pupykin <pupykin.s@arch@gmail.com>
+# Contributor: Andreas Wagner <Andreas.Wagner@em.uni-frankfurt.de>
+
+pkgname=s-nail
+pkgver=14.9.25
+pkgrel=1
+pkgdesc='Environment for sending and receiving mail'
+url='https://www.sdaoden.eu/code.html#s-nail'
+license=('custom:BSD')
+arch=('x86_64')
+depends=('openssl' 'krb5' 'libidn2')
+makedepends=('git')
+optdepends=('smtp-forwarder: for sending mail')
+backup=('etc/mail.rc')
+provides=('mailx' 'mailx-heirloom' 'heirloom-mailx')
+# trim: conflicts/replaces — house standard drops stock
+# conflicts=('mailx' 'mailx-heirloom' 'heirloom-mailx')
+# replaces=('mailx' 'mailx-heirloom' 'heirloom-mailx')
+source=("git+https://git.sdaoden.eu/scm/s-nail.git?signed#tag=v${pkgver}")
+sha512sums=('9225f543455c5befc88bb7fe9f5267eff43519020e09ffd0a2117f871f2a60487e3292bbede900716a687b7ab68b5c672e314a51b1282f768f2e5e4f9fb3fd3a')
+validpgpkeys=('EE19E1C1F2F7054F8D3954D8308964B51883A0DD')
+
+build() {
+	cd ${pkgname}
+	# House style: mold linker when available
+	local _mold=""
+	command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+	export LDFLAGS+=" ${_mold}"
+	export CFLAGS+=" $CPPFLAGS"
+	make \
+		VAL_PREFIX=/usr \
+		VAL_SYSCONFDIR=/etc \
+		VAL_LIBEXECDIR=/usr/lib \
+		VAL_MAIL=/var/spool/mail \
+		VAL_SID= VAL_MAILX=mail \
+		OPT_AUTOCC=0 \
+		config
+
+	make build -j"${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+}
+
+check() {
+	cd ${pkgname}
+	make test
+}
+
+package() {
+	cd ${pkgname}
+	make DESTDIR="${pkgdir}" install
+	ln -sf mail "${pkgdir}"/usr/bin/mailx
+	# trim: man — the stock mailx.1.gz man symlink goes together with the pages
+	rm -rf "${pkgdir}"/usr/share/man
+	# license: ship upstream licence text (BSD)
+	install -Dm644 COPYING "${pkgdir}/usr/share/licenses/${pkgname}/COPYING"
+}

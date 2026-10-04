@@ -1,0 +1,50 @@
+# Maintainer: Chocobo1 <chocobo1 AT archlinux DOT net>
+
+# git recipe tracking upstream libuv VCS (AUR libuv-git used as reference
+# only)
+
+pkgname=libuv-git
+pkgver=1.53.0.r24.g49b1c064
+pkgrel=1
+pkgdesc='A multi-platform support library with a focus on asynchronous I/O (git build)'
+arch=('x86_64')
+url='https://libuv.org/'
+license=('MIT' 'BSD-2-Clause' 'ISC' 'CC-BY-4.0')
+depends=('glibc' 'libnsl')
+# trim: python-sphinx makedep (purged system tool — MEMORY rule 8) together
+# with the sphinx docs build below — the man1/libuv.1 doc output is not shipped
+makedepends=('git')
+provides=("libuv=$pkgver" 'libuv.so')
+conflicts=('libuv')
+options=('staticlibs')
+source=('git+https://github.com/libuv/libuv.git')
+b2sums=('SKIP')
+
+pkgver() {
+  cd libuv
+  git describe --long --tags | sed 's/\([^-]*-g\)/r\1/;s/-/./g;s/^v//'
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  cd libuv
+  ./autogen.sh
+  CFLAGS="$CFLAGS -ffat-lto-objects" \
+    ./configure --prefix=/usr
+  make -j"${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+  # trim: sphinx man-page docs build (make -C docs man) — python-sphinx is a
+  # purged system tool (MEMORY rule 8); docs/build/man/libuv.1 is never built
+  # and its install path is trimmed from package() below
+}
+
+package() {
+  cd libuv
+  make DESTDIR="$pkgdir" install
+
+  # trim: man1/libuv.1 doc install path — never built (sphinx docs build
+  # dropped with the purged python-sphinx tool)
+  install -Dm644 LICENSE LICENSE-extra LICENSE-docs -t "$pkgdir/usr/share/licenses/$pkgname/"
+}

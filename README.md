@@ -23,19 +23,24 @@ verification.
 
 ## What is included
 
-The current set has 148 recipe directories and 167 group memberships (counts
-from the `groups` fields in `config/topology.conf`, cross-checked with `fish
-build-all.fish --list -g <group>`). The counts differ because `hip-runtime`,
-`hsa-rocr` and `openssl` are `stable,core` records and the 16 toolchain
-records are `core,build-tools`, each counted in both groups;
+The current set has 653 recipe records — one per recipe directory — and 707
+group memberships (counts from the `groups` fields in `config/topology.conf`,
+cross-checked with `fish build-all.fish --list -g <group>`). The counts differ
+because `hip-runtime`, `hsa-rocr` and `openssl` are `stable,core` records,
+the 16 toolchain records are `core,build-tools`, each counted in both groups,
+and 11 split-package recipes build many pacman package names — one recipe,
+many pkgnames (`gst-plugins-base`, `vlc-plugin-freetype` and `gnome-desktop-4`
+are package names built by the `gstreamer`, `vlc` and `gnome-desktop` recipes,
+not records of their own), 35 of those output names counted with their
+recipe's group;
 `core` is a logical build group whose 53 members span the physical layout: 48
 live under `packages/core/`, `autofdo-git` and `libclc-git` come from
 `packages/git/`, and the three `stable,core` members from `packages/stable/`:
 
 | Group | Members | Purpose |
 | --- | ---: | --- |
-| `git` | 33 | Top-level development and rolling packages |
-| `stable` | 41 | Stock-name packages synchronized with Arch repositories (grew 27 → 44 with the 2026-09-28 leaf-utility batch) |
+| `git` | 140 | Top-level development and rolling packages |
+| `stable` | 474 | Stock-name packages synchronized with Arch repositories (grew 27 → 44 with the 2026-09-28 leaf-utility batch, then to 41 as three ABI hubs moved into `core` on 2026-10-04) |
 | `core` | 53 | Heavy, ABI-coupled, source-heavy, and ROCm packages |
 | `misc` | 1 | Optional CachyOS kernel recipe |
 | `app` | 23 | Optional applications; a TTY build/`-n` run prompts to multi-select (all unchecked + Enter = build all; records sharing an `app-cluster` tag toggle as one row); leaf builds — app packages typically have no consumers to expand |

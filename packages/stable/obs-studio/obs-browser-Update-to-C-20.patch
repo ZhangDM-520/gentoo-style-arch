@@ -1,0 +1,36 @@
+From cea7f6efd953136465f0f47fbb199d2212bf318c Mon Sep 17 00:00:00 2001
+From: Hoshino Lina <lina@lina.yt>
+Date: Sat, 7 Mar 2026 20:42:22 +0900
+Subject: [PATCH] Update to C++20
+
+Current CEF requires compiling as C++20.
+---
+ CMakeLists.txt       | 2 +-
+ cmake/os-linux.cmake | 1 +
+ 2 files changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 0853ac0c2..0139b4c1c 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -42,7 +42,7 @@ target_sources(
+ 
+ target_include_directories(obs-browser PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/deps")
+ 
+-target_compile_features(obs-browser PRIVATE cxx_std_17)
++target_compile_features(obs-browser PRIVATE cxx_std_20)
+ target_link_libraries(obs-browser PRIVATE OBS::libobs OBS::frontend-api OBS::websocket-api nlohmann_json::nlohmann_json)
+ 
+ if(OS_WINDOWS)
+diff --git a/cmake/os-linux.cmake b/cmake/os-linux.cmake
+index f74797a62..791ec01b9 100644
+--- a/cmake/os-linux.cmake
++++ b/cmake/os-linux.cmake
+@@ -19,6 +19,7 @@ target_sources(
+ target_include_directories(browser-helper PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/deps"
+                                                   "${CMAKE_CURRENT_SOURCE_DIR}/obs-browser-page")
+ 
++target_compile_features(browser-helper PRIVATE cxx_std_20)
+ target_link_libraries(browser-helper PRIVATE CEF::Wrapper CEF::Library)
+ 
+ target_sources(obs-browser PRIVATE deps/ip-string-posix.cpp)

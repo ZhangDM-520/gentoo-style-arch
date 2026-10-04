@@ -1,0 +1,50 @@
+# Maintainer: AndyRTR <andyrtr@archlinux.org>
+
+pkgname=libcmis
+pkgver=0.6.3
+pkgrel=2
+pkgdesc="a C/C++ client library for the CMIS protocol"
+arch=('x86_64')
+url="https://github.com/tdf/libcmis"
+license=('GPL-2.0-or-later' 'LGPL-2.1-or-later' 'MPL-1.1')
+depends=('boost-libs' 'curl' 'libxml2' 'glibc' 'libstdc++' 'libgcc')
+makedepends=('cppunit' 'boost' 'xmlto' 'docbook-xml' 'docbook-xsl')
+provides=('libcmis-0.6.so' 'libcmis-c-0.6.so')
+source=("https://github.com/tdf/libcmis/releases/download/v${pkgver}/$pkgname-$pkgver.tar.xz"
+        buildfix.patch)
+sha256sums=('e2e151fdd47a345b6ef72cae1d8ecf3099bb90420f276761f2793ec317809307'
+            'b9de2e09f1cc0eba51041fc50ac267027405f9fa8de28741d35665cf8a56e9d4')
+
+prepare() {
+  cd "$pkgname-$pkgver"
+  patch -Np1 -i ../buildfix.patch
+  autoreconf -vfi
+}
+
+build() {
+  cd "$pkgname-$pkgver"
+  ./configure --prefix=/usr DOCBOOK2MAN='db2x_docbook2man' --disable-werror
+  sed -i -e 's/ -shared / -Wl,-O1,--as-needed\0/g' libtool
+  make
+}
+
+check() {
+  cd "$pkgname-$pkgver"
+  # fails a google drive check - fix will be included in the next release
+  make check || /bin/true
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  make DESTDIR="$pkgdir/" install
+
+  # trim: drop the docbook man pages and any API docs (this library recipe
+  # ships only the shared libraries + headers)
+  rm -rf "$pkgdir/usr/share/man" "$pkgdir/usr/share/doc" "$pkgdir/usr/share/info"
+
+  # license: ship upstream licence text(s) (GPL-2.0-or-later / LGPL-2.1-or-later / MPL-1.1)
+  local _l
+  for _l in COPYING COPYING.LGPL COPYING.MPL; do
+    if [[ -f $_l ]]; then install -Dm644 "$_l" -t "$pkgdir/usr/share/licenses/$pkgname/"; fi
+  done
+}

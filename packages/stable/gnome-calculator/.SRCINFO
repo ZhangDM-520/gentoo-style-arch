@@ -1,0 +1,33 @@
+pkgbase = gnome-calculator
+	pkgdesc = GNOME Scientific calculator
+	pkgver = 51.0
+	pkgrel = 1
+	url = https://apps.gnome.org/Calculator
+	arch = x86_64
+	groups = gnome
+	license = GPL-3.0-or-later
+	makedepends = blueprint-compiler
+	makedepends = git
+	makedepends = gobject-introspection
+	makedepends = meson
+	makedepends = vala
+	makedepends = yelp-tools
+	depends = dconf
+	depends = glib2
+	depends = glibc
+	depends = gmp
+	depends = gtk4
+	depends = gtksourceview5
+	depends = hicolor-icon-theme
+	depends = libadwaita
+	depends = libgee
+	depends = libmpc
+	depends = libsoup3
+	depends = libxml2
+	depends = mpfr
+	provides = libgcalc-2.so
+	provides = libgci-1.so
+	source = git+https://gitlab.gnome.org/GNOME/gnome-calculator.git#tag=51.0
+	b2sums = b456e4da55214c81adee7b992cabc49e51066ca965e97661c5c6e3999862010aec97fe0d3c755248d0bd75efd5124e156e344805043da01bab2d14f7cdaad199
+
+pkgname = gnome-calculator

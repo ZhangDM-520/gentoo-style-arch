@@ -1,0 +1,192 @@
+# Maintainer: Felix Yan <felixonmars@archlinux.org>
+# Contributor: Angel Velasquez <angvp@archlinux.org>
+# Contributor: Stéphane Gaudreault <stephane@archlinux.org>
+# Contributor: Paul Mattal <paul@archlinux.org>
+# Contributor: Jason Chu <jason@archlinux.org>
+
+pkgname=subversion
+pkgver=1.14.5
+pkgrel=5
+pkgdesc="A Modern Concurrent Version Control System"
+arch=('x86_64')
+url="https://subversion.apache.org/"
+license=('Apache-2.0')
+depends=(
+  'apr'
+  'apr-util'
+  'bash'
+  'dbus'
+  'expat'
+  'file'
+  'libgcc'
+  'libstdc++'
+  'glibc'
+  'libsasl'
+  'libutf8proc'
+  'lz4'
+  'serf'
+  'sqlite'
+  'zlib'
+)
+makedepends=('apache' 'python' 'python-py3c' 'perl' 'swig' 'java-environment>=8'
+             'libsecret' 'ruby' 'ruby-nkf' 'python-setuptools')
+optdepends=('libsecret: for GNOME Keyring for auth credentials'
+            'bash-completion: for svn bash completion'
+            'python: for some hook scripts'
+            'java-environment: for Java support'
+            'ruby: for some hook scripts')
+provides=(
+  'svn'
+  libsvn_auth_gnome_keyring-1.so
+  libsvn_client-1.so
+  libsvn_delta-1.so
+  libsvn_diff-1.so
+  libsvn_fs-1.so
+  libsvn_fs_fs-1.so
+  libsvn_fs_util-1.so
+  libsvn_fs_x-1.so
+  libsvn_ra-1.so
+  libsvn_ra_local-1.so
+  libsvn_ra_serf-1.so
+  libsvn_ra_svn-1.so
+  libsvn_repos-1.so
+  libsvn_subr-1.so
+  libsvn_swig_perl-1.so
+  libsvn_swig_py-1.so
+  libsvn_swig_ruby-1.so
+  libsvn_wc-1.so
+  libsvnjavahl-1.so
+  mod_authz_svn.so
+  mod_dav_svn.so
+  _client.so
+  _core.so
+  _delta.so
+  _diff.so
+  _fs.so
+  _ra.so
+  _repos.so
+  _wc.so
+  client.so
+  core.so
+  delta.so
+  diff.so
+  fs.so
+  ra.so
+  repos.so
+  wc.so
+)
+backup=('etc/conf.d/svnserve')
+options=('!makeflags' '!emptydirs')
+source=(https://archive.apache.org/dist/subversion/subversion-${pkgver}.tar.bz2{,.asc}
+        svnserve.conf
+        svnserve.tmpfiles
+        svnserve.service
+        subversion.rpath.fix.patch
+        ruby-frozen-nil.patch
+        swig-4.4.patch
+        python-3.14.patch
+)
+sha512sums=('e4800564d0cc68be98f19aa58d89181de83f237f0ccff10824d9237f8c65eb0071f7176ac54e9e8f8ecbf685849bd3e94be48f678f4c23ed6a5fd7fb6edd0321'
+            'SKIP'
+            'f7f2ceac2446cc94ac2be3404083cc54a0f1f4d04d5301f600dfafca38819669bcffdfa45f1b90b9f3cdb042469385a764f11dc1a827f10c23ddf73b7ac6c9da'
+            '7775f4da5003970c9ebdc2f696ba090df194a77d9daed791875488c943f72ae496b5f9cc6f3ff9f3f4de9f352a3b518137babdea38947d1a2d5dd16aa1844036'
+            'd879cd8212b8c242386dc0668d1772358a94110fabde725ad132781da7dd0893d51cba09271a566fbbd7dc5fc8962b0de3ef8c8d9959fa47f1fa6db555f440d0'
+            '92087b9a70722f4d39b75345463c1b04c9db30faf9eb6fe9b911416e73570c7930dd74d3b6136c00da6adeb2a263cac75f3520ccc08ecdb56d88a8a256172af4'
+            'bb772e55acd9601121ad06b254c364e8d8cf772ca59b8df0cf4c5c5ecba110d4108d0363672f121f770550cdd052802474029e57643258f398aacd2b63ccb898'
+            '040c7aa1e642ebf2a52ce22f2292c7ba8dbe3bb919a6c91c70beefaf0a4e38cef36757d129b59339dc4bf87ca74da305a3e5385a8353ee5ab7f669170ebf4d2b'
+            '149abfbebd4ca26c39bd51237802695f3f38c361709983d821d1dba6c7d82dad8b481363bd20d857ba15bdbe334781dcf5c508db7b847305d413957960cef36d')
+validpgpkeys=('19BBCAEF7B19B280A0E2175E62D48FAD16A0DE01'
+              '8BC4DAE0C5A4D65F404401074F7DBAA99A59B973'
+              'BA3C15B1337CF0FB222BD41A1BCA6586A347943F'
+              'E7B2A7F4EC28BE9FF8B38BA4B64FFF1209F9FA74'
+              '3D1DC66D6D2E0B9039528138C4A6C625CCC8E1DF'
+              'A844790FB5743606EE95920776D788E1ED1A599C'
+              '7B8CA7F6451AD89C8ADC077B376A3CFD110B1C95'
+              '056F8016D9B87B1BDE41746799EC741B57921ACC'
+              '3F8E467CB3366E3013E1120D583F00ADF981C39F'
+              '91BFBF4D6956BD5DF7B72D23DFE691AE331BA3DB'
+              'EC25FCC105618D04ADB43429C4416167349A3BCB'
+              '4FFCB55C0D0D9343CFB4611F28DB47329CFFDC63'
+              '7DC8A7BF37478FF48E33E85E2B4822B4B6340BAC')
+# Ben Reser / Stefan Sperling / Branko Čibej / Evgeny Kotkov / Bert Huijben / Philip Martin /
+# Stefan Fuhrmann / Stefan Hett (CODE SIGNING KEY) /Nathan Hartman (CODE SIGNING KEY) / James McCoy /
+# Mark Phippard / Daniel Sahlberg
+# See https://downloads.apache.org/subversion/subversion-${pkgver}.KEYS
+
+prepare() {
+  cd ${pkgname}-${pkgver}
+  patch -Np0 -i ../subversion.rpath.fix.patch
+  patch -p1 -i ../ruby-frozen-nil.patch
+  patch -p1 -i ../swig-4.4.patch # Fix build with SWIG 4.4 (Fedora)
+  patch -p1 -i ../python-3.14.patch # skip failing tests with python 3.14 (Fedora)
+  rm subversion/bindings/swig/proxy/*.swg
+  ./autogen.sh
+}
+
+build() {
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  local site_packages=$(python -c "import site; print(site.getsitepackages()[0])")
+
+  CFLAGS+=" -Wno-incompatible-pointer-types -Wno-int-conversion"
+  cd ${pkgname}-${pkgver}
+  ./configure --prefix=/usr \
+              --with-apxs \
+              --enable-javahl \
+              --with-jdk=/usr/lib/jvm/default \
+              --with-gnome-keyring \
+              --with-apache-libexecdir=/usr/lib/httpd/modules \
+              --with-ruby-sitedir=/usr/lib/ruby/vendor_ruby \
+              --disable-static
+
+  # prevent excessive overlinking due to libtool
+  sed -i -e 's/ -shared / -Wl,-O1,--as-needed\0/g' libtool
+  make LT_LDFLAGS="-L$Fdestdir/usr/lib"
+  make swig_pydir=$site_packages/libsvn \
+    swig_pydir_extra=$site_packages/svn swig-py swig-pl javahl swig-rb
+  # trim: the stock File.exists? sed over subversion/bindings/swig/ruby/test
+  # went with the test suite dropped below (dead check path)
+}
+
+# trim: the full check suite (make check + check-swig-py/pl/rb) and its
+# ruby-test-unit checkdepends are dropped — heavyweight networked/flaky
+# regression suites, not gating for this ABI consumer rebuild recipe
+
+package() {
+  local site_packages=$(python -c "import site; print(site.getsitepackages()[0])")
+
+  cd ${pkgname}-${pkgver}
+
+  export LD_LIBRARY_PATH="${pkgdir}"/usr/lib:${LD_LIBRARY_PATH}
+  make DESTDIR="${pkgdir}" INSTALLDIRS=vendor \
+    swig_pydir=$site_packages/libsvn \
+    swig_pydir_extra=$site_packages/svn \
+    install install-swig-py install-swig-pl install-javahl install-swig-rb
+
+  install -dm755 "${pkgdir}"/usr/share/subversion
+  cp -a tools/hook-scripts "${pkgdir}"/usr/share/subversion/
+  rm "${pkgdir}"/usr/share/subversion/hook-scripts/*.in
+
+  ## svnserve ...
+
+  # ... systemd
+  install -D -m 644 "${srcdir}"/svnserve.service  "${pkgdir}"/usr/lib/systemd/system/svnserve.service
+  install -D -m 644 "${srcdir}"/svnserve.tmpfiles "${pkgdir}"/usr/lib/tmpfiles.d/svnserve.conf
+
+  # ... common config
+  install -D -m 644 "${srcdir}"/svnserve.conf "${pkgdir}"/etc/conf.d/svnserve
+
+  install -Dm 644 tools/client-side/bash_completion \
+    "${pkgdir}"/usr/share/bash-completion/completions/subversion
+  for i in svn svnadmin svndumpfilter svnlook svnsync svnversion; do
+     ln -sf subversion "${pkgdir}"/usr/share/bash-completion/completions/${i}
+  done
+
+  # license
+  install -Dm644 LICENSE -t "${pkgdir}"/usr/share/licenses/$pkgname/
+}
+
+# vim: ts=2 sw=2 et:

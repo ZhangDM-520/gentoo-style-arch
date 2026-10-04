@@ -1,0 +1,72 @@
+# Maintainer: Levente Polyak <anthraxx[at]archlinux[dot]org>
+# Contributor: Eric Bélanger <eric@archlinux.org>
+
+pkgname=jasper
+pkgver=4.2.9
+pkgrel=1
+pkgdesc='Software-based implementation of the codec specified in the emerging JPEG-2000 Part-1 standard'
+url='https://www.ece.uvic.ca/~frodo/jasper/'
+arch=(x86_64)
+license=('LicenseRef-JasPer2.0')
+depends=(
+  freeglut
+  glibc
+  glu
+  libglvnd
+  libjpeg-turbo
+)
+makedepends=(
+  cmake
+  freeglut
+  glibc
+  glu
+  libjpeg-turbo
+  libxmu
+)
+provides=('libjasper.so')
+source=(
+  https://github.com/jasper-software/jasper/archive/version-${pkgver}/${pkgname}-${pkgver}.tar.gz
+)
+sha512sums=('5c74521150f49a1055b909e01629ced3b97f222d0d81b0f5b42dcca4915fff11a11e247cc1ec37bcb669b819812892c950ec980275cbebe9897a2aec8b52ab3d')
+b2sums=('058eeb4f357566c1774074a8cea55b78d088d496c4d8f74f259974bd3ec1e97924e362b10724443223be5456f7e1d76566539da349cac9a36cc3c761ae5fe376')
+
+prepare() {
+  cd ${pkgname}-version-${pkgver}
+  sed -r 's|(CMAKE_SKIP_BUILD_RPATH) FALSE|\1 TRUE|g' -i CMakeLists.txt
+}
+
+build() {
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  # trim: doxygen API docs (JAS_ENABLE_DOC=OFF, doxygen makedep dropped) —
+  # Class B trim standard (docs); the jasper-doc split went with them
+  cmake \
+    -B buildx -S ${pkgname}-version-${pkgver} \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DCMAKE_C_FLAGS="$CFLAGS -ffat-lto-objects" \
+    -DJAS_ENABLE_OPENGL=ON \
+    -DJAS_ENABLE_LIBJPEG=ON \
+    -DJAS_ENABLE_AUTOMATIC_DEPENDENCIES=OFF \
+    -DCMAKE_SKIP_RPATH=ON \
+    -DJAS_ENABLE_DOC=OFF \
+    -DJAS_ENABLE_SHARED=ON
+  cmake --build buildx --parallel "${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+# trim: check() test suite (make -C buildx test) — Class B trim standard (tests)
+
+package() {
+  make -C buildx DESTDIR="${pkgdir}" install
+
+  # trim: doc payload (HTML docs from the dropped jasper-doc split, plus the
+  # stock NEWS/README copies) and man pages — Class B trim standard
+  # (docs/man); the jasper-doc optdepends went with the split
+  rm -rf "${pkgdir}/usr/share/doc" "${pkgdir}/usr/share/man"
+
+  install -Dm 644 ${pkgname}-version-${pkgver}/LICENSE.txt  -t "${pkgdir}/usr/share/licenses/${pkgname}"
+}
+
+# vim: ts=2 sw=2 et:

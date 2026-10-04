@@ -1,0 +1,61 @@
+# Maintainer: Caleb Maclennan <caleb@alerque.com>
+# Contributor: Pierre Schmitz <pierre@archlinux.de>
+# Contributor: Douglas Soares de Andrade <douglas@archlinux.org>
+# Contributor: Tom Newsom <Jeepster@gmx.co.uk>
+
+pkgname=lynx
+pkgver=2.9.3
+pkgrel=1
+pkgdesc='A text browser for the World Wide Web'
+url='https://lynx.invisible-island.net/'
+arch=(x86_64)
+license=(GPL-2.0-only)
+depends=(brotli
+         bzip2
+         glibc
+         libidn2
+         ncurses
+         openssl
+         zlib)
+backup=(etc/lynx.cfg)
+options=(!lto)
+_archive="$pkgname$pkgver"
+source=("https://invisible-mirror.net/archives/lynx/tarballs/$_archive.tar.bz2"{,.asc})
+sha256sums=('174b7f2866a60f3247ba75f5c7dbb10b124aede4a1359312de15f3bfebd2050f'
+            'SKIP')
+validpgpkeys=('19882D92DDA4C400C22C0D56CC2AF4472167BE03') # Thomas Dickey <dickey@invisible-island.net>
+
+build() {
+	cd "$_archive"
+	# House style: mold linker when available
+	local _mold=""
+	command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+	export LDFLAGS+=" ${_mold}"
+	./configure --prefix=/usr \
+		--sysconfdir=/etc \
+		--with-ssl=/usr \
+		--enable-externs \
+		--enable-default-colors \
+		--enable-nls \
+		--enable-ipv6 \
+		--mandir=/usr/share/man
+	make -j"${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+}
+
+package() {
+	cd "$_archive"
+	make DESTDIR="$pkgdir" install
+	# trim: man/locales — lean consumer-rebuild recipe
+	rm -rf "$pkgdir/usr/share/man" "$pkgdir/usr/share/locale"
+	# FS#20404 - points to local help
+	sed -i -e "s|^HELPFILE.*$|HELPFILE:file:///usr/share/doc/lynx/lynx_help/lynx_help_main.html|" "${pkgdir}/etc/lynx.cfg"
+	# keep: lynx_help runtime help (user-visible feature, /etc/lynx.cfg HELPFILE
+	# target) — installed as data, the rest of /usr/share/doc stays trimmed
+	install -d "$pkgdir/usr/share/doc/lynx"
+	cp -rf lynx_help "$pkgdir/usr/share/doc/lynx"
+	# license: ship upstream licence text (GPL-2.0-only)
+	local _l
+	for _l in COPYING COPYHEADER LICENSE; do
+		if [[ -f $_l ]]; then install -Dm644 "$_l" -t "$pkgdir/usr/share/licenses/$pkgname/"; fi
+	done
+}

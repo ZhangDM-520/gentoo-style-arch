@@ -1,0 +1,48 @@
+# Maintainer: auto-generated (Class A upstream-VCS recipe)
+# Contributor: Chocobo1 <chocobo1 AT archlinux DOT net> (AUR libzip-git reference)
+# Contributor: Maxime Gauduin (stock libzip)
+
+pkgname=libzip-git
+pkgver=1.11.4.r170.g0548793
+pkgrel=1
+pkgdesc="C library for reading, creating, and modifying zip archives (git build)"
+arch=('x86_64')
+url="https://libzip.org"
+license=('BSD-3-Clause')
+# xz kept from the AUR reference although stock omits it: CMake auto-detects
+# liblzma when present and the resulting shared lib links it at runtime
+depends=('glibc' 'bzip2' 'gnutls' 'openssl' 'xz' 'zlib' 'zstd')
+makedepends=('git' 'cmake')
+provides=("libzip=$pkgver" 'libzip.so')
+# bare libzip.so: pacman 7.1 auto-derives libzip.so=4-64 (soname libzip.so.4
+# on the 1.11.x line)
+conflicts=('libzip')
+source=('git+https://github.com/nih-at/libzip.git')
+b2sums=('SKIP')
+
+pkgver() {
+  cd libzip
+  git describe --long --tags | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g'
+}
+
+build() {
+  cd libzip
+
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  # CMAKE_BUILD_TYPE=None: stock convention — uses makepkg CFLAGS, adds no -O3
+  cmake -B build -S . \
+    -D CMAKE_BUILD_TYPE=None \
+    -D CMAKE_INSTALL_PREFIX=/usr \
+    -D CMAKE_INSTALL_LIBDIR=lib \
+    -Wno-dev
+  cmake --build build --parallel "${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package() {
+  cd libzip
+  DESTDIR="$pkgdir" cmake --install build
+  install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname/"
+}

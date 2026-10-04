@@ -1,0 +1,113 @@
+# Maintainer: Fabian Bornschein <fabiscafe@archlinux.org>
+# Maintainer: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
+# Contributor: Ignacy Kuchciński (ignapk) <ignacykuchcinski@gmail.com>
+# Contributor: Simon Gardling <titaniumtown@gmail.com>
+# Contributor: Sergej Pupykin <pupykin.s+mail.ru>
+# Contributor: Geoffroy Carrier <geoffroy.carrier@aur.archlinux.org>
+# Contributor: Eric Belanger <belanger@astro.umontreal.ca>
+#
+# git build adapted from AUR sysprof-git (reference only) + stock Arch sysprof
+# pkgbase: tracks upstream master directly (the AUR reference is stale at
+# 3.40.0/gtk3+libdazzle; master is gtk4+libadwaita and needs libpanel).
+# Split mirrors stock: sysprof + libsysprof-capture outputs.
+
+pkgbase=sysprof-git
+pkgname=(
+  sysprof-git
+  libsysprof-capture-git
+)
+pkgver=3.40.0+1+g7353f8d
+pkgrel=1
+pkgdesc="Kernel based performance profiler (git build)"
+url="https://apps.gnome.org/Sysprof/"
+license=('GPL-3.0-or-later')
+arch=('x86_64')
+depends=(
+  cairo
+  glib2
+  glibc
+  graphene
+  gtk4
+  hicolor-icon-theme
+  json-glib
+  libadwaita
+  libdex
+  libelf
+  libgcc
+  libpanel
+  libstdc++
+  libunwind
+  pango
+  polkit
+  systemd-libs
+)
+makedepends=(
+  git
+  glib2-devel
+  meson
+  yelp-tools
+)
+source=("git+https://gitlab.gnome.org/GNOME/sysprof.git")
+b2sums=('SKIP')
+
+pkgver() {
+  cd sysprof
+  git describe --long --tags | sed 's/^sysprof-//;s/\([^-]*-g\)/r\1/;s/-/./g'
+}
+
+build() {
+  # Ensure static library is non-LTO compatible (stock rule)
+  CFLAGS+=" -ffat-lto-objects"
+
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  arch-meson sysprof build
+  meson compile -C build
+}
+
+_pick() {
+  local p="$1" f d; shift
+  for f; do
+    # tolerate file-surface drift on master
+    [[ -e "$f" ]] || continue
+    d="$srcdir/$p/${f#$pkgdir/}"
+    mkdir -p "$(dirname "$d")"
+    mv "$f" "$d"
+    rmdir -p --ignore-fail-on-non-empty "$(dirname "$f")" 2>/dev/null || true
+  done
+}
+
+package_sysprof-git() {
+  depends+=("libsysprof-capture-git=$pkgver-$pkgrel")
+  provides=("sysprof=$pkgver")
+  conflicts=('sysprof')
+  groups=('gnome-extra')
+
+  meson install -C build --no-rebuild --destdir "$pkgdir"
+
+  cd "$pkgdir"
+
+  # stock split list: everything capture-related moves to the sibling output
+  _pick capture usr/lib/libsysprof-capture-*
+  _pick capture usr/lib/pkgconfig/sysprof-capture-*
+  _pick capture usr/include/sysprof-*/sysprof-{address,capture,clock,collector,macros}.h
+  _pick capture usr/include/sysprof-*/sysprof-{platform,version,version-macros}.h
+  _pick capture usr/include/sysprof-*/sysprof-capture-{condition,cursor,reader,types,writer}.h
+
+  install -Dm644 "$srcdir/sysprof/COPYING" "$pkgdir/usr/share/licenses/$pkgname/COPYING"
+}
+
+package_libsysprof-capture-git() {
+  pkgdesc="$pkgdesc - capture library (git build)"
+  depends=()
+  provides=("libsysprof-capture=$pkgver")
+  conflicts=('libsysprof-capture')
+  license=('BSD-2-Clause-Patent')
+
+  mv capture/* "$pkgdir"
+
+  install -Dt "$pkgdir/usr/share/licenses/$pkgname" -m644 \
+    sysprof/src/libsysprof-capture/COPYING
+}

@@ -1,0 +1,23 @@
+pkgbase = libkdcraw-git
+	pkgdesc = A C++ interface used to decode RAW picture (git build)
+	pkgver = 26.08.1.r0.g3afdbfc37b
+	pkgrel = 1
+	url = https://invent.kde.org/graphics/libkdcraw
+	arch = x86_64
+	license = GPL-2.0-or-later
+	license = BSD-3-Clause
+	makedepends = cmake
+	makedepends = extra-cmake-modules
+	makedepends = git
+	depends = glibc
+	depends = libgcc
+	depends = libraw
+	depends = libstdc++
+	depends = qt6-base
+	provides = libkdcraw=26.08.1.r0.g3afdbfc37b
+	provides = libKDcrawQt6.so
+	conflicts = libkdcraw
+	source = git+https://invent.kde.org/graphics/libkdcraw.git
+	b2sums = SKIP
+
+pkgname = libkdcraw-git

@@ -1,0 +1,36 @@
+# Maintainer: Andreas Radke <andyrtr@archlinux.org>
+# Controbutor: Jan de Groot <jgc@archlinux.org>
+
+pkgname=xcb-util-wm
+pkgver=0.4.2
+pkgrel=2
+pkgdesc="Utility libraries for XC Binding - client and window-manager helpers for ICCCM"
+arch=('x86_64')
+url="https://xcb.freedesktop.org"
+license=('X11-distribute-modifications-variant')
+depends=('libxcb' 'glibc')
+makedepends=('xorg-util-macros' 'xorgproto')
+provides=(libxcb-icccm.so libxcb-ewmh.so)
+source=(https://xorg.freedesktop.org/archive/individual/lib/${pkgname}-${pkgver}.tar.xz{,.sig})
+sha512sums=('eab6588e6a47d28a3b25ecd13b5018529419db6b49c74458c093699b60a194933be1e1f6f7799abf03344f7ebc7af88586ff2935938d53644bdd5c763a7fa9b0'
+            'SKIP')
+validpgpkeys=('4A193C06D35E7C670FA4EF0BA2FB9E081F2D130E') # Alan Coopersmith <alan.coopersmith@oracle.com>
+
+build() {
+  cd ${pkgname}-${pkgver}
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  ./configure --prefix=/usr --disable-static
+  make -j"${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+# trim: check() test suite (make check) — Class B trim standard (tests)
+
+package() { 
+  cd ${pkgname}-${pkgver}
+  make DESTDIR="${pkgdir}" install
+  install -Dm644 COPYING "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

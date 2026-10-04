@@ -1,0 +1,47 @@
+pkgbase = sqlite
+	pkgdesc = A C library that implements an SQL database engine
+	pkgver = 3.53.4
+	pkgrel = 1
+	url = https://www.sqlite.org/
+	arch = x86_64
+	license = LicenseRef-Sqlite
+	makedepends = tcl
+	makedepends = readline
+	makedepends = zlib
+	options = !emptydirs
+	source = https://www.sqlite.org/2026/sqlite-src-3530400.zip
+	source = https://www.sqlite.org/2026/sqlite-doc-3530400.zip
+	source = sqlite-lemon-system-template.patch
+	source = license.txt
+	sha256sums = d18fa15aec74d8c17e1463f861095adc01b5ad190256acb4f91d22f0368d232b
+	sha256sums = a1d0f5de57485d062796ed7e67daff0758b50d00001a0f233a2c15aaf40bbdc8
+	sha256sums = ce0083835e458236c83d4f74ad398816e29859cd2f940c7aad9080835b50dcec
+	sha256sums = 4e57d9ac979f1c9872e69799c2597eeef4c6ce7224f3ede0bf9dc8d217b1e65d
+
+pkgname = sqlite
+	pkgdesc = A C library that implements an SQL database engine
+	depends = readline
+	depends = zlib
+	depends = glibc
+	provides = sqlite3=3.53.4
+	provides = libsqlite3.so
+	replaces = sqlite3
+
+pkgname = sqlite-tcl
+	pkgdesc = sqlite Tcl Extension Architecture (TEA)
+	depends = sqlite
+	depends = tcl
+	depends = zlib
+	depends = glibc
+	provides = sqlite3-tcl=3.53.4
+	replaces = sqlite3-tcl
+
+pkgname = sqlite-analyzer
+	pkgdesc = An analysis program for sqlite3 database files
+	depends = sqlite
+	depends = tcl
+	depends = glibc
+
+pkgname = lemon
+	pkgdesc = A parser generator
+	depends = glibc

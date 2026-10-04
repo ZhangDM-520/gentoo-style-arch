@@ -1,0 +1,56 @@
+# Maintainer: Felix Yan <felixonmars@archlinux.org>
+# Maintainer: Antonio Rojas <arojas@archlinux.org>
+# Contributor: Andrea Scarpino <andrea@archlinux.org>
+
+pkgname=kwindowsystem
+pkgver=6.30.0
+pkgrel=1
+pkgdesc='Access to the windowing system'
+arch=(x86_64)
+url='https://develop.kde.org/products/frameworks/'
+license=(LGPL-2.0-only LGPL-3.0-only)
+depends=(glibc
+         libstdc++
+         libx11
+         libxcb
+         libxfixes
+         qt6-base
+         wayland
+         xcb-util-keysyms)
+makedepends=(doxygen
+             extra-cmake-modules
+             plasma-wayland-protocols
+             qt6-declarative
+             qt6-tools
+             wayland-protocols)
+optdepends=('qt6-declarative: QML bindings')
+groups=(kf6)
+provides=(libKF6WindowSystem.so)
+source=(https://download.kde.org/stable/frameworks/${pkgver%.*}/$pkgname-$pkgver.tar.xz{,.sig})
+sha256sums=('639a501b877446b19905399d27e2be2b6ebb0bb481abe3209dc4d535a12e12ca'
+            'SKIP')
+validpgpkeys=(53E6B47B45CEA3E0D5B7457758D0EE648A48B3BB # David Faure <faure@kde.org>
+              90A968ACA84537CC27B99EAF2C8DF587A6D4AAC1 # Nicolas Fella <nicolas.fella@kde.org>
+              )
+
+build() {
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  cmake -B build -S $pkgname-$pkgver \
+    -DBUILD_TESTING=OFF
+  cmake --build build --parallel "${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package() {
+  DESTDIR="$pkgdir" cmake --install build
+
+  # trim: locales — Class B trim standard (locale payload); makedepends left
+  # stock (doxygen/qt6-tools feed the stock build, unverified at build time)
+  rm -rf "$pkgdir"/usr/share/locale "$pkgdir"/usr/share/doc
+
+  # license: ship upstream licence texts (LGPL-2.0-only LGPL-3.0-only)
+  install -Dm644 $pkgname-$pkgver/LICENSES/* -t "$pkgdir"/usr/share/licenses/$pkgname/
+}

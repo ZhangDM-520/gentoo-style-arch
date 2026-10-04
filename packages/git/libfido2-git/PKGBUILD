@@ -1,0 +1,39 @@
+# Maintainer: auto-generated
+# AUR reference: libfido2-git (Maintainer: Karol Babioch <karol@babioch.de>)
+pkgname=libfido2-git
+_pkgname=libfido2
+pkgver=1.17.0.r108.daeb325
+pkgrel=1
+pkgdesc="Library functionality for FIDO 2.0, including communication with a device over USB (git build)"
+arch=('x86_64')
+url="https://developers.yubico.com/libfido2/"
+license=('BSD-2-Clause')
+depends=('gcc-libs' 'glibc' 'openssl' 'libcbor' 'hidapi' 'systemd-libs' 'zlib')
+makedepends=('git' 'cmake')
+provides=("libfido2=$pkgver" 'libfido2.so')
+conflicts=('libfido2')
+source=("git+https://github.com/Yubico/libfido2.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$_pkgname"
+  git describe --long --tags | sed 's/\([^-]*-g\)/r\1/;s/-/./g;s/^v//g'
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  # CMAKE_BUILD_TYPE=None: makepkg.conf owns the opt level (no hard-coded -O3)
+  cmake -B build -S "$_pkgname" \
+    -DCMAKE_BUILD_TYPE=None \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DCMAKE_INSTALL_LIBDIR=lib
+  cmake --build build
+}
+
+package() {
+  DESTDIR="$pkgdir" cmake --install build
+  install -Dm644 "$_pkgname/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

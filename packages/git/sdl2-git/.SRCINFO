@@ -1,0 +1,44 @@
+pkgbase = sdl2-git
+	pkgdesc = A library for portable low-level access to a video framebuffer, audio output, mouse, and keyboard (Version 2) (git build)
+	pkgver = 2.32.0.r259.g4c2d9014a
+	pkgrel = 1
+	url = https://www.libsdl.org
+	arch = x86_64
+	license = Zlib
+	makedepends = alsa-lib
+	makedepends = dbus
+	makedepends = mesa
+	makedepends = libpulse
+	makedepends = libxrandr
+	makedepends = libxinerama
+	makedepends = wayland
+	makedepends = libxkbcommon
+	makedepends = wayland-protocols
+	makedepends = ibus
+	makedepends = libxss
+	makedepends = cmake
+	makedepends = jack
+	makedepends = ninja
+	makedepends = pipewire
+	makedepends = libdecor
+	makedepends = vulkan-driver
+	makedepends = vulkan-headers
+	makedepends = libsamplerate
+	makedepends = git
+	depends = glibc
+	depends = libxext
+	depends = libxrender
+	depends = libx11
+	depends = libgl
+	depends = libxcursor
+	depends = hidapi
+	depends = libusb
+	provides = sdl2=2.32.0.r259.g4c2d9014a
+	provides = libSDL2-2.0.so
+	provides = libSDL2.so
+	conflicts = sdl2
+	conflicts = sdl2-compat
+	source = SDL::git+https://github.com/libsdl-org/SDL.git#branch=SDL2
+	b2sums = SKIP
+
+pkgname = sdl2-git

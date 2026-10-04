@@ -1,0 +1,43 @@
+# Maintainer: AndyRTR <andyrtr@archlinux.org>
+# Contributor: Thomas Arnhold <thomas at arnhold dot org>
+
+pkgname=libmwaw
+pkgver=0.3.23
+pkgrel=1
+pkgdesc="Import library for some old mac text documents."
+arch=('x86_64')
+url="https://sourceforge.net/projects/libmwaw/"
+license=('LGPL-2.1-or-later OR MPL-2.0')
+depends=('librevenge' 'zlib' 'glibc' 'libstdc++' 'libgcc')
+provides=('libmwaw-0.3.so')
+# trim: doxygen (with the libmwaw-docs split below) — doxygen API HTML docs are not shipped
+makedepends=('librevenge')
+source=(https://sourceforge.net/projects/${pkgname}/files/${pkgname}/${pkgname}-${pkgver}/${pkgname}-${pkgver}.tar.xz)
+sha1sums=('5ce890660dbca08746f4701d21a5a7f0138a6756')
+sha256sums=('ac3590f691a2904eb8c7dc8b757b8a29f125f592449e421459ae8fa928b399eb')
+
+prepare() {
+  cd "$pkgname-$pkgver"
+  autoreconf -vfi
+}
+
+build() {
+  cd "${pkgname}"-${pkgver}
+  ./configure --prefix=/usr
+  make
+}
+
+check() {
+  cd "${pkgname}"-${pkgver}
+  make check
+}
+
+package() {
+
+  cd "${pkgname}"-${pkgver}
+  make DESTDIR="$pkgdir" install
+  # trim: doxygen API HTML docs (the libmwaw-docs split is dropped together
+  # with its doxygen makedepends and the ../docs split-move machinery)
+  rm -rf "$pkgdir"/usr/share/doc
+  install -Dm644 COPYING.LGPL COPYING.MPL -t "$pkgdir"/usr/share/licenses/$pkgname/
+}

@@ -1,0 +1,56 @@
+# Maintainer: Antonio Rojas <arojas@archlinux.org>
+# Maintainer: Bruno Pagani <archange@archlinux.org>
+
+# trim: the kvantum (Qt6) split and its Qt6 build tree (build6) are dropped
+# together with the kwindowsystem/qt6-svg/qt6-tools makedeps and its
+# build6 install path — this single-output recipe packages only kvantum-qt5
+pkgname=kvantum-qt5
+pkgver=1.1.8
+pkgrel=1
+pkgdesc='SVG-based theme engine for Qt5'
+arch=(x86_64)
+url='https://github.com/tsujan/Kvantum'
+license=(GPL-3.0-or-later)
+depends=(glibc
+         libgcc
+         libstdc++
+         libx11
+         kvantum
+         qt5-base
+         qt5-svg
+         qt5-x11extras)
+makedepends=(cmake
+             git
+             qt5-svg
+             qt5-tools
+             qt5-x11extras)
+provides=(libkvantum.so)
+source=(git+https://github.com/tsujan/Kvantum#tag=V$pkgver?signed)
+sha256sums=('c407e9fb1e9e985b3af78d7535445da31f03473387b1c45b4c810883b8c27ec6')
+validpgpkeys=(19DFDF3A579BD509DBB572D8BE793007AD22DF7E) # Pedram Pourang <tsujan2000@gmail.com>
+
+build() {
+  # House style: mold linker when available (CMake reads LDFLAGS at cache init)
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  cmake -B build5 -S Kvantum/Kvantum \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DENABLE_QT5=ON
+  make -C build5 -j"${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package() {
+  DESTDIR="$pkgdir" cmake --install build5/style
+
+  # license: ship the upstream GPL-3.0-or-later text
+  local _lic
+  for _lic in LICENSE LICENSES COPYING; do
+    if [[ -f Kvantum/$_lic ]]; then
+      install -Dm644 "Kvantum/$_lic" -t "$pkgdir/usr/share/licenses/$pkgname/"
+    elif [[ -d Kvantum/$_lic ]]; then
+      cp -a "Kvantum/$_lic" "$pkgdir/usr/share/licenses/$pkgname/"
+    fi
+  done
+}

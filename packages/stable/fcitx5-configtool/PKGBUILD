@@ -1,0 +1,58 @@
+# Maintainer: Felix Yan <felixonmars@archlinux.org>
+# Contributor: csslayer <wengxt AT gmail com>
+
+pkgname=fcitx5-configtool
+pkgver=5.1.16
+pkgrel=2
+pkgdesc="Configuration Tool for Fcitx5"
+arch=('x86_64')
+url="https://github.com/fcitx/fcitx5-configtool"
+license=('GPL-2.0-or-later' 'LGPL-2.1-or-later')
+groups=('fcitx5-im')
+provides=('fcitx5-config-qt' 'kcm-fcitx5' 'libFcitx5Migrator.so')
+# trim: stock conflicts=(kcm-fcitx5) + replaces=(kcm-fcitx5) dropped — house
+# rule (no conflicts/replaces); the kcm-fcitx5 name stays a provides entry
+depends=('fcitx5' 'fcitx5-qt' 'kdbusaddons' 'kwidgetsaddons' 'kitemviews' 'kwindowsystem')
+optdepends=('kcmutils: for KCM support'
+            'kdeclarative: for KCM support'
+            'kirigami: for KCM support'
+            'ksvg: for KCM support'
+            'libplasma: for fcitx5-plasma-theme-generator')
+makedepends=('git' 'extra-cmake-modules' 'kcmutils' 'kdeclarative' 'kirigami' 'ksvg' 'libplasma'
+             'ninja' 'python')
+source=("git+https://github.com/fcitx/fcitx5-configtool.git#tag=$pkgver?signed")
+sha512sums=('6592fb43ab2483c0275c2f90d3ddeea109394f279e3f8136e75f5fc598152be17a0ef5a752efb0442b4ee1c158a71d9bd59f8e69dfa67427a7288eac3530ea8f')
+validpgpkeys=('2CC8A0609AD2A479C65B6D5C8E8B898CBF2412F9') # Weng Xuetian <wengxt@gmail.com>
+
+prepare() {
+  mkdir -p build
+}
+
+build() {
+  cd build
+
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  cmake \
+    -GNinja \
+    -DCMAKE_BUILD_TYPE=None \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DCMAKE_INSTALL_LIBDIR=/usr/lib \
+    -DKDE_INSTALL_USE_QT_SYS_PATHS=ON \
+    ../$pkgname
+  ninja -j"${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package() {
+  cd build
+  DESTDIR="$pkgdir" ninja install
+
+  # trim: locales and doc payload — Class B trim standard (locale/docs)
+  rm -rf "$pkgdir"/usr/share/locale "$pkgdir"/usr/share/doc
+
+  # license: ship upstream licence texts (GPL-2.0-or-later / LGPL-2.1-or-later)
+  install -Dm644 "$srcdir"/$pkgname/LICENSES/* -t "$pkgdir"/usr/share/licenses/$pkgname/
+}

@@ -1,0 +1,85 @@
+# Maintainer: a821 at (nospam) mail de
+# Contributor: Brian Bidulock <bidulock@openss7.org>
+# Contributor: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
+# Contributor: Jan de Groot <jgc@archlinux.org>
+# Contributor: Fabian Bornschein <fabiscafe@archlinux.org>
+#
+# git build adapted from AUR librsvg-git (reference only) + stock Arch librsvg:
+# tracks upstream master directly (stock pins release tags). The stock
+# librsvg-docs split is NOT superseded — docs are trimmed here (-D docs=false,
+# gi-docgen dropped).
+# NOTE cargo/rustc: needs rust-git edge.
+
+pkgname=librsvg-git
+pkgver=2.62.0.r14.gcd744e2c8
+pkgrel=1
+epoch=2
+pkgdesc="SVG rendering library (git build)"
+url="https://gitlab.gnome.org/GNOME/librsvg"
+arch=('x86_64')
+license=('LGPL-2.1-or-later')
+depends=(
+  cairo
+  dav1d
+  fontconfig
+  freetype2
+  gdk-pixbuf2
+  glib2
+  glibc
+  harfbuzz
+  libgcc
+  libxml2
+  pango
+)
+makedepends=(
+  cargo-c
+  git
+  gobject-introspection
+  llvm
+  meson
+  python-docutils
+  rust
+  vala
+)
+provides=("librsvg=$pkgver" 'librsvg-2.so')
+conflicts=('librsvg')
+source=("git+https://gitlab.gnome.org/GNOME/librsvg.git")
+b2sums=('SKIP')
+
+# Use debug
+export CARGO_PROFILE_RELEASE_DEBUG=2 CARGO_PROFILE_RELEASE_STRIP=false
+
+# Use LTO
+export CARGO_PROFILE_RELEASE_LTO=true CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
+
+pkgver() {
+  cd librsvg
+  git describe --tags | sed -r 's,^[^0-9]*,,;s,([0-9]*-g),r\1,;s,[-_],.,g'
+}
+
+prepare() {
+  cd librsvg
+  cargo fetch --locked --target host-tuple
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  local meson_options=(
+    -D avif=enabled
+    -D pixbuf-loader=disabled
+    # stock splits the API reference into librsvg-docs; house trims docs
+    -D docs=false
+  )
+
+  arch-meson librsvg build "${meson_options[@]}"
+  meson compile -C build
+}
+
+package() {
+  meson install -C build --destdir "$pkgdir" --no-rebuild
+
+  install -Dm644 librsvg/COPYING.LIB "$pkgdir/usr/share/licenses/$pkgname/COPYING.LIB"
+}

@@ -1,0 +1,20 @@
+pkgbase = libmythes
+	pkgdesc = a simple thesaurus
+	pkgver = 1.2.6
+	pkgrel = 1
+	epoch = 1
+	url = https://github.com/hunspell/mythes
+	arch = x86_64
+	license = BSD-3-Clause-Modification
+	license = MIT
+	makedepends = hunspell
+	depends = glibc
+	depends = libstdc++
+	depends = libgcc
+	depends = perl
+	provides = mythes
+	provides = libmythes-1.2.so
+	source = https://github.com/hunspell/mythes/releases/download/v1.2.6/mythes-1.2.6.tar.xz
+	sha256sums = 97bd2ba5738aebdba1bc31f30f1be42f1404386c94105ad5990d839a1311c8a5
+
+pkgname = libmythes

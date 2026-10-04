@@ -1,0 +1,45 @@
+# Maintainer: Caleb Maclennan <caleb@alerque.com>
+# Contributor: Sergej Pupykin <pupykin.s+arch@gmail.com>
+# Contributor: Christoph Drexler <chrdr at gmx dot at>
+
+pkgname=leptonica
+pkgver=1.87.0
+pkgrel=2
+pkgdesc='Software that is broadly useful for image processing and image analysis applications'
+arch=(x86_64)
+url='http://www.leptonica.com'
+_url="https://github.com/DanBloomberg/$pkgname"
+license=(custom)
+depends=(giflib libgif.so
+         libjpeg-turbo libjpeg.so
+         libpng libpng16.so
+         libtiff libtiff.so
+         libtiff libtiff.so
+         libwebp libwebp.so libwebpmux.so
+         openjpeg2 # libopenjp2.so
+         zlib libz.so)
+provides=(libleptonica.so)
+_archive="$pkgname-$pkgver"
+source=("$_url/archive/$pkgver/$_archive.tar.gz")
+sha256sums=('fa2b40c5caea96d1bb93a97486262aed8731b69ce25a84a6bf5d25323e33f631')
+
+prepare() {
+  cd "$_archive"
+  ./autogen.sh
+}
+
+build() {
+  cd "$_archive"
+  # House style: mold linker when available
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+  ./configure --prefix=/usr
+  make -j"${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package() {
+  cd "$_archive"
+  make DESTDIR="$pkgdir" install
+  install -Dm0644 -t "$pkgdir/usr/share/licenses/leptonica/" leptonica-license.txt
+}

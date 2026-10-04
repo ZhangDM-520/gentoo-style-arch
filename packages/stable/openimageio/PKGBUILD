@@ -1,0 +1,55 @@
+# Maintainer: Sven-Hendrik Haase <svenstaro@archlinux.org>
+# Contributor: SpepS <dreamspepser at yahoo dot it>
+
+pkgname=openimageio
+pkgver=3.1.12.1
+pkgrel=7
+pkgdesc="A library for reading and writing images, including classes, utilities, and applications"
+arch=('x86_64')
+url="http://www.openimageio.org/"
+license=('Apache-2.0')
+depends=('openexr' 'openjph' 'giflib' 'openjpeg2' 'libtiff' 'libjpeg-turbo'
+         'opencolorio' 'libpng' 'libraw' 'libwebp' 'pugixml'
+         'libheif' 'freetype2' 'libstdc++' 'glibc' 'zlib' 'libgcc') # TODO: Consider adding these deps: 'openvdb' 'ffmpeg' 'ptex' 'opencv'
+makedepends=('cmake' 'qt5-base' 'python' 'boost' 'mesa' 'fontconfig' 'libxrender' 'ninja' 'robin-map' 'fmt' 'pybind11')
+optdepends=('qt5-base: iv image viewer'
+            'python: bindings support')
+source=("$pkgname-$pkgver.tar.gz::https://github.com/OpenImageIO/oiio/archive/refs/tags/v$pkgver.tar.gz")
+sha512sums=('f5234850aa086217be74947d3138186ecc69cc2a6cc7cda1a4c560a8584c90016bff453f17c061653c2c380d952f6938ffae12cd5c797466438a1411e865449c')
+
+build() {
+  cd OpenImageIO-$pkgver
+
+  # House style: mold linker when available (CMake reads LDFLAGS at cache init)
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  local python_version=$(python -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
+  cmake \
+    -Bbuild \
+    -GNinja \
+    -DUSE_PYTHON=ON \
+    -DPYTHON_VERSION=$python_version \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DCMAKE_INSTALL_LIBDIR=lib \
+    -DOIIO_BUILD_TESTS=ON \
+    -DOIIO_BUILD_TOOLS=ON \
+    -DOIIO_INTERNALIZE_FMT=OFF \
+    -DUSE_EXTERNAL_PUGIXML=ON \
+    -DSTOP_ON_WARNING=OFF
+  ninja -j"${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}" -C build
+}
+
+package() {
+  cd OpenImageIO-$pkgver
+
+  provides+=(libOpenImageIO.so libOpenImageIO_Util.so)
+
+  DESTDIR="$pkgdir" ninja -C build install
+
+  # Remove vendored fonts
+  rm -r "$pkgdir"/usr/share/fonts
+
+  install -Dm644 LICENSE.md "$pkgdir/usr/share/licenses/$pkgname/LICENSE".md
+}

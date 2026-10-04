@@ -1,0 +1,69 @@
+# Maintainer: Levente Polyak <anthraxx[at]archlinux[dot]org>
+# Maintainer: Caleb Maclennan <caleb@alerque.com>
+# Contributor: tobias <tobias@arhlinux.org>
+
+pkgname=exiv2
+pkgver=0.28.9
+pkgrel=1
+pkgdesc="Exif, Iptc and XMP metadata manipulation library and tools"
+url="https://exiv2.org"
+arch=('x86_64')
+license=('GPL-2.0-or-later')
+depends=(brotli libbrotlidec.so
+         curl
+         expat libexpat.so
+         gettext
+         glibc # libc.so libm.so
+         libcurl.so
+         libgcc # libgcc_s.so
+         libinih libINIReader.so
+         libstdc++ # libstdc++.so
+         zlib libz.so)
+makedepends=('git' 'cmake' 'ninja')
+# trim: gtest makedep + python checkdepends dropped with the unit test suite
+# below — Class B trim standard (tests)
+provides=('libexiv2.so')
+source=(git+https://github.com/Exiv2/exiv2#tag=v$pkgver)
+sha512sums=('2e7a421382f62c70870bcf675f705dd910529aadbdbcbe406b6497135744000aab4374a78f9ac271d2bd1d8be03fce905c578ed7e37dfc0cdf3a3be8d35e57b6')
+b2sums=('419175977f3f6ad397f415a517bbfd0de877fb85b48f6ca9ad1a812759f9d567d55a7c843cf14837b94d58ab98f841ab33706c7f2a17a3724ce76888ca322e7a')
+
+build() {
+  cd ${pkgname}
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  # trim: sample programs and the unit test suite (the stock recipe built
+  # samples only to run the tests) — Class B trim standard (tests/demos)
+  cmake -B build \
+    -GNinja \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DCMAKE_SKIP_RPATH=ON \
+    -DEXIV2_BUILD_SAMPLES=OFF \
+    -DEXIV2_BUILD_UNIT_TESTS=OFF \
+    -DEXIV2_ENABLE_VIDEO=ON \
+    -DEXIV2_ENABLE_NLS=ON \
+    -DEXIV2_ENABLE_XMP=ON \
+    -DEXIV2_ENABLE_CURL=ON \
+    -DEXIV2_ENABLE_WEBREADY=ON \
+    -DEXIV2_ENABLE_BMFF=ON
+  ninja -j"${GSA_BUILD_JOBS:-$(nproc)}" -C build
+}
+
+# trim: check() (ninja test, needs the dropped unit tests) — Class B trim
+# standard (tests)
+
+package() {
+  cd ${pkgname}
+  DESTDIR="${pkgdir}" ninja -C build install
+
+  # trim: man pages, locales and doc payload — Class B trim standard
+  # (man/locale/docs)
+  rm -rf "$pkgdir"/usr/share/man "$pkgdir"/usr/share/locale "$pkgdir"/usr/share/doc
+
+  # license: ship upstream licence texts (GPL-2.0-or-later)
+  install -Dm644 COPYING LICENSE.txt -t "$pkgdir"/usr/share/licenses/$pkgname/
+}
+
+# vim: ts=2 sw=2 et:

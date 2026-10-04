@@ -1,0 +1,70 @@
+# Maintainer: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
+# Contributor: Jan de Groot <jgc@archlinux.org>
+
+pkgname=gnome-autoar
+pkgver=0.5.2
+pkgrel=1
+pkgdesc="Automatic archives creating and extracting library"
+url="https://gnome.pages.gitlab.gnome.org/gnome-autoar/"
+arch=(x86_64)
+license=(LGPL-2.1-or-later)
+depends=(
+  glib2
+  glibc
+  libarchive
+  libgcc
+)
+makedepends=(
+  git
+  glib2-devel
+  gobject-introspection
+  meson
+  vala
+)
+# trim: gnome-autoar-docs split + gi-docgen makedep dropped together with
+#       -D docs=false below and the doc staging move in package() (docs)
+# trim: test suite (-D tests=false + check()/meson test) dropped (Class B tests)
+# House standard: bare soname provide per ELF output (never pinned) — stock kept.
+provides=(libgnome-autoar-${pkgver%%.*}.so)
+source=("git+https://gitlab.gnome.org/GNOME/gnome-autoar.git#tag=$pkgver")
+b2sums=('4c6565f97469b770f76b205b6482031f724ccbc0c7ed60f2e83571640ce8116190af47060043f1ce43d80930dc3a1c8b61d4503cdb94bfc6ec05218b016b3b61')
+
+prepare() {
+  cd $pkgname
+}
+
+build() {
+  local meson_options=(
+    # trim: gi-docgen API reference (docs) for the dropped gnome-autoar-docs
+    #       split
+    -D docs=false
+    # trim: test suite (Class B tests)
+    -D tests=false
+    -D vapi=true
+  )
+
+  # House style: mold linker when available
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  arch-meson $pkgname build "${meson_options[@]}"
+  meson compile -C build -j "${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package() {
+  meson install -C build --destdir "$pkgdir"
+
+  # trim: locale/doc payload for the dropped gnome-autoar-docs split
+  #       (locales/docs)
+  rm -rf "$pkgdir/usr/share/doc" "$pkgdir/usr/share/locale"
+
+  # license: ship the upstream licence text(s) (LGPL-2.1-or-later)
+  cd $pkgname
+  local _l
+  for _l in COPYING COPYING.LGPL LICENSE; do
+    [[ -f $_l ]] && install -Dm644 "$_l" -t "$pkgdir/usr/share/licenses/$pkgname/"
+  done
+}
+
+# vim:set sw=2 sts=-1 et:

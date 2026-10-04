@@ -1,0 +1,36 @@
+# Maintainer: Andreas Radke <andyrtr@archlinux.org>
+# Contributor: Jan de Groot <jgc@archlinux.org>
+
+pkgname=xcb-util-renderutil
+pkgver=0.3.10
+pkgrel=2
+pkgdesc="Utility libraries for XC Binding - Convenience functions for the Render extension"
+arch=('x86_64')
+url="https://xcb.freedesktop.org"
+license=('X11-distribute-modifications-variant' 'HPND-sell-variant')
+depends=('libxcb' 'glibc')
+makedepends=('xorg-util-macros' 'xorgproto')
+provides=(libxcb-render-util.so)
+source=(https://xorg.freedesktop.org/archive/individual/lib/${pkgname}-${pkgver}.tar.xz{,.sig})
+sha512sums=('9cfa9201be2df7c0b832e1e1fe506e7c7a1e0f2b1b1d4a4b58620eadc241190a36478fa3ea27c32047fa79bf199f17dcd0b106853dbf5eda8cd584f3fc2b0c15'
+            'SKIP')
+validpgpkeys=('4A193C06D35E7C670FA4EF0BA2FB9E081F2D130E') # Alan Coopersmith <alan.coopersmith@oracle.com>
+
+build() {
+  cd ${pkgname}-${pkgver}
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  ./configure --prefix=/usr --disable-static
+  make -j"${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+# trim: check() test suite (make check) — Class B trim standard (tests)
+
+package() { 
+  cd ${pkgname}-${pkgver}
+  make DESTDIR="${pkgdir}" install
+  install -Dm644 COPYING "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

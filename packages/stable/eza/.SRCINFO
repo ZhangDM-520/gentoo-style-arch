@@ -1,0 +1,19 @@
+pkgbase = eza
+	pkgdesc = A modern replacement for ls (community fork of exa)
+	pkgver = 0.23.5
+	pkgrel = 2
+	url = https://github.com/eza-community/eza
+	arch = x86_64
+	license = EUPL-1.2
+	makedepends = cargo
+	depends = glibc
+	depends = libgcc
+	depends = libgcc_s.so
+	depends = libgit2
+	depends = libgit2.so
+	provides = exa
+	source = https://github.com/eza-community/eza/archive/refs/tags/v0.23.5/eza-0.23.5.tar.gz
+	sha256sums = bbf179f2611c904014431740b559e8055276c12fcf978a7e31c271663548337f
+	b2sums = dd5c8d231210000db2a9bbe3d4063eb1b6a00fd3336c8424861664250dd2948a4d3b1f3d2fd0a4966b0ef68151c26bf8e3236f1a64142c9ab960cf20e62cb2e3
+
+pkgname = eza

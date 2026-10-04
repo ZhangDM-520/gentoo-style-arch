@@ -1,0 +1,30 @@
+pkgbase = ncurses-git
+	pkgdesc = System V Release 4.0 curses emulation library (git build)
+	pkgver = 6.6.20260926.r0.g41553966
+	pkgrel = 1
+	url = https://invisible-island.net/ncurses/ncurses.html
+	arch = x86_64
+	license = MIT-open-group
+	makedepends = git
+	depends = glibc
+	depends = libgcc
+	depends = libstdc++
+	optdepends = bash: for ncursesw6-config
+	provides = ncurses=6.6.20260926.r0.g41553966
+	provides = libncurses++w.so
+	provides = libformw.so
+	provides = libmenuw.so
+	provides = libpanelw.so
+	provides = libncursesw.so
+	conflicts = ncurses
+	replaces = alacritty-terminfo
+	replaces = rio-terminfo
+	replaces = wezterm-terminfo
+	source = ncurses::git+https://github.com/ThomasDickey/ncurses-snapshots.git
+	source = ncurses-6.6-libs.patch
+	source = ncurses-6.6-pkgconfig.patch
+	b2sums = SKIP
+	b2sums = 29f2c29e229687b8539be5147ce35f08b8a8eeead880a8a34189b3a02400fd752ee96314eed3e175503281dc05bf3668f26edeca4540668592d46d4cddc9aef4
+	b2sums = d8c079262332253c758f1c42ff642db0b14a86695dcaa735a73615ab594f65e0d1de3e31732ff7c413078b43f8e71e86b6ce41236e54e049ecf65d8cf7587e0a
+
+pkgname = ncurses-git

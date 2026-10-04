@@ -1,0 +1,59 @@
+# Maintainer: Chocobo1 <chocobo1 AT archlinux DOT net>
+# Class A git recipe: tracks upstream libmicrohttpd git directly (HEAD).
+# AUR libmicrohttpd-git and stock libmicrohttpd are REFERENCES ONLY.
+# ANOMALY: upstream publishes only the git:// transport (git.gnunet.org
+# https git hangs; no other upstream-published transport) — kept as-is.
+
+pkgname=libmicrohttpd-git
+pkgver=1.0.10.r0.g7922bbd7a9
+pkgrel=1
+pkgdesc="A small C library that makes it easy to run an HTTP server as part of another application (git build)"
+arch=('x86_64')
+url="https://www.gnu.org/software/libmicrohttpd/"
+license=('LGPL-2.1-or-later')
+depends=('glibc' 'gnutls')
+makedepends=('git')
+checkdepends=('curl')
+# soname shipped: libmicrohttpd.so.12
+provides=("libmicrohttpd=$pkgver" 'libmicrohttpd.so')
+conflicts=('libmicrohttpd')
+source=("git://git.gnunet.org/libmicrohttpd.git")
+b2sums=('SKIP')
+
+pkgver() {
+  cd libmicrohttpd
+  git describe --long --tags | sed 's/\([^-]*-g\)/r\1/;s/-/./g;s/^v//'
+}
+
+build() {
+  cd libmicrohttpd
+
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  ./bootstrap
+  # stock configure flags carried over
+  ./configure \
+    --prefix=/usr \
+    --disable-dependency-tracking \
+    --disable-examples \
+    --enable-curl \
+    --enable-https \
+    --enable-largefile \
+    --enable-messages \
+    --with-pic
+  make
+}
+
+check() {
+  cd libmicrohttpd
+  make check
+}
+
+package() {
+  cd libmicrohttpd
+  make DESTDIR="$pkgdir" install
+  # upstream ships its license texts as COPYING* (exact set varies by era)
+  install -Dm644 COPYING* -t "${pkgdir}/usr/share/licenses/${pkgname}"
+}

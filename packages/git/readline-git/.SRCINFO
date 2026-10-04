@@ -1,0 +1,22 @@
+pkgbase = readline-git
+	pkgdesc = GNU readline library (git build)
+	pkgver = 8.3.r6.gf95e814
+	pkgrel = 1
+	url = https://tiswww.case.edu/php/chet/readline/rltop.html
+	arch = x86_64
+	license = GPL-3.0-or-later
+	depends = glibc
+	depends = libncursesw.so
+	depends = ncurses
+	provides = readline=8.3.r6.gf95e814
+	provides = libhistory.so
+	provides = libreadline.so
+	conflicts = readline
+	options = !emptydirs
+	backup = etc/inputrc
+	source = readline::git+https://git.savannah.gnu.org/git/readline.git
+	source = inputrc
+	b2sums = SKIP
+	b2sums = 50db43bff430f282175aba4c4259e0b2222bc7e342fbe47b9dcce0172458472e72aebb9852eeafa4d10d4e89f2e1e8bb83b6b5dfc68eeababe699d4b5eae80f7
+
+pkgname = readline-git

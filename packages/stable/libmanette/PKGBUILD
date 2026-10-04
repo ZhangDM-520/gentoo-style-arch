@@ -1,0 +1,65 @@
+# Maintainer: Balló György <ballogyor+arch at gmail dot com>
+
+pkgbase=libmanette
+pkgname=(
+  libmanette
+)
+# trim: the libmanette-docs split is dropped — the gi-docgen API docs are not
+# shipped (doc=false in build()); only the library output stays
+pkgver=0.2.13
+pkgrel=2
+pkgdesc="Simple GObject game controller library"
+url="https://gnome.pages.gitlab.gnome.org/libmanette/"
+arch=(x86_64)
+license=(LGPL-2.1-or-later)
+depends=(
+  glib2
+  glibc
+  hidapi
+  libevdev
+  libgcc
+  libgudev
+)
+# trim: gi-docgen (makedepends) went with the libmanette-docs split (docs)
+makedepends=(
+  git
+  gobject-introspection
+  meson
+  vala
+)
+source=("git+https://gitlab.gnome.org/GNOME/libmanette.git#tag=$pkgver")
+b2sums=(ba0faf503bc96520ab94e74ea7eebc60f2679dba9ba132883259f23246f51ba920aa0bcb8d17af5dbd8f745e392f13d715e520af6f9d7d294acc79a1f910573c)
+
+prepare() {
+  cd $pkgname
+}
+
+build() {
+  # House style: mold linker when available (arch-meson consumes LDFLAGS env)
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  # trim: gi-docgen API docs — Class B trim standard (docs)
+  arch-meson $pkgname build \
+    -D doc=false
+  meson compile -C build -j "${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+check() {
+  meson test -C build --print-errorlogs
+}
+
+package_libmanette() {
+  provides=(libmanette-0.2.so)
+
+  meson install -C build --destdir "$pkgdir"
+
+  # license: ship the upstream LGPL-2.1-or-later text
+  local _l
+  for _l in COPYING COPYING.LGPL LICENSE; do
+    if [[ -f libmanette/$_l ]]; then install -Dm644 "libmanette/$_l" -t "$pkgdir/usr/share/licenses/$pkgname/"; fi
+  done
+}
+
+# vim:set sw=2 sts=-1 et:

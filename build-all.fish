@@ -8,6 +8,11 @@ set -g CONFIG_DIR "$SCRIPT_DIR/config"
 # the former packages.map + groups/*.list + dependencies.conf trio (2026-09-26).
 set -g TOPOLOGY_FILE "$CONFIG_DIR/topology.conf"
 set -g DEFAULT_CONFIG_FILE "$CONFIG_DIR/build-defaults.conf"
+# The ABI-drift guard's documented exception registry (Tier-2 exclusions,
+# format documented in the file's header). Wired like the other config: a
+# present file is strictly validated on every invocation (read_abi_exclusions);
+# an absent one is an empty registry, never a silent wildcard.
+set -g ABI_EXCLUSIONS_FILE "$CONFIG_DIR/abi-exclusions.conf"
 set -g _STATE_DIR "$SCRIPT_DIR/.state"
 if set -q GSA_STATE_DIR; and test -n "$GSA_STATE_DIR"
     set -g _STATE_DIR "$GSA_STATE_DIR"
@@ -547,6 +552,53 @@ function read_topology_config
     return 0
 end
 
+# Read config/abi-exclusions.conf — the ABI-guard's documented exception
+# registry. One entry per line: id|reason|review-by (the file's header is the
+# normative format doc). `#` lines and blanks are ignored. Strict like
+# topology: a malformed entry fails every command with the offending line
+# named — an exception registry that silently misparses is exactly the silent
+# gap the guard exists to prevent. An ABSENT file is a valid empty registry
+# (a scratch workspace may simply carry no exceptions).
+function read_abi_exclusions
+    set -g _ABI_EXCLUSIONS
+    set -g _ABI_EXCLUSION_IDS
+    test -f "$ABI_EXCLUSIONS_FILE"; or return 0
+    set -l line_no 0
+    for raw_line in (cat "$ABI_EXCLUSIONS_FILE")
+        set line_no (math $line_no + 1)
+        set -l line (string trim -- "$raw_line")
+        test -n "$line"; or continue
+        string match -q '#*' -- "$line"; and continue
+        set -l fields (string split '|' -- "$line")
+        if test (count $fields) -ne 3
+            ui_error "invalid abi-exclusions entry (expected 'id|reason|review-by'): $ABI_EXCLUSIONS_FILE line $line_no"
+            return 1
+        end
+        set -l id (string trim -- "$fields[1]")
+        set -l reason (string trim -- "$fields[2]")
+        set -l review_by (string trim -- "$fields[3]")
+        if not string match -qr '^[A-Za-z0-9._+-]+$' -- "$id"
+            ui_error "invalid abi-exclusions id '$id' (allowed: A-Za-z0-9._+-): $ABI_EXCLUSIONS_FILE line $line_no"
+            return 1
+        end
+        if test -z "$reason"
+            ui_error "abi-exclusions entry $id has no reason: $ABI_EXCLUSIONS_FILE line $line_no"
+            return 1
+        end
+        if not string match -qr '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' -- "$review_by"
+            ui_error "abi-exclusions entry $id has no ISO review-by date: $ABI_EXCLUSIONS_FILE line $line_no"
+            return 1
+        end
+        if contains -- "$id" $_ABI_EXCLUSION_IDS
+            ui_error "duplicate abi-exclusions id: $id ($ABI_EXCLUSIONS_FILE line $line_no)"
+            return 1
+        end
+        set -a _ABI_EXCLUSION_IDS "$id"
+        set -a _ABI_EXCLUSIONS "$id|$review_by|$reason"
+    end
+    return 0
+end
+
 function load_project_config
     # Every return 1 below names its offender. The caller can only say
     # "project configuration is invalid", so a bare return 1 leaves the user
@@ -598,6 +650,12 @@ function load_project_config
     if not read_topology_config
         return 1
     end
+    # The ABI-guard's exception registry is config too: it loads here so the
+    # same strict-loader contract covers it (read_abi_exclusions names every
+    # offender).
+    if not read_abi_exclusions
+        return 1
+    end
     topo_sort (string join ' ' $_PACKAGE_IDS) >/dev/null
     if test (count $_TOPO_BLOCKED) -gt 0
         ui_error "dependency configuration did not produce a complete order"
@@ -607,6 +665,15 @@ function load_project_config
 end
 
 # ─── Topological sort (Kahn's algorithm) ─────────────────────────────────────
+# Order-identical O(V+E) Kahn since 2026-10-04: the previous nested-list
+# scanner re-split every record inside O(V×E) loops (millions of string splits
+# per call over 653 records / 3373 edges — the whole multi-minute `--list`
+# latency, paid TWICE per invocation). Lookups here are `contains --index`
+# in-process C scans (fish has no assoc arrays) and the reverse adjacency is
+# precomputed in one pass. The ORDER printed is load-bearing and unchanged:
+# zero-in-degree members queued in $pkgs order, FIFO processing, decrements in
+# $_DEPS record order against the FIRST $pkgs occurrence of each consumer,
+# leftovers appended in $pkgs order.
 function topo_sort -a pkgs_str
     # pkgs_str is a space-separated list of package IDs.
     set -l pkgs (string split ' ' $pkgs_str)
@@ -620,50 +687,61 @@ function topo_sort -a pkgs_str
     set pkgs $pkgs_filtered
     set -g _TOPO_BLOCKED
 
-    # Build dependency map: $dep_of[pkg] = "dep1 dep2 ..."
-    set -l dep_of_pkg
-    set -l all_deps
+    # $pkgs index of each name's FIRST occurrence — the "first matching entry
+    # wins" slot the old scans found by brute force. The in-degree and reverse
+    # maps live on those slots; a name occurring twice still gets its own
+    # queue entry and its own place in $sorted, exactly like the old
+    # per-occurrence bookkeeping.
+    set -l first_idx
+    for pkg in $pkgs
+        set -a first_idx (contains --index -- "$pkg" $pkgs)
+    end
+
+    # in_degree[i] = count of $pkgs[i]'s deps that are in the build list,
+    # addressed at first-occurrence slots (decrements always landed on the
+    # first matching entry too). rev[i] = consumer indices that $pkgs[i]
+    # unblocks, in $_DEPS record order — the order the old scan decremented in.
+    set -l in_degree
+    set -l rev
+    for i in $first_idx
+        set -a in_degree 0
+        set -a rev ""
+    end
+
+    # ONE pass over $_DEPS ("id:dep1,dep2") builds both maps. Same-input
+    # fidelity with the old loops: a dep token repeated inside one record adds
+    # +2 to the in-degree count (the old init loop counted every token) but
+    # only ONE reverse edge (the old edge scan matched each record once per
+    # pop, breaking at the first equal dep).
     for entry in $_DEPS
-        set -l parts (string split ':' $entry)
-        set -l pkg $parts[1]
+        set -l parts (string split ':' $entry -m 2)
         if test (count $parts) -ge 2 -a -n "$parts[2]"
-            set -a dep_of_pkg "$pkg:"(string join ' ' (string split ',' $parts[2]))
-        else
-            set -a dep_of_pkg "$pkg:"
+            set -l ci (contains --index -- "$parts[1]" $pkgs)
+            if test -n "$ci"
+                set -l rev_seen
+                for dep in (string split ',' -- "$parts[2]")
+                    test -n "$dep"; or continue
+                    set -l di (contains --index -- "$dep" $pkgs)
+                    test -n "$di"; or continue
+                    set in_degree[$ci] (math $in_degree[$ci] + 1)
+                    contains -- "$dep" $rev_seen; and continue
+                    set -a rev_seen "$dep"
+                    set rev[$di] "$rev[$di] $ci"
+                end
+            end
         end
     end
 
     # Kahn's algorithm
-    # in_degree[pkg] = count of unprocessed deps that are in our build list
-    set -l in_degree
     set -l queue
     set -l sorted
 
-    # Initialize in-degrees
-    for pkg in $pkgs
-        set -l deps ""
-        for entry in $dep_of_pkg
-            set -l parts (string split ':' $entry -m 2)
-            if test "$parts[1]" = "$pkg" -a -n "$parts[2]"
-                set deps (string split ' ' $parts[2])
-                break
-            end
-        end
-
-        set -l deg 0
-        for dep in $deps
-            # Only count deps that are in our build list
-            for p in $pkgs
-                if test "$p" = "$dep"
-                    set deg (math $deg + 1)
-                    break
-                end
-            end
-        end
-        set -a in_degree "$pkg:$deg"
-
-        if test $deg -eq 0
-            set -a queue $pkg
+    # Zero-in-degree members queue in $pkgs order — one entry per OCCURRENCE,
+    # as the old init loop appended them.
+    for j in (seq (count $pkgs))
+        set -l f $first_idx[$j]
+        if test $in_degree[$f] -eq 0
+            set -a queue $pkgs[$j]
         end
     end
 
@@ -673,36 +751,17 @@ function topo_sort -a pkgs_str
         set -e queue[1]
         set -a sorted $pkg
 
-        # Find packages that depend on this one
-        for entry in $dep_of_pkg
-            set -l parts (string split ':' $entry -m 2)
-            if test (count $parts) -lt 2 -o -z "$parts[2]"
-                continue
-            end
-            set -l deps (string split ' ' $parts[2])
-
-            # Check if this pkg is a dep of the entry
-            set -l is_dep 0
-            for dep in $deps
-                if test "$dep" = "$pkg"
-                    set is_dep 1
-                    break
-                end
-            end
-
-            if test $is_dep -eq 1
-                # Decrease in-degree
-                set -l child $parts[1]
-                for j in (seq (count $in_degree))
-                    set -l iparts (string split ':' $in_degree[$j] -m 2)
-                    if test "$iparts[1]" = "$child"
-                        set -l new_deg (math $iparts[2] - 1)
-                        set in_degree[$j] "$child:$new_deg"
-                        if test $new_deg -eq 0
-                            set -a queue $child
-                        end
-                        break
-                    end
+        # Every consumer this package unblocks, in record order; the reverse
+        # list holds first-occurrence indices, so decrementing $in_degree there
+        # is exactly the old "first entry named child" scan.
+        set -l di (contains --index -- "$pkg" $pkgs)
+        if test -n "$di"
+            for ci in (string split ' ' -- "$rev[$di]")
+                test -n "$ci"; or continue
+                set -l new_deg (math $in_degree[$ci] - 1)
+                set in_degree[$ci] $new_deg
+                if test $new_deg -eq 0
+                    set -a queue $pkgs[$ci]
                 end
             end
         end
@@ -710,14 +769,7 @@ function topo_sort -a pkgs_str
 
     # Append any remaining (cycles or missing deps) at the end
     for pkg in $pkgs
-        set -l found 0
-        for s in $sorted
-            if test "$s" = "$pkg"
-                set found 1
-                break
-            end
-        end
-        if test $found -eq 0
+        if not contains -- "$pkg" $sorted
             set -a _TOPO_BLOCKED $pkg
             set -a sorted $pkg
         end
@@ -3104,6 +3156,887 @@ function install_all
     install_execute "$install_log" loud (count $argv) $argv $plan
 end
 
+# ─── ABI-drift guard (the five layers) ──────────────────────────────────────
+# A Class A `-git` library's soname bump must never silently break installed
+# consumers. Five layers, one shared vocabulary (tests/abi-*.sh pin them):
+#
+#   1. closure lint  (audit_lint_abi_closure, --audit / --audit-lint
+#      abi-closure, report-only): every workspace recipe shipping ELF libs
+#      must carry bare soname provides (`libfoo.so`, auto-versioned by
+#      makepkg); every DT_NEEDED soname of a workspace-built output must
+#      resolve to (a) a workspace package's provides, (b) an expected
+#      base-system lib (abi_base_lib_ok), or (c) a name registered in the
+#      exception registry (config/abi-exclusions.conf). Violations name the
+#      provider/consumer pair.
+#   2. batch gate tightening (the coupled-batch gate in main): a provider
+#      whose soname-provides set changed against the installed stock package's
+#      provides drags its FULL in-tree consumer closure into the batch —
+#      an installed member omitted from the selection is refused. Pure gate
+#      logic: committed .SRCINFO provides + config/topology.conf, no builds.
+#   3. install-time fatal provide-diff refusal (abi_provide_refusals, an
+#      install-plan step alongside pgo_payload_refusals, BEFORE the force
+#      branch): when an archive's .PKGINFO bare soname provides disappear or
+#      change against the installed database's provides for the same pkgname
+#      and the consumer closure is not fully included in the transaction,
+#      silent `refuse abi-*` rows abort before any pacman -U.
+#   4. post-install NEEDED probe (install_needed_probe, after a successful
+#      transaction): every installed consumer output's DT_NEEDED must resolve
+#      within the newly installed + existing provide set; unresolved sonames
+#      abort loudly, named.
+#   5. exposure audit (audit_lint_abi_exposure, --audit / --audit-lint
+#      abi-exposure, report-only): the provider → exposed-consumer mapping for
+#      every workspace lib whose soname provides differ from the installed
+#      stock equivalent.
+#
+# Resolution vocabulary (layers 1/4): a soname resolves to (a) a provide some
+# workspace package declares (abi_provide_covers: a bare stem covers its
+# family, makepkg's auto-versioned form covers its exact version — that
+# precision is what turns a silent soname bump into a named violation),
+# (b) an expected base-system soname (abi_base_lib_ok), or (c) an exception
+# documented in config/abi-exclusions.conf (abi_excluded — the registry is
+# wired in read_abi_exclusions, loaded on EVERY invocation).
+#
+# Stock convention (layers 2/5): the "installed stock equivalent" of a
+# workspace pkgname is what the installed database answers for the name with
+# its VCS suffix stripped (abi_stock_name — the same swap counterpart
+# audit_lint_swap uses). `pacman -Qi <stock>` resolves through provides, so
+# the query reaches whatever currently provides the stock name: the stock
+# package before the swap, the house build after it.
+
+# abi_stock_name NAME → the stock counterpart of a pkgname: the name with a
+# VCS suffix (-git/-svn/-hg/-snapshot) stripped, or NAME itself.
+function abi_stock_name -a name
+    string replace -r -- '-(git|svn|hg|snapshot)$' '' "$name"
+end
+
+# abi_provide_name ENTRY → the name part of a provide/depend entry
+# ('libfoo.so=1-64' → 'libfoo.so', 'meson>=1.8' → 'meson').
+function abi_provide_name -a entry
+    set -l name (string replace -r -- '[=<>].*$' '' "$entry")
+    string trim -- "$name"
+end
+
+# abi_provide_covers ENTRY SONAME → 0 when provide ENTRY satisfies the
+# DT_NEEDED SONAME. Exact names always match. A bare-stem provide
+# ('libfoo.so') covers the whole family ('libfoo.so.N'); makepkg's
+# auto-versioned form ('libfoo.so=1-64', generated from soname 'libfoo.so.1')
+# covers only its own version — so a bumped consumer NEEDED no longer resolves
+# to the old provider and the violation can name both sides.
+function abi_provide_covers -a entry soname
+    set -l pp (string split -m 1 '=' -- "$entry")
+    set -l name (string trim -- "$pp[1]")
+    test -n "$name"; or return 1
+    test "$name" = "$soname"; and return 0
+    set -l stem (_lint_soname_stem "$soname")
+    if test (count $stem) -ge 1; and test "$name" = "$stem"
+        if test (count $pp) -lt 2; or test -z "$pp[2]"
+            return 0
+        end
+        set -l v (string replace -r -- '-[^-]+$' '' "$pp[2]")
+        test "$soname" = "$name.$v"; and return 0
+    end
+    return 1
+end
+
+# abi_soname_stems ENTRIES... → the bare soname stems of soname-shaped
+# provide names (the layer-2/5 comparison unit: a family rename moves the
+# stem set, an in-place version bump moves only makepkg's auto-version —
+# which is layer 3's exact-diff job).
+function abi_soname_stems
+    for value in $argv
+        set -l name (abi_provide_name "$value")
+        set -l stem (_lint_soname_stem "$name")
+        test (count $stem) -ge 1; or continue
+        printf '%s\n' $stem[1]
+    end
+    return 0
+end
+
+# abi_base_lib_ok SONAME → 0 for an expected base-system soname: the glibc +
+# gcc-libs runtime every Arch system carries (`base` depends on both). Any
+# other non-workspace soname must be registered in the exclusions registry.
+function abi_base_lib_ok -a soname
+    contains -- "$soname" \
+        libc.so.6 libm.so.6 libmvec.so.1 libdl.so.2 libpthread.so.0 librt.so.1 \
+        libresolv.so.2 libutil.so.1 libnsl.so.1 libthread_db.so.1 \
+        ld-linux-x86-64.so.2 ld-linux.so.2 ld64.so.2 \
+        libgcc_s.so.1 libstdc++.so.6 libgomp.so.1 libatomic.so.1 libquadmath.so.0
+end
+
+# abi_excluded NAME → 0 when the documented exception registry covers this
+# package id or this soname name/stem (config/abi-exclusions.conf).
+function abi_excluded -a name
+    contains -- "$name" $_ABI_EXCLUSION_IDS; and return 0
+    set -l stem (_lint_soname_stem "$name")
+    if test (count $stem) -ge 1
+        contains -- "$stem" $_ABI_EXCLUSION_IDS; and return 0
+    end
+    return 1
+end
+
+# abi_package_srcinfo ID → the committed .SRCINFO path of a workspace id.
+function abi_package_srcinfo -a id
+    for entry in $_PACKAGE_MAP
+        set -l fields (string split '|' -- "$entry")
+        if test "$fields[1]" = "$id"
+            printf '%s\n' "$SCRIPT_DIR/$fields[2]/.SRCINFO"
+            return 0
+        end
+    end
+    return 1
+end
+
+# srcinfo_pkgnames SRCINFO → pkgbase + pkgname outputs (deduped).
+function srcinfo_pkgnames -a srcinfo
+    sed -n 's/^pkgbase = //p; s/^pkgname = //p' "$srcinfo" 2>/dev/null | awk '!seen[$0]++'
+end
+
+# srcinfo_provides SRCINFO → every `provides = ` value (all sections).
+function srcinfo_provides -a srcinfo
+    sed -n 's/^[[:space:]]*provides[[:space:]]*=[[:space:]]*//p' "$srcinfo" 2>/dev/null
+end
+
+# abi_installed_provides NAME → the installed database's provide entries for
+# NAME (LANG=C pins the field layout, like install_skip_reason's queries).
+# pacman resolves NAME through provides, so the stock counterpart query
+# reaches whatever currently provides the stock name.
+function abi_installed_provides -a name
+    set -l lines (LANG=C pacman -Qi -- "$name" 2>/dev/null)
+    test (count $lines) -gt 0; or return 0
+    set -l values
+    for line in $lines
+        set -l m (string match -r -g '^[[:space:]]*Provides[[:space:]]*:[[:space:]]*(.*)$' -- "$line")
+        if test (count $m) -lt 1
+            set m (string match -r -g '^[[:space:]]*Provides As[[:space:]]*:[[:space:]]*(.*)$' -- "$line")
+        end
+        test (count $m) -ge 1; and set -a values (string split -n ' ' -- (string replace -a \t ' ' -- $m[1]))
+    end
+    for value in $values
+        test "$value" = None; and continue
+        printf '%s\n' "$value"
+    end
+    return 0
+end
+
+# abi_pkg_installed ID → 0 when any output of the workspace package is
+# installed (the batch gate's "nothing to protect" rule reads this).
+function abi_pkg_installed -a id
+    set -l names $id
+    set -l srcinfo (abi_package_srcinfo "$id")
+    if test -n "$srcinfo"; and test -f "$srcinfo"
+        set names (srcinfo_pkgnames "$srcinfo")
+        test (count $names) -gt 0; or set names $id
+    end
+    for name in $names
+        pacman -Q -- "$name" >/dev/null 2>&1; and return 0
+    end
+    return 1
+end
+
+# abi_name_edges → provider|consumer pairs from the committed .SRCINFO files:
+# consumer C names provider P when a build-time field of C (depends,
+# makedepends, optdepends, checkdepends) names any name P's surface carries
+# (pkgbase, pkgname or provide name). The .SRCINFO half of the closure
+# relation; config/topology.conf's edges are the other (see
+# abi_consumer_closure). One sorted pass, then one awk join — never a nested
+# fish loop over every pair.
+function abi_name_edges
+    set -l rows
+    for entry in $_PACKAGE_MAP
+        set -l fields (string split '|' -- "$entry")
+        set -l id $fields[1]
+        set -l srcinfo "$SCRIPT_DIR/$fields[2]/.SRCINFO"
+        test -f "$srcinfo"; or continue
+        for name in (sed -n 's/^pkgbase = //p; s/^pkgname = //p' "$srcinfo" 2>/dev/null)
+            test -n "$name"; and set -a rows "S|$name|$id"
+        end
+        for value in (srcinfo_provides "$srcinfo")
+            set -l name (abi_provide_name "$value")
+            test -n "$name"; and set -a rows "S|$name|$id"
+        end
+        for field in depends makedepends optdepends checkdepends
+            for value in (sed -n "s/^[[:space:]]*$field = //p" "$srcinfo" 2>/dev/null)
+                set -l v (string split -m 1 ':' -- "$value")[1]
+                set -l name (abi_provide_name (string trim -- "$v"))
+                test -n "$name"; and set -a rows "A|$name|$id"
+            end
+        end
+    end
+    if test (count $rows) -gt 0
+        printf '%s\n' $rows | sort -t '|' -k 2,2 | awk -F'|' '
+            function flush(   s, a) {
+                for (s in prov) for (a in cons) if (prov[s] != cons[a]) print prov[s] "|" cons[a]
+                delete prov
+                delete cons
+            }
+            $2 != last { flush(); last = $2 }
+            { if ($1 == "S") prov[$3] = $3; else cons[$3] = $3 }
+            END { flush() }
+        '
+    end
+    return 0
+end
+
+# abi_consumer_closure PROVIDER... → the FULL in-tree consumer closure of the
+# provider ids: every workspace package transitively consuming one of them,
+# over BOTH relations — the topology reverse adjacency (_CONSUMER_INDEX from
+# config/topology.conf) and the committed .SRCINFO name matching
+# (abi_name_edges). Pure gate logic: no builds, no pacman, no network. The
+# providers themselves are never output.
+function abi_consumer_closure
+    set -l seeds $argv
+    test (count $seeds) -gt 0; or return 0
+    set -l name_edges (abi_name_edges)
+    set -l visited
+    set -l queue $seeds
+    while test (count $queue) -gt 0
+        set -l pkg $queue[1]
+        set -e queue[1]
+        contains -- "$pkg" $visited; and continue
+        set -a visited $pkg
+        for entry in $_CONSUMER_INDEX
+            set -l parts (string split '|' -- "$entry")
+            test "$parts[1]" = "$pkg"; or continue
+            set -a queue $parts[2]
+        end
+        for edge in $name_edges
+            set -l parts (string split -m 1 '|' -- "$edge")
+            test "$parts[1]" = "$pkg"; or continue
+            set -a queue $parts[2]
+        end
+    end
+    for pkg in $visited
+        contains -- "$pkg" $seeds; and continue
+        printf '%s\n' "$pkg"
+    end
+    return 0
+end
+
+# abi_soname_provides_changed ID → 0 when the workspace recipe's soname
+# provides (committed .SRCINFO, bare stems) differ from the installed stock
+# equivalent's provides (the stem sets). Layer 2's batch trigger: only a
+# changed surface can strand consumers. Nothing installed to compare against
+# means nothing to protect — never changed.
+function abi_soname_provides_changed -a id
+    set -l srcinfo (abi_package_srcinfo "$id")
+    if test -z "$srcinfo"; or not test -f "$srcinfo"
+        return 1
+    end
+    set -l house (abi_soname_stems (srcinfo_provides "$srcinfo"))
+    test (count $house) -gt 0; or return 1
+    set -l names (srcinfo_pkgnames "$srcinfo")
+    test (count $names) -gt 0; or set names $id
+    set -l installed
+    set -l compared 0
+    for name in $names
+        set -l entries (abi_installed_provides (abi_stock_name "$name"))
+        test (count $entries) -gt 0; or continue
+        set compared 1
+        set -a installed (abi_soname_stems $entries)
+    end
+    test $compared -eq 1; or return 1
+    for stem in $house
+        contains -- "$stem" $installed; or return 0
+    end
+    for stem in $installed
+        contains -- "$stem" $house; or return 0
+    end
+    return 1
+end
+
+# abi_package_id_for_pkgname NAME → the workspace id whose committed
+# .SRCINFO outputs NAME (used to find a consumer closure from an archive's
+# own .PKGINFO — never from the path spelling the caller happened to pass).
+function abi_package_id_for_pkgname -a name
+    for entry in $_PACKAGE_MAP
+        set -l fields (string split '|' -- "$entry")
+        set -l srcinfo "$SCRIPT_DIR/$fields[2]/.SRCINFO"
+        test -f "$srcinfo"; or continue
+        if srcinfo_pkgnames "$srcinfo" | grep -Fxq -- "$name"
+            printf '%s\n' "$fields[1]"
+            return 0
+        end
+    end
+    return 1
+end
+
+# archive_pkginfo ARCHIVE → the archive's .PKGINFO content (empty when the
+# payload is unreadable). Member names differ across packers ('.PKGINFO' vs
+# './.PKGINFO'), so the member is listed first and read by name.
+function archive_pkginfo -a archive
+    set -l member (tar -tf "$archive" 2>/dev/null \
+        | awk '$0 == ".PKGINFO" || $0 == "./.PKGINFO" { print; exit }')
+    test -n "$member"; or return 1
+    tar -xOf "$archive" -- "$member" 2>/dev/null
+    return $status
+end
+
+# ─── Layer 3: install-time fatal provide-diff refusal (install-plan step) ────
+# For each archive destined for install, compare its .PKGINFO provides against
+# the installed database's provides for the same pkgname. A BARE soname
+# provide (auto-versioned by makepkg: `libfoo.so=1-64`) that disappears or
+# changes version is a soname bump: every installed consumer built against the
+# old surface breaks the moment pacman -U lands. If the consumer closure is
+# not fully included in the transaction, the plan refuses — silently here
+# (the decision half never renders); install_execute renders the rows, and the
+# --install-decide seam prints them verbatim. Runs BEFORE the force branch:
+# -fi/-ia bypass the same-version SKIP, never this gate. Tolerance on what it
+# cannot read (the locked decision — fail-closed on unreadable .PKGINFO was
+# rejected: the existing battery's stub makepkg emits empty archives and its
+# pinned contracts demand a pacman-free plan for them): an archive with no
+# readable .PKGINFO is skipped WITHOUT consulting pacman (install-conflict-ask
+# C1/C2 and install-archive-guard I5 pin zero pacman calls on those paths).
+# A READABLE .PKGINFO that carries no provides is the provide-disappears case
+# and still refuses below. Nothing installed for the name means nothing can
+# disappear (a fresh install cannot orphan consumers of a surface that never
+# existed).
+#
+# "Fully included in the transaction" counts the INSTALLED part of the
+# consumer closure (an uninstalled consumer has nothing to protect — the
+# batch gate's standing rule); a member counts as included when any of its
+# outputs is among the transaction's pkgnames. Consumers of an archive whose
+# pkgname matches no workspace recipe are vacuously covered (no in-tree
+# closure to open).
+#
+# Row shapes (fields space-separated, mirroring pgo_payload_refusals):
+#   refuse abi-soname <archive> <pkgname> <provide-name> <installed-ver> <built-ver>
+#   refuse abi-consumer <archive> <consumer>
+# (<built-ver> is '-' when the provide disappears entirely.) Returns 0 for
+# every archive that is clean or not comparable, 1 after any refusal row.
+function abi_provide_refusals
+    # Every pkgname the transaction will install — the closure-coverage side.
+    set -l tx_names
+    for archive in $argv
+        for line in (archive_pkginfo "$archive")
+            set -l h (string match -r -g '^pkgname = (.+)$' -- "$line")
+            test (count $h) -ge 1; and set -a tx_names $h[1]
+        end
+    end
+    set -l rows
+    for archive in $argv
+        set -l pkgname ""
+        set -l built_provides
+        for line in (archive_pkginfo "$archive")
+            set -l h (string match -r -g '^pkgname = (.+)$' -- "$line")
+            if test (count $h) -ge 1
+                test -z "$pkgname"; and set pkgname $h[1]
+                continue
+            end
+            set -l p (string match -r -g '^[[:space:]]*provides = (.+)$' -- "$line")
+            test (count $p) -ge 1; and set -a built_provides $p[1]
+        end
+        if test -z "$pkgname"
+            # Not a readable payload — skip outright (see the tolerance note
+            # above): no pacman probe names it, because the plan step must
+            # stay pacman-free for unreadable archives.
+            continue
+        end
+        set -l installed (abi_installed_provides "$pkgname")
+        test (count $installed) -gt 0; or continue
+        set -l archive_rows
+        for entry in $installed
+            set -l name (abi_provide_name "$entry")
+            # "bare soname provide": an auto-versioned bare stem — the surface
+            # makepkg generates from a shipped DT_SONAME.
+            string match -q '*.so' -- "$name"; or continue
+            set -l inst_ver ""
+            set -l ep (string split -m 1 '=' -- "$entry")
+            test (count $ep) -ge 2; and set inst_ver "$ep[2]"
+            set -l matched 0
+            set -l built_ver ""
+            for b in $built_provides
+                test (abi_provide_name "$b") = "$name"; or continue
+                set matched 1
+                set -l bp (string split -m 1 '=' -- "$b")
+                test (count $bp) -ge 2; and set built_ver "$bp[2]"
+            end
+            if test $matched -eq 0
+                set -a archive_rows "refuse abi-soname $archive $pkgname $name $inst_ver -"
+            else if test "$built_ver" != "$inst_ver"
+                set -a archive_rows "refuse abi-soname $archive $pkgname $name $inst_ver $built_ver"
+            end
+        end
+        test (count $archive_rows) -gt 0; or continue
+        # The refusal is conditional: a provide change whose consumer closure
+        # is fully covered by the transaction lands safely together.
+        set -l provider_id (abi_package_id_for_pkgname "$pkgname")
+        set -l open
+        if test -n "$provider_id"
+            for member in (abi_consumer_closure "$provider_id")
+                set -l srcinfo (abi_package_srcinfo "$member")
+                set -l names $member
+                if test -n "$srcinfo"; and test -f "$srcinfo"
+                    set names (srcinfo_pkgnames "$srcinfo")
+                    test (count $names) -gt 0; or set names $member
+                end
+                set -l covered 0
+                set -l member_installed 0
+                for name in $names
+                    contains -- "$name" $tx_names; and set covered 1
+                    pacman -Q -- "$name" >/dev/null 2>&1; and set member_installed 1
+                end
+                test $covered -eq 1; and continue
+                test $member_installed -eq 1; or continue
+                set -a open "$member"
+            end
+        end
+        test (count $open) -gt 0; or continue
+        set -a rows $archive_rows
+        for member in $open
+            set -a rows "refuse abi-consumer $archive $member"
+        end
+    end
+    if test (count $rows) -gt 0
+        printf '%s\n' $rows | awk '!seen[$0]++'
+        return 1
+    end
+    return 0
+end
+
+# ─── Layer 4: post-install NEEDED probe ─────────────────────────────────────
+# After a transaction lands, every installed consumer output's DT_NEEDED must
+# resolve within the NEWLY INSTALLED + EXISTING provide set (plus the expected
+# base-system sonames and the exclusions registry). Failure = loud abort with
+# the unresolved sonames named (install_execute renders the rows) — the
+# transaction already landed, so the run stops instead of letting every later
+# package compile against an unresolvable system.
+#
+# Reads the transaction's ARCHIVES, not /usr: the probe must be fixture-safe
+# and must not depend on where the payload ended up. An archive that cannot be
+# extracted after pacman accepted it has no probeable outputs — the probe
+# verifies the outputs it can read (a tar failure here is environmental; the
+# abort condition is an unresolved NEEDED name, never a missing tool).
+#
+# Row shape: probe-needed <archive> <member> <soname>
+function install_needed_probe
+    command -q tar; or return 0
+    command -q readelf; or return 0
+    set -l tmp_root "$TMPDIR"
+    if test -z "$tmp_root"
+        set tmp_root /tmp
+    end
+    set -l work (mktemp -d "$tmp_root/gsa-abi-probe.XXXXXX" 2>/dev/null)
+    test -n "$work"; or return 0
+    # (a) the newly installed provides, straight from the transaction's
+    # .PKGINFO files (makepkg's auto-versioned soname forms).
+    set -l provides
+    for archive in $argv
+        for line in (archive_pkginfo "$archive")
+            set -l p (string match -r -g '^[[:space:]]*provides = (.+)$' -- "$line")
+            test (count $p) -ge 1; and set -a provides $p[1]
+        end
+    end
+    # (b) the existing set: the installed database's provides, post-transaction.
+    # Field-tracked parse of `pacman -Qi`'s full dump — a wrapped Provides
+    # continuation must not leak Depends tokens into the provide set.
+    set -l cur_field ""
+    for line in (LANG=C pacman -Qi 2>/dev/null)
+        set -l h (string match -r -g '^[[:space:]]*([A-Za-z][A-Za-z ]*)[[:space:]]*:[[:space:]]*(.*)$' -- "$line")
+        if test (count $h) -ge 2
+            set cur_field (string trim -- "$h[1]")
+            if test "$cur_field" = Provides; or test "$cur_field" = 'Provides As'
+                for value in (string split -n ' ' -- (string replace -a \t ' ' -- $h[2]))
+                    test "$value" = None; or set -a provides $value
+                end
+            end
+            continue
+        end
+        if test "$cur_field" = Provides; or test "$cur_field" = 'Provides As'
+            for value in (string split -n ' ' -- (string replace -a \t ' ' -- (string trim -- "$line")))
+                test -n "$value"; and set -a provides $value
+            end
+        end
+    end
+    set -l rows
+    set -l n 0
+    for archive in $argv
+        set n (math $n + 1)
+        set -l dest "$work/$n"
+        mkdir -p "$dest"
+        tar -xf "$archive" -C "$dest" 2>/dev/null; or continue
+        for file in (find "$dest" -type f 2>/dev/null)
+            set -l rel (string replace "$dest/" '' -- "$file")
+            for soname in (readelf -dW "$file" 2>/dev/null \
+                | sed -n 's/^.*NEEDED.*\[\(.*\)\]$/\1/p')
+                abi_base_lib_ok "$soname"; and continue
+                abi_excluded "$soname"; and continue
+                set -l resolved 0
+                for entry in $provides
+                    if abi_provide_covers "$entry" "$soname"
+                        set resolved 1
+                        break
+                    end
+                end
+                test $resolved -eq 1; and continue
+                set -a rows "probe-needed $archive $rel $soname"
+            end
+        end
+    end
+    rm -rf -- "$work"
+    if test (count $rows) -gt 0
+        printf '%s\n' $rows | awk '!seen[$0]++'
+        return 1
+    end
+    return 0
+end
+
+# ─── Layer 1 + 5: the ABI audit lints (report-only everywhere) ──────────────
+# audit_lint_abi_closure (layer 1) and audit_lint_abi_exposure (layer 5) join
+# the recipe-contract lints: rendered in --audit's report, individually
+# runnable through the hidden --audit-lint seam. Findings never change an exit
+# status — the gating is fixtures + the install/batch layers above.
+
+# Layer 1: the closure lint over WORKSPACE-BUILT OUTPUTS (the archives beside
+# each recipe — the only place the shipped ELF surface is real). Two rules:
+#   ship    every DT_SONAME an output ships needs a bare soname provide in
+#           its recipe's committed .SRCINFO;
+#   needed  every DT_NEEDED of an output resolves to (a) a workspace provide,
+#           (b) an expected base-system soname, or (c) an exclusions entry.
+# Findings name the provider/consumer pair. Without built outputs the lint
+# reports `skipped` (nothing shipped can be probed on a clean checkout).
+function audit_lint_abi_closure
+    for tool in tar readelf
+        if not command -q $tool
+            echo "abi-closure: skipped — $tool is not available"
+            return 0
+        end
+    end
+    set -l tmp_root "$TMPDIR"
+    if test -z "$tmp_root"
+        set tmp_root /tmp
+    end
+    set -l work (mktemp -d "$tmp_root/gsa-abi-closure.XXXXXX" 2>/dev/null)
+    if test -z "$work"
+        echo "abi-closure: skipped — cannot create a temp dir to probe built outputs"
+        return 0
+    end
+    set -l declared # id|provide-entry
+    set -l shipped # id|member|soname
+    set -l needed # id|member|soname
+    set -l outputs 0
+    for entry in $_PACKAGE_MAP
+        set -l fields (string split '|' -- "$entry")
+        set -l id $fields[1]
+        set -l recipe "$SCRIPT_DIR/$fields[2]"
+        if test -f "$recipe/.SRCINFO"
+            for value in (srcinfo_provides "$recipe/.SRCINFO")
+                set -a declared "$id|$value"
+            end
+        end
+        set -l n 0
+        for archive in (list_split_pkgs "$recipe")
+            set n (math $n + 1)
+            set outputs (math $outputs + 1)
+            set -l dest "$work/$id-$n"
+            mkdir -p "$dest"
+            if not tar -xf "$archive" -C "$dest" 2>/dev/null
+                set -a shipped "$id|(unreadable)|(unreadable)"
+                continue
+            end
+            # ONE readelf per bounded path batch instead of one process per
+            # member (35k processes at 653-record scale — the single largest
+            # --audit cost). The batch caps argv below the OS limit: one
+            # archive's file list alone (a bundled python venv) is 4MB of
+            # paths. Batch output is split back into per-file chunks at its
+            # "File: " headers and each chunk feeds the SAME SONAME/NEEDED
+            # seds as before; a non-ELF member prints no header and is skipped
+            # exactly like the old per-file count guard. A sentinel header
+            # flushes the last real chunk.
+            set -l files (find "$dest" -type f 2>/dev/null)
+            set -l batch
+            set -l nfiles (count $files)
+            set -l f0 1
+            while test $f0 -le $nfiles
+                set -l f1 (math $f0 + 255)
+                test $f1 -gt $nfiles; and set f1 $nfiles
+                set -a batch (readelf -dW $files[$f0..$f1] 2>/dev/null)
+                set f0 (math $f1 + 1)
+            end
+            set -a batch "File: "
+            set -l chunk_rel ""
+            set -l chunk
+            for raw in $batch
+                if string match -q 'File: *' -- "$raw"
+                    if test -n "$chunk_rel"
+                        set -l rel (string replace "$dest/" '' -- "$chunk_rel")
+                        # Same extractions as the old per-file
+                        # `printf | sed -n 's/^.*SONAME.*\[\(.*\)\]$/\1/p'`
+                        # (and the NEEDED twin) — same patterns, same
+                        # one-value-per-line result — but in-process: a pipe +
+                        # sed fork per member cost more than the readelf scan
+                        # itself at 33k members. The glob precheck is the sed
+                        # pattern's ".*SONAME.*" half; empty captures drop out
+                        # of the substitution exactly like sed's empty line.
+                        for line in $chunk
+                            if string match -q '*SONAME*' -- "$line"
+                                set -l m (string match -r -g '^.*SONAME.*\[(.*)\]$' -- "$line")
+                                test (count $m) -ge 1; and set -a shipped "$id|$rel|$m[1]"
+                            end
+                            if string match -q '*NEEDED*' -- "$line"
+                                set -l m (string match -r -g '^.*NEEDED.*\[(.*)\]$' -- "$line")
+                                test (count $m) -ge 1; and set -a needed "$id|$rel|$m[1]"
+                            end
+                        end
+                    end
+                    set chunk_rel (string replace -r '^File: ' '' -- "$raw")
+                    set chunk
+                else if test -n "$chunk_rel"
+                    set -a chunk "$raw"
+                end
+            end
+        end
+    end
+    set -l findings
+    if test $outputs -eq 0
+        rm -rf -- "$work"
+        echo "abi-closure: skipped — no workspace-built outputs (build the recipes to enable the closure probe)"
+        return 0
+    end
+    # Provide-name index over $declared. Both rules below can only cover a
+    # soname with an entry whose NAME equals the soname or its bare stem
+    # (see abi_provide_covers), so the old scan over every declared row per
+    # shipped/needed row — 843k covers calls at 653-record scale — becomes one
+    # name test per row plus a covers call on candidates alone. Rows keep
+    # their declared order, which is the order provider/mismatch assembly
+    # below depends on.
+    set -l decl_id
+    set -l decl_value
+    set -l decl_name
+    for d in $declared
+        set -l dp (string split -m 1 '|' -- "$d")
+        set -l pp (string split -m 1 '=' -- "$dp[2]")
+        set -a decl_id "$dp[1]"
+        set -a decl_value "$dp[2]"
+        set -a decl_name (string trim -- "$pp[1]")
+    end
+    set -l decl_idx (seq (count $decl_id))
+    # Rule ship: a shipped DT_SONAME needs its bare soname provide.
+    for row in $shipped
+        set -l parts (string split '|' -- "$row")
+        set -l id $parts[1]
+        set -l member $parts[2]
+        set -l soname $parts[3]
+        abi_excluded "$id"; and continue
+        if test "$soname" = "(unreadable)"
+            set -a findings "abi-closure: $id: cannot extract $member — built outputs not probed"
+            continue
+        end
+        set -l stem (_lint_soname_stem "$soname")
+        test (count $stem) -ge 1; or continue
+        set -l covered 0
+        for j in $decl_idx
+            test "$decl_id[$j]" = "$id"; or continue
+            test "$decl_name[$j]" = "$soname"; or test "$decl_name[$j]" = "$stem"; or continue
+            if abi_provide_covers "$decl_value[$j]" "$soname"
+                set covered 1
+                break
+            end
+        end
+        test $covered -eq 1; and continue
+        set -a findings "abi-closure: provider $id: ships $member with soname '$soname' but declares no bare soname provide '$stem' — declare provides=('$stem') and let makepkg auto-version it"
+    end
+    # Rule needed: every DT_NEEDED resolves to (a), (b) or (c).
+    for row in $needed
+        set -l parts (string split '|' -- "$row")
+        set -l id $parts[1]
+        set -l member $parts[2]
+        set -l soname $parts[3]
+        abi_excluded "$id"; and continue
+        abi_base_lib_ok "$soname"; and continue
+        abi_excluded "$soname"; and continue
+        set -l stem (_lint_soname_stem "$soname")
+        set -l providers
+        set -l resolved 0
+        set -l mismatch
+        for j in $decl_idx
+            test "$decl_name[$j]" = "$soname"; or test "$decl_name[$j]" = "$stem"; or continue
+            abi_provide_covers "$decl_value[$j]" "$soname"; or continue
+            contains -- "$decl_id[$j]" $providers; and continue
+            set -a providers "$decl_id[$j]"
+        end
+        for pid in $providers
+            set -l has_outputs 0
+            set -l ships 0
+            set -l shipped_names
+            for s in $shipped
+                set -l sp (string split '|' -- "$s")
+                test "$sp[1]" = "$pid"; or continue
+                set has_outputs 1
+                if test "$sp[3]" = "$soname"
+                    set ships 1
+                end
+                set -l sstem (_lint_soname_stem "$sp[3]")
+                if test (count $sstem) -ge 1
+                    set -l wstem (_lint_soname_stem "$soname")
+                    if test (count $wstem) -ge 1; and test "$sstem[1]" = "$wstem[1]"
+                        set -a shipped_names "$sp[3]"
+                    end
+                end
+            end
+            if test $ships -eq 1; or test $has_outputs -eq 0
+                set resolved 1
+                break
+            end
+            set -a mismatch "$pid: "(string join ', ' $shipped_names)
+        end
+        test $resolved -eq 1; and continue
+        if test (count $providers) -gt 0
+            set -a findings "abi-closure: consumer $id ($member) needs '$soname' but provider "(string join ' / ' $mismatch)" — the provider/consumer pair must move in one batch"
+        else
+            set -a findings "abi-closure: consumer $id ($member) needs '$soname' — no workspace provider declares it, it is not an expected base-system lib, and no config/abi-exclusions.conf entry covers it"
+        end
+    end
+    rm -rf -- "$work"
+    if test (count $findings) -gt 0
+        printf '%s\n' $findings | sort -u
+    end
+    return 0
+end
+
+# Layer 5: the exposure audit. For every workspace lib whose soname provides
+# (committed .SRCINFO bare stems) differ from the installed stock equivalent
+# (abi_installed_provides of abi_stock_name — the installed database answer
+# for the stock name), report the provider → exposed-consumer mapping: one
+# row per drifted provide per installed consumer whose Depends On reaches the
+# drift (the drifted soname name or the stock name), `-> none` when nothing
+# installed depends on it. Report-only: the mapping tells the maintainer who
+# is exposed when the swap lands; the batch/install layers above do the
+# gating.
+function audit_lint_abi_exposure
+    if not command -q pacman
+        echo "abi-exposure: skipped — pacman is not available"
+        return 0
+    end
+    # The exposure side: every installed package's Depends On (full dump,
+    # field-tracked so wrapped continuations stay with their field).
+    set -l dep_names # consumer|dep-name
+    set -l inst_names
+    set -l cur_name ""
+    set -l cur_field ""
+    for line in (LANG=C pacman -Qi 2>/dev/null)
+        set -l h (string match -r -g '^[[:space:]]*([A-Za-z][A-Za-z ]*)[[:space:]]*:[[:space:]]*(.*)$' -- "$line")
+        if test (count $h) -ge 2
+            set cur_field (string trim -- "$h[1]")
+            switch "$cur_field"
+                case Name
+                    set cur_name (string trim -- "$h[2]")
+                    set -a inst_names "$cur_name"
+                case 'Depends On'
+                    for value in (string split -n ' ' -- (string replace -a \t ' ' -- $h[2]))
+                        test "$value" = None; and continue
+                        test -n "$cur_name"; and set -a dep_names "$cur_name|"(abi_provide_name "$value")
+                    end
+            end
+            continue
+        end
+        if test "$cur_field" = 'Depends On'
+            for value in (string split -n ' ' -- (string replace -a \t ' ' -- (string trim -- "$line")))
+                test -n "$cur_name"; and test -n "$value"; and set -a dep_names "$cur_name|"(abi_provide_name "$value")
+            end
+        end
+    end
+    # The candidate scans below guard on this flag instead of re-counting
+    # $dep_names per drift row (fish marshals every element into `count` —
+    # 10k+ arguments, 1225 drift rows).
+    set -l have_dep_names 0
+    test (count $dep_names) -gt 0; and set have_dep_names 1
+    set -l findings
+    set -l compared 0
+    for entry in $_PACKAGE_MAP
+        set -l fields (string split '|' -- "$entry")
+        set -l id $fields[1]
+        abi_excluded "$id"; and continue
+        set -l srcinfo "$SCRIPT_DIR/$fields[2]/.SRCINFO"
+        test -f "$srcinfo"; or continue
+        set -l house_values (srcinfo_provides "$srcinfo")
+        set -l house (abi_soname_stems $house_values)
+        test (count $house) -gt 0; or continue
+        set -l names (srcinfo_pkgnames "$srcinfo")
+        test (count $names) -gt 0; or set names $id
+        set -l installed_rows # stock|entry
+        for name in $names
+            set -l stock (abi_stock_name "$name")
+            for value in (abi_installed_provides "$stock")
+                set -a installed_rows "$stock|$value"
+            end
+        end
+        test (count $installed_rows) -gt 0; or continue
+        set compared 1
+        # Drift rows: stock-only (the workspace recipe drops what the stock
+        # surface carries) and house-only (it adds what the stock does not).
+        set -l drifts # stock|entry|stock-only-or-house-only|drift-name
+        for row in $installed_rows
+            set -l rp (string split -m 1 '|' -- "$row")
+            set -l stem (abi_soname_stems "$rp[2]")
+            test (count $stem) -ge 1; or continue
+            contains -- "$stem[1]" $house; and continue
+            set -a drifts "$rp[1]|$rp[2]|stock-only|"(abi_provide_name "$rp[2]")
+        end
+        for value in $house_values
+            set -l stem (abi_soname_stems "$value")
+            test (count $stem) -ge 1; or continue
+            set -l installed_all
+            for row in $installed_rows
+                set -l rp (string split -m 1 '|' -- "$row")
+                set -a installed_all (abi_soname_stems "$rp[2]")
+            end
+            contains -- "$stem[1]" $installed_all; and continue
+            set -l stock_name (string split -m 1 '|' -- $installed_rows[1])[1]
+            set -a drifts "$stock_name|$value|house-only|"(abi_provide_name "$value")
+        end
+        test (count $drifts) -gt 0; or continue
+        for row in $drifts
+            set -l rp (string split '|' -- "$row")
+            set -l stock "$rp[1]"
+            set -l entry_value "$rp[2]"
+            set -l kind "$rp[3]"
+            set -l drift_name "$rp[4]"
+            set -l exposed
+            # Candidate scan: two C-speed literal substring matches per drift
+            # row replace the interpreted walk over every installed Depends
+            # On pair (quadratic on a real 1700-package database); the exact
+            # filter in the loop below keeps the semantics byte-identical.
+            # The count guard matters: `string match` with no input arguments
+            # would read stdin.
+            set -l candidates
+            if test $have_dep_names -eq 1
+                set candidates (string match -e -- "|$drift_name" $dep_names) \
+                    (string match -e -- "|$stock" $dep_names)
+            end
+            for d in $candidates
+                set -l dp (string split -m 1 '|' -- "$d")
+                # Same three ANDed conditions as before, cheapest first: the
+                # substring prefilter above is a superset (it matches every
+                # exact name), so most candidates die on the exact test and
+                # never reach the regex-bearing abi_excluded.
+                if test "$dp[2]" = "$drift_name"; or test "$dp[2]" = "$stock"
+                    contains -- "$dp[1]" $names; and continue
+                    abi_excluded "$dp[1]"; and continue
+                    contains -- "$dp[1]" $exposed; or set -a exposed "$dp[1]"
+                end
+            end
+            if test (count $exposed) -eq 0
+                set exposed none
+            end
+            for consumer in $exposed
+                if test "$kind" = stock-only
+                    set -a findings "exposure: $id -> $consumer: stock $stock carries '$entry_value' but $id drops it"
+                else
+                    set -a findings "exposure: $id -> $consumer: $id carries '$entry_value' that stock $stock does not"
+                end
+            end
+        end
+    end
+    if test $compared -eq 0
+        echo "abi-exposure: skipped — no workspace lib has an installed stock equivalent to compare against"
+        return 0
+    end
+    if test (count $findings) -gt 0
+        printf '%s\n' $findings | sort -u
+    end
+    return 0
+end
+
 # ─── PGO payload gate (an install-plan step) ─────────────────────────────────
 # An installed PGO *phase-1* binary bakes absolute profile destinations into
 # `.rodata` — `.gcda` for C/C++ `-fprofile-generate`, `.profraw` for Rust's
@@ -3546,17 +4479,29 @@ function audit_lint_provides
         set -l id $fields[1]
         set -l srcinfo "$SCRIPT_DIR/$fields[2]/.SRCINFO"
         test -f "$srcinfo"; or continue
-        for field in depends makedepends optdepends checkdepends
-            for value in (sed -n "s/^[[:space:]]*$field = //p" "$srcinfo" 2>/dev/null)
-                # optdepends carry a `: description` suffix; names never do.
-                set -l v (string split -m1 ':' -- "$value")[1]
-                set -l m (string match -r -g '^(.+?)(>=|<=|=|>|<)(.+)$' -- (string trim -- $v))
-                test (count $m) -ge 3; or continue
-                set -a constraints "$m[1]|$m[2]|$m[3]|$id"
+        # ONE tagged sed pass replaces five: the same BREs as the old
+        # per-field `sed -n "s/^[[:space:]]*$field = //p"` runs, tagged and
+        # merged (a line matches exactly one field name). The empty-value
+        # guard replicates the old substitution dropping empty output lines.
+        for row in (sed -n \
+            -e 's/^[[:space:]]*depends = /depends@/p' \
+            -e 's/^[[:space:]]*makedepends = /makedepends@/p' \
+            -e 's/^[[:space:]]*optdepends = /optdepends@/p' \
+            -e 's/^[[:space:]]*checkdepends = /checkdepends@/p' \
+            -e 's/^[[:space:]]*provides = /provides@/p' \
+            "$srcinfo" 2>/dev/null)
+            set -l kv (string split -m 1 '@' -- "$row")
+            test -n "$kv[2]"; or continue
+            if test "$kv[1]" = provides
+                set -a entries "$id|$kv[2]"
+                continue
             end
-        end
-        for value in (sed -n 's/^[[:space:]]*provides = //p' "$srcinfo" 2>/dev/null)
-            set -a entries "$id|$value"
+            set -l value "$kv[2]"
+            # optdepends carry a `: description` suffix; names never do.
+            set -l v (string split -m1 ':' -- "$value")[1]
+            set -l m (string match -r -g '^(.+?)(>=|<=|=|>|<)(.+)$' -- (string trim -- $v))
+            test (count $m) -ge 3; or continue
+            set -a constraints "$m[1]|$m[2]|$m[3]|$id"
         end
     end
 
@@ -3603,15 +4548,24 @@ function audit_lint_purged
         set -l id $fields[1]
         set -l srcinfo "$SCRIPT_DIR/$fields[2]/.SRCINFO"
         test -f "$srcinfo"; or continue
-        for field in makedepends checkdepends
-            for value in (sed -n "s/^[[:space:]]*$field = //p" "$srcinfo" 2>/dev/null)
-                set -l v (string split -m1 ':' -- "$value")[1]
-                set -l m (string match -r -g '^(.+?)(>=|<=|=|>|<)(.+)$' -- (string trim -- $v))
-                set -l name $v
-                test (count $m) -ge 3; and set name $m[1]
-                if contains -- "$name" $denylist
-                    set -a findings "purged: $id: $field reintroduces purged tool '$name' — remove it (docs/MEMORY.md rule 8)"
-                end
+        # ONE tagged sed pass replaces the two per-field runs (same BREs; the
+        # empty-value guard replicates the old substitution's empty-line drop).
+        # Findings sort -u at the end, so line order vs the old field-major
+        # order is output-invisible.
+        for row in (sed -n \
+            -e 's/^[[:space:]]*makedepends = /makedepends@/p' \
+            -e 's/^[[:space:]]*checkdepends = /checkdepends@/p' \
+            "$srcinfo" 2>/dev/null)
+            set -l kv (string split -m 1 '@' -- "$row")
+            test -n "$kv[2]"; or continue
+            set -l field "$kv[1]"
+            set -l value "$kv[2]"
+            set -l v (string split -m1 ':' -- "$value")[1]
+            set -l m (string match -r -g '^(.+?)(>=|<=|=|>|<)(.+)$' -- (string trim -- $v))
+            set -l name $v
+            test (count $m) -ge 3; and set name $m[1]
+            if contains -- "$name" $denylist
+                set -a findings "purged: $id: $field reintroduces purged tool '$name' — remove it (docs/MEMORY.md rule 8)"
             end
         end
     end
@@ -3678,6 +4632,335 @@ function audit_lint_ignorepkg -a conf
         printf '%s\n' $findings | sort -u
     end
     return 0
+end
+
+# ─── AUTO-REGISTER: the IgnorePkg mutation seam ──────────────────────────────
+# `--register-ignorepkg [conf]` (bottom of this file) is the WRITE half of
+# docs/MEMORY.md rule 9, paired with the read-only closure lint above: it
+# computes the workspace pkgname universe (pkgbase + every pkgname of each
+# committed .SRCINFO — never a PKGBUILD grep, the kernel hides its names) and
+# appends the names the target pacman.conf does not cover yet as cumulative
+# `IgnorePkg =` lines (~10 names/line) INSIDE [options] — after the last
+# existing IgnorePkg line there, or before the next section header. Idempotent:
+# a complete closure appends nothing. AUTO-REGISTER never auto-trusts — the
+# seam REFUSES (rc 1, nothing changed) whenever the universe cannot be
+# verified: a recipe directory with a missing/stale .SRCINFO is NAMED and
+# blocks the write (read_abi_exclusions' strict-loader contract: a silent gap
+# is exactly what the guard exists to prevent), and so does a target that is
+# not user-writable when `sudo -n` is unavailable (the builder NEVER prompts).
+#
+# pacman_conf_ignorepkg_walk CONF — THE pacman.conf parser for the seam (the
+# lint above parses the same grammar for its report; this walk adds the
+# mutation-side derivations). Semantics are pacman's: `IgnorePkg =` lines
+# accumulate, whitespace-split, only inside [options]; a line inside a repo
+# section — or before any section header — is dropped (a repo-section drop is
+# LOUD here, a pre-section drop is silently pacman's own behaviour). Emits
+# one tagged line per observation:
+#   ignored <name>             one name in the cumulative [options] closure
+#   repo-drop <TAB>line<TAB>sec  IgnorePkg inside repo section <sec> (dropped)
+#   options-include <line>     an Include inside [options] (closure unfollowable)
+#   insert-before <line>       splice point for new lines (0 = append at EOF)
+#   no-options                 the conf has no [options] section at all
+function pacman_conf_ignorepkg_walk -a conf
+    set -l in_options 0
+    set -l sec ''
+    set -l lineno 0
+    set -l last_ignore 0
+    set -l options_seen 0
+    set -l insert_before 0
+    for raw in (cat "$conf")
+        set lineno (math $lineno + 1)
+        set -l line (string trim -- (string split -m1 '#' -- "$raw")[1])
+        test -n "$line"; or continue
+        if string match -qr '^\[.+\]$' -- "$line"
+            set sec (string trim -- (string replace -r '^\[(.+)\]$' '$1' -- "$line"))
+            if test "$sec" = options
+                set in_options 1
+                set options_seen 1
+            else
+                # First non-[options] header after [options]: the fallback
+                # splice point when [options] carries no IgnorePkg line yet.
+                if test $options_seen -eq 1; and test $insert_before -eq 0
+                    set insert_before $lineno
+                end
+                set in_options 0
+            end
+            continue
+        end
+        if string match -qr '^IgnorePkg[[:space:]]*=' -- "$line"
+            if test $in_options -eq 1
+                set last_ignore $lineno
+                set -l m (string match -r -g '^IgnorePkg[[:space:]]*=[[:space:]]*(.*)$' -- "$line")
+                test (count $m) -ge 1; or continue
+                for name in (string split -n ' ' -- (string replace -a \t ' ' -- $m[1]))
+                    echo "ignored $name"
+                end
+            else if test -n "$sec"
+                printf 'repo-drop\t%s\t%s\n' "$lineno" "$sec"
+            end
+            continue
+        end
+        if test $in_options -eq 1; and string match -qr '^Include[[:space:]]*=' -- "$line"
+            echo "options-include $lineno"
+        end
+    end
+    if test $options_seen -eq 0
+        echo "no-options"
+        return 0
+    end
+    if test $last_ignore -gt 0
+        echo "insert-before "(math $last_ignore + 1)
+    else
+        echo "insert-before $insert_before"
+    end
+end
+
+# register_ignorepkg CONF — compute the workspace name universe, append the
+# missing names to CONF's [options] and verify the result. rc 0 = the closure
+# is complete afterwards (nothing-to-append counts), 1 = refusal (nothing
+# changed, or the post-check caught a write that did not land), 2 = usage is
+# the dispatcher's job. See the seam comment at the bottom of this file.
+function register_ignorepkg -a conf
+    test -n "$conf"; or set conf /etc/pacman.conf
+
+    # ── 1. workspace pkgname universe: every recipe's committed .SRCINFO ──
+    # Recipe dirs live at packages/<group>/<name> (a synthetic workspace may
+    # put them one level up); a directory is a recipe when it carries PKGBUILD
+    # or .SRCINFO. Missing or stale .SRCINFO is a NAMED finding that blocks:
+    # registering a closure computed over a hole would print "empty missing
+    # set" while some outputs stay unprotected.
+    set -l names
+    set -l findings
+    set -l recipe_count 0
+    for dir in $SCRIPT_DIR/packages/* $SCRIPT_DIR/packages/*/*
+        test -d "$dir"; or continue
+        if not test -f "$dir/PKGBUILD"; and not test -f "$dir/.SRCINFO"
+            continue
+        end
+        set recipe_count (math $recipe_count + 1)
+        set -l rel (string replace -- "$SCRIPT_DIR/" '' "$dir")
+        set -l srcinfo "$dir/.SRCINFO"
+        if not test -f "$srcinfo"
+            set -a findings "$rel: no .SRCINFO committed"
+            continue
+        end
+        set -l si (cat "$srcinfo")
+        set -l si_base ''
+        set -l si_out
+        if test (count $si) -gt 0
+            set -l b (string match -r -g '^pkgbase = (.+)$' -- $si)
+            test (count $b) -ge 1; and set si_base $b[1]
+            set si_out (string match -r -g '^pkgname = (.+)$' -- $si)
+        end
+        if test -z "$si_base"; or test (count $si_out) -eq 0
+            set -a findings "$rel: stale .SRCINFO (pkgbase/pkgname entries missing — regenerate with GIT_CONFIG_COUNT=0 makepkg --printsrcinfo > .SRCINFO)"
+            continue
+        end
+        # Stale the way bettbox was stale (docs/MEMORY.md): the PKGBUILD
+        # declares a LITERAL pkgver/pkgrel/epoch the committed .SRCINFO
+        # contradicts. Only plain literals are compared — a computed value
+        # (the kernel's pkgver=$_basekernver) is uncheckable text, and the
+        # full makepkg --printsrcinfo diff is tests/srcinfo-freshness.sh's job.
+        set -l pb
+        if test -f "$dir/PKGBUILD"
+            set pb (cat "$dir/PKGBUILD")
+        end
+        for field in epoch pkgver pkgrel
+            set -l pb_val ''
+            for raw in $pb
+                set -l m (string match -r -g "^$field=(.+)\$" -- "$raw")
+                test (count $m) -ge 1; or continue
+                set pb_val (string trim -c "\"'" -- $m[1])
+                break
+            end
+            test -n "$pb_val"; or continue
+            string match -qr '^[0-9A-Za-z._:+~>-]+$' -- "$pb_val"; or continue
+            set -l siv ''
+            if test (count $si) -gt 0
+                set -l s (string match -r -g "^$field = (.+)\$" -- $si)
+                test (count $s) -ge 1; and set siv $s[1]
+            end
+            test -n "$siv"; or continue
+            if test "$pb_val" != "$siv"
+                set -a findings "$rel: stale .SRCINFO ($field is $pb_val in PKGBUILD but $siv in .SRCINFO — regenerate with GIT_CONFIG_COUNT=0 makepkg --printsrcinfo > .SRCINFO)"
+            end
+        end
+        for name in $si_base $si_out
+            test -n "$name"; and set -a names "$name"
+        end
+    end
+    if test $recipe_count -eq 0
+        set -a findings "no recipe directories under $SCRIPT_DIR/packages — nothing to register"
+    end
+    if test (count $names) -gt 0
+        set names (printf '%s\n' $names | sort -u)
+    end
+
+    # ── 2. parse the target exactly like pacman (the walk) ───────────────
+    if not test -r "$conf"
+        echo "register-ignorepkg: cannot read $conf — nothing changed" >&2
+        return 1
+    end
+    set -l walk (pacman_conf_ignorepkg_walk "$conf")
+    set -l ignored
+    set -l repo_drops
+    set -l options_includes
+    set -l insert_before -1
+    if test (count $walk) -gt 0
+        set ignored (string match -r -g '^ignored (.+)$' -- $walk)
+        set repo_drops (string match -r -g '^repo-drop\t(.+)$' -- $walk)
+        set options_includes (string match -r -g '^options-include ([0-9]+)$' -- $walk)
+        set -l ib (string match -r -g '^insert-before ([0-9]+)$' -- $walk)
+        test (count $ib) -ge 1; and set insert_before $ib[1]
+    end
+    for drop in $repo_drops
+        set -l parts (string split \t -- $drop)
+        echo "register-ignorepkg: warning: $conf line $parts[1]: IgnorePkg inside repo section [$parts[2]] is dropped by pacman — move it into [options]"
+    end
+    for line in $options_includes
+        set -a findings "$conf line $line: [options] Include is not followed — inline its IgnorePkg entries into the file"
+    end
+    if test $insert_before -lt 0
+        set -a findings "$conf: no [options] section — IgnorePkg lines have nowhere to live"
+    end
+    if test (count $ignored) -gt 0
+        set ignored (printf '%s\n' $ignored | sort -u)
+    end
+
+    if test (count $findings) -gt 0
+        for finding in $findings
+            echo "register-ignorepkg: finding: $finding" >&2
+        end
+        echo "register-ignorepkg: universe "(count $names)" name(s) from $recipe_count recipe(s), closure "(count $ignored)" name(s) before, not modified" >&2
+        echo "register-ignorepkg: refusing to modify $conf — fix the findings first" >&2
+        return 1
+    end
+
+    # ── 3. missing set: the universe names the closure does not cover ────
+    set -l missing
+    for name in $names
+        contains -- "$name" $ignored; or set -a missing "$name"
+    end
+
+    # ── 4. write path (only when something is missing) ───────────────────
+    # Escalate with sudo -n ONLY — the builder never prompts: a dead
+    # credential fails fast with nothing changed. A user-writable target
+    # (every fixture path) never touches sudo at all.
+    if test (count $missing) -gt 0
+        set -l need_sudo 0
+        if not test -w "$conf"; or not test -w (dirname -- "$conf")
+            set need_sudo 1
+        end
+        if test $need_sudo -eq 1
+            if not sudo -n true 2>/dev/null
+                echo "register-ignorepkg: sudo cannot modify $conf non-interactively — nothing changed" >&2
+                return 1
+            end
+        end
+        # Dated pre-image backup before the first modification. An existing
+        # identical backup is left alone (crash-window recovery); a differing
+        # one is never overwritten — it is the day's original pre-image.
+        set -l backup "$conf.bak-"(date +%Y%m%d)
+        if test -e "$backup"
+            if command cmp -s -- "$conf" "$backup"
+                echo "register-ignorepkg: backup $backup already present (identical pre-image)"
+            else
+                echo "register-ignorepkg: refusing to modify $conf — backup $backup already exists with different content; move it aside first" >&2
+                return 1
+            end
+        else if test $need_sudo -eq 1
+            if not sudo -n cp -p -- "$conf" "$backup"
+                echo "register-ignorepkg: cannot write backup $backup — nothing changed" >&2
+                return 1
+            end
+            echo "register-ignorepkg: backup $backup (pre-image)"
+        else
+            if not command cp -p -- "$conf" "$backup"
+                echo "register-ignorepkg: cannot write backup $backup — nothing changed" >&2
+                return 1
+            end
+            echo "register-ignorepkg: backup $backup (pre-image)"
+        end
+        # ~10 names per cumulative line, in the universe's sorted order.
+        set -l new_lines
+        set -l idx 1
+        set -l total (count $missing)
+        while test $idx -le $total
+            set -l last (math $idx + 9)
+            test $last -gt $total; and set last $total
+            set -a new_lines "IgnorePkg = "(string join ' ' $missing[$idx..$last])
+            set idx (math $idx + 10)
+        end
+        set -l tmpfile (mktemp)
+        if test -z "$tmpfile"
+            echo "register-ignorepkg: cannot allocate a scratch file — nothing changed" >&2
+            return 1
+        end
+        if test $insert_before -gt 0
+            command head -n (math $insert_before - 1) -- "$conf" >"$tmpfile"
+            printf '%s\n' $new_lines >>"$tmpfile"
+            command tail -n +"$insert_before" -- "$conf" >>"$tmpfile"
+        else
+            command cat -- "$conf" >"$tmpfile"
+            # a conf without a trailing newline must not swallow the first
+            # appended line
+            if test (command tail -c 1 -- "$conf" | command wc -l) -eq 0
+                printf '\n' >>"$tmpfile"
+            end
+            printf '%s\n' $new_lines >>"$tmpfile"
+        end
+        # NOTE: `set -l` is BLOCK-scoped in fish — cp_rc must be declared
+        # outside the if/else below to survive its `end`.
+        set -l cp_rc 0
+        if test $need_sudo -eq 1
+            sudo -n cp -- "$tmpfile" "$conf"
+            set cp_rc $status
+        else
+            command cp -- "$tmpfile" "$conf"
+            set cp_rc $status
+        end
+        command rm -f -- "$tmpfile"
+        if test $cp_rc -ne 0
+            echo "register-ignorepkg: cannot write $conf" >&2
+            return 1
+        end
+        echo "register-ignorepkg: universe "(count $names)" name(s) from $recipe_count recipe(s), closure "(count $ignored)" name(s) before, appended $total name(s) as "(count $new_lines)" IgnorePkg line(s)"
+    else
+        echo "register-ignorepkg: universe "(count $names)" name(s) from $recipe_count recipe(s), closure "(count $ignored)" name(s) before, no changes needed"
+    end
+
+    # ── 5. post-condition: comm -23(universe, closure-after) must be empty ─
+    # The verification RE-READS the file through the same pacman parser — the
+    # write is only done when the closure it ships is provably complete.
+    set -l walk_after (pacman_conf_ignorepkg_walk "$conf")
+    set -l ignored_after
+    if test (count $walk_after) -gt 0
+        set ignored_after (string match -r -g '^ignored (.+)$' -- $walk_after)
+    end
+    set -l scratch (mktemp -d)
+    if test -n "$scratch"
+        if test (count $names) -gt 0
+            printf '%s\n' $names | sort -u >"$scratch/universe"
+        else
+            printf '' >"$scratch/universe"
+        end
+        if test (count $ignored_after) -gt 0
+            printf '%s\n' $ignored_after | sort -u >"$scratch/closure"
+        else
+            printf '' >"$scratch/closure"
+        end
+        set -l missing_after (command comm -23 "$scratch/universe" "$scratch/closure")
+        command rm -rf -- "$scratch"
+        if test (count $missing_after) -eq 0
+            echo "register-ignorepkg: verification comm -23 (universe vs closure after): empty"
+            return 0
+        end
+        echo "register-ignorepkg: verification comm -23 (universe vs closure after):"
+        printf '%s\n' $missing_after
+        return 1
+    end
+    echo "register-ignorepkg: cannot allocate scratch for the verification — re-run to verify" >&2
+    return 1
 end
 
 function audit_lint_swap
@@ -3934,6 +5217,31 @@ function audit_workspace
         echo "  none"
     else
         for finding in $swap_findings
+            echo "  $finding"
+        end
+    end
+
+    # ABI-drift guard layers 1 + 5 (report-only here exactly like the
+    # recipe-contract lints above; the hidden --audit-lint seam runs them
+    # individually as abi-closure / abi-exposure).
+    echo ""
+    echo "ABI closure (workspace-built outputs):"
+    set -l closure_findings (audit_lint_abi_closure)
+    if test (count $closure_findings) -eq 0
+        echo "  none"
+    else
+        for finding in $closure_findings
+            echo "  $finding"
+        end
+    end
+
+    echo ""
+    echo "ABI exposure (soname provides vs installed stock):"
+    set -l exposure_findings (audit_lint_abi_exposure)
+    if test (count $exposure_findings) -eq 0
+        echo "  none"
+    else
+        for finding in $exposure_findings
             echo "  $finding"
         end
     end
@@ -4386,8 +5694,23 @@ function install_plan -a mode
     # Never plan a PGO phase-1 payload: libgcov would recreate its build tree
     # on every run, and under -i every later package would build against it.
     set -l pgo_rows (pgo_payload_refusals $archives)
-    if test $status -ne 0
+    set -l pgo_failed $status
+    if test $pgo_failed -ne 0
+        # A PGO refusal already fails the plan and the decision half must
+        # stay pacman-free to the very end (tests/pgo-payload-guard.sh and
+        # tests/install-conflict-ask.sh C2 pin zero pacman calls on those
+        # paths), so the ABI gate below is not even consulted — it is the
+        # only other plan-step reader of the installed database.
         printf '%s\n' $pgo_rows
+        return 1
+    end
+    # ABI-drift guard layer 3 (abi_provide_refusals): a bare soname provide
+    # that disappears/changes against the installed database while the
+    # consumer closure is open refuses the plan — BEFORE the force branch, so
+    # -fi/-ia can never route around it. Decision half stays silent.
+    set -l abi_rows (abi_provide_refusals $archives)
+    if test $status -ne 0
+        printf '%s\n' $abi_rows
         return 1
     end
     if test "$mode" = force
@@ -4505,6 +5828,14 @@ function install_execute -a log_file sink n_extra
                 case pgo-instrumented
                     install_emit "$sink" "$log_file" error "refusing to install "(basename "$fields[3]")": a phase-1 PGO binary is packaged, so libgcov would recreate its build tree on every run"
                     install_emit "$sink" "$log_file" error "rebuild the recipe so phase 2 really replaces the profiled flags (docs/build-guide.md: PGO)"
+                case abi-soname
+                    if test "$fields[7]" = "-"
+                        install_emit "$sink" "$log_file" error (basename "$fields[3]")": soname provide "$fields[5]" (installed "$fields[6]") disappears in this build — its consumer closure is not in this transaction"
+                    else
+                        install_emit "$sink" "$log_file" error (basename "$fields[3]")": soname provide "$fields[5]" moves "$fields[6]" -> "$fields[7]" — its consumer closure is not in this transaction"
+                    end
+                case abi-consumer
+                    install_emit "$sink" "$log_file" error "installed consumer "$fields[4]" is not in this transaction — a moved soname provide would leave it broken (rebuild it in the same batch, or install the built set together with -ia)"
                 case '*'
                     install_emit "$sink" "$log_file" error "unrecognized install-plan refusal: $row"
             end
@@ -4547,6 +5878,20 @@ function install_execute -a log_file sink n_extra
         else
             ui_error "Install failed (rc=$irc)"
         end
+        return 1
+    end
+    # ABI-drift guard layer 4: after the transaction lands, every installed
+    # consumer output's DT_NEEDED must resolve within the newly installed +
+    # existing provide set. Failure aborts loudly, sonames named — the
+    # transaction already landed, so every later package would otherwise
+    # compile against an unresolvable system.
+    set -l probe_rows (install_needed_probe $installs)
+    if test $status -ne 0
+        for row in $probe_rows
+            set -l fields (string split ' ' -- "$row")
+            install_emit "$sink" "$log_file" error "post-install NEEDED probe: "$fields[3]" needs "$fields[4]" — unresolved after the transaction"
+        end
+        install_emit "$sink" "$log_file" error "post-install NEEDED probe: aborting — the transaction landed with outputs whose sonames do not resolve (rebuild the provider in the same batch, or register the name in config/abi-exclusions.conf)"
         return 1
     end
     return 0
@@ -8463,6 +9808,43 @@ function main
             echo "  this run rebuilds an abi=must batch anchor; the packages above are installed"
             echo "  abi=should members whose ABI can be left stale against it."
         end
+
+        # ABI-drift guard layer 2 — batch tightening on soname drift. The
+        # tag-based batch above is the policy relation; this is the CONCRETE
+        # one: any provider whose soname-provides set (committed .SRCINFO
+        # bare stems) differs from the installed stock equivalent's provides
+        # (abi_soname_provides_changed — pure gate logic, no builds) drags
+        # its FULL in-tree consumer closure into the batch
+        # (abi_consumer_closure: .SRCINFO name matching + topology edges).
+        # An installed closure member omitted from the selection is refused
+        # exactly like an omitted abi=must member: the provider's new surface
+        # would land beside a consumer still built against the old one. A
+        # member that is not installed has nothing to protect and never
+        # gates; read-only modes stay exempt.
+        set -l abi_open
+        for provider in $sorted
+            abi_soname_provides_changed "$provider"; or continue
+            for member in (abi_consumer_closure "$provider")
+                contains -- "$member" $sorted; and continue
+                abi_pkg_installed "$member"; or continue
+                set -a abi_open (printf '%s %s' $provider $member)
+            end
+        end
+        if test (count $abi_open) -gt 0
+            set abi_open (printf '%s\n' $abi_open | sort -u)
+            set -l first_pair (string split ' ' -- $abi_open[1])
+            ui_error "refusing to build $first_pair[1] without $first_pair[2] — its soname provides changed, so the whole consumer closure must rebuild in the same selection"
+            echo "  $first_pair[1]'s soname provides differ from the installed stock package's provides:"
+            echo "  installing it beside an installed consumer leaves that consumer broken the"
+            echo "  moment the archive lands. Missing consumer(s) of the closure:"
+            for entry in $abi_open
+                set -l pair (string split ' ' -- $entry)
+                echo "  missing: $pair[2] — add $pair[2] to the selection (or use --no-deps only for leaves)"
+            end
+            echo "  if the consumers cannot rebuild yet, build without -i and install the whole"
+            echo "  built set together with -ia once the closure is complete."
+            return 1
+        end
     end
 
     # List — read-only, and deliberately AFTER the range filter: the printed
@@ -8815,26 +10197,27 @@ end
 # Hidden fixture seam (same precedent as --stale-lock-check/--local-db-check):
 # run ONE workspace-audit lint against the loaded workspace — no build, no
 # network, no host state beyond the pacman.conf the caller names.
-#   fish build-all.fish --audit-lint <provides|purged|ignorepkg|swap> [pacman-conf]
+#   fish build-all.fish --audit-lint <provides|purged|ignorepkg|swap|abi-closure|abi-exposure> [pacman-conf]
 # Output: one finding line per finding (prefix `provides: `/`purged: `/
-# `ignorepkg: `/`swap: `) followed by `audit-lint <name>: clean`,
-# `audit-lint <name>: N finding(s)` or `audit-lint ignorepkg: skipped`.
+# `ignorepkg: `/`swap: `/`abi-closure: `/`exposure: `) followed by
+# `audit-lint <name>: clean`, `audit-lint <name>: N finding(s)` or
+# `audit-lint <name>: skipped`.
 # rc 0 = the lint RAN — a finding never changes the exit status (report-only,
 # the same contract --audit has) — 2 = usage. No GSA_* test knob.
 if test (count $argv) -gt 0; and test "$argv[1]" = --audit-lint
     if test (count $argv) -lt 2; or test (count $argv) -gt 3
-        echo "Error: --audit-lint expects <provides|purged|ignorepkg|swap> and an optional pacman.conf path" >&2
+        echo "Error: --audit-lint expects <provides|purged|ignorepkg|swap|abi-closure|abi-exposure> and an optional pacman.conf path" >&2
         exit 2
     end
     switch $argv[2]
-        case provides purged swap
+        case provides purged swap abi-closure abi-exposure
             if test (count $argv) -ne 2
                 echo "Error: --audit-lint $argv[2] takes no pacman.conf path" >&2
                 exit 2
             end
         case ignorepkg
         case '*'
-            echo "Error: --audit-lint expects provides, purged, ignorepkg or swap" >&2
+            echo "Error: --audit-lint expects provides, purged, ignorepkg, swap, abi-closure or abi-exposure" >&2
             exit 2
     end
     set -l lint_findings
@@ -8847,18 +10230,60 @@ if test (count $argv) -gt 0; and test "$argv[1]" = --audit-lint
             set lint_findings (audit_lint_ignorepkg "$argv[3]")
         case swap
             set lint_findings (audit_lint_swap)
+        case abi-closure
+            set lint_findings (audit_lint_abi_closure)
+        case abi-exposure
+            set lint_findings (audit_lint_abi_exposure)
     end
     for finding in $lint_findings
         echo "$finding"
     end
-    if test "$argv[2]" = ignorepkg; and test (count $lint_findings) -eq 1; and string match -q 'ignorepkg: skipped*' -- $lint_findings[1]
-        echo "audit-lint ignorepkg: skipped"
+    if test (count $lint_findings) -eq 1; and string match -q "$argv[2]: skipped*" -- $lint_findings[1]
+        echo "audit-lint $argv[2]: skipped"
     else if test (count $lint_findings) -eq 0
         echo "audit-lint $argv[2]: clean"
     else
         echo "audit-lint $argv[2]: "(count $lint_findings)" finding(s)"
     end
     exit 0
+end
+
+# Hidden mutation seam (same rc vocabulary as --install-decide): close the
+# IgnorePkg closure of a pacman.conf from the workspace name universe — the
+# WRITE half of docs/MEMORY.md rule 9, whose READ half is --audit's ignorepkg
+# closure lint (and the hidden --audit-lint ignorepkg). Unlike the lint it is
+# NOT report-only: it appends the missing names, so it may modify its target.
+#   fish build-all.fish --register-ignorepkg [pacman-conf]
+# Default target /etc/pacman.conf. The universe is pkgbase+pkgname of every
+# committed .SRCINFO under packages/; the target is parsed exactly like pacman
+# (cumulative `IgnorePkg =` inside [options] only — a repo-section line is
+# dropped, with a warning) and the missing names land as ~10-per-line
+# `IgnorePkg =` lines inside [options], after the last existing one there.
+# Idempotent: a complete closure appends nothing (and writes nothing).
+# rc 0 = the closure is complete afterwards (the verification comm -23 is
+# empty; nothing-to-append counts), 1 = refusal with nothing changed (a
+# missing/stale .SRCINFO names its recipe and blocks; a non-user-writable
+# target escalates with `sudo -n` ONLY and fails fast when that is
+# unavailable — the builder never prompts; backup clash or failed
+# write/post-check also refuse), 2 = bad usage. A dated pre-image backup
+# (<conf>.bak-YYYYMMDD) is written before the first modification only.
+# Fixture-path targets (user-writable) never invoke sudo:
+# tests/ignorepkg-register.sh. No GSA_* test knob.
+if test (count $argv) -gt 0; and test "$argv[1]" = --register-ignorepkg
+    if test (count $argv) -gt 2
+        echo "Error: --register-ignorepkg expects at most one pacman.conf path" >&2
+        exit 2
+    end
+    set -l register_conf /etc/pacman.conf
+    if test (count $argv) -eq 2
+        if test -z "$argv[2]"
+            echo "Error: --register-ignorepkg pacman.conf path must not be empty" >&2
+            exit 2
+        end
+        set register_conf "$argv[2]"
+    end
+    register_ignorepkg "$register_conf"
+    exit $status
 end
 
 main $argv

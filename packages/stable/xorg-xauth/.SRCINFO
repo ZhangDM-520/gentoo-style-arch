@@ -1,0 +1,22 @@
+pkgbase = xorg-xauth
+	pkgdesc = X.Org authorization settings program
+	pkgver = 1.1.5
+	pkgrel = 1
+	url = https://gitlab.freedesktop.org/xorg/app/xauth
+	arch = x86_64
+	groups = xorg-apps
+	groups = xorg
+	license = MIT-open-group
+	makedepends = xorg-util-macros
+	depends = libxmu
+	depends = libxau
+	depends = libxext
+	depends = libx11
+	depends = glibc
+	source = https://xorg.freedesktop.org/releases/individual/app/xauth-1.1.5.tar.xz
+	source = https://xorg.freedesktop.org/releases/individual/app/xauth-1.1.5.tar.xz.sig
+	validpgpkeys = 3AB285232C46AE43D8E192F4DAB0F78EA6E7E2D2
+	sha512sums = df94b59de49ced2490351b7ab42d56d3ef92077891b8ba7a73c53b6babb1facd250d934b82f36ee1ddc355dffefb8f52914d30893c9d578711264f82e9bf3cb9
+	sha512sums = SKIP
+
+pkgname = xorg-xauth

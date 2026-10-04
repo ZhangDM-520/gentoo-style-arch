@@ -16,7 +16,7 @@ url='https://tukaani.org/xz/'
 license=('GPL-2.0-or-later' 'LGPL-2.1-or-later' '0BSD' 'LicenseRef-custom')
 depends=('sh')
 makedepends=('git' 'tar')  # doxygen/po4a dropped 2026-09-04: docs-only
-provides=('liblzma.so=5-64' "xz=${pkgver%%.r*}")
+provides=('liblzma.so' "xz=${pkgver%%.r*}")
 conflicts=(xz)
 source=("$pkgname::git+https://github.com/tukaani-project/xz.git")
 sha256sums=('SKIP')

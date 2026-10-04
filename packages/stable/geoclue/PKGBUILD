@@ -1,0 +1,85 @@
+# Maintainer: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
+# Contributor: György Balló <ballogy@freestart.hu>
+
+pkgname=geoclue
+pkgver=2.8.2
+pkgrel=1
+pkgdesc="Modular geoinformation service built on the D-Bus messaging system"
+url="https://gitlab.freedesktop.org/geoclue/geoclue/-/wikis/home"
+arch=(x86_64)
+license=(
+  LGPL-2.1-or-later
+  GPL-2.0-or-later
+)
+depends=(
+  avahi
+  glib2
+  glibc
+  json-glib
+  libgcc
+  libmm-glib
+  libsoup3
+)
+makedepends=(
+  git
+  glib2-devel
+  gobject-introspection
+  meson
+  systemd
+  vala
+)
+# trim: gtk-doc (API docs, -D gtk-doc=false below) and libnotify + the demo
+#       agent optdepends (-D demo-agent=false below) dropped together
+#       (docs/demos)
+# trim: stock provides=("geoclue2=$pkgver-$pkgrel") + conflicts/replaces=(geoclue2)
+#       dropped (house: bare soname provides only, no conflicts/replaces)
+# House standard: bare soname provide per ELF output (never pinned).
+provides=(libgeoclue-2.so)
+backup=(etc/geoclue/geoclue.conf)
+source=(
+  "git+https://gitlab.freedesktop.org/geoclue/geoclue.git#tag=$pkgver"
+)
+b2sums=('4a143cb4e001ca545fd64969cb4a96c89c954fafbd94442135fef27858320d1eed1428b7867adccd9df26570ec8bdb1006ce01cffe40aa5d8deb33be47cd9830')
+
+prepare() {
+  cd geoclue
+}
+
+build() {
+  local meson_options=(
+    -D dbus-srv-user=geoclue
+    # trim: demo agent + its libnotify dependency (demos)
+    -D demo-agent=false
+    # trim: gtk-doc API reference (docs)
+    -D gtk-doc=false
+  )
+
+  # House style: mold linker when available
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  arch-meson geoclue build "${meson_options[@]}"
+  meson compile -C build -j "${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+# trim: check() test suite (meson test) dropped (Class B tests)
+
+package() {
+  meson install -C build --destdir "$pkgdir"
+
+  echo 'd /var/lib/geoclue 0755 geoclue geoclue' |
+    install -Dm644 /dev/stdin "$pkgdir/usr/lib/tmpfiles.d/geoclue.conf"
+
+  # trim: locale/doc payload (locales/docs)
+  rm -rf "$pkgdir/usr/share/locale" "$pkgdir/usr/share/doc" "$pkgdir/usr/share/gtk-doc"
+
+  # license: ship the upstream licence text(s) (LGPL-2.1-or-later, GPL-2.0-or-later)
+  cd geoclue
+  local _l
+  for _l in COPYING COPYING.GPL COPYING.LGPL LICENSE; do
+    [[ -f $_l ]] && install -Dm644 "$_l" -t "$pkgdir/usr/share/licenses/$pkgname/"
+  done
+}
+
+# vim:set sw=2 sts=-1 et:

@@ -1,0 +1,74 @@
+# Maintainer: auto-generated
+# Contributor: David Runge <dvzrv@archlinux.org> (AUR jack2-git)
+# Contributor: Christopher Arndt <aur -at- chrisarndt -dot- de> (AUR jack2-git)
+# Contributor: rtfreedman (AUR jack2-git)
+
+pkgname=jack2-git
+_pkgname=jack2
+epoch=2
+pkgver=1.9.22.r41.g1795946
+pkgrel=1
+pkgdesc="The JACK low-latency audio server (git build)"
+arch=('x86_64')
+url="https://github.com/jackaudio/jack2"
+license=('GPL-2.0-or-later' 'LGPL-2.1-or-later')
+depends=('alsa-lib' 'db5.3' 'dbus' 'expat' 'glibc' 'libgcc' 'libsamplerate' 'libstdc++' 'opus' 'systemd-libs')
+makedepends=('git' 'waf')
+# One output supersedes stock jack2 + jack2-dbus (dbus integration merged in);
+# stock jack2-docs is dropped (doxygen docs trimmed).
+provides=("jack2=$pkgver" 'jack' 'jack2-dbus' 'libjack.so' 'libjacknet.so' 'libjackserver.so')
+conflicts=('jack2' 'jack' 'jack2-dbus')
+optdepends=(
+  'a2jmidid: for ALSA MIDI to JACK MIDI bridging'
+  'jack-example-tools: for official JACK example-clients and tools'
+  'libffado: for firewire support using FFADO'
+  'python-dbus: for the jack_control script'
+  'realtime-privileges: for realtime privileges'
+)
+# develop is the active 1.9.x line where the v1.9.x release tags live
+source=("$_pkgname::git+https://github.com/jackaudio/${_pkgname}#branch=develop")
+b2sums=('SKIP')
+
+prepare() {
+  # use the system waf instead of the bundled waflib (stock jack2)
+  touch "$_pkgname/__init__.py"
+  rm -rv "$_pkgname/waflib"
+
+  # db-5.3 detection, from stock jack2-1.9.22-db-5.3.patch (still unmerged
+  # upstream as of 1.9.22.r41); fail loudly if the wscript changed under us
+  sed -i "s/db.check(header_name='db.h')/db.check(header_name='db5.3\/db.h')/; s/db.check(lib='db')/db.check(lib='db-5.3')/" "$_pkgname/wscript"
+  grep -q "db.check(lib='db-5.3')" "$_pkgname/wscript"
+}
+
+pkgver() {
+  cd "$_pkgname"
+  git describe --long --tags --match="v[0-9]*" | sed 's/\([^-]*-g\)/r\1/;s/-/./g;s/v//g'
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  local _jobs="${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+
+  cd "$_pkgname"
+  # db5.3 headers/libs live outside the default search path (stock jack2)
+  export CXXFLAGS="$CXXFLAGS -I/usr/include/db5.3"
+  export LDFLAGS="$LDFLAGS -ldb-5.3"
+  export LINKFLAGS="$LDFLAGS"
+  export PYTHONPATH="$PWD:$PYTHONPATH"
+  waf configure --prefix=/usr \
+                --autostart=none \
+                --classic \
+                --dbus \
+                --systemd-unit
+  waf build -j "$_jobs"
+}
+
+package() {
+  cd "$_pkgname"
+  export PYTHONPATH="$PWD:$PYTHONPATH"
+  waf install --destdir="$pkgdir"
+  install -Dm644 COPYING "$pkgdir/usr/share/licenses/$pkgname/COPYING"
+}

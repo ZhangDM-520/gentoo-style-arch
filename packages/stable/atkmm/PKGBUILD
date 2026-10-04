@@ -1,0 +1,77 @@
+# Maintainer: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
+# Contributor: Jan de Groot <jgc@archlinux.org>
+
+pkgname=atkmm
+pkgver=2.28.5
+pkgrel=2
+pkgdesc="C++ bindings for ATK"
+url="https://www.gtkmm.org/"
+arch=(x86_64)
+license=(LGPL-2.1-or-later)
+depends=(
+  atk
+  glib2
+  glibc
+  glibmm
+  libgcc
+  libsigc++
+  libstdc++
+)
+# trim: the atkmm-docs split is dropped together with its docs staging path
+# and the glibmm-docs/libsigc++-docs makedepends (documentation disabled
+# below); options=(!emptydirs) is kept (load-bearing once the doc/devhelp
+# payload is gone)
+makedepends=(
+  git
+  meson
+  mm-common
+)
+options=(!emptydirs)
+source=("git+https://gitlab.gnome.org/GNOME/atkmm.git#tag=$pkgver")
+b2sums=('c69c631bf79ffa6b78e6809bac8e95da572db57a78b3eef606a8b7aa113744934947236161c0044039bf4d1c27ec2686ca1c70019d8c9175dde0cf1df50f70f1')
+
+prepare() {
+  cd atkmm
+}
+
+build() {
+  local meson_options=(
+    -D maintainer-mode=true
+    # trim: the API/devhelp docs (the atkmm-docs split is dropped)
+    -D build-documentation=false
+  )
+
+  # House style: mold linker when available (arch-meson consumes LDFLAGS env)
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  arch-meson atkmm build "${meson_options[@]}"
+  meson compile -C build -j "${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+}
+
+check() {
+  meson test -C build --print-errorlogs
+}
+
+package_atkmm() {
+  depends+=(
+    libglibmm-2.4.so
+    libsigc-2.0.so
+  )
+  provides=(libatkmm-1.6.so)
+
+  meson install -C build --destdir "$pkgdir"
+
+  # trim: drop locales and any doc/devhelp leftovers (this recipe ships the
+  # shared library + headers only)
+  rm -rf "$pkgdir/usr/share/locale" "$pkgdir/usr/share/doc" "$pkgdir/usr/share/devhelp"
+
+  # license: ship upstream licence text (LGPL-2.1-or-later)
+  local _l
+  for _l in COPYING COPYING.LIB LICENSE; do
+    if [[ -f atkmm/$_l ]]; then install -Dm644 "atkmm/$_l" -t "$pkgdir/usr/share/licenses/$pkgname/"; fi
+  done
+}
+
+# vim:set sw=2 sts=-1 et:

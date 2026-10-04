@@ -1,0 +1,52 @@
+# Maintainer: Chocobo1 <chocobo1 AT archlinux DOT net>
+# Recipe adapted for the gentoo-style-arch fleet; tracks upstream VCS directly.
+# The AUR package of the same name was used as a reference only.
+
+pkgname=acl-git
+pkgver=2.3.2.r7.g714d74b
+pkgrel=1
+pkgdesc="Commands for manipulating POSIX access control lists (git build)"
+arch=('x86_64')
+url="https://savannah.nongnu.org/projects/acl"
+license=('GPL-2.0-or-later' 'LGPL-2.1-or-later')
+depends=('attr' 'glibc')
+makedepends=('git')
+provides=("acl=$pkgver" 'libacl.so')
+conflicts=('acl')
+options=('staticlibs')
+source=("git+https://git.savannah.gnu.org/git/acl.git")
+b2sums=('SKIP')
+
+pkgver() {
+  cd acl
+
+  git describe --long --tags | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g'
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  cd acl
+
+  ./autogen.sh
+  ./configure \
+    --prefix="/usr"
+  make -j"${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+check() {
+  cd acl
+
+  make check
+}
+
+package() {
+  cd acl
+
+  make DESTDIR="$pkgdir" install
+
+  # Upstream keeps its licenses in doc/: GPL for the tools, LGPL for libacl
+  install -Dm644 doc/COPYING doc/COPYING.LGPL -t "$pkgdir/usr/share/licenses/$pkgname"
+}

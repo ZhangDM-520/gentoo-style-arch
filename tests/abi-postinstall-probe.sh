@@ -1,0 +1,217 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ABI-drift guard layer 4 — the post-install NEEDED probe
+# (build-all.fish install_needed_probe, run by install_execute after every
+# successful transaction — the -i lane and -ia share that one executor). A
+# stub "fabricates install results": pacman -U records the transaction and
+# the fake installed database (pacman -Qi full dump) grows from it, so the
+# probe resolves against exactly the NEWLY INSTALLED + EXISTING provide set
+# the real one would see. Pinned:
+#
+#   A. clean: a consumer output whose DT_NEEDED libgreet.so.1 resolves via
+#      the EXISTING set (a pre-installed package's auto-versioned provide
+#      'libgreet.so=1-64' covers soname libgreet.so.1) → run succeeds, no
+#      probe output;
+#   B. failure: nothing provides the needed soname → the transaction lands,
+#      then the run ABORTS loudly naming the member and the unresolved
+#      sonames, rc != 0, no success reported;
+#   C. the NEWLY INSTALLED half of the resolution set: provider + consumer in
+#      one transaction (the -ia collective install), the existing set empty —
+#      the provider's own .PKGINFO provide covers the consumer's NEEDED;
+#   D. the exclusions registry resolves source (c) for the probe too.
+#
+# Everything under $TMPDIR; ELF payloads synthesized with cc (like
+# tests/provides-audit.sh); the real /usr and the real pacman DB are never
+# touched (pacman/pacman-conf/sudo all stubbed).
+
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+source "$root/tests/lib/fixture-lib.bash"
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/gsa-abi-postinstall-probe.XXXXXX")
+trap 'rm -rf -- "$tmp"' EXIT
+
+fail() {
+    printf 'abi-postinstall-probe fixture: %s\n' "$1" >&2
+    exit 1
+}
+
+command -v cc >/dev/null 2>&1 || fail 'cc is required to synthesize ELF payloads'
+command -v readelf >/dev/null 2>&1 || fail 'readelf is required'
+
+checks=0
+
+ws="$tmp/ws"
+make_workspace "$ws" 1 2 low
+add_package "$ws" libs-git "$gsa_meta_any"
+add_package "$ws" app-git "$gsa_meta_any"
+set_topology_record "$ws" app-git git 'libs-git'
+mkdir -p "$ws/db/local"
+
+# Payloads: the provider ships usr/lib/libgreet.so.1 (DT_SONAME); the
+# consumer's usr/lib/libapp.so.1 NEEDs it for real (linked against it).
+printf 'int gsa_probe_anchor;\n' |
+    cc -shared -fPIC -x c - -Wl,-soname,libgreet.so.1 -o "$tmp/libgreet.so.1"
+mkdir -p "$tmp/payload-libs-git/usr/lib"
+cp "$tmp/libgreet.so.1" "$tmp/payload-libs-git/usr/lib/libgreet.so.1"
+printf 'pkgname = libs-git\npkgver = 1.0.0-1\nprovides = libgreet.so=1-64\n' \
+    >"$tmp/payload-libs-git/.PKGINFO"
+mkdir -p "$tmp/payload-app-git/usr/lib"
+printf 'extern int gsa_probe_anchor;\nint gsa_probe_consumer(void) { return gsa_probe_anchor; }\n' |
+    cc -shared -fPIC -x c - -Wl,-soname,libapp.so.1 -L"$tmp" -Wl,-rpath-link,"$tmp" \
+        -l:libgreet.so.1 -o "$tmp/payload-app-git/usr/lib/libapp.so.1"
+printf 'pkgname = app-git\npkgver = 1.0.0-1\nprovides = libapp.so=1-64\n' \
+    >"$tmp/payload-app-git/.PKGINFO"
+
+stage_archive() { # ID — build the id's archive beside its recipe.
+    tar --zstd -cf "$ws/packages/$1/$1-1.0.0-1-x86_64.pkg.tar.zst" \
+        -C "$tmp/payload-$1" .
+}
+
+# The pacman stub that fabricates install results: -U records the installed
+# archives; the bare `pacman -Qi` full dump prints the pre-existing blocks
+# (GSA_FAKE_EXISTING file) plus one block per recorded archive, read from its
+# own .PKGINFO. Named queries answer "not installed" so every conservative
+# skip/diff path stays out of the way.
+cat >"$ws/bin/pacman" <<'EOF'
+#!/usr/bin/env bash
+set -u
+printf 'pacman %s\n' "$*" >>"${GSA_FAKE_PACMAN_LOG:?}"
+args=()
+for a in "$@"; do
+    [[ $a == -- ]] && continue
+    args+=("$a")
+done
+case ${args[0]:-} in
+-U)
+    for a in "${args[@]:1}"; do
+        [[ $a == *.pkg.tar.zst ]] || continue
+        printf '%s\n' "$a" >>"${GSA_FAKE_DB_DIR:?}/installed.list"
+    done
+    exit 0
+    ;;
+-Qi)
+    if [[ -z ${args[1]:-} ]]; then
+        cat "${GSA_FAKE_EXISTING:?}" 2>/dev/null
+        if [[ -f ${GSA_FAKE_DB_DIR:?}/installed.list ]]; then
+            while read -r arch; do
+                member=$(tar -tf "$arch" 2>/dev/null |
+                    awk '$0 == ".PKGINFO" || $0 == "./.PKGINFO" { print; exit }')
+                [[ -n $member ]] || continue
+                info=$(tar -xOf "$arch" -- "$member" 2>/dev/null)
+                printf 'Name : %s\n' \
+                    "$(printf '%s\n' "$info" | sed -n 's/^pkgname = //p' | head -1)"
+                printf 'Provides : %s\n' \
+                    "$(printf '%s\n' "$info" |
+                        sed -n 's/^provides = //p' | paste -sd' ' -)"
+            done <"$GSA_FAKE_DB_DIR/installed.list"
+        fi
+        exit 0
+    fi
+    exit 1
+    ;;
+esac
+exit 1
+EOF
+chmod +x "$ws/bin/pacman"
+
+cat >"$ws/bin/pacman-conf" <<'EOF'
+#!/usr/bin/env bash
+set -u
+if [[ ${1:-} == DBPath ]]; then
+    printf '%s\n' "${GSA_FAKE_DB_PATH:?}"
+    exit 0
+fi
+exit 1
+EOF
+chmod +x "$ws/bin/pacman-conf"
+stub_sudo "$ws"
+
+run_case() { # LABEL — run -ia over whatever archives are staged.
+    run_builder env \
+        PATH="$ws/bin:$PATH" \
+        GSA_STATE_DIR="$ws/state" \
+        GSA_FAKE_PACMAN_LOG="$ws/pacman.log" \
+        GSA_FAKE_DB_DIR="$ws/db" \
+        GSA_FAKE_DB_PATH="$ws/db" \
+        GSA_FAKE_EXISTING="$ws/existing.txt" \
+        GSA_CPU_THREADS=8 GSA_MEMORY_GIB=16 \
+        fish "$ws/build-all.fish" --allow-broken-rustc --no-deps --no-sync -ia
+}
+
+reset_case() {
+    rm -f "$ws/packages"/*/*.pkg.tar.zst "$ws/db/installed.list"
+    : >"$ws/pacman.log"
+}
+
+# ─── A. clean: the existing set resolves the consumer's NEEDED ─────────────
+reset_case
+stage_archive libs-git
+stage_archive app-git
+cat >"$ws/existing.txt" <<'EOF'
+Name : preinstalled-runtime
+Version : 1-1
+Provides : libgreet.so=1-64
+EOF
+run_case A
+((FIXTURE_RC == 0)) ||
+    fail "A: a resolved NEEDED must not abort (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
+grep -Fq 'post-install NEEDED probe' <<<"$FIXTURE_OUTPUT" &&
+    fail "A: no probe output expected on the clean case: $FIXTURE_OUTPUT"
+grep -q -- 'pacman -U' "$ws/pacman.log" ||
+    fail "A: the transaction never ran: $(cat "$ws/pacman.log")"
+checks=$((checks + 3))
+
+# ─── B. unresolved NEEDED → loud abort naming member + soname ─────────────
+reset_case
+stage_archive app-git
+cat >"$ws/existing.txt" <<'EOF'
+Name : unrelated
+Version : 1-1
+Provides : libother.so=9-64
+EOF
+run_case B
+((FIXTURE_RC != 0)) ||
+    fail "B: an unresolved NEEDED must abort the run: $FIXTURE_OUTPUT"
+grep -q -- 'pacman -U' "$ws/pacman.log" ||
+    fail "B: the transaction must land first (the probe is POST-install): $(cat "$ws/pacman.log")"
+grep -Fq 'post-install NEEDED probe: usr/lib/libapp.so.1 needs libgreet.so.1' \
+    <<<"$FIXTURE_OUTPUT" ||
+    fail "B: the abort must name the member and the unresolved soname: $FIXTURE_OUTPUT"
+grep -Fq 'aborting — the transaction landed with outputs whose sonames do not resolve' \
+    <<<"$FIXTURE_OUTPUT" ||
+    fail "B: the abort must say what it stops: $FIXTURE_OUTPUT"
+grep -Fq 'All builds succeeded!' <<<"$FIXTURE_OUTPUT" &&
+    fail "B: success was reported after the probe failure: $FIXTURE_OUTPUT"
+checks=$((checks + 4))
+
+# ─── C. the newly installed set resolves within the same transaction ──────
+reset_case
+stage_archive libs-git
+stage_archive app-git
+: >"$ws/existing.txt"
+run_case C
+((FIXTURE_RC == 0)) ||
+    fail "C: the provider's own .PKGINFO provide must resolve the consumer (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
+grep -Fq 'post-install NEEDED probe' <<<"$FIXTURE_OUTPUT" &&
+    fail "C: no probe output expected: $FIXTURE_OUTPUT"
+checks=$((checks + 2))
+
+# ─── D. the exclusions registry is the probe's resolution source (c) ──────
+reset_case
+stage_archive app-git
+cat >>"$ws/config/abi-exclusions.conf" <<'EOF'
+libgreet.so|fixture: documented dangling soname|2099-01-01
+EOF
+cat >"$ws/existing.txt" <<'EOF'
+Name : unrelated
+Version : 1-1
+Provides : libother.so=9-64
+EOF
+run_case D
+((FIXTURE_RC == 0)) ||
+    fail "D: a registered soname must resolve for the probe (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
+grep -Fq 'post-install NEEDED probe' <<<"$FIXTURE_OUTPUT" &&
+    fail "D: no probe output expected with the exclusion registered: $FIXTURE_OUTPUT"
+checks=$((checks + 2))
+
+printf 'abi-postinstall-probe fixture: PASS (%d checks)\n' "$checks"

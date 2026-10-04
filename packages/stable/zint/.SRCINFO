@@ -1,0 +1,17 @@
+pkgbase = zint
+	pkgdesc = Barcode encoding library supporting over 50 symbologies
+	pkgver = 2.16.0
+	pkgrel = 2
+	url = https://zint.org.uk/
+	arch = x86_64
+	license = GPL-3.0-or-later
+	makedepends = cmake
+	makedepends = git
+	depends = glibc
+	provides = libzint.so
+	source = git+https://github.com/zint/zint#tag=2.16.0
+	sha256sums = 0bd39dbba01db925e9c50fcd282b36377b9b748a3f0ea9fbc890ccb37b448d4c
+
+pkgname = zint
+	depends = glibc
+	depends = libpng

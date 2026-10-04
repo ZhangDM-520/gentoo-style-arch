@@ -1,0 +1,73 @@
+# Maintainer: Balló György <ballogyor+arch at gmail dot com>
+# Contributor: Stefano Facchini <stefano.facchini@gmail.com>
+
+pkgname=libosinfo
+pkgver=1.12.0
+pkgrel=3
+pkgdesc='GObject based library API for managing information about operating systems, hypervisors and the (virtual) hardware devices they can support'
+arch=(x86_64)
+url='https://libosinfo.org/'
+license=('GPL-2.0-or-later AND LGPL-2.1-or-later')
+depends=(
+  glib2
+  glibc
+  hwdata
+  libgcc
+  libsoup3
+  libxml2
+  libxslt
+  osinfo-db
+)
+makedepends=(
+  git
+  glib2-devel
+  gobject-introspection
+  meson
+  vala
+)
+provides=('libosinfo-1.0.so')
+source=("git+https://gitlab.com/libosinfo/$pkgname.git?signed#tag=v$pkgver")
+b2sums=(7603532c78acad31d1096467eea64b6eaff29120109af9dd6bce05c8e6330df1dcf2460ffdb53c81e38a70711089106a4c383e18b31b2cd198445cf93f904b3c)
+validpgpkeys=(
+  DAF3A6FDB26B62912D0E8E3FBE86EBB415104FDF # Daniel P. Berrange
+  09B9C8FF223EF113AFA06A39EE926C2BDACC177B # Fabiano Fidêncio
+  206D3B352F566F3B0E6572E997D9123DE37A484F # Victor Toso de Carvalho <me@victortoso.com>
+)
+
+prepare() {
+  cd $pkgname
+  sed -i "s/'-Werror'//" meson.build
+
+  # Fix compat with libxml 2.14
+  git cherry-pick -n 0adf38535637ec668e658d43f04f60f11f51574f
+}
+
+build() {
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+  # trim: gtk-doc API docs (enable-gtk-doc=false — docs; also drops the
+  # gtkdoc-scan build requirement) and the test suite (enable-tests=false —
+  # tests) together with their test build; gir/vapi/tools kept
+  arch-meson $pkgname build \
+    -D enable-gtk-doc=false \
+    -D enable-tests=false \
+    -D with-usb-ids-path=/usr/share/hwdata/usb.ids \
+    -D with-pci-ids-path=/usr/share/hwdata/pci.ids
+  meson compile -C build
+}
+
+# trim: upstream meson test suite (check() — tests) with its enable-tests
+# build above
+
+package() {
+  meson install -C build --destdir "$pkgdir"
+
+  # trim: gettext locales (po/ translations — locales) per Class B trim list
+  rm -rf "$pkgdir/usr/share/locale"
+
+  # license: ship upstream license texts (GPL-2.0 COPYING + LGPL-2.1
+  # COPYING.LIB) — stock installs no license file
+  install -Dm644 $pkgname/COPYING $pkgname/COPYING.LIB -t "$pkgdir/usr/share/licenses/$pkgname/"
+}

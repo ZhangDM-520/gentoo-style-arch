@@ -1,0 +1,93 @@
+# Maintainer: Antonio Rojas <arojas@archlinux.org>
+# Contributor: Andrea Scarpino <andrea@archlinux.org>
+# Contributor: Pierre Schmitz <pierre@archlinux.de>
+
+pkgbase=qca
+pkgname=(qca-qt5
+         qca-qt6)
+pkgver=2.3.12
+pkgrel=1
+pkgdesc='Qt Cryptographic Architecture'
+arch=(x86_64)
+url='https://userbase.kde.org/QCA'
+license=(LGPL-2.1-or-later)
+depends=(ca-certificates
+         glibc
+         libgcc
+         libstdc++
+         nss)
+optdepends=('botan: botan plugin'
+            'libgcrypt: gcrypt plugin'
+            'libsasl: SASL plugin'
+            'openssl: SSL plugin'
+            'pkcs11-helper: PKCS-11 plugin')
+makedepends=(botan
+             cmake
+             doxygen
+             libgcrypt
+             libsasl
+             openssl
+             pkcs11-helper
+             qt5-base
+             qt6-base
+             qt6-5compat)
+source=(https://download.kde.org/stable/$pkgbase/$pkgver/$pkgbase-$pkgver.tar.xz{,.sig})
+sha256sums=('d4a2b3aa0272d73ea0c4cd2140960177fa34ddc2030e59a48ecfb80c757572c3'
+            'SKIP')
+validpgpkeys=(CB9387521E1EE0127DA804843FDBB55084CC5D84) # Harald Sitter <sitter@kde.org>
+
+build() {
+  # House style: mold linker when available (CMake reads LDFLAGS at cache init)
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+  cmake -B build-qt5 -S $pkgbase-$pkgver \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DBUILD_TESTS=OFF \
+    -DQCA_INSTALL_IN_QT_PREFIX=ON \
+    -DQCA_MAN_INSTALL_DIR=/usr/share/man
+  cmake --build build-qt5
+
+  cmake -B build-qt6 -S $pkgbase-$pkgver \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DQT6=ON \
+    -DBUILD_TESTS=OFF \
+    -DQCA_INSTALL_IN_QT_PREFIX=ON \
+    -DQCA_MAN_INSTALL_DIR=/usr/share/man
+  cmake --build build-qt6
+}
+
+package_qca-qt5() {
+  depends+=(qt5-base)
+  provides=(qca libqca-qt5.so)
+  # trim: stock conflicts/replaces (qca) dropped per house policy
+  # (no conflicts/replaces); stock virtual provides kept
+
+  DESTDIR="$pkgdir" cmake --install build-qt5
+
+  # trim: man pages (qcatool) — docs are not part of the maintained target
+  rm -rf "$pkgdir"/usr/share/man
+
+  # license: ship upstream licence text (LGPL-2.1-or-later)
+  local _l
+  for _l in COPYING COPYING.LIB; do
+    if [[ -f $pkgbase-$pkgver/$_l ]]; then install -Dm644 $pkgbase-$pkgver/$_l -t "$pkgdir/usr/share/licenses/$pkgname/"; fi
+  done
+}
+
+package_qca-qt6() {
+  depends+=(qt6-5compat
+            qt6-base)
+  provides=(libqca-qt6.so)
+
+  DESTDIR="$pkgdir" cmake --install build-qt6
+
+  # trim: man pages (qcatool) — docs are not part of the maintained target
+  rm -rf "$pkgdir"/usr/share/man
+
+  # license: ship upstream licence text (LGPL-2.1-or-later)
+  local _l
+  for _l in COPYING COPYING.LIB; do
+    if [[ -f $pkgbase-$pkgver/$_l ]]; then install -Dm644 $pkgbase-$pkgver/$_l -t "$pkgdir/usr/share/licenses/$pkgname/"; fi
+  done
+}

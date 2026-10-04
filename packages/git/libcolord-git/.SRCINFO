@@ -1,0 +1,27 @@
+pkgbase = libcolord-git
+	pkgdesc = System daemon for managing color devices (client library, git build)
+	pkgver = 1.4.8.r16.g56ccc23
+	pkgrel = 1
+	url = https://www.freedesktop.org/software/colord/
+	arch = x86_64
+	license = GPL-2.0-or-later
+	makedepends = git
+	makedepends = gobject-introspection
+	makedepends = libgusb
+	makedepends = libgudev
+	makedepends = meson
+	makedepends = ninja
+	makedepends = sqlite
+	depends = glib2
+	depends = glibc
+	depends = lcms2
+	depends = libgcc
+	depends = systemd-libs
+	provides = libcolord=1.4.8.r16.g56ccc23
+	provides = libcolord.so
+	provides = libcolordcompat.so
+	conflicts = libcolord
+	source = git+https://github.com/hughsie/colord
+	b2sums = SKIP
+
+pkgname = libcolord-git

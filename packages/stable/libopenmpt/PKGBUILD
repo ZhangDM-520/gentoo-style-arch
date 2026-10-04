@@ -1,0 +1,63 @@
+# Maintainer: David Runge <dvzrv@archlinux.org>
+
+pkgname=libopenmpt
+pkgver=0.8.9
+pkgrel=1
+pkgdesc="A library to render tracker music to a PCM audio stream"
+arch=(x86_64)
+url="https://lib.openmpt.org/libopenmpt/"
+license=(BSD-3-Clause)
+depends=(
+  flac
+  glibc
+  libgcc
+  libogg  # required by pkgconf
+  libpulse
+  libsndfile
+  libstdc++
+  libvorbis
+  mpg123
+  portaudio
+  zlib
+)
+makedepends=(
+  autoconf-archive
+  doxygen
+  help2man
+)
+provides=(libopenmpt.so)
+source=($pkgname-$pkgver.tar.gz::https://lib.openmpt.org/files/libopenmpt/src/$pkgname-$pkgver+release.autotools.tar.gz)
+sha512sums=('f17eb759f21d22ac51cdc11d1785e5c025d912cd14154cde93a92b8d0752c63ea19890f0a289bc0b75c94a1910537dbbd6ce442f9f5210fadf7f2966e7d329a0')
+b2sums=('d21ee443317f4f0e11abb5bda1b771006387341a7dac6090efbcf5588ccdbf1fb90951f833997b062857801dd1b4815740c91800a2bfd5df9ef1bbbb73b785d9')
+
+prepare() {
+  cd $pkgname-$pkgver+release.autotools
+  autoreconf -fiv
+}
+
+build() {
+  cd $pkgname-$pkgver+release.autotools
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  ./configure --prefix=/usr
+  # prevent excessive overlinking due to libtool
+  sed -i -e 's/ -shared / -Wl,-O1,--as-needed\0/g' libtool
+  make -j"${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+# trim: check() test suite (make check) — Class B trim standard (tests)
+
+package() {
+  cd $pkgname-$pkgver+release.autotools
+  make DESTDIR="$pkgdir" install
+
+  # trim: man pages, locales and doc payload (examples/README) — Class B
+  # trim standard (man/locale/docs/examples); makedepends left stock
+  # (help2man/doxygen feed the stock build, unverified at build time)
+  rm -rf "$pkgdir"/usr/share/man "$pkgdir"/usr/share/locale "$pkgdir"/usr/share/doc
+
+  install -vDm 644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname/"
+}

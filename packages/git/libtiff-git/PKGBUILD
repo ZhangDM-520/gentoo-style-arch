@@ -1,0 +1,74 @@
+# Maintainer: Levente Polyak <anthraxx[at]archlinux[dot]org>
+# Maintainer: Chocobo1 <chocobo1 AT archlinux DOT net>
+# Contributor: Eric Bélanger <eric@archlinux.org>
+# Contributor: HurricanePootis <hurricanepootis@protonmail.com>
+#
+# git build adapted from AUR libtiff-git (reference only) + stock Arch libtiff:
+# tracks upstream master directly (stock pins signed release tags). The build
+# system follows stock Arch (CMake); the AUR reference still builds autotools.
+
+pkgname=libtiff-git
+_pkgname=libtiff
+pkgver=4.7.2.r0.gd01a94be
+pkgrel=1
+pkgdesc='Library for manipulation of TIFF images (git build)'
+arch=('x86_64')
+url='https://libtiff.gitlab.io/libtiff/'
+license=('libtiff')
+depends=(
+  libstdc++
+  glibc
+  jbigkit
+  libdeflate
+  libjpeg-turbo
+  libjpeg.so
+  libwebp
+  xz
+  zlib
+  zstd
+)
+makedepends=(
+  cmake
+  freeglut
+  git
+  glu
+  mesa
+)
+optdepends=(
+  'freeglut: for using tiffgt'
+)
+provides=("libtiff=$pkgver" 'libtiff.so' 'libtiffxx.so')
+conflicts=('libtiff')
+# v4.x release tags are signed; this recipe tracks master so there is no
+# pinned tag to verify — fingerprints kept for documentation only, taken from
+# the stock Arch PKGBUILD (upstream-published release signers).
+validpgpkeys=(
+  'EBDFDB21B020EE8FD151A88DE301047DE1198975' # Bob Friesenhahn <bfriesen@simple.dallas.tx.us>
+  'B1FA7D81EEB8E66399178B9733EBBFC47B3DD87D' # Even Rouault <even.rouault@spatialys.com>
+)
+source=("git+https://gitlab.com/libtiff/${_pkgname}.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$_pkgname"
+  git describe --long --tags | sed 's/^Release-v//;s/^v//;s/\([^-]*-g\)/r\1/;s/-/./g'
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  cmake -B build -S "$_pkgname" \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DCMAKE_BUILD_TYPE=None \
+    -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+
+  cmake --build build --parallel "${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package() {
+  DESTDIR="$pkgdir" cmake --install build
+
+  install -Dm644 "$_pkgname/LICENSE.md" -t "$pkgdir/usr/share/licenses/$pkgname/"
+}

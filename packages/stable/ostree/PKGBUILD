@@ -1,0 +1,143 @@
+# Maintainer: David Runge <dvzrv@archlinux.org>
+# Maintainer: Christian Heusel <gromit@archlinux.org>
+# Contributor: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
+# Contributor: Mirco Tischler <mt-ml at gmx dot de>
+
+pkgname=ostree
+pkgver=2026.4
+pkgrel=1
+pkgdesc="Operating system and container binary deployment and upgrades"
+url="https://ostreedev.github.io/ostree/"
+arch=(x86_64)
+license=(LGPL-2.0-or-later)
+depends=(
+  bash
+  composefs
+  fuse3
+  glibc
+  libgcc
+  libgpg-error
+  libsodium
+  sh
+  util-linux
+  which  # remove after https://github.com/ostreedev/ostree/pull/3154 is merged and released
+  zlib
+)
+makedepends=(
+  avahi
+  curl
+  e2fsprogs
+  git
+  glib2
+  glib2-devel
+  gobject-introspection
+  gpgme
+  # trim: gtk-doc makedep (gtk-doc HTML API docs are not installed — see package())
+  libarchive
+  libsoup3
+  libxslt
+  mkinitcpio
+  openssl
+  python
+  systemd
+  xz
+)
+checkdepends=(
+  cpio
+  elfutils
+  fsverity-utils
+  gjs
+  jq
+  parallel
+  python-yaml
+  syslinux
+)
+provides=(libostree-1.so)
+source=(
+  git+https://github.com/ostreedev/ostree#tag=v$pkgver
+  git+https://github.com/mendsley/bsdiff
+  git+https://gitlab.gnome.org/GNOME/libglnx.git
+  $pkgname-2023.1-use_fuse3.patch
+)
+b2sums=('dbdb6134ad17f2cf2d44a2058c36e38a2b487d4db880017db204b6672699c2100f9ab6b105698e1b56c719473805f9c33a41e91b0853a60b6100b949289cb04c'
+        'SKIP'
+        'SKIP'
+        '94f49d08e18500752a573c2e57339a1bcdc969e821d93fbdf07b7dda4e7f246709fcb7e1456b5f875706be5d073dad32a35282c0abcc686b1ea0cd9af678c483')
+
+prepare() {
+  cd $pkgname
+
+  # use fusemount3 (fuse3)
+  git apply -3 ../$pkgname-2023.1-use_fuse3.patch
+
+  git submodule init
+  git submodule set-url bsdiff "$srcdir/bsdiff"
+  git submodule set-url libglnx "$srcdir/libglnx"
+  git -c protocol.file.allow=always -c protocol.allow=never submodule update
+
+  NOCONFIGURE=1 ./autogen.sh
+}
+
+build() {
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  local configure_options=(
+    --disable-static
+    --enable-experimental-api
+    # trim: --enable-gtk-doc dropped with the gtk-doc makedep above
+    --libexecdir=/usr/lib
+    --localstatedir=/var
+    --prefix=/usr
+    --sbindir=/usr/bin
+    --sysconfdir=/etc
+    --with-curl
+    --with-dracut=yesbutnoconf
+    --with-ed25519-libsodium
+    --with-grub2-mkconfig-path=/usr/bin/grub-mkconfig
+    --with-mkinitcpio
+    --with-modern-grub
+    --with-openssl
+  )
+
+  cd $pkgname
+  ./configure "${configure_options[@]}"
+  # prevent overlinking due to libtool
+  sed -i -e 's/ -shared / -Wl,-O1,--as-needed\0/g' libtool
+  make -j"${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+check() {
+  make check -k -C $pkgname
+}
+
+package() {
+  depends+=(
+    avahi libavahi-client.so libavahi-common.so libavahi-glib.so
+    curl libcurl.so
+    glib2 libgio-2.0.so libglib-2.0.so libgobject-2.0.so
+    gpgme libgpgme.so
+    libarchive libarchive.so
+    openssl libcrypto.so
+    systemd-libs libsystemd.so
+    xz liblzma.so
+  )
+
+  make DESTDIR="$pkgdir" install -C $pkgname
+
+  # trim: gtk-doc HTML API docs, man pages and doc stubs (runtime payload only)
+  rm -rf "$pkgdir/usr/share/gtk-doc" "$pkgdir/usr/share/man" "$pkgdir/usr/share/doc"
+
+  # license: ship upstream licence text(s) (LGPL-2.0-or-later)
+  local _l
+  for _l in LICENSE LICENCE COPYING COPYRIGHT; do
+    if [[ -f $pkgname/$_l ]]; then
+      install -Dm644 "$pkgname/$_l" -t "$pkgdir/usr/share/licenses/$pkgname/"
+    fi
+  done
+  if [[ -d $pkgname/LICENSES ]]; then
+    install -Dm644 "$pkgname"/LICENSES/* -t "$pkgdir/usr/share/licenses/$pkgname/"
+  fi
+}

@@ -1,0 +1,34 @@
+pkgbase = gnome-disk-utility
+	pkgdesc = Disk Management Utility for GNOME
+	pkgver = 51beta
+	pkgrel = 2
+	url = https://apps.gnome.org/DiskUtility/
+	arch = x86_64
+	groups = gnome
+	license = GPL-2.0-or-later
+	makedepends = appstream
+	makedepends = blueprint-compiler
+	makedepends = cargo
+	makedepends = docbook-xsl
+	makedepends = git
+	makedepends = glib2-devel
+	makedepends = meson
+	depends = dconf
+	depends = glib2
+	depends = glibc
+	depends = gtk4
+	depends = hicolor-icon-theme
+	depends = libadwaita
+	depends = libdvdread
+	depends = libgcc
+	depends = libnotify
+	depends = libpwquality
+	depends = libsecret
+	depends = pango
+	depends = systemd-libs
+	depends = udisks2
+	depends = xz
+	source = git+https://gitlab.gnome.org/GNOME/gnome-disk-utility.git#tag=51.beta
+	b2sums = 1c544f401a7c6864550f286918f5bbd7031335e9433a2a2b0ee5b53d6c3dafb2ee296ea96973b62edb617040d78f9d643129d1a0160d32da9f40a6d8c8ea886b
+
+pkgname = gnome-disk-utility

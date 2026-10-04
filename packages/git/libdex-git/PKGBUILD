@@ -9,7 +9,7 @@ url="https://gitlab.gnome.org/GNOME/libdex"
 license=('LGPL-2.1-or-later')
 depends=('glib2' 'glibc' 'libatomic' 'liburing')
 makedepends=('git' 'meson' 'sysprof')  # gi/vala/python-gobject dropped 2026-09-04: x-d-p uses the C API only
-provides=("libdex" "libdex-1.so=1-64")
+provides=("libdex" "libdex-1.so")
 conflicts=('libdex')
 source=("git+https://gitlab.gnome.org/GNOME/${_pkgname}")
 b2sums=('SKIP')

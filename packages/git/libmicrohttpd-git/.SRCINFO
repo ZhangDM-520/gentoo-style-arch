@@ -1,0 +1,18 @@
+pkgbase = libmicrohttpd-git
+	pkgdesc = A small C library that makes it easy to run an HTTP server as part of another application (git build)
+	pkgver = 1.0.10.r0.g7922bbd7a9
+	pkgrel = 1
+	url = https://www.gnu.org/software/libmicrohttpd/
+	arch = x86_64
+	license = LGPL-2.1-or-later
+	checkdepends = curl
+	makedepends = git
+	depends = glibc
+	depends = gnutls
+	provides = libmicrohttpd=1.0.10.r0.g7922bbd7a9
+	provides = libmicrohttpd.so
+	conflicts = libmicrohttpd
+	source = git://git.gnunet.org/libmicrohttpd.git
+	b2sums = SKIP
+
+pkgname = libmicrohttpd-git

@@ -1,0 +1,17 @@
+pkgbase = xxhash-git
+	pkgdesc = Extremely fast non-cryptographic hash algorithm (git build)
+	pkgver = 0.8.4.r5.680bf46
+	pkgrel = 1
+	url = https://cyan4973.github.io/xxHash/
+	arch = x86_64
+	license = BSD-2-Clause
+	license = GPL-2.0-only
+	makedepends = git
+	depends = glibc
+	provides = xxhash=0.8.4.r5.680bf46
+	provides = libxxhash.so
+	conflicts = xxhash
+	source = xxHash::git+https://github.com/Cyan4973/xxHash.git#branch=dev
+	b2sums = SKIP
+
+pkgname = xxhash-git

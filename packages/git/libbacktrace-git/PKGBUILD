@@ -1,0 +1,46 @@
+# Maintainer: auto-generated
+# Contributor: Chocobo1 <chocobo1 AT archlinux DOT net> (AUR libbacktrace-git)
+
+pkgname=libbacktrace-git
+_pkgname=libbacktrace
+pkgver=r136.g0b9b49c
+pkgrel=1
+pkgdesc="Library to produce symbolic backtraces (git build)"
+arch=('x86_64')
+url="https://github.com/ianlancetaylor/libbacktrace"
+license=('BSD-3-Clause')
+depends=('glibc' 'libgcc' 'zlib')
+makedepends=('git' 'libunwind')
+provides=("libbacktrace=$pkgver" 'libbacktrace.so')
+conflicts=('libbacktrace')
+# NOTE: the AUR reference carries an unmerged upstream PR (#92) adding a
+# pkg-config file; not reproduced here (unpinned PR content) — consumers link
+# against -lbacktrace directly.
+source=("git+https://github.com/ianlancetaylor/${_pkgname}")
+b2sums=('SKIP')
+
+pkgver() {
+  cd "$_pkgname"
+  printf 'r%s.g%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  local _jobs="${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+
+  cd "$_pkgname"
+  autoreconf -fi
+  ./configure --prefix=/usr \
+              --enable-shared \
+              --with-system-libunwind
+  make -j "$_jobs"
+}
+
+package() {
+  cd "$_pkgname"
+  make DESTDIR="$pkgdir" install
+  install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

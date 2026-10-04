@@ -1,0 +1,154 @@
+# Maintainer: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
+
+pkgbase=libportal
+pkgname=(
+  libportal
+
+  libportal-gtk3
+  libportal-gtk4
+  libportal-qt5
+  libportal-qt6
+)
+pkgver=0.11.0
+pkgrel=1
+pkgdesc="GIO-style async APIs for most Flatpak portals"
+url="https://github.com/flatpak/libportal"
+arch=(x86_64)
+license=(LGPL-3.0-only)
+depends=(
+  glib2
+  glibc
+  libgcc
+)
+# trim: gi-docgen (with -Ddocs=false below) — libportal-docs API docs are not shipped
+makedepends=(
+  git
+  gjs
+  glib2-devel
+  gobject-introspection
+  gtk3
+  gtk4
+  libstdc++
+  meson
+  qt5-base
+  qt5-tools
+  qt5-x11extras
+  qt6-base
+  qt6-tools
+  vala
+)
+checkdepends=(
+  python-dbusmock
+  python-pytest
+  xorg-server-xvfb
+)
+source=("git+https://github.com/flatpak/libportal#tag=$pkgver")
+b2sums=('91396a9583cb46e36bb182d7815082b650a50249b302e65b9fe1d453ba587b4d491cda408b076be626289d89889484d58d46c0bfcc3eaf3305476ce2f0666d47')
+
+prepare() {
+  cd libportal
+
+  # Fix build against Qt 6.9
+  git cherry-pick -n 796053d2eebe4532aad6bd3fd80cdf3b197806ec
+}
+
+build() {
+  # trim: -Ddocs=false — the libportal-docs split is dropped together with
+  # its gi-docgen makedepends and the _pick docs machinery
+  arch-meson libportal build -Ddocs=false
+  meson compile -C build
+}
+
+check() {
+  xvfb-run -s '-nolisten local' \
+    meson test -C build --print-errorlogs
+}
+
+_pick() {
+  local p="$1" f d; shift
+  for f; do
+    d="$srcdir/$p/${f#$pkgdir/}"
+    mkdir -p "$(dirname "$d")"
+    mv "$f" "$d"
+    rmdir -p --ignore-fail-on-non-empty "$(dirname "$f")"
+  done
+}
+
+package_libportal() {
+  depends+=(libg{lib,object,io}-2.0.so)
+  optdepends=(
+    'libportal-gtk3: GTK 3 backend'
+    'libportal-gtk4: GTK 4 backend'
+    'libportal-qt5: Qt 5 backend'
+    'libportal-qt6: Qt 6 backend'
+    'xdg-desktop-portal: Portal service'
+  )
+  provides=(libportal.so)
+
+  meson install -C build --destdir "$pkgdir"
+
+  # trim: gi-docgen API docs (libportal-docs split dropped with its machinery)
+  rm -rf "$pkgdir"/usr/share/doc
+  install -Dm644 libportal/COPYING -t "$pkgdir"/usr/share/licenses/$pkgname/
+
+  cd "$pkgdir"
+
+  local x
+  for x in gtk3 gtk4 qt5 qt6; do
+    _pick $x usr/include/libportal-$x
+    _pick $x usr/lib{,/pkgconfig}/libportal-$x.*
+
+    if [[ $x == gtk* ]]; then
+      _pick $x {usr/lib/girepository-1.0,usr/share/gir-1.0}/Xdp${x^}-1.0.*
+      _pick $x usr/share/vala/vapi/libportal-$x.*
+    fi
+  done
+}
+
+package_libportal-gtk3() {
+  pkgdesc+=" - GTK 3 backend"
+  depends+=(
+    "libportal=$pkgver-$pkgrel"
+    gtk3 libg{d,t}k-3.so
+  )
+  provides=(libportal-gtk3.so)
+
+  mv gtk3/* "$pkgdir"
+}
+
+package_libportal-gtk4() {
+  pkgdesc+=" - GTK 4 backend"
+  depends+=(
+    "libportal=$pkgver-$pkgrel"
+    gtk4 libgtk-4.so
+  )
+  provides=(libportal-gtk4.so)
+
+  mv gtk4/* "$pkgdir"
+}
+
+package_libportal-qt5() {
+  pkgdesc+=" - Qt 5 backend"
+  depends+=(
+    "libportal=$pkgver-$pkgrel"
+    libstdc++
+    qt5-base
+    qt5-x11extras
+  )
+  provides=(libportal-qt5.so)
+
+  mv qt5/* "$pkgdir"
+}
+
+package_libportal-qt6() {
+  pkgdesc+=" - Qt 6 backend"
+  depends+=(
+    "libportal=$pkgver-$pkgrel"
+    libstdc++
+    qt6-base
+  )
+  provides=(libportal-qt6.so)
+
+  mv qt6/* "$pkgdir"
+}
+# vim:set sw=2 sts=-1 et:

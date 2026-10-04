@@ -1,0 +1,40 @@
+# Maintainer: auto-generated
+# AUR reference: libei-git (Maintainer: PisonJay <PisonJay@outlook.com>)
+pkgname=libei-git
+_pkgname=libei
+pkgver=1.6.0.r0.g82cdbc9
+pkgrel=1
+pkgdesc="Library for Emulated Input (git build)"
+arch=('x86_64')
+url="https://gitlab.freedesktop.org/libinput/libei"
+license=('MIT')
+depends=('gcc-libs' 'glibc' 'libevdev' 'systemd-libs')
+# python-dbusmock/python-pytest/python-structlog dropped: test-only and
+# tests are disabled below
+makedepends=('git' 'meson' 'libxkbcommon' 'python-attrs' 'python-jinja' 'python-yaml')
+provides=("libei=$pkgver" 'libei.so' 'libeis.so' 'liboeffis.so')
+conflicts=('libei')
+source=("git+https://gitlab.freedesktop.org/libinput/libei.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$_pkgname"
+  git describe --long --tags | sed 's/\([^-]*-g\)/r\1/;s/-/./g;s/^v//g'
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  arch-meson "$_pkgname" build \
+    -D tests=disabled \
+    -D b_lto=true \
+    -D b_ndebug=true
+  meson compile -C build
+}
+
+package() {
+  meson install -C build --destdir "$pkgdir"
+  install -Dm644 "$_pkgname/COPYING" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

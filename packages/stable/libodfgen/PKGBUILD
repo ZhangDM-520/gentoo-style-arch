@@ -1,0 +1,54 @@
+# Maintainer: AndyRTR <andyrtr@archlinux.org>
+# Contributor:  Bartłomiej Piotrowski <bpiotrowski@archlinux.org>
+# Contributor: Yue
+
+pkgname=libodfgen
+pkgver=0.1.8
+pkgrel=5
+pkgdesc='Library for generating documents in Open Document Format'
+arch=('x86_64')
+url='https://sourceforge.net/p/libwpd/wiki/libodfgen/'
+license=('LGPL-2.1-or-later OR MPL-2.0')
+depends=(
+  'zlib'
+  'librevenge'
+  'libxml2'
+  'libgcc'
+  'libstdc++'
+  'glibc'
+)
+provides=('libodfgen-0.1.so')
+# trim: doxygen — doxygen API HTML docs are not shipped
+makedepends=('libwpg' 'libetonyek')
+source=(https://sourceforge.net/projects/libwpd/files/libodfgen/libodfgen-$pkgver/$pkgname-$pkgver.tar.xz
+        includes.patch)
+sha1sums=('9b36d313e64c6ce1026485d521fbdeff7f47594c'
+          '6c6646bc40bf7ee8d88f8eb5d5ba42c4d492f86b')
+sha256sums=('55200027fd46623b9bdddd38d275e7452d1b0ff8aeddcad6f9ae6dc25f610625'
+            '35a989309d0a7a480e238703f7f6dcabc5251bda6894c9884d9eb6f3ea7ed8e0')
+
+prepare() {
+  cd "$pkgname-$pkgver"
+  patch -Np1 -i ../includes.patch  
+  autoreconf -vfi
+}
+
+build() {
+  cd $pkgname-$pkgver
+  ./configure --prefix=/usr --disable-werror
+  sed -i -e 's/ -shared / -Wl,-O1,--as-needed\0/g' libtool
+  make
+}
+
+check() {
+  cd $pkgname-$pkgver
+  make check
+}
+
+package() {
+  cd $pkgname-$pkgver
+  make DESTDIR="$pkgdir" install
+  # trim: doxygen API HTML docs (dropped with the doxygen makedepends)
+  rm -rf "$pkgdir"/usr/share/doc
+  install -Dm644 COPYING.LGPL COPYING.MPL -t "$pkgdir"/usr/share/licenses/$pkgname/
+}

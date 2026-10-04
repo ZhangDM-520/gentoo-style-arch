@@ -1,0 +1,64 @@
+pkgbase = elfutils-git
+	pkgdesc = Utilities and libraries to handle ELF object files and DWARF debugging information (git build)
+	pkgver = 0.194.r34.g9129bee5
+	pkgrel = 1
+	url = https://sourceware.org/elfutils/
+	arch = x86_64
+	license = GPL-2.0-or-later AND GPL-3.0-or-later AND LGPL-3.0-or-later
+	makedepends = bzip2
+	makedepends = curl
+	makedepends = git
+	makedepends = libarchive
+	makedepends = libmicrohttpd
+	makedepends = sqlite
+	makedepends = xz
+	makedepends = zlib
+	makedepends = zstd
+	depends = glibc
+	depends = libgcc
+	depends = libstdc++
+	depends = json-c
+	depends = libarchive.so
+	depends = libbz2.so
+	depends = libcurl.so
+	depends = liblzma.so
+	depends = libmicrohttpd.so
+	depends = libsqlite3.so
+	depends = libz.so
+	depends = libzstd.so
+	depends = sh
+	options = staticlibs
+	source = git+https://sourceware.org/git/elfutils.git
+	b2sums = SKIP
+
+pkgname = elfutils-git
+	pkgdesc = Utilities and libraries to handle ELF object files and DWARF debugging information (git build)
+	depends = glibc
+	depends = libelf-git
+	depends = libgcc
+	depends = libstdc++
+	depends = json-c
+	depends = libarchive.so
+	depends = libbz2.so
+	depends = libcurl.so
+	depends = liblzma.so
+	depends = libmicrohttpd.so
+	depends = libsqlite3.so
+	depends = libz.so
+	depends = libzstd.so
+	depends = sh
+	provides = elfutils=0.194.r34.g9129bee5
+	provides = debuginfod=0.194.r34.g9129bee5
+	provides = libdw.so
+	provides = libasm.so
+	provides = libdebuginfod.so
+	conflicts = elfutils
+	conflicts = debuginfod
+
+pkgname = libelf-git
+	pkgdesc = Libraries to handle ELF object files (git build)
+	depends = glibc
+	provides = libelf=0.194.r34.g9129bee5
+	provides = libelf.so
+	conflicts = libelf
+	backup = 

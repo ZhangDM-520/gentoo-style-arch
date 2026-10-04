@@ -1,0 +1,65 @@
+# Maintainer: auto-generated (Class A upstream-VCS recipe)
+# Contributor: Chocobo1 <chocobo1 AT archlinux DOT net> (AUR opus-git reference)
+# Contributor: Jan Alexander Steffens (heftig) <heftig@archlinux.org> (stock opus)
+# Contributor: Jan de Groot <jgc@archlinux.org>
+# Contributor: DrZaius <lou[at]fakeoutdoorsman[dot]com>
+# Contributor: pumbur
+
+pkgname=opus-git
+pkgver=1.6.1.r68.g503d81b1
+pkgrel=1
+pkgdesc="Totally open, royalty-free, highly versatile audio codec (git build)"
+arch=('x86_64')
+url="https://www.opus-codec.org/"
+license=('BSD-3-Clause')
+depends=('glibc')
+# stock's doxygen makedep dropped with the opus-docs split
+makedepends=('git' 'meson')
+provides=("opus=$pkgver" 'libopus.so')
+# bare libopus.so: pacman 7.1 derives libopus.so=0-64 (soname libopus.so.0);
+# stock's opus-docs split dropped (docs payload removed below) and conflicted,
+# not provided (classb sqlite-doc precedent)
+conflicts=('opus' 'opus-docs')
+# stock verifies signed release tags (?signed#tag=v$pkgver, validpgpkeys:
+# Jean-Marc Valin) — master-tracking has no tag to pin/verify (makepkg would
+# run `git verify-commit HEAD` for ?signed on unsigned commits); tracked
+# unsigned, no --skippgpcheck
+source=('opus::git+https://gitlab.xiph.org/xiph/opus.git')
+b2sums=('SKIP')
+
+pkgver() {
+  cd opus
+  git describe --long --tags | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g'
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  local meson_options=(
+    # kept from stock
+    -D asm=disabled
+    -D custom-modes=true
+    # stock enables these for the release tarball: "Git doesn't contain model
+    # data" (stock comment) — the DRED/OSCE/deep-PLC neural models ship only
+    # in release tarballs, so they are disabled for VCS builds (AUR opus-git
+    # enables them anyway; that reference is stale/unverified)
+    -D deep-plc=disabled
+    -D dred=disabled
+    -D osce=disabled
+  )
+
+  arch-meson opus build "${meson_options[@]}"
+  meson compile -C build
+}
+
+package() {
+  meson install -C build --destdir "$pkgdir"
+  install -Dm644 opus/opus.m4 -t "$pkgdir/usr/share/aclocal"
+
+  # stock splits /usr/share/doc into opus-docs; dropped here
+  rm -rf "$pkgdir/usr/share/doc"
+
+  install -Dm644 opus/COPYING -t "$pkgdir/usr/share/licenses/$pkgname/"
+}

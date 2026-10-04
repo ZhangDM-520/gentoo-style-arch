@@ -1,0 +1,26 @@
+pkgbase = libei-git
+	pkgdesc = Library for Emulated Input (git build)
+	pkgver = 1.6.0.r0.g82cdbc9
+	pkgrel = 1
+	url = https://gitlab.freedesktop.org/libinput/libei
+	arch = x86_64
+	license = MIT
+	makedepends = git
+	makedepends = meson
+	makedepends = libxkbcommon
+	makedepends = python-attrs
+	makedepends = python-jinja
+	makedepends = python-yaml
+	depends = gcc-libs
+	depends = glibc
+	depends = libevdev
+	depends = systemd-libs
+	provides = libei=1.6.0.r0.g82cdbc9
+	provides = libei.so
+	provides = libeis.so
+	provides = liboeffis.so
+	conflicts = libei
+	source = git+https://gitlab.freedesktop.org/libinput/libei.git
+	sha256sums = SKIP
+
+pkgname = libei-git

@@ -1,0 +1,41 @@
+# Maintainer: auto-generated
+# Contributor: Chocobo1 <chocobo1 AT archlinux DOT net> (AUR jansson-git)
+
+pkgname=jansson-git
+_pkgname=jansson
+pkgver=2.15.1.r5.g851a214
+pkgrel=1
+pkgdesc="C library for encoding, decoding and manipulating JSON data (git build)"
+arch=('x86_64')
+url="https://www.digip.org/jansson/"
+license=('MIT')
+depends=('glibc')
+makedepends=('git')
+provides=("jansson=$pkgver" 'libjansson.so')
+conflicts=('jansson')
+source=("git+https://github.com/akheron/${_pkgname}.git")
+b2sums=('SKIP')
+
+pkgver() {
+  cd "$_pkgname"
+  git describe --long --tags | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g'
+}
+
+build() {
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  local _jobs="${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+
+  cd "$_pkgname"
+  autoreconf -fi
+  ./configure --prefix=/usr
+  make -j "$_jobs"
+}
+
+package() {
+  cd "$_pkgname"
+  make DESTDIR="$pkgdir" install
+  install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

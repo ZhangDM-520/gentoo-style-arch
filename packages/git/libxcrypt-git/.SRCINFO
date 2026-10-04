@@ -1,0 +1,24 @@
+pkgbase = libxcrypt-git
+	pkgdesc = Modern library for one-way hashing of passwords (git build)
+	pkgver = 4.5.2.r7.g174c24d
+	pkgrel = 1
+	url = https://github.com/besser82/libxcrypt/
+	arch = x86_64
+	license = LGPL
+	makedepends = git
+	depends = glibc
+	source = git+https://github.com/besser82/libxcrypt.git
+	b2sums = SKIP
+
+pkgname = libxcrypt-git
+	provides = libxcrypt=4.5.2.r7.g174c24d
+	provides = libcrypt.so
+	conflicts = libxcrypt
+
+pkgname = libxcrypt-compat-git
+	pkgdesc = Modern library for one-way hashing of passwords - legacy glibc API functions (git build)
+	depends = libxcrypt-git
+	depends = glibc
+	provides = libxcrypt-compat=4.5.2.r7.g174c24d
+	provides = libcrypt.so
+	conflicts = libxcrypt-compat

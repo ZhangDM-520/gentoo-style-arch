@@ -1,0 +1,56 @@
+# Maintainer: Carl Smedstad <carsme@archlinux.org>
+# Contributor: Jeremy Gust <jeremy AT plasticsoup DOT net>
+# Contributor: Aaron Blasko <blaskoazzolaaaron [at] gmail.com>
+
+pkgname=hyprpicker
+pkgver=0.4.7
+pkgrel=4
+pkgdesc="A wlroots-compatible Wayland color picker that does not suck"
+arch=(x86_64)
+url="https://github.com/hyprwm/hyprpicker"
+license=(BSD-3-Clause)
+depends=(
+  cairo
+  glibc
+  hyprutils
+  libgcc
+  libstdc++
+  libxkbcommon
+  wayland
+)
+makedepends=(
+  cmake
+  hyprwayland-scanner
+  libglvnd
+  libjpeg-turbo
+  ninja
+  pango
+  wayland-protocols
+)
+optdepends=('wl-clipboard: Allows --autocopy to automatically copy the output to the clipboard')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
+sha256sums=('cde02b92abe372187c9d59a7cb2ca07ede5c3e1a8c81ed8b209dc0d3ac5f0339')
+
+build() {
+  cd $pkgname-$pkgver
+  # House style: mold linker when available (runtime-guarded, no output effect).
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+  cmake -S . -B build \
+    -DCMAKE_BUILD_TYPE=None \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DCMAKE_INSTALL_MANDIR=/usr/share/man \
+    -Wno-dev
+  cmake --build build --parallel "${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  DESTDIR="$pkgdir" cmake --install build
+
+  # trim: man page (man1 hyprpicker) (docs) — not shipped
+  rm -rf "$pkgdir"/usr/share/man
+
+  install -vDm644 -t "$pkgdir/usr/share/licenses/$pkgname" LICENSE
+}

@@ -1,0 +1,26 @@
+pkgbase = libxfont2
+	pkgdesc = X11 font rasterisation library
+	pkgver = 2.0.9
+	pkgrel = 1
+	url = https://xorg.freedesktop.org/
+	arch = x86_64
+	license = BSD-2-Clause
+	license = BSD-4-Clause-UC
+	license = HPND-sell-variant
+	license = MIT-open-group
+	license = SMLNJ
+	license = X11
+	makedepends = git
+	makedepends = xorg-util-macros
+	makedepends = xtrans
+	depends = freetype2
+	depends = libfontenc
+	depends = xorgproto
+	depends = zlib
+	depends = glibc
+	provides = libXfont2.so
+	source = git+https://gitlab.freedesktop.org/xorg/lib/libxfont.git?signed#tag=libXfont2-2.0.9
+	validpgpkeys = 3C2C43D9447D5938EF4551EBE23B7E70B467F0BF
+	sha512sums = 169d9a62b6706d40991b14221b13777852fcef9f56692a1bfc9638b168d7b3f0438524cbfd85b36dc24ceec1a04626a2470c73f34d5570a7ecb70791db3ee332
+
+pkgname = libxfont2

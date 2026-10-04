@@ -1,0 +1,70 @@
+# Maintainer: Darshit Shah [ darnir [uses] gnu [tld] org ]
+# Contributor: Anatol Pomozov
+# Contributor: Zhuoyun Wei <wzyboy@wzyboy.org>
+# Class A git recipe: tracks upstream nghttp2 git directly (HEAD), lib-only
+# build shape matching stock libnghttp2. AUR libnghttp2-git and stock
+# libnghttp2 are REFERENCES ONLY. Stock's submodule redirect list copied
+# verbatim — update it if upstream's submodule set changes.
+
+pkgname=libnghttp2-git
+_pkgname=libnghttp2
+pkgver=1.70.0.r0.g7a6d122aac
+pkgrel=1
+pkgdesc='Framing layer of HTTP/2 is implemented as a reusable C library (git build)'
+arch=('x86_64')
+url='https://nghttp2.org/'
+license=('MIT')
+depends=('glibc')
+makedepends=('git')
+# soname shipped: libnghttp2.so.14
+provides=("libnghttp2=$pkgver" 'libnghttp2.so')
+conflicts=('libnghttp2' 'nghttp2<1.20.0-2')
+source=('git+https://github.com/nghttp2/nghttp2.git'
+        'git+https://github.com/ngtcp2/munit.git'
+        'git+https://github.com/mruby/mruby.git'
+        'git+https://github.com/tatsuhiro-t/neverbleed.git')
+b2sums=('SKIP' 'SKIP' 'SKIP' 'SKIP')
+
+prepare() {
+  cd nghttp2
+
+  git config --file=.gitmodules submodule.tests/munit.url ../munit/
+  git config --file=.gitmodules submodule.third-party/mruby.url ../mruby/
+  git config --file=.gitmodules submodule.tests/neverbleed.url ../neverbleed/
+
+  git submodule init
+  git -c protocol.file.allow=always submodule update
+
+  autoreconf -i
+}
+
+pkgver() {
+  cd nghttp2
+  git describe --long --tags | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g'
+}
+
+build() {
+  cd nghttp2
+
+  if command -v mold >/dev/null 2>&1; then
+    export LDFLAGS+=" -fuse-ld=mold"
+  fi
+
+  ./configure \
+    --prefix=/usr \
+    --disable-examples \
+    --disable-python-bindings \
+    --enable-lib-only
+  make
+}
+
+check() {
+  cd nghttp2
+  make check
+}
+
+package() {
+  cd nghttp2/lib
+  make DESTDIR="$pkgdir" install
+  install -Dm644 ../COPYING "$pkgdir/usr/share/licenses/$pkgname/COPYING"
+}
