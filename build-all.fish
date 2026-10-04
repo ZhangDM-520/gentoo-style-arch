@@ -4434,12 +4434,25 @@ end
 # same metadata install/depends decisions read — PKGBUILD is never evaluated.
 #
 # Rules (docs/MEMORY.md provides discipline + purged tools + IgnorePkg closure):
-#   provides   a VERSIONED name-provide wherever some workspace consumer
-#              constrains that name (an unversioned provide cannot satisfy
-#              `>=N`, so pacman silently falls back to the repo package — the
-#              meson incident class), and BARE soname stems (`libfoo.so`,
-#              never `libfoo.so=2-64`: makepkg auto-versions a bare stem from
-#              the built ELF, a hand-pinned one only rots).
+#   provides   the Q8 mapping scope is SONAME + NAME, and the two sides get
+#              opposite forms. SONAME: BARE stems only (`libfoo.so`, never
+#              `libfoo.so=2-64`: makepkg auto-versions a bare stem from the
+#              built ELF, a hand-pinned one only rots). NAME: a versioned
+#              name-provide wherever the recipe MAPS a stock name — it swaps
+#              it (also declares it in conflicts, the Class A shape
+#              `provides=(<stock>=$pkgver)` + `conflicts=(<stock>)`), is the
+#              stock counterpart of one of its outputs (the swap rule's
+#              VCS-suffix derivation), or compat-maps an output name — the
+#              output name can belong to any workspace recipe, because a
+#              compat map can target a sibling recipe's output
+#              (wireplumber→pipewire-session-manager), not just its own —
+#              plus a VERSIONED name-provide wherever some workspace consumer
+#              constrains that name. The reason is the same in both NAME
+#              cases: an unversioned provide cannot satisfy `>=N`, so pacman
+#              silently falls back to the repo package (the meson incident
+#              class). A provide maps nothing when it carries no routing
+#              weight: a capability virtual (`libgl`, `ladspa-host`) and a
+#              package providing its own name both stay unversioned.
 #   purged     host-purged tools must not re-enter through makedepends/
 #              checkdepends (makepkg reinstalls them silently).
 #   ignorepkg  every workspace pkgbase/pkgname must sit in the host's
@@ -4473,12 +4486,20 @@ end
 
 function audit_lint_provides
     set -l constraints # name|op|ver|consumer — every versioned dep in the set
-    set -l entries # id|provide-value — every provide in the set
+    set -l entries # id|carrier|provide-value — every provide in the set
+    set -l mapping # id|name — every stock name a recipe swaps or derives
+    set -l output_names # every workspace output name, the compat-map registry
+    set -l recipe_outputs # id|name — needed to tell a self-provide from a map
     for entry in $_PACKAGE_MAP
         set -l fields (string split '|' -- "$entry")
         set -l id $fields[1]
         set -l srcinfo "$SCRIPT_DIR/$fields[2]/.SRCINFO"
         test -f "$srcinfo"; or continue
+        set -l outputs # the pkgname values, the real outputs of this recipe
+        set -l base_names # pkgbase, used only when no pkgname line exists
+        set -l conflict_names
+        set -l carrier '' # the output the current row belongs to; '' = the
+        # pkgbase section, whose arrays are carried by every output
         # ONE tagged sed pass replaces five: the same BREs as the old
         # per-field `sed -n "s/^[[:space:]]*$field = //p"` runs, tagged and
         # merged (a line matches exactly one field name). The empty-value
@@ -4489,11 +4510,27 @@ function audit_lint_provides
             -e 's/^[[:space:]]*optdepends = /optdepends@/p' \
             -e 's/^[[:space:]]*checkdepends = /checkdepends@/p' \
             -e 's/^[[:space:]]*provides = /provides@/p' \
+            -e 's/^[[:space:]]*conflicts = /conflicts@/p' \
+            -e 's/^[[:space:]]*pkgbase = /pkgbase@/p' \
+            -e 's/^[[:space:]]*pkgname = /pkgname@/p' \
             "$srcinfo" 2>/dev/null)
             set -l kv (string split -m 1 '@' -- "$row")
             test -n "$kv[2]"; or continue
             if test "$kv[1]" = provides
-                set -a entries "$id|$kv[2]"
+                set -a entries "$id|$carrier|$kv[2]"
+                continue
+            end
+            if test "$kv[1]" = conflicts
+                set -a conflict_names (string replace -r '[=<>].*$' '' -- "$kv[2]")
+                continue
+            end
+            if test "$kv[1]" = pkgname
+                set -a outputs "$kv[2]"
+                set carrier "$kv[2]"
+                continue
+            end
+            if test "$kv[1]" = pkgbase
+                set -a base_names "$kv[2]"
                 continue
             end
             set -l value "$kv[2]"
@@ -4503,13 +4540,30 @@ function audit_lint_provides
             test (count $m) -ge 3; or continue
             set -a constraints "$m[1]|$m[2]|$m[3]|$id"
         end
+        # Mapping names, per recipe: the conflicted stock names (the swap) and
+        # each output's stock counterpart (strip the VCS suffix — the swap
+        # rule's derivation; a suffixless output "derives" only itself, which
+        # maps nothing). Compat-maps are not listed here: whether a provide of
+        # an output name is a map depends on which output carries it, so the
+        # findings loop below decides them against the carrier.
+        test (count $outputs) -gt 0; or set outputs $base_names
+        for name in $conflict_names
+            set -a mapping "$id|$name"
+        end
+        for name in $outputs
+            set -a output_names $name
+            set -a recipe_outputs "$id|$name"
+            set -l stock (string replace -r -- '-(git|svn|hg|snapshot)$' '' "$name")
+            test "$stock" = "$name"; or set -a mapping "$id|$stock"
+        end
     end
 
     set -l findings
     for entry in $entries
-        set -l parts (string split -m 1 '|' -- $entry)
+        set -l parts (string split -m 2 '|' -- $entry)
         set -l id $parts[1]
-        set -l value $parts[2]
+        set -l carrier $parts[2]
+        set -l value $parts[3]
         set -l pp (string split -m 1 '=' -- $value)
         set -l name $pp[1]
         set -l ver ''
@@ -4521,6 +4575,36 @@ function audit_lint_provides
                 set -a findings "provides: $id: soname provide '$value' names a versioned soname — declare the bare stem '$stem'"
             else if test -n "$ver"
                 set -a findings "provides: $id: soname provide '$value' is hand-versioned — declare the bare stem '$name' and let makepkg auto-version it from the built ELF"
+            end
+            continue
+        end
+        # Q8 NAME side: a mapped name is only mapped when the provide carries
+        # a VERSION — one finding per provide, because the fix is the same
+        # declaration the constraint rule below asks for, and a second finding
+        # would only double-count the same edit. A provide of an output name
+        # is a compat map only when some carrying output is named differently:
+        # a package providing its own name routes nothing, exactly like a
+        # capability virtual.
+        set -l mapped 0
+        if contains -- "$id|$name" $mapping
+            set mapped 1
+        else if contains -- "$name" $output_names
+            if test -n "$carrier"
+                test "$carrier" != "$name"; and set mapped 1
+            else
+                for ro in $recipe_outputs
+                    set -l rop (string split -m 1 '|' -- $ro)
+                    test "$rop[1]" = "$id"; or continue
+                    if test "$rop[2]" != "$name"
+                        set mapped 1
+                        break
+                    end
+                end
+            end
+        end
+        if test $mapped -eq 1
+            if test -z "$ver"
+                set -a findings "provides: $id: mapped swap/compat provide '$name' is unversioned — declare provides=('$name=\${pkgver}') so versioned dependents of the mapped name resolve here"
             end
             continue
         end

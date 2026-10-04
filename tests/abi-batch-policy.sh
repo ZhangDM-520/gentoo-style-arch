@@ -41,8 +41,9 @@ set -euo pipefail
 #   F. Grouping policy: the committed topology's group discipline
 #      (docs/MEMORY.md §1 rule 21) — every compile-toolchain record carries
 #      core,build-tools; every package with ≥2 edge-consumers carries core
-#      (allow-lists: the rule 21(a) app-cluster exception, plus the Q2-open
-#      register — see section F(b) for the written justification); ripgrep and fd
+#      (sole allow-list: the rule 21(a) app-cluster exception — the Q2-open
+#      register was deleted when the 2026-10-04 Q2 decision landed its 203
+#      ids as core dual membership, see section F(b)); ripgrep and fd
 #      declare a rust-git edge; groups stay inside the six-name roster and
 #      build-tools is always dual with core. These checks read the topology
 #      RECORDS raw (the id|path|groups|edges[|tags] lines) from the optional
@@ -491,8 +492,8 @@ done
 # docs/MEMORY.md §1 rule 21 membership tests, one pin per sub-check:
 #   a. the compile-toolchain set carries BOTH core and build-tools;
 #   b. a package with ≥2 edge-consumers (a record listing X in edges consumes
-#      X) carries core, except the two exception classes in F(b) below
-#      (rule 21(a) app-cluster exception; the Q2-open register);
+#      X) carries core, except the rule 21(a) app-cluster exception in F(b)
+#      below;
 #   c. ripgrep and fd declare a rust-git edge (rule 21(e) — the toolchain-edge
 #      discipline the builder's --audit lint checks);
 #   d. every group named in a record is one of the six roster names, and
@@ -547,88 +548,26 @@ for id in "${toolchain_set[@]}"; do
     done
 done
 
-# b. the hub rule: ≥2 edge-consumers ⇒ core. Two exception classes, each
-# entry naming its reason:
+# b. the hub rule: ≥2 edge-consumers ⇒ core. One exception class, each entry
+#   naming its reason:
 #   - rule 21(a)'s app-cluster exception: a member whose consumers are all
-#     its own app-cluster siblings stays app;
-#   - the Q2-open register below — WRITTEN JUSTIFICATION for narrowing this
-#     pin's scope (an expectation may change only with written
-#     justification): rule 21(a) and this check were pinned on the
-#     2026-10-04 build-tools migration's CURATED build-order edge graph
-#     (144 records), where "a record listing X in edges consumes X"
-#     identified ABI hubs. The 2026-10-04 topology wiring then replaced
-#     that edge set with the FULL dependency/supersession graph (653
-#     records / 3373 edges, landed and verified; config/topology.conf is
-#     outside this fixture's write scope), so a raw reverse-edge count no
-#     longer identifies ABI-coupled hubs: 204 records have ≥2
-#     edge-consumers without carrying `core`, including nearly every
-#     shared library. Whether those records gain `core` dual membership is
-#     the wiring handoff's OPEN QUESTION Q2 ("ABI-libs vs core dual
-#     membership"), explicitly deferred to the docs/ABI-policy phase — not
-#     this fixture's decision to make. Until Q2 lands, every CURRENT
-#     violation is registered below (reason: Q2-open) so the pin keeps its
-#     teeth: a NEW ≥2-consumer record without `core` still fails until it
-#     carries `core` or its own written exception is added here. When Q2
-#     lands (the records gain `core`, or rule 21(a) is revised), delete the
-#     register and the bare pin binds again.
+#     its own app-cluster siblings stays app.
+# History of the pin's scope: rule 21(a) and this check were pinned on the
+# 2026-10-04 build-tools migration's CURATED build-order edge graph (144
+# records), where "a record listing X in edges consumes X" identified ABI
+# hubs. The 2026-10-04 topology wiring then replaced that edge set with the
+# FULL dependency/supersession graph (653 records / 3373 edges), where a raw
+# reverse-edge count no longer identifies ABI-coupled hubs — 204 records had
+# ≥2 edge-consumers without carrying `core` — so this fixture narrowed its
+# pin with a written-debt register rather than decide the open policy
+# question itself. The 2026-10-04 Q2 decision settled that debt the
+# enforcing way: all 203 registered records gained `core` dual membership
+# (fcitx5-qt-git included — its consumers are NOT all cluster siblings) and
+# the register was deleted in the same change, so the bare pin binds over
+# the whole graph again. A NEW ≥2-consumer record without `core` fails until
+# it carries `core` or its own written exception is added here.
 hub_rule_exempt=(
-    'fcitx5-git' # app-cluster exception: its five consumers are all its own app-cluster=fcitx5 siblings
-)
-# Q2-open hub-rule debt register (reason above, shared by every entry).
-# 203 ids as of the 2026-10-04 wiring (fcitx5-qt-git included: its consumers
-# are NOT all cluster siblings — fcitx5-configtool is stable).
-q2_open_hubs=(
-    acl-git alsa-lib appstream apr-util
-    at-spi2-core-git audit bash binutils
-    bluez-libs boost-libs brotli-git bzip2-git
-    coreutils cups-git curl dbus-broker
-    desktop-file-utils elfutils-git enchant exiv2
-    expat-git fcitx5-qt-git ffmpeg-git fftw
-    file fluidsynth-git fontconfig-git freetype2-git
-    gc gdbm-git gdk-pixbuf2-git gegl-git
-    gettext ghostscript git-git glu
-    gnutls-git gobject-introspection gstreamer harfbuzz-git
-    icu-git imagemagick jack2-git jansson-git
-    jemalloc-git jq kmod-git krb5-git
-    kwindowsystem ladspa lame lcms2
-    libarchive-git libass libbpf-git libbs2b-git
-    libcaca libcap libcap-ng-git libdc1394
-    libdex-git libebur128-git libedit libei-git
-    libepoxy-git libevdev-git libexif-git libfdk-aac-git
-    libffi-git libfido2-git libfreeaptx libgcrypt
-    libgexiv2-git libglvnd-git libgudev libheif-git
-    libidn2-git libinput-git libjpeg-turbo-git libjxl-git
-    liblc3-git libldac libldap libmypaint-git
-    libmysofa-git libnghttp2-git libnl-git libnotify
-    libpciaccess-git libplist-git libpng-git libproxy-git
-    libpsl-git libpulse-git libraw-git librsvg-git
-    libseccomp-git libsecret libsm libsndfile-git
-    libsodium-git libssh2-git libtiff-git libtirpc
-    libtool-git libunwind-git liburing-git libusb-git
-    libva-git libwebp-git libwmf-git libx11-git
-    libxcb-git libxcomposite libxcrypt-git libxcursor
-    libxdamage libxext-git libxfixes libxi-git
-    libxinerama libxkbcommon-git libxkbfile libxml2-git
-    libxmu libxpm-git libxrandr-git libxrender
-    libxshmfence libxslt-git libxss libxt
-    libxtst lilv-git lz4-git lzo
-    mariadb-libs mesa-git mpg123 ncurses-git
-    neon nettle-git networkmanager nodejs
-    nspr-git nss-git openal-git opencolorio
-    openimageio openjpeg2 openssh openxr
-    opus-git pam pcre2-git perl
-    pipewire pixman-git pkcs11-helper poppler
-    postgresql-libs python python-gobject python-lxml
-    qrencode qt5-wayland raptor readline-git
-    ripgrep rsync sbc sdl2-git
-    shadow shared-mime-info spandsp-git speech-dispatcher
-    sqlite subversion twolame udisks2
-    unixodbc unzip upower util-linux
-    vamp-plugin-sdk vulkan-headers-git vulkan-icd-loader-git wayland-protocols-git
-    webkit2gtk-4.1 webrtc-audio-processing-1 xcb-util xcb-util-cursor
-    xcb-util-image xcb-util-keysyms xcb-util-renderutil xcb-util-wm
-    xdg-desktop-portal-gtk-git xdg-utils xxhash-git xz-git
-    zip zlib-ng-compat-git zstd-git
+    'fcitx5-git' # rule 21(a) app-cluster exception, preserved as documented by the 2026-10-04 Q2 decision: 5 of its 6 consumers are its own app-cluster=fcitx5 siblings, with stable fcitx5-configtool the known outlier
 )
 exempt_hub() { # $1 = package id — is it on a hub-rule allow-list?
     local x
@@ -639,17 +578,8 @@ exempt_hub() { # $1 = package id — is it on a hub-rule allow-list?
     done
     return 1
 }
-q2_registered() { # $1 = package id — is it in the Q2-open register?
-    local x
-    for x in "${q2_open_hubs[@]}"; do
-        if [[ $x == "$1" ]]; then
-            return 0
-        fi
-    done
-    return 1
-}
 while read -r id consumers; do
-    if exempt_hub "$id" || q2_registered "$id"; then
+    if exempt_hub "$id"; then
         continue
     fi
     groups=$(record_field "$id" 3)

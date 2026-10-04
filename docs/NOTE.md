@@ -37,6 +37,114 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-04 — Q8 provides mapping scope lands as soname+name; the lint extends, 59 recipes become ratcheted debt
+
+- **Symptom**: the provides↔soname mapping's expected reach was undecided
+  (Q8), so `--audit-lint provides` enforced bare-soname stems and
+  consumer-constrained versioned name provides, but not the mapped stock
+  names a recipe swaps or compat-maps — the Class A
+  `provides=(<stock>=$pkgver)` + `conflicts=(<stock>)` shape was convention,
+  not lint.
+- **Root cause**: two name-surface questions were conflated — how far a
+  recipe's output names map stock names (swap, VCS counterpart, compat-map),
+  and which form each side of the mapping takes. User decision: scope =
+  SONAME + NAME with opposite forms — bare soname stems (makepkg
+  auto-versions them), versioned name provides `name=$pkgver` wherever a
+  recipe maps a stock name or a workspace consumer constrains the name by
+  version; capability virtuals map nothing and stay unversioned, and a
+  provide of the recipe's own output name maps nothing either.
+- **Fix**: `audit_lint_provides` in `build-all.fish` grew a mapping registry
+  (conflicted names + each output's name + its VCS-suffix-stripped
+  counterpart, pooled per recipe, with a global cross-recipe output registry
+  and a carrier check so self-provides don't self-flag). The lint reports
+  unversioned mapped provides. Because the rule post-dates the set,
+  `tests/recipe-contract.sh` section E pins the current 59 recipes / 113
+  name pairs as a one-way ratchet: recipes gated by the >5 no-mass-edit
+  rule were reported, not edited; new recipes must comply; the debt list
+  only ever shrinks.
+- **Validation**: `fish -n build-all.fish` rc 0;
+  `fish build-all.fish --audit-lint provides` rc 0, report-only,
+  113 findings (113 mapped, 0 constraint, 0 soname);
+  `bash tests/recipe-contract.sh` PASS, incl. a mutation probe (delete one
+  pinned pair → fixture fails → restore → green).
+- **Durable rule**: mapped stock names take VERSIONED name provides
+  (`provides=(<name>=$pkgver)`), soname stems take BARE provides, virtuals
+  stay unversioned — recorded in `docs/MEMORY.md` §4 provides discipline;
+  the per-recipe debt is a queued item there, not policy.
+
+## 2026-10-04 — deferred topology edges adjudicated: 4 land on gcc-snapshot, the mutual pair stays broken consumer-side
+
+- **Symptom**: the 2026-10-04 topology wiring left 5 evidence-backed edges
+  out of `config/topology.conf` — the systemd↔util-linux mutual coupling's
+  second direction plus 4 gcc-snapshot edges — parking them on two open
+  questions (Q6 portal-cycle break side, Q7 deferral count) instead of the
+  graph.
+- **Root cause**: the dependency data contains one genuine mutual build
+  coupling — `makedepends = util-linux` (`packages/core/systemd/.SRCINFO:24`)
+  against `makedepends = systemd` (`packages/stable/util-linux/.SRCINFO:24`)
+  — so both directions cannot hold in an acyclic build-order graph and one
+  side must yield; the 4 gcc-snapshot edges were held only by the unsettled
+  deferral count, not by any cycle (they close none).
+- **Fix**: Q7 settled the deferral count at **0**, so all 4 landed on
+  `gcc-snapshot`'s record — `binutils`, `git-git`, `python`, `zstd-git`
+  (`makedepends = binutils/git/python/zstd` at
+  `packages/core/gcc-snapshot/.SRCINFO:12,13,16,17`, plus runtime
+  `depends = zstd` at :53; the stock names `git`/`zstd` resolve to their
+  `X→X-git` supersession records per the wiring mapping rule). Q6 settled
+  the mutual pair's break on the **CONSUMER side**: of the two, `util-linux`
+  is the consumer of the exchanged libraries — it declares runtime
+  consumption of systemd's `libsystemd.so`/`libudev.so`
+  (`packages/stable/util-linux/.SRCINFO:66-68`) where systemd declares no
+  runtime consumption of util-linux's libraries — so the edge that yields is
+  the consumer's claim `util-linux→systemd`; the authored `systemd→util-linux`
+  edge stands, and the pair remains exactly one edge, now as a chosen break
+  instead of a deferral. The only cycle the deferred edges participate in is
+  this 2-cycle, so the break side was decided for it.
+- **Validation**: full-graph DFS over the changed map reports no cycle (652
+  records; the loader's own topological sort re-validates the same property
+  on every invocation — exercised by `--list`, `--audit` and the
+  git/stable/core dry-runs); `bash tests/abi-batch-policy.sh` and
+  `bash tests/project.sh` stay green.
+- **Durable rules**: never land an edge without recipe-metadata evidence —
+  each landed edge above names its `.SRCINFO` line; a mutual build coupling
+  is broken on the consumer side (Q6 decision) and the chosen break is
+  recorded here beside both `.SRCINFO` citations rather than left as a
+  deferral; a deferral count of 0 means no wiring-deferred edge may remain
+  un-adjudicated — it either lands or is recorded here as the break.
+
+## 2026-10-04 — Q2 lands: the hub-rule debt register becomes core dual membership
+
+- **Symptom**: rule 21(a) ("a package with ≥2 edge-consumers carries `core`")
+  was pinned against the curated 144-record edge graph; on the full
+  653-record wiring graph 204 records violated it — 203 carried as the
+  written-debt Q2-open register in `tests/abi-batch-policy.sh`, plus one
+  documented exception (fcitx5-git).
+- **Root cause**: at wiring time the ABI-libs-vs-core question (Q2) was
+  deferred instead of decided, so the pin's scope was narrowed with a
+  register that preserved its teeth while the policy stayed open.
+- **Fix**: the 2026-10-04 Q2 decision is **promote** — every one of the 203
+  registered records gained `core` dual membership beside its existing group
+  (`git,core` / `stable,core` / `app,core`, matching the `stable,core`
+  precedent), and the register was deleted in the same change so the
+  fixture's hub pin binds bare again over the whole graph. fcitx5-git keeps
+  its rule 21(a) app-cluster exception exactly as the fixture documented it
+  (5 of its 6 consumers are its own `app-cluster=fcitx5` siblings; stable
+  `fcitx5-configtool` is the known outlier the decision accepted);
+  fcitx5-qt-git is deliberately inside the
+  promotion — its consumers are not all cluster siblings
+  (`fcitx5-configtool` is stable). `docs/MEMORY.md` §1 rule 21(i) and the §5
+  Q2/Q6/Q7 queue rows predate this change and are reconciled in the docs
+  pass.
+- **Validation**: `bash tests/abi-batch-policy.sh` green with the register
+  gone — the F(b) pin re-derives its hub list from the records and all 204
+  former violations now either carry `core` or sit on the one named
+  exception; `bash tests/project.sh` green (its size expectations are
+  derived from records, never pinned counts).
+- **Durable rules**: hub-rule debt is not re-accumulatable as a register — a
+  new ≥2-consumer record without `core` fails the pin until it carries
+  `core` or a written exception naming its reason; when a decision lands,
+  the narrowing workaround dies in the same change.
+
 ## 2026-10-04 — local/remote divergence: 4 local commits rebased onto 13 remote
 
 - **Symptom**: `main` had diverged — 4 unpushed local commits (hermes-agent-git

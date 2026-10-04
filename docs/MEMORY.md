@@ -63,8 +63,22 @@
      clean; the recipe-contract ratchet emptied and became a strict gate). A
      versioned provide is for a NAME capability whose consumers constrain it
      by version — `shelly=${pkgver}` and the toolchain `meson=${pkgver}`
-     pattern. Check: `fish build-all.fish --audit-lint provides` +
-     `tests/provides-audit.sh`. (last reviewed 2026-10-04)
+     pattern.
+   - the name side is SONAME + NAME with opposite forms (2026-10-04 Q8
+     decision): wherever a recipe MAPS a stock name — swaps it (Class A
+     `provides=(<stock>=$pkgver)` + `conflicts=(<stock>)`), is the VCS
+     counterpart of one of its outputs, or compat-maps an output name
+     (including a cross-recipe map like `wireplumber`→`pipewire-session-manager`)
+     — it declares a VERSIONED name provide `provides=(<name>=$pkgver)`;
+     same for every name some workspace consumer constrains by version. The
+     reason is the meson-incident one: an unversioned provide cannot satisfy
+     `>=N`. A capability virtual (`libgl`, `ladspa-host`) maps nothing and
+     stays unversioned; a package providing its own output name maps nothing
+     either. Check: `fish build-all.fish --audit-lint provides` +
+     `tests/provides-audit.sh`. 59 recipes (113 name pairs) predate this rule
+     and are debt-ratcheted in `tests/recipe-contract.sh` section E — new
+     recipes must comply; the debt shrinks one recipe at a time, never grows.
+     (last reviewed 2026-10-04)
 5. **Qt private-API coupling**: qt6/qt5-base-git update ⇒ rebuild ALL coupled
    all coupled Qt modules in the SAME pass; verify private tags
    (`nm -D --undefined-only | grep QtPrivate_`); never `-Syu` fresh base-git
@@ -452,10 +466,12 @@
     (h) a refusing install plan (PGO/ABI/empty-list) is pacman-free end to
     end, and unreadable `.PKGINFO` archives are skipped, never probed
     (breakage: any early pacman call is a silent `--ask 4` consent path);
-    (i) a package with ≥2 edge-consumers carries `core` (rule 21(a)) — the
-    203-id Q2-open register in `tests/abi-batch-policy.sh` is written debt,
-    not policy (breakage: the hub pin caught `libdrm-git` dropped from the
-    migration list mid-plan);
+    (i) a package with ≥2 edge-consumers carries `core` (rule 21(a)) —
+    enforced by promotion, not by a debt register: the 203-id Q2-open
+    register was landed as `core` dual membership on 2026-10-04 and the
+    register deleted (breakage: the hub pin caught `libdrm-git` dropped from
+    the migration list mid-plan; a register let 203 known violators sit
+    outside the rule);
     (j) fixture expectations about topology-derived sizes are computed from
     records, never pinned counts (breakage: the same hub pin worked only
     because it re-derived its expectation).
@@ -939,15 +955,13 @@ going stale.
 - **spandsp sign-off** (2026-10-03→04 ingestion): it resolves to the
   FreeSWITCH fork rather than the classic library; explicit sign-off wanted
   before it becomes the house provider.
-- **Q2 — ABI-libs vs core dual membership** (2026-10-04 wiring): the 203-id
-  Q2-open register in `tests/abi-batch-policy.sh` is the written debt backing
-  this; narrow it in the same change the decision lands in.
-- **Q6 — portal-cycle break side** (2026-10-04 wiring): decide which side of
-  the portal dependency cycle the deferred edges break on.
-- **Q7 — gcc-snapshot deferral count** (2026-10-04 wiring): settle the
-  deferral count so the 4 deferred gcc-snapshot edges can land.
-- **Q8 — provides/soname mapping scope** (2026-10-04 wiring): decide how far
-  the provides↔soname mapping is expected to reach.
+- **Versioned name-provides debt** (2026-10-04 Q8 follow-up): 59 recipes /
+  113 mapped-name pairs predate the soname+name rule (see §4 provides
+  discipline) — each needs `provides=(<name>=$pkgver)` for its swapped,
+  VCS-counterpart or compat-mapped stock names. The list is pinned as the
+  ratchet in `tests/recipe-contract.sh` section E; shrink it recipe by
+  recipe (a provides change needs a real rebuild — the archive's `.PKGINFO`
+  is the deliverable), never grow it.
 - **version-sync vs pkgrel rebuild triggers** (2026-10-04 merge): a
   version-sync wave resets `pkgrel=1` on a new pkgver while fixture pins like
   `tests/noctalia-pgo.sh`'s `pkgrel >= 2` (the 2026-09-23 PGO fix's rebuild

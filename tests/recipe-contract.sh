@@ -112,6 +112,60 @@ write_srcinfo() {
     ((FIXTURE_RC == 0)) || fail "A: green case failed (rc=$FIXTURE_RC)"
     grep -Fq 'audit-lint provides: clean' <<<"$FIXTURE_OUTPUT" ||
         fail "A: expected a clean verdict, got: $FIXTURE_OUTPUT"
+    # Q8 NAME mapping scope (red): every shape that MAPS a name needs a
+    # VERSIONED name-provide — the Class A swap, the VCS-derived stock
+    # counterpart, and compat-maps of output names (sibling AND cross-recipe).
+    # The swap case also pins the dedup: a mapped name a consumer constrains
+    # gets ONE finding, since one edit fixes both sides. A self-provide and a
+    # capability virtual map nothing and stay unversioned.
+    add_package "$ws" swap-git
+    add_package "$ws" map-git
+    add_package "$ws" compat
+    add_package "$ws" cross
+    add_package "$ws" selfname
+    add_package "$ws" virt
+    write_srcinfo "$ws/packages/swap-git" swap-git
+    printf '\tprovides = stocklib\n' >>"$ws/packages/swap-git/.SRCINFO"
+    printf '\tconflicts = stocklib\n' >>"$ws/packages/swap-git/.SRCINFO"
+    printf '\tmakedepends = stocklib>=2\n' >>"$ws/packages/consumer-git/.SRCINFO"
+    write_srcinfo "$ws/packages/map-git" map-git
+    printf '\tprovides = map\n' >>"$ws/packages/map-git/.SRCINFO"
+    write_srcinfo "$ws/packages/compat" compat compat-b
+    printf '\tprovides = compat\n' >>"$ws/packages/compat/.SRCINFO"
+    write_srcinfo "$ws/packages/cross" cross
+    printf '\tprovides = compat-b\n' >>"$ws/packages/cross/.SRCINFO"
+    write_srcinfo "$ws/packages/selfname" selfname
+    printf '\tprovides = selfname\n' >>"$ws/packages/selfname/.SRCINFO"
+    write_srcinfo "$ws/packages/virt" virt
+    printf '\tprovides = libgl\n' >>"$ws/packages/virt/.SRCINFO"
+
+    lint "$ws" provides
+    ((FIXTURE_RC == 0)) || fail "A: Q8 red case must stay report-only (rc=$FIXTURE_RC)"
+    for pair in "swap-git: stocklib" "map-git: map" "compat: compat" "cross: compat-b"; do
+        id=${pair%%: *}
+        name=${pair#*: }
+        grep -Fq "provides: $id: mapped swap/compat provide '$name' is unversioned" \
+            <<<"$FIXTURE_OUTPUT" ||
+            fail "A: missing Q8 mapping finding for '$pair', got: $FIXTURE_OUTPUT"
+    done
+    grep -Fq 'audit-lint provides: 4 finding(s)' <<<"$FIXTURE_OUTPUT" ||
+        fail "A: wrong Q8 finding count (dedup/self-provide/virtual must add none): $FIXTURE_OUTPUT"
+
+    # Green: the mapped names carry versions; the self-provide and the
+    # capability virtual stay unversioned and stay clean.
+    write_srcinfo "$ws/packages/swap-git" swap-git
+    printf '\tprovides = stocklib=2.0\n' >>"$ws/packages/swap-git/.SRCINFO"
+    printf '\tconflicts = stocklib\n' >>"$ws/packages/swap-git/.SRCINFO"
+    write_srcinfo "$ws/packages/map-git" map-git
+    printf '\tprovides = map=1.0\n' >>"$ws/packages/map-git/.SRCINFO"
+    write_srcinfo "$ws/packages/compat" compat compat-b
+    printf '\tprovides = compat=1.0\n' >>"$ws/packages/compat/.SRCINFO"
+    write_srcinfo "$ws/packages/cross" cross
+    printf '\tprovides = compat-b=1.0\n' >>"$ws/packages/cross/.SRCINFO"
+    lint "$ws" provides
+    ((FIXTURE_RC == 0)) || fail "A: Q8 green case failed (rc=$FIXTURE_RC)"
+    grep -Fq 'audit-lint provides: clean' <<<"$FIXTURE_OUTPUT" ||
+        fail "A: versioning the mapped names must clear the verdict, got: $FIXTURE_OUTPUT"
     printf 'A: provides versioning red/green OK\n'
 )
 
@@ -259,20 +313,137 @@ EOF
     run_builder fish "$root/build-all.fish" --audit-lint provides
     ((FIXTURE_RC == 0)) || fail "E: real-repo provides lint failed (rc=$FIXTURE_RC)"
 
-    # P2 debt cleared 2026-10-04: the list is empty and stays a strict gate —
-    # any NEW hand-pinned soname provide fails here (bare-declare the stem).
-    # P1/P3 must be empty too: all provides findings are forbidden now.
-    sed -n "s/^provides: \([^:]*\): soname provide '\([^']*\)' is hand-versioned .*/\1: \2/p" \
-        <<<"$FIXTURE_OUTPUT" | LC_ALL=C sort >"$tmp/p2.actual"
-    if grep '^provides: ' <<<"$FIXTURE_OUTPUT" |
-        grep -v ' is hand-versioned — ' | grep -q .; then
-        fail "E: non-P2 provides finding on the real repo (P1/P3 must be empty): $FIXTURE_OUTPUT"
+    # The SONAME side and the constraint side stay strictly forbidden on the
+    # real repo (P2 debt cleared 2026-10-04: bare stems only; an unversioned
+    # provide of a constrained name is the meson-incident class). The NAME
+    # mapping side carries the Q8 debt register instead: the 2026-10-04 scope
+    # decision (SONAME + NAME) was audited the same day, and these recipes
+    # still declare mapped names unversioned. More than five, so recipe work
+    # stays gated — version one (declare provides=('<name>=$pkgver')) or
+    # update this ratchet consciously.
+    if grep '^provides: ' <<<"$FIXTURE_OUTPUT" | grep -v ' mapped swap/compat provide ' | grep -q .; then
+        fail "E: soname/constraint provides finding on the real repo: $FIXTURE_OUTPUT"
     fi
-    cat >"$tmp/p2.expected" <<'EOF'
+    sed -n "s/^provides: \([^:]*\): mapped swap\/compat provide '\([^']*\)' is unversioned.*/\1: \2/p" \
+        <<<"$FIXTURE_OUTPUT" | LC_ALL=C sort >"$tmp/mapping.actual"
+    cat >"$tmp/mapping.expected" <<'EOF'
+blender-git: blender
+bpftune-git: bpftune
+dbus-broker-git: dbus-broker
+dbus-broker-git: dbus-broker-units
+dbus-broker-git: dbus-units
+dbus-broker: dbus-units
+dbus: libdbus
+easyeffects-git: easyeffects
+emacs: emacs
+fcitx5-chinese-addons-git: fcitx5-chinese-addons
+fcitx5-git: fcitx5
+fcitx5-gtk-git: fcitx5-gtk
+fcitx5-lua-git: fcitx5-lua
+fcitx5-qt-git: fcitx5-qt
+fcitx5-qt-git: fcitx5-qt5
+fcitx5-qt-git: fcitx5-qt6
+flatpak-git: flatpak
+freeglut: glut
+gcc-snapshot: gcc
+gcc-snapshot: gcc-fortran
+gcc-snapshot: gcc-fortran-multilib
+gcc-snapshot: gcc-libs-multilib
+gcc-snapshot: gcc-multilib
+gcc-snapshot: lib32-gcc-libs
+gcc-snapshot: libasan
+gcc-snapshot: libatomic
+gcc-snapshot: libgcc
+gcc-snapshot: libgccjit
+gcc-snapshot: libgfortran
+gcc-snapshot: libgomp
+gcc-snapshot: libitm
+gcc-snapshot: liblsan
+gcc-snapshot: libquadmath
+gcc-snapshot: libstdc++
+gcc-snapshot: libtsan
+gcc-snapshot: libubsan
+gcc-snapshot: lto-dump
+gimp-git: gimp
+git-git: git
+gtk3-git: gtk3-print-backends
+jack2-git: jack
+jack2-git: jack2-dbus
+kmod-git: kmod
+libadwaita-git: libadwaita
+libcamera-git: libcamera-ipa
+libclc-git: libclc
+libdex-git: libdex
+libdrm-git: libdrm
+libime-git: libime
+libinput-git: libinput
+libisl-git: isl
+libisl-git: libisl
+liburing-git: liburing
+libva-git: libva
+llvm-git: clang
+llvm-git: clang-opencl-headers
+llvm-git: compiler-rt
+llvm-git: lld
+llvm-git: llvm
+llvm-git: llvm-libs
+logseq-desktop-git: logseq
+logseq-desktop-git: logseq-desktop
+mesa-git: libva-mesa-driver
+mesa-git: mesa
+mesa-git: mesa-libgl
+mesa-git: vulkan-intel
+mesa-git: vulkan-mesa-device-select
+mesa-git: vulkan-mesa-implicit-layers
+mesa-git: vulkan-mesa-layers
+mesa-git: vulkan-nouveau
+mesa-git: vulkan-radeon
+mesa-git: vulkan-swrast
+mesa-git: vulkan-virtio
+mimalloc-git: mimalloc
+nghttp3-git: nghttp3
+noctalia-git: noctalia
+onlyoffice-git: onlyoffice
+onlyoffice-git: onlyoffice-desktopeditors
+pango-git: pango
+pipewire: pulse-native-provider
+pyside6-git: pyside6
+pyside6-git: shiboken6
+qt6-base-git: qt6-base
+qt6-base-git: qt6-xcb-private-headers
+rust-bindgen-git: rust-bindgen
+rust-git: cargo
+rust-git: rust
+rust-git: rust-src
+rust-git: rustfmt
+seatd-git: libseat
+seatd-git: seatd
+spirv-llvm-translator-git: spirv-llvm-translator
+systemd: libsystemd
+systemd: nss-myhostname
+systemd: resolvconf
+util-linux: hardlink
+util-linux: libutil-linux
+util-linux: rfkill
+vencord-git: vencord
+vscodium-insiders-git: codium
+vscodium-insiders-git: vscodium
+vulkan-icd-loader-git: vulkan-icd-loader
+wireplumber: pipewire-session-manager
+xcb-imdkit-git: xcb-imdkit
+xdg-desktop-portal-gnome-git: xdg-desktop-portal-gnome
+xdg-desktop-portal-gtk-git: xdg-desktop-portal-gtk
+xorg-xwayland-git: xorg-server-xwayland
+xorg-xwayland-git: xorg-server-xwayland-git
+xorg-xwayland-git: xorg-xwayland
+xwayland-satellite-git: xwayland-satellite
+zlib-ng-compat-git: zlib
+zlib-ng-git: zlib-ng
+zstd-git: zstd
 EOF
-    LC_ALL=C sort -o "$tmp/p2.expected" "$tmp/p2.expected"
-    diff -u "$tmp/p2.expected" "$tmp/p2.actual" >&2 ||
-        fail 'E: the hand-pinned soname-provides set drifted — fix the recipe (bare-declare the stem) or update this ratchet consciously'
+    LC_ALL=C sort -o "$tmp/mapping.expected" "$tmp/mapping.expected"
+    diff -u "$tmp/mapping.expected" "$tmp/mapping.actual" >&2 ||
+        fail "E: the mapped-name versioned-provides debt drifted — fix the recipe (declare provides=(<name>=\${pkgver})) or update this ratchet consciously"
 
     run_builder fish "$root/build-all.fish" --audit-lint purged
     ((FIXTURE_RC == 0)) || fail "E: real-repo purged lint failed (rc=$FIXTURE_RC)"
