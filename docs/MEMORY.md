@@ -948,6 +948,13 @@ going stale.
   deferral count so the 4 deferred gcc-snapshot edges can land.
 - **Q8 — provides/soname mapping scope** (2026-10-04 wiring): decide how far
   the provides↔soname mapping is expected to reach.
+- **version-sync vs pkgrel rebuild triggers** (2026-10-04 merge): a
+  version-sync wave resets `pkgrel=1` on a new pkgver while fixture pins like
+  `tests/noctalia-pgo.sh`'s `pkgrel >= 2` (the 2026-09-23 PGO fix's rebuild
+  trigger) demand the bump — the two conventions collide and re-break the
+  battery on every sync wave. Decide: teach the sync machinery to preserve
+  trigger bumps, or re-express the pins as "installed build is older than the
+  fix" checks.
 - **Residual ingestion debts** (2026-10-04 fleet): 3 stale `.SRCINFO`s —
   gcc-snapshot, hermes-agent-git, zen-browser-pgo — await their recipe owner
   (rule 22(c): no self-reported validation); recipe-sources untracked-asset

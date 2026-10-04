@@ -264,6 +264,15 @@ Version : 1.0.0-1
 Provides : libgreet.so=1-64'
 stub_sudo "$ws"
 stub_makepkg "$ws"
+# A missing GCC build-identity stamp makes the toolchain-drift clean delete
+# every cached archive before the build (the drift feature's own contract) —
+# which would silently destroy this case's pre-made bumped-provide archive.
+# Stamp the CURRENT toolchain identity so the workspace looks like a healthy
+# build and this case stays about the ABI gate, not toolchain drift.
+mkdir -p "$ws/state/toolchains"
+gccline=$(LC_ALL=C gcc --version 2>/dev/null | head -1)
+[[ -n $gccline ]] || gccline='gcc unavailable'
+printf '%s\n%s\n' "$ws/packages/libs-git" "$gccline" >"$ws/state/toolchains/libs-git"
 : >"$ws/pacman.log"
 run_builder env \
     PATH="$ws/bin:$PATH" \

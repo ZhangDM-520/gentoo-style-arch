@@ -37,6 +37,45 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-04 — local/remote divergence: 4 local commits rebased onto 13 remote
+
+- **Symptom**: `main` had diverged — 4 unpushed local commits (hermes-agent-git
+  packaging, build-tools group migration, the recipe/ABI-guard/perf land)
+  against 13 remote commits (version-sync waves, toolchain-drift clean, PGO
+  training bounds, checksum-gate defer, `--skip` freshness tolerance,
+  hermes-agent-git landing) from the other machine's tree.
+- **Root cause**: two work lines landed the same period without a shared
+  trunk; the hermes recipe existed on both sides (remote `a99d46d` was the
+  verified build of local `cc7cc87`+`181839f`'s content), and both sides
+  evolved `build-all.fish`, `config/topology.conf`, docs and PGO fixtures.
+- **Fix**: linear-history rebase of the 4 onto `origin/main` with per-hunk
+  intent preservation. Decisions worth knowing: the remote hermes recipe
+  content won (its `.SRCINFO` was the consistent one) while the local-only
+  journal entries were kept; the topology wiring kept the local edge sets
+  (`hermes-agent-git` consumes `git-git,nodejs,python` — the edge-free record
+  predates those recipes existing, and app records uniformly carry their
+  workspace closure); `pick_next_ready` carries BOTH the toolchain-remediation
+  force queue and the build-tools dispatch band (the band reorders ready
+  candidates only); `tests/project.sh` counts scope through the `--topology`
+  data channel (the documented contract) while deriving size expectations
+  from records. Four merge regressions were fixed: `tests/pgo-lib.sh` kept
+  pre-migration recipe paths (the core migration moved cairo/gtk3/wayland),
+  `noctalia-git`'s `pkgrel=2` rebuild trigger was lost to a bulk-land reset
+  and is restored, three `.SRCINFO`s regenerated from their merged PKGBUILDs,
+  and `tests/abi-drift-install.sh` case G now stamps the GCC build-identity
+  state — the toolchain-drift clean legitimately deletes cached archives on a
+  missing identity, which had been silently destroying the case's pre-made
+  bumped-provide archive.
+- **Validation**: full battery 55/55; `--list` 3.9 s / 662 rows, `--audit`
+  rc 0 (PGO payload clean, 102 s), three dry-run sweeps rc 0; `.SRCINFO`
+  freshness green across 652 recipes.
+- **Durable rules**: a fixture that pre-places build artifacts must also
+  model the toolchain state the builder trusts, or the drift clean will eat
+  its setup; a version-sync pkgver bump and a pkgrel rebuild trigger can
+  collide (the pin in `tests/noctalia-pgo.sh` is the arbiter); when both
+  sides rename recipe paths and fixtures, the fixtures' path lists are the
+  usual silent casualty.
+
 ## 2026-10-04 — builder latency regression at 653-record scale
 
 - **Symptom**: once the roster reached 653 records / 3373 edges, `fish

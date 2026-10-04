@@ -1,6 +1,6 @@
 pkgbase = gcc-snapshot
 	pkgdesc = The GNU Compiler Collection (snapshot)
-	pkgver = 17.0.0.snapshot20260920
+	pkgver = 17.0.0.snapshot20260927
 	pkgrel = 1
 	url = https://gcc.gnu.org
 	arch = x86_64
@@ -17,7 +17,7 @@ pkgbase = gcc-snapshot
 	makedepends = zstd
 	options = !emptydirs
 	options = !lto
-	source = https://ftp.fu-berlin.de/unix/languages/gcc/snapshots/17-20260920/gcc-17-20260920.tar.xz
+	source = https://ftp.fu-berlin.de/unix/languages/gcc/snapshots/17-20260927/gcc-17-20260927.tar.xz
 	source = git+https://github.com/Meinersbur/isl.git#branch=master
 	source = https://gmplib.org/download/gmp/gmp-6.3.0.tar.xz
 	source = https://gmplib.org/download/gmp/gmp-6.3.0.tar.xz.sig
@@ -47,8 +47,8 @@ pkgbase = gcc-snapshot
 
 pkgname = gcc-snapshot
 	pkgdesc = GNU Compiler Collection - C and C++ front-ends (snapshot)
-	depends = libgcc-snapshot=17.0.0.snapshot20260920-1
-	depends = libstdc++-snapshot=17.0.0.snapshot20260920-1
+	depends = libgcc-snapshot=17.0.0.snapshot20260927-1
+	depends = libstdc++-snapshot=17.0.0.snapshot20260927-1
 	depends = glibc>=2.40
 	depends = zstd
 	optdepends = lib32-gcc-libs-snapshot: for generating code for 32-bit ABI
@@ -65,8 +65,8 @@ pkgname = gcc-snapshot
 
 pkgname = gcc-fortran-snapshot
 	pkgdesc = GNU Compiler Collection - Fortran front-end (snapshot)
-	depends = gcc-snapshot=17.0.0.snapshot20260920-1
-	depends = libgfortran-snapshot=17.0.0.snapshot20260920-1
+	depends = gcc-snapshot=17.0.0.snapshot20260927-1
+	depends = libgfortran-snapshot=17.0.0.snapshot20260927-1
 	depends = glibc>=2.40
 	provides = gcc-fortran-snapshot-multilib
 	provides = gcc-fortran-multilib
@@ -81,21 +81,21 @@ pkgname = gcc-fortran-snapshot
 
 pkgname = gcc-libs-snapshot
 	pkgdesc = GNU Compiler Collection - Runtime libraries (snapshot)
-	depends = libasan-snapshot=17.0.0.snapshot20260920-1
-	depends = libatomic-snapshot=17.0.0.snapshot20260920-1
-	depends = libgfortran-snapshot=17.0.0.snapshot20260920-1
-	depends = libgcc-snapshot=17.0.0.snapshot20260920-1
-	depends = libgomp-snapshot=17.0.0.snapshot20260920-1
-	depends = libitm-snapshot=17.0.0.snapshot20260920-1
-	depends = liblsan-snapshot=17.0.0.snapshot20260920-1
-	depends = libquadmath-snapshot=17.0.0.snapshot20260920-1
-	depends = libstdc++-snapshot=17.0.0.snapshot20260920-1
-	depends = libtsan-snapshot=17.0.0.snapshot20260920-1
-	depends = libubsan-snapshot=17.0.0.snapshot20260920-1
+	depends = libasan-snapshot=17.0.0.snapshot20260927-1
+	depends = libatomic-snapshot=17.0.0.snapshot20260927-1
+	depends = libgfortran-snapshot=17.0.0.snapshot20260927-1
+	depends = libgcc-snapshot=17.0.0.snapshot20260927-1
+	depends = libgomp-snapshot=17.0.0.snapshot20260927-1
+	depends = libitm-snapshot=17.0.0.snapshot20260927-1
+	depends = liblsan-snapshot=17.0.0.snapshot20260927-1
+	depends = libquadmath-snapshot=17.0.0.snapshot20260927-1
+	depends = libstdc++-snapshot=17.0.0.snapshot20260927-1
+	depends = libtsan-snapshot=17.0.0.snapshot20260927-1
+	depends = libubsan-snapshot=17.0.0.snapshot20260927-1
 	depends = glibc>=2.40
 	provides = gcc-libs-snapshot-multilib
 	provides = gcc-libs-multilib
-	provides = gcc-libs=17.0.0.snapshot20260920-1
+	provides = gcc-libs=17.0.0.snapshot20260927-1
 	conflicts = gcc-libs-multilib
 	conflicts = gcc-libs
 	replaces = gcc-libs-snapshot-multilib
@@ -139,7 +139,7 @@ pkgname = libgcc-snapshot
 
 pkgname = libgccjit-snapshot
 	pkgdesc = GNU Compiler Collection - Just-In-Time compilation framework (snapshot)
-	depends = gcc-snapshot=17.0.0.snapshot20260920-1
+	depends = gcc-snapshot=17.0.0.snapshot20260927-1
 	provides = libgccjit-snapshot-multilib
 	provides = libgccjit
 	conflicts = libgccjit
@@ -257,7 +257,7 @@ pkgname = lib32-gcc-libs-snapshot
 
 pkgname = lto-dump-snapshot
 	pkgdesc = GNU Compiler Collection - Dump link time optimization object files tool (snapshot)
-	depends = gcc-snapshot=17.0.0.snapshot20260920-1
+	depends = gcc-snapshot=17.0.0.snapshot20260927-1
 	depends = libgcc-snapshot
 	provides = lto-dump-snapshot-multilib
 	provides = lto-dump

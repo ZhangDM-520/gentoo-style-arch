@@ -293,9 +293,9 @@ EOF
     # a hand-rolled `timeout … meson test` line next to it would silently
     # reintroduce the storm.
     for rel in packages/core/glib2-git packages/core/gtk4-git \
-        packages/git/cairo-git packages/git/gtk3-git \
+        packages/core/cairo-git packages/core/gtk3-git \
         packages/git/libinput-git packages/git/pixman-git \
-        packages/git/wayland-git packages/git/xorg-xwayland-git; do
+        packages/core/wayland-git packages/git/xorg-xwayland-git; do
         pkb="$root/$rel/PKGBUILD"
         grep -qE 'pgo_train_meson( --display-suite)? [^ ]+ [0-9]+' "$pkb" ||
             fail "$rel: training is not routed through pgo_train_meson <builddir> <budget>"
