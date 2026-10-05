@@ -12,22 +12,34 @@ depends=(glibc)
 makedepends=(git make gcc patchelf)
 provides=(libldacBT_dec.so)
 _commit=c90094b15e25aef0e47c6d775fa94aceb36cabbc
+# libldac is upstream's git submodule (see .gitmodules) pinned at the
+# submodule gitlink of this commit (e8ff0f96...). It is fetched as googlesource's
+# +archive tarball of the SAME commit, not as a git clone: the android.googlesource
+# repo advertises a corrupt branch ref (refs/heads/android17-security-release ->
+# non-commit 15a1c66) and git 2.56 refuses to clone past it ("trying to write
+# non-commit object ... to branch"); makepkg clones --mirror (all refs), so no
+# fragment avoids it. The archive carries the same tree and is checksummed here
+# (fail closed if googlesource ever regenerates it differently).
+_libldac_commit=e8ff0f96f26b84b47711c549e0d60baa425cd70e
 source=("git+$url#commit=$_commit"
-        "git+https://android.googlesource.com/platform/external/libldac.git#commit=e8ff0f96f26b84b47711c549e0d60baa425cd70e"
+        "libldac.tar.gz::https://android.googlesource.com/platform/external/libldac/+archive/${_libldac_commit}.tar.gz"
         "ldacBT-dec.pc"
         )
 sha256sums=('4f2eb83a0ceaa71c0cbdb3e622ff37444199779df00372b8a167b9da3522fb2e'
-            '096342df8d8675c354f0b6335d4d0b2f044511628952c9240e20f8c4bda6a93f'
+            'f081e511421f5f232a21b91fc70ec1e2f9149ef18e360831f0b4f3a45135ae42'
             'd6425808c870f7c408013934478421e8895073c10fb3ac10fa1db9febe0783f4')
+# the +archive tarball is a bare tree (no wrapping dir): keep makepkg from
+# spilling it over $srcdir and unpack it into the submodule path ourselves
+noextract=('libldac.tar.gz')
 
 prepare() {
   cd libldacdec
 
-  # Feed the pinned android libldac clone in as the submodule instead of
-  # re-fetching it from googlesource (the local path needs protocol.file.allow).
-  git submodule init
-  git submodule set-url libldac "$srcdir/libldac"
-  git -c protocol.file.allow=always submodule update
+  # upstream tracks libldac as a git submodule; drop the pinned tree in as the
+  # submodule content (the build compiles these sources and needs no git metadata)
+  rm -rf libldac
+  mkdir libldac
+  tar -xf "$srcdir/libldac.tar.gz" -C libldac
 }
 
 build() {
