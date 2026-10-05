@@ -1418,9 +1418,13 @@ end
 # workspace package declares (abi_provide_covers: a bare stem covers its
 # family, makepkg's auto-versioned form covers its exact version — that
 # precision is what turns a silent soname bump into a named violation),
-# (b) an expected base-system soname (abi_base_lib_ok), or (c) an exception
+# (b) an expected base-system soname (abi_base_lib_ok), (c) an exception
 # documented in config/abi-exclusions.conf (abi_excluded — the registry is
-# wired in read_abi_exclusions, loaded on EVERY invocation).
+# wired in read_abi_exclusions, loaded on EVERY invocation), or (d) for the
+# post-install probe only, runtime file truth: the named file is shipped by
+# the transaction or owned by an installed package (install_needed_probe's
+# `_PROBESHIP_`/`pacman -Ql` half — stock Arch providers such as libx11 ship
+# no soname provide, and the dynamic linker resolves their files regardless).
 #
 # Stock convention (layers 2/5): the "installed stock equivalent" of a
 # workspace pkgname is what the installed database answers for the name with
@@ -2145,6 +2149,20 @@ function install_needed_probe
         test -n "$pname"; or continue
         set -f -a _PROVBY_(string replace -a -r '[^A-Za-z0-9]' '' -- "$pname") "$entry"
     end
+    # Runtime-file half of resolution (2026-10-06 real full build): a NEEDED
+    # name is also resolved when its FILE is on the resulting system — shipped
+    # by this transaction, or owned by an installed package. The provide set
+    # is the packaging story and stock Arch does NOT mirror it 1:1: libx11,
+    # libxt and libxext (among many) ship no `provides=(libX11.so)`, so a
+    # provide-only probe aborts every consumer of such a provider although the
+    # dynamic linker resolves it fine. The file check is the runtime truth and
+    # keeps the true positives: a soname whose file vanished (the icu 78→79
+    # class) has neither a provide nor a file and still aborts. The owned-file
+    # list is one `pacman -Ql` dump per probe, built lazily on the first
+    # provide miss (the fixture stub fabricates it; a failure yields an empty
+    # list and the probe stays fail-closed).
+    set -l disk_names "$work/disk-names"
+    set -l disk_names_ready 0
     for archive in $argv
         set n (math $n + 1)
         set -l dest "$work/$n"
@@ -2152,6 +2170,7 @@ function install_needed_probe
         tar -xf "$archive" -C "$dest" 2>/dev/null; or continue
         for file in (find "$dest" -type f 2>/dev/null)
             set -l rel (string replace "$dest/" '' -- "$file")
+            set -f _PROBESHIP_(string replace -a -r '[^A-Za-z0-9]' '' -- (string replace -r '^.*/' '' -- "$file")) 1
             for soname in (readelf -dW "$file" 2>/dev/null \
                 | sed -n 's/^.*NEEDED.*\[\(.*\)\]$/\1/p')
                 abi_base_lib_ok "$soname"; and continue
@@ -2172,6 +2191,22 @@ function install_needed_probe
                     if abi_provide_covers "$entry" "$soname"
                         set resolved 1
                         break
+                    end
+                end
+                if test $resolved -eq 0
+                    # Runtime-file half (see the index comment above): bytes
+                    # the transaction itself ships resolve for every member.
+                    set -q _PROBESHIP_$skey; and set resolved 1
+                end
+                if test $resolved -eq 0
+                    if test $disk_names_ready -eq 0
+                        command pacman -Ql 2>/dev/null \
+                            | awk '{ p = $0; sub(/^[^ \t]+[ \t]+/, "", p); n = p; sub(/.*\//, "", n); print n }' \
+                            | command sort -u > "$disk_names"
+                        set disk_names_ready 1
+                    end
+                    if grep -qxF -- "$soname" "$disk_names" 2>/dev/null
+                        set resolved 1
                     end
                 end
                 test $resolved -eq 1; and continue

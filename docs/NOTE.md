@@ -37,6 +37,73 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-06 — post-install NEEDED probe false-aborted on stock providers
+
+- **Symptom**: run #4 of the same full build stopped at `libxpm-git` — the package BUILT and
+  INSTALLED fine, then `post-install NEEDED probe` aborted: `usr/lib/libXpm.so.4.11.0 needs
+  libX11.so.6 — unresolved after the transaction` (plus `libXt.so.6`, `libXext.so.6`), run rc 1,
+  dispatch stopped. The dynamic linker resolves all three at runtime.
+- **Root cause (guard model, not a package)**: the probe's resolution set was the
+  transaction's `.PKGINFO` provides + the installed DB's provides. But stock Arch does NOT
+  mirror files 1:1 in provides — `libx11`, `libxt`, `libxext` (and, measured over this host's
+  top-level consumers, ~350 more stems) ship no `provides=(libX11.so)` at all (`pacman -Si
+  libx11`: `Provides : None`). A provide-set-only probe therefore false-aborts every consumer
+  of any provider whose PKGBUILD never declared its bare soname provide — and the run hits it
+  one package at a time. The fixture's case D also leaked its `libgreet.so` exclusion entry
+  into every later case (`reset_case` never removed it), masking exactly this class.
+- **Fix**: `install_needed_probe` now has the runtime-file half of resolution — a NEEDED name
+  also resolves when its file is on the resulting system: shipped by the transaction itself
+  (per-probe `_PROBESHIP_` basename index over the extracted members) or owned by an installed
+  package (one lazy `pacman -Ql` basename dump per probe). The provide set stays the primary
+  (and still names the packaging gap in layer 1's lint); the file check is what decides the
+  abort. True positives are kept: a soname whose file vanished (the icu 78→79 class) has
+  neither a provide nor a file and still aborts. `tests/abi-postinstall-probe.sh` gains cases G
+  (owned file, no provide — red-first against the unfixed builder, then green) and H (bytes
+  shipped by the same transaction, no provide), and case D now removes its registry entry.
+  Mutation-probed: disabling either fallback re-fails exactly its own case.
+- **Rule**: a guard that models the packaging DB must not treat the DB as complete. When the
+  question is "does this resolve at RUNTIME", the file on disk (or in the transaction) is the
+  truth and declared provides are one evidence source among several. And when a fixture case
+  mutates shared state (a registry, a config), restore it — a leaked entry silently turns the
+  next case into a tautology.
+
+## 2026-10-06 — icu-git soname bump 78→79: the atomic heal-set transition
+
+- **Symptom**: third install refusal of the same real full build, this time on `icu-git`
+  (run #3, ~13 min of building first): `removing icu breaks dependency 'libicuuc.so=78-64'
+  required by libxml2`. Upstream ICU master had moved to soname 79 (`provides =
+  libicuuc.so=79-64` in the freshly built archive) while the installed consumers still pin the
+  exact soname `libicuuc.so=78-64`.
+- **Root cause (class, not one package)**: makepkg's autodeps bake the linked soname into
+  `depend = libicuuc.so=78-64`, and a rolling `-git` provider that bumps the soname can never
+  satisfy the old pin — unlike the lib32 lockstep `name=version` pins of the same day, these
+  pins are ABI truth and must NOT be relaxed. A full-system scan of the local DB (`grep -l
+  libicu /var/lib/pacman/local/*/desc`) found exactly two 64-bit pinners — `libxml2`, `raptor` —
+  but the runtime closure was wider: `pacman → libxml2 → ICU`, `snapper`, `cmake` and
+  `gdb → libboost_regex`, so a forced swap would have broken the package manager and the
+  snapper transaction hooks mid-run.
+- **Fix (host, one atomic transaction)**: staged the built `icu-git` archive into
+  `/tmp/icu79stage` (its `icu-*.pc`/`icu-config` prefixes rewritten to the stage), rebuilt the
+  heal-set from Arch's packaging git against the stage — `libxml2 2.15.4-1.2`, `raptor
+  2.0.16-9.2`, `libqalculate 5.12.0-1.2` (pkgrel `.2` local deltas; raptor's `.asc` verified
+  against the vendored upstream key; the heal libxml2 is a bridge without docs/python, since
+  doxygen is purged here and the run's in-set `libxml2-git` replaces it) — then ONE
+  `pacman -U --noconfirm --ask 4` of `{icu-git, libxml2, raptor, libqalculate}`: the old pinners
+  are replaced in the same transaction, so no `--assume-installed`/`-Rdd` hack was needed and
+  the snapper pre/post hooks ran on consistent states. Post-check: `ldd` of pacman/snapper/cmake
+  resolves `libicuuc.so.79`, no `.so.78` remains in any toolchain closure, and the only
+  surviving `=78` pins are the untouched 32-bit ones.
+- **Topology**: 23 records whose `.SRCINFO` declares `icu` (depends/makedepends) lacked the
+  `icu-git` build-order edge (`libxml2-git`, `raptor`, `boost-libs`, `libical`, `harfbuzz-git`,
+  `qt6-webengine`, `nodejs`, `postgresql-libs`, …), so a from-scratch run could compile ICU
+  consumers against the wrong generation. All 23 now carry the edge.
+- **Rule**: a soname bump is a batch, not a package: rebuild every pinner and every
+  runtime-critical linker in ONE `pacman -U` transaction against the staged new provider, verify
+  with `ldd`/`readelf -d` afterwards, and never relax a soname pin or reach for
+  `--assume-installed` to get past one. Detect the set from the local DB (`grep -l
+  'libicu<name>\.so=' /var/lib/pacman/local/*/desc`) plus a `readelf -d` sweep of `/usr/lib` —
+  pin lists alone miss silent linkers that simply fail at runtime.
+
 ## 2026-10-06 — archive discovery dropped the epoch (real full build, first package)
 
 - **Symptom**: the first package of a real 652-package `-i` run (`ninja-git`, epoch=2) built

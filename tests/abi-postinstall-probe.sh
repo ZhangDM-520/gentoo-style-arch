@@ -19,7 +19,15 @@ set -euo pipefail
 #   C. the NEWLY INSTALLED half of the resolution set: provider + consumer in
 #      one transaction (the -ia collective install), the existing set empty —
 #      the provider's own .PKGINFO provide covers the consumer's NEEDED;
-#   D. the exclusions registry resolves source (c) for the probe too.
+#   D. the exclusions registry resolves source (c) for the probe too;
+#   G. the runtime-file half of resolution (2026-10-06 full build): a NEEDED
+#      whose file is OWNED by an installed package resolves even when no
+#      package declares the soname provide — stock Arch ships libx11/libxt/
+#      libxext without `provides=(libX11.so)`, so the provide set alone
+#      false-aborts every consumer of a provider that never declared one.
+#      The ownership list is `pacman -Ql`'s, fabricated by the stub;
+#   H. the same for a file SHIPPED by the transaction itself (a private lib
+#      in the same batch, no provide declared): shipped bytes resolve too.
 #
 # Everything under $TMPDIR; ELF payloads synthesized with cc (like
 # tests/provides-audit.sh); the real /usr and the real pacman DB are never
@@ -90,6 +98,12 @@ case ${args[0]:-} in
     done
     exit 0
     ;;
+-Ql)
+    # Fabricated file lists (source (d) of the probe's resolution): the
+    # names an installed package owns, one 'pkgname /path' line per file.
+    cat "${GSA_FAKE_QL:-/dev/null}" 2>/dev/null
+    exit 0
+    ;;
 -Qi)
     if [[ -z ${args[1]:-} ]]; then
         cat "${GSA_FAKE_EXISTING:?}" 2>/dev/null
@@ -136,6 +150,7 @@ run_case() { # LABEL — run -ia over whatever archives are staged.
         GSA_FAKE_DB_DIR="$ws/db" \
         GSA_FAKE_DB_PATH="$ws/db" \
         GSA_FAKE_EXISTING="$ws/existing.txt" \
+        GSA_FAKE_QL="$ws/ql.txt" \
         GSA_CPU_THREADS=8 GSA_MEMORY_GIB=16 \
         fish "$ws/build-all.fish" --allow-broken-rustc --no-deps --no-sync -ia
 }
@@ -143,6 +158,7 @@ run_case() { # LABEL — run -ia over whatever archives are staged.
 reset_case() {
     rm -f "$ws/packages"/*/*.pkg.tar.zst "$ws/db/installed.list"
     : >"$ws/pacman.log"
+    : >"$ws/ql.txt"
 }
 
 # ─── A. clean: the existing set resolves the consumer's NEEDED ─────────────
@@ -214,6 +230,45 @@ run_case D
     fail "D: a registered soname must resolve for the probe (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
 grep -Fq 'post-install NEEDED probe' <<<"$FIXTURE_OUTPUT" &&
     fail "D: no probe output expected with the exclusion registered: $FIXTURE_OUTPUT"
+# Leave the registry as we found it: D's entry must not resolve later cases.
+sed -i '/^libgreet\.so|/d' "$ws/config/abi-exclusions.conf"
+checks=$((checks + 2))
+
+# ─── G. a file owned by an installed package resolves without a provide ────
+# 2026-10-06 full build: stock Arch ships libx11/libxt/libxext WITHOUT
+# `provides=(libX11.so)`, so a provide-set-only probe aborts every consumer
+# of a provider that never declared its soname. The runtime truth is the
+# FILE — `pacman -Ql`'s ownership list is what the stub fabricates here.
+reset_case
+stage_archive app-git
+printf 'libx11 /usr/lib/libgreet.so.1\n' >"$ws/ql.txt"
+cat >"$ws/existing.txt" <<'EOF'
+Name : unrelated
+Version : 1-1
+Provides : libother.so=9-64
+EOF
+run_case G
+((FIXTURE_RC == 0)) ||
+    fail "G: an owned soname file must resolve without a provide (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
+grep -Fq 'post-install NEEDED probe' <<<"$FIXTURE_OUTPUT" &&
+    fail "G: no probe output expected when the file is owned: $FIXTURE_OUTPUT"
+checks=$((checks + 2))
+
+# ─── H. bytes shipped by the same transaction resolve without a provide ────
+# A batch mate's private lib (no provide declared) is resolvable from the
+# very files the transaction lands — and the name is then owned afterwards.
+reset_case
+printf 'pkgname = libs-git\npkgver = 1.0.0-1\n' >"$tmp/payload-libs-git/.PKGINFO"
+stage_archive libs-git
+stage_archive app-git
+printf 'pkgname = libs-git\npkgver = 1.0.0-1\nprovides = libgreet.so=1-64\n' \
+    >"$tmp/payload-libs-git/.PKGINFO"
+: >"$ws/existing.txt"
+run_case H
+((FIXTURE_RC == 0)) ||
+    fail "H: a same-transaction shipped soname must resolve (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
+grep -Fq 'post-install NEEDED probe' <<<"$FIXTURE_OUTPUT" &&
+    fail "H: no probe output expected when the batch ships the file: $FIXTURE_OUTPUT"
 checks=$((checks + 2))
 
 # ─── E. a probe that cannot run is a NAMED warning, never a silent "clean" ──

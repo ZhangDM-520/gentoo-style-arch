@@ -457,7 +457,11 @@
     provide, an expected base-system soname, or an exclusions entry —
     findings name the provider/consumer pair (breakage: the 2026-10-03 audit's
     53 host-only sonames and the ELF packages shipping without bare soname
-    provides);
+    provides); the post-install probe adds one more resolution source —
+    runtime file truth (the file the transaction ships or an installed
+    package owns), because stock Arch providers like libx11/libxt/libxext
+    declare NO soname provide and a provide-only probe false-aborts their
+    consumers (2026-10-06 full build, `libxpm-git`);
     (c) a provider whose bare-stem provide set changes vs installed stock
     rebuilds its FULL in-tree consumer closure in one selection (breakage:
     09-06 rust-git compiled against a minimal llvm-git mid-run);
@@ -467,7 +471,10 @@
     preflight had passed);
     (e) the post-install NEEDED probe aborts loudly naming member + soname
     (breakage: a landed transaction with unresolvable sonames used to let
-    every later package compile against a broken system);
+    every later package compile against a broken system); its abort decision
+    is file-backed (provide set ∪ shipped bytes ∪ installed files), so a
+    vanished soname still aborts while a stock provider without provides
+    does not (2026-10-06);
     (f) the exclusions registry is strict-loader `id|reason|review-by`
     (`config/abi-exclusions.conf`, 35 entries, loaded on every invocation)
     and entries are reviewed before their review-by (breakage: silent gaps
@@ -1048,6 +1055,16 @@ going stale.
   gcc-snapshot, hermes-agent-git, zen-browser-pgo — await their recipe owner
   (rule 22(c): no self-reported validation); recipe-sources untracked-asset
   noise resolves at commit, no action beyond the commit.
+- **ABI provide-refusal blind spot: stock predecessors and stock consumers**
+  (2026-10-06 icu 78→79 diagnosis): `abi_provide_refusals` compares an
+  archive's soname provides against the installed provides **of the same
+  pkgname**, so a stock predecessor under a different name is invisible
+  (`icu` 78 vs the new `icu-git`), and its consumer closure is computed
+  **workspace-only**, so an out-of-tree consumer of the vanishing provide
+  (`libqalculate`, `firefox-pure`, `smbclient`) is invisible too. The guard
+  should consult the local DB's reverse deps of the moving provide and name
+  the stock-side consumers in the refusal. Not fixed here — fixture blast
+  radius across the install-plan seams; queued deliberately.
 
 Queue items deleted as done in earlier passes (each verified, not assumed):
 the `-Rns hyperv intel-speed-select x86_energy_perf_policy` batch and
