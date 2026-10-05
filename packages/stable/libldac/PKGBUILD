@@ -15,32 +15,30 @@ makedepends=(
 )
 provides=(libldacBT_{abr,enc}.so)
 # libldac is upstream's git submodule pinned at the submodule gitlink of the
-# v$pkgver tag (82b6a1ab...). It is fetched as googlesource's +archive tarball
-# of the SAME commit, not as a git clone: the android.googlesource repo
-# advertises a corrupt branch ref (refs/heads/android17-security-release ->
-# non-commit 15a1c66) and git 2.56 refuses to clone past it ("trying to write
-# non-commit object ... to branch"); makepkg clones --mirror (all refs), so no
-# fragment avoids it. The archive is checksummed here (fail closed if
-# googlesource ever regenerates it differently).
-_libldac_commit=82b6a1abee84787b8fa167efe20290073f60db2d
+# v$pkgver tag (82b6a1ab...). The canonical android.googlesource host advertises
+# a corrupt branch ref (refs/heads/android17-security-release -> non-commit
+# 15a1c66) that git 2.56 refuses to clone past ("trying to write non-commit
+# object ... to branch"), and makepkg clones --mirror (all refs), so no fragment
+# avoids it. Fetched from the libldacdec author's mirror of the same repo
+# instead: content is pinned by the git object id itself (identical commit hash
+# = identical content). googlesource's +archive tarball was rejected as a
+# replacement: its bytes are regenerated per request (gzip metadata), so no
+# checksum can pin it.
 source=(
   "git+$url#tag=v$pkgver"
-  "libldac.tar.gz::https://android.googlesource.com/platform/external/libldac/+archive/${_libldac_commit}.tar.gz"
+  "git+https://github.com/anonymix007/libldac#commit=82b6a1abee84787b8fa167efe20290073f60db2d"
 )
 b2sums=('cefd6836476371999cbca1d45c3b5fce447d88186de24ab85f4d7c2b771bd2bd7427adc73112a6f003004a259f519319586589d46bd07af192e795943400cc46'
-        '64346c3b0fc9f63b1fe633a2fd3212a174ce4fd57af8fb65411a263658d6f498d88f83c505846c1c2a1d546e8811bbb28d69f04806a38e3a53a21f475caffffa')
-# the +archive tarball is a bare tree (no wrapping dir): keep makepkg from
-# spilling it over $srcdir and unpack it into the submodule path ourselves
-noextract=('libldac.tar.gz')
+        '38ce7971ea7dda28aadc023694722ddc7d8c269454e4c219b92f9673688c5baa6d6777d506b75229192d6e7bc9bc8c0641b2abd211c5e088dfd60226e3f379be')
 
 prepare() {
   cd ldacBT
 
-  # upstream tracks libldac as a git submodule; drop the pinned tree in as the
-  # submodule content (the build compiles these sources and needs no git metadata)
-  rm -rf libldac
-  mkdir libldac
-  tar -xf "$srcdir/libldac.tar.gz" -C libldac
+  # Feed the pinned libldac clone in as the submodule instead of re-fetching it
+  # from its .gitmodules URL (the local path needs protocol.file.allow).
+  git submodule init
+  git submodule set-url libldac "$srcdir/libldac"
+  git -c protocol.file.allow=always -c protocol.allow=never submodule update
 }
 
 build() {

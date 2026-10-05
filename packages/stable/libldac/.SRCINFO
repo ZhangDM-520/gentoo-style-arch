@@ -11,10 +11,9 @@ pkgbase = libldac
 	depends = glibc
 	provides = libldacBT_abr.so
 	provides = libldacBT_enc.so
-	noextract = libldac.tar.gz
 	source = git+https://github.com/EHfive/ldacBT#tag=v2.0.2.6
-	source = libldac.tar.gz::https://android.googlesource.com/platform/external/libldac/+archive/82b6a1abee84787b8fa167efe20290073f60db2d.tar.gz
+	source = git+https://github.com/anonymix007/libldac#commit=82b6a1abee84787b8fa167efe20290073f60db2d
 	b2sums = cefd6836476371999cbca1d45c3b5fce447d88186de24ab85f4d7c2b771bd2bd7427adc73112a6f003004a259f519319586589d46bd07af192e795943400cc46
-	b2sums = 64346c3b0fc9f63b1fe633a2fd3212a174ce4fd57af8fb65411a263658d6f498d88f83c505846c1c2a1d546e8811bbb28d69f04806a38e3a53a21f475caffffa
+	b2sums = 38ce7971ea7dda28aadc023694722ddc7d8c269454e4c219b92f9673688c5baa6d6777d506b75229192d6e7bc9bc8c0641b2abd211c5e088dfd60226e3f379be
 
 pkgname = libldac
