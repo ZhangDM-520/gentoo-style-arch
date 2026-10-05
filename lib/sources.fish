@@ -36,12 +36,16 @@ function pkgbuild_var -a pkg_path var
 end
 
 # Read the archive-selection version pair once; makepkg writes pkgver()'s
-# resolved value back to PKGBUILD, which keeps discovery aligned with its archive.
+# resolved value back to PKGBUILD, which keeps discovery aligned with its
+# archive. pkgver comes back as makepkg builds it INTO THE FILENAME
+# (`get_full_version`: `epoch:pkgver`) — an epoch-bearing recipe archives as
+# ninja-git-2:1.13.…-1-x86_64.pkg.tar.zst and a bare pkgver never matches that
+# name (2026-10-06 full-build finding; 47 recipes carry epoch=).
 function pkgbuild_version -a pkg_path
     bash -c '
         cd "$1" || exit 1
         source ./PKGBUILD >/dev/null 2>&1 || exit $?
-        printf "pkgver=%s\npkgrel=%s\n" "${pkgver-}" "${pkgrel-}"
+        printf "pkgver=%s\npkgrel=%s\n" "${epoch:+$epoch:}${pkgver-}" "${pkgrel-}"
     ' _ "$pkg_path" 2>/dev/null
 end
 

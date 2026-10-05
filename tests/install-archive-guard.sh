@@ -7,6 +7,8 @@ set -euo pipefail
 #  2. A VCS pkgver() result is the current version after makepkg updates it.
 #  3. Unknown version metadata must not broaden discovery to every archive.
 #  4. A genuinely missing archive must fail checked install, never report success.
+#  5. An epoch-bearing recipe archives as NAME-epoch:pkgver-pkgrel-arch (makepkg's
+#     get_full_version) — discovery must match the epoch-prefixed name.
 #
 # The invariant this fixture enforces is behavioural, not textual: a run that
 # reports success under `-i` must have actually installed something. Case B
@@ -164,6 +166,26 @@ fi
 if grep -F 'p1-1.0.0-1-any.pkg.tar.zst' "$dir_vcs/pacman.log" >/dev/null; then
     printf 'case A3: pacman received a stale pre-build pkgver archive:\n%s\n' \
         "$(cat "$dir_vcs/pacman.log")" >&2
+    exit 1
+fi
+
+# Case A4: an epoch-bearing recipe archives as NAME-epoch:pkgver-pkgrel-arch
+# (makepkg's get_full_version). Discovery reads the version from the evaluated
+# PKGBUILD, so it must join the epoch the same way makepkg does — the 2026-10-06
+# full-build finding: ninja-git built fine and the install then refused with
+# "no built package archive matched the current pkgver-pkgrel" because the
+# expected stem lacked the `2:`. 47 recipes in the real workspace carry epoch=.
+dir_epoch="$fixture/case-epoch"
+make_case_workspace "$dir_epoch" $'epoch=2\npkgver=1.0.0'
+if ! run_case "$dir_epoch" GSA_FAKE_ARCHIVE_NAME='p1-2:1.0.0-1-any.pkg.tar.zst'; then
+    printf 'case A4: builder failed on an epoch-bearing recipe:\n%s\n' \
+        "$FIXTURE_OUTPUT" >&2
+    exit 1
+fi
+if ! grep -F 'p1-2:1.0.0-1-any.pkg.tar.zst' "$dir_epoch/pacman.log" >/dev/null 2>&1; then
+    printf 'case A4: pacman did not receive the epoch-prefixed archive — discovery\n' >&2
+    printf 'matched the filename without the epoch:\n%s\n' \
+        "$(cat "$dir_epoch/pacman.log" 2>/dev/null || true)" >&2
     exit 1
 fi
 
