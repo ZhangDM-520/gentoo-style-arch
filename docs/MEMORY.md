@@ -1109,6 +1109,24 @@ going stale.
   should consult the local DB's reverse deps of the moving provide and name
   the stock-side consumers in the refusal. Not fixed here — fixture blast
   radius across the install-plan seams; queued deliberately.
+- **rustc sanity probe misses non-Rust recipes that compile Rust**
+  (2026-10-06 js140 diagnosis): the `--allow-broken-rustc` probe fires only
+  for Rust-family recipes, so `js140` (a C++ recipe whose build invokes
+  rustc) hit `rustc: symbol lookup error ... version LLVM_23.1` mid-compile
+  as a confusing build failure instead of a named probe refusal. The probe
+  should fire for any recipe that will invoke rustc (e.g. rustc in
+  makedepends), or once per run before dispatch. Queued deliberately —
+  probe-scope change touches the fixture-pinned probe seam.
+- **Predicted llvm-git install wall: stock `rust` pins `llvm-libs` exactly**
+  (2026-10-06, pre-empted, not yet hit): `llvm-libs-git` carries
+  `provides=(llvm-libs) conflicts=('llvm-libs')` while stock `rust` depends
+  on `llvm-libs=23.1.1` — the run will refuse llvm-git's install in the same
+  class as the spandsp and icu soname swaps. Heal-set when it hits: sweep
+  exact pinners (`expac -Q '%n\t%D' | grep 'llvm-libs='`); stage the built
+  llvm-git; build `rust-git` against the stage **while stock rustc still
+  runs** (its bootstrap.toml pins `/usr/bin/rustc` as system stage0 —
+  rust-git built against stock llvm would link `libLLVM.so.23.1` and break
+  at the swap); one `pacman -U` of the llvm-git splits + rust-git splits.
 
 Queue items deleted as done in earlier passes (each verified, not assumed):
 the `-Rns hyperv intel-speed-select x86_energy_perf_policy` batch and

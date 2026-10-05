@@ -104,6 +104,30 @@ dependency edges, and incident root causes are unaffected by the renames.
   single download, and never silence a checksum with SKIP to make a build pass (MEMORY rule 28
   family).
 
+## 2026-10-06 — a signing-key rotation was not in validpgpkeys (js140)
+
+- **Symptom**: run #8 died at `js140` in source validation —
+  `firefox-140.17.0esr.source.tar.xz ... FAILED (unknown public key 678E455D76767AA3)`.
+- **Root cause**: Mozilla rotated its Firefox/Thunderbird signing SUBKEY on 2026-08-06 (the
+  2025-03 subkey was revoked after its unencrypted copy leaked); the recipe's `validpgpkeys`
+  listed only the unchanged PRIMARY, and the host keyring lacked the new subkey. Recipe-vs-
+  upstream drift of the key-material class — same shape as a version bump, but on `validpgpkeys`.
+- **Fix, verified before touching the recipe** (source-verification rule): the signing key's long
+  id `678E455D76767AA3` was matched to the published subkey fingerprint
+  `827E658608679618CD349F93678E455D76767AA3` in Mozilla's security-blog announcement; the
+  subkey binding is signed by the pinned primary in Mozilla's own published key block
+  (`packages.mozilla.org/rpm/firefox/signing-key.gpg`); `gpg --verify` of the shipped `.asc`
+  against the tarball reports a good signature with primary `14F2…D98F0353`. Then the subkey
+  was added to `validpgpkeys` with a role/rotation comment and imported into the build user's
+  keyring (makepkg verifies against the user keyring — a correct `validpgpkeys` alone is not
+  enough).
+- **Validation**: `bash -n`; `.SRCINFO` regenerated; recipe-sources PASS; signature re-verified
+  good in a clean temp keyring; red→green by the real workspace rebuild.
+- **Rule**: `validpgpkeys` is versioned upstream state like `pkgver` — a signature failure with
+  "unknown public key" on a long-stable recipe is a key-rotation signal, and the verification
+  chain is blog/published-key → subkey binding → detached signature, in that order; never import
+  a key you cannot place in a publisher's own announcement.
+
 ## 2026-10-06 — a git recipe lost a build input that only release tarballs carry (opus-git)
 
 - **Symptom**: run #6 died on `opus-git` after 14 successful builds —
