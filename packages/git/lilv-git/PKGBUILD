@@ -93,9 +93,9 @@ package_lilv-git() {
 
   meson install -C build --destdir "$pkgdir"
 
-  # bash completion into /usr/share, not /etc (upstream work item 15, stock)
-  install -Dm644 "$pkgdir/etc/bash_completion.d/lilv" -t "$pkgdir/usr/share/bash-completion/completions/"
-  rm -rf "$pkgdir/etc"
+  # upstream landed work item 15: the completion installs straight into
+  # bash-completion's completionsdir (/usr/share/bash-completion/completions),
+  # so stock's /etc/bash_completion.d → /usr/share move has nothing to move
 
   (
     cd "$pkgdir"
