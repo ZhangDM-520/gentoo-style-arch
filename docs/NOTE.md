@@ -37,6 +37,42 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-06 — libtool self-resolution poisoned an in-place rebuild (libao)
+
+**Symptom.** Run #9 of the real-world `-i` full build failed at `libao`
+(22/652) linking its pulse plugin: `mold: fatal: cannot open
+.../src/plugins/pulse/.libs/libpulse.so: No such file or directory` — the
+plugin's own output path opened as an *input*. The same generated command line
+fails identically under bfd, lld and mold, so no linker is at fault.
+
+**Root cause.** Three-step chain:
+1. run #8's parallel lane had already built libao successfully at 03:54,
+   leaving `src/libao-1.2.2/src/plugins/pulse/libpulse.la` behind in the reused
+   `src/` tree — makepkg re-extracts over it (bsdtar does not clean first);
+2. the `git pull` of 5d489a5 rewrote `libao/PKGBUILD` **byte-identically** at
+   04:02, so its mtime passed the fresh 03:54 archive and `-s` could not skip
+   the rebuild;
+3. libtool resolved the plugin's `-lpulse` dependency against the stale
+   `./libpulse.la` — the module name `libpulse` collides with the dependency
+   name — and substituted the `.la`'s `.libs/libpulse.so`, i.e. the link's own
+   not-yet-built output. Every linker fails opening it.
+
+**Fix.** `packages/stable/libao/PKGBUILD`: `prepare()` purges stale libtool
+outputs after `autoreconf` (`find . -name '*.la' -delete`). The module-vs-
+dependency name collision is upstream's; the stale-tree poisoning is ours.
+
+**Validation.** Red: the run #9 failure plus a direct repro over the stale tree
+against all three linkers. Green: the stale `libpulse.la` restored (poison
+re-applied), fixed PKGBUILD copied to the workspace, `makepkg -sf --noconfirm`
+rc 0, archive `libao-1.2.2-7.1` ships `usr/lib/ao/plugins-4/libpulse.so` and
+the other three plugins. `bash -n` clean; `.SRCINFO` byte-unchanged.
+
+**Rule.** A reused `src/` tree is stale state just like a Meson build dir:
+leftover `.la` files make libtool resolve a module named after its dependency
+to the module's own output on rebuild. Any rebuild over a reused tree triggers
+it — including spurious ones (a `git pull` that bumps a PKGBUILD's mtime past
+its archive defeats `-s`). MEMORY rule 6 extended with the class.
+
 ## 2026-10-06 — a soname swap met exact-pin stock leftovers (spandsp-git, pipewire)
 
 - **Symptom**: run #7 stopped at `spandsp-git` (17/652) — the build succeeded, the INSTALL did not:

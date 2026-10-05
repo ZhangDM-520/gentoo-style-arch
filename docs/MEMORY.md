@@ -112,6 +112,17 @@
    resumes. With `-s`, resolve a current-mtime VCS archive's refs before the
    automatic clean so an unreachable ref still refuses before its archive and
    baseline are removed.
+   Stale libtool outputs poison in-place rebuilds the same way: makepkg
+   re-extracts over a reused `src/` tree, and a leftover `libfoo.la` makes
+   libtool resolve `-lfoo` to that `.la`'s `.libs/libfoo.so` — including when
+   `libfoo` is merely a *dependency* of a module that shares its name (libao's
+   pulse plugin vs the PulseAudio `libpulse`, 2026-10-06). The resolved input
+   is the link's own not-yet-built output, so bfd, lld and mold all fail
+   opening it; fresh trees link fine. A recipe hit by the collision purges
+   stale outputs in `prepare()` (`find . -name '*.la' -delete`); the trigger is
+   any rebuild over a reused tree, spurious ones included — e.g. a `git pull`
+   rewriting a PKGBUILD byte-identically bumps its mtime past the archive and
+   defeats `-s`.
 7. **Don't touch in-progress builds**: check running makepkg processes and
    runtime log mtimes before rebuilding a package someone else is on.
    Never run two heavy builds concurrently (OOM).

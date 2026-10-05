@@ -30,6 +30,13 @@ prepare() {
   # add missing `time.h` include
   patch -Np1 -i ../$pkgname-1.2.2-add-missing-time-include.patch
   autoreconf -fiv
+  # Purge stale libtool outputs. makepkg re-extracts over the old src/ tree on
+  # an in-place rebuild, and a leftover libpulse.la makes libtool resolve the
+  # pulse plugin's own -lpulse dependency to its own .libs/libpulse.so output
+  # (module name collides with the dependency name) — every linker then fails
+  # opening the not-yet-built output. Fresh trees link fine; this only matters
+  # for rebuilds over reused src/.
+  find . -name '*.la' -delete
 }
 
 build() {
