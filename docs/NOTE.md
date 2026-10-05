@@ -37,6 +37,47 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-06 — libftdi: missing key import, then Python 2 API in a third-party patch
+
+**Symptom.** Run #10 failed at `libftdi` (28/652) with `One or more PGP
+signatures could not be verified!` — `libftdi1-1.5.tar.bz2 ... FAILED (unknown
+public key 707F91A424F006F5)`. After the key was imported, the same build then
+failed compiling the SWIG wrapper: `ftdi1PYTHON_wrap.c:3985: error: implicit
+declaration of function 'PyInt_AsLong'; did you mean 'PyLong_AsLong'?`.
+
+**Root cause.** Two independent layers:
+1. *Host keyring gap*: the recipe had pinned `validpgpkeys` correctly all along
+   (`3CEA9B8868BC3852618EB5B4707F91A424F006F5`, "Intra2net open source") but
+   the key was never in the build user's gpg keyring — `validpgpkeys` alone
+   verifies nothing (the js140 lesson, second occurrence).
+2. *Python 2 API in the pinned third-party patch*: the Fedora
+   `libftdi-1.5-swig-4.3.patch` (fetched at URL, checksum-pinned; Fedora
+   rawhide still ships it byte-identical) writes custom typemaps using
+   `PyInt_AsLong` — Python 2 C API. SWIG ≥ 4.1 dropped the `PyInt_*` compat
+   macros, so the generated wrapper calls a function no Python 3 header
+   declares: an implicit-declaration hard error on modern compilers, and an
+   undefined symbol in the module at import time even where it compiles. Arch's
+   own `libftdi` 1.5-10 (built 2026-02-15) carries the same patch unmodified.
+
+**Fix.** Key: imported by exact fingerprint from keyserver.ubuntu.com,
+fingerprint confirmed equal to the pin and cross-checked against Arch's
+official PKGBUILD (same pin, same role comment). Recipe:
+`prepare()` now runs `sed -i 's/PyInt_AsLong(/PyLong_AsLong(/g' python/ftdi1.i`
+after the patches. No repo change needed for the key (it was already pinned).
+
+**Validation.** Red: run #10's PGP failure + the direct rc=4 compile failure
+against all evidence above. Green: `makepkg -sf --noconfirm` rc 0 →
+`libftdi-1.5-10`; the packaged `_ftdi1.so` imports cleanly (no undefined
+symbol) and its API surface matches the stock module 338/339 (only SWIG
+internal helpers differ). `bash -n` clean; `.SRCINFO` byte-unchanged.
+
+**Rule.** A checksum-pinned third-party patch is verified *content*, not
+verified *correctness* — when it carries language/API level assumptions (here
+Python 2), newer toolchains surface them as build breaks; the fix belongs in
+`prepare()` with a why-comment. And a `validpgpkeys` pin is inert until the key
+is actually in the build user's keyring (already a MEMORY rule; this is its
+second live incident).
+
 ## 2026-10-06 — libtool self-resolution poisoned an in-place rebuild (libao)
 
 **Symptom.** Run #9 of the real-world `-i` full build failed at `libao`
