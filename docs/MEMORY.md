@@ -547,7 +547,29 @@
     Red-herring warning: a first mutation probe that changed the digest's
     LENGTH only proved the fail-closed path — probes must preserve the input
     shape (see NOTE.md same-dated entry). Checks: `bash -n`, the probe pair,
-    `tests/recipe-sources.sh`.
+    `tests/recipe-sources.sh`. Mirror clause (2026-10-06 libldacdec/libldac):
+    a VCS source must be cloneable AT the pinned ref from a clean checkout —
+    if upstream's ref advertisement rots (AOSP's corrupt branch ref broke
+    `makepkg`'s `--mirror` clone, git 2.56), move to a mirror carrying the
+    SAME commit ids and state the mirror's provenance in the recipe
+    (identical commit hash = identical content; pin makepkg's git-archive
+    checksums). Two verifications to distrust: a regenerated archive
+    (googlesource `+archive` re-encodes per request — pinning one download's
+    bytes proves nothing) and a `SKIP` checksum ("never silence a checksum to
+    make a build pass"). Also: real checksums on `#commit=` sources make
+    makepkg run `git archive` against the bare SRCDEST mirror
+    (`calc_checksum_git`), which the agent-shell `safe.bareRepository=explicit`
+    hardening kills — invoke makepkg with `GIT_CONFIG_COUNT=0`.
+29. **A swap wave retires exact-pin leftovers, never rebuilds them**
+    (2026-10-06 spandsp-git): when a swap target bumps soname (stock so.2 →
+    git so.4), the wave is (a) rebuild every installed pinner in the SAME
+    `pacman -U --ask 4` transaction (ICU pattern), and (b) first clear stock
+    leftovers that pin swap-set packages at exact versions — `gst-plugin-pipewire`
+    pinned `pipewire=1:1.6.9-1`, making any pkgrel bump uninstallable. Such a
+    leftover is trimmed from the set on purpose: rebuild it and it re-adds a
+    trimmed output plus a permanent lockstep pin. Sweep before planning the
+    wave: `expac -Q '%n\t%D' | grep '<pkgbase>='`. Rejected: faking a soname
+    provide (rule 27's "never make a provider lie").
 
 ## 2. Workspace overview
 

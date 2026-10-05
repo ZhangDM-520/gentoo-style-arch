@@ -37,6 +37,73 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-06 — a soname swap met exact-pin stock leftovers (spandsp-git, pipewire)
+
+- **Symptom**: run #7 stopped at `spandsp-git` (17/652) — the build succeeded, the INSTALL did not:
+  `spandsp-git and spandsp-0.0.6-7 are in conflict … removing spandsp breaks dependency
+  'libspandsp.so=2-64' required by pipewire-audio`.
+- **Root cause**: `spandsp-git` (FreeSWITCH fork 3.1.1) ships `libspandsp.so.4` while stock ships
+  `.so.2` — the ICU 78→79 class (soname bump on a swap target). One installed pinner
+  (`pipewire-audio`), no lib32 pins. A second blocker hid behind it: the stock leftover
+  `gst-plugin-pipewire` — trimmed from our `pipewire` recipe 2026-09-04 but still installed —
+  pins `pipewire=1:1.6.9-1` (and `libpipewire`/`pipewire-audio`) EXACTLY, so any pipewire pkgrel
+  bump is uninstallable until it goes.
+- **Fix (heal-set, ICU pattern)**: stage the built spandsp-git (`/tmp/spandspstage`, `spandsp.pc`
+  `prefix`+`libdir` rewritten — `libdir` is hardcoded in that file, missing it links the stock
+  lib) → heal-build `pipewire` against the stage (`PKG_CONFIG_PATH`, `makepkg -s` pulls
+  `rtkit`/`valgrind` from repos exactly like the run-time path) → retire `gst-plugin-pipewire`
+  (`pacman -R`; zero revdeps, and rebuilding it was rejected: it would re-add a trimmed output and
+  lock every future pipewire bump into a lockstep pin) → ONE `pacman -U --noconfirm --ask 4` of
+  spandsp-git + the rebuilt splits of the six installed names. `libcamera-git`/`libldacdec` were
+  built first — pipewire makedepends the run had not reached yet (wave = the run's own order).
+- **Validation**: pre-swap `.PKGINFO` showed `depend = libspandsp.so=4-64` (makepkg auto-versioned
+  from the linked ELF) and `readelf` on `usr/lib/spa-0.2/bluez5/libspa-codec-bluez5-hfp-msbc.so`
+  showed `NEEDED libspandsp.so.4`; post-swap `expac` shows `=4-64`, `ldd` resolves
+  `libspandsp.so.4 => /usr/lib/libspandsp.so.4`, `pacman -Dk` clean.
+- **Rule**: a soname bump on a swap target needs its pinners rebuilt in the SAME transaction, and
+  the wave must also clear stock leftovers that pin swap-set packages at exact versions — check
+  `expac -Q '%n\t%D' | grep '<pkgbase>='` for `=`-pins before planning the wave; a leftover that
+  the set trims is retired, never rebuilt (MEMORY rule 27 family).
+
+## 2026-10-06 — upstream git repo grew an unclonable ref (libldacdec, libldac)
+
+- **Symptom**: `libldacdec` died at source download: `fatal: trying to write non-commit object
+  15a1c66 to branch 'refs/heads/android17-security-release'` while cloning
+  `android.googlesource.com/platform/external/libldac`; pristine-clone test reproduced it (not
+  env, not a stale mirror).
+- **Root cause**: the canonical AOSP repo advertises a corrupt branch ref pointing at a non-commit
+  object, and git 2.56 refuses to write it. makepkg's `download_git` clones `--mirror` (ALL
+  refs) and no `#commit`/`#branch` fragment narrows the clone, so every makepkg build from this
+  URL is broken — including stock Arch's `libldac`, which carries the same source. `git fetch`
+  of the pinned commit by SHA works fine; the objects are healthy, only the ref advertisement is
+  not.
+- **Failed approach (keep out)**: googlesource's `+archive/<sha>.tar.gz` looked ideal (canonical
+  host, checksummable) but its bytes are REGENERATED PER REQUEST — three downloads gave three
+  sha256s (gzip metadata; file list identical) — and the raw `.tar` endpoint is not a tar at all.
+  A checksum that cannot pin the bytes is no verification; the URL was rejected. First-attempt
+  lesson: my own probe that "verified" the checksum verified ONE generation only.
+- **Fix**: both recipes fetch the same pinned commits from `github.com/anonymix007/libldac` — the
+  libldacdec author's own mirror of the submodule repo — which clones cleanly. Content is pinned
+  by the git object id (identical commit hash = identical content), and makepkg's git-archive
+  checksums (`git archive --format tar <commit> | sha256sum`/`b2sum`) are pinned in the recipes;
+  the mirror-derived sha256 for `e8ff0f96` matched the AUR recipe's googlesource-derived value
+  byte-for-byte — independent content-identity proof. Pins: `e8ff0f96` = submodule gitlink at
+  libldacdec's pinned commit, `82b6a1ab` = gitlink at ldacBT `v2.0.2.6` (both verified with
+  `git ls-tree`).
+- **Second trap in the same rebuild**: with real (non-`SKIP`) checksums on `#commit=` sources,
+  makepkg's `calc_checksum_git` runs `git archive` against the bare SRCDEST mirror — and the
+  agent-shell git hardening (`safe.bareRepository=explicit`) kills it (`cannot use bare
+  repository`), while `download_git`'s own fetch path passes `-c safe.bareRepository=all` and is
+  fine. Any makepkg invocation from an agent shell needs `GIT_CONFIG_COUNT=0`.
+- **Validation**: `bash -n`; `.SRCINFO` regenerated; recipe-sources fixture PASS; both commits
+  `cat-file`-verified in the mirror; red→green by the real workspace rebuilds (both packages
+  built + installed; `libldacdec` reproducibly failed before).
+- **Rule**: a VCS source must be cloneable AT the pinned ref on a clean checkout — if upstream's
+  ref advertisement rots, move to a mirror whose content is pinned by the same commit id and
+  record the mirror's provenance in the recipe; never "verify" a regenerated archive from a
+  single download, and never silence a checksum with SKIP to make a build pass (MEMORY rule 28
+  family).
+
 ## 2026-10-06 — a git recipe lost a build input that only release tarballs carry (opus-git)
 
 - **Symptom**: run #6 died on `opus-git` after 14 successful builds —
