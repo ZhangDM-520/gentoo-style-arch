@@ -66,6 +66,11 @@ build() {
     # kept from stock
     -D asm=disabled
     -D custom-modes=true
+    # stock's doxygen makedep was dropped with the opus-docs split below, but
+    # `arch-meson` passes --auto-features enabled, which forces the `docs`
+    # feature ON and makes find_program('doxygen') REQUIRED (lilv-git class)
+    # trim:
+    -D docs=disabled
     # stock enables these for the release tarball because "Git doesn't contain
     # model data"; this recipe now fetches the same generated weight tables as
     # a checksummed source (see above), so the stock feature set is restored —
