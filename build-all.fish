@@ -295,12 +295,13 @@ set -g _CORE_MEMORY_PER_JOB_GIB 4
 set -g _RESERVED_MEMORY_GIB 2
 
 function package_path -a package_id
-    for entry in $_PACKAGE_MAP
-        set -l fields (string split '|' -- "$entry")
-        if test "$fields[1]" = "$package_id"
-            echo "$SCRIPT_DIR/$fields[2]"
-            return 0
-        end
+    # O(1) keyed lookup (_TPATH_ published by read_topology_config); the old
+    # linear _PACKAGE_MAP scan cost 650 string splits per call — it was the
+    # dispatcher profile's largest self-time item at scale.
+    set -l path_var _TPATH_(_topo_key "$package_id")
+    if set -q $path_var
+        echo "$SCRIPT_DIR/$$path_var"
+        return 0
     end
     return 1
 end
@@ -486,7 +487,7 @@ function read_topology_config
     # pattern MUST match each name in full and use a non-capturing group:
     # `string match -r` prints only the matched portion (a prefix pattern
     # erases nothing) and additionally prints capture groups as names (2026-10-05).
-    set -l stale_keys (set -n | string match -r '^_(?:TID|TDEPKEYS|TDEP|TCONSKEYS|TCONS|TTAGS)_.*$')
+    set -l stale_keys (set -n | string match -r '^_(?:TID|TPATH|TDEPKEYS|TDEP|TCONSKEYS|TCONS|TTAGS)_.*$')
     if test (count $stale_keys) -gt 0
         set -e $stale_keys
     end
@@ -606,6 +607,7 @@ function read_topology_config
         # seams read them. _TDEPKEYS_ mirrors _TDEP_ with keys so later graph
         # walks never derive a key per edge again.
         set -g _TID_$id_key "$id"
+        set -g _TPATH_$id_key "$relative_path"
         set -g _TDEP_$id_key $record_edges
         set -g _TDEPKEYS_$id_key $record_dep_keys
         set -g _TTAGS_$id_key (string join ',' $record_tags)
@@ -1500,14 +1502,10 @@ end
 
 # abi_package_srcinfo ID → the committed .SRCINFO path of a workspace id.
 function abi_package_srcinfo -a id
-    for entry in $_PACKAGE_MAP
-        set -l fields (string split '|' -- "$entry")
-        if test "$fields[1]" = "$id"
-            printf '%s\n' "$SCRIPT_DIR/$fields[2]/.SRCINFO"
-            return 0
-        end
-    end
-    return 1
+    set -l pkg_path (package_path "$id")
+    test -n "$pkg_path"; or return 1
+    printf '%s\n' "$pkg_path/.SRCINFO"
+    return 0
 end
 
 # srcinfo_pkgnames SRCINFO → pkgbase + pkgname outputs (deduped).
@@ -1533,8 +1531,25 @@ end
 # pacman resolves NAME through provides, so the stock counterpart query
 # reaches whatever currently provides the stock name.
 function abi_installed_provides -a name
+    # Memoised per name (per process): the gate probes every selected
+    # provider's names and the same names repeat across probes — each cached
+    # hit is one saved `pacman -Qi` fork. The cache reflects the installed
+    # database as of the first query; install_execute clears it right after a
+    # transaction so nothing later reads pre-install state.
+    set -l cache_key _ABIPROV_(_topo_key "$name")
+    set -l ready_key _ABIPROVREADY_(_topo_key "$name")
+    if set -q $ready_key
+        if set -q $cache_key
+            set -l cached $$cache_key
+            test (count $cached) -gt 0; and printf '%s\n' $cached
+        end
+        return 0
+    end
     set -l lines (LANG=C pacman -Qi -- "$name" 2>/dev/null)
-    test (count $lines) -gt 0; or return 0
+    test (count $lines) -gt 0; or begin
+        set -g $ready_key 1
+        return 0
+    end
     set -l values
     for line in $lines
         set -l m (string match -r -g '^[[:space:]]*Provides[[:space:]]*:[[:space:]]*(.*)$' -- "$line")
@@ -1543,11 +1558,28 @@ function abi_installed_provides -a name
         end
         test (count $m) -ge 1; and set -a values (string split -n ' ' -- (string replace -a \t ' ' -- $m[1]))
     end
+    set -l out
     for value in $values
         test "$value" = None; and continue
-        printf '%s\n' "$value"
+        set -a out "$value"
     end
+    if test (count $out) -gt 0
+        set -g $cache_key $out
+        printf '%s\n' $out
+    end
+    set -g $ready_key 1
     return 0
+end
+
+# abi_installed_cache_clear — drop the per-process installed-database memos
+# (abi_installed_provides / abi_pkg_installed / the gate's id probes). Called
+# right after a pacman transaction lands: every later answer must reflect the
+# NEW database, not the pre-install snapshot the plan consulted.
+function abi_installed_cache_clear
+    set -l stale (set -n | string match -r '^_(?:ABIPROV|ABIPROVREADY|ABIQ|ABIQREADY|ABIQID|ABIQIDREADY)_.*$')
+    if test (count $stale) -gt 0
+        set -e $stale
+    end
 end
 
 # _abi_provides_chunk NAME... → "NAME|provide-entry" rows for one chunk, or a
@@ -1677,6 +1709,13 @@ end
 # abi_pkg_installed ID → 0 when any output of the workspace package is
 # installed (the batch gate's "nothing to protect" rule reads this).
 function abi_pkg_installed -a id
+    # Memoised per workspace id (see abi_installed_provides): the batch gate
+    # probes the same members once per changed provider.
+    set -l ready_key _ABIQREADY_(_topo_key "$id")
+    if set -q $ready_key
+        test "$$ready_key" = 1; and return 0
+        return 1
+    end
     set -l names $id
     set -l srcinfo (abi_package_srcinfo "$id")
     if test -n "$srcinfo"; and test -f "$srcinfo"
@@ -1684,8 +1723,30 @@ function abi_pkg_installed -a id
         test (count $names) -gt 0; or set names $id
     end
     for name in $names
-        pacman -Q -- "$name" >/dev/null 2>&1; and return 0
+        pacman -Q -- "$name" >/dev/null 2>&1; and begin
+            set -g $ready_key 1
+            return 0
+        end
     end
+    set -g $ready_key 0
+    return 1
+end
+
+# abi_id_installed ID → memoised `pacman -Q <id>` (the tag batch gate's
+# installed-member probe; first query forks exactly like the direct call it
+# replaced — `pacman -Q NAME`, NO `--`: the fixture stubs that answer this
+# probe read argv positionally).
+function abi_id_installed -a id
+    set -l ready_key _ABIQIDREADY_(_topo_key "$id")
+    if set -q $ready_key
+        test "$$ready_key" = 1; and return 0
+        return 1
+    end
+    if pacman -Q "$id" >/dev/null 2>&1
+        set -g $ready_key 1
+        return 0
+    end
+    set -g $ready_key 0
     return 1
 end
 
@@ -1698,24 +1759,39 @@ end
 # fish loop over every pair.
 function abi_name_edges
     # ONE shared .SRCINFO parse (srcinfo_rows) replaces the six sed forks per
-    # recipe (names, provides, four dep fields) and the O(n²) row list: the
-    # walk prints rows straight into the same sort | join pipeline as before.
-    # The first awk applies abi_provide_name's exact rule (strip from the first
-    # `[=<>]`, trim; a dep value also drops any `: description` first, then
-    # trims) and keeps the empty-name drop. Row order is output-invisible: the
-    # sort keys on the name (whole line breaks ties) and the join emits a set
-    # per name group.
-    for row in (srcinfo_rows)
-        set -l parts (string split -m 3 '|' -- "$row")
-        switch $parts[1]
-            case B N
-                test -n "$parts[3]"; and printf 'S|%s|%s\n' "$parts[3]" "$parts[2]"
-            case P
-                printf 'P|%s|%s\n' "$parts[4]" "$parts[2]"
-            case D
-                printf 'A|%s|%s\n' "$parts[4]" "$parts[2]"
-        end
-    end | awk -F'|' '
+    # recipe. The tagged-row → S/P/A walk is one awk over the row stream — the
+    # old fish `for row in (srcinfo_rows)` re-marshalled every row (~40k at
+    # scale) through `string split` on EACH call, and this ran once per changed
+    # provider through abi_consumer_closure. The result is memoised per
+    # process: the committed .SRCINFOs are static within a caller's window
+    # (version sync rewrites them BEFORE any ABI consumer runs in a lane).
+    # Row values keep everything after their fixed separator count (the old
+    # `string split -m 3` semantics), so a value containing '|' survives.
+    if set -q _ABI_NAME_EDGES_READY
+        test (count $_ABI_NAME_EDGES) -gt 0; and printf '%s\n' $_ABI_NAME_EDGES
+        return 0
+    end
+    set -g _ABI_NAME_EDGES (srcinfo_rows | awk -F'|' '
+        function field_rest(s, n,   i, p) {
+            p = 1
+            for (i = 1; i <= n; i++) {
+                p = index(s, "|")
+                if (p == 0) return ""
+                s = substr(s, p + 1)
+            }
+            return s
+        }
+        {
+            tag = $1
+            if (tag == "B" || tag == "N") {
+                v = field_rest($0, 2)
+                if (v != "") print "S|" v "|" $2
+            } else if (tag == "P") {
+                print "P|" field_rest($0, 3) "|" $2
+            } else if (tag == "D") {
+                print "A|" field_rest($0, 3) "|" $2
+            }
+        }' | awk -F'|' '
         function norm(x) {
             sub(/[=<>].*$/, "", x)
             gsub(/^[ \t\r\n\f\v]+|[ \t\r\n\f\v]+$/, "", x)
@@ -1736,7 +1812,21 @@ function abi_name_edges
         $2 != last { flush(); last = $2 }
         { if ($1 == "S") prov[$3] = $3; else cons[$3] = $3 }
         END { flush() }
-    '
+    ')
+    set -g _ABI_NAME_EDGES_READY 1
+    # Provider → consumer adjacency from the name edges, keyed (order per
+    # provider preserved: the edges are appended in stream order). Built here
+    # so abi_consumer_closure's BFS is O(closure) instead of scanning the
+    # whole edge list per visited node.
+    set -l stale (set -n | string match -r '^_ABICONS_.*$')
+    if test (count $stale) -gt 0
+        set -e $stale
+    end
+    for edge in $_ABI_NAME_EDGES
+        set -l parts (string split -m 1 '|' -- "$edge")
+        set -ga _ABICONS_(_topo_key "$parts[1]") "$parts[2]"
+    end
+    test (count $_ABI_NAME_EDGES) -gt 0; and printf '%s\n' $_ABI_NAME_EDGES
     return 0
 end
 
@@ -1749,23 +1839,42 @@ end
 function abi_consumer_closure
     set -l seeds $argv
     test (count $seeds) -gt 0; or return 0
-    set -l name_edges (abi_name_edges)
+    # Builds the memoised name-edge stream + its keyed provider→consumer map
+    # (_ABICONS_) once; the BFS below is O(closure) over keyed adjacency.
+    # The old version scanned $_CONSUMER_INDEX AND the whole name-edge list
+    # per visited package — O(V·E) string splits per call — and re-parsed
+    # every .SRCINFO row per call.
+    abi_name_edges >/dev/null
     set -l visited
     set -l queue $seeds
-    while test (count $queue) -gt 0
-        set -l pkg $queue[1]
-        set -e queue[1]
-        contains -- "$pkg" $visited; and continue
-        set -a visited $pkg
-        for entry in $_CONSUMER_INDEX
-            set -l parts (string split '|' -- "$entry")
-            test "$parts[1]" = "$pkg"; or continue
-            set -a queue $parts[2]
+    set -l qhead 1
+    # CACHED queue length: `count $queue` in the loop head expands the WHOLE
+    # queue into argv every iteration (fish `count` is O(1), its ARGV is not)
+    # — 38 s of self time across the two largest real closures (profile
+    # 2026-10-05). The queue only grows at the two appends below, so qlen is
+    # maintained there.
+    set -l qlen (count $queue)
+    while test $qhead -le $qlen
+        set -l pkg $queue[$qhead]
+        set qhead (math $qhead + 1)
+        set -l key (_topo_key "$pkg")
+        set -l seen_var _ABICLSEEN_$key
+        if set -q $seen_var
+            continue
         end
-        for edge in $name_edges
-            set -l parts (string split -m 1 '|' -- "$edge")
-            test "$parts[1]" = "$pkg"; or continue
-            set -a queue $parts[2]
+        set -f $seen_var 1
+        set -a visited $pkg
+        set -l cons_var _TCONS_$key
+        if set -q $cons_var
+            set -l cons $$cons_var
+            set -a queue $cons
+            set qlen (math $qlen + (count $cons))
+        end
+        set -l name_var _ABICONS_$key
+        if set -q $name_var
+            set -l ncons $$name_var
+            set -a queue $ncons
+            set qlen (math $qlen + (count $ncons))
         end
     end
     for pkg in $visited
@@ -1927,13 +2036,15 @@ function abi_provide_refusals
                     test (count $names) -gt 0; or set names $member
                 end
                 set -l covered 0
-                set -l member_installed 0
                 for name in $names
                     contains -- "$name" $tx_names; and set covered 1
-                    pacman -Q -- "$name" >/dev/null 2>&1; and set member_installed 1
                 end
                 test $covered -eq 1; and continue
-                test $member_installed -eq 1; or continue
+                # The installed-state probe goes through the memoized helper
+                # (at most one `pacman -Q` per output name per process) — the
+                # raw per-name fork here re-probed every closure member's
+                # outputs on every refusal-path install.
+                abi_pkg_installed "$member"; or continue
                 set -a open "$member"
             end
         end
@@ -2019,6 +2130,21 @@ function install_needed_probe
     end
     set -l rows
     set -l n 0
+    # Candidate index over the provide set (built once per probe): the cover
+    # rule can only match an entry whose name is the soname or its bare stem,
+    # so pair selection becomes two keyed lookups per soname instead of an
+    # O(sonames × provides) scan — the old shape paid abi_provide_covers (and
+    # inside it a stem command substitution — a fork) for EVERY non-matching
+    # pair: 24.5 s per probe measured at 8000 provides × 33 sonames. The key
+    # is a lossy var-safe digest of the name (non-alphanumerics dropped):
+    # equal names always share a key (no real candidate can be missed) and a
+    # collision only ADDS candidates that abi_provide_covers then rejects.
+    for entry in $provides
+        set -l ep (string split -m 1 '=' -- "$entry")
+        set -l pname (string trim -- "$ep[1]")
+        test -n "$pname"; or continue
+        set -f -a _PROVBY_(string replace -a -r '[^A-Za-z0-9]' '' -- "$pname") "$entry"
+    end
     for archive in $argv
         set n (math $n + 1)
         set -l dest "$work/$n"
@@ -2030,8 +2156,19 @@ function install_needed_probe
                 | sed -n 's/^.*NEEDED.*\[\(.*\)\]$/\1/p')
                 abi_base_lib_ok "$soname"; and continue
                 abi_excluded "$soname"; and continue
+                set -l skey (string replace -a -r '[^A-Za-z0-9]' '' -- "$soname")
+                set -l stem (_lint_soname_stem "$soname")
+                set -l candidates
+                set -l map_var _PROVBY_$skey
+                set -q $map_var; and set -a candidates $$map_var
+                if test (count $stem) -ge 1
+                    set -l stem_var _PROVBY_(string replace -a -r '[^A-Za-z0-9]' '' -- "$stem[1]")
+                    if test "$stem_var" != "$map_var"
+                        set -q $stem_var; and set -a candidates $$stem_var
+                    end
+                end
                 set -l resolved 0
-                for entry in $provides
+                for entry in $candidates
                     if abi_provide_covers "$entry" "$soname"
                         set resolved 1
                         break
@@ -2943,6 +3080,114 @@ function install_emit -a sink log_file level text
     end
 end
 
+# install_register_names ARCHIVE... → the package names each archive installs
+# (one per line, deduped), rc 1 the moment an archive is UNNAMEABLE. Two name
+# sources per archive, in authority order:
+#   1. the archive's own .PKGINFO (pkgbase + pkgname) — what pacman -U will
+#      actually install;
+#   2. the recipe directory beside the archive (PKGDEST=$startdir is the house
+#      layout): the committed .SRCINFO's pkgbase+pkgname, else the evaluated
+#      PKGBUILD's pkgbase/pkgname — the same "published claim one level down"
+#      expected_output_names falls back to for synthetic workspaces.
+# Fixture stub archives are EMPTY on purpose (tests/lib/fixture-lib.bash), so
+# rung 2 is what their runs resolve through. Neither rung answering is
+# fail-closed by design: skipping registration silently would leave exactly
+# the names the transaction installs unprotected, which is the bug class this
+# feature exists to close. Diagnostics go to stderr so the caller can route
+# them through its own sink (a lane child must never write to the terminal).
+function install_register_names
+    for archive in $argv
+        set -l dir (path dirname -- "$archive")
+        set -l names
+        for line in (archive_pkginfo "$archive")
+            set -l base (string match -r -g '^pkgbase = (.+)$' -- "$line")
+            test (count $base) -ge 1; and set -a names $base[1]
+            set -l out (string match -r -g '^pkgname = (.+)$' -- "$line")
+            test (count $out) -ge 1; and set -a names $out[1]
+        end
+        if test (count $names) -eq 0
+            if test -f "$dir/.SRCINFO"
+                set names (srcinfo_pkgnames "$dir/.SRCINFO")
+            end
+        end
+        if test (count $names) -eq 0
+            set names (pkgbuild_array_checked "$dir" pkgbase) (pkgbuild_array_checked "$dir" pkgname)
+        end
+        if test (count $names) -eq 0
+            echo "install-register: cannot establish the package names of "(basename -- "$archive")" — no readable .PKGINFO and no pkgbase/pkgname in $dir" >&2
+            return 1
+        end
+        printf '%s\n' $names
+    end
+    return 0
+end
+
+# install_register_ignorepkg LOG_FILE SINK ARCHIVE... — the dynamic IgnorePkg
+# registration step of the ONE install pipeline, run BEFORE pacman -U so a
+# name is never installed while unprotected (the whole point: the retired
+# static closure in /etc/pacman.conf cannot know what a future build installs).
+# It registers pkgbase+pkgname of every accepted archive (install AND skip rows
+# — both are archives this run keeps), through the shared names-driven core
+# register_ignorepkg_names (lib/audit.fish), into $_IGNOREPKG_CONF when set
+# (the fixture seam) or /etc/pacman.conf.
+# The step runs under the BUILDER's pacman mutex (run_pacman_locked → the
+# hidden --install-register seam), with the bounded db.lck deferral INSIDE the
+# same critical section: two lanes must never interleave the conf
+# read-modify-write, and a mutex timeout must stay the one failure shape it is
+# for `pacman -U` (rc 75 → `mutex-timeout`, no recovery probes —
+# tests/pacman-mutex-shim.sh pins both). Registration failure, lock timeout or
+# mutex timeout REFUSES the install (fail-closed: an unregistered name is the
+# bug, not a footnote), and --no-register-ignorepkg (-gx _IGNOREPKG_REGISTER
+# 0) skips the step loudly.
+function install_register_ignorepkg -a log_file sink
+    set -l archives $argv[3..-1]
+    if test (count $archives) -eq 0
+        return 0
+    end
+    if set -q _IGNOREPKG_REGISTER; and test "$_IGNOREPKG_REGISTER" = 0
+        install_emit "$sink" "$log_file" warn "IgnorePkg registration skipped (--no-register-ignorepkg) — "(count $archives)" archive name(s) were NOT added to the pacman.conf closure"
+        return 0
+    end
+    # Names first: an unnameable archive is refused before anything is waited
+    # for or written. stderr rides along in the same capture (it is only ever
+    # written on the failure path), so both routes land in the transcript.
+    set -l named (install_register_names $archives 2>&1)
+    set -l nrc $status
+    if test $nrc -ne 0
+        for line in $named
+            install_emit "$sink" "$log_file" error "$line"
+        end
+        install_emit "$sink" "$log_file" error "refusing to install: a package name could not be established, so its IgnorePkg registration cannot be guaranteed"
+        return 1
+    end
+    set -l conf /etc/pacman.conf
+    if set -q _IGNOREPKG_CONF; and test -n "$_IGNOREPKG_CONF"
+        set conf $_IGNOREPKG_CONF
+    end
+    set -l subject (count $named)" name(s) from "(count $archives)" archive(s)"
+    set -l reg_out (run_pacman_locked "$log_file" \
+        fish "$SCRIPT_DIR/build-all.fish" --install-register "$conf" "$subject" $named 2>&1)
+    set -l rrc $status
+    for line in $reg_out
+        if string match -q '*warning*' -- "$line"
+            install_emit "$sink" "$log_file" warn "$line"
+        else if test $rrc -ne 0; or string match -q '*timed out*' -- "$line"
+            install_emit "$sink" "$log_file" error "$line"
+        else
+            install_emit "$sink" "$log_file" info "$line"
+        end
+    end
+    if test $rrc -ne 0
+        if test $rrc -eq 75
+            install_emit "$sink" "$log_file" error "IgnorePkg registration never ran: the builder pacman mutex timed out — refusing to install unregistered package name(s)"
+        else
+            install_emit "$sink" "$log_file" error "IgnorePkg registration failed — refusing to install package name(s) the pacman.conf closure does not cover"
+        end
+        return 1
+    end
+    return 0
+end
+
 # install_execute LOG_FILE SINK N_EXTRA EXTRA... PLAN_ROW... — the ONE
 # executor: renders the plan (refusals abort before anything else, then the
 # skip note) and runs the single pacman transaction for its install set.
@@ -3025,6 +3270,13 @@ function install_execute -a log_file sink n_extra
         end
         return 1
     end
+    # Dynamic IgnorePkg registration (2026-10-05) runs here — after the
+    # refusals, before the transaction: every accepted archive (install AND
+    # skip rows) must have its names in the pacman.conf closure before pacman
+    # -U can install them. Failure refuses the whole install (fail-closed).
+    if not install_register_ignorepkg "$log_file" "$sink" $installs $skips
+        return 1
+    end
     if test (count $skips) -gt 0
         # D-F14: the note must not present ONE row's version as every skipped
         # package's. One distinct version keeps the original phrasing; a mixed
@@ -3062,6 +3314,12 @@ function install_execute -a log_file sink n_extra
         run_pacman_locked "$log_file" $cmd -U --noconfirm --ask 4 $extra $installs 2>&1 | tee -a "$log_file" | tail -3
         set irc $pipestatus[1]
     end
+    # The installed-database memos (abi_installed_provides / abi_pkg_installed
+    # / abi_id_installed) answered from the PRE-transaction state — drop them
+    # the moment the transaction has run so every later probe (the NEEDED
+    # probe below, the next install's plan) reads the NEW database, not the
+    # snapshot the plan consulted.
+    abi_installed_cache_clear
     if test $irc -ne 0
         if test "$sink" = quiet
             if test $irc -eq 75
@@ -3189,7 +3447,7 @@ function _pkgname_index
     if not set -q _PKGNAME_INDEX
         set -g _PKGNAME_INDEX
         # ONE name surface (D-F4): pkgbase + every pkgname output — the same
-        # B/N rows the ignorepkg closure and the ABI lookups read. A name is
+        # B/N rows the ABI lookups read. A name is
         # resolvable wherever pacman can resolve it, whichever .SRCINFO field
         # carries it, and every lookup (CLI references, abi_package_id_for_
         # pkgname, register_ignorepkg's universe) answers from this one list.
@@ -3307,7 +3565,7 @@ end
 function _suggest_option -a given
     string match -qr '^--' -- "$given"; or return 0
     set -l options --install --forceinstall --clean --skip --no-sync --lanes --jobs --intensity \
-        --allow-broken-rustc --no-deps --dry-run --list --group --help --topology \
+        --allow-broken-rustc --no-deps --no-register-ignorepkg --dry-run --list --group --help --topology \
         --installall --cleanup --nuclear --link-sources --audit
     set -l hit (printf '%s\n' $options | _nearest_lines "$given" 2 \
         | sort -n | head -1 | cut -d' ' -f2-)
@@ -3876,10 +4134,9 @@ end
 # its owning seam.
 # package_abi_severity PKG → must | should | none
 function package_abi_severity -a pkg
-    for entry in $_TAGS
-        set -l parts (string split '|' -- "$entry")
-        test "$parts[1]" = "$pkg"; or continue
-        set -l tags (string split ',' -- "$parts[2]")
+    set -l tags_var _TTAGS_(_topo_key "$pkg")
+    if set -q $tags_var
+        set -l tags (string split ',' -- "$$tags_var")
         if contains abi=must $tags
             echo must
         else if contains abi=should $tags
@@ -3896,17 +4153,14 @@ end
 # The topology tag is the opt-in; a recipe config alone does not select a
 # version provider.
 function package_version_sync_provider -a pkg
-    for entry in $_TAGS
-        set -l parts (string split '|' -- "$entry")
-        test "$parts[1]" = "$pkg"; or continue
-        for tag in (string split ',' -- "$parts[2]")
+    set -l tags_var _TTAGS_(_topo_key "$pkg")
+    if set -q $tags_var
+        for tag in (string split ',' -- "$$tags_var")
             if test "$tag" = version-sync=nvchecker
                 echo nvchecker
                 return
             end
         end
-        echo none
-        return
     end
     echo none
 end
@@ -3915,16 +4169,14 @@ end
 # Members sharing one name belong to one prompt row; the loader caps a record
 # at one such tag, and only prompt_app_selection consumes this.
 function package_app_cluster -a pkg
-    for entry in $_TAGS
-        set -l parts (string split '|' -- "$entry")
-        test "$parts[1]" = "$pkg"; or continue
-        for tag in (string split ',' -- "$parts[2]")
+    set -l tags_var _TTAGS_(_topo_key "$pkg")
+    if set -q $tags_var
+        for tag in (string split ',' -- "$$tags_var")
             if string match -q 'app-cluster=*' -- "$tag"
                 string replace 'app-cluster=' '' -- "$tag"
                 return
             end
         end
-        return
     end
 end
 
@@ -3935,12 +4187,33 @@ end
 # ancestors) are. The graph is acyclic (the loader's topo check proved it),
 # so the recursion terminates.
 function has_abi_tagged_dependency -a pkg
-    for dep in (deps_of $pkg)
-        if test (package_abi_severity $dep) != none
-            return 0
+    # Iterative forward BFS over the keyed dep adjacency (_TDEPKEYS_, built by
+    # read_topology_config), with O(1) tag reads (_TTAGS_). The old recursion
+    # re-derived deps through command substitutions and scanned _TAGS linearly
+    # per node — O(V·E·T) across the gate's per-anchor calls.
+    set -l start_key (_topo_key "$pkg")
+    set -l queue_keys
+    set -l deps_var _TDEPKEYS_$start_key
+    if set -q $deps_var
+        set queue_keys $$deps_var
+    end
+    set -l qhead 1
+    while test $qhead -le (count $queue_keys)
+        set -l key $queue_keys[$qhead]
+        set qhead (math $qhead + 1)
+        set -l seen_var _ABITAGSEEN_$key
+        set -q $seen_var; and continue
+        set -f $seen_var 1
+        set -l tags_var _TTAGS_$key
+        if set -q $tags_var
+            set -l tags (string split ',' -- "$$tags_var")
+            if contains abi=must $tags; or contains abi=should $tags
+                return 0
+            end
         end
-        if has_abi_tagged_dependency $dep
-            return 0
+        set -l next_var _TDEPKEYS_$key
+        if set -q $next_var
+            set -a queue_keys $$next_var
         end
     end
     return 1
@@ -3948,10 +4221,24 @@ end
 
 # abi_depends_on PKG TARGET → 0 when PKG transitively depends on TARGET.
 function abi_depends_on -a pkg target
-    for dep in (deps_of $pkg)
-        test "$dep" = "$target"; and return 0
-        if abi_depends_on $dep $target
-            return 0
+    set -l target_key (_topo_key "$target")
+    set -l start_key (_topo_key "$pkg")
+    set -l queue_keys
+    set -l deps_var _TDEPKEYS_$start_key
+    if set -q $deps_var
+        set queue_keys $$deps_var
+    end
+    set -l qhead 1
+    while test $qhead -le (count $queue_keys)
+        set -l key $queue_keys[$qhead]
+        set qhead (math $qhead + 1)
+        test "$key" = "$target_key"; and return 0
+        set -l seen_var _ABIDEPSEEN_$key
+        set -q $seen_var; and continue
+        set -f $seen_var 1
+        set -l next_var _TDEPKEYS_$key
+        if set -q $next_var
+            set -a queue_keys $$next_var
         end
     end
     return 1
@@ -3961,12 +4248,30 @@ end
 # depends on ANCHOR (the reverse closure the edge file cannot express), one
 # per line, in map order.
 function abi_batch_dependents -a anchor
-    for candidate in $_PACKAGE_IDS
-        test (package_abi_severity $candidate) = none; and continue
-        test "$candidate" = "$anchor"; and continue
-        if abi_depends_on $candidate $anchor
-            echo $candidate
+    # Reverse BFS over the keyed consumer adjacency (_TCONSKEYS_) — one pass
+    # per anchor instead of a reachability query per (anchor × package) pair
+    # (the old `for candidate in $_PACKAGE_IDS: abi_depends_on` was O(V·E) per
+    # anchor, minutes at 653 records). The map-order output contract is kept
+    # by scanning $_PACKAGE_IDS once against the BFS marks.
+    set -l anchor_key (_topo_key "$anchor")
+    set -l queue_keys $anchor_key
+    set -l qhead 1
+    while test $qhead -le (count $queue_keys)
+        set -l key $queue_keys[$qhead]
+        set qhead (math $qhead + 1)
+        set -l seen_var _ABIREVSEEN_$key
+        set -q $seen_var; and continue
+        set -f $seen_var 1
+        set -l cons_var _TCONSKEYS_$key
+        if set -q $cons_var
+            set -a queue_keys $$cons_var
         end
+    end
+    for candidate in $_PACKAGE_IDS
+        test "$candidate" = "$anchor"; and continue
+        test (package_abi_severity $candidate) = none; and continue
+        set -l cand_var _ABIREVSEEN_(_topo_key "$candidate")
+        set -q $cand_var; and echo $candidate
     end
 end
 
@@ -4249,6 +4554,41 @@ function check_pacman_lock -a lock_path
             echo "  status: STALE — no open handle on the lock inode (proven idle)."
     end
     echo "  NEVER deleted automatically — the Recovery command above is the operator action."
+    return 1
+end
+
+# pacman_lock_wait_clear PATH — the bounded wait the dynamic IgnorePkg
+# registration runs before it rewrites pacman.conf: report the lock state ONCE
+# through check_pacman_lock, then poll `test -e` every second until the lock
+# file disappears or _PACMAN_LOCK_WAIT_S elapses (default 300; the variable is
+# the fixture seam for the timeout case — there is no GSA_* knob).
+# rc 0 = the lock is gone (or was never there); 1 = still present at the
+# deadline. CONTRACT (2026-10-04, unchanged): the lock is NEVER deleted here —
+# this only waits for whoever holds it to finish. Status lines go to stdout so
+# the caller renders them through its own sink.
+function pacman_lock_wait_clear -a lock_path
+    set -l wait_s 300
+    if set -q _PACMAN_LOCK_WAIT_S
+        if string match -qr '^[0-9]+$' -- "$_PACMAN_LOCK_WAIT_S"
+            set wait_s $_PACMAN_LOCK_WAIT_S
+        else
+            echo "  _PACMAN_LOCK_WAIT_S='$_PACMAN_LOCK_WAIT_S' is not a whole number of seconds — using the default 300"
+        end
+    end
+    if check_pacman_lock "$lock_path"
+        return 0
+    end
+    echo "  waiting up to $wait_s s for the pacman database lock to clear (never removed automatically)"
+    set -l waited 0
+    while test $waited -lt $wait_s
+        sleep 1
+        set waited (math $waited + 1)
+        if not test -e "$lock_path"
+            echo "  pacman database lock cleared after $waited s"
+            return 0
+        end
+    end
+    echo "  pacman database lock still present after $waited s — giving up (nothing was removed)"
     return 1
 end
 
@@ -6517,10 +6857,10 @@ function run_record_field -a pkg field
     return 1
 end
 
-# Register the run's plan once, before dispatch. The 9 fixed arguments are the
+# Register the run's plan once, before dispatch. The 10 fixed arguments are the
 # continuation state (mirrored by continuation_args) plus the selection-source
 # scalar; the payload is the topological order of the selection.
-function run_record_plan -a lanes jobs intensity install force no_deps no_sync allow_broken source
+function run_record_plan -a lanes jobs intensity install force no_deps no_sync allow_broken no_register source
     set -g _RL_ROWS
     set -g _RL_REMAINING
     set -g _RL_SUCCEEDED
@@ -6530,7 +6870,7 @@ function run_record_plan -a lanes jobs intensity install force no_deps no_sync a
     set -g _RL_SUDO_NOTE ""
     set -g _RL_INTERRUPTED 0
     set -g _RR_SOURCE "$source"
-    set -g _RR_ORDER $argv[10..-1]
+    set -g _RR_ORDER $argv[11..-1]
     set -g _RR_CONT_LANES "$lanes"
     set -g _RR_CONT_JOBS "$jobs"
     set -g _RR_CONT_INTENSITY "$intensity"
@@ -6539,6 +6879,7 @@ function run_record_plan -a lanes jobs intensity install force no_deps no_sync a
     set -g _RR_CONT_NO_DEPS "$no_deps"
     set -g _RR_CONT_NO_SYNC "$no_sync"
     set -g _RR_CONT_ALLOW_BROKEN "$allow_broken"
+    set -g _RR_CONT_NO_REGISTER "$no_register"
     # Resolved by run_lanes once the plan is computed (the `parallelism:` line
     # knows them); '-' until then — a run that refused before planning has no
     # resolved values to report.
@@ -6556,9 +6897,19 @@ end
 # order — a failed package must rebuild BEFORE its dependents, so it stays in
 # Remaining and in the resume suggestion) are derived from them.
 function run_record_finalize
-    set -l rowed
+    # Keyed, one-pass rewrite of the old `contains "$pkg" $rowed` + nested row
+    # scan (O(N²) at 653 packages): rows and the started set are published
+    # under _topo_key marks (function-scoped — finalize is the only writer),
+    # so the never-classified sweep and the topological ordering are each one
+    # linear walk. First row per package wins, exactly like the old nested
+    # scan's `break`.
     for row in $_RL_ROWS
-        set -a rowed (string split -f 1 '|' -- "$row")
+        set -l row_var _RRROW_(_topo_key (string split -f 1 '|' -- "$row"))
+        set -q $row_var; and continue
+        set -f $row_var "$row"
+    end
+    for pkg in $_lane_started
+        set -f _LRSTARTED_(_topo_key "$pkg") 1
     end
     # One reason for ALL never-started rows, decided from the state as
     # finalize found it — not per row, which would let the first row added by
@@ -6569,24 +6920,23 @@ function run_record_finalize
     else if test (count $_lane_started) -eq 0; and test (count $_RL_ROWS) -eq 0
         set ns_reason preflight-refused
     end
+    set -l order_keys (_topo_key $_RR_ORDER)
+    set -l i 0
     for pkg in $_RR_ORDER
-        if contains "$pkg" $rowed
-            continue
-        end
-        if test (count $_lane_started) -gt 0; and contains "$pkg" $_lane_started
+        set i (math $i + 1)
+        set -l row_var _RRROW_$order_keys[$i]
+        set -q $row_var; and continue
+        if test (count $_lane_started) -gt 0; and set -q _LRSTARTED_$order_keys[$i]
             run_record_row "$pkg" interrupted - - interrupted-mid-build
         else
             run_record_row "$pkg" never-started - - $ns_reason
         end
+        set -f $row_var "$_RL_ROWS[-1]"
     end
     set -l ordered
-    for pkg in $_RR_ORDER
-        for row in $_RL_ROWS
-            if test (string split -f 1 '|' -- "$row") = "$pkg"
-                set -a ordered $row
-                break
-            end
-        end
+    for key in $order_keys
+        set -l row_var _RRROW_$key
+        set -q $row_var; and set -a ordered $$row_var
     end
     set _RL_ROWS $ordered
 
@@ -6614,6 +6964,28 @@ function run_record_finalize
     set -g _RL_BLOCKED $blocked_rows
 end
 
+# abort_before_dispatch — the ONE pre-dispatch interrupt exit (R-F27),
+# factored out of the check just before run_lanes so every pre-dispatch phase
+# boundary (the ABI gate's per-anchor / per-provider iterations included) can
+# honour the latch promptly instead of grinding to the end of the scan. The
+# run record is completed (every row never-started / interrupted-before-start)
+# and rendered, and the exit status is the signal's own (gsa_signal_exit_rc:
+# 129/130/143). During dispatch the latch stays with run_lanes' loop head —
+# its latch+drain semantics are untouched. It PRINTS the summary and the
+# machine block, so it must never be wrapped in a command substitution;
+# callers do `abort_before_dispatch; return $status`.
+function abort_before_dispatch
+    printf '\n'
+    ui_warning "Build interrupted"
+    dispatcher_log "Build interrupted (last signal: $_LAST_SIGNAL, before dispatch)"
+    set -g _RL_INTERRUPTED 1
+    run_record_finalize
+    print_run_summary interrupted
+    set -l interrupt_rc (gsa_signal_exit_rc)
+    print_run_record interrupted $interrupt_rc
+    return $interrupt_rc
+end
+
 # ─── continuation_args: ONE implementation of both continuation mirrors ──────
 # The canonical flag → continuation-rule table. continuation_args iterates it
 # (the list order below IS the emission order) and every continuation command
@@ -6634,6 +7006,7 @@ end
 #                                                   --forceinstall (implies -i)
 #   semantics   --no-deps --no-sync                  mirrored on resume only
 #               --allow-broken-rustc                 (replay carries argv)
+#               --no-register-ignorepkg
 #   replaced    -g/--group, N..M ranges,             replaced by the package
 #               package references                  list ($remaining/argv)
 #   not-mirrored -c/--clean, -s/--skip               deliberately NOT mirrored:
@@ -6646,6 +7019,7 @@ end
 #   not-mirrored --lane-job --stale-lock-check       hidden seams: process-exit
 #               --local-db-check --install-decide    interfaces, never a
 #               --audit-lint --register-ignorepkg    command a resume replays
+#               --install-register
 set -g _CONTINUATION_RULES \
     '--lanes|value' \
     '--jobs|value' \
@@ -6654,11 +7028,12 @@ set -g _CONTINUATION_RULES \
     '--no-deps|semantics' \
     '--no-sync|semantics' \
     '--allow-broken-rustc|semantics' \
+    '--no-register-ignorepkg|semantics' \
     '-g --group, N..M ranges, package references|replaced' \
     '-c --clean|not-mirrored' \
     '-s --skip|not-mirrored' \
     '-n --dry-run -l --list -ia --installall -cc --cleanup -ccc --nuclear -ln --link-sources --audit --topology -h --help|not-mirrored' \
-    '--lane-job --stale-lock-check --local-db-check --install-decide --audit-lint --register-ignorepkg|not-mirrored'
+    '--lane-job --stale-lock-check --local-db-check --install-decide --install-register --audit-lint --register-ignorepkg|not-mirrored'
 
 # continuation_args MODE [PAYLOAD...] → one line of continuation arguments.
 # Run-shape state comes from the run record (run_record_plan).
@@ -6701,6 +7076,10 @@ function continuation_args -a mode
                         case --allow-broken-rustc
                             if test "$_RR_CONT_ALLOW_BROKEN" = "1"
                                 set -a out --allow-broken-rustc
+                            end
+                        case --no-register-ignorepkg
+                            if test "$_RR_CONT_NO_REGISTER" = "1"
+                                set -a out --no-register-ignorepkg
                             end
                     end
                 end
@@ -6897,10 +7276,9 @@ function usage
     echo "                    stale runtime/error artifacts, cargo/rustc recipes"
     echo "                    with no rust-git edge, the recipe-contract lint"
     echo "                    families (provides-versioning, purged tools,"
-    echo "                    IgnorePkg closure, provides swaps, ABI closure,"
-    echo "                    ABI exposure), and installed PGO packages"
-    echo "                    still carrying -fprofile-generate or"
-    echo "                    -Cprofile-generate payloads"
+    echo "                    provides swaps, ABI closure, ABI exposure), and"
+    echo "                    installed PGO packages still carrying"
+    echo "                    -fprofile-generate or -Cprofile-generate payloads"
     echo "  --topology        Print the resolved topology as machine-readable"
     echo "                    records, one per package:"
     echo "                      id|path|groups|edges|tags"
@@ -6931,6 +7309,12 @@ function usage
     echo "                    Same as -i, but ALWAYS runs pacman -U — no same-version"
     echo "                    sanity check. Implies -i, so it works with or without it."
     echo "  --no-deps         Build only what you named (no consumer expansion)"
+    echo "  --no-register-ignorepkg"
+    echo "                    Skip the dynamic IgnorePkg registration an install run"
+    echo "                    normally performs before pacman -U (it appends the"
+    echo "                    built package names to the [options] closure in"
+    echo "                    pacman.conf). Only for a run that must install"
+    echo "                    without touching pacman.conf — the skip is loud."
     echo "  -c, --clean       Clean build artifacts before building"
     echo "  -s, --skip        Skip fresh archives only when each VCS source ref matches"
     echo "                    its recorded revision; an unusable baseline rebuilds"
@@ -7254,6 +7638,7 @@ function main
     set -l jobs_override "$_DEFAULT_JOBS"
     set -l intensity_level "$_DEFAULT_INTENSITY"
     set -l allow_broken_rustc 0
+    set -l no_register_flag 0
     set -l groups
     set -l packages
     set -l ranges
@@ -7324,6 +7709,14 @@ function main
                 # Leaf rebuilds where the deps are known current (e.g. niri
                 # without dragging in llvm/rust/mesa).
                 set no_deps_flag 1
+            case --no-register-ignorepkg
+                # Deliberate escape hatch for the dynamic IgnorePkg
+                # registration (install_register_ignorepkg): skip it, loudly,
+                # for a run that must install without touching pacman.conf.
+                # The decision rides as an EXPORTED variable so lane children
+                # see it without a change to the pinned lane_argv codec.
+                set no_register_flag 1
+                set -gx _IGNOREPKG_REGISTER 0
             case -n --dry-run
                 set dry_run 1
             case -l --list
@@ -7571,6 +7964,31 @@ function main
         return 1
     end
 
+    # Register the run record's plan once for this run (the cluster's input
+    # contract — see the run-record cluster below run_lanes). Registered here,
+    # BEFORE the ABI gate, because a ^C anywhere in the pre-dispatch phase must
+    # be able to render a record on its abort path. selection-source renders
+    # as groups=… packages=… ranges=… with '-' for an absent part. Read-only
+    # modes (-n/-l) never render the record and stay unregistered.
+    if test $dry_run -eq 0; and test $list_flag -eq 0
+        set -l src_groups -
+        set -l src_packages -
+        set -l src_ranges -
+        if test (count $groups) -gt 0
+            set src_groups (string join ',' $groups)
+        end
+        if test (count $packages) -gt 0
+            set src_packages (string join ',' $packages)
+        end
+        if test (count $ranges) -gt 0
+            set src_ranges (string join ',' $ranges)
+        end
+        run_record_plan "$lane_count" "$jobs_override" "$intensity_level" \
+            "$install_flag" "$force_install_flag" "$no_deps_flag" "$no_sync_flag" \
+            "$allow_broken_rustc" "$no_register_flag" \
+            "groups=$src_groups packages=$src_packages ranges=$src_ranges" $sorted
+    end
+
     # Generic coupled-batch gate (2026-09-25 llvm/rust incident, generalized:
     # the hard-coded llvm-git/rust-git pair was one instance of this rule, and
     # its Qt private-API siblings lived only in prose). Tags are topology data
@@ -7590,11 +8008,18 @@ function main
         set -l batch_missing
         set -l batch_candidates
         for anchor in $sorted
+            # Every pre-dispatch phase boundary honours the interrupt latch:
+            # a ^C during the gate aborts on the next iteration (or at the
+            # loop's end below), never after the full scan.
+            if test "$_INTERRUPT_HANDLED" = "1"
+                abort_before_dispatch
+                return $status
+            end
             test (package_abi_severity $anchor) = must; or continue
             has_abi_tagged_dependency $anchor; and continue
             for member in (abi_batch_dependents $anchor)
                 contains $member $sorted; and continue
-                pacman -Q $member >/dev/null 2>&1; or continue
+                abi_id_installed "$member"; or continue
                 switch (package_abi_severity $member)
                     case must
                         set -a batch_missing (printf '%s %s' $anchor $member)
@@ -7602,6 +8027,10 @@ function main
                         set -a batch_candidates $member
                 end
             end
+        end
+        if test "$_INTERRUPT_HANDLED" = "1"
+            abort_before_dispatch
+            return $status
         end
         if test (count $batch_missing) -gt 0
             set batch_missing (printf '%s\n' $batch_missing | sort -u)
@@ -7639,12 +8068,20 @@ function main
         # gates; read-only modes stay exempt.
         set -l abi_open
         for provider in $sorted
+            if test "$_INTERRUPT_HANDLED" = "1"
+                abort_before_dispatch
+                return $status
+            end
             abi_soname_provides_changed "$provider"; or continue
             for member in (abi_consumer_closure "$provider")
                 contains -- "$member" $sorted; and continue
                 abi_pkg_installed "$member"; or continue
                 set -a abi_open (printf '%s %s' $provider $member)
             end
+        end
+        if test "$_INTERRUPT_HANDLED" = "1"
+            abort_before_dispatch
+            return $status
         end
         if test (count $abi_open) -gt 0
             set abi_open (printf '%s\n' $abi_open | sort -u)
@@ -7718,26 +8155,6 @@ function main
     echo "State:    $_STATE_DIR"
     echo ""
 
-    # Register the run record's plan once for this run (the cluster's input
-    # contract — see the run-record cluster below run_lanes). selection-source
-    # renders as groups=… packages=… ranges=… with '-' for an absent part.
-    set -l src_groups -
-    set -l src_packages -
-    set -l src_ranges -
-    if test (count $groups) -gt 0
-        set src_groups (string join ',' $groups)
-    end
-    if test (count $packages) -gt 0
-        set src_packages (string join ',' $packages)
-    end
-    if test (count $ranges) -gt 0
-        set src_ranges (string join ',' $ranges)
-    end
-    run_record_plan "$lane_count" "$jobs_override" "$intensity_level" \
-        "$install_flag" "$force_install_flag" "$no_deps_flag" "$no_sync_flag" \
-        "$allow_broken_rustc" \
-        "groups=$src_groups packages=$src_packages ranges=$src_ranges" $sorted
-
     if test "$_ROOT_MODE" != "1"; and test "$install_flag" = "1"
         # The sudo hint is the ARGV-REPLAY mirror of continuation_args (see
         # the canonical flag → continuation-rule table with the cluster).
@@ -7761,19 +8178,8 @@ function main
         end
     end
     if test "$_INTERRUPT_HANDLED" = "1"
-        printf '\n'
-        ui_warning "Build interrupted"
-        dispatcher_log "Build interrupted (last signal: $_LAST_SIGNAL, before dispatch)"
-        # An interrupted run prints the summary + machine block + continuation
-        # and still exits with the signal's own status (gsa_signal_exit_rc:
-        # 129/130/143, 2026-09-26 interrupt gap, R-F27). Nothing dispatched
-        # yet, so every row is never-started / interrupted-before-start.
-        set -g _RL_INTERRUPTED 1
-        run_record_finalize
-        print_run_summary interrupted
-        set -l interrupt_rc (gsa_signal_exit_rc)
-        print_run_record interrupted $interrupt_rc
-        return $interrupt_rc
+        abort_before_dispatch
+        return $status
     end
 
     # Parallel lane dispatcher (--lanes 1 = strict topo order, the old
@@ -8107,30 +8513,55 @@ if test (count $argv) -gt 0; and test "$argv[1]" = --install-decide
     exit $status
 end
 
+# Hidden install-pipeline seam: the DYNAMIC IgnorePkg registration step's
+# db.lck deferral + conf write, runnable under the builder's pacman mutex.
+# install_register_ignorepkg is the ONLY caller — it has already resolved the
+# names (install_register_names) and the target conf, and runs this seam
+# through run_pacman_locked so the write serializes with every other
+# pacman-state mutation. fish's `exec` takes no redirections, so a fish
+# process cannot hold a flock across its own code: the mutex always wraps an
+# external command, and this seam is that command.
+#   fish build-all.fish --install-register <pacman-conf> <subject> <name>...
+# SUBJECT is the phrase register_ignorepkg_names reports these names with.
+# rc 0 = the closure covers the names afterwards (nothing-to-append counts),
+# 1 = refusal, or the bounded db.lck wait timed out; 2 = bad usage.
+if test (count $argv) -gt 0; and test "$argv[1]" = --install-register
+    if test (count $argv) -lt 4; or test -z "$argv[2]"; or test -z "$argv[3]"
+        echo "Error: --install-register expects <pacman-conf> <subject> <name>..." >&2
+        exit 2
+    end
+    # The deferral (2026-10-05): never rewrite pacman.conf while an alpm
+    # transaction holds the db lock — the write is a cp, not an atomic rename,
+    # so a concurrent transaction could read a half-written conf. Bounded
+    # wait, and the lock is NEVER deleted here.
+    if not pacman_lock_wait_clear (pacman_db_lock_path)
+        exit 1
+    end
+    register_ignorepkg_names "$argv[2]" "$argv[3]" $argv[4..-1]
+    exit $status
+end
+
 # Hidden fixture seam (same precedent as --stale-lock-check/--local-db-check):
 # run ONE workspace-audit lint against the loaded workspace — no build, no
-# network, no host state beyond the pacman.conf the caller names.
-#   fish build-all.fish --audit-lint <provides|purged|ignorepkg|swap|abi-closure|abi-exposure> [pacman-conf]
+# network, no host state. (The IgnorePkg closure lint retired 2026-10-5 with
+# the static closure contract: IgnorePkg is now registered dynamically at
+# install time, so there is no static closure left to lint.)
+#   fish build-all.fish --audit-lint <provides|purged|swap|abi-closure|abi-exposure>
 # Output: one finding line per finding (prefix `provides: `/`purged: `/
-# `ignorepkg: `/`swap: `/`abi-closure: `/`exposure: `) followed by
+# `swap: `/`abi-closure: `/`exposure: `) followed by
 # `audit-lint <name>: clean`, `audit-lint <name>: N finding(s)` or
 # `audit-lint <name>: skipped`.
 # rc 0 = the lint RAN — a finding never changes the exit status (report-only,
 # the same contract --audit has) — 2 = usage. No GSA_* test knob.
 if test (count $argv) -gt 0; and test "$argv[1]" = --audit-lint
-    if test (count $argv) -lt 2; or test (count $argv) -gt 3
-        echo "Error: --audit-lint expects <provides|purged|ignorepkg|swap|abi-closure|abi-exposure> and an optional pacman.conf path" >&2
+    if test (count $argv) -ne 2
+        echo "Error: --audit-lint expects <provides|purged|swap|abi-closure|abi-exposure>" >&2
         exit 2
     end
     switch $argv[2]
         case provides purged swap abi-closure abi-exposure
-            if test (count $argv) -ne 2
-                echo "Error: --audit-lint $argv[2] takes no pacman.conf path" >&2
-                exit 2
-            end
-        case ignorepkg
         case '*'
-            echo "Error: --audit-lint expects provides, purged, ignorepkg, swap, abi-closure or abi-exposure" >&2
+            echo "Error: --audit-lint expects provides, purged, swap, abi-closure or abi-exposure" >&2
             exit 2
     end
     set -l lint_findings
@@ -8139,8 +8570,6 @@ if test (count $argv) -gt 0; and test "$argv[1]" = --audit-lint
             set lint_findings (audit_lint_provides)
         case purged
             set lint_findings (audit_lint_purged)
-        case ignorepkg
-            set lint_findings (audit_lint_ignorepkg "$argv[3]")
         case swap
             set lint_findings (audit_lint_swap)
         case abi-closure
@@ -8163,9 +8592,12 @@ end
 
 # Hidden mutation seam (same rc vocabulary as --install-decide): close the
 # IgnorePkg closure of a pacman.conf from the workspace name universe — the
-# WRITE half of docs/MEMORY.md rule 9, whose READ half is --audit's ignorepkg
-# closure lint (and the hidden --audit-lint ignorepkg). Unlike the lint it is
-# NOT report-only: it appends the missing names, so it may modify its target.
+# BACKFILL of docs/MEMORY.md rule 9. Since 2026-10-05 the contract is dynamic
+# (install_register_ignorepkg registers each built package's names before
+# pacman -U); this seam exists to bring an EXISTING conf up to date in one
+# shot, and the static --audit closure lint it used to pair with is retired.
+# Unlike the lints it is NOT report-only: it appends the missing names, so it
+# may modify its target.
 #   fish build-all.fish --register-ignorepkg [pacman-conf]
 # Default target /etc/pacman.conf. The universe is pkgbase+pkgname of every
 # committed .SRCINFO under packages/; the target is parsed exactly like pacman

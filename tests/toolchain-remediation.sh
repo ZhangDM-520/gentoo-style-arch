@@ -129,6 +129,7 @@ prepare() {
     local dir=$1
     install_stubs "$dir"
     mkdir -p "$dir/state/skew" "$dir/installed"
+    make_install_conf "$dir/pacman.conf" # this case's IgnorePkg registration target (never the host's)
     : >"$dir/installed/rust-git"
 }
 
@@ -141,6 +142,7 @@ run_scenario() {
     run_builder env \
         PATH="$dir/bin:$PATH" \
         GSA_STATE_DIR="$dir/state" \
+        _IGNOREPKG_CONF="$dir/pacman.conf" \
         GSA_FAKE_MARKER_DIR="$dir/state/skew" \
         GSA_FAKE_INSTALLED_DIR="$dir/installed" \
         GSA_FAKE_SPAWN_LOG="$dir/spawn.log" \

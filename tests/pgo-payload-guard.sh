@@ -28,6 +28,7 @@ fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-pgo-payload.XXXXXX")
 trap 'rm -rf -- "$fixture"' EXIT
 
 make_workspace "$fixture" auto auto xhigh
+make_install_conf "$fixture/pacman.conf" # this run's IgnorePkg registration target (never the host's)
 
 # A recipe counts as PGO to the gate purely by naming an instrumenting flag,
 # so the gate and the payload are varied independently.
@@ -132,6 +133,7 @@ run_case() {
     run_builder env \
         PATH="$fixture/bin:$PATH" \
         GSA_STATE_DIR="$fixture/state" \
+        _IGNOREPKG_CONF="$fixture/pacman.conf" \
         fish "$fixture/build-all.fish" --installall
     printf '%s\n' "$FIXTURE_OUTPUT"
     return "$FIXTURE_RC"

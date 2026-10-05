@@ -1,23 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Recipe-contract lints: provides versioning, the purged-tools denylist and
-# the IgnorePkg closure. One implementation per rule lives in build-all.fish
-# (audit_lint_provides / audit_lint_purged / audit_lint_ignorepkg);
+# Recipe-contract lints: provides versioning and the purged-tools denylist (the
+# static IgnorePkg closure lint was retired 2026-10-05 in favour of dynamic
+# install-time registration). One implementation per rule lives in
+# build-all.fish (audit_lint_provides / audit_lint_purged);
 # `fish build-all.fish --audit` renders them in its report and the hidden
-# `--audit-lint <name> [pacman-conf]` seam runs one of them — the seam is the
-# interface, and this fixture is its gating walker (red/green per rule, then
-# the real-repo gates).
+# `--audit-lint <name>` seam runs one of them — the seam is the interface, and
+# this fixture is its gating walker (red/green per rule, then the real-repo
+# gates).
 #
-# Enforcement mapping (the settled three-tier rule):
+# Enforcement mapping (the settled two-tier rule):
 #   deterministic + must-gate  provides-versioning, purged-tools → --audit
 #                              lints, GATED here (fixture rc, never --audit's);
-#   host-state                 IgnorePkg closure → --audit lint (report-only,
-#                              Q20) + gate here that reads /etc/pacman.conf
-#                              DIRECTLY and skips only when it is unreadable
-#                              (Q17); the cumulative [options] semantics are
-#                              proven against scratch confs through the seam's
-#                              path argument;
 #   heavy/ELF                  soname-presence → tools/provides-audit.sh pair.
 # PGP procedure and trimming stay docs-only by the same mapping.
 #
@@ -39,14 +34,10 @@ fail() {
     exit 1
 }
 
-# lint WORKSPACE NAME [CONF] — run one audit lint through the seam.
+# lint WORKSPACE NAME — run one audit lint through the seam.
 lint() {
-    local ws=$1 name=$2 conf=${3:-}
-    if [[ -n $conf ]]; then
-        run_builder fish "$ws/build-all.fish" --audit-lint "$name" "$conf"
-    else
-        run_builder fish "$ws/build-all.fish" --audit-lint "$name"
-    fi
+    local ws=$1 name=$2
+    run_builder fish "$ws/build-all.fish" --audit-lint "$name"
 }
 
 # write_srcinfo DIR BASE [EXTRA_PKGNAME...] — committed-.SRCINFO shape:
@@ -206,90 +197,6 @@ write_srcinfo() {
     printf 'B: purged-tools denylist red/green OK\n'
 )
 
-# ─── C. IgnorePkg closure: pacman.conf semantics + Q17 skip ──────────────────
-(
-    set -euo pipefail
-    ws=$tmp/ignorepkg-ws
-    make_workspace "$ws" 1 2 low
-    add_package "$ws" p1
-    add_package "$ws" q
-    write_srcinfo "$ws/packages/p1" p1
-    write_srcinfo "$ws/packages/q" q q-libs # split output: two names under test
-
-    conf_ok=$tmp/conf-ok
-    cat >"$conf_ok" <<EOF
-# Repeated IgnorePkg lines inside [options] ACCUMULATE (Q16 semantics), and a
-# repo section's IgnorePkg line is silently dropped.
-[options]
-IgnorePkg = p1
-IgnorePkg = q   q-libs
-
-[cachyos]
-Include = /etc/pacman.d/cachyos-mirrorlist
-IgnorePkg = decoy-repo-section
-EOF
-    lint "$ws" ignorepkg "$conf_ok"
-    ((FIXTURE_RC == 0)) || fail "C: clean case failed (rc=$FIXTURE_RC)"
-    grep -Fq 'audit-lint ignorepkg: clean' <<<"$FIXTURE_OUTPUT" ||
-        fail "C: cumulative [options] lines must cover every name, got: $FIXTURE_OUTPUT"
-
-    # Drop conf: the pre-header line belongs to no section, the [core] line is
-    # repo-scoped, and a commented line is not a directive — all three names
-    # must come back as findings.
-    conf_drop=$tmp/conf-drop
-    cat >"$conf_drop" <<EOF
-IgnorePkg = p1
-[core]
-IgnorePkg = q q-libs
-[options]
-# IgnorePkg = q
-EOF
-    lint "$ws" ignorepkg "$conf_drop"
-    ((FIXTURE_RC == 0)) || fail "C: --audit-lint must stay report-only (rc=$FIXTURE_RC)"
-    for name in p1 q q-libs; do
-        grep -Fq "ignorepkg: $name is not in the IgnorePkg closure of $conf_drop" \
-            <<<"$FIXTURE_OUTPUT" ||
-            fail "C: '$name' must be reported when its only IgnorePkg line is dropped, got: $FIXTURE_OUTPUT"
-    done
-    grep -Fq 'audit-lint ignorepkg: 3 finding(s)' <<<"$FIXTURE_OUTPUT" ||
-        fail "C: wrong finding count (comment/pre-header/repo lines must not count): $FIXTURE_OUTPUT"
-
-    # Inline comments strip after the names; the names before '#' still count.
-    conf_comment=$tmp/conf-comment
-    cat >"$conf_comment" <<EOF
-[options]
-IgnorePkg = p1 # trailing comment
-IgnorePkg = q q-libs
-EOF
-    lint "$ws" ignorepkg "$conf_comment"
-    grep -Fq 'audit-lint ignorepkg: clean' <<<"$FIXTURE_OUTPUT" ||
-        fail "C: inline comments must strip after the names, got: $FIXTURE_OUTPUT"
-
-    # An [options] Include cannot be followed here: report it instead of
-    # silently under-counting the closure.
-    conf_include=$tmp/conf-include
-    cat >"$conf_include" <<EOF
-[options]
-Include = $tmp/extra.conf
-IgnorePkg = p1 q q-libs
-EOF
-    lint "$ws" ignorepkg "$conf_include"
-    grep -Fq "ignorepkg: $conf_include: [options] Include is not followed — inline its IgnorePkg entries into the file" \
-        <<<"$FIXTURE_OUTPUT" ||
-        fail "C: an [options] Include must be reported, got: $FIXTURE_OUTPUT"
-    grep -Fq 'audit-lint ignorepkg: 1 finding(s)' <<<"$FIXTURE_OUTPUT" ||
-        fail "C: the Include finding must be the only one when all names are covered, got: $FIXTURE_OUTPUT"
-
-    # Q17: the ONLY skip condition is an unreadable conf — and it says so.
-    lint "$ws" ignorepkg "$tmp/no-such.conf"
-    ((FIXTURE_RC == 0)) || fail "C: skip must stay report-only (rc=$FIXTURE_RC)"
-    grep -Fq "ignorepkg: skipped — $tmp/no-such.conf is not readable" <<<"$FIXTURE_OUTPUT" ||
-        fail "C: skip must name the unreadable conf, got: $FIXTURE_OUTPUT"
-    grep -Fq 'audit-lint ignorepkg: skipped' <<<"$FIXTURE_OUTPUT" ||
-        fail "C: skip must be visible in the verdict line, got: $FIXTURE_OUTPUT"
-    printf 'C: IgnorePkg semantics + skip OK\n'
-)
-
 # ─── D. --audit renders the lints and stays report-only (Q20) ────────────────
 (
     set -euo pipefail
@@ -302,7 +209,7 @@ EOF
     run_builder fish "$ws/build-all.fish" --audit
     ((FIXTURE_RC == 0)) ||
         fail "D: --audit must exit 0 even with findings (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
-    for heading in 'Provides versioning:' 'Purged tools:' 'IgnorePkg closure:'; do
+    for heading in 'Provides versioning:' 'Purged tools:'; do
         grep -Fq "$heading" <<<"$FIXTURE_OUTPUT" ||
             fail "D: --audit is missing the '$heading' section: $FIXTURE_OUTPUT"
     done
@@ -454,16 +361,6 @@ EOF
     grep -Fq 'audit-lint purged: clean' <<<"$FIXTURE_OUTPUT" ||
         fail "E: a purged tool re-entered the workspace: $FIXTURE_OUTPUT"
 
-    run_builder fish "$root/build-all.fish" --audit-lint ignorepkg
-    ((FIXTURE_RC == 0)) || fail "E: real-repo ignorepkg lint failed (rc=$FIXTURE_RC)"
-    if [[ -r /etc/pacman.conf ]]; then
-        grep -Fq 'audit-lint ignorepkg: clean' <<<"$FIXTURE_OUTPUT" ||
-            fail "E: a workspace pkgname is missing from the IgnorePkg closure: $FIXTURE_OUTPUT"
-    else
-        # Q17: the gate skips exactly here, and says so.
-        grep -Fq "ignorepkg: skipped — /etc/pacman.conf is not readable" <<<"$FIXTURE_OUTPUT" ||
-            fail "E: unreadable /etc/pacman.conf must produce the skip line, got: $FIXTURE_OUTPUT"
-    fi
     printf 'E: real-repo gates OK\n'
 )
 
@@ -578,4 +475,4 @@ EOF
 #      → assertion (4) red; reverse → green.
 # ─────────────────────────────────────────────────────────────────────────────
 
-printf 'recipe contract fixture: PASS (3 lint seams gated, name surface pinned, real-repo gates green)\n'
+printf 'recipe contract fixture: PASS (2 lint seams gated, name surface pinned, real-repo gates green)\n'

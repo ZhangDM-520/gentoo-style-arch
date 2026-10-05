@@ -85,6 +85,8 @@ make_vcs_workspace() { # $1 workspace; $2 remote path; $3 branch|tag; $4 ref;
     [[ $kind == default ]] || source+="#$kind=$ref"
     local extra="$gsa_meta_any"$'\n'"source=(\"$source\")"$'\n'"sha256sums=('SKIP')"
     make_workspace "$dir" 1 2 low
+    # Dynamic IgnorePkg registration target — never the host's /etc/pacman.conf.
+    make_install_conf "$dir/pacman.conf"
     add_package "$dir" p1 "$extra"
     # Keep the archive-mtime condition deterministic on the first build.
     touch -d '2000-01-01 00:00:00 UTC' "$dir/packages/p1/PKGBUILD"
@@ -220,6 +222,7 @@ run_case() { # $1 = workspace; remaining args = builder selection/flags
         SRCDEST="$dir/makepkg-srcdest" \
         GSA_FAKE_VCS_LAYOUT="${GSA_FAKE_VCS_LAYOUT:-root}" \
         GSA_STATE_DIR="$dir/state" \
+        _IGNOREPKG_CONF="$dir/pacman.conf" \
         GSA_FAKE_MAKEPKG_COUNT="$dir/makepkg.count" \
         GSA_FAKE_PACMAN_LOG="$dir/pacman.log" \
         GSA_FAKE_EXPECT_CLEAN="${GSA_FAKE_EXPECT_CLEAN:-0}" \
@@ -238,6 +241,8 @@ make_non_git_workspace() { # $1 = workspace; $2 = svn|hg|bzr; $3 = optional frag
     [[ -n $fragment ]] && source+="#$fragment"
     local extra="$gsa_meta_any"$'\n'"source=(\"$source\")"$'\n'"sha256sums=('SKIP')"
     make_workspace "$dir" 1 2 low
+    # Dynamic IgnorePkg registration target — never the host's /etc/pacman.conf.
+    make_install_conf "$dir/pacman.conf"
     add_package "$dir" p1 "$extra"
     touch -d '2000-01-01 00:00:00 UTC' "$dir/packages/p1/PKGBUILD"
 
@@ -1004,6 +1009,7 @@ assert_makepkg_count "$src_suffix/workspace" 1 'srcdir basename-style unchanged 
     split_dir=$fixture/split-set
     split_ws=$split_dir/workspace
     make_workspace "$split_ws" 1 2 low
+    make_install_conf "$split_ws/pacman.conf"
     mkdir -p "$split_ws/packages/p1"
     printf '%s\n' 'pkgname=(p1 p1-extra)' 'pkgver=1.0.0' 'pkgrel=1' 'arch=(any)' \
         >"$split_ws/packages/p1/PKGBUILD"
@@ -1047,6 +1053,7 @@ EOF
     trunc_dir=$fixture/truncated-archive
     trunc_ws=$trunc_dir/workspace
     make_workspace "$trunc_ws" 1 2 low
+    make_install_conf "$trunc_ws/pacman.conf"
     add_package "$trunc_ws" p1 "$gsa_meta_any"
     touch -d '2000-01-01 00:00:00 UTC' "$trunc_ws/packages/p1/PKGBUILD"
     cat >"$trunc_ws/bin/makepkg" <<'EOF'
@@ -1105,6 +1112,7 @@ EOF
     stale_dir=$fixture/stale-version
     stale_ws=$stale_dir/workspace
     make_workspace "$stale_ws" 1 2 low
+    make_install_conf "$stale_ws/pacman.conf"
     add_package "$stale_ws" p1 "$gsa_meta_any"
     touch -d '2000-01-01 00:00:00 UTC' "$stale_ws/packages/p1/PKGBUILD"
     cat >"$stale_ws/bin/makepkg" <<'EOF'

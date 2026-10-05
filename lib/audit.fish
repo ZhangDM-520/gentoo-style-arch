@@ -510,12 +510,12 @@ end
 # One implementation per rule, two consumers: audit_workspace renders these
 # into --audit's report and the hidden --audit-lint seam (bottom of this file)
 # runs one of them against the loaded workspace. tests/recipe-contract.sh is
-# the gating walker for provides/purged/ignorepkg, tests/swap-completeness.sh
+# the gating walker for provides/purged, tests/swap-completeness.sh
 # for swap. All four lints are REPORT-ONLY everywhere: a finding never
 # changes an exit status. Inputs are the committed .SRCINFO files — the
 # same metadata install/depends decisions read — PKGBUILD is never evaluated.
 #
-# Rules (docs/MEMORY.md provides discipline + purged tools + IgnorePkg closure):
+# Rules (docs/MEMORY.md provides discipline + purged tools):
 #   provides   the Q8 mapping scope is SONAME + NAME, and the two sides get
 #              opposite forms. SONAME: BARE stems only (`libfoo.so`, never
 #              `libfoo.so=2-64`: makepkg auto-versions a bare stem from the
@@ -537,12 +537,6 @@ end
 #              package providing its own name both stay unversioned.
 #   purged     host-purged tools must not re-enter through makedepends/
 #              checkdepends (makepkg reinstalls them silently).
-#   ignorepkg  every workspace pkgbase/pkgname must sit in the host's
-#              IgnorePkg closure, read the way pacman reads /etc/pacman.conf:
-#              repeated IgnorePkg lines inside [options] ACCUMULATE, and a
-#              line inside a repo section — or before any section — is
-#              dropped. An [options] Include cannot be followed here, so it
-#              is reported instead of silently under-counting the closure.
 #   swap       the stock→house swap must be COMPLETE: a pkgname with a VCS
 #              suffix (-git/-svn/-hg/-snapshot) must provide AND conflict its
 #              stock counterpart (strip the suffix), so pacman's `--ask 4`
@@ -727,77 +721,22 @@ function audit_lint_purged
     return 0
 end
 
-function audit_lint_ignorepkg -a conf
-    test -n "$conf"; or set conf /etc/pacman.conf
-    # Names under test: the documented closure is pkgbase+pkgname from every
-    # committed .SRCINFO (docs/MEMORY.md rule 9's verification procedure) —
-    # the shared parse's name rows, i.e. the ONE name surface _pkgname_index
-    # and abi_package_id_for_pkgname share (pkgbase + outputs).
-    set -l names
-    for row in (srcinfo_rows B) (srcinfo_rows N)
-        set -l fields (string split -m 1 '|' -- "$row")
-        set -a names "$fields[2]"
-    end
-    if test (count $names) -gt 0
-        set names (printf '%s\n' $names | sort -u)
-    end
-
-    if not test -r "$conf"
-        echo "ignorepkg: skipped — $conf is not readable"
-        return 0
-    end
-    # pacman.conf semantics: directives count only inside their section, so
-    # the section tracker starts OUTSIDE [options] — a line before any section
-    # header belongs to no section and is dropped, exactly like a repo
-    # section's IgnorePkg line.
-    set -l ignored
-    set -l findings
-    set -l in_options 0
-    for raw in (cat "$conf")
-        set -l line (string trim -- (string split -m1 '#' -- "$raw")[1])
-        test -n "$line"; or continue
-        if string match -qr '^\[.+\]$' -- "$line"
-            set -l sec (string replace -r '^\[(.+)\]$' '$1' -- "$line")
-            if test (string trim -- "$sec") = options
-                set in_options 1
-            else
-                set in_options 0
-            end
-            continue
-        end
-        test $in_options -eq 1; or continue
-        if string match -qr '^Include[[:space:]]*=' -- "$line"
-            set -a findings "ignorepkg: $conf: [options] Include is not followed — inline its IgnorePkg entries into the file"
-            continue
-        end
-        set -l m (string match -r -g '^IgnorePkg[[:space:]]*=[[:space:]]*(.*)$' -- "$line")
-        test (count $m) -ge 1; or continue
-        set -a ignored (string split -n ' ' -- (string replace -a \t ' ' -- $m[1]))
-    end
-    for name in $names
-        contains -- "$name" $ignored; and continue
-        set -a findings "ignorepkg: $name is not in the IgnorePkg closure of $conf"
-    end
-    if test (count $findings) -gt 0
-        printf '%s\n' $findings | sort -u
-    end
-    return 0
-end
-
 # ─── AUTO-REGISTER: the IgnorePkg mutation seam ──────────────────────────────
-# `--register-ignorepkg [conf]` (bottom of this file) is the WRITE half of
-# docs/MEMORY.md rule 9, paired with the read-only closure lint above: it
-# computes the workspace pkgname universe (pkgbase + every pkgname of each
-# committed .SRCINFO — never a PKGBUILD grep, the kernel hides its names) and
-# appends the names the target pacman.conf does not cover yet as cumulative
-# `IgnorePkg =` lines (~10 names/line) INSIDE [options] — after the last
-# existing IgnorePkg line there, or before the next section header. Idempotent:
-# a complete closure appends nothing. AUTO-REGISTER never auto-trusts — the
-# seam REFUSES (rc 1, nothing changed) whenever the universe cannot be
-# verified: a recipe directory with a missing/stale .SRCINFO is NAMED and
-# blocks the write (read_abi_exclusions' strict-loader contract: a silent gap
-# is exactly what the guard exists to prevent), and so does a target that is
-# not user-writable when `sudo -n` is unavailable (the builder NEVER prompts).
+# IgnorePkg is DYNAMIC since 2026-10-05: the install pipeline registers each
+# accepted archive's names at install time (register_ignorepkg_names below),
+# and `--register-ignorepkg [conf]` (dispatcher at the bottom of
+# build-all.fish) remains as the one-shot backfill over the whole workspace
+# universe (pkgbase + every pkgname of each committed .SRCINFO — never a
+# PKGBUILD grep, the kernel hides its names). Both paths share ONE write core:
+# append the missing names as cumulative `IgnorePkg =` lines (~10 names/line)
+# INSIDE [options] — after the last existing IgnorePkg line there, or before
+# the next section header. Idempotent: a complete closure appends nothing.
+# AUTO-REGISTER never auto-trusts — it REFUSES (rc 1, nothing changed) when
+# the name set cannot be verified (a missing/stale .SRCINFO is NAMED and
+# blocks the backfill write), or on a target that is not user-writable when
+# `sudo -n` is unavailable (the builder NEVER prompts). The static closure
+# lint that used to pair with this seam is RETIRED (2026-10-05): the contract
+# is now "registered at install time", not "pre-listed in the host conf".
 #
 # pacman_conf_ignorepkg_walk CONF — THE pacman.conf parser for the seam (the
 # lint above parses the same grammar for its report; this walk adds the
@@ -865,11 +804,210 @@ function pacman_conf_ignorepkg_walk -a conf
     end
 end
 
-# register_ignorepkg CONF — compute the workspace name universe, append the
-# missing names to CONF's [options] and verify the result. rc 0 = the closure
+# register_ignorepkg_names CONF SUBJECT NAMES... [-- FINDING...] — the ONE
+# names-driven write core, shared by the install pipeline's dynamic
+# registration (build-all.fish's install_register_ignorepkg) and the
+# --register-ignorepkg backfill wrapper below. Appends the NAMES the CONF's
+# [options] closure does not cover as cumulative `IgnorePkg =` lines and
+# verifies the result. SUBJECT is the phrase the report lines use to say
+# whose names these are ("universe N name(s) from M recipe(s)" for the
+# backfill, "N name(s) from M archive(s)" for the install path); FINDING...
+# (after a literal `--`) are caller-side findings that block the write
+# exactly like the walk's own. rc 0 = the closure covers NAMES afterwards
+# (nothing-to-append counts), 1 = refusal (nothing changed, or the post-check
+# caught a write that did not land), 2 = usage is the dispatcher's job.
+function register_ignorepkg_names -a conf subject
+    set -l rest $argv[3..-1]
+    set -l names $rest
+    set -l findings
+    if set -l sep (contains -i -- -- $rest)
+        set names $rest[1..(math $sep - 1)]
+        set findings $rest[(math $sep + 1)..-1]
+    end
+    test -n "$conf"; or set conf /etc/pacman.conf
+
+    if test (count $names) -gt 0
+        set names (printf '%s\n' $names | sort -u)
+    end
+
+    # ── parse the target exactly like pacman (the walk) ──────────────────
+    if not test -r "$conf"
+        echo "register-ignorepkg: cannot read $conf — nothing changed" >&2
+        return 1
+    end
+    set -l walk (pacman_conf_ignorepkg_walk "$conf")
+    set -l ignored
+    set -l repo_drops
+    set -l options_includes
+    set -l insert_before -1
+    if test (count $walk) -gt 0
+        set ignored (string match -r -g '^ignored (.+)$' -- $walk)
+        set repo_drops (string match -r -g '^repo-drop\t(.+)$' -- $walk)
+        set options_includes (string match -r -g '^options-include ([0-9]+)$' -- $walk)
+        set -l ib (string match -r -g '^insert-before ([0-9]+)$' -- $walk)
+        test (count $ib) -ge 1; and set insert_before $ib[1]
+    end
+    for drop in $repo_drops
+        set -l parts (string split \t -- $drop)
+        echo "register-ignorepkg: warning: $conf line $parts[1]: IgnorePkg inside repo section [$parts[2]] is dropped by pacman — move it into [options]"
+    end
+    for line in $options_includes
+        set -a findings "$conf line $line: [options] Include is not followed — inline its IgnorePkg entries into the file"
+    end
+    if test $insert_before -lt 0
+        set -a findings "$conf: no [options] section — IgnorePkg lines have nowhere to live"
+    end
+    if test (count $ignored) -gt 0
+        set ignored (printf '%s\n' $ignored | sort -u)
+    end
+
+    if test (count $findings) -gt 0
+        for finding in $findings
+            echo "register-ignorepkg: finding: $finding" >&2
+        end
+        echo "register-ignorepkg: $subject, closure "(count $ignored)" name(s) before, not modified" >&2
+        echo "register-ignorepkg: refusing to modify $conf — fix the findings first" >&2
+        return 1
+    end
+
+    # ── 3. missing set: the universe names the closure does not cover ────
+    set -l missing
+    for name in $names
+        contains -- "$name" $ignored; or set -a missing "$name"
+    end
+
+    # ── 4. write path (only when something is missing) ───────────────────
+    # Escalate with sudo -n ONLY — the builder never prompts: a dead
+    # credential fails fast with nothing changed. A user-writable target
+    # (every fixture path) never touches sudo at all.
+    if test (count $missing) -gt 0
+        set -l need_sudo 0
+        if not test -w "$conf"; or not test -w (dirname -- "$conf")
+            set need_sudo 1
+        end
+        if test $need_sudo -eq 1
+            if not sudo -n true 2>/dev/null
+                echo "register-ignorepkg: sudo cannot modify $conf non-interactively — nothing changed" >&2
+                return 1
+            end
+        end
+        # Dated pre-image backup before the first modification. An existing
+        # identical backup is left alone (crash-window recovery); a differing
+        # one is never overwritten — it is the day's original pre-image.
+        set -l backup "$conf.bak-"(date +%Y%m%d)
+        if test -e "$backup"
+            if command cmp -s -- "$conf" "$backup"
+                echo "register-ignorepkg: backup $backup already present (identical pre-image)"
+            else
+                # The dated file is the day's ORIGINAL pre-image: kept as the
+                # restore point, never rewritten, and never a reason to refuse
+                # (2026-10-05). The dynamic install-time registration runs on
+                # EVERY install, so a backup that differs from the conf is the
+                # normal state after the first write of the day — the earlier
+                # refusal made every later registration fail on it.
+                echo "register-ignorepkg: backup $backup already present (kept as the day's pre-image)"
+            end
+        else if test $need_sudo -eq 1
+            if not sudo -n cp -p -- "$conf" "$backup"
+                echo "register-ignorepkg: cannot write backup $backup — nothing changed" >&2
+                return 1
+            end
+            echo "register-ignorepkg: backup $backup (pre-image)"
+        else
+            if not command cp -p -- "$conf" "$backup"
+                echo "register-ignorepkg: cannot write backup $backup — nothing changed" >&2
+                return 1
+            end
+            echo "register-ignorepkg: backup $backup (pre-image)"
+        end
+        # ~10 names per cumulative line, in the universe's sorted order.
+        set -l new_lines
+        set -l idx 1
+        set -l total (count $missing)
+        while test $idx -le $total
+            set -l last (math $idx + 9)
+            test $last -gt $total; and set last $total
+            set -a new_lines "IgnorePkg = "(string join ' ' $missing[$idx..$last])
+            set idx (math $idx + 10)
+        end
+        set -l tmpfile (mktemp)
+        if test -z "$tmpfile"
+            echo "register-ignorepkg: cannot allocate a scratch file — nothing changed" >&2
+            return 1
+        end
+        if test $insert_before -gt 0
+            command head -n (math $insert_before - 1) -- "$conf" >"$tmpfile"
+            printf '%s\n' $new_lines >>"$tmpfile"
+            command tail -n +"$insert_before" -- "$conf" >>"$tmpfile"
+        else
+            command cat -- "$conf" >"$tmpfile"
+            # a conf without a trailing newline must not swallow the first
+            # appended line
+            if test (command tail -c 1 -- "$conf" | command wc -l) -eq 0
+                printf '\n' >>"$tmpfile"
+            end
+            printf '%s\n' $new_lines >>"$tmpfile"
+        end
+        # NOTE: `set -l` is BLOCK-scoped in fish — cp_rc must be declared
+        # outside the if/else below to survive its `end`.
+        set -l cp_rc 0
+        if test $need_sudo -eq 1
+            sudo -n cp -- "$tmpfile" "$conf"
+            set cp_rc $status
+        else
+            command cp -- "$tmpfile" "$conf"
+            set cp_rc $status
+        end
+        command rm -f -- "$tmpfile"
+        if test $cp_rc -ne 0
+            echo "register-ignorepkg: cannot write $conf" >&2
+            return 1
+        end
+        echo "register-ignorepkg: $subject, closure "(count $ignored)" name(s) before, appended $total name(s) as "(count $new_lines)" IgnorePkg line(s)"
+    else
+        echo "register-ignorepkg: $subject, closure "(count $ignored)" name(s) before, no changes needed"
+    end
+
+    # ── 5. post-condition: comm -23(universe, closure-after) must be empty ─
+    # The verification RE-READS the file through the same pacman parser — the
+    # write is only done when the closure it ships is provably complete.
+    set -l walk_after (pacman_conf_ignorepkg_walk "$conf")
+    set -l ignored_after
+    if test (count $walk_after) -gt 0
+        set ignored_after (string match -r -g '^ignored (.+)$' -- $walk_after)
+    end
+    set -l scratch (mktemp -d)
+    if test -n "$scratch"
+        if test (count $names) -gt 0
+            printf '%s\n' $names | sort -u >"$scratch/universe"
+        else
+            printf '' >"$scratch/universe"
+        end
+        if test (count $ignored_after) -gt 0
+            printf '%s\n' $ignored_after | sort -u >"$scratch/closure"
+        else
+            printf '' >"$scratch/closure"
+        end
+        set -l missing_after (command comm -23 "$scratch/universe" "$scratch/closure")
+        command rm -rf -- "$scratch"
+        if test (count $missing_after) -eq 0
+            echo "register-ignorepkg: verification comm -23 (universe vs closure after): empty"
+            return 0
+        end
+        echo "register-ignorepkg: verification comm -23 (universe vs closure after):"
+        printf '%s\n' $missing_after
+        return 1
+    end
+    echo "register-ignorepkg: cannot allocate scratch for the verification — re-run to verify" >&2
+    return 1
+end
+
+# register_ignorepkg CONF — the --register-ignorepkg backfill: compute the
+# workspace name universe, append the missing names to CONF's [options] and
+# verify the result, through the names-driven core above. rc 0 = the closure
 # is complete afterwards (nothing-to-append counts), 1 = refusal (nothing
 # changed, or the post-check caught a write that did not land), 2 = usage is
-# the dispatcher's job. See the seam comment at the bottom of this file.
+# the dispatcher's job. See the seam comment at the bottom of build-all.fish.
 function register_ignorepkg -a conf
     test -n "$conf"; or set conf /etc/pacman.conf
 
@@ -948,171 +1086,8 @@ function register_ignorepkg -a conf
         set names (printf '%s\n' $names | sort -u)
     end
 
-    # ── 2. parse the target exactly like pacman (the walk) ───────────────
-    if not test -r "$conf"
-        echo "register-ignorepkg: cannot read $conf — nothing changed" >&2
-        return 1
-    end
-    set -l walk (pacman_conf_ignorepkg_walk "$conf")
-    set -l ignored
-    set -l repo_drops
-    set -l options_includes
-    set -l insert_before -1
-    if test (count $walk) -gt 0
-        set ignored (string match -r -g '^ignored (.+)$' -- $walk)
-        set repo_drops (string match -r -g '^repo-drop\t(.+)$' -- $walk)
-        set options_includes (string match -r -g '^options-include ([0-9]+)$' -- $walk)
-        set -l ib (string match -r -g '^insert-before ([0-9]+)$' -- $walk)
-        test (count $ib) -ge 1; and set insert_before $ib[1]
-    end
-    for drop in $repo_drops
-        set -l parts (string split \t -- $drop)
-        echo "register-ignorepkg: warning: $conf line $parts[1]: IgnorePkg inside repo section [$parts[2]] is dropped by pacman — move it into [options]"
-    end
-    for line in $options_includes
-        set -a findings "$conf line $line: [options] Include is not followed — inline its IgnorePkg entries into the file"
-    end
-    if test $insert_before -lt 0
-        set -a findings "$conf: no [options] section — IgnorePkg lines have nowhere to live"
-    end
-    if test (count $ignored) -gt 0
-        set ignored (printf '%s\n' $ignored | sort -u)
-    end
-
-    if test (count $findings) -gt 0
-        for finding in $findings
-            echo "register-ignorepkg: finding: $finding" >&2
-        end
-        echo "register-ignorepkg: universe "(count $names)" name(s) from $recipe_count recipe(s), closure "(count $ignored)" name(s) before, not modified" >&2
-        echo "register-ignorepkg: refusing to modify $conf — fix the findings first" >&2
-        return 1
-    end
-
-    # ── 3. missing set: the universe names the closure does not cover ────
-    set -l missing
-    for name in $names
-        contains -- "$name" $ignored; or set -a missing "$name"
-    end
-
-    # ── 4. write path (only when something is missing) ───────────────────
-    # Escalate with sudo -n ONLY — the builder never prompts: a dead
-    # credential fails fast with nothing changed. A user-writable target
-    # (every fixture path) never touches sudo at all.
-    if test (count $missing) -gt 0
-        set -l need_sudo 0
-        if not test -w "$conf"; or not test -w (dirname -- "$conf")
-            set need_sudo 1
-        end
-        if test $need_sudo -eq 1
-            if not sudo -n true 2>/dev/null
-                echo "register-ignorepkg: sudo cannot modify $conf non-interactively — nothing changed" >&2
-                return 1
-            end
-        end
-        # Dated pre-image backup before the first modification. An existing
-        # identical backup is left alone (crash-window recovery); a differing
-        # one is never overwritten — it is the day's original pre-image.
-        set -l backup "$conf.bak-"(date +%Y%m%d)
-        if test -e "$backup"
-            if command cmp -s -- "$conf" "$backup"
-                echo "register-ignorepkg: backup $backup already present (identical pre-image)"
-            else
-                echo "register-ignorepkg: refusing to modify $conf — backup $backup already exists with different content; move it aside first" >&2
-                return 1
-            end
-        else if test $need_sudo -eq 1
-            if not sudo -n cp -p -- "$conf" "$backup"
-                echo "register-ignorepkg: cannot write backup $backup — nothing changed" >&2
-                return 1
-            end
-            echo "register-ignorepkg: backup $backup (pre-image)"
-        else
-            if not command cp -p -- "$conf" "$backup"
-                echo "register-ignorepkg: cannot write backup $backup — nothing changed" >&2
-                return 1
-            end
-            echo "register-ignorepkg: backup $backup (pre-image)"
-        end
-        # ~10 names per cumulative line, in the universe's sorted order.
-        set -l new_lines
-        set -l idx 1
-        set -l total (count $missing)
-        while test $idx -le $total
-            set -l last (math $idx + 9)
-            test $last -gt $total; and set last $total
-            set -a new_lines "IgnorePkg = "(string join ' ' $missing[$idx..$last])
-            set idx (math $idx + 10)
-        end
-        set -l tmpfile (mktemp)
-        if test -z "$tmpfile"
-            echo "register-ignorepkg: cannot allocate a scratch file — nothing changed" >&2
-            return 1
-        end
-        if test $insert_before -gt 0
-            command head -n (math $insert_before - 1) -- "$conf" >"$tmpfile"
-            printf '%s\n' $new_lines >>"$tmpfile"
-            command tail -n +"$insert_before" -- "$conf" >>"$tmpfile"
-        else
-            command cat -- "$conf" >"$tmpfile"
-            # a conf without a trailing newline must not swallow the first
-            # appended line
-            if test (command tail -c 1 -- "$conf" | command wc -l) -eq 0
-                printf '\n' >>"$tmpfile"
-            end
-            printf '%s\n' $new_lines >>"$tmpfile"
-        end
-        # NOTE: `set -l` is BLOCK-scoped in fish — cp_rc must be declared
-        # outside the if/else below to survive its `end`.
-        set -l cp_rc 0
-        if test $need_sudo -eq 1
-            sudo -n cp -- "$tmpfile" "$conf"
-            set cp_rc $status
-        else
-            command cp -- "$tmpfile" "$conf"
-            set cp_rc $status
-        end
-        command rm -f -- "$tmpfile"
-        if test $cp_rc -ne 0
-            echo "register-ignorepkg: cannot write $conf" >&2
-            return 1
-        end
-        echo "register-ignorepkg: universe "(count $names)" name(s) from $recipe_count recipe(s), closure "(count $ignored)" name(s) before, appended $total name(s) as "(count $new_lines)" IgnorePkg line(s)"
-    else
-        echo "register-ignorepkg: universe "(count $names)" name(s) from $recipe_count recipe(s), closure "(count $ignored)" name(s) before, no changes needed"
-    end
-
-    # ── 5. post-condition: comm -23(universe, closure-after) must be empty ─
-    # The verification RE-READS the file through the same pacman parser — the
-    # write is only done when the closure it ships is provably complete.
-    set -l walk_after (pacman_conf_ignorepkg_walk "$conf")
-    set -l ignored_after
-    if test (count $walk_after) -gt 0
-        set ignored_after (string match -r -g '^ignored (.+)$' -- $walk_after)
-    end
-    set -l scratch (mktemp -d)
-    if test -n "$scratch"
-        if test (count $names) -gt 0
-            printf '%s\n' $names | sort -u >"$scratch/universe"
-        else
-            printf '' >"$scratch/universe"
-        end
-        if test (count $ignored_after) -gt 0
-            printf '%s\n' $ignored_after | sort -u >"$scratch/closure"
-        else
-            printf '' >"$scratch/closure"
-        end
-        set -l missing_after (command comm -23 "$scratch/universe" "$scratch/closure")
-        command rm -rf -- "$scratch"
-        if test (count $missing_after) -eq 0
-            echo "register-ignorepkg: verification comm -23 (universe vs closure after): empty"
-            return 0
-        end
-        echo "register-ignorepkg: verification comm -23 (universe vs closure after):"
-        printf '%s\n' $missing_after
-        return 1
-    end
-    echo "register-ignorepkg: cannot allocate scratch for the verification — re-run to verify" >&2
-    return 1
+    set -l subject "universe "(count $names)" name(s) from $recipe_count recipe(s)"
+    register_ignorepkg_names "$conf" "$subject" $names -- $findings
 end
 
 function audit_lint_swap
@@ -1345,17 +1320,6 @@ function audit_workspace
         echo "  none"
     else
         for finding in $purged_findings
-            echo "  $finding"
-        end
-    end
-
-    echo ""
-    echo "IgnorePkg closure:"
-    set -l ignorepkg_findings (audit_lint_ignorepkg '')
-    if test (count $ignorepkg_findings) -eq 0
-        echo "  none"
-    else
-        for finding in $ignorepkg_findings
             echo "  $finding"
         end
     end

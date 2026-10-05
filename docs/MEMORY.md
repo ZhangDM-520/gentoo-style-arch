@@ -130,35 +130,40 @@
    it; dropping only the output leaves the stage that produces it. Check:
    `fish build-all.fish --audit-lint purged` + the `# trim:` annotations at
    every removal site. (last reviewed 2026-10-04)
-9. **IgnorePkg closure**: every workspace pkgname must be in /etc/pacman.conf
-   IgnorePkg (cumulative repeated `IgnorePkg =` lines, all inside
-   `[options]` — a line in a repo section is silently dropped). Verify by
-   unioning pkgbase+pkgname[] from each committed `.SRCINFO` — the audit must
-   read `.SRCINFO`, never grep the PKGBUILD (the kernel's
-   `pkgbase="linux-$_pkgsuffix"` hides the real names) — and diffing with
-   `comm -23` against `pacman-conf IgnorePkg | sort -u` (empty = covered;
-   `pacman-conf` reads the file directly and needs no database lock). Since
-   2026-09-26 `--audit` carries a report-only closure gate that reads
-   /etc/pacman.conf directly with the same [options]-cumulative semantics
-   and skips only when the conf is unreadable (seam: `--audit-lint ignorepkg
-   [conf]`; it informs, never blocks a build).
-   Write half since 2026-10-04 (`fish build-all.fish --register-ignorepkg
-   [<path>]`): computes the pkgbase+pkgname universe from the committed
-   `.SRCINFO`s (never a PKGBUILD grep) and appends the missing names as
-   cumulative `IgnorePkg =` lines inside `[options]` only, using the
-   pacman-exact parse (a repo-section line is dropped by pacman and warned
-   about loudly). rc 0 = the closure is complete afterwards
-   (nothing-to-append counts), 1 = refusal with nothing changed (a
-   missing/stale `.SRCINFO` is named as the blocker; target not writable with
-   `sudo -n` unavailable — the builder never prompts; or the post-check caught
-   a write that did not land), 2 = usage. Idempotent, dated pre-image backups
-   that must match byte-for-byte before a re-run writes over one. Auto-register
-   never auto-trusts: any unverifiable universe refuses rather than writing a
-   partial closure, and the post-write `comm -23` verification is part of the
-   seam. Check: `fish build-all.fish --register-ignorepkg` then
-   `fish build-all.fish --audit-lint ignorepkg`, pinned by
-   `tests/ignorepkg-register.sh` (9/9 with falsification).
-   (last reviewed 2026-10-04)
+9. **IgnorePkg registration is dynamic** — the static closure contract
+   ("every workspace pkgname must appear in the host conf") is retired
+   2026-10-05. An install run (`-i`/`-fi`/`-ia`) registers the
+   pkgbase+pkgname of every ACCEPTED archive (install rows AND skip rows)
+   into the `[options]` `IgnorePkg` closure of the target pacman.conf
+   (`/etc/pacman.conf` by default, `_IGNOREPKG_CONF` seam) before
+   `pacman -U` runs. Name sources per archive, in authority order: the
+   archive's own `.PKGINFO` `pkgbase`/`pkgname` lines, else the recipe
+   directory beside the archive (house layout PKGDEST=$startdir): the
+   committed `.SRCINFO` pkgbase+pkgname, else the evaluated PKGBUILD. An
+   archive whose names cannot be established REFUSES the install (fail-closed,
+   never a silent skip). The conf rewrite is deferred until the pacman
+   database lock clears (bounded wait, default 300 s, `_PACMAN_LOCK_WAIT_S`)
+   and the lock is NEVER deleted; a wait timeout or registration failure
+   refuses the install before any transaction runs. `--no-register-ignorepkg`
+   skips the step loudly (deliberate escape hatch, mirrored into the resume
+   continuation arguments). A dated pre-image backup `<conf>.bak-YYYYMMDD` is
+   written before the first modification of the day, never rewritten
+   afterwards, never blocking a later write.
+   `fish build-all.fish --register-ignorepkg [pacman-conf]` remains a one-shot
+   BACKFILL of an existing conf (it computes the pkgbase+pkgname universe
+   from the committed `.SRCINFO`s — never a PKGBUILD grep: the kernel's
+   `pkgbase="linux-$_pkgsuffix"` hides the real names — and writes the same
+   closure); the write half lives in `lib/audit.fish`'s
+   `register_ignorepkg_names`. The static lint is GONE: `--audit` no longer
+   prints an "IgnorePkg closure:" section, and the hidden seam is
+   `--audit-lint <provides|purged|swap|abi-closure|abi-exposure>`.
+   Check the closure the way pacman READS it: repeated `IgnorePkg =` lines
+   inside `[options]` are cumulative, a line inside a repo section is
+   silently dropped — diff the pkgbase+pkgname universe against
+   `pacman-conf IgnorePkg | sort -u` with `comm -23` (empty = covered;
+   `pacman-conf` reads the file directly and needs no database lock). Pinned
+   by `tests/ignorepkg-register.sh`.
+   (last reviewed 2026-10-05)
 10. **Logs**: append one `## YYYY-MM-DD — topic` section per incident to
     NOTE.md: symptom → root cause → fix → rule.
 11. **Install-before-dependents-compile**: never build-then-install-collectively.
@@ -646,7 +651,12 @@ pkgbase-only names with an announced substitution); lint/audit I-O goes
 through the shared tagged parses (`srcinfo_rows`, `pkgbuild_scan_rows`) —
 never fork per recipe; keyed maps use `_topo_key` (the only key scheme), and
 dispatch readiness is O(1) markers tail-synced from append-only lane-state
-lists. Recipe evaluation failure is never "no sources": callers use
+lists. Pre-dispatch phase boundaries honour the interrupt latch
+(`abort_before_dispatch`, 2026-10-05): every phase before the first dispatch
+must check it and abort into the interrupt run record, and the ABI gate +
+install-ABI helpers must stay keyed/memoized — their per-name probe argv
+shapes (`pacman -Q NAME` positionally for `abi_id_installed`) are
+fixture-pinned contracts. Recipe evaluation failure is never "no sources": callers use
 `pkgbuild_array_checked` (rc 2 = failure), which never licenses a freshness
 claim. Lane results carry a named vocabulary:
 `lane_outcome_{ok 0, failed 1, defer 99, lost 125, hup 129, int 130, term
@@ -1039,6 +1049,21 @@ constant, not a baked path).
 
 ## 6. Pitfall digest (full details: NOTE.md sections of same dates)
 
+- **Fixture stub argv shapes ARE the contract** (2026-10-05): routing a raw
+  probe through a helper is safe only when the forked argv is char-for-char
+  identical — adding `--` to `pacman -Q NAME` silently disabled the ABI-batch
+  refusal path, and only refusal-shaped scenarios (§B-style) could catch it.
+  Probe-count oracles must therefore be separator-agnostic (`OP [--] NAME`),
+  and a changed probe argv needs a fixture re-run, not just a green subset.
+- **`count $list` in a hot loop head is O(list)** (2026-10-05): fish `count`
+  is O(1) but its argv EXPANSION is not — a BFS `while test $qhead -le (count
+  $queue)` head cost 38 s across 19 822 iterations. Cache the length and
+  maintain it at the append sites.
+- **Fixture scale pins are probe/CALL counts, never wall-clock** (2026-10-05):
+  and any step that must follow a phase start waits on an EVENT (marker file,
+  log line), never a sleep — `tests/run-record.sh` scenario 5's `sleep 1.5`
+  raced the pre-dispatch phase under battery parallelism and flaked into the
+  pre-dispatch-interrupt outcome (itself correct, pinned by signal-abort-lock).
 - **`set -n` + `string match -r` name sweeps erase NOTHING unless the pattern
   matches the whole name and has no capture groups** (2026-10-05, one defect
   with two faces): `string match -r` prints only the matched *portion* (a
@@ -1597,7 +1622,8 @@ constant, not a baked path).
   drifted **32 names short** again (2026-09-19: the three
   `linux-cachyos-rt-bore-lto*` outputs, all 30 `texlive-*` splits, and more —
   221 → 253 entries, fixed same day). Keep the closure diff empty after
-  adding any package (audit method in golden rule 9). Back up
+  adding any package (check method in golden rule 9; registration is dynamic
+  since 2026-10-05 — an install run registers accepted archives itself). Back up
   `/etc/pacman.conf` before editing it — the file accumulates repeated
   `IgnorePkg =` lines and a mistake is silent until `-Syu` replaces a house
   package.

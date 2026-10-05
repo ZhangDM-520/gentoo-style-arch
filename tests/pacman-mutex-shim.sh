@@ -39,6 +39,9 @@ fail() {
 
 make_workspace "$fixture" auto auto xhigh
 add_package "$fixture" p1 $'pkgver=1.0\npkgrel=1\narch=(x86_64)'
+# Dynamic IgnorePkg registration target — never the host's /etc/pacman.conf
+# (the battery must be non-mutating).
+make_install_conf "$fixture/pacman.conf"
 
 cat >"$fixture/bin/makepkg" <<'EOF'
 #!/usr/bin/env bash
@@ -110,6 +113,7 @@ run_rc=0
 run_output=$(
     env PATH="$fixture/bin:$PATH" \
         GSA_STATE_DIR="$state" \
+        _IGNOREPKG_CONF="$fixture/pacman.conf" \
         GSA_FAKE_DB_PATH="$state/var/pacman" \
         GSA_FAKE_MARKER_DIR="$state/built" \
         GSA_FAKE_PACMAN_ENV_LOG="$state/pacman-env.log" \
@@ -240,6 +244,7 @@ creator=$!
 run_output2=$(
     env PATH="$fixture/bin:$PATH" \
         GSA_STATE_DIR="$state2" \
+        _IGNOREPKG_CONF="$fixture/pacman.conf" \
         GSA_FAKE_DB_PATH="$state2/var/pacman" \
         GSA_FAKE_MARKER_DIR="$state2/built" \
         GSA_FAKE_PACMAN_ENV_LOG="$state2/pacman-env.log" \

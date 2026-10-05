@@ -38,10 +38,17 @@
 #   GSA_FAKE_CHOWN_LOG         log-ownership chown stub: invocation log
 #   GSA_FAKE_DATE_COUNTER      sudo-keepalive fake `date`: virtual-clock counter
 #   GSA_FAKE_DB_PATH           pacman-conf stub's DBPath answer (pacman-mutex-shim,
-#                              signal-abort-lock) — never the host's real db.lck
+#                              signal-abort-lock, ignorepkg-register) — never the
+#                              host's real db.lck
+#   GSA_FAKE_DB_SEED           ignorepkg-register makepkg stub: drop a db.lck at
+#                              build end (the registration's bounded lock wait)
 #   GSA_FAKE_DIR               stub scratch dir for curl/updpkgsums/makepkg call
 #                              logs (anchor-defer, stable-sync-checksums)
 #   GSA_FAKE_DURATIONS         scheduler-core-solo: per-package duration table
+#   GSA_FAKE_EXPECT_CONF       ignorepkg-register pacman stub: conf the `pacman -U`
+#                              oracle reads at transaction time
+#   GSA_FAKE_EXPECT_NAMES      that oracle's names (space-separated) that the conf
+#                              must already cover when the transaction runs
 #   GSA_FAKE_FAIL_PACKAGE      trivial makepkg stub: package id whose build must
 #                              fail (was GSA_FAIL_PACKAGE)
 #   GSA_FAKE_GCC_VERSION       toolchain-drift's gcc stub: reported compiler
@@ -114,6 +121,25 @@ gsa_repo_root=$(cd "$_gsa_lib_dir/../.." && pwd)
 # ($id-1.0.0-1-any); a fixture whose stubs assume something else passes its own
 # lines instead.
 gsa_meta_any=$'pkgver=1.0.0\npkgrel=1\narch=(any)'
+
+# make_install_conf PATH — the synthetic pacman.conf an INSTALL-path fixture
+# passes to the builder as `_IGNOREPKG_CONF=<path>`. The dynamic IgnorePkg
+# registration (2026-10-05) rewrites the target's [options] closure before
+# pacman -U runs; without this seam the target is the HOST's /etc/pacman.conf,
+# which no fixture may ever write. Point it at a per-FIXTURE (in practice
+# per-run, since a fixture may stage several cases) file: the battery runs
+# fixtures in parallel and registration is a read-modify-write with a dated
+# pre-image backup, so one shared target would race and refuse on the backup.
+# The file needs a real [options] section or the registration refuses — a
+# fixture whose install must SUCCEED wants this skeleton, not a hand-rolled one.
+make_install_conf() {
+    cat >"$1" <<'EOF'
+# synthetic pacman.conf — this fixture's dynamic IgnorePkg registration target
+# (_IGNOREPKG_CONF), never the host's /etc/pacman.conf
+[options]
+HoldPkg = pacman glibc
+EOF
+}
 
 # make_workspace DIR [lanes [jobs [intensity]]]
 # Minimal but fully valid workspace skeleton: the loader validates every

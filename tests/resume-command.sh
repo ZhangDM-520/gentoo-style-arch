@@ -21,6 +21,9 @@ trap 'rm -rf -- "$fixture"' EXIT
 make_case_workspace() { # $1 = sandbox dir
     local dir=$1 id
     make_workspace "$dir" 1 2 low
+    # Dynamic IgnorePkg registration target — per-case, never the host's
+    # /etc/pacman.conf (the battery must be non-mutating).
+    make_install_conf "$dir/pacman.conf"
     for id in p1 p2 p3; do
         add_package "$dir" "$id" $'pkgver=1.0.0\npkgrel=1\narch=(any)'
     done
@@ -37,6 +40,7 @@ run_expecting_failure() {
     RESUME_OUTPUT=$(
         PATH="$dir/bin:$PATH" \
             GSA_STATE_DIR="$dir/state" \
+            _IGNOREPKG_CONF="$dir/pacman.conf" \
             GSA_FAKE_PACMAN_LOG="$dir/pacman.log" \
             GSA_FAKE_FAIL_PACKAGE=p2 \
             GSA_CPU_THREADS=8 \
@@ -176,6 +180,7 @@ fi
 (
     dir="$fixture/plan-refusal"
     make_workspace "$dir" 1 2 low
+    make_install_conf "$dir/pacman.conf"
     add_package "$dir" p1 $'pkgver=1.0.0\npkgrel=1\narch=(any)'
     add_package "$dir" p2 $'pkgver=1.0.0\npkgrel=1\narch=(any)\npkgname=(p2 p2-extra)'
     add_package "$dir" p3 $'pkgver=1.0.0\npkgrel=1\narch=(any)'
@@ -196,6 +201,7 @@ EOF
     RESUME_OUTPUT=$(
         PATH="$dir/bin:$PATH" \
             GSA_STATE_DIR="$dir/state" \
+            _IGNOREPKG_CONF="$dir/pacman.conf" \
             GSA_FAKE_PACMAN_LOG="$dir/pacman.log" \
             GSA_CPU_THREADS=8 \
             GSA_MEMORY_GIB=16 \

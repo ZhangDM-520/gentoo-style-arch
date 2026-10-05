@@ -41,6 +41,9 @@ fail() {
 make_case_workspace() {
     local dir=$1
     make_workspace "$dir" 1 2 low
+    # Dynamic IgnorePkg registration target — per-case, never the host's
+    # /etc/pacman.conf (the battery must be non-mutating).
+    make_install_conf "$dir/pacman.conf"
     add_package "$dir" p1 "$gsa_meta_any"
     stub_makepkg "$dir"
     stub_sudo "$dir"
@@ -77,6 +80,7 @@ run_install() {
     run_builder env \
         PATH="$dir/bin:$PATH" \
         GSA_STATE_DIR="$dir/state" \
+        _IGNOREPKG_CONF="$dir/pacman.conf" \
         GSA_FAKE_PACMAN_LOG="$dir/pacman.log" \
         GSA_FAKE_DB_PATH="$dir/db" \
         GSA_CPU_THREADS=8 \
@@ -142,6 +146,7 @@ DECIDE_RC=0
 DECIDE_OUT=$(env PATH="$dir_c/bin:$PATH" \
     GSA_FAKE_PACMAN_LOG="$dir_c/pacman.log" \
     GSA_FAKE_DB_PATH="$dir_c/db" \
+    _IGNOREPKG_CONF="$dir_c/pacman.conf" \
     fish "$dir_c/build-all.fish" --install-decide checked 2>"$dir_c/decide.err") || DECIDE_RC=$?
 [[ $DECIDE_RC == 1 && $DECIDE_OUT == $'refuse\tempty-list' ]] ||
     fail "C1: seam must print 'refuse<TAB>empty-list' and rc 1, got rc=$DECIDE_RC out=$DECIDE_OUT"
@@ -166,6 +171,7 @@ DECIDE_RC=0
 DECIDE_OUT=$(env PATH="$dir_c/bin:$PATH" \
     GSA_FAKE_PACMAN_LOG="$dir_c/pacman.log" \
     GSA_FAKE_DB_PATH="$dir_c/db" \
+    _IGNOREPKG_CONF="$dir_c/pacman.conf" \
     fish "$dir_c/build-all.fish" --install-decide force "$arch" 2>"$dir_c/decide.err") || DECIDE_RC=$?
 expected=$'refuse\tpgo-hit\t'"$arch"$'\t./usr/bin/p2\nrefuse\tpgo-instrumented\t'"$arch"
 [[ $DECIDE_RC == 1 && $DECIDE_OUT == "$expected" ]] ||

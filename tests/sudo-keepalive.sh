@@ -118,9 +118,11 @@ run_output=""
 run_scenario() {
     local state=$1 mode=$2 build_s=${3:-1.2}
     mkdir -p "$fixture/state-$state"
+    make_install_conf "$fixture/state-$state/pacman.conf" # this case's IgnorePkg registration target (never the host's)
     run_builder env \
         PATH="$fixture/bin:$PATH" \
         GSA_STATE_DIR="$fixture/state-$state" \
+        _IGNOREPKG_CONF="$fixture/state-$state/pacman.conf" \
         GSA_FAKE_SUDO_MODE="$mode" \
         GSA_FAKE_SUDO_LOG="$fixture/state-$state/sudo.log" \
         GSA_FAKE_SUDO_STATE="$fixture/state-$state" \
@@ -235,12 +237,14 @@ fi
 #    -v` in the log — a prompt attempt is the regression this pins).
 if command -v script >/dev/null 2>&1; then
     mkdir -p "$fixture/state-tty-cold"
+    make_install_conf "$fixture/state-tty-cold/pacman.conf" # this case's IgnorePkg registration target (never the host's)
     pty_rc=0
     pty_output=$(
         script -qec "PATH=\"$fixture/bin:\$PATH\" GSA_STATE_DIR='$fixture/state-tty-cold' \
 GSA_FAKE_SUDO_MODE=cold GSA_FAKE_SUDO_LOG='$fixture/state-tty-cold/sudo.log' \
 GSA_FAKE_SUDO_STATE='$fixture/state-tty-cold' GSA_FAKE_DATE_COUNTER='$fixture/state-tty-cold/clock' \
 GSA_FAKE_MARKER_DIR='$fixture/state-tty-cold/built' GSA_FAKE_BUILD_SECONDS=1.2 \
+_IGNOREPKG_CONF='$fixture/state-tty-cold/pacman.conf' \
 fish '$fixture/build-all.fish' --allow-broken-rustc --no-deps --no-sync \
 --lanes 2 --jobs 2 --install ${ids[*]}" /dev/null 2>&1
     ) || pty_rc=$?

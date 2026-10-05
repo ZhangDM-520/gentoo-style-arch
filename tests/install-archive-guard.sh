@@ -20,6 +20,9 @@ trap 'rm -rf -- "$fixture"' EXIT
 make_case_workspace() { # $1 = sandbox dir, $2 = pkgver line in the PKGBUILD
     local dir=$1 pkgver_line=$2
     make_workspace "$dir" 1 2 low
+    # Dynamic IgnorePkg registration target — per-case, never the host's
+    # /etc/pacman.conf (the battery must be non-mutating).
+    make_install_conf "$dir/pacman.conf"
 
     # The trailing comment is the whole point of case A: it is legal PKGBUILD
     # syntax and the builder must read the VALUE, not the line. It rides in as
@@ -93,6 +96,7 @@ run_case() { # $1 = dir, $2 = extra env NAME=VALUE ...
     run_builder env "$@" \
         PATH="$dir/bin:$PATH" \
         GSA_STATE_DIR="$dir/state" \
+        _IGNOREPKG_CONF="$dir/pacman.conf" \
         GSA_FAKE_PACMAN_LOG="$dir/pacman.log" \
         GSA_FAKE_MAKEPKG_COUNT="$dir/makepkg.count" \
         GSA_CPU_THREADS=8 \
@@ -420,6 +424,7 @@ decide() { # $1 = dir, $2 = mode, $3 = label, rest = archives; env via decide_en
     env PATH="$dir/bin:$PATH" \
         GSA_FAKE_PACMAN_LOG="$dir/pacman.log" \
         GSA_FAKE_SUDO_LOG="$dir/sudo.log" \
+        _IGNOREPKG_CONF="$dir/pacman.conf" \
         "${decide_env[@]}" \
         fish "$dir/build-all.fish" --install-decide "$mode" "$@" \
         >"$dir/decide.out" 2>"$dir/decide.err" || DECIDE_RC=$?

@@ -37,6 +37,153 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-05 — IgnorePkg closure becomes dynamic (registered at install time)
+
+- **Symptom**: the `/etc/pacman.conf` `IgnorePkg` closure was a *static*
+  contract — a hand-maintained list, linted report-only by `--audit`'s
+  "IgnorePkg closure" section and by a battery gate. It cannot know what a
+  future build will install, and on this host it had silently shrunk from
+  254 names to 3 (restored 2026-10-03 from a system backup; the old list was
+  never backed up and the external drive holding it was unmounted). Every
+  recipe-contract run then reported the drift without being able to fix it.
+- **Root causes**:
+  1. the closure's source of truth was host state maintained by hand, so it
+     drifted by construction and the lint could only report;
+  2. the shared write core refused a second registration of the SAME day
+     whenever the dated `.bak-YYYYMMDD` pre-image already existed and
+     differed — after the first dynamic write of the day that is the normal
+     state, so every later registration would have failed;
+  3. (design hazard found while wiring fixtures) registration sitting
+     outside the builder's pacman mutex let two `-i` lanes race the conf
+     read-modify-write, and it shadowed `tests/pacman-mutex-shim.sh` §6's
+     pinned failure shape (a seeded `db.lck` made registration wait 300 s
+     and refuse before `pacman -U` ever ran, so `builder pacman mutex timed
+     out` never printed).
+- **Fix**: the closure is now written DYNAMICALLY by the one install
+  pipeline. `install_register_names` resolves each accepted archive's
+  names (`.PKGINFO` pkgbase+pkgname → the recipe's committed `.SRCINFO` →
+  evaluated `PKGBUILD`, rung-3 added because fixture stub archives are
+  empty; no rung answering = refuse, never a silent skip), and
+  `install_register_ignorepkg` registers them through the shared
+  `register_ignorepkg_names` core into `$_IGNOREPKG_CONF` (fixture seam) or
+  `/etc/pacman.conf` **before** `pacman -U`, for install AND skip rows and
+  `-ia` alike. The step runs INSIDE the builder pacman mutex via the hidden
+  `--install-register` seam (`run_pacman_locked` → `pacman_lock_wait_clear`
+  → write): fish's `exec` takes no redirections (measured — fd 9 = "Bad
+  file descriptor"), so a fish process cannot hold a flock across its own
+  code and the mutex always wraps an external command. The db.lck deferral
+  is bounded (`_PACMAN_LOCK_WAIT_S`, default 300, fixture seam) and never
+  deletes the lock; a timeout, a mutex timeout or a registration failure
+  REFUSES the install and fails the run. `--no-register-ignorepkg` skips
+  the step loudly (continuation-mirrored); `--register-ignorepkg` remains
+  as the one-shot offline backfill. The static half is retired: the audit
+  lint `IgnorePkg closure:` render, `audit_lint_ignorepkg`, the
+  `--audit-lint ignorepkg` seam case and `tests/recipe-contract.sh` §C/§E.
+  The shared write core now keeps an existing dated backup as the day's
+  pre-image and proceeds (a differing backup is no longer a refusal).
+- **Validation**: `tests/ignorepkg-register.sh` grew to 15 cases — the
+  backfill suite (a–i) plus case j (second same-day write proceeds, the
+  original `.bak` stays the pre-image) and the install-pipeline sections
+  N1–N5 (register-before-install ordering oracle at `pacman -U` time;
+  `--no-register-ignorepkg` leaves the conf byte-identical while the
+  install still runs; a `db.lck` landing at build end defers the write and
+  then it lands; a never-clearing lock + `_PACMAN_LOCK_WAIT_S=1` fails the
+  run with no `pacman -U`; a second install run is idempotent). Six
+  mutation probes were RUN and each went red at its own named assertion
+  (M-N1 registration moved after the transaction, M-N2 skip-flag check
+  bypassed, M-N3 wait short-circuited, M-N4 timeout `return 1`→`0`, M-j
+  backup refusal re-added, M-idem always-write), then reversed.
+  `tests/pacman-mutex-shim.sh` §6 stays green unchanged (the rc-75 shape is
+  preserved because the seam rides `run_pacman_locked`). Full battery:
+  **54 pass / 1 fail** — only `cleanup-extensions.sh`, the documented host
+  drift (a fish `rm` fast-trash wrapper calling a missing `trash-put`),
+  reproduced identically at pristine HEAD. Host `/etc/pacman.conf` md5
+  identical before/after the whole battery (fixtures point
+  `_IGNOREPKG_CONF` at per-run temp files). 12 install fixtures were wired
+  to `_IGNOREPKG_CONF` + the shared `make_install_conf` skeleton so no
+  battery run can write the host conf.
+- **Rules**:
+  - Registration is part of the transaction's critical section: it must
+    stay BEFORE `pacman -U` and INSIDE `run_pacman_locked` (the hidden
+    `--install-register` seam). A name is protected before it is
+    installable — never after.
+  - Name resolution is fail-closed: `.PKGINFO` → `.SRCINFO` → evaluated
+    `PKGBUILD`, and "unnameable" refuses the install. Silent skips are the
+    bug class this feature exists to close.
+  - Exactly one dated pre-image per conf per day (`<conf>.bak-YYYYMMDD`),
+    kept as the day's original; a later write proceeds and never rewrites
+    it. The battery snapshot-diffs `/etc/pacman.conf` around every full run.
+  - Any fixture that drives the install path must set `_IGNOREPKG_CONF` to
+    its own file (per-RUN file when a fixture stages several cases) —
+    without it registration writes the host's conf.
+
+## 2026-10-05 — Pre-dispatch gate scaling + pre-dispatch ^C abort
+
+- **Symptom**: `sudo fish build-all.fish -g git,stable,core,app -i` spent
+  tens of minutes in the pre-dispatch phase before the first lane started
+  (652 records / 2710 edges), and `^C` during that phase was unresponsive —
+  the run continued into dispatch as if nothing happened.
+- **Root causes** (three perf layers + one signal seam):
+  1. the ABI gate's loops were O(V·E) fish iterations (per-member scans of
+     the whole consumer index and the whole name-edge list per visited
+     package);
+  2. install-path provide matching was O(sonames × provides) with one
+     command-substitution stem extraction per pair — measured 24.5 s per
+     install probe against 8003 provides × 33 sonames;
+  3. `abi_consumer_closure`'s BFS loop head ran `count $queue`, which is
+     O(1) itself but expands the WHOLE queue into argv every iteration
+     (38 s of the 46 s loop self-time over 19 822 iterations, profile
+     2026-10-05);
+  4. the interrupt latch `_INTERRUPT_HANDLED` was consumed only in
+     `run_lanes`' loop, so every pre-dispatch phase (loader, ABI gate)
+     swallowed `^C` silently.
+- **Fix**: keyed/memoized gate + install-ABI helpers (one installed-member
+  probe per unique id across all anchor×member visits, memoized stock
+  provides / installed-state probes with the cache cleared right after each
+  `pacman -U` transaction); keyed provide matching via candidate buckets;
+  cached queue length maintained at the two BFS appends; `abort_before_dispatch`
+  checked at every pre-dispatch phase boundary (replacing the inline block
+  before `run_lanes`, with `run_record_plan` registration moved ahead of the
+  ABI gate so the record exists before any abort); `run_record_finalize`
+  rewritten over keyed row marks.
+- **Validation**: gate probe on the real 652-package workspace — layer 1
+  0.88 s / 44 member checks; layer 2 **562 s → 51.3 s** (31 changed
+  providers, 16 877 closure iterations); pre-dispatch gate >37 min
+  (non-completing) → **≈52 s**. Worst single cold closure 24.7 s → 2.6 s
+  (glib2-git, 649 members) / 1.3 s (mesa-git). Install provide matching
+  24.5 s → 0.39 s per probe. Synthetic 650-record run (instant stubs):
+  pre-dispatch 29 s, 634 stub dispatches in 5.9 min on 2 lanes, rc 0.
+  Fixtures: `tests/signal-abort-lock.sh` phase 17 (deterministic SIGINT via
+  the gate's `pacman -Q` stub probe — rc 130, `never-started …
+  interrupted-before-start` rows, no dispatch, no second-signal escalation);
+  `tests/abi-batch-policy.sh` section H (240-member shared pool: exactly
+  240 `-Q` probes across 960 anchor×member visits, 0 probes on the complete
+  batch, one `-Qi` across 3 same-stock drift flavors — probe COUNTS as the
+  scale pin; mutation-probed: an inverted bound fails the fixture).
+  `tests/run-record.sh` scenario 5 was re-anchored from `sleep 1.5` to a
+  makepkg-started marker: an interrupt that lands BEFORE dispatch is the
+  other correct outcome (pinned by signal-abort-lock), and wall-clock timing
+  flaked into it under battery parallelism. Full battery green except two
+  failures reproduced identically at pristine HEAD (host drift, not repo:
+  a fish autoloaded `rm` wrapper whose `trash-put` branch is not installed
+  breaks the builder's `rm` calls; the host `/etc/pacman.conf` `IgnorePkg`
+  closure had shrunk to 3 names, tripping the recipe-contract lint's
+  report-only section E).
+- **Rules**:
+  - Fixture stub argv shapes ARE the contract: a raw probe may only be
+    routed through a helper if the forked argv is char-for-char identical
+    (adding `--` to `pacman -Q` silently disabled the refusal path, and
+    only section-B-style refusal scenarios could catch it).
+  - `count $list` in a hot loop head is O(list) via argv expansion — cache
+    the length and maintain it at the append sites.
+  - Fixture scale pins are probe/CALL COUNTS, never wall-clock; any fixture
+    step that must happen after a phase starts waits on an event (marker
+    file, log line), never on a sleep.
+  - Pre-dispatch phase boundaries must honour the interrupt latch
+    (`abort_before_dispatch`), and the ABI gate + install-ABI helpers must
+    stay keyed/memoized — the per-name probe argv shapes are pinned by
+    fixtures.
+
 ## 2026-10-05 — Design C: two leaf clusters move out of build-all.fish
 
 - **Symptom/design**: `build-all.fish` reached 12 423 lines / 220 functions with

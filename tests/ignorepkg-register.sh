@@ -26,7 +26,50 @@ set -euo pipefail
 #   h. a recipe dir with NO .SRCINFO is a loud NAMED finding that blocks the
 #      write (refusal, file unchanged) — never a silent skip;
 #   i. (extra) a stale .SRCINFO (literal pkgver drift, the bettbox class) is
-#      named and blocks the same way.
+#      named and blocks the same way;
+#   j. a second same-day WRITE (a new recipe grows the universe) proceeds
+#      instead of refusing on the existing dated backup, and that backup is
+#      KEPT as the day's original pre-image (2026-10-05 semantics: the
+#      install-time registration runs on every install, so a differing dated
+#      backup is the normal state after the first write of the day).
+#
+# Install-pipeline sections (N1–N5), each in its own `( subshell )`: the
+# registration step of the ONE install pipeline (install_register_ignorepkg →
+# the hidden --install-register seam under the builder pacman mutex) —
+# `--register-ignorepkg` above is only the offline backfill of the same core:
+#   N1 register-before-install ordering — the pacman stub ORACLES the conf at
+#      `pacman -U` transaction time (the only place that can observe the
+#      ordering) and records `U-time: covered p1`;
+#   N2 --no-register-ignorepkg — conf byte-identical, the warn line lands,
+#      the install itself still runs (registration skip ≠ install skip) and
+#      the oracle records `U-time: NOT covered: p1`;
+#   N3 db.lck lands at build end and is cleared 2 s later — the bounded wait
+#      reports, proceeds, names land, `pacman -U` runs;
+#   N4 db.lck never cleared + _PACMAN_LOCK_WAIT_S=1 — the run FAILS, the
+#      refusal names the timeout, NO pacman -U, conf unchanged;
+#   N5 idempotent second install run — `no changes needed`, conf
+#      byte-identical, exactly one dated backup.
+#
+# Mutation probes — all RUN on 2026-10-05, each red at its own named assertion,
+# each reversed by pasting the original line back (never `git checkout`/
+# `git stash`). Anchors are function names, not line numbers:
+#   M-N1 ordering: move the `install_register_ignorepkg` call in install_execute
+#      (build-all.fish's Dynamic IgnorePkg registration block) to AFTER the
+#      pacman transaction → N1 red (`U-time: NOT covered: p1`);
+#   M-N2 skip flag: make the `_IGNOREPKG_REGISTER = 0` check in
+#      install_register_ignorepkg unreachable (`if false`) → N2 red (the conf
+#      gains `IgnorePkg = p1`);
+#   M-N3 bounded wait: `return 0` at the top of pacman_lock_wait_clear → N3 red
+#      (no wait report, the write lands through the held lock);
+#   M-N4 timeout refusal: flip pacman_lock_wait_clear's final `return 1` (its
+#      "still present" path) to `return 0` → N4 red (run succeeds, the
+#      transaction runs) while N1–N3 stay green;
+#   M-j  backup semantics: re-add `return 1` after the kept-pre-image line in
+#      register_ignorepkg_names (lib/audit.fish) → j red (second write refused);
+#   M-idem idempotence: `if test (count $missing) -gt 0` → `if true` in
+#      register_ignorepkg_names, with case b's twin assertion suspended for
+#      that run → N5 red (the second install run rewrites instead of reporting
+#      `no changes needed`).
 #
 # rc vocabulary under test: 0 = closure complete afterwards (nothing to
 # append counts), 1 = refusal with nothing changed, 2 = bad usage.
@@ -132,6 +175,120 @@ no_backup() {
         fail "$2: expected no backup next to $conf, got: ${baks[*]}"
 }
 
+# ─── install-pipeline helpers (N1–N5) ────────────────────────────────────────
+# conf_covers CONF NAME... — the [options]-closure check the N sections assert
+# on: a name counts only as an IgnorePkg token INSIDE [options] (a repo-section
+# line never covers). Mirrors the pacman stub's own oracle.
+conf_covers() {
+    local conf=$1 n covered
+    shift
+    covered=$(awk '
+        /^\[/ { inopt = ($0 == "[options]") }
+        inopt && /^IgnorePkg/ { sub(/^IgnorePkg *= */, ""); print }
+    ' "$conf")
+    for n in "$@"; do
+        tr ' ' '\n' <<<"$covered" | grep -qxF -- "$n" || return 1
+    done
+    return 0
+}
+
+# make_install_ws DIR — one package (p1), the trivial stubs plus the two
+# ORACLE stubs: pacman records whether the target conf ALREADY covers the
+# expected names at `pacman -U` transaction time (never enforces — the fixture
+# asserts the recorded line so the red lands on the named check), and makepkg
+# can drop a db.lck at build end (GSA_FAKE_DB_SEED=1) so the registration's
+# bounded lock wait sees one deterministically: preflight has already passed,
+# and nothing between build end and registration looks at the lock.
+make_install_ws() {
+    local ws=$1
+    make_workspace "$ws" 1 1 low
+    add_package "$ws" p1 "$gsa_meta_any"
+    make_install_conf "$ws/pacman.conf"
+    stub_sudo "$ws"
+    cat >"$ws/bin/pacman-conf" <<'EOF'
+#!/usr/bin/env bash
+# DBPath oracle: never probe the host's real /var/lib/pacman/db.lck.
+if [[ ${1:-} == DBPath ]]; then
+    printf '%s\n' "${GSA_FAKE_DB_PATH:?fixture forgot GSA_FAKE_DB_PATH}"
+    exit 0
+fi
+exit 1
+EOF
+    cat >"$ws/bin/makepkg" <<'EOF'
+#!/usr/bin/env bash
+set -u
+id=$(basename "$PWD")
+: >"$PWD/$id-1.0.0-1-any.pkg.tar.zst"
+if [[ ${GSA_FAKE_DB_SEED:-0} == 1 ]]; then
+    mkdir -p "${GSA_FAKE_DB_PATH:?}/local"
+    : >"${GSA_FAKE_DB_PATH}/db.lck"
+fi
+printf 'fake makepkg %s\n' "$PWD"
+exit 0
+EOF
+    cat >"$ws/bin/pacman" <<'EOF'
+#!/usr/bin/env bash
+set -u
+printf 'pacman %s\n' "$*" >>"${GSA_FAKE_PACMAN_LOG:?}"
+if [[ ${1:-} == -Qp || ${1:-} == -Qi ]]; then
+    # Doubt installs: an unanswered version probe keeps the archive in the
+    # transaction (install_skip_reason's conservative direction).
+    exit 1
+fi
+if [[ ${1:-} == -U ]]; then
+    conf=${GSA_FAKE_EXPECT_CONF:?fixture forgot GSA_FAKE_EXPECT_CONF}
+    covered=$(awk '
+        /^\[/ { inopt = ($0 == "[options]") }
+        inopt && /^IgnorePkg/ { sub(/^IgnorePkg *= */, ""); print }
+    ' "$conf")
+    state=covered
+    for n in ${GSA_FAKE_EXPECT_NAMES:?fixture forgot GSA_FAKE_EXPECT_NAMES}; do
+        tr ' ' '\n' <<<"$covered" | grep -qxF -- "$n" || state="NOT covered: $n"
+    done
+    printf 'U-time: %s %s\n' "$state" "${GSA_FAKE_EXPECT_NAMES}" \
+        >>"${GSA_FAKE_PACMAN_LOG}"
+fi
+exit 0
+EOF
+    chmod +x "$ws/bin/"*
+}
+
+# run_install WS [VAR=VAL ...] [BUILD-ARG ...] — one install-pipeline run
+# against the workspace stubs: VAR=VAL arguments are extra stub/fixture env,
+# anything else is appended to the builder's own arguments (the selection is
+# always `--install p1`). _IGNOREPKG_CONF is the WORKSPACE conf: without it
+# the registration would rewrite the host's /etc/pacman.conf (the battery
+# must be non-mutating).
+run_install() {
+    local ws=$1 arg
+    shift
+    local envs=() build=()
+    for arg in "$@"; do
+        if [[ $arg == *=* ]]; then
+            envs+=("$arg")
+        else
+            build+=("$arg")
+        fi
+    done
+    run_builder env PATH="$ws/bin:$PATH" LC_ALL=C \
+        GSA_STATE_DIR="$ws/state" \
+        _IGNOREPKG_CONF="$ws/pacman.conf" \
+        GSA_FAKE_PACMAN_LOG="$ws/pacman.log" \
+        GSA_FAKE_DB_PATH="$ws/state/var/pacman" \
+        GSA_FAKE_EXPECT_CONF="$ws/pacman.conf" \
+        GSA_FAKE_EXPECT_NAMES=p1 \
+        "${envs[@]}" \
+        fish "$ws/build-all.fish" --allow-broken-rustc --no-deps --no-sync \
+            --lanes 1 --jobs 1 --install p1 "${build[@]}"
+}
+
+# run_text WS — everything the run said, wherever its sink put it (the lane
+# transcript plus the captured stdout/stderr).
+run_text() {
+    printf '%s\n' "$FIXTURE_OUTPUT"
+    cat "$1/state/logs"/*.log 2>/dev/null
+}
+
 # ─── main scenario: one workspace + one conf feeding cases a, b, c, f, g ─────
 ws=$tmp/ws-main
 make_register_ws "$ws"
@@ -219,6 +376,29 @@ cmp "${baks[0]}" "$conf.orig" >/dev/null ||
 [[ ! -s $ws/sudo.log ]] ||
     fail "b: a user-writable target must never invoke sudo: $(cat "$ws/sudo.log")"
 printf 'b: second run = no changes (idempotent) OK\n'
+
+# ─── j. second same-day WRITE proceeds; the dated backup stays the pre-image ─
+# The universe grows (a recipe landed between two registrations), so this run
+# WRITES again: the pre-2026-10-05 semantics refused on the differing dated
+# backup — which broke every second registration of the day.
+add_recipe "$ws" git delta-git
+run_register "$ws" "$conf"
+((FIXTURE_RC == 0)) ||
+    fail "j: a second write of the day must proceed (rc 0), got rc=$FIXTURE_RC: $FIXTURE_OUTPUT"
+grep -Fq 'kept as the day'"'"'s pre-image' <<<"$FIXTURE_OUTPUT" ||
+    fail "j: expected the kept-pre-image line, got: $FIXTURE_OUTPUT"
+grep -Fq 'delta-git' "$conf" ||
+    fail "j: delta-git must be appended to the closure: $(cat "$conf")"
+conf_covers "$conf" delta-git ||
+    fail "j: delta-git must land inside [options]: $(cat "$conf")"
+shopt -s nullglob
+baks=("$conf".bak-*)
+shopt -u nullglob
+((${#baks[@]} == 1)) ||
+    fail "j: the dated backup must still be exactly one, got: ${baks[*]:-none}"
+cmp "${baks[0]}" "$conf.orig" >/dev/null ||
+    fail "j: the kept backup must stay the ORIGINAL pre-image, it was rewritten"
+printf 'j: second write proceeds, original .bak kept OK\n'
 
 # ─── d. non-writable conf + failing sudo = rc 1, file unchanged ──────────────
 if [[ $(id -u) == 0 ]]; then
@@ -308,5 +488,141 @@ cmp "$conf_i" "$conf_i.orig" >/dev/null ||
     fail "i: refusal must leave the conf unchanged"
 no_backup "$conf_i" i
 printf 'i: stale .SRCINFO = loud named finding, blocked OK\n'
+
+# ─── N1. register-before-install ordering ────────────────────────────────────
+(
+    fail() {
+        printf 'ignorepkg-register N1: %s\n' "$1" >&2
+        exit 1
+    }
+    ws=$tmp/ws-n1
+    make_install_ws "$ws"
+    run_install "$ws"
+    ((FIXTURE_RC == 0)) ||
+        fail "install run must succeed, got rc=$FIXTURE_RC: $(run_text "$ws")"
+    grep -qF 'U-time: covered p1' "$ws/pacman.log" ||
+        fail "the conf must already cover p1 at pacman -U time (registration before install): $(cat "$ws/pacman.log" 2>/dev/null || true)"
+    grep -q 'pacman -U' "$ws/pacman.log" ||
+        fail "the transaction never ran: $(cat "$ws/pacman.log" 2>/dev/null || true)"
+    conf_covers "$ws/pacman.conf" p1 ||
+        fail "p1 must be in the [options] closure after the run: $(cat "$ws/pacman.conf")"
+    grep -q 'appended 1 name(s)' <(run_text "$ws") ||
+        fail "the registration summary must report the appended name: $(run_text "$ws")"
+    printf 'N1: names are registered before pacman -U OK\n'
+)
+
+# ─── N2. --no-register-ignorepkg: conf untouched, install still runs ─────────
+(
+    fail() {
+        printf 'ignorepkg-register N2: %s\n' "$1" >&2
+        exit 1
+    }
+    ws=$tmp/ws-n2
+    make_install_ws "$ws"
+    cp "$ws/pacman.conf" "$ws/pacman.conf.orig"
+    run_install "$ws" --no-register-ignorepkg
+    ((FIXTURE_RC == 0)) ||
+        fail "a skipped registration must not fail the run, got rc=$FIXTURE_RC: $(run_text "$ws")"
+    cmp "$ws/pacman.conf" "$ws/pacman.conf.orig" >/dev/null ||
+        fail "the conf must stay byte-identical when registration is skipped: $(diff "$ws/pacman.conf.orig" "$ws/pacman.conf" || true)"
+    grep -qF 'IgnorePkg registration skipped (--no-register-ignorepkg)' <(run_text "$ws") ||
+        fail "the skip must be announced (loud warn): $(run_text "$ws")"
+    grep -q 'pacman -U' "$ws/pacman.log" ||
+        fail "registration skip must NOT skip the install: $(cat "$ws/pacman.log" 2>/dev/null || true)"
+    grep -qF 'U-time: NOT covered: p1' "$ws/pacman.log" ||
+        fail "the oracle must observe the unregistered conf at -U time: $(cat "$ws/pacman.log" 2>/dev/null || true)"
+    shopt -s nullglob
+    baks=("$ws/pacman.conf".bak-*)
+    shopt -u nullglob
+    ((${#baks[@]} == 0)) ||
+        fail "a skipped registration must not even back up: ${baks[*]}"
+    printf 'N2: --no-register-ignorepkg skips the write loudly, install runs OK\n'
+)
+
+# ─── N3. db.lck held at build end, cleared 2 s later → wait, then register ───
+(
+    fail() {
+        printf 'ignorepkg-register N3: %s\n' "$1" >&2
+        exit 1
+    }
+    ws=$tmp/ws-n3
+    make_install_ws "$ws"
+    (
+        # Bounded holder: exits on its own even if the run never seeds a lock.
+        for _ in $(seq 1 300); do
+            [[ -e $ws/state/var/pacman/db.lck ]] && break
+            sleep 0.1
+        done
+        sleep 2
+        rm -f -- "$ws/state/var/pacman/db.lck"
+    ) &
+    holder=$!
+    run_install "$ws" GSA_FAKE_DB_SEED=1 _PACMAN_LOCK_WAIT_S=60
+    wait "$holder" 2>/dev/null
+    ((FIXTURE_RC == 0)) ||
+        fail "the bounded wait must proceed once the lock clears, got rc=$FIXTURE_RC: $(run_text "$ws")"
+    text=$(run_text "$ws")
+    grep -q 'waiting up to 60 s for the pacman database lock to clear' <<<"$text" ||
+        fail "the deferral must report its bounded wait: $text"
+    grep -Eq 'pacman database lock cleared after [0-9]+ s' <<<"$text" ||
+        fail "the wait must report the clearance: $text"
+    grep -qF 'U-time: covered p1' "$ws/pacman.log" ||
+        fail "registration must land before pacman -U once the lock clears: $(cat "$ws/pacman.log" 2>/dev/null || true)"
+    conf_covers "$ws/pacman.conf" p1 ||
+        fail "p1 must be registered after the deferred write: $(cat "$ws/pacman.conf")"
+    printf 'N3: held db.lck defers the registration, then it lands OK\n'
+)
+
+# ─── N4. db.lck never clears + 1 s bound → refuse, fail, no pacman -U ────────
+(
+    fail() {
+        printf 'ignorepkg-register N4: %s\n' "$1" >&2
+        exit 1
+    }
+    ws=$tmp/ws-n4
+    make_install_ws "$ws"
+    cp "$ws/pacman.conf" "$ws/pacman.conf.orig"
+    run_install "$ws" GSA_FAKE_DB_SEED=1 _PACMAN_LOCK_WAIT_S=1
+    ((FIXTURE_RC != 0)) ||
+        fail "an unregistrable set must fail the run, got rc=0: $(run_text "$ws")"
+    text=$(run_text "$ws")
+    grep -q 'pacman database lock still present after 1 s' <<<"$text" ||
+        fail "the timeout must name the bounded wait: $text"
+    grep -q 'refusing to install' <<<"$text" ||
+        fail "the refusal must be explicit: $text"
+    if grep -q 'pacman -U' "$ws/pacman.log" 2>/dev/null; then
+        fail "no transaction may run on a refused registration: $(cat "$ws/pacman.log")"
+    fi
+    cmp "$ws/pacman.conf" "$ws/pacman.conf.orig" >/dev/null ||
+        fail "the conf must stay unchanged on the timeout refusal: $(diff "$ws/pacman.conf.orig" "$ws/pacman.conf" || true)"
+    printf 'N4: lock timeout refuses the install and fails the run OK\n'
+)
+
+# ─── N5. idempotent second install run ───────────────────────────────────────
+(
+    fail() {
+        printf 'ignorepkg-register N5: %s\n' "$1" >&2
+        exit 1
+    }
+    ws=$tmp/ws-n5
+    make_install_ws "$ws"
+    run_install "$ws"
+    ((FIXTURE_RC == 0)) ||
+        fail "first install run must succeed, got rc=$FIXTURE_RC: $(run_text "$ws")"
+    cp "$ws/pacman.conf" "$ws/pacman.conf.after1"
+    run_install "$ws"
+    ((FIXTURE_RC == 0)) ||
+        fail "second install run must succeed, got rc=$FIXTURE_RC: $(run_text "$ws")"
+    grep -q 'no changes needed' <(run_text "$ws") ||
+        fail "the second run must report the closure as complete: $(run_text "$ws")"
+    cmp "$ws/pacman.conf" "$ws/pacman.conf.after1" >/dev/null ||
+        fail "the second run must not rewrite the conf: $(diff "$ws/pacman.conf.after1" "$ws/pacman.conf" || true)"
+    shopt -s nullglob
+    baks=("$ws/pacman.conf".bak-*)
+    shopt -u nullglob
+    ((${#baks[@]} == 1)) ||
+        fail "two install runs must leave exactly one dated backup, got: ${baks[*]:-none}"
+    printf 'N5: second install run is idempotent OK\n'
+)
 
 printf 'ignorepkg-register fixture: PASS\n'

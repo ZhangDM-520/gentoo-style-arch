@@ -42,6 +42,7 @@ checks=0
 
 ws="$tmp/ws"
 make_workspace "$ws" 1 2 low
+make_install_conf "$ws/pacman.conf" # this run's IgnorePkg registration target (never the host's)
 add_package "$ws" libs-git "$gsa_meta_any"
 add_package "$ws" app-git "$gsa_meta_any"
 set_topology_record "$ws" app-git git 'libs-git'
@@ -130,6 +131,7 @@ run_case() { # LABEL — run -ia over whatever archives are staged.
     run_builder env \
         PATH="$ws/bin:$PATH" \
         GSA_STATE_DIR="$ws/state" \
+        _IGNOREPKG_CONF="$ws/pacman.conf" \
         GSA_FAKE_PACMAN_LOG="$ws/pacman.log" \
         GSA_FAKE_DB_DIR="$ws/db" \
         GSA_FAKE_DB_PATH="$ws/db" \
@@ -264,6 +266,7 @@ EOF
     run_builder env \
         PATH="$ws/bin:$farm" \
         GSA_STATE_DIR="$ws/state" \
+        _IGNOREPKG_CONF="$ws/pacman.conf" \
         GSA_FAKE_PACMAN_LOG="$ws/pacman.log" \
         GSA_FAKE_DB_DIR="$ws/db" \
         GSA_FAKE_DB_PATH="$ws/db" \

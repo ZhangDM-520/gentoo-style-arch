@@ -76,6 +76,7 @@ write_srcinfo() {
 
 ws="$tmp/ws"
 make_workspace "$ws" 1 2 low
+make_install_conf "$ws/pacman.conf" # this run's IgnorePkg registration target (never the host's)
 add_package "$ws" libs-git "$gsa_meta_any"
 add_package "$ws" app-git "$gsa_meta_any"
 set_topology_record "$ws" app-git git 'libs-git'
@@ -142,6 +143,7 @@ decide() {
     FIXTURE_OUTPUT=$(env \
         PATH="$ws/bin:$PATH" \
         GSA_STATE_DIR="$ws/state" \
+        _IGNOREPKG_CONF="$ws/pacman.conf" \
         GSA_FAKE_PACMAN_LOG="$ws/pacman.log" \
         GSA_FAKE_QI_LIBS="$GSA_FAKE_QI_LIBS" \
         GSA_FAKE_QI_APP="$GSA_FAKE_QI_APP" \
@@ -284,6 +286,7 @@ printf '%s\n%s\n' "$ws/packages/libs-git" "$gccline" >"$ws/state/toolchains/libs
 run_builder env \
     PATH="$ws/bin:$PATH" \
     GSA_STATE_DIR="$ws/state" \
+    _IGNOREPKG_CONF="$ws/pacman.conf" \
     GSA_FAKE_PACMAN_LOG="$ws/pacman.log" \
     GSA_FAKE_QI_LIBS="$GSA_FAKE_QI_LIBS" \
     GSA_FAKE_QI_APP="$GSA_FAKE_QI_APP" \

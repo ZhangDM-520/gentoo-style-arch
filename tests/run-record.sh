@@ -310,6 +310,10 @@ cat >"$ws/bin/makepkg" <<'EOF'
 #!/usr/bin/env bash
 set -u
 id=$(basename "$PWD")
+# Event marker: the fixture waits for this file before signalling INT, so the
+# interrupt deterministically lands mid-build instead of racing the
+# pre-dispatch phase on wall-clock time.
+: >"$(cd "$(dirname "$0")/.." && pwd)/makepkg-started"
 printf 'fake makepkg %s\n' "$PWD"
 sleep 3
 : >"$PWD/$id-1.0.0-1-any.pkg.tar.zst"
@@ -326,7 +330,19 @@ env PATH="$ws/bin:$PATH" \
     fish "$ws/build-all.fish" --allow-broken-rustc --no-deps --no-sync \
     --intensity low p1 p2 p3 >"$fixture/s5.out" 2>&1 &
 builder_pid=$!
-sleep 1.5
+# Wait (bounded) for the first lane's makepkg to actually start before
+# signalling — an event, not a wall-clock guess. Under battery parallelism the
+# pre-dispatch phase outlasts any fixed sleep, and an interrupt that lands
+# BEFORE dispatch is a different, equally correct outcome (all rows
+# never-started / interrupted-before-start) pinned by signal-abort-lock.sh;
+# this scenario exists to pin the MID-build half and must not flake into it.
+for _ in $(seq 1 300); do
+    [[ -e $ws/makepkg-started ]] && break
+    sleep 0.1
+done
+[[ -e $ws/makepkg-started ]] \
+    || fail "the fake makepkg never started, so the interrupt cannot be timed:
+$(cat "$fixture/s5.out")"
 kill -INT "$builder_pid"
 wait "$builder_pid"
 int_rc=$?

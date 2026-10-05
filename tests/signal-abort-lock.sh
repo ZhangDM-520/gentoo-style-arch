@@ -77,6 +77,19 @@ set -uo pipefail
 #      reach the wire (rc 125, `lane result write failed`, no result file);
 #      MAKEFLAGS/NINJAFLAGS `-j N` pairs re-export as the lane's `-j1` with
 #      no stranded operand token.
+#  17. SIGINT during PRE-DISPATCH (R-F27, the latch before dispatch): a
+#      signal delivered while the ABI gate is still probing — the stub
+#      pacman's `pacman -Q rust-git` gate probe sends exactly ONE SIGINT
+#      to the builder itself, at a known point, never a sleep-and-hope ^C
+#      race — must abort BEFORE any lane/makepkg is spawned: exit 130 (the
+#      signal's own status via gsa_signal_exit_rc), the `Build interrupted`
+#      warning, the run-record block rendered with every row `never-started
+#      … interrupted-before-start`, the stub makepkg log EMPTY, and
+#      dispatcher.log's `Build interrupted (last signal: …, before dispatch)`
+#      (the abort-before-dispatch marker). The stub logs the pid it targeted;
+#      the fixture matches it against the handler's own `signal: INT
+#      received (pid=…)` line — the delivery landed on the process whose
+#      handler latched it.
 #
 # Lock isolation: the PATH-stub `pacman-conf` answers DBPath with a fixture
 # directory, so the host's real /var/lib/pacman/db.lck is never probed; the
@@ -97,13 +110,29 @@ fail() {
 }
 
 make_workspace "$fixture" auto auto xhigh
+# Dynamic IgnorePkg registration target — never the host's /etc/pacman.conf.
+make_install_conf "$fixture/pacman.conf"
 add_package "$fixture" p1
+# Phase 17's pre-dispatch ABI gate data — the abi-batch-policy.sh layer-1
+# (tag batch) shape exactly: llvm-git is the abi=must anchor (no abi-tagged
+# dependency), rust-git its abi=must mandatory member (the llvm-git edge).
+# A `--no-deps llvm-git …` selection omits the member, so the gate must
+# probe `pacman -Q rust-git` asking whether it is installed — that probe
+# is the deterministic SIGINT delivery point the stub pacman owns.
+add_package "$fixture" llvm-git
+add_package "$fixture" rust-git
+set_topology_record "$fixture" llvm-git git '' 'abi=must'
+set_topology_record "$fixture" rust-git git 'llvm-git' 'abi=must'
 
 # ── stubs (behaviour driven by GSA_FAKE_* variables the STUBS define) ───────
 cat >"$fixture/bin/makepkg" <<'EOF'
 #!/usr/bin/env bash
 set -uo pipefail
 name=$(basename "$PWD")
+# Invocation log (phase 17's "nothing was dispatched" oracle: an abort before
+# dispatch must leave this file empty).
+[[ -n ${GSA_FAKE_MAKEPKG_LOG:-} ]] &&
+    printf 'BUILD %s\n' "$name" >>"$GSA_FAKE_MAKEPKG_LOG"
 [[ -n ${GSA_FAKE_PACMAN_ENV_LOG:-} ]] &&
     printf '%s\n' "${PACMAN:-}" >>"$GSA_FAKE_PACMAN_ENV_LOG"
 if [[ -n ${GSA_FAKE_FLAGS_LOG:-} ]]; then
@@ -186,6 +215,61 @@ printf '%s\n' "$*" >>"$GSA_FAKE_STUB_PACMAN_LOG"
 exit 0
 EOF
 
+cat >"$fixture/bin/pacman" <<'EOF'
+#!/usr/bin/env bash
+set -u
+# Pre-dispatch ABI-gate probe stub + the deterministic SIGINT trigger (phase
+# 17). The builder's gate probe arrives `pacman -Q NAME`; other probes may
+# pass `--` before names, so a leading `--` is dropped before reading.
+# `-Q NAME` answers "installed" exactly for the names in GSA_FAKE_INSTALLED.
+# When GSA_FAKE_INT_QUERY names the probed package, this stub sends exactly
+# ONE SIGINT to the BUILDER (the atomic mkdir guard makes even a repeated
+# probe a no-op — a second signal would escalate to the SIGKILL sweep) and
+# records the pid it targeted in GSA_FAKE_INT_TRIGGER_LOG so the fixture can
+# prove the delivery landed on the very process whose handler latched it.
+# The target is found by walking up from $PPID to the build-all.fish ancestor
+# (fish execs this stub directly, so $PPID is normally already fish) — the
+# walk never leaves THIS run's process chain, so a sibling fixture running in
+# parallel can never be signalled.
+[[ -n ${GSA_FAKE_PACMAN_LOG:-} ]] &&
+    printf 'pacman %s\n' "$*" >>"$GSA_FAKE_PACMAN_LOG"
+args=()
+for a in "$@"; do
+    [[ $a == -- ]] && continue
+    args+=("$a")
+done
+name=${args[1]:-}
+if [[ ${args[0]:-} == -Q && -n ${GSA_FAKE_INT_QUERY:-} &&
+    $name == "$GSA_FAKE_INT_QUERY" ]] &&
+    mkdir "${GSA_FAKE_INT_TRIGGER_DIR:?INT trigger needs GSA_FAKE_INT_TRIGGER_DIR}" 2>/dev/null; then
+    target=$PPID
+    found=
+    for _ in 1 2 3 4 5 6; do
+        [[ -r /proc/$target/cmdline ]] || break
+        if tr '\0' ' ' <"/proc/$target/cmdline" | grep -q 'build-all\.fish'; then
+            found=1
+            break
+        fi
+        target=$(awk '/^PPid:/ {print $2}' "/proc/$target/status" 2>/dev/null)
+        [[ -n ${target:-} ]] || break
+    done
+    if [[ -z $found ]]; then
+        printf 'trigger failed: no build-all.fish ancestor (ppid=%s)\n' "$PPID" \
+            >>"${GSA_FAKE_INT_TRIGGER_LOG:?INT trigger needs GSA_FAKE_INT_TRIGGER_LOG}"
+        exit 97
+    fi
+    printf 'trigger: argv=pacman %s stub=%s ppid=%s target=%s\n' \
+        "$*" "$$" "$PPID" "$target" >>"$GSA_FAKE_INT_TRIGGER_LOG"
+    command kill -INT "$target"
+fi
+if [[ ${args[0]:-} == -Q ]]; then
+    for installed in ${GSA_FAKE_INSTALLED:-}; do
+        [[ $installed == "$name" ]] && exit 0
+    done
+fi
+exit 1
+EOF
+
 chmod +x "$fixture/bin/"*
 
 BARGS=(--allow-broken-rustc --no-deps --no-sync --lanes 1 --jobs 1 p1)
@@ -199,6 +283,7 @@ mk_env() { # state build_seconds
     RUN_ENV=(
         "PATH=$fixture/bin:$PATH"
         "GSA_STATE_DIR=$state"
+        "_IGNOREPKG_CONF=$fixture/pacman.conf"
         "GSA_FAKE_DB_PATH=$state/var/pacman"
         "GSA_FAKE_MARKER_DIR=$state/built"
         "GSA_FAKE_PACMAN_ENV_LOG=$state/pacman-env.log"
@@ -975,5 +1060,98 @@ if ps -eo args= | grep -F "$fixture" | grep -v grep >/dev/null; then
     fail "a fixture process survived:" \
         "$(ps -eo args= | grep -F "$fixture" | grep -v grep)"
 fi
+
+# ── 17. SIGINT during pre-dispatch: abort before dispatch (R-F27 latch) ────
+# WHY: the interrupt latch used to be consumed only inside run_lanes'
+# dispatch loop, so a ^C during the pre-dispatch phase (the ABI gates, the
+# plan) was IGNORED and the run went on to dispatch work the operator had
+# just cancelled. abort_before_dispatch now honours the latch at every
+# gate-loop boundary and immediately before run_lanes. The trigger is
+# deterministic, never a sleep-and-hope ^C race: the stub pacman's
+# `pacman -Q rust-git` probe — the layer-1 abi=must batch gate asking
+# whether the omitted member is installed (abi-batch-policy.sh B's exact
+# topology) — sends exactly ONE SIGINT to the builder and logs the pid it
+# targeted, so delivery, handler and latch are one provable chain. The
+# signal must win OVER the gate's own decision (the installed member would
+# otherwise refuse the selection) and over dispatch entirely.
+(
+    echo "phase 17: SIGINT during the pre-dispatch ABI gate aborts before dispatch"
+    state="$fixture/state-predispatch-int"
+    mk_env "$state" 0
+    mklog="$state/makepkg.log"
+    tlog="$state/int-trigger.log"
+    RUN_ENV+=(
+        "GSA_FAKE_MAKEPKG_LOG=$mklog"
+        "GSA_FAKE_PACMAN_LOG=$state/pacman.log"
+        "GSA_FAKE_INSTALLED=rust-git"
+        "GSA_FAKE_INT_QUERY=rust-git"
+        "GSA_FAKE_INT_TRIGGER_DIR=$state/int-triggered"
+        "GSA_FAKE_INT_TRIGGER_LOG=$tlog"
+    )
+    run_bg "$state/run.out" fish "$fixture/build-all.fish" \
+        --allow-broken-rustc --no-deps --no-sync --lanes 1 --jobs 1 llvm-git p1
+    end_bg
+
+    # The signal's own status via gsa_signal_exit_rc — never a flat failure.
+    [[ $rc -eq 130 ]] ||
+        fail "pre-dispatch SIGINT run exited rc=$rc, want 130 (the signal's own status)" \
+            "$(cat "$state/run.out")"
+    grep -q 'Build interrupted' "$state/run.out" ||
+        fail "no 'Build interrupted' warning on the pre-dispatch abort:" \
+            "$(cat "$state/run.out")"
+
+    # The machine-checkable run record is rendered on this abort path too.
+    rr_outcome=$(rr_scalar outcome <"$state/run.out") ||
+        fail "no run record on the pre-dispatch abort" "$(cat "$state/run.out")"
+    [[ $rr_outcome == interrupted ]] ||
+        fail "run-record outcome is '$rr_outcome', want 'interrupted'"
+    rr_rc=$(rr_scalar rc <"$state/run.out") ||
+        fail "no run-record rc: scalar" "$(cat "$state/run.out")"
+    [[ $rr_rc == 130 ]] ||
+        fail "run-record rc: is '$rr_rc', want 130 (the signal's own status)"
+
+    # Every selected package is honestly never-started: nothing dispatched.
+    for pkg in llvm-git p1; do
+        row=$(rr_row "$pkg" <"$state/run.out") ||
+            fail "no run-record row for $pkg" "$(cat "$state/run.out")"
+        [[ $row == "$pkg never-started - - interrupted-before-start" ]] ||
+            fail "run-record row for $pkg is '$row', want '$pkg never-started - - interrupted-before-start'"
+    done
+    [[ $(rr_rows <"$state/run.out" | wc -l) -eq 2 ]] ||
+        fail "run record has unexpected extra rows:" "$(rr_rows <"$state/run.out")"
+
+    # NO build was dispatched — the stub makepkg log stays empty.
+    [[ ! -s $mklog ]] ||
+        fail "stub makepkg ran despite the pre-dispatch abort:" "$(cat "$mklog")"
+    [[ ! -e $state/built ]] ||
+        fail "a build marker landed despite the pre-dispatch abort:" \
+            "$(ls -la "$state/built" 2>/dev/null)"
+
+    dlog="$state/logs/dispatcher.log"
+    [[ -f $dlog ]] ||
+        fail "dispatcher.log was never created"
+    # The latch fired (the handler named the signal) AND the abort happened
+    # before dispatch (the marker line only abort_before_dispatch prints).
+    grep -qF 'signal: INT received' "$dlog" ||
+        fail "dispatcher.log does not record the INT delivery:" "$(cat "$dlog")"
+    grep -qF 'Build interrupted (last signal: INT, before dispatch)' "$dlog" ||
+        fail "dispatcher.log lacks the abort-before-dispatch marker:" "$(cat "$dlog")"
+
+    # Exactly ONE SIGINT left this stub (a second would escalate to the
+    # SIGKILL sweep — the run must have seen a first signal only).
+    [[ -f $tlog && $(wc -l <"$tlog") -eq 1 ]] ||
+        fail "the INT trigger must fire exactly once, saw:" "$(cat "$tlog" 2>/dev/null)"
+    if grep -q 'SECOND signal' "$dlog"; then
+        fail "a single trigger produced a second-signal escalation:" "$(cat "$dlog")"
+    fi
+
+    # PID-targeting proof: the pid the stub signalled is the pid whose handler
+    # latched the interrupt — delivery, handler and latch are one chain.
+    tgt=$(sed -n 's/.* target=\([0-9][0-9]*\)$/\1/p' "$tlog" | head -1)
+    hpid=$(sed -n 's/.*signal: INT received (pid=\([0-9][0-9]*\),.*/\1/p' "$dlog" | head -1)
+    [[ -n $tgt && $tgt == "$hpid" ]] ||
+        fail "the stub's SIGINT target ($tgt) is not the pid whose handler latched it ($hpid)" \
+            "trigger: $(cat "$tlog")" "dispatcher: $(cat "$dlog")"
+) || exit 1
 
 printf 'signal-abort-lock fixture: PASS\n'

@@ -354,16 +354,16 @@ Consequences worth internalising:
 **Recipe registration.** Adding a recipe means: put it under the physical
 category and add one topology record (`id|path|groups|edges[|tags]` in
 `config/topology.conf`); add an `edges` entry only after verifying the dependency
-against package metadata and a build-order reason. Every workspace `pkgname`
-must also appear in the host's `/etc/pacman.conf` `IgnorePkg` closure —
-cumulative repeated `IgnorePkg =` lines, all inside `[options]` (a line inside
-a repo section is silently dropped). Verify by unioning `pkgbase`+`pkgname[]`
-from every recipe and diffing against `pacman-conf IgnorePkg | sort -u` with
-`comm -23`; empty output means covered. This rule is linted: `--audit`
-includes the recipe-contract lints (provides-versioning, the purged-tools
-denylist, and the IgnorePkg closure — read the way pacman reads
-`/etc/pacman.conf`, with repeated `IgnorePkg` lines inside `[options]`
-cumulative), report-only, and the hidden `--audit-lint <name> [pacman-conf]`
+against package metadata and a build-order reason. IgnorePkg registration is
+dynamic (2026-10-05): an install run registers
+each accepted archive's `pkgbase`+`pkgname` into the `[options]` `IgnorePkg`
+closure of the target pacman.conf before `pacman -U`, an archive whose names
+cannot be established refuses the install (fail-closed), `--no-register-ignorepkg`
+skips the step, and `--register-ignorepkg` is the one-shot backfill of an
+existing conf. `--audit` includes the recipe-contract lints
+(provides-versioning, purged tools, provides swaps (Stock→house swap), ABI
+closure, ABI exposure), report-only, and the hidden
+`--audit-lint <provides|purged|swap|abi-closure|abi-exposure>`
 seam runs one lint at a time (`tests/recipe-contract.sh` pins both); the
 audit's exit status stays 0, so read the report. Per-recipe exceptions are
 data: a recipe's own `FETCHED-ONLY` file (one source-basename glob per line)

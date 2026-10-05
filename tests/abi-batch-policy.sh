@@ -9,7 +9,7 @@ set -euo pipefail
 # run start and was never re-run, and recipes that compile Rust could be
 # dispatched before rust-git in a coupled batch.
 #
-# Seven policy seams are pinned here, one section each:
+# Eight policy seams are pinned here, one section each:
 #
 #   A. --audit toolchain lint: a recipe whose PKGBUILD invokes cargo/rustc
 #      must name rust-git in its topology record's edges field (rust-git
@@ -56,6 +56,14 @@ set -euo pipefail
 #      installed member of its in-tree consumer closure (--no-deps keeps the
 #      omission reachable); the complete closure builds, and an unchanged
 #      surface or an uninstalled consumer never gates.
+#   H. Pre-dispatch gate COST at synthetic scale: the keyed/memoized gate
+#      helpers keep the pacman probe count bounded — one installed-member
+#      probe (`pacman -Q <id>`) per unique member id across ALL (anchor ×
+#      member) visits, one stock-surface probe (`pacman -Qi <name>`) per
+#      unique name — pinned by COUNTING the stub pacman's argv log (never by
+#      wall-clock timing, which flakes), while B's refusal and G's layer-2
+#      refusal are re-asserted at 247 synthetic packages and a complete
+#      batch still builds.
 #
 # Synthetic workspaces + PATH stubs only; nothing real is built or installed.
 #
@@ -163,13 +171,20 @@ stub_sudo "$dir_b"
 
 # The stub pacman reports rust-git as INSTALLED — the refusal's precondition.
 # -Qp/-Qi answer nothing, so the -i same-version check stays conservative.
+# Arguments arrive `pacman -Q -- NAME` since the gate's keyed abi_id_installed
+# landed — `--` is stripped before the name is read (section G's convention).
 cat >"$dir_b/bin/pacman" <<'EOF'
 #!/usr/bin/env bash
 set -u
 printf 'pacman %s\n' "$*" >>"${GSA_FAKE_PACMAN_LOG:?}"
-case ${1:-} in
+args=()
+for a in "$@"; do
+    [[ $a == -- ]] && continue
+    args+=("$a")
+done
+case ${args[0]:-} in
 -Q)
-    [[ ${2:-} == rust-git ]] && exit 0
+    [[ ${args[1]:-} == rust-git ]] && exit 0
     exit 1
     ;;
 -Qp | -Qi) exit 1 ;;
@@ -260,6 +275,7 @@ fi
 # ─── C. dispatcher: mid-run probe after the run's own llvm install ──────────
 dir_c="$fixture/dispatch"
 make_workspace "$dir_c" 1 2 low
+make_install_conf "$dir_c/pacman.conf" # the -i run's IgnorePkg registration target (never the host's)
 add_meta_package "$dir_c" llvm-git ''
 add_meta_package "$dir_c" p2 ''
 set_topology_record "$dir_c" p2 git 'llvm-git'
@@ -322,6 +338,7 @@ mkdir -p "$marker_dir"
 run_builder env \
     PATH="$dir_c/bin:$PATH" \
     GSA_STATE_DIR="$dir_c/state" \
+    _IGNOREPKG_CONF="$dir_c/pacman.conf" \
     GSA_FAKE_MARKER_DIR="$marker_dir" \
     GSA_FAKE_SPAWN_LOG="$dir_c/spawn.log" \
     GSA_FAKE_PACMAN_LOG="$dir_c/pacman.log" \
@@ -420,6 +437,7 @@ fi
 # still used when an app-cluster tag is also present.
 dir_e="$fixture/non-abi-tags"
 make_workspace "$dir_e" 1 2 low
+make_install_conf "$dir_e/pacman.conf" # the -i run's IgnorePkg registration target (never the host's)
 add_meta_package "$dir_e" llvm-git ''
 add_meta_package "$dir_e" fcitx5-git ''
 add_meta_package "$dir_e" fcitx5-qt-git ''
@@ -449,6 +467,7 @@ run_env_e() {
     run_builder env \
         PATH="$dir_e/bin:$PATH" \
         GSA_STATE_DIR="$dir_e/state" \
+        _IGNOREPKG_CONF="$dir_e/pacman.conf" \
         GSA_FAKE_PACMAN_LOG="$dir_e/pacman.log" \
         GSA_CPU_THREADS=8 \
         GSA_MEMORY_GIB=16 \
@@ -787,5 +806,258 @@ if ! grep -Fq 'BUILD libs-git' "$dir_g/makepkg.log"; then
     printf 'G4: libs-git did not build:\n%s\n' "$FIXTURE_OUTPUT" >&2
     exit 1
 fi
+
+# ─── H. gate COST at synthetic scale: probe-count bounds ────────────────────
+# The 2026-10-05 gate rewrite keyed/memoised every helper that forks pacman
+# (abi_id_installed / abi_pkg_installed / abi_installed_provides) and turned
+# the batch/closure walks into BFS over keyed adjacency. This section pins the
+# COST of the gate the only non-flaky way a fixture has: PACMAN PROBE COUNTS
+# against the stub's argv log — never wall-clock timing (it flakes on shared
+# machines). The expensive shape for the old per-(anchor × member) probe is
+# synthetic: 4 abi=must anchors sharing ONE pool of 240 installed abi=must
+# members (960 anchor×member visits) and 3 soname-drift providers sharing the
+# same 240 members as their layer-2 consumer closure (720 provider×member
+# visits). The members' .SRCINFO depends name the providers' soname provides,
+# so the closure is pinned in BOTH halves like section G (topology edge +
+# name edge). Decisions are asserted unchanged on the way: B1's tag refusal,
+# G1's layer-2 refusal (both with nothing dispatched), and a complete batch
+# that builds all 244 of its packages.
+(
+    set -euo pipefail
+    dir_h="$fixture/abi-gate-cost"
+    make_workspace "$dir_h" 1 2 low
+
+    # anchors: abi=must with no abi-tagged dependency — the batch origins.
+    # providers: UNTAGGED (the tag gate must never claim them, or layer 2
+    # would be unreachable behind the tag refusal) and three VCS flavors of
+    # ONE stock name — abi_stock_name maps h-drift-{git,hg,snapshot} all to
+    # h-drift, so an unmemoised abi_installed_provides would fork the same
+    # `pacman -Qi -- h-drift` once per provider while the memo forks it once.
+    # Their house provides (libpN.so) differ from the installed surface the
+    # stub reports for h-drift (libgone.so) — G1's changed-surface trigger.
+    anchors=()
+    for n in 1 2 3 4; do
+        add_meta_package "$dir_h" "h-anchor$n" ''
+        set_topology_record "$dir_h" "h-anchor$n" git '' 'abi=must'
+        anchors+=("h-anchor$n")
+    done
+    providers=()
+    n=0
+    for flavor in git hg snapshot; do
+        n=$((n + 1))
+        add_meta_package "$dir_h" "h-prov$n" ''
+        set_topology_record "$dir_h" "h-prov$n" git '' ''
+        {
+            printf 'pkgbase = h-drift-%s\n' "$flavor"
+            printf 'pkgname = h-drift-%s\n' "$flavor"
+            printf '\tprovides = libp%d.so\n' "$n"
+        } >"$dir_h/packages/h-prov$n/.SRCINFO"
+        providers+=("h-prov$n")
+    done
+
+    # members: abi=must, consuming EVERY anchor and EVERY provider — the one
+    # shared pool that is each anchor's tag batch and each provider's layer-2
+    # consumer closure at once. Written by one direct loop (two-line PKGBUILD,
+    # .SRCINFO, record — byte-identical to what add_meta_package +
+    # set_topology_record produce) because those helpers rewrite the whole
+    # topology file per record: O(n²) forks at 240 packages, which would
+    # dominate this fixture's runtime.
+    member_edges='h-anchor1,h-anchor2,h-anchor3,h-anchor4,h-prov1,h-prov2,h-prov3'
+    mkdir -p "$dir_h"/packages/h-mem{001..240}
+    members=()
+    for num in $(seq -w 1 240); do
+        id="h-mem$num"
+        {
+            printf 'pkgname=%s\n' "$id"
+            printf '%s\n' "$gsa_meta_any"
+        } >"$dir_h/packages/$id/PKGBUILD"
+        {
+            printf 'pkgbase = %s\n' "$id"
+            printf 'pkgname = %s\n' "$id"
+            printf '\tdepends = libp1.so\n'
+            printf '\tdepends = libp2.so\n'
+            printf '\tdepends = libp3.so\n'
+        } >"$dir_h/packages/$id/.SRCINFO"
+        printf '%s|packages/%s|git|%s|abi=must\n' \
+            "$id" "$id" "$member_edges" >>"$dir_h/config/topology.conf"
+        members+=("$id")
+    done
+
+    stub_sudo "$dir_h"
+
+    # The stub pacman logs EVERY argv (the cost channel: counts, never timing)
+    # and strips the leading `--` before answering. Installed = the shared
+    # member pool (both refusal preconditions); the ONE installed stock
+    # surface is h-drift, answering G's changed-surface shape
+    # (`libgone.so=1-64` against the house `libpN.so`).
+    cat >"$dir_h/bin/pacman" <<'EOF'
+#!/usr/bin/env bash
+set -u
+printf 'pacman %s\n' "$*" >>"${GSA_FAKE_PACMAN_LOG:?}"
+args=()
+for a in "$@"; do
+    [[ $a == -- ]] && continue
+    args+=("$a")
+done
+case ${args[0]:-} in
+-Qi)
+    [[ ${args[1]:-} == h-drift ]] || exit 1
+    printf 'Name : h-drift\nVersion : 1-1\nProvides : libgone.so=1-64\n'
+    exit 0
+    ;;
+-Q)
+    [[ ${args[1]:-} == h-mem* ]] && exit 0
+    exit 1
+    ;;
+esac
+exit 1
+EOF
+    chmod +x "$dir_h/bin/pacman"
+
+    # The stub makepkg: B/G's shape — a BUILD marker plus the trivial archive.
+    cat >"$dir_h/bin/makepkg" <<'EOF'
+#!/usr/bin/env bash
+set -u
+id=$(basename "$PWD")
+printf 'BUILD %s\n' "$id" >>"${GSA_FAKE_MAKEPKG_LOG:?}"
+: >"$PWD/$id-1.0.0-1-any.pkg.tar.zst"
+exit 0
+EOF
+    chmod +x "$dir_h/bin/makepkg"
+
+    run_env_h() {
+        run_builder env \
+            PATH="$dir_h/bin:$PATH" \
+            GSA_STATE_DIR="$dir_h/state" \
+            GSA_FAKE_PACMAN_LOG="$dir_h/pacman.log" \
+            GSA_FAKE_MAKEPKG_LOG="$dir_h/makepkg.log" \
+            GSA_CPU_THREADS=8 \
+            GSA_MEMORY_GIB=16 \
+            fish "$dir_h/build-all.fish" "$@"
+    }
+
+    # Probe-count oracles over the stub's argv log. The gate spells its probes
+    # two ways — abi_id_installed passes `pacman -Q NAME` positionally (the
+    # contract the fixture stubs read), abi_pkg_installed /
+    # abi_installed_provides pass the `--` separator — so the oracles count
+    # `pacman OP [--] NAME` probe lines by NAME regardless of the separator:
+    # the bound is on FORKS per unique name, not on argv spelling. probe_once
+    # asserts the memoisation bound (every probed name appears EXACTLY once —
+    # a name never probed is a saved fork and vacuously satisfies the bound);
+    # probe_count pins the scenario totals — the memo must collapse repeated
+    # visits to one probe per unique name, never drop a probe the decision
+    # depends on.
+    probe_once() { # $1 = log, $2 = op (-Q|-Qi), $3 = scenario label
+        local offenders
+        offenders=$(awk -v op="$2" '
+            $1 == "pacman" && $2 == op {
+                name = ($3 == "--" ? $4 : $3)
+                if (name != "") n[name]++
+            }
+            END { for (k in n) if (n[k] != 1) printf "%s probed %d time(s)\n", k, n[k] }' "$1" \
+            | sort)
+        [[ -z $offenders ]] \
+            || fail "$3: pacman $2 probe not once per unique name: $offenders"
+    }
+    probe_count() { # $1 = log, $2 = op (-Q|-Qi) — probe lines seen
+        awk -v op="$2" '
+            $1 == "pacman" && $2 == op {
+                name = ($3 == "--" ? $4 : $3)
+                if (name != "") n++
+            }
+            END { print n + 0 }' "$1"
+    }
+    q_probes() { # $1 = log — the probed -Q names, sorted
+        awk '
+            $1 == "pacman" && $2 == "-Q" {
+                name = ($3 == "--" ? $4 : $3)
+                if (name != "") print name
+            }' "$1" | sort
+    }
+
+    # H1 — the tag gate's cost pin. Only the 4 anchors are selected
+    # (--no-deps keeps the members out) and every member is installed:
+    # 4 × 240 = 960 (anchor, member) visits must collapse to ONE
+    # `pacman -Q <id>` probe per unique member id (the old gate forked a
+    # pacman per visit). The decision is B1's refusal verbatim, at scale.
+    : >"$dir_h/pacman.log"
+    : >"$dir_h/makepkg.log"
+    run_env_h --no-deps --no-sync --allow-broken-rustc "${anchors[@]}"
+    [[ $FIXTURE_RC -ne 0 ]] \
+        || fail "H1: the anchors without their shared members were allowed to build: $FIXTURE_OUTPUT"
+    for want in \
+        'refusing to build h-anchor1 without h-mem001' \
+        'abi=must batch anchor' \
+        'rebuild in the same selection' \
+        'rebuild h-mem001 in the same run' \
+        'check_rustc_sanity recovery text'; do
+        if ! grep -Fq "$want" <<<"$FIXTURE_OUTPUT"; then
+            fail "H1: refusal message is missing $want: $FIXTURE_OUTPUT"
+        fi
+    done
+    if [[ -s "$dir_h/makepkg.log" ]]; then
+        fail "H1: the refusal came after builds were dispatched: $(cat "$dir_h/makepkg.log")"
+    fi
+    probe_once "$dir_h/pacman.log" -Q H1
+    [[ $(probe_count "$dir_h/pacman.log" -Q) == 240 ]] \
+        || fail "H1: want exactly 240 pacman -Q probes (one per shared member across 960 anchor×member visits), saw $(probe_count "$dir_h/pacman.log" -Q)"
+    [[ $(q_probes "$dir_h/pacman.log") == "$(printf '%s\n' "${members[@]}" | sort)" ]] \
+        || fail "H1: the probed id set is not exactly the 240 shared members: $(q_probes "$dir_h/pacman.log" | tr '\n' ' ')"
+    [[ $(probe_count "$dir_h/pacman.log" -Qi) == 0 ]] \
+        || fail "H1: the tag-gate refusal must stop before layer 2 probes pacman -Qi: $(cat "$dir_h/pacman.log")"
+
+    # H2 — the decision half at scale: the same anchors WITHOUT --no-deps.
+    # Consumer expansion rides the 240 members in (they consume the anchors),
+    # the batch is complete, and all 244 packages build. A complete batch
+    # must probe pacman ZERO times: every member is in the selection, so the
+    # memoised helpers are never reached.
+    : >"$dir_h/pacman.log"
+    : >"$dir_h/makepkg.log"
+    run_env_h --no-sync --allow-broken-rustc "${anchors[@]}"
+    [[ $FIXTURE_RC -eq 0 ]] && grep -Fq 'All builds succeeded!' <<<"$FIXTURE_OUTPUT" \
+        || fail "H2: the complete batch was refused or failed: $FIXTURE_OUTPUT"
+    built=$(awk '/^BUILD / { n++ } END { print n + 0 }' "$dir_h/makepkg.log")
+    [[ $built == 244 ]] \
+        || fail "H2: want 244 stub makepkg dispatches (4 anchors + 240 members), saw $built"
+    absent=$(printf '%s\n' "${anchors[@]}" "${members[@]}" | sort \
+        | comm -23 - <(awk '/^BUILD / { print $2 }' "$dir_h/makepkg.log" | sort -u))
+    [[ -z $absent ]] || fail "H2: never reached the stub makepkg: $absent"
+    [[ $(probe_count "$dir_h/pacman.log" -Q) == 0 ]] \
+        || fail "H2: a complete batch must not probe pacman -Q: $(cat "$dir_h/pacman.log")"
+    [[ $(probe_count "$dir_h/pacman.log" -Qi) == 0 ]] \
+        || fail "H2: a complete batch must not probe pacman -Qi: $(cat "$dir_h/pacman.log")"
+
+    # H3 — the layer-2 helpers' cost pin. Only the 3 drift providers are
+    # selected (untagged, so the tag gate stays silent) and all 240 members
+    # are omitted and installed: 3 × 240 = 720 (provider, member) closure
+    # visits must collapse to one `pacman -Q` probe per member id, and the
+    # three same-stock-name providers' surface probes must collapse to ONE
+    # `pacman -Qi -- h-drift`. The decision is G1's refusal verbatim, at scale.
+    : >"$dir_h/pacman.log"
+    : >"$dir_h/makepkg.log"
+    run_env_h --no-deps --no-sync --allow-broken-rustc "${providers[@]}"
+    [[ $FIXTURE_RC -ne 0 ]] \
+        || fail "H3: drifted providers with omitted installed consumers built: $FIXTURE_OUTPUT"
+    for want in \
+        'refusing to build h-prov1 without h-mem001' \
+        'soname provides changed' \
+        'missing: h-mem001' \
+        'add h-mem001 to the selection'; do
+        if ! grep -Fq "$want" <<<"$FIXTURE_OUTPUT"; then
+            fail "H3: refusal message is missing $want: $FIXTURE_OUTPUT"
+        fi
+    done
+    if [[ -s "$dir_h/makepkg.log" ]]; then
+        fail "H3: the refusal came after builds were dispatched: $(cat "$dir_h/makepkg.log")"
+    fi
+    probe_once "$dir_h/pacman.log" -Q H3
+    [[ $(probe_count "$dir_h/pacman.log" -Q) == 240 ]] \
+        || fail "H3: want exactly 240 pacman -Q probes (one per shared member across 720 provider×member visits), saw $(probe_count "$dir_h/pacman.log" -Q)"
+    [[ $(q_probes "$dir_h/pacman.log") == "$(printf '%s\n' "${members[@]}" | sort)" ]] \
+        || fail "H3: the probed id set is not exactly the 240 shared members: $(q_probes "$dir_h/pacman.log" | tr '\n' ' ')"
+    probe_once "$dir_h/pacman.log" -Qi H3
+    [[ $(probe_count "$dir_h/pacman.log" -Qi) == 1 ]] \
+        || fail "H3: want exactly 1 pacman -Qi probe (h-drift, memoised across the 3 VCS flavors), saw $(probe_count "$dir_h/pacman.log" -Qi)"
+)
 
 printf 'abi-batch-policy fixture: PASS\n'
