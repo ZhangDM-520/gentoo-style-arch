@@ -196,7 +196,7 @@ package_mariadb-libs() {
   cd "$srcdir/mariadb"
   local _l
   for _l in COPYING COPYING.thirdparty README.md; do
-    [[ -f $_l ]] && install -Dm644 "$_l" -t "$pkgdir/usr/share/licenses/$pkgname/"
+    if [[ -f $_l ]]; then install -Dm644 "$_l" -t "$pkgdir/usr/share/licenses/$pkgname/"; fi
   done
 }
 

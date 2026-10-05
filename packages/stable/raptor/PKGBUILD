@@ -81,6 +81,6 @@ package() {
   cd $_name-$pkgver
   local _l
   for _l in LICENSE.txt LICENSE-2.0.txt COPYING COPYING.LIB; do
-    [[ -f $_l ]] && install -Dm644 "$_l" -t "$pkgdir/usr/share/licenses/$pkgname/"
+    if [[ -f $_l ]]; then install -Dm644 "$_l" -t "$pkgdir/usr/share/licenses/$pkgname/"; fi
   done
 }

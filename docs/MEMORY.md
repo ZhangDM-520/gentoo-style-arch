@@ -1163,6 +1163,14 @@ constant, not a baked path).
 
 ## 6. Pitfall digest (full details: NOTE.md sections of same dates)
 
+- **A `[[ -f ]] && cmd` guard as a function's last command fails the function
+  when the file is absent** (2026-10-06 mpg123): 16 recipes carried the
+  license-loop idiom `[[ -f $_l ]] && install ...`; when the last candidate
+  file is missing upstream (mpg123 1.33.7 ships only `COPYING`), the loop's
+  short-circuit status 1 becomes `package()`'s return value and makepkg fails
+  with no error text. Guards at function tail use `if ...; then ...; fi`
+  (status 0 either way) — same family as the discarded-status rule the PGO
+  gate exists for.
 - **Fixture stub argv shapes ARE the contract** (2026-10-05): routing a raw
   probe through a helper is safe only when the forked argv is char-for-char
   identical — adding `--` to `pacman -Q NAME` silently disabled the ABI-batch

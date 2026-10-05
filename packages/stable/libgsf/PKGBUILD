@@ -75,6 +75,6 @@ package() {
   # license: ship upstream licence text(s) (LGPL-2.1-only)
   local _l
   for _l in COPYING COPYING.LIB; do
-    [[ -f $_l ]] && install -Dm644 "$_l" -t "$pkgdir/usr/share/licenses/$pkgname/"
+    if [[ -f $_l ]]; then install -Dm644 "$_l" -t "$pkgdir/usr/share/licenses/$pkgname/"; fi
   done
 }

@@ -34,6 +34,6 @@ package() {
   # license: ship the upstream licence text(s) (GPL)
   local _l
   for _l in COPYING LICENSE; do
-    [[ -f $_l ]] && install -Dm644 "$_l" -t "$pkgdir/usr/share/licenses/$pkgname/"
+    if [[ -f $_l ]]; then install -Dm644 "$_l" -t "$pkgdir/usr/share/licenses/$pkgname/"; fi
   done
 }

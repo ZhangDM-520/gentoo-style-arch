@@ -3,7 +3,7 @@
 
 pkgname=mpg123
 pkgver=1.33.7
-pkgrel=1
+pkgrel=1.1
 pkgdesc='Console based real time MPEG Audio Player for Layer 1, 2 and 3'
 url='https://mpg123.de/'
 arch=('x86_64')
@@ -54,7 +54,7 @@ package() {
   # license: ship upstream licence text(s) (LGPL-2.1-only)
   local _l
   for _l in COPYING COPYING.LIB LICENSE; do
-    [[ -f $_l ]] && install -Dm644 "$_l" -t "$pkgdir/usr/share/licenses/$pkgname/"
+    if [[ -f $_l ]]; then install -Dm644 "$_l" -t "$pkgdir/usr/share/licenses/$pkgname/"; fi
   done
 }
 

@@ -63,7 +63,7 @@ package() {
   cd $pkgname
   local _l
   for _l in COPYING COPYING.LGPL LICENSE; do
-    [[ -f $_l ]] && install -Dm644 "$_l" -t "$pkgdir/usr/share/licenses/$pkgname/"
+    if [[ -f $_l ]]; then install -Dm644 "$_l" -t "$pkgdir/usr/share/licenses/$pkgname/"; fi
   done
 }
 

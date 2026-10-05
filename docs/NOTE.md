@@ -37,6 +37,36 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-06 — silent package() failure: `[[ -f ]] && install` guard loops (mpg123 + 15 more)
+
+**Symptom.** Run #12 failed at `mpg123` (67/652) with `==> ERROR: A failure
+occurred in package()` and **no error text** — the make install completed
+normally and the very next log line is the failure.
+
+**Root cause.** The license loop
+`for _l in COPYING COPYING.LIB LICENSE; do [[ -f $_l ]] && install ...; done`
+runs as `package()`'s last command. mpg123 1.33.7 ships only `COPYING`, so the
+last two iterations short-circuit with status 1; bash keeps the last status,
+`package()` returns 1, and makepkg reports a failure with nothing to point at.
+The discarded-status family the PGO gate was built for — but on the `&&`
+guard side rather than the `|| return` side. 16 recipes carried the idiom
+verbatim (avahi, coin-or-coinutils, enchant, gawk, gcr-4, gcr, geoclue, gloox,
+gnome-autoar, gnome-calculator, libgsf, mariadb-libs, mpg123, raptor,
+roc-toolkit, zbar); each fails the same way the day its upstream tree drops
+the last-listed candidate.
+
+**Fix.** All 16 converted to `if [[ -f $_l ]]; then install ...; fi` — same
+behavior when files exist, status 0 when they do not.
+
+**Validation.** Red: run #12's silent failure + the loop isolated in a shell
+(`loop status=1` with only COPYING present). Green: `makepkg -sf --noconfirm`
+rc 0 → `mpg123 1.33.7-1.1`; `bash -n` clean on all 16; fixture battery 54
+pass / 1 documented host drift (cleanup-extensions.sh).
+
+**Rule.** A conditional guard that can legitimately fail must not be a
+function's last command — end package/prepare tails with `if`-forms (or a
+positive statement), never `[[ ... ]] && cmd`. MEMORY §6 digest updated.
+
 ## 2026-10-06 — systemic keyring gap: 146 of 179 validpgpkeys pins unimported (batch heal)
 
 **Symptom.** Run #11 failed at `libxau` (39/652) with `unknown public key

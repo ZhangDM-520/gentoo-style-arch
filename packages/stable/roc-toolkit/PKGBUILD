@@ -79,7 +79,7 @@ package() {
   # license: upstream license text(s) + bundled hedley licence
   local _l
   for _l in LICENSE.txt LICENSE MPL-2.0.txt CC0-1.0.txt LICENSE.MPL-2.0 LICENSE.CC0-1.0; do
-    [[ -f $_l ]] && install -Dm644 "$_l" -t "$pkgdir/usr/share/licenses/$pkgname/"
+    if [[ -f $_l ]]; then install -Dm644 "$_l" -t "$pkgdir/usr/share/licenses/$pkgname/"; fi
   done
   install -vDm 644 3rdparty/hedley/COPYING -t "$pkgdir/usr/share/licenses/$pkgname/hedley.COPYING"
 }
