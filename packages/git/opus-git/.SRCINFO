@@ -13,6 +13,8 @@ pkgbase = opus-git
 	conflicts = opus
 	conflicts = opus-docs
 	source = opus::git+https://gitlab.xiph.org/xiph/opus.git
+	source = https://media.xiph.org/opus/models/opus_data-a5177ec6fb7d15058e99e57029746100121f68e4890b1467d4094aa336b6013e.tar.gz
 	b2sums = SKIP
+	b2sums = 7ee7c2b8ef7d6fcacc0b80aa68a31dab290cc9e8b62a0849da42aea84c8a8c99cd13e1f02fd59ed58ebb091147cec2f77fa4d7d4282e30dfa04550430fe08e48
 
 pkgname = opus-git

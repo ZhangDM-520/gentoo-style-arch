@@ -24,8 +24,33 @@ conflicts=('opus' 'opus-docs')
 # Jean-Marc Valin) — master-tracking has no tag to pin/verify (makepkg would
 # run `git verify-commit HEAD` for ?signed on unsigned commits); tracked
 # unsigned, no --skippgpcheck
-source=('opus::git+https://gitlab.xiph.org/xiph/opus.git')
-b2sums=('SKIP')
+#
+# Model data is NOT in git: upstream pins its sha256 in autogen.sh (invoked by
+# dnn/download_model.sh) and publishes the generated dnn/*_data.{c,h} weight
+# tables as opus_data-<sha256>.tar.gz on media.xiph.org — the file name IS the
+# content checksum (see dnn/download_model.sh + create_opus_data.sh). Declared
+# here so makepkg verifies it (b2 below; the sha256 is the file name). The
+# lpcnet/fargan tables are unconditional in the .mk source lists, so no build
+# works without them. On a model bump prepare() fails closed with the new pin.
+_opus_model_sha256=a5177ec6fb7d15058e99e57029746100121f68e4890b1467d4094aa336b6013e
+source=('opus::git+https://gitlab.xiph.org/xiph/opus.git'
+        "https://media.xiph.org/opus/models/opus_data-${_opus_model_sha256}.tar.gz")
+b2sums=('SKIP'
+        '7ee7c2b8ef7d6fcacc0b80aa68a31dab290cc9e8b62a0849da42aea84c8a8c99cd13e1f02fd59ed58ebb091147cec2f77fa4d7d4282e30dfa04550430fe08e48')
+
+prepare() {
+  # fail closed on upstream model drift: autogen.sh is the upstream pin
+  local pinned
+  pinned=$(sed -n 's/.*download_model\.sh "\([0-9a-f]\{64\}\)".*/\1/p' opus/autogen.sh)
+  if [[ $pinned != "$_opus_model_sha256" ]]; then
+    echo "opus-git: model data drift — autogen.sh pins ${pinned:-<none>}, recipe pins $_opus_model_sha256" >&2
+    echo "opus-git: update _opus_model_sha256 + b2sums to opus_data-${pinned:-<sha256>}.tar.gz" >&2
+    return 1
+  fi
+  # generated weight tables only; dnn/models/*.pth are training-time artefacts
+  # referenced by no build list
+  tar -xf "opus_data-${_opus_model_sha256}.tar.gz" -C opus --exclude='dnn/models'
+}
 
 pkgver() {
   cd opus
@@ -41,13 +66,13 @@ build() {
     # kept from stock
     -D asm=disabled
     -D custom-modes=true
-    # stock enables these for the release tarball: "Git doesn't contain model
-    # data" (stock comment) — the DRED/OSCE/deep-PLC neural models ship only
-    # in release tarballs, so they are disabled for VCS builds (AUR opus-git
-    # enables them anyway; that reference is stale/unverified)
-    -D deep-plc=disabled
-    -D dred=disabled
-    -D osce=disabled
+    # stock enables these for the release tarball because "Git doesn't contain
+    # model data"; this recipe now fetches the same generated weight tables as
+    # a checksummed source (see above), so the stock feature set is restored —
+    # the earlier disable was data-forced, not a trim
+    -D deep-plc=enabled
+    -D dred=enabled
+    -D osce=enabled
   )
 
   arch-meson opus build "${meson_options[@]}"
