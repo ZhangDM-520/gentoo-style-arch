@@ -531,6 +531,23 @@
     counterpart rebuilt with an unversioned dep in the same wave (local
     `.1` pkgrel; sources stay signature-verified). Never make a provider
     lie about its version to satisfy a pin.
+28. **A VCS recipe must pin build inputs that git does not carry**
+    (2026-10-06 opus-git): some projects generate or fetch build-time data
+    (opus's `dnn/*_data.{c,h}` weight tables) outside git and only ship it
+    in release tarballs; the upstream tree itself names the pin (opus:
+    `autogen.sh` → `dnn/download_model.sh <sha256>`, archive named after its
+    own digest on media.xiph.org). Declare that artifact as a checksummed
+    `source=()` entry (makepkg verifies it — never an out-of-band download in
+    `prepare()`), and add a `prepare()` guard that fails closed when the
+    upstream pin drifts, printing both values and the exact update. Second
+    half of the rule: a trim/disable comment must state WHICH fact forced it
+    ("git has no model data") so it can be revisited when the fact changes —
+    opus's disabled neural features were data-forced, not policy, and became
+    stock-parity `-D deep-plc/dred/osce=enabled` once the data was pinned.
+    Red-herring warning: a first mutation probe that changed the digest's
+    LENGTH only proved the fail-closed path — probes must preserve the input
+    shape (see NOTE.md same-dated entry). Checks: `bash -n`, the probe pair,
+    `tests/recipe-sources.sh`.
 
 ## 2. Workspace overview
 

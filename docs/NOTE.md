@@ -37,6 +37,44 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-06 — a git recipe lost a build input that only release tarballs carry (opus-git)
+
+- **Symptom**: run #6 died on `opus-git` after 14 successful builds —
+  `opus/meson.build:659:24: ERROR: File dnn/fargan_data.h does not exist.`
+- **Root cause**: recipe-vs-upstream drift. `lpcnet_headers.mk`/`lpcnet_sources.mk` reference
+  `dnn/fargan_data.{c,h}` UNCONDITIONALLY (fargan is core code since the DNN rewrite, unlike the
+  optional dred/osce/deep-plc the recipe disabled), but the git tree carries no model data:
+  upstream pins the model's sha256 in `autogen.sh` and publishes the *generated* weight tables
+  (`dnn/*_data.{c,h}`) as `opus_data-<sha256>.tar.gz` on `media.xiph.org` — the file name IS the
+  content checksum (`dnn/download_model.sh` verifies the argument against the download;
+  `create_opus_data.sh` names the archive after its own digest). Release tarballs ship the
+  tables pre-generated, which is why stock only builds from them. The recipe's stock-derived
+  comment ("Git doesn't contain model data … disabled for VCS builds") described a fact about
+  the TREE but the recipe then treated it as "no data exists at all" — the disable only covered
+  the optional features while the unconditional ones died at configure.
+- **Fix**: declare `opus_data-<sha256>.tar.gz` as a second `source=()` entry with a `b2` checksum
+  (makepkg-verified, not an out-of-band `download_model.sh` call), extract the weight tables in
+  `prepare()` excluding training-only `dnn/models/*.pth` (referenced by no build list), and add a
+  `prepare()` guard that fails closed when the sha256 `autogen.sh` pins drifts from the recipe
+  pin (prints both and the exact update). With the data present, stock's feature set is restored
+  (`-D deep-plc/dred/osce=enabled`) — the earlier disable was data-forced, not a trim. The same
+  rebuild then hit the lilv-git class AGAIN one stage later: `meson.build:682 find_program('doxygen',
+  required: get_option('docs'))` — stock's doxygen makedep went with the opus-docs split, and
+  `arch-meson`'s `--auto-features enabled` forces the `docs` feature ON. Fixed with
+  `-D docs=disabled`, `# trim:`-annotated (house pattern).
+- **Validation**: `bash -n`; `.SRCINFO` regenerated; drift guard probed both directions (real pin
+  extracts to the recipe value; same-length mutation detected — first probe mutated the digest
+  LENGTH and only proved the fail-closed path, a probe must preserve the input shape);
+  `tests/recipe-sources.sh` PASS (513 local sources / 653 recipes). Red→green proven by the real
+  workspace rebuild (both failures reproduced first): `opus-git 1.6.1.r68.g503d81b1-1` builds with
+  `provides = libopus.so=0-64`, `usr/lib/libopus.so.0.11.1` at 4 475 792 B vs stock 4 515 784 B
+  (stock feature parity), `opus_dred_*`/OSCE/PLC symbols exported, no docs payload and no
+  `dnn/models/*.pth` in the archive.
+- **Rule**: a VCS recipe for a project whose build needs generated/fetched data absent from git
+  must pin that data as a checksummed source AND fail closed against whatever in-tree file names
+  the upstream pin; and a trim/disable comment must state which facts forced it, so the option
+  can be revisited when the fact changes (MEMORY rule 28).
+
 ## 2026-10-06 — a docs trim left its build stage behind (lilv-git)
 
 - **Symptom**: run #5 died on `lilv-git` at 0m11s — `lilv/doc/meson.build:7: ERROR: Program
