@@ -506,6 +506,19 @@
     expectations — timing assertions block the very perf work that removes
     the latency. Check: `time fish build-all.fish --list` at the current
     roster size.
+27. **Two version surfaces, two rules** (2026-10-06 real full-build
+    findings): (a) any version joined to a PACKAGE FILENAME must be
+    makepkg's full version `epoch:pkgver` (`get_full_version`) — a bare
+    `pkgver` never matches an epoch-bearing archive and discovery reports
+    "no built package archive matched" for a perfectly good artifact
+    (47 recipes carry `epoch=`; pinned by `tests/install-archive-guard.sh`
+    case A4); (b) a strict `=` dependency pin cannot be satisfied by a
+    rolling `-git` provider, and Arch's lib32 packages pin their 64-bit
+    counterpart exactly — on a multilib host, swap targets with such a
+    pin (`pacman -Qi | grep 'name=[0-9]'`) need the pinning lib32
+    counterpart rebuilt with an unversioned dep in the same wave (local
+    `.1` pkgrel; sources stay signature-verified). Never make a provider
+    lie about its version to satisfy a pin.
 
 ## 2. Workspace overview
 

@@ -37,6 +37,49 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-06 — archive discovery dropped the epoch (real full build, first package)
+
+- **Symptom**: the first package of a real 652-package `-i` run (`ninja-git`, epoch=2) built
+  cleanly and then refused to install: `install requested but no built package archive matched
+  the current pkgver-pkgrel — refusing to report success`, run rc 1, dispatch stopped.
+- **Root cause**: `pkgbuild_version` (lib/sources.fish) returned the bare `pkgver`, but makepkg
+  writes the archive filename from `get_full_version` = `epoch:pkgver` — the artifact is
+  `ninja-git-2:1.13.2.r196.g4e4df1e5-1-x86_64.pkg.tar.zst` while discovery looked for the stem
+  without the `2:`. `archive_matches_output` is literal string surgery (correctly — pkgver may
+  carry metacharacters), so the epoch must be joined BEFORE the match. 47 recipes carry `epoch=`,
+  so every one of them would have died the same way at install time. No fixture had used an epoch.
+- **Fix**: `pkgbuild_version` now returns pkgver exactly as makepkg builds it into the filename
+  (`${epoch:+$epoch:}${pkgver}`); its only consumer is `current_archives`, so the seam is
+  contained. `tests/install-archive-guard.sh` case A4 pins an epoch-bearing recipe whose archive
+  is `p1-2:1.0.0-1-any.pkg.tar.zst` (red-first: A4 reproduced the real-world refusal against the
+  unfixed builder, green after).
+- **Rule**: every version a helper feeds to FILENAME matching must be the makepkg full version
+  (`epoch:pkgver-pkgrel`), never the raw `pkgver` variable; a version fed to pacman-level
+  comparisons (`-Qp`/`-Qi` answers) is already full — never strip or add an epoch there.
+
+## 2026-10-06 — lib32 lockstep pins block every stock→-git swap on a multilib host
+
+- **Symptom**: after the epoch fix, the run reached `expat-git` and its install refused:
+  `expat-git-2.9.0… and expat-2.8.5-1.1 are in conflict. Remove expat? → removing expat breaks
+  dependency 'expat=2.8.5' required by lib32-expat`. The build itself was fine.
+- **Root cause** (host-state class, not a recipe defect): Arch's multilib packages pin their
+  64-bit counterpart at an EXACT version (`lib32-expat: expat=2.8.5`) to keep the two in lockstep.
+  A rolling -git provider cannot satisfy `=`, so the swap is unsatisfiable while the lib32
+  counterpart is installed. A full-system scan showed five such pins against this set's core
+  swap targets: `lib32-expat→expat`, `lib32-libelf→libelf` (elfutils-git's `libelf-git` output),
+  `lib32-libffi→libffi`, `lib32-ncurses→ncurses`, `lib32-nettle→nettle`.
+- **Fix (host)**: rebuilt those five from Arch's own multilib PKGBUILDs with the pin relaxed to
+  the bare provider name (each 32-bit lib is self-contained — the pin is a lockstep convention,
+  not an ABI link), pkgrel `.1` local delta, installed in one transaction. Sources stayed
+  signature-verified (upstream keys imported; never `--skippgpcheck`); only `lib32-libelf` needed
+  a build tweak (`-Wno-error=null-dereference` for generated flex code under the GCC snapshot).
+  The relaxed deps are satisfiable by the -git providers' versioned provides (`expat=$pkgver` etc.).
+- **Rule**: on a multilib host, before swapping a library for its -git provider, check
+  `pacman -Qi` exact-version pins on the stock name (`pacman -Qi | grep -E 'name=[0-9]'`);
+  rebuild the pinning lib32 counterpart with an unversioned dep in the same wave as the swap.
+  Strict `=` pins can never be satisfied by a rolling provider — never "fix" it by downgrading
+  the provider's `provides` to lie about its version.
+
 ## 2026-10-05 — IgnorePkg closure becomes dynamic (registered at install time)
 
 - **Symptom**: the `/etc/pacman.conf` `IgnorePkg` closure was a *static*
