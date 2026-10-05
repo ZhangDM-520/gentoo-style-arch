@@ -30,6 +30,7 @@ pkgbase = js140
 	source = 0004-Bug-1983736-Patch-jsonschema-to-work-with-Python-3.1.patch
 	source = 0005-Bug-1993797-Fix-AST-parsing-in-DecoratorVisitor-for-.patch
 	validpgpkeys = 14F26682D0916CDD81E37B6D61B7B526D98F0353
+	validpgpkeys = 827E658608679618CD349F93678E455D76767AA3
 	sha256sums = 4d6ed3b18b2069c55bab12d8ba95da6013ac0b036d8a031df8b9f39a25d05c33
 	sha256sums = SKIP
 	sha256sums = b5178a7b8a603b645cbae61467f3fa1fef6e9f34c90e4a22faf4ea2152a50fba

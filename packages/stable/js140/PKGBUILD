@@ -49,6 +49,13 @@ validpgpkeys=(
   # Mozilla Software Releases <release@mozilla.com>
   # https://blog.mozilla.org/security/2025/04/01/updated-gpg-key-for-signing-firefox-releases-2/
   14F26682D0916CDD81E37B6D61B7B526D98F0353
+  # 2026-08-06 signing SUBKEY after the 2025-03 subkey was revoked (its
+  # unencrypted copy leaked; https://blog.mozilla.org/security/2026/08/10/
+  # updated-gpg-key-for-signing-firefox-and-thunderbird-releases/). Subkey of
+  # the primary above — binding verified against Mozilla's published key
+  # block (packages.mozilla.org/rpm/firefox/signing-key.gpg); signatures on
+  # 140.17.0esr are made by this subkey.
+  827E658608679618CD349F93678E455D76767AA3
 )
 sha256sums=('4d6ed3b18b2069c55bab12d8ba95da6013ac0b036d8a031df8b9f39a25d05c33'
             'SKIP'
