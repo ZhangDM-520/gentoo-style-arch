@@ -53,7 +53,12 @@ build() {
     export LDFLAGS+=" -fuse-ld=mold"
   fi
 
-  arch-meson lilv build
+  # trim: docs stage disabled with its dropped lilv-docs output (see the
+  # makedepends note above) — arch-meson sets --auto-features enabled, so the
+  # doxygen/sphinx find_program calls in doc/meson.build would be REQUIRED
+  # and kill the build on a host without them. The man pages are hand-written
+  # doc/*.1 installed from tools/meson.build, not generated here: they stay.
+  arch-meson lilv build -D docs=disabled
   meson compile -C build
 }
 

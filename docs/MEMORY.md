@@ -127,7 +127,12 @@
    python-sphinx man-page docs stage and the `man1/libuv.1` install path,
    man-db dropped po4a translations with the `usr/share/man/<lang>/` + NLS
    locale trees. Dropping only the tool leaves a build that dies looking for
-   it; dropping only the output leaves the stage that produces it. Check:
+   it; dropping only the output leaves the stage that produces it — on a
+   meson recipe the trim must disable the FEATURE (`-D docs=disabled`,
+   `-D <x>_doc=false`), because `arch-meson` runs `--auto-features enabled`
+   and turns every optional tool into a hard `find_program` requirement
+   (2026-10-06 lilv-git: output+tool trimmed, `doc/meson.build` stage left
+   live). Check:
    `fish build-all.fish --audit-lint purged` + the `# trim:` annotations at
    every removal site. (last reviewed 2026-10-04)
 9. **IgnorePkg registration is dynamic** — the static closure contract
