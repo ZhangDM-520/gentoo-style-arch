@@ -37,6 +37,41 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-06 — systemic keyring gap: 146 of 179 validpgpkeys pins unimported (batch heal)
+
+**Symptom.** Run #11 failed at `libxau` (39/652) with `unknown public key
+CFDF148828C642A7` — the third PGP-class wall of the day (after js140 and
+libftdi), and inspecting the keyring showed why: only 33 of the 179
+`validpgpkeys` pins across the recipe set were present in the build user's
+gpg keyring.
+
+**Root cause.** The keyring is per-host state that nothing reconstructs: each
+pin is correct in its recipe, but `validpgpkeys` alone verifies nothing
+(MEMORY rule 15). The libxau failure additionally exercised the subkey case —
+`CFDF148828C642A7` is Alan Coopersmith's *signing subkey* while the recipe
+pins his primary `4A193C...1F2D130E` (Arch's own pin is identical).
+
+**Fix.** No recipe changes. One batch heal: all 179 pins enumerated, missing
+ones imported by exact fingerprint (fingerprint-matched fetch is
+self-verifying), Linus Torvalds' key sourced from kernel.org's published
+`pgpkeys.git` keyring after both public keyservers returned "No data", and a
+sweep proving every cached `*.sig` signer in the source cache is now covered.
+`gpg --verify` on the libXau sig reports good against the pinned primary.
+
+**Validation.** Red: run #11's failure + `gpg --verify: No public key` before
+the heal. Green: `makepkg --verifysource` and a full `makepkg -sf --noconfirm`
+rc 0 → `libxau 1.0.12-1.1`; sig-signer sweep over the source cache reports 0
+uncovered; gpg-based coverage of all 179 pins leaves exactly two unresolvable
+and both are proven non-exercised — `1FED507E...` (libpng-git: git source,
+no fetch-time PGP) and `FF478FB2...` (guile: revoked upstream; the guile
+tarball is signed by Courtès' pinned key instead).
+
+**Rule.** Keyring coverage is a host invariant to sweep in one pass whenever a
+`unknown public key` appears — heal the class, not the instance. A subkey
+signature verifies against the pinned primary once it is imported (binding
+covers it); an explicit subkey entry is only needed to pin a rotated signer.
+MEMORY rule 15 extended accordingly.
+
 ## 2026-10-06 — libftdi: missing key import, then Python 2 API in a third-party patch
 
 **Symptom.** Run #10 failed at `libftdi` (28/652) with `One or more PGP

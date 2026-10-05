@@ -263,7 +263,18 @@
     primary key. `git verify-tag <tag>` names the actual signer; confirm that
     fingerprint against the maintainer's published key, add it to
     `validpgpkeys` with a role comment, and import the key. Never pass
-    `--skippgpcheck` or drop `#signed`.
+    `--skippgpcheck` or drop `#signed`. A `validpgpkeys` pin is inert until the
+    key is in the **build user's keyring** — makepkg verifies against the
+    keyring, so an import gap fails every signed source with `unknown public
+    key` no matter how correct the pin is (js140 2026-10-06, then libxau the
+    same day with 146 of 179 pins unimported). Sweep the whole set at once:
+    enumerate every pin, `gpg --list-keys <pin>` each, import missing keys by
+    exact fingerprint (a fingerprint-matched fetch is self-verifying); retired
+    or keyservers-hostile keys come from the publisher's own keyring (Linus'
+    and Greg KH's keys from kernel.org's `pgpkeys.git`). A subkey signature
+    verifies against the pinned **primary** once it is imported (the binding
+    covers it — libxau's sig is Coopersmith's signing subkey); an explicit
+    subkey entry in `validpgpkeys` is only needed to pin a rotated signer.
 
 16. **Bulk `prepare()` loops: batch them, and refuse incomplete inputs**
     (09-18 texlive incident): a loop that shells out per file costs process
