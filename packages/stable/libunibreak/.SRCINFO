@@ -1,7 +1,7 @@
 pkgbase = libunibreak
 	pkgdesc = An implementation of the line breaking algorithm as described in Unicode 5.2.0 Standard Annex 14, Revision 24
 	pkgver = 7.0
-	pkgrel = 1
+	pkgrel = 1.2
 	url = https://github.com/adah1972/libunibreak/
 	arch = x86_64
 	license = custom:zlib/libpng

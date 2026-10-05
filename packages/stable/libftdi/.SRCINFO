@@ -1,7 +1,7 @@
 pkgbase = libftdi
 	pkgdesc = A library to talk to FTDI chips
 	pkgver = 1.5
-	pkgrel = 10
+	pkgrel = 10.1
 	url = https://www.intra2net.com/en/developer/libftdi/
 	arch = x86_64
 	license = GPL-2.0-only

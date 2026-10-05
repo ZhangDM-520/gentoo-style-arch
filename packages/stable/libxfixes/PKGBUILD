@@ -3,7 +3,7 @@
 
 pkgname=libxfixes
 pkgver=6.0.2
-pkgrel=1
+pkgrel=1.1
 pkgdesc="X11 miscellaneous 'fixes' extension library"
 arch=('x86_64')
 url="https://xorg.freedesktop.org/"

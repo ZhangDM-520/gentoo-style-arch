@@ -1,7 +1,7 @@
 pkgbase = logrotate
 	pkgdesc = Rotates system logs automatically
 	pkgver = 3.22.0
-	pkgrel = 1
+	pkgrel = 1.1
 	url = https://github.com/logrotate/logrotate
 	arch = x86_64
 	license = GPL

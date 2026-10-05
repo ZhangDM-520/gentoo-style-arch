@@ -1,7 +1,7 @@
 pkgbase = tomlplusplus
 	pkgdesc = TOML config file parser and serializer for C++17
 	pkgver = 3.4.0
-	pkgrel = 2
+	pkgrel = 2.2
 	url = https://marzer.github.io/tomlplusplus/
 	arch = x86_64
 	license = MIT

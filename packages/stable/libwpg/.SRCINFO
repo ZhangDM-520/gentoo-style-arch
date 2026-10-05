@@ -1,7 +1,7 @@
 pkgbase = libwpg
 	pkgdesc = Library for importing and converting Corel WordPerfect(tm) Graphics images.
 	pkgver = 0.3.4
-	pkgrel = 3
+	pkgrel = 3.1
 	url = https://libwpg.sourceforge.net/
 	arch = x86_64
 	license = LGPL-2.1-or-later OR MPL-2.0

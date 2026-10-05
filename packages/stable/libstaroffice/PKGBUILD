@@ -6,7 +6,7 @@ pkgname=(libstaroffice)
 # trim: the libstaroffice-doc split is dropped — the doxygen API docs are not
 # shipped (--without-docs in build()); only the library/tools output stays
 pkgver=0.0.8
-pkgrel=1
+pkgrel=1.1
 pkgdesc="filter for old StarOffice documents(.sdc, .sdw, ...) based on librevenge"
 url="https://github.com/fosnola/libstaroffice"
 arch=('x86_64')

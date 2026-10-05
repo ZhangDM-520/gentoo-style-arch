@@ -1,7 +1,7 @@
 pkgbase = libxss
 	pkgdesc = X11 Screen Saver extension library
 	pkgver = 1.2.5
-	pkgrel = 1
+	pkgrel = 1.1
 	url = https://gitlab.freedesktop.org/xorg/lib/libxscrnsaver
 	arch = x86_64
 	license = X11

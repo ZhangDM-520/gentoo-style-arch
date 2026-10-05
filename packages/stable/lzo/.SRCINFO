@@ -1,7 +1,7 @@
 pkgbase = lzo
 	pkgdesc = Portable lossless data compression library
 	pkgver = 2.10
-	pkgrel = 5
+	pkgrel = 5.1
 	url = https://www.oberhumer.com/opensource/lzo
 	arch = x86_64
 	license = GPL

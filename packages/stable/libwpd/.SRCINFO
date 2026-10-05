@@ -1,7 +1,7 @@
 pkgbase = libwpd
 	pkgdesc = Library for importing WordPerfect (tm) documents
 	pkgver = 0.10.3
-	pkgrel = 6
+	pkgrel = 6.1
 	url = https://libwpd.sourceforge.net/
 	arch = x86_64
 	license = LGPL-2.1-or-later OR MPL-2.0

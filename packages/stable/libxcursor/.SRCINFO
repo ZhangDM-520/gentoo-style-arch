@@ -1,7 +1,7 @@
 pkgbase = libxcursor
 	pkgdesc = X cursor management library
 	pkgver = 1.2.3
-	pkgrel = 1
+	pkgrel = 1.1
 	url = https://gitlab.freedesktop.org/xorg/lib/libxcursor
 	arch = x86_64
 	license = HPND-sell-variant

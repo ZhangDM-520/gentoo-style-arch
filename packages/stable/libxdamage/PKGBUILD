@@ -3,7 +3,7 @@
 
 pkgname=libxdamage
 pkgver=1.1.7
-pkgrel=1
+pkgrel=1.1
 pkgdesc="X11 damaged region extension library"
 arch=('x86_64')
 url="https://xorg.freedesktop.org/"

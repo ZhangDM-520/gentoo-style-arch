@@ -1,7 +1,7 @@
 pkgbase = libxxf86vm
 	pkgdesc = X11 XFree86 video mode extension library
 	pkgver = 1.1.7
-	pkgrel = 1
+	pkgrel = 1.1
 	url = https://xorg.freedesktop.org/
 	arch = x86_64
 	license = X11-distribute-modifications-variant

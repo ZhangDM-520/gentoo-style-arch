@@ -3,7 +3,7 @@
 
 pkgname=libxcomposite
 pkgver=0.4.7
-pkgrel=1
+pkgrel=1.1
 pkgdesc="X11 Composite extension library"
 arch=('x86_64')
 url="https://xorg.freedesktop.org/"

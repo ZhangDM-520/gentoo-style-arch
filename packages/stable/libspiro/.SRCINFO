@@ -1,7 +1,7 @@
 pkgbase = libspiro
 	pkgdesc = Library that simplifies the drawing of beautiful curves
 	pkgver = 20240903
-	pkgrel = 1
+	pkgrel = 1.2
 	epoch = 1
 	url = https://github.com/fontforge/libspiro
 	arch = x86_64

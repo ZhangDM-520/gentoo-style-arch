@@ -1,7 +1,7 @@
 pkgbase = libstaroffice
 	pkgdesc = filter for old StarOffice documents(.sdc, .sdw, ...) based on librevenge
 	pkgver = 0.0.8
-	pkgrel = 1
+	pkgrel = 1.1
 	url = https://github.com/fosnola/libstaroffice
 	arch = x86_64
 	license = LGPL-2.1-or-later OR MPL-2.0

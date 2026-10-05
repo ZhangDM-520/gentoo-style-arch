@@ -3,7 +3,7 @@
 
 pkgname=xcb-util-errors
 pkgver=1.0.1
-pkgrel=2
+pkgrel=2.1
 pkgdesc='XCB errors library'
 arch=('x86_64')
 url='https://cgit.freedesktop.org/xcb/util-errors/'

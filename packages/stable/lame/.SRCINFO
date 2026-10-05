@@ -1,7 +1,7 @@
 pkgbase = lame
 	pkgdesc = A high quality MPEG Audio Layer III (MP3) encoder
 	pkgver = 4.0
-	pkgrel = 1
+	pkgrel = 1.1
 	url = http://lame.sourceforge.net/
 	arch = x86_64
 	license = LGPL-2.0-only

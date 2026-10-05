@@ -7,7 +7,7 @@ pkgname=(
 # trim: the libtraceevent-docs split is dropped — the asciidoc/xmlto
 # Documentation output (API man3 + html) is not shipped
 pkgver=1.9.0
-pkgrel=1
+pkgrel=1.1
 epoch=1
 pkgdesc="Linux kernel trace event library"
 arch=(x86_64)

@@ -4,7 +4,7 @@
 
 pkgname=libxau
 pkgver=1.0.12
-pkgrel=1
+pkgrel=1.1
 pkgdesc="X11 authorisation library"
 arch=('x86_64')
 url="https://xorg.freedesktop.org/"
