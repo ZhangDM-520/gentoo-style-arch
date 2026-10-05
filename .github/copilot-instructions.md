@@ -289,7 +289,10 @@ Four modules, deliberately separated (`docs/architecture.md`):
    that silently goes stale — `tests/project.sh` fails on it.
 3. **Builder** — `build-all.fish` resolves IDs, expands consumers and sorts
    by build order, dispatches isolated fish child processes as lanes, serializes
-   pacman transactions, owns the dashboard, and reports per-package logs.
+   pacman transactions, owns the dashboard, and reports per-package logs —
+   plus two sourced leaf modules, `lib/sources.fish` (PKGBUILD/.SRCINFO parsing,
+   version sync, VCS freshness, checksum anchoring) and `lib/audit.fish`
+   (workspace audit lints), cut out verbatim by the Design C split (2026-10-05).
 4. **Runtime state** — split by owner. `.state/` (or `GSA_STATE_DIR`) holds
    builder-owned logs, lane results, and the pacman mutex. makepkg's own
    mirrors, `src/`, `pkg/`, and archives land **beside each recipe**
@@ -332,12 +335,19 @@ Consequences worth internalising:
 - Resource planning is entirely host-derived; the profiles and formulas are in
   `docs/portability.md`. Never predict a plan — read the `parallelism:` line the
   builder prints. `--lanes`/`--jobs` override `--intensity`.
-- `build-all.fish` is one ~6 500-line fish program (6 491 lines as of
-  2026-09-27) with no includes, so there
-  is no module to look for: every helper, the lane dispatcher, and the
-  `INTENSITY_*` constants (inside `configure_intensity`) live in that file.
-  The one shared code module in the repo is `lib/pgo.sh`, and it is sourced by
-  recipes, not by the builder.
+- `build-all.fish` is an ~8 200-line fish entry (8 202 lines / 158 functions as
+  of 2026-10-05) with two sourced leaf modules (Design C split, same day):
+  `lib/sources.fish` (52 fns — PKGBUILD/.SRCINFO parsing, version sync, VCS
+  freshness, checksum anchoring; documented out-param globals
+  `_VCS_REVISION_ERROR`, `_VCS_SKIP_TOLERANCE`, `_FRESHNESS_WAIVER{,_REASON}`,
+  `_DEFER_REASON`, `_VERSION_SYNC_TMP_ERROR`, `_SR_ROWS`/`_PB_ROWS`) and
+  `lib/audit.fish` (10 fns — audit lints; writes no globals). They are cut out
+  verbatim and sourced from `$SCRIPT_DIR/lib/` before `load_project_config` and
+  the hidden seams; the loader, lane dispatcher, `INTENSITY_*` constants
+  (inside `configure_intensity`) and `main` remain in the entry. `lib/pgo.sh`
+  is the one module sourced by *recipes*, not by the builder. Synthetic
+  workspace fixtures copy the modules beside the entry (`tests/lib/fixture-lib.bash`'s
+  `make_workspace` does).
 
 ## Conventions
 

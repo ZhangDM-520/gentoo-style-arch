@@ -30,8 +30,13 @@ Gentoo_Style_Arch has four deliberately separate modules:
 3. **Builder** in `build-all.fish` is the operational interface. It resolves
    package IDs, expands consumers and sorts by build order, dispatches isolated
    lanes, serializes pacman transactions, owns the interactive dashboard, and
-   reports failures through per-package logs. Stable recipes use Arch metadata
-   unless their topology record explicitly selects an nvchecker provider.
+   reports failures through per-package logs. Two leaf clusters are sourced
+   modules (Design C split, 2026-10-05): `lib/sources.fish` (PKGBUILD/.SRCINFO
+   parsing, version sync, VCS freshness, checksum anchoring) and
+   `lib/audit.fish` (workspace audit lints); the loader, lanes, install
+   pipeline, run record and entry remain in `build-all.fish`. Stable recipes
+   use Arch metadata unless their topology record explicitly selects an
+   nvchecker provider.
 4. **Runtime state** is split in two by who owns it. Under `.state/` (or
    `GSA_STATE_DIR`) the builder keeps its own state: `logs/`, the pacman
    mutex, lane result files, and per-recipe GCC identity records under

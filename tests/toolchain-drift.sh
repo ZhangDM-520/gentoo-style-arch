@@ -36,6 +36,19 @@ fi
 EOF
 chmod +x "$dir/bin/makepkg"
 
+cat >"$dir/bin/pacman" <<'EOF'
+#!/usr/bin/env bash
+set -u
+# The skip gate payload-probes archives with `pacman -Qp`; this scenario tests
+# compiler-drift cleaning, not archive integrity, so the probe answers
+# "readable". Anything else is unexpected on this path and fails closed.
+case "${1:-}" in
+    -Qp) exit 0 ;;
+esac
+exit 1
+EOF
+chmod +x "$dir/bin/pacman"
+
 builder_args=(p1)
 run_case() { # $1 = compiler version, rest = fixture environment overrides
     local version=$1

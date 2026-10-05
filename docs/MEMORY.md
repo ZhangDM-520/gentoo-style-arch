@@ -194,6 +194,14 @@
     sudoers entry makes `-v` fail forever while every install succeeds — and a
     run whose dispatch stopped early must exit non-zero instead of reporting
     success (2026-09-17).
+    Install-plan and probe rows are TAB-framed through the one
+    `plan_row`/`plan_row_fields` codec (2026-10-05) — never hand-built rows.
+    A discovery omission refuses the plan by name (`refuse partial-set`,
+    `refuse discover-failed`) and blocks `-ia`'s single transaction (a
+    shrunken set is never installed); a failed plan without a row renders
+    `refuse plan-failed`; a probe that cannot run emits `probe-skipped` and is
+    never "clean"; freshness compares are nanosecond (`find -newermt`) with
+    doubt-installs; `readelf` is an install prereq alongside tar/strings.
 12. **Mandatory selection + keystone discipline** (2026-09-07): build-all.fish
     has NO default action — always pass `-g` and/or package names. For
     ABI-coupled core updates use `-g core` (auto-installs the merged core set);
@@ -575,6 +583,15 @@ order, and rejects cycles or missing records. Prerequisites are assumed
 installed and current — nothing upstream is pulled in; bootstrap and fresh
 builds use `-g` group runs.
 
+Builder code is split (Design C, 2026-10-05): entry `build-all.fish` plus two
+sourced leaf modules, `lib/sources.fish` (PKGBUILD/.SRCINFO parsing, version
+sync, VCS freshness, checksum anchoring) and `lib/audit.fish` (workspace audit
+lints), cut out verbatim; function names and `lib/sources.fish`'s documented
+out-param globals are the interface, and both are sourced before
+`load_project_config` and the hidden seams. Synthetic-workspace fixtures copy
+the modules beside the entry (`tests/lib/fixture-lib.bash`'s `make_workspace`
+does).
+
 `--intensity xhigh` is the default automatic plan. It derives bounded lanes
 and a global normal-lane job budget from CPU threads and available memory;
 `low`, `medium`, `high`, `xhigh`, and `max` trade utilization against
@@ -596,8 +613,42 @@ NEVER prompts (2026-09-26): the preflight probe refuses to start an `-i` run
 when installs cannot succeed (`sudo cannot install non-interactively`), and a
 credential lost mid-run stops dispatch exactly once (`sudo credential expired
 and cannot be refreshed`) with a non-zero exit — a TTY changes nothing, and
-`-ia` under a cold credential fails fast too. A system pacman database lock
-is never deleted automatically. Lane results carry a named vocabulary:
+`-ia` under a cold credential fails fast too. A system pacman database lock and broken local-db entries are NEVER
+deleted automatically (2026-10-05): idleness is proven by scanning
+`/proc/*/fd` for open handles on the lock inode — name-independent, so any
+alpm client (e.g. `paru`) counts — and a killed/short/uncertain probe or
+hidden handles classify `UNKNOWN`, never idle. The probes are report-only
+(preflight, `run_pacman_locked` failure path, interrupt teardown) and print
+the exact operator command (`sudo rm -f <db.lck>` / `sudo rm -rf <entry>`
+then reinstall). makepkg dep installs share the builder mutex through the
+generated pacman shim, but only for TRANSACTIONS: read-only queries run
+unlocked, because queueing them manufactures rc-75 timeouts on a healthy
+queue; flock rc 75 is named `builder pacman mutex timed out`, runs no
+recovery probe, and records as row reason `mutex-timeout`, never
+`build-failed`. Archive currency for `-s` (2026-10-05) = the complete
+output set at the evaluated pkgver-pkgrel, every member payload-readable
+(`pacman -Qp`, fail-closed) and bound to its VCS baseline by sha256+size
+(manifest v2; v1 forces one rebuild) — a partial split set never skips and
+never reaches install discovery (`list_split_pkgs` prints nothing and names
+the missing outputs), and anomaly diagnostics print even in quiet output.
+Recipe-file rewrites are transactional (2026-10-05): one staged per-process
+temp + one `mv` publish, snapshotted before the first write and rolled back
+through a CHECKED restore whose failure is its own named error (anchor rc 5:
+the recipe is dirty; nothing may build or park it); a version or query a run
+could not verify suppresses the freshness claim instead of making it (sync
+query failure → defer `upstream-unverified` or a loud as-is build), and a
+failed committed `.SRCINFO` refresh surfaces in log AND run summary. One run
+per workspace: `run_lock_acquire` refuses (never queues) and names the
+holder; lane results are run-scoped and foreign lines are ignored, never
+classified. Name surface and parse discipline (2026-10-05): one
+pkgbase+pkgname lookup answers every name question (CLI references resolve
+pkgbase-only names with an announced substitution); lint/audit I-O goes
+through the shared tagged parses (`srcinfo_rows`, `pkgbuild_scan_rows`) —
+never fork per recipe; keyed maps use `_topo_key` (the only key scheme), and
+dispatch readiness is O(1) markers tail-synced from append-only lane-state
+lists. Recipe evaluation failure is never "no sources": callers use
+`pkgbuild_array_checked` (rc 2 = failure), which never licenses a freshness
+claim. Lane results carry a named vocabulary:
 `lane_outcome_{ok 0, failed 1, defer 99, lost 125, hup 129, int 130, term
 143}` classified by `lane_outcome_name`, crossing the process boundary only
 through the `lane_result_encode`/`decode` codec pair (lane argv stays
@@ -675,12 +726,13 @@ OpenShadingLanguage -> blender.
   `export -f` them (`tests/srcinfo-freshness.sh` exports `check_recipe` and
   `makepkg_printsrcinfo` for exactly that reason).
 - Every stub knob is named `GSA_FAKE_*` and is fixture-side only: read by the
-  stub script, never by the builder, which honours exactly the seven `GSA_*`
-  inputs `--help` lists — `GSA_LANES`, `GSA_JOBS`, `GSA_INTENSITY`,
-  `GSA_CPU_THREADS`, `GSA_MEMORY_GIB`, `GSA_STATE_DIR`, `GSA_TARGET_CPU`.
-  `GSA_BUILD_JOBS` is the builder's OUTPUT to recipes, not an input. A new
-  fixture knob keeps the `GSA_FAKE_*` prefix (full table in the helper's
-  header).
+  stub script, never by the builder. The builder's real environment surface —
+  its `GSA_*` inputs, the inherited environment that silently changes
+  behaviour, and its outputs to recipes — is one list in `docs/build-guide.md`
+  § Environment surface; check the input roster with `fish build-all.fish
+  --help` rather than counting names. A new fixture knob keeps the
+  `GSA_FAKE_*` prefix (full table in the helper's header). (last reviewed
+  2026-10-04)
 - `tests/run-all.sh` discovers fixtures recursively (`find . -name '*.sh'`)
   and excludes `tests/assets/` (frozen reference material, never runs
   standalone) and `./lib/*`; the helper is `fixture-lib.bash` (`.bash`, not
@@ -987,6 +1039,33 @@ constant, not a baked path).
 
 ## 6. Pitfall digest (full details: NOTE.md sections of same dates)
 
+- **`set -n` + `string match -r` name sweeps erase NOTHING unless the pattern
+  matches the whole name and has no capture groups** (2026-10-05, one defect
+  with two faces): `string match -r` prints only the matched *portion* (a
+  `^_TID_` prefix yields `_TID_`, never `_TID_p1`, so `set -e` erases a
+  non-existent var), and a `(…)` alternation is additionally printed as junk
+  names (`TID`, `TCONS`). The stale-keyed-var sweeps of `read_topology_config`,
+  `dispatch_state_refresh` and `_deferred_blocked_refresh` all carried it; the
+  first flipped `unverifiable_defer_plan`'s topology re-read into "duplicate
+  package id", silently turning every defer into a build (two fixtures
+  regressed). Use `'^_PREFIX_[A-Za-z0-9_]*$'` with `(?:…)` alternation and
+  verify the erase in isolation. Corollary: lane children redirect stderr into
+  `state/logs/<pkg>.log`, so trace echoes there never reach `FIXTURE_OUTPUT` —
+  route temporary instrumentation to a fixed scratch file.
+- **fish 4.9.3 does not expand `(cmd)` inside double quotes; a bare `$$var`
+  statement EXECUTES the list** (2026-10-05, two measured defects): an
+  `awk -v x="(string join …)"` passed literal text and silently defeated a
+  batch (per-name forks stayed); a `$$dep_var` statement ran the list as a
+  command. Use `"(cmd)"` concatenation or a variable for the first; always
+  `printf '%s\n' $list` for the second. Caught only by profiling/fixture —
+  both fail silently.
+- **Bare `rm` in fish-run builder code does not delete on this host**
+  (2026-10-05): the login shell's fish `rm` is a fast-trash function (mv +
+  `.trashinfo`), so `rm` inside `build-all.fish` and any fish context silently
+  archives instead of deleting — cleanup flags and staged-rewrite discards
+  "worked" while leaving everything behind. Use `command rm` or
+  `find -delete` (verified 2026-10-05; the lane sweep/reap/result gate were
+  fixed; a file-wide sweep of the remaining bare sites is queued).
 - **Mold cannot build this glibc recipe — the recipe pins bfd, only for
   itself** (2026-10-03, glibc-git; three measured defects): (1) the
   `librtld.mk` member parse matches GNU-ld/lld map lines only; mold map lines
@@ -1668,7 +1747,8 @@ constant, not a baked path).
   `*-pgo-transition.sh` wrappers folded into `pgo-transition.sh` (no args = all
   five pairs). `dashboard.sh` case C no longer waits out a real 30 s window:
   `_LANE_STOP_GRACE_S` is an env-overridable *internal* seam (default stays 30,
-  pinned by `signal-abort-lock.sh`; not an eighth public `GSA_*` input), and
+  pinned by `signal-abort-lock.sh`; not one of the public `GSA_*` inputs —
+  their roster lives in `docs/build-guide.md` § Environment surface), and
   `.SRCINFO` freshness has exactly one owner, `tests/srcinfo-freshness.sh`.
 - **User-level fish wrapper functions intercept the battery's PATH stubs**
   (2026-09-26, harness): the builder runs under fish, and fish autoloads

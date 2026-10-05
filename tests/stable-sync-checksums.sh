@@ -155,10 +155,22 @@ EOF
 
     printf '%s\n' "$repo_full" >"$dir/fake/repo_version"
 
-    # The stub repository: sync_stable_version runs `pacman -Si <name>`.
+    # The stub repository: sync_stable_version runs `pacman -Si <name>`. The
+    # failure modes distinguish the two answers the builder must never fold
+    # together (R-F20): a name the repos do not know versus a query that failed.
     cat >"$dir/bin/pacman" <<'EOF'
 #!/usr/bin/env bash
 if [[ ${1:-} == -Si ]]; then
+    case ${GSA_FAKE_SI_MODE:-} in
+        db-error)
+            printf 'error: failed to synchronize all databases (unexpected error)\n' >&2
+            exit 1
+            ;;
+        not-found)
+            printf "error: package '%s' was not found\n" "$2" >&2
+            exit 1
+            ;;
+    esac
     printf 'Repository      : extra\nName            : s1\nVersion         : %s\n' \
         "$(cat "$GSA_FAKE_DIR/repo_version")"
     exit 0
@@ -166,6 +178,18 @@ fi
 exit 0
 EOF
     chmod +x "$dir/bin/pacman"
+
+    # Delegating wrapper: records the argv when asked (the transactional
+    # rewrite case asserts the tracked PKGBUILD is never sed-edited in place)
+    # and otherwise runs the real thing unchanged.
+    cat >"$dir/bin/sed" <<'EOF'
+#!/usr/bin/env bash
+if [[ -n ${GSA_FAKE_SED_LOG:-} ]]; then
+    printf '%s\n' "$*" >>"$GSA_FAKE_SED_LOG"
+fi
+exec /usr/bin/sed "$@"
+EOF
+    chmod +x "$dir/bin/sed"
 
     # Stands in for the fetch of gitlab.archlinux.org/.../.SRCINFO. An empty
     # fake/srcinfo is the 404 case: a recipe Arch does not carry. fake/srcinfo is
@@ -272,6 +296,14 @@ for arg in "$@"; do
         for ((i = 0; i < ${#args[@]}; i++)); do
             [[ ${args[i]} == --dir ]] && dir=${args[i + 1]}
         done
+        # The refresh scratch name is observable only while this runs (the
+        # redirect creates it before exec): record it so a case can assert the
+        # per-process suffix that makes two runs unable to collide.
+        if [[ -n ${GSA_FAKE_TMP_WATCH:-} ]]; then
+            find "$dir" -maxdepth 1 -name '.SRCINFO.tmp*' -printf '%f\n' \
+                >>"$GSA_FAKE_DIR/tmp_names" 2>/dev/null
+        fi
+        [[ ${GSA_FAKE_PRINTSRCINFO_FAIL:-0} != 1 ]] || exit 1
         bash -c '
             cd "$1" || exit 1
             source ./PKGBUILD >/dev/null 2>&1 || exit 1
@@ -350,6 +382,10 @@ run_build() {
         GSA_FAKE_NVCHECK_KEY="${GSA_FAKE_NVCHECK_KEY:-s1}" \
         GSA_FAKE_NVCHECK_FAIL="${GSA_FAKE_NVCHECK_FAIL:-0}" \
         GSA_FAKE_GITHUB_STATUS="${GSA_FAKE_GITHUB_STATUS:-200}" \
+        GSA_FAKE_SI_MODE="${GSA_FAKE_SI_MODE:-}" \
+        GSA_FAKE_SED_LOG="${GSA_FAKE_SED_LOG:-}" \
+        GSA_FAKE_TMP_WATCH="${GSA_FAKE_TMP_WATCH:-}" \
+        GSA_FAKE_PRINTSRCINFO_FAIL="${GSA_FAKE_PRINTSRCINFO_FAIL:-}" \
         GSA_CPU_THREADS=4 \
         GSA_MEMORY_GIB=8 \
         fish "$dir/build-all.fish" --allow-broken-rustc --no-deps \
@@ -1378,4 +1414,218 @@ grep -q "^pkgver=$repo_version$" "$(pkgfile "$dir")" \
     || fail 'section-by-id: the id-named tracker section was not resolved for a flavored pkgbase'
 grep -q 'synced with GitHub example/s1' "$dir/out.txt" \
     || fail 'section-by-id: the resolved version provider was not reported'
+(
+# ─── Case 37: a resumed -s run must see upstream movement (R-F10) ───────────
+# The skip decision used to run BEFORE the version query, so a non-VCS recipe
+# on a resumed -s loop claimed "already built" forever at a stale version. The
+# version check runs first now: nothing moved → the skip holds; upstream moved
+# → the recipe is rewritten and rebuilt, never skipped. The source URL is
+# static so this case exercises the skip claim alone, not the checksum anchor.
+dir="$fixture/s-resume"
+make_case_workspace "$dir" "$staged_version-1" \
+    "https://example.invalid/s1-$staged_version.tar.gz"
+run_build "$dir" 's-resume seed' 0        # also records the toolchain identity
+
+# The seed run's output: the current version, newer than the recipe.
+printf 'built payload\n' >"$dir/packages/stable/s1/s1-$staged_version-1-any.pkg.tar.zst"
+
+: >"$dir/fake/makepkg_argv"
+run_build "$dir" 's-resume still-current' 0 -s
+[[ ! -s $dir/fake/makepkg_argv ]] \
+    || fail 's-resume: -s rebuilt a recipe whose version is current and whose archive is fresh'
+grep -q "^pkgver=$staged_version$" "$(pkgfile "$dir")" \
+    || fail 's-resume: the still-current run rewrote the recipe'
+
+printf '%s\n' "$repo_version-1" >"$dir/fake/repo_version"
+run_build "$dir" 's-resume upstream moved' 0 -s
+grep -q "^pkgver=$repo_version$" "$(pkgfile "$dir")" \
+    || fail 's-resume: a resumed -s run did not sync the moved upstream version'
+[[ -s $dir/fake/makepkg_argv ]] \
+    || fail 's-resume: a resumed -s run SKIPPED a recipe whose upstream version moved — the version was never checked'
+if [[ -s $dir/fake/curl_calls || -s $dir/fake/updpkgsums_calls ]]; then
+    fail 's-resume: the static source did not move; anchoring ran anyway'
+fi
+)
+
+(
+# ─── Case 38: a failed repo query is not "the name is unknown" (R-F20) ─────
+# pacman -Si used to fail (unsynced db, mirror error) exactly like "not in the
+# repos" — both silently returned 0 — so a stale committed version built or
+# skipped with no log and no note. The query failure now names itself and
+# parks the recipe when its consumer chain can wait; the name-unknown answer
+# syncs nothing and leaves the skip claim intact.
+for mode in db-error not-found; do
+    dir="$fixture/si-$mode"
+    make_case_workspace "$dir" "$staged_version-1" \
+        "https://example.invalid/s1-$staged_version.tar.gz"
+    run_build "$dir" "si-$mode seed" 0
+    printf 'built payload\n' >"$dir/packages/stable/s1/s1-$staged_version-1-any.pkg.tar.zst"
+    : >"$dir/fake/makepkg_argv"
+    if [[ $mode == db-error ]]; then
+        GSA_FAKE_SI_MODE=db-error run_build "$dir" "si-$mode" fail -s
+        grep -q 'cannot query the Arch repository version' "$(recipe_log "$dir")" \
+            || fail "si-$mode: the failed query is not named in the log"
+        grep -q 'DEFERRED' "$dir/out.txt" \
+            || fail "si-$mode: an unverifiable repository version was not parked"
+        [[ ! -s $dir/fake/makepkg_argv ]] \
+            || fail "si-$mode: a build ran over an unverified version"
+    else
+        GSA_FAKE_SI_MODE=not-found run_build "$dir" "si-$mode" 0 -s
+        [[ ! -s $dir/fake/makepkg_argv ]] \
+            || fail "si-$mode: the name-unknown answer destroyed the skip claim"
+    fi
+    grep -q "^pkgver=$staged_version$" "$(pkgfile "$dir")" \
+        || fail "si-$mode: the recipe was rewritten although the query never succeeded"
+done
+)
+
+(
+# ─── Case 39: repository version text that cannot be written safely is
+# refused before the first write (R-F11) ─────────────────────────────────────
+# pacman -Si Version text reached sed program text unvalidated: `&`, `\` and
+# `/` corrupt a replacement rather than fail it. The rewrite now refuses such
+# a version outright — nothing is written, nothing is built.
+i=0
+for bad_ver in '2.0&0-1' '2.0\0-1' '2.0/0-1'; do
+    i=$((i + 1))
+    dir="$fixture/badver-$i"
+    make_case_workspace "$dir" "$bad_ver" \
+        "https://example.invalid/s1-$staged_version.tar.gz"
+    cp -- "$(pkgfile "$dir")" "$dir/pre-PKGBUILD"
+    run_build "$dir" "badver-$i" fail
+    grep -q 'refusing to sync from a repository version' "$(recipe_log "$dir")" \
+        || fail "badver-$i: the unwritable repository version is not named"
+    cmp -s "$dir/pre-PKGBUILD" "$(pkgfile "$dir")" \
+        || fail "badver-$i: the recipe was written although the repository version cannot be written safely"
+    [[ ! -s $dir/fake/makepkg_argv ]] \
+        || fail "badver-$i: makepkg ran over a refused version"
+done
+)
+
+(
+# ─── Case 40: a failure after the publish rolls the whole rewrite back
+# (R-F11) ───────────────────────────────────────────────────────────────────
+# The snapshot/rollback boundary the nvchecker path always had now wraps the
+# Arch path too: a failure AFTER the rewrite (here an artifact directory rm
+# cannot clear) leaves the recipe byte-for-byte at its committed state, not
+# half-rewritten for the owner to commit.
+dir="$fixture/rollback"
+make_case_workspace "$dir" "$staged_version-1" \
+    "https://example.invalid/s1-$staged_version.tar.gz"
+run_build "$dir" 'rollback seed' 0
+: >"$dir/fake/makepkg_argv"           # the seed build is not this case's data
+cp -- "$(pkgfile "$dir")" "$dir/pre-PKGBUILD"
+# An artifact directory rm -rf cannot clear (no write bit, one file inside).
+mkdir -p "$dir/packages/stable/s1/src"
+printf 'cached object\n' >"$dir/packages/stable/s1/src/keep"
+chmod 555 "$dir/packages/stable/s1/src"
+printf '%s\n' "$repo_version-1" >"$dir/fake/repo_version"
+run_build "$dir" 'rollback' fail
+chmod -R u+w "$dir/packages/stable/s1"     # asserts below must not need the mode
+grep -q 'could not clear stale build artifacts' "$(recipe_log "$dir")" \
+    || fail 'rollback: the failing step is not named'
+grep -q 'rolled back to its committed version' "$(recipe_log "$dir")" \
+    || fail 'rollback: the rollback is not claimed'
+cmp -s "$dir/pre-PKGBUILD" "$(pkgfile "$dir")" \
+    || fail 'rollback: the recipe is not back at its committed state after the failed step'
+[[ ! -s $dir/fake/makepkg_argv ]] \
+    || fail 'rollback: makepkg ran after the rollback'
+)
+
+(
+# ─── Case 41: the tracked PKGBUILD is never edited in place (R-F24) ─────────
+# Multi-sed rewrites over the tracked file leave a torn-read window, and
+# shared temp names let two runs destroy each other's work. The rewrite now
+# stages ONE copy, edits only that, and publishes with a single mv — asserted
+# at the tool boundary: no sed invocation may name the tracked PKGBUILD, the
+# staged names carry a per-process suffix, and no scratch survives the run.
+dir="$fixture/txn"
+make_case_workspace "$dir" "$staged_version-1" \
+    "https://example.invalid/s1-$staged_version.tar.gz"
+run_build "$dir" 'txn seed' 0
+printf 'pkgbase = s1\n\tpkgver = %s\n\tpkgrel = 1\npkgname = s1\n' "$staged_version" \
+    >"$dir/packages/stable/s1/.SRCINFO"
+sed_log="$dir/sed.log"
+: >"$sed_log"
+printf '%s\n' "$repo_version-1" >"$dir/fake/repo_version"
+GSA_FAKE_SED_LOG="$sed_log" GSA_FAKE_TMP_WATCH=1 run_build "$dir" 'txn' 0
+
+if grep -qE '(^| )[^ ]*/packages/stable/s1/PKGBUILD( |$)' "$sed_log"; then
+    fail 'txn: sed edited the tracked PKGBUILD in place — the rewrite is not a transaction'
+fi
+grep -q 'PKGBUILD\.tmp\.' "$sed_log" \
+    || fail 'txn: the version rewrite did not go through a staged copy'
+grep -q "^pkgver=$repo_version$" "$(pkgfile "$dir")" \
+    || fail 'txn: the transactional rewrite did not publish its result'
+if find "$dir/packages/stable/s1" -name '*.tmp*' -print -quit | grep -q .; then
+    fail 'txn: a staged file survived the run'
+fi
+grep -qE '^\.SRCINFO\.tmp\.[0-9]+$' "$dir/fake/tmp_names" \
+    || fail "txn: the .SRCINFO refresh did not use a per-process temp name: $(cat "$dir/fake/tmp_names" 2>/dev/null)"
+if grep -qx '\.SRCINFO\.tmp' "$dir/fake/tmp_names"; then
+    fail 'txn: the shared .SRCINFO.tmp name is back'
+fi
+)
+
+(
+# ─── Case 43: an unevaluable recipe is named, never synced blind (R-F32) ────
+# The pkgname candidates came from `bash -c "source '$pkg_path/PKGBUILD' …"`
+# with the failure swallowed: a recipe that does not source looked exactly
+# like one whose pkgname is its pkgbase, and the query went out blind.
+dir="$fixture/eval-broken"
+make_case_workspace "$dir" "$repo_version-1" \
+    "https://example.invalid/s1-$staged_version.tar.gz"
+printf 'return 1\n' >>"$(pkgfile "$dir")"
+cp -- "$(pkgfile "$dir")" "$dir/pre-PKGBUILD"
+run_build "$dir" 'eval-broken' fail
+grep -q 'cannot evaluate the pkgname array' "$(recipe_log "$dir")" \
+    || fail 'eval-broken: the unevaluable recipe is not named'
+cmp -s "$dir/pre-PKGBUILD" "$(pkgfile "$dir")" \
+    || fail 'eval-broken: the recipe was rewritten although it never evaluated'
+[[ ! -s $dir/fake/makepkg_argv ]] \
+    || fail 'eval-broken: makepkg ran'
+)
+
+(
+# ─── Case 44: -ccc/-ln name unevaluable recipes instead of skipping them ────
+# Their evaluation snippets had the same swallow: a recipe that failed to
+# source looked exactly like a recipe with no sources, and -ccc reported a
+# clean scan over recipes it never read. The distinction ("no sources" is
+# fine, "cannot evaluate" is named and fails the scan) is the case.
+dir="$fixture/unevaluable"
+make_workspace "$dir" 1 2 low
+mkdir -p "$dir/packages/stable/broken"
+{
+    printf 'pkgname=broken\n'
+    printf 'pkgver=1.0.0\npkgrel=1\narch=(any)\n'
+    printf 'return 1\n'
+} >"$dir/packages/stable/broken/PKGBUILD"
+printf 'broken|packages/stable/broken|stable|\n' >>"$dir/config/topology.conf"
+add_package "$dir" ok "$gsa_meta_any"
+
+set +e
+nuclear_out=$(PATH="$dir/bin:$PATH" GSA_STATE_DIR="$dir/state" \
+    fish "$dir/build-all.fish" -ccc </dev/null 2>&1)
+nuclear_rc=$?
+set -e
+((nuclear_rc != 0)) \
+    || fail "unevaluable: -ccc reported success over a recipe it never read"
+grep -q 'could not be evaluated' <<<"$nuclear_out" \
+    || fail 'unevaluable: -ccc does not name the evaluation failure'
+grep -q 'packages/stable/broken/PKGBUILD' <<<"$nuclear_out" \
+    || fail 'unevaluable: -ccc does not say WHICH recipe failed to evaluate'
+
+set +e
+link_out=$(PATH="$dir/bin:$PATH" GSA_STATE_DIR="$dir/state" \
+    fish "$dir/build-all.fish" -ln </dev/null 2>&1)
+link_rc=$?
+set -e
+((link_rc != 0)) \
+    || fail "unevaluable: -ln reported success over a recipe it never read"
+grep -q 'could not be evaluated' <<<"$link_out" \
+    || fail 'unevaluable: -ln does not name the evaluation failure'
+grep -q 'packages/stable/broken/PKGBUILD' <<<"$link_out" \
+    || fail 'unevaluable: -ln does not say WHICH recipe failed to evaluate'
+)
+
 printf 'stable-sync fixture: PASS\n'

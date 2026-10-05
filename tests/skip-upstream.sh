@@ -46,6 +46,21 @@ advance_main() { # $1 = local worktree; $2 = commit message and file content;
     git_fixture -C "$work" push origin main >/dev/null
 }
 
+mk_fake_archive() { # $1 = archive path; $2 = optional payload text
+    # A REAL (if tiny) zstd tarball: the -s payload probe reads archives the
+    # way pacman does, so "an archive exists" must model a readable one — a
+    # zero-byte file models exactly the interrupted write this seam rejects.
+    if [[ -n ${2:-} ]]; then
+        local stage=$fixture/.mk-archive.$$
+        mkdir -p "$stage"
+        printf '%s\n' "$2" >"$stage/payload"
+        tar --zstd -cf "$1" -C "$stage" payload
+        rm -rf "$stage"
+    else
+        tar --zstd -cf "$1" --files-from /dev/null
+    fi
+}
+
 make_vcs_workspace() { # $1 workspace; $2 remote path; $3 branch|tag; $4 ref;
     # $5 entry style: override (default — 'upstream::url') or basename (no
     #    override, URL basename carries .git — the xdg-utils shape). The
@@ -167,7 +182,7 @@ tag=*)
     ;;
 esac
 
-: >"$PWD/$id-1.0.0-1-any.pkg.tar.zst"
+tar --zstd -cf "$PWD/$id-1.0.0-1-any.pkg.tar.zst" --files-from /dev/null
 EOF
     chmod +x "$dir/bin/makepkg"
     stub_sudo "$dir"
@@ -176,7 +191,17 @@ EOF
 set -u
 printf 'pacman %s\n' "$*" >>"${GSA_FAKE_PACMAN_LOG:?}"
 case ${1:-} in
--Qp | -Qi) exit 1 ;;
+-Qp)
+    # Model pacman's own archive validation: it decompresses the whole zstd
+    # stream before answering, so a write killed at ANY offset fails this
+    # probe exactly as it fails real pacman.
+    file=
+    for arg in "$@"; do file=$arg; done
+    [[ -n $file ]] || exit 1
+    tar --zstd -t -f "$file" >/dev/null 2>&1
+    exit $?
+    ;;
+-Qi) exit 1 ;;
 esac
 exit 0
 EOF
@@ -222,7 +247,7 @@ set -eu
 id=$(basename "$PWD")
 printf '%s\n' "$id" >>"${GSA_FAKE_MAKEPKG_COUNT:?}"
 mkdir -p "$PWD/upstream"
-: >"$PWD/$id-1.0.0-1-any.pkg.tar.zst"
+tar --zstd -cf "$PWD/$id-1.0.0-1-any.pkg.tar.zst" --files-from /dev/null
 EOF
     chmod +x "$dir/bin/makepkg"
 
@@ -272,7 +297,17 @@ EOF
 set -u
 printf 'pacman %s\n' "$*" >>"${GSA_FAKE_PACMAN_LOG:?}"
 case ${1:-} in
--Qp | -Qi) exit 1 ;;
+-Qp)
+    # Model pacman's own archive validation: it decompresses the whole zstd
+    # stream before answering, so a write killed at ANY offset fails this
+    # probe exactly as it fails real pacman.
+    file=
+    for arg in "$@"; do file=$arg; done
+    [[ -n $file ]] || exit 1
+    tar --zstd -t -f "$file" >/dev/null 2>&1
+    exit $?
+    ;;
+-Qi) exit 1 ;;
 esac
 exit 0
 EOF
@@ -352,7 +387,7 @@ expect_success 'unchanged branch with install'
 assert_makepkg_count "$branch_dir/workspace" 1 'unchanged branch with install'
 grep -q -- 'pacman -U' "$branch_dir/workspace/pacman.log" ||
     fail 'unchanged branch -s -i did not install the skipped archive'
-grep -Fq 'p1-1.0.0-1-any.pkg.tar.zst' "$branch_dir/workspace/pacman.log" ||
+grep -- 'pacman -U' "$branch_dir/workspace/pacman.log" | grep -Fq 'p1-1.0.0-1-any.pkg.tar.zst' ||
     fail 'unchanged branch -s -i installed without the existing archive'
 
 # The rebuild trigger below must clear the freshness tolerance (-s waives
@@ -376,7 +411,7 @@ init_git_remote "$missing_dir/repository"
 missing_remote=$missing_dir/repository/remote.git
 make_vcs_workspace "$missing_dir/workspace" "$missing_remote" branch main
 archive=$missing_dir/workspace/packages/p1/p1-1.0.0-1-any.pkg.tar.zst
-: >"$archive"
+mk_fake_archive "$archive"
 run_case "$missing_dir/workspace" -s p1
 expect_success 'legacy archive rebuilds once to record its baseline'
 assert_makepkg_count "$missing_dir/workspace" 1 'legacy archive rebuild'
@@ -389,7 +424,7 @@ printf 'malformed VCS baseline\n' >"$archive.gsa-vcs-revisions"
 run_case "$missing_dir/workspace" -s p1
 expect_success 'malformed legacy baseline triggers a rebuild'
 assert_makepkg_count "$missing_dir/workspace" 2 'malformed legacy baseline rebuild'
-grep -Fq $'gsa-vcs-revisions\t1' "$archive.gsa-vcs-revisions" ||
+grep -Fq $'gsa-vcs-revisions\t2' "$archive.gsa-vcs-revisions" ||
     fail 'malformed legacy baseline was not replaced after rebuilding'
 
 # A missing baseline does not license a skip or a build when upstream cannot
@@ -398,7 +433,7 @@ legacy_offline_dir=$fixture/missing-baseline-offline
 init_git_remote "$legacy_offline_dir/repository"
 legacy_offline_remote=$legacy_offline_dir/repository/remote.git
 make_vcs_workspace "$legacy_offline_dir/workspace" "$legacy_offline_remote" branch main
-: >"$legacy_offline_dir/workspace/packages/p1/p1-1.0.0-1-any.pkg.tar.zst"
+mk_fake_archive "$legacy_offline_dir/workspace/packages/p1/p1-1.0.0-1-any.pkg.tar.zst"
 mv "$legacy_offline_remote" "$legacy_offline_dir/repository/remote.offline"
 run_case "$legacy_offline_dir/workspace" -s p1
 expect_unverifiable_defer "$legacy_offline_dir/workspace" 0 \
@@ -474,7 +509,7 @@ attempts=$(lsremote_attempts "$flaky_dir/workspace")
     fail "flaky transport: expected a retry, saw $attempts ls-remote attempt(s)"
 grep -q -- 'pacman -U' "$flaky_dir/workspace/pacman.log" ||
     fail 'flaky transport skip did not install the skipped archive'
-grep -Fq 'p1-1.0.0-1-any.pkg.tar.zst' "$flaky_dir/workspace/pacman.log" ||
+grep -- 'pacman -U' "$flaky_dir/workspace/pacman.log" | grep -Fq 'p1-1.0.0-1-any.pkg.tar.zst' ||
     fail 'flaky transport skip installed without the existing archive'
 
 # T2: one transport failure, then the upstream answers a MOVED ref — the
@@ -520,7 +555,7 @@ if grep -q 'git+file://' "$PWD/PKGBUILD" 2>/dev/null; then
 fi
 id=$(basename "$PWD")
 printf '%s\n' "$id" >>"${GSA_FAKE_MAKEPKG_COUNT:?}"
-: >"$PWD/$id-1.0.0-1-any.pkg.tar.zst"
+tar --zstd -cf "$PWD/$id-1.0.0-1-any.pkg.tar.zst" --files-from /dev/null
 EOF
 chmod +x "$defer_dir/workspace/bin/makepkg"
 install_lsremote_stub "$defer_dir/workspace"
@@ -557,10 +592,11 @@ assert_makepkg_count "$defer_dir/workspace" 2 'only p3 may build while p1 is def
 if grep -q '^p2$' "$defer_dir/workspace/makepkg.count" 2>/dev/null; then
     fail 'p2 was dispatched although its dependency p1 is parked'
 fi
-if grep -F 'p1-1.0.0-1-any.pkg.tar.zst' "$defer_dir/workspace/pacman.log" 2>/dev/null; then
+if grep -- 'pacman -U' "$defer_dir/workspace/pacman.log" 2>/dev/null |
+    grep -F 'p1-1.0.0-1-any.pkg.tar.zst'; then
     fail 'p1 archive was installed although upstream never answered'
 fi
-grep -Fq 'p3-1.0.0-1-any.pkg.tar.zst' "$defer_dir/workspace/pacman.log" ||
+grep -- 'pacman -U' "$defer_dir/workspace/pacman.log" | grep -Fq 'p3-1.0.0-1-any.pkg.tar.zst' ||
     fail 'p3 did not install under -i while p1 was parked'
 
 # T4: a heavily-consumed recipe cannot park — the fallback is a normal build
@@ -584,7 +620,7 @@ if grep -q 'git+file://' "$PWD/PKGBUILD" 2>/dev/null; then
 fi
 id=$(basename "$PWD")
 printf '%s\n' "$id" >>"${GSA_FAKE_MAKEPKG_COUNT:?}"
-: >"$PWD/$id-1.0.0-1-any.pkg.tar.zst"
+tar --zstd -cf "$PWD/$id-1.0.0-1-any.pkg.tar.zst" --files-from /dev/null
 EOF
 chmod +x "$heavy_dir/workspace/bin/makepkg"
 install_lsremote_stub "$heavy_dir/workspace"
@@ -605,7 +641,7 @@ for id in p2 p3 p4 p5 p6; do
         fail "$id did not build behind the fallback:"$'\n'"$FIXTURE_OUTPUT"
 done
 assert_makepkg_count "$heavy_dir/workspace" 7 'fallback build plus all five consumers'
-grep -Fq 'p1-1.0.0-1-any.pkg.tar.zst' "$heavy_dir/workspace/pacman.log" ||
+grep -- 'pacman -U' "$heavy_dir/workspace/pacman.log" | grep -Fq 'p1-1.0.0-1-any.pkg.tar.zst' ||
     fail 'the fallback-built p1 archive did not install under -i'
 
 # A tag-pinned source follows the declared tag, not HEAD or unrelated branches.
@@ -809,7 +845,7 @@ abi_base_dir=$fixture/abi-missing-baseline
 init_git_remote "$abi_base_dir/repository"
 make_vcs_workspace "$abi_base_dir/workspace" "$abi_base_dir/repository/remote.git" branch main
 printf 'fixture rationale: matched ABI provider\n' >"$abi_base_dir/workspace/packages/p1/.gsa-abi-provider"
-: >"$abi_base_dir/workspace/packages/p1/p1-1.0.0-1-any.pkg.tar.zst"
+mk_fake_archive "$abi_base_dir/workspace/packages/p1/p1-1.0.0-1-any.pkg.tar.zst"
 run_case "$abi_base_dir/workspace" -s p1
 expect_success 'marked recipe rebuilds once on a missing baseline'
 assert_makepkg_count "$abi_base_dir/workspace" 1 'marked missing-baseline rebuild (rc 3 path intact)'
@@ -895,7 +931,7 @@ src_layout_archive=$src_layout_pkg/p1-1.0.0-1-any.pkg.tar.zst
 src_layout_manifest=$src_layout_archive.gsa-vcs-revisions
 [[ -f $src_layout_manifest ]] ||
     fail 'srcdir-layout build did not record its VCS baseline'
-recorded=$(awk -F '\t' 'NR > 1 { print $3 }' "$src_layout_manifest")
+recorded=$(awk -F '\t' 'NR > 2 { print $3 }' "$src_layout_manifest")
 src_rev=$(GIT_CONFIG_COUNT=0 git -C "$src_layout_pkg/src/upstream" rev-parse HEAD)
 [[ $recorded == "$src_rev" && $recorded == "$rev1" ]] ||
     fail "srcdir-layout recorded $recorded; src/ checkout is $src_rev (first revision $rev1)"
@@ -925,7 +961,7 @@ GSA_FAKE_VCS_LAYOUT=srcdir run_case "$src_layout/workspace" -s p1
 expect_success 'srcdir-layout advanced selected branch'
 assert_makepkg_count "$src_layout/workspace" 2 'srcdir-layout advanced selected branch'
 rev2=$(GIT_CONFIG_COUNT=0 git -C "$src_layout_work" rev-parse HEAD)
-recorded=$(awk -F '\t' 'NR > 1 { print $3 }' "$src_layout_manifest")
+recorded=$(awk -F '\t' 'NR > 2 { print $3 }' "$src_layout_manifest")
 src_rev=$(GIT_CONFIG_COUNT=0 git -C "$src_layout_pkg/src/upstream" rev-parse HEAD)
 [[ $recorded == "$src_rev" && $recorded == "$rev2" && $recorded != "$rev1" ]] ||
     fail "srcdir-layout recorded $recorded after the advance; src/ checkout is $src_rev (decoys still at $rev1)"
@@ -945,7 +981,7 @@ assert_makepkg_count "$src_suffix/workspace" 1 'srcdir basename-style build'
 src_suffix_manifest=$src_suffix/workspace/packages/p1/p1-1.0.0-1-any.pkg.tar.zst.gsa-vcs-revisions
 [[ -f $src_suffix_manifest ]] ||
     fail 'basename-style build did not record its VCS baseline'
-recorded=$(awk -F '\t' 'NR > 1 { print $3 }' "$src_suffix_manifest")
+recorded=$(awk -F '\t' 'NR > 2 { print $3 }' "$src_suffix_manifest")
 src_rev=$(GIT_CONFIG_COUNT=0 git -C "$src_suffix/workspace/packages/p1/src/remote" rev-parse HEAD)
 [[ $recorded == "$src_rev" ]] ||
     fail "basename-style recorded $recorded; src/ checkout is $src_rev"
@@ -953,5 +989,181 @@ src_rev=$(GIT_CONFIG_COUNT=0 git -C "$src_suffix/workspace/packages/p1/src/remot
 GSA_FAKE_VCS_LAYOUT=srcdir run_case "$src_suffix/workspace" -s p1
 expect_success 'srcdir basename-style unchanged selected branch'
 assert_makepkg_count "$src_suffix/workspace" 1 'srcdir basename-style unchanged selected branch'
+
+# ─── Built-output set completeness (R-F2) ────────────────────────────────────
+# A split recipe's currency is a property of the whole OUTPUT SET: an archive
+# for one output does not make the recipe current while a sibling output is
+# missing, so -s must rebuild instead of skipping on the surviving half. The
+# expected set is discovered from the evaluated pkgname array (this workspace
+# carries no .SRCINFO; install-archive-guard.sh pins the .SRCINFO primary
+# source). The anomaly is created the way it happens in production: the set
+# builds complete once (which also records the workspace's toolchain identity,
+# so no drift clean can mask the decision), then a packaging SIGKILL is
+# simulated by deleting one output.
+(
+    split_dir=$fixture/split-set
+    split_ws=$split_dir/workspace
+    make_workspace "$split_ws" 1 2 low
+    mkdir -p "$split_ws/packages/p1"
+    printf '%s\n' 'pkgname=(p1 p1-extra)' 'pkgver=1.0.0' 'pkgrel=1' 'arch=(any)' \
+        >"$split_ws/packages/p1/PKGBUILD"
+    printf 'p1|packages/p1|git|\n' >>"$split_ws/config/topology.conf"
+    touch -d '2000-01-01 00:00:00 UTC' "$split_ws/packages/p1/PKGBUILD"
+    cat >"$split_ws/bin/makepkg" <<'EOF'
+#!/usr/bin/env bash
+set -eu
+id=$(basename "$PWD")
+printf '%s\n' "$id" >>"${GSA_FAKE_MAKEPKG_COUNT:?}"
+tar --zstd -cf "$PWD/p1-1.0.0-1-any.pkg.tar.zst" --files-from /dev/null
+tar --zstd -cf "$PWD/p1-extra-1.0.0-1-any.pkg.tar.zst" --files-from /dev/null
+EOF
+    chmod +x "$split_ws/bin/makepkg"
+    stub_sudo "$split_ws"
+    stub_pacman "$split_ws"
+
+    run_case "$split_ws" -s p1
+    expect_success 'split set: initial build'
+    assert_makepkg_count "$split_ws" 1 'split set: initial build'
+    rm -f "$split_ws/packages/p1/p1-extra-1.0.0-1-any.pkg.tar.zst"
+    run_case "$split_ws" -s p1
+    expect_success 'partial output set rebuilds'
+    assert_makepkg_count "$split_ws" 2 'partial output set rebuilds'
+    diagnostics=$(diagnostics_with_logs "$split_ws")
+    grep -Fq 'is incomplete' <<<"$diagnostics" ||
+        fail 'partial output set did not report the incomplete set:'$'\n'"$diagnostics"
+    grep -Fq 'missing: p1-extra' <<<"$diagnostics" ||
+        fail 'incomplete-set diagnostic did not name the missing output:'$'\n'"$diagnostics"
+
+    run_case "$split_ws" -s p1
+    expect_success 'complete output set skips'
+    assert_makepkg_count "$split_ws" 2 'complete output set skips'
+)
+
+# ─── Payload integrity (R-F3) ────────────────────────────────────────────────
+# A truncated archive must not be sticky under -s. The probe reads archives
+# the way pacman does — the whole zstd stream, not the filename — so an
+# interrupted write is detected before the skip and rebuilt once.
+(
+    trunc_dir=$fixture/truncated-archive
+    trunc_ws=$trunc_dir/workspace
+    make_workspace "$trunc_ws" 1 2 low
+    add_package "$trunc_ws" p1 "$gsa_meta_any"
+    touch -d '2000-01-01 00:00:00 UTC' "$trunc_ws/packages/p1/PKGBUILD"
+    cat >"$trunc_ws/bin/makepkg" <<'EOF'
+#!/usr/bin/env bash
+set -eu
+id=$(basename "$PWD")
+printf '%s\n' "$id" >>"${GSA_FAKE_MAKEPKG_COUNT:?}"
+tar --zstd -cf "$PWD/$id-1.0.0-1-any.pkg.tar.zst" --files-from /dev/null
+EOF
+    chmod +x "$trunc_ws/bin/makepkg"
+    stub_sudo "$trunc_ws"
+    # The tar-delegating probe stub: pacman -Qp must model stream validation,
+    # so a truncated archive fails it exactly as it fails real pacman.
+    cat >"$trunc_ws/bin/pacman" <<'EOF'
+#!/usr/bin/env bash
+set -u
+printf 'pacman %s\n' "$*" >>"${GSA_FAKE_PACMAN_LOG:?}"
+case ${1:-} in
+-Qp)
+    file=
+    for arg in "$@"; do file=$arg; done
+    [[ -n $file ]] || exit 1
+    tar --zstd -t -f "$file" >/dev/null 2>&1
+    exit $?
+    ;;
+-Qi) exit 1 ;;
+esac
+exit 0
+EOF
+    chmod +x "$trunc_ws/bin/pacman"
+
+    trunc_archive=$trunc_ws/packages/p1/p1-1.0.0-1-any.pkg.tar.zst
+    run_case "$trunc_ws" -s p1
+    expect_success 'truncated archive: initial build'
+    assert_makepkg_count "$trunc_ws" 1 'truncated archive: initial build'
+    half=$(($(stat -c %s "$trunc_archive") / 2))
+    head -c "$half" "$trunc_archive" >"$trunc_archive.trunc"
+    mv "$trunc_archive.trunc" "$trunc_archive"
+    run_case "$trunc_ws" -s p1
+    expect_success 'truncated archive rebuilds'
+    assert_makepkg_count "$trunc_ws" 2 'truncated archive rebuilds'
+    diagnostics=$(diagnostics_with_logs "$trunc_ws")
+    grep -Fq 'cannot be read as a package archive' <<<"$diagnostics" ||
+        fail 'truncated archive did not report the payload failure:'$'\n'"$diagnostics"
+
+    run_case "$trunc_ws" -s p1
+    expect_success 'rebuilt archive skips'
+    assert_makepkg_count "$trunc_ws" 2 'rebuilt archive skips'
+)
+
+# ─── Version-aware currency (R-F23 / D-F2) ───────────────────────────────────
+# "Current" is keyed to the evaluated pkgver/pkgrel: an archive named for an
+# older version is not a build of THIS PKGBUILD and must never satisfy -s,
+# however fresh its mtime.
+(
+    stale_dir=$fixture/stale-version
+    stale_ws=$stale_dir/workspace
+    make_workspace "$stale_ws" 1 2 low
+    add_package "$stale_ws" p1 "$gsa_meta_any"
+    touch -d '2000-01-01 00:00:00 UTC' "$stale_ws/packages/p1/PKGBUILD"
+    cat >"$stale_ws/bin/makepkg" <<'EOF'
+#!/usr/bin/env bash
+set -eu
+id=$(basename "$PWD")
+printf '%s\n' "$id" >>"${GSA_FAKE_MAKEPKG_COUNT:?}"
+tar --zstd -cf "$PWD/$id-1.0.0-1-any.pkg.tar.zst" --files-from /dev/null
+EOF
+    chmod +x "$stale_ws/bin/makepkg"
+    stub_sudo "$stale_ws"
+    stub_pacman "$stale_ws"
+
+    run_case "$stale_ws" -s p1
+    expect_success 'stale-version archive: initial build'
+    assert_makepkg_count "$stale_ws" 1 'stale-version archive: initial build'
+    # The recipe moves to 1.0.0 while only the 0.9 build is on disk: the old
+    # archive is not a build of this PKGBUILD and must not satisfy -s.
+    mv "$stale_ws/packages/p1/p1-1.0.0-1-any.pkg.tar.zst" \
+        "$stale_ws/packages/p1/p1-0.9-1-any.pkg.tar.zst"
+    run_case "$stale_ws" -s p1
+    expect_success 'stale-version archive rebuilds'
+    assert_makepkg_count "$stale_ws" 2 'stale-version archive rebuilds'
+
+    run_case "$stale_ws" -s p1
+    expect_success 'current-version archive skips'
+    assert_makepkg_count "$stale_ws" 2 'current-version archive skips'
+)
+
+# ─── Manifest identity binding (R-F4) ────────────────────────────────────────
+# The v2 VCS manifest binds the recorded baseline to the exact archive bytes
+# (sha256 + size). An archive replaced under a live manifest is a DIFFERENT
+# build: the recorded revisions cannot vouch for it, so -s must rebuild rather
+# than skip. The replacement here is a readable archive — the payload probe
+# passes — so this case isolates the identity binding from the payload check.
+(
+    ident_dir=$fixture/manifest-identity
+    init_git_remote "$ident_dir/repository"
+    ident_remote=$ident_dir/repository/remote.git
+    make_vcs_workspace "$ident_dir/workspace" "$ident_remote" branch main
+    ident_ws=$ident_dir/workspace
+    ident_archive=$ident_ws/packages/p1/p1-1.0.0-1-any.pkg.tar.zst
+    run_case "$ident_ws" p1
+    expect_success 'manifest identity: initial build'
+    assert_makepkg_count "$ident_ws" 1 'manifest identity: initial build'
+    [[ -f $ident_archive.gsa-vcs-revisions ]] ||
+        fail 'manifest identity: initial build did not record its VCS baseline'
+
+    mk_fake_archive "$ident_archive" 'replacement payload'
+    run_case "$ident_ws" -s p1
+    expect_success 'manifest identity: replaced archive rebuilds'
+    assert_makepkg_count "$ident_ws" 2 'manifest identity: replaced archive rebuilds'
+    diagnostics=$(diagnostics_with_logs "$ident_ws")
+    grep -Fq 'a different build of' <<<"$diagnostics" ||
+        fail 'manifest identity: replaced archive did not report the baseline mismatch'
+
+    run_case "$ident_ws" -s p1
+    expect_success 'manifest identity: rebuilt archive skips'
+    assert_makepkg_count "$ident_ws" 2 'manifest identity: rebuilt archive skips'
+)
 
 printf 'upstream-aware skip fixture: PASS\n'

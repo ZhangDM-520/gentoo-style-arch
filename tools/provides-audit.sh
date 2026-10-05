@@ -8,7 +8,7 @@ set -uo pipefail
 # A library-shipping package must declare a bare soname provide (`libfoo.so`)
 # for every DT_SONAME it ships: an undeclared soname leaves repo consumers
 # unable to resolve the library from this workspace at all. The workspace
-# audit lint (build-all.fish `audit_lint_provides`) owns the companion FORM
+# audit lint (lib/audit.fish `audit_lint_provides`) owns the companion FORM
 # rule — declare the bare stem so makepkg auto-versions it from the built ELF
 # — but form is only checkable from recipe metadata. PRESENCE is a property of
 # the built payload, so it is checked here, against the artifact itself.

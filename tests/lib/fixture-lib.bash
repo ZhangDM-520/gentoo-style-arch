@@ -55,6 +55,8 @@
 #                              counter (was GSA_FIXTURE_MAKEPKG_COUNT)
 #   GSA_FAKE_MAKEPKG_LOG       abi-batch makepkg stub: BUILD marker log
 #                              (was GSA_FIXTURE_MAKEPKG_LOG)
+#   GSA_FAKE_MKTEMP_FAIL       anchor-defer mktemp stub: 'anchor' fails only
+#                              the checksum anchor's scratch template
 #   GSA_FAKE_MARKER_DIR        per-package build marker dir (abi-batch,
 #                              log-ownership, pacman-mutex-shim, signal-abort-lock,
 #                              sudo-keepalive)
@@ -72,6 +74,8 @@
 #                              for shell-expanded pkgver coverage
 #   GSA_FAKE_CALL_PKGVER       install-archive-guard makepkg stub: run pkgver()
 #                              and model makepkg's updated PKGBUILD version
+#   GSA_FAKE_PRINTSRCINFO_FAIL stable-sync-checksums makepkg stub: `--printsrcinfo`
+#                              exits 1 (the .SRCINFO refresh-failure seam)
 #   GSA_FAKE_PGREP_HOLDER      pgrep stub: THE pid "holding" the lock/db
 #                              (local-db-repair, signal-abort-lock)
 #   GSA_FAKE_QI                install-archive-guard pacman stub: `pacman -Qi`
@@ -84,6 +88,10 @@
 #   GSA_FAKE_SIGNAL_LOG        signal-abort-lock makepkg stub: signal-receipt log
 #   GSA_FAKE_SPAWN_LOG         spawned-helper argv log (abi-batch-policy,
 #                              texlive-split) (was GSA_SPAWN_LOG)
+#   GSA_FAKE_SED_LOG           stable-sync-checksums sed wrapper: argv log
+#                              proving which file the version rewrite edits
+#   GSA_FAKE_SI_MODE           stable-sync-checksums pacman stub: `pacman -Si`
+#                              scenario (db-error|not-found)
 #   GSA_FAKE_SRCINFO_JOBS      srcinfo-freshness: parallelism of its own
 #                              printsrcinfo sweep (was GSA_SRCINFO_JOBS)
 #   GSA_FAKE_STUB_PACMAN       path to the recorder the flock shim redirects the
@@ -93,6 +101,8 @@
 #   GSA_FAKE_SUDO_LOG          sudo stub: argv log
 #   GSA_FAKE_SUDO_MODE         sudo stub: scenario mode (sudo-keepalive)
 #   GSA_FAKE_SUDO_STATE        sudo stub: state dir (sudo-keepalive)
+#   GSA_FAKE_TMP_WATCH         stable-sync-checksums makepkg stub: record the
+#                              .SRCINFO temp names visible at exec
 #   GSA_FAKE_TICKS             dashboard makepkg stub: tail-line count
 
 # Repo root from this file's own location: tests/lib/fixture-lib.bash → repo.
@@ -121,6 +131,7 @@ make_workspace() {
     local dir=$1 lanes=${2:-auto} jobs=${3:-auto} intensity=${4:-xhigh}
     mkdir -p "$dir/config" "$dir/packages" "$dir/bin"
     cp "$gsa_repo_root/build-all.fish" "$dir/build-all.fish"
+    mkdir -p "$dir/lib" && cp "$gsa_repo_root/lib/sources.fish" "$gsa_repo_root/lib/audit.fish" "$dir/lib/"
     cat >"$dir/config/build-defaults.conf" <<EOF
 lanes=$lanes
 jobs=$jobs

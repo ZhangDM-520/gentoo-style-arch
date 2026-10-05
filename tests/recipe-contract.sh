@@ -21,6 +21,10 @@ set -euo pipefail
 #   heavy/ELF                  soname-presence → tools/provides-audit.sh pair.
 # PGP procedure and trimming stay docs-only by the same mapping.
 #
+# Section F pins the CLI name surface instead of a lint: pkgbase + pkgname from
+# a recipe's committed .SRCINFO both resolve as package references, and an
+# unknown name is refused (red-first probe, see the section's header).
+#
 # Every scratch workspace and conf lives under $TMPDIR; the real-repo sections
 # are read-only.
 
@@ -463,4 +467,115 @@ EOF
     printf 'E: real-repo gates OK\n'
 )
 
-printf 'recipe contract fixture: PASS (3 lint seams gated, real-repo gates green)\n'
+# ─── F. one name surface: pkgbase + pkgname resolve as CLI references ────────
+# The CLI name surface is the union of a recipe's committed-.SRCINFO pkgbase
+# and pkgname rows — `_pkgname_index`/`_pkgname_owner` in build-all.fish is the
+# one index both feed. The discriminating shape is a recipe whose pkgbase
+# differs from its id AND its outputs ("pkgbase-only name"): only an index that
+# carries the pkgbase rows resolves it. A genuinely unknown name is still
+# refused with the unresolved token reported — a typo is never auto-corrected,
+# because a wrong guess would build the wrong recipe and its consumer closure.
+#
+# The four assertions, in contract order:
+#   (1) id reference 'rec-a' — the baseline selection;
+#   (2) pkgbase-only reference 'base-only' — same selection as (1), exactly
+#       recipe rec-a ONCE; this is the red-first probe and deliberately runs
+#       LAST, so a red run still executes and proves (1)/(3)/(4) before it
+#       fails exactly where the contract is unimplemented;
+#   (3) pkgname reference 'rec-a-out' — must keep resolving to rec-a;
+#   (4) unknown reference — non-zero exit, the token reported, no selection.
+# (2) is RED against an index that lacks pkgbase rows and GREEN once the index
+# is the pkgbase+pkgname union — red-first is the fixture's purpose.
+#
+# Selection surface: --dry-run returns before the run record is registered
+# (the build path registers its plan afterwards), so the numbered build-order
+# rows are the stable machine-checkable selection output. The assertions parse
+# only those rows and never prose wording, so an unrelated output-format change
+# cannot flip them; "exactly rec-a" also fails on a duplicated row.
+(
+    set -euo pipefail
+    ws=$tmp/namesurface-ws
+    make_workspace "$ws" 1 2 low
+
+    # rec-b is a decoy: not a consumer of rec-a, so it must never appear in
+    # any of these selections — "exactly rec-a" means the closure is one row.
+    add_package "$ws" rec-b
+    write_srcinfo "$ws/packages/rec-b" rec-b
+
+    # rec-a: pkgbase 'base-only' differs from the recipe id AND the sole
+    # pkgname output 'rec-a-out'. PKGBUILD and .SRCINFO carry the same names;
+    # the index reads the committed .SRCINFO, never the PKGBUILD.
+    add_package "$ws" rec-a
+    cat >"$ws/packages/rec-a/PKGBUILD" <<'EOF'
+pkgbase=base-only
+pkgname=(rec-a-out)
+EOF
+    printf 'pkgbase = base-only\npkgname = rec-a-out\n' >"$ws/packages/rec-a/.SRCINFO"
+
+    # dry_order OUTPUT — the build-order rows only ("  %2d. %s"), one per line.
+    dry_order() {
+        awk '/^[[:space:]]*[0-9]+\. / { sub(/^[[:space:]]*[0-9]+\. /, ""); print }' <<<"$1"
+    }
+    # assert_rec_a_only LABEL OUTPUT — the run selected exactly recipe rec-a.
+    assert_rec_a_only() {
+        local label=$1 out=$2 order
+        order=$(dry_order "$out")
+        [[ $order == rec-a ]] ||
+            fail "F: $label must select exactly recipe 'rec-a' (once), got: ${order:-<no build order>} | output: $out"
+    }
+
+    # (1) id reference: baseline selection.
+    run_builder fish "$ws/build-all.fish" --dry-run rec-a
+    ((FIXTURE_RC == 0)) || fail "F: id reference 'rec-a' failed (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
+    assert_rec_a_only "id reference 'rec-a'" "$FIXTURE_OUTPUT"
+    id_order=$(dry_order "$FIXTURE_OUTPUT")
+
+    # (3) pkgname reference: the output name keeps resolving to its recipe.
+    run_builder fish "$ws/build-all.fish" --dry-run rec-a-out
+    ((FIXTURE_RC == 0)) || fail "F: pkgname reference 'rec-a-out' failed (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
+    assert_rec_a_only "pkgname reference 'rec-a-out'" "$FIXTURE_OUTPUT"
+
+    # (4) unknown reference: refused, named, and it selects nothing.
+    run_builder fish "$ws/build-all.fish" --dry-run definitely-not-a-package
+    ((FIXTURE_RC != 0)) || fail "F: unknown reference 'definitely-not-a-package' must exit non-zero, got rc=0: $FIXTURE_OUTPUT"
+    grep -Fq 'definitely-not-a-package' <<<"$FIXTURE_OUTPUT" ||
+        fail "F: the unknown reference must be reported by name, got: $FIXTURE_OUTPUT"
+    unknown_order=$(dry_order "$FIXTURE_OUTPUT")
+    [[ -z $unknown_order ]] ||
+        fail "F: an unknown reference must not select anything, got order: $unknown_order | output: $FIXTURE_OUTPUT"
+
+    # (2) pkgbase-only reference (red-first probe, last on purpose): must
+    # resolve to rec-a exactly like the id does — same selection, one row.
+    run_builder fish "$ws/build-all.fish" --dry-run base-only
+    ((FIXTURE_RC == 0)) ||
+        fail "F: pkgbase-only reference 'base-only' must resolve like the id (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
+    assert_rec_a_only "pkgbase reference 'base-only'" "$FIXTURE_OUTPUT"
+    base_order=$(dry_order "$FIXTURE_OUTPUT")
+    [[ $base_order == "$id_order" ]] ||
+        fail "F: pkgbase reference must select what the id selects ('"$id_order"'), got: $base_order"
+
+    printf 'F: one name surface (pkgbase + pkgname) + unknown-name refusal OK\n'
+)
+
+# ─── F mutation probes (documented, NOT run here: they need the name-surface
+# implementation first). Each probe is a one-spot perturbation of build-all.fish
+# followed by `bash tests/recipe-contract.sh` → the named assertion goes red;
+# REVERSE the edit (paste the original line back — never `git checkout`/`git
+# stash`) → green again. Line numbers are the 2026-10-05 anchors and drift;
+# the function names are the stable handles.
+#   M1 pkgbase half of the surface: in `_pkgname_index` (build-all.fish:7233,
+#      the row sweep around `sed -n 's/^pkgname = //p'`), keep only the pkgname
+#      rows and drop the pkgbase rows → assertion (2) red; reverse → green.
+#      This probe reproduces the pre-change state the fixture is red against.
+#   M2 pkgname half: in the same sweep keep only the pkgbase rows → assertion
+#      (3) red; reverse → green.
+#   M3 wrong owner: make the sweep emit one extra row `base-only|rec-b` (or
+#      make `_pkgname_owner`, build-all.fish:7249, return a second owner) →
+#      assertion (2)'s "exactly rec-a, once" check red; reverse → green.
+#   M4 unknown-name refusal: make `canonicalize_pkg_ref` (build-all.fish:7384)
+#      echo a known id instead of the unresolved token, or make the
+#      `_report_unknown_ref` call site (build-all.fish:11333) not `return 1`
+#      → assertion (4) red; reverse → green.
+# ─────────────────────────────────────────────────────────────────────────────
+
+printf 'recipe contract fixture: PASS (3 lint seams gated, name surface pinned, real-repo gates green)\n'

@@ -399,6 +399,14 @@ builder_args=(-i p1)
 # implementation" pin). Exact-output matching doubles as the silence pin: any
 # mid-decision chatter breaks the whole-plan equality.
 
+# planrow FIELD... — the plan-row codec's framing (tab-separated fields, the
+# 2026-10-05 R-F22 grammar): fixture expectations must frame rows exactly as
+# install_plan prints them, spaces inside fields and all.
+planrow() {
+    local IFS=$'\t'
+    printf '%s' "$*"
+}
+
 decide() { # $1 = dir, $2 = mode, $3 = label, rest = archives; env via decide_env
     local dir=$1 mode=$2 label=$3
     shift 3
@@ -455,30 +463,30 @@ mkdir -p "$(dirname "$arch")"
 # → the one positive-evidence skip.
 decide_env=(GSA_FAKE_QP='p1 1.0.0-1' "GSA_FAKE_QI=$(fresh_qi 1.0.0-1)")
 decide "$dir_i" checked 'decide I1' "$arch"
-decide_assert 'decide I1 (checked, fresh install)' 0 "skip $arch 1.0.0-1"
+decide_assert 'decide I1 (checked, fresh install)' 0 "$(planrow skip "$arch" 1.0.0-1)"
 
 # I2: version mismatch → install (doubt installs).
 decide_env=(GSA_FAKE_QP='p1 1.0.0-1' "GSA_FAKE_QI=$(fresh_qi 0.9.0-1)")
 decide "$dir_i" checked 'decide I2' "$arch"
-decide_assert 'decide I2 (checked, version mismatch)' 0 "install $arch"
+decide_assert 'decide I2 (checked, version mismatch)' 0 "$(planrow install "$arch")"
 
 # I3: same version but install date older than the archive (a same-version
 # rebuild) → install.
 decide_env=(GSA_FAKE_QP='p1 1.0.0-1' "GSA_FAKE_QI=$(stale_qi 1.0.0-1)")
 decide "$dir_i" checked 'decide I3' "$arch"
-decide_assert 'decide I3 (checked, stale install date)' 0 "install $arch"
+decide_assert 'decide I3 (checked, stale install date)' 0 "$(planrow install "$arch")"
 
 # I4: neither query answers (doubt) → install.
 decide_env=()
 decide "$dir_i" checked 'decide I4' "$arch"
-decide_assert 'decide I4 (checked, no query answers)' 0 "install $arch"
+decide_assert 'decide I4 (checked, no query answers)' 0 "$(planrow install "$arch")"
 
 # I5: force mode over a perfectly fresh install → install anyway, and the
 # pacman stub is never consulted at all: force bypasses install_skip_reason
 # entirely (-ia shares this path; no second implementation).
 decide_env=(GSA_FAKE_QP='p1 1.0.0-1' "GSA_FAKE_QI=$(fresh_qi 1.0.0-1)")
 decide "$dir_i" force 'decide I5' "$arch"
-decide_assert 'decide I5 (force bypasses the skip check)' 0 "install $arch"
+decide_assert 'decide I5 (force bypasses the skip check)' 0 "$(planrow install "$arch")"
 if [[ -s "$dir_i/pacman.log" ]]; then
     printf 'decide I5: force mode consulted the installed database:\n%s\n' \
         "$(cat "$dir_i/pacman.log")" >&2
@@ -488,11 +496,277 @@ fi
 # I6: checked + nothing to install → refusal (the 2026-09-20 silence bug).
 decide_env=()
 decide "$dir_i" checked 'decide I6'
-decide_assert 'decide I6 (checked, empty list)' 1 'refuse empty-list'
+decide_assert 'decide I6 (checked, empty list)' 1 "$(planrow refuse empty-list)"
 
 # I7: force + nothing to install → a no-op plan, not a refusal (-ia on a
 # workspace with nothing built is a no-op success).
 decide "$dir_i" force 'decide I7'
-decide_assert 'decide I7 (force, empty list)' 0 'noop empty-list'
+decide_assert 'decide I7 (force, empty list)' 0 "$(planrow noop empty-list)"
+
+# ─── Split-output set completeness at install discovery (R-F2) ───────────────
+# Installing a SUBSET of a split recipe's outputs is a silent wrong claim: the
+# outputs are discovered as a set and a partial set is excluded with a named
+# warning, never half-installed. The expected set comes from the committed
+# .SRCINFO here (skip-upstream.sh pins the evaluated-pkgname fallback), and
+# GSA_FAKE_DROP_OUTPUT models a build that died between the two outputs.
+
+make_split_workspace() { # $1 = dir — .SRCINFO-backed two-output recipe
+    make_case_workspace "$1" "pkgver=1.0.0"
+    printf '%s\n' 'pkgname=(p1 p1-extra)' 'pkgver=1.0.0' 'pkgrel=1' 'arch=(any)' \
+        >"$1/packages/p1/PKGBUILD"
+    printf '%s\n' 'pkgbase = p1' 'pkgname = p1' 'pkgname = p1-extra' \
+        'pkgver = 1.0.0' 'pkgrel = 1' 'arch = any' >"$1/packages/p1/.SRCINFO"
+    cat >"$1/bin/makepkg" <<'EOF'
+#!/usr/bin/env bash
+set -u
+: >"$PWD/p1-1.0.0-1-any.pkg.tar.zst"
+if [[ "${GSA_FAKE_DROP_OUTPUT:-0}" != 1 ]]; then
+    : >"$PWD/p1-extra-1.0.0-1-any.pkg.tar.zst"
+fi
+if [[ -n ${GSA_FAKE_MAKEPKG_COUNT:-} ]]; then
+    printf 'run\n' >>"$GSA_FAKE_MAKEPKG_COUNT"
+fi
+printf 'fake makepkg %s\n' "$PWD"
+exit 0
+EOF
+    chmod +x "$1/bin/makepkg"
+}
+
+# S1: a complete set installs every output in the one transaction.
+dir_s1="$fixture/split-complete"
+make_split_workspace "$dir_s1"
+builder_args=(-i p1)
+if ! run_case "$dir_s1"; then
+    printf 'case S1: -i failed on a complete split set:\n%s\n' "$FIXTURE_OUTPUT" >&2
+    exit 1
+fi
+for out in p1-1.0.0-1-any.pkg.tar.zst p1-extra-1.0.0-1-any.pkg.tar.zst; do
+    if ! grep -- 'pacman -U' "$dir_s1/pacman.log" 2>/dev/null | grep -Fq "$out"; then
+        printf 'case S1: pacman -U did not receive %s:\n%s\n' "$out" \
+            "$(cat "$dir_s1/pacman.log" 2>/dev/null || true)" >&2
+        exit 1
+    fi
+done
+
+# S2: a PARTIAL set must fail checked install: nothing is installed (not even
+# the surviving output) and the missing output is named.
+dir_s2="$fixture/split-partial"
+make_split_workspace "$dir_s2"
+builder_args=(-i p1)
+if run_case "$dir_s2" GSA_FAKE_DROP_OUTPUT=1; then
+    printf 'case S2: -i succeeded while half the split set is missing:\n%s\n' \
+        "$FIXTURE_OUTPUT" >&2
+    exit 1
+fi
+assert_no_u "$dir_s2" 'case S2'
+if ! grep -Fq 'is incomplete' <<<"$FIXTURE_OUTPUT" ||
+    ! grep -Fq 'p1-extra' <<<"$FIXTURE_OUTPUT"; then
+    printf 'case S2: the partial set was not reported by name:\n%s\n' \
+        "$FIXTURE_OUTPUT" >&2
+    exit 1
+fi
+
+# S3: -ia is the force/no-op escape hatch — a partial set is excluded from its
+# discovery the same way (warning names the missing output), but an empty
+# force plan is a no-op success, never a transaction and never a refusal.
+dir_s3="$fixture/split-installall"
+make_split_workspace "$dir_s3"
+: >"$dir_s3/packages/p1/p1-1.0.0-1-any.pkg.tar.zst"
+builder_args=(-ia)
+if ! run_case "$dir_s3"; then
+    printf 'case S3: -ia failed on a partial split set (force empty is a no-op):\n%s\n' \
+        "$FIXTURE_OUTPUT" >&2
+    exit 1
+fi
+assert_no_u "$dir_s3" 'case S3'
+if ! grep -Fq 'No eligible built packages found' <<<"$FIXTURE_OUTPUT"; then
+    printf 'case S3: the partial set was not excluded from -ia discovery:\n%s\n' \
+        "$FIXTURE_OUTPUT" >&2
+    exit 1
+fi
+if ! grep -Fq 'is incomplete' <<<"$FIXTURE_OUTPUT" ||
+    ! grep -Fq 'p1-extra' <<<"$FIXTURE_OUTPUT"; then
+    printf 'case S3: the exclusion did not name the missing output:\n%s\n' \
+        "$FIXTURE_OUTPUT" >&2
+    exit 1
+fi
+
+# ─── R-F37: the freshness compare is NANOSECOND, not second ─────────────────
+# The install date is second-granular, so a second-equality compare skipped a
+# same-version rebuild whose archive was written mid-second AFTER the install
+# instant. Doubt installs: an archive newer by nanoseconds must install; an
+# install genuinely at-or-after the archive still skips.
+(
+    dir_f37="$fixture/decide-f37"
+    make_case_workspace "$dir_f37" "pkgver=1.0.0"
+    arch_f="$dir_f37/decide-archives/p1-1.0.0-1-any.pkg.tar.zst"
+    mkdir -p "$(dirname "$arch_f")"
+    : >"$arch_f"
+    qi_at() { # $1 = version, $2 = install epoch (second granularity)
+        printf 'Version : %s\nInstall Date : %s\n' "$1" \
+            "$(date -d "@$2" '+%Y-%m-%d %H:%M:%S')"
+    }
+
+    # Same second, archive half a second AFTER the install instant → install.
+    # The old second-equality compare reported this as fresh and skipped it.
+    touch -d '@1700000000.5' "$arch_f"
+    decide_env=(GSA_FAKE_QP='p1 1.0.0-1' "GSA_FAKE_QI=$(qi_at 1.0.0-1 1700000000)")
+    decide "$dir_f37" checked 'decide F37-same-second' "$arch_f"
+    decide_assert 'F37: ns-newer archive inside the install second must install' 0 "$(planrow install "$arch_f")"
+
+    # Archive exactly at the install instant → the one equality that skips.
+    touch -d '@1700000000' "$arch_f"
+    decide "$dir_f37" checked 'decide F37-exact' "$arch_f"
+    decide_assert 'F37: an archive at the install instant still skips' 0 "$(planrow skip "$arch_f" 1.0.0-1)"
+
+    # Archive a second earlier (ns before the install) → still skips.
+    touch -d '@1699999999.5' "$arch_f"
+    decide_env=(GSA_FAKE_QP='p1 1.0.0-1' "GSA_FAKE_QI=$(qi_at 1.0.0-1 1700000000)")
+    decide "$dir_f37" checked 'decide F37-older' "$arch_f"
+    decide_assert 'F37: an older archive with a fresher install still skips' 0 "$(planrow skip "$arch_f" 1.0.0-1)"
+)
+
+# ─── R-F22 (decision half): a spaced archive path survives the row codec ────
+(
+    dir_sp="$fixture/decide-space"
+    make_case_workspace "$dir_sp" "pkgver=1.0.0"
+    arch_sp="$dir_sp/decide archives/p1 with space-1.0.0-1-any.pkg.tar.zst"
+    mkdir -p "$(dirname "$arch_sp")"
+    : >"$arch_sp"
+    decide_env=()
+    decide "$dir_sp" checked 'decide space-install' "$arch_sp"
+    decide_assert 'R-F22: the install row keeps a spaced path intact' 0 "$(planrow install "$arch_sp")"
+    decide_env=(GSA_FAKE_QP='p1 1.0.0-1' "GSA_FAKE_QI=$(fresh_qi 1.0.0-1)")
+    decide "$dir_sp" checked 'decide space-skip' "$arch_sp"
+    decide_assert 'R-F22: the skip row keeps a spaced path intact' 0 "$(planrow skip "$arch_sp" 1.0.0-1)"
+)
+
+# ─── R-F25: -ia must not silently install a shrunken set ────────────────────
+# One recipe's discovery is damaged (pkgver evaluation fails) while another
+# has a complete built set. "Install everything" may not install the
+# evaluable subset and report success — the plan refuses the omission by name.
+(
+    dir_r25="$fixture/ia-shrink"
+    make_case_workspace "$dir_r25" "pkgver=1.0.0"
+    add_package "$dir_r25" p2 $'if then'
+    : >"$dir_r25/packages/p1/p1-1.0.0-1-any.pkg.tar.zst"
+    : >"$dir_r25/packages/p2/p2-1.0.0-1-any.pkg.tar.zst"
+    builder_args=(-ia)
+    if run_case "$dir_r25"; then
+        printf 'R-F25: -ia installed the evaluable subset although p2 discovery failed:\n%s\n' \
+            "$FIXTURE_OUTPUT" >&2
+        exit 1
+    fi
+    grep -Fq 'archive discovery could not be established' <<<"$FIXTURE_OUTPUT" ||
+        { printf 'R-F25: the refusal does not name the discovery failure:\n%s\n' "$FIXTURE_OUTPUT" >&2; exit 1; }
+    grep -Fq 'p2' <<<"$FIXTURE_OUTPUT" ||
+        { printf 'R-F25: the refusal does not name p2:\n%s\n' "$FIXTURE_OUTPUT" >&2; exit 1; }
+    if grep -q -- 'pacman -U' "$dir_r25/pacman.log" 2>/dev/null; then
+        printf 'R-F25: a transaction ran over the shrunken set:\n%s\n' "$(cat "$dir_r25/pacman.log")" >&2
+        exit 1
+    fi
+    if grep -q 'No eligible built packages found' <<<"$FIXTURE_OUTPUT"; then
+        printf 'R-F25: a non-empty set reported as nothing-eligible:\n%s\n' "$FIXTURE_OUTPUT" >&2
+        exit 1
+    fi
+)
+
+# ─── Wave-1 follow-up: a partial set refuses with the named refusal row ─────
+# The discovery layer already excludes the partial set; the plan must surface
+# the refusal as its own rendered row (`refuse partial-set`), not fall
+# through to the misleading `refuse empty-list`.
+(
+    dir_ps="$fixture/partial-refusal"
+    make_split_workspace "$dir_ps"
+    builder_args=(-i p1)
+    if run_case "$dir_ps" GSA_FAKE_DROP_OUTPUT=1; then
+        printf 'partial-set: -i succeeded over a partial set:\n%s\n' "$FIXTURE_OUTPUT" >&2
+        exit 1
+    fi
+    if ! grep -rq 'refusing to install' "$dir_ps/state" 2>/dev/null &&
+        ! grep -q 'refusing to install' <<<"$FIXTURE_OUTPUT"; then
+        printf 'partial-set: no named refusal row was rendered:\n%s\n' "$FIXTURE_OUTPUT" >&2
+        exit 1
+    fi
+    grep -Fq 'is incomplete' <<<"$FIXTURE_OUTPUT" ||
+        { printf 'partial-set: the refusal lost the incomplete-set reason:\n%s\n' "$FIXTURE_OUTPUT" >&2; exit 1; }
+    grep -Fq 'p1-extra' <<<"$FIXTURE_OUTPUT" ||
+        { printf 'partial-set: the refusal lost the missing output name:\n%s\n' "$FIXTURE_OUTPUT" >&2; exit 1; }
+    assert_no_u "$dir_ps" 'partial-set'
+)
+
+# ─── D-F13: the empty-list refusal renders through install_emit ────────────
+# One message text, one rendering seam — the checked empty-set refusal lands
+# in the lane transcript (quiet sink) with exactly the unified wording.
+(
+    dir_e13="$fixture/empty-list-render"
+    make_case_workspace "$dir_e13" "pkgver=1.0.0"
+    builder_args=(-i p1)
+    if run_case "$dir_e13" GSA_FAKE_NO_ARCHIVE=1; then
+        printf 'D-F13: -i succeeded with nothing to install:\n%s\n' "$FIXTURE_OUTPUT" >&2
+        exit 1
+    fi
+    if ! grep -rqF 'install requested but no built package archive matched the current pkgver-pkgrel — refusing to report success' "$dir_e13/state" 2>/dev/null &&
+        ! grep -qF 'install requested but no built package archive matched the current pkgver-pkgrel — refusing to report success' <<<"$FIXTURE_OUTPUT"; then
+        printf 'D-F13: the empty-list refusal did not render through install_emit:\n%s\n' "$FIXTURE_OUTPUT" >&2
+        exit 1
+    fi
+)
+
+# ─── D-F14: a mixed skip note shows every version, not one row's ────────────
+# Two skipped outputs with DIFFERENT installed versions in one transaction:
+# the note must present the version set. The old note printed the last row's
+# version for both packages.
+(
+    dir_e14="$fixture/multi-skip-note"
+    make_split_workspace "$dir_e14"
+    cat >"$dir_e14/bin/pacman" <<'EOF'
+#!/usr/bin/env bash
+set -u
+printf 'pacman %s\n' "$*" >>"${GSA_FAKE_PACMAN_LOG:?}"
+last=''
+for a in "$@"; do last=$a; done
+base=${last##*/}
+case ${1:-} in
+-Qp)
+    case "$base" in
+    p1-extra-*) printf 'p1-extra 2.0-1\n' ;;
+    p1-*) printf 'p1 1.0.0-1\n' ;;
+    *) exit 1 ;;
+    esac
+    ;;
+-Qi)
+    case "$last" in
+    p1)
+        printf 'Version : 1.0.0-1\nInstall Date : %s\n' "$(date -d '+1 day' '+%Y-%m-%d %H:%M:%S')"
+        ;;
+    p1-extra)
+        printf 'Version : 2.0-1\nInstall Date : %s\n' "$(date -d '+1 day' '+%Y-%m-%d %H:%M:%S')"
+        ;;
+    *) exit 1 ;;
+    esac
+    ;;
+esac
+exit 0
+EOF
+    chmod +x "$dir_e14/bin/pacman"
+    builder_args=(-i p1)
+    if ! run_case "$dir_e14"; then
+        printf 'D-F14: -i failed on a fully-skipped split set:\n%s\n' "$FIXTURE_OUTPUT" >&2
+        exit 1
+    fi
+    skip_note=$(grep -rh 'skipping their install' "$dir_e14/state" 2>/dev/null || true)
+    [[ -n $skip_note ]] || skip_note=$(grep 'skipping their install' <<<"$FIXTURE_OUTPUT" || true)
+    if [[ "$skip_note" != *'1.0.0-1'* || "$skip_note" != *'2.0-1'* ]]; then
+        printf 'D-F14: the skip note lost a version:\nnote: %s\nrun:\n%s\n' \
+            "$skip_note" "$FIXTURE_OUTPUT" >&2
+        exit 1
+    fi
+    if grep -q -- 'pacman -U' "$dir_e14/pacman.log" 2>/dev/null; then
+        printf 'D-F14: both outputs were already installed but pacman -U ran:\n%s\n' \
+            "$(cat "$dir_e14/pacman.log")" >&2
+        exit 1
+    fi
+)
 
 printf 'install archive guard fixture: PASS\n'

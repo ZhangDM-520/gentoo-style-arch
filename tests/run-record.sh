@@ -22,8 +22,13 @@ set -euo pipefail
 #      rc visible in the row), blocked (waits-on-deferred), never-started
 #      (dispatch-stopped / preflight-refused / interrupted-before-start) and
 #      interrupted (interrupted-mid-build). The reasons the stub machinery
-#      cannot force (lane-lost, log-unwritable, never-ready) stay
-#      whitelist-checked only;
+#      cannot force stay whitelist-checked only: lane-lost, log-unwritable,
+#      never-ready, mutex-timeout (the builder pacman MUTEX wait timed out),
+#      result-clear-failed (a named dispatch refusal when the run-scoped
+#      result slot cannot be cleared) and the signal names signal-hup /
+#      signal-int / signal-term — an externally signalled lane's honest rc
+#      129/130/143 records the signal name as its row reason instead of
+#      build-failed;
 #   4. the continuation output of an INTERRUPTED run — summary + record +
 #      resume suggestion naming the non-succeeded rows in order (the
 #      interrupt path used to exit 130 silently, with nothing to resume by).
@@ -41,7 +46,7 @@ fail() {
 }
 
 STATUSES='succeeded failed deferred blocked never-started interrupted'
-REASONS='ok build-failed lane-lost log-unwritable anchoring-refused upstream-unverified waits-on-deferred never-ready dispatch-stopped preflight-refused interrupted-before-start interrupted-mid-build'
+REASONS='ok build-failed lane-lost log-unwritable anchoring-refused upstream-unverified waits-on-deferred never-ready dispatch-stopped preflight-refused interrupted-before-start interrupted-mid-build mutex-timeout signal-hup signal-int signal-term result-clear-failed'
 seen_statuses=$fixture/seen-statuses
 : >"$seen_statuses"
 
@@ -326,6 +331,10 @@ kill -INT "$builder_pid"
 wait "$builder_pid"
 int_rc=$?
 set -e
+# This scenario signals INT (kill -INT above), and an interrupted run exits
+# with the signal's own status (gsa_signal_exit_rc: HUP 129 / INT 130 /
+# TERM 143) — so 130 below is INT's status, not a flat default; a TERM or
+# HUP scenario would pin 143 or 129 instead (the signal sent here stays INT).
 [[ $int_rc -eq 130 ]] ||
     fail "the interrupted run exited $int_rc, want 130:
 $(cat "$fixture/s5.out")"

@@ -55,7 +55,9 @@ Install decisions are fail-closed and computed once: an empty archive list is
 a refusal under `--install` (`refuse empty-list` — a run that installs nothing
 would leave later packages compiling against the old system version) and a
 no-op under `--installall`; a PGO archive that still carries a baked
-`.gcda`/`.profraw` destination is refused (`refuse pgo-*`) before anything is
+`.gcda`/`.profraw` destination is refused (`refuse pgo-*`) and a bare soname
+provide that drifts against the installed database refuses likewise
+(`refuse abi-soname` / `refuse abi-consumer`), before anything is
 written into `/usr`. To see exactly what a run would decide without touching
 pacman, sudo or the build, ask the hidden seam directly:
 
@@ -100,6 +102,16 @@ declared ref (`git`, `svn`, `hg`, or `bzr`). Every declared ref must still
 match before the archive can be skipped. A moved ref makes the archive stale
 and the package follows the ordinary build path. Resolve the declared ref, not
 an unrelated repository `HEAD` or the mutable shared source checkout.
+
+"Already built" means more than an mtime match (2026-10-05): the archive must
+be part of the *complete* output set its recipe declares (every split output
+present at the evaluated `pkgver-pkgrel`), every member must pass a payload
+readability probe (`pacman -Qp`), and a VCS archive must match the sha256+size
+identity its revision baseline was recorded with. A missing sibling output, a
+truncated write, a pkgver change, a replaced archive, or an old-format
+baseline each forces a rebuild with a named diagnostic; anomaly diagnostics
+print even in quiet output. A partial output set never reaches install
+discovery at all.
 
 If an archive has no usable revision baseline, `-s` never assumes that the
 current upstream ref produced it. The builder first checks that each declared
@@ -357,6 +369,64 @@ confirmation from stdin and prints the same target list to a pipe as to a
 terminal, so `printf 'n\n' | fish build-all.fish -ccc` lists what it would
 delete and then aborts — answering `y` deletes it.
 
+## Environment surface
+
+The builder's environment contract in three lists: the `GSA_*` inputs it
+reads, the inherited environment that silently changes its behaviour, and what
+it exports. `fish build-all.fish --help` is the authoritative input roster —
+check it (or grep the builder for a variable name) rather than counting names.
+
+**Inputs the builder reads** (the `--help` roster; a run-time flag overrides
+the three planning defaults):
+
+- `GSA_LANES` — default lane count. Default: `lanes` in
+  `config/build-defaults.conf` (`auto`).
+- `GSA_JOBS` — default per-lane job count. Default: `jobs` in
+  `config/build-defaults.conf` (`auto`).
+- `GSA_INTENSITY` — default intensity level (`low`, `medium`, `high`, `xhigh`,
+  `max`). Default: `intensity` in `config/build-defaults.conf`.
+- `GSA_CPU_THREADS` — overrides the detected CPU thread count the parallelism
+  plan is computed from; must be a positive integer (anything else aborts).
+  Default: CPU detection.
+- `GSA_MEMORY_GIB` — overrides the detected available memory in GiB the
+  parallelism plan is computed from; must be a positive integer (anything else
+  aborts). Default: memory detection.
+- `GSA_STATE_DIR` — where builder-owned state (logs, lane results, locks,
+  per-recipe toolchain identities) lives. Default: `.state/` in the workspace.
+- `GSA_TARGET_CPU` — forwarded unchanged into build lanes for recipes that
+  read it (CPU tuning); the builder itself does not consume it. Default: unset
+  — the host `makepkg.conf` tuning applies.
+- `GSA_VCS_SKIP_TOLERANCE` — how many upstream commits a recorded baseline may
+  trail a moving Git ref before `-s` refuses to waive the rebuild; must be a
+  positive integer, anything else falls back to the default with a warning.
+  Default: `5`.
+
+**Inherited environment that changes behaviour** without being validated
+configuration:
+
+- `SRCDEST` — makepkg's source-mirror root; the builder also consults it when
+  locating declared sources and `-s` baselines.
+- `TMPDIR` — scratch root for version-sync work (`mktemp` honours it); version
+  sync refuses a `TMPDIR` inside the repository.
+- `MAKEFLAGS` / `NINJAFLAGS` — forwarded into build lanes; the builder strips
+  any `-jN` and appends the lane's own job count, preserving the caller's other
+  flags.
+- `PACMAN` — makepkg's dependency-install command
+  (`PACMAN=${PACMAN:-pacman}`); the builder forwards it and, when it can,
+  replaces the lane's value with its own mutex-routing shim so makepkg's `-s`
+  dep installs share the builder's pacman lock.
+- `COLUMNS` — dashboard width when it is numeric.
+- `TERM` — a terminal with a non-`dumb` `TERM` set selects the interactive
+  dashboard; a pipe, a dumb terminal, or an unset `TERM` gets plain output.
+- `GIT_CONFIG_COUNT` — injected agent-shell git config breaks bare-repo and
+  makepkg VCS operations; the builder runs its own git calls under
+  `GIT_CONFIG_COUNT=0`, and so must any hand-run `makepkg --printsrcinfo`.
+
+**Outputs the builder exports** (never inputs):
+
+- `GSA_BUILD_JOBS` — the lane's job count, exported per lane so a recipe reads
+  it instead of calling `nproc` or hard-coding `-j`.
+
 ## Builder output contract
 
 One run record per run — plan plus one outcome row per package — is rendered
@@ -385,13 +455,21 @@ space-separated `pkg status rc dur reason` (the reason is the remainder of the
 line). `rc` and `dur` are integers (`dur` in seconds) or `-` when the package
 never produced one. The status enum, with its reasons:
 
-- `succeeded` — `ok`.
+- `succeeded` — `ok`; or, without building, `freshness-waived` (`-s` skipped
+  an archive whose selected Git ref moved fewer than
+  `GSA_VCS_SKIP_TOLERANCE` commits) or `abi-provider-waived` (`-s` skipped an
+  archive of a `.gsa-abi-provider` recipe such as `llvm-git` — upstream
+  movement alone never rebuilds a matched ABI provider). The waiver line is in
+  the package log; the row reason keeps a waiver from claiming to be `ok`.
 - `failed` — `build-failed` (lane ran, rc is in the row), `lane-lost` (reap
   anomaly, rc 125), `log-unwritable` (dispatch refused: log not openable).
 - `deferred` — rc **99**, reason `anchoring-refused` (checksum anchoring was
-  impossible) or `upstream-unverified` (`-s` could not confirm the recorded
-  refs: transport retries exhausted): the recipe is parked rather than failed,
-  dispatch continues and its dependents wait. Not a failed build.
+  impossible), `upstream-unverified` (`-s` could not confirm the recorded
+  refs: transport retries exhausted), or `source-unfetchable` (a declared
+  source never arrived in the recipe or `SRCDEST`, so its checksum could not
+  be applied, and the consumer chain can absorb the wait): the recipe is
+  parked rather than failed, dispatch continues and its dependents wait. Not a
+  failed build.
 - `blocked` — `waits-on-deferred` (dependent of a parked recipe) or
   `never-ready` (dependency cycle / missing dep).
 - `never-started` — `dispatch-stopped`, `preflight-refused`, or
@@ -409,8 +487,15 @@ included — they must rebuild before their dependents). `-c`/`--clean` and
 `-s`/`--skip` are deliberately not mirrored (`-c` would wipe the archives a
 resume needs; `-s` is the user's call — the printed tip says to add it), and
 one-shot actions (`-n`, `-l`, `-ia`, `-cc`, `-ccc`, `-ln`, `--audit`,
-`--help`) are never mirrored. Ambient environment inputs (`GSA_TARGET_CPU`,
-`GSA_STATE_DIR`) are warned about, never baked into the command. The interrupt
+`--help`) are never mirrored. Environment inputs are never baked into the
+command either: the summary warns when `GSA_TARGET_CPU`, `GSA_STATE_DIR` or
+`GSA_VCS_SKIP_TOLERANCE` is set — the continuation must then run under the
+same values. The resolved `--lanes`/`--jobs`/`--intensity` values are mirrored
+as explicit flags, so different `GSA_LANES`/`GSA_JOBS`/`GSA_INTENSITY` pins
+cannot drift a continuation. `GSA_CPU_THREADS`/`GSA_MEMORY_GIB` are **not**
+warned about and not mirrored: the core-solo job budget is derived from them
+afresh on every run, so resume under the same pins and compare the
+`parallelism:` line both runs print. The interrupt
 path prints the summary, the machine block and this suggestion before exiting
 130, so a Ctrl-C run leaves the same three artifacts as a completed one.
 

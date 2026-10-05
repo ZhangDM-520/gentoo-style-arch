@@ -37,6 +37,301 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-05 — Design C: two leaf clusters move out of build-all.fish
+
+- **Symptom/design**: `build-all.fish` reached 12 423 lines / 220 functions with
+  no subsystem seam. The module survey's **Design C** (minimal cut, the
+  recommended first move) extracts only leaf clusters — code that reads
+  topology globals but writes no scheduler/run-record state.
+- **What moved** (verbatim, 60 functions; line-multiset conservation checked):
+  `lib/sources.fish` (52) — PKGBUILD/.SRCINFO parsing including the shared
+  parses (`srcinfo_rows`, `pkgbuild_scan_rows`), version sync, VCS freshness,
+  checksum anchoring; `lib/audit.fish` (10) — recipe-contract lints,
+  `pacman_conf_ignorepkg_walk`, `register_ignorepkg`, `audit_workspace`, the
+  two ABI audit lints. The entry sources both from `$SCRIPT_DIR/lib/` (fail-loud
+  guard) before `load_project_config` and the hidden seam blocks. Left behind
+  by decision: `report_pkgbuild_eval_failures`, `srcinfo_pkgnames`/
+  `output_names`/`provides`, the built-archive discovery family and
+  `freshness_skip_decision` — shared with the scheduler core, not clean leaves.
+  Fixture migration: `tests/lib/fixture-lib.bash`'s `make_workspace` copies the
+  modules beside the entry; `tests/log-ownership.sh`'s static source sweep reads
+  `build-all.fish` **and** `lib/audit.fish` (its pinned section moved with
+  `audit_workspace` — pointer migration only, assertion text untouched).
+- **Validation**: `fish -n` ×3; a 91-channel seam capture (`--topology`,
+  `--audit-lint` ×6 + usage shapes, `--install-decide` checked/force,
+  `--lane-job` incl. result-line codec, lock/db/register seams, run-record
+  blocks, `--list`) byte-identical before/after except two fields proven
+  nondeterministic against a pre-edit noise floor (lane `dur`, lock-holder
+  pid/timestamp); targeted fixtures 12/12; full battery 55/55 (baseline and
+  after); `--list`/`--audit`/three dry-runs rc 0.
+- **Rule**: the builder's module boundary is the named function set — fish has
+  no visibility control, so `lib/sources.fish`'s out-param globals
+  (`_VCS_REVISION_ERROR`, `_VCS_SKIP_TOLERANCE`, `_FRESHNESS_WAIVER{,_REASON}`,
+  `_DEFER_REASON`, `_VERSION_SYNC_TMP_ERROR`, `_SR_ROWS`/`_PB_ROWS`) are its
+  documented interface and `lib/audit.fish` writes none. Fixture synthesis must
+  copy `lib/` modules beside the entry. Future extractions: leaf clusters only,
+  verbatim moves, and a seam-capture diff (with a pre-edit noise floor) as the
+  evidence.
+
+## 2026-10-05 — keyed-var sweep erased nothing: defer flipped to build on re-read
+
+- **Symptom**: two wave-3 gate fixtures regressed at once: `tests/skip-upstream.sh`
+  ("unreachable legacy upstream (a parked recipe must not run makepkg): makepkg
+  ran 1 times, expected 0") and `tests/stable-sync-checksums.sh` case 38
+  (`si-db-error: the builder reported success; it was supposed to refuse`). Both
+  are the defer-vs-build disposition: a recipe that must PARK on an unverifiable
+  upstream instead ran a normal build.
+- **Root cause**: `read_topology_config`'s stale-keyed-var sweep (the keyed-index
+  rewrite) used `set -n | string match -r '^_(TID|TDEPKEYS|…)_'` and passed the
+  result to `set -e`. Two fish traps in one line: `string match -r` prints only
+  the *matched portion* — the prefix `_TID_`, never the full name `_TID_p1` — so
+  `set -e` erased nothing; and regex capture groups are printed as additional
+  "names" (junk `TID`, `TCONS` entries). The erase was therefore a no-op, so
+  `unverifiable_defer_plan`'s topology re-read (taken whenever `_CONSUMER_INDEX`
+  is empty — e.g. a one-package no-edge fixture topology) died on "duplicate
+  package id in topology record" and hit its documented fallback `echo build`
+  *before* any defer logic. `--list`/`--help` never re-read, so only the
+  deferral seam showed it.
+- **Fix**: all three name-pattern sweeps now match the whole name with
+  non-capturing groups: `'^_(?:TID|TDEPKEYS|TDEP|TCONSKEYS|TCONS|TTAGS)_.*$'`
+  (`read_topology_config`), `'^_(?:DS_DEPKEYS|DS_STARTED|DS_DONE|DS_DEFER|DS_CORE|DS_BAND|DS_INLIST)_.*$'`
+  (`dispatch_state_refresh`), `'^_DBLOCKED_.*$'` (`_deferred_blocked_refresh`).
+  The first site's comment records both traps.
+- **Validation**: `fish -n`; erase semantics proved in isolation (before: `_TID_p1`
+  survived; after: all three test keys erased); both fixtures green standalone;
+  full battery re-run as the wave-3 gate.
+- **Rule**: a keyed-variable sweep built from `set -n` + `string match -r` must
+  use a full-name pattern (`^PREFIX_.*$`) and a non-capturing alternation
+  `(?:…)` — anything less erases nothing and can inject junk names into `set -e`.
+  Also: lane children redirect stderr into `state/logs/<pkg>.log`, so temporary
+  trace echoes must go to a fixed scratch file — their absence from
+  `FIXTURE_OUTPUT` proves nothing about whether the code ran.
+
+## 2026-10-05 — --audit batched: 109 s → 20.6 s (shared parses, one pacman dump)
+
+- **Symptom**: `--audit` took ~109 s (abi-exposure alone ~81 s) at 652 recipes:
+  sed/grep forks per recipe per lint (~8–10 k forks), one `pacman -Qi` fork per
+  pkgname (~649), 1 225 drift rows marshaling 10 k+ element lists per
+  `string match`, O(n²) `set -a findings`.
+- **Root cause**: every lint re-parsed every recipe and every lookup re-read the
+  whole installed DB; plus a fish quoting bug silently defeated an earlier batch
+  attempt (`(cmd)` is NOT expanded inside double quotes in fish 4.9.3 — the
+  batch passed literal text and the per-name forks stayed).
+- **Fix**: shared tagged parses (`srcinfo_rows`, `pkgbuild_scan_rows`) feed all
+  lints; the exposure lint computes one pacman dump → awk row stream → fish
+  predicates as row data → one join → `sort -u`; `abi_name_edges` walks shared
+  rows fork-free; PGO scan batches `pacman -Ql`; findings accumulate file-backed.
+  Name surface unified (drift D-F4/D-F5): one pkgbase+pkgname lookup
+  everywhere; 8 previously-unresolvable CLI references now resolve with an
+  announced substitution (e.g. `java-openjdk`→jdk-openjdk).
+- **Validation**: before/after medians (3 runs) — `--audit` 109.0→20.6 s,
+  abi-exposure 80.6→4.1 s; byte-identical findings for all lints (one line delta
+  attributed to `python-ply` leaving the host system mid-work, not to code);
+  7 lint fixtures green; M1–M4 probes falsified then reversed green.
+- **Durable rule**: lint/audit I-O goes through the shared parses — never fork
+  per recipe; `pacman -Qi -- a b …` prints one record per resolved target in
+  target order (never deduped) so positional zips are correct; before blaming
+  code for a one-line byte-diff, attribute it to `pacman.log` (the DB moved).
+
+## 2026-10-05 — loader/selection/dispatch keyed: --list -g git 73 s → 4.4 s
+
+- **Symptom**: `--help` 2.7 s (loader tax on EVERY invocation), `--list` 3.9 s,
+  `--list -g git` 73.2 s, `--topology` 8.8 s, ~2.3 s re-validation per lane
+  spawn (~25 min over a full run).
+- **Root cause**: `contains`-list marshaling (~105 µs/call) in O(P²)/O(E×P)
+  loader passes, per-entry command substitution in `expand_consumers` (O(C×E),
+  ~2 M split-executions), O(P×E) `deps_of`/`print_topology` scans, and
+  O(V²·E) readiness scans in the dispatch loop.
+- **Fix**: one injective key scheme (`_topo_key`, prefix-free hex escapes)
+  names fish variables as hash buckets: the loader publishes keyed
+  `_TID_/_TDEP_/_TCONS_/_TTAGS_` maps (validation still runs every invocation —
+  stronger than a content-hash cache), `expand_consumers` is keyed BFS,
+  `deps_of`/`print_topology` are O(1) derefs, and dispatch readiness is O(1)
+  markers tail-synced from append-only lane-state lists.
+- **Validation**: byte-identical `--topology`/`--list`/`--list -g git`/`-n` plan
+  and run-record vs the pre-task builder; orderings pinned by
+  scheduler-dispatch-order/glibc-package still hold; 8 mutation probes
+  falsified then reversed green. Medians: --help 2.7→1.2 s, --list 3.9→1.6 s,
+  --list -g git 73.2→4.4 s, --topology 8.8→1.5 s, lane spawn 2.3→1.2 s.
+- **Durable rule**: a bare `$$var` statement EXECUTES the list in fish — always
+  `printf '%s\n' $list`; an incremental degree scheme needs the "no marker left
+  ⇒ skip, never re-ready" guard (duplicate names pop twice); `_topo_key` is the
+  only key scheme; lane-state lists feeding the dispatch refresh are
+  append-only (a new list needs a matching tail-sync offset).
+
+## 2026-10-05 — evaluation honesty: pkgbuild_array_checked everywhere, shim path quoted
+
+- **Symptom**: the unchecked `pkgbuild_array` masked recipe-evaluation failure
+  as an empty array — `record_vcs_archive_revisions` recorded "no VCS sources"
+  over a recipe it never read, the freshness path could `-s`-skip an
+  unevaluable recipe forever, and dead status guards sat in callers that
+  believed they were checking. Separately, `ensure_pacman_shim` baked
+  `$_PACMAN_MUTEX` unquoted into the build-user shim (word-split/injection
+  through a user-controlled `GSA_STATE_DIR`).
+- **Root cause**: `bash -c 'source "$1"; eval …'` exits 0 on source failure;
+  the shim's printf template embedded the path as a bare `%s`.
+- **Fix**: all 10 call sites moved to `pkgbuild_array_checked` (rc 2 = source
+  failure) with honest handling per caller — manifest/manifest-verify refuse,
+  sync paths name + roll back, the anchor candidate loop refuses, and
+  `build_package` drops `skip_allowed` on doubt (an unevaluable recipe is
+  never claimed fresh). The old function is deleted. The shim bakes the mutex
+  as a shell-quoted literal.
+- **Validation**: 6 fixtures green on the touched paths (skip-upstream,
+  stable-sync-checksums, anchor-defer, srcinfo-freshness, pacman-mutex-shim,
+  install-archive-guard); new fixture pins with falsified mutation probes —
+  config-diagnostics build-defaults naming (malformed line/unknown key/
+  unreadable file each named) and resume-command ambient CPU/RAM warnings.
+- **Durable rule**: recipe evaluation failure is never "no sources" and never
+  licenses a freshness claim; test data for a "malformed line" case must
+  genuinely lack the delimiter (a line containing `key=value` text parses as
+  an unknown KEY, not a malformed line).
+
+## 2026-10-05 — lane lifecycle, run identity, signal teardown (w2-lane-lifecycle)
+
+- **Symptom**: concurrent runs could double-dispatch over one workspace; a
+  SIGKILLed dispatcher left `setsid` lanes building and installing unattended;
+  a stale/foreign result file could kill a healthy lane as "lost"; interrupt
+  exit was flat 130 and externally signalled lanes recorded `build-failed`.
+- **Root cause**: no workspace run lock, no lane-parent liveness watchdog, per
+  -index (not per-run) result slots, and a reason-less signal row grammar.
+- **Fix**: a refuse-never-queue run lock (one flock holder process on fd 9);
+  startup `orphan_lane_sweep` + a lane-side parent-liveness watchdog;
+  run-scoped result files with `lane_result_decode` rc 2 = FOREIGN (ignored,
+  never classifies or kills); signal row taxonomy (`signal-hup/int/term`) and
+  exit rc 129/130/143; a clear-then-verify result gate
+  (`result-clear-failed`); second signal = immediate KILL sweep; stale
+  `*.tmp.*`/`.lane*.result` sweep with named operator commands.
+- **Validation**: six fixtures (incl. 7× signal-abort-lock for flakes) + 12
+  mutation probes red-then-restored; two root-cause fixes found by probes: the
+  run-lock holder must be ONE process (a flock-parent/sh-child pair orphaned a
+  poll loop past its dispatcher), and every deletion in fish-run builder code
+  must be `command rm` — this host's fish `rm` is a trash function.
+- **Durable rule**: one run per workspace (run lock, refuse-never-queue);
+  lane results are run-scoped and foreign lines are ignored; a lock holder is
+  one process so release cannot orphan it; bare `rm` in `build-all.fish`
+  never deletes on this host — use `command rm`/`find -delete`.
+
+## 2026-10-05 — Version sync made transactional (w2-version-sync)
+
+- **Symptom**: a resumed `-s` loop reported "already built" forever at a stale
+  version; `pacman -Si` failures and "not in repos" were one silent success;
+  `sync_stable_version` could leave a half-rewritten tracked PKGBUILD; an
+  unchecked `mktemp -d` collapsed anchor paths to the filesystem root; the
+  anchor's failure path claimed "the recipe was restored" over an unchecked
+  `cp`; multi-sed rewrites and a shared `.SRCINFO.tmp` let two runs destroy
+  each other's work; eval snippets swallowed failure so `-ccc` claimed a clean
+  scan over recipes it never read.
+- **Root cause**: the skip claim ran before the version check; the query
+  classifier folded every non-zero exit into "name unknown"; the rewrite path
+  had no snapshot/rollback boundary and no charset gate on sed program text.
+- **Fix**: version query/rewrite runs before the skip block and the claim is
+  qualified (`skip_allowed`); `pacman -Si` exits separate name-unknown from
+  query failure (new rc 4 → defer `upstream-unverified` or a loud as-is
+  build); one shared charset gate + snapshot + staged
+  `PKGBUILD.tmp.$fish_pid` + one `mv` publish + checked restore (failure =
+  named error + anchor rc 5 — nothing builds over a dirty recipe);
+  `version_sync_temp_dir` gates every anchor path; `refresh_package_srcinfo`
+  has a 0/1/2 return contract and failures surface in log AND run summary;
+  eval snippets are positional and name failures (`-ccc`/`-ln` exit non-zero).
+- **Validation**: stable-sync-checksums (36 + new cases 37–44), anchor-defer
+  (mktemp-fail, restore-fails), srcinfo-freshness green; 11 mutation probes
+  red-then-restored.
+- **Durable rule**: every tracked recipe rewrite is one staged per-process
+  temp + one `mv` publish, snapshotted before the first write and rolled back
+  through a CHECKED restore whose failure is its own named error. A version
+  or query this run could not verify suppresses the freshness claim instead
+  of making it.
+
+## 2026-10-05 — Install pipeline integrity: plan-row grammar, discovery refusals, probe honesty (w2-installer)
+
+- **Symptom**: plan rows were space-joined text, so an archive path with a
+  space split into bogus fields and `pacman -U` got nonexistent paths; a
+  recipe whose archive discovery failed silently shrank the `-ia` transaction
+  to the evaluable subset and exited 0; a post-install NEEDED probe that
+  could not run reported "clean"; a failed install plan could render "nothing
+  to do" and exit 0; the same-version freshness compare was second-granular
+  and skipped mid-second rebuilds; the empty-list refusal bypassed
+  `install_emit`; a mixed skip note quoted one row's version for all.
+- **Root cause**: no row codec (grammar matched the payload's spaces),
+  discovery refusals were discarded instead of recorded, probe failures
+  collapsed into the clean return, the install wrappers dropped
+  `install_plan`'s status.
+- **Fix**: tab-framed `plan_row`/`plan_row_fields` codec with every producer
+  and consumer converted; `_GSA_DISCOVER_REFUSALS` rows (`refuse partial-set`,
+  `refuse discover-failed`) refusing the plan by name; `install_needed_probe`
+  rc 0/1/2 + `probe-skipped` rows rendered as named non-fatal warnings;
+  `refuse plan-failed` backstop on both entry points; `find -newermt` ns
+  compare with doubt-install; unified empty-list text through `install_emit`;
+  skip-note version set. `readelf` joins the install prereqs.
+- **Validation**: five fixtures green; `--install-decide` rc 0/1/2 with tab
+  rows incl. spaced paths; 18 mutation probes red-then-restored.
+- **Durable rule**: every plan/probe row goes through the tab codec — never
+  hand-built rows; a discovery omission refuses the plan by name and `-ia`
+  never installs a shrunken set; a probe that cannot run emits `probe-skipped`
+  and is never "clean"; freshness compares use the full mtime timespec.
+
+## 2026-10-05 — archive currency unified: complete-set + payload + manifest-v2 binding
+
+- **Symptom**: `-s` skipped and `-i` installed archives that were not current
+  builds — a split set cut mid-packaging skipped on its surviving half and
+  installed subsets silently (run-record row said `ok`); a truncated archive
+  re-skipped forever; a stale-version archive satisfied currency; a VCS
+  manifest recorded for one build blessed a replacement archive.
+- **Root cause**: currency was "newest `*.pkg.tar.zst` ≥ PKGBUILD mtime" —
+  version-blind and set-blind — with two divergent freshness copies (toolchain
+  pre-check vs skip block) and a v1 manifest not bound to archive bytes.
+- **Fix**: one `current_archives` oracle (expected outputs from committed
+  `.SRCINFO`/evaluated `pkgname`, evaluated pkgver-pkgrel, states complete/
+  none/partial), a payload probe (`pacman -Qp`, fail-closed) in the skip
+  gate, manifest v2 (sha256+size identity binding; v1 forces exactly one
+  rebuild), and one shared `freshness_skip_decision` for both claim sites.
+  `list_split_pkgs` excludes partial sets with a named warning; `-i` refuses
+  and `-ia` warns without a transaction.
+- **Validation**: four new fixture sections in `tests/skip-upstream.sh` and
+  `tests/install-archive-guard.sh`, each mutation-probed red-then-green
+  (completeness, payload, version, identity); `tests/toolchain-drift.sh`'s
+  stub gained a pacman `-Qp` stub for the new probe; full battery green.
+- **Durable rule**: an archive is current only as part of the complete output
+  set at the evaluated pkgver-pkgrel, payload-readable, and bound (sha256+
+  size) to its VCS baseline; doubt always rebuilds or refuses — never skips,
+  never installs a subset. Pitfalls: bash rejects `:'"$'\n'"'` concatenation
+  (use `:'$'\n'"…"`); fish `echo "x="(string join …)` silently emits nothing
+  when the join is empty.
+
+## 2026-10-05 — pacman lock / local-db recovery: never-delete + inode holders + named mutex-timeout
+
+- **Symptom**: the db.lck and broken local-db probes auto-deleted on a
+  two-probe `pgrep -x pacman|packagekitd|pamac` heuristic — contradicting
+  the invariant "a system pacman database lock is never deleted
+  automatically". Failure modes: alpm clients outside the name list (`paru`),
+  probe↔rm TOCTOU, and a Ctrl-C storm killing the probe children so an empty
+  holder list gated `rm` on LIVE pacman state mid-transaction. The dep
+  shim flocked EVERY pacman call (incl. read-only `pacman -T`) on a fixed
+  300 s wait, and a mutex timeout collapsed into `build-failed` while running
+  the mutating recovery probes.
+- **Root cause**: idleness was inferred from process NAMES and acted on; a
+  timeout was treated as a pacman failure.
+- **Fix**: idleness proven by open-handle inspection of `/proc/*/fd` against
+  the lock inode (alpm holds `db.lck` open for whole transactions —
+  measured); killed/short/uncertain scans (incl. hidden handles) classify
+  `UNKNOWN` and nothing is EVER deleted — both probes are report-only and
+  print the exact operator command. The shim splits query from transaction
+  (queries run unlocked); flock rc 75 is named `builder pacman mutex timed
+  out`, skips all recovery probes, and lands in the run record as row reason
+  `mutex-timeout`.
+- **Validation**: `fish -n`; `--list` rc 0; `local-db-repair` /
+  `pacman-mutex-shim` / `signal-abort-lock` green (incl. a Ctrl-C-storm probe
+  case and an end-to-end mutex-timeout row); 17 mutation probes
+  red-then-reverted.
+- **Durable rule**: a system pacman database lock and local-db entries are
+  NEVER deleted automatically; idleness must be proven by lock-inode open
+  handles and an unprovable probe is unknown — the operator gets a named
+  command. A builder-mutex timeout is `mutex-timeout`, never `build-failed`,
+  and triggers no recovery probes. Pitfalls: GNU find global options must
+  precede paths (`find -L -maxdepth … DIR` matches nothing);
+  `find -samefile` holds its reference open (never scan the scanner's own fd
+  dir); `printf` reuses its format when extra args remain.
+
 ## 2026-10-04 — Q8 provides mapping scope lands as soname+name; the lint extends, 59 recipes become ratcheted debt
 
 - **Symptom**: the provides↔soname mapping's expected reach was undecided

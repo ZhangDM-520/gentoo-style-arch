@@ -134,7 +134,8 @@ build() {
 }'
 
 # C1: checked mode with nothing to install → `refuse empty-list` row, no
-# execution, no pacman.
+# execution, no pacman. (Rows are tab-framed — the plan_row codec; a fixture
+# expectation must frame them identically or it pins the OLD grammar.)
 : >"$dir_c/pacman.log"
 rm -f "$dir_c/sudo.log"
 DECIDE_RC=0
@@ -142,8 +143,8 @@ DECIDE_OUT=$(env PATH="$dir_c/bin:$PATH" \
     GSA_FAKE_PACMAN_LOG="$dir_c/pacman.log" \
     GSA_FAKE_DB_PATH="$dir_c/db" \
     fish "$dir_c/build-all.fish" --install-decide checked 2>"$dir_c/decide.err") || DECIDE_RC=$?
-[[ $DECIDE_RC == 1 && $DECIDE_OUT == 'refuse empty-list' ]] ||
-    fail "C1: seam must print 'refuse empty-list' and rc 1, got rc=$DECIDE_RC out=$DECIDE_OUT"
+[[ $DECIDE_RC == 1 && $DECIDE_OUT == $'refuse\tempty-list' ]] ||
+    fail "C1: seam must print 'refuse<TAB>empty-list' and rc 1, got rc=$DECIDE_RC out=$DECIDE_OUT"
 [[ ! -s "$dir_c/pacman.log" ]] ||
     fail "C1: a refusal row reached the pacman stub: $(cat "$dir_c/pacman.log")"
 printf 'C1: empty-list refusal never reaches pacman OK\n'
@@ -166,10 +167,9 @@ DECIDE_OUT=$(env PATH="$dir_c/bin:$PATH" \
     GSA_FAKE_PACMAN_LOG="$dir_c/pacman.log" \
     GSA_FAKE_DB_PATH="$dir_c/db" \
     fish "$dir_c/build-all.fish" --install-decide force "$arch" 2>"$dir_c/decide.err") || DECIDE_RC=$?
-expected="refuse pgo-hit $arch ./usr/bin/p2
-refuse pgo-instrumented $arch"
+expected=$'refuse\tpgo-hit\t'"$arch"$'\t./usr/bin/p2\nrefuse\tpgo-instrumented\t'"$arch"
 [[ $DECIDE_RC == 1 && $DECIDE_OUT == "$expected" ]] ||
-    fail "C2: seam must print the pgo refusal rows and rc 1.\nwant: $expected\ngot (rc=$DECIDE_RC): $DECIDE_OUT"
+    fail "C2: seam must print the pgo refusal rows (tab-framed) and rc 1.\nwant: $expected\ngot (rc=$DECIDE_RC): $DECIDE_OUT"
 [[ ! -s "$dir_c/pacman.log" ]] ||
     fail "C2: a pgo refusal row reached the pacman stub: $(cat "$dir_c/pacman.log")"
 printf 'C2: pgo refusal rows pinned OK\n'
@@ -200,5 +200,41 @@ if [[ -r $alpm_hdr ]]; then
 else
     printf 'D: skipped — %s absent on this host; the --ask 4 semantic pin could not be checked\n' "$alpm_hdr"
 fi
+
+# ─── E. a spaced archive path reaches pacman as ONE argv (R-F22) ────────────
+# The executor half of the row-codec contract: install_execute must hand the
+# WHOLE archive path to pacman as one argument. The old space-joined rows
+# truncated at the first space and pacman got a nonexistent path, aborting
+# the transaction. The workspace root carries the space so the discovered
+# archive path does; the stub logs one argv per line, so a split path shows
+# up as a truncated argv line and a lost remainder.
+(
+    dir_e="$fixture/case-e"
+    ws="$dir_e/the ws"
+    make_case_workspace "$ws"
+    arch_e="$ws/packages/p1/p1-1.0.0-1-any.pkg.tar.zst"
+    : >"$arch_e"
+    cat >"$ws/bin/pacman" <<'EOF'
+#!/usr/bin/env bash
+set -u
+{
+    printf 'BEGIN\n'
+    for a in "$@"; do printf 'argv:%s\n' "$a"; done
+    printf 'END\n'
+} >>"${GSA_FAKE_PACMAN_LOG:?}"
+exit 0
+EOF
+    chmod +x "$ws/bin/pacman"
+    : >"$ws/pacman.log"
+    run_install "$ws" -ia
+    ((FIXTURE_RC == 0)) ||
+        fail "E: -ia over a spaced path must succeed, got rc=$FIXTURE_RC: $FIXTURE_OUTPUT"
+    [[ $(grep -cxF "argv:$arch_e" "$ws/pacman.log") == 1 ]] ||
+        fail "E: pacman never received the full spaced path as one argv: $(cat "$ws/pacman.log")"
+    if grep -qxF "argv:${arch_e%% *}" "$ws/pacman.log"; then
+        fail "E: the archive path was truncated at the first space: $(cat "$ws/pacman.log")"
+    fi
+    printf 'E: spaced archive path reaches pacman intact OK\n'
+)
 
 printf 'install conflict-ask fixture: PASS\n'

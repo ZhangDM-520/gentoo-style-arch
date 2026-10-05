@@ -212,4 +212,209 @@ $output"
     || fail "resume command does not carry the run-record resume set [a-stable b-dep]: $resume"
 [[ $resume == *--intensity* ]] || fail "resume command lost its flags: $resume"
 
+(
+# ─── A failed anchor scratch creation is a named refusal, never root-relative
+# paths (R-F12) ─────────────────────────────────────────────────────────────
+# `set -l tmp (mktemp -d)` was unchecked: on failure every derived path
+# collapsed to the filesystem root ("/map", "/PKGBUILD.orig") and the root-mode
+# failure path would have "restored" from /PKGBUILD.orig. The anchor now gates
+# its scratch creation and derives every path from a verified directory.
+dir="$fixture/mktemp-fail"
+make_workspace "$dir" 1 2 low
+mkdir -p "$dir/packages/stable/m1"
+{
+    printf 'pkgname=m1\n'
+    printf 'pkgver=1.0.0\n'
+    printf 'pkgrel=1\n'
+    printf 'arch=(any)\n'
+    printf 'source=("https://example.invalid/m-$pkgver.tar.gz")\n'
+    printf "sha256sums=('0000000000000000000000000000000000000000000000000000000000000000')\n"
+} >"$dir/packages/stable/m1/PKGBUILD"
+printf 'm1|packages/stable/m1|stable|\n' >>"$dir/config/topology.conf"
+mkdir -p "$dir/fake"
+printf '2.0.0-1\n' >"$dir/fake/repo_version"
+cat >"$dir/bin/pacman" <<'EOF'
+#!/usr/bin/env bash
+if [[ ${1:-} == -Si ]]; then
+    printf 'Repository      : extra\nName            : %s\nVersion         : %s\n' \
+        "$2" "$(cat "$GSA_FAKE_DIR/repo_version")"
+    exit 0
+fi
+exit 0
+EOF
+chmod +x "$dir/bin/pacman"
+cat >"$dir/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+exit 22
+EOF
+chmod +x "$dir/bin/curl"
+cat >"$dir/bin/updpkgsums" <<'EOF'
+#!/usr/bin/env bash
+printf 'called\n' >>"$GSA_FAKE_DIR/updpkgsums_calls"
+exit 0
+EOF
+chmod +x "$dir/bin/updpkgsums"
+cat >"$dir/bin/makepkg" <<'EOF'
+#!/usr/bin/env bash
+set -u
+id=$(basename "$PWD")
+printf '%s\n' "$id" >>"$GSA_FAKE_DIR/makepkg_calls"
+exit 0
+EOF
+chmod +x "$dir/bin/makepkg"
+# Only the ANCHOR's template fails — the version sync's own snapshot must
+# still work, or the refusal would come from the wrong seam entirely.
+cat >"$dir/bin/mktemp" <<'EOF'
+#!/usr/bin/env bash
+for a in "$@"; do
+    if [[ $a == *gsa-anchor-sums* && ${GSA_FAKE_MKTEMP_FAIL:-} == anchor ]]; then
+        printf 'fake mktemp: requested failure\n' >&2
+        exit 1
+    fi
+done
+exec /usr/bin/mktemp "$@"
+EOF
+chmod +x "$dir/bin/mktemp"
+
+set +e
+output=$(
+    PATH="$dir/bin:$PATH" \
+    GSA_STATE_DIR="$dir/state" \
+    GSA_FAKE_DIR="$dir/fake" \
+    GSA_FAKE_MKTEMP_FAIL=anchor \
+    GSA_CPU_THREADS=4 \
+    GSA_MEMORY_GIB=8 \
+    fish "$dir/build-all.fish" --allow-broken-rustc --no-deps \
+        --intensity low m1 2>&1
+)
+rc=$?
+set -e
+printf '%s' "$output" >"$dir/out.txt"
+
+((rc != 0)) || fail "mktemp-fail: the run succeeded although no checksum state could be held:
+$output"
+grep -q 'cannot create an isolated temporary directory' "$dir/state/logs/m1.log" \
+    || fail "mktemp-fail: the scratch failure is not named in the log:
+$(cat "$dir/state/logs/m1.log" 2>/dev/null)"
+grep -q 'DEFERRED' "$dir/out.txt" \
+    || fail "mktemp-fail: the unanchorable recipe was not parked:
+$output"
+[[ ! -s $dir/fake/makepkg_calls ]] \
+    || fail 'mktemp-fail: makepkg ran although the sums were never anchored'
+grep -q "^pkgver=2.0.0$" "$dir/packages/stable/m1/PKGBUILD" \
+    || fail 'mktemp-fail: the version sync did not land — the case would test the wrong seam'
+grep -q "^sha256sums=('0000000000000000000000000000000000000000000000000000000000000000')$" \
+    "$dir/packages/stable/m1/PKGBUILD" \
+    || fail 'mktemp-fail: the sums were rewritten although no anchor could be consulted'
+)
+
+(
+# ─── A failed restore is its own named error, never a false claim (R-F21) ──
+# The anchor's failure paths restored with an unchecked `cp` while the message
+# asserted "the recipe was restored": a failed restore left the recipe
+# rewritten behind a claim that never held. The restore is now checked and its
+# failure is folded into the return status — a dirty recipe fails the run
+# instead of parking quietly.
+dir="$fixture/restore-fails"
+make_workspace "$dir" 1 2 low
+mkdir -p "$dir/packages/stable/r1"
+{
+    printf 'pkgname=r1\n'
+    printf 'pkgver=1.0.0\n'
+    printf 'pkgrel=1\n'
+    printf 'arch=(any)\n'
+    printf 'source=("https://example.invalid/r-$pkgver.tar.gz")\n'
+    printf "sha256sums=('0000000000000000000000000000000000000000000000000000000000000000')\n"
+} >"$dir/packages/stable/r1/PKGBUILD"
+printf 'r1|packages/stable/r1|stable|\n' >>"$dir/config/topology.conf"
+mkdir -p "$dir/fake"
+printf '2.0.0-1\n' >"$dir/fake/repo_version"
+cat >"$dir/bin/pacman" <<'EOF'
+#!/usr/bin/env bash
+if [[ ${1:-} == -Si ]]; then
+    printf 'Repository      : extra\nName            : %s\nVersion         : %s\n' \
+        "$2" "$(cat "$GSA_FAKE_DIR/repo_version")"
+    exit 0
+fi
+exit 0
+EOF
+chmod +x "$dir/bin/pacman"
+# The anchor must reach the updater step for this case: serve the official
+# packaging .SRCINFO at the rewritten version, and 404 everything else.
+cat >"$dir/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+out=
+url=
+while (($#)); do
+    case $1 in
+    -o) out=$2; shift 2 ;;
+    --max-time) shift 2 ;;
+    -*) shift ;;
+    *) url=$1; shift ;;
+    esac
+done
+if [[ -n ${url:-} && $url == *'/packaging/packages/r1/-/raw/'* && -n $out ]]; then
+    {
+        printf 'pkgbase = r1\n'
+        printf '\tpkgver = 2.0.0\n'
+        printf '\tpkgrel = 1\n'
+        printf 'source = https://example.invalid/r-2.0.0.tar.gz\n'
+        printf 'sha256sums = 0000000000000000000000000000000000000000000000000000000000000000\n'
+        printf 'pkgname = r1\n'
+    } >"$out"
+    exit 0
+fi
+exit 22
+EOF
+chmod +x "$dir/bin/curl"
+# The updater makes the recipe directory unwritable before failing: the
+# restore can then not write, which is exactly the unchecked path.
+cat >"$dir/bin/updpkgsums" <<'EOF'
+#!/usr/bin/env bash
+printf 'called\n' >>"$GSA_FAKE_DIR/updpkgsums_calls"
+chmod 555 "$PWD"
+exit 1
+EOF
+chmod +x "$dir/bin/updpkgsums"
+cat >"$dir/bin/makepkg" <<'EOF'
+#!/usr/bin/env bash
+set -u
+id=$(basename "$PWD")
+printf '%s\n' "$id" >>"$GSA_FAKE_DIR/makepkg_calls"
+exit 0
+EOF
+chmod +x "$dir/bin/makepkg"
+
+set +e
+output=$(
+    PATH="$dir/bin:$PATH" \
+    GSA_STATE_DIR="$dir/state" \
+    GSA_FAKE_DIR="$dir/fake" \
+    GSA_CPU_THREADS=4 \
+    GSA_MEMORY_GIB=8 \
+    fish "$dir/build-all.fish" --allow-broken-rustc --no-deps \
+        --intensity low r1 2>&1
+)
+rc=$?
+set -e
+printf '%s' "$output" >"$dir/out.txt"
+chmod -R u+w "$dir/packages/stable/r1"     # asserts below must not need the mode
+
+((rc != 0)) || fail "restore-fails: the run succeeded over a recipe left dirty:
+$output"
+grep -q 'could NOT be restored' "$dir/state/logs/r1.log" \
+    || fail "restore-fails: the failed restore is not named in the log:
+$(cat "$dir/state/logs/r1.log" 2>/dev/null)"
+if grep -q 'the recipe was restored' "$dir/state/logs/r1.log"; then
+    fail "restore-fails: the log claims a restore that never happened:
+$(cat "$dir/state/logs/r1.log" 2>/dev/null)"
+fi
+if grep -q 'DEFERRED' "$dir/out.txt"; then
+    fail "restore-fails: a dirty recipe was parked instead of failing the run:
+$output"
+fi
+[[ ! -s $dir/fake/makepkg_calls ]] \
+    || fail 'restore-fails: makepkg ran over a recipe left dirty'
+)
+
 printf 'anchor defer fixture: PASS (parked a-stable, waited b-dep, built c-plain)\n'

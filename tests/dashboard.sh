@@ -227,7 +227,18 @@ export _LANE_STOP_GRACE_S=5
 export GSA_FAKE_LANE_MARKER="$dir/pids"
 fish "$dir/build-all.fish" --allow-broken-rustc --no-deps --no-sync --lanes 2 p1 p2 p3 &
 builder=\$!
-sleep 1.4
+# Wait for BOTH lanes to record themselves before interrupting: a fixed
+# sleep races the dispatcher under parallel battery load, and interrupting
+# before any lane starts would prove nothing (the assertion below says so
+# honestly if the lanes never appear within 10s).
+attempts=0
+while :; do
+    n=\$(wc -l <"$dir/pids" 2>/dev/null || echo 0)
+    if test "\$n" -ge 2; then break; fi
+    attempts=\$((attempts + 1))
+    if test "\$attempts" -ge 100; then break; fi
+    sleep 0.1
+done
 kill -INT "\$builder" 2>/dev/null
 # A zombie still answers kill -0, so \"exited\" is decided the way the builder
 # decides it: no such pid, or a Z state. The 20s deadline clears the 5s abort

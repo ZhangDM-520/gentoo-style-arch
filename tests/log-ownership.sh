@@ -19,6 +19,19 @@ set -euo pipefail
 # predicate is test -w by the build user, and open-for-write fails with the
 # same EACCES either way (root-owned 644 vs own 0444). The root-mode branch
 # (chown repair) needs real root and is argued in docs/NOTE.md, not pinned here.
+#
+# Also pinned here (the stale runtime artifact sweep, R-F34): a crashed run
+# leaves `*.tmp.<pid>` writers (write_lane_result's lane-result temps, the
+# pacman shim, toolchain records) and `*.gsa-vcs-revisions.tmp.*` manifests.
+# The next run sweeps them at run start INSIDE the run lock (no live run can
+# own them): the four crash-leftover shapes are gone afterwards while the
+# run's own fresh `.pacman-shim` (no `.tmp.` in its name) survives; an
+# unremovable leftover (read-only directory) is named with
+# `cannot remove stale runtime artifact` and an `or: sudo rm -f <path>`
+# operator line, never silenced and never fatal; and the `--audit` report's
+# `Stale runtime/error artifacts:` find keeps both swept name shapes
+# (`*.tmp.*` state dir, `*.gsa-vcs-revisions.tmp.*` packages tree — pinned as
+# a static shape check on the builder source).
 
 source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-log-ownership.XXXXXX")
@@ -168,6 +181,112 @@ if ! grep -q 'SENTINEL run-A dispatcher' "$dlog"; then
             "$(ls -la "$dir/state/logs"; cat "$dlog" 2>/dev/null)"
     fi
 fi
+
+# ─── Stale runtime artifact sweep (R-F34) ──────────────────────────────────
+# A crashed run leaves half-written runtime files: the `*.tmp.<pid>` writers
+# (write_lane_result's `.lane…result.tmp.<pid>`, the pacman shim
+# `.pacman-shim.tmp.<pid>`, toolchain records `toolchains/<pkg>.tmp.<pid>`)
+# and VCS-revision manifests (`<archive>.gsa-vcs-revisions.tmp.XXXXXX`) that
+# sit beside built archives. With the run lock held nothing alive can own
+# them, so sweep_stale_run_artifacts collects them at run start — by NAME
+# anywhere under the state dir and packages/ (fixture recipes live at
+# packages/<id>/, the real repo at packages/<cat>/<pkg>/), never at a fixed
+# depth. An unremovable leftover is NAMED with
+# `cannot remove stale runtime artifact` and its `or: sudo rm -f <path>`
+# operator line — never silenced, never fatal (the sweep is best-effort).
+
+# 1. behavioral: the four crash-leftover shapes are swept at run start while
+#    the run's own fresh .pacman-shim (written after the sweep, no `.tmp.`
+#    in its name) survives.
+dir="$fixture/stale-sweep"
+make_case_workspace "$dir"
+mkdir -p "$dir/state/logs" "$dir/state/toolchains"
+printf 'stale\n' >"$dir/state/logs/.pacman-shim.tmp.12345"
+printf 'stale\n' >"$dir/state/logs/.lane.dead.1.result"
+printf 'stale\n' >"$dir/state/toolchains/p1.tmp.12345"
+printf 'stale\n' >"$dir/packages/p1/p1-1.0.0-1-any.pkg.tar.zst.gsa-vcs-revisions.tmp.ABC123"
+
+set +e
+output=$(
+    PATH="$dir/bin:$PATH" \
+        GSA_STATE_DIR="$dir/state" \
+        GSA_CPU_THREADS=8 \
+        GSA_MEMORY_GIB=16 \
+        fish "$dir/build-all.fish" --no-deps --allow-broken-rustc --no-sync p1 \
+        2>&1
+)
+rc=$?
+set -e
+if ((rc != 0)); then
+    fail "the trivial sweep run must succeed, rc=$rc" "$output"
+fi
+for stale in \
+    "$dir/state/logs/.pacman-shim.tmp.12345" \
+    "$dir/state/logs/.lane.dead.1.result" \
+    "$dir/state/toolchains/p1.tmp.12345" \
+    "$dir/packages/p1/p1-1.0.0-1-any.pkg.tar.zst.gsa-vcs-revisions.tmp.ABC123"; do
+    if [[ -e $stale ]]; then
+        fail "stale runtime artifact survived the run-start sweep: $stale" "$output"
+    fi
+done
+if [[ ! -f $dir/state/logs/.pacman-shim ]]; then
+    fail "the run's own fresh .pacman-shim is gone — the sweep must collect *.tmp.* names only" \
+        "$(ls -la "$dir/state/logs")"
+fi
+
+# 2. behavioral: an unremovable leftover is named with its operator command
+#    (rm -f fails inside a read-only directory) and never breaks the run.
+dir="$fixture/stale-unremovable"
+make_case_workspace "$dir"
+mkdir -p "$dir/state/logs/trapped"
+printf 'stale\n' >"$dir/state/logs/trapped/f.tmp.9"
+chmod 555 "$dir/state/logs/trapped" # rm -f needs write permission on the DIRECTORY
+
+set +e
+output=$(
+    PATH="$dir/bin:$PATH" \
+        GSA_STATE_DIR="$dir/state" \
+        GSA_CPU_THREADS=8 \
+        GSA_MEMORY_GIB=16 \
+        fish "$dir/build-all.fish" --no-deps --allow-broken-rustc --no-sync p1 \
+        2>&1
+)
+rc=$?
+set -e
+# Restore before any assertion can fail — the EXIT trap's rm -rf cannot
+# unlink inside a 555 directory.
+chmod 755 "$dir/state/logs/trapped"
+if ((rc != 0)); then
+    fail "an unremovable leftover must not break the run (the sweep is best-effort), rc=$rc" "$output"
+fi
+grep -q 'cannot remove stale runtime artifact' <<<"$output" ||
+    fail "the unremovable leftover was silenced (want 'cannot remove stale runtime artifact')" "$output"
+grep 'or: sudo rm -f' <<<"$output" |
+    grep -F -- "$dir/state/logs/trapped/f.tmp.9" >/dev/null ||
+    fail "the unremovable leftover carries no 'or: sudo rm -f <path>' operator line naming it" "$output"
+if [[ ! -e $dir/state/logs/trapped/f.tmp.9 ]]; then
+    fail "the read-only-directory leftover vanished — the scenario proved nothing" "$output"
+fi
+
+# 3. static shape: --audit's "Stale runtime/error artifacts:" section must
+#    LIST the same name shapes the sweep collects. Asserted on the builder
+#    source (a behavioral --audit run probes installed packages and needs
+#    ripgrep, so its output is host-dependent) — the technique
+#    tests/signal-abort-lock.sh phase 6 uses for stop_lane_process.
+gf="$gsa_repo_root/build-all.fish"
+# The section lives in audit_workspace, which the Design C split moved to
+# lib/audit.fish — the sweep reads both so the assertion follows the code.
+audit_region=$(awk '
+    /echo "Stale runtime\/error artifacts:"/ { inr = 1 }
+    inr { print }
+    inr && /Installed PGO payloads:/ { exit }
+' "$gf" "$gsa_repo_root/lib/audit.fish")
+[[ -n $audit_region ]] ||
+    fail "could not extract the Stale runtime/error artifacts section from build-all.fish"
+grep -qF -- '*.tmp.*' <<<"$audit_region" ||
+    fail "the audit stale listing no longer matches '*.tmp.*' state-dir leftovers"
+grep -qF -- '*.gsa-vcs-revisions.tmp.*' <<<"$audit_region" ||
+    fail "the audit stale listing no longer matches '*.gsa-vcs-revisions.tmp.*' package-tree leftovers"
 
 printf 'log-ownership fixture: PASS\n'
 

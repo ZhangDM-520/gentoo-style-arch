@@ -135,6 +135,52 @@ make_case_workspace "$dir"
 printf '%s\n' 'p1|packages/p1|git|' >>"$dir/config/topology.conf"
 assert_rejected 'duplicate id' "$dir" 'duplicate package id in topology record: p1'
 
+# ─── two DIFFERENT app-cluster tags on one record ──────────────────────────
+# An identical repeated tag is caught by the repeat check; two different
+# cluster names are the split-row hazard (one record must join exactly one
+# prompt row), so the count check is pinned separately.
+dir="$fixture/cluster-duplicate"
+make_case_workspace "$dir"
+set_topology_record "$dir" p1 git '' 'app-cluster=one,app-cluster=two'
+assert_rejected 'multiple app-cluster tags' "$dir" 'names more than one app-cluster tag'
+
+# ─── a forward edge reference (consumer listed before its dep) is valid ────
+# Edge targets are validated only after EVERY record is known, so record order
+# in the file is irrelevant: p1's record names p2 as its edge target while
+# p2's record sits below it. The keyed target check must accept that exactly
+# like the old scans did — a name-pattern bug in the key plumbing would reject
+# it with the unknown-dependency error.
+dir="$fixture/forward-edge"
+make_case_workspace "$dir"
+set_topology_record "$dir" p1 git 'p2'
+if ! run_list "$dir"; then
+    printf 'forward edge reference was rejected:\n%s\n' "$FIXTURE_OUTPUT" >&2
+    exit 1
+fi
+
+# ─── build-defaults: every failure names its offender (line/text/file) ──────
+# read_config_defaults was the one loader that returned 1 silently — the user
+# saw only "invalid build defaults: <file>" and bisected by hand. The rule is
+# now uniform with read_topology_config: the offending line (number + text) or
+# the unreadable file is named in the error (2026-10-05).
+dir="$fixture/defaults-malformed"
+make_case_workspace "$dir"
+printf 'this line has no equals sign\n' >"$dir/config/build-defaults.conf"
+assert_rejected 'malformed build-defaults line' "$dir" \
+    "invalid build defaults line 1 (expected 'key=value'): this line has no equals sign"
+
+dir="$fixture/defaults-unknown-key"
+make_case_workspace "$dir"
+printf 'bogus_key=1\n' >"$dir/config/build-defaults.conf"
+assert_rejected 'unknown build-defaults key' "$dir" \
+    'unknown key in build defaults line 1: bogus_key=1'
+
+dir="$fixture/defaults-unreadable"
+make_case_workspace "$dir"
+chmod 000 "$dir/config/build-defaults.conf"
+assert_rejected 'unreadable build-defaults file' "$dir" 'build defaults unreadable:'
+chmod 644 "$dir/config/build-defaults.conf"
+
 # ─── fixture-lib smoke: a helper-built workspace satisfies the loader ────────
 # The synthesis helper's contract is that its skeletons are valid OUT OF THE
 # BOX — every migrated fixture rests on that. Wrapped in a subshell so the

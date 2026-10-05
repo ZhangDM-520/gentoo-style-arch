@@ -15,6 +15,15 @@ set -g DEFAULT_CONFIG_FILE "$CONFIG_DIR/build-defaults.conf"
 set -g ABI_EXCLUSIONS_FILE "$CONFIG_DIR/abi-exclusions.conf"
 set -g _STATE_DIR "$SCRIPT_DIR/.state"
 if set -q GSA_STATE_DIR; and test -n "$GSA_STATE_DIR"
+    # Control characters are rejected HERE (the env knob's first read): the
+    # lane spawn payload is newline-framed (lane_argv), so a state dir with a
+    # newline or other control char would corrupt the 8-arg boundary and the
+    # run-scoped result paths built from it (R-F30). lane_argv_check refuses
+    # the same class at the receiving end as the backstop.
+    if string match -qr '[\x00-\x1f\x7f]' -- "$GSA_STATE_DIR"
+        echo "Error: GSA_STATE_DIR must not contain control characters" >&2
+        exit 1
+    end
     set -g _STATE_DIR "$GSA_STATE_DIR"
 end
 set -g LOG_DIR "$_STATE_DIR/logs"
@@ -167,7 +176,8 @@ set -g _RL_DEFERRED
 # numbers at every site. Two further numbers exist but are NOT outcomes: the
 # --lane-job handler exits 2 on an invalid invocation (process rc only, no
 # result row), and flock(1) surfaces 75 for a mutex timeout inside an install
-# failure (which collapses to lane_outcome_failed like every other non-zero).
+# failure (which collapses to lane_outcome_failed like every other non-zero —
+# the run-record ROW reason names it `mutex-timeout`).
 #   ok      0    build (and requested install) succeeded
 #   failed  1    build or install failed — build_package collapses makepkg's
 #                own rc to 1, so the compiler's number lives only in the log
@@ -192,13 +202,12 @@ set -g lane_outcome_lost 125
 set -g lane_outcome_hup 129
 set -g lane_outcome_int 130
 set -g lane_outcome_term 143
-# Historical name kept as an alias: docs/MEMORY.md and the run-record cluster
-# speak of "the _ANCHOR_DEFER_RC amendment"; the value has one home above.
-set -g _ANCHOR_DEFER_RC $lane_outcome_defer
-
-# lane_outcome_name RC → the enum's name for RC. Any number outside the
-# vocabulary decodes as `failed` — the failure branch is the conservative
-# default, never a silent success.
+# lane_outcome_name RC → the run-record reason token for RC (ok, failed,
+# defer, lost, signal-hup, signal-int, signal-term). The signal outcomes spell
+# their DISPLAY form `signal-*` — what the row grammar and the classifier
+# teach — while the lane_outcome_* constants keep the short names. Any number
+# outside the vocabulary decodes as `failed` — the failure branch is the
+# conservative default, never a silent success.
 function lane_outcome_name -a rc
     switch "$rc"
         case "$lane_outcome_ok"
@@ -224,10 +233,29 @@ set -g _INTERRUPT_HANDLED 0
 set -g _LAST_SIGNAL none
 set -g _LANE_JOB_ACTIVE 0
 set -g _LANE_SIGNAL_RC 0
+# Second-signal escalation (R-F15): the first signal latches the interrupt and
+# drains lanes through the normal TERM→grace→KILL teardown; a SECOND signal
+# must mean "now" — gsa_handle_signal then SIGKILL-sweeps the active lanes
+# immediately, no grace.
+set -g _SIGNAL_ESCALATED 0
+# Foreground-child tracking (R-F15): fish defers --on-signal handlers until an
+# in-flight FOREGROUND command exits (measured on fish 4.9.3: SIGINT at t=0.5 s
+# to `sleep 4` ran the handler at t=4.0 s), but runs them promptly during a
+# `wait` on a backgrounded job. The dispatcher therefore runs its waits as
+# tracked background children and records the pid here; the handler signals it
+# too ("signal both") so the loop unblocks at the signal, not at the child's
+# natural exit.
+set -g _FG_CHILD_PID ""
+# Run identity (R-F9): one id per run, carried in every result filename
+# (.lane.<run-id>.<lane>.result) so another run's or an orphan's write can
+# never land in THIS run's slot. The internal _GSA_RUN_ID env seam pins it for
+# fixtures (same class as _LANE_STOP_GRACE_S: not a public GSA_* input).
+set -g _RUN_ID ""
+set -g _RUN_LOCK_HOLDER ""
 # The grace defaults to 30 s but an exported value overrides it: an
 # underscore-prefixed INTERNAL seam (tests/dashboard.sh shortens it so the
-# post-grace KILL path can be proven in seconds). The seven public GSA_*
-# inputs listed in --help are unchanged. Non-numeric junk falls back to 30.
+# post-grace KILL path can be proven in seconds). The GSA_* inputs listed in
+# --help are unchanged. Non-numeric junk falls back to 30.
 if not set -q _LANE_STOP_GRACE_S; or not string match -qr '^[0-9]+$' -- $_LANE_STOP_GRACE_S
     set -g _LANE_STOP_GRACE_S 30
 end
@@ -243,8 +271,10 @@ end
 # 2026-10-04: build-tools added — a dispatch-first SCHEDULING class with
 # exactly one behavioural effect (the lane dispatcher picks its ready members
 # before all other ready packages, never over build-order edges), dual with
-# core: every member also carries core, so core's solo/auto-install semantics
-# apply unchanged.
+# core: every member also carries core, so its core SOLO builds hold through
+# that membership — but the -i auto-enable keys on the literal `-g core`
+# selection (main's group loop), so a `-g build-tools` run never installs on
+# its own.
 set -g _GROUP_NAMES git stable core misc app build-tools
 set -g _PACKAGE_MAP
 set -g _PACKAGE_IDS
@@ -358,14 +388,32 @@ function configure_intensity -a intensity_level
     end
 end
 
+# build-defaults.conf: one key=value per line, keys named in the switch
+# below. Every failure here names its OFFENDER (line number + text, or the
+# unreadable file), like read_topology_config does: the caller can only say
+# "invalid build defaults: <file>", so a bare return 1 leaves the user
+# bisecting by hand (the loader's 2026-09-20 rule).
 function read_config_defaults
     test -f "$DEFAULT_CONFIG_FILE"; or return 1
-    for raw_line in (cat "$DEFAULT_CONFIG_FILE")
+    set -l raw_lines (cat -- "$DEFAULT_CONFIG_FILE" 2>/dev/null)
+    if test $status -ne 0
+        # A failed read must NOT parse as empty: the built-in defaults would
+        # silently replace the user's file and the next disagreement gets
+        # blamed on a key they never broke.
+        ui_error "build defaults unreadable: $DEFAULT_CONFIG_FILE"
+        return 1
+    end
+    set -l line_no 0
+    for raw_line in $raw_lines
+        set line_no (math $line_no + 1)
         set -l line (string trim -- "$raw_line")
         test -n "$line"; or continue
         string match -q '#*' -- "$line"; and continue
         set -l fields (string split -m 1 '=' -- "$line")
-        test (count $fields) -eq 2; or return 1
+        if test (count $fields) -ne 2
+            ui_error "invalid build defaults line $line_no (expected 'key=value'): $line"
+            return 1
+        end
         switch "$fields[1]"
             case lanes
                 set -g _DEFAULT_LANES "$fields[2]"
@@ -391,6 +439,7 @@ function read_config_defaults
                     set -g LOG_DIR "$_STATE_DIR/logs"
                 end
             case '*'
+                ui_error "unknown key in build defaults line $line_no: $line"
                 return 1
         end
     end
@@ -405,6 +454,23 @@ function read_config_defaults
     end
 end
 
+# _topo_key ID... → each ID in variable-name form, for the O(1) keyed indexes
+# the loader publishes (_TID_/_TDEP_/_TCONS_/…). fish has no associative
+# arrays and `contains` over the ~650-entry id list costs ~105µs per lookup,
+# which the old O(E×P) scans paid per edge. The map is the homomorphism
+# a→a (alnum), _→_5f, .→_2e, -→_2d, +→_2b: a prefix-free codebook over the
+# id charset ([A-Za-z0-9._+-]), so distinct ids yield distinct keys — do not
+# replace it with `string escape --style=var`: its escaping is context-
+# dependent (.0a → _2E_30_a) and its injectivity cannot be argued. Takes
+# VARARGS (one cmdsub per LIST of ids, not per id — a single call already
+# pays the ~20µs substitution cost) and prints one key per id, in order.
+function _topo_key
+    # No stdin fallback: `string replace` with no strings would READ STDIN.
+    test (count $argv) -gt 0; or return 0
+    string replace -a -- _ _5f $argv | string replace -a -- . _2e \
+        | string replace -a -- - _2d | string replace -a -- + _2b
+end
+
 # Read config/topology.conf — the ONE topology source. One record per package:
 #   id|path|groups|edges[|tags]
 # (a lone id|path|groups| is a deliberate no-edge record; records ALWAYS exist
@@ -412,6 +478,18 @@ end
 # or field: the caller can only say "project configuration is invalid", so a
 # bare return 1 leaves the user bisecting by hand (2026-09-20 rule).
 function read_topology_config
+    # Re-reads (unverifiable_defer_plan) start from a clean index: a keyed var
+    # left by a previous parse would answer lookups for an id this parse never
+    # saw. The keyed vars are erasable by NAME PATTERN from `set -n` — do not
+    # track them in a growing list: fish's `set -a` copies the whole list per
+    # append, so bookkeeping 9k names that way cost ~2s on its own. The
+    # pattern MUST match each name in full and use a non-capturing group:
+    # `string match -r` prints only the matched portion (a prefix pattern
+    # erases nothing) and additionally prints capture groups as names (2026-10-05).
+    set -l stale_keys (set -n | string match -r '^_(?:TID|TDEPKEYS|TDEP|TCONSKEYS|TCONS|TTAGS)_.*$')
+    if test (count $stale_keys) -gt 0
+        set -e $stale_keys
+    end
     set -g _PACKAGE_MAP
     set -g _PACKAGE_IDS
     set -g _DEPS
@@ -421,8 +499,9 @@ function read_topology_config
         assign_group "$group_name"
     end
     # Edge targets may name records further down the file, so edge validation
-    # is deferred until every id is known; these hold id:dep,... meanwhile.
-    set -l raw_edges
+    # is deferred until every id is known; the deferred pass reads each
+    # record's dep names (_TDEP_) and their keys (_TDEPKEYS_) — published in
+    # the record loop below, index-aligned — straight off the keyed index.
     set -l line_no 0
     for raw_line in (cat "$TOPOLOGY_FILE")
         set line_no (math $line_no + 1)
@@ -442,7 +521,8 @@ function read_topology_config
             ui_error "invalid topology record id '$id' (allowed: A-Za-z0-9._+-): $line"
             return 1
         end
-        if contains "$id" $_PACKAGE_IDS
+        set -l id_key (_topo_key "$id")
+        if set -q _TID_$id_key
             ui_error "duplicate package id in topology record: $id ($TOPOLOGY_FILE line $line_no)"
             return 1
         end
@@ -480,6 +560,9 @@ function read_topology_config
             end
             set -a record_edges "$dep"
         end
+        # One key derivation for the whole dep list (see _topo_key), aligned
+        # with $record_edges by position.
+        set -l record_dep_keys (_topo_key $record_edges)
         # tags: closed vocabulary, no repeats. Unknown tags are refused, not
         # ignored — a typo'd batch tag would silently disable the batch gate.
         # Vocabulary: abi=must, abi=should (batch relation),
@@ -518,7 +601,14 @@ function read_topology_config
         end
         set -a _PACKAGE_IDS "$id"
         set -a _PACKAGE_MAP "$id|$relative_path"
-        set -a raw_edges (printf '%s:%s' "$id" (string join ',' $record_edges))
+        # O(1) keyed index (see _topo_key), published alongside the legacy
+        # row-shaped lists above — which stay byte-identical because other
+        # seams read them. _TDEPKEYS_ mirrors _TDEP_ with keys so later graph
+        # walks never derive a key per edge again.
+        set -g _TID_$id_key "$id"
+        set -g _TDEP_$id_key $record_edges
+        set -g _TDEPKEYS_$id_key $record_dep_keys
+        set -g _TTAGS_$id_key (string join ',' $record_tags)
         for grp in $record_groups
             set -l mangled (string replace - _ -- "$grp")
             set -a "_GROUP_$mangled" "$id"
@@ -531,22 +621,39 @@ function read_topology_config
     # Now every id is known: validate edge targets and publish _DEPS in the
     # id:dep,... shape topo_sort/deps_of split on. The same pass publishes the
     # reverse adjacency _CONSUMER_INDEX (target|consumer pairs, the
-    # _pkgname_index shape): selection expansion walks CONSUMERS — the set at
-    # ABI risk when a package rebuilds — and that walk needs "who consumes
-    # this" lookup on every node, which scanning _DEPS forward cannot answer.
-    for entry in $raw_edges
-        set -l parts (string split -m 1 ':' -- "$entry")
-        set -l pkg "$parts[1]"
+    # _pkgname_index shape) and its O(1) keyed twin _TCONS_/_TCONSKEYS_:
+    # selection expansion walks CONSUMERS — the set at ABI risk when a package
+    # rebuilds — and that walk needs "who consumes this" on every node, which
+    # scanning _DEPS forward cannot answer. The record loop already published
+    # each record's dep names (_TDEP_) and their keys (_TDEPKEYS_),
+    # index-aligned and empty-free, so this pass derefs those instead of
+    # round-tripping string rows through join/split (the old shape also
+    # shifted a shrinking key list per record — O(P²) list copies).
+    for pkg in $_PACKAGE_IDS
+        set -l pkg_key (_topo_key "$pkg")
+        set -l deps_var _TDEP_$pkg_key
+        set -l deps $$deps_var
+        set -l dep_keys_var _TDEPKEYS_$pkg_key
+        set -l dep_keys $$dep_keys_var
         set -l record_edges
-        for dep in (string split ',' -- "$parts[2]")
+        # Collected per record and appended in ONE call: fish's `set -a`
+        # copies the whole list per append, so per-edge appends to the global
+        # reverse index were O(E²) copies.
+        set -l cons_pairs
+        for dep in $deps
+            set -l dep_key "$dep_keys[1]"
+            set dep_keys $dep_keys[2..-1]
             test -n "$dep"; or continue
-            if not contains "$dep" $_PACKAGE_IDS
+            if not set -q _TID_$dep_key
                 ui_error "topology record for $pkg names an unknown dependency: $dep"
                 return 1
             end
             set -a record_edges "$dep"
-            set -a _CONSUMER_INDEX "$dep|$pkg"
+            set -a cons_pairs "$dep|$pkg"
+            set -ga _TCONS_$dep_key "$pkg"
+            set -ga _TCONSKEYS_$dep_key "$pkg_key"
         end
+        set -a _CONSUMER_INDEX $cons_pairs
         set -a _DEPS (printf '%s:%s' "$pkg" (string join ',' $record_edges))
     end
     return 0
@@ -668,8 +775,10 @@ end
 # Order-identical O(V+E) Kahn since 2026-10-04: the previous nested-list
 # scanner re-split every record inside O(V×E) loops (millions of string splits
 # per call over 653 records / 3373 edges — the whole multi-minute `--list`
-# latency, paid TWICE per invocation). Lookups here are `contains --index`
-# in-process C scans (fish has no assoc arrays) and the reverse adjacency is
+# latency, paid TWICE per invocation). Lookups here are keyed variables built
+# from _topo_key (function-scoped, so calls cannot see each other's maps):
+# `contains --index` marshals the whole $pkgs list per call (~105µs over 650
+# names), which the edge pass paid per dep. The reverse adjacency is
 # precomputed in one pass. The ORDER printed is load-bearing and unchanged:
 # zero-in-degree members queued in $pkgs order, FIFO processing, decrements in
 # $_DEPS record order against the FIRST $pkgs occurrence of each consumer,
@@ -687,26 +796,34 @@ function topo_sort -a pkgs_str
     set pkgs $pkgs_filtered
     set -g _TOPO_BLOCKED
 
+    # One key derivation for the whole list (_topo_key is varargs), then the
     # $pkgs index of each name's FIRST occurrence — the "first matching entry
     # wins" slot the old scans found by brute force. The in-degree and reverse
     # maps live on those slots; a name occurring twice still gets its own
     # queue entry and its own place in $sorted, exactly like the old
-    # per-occurrence bookkeeping.
-    set -l first_idx
-    for pkg in $pkgs
-        set -a first_idx (contains --index -- "$pkg" $pkgs)
+    # per-occurrence bookkeeping. The slots themselves are read back from the
+    # _TSI_ map on demand, so no parallel index array is kept.
+    set -l pkg_keys (_topo_key $pkgs)
+    set -l idxs (seq (count $pkgs))
+    for j in $idxs
+        set -l slot_var _TSI_$pkg_keys[$j]
+        if not set -q $slot_var
+            set -f $slot_var $j
+        end
     end
 
     # in_degree[i] = count of $pkgs[i]'s deps that are in the build list,
     # addressed at first-occurrence slots (decrements always landed on the
     # first matching entry too). rev[i] = consumer indices that $pkgs[i]
     # unblocks, in $_DEPS record order — the order the old scan decremented in.
-    set -l in_degree
-    set -l rev
-    for i in $first_idx
-        set -a in_degree 0
-        set -a rev ""
-    end
+    # Both maps are keyed lists, not indexed arrays: _TDI_<slot> holds one
+    # `_pending` marker per in-list dep TOKEN (a repeated token adds two
+    # markers, exactly the old `math` count), so a decrement is `set -e deg[1]`
+    # and zero in-degree is an empty list — no `math`, no whole-array copy.
+    # _TREV_<slot> is the consumer slots in record order. Both are
+    # function-scoped, so they die with the call and need no stale sweep.
+    # (Array writes were the hot cost: `set arr[i]` copies the whole array and
+    # `math` is a ~16µs command substitution per edge.)
 
     # ONE pass over $_DEPS ("id:dep1,dep2") builds both maps. Same-input
     # fidelity with the old loops: a dep token repeated inside one record adds
@@ -716,17 +833,28 @@ function topo_sort -a pkgs_str
     for entry in $_DEPS
         set -l parts (string split ':' $entry -m 2)
         if test (count $parts) -ge 2 -a -n "$parts[2]"
-            set -l ci (contains --index -- "$parts[1]" $pkgs)
-            if test -n "$ci"
+            set -l owner_key (_topo_key "$parts[1]")
+            set -l ci_var _TSI_$owner_key
+            if set -q $ci_var
+                set -l ci $$ci_var
+                # Dep keys ride along from read_topology_config (_TDEPKEYS_),
+                # index-aligned with the row's dep tokens (the loader drops
+                # empty tokens before publishing both), so this pass never
+                # derives a key per edge — and the key IS the loop token: the
+                # map is injective, so the old name-equality dedup is exactly
+                # key-equality here.
+                set -l dep_keys_var _TDEPKEYS_$owner_key
+                set -l dep_keys $$dep_keys_var
                 set -l rev_seen
-                for dep in (string split ',' -- "$parts[2]")
-                    test -n "$dep"; or continue
-                    set -l di (contains --index -- "$dep" $pkgs)
-                    test -n "$di"; or continue
-                    set in_degree[$ci] (math $in_degree[$ci] + 1)
-                    contains -- "$dep" $rev_seen; and continue
-                    set -a rev_seen "$dep"
-                    set rev[$di] "$rev[$di] $ci"
+                for dep_key in $dep_keys
+                    test -n "$dep_key"; or continue
+                    set -l di_var _TSI_$dep_key
+                    set -q $di_var; or continue
+                    set -l di $$di_var
+                    set -f -a _TDI_$ci _pending
+                    contains -- "$dep_key" $rev_seen; and continue
+                    set -a rev_seen "$dep_key"
+                    set -f -a _TREV_$di $ci
                 end
             end
         end
@@ -734,44 +862,72 @@ function topo_sort -a pkgs_str
 
     # Kahn's algorithm
     set -l queue
+    set -l queue_keys
     set -l sorted
 
     # Zero-in-degree members queue in $pkgs order — one entry per OCCURRENCE,
-    # as the old init loop appended them.
-    for j in (seq (count $pkgs))
-        set -l f $first_idx[$j]
-        if test $in_degree[$f] -eq 0
+    # as the old init loop appended them. The first-occurrence slot comes
+    # straight from the _TSI_ map built above. Each queue entry carries its
+    # key, so the pop loop never derives one.
+    for j in $idxs
+        set -l slot_var _TSI_$pkg_keys[$j]
+        set -l f $$slot_var
+        set -l deg_var _TDI_$f
+        set -l deg $$deg_var
+        if not set -q deg[1]
             set -a queue $pkgs[$j]
+            set -a queue_keys $pkg_keys[$j]
         end
     end
 
-    # Process queue
-    while test (count $queue) -gt 0
-        set -l pkg $queue[1]
-        set -e queue[1]
+    # Process queue. The queue is consumed through a moving head instead of
+    # `set -e queue[1]`: deleting the head reindexes the whole list per pop.
+    set -l qhead 1
+    while test $qhead -le (count $queue)
+        set -l pkg $queue[$qhead]
+        set -l pkg_key $queue_keys[$qhead]
+        set qhead (math $qhead + 1)
         set -a sorted $pkg
+        set -f _TSORTED_$pkg_key 1
 
         # Every consumer this package unblocks, in record order; the reverse
-        # list holds first-occurrence indices, so decrementing $in_degree there
-        # is exactly the old "first entry named child" scan.
-        set -l di (contains --index -- "$pkg" $pkgs)
-        if test -n "$di"
-            for ci in (string split ' ' -- "$rev[$di]")
-                test -n "$ci"; or continue
-                set -l new_deg (math $in_degree[$ci] - 1)
-                set in_degree[$ci] $new_deg
-                if test $new_deg -eq 0
-                    set -a queue $pkgs[$ci]
+        # list holds first-occurrence indices, so decrementing the in-degree
+        # markers there is exactly the old "first entry named child" scan.
+        # The guard on the decrement is load-bearing: a name occurring twice
+        # can be queued (and popped) twice, traversing _TREV_ twice, and the
+        # old `math` count then went negative and never re-readied the slot —
+        # so a decrement with no marker left is skipped and queues nothing.
+        set -l di_var _TSI_$pkg_key
+        if set -q $di_var
+            set -l di $$di_var
+            set -l rev_var _TREV_$di
+            for ci in $$rev_var
+                set -l deg_var _TDI_$ci
+                set -l deg $$deg_var
+                if set -q deg[1]
+                    set -e deg[1]
+                    set -f $deg_var $deg
+                    if not set -q deg[1]
+                        set -a queue $pkgs[$ci]
+                        set -a queue_keys $pkg_keys[$ci]
+                    end
                 end
             end
         end
     end
 
-    # Append any remaining (cycles or missing deps) at the end
-    for pkg in $pkgs
-        if not contains -- "$pkg" $sorted
-            set -a _TOPO_BLOCKED $pkg
-            set -a sorted $pkg
+    # Append any remaining (cycles or missing deps) at the end. Membership is
+    # the function-scoped _TSORTED_ marker set at pop time — `contains` over
+    # $sorted re-marshalled the growing list per remaining name.
+    for j in $idxs
+        set -l pkg_key $pkg_keys[$j]
+        if not set -q _TSORTED_$pkg_key
+            # Mark as well: the old `contains` test saw leftovers appended by
+            # this very loop, so a repeated name is appended (and reported
+            # blocked) exactly once.
+            set -f _TSORTED_$pkg_key 1
+            set -a _TOPO_BLOCKED $pkgs[$j]
+            set -a sorted $pkgs[$j]
         end
     end
 
@@ -794,34 +950,45 @@ end
 function expand_consumers
     set -l result
     set -l queue $argv
+    # Keys ride beside the queue (_topo_key is varargs — one call for the
+    # whole seed list, exactly one key per name, order preserved), so no pop
+    # derives one.
+    set -l queue_keys (_topo_key $argv)
 
-    while test (count $queue) -gt 0
-        set -l pkg $queue[1]
-        set -e queue[1]
+    # The queue is consumed through a moving head (see topo_sort) and the
+    # seen set is function-scoped keyed membership: the old inner loop
+    # re-scanned every _CONSUMER_INDEX row per dequeued node (O(C×E) string
+    # splits) and re-walked $result for the dedupe.
+    set -l qhead 1
+    while test $qhead -le (count $queue)
+        set -l pkg $queue[$qhead]
+        set -l key $queue_keys[$qhead]
+        set qhead (math $qhead + 1)
 
         # Skip if already in result
-        set -l already_seen 0
-        for r in $result
-            if test "$r" = "$pkg"
-                set already_seen 1
-                break
-            end
-        end
-        if test $already_seen -eq 1
+        set -l seen_var _ECS_$key
+        if set -q $seen_var
             continue
         end
+        set -f $seen_var 1
 
         set -a result $pkg
 
         # Every record that lists $pkg among its edges consumes it: pull the
-        # consumer side of each reverse-adjacency pair (built once by
-        # read_topology_config).
-        for entry in $_CONSUMER_INDEX
-            set -l parts (string split '|' -- "$entry")
-            if test "$parts[1]" = "$pkg"
-                set -l consumer "$parts[2]"
-                if package_path "$consumer" >/dev/null
+        # consumer side of the reverse adjacency (built once by
+        # read_topology_config, in _CONSUMER_INDEX scan order — the order the
+        # old scan pushed consumers in).
+        set -l cons_var _TCONS_$key
+        if set -q $cons_var
+            set -l consumers $$cons_var
+            set -l cons_keys_var _TCONSKEYS_$key
+            set -l consumer_keys $$cons_keys_var
+            for consumer in $consumers
+                set -l consumer_key "$consumer_keys[1]"
+                set consumer_keys $consumer_keys[2..-1]
+                if set -q _TID_$consumer_key
                     set -a queue $consumer
+                    set -a queue_keys $consumer_key
                 else
                     ui_error "missing local dependency: $consumer -> $pkg" >&2
                     return 1
@@ -859,7 +1026,8 @@ function unverifiable_defer_plan -a pkg
         end
     end
     set -l closure (expand_consumers $pkg)
-    if test $status -ne 0
+    set -l exp_status $status
+    if test $exp_status -ne 0
         # Unresolvable consumer chain: fall back to building.
         echo build
         return 0
@@ -872,2225 +1040,256 @@ function unverifiable_defer_plan -a pkg
     end
 end
 
-# Read PKGBUILD scalars through Bash like arrays; values may depend on earlier
-# shell assignments.
-function pkgbuild_var -a pkg_path var
-    bash -c '
-        [[ $2 =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || exit 2
-        __gsa_pkgbuild_var_name=$2
-        readonly __gsa_pkgbuild_var_name
-        cd "$1" || exit 1
-        source ./PKGBUILD >/dev/null 2>&1 || exit $?
-        declare -p "$__gsa_pkgbuild_var_name" >/dev/null 2>&1 || exit 0
-        printf "%s\n" "${!__gsa_pkgbuild_var_name}"
-    ' _ "$pkg_path" "$var" 2>/dev/null
-end
-
-# Read the archive-selection version pair once; makepkg writes pkgver()'s
-# resolved value back to PKGBUILD, which keeps discovery aligned with its archive.
-function pkgbuild_version -a pkg_path
-    bash -c '
-        cd "$1" || exit 1
-        source ./PKGBUILD >/dev/null 2>&1 || exit $?
-        printf "pkgver=%s\npkgrel=%s\n" "${pkgver-}" "${pkgrel-}"
-    ' _ "$pkg_path" 2>/dev/null
-end
-
-# Print an *expanded* PKGBUILD array, one element per line. Sourcing is the only
-# way to get what makepkg sees: `source=(…tar.gz{,.sig})` is two entries and
-# `{,-doc}` is two more, and a $pkgver inside an entry is a version. Tokenising
-# the text instead gets both wrong — a mistake this audit made twice before
-# catching it, and one that would silently miscalculate checksum coverage.
-function pkgbuild_array -a pkg_path name
-    bash -c 'source "$1" >/dev/null 2>&1; eval "printf \"%s\n\" \"\${$2[@]}\""' _ "$pkg_path/PKGBUILD" "$name" 2>/dev/null
-end
-
-function pkgbuild_base -a pkg_path
-    set -l pkgbase (pkgbuild_var "$pkg_path" pkgbase)
-    if test -z "$pkgbase"
-        set -l names (pkgbuild_array "$pkg_path" pkgname)
-        set -l names_status $status
-        if test $names_status -eq 0; and test (count $names) -eq 1
-            set pkgbase "$names[1]"
-        end
-    end
-    if test -z "$pkgbase"
-        set pkgbase (basename "$pkg_path")
-    end
-    echo "$pkgbase"
-end
-
-# Raw text of the first top-level `pkgver=` assignment, unevaluated. Empty when
-# the recipe has no such line (a pkgver() function, which the sync paths skip).
-function pkgbuild_pkgver_rhs -a pkg_path
-    bash -c '
-        while IFS= read -r line; do
-            case "$line" in
-                pkgver=*)
-                    printf "%s\n" "${line#pkgver=}"
-                    exit 0
-                    ;;
-            esac
-        done <"$1/PKGBUILD"
-        exit 1
-    ' _ "$pkg_path" 2>/dev/null
-end
-
-# pkgbuild_pkgver_plan PKG_PATH TARGET
-# Plan the bump of a COMPUTED pkgver (pkgver=${_major}.${_rcver}): print one
-# `var=newvalue` row per variable assignment that must move for the expression
-# to evaluate to TARGET. Every other referenced variable keeps its current
-# value — the expression itself is never rewritten. The target is matched
-# against the expression's literal/variable segmentation and the assignment is
-# chosen by (1) keeping the most variables unchanged, then (2) the smallest
-# total edit distance to their current values: a plain rc bump moves only
-# _rcver, while a channel change lands on the split closest to what is there.
-# Exit: 0 planned (zero rows = already at TARGET) · 2 the expression is not a
-# literal-and-${var} construction (command substitution, exotic parameter
-# expansion, or it references pkgver/pkgrel/epoch) · 3 a referenced variable
-# has no single plain-literal assignment line to rewrite · 4 TARGET cannot be
-# expressed through the expression at all.
-function pkgbuild_pkgver_plan -a pkg_path target
-    bash -c '
-pkg_path=$1
-target=$2
-rhs=""
-while IFS= read -r line; do
-    case "$line" in
-        pkgver=*) rhs=${line#pkgver=}; break ;;
-    esac
-done <"$pkg_path/PKGBUILD"
-[[ -n $rhs ]] || exit 2
-case "$rhs" in
-    \"*\") rhs=${rhs#\"}; rhs=${rhs%\"} ;;
-esac
-
-# Tokenize into literal and variable segments. Anything beyond $var/${var}
-# (command substitution, other parameter expansions) is refused, never guessed.
-segs=()
-seg_vars=()
-lit=""
-i=0
-len=${#rhs}
-while ((i < len)); do
-    ch=${rhs:i:1}
-    if [[ $ch == "$" ]]; then
-        j=$((i + 1))
-        if ((j < len)) && [[ ${rhs:j:1} == "{" ]]; then
-            j=$((j + 1))
-            name=""
-            while ((j < len)) && [[ ${rhs:j:1} == [A-Za-z0-9_] ]]; do
-                name+=${rhs:j:1}
-                j=$((j + 1))
-            done
-            if [[ -z $name || ${rhs:j:1} != "}" ]]; then exit 2; fi
-            end=$((j + 1))
-        else
-            name=""
-            while ((j < len)) && [[ ${rhs:j:1} == [A-Za-z0-9_] ]]; do
-                name+=${rhs:j:1}
-                j=$((j + 1))
-            done
-            [[ -n $name ]] || exit 2
-            end=$j
-        fi
-        [[ $name == [A-Za-z_]* ]] || exit 2
-        case "$name" in pkgver | pkgrel | epoch) exit 2 ;; esac
-        if [[ -n $lit ]]; then segs+=("L$lit"); lit=""; fi
-        segs+=("V$name")
-        seg_vars+=("$name")
-        i=$end
-    elif [[ $ch == "\`" ]]; then
-        exit 2
-    else
-        lit+=$ch
-        i=$((i + 1))
-    fi
-done
-[[ -n $lit ]] && segs+=("L$lit")
-has_var=0
-for s in "${segs[@]}"; do [[ $s == V* ]] && has_var=1; done
-((has_var)) || exit 2
-
-cd "$pkg_path" || exit 2
-source ./PKGBUILD >/dev/null 2>&1 || exit 2
-declare -A cur=()
-var_order=()
-for name in "${seg_vars[@]}"; do
-    [[ -z ${cur[$name]+x} ]] || continue
-    var_order+=("$name")
-    eval "cur[\$name]=\${$name-}"
-    # Bumping means rewriting the assignment line, so it must exist exactly
-    # once and hold a plain literal — a computed assignment is not ours to edit.
-    [[ $(grep -c "^$name=" PKGBUILD) == 1 ]] || exit 3
-    assign=$(grep -m1 "^$name=" PKGBUILD)
-    val=${assign#*=}
-    case "$val" in
-        \"*\") val=${val#\"}; val=${val%\"} ;;
-    esac
-    [[ $val =~ ^[A-Za-z0-9._+-]*$ ]] || exit 3
-done
-
-# Enumerate every assignment of the expression that evaluates to TARGET.
-# A variable runs up to the next literal (or the end), so candidates are
-# bounded by that literal"s occurrences — never a combinatorial blow-up.
-sep=$(printf "\037")
-declare -a sols=()
-solve() {
-    local idx=$1 pos=$2 prefix=$3
-    local tlen=${#target}
-    if ((idx == ${#segs[@]})); then
-        ((pos == tlen)) && sols+=("$prefix")
-        return 0
-    fi
-    local seg=${segs[idx]}
-    if [[ $seg == L* ]]; then
-        local text=${seg#L}
-        [[ ${target:pos:${#text}} == "$text" ]] || return 0
-        solve $((idx + 1)) $((pos + ${#text})) "$prefix"
-        return 0
-    fi
-    local nextlit=""
-    if ((idx + 1 < ${#segs[@]})) && [[ ${segs[idx+1]} == L* ]]; then
-        nextlit=${segs[idx+1]#L}
-    fi
-    if [[ -z $nextlit ]]; then
-        if ((idx + 1 == ${#segs[@]})); then
-            ((pos < tlen)) || return 0
-            solve $((idx + 1)) $tlen "$prefix$sep${target:pos}"
-        else
-            local k
-            for ((k = pos + 1; k <= tlen; k++)); do
-                solve $((idx + 1)) $k "$prefix$sep${target:pos:k-pos}"
-            done
-        fi
-        return 0
-    fi
-    local nl=${#nextlit} o
-    for ((o = 1; pos + o + nl <= tlen; o++)); do
-        [[ ${target:pos+o:nl} == "$nextlit" ]] || continue
-        solve $((idx + 1)) $((pos + o)) "$prefix$sep${target:pos:o}"
-    done
-}
-solve 0 0 ""
-((${#sols[@]})) || exit 4
-
-lev() {
-    local a=$1 b=$2 i j
-    local -a prev currow
-    for ((j = 0; j <= ${#b}; j++)); do prev[j]=$j; done
-    for ((i = 1; i <= ${#a}; i++)); do
-        currow[0]=$i
-        for ((j = 1; j <= ${#b}; j++)); do
-            local cost=1
-            [[ ${a:i-1:1} == "${b:j-1:1}" ]] && cost=0
-            local m=$((prev[j] + 1))
-            ((currow[j-1] + 1 < m)) && m=$((currow[j-1] + 1))
-            ((prev[j-1] + cost < m)) && m=$((prev[j-1] + cost))
-            currow[j]=$m
-        done
-        prev=("${currow[@]}")
-    done
-    printf "%s\n" "${prev[${#b}]}"
-}
-
-declare -A best=()
-have_best=0
-best_unchanged=-1
-best_dist=1000000
-for sol in "${sols[@]}"; do
-    body=${sol#"$sep"}
-    IFS=$sep read -r -a vals <<<"$body"
-    ((${#vals[@]} == ${#seg_vars[@]})) || continue
-    declare -A newval=()
-    ok=1
-    for ((k = 0; k < ${#seg_vars[@]}; k++)); do
-        name=${seg_vars[k]}
-        v=${vals[k]}
-        if [[ -n ${newval[$name]+x} && ${newval[$name]} != "$v" ]]; then ok=0; break; fi
-        newval[$name]=$v
-    done
-    ((ok)) || continue
-    unchanged=0
-    dist=0
-    for name in "${var_order[@]}"; do
-        if [[ ${cur[$name]} == "${newval[$name]}" ]]; then
-            unchanged=$((unchanged + 1))
-        else
-            d=$(lev "${cur[$name]}" "${newval[$name]}")
-            dist=$((dist + d))
-        fi
-    done
-    if ((unchanged > best_unchanged)) || { ((unchanged == best_unchanged)) && ((dist < best_dist)); }; then
-        have_best=1
-        best_unchanged=$unchanged
-        best_dist=$dist
-        best=()
-        for name in "${var_order[@]}"; do best[$name]=${newval[$name]}; done
-    fi
-done
-((have_best)) || exit 4
-
-for name in "${var_order[@]}"; do
-    [[ ${cur[$name]} == "${best[$name]}" ]] && continue
-    printf "%s=%s\n" "$name" "${best[$name]}"
-done
-exit 0
-' _ "$pkg_path" "$target"
-end
-
-# apply_pkgver_version PKG_PATH NEW_PKGVER — rewrite a recipe's version.
-# A literal `pkgver=` line is rewritten in place: the historical behaviour,
-# unchanged. A COMPUTED `pkgver=${var}...` expression is never clobbered with a
-# literal (that silently pins the version and defeats the variable tracking,
-# the pkgver()-override hazard in reverse); instead the variables the
-# expression expands are bumped so it evaluates to NEW_PKGVER. Handles any
-# pkgver=${var} recipe, not one package's shape.
-# Return: 0 applied (or nothing to do) · 2 the write failed (the caller owns
-# restore semantics) · 3 unsupported pkgver expression · 4 NEW_PKGVER cannot be
-# expressed through it · 5 a referenced variable cannot be rewritten.
-function apply_pkgver_version -a pkg_path new_pkgver
-    set -l pkg_name (basename "$pkg_path")
-    set -l rhs (pkgbuild_pkgver_rhs "$pkg_path")
-
-    # Computed iff bash would expand it: anything outside a single-quoted RHS
-    # that carries $ or a command substitution. Everything else is a literal
-    # line and keeps the historical rewrite byte for byte.
-    set -l computed 0
-    if not string match -q "'*'" -- "$rhs"
-        if string match -q '*$*' -- "$rhs"; or string match -q '*`*' -- "$rhs"
-            set computed 1
-        end
-    end
-
-    if test $computed -eq 0
-        if not sed -i "s/^pkgver=.*/pkgver=$new_pkgver/" "$pkg_path/PKGBUILD"
-            return 2
-        end
+# report_pkgbuild_eval_failures PATH... — the -ccc/-ln surface for recipes the
+# evaluator could not read: named, and rc 1 so "nothing to clean" can never
+# claim success over a recipe whose sources were never scanned. Empty = rc 0.
+function report_pkgbuild_eval_failures
+    if test (count $argv) -eq 0
         return 0
     end
+    ui_error (count $argv)" recipe(s) could not be evaluated; their sources were NOT scanned:"
+    printf '  %s\n' $argv
+    return 1
+end
 
-    # Computed: touch nothing unless the version must actually move.
-    set -l cur_pkgver (pkgbuild_var "$pkg_path" pkgver)
-    if test "$cur_pkgver" = "$new_pkgver"
-        return 0
+# ─── Archive currency: which archive is current? ─────────────────────────────
+# One oracle for the whole seam: an archive is CURRENT only when its filename
+# maps to an expected output at the EVALUATED pkgver-pkgrel, and EVERY
+# expected output has one. "Has an archive" means "has the COMPLETE
+# current-version set", never a subset — a split set cut apart by a
+# mid-packaging SIGKILL must neither skip nor install.
+
+# expected_output_names PKG_PATH → the outputs a complete build must produce.
+# The committed .SRCINFO is the recipe's published claim (already expanded;
+# tests/srcinfo-freshness.sh keeps it in step); synthetic workspaces ship no
+# .SRCINFO and fall back to the evaluated pkgname array, the same claim one
+# level down. Neither answer yields nothing — an expected set that cannot be
+# established never blesses an archive set.
+function expected_output_names -a pkg_path
+    set -l names
+    if test -f "$pkg_path/.SRCINFO"
+        set names (srcinfo_output_names "$pkg_path/.SRCINFO")
     end
-
-    set -l plan (pkgbuild_pkgver_plan "$pkg_path" "$new_pkgver")
-    set -l plan_status $status
-    switch $plan_status
-        case 0
-            ;
-        case 2
-            ui_error "$pkg_name: pkgver is computed by an expression this version sync cannot rewrite (only literal-and-\${var} constructions are); bump its variables by hand"
-            return 3
-        case 3
-            ui_error "$pkg_name: a pkgver variable has no single plain-literal assignment line to rewrite; bump it by hand"
-            return 5
-        case 4
-            ui_error "$pkg_name: upstream version $new_pkgver cannot be expressed through this recipe's pkgver expression; the recipe keeps its current version"
-            return 4
-        case '*'
-            ui_error "$pkg_name: could not evaluate the recipe's pkgver expression"
-            return 3
+    if test (count $names) -eq 0
+        # An evaluation failure lands here as "no outputs", which is
+        # fail-closed for every caller (nothing is blessed as current), so the
+        # fallback is honest even though the reason is not distinguishable.
+        set names (pkgbuild_array_checked "$pkg_path" pkgname)
     end
-
-    for row in $plan
-        set -l pair (string split -m 1 = -- "$row")
-        if test (count $pair) -ne 2; or not string match -qr '^[A-Za-z_][A-Za-z0-9_]*$' -- "$pair[1]"
-            ui_error "$pkg_name: version sync produced an invalid variable rewrite"
-            return 3
-        end
-        if not string match -qr '^[A-Za-z0-9._+]+$' -- "$pair[2]"
-            ui_error "$pkg_name: version sync produced an unsupported value for $pair[1]"
-            return 3
-        end
-        if not sed -i "s/^$pair[1]=.*/$pair[1]=$pair[2]/" "$pkg_path/PKGBUILD"
-            ui_error "$pkg_name: could not update $pair[1] for the computed pkgver"
-            return 2
-        end
+    if test (count $names) -gt 0
+        printf '%s\n' $names
     end
     return 0
 end
 
-# ─── Sync stable package version with Arch repos ─────────────────────────────
-# Return contract (build_package switches on it):
-#   0 = nothing to do — not a stable recipe, already current, or the repo
-#       version/pkgrel is a downgrade
-#   1 = rewritten, and pkgver moved
-#   2 = rewrite failed
-#   3 = rewritten, but only pkgrel/epoch moved
-#
-# 1 and 3 are informational only: whether the committed sums went stale depends
-# on whether a source=() entry actually changed, which build_package determines
-# by diffing the expanded array around this call. See the comment there.
-function sync_stable_version -a pkg_path
-    # Only applies to recipes physically staged under packages/stable.
-    string match -q "$SCRIPT_DIR/packages/stable/*" "$pkg_path"; or return 0
-
-    # pkgver()-driven PKGBUILDs (Qt dev-branch builds) have NO stable pkgver=
-    # line — inserting one would OVERRIDE pkgver() and pin the version to the
-    # repo release, defeating dev tracking. Skip them; their describe-based
-    # version is always ahead of the repo anyway (never-downgrade guard).
-    if not grep -q '^pkgver=' "$pkg_path/PKGBUILD"
-        return 0
-    end
-
-    set -l pkgbase (pkgbuild_var "$pkg_path" pkgbase)
-    if test -z "$pkgbase"
-        set pkgbase (basename "$pkg_path")
-    end
-
-    # Candidate names to query: pkgbase first, then every split package name
-    # (resolved in bash so comments/variables in pkgname=() don't break it).
-    # E.g. hip-runtime's PKGBUILD builds pkgname=(hip-runtime-amd) — the repo
-    # only knows the latter, so a pkgbase-only query would silently NEVER sync
-    # and -Syu would replace the custom build with the newer stock one.
-    set -l candidates "$pkgbase"
-    for n in (bash -c "source '$pkg_path/PKGBUILD' 2>/dev/null && printf '%s\n' \"\${pkgname[@]}\"" 2>/dev/null)
-        set -a candidates "$n"
-    end
-
-    # Query latest version from Arch repos
-    set -l repo_info ""
-    for c in $candidates
-        set repo_info (pacman -Si "$c" 2>/dev/null)
-        if test -n "$repo_info"
-            break
-        end
-    end
-    if test -z "$repo_info"
-        return 0
-    end
-
-    set -l repo_ver_full (printf '%s\n' $repo_info | grep -m1 '^Version' | awk '{print $NF}')
-    if test -z "$repo_ver_full"
-        return 0
-    end
-
-    # Split "2.42.2-1", "7.2.4-1.1", or "1:7.1-1" (epoch) into epoch/version/release
-    set -l repo_epoch 0
-    set -l repo_v $repo_ver_full
-    if string match -qr '^[0-9]+:' "$repo_v"
-        set repo_epoch (string replace -r -- ':.*$' '' "$repo_v")
-        set repo_v (string replace -r -- '^[0-9]+:' '' "$repo_v")
-    end
-    set -l repo_pkgver (string replace -r -- '-[0-9].*$' '' "$repo_v")
-    set -l repo_pkgrel (string match -r -- '-([0-9].*)$' "$repo_v")[2]
-    if test -z "$repo_pkgrel"
-        set repo_pkgrel 1
-    end
-
-    # Read current version
-    set -l cur_pkgver (pkgbuild_var "$pkg_path" pkgver)
-    set -l cur_pkgrel (pkgbuild_var "$pkg_path" pkgrel)
-
-    # Never downgrade the content version — repos can game vercmp with an epoch
-    # (e.g. repo "1:7.1-1" vs local "7.2-1": 7.2 content is newer, keep it)
-    set -l vercmp_res -1
-    if type -q vercmp
-        set vercmp_res (vercmp "$cur_pkgver" "$repo_pkgver")
-    else if test "$cur_pkgver" = "$repo_pkgver"
-        set vercmp_res 0
-    end
-    if test "$vercmp_res" -gt 0
-        return 0
-    end
-    if test "$vercmp_res" -eq 0
-        if test "$cur_pkgrel" = "$repo_pkgrel"
-            return 0
-        end
-        # pkgver is at repo parity, so only a repo pkgrel that is actually
-        # AHEAD is a sync worth making. A local pkgrel ahead of the repo is a
-        # deliberate bump (e.g. ripgrep's Rust PGO wave carries pkgrel 2 over
-        # the repo's 1), not staleness — rewriting it back to the repo value
-        # clobbered ripgrep 15.2.0-2 to 15.2.0-1 on 2026-09-28, silently
-        # re-stamping a PGO build with the pre-PGO revision identity. Same as
-        # the pkgver guard above, the ordering rests on vercmp; without it the
-        # inequality case falls through to the historical rewrite behaviour.
-        set -l pkgrel_cmp 0
-        if type -q vercmp
-            set pkgrel_cmp (vercmp "$cur_pkgrel" "$repo_pkgrel")
-        end
-        if test "$pkgrel_cmp" -ge 0
-            return 0
-        end
-    end
-
-    if test "$_BUILD_QUIET" != "1"
-        ui_info "$pkgbase: $cur_pkgver-$cur_pkgrel → $repo_pkgver-$repo_pkgrel (synced with repo)"
-    end
-
-    # Whether the *sources* move. A repo bump that carries only pkgrel or epoch
-    # leaves source=() alone, so the committed sums still verify and the caller
-    # must not treat the recipe as stale. Compared before the rewrite, because
-    # the rewrite is what destroys the old value.
-    set -l pkgver_changed 0
-    if test "$cur_pkgver" != "$repo_pkgver"
-        set pkgver_changed 1
-    end
-
-    # Update pkgver/pkgrel (+ epoch when the repo carries one — never inside pkgver,
-    # makepkg rejects colons there). A computed pkgver=${var} recipe gets its
-    # version variables bumped instead of the expression being overwritten with
-    # a literal (apply_pkgver_version); a literal pkgver= line is rewritten
-    # exactly as before.
-    apply_pkgver_version "$pkg_path" "$repo_pkgver"
-    if test $status -ne 0
-        return 2
-    end
-    if not sed -i "s/^pkgrel=.*/pkgrel=$repo_pkgrel/" "$pkg_path/PKGBUILD"
-        return 2
-    end
-    if grep -q '^epoch=' "$pkg_path/PKGBUILD"
-        if not sed -i "s/^epoch=.*/epoch=$repo_epoch/" "$pkg_path/PKGBUILD"
-            return 2
-        end
-    else if test "$repo_epoch" -ne 0
-        if not sed -i "/^pkgrel=.*/a epoch=$repo_epoch" "$pkg_path/PKGBUILD"
-            return 2
-        end
-    end
-
-    # Clean stale source/build artifacts
-    if not command rm -rf -- "$pkg_path/src" "$pkg_path/pkg" "$pkg_path/build"
-        return 2
-    end
-
-    # Run-level witness: a run never commits (the disposition of these edits is
-    # the owner's), so the end-of-run summary must name every recipe this run
-    # rewrote — best-effort append; the per-package log keeps the record
-    # either way.
-    printf '%s: %s → %s (synced with repo)\n' \
-        "$pkgbase" "$cur_pkgver-$cur_pkgrel" "$repo_pkgver-$repo_pkgrel" \
-        >>"$_STATE_DIR/synced.list" 2>/dev/null
-
-    if test $pkgver_changed -eq 1
+# archive_matches_output ARCHIVE NAME PV PR → 0 when the filename is
+# NAME-PV-PR-<arch>.pkg.tar.zst. Literal string surgery only — pkgver is
+# recipe data and may carry glob/regex metacharacters, so the prefix is never
+# a pattern; the arch token is free-form and must carry no dash.
+function archive_matches_output -a archive name pv pr
+    set -l base (basename -- "$archive")
+    set -l stem "$name-$pv-$pr-"
+    set -l stem_len (string length -- "$stem")
+    if test (string length -- "$base") -le $stem_len
         return 1
     end
-    return 3
-end
-
-function remove_version_sync_temp -a tmp
-    if test -n "$tmp"; and test -d "$tmp"
-        command rm -rf -- "$tmp"
+    if test (string sub -s 1 -l $stem_len -- "$base") != "$stem"
+        return 1
     end
+    string match -qr -- '^[^-]+\.pkg\.tar\.zst$' (string sub -s (math "$stem_len + 1") -- "$base")
 end
 
-function restore_version_sync_recipe -a pkg_path original tmp
-    set -l restore_status 0
-    if not cp -p -- "$original" "$pkg_path/PKGBUILD"
-        ui_error "$(basename "$pkg_path"): could not restore $pkg_path/PKGBUILD after version sync"
-        set restore_status 1
+# current_archives PKG_PATH → the covered archives (every archive that maps to
+# an expected output at the evaluated pkgver-pkgrel, sorted) and the state of
+# the SET:
+#   0 complete  every expected output has a current-version archive
+#   1 none      nothing is current (fresh workspace, or only stale versions)
+#   2 partial   some outputs covered — the one state that must never bless a
+#               skip or an install; _CURRENT_ARCHIVES_MISSING names the rest.
+#   3 unknown   discovery could not be established (pkgver/pkgrel evaluation
+#               failed or yielded nothing usable) — distinct from `none` so a
+#               listing caller can refuse a damaged recipe instead of
+#               confusing it with a not-yet-built one (R-F25).
+# One archive maps to exactly one output name (the NAME-PV-PR- prefix is
+# unique per output); a same-version ARCH-flavour leftover therefore rides
+# along with the build's own archive instead of silently displacing it.
+function current_archives -a pkg_path
+    set -g _CURRENT_ARCHIVES_MISSING
+    set -l metadata (pkgbuild_version "$pkg_path")
+    if test $status -ne 0; or test (count $metadata) -ne 2
+        ui_error "$(basename "$pkg_path"): could not evaluate pkgver/pkgrel for archive discovery" >&2
+        return 3
     end
-    remove_version_sync_temp "$tmp"
-    return $restore_status
+    set -l pv (string replace -r '^pkgver=' '' -- "$metadata[1]")
+    set -l pr (string replace -r '^pkgrel=' '' -- "$metadata[2]")
+    # Unknown version metadata cannot prove an archive current; never broaden
+    # discovery to every archive when the version-specific pattern is unknown.
+    if test -z "$pv" -o -z "$pr"
+        return 3
+    end
+    set -l expected (expected_output_names "$pkg_path")
+    if test (count $expected) -eq 0
+        return 3
+    end
+    # find -printf %T@: nanosecond mtimes, newest first (fish globs would
+    # FATAL on "no matches"; find -name returns 0 with none).
+    set -l rows (find "$pkg_path" -maxdepth 1 -type f -name '*.pkg.tar.zst' \
+        -printf '%T@\t%p\n' 2>/dev/null | sort -rn)
+    set -l chosen
+    for name in $expected
+        set -l covered 0
+        for row in $rows
+            set -l fields (string split \t -- "$row")
+            if test (count $fields) -ne 2
+                continue
+            end
+            if archive_matches_output "$fields[2]" "$name" "$pv" "$pr"
+                set -a chosen "$fields[2]"
+                set covered 1
+            end
+        end
+        if test $covered -eq 0
+            set -a _CURRENT_ARCHIVES_MISSING "$name"
+        end
+    end
+    if test (count $chosen) -gt 0
+        printf '%s\n' $chosen | sort
+    end
+    if test (count $_CURRENT_ARCHIVES_MISSING) -eq 0
+        return 0
+    end
+    if test (count $chosen) -eq 0
+        return 1
+    end
+    return 2
 end
 
-function sync_nvchecker_version -a package_id pkg_path
+# archive_payload_ok ARCHIVE → 0 only when the package payload reads end to
+# end. pacman -Qp decompresses the whole zstd stream before answering (a write
+# killed at ANY offset fails it — measured against cuts at the last 100
+# bytes), which is exactly the mid-packaging SIGKILL shape that used to
+# re-skip forever. Read-only and lock-free like install_skip_reason's queries.
+# Doubt FAILS CLOSED here, the opposite of install_skip_reason's
+# doubt-installs: an unreadable archive is never evidence of a build.
+function archive_payload_ok -a archive
+    pacman -Qp -- "$archive" >/dev/null 2>&1
+end
+
+# freshness_skip_decision PKG_PATH PACKAGE_ID — THE -s decision. Both claim
+# sites (build_package's skip block and the toolchain pre-check before a drift
+# clean) call this one function; the two copies that used to live at those
+# sites had already diverged once. Results:
+#   _FRESHNESS_VERDICT  skip | build | defer
+#   _FRESHNESS_ARCHIVE  the current set (skip verdict only)
+#   _FRESHNESS_WAIVER   waiver line(s) — printed only by an actual skip claim
+# skip  = the COMPLETE current-version set is payload-valid, every member is
+#         at least as new as the PKGBUILD (nanosecond mtimes: makepkg writes
+#         all outputs of one build together, so a mixed-age set is itself
+#         evidence of an interrupted build), and every member is VCS-current
+#         or under a recorded waiver.
+# build = anything else; the reason is already reported, except the silent
+#         "nothing is current" case.
+# defer = freshness unverifiable and the consumer chain can absorb the wait
+#         (_DEFER_REASON set for the run record).
+function freshness_skip_decision -a pkg_path package_id
+    set -g _FRESHNESS_VERDICT build
+    set -g _FRESHNESS_ARCHIVE
     set -l pkg_name "$package_id"
-    set -l pkgbase (pkgbuild_base "$pkg_path")
-    set -l config "$pkg_path/.nvchecker.toml"
-    set -l resolver "$SCRIPT_DIR/tools/nvcheck.sh"
-    if not test -f "$config"; or not test -f "$resolver"
-        ui_error "$pkg_name: the opted-in nvchecker config or resolver is missing"
-        return $lane_outcome_defer
-    end
-
-    set -l repository_root (cd "$SCRIPT_DIR" 2>/dev/null && pwd -P)
-    set -l tmp_base /tmp
-    if set -q TMPDIR; and test -n "$TMPDIR"
-        set tmp_base "$TMPDIR"
-    end
-    set tmp_base (cd -- "$tmp_base" 2>/dev/null && pwd -P)
-    if test -z "$repository_root"; or test -z "$tmp_base"
-        ui_error "$pkg_name: cannot resolve a safe version-sync temporary directory"
-        return $lane_outcome_defer
-    end
-    if test "$tmp_base" = "$repository_root"; or string match -q "$repository_root/*" -- "$tmp_base"
-        ui_error "$pkg_name: TMPDIR must be outside the repository for version sync"
-        return $lane_outcome_defer
-    end
-    set -l tmp (mktemp -d "$tmp_base/gsa-version-sync.XXXXXXXX" 2>/dev/null)
-    if test $status -ne 0; or test -z "$tmp"
-        ui_error "$pkg_name: cannot create isolated version-sync state"
-        return $lane_outcome_defer
-    end
-    set -l tmp_created "$tmp"
-    set tmp (cd "$tmp" 2>/dev/null && pwd -P)
-    if test -z "$tmp"
-        ui_error "$pkg_name: cannot resolve isolated version-sync state"
-        remove_version_sync_temp "$tmp_created"
-        return $lane_outcome_defer
-    end
-    set -l original "$tmp/PKGBUILD.original"
-    if not cp -p -- "$pkg_path/PKGBUILD" "$original"
-        ui_error "$pkg_name: cannot snapshot PKGBUILD before version sync"
-        remove_version_sync_temp "$tmp"
-        return 2
-    end
-
-    set -l sync_key "$pkgbase"
-    set -l provider_info (bash "$resolver" --provider "$config" "$sync_key" 2>"$tmp/provider.err")
-    set -l provider_status $status
-    if test $provider_status -ne 0; and test "$package_id" != "$pkgbase"
-        # A tracker section may be named for the recipe's topology id instead
-        # of its pkgbase: pkgbase is flavor-derived for some recipes
-        # (linux-cachyos evaluates to linux-cachyos-rt-bore-lto from its
-        # scheduler knobs) while the recipe identity is stable. pkgbase is
-        # tried first, so a conventional section resolves exactly as before.
-        set provider_info (bash "$resolver" --provider "$config" "$package_id" 2>"$tmp/provider.err")
-        set provider_status $status
-        if test $provider_status -eq 0
-            set sync_key "$package_id"
-        end
-    end
-    if test $provider_status -ne 0; or test (count $provider_info) -ne 2
-        ui_error "$pkg_name: cannot read its nvchecker provider metadata"
-        if test -s "$tmp/provider.err"
-            sed 's/^/  /' "$tmp/provider.err"
-        end
-        remove_version_sync_temp "$tmp"
-        return $lane_outcome_defer
-    end
-    set -l provider "$provider_info[1]"
-    set -l provider_id "$provider_info[2]"
-
-    set -l new_pkgver (env TMPDIR="$tmp" bash "$resolver" --resolve "$config" "$sync_key" 2>"$tmp/resolve.err")
-    set -l resolve_status $status
-    if test $resolve_status -ne 0; or test (count $new_pkgver) -ne 1
-        ui_error "$pkg_name: nvchecker could not resolve a version from $provider_id"
-        if test -s "$tmp/resolve.err"
-            sed 's/^/  /' "$tmp/resolve.err"
-        end
-        remove_version_sync_temp "$tmp"
-        return $lane_outcome_defer
-    end
-    if not string match -qr '^[A-Za-z0-9._+]+$' -- "$new_pkgver"
-        ui_error "$pkg_name: refusing unsupported upstream pkgver format '$new_pkgver'"
-        remove_version_sync_temp "$tmp"
-        return 4
-    end
-
-    set -l aur_srcinfo ""
-    set -l aur_pkgrel ""
-    set -l aur_epoch 0
-    if test "$provider" = aur
-        if not type -q curl
-            ui_error "$pkg_name: cannot read AUR metadata because curl is missing"
-            remove_version_sync_temp "$tmp"
-            return $lane_outcome_defer
-        end
-        set aur_srcinfo "$tmp/aur.SRCINFO"
-        if not curl -fsSL --max-time 60 --connect-timeout 10 -o "$aur_srcinfo" \
-            "https://aur.archlinux.org/cgit/aur.git/plain/.SRCINFO?h=$provider_id" \
-            2>"$tmp/aur-curl.err"
-            ui_error "$pkg_name: AUR .SRCINFO for $provider_id is unavailable"
-            if test -s "$tmp/aur-curl.err"
-                sed 's/^/  /' "$tmp/aur-curl.err"
-            end
-            remove_version_sync_temp "$tmp"
-            return $lane_outcome_defer
-        end
-        set -l aur_pkgbase (srcinfo_pkgbase "$aur_srcinfo")
-        set -l aur_pkgver (srcinfo_pkgver "$aur_srcinfo")
-        if test "$aur_pkgbase" != "$provider_id"; or test "$aur_pkgbase" != "$pkgbase"; or test "$aur_pkgver" != "$new_pkgver"
-            ui_error "$pkg_name: AUR .SRCINFO changed or disagrees with nvchecker (expected $provider_id $new_pkgver, got $aur_pkgbase $aur_pkgver)"
-            remove_version_sync_temp "$tmp"
-            return $lane_outcome_defer
-        end
-        set aur_pkgrel (srcinfo_pkgrel "$aur_srcinfo")
-        set -l aur_pkgrel_status $status
-        set aur_epoch (srcinfo_epoch "$aur_srcinfo")
-        if test $aur_pkgrel_status -ne 0; or not string match -qr '^[A-Za-z0-9._+]+$' -- "$aur_pkgrel"; or not string match -qr '^[0-9]+$' -- "$aur_epoch"
-            ui_error "$pkg_name: AUR .SRCINFO has an invalid pkgrel or epoch"
-            remove_version_sync_temp "$tmp"
-            return $lane_outcome_defer
-        end
-    end
-
-    set -l cur_pkgver (pkgbuild_var "$pkg_path" pkgver)
-    set -l cur_pkgrel (pkgbuild_var "$pkg_path" pkgrel)
-    set -l cur_epoch (pkgbuild_var "$pkg_path" epoch)
-    if test -z "$cur_pkgrel"
-        set cur_pkgrel 1
-    end
-    if test -z "$cur_epoch"
-        set cur_epoch 0
-    end
-    if test -z "$cur_pkgver"; or not string match -qr '^[A-Za-z0-9._+]+$' -- "$cur_pkgver"; or not string match -qr '^[A-Za-z0-9._+]+$' -- "$cur_pkgrel"; or not string match -qr '^[0-9]+$' -- "$cur_epoch"
-        ui_error "$pkg_name: the current PKGBUILD version metadata is invalid"
-        remove_version_sync_temp "$tmp"
-        return 4
-    end
-    if not type -q vercmp
-        ui_error "$pkg_name: cannot compare versions because vercmp is missing"
-        remove_version_sync_temp "$tmp"
-        return $lane_outcome_defer
-    end
-    set -l version_order (vercmp "$cur_pkgver" "$new_pkgver")
-    if test $status -ne 0
-        ui_error "$pkg_name: vercmp could not compare $cur_pkgver and $new_pkgver"
-        remove_version_sync_temp "$tmp"
-        return $lane_outcome_defer
-    end
-    if test $version_order -gt 0
-        remove_version_sync_temp "$tmp"
-        return 0
-    end
-
-    set -l new_pkgrel "$cur_pkgrel"
-    set -l new_epoch "$cur_epoch"
-    if test "$provider" = aur
-        if test $version_order -lt 0
-            set new_pkgrel "$aur_pkgrel"
-            set new_epoch "$aur_epoch"
-        else
-            set -l release_order (vercmp "$cur_pkgrel" "$aur_pkgrel")
-            if test $release_order -lt 0
-                set new_pkgrel "$aur_pkgrel"
-            end
-            if test "$aur_epoch" -gt "$cur_epoch"
-                set new_epoch "$aur_epoch"
-            end
-        end
-    else if test "$provider" = github; and test $version_order -lt 0
-        set new_pkgrel 1
-    end
-
-    if not test -f "$pkg_path/PKGBUILD"; or not grep -q '^pkgver=' "$pkg_path/PKGBUILD"; or not grep -q '^pkgrel=' "$pkg_path/PKGBUILD"
-        ui_error "$pkg_name: PKGBUILD must define literal pkgver and pkgrel fields for version sync"
-        remove_version_sync_temp "$tmp"
-        return 4
-    end
-    set -l pkgver_changed 0
-    if test "$cur_pkgver" != "$new_pkgver"
-        set pkgver_changed 1
-    end
-    set -l metadata_changed 0
-    if test "$pkgver_changed" -eq 1; or test "$cur_pkgrel" != "$new_pkgrel"; or test "$cur_epoch" != "$new_epoch"
-        set metadata_changed 1
-    end
-    set -l sources_before (pkgbuild_array "$pkg_path" source)
-    if test $status -ne 0
-        ui_error "$pkg_name: cannot evaluate the current PKGBUILD source array"
-        remove_version_sync_temp "$tmp"
-        return 4
-    end
-
-    if test "$metadata_changed" -eq 1
-        # A literal pkgver= line is rewritten in place; a computed
-        # pkgver=${var}... expression has its variables bumped instead (e.g.
-        # _rcver=rc3 → _rcver=rc5), never clobbered with a literal.
-        apply_pkgver_version "$pkg_path" "$new_pkgver"
-        set -l pkgver_write_status $status
-        if test $pkgver_write_status -eq 2
-            ui_error "$pkg_name: could not update pkgver"
-            restore_version_sync_recipe "$pkg_path" "$original" "$tmp"
-            return 2
-        else if test $pkgver_write_status -ne 0
-            # The computed-pkgver planner refused (unsupported expression, an
-            # unrewritable variable, or the version is not expressible through
-            # the recipe's pkgver expression) and already said why.
-            restore_version_sync_recipe "$pkg_path" "$original" "$tmp"
-            return 4
-        end
-        if not sed -i "s/^pkgrel=.*/pkgrel=$new_pkgrel/" "$pkg_path/PKGBUILD"
-            ui_error "$pkg_name: could not update pkgrel"
-            restore_version_sync_recipe "$pkg_path" "$original" "$tmp"
-            return 2
-        end
-        if grep -q '^epoch=' "$pkg_path/PKGBUILD"
-            if not sed -i "s/^epoch=.*/epoch=$new_epoch/" "$pkg_path/PKGBUILD"
-                ui_error "$pkg_name: could not update epoch"
-                restore_version_sync_recipe "$pkg_path" "$original" "$tmp"
-                return 2
-            end
-        else if test "$new_epoch" -ne 0
-            if not sed -i "/^pkgrel=.*/a epoch=$new_epoch" "$pkg_path/PKGBUILD"
-                ui_error "$pkg_name: could not add epoch"
-                restore_version_sync_recipe "$pkg_path" "$original" "$tmp"
-                return 2
-            end
-        end
-        if not command rm -rf -- "$pkg_path/src" "$pkg_path/pkg" "$pkg_path/build"
-            ui_error "$pkg_name: could not clear artifacts after version sync"
-            restore_version_sync_recipe "$pkg_path" "$original" "$tmp"
-            return 2
-        end
-    end
-
-    set -l sources_after (pkgbuild_array "$pkg_path" source)
-    if test $status -ne 0
-        ui_error "$pkg_name: resolved pkgver cannot be evaluated by its PKGBUILD; the recipe was restored"
-        restore_version_sync_recipe "$pkg_path" "$original" "$tmp"
-        return 4
-    end
-    if test "$provider" = aur; and not srcinfo_matches_sources "$aur_srcinfo" "$pkg_path"
-        ui_error "$pkg_name: AUR .SRCINFO sources do not exactly match the rewritten recipe; the recipe was restored"
-        restore_version_sync_recipe "$pkg_path" "$original" "$tmp"
-        return $lane_outcome_defer
-    end
-
-    set -l moved_sources
-    set -l source_count (count $sources_after)
-    if test (count $sources_before) -gt $source_count
-        set source_count (count $sources_before)
-    end
-    set -l source_index 1
-    while test $source_index -le $source_count
-        set -l before ""
-        set -l after ""
-        if test $source_index -le (count $sources_before)
-            set before "$sources_before[$source_index]"
-        end
-        if test $source_index -le (count $sources_after)
-            set after "$sources_after[$source_index]"
-        end
-        if test "$before" != "$after"; and test -n "$after"
-            set -a moved_sources "$after"
-        end
-        set source_index (math $source_index + 1)
-    end
-
-    if test (count $moved_sources) -gt 0
-        anchor_sums_from_provider "$pkg_path" "$provider" "$provider_id" "$aur_srcinfo" $moved_sources
-        set -l anchor_status $status
-        switch $anchor_status
-            case 0
-                # The checksum pipeline also refreshes a committed .SRCINFO.
-            case 1
-                refresh_package_srcinfo "$pkg_path" "version metadata was synced"
-            case 4
-                restore_version_sync_recipe "$pkg_path" "$original" "$tmp"
-                return 4
-            case 2 3
-                restore_version_sync_recipe "$pkg_path" "$original" "$tmp"
-                return $lane_outcome_defer
-            case '*'
-                ui_error "$pkg_name: unexpected checksum-anchor result $anchor_status"
-                restore_version_sync_recipe "$pkg_path" "$original" "$tmp"
-                return 2
-        end
-    else if test "$metadata_changed" -eq 1
-        refresh_package_srcinfo "$pkg_path" "version metadata was synced"
-    end
-
-    if test "$metadata_changed" -eq 0
-        remove_version_sync_temp "$tmp"
-        return 0
-    end
-    set -l provider_label "$provider_id"
-    if test "$provider" = aur
-        set provider_label "AUR $provider_id"
-    else
-        set provider_label "GitHub $provider_id"
-    end
-    set -l old_version "$cur_pkgver-$cur_pkgrel"
-    set -l new_version "$new_pkgver-$new_pkgrel"
-    if test "$cur_epoch" -ne 0
-        set old_version "$cur_epoch:$old_version"
-    end
-    if test "$new_epoch" -ne 0
-        set new_version "$new_epoch:$new_version"
-    end
-    if test "$_BUILD_QUIET" != "1"
-        ui_info "$pkgbase: $old_version → $new_version (synced with $provider_label)"
-    end
-    printf '%s: %s → %s (synced with %s)\n' \
-        "$pkgbase" "$old_version" "$new_version" "$provider_label" \
-        >>"$_STATE_DIR/synced.list" 2>/dev/null
-    remove_version_sync_temp "$tmp"
-    if test "$pkgver_changed" -eq 1
-        return 1
-    end
-    return 3
-end
-
-# The URL part of a source entry, with any "name::" override removed, or nothing
-# when the entry is an in-tree file (a patch, a dotfile, an .install script) that
-# has no URL and so nothing to download.
-function source_url -a entry
-    set -l e $entry
-    if string match -q '*::*' -- $e
-        set e (string replace -r '^.*::' '' -- $e)
-    end
-    string match -q '*://*' -- $e; or return 1
-    echo $e
-end
-
-# The VCS protocol of a source entry (git/svn/hg/bzr), or nothing for a plain
-# download. It must be read from the URL part, after the "name::" prefix is
-# removed: "fish::git+https://…" is a git checkout, and testing the raw entry
-# misses it, so the checkout is then treated as a tarball and the build refused.
-function source_vcs -a entry
-    set -l e (source_url $entry); or return 1
-    for p in git svn hg bzr
-        if string match -q "$p+*" -- $e
-            echo $p
-            return 0
-        end
-    end
-    return 1
-end
-
-# The name makepkg gives one source entry, which is what a checksum array
-# describes: the "name::" override when the entry has one, otherwise the
-# basename of the URL. Nothing is printed for a signature file (makepkg writes
-# SKIP for those) or for an in-tree file, because neither is a download that a
-# checksum published elsewhere can describe. The suffix list must cover every
-# spelling of a detached signature — '.sign' is the kernel.org one
-# (linux-7.2.7.tar.sign), and missing it is what made an official-SKIP entry
-# look unanchorable and refused the recipe (measured 2026-09-24: makepkg
-# verifies .sign with PGP against validpgpkeys — corrupting it fails the build
-# with 'SIGNATURE NOT FOUND' — so its integrity is cryptographic, not a hash).
-#
-# The override matters: 'udisks2::git+…' downloads to "udisks2", and
-# 'openshadinglanguage-…tar.gz::https://…/v1.15.3.0.tar.gz' downloads to
-# "openshadinglanguage-…tar.gz", not to the URL's basename. Reading the basename
-# instead made the verifier look for a file that does not exist, and — worse, for
-# util-linux's renamed LICENSE — find a *different* file that happened to share
-# it, which is a false mismatch in that case and a false *pass* in the other
-# direction.
-function source_filename -a entry
-    set -l name ""
-    if string match -q '*::*' -- $entry
-        set name (string replace -r '::.*$' '' -- $entry)
-    else
-        set -l url (source_url $entry); or return 1
-        set name (string replace -r '[?#].*$' '' -- $url)
-        set name (string replace -r '^.*/' '' -- $name)
-    end
-    if test -z "$name"
-        return 1
-    end
-    for suffix in .sig .asc .signature .sign
-        string match -q "*$suffix" -- $name; and return 1
-    end
-    echo $name
-end
-
-# The protocol, URL, and selected ref from an expanded VCS source entry.
-# Return one item per line so values containing spaces remain intact.
-function vcs_source_ref_info -a entry
-    set -l protocol (source_vcs "$entry"); or return 1
-    set -l raw (source_url "$entry"); or return 1
-    set raw (string replace -r '^(git|svn|hg|bzr)\+' '' -- "$raw")
-    set -l parts (string split -m 1 '#' -- "$raw")
-    set -l url "$parts[1]"
-    set -l fragment ""
-    if test (count $parts) -gt 1
-        set fragment "$parts[2]"
-    end
-    set url (string replace -r '\?signed$' '' -- "$url")
-    set fragment (string replace -r '\?signed$' '' -- "$fragment")
-
-    set -l ref_kind default
-    set -l ref_value -
-    if test -n "$fragment"
-        if string match -q '*=*' -- "$fragment"
-            set ref_kind (string replace -r '=.*$' '' -- "$fragment")
-            set ref_value (string replace -r '^[^=]*=' '' -- "$fragment")
-        else
-            set ref_kind revision
-            set ref_value "$fragment"
-        end
-    end
-    printf '%s\n' "$protocol" "$url" "$ref_kind" "$ref_value"
-end
-
-# Hash the expanded entry so revision records never expose credential-bearing URLs.
-function vcs_source_key -a entry
-    set -l key (printf '%s' "$entry" | sha256sum 2>/dev/null | cut -d ' ' -f1)
-    string match -qr '^[0-9a-f]{64}$' -- "$key"; or return 1
-    echo "$key"
-end
-
-# Locate the checkout makepkg actually compiled from. The authoritative root
-# is $srcdir ($startdir/src/<name>): download_git keeps only the mirror in
-# SRCDEST, extract_git clones the working copy into $srcdir, and
-# build()/package() cd into it — so the src/ probe needs no environment at
-# all, which matters because sudo's env_reset strips SRCDEST from the
-# recorder's own environment in root-supervisor runs (2026-10-02 xdg-utils:
-# 'missing local checkout' after a green build, the checkout one directory
-# deeper in src/ the whole time). A mirror — in SRCDEST, or at the package
-# root when SRCDEST defaults to $startdir — is a download cache whose HEAD is
-# the remote's default branch, not the built ref (measured: mirror HEAD
-# 03707c1f while the archive was compiled from 356c380a), so the package-root
-# and SRCDEST roots are fallbacks only, tried when src/ has no working copy.
-# Git strips .git from its default source name; honor both spellings in
-# every root.
-function vcs_source_checkout -a pkg_path entry
-    set -l name (source_filename "$entry"); or return 1
-    set -l names "$name"
-    set -l stripped (string replace -r '\.git$' '' -- "$name")
-    if test "$stripped" != "$name"
-        set -a names "$stripped"
-    end
-    set -l roots "$pkg_path/src" "$pkg_path"
-    if set -q SRCDEST; and test -n "$SRCDEST"
-        set -a roots "$SRCDEST"
-    end
-    for root in $roots
-        for candidate_name in $names
-            set -l candidate "$root/$candidate_name"
-            if test -d "$candidate"
-                echo "$candidate"
-                return 0
-            end
-        end
-    end
-    return 1
-end
-
-function vcs_local_revision -a protocol checkout
-    switch "$protocol"
-        case git
-            env GIT_CONFIG_COUNT=0 git -c safe.bareRepository=all -C "$checkout" rev-parse --verify HEAD 2>/dev/null
-        case svn
-            command svn info --show-item revision "$checkout" 2>/dev/null
-        case hg
-            command hg --cwd "$checkout" log -r . --template '{node}' 2>/dev/null
-        case bzr
-            command bzr version-info --custom '--template={revision_id}' "$checkout" 2>/dev/null
-        case '*'
-            return 1
-    end
-end
-
-# git_ls_remote [git-ls-remote args...] — one Git upstream query with a
-# transport classifier and bounded retry. The exit status separates a
-# COMPLETED query (0 = match, 2 = clean "no such ref" under --exit-code —
-# never retried, an answer does not change on repetition) from a transport
-# failure (anything else: TLS, timeout, dead host — no answer at all, the
-# only retryable class; measured 2026-10-02: repo.or.cz answered 1 of 3
-# attempts within a minute, so one shot is not an oracle for "upstream is
-# gone"). 3 attempts, 0.5 s then 1 s backoff. Exhaustion returns the failing
-# status with no rows; callers keep treating "no rows" as unresolvable.
-# A persistent condition that LOOKS like transport (expired credentials,
-# proxy 403) is retried and then fails the same way — the classifier only
-# gates retries, never trust, so a misclassification costs latency, never a
-# skip decision. Args are passed through verbatim so option order
-# (--symref before the URL) stays the caller's.
-function git_ls_remote_quiet
-    set -l attempt 1
-    while true
-        set -l rows (env GIT_CONFIG_COUNT=0 GIT_TERMINAL_PROMPT=0 git \
-            -c safe.bareRepository=all ls-remote $argv 2>/dev/null)
-        set -l query_status $status
-        if test $query_status -eq 0; or test $query_status -eq 2; or test $attempt -ge 4
-            printf '%s\n' $rows
-            return $query_status
-        end
-        # Flaky upstreams (repo.or.cz drops ~half of TLS handshakes from some
-        # networks) need a window in seconds, not milliseconds (2026-10-02).
-        switch $attempt
-            case 1
-                sleep 2
-            case 2
-                sleep 5
-            case 3
-                sleep 10
-        end
-        set attempt (math $attempt + 1)
-    end
-end
-
-# Resolve the selected upstream ref, not an unrelated repository HEAD. Fixed
-# Git commits and numeric SVN revisions are immutable inputs.
-function vcs_remote_revision -a protocol url ref_kind ref_value
-    switch "$protocol"
-        case git
-            switch "$ref_kind"
-                case commit
-                    string match -qr '^[0-9a-fA-F]{7,64}$' -- "$ref_value"; or return 1
-                    echo (string lower -- "$ref_value")
-                    return 0
-                case branch
-                    set -l target "$ref_value"
-                    if not string match -q 'refs/heads/*' -- "$target"
-                        set target "refs/heads/$target"
-                    end
-                    set -l rows (git_ls_remote_quiet --exit-code "$url" "$target")
-                    for row in $rows
-                        set -l fields (string split \t -- "$row")
-                        if test (count $fields) -eq 2; and test "$fields[2]" = "$target"
-                            string match -qr '^[0-9a-fA-F]{40,64}$' -- "$fields[1]"; or return 1
-                            echo (string lower -- "$fields[1]")
-                            return 0
-                        end
-                    end
-                    return 1
-                case tag
-                    set -l target "$ref_value"
-                    if not string match -q 'refs/tags/*' -- "$target"
-                        set target "refs/tags/$target"
-                    end
-                    set -l peeled "$target^{}"
-                    set -l rows (git_ls_remote_quiet --exit-code "$url" "$target" "$peeled")
-                    set -l tag_revision ""
-                    set -l peeled_revision ""
-                    for row in $rows
-                        set -l fields (string split \t -- "$row")
-                        if test (count $fields) -eq 2
-                            if test "$fields[2]" = "$target"
-                                set tag_revision "$fields[1]"
-                            else if test "$fields[2]" = "$peeled"
-                                set peeled_revision "$fields[1]"
-                            end
-                        end
-                    end
-                    set -l revision "$peeled_revision"
-                    if test -z "$revision"
-                        set revision "$tag_revision"
-                    end
-                    string match -qr '^[0-9a-fA-F]{40,64}$' -- "$revision"; or return 1
-                    echo (string lower -- "$revision")
-                    return 0
-                case default
-                    set -l rows (git_ls_remote_quiet --symref --exit-code "$url" HEAD)
-                    for row in $rows
-                        set -l fields (string split \t -- "$row")
-                        if test (count $fields) -eq 2; and test "$fields[2]" = HEAD
-                            if string match -qr '^[0-9a-fA-F]{40,64}$' -- "$fields[1]"
-                                echo (string lower -- "$fields[1]")
-                                return 0
-                            end
-                        end
-                    end
-                    return 1
-                case '*'
-                    return 1
-            end
-        case svn
-            if test "$ref_kind" != default; and test "$ref_kind" != revision
-                return 1
-            end
-            if test "$ref_kind" = default
-                set ref_value HEAD
-            end
-            if test "$ref_value" != HEAD; and string match -qr '^[0-9]+$' -- "$ref_value"
-                echo "$ref_value"
-                return 0
-            end
-            set -l revision (command svn --non-interactive info --show-item revision \
-                --revision "$ref_value" "$url" 2>/dev/null)
-            string match -qr '^[0-9]+$' -- "$revision"; or return 1
-            echo "$revision"
-            return 0
-        case hg
-            if test "$ref_kind" != default; and test "$ref_kind" != branch \
-                and test "$ref_kind" != revision; and test "$ref_kind" != tag
-                return 1
-            end
-            if test "$ref_kind" = default
-                set ref_value default
-            end
-            set -l revision (command hg --config ui.interactive=False identify \
-                --template '{node}' --rev "$ref_value" "$url" 2>/dev/null)
-            string match -qr '^[0-9a-fA-F]{40,64}$' -- "$revision"; or return 1
-            echo (string lower -- "$revision")
-            return 0
-        case bzr
-            if test "$ref_kind" != default; and test "$ref_kind" != revision
-                return 1
-            end
-            set -l args version-info --custom '--template={revision_id}'
-            if test "$ref_kind" = revision
-                set -a args "--revision=$ref_value"
-            end
-            set -a args "$url"
-            set -l revision (command bzr $args 2>/dev/null)
-            test -n "$revision"; or return 1
-            echo "$revision"
+    set -l archives (current_archives "$pkg_path")
+    switch $status
+        case 0
+            # Complete set — fall through to the gates below.
+        case 1 3
+            # Nothing current (1) or discovery unestablished (3): build. An
+            # evaluation failure already named itself on stderr.
             return 0
         case '*'
-            return 1
+            # Anomaly, not routine rebuild noise: a half-written split set is
+            # exactly what used to pass silently, so it is reported even in
+            # quiet/piped output (like the evaluation error below).
+            ui_info "$pkg_name: built output set is incomplete (missing: "(string join ' ' $_CURRENT_ARCHIVES_MISSING)") — rebuilding"
+            return 0
     end
-end
-
-# Store one revision record for every distinct VCS source used by an archive.
-# The sidecar is ignored by the existing *.pkg.tar.* rule and replaced atomically.
-function record_vcs_archive_revisions -a pkg_path archive
-    set -g _VCS_REVISION_ERROR ""
-    set -l manifest "$archive.gsa-vcs-revisions"
-    set -l entries
-    set -l keys
-    for entry in (pkgbuild_array "$pkg_path" source)
-        set -l protocol (source_vcs "$entry")
-        or continue
-        set -l key (vcs_source_key "$entry")
-        if test -z "$key"
-            set -g _VCS_REVISION_ERROR "cannot identify a VCS source entry"
-            return 1
-        end
-        if contains -- "$key" $keys
-            continue
-        end
-        set -a keys "$key"
-        set -a entries "$entry"
-    end
-
-    if test (count $entries) -eq 0
-        if test -e "$manifest"; and not rm -f -- "$manifest"
-            set -g _VCS_REVISION_ERROR "cannot remove stale VCS revision metadata"
-            return 1
-        end
-        return 0
-    end
-
-    # The archive changed; invalidate any old record before collecting its new
-    # revisions so a failed capture cannot make the replacement look current.
-    if test -e "$manifest"; and not rm -f -- "$manifest"
-        set -g _VCS_REVISION_ERROR "cannot replace VCS revision metadata"
-        return 1
-    end
-    set -l temporary (mktemp "$manifest.tmp.XXXXXX" 2>/dev/null)
-    if test -z "$temporary"
-        set -g _VCS_REVISION_ERROR "cannot create VCS revision metadata"
-        return 1
-    end
-    if not printf 'gsa-vcs-revisions\t1\n' >"$temporary"
-        rm -f -- "$temporary"
-        set -g _VCS_REVISION_ERROR "cannot write VCS revision metadata"
-        return 1
-    end
-
-    for entry in $entries
-        set -l info (vcs_source_ref_info "$entry")
-        if test (count $info) -ne 4
-            rm -f -- "$temporary"
-            set -g _VCS_REVISION_ERROR "cannot parse a VCS source ref"
-            return 1
-        end
-        set -l checkout (vcs_source_checkout "$pkg_path" "$entry")
-        if test -z "$checkout"
-            rm -f -- "$temporary"
-            set -l name (source_filename "$entry")
-            set -g _VCS_REVISION_ERROR "missing local checkout for $name"
-            return 1
-        end
-        set -l revision (vcs_local_revision "$info[1]" "$checkout")
-        if test -z "$revision"
-            rm -f -- "$temporary"
-            set -l name (source_filename "$entry")
-            set -g _VCS_REVISION_ERROR "cannot read the built revision for $name"
-            return 1
-        end
-        set -l key (vcs_source_key "$entry")
-        if test -z "$key"; or not printf '%s\t%s\t%s\n' "$key" "$info[1]" "$revision" >>"$temporary"
-            rm -f -- "$temporary"
-            set -g _VCS_REVISION_ERROR "cannot write VCS revision metadata"
-            return 1
-        end
-    end
-
-    if not mv -f -- "$temporary" "$manifest"
-        rm -f -- "$temporary"
-        set -g _VCS_REVISION_ERROR "cannot publish VCS revision metadata"
-        return 1
-    end
-    if test "$_ROOT_MODE" = "1"; and not chown "$_BUILD_USER": "$manifest"
-        set -g _VCS_REVISION_ERROR "cannot restore VCS revision metadata ownership"
-        return 1
-    end
-    return 0
-end
-
-# Confirm every selected source ref can be resolved before rebuilding an
-# archive whose saved baseline is missing or unusable.
-function vcs_selected_refs_queryable
-    for entry in $argv
-        set -l info (vcs_source_ref_info "$entry")
-        if test (count $info) -ne 4
-            set -g _VCS_REVISION_ERROR "cannot parse a VCS source ref"
-            return 1
-        end
-        set -l current (vcs_remote_revision "$info[1]" "$info[2]" "$info[3]" "$info[4]")
-        if test -z "$current"
-            set -l name (source_filename "$entry")
-            set -g _VCS_REVISION_ERROR "cannot query upstream revision for $name"
-            return 1
-        end
-    end
-    return 0
-end
-
-# The freshness tolerance: how many upstream commits a recorded baseline may
-# trail a moving Git ref before -s stops waiving the rebuild. GSA_VCS_SKIP_TOLERANCE
-# overrides the default 5; the value must be a positive integer and anything
-# else falls back to the default LOUDLY (a silently ignored knob would make
-# skip decisions unexplainable). Resolved once per process into a global
-# (command substitution would run in a subshell and lose the memo).
-# Rationale (owner design 2026-10-03): we are CONSUMERS of llvm/rust/qt6, not
-# their developers — rebuilding a 2-hour package because upstream landed two
-# commits is pure waste.
-function vcs_skip_tolerance_resolve
-    if set -q _VCS_SKIP_TOLERANCE
-        return 0
-    end
-    set -l tolerance 5
-    if set -q GSA_VCS_SKIP_TOLERANCE
-        if string match -qr '^[1-9][0-9]*$' -- "$GSA_VCS_SKIP_TOLERANCE"
-            set tolerance "$GSA_VCS_SKIP_TOLERANCE"
-        else
-            ui_warning "GSA_VCS_SKIP_TOLERANCE='$GSA_VCS_SKIP_TOLERANCE' is not a positive integer — using the default $tolerance"
-        end
-    end
-    set -g _VCS_SKIP_TOLERANCE "$tolerance"
-    return 0
-end
-
-# The fetch refspec for a selected Git ref — one home for the ref-kind →
-# refspec mapping shared by the advance probes (vcs_remote_revision keeps its
-# own ls-remote argument shapes).
-function vcs_git_fetch_refspec -a ref_kind ref_value
-    switch "$ref_kind"
-        case default
-            echo HEAD
-        case branch
-            if string match -q 'refs/heads/*' -- "$ref_value"
-                echo "$ref_value"
-            else
-                echo "refs/heads/$ref_value"
-            end
-        case tag
-            if string match -q 'refs/tags/*' -- "$ref_value"
-                echo "$ref_value"
-            else
-                echo "refs/tags/$ref_value"
-            end
-        case '*'
-            return 1
-    end
-end
-
-# vcs_git_advance_distance URL REFSPEC BASELINE TIP DEPTH → the commit
-# distance from BASELINE to TIP on stdout (rc 0), or rc 1 when it cannot be
-# measured (no output).
-# Rationale (the shallow-window trick): callers only need bounded questions
-# about the advance ("fewer than tolerance new commits?" / "what may we CLAIM
-# about the count?"), so one bounded shallow fetch into a scratch bare repo
-# answers without cloning the world. --depth=DEPTH fetches the tip and its
-# DEPTH-1 nearest ancestors — exactly the distances 1..DEPTH-1 are measurable
-# (measured 2026-10-03: with --depth=6 a baseline 5 back counts 5; 10 back is
-# absent and `rev-list --count` fails with "Invalid revision range"). DEPTH is
-# caller-chosen: the tolerance path wants tolerance+1 (the boundary AT the
-# tolerance must count), the ABI-provider path wants a wider informational
-# window (its verdict is already fixed; the count is for the loud line).
-# --filter=tree:0 keeps the fetch commits-only where the server honours
-# partial-clone filters (e.g. GitHub); servers that ignore it fetch the window's
-# trees and still work. A failing `rev-list` MEANS the distance exceeds the
-# window (or history was rewritten — the baseline is not a recent ancestor of
-# the new tip, so it is not in the fetch window either) and the caller must
-# treat it as ">= the window", never as a small move. A fetch that never
-# succeeds (after the same bounded transport retries as git_ls_remote_quiet —
-# the tip query already worked, so a fetch failure is likely another flake) is
-# likewise unmeasurable: a waiver needs PROOF; nothing else may lower the
-# verification.
-function vcs_git_advance_distance -a url refspec baseline tip depth
-    # mktemp -d honours $TMPDIR by itself (GNU coreutils).
-    set -l scratch (mktemp -d 2>/dev/null)
-    if test -z "$scratch"
-        return 1
-    end
-    set -l repo "$scratch/repo.git"
-    set -l fetched 0
-    set -l attempt 1
-    if env GIT_CONFIG_COUNT=0 GIT_TERMINAL_PROMPT=0 git init --bare -q "$repo" 2>/dev/null
-        while test $attempt -le 3
-            if env GIT_CONFIG_COUNT=0 GIT_TERMINAL_PROMPT=0 git -C "$repo" \
-                fetch -q --depth="$depth" --filter=tree:0 --no-tags \
-                "$url" "$refspec" 2>/dev/null
-                set fetched 1
-                break
-            end
-            switch $attempt
-                case 1
-                    sleep 2
-                case 2
-                    sleep 5
-            end
-            set attempt (math $attempt + 1)
-        end
-    end
-    set -l distance ""
-    if test $fetched -eq 1
-        set distance (env GIT_CONFIG_COUNT=0 git -C "$repo" \
-            rev-list --count "$baseline..$tip" 2>/dev/null)
-    end
-    rm -rf -- "$scratch"
-    if not string match -qr '^[1-9][0-9]*$' -- "$distance"
-        return 1
-    end
-    echo "$distance"
-    return 0
-end
-
-# The informational measurement window for ABI-provider freshness waivers: how
-# much upstream movement a marked recipe's loud line can count exactly. 64
-# absorbs days of llvm-project movement ("dozens of commits an hour") while
-# staying a bounded, commits-only fetch where the server honours
-# --filter=tree:0; past it the line names the window instead of inventing a
-# count — the verdict (waived) is identical either way.
-set -g _VCS_ABI_ADVANCE_WINDOW 64
-
-# The marker that makes a recipe an ABI provider: an (empty or one-line
-# rationale) `.gsa-abi-provider` file in the recipe directory. One home for
-# the predicate so every future call site reads the marker the same way.
-function vcs_abi_provider_marked -a pkg_path
-    test -e "$pkg_path/.gsa-abi-provider"
-end
-
-# Return 0 when a VCS archive is current — including when a moved Git ref is
-# within the freshness tolerance, or when the recipe is an ABI provider (see
-# below), in which case _FRESHNESS_WAIVER names the waiver line(s) and
-# _FRESHNESS_WAIVER_REASON the claim (freshness-waived / abi-provider-waived —
-# a waived-freshness skip is not the same claim as an untouched one).
-# Return 1 when a selected ref moved past the tolerance, 2 when its current
-# state cannot be established, and 3 when a rebuild can establish a missing or
-# unusable baseline. Both -s callers defer (rc 99) on 2 — an unverifiable
-# upstream must neither fail the run nor license a skip. The tolerance and the
-# ABI-provider waiver only soften the 0/1 boundary; 2 and 3 are untouched.
-function vcs_archive_is_current -a pkg_path archive
-    set -g _VCS_REVISION_ERROR ""
-    set -g _FRESHNESS_WAIVER
-    set -g _FRESHNESS_WAIVER_REASON ""
-    set -l entries
-    set -l keys
-    for entry in (pkgbuild_array "$pkg_path" source)
-        set -l protocol (source_vcs "$entry")
-        or continue
-        set -l key (vcs_source_key "$entry")
-        if test -z "$key"
-            set -g _VCS_REVISION_ERROR "cannot identify a VCS source entry"
-            return 2
-        end
-        if contains -- "$key" $keys
-            continue
-        end
-        set -a keys "$key"
-        set -a entries "$entry"
-    end
-    if test (count $entries) -eq 0
-        return 0
-    end
-
-    set -l manifest "$archive.gsa-vcs-revisions"
-    if not test -f "$manifest"
-        if not vcs_selected_refs_queryable $entries
-            return 2
-        end
-        set -g _VCS_REVISION_ERROR "no recorded VCS baseline for "(basename "$archive")
-        return 3
-    end
-    set -l manifest_count (awk -F '\t' '
-        NR == 1 {
-            if ($0 != "gsa-vcs-revisions\t1") bad = 1
-            next
-        }
-        NF != 3 || length($1) != 64 || $1 !~ /^[0-9a-f]+$/ ||
-            $2 !~ /^(git|svn|hg|bzr)$/ || $3 == "" { bad = 1; next }
-        { count++ }
-        END {
-            if (bad) exit 1
-            printf "%d\n", count + 0
-        }
-    ' "$manifest" 2>/dev/null)
-    set -l expected_count (count $entries)
-    if test -z "$manifest_count"; or test "$manifest_count" != "$expected_count"
-        if not vcs_selected_refs_queryable $entries
-            return 2
-        end
-        set -g _VCS_REVISION_ERROR "VCS baseline is missing, malformed, or belongs to different sources"
-        return 3
-    end
-
-    for entry in $entries
-        set -l info (vcs_source_ref_info "$entry")
-        set -l key (vcs_source_key "$entry")
-        if test (count $info) -ne 4; or test -z "$key"
-            set -g _VCS_REVISION_ERROR "cannot parse a VCS source ref"
-            return 2
-        end
-        set -l fields (awk -F '\t' -v key="$key" \
-            '$1 == key { print $2; print $3 }' "$manifest" 2>/dev/null)
-        if test (count $fields) -ne 2; or test "$fields[1]" != "$info[1]"
-            if not vcs_selected_refs_queryable $entries
-                return 2
-            end
-            set -l name (source_filename "$entry")
-            set -g _VCS_REVISION_ERROR "VCS baseline does not match source $name"
-            return 3
-        end
-        set -l current (vcs_remote_revision "$info[1]" "$info[2]" "$info[3]" "$info[4]")
-        if test -z "$current"
-            set -l name (source_filename "$entry")
-            set -g _VCS_REVISION_ERROR "cannot query upstream revision for $name"
-            return 2
-        end
-        if test "$info[1]" = git; and test "$info[3]" = commit
-            if not string match -q "$current*" -- "$fields[2]"
-                set -l name (source_filename "$entry")
-                set -g _VCS_REVISION_ERROR "pinned Git commit does not match source $name"
-                return 1
-            end
-        else if test "$fields[2]" != "$current"
-            set -l name (source_filename "$entry")
-            # ABI-provider waiver (owner rule 2026-10-03: "not building the
-            # already built abi provider which is extremely heavy"): a recipe
-            # marked .gsa-abi-provider is the matched ABI provider of its
-            # consumer chain — rebuilding it invalidates every dependent's ABI
-            # (rust must rebuild after it: the owner's cascade rule) and costs
-            # hours, while its upstream moves far faster than any tolerance can
-            # absorb (llvm-project lands dozens of commits an hour). For such a
-            # recipe mere upstream movement NEVER rebuilds: the verdict is
-            # "freshness waived", not "tolerated" — any distance, any VCS kind
-            # (svn/hg/bzr have no commit distance and waive the same way).
-            # Purely the 0/1 boundary for marked recipes: an unusable/missing
-            # baseline (rc 3) still rebuilds once to record it, an unverifiable
-            # upstream (rc 2) still defers, a mismatched pinned commit is local
-            # inconsistency (not movement) and still rebuilds — and only -s is
-            # exempt: an explicit build rebuilds normally.
-            if vcs_abi_provider_marked "$pkg_path"
-                set -l abi_id (basename "$pkg_path")
-                set -l moved_claim "upstream revision moved"
-                if test "$info[1]" = git; and test "$info[3]" != commit
-                    set -l refspec (vcs_git_fetch_refspec "$info[3]" "$info[4]")
-                    set -l distance (vcs_git_advance_distance "$info[2]" "$refspec" \
-                        "$fields[2]" "$current" "$_VCS_ABI_ADVANCE_WINDOW")
-                    if string match -qr '^[1-9][0-9]*$' -- "$distance"
-                        set moved_claim "upstream moved $distance commit(s)"
-                    else
-                        # Never invent a count the window could not measure
-                        # (rewritten history reads unmeasurable too).
-                        set moved_claim "upstream moved past the measurement window ($_VCS_ABI_ADVANCE_WINDOW commits)"
-                    end
-                end
-                set -a _FRESHNESS_WAIVER "$moved_claim — $abi_id is an ABI provider; freshness waived (rebuild only on measured skew or an explicit build)"
-                set -g _FRESHNESS_WAIVER_REASON abi-provider-waived
-                continue
-            end
-            # Freshness tolerance (owner design 2026-10-03): a handful of new
-            # upstream commits is noise for a CONSUMER of llvm/rust/qt6, so -s
-            # waives the rebuild while the measured advance stays strictly
-            # below the tolerance (vcs_skip_tolerance_resolve). Git only: the
-            # measurement is a commit distance, which svn/hg/bzr revisions do
-            # not have — those keep exact-match as the conservative default.
-            # Pinned Git commits are immutable inputs and cannot advance at
-            # all. The waiver never lowers verification silently: no measured
-            # distance strictly below the tolerance (see
-            # vcs_git_advance_distance's unmeasurable = >= tolerance contract)
-            # means no skip.
-            if test "$info[1]" = git; and test "$info[3]" != commit
-                vcs_skip_tolerance_resolve
-                set -l tolerance "$_VCS_SKIP_TOLERANCE"
-                set -l refspec (vcs_git_fetch_refspec "$info[3]" "$info[4]")
-                set -l distance (vcs_git_advance_distance "$info[2]" "$refspec" \
-                    "$fields[2]" "$current" (math "$tolerance" + 1))
-                if string match -qr '^[1-9][0-9]*$' -- "$distance"
-                    and test "$distance" -lt "$tolerance"
-                    set -a _FRESHNESS_WAIVER "upstream moved $distance commit(s) < tolerance $tolerance — treating $name as current"
-                    set -g _FRESHNESS_WAIVER_REASON freshness-waived
-                    continue
-                end
-            end
-            set -g _VCS_REVISION_ERROR "selected upstream ref moved for source $name"
-            return 1
-        end
-    end
-    return 0
-end
-
-# Snapshot archive path, nanosecond mtime, and size so records are written only
-# for files makepkg actually replaced (including split outputs).
-function package_archive_snapshot -a pkg_path
-    find "$pkg_path" -maxdepth 1 -type f -name '*.pkg.tar.zst' \
-        -printf '%p\t%T@\t%s\n' 2>/dev/null
-end
-
-# The pkgver a .SRCINFO declares for its pkgbase, or nothing when it has none.
-function srcinfo_pkgver -a srcinfo
-    for line in (cat "$srcinfo" 2>/dev/null)
-        if string match -qr '^\s*pkgname\s*=' -- $line
-            break
-        end
-        if string match -qr '^\s*pkgver\s*=' -- $line
-            echo (string replace -r '^\s*pkgver\s*=\s*' '' -- $line)
+    for archive in $archives
+        # `test -nt` compares nanosecond mtimes; a PKGBUILD newer than any
+        # member means the whole set predates the recipe.
+        if test "$pkg_path/PKGBUILD" -nt "$archive"
             return 0
         end
     end
-    return 1
-end
-
-function srcinfo_base_value -a srcinfo field
-    for line in (cat "$srcinfo" 2>/dev/null)
-        if string match -qr '^\s*pkgname\s*=' -- "$line"
-            break
-        end
-        if string match -qr -- "^\s*$field\s*=" "$line"
-            echo (string replace -r -- "^\s*$field\s*=\s*" '' "$line")
+    for archive in $archives
+        if not archive_payload_ok "$archive"
+            ui_info "$pkg_name: "(basename -- "$archive")" cannot be read as a package archive (interrupted write?) — rebuilding"
             return 0
         end
     end
-    return 1
-end
-
-function srcinfo_pkgbase -a srcinfo
-    srcinfo_base_value "$srcinfo" pkgbase
-end
-
-function srcinfo_pkgrel -a srcinfo
-    srcinfo_base_value "$srcinfo" pkgrel
-end
-
-function srcinfo_epoch -a srcinfo
-    set -l epoch (srcinfo_base_value "$srcinfo" epoch)
-    if test -z "$epoch"
-        echo 0
-    else
-        echo $epoch
-    end
-end
-
-function srcinfo_base_sources -a srcinfo
-    for line in (cat "$srcinfo" 2>/dev/null)
-        if string match -qr '^\s*pkgname\s*=' -- "$line"
-            break
-        end
-        if string match -qr '^\s*source\s*=' -- "$line"
-            echo (string replace -r '^\s*source\s*=\s*' '' -- "$line")
-        end
-    end
-end
-
-function srcinfo_matches_sources -a srcinfo pkg_path
-    set -l published_sources (srcinfo_base_sources "$srcinfo")
-    set -l recipe_sources (pkgbuild_array "$pkg_path" source)
-    set -l recipe_status $status
-    if test $recipe_status -ne 0; or test (count $published_sources) -ne (count $recipe_sources)
-        return 1
-    end
-    set -l i 1
-    while test $i -le (count $recipe_sources)
-        if test "$published_sources[$i]" != "$recipe_sources[$i]"
-            return 1
-        end
-        set i (math $i + 1)
-    end
-    return 0
-end
-
-# Checksum map for one recipe as "<file>\t<algorithm>\t<value>", read from
-# the *pkgbase* section of a .SRCINFO.
-#
-# makepkg writes .SRCINFO with every `source =` line in order, then each checksum
-# array in order, and it is already brace-expanded — so it is both easier and
-# safer to read than a provider PKGBUILD, which would have to be *executed* to
-# be expanded. Sources and sums only line up *within* one algorithm, though:
-# Arch and AUR publish the same file list once per algorithm (fish has one
-# source with both a sha512 and a b2 sum), so the flat list is not aligned. Only
-# the first contiguous run of one algorithm is used, and the function returns 1
-# unless that run is exactly as long as the source list, so an unparseable file
-# can never be anchored to.
-function srcinfo_sum_map -a srcinfo
-    set -l srcs
-    set -l algos
-    set -l vals
-    for line in (cat "$srcinfo" 2>/dev/null)
-        if string match -qr '^\s*pkgname\s*=' -- $line
-            break
-        end
-        if string match -qr '^\s*source\s*=' -- $line
-            set -a srcs (string replace -r '^\s*source\s*=\s*' '' -- $line)
-        else if string match -qr '^\s*(sha256|sha512|b2|md5)sums\s*=' -- $line
-            set -a algos (string replace -r 'sums$' '' -- (string replace -r '^\s*([a-z0-9]+)\s*=.*$' '$1' -- $line))
-            set -a vals (string replace -r '^\s*[a-z0-9]+\s*=\s*' '' -- $line)
-        end
-    end
-    if test (count $srcs) -eq 0; or test (count $algos) -lt (count $srcs)
-        return 1
-    end
-    set -l alg $algos[1]
-    set -l run 0
-    for a in $algos
-        if test "$a" != "$alg"
-            break
-        end
-        set run (math $run + 1)
-    end
-    if test $run -ne (count $srcs)
-        return 1
-    end
-    for i in (seq (count $srcs))
-        if test -z "$vals[$i]"; or test "$vals[$i]" = "SKIP"
-            continue
-        end
-        set -l f (source_filename $srcs[$i])
-        if test -z "$f"
-            continue
-        end
-        printf '%s\t%s\t%s\n' $f $alg $vals[$i]
-    end
-end
-
-function github_release_checksum_map -a repo pkgver tmp map_file tag_file
-    if not type -q python3
-        ui_error "$repo: Python 3 is required to read GitHub release metadata"
-        return 2
-    end
-    set -l found_release 0
-    for tag in "$pkgver" "v$pkgver"
-        set -l response "$tmp/github-release-$tag.json"
-        set -l http_code (curl --silent --show-error --location \
-            --max-time 60 --connect-timeout 10 --output "$response" \
-            --write-out '%{http_code}' \
-            "https://api.github.com/repos/$repo/releases/tags/$tag" \
-            2>"$tmp/github-curl.err")
-        set -l curl_status $status
-        if test $curl_status -ne 0
-            ui_error "$repo: GitHub release metadata request failed for tag $tag (curl exit $curl_status)"
-            if test -s "$tmp/github-curl.err"
-                tail -5 "$tmp/github-curl.err" | sed 's/^/  /'
-            end
-            return 2
-        end
-        if test "$http_code" = 404
-            continue
-        end
-        if test "$http_code" != 200
-            ui_error "$repo: GitHub release metadata for tag $tag returned HTTP $http_code"
-            return 2
-        end
-        if not bash "$SCRIPT_DIR/tools/nvcheck.sh" --release-digests "$response" "$tag" \
-            >"$map_file" 2>"$tmp/github-json.err"
-        then
-            ui_error "$repo: cannot read GitHub release metadata for tag $tag"
-            if test -s "$tmp/github-json.err"
-                sed 's/^/  /' "$tmp/github-json.err"
-            end
-            return 2
-        end
-        printf '%s\n' "$tag" >"$tag_file"
-        set found_release 1
-        break
-    end
-    if test $found_release -eq 0
-        printf '' >"$map_file"
-        printf '' >"$tag_file"
-    end
-    return 0
-end
-
-function github_source_matches_release -a entry repo tag
-    if test -z "$tag"
-        return 1
-    end
-    set -l url (source_url "$entry"); or return 1
-    set url (string replace -r '[?#].*$' '' -- "$url")
-    string match -q "https://github.com/$repo/releases/download/$tag/*" -- "$url"
-end
-
-function github_release_asset_name -a entry
-    set -l url (source_url "$entry"); or return 1
-    set url (string replace -r '[?#].*$' '' -- "$url")
-    set -l name (string replace -r '^.*/' '' -- "$url")
-    if test -z "$name"
-        return 1
-    end
-    echo "$name"
-end
-
-function refresh_package_srcinfo -a pkg_path reason
-    if not test -f "$pkg_path/.SRCINFO"
-        return 0
-    end
-    set -l pkg_name (basename "$pkg_path")
-    set -l run_as env
-    if test "$_ROOT_MODE" = "1"
-        set run_as sudo -u "$_BUILD_USER" env HOME=$_BUILD_HOME
-    end
-    if $run_as makepkg --printsrcinfo --dir "$pkg_path" >"$pkg_path/.SRCINFO.tmp" 2>/dev/null
-        if not mv -f -- "$pkg_path/.SRCINFO.tmp" "$pkg_path/.SRCINFO"
-            rm -f -- "$pkg_path/.SRCINFO.tmp"
-            ui_warning "$pkg_name: $reason but the refreshed .SRCINFO could not replace the committed file"
-        end
-    else
-        rm -f -- "$pkg_path/.SRCINFO.tmp"
-        ui_warning "$pkg_name: $reason but the committed .SRCINFO could not be refreshed; regenerate it with 'makepkg --printsrcinfo > .SRCINFO'"
-    end
-end
-
-# makepkg's own checksum for one VCS source: it hashes `git archive --format tar
-# <tag>` of the checkout, so the value is reproducible on any machine and the
-# provider's published value is a cross-check rather than a local echo. Prints
-# nothing and returns 1 when there is nothing to recompute yet (no checkout, or
-# a fragment makepkg itself would answer SKIP for); returns 2 when the
-# recomputation was attempted and failed.
-function vcs_source_sum -a dir entry alg
-    set -l url (source_url $entry); or return 1
-    if not string match -q '*#*' -- $url
-        return 1
-    end
-    set -l frag (string replace -r '^[^#]*#' '' -- $url)
-    # makepkg appends verification flags to the fragment (#tag=v262?signed);
-    # the ref name itself must never carry them or `git archive` looks up a
-    # ref that cannot exist and the anchor reports a false checksum mismatch
-    # (2026-10-02, systemd). Same rule as the shared source parser.
-    set frag (string replace -r '\?signed$' '' -- $frag)
-    set -l kind (string replace -r '=.*$' '' -- $frag)
-    if test "$kind" != tag; and test "$kind" != commit
-        return 1
-    end
-    set -l val (string replace -r '^[^=]*=' '' -- $frag)
-    set -l name (source_filename $entry); or return 1
-    # makepkg's get_filename strips a trailing .git from a VCS URL (the clone
-    # of …/pipewire.git lands in 'pipewire'), while source_filename keeps the
-    # URL spelling the provider map is keyed by — try both spellings, or the
-    # checkout is "not available" no matter how healthy it is (2026-09-30).
-    set -l name_stripped (string replace -r '\.git$' '' -- $name)
-    set -l cands "$dir/$name"
-    if test "$name_stripped" != "$name"
-        set -a cands "$dir/$name_stripped"
-    end
-    if set -q SRCDEST; and test -n "$SRCDEST"
-        set -a cands "$SRCDEST/$name"
-        if test "$name_stripped" != "$name"
-            set -a cands "$SRCDEST/$name_stripped"
-        end
-    end
-    set -l repo ""
-    for cand in $cands
-        if test -d "$cand"
-            set repo "$cand"
-            break
-        end
-    end
-    if test -z "$repo"
-        return 1
-    end
-    set -l sum_file (mktemp); or return 2
-    # The archive is written to a file, not piped: a failing git would
-    # otherwise hash empty stdin and report a confident wrong sum. Any git
-    # failure (incl. host git hardening on bare repos) is case 2, not a value.
-    if not git -c core.abbrev=no -C "$repo" archive --format tar "$val" >"$sum_file" 2>/dev/null
-        rm -f -- "$sum_file"
-        return 2
-    end
-    set -l sum (command "$alg"sum <"$sum_file" | string replace -r '\s+.*$' '')
-    rm -f -- "$sum_file"
-    if test -z "$sum"
-        return 2
-    end
-    echo $sum
-end
-
-# ─── Re-anchor moved sources to the selected version provider ────────────────
-# A provider version can move a source=() URL away from the bytes described by
-# the committed sums. Never treat updpkgsums alone as verification: use a
-# provider-published checksum when available, and otherwise report the existing
-# loud fetch-only policy.
-#
-# When a provider publishes no checksum for an entry, refresh it loudly as
-# fetch-only instead of claiming the new hash is an anchor. The log and the run
-# summary name every such entry and the remaining attestation (PGP for a
-# detached signature — already outside this list via source_filename —,
-# #tag/#commit for a VCS source, TLS for a plain download). Published values
-# remain anchor-or-refuse: verify them after writing and restore on disagreement.
-#
-# The caller passes only moved entries. In the default Arch path, a pkgver
-# rewrite that leaves source=() alone — 26 of the 28 stable recipes pin literal
-# versions in their URLs — leaves the committed sums valid, so refusing those
-# builds would be a false alarm, and so would re-hashing them.
-#
-# updpkgsums does the writing, so the recipe keeps its own formatting and its own
-# choice of algorithm; the values are then verified against the selected
-# provider's, whatever algorithm it publishes, and the check is per-file so a
-# disagreement names the file. Every path fails closed, restoring the recipe
-# where it was already rewritten.
-#
-# Return: 0 = anchored (and any refresh-only entries recorded) · 1 = nothing
-#         to anchor · 2 = provider/fetch/write failure · 3 = no matching
-#         provider metadata · 4 = a source disagrees with a published checksum.
-function anchor_sums_from_provider -a pkg_path provider provider_id provider_file
-    set -l pkg_name (basename "$pkg_path")
-    set -l pkgbase (pkgbuild_var "$pkg_path" pkgbase)
-    if test -z "$pkgbase"
-        if test "$provider" = aur
-            set pkgbase (pkgbuild_base "$pkg_path")
-        else
-            set pkgbase $pkg_name
-        end
-    end
-    set -l pkgver (pkgbuild_var "$pkg_path" pkgver)
-    set -l pkgrel (pkgbuild_var "$pkg_path" pkgrel)
-    set -l refuse_manual "  Refresh them by hand — 'updpkgsums' in that recipe, commit, rebuild. '--no-sync' builds the committed version as-is."
-    set -l authority_phrase "the official"
-    set -l checksum_owner "Arch"
-    if test "$provider" = aur
-        set authority_phrase "AUR"
-        set checksum_owner "AUR"
-        set refuse_manual "  No package was built; the recipe was restored. Retry when AUR metadata is available, or use '--no-sync' to build the committed version and sums. Do not treat a fetched hash as an upstream anchor."
-    else if test "$provider" = github
-        set authority_phrase "GitHub"
-        set checksum_owner "GitHub"
-        set refuse_manual "  No package was built; the recipe was restored. Retry when GitHub metadata is available, or use '--no-sync' to build the committed version and sums. Do not treat a fetched hash as an upstream anchor."
-    end
-
-    # Which of the moved sources a checksum published elsewhere can describe at
-    # all: an in-tree file was not downloaded and a signature file gets SKIP.
-    set -l anchor_names
-    set -l anchor_entries
-    for e in $argv[5..-1]
-        if test -z (source_url $e)
-            continue
-        end
-        set -l fn (source_filename $e)
-        if test -z "$fn"
-            continue
-        end
-        if contains -- $fn $anchor_names
-            continue
-        end
-        set -a anchor_names $fn
-        set -a anchor_entries $e
-    end
-    if test (count $anchor_names) -eq 0
-        return 1
-    end
-
-    if not type -q curl
-        if test "$provider" = arch
-            ui_error "$pkg_name: refusing to build — pkgver was synced to $pkgver-$pkgrel and 'curl' is missing, so the official checksums cannot be read"
-        else
-            ui_error "$pkg_name: refusing to build — pkgver was synced to $pkgver-$pkgrel and 'curl' is missing, so provider checksum metadata cannot be read"
-        end
-        echo "$refuse_manual"
-        return 2
-    end
-    if not type -q updpkgsums
-        ui_error "$pkg_name: refusing to build — pkgver was synced to $pkgver-$pkgrel and 'updpkgsums' is missing, so the sums cannot be refreshed (it ships with pacman)"
-        echo "$refuse_manual"
-        return 2
-    end
-
-    set -l tmp (mktemp -d)
-
-    set -l srcinfo ""
-    set -l published "$provider_id"
-    set -l map "$tmp/map"
-    set -l release_tag ""
-    switch "$provider"
-        case arch
-            # The pkgbase is usually right; some recipes follow a name Arch
-            # does not (hip-runtime lives under hip), so try split names too.
-            # `main` comes first; the version's own tag is the fallback when
-            # the packaging repo has moved past the repo version.
-            set -l tried
-            set -l seen_pkg ""
-            set -l seen_ver ""
-            for c in $pkgbase (pkgbuild_array "$pkg_path" pkgname)
-                if test -z "$c"
-                    continue
-                end
-                if contains -- $c $tried
-                    continue
-                end
-                set -a tried $c
-                for r in main "$pkgver-$pkgrel"
-                    set -l f "$tmp/$c-$r.SRCINFO"
-                    if not curl -fsSL --max-time 60 -o "$f" "https://gitlab.archlinux.org/archlinux/packaging/packages/$c/-/raw/$r/.SRCINFO" 2>/dev/null
-                        continue
-                    end
-                    if not test -s "$f"
-                        continue
-                    end
-                    # A revision that does not carry our pkgver is no anchor:
-                    # it describes different files.
-                    set -l v (srcinfo_pkgver "$f")
-                    if test -z "$v"
-                        continue
-                    end
-                    if test "$v" = "$pkgver"
-                        set srcinfo "$f"
-                        set published "$c"
-                        break
-                    end
-                    set seen_pkg "$c"
-                    set seen_ver "$v"
-                end
-                if test -n "$srcinfo"
-                    break
-                end
-            end
-            if test -z "$srcinfo"
-                if test -n "$seen_ver"
-                    ui_error "$pkg_name: refusing to build — pkgver was synced to $pkgver-$pkgrel, but the official packaging repo carries $seen_ver"
-                    echo "  (read from the .SRCINFO of the official $seen_pkg packaging repo; anchoring to another version's checksums would describe different files)"
-                else
-                    ui_error "$pkg_name: refusing to build — pkgver was synced to $pkgver-$pkgrel, and the official Arch packaging repo carries no revision of $pkgbase at that version to anchor the checksums to"
-                end
-                echo "$refuse_manual"
-                command rm -rf -- "$tmp"
-                return 3
-            end
-            srcinfo_sum_map "$srcinfo" >"$map"
-            set -l map_status $status
-            if test $map_status -ne 0; or not test -s "$map"
-                ui_error "$pkg_name: refusing to build — the official .SRCINFO for $published does not line its sources up with its checksums, so it cannot be used as an anchor"
-                echo "$refuse_manual"
-                command rm -rf -- "$tmp"
-                return 3
-            end
-        case aur
-            set srcinfo "$provider_file"
-            if not test -s "$srcinfo"; or test (srcinfo_pkgbase "$srcinfo") != "$provider_id"; or test (srcinfo_pkgbase "$srcinfo") != "$pkgbase"; or test (srcinfo_pkgver "$srcinfo") != "$pkgver"
-                ui_error "$pkg_name: refusing to build — the AUR .SRCINFO for $provider_id does not match pkgbase $pkgbase and pkgver $pkgver"
-                echo "$refuse_manual"
-                command rm -rf -- "$tmp"
-                return 3
-            end
-            if not srcinfo_matches_sources "$srcinfo" "$pkg_path"
-                ui_error "$pkg_name: refusing to build — the AUR .SRCINFO sources for $provider_id do not exactly match the rewritten recipe"
-                echo "$refuse_manual"
-                command rm -rf -- "$tmp"
-                return 3
-            end
-            srcinfo_sum_map "$srcinfo" >"$map"
-            set -l map_status $status
-            if test $map_status -ne 0
-                ui_error "$pkg_name: refusing to build — the AUR .SRCINFO for $provider_id does not line its sources up with its checksums"
-                echo "$refuse_manual"
-                command rm -rf -- "$tmp"
-                return 3
-            end
-        case github
-            set -l tag_file "$tmp/release-tag"
-            github_release_checksum_map "$provider_id" "$pkgver" "$tmp" "$map" "$tag_file"
-            if test $status -ne 0
-                echo "$refuse_manual"
-                command rm -rf -- "$tmp"
-                return 2
-            end
-            set release_tag (cat "$tag_file" 2>/dev/null)
-        case '*'
-            ui_error "$pkg_name: refusing to build — unsupported version sync provider '$provider'"
-            command rm -rf -- "$tmp"
-            return 2
-    end
-
-    # Grade before writing. An entry the provider does not cover cannot be
-    # anchored to a published value, so it follows the loud refresh-only path.
-    # A published digest is still verified after the write; a disagreement
-    # refuses and restores.
-    set -l refresh_only
-    set -l anchor_index 1
-    while test $anchor_index -le (count $anchor_names)
-        set -l fn $anchor_names[$anchor_index]
-        set -l entry $anchor_entries[$anchor_index]
-        if test "$provider" = github
-            set -l asset_name (github_release_asset_name "$entry")
-            if test -z "$asset_name"; or not github_source_matches_release "$entry" "$provider_id" "$release_tag"
-                set -a refresh_only $fn
-            else if not grep -qF -- (printf '%s\t' "$asset_name") "$map"
-                set -a refresh_only $fn
-            end
-        else if not grep -qF -- (printf '%s\t' $fn) "$map"
-            set -a refresh_only $fn
-        end
-        set anchor_index (math $anchor_index + 1)
-    end
-
-    if not cp -- "$pkg_path/PKGBUILD" "$tmp/PKGBUILD.orig"
-        ui_error "$pkg_name: cannot back up $pkg_path/PKGBUILD before refreshing the checksums"
-        command rm -rf -- "$tmp"
-        return 2
-    end
-
-    # Write with makepkg's own updater: it preserves the recipe's formatting and
-    # keeps whatever checksum algorithm the recipe already uses, and it is also
-    # what fetches the sources that step 2 below then verifies.
-    if not pushd "$pkg_path" >/dev/null
-        ui_error "$pkg_name: cannot enter $pkg_path to refresh the checksums"
-        command rm -rf -- "$tmp"
-        return 2
-    end
-    # updpkgsums shells out to makepkg, which refuses to run as root (it exits
-    # 10 before it touches the sums). Root mode therefore drops to the invoking
-    # user for this step too — the recipe tree is theirs, not root's.
-    set -l run_as env
-    if test "$_ROOT_MODE" = "1"
-        set run_as sudo -u "$_BUILD_USER" env HOME=$_BUILD_HOME
-    end
-    $run_as updpkgsums >"$tmp/updpkgsums.log" 2>&1
-    set -l upd_rc $status
-    popd >/dev/null
-    if test "$upd_rc" -ne 0
-        cp --force -- "$tmp/PKGBUILD.orig" "$pkg_path/PKGBUILD"
-        ui_error "$pkg_name: refusing to build — 'updpkgsums' could not refresh the checksums (exit $upd_rc); the recipe was restored"
-        tail -5 "$tmp/updpkgsums.log" 2>/dev/null | sed 's/^/  /'
-        echo "$refuse_manual"
-        command rm -rf -- "$tmp"
-        return 2
-    end
-
-    # Verify the fetched sources against the provider's values. This is the step
-    # that makes the refresh an anchor rather than a rubber stamp, and it is why
-    # the algorithm does not have to match: the published hash is checked
-    # against the artifact, and the artifact is what the recipe's own hash now
-    # describes.
-    # A VCS checkout is hashed the way makepkg hashes it (git archive of the
-    # tag), because there is no file to run sha256sum on.
-    set -l bad
-    # A failure here can be an ABSENCE (source not fetched / VCS checkout
-    # unavailable — the anchor is unverifiable) or a DISAGREEMENT (the fetched
-    # bytes hash differently — a different source). Only disagreements are fatal.
-    set -l environmental_only 1
-    for i in (seq (count $anchor_names))
-        set -l fn $anchor_names[$i]
-        # Refresh-only entries have no published value to compare against —
-        # they were recorded as fetch-only above; only anchored entries are
-        # verified against the selected provider here.
-        if contains -- $fn $refresh_only
-            continue
-        end
-        set -l e $anchor_entries[$i]
-        set -l map_name "$fn"
-        if test "$provider" = github
-            set map_name (github_release_asset_name "$e")
-        end
-        set -l alg (awk -F'\t' -v f="$map_name" '$1==f{print $2}' "$map")
-        set -l want (awk -F'\t' -v f="$map_name" '$1==f{print $3}' "$map")
-        if not contains -- $alg sha256 sha512 md5 b2
-            set -a bad "$fn: $checksum_owner publishes an algorithm this check does not know ('$alg')"
-            set environmental_only 0
-            continue
-        end
-        set -l got ""
-        if source_vcs $e >/dev/null
-            set got (vcs_source_sum "$pkg_path" "$e" "$alg")
-            switch $status
-                case 1
-                    set -a bad "$fn: the VCS checkout was not available to recompute $checksum_owner's $alg against"
-                    continue
-                case 2
-                    set -a bad "$fn: 'git archive' could not reproduce the $alg $checksum_owner publishes for this checkout"
-                    set environmental_only 0
-                    continue
-            end
-        else
-            set -l file ""
-            if test -f "$pkg_path/$fn"
-                set file "$pkg_path/$fn"
-            else if set -q SRCDEST; and test -n "$SRCDEST"; and test -f "$SRCDEST/$fn"
-                set file "$SRCDEST/$fn"
-            end
-            if test -z "$file"
-                set -a bad "$fn: not fetched into the recipe or \$SRCDEST, so $checksum_owner's checksum could not be applied to it"
-                continue
-            end
-            set got (command "$alg"sum "$file" | string replace -r '\s+.*$' '')
-        end
-        if test "$got" != "$want"
-            set -a bad "$fn: $checksum_owner's $alg is $want, the fetched source hashes to $got"
-            set environmental_only 0
-        end
-    end
-    if test (count $bad) -gt 0
-        cp --force -- "$tmp/PKGBUILD.orig" "$pkg_path/PKGBUILD"
-        if test $environmental_only -eq 1
-            # Every entry is an absence, not a disagreement: the anchor could not
-            # be checked because the source never arrived. Owner semantics
-            # (2026-10-03): park when the consumer chain can absorb the wait, else
-            # fall back to a normal build attempt (makepkg fetches and verifies
-            # against the recipe sums itself). Never fail-fast on a reconcilable
-            # fetch hazard.
-            printf '  %s\n' $bad
-            switch (unverifiable_defer_plan (basename "$pkg_path"))
+    set -l waiver_lines
+    for archive in $archives
+        vcs_archive_is_current "$pkg_path" "$archive"
+        set -l freshness_status $status
+        set -a waiver_lines $_FRESHNESS_WAIVER
+        if test $freshness_status -eq 2
+            # rc 2 = freshness cannot be established (transport retries
+            # exhausted inside the query). Owner semantics (2026-10-02): -s may
+            # skip ONLY on verified-unchanged. Unverifiable parks the recipe
+            # ONLY when its consumer chain can absorb the wait (few or no
+            # waiters); else it falls back to a normal build attempt. Never fail.
+            ui_error "$pkg_name: --skip cannot verify upstream VCS freshness: $_VCS_REVISION_ERROR"
+            switch (unverifiable_defer_plan "$package_id")
                 case defer
-                    set -g _DEFER_REASON source-unfetchable
-                    ui_error "$pkg_name: sources absent at anchoring time — consumer chain can absorb the wait — parking this recipe (deferred)"
+                    set -g _DEFER_REASON upstream-unverified
+                    ui_error "$pkg_name: consumer chain can absorb the wait — parking this recipe (deferred)"
                     echo "  Nothing was built or installed; dependents wait (waits-on-deferred)."
-                    command rm -rf -- "$tmp"
-                    return $lane_outcome_defer
+                    set -g _FRESHNESS_VERDICT defer
+                    return 0
                 case '*'
-                    ui_error "$pkg_name: sources absent at anchoring time — consumers cannot wait — falling back to a normal build attempt (makepkg fetches; the official-anchor check is skipped this run)"
+                    ui_error "$pkg_name: consumers cannot wait — falling back to a normal build attempt"
+                    return 0
             end
-            command rm -rf -- "$tmp"
-            return 3
         end
-        if test "$provider" = arch
-            ui_error "$pkg_name: refusing to build — a source does not match the official Arch checksum"
-            printf '  %s\n' $bad
-            echo "  Nothing was built or installed and the recipe was restored. A source that disagrees with Arch's published checksum is a different source, not a stale sum."
-        else
-            ui_error "$pkg_name: refusing to build — a source does not match the $checksum_owner published checksum"
-            printf '  %s\n' $bad
-            echo "  Nothing was built or installed and the recipe was restored. A source that disagrees with $checksum_owner's published checksum is a different source, not a stale sum."
+        if test $freshness_status -ne 0
+            if test $freshness_status -eq 3
+                # A missing/mismatched baseline or a manifest bound to
+                # different archive bytes is state corruption, not routine
+                # rebuild noise — reported even in quiet/piped output.
+                ui_info "$pkg_name: $_VCS_REVISION_ERROR; rebuilding once to record a baseline"
+            else if test "$_BUILD_QUIET" != "1"
+                ui_info "$pkg_name: upstream VCS ref moved; rebuilding"
+            end
+            return 0
         end
-        command rm -rf -- "$tmp"
-        return 4
     end
-
-    # Refresh-only entries: say so, here and at run level. This is what keeps
-    # the refresh from being a silent weakening — the sums describe what the
-    # fetch delivered, so the log names every such entry and what stands behind
-    # it, and the run summary (synced.list → print_synced_notes) carries the
-    # review/commit instruction to the owner.
-    set -l n_refresh (count $refresh_only)
-    set -l n_anchored (math (count $anchor_names) - $n_refresh)
-    if test $n_refresh -gt 0
-        ui_warning "$pkg_name: $authority_phrase $published $pkgver publishes no checksum for (refreshed from the fetch, NOT anchored):"
-        printf '  %s\n' $refresh_only
-        echo "  Attestation: a detached signature is PGP-verified against the anchored payload at build time, a VCS source is pinned by its #tag/#commit, and a plain download is attested by nothing but the fetch (TLS). Review these sums before committing; '--no-sync' builds the committed version as-is."
-    end
-
-    refresh_package_srcinfo "$pkg_path" "the source checksums were updated"
-
-    if test $n_anchored -gt 0
-        ui_info "$pkg_name: checksums re-anchored to $authority_phrase $published $pkgver checksums, and verified against the fetched sources"
-    else
-        ui_info "$pkg_name: checksums refreshed for $pkgver — $authority_phrase $published publishes no checksum for any moved source"
-    end
-    set -l synced_note "$pkg_name: checksums re-anchored to $authority_phrase $published $pkgver"
-    if test $n_refresh -gt 0
-        set synced_note "$pkg_name: checksums refreshed at $pkgver — $n_anchored anchored to $authority_phrase $published, $n_refresh refresh-only (fetch-only sums: review before committing)"
-    end
-    printf '%s\n' "$synced_note" >>"$_STATE_DIR/synced.list" 2>/dev/null
-    command rm -rf -- "$tmp"
+    set -g _FRESHNESS_WAIVER $waiver_lines
+    set -g _FRESHNESS_ARCHIVE $archives
+    set -g _FRESHNESS_VERDICT skip
     return 0
-end
-
-function anchor_sums_from_official -a pkg_path
-    anchor_sums_from_provider "$pkg_path" arch "" "" $argv[2..-1]
 end
 
 # ─── List built package files for a PKGBUILD (all splits, current version) ───
 # Multi-split packages (e.g. linux-firmware) produce several *.pkg.tar.zst —
-# "ls -t | head -1" would install only one split. Filter by the evaluated
-# pkgver-pkgrel so stale packages from previous builds are never installed.
+# "ls -t | head -1" would install only one split. Discovery is current_archives:
+# expected outputs at the evaluated pkgver-pkgrel only, and a partial set
+# prints NOTHING — installing a subset of a split package is exactly the
+# silent-wrong claim this seam refuses. The missing outputs are named on
+# stderr so a command-substitution caller still learns why its list is empty.
+# Damaged discovery additionally records a named refusal row (refuse
+# partial-set / refuse discover-failed) in _GSA_DISCOVER_REFUSALS — install_plan
+# consumes them, so the single-transaction entries refuse a shrunken set
+# instead of installing the evaluable subset (R-F25 + the follow-up row).
 function list_split_pkgs -a pkg_path
-    set -l any_archive (find "$pkg_path" -maxdepth 1 -type f \
-        -name '*.pkg.tar.zst' -print -quit 2>/dev/null)
-    if test -z "$any_archive"
-        return 0
+    set -q _GSA_DISCOVER_REFUSALS; or set -g _GSA_DISCOVER_REFUSALS
+    set -l archives (current_archives "$pkg_path")
+    switch $status
+        case 0
+            printf '%s\n' $archives
+        case 2
+            ui_warning "$(basename "$pkg_path"): built output set is incomplete (missing: "(string join ' ' $_CURRENT_ARCHIVES_MISSING)") — excluded from discovery; rebuild before installing" >&2
+            set -a _GSA_DISCOVER_REFUSALS (plan_row refuse partial-set "$pkg_path" $_CURRENT_ARCHIVES_MISSING)
+        case 3
+            ui_warning "$(basename "$pkg_path"): archive discovery could not be established (pkgver/pkgrel unusable) — excluded from discovery; fix the recipe before installing" >&2
+            set -a _GSA_DISCOVER_REFUSALS (plan_row refuse discover-failed "$pkg_path")
     end
-    set -l metadata (pkgbuild_version "$pkg_path")
-    set -l metadata_status $status
-    if test $metadata_status -ne 0; or test (count $metadata) -ne 2
-        ui_error "$(basename "$pkg_path"): could not evaluate pkgver/pkgrel for archive discovery" >&2
-        return 0
-    end
-    set -l pv (string replace -r '^pkgver=' '' -- "$metadata[1]")
-    set -l pr (string replace -r '^pkgrel=' '' -- "$metadata[2]")
-    # find (not fish globs): an unmatched glob is a FATAL error in fish, and
-    # 2>/dev/null does not suppress it. find -name returns 0 with no matches.
-    # Unknown version metadata cannot prove an archive current; never broaden
-    # discovery to every archive when the version-specific pattern is unknown.
-    if test -z "$pv" -o -z "$pr"
-        return 0
-    end
-    find "$pkg_path" -maxdepth 1 -name "*$pv-$pr-*.pkg.tar.zst" 2>/dev/null | sort
+    return 0
 end
 
 # ─── Workspace-wide built-package helpers ────────────────────────────────────
@@ -3121,8 +1320,10 @@ function install_all
         return 1
     end
     # -ia returns before run_lanes, so check_runtime_prereqs never runs for it.
-    # The PGO gate needs both: tar unrolls the archive, strings reads it.
-    if not require_command tar; or not require_command strings
+    # The PGO gate needs both: tar unrolls the archive, strings reads it;
+    # readelf arms the post-install NEEDED probe (R-F26: a probe that cannot
+    # run must be a preflight refusal, never a silent "clean").
+    if not require_command tar; or not require_command strings; or not require_command readelf
         return 1
     end
     if test "$_ROOT_MODE" != "1"; and not require_command sudo
@@ -3137,22 +1338,45 @@ function install_all
     set -l pkgs (find_built_pkgs)
     if test (count $pkgs) -eq 0
         # Force mode remains a no-op when no archive can be identified at its
-        # PKGBUILD's current evaluated pkgver-pkgrel.
+        # PKGBUILD's current evaluated pkgver-pkgrel — but a DAMAGED recipe is
+        # still enumerated by name here (R-F25): "install everything" must
+        # never shrink without a named omission. The empty-set contract (no
+        # refusal, no transaction) is pinned by tests/install-archive-guard.sh
+        # cases J/K and S3.
+        for row in $_GSA_DISCOVER_REFUSALS
+            set -l fields (plan_row_fields "$row")
+            if test "$fields[2]" = partial-set
+                ui_warning "omitted from the transaction: "(basename "$fields[3]")" — built output set is incomplete (missing: "(string join ' ' $fields[4..-1])")"
+            else
+                ui_warning "omitted from the transaction: "(basename "$fields[3]")" — archive discovery could not be established (pkgver/pkgrel unusable)"
+            end
+        end
+        set -g _GSA_DISCOVER_REFUSALS
         ui_warning "No eligible built packages found."
         return 0
     end
-    ui_heading "Installing "(count $pkgs)" packages"
-    for p in $pkgs
-        echo "  $p"
+    # The plan is computed once and consumed by the executor (silent: the
+    # heading below is the only plan rendering this entry adds). A damaged
+    # discovery refuses the plan rows (R-F25) — the single transaction may
+    # not install the shrunken set.
+    set -l plan (install_plan force $pkgs)
+    set -l plan_status $status
+    if test $plan_status -ne 0; and test (count $plan) -eq 0
+        # F39: a FAILED plan must never render as "nothing to do" (see
+        # install_pkgs_now).
+        set plan (plan_row refuse plan-failed)
+    end
+    if test $plan_status -eq 0
+        ui_heading "Installing "(count $pkgs)" packages"
+        for p in $pkgs
+            echo "  $p"
+        end
     end
     # $pkgs are absolute (find_pkg_dirs → $SCRIPT_DIR) — safe under any cwd.
     if not ensure_state_dirs
         return 1
     end
     set -l install_log "$LOG_DIR/install-all.log"
-    # The plan is computed once and consumed by the executor (silent: the
-    # heading above is the only plan rendering this entry adds).
-    set -l plan (install_plan force $pkgs)
     install_execute "$install_log" loud (count $argv) $argv $plan
 end
 
@@ -3291,6 +1515,14 @@ function srcinfo_pkgnames -a srcinfo
     sed -n 's/^pkgbase = //p; s/^pkgname = //p' "$srcinfo" 2>/dev/null | awk '!seen[$0]++'
 end
 
+# srcinfo_output_names SRCINFO → the pkgname OUTPUTS only (no pkgbase): the
+# names built archives actually carry. A recipe whose pkgbase differs from its
+# outputs must never demand — or bless — an archive named after the pkgbase;
+# srcinfo_pkgnames answers a different question (installed-name probes).
+function srcinfo_output_names -a srcinfo
+    sed -n 's/^pkgname = //p' "$srcinfo" 2>/dev/null | awk '!seen[$0]++'
+end
+
 # srcinfo_provides SRCINFO → every `provides = ` value (all sections).
 function srcinfo_provides -a srcinfo
     sed -n 's/^[[:space:]]*provides[[:space:]]*=[[:space:]]*//p' "$srcinfo" 2>/dev/null
@@ -3318,6 +1550,130 @@ function abi_installed_provides -a name
     return 0
 end
 
+# _abi_provides_chunk NAME... → "NAME|provide-entry" rows for one chunk, or a
+# non-zero status when the batched form is not provably the per-name form.
+# pacman resolves each bare target through provides exactly like the
+# single-name query and prints one record per resolved target IN TARGET ORDER
+# (verified on pacman 7.1: `pacman -Qi -- java-runtime jdk-openjdk` prints the
+# provider's record twice — one record per target, never deduped), so the
+# batch output zips back onto the target list minus the names stderr reports
+# as not found. The zip is only trusted when every piece lines up: only
+# not-found errors on stderr, one record per resolved target, and each record
+# either named for its target or carrying it as a provide — anything else
+# reports divergence and the caller reruns the chunk per name (the exact
+# behaviour this batches).
+function _abi_provides_chunk
+    set -l tmp_root "$TMPDIR"
+    if test -z "$tmp_root"
+        set tmp_root /tmp
+    end
+    set -l work (mktemp -d "$tmp_root/gsa-abi-batch.XXXXXX" 2>/dev/null)
+    test -n "$work"; or return 1
+    LANG=C pacman -Qi -- $argv 2>"$work/err" >"$work/out"
+    set -l awk_rc 0
+    # The record side is first (ARGV[1]) because the standard FNR==NR
+    # two-file trick misfires when the error file is empty.
+    set -l target_str (string join ' ' $argv)
+    awk -v targets="$target_str" '
+        BEGIN { rec = -1; newrec = 1 }
+        FILENAME == ARGV[1] {
+            if ($0 == "") { newrec = 1; next }
+            if (newrec || rec < 0) { rec++; newrec = 0 }
+            if ($0 ~ /^[ \t]*Name[ \t]*:[ \t]*/) {
+                v = $0
+                sub(/^[ \t]*Name[ \t]*:[ \t]*/, "", v)
+                gsub(/^[ \t]+|[ \t]+$/, "", v)
+                rname[rec] = v
+                next
+            }
+            if ($0 ~ /^[ \t]*Provides As[ \t]*:[ \t]*/) {
+                v = $0
+                sub(/^[ \t]*Provides As[ \t]*:[ \t]*/, "", v)
+                gsub(/\t/, " ", v)
+                rprov[rec] = rprov[rec] " " v
+                next
+            }
+            if ($0 ~ /^[ \t]*Provides[ \t]*:[ \t]*/) {
+                v = $0
+                sub(/^[ \t]*Provides[ \t]*:[ \t]*/, "", v)
+                gsub(/\t/, " ", v)
+                rprov[rec] = rprov[rec] " " v
+                next
+            }
+            next
+        }
+        {
+            if ($0 == "") next
+            if ($0 ~ /^error: package .+ was not found$/) {
+                e = $0
+                sub(/^error: package ./, "", e)
+                sub(/. was not found$/, "", e)
+                missed[e] = 1
+                next
+            }
+            bad = 1
+        }
+        END {
+            if (bad) exit 3
+            n = split(targets, T, " ")
+            resolved = 0
+            for (i = 1; i <= n; i++) if (!(T[i] in missed)) resolved++
+            if (rec + 1 != resolved) exit 3
+            ri = 0
+            for (i = 1; i <= n; i++) {
+                t = T[i]
+                if (t in missed) continue
+                ok = (rname[ri] == t)
+                m = split(rprov[ri], p, " ")
+                for (j = 1; j <= m && !ok; j++) {
+                    q = p[j]
+                    sub(/[=<>].*$/, "", q)
+                    gsub(/^[ \t]+|[ \t]+$/, "", q)
+                    if (q == t) ok = 1
+                }
+                if (!ok) exit 3
+                for (j = 1; j <= m; j++) {
+                    if (p[j] == "" || p[j] == "None") continue
+                    print t "|" p[j]
+                }
+                ri++
+            }
+        }' "$work/out" "$work/err"
+    set awk_rc $status
+    command rm -rf -- "$work"
+    return $awk_rc
+end
+
+# abi_installed_provides_batch NAME... → "NAME|provide-entry" rows for every
+# queried name (duplicates collapsed), computed in ONE `pacman -Qi` per
+# 256-name chunk instead of one fork per name — the exposure lint queried 649
+# stock names at ~74 ms per fork (~48 s). Entries are the raw provide strings
+# ('libfoo.so=1-64'), `None` skipped — identical to abi_installed_provides,
+# which stays the per-name primitive (the install/batch paths) and is the
+# fallback whenever a chunk's batch form diverges.
+function abi_installed_provides_batch
+    set -l names (printf '%s\n' $argv 2>/dev/null | awk '!seen[$0]++')
+    set -l total (count $names)
+    set -l first 1
+    while test $first -le $total
+        set -l last (math $first + 255)
+        test $last -gt $total; and set last $total
+        set -l chunk $names[$first..$last]
+        set -l rows (_abi_provides_chunk $chunk)
+        if test $status -ne 0
+            set rows
+            for name in $chunk
+                for value in (abi_installed_provides "$name")
+                    set -a rows "$name|$value"
+                end
+            end
+        end
+        test (count $rows) -gt 0; and printf '%s\n' $rows
+        set first (math $last + 1)
+    end
+    return 0
+end
+
 # abi_pkg_installed ID → 0 when any output of the workspace package is
 # installed (the batch gate's "nothing to protect" rule reads this).
 function abi_pkg_installed -a id
@@ -3341,39 +1697,46 @@ end
 # abi_consumer_closure). One sorted pass, then one awk join — never a nested
 # fish loop over every pair.
 function abi_name_edges
-    set -l rows
-    for entry in $_PACKAGE_MAP
-        set -l fields (string split '|' -- "$entry")
-        set -l id $fields[1]
-        set -l srcinfo "$SCRIPT_DIR/$fields[2]/.SRCINFO"
-        test -f "$srcinfo"; or continue
-        for name in (sed -n 's/^pkgbase = //p; s/^pkgname = //p' "$srcinfo" 2>/dev/null)
-            test -n "$name"; and set -a rows "S|$name|$id"
+    # ONE shared .SRCINFO parse (srcinfo_rows) replaces the six sed forks per
+    # recipe (names, provides, four dep fields) and the O(n²) row list: the
+    # walk prints rows straight into the same sort | join pipeline as before.
+    # The first awk applies abi_provide_name's exact rule (strip from the first
+    # `[=<>]`, trim; a dep value also drops any `: description` first, then
+    # trims) and keeps the empty-name drop. Row order is output-invisible: the
+    # sort keys on the name (whole line breaks ties) and the join emits a set
+    # per name group.
+    for row in (srcinfo_rows)
+        set -l parts (string split -m 3 '|' -- "$row")
+        switch $parts[1]
+            case B N
+                test -n "$parts[3]"; and printf 'S|%s|%s\n' "$parts[3]" "$parts[2]"
+            case P
+                printf 'P|%s|%s\n' "$parts[4]" "$parts[2]"
+            case D
+                printf 'A|%s|%s\n' "$parts[4]" "$parts[2]"
         end
-        for value in (srcinfo_provides "$srcinfo")
-            set -l name (abi_provide_name "$value")
-            test -n "$name"; and set -a rows "S|$name|$id"
-        end
-        for field in depends makedepends optdepends checkdepends
-            for value in (sed -n "s/^[[:space:]]*$field = //p" "$srcinfo" 2>/dev/null)
-                set -l v (string split -m 1 ':' -- "$value")[1]
-                set -l name (abi_provide_name (string trim -- "$v"))
-                test -n "$name"; and set -a rows "A|$name|$id"
-            end
-        end
-    end
-    if test (count $rows) -gt 0
-        printf '%s\n' $rows | sort -t '|' -k 2,2 | awk -F'|' '
-            function flush(   s, a) {
-                for (s in prov) for (a in cons) if (prov[s] != cons[a]) print prov[s] "|" cons[a]
-                delete prov
-                delete cons
-            }
-            $2 != last { flush(); last = $2 }
-            { if ($1 == "S") prov[$3] = $3; else cons[$3] = $3 }
-            END { flush() }
-        '
-    end
+    end | awk -F'|' '
+        function norm(x) {
+            sub(/[=<>].*$/, "", x)
+            gsub(/^[ \t\r\n\f\v]+|[ \t\r\n\f\v]+$/, "", x)
+            return x
+        }
+        $1 == "S" { if ($2 != "") print "S|" $2 "|" $3; next }
+        $1 == "P" { n = norm($2); if (n != "") print "S|" n "|" $3; next }
+        { v = $2; sub(/:.*/, "", v)
+          gsub(/^[ \t\r\n\f\v]+|[ \t\r\n\f\v]+$/, "", v)
+          n = norm(v)
+          if (n != "") print "A|" n "|" $3 }
+    ' | sort -t '|' -k 2,2 | awk -F'|' '
+        function flush(   s, a) {
+            for (s in prov) for (a in cons) if (prov[s] != cons[a]) print prov[s] "|" cons[a]
+            delete prov
+            delete cons
+        }
+        $2 != last { flush(); last = $2 }
+        { if ($1 == "S") prov[$3] = $3; else cons[$3] = $3 }
+        END { flush() }
+    '
     return 0
 end
 
@@ -3448,16 +1811,9 @@ end
 # .SRCINFO outputs NAME (used to find a consumer closure from an archive's
 # own .PKGINFO — never from the path spelling the caller happened to pass).
 function abi_package_id_for_pkgname -a name
-    for entry in $_PACKAGE_MAP
-        set -l fields (string split '|' -- "$entry")
-        set -l srcinfo "$SCRIPT_DIR/$fields[2]/.SRCINFO"
-        test -f "$srcinfo"; or continue
-        if srcinfo_pkgnames "$srcinfo" | grep -Fxq -- "$name"
-            printf '%s\n' "$fields[1]"
-            return 0
-        end
-    end
-    return 1
+    # D-F4: answers from the ONE name surface (_pkgname_index), not a private
+    # per-recipe scan — a name resolves to the same recipe everywhere.
+    _pkgname_owner "$name"
 end
 
 # archive_pkginfo ARCHIVE → the archive's .PKGINFO content (empty when the
@@ -3498,7 +1854,8 @@ end
 # pkgname matches no workspace recipe are vacuously covered (no in-tree
 # closure to open).
 #
-# Row shapes (fields space-separated, mirroring pgo_payload_refusals):
+# Row shapes (tab-framed through the plan_row codec, mirroring
+# pgo_payload_refusals):
 #   refuse abi-soname <archive> <pkgname> <provide-name> <installed-ver> <built-ver>
 #   refuse abi-consumer <archive> <consumer>
 # (<built-ver> is '-' when the provide disappears entirely.) Returns 0 for
@@ -3551,9 +1908,9 @@ function abi_provide_refusals
                 test (count $bp) -ge 2; and set built_ver "$bp[2]"
             end
             if test $matched -eq 0
-                set -a archive_rows "refuse abi-soname $archive $pkgname $name $inst_ver -"
+                set -a archive_rows (plan_row refuse abi-soname "$archive" "$pkgname" "$name" "$inst_ver" -)
             else if test "$built_ver" != "$inst_ver"
-                set -a archive_rows "refuse abi-soname $archive $pkgname $name $inst_ver $built_ver"
+                set -a archive_rows (plan_row refuse abi-soname "$archive" "$pkgname" "$name" "$inst_ver" "$built_ver")
             end
         end
         test (count $archive_rows) -gt 0; or continue
@@ -3583,7 +1940,7 @@ function abi_provide_refusals
         test (count $open) -gt 0; or continue
         set -a rows $archive_rows
         for member in $open
-            set -a rows "refuse abi-consumer $archive $member"
+            set -a rows (plan_row refuse abi-consumer "$archive" "$member")
         end
     end
     if test (count $rows) -gt 0
@@ -3607,16 +1964,29 @@ end
 # verifies the outputs it can read (a tar failure here is environmental; the
 # abort condition is an unresolved NEEDED name, never a missing tool).
 #
-# Row shape: probe-needed <archive> <member> <soname>
+# Row shapes (tab-framed through plan_row, like every install-plan row):
+#   probe-needed <archive> <member> <soname>   (one per unresolved soname)
+#   probe-skipped <reason>                     (the probe could not run at all)
+# Return: 0 clean, 1 unresolved rows (fatal), 2 skipped (named non-fatal
+# warning — the probe never converts "cannot probe" into "clean", R-F26).
 function install_needed_probe
-    command -q tar; or return 0
-    command -q readelf; or return 0
+    if not command -q tar
+        plan_row probe-skipped "tar is not available"
+        return 2
+    end
+    if not command -q readelf
+        plan_row probe-skipped "readelf is not available"
+        return 2
+    end
     set -l tmp_root "$TMPDIR"
     if test -z "$tmp_root"
         set tmp_root /tmp
     end
     set -l work (mktemp -d "$tmp_root/gsa-abi-probe.XXXXXX" 2>/dev/null)
-    test -n "$work"; or return 0
+    if test -z "$work"
+        plan_row probe-skipped "cannot create a temp dir to probe"
+        return 2
+    end
     # (a) the newly installed provides, straight from the transaction's
     # .PKGINFO files (makepkg's auto-versioned soname forms).
     set -l provides
@@ -3668,371 +2038,14 @@ function install_needed_probe
                     end
                 end
                 test $resolved -eq 1; and continue
-                set -a rows "probe-needed $archive $rel $soname"
+                set -a rows (plan_row probe-needed "$archive" "$rel" "$soname")
             end
         end
     end
-    rm -rf -- "$work"
+    command rm -rf -- "$work"
     if test (count $rows) -gt 0
         printf '%s\n' $rows | awk '!seen[$0]++'
         return 1
-    end
-    return 0
-end
-
-# ─── Layer 1 + 5: the ABI audit lints (report-only everywhere) ──────────────
-# audit_lint_abi_closure (layer 1) and audit_lint_abi_exposure (layer 5) join
-# the recipe-contract lints: rendered in --audit's report, individually
-# runnable through the hidden --audit-lint seam. Findings never change an exit
-# status — the gating is fixtures + the install/batch layers above.
-
-# Layer 1: the closure lint over WORKSPACE-BUILT OUTPUTS (the archives beside
-# each recipe — the only place the shipped ELF surface is real). Two rules:
-#   ship    every DT_SONAME an output ships needs a bare soname provide in
-#           its recipe's committed .SRCINFO;
-#   needed  every DT_NEEDED of an output resolves to (a) a workspace provide,
-#           (b) an expected base-system soname, or (c) an exclusions entry.
-# Findings name the provider/consumer pair. Without built outputs the lint
-# reports `skipped` (nothing shipped can be probed on a clean checkout).
-function audit_lint_abi_closure
-    for tool in tar readelf
-        if not command -q $tool
-            echo "abi-closure: skipped — $tool is not available"
-            return 0
-        end
-    end
-    set -l tmp_root "$TMPDIR"
-    if test -z "$tmp_root"
-        set tmp_root /tmp
-    end
-    set -l work (mktemp -d "$tmp_root/gsa-abi-closure.XXXXXX" 2>/dev/null)
-    if test -z "$work"
-        echo "abi-closure: skipped — cannot create a temp dir to probe built outputs"
-        return 0
-    end
-    set -l declared # id|provide-entry
-    set -l shipped # id|member|soname
-    set -l needed # id|member|soname
-    set -l outputs 0
-    for entry in $_PACKAGE_MAP
-        set -l fields (string split '|' -- "$entry")
-        set -l id $fields[1]
-        set -l recipe "$SCRIPT_DIR/$fields[2]"
-        if test -f "$recipe/.SRCINFO"
-            for value in (srcinfo_provides "$recipe/.SRCINFO")
-                set -a declared "$id|$value"
-            end
-        end
-        set -l n 0
-        for archive in (list_split_pkgs "$recipe")
-            set n (math $n + 1)
-            set outputs (math $outputs + 1)
-            set -l dest "$work/$id-$n"
-            mkdir -p "$dest"
-            if not tar -xf "$archive" -C "$dest" 2>/dev/null
-                set -a shipped "$id|(unreadable)|(unreadable)"
-                continue
-            end
-            # ONE readelf per bounded path batch instead of one process per
-            # member (35k processes at 653-record scale — the single largest
-            # --audit cost). The batch caps argv below the OS limit: one
-            # archive's file list alone (a bundled python venv) is 4MB of
-            # paths. Batch output is split back into per-file chunks at its
-            # "File: " headers and each chunk feeds the SAME SONAME/NEEDED
-            # seds as before; a non-ELF member prints no header and is skipped
-            # exactly like the old per-file count guard. A sentinel header
-            # flushes the last real chunk.
-            set -l files (find "$dest" -type f 2>/dev/null)
-            set -l batch
-            set -l nfiles (count $files)
-            set -l f0 1
-            while test $f0 -le $nfiles
-                set -l f1 (math $f0 + 255)
-                test $f1 -gt $nfiles; and set f1 $nfiles
-                set -a batch (readelf -dW $files[$f0..$f1] 2>/dev/null)
-                set f0 (math $f1 + 1)
-            end
-            set -a batch "File: "
-            set -l chunk_rel ""
-            set -l chunk
-            for raw in $batch
-                if string match -q 'File: *' -- "$raw"
-                    if test -n "$chunk_rel"
-                        set -l rel (string replace "$dest/" '' -- "$chunk_rel")
-                        # Same extractions as the old per-file
-                        # `printf | sed -n 's/^.*SONAME.*\[\(.*\)\]$/\1/p'`
-                        # (and the NEEDED twin) — same patterns, same
-                        # one-value-per-line result — but in-process: a pipe +
-                        # sed fork per member cost more than the readelf scan
-                        # itself at 33k members. The glob precheck is the sed
-                        # pattern's ".*SONAME.*" half; empty captures drop out
-                        # of the substitution exactly like sed's empty line.
-                        for line in $chunk
-                            if string match -q '*SONAME*' -- "$line"
-                                set -l m (string match -r -g '^.*SONAME.*\[(.*)\]$' -- "$line")
-                                test (count $m) -ge 1; and set -a shipped "$id|$rel|$m[1]"
-                            end
-                            if string match -q '*NEEDED*' -- "$line"
-                                set -l m (string match -r -g '^.*NEEDED.*\[(.*)\]$' -- "$line")
-                                test (count $m) -ge 1; and set -a needed "$id|$rel|$m[1]"
-                            end
-                        end
-                    end
-                    set chunk_rel (string replace -r '^File: ' '' -- "$raw")
-                    set chunk
-                else if test -n "$chunk_rel"
-                    set -a chunk "$raw"
-                end
-            end
-        end
-    end
-    set -l findings
-    if test $outputs -eq 0
-        rm -rf -- "$work"
-        echo "abi-closure: skipped — no workspace-built outputs (build the recipes to enable the closure probe)"
-        return 0
-    end
-    # Provide-name index over $declared. Both rules below can only cover a
-    # soname with an entry whose NAME equals the soname or its bare stem
-    # (see abi_provide_covers), so the old scan over every declared row per
-    # shipped/needed row — 843k covers calls at 653-record scale — becomes one
-    # name test per row plus a covers call on candidates alone. Rows keep
-    # their declared order, which is the order provider/mismatch assembly
-    # below depends on.
-    set -l decl_id
-    set -l decl_value
-    set -l decl_name
-    for d in $declared
-        set -l dp (string split -m 1 '|' -- "$d")
-        set -l pp (string split -m 1 '=' -- "$dp[2]")
-        set -a decl_id "$dp[1]"
-        set -a decl_value "$dp[2]"
-        set -a decl_name (string trim -- "$pp[1]")
-    end
-    set -l decl_idx (seq (count $decl_id))
-    # Rule ship: a shipped DT_SONAME needs its bare soname provide.
-    for row in $shipped
-        set -l parts (string split '|' -- "$row")
-        set -l id $parts[1]
-        set -l member $parts[2]
-        set -l soname $parts[3]
-        abi_excluded "$id"; and continue
-        if test "$soname" = "(unreadable)"
-            set -a findings "abi-closure: $id: cannot extract $member — built outputs not probed"
-            continue
-        end
-        set -l stem (_lint_soname_stem "$soname")
-        test (count $stem) -ge 1; or continue
-        set -l covered 0
-        for j in $decl_idx
-            test "$decl_id[$j]" = "$id"; or continue
-            test "$decl_name[$j]" = "$soname"; or test "$decl_name[$j]" = "$stem"; or continue
-            if abi_provide_covers "$decl_value[$j]" "$soname"
-                set covered 1
-                break
-            end
-        end
-        test $covered -eq 1; and continue
-        set -a findings "abi-closure: provider $id: ships $member with soname '$soname' but declares no bare soname provide '$stem' — declare provides=('$stem') and let makepkg auto-version it"
-    end
-    # Rule needed: every DT_NEEDED resolves to (a), (b) or (c).
-    for row in $needed
-        set -l parts (string split '|' -- "$row")
-        set -l id $parts[1]
-        set -l member $parts[2]
-        set -l soname $parts[3]
-        abi_excluded "$id"; and continue
-        abi_base_lib_ok "$soname"; and continue
-        abi_excluded "$soname"; and continue
-        set -l stem (_lint_soname_stem "$soname")
-        set -l providers
-        set -l resolved 0
-        set -l mismatch
-        for j in $decl_idx
-            test "$decl_name[$j]" = "$soname"; or test "$decl_name[$j]" = "$stem"; or continue
-            abi_provide_covers "$decl_value[$j]" "$soname"; or continue
-            contains -- "$decl_id[$j]" $providers; and continue
-            set -a providers "$decl_id[$j]"
-        end
-        for pid in $providers
-            set -l has_outputs 0
-            set -l ships 0
-            set -l shipped_names
-            for s in $shipped
-                set -l sp (string split '|' -- "$s")
-                test "$sp[1]" = "$pid"; or continue
-                set has_outputs 1
-                if test "$sp[3]" = "$soname"
-                    set ships 1
-                end
-                set -l sstem (_lint_soname_stem "$sp[3]")
-                if test (count $sstem) -ge 1
-                    set -l wstem (_lint_soname_stem "$soname")
-                    if test (count $wstem) -ge 1; and test "$sstem[1]" = "$wstem[1]"
-                        set -a shipped_names "$sp[3]"
-                    end
-                end
-            end
-            if test $ships -eq 1; or test $has_outputs -eq 0
-                set resolved 1
-                break
-            end
-            set -a mismatch "$pid: "(string join ', ' $shipped_names)
-        end
-        test $resolved -eq 1; and continue
-        if test (count $providers) -gt 0
-            set -a findings "abi-closure: consumer $id ($member) needs '$soname' but provider "(string join ' / ' $mismatch)" — the provider/consumer pair must move in one batch"
-        else
-            set -a findings "abi-closure: consumer $id ($member) needs '$soname' — no workspace provider declares it, it is not an expected base-system lib, and no config/abi-exclusions.conf entry covers it"
-        end
-    end
-    rm -rf -- "$work"
-    if test (count $findings) -gt 0
-        printf '%s\n' $findings | sort -u
-    end
-    return 0
-end
-
-# Layer 5: the exposure audit. For every workspace lib whose soname provides
-# (committed .SRCINFO bare stems) differ from the installed stock equivalent
-# (abi_installed_provides of abi_stock_name — the installed database answer
-# for the stock name), report the provider → exposed-consumer mapping: one
-# row per drifted provide per installed consumer whose Depends On reaches the
-# drift (the drifted soname name or the stock name), `-> none` when nothing
-# installed depends on it. Report-only: the mapping tells the maintainer who
-# is exposed when the swap lands; the batch/install layers above do the
-# gating.
-function audit_lint_abi_exposure
-    if not command -q pacman
-        echo "abi-exposure: skipped — pacman is not available"
-        return 0
-    end
-    # The exposure side: every installed package's Depends On (full dump,
-    # field-tracked so wrapped continuations stay with their field).
-    set -l dep_names # consumer|dep-name
-    set -l inst_names
-    set -l cur_name ""
-    set -l cur_field ""
-    for line in (LANG=C pacman -Qi 2>/dev/null)
-        set -l h (string match -r -g '^[[:space:]]*([A-Za-z][A-Za-z ]*)[[:space:]]*:[[:space:]]*(.*)$' -- "$line")
-        if test (count $h) -ge 2
-            set cur_field (string trim -- "$h[1]")
-            switch "$cur_field"
-                case Name
-                    set cur_name (string trim -- "$h[2]")
-                    set -a inst_names "$cur_name"
-                case 'Depends On'
-                    for value in (string split -n ' ' -- (string replace -a \t ' ' -- $h[2]))
-                        test "$value" = None; and continue
-                        test -n "$cur_name"; and set -a dep_names "$cur_name|"(abi_provide_name "$value")
-                    end
-            end
-            continue
-        end
-        if test "$cur_field" = 'Depends On'
-            for value in (string split -n ' ' -- (string replace -a \t ' ' -- (string trim -- "$line")))
-                test -n "$cur_name"; and test -n "$value"; and set -a dep_names "$cur_name|"(abi_provide_name "$value")
-            end
-        end
-    end
-    # The candidate scans below guard on this flag instead of re-counting
-    # $dep_names per drift row (fish marshals every element into `count` —
-    # 10k+ arguments, 1225 drift rows).
-    set -l have_dep_names 0
-    test (count $dep_names) -gt 0; and set have_dep_names 1
-    set -l findings
-    set -l compared 0
-    for entry in $_PACKAGE_MAP
-        set -l fields (string split '|' -- "$entry")
-        set -l id $fields[1]
-        abi_excluded "$id"; and continue
-        set -l srcinfo "$SCRIPT_DIR/$fields[2]/.SRCINFO"
-        test -f "$srcinfo"; or continue
-        set -l house_values (srcinfo_provides "$srcinfo")
-        set -l house (abi_soname_stems $house_values)
-        test (count $house) -gt 0; or continue
-        set -l names (srcinfo_pkgnames "$srcinfo")
-        test (count $names) -gt 0; or set names $id
-        set -l installed_rows # stock|entry
-        for name in $names
-            set -l stock (abi_stock_name "$name")
-            for value in (abi_installed_provides "$stock")
-                set -a installed_rows "$stock|$value"
-            end
-        end
-        test (count $installed_rows) -gt 0; or continue
-        set compared 1
-        # Drift rows: stock-only (the workspace recipe drops what the stock
-        # surface carries) and house-only (it adds what the stock does not).
-        set -l drifts # stock|entry|stock-only-or-house-only|drift-name
-        for row in $installed_rows
-            set -l rp (string split -m 1 '|' -- "$row")
-            set -l stem (abi_soname_stems "$rp[2]")
-            test (count $stem) -ge 1; or continue
-            contains -- "$stem[1]" $house; and continue
-            set -a drifts "$rp[1]|$rp[2]|stock-only|"(abi_provide_name "$rp[2]")
-        end
-        for value in $house_values
-            set -l stem (abi_soname_stems "$value")
-            test (count $stem) -ge 1; or continue
-            set -l installed_all
-            for row in $installed_rows
-                set -l rp (string split -m 1 '|' -- "$row")
-                set -a installed_all (abi_soname_stems "$rp[2]")
-            end
-            contains -- "$stem[1]" $installed_all; and continue
-            set -l stock_name (string split -m 1 '|' -- $installed_rows[1])[1]
-            set -a drifts "$stock_name|$value|house-only|"(abi_provide_name "$value")
-        end
-        test (count $drifts) -gt 0; or continue
-        for row in $drifts
-            set -l rp (string split '|' -- "$row")
-            set -l stock "$rp[1]"
-            set -l entry_value "$rp[2]"
-            set -l kind "$rp[3]"
-            set -l drift_name "$rp[4]"
-            set -l exposed
-            # Candidate scan: two C-speed literal substring matches per drift
-            # row replace the interpreted walk over every installed Depends
-            # On pair (quadratic on a real 1700-package database); the exact
-            # filter in the loop below keeps the semantics byte-identical.
-            # The count guard matters: `string match` with no input arguments
-            # would read stdin.
-            set -l candidates
-            if test $have_dep_names -eq 1
-                set candidates (string match -e -- "|$drift_name" $dep_names) \
-                    (string match -e -- "|$stock" $dep_names)
-            end
-            for d in $candidates
-                set -l dp (string split -m 1 '|' -- "$d")
-                # Same three ANDed conditions as before, cheapest first: the
-                # substring prefilter above is a superset (it matches every
-                # exact name), so most candidates die on the exact test and
-                # never reach the regex-bearing abi_excluded.
-                if test "$dp[2]" = "$drift_name"; or test "$dp[2]" = "$stock"
-                    contains -- "$dp[1]" $names; and continue
-                    abi_excluded "$dp[1]"; and continue
-                    contains -- "$dp[1]" $exposed; or set -a exposed "$dp[1]"
-                end
-            end
-            if test (count $exposed) -eq 0
-                set exposed none
-            end
-            for consumer in $exposed
-                if test "$kind" = stock-only
-                    set -a findings "exposure: $id -> $consumer: stock $stock carries '$entry_value' but $id drops it"
-                else
-                    set -a findings "exposure: $id -> $consumer: $id carries '$entry_value' that stock $stock does not"
-                end
-            end
-        end
-    end
-    if test $compared -eq 0
-        echo "abi-exposure: skipped — no workspace lib has an installed stock equivalent to compare against"
-        return 0
-    end
-    if test (count $findings) -gt 0
-        printf '%s\n' $findings | sort -u
     end
     return 0
 end
@@ -4074,9 +2087,9 @@ end
 #
 # This is the DECISION half: it emits install-plan rows and stays silent —
 # install_execute renders the refusal messages from these rows, and the
-# --install-decide fixture seam prints them verbatim. Row shapes (fields are
-# space-separated; a member name containing a space would truncate its row,
-# which still refuses correctly):
+# --install-decide fixture seam prints them verbatim. Row shapes (tab-framed
+# through the plan_row codec, so a member name containing a space survives
+# the consumer):
 #   refuse pgo-temp <archive>
 #   refuse pgo-unreadable <archive> <tar-rc> <extracted-files>
 #   refuse pgo-hit <archive> <member>          (one per offending member)
@@ -4097,7 +2110,7 @@ function pgo_payload_refusals
         end
         set -l work (mktemp -d "$tmp_root/gsa-pgo-verify.XXXXXX" 2>/dev/null)
         if test -z "$work"
-            echo "refuse pgo-temp $archive"
+            plan_row refuse pgo-temp "$archive"
             set failed 1
             continue
         end
@@ -4110,8 +2123,8 @@ function pgo_payload_refusals
         set -l tar_rc $status
         set -l extracted (count (find "$work" -type f 2>/dev/null))
         if test "$tar_rc" -ne 0; or test "$extracted" -eq 0
-            rm -rf -- "$work"
-            echo "refuse pgo-unreadable $archive $tar_rc $extracted"
+            command rm -rf -- "$work"
+            plan_row refuse pgo-unreadable "$archive" "$tar_rc" "$extracted"
             set failed 1
             continue
         end
@@ -4121,12 +2134,12 @@ function pgo_payload_refusals
         set -l hits (cd "$work"; and find . -type f -exec strings -a -f {} + 2>/dev/null \
             | grep -E '^[^:]+: /[^[:space:]/*][^[:space:]]*\.(gcda|profraw)' \
             | cut -d: -f1 | sort -u)
-        rm -rf -- "$work"
+        command rm -rf -- "$work"
         if test (count $hits) -gt 0
             for hit in $hits
-                echo "refuse pgo-hit $archive $hit"
+                plan_row refuse pgo-hit "$archive" "$hit"
             end
-            echo "refuse pgo-instrumented $archive"
+            plan_row refuse pgo-instrumented "$archive"
             set failed 1
         end
     end
@@ -4173,17 +2186,23 @@ function run_pacman_locked -a log_file
     set -l rc $status
     if test "$rc" -eq 75
         printf '%s\n' "$_UI_ICON_ERROR builder pacman mutex timed out after $_PACMAN_MUTEX_WAIT seconds" >&2
+        # mutex-timeout is its own failure shape: the BUILDER's queue outlived
+        # the wait. It says nothing about the system db.lck or the local db,
+        # so no lock/db probe runs on rc 75 (2026-10-04) — and the named line
+        # above is what the run record keys `mutex-timeout` off.
+        return $rc
     end
     if test "$rc" -ne 0
         # Lock-failure path (install_pkgs_now and -ia funnel through here): a
-        # failed pacman commonly means db.lck — report holders, or clear a
-        # provably stale lock so the NEXT attempt can proceed (2026-09-23:
-        # six runs died on "could not lock database: File exists").
+        # failed pacman commonly means db.lck (2026-09-23: six runs died on
+        # "could not lock database: File exists") — REPORT-ONLY since
+        # 2026-10-04: the probe names holders and the operator command, and
+        # never deletes anything.
         check_pacman_lock (pacman_db_lock_path)
         # The other failure this path actually sees is pacman's misleading
         # "invalid or corrupted package", which is the LOCAL db, not the
-        # archive (2026-09-24 vscodium): probe/repair the broken entry right
-        # here so the retry or the next run can succeed.
+        # archive (2026-09-24 vscodium): report the broken entry and its
+        # operator repair command right here. Also report-only.
         check_pacman_db_health (pacman_db_local_path)
     end
     return $rc
@@ -4193,8 +2212,11 @@ end
 # flock (run_pacman in /usr/bin/makepkg: `PACMAN=${PACMAN:-pacman}` ~line
 # 1203, resolved as PACMAN_PATH=$(type -P $PACMAN) for both -T probes and -S
 # installs — verified 2026-09-23). Six dep-pacmans raced the builder's
-# `pacman -U` at 19:33:58 that day. The shim pins those calls to the SAME
-# mutex run_pacman_locked uses. No deadlock: run_pacman_locked is a leaf
+# `pacman -U` at 19:33:58 that day. The shim pins the MUTATING calls to the
+# SAME mutex run_pacman_locked uses; read-only queries (-Q/-T and -S lookups)
+# run unlocked — they take no alpm lock, so queueing them behind a
+# transaction only manufactures rc-75 timeouts on a healthy run (2026-10-04).
+# No deadlock: run_pacman_locked is a leaf
 # (flock → /usr/bin/pacman directly, never re-entering makepkg), so the lock
 # order cannot cycle. On flock timeout rc=75 propagates as a loud dep-install
 # failure — the accepted outcome.
@@ -4204,26 +2226,29 @@ function ensure_pacman_shim
     end
     set -l shim "$LOG_DIR/.pacman-shim"
     set -l tmp "$shim.tmp.$fish_pid"
-    # %d → _PACMAN_MUTEX_WAIT; mutex path baked absolute; "$@" is literal sh.
-    if not printf '#!/bin/sh\n# build-all.fish: makepkg -s dep installs must share the builder mutex.\nexec flock -x -w %d %s /usr/bin/pacman "$@"\n' \
-            "$_PACMAN_MUTEX_WAIT" "$_PACMAN_MUTEX" >"$tmp"
-        rm -f -- "$tmp"
+    # %d,%d → _PACMAN_MUTEX_WAIT (flock wait + timeout message); the mutex path
+    # is baked as a shell-QUOTED literal — GSA_STATE_DIR is user-controlled and
+    # an unquoted path word-splits or injects into this build-user script.
+    set -l mutex_lit "'"(string replace -a "'" "'\\''" -- "$_PACMAN_MUTEX")"'"
+    if not printf '#!/bin/sh\n# build-all.fish: makepkg -s dep installs must share the builder mutex.\n# Transactions queue on the mutex; read-only queries run unlocked (2026-10-04).\nP=/usr/bin/pacman\nq=\nt=\nfor a in "$@"; do\n    case $a in\n        -Q*|-T|-Ss|-Si|-Sg|-Sl|-Sp|--query|--deptest) q=1 ;;\n        -S*|-U*|-R*|-D*|-F*|--sync|--remove|--upgrade|--database|--files) t=1 ;;\n    esac\ndone\nif [ -n "$q" ] && [ -z "$t" ]; then\n    exec "$P" "$@"\nfi\nflock -x -w %d %s "$P" "$@"\nrc=$?\nif [ "$rc" -eq 75 ]; then\n    echo "builder pacman mutex timed out after %d seconds" >&2\nfi\nexit "$rc"\n' \
+            "$_PACMAN_MUTEX_WAIT" "$mutex_lit" "$_PACMAN_MUTEX_WAIT" >"$tmp"
+        command rm -f -- "$tmp"
         return 1
     end
     if not chmod 755 "$tmp"
-        rm -f -- "$tmp"
+        command rm -f -- "$tmp"
         return 1
     end
     # Write-time ownership: publish the shim as the build user (the exec'ing
     # makepkg runs as them; a SIGKILL between here and mv only strands a
     # .tmp file, never a root-owned shim — the next run replaces it by rename).
     if test "$_ROOT_MODE" = "1"; and not chown "$_BUILD_USER": "$tmp" 2>/dev/null
-        rm -f -- "$tmp"
+        command rm -f -- "$tmp"
         return 1
     end
     # Atomic replace: a lane already executing the old inode keeps running.
     if not mv -f -- "$tmp" "$shim"
-        rm -f -- "$tmp"
+        command rm -f -- "$tmp"
         return 1
     end
     return 0
@@ -4246,7 +2271,7 @@ function cleanup_pkgs
     end
     set -l targets $pkgs $manifests
     echo "Removing "(count $pkgs)" package archives ("$size") and "(count $manifests)" VCS revision records"
-    if not rm -v -- $targets
+    if not command rm -v -- $targets
         ui_error "failed to remove one or more package archives"
         return 1
     end
@@ -4274,6 +2299,7 @@ function nuclear_cleanup
     end
     set -l all_targets
     set -l all_skipped
+    set -l all_eval_failures
 
     for d in (find_pkg_dirs)
         set -l pkg_targets
@@ -4289,8 +2315,14 @@ function nuclear_cleanup
             end
         end
 
-        # Sources as makepkg sees them
-        set -l sources (bash -c "source '$d/PKGBUILD' 2>/dev/null && printf '%s\n' \"\${source[@]}\"" 2>/dev/null)
+        # Sources as makepkg sees them. A recipe that cannot be EVALUATED is
+        # named and counted, never folded into "no sources": -ccc must not
+        # report a clean scan over recipes it never read (2026-10-05).
+        set -l sources (pkgbuild_array_checked "$d" source)
+        if test $status -ne 0
+            ui_error "$d/PKGBUILD cannot be evaluated — its sources were NOT scanned"
+            set -a all_eval_failures "$d/PKGBUILD"
+        end
         for s in $sources
             set -l name ""
             set -l url "$s"
@@ -4386,10 +2418,11 @@ function nuclear_cleanup
     if test (count $all_targets) -eq 0
         if test (count $all_skipped) -eq 0
             echo "Nothing to clean — no pulled sources found."
-            return 0
+        else
+            echo "Nothing to delete — all found sources are preserved symlinks."
         end
-        echo "Nothing to delete — all found sources are preserved symlinks."
-        return 0
+        report_pkgbuild_eval_failures $all_eval_failures
+        return $status
     end
 
     set -l total (du -sch $all_targets 2>/dev/null | tail -1 | cut -f1)
@@ -4402,14 +2435,15 @@ function nuclear_cleanup
     read -P "Proceed? [y/N] " -l answer
     if not string match -qi 'y*' -- "$answer"
         echo "Aborted — nothing deleted."
-        return 0
+        report_pkgbuild_eval_failures $all_eval_failures
+        return $status
     end
 
     for t in $all_targets
         # Safety net: never touch anything outside the workspace
         if string match -q "$SCRIPT_DIR/*" -- "$t"
             if test "$_ROOT_MODE" = "1"
-                if not rm -rf -- "$t"
+                if not command rm -rf -- "$t"
                     ui_error "failed to remove cleanup target: $t"
                     return 1
                 end
@@ -4421,999 +2455,10 @@ function nuclear_cleanup
             ui_warning "skipped cleanup target outside workspace: $t"
         end
     end
+    if not report_pkgbuild_eval_failures $all_eval_failures
+        return 1
+    end
     ui_success "Nuclear cleanup complete."
-end
-
-# ─── Workspace audit lints (recipe contract) ─────────────────────────────────
-# One implementation per rule, two consumers: audit_workspace renders these
-# into --audit's report and the hidden --audit-lint seam (bottom of this file)
-# runs one of them against the loaded workspace. tests/recipe-contract.sh is
-# the gating walker for provides/purged/ignorepkg, tests/swap-completeness.sh
-# for swap. All four lints are REPORT-ONLY everywhere: a finding never
-# changes an exit status. Inputs are the committed .SRCINFO files — the
-# same metadata install/depends decisions read — PKGBUILD is never evaluated.
-#
-# Rules (docs/MEMORY.md provides discipline + purged tools + IgnorePkg closure):
-#   provides   the Q8 mapping scope is SONAME + NAME, and the two sides get
-#              opposite forms. SONAME: BARE stems only (`libfoo.so`, never
-#              `libfoo.so=2-64`: makepkg auto-versions a bare stem from the
-#              built ELF, a hand-pinned one only rots). NAME: a versioned
-#              name-provide wherever the recipe MAPS a stock name — it swaps
-#              it (also declares it in conflicts, the Class A shape
-#              `provides=(<stock>=$pkgver)` + `conflicts=(<stock>)`), is the
-#              stock counterpart of one of its outputs (the swap rule's
-#              VCS-suffix derivation), or compat-maps an output name — the
-#              output name can belong to any workspace recipe, because a
-#              compat map can target a sibling recipe's output
-#              (wireplumber→pipewire-session-manager), not just its own —
-#              plus a VERSIONED name-provide wherever some workspace consumer
-#              constrains that name. The reason is the same in both NAME
-#              cases: an unversioned provide cannot satisfy `>=N`, so pacman
-#              silently falls back to the repo package (the meson incident
-#              class). A provide maps nothing when it carries no routing
-#              weight: a capability virtual (`libgl`, `ladspa-host`) and a
-#              package providing its own name both stay unversioned.
-#   purged     host-purged tools must not re-enter through makedepends/
-#              checkdepends (makepkg reinstalls them silently).
-#   ignorepkg  every workspace pkgbase/pkgname must sit in the host's
-#              IgnorePkg closure, read the way pacman reads /etc/pacman.conf:
-#              repeated IgnorePkg lines inside [options] ACCUMULATE, and a
-#              line inside a repo section — or before any section — is
-#              dropped. An [options] Include cannot be followed here, so it
-#              is reported instead of silently under-counting the closure.
-#   swap       the stock→house swap must be COMPLETE: a pkgname with a VCS
-#              suffix (-git/-svn/-hg/-snapshot) must provide AND conflict its
-#              stock counterpart (strip the suffix), so pacman's `--ask 4`
-#              conflict removal actually replaces the stock package and
-#              dependents of the stock name resolve to this build. Empty
-#              provides/conflicts entries are flagged outright — a split
-#              output's unset array slot ships as `provides = `, metadata
-#              that names nothing. Names only, any version satisfies.
-
-# Bare soname stem for a provide NAME ('libfoo.so' or 'libfoo.so.1.2' →
-# 'libfoo.so'); prints nothing when the name is not soname-shaped.
-function _lint_soname_stem -a name
-    if string match -qr '^(.+)\.so$' -- "$name"
-        printf '%s\n' "$name"
-        return 0
-    end
-    set -l m (string match -r -g '^(.+)\.so\..+$' -- "$name")
-    if test (count $m) -ge 1
-        printf '%s.so\n' $m[1]
-    end
-    return 0
-end
-
-function audit_lint_provides
-    set -l constraints # name|op|ver|consumer — every versioned dep in the set
-    set -l entries # id|carrier|provide-value — every provide in the set
-    set -l mapping # id|name — every stock name a recipe swaps or derives
-    set -l output_names # every workspace output name, the compat-map registry
-    set -l recipe_outputs # id|name — needed to tell a self-provide from a map
-    for entry in $_PACKAGE_MAP
-        set -l fields (string split '|' -- "$entry")
-        set -l id $fields[1]
-        set -l srcinfo "$SCRIPT_DIR/$fields[2]/.SRCINFO"
-        test -f "$srcinfo"; or continue
-        set -l outputs # the pkgname values, the real outputs of this recipe
-        set -l base_names # pkgbase, used only when no pkgname line exists
-        set -l conflict_names
-        set -l carrier '' # the output the current row belongs to; '' = the
-        # pkgbase section, whose arrays are carried by every output
-        # ONE tagged sed pass replaces five: the same BREs as the old
-        # per-field `sed -n "s/^[[:space:]]*$field = //p"` runs, tagged and
-        # merged (a line matches exactly one field name). The empty-value
-        # guard replicates the old substitution dropping empty output lines.
-        for row in (sed -n \
-            -e 's/^[[:space:]]*depends = /depends@/p' \
-            -e 's/^[[:space:]]*makedepends = /makedepends@/p' \
-            -e 's/^[[:space:]]*optdepends = /optdepends@/p' \
-            -e 's/^[[:space:]]*checkdepends = /checkdepends@/p' \
-            -e 's/^[[:space:]]*provides = /provides@/p' \
-            -e 's/^[[:space:]]*conflicts = /conflicts@/p' \
-            -e 's/^[[:space:]]*pkgbase = /pkgbase@/p' \
-            -e 's/^[[:space:]]*pkgname = /pkgname@/p' \
-            "$srcinfo" 2>/dev/null)
-            set -l kv (string split -m 1 '@' -- "$row")
-            test -n "$kv[2]"; or continue
-            if test "$kv[1]" = provides
-                set -a entries "$id|$carrier|$kv[2]"
-                continue
-            end
-            if test "$kv[1]" = conflicts
-                set -a conflict_names (string replace -r '[=<>].*$' '' -- "$kv[2]")
-                continue
-            end
-            if test "$kv[1]" = pkgname
-                set -a outputs "$kv[2]"
-                set carrier "$kv[2]"
-                continue
-            end
-            if test "$kv[1]" = pkgbase
-                set -a base_names "$kv[2]"
-                continue
-            end
-            set -l value "$kv[2]"
-            # optdepends carry a `: description` suffix; names never do.
-            set -l v (string split -m1 ':' -- "$value")[1]
-            set -l m (string match -r -g '^(.+?)(>=|<=|=|>|<)(.+)$' -- (string trim -- $v))
-            test (count $m) -ge 3; or continue
-            set -a constraints "$m[1]|$m[2]|$m[3]|$id"
-        end
-        # Mapping names, per recipe: the conflicted stock names (the swap) and
-        # each output's stock counterpart (strip the VCS suffix — the swap
-        # rule's derivation; a suffixless output "derives" only itself, which
-        # maps nothing). Compat-maps are not listed here: whether a provide of
-        # an output name is a map depends on which output carries it, so the
-        # findings loop below decides them against the carrier.
-        test (count $outputs) -gt 0; or set outputs $base_names
-        for name in $conflict_names
-            set -a mapping "$id|$name"
-        end
-        for name in $outputs
-            set -a output_names $name
-            set -a recipe_outputs "$id|$name"
-            set -l stock (string replace -r -- '-(git|svn|hg|snapshot)$' '' "$name")
-            test "$stock" = "$name"; or set -a mapping "$id|$stock"
-        end
-    end
-
-    set -l findings
-    for entry in $entries
-        set -l parts (string split -m 2 '|' -- $entry)
-        set -l id $parts[1]
-        set -l carrier $parts[2]
-        set -l value $parts[3]
-        set -l pp (string split -m 1 '=' -- $value)
-        set -l name $pp[1]
-        set -l ver ''
-        test (count $pp) -ge 2; and set ver $pp[2]
-        test -n "$name"; or continue
-        set -l stem (_lint_soname_stem "$name")
-        if set -q stem[1]
-            if string match -q '*.so.*' -- "$name"
-                set -a findings "provides: $id: soname provide '$value' names a versioned soname — declare the bare stem '$stem'"
-            else if test -n "$ver"
-                set -a findings "provides: $id: soname provide '$value' is hand-versioned — declare the bare stem '$name' and let makepkg auto-version it from the built ELF"
-            end
-            continue
-        end
-        # Q8 NAME side: a mapped name is only mapped when the provide carries
-        # a VERSION — one finding per provide, because the fix is the same
-        # declaration the constraint rule below asks for, and a second finding
-        # would only double-count the same edit. A provide of an output name
-        # is a compat map only when some carrying output is named differently:
-        # a package providing its own name routes nothing, exactly like a
-        # capability virtual.
-        set -l mapped 0
-        if contains -- "$id|$name" $mapping
-            set mapped 1
-        else if contains -- "$name" $output_names
-            if test -n "$carrier"
-                test "$carrier" != "$name"; and set mapped 1
-            else
-                for ro in $recipe_outputs
-                    set -l rop (string split -m 1 '|' -- $ro)
-                    test "$rop[1]" = "$id"; or continue
-                    if test "$rop[2]" != "$name"
-                        set mapped 1
-                        break
-                    end
-                end
-            end
-        end
-        if test $mapped -eq 1
-            if test -z "$ver"
-                set -a findings "provides: $id: mapped swap/compat provide '$name' is unversioned — declare provides=('$name=\${pkgver}') so versioned dependents of the mapped name resolve here"
-            end
-            continue
-        end
-        # A versioned name-provide satisfies its own version; only an
-        # UNVERSIONED provide falls back to the repo package.
-        test -z "$ver"; or continue
-        for c in $constraints
-            set -l cp (string split '|' -- $c)
-            test "$cp[1]" = "$name"; or continue
-            set -a findings "provides: $id: unversioned provide '$name' cannot satisfy '$name$cp[2]$cp[3]' (required by $cp[4]) — version it as provides=('$name=\${pkgver}')"
-        end
-    end
-    if test (count $findings) -gt 0
-        printf '%s\n' $findings | sort -u
-    end
-    return 0
-end
-
-function audit_lint_purged
-    # The purged set docs/MEMORY.md rule 8 keeps out of build-time fields.
-    set -l denylist po4a python-sphinx python-myst-parser lvm2 libblockdev-lvm systemd-tests cuda gcc15
-    set -l findings
-    for entry in $_PACKAGE_MAP
-        set -l fields (string split '|' -- "$entry")
-        set -l id $fields[1]
-        set -l srcinfo "$SCRIPT_DIR/$fields[2]/.SRCINFO"
-        test -f "$srcinfo"; or continue
-        # ONE tagged sed pass replaces the two per-field runs (same BREs; the
-        # empty-value guard replicates the old substitution's empty-line drop).
-        # Findings sort -u at the end, so line order vs the old field-major
-        # order is output-invisible.
-        for row in (sed -n \
-            -e 's/^[[:space:]]*makedepends = /makedepends@/p' \
-            -e 's/^[[:space:]]*checkdepends = /checkdepends@/p' \
-            "$srcinfo" 2>/dev/null)
-            set -l kv (string split -m 1 '@' -- "$row")
-            test -n "$kv[2]"; or continue
-            set -l field "$kv[1]"
-            set -l value "$kv[2]"
-            set -l v (string split -m1 ':' -- "$value")[1]
-            set -l m (string match -r -g '^(.+?)(>=|<=|=|>|<)(.+)$' -- (string trim -- $v))
-            set -l name $v
-            test (count $m) -ge 3; and set name $m[1]
-            if contains -- "$name" $denylist
-                set -a findings "purged: $id: $field reintroduces purged tool '$name' — remove it (docs/MEMORY.md rule 8)"
-            end
-        end
-    end
-    if test (count $findings) -gt 0
-        printf '%s\n' $findings | sort -u
-    end
-    return 0
-end
-
-function audit_lint_ignorepkg -a conf
-    test -n "$conf"; or set conf /etc/pacman.conf
-    # Names under test: the documented closure is pkgbase+pkgname from every
-    # committed .SRCINFO (docs/MEMORY.md rule 9's verification procedure).
-    set -l names
-    for entry in $_PACKAGE_MAP
-        set -l fields (string split '|' -- "$entry")
-        set -l srcinfo "$SCRIPT_DIR/$fields[2]/.SRCINFO"
-        test -f "$srcinfo"; or continue
-        for name in (sed -n 's/^\(pkgbase\|pkgname\) = //p' "$srcinfo" 2>/dev/null)
-            set -a names "$name"
-        end
-    end
-    if test (count $names) -gt 0
-        set names (printf '%s\n' $names | sort -u)
-    end
-
-    if not test -r "$conf"
-        echo "ignorepkg: skipped — $conf is not readable"
-        return 0
-    end
-    # pacman.conf semantics: directives count only inside their section, so
-    # the section tracker starts OUTSIDE [options] — a line before any section
-    # header belongs to no section and is dropped, exactly like a repo
-    # section's IgnorePkg line.
-    set -l ignored
-    set -l findings
-    set -l in_options 0
-    for raw in (cat "$conf")
-        set -l line (string trim -- (string split -m1 '#' -- "$raw")[1])
-        test -n "$line"; or continue
-        if string match -qr '^\[.+\]$' -- "$line"
-            set -l sec (string replace -r '^\[(.+)\]$' '$1' -- "$line")
-            if test (string trim -- "$sec") = options
-                set in_options 1
-            else
-                set in_options 0
-            end
-            continue
-        end
-        test $in_options -eq 1; or continue
-        if string match -qr '^Include[[:space:]]*=' -- "$line"
-            set -a findings "ignorepkg: $conf: [options] Include is not followed — inline its IgnorePkg entries into the file"
-            continue
-        end
-        set -l m (string match -r -g '^IgnorePkg[[:space:]]*=[[:space:]]*(.*)$' -- "$line")
-        test (count $m) -ge 1; or continue
-        set -a ignored (string split -n ' ' -- (string replace -a \t ' ' -- $m[1]))
-    end
-    for name in $names
-        contains -- "$name" $ignored; and continue
-        set -a findings "ignorepkg: $name is not in the IgnorePkg closure of $conf"
-    end
-    if test (count $findings) -gt 0
-        printf '%s\n' $findings | sort -u
-    end
-    return 0
-end
-
-# ─── AUTO-REGISTER: the IgnorePkg mutation seam ──────────────────────────────
-# `--register-ignorepkg [conf]` (bottom of this file) is the WRITE half of
-# docs/MEMORY.md rule 9, paired with the read-only closure lint above: it
-# computes the workspace pkgname universe (pkgbase + every pkgname of each
-# committed .SRCINFO — never a PKGBUILD grep, the kernel hides its names) and
-# appends the names the target pacman.conf does not cover yet as cumulative
-# `IgnorePkg =` lines (~10 names/line) INSIDE [options] — after the last
-# existing IgnorePkg line there, or before the next section header. Idempotent:
-# a complete closure appends nothing. AUTO-REGISTER never auto-trusts — the
-# seam REFUSES (rc 1, nothing changed) whenever the universe cannot be
-# verified: a recipe directory with a missing/stale .SRCINFO is NAMED and
-# blocks the write (read_abi_exclusions' strict-loader contract: a silent gap
-# is exactly what the guard exists to prevent), and so does a target that is
-# not user-writable when `sudo -n` is unavailable (the builder NEVER prompts).
-#
-# pacman_conf_ignorepkg_walk CONF — THE pacman.conf parser for the seam (the
-# lint above parses the same grammar for its report; this walk adds the
-# mutation-side derivations). Semantics are pacman's: `IgnorePkg =` lines
-# accumulate, whitespace-split, only inside [options]; a line inside a repo
-# section — or before any section header — is dropped (a repo-section drop is
-# LOUD here, a pre-section drop is silently pacman's own behaviour). Emits
-# one tagged line per observation:
-#   ignored <name>             one name in the cumulative [options] closure
-#   repo-drop <TAB>line<TAB>sec  IgnorePkg inside repo section <sec> (dropped)
-#   options-include <line>     an Include inside [options] (closure unfollowable)
-#   insert-before <line>       splice point for new lines (0 = append at EOF)
-#   no-options                 the conf has no [options] section at all
-function pacman_conf_ignorepkg_walk -a conf
-    set -l in_options 0
-    set -l sec ''
-    set -l lineno 0
-    set -l last_ignore 0
-    set -l options_seen 0
-    set -l insert_before 0
-    for raw in (cat "$conf")
-        set lineno (math $lineno + 1)
-        set -l line (string trim -- (string split -m1 '#' -- "$raw")[1])
-        test -n "$line"; or continue
-        if string match -qr '^\[.+\]$' -- "$line"
-            set sec (string trim -- (string replace -r '^\[(.+)\]$' '$1' -- "$line"))
-            if test "$sec" = options
-                set in_options 1
-                set options_seen 1
-            else
-                # First non-[options] header after [options]: the fallback
-                # splice point when [options] carries no IgnorePkg line yet.
-                if test $options_seen -eq 1; and test $insert_before -eq 0
-                    set insert_before $lineno
-                end
-                set in_options 0
-            end
-            continue
-        end
-        if string match -qr '^IgnorePkg[[:space:]]*=' -- "$line"
-            if test $in_options -eq 1
-                set last_ignore $lineno
-                set -l m (string match -r -g '^IgnorePkg[[:space:]]*=[[:space:]]*(.*)$' -- "$line")
-                test (count $m) -ge 1; or continue
-                for name in (string split -n ' ' -- (string replace -a \t ' ' -- $m[1]))
-                    echo "ignored $name"
-                end
-            else if test -n "$sec"
-                printf 'repo-drop\t%s\t%s\n' "$lineno" "$sec"
-            end
-            continue
-        end
-        if test $in_options -eq 1; and string match -qr '^Include[[:space:]]*=' -- "$line"
-            echo "options-include $lineno"
-        end
-    end
-    if test $options_seen -eq 0
-        echo "no-options"
-        return 0
-    end
-    if test $last_ignore -gt 0
-        echo "insert-before "(math $last_ignore + 1)
-    else
-        echo "insert-before $insert_before"
-    end
-end
-
-# register_ignorepkg CONF — compute the workspace name universe, append the
-# missing names to CONF's [options] and verify the result. rc 0 = the closure
-# is complete afterwards (nothing-to-append counts), 1 = refusal (nothing
-# changed, or the post-check caught a write that did not land), 2 = usage is
-# the dispatcher's job. See the seam comment at the bottom of this file.
-function register_ignorepkg -a conf
-    test -n "$conf"; or set conf /etc/pacman.conf
-
-    # ── 1. workspace pkgname universe: every recipe's committed .SRCINFO ──
-    # Recipe dirs live at packages/<group>/<name> (a synthetic workspace may
-    # put them one level up); a directory is a recipe when it carries PKGBUILD
-    # or .SRCINFO. Missing or stale .SRCINFO is a NAMED finding that blocks:
-    # registering a closure computed over a hole would print "empty missing
-    # set" while some outputs stay unprotected.
-    set -l names
-    set -l findings
-    set -l recipe_count 0
-    for dir in $SCRIPT_DIR/packages/* $SCRIPT_DIR/packages/*/*
-        test -d "$dir"; or continue
-        if not test -f "$dir/PKGBUILD"; and not test -f "$dir/.SRCINFO"
-            continue
-        end
-        set recipe_count (math $recipe_count + 1)
-        set -l rel (string replace -- "$SCRIPT_DIR/" '' "$dir")
-        set -l srcinfo "$dir/.SRCINFO"
-        if not test -f "$srcinfo"
-            set -a findings "$rel: no .SRCINFO committed"
-            continue
-        end
-        set -l si (cat "$srcinfo")
-        set -l si_base ''
-        set -l si_out
-        if test (count $si) -gt 0
-            set -l b (string match -r -g '^pkgbase = (.+)$' -- $si)
-            test (count $b) -ge 1; and set si_base $b[1]
-            set si_out (string match -r -g '^pkgname = (.+)$' -- $si)
-        end
-        if test -z "$si_base"; or test (count $si_out) -eq 0
-            set -a findings "$rel: stale .SRCINFO (pkgbase/pkgname entries missing — regenerate with GIT_CONFIG_COUNT=0 makepkg --printsrcinfo > .SRCINFO)"
-            continue
-        end
-        # Stale the way bettbox was stale (docs/MEMORY.md): the PKGBUILD
-        # declares a LITERAL pkgver/pkgrel/epoch the committed .SRCINFO
-        # contradicts. Only plain literals are compared — a computed value
-        # (the kernel's pkgver=$_basekernver) is uncheckable text, and the
-        # full makepkg --printsrcinfo diff is tests/srcinfo-freshness.sh's job.
-        set -l pb
-        if test -f "$dir/PKGBUILD"
-            set pb (cat "$dir/PKGBUILD")
-        end
-        for field in epoch pkgver pkgrel
-            set -l pb_val ''
-            for raw in $pb
-                set -l m (string match -r -g "^$field=(.+)\$" -- "$raw")
-                test (count $m) -ge 1; or continue
-                set pb_val (string trim -c "\"'" -- $m[1])
-                break
-            end
-            test -n "$pb_val"; or continue
-            string match -qr '^[0-9A-Za-z._:+~>-]+$' -- "$pb_val"; or continue
-            set -l siv ''
-            if test (count $si) -gt 0
-                set -l s (string match -r -g "^$field = (.+)\$" -- $si)
-                test (count $s) -ge 1; and set siv $s[1]
-            end
-            test -n "$siv"; or continue
-            if test "$pb_val" != "$siv"
-                set -a findings "$rel: stale .SRCINFO ($field is $pb_val in PKGBUILD but $siv in .SRCINFO — regenerate with GIT_CONFIG_COUNT=0 makepkg --printsrcinfo > .SRCINFO)"
-            end
-        end
-        for name in $si_base $si_out
-            test -n "$name"; and set -a names "$name"
-        end
-    end
-    if test $recipe_count -eq 0
-        set -a findings "no recipe directories under $SCRIPT_DIR/packages — nothing to register"
-    end
-    if test (count $names) -gt 0
-        set names (printf '%s\n' $names | sort -u)
-    end
-
-    # ── 2. parse the target exactly like pacman (the walk) ───────────────
-    if not test -r "$conf"
-        echo "register-ignorepkg: cannot read $conf — nothing changed" >&2
-        return 1
-    end
-    set -l walk (pacman_conf_ignorepkg_walk "$conf")
-    set -l ignored
-    set -l repo_drops
-    set -l options_includes
-    set -l insert_before -1
-    if test (count $walk) -gt 0
-        set ignored (string match -r -g '^ignored (.+)$' -- $walk)
-        set repo_drops (string match -r -g '^repo-drop\t(.+)$' -- $walk)
-        set options_includes (string match -r -g '^options-include ([0-9]+)$' -- $walk)
-        set -l ib (string match -r -g '^insert-before ([0-9]+)$' -- $walk)
-        test (count $ib) -ge 1; and set insert_before $ib[1]
-    end
-    for drop in $repo_drops
-        set -l parts (string split \t -- $drop)
-        echo "register-ignorepkg: warning: $conf line $parts[1]: IgnorePkg inside repo section [$parts[2]] is dropped by pacman — move it into [options]"
-    end
-    for line in $options_includes
-        set -a findings "$conf line $line: [options] Include is not followed — inline its IgnorePkg entries into the file"
-    end
-    if test $insert_before -lt 0
-        set -a findings "$conf: no [options] section — IgnorePkg lines have nowhere to live"
-    end
-    if test (count $ignored) -gt 0
-        set ignored (printf '%s\n' $ignored | sort -u)
-    end
-
-    if test (count $findings) -gt 0
-        for finding in $findings
-            echo "register-ignorepkg: finding: $finding" >&2
-        end
-        echo "register-ignorepkg: universe "(count $names)" name(s) from $recipe_count recipe(s), closure "(count $ignored)" name(s) before, not modified" >&2
-        echo "register-ignorepkg: refusing to modify $conf — fix the findings first" >&2
-        return 1
-    end
-
-    # ── 3. missing set: the universe names the closure does not cover ────
-    set -l missing
-    for name in $names
-        contains -- "$name" $ignored; or set -a missing "$name"
-    end
-
-    # ── 4. write path (only when something is missing) ───────────────────
-    # Escalate with sudo -n ONLY — the builder never prompts: a dead
-    # credential fails fast with nothing changed. A user-writable target
-    # (every fixture path) never touches sudo at all.
-    if test (count $missing) -gt 0
-        set -l need_sudo 0
-        if not test -w "$conf"; or not test -w (dirname -- "$conf")
-            set need_sudo 1
-        end
-        if test $need_sudo -eq 1
-            if not sudo -n true 2>/dev/null
-                echo "register-ignorepkg: sudo cannot modify $conf non-interactively — nothing changed" >&2
-                return 1
-            end
-        end
-        # Dated pre-image backup before the first modification. An existing
-        # identical backup is left alone (crash-window recovery); a differing
-        # one is never overwritten — it is the day's original pre-image.
-        set -l backup "$conf.bak-"(date +%Y%m%d)
-        if test -e "$backup"
-            if command cmp -s -- "$conf" "$backup"
-                echo "register-ignorepkg: backup $backup already present (identical pre-image)"
-            else
-                echo "register-ignorepkg: refusing to modify $conf — backup $backup already exists with different content; move it aside first" >&2
-                return 1
-            end
-        else if test $need_sudo -eq 1
-            if not sudo -n cp -p -- "$conf" "$backup"
-                echo "register-ignorepkg: cannot write backup $backup — nothing changed" >&2
-                return 1
-            end
-            echo "register-ignorepkg: backup $backup (pre-image)"
-        else
-            if not command cp -p -- "$conf" "$backup"
-                echo "register-ignorepkg: cannot write backup $backup — nothing changed" >&2
-                return 1
-            end
-            echo "register-ignorepkg: backup $backup (pre-image)"
-        end
-        # ~10 names per cumulative line, in the universe's sorted order.
-        set -l new_lines
-        set -l idx 1
-        set -l total (count $missing)
-        while test $idx -le $total
-            set -l last (math $idx + 9)
-            test $last -gt $total; and set last $total
-            set -a new_lines "IgnorePkg = "(string join ' ' $missing[$idx..$last])
-            set idx (math $idx + 10)
-        end
-        set -l tmpfile (mktemp)
-        if test -z "$tmpfile"
-            echo "register-ignorepkg: cannot allocate a scratch file — nothing changed" >&2
-            return 1
-        end
-        if test $insert_before -gt 0
-            command head -n (math $insert_before - 1) -- "$conf" >"$tmpfile"
-            printf '%s\n' $new_lines >>"$tmpfile"
-            command tail -n +"$insert_before" -- "$conf" >>"$tmpfile"
-        else
-            command cat -- "$conf" >"$tmpfile"
-            # a conf without a trailing newline must not swallow the first
-            # appended line
-            if test (command tail -c 1 -- "$conf" | command wc -l) -eq 0
-                printf '\n' >>"$tmpfile"
-            end
-            printf '%s\n' $new_lines >>"$tmpfile"
-        end
-        # NOTE: `set -l` is BLOCK-scoped in fish — cp_rc must be declared
-        # outside the if/else below to survive its `end`.
-        set -l cp_rc 0
-        if test $need_sudo -eq 1
-            sudo -n cp -- "$tmpfile" "$conf"
-            set cp_rc $status
-        else
-            command cp -- "$tmpfile" "$conf"
-            set cp_rc $status
-        end
-        command rm -f -- "$tmpfile"
-        if test $cp_rc -ne 0
-            echo "register-ignorepkg: cannot write $conf" >&2
-            return 1
-        end
-        echo "register-ignorepkg: universe "(count $names)" name(s) from $recipe_count recipe(s), closure "(count $ignored)" name(s) before, appended $total name(s) as "(count $new_lines)" IgnorePkg line(s)"
-    else
-        echo "register-ignorepkg: universe "(count $names)" name(s) from $recipe_count recipe(s), closure "(count $ignored)" name(s) before, no changes needed"
-    end
-
-    # ── 5. post-condition: comm -23(universe, closure-after) must be empty ─
-    # The verification RE-READS the file through the same pacman parser — the
-    # write is only done when the closure it ships is provably complete.
-    set -l walk_after (pacman_conf_ignorepkg_walk "$conf")
-    set -l ignored_after
-    if test (count $walk_after) -gt 0
-        set ignored_after (string match -r -g '^ignored (.+)$' -- $walk_after)
-    end
-    set -l scratch (mktemp -d)
-    if test -n "$scratch"
-        if test (count $names) -gt 0
-            printf '%s\n' $names | sort -u >"$scratch/universe"
-        else
-            printf '' >"$scratch/universe"
-        end
-        if test (count $ignored_after) -gt 0
-            printf '%s\n' $ignored_after | sort -u >"$scratch/closure"
-        else
-            printf '' >"$scratch/closure"
-        end
-        set -l missing_after (command comm -23 "$scratch/universe" "$scratch/closure")
-        command rm -rf -- "$scratch"
-        if test (count $missing_after) -eq 0
-            echo "register-ignorepkg: verification comm -23 (universe vs closure after): empty"
-            return 0
-        end
-        echo "register-ignorepkg: verification comm -23 (universe vs closure after):"
-        printf '%s\n' $missing_after
-        return 1
-    end
-    echo "register-ignorepkg: cannot allocate scratch for the verification — re-run to verify" >&2
-    return 1
-end
-
-function audit_lint_swap
-    set -l findings
-    for entry in $_PACKAGE_MAP
-        set -l fields (string split '|' -- "$entry")
-        set -l srcinfo "$SCRIPT_DIR/$fields[2]/.SRCINFO"
-        test -f "$srcinfo"; or continue
-        # Section walk over the committed .SRCINFO: `pkgbase`/`pkgname` lines
-        # at column 0 switch the section, every INDENTED field belongs to the
-        # section above it. pkgbase-section metadata is effective for EVERY
-        # output (makepkg merges it into each pkgname — cmake-git's shape),
-        # a pkgname-section field only for that output. Entries are stored as
-        # handle|name (handle '' = pkgbase section) with the version suffix
-        # already stripped, so `provides = cmake=4.4.3…` matches `cmake`.
-        set -l base_section 1
-        set -l section ''
-        set -l outputs
-        set -l provide_keys
-        set -l conflict_keys
-        for raw in (cat "$srcinfo" 2>/dev/null)
-            set -l line (string replace -r '\r$' '' -- "$raw")
-            set -l h (string match -r -g '^(pkgbase|pkgname) = (.+)$' -- "$line")
-            if test (count $h) -ge 2
-                set section $h[2]
-                set base_section 0
-                if test "$h[1]" = pkgname
-                    set -a outputs "$h[2]"
-                else
-                    set base_section 1
-                end
-                continue
-            end
-            set -l handle ''
-            test $base_section -eq 0; and set handle "$section"
-            if string match -qr '^[[:space:]]+provides[[:space:]]*=' -- "$line"
-                set -l value (string replace -r '^[[:space:]]+provides[[:space:]]*=[[:space:]]*' '' -- "$line")
-                if test -z "$value"
-                    set -a findings "swap: $section: empty provides entry — declare the stock counterpart or drop the entry"
-                else
-                    set -a provide_keys "$handle|"(string replace -r '[=<>].*$' '' -- "$value")
-                end
-                continue
-            end
-            if string match -qr '^[[:space:]]+conflicts[[:space:]]*=' -- "$line"
-                set -l value (string replace -r '^[[:space:]]+conflicts[[:space:]]*=[[:space:]]*' '' -- "$line")
-                if test -z "$value"
-                    set -a findings "swap: $section: empty conflicts entry — declare the stock counterpart or drop the entry"
-                else
-                    set -a conflict_keys "$handle|"(string replace -r '[=<>].*$' '' -- "$value")
-                end
-            end
-        end
-        for name in $outputs
-            set -l stock (string replace -r -- '-(git|svn|hg|snapshot)$' '' "$name")
-            if test "$stock" = "$name"
-                continue
-            end
-            # A soname-shaped counterpart (`libfoo.so…`) is a provide of a
-            # library, never a stock package name — nothing to swap.
-            if string match -q '*.so*' -- "$stock"
-                continue
-            end
-            if not contains -- "|$stock" $provide_keys; and not contains -- "$name|$stock" $provide_keys
-                set -a findings "swap: $name: stock counterpart '$stock' missing from provides — declare provides=('$stock=\${pkgver}')"
-            end
-            if not contains -- "|$stock" $conflict_keys; and not contains -- "$name|$stock" $conflict_keys
-                set -a findings "swap: $name: stock counterpart '$stock' missing from conflicts — declare conflicts=('$stock')"
-            end
-        end
-    end
-    if test (count $findings) -gt 0
-        printf '%s\n' $findings | sort -u
-    end
-    return 0
-end
-
-# ─── Workspace audit (--audit) ───────────────────────────────────────────────
-# Read-only inventory of migration drift. Historical NOTE.md entries and large
-# source/build trees are reported separately from active control-file findings.
-function audit_workspace
-    # `strings`/`xargs` back the installed-PGO-payload scan; without them that
-    # section would report a clean result it never actually measured.
-    for tool in rg strings xargs mktemp
-        require_command $tool; or return 1
-    end
-
-    ui_heading "Workspace legacy audit"
-    echo ""
-    # ONE pass over everything a maintainer can edit. The pre-Git workspace
-    # split recipes across top-level .Stable/.Heavy/.Static/.Core/.Misc/.3rdP
-    # directories; any surviving mention of one is drift. config/ and docs/ are
-    # excluded: config/ is validated structurally at load time, and NOTE.md is
-    # a historical journal that is *expected* to name the old layout.
-    echo "Legacy layout references:"
-    set -l refs (rg -n --hidden \
-        --glob '!docs/**' --glob '!build-all.fish' --glob '!config/**' \
-        --glob '!**/.state/**' --glob '!**/.git/**' \
-        --glob '!**/src/**' --glob '!**/pkg/**' --glob '!**/build/**' \
-        '(^|[^[:alnum:]_])\.(Stable|Static|Heavy|Heavyweight|Core|Misc|3rdP)/' \
-        "$SCRIPT_DIR" 2>/dev/null | head -100)
-    if test (count $refs) -eq 0
-        echo "  none"
-    else
-        for ref in $refs
-            echo "  $ref"
-        end
-    end
-
-    set -l listed
-    for group_name in $_GROUP_NAMES
-        set -l mangled (string replace - _ -- "$group_name")
-        set -l var_name "_GROUP_$mangled"
-        set -a listed $$var_name
-    end
-    set listed (printf '%s\n' $listed | awk '!seen[$0]++')
-    set -l actual $_PACKAGE_IDS
-    set -l unlisted
-    for d in $actual
-        if not contains "$d" $listed
-            set -a unlisted $d
-        end
-    end
-    set -l missing
-    for d in $listed
-        if not contains "$d" $actual
-            set -a missing $d
-        end
-    end
-
-    echo ""
-    echo "Package membership drift:"
-    if test (count $unlisted) -eq 0
-        echo "  unlisted: none"
-    else
-        echo "  unlisted:"
-        for d in $unlisted
-            echo "    $d"
-        end
-    end
-    if test (count $missing) -eq 0
-        echo "  listed-but-missing: none"
-    else
-        echo "  listed-but-missing:"
-        for d in $missing
-            echo "    $d"
-        end
-    end
-
-    set -l bad_deps
-    for entry in $_DEPS
-        set -l parts (string split ':' $entry -m 2)
-        set -l pkg $parts[1]
-        if not contains "$pkg" $actual
-            set -a bad_deps "$pkg (package missing)"
-        end
-        if test (count $parts) -ge 2 -a -n "$parts[2]"
-            for dep in (string split ',' $parts[2])
-                if not contains "$dep" $actual
-                    set -a bad_deps "$pkg -> $dep"
-                end
-            end
-        end
-    end
-    echo ""
-    echo "Dependency graph:"
-    if test (count $bad_deps) -eq 0
-        echo "  all package and dependency paths resolve"
-    else
-        for dep in $bad_deps
-            echo "  $dep"
-        end
-    end
-
-    # Toolchain lint (2026-09-25 ABI-skew incident): a recipe that compiles
-    # with cargo/rustc only survives a coupled LLVM batch when rust-git
-    # rebuilds BEFORE it, so its topology record's edges field must name
-    # rust-git explicitly. rust-git is the toolchain itself and cannot depend
-    # on its own output, so it is excepted. "Invokes" = any non-comment line
-    # (first non-blank character is not '#') naming cargo or rustc as a bare
-    # word; comment-only mentions are history, not toolchain use.
-    echo ""
-    echo "Toolchain (cargo/rustc) dependency edges:"
-    set -l toolchain_missing
-    for entry in $_PACKAGE_MAP
-        set -l fields (string split '|' -- "$entry")
-        set -l id $fields[1]
-        test "$id" = rust-git; and continue
-        set -l recipe "$SCRIPT_DIR/$fields[2]"
-        set -l toolchain_lines (grep -E '^[[:space:]]*[^#[:space:]]' "$recipe/PKGBUILD" 2>/dev/null \
-            | grep -Ec '(^|[^[:alnum:]_])(cargo|rustc)([^[:alnum:]_]|$)')
-        test -n "$toolchain_lines"; or set toolchain_lines 0
-        test "$toolchain_lines" -gt 0; or continue
-        set -l has_rust_edge 0
-        for dep_entry in $_DEPS
-            set -l dep_fields (string split ':' $dep_entry -m 2)
-            if test "$dep_fields[1]" = "$id"; and test (count $dep_fields) -ge 2
-                for dep in (string split ',' $dep_fields[2])
-                    test "$dep" = rust-git; and set has_rust_edge 1
-                end
-            end
-        end
-        test $has_rust_edge -eq 1; and continue
-        set -a toolchain_missing $id
-    end
-    if test (count $toolchain_missing) -eq 0
-        echo "  none"
-    else
-        for id in $toolchain_missing
-            echo "  toolchain: $id uses cargo/rustc but declares no rust-git edge"
-        end
-    end
-
-    # Recipe-contract lints (one implementation per rule — the functions above;
-    # the hidden --audit-lint seam runs them individually). Report-only here:
-    # findings never changed this audit's exit status and must not start now.
-    echo ""
-    echo "Provides versioning:"
-    set -l provides_findings (audit_lint_provides)
-    if test (count $provides_findings) -eq 0
-        echo "  none"
-    else
-        for finding in $provides_findings
-            echo "  $finding"
-        end
-    end
-
-    echo ""
-    echo "Purged tools:"
-    set -l purged_findings (audit_lint_purged)
-    if test (count $purged_findings) -eq 0
-        echo "  none"
-    else
-        for finding in $purged_findings
-            echo "  $finding"
-        end
-    end
-
-    echo ""
-    echo "IgnorePkg closure:"
-    set -l ignorepkg_findings (audit_lint_ignorepkg '')
-    if test (count $ignorepkg_findings) -eq 0
-        echo "  none"
-    else
-        for finding in $ignorepkg_findings
-            echo "  $finding"
-        end
-    end
-
-    echo ""
-    echo "Stock→house swap:"
-    set -l swap_findings (audit_lint_swap)
-    if test (count $swap_findings) -eq 0
-        echo "  none"
-    else
-        for finding in $swap_findings
-            echo "  $finding"
-        end
-    end
-
-    # ABI-drift guard layers 1 + 5 (report-only here exactly like the
-    # recipe-contract lints above; the hidden --audit-lint seam runs them
-    # individually as abi-closure / abi-exposure).
-    echo ""
-    echo "ABI closure (workspace-built outputs):"
-    set -l closure_findings (audit_lint_abi_closure)
-    if test (count $closure_findings) -eq 0
-        echo "  none"
-    else
-        for finding in $closure_findings
-            echo "  $finding"
-        end
-    end
-
-    echo ""
-    echo "ABI exposure (soname provides vs installed stock):"
-    set -l exposure_findings (audit_lint_abi_exposure)
-    if test (count $exposure_findings) -eq 0
-        echo "  none"
-    else
-        for finding in $exposure_findings
-            echo "  $finding"
-        end
-    end
-
-    echo ""
-    echo "Stale runtime/error artifacts:"
-    set -l stale (find "$LOG_DIR" -maxdepth 1 -type f \
-        \( -name '.lane*.result' -o -name '*.srcinfo.err' \) \
-        -printf '%p\n' 2>/dev/null)
-    if test (count $stale) -eq 0
-        echo "  none"
-    else
-        for path in $stale
-            echo "  $path"
-        end
-    end
-    set -l package_errors (find "$SCRIPT_DIR/packages" -name '.srcinfo.err' \
-        -not -path '*/src/*' -not -path '*/pkg/*' -printf '%p\n' 2>/dev/null)
-    for path in $package_errors
-        if not contains "$path" $stale
-            echo "  $path"
-        end
-    end
-
-    echo ""
-    echo "Installed PGO payloads:"
-    # An installed binary that still carries -fprofile-generate or
-    # -Cprofile-generate is the one
-    # PGO defect the recipe-level check cannot see: it fails only on machines
-    # that do not have the instrumenting build's directory tree.  The builder
-    # refuses such an archive at install time (the install plan's PGO gate,
-    # pgo_payload_refusals), but an
-    # install made *before* that gate existed stays broken until rebuilt, so
-    # the audit reports it.  Every file is scanned rather than the obvious
-    # usr/bin+usr/lib pair, because scoping to those embeds an assumption
-    # about where a recipe installs its binaries.  Archive metadata is not a
-    # false-positive source here: the predicate matches a `.gcda`/`.profraw`
-    # path, not the instrumenting flag that `.BUILDINFO` happens to record.
-    set -l pgo_names
-    for entry in $_PACKAGE_MAP
-        set -l fields (string split '|' -- "$entry")
-        set -l recipe "$SCRIPT_DIR/$fields[2]"
-        grep -Eq -- '-fprofile-generate|-C ?profile-generate' "$recipe/PKGBUILD" 2>/dev/null; or continue
-        # Names come from .SRCINFO, never PKGBUILD: the kernel assigns pkgbase
-        # in a variable, so PKGBUILD scraping would misreport it as absent.
-        for name in (sed -n 's/^pkgname = //p' "$recipe/.SRCINFO" 2>/dev/null)
-            set -a pgo_names "$name"
-        end
-    end
-    if test (count $pgo_names) -gt 0
-        set pgo_names (printf '%s\n' $pgo_names | awk '!seen[$0]++')
-    end
-    set -l pgo_list (mktemp 2>/dev/null)
-    set -l pgo_absent
-    if test -n "$pgo_list"
-        for name in $pgo_names
-            if not pacman -Qq -- "$name" >/dev/null 2>&1
-                set -a pgo_absent "$name"
-                continue
-            end
-            LANG=C pacman -Ql -- "$name" 2>/dev/null | awk '$2 !~ /\/$/ {print $2}'
-        end > $pgo_list
-    end
-    if test (count $pgo_absent) -gt 0
-        echo "  not installed (not inspected): "(string join ' ' $pgo_absent)
-    end
-    # Fail closed: a scan that read no files would otherwise report "none".
-    set -l pgo_files 0
-    test -n "$pgo_list"; and set pgo_files (count (cat $pgo_list))
-    if test -z "$pgo_list" -o "$pgo_files" -eq 0
-        echo "  unable to enumerate installed files — payload check skipped"
-    else
-        echo "  inspected $pgo_files files from "(count $pgo_names)" PGO recipes"
-        set -l pgo_hits (xargs -d'\n' -r -n 400 strings -a -f < $pgo_list 2>/dev/null \
-            | grep -E '^[^:]+: /[^[:space:]/*][^[:space:]]*\.(gcda|profraw)' | cut -d: -f1 | sort -u)
-        if test (count $pgo_hits) -eq 0
-            echo "  none carry baked .gcda/.profraw paths"
-        else
-            for hit in $pgo_hits
-                echo "  $hit"
-            end
-        end
-    end
-    test -n "$pgo_list"; and rm -f $pgo_list
-
-    echo ""
-    echo "Historical references in docs/NOTE.md are not treated as active"
-    echo "configuration by this audit."
 end
 
 # ─── Shared-source linking (-ln / --link-sources) ────────────────────────────
@@ -5457,10 +2502,18 @@ end
 
 function link_sources
     set -l entries
+    set -l eval_failures
 
     # Collect git sources as "effectiveURL|localName|pkgDir"
     for d in (find_pkg_dirs)
-        set -l srcs (bash -c "source '$d/PKGBUILD' 2>/dev/null && printf '%s\n' \"\${source[@]}\"" 2>/dev/null)
+        # A recipe that cannot be EVALUATED is named and counted, never folded
+        # into "no sources": -ln must not report a clean scan over recipes it
+        # never read (2026-10-05).
+        set -l srcs (pkgbuild_array_checked "$d" source)
+        if test $status -ne 0
+            ui_error "$d/PKGBUILD cannot be evaluated — its sources were NOT scanned"
+            set -a eval_failures "$d/PKGBUILD"
+        end
         for s in $srcs
             set -l name ""
             set -l url "$s"
@@ -5482,7 +2535,8 @@ function link_sources
 
     if test (count $entries) -eq 0
         echo "No git sources found."
-        return 0
+        report_pkgbuild_eval_failures $eval_failures
+        return $status
     end
 
     set -l urls (printf '%s\n' $entries | cut -d'|' -f1 | sort -u)
@@ -5607,7 +2661,7 @@ function link_sources
                     continue
                 end
                 printf '%s%s%s\n' (set_color yellow) "  ↻ relinking $twin_path (was → $resolved)" (set_color normal)
-                rm "$twin_path"
+                command rm "$twin_path"
             else if valid_source_mirror "$twin_path"
                 printf '%s%s%s\n' (set_color red) "  ☢ duplicate clone: $twin_path ("(du -sh "$twin_path" 2>/dev/null | cut -f1)")" (set_color normal)
                 set -a deletions "$twin_path"
@@ -5651,10 +2705,11 @@ function link_sources
         read -P "Proceed? [y/N] " -l answer
         if not string match -qi 'y*' -- "$answer"
             echo "Aborted — deletions skipped, other fixes already applied."
-            return 0
+            report_pkgbuild_eval_failures $eval_failures
+            return $status
         end
         for t in $deletions
-            if not rm -rf -- "$t"
+            if not command rm -rf -- "$t"
                 ui_error "failed to delete duplicate source: $t"
                 set n_error (math $n_error + 1)
             end
@@ -5674,10 +2729,13 @@ function link_sources
 
     echo ""
     echo "Shared-mirror scan done: $n_ok verified link(s), $n_fix change(s) applied."
+    report_pkgbuild_eval_failures $eval_failures
+    set -l eval_status $status
     if test "$n_error" -gt 0
         echo "Shared-mirror scan encountered $n_error error(s)."
         return 1
     end
+    return $eval_status
 end
 
 # Same-version sanity check for ONE archive: print (status 0) the installed
@@ -5728,13 +2786,18 @@ function install_skip_reason -a archive
     if test $status -ne 0; or test -z "$installed_epoch"
         return 1
     end
-    set -l archive_mtime (stat -c %Y -- "$archive" 2>/dev/null)
-    if test $status -ne 0; or test -z "$archive_mtime"
-        return 1
-    end
     # Freshness guard: a same-version rebuild whose archive is NEWER than the
     # install must still be installed — version equality alone would skip it.
-    if test "$installed_epoch" -lt "$archive_mtime"
+    # Nanosecond precision (R-F37): the install date is second-granular, so a
+    # second-equality compare used to skip archives makepkg wrote mid-second
+    # AFTER the install. find -newermt compares the full mtime timespec
+    # against the install instant, and doubt installs: a probe failure keeps
+    # the archive in the set.
+    set -l newer (find "$archive" -maxdepth 0 -newermt "@$installed_epoch" -print 2>/dev/null)
+    if test $status -ne 0
+        return 1
+    end
+    if test -n "$newer"
         return 1
     end
     printf '%s\n' "$installed_version"
@@ -5752,16 +2815,46 @@ end
 # never render, so "what would happen" (the seam) and "what happened" (the
 # executor) cannot drift apart — the interface IS the test surface.
 #
-# Plan rows (fields space-separated; a path containing a space would truncate
-# its row, which still decides correctly — no such path exists here):
+# Plan rows (fields TAB-framed via the plan_row codec below; an archive or
+# member path containing a space must survive the round trip to the consumer
+# — space-joined rows were re-split at consumption and handed pacman a
+# truncated, nonexistent path):
 #   install <archive>                   → run pacman -U for it
 #   skip <archive> <installed-version>  → exact version, installed fresher
 #   refuse empty-list                   → nothing to install (checked mode)
 #   noop empty-list                     → nothing to do (force mode: mirrors -ia)
+#   refuse plan-failed                  → the plan failed without a reason row
+#   refuse partial-set <pkgdir> <missing>...  → see list_split_pkgs
+#   refuse discover-failed <pkgdir>     → see list_split_pkgs
 #   refuse pgo-*                        → see pgo_payload_refusals
+#   refuse abi-*                        → see abi_provide_refusals
 # A refusal row aborts the whole transaction; skip and install rows may mix.
+
+# plan_row FIELD... → one framed plan/probe row; plan_row_fields ROW → its
+# fields. Tab framing is the codec of the install pipeline: producers and
+# consumers meet ONLY through these two, so no field-splitting drift can hand
+# pacman a truncated path (R-F22). A field containing a literal tab would
+# corrupt the frame; nothing the pipeline names can contain one.
+function plan_row
+    string join \t -- $argv
+end
+
+function plan_row_fields -a row
+    string split \t -- "$row"
+end
+
 function install_plan -a mode
     set -l archives $argv[2..-1]
+    # Discovery damage recorded by list_split_pkgs owns this plan's refusal:
+    # the built set of a recipe in the selection is incomplete or could not be
+    # established, so installing the remaining archives is the silent shrink
+    # the single-transaction entries must never do (R-F25). The rows are
+    # consumed ONCE — they name the reason `refuse empty-list` would hide.
+    if test (count $_GSA_DISCOVER_REFUSALS) -gt 0
+        printf '%s\n' $_GSA_DISCOVER_REFUSALS
+        set -g _GSA_DISCOVER_REFUSALS
+        return 1
+    end
     if test (count $archives) -eq 0
         # An empty list is NOT success on the -i path. It means discovery
         # found no archive for the current evaluated pkgver-pkgrel, or could
@@ -5769,10 +2862,10 @@ function install_plan -a mode
         # compiling against the old system version.
         # tests/install-archive-guard.sh pins both halves.
         if test "$mode" = force
-            echo 'noop empty-list'
+            plan_row noop empty-list
             return 0
         end
-        echo 'refuse empty-list'
+        plan_row refuse empty-list
         return 1
     end
     # Never plan a PGO phase-1 payload: libgcov would recreate its build tree
@@ -5802,7 +2895,7 @@ function install_plan -a mode
         # install_skip_reason is never even consulted, so there is no second
         # implementation of the skip decision to drift.
         for archive in $archives
-            echo "install $archive"
+            plan_row install "$archive"
         end
         return 0
     end
@@ -5816,9 +2909,9 @@ function install_plan -a mode
     for archive in $archives
         set -l iver (install_skip_reason "$archive")
         if test $status -eq 0
-            echo "skip $archive $iver"
+            plan_row skip "$archive" "$iver"
         else
-            echo "install $archive"
+            plan_row install "$archive"
         end
     end
     return 0
@@ -5827,12 +2920,14 @@ end
 # install_emit SINK LOG_FILE LEVEL TEXT — the ONE rendering seam of the
 # install pipeline. quiet: append to the transcript (lane children must never
 # write to the terminal — the dispatcher owns all progress rendering). loud:
-# print with the usual icon. LEVEL is error or info.
+# print with the usual icon. LEVEL is error, warn or info.
 function install_emit -a sink log_file level text
     if test "$sink" = quiet
         switch $level
             case error
                 printf '%s %s\n' "$_UI_ICON_ERROR" "$text" >>"$log_file"
+            case warn
+                printf '%s %s\n' "$_UI_ICON_WARN" "$text" >>"$log_file"
             case '*'
                 printf '%s %s\n' "$_UI_ICON_INFO" "$text" >>"$log_file"
         end
@@ -5840,6 +2935,8 @@ function install_emit -a sink log_file level text
         switch $level
             case error
                 ui_error "$text"
+            case warn
+                ui_warning "$text"
             case '*'
                 ui_info "$text"
         end
@@ -5877,16 +2974,16 @@ function install_execute -a log_file sink n_extra
     end
     set -l installs
     set -l skips
-    set -l skip_version ""
+    set -l skip_versions
     set -l refusals
     for row in $rows
-        set -l fields (string split ' ' -- "$row")
+        set -l fields (plan_row_fields "$row")
         switch $fields[1]
             case install
                 set -a installs $fields[2]
             case skip
                 set -a skips $fields[2]
-                set skip_version $fields[3]
+                set -a skip_versions $fields[3]
             case noop
                 # force mode with nothing to do — no message, no transaction.
             case '*'
@@ -5895,14 +2992,16 @@ function install_execute -a log_file sink n_extra
     end
     if test (count $refusals) -gt 0
         for row in $refusals
-            set -l fields (string split ' ' -- "$row")
+            set -l fields (plan_row_fields "$row")
             switch $fields[2]
                 case empty-list
-                    if test "$sink" = quiet
-                        printf '%s Install requested but no built package archive matched the current pkgver-pkgrel — refusing to report success\n' "$_UI_ICON_ERROR" >>"$log_file"
-                    else
-                        ui_error "install requested but no built package archive was found for the current pkgver-pkgrel"
-                    end
+                    install_emit "$sink" "$log_file" error "install requested but no built package archive matched the current pkgver-pkgrel — refusing to report success"
+                case plan-failed
+                    install_emit "$sink" "$log_file" error "the install plan failed without a reason row — refusing to install"
+                case partial-set
+                    install_emit "$sink" "$log_file" error "refusing to install "(basename "$fields[3]")": built output set is incomplete (missing: "(string join ' ' $fields[4..-1])") — rebuild before installing"
+                case discover-failed
+                    install_emit "$sink" "$log_file" error "refusing to install "(basename "$fields[3]")": archive discovery could not be established (pkgver/pkgrel unusable) — fix the recipe before installing"
                 case pgo-temp
                     install_emit "$sink" "$log_file" error "cannot create a temp dir to verify "(basename "$fields[3]")
                 case pgo-unreadable
@@ -5927,7 +3026,15 @@ function install_execute -a log_file sink n_extra
         return 1
     end
     if test (count $skips) -gt 0
-        install_emit "$sink" "$log_file" info (count $skips)" of "(math (count $skips) + (count $installs))" package(s) already installed at $skip_version — skipping their install"
+        # D-F14: the note must not present ONE row's version as every skipped
+        # package's. One distinct version keeps the original phrasing; a mixed
+        # skip set shows the version SET.
+        set -l uniq_versions (printf '%s\n' $skip_versions | sort -u)
+        if test (count $uniq_versions) -eq 1
+            install_emit "$sink" "$log_file" info (count $skips)" of "(math (count $skips) + (count $installs))" package(s) already installed at $uniq_versions[1] — skipping their install"
+        else
+            install_emit "$sink" "$log_file" info (count $skips)" of "(math (count $skips) + (count $installs))" package(s) already installed at their built versions ("(string join ', ' $uniq_versions)") — skipping their install"
+        end
     end
     if test (count $installs) -eq 0
         return 0
@@ -5957,10 +3064,21 @@ function install_execute -a log_file sink n_extra
     end
     if test $irc -ne 0
         if test "$sink" = quiet
-            printf '%s Install failed (rc=%s) — stopping: later packages would build against the wrong system state\n' "$_UI_ICON_ERROR" "$irc" >>"$log_file"
+            if test $irc -eq 75
+                # mutex-timeout is a queue failure, not a pacman error — name
+                # it so the run record can carry `mutex-timeout` instead of
+                # folding it into build-failed (2026-10-04).
+                printf '%s Install failed: builder pacman mutex timed out (rc=75) — the transaction never ran\n' "$_UI_ICON_ERROR" >>"$log_file"
+            else
+                printf '%s Install failed (rc=%s) — stopping: later packages would build against the wrong system state\n' "$_UI_ICON_ERROR" "$irc" >>"$log_file"
+            end
             printf '  NOTE: with -i the BUILD may still have succeeded (archive exists); install later with -ia or resume with -s -i\n' >>"$log_file"
         else
-            ui_error "Install failed (rc=$irc)"
+            if test $irc -eq 75
+                ui_error "Install failed: builder pacman mutex timed out (rc=75) — the transaction never ran"
+            else
+                ui_error "Install failed (rc=$irc)"
+            end
         end
         return 1
     end
@@ -5970,11 +3088,19 @@ function install_execute -a log_file sink n_extra
     # transaction already landed, so every later package would otherwise
     # compile against an unresolvable system.
     set -l probe_rows (install_needed_probe $installs)
-    if test $status -ne 0
-        for row in $probe_rows
-            set -l fields (string split ' ' -- "$row")
-            install_emit "$sink" "$log_file" error "post-install NEEDED probe: "$fields[3]" needs "$fields[4]" — unresolved after the transaction"
+    set -l probe_status $status
+    for row in $probe_rows
+        set -l fields (plan_row_fields "$row")
+        switch $fields[1]
+            case probe-needed
+                install_emit "$sink" "$log_file" error "post-install NEEDED probe: "$fields[3]" needs "$fields[4]" — unresolved after the transaction"
+            case probe-skipped
+                # Named, non-fatal by policy (R-F26): the probe could not run
+                # at all, so "clean" must never stand for "unprobed".
+                install_emit "$sink" "$log_file" warn "post-install NEEDED probe skipped ($fields[2]) — the post-install ABI layer did not run"
         end
+    end
+    if test $probe_status -eq 1
         install_emit "$sink" "$log_file" error "post-install NEEDED probe: aborting — the transaction landed with outputs whose sonames do not resolve (rebuild the provider in the same batch, or register the name in config/abi-exclusions.conf)"
         return 1
     end
@@ -5997,6 +3123,13 @@ function install_pkgs_now -a log_file quiet_flag force_install_flag
         set sink quiet
     end
     set -l plan (install_plan $mode $pkgs)
+    set -l plan_status $status
+    if test $plan_status -ne 0; and test (count $plan) -eq 0
+        # F39: a FAILED plan must never render as "nothing to do". Every plan
+        # step is contracted to emit a reason row before failing, so this row
+        # is the fail-closed backstop when one someday does not.
+        set plan (plan_row refuse plan-failed)
+    end
     install_execute "$log_file" $sink 0 $plan
 end
 
@@ -6055,13 +3188,18 @@ end
 function _pkgname_index
     if not set -q _PKGNAME_INDEX
         set -g _PKGNAME_INDEX
-        for entry in $_PACKAGE_MAP
-            set -l fields (string split '|' -- "$entry")
-            set -l srcinfo "$SCRIPT_DIR/$fields[2]/.SRCINFO"
-            test -f "$srcinfo"; or continue
-            for name in (sed -n 's/^pkgname = //p' "$srcinfo" 2>/dev/null)
-                set -a _PKGNAME_INDEX "$name|$fields[1]"
-            end
+        # ONE name surface (D-F4): pkgbase + every pkgname output — the same
+        # B/N rows the ignorepkg closure and the ABI lookups read. A name is
+        # resolvable wherever pacman can resolve it, whichever .SRCINFO field
+        # carries it, and every lookup (CLI references, abi_package_id_for_
+        # pkgname, register_ignorepkg's universe) answers from this one list.
+        # Entries are deduped (a pkgbase equal to its output is one name) and
+        # first entry wins in _pkgname_owner; the workspace surface carries no
+        # cross-recipe collisions (verified across all committed .SRCINFOs).
+        for row in (srcinfo_rows B) (srcinfo_rows N)
+            set -l parts (string split -m 1 '|' -- "$row")
+            set -l entry "$parts[2]|$parts[1]"
+            contains -- "$entry" $_PKGNAME_INDEX; or set -a _PKGNAME_INDEX "$entry"
         end
     end
     test (count $_PKGNAME_INDEX) -gt 0; and printf '%s\n' $_PKGNAME_INDEX
@@ -6265,7 +3403,7 @@ function record_package_toolchain -a package_id pkg_path gcc_identity
     end
     if not $run_as sh -c 'printf "%s\n%s\n" "$1" "$2" >"$3" && mv -f -- "$3" "$4"' \
         sh "$pkg_path" "$gcc_identity" "$temporary" "$state_file"
-        $run_as rm -f -- "$temporary" 2>/dev/null
+        $run_as command rm -f -- "$temporary" 2>/dev/null
         ui_error "$package_id: cannot record GCC build identity: $state_file"
         return 1
     end
@@ -6314,35 +3452,14 @@ function build_package -a package_id install_flag clean_flag skip_flag no_sync_f
 
     # A drift clean deletes the archive and its VCS baseline. Resolve a
     # potentially skippable archive first so an unreachable ref still refuses
-    # before makepkg rather than being hidden by that automatic clean.
+    # before makepkg rather than being hidden by that automatic clean. The
+    # decision is the same one the skip block makes (freshness_skip_decision);
+    # here only its deferral outcome is acted on — a skip verdict still falls
+    # through to the drift clean and rebuild below.
     if test "$toolchain_mismatch" = "1"; and test "$clean_flag" != "1"; and test "$skip_flag" = "1"
-        set -l candidate (find "$pkg_path" -maxdepth 1 -name '*.pkg.tar.zst' \
-            -printf '%T@\t%p\n' 2>/dev/null | sort -rn | head -1 | cut -f2-)
-        if test -n "$candidate"
-            set -l pkg_time (stat -c %Y "$pkg_path/PKGBUILD" 2>/dev/null)
-            set -l built_time (stat -c %Y "$candidate" 2>/dev/null)
-            if test -n "$pkg_time" -a -n "$built_time" -a "$built_time" -ge "$pkg_time"
-                vcs_archive_is_current "$pkg_path" "$candidate"
-                set -l freshness_status $status
-                if test $freshness_status -eq 2
-                    # rc 2 = freshness cannot be established (transport
-                    # retries exhausted inside the query). Owner semantics
-                    # (2026-10-02): -s may skip ONLY on verified-unchanged.
-                    # Unverifiable parks the recipe ONLY when its consumer
-                    # chain can absorb the wait (few or no waiters); else it
-                    # falls back to a normal build attempt. Never fail.
-                    ui_error "$pkg_name: --skip cannot verify upstream VCS freshness: $_VCS_REVISION_ERROR"
-                    switch (unverifiable_defer_plan "$package_id")
-                        case defer
-                            set -g _DEFER_REASON upstream-unverified
-                            ui_error "$pkg_name: consumer chain can absorb the wait — parking this recipe (deferred)"
-                            echo "  Nothing was built or installed; dependents wait (waits-on-deferred)."
-                            return $lane_outcome_defer
-                        case '*'
-                            ui_error "$pkg_name: consumers cannot wait — falling back to a normal build attempt"
-                    end
-                end
-            end
+        freshness_skip_decision "$pkg_path" "$package_id"
+        if test "$_FRESHNESS_VERDICT" = "defer"
+            return $lane_outcome_defer
         end
     end
 
@@ -6368,64 +3485,144 @@ function build_package -a package_id install_flag clean_flag skip_flag no_sync_f
         end
     end
 
-    # Skip if already built (only when -s flag is set)
-    if test "$skip_flag" = "1"
-        # find with -printf: newest archive by mtime (fish globs would FATAL on
-        # "no matches" for packages that have no built archive yet)
-        set -l latest_pkg (find "$pkg_path" -maxdepth 1 -name '*.pkg.tar.zst' -printf '%T@\t%p\n' 2>/dev/null | sort -rn | head -1 | cut -f2-)
-        if test -n "$latest_pkg"
-            set -l pkg_time (stat -c %Y "$pkg_path/PKGBUILD" 2>/dev/null)
-            set -l built_time (stat -c %Y "$latest_pkg" 2>/dev/null)
-            if test -n "$pkg_time" -a -n "$built_time" -a "$built_time" -ge "$pkg_time"
-                vcs_archive_is_current "$pkg_path" "$latest_pkg"
-                set -l freshness_status $status
-                if test $freshness_status -eq 2
-                    # Same contract as the toolchain pre-check above (owner
-                    # semantics 2026-10-02): park when the consumer chain
-                    # can absorb the wait, else fall back to a normal build.
-                    ui_error "$pkg_name: --skip cannot verify upstream VCS freshness: $_VCS_REVISION_ERROR"
+    # An explicit topology opt-in selects nvchecker; every other stable recipe
+    # keeps the existing Arch repository behavior.
+    #
+    # In the default Arch path, what makes committed sums stale is not the
+    # version number but a moved *source*: 26 of the 28 stable recipes pin a
+    # literal version inside their source=() URLs, so a pkgver rewrite leaves
+    # them fetching exactly what they fetched before and their sums still
+    # verify. Only linux-api-headers and linux-firmware spell the version into a
+    # URL. Diffing the array around the rewrite is therefore the precise signal,
+    # and treating every pkgver bump as stale would refuse builds whose sums
+    # were never in question.
+    #
+    # The version check runs BEFORE the skip decision (2026-10-05): freshness
+    # is not purely local mtime — a resumed -s run must see upstream movement,
+    # or it reports "already built" forever at a stale version. A rewrite bumps
+    # the PKGBUILD past every existing archive, so the skip gate then says
+    # build on its own.
+    set -l sources_before (pkgbuild_array_checked "$pkg_path" source)
+    set -l sources_before_status $status
+    set -l external_sync 0
+    set -l skip_allowed 1
+    if test $sources_before_status -eq 2
+        # An unevaluable recipe must never be claimed fresh: -s would skip it
+        # forever at whatever version the tree happens to hold.
+        ui_warning "$package_id: cannot evaluate the PKGBUILD source array — freshness is unverifiable; this run will not skip"
+        set skip_allowed 0
+    end
+    if test "$no_sync_flag" != "1"
+        set -l version_provider (package_version_sync_provider "$package_id")
+        if test "$version_provider" = nvchecker
+            # Source changes and checksum anchoring are handled by the
+            # opted-in provider path as one rollback boundary.
+            sync_nvchecker_version "$package_id" "$pkg_path"
+            set -l sync_status $status
+            switch $sync_status
+                case 0
+                    ;
+                case 1 3
+                    set skip_allowed 0
+                case $lane_outcome_defer
+                    return $lane_outcome_defer
+                case '*'
+                    ui_error "failed to synchronize upstream metadata for $pkg_name"
+                    return 1
+            end
+            set external_sync 1
+        else
+            sync_stable_version "$pkg_path"
+            set -l sync_status $status
+            switch $sync_status
+                case 0
+                    ;
+                case 1 3
+                    # 1 = pkgver moved, 3 = only pkgrel/epoch moved; the source
+                    # diff below decides whether the sums need re-anchoring.
+                    set skip_allowed 0
+                case 4
+                    # The repo query FAILED (unsynced db, mirror error) — the
+                    # committed version's freshness is UNVERIFIED. Never a
+                    # silent skip and never a silent stale build (2026-10-05):
+                    # park the recipe when its consumer chain can absorb the
+                    # wait, else build the committed version loudly.
+                    set skip_allowed 0
                     switch (unverifiable_defer_plan "$package_id")
                         case defer
                             set -g _DEFER_REASON upstream-unverified
-                            ui_error "$pkg_name: consumer chain can absorb the wait — parking this recipe (deferred)"
+                            ui_error "$pkg_name: the Arch repository version could not be queried — consumer chain can absorb the wait — parking this recipe (deferred)"
                             echo "  Nothing was built or installed; dependents wait (waits-on-deferred)."
                             return $lane_outcome_defer
                         case '*'
-                            ui_error "$pkg_name: consumers cannot wait — falling back to a normal build attempt"
+                            ui_error "$pkg_name: the Arch repository version could not be queried — building the committed version as-is (its freshness is unverified)"
                     end
-                end
-                if test $freshness_status -eq 0
-                    if test (count $_FRESHNESS_WAIVER) -gt 0
-                        # LOUD on purpose (never lower verification silently):
-                        # this skip is a freshness WAIVER, not an untouched
-                        # archive, and the named line(s) — unguarded, so they
-                        # land in the per-package log in lane mode too — say
-                        # exactly what was waived. The run record row carries
-                        # the claim as its reason (freshness-waived /
-                        # abi-provider-waived).
-                        for waiver_line in $_FRESHNESS_WAIVER
-                            ui_info "$waiver_line"
-                        end
+                case '*'
+                    ui_error "failed to synchronize stable metadata for $pkg_name"
+                    return 1
+            end
+        end
+    end
+    set -l sources_after (pkgbuild_array_checked "$pkg_path" source)
+    set -l sources_after_status $status
+    set -l moved_sources
+    set -l source_count (count $sources_after)
+    if test (count $sources_before) -gt $source_count
+        set source_count (count $sources_before)
+    end
+    for i in (seq $source_count)
+        if test "$sources_before[$i]" != "$sources_after[$i]"
+            set -a moved_sources $sources_after[$i]
+        end
+    end
+    if test $sources_after_status -eq 2
+        ui_warning "$package_id: cannot evaluate the rewritten PKGBUILD source array — freshness is unverifiable; this run will not skip"
+        set skip_allowed 0
+    end
+    set -l stale_sums 0
+    if test (count $moved_sources) -gt 0
+        # A moved source is never freshness-skippable either.
+        set skip_allowed 0
+        if test $external_sync -eq 0
+            set stale_sums 1
+        end
+    end
+
+    # Skip if already built (only when -s flag is set). The decision — the
+    # COMPLETE current-version set, payload-valid, newer than the PKGBUILD,
+    # VCS-current or waived — is freshness_skip_decision, shared with the
+    # toolchain pre-check above; only the skip CLAIM renders it. The claim is
+    # made only when the version check above established there was nothing to
+    # do (skip_allowed): over an UNCHECKED repo version "already built" would
+    # be a freshness claim this run never made (2026-10-05).
+    if test "$skip_flag" = "1"; and test $skip_allowed -eq 1
+        freshness_skip_decision "$pkg_path" "$package_id"
+        switch $_FRESHNESS_VERDICT
+            case defer
+                return $lane_outcome_defer
+            case skip
+                if test (count $_FRESHNESS_WAIVER) -gt 0
+                    # LOUD on purpose (never lower verification silently):
+                    # this skip is a freshness WAIVER, not an untouched
+                    # archive, and the named line(s) — unguarded, so they
+                    # land in the per-package log in lane mode too — say
+                    # exactly what was waived. The run record row carries
+                    # the claim as its reason (freshness-waived /
+                    # abi-provider-waived).
+                    for waiver_line in $_FRESHNESS_WAIVER
+                        ui_info "$waiver_line"
                     end
-                    if test "$_BUILD_QUIET" != "1"
-                        ui_info "$pkg_name: already built ($(basename $latest_pkg))"
-                    end
-                    # -s + -i: the skip path installs too — topo order must
-                    # hold for already-built packages just the same.
-                    # ($log_file isn't defined yet — use the canonical path.)
-                    if test "$install_flag" = "1"
-                        install_pkgs_now (package_log_file "$package_id") 1 $force_install_flag (list_split_pkgs "$pkg_path"); or return 1
-                    end
-                    return 0
                 end
                 if test "$_BUILD_QUIET" != "1"
-                    if test $freshness_status -eq 3
-                        ui_info "$pkg_name: $_VCS_REVISION_ERROR; rebuilding once to record a baseline"
-                    else
-                        ui_info "$pkg_name: upstream VCS ref moved; rebuilding"
-                    end
+                    ui_info "$pkg_name: already built ("(string join ', ' (basename -- $_FRESHNESS_ARCHIVE))")"
                 end
-            end
+                # -s + -i: the skip path installs too — topo order must
+                # hold for already-built packages just the same.
+                # ($log_file isn't defined yet — use the canonical path.)
+                if test "$install_flag" = "1"
+                    install_pkgs_now (package_log_file "$package_id") 1 $force_install_flag (list_split_pkgs "$pkg_path"); or return 1
+                end
+                return 0
         end
     end
 
@@ -6454,63 +3651,6 @@ function build_package -a package_id install_flag clean_flag skip_flag no_sync_f
     if test "$toolchain_mismatch" = "1"
         printf 'GCC build identity missing or changed; cached build artifacts were cleaned before this build.\nGCC: %s\n' \
             "$gcc_identity" >>"$log_file"
-    end
-
-    # An explicit topology opt-in selects nvchecker; every other stable recipe
-    # keeps the existing Arch repository behavior.
-    #
-    # In the default Arch path, what makes committed sums stale is not the
-    # version number but a moved *source*: 26 of the 28 stable recipes pin a
-    # literal version inside their source=() URLs, so a pkgver rewrite leaves
-    # them fetching exactly what they fetched before and their sums still
-    # verify. Only linux-api-headers and linux-firmware spell the version into a
-    # URL. Diffing the array around the rewrite is therefore the precise signal,
-    # and treating every pkgver bump as stale would refuse builds whose sums
-    # were never in question.
-    set -l sources_before (pkgbuild_array "$pkg_path" source)
-    set -l external_sync 0
-    if test "$no_sync_flag" != "1"
-        set -l version_provider (package_version_sync_provider "$package_id")
-        if test "$version_provider" = nvchecker
-            sync_nvchecker_version "$package_id" "$pkg_path"
-            set -l sync_status $status
-            switch $sync_status
-                case 0 1 3
-                    # Source changes and checksum anchoring are handled by the
-                    # opted-in provider path as one rollback boundary.
-                case $lane_outcome_defer
-                    return $lane_outcome_defer
-                case '*'
-                    ui_error "failed to synchronize upstream metadata for $pkg_name"
-                    return 1
-            end
-            set external_sync 1
-        else
-            sync_stable_version "$pkg_path"
-            switch $status
-                case 0 1 3
-                    # 1 = pkgver moved, 3 = only pkgrel/epoch moved; the source
-                    # diff below decides whether the sums need re-anchoring.
-                case '*'
-                    ui_error "failed to synchronize stable metadata for $pkg_name"
-                    return 1
-            end
-        end
-    end
-    set -l sources_after (pkgbuild_array "$pkg_path" source)
-    set -l moved_sources
-    set -l source_count (count $sources_after)
-    if test (count $sources_before) -gt $source_count
-        set source_count (count $sources_before)
-    end
-    for i in (seq $source_count)
-        if test "$sources_before[$i]" != "$sources_after[$i]"
-            set -a moved_sources $sources_after[$i]
-        end
-    end
-    set -l stale_sums 0
-    if test (count $moved_sources) -gt 0; and test $external_sync -eq 0
-        set stale_sums 1
     end
 
     if test "$_BUILD_QUIET" != "1"
@@ -6542,6 +3682,12 @@ function build_package -a package_id install_flag clean_flag skip_flag no_sync_f
                 # integrity signal, treated like a failed build — it stops the
                 # dispatch. Parking it would keep building the rest of the run
                 # over a possible tamper signal.
+                return 1
+            case 5
+                # The anchor failure could not roll its own rewrite back: the
+                # recipe is left dirty. Nothing may build over it and nothing
+                # may quietly park it — stop like an integrity signal, and the
+                # anchor's own message named the dirty recipe.
                 return 1
             case '*'
                 # Anchoring is impossible right now (2: fetch/tool/refresh
@@ -6618,7 +3764,7 @@ function build_package -a package_id install_flag clean_flag skip_flag no_sync_f
         if test -z "$old_mtime"; or test "$old_mtime" != "$after_fields[2]"; or test "$old_size" != "$after_fields[3]"
             set -a changed_archives "$after_fields[1]"
             if test -e "$after_fields[1].gsa-vcs-revisions"; \
-                and not rm -f -- "$after_fields[1].gsa-vcs-revisions"
+                and not command rm -f -- "$after_fields[1].gsa-vcs-revisions"
                 set archive_revision_error "cannot invalidate the old VCS revision record for "(basename "$after_fields[1]")
             end
         end
@@ -6709,13 +3855,15 @@ set -g _lane_done
 set -g _lane_started
 
 function deps_of -a pkg
-    for entry in $_DEPS
-        set -l parts (string split ':' $entry -m 2)
-        if test "$parts[1]" = "$pkg"
-            if test (count $parts) -ge 2 -a -n "$parts[2]"
-                string split ',' $parts[2]
-            end
-            return
+    # Keyed lookup (see _topo_key): the old loop split every _DEPS row until
+    # the id matched — O(P) command substitutions per call, paid by every
+    # readiness check. Same output contract: the record's deps in record
+    # order, one per line; nothing for a no-edge record or unknown id.
+    set -l dep_var _TDEP_(_topo_key "$pkg")
+    if set -q $dep_var
+        set -l deps $$dep_var
+        if test (count $deps) -gt 0
+            printf '%s\n' $deps
         end
     end
 end
@@ -6974,22 +4122,85 @@ function pacman_db_local_path
     echo (pacman_db_path)"/local"
 end
 
-# One "holder pid=N cmd=..." line per live lock holder on stdout. Empty
-# output = proven idle; any line (including an "unknown" line when pgrep is
-# missing) = treat as busy and NEVER remove the lock.
-function pacman_lock_holder_lines
-    if not command -q pgrep
-        echo "  holder unknown: pgrep is unavailable — cannot prove the lock idle"
+# One "holder pid=N cmd=..." line per process holding the lock INODE open,
+# plus at most one "holder unknown: ..." line when idleness cannot be
+# proven. Empty output = proven idle; ANY output line = treat as
+# busy/unproven and NEVER touch the lock.
+# The proof is open-handle inspection of /proc/*/fd against the lock's
+# dev+inode (find -samefile; alpm holds db.lck open for a whole transaction,
+# verified 2026-10-04), never a process-NAME list: the old
+# `pgrep -x pacman|packagekitd|pamac` missed every other alpm client (this
+# host runs paru), and probe children killed by a Ctrl-C storm returned a
+# confidently EMPTY list that gated deletion of live state.
+function pacman_lock_holder_lines -a lock_path
+    if test -z "$lock_path"
+        echo "  holder unknown: no lock path to inspect — cannot prove the lock idle"
+        return 0
+    end
+    if not test -e "$lock_path"
+        # No lock file at all: every alpm transaction holds the lock inode
+        # open for its whole duration (verified 2026-10-04), so an absent
+        # lock proves no transaction is live. (A lock deleted WHILE held
+        # leaves its inode open but unreferenced — unobservable by path, and
+        # nothing here acts on the classification anyway.)
+        return 0
+    end
+    if not test -d /proc
+        echo "  holder unknown: no /proc to inspect open handles — cannot prove the lock idle"
+        return 0
+    end
+    # Each scan stage's trailing sentinel line carries the child's exit
+    # status, so a killed or truncated probe is detected as UNKNOWN instead
+    # of silently looking idle — the scan children sit in the foreground pgrp
+    # and die on a second SIGINT mid-scan (2026-09-23 teardown storm).
+    set -l fd_dirs (LC_ALL=C find /proc -mindepth 2 -maxdepth 2 -type d -name fd -printf '%p\n' 2>/dev/null; echo "__gsa_fd_dirs_end__ $status")
+    if test (count $fd_dirs) -eq 0; or not string match -q '__gsa_fd_dirs_end__ *' -- "$fd_dirs[-1]"
+        echo "  holder unknown: the open-handle scan was cut short — cannot prove the lock idle"
+        return 0
+    end
+    set -l list_rc (string replace '__gsa_fd_dirs_end__ ' '' -- "$fd_dirs[-1]")
+    set -e fd_dirs[-1]
+    if test "$list_rc" -ge 128; or test "$list_rc" -eq 127
+        echo "  holder unknown: the open-handle scan died (rc=$list_rc) — cannot prove the lock idle"
+        return 0
+    end
+    if not contains -- /proc/1/fd $fd_dirs
+        # hidepid (or equivalent) hides other users' processes from readdir:
+        # their holders would be invisible, which is unknown, never idle.
+        echo "  holder unknown: /proc is restricted for "(id -un)" — cannot prove the lock idle"
+        return 0
+    end
+    # Stage 2 matches the lock inode among those handles. stdout and stderr
+    # are captured together: an unreadable fd dir ("Permission denied") means
+    # a holder could hide there.
+    set -l scan (LC_ALL=C find -L $fd_dirs -maxdepth 1 -samefile "$lock_path" -printf '%p\n' 2>&1; echo "__gsa_lock_scan_end__ $status")
+    if test (count $scan) -eq 0; or not string match -q '__gsa_lock_scan_end__ *' -- "$scan[-1]"
+        echo "  holder unknown: the open-handle scan was cut short — cannot prove the lock idle"
+        return 0
+    end
+    set -l scan_rc (string replace '__gsa_lock_scan_end__ ' '' -- "$scan[-1]")
+    set -e scan[-1]
+    if test "$scan_rc" -ge 128; or test "$scan_rc" -eq 127
+        echo "  holder unknown: the open-handle scan died (rc=$scan_rc) — cannot prove the lock idle"
         return 0
     end
     set -l holder_pids
-    for name in pacman packagekitd pamac
-        set -a holder_pids (pgrep -x "$name" 2>/dev/null)
+    set -l blind 0
+    for line in $scan
+        if string match -qr '^/proc/[0-9]+/fd/[0-9]+$' -- "$line"
+            set -l pid (string replace -r '^/proc/([0-9]+)/fd/.*$' '$1' -- "$line")
+            contains -- "$pid" $holder_pids; or set -a holder_pids $pid
+        else if string match -q '*Permission denied*' -- "$line"
+            set blind 1
+        end
     end
     for pid in $holder_pids
         set -l cmd (ps -o args= -p "$pid" 2>/dev/null | string trim)
         test -n "$cmd"; or set cmd "(cmdline unavailable)"
         printf '  holder pid=%s cmd=%s\n' "$pid" "$cmd"
+    end
+    if test $blind -eq 1
+        echo "  holder unknown: some processes hide their open files from "(id -un)" — cannot prove the lock idle"
     end
 end
 
@@ -7003,39 +4214,41 @@ function pacman_lock_busy_report -a lock_path
     echo "    sudo rm -f $lock_path"
 end
 
-# check_pacman_lock <path> — report-only probe PLUS guarded stale removal.
-# Reconciliation note (2026-09-23): the older never-remove todo predates the
-# user's explicit re-approval of idle-removal that same day after the lock
-# storm (plan.md decision `lock_strategy = both`). Merged rule: NEVER remove
-# while any holder exists; remove ONLY when two probes ~1 s apart both find
-# nothing — that closes the appear-between-probes race.
-# rc 0 = absent or removed (clear to install), rc 1 = busy/unremovable.
+# check_pacman_lock <path> — REPORT-ONLY (contract 2026-10-04): a system
+# pacman database lock is NEVER deleted automatically. The 2026-09-23
+# "two quiet probes 1 s apart → rm" behaviour lost to three failure modes:
+# alpm clients outside the old name list (this host runs paru), the
+# probe↔rm TOCTOU window, and a Ctrl-C storm killing the probe children so
+# an empty holder list gated `rm` on LIVE pacman state mid-transaction.
+# Removal is therefore always an explicit operator action (the named
+# `sudo rm` line in pacman_lock_busy_report); this probe only classifies
+# the lock — held / stale / unknown — against the lock inode's open handles.
+# rc 0 = lock absent (clear to install); rc 1 = lock present (held, stale,
+# or unprovable). Nothing is ever removed here.
 function check_pacman_lock -a lock_path
     if test -z "$lock_path"; or not test -e "$lock_path"
         return 0
     end
-    set -l holders (pacman_lock_holder_lines)
-    if test (count $holders) -gt 0
-        pacman_lock_busy_report "$lock_path" $holders
-        return 1
+    set -l holders (pacman_lock_holder_lines "$lock_path")
+    pacman_lock_busy_report "$lock_path" $holders
+    set -l classified idle
+    for line in $holders
+        if string match -q '  holder pid=*' -- "$line"
+            set classified held
+            break
+        else if string match -q '  holder unknown:*' -- "$line"
+            set classified unknown
+        end
     end
-    sleep 1
-    set holders (pacman_lock_holder_lines)
-    if test (count $holders) -gt 0
-        pacman_lock_busy_report "$lock_path" $holders
-        return 1
+    switch $classified
+        case held
+            echo "  status: HELD — a live transaction holds the lock inode open."
+        case unknown
+            echo "  status: UNKNOWN — idleness could not be proven (see above)."
+        case '*'
+            echo "  status: STALE — no open handle on the lock inode (proven idle)."
     end
-    # Provably idle twice — the case that hard-failed six installs on
-    # 2026-09-23. LOUD on purpose: this mutates host state.
-    if rm -f -- "$lock_path"
-        ui_warning "STALE pacman lock removed (no holder on two probes 1 s apart): $lock_path"
-        echo "  Why: the previous pacman/packagekitd/pamac died without unlocking its"
-        echo "  database (2026-09-23 lock-storm incident). If installs fail next,"
-        echo "  re-check the database before forcing anything else."
-        return 0
-    end
-    ui_error "cannot remove the stale lock: $lock_path (permission denied?)"
-    echo "  Remove it manually: sudo rm -f $lock_path"
+    echo "  NEVER deleted automatically — the Recovery command above is the operator action."
     return 1
 end
 
@@ -7059,9 +4272,9 @@ function pacman_db_broken_report -a local_dir
     for line in $argv[2..-1]
         echo "$line"
     end
-    echo "  A live transaction may be committing these right now. If they stay"
-    echo "  broken after it ends, the next builder run repairs them automatically"
-    echo "  (idle removal), or fix by hand:"
+    echo "  A live transaction may be committing these right now — do not touch"
+    echo "  them while it runs. The builder NEVER deletes local database entries"
+    echo "  automatically; once nothing is running, repair by hand:"
     echo "    sudo rm -rf <entry>   then reinstall the package (-s -i / -ia)"
 end
 
@@ -7075,13 +4288,13 @@ end
 # prints the raw `desc` open error during the package() phase. The entry is
 # unusable in every direction (-U, -R, -Ql all hard-fail), so removal plus
 # reinstall is the only repair; pacman -R cannot even read it.
-# Rules mirror check_pacman_lock: NEVER touch anything while a pacman/
-# packagekitd/pamac holder exists (a live transaction may legitimately be
-# mid-commit); remove ONLY when two probes 1 s apart find the box idle; LOUD,
-# because this mutates host state. In non-root runs `rm -rf` fails like the
-# lock probe does and prints the manual sudo line instead.
-# rc 0 = nothing broken, or the broken entries were removed; rc 1 = broken
-# entries remain (busy holder or permission denied).
+# Rules mirror check_pacman_lock (2026-10-04): REPORT-ONLY. The entries are
+# named with the exact operator repair command and NEVER deleted here — the
+# idle-removal gate inherited the same three failure modes as the lock
+# (name-list gap, probe↔rm TOCTOU, Ctrl-C-killed probes deleting live state
+# mid-commit), so repair is an explicit operator action.
+# rc 0 = nothing broken; rc 1 = broken entries present (reported, never
+# touched).
 function check_pacman_db_health -a local_dir
     if test -z "$local_dir"; or not test -d "$local_dir"
         return 0
@@ -7090,43 +4303,30 @@ function check_pacman_db_health -a local_dir
     if test (count $broken) -eq 0
         return 0
     end
-    set -l holders (pacman_lock_holder_lines)
-    if test (count $holders) -gt 0
-        ui_warning "local package database has "(count $broken)" broken entry(ies) but a transaction holder is alive — leaving them untouched:"
-        pacman_db_broken_report "$local_dir" $holders
-        return 1
-    end
-    sleep 1
-    set broken (pacman_db_broken_entries "$local_dir")
-    if test (count $broken) -eq 0
-        return 0
-    end
-    set holders (pacman_lock_holder_lines)
-    if test (count $holders) -gt 0
-        ui_warning "local package database has "(count $broken)" broken entry(ies) but a transaction holder is alive — leaving them untouched:"
-        pacman_db_broken_report "$local_dir" $holders
-        return 1
-    end
-    # Provably idle twice — the same gate as the lock removal above.
-    if rm -rf -- $broken
-        ui_warning "BROKEN local package database entries removed (idle on two probes 1 s apart):"
-        for entry in $broken
-            echo "  removed: $entry"
+    # A live alpm transaction holds <dbpath>/db.lck open for its whole
+    # duration, and these entries live in <dbpath>/local — the sibling lock
+    # is the right inode to ask about.
+    set -l lock_path (path dirname "$local_dir")/db.lck
+    set -l holders (pacman_lock_holder_lines "$lock_path")
+    ui_warning "local package database has "(count $broken)" broken entry(ies) — report-only, never repaired automatically:"
+    pacman_db_broken_report "$local_dir" $holders
+    set -l classified idle
+    for line in $holders
+        if string match -q '  holder pid=*' -- "$line"
+            set classified held
+            break
+        else if string match -q '  holder unknown:*' -- "$line"
+            set classified unknown
         end
-        echo "  Why: an interrupted pacman -U commit leaves the entry directory without"
-        echo "  its desc/files members (2026-09-24 vscodium-insiders-git incident),"
-        echo "  after which pacman rejects every later transaction with a misleading"
-        echo "  'invalid or corrupted package'. The affected package(s) now count as"
-        echo "  NOT installed — reinstall them next: 'build-all.fish -s -i' or '-ia'"
-        echo "  reinstalls from the already-built archives."
-        return 0
     end
-    ui_error "cannot remove broken local package database entries (permission denied?):"
-    for entry in $broken
-        echo "  $entry"
+    switch $classified
+        case held
+            echo "  status: HELD — a live transaction may be committing these entries."
+        case unknown
+            echo "  status: UNKNOWN — idleness could not be proven (see above)."
+        case '*'
+            echo "  status: IDLE — no open handle on $lock_path."
     end
-    echo "  Remove them manually, then reinstall the package(s):"
-    echo "    sudo rm -rf <entry> && sudo pacman -U <archive>"
     return 1
 end
 
@@ -7185,8 +4385,10 @@ function check_runtime_prereqs -a install_flag needs_stable_sync
     end
     if test "$install_flag" = "1"
         set -a required flock pacman
-        # pgo_payload_refusals unrolls the archive to inspect its payload.
-        set -a required tar strings
+        # pgo_payload_refusals unrolls the archive to inspect its payload;
+        # readelf arms the post-install NEEDED probe (R-F26: gate up front,
+        # the probe's own skip stays a named non-fatal backstop).
+        set -a required tar strings readelf
         if test "$_ROOT_MODE" != "1"
             set -a required sudo
         end
@@ -7234,6 +4436,13 @@ end
 # escalation is `sudo -n` (2026-09-26 decision) — the builder never prompts,
 # so a dead credential fails fast instead of hanging an unattended run.
 
+# The topology id charset: ONE pattern, the loader's own rule (its id check
+# matches against THIS — read_topology_config refuses anything else at config
+# load), asserted again at the wire's PRODUCER so a drifted identity can
+# never reach the wire and degrade a good build to `lost (125)` at the reap
+# (R-F29). Defined once here, referenced by loader and codec alike.
+set -g _TOPOLOGY_ID_RE '^[A-Za-z0-9._+-]+$'
+
 # ─── Lane result codec: the process boundary's one format ────────────────────
 # One wire line: `pkg rc dur [reason]`, space-separated — the reason rides
 # only on deferrals that carry one. encode/decode are THE pair that defines
@@ -7247,10 +4456,14 @@ end
 # (anchoring-refused) when there is no fourth.
 
 # lane_result_encode PKG RC DUR [REASON] → the wire line on stdout; fails on
-# an empty pkg (identity is mandatory), a non-numeric rc/dur (the outcome
-# vocabulary is numeric by construction), or a malformed reason token.
+# an empty pkg (identity is mandatory), a pkg outside the loader's id charset
+# (_TOPOLOGY_ID_RE), a non-numeric rc/dur (the outcome vocabulary is numeric by
+# construction), or a malformed reason token.
 function lane_result_encode -a pkg rc dur reason
     if test -z "$pkg"
+        return 1
+    end
+    if not string match -qr "$_TOPOLOGY_ID_RE" -- "$pkg"
         return 1
     end
     if not string match -qr '^[0-9]+$' -- "$rc"
@@ -7271,8 +4484,12 @@ end
 
 # lane_result_decode EXPECTED_PKG LINE → three lines (pkg, rc, dur), plus a
 # fourth (reason) when the wire carried one, for fish command substitution,
-# which splits on newlines only; fails on any shape, identity or numeric
-# mismatch. Callers treat failure as "no valid result".
+# which splits on newlines only. rc 1 = no valid line (shape or numeric
+# mismatch); rc 2 = FOREIGN: a well-formed line carrying a different identity
+# — another run's or an orphan's result that landed here. A foreign line is
+# NEVER this lane's outcome: the reap must ignore it, not classify it and not
+# kill the lane that owns the slot (R-F9). Callers treat any failure as "no
+# valid result".
 function lane_result_decode -a expected_pkg result_line
     set -l fields
     for field in (string split ' ' -- "$result_line")
@@ -7284,7 +4501,7 @@ function lane_result_decode -a expected_pkg result_line
         return 1
     end
     if test "$fields[1]" != "$expected_pkg"
-        return 1
+        return 2
     end
     if not string match -qr '^[0-9]+$' -- "$fields[2]"
         return 1
@@ -7312,19 +4529,20 @@ function write_lane_result -a result_file pkg rc dur reason
     end
     set -l tmp_result "$result_file.tmp.$fish_pid"
     if not printf '%s\n' "$line" >"$tmp_result"
-        rm -f -- "$tmp_result"
+        command rm -f -- "$tmp_result"
         return 1
     end
     # Write-time ownership: in root mode the lane child creates this tmp as
     # root, so hand it to the build user BEFORE the atomic publish — the
     # published result must never be root-owned. A SIGKILL between printf and
-    # chown strands only the tmp (next run rm -f's by directory permission).
+    # chown strands only the tmp; the next run's startup sweep collects it
+    # (sweep_stale_run_artifacts — the "next run rm -f's" never used to happen).
     if test "$_ROOT_MODE" = "1"; and not chown "$_BUILD_USER": "$tmp_result" 2>/dev/null
-        rm -f -- "$tmp_result"
+        command rm -f -- "$tmp_result"
         return 1
     end
     if not mv -f -- "$tmp_result" "$result_file"
-        rm -f -- "$tmp_result"
+        command rm -f -- "$tmp_result"
         return 1
     end
     return 0
@@ -7573,17 +4791,222 @@ end
 function cleanup_active_lanes
     dispatcher_log "cleanup begin count="(count $_ACTIVE_LANE_PIDS)
     set -l active_pids $_ACTIVE_LANE_PIDS
+    set -l active_pkgs $_ACTIVE_LANE_PKGS
+    # The globals stay populated until the END: a second signal arriving
+    # during the grace window escalates through kill_active_lanes_immediate,
+    # which reads _ACTIVE_LANE_PIDS — clearing early would make the escalation
+    # a no-op exactly when it matters.
+    # Fleet-wide teardown in THREE phases, not one stop_lane_process per lane
+    # in series: a serial TERM→grace→KILL cost ~3 min for six lanes and was
+    # un-abortable while it ran (R-F15). One TERM per pid, ONE shared grace
+    # window, ONE SIGKILL sweep. The per-pid TERM discipline of
+    # stop_lane_process is preserved exactly: the 2026-09-23 blitz re-TERMed
+    # a running `pacman -U` mid db.lck unlock — each pid is TERMed ONCE and a
+    # transaction that survived the TERM gets the whole grace to finish.
     for i in (seq (count $active_pids))
+        set -l lane_pid "$active_pids[$i]"
         set -l pkg ''
-        if test $i -le (count $_ACTIVE_LANE_PKGS)
-            set pkg $_ACTIVE_LANE_PKGS[$i]
+        if test $i -le (count $active_pkgs)
+            set pkg "$active_pkgs[$i]"
         end
-        stop_lane_process "$active_pids[$i]" interrupt "$pkg"
+        set -l pkg_label '-'
+        test -n "$pkg"; and set pkg_label "$pkg"
+        set -l lane_process_ids (lane_processes "$lane_pid")
+        set -l pid_list '-'
+        if test (count $lane_process_ids) -gt 0
+            set pid_list (string join ',' -- $lane_process_ids)
+        end
+        dispatcher_log "stop begin reason=interrupt pgid=$lane_pid pkg=$pkg_label pids=$pid_list"
+        for process_id in $lane_process_ids
+            kill -TERM "$process_id" 2>/dev/null
+        end
     end
+    # Shared grace (wall-clock deadline, see stop_lane_process): every lane's
+    # stragglers drain inside ONE window instead of one window each.
+    set -l grace_deadline (math (date +%s) + $_LANE_STOP_GRACE_S)
+    while true
+        set -l survivors 0
+        for lane_pid in $active_pids
+            if test (count (lane_processes "$lane_pid")) -gt 0
+                set survivors (math $survivors + 1)
+            end
+        end
+        test $survivors -eq 0; and break
+        if test (date +%s) -ge $grace_deadline
+            break
+        end
+        sleep 0.1
+    end
+    for i in (seq (count $active_pids))
+        set -l lane_pid "$active_pids[$i]"
+        set -l pkg ''
+        if test $i -le (count $active_pkgs)
+            set pkg "$active_pkgs[$i]"
+        end
+        set -l pkg_label '-'
+        test -n "$pkg"; and set pkg_label "$pkg"
+        set -l lane_process_ids (lane_processes "$lane_pid")
+        for process_id in $lane_process_ids
+            # Escalation is exceptional and must be auditable in BOTH logs.
+            dispatcher_log "escalate: pid=$process_id pgid=$lane_pid pkg=$pkg_label SIGKILL after grace reason=interrupt"
+            if test -n "$pkg"
+                set -l pkg_log (package_log_file "$pkg")
+                if ensure_log_writable "$pkg_log"
+                    printf '%s [DEBUG-gsa-term] escalate: pid=%s SIGKILL after %ss grace (reason=%s)\n' \
+                        "$_UI_ICON_WARN" "$process_id" "$_LANE_STOP_GRACE_S" interrupt >>"$pkg_log"
+                end
+            end
+            kill -KILL "$process_id" 2>/dev/null
+        end
+        if test (count $lane_process_ids) -gt 0
+            for poll in (seq 20)
+                set lane_process_ids (lane_processes "$lane_pid")
+                test (count $lane_process_ids) -eq 0; and break
+                sleep 0.1
+            end
+        end
+        wait "$lane_pid" 2>/dev/null
+    end
+    # Only THIS run's result files: a foreign run's leftovers are never ours
+    # to delete (the startup sweep — which owns the whole directory because
+    # the run lock proves no live run exists — collects those).
+    find "$LOG_DIR" -maxdepth 1 -name ".lane.$_RUN_ID.*.result" -delete 2>/dev/null
     set -g _ACTIVE_LANE_PIDS
     set -g _ACTIVE_LANE_PKGS
-    find "$LOG_DIR" -maxdepth 1 -name '.lane*.result' -delete 2>/dev/null
     dispatcher_log "cleanup done"
+end
+
+# ─── Run identity: one run per workspace (R-F9) ─────────────────────────────
+# The workspace run lock is held for the whole run by a tiny HOLDER process
+# (flock(1) on $_STATE_DIR/run.lock) that outlives the dispatcher by at most
+# one 0.25 s poll: the flock dies with the holder and the holder dies with the
+# dispatcher, so a crashed run can never block the next one. A second run is
+# REFUSED, never queued — this repo builds one workspace at a time, and the
+# refusal NAMES the holder. Held before any dispatch, which also makes every
+# stale result/tmp artifact in $_STATE_DIR provably ownerless: the sweeps
+# below may delete wholesale.
+
+function run_lock_acquire
+    set -g _RUN_LOCK_HOLDER ""
+    set -l lock_file "$_STATE_DIR/run.lock"
+    set -l stamp "pid $fish_pid started "(date '+%Y-%m-%dT%H:%M:%S%z')
+    # ONE process holds the lock: the watcher itself locks fd 9 (the flock
+    # fd idiom — the lock lives on the open file description) instead of
+    # flock's command mode, which left an orphaned `sh -c` poll loop when
+    # release killed only the flock parent: the orphan then lingered up to
+    # one 0.25 s poll past its dispatcher and a leak scan could catch it.
+    # The stamp is written only after acquisition — the acquire signal; a
+    # holder that exits at once was refused. The holder watches the
+    # dispatcher pid and exits when it vanishes (SIGKILL cannot strand the
+    # lock). `9<>` never truncates: a refused run must leave the holder's
+    # stamp readable for the refusal UX.
+    sh -c 'exec 9<>"$2" || exit 1
+flock -n 9 || exit 1
+printf "%s\n" "$1" >"$2"
+while kill -0 "$3" 2>/dev/null; do sleep 0.25; done' \
+        sh "$stamp" "$lock_file" "$fish_pid" 2>/dev/null &
+    set -g _RUN_LOCK_HOLDER $last_pid
+    for poll in (seq 40)
+        if grep -qF "$stamp" "$lock_file" 2>/dev/null
+            return 0
+        end
+        if not lane_pid_alive "$_RUN_LOCK_HOLDER"
+            break
+        end
+        sleep 0.05
+    end
+    if grep -qF "$stamp" "$lock_file" 2>/dev/null
+        return 0
+    end
+    set -l holder_line (head -n 1 -- "$lock_file" 2>/dev/null | string trim)
+    if not lane_pid_alive "$_RUN_LOCK_HOLDER"; and test -z "$holder_line"
+        # The helper died BEFORE recording a holder and no foreign holder is
+        # registered: that is a broken lock mechanism (e.g. no flock), never
+        # "another build is running" — say so. (A contended lock also kills
+        # the helper at `flock -n`, but then a holder stamp exists above.)
+        set -g _RUN_LOCK_HOLDER ""
+        ui_error "cannot establish the run lock — the lock helper exited before recording a holder"
+        echo "  lock: $lock_file"
+        echo "  Is flock(1) available and functional? Nothing was started."
+        return 1
+    end
+    test -n "$holder_line"; or set holder_line "(holder unknown)"
+    ui_error "another build already holds this workspace's run lock — refusing to run concurrently"
+    echo "  lock: $lock_file"
+    echo "  holder: $holder_line"
+    echo "  Nothing is queued: this repo runs one build per workspace at a time. The"
+    echo "  holder releases the lock by itself when its run ends or dies — if the"
+    echo "  holder pid is gone, just rerun."
+    wait "$_RUN_LOCK_HOLDER" 2>/dev/null
+    set -g _RUN_LOCK_HOLDER ""
+    return 1
+end
+
+function run_lock_release
+    if test -n "$_RUN_LOCK_HOLDER"
+        # $_RUN_LOCK_HOLDER IS the lock-holding process (see run_lock_acquire):
+        # killing it releases the lock and the poll loop in one step.
+        command kill "$_RUN_LOCK_HOLDER" 2>/dev/null
+        wait "$_RUN_LOCK_HOLDER" 2>/dev/null
+        set -g _RUN_LOCK_HOLDER ""
+    end
+end
+
+# orphan_lane_sweep — detect and stop lanes of a PREVIOUS run (R-F8). A lane's
+# argv carries its run-scoped result path, so any live `--lane-job` referencing
+# THIS workspace's log dir belongs to a dead run: we hold the run lock, so no
+# living dispatcher can own it. Left alone they keep building AND installing
+# (`sudo pacman -U`) unattended and overlap this run (the OOM hazard).
+function orphan_lane_sweep
+    set -l log_prefix "$LOG_DIR/"
+    set -l log_pattern (string escape --style=regex -- "$log_prefix")
+    set -l orphans
+    for row in (ps -eo pid=,args= 2>/dev/null)
+        set -l fields (string trim -- "$row" | string split -m 2 ' ')
+        test (count $fields) -ge 3; or continue
+        set -l pid $fields[1]
+        set -l cmdline (string join ' ' -- $fields[2..-1])
+        test "$pid" != "$fish_pid"; or continue
+        string match -q '*--lane-job*' -- "$cmdline"; or continue
+        string match -qr -- "$log_pattern" "$cmdline"; or continue
+        set -a orphans $pid
+    end
+    if test (count $orphans) -eq 0
+        return 0
+    end
+    for pid in $orphans
+        ui_warning "stopping an orphaned lane of a previous run: pid $pid"
+        dispatcher_log "orphan lane: pid=$pid of a previous run — stopping (no live dispatcher owns it)"
+        stop_lane_process "$pid" orphan ""
+    end
+end
+
+# sweep_stale_run_artifacts — crash leftovers of dead runs (R-F34):
+# `*.tmp.$pid` writers (write_lane_result, the pacman shim, toolchain records)
+# and `*.gsa-vcs-revisions.tmp.XXXXXX` manifests. The run lock proves nothing
+# alive owns them. Unremovable leftovers (root-owned from a killed root run,
+# swept unprivileged) are NAMED with their operator command, never silenced.
+function sweep_stale_run_artifacts
+    set -l stale (find "$_STATE_DIR" -type f \
+        \( -name '*.tmp.*' -o -name '.lane*.result' \) -printf '%p\n' 2>/dev/null)
+    # Manifest temps sit beside built archives at RECIPE depth — which is
+    # packages/<cat>/<pkg>/ here but packages/<id>/ in fixture workspaces — so
+    # match by name anywhere below packages/, never at a fixed depth.
+    set -a stale (find "$SCRIPT_DIR/packages" -type f \
+        -name '*.gsa-vcs-revisions.tmp.*' \
+        -not -path '*/src/*' -not -path '*/pkg/*' -not -path '*/build/*' \
+        -printf '%p\n' 2>/dev/null)
+    for path in $stale
+        # `command rm`: this host defines a fish `rm` FUNCTION that moves
+        # targets to a Trash instead of deleting them — a trash-move leaves
+        # the artifact unowned-but-present semantics wrong (and fails
+        # differently). The external rm is the only real deletion.
+        if command rm -f -- "$path" 2>/dev/null; and not test -e "$path"
+            continue
+        end
+        ui_warning "cannot remove stale runtime artifact (owner "(stat -c %U -- "$path" 2>/dev/null)"): $path"
+        printf '    or: sudo rm -f %s\n' "$path" >&2
+    end
 end
 
 function check_rustc_sanity
@@ -7613,7 +5036,7 @@ function check_rustc_sanity
             set ok 1
         end
     end
-    if not rm -f -- "$probe.rs" "$probe.bin"
+    if not command rm -f -- "$probe.rs" "$probe.bin"
         ui_warning "could not remove rustc sanity probe files under /tmp"
     end
     if test $ok -eq 0
@@ -7695,25 +5118,132 @@ function force_queue_packages
     echo $added
 end
 
+# dispatch_state_refresh — maintain the O(1) per-name markers that
+# pick_next_ready's non-force scan reads. The lane state lists are append-only
+# during a run (_lane_sorted is replaced once at run start and only appended
+# by force_queue_packages afterwards), so a full rebuild keys off the sorted
+# count and everything else is tail-sync: each list's new tail entries are
+# marked once. Markers are per NAME (keyed via _topo_key, injective) — exactly
+# what `contains "$pkg" $_lane_...` matched on, so a duplicated name in
+# _lane_sorted keeps one shared state.
+function dispatch_state_refresh
+    set -l n (count $_lane_sorted)
+    if test "$n" != "$_DS_N"
+        # Stale-key hygiene for the keyed globals: names pattern-swept, never
+        # tracked in a growing list (see read_topology_config).
+        set -l stale (set -n | string match -r '^_(?:DS_DEPKEYS|DS_STARTED|DS_DONE|DS_DEFER|DS_CORE|DS_BAND|DS_INLIST)_.*$')
+        if test (count $stale) -gt 0
+            set -e $stale
+        end
+        set -g _DS_N $n
+        set -g _DS_KEYS (_topo_key $_lane_sorted)
+        set -g _DS_SLOT_IDX (seq $n)
+        set -g _DS_OFF_STARTED 1
+        set -g _DS_OFF_DONE 1
+        set -g _DS_OFF_DEFER 1
+        for key in $_DS_KEYS
+            set -g _DS_INLIST_$key 1
+        end
+        # Core and build-tools membership markers (static per run) — the
+        # band-first and core-solo tests in the scan.
+        for key in (_topo_key $_GROUP_core)
+            set -g _DS_CORE_$key 1
+        end
+        for key in (_topo_key $_GROUP_build_tools)
+            set -g _DS_BAND_$key 1
+        end
+        # In-list dep keys per name: deps_of's contract minus the external
+        # deps the readiness check skips, precomputed once.
+        for key in $_DS_KEYS
+            set -l tdeps_var _TDEPKEYS_$key
+            set -l in_list
+            for dep_key in $$tdeps_var
+                if set -q _DS_INLIST_$dep_key
+                    set -a in_list $dep_key
+                end
+            end
+            set -g _DS_DEPKEYS_$key $in_list
+        end
+    end
+    # Tail-sync each append-only list; offsets hold the NEXT index to mark and
+    # only actual growth costs a key derivation.
+    set -l started_n (count $_lane_started)
+    if test $started_n -ge $_DS_OFF_STARTED
+        set -l new_items $_lane_started[$_DS_OFF_STARTED..$started_n]
+        set -g _DS_OFF_STARTED (math $started_n + 1)
+        for key in (_topo_key $new_items)
+            set -g _DS_STARTED_$key 1
+        end
+    end
+    set -l done_n (count $_lane_done)
+    if test $done_n -ge $_DS_OFF_DONE
+        set -l new_items $_lane_done[$_DS_OFF_DONE..$done_n]
+        set -g _DS_OFF_DONE (math $done_n + 1)
+        for key in (_topo_key $new_items)
+            set -g _DS_DONE_$key 1
+        end
+    end
+    set -l defer_n (count $_lane_deferred)
+    if test $defer_n -ge $_DS_OFF_DEFER
+        set -l new_items $_lane_deferred[$_DS_OFF_DEFER..$defer_n]
+        set -g _DS_OFF_DEFER (math $defer_n + 1)
+        for key in (_topo_key $new_items)
+            set -g _DS_DEFER_$key 1
+        end
+    end
+end
+
+# _deferred_blocked_refresh — maintain _DBLOCKED_ marks: every package in the
+# build list that TRANSITIVELY consumes a deferred one — the memoized answer
+# to the waits_on_deferred recursion. Deferred only grows during a run, so the
+# marks are monotone and new deferred entries extend the BFS from their own
+# tails; a sorted-count change rebuilds from scratch.
+function _deferred_blocked_refresh
+    if test "$_DS_N" != "$_DB_N"
+        set -l stale (set -n | string match -r '^_DBLOCKED_.*$')
+        if test (count $stale) -gt 0
+            set -e $stale
+        end
+        set -g _DB_N $_DS_N
+        set -g _DB_OFF 1
+    end
+    set -l n (count $_lane_deferred)
+    if test $n -lt $_DB_OFF
+        return 0
+    end
+    set -l new_items $_lane_deferred[$_DB_OFF..$n]
+    set -g _DB_OFF (math $n + 1)
+    set -l queue_keys (_topo_key $new_items)
+    set -l qhead 1
+    while test $qhead -le (count $queue_keys)
+        set -l key $queue_keys[$qhead]
+        set qhead (math $qhead + 1)
+        set -l cons_var _TCONSKEYS_$key
+        for cons_key in $$cons_var
+            set -q _DS_INLIST_$cons_key; or continue
+            set -q _DBLOCKED_$cons_key; and continue
+            set -g _DBLOCKED_$cons_key 1
+            set -a queue_keys $cons_key
+        end
+    end
+end
+
 # True when $pkg transitively depends (within the build list) on a recipe this
 # run deferred — used to label unstarted packages honestly: waiting on a
 # parked recipe is not the dependency cycle the old message claimed. The graph
-# is acyclic (topo_sort validated it), so the recursion terminates.
+# is acyclic (topo_sort validated it), so the recursion terminates. The
+# recursion is memoized in the _DBLOCKED_ marks; callers pass packages from
+# the build list (unstarted plan rows), and the marks are exactly the
+# recursion's answer for those.
 function waits_on_deferred -a pkg
     if test (count $_lane_deferred) -eq 0
         return 1
     end
-    for dep in (deps_of $pkg)
-        if not contains "$dep" $_lane_sorted
-            continue
-        end
-        if contains "$dep" $_lane_deferred
-            return 0
-        end
-        if waits_on_deferred $dep
-            return 0
-        end
-    end
+    dispatch_state_refresh
+    _deferred_blocked_refresh
+    set -l key (_topo_key "$pkg")
+    set -q _DBLOCKED_$key
+    and return 0
     return 1
 end
 
@@ -7739,6 +5269,11 @@ function pick_next_ready -a solo_ok
     if test (count $restrict) -gt 0
         set force_mode 1
     end
+    # Force mode (the remediation path — rare) keeps the original scan below
+    # verbatim: its FORCE semantics deliberately re-dispatch packages that
+    # already landed in _lane_started/_lane_done, which the fast path's
+    # per-name markers would refuse by construction.
+    if test $force_mode -eq 1
     set -l fallback ""
     for pkg in $_lane_sorted
         if test $force_mode -eq 1
@@ -7808,6 +5343,58 @@ function pick_next_ready -a solo_ok
         return 0
     end
     return 1
+    end
+
+    # Fast path (the common non-force call): same predicate, same
+    # first-ready-in-topo-order pick with band-first-with-fallback, over O(1)
+    # per-name markers maintained by dispatch_state_refresh instead of
+    # `contains` scans — each `contains` re-marshals a V-element list, so the
+    # old loop was O(V²·E) list traffic across a run.
+    dispatch_state_refresh
+    set -l fallback ""
+    for j in $_DS_SLOT_IDX
+        set -l pkg $_lane_sorted[$j]
+        set -l key $_DS_KEYS[$j]
+        set -q _DS_STARTED_$key; and continue
+        set -q _DS_DONE_$key; and continue
+        set -l depkeys_var _DS_DEPKEYS_$key
+        set -l ok 1
+        for dep_key in $$depkeys_var
+            # Deferred first, exactly like the scan above: a deferred dep IS
+            # in _lane_done (the lane finished, parked), but its package was
+            # never built or installed.
+            if set -q _DS_DEFER_$dep_key
+                set ok 0
+                break
+            end
+            if not set -q _DS_DONE_$dep_key
+                set ok 0
+                break
+            end
+        end
+        if test $ok -eq 0
+            continue
+        end
+        # Core packages are only dispatched solo.
+        if test $solo_ok -eq 0; and set -q _DS_CORE_$key
+            continue
+        end
+        # Build-tools band: members ready NOW are picked before all other
+        # ready packages; the first ready non-member is the fallback (topo
+        # order of $_lane_sorted decides within each band).
+        if set -q _DS_BAND_$key
+            echo $pkg
+            return 0
+        end
+        if test -z "$fallback"
+            set fallback $pkg
+        end
+    end
+    if test -n "$fallback"
+        echo $fallback
+        return 0
+    end
+    return 1
 end
 
 # ─── Lane invocation: one description of the process-boundary argv ───────────
@@ -7831,6 +5418,14 @@ end
 function lane_argv_check
     if test (count $argv) -ne 8
         echo "Error: --lane-job expects package, result file, job count, and five flags" >&2
+        return 2
+    end
+    # The payload is newline-framed (lane_argv prints one field per line), so
+    # a control character in the result path would corrupt the 8-arg boundary
+    # — the receiving end refuses it explicitly (R-F30 backstop; the producer
+    # side gate is where GSA_STATE_DIR is first read).
+    if string match -qr '[\x00-\x1f\x7f]' -- "$argv[2]"
+        echo "Error: --lane-job received a result path with control characters" >&2
         return 2
     end
     if not string match -qr '^[1-9][0-9]*$' -- "$argv[3]"
@@ -7864,12 +5459,25 @@ function lane_job -a pkg_id result_file total_jobs install_flag clean_flag skip_
         echo "warning: could not generate $LOG_DIR/.pacman-shim — dep installs run unlocked" >&2
     end
     set -gx GSA_BUILD_JOBS "$total_jobs"
+    # -j normalisation (R-F31): a bare `-j` takes its operand as the NEXT
+    # token — dropping only the flag strands that operand in the re-exported
+    # MAKEFLAGS. Both spellings (-jN and -j N) are consumed as a pair.
     set -l make_flags
     if set -q MAKEFLAGS
-        for flag in (string split ' ' -- "$MAKEFLAGS")
-            if test -n "$flag"; and not string match -qr '^-j[0-9]*$' -- "$flag"
-                set -a make_flags "$flag"
+        set -l tokens (string split ' ' -- "$MAKEFLAGS")
+        set -l i 1
+        while test $i -le (count $tokens)
+            set -l flag $tokens[$i]
+            if test -n "$flag"
+                if string match -qr '^-j[0-9]*$' -- "$flag"
+                    if test "$flag" = -j
+                        set i (math $i + 1)
+                    end
+                else
+                    set -a make_flags "$flag"
+                end
             end
+            set i (math $i + 1)
         end
     end
     set -a make_flags "-j$total_jobs"
@@ -7881,10 +5489,20 @@ function lane_job -a pkg_id result_file total_jobs install_flag clean_flag skip_
     set -gx MAKEFLAGS "$make_flags"
     set -l ninja_flags
     if set -q NINJAFLAGS
-        for flag in (string split ' ' -- "$NINJAFLAGS")
-            if test -n "$flag"; and not string match -qr '^-j[0-9]*$' -- "$flag"
-                set -a ninja_flags "$flag"
+        set -l tokens (string split ' ' -- "$NINJAFLAGS")
+        set -l i 1
+        while test $i -le (count $tokens)
+            set -l flag $tokens[$i]
+            if test -n "$flag"
+                if string match -qr '^-j[0-9]*$' -- "$flag"
+                    if test "$flag" = -j
+                        set i (math $i + 1)
+                    end
+                else
+                    set -a ninja_flags "$flag"
+                end
             end
+            set i (math $i + 1)
         end
     end
     set -a ninja_flags "-j$total_jobs"
@@ -8076,10 +5694,34 @@ function run_lanes -a lanes jobs_override intensity_level install_flag clean_fla
     if not ensure_state_dirs
         return 1
     end
+    # Run identity first (R-F9): the lock REFUSES a second concurrent run —
+    # never queues it — and its holder outlives this process by at most one
+    # poll, so a crashed run cannot block the next. With the lock held,
+    # everything else in the state dir is provably ownerless: stop orphaned
+    # lanes of previous runs (R-F8) and sweep their crash leftovers (R-F34)
+    # before the first dispatch.
+    if not run_lock_acquire
+        return 1
+    end
+    set -g _RUN_ID "$fish_pid-"(date +%s)
+    if set -q _GSA_RUN_ID; and test -n "$_GSA_RUN_ID"
+        # Internal fixture seam (same class as _LANE_STOP_GRACE_S): pins the
+        # run-scoped result filenames so a test can address them.
+        if string match -qr "$_TOPOLOGY_ID_RE" -- "$_GSA_RUN_ID"
+            set -g _RUN_ID "$_GSA_RUN_ID"
+        else
+            ui_error "_GSA_RUN_ID must match $_TOPOLOGY_ID_RE"
+            run_lock_release
+            return 1
+        end
+    end
+    dispatcher_log "run start: id=$_RUN_ID pid=$fish_pid lanes=$lanes"
+    orphan_lane_sweep
+    sweep_stale_run_artifacts
     # One run's sync/refresh notes: never carry the previous run's recipes
     # into this summary. Deleted by directory permission, so it works even
     # when an earlier root run left the file root-owned.
-    rm -f -- "$_STATE_DIR/synced.list"
+    command rm -f -- "$_STATE_DIR/synced.list"
     printf '' >"$_STATE_DIR/synced.list" 2>/dev/null
     # Generate the makepkg dep-install shim at run start so every lane child
     # (lane_job re-checks and exports PACMAN) shares the builder mutex.
@@ -8112,45 +5754,55 @@ function run_lanes -a lanes jobs_override intensity_level install_flag clean_fla
             abort_dashboard
             printf '\n'
             # Post-teardown lock probe: a lane's pacman may have died during
-            # the cleanup TERM sweep — a provably-stale db.lck is removed
-            # loudly here, a live holder is only reported.
+            # the cleanup TERM sweep, possibly mid-commit. REPORT-ONLY since
+            # 2026-10-04: the probe classifies the lock (held/stale/unknown)
+            # and prints the operator command — a killed probe must never be
+            # able to delete live pacman state.
             check_pacman_lock (pacman_db_lock_path)
             # Same aftermath window: a TERMed pacman may have died MID-COMMIT
             # (2026-09-24: mtree-only local entry, three packages' installs
-            # poisoned until it was repaired). Idle → removed loudly here so
-            # the next run's -i self-heals; busy → reported only.
+            # poisoned until it was repaired). Also report-only: the broken
+            # entries are named with their operator repair command.
             check_pacman_db_health (pacman_db_local_path)
             ui_warning "Build interrupted"
             dispatcher_log "Build interrupted (last signal: $_LAST_SIGNAL)"
             set -g _RL_INTERRUPTED 1
-            return 130
+            run_lock_release
+            return (gsa_signal_exit_rc)
         end
 
         # Reap finished lanes
         for i in (seq $lanes)
             if test $lane_busy[$i] -eq 1
-                set -l rf "$LOG_DIR/.lane$i.result"
+                set -l rf "$LOG_DIR/.lane.$_RUN_ID.$i.result"
                 set -l res_raw (cat "$rf" 2>/dev/null)
                 set -l expected_pkg "$lane_pkg[$i]"
                 set -l result_ready 0
                 set -l result_malformed 0
+                set -l result_foreign 0
                 set -l decoded
                 if test (count $res_raw) -gt 0
                     set decoded (lane_result_decode "$expected_pkg" "$res_raw[1]")
+                    set -l dstat $status
                     if test (count $decoded) -ge 3
                         set result_ready 1
+                    else if test $dstat -eq 2
+                        # FOREIGN identity (R-F9): another run's or an
+                        # orphan's line in this slot. Never this lane's
+                        # outcome, and never a reason to kill a healthy lane.
+                        set result_foreign 1
                     else
                         set result_malformed 1
                     end
                 end
-                if test $result_ready -eq 0; and test $result_malformed -eq 0; and \
+                if test $result_ready -eq 0; and \
                     lane_pid_alive "$lane_pid[$i]"
-                    # An absent or partial result is normal while the child
-                    # is still running; atomic result publication prevents a
-                    # finished child from looking partial here.
+                    # An absent, partial or foreign result is normal while the
+                    # child is still running; atomic result publication
+                    # prevents a finished child from looking partial here.
                     continue
                 end
-                if test $result_ready -eq 0; and test $result_malformed -eq 0; and \
+                if test $result_ready -eq 0; and \
                     not lane_pid_alive "$lane_pid[$i]"
                     # The read above and the death observed above are not one
                     # atomic step: a child can publish (write_lane_result's
@@ -8162,8 +5814,11 @@ function run_lanes -a lanes jobs_override intensity_level install_flag clean_fla
                     set res_raw (cat "$rf" 2>/dev/null)
                     if test (count $res_raw) -gt 0
                         set decoded (lane_result_decode "$expected_pkg" "$res_raw[1]")
+                        set -l dstat2 $status
                         if test (count $decoded) -ge 3
                             set result_ready 1
+                        else if test $dstat2 -eq 2
+                            set result_foreign 1
                         else
                             set result_malformed 1
                         end
@@ -8209,23 +5864,23 @@ function run_lanes -a lanes jobs_override intensity_level install_flag clean_fla
                             "  result file bytes: $raw_joined" \
                             "  Check the lane log: $log_file" >>"$log_file"
                     end
-                    dispatcher_log "reap anomaly pkg=$p pid=$lane_pid[$i] state=$lane_state reason=missing-or-malformed raw=$raw_joined"
+                    dispatcher_log "reap anomaly pkg=$p pid=$lane_pid[$i] state=$lane_state reason="(test $result_foreign -eq 1; and echo foreign-identity; or echo missing-or-malformed)" raw=$raw_joined"
                     set stop_starting 1
                     set -g _DASHBOARD_LAST_EVENT "$_UI_ICON_ERROR lane lost $p"
                 end
 
-                rm -f -- "$rf"
+                # `command rm` — the host's fish `rm` FUNCTION trashes
+                # instead of deleting (see sweep_stale_run_artifacts).
+                command rm -f -- "$rf"
                 set -l finished_pid $lane_pid[$i]
                 set lane_busy[$i] 0
                 set lane_pkg[$i] ""
                 set lane_start[$i] ""
                 set lane_pid[$i] ""
                 if test -n "$finished_pid"
-                    if test "$result_malformed" -eq 1
-                        stop_lane_process "$finished_pid" malformed "$p"
-                    else
-                        wait "$finished_pid" 2>/dev/null
-                    end
+                    # Never kill a lane over a foreign/malformed file (R-F9):
+                    # the child is already gone here — classify and reap it.
+                    wait "$finished_pid" 2>/dev/null
                     forget_lane_pid "$finished_pid"
                 end
 
@@ -8388,7 +6043,26 @@ function run_lanes -a lanes jobs_override intensity_level install_flag clean_fla
                         # anomaly (lane_outcome_lost, no valid result) is the
                         # lane being lost.
                         if test "$result_ready" = "1"
-                            run_record_row "$p" failed $rc $dur build-failed
+                            # Row reason taxonomy for an honest non-zero rc
+                            # (R-F27): a signal outcome keeps its SIGNAL name
+                            # (the lane's own handler wrote 129/130/143 — the
+                            # reason token is lane_outcome_name's), a builder-
+                            # mutex timeout is its own row reason (the rc
+                            # collapses to failed on the wire, but "the queue
+                            # outlived the wait" is not "the build broke" —
+                            # 2026-10-04; the named line lands in the package
+                            # log from run_pacman_locked and the dep-install
+                            # shim alike), everything else is build-failed.
+                            set -l row_reason build-failed
+                            switch (lane_outcome_name $rc)
+                                case signal-hup signal-int signal-term
+                                    set row_reason (lane_outcome_name $rc)
+                                case '*'
+                                    if grep -q 'builder pacman mutex timed out' (package_log_file "$p") 2>/dev/null
+                                        set row_reason mutex-timeout
+                                    end
+                            end
+                            run_record_row "$p" failed $rc $dur $row_reason
                         else
                             run_record_row "$p" failed $rc $dur lane-lost
                         end
@@ -8527,7 +6201,7 @@ function run_lanes -a lanes jobs_override intensity_level install_flag clean_fla
                 if contains "$next" $_GROUP_core
                     set jobs $core_jobs
                 end
-                set -l rf "$LOG_DIR/.lane$i.result"
+                set -l rf "$LOG_DIR/.lane.$_RUN_ID.$i.result"
                 set -l child_log (package_log_file "$next")
                 # Settle log ownership/openability BEFORE the lane exists.
                 # A poisoned log used to die here — the spawn redirect failed
@@ -8542,11 +6216,30 @@ function run_lanes -a lanes jobs_override intensity_level install_flag clean_fla
                     set stop_starting 1
                     continue
                 end
+                # Result-slot settle (R-F33): the clear used to be an
+                # unchecked `rm -f` AFTER the lane was marked busy — a leftover
+                # that survived it would decode malformed and get a healthy
+                # just-started lane killed as lane-lost. Settle ownership
+                # through ensure_log_writable (a root-owned crash leftover is
+                # repaired/quarantined there), then clear and VERIFY: an
+                # unremovable result is a named dispatch refusal, never a
+                # silent time bomb for the reap.
+                # `command rm`: the host's fish `rm` FUNCTION trashes instead
+                # of deleting, which "succeeds" on a DIRECTORY left in the
+                # slot and defeats the verification below — the external rm
+                # refuses a directory and the gate names it.
+                if not ensure_log_writable "$rf"; or not command rm -f -- "$rf"; or test -e "$rf"
+                    ui_error "cannot clear a stale lane result — refusing to dispatch $next"
+                    echo "  result slot: $rf"
+                    set -a failed $next
+                    run_record_row "$next" failed 1 0 result-clear-failed
+                    set stop_starting 1
+                    continue
+                end
                 set -a _lane_started $next
                 set lane_busy[$i] 1
                 set lane_pkg[$i] $next
                 set lane_start[$i] (date +%s)
-                rm -f "$rf"
                 # Clear before the child starts preflight/sync so the
                 # dashboard never shows a previous run's tail for this lane.
                 printf '' >"$child_log"
@@ -8570,7 +6263,8 @@ function run_lanes -a lanes jobs_override intensity_level install_flag clean_fla
                     set -e _REMED_PENDING[(contains --index -- "$next" $_REMED_PENDING)]
                     set -a _REMED_ACTIVE "$next"
                 end
-                setsid --wait fish "$SCRIPT_DIR/build-all.fish" --lane-job \
+                _GSA_LANE_WATCHDOG_PID=$fish_pid \
+                    setsid --wait fish "$SCRIPT_DIR/build-all.fish" --lane-job \
                     (lane_argv "$next" "$rf" $jobs $install_flag $clean_flag \
                         $lane_skip $no_sync_flag $lane_force_install) >>"$child_log" 2>&1 &
                 set lane_pid[$i] $last_pid
@@ -8684,7 +6378,16 @@ function run_lanes -a lanes jobs_override intensity_level install_flag clean_fla
             render_dashboard $total $disp_count (count $succeeded) (count $failed) $stop_starting
         end
 
-        sleep 0.5
+        # Foreground tracking (R-F15): fish defers --on-signal handlers until
+        # an in-flight FOREGROUND command exits (measured on fish 4.9.3: a
+        # signal at t=0.5 s to `sleep 4` ran the handler at t=4.0 s), but runs
+        # them promptly during `wait` on a backgrounded job. The poll sleep is
+        # therefore a tracked background child: the handler runs at the signal
+        # and signals the tracked pid ("signal both") so this wait ends now.
+        sleep 0.5 &
+        set -g _FG_CHILD_PID $last_pid
+        wait $_FG_CHILD_PID 2>/dev/null
+        set -g _FG_CHILD_PID ""
     end
 
     finish_dashboard
@@ -8720,6 +6423,7 @@ function run_lanes -a lanes jobs_override intensity_level install_flag clean_fla
     # A dispatch stopped by a lost sudo credential left packages unbuilt: that
     # must never be reported as "All builds succeeded!" (2026-09-17). Nor may
     # a run that parked a recipe — parked work needs the owner (2026-09-24).
+    run_lock_release
     if test (count $failed) -gt 0 -o "$blocked" -gt 0; or test "$sudo_stopped" -eq 1; or test "$probe_stopped" -eq 1
         return 1
     end
@@ -8746,10 +6450,10 @@ end
 # Row grammar (internal): pkg|status|rc|dur|reason — exactly one row per
 # package, in topological order after finalize. status ∈ {succeeded, failed,
 # deferred, blocked, never-started, interrupted} ("deferred" NAMES the lane
-# rc-99 _ANCHOR_DEFER_RC amendment: a parked recipe, not a failed build —
-# either anchoring refusal or a named freshness refusal; the reason token
-# says which). rc and dur are integers (dur in seconds) or '-' when
-# the package never produced one. reason is a kebab-case token:
+# rc-99 lane_outcome_defer amendment (docs call it the _ANCHOR_DEFER_RC
+# amendment): a parked recipe, not a failed build — a named deferral refusal,
+# and the reason token says which). rc and dur are integers (dur in seconds)
+# or '-' when the package never produced one. reason is a kebab-case token:
 #   ok                   succeeded
 #   freshness-waived     succeeded WITHOUT building: -s skipped an archive
 #                        whose selected Git ref moved fewer than
@@ -8761,11 +6465,22 @@ end
 #                        mere upstream movement can never rebuild a matched
 #                        ABI provider. Same loud-line plumbing as above.
 #   build-failed         lane ran, makepkg/exits non-zero (rc is in the row)
+#   mutex-timeout        failed on the builder pacman MUTEX wait (flock rc
+#                        75): the queue outlived the wait and the
+#                        transaction never ran — not a build or pacman error
+#   signal-hup           failed: the lane child was killed by SIGHUP (rc=129,
+#                        lane_outcome_name's display form)
+#   signal-int           failed: the lane child was killed by SIGINT (rc=130)
+#   signal-term          failed: the lane child was killed by SIGTERM (rc=143)
 #   lane-lost            reap anomaly: no valid lane result (rc=125)
 #   log-unwritable       dispatch refused: the package log could not be opened
+#   result-clear-failed  dispatch refused: the run-scoped result slot could
+#                        not be cleared for the lane (the write failed)
 #   anchoring-refused    deferred (rc=99): checksum anchoring refused
 #   upstream-unverified  deferred (rc=99): -s could not confirm the recorded
 #                        refs against upstream after transport retries
+#   source-unfetchable   deferred (rc=99): sources absent at anchoring time
+#                        and the consumer chain can absorb the wait
 #   waits-on-deferred    blocked on a parked recipe
 #   never-ready          blocked: dependency cycle or missing dep
 #   dispatch-stopped     never started: dispatch stopped, lanes drained
@@ -8927,7 +6642,10 @@ end
 #                                                   the user's call (the tip
 #                                                   says to add it)
 #   not-mirrored -n -l -ia -cc -ccc -ln              one-shot actions and
-#               --audit -h --help                    read-only modes
+#               --audit --topology -h --help         read-only modes
+#   not-mirrored --lane-job --stale-lock-check       hidden seams: process-exit
+#               --local-db-check --install-decide    interfaces, never a
+#               --audit-lint --register-ignorepkg    command a resume replays
 set -g _CONTINUATION_RULES \
     '--lanes|value' \
     '--jobs|value' \
@@ -8939,7 +6657,8 @@ set -g _CONTINUATION_RULES \
     '-g --group, N..M ranges, package references|replaced' \
     '-c --clean|not-mirrored' \
     '-s --skip|not-mirrored' \
-    '-n --dry-run -l --list -ia --installall -cc --cleanup -ccc --nuclear -ln --link-sources --audit -h --help|not-mirrored'
+    '-n --dry-run -l --list -ia --installall -cc --cleanup -ccc --nuclear -ln --link-sources --audit --topology -h --help|not-mirrored' \
+    '--lane-job --stale-lock-check --local-db-check --install-decide --audit-lint --register-ignorepkg|not-mirrored'
 
 # continuation_args MODE [PAYLOAD...] → one line of continuation arguments.
 # Run-shape state comes from the run record (run_record_plan).
@@ -9058,8 +6777,12 @@ function print_run_summary -a outcome
     set -l ambient
     set -q GSA_TARGET_CPU; and set -a ambient GSA_TARGET_CPU
     set -q GSA_STATE_DIR; and set -a ambient GSA_STATE_DIR
-    # GSA_VCS_SKIP_TOLERANCE changes -s skip decisions at run time, so a
-    # continuation must see the same value (never baked into the command).
+    # GSA_CPU_THREADS/GSA_MEMORY_GIB re-derive the whole plan (core_jobs among
+    # it) every run, and GSA_VCS_SKIP_TOLERANCE changes -s skip decisions at
+    # run time — a continuation under different pins silently re-plans, so all
+    # three must match this run's env (never baked into the command).
+    set -q GSA_CPU_THREADS; and set -a ambient GSA_CPU_THREADS
+    set -q GSA_MEMORY_GIB; and set -a ambient GSA_MEMORY_GIB
     set -q GSA_VCS_SKIP_TOLERANCE; and set -a ambient GSA_VCS_SKIP_TOLERANCE
     if test (count $ambient) -gt 0
         ui_warning "ambient environment: "(string join ' ' $ambient)" — the continuation must run in the same env (never baked into the command)"
@@ -9110,22 +6833,25 @@ function print_topology
                 set -a group_values "$group_name"
             end
         end
-        set -l edge_values (deps_of $id)
-        set -l tag_values
+        set -l key (_topo_key "$id")
+        set -l dep_var _TDEP_$key
+        set -l edge_values
+        if set -q $dep_var
+            set edge_values $$dep_var
+        end
         # Raw record tags, comma-joined in record order: the data channel
         # round-trips every tag (app-cluster=<name> included) unchanged. The
         # vocabulary is closed and loader-validated, so raw == the old
-        # abi-only normalisation for every pre-existing record.
-        for entry in $_TAGS
-            set -l parts (string split '|' -- "$entry")
-            if test "$parts[1]" = "$id"
-                set tag_values (string split ',' -- "$parts[2]")
-                break
-            end
+        # abi-only normalisation for every pre-existing record. The loader
+        # stores the raw row in _TTAGS_<key> — the old scan re-split every
+        # _TAGS row for every package (O(P×T) command substitutions).
+        set -l tag_var _TTAGS_$key
+        set -l tags_str ""
+        if set -q $tag_var
+            set tags_str "$$tag_var"
         end
         set -l groups_str (string join ',' $group_values)
         set -l edges_str (string join ',' $edge_values)
-        set -l tags_str (string join ',' $tag_values)
         printf '%s|%s|%s|%s|%s\n' "$id" "$fields[2]" "$groups_str" "$edges_str" "$tags_str"
     end
 end
@@ -9163,11 +6889,16 @@ function usage
     echo "                    place of -i when packages in the set depend on each"
     echo "                    other — build with -i instead."
     echo "  -cc, --cleanup    Remove ALL built package archives (*.pkg.tar.zst)"
+    echo "                    plus their .gsa-vcs-revisions sidecars; symlinks"
+    echo "                    are preserved (never deleted or followed)"
     echo "  -ccc, --nuclear   Remove pulled sources: src/pkg/build dirs, source git"
     echo "                    clones, and downloaded source tarballs (asks first)"
     echo "  --audit           Read-only report of legacy paths, package drift,"
     echo "                    stale runtime/error artifacts, cargo/rustc recipes"
-    echo "                    with no rust-git edge, and installed PGO packages"
+    echo "                    with no rust-git edge, the recipe-contract lint"
+    echo "                    families (provides-versioning, purged tools,"
+    echo "                    IgnorePkg closure, provides swaps, ABI closure,"
+    echo "                    ABI exposure), and installed PGO packages"
     echo "                    still carrying -fprofile-generate or"
     echo "                    -Cprofile-generate payloads"
     echo "  --topology        Print the resolved topology as machine-readable"
@@ -9270,13 +7001,14 @@ function usage
     echo "                                      its ranges address"
     echo "  build-all.fish --no-deps niri-spicy-git"
     echo "                                      Rebuild ONE package — build only what you named"
-    echo "  build-all.fish glib2-git            Rebuild it + its 21 consumers (gtk4-git,"
+    echo "  build-all.fish glib2-git            Rebuild it + its consumers (gtk4-git,"
     echo "                                      gimp-git, …) — use --no-deps to avoid this"
     echo "  build-all.fish -g git 22..38        Build packages 22-38 of the git group"
     echo "  build-all.fish -n -g core           Dry-run: show the core build order"
     echo "  build-all.fish -n                   Show full build order (dry run)"
     echo "  build-all.fish -ia --overwrite '*'  Same, passing pacman options through"
     echo "  build-all.fish -cc                  Delete all built package archives"
+    echo "                                      and their VCS revision sidecars"
     echo "  build-all.fish -ccc                 Wipe pulled sources (src/pkg/build,"
     echo "                                      git clones, tarballs) — asks first"
     echo "  build-all.fish -ln                  Dedup git clones into shared mirrors"
@@ -10033,13 +7765,15 @@ function main
         ui_warning "Build interrupted"
         dispatcher_log "Build interrupted (last signal: $_LAST_SIGNAL, before dispatch)"
         # An interrupted run prints the summary + machine block + continuation
-        # and still exits 130 (2026-09-26 interrupt gap). Nothing dispatched
+        # and still exits with the signal's own status (gsa_signal_exit_rc:
+        # 129/130/143, 2026-09-26 interrupt gap, R-F27). Nothing dispatched
         # yet, so every row is never-started / interrupted-before-start.
         set -g _RL_INTERRUPTED 1
         run_record_finalize
         print_run_summary interrupted
-        print_run_record interrupted 130
-        return 130
+        set -l interrupt_rc (gsa_signal_exit_rc)
+        print_run_record interrupted $interrupt_rc
+        return $interrupt_rc
     end
 
     # Parallel lane dispatcher (--lanes 1 = strict topo order, the old
@@ -10074,9 +7808,23 @@ function main
             # is no collective end-install step anymore.
             return 0
         case interrupted
-            return 130
+            return (gsa_signal_exit_rc)
     end
     return 1
+end
+
+# ─── Sourced leaf modules (Design C split) ──────────────────────────────────
+# lib/sources.fish and lib/audit.fish were cut out of this file verbatim.
+# Sourced here — before load_project_config and the hidden seam blocks below —
+# so the loader, the seams and main all resolve the same flat function
+# namespace as before the split.
+if not source "$SCRIPT_DIR/lib/sources.fish"
+    echo "build-all.fish: cannot source $SCRIPT_DIR/lib/sources.fish" >&2
+    exit 1
+end
+if not source "$SCRIPT_DIR/lib/audit.fish"
+    echo "build-all.fish: cannot source $SCRIPT_DIR/lib/audit.fish" >&2
+    exit 1
 end
 
 if not load_project_config
@@ -10139,9 +7887,10 @@ end
 # Dispatcher mode (_LANE_JOB_ACTIVE unset/0): forensics FIRST (timestamped
 # line naming the signal + ancestry), then _INTERRUPT_HANDLED is set exactly
 # as the old combined handle_interrupt did — the run drains lanes through
-# cleanup_active_lanes and exits 130 via the permanent "Build interrupted"
-# event. HUP joins INT/TERM here: it previously had NO handler and orphaned
-# live lanes outright.
+# cleanup_active_lanes and exits with the signal's own status
+# (gsa_signal_exit_rc: 129/130/143) via the permanent "Build interrupted"
+# event. A SECOND signal escalates to an immediate SIGKILL sweep. HUP joins
+# INT/TERM here: it previously had NO handler and orphaned live lanes outright.
 #
 # Lane mode (marker set by the --lane-job branch before any work): write an
 # honest signal result (129 HUP / 130 INT / 143 TERM + pid/signal text in the
@@ -10192,7 +7941,57 @@ function gsa_handle_signal -a sig rc binder
     # Dispatcher (or any non-lane mode): name the signal, then latch the flag.
     set -g _LAST_SIGNAL $sig
     dispatcher_log "signal: $sig received (pid=$fish_pid, prior_flag=$_INTERRUPT_HANDLED) chain="(process_chain_snapshot)
+    # Foreground tracking (R-F15): fish ran THIS handler only because the
+    # dispatcher waits on background children; the tracked foreground child
+    # is signalled too so the wait returns now instead of at the child's
+    # natural exit ("signal both").
+    if test -n "$_FG_CHILD_PID"
+        command kill -TERM "$_FG_CHILD_PID" 2>/dev/null
+    end
+    if test "$_INTERRUPT_HANDLED" = "1"
+        # SECOND signal: the user said NOW (R-F15). The normal teardown is a
+        # TERM→grace→KILL sweep that may take the whole grace; escalate to an
+        # immediate SIGKILL sweep with no grace, then let the interrupt path
+        # finish the bookkeeping.
+        set -g _SIGNAL_ESCALATED 1
+        dispatcher_log "signal: $sig is the SECOND signal — immediate SIGKILL sweep of active lanes (grace skipped)"
+        kill_active_lanes_immediate
+    end
     set -g _INTERRUPT_HANDLED 1
+end
+
+# kill_active_lanes_immediate — the second-signal escalation: SIGKILL every
+# pid of every active lane pgrp NOW, no TERM, no grace. Forensics keep the
+# escalate line shape so the two kill paths read alike in dispatcher.log.
+function kill_active_lanes_immediate
+    for i in (seq (count $_ACTIVE_LANE_PIDS))
+        set -l lane_pid "$_ACTIVE_LANE_PIDS[$i]"
+        set -l pkg ''
+        if test $i -le (count $_ACTIVE_LANE_PKGS)
+            set pkg "$_ACTIVE_LANE_PKGS[$i]"
+        end
+        set -l pkg_label '-'
+        test -n "$pkg"; and set pkg_label "$pkg"
+        for process_id in (lane_processes "$lane_pid")
+            dispatcher_log "escalate: pid=$process_id pgid=$lane_pid pkg=$pkg_label SIGKILL immediately (second signal)"
+            kill -KILL "$process_id" 2>/dev/null
+        end
+    end
+end
+
+# gsa_signal_exit_rc — the process exit status an interrupted run owes its
+# caller: 129/130/143 for HUP/INT/TERM from the signal that actually arrived
+# (_LAST_SIGNAL), never a flat 130 (R-F27). No signal recorded keeps the
+# historical 130.
+function gsa_signal_exit_rc
+    switch "$_LAST_SIGNAL"
+        case HUP
+            echo $lane_outcome_hup
+        case TERM
+            echo $lane_outcome_term
+        case '*'
+            echo $lane_outcome_int
+    end
 end
 
 function gsa_on_int --on-signal INT
@@ -10226,13 +8025,42 @@ if test (count $argv) -gt 0; and test "$argv[1]" = --lane-job
     if test $status -ne 0
         exit 2
     end
+    # Parent-liveness watchdog (R-F8): if the dispatcher is SIGKILLed, this
+    # setsid lane would keep building — and installing (`sudo pacman -U`) —
+    # unattended, overlapping the next run (the OOM hazard). A tiny external
+    # watcher (fish cannot background a function) polls the dispatcher pid
+    # and this lane pid; when the dispatcher vanishes it TERMs this whole
+    # process group — the makepkg child included — and SIGKILLs after a short
+    # settle. It exits by itself once this lane does. Only dispatcher-spawned
+    # lanes carry the marker env; direct --lane-job seam runs spawn none.
+    if set -q _GSA_LANE_WATCHDOG_PID; and test -n "$_GSA_LANE_WATCHDOG_PID"
+        set -l my_pgid (ps -o pgid= -p $fish_pid 2>/dev/null | string trim)
+        if test -n "$my_pgid"
+            sh -c 'trap "" TERM
+state=$(ps -o stat= -p "$1" 2>/dev/null)
+while [ -n "$state" ]; do
+    case $state in *Z*) break ;; esac
+    own=$(ps -o stat= -p "$3" 2>/dev/null)
+    [ -n "$own" ] || exit 0
+    case $own in *Z*) exit 0 ;; esac
+    sleep 1
+    state=$(ps -o stat= -p "$1" 2>/dev/null)
+done
+kill -TERM -- "-$2" 2>/dev/null
+sleep 2
+kill -KILL -- "-$2" 2>/dev/null' \
+                sh "$_GSA_LANE_WATCHDOG_PID" "$my_pgid" "$fish_pid" &
+        end
+    end
     lane_job $argv[2..-1]
     exit $status
 end
 
 # Hidden fixture seam (same precedent as --lane-job): run the production lock
-# probe against an arbitrary path. rc 0 = absent/removed, 1 = busy/unremovable.
-# No GSA_* test knob — the builder honours exactly the seven --help lists.
+# probe against an arbitrary path. rc 0 = absent, 1 = present (held/stale/
+# unproven). REPORT-ONLY: the probe never removes anything — it classifies
+# the lock and prints the operator removal command.
+# No GSA_* test knob — the builder honours only the GSA_* inputs --help lists.
 if test (count $argv) -gt 0; and test "$argv[1]" = --stale-lock-check
     if test (count $argv) -ne 2
         echo "Error: --stale-lock-check expects exactly one lock path" >&2
@@ -10243,9 +8071,10 @@ if test (count $argv) -gt 0; and test "$argv[1]" = --stale-lock-check
 end
 
 # Hidden fixture seam (same precedent as --stale-lock-check): run the
-# local-db integrity probe against an arbitrary directory. rc 0 = healthy or
-# broken entries removed; 1 = broken entries remain (busy holder or
-# permission denied). Never points at the host db unless a caller passes it.
+# local-db integrity probe against an arbitrary directory. rc 0 = healthy;
+# 1 = broken entries present. REPORT-ONLY: the probe names them and prints
+# the operator repair command but never removes them. Never points at the
+# host db unless a caller passes it.
 if test (count $argv) -gt 1; and test "$argv[1]" = --local-db-check
     if test (count $argv) -ne 2
         echo "Error: --local-db-check expects exactly one local-db path" >&2

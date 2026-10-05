@@ -584,3 +584,68 @@ printf 'project configuration fixture: PASS\n'
 
     printf 'consumer expansion fixture: PASS (2-hop chain, cross-group consumer, idempotent continuation)\n'
 )
+
+# ==== consumer-expansion-order ====
+# The diamond and the duplicate seed pin the ORDER contract of the consumer
+# walk (keyed rewrite 2026-10-05): selection of a package grows into its
+# transitive consumers, a name reachable twice — or seeded twice — is emitted
+# exactly once, and ties in the final build order break on the expansion
+# order (record order of the consumer lists). A diamond d <- {m1, m2} <- top
+# makes every one of those observable in the dry-run rows: m1 and m2 are
+# independent of each other, so their relative order can only come from the
+# consumer walk's order.
+(
+    source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
+    fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-consumer-expansion-order.XXXXXX")
+    trap 'rm -rf -- "$fixture"' EXIT
+
+    fail() {
+        printf 'consumer expansion order fixture: %s\n' "$1" >&2
+        exit 1
+    }
+
+    ws=$fixture/ws
+    make_workspace "$ws" 1 2 low
+    add_package "$ws" d "$gsa_meta_any" misc
+    add_package "$ws" m1 "$gsa_meta_any" misc
+    add_package "$ws" m2 "$gsa_meta_any" misc
+    add_package "$ws" top "$gsa_meta_any" misc
+    set_topology_record "$ws" m1 misc 'd'
+    set_topology_record "$ws" m2 misc 'd'
+    set_topology_record "$ws" top misc 'm1,m2'
+    stub_makepkg "$ws"
+    stub_sudo "$ws"
+    stub_pacman "$ws"
+
+    dry_rows() { # stdin: a dry-run capture -> its numbered rows, one per line
+        sed -n '/Build order (dry run):/,/^Total:/p' | sed -n 's/^ *[0-9][0-9]*\. //p'
+    }
+
+    # a. the diamond expands to exactly four rows: d first, top last, and the
+    # two independent middle consumers in record order (m1's record lists d
+    # before m2's record does).
+    run_builder fish "$ws/build-all.fish" -n d
+    [[ $FIXTURE_RC -eq 0 ]] || fail "a: dry run of bare d failed: $FIXTURE_OUTPUT"
+    rows_a=$(dry_rows <<<"$FIXTURE_OUTPUT")
+    expected_rows=$'d\nm1\nm2\ntop'
+    [[ $rows_a == "$expected_rows" ]] ||
+        fail "a: bare d listed [$(echo "$rows_a" | tr '\n' ' ')], want [d m1 m2 top] (diamond in build order, record-order tie-break)"
+
+    # b. the same package seeded twice is one selection: identical rows, no
+    # doubled member (this is what a misaligned key/name queue would break).
+    run_builder fish "$ws/build-all.fish" -n d d
+    [[ $FIXTURE_RC -eq 0 ]] || fail "b: dry run of d d failed: $FIXTURE_OUTPUT"
+    rows_b=$(dry_rows <<<"$FIXTURE_OUTPUT")
+    [[ $rows_b == "$expected_rows" ]] ||
+        fail "b: d d listed [$(echo "$rows_b" | tr '\n' ' ')], want the same [d m1 m2 top] (duplicate seed is idempotent)"
+
+    # c. the diamond tip seeded alone stays one row — nothing consumes top,
+    # and the upstream diamond is never pulled in.
+    run_builder fish "$ws/build-all.fish" -n top
+    [[ $FIXTURE_RC -eq 0 ]] || fail "c: dry run of bare top failed: $FIXTURE_OUTPUT"
+    rows_c=$(dry_rows <<<"$FIXTURE_OUTPUT")
+    [[ $rows_c == top ]] ||
+        fail "c: bare top listed [$(echo "$rows_c" | tr '\n' ' ')], want exactly [top] (upstream is never expanded)"
+
+    printf 'consumer expansion order fixture: PASS (diamond, record-order tie-break, duplicate seed)\n'
+)

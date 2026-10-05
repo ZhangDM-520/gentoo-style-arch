@@ -35,6 +35,13 @@ fail() {
     exit 1
 }
 
+# planrow FIELD... — the plan-row codec's tab framing (R-F22 grammar): row
+# expectations must frame fields exactly as install_plan prints them.
+planrow() {
+    local IFS=$'\t'
+    printf '%s' "$*"
+}
+
 checks=0
 
 # make_archive DIR PKGNAME PROVIDES-LINE... — a makepkg-shaped archive with
@@ -166,10 +173,10 @@ GSA_FAKE_APP_INSTALLED=1
 decide force "$libs_arch"
 ((FIXTURE_RC == 1)) ||
     fail "A: a moving soname provide with an open closure must refuse (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
-expected="refuse abi-soname $libs_arch libs-git libgreet.so 1-64 2-64
-refuse abi-consumer $libs_arch app-git"
+expected="$(planrow refuse abi-soname "$libs_arch" libs-git libgreet.so 1-64 2-64)
+$(planrow refuse abi-consumer "$libs_arch" app-git)"
 [[ $FIXTURE_OUTPUT == "$expected" ]] ||
-    fail "A: wrong refusal rows.
+    fail "A: wrong refusal rows (want tab-framed plan_row output).
 want:
 $expected
 got:
@@ -191,9 +198,9 @@ checks=$((checks + 2))
 decide force "$libs_arch" "$app_arch"
 ((FIXTURE_RC == 0)) ||
     fail "B: a complete closure must plan cleanly (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
-grep -Fxq "install $libs_arch" <<<"$FIXTURE_OUTPUT" ||
+grep -Fxq "$(planrow install "$libs_arch")" <<<"$FIXTURE_OUTPUT" ||
     fail "B: the provider must be planned for install: $FIXTURE_OUTPUT"
-grep -Fxq "install $app_arch" <<<"$FIXTURE_OUTPUT" ||
+grep -Fxq "$(planrow install "$app_arch")" <<<"$FIXTURE_OUTPUT" ||
     fail "B: the consumer must be planned for install: $FIXTURE_OUTPUT"
 assert_no_u B
 checks=$((checks + 3))
@@ -222,7 +229,7 @@ Provides : libgreet.so=2-64'
 decide force "$libs_arch"
 ((FIXTURE_RC == 0)) ||
     fail "D: an unchanged provide surface must plan cleanly (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
-grep -Fxq "install $libs_arch" <<<"$FIXTURE_OUTPUT" ||
+grep -Fxq "$(planrow install "$libs_arch")" <<<"$FIXTURE_OUTPUT" ||
     fail "D: the archive must still be planned for install: $FIXTURE_OUTPUT"
 assert_no_u D
 checks=$((checks + 2))
@@ -236,9 +243,9 @@ Provides : libgreet.so=1-64'
 decide force "$libs_arch"
 ((FIXTURE_RC == 1)) ||
     fail "E: a disappearing soname provide must refuse (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
-grep -Fxq "refuse abi-soname $libs_arch libs-git libgreet.so 1-64 -" <<<"$FIXTURE_OUTPUT" ||
+grep -Fxq "$(planrow refuse abi-soname "$libs_arch" libs-git libgreet.so 1-64 -)" <<<"$FIXTURE_OUTPUT" ||
     fail "E: missing disappear row: $FIXTURE_OUTPUT"
-grep -Fxq "refuse abi-consumer $libs_arch app-git" <<<"$FIXTURE_OUTPUT" ||
+grep -Fxq "$(planrow refuse abi-consumer "$libs_arch" app-git)" <<<"$FIXTURE_OUTPUT" ||
     fail "E: missing consumer row: $FIXTURE_OUTPUT"
 assert_no_u E
 checks=$((checks + 3))
@@ -294,5 +301,37 @@ grep -Fq 'installed consumer app-git is not in this transaction' "$g_log" ||
     fail "G: the refusal must name the consumer: $(cat "$g_log")"
 assert_no_u G
 checks=$((checks + 3))
+
+# ─── H. a spaced archive path survives the abi refusal rows (R-F22) ────────
+# The refusal rows carry the archive path too; the tab-framed codec must
+# deliver it to the seam/consumer intact (the old space-joined row truncated
+# at the first space and the rendering named a nonexistent archive).
+(
+    mkdir -p "$ws/spaced dir"
+    make_archive "$ws" libs-git 'libgreet.so=2-64'
+    sp_arch="$ws/spaced dir/libs-git-1.0.0-1-x86_64.pkg.tar.zst"
+    cp "$libs_arch" "$sp_arch"
+    GSA_FAKE_QI_LIBS='Name : libs-git
+Version : 1.0.0-1
+Provides : libgreet.so=1-64'
+    GSA_FAKE_QI_APP='Name : app-git
+Version : 1.0.0-1
+Provides : libapp.so=1-64'
+    GSA_FAKE_APP_INSTALLED=1
+    : >"$ws/pacman.log"
+    decide force "$sp_arch"
+    ((FIXTURE_RC == 1)) ||
+        fail "H: a moving provide over a spaced path must refuse (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
+    sp_expected="$(planrow refuse abi-soname "$sp_arch" libs-git libgreet.so 1-64 2-64)
+$(planrow refuse abi-consumer "$sp_arch" app-git)"
+    [[ $FIXTURE_OUTPUT == "$sp_expected" ]] ||
+        fail "H: the spaced path did not survive the refusal rows.
+want:
+$sp_expected
+got:
+$FIXTURE_OUTPUT"
+    assert_no_u H
+    checks=$((checks + 2))
+)
 
 printf 'abi-drift-install fixture: PASS (%d checks)\n' "$checks"

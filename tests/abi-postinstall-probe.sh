@@ -214,4 +214,71 @@ grep -Fq 'post-install NEEDED probe' <<<"$FIXTURE_OUTPUT" &&
     fail "D: no probe output expected with the exclusion registered: $FIXTURE_OUTPUT"
 checks=$((checks + 2))
 
+# ─── E. a probe that cannot run is a NAMED warning, never a silent "clean" ──
+# R-F26 non-fatal half: mktemp failure (the probe's temp dir) must surface as
+# `post-install NEEDED probe skipped (<reason>)` while the run still succeeds
+# — the layer reports "unprobed", never "clean". The stub fails ONLY the
+# probe's template so no other temp user is collateral.
+(
+    reset_case
+    stage_archive libs-git
+    stage_archive app-git
+    : >"$ws/existing.txt"
+    cat >"$ws/bin/mktemp" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+*gsa-abi-probe*) exit 1 ;;
+esac
+exec /usr/bin/mktemp "$@"
+EOF
+    chmod +x "$ws/bin/mktemp"
+    run_case E-mktemp
+    rm -f "$ws/bin/mktemp"
+    ((FIXTURE_RC == 0)) ||
+        fail "E: a skipped probe is non-fatal (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
+    grep -Fq 'post-install NEEDED probe skipped' <<<"$FIXTURE_OUTPUT" ||
+        fail "E: the skipped probe must be a named warning: $FIXTURE_OUTPUT"
+    grep -Fq 'ABI layer did not run' <<<"$FIXTURE_OUTPUT" ||
+        fail "E: the warning must say the layer did not run: $FIXTURE_OUTPUT"
+    grep -q -- 'pacman -U' "$ws/pacman.log" ||
+        fail "E: the transaction must still land before the probe: $(cat "$ws/pacman.log")"
+    checks=$((checks + 3))
+)
+
+# ─── F. the -ia preflight REFUSES when readelf is missing (R-F26 gate half) ─
+# A symlink farm of every /usr/bin tool except readelf pins `command -q
+# readelf` to fail without stubbing anything else: the probe's tools are
+# prereqs of the install entries (like tar/strings), so an unprobeable host
+# refuses up front instead of installing under a silent "clean".
+(
+    farm="$ws/noreadelf-bin"
+    mkdir -p "$farm"
+    for tool_bin in /usr/bin/*; do
+        tool=${tool_bin##*/}
+        [[ $tool == readelf ]] && continue
+        ln -s "$tool_bin" "$farm/$tool"
+    done
+    reset_case
+    stage_archive libs-git
+    : >"$ws/existing.txt"
+    run_builder env \
+        PATH="$ws/bin:$farm" \
+        GSA_STATE_DIR="$ws/state" \
+        GSA_FAKE_PACMAN_LOG="$ws/pacman.log" \
+        GSA_FAKE_DB_DIR="$ws/db" \
+        GSA_FAKE_DB_PATH="$ws/db" \
+        GSA_FAKE_EXISTING="$ws/existing.txt" \
+        GSA_CPU_THREADS=8 GSA_MEMORY_GIB=16 \
+        fish "$ws/build-all.fish" --allow-broken-rustc --no-deps --no-sync -ia
+    rm -rf -- "$farm"
+    ((FIXTURE_RC != 0)) ||
+        fail "F: -ia must refuse when readelf is unavailable: $FIXTURE_OUTPUT"
+    grep -Fq "required command 'readelf' is unavailable" <<<"$FIXTURE_OUTPUT" ||
+        fail "F: the refusal must name readelf: $FIXTURE_OUTPUT"
+    if grep -q -- 'pacman -U' "$ws/pacman.log" 2>/dev/null; then
+        fail "F: a transaction ran under an unprobeable host: $(cat "$ws/pacman.log")"
+    fi
+    checks=$((checks + 3))
+)
+
 printf 'abi-postinstall-probe fixture: PASS (%d checks)\n' "$checks"

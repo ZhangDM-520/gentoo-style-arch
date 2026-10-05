@@ -167,4 +167,92 @@ if [[ $(rr_remaining <<<"$RESUME_OUTPUT" | tr '\n' ' ') != 'p2 p3 ' ]]; then
     exit 1
 fi
 
+# ─── An install-PLAN refusal fails the RUN and lands in the record ──────────
+# R-F39/F25 family: the plan's status is never dropped. p2's built set is a
+# PARTIAL split set (its second output never appears), so its install plan
+# refuses with the named row instead of installing a subset or reporting
+# "nothing to do" — p2's row is failed, the run outcome is failed, and the
+# resume suggestion keeps --install and the not-yet-installed remainder.
+(
+    dir="$fixture/plan-refusal"
+    make_workspace "$dir" 1 2 low
+    add_package "$dir" p1 $'pkgver=1.0.0\npkgrel=1\narch=(any)'
+    add_package "$dir" p2 $'pkgver=1.0.0\npkgrel=1\narch=(any)\npkgname=(p2 p2-extra)'
+    add_package "$dir" p3 $'pkgver=1.0.0\npkgrel=1\narch=(any)'
+    stub_sudo "$dir"
+    stub_pacman "$dir"
+    cat >"$dir/bin/makepkg" <<'EOF'
+#!/usr/bin/env bash
+set -u
+id=$(basename "$PWD")
+: >"$PWD/$id-1.0.0-1-any.pkg.tar.zst"
+# No second output for the split recipe: the built set stays PARTIAL, which
+# the install plan must refuse by name — the build itself succeeds here.
+printf 'fake makepkg %s\n' "$PWD"
+exit 0
+EOF
+    chmod +x "$dir/bin/makepkg"
+    set +e
+    RESUME_OUTPUT=$(
+        PATH="$dir/bin:$PATH" \
+            GSA_STATE_DIR="$dir/state" \
+            GSA_FAKE_PACMAN_LOG="$dir/pacman.log" \
+            GSA_CPU_THREADS=8 \
+            GSA_MEMORY_GIB=16 \
+            fish "$dir/build-all.fish" --install --no-deps --allow-broken-rustc --no-sync p1 p2 p3 2>&1
+    )
+    rc=$?
+    set -e
+    if ((rc == 0)); then
+        printf "plan refusal: the run succeeded although p2's install plan refused:\n%s\n" "$RESUME_OUTPUT" >&2
+        exit 1
+    fi
+    if [[ $(rr_scalar outcome <<<"$RESUME_OUTPUT") != failed ]]; then
+        printf 'plan refusal: run record outcome is %s, want failed:\n%s\n' \
+            "$(rr_scalar outcome <<<"$RESUME_OUTPUT")" "$RESUME_OUTPUT" >&2
+        exit 1
+    fi
+    if [[ $(rr_row p2 status <<<"$RESUME_OUTPUT") != failed ]]; then
+        printf 'plan refusal: p2 row is %s, want failed:\n%s\n' \
+            "$(rr_row p2 status <<<"$RESUME_OUTPUT")" "$RESUME_OUTPUT" >&2
+        exit 1
+    fi
+    RESUME_CMD=$(grep '^  build-all.fish ' <<<"$RESUME_OUTPUT" | head -1)
+    if [[ "$RESUME_CMD" != *"--install"* ]]; then
+        printf 'plan refusal: resume command dropped --install:\n  %s\n' "$RESUME_CMD" >&2
+        exit 1
+    fi
+    for pkg in p2 p3; do
+        if ! grep -qw "$pkg" <<<"$RESUME_CMD"; then
+            printf 'plan refusal: resume command drops %s:\n  %s\n' "$pkg" "$RESUME_CMD" >&2
+            exit 1
+        fi
+    done
+    if ! grep -Fq 'is incomplete' <<<"$RESUME_OUTPUT" ||
+        ! grep -Fq 'p2-extra' <<<"$RESUME_OUTPUT"; then
+        printf 'plan refusal: the omission was not named in the run output:\n%s\n' "$RESUME_OUTPUT" >&2
+        exit 1
+    fi
+    if ! grep -rq 'refusing to install' "$dir/state" 2>/dev/null; then
+        printf 'plan refusal: no named refusal row in the package transcript:\n%s\n' "$RESUME_OUTPUT" >&2
+        exit 1
+    fi
+)
+
+# ─── Ambient CPU/RAM pins are warned about, or a resume silently re-plans ───
+# continuation_args warned about GSA_TARGET_CPU/GSA_STATE_DIR/
+# GSA_VCS_SKIP_TOLERANCE but not GSA_CPU_THREADS/GSA_MEMORY_GIB — yet the
+# core-solo job budget recomputes from them at every start, so a resume under
+# different pins silently changed the plan (2026-10-05).
+dir="$fixture/ambient-pins"
+make_case_workspace "$dir"
+run_expecting_failure "$dir" 'ambient pins' --no-deps --allow-broken-rustc --no-sync
+for var in GSA_CPU_THREADS GSA_MEMORY_GIB; do
+    if ! grep 'ambient environment' <<<"$RESUME_OUTPUT" | grep -q "$var"; then
+        printf 'ambient pins: %s is not named in the ambient warning:\n%s\n' \
+            "$var" "$RESUME_OUTPUT" >&2
+        exit 1
+    fi
+done
+
 printf 'resume command fixture: PASS\n'
