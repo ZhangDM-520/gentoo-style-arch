@@ -1,7 +1,7 @@
 pkgbase = libbytesize
 	pkgdesc = A tiny library providing a C "class" for working with arbitrary big sizes in bytes
 	pkgver = 2.12
-	pkgrel = 3
+	pkgrel = 3.1
 	url = https://github.com/storaged-project/libbytesize
 	arch = x86_64
 	license = LGPL-2.1-or-later

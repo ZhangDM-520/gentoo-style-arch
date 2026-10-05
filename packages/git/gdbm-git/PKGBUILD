@@ -3,7 +3,7 @@
 # The AUR package of the same name was used as a reference only.
 
 pkgname=gdbm-git
-pkgver=1.23.r21.gcbbf1d7
+pkgver=1.26.r1.gfb46d98
 pkgrel=1
 pkgdesc="GNU database library (git build)"
 arch=('x86_64')

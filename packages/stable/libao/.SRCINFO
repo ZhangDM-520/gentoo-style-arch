@@ -1,7 +1,7 @@
 pkgbase = libao
 	pkgdesc = Cross-platform audio output library and plugins
 	pkgver = 1.2.2
-	pkgrel = 7
+	pkgrel = 7.1
 	url = https://xiph.org/ao/
 	arch = x86_64
 	license = GPL-2.0-or-later

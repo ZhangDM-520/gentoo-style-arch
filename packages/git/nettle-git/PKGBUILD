@@ -3,7 +3,7 @@
 # Contributor: Andreas Radke <andyrtr@archlinux.org> (stock nettle)
 
 pkgname=nettle-git
-pkgver=4.0.r42.gaa32f0f
+pkgver=4.0.r46.g81cc9f92
 pkgrel=1
 pkgdesc="A low-level cryptographic library (git build)"
 arch=('x86_64')

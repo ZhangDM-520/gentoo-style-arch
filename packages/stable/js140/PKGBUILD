@@ -2,7 +2,7 @@
 
 pkgname=js140
 pkgver=140.17.0
-pkgrel=1
+pkgrel=1.1
 pkgdesc="JavaScript interpreter and libraries - Version 140"
 url="https://spidermonkey.dev/"
 arch=(x86_64)

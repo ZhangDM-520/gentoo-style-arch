@@ -3,7 +3,7 @@
 # The AUR package of the same name was used as a reference only.
 
 pkgname=expat-git
-pkgver=2.7.1.r47.g4b274f12
+pkgver=2.9.0.r0.ga76b1174
 pkgrel=1
 pkgdesc="A stream-oriented XML parser library written in C (git build)"
 arch=('x86_64')

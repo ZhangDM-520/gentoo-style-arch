@@ -2,7 +2,7 @@
 
 pkgname=libldac
 pkgver=2.0.2.6
-pkgrel=1
+pkgrel=1.1
 pkgdesc="LDAC Bluetooth encoder library"
 url="https://github.com/EHfive/ldacBT"
 arch=(x86_64)
