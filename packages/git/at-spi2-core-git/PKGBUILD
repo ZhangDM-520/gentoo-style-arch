@@ -6,7 +6,7 @@
 # The AUR package of the same name was used as a reference only.
 
 pkgname=at-spi2-core-git
-pkgver=2.52.0.r13.g13be6f0ed
+pkgver=2.62.0.1.r4.g675ad4f1
 pkgrel=1
 pkgdesc="Protocol definitions and daemon for D-Bus at-spi (git build)"
 url="https://gitlab.gnome.org/GNOME/at-spi2-core"

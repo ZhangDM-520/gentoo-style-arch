@@ -13,7 +13,7 @@ ENABLE_DOC=${ENABLE_DOC:-1}
 
 _pkgname=babl
 pkgname="${_pkgname}-git"
-pkgver=0.1.129.r2144.56a3878
+pkgver=0.1.129.r2145.87ebf96
 pkgrel=1
 pkgdesc="Dynamic, any to any, pixel format translation library."
 arch=('x86_64')

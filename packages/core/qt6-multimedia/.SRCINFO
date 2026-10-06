@@ -1,6 +1,6 @@
 pkgbase = qt6-multimedia
 	pkgdesc = Classes for audio, video, radio and camera functionality
-	pkgver = 6.13.0_r9827.g85b8b9075
+	pkgver = 6.13.0_r9875.g99eda9976
 	pkgrel = 1
 	url = https://www.qt.io
 	arch = x86_64

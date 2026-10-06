@@ -7,7 +7,7 @@
 # The AUR package of the same name was used as a reference only.
 
 pkgname=fontconfig-git
-pkgver=2.18.3.r82.gf477dc21
+pkgver=2.18.3.r84.g44d723fa
 pkgrel=1
 pkgdesc="Library for configuring and customizing font access (git build)"
 url="https://www.freedesktop.org/wiki/Software/fontconfig/"

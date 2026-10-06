@@ -4,7 +4,7 @@
 
 pkgname=qt6-svg
 # placeholder — overridden by pkgver() (git describe on dev branch)
-pkgver=6.13.0_r2478.gd3c0f4bb
+pkgver=6.13.0_r2479.g2ed30cc1
 pkgrel=1
 arch=(x86_64)
 url='https://www.qt.io'

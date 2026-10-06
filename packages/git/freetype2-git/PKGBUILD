@@ -4,7 +4,7 @@
 # The AUR package of the same name was used as a reference only.
 
 pkgname=freetype2-git
-pkgver=2.14.3.r146.g25167984d
+pkgver=2.14.3.r147.gd5d4bef0c
 pkgrel=1
 pkgdesc="Font rasterization library (git build)"
 url="https://www.freetype.org/"

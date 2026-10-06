@@ -4,7 +4,7 @@
 
 pkgname=qt6-graphs
 # placeholder — overridden by pkgver() (git describe is unusable on dev branches)
-pkgver=6.13.0_r1740.g4fafe2b2
+pkgver=6.13.0_r1749.g9dd8d391
 pkgrel=1
 arch=(x86_64)
 url='https://www.qt.io'

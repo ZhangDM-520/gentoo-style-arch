@@ -1,6 +1,6 @@
 pkgbase = gdk-pixbuf2-git
 	pkgdesc = An image loading library (git build)
-	pkgver = 2.44.2.r1.gbeb152174
+	pkgver = 2.44.8.r6.g41248b9d9
 	pkgrel = 1
 	url = https://wiki.gnome.org/Projects/GdkPixbuf
 	install = gdk-pixbuf2.install
@@ -15,7 +15,7 @@ pkgbase = gdk-pixbuf2-git
 	depends = glibc
 	depends = glycin
 	depends = shared-mime-info
-	provides = gdk-pixbuf2=2.44.2.r1.gbeb152174
+	provides = gdk-pixbuf2=2.44.8.r6.g41248b9d9
 	provides = libgdk_pixbuf-2.0.so
 	conflicts = gdk-pixbuf2
 	source = git+https://gitlab.gnome.org/GNOME/gdk-pixbuf.git

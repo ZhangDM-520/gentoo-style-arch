@@ -3,7 +3,7 @@
 # The AUR package of the same name was used as a reference only.
 
 pkgname=brotli-git
-pkgver=1.2.0.r170.g42a2ed4
+pkgver=1.2.0.r171.g392b261
 pkgrel=1
 pkgdesc="Brotli compression library (git build)"
 arch=('x86_64')

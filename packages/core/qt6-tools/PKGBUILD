@@ -4,7 +4,7 @@
 
 pkgname=qt6-tools
 # placeholder — overridden by pkgver() (git describe on dev branch)
-pkgver=6.13.0_r7576.gbbf76d83a
+pkgver=6.13.0_r7584.gf7b399a94
 pkgrel=1
 arch=(x86_64)
 url='https://www.qt.io'

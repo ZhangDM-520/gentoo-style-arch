@@ -16,7 +16,7 @@
 
 
 pkgname=('llvm-git' 'llvm-libs-git' 'clang-opencl-headers-git')  # llvm-ocaml-git split dropped 2026-09-04 (no consumer)
-pkgver=24.0.0_r600824.97c2b129a824
+pkgver=24.0.0_r600873.1a79ebf21526
 pkgrel=1
 arch=('x86_64')
 url="https://llvm.org/"

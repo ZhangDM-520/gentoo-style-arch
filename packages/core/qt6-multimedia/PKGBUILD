@@ -6,7 +6,7 @@ pkgname=(qt6-multimedia
          qt6-multimedia-ffmpeg
          qt6-multimedia-gstreamer)
 # placeholder — overridden by pkgver() (git describe on dev branch)
-pkgver=6.13.0_r9827.g85b8b9075
+pkgver=6.13.0_r9875.g99eda9976
 pkgrel=1
 arch=(x86_64)
 url='https://www.qt.io'

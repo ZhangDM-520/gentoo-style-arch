@@ -6,7 +6,7 @@
 # The AUR package of the same name was used as a reference only.
 
 pkgname=gdk-pixbuf2-git
-pkgver=2.44.2.r1.gbeb152174
+pkgver=2.44.8.r6.g41248b9d9
 pkgrel=1
 pkgdesc="An image loading library (git build)"
 url="https://wiki.gnome.org/Projects/GdkPixbuf"
