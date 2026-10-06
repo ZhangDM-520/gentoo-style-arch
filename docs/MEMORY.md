@@ -1279,6 +1279,12 @@ constant, not a baked path).
 
 ## 6. Pitfall digest (full details: NOTE.md sections of same dates)
 
+- **`$srcdir` persists across makepkg runs — recipe-side state creation must
+  be idempotent** (2026-10-07 sqlite, run #39): a bare `mkdir "$srcdir"/tcl`
+  died on the empty dir left by run #36's failed attempt, and a clean-clone
+  validation missed it. `rm -rf` before recreating staging dirs
+  (deployments-delete-destination style), and validate packaging-layout fixes
+  against a POLLUTED work dir — same family as Meson build-dir staleness.
 - **A Stock→house swap must reproduce the stock pkg-config NAMES, not just
   the soname** (2026-10-07 bzip2-git): meson `pkg.generate(lib)` names the
   pc after the library target (`bz2.pc`, `Name: bz2`) while the ecosystem

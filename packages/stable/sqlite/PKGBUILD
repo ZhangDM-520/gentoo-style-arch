@@ -92,6 +92,9 @@ package_sqlite() {
   # literal zipfs:/lib/tcl/tcl_library pseudo-path on tcl 9.0 — so locate
   # it by its pkgIndex.tcl instead of pinning one layout, and drop the
   # leftover scaffolding (tcl 9's zipfs: tree would otherwise ship).
+  # rm -rf first: $srcdir persists across makepkg runs, so a bare mkdir
+  # dies on the leftover dir from any earlier failed/partial attempt.
+  rm -rf "$srcdir"/tcl
   mkdir "$srcdir"/tcl
   local _tcl_ext
   _tcl_ext=$(find "$pkgdir" -name pkgIndex.tcl -printf '%h\n' -quit)

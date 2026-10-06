@@ -32,6 +32,12 @@ pkgver() {
 
 prepare() {
   cd libmypaint
+
+  # Upstream autogen.sh defaults ACLOCAL/AUTOMAKE to the automake-1.NN that was
+  # current upstream and its fallback cascade stops before the host's newer
+  # automake; unversioned names resolve to whatever automake the host provides.
+  sed -E -i 's/(aclocal|automake)-1\.[0-9]+/\1/g' autogen.sh
+
   ./autogen.sh
 }
 

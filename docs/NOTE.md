@@ -37,6 +37,37 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-07 — `libmypaint-git` prepare() wall: upstream `autogen.sh` pins automake minor-version tool names
+
+**Symptom.** `prepare()` died in `./autogen.sh`: "You must have automake
+1.13 or newer" (misleading) and `autogen.sh: line 160: automake-1.18:
+command not found` — the host has automake 1.19, whose binary is
+`automake-1.19`.
+
+**Root cause.** Upstream's bootstrap hard-defaults `ACLOCAL=aclocal-1.18` /
+`AUTOMAKE=automake-1.18` (autogen.sh:12,15), and its fallback probe cascade
+(autogen.sh:128-148) only tries `automake-1.18`…`automake-1.13`, so a NEWER
+host automake matches nothing. `autoreconf -fiv` is not a valid substitute:
+autogen.sh also runs `generate.py` codegen for headers that are not
+committed and have no Makefile.am rule (autogen.sh:268) — replacing it would
+silently drop required generated code.
+
+**Fix.** `packages/git/libmypaint-git/PKGBUILD` `prepare()` normalizes the
+version-pinned tool names to unversioned before running the script:
+`sed -E -i 's/(aclocal|automake)-1\.[0-9]+/\1/g' autogen.sh` — no minor
+version pinned, idempotent if upstream goes unversioned.
+
+**Validation.** Red-first scratch `makepkg --nobuild` (runs prepare()) at
+the exact failing revision reproduced both errors; after the fix, automake
+1.19 and intltool 0.51.0 are detected and "Sources are ready." (scratch's
+pkgver rewrite not propagated). `bash -n` clean; `.SRCINFO` byte-identical.
+
+**Rule.** When an upstream bootstrap pins version-suffixed tool NAMES,
+normalize them in `prepare()` to the unversioned tools; do not replace a
+bootstrap script with `autoreconf` when it does more than autotools (check
+for codegen before substituting). Full `build()` remains unproven for this
+slice — codegen correctness rests on autogen.sh's unchanged execution path.
+
 ## 2026-10-07 — `hermes-agent-git` prepare() drift in `0001`/`0002`: upstream refactors broke two patch hunks
 
 **Symptom.** `makepkg --nobuild` aborted in `prepare()`:
@@ -179,6 +210,18 @@ hits (tcl-wave acceptance item cleared).
 from `tclConfig.sh`/`TCL_PACKAGE_PATH` or locate the payload by content
 (`pkgIndex.tcl`) and move it. TCL_LIBRARY may be a pseudo-path (`zipfs:…`);
 any upstream `install-tcl` step can materialise it literally under `$pkgdir`.
+
+**Follow-up (run #39).** The fix itself then walled on a *stale-state* bug:
+`mkdir "$srcdir"/tcl` (no `-p`, no clean) died with `File exists` — `$srcdir`
+persists across makepkg runs, and run #36's failed attempt had left an empty
+`src/tcl` behind. The clone validation missed it because its `$srcdir` was
+clean. `package_sqlite()` now `rm -rf`s the staging dir before recreating it,
+and the re-validation was run against a clone carrying the stale dir on
+purpose. Rule: any recipe step that creates state under `$srcdir`/`$pkgdir`
+must be idempotent (`rm -rf` first, deployments-delete-destination style) —
+and packaging-layout fixes must be validated against a *polluted* work dir,
+not just a clean clone; `$srcdir` staleness is the same family as the Meson
+build-dir staleness rule.
 
 ## 2026-10-06 — `-s` skip churn on flaky networks and git-pull mtimes: `--skip-built` + `--vcs-skip-tolerance`
 
