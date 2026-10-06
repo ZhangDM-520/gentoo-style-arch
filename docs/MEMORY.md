@@ -646,6 +646,20 @@
     removed code used to define; when taking one patch from a multi-patch
     upstream set, diff the set as a whole and carry over whatever the taken
     patch depends on. See `docs/NOTE.md` 2026-10-06 nspr-git.
+33. **A fix verified in a clean tree is not verified for the run path —
+    re-verify over a dirty `$srcdir`** (2026-10-06 nspr-git, second wall):
+    makepkg re-extraction resets tracked files but leaves untracked in-tree
+    build outputs, and make-without-header-deps build systems never rebuild
+    `.o` files when only a *header* the recipe patches changes — so the same
+    verified recipe shipped the same broken library in the full run, whose
+    rebuilds always land over persistent `src/` trees. (a) When changing a
+    recipe's patches or flags, treat existing `src/` output as poison: the
+    recipe should clean it itself (nspr `build()` now runs `make clean`
+    after `configure`), else rebuild that package with `-c`. (b) Validate
+    such a fix by building twice without cleaning — the second build over
+    the first one's objects is the run path; `nm -D` the shipped `.so` (rule
+    32) both times. See `docs/NOTE.md` 2026-10-06 nspr-git (stale in-tree
+    objects).
 
 ## 2. Workspace overview
 

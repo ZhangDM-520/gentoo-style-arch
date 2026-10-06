@@ -37,6 +37,118 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-06 — pgo-payload-guard raced the shared battery $TMPDIR ("0 -> 1" flake)
+
+**Symptom.** The parallel battery failed non-deterministically with different
+single fixtures per run (`cleanup-extensions.sh`, then `install-archive-guard`
++ `toolchain-remediation` under a concurrent makepkg, then
+`pgo-payload-guard.sh`: `payload check left its temp extraction behind
+(0 -> 1)`), each passing in isolation.
+
+**Root cause.** Two layers. (a) Host: the fish `rm` wrapper's foreign-
+filesystem branch delegates to `trash-put`, which was never installed — any
+fish-side `rm` of a `$TMPDIR`/workspace target failed; fixed by installing
+`trash-cli` (extra). (b) Fixture: `pgo-payload-guard.sh` counted
+`gsa-pgo-verify.*` in the *shared* battery `$TMPDIR`, while the payload check
+extracts into exactly that pattern — a concurrent fixture exercising the
+install seam widened the race (made more likely by (a)'s post-install python
+latency in other fixtures' cleanup).
+
+**Fix.** (a) `pacman -S trash-cli`. (b) The fixture now exports a private
+`TMPDIR` for the runs it makes and counts there; the assertion is unchanged
+and now unambiguous.
+
+**Validation.** `bash -n`; fixture green in isolation; the full battery run
+twice back-to-back green; the other `maxdepth 1 -name` assertions in the
+suite all read fixture-private paths.
+
+**Rule.** Battery parallelism is sound only if every fixture reads and
+writes its own tree: a fixture that asserts on the shared `$TMPDIR` namespace
+(global name patterns) is racing its siblings by construction — scope the
+namespace (private `TMPDIR`), never the schedule (no `--serial`).
+
+## 2026-10-06 — nspr-git: stale in-tree objects survived re-extraction and shipped the broken lib again
+
+**Symptom.** After the `0003` builtins patch landed and was verified clean
+(previous entry), run #17 rebuilt `nspr-git` in the external workspace and
+installed a **broken** `libnspr4.so` again — same undefined
+`_PR_x86_64_Atomic*` symbols, `nss-git` walled at the identical strict link.
+The recipe was byte-identical to the verified build (`diff` clean against
+HEAD) and the build log showed both patches found, checksum-verified and
+applied cleanly.
+
+**Root cause.** makepkg re-extraction resets tracked files but leaves
+untracked in-tree build outputs in `$srcdir`, and nspr builds in-tree with
+makefiles that have no header dependencies. The workspace's `src/` still held
+run #16's `.o` files compiled against the asm-mapped `_linux.h`
+(`prvrsion.o` mtime 02:54 vs patched `_linux.h` 11:06). `prepare()` re-patched
+the header, but no object had a header prerequisite, so the stale objects —
+calling the removed asm symbols — were relinked into the new `libnspr4.so`.
+The canonical build was clean simply because its `src/` was fresh; the run
+path rebuilds over persistent trees.
+
+**Fix.** Recipe-level stale-object guard: `make clean` after `./configure` in
+`build()`, so nspr always recompiles (a minute on a small package). Red/green
+falsified in a scratch tree reproducing the burn exactly: build A (pre-`0003`
+recipe) → 4 broken symbols; build B (`0003` without the guard, over A's
+stale objects — the run #17 state) → 4 broken symbols; build C (with the
+guard, same dirty tree) → 0 symbols.
+
+**Validation.** Scratch red/green above; canonical rebuild over its own dirty
+tree → archive and installed `/usr/lib/libnspr4.so` both show 0 matching
+symbols; full `tests/run-all.sh` battery green; `nss-git`'s strict link is
+exercised by the next full run.
+
+**Rule.** A recipe that patches headers and builds with make-without-header-
+deps is unsound over a persistent `$srcdir`: makepkg succeeding is not the
+gate (rule 32 — `nm -D` the shipped `.so`). When changing a recipe's patches
+or flags, treat previous build outputs in `src/` as poison: either the recipe
+cleans them itself (preferred, as nspr now does) or rebuild with `-c`. And a
+fix verified in a clean tree is not verified for the run path — re-verify over
+a dirty tree (a second consecutive build without cleaning) whenever
+in-tree make is involved.
+
+## 2026-10-06 — toolchain build-order audit: four missing compiler edges (js140 et al.)
+
+**Symptom.** Owner question — "does the compile toolchain sit at the head of
+build order?" — prompted an audit of the `build-tools` guarantee. Ordering is
+sound at the scheduling layer (the `build-tools` dispatch-priority class runs
+its members before all other ready packages, never over build-order edges),
+but four records consumed the set's compiler toolchain in `makedepends`
+without any build-order edge, so they sorted before the toolchain and were
+invisible to consumer expansion.
+
+**Root cause.** Edge authorship is per-recipe and the record set drifted where
+`makedepends` named `clang`/`llvm`/`lld`/`rust` but the record kept an empty
+or partial edge list. Worst case `js140`: `makedepends=(cbindgen clang lld
+llvm rust)` with a completely empty `edges` field — it sorted #21, before
+`llvm-git` (#138) and `rust-git` (#338), so a toolchain bump would never pull
+it back and a from-scratch run compiled it against whatever toolchain was
+installed.
+
+**Fix.** New edges, each justified by the recipe's own `makedepends`:
+`js140` → `llvm-git,rust-git` (`clang`/`lld`/`llvm` from llvm-git, `rust`
+from rust-git; `cbindgen` is external to the set, like base-devel);
+`networkmanager` → `+llvm-git` (clang compiles its eBPF objects);
+`ffmpeg-git` → `+llvm-git` (clang makedepend); `xwayland-satellite-git` →
+`+llvm-git` (clang makedepend alongside its existing `rust-git` edge).
+Deliberately NOT touched: `rocm-llvm` (its makedepends has no clang/lld — it
+bootstraps its own; an earlier regex scan false-matched the build script),
+`asusctl` (clang is `checkdepends`-only and checks are disabled), and the
+generic meson/cmake/ninja tool class — that class is systemically loose
+(84 of 370 tool-uses carry no edge) and changing it is a policy decision,
+not an audit fix.
+
+**Validation.** `fish build-all.fish --audit` and `--list`, dry-runs for
+`git`/`stable`/`core`, and the full `tests/run-all.sh` battery all green;
+consumer expansion now includes js140 on an `llvm-git`/`rust-git` selection.
+
+**Rule.** Audit edges against `makedepends` whenever a recipe touches the
+compiler toolchain: a record that compiles with the set's clang/llvm/rust
+needs the matching edge, both for intra-run ordering and for consumer
+expansion on a toolchain bump. Generic build drivers (meson/cmake/ninja)
+remain edge-optional by current norm.
+
 ## 2026-10-06 — nspr-git: asm removal without the builtins replacement shipped undefined atomics
 
 **Symptom.** Run #16 wall at 74/652 on `nss-git`: mold refuses `/usr/lib/libnspr4.so`
