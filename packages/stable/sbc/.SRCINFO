@@ -1,7 +1,7 @@
 pkgbase = sbc
 	pkgdesc = Bluetooth Subband Codec (SBC) library
 	pkgver = 2.2
-	pkgrel = 1
+	pkgrel = 1.1
 	url = https://git.kernel.org/pub/scm/bluetooth/sbc.git
 	arch = x86_64
 	license = GPL-2.0-or-later

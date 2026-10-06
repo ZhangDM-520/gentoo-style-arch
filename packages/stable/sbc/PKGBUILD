@@ -2,7 +2,7 @@
 
 pkgname=sbc
 pkgver=2.2
-pkgrel=1
+pkgrel=1.1
 pkgdesc="Bluetooth Subband Codec (SBC) library"
 url="https://git.kernel.org/pub/scm/bluetooth/sbc.git"
 arch=(x86_64)
