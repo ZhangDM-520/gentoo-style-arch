@@ -5,7 +5,7 @@
 
 pkgname=mkinitcpio-busybox
 pkgver=1.36.1
-pkgrel=1
+pkgrel=2
 pkgdesc='Base initramfs tools'
 arch=(x86_64)
 url="https://www.busybox.net/"
@@ -44,5 +44,8 @@ build() {
 
 package() {
   install -Dm755 "$srcdir/busybox-$pkgver/busybox" "$pkgdir/usr/lib/initcpio/busybox"
-  install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname/"
+  # upstream's license text lives inside the extracted tree — package() runs
+  # with cwd=$srcdir (makepkg default workingdir), so a bare LICENSE only
+  # worked via stale $srcdir artifacts and failed on a clean build (run #22)
+  install -Dm644 "$srcdir/busybox-$pkgver/LICENSE" -t "$pkgdir/usr/share/licenses/$pkgname/"
 }

@@ -1,7 +1,7 @@
 pkgbase = mkinitcpio-busybox
 	pkgdesc = Base initramfs tools
 	pkgver = 1.36.1
-	pkgrel = 1
+	pkgrel = 2
 	url = https://www.busybox.net/
 	arch = x86_64
 	license = GPL

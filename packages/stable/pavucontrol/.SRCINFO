@@ -8,7 +8,6 @@ pkgbase = pavucontrol
 	license = GPL-2.0-or-later
 	checkdepends = tidy
 	makedepends = git
-	makedepends = lynx
 	makedepends = meson
 	depends = glib2
 	depends = glibc

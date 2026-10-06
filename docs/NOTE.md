@@ -37,6 +37,69 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-06 — run #21: a version-sync rewrite blocked the fix's sync, `| tail -1` hid it
+
+**Symptom.** Run #21 walled at `libnewt` with the *same* old-recipe 404
+even though the fix was already pushed and "synced".
+
+**Root cause.** The builder's version-sync had rewritten the workspace's
+`libnewt` PKGBUILD (`pkgrel` 2→2.1) during the previous run, so
+`git pull --ff-only` aborted with "local changes would be overwritten" —
+and the pull was piped through `| tail -1`, which hid the error while
+still showing the aborted merge's `Updating ...` line. HEAD silently
+stayed behind.
+
+**Fix.** Discard the superseded local rewrite (`git checkout --` the
+path), pull with full output, verify `git log --oneline -1` equals the
+pushed HEAD, then relaunch.
+
+**Validation.** $W HEAD verified at the fix commit and the recipe grep'd
+for the new source before relaunch; run #22 cleared the gate.
+
+**Rule.** Never pipe a state-changing command through `| tail` — verify
+the artifact (`git log -1` == pushed HEAD) after every workspace sync.
+Version-sync rewrites are disposable inputs: when one collides with an
+incoming fix, the pushed fix wins; the remaining rewrites get batched into
+the periodic version-sync commit.
+
+## 2026-10-06 — mkinitcpio-busybox: `install LICENSE` in package() was a stale-$srcdir illusion
+
+**Symptom.** Run #22 walled at `mkinitcpio-busybox` (0m26s, build fine,
+`package()` fails): `install: cannot stat 'LICENSE'`. The recipe had
+"worked" before — it installed cleanly on 2026-10-05.
+
+**Root cause.** makepkg runs `package()` with `workingdir=$srcdir`
+(`run_function` default), but the recipe installed a bare relative
+`LICENSE` — the recipe-dir file, which is the repo's own MIT attribution,
+not busybox's license text anyway. A bare `LICENSE` in `$srcdir` only ever
+existed as a leftover build artifact from an older dirty tree; the clean
+build has `$srcdir/busybox-1.36.1/LICENSE` at the upstream path and
+nothing at `$srcdir/LICENSE`. Reproduced red in the canonical tree
+(`makepkg` rc=4, same error) — the recipe was broken for clean builds
+since it landed.
+
+**Fix.** Install the license from the extracted tree:
+`install -Dm644 "$srcdir/busybox-$pkgver/LICENSE" -t
+"$pkgdir/usr/share/licenses/$pkgname/"` — the shipped binary's actual
+license (the recipe-dir `LICENSE` is the repo's MIT text and must NOT be
+shipped as the package's license).
+
+**Validation.** `bash -n`; `.SRCINFO` byte-identical (no metadata change);
+red reproduced first (rc=4), then green rebuild — archive contains
+`usr/lib/initcpio/busybox` and `usr/share/licenses/mkinitcpio-busybox/LICENSE`;
+battery green.
+
+**Rule.** `package()` runs in `$srcdir`, not the recipe dir: never install
+a bare relative file that lives at `$startdir`. A recipe that "works" over
+a dirty tree can be a stale-artifact illusion (rule 33) — the canonical
+red test is a build from the current tree state, not a remembered success.
+Class audit after the fix found one more offender, `pavucontrol` (same bare
+`LICENSE`), which also still makedepended `lynx` solely for upstream's
+optional README-text doc target — `arch-meson`'s `--auto-features enabled`
+turns that feature on, so the fix is `-Dlynx=disabled` plus dropping the
+makedepend (trim standard: tool and feature together), not installing a
+text browser. Any `find_program`-gated doc tool is the same shape.
+
 ## 2026-10-06 — libnewt: pagure.io archive outage, source moved to Debian's orig tarball
 
 **Symptom.** Run #20 walled at `libnewt` (0m08s): `curl: (22) ... 404` on

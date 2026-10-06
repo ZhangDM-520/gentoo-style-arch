@@ -26,7 +26,6 @@ depends=(
 )
 makedepends=(
   git
-  lynx
   meson
 )
 checkdepends=(tidy)
@@ -45,7 +44,8 @@ build() {
   local _mold=""
   command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
   export LDFLAGS+=" ${_mold}"
-  arch-meson pavucontrol build
+  arch-meson pavucontrol build \
+    -Dlynx=disabled # trim: README text (docs) — lynx existed only for it
   meson compile -C build --jobs "${GSA_BUILD_JOBS:-$(nproc)}"
 }
 
@@ -59,7 +59,9 @@ package() {
   # trim: man page (man1 pavucontrol) (docs) — not shipped
   rm -rf "$pkgdir"/usr/share/man
 
-  install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname/"
+  # upstream LICENSE lives in the extracted source dir — package() runs with
+  # cwd=$srcdir, so reference it by path (bare LICENSE fails on clean builds)
+  install -Dm644 pavucontrol/LICENSE -t "$pkgdir/usr/share/licenses/$pkgname/"
 }
 
 # vim:set sw=2 sts=-1 et:
