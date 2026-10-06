@@ -268,10 +268,12 @@
     keyring, so an import gap fails every signed source with `unknown public
     key` no matter how correct the pin is (js140 2026-10-06, then libxau the
     same day with 146 of 179 pins unimported). Sweep the whole set at once:
-    enumerate every pin, `gpg --list-keys <pin>` each, import missing keys by
-    exact fingerprint (a fingerprint-matched fetch is self-verifying); retired
-    or keyservers-hostile keys come from the publisher's own keyring (Linus'
-    and Greg KH's keys from kernel.org's `pgpkeys.git`). A subkey signature
+    enumerate every pin **quote-agnostically** (a quoted-literal regex missed
+    90 of 269 pins; webrtc-audio-processing-1's bare pin walled run #13),
+    `gpg --list-keys <pin>` each, import missing keys by exact fingerprint (a
+    fingerprint-matched fetch is self-verifying); retired or
+    keyservers-hostile keys come from the publisher's own keyring (Linus' and
+    Greg KH's keys from kernel.org's `pgpkeys.git`). A subkey signature
     verifies against the pinned **primary** once it is imported (the binding
     covers it — libxau's sig is Coopersmith's signing subkey); an explicit
     subkey entry in `validpgpkeys` is only needed to pin a rotated signer.
@@ -592,6 +594,24 @@
     trimmed output plus a permanent lockstep pin. Sweep before planning the
     wave: `expac -Q '%n\t%D' | grep '<pkgbase>='`. Rejected: faking a soname
     provide (rule 27's "never make a provider lie").
+30. **Soname beats pkgver in ABI bookkeeping** (2026-10-06 icu incident): a
+    VCS package's `pkgver` is a version surface, not an ABI statement —
+    icu-git `78.3.r454…` built from post-release main ships `libicu*.so.79`,
+    so the pkgver lied about the soname and a "same-version" swap was an ABI
+    event. (a) When a soname swap heals a wave, the wave covers EVERY direct
+    linker, found by content scan + confirm: `grep -l 'libicu\(uc\|i18n\|
+    data\)\.so\.<old>' /usr/bin/* /usr/lib/*.so* /usr/lib32/*.so*` then
+    `readelf -d <obj> | grep NEEDED`; consumers of the victims heal
+    transitively, victims never do (the 02:07 icu79 wave rebuilt 3 of ~10
+    and stranded Qt6Core — all Qt apps, node, nautilus, xfs_scrub,
+    boost_locale/regex, libical, samba). (b) The failure mode is asymmetric
+    and deceptive: long-running processes keep running on deleted inodes
+    while every NEW exec dies at the loader (rc=127), so "the app runs but
+    its spawned helper fails" (noctalia unlock's pam-helper self-exec showed
+    as "PAM start failed") points at a soname swap, not the service the
+    error names — check `ldd`/loader errors before touching any config.
+    Rebuild+install the direct victims (all in the set's build order); never
+    symlink old soname → new.
 
 ## 2. Workspace overview
 

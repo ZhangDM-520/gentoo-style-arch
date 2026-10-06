@@ -37,6 +37,40 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-06 — noctalia unlock "PAM start failed" was an ICU soname skew, not PAM
+
+**Symptom.** Noctalia's lock-screen unlock began failing with "PAM start
+failed" while the shell itself kept running normally.
+
+**Root cause.** Not PAM: the 02:07 host swap `icu (78.3)` → `icu-git
+(78.3.r454…)` replaced the ICU **soname 78** libs with soname **79** — the
+icu-git `pkgver` still reads 78.3 while the tree ships `libicu*.so.79.1`, so
+the version surface lied about the ABI. The `/tmp/icu79-heal` wave rebuilt
+only three direct linkers (libxml2, raptor, libqalculate); everything still
+NEEDED-ing `libicu*.so.78` became unlaunchable. Long-running processes (the
+noctalia instance, pid alive since before the swap) survive on deleted
+inodes, but every **new exec** dies at the loader (rc=127) — including
+noctalia's unlock `pam-helper` self-exec, which surfaces as the PAM error.
+
+**Evidence.** `ldd /usr/bin/noctalia` → `libicui18n.so.78 / libicuuc.so.78 =>
+not found`; `/proc/<noctalia>/maps` still holds `libicu*.so.78.3`; the string
+scan `grep -l 'libicu\(uc\|i18n\|data\)\.so\.78' /usr/bin/* /usr/lib/*.so*
+/usr/lib32/*.so*` + `readelf -d | grep NEEDED` names the direct victims:
+libQt6Core/libQt6Core5Compat (qt6-base), libQt5Core (qt5-base),
+libboost_locale/libboost_regex (boost-libs), libical, libsamba-util (samba),
+node, nautilus, xfs_scrub — every consumer of those inherits the breakage,
+noctalia included.
+
+**Fix direction.** Rebuild+install the direct victim packages against the
+icu-git soname (they are all in the set's build order; qt6-base is the one
+that heals every Qt app at once) — or revert icu to stock 78.3 and walk the
+three healed packages back. Never symlink .78 → .79.
+
+**Durable rule.** MEMORY rule 30: soname beats pkgver in ABI bookkeeping;
+when "the app runs but a spawned helper/child fails", check `ldd`/loader
+errors before touching service configs — the failing exec is downstream of a
+soname swap, not a PAM misconfiguration.
+
 ## 2026-10-06 — silent package() failure: `[[ -f ]] && install` guard loops (mpg123 + 15 more)
 
 **Symptom.** Run #12 failed at `mpg123` (67/652) with `==> ERROR: A failure
@@ -101,6 +135,15 @@ tarball is signed by Courtès' pinned key instead).
 signature verifies against the pinned primary once it is imported (binding
 covers it); an explicit subkey entry is only needed to pin a rotated signer.
 MEMORY rule 15 extended accordingly.
+
+**Addendum (run #13, same day).** The sweep missed webrtc-audio-processing-1's
+pin `52DFA7B8...` and walled the next run — the enumeration regex required
+quoted tokens, but that recipe writes its pin bare. Quote-agnostic enumeration
+finds **269** pins, not 179. webrtc's git source also exercises a third
+fetch-time verification mode: `#tag=...?signed` makes makepkg verify the git
+tag signature at clone time. 77 keys were queued for import when the host's
+foreign routing went down mid-heal (proxy upstream; domestic traffic fine) —
+the run is network-blocked until it recovers.
 
 ## 2026-10-06 — libftdi: missing key import, then Python 2 API in a third-party patch
 
