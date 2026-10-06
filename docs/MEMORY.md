@@ -1279,6 +1279,14 @@ constant, not a baked path).
 
 ## 6. Pitfall digest (full details: NOTE.md sections of same dates)
 
+- **A Stock→house swap must reproduce the stock pkg-config NAMES, not just
+  the soname** (2026-10-07 bzip2-git): meson `pkg.generate(lib)` names the
+  pc after the library target (`bz2.pc`, `Name: bz2`) while the ecosystem
+  requires `bzip2` (`freetype2.pc` has `Requires.private: … bzip2 …`) —
+  the swap deleted the name and fontconfig-git died in 4 s on a wrap
+  fallback. Verify `pkg-config --exists <name>` for every pc name the stock
+  package shipped; a pc file other packages `Require` is ABI-adjacent
+  interface.
 - **Never pin a tcl-versioned install path in `package()`** (2026-10-07
   sqlite): tcl 9's `TCL_LIBRARY` is the pseudo-path `zipfs:/lib/tcl/tcl_library`,
   so an upstream `install-tcl` wrote a literal `$pkgdir/zipfs:/…` tree and the

@@ -37,6 +37,41 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-07 — Run #37 `fontconfig-git` wall: the bzip2-git swap dropped the stock `bzip2.pc` name
+
+**Symptom.** Run #37 failed at `fontconfig-git` (4 s, dispatch stopped):
+meson could not resolve `freetype2` via pkg-config —
+`Package 'bzip2', required by 'freetype2', not found` — fell through to the
+wrap subproject and hard-errored on `--wrap-mode nodownload`.
+
+**Root cause.** Stock→house swap gap in `bzip2-git`: upstream's meson port
+calls `pkg.generate(libbzip2)`, which names the pc file after the library
+target (`bz2.pc`, `Name: bz2`), and never configures the classic
+`bzip2.pc.in` template. Stock Arch ships `bzip2.pc`, and `freetype2.pc`
+carries `Requires.private: zlib, bzip2, …` — so the swap silently deleted
+the `bzip2` pkg-config name, and every consumer of `freetype2.pc` through
+pkg-config failed. freetype2 itself was fine (`ldd /usr/lib/libfreetype.so.6`
+→ `libbz2.so.1.0`, built with bzip2 support); only the pc name was missing.
+
+**Fix.** `packages/git/bzip2-git/PKGBUILD` `package()` derives `bzip2.pc`
+from the generated `bz2.pc` (`sed` on the `Name:` line, so Version/Libs/
+Cflags stay in sync with the build), keeps `bz2.pc` too (additive, upstream's
+own name), and fails loud when the generated file is missing or reshaped.
+pkgrel 2→3, `.SRCINFO` regenerated.
+
+**Validation.** Real clone build (rc=0): archive contains both `bz2.pc` and
+`bzip2.pc` (`Name: bzip2`); `pkg-config --exists bzip2` and
+`pkg-config --exists freetype2` both resolve from the DESTDIR tree; the
+fail-loud guard probe (renamed upstream file → package() refuses) confirms
+the check can fail. NOTE+MEMORY updated; full fixture battery green.
+
+**Rule.** A Stock→house swap must reproduce the stock *pkg-config names*,
+not just the soname: meson's `pkg.generate(lib)` names the pc after the
+library target, which can differ from the ecosystem name consumers `Require`.
+After any swap, `pkg-config --exists <every name the stock package shipped>`
+is part of the swap check — and a package whose pc file other packages
+`Require` (freetype2→bzip2) is an ABI-adjacent interface.
+
 ## 2026-10-07 — Run #36 `sqlite` packaging wall: tcl 9's `zipfs:` pseudo-path broke the split-out glob
 
 **Symptom.** Run #36 died at `sqlite` (134/653) in the PACKAGING phase:

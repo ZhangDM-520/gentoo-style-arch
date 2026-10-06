@@ -5,7 +5,7 @@
 
 pkgname=bzip2-git
 pkgver=r181.66c46b8
-pkgrel=2
+pkgrel=3
 pkgdesc="A high-quality data compression program (git build)"
 arch=('x86_64')
 url="https://gitlab.com/bzip2/bzip2"
@@ -71,6 +71,21 @@ prepare() {
 
 package() {
   meson install -C build --destdir "$pkgdir"
+
+  # stock-name pkg-config: upstream's meson pkg.generate names the pc file
+  # after the library target (bz2.pc, Name: bz2), but the ecosystem
+  # contract — stock Arch shipped it, and freetype2.pc carries
+  # `Requires.private: ... bzip2 ...` — is the name `bzip2`. Without it
+  # every pkg-config consumer of freetype2 fails (run #37 fontconfig-git
+  # wall: meson fell through to a wrap subproject and hard-errored).
+  # Derive bzip2.pc from the generated file so Version/Libs/Cflags stay in
+  # sync with the build; keep bz2.pc as well (additive, upstream's name).
+  local _bz2pc="$pkgdir/usr/lib/pkgconfig/bz2.pc"
+  if [[ ! -f $_bz2pc ]] || ! grep -q '^Name: bz2$' "$_bz2pc"; then
+    echo "bzip2-git: generated bz2.pc missing or reshaped (upstream meson changed)" >&2
+    return 1
+  fi
+  sed 's/^Name: bz2$/Name: bzip2/' "$_bz2pc" > "$pkgdir/usr/lib/pkgconfig/bzip2.pc"
 
   install -Dm644 bzip2/COPYING -t "$pkgdir/usr/share/licenses/$pkgname"
 }
