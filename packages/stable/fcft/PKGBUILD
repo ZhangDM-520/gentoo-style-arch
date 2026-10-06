@@ -21,7 +21,13 @@ makedepends=(meson
 checkdepends=(ttf-dejavu)
 provides=(libfcft.so)
 source=("$pkgname-$pkgver.tar.gz::$url/archive/$pkgver.tar.gz")
-sha256sums=('c0d8d485b45b1af829f73101d6588f404a32bf3c7543236b1a4707d44be81b60')
+# Codeberg/Forgejo re-serialized the 3.3.3 archive on 2026-10-06 (server
+# side; same source tree — verified byte-identical to tag 3.3.3, commit
+# 38de2ae, via diff -r against a fresh tag clone; annotated tag object
+# 24591f1 unmoved since 2025-12-27). The sum tracks the re-emitted bytes
+# (re-verified from a fresh download 2026-10-07; the immutable-rev
+# archive hashes identically). Not cache poison, not source drift.
+sha256sums=('b0c0f4a599f43723736c8565b8b84337c4195077f07f1bb8bb3252bb13a2306a')
 
 build() {
 	arch-meson $pkgname build \
