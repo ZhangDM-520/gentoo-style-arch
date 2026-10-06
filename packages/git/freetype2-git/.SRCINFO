@@ -1,6 +1,6 @@
 pkgbase = freetype2-git
 	pkgdesc = Font rasterization library (git build)
-	pkgver = 2.14.3.r16.ga6d486002
+	pkgver = 2.14.3.r146.g25167984d
 	pkgrel = 1
 	url = https://www.freetype.org/
 	arch = x86_64
@@ -12,7 +12,7 @@ pkgbase = freetype2-git
 	depends = glibc
 	depends = libpng
 	depends = zlib
-	provides = freetype2=2.14.3.r16.ga6d486002
+	provides = freetype2=2.14.3.r146.g25167984d
 	provides = libfreetype.so
 	conflicts = freetype2
 	source = git+https://gitlab.freedesktop.org/freetype/freetype.git
