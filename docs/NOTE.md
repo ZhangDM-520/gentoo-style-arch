@@ -72,6 +72,16 @@ After any swap, `pkg-config --exists <every name the stock package shipped>`
 is part of the swap check — and a package whose pc file other packages
 `Require` (freetype2→bzip2) is an ABI-adjacent interface.
 
+**Follow-up (run #38).** The recipe fix alone was not enough: `bzip2-git`
+sits ~35 positions AFTER `fontconfig-git` in build order, so run #38 walled
+identically before the fixed package's turn. Durable ordering fix: topology
+edge `fontconfig-git → bzip2-git` (verified: fontconfig's meson resolves
+`freetype2` via pkg-config and `freetype2.pc` carries
+`Requires.private: zlib, bzip2, …` — the same reason `freetype2-git` already
+edges `zlib-ng-compat-git`). A pc `Requires`/`Requires.private` line IS
+build-order metadata: when a swap renames a pc, every pkg-config consumer of
+a pc that requires that name needs an edge to the provider.
+
 ## 2026-10-07 — Run #36 `sqlite` packaging wall: tcl 9's `zipfs:` pseudo-path broke the split-out glob
 
 **Symptom.** Run #36 died at `sqlite` (134/653) in the PACKAGING phase:
