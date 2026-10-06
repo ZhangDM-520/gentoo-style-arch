@@ -21,6 +21,19 @@ set -euo pipefail
 #      installed can lose a provide;
 #   G. the force branch does NOT bypass the gate: the REAL -i executor
 #      renders the same refusal and aborts before pacman -U.
+#   H. a spaced archive path survives the codec round trip (R-F22).
+#   I. Stock→house swap (the run #31 blind spot): the archive's pkgname is
+#      NOT installed but its stock counterpart (abi_stock_name) IS, with a
+#      drifted soname surface and an uncovered consumer closure → the SAME
+#      `refuse abi-soname` + `refuse abi-consumer` rows (pkgname field stays
+#      the archive's pkgname; the installed side comes from the counterpart),
+#      rc 1, and zero mutating invocations (no pacman -U, no sudo — the
+#      decision half's only pacman traffic is read-only -Qi/-Q probes).
+#   J. the swap with an IDENTICAL soname surface is a clean pass even with
+#      the consumer closure open — only the surface MOVING strands consumers.
+#      (The double-fresh shape — neither the pkgname nor the stock
+#      counterpart installed — is case F: one more read-only probe, same
+#      clean plan.)
 #
 # The pacman stub is read-only (-Qi/-Q probes); every case asserts no
 # `pacman -U` ever ran. Scratch workspaces under $TMPDIR only.
@@ -116,6 +129,12 @@ case ${args[0]:-} in
         [[ -n ${GSA_FAKE_QI_APP:-} ]] || exit 1
         printf '%s\n' "$GSA_FAKE_QI_APP"
         ;;
+    libs)
+        # The STOCK counterpart of libs-git — the swap path's comparison
+        # surface (empty = nothing installed for it = true fresh install).
+        [[ -n ${GSA_FAKE_QI_STOCK:-} ]] || exit 1
+        printf '%s\n' "$GSA_FAKE_QI_STOCK"
+        ;;
     *) exit 1 ;;
     esac
     ;;
@@ -147,6 +166,7 @@ decide() {
         GSA_FAKE_PACMAN_LOG="$ws/pacman.log" \
         GSA_FAKE_QI_LIBS="$GSA_FAKE_QI_LIBS" \
         GSA_FAKE_QI_APP="$GSA_FAKE_QI_APP" \
+        GSA_FAKE_QI_STOCK="${GSA_FAKE_QI_STOCK:-}" \
         GSA_FAKE_APP_INSTALLED="$GSA_FAKE_APP_INSTALLED" \
         fish "$ws/build-all.fish" --install-decide "$@" 2>"$ws/decide.err")
     FIXTURE_RC=$?
@@ -335,6 +355,93 @@ got:
 $FIXTURE_OUTPUT"
     assert_no_u H
     checks=$((checks + 2))
+)
+
+# ─── I. Stock→house swap: drifted counterpart surface → the same refusals ──
+# The run #31 blind spot: nothing is installed for the ARCHIVE's pkgname
+# (libs-git) — the old gate read that as a fresh install and skipped — but the
+# stock counterpart (`libs`, abi_stock_name) IS installed and its soname
+# surface MOVES (`libgreet.so=1-64` → the build's `=2-64`), with the
+# consumer closure open. The rows must be the same-pkgname shape (the
+# pkgname field stays the ARCHIVE's pkgname; only the installed side comes
+# from the counterpart's record), and the refusal must abort before any
+# MUTATING invocation. The decision half's only installed-database traffic is
+# the read-only -Qi/-Q probes the gate cannot see the drift without — the
+# "zero pacman/sudo" contract is zero transactions/escalations, pinned below
+# by the log shapes. The sudo stub is an ORACLE (logs to a path derived from
+# itself, so no env can silence it): any escalation at all must show up.
+(
+    set -euo pipefail
+    cat >"$ws/bin/sudo" <<'EOF'
+#!/usr/bin/env bash
+set -u
+log=$(dirname "$0")/../sudo.log
+printf 'sudo %s\n' "$*" >>"$log"
+exit 99
+EOF
+    chmod +x "$ws/bin/sudo"
+    make_archive "$ws" libs-git 'libgreet.so=2-64'
+    GSA_FAKE_QI_LIBS=''
+    GSA_FAKE_QI_STOCK='Name : libs
+Version : 1.0.0-1
+Provides : libgreet.so=1-64'
+    GSA_FAKE_QI_APP='Name : app-git
+Version : 1.0.0-1
+Provides : libapp.so=1-64'
+    GSA_FAKE_APP_INSTALLED=1
+    : >"$ws/pacman.log"
+    : >"$ws/sudo.log"
+    decide force "$libs_arch"
+    ((FIXTURE_RC == 1)) ||
+        fail "I: a Stock→house swap moving the soname surface must refuse (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
+    i_expected="$(planrow refuse abi-soname "$libs_arch" libs-git libgreet.so 1-64 2-64)
+$(planrow refuse abi-consumer "$libs_arch" app-git)"
+    [[ $FIXTURE_OUTPUT == "$i_expected" ]] ||
+        fail "I: wrong swap refusal rows (want tab-framed plan_row output).
+want:
+$i_expected
+got:
+$FIXTURE_OUTPUT"
+    if grep -Evq '^pacman -(Qi|Q) ' "$ws/pacman.log"; then
+        fail "I: the refusal path must make only read-only pacman probes: $(cat "$ws/pacman.log")"
+    fi
+    assert_no_u I
+    [[ ! -s "$ws/sudo.log" ]] ||
+        fail "I: a refused plan must never escalate via sudo: $(cat "$ws/sudo.log")"
+    checks=$((checks + 3))
+)
+
+# ─── J. Stock→house swap with an IDENTICAL soname surface → clean plan ─────
+# Same swap shape as I (nothing installed for libs-git, `libs` installed,
+# consumer closure open) but the counterpart's surface matches the archive's
+# exactly: a drop-in swap must plan cleanly — only a surface that MOVES
+# strands consumers.
+(
+    set -euo pipefail
+    make_archive "$ws" libs-git 'libgreet.so=2-64'
+    GSA_FAKE_QI_LIBS=''
+    GSA_FAKE_QI_STOCK='Name : libs
+Version : 1.0.0-1
+Provides : libgreet.so=2-64'
+    GSA_FAKE_QI_APP='Name : app-git
+Version : 1.0.0-1
+Provides : libapp.so=1-64'
+    GSA_FAKE_APP_INSTALLED=1
+    : >"$ws/pacman.log"
+    : >"$ws/sudo.log"
+    decide force "$libs_arch"
+    ((FIXTURE_RC == 0)) ||
+        fail "J: a drop-in swap (identical soname provides) must plan cleanly (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
+    grep -Fxq "$(planrow install "$libs_arch")" <<<"$FIXTURE_OUTPUT" ||
+        fail "J: the swap archive must be planned for install: $FIXTURE_OUTPUT"
+    grep -Fq 'refuse' <<<"$FIXTURE_OUTPUT" &&
+        fail "J: no refusal rows expected: $FIXTURE_OUTPUT"
+    if grep -Evq '^pacman -(Qi|Q) ' "$ws/pacman.log"; then
+        fail "J: the decide seam made a non-probe pacman call: $(cat "$ws/pacman.log")"
+    fi
+    [[ ! -s "$ws/sudo.log" ]] ||
+        fail "J: the decide seam must never escalate via sudo: $(cat "$ws/sudo.log")"
+    checks=$((checks + 3))
 )
 
 printf 'abi-drift-install fixture: PASS (%d checks)\n' "$checks"

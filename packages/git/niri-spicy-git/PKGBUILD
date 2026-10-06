@@ -39,8 +39,8 @@ optdepends=('fuzzel: application launcher similar to rofi drun mode'
             'xdg-desktop-portal-gnome: screencasting support'
             'gnome-keyring: implements the secret portal, for certain apps to work'
             'polkit-gnome: when apps need to ask for root permissions')
-provides=("${pkgname%-spicy-git}=${pkgver}" 'wayland-compositor')
-conflicts=("${pkgname%-spicy-git}-bin" "${pkgname%-spicy-git}")
+provides=("${pkgname%-spicy-git}=${pkgver}" "${pkgname%-git}=${pkgver}" 'wayland-compositor')
+conflicts=("${pkgname%-spicy-git}-bin" "${pkgname%-spicy-git}" "${pkgname%-git}")
 options=(!debug strip !lto)
 # !lto is intentional: Rust LTO is controlled via CARGO_PROFILE_RELEASE_* below,
 # and no C is compiled here, so makepkg's CFLAGS -flto is pointless.

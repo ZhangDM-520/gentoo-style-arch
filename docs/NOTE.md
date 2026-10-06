@@ -37,6 +37,71 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-06 — run #31's raw pacman wall: the Layer-3 gate could not see a Stock→house swap
+
+**Symptom.** Run #31 (the `bzip2-git` swap wall): the recipe is a Class A swap
+(`pkgname bzip2-git`, `conflicts=('bzip2')`, `provides=("bzip2=$pkgver"
+'libbz2.so')`) whose built archive's makepkg-auto-versioned provide was
+`libbz2.so=1-64`, while the installed stock `bzip2` provided `libbz2.so=1.0-64`
+and every installed consumer (file, gnupg, libarchive, libelf) depends on
+exactly `libbz2.so=1.0-64`. Raw pacman noise ("removing bzip2 breaks dependency
+'libbz2.so=1.0-64'…") leaked to the operator instead of the builder's
+structured `refuse abi-*` rows. (The recipe itself is fixed upstream of this
+change — its soname is pinned; this entry is the builder-side hole.)
+
+**Root cause.** `abi_provide_refusals` (install-time Layer 3) compared an
+archive's `.PKGINFO` provides against the installed provides **of the same
+pkgname** and skipped the fresh-install case outright ("nothing installed for
+the name means nothing can disappear"). In a Stock→house swap the surface does
+not disappear — it MOVES to the new pkgname: nothing is installed for
+`bzip2-git`, while `pacman -Qi bzip2` resolves to the stock record carrying the
+surface every consumer links against.
+
+**Fix.** (1) Gate: when the archive's pkgname has no installed same-name, the
+gate resolves the counterpart with `abi_stock_name` and compares the archive's
+bare soname provides against the counterpart's provides with the same
+comparison unit and the same refusal rows — row shapes unchanged (the
+`<pkgname>` field stays the archive's pkgname; only the installed side comes
+from the counterpart's record, documented in the Layer-3 comment block).
+Same-name upgrades and the unreadable-`.PKGINFO` tolerance are bit-for-bit
+unchanged; a drop-in swap (identical provides) stays clean; the fresh-install
+skip now takes the double negative (nothing for the name AND nothing for the
+counterpart). (2) Lint: `audit_lint_swap` gained a soname-drift half — the
+output's effective bare soname provides vs the installed stock counterpart's,
+both directions of the bare-stem symmetric difference (`abi_soname_stems`, the
+layer-2/5 comparison unit), report-only, silent when the counterpart record
+has no provide entries (not comparable — the gate's tolerance family).
+(3) Recipes: `niri-spicy-git` declares the counterpart `niri-spicy` in
+provides+conflicts, `vscodium-insiders-git` declares
+`vscodium-insiders=${pkgver}`; both `.SRCINFO`s regenerated
+(`GIT_CONFIG_COUNT=0 makepkg --printsrcinfo`).
+
+**Validation.** `fish -n build-all.fish`, `bash -n` on every touched script and
+PKGBUILD, `--audit` + `--list`, `--dry-run --group git/stable/core`,
+`RUN_ALL_JOBS=6 bash tests/run-all.sh` → 55 fixtures PASS, and the bad-filter
+probe still exits 2. New fixture sections (`tests/abi-drift-install.sh` I/J —
+swap refusal rows with zero mutating invocations, and the clean drop-in;
+`tests/swap-completeness.sh` H/I — drift reported in both directions / absent
+on matching provides; G's debt ratchet updated to empty per its own contract)
+each falsified in a scratch tree with one broken input per check — every run
+exited non-zero naming the broken check.
+
+**Skew (documented, not lowered):** `fish build-all.fish --audit-lint swap`
+against this host's real installed database is NOT clean after the recipe
+fixes — the new drift half reports 18 real rows (see the queue item in
+MEMORY.md §5). The battery pins the lint against a fabricated installed
+database (`tests/swap-completeness.sh`, the abi-exposure-audit precedent)
+because a fixture must never depend on host state.
+
+**Durable rules.** (1) The Layer-3 comparison surface is "whatever provides
+the pkgname, else its `abi_stock_name` counterpart" — a fresh-install skip
+needs the double negative, because a swap MOVES the surface. (2) Soname-drift
+comparison at lint/audit level uses bare stems (the layer-2/5 unit): committed
+`.SRCINFO` carries bare provides only, so an in-place makepkg auto-version
+move (`1.0-64` → `1-64`) is invisible there and stays Layer 3's exact-diff
+job. (3) "Installed stock equivalent" is the `abi_stock_name` answer through
+the installed DB; fixtures fabricate that DB and never read the host's.
+
 ## 2026-10-06 — fixture battery speed: 0.5 s dispatcher polls and retry backoffs were the wall clock
 
 **Symptom.** `bash tests/run-all.sh` felt slow again: 309.6 s wall for 55

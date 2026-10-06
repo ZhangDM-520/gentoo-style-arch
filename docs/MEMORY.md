@@ -457,13 +457,21 @@
     flag. A Class A provider declares `provides=(<stock>=$pkgver)` +
     `conflicts=(<stock>)` so the stock package is satisfied and displaced
     atomically. The install plan refuses `.PKGINFO` provide-diff drift before
-    the force branch, so `-fi`/`-ia` cannot route around it. Tier-2 ABI
+    the force branch, so `-fi`/`-ia` cannot route around it — against the
+    installed provides of the same pkgname, or of its `abi_stock_name`
+    counterpart when the pkgname is not installed (a Stock→house swap MOVES
+    the surface to a new pkgname instead of vanishing it; run #31, bzip2-git).
+    Tier-2 ABI
     exclusions live in `config/abi-exclusions.conf` (35, user-approved;
     Tier-1 exposure is never excludable). Breakage: the swap path silently
     confirmed removals and could ship provides drifting from the stock
     packages they replace. Check: `fish build-all.fish --audit-lint swap`,
-    `bash tests/swap-completeness.sh`, `bash tests/install-conflict-ask.sh`.
-    Swap-lint debt remains on `niri-spicy-git` and `vscodium-insiders-git`.
+    `bash tests/swap-completeness.sh`, `bash tests/abi-drift-install.sh`,
+    `bash tests/install-conflict-ask.sh`.
+    Swap-lint debt was cleared 2026-10-06 (`niri-spicy-git`,
+    `vscodium-insiders-git` declare their counterpart now); the lint also
+    reports soname-surface drift against the installed stock counterpart
+    (bare-stem symmetric difference, both directions — see NOTE 2026-10-06).
 24. **Source-merge and topology identity** (2026-10-04 source-merge +
     wiring campaigns): a same-upstream cluster merges only into ONE buildable
     recipe with ONE topology record — an alias record would make the
@@ -1200,16 +1208,28 @@ going stale.
   gcc-snapshot, hermes-agent-git, zen-browser-pgo — await their recipe owner
   (rule 22(c): no self-reported validation); recipe-sources untracked-asset
   noise resolves at commit, no action beyond the commit.
-- **ABI provide-refusal blind spot: stock predecessors and stock consumers**
-  (2026-10-06 icu 78→79 diagnosis): `abi_provide_refusals` compares an
-  archive's soname provides against the installed provides **of the same
-  pkgname**, so a stock predecessor under a different name is invisible
-  (`icu` 78 vs the new `icu-git`), and its consumer closure is computed
-  **workspace-only**, so an out-of-tree consumer of the vanishing provide
-  (`libqalculate`, `firefox-pure`, `smbclient`) is invisible too. The guard
-  should consult the local DB's reverse deps of the moving provide and name
-  the stock-side consumers in the refusal. Not fixed here — fixture blast
-  radius across the install-plan seams; queued deliberately.
+- **ABI provide-refusal blind spot: stock-side consumers of the moving
+  provide** (2026-10-06 icu 78→79 diagnosis; the stock-predecessor half was
+  closed later the same day — see NOTE 2026-10-06): `abi_provide_refusals`
+  used to compare an archive's soname provides against the installed provides
+  **of the same pkgname** only, so a stock predecessor under a different name
+  was invisible (`icu` 78 vs the new `icu-git`; run #31's bzip2 wall). That
+  half is FIXED: the gate now also resolves the `abi_stock_name` counterpart
+  when the archive's pkgname is not installed. Still open: the consumer
+  closure is computed **workspace-only**, so an out-of-tree consumer of the
+  vanishing provide (`libqalculate`, `firefox-pure`, `smbclient`) is invisible
+  too. The guard should consult the local DB's reverse deps of the moving
+  provide and name the stock-side consumers in the refusal. Not fixed here —
+  fixture blast radius across the install-plan seams; queued deliberately.
+- **Swap-lint soname-drift findings need disposition** (2026-10-06, from the
+  blind-spot fix's new lint half): `fish build-all.fish --audit-lint swap`
+  reports 18 real drift rows against this host's installed stock — mostly
+  house-only adds where stock ships no soname provides (Arch policy), plus
+  genuine drops: `flatpak-git`/`libinput-git` declare no soname provides at
+  all where stock carries `libflatpak.so`/`libinput.so`, and `harfbuzz-git` /
+  `lib32-gcc-libs-snapshot` drop families stock carries. Report-only. Decide:
+  fix the recipes (declare the dropped families) or narrow the lint to the
+  drop direction.
 - **rustc sanity probe misses non-Rust recipes that compile Rust**
   (2026-10-06 js140 diagnosis): the `--allow-broken-rustc` probe fires only
   for Rust-family recipes, so `js140` (a C++ recipe whose build invokes

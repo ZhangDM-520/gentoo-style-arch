@@ -33,6 +33,7 @@ pkgbase = vscodium-insiders-git
 	optdepends = libdbusmenu-glib: For KDE global menu
 	provides = codium
 	provides = vscodium
+	provides = vscodium-insiders=1.135.06055.r0.g5a73682c
 	conflicts = codium
 	conflicts = vscodium
 	conflicts = vscodium-bin

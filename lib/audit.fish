@@ -544,7 +544,16 @@ end
 #              dependents of the stock name resolve to this build. Empty
 #              provides/conflicts entries are flagged outright — a split
 #              output's unset array slot ships as `provides = `, metadata
-#              that names nothing. Names only, any version satisfies.
+#              that names nothing. Names only, any version satisfies. The
+#              SONAME surface must survive the swap too: the recipe's bare
+#              soname provides are compared against the installed stock
+#              counterpart's provides (the suffix-stripped name queried
+#              through the installed database) and both drift directions are
+#              reported — a surface that MOVES is the drift that turns a name
+#              swap into a soname swap. Comparison unit is bare soname stems
+#              (abi_soname_stems, the layer-2/5 unit); an in-place makepkg
+#              auto-version move is invisible in committed .SRCINFO and stays
+#              layer 3's exact-diff job.
 
 # Bare soname stem for a provide NAME ('libfoo.so' or 'libfoo.so.1.2' →
 # 'libfoo.so'); prints nothing when the name is not soname-shaped.
@@ -1108,13 +1117,20 @@ function audit_lint_swap
     set -l outputs
     set -l provide_keys
     set -l conflict_keys
+    # Soname-drift candidates (the new half): <output>|<stock> pairs to
+    # compare and the recipe side's bare soname stems as <output>|<stem> rows,
+    # collected during the walk and resolved against the installed database
+    # ONCE after it (the exposure lint's F4 shape — one batched lookup, never
+    # one pacman fork per output).
+    set -l drift_pairs
+    set -l drift_house
     for row in (srcinfo_rows) '__flush__|'
         set -l parts (string split -m 3 '|' -- "$row")
         set -l id $parts[2]
         if test "$id" != "$row_id"
             if test -n "$row_id"
                 for name in $outputs
-                    set -l stock (string replace -r -- '-(git|svn|hg|snapshot)$' '' "$name")
+                    set -l stock (abi_stock_name "$name")
                     if test "$stock" = "$name"
                         continue
                     end
@@ -1128,6 +1144,19 @@ function audit_lint_swap
                     end
                     if not contains -- "|$stock" $conflict_keys; and not contains -- "$name|$stock" $conflict_keys
                         set -a findings "swap: $name: stock counterpart '$stock' missing from conflicts — declare conflicts=('$stock')"
+                    end
+                    # Drift candidate. House side = the output's EFFECTIVE
+                    # bare soname provides (pkgbase section + its own, the
+                    # same merge rule the name-level checks apply).
+                    set -a drift_pairs "$name|$stock"
+                    for kv in $provide_keys
+                        set -l kvp (string split -m 1 '|' -- "$kv")
+                        if test -z "$kvp[1]"; or test "$kvp[1]" = "$name"
+                            set -l st (abi_soname_stems "$kvp[2]")
+                            if test (count $st) -ge 1; and not contains -- "$name|$st[1]" $drift_house
+                                set -a drift_house "$name|$st[1]"
+                            end
+                        end
                     end
                 end
             end
@@ -1156,6 +1185,62 @@ function audit_lint_swap
                 else
                     set -a conflict_keys "$parts[3]|"(string replace -r '[=<>].*$' '' -- "$parts[4]")
                 end
+        end
+    end
+    # The installed side: ONE batched lookup over every candidate stock
+    # (abi_installed_provides_batch — `pacman -Qi <stock>` resolves through
+    # provides to whatever carries the stock name today: the stock package
+    # before the swap, the house build after it). A counterpart with NO
+    # readable provide entries is not comparable — not installed, or a record
+    # whose provides are `None` (pacman answers both the same way, and the
+    # gate's fresh-install path accepts the same conflation) — so a recipe's
+    # soname provides are only ever checked against a surface that EXISTS.
+    set -l stocks
+    for pair in $drift_pairs
+        set -l ps (string split -m 1 '|' -- "$pair")
+        contains -- "$ps[2]" $stocks; or set -a stocks "$ps[2]"
+    end
+    set -l inst_any # stocks whose record carries at least one provide entry
+    set -l inst_stems # <stock>|<stem> — the counterpart's bare soname stems
+    if test (count $stocks) -gt 0
+        for row in (abi_installed_provides_batch $stocks)
+            set -l rp (string split -m 1 '|' -- "$row")
+            contains -- "$rp[1]" $inst_any; or set -a inst_any "$rp[1]"
+            set -l st (abi_soname_stems "$rp[2]")
+            if test (count $st) -ge 1; and not contains -- "$rp[1]|$st[1]" $inst_stems
+                set -a inst_stems "$rp[1]|$st[1]"
+            end
+        end
+    end
+    # Drift = the SYMMETRIC difference of the bare soname stem sets (the same
+    # comparison unit abi_soname_provides_changed makes layer 2's batch
+    # trigger — a family rename moves the stem set in both directions, an
+    # in-place auto-version move only at build time). Both directions are
+    # reported because both mean the swap hands over a surface the installed
+    # consumers were not built against: the drops strand them outright, the
+    # adds declare the swap a different surface than the one being replaced.
+    for pair in $drift_pairs
+        set -l ps (string split -m 1 '|' -- "$pair")
+        set -l name $ps[1]
+        set -l stock $ps[2]
+        contains -- "$stock" $inst_any; or continue
+        set -l house_stems
+        for hp in $drift_house
+            set -l hps (string split -m 1 '|' -- "$hp")
+            test "$hps[1]" = "$name"; and set -a house_stems "$hps[2]"
+        end
+        set -l stock_stems
+        for ip in $inst_stems
+            set -l ips (string split -m 1 '|' -- "$ip")
+            test "$ips[1]" = "$stock"; and set -a stock_stems "$ips[2]"
+        end
+        for stem in $house_stems
+            contains -- "$stem" $stock_stems; and continue
+            set -a findings "swap: $name: soname drift vs installed stock '$stock': this recipe's provides carry '$stem' that the installed stock does not"
+        end
+        for stem in $stock_stems
+            contains -- "$stem" $house_stems; and continue
+            set -a findings "swap: $name: soname drift vs installed stock '$stock': the installed stock carries '$stem' that this recipe's provides drop — the swap becomes a soname swap for its installed consumers"
         end
     end
     if test (count $findings) -gt 0

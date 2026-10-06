@@ -1403,8 +1403,11 @@ end
 #      install-plan step alongside pgo_payload_refusals, BEFORE the force
 #      branch): when an archive's .PKGINFO bare soname provides disappear or
 #      change against the installed database's provides for the same pkgname
-#      and the consumer closure is not fully included in the transaction,
-#      silent `refuse abi-*` rows abort before any pacman -U.
+#      — or, when the pkgname is not installed, for its abi_stock_name
+#      counterpart (the Stock→house swap: the surface MOVES to a new pkgname,
+#      it does not vanish) — and the consumer closure is not fully included
+#      in the transaction, silent `refuse abi-*` rows abort before any
+#      pacman -U.
 #   4. post-install NEEDED probe (install_needed_probe, after a successful
 #      transaction): every installed consumer output's DT_NEEDED must resolve
 #      within the newly installed + existing provide set; unresolved sonames
@@ -1942,7 +1945,16 @@ end
 
 # ─── Layer 3: install-time fatal provide-diff refusal (install-plan step) ────
 # For each archive destined for install, compare its .PKGINFO provides against
-# the installed database's provides for the same pkgname. A BARE soname
+# the installed database's provides for the same pkgname — or, when the
+# archive's pkgname is NOT installed, against the provides of its stock
+# counterpart (abi_stock_name: the VCS suffix stripped). The counterpart path
+# is the Stock→house swap (run #31, 2026-10-06: bzip2-git replaced installed
+# stock bzip2 whose `libbz2.so=1.0-64` provide every consumer depended on,
+# while the build auto-versioned `libbz2.so=1-64`): the surface MOVES to a
+# new pkgname instead of vanishing, so "nothing installed for this pkgname"
+# is not evidence that nothing can disappear. `pacman -Qi <stock>` resolves
+# through provides to whatever carries the stock name today — the stock
+# package before the swap. A BARE soname
 # provide (auto-versioned by makepkg: `libfoo.so=1-64`) that disappears or
 # changes version is a soname bump: every installed consumer built against the
 # old surface breaks the moment pacman -U lands. If the consumer closure is
@@ -1956,9 +1968,13 @@ end
 # readable .PKGINFO is skipped WITHOUT consulting pacman (install-conflict-ask
 # C1/C2 and install-archive-guard I5 pin zero pacman calls on those paths).
 # A READABLE .PKGINFO that carries no provides is the provide-disappears case
-# and still refuses below. Nothing installed for the name means nothing can
-# disappear (a fresh install cannot orphan consumers of a surface that never
-# existed).
+# and still refuses below. Only nothing installed for the name AND nothing
+# installed for the stock counterpart means nothing can disappear (a fresh
+# install cannot orphan consumers of a surface that never existed) — that
+# double-negative is probed with one extra read-only `pacman -Qi <stock>`;
+# a pkgname with no VCS suffix has no counterpart and keeps the one-probe
+# fresh-install path. A swap whose bare soname provides match the
+# counterpart's exactly is a clean pass.
 #
 # "Fully included in the transaction" counts the INSTALLED part of the
 # consumer closure (an uninstalled consumer has nothing to protect — the
@@ -1971,7 +1987,11 @@ end
 # pgo_payload_refusals):
 #   refuse abi-soname <archive> <pkgname> <provide-name> <installed-ver> <built-ver>
 #   refuse abi-consumer <archive> <consumer>
-# (<built-ver> is '-' when the provide disappears entirely.) Returns 0 for
+# (<built-ver> is '-' when the provide disappears entirely.) The Stock→house
+# swap path reuses these shapes unchanged (no new row): <pkgname> stays the
+# ARCHIVE's pkgname and <installed-ver> comes from the stock counterpart's
+# surface — the counterpart is derivable (abi_stock_name <pkgname>) and the
+# codec/renderer contract stays 7 fields. Returns 0 for
 # every archive that is clean or not comparable, 1 after any refusal row.
 function abi_provide_refusals
     # Every pkgname the transaction will install — the closure-coverage side.
@@ -2002,7 +2022,16 @@ function abi_provide_refusals
             continue
         end
         set -l installed (abi_installed_provides "$pkgname")
-        test (count $installed) -gt 0; or continue
+        if test (count $installed) -eq 0
+            # Stock→house swap: the surface moved to this new pkgname, so the
+            # comparison target is the stock counterpart's provides (the same
+            # comparison unit as the same-pkgname path below). Nothing
+            # installed for either name is the only true fresh install.
+            set -l stock (abi_stock_name "$pkgname")
+            test "$stock" != "$pkgname"; or continue
+            set installed (abi_installed_provides "$stock")
+            test (count $installed) -gt 0; or continue
+        end
         set -l archive_rows
         for entry in $installed
             set -l name (abi_provide_name "$entry")

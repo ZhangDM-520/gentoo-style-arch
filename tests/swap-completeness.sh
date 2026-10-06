@@ -20,10 +20,22 @@ set -euo pipefail
 #   * effective = the pkgbase section (makepkg merges it into every output —
 #     cmake-git's shape) plus the output's own pkgname section, name-matched
 #     through any `=ver`/`<ver` suffix;
-#   * empty-value provides/conflicts entries are flagged outright.
+#   * empty-value provides/conflicts entries are flagged outright;
+#   * soname drift (the swap half of the ABI guard): a swap output's bare
+#     soname provides are compared against the installed stock counterpart's
+#     provides (the installed-database answer for the stripped name) and both
+#     directions of the bare-stem symmetric difference are reported — a
+#     surface that MOVES turns the name swap into a soname swap. Nothing
+#     comparable installed (no record / no provide entries) → no drift rows.
 #
 # The real-repo section ratchets the known debt: the two hardened recipes
 # (qt6-base-git, zlib-ng-compat-git) must stay clean and new debt fails here.
+#
+# Every run reads the installed database through a FABRICATED one ($tmp/qi-db,
+# one pacman -Qi record file per installed name) — the battery must never
+# depend on what the host happens to have installed (the abi-exposure-audit
+# precedent: "the real pacman DB is never read"). The drift semantics are
+# pinned in sections H/I against fabricated records.
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 source "$root/tests/lib/fixture-lib.bash"
@@ -36,9 +48,42 @@ fail() {
     exit 1
 }
 
+# pacman stub + fabricated installed database: `-Qi` answers from $tmp/qi-db
+# (one `pacman -Qi` record file per installed name; the BATCH form prints one
+# record per resolved target in target order and `error: package 'NAME' was
+# not found` on stderr for misses — exactly the shape the builder's
+# _abi_provides_chunk validates), every other subcommand passes through to
+# the real pacman (--audit's installed-PGO scan needs `pacman -Ql` against
+# the real file lists).
+mkdir -p "$tmp/stub-bin" "$tmp/qi-db"
+cat >"$tmp/stub-bin/pacman" <<'EOF'
+#!/usr/bin/env bash
+set -u
+args=()
+for a in "$@"; do
+    [[ $a == -- ]] && continue
+    args+=("$a")
+done
+if [[ ${args[0]:-} == -Qi ]]; then
+    db=$(dirname "$0")/../qi-db
+    rc=0
+    for name in "${args[@]:1}"; do
+        if [[ -f $db/$name ]]; then
+            cat "$db/$name"
+        else
+            printf "error: package '%s' was not found\n" "$name" >&2
+            rc=1
+        fi
+    done
+    exit $rc
+fi
+exec /usr/bin/pacman "$@"
+EOF
+chmod +x "$tmp/stub-bin/pacman"
+
 # lint WORKSPACE — run the swap lint through the seam into FIXTURE_OUTPUT.
 lint() {
-    run_builder fish "$1/build-all.fish" --audit-lint swap
+    run_builder env PATH="$tmp/stub-bin:$PATH" fish "$1/build-all.fish" --audit-lint swap
 }
 
 # ─── A. counterpart completeness: red then green ─────────────────────────────
@@ -203,7 +248,7 @@ lint() {
     add_package "$ws" foo-git
     printf 'pkgbase = foo-git\npkgname = foo-git\n' >"$ws/packages/foo-git/.SRCINFO"
 
-    run_builder fish "$ws/build-all.fish" --audit
+    run_builder env PATH="$tmp/stub-bin:$PATH" fish "$ws/build-all.fish" --audit
     ((FIXTURE_RC == 0)) ||
         fail "F: --audit must exit 0 even with findings (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
     grep -Fq 'Stock→house swap:' <<<"$FIXTURE_OUTPUT" ||
@@ -215,9 +260,13 @@ lint() {
 )
 
 # ─── G. real-repo gates: hardened recipes clean, debt ratcheted ──────────────
+# Runs against the FABRICATED (empty) installed database: G pins the REPO's
+# swap DECLARATIONS, which are host-independent — the drift half's
+# installed-database semantics are pinned against fabricated RECORDS in H/I,
+# never against whatever this host happens to have installed.
 (
     set -euo pipefail
-    run_builder fish "$root/build-all.fish" --audit-lint swap
+    run_builder env PATH="$tmp/stub-bin:$PATH" fish "$root/build-all.fish" --audit-lint swap
     ((FIXTURE_RC == 0)) || fail "G: real-repo swap lint failed (rc=$FIXTURE_RC)"
 
     # The two hardened recipes (qt6-base-git outputs + zlib-ng-compat-git)
@@ -228,21 +277,89 @@ lint() {
         fi
     done
 
-    # Known-debt ratchet (report-only, 2 recipes outside the hardening change):
-    # new debt fails here; removing debt shrinks the list — update this
-    # ratchet consciously; an empty list ends it.
+    # Known-debt ratchet (report-only): new debt fails here; removing debt
+    # shrinks the list — update this ratchet consciously; an empty list ends
+    # it. The 2026-10-06 debt (niri-spicy-git's counterpart provides +
+    # conflicts, vscodium-insiders-git's counterpart provide) was FIXED in
+    # place, so the list is empty and the ratchet now pins it staying empty.
     { grep '^swap: ' <<<"$FIXTURE_OUTPUT" || true; } | LC_ALL=C sort >"$tmp/swap.actual"
-    cat >"$tmp/swap.expected" <<'EOF'
-swap: niri-spicy-git: stock counterpart 'niri-spicy' missing from provides — declare provides=('niri-spicy=${pkgver}')
-swap: niri-spicy-git: stock counterpart 'niri-spicy' missing from conflicts — declare conflicts=('niri-spicy')
-swap: vscodium-insiders-git: stock counterpart 'vscodium-insiders' missing from provides — declare provides=('vscodium-insiders=${pkgver}')
-EOF
-    LC_ALL=C sort -o "$tmp/swap.expected" "$tmp/swap.expected"
+    : >"$tmp/swap.expected"
     diff -u "$tmp/swap.expected" "$tmp/swap.actual" >&2 ||
         fail 'G: the swap-lint debt set drifted — fix the recipe (declare the stock counterpart) or update this ratchet consciously'
-    grep -Fq 'audit-lint swap: 3 finding(s)' <<<"$FIXTURE_OUTPUT" ||
-        fail "G: wrong real-repo finding count, got: $FIXTURE_OUTPUT"
-    printf 'G: real-repo gates OK (hardened recipes clean, 2-recipe debt ratchet)\n'
+    grep -Fq 'audit-lint swap: clean' <<<"$FIXTURE_OUTPUT" ||
+        fail "G: expected a clean real-repo verdict, got: $FIXTURE_OUTPUT"
+    printf 'G: real-repo gates OK (hardened recipes clean, debt ratchet empty)\n'
 )
 
-printf 'swap completeness fixture: PASS (7 sections gated)\n'
+# ─── H. soname drift against the installed stock counterpart is reported ────
+# The swap's ABI half: name-level swap COMPLETE (so only drift rows can
+# appear), house carries libgreet.so + libnew.so, fabricated installed stock
+# `libs` carries libgreet.so + libold.so → one row per drift direction.
+(
+    set -euo pipefail
+    ws=$tmp/drift-ws
+    make_workspace "$ws" 1 2 low
+    add_package "$ws" libs-git
+    {
+        printf 'pkgbase = libs-git\n'
+        printf 'pkgname = libs-git\n'
+        printf '\tprovides = libs=1\n'
+        printf '\tprovides = libgreet.so\n'
+        printf '\tprovides = libnew.so\n'
+        printf '\tconflicts = libs\n'
+    } >"$ws/packages/libs-git/.SRCINFO"
+    cat >"$tmp/qi-db/libs" <<'EOF'
+Name : libs
+Version : 1-1
+Provides : libgreet.so=1-64  libold.so=0-64
+EOF
+    lint "$ws"
+    ((FIXTURE_RC == 0)) || fail "H: --audit-lint must stay report-only (rc=$FIXTURE_RC)"
+    grep -Fq "swap: libs-git: soname drift vs installed stock 'libs': this recipe's provides carry 'libnew.so' that the installed stock does not" \
+        <<<"$FIXTURE_OUTPUT" ||
+        fail "H: house-only drift not reported, got: $FIXTURE_OUTPUT"
+    grep -Fq "swap: libs-git: soname drift vs installed stock 'libs': the installed stock carries 'libold.so' that this recipe's provides drop — the swap becomes a soname swap for its installed consumers" \
+        <<<"$FIXTURE_OUTPUT" ||
+        fail "H: stock-only drift not reported, got: $FIXTURE_OUTPUT"
+    if grep -Fq 'missing from' <<<"$FIXTURE_OUTPUT"; then
+        fail "H: the name-level swap is complete — only drift rows expected: $FIXTURE_OUTPUT"
+    fi
+    grep -Fq 'audit-lint swap: 2 finding(s)' <<<"$FIXTURE_OUTPUT" ||
+        fail "H: wrong finding count, got: $FIXTURE_OUTPUT"
+    rm -f "$tmp/qi-db/libs"
+    printf 'H: soname drift reporting OK (both directions)\n'
+)
+
+# ─── I. identical soname surface → the drift finding is absent ──────────────
+# Same swap shape as H, but the counterpart's auto-versioned entries
+# normalize to exactly the recipe's bare stems — a drop-in swap is clean.
+(
+    set -euo pipefail
+    ws=$tmp/match-ws
+    make_workspace "$ws" 1 2 low
+    add_package "$ws" libs-git
+    {
+        printf 'pkgbase = libs-git\n'
+        printf 'pkgname = libs-git\n'
+        printf '\tprovides = libs=1\n'
+        printf '\tprovides = libgreet.so\n'
+        printf '\tprovides = libold.so\n'
+        printf '\tconflicts = libs\n'
+    } >"$ws/packages/libs-git/.SRCINFO"
+    cat >"$tmp/qi-db/libs" <<'EOF'
+Name : libs
+Version : 1-1
+Provides : libgreet.so=1-64  libold.so=0-64
+EOF
+    lint "$ws"
+    ((FIXTURE_RC == 0)) || fail "I: --audit-lint must stay report-only (rc=$FIXTURE_RC)"
+    if grep -Fq 'soname drift' <<<"$FIXTURE_OUTPUT"; then
+        fail "I: matching soname provides must not report drift: $FIXTURE_OUTPUT"
+    fi
+    grep -Fq 'audit-lint swap: clean' <<<"$FIXTURE_OUTPUT" ||
+        fail "I: expected a clean verdict, got: $FIXTURE_OUTPUT"
+    rm -f "$tmp/qi-db/libs"
+    printf 'I: soname drift absent on matching provides OK\n'
+)
+
+printf 'swap completeness fixture: PASS (9 sections gated)\n'

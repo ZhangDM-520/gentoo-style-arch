@@ -52,6 +52,7 @@ sha256sums=('SKIP'
 provides=(
     'codium'
     'vscodium'
+    "vscodium-insiders=${pkgver}"
 )
 conflicts=(
     'codium'
