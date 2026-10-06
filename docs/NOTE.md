@@ -62,6 +62,44 @@ Version-sync rewrites are disposable inputs: when one collides with an
 incoming fix, the pushed fix wins; the remaining rewrites get batched into
 the periodic version-sync commit.
 
+## 2026-10-06 — tk 9.0.1 had no Tcl provider: added tcl 9.0.1 + the ABI victim wave
+
+**Symptom.** Run #23 walled at `tk` (0m06s): `configure: error: tk 9.0
+requires Tcl 8.7+; Found config for Tcl 8.6` — the set pins tk 9.0.1 but
+nothing in the set (or the released repos) provides Tcl 8.7+.
+
+**Root cause.** The set's version-sync tracks gitlab.archlinux.org
+packaging *main* (lib/sources.fish fetches the stock `.SRCINFO` from
+there), where tcl/tk are already 9.0.1 — while released `extra` still
+ships 8.6.16. `tk` was synced to main but the set has no `tcl` recipe at
+all, so the 9-series migration was half-done: tk9's configure is hard-pinned
+to a Tcl 8.7+ `tclConfig.sh`.
+
+**Fix.** New `packages/stable/tcl` mirroring stock's 9.0.1 packaging
+(sha256-pinned release tarball; house additions: `provides=(libtcl9.0.so)`,
+mold guard, man-page trim, check() trimmed) plus the coupled ABI wave —
+tcl 8.6→9 is a soname move, and every libtcl8.6 linker must move together
+(rule 30 shape): the set's `sqlite` split (`sqltclsh`, `sqlite3_analyzer`),
+`libnewt` (`whiptcl.so` — verified `ldd`), and `vim` (+tcl dlopen; the set
+rebuild picks up tcl9) get `pkgrel` bumps to force their `-s` rebuilds,
+and build-order edges to `tcl` for every tcl consumer (`tk`, `sqlite`,
+`libnewt`, `postgresql-libs`, `usb_modeswitch`, `vim`). Non-linking
+consumers (`postgresql-libs`, `usb_modeswitch`) get the edge only —
+`usb_modeswitch`'s tcl scripts may need upstream's own Tcl-9 fixes later.
+
+**Validation.** `bash -n` + `.SRCINFO` for all touched recipes; `--list`
+orders tcl (#109) before libnewt/sqlite/tk/vim; `--audit` green; tcl
+9.0.1 builds in canonical with `libtcl9.0.so`/`tclConfig.sh`/`tclsh` in
+the archive; battery green. The wave executes in run #24 (tcl installs
+first with `-i`, victims rebuild after it).
+
+**Rule.** When the version-sync moves a stock package onto a new soname
+series, the provider AND its wave move in one change — a half-done
+migration (the new consumer pinned, the provider absent) is a guaranteed
+configure wall. Identify linkers by `ldd`/content scan, not by declared
+depends: `whiptcl.so` and `sqltclsh` were the real victims, `vim` only
+dlopens.
+
 ## 2026-10-06 — mkinitcpio-busybox: `install LICENSE` in package() was a stale-$srcdir illusion
 
 **Symptom.** Run #22 walled at `mkinitcpio-busybox` (0m26s, build fine,

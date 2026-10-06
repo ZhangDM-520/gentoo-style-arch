@@ -1,7 +1,7 @@
 pkgbase = libnewt
 	pkgdesc = Not Erik's Windowing Toolkit - text mode windowing with slang
 	pkgver = 0.52.25
-	pkgrel = 3
+	pkgrel = 4
 	url = https://pagure.io/newt
 	arch = x86_64
 	license = GPL-2.0-only
