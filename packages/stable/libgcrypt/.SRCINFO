@@ -19,6 +19,11 @@ pkgbase = libgcrypt
 	source = https://gnupg.org/ftp/gcrypt/libgcrypt/libgcrypt-1.12.4.tar.bz2
 	source = https://gnupg.org/ftp/gcrypt/libgcrypt/libgcrypt-1.12.4.tar.bz2.sig
 	validpgpkeys = 6DAA6E64A76D2840571B4902528897B826403ADA
+	validpgpkeys = AC8E115BF73E2D8D47FA9908E98E9B2D19C6C8BD
+	validpgpkeys = 3B761AE4E63BF3519CE7D63BECB664CBE1332EEF
+	validpgpkeys = D02AE49173BDAD56E4F88223707E56D3DEF4115C
+	validpgpkeys = 02F38DFF731FF97CB039A1DA549E695E905BA208
+	validpgpkeys = 1493269DE61F124AA69A316E3ADF34EBDBB200A4
 	sha256sums = d77f68f48879510e79a2f65977ccc68981781ea0923e5bdffac2a193ea3d660e
 	sha256sums = SKIP
 

@@ -37,6 +37,43 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-06 — run #29: libgcrypt's multi-signature .sig needs EVERY signer pinned
+
+**Symptom.** Run #29 walled at `libgcrypt` (0m09s): `ERROR: One or more PGP
+signatures could not be verified!` — while a keyring sweep reported 0 of 118
+`validpgpkeys` pins missing, so this was not an import gap.
+
+**Root cause.** gnupg.org ships **multi-signature** detached sigs: the
+`libgcrypt-1.12.4.tar.bz2.sig` carries two signatures — Werner Koch (dist
+signing 2020, `6DAA6E64…`, pinned) *and* Niibe Yutaka (GnuPG Release Key,
+`AC8E115B…`, unpinned). makepkg rejects the whole file unless **every**
+signer is in `validpgpkeys`, so a publisher adding a co-signer breaks the
+build even though the previously working pin is still valid. Same
+signer-rotation shape as the 2026-10-06 js140 incident, one mechanism
+further: there the signer *changed*, here the sig file *grew*.
+
+**Fix.** Both signers confirmed against gnupg.org's publisher key page
+(`signature_key.html`: "Current releases are signed by one or more of these
+keys"), then the whole current official set (5 fingerprints) pinned in
+`libgcrypt` with role comments — pinning only today's two signers would
+re-wall on the next co-signer rotation. `pinentry` (same publisher, already
+pinned 3) got the 3 newer published keys for the same reason. The 4 keys
+absent from the keyring were imported from the publisher's own
+`signature_key.asc`, and both recipes' `.SRCINFO` regenerated.
+
+**Validation.** Red: run #29 console log (`libgcrypt … One or more PGP
+signatures could not be verified!`). Green: `makepkg --verifysource` in both
+recipe dirs — `libgcrypt-1.12.4.tar.bz2 … Passed`, `pinentry-1.3.3.tar.bz2
+… Passed`; `bash -n` clean; fixture battery 55/55.
+
+**Rule.** For a publisher that co-signs releases, pin the publisher's full
+current release-key set from its key page, not just the signers observed on
+today's artifact. Diagnostic caution from the sweep that found this: a
+signature's *subkey* fingerprint is not a missing pin — `libxshmfence`'s
+sig shows subkey `2F7DBCAD…` of pinned primary `4A193C06…` and verifies
+fine; resolve to the primary fingerprint before concluding a pin is
+missing.
+
 ## 2026-10-06 — run #21: a version-sync rewrite blocked the fix's sync, `| tail -1` hid it
 
 **Symptom.** Run #21 walled at `libnewt` with the *same* old-recipe 404

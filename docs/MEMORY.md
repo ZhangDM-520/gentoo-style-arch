@@ -277,6 +277,12 @@
     verifies against the pinned **primary** once it is imported (the binding
     covers it — libxau's sig is Coopersmith's signing subkey); an explicit
     subkey entry in `validpgpkeys` is only needed to pin a rotated signer.
+    A detached `.sig` may carry **several** signatures and makepkg rejects
+    the file unless every signer is pinned (libgcrypt 2026-10-06: gnupg.org
+    added Niibe Yutaka as co-signer next to Werner Koch), so for a
+    co-signing publisher pin the full current release-key set from its own
+    key page, and resolve a sig's subkey fingerprint to its primary before
+    calling a pin missing.
 
 16. **Bulk `prepare()` loops: batch them, and refuse incomplete inputs**
     (09-18 texlive incident): a loop that shells out per file costs process
