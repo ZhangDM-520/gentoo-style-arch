@@ -14,13 +14,20 @@ depends=('brotli' 'bzip2' 'glibc' 'libpng' 'zlib')
 makedepends=('git' 'meson')
 provides=("freetype2=$pkgver" 'libfreetype.so')
 conflicts=('freetype2')
-source=("git+https://gitlab.freedesktop.org/freetype/freetype.git?signed")
+source=("git+https://gitlab.freedesktop.org/freetype/freetype.git")
 b2sums=('SKIP')
-# upstream signs its VER-* release tags (signature verified on VER-2-14-3,
-# tagger Werner Lemberg); fingerprint from the AUR reference recipe
-validpgpkeys=(
-  E30674707856409FF1948010BE6C3AAC63AD8E3F # Werner Lemberg <wl@gnu.org>
-)
+# Upstream signs only its VER-* release tags, never branch commits, so a
+# floating VCS source cannot carry `?signed` (makepkg verifies the unsigned
+# tip -> SIGNATURE NOT FOUND, run #14 wall 2026-10-06). Owner trust ruling
+# 2026-10-06: dropping `?signed` on a floating -git source is permitted —
+# the sibling floating recipes (ninja-git, meson-git, wayland-git, …) never
+# had it. If tag-pinned verification is wanted later, use
+# `#tag=VER-<x>?signed` with Werner Lemberg's DSA key
+# 58E0C111E39F5408C5D3EC76C1A60EACE707FDA5 — the actual signer of
+# VER-2-13-3..VER-2-14-3 (git verify-tag; confirmed against
+# freetype.org/download.html and Gentoo's openpgp-keys-wernerlemberg), NOT
+# the AUR-referenced E30674707856409FF1948010BE6C3AAC63AD8E3F, which never
+# signed these tags.
 
 pkgver() {
   cd freetype

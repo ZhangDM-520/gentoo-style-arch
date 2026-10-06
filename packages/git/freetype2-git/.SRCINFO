@@ -15,8 +15,7 @@ pkgbase = freetype2-git
 	provides = freetype2=2.14.3.r16.ga6d486002
 	provides = libfreetype.so
 	conflicts = freetype2
-	source = git+https://gitlab.freedesktop.org/freetype/freetype.git?signed
-	validpgpkeys = E30674707856409FF1948010BE6C3AAC63AD8E3F
+	source = git+https://gitlab.freedesktop.org/freetype/freetype.git
 	b2sums = SKIP
 
 pkgname = freetype2-git
