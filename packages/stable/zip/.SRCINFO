@@ -1,7 +1,7 @@
 pkgbase = zip
 	pkgdesc = Compressor/archiver for creating and modifying zipfiles
 	pkgver = 3.0
-	pkgrel = 14
+	pkgrel = 14.1
 	url = http://www.info-zip.org/Zip.html
 	arch = x86_64
 	license = LicenseRef-Info-ZIP

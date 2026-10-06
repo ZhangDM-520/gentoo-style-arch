@@ -2,7 +2,7 @@
 # Contributor: MGislv <mgislv at ceppo dot xyz>
 
 pkgname=zlib-ng-compat-git
-pkgver=2.3.1.r596.gg8b61b4ef
+pkgver=2.3.1.r598.gg72aceeac
 pkgrel=1
 pkgdesc='zlib replacement with optimizations for next generation systems'
 url='https://github.com/zlib-ng/zlib-ng'

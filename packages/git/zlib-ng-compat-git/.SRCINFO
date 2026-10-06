@@ -1,6 +1,6 @@
 pkgbase = zlib-ng-compat-git
 	pkgdesc = zlib replacement with optimizations for next generation systems
-	pkgver = 2.3.1.r596.gg8b61b4ef
+	pkgver = 2.3.1.r598.gg72aceeac
 	pkgrel = 1
 	url = https://github.com/zlib-ng/zlib-ng
 	arch = x86_64
@@ -16,6 +16,6 @@ pkgname = zlib-ng-compat-git
 	pkgdesc = zlib replacement with optimizations for next generation systems (zlib compat)
 	provides = zlib
 	provides = libz.so
-	provides = zlib-ng-compat=2.3.1.r596.gg8b61b4ef
+	provides = zlib-ng-compat=2.3.1.r598.gg72aceeac
 	conflicts = zlib
 	conflicts = zlib-ng-compat
