@@ -37,6 +37,55 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-06 — fixture battery speed: 0.5 s dispatcher polls and retry backoffs were the wall clock
+
+**Symptom.** `bash tests/run-all.sh` felt slow again: 309.6 s wall for 55
+fixtures at `RUN_ALL_JOBS=6` (paired measurement, heavy build running on the
+host).
+
+**Root cause.** A serial per-fixture profile (3 reps, first dropped as
+warm-up) put 4 fixtures at 513 s of the ~850 s serial total.
+`abi-batch-policy.sh` (276–317 s) builds a 244-package batch in section H at
+`lanes=1`, and the dispatcher starts at most one package per lane per its
+0.5 s poll cycle (`build-all.fish`'s tracked `sleep 0.5 &`), so each stub
+package cost ~0.5 s of pure dispatch latency (measured: 30 stub packages =
+15.7 s at lanes 1 vs 1.2 s at lanes 8). `skip-upstream.sh` (134 s) pays the
+builder's real transport-retry backoffs (`git_ls_remote_quiet` sleeps
+2/5/10 s, `vcs_git_advance_distance` 2/5 s in `lib/sources.fish`) which its
+flaky/unreachable scenarios trigger on purpose, plus 65 builder runs at a
+poll cycle each. `srcinfo-freshness.sh` (117 s) is CPU-bound on 145 real
+`makepkg --printsrcinfo` runs and is the honest cost of the check — nothing
+there was touched.
+
+**Fix.** Section H of `tests/abi-batch-policy.sh` runs 8 lanes (nothing it
+asserts reads lanes or build order: probe-fork counts, an unordered dispatch
+set, pre-dispatch refusals). New trivial `stub_sleep DIR` PATH stub in
+`tests/lib/fixture-lib.bash`: any numeric sleep operand ≥ 0.4 s collapses to
+0.05 s, shorter operands pass through unchanged so fixture-side poll loops
+keep their cadence and iteration budgets. Installed in the workspace builders
+of `skip-upstream.sh`, `stable-sync-checksums.sh` and
+`install-archive-guard.sh`, none of which assert on wall-clock time.
+
+**Validation.** `bash -n` on every touched script; battery PASS (55
+fixture(s)) before and after, wall 309.6 s → 178.4 s at `RUN_ALL_JOBS=6`
+(-42%); per-fixture medians (3 serial reps, first dropped): abi-batch
+296.6→55.6 s, skip-upstream 134.4→40.7 s, stable-sync-checksums 44.4→24.3 s,
+install-archive-guard 16.9→10.5 s. Every modified fixture was falsified from
+a scratch copy with one input broken and each failed non-zero naming what
+broke (H1's `want exactly 240 pacman -Q probes … saw 239`, H2's `want 244
+stub makepkg dispatches … saw 0`, `flaky transport: expected a retry, saw 1
+ls-remote attempt(s)`, `anchor: the builder exited 1`, `case A: builder
+failed on a valid PKGBUILD with a commented pkgver`) — the retry-count
+assertion surviving the capped clock is the one that matters.
+
+**Rule.** Fixture-side latency knobs stay stubs, never builder knobs: the
+capped clock is `stub_sleep` in `tests/lib/fixture-lib.bash`, installable
+only in fixtures that use no long sleep as a lease (`sleep 60 60<"$lock"`)
+or as a measured duration (run-record's `sleep 3` mid-build stall,
+scheduler-core-solo's duration table). A scale scenario (hundreds of stub
+packages) should parallelise across lanes rather than serialise through the
+dispatcher's poll cycle.
+
 ## 2026-10-06 — run #30: bzip2-git's upstream test probe dies at CONFIGURE, not at check()
 
 **Symptom.** Run #30 (first reach of `bzip2-git`, #131/653) failed 13s in:

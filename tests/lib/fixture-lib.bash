@@ -270,6 +270,39 @@ EOF
     chmod +x "$1/bin/makepkg"
 }
 
+# stub_sleep DIR — the capped-sleep stub. The builder's own long waits are
+# pure latency no fixture asserts on — the VCS transport-retry backoffs in
+# lib/sources.fish (2 s/5 s/10 s), the dispatcher's 0.5 s poll cycle, the
+# bounded db.lck poll — and at fixture scale they dwarf the work under test
+# (skip-upstream burned ~45 s of its ~135 s in retry backoffs alone; a stub
+# package dispatch costs one 0.5 s poll cycle). A `sleep` stub on PATH
+# re-runs /usr/bin/sleep with every numeric operand >= 0.4 s replaced by
+# 0.05 s; SHORTER operands pass through unchanged, so fixture-side polling
+# (0.05-0.3 s loops and their iteration budgets) keeps its exact cadence.
+# Only install it where no long sleep is a lease or a measured duration: the
+# `sleep 60 60<"$lock"` lock-holder of signal-abort-lock/local-db-repair,
+# run-record's `sleep 3` mid-build stall and scheduler-core-solo's duration
+# table all need real time and must never see this stub.
+stub_sleep() {
+    cat >"$1/bin/sleep" <<'EOF'
+#!/usr/bin/env bash
+set -u
+args=()
+for a in "$@"; do
+    ip=${a%%.*}
+    fp=0
+    [[ $a == *.* ]] && fp=${a#*.}
+    fp=${fp:0:1}
+    if [[ $ip =~ ^[0-9]+$ && $fp =~ ^[0-9]$ ]] && ((ip >= 1 || (ip == 0 && fp >= 4))); then
+        a=0.05
+    fi
+    args+=("$a")
+done
+exec /usr/bin/sleep "${args[@]}"
+EOF
+    chmod +x "$1/bin/sleep"
+}
+
 # run_builder CMD [ARG...] — the capture helper. Runs the command with combined
 # stdout+stderr captured in FIXTURE_OUTPUT and its exit status in FIXTURE_RC.
 # ALWAYS returns 0 (a failing builder is the fixture's data, not a reason to

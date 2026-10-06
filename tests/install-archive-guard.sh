@@ -22,6 +22,9 @@ trap 'rm -rf -- "$fixture"' EXIT
 make_case_workspace() { # $1 = sandbox dir, $2 = pkgver line in the PKGBUILD
     local dir=$1 pkgver_line=$2
     make_workspace "$dir" 1 2 low
+    # The SUT's retry backoffs and dispatcher polls are pure latency here —
+    # nothing in this fixture asserts on wall-clock time (see stub_sleep).
+    stub_sleep "$dir"
     # Dynamic IgnorePkg registration target — per-case, never the host's
     # /etc/pacman.conf (the battery must be non-mutating).
     make_install_conf "$dir/pacman.conf"

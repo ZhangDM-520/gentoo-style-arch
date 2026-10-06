@@ -825,7 +825,13 @@ fi
 (
     set -euo pipefail
     dir_h="$fixture/abi-gate-cost"
-    make_workspace "$dir_h" 1 2 low
+    # 8 lanes, not the usual 1: H2 builds the complete 244-package batch and
+    # the dispatcher starts at most one package per lane per 0.5 s poll cycle,
+    # so a single lane turns those stub builds into minutes of pure dispatch
+    # latency. Nothing asserted below depends on the lane count or the build
+    # order: H1/H3 are pre-dispatch refusals counted as probe forks, and H2
+    # counts dispatches as an unordered set.
+    make_workspace "$dir_h" 8 2 low
 
     # anchors: abi=must with no abi-tagged dependency — the batch origins.
     # providers: UNTAGGED (the tag gate must never claim them, or layer 2

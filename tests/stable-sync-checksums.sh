@@ -132,6 +132,9 @@ make_case_workspace() {
     local source_entry=${3:-'https://example.invalid/s1-$pkgver.tar.gz'}
     local sum_lines=${4:-"sha256sums=('$staged_sum')"}
     make_workspace "$dir" 1 2 low
+    # The SUT's retry backoffs and dispatcher polls are pure latency here —
+    # nothing in this fixture asserts on wall-clock time (see stub_sleep).
+    stub_sleep "$dir"
     mkdir -p "$dir/packages/stable/s1" "$dir/fake"
     printf 's1|packages/stable/s1|stable|\n' >>"$dir/config/topology.conf"
 

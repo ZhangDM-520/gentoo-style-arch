@@ -85,6 +85,9 @@ make_vcs_workspace() { # $1 workspace; $2 remote path; $3 branch|tag; $4 ref;
     [[ $kind == default ]] || source+="#$kind=$ref"
     local extra="$gsa_meta_any"$'\n'"source=(\"$source\")"$'\n'"sha256sums=('SKIP')"
     make_workspace "$dir" 1 2 low
+    # The SUT's retry backoffs and dispatcher polls are pure latency here —
+    # nothing in this fixture asserts on wall-clock time (see stub_sleep).
+    stub_sleep "$dir"
     # Dynamic IgnorePkg registration target — never the host's /etc/pacman.conf.
     make_install_conf "$dir/pacman.conf"
     add_package "$dir" p1 "$extra"
@@ -241,6 +244,9 @@ make_non_git_workspace() { # $1 = workspace; $2 = svn|hg|bzr; $3 = optional frag
     [[ -n $fragment ]] && source+="#$fragment"
     local extra="$gsa_meta_any"$'\n'"source=(\"$source\")"$'\n'"sha256sums=('SKIP')"
     make_workspace "$dir" 1 2 low
+    # The SUT's retry backoffs and dispatcher polls are pure latency here —
+    # nothing in this fixture asserts on wall-clock time (see stub_sleep).
+    stub_sleep "$dir"
     # Dynamic IgnorePkg registration target — never the host's /etc/pacman.conf.
     make_install_conf "$dir/pacman.conf"
     add_package "$dir" p1 "$extra"

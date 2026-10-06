@@ -876,12 +876,17 @@ OpenShadingLanguage -> blender.
   (one-line PKGBUILD + its topology record `ID|packages/ID|GROUP|`; extra
   PKGBUILD lines are passed verbatim, never guessed); `set_topology_record DIR
   ID GROUPS [EDGES [TAGS]]` is the single writer for records that need
-  multiple groups, edges or tags (replace-or-append); `stub_sudo`/`stub_pacman`/`stub_makepkg` write the trivial
+  multiple groups, edges or tags (replace-or-append); `stub_sudo`/`stub_pacman`/`stub_makepkg`/`stub_sleep` write the trivial
   byte-identical PATH stubs. `stub_sudo` is a passthrough that strips the
   builder's non-interactive flags (`-n`, `-v`, `--`) **and `--preserve-env`** —
   some hosts wrap `sudo` in a fish function that re-execs it as `command sudo
   --preserve-env …`, and a stub that chokes on that flag would fail every `-i`
-  fixture in the preflight probe. Oracle-shaped stubs (fake `date`, marker
+  fixture in the preflight probe. `stub_sleep` is the capped clock for
+  SUT-side waits: numeric operands ≥ 0.4 s collapse to 0.05 s, shorter ones
+  pass through untouched — install it only where no long sleep is a lease
+  (`sleep 60 60<"$lock"`) or a measured duration (run-record's mid-build
+  `sleep 3`, scheduler-core-solo's duration table). Oracle-shaped stubs (fake
+  `date`, marker
   flipping, `-Qp`/`-Qi` answers, signal loggers) stay inline in the fixture
   that gives them meaning, as do assertions, `fail()` prefixes and the
   `( subshell )` section structure of multi-subject fixtures.
