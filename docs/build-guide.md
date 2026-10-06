@@ -113,6 +113,22 @@ baseline each forces a rebuild with a named diagnostic; anomaly diagnostics
 print even in quiet output. A partial output set never reaches install
 discovery at all.
 
+Two flags reshape the skip decision (2026-10-06, `docs/NOTE.md`):
+
+- `--skip-built` claims "built remains built" with the freshness analysis
+  **off**: a complete, payload-valid archive set at the recipe's evaluated
+  current `pkgver-pkgrel` is skipped (run-record row reason `skip-built`) —
+  no `PKGBUILD`-vs-archive mtime compare, no upstream VCS probes (the mode
+  touches no network at all), no waivers. A recipe whose version advanced, an
+  incomplete split set, or an unreadable archive still rebuilds with the same
+  named diagnostics as `-s`. With `--install` the skipped package still
+  installs. Combined with `-s`, `--skip-built` wins — in either order.
+- `--vcs-skip-tolerance N` is the CLI form of the waive threshold described
+  above. It overrides `GSA_VCS_SKIP_TOLERANCE` and accepts positive integers
+  only; `0`, negatives and non-numbers are a loud usage error (exit non-zero),
+  unlike the env var, whose garbage values fall back to the default of 5 with
+  a warning.
+
 If an archive has no usable revision baseline, `-s` never assumes that the
 current upstream ref produced it. The builder first checks that each declared
 ref can be parsed and resolved, then performs one normal build to record the
@@ -399,7 +415,10 @@ the three planning defaults):
 - `GSA_VCS_SKIP_TOLERANCE` — how many upstream commits a recorded baseline may
   trail a moving Git ref before `-s` refuses to waive the rebuild; must be a
   positive integer, anything else falls back to the default with a warning.
-  Default: `5`.
+  Default: `5`. The `--vcs-skip-tolerance` flag overrides this value (and
+  rejects non-positive-integer input outright instead of falling back); the
+  env var remains the transport that carries the effective value into build
+  lanes.
 
 **Inherited environment that changes behaviour** without being validated
 configuration:
@@ -455,7 +474,10 @@ space-separated `pkg status rc dur reason` (the reason is the remainder of the
 line). `rc` and `dur` are integers (`dur` in seconds) or `-` when the package
 never produced one. The status enum, with its reasons:
 
-- `succeeded` — `ok`; or, without building, `freshness-waived` (`-s` skipped
+- `succeeded` — `ok`; or, without building, `skip-built` (`--skip-built`
+  skipped a complete, payload-valid archive set for the recipe's current
+  version — no freshness analysis, so this is never a claim that upstream is
+  unchanged), `freshness-waived` (`-s` skipped
   an archive whose selected Git ref moved fewer than
   `GSA_VCS_SKIP_TOLERANCE` commits) or `abi-provider-waived` (`-s` skipped an
   archive of a `.gsa-abi-provider` recipe such as `llvm-git` — upstream
@@ -483,9 +505,11 @@ continuation-flag table: the plan values (`--lanes`/`--jobs`/`--intensity`),
 the install flavour (`-i` → `--install`, `-fi` → `--forceinstall`), the
 semantics flags (`--no-deps`/`--no-sync`/`--allow-broken-rustc`), and the
 remaining package list in place of the original selection (failed packages
-included — they must rebuild before their dependents). `-c`/`--clean` and
-`-s`/`--skip` are deliberately not mirrored (`-c` would wipe the archives a
-resume needs; `-s` is the user's call — the printed tip says to add it), and
+included — they must rebuild before their dependents). `-c`/`--clean`,
+`-s`/`--skip`, `--skip-built` and `--vcs-skip-tolerance` are deliberately not
+mirrored (`-c` would wipe the archives a
+resume needs; the skip modes are the user's call — the printed tip says to
+add them), and
 one-shot actions (`-n`, `-l`, `-ia`, `-cc`, `-ccc`, `-ln`, `--audit`,
 `--help`) are never mirrored. Environment inputs are never baked into the
 command either: the summary warns when `GSA_TARGET_CPU`, `GSA_STATE_DIR` or
@@ -504,7 +528,8 @@ path prints the summary, the machine block and this suggestion before exiting
 Read the per-package log named in a failure message. A stale system pacman
 lock is not removed automatically. Resume with the remaining package IDs
 printed by the failure summary, usually adding `--skip --install` after
-checking whether the archive was already produced. Under `--install`, a
+checking whether the archive was already produced (or `--skip-built
+--install` to trust the built set outright — see **Skip and resume**). Under `--install`, a
 package whose exact version is already installed with an install date not
 older than its archive skips its transaction automatically; add
 `--forceinstall` (implies `--install`) when the install must run anyway —

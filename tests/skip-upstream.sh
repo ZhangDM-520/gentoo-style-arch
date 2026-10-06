@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Regression fixture for upstream-aware -s. Every workspace and local remote is
+# Regression fixture for upstream-aware -s and the skip modes (--skip-built's
+# freshness-free built-set claim, --vcs-skip-tolerance's CLI waive threshold).
+# Every workspace and local remote is
 # isolated under $TMPDIR; only the Git adapter is exercised end to end here.
 source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-skip-upstream.XXXXXX")
@@ -1178,6 +1180,212 @@ EOF
     run_case "$ident_ws" -s p1
     expect_success 'manifest identity: rebuilt archive skips'
     assert_makepkg_count "$ident_ws" 2 'manifest identity: rebuilt archive skips'
+)
+
+# ─── --skip-built: the built set is the claim, freshness analysis off ────────
+# Owner ask (2026-10-06): "built remains built, no ignore skip" — a git pull
+# that only bumps the PKGBUILD's mtime, over a flaky network, made -s a
+# rebuild machine (the mtime gate fires locally; the VCS probes need the
+# network). --skip-built keeps the SKIP claim — a complete, payload-valid
+# archive set for the recipe's CURRENT version stays built — and drops the
+# freshness analysis entirely: no PKGBUILD-vs-archive mtime compare, no VCS
+# probes (zero network), no waivers. Each case owns its workspace.
+
+(
+    sb_dir=$fixture/skip-built-mtime
+    sb_ws=$sb_dir/workspace
+    init_git_remote "$sb_dir/repository"
+    make_vcs_workspace "$sb_ws" "$sb_dir/repository/remote.git" branch main
+    run_case "$sb_ws" p1
+    expect_success 'skip-built mtime: initial build'
+    assert_makepkg_count "$sb_ws" 1 'skip-built mtime: initial build'
+
+    # The git-pull shape: the recipe file is NEWER than the archive. Under -s
+    # that mtime alone forces a rebuild ('newer PKGBUILD mtime' above pins
+    # it); under --skip-built the built set still counts.
+    touch -d '+1 day' "$sb_ws/packages/p1/PKGBUILD"
+    run_case "$sb_ws" --skip-built p1
+    expect_success 'skip-built skips a built package despite a newer PKGBUILD'
+    assert_makepkg_count "$sb_ws" 1 'skip-built mtime: the git-pull mtime churn must not rebuild'
+    [[ $(rr_row p1 reason <<<"$FIXTURE_OUTPUT") == skip-built ]] ||
+        fail "skip-built row is not 'succeeded … skip-built':"$'\n'"$FIXTURE_OUTPUT"
+)
+
+# A recipe whose version advanced has NOT built its current version: the
+# old-version archive must not satisfy --skip-built. The PKGBUILD mtime is
+# pinned back into the past after the edit, so the rebuild can only come from
+# the version — --skip-built has no mtime gate to blame.
+(
+    sbv_dir=$fixture/skip-built-version
+    sbv_ws=$sbv_dir/workspace
+    make_workspace "$sbv_ws" 1 2 low
+    make_install_conf "$sbv_ws/pacman.conf"
+    add_package "$sbv_ws" p1 "$gsa_meta_any"
+    touch -d '2000-01-01 00:00:00 UTC' "$sbv_ws/packages/p1/PKGBUILD"
+    cat >"$sbv_ws/bin/makepkg" <<'EOF'
+#!/usr/bin/env bash
+set -eu
+id=$(basename "$PWD")
+printf '%s\n' "$id" >>"${GSA_FAKE_MAKEPKG_COUNT:?}"
+tar --zstd -cf "$PWD/$id-1.0.0-1-any.pkg.tar.zst" --files-from /dev/null
+EOF
+    chmod +x "$sbv_ws/bin/makepkg"
+    stub_sudo "$sbv_ws"
+    stub_pacman "$sbv_ws"
+
+    run_case "$sbv_ws" p1
+    expect_success 'skip-built version: initial build'
+    assert_makepkg_count "$sbv_ws" 1 'skip-built version: initial build'
+    sed -i 's/^pkgver=1\.0\.0$/pkgver=1.1.0/' "$sbv_ws/packages/p1/PKGBUILD"
+    touch -d '2000-01-01 00:00:00 UTC' "$sbv_ws/packages/p1/PKGBUILD"
+    run_case "$sbv_ws" --skip-built p1
+    expect_success 'skip-built rebuilds when the recipe version advanced'
+    assert_makepkg_count "$sbv_ws" 2 'skip-built version: an old-version archive is not built for the current recipe'
+)
+
+# The claim is the COMPLETE current-version set: a split recipe missing a
+# sibling output must rebuild under --skip-built too (same anomaly shape as
+# the R-F2 section, same named diagnostic).
+(
+    sbi_dir=$fixture/skip-built-incomplete
+    sbi_ws=$sbi_dir/workspace
+    make_workspace "$sbi_ws" 1 2 low
+    make_install_conf "$sbi_ws/pacman.conf"
+    mkdir -p "$sbi_ws/packages/p1"
+    printf '%s\n' 'pkgname=(p1 p1-extra)' 'pkgver=1.0.0' 'pkgrel=1' 'arch=(any)' \
+        >"$sbi_ws/packages/p1/PKGBUILD"
+    printf 'p1|packages/p1|git|\n' >>"$sbi_ws/config/topology.conf"
+    touch -d '2000-01-01 00:00:00 UTC' "$sbi_ws/packages/p1/PKGBUILD"
+    cat >"$sbi_ws/bin/makepkg" <<'EOF'
+#!/usr/bin/env bash
+set -eu
+id=$(basename "$PWD")
+printf '%s\n' "$id" >>"${GSA_FAKE_MAKEPKG_COUNT:?}"
+tar --zstd -cf "$PWD/p1-1.0.0-1-any.pkg.tar.zst" --files-from /dev/null
+tar --zstd -cf "$PWD/p1-extra-1.0.0-1-any.pkg.tar.zst" --files-from /dev/null
+EOF
+    chmod +x "$sbi_ws/bin/makepkg"
+    stub_sudo "$sbi_ws"
+    stub_pacman "$sbi_ws"
+
+    run_case "$sbi_ws" --skip-built p1
+    expect_success 'skip-built incomplete: initial build'
+    assert_makepkg_count "$sbi_ws" 1 'skip-built incomplete: initial build'
+    rm -f "$sbi_ws/packages/p1/p1-extra-1.0.0-1-any.pkg.tar.zst"
+    run_case "$sbi_ws" --skip-built p1
+    expect_success 'skip-built rebuilds a partial split set'
+    assert_makepkg_count "$sbi_ws" 2 'skip-built incomplete: a missing sibling output must rebuild'
+    diagnostics=$(diagnostics_with_logs "$sbi_ws")
+    grep -Fq 'is incomplete' <<<"$diagnostics" ||
+        fail 'skip-built incomplete: the incompleteness was not reported:'"$diagnostics"
+    grep -Fq 'missing: p1-extra' <<<"$diagnostics" ||
+        fail 'skip-built incomplete: the missing output was not named:'"$diagnostics"
+)
+
+# "no ignore skip": --skip-built skips the BUILD, never the install — with -i
+# the skip path sends the existing archive through the same install path the
+# -s skip uses ('unchanged branch with install' above).
+(
+    sbin_dir=$fixture/skip-built-install
+    sbin_ws=$sbin_dir/workspace
+    init_git_remote "$sbin_dir/repository"
+    make_vcs_workspace "$sbin_ws" "$sbin_dir/repository/remote.git" branch main
+    run_case "$sbin_ws" p1
+    expect_success 'skip-built install: initial build'
+    assert_makepkg_count "$sbin_ws" 1 'skip-built install: initial build'
+    run_case "$sbin_ws" --skip-built -i p1
+    expect_success 'skip-built install: -i run'
+    assert_makepkg_count "$sbin_ws" 1 'skip-built install: the skip path must not rebuild'
+    [[ $(rr_row p1 reason <<<"$FIXTURE_OUTPUT") == skip-built ]] ||
+        fail "skip-built -i row is not 'succeeded … skip-built':"$'\n'"$FIXTURE_OUTPUT"
+    grep -- 'pacman -U' "$sbin_ws/pacman.log" | grep -Fq 'p1-1.0.0-1-any.pkg.tar.zst' ||
+        fail 'skip-built -i did not install the skipped archive'
+)
+
+# ─── --vcs-skip-tolerance N: the -s waive threshold as a CLI number ──────────
+# The flag beats GSA_VCS_SKIP_TOLERANCE (which stays the transport to lane
+# children), and bad values are usage errors, not silent fallbacks.
+(
+    tol2_dir=$fixture/vcs-tolerance-flag
+    init_git_remote "$tol2_dir/repository"
+    tol2_work=$tol2_dir/repository/work
+    tol2_ws=$tol2_dir/workspace
+    make_vcs_workspace "$tol2_ws" "$tol2_dir/repository/remote.git" branch main
+    run_case "$tol2_ws" p1
+    expect_success 'flag tolerance: initial build'
+    assert_makepkg_count "$tol2_ws" 1 'flag tolerance: initial build'
+
+    # GSA_VCS_SKIP_TOLERANCE=2 would REBUILD a two-commit move (the boundary
+    # is AT 2 — pinned above), so a skip here can only come from the flag's 3,
+    # and the waiver line must name the flag's value.
+    advance_main "$tol2_work" 'flag tolerance noise' 2
+    GSA_VCS_SKIP_TOLERANCE=2 run_case "$tol2_ws" -s --vcs-skip-tolerance 3 p1
+    expect_success 'flag tolerance 3 waives a two-commit move'
+    assert_makepkg_count "$tol2_ws" 1 'flag tolerance: a two-commit move must stay skipped under tolerance 3'
+    [[ $(rr_row p1 reason <<<"$FIXTURE_OUTPUT") == freshness-waived ]] ||
+        fail "flag tolerance row is not 'succeeded … freshness-waived':"$'\n'"$FIXTURE_OUTPUT"
+    tol2_diagnostics=$(diagnostics_with_logs "$tol2_ws")
+    grep -Fq 'upstream moved 2 commit(s) < tolerance 3 — treating upstream as current' \
+        <<<"$tol2_diagnostics" ||
+        fail 'the waiver does not name the FLAG tolerance 3 (the env value must lose):'$'\n'"$tol2_diagnostics"
+
+    # Five commits from the recorded baseline (the skip above kept it):
+    # at-or-past 3 rebuilds.
+    advance_main "$tol2_work" 'flag tolerance boundary' 3
+    GSA_VCS_SKIP_TOLERANCE=2 run_case "$tol2_ws" -s --vcs-skip-tolerance 3 p1
+    expect_success 'flag tolerance 3 rebuilds at five commits'
+    assert_makepkg_count "$tol2_ws" 2 'flag tolerance: a five-commit move must rebuild under tolerance 3'
+
+    # Invalid values are a loud usage error naming the flag — rc AND text —
+    # never a silent fallback like the env var's warning.
+    for bad in 0 -1 x; do
+        run_case "$tol2_ws" --vcs-skip-tolerance "$bad" p1
+        ((FIXTURE_RC != 0)) ||
+            fail "flag tolerance: --vcs-skip-tolerance $bad exited 0 (a usage error must be non-zero)"
+        grep -Fq -- '--vcs-skip-tolerance' <<<"$FIXTURE_OUTPUT" ||
+            fail "flag tolerance: the --vcs-skip-tolerance $bad error does not name the flag:"$'\n'"$FIXTURE_OUTPUT"
+    done
+    assert_makepkg_count "$tol2_ws" 2 'flag tolerance: usage errors must not build'
+)
+
+# -s --skip-built together: --skip-built wins (freshness analysis off) — the
+# claim is the built set, in BOTH flag orders, and the zero-network promise is
+# MEASURED: the ls-remote counting stub must record zero attempts.
+(
+    both_dir=$fixture/skip-and-skip-built
+    both_ws=$both_dir/workspace
+    init_git_remote "$both_dir/repository"
+    make_vcs_workspace "$both_ws" "$both_dir/repository/remote.git" branch main
+    install_lsremote_stub "$both_ws"
+    run_case "$both_ws" p1
+    expect_success 'combined modes: initial build'
+    assert_makepkg_count "$both_ws" 1 'combined modes: initial build'
+
+    # State that would make plain -s both probe and rebuild: the ref moved far
+    # past the tolerance.
+    advance_main "$both_dir/repository/work" 'combined-mode churn' 30
+    rm -f "$both_ws/lsremote.count"
+    run_case "$both_ws" -s --skip-built p1
+    expect_success '-s --skip-built skips the built set'
+    assert_makepkg_count "$both_ws" 1 'combined modes: --skip-built must win over -s'
+    [[ $(rr_row p1 reason <<<"$FIXTURE_OUTPUT") == skip-built ]] ||
+        fail "combined-mode row is not 'succeeded … skip-built':"$'\n'"$FIXTURE_OUTPUT"
+    attempts=$(lsremote_attempts "$both_ws")
+    ((attempts == 0)) ||
+        fail "combined modes: --skip-built probed upstream $attempts time(s) — it must make zero VCS probes"
+    run_case "$both_ws" --skip-built -s p1
+    expect_success '--skip-built -s skips the built set'
+    assert_makepkg_count "$both_ws" 1 'combined modes: the reversed flag order must skip too'
+
+    # Control: plain -s over the same moved ref probes and rebuilds — the
+    # skip and zero-probe claims belong to --skip-built, not to the state.
+    rm -f "$both_ws/lsremote.count"
+    run_case "$both_ws" -s p1
+    expect_success 'plain -s over the moved ref rebuilds'
+    assert_makepkg_count "$both_ws" 2 'combined modes control: plain -s must rebuild over a 30-commit move'
+    attempts=$(lsremote_attempts "$both_ws")
+    ((attempts >= 1)) ||
+        fail 'combined modes control: plain -s probed upstream zero times — the zero-probe oracle is vacuous'
 )
 
 printf 'upstream-aware skip fixture: PASS\n'

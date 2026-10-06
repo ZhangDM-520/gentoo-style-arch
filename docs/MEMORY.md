@@ -804,6 +804,14 @@ output set at the evaluated pkgver-pkgrel, every member payload-readable
 (manifest v2; v1 forces one rebuild) — a partial split set never skips and
 never reaches install discovery (`list_split_pkgs` prints nothing and names
 the missing outputs), and anomaly diagnostics print even in quiet output.
+Skip modes (2026-10-06): `-s` is freshness-gated (mtime, VCS probes, waivers
+— rows `freshness-waived`/`abi-provider-waived`); `--skip-built` claims the
+complete payload-valid current-version set with freshness OFF (no mtime
+compare, no VCS probes or any network, no waivers — row `skip-built`), wins
+over `-s` in either order, and still installs under `-i`. The waive threshold
+is `--vcs-skip-tolerance N` (positive integers only; overrides env
+`GSA_VCS_SKIP_TOLERANCE`, the lane-child transport, whose garbage values
+still fall back to 5 loudly).
 Recipe-file rewrites are transactional (2026-10-05): one staged per-process
 temp + one `mv` publish, snapshotted before the first write and rolled back
 through a CHECKED restore whose failure is its own named error (anchor rc 5:

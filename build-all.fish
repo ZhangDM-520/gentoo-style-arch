@@ -1177,23 +1177,34 @@ function archive_payload_ok -a archive
     pacman -Qp -- "$archive" >/dev/null 2>&1
 end
 
-# freshness_skip_decision PKG_PATH PACKAGE_ID — THE -s decision. Both claim
-# sites (build_package's skip block and the toolchain pre-check before a drift
-# clean) call this one function; the two copies that used to live at those
-# sites had already diverged once. Results:
+# freshness_skip_decision PKG_PATH PACKAGE_ID SKIP_MODE — THE skip decision.
+# Both claim sites (build_package's skip block and the toolchain pre-check
+# before a drift clean) call this one function; the two copies that used to
+# live at those sites had already diverged once. SKIP_MODE is build_package's
+# skip_flag (in-params are arguments here, like every other caller seam):
+#   1 = -s           the full freshness analysis below
+#   2 = --skip-built the built-set claim only — no PKGBUILD-vs-archive mtime
+#                    compare, no VCS probes (this function must not touch the
+#                    network in that mode), no waivers (nothing to waive)
+# Results:
 #   _FRESHNESS_VERDICT  skip | build | defer
 #   _FRESHNESS_ARCHIVE  the current set (skip verdict only)
 #   _FRESHNESS_WAIVER   waiver line(s) — printed only by an actual skip claim
-# skip  = the COMPLETE current-version set is payload-valid, every member is
-#         at least as new as the PKGBUILD (nanosecond mtimes: makepkg writes
-#         all outputs of one build together, so a mixed-age set is itself
-#         evidence of an interrupted build), and every member is VCS-current
-#         or under a recorded waiver.
+#   _FRESHNESS_WAIVER_REASON  the claim token when the skip carries one
+#                             (freshness-waived / abi-provider-waived /
+#                             skip-built)
+# skip  = the COMPLETE current-version set is payload-valid and, in -s mode,
+#         every member is at least as new as the PKGBUILD (nanosecond mtimes:
+#         makepkg writes all outputs of one build together, so a mixed-age set
+#         is itself evidence of an interrupted build) and every member is
+#         VCS-current or under a recorded waiver. In --skip-built mode the
+#         complete payload-valid set IS the claim.
 # build = anything else; the reason is already reported, except the silent
 #         "nothing is current" case.
 # defer = freshness unverifiable and the consumer chain can absorb the wait
-#         (_DEFER_REASON set for the run record).
-function freshness_skip_decision -a pkg_path package_id
+#         (_DEFER_REASON set for the run record). --skip-built never defers —
+#         it never probes, so there is nothing to be unverifiable.
+function freshness_skip_decision -a pkg_path package_id skip_mode
     set -g _FRESHNESS_VERDICT build
     set -g _FRESHNESS_ARCHIVE
     set -l pkg_name "$package_id"
@@ -1212,11 +1223,15 @@ function freshness_skip_decision -a pkg_path package_id
             ui_info "$pkg_name: built output set is incomplete (missing: "(string join ' ' $_CURRENT_ARCHIVES_MISSING)") — rebuilding"
             return 0
     end
-    for archive in $archives
-        # `test -nt` compares nanosecond mtimes; a PKGBUILD newer than any
-        # member means the whole set predates the recipe.
-        if test "$pkg_path/PKGBUILD" -nt "$archive"
-            return 0
+    if test "$skip_mode" != 2
+        for archive in $archives
+            # `test -nt` compares nanosecond mtimes; a PKGBUILD newer than any
+            # member means the whole set predates the recipe. --skip-built
+            # deliberately drops this gate: a git pull that only touches the
+            # recipe's mtime is not evidence the built set is stale.
+            if test "$pkg_path/PKGBUILD" -nt "$archive"
+                return 0
+            end
         end
     end
     for archive in $archives
@@ -1224,6 +1239,17 @@ function freshness_skip_decision -a pkg_path package_id
             ui_info "$pkg_name: "(basename -- "$archive")" cannot be read as a package archive (interrupted write?) — rebuilding"
             return 0
         end
+    end
+    if test "$skip_mode" = 2
+        # The --skip-built claim: a complete, payload-valid current-version set
+        # is the evidence — freshness analysis stops here. The reason rides the
+        # lane wire so the run-record row says skip-built, never a bare ok (a
+        # freshness-blind skip is a different claim from an untouched archive).
+        set -g _FRESHNESS_WAIVER
+        set -g _FRESHNESS_WAIVER_REASON skip-built
+        set -g _FRESHNESS_ARCHIVE $archives
+        set -g _FRESHNESS_VERDICT skip
+        return 0
     end
     set -l waiver_lines
     for archive in $archives
@@ -3623,12 +3649,13 @@ end
 
 # Nearest known long option to a mistyped flag, or nothing. Only long options
 # are hinted — a one-letter flag is a different flag rather than a typo, and the
-# usage dump that follows lists them all. No first-character prefilter: with 19
-# options, distance <= 2 yields a single candidate for every typo measured and a
-# prefilter only cost true positives (`--xanels` -> `--lanes`).
+# usage dump that follows lists them all. No first-character prefilter: with the
+# full option list below, distance <= 2 yields a single candidate for every typo
+# measured and a prefilter only cost true positives (`--xanels` -> `--lanes`).
 function _suggest_option -a given
     string match -qr '^--' -- "$given"; or return 0
-    set -l options --install --forceinstall --clean --skip --no-sync --lanes --jobs --intensity \
+    set -l options --install --forceinstall --clean --skip --skip-built --vcs-skip-tolerance \
+        --no-sync --lanes --jobs --intensity \
         --allow-broken-rustc --no-deps --no-register-ignorepkg --dry-run --list --group --help --topology \
         --installall --cleanup --nuclear --link-sources --audit
     set -l hit (printf '%s\n' $options | _nearest_lines "$given" 2 \
@@ -3733,6 +3760,10 @@ function record_package_toolchain -a package_id pkg_path gcc_identity
 end
 
 # ─── Build a single package ──────────────────────────────────────────────────
+# skip_flag is the skip MODE, not a boolean: 0 = no skip, 1 = -s (freshness-
+# gated), 2 = --skip-built (built-set claim, freshness analysis off). It rides
+# lane_argv's pinned SKIP field unchanged, so every consumer tests it as a
+# mode ("not 0" = any skip claim) rather than against the literal 1.
 function build_package -a package_id install_flag clean_flag skip_flag no_sync_flag quiet_flag force_install_flag
     # quiet_flag=1: background lane mode — no human echoes; everything goes to
     # the per-package log; the parent dispatcher renders lane state.
@@ -3778,8 +3809,8 @@ function build_package -a package_id install_flag clean_flag skip_flag no_sync_f
     # decision is the same one the skip block makes (freshness_skip_decision);
     # here only its deferral outcome is acted on — a skip verdict still falls
     # through to the drift clean and rebuild below.
-    if test "$toolchain_mismatch" = "1"; and test "$clean_flag" != "1"; and test "$skip_flag" = "1"
-        freshness_skip_decision "$pkg_path" "$package_id"
+    if test "$toolchain_mismatch" = "1"; and test "$clean_flag" != "1"; and test "$skip_flag" != "0"
+        freshness_skip_decision "$pkg_path" "$package_id" "$skip_flag"
         if test "$_FRESHNESS_VERDICT" = "defer"
             return $lane_outcome_defer
         end
@@ -3910,15 +3941,15 @@ function build_package -a package_id install_flag clean_flag skip_flag no_sync_f
         end
     end
 
-    # Skip if already built (only when -s flag is set). The decision — the
-    # COMPLETE current-version set, payload-valid, newer than the PKGBUILD,
-    # VCS-current or waived — is freshness_skip_decision, shared with the
-    # toolchain pre-check above; only the skip CLAIM renders it. The claim is
-    # made only when the version check above established there was nothing to
-    # do (skip_allowed): over an UNCHECKED repo version "already built" would
-    # be a freshness claim this run never made (2026-10-05).
-    if test "$skip_flag" = "1"; and test $skip_allowed -eq 1
-        freshness_skip_decision "$pkg_path" "$package_id"
+    # Skip if already built (only when a skip mode is set). The decision — the
+    # COMPLETE current-version set, payload-valid, and in -s mode newer than
+    # the PKGBUILD, VCS-current or waived — is freshness_skip_decision, shared
+    # with the toolchain pre-check above; only the skip CLAIM renders it. The
+    # claim is made only when the version check above established there was
+    # nothing to do (skip_allowed): over an UNCHECKED repo version "already
+    # built" would be a freshness claim this run never made (2026-10-05).
+    if test "$skip_flag" != "0"; and test $skip_allowed -eq 1
+        freshness_skip_decision "$pkg_path" "$package_id" "$skip_flag"
         switch $_FRESHNESS_VERDICT
             case defer
                 return $lane_outcome_defer
@@ -3930,7 +3961,7 @@ function build_package -a package_id install_flag clean_flag skip_flag no_sync_f
                     # land in the per-package log in lane mode too — say
                     # exactly what was waived. The run record row carries
                     # the claim as its reason (freshness-waived /
-                    # abi-provider-waived).
+                    # abi-provider-waived / skip-built).
                     for waiver_line in $_FRESHNESS_WAIVER
                         ui_info "$waiver_line"
                     end
@@ -5803,7 +5834,8 @@ end
 
 # ─── Lane invocation: one description of the process-boundary argv ───────────
 # The seam stays the PROCESS BOUNDARY: `--lane-job` + 8 positional payload
-# args (pkg, result file, jobs, five 0|1 flags), unchanged. But the shape now
+# args (pkg, result file, jobs, four 0|1 flags, and the SKIP mode 0|1|2),
+# unchanged. But the shape now
 # has one home: lane_argv builds the payload (the spawn) and lane_argv_check
 # validates exactly that shape (the handler). Adding a lane flag is a two-line
 # edit here plus the lane_job signature — never argv archaeology through a
@@ -5811,6 +5843,8 @@ end
 
 # lane_argv PKG RESULT_FILE JOBS INSTALL CLEAN SKIP NO_SYNC FORCE → the eight
 # payload args, one per line (fish command substitution splits on newlines).
+# SKIP is the skip MODE (0 off, 1 -s, 2 --skip-built) — the arity is pinned,
+# so the mode rides the existing field instead of a ninth argument.
 function lane_argv -a pkg result_file jobs install_flag clean_flag skip_flag no_sync_flag force_install_flag
     printf '%s\n' "$pkg" "$result_file" "$jobs" "$install_flag" "$clean_flag" "$skip_flag" "$no_sync_flag" "$force_install_flag"
 end
@@ -5836,7 +5870,14 @@ function lane_argv_check
         echo "Error: --lane-job received an invalid job count: $argv[3]" >&2
         return 2
     end
-    for flag in $argv[4..8]
+    # SKIP ($argv[6]) is a mode (0 off, 1 -s, 2 --skip-built); the other four
+    # flags are booleans. One grammar, two shapes — validated where the wire
+    # is defined so a future mode value is a deliberate edit at both ends.
+    if not string match -qr '^[012]$' -- "$argv[6]"
+        echo "Error: --lane-job received an invalid flag: $argv[6]" >&2
+        return 2
+    end
+    for flag in $argv[4..5] $argv[7..8]
         if not string match -qr '^[01]$' -- "$flag"
             echo "Error: --lane-job received an invalid flag: $flag" >&2
             return 2
@@ -5918,16 +5959,19 @@ function lane_job -a pkg_id result_file total_jobs install_flag clean_flag skip_
     set -l dur (math (date +%s) - $start_s)
     # A deferral carries WHY it parked when build_package named one (the
     # anchor branch stays silent and keeps the legacy default); an ok outcome
-    # carries the freshness waiver when -s skipped on one (a waived-freshness
-    # skip is not the same claim as an untouched archive — the run record row
-    # must say which happened: freshness-waived or abi-provider-waived); every
-    # other outcome has no reason field.
+    # carries the skip CLAIM when one was made (a waived-freshness skip or a
+    # --skip-built claim is not the same claim as an untouched archive — the
+    # run record row must say which happened: freshness-waived,
+    # abi-provider-waived or skip-built); every other outcome has no reason
+    # field. The reason, not the waiver line count, is the claim marker:
+    # --skip-built claims with nothing waived (freshness analysis is off).
     set -l lane_reason ""
     if test "$rc" = "$lane_outcome_defer"; and set -q _DEFER_REASON
         set lane_reason "$_DEFER_REASON"
-    else if test "$rc" = "$lane_outcome_ok"; and set -q _FRESHNESS_WAIVER; and test (count $_FRESHNESS_WAIVER) -gt 0
-        set lane_reason "$_FRESHNESS_WAIVER_REASON"
-        if test -z "$lane_reason"
+    else if test "$rc" = "$lane_outcome_ok"
+        if set -q _FRESHNESS_WAIVER_REASON; and test -n "$_FRESHNESS_WAIVER_REASON"
+            set lane_reason "$_FRESHNESS_WAIVER_REASON"
+        else if set -q _FRESHNESS_WAIVER; and test (count $_FRESHNESS_WAIVER) -gt 0
             set lane_reason freshness-waived
         end
     end
@@ -7074,10 +7118,11 @@ end
 #   replaced    -g/--group, N..M ranges,             replaced by the package
 #               package references                  list ($remaining/argv)
 #   not-mirrored -c/--clean, -s/--skip               deliberately NOT mirrored:
-#                                                   -c would wipe the archives
-#                                                   a resume needs, and -s is
-#                                                   the user's call (the tip
-#                                                   says to add it)
+#               --skip-built --vcs-skip-tolerance    -c would wipe the archives
+#                                                   a resume needs, and the
+#                                                   skip modes are the user's
+#                                                   call (the tip says to add
+#                                                   them)
 #   not-mirrored -n -l -ia -cc -ccc -ln              one-shot actions and
 #               --audit --topology -h --help         read-only modes
 #   not-mirrored --lane-job --stale-lock-check       hidden seams: process-exit
@@ -7095,7 +7140,7 @@ set -g _CONTINUATION_RULES \
     '--no-register-ignorepkg|semantics' \
     '-g --group, N..M ranges, package references|replaced' \
     '-c --clean|not-mirrored' \
-    '-s --skip|not-mirrored' \
+    '-s --skip --skip-built --vcs-skip-tolerance|not-mirrored' \
     '-n --dry-run -l --list -ia --installall -cc --cleanup -ccc --nuclear -ln --link-sources --audit --topology -h --help|not-mirrored' \
     '--lane-job --stale-lock-check --local-db-check --install-decide --install-register --audit-lint --register-ignorepkg|not-mirrored'
 
@@ -7210,7 +7255,8 @@ function print_run_summary -a outcome
             echo ""
             echo "To resume, run:"
             echo "  build-all.fish "(continuation_args resume $remaining)""
-            echo "(Tip: add -s so already-built pkgs are skipped.)"
+            echo "(Tip: add -s so already-built pkgs are skipped, or --skip-built to skip the built set without freshness checks.)"
+            echo "(Tip: --vcs-skip-tolerance N sets the -s waive threshold.)"
         end
     end
 
@@ -7226,7 +7272,14 @@ function print_run_summary -a outcome
     # three must match this run's env (never baked into the command).
     set -q GSA_CPU_THREADS; and set -a ambient GSA_CPU_THREADS
     set -q GSA_MEMORY_GIB; and set -a ambient GSA_MEMORY_GIB
-    set -q GSA_VCS_SKIP_TOLERANCE; and set -a ambient GSA_VCS_SKIP_TOLERANCE
+    # A --vcs-skip-tolerance value is command text, not ambient state: the
+    # flag writes GSA_VCS_SKIP_TOLERANCE only because that env var is how lane
+    # children receive the effective value, and the tip already tells the user
+    # to re-add the flag — warning about an env var they never set would name
+    # the wrong knob.
+    if set -q GSA_VCS_SKIP_TOLERANCE; and not set -q _GSA_TOLERANCE_FROM_FLAG
+        set -a ambient GSA_VCS_SKIP_TOLERANCE
+    end
     if test (count $ambient) -gt 0
         ui_warning "ambient environment: "(string join ' ' $ambient)" — the continuation must run in the same env (never baked into the command)"
     end
@@ -7385,7 +7438,8 @@ function usage
     echo "                    once if refs resolve. A Git ref that ADVANCED still"
     echo "                    skips while the move is fewer than 5 commits (a loud,"
     echo "                    named freshness waiver, recorded as the row reason"
-    echo "                    freshness-waived; GSA_VCS_SKIP_TOLERANCE overrides"
+    echo "                    freshness-waived; --vcs-skip-tolerance N, or env"
+    echo "                    GSA_VCS_SKIP_TOLERANCE — the flag wins — overrides"
     echo "                    the 5, positive integers only); 5 or more commits"
     echo "                    rebuilds. A recipe marked .gsa-abi-provider (an ABI"
     echo "                    provider, e.g. llvm-git) skips on ANY upstream"
@@ -7395,6 +7449,19 @@ function usage
     echo "                    after transport retries parks that recipe (deferred:"
     echo "                    nothing is skipped or built, the rest of the run"
     echo "                    continues, exit stays non-zero)."
+    echo "  --skip-built      Skip anything already built for the recipe's CURRENT"
+    echo "                    version: a complete, payload-valid archive set stays"
+    echo "                    skipped (row reason skip-built) — freshness analysis"
+    echo "                    is OFF (no PKGBUILD-vs-archive mtime compare, no"
+    echo "                    upstream VCS probes, no network, no waivers). An"
+    echo "                    old-version or incomplete set still rebuilds. With"
+    echo "                    -i the skipped package still installs. Combined with"
+    echo "                    -s, --skip-built wins."
+    echo "  --vcs-skip-tolerance N"
+    echo "                    The -s waive threshold: a moved Git ref still skips"
+    echo "                    while the move is fewer than N commits. Overrides"
+    echo "                    GSA_VCS_SKIP_TOLERANCE (default 5); positive"
+    echo "                    integers only."
     echo "  --no-sync         Don't auto-update stable or opted-in recipe versions."
     echo "                    Stable recipes use pacman -Si; only a record tagged"
     echo "                    version-sync=nvchecker uses its .nvchecker.toml provider."
@@ -7418,6 +7485,8 @@ function usage
     echo "               GSA_CPU_THREADS, GSA_MEMORY_GIB, GSA_TARGET_CPU,"
     echo "               GSA_VCS_SKIP_TOLERANCE"
     echo "               override runtime state, parallelism, and optional CPU tuning."
+    echo "               A flag beats its env twin: --vcs-skip-tolerance overrides"
+    echo "               GSA_VCS_SKIP_TOLERANCE."
     echo ""
     echo "Package references (a bare name is not a leaf build — it expands to"
     echo "its transitive consumers, the packages at ABI risk when it rebuilds;"
@@ -7730,7 +7799,29 @@ function main
             case -c --clean
                 set clean_flag 1
             case -s --skip
-                set skip_flag 1
+                # A skip MODE, not a boolean: --skip-built (2) wins over -s (1)
+                # however the two are ordered, so -s never demotes it.
+                if test "$skip_flag" != 2
+                    set skip_flag 1
+                end
+            case --skip-built
+                set skip_flag 2
+            case --vcs-skip-tolerance
+                if test (count $args) -lt 2
+                    ui_error "--vcs-skip-tolerance requires an argument"
+                    return 1
+                end
+                if not string match -qr '^[1-9][0-9]*$' -- "$args[2]"
+                    ui_error "--vcs-skip-tolerance expects a positive integer, got '$args[2]'"
+                    return 1
+                end
+                # The env var is the transport to lane children (lane_argv's
+                # payload is pinned), so the flag writes it after validation
+                # and stays the single source of truth for the effective
+                # value: vcs_skip_tolerance_resolve reads only the env var.
+                set -gx GSA_VCS_SKIP_TOLERANCE "$args[2]"
+                set -g _GSA_TOLERANCE_FROM_FLAG 1
+                set -e args[2]
             case --no-sync
                 set no_sync_flag 1
             case --lanes

@@ -381,7 +381,8 @@ printf 'dashboard fixture: PASS\n'
     has 'Remaining:         2'
     has 'note: 1 failed package(s) included'
     has 'To resume, run:'
-    has '(Tip: add -s so already-built pkgs are skipped.)'
+    has '(Tip: add -s so already-built pkgs are skipped, or --skip-built to skip the built set without freshness checks.)'
+    has '(Tip: --vcs-skip-tolerance N sets the -s waive threshold.)'
     grep -qE '^  ✗ p2: BUILD FAILED \(rc=1, [0-9]m[0-9][0-9]s\)' <<<"$out" \
         || fail "no per-package failure line for p2: $out"
 

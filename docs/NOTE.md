@@ -37,6 +37,73 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-06 — `-s` skip churn on flaky networks and git-pull mtimes: `--skip-built` + `--vcs-skip-tolerance`
+
+**Symptom.** A `git pull` that only bumps the PKGBUILD's mtime, or a network
+blip during the upstream probes, turned `-s` into a rebuild machine over
+archives that were already built for the recipe's CURRENT version. Owner ask:
+"built remains built, no ignore skip" — keep the skip claim without the
+freshness analysis — and "add waive threshold number pass": the `-s` waive
+threshold had to be passable as a CLI number, not only via
+`GSA_VCS_SKIP_TOLERANCE`.
+
+**Root cause.** The `-s` skip claim was inseparable from its freshness
+analysis: `freshness_skip_decision` always ran the PKGBUILD-vs-archive
+nanosecond-mtime loop, the `vcs_archive_is_current` probes (network), and the
+tolerance/ABI waivers before any skip could be claimed — a churn-only mtime
+touch tripped the first gate and an unreachable upstream tripped the second.
+The waive threshold itself had only an env knob.
+
+**Fix.** Two flags, both `not-mirrored` in `_CONTINUATION_RULES` (the `-s`
+"the user's call — the tip says to add it" policy; the resume tip now names
+both):
+
+- `--skip-built` — skip mode 2: the complete, payload-valid current-version
+  archive set IS the claim. No mtime compare, no VCS probes (zero network),
+  no waivers; the run-record row reason is `skip-built`, wired through the
+  lane result's existing reason field (`lane_job` now keys on the claim
+  reason, not the waiver-line count — a skip-built claim waives nothing). It
+  still rebuilds when no/incomplete/unreadable current-version set exists
+  (same named diagnostics), `-i` still installs the skipped archive, and
+  combined with `-s` it wins in either order. The mode rides `lane_argv`'s
+  pinned SKIP field as 0|1|2 (`lane_argv_check` accepts 0..2 for that one
+  field), so no lane signature changed; `freshness_skip_decision` takes the
+  mode as a third argument and the toolchain pre-check passes it too — no
+  probes in mode 2 there either.
+- `--vcs-skip-tolerance N` — positive integers only: `0`, negatives and
+  non-numbers are a loud usage error (exit 1, the `--lanes`/`--jobs`/
+  `--intensity` convention). After validation the flag writes
+  `GSA_VCS_SKIP_TOLERANCE`, keeping ONE source of truth: the env var is the
+  transport into lane children and `vcs_skip_tolerance_resolve` stays its
+  single consumer. The flag beats the env value; a flag-supplied value is
+  command text (the tip covers it), so the ambient-env warning no longer names
+  it.
+
+**Validation.** `fish -n build-all.fish` and `bash -n tests/skip-upstream.sh`
+clean; `tests/skip-upstream.sh` green standalone (rc 0) with six new
+`( subshell )` sections: skip despite newer PKGBUILD mtime (row `skip-built`),
+rebuild on version advance (mtime pinned back so only the version can trigger),
+rebuild on a partial split set (names `missing: p1-extra`), `-i` install on
+the skip path (`pacman -U` with the existing archive), the tolerance flag (a
+2-commit move waived at flag 3 while env says 2, waiver line names
+`tolerance 3`; 5 commits rebuilds; `0`/`-1`/`x` exit non-zero with an error
+naming the flag), and `-s --skip-built` (skips in both flag orders, zero
+ls-remote attempts, with a plain `-s` control that probes and rebuilds). Every
+new assertion was falsified by a one-line mutation probe — 20/20 tripped with
+the assertion's own `fail()` line, and the invalid-value assertions tripped
+per input under a loosened validation regex (`0`/`-1`/`x` each exited 0 with
+no usage error, and a bad value proceeded to build). `tests/resume-command.sh`,
+`tests/run-record.sh` and `tests/dashboard.sh` green; `--help`, `--list`,
+`--dry-run --group git` unchanged apart from the new help entries.
+
+**Durable rule.** A skip claim and a freshness claim are different claims: the
+run-record row must say which (`skip-built` never implies "upstream
+unchanged"). A builder mode may ride an existing wire field only when BOTH
+ends of the grammar are edited (the lane SKIP field documents 0|1|2). A CLI
+value flag validates before it becomes env transport and beats its env twin;
+the resume-tip prose is fixture-pinned (`tests/dashboard.sh`), so extend the
+pin with the prose.
+
 ## 2026-10-06 — `makepkg --nobuild` is NOT read-only: it rewrites the PKGBUILD's pkgver
 
 **Symptom.** The look-ahead scanner (running every canonical recipe through
