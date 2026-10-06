@@ -1113,6 +1113,15 @@ going stale.
 
 ### Queued (claim by editing this section)
 
+- **Fixture-safe pacman lock preflight** (2026-10-06): give the fixtures a
+  `pacman-conf` stub whose DBPath points inside the workspace, so the `-i`
+  preflight's `db.lck` check reads a stub lock and batteries can run beside a
+  live install run (see Pitfall digest). Owner-blessed idiom: a stub, not a
+  builder test knob.
+- **Swap-drift owner calls** (2026-10-06, from the swap-gate work): (1) keep
+  the audit's soname-drift finding symmetric or narrow it to drop-only
+  (≈8 findings vs 18); (2) disposition the 18 real host drift rows the lint
+  now reports — fix recipes or consciously retire the debt entries.
 - **ROCm is half-removed**: `hsa-rocr` 7.2.4-1.1, `rocm-llvm` 2:7.2.4-2.1 and
   `comgr` 2:7.2.4-2.1 are installed again (the 2026-09-06 collective removal was
   reversed), while `hip-runtime` is absent — so HIP compute/Blender-HIP is still
@@ -1262,6 +1271,22 @@ constant, not a baked path).
 
 ## 6. Pitfall digest (full details: NOTE.md sections of same dates)
 
+- **`makepkg` is a WRITER of the recipe it touches** (2026-10-06): `--nobuild`
+  still runs `pkgver()` and rewrites `pkgver=` in place (`/usr/bin/makepkg:190`
+  `update_pkgver`) — a "read-only" screening sweep dirtied 12 tracked
+  PKGBUILDs and red-legged `srcinfo-freshness`. Any screening/linting that
+  shells into makepkg runs in a recipe-dir COPY (global SRCDEST keeps the
+  cache shared); dirty PKGBUILDs after any makepkg call are expected.
+- **The fixture battery is unsafe beside a live `-i`/`-ia` run** (2026-10-06):
+  fixtures' install preflights read the REAL `/var/lib/pacman/db.lck`; a live
+  `sudo pacman -U` (root, fds hidden → "holder unknown") makes them refuse
+  and random install fixtures go red. Run batteries in the gaps between
+  builds; queued: a fixture-side `pacman-conf` stub pointing the lock check
+  at a fixture-local DBPath.
+- **A pkgrel floor is unsound on version-synced recipes** (2026-10-06): the
+  github provider resets pkgrel=1 whenever it advances pkgver
+  (`lib/sources.fish` `new_pkgrel`), so `pkgrel >= N` ratchets break on the
+  next advance — pin the fix's content greps, never its release number.
 - **A `[[ -f ]] && cmd` guard as a function's last command fails the function
   when the file is absent** (2026-10-06 mpg123): 16 recipes carried the
   license-loop idiom `[[ -f $_l ]] && install ...`; when the last candidate

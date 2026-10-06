@@ -37,6 +37,146 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-06 — `makepkg --nobuild` is NOT read-only: it rewrites the PKGBUILD's pkgver
+
+**Symptom.** The look-ahead scanner (running every canonical recipe through
+`makepkg --nobuild --nodeps` to screen fetch/extract/prepare failures) left
+12 tracked `PKGBUILD`s modified (`packages/core/{babl-git,llvm-git,meson-git,
+qt6-graphs,qt6-multimedia,qt6-quick3d,qt6-svg,qt6-tools,spirv-llvm-translator-git}`,
+`packages/git/{at-spi2-core-git,brotli-git,expat-git}`) with VCS pkgver
+advances and stale `.SRCINFO`s; `tests/srcinfo-freshness.sh` went red
+"8/8 stale rows".
+
+**Root cause.** `makepkg` runs a recipe's `pkgver()` and rewrites the
+`pkgver=` line in place (`/usr/bin/makepkg:190` `update_pkgver`, called from
+the extract/prepare flow) whenever the computed version differs — `--nobuild`
+suppresses `build()`, not `pkgver()`. With the shared seeded
+`SRCDEST=/home/zhangdm/.cache/gsa-src`, every VCS recipe's `pkgver()` has
+fresh revisions to report.
+
+**Fix.** Read-only screening runs in a scratch copy of the recipe dir (the
+global SRCDEST keeps downloads shared); the 12 advances are benign and get
+`.SRCINFO` regeneration + batch commit like any version-sync dirt.
+
+**Durable rule.** Any `makepkg` invocation against a live recipe dir is a
+*writer* of that recipe's version fields — "screening" must happen in copies,
+and a dirty `PKGBUILD` after any makepkg call is expected, not an anomaly.
+
+## 2026-10-06 — the fixture battery is unsafe beside a live install run: the real pacman lock
+
+**Symptom.** Consecutive full batteries failed on random different fixtures
+(`resume-command` once; then `install-archive-guard`, `pgo-payload-guard`,
+`pgo-transition`) with assertions like "p2 row is never-started, want failed",
+while the same fixtures passed standalone 10/10 and 18/18 six-way concurrent.
+
+**Root cause.** Fixtures run the builder in `-i`/`-ia` modes; the preflight
+reads the REAL `/var/lib/pacman/db.lck`; a live `sudo pacman -U` from the
+full build (root; its fds are hidden from the user — "holder unknown") makes
+the preflight refuse (`refusing to start an -i run while the pacman database
+lock is busy`) and the fixtures' install assertions die. Lock windows are
+transient, so the collision is probabilistic.
+
+**Fix.** Operational: never run the battery while a live `-i`/`-ia` build is
+active — run it in the gaps between runs. Queued hardening: fixture-side
+`pacman-conf` stub returning a fixture-local DBPath, so the lock preflight
+reads a stub lock (the repo's "a stub, not a test knob" idiom).
+
+**Durable rule.** A red battery beside a live install run proves nothing
+about the tree; classify failures against `db.lck` first. One green battery
+in a gap beats five racy ones.
+
+## 2026-10-06 — run #35's two compile walls: whiptcl vs Tcl 9's opaque Tcl_Interp; tkUnixFont vs const-preserving strchr
+
+**Symptom.** Run #35 died at 134/653 on two recipes within minutes of
+reaching them: `libnewt` (`whiptcl.c`: 13× `invalid use of incomplete typedef
+'Tcl_Interp'`, `interp->result`/`interp->freeProc`/`Tcl_FreeResult`) and `tk`
+(`tkUnixFont.c:1938`: `assignment of read-only location '*(const char
+*)strchr(fallback, 45)'`).
+
+**Root cause.** Two upstream-vs-toolchain gaps on the current stack: (1) the
+tcl 9.0.1 wave (c866b48) made `Tcl_Interp` opaque — whiptcl.c is written
+against the Tcl 8 interp-field API (the recipe's `USE_INTERP_RESULT` echo and
+`Makefile.in` sed were already dead weight: configure injects the define
+itself, and the `tcl8.4` strings live in `configure.ac`); (2) the snapshot
+GCC's const-preserving `strchr` builtin rejects the write through
+`strchr()` on a `const char *fallback` (writable `XListFonts` memory).
+
+**Fix.** `packages/stable/libnewt/whiptcl-tcl9.patch` ports every site to the
+public `Tcl_SetResult`/`Tcl_ResetResult` API (8.6- and 9-compatible), dead
+config dropped, pkgrel 4→5; `packages/stable/tk/tk-strchr-const.patch` routes
+the write through an explicit `char *` cast, pkgrel 1→2 (c7b6842).
+
+**Validation.** Real `makepkg` builds of both in an isolated clone (libnewt
+0.52.25-5, tk 9.0.1-2); extracted `whiptcl.so` links `libtcl9.0.so` with zero
+libtcl8.6 refs (the tcl-wave acceptance item); `git grep` finds no other
+tracked recipe carrying the legacy interp API.
+
+**Durable rule.** Compile walls are invisible to `--nobuild` screening — only
+a real compile proves a C-level port. When a soname wave lands (tcl 8.6→9),
+the *extensions* against the removed API are the hidden victims: grep the
+API, don't wait for the run to find it.
+
+## 2026-10-06 — version-sync batch (53 recipes) + the pkgrel floor version sync makes impossible
+
+**Symptom.** The full-build workspace accumulated 101 uncommitted
+version-sync rewrites (48 stable pkgver/pkgrel moves tracking the Arch repos;
+github-provider pkgver advances for llvm-git, gnutls-git, noctalia-git,
+nss-git, pcre2-git); batching them turned `tests/noctalia-pgo.sh` red:
+"pkgrel was not bumped for the 2026-09-23 PGO fix (pkgrel=1)".
+
+**Root cause.** The github version-sync provider resets `pkgrel` to 1
+whenever it advances `pkgver` (`lib/sources.fish` `new_pkgrel` path) —
+standard makepkg versioning. The fixture's `pkgrel >= 2` ratchet (pinning the
+PGO fix's release bump) therefore cannot survive any noctalia-git version
+advance and could never pass again.
+
+**Fix.** Batched the rewrites into canonical with five `-git` `.SRCINFO`s
+regenerated (498a67d); retired the pkgrel floor from the fixture — the fix's
+content greps and the PKGBUILD/.SRCINFO sync checks are the durable half of
+that contract and stay.
+
+**Durable rule.** A pkgrel floor is unsound on any version-synced recipe:
+pin the fix's *content*, never its release number. (The `cmd | tail` that hid
+this fixture's rc=1 for two runs is the same old lesson: capture the
+fixture's own exit status.)
+
+## 2026-10-06 — upstream-host outage class: man-db/unzip/apr-util, and the .asc-mirror pre-seed
+
+**Symptom.** Runs walled at man-db, unzip and apr-util with fetch failures
+(`curl (56)/(35) unexpected eof`) that retried into the same wall.
+
+**Root cause.** Host TLS flakiness is per-destination: gnupg.org,
+www/archive.apache.org and friends flake independently, and a `.sig`/`.asc`
+fetched from a different host than its tarball is not a wall to retry into —
+it is a mirror-selection problem.
+
+**Fix/lesson.** Mirror-seed from the healthy sibling host (`apache.org` works
+when `www/archive.apache.org` flakes), enforce pin match, and pre-seed the
+detached `.asc`/`.sig` alongside the tarball in the mirror so
+`makepkg --verifysource` verifies without touching the flaky host. Never
+`--skippgpcheck`.
+
+**Durable rule.** One outage wall is a mirror seed, not a recipe fix; record
+which host flaked and which mirror answered.
+
+## 2026-10-06 — run #28's install refusal: stock rust's versioned llvm-libs pin
+
+**Symptom.** `llvm-git`/`llvm-libs-git` built and the wave installed, but the
+run's install step refused on stock `rust`: it pins `llvm-libs=23.1.1`, which
+the 24.0.0 wave's `llvm-libs-git` cannot satisfy — stock `rust` (a leaf)
+became the sole blocker.
+
+**Root cause.** A stock package with a *versioned* pin on a wave-coupled
+library survives every rebuild of that library and turns the next install
+transaction into a refusal.
+
+**Fix/lesson.** Stock `rust` removed (the set's `rust-git` replaces it);
+pre-flight an ABI wave by scanning installed stock packages for versioned
+pins on the wave's libraries.
+
+**Durable rule.** Versioned pins on wave-coupled libraries are wave blockers
+in disguise — find them before the wave, not inside it.
+
 ## 2026-10-06 — run #31's raw pacman wall: the Layer-3 gate could not see a Stock→house swap
 
 **Symptom.** Run #31 (the `bzip2-git` swap wall): the recipe is a Class A swap
