@@ -50,7 +50,12 @@ build() {
     # harfbuzz is dlopen'ed at runtime (Arch convention) — also breaks the
     # freetype <-> harfbuzz build cycle for this git batch
     -D harfbuzz=dynamic
-    -D tests=false
+    # arch-meson's --auto-features enabled turns every feature option on;
+    # freetype's hvf feature then errors on non-Apple (meson.build:429) and
+    # tests (a feature, not a boolean) rejects a literal false — both were
+    # latent until run #15 (2026-10-06)
+    -D hvf=disabled
+    -D tests=disabled
   )
 
   arch-meson freetype build "${meson_options[@]}"
