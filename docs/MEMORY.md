@@ -612,6 +612,27 @@
     error names — check `ldd`/loader errors before touching any config.
     Rebuild+install the direct victims (all in the set's build order); never
     symlink old soname → new.
+31. **A `?signed` source must pin a signed ref, and pins must name the
+    ACTUAL signer** (2026-10-06 freetype2-git): makepkg verifies the
+    *resolved* ref — `#tag=...?signed` verifies the tag, while a floating
+    `git+URL?signed` verifies the unsigned tip commit (SIGNATURE NOT FOUND).
+    Upstream that signs only tags cannot back a floating source: per the
+    owner trust ruling 2026-10-06, CONTRIBUTING #1 is scoped so that
+    floating `-git` sources carry plain `git+URL` + `b2sums=('SKIP')` (the
+    family norm), while every pinned release artifact and `#tag=` source
+    keeps `#signed`/`?signed` always. Second half: `validpgpkeys` must name
+    the key that actually signed — run `git verify-tag`/`gpg --verify`
+    FIRST and compare against the pin; AUR-sourced pins can be plain wrong
+    (freetype pinned E3067470…; the real signer of VER-2-13-3..VER-2-14-3
+    is DSA 58E0C111…), and a new signer is confirmed against publisher
+    material before pinning (CONTRIBUTING #2–4). Third half, same incident:
+    `arch-meson` passes `--auto-features enabled`, so every meson *feature*
+    option defaults ON — a platform-gated feature (freetype `hvf`) errors
+    on Linux, and `-D tests=false` is invalid for a feature-type option
+    (choices: enabled/disabled/auto). Validate `-D` values against
+    `meson_options.txt` types before the first real build; red/green
+    rehearsal at the configure seam (extract the pinned ref from SRCDEST,
+    run the recipe's exact meson args) catches both in seconds.
 
 ## 2. Workspace overview
 

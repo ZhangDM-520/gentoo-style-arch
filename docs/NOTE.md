@@ -37,6 +37,42 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-06 — freetype2-git: `?signed` on a floating source, then auto-features vs platform gates
+
+**Symptom.** Runs #14 and #15 both wall at 73/652 on `freetype2-git`: first
+`freetype git repo ... SIGNATURE NOT FOUND` at fetch+verify, then (after the
+source fix) a meson option error `Value "false" ... for option "tests"`.
+
+**Root cause.** Two independent recipe bugs, both latent since ingestion
+(719112d — the recipe never had a real fetch+verify+configure before this
+campaign): (a) `git+URL?signed` on a *floating* source makes makepkg verify
+the checked-out tip commit, and upstream signs only `VER-*` tags — the
+recipe's `validpgpkeys` pin (E3067470…, "fingerprint from the AUR reference
+recipe") never signed those tags; the actual signer is Werner Lemberg's DSA
+key 58E0C111E39F5408C5D3EC76C1A60EACE707FDA5 (VER-2-13-3..VER-2-14-3 all
+signed by it; confirmed via `git verify-tag` and publisher material —
+freetype.org/download.html, Gentoo's `openpgp-keys-wernerlemberg`); (b)
+`arch-meson` passes `--auto-features enabled`, turning every *feature*
+option on: `-D tests=false` is invalid (`tests` is a feature —
+enabled/disabled/auto) and the platform-gated `hvf` feature errors on
+non-Apple (meson.build:429). Bug (a) masked (b).
+
+**Fix.** Floating `git+` source with no `?signed` — the -git family norm
+(70+ floating siblings never had it) — under the owner trust ruling
+2026-10-06 (the set's sources are trusted; dropping `?signed` on floating
+VCS sources is permitted, pinned release artifacts keep `#signed` always);
+the wrong pin retired with the confirmed signer documented for future
+`#tag=...?signed` pinning; `-D hvf=disabled -D tests=disabled` added.
+
+**Validation.** Red/green rehearsal at the failing seam: HEAD extracted from
+the SRCDEST mirror, the recipe's exact meson args run — red reproduces run
+#15's option error verbatim; green (both fixes) configures through to
+`Generating build.ninja`. `bash -n`; `.SRCINFO` regenerated; live gate is
+the next run passing 73/652.
+
+**Durable rules.** MEMORY rule 31 (signed-ref scope + pin-the-actual-signer
++ auto-features/platform-gate trap).
+
 ## 2026-10-06 — noctalia unlock "PAM start failed" was an ICU soname skew, not PAM
 
 **Symptom.** Noctalia's lock-screen unlock began failing with "PAM start

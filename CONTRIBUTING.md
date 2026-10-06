@@ -50,7 +50,11 @@ belong in `docs/NOTE.md`; `docs/MEMORY.md` §5 holds a live decision.
 ### Source verification and signing keys
 
 1. Never disable verification with `--skippgpcheck` or remove `#signed` from a
-   source to work around a failure.
+   source to work around a failure. Scope (owner ruling 2026-10-06): a
+   *floating* VCS source (`git+URL` with no ref) whose upstream signs only
+   tags carries no `?signed` to drop — such recipes use the plain family
+   form (MEMORY rule 31); `#signed`/`?signed` remains mandatory on every
+   pinned release artifact and `#tag=` source.
 2. A tag can be signed by a signing **subkey**, while the upstream
    `validpgpkeys` array lists only the **primary** fingerprint. Compare
    `git verify-tag <tag>` (or `gpg --verify`) against the maintainer's
