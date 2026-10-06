@@ -1356,6 +1356,18 @@ constant, not a baked path).
   `check()` here anyway). Leave a full suite with documented skew rather than
   deleting tests to make `check()` green.
 
+- **A `checkdepends`-only test dep that upstream *configures* against walls
+  `build()`** (2026-10-06, `bzip2-git` run #30): upstream's
+  `tests/meson.build` hard-errors at configure without pytest, but
+  `BUILDENV=(!check)` means makepkg never installs `checkdepends` — the
+  probe dies in `build()` before `check()` exists. That is the boundary
+  against the shtab rule above: delete a suite only when its configure-time
+  requirement makes `build()` impossible and no option can disable it
+  (validate `-D tests=…` against `meson_options.txt` first — bzip2 has no
+  `tests` option at all, so the trim is `sed "/subdir('tests')/d"` at the
+  inclusion point, dropping `check()`+`checkdepends` in the same change,
+  libei-git shape). A suite that merely fails inside `check()` stays.
+
 - **`cargo test` integration suites mis-resolve test binaries on this host's
   rust-git toolchain** (2026-09-28): the binaries land in
   `build/<pkg>/<hash>/out/` instead of `deps/`, which breaks harnesses that

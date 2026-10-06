@@ -37,6 +37,45 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-06 — run #30: bzip2-git's upstream test probe dies at CONFIGURE, not at check()
+
+**Symptom.** Run #30 (first reach of `bzip2-git`, #131/653) failed 13s in:
+`bzip2/tests/meson.build:6:2: ERROR: Problem encountered: pytest for
+python3 is required to run the tests` — from `build()`, even though the
+recipe declares `checkdepends=('python-pytest')`.
+
+**Root cause.** Two facts collide. (1) The house build env runs
+`BUILDENV=(!check …)`, so makepkg never installs `checkdepends` — and the
+upstream `tests/meson.build` runs `python3 -m pytest --help` as a hard
+`error()` probe inside the **configure** step, before check() is ever
+reached. (2) upstream bzip2 offers no meson `tests` option to turn the
+suite off (`meson_options.txt` has only `docs`), and `subdir('tests')` is
+included unconditionally — so no `-D` flag can avoid the probe (the
+freetype rule: validate `-D` values against `meson_options.txt` types —
+here the option simply does not exist).
+
+**Fix.** Trim the suite at its inclusion point:
+`sed -i "/subdir('tests')/d" bzip2/meson.build` in a new `prepare()`,
+and drop `check()` + `checkdepends` together (the libei-git
+"test-only deps dropped with the tests" shape; the suite trains nothing —
+no PGO phase in this recipe). No test-only Python stack reaches the build
+env, and a check-enabled environment is unaffected.
+
+**Validation.** Red: run #30 console/lane log (`bzip2-git.log`, meson
+ERROR above). Green: real `makepkg -f` of `bzip2-git` in the canonical
+tree — configure passes the former wall, full build + package completes
+(`bzip2-git r181.66c46b8-1`), `bash -n` clean, `.SRCINFO` regenerated
+(checkdepends line gone), fixture battery 55/55.
+
+**Rule.** A `checkdepends`-only test dependency is dead weight whenever
+upstream *configures* against it: with `!check` the dep is never installed,
+so any configure-time probe (meson `run_command`/`error()` gate, autotools
+`PKG_CHECK_MODULES` on a test lib) walls `build()`. Decide per recipe: move
+the dep to `makedepends` if the suite is wanted, or trim the suite at its
+inclusion point and drop `check()`/`checkdepends` in the same change. And
+before reaching for `-D tests=…`, read `meson_options.txt` — an option that
+does not exist cannot disable anything.
+
 ## 2026-10-06 — run #29: libgcrypt's multi-signature .sig needs EVERY signer pinned
 
 **Symptom.** Run #29 walled at `libgcrypt` (0m09s): `ERROR: One or more PGP

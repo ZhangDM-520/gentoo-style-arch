@@ -5,7 +5,6 @@ pkgbase = bzip2-git
 	url = https://gitlab.com/bzip2/bzip2
 	arch = x86_64
 	license = custom
-	checkdepends = python-pytest
 	makedepends = git
 	makedepends = meson
 	depends = bash

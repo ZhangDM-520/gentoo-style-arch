@@ -12,7 +12,6 @@ url="https://gitlab.com/bzip2/bzip2"
 license=('custom')
 depends=('bash' 'glibc')
 makedepends=('git' 'meson')
-checkdepends=('python-pytest')
 provides=("bzip2=$pkgver" 'libbz2.so')
 conflicts=('bzip2')
 source=("git+https://gitlab.com/bzip2/bzip2.git")
@@ -38,8 +37,15 @@ build() {
   meson compile -C build -j "${GSA_BUILD_JOBS:-$(nproc)}"
 }
 
-check() {
-  meson test -C build --print-errorlogs
+prepare() {
+  # trim: upstream includes subdir('tests') unconditionally and
+  # tests/meson.build hard-errors at CONFIGURE time when python-pytest is
+  # absent (there is no meson 'tests' option to turn it off), while the
+  # house build env runs no checks and installs no checkdepends. The suite
+  # trains nothing (no PGO phase here), so the test subdir is dropped at
+  # its inclusion point together with check()/checkdepends — the libei-git
+  # "test-only deps dropped with the tests" shape.
+  sed -i "/subdir('tests')/d" bzip2/meson.build
 }
 
 package() {
