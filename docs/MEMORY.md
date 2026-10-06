@@ -1279,6 +1279,13 @@ constant, not a baked path).
 
 ## 6. Pitfall digest (full details: NOTE.md sections of same dates)
 
+- **Never pin a tcl-versioned install path in `package()`** (2026-10-07
+  sqlite): tcl 9's `TCL_LIBRARY` is the pseudo-path `zipfs:/lib/tcl/tcl_library`,
+  so an upstream `install-tcl` wrote a literal `$pkgdir/zipfs:/…` tree and the
+  recipe's `mv usr/lib/tcl8.6/*` glob found nothing — a tcl-wave wall in a
+  PACKAGING step, not a compile. Derive the location from `tclConfig.sh`/
+  `TCL_PACKAGE_PATH` (tcl 9: `/usr/lib`) or locate the payload by content
+  (`find -name pkgIndex.tcl`) and move it, pruning the scaffolding fail-loud.
 - **`makepkg` is a WRITER of the recipe it touches** (2026-10-06): `--nobuild`
   still runs `pkgver()` and rewrites `pkgver=` in place (`/usr/bin/makepkg:190`
   `update_pkgver`) — a "read-only" screening sweep dirtied 12 tracked

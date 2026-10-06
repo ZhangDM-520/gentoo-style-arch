@@ -37,6 +37,39 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-07 — Run #36 `sqlite` packaging wall: tcl 9's `zipfs:` pseudo-path broke the split-out glob
+
+**Symptom.** Run #36 died at `sqlite` (134/653) in the PACKAGING phase:
+`package_sqlite()`'s `mv "$pkgdir"/usr/lib/tcl8.6/sqlite*` could not stat its
+glob — the tcl extension never landed under `/usr/lib/tcl8.6/`. Note the wall
+class: tcl-wave victims die in packaging steps too, not only at compile time.
+
+**Root cause.** tcl 9.0.1's `TCL_LIBRARY` is the pseudo-path
+`zipfs:/lib/tcl/tcl_library`, so upstream's `install-tcl` wrote a literal
+`$pkgdir/zipfs:/lib/tcl/tcl_library/tcl9.0/sqlite3.53.4/` directory tree
+instead of the tcl 8.6-era `/usr/lib/tcl8.6/` location the recipe's glob
+assumed. The runtime destination for the split (`/usr/lib/sqlite3.53.4/`) was
+never wrong — `TCL_PACKAGE_PATH='/usr/lib'` (confirmed via `tclsh` auto_path),
+which is why `package_sqlite-tcl()` kept working.
+
+**Fix.** `packages/stable/sqlite/PKGBUILD`: the split-out now locates the
+extension by content — `find "$pkgdir" -name pkgIndex.tcl -printf '%h\n'
+-quit` — moves that directory to `$srcdir/tcl`, prunes the emptied `zipfs:`
+scaffolding with `find "$pkgdir" -depth -type d -empty -delete`, and fails
+loud if the extension was not found. pkgrel 2→3, `.SRCINFO` regenerated.
+
+**Validation.** Real package build in the isolated clone (rc=0): all four
+splits carry zero `zipfs:` members; `sqlite` holds no tcl files;
+`sqlite-tcl` holds `usr/lib/sqlite3.53.4/{pkgIndex.tcl,libtcl9sqlite3.53.4.so}`
+plus `sqltclsh`; `sqlite-analyzer` holds `sqlite3_analyzer`; `ldd` of
+sqltclsh and sqlite3_analyzer resolves `libtcl9.0.so` with ZERO `libtcl8.6`
+hits (tcl-wave acceptance item cleared).
+
+**Rule.** Never pin a tcl-versioned install path in `package()` — derive it
+from `tclConfig.sh`/`TCL_PACKAGE_PATH` or locate the payload by content
+(`pkgIndex.tcl`) and move it. TCL_LIBRARY may be a pseudo-path (`zipfs:…`);
+any upstream `install-tcl` step can materialise it literally under `$pkgdir`.
+
 ## 2026-10-06 — `-s` skip churn on flaky networks and git-pull mtimes: `--skip-built` + `--vcs-skip-tolerance`
 
 **Symptom.** A `git pull` that only bumps the PKGBUILD's mtime, or a network
