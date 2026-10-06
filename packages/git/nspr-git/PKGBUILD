@@ -7,7 +7,7 @@
 
 pkgname=nspr-git
 pkgver=4.39beta1.r5.g3fa8e4d81657
-pkgrel=1
+pkgrel=2
 pkgdesc="Netscape Portable Runtime (hg build)"
 arch=('x86_64')
 url="https://developer.mozilla.org/en-US/docs/Mozilla/Projects/NSPR"
@@ -25,9 +25,11 @@ conflicts=('nspr')
 # so the derived $pkgver may sort below stock nspr 4.40 — versioned nspr deps
 # in consumers may need review (recorded in the classa-7 notes).
 source=('nspr::hg+https://hg.mozilla.org/projects/nspr'
-        '0002-configure.in-Remove-assembly-files-from-build.patch')
+        '0002-configure.in-Remove-assembly-files-from-build.patch'
+        '0003-linux-x86_64-use-GCC-builtins-for-atomics.patch')
 b2sums=('SKIP'
-        'eec760670dfeac2d27cd41573bb97ee4e8251c54d80f2404bc4e32058511a3c63f37fe9f37bc6348a7d3cf0eaf5440bec1479ec38141d64d2e61137b67912be3')
+        'eec760670dfeac2d27cd41573bb97ee4e8251c54d80f2404bc4e32058511a3c63f37fe9f37bc6348a7d3cf0eaf5440bec1479ec38141d64d2e61137b67912be3'
+        'a909794c63484ee473d67137735eee56b097cc8cfa24b5e616e552e3f0143f088f977bb1173fd0875cb232bc27622dc76dd6dc520228f4fda9451748bfb73e03')
 
 pkgver() {
   cd nspr
@@ -42,10 +44,15 @@ prepare() {
   # From stock nspr (gitlab.archlinux.org/archlinux/packaging/packages/nspr):
   # remove obsolete hand-written assembly from the build. Still applies to hg
   # tip (dry-run 2026-10).
-  # Stock's 0001-linux-prefer-GCC-provided-atomics...patch is DROPPED: it no
-  # longer applies to tip because tip already uses the GCC builtins it adds
-  # ("Use GCC built-in functions" in pr/include/md/_linux.h) — merged upstream.
+  # Stock pairs the asm removal with 0001-linux-prefer-GCC-provided-atomics
+  # ...patch (the callers in pr/include/md/_linux.h must stop referencing the
+  # asm symbols). hg tip merged the GCC builtins for most arch blocks but NOT
+  # __x86_64__ — dropping the asm alone shipped a libnspr4.so with undefined
+  # _PR_x86_64_Atomic* and walled nss-git's strict link (run #16, 2026-10-06).
+  # 0003 completes the pairing for x86_64 in the same __sync_* style as tip's
+  # own loongarch/or1k/powerpc64 blocks.
   patch -Np1 -i ../0002-configure.in-Remove-assembly-files-from-build.patch
+  patch -Np1 -i ../0003-linux-x86_64-use-GCC-builtins-for-atomics.patch
 
   autoreconf -fvi
 }
