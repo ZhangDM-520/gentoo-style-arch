@@ -87,10 +87,10 @@ prepare() {
   fi
 
 # Update minted for Python 3.14 compatibility
-  patch -p1 < minted-3.8.patch
+  patch -p1 < minted-3.8.patch || return 1
 
 # Customize configuration
-  patch -d texmf-dist/web2c -p0 < texmf.cnf.patch
+  patch -d texmf-dist/web2c -p0 < texmf.cnf.patch || return 1
 
   # Copy files where format and maps will be extracted from
   cp texmf-dist/web2c/{fmtutil.cnf,updmap.cfg,texmf.cnf} .

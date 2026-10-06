@@ -1,7 +1,7 @@
 # Rationale: Mark pacman-owned trees so every update surface refuses in-place mutation, reports pacman remediation, and exposes the packaged version without inventing a source SHA.
 
 diff --git a/hermes_cli/config.py b/hermes_cli/config.py
-index 49a2980a..a5885516 100644
+index 4b839755a9c..1e650c498eb 100644
 --- a/hermes_cli/config.py
 +++ b/hermes_cli/config.py
 @@ -253,7 +253,9 @@ def get_managed_update_command() -> Optional[str]:
@@ -33,7 +33,7 @@ index 49a2980a..a5885516 100644
  
  
 diff --git a/hermes_cli/steward.py b/hermes_cli/steward.py
-index 5db757f0..6724f328 100644
+index 5db757f0e23..6724f32885b 100644
 --- a/hermes_cli/steward.py
 +++ b/hermes_cli/steward.py
 @@ -30,6 +30,7 @@ STEWARD_DESKTOP = "desktop-app"
@@ -77,7 +77,7 @@ index 5db757f0..6724f328 100644
      if message is not None:
          return message
 diff --git a/hermes_cli/update_contract.py b/hermes_cli/update_contract.py
-index 18c64ade..a7fc7b0b 100644
+index 18c64ade20f..a7fc7b0bebe 100644
 --- a/hermes_cli/update_contract.py
 +++ b/hermes_cli/update_contract.py
 @@ -12,7 +12,9 @@ from dataclasses import dataclass
@@ -121,7 +121,7 @@ index 18c64ade..a7fc7b0b 100644
          logger.debug("Install-method admission check failed: %s", exc)
      return None
 diff --git a/hermes_cli/update_inventory.py b/hermes_cli/update_inventory.py
-index a5762a51..eb110841 100644
+index fac8b12a26c..af297cc2b36 100644
 --- a/hermes_cli/update_inventory.py
 +++ b/hermes_cli/update_inventory.py
 @@ -36,7 +36,7 @@ class RuntimeRecord:
@@ -134,7 +134,7 @@ index a5762a51..eb110841 100644
      update_mechanism: str = "hermes update"
      expected_sha: Optional[str] = None    # current checkout HEAD (pre-pull)
 diff --git a/hermes_cli/version_info.py b/hermes_cli/version_info.py
-index fd0c38ff..15c36531 100644
+index fd0c38ffe8a..15c36531139 100644
 --- a/hermes_cli/version_info.py
 +++ b/hermes_cli/version_info.py
 @@ -32,7 +32,7 @@ class VersionInfo:
@@ -183,10 +183,10 @@ index fd0c38ff..15c36531 100644
  
      commit_date = data.get("commitDate")
 diff --git a/hermes_cli/web_routers/actions.py b/hermes_cli/web_routers/actions.py
-index 966662c5..4d198eb1 100644
+index 661379ac1cd..88142bf4c1a 100644
 --- a/hermes_cli/web_routers/actions.py
 +++ b/hermes_cli/web_routers/actions.py
-@@ -60,6 +60,7 @@ _MANAGED_EXTERNALLY_MESSAGE = "Hermes updates are managed outside this dashboard
+@@ -61,6 +61,7 @@ _MANAGED_EXTERNALLY_MESSAGE = "Hermes updates are managed outside this dashboard
  _UPDATE_REFUSAL_ERROR_CODES = {
      "docker": "docker_update_unsupported", "image-marker": "docker_update_unsupported",
      "image-marker-invalid": "docker_update_unsupported", "apt": "apt_update_required",
@@ -194,7 +194,7 @@ index 966662c5..4d198eb1 100644
      "nix": "nix_update_unsupported",
  }
  
-@@ -257,6 +258,10 @@ async def update_hermes():
+@@ -277,6 +278,10 @@ async def update_hermes():
  _NON_APPLYABLE_MESSAGES = {
      "docker": format_docker_update_message,
      "apt": lambda: "Hermes is managed by Termux APT; run `pkg upgrade hermes-agent`.",
@@ -205,7 +205,7 @@ index 966662c5..4d198eb1 100644
  }
  
  
-@@ -264,7 +269,7 @@ _NON_APPLYABLE_MESSAGES = {
+@@ -284,7 +289,7 @@ _NON_APPLYABLE_MESSAGES = {
  async def check_hermes_update(force: bool = False, profile: Optional[str] = None):
      """Report whether a Hermes update is available, without applying it.
  
@@ -215,7 +215,7 @@ index 966662c5..4d198eb1 100644
      null = check could not run), update_available, can_apply (git only — the
      dashboard button can apply in place), update_command, message (guidance for
 diff --git a/tests/hermes_cli/test_cmd_update_docker.py b/tests/hermes_cli/test_cmd_update_docker.py
-index a136a759..ef3ba652 100644
+index a136a7595b7..ef3ba652d92 100644
 --- a/tests/hermes_cli/test_cmd_update_docker.py
 +++ b/tests/hermes_cli/test_cmd_update_docker.py
 @@ -50,6 +50,24 @@ def test_cmd_update_in_docker_prints_guidance_and_exits(
@@ -244,7 +244,7 @@ index a136a759..ef3ba652 100644
  
  # ---------- Non-Docker installs unaffected ----------
 diff --git a/tests/hermes_cli/test_dashboard_admin_endpoints.py b/tests/hermes_cli/test_dashboard_admin_endpoints.py
-index a201380f..61eef847 100644
+index a201380ffac..61eef847d0c 100644
 --- a/tests/hermes_cli/test_dashboard_admin_endpoints.py
 +++ b/tests/hermes_cli/test_dashboard_admin_endpoints.py
 @@ -826,6 +826,20 @@ class TestUpdateCheckEndpoint:
@@ -269,7 +269,7 @@ index a201380f..61eef847 100644
      def test_managed_runtime_dashboard_is_not_applyable(self, monkeypatch):
  
 diff --git a/tests/hermes_cli/test_pip_install_detection.py b/tests/hermes_cli/test_pip_install_detection.py
-index f88e04ad..c0be6b20 100644
+index f88e04ad109..c0be6b2067c 100644
 --- a/tests/hermes_cli/test_pip_install_detection.py
 +++ b/tests/hermes_cli/test_pip_install_detection.py
 @@ -30,6 +30,18 @@ def test_code_scoped_stamp_wins_over_home_stamp(tmp_path):
@@ -297,7 +297,7 @@ index f88e04ad..c0be6b20 100644
  
 -
 diff --git a/tests/hermes_cli/test_steward_detection.py b/tests/hermes_cli/test_steward_detection.py
-index 890f07aa..258bd163 100644
+index 890f07aadc4..258bd163568 100644
 --- a/tests/hermes_cli/test_steward_detection.py
 +++ b/tests/hermes_cli/test_steward_detection.py
 @@ -17,9 +17,11 @@ from hermes_cli.steward import (
@@ -333,7 +333,7 @@ index 890f07aa..258bd163 100644
          root = tmp_path / "checkout"
          root.mkdir()
 diff --git a/tests/hermes_cli/test_update_contract.py b/tests/hermes_cli/test_update_contract.py
-index b24bf2fd..9319aed6 100644
+index b24bf2fd3cf..9319aed64fe 100644
 --- a/tests/hermes_cli/test_update_contract.py
 +++ b/tests/hermes_cli/test_update_contract.py
 @@ -147,6 +147,42 @@ def test_admission_nix_refuses(tmp_path, monkeypatch):
@@ -380,7 +380,7 @@ index b24bf2fd..9319aed6 100644
  # Refusal receipt
  # ---------------------------------------------------------------------------
 diff --git a/tests/hermes_cli/test_update_inventory.py b/tests/hermes_cli/test_update_inventory.py
-index d798e40f..a5e25e5b 100644
+index d798e40f759..a5e25e5b3ba 100644
 --- a/tests/hermes_cli/test_update_inventory.py
 +++ b/tests/hermes_cli/test_update_inventory.py
 @@ -77,6 +77,17 @@ class TestCollectInventory:
@@ -402,7 +402,7 @@ index d798e40f..a5e25e5b 100644
          monkeypatch.setattr("gateway.status._pid_exists", lambda pid: False)
          plan = ui.collect_runtime_inventory()
 diff --git a/tests/hermes_cli/test_version_info.py b/tests/hermes_cli/test_version_info.py
-index c0dddeda..1258e210 100644
+index c0dddeda20f..1258e210577 100644
 --- a/tests/hermes_cli/test_version_info.py
 +++ b/tests/hermes_cli/test_version_info.py
 @@ -78,6 +78,28 @@ def test_stamp_version_info_reads_nix_stamp(tmp_path, monkeypatch):
@@ -435,10 +435,10 @@ index c0dddeda..1258e210 100644
      stamp = {"commit": "d" * 40, "source": "ci", "distribution": "docker", "updateMechanism": "external"}
      stamp_file = tmp_path / "install-stamp.json"
 diff --git a/tests/hermes_cli/test_web_server.py b/tests/hermes_cli/test_web_server.py
-index 3bb104ea..8988f43c 100644
+index 18523ab289a..73a1dc68abf 100644
 --- a/tests/hermes_cli/test_web_server.py
 +++ b/tests/hermes_cli/test_web_server.py
-@@ -1370,6 +1370,35 @@ CONFIG_SCHEMA = ProviderConfigSchema(
+@@ -1454,6 +1454,35 @@ CONFIG_SCHEMA = ProviderConfigSchema(
          assert check_data["can_apply"] is False
          assert check_data["update_command"] == data["update_command"]
  
@@ -471,6 +471,6 @@ index 3bb104ea..8988f43c 100644
 +        assert check_data["update_available"] is False
 +        assert check_data["update_command"] == data["update_command"]
 +
-     def test_update_status_recovers_completed_result_after_dashboard_restart(self, monkeypatch, tmp_path):
+     def test_update_hermes_spawns_with_action_id(self, monkeypatch):
+         import hermes_cli.web_server as web_server
  
-         action_id = "c" * 32

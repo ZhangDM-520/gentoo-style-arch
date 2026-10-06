@@ -37,6 +37,71 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-07 — `hermes-agent-git` prepare() drift in `0001`/`0002`: upstream refactors broke two patch hunks
+
+**Symptom.** `makepkg --nobuild` aborted in `prepare()`:
+`error: patch failed: tools/memory_tool.py:157` → the recipe guard
+`upstream context drift in 0001-unattended-memory-audit.patch`. Latent behind
+it: `0002-pacman-update-policy.patch` had drifted too
+(`tests/hermes_cli/test_web_server.py`) — invisible only because the guard
+aborts at the first failing patch.
+
+**Root cause.** Upstream refactors landed under the patches' context:
+`tools/memory_tool.py` gained `FAILURE_CLASS.set()` lines inside the function
+`0001` deletes and an `_invalid()`/missing-parameter-guard refactor in
+`_memory_tool`; upstream commit `5c3afeee45e` also made `destructive_ops` a
+shared helper of `hermes_cli/write_approval_commands.py`, so `0001` must no
+longer delete it. In `0002`, the neighbouring test was renamed/reworked, so
+its one insertion hunk's trailing context vanished.
+
+**Fix.** Both patches regenerated against current upstream from a scratch
+clone (hunks re-based; `destructive_ops` kept; upstream's `_invalid()` forms
+and `#64291` guard preserved in the merged `_memory_tool` hunk; `0002`'s new
+test re-anchored before `test_update_hermes_spawns_with_action_id`).
+sha256sums and `.SRCINFO` updated. No recipe logic changed.
+
+**Validation.** Scratch-copy `makepkg --nobuild --noconfirm --nodeps`
+(×2, upstream `main` moved under both runs): checksums `Passed`, all five
+patches applied, `prepare()` + `pkgver()` completed. Standalone
+`git apply --check` of the five-patch sequence against a pristine clone: OK.
+
+**Rule.** A patch that deletes upstream code re-encounters every upstream edit
+to that code as context drift. When refreshing, grep the *deleted* symbols for
+new call sites (`destructive_ops`) — refreshing without them yields a patch
+that applies and still breaks the tree. And `git apply --check` a whole patch
+series, not just the named failure: the guard reports only the first wall.
+
+## 2026-10-07 — `texlive-texmf` `minted-3.8.patch` "File to patch" finding: disproven, `-p1` is correct
+
+**Symptom (reported).** The committed diff's headers say
+`Master/texmf-dist/doc/latex/minted/…` while "the extracted tree has no
+`Master/` prefix", so every hunk reports `File to patch:` and is ignored.
+
+**Root cause (of the report).** Wrong-root repro. The diff paths are relative
+to the TeX Live SVN *trunk*, but makepkg never extracts that shape:
+`extract_svn` copies the SRCDEST working copy — named after the URL basename
+(`get_filename`, `source.sh:56`) — into `$srcdir`, so the tree is
+`$srcdir/texmf-dist/{doc,source,tex,web2c}/…`, and `prepare()` runs with
+cwd=`$srcdir` (`run_function`'s default, `makepkg:409-419`). `-p1` strips
+exactly `Master/` and lands on `texmf-dist/…` — which is why the tree having
+no `Master/` prefix is an argument *for* the committed `-p1`, not against it.
+A fixture tree that literally contains `Master/texmf-dist/…` reproduces
+`can't find file to patch` at `-p1`, but that tree cannot occur.
+
+**Fix.** None — changing `-p` or rewriting headers would break the real
+build. Verification is cheap without the tens-of-GB checkout: the six target
+files are read straight out of the SRCDEST working copy (`svn info` = the
+recipe's `_rev=78408`, files in pre-patch state) into a minimal tree shaped
+like `$srcdir`, then `patch --dry-run -pN` for N=0..4: only `-p1` is clean
+(all 6 files), every other level reproduces the reported message.
+
+**Rule.** Prove a patch-level fix against the *extraction* layout
+(`extract_*` in `/usr/share/makepkg/source/` + `get_filename`), not the
+diff's own path shape; the two differ for every VCS source whose checkout
+root is renamed (svn here). Also: `prepare()` has no `set -e`, so a failed
+`patch` mid-function is ignored — both patch call sites now fail loud
+(`|| return 1`), the discarded-status rule the PGO gate exists for.
+
 ## 2026-10-07 — Run #37 `fontconfig-git` wall: the bzip2-git swap dropped the stock `bzip2.pc` name
 
 **Symptom.** Run #37 failed at `fontconfig-git` (4 s, dispatch stopped):
