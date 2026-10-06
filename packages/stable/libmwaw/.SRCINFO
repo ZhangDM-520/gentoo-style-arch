@@ -1,7 +1,7 @@
 pkgbase = libmwaw
 	pkgdesc = Import library for some old mac text documents.
 	pkgver = 0.3.23
-	pkgrel = 1
+	pkgrel = 1.1
 	url = https://sourceforge.net/projects/libmwaw/
 	arch = x86_64
 	license = LGPL-2.1-or-later OR MPL-2.0

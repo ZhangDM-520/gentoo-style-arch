@@ -1,7 +1,7 @@
 pkgbase = libmythes
 	pkgdesc = a simple thesaurus
 	pkgver = 1.2.6
-	pkgrel = 1
+	pkgrel = 1.2
 	epoch = 1
 	url = https://github.com/hunspell/mythes
 	arch = x86_64

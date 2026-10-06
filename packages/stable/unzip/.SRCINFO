@@ -1,7 +1,7 @@
 pkgbase = unzip
 	pkgdesc = For extracting and viewing files in .zip archives
 	pkgver = 6.0
-	pkgrel = 23
+	pkgrel = 23.1
 	url = http://infozip.sourceforge.net/UnZip.html
 	arch = x86_64
 	license = custom

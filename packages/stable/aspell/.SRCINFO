@@ -1,7 +1,7 @@
 pkgbase = aspell
 	pkgdesc = A spell checker designed to eventually replace Ispell
 	pkgver = 0.60.8.2
-	pkgrel = 2
+	pkgrel = 2.1
 	url = http://aspell.net/
 	arch = x86_64
 	license = LGPL-2.0-or-later AND LGPL-2.1-only AND GPL-2.0-or-later AND BSD-2-Clause

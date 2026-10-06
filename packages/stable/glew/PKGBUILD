@@ -4,7 +4,7 @@
 
 pkgname=glew
 pkgver=2.3.1
-pkgrel=1
+pkgrel=1.1
 pkgdesc="The OpenGL Extension Wrangler Library"
 arch=('x86_64')
 url="https://github.com/nigels-com/glew"

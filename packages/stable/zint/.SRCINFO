@@ -1,7 +1,7 @@
 pkgbase = zint
 	pkgdesc = Barcode encoding library supporting over 50 symbologies
 	pkgver = 2.16.0
-	pkgrel = 2
+	pkgrel = 2.1
 	url = https://zint.org.uk/
 	arch = x86_64
 	license = GPL-3.0-or-later

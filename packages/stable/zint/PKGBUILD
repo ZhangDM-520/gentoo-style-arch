@@ -2,7 +2,7 @@
 
 pkgname=zint
 pkgver=2.16.0
-pkgrel=2
+pkgrel=2.1
 pkgdesc='Barcode encoding library supporting over 50 symbologies'
 arch=(x86_64)
 url='https://zint.org.uk/'

@@ -74,7 +74,12 @@ printf 'noctalia-pgo fixture: PASS\n'
 #  3. CLI subcommands must run with WAYLAND_DISPLAY unset (env -u): with it
 #     exported against a dead/foreign socket they probe IPC instead of taking
 #     the CLI path that is guaranteed to exit through main() and flush .gcda.
-#  4. The 2026-09-23 fix bumped pkgrel, and .SRCINFO must stay in sync.
+# 4. .SRCINFO must stay in sync with the PKGBUILD on the version fields.
+#    (The former "pkgrel >= 2" ratchet — the 2026-09-23 fix's release bump —
+#    was retired 2026-10-06: the github version-sync provider resets pkgrel
+#    to 1 whenever it advances pkgver (lib/sources.fish), so no pkgrel floor
+#    can survive a version advance. The fix itself is pinned by the content
+#    greps below, which is the durable half of the contract.)
 #
 # Static inspection only — this never runs a build.
 
@@ -116,9 +121,9 @@ grep -Fq 'env -u WAYLAND_DISPLAY' "$pkgbuild" ||
 grep -Eq 'env -u WAYLAND_DISPLAY "\$bin" --help' "$pkgbuild" ||
     fail "the --help CLI probe does not carry env -u WAYLAND_DISPLAY"
 
-# 4. pkgrel bumped past the pre-incident value, and .SRCINFO in sync with the
-#    PKGBUILD on the version fields (--printsrcinfo does not re-run pkgver(),
-#    so the static values are what both files must carry).
+# 4. .SRCINFO in sync with the PKGBUILD on the version fields (--printsrcinfo
+#    does not re-run pkgver(), so the static values are what both files must
+#    carry).
 # shellcheck disable=SC1090
 read -r pkgver_src pkgrel_src < <(bash -c '
     source "$1" >/dev/null || exit 1
@@ -131,8 +136,6 @@ test -n "$pkgver_src" && test -n "$pkgrel_src" ||
 test -n "$pkgver_info" && test -n "$pkgrel_info" ||
     fail ".SRCINFO did not yield pkgver/pkgrel"
 [[ $pkgrel_src =~ ^[0-9]+$ ]] || fail "pkgrel is not an integer: $pkgrel_src"
-(( pkgrel_src >= 2 )) ||
-    fail "pkgrel was not bumped for the 2026-09-23 PGO fix (pkgrel=$pkgrel_src)"
 [[ $pkgver_src == "$pkgver_info" ]] ||
     fail "pkgver out of sync: PKGBUILD=$pkgver_src .SRCINFO=$pkgver_info"
 [[ $pkgrel_src == "$pkgrel_info" ]] ||

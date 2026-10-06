@@ -1,7 +1,7 @@
 pkgbase = xcb-util-wm
 	pkgdesc = Utility libraries for XC Binding - client and window-manager helpers for ICCCM
 	pkgver = 0.4.2
-	pkgrel = 2
+	pkgrel = 2.1
 	url = https://xcb.freedesktop.org
 	arch = x86_64
 	license = X11-distribute-modifications-variant

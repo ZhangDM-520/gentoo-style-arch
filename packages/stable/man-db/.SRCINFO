@@ -1,7 +1,7 @@
 pkgbase = man-db
 	pkgdesc = A utility for reading man pages
 	pkgver = 2.13.1
-	pkgrel = 2
+	pkgrel = 2.1
 	url = https://gitlab.com/man-db/man-db
 	arch = x86_64
 	license = GPL-2.0-or-later AND GPL-3.0-or-later

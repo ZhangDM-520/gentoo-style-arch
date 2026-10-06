@@ -1,7 +1,7 @@
 pkgbase = xorg-xrandr
 	pkgdesc = Primitive command line interface to RandR extension
 	pkgver = 1.5.4
-	pkgrel = 1
+	pkgrel = 1.1
 	url = https://xorg.freedesktop.org/
 	arch = x86_64
 	groups = xorg-apps

@@ -8,7 +8,7 @@
 pkgbase=openldap
 pkgname=libldap
 pkgver=2.7.1
-pkgrel=1
+pkgrel=1.1
 arch=('x86_64')
 url="https://www.openldap.org/"
 license=('OLDAP-2.8')

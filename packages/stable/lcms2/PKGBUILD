@@ -2,7 +2,7 @@
 
 pkgname=lcms2
 pkgver=2.19.1
-pkgrel=1
+pkgrel=1.1
 pkgdesc='Small-footprint color management engine, version 2'
 arch=('x86_64')
 url='http://www.littlecms.com/'

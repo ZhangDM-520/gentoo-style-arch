@@ -1,7 +1,7 @@
 pkgbase = libexttextcat
 	pkgdesc = N-Gram-Based Text Categorization library primarily intended for language guessing
 	pkgver = 3.4.8
-	pkgrel = 1
+	pkgrel = 1.2
 	url = https://wiki.documentfoundation.org/Libexttextcat
 	arch = x86_64
 	license = BSD-3-Clause

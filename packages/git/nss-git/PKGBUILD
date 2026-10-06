@@ -9,7 +9,7 @@ pkgname=(
   nss-git
   ca-certificates-mozilla-git
 )
-pkgver=3.130beta1.r32.ga83a61b3fb24
+pkgver=3.130beta1.r36.g8b32d1d997f0
 pkgrel=1
 pkgdesc="Network Security Services (hg build)"
 arch=('x86_64')

@@ -1,7 +1,7 @@
 pkgbase = woff2
 	pkgdesc = Web Open Font Format 2 reference implementation
 	pkgver = 1.0.2
-	pkgrel = 6
+	pkgrel = 6.1
 	url = https://github.com/google/woff2
 	arch = x86_64
 	license = MIT

@@ -1,7 +1,7 @@
 pkgbase = xcb-util-keysyms
 	pkgdesc = Utility libraries for XC Binding - Standard X key constants and conversion to/from keycodes
 	pkgver = 0.4.1
-	pkgrel = 5
+	pkgrel = 5.1
 	url = https://xcb.freedesktop.org
 	arch = x86_64
 	license = X11-distribute-modifications-variant

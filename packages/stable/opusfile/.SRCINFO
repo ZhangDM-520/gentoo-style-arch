@@ -1,7 +1,7 @@
 pkgbase = opusfile
 	pkgdesc = Library for opening, seeking, and decoding .opus files
 	pkgver = 0.12
-	pkgrel = 4
+	pkgrel = 4.1
 	url = https://opus-codec.org/
 	arch = x86_64
 	license = BSD

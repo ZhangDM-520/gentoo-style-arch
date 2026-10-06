@@ -1,7 +1,7 @@
 pkgbase = gawk
 	pkgdesc = GNU version of awk
 	pkgver = 5.4.1
-	pkgrel = 1
+	pkgrel = 1.1
 	url = https://www.gnu.org/software/gawk/
 	arch = x86_64
 	license = GPL-3.0-or-later

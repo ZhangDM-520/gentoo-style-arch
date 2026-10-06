@@ -3,7 +3,7 @@
 # The AUR package of the same name was used as a reference only.
 
 pkgname=gnutls-git
-pkgver=3.8.9.r2.g5c1a38f7e
+pkgver=3.8.13.r145.g1e5be97c0
 pkgrel=1
 pkgdesc="A secure communications library implementing the SSL, TLS and DTLS protocols and technologies around them (git build)"
 arch=('x86_64')

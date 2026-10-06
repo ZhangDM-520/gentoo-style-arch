@@ -1,7 +1,7 @@
 pkgbase = bc
 	pkgdesc = An arbitrary precision calculator language
 	pkgver = 1.08.2
-	pkgrel = 1
+	pkgrel = 1.1
 	url = https://www.gnu.org/software/bc/
 	arch = x86_64
 	license = GPL-3.0-only

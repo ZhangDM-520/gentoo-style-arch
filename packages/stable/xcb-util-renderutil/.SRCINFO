@@ -1,7 +1,7 @@
 pkgbase = xcb-util-renderutil
 	pkgdesc = Utility libraries for XC Binding - Convenience functions for the Render extension
 	pkgver = 0.3.10
-	pkgrel = 2
+	pkgrel = 2.1
 	url = https://xcb.freedesktop.org
 	arch = x86_64
 	license = X11-distribute-modifications-variant

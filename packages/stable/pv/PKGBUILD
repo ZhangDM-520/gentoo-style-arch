@@ -5,7 +5,7 @@
 
 pkgname=pv
 pkgver=1.12.0
-pkgrel=1
+pkgrel=1.1
 pkgdesc='A terminal-based tool for monitoring the progress of data through a pipeline'
 arch=(x86_64)
 url="https://www.ivarch.com/programs/$pkgname.shtml"

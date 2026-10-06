@@ -1,7 +1,7 @@
 pkgbase = libpagemaker
 	pkgdesc = a library that parses the file format of Aldus/Adobe PageMaker documents
 	pkgver = 0.0.4
-	pkgrel = 5
+	pkgrel = 5.1
 	url = https://wiki.documentfoundation.org/DLP/Libraries/libpagemaker
 	arch = x86_64
 	license = MPL-2.0

@@ -1,6 +1,6 @@
 pkgbase = nss-git
 	pkgdesc = Network Security Services (hg build)
-	pkgver = 3.130beta1.r32.ga83a61b3fb24
+	pkgver = 3.130beta1.r36.g8b32d1d997f0
 	pkgrel = 1
 	url = https://firefox-source-docs.mozilla.org/security/nss/index.html
 	arch = x86_64
@@ -25,7 +25,7 @@ pkgbase = nss-git
 	b2sums = 6bb59dcc9289916dcbf8fb6d73db0c0cd7582dc12a3aa4e8be19ec62c9ede65fdd9470a2d92ec5a114506b78d2d21b8ae0a1b45a17dc1f90f7d75434a93da510
 
 pkgname = nss-git
-	provides = nss=3.130beta1.r32.ga83a61b3fb24
+	provides = nss=3.130beta1.r36.g8b32d1d997f0
 	provides = libfreebl3.so
 	provides = libnss3.so
 	provides = libnssutil3.so
@@ -38,5 +38,5 @@ pkgname = nss-git
 pkgname = ca-certificates-mozilla-git
 	pkgdesc = Mozilla's set of trusted CA certificates (hg build)
 	depends = ca-certificates-utils>=20181109-3
-	provides = ca-certificates-mozilla=3.130beta1.r32.ga83a61b3fb24
+	provides = ca-certificates-mozilla=3.130beta1.r36.g8b32d1d997f0
 	conflicts = ca-certificates-mozilla
