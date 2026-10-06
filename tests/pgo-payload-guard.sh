@@ -125,7 +125,14 @@ chmod +x "$fixture/bin/sudo"
 
 : >"$fixture/pacman.log"
 export GSA_FAKE_PACMAN_LOG="$fixture/pacman.log"
-temp_root="${TMPDIR:-/tmp}"
+# Parallel-soundness: the payload check extracts into "$TMPDIR"/gsa-pgo-verify.*,
+# so counting that pattern in the shared battery $TMPDIR races against any
+# concurrent fixture exercising the same seam (observed "0 -> 1" flake,
+# 2026-10-06). Give the runs a private $TMPDIR and count there — the
+# assertion is unchanged and unambiguous.
+export TMPDIR="$fixture/tmp"
+mkdir -p "$TMPDIR"
+temp_root="$TMPDIR"
 leftovers_before=$(find "$temp_root" -maxdepth 1 -name 'gsa-pgo-verify.*' 2>/dev/null | wc -l)
 
 # status-returning wrapper over the helper's capture runner
