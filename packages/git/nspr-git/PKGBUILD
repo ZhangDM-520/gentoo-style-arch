@@ -74,6 +74,15 @@ build() {
   )
 
   ./configure "${configure_options[@]}"
+
+  # Stale-object guard (run #17, 2026-10-06): makepkg re-extraction resets
+  # tracked files but untracked in-tree build outputs survive, and nspr's
+  # makefiles have no header dependencies — a header patch change then
+  # relinks stale .o files (compiled against the old headers) into the new
+  # libnspr4.so. Always drop them before building; the cost is one full
+  # recompile of a small package.
+  make clean
+
   make -j"${GSA_BUILD_JOBS:-$(nproc)}" ${SOURCE_DATE_EPOCH:+
     SH_NOW="${SOURCE_DATE_EPOCH}000000"
     SH_DATE="$(date --utc --date="@$SOURCE_DATE_EPOCH" '+%Y-%m-%d %T')"
