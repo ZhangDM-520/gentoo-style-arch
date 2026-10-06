@@ -6,7 +6,7 @@
 
 pkgname=libnewt
 pkgver=0.52.25
-pkgrel=4
+pkgrel=5
 _tclver=8.6
 pkgdesc="Not Erik's Windowing Toolkit - text mode windowing with slang"
 arch=(x86_64)
@@ -35,13 +35,20 @@ provides=(libnewt.so)
 # missing, 0 files differing, only release-generated extras — configure,
 # config.h.in, po/*.mo). Same trust class: checksum-pinned unsigned tarball
 # from a reputable mirror, matching stock's pinning.
-source=("https://deb.debian.org/debian/pool/main/n/newt/newt_$pkgver.orig.tar.xz")
-b2sums=('5dd03ade5ae781a0fb1e3adf658aeef399f173047eb5a8a1a59735f32a5de82213f2d05db1aaf6fec88d80004ce357665921f8867efebb640ef6f9aa82b570e4')
+source=("https://deb.debian.org/debian/pool/main/n/newt/newt_$pkgver.orig.tar.xz"
+        "whiptcl-tcl9.patch")
+b2sums=('5dd03ade5ae781a0fb1e3adf658aeef399f173047eb5a8a1a59735f32a5de82213f2d05db1aaf6fec88d80004ce357665921f8867efebb640ef6f9aa82b570e4'
+        '0ef152442a395b9589e0433af529ee4fa660543786e45de81cc09e953c803008afc6c41b3d227e06edc70ba834c6d70435fbc5b025eda1cd14192915fff38e28')
 
 prepare() {
   cd "newt-$pkgver"
-  echo '#define USE_INTERP_RESULT 1' >> config.h
-  sed -i "s:tcl8.4:tcl$_tclver:" Makefile.in
+  # whiptcl.c targets the Tcl 8 interp->result API, which Tcl 9's opaque
+  # Tcl_Interp removed (the tcl 9.0.1 wave made that build wall); port it to
+  # the public Tcl_SetResult/Tcl_ResetResult API, which both 8.6 and 9 accept.
+  # The former USE_INTERP_RESULT config.h echo and the tcl8.4 Makefile.in sed
+  # were dead weight: configure injects USE_INTERP_RESULT itself and the
+  # tcl8.4 strings live in configure.ac, not Makefile.in.
+  patch -Np1 -i ../whiptcl-tcl9.patch
 
   ./autogen.sh
 }

@@ -1,7 +1,7 @@
 pkgbase = tk
 	pkgdesc = A windowing toolkit for use with tcl
 	pkgver = 9.0.1
-	pkgrel = 1
+	pkgrel = 2
 	url = http://tcl.sourceforge.net/
 	arch = x86_64
 	license = TCL
@@ -12,6 +12,8 @@ pkgbase = tk
 	provides = libtk9.0.so
 	options = staticlibs
 	source = https://downloads.sourceforge.net/sourceforge/tcl/tk9.0.1-src.tar.gz
+	source = tk-strchr-const.patch
 	sha256sums = d6f01a4d598bfc6398be9584e1bab828c907b0758db4bbb351a1429106aec527
+	sha256sums = a799510933f8c32837f7e7444cf016ee5eb4cf0e6caae38dcf854b06f434a5ab
 
 pkgname = tk

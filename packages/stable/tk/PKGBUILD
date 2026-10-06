@@ -3,7 +3,7 @@
 
 pkgname=tk
 pkgver=9.0.1
-pkgrel=1
+pkgrel=2
 pkgdesc='A windowing toolkit for use with tcl'
 arch=(x86_64)
 url="http://tcl.sourceforge.net/"
@@ -16,8 +16,19 @@ options=(staticlibs)
 # house: bare soname provide for the shipped shared library (libtk9.0.so)
 provides=(libtk9.0.so)
 _archive="$pkgname$pkgver"
-source=("https://downloads.sourceforge.net/sourceforge/tcl/$_archive-src.tar.gz")
-sha256sums=('d6f01a4d598bfc6398be9584e1bab828c907b0758db4bbb351a1429106aec527')
+source=("https://downloads.sourceforge.net/sourceforge/tcl/$_archive-src.tar.gz"
+        "tk-strchr-const.patch")
+sha256sums=('d6f01a4d598bfc6398be9584e1bab828c907b0758db4bbb351a1429106aec527'
+            'a799510933f8c32837f7e7444cf016ee5eb4cf0e6caae38dcf854b06f434a5ab')
+
+prepare() {
+	cd "$_archive"
+	# tkUnixFont.c writes through strchr() on a const-qualified fallback name;
+	# modern GCC's const-preserving strchr builtin rejects the assignment, so
+	# the write goes through an explicit char* cast (the buffer is writable
+	# XListFonts memory)
+	patch -Np1 -i ../tk-strchr-const.patch
+}
 
 build() {
 	cd "$_archive/unix"
