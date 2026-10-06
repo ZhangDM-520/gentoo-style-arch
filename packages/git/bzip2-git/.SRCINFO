@@ -1,7 +1,7 @@
 pkgbase = bzip2-git
 	pkgdesc = A high-quality data compression program (git build)
 	pkgver = r181.66c46b8
-	pkgrel = 1
+	pkgrel = 2
 	url = https://gitlab.com/bzip2/bzip2
 	arch = x86_64
 	license = custom

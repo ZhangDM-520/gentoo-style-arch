@@ -5,7 +5,7 @@
 
 pkgname=bzip2-git
 pkgver=r181.66c46b8
-pkgrel=1
+pkgrel=2
 pkgdesc="A high-quality data compression program (git build)"
 arch=('x86_64')
 url="https://gitlab.com/bzip2/bzip2"
@@ -46,6 +46,27 @@ prepare() {
   # its inclusion point together with check()/checkdepends — the libei-git
   # "test-only deps dropped with the tests" shape.
   sed -i "/subdir('tests')/d" bzip2/meson.build
+
+  # soname pin: upstream's meson port versioned the library by libtool rules
+  # (current-age=1) and moved the soname to libbz2.so.1, but the whole
+  # installed ecosystem — including pacman itself (ldd /usr/bin/pacman →
+  # libarchive → libbz2.so.1.0) — links libbz2.so.1.0 and depends on
+  # libbz2.so=1.0-64. Shipping the new soname makes this a soname swap that
+  # nothing can survive: the file libbz2.so.1.0 vanishes, every consumer and
+  # pacman fail to load, and the run cannot even rebuild them (each install
+  # is a pacman call). Keep the ecosystem soname: the file version
+  # (1.0.9) and the public BZ2_* API are unchanged (verified symbol-for-symbol
+  # against 1.0.8; only 11 internal accident-exports disappear behind
+  # gnu_symbol_visibility: 'hidden'). Revisit when the Arch ecosystem itself
+  # moves to bzip2 1.1 / libbz2.so.1.
+  sed -i "s/^bz2_soversion   = bz2_lt_current - bz2_lt_age$/bz2_soversion   = '1.0'/" bzip2/meson.build
+  sed -i "s/format(bz2_soversion, bz2_lt_age, bz2_lt_revision)/format('1', bz2_lt_age, bz2_lt_revision)/" bzip2/meson.build
+  # fail closed: if upstream refactors the versioning block, the seds silently
+  # no-op and the soname swap returns — refuse to build instead.
+  grep -q "^bz2_soversion   = '1.0'" bzip2/meson.build || {
+    echo "bzip2-git: soname pin failed to apply (upstream meson.build changed)" >&2
+    return 1
+  }
 }
 
 package() {
