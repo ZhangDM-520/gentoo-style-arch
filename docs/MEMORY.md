@@ -633,6 +633,19 @@
     `meson_options.txt` types before the first real build; red/green
     rehearsal at the configure seam (extract the pinned ref from SRCDEST,
     run the recipe's exact meson args) catches both in seconds.
+32. **A patch dropped from a set must be checked for what it replaced; gate
+    the SHIPPED symbols, not the build exit code** (2026-10-06 nspr-git):
+    the recipe applied stock's `0002` (removing the atomic asm files from the
+    build) but skipped stock's companion builtins patch, and hg tip's
+    `_linux.h` had migrated every arch block to GCC builtins except
+    `__x86_64__` — so `_MD_ATOMIC_*` still resolved to `_PR_x86_64_Atomic*`,
+    defined only in the removed asm. makepkg succeeded and shipped a
+    `libnspr4.so` with four undefined `U` symbols that broke every strict
+    link. After any build-flag surgery (dropping a file from the build,
+    disabling a feature), `nm -D` the shipped `.so` for the symbols the
+    removed code used to define; when taking one patch from a multi-patch
+    upstream set, diff the set as a whole and carry over whatever the taken
+    patch depends on. See `docs/NOTE.md` 2026-10-06 nspr-git.
 
 ## 2. Workspace overview
 

@@ -37,6 +37,40 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-06 — nspr-git: asm removal without the builtins replacement shipped undefined atomics
+
+**Symptom.** Run #16 wall at 74/652 on `nss-git`: mold refuses `/usr/lib/libnspr4.so`
+with `undefined symbol _PR_x86_64_Atomic{Set,Add,Increment,Decrement}`. The
+installed library was objectively broken — `nm -D` showed the four symbols as
+undefined `U` entries while `NEEDED` listed only libc, so any strict link
+(`--no-allow-shlib-undefined`) and any runtime atomic op failed.
+
+**Root cause.** The recipe applies stock's
+`0002-configure.in-Remove-assembly-files-from-build.patch` (drops the
+`os_Linux_*.s` asm files from the build) but skipped stock's companion builtins
+patch. hg tip migrated most arch blocks in `pr/include/md/_linux.h` to GCC
+builtins — but **not `__x86_64__`**: it still maps `_MD_ATOMIC_*` to
+`_PR_x86_64_Atomic*`, which are declared extern and defined only in the asm
+file the recipe removes. Stock pairs the removal with a builtins patch; taking
+half of the set left the callers pointing at definitions that no longer exist.
+
+**Fix.** New `0003-linux-x86_64-use-GCC-builtins-for-atomics.patch` maps
+`_MD_ATOMIC_*` on `__x86_64__` to `__sync_*` builtins, matching the in-tree
+template used by the other arch blocks (same semantics as the removed asm);
+wired into `source`/`b2sums`/`prepare`, `pkgrel` 1→2.
+
+**Validation.** `bash -n` clean; makepkg build produced
+`nspr-git-4.39beta1.r5.g3fa8e4d81657-2`; `nm -D` grep for
+`_PR_x86_64_Atomic` empty on the staged `pkg/` library, the `-2` archive's
+`libnspr4.so`, and the installed `/usr/lib/libnspr4.so`; pacman.log records the
+upgrade to `-2`. nss-git's link gate is exercised by the next full run.
+
+**Rule.** After build-flag surgery (removing a file from a build, disabling a
+feature), `nm -D` the shipped `.so` — the build succeeding is not the gate, the
+shipped symbols are. A patch dropped from a *set* must be checked for what it
+replaced: asm removals need their builtins replacement, or the header still
+references the deleted definitions.
+
 ## 2026-10-06 — freetype2-git: `?signed` on a floating source, then auto-features vs platform gates
 
 **Symptom.** Runs #14 and #15 both wall at 73/652 on `freetype2-git`: first
