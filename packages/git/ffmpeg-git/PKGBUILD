@@ -126,9 +126,11 @@ b2sums=('SKIP')
 pkgver() {
   cd ffmpeg
 
-  # release tags are n8.2 style; version tag + rev-count + hash (house style)
+  # release tags are n8.2 style; version tag + rev-count + hash (house style).
+  # Tags may be pre-release (n9.1-dev): hyphens become dots since makepkg
+  # rejects them in pkgver (n9.1-dev -> 9.1.dev).
   printf '%s.r%s.g%s' \
-    "$(git describe --tags --abbrev=0 | sed 's/^n//')" \
+    "$(git describe --tags --abbrev=0 | sed 's/^n//; s/-/./g')" \
     "$(git rev-list --count HEAD)" \
     "$(git rev-parse --short HEAD)"
 }

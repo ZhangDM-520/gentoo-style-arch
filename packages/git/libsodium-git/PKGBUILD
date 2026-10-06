@@ -28,12 +28,13 @@ source=("git+https://github.com/jedisct1/libsodium.git")
 sha256sums=('SKIP')
 
 pkgver() {
-  cd "$pkgname"
+  # clone dir is the upstream repo name (libsodium), not $pkgname
+  cd libsodium
   git describe --long --tags | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g'
 }
 
 build() {
-  cd "$pkgname"
+  cd libsodium
 
   if command -v mold >/dev/null 2>&1; then
     export LDFLAGS+=" -fuse-ld=mold"
@@ -45,7 +46,7 @@ build() {
 }
 
 package() {
-  cd "$pkgname"
+  cd libsodium
 
   make DESTDIR="$pkgdir" install
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
