@@ -37,6 +37,38 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-06 — libnewt: pagure.io archive outage, source moved to Debian's orig tarball
+
+**Symptom.** Run #20 walled at `libnewt` (0m08s): `curl: (22) ... 404` on
+`https://pagure.io/newt/archive/r0-52-25/newt-r0-52-25.tar.gz`. The recipe was
+byte-identical to Arch stock (same URL, same b2).
+
+**Root cause.** pagure.io's web archive endpoint is down — every snapshot URL
+404s (including the default branch) — while the git backend is healthy: tag
+`r0-52-25` verified present via `git ls-remote`. Not the proxy (404 with and
+without), not the recipe. No mirror held the exact snapshot bytes (FreeBSD
+distcache and Gentoo distfiles both miss it).
+
+**Fix.** Source moved to Debian's `newt_0.52.25.orig.tar.xz` (stable pool) —
+the upstream release artifact of the same version. Content verified against
+the upstream tag by tree diff (`git clone` tag `r0-52-25` vs the tarball):
+0 files missing, 0 files differing; the only extras are release-generated
+(`configure`, `config.h.in`, `po/*.mo`). b2 re-pinned, `pkgrel` 2→3, tree
+paths `newt-r$_pkgver` → `newt-$pkgver`. Same trust class as stock:
+checksum-pinned unsigned release tarball from a reputable mirror.
+
+**Validation.** `bash -n`; `.SRCINFO` regenerated; full `makepkg` build green
+(`libnewt-0.52.25-3-x86_64.pkg.tar.zst`, `libnewt.so` extracted from the
+archive); `tests/recipe-sources.sh` PASS. (Lane log also showed benign
+post-failure noise from the version-sync `popd` after its temp dir was
+cleaned — cosmetic, not the wall.)
+
+**Rule.** When an upstream tarball host dies, the substitute artifact must
+be verified against the upstream VCS tag by tree diff (0 missing / 0
+differing) before re-pinning — and `git ls-remote` is the ground truth for
+tag existence when the web layer is down; the git protocol often survives
+web outages.
+
 ## 2026-10-06 — pgo-payload-guard raced the shared battery $TMPDIR ("0 -> 1" flake)
 
 **Symptom.** The parallel battery failed non-deterministically with different
