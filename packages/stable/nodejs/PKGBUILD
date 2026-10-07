@@ -43,9 +43,11 @@ makedepends=(
   'python'
 )
 optdepends=('npm: nodejs package manager')
-source=("git+https://github.com/nodejs/node.git#tag=v$pkgver?signed")
+source=("git+https://github.com/nodejs/node.git#tag=v$pkgver?signed"
+        '0001-v8-regexp-special-case-keep-class-walk-bmp-only.patch')
 
-sha512sums=('8484d02eff0c710553d0cc341027db9b362aaa411fff80e6181ab02d410f41698bac5f8944ce58153ab6f8af4c502a4edb87ec662aa377dd4064ca794b774dd1')
+sha512sums=('8484d02eff0c710553d0cc341027db9b362aaa411fff80e6181ab02d410f41698bac5f8944ce58153ab6f8af4c502a4edb87ec662aa377dd4064ca794b774dd1'
+            '6d3b819a703faa6f25b118c7467afaf8900472e83f58aed68e643f36b711741d2faf1a9cc025ae222731d7013c98e1d59b61d1717c02eabebc0e8106eef52305')
 validpgpkeys=(
   '8FCCA13FEF1D0C2E91008E09770F7A9A5AE15600' # Michaël Zasso (Targos) <targos@protonmail.com>
   '890C08DB8579162FEE0DF9DB8BEAB4DFCF555EF4' # RafaelGSS <rafael.nunu@hotmail.com>
@@ -59,6 +61,19 @@ _set_flags() {
   # /usr/lib/libnode.so uses malloc_usable_size, which is incompatible with fortification level 3
   CFLAGS="${CFLAGS/_FORTIFY_SOURCE=3/_FORTIFY_SOURCE=2}"
   CXXFLAGS="${CXXFLAGS/_FORTIFY_SOURCE=3/_FORTIFY_SOURCE=2}"
+}
+
+prepare() {
+  cd node
+
+  # Keep V8's case-folding class walk BMP-only. The generator feeds every
+  # member of a BMP character's closeOver(USET_CASE_INSENSITIVE) class to
+  # RegExpCaseFolding::Canonicalize, which CHECKs ch <= 0xffff (the table
+  # serves ECMAScript's per-code-unit, non-unicode matching). ICU master
+  # (79.x, Unicode 17) added U+1DF95 to the U+00DF/U+1E9E classes, so the
+  # unpatched generator aborts at build time; measured 2026-10-07.
+  patch -Np1 --fuzz=0 \
+    -i "$srcdir/0001-v8-regexp-special-case-keep-class-walk-bmp-only.patch"
 }
 
 build() {
