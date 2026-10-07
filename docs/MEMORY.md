@@ -1121,6 +1121,18 @@ going stale.
 
 ### Queued (claim by editing this section)
 
+- **ABI-batch install deferral** (2026-10-07, from the libLLVM freeze): the
+  coupled-batch gate (build-all.fish ~8145) protects selection completeness
+  but never delays the anchor's `-i` install until its batch mates are built
+  — the anchor lands at its lane position and leaves an ABI-stale live-stack
+  window (black desktop + freeze, see Pitfall digest). Design: when `-i` is
+  on and a package belongs to a multi-member ABI batch (anchor + abi
+  batchmates incl. the soname-drift closure), `install_plan` emits a `defer`
+  row until every batchmate has a built archive, then `install_execute`
+  issues ONE `pacman -U` for the batch. Needs fixtures via the hidden
+  `--install-decide` seam (plan rows: install/skip/refuse/noop/defer) plus a
+  run-record rendering row. Owner decision: implement, or keep the
+  operational rule (GUI stopped during batch installs).
 - **Fixture-safe pacman lock preflight** (2026-10-06): give the fixtures a
   `pacman-conf` stub whose DBPath points inside the workspace, so the `-i`
   preflight's `db.lck` check reads a stub lock and batteries can run beside a
@@ -1279,6 +1291,16 @@ constant, not a baked path).
 
 ## 6. Pitfall digest (full details: NOTE.md sections of same dates)
 
+- **An `-i` install of an LLVM-ABI provider replaces the SONAMEs the LIVE
+  mesa stack dlopens — black desktop + hard freeze** (2026-10-07): house
+  `llvm-libs-git` swapped out stock `libLLVM.so.23.1` while stock mesa was
+  live; niri lost all outputs (`MESA-LOADER: failed to open dri:
+  libLLVM.so.23.1`) and the machine froze. The coupled-batch gate checks
+  SELECTION completeness only — it never delays the anchor's INSTALL, so
+  `-i` leaves an ABI-stale window mid-run. Until an install-deferral seam
+  exists: run `-i` batch runs with the GUI stopped or accept a session
+  restart at the batch; a black screen after a build run is first a
+  `libLLVM*`-presence check, never a display bug.
 - **`$srcdir` persists across makepkg runs — recipe-side state creation must
   be idempotent** (2026-10-07 sqlite, run #39): a bare `mkdir "$srcdir"/tcl`
   died on the empty dir left by run #36's failed attempt, and a clean-clone

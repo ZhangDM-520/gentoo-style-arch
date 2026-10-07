@@ -37,6 +37,51 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-07 — Hard freeze + black desktop: `-i` swapped `libLLVM` under the live GL stack
+
+**Symptom.** Machine hard-froze (~03:32, recurring "again" per owner), force
+power-off twice; after reboot `niri-session` produced a totally black screen
+("display handle broken") and the compositor saw ZERO outputs
+(`niri msg outputs` empty). The user could not launch their proxy app.
+
+**Root cause.** Run #37/#39's `-i` installs put house `llvm-libs-git`
+(24.0.0_r600914) on the system, REPLACING stock `llvm-libs` — so
+`/usr/lib/libLLVM.so.23.1` vanished while stock `mesa` (which dlopens exactly
+that SONAME at GPU-device init) was live. The compositor log's real error:
+`MESA-LOADER: failed to open dri: libLLVM.so.23.1: cannot open shared object
+file` → `error adding primary node device, display-only devices may not work`
+→ no outputs → black. niri limped along pre-reboot only because it renders
+via Vulkan (RADV needs no LLVM). The freeze signature matches the same
+incident class: replacing libLLVM under a live GL/GPU stack mid-run.
+Verified NOT the cause: kernel DRM (plain open + DRM_IOCTL_VERSION on
+/dev/dri/card1 OK), config validity (`niri validate` OK), and no graphics
+package installs in the freeze window.
+
+**Fix.** Spliced authentic stock `libLLVM.so.23.1` (and its `libLLVM-23.so`
+link) back into /usr/lib alongside the house 24.0 — different SONAMEs
+coexist and each consumer resolves its exact ABI match. Package fetched from
+TUNA (international routes blocked; the Cachyos CDN reset), signature
+verified with `pacman-key` (Arch packager key) before touching the system.
+House `libLLVM.so → 24.0` symlink untouched. Rollback: remove the two
+spliced files.
+
+**Validation.** `dlopen libLLVM.so.23.1` OK; the full
+`/usr/lib/gbm/dri_gbm.so` → `/usr/lib/dri/libdril_dri.so` → LLVM chain loads
+clean (it previously died at the missing libLLVM); live `niri-session` start
+is the owner's acceptance test (agent must never run `niri-session` itself —
+it blacks the TTY).
+
+**Rule.** Installing an LLVM-ABI provider (`llvm-libs-git`) replaces the
+SONAME set the LIVE mesa stack dlopens — a `-i` run can therefore kill the
+running desktop and hard-freeze the machine. The coupled-batch gate protects
+*selection completeness* only; it does NOT sequence *installs* (the anchor
+installs at its lane position while members land later). Until an
+install-deferral seam exists: run `-i` runs with the GUI stopped, or accept
+one session restart around the batch, and never treat a mid-run black
+screen as a display bug without checking `libLLVM*` presence first.
+
+
+
 ## 2026-10-07 — `libmypaint-git` prepare() wall: upstream `autogen.sh` pins automake minor-version tool names
 
 **Symptom.** `prepare()` died in `./autogen.sh`: "You must have automake
