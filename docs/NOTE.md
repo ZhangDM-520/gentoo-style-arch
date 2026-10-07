@@ -37,6 +37,75 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-07 — run #48 stopped at pkg 46: the Layer-3 install gate refused a soname move the run itself was about to repair
+
+- **Symptom.** Full-build run #48 (`-s -i`, 516-package window) died at
+  46/516: `libdisplay-info-git` built cleanly, then its install plan refused
+  — `soname provide libdisplay-info.so moves 3-64 -> 5-64 — its surface
+  consumers are not in this transaction` + `installed consumer niri-spicy-git
+  is not in this transaction`. 44 built, 472 never-started. Separately
+  `libisl-git` parked `upstream-unverified` again (second run in a row).
+- **Root cause (gate/model mismatch).** Layer 3 (`abi_provide_refusals`)
+  counted a surface consumer as covered only when its archive rode the SAME
+  pacman transaction. Under `-i` a transaction is one recipe's outputs, so
+  the gate's own remedy text — "rebuild it in the same batch" — was
+  unsatisfiable: `niri-spicy-git` WAS in the selection, ordered after the
+  provider (it even has the build-order edge), and `-i`'s contract is exactly
+  "installs each package before its dependents compile" — the consumer's
+  rebuild against the new surface is what repairs the move. The gate demanded
+  the `-ia` whole-set shape for every soname move, and a `-git` set moves
+  sonames routinely (stock 0.3.0 ships `libdisplay-info.so=3-64`, upstream
+  master is so.5). `libisl-git`'s deferral was pure transport: repo.or.cz
+  TLS-eof failures arrive in BURSTS that outlast the old 4-attempt/17 s
+  retry budget (measured 2026-10-07: an all-fail burst of 6 probes, then 2/3
+  answers within a minute once idle).
+- **Fix.**
+  1. **In-run repair coverage** (layer 3): a surface consumer scheduled
+     strictly AFTER the provider in the run's topological order
+     (`_GSA_RUN_ORDER`, exported by `run_lanes` to lane children) is covered
+     — the move lands and the run rebuilds+reinstalls the consumer against it
+     before finishing. Same-transaction coverage unchanged; ordered-before or
+     absent-from-selection consumers still refuse (nothing repairs them).
+     Covered moves emit a non-refusal `repair <archive> <consumer>
+     <provider>` plan row (`abi_provide_refusals` now returns 1 only on
+     `refuse` rows).
+  2. **Forced-rebuild markers**: `install_execute` records
+     `$_STATE_DIR/abi-repair/<consumer>` from `repair` rows BEFORE the
+     transaction (a marker that cannot be written aborts with nothing mutated
+     — fail-closed) and consumes it only after the consumer's own install
+     lands clean (names resolved through `install_register_names`' two-rung
+     ladder). `freshness_skip_decision` yields to a pending marker over every
+     freshness claim — `-s` AND `--skip-built` — because a skipped consumer is
+     never rebuilt: without this, the resume meant to finish the run would
+     strand the installed consumer forever.
+  3. **`git_ls_remote_quiet`**: 6 attempts, 2/5/10/20/40 s backoff (~93 s
+     budget) so a transport burst is noise, not an `upstream-unverified`
+     deferral.
+- **Validation.** Red-first, both halves falsified against the old code
+  (source fix stashed): `abi-drift-install` K failed exactly as run #48 did
+  (`rc=1`, `refuse abi-soname`/`abi-consumer` rows) and `skip-upstream`'s
+  marker case failed `makepkg ran 1 times, expected 2`; green after the fix —
+  `tests/abi-drift-install.sh` 37 checks (K in-order accept + `repair` row,
+  L ordered-before refuse, M absent refuse, N full `-i` cycle: marker present
+  at the provider's transaction per the pacman-stub snapshot oracle, note in
+  the package log, consumed by the consumer's own install),
+  `tests/skip-upstream.sh` green (marker forces the rebuild under `-s` and
+  `--skip-built`, survives runs without `-i`, is consumed at install, and
+  normal skip resumes). `fish -n`/`bash -n`, full battery green,
+  `--audit`/`--list`/dry-runs clean.
+- **Durable rules.**
+  1. A `-i` run OWNS the repair of its own soname moves: Layer-3 coverage is
+     "consumer in the transaction" OR "consumer strictly after the provider
+     in the run order" — the second reading is what makes the `-i` contract
+     executable at all. The transient window (moved surface installed,
+     consumer not yet rebuilt) is the contract's own intermediate state; a
+     run that dies inside it leaves the window open until a resume reaches
+     the consumer.
+  2. A pending forced-rebuild marker outranks every freshness claim: `-s`
+     may never skip a consumer that owes a repair, and only the consumer's
+     own landed install clears the marker (a build without `-i` keeps it).
+  3. VCS transport retries must outlast a failure BURST, not one handshake.
+
 ## 2026-10-07 — vim build wall: Tcl 9 dropped the Tcl-8 macros and channel contracts if_tcl.c is written against — compat patch bridges all four gaps
 
 Symptom: run #47 stopped on `vim` (0m51s): `make` died compiling

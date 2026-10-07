@@ -1300,8 +1300,13 @@ end
 # failure (anything else: TLS, timeout, dead host — no answer at all, the
 # only retryable class; measured 2026-10-02: repo.or.cz answered 1 of 3
 # attempts within a minute, so one shot is not an oracle for "upstream is
-# gone"). 3 attempts, 0.5 s then 1 s backoff. Exhaustion returns the failing
-# status with no rows; callers keep treating "no rows" as unresolvable.
+# gone"). 6 attempts, 2/5/10/20/40 s backoff (~93 s budget): the 2026-10-07
+# run #47/#48 deferrals showed repo.or.cz TLS-eof failures arrive in BURSTS
+# that outlast the old 4-attempt/17 s budget (idle probes 2026-10-07 answered
+# again within ~60 s of an all-fail burst), so a short budget converts
+# transport noise into an upstream-unverified deferral. Exhaustion returns
+# the failing status with no rows; callers keep treating "no rows" as
+# unresolvable.
 # A persistent condition that LOOKS like transport (expired credentials,
 # proxy 403) is retried and then fails the same way — the classifier only
 # gates retries, never trust, so a misclassification costs latency, never a
@@ -1313,12 +1318,13 @@ function git_ls_remote_quiet
         set -l rows (env GIT_CONFIG_COUNT=0 GIT_TERMINAL_PROMPT=0 git \
             -c safe.bareRepository=all ls-remote $argv 2>/dev/null)
         set -l query_status $status
-        if test $query_status -eq 0; or test $query_status -eq 2; or test $attempt -ge 4
+        if test $query_status -eq 0; or test $query_status -eq 2; or test $attempt -ge 6
             printf '%s\n' $rows
             return $query_status
         end
         # Flaky upstreams (repo.or.cz drops ~half of TLS handshakes from some
-        # networks) need a window in seconds, not milliseconds (2026-10-02).
+        # networks) need a window in seconds, not milliseconds (2026-10-02) —
+        # and one that outlasts a failure BURST, hence the growing backoff.
         switch $attempt
             case 1
                 sleep 2
@@ -1326,6 +1332,10 @@ function git_ls_remote_quiet
                 sleep 5
             case 3
                 sleep 10
+            case 4
+                sleep 20
+            case 5
+                sleep 40
         end
         set attempt (math $attempt + 1)
     end

@@ -1503,4 +1503,64 @@ EOF
         fail 'combined modes control: plain -s probed upstream zero times — the zero-probe oracle is vacuous'
 )
 
+# ─── Pending ABI-repair marker: a skip must never strand a repair ──────────
+# 2026-10-07 run #48: the layer-3 ABI gate accepts a provider's soname move
+# on the strength of the run rebuilding the consumer later (in-run repair),
+# and the executor records a forced-rebuild marker under
+# $GSA_STATE_DIR/abi-repair/. If -s then claims the consumer's fresh archive
+# as current, the repair never happens and the installed consumer stays
+# broken forever — so a pending marker outranks EVERY freshness claim below
+# it (both skip modes) and forces the build; only the consumer's own INSTALL
+# consumes the marker, so runs without -i keep it pending.
+(
+    set -euo pipefail
+    marker_dir=$fixture/abi-repair-marker
+    init_git_remote "$marker_dir/repository"
+    marker_ws=$marker_dir/workspace
+    make_vcs_workspace "$marker_ws" "$marker_dir/repository/remote.git" branch main
+    # Real recipe dirs carry a committed .SRCINFO — it is the builder's ONE
+    # name surface (_pkgname_index), and consumption maps the installed
+    # archive's names back to the marker key through it. Fixture synthesis
+    # (add_package) writes only a PKGBUILD, so model the real shape here.
+    printf 'pkgbase = p1\npkgname = p1\n' >"$marker_ws/packages/p1/.SRCINFO"
+
+    run_case "$marker_ws" p1
+    expect_success 'marker: initial build'
+    assert_makepkg_count "$marker_ws" 1 'marker: initial build'
+
+    run_case "$marker_ws" -s p1
+    expect_success 'marker: clean skip before any marker'
+    assert_makepkg_count "$marker_ws" 1 'marker: clean skip before any marker'
+
+    mkdir -p "$marker_ws/state/abi-repair"
+    printf 'provider=libs\ndate=fixture\n' >"$marker_ws/state/abi-repair/p1"
+
+    run_case "$marker_ws" -s p1
+    expect_success 'marker: a pending repair forces a rebuild under -s'
+    assert_makepkg_count "$marker_ws" 2 'marker: a pending repair forces a rebuild under -s'
+    marker_diag=$(printf '%s\n' "$FIXTURE_OUTPUT"
+        find "$marker_ws/state/logs" -maxdepth 1 -type f -exec cat {} + 2>/dev/null || true)
+    grep -Fq 'pending ABI repair' <<<"$marker_diag" ||
+        fail 'marker: the forced rebuild must say why (pending ABI repair):'$'\n'"$marker_diag"
+    [[ -f $marker_ws/state/abi-repair/p1 ]] ||
+        fail 'marker: a build without -i must keep the marker pending (no install = no repair)'
+
+    run_case "$marker_ws" --skip-built p1
+    expect_success 'marker: a pending repair forces a rebuild under --skip-built too'
+    assert_makepkg_count "$marker_ws" 3 'marker: a pending repair forces a rebuild under --skip-built too'
+    [[ -f $marker_ws/state/abi-repair/p1 ]] ||
+        fail 'marker: --skip-built without -i must keep the marker pending too'
+
+    run_case "$marker_ws" -s -i p1
+    expect_success 'marker: -s -i rebuilds and installs the repair'
+    assert_makepkg_count "$marker_ws" 4 'marker: -s -i must rebuild a pending repair, never skip it'
+    grep -q -- 'pacman -U' "$marker_ws/pacman.log" ||
+        fail 'marker: -s -i did not install the repaired archive'
+    [[ ! -e $marker_ws/state/abi-repair/p1 ]] ||
+        fail 'marker: the consumer install must consume the marker'
+
+    run_case "$marker_ws" -s p1
+    expect_success 'marker: normal skip resumes after consumption'
+    assert_makepkg_count "$marker_ws" 4 'marker: normal skip resumes after consumption'
+)
 printf 'upstream-aware skip fixture: PASS\n'

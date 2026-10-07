@@ -519,10 +519,17 @@
     set through boost-libs→gdb→python→glibc hub chains, and its one-hop
     repair still demanded tools through name edges (`python`→glibc-git) —
     both refused full runs);
-    (d) never install a moving/removed soname provide with any of its
-    LINKED consumers outside the transaction — build the complete set (`-ia`)
+    (d) never install a moving/removed soname provide while any LINKED
+    consumer is UNCOVERED — covered means the consumer rides the same
+    transaction (`-ia`), or the run itself rebuilds+reinstalls it later
+    (in-run repair: the consumer sits strictly after the provider in the run
+    order, and a forced-rebuild marker under `$STATE_DIR/abi-repair/` keeps
+    `-s`/`--skip-built` from skipping that repair; only the consumer's own
+    landed install clears the marker)
     (breakage: 2026-09-25, the run's own llvm-git install broke rustc after
-    preflight had passed);
+    preflight had passed; 2026-10-07 run #48, the transaction-only reading
+    dead-ended every soname move under `-i` — libdisplay-info 3-64→5-64 vs
+    niri-spicy-git, which the same run was scheduled to rebuild anyway);
     (e) the post-install NEEDED probe aborts loudly naming member + soname
     (breakage: a landed transaction with unresolvable sonames used to let
     every later package compile against a broken system); its abort decision

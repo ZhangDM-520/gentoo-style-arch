@@ -34,6 +34,22 @@ set -euo pipefail
 #      (The double-fresh shape — neither the pkgname nor the stock
 #      counterpart installed — is case F: one more read-only probe, same
 #      clean plan.)
+#   K. in-run repair coverage (2026-10-07, run #48 wall): the surface
+#      consumer scheduled strictly AFTER the provider in the exported run
+#      order (_GSA_RUN_ORDER — run_lanes' topological selection) is rebuilt
+#      and reinstalled by THIS run, so the move lands with a repair: clean
+#      plan carrying the non-refusal row
+#      `repair <archive> <consumer> <provider-id>`, no refusal rows;
+#   L. the consumer scheduled BEFORE the provider in the run order → the
+#      usual refusals (nothing later repairs it);
+#   M. the consumer absent from the run order → the usual refusals (the run
+#      never rebuilds it);
+#   N. the REAL -i executor cycle: a run whose selection orders the consumer
+#      after the provider plans `repair`, records the forced-rebuild marker
+#      under $GSA_STATE_DIR/abi-repair/ BEFORE pacman -U (the stub snapshots
+#      the marker dir at every transaction), renders the note into the
+#      package log, and consumes the marker when the consumer's own install
+#      lands.
 #
 # The pacman stub is read-only (-Qi/-Q probes); every case asserts no
 # `pacman -U` ever ran. Scratch workspaces under $TMPDIR only.
@@ -155,6 +171,19 @@ case ${args[0]:-} in
     ;;
 -Qp) exit 1 ;;
 -U)
+    if [[ ${GSA_FAKE_ACCEPT_U:-0} == 1 ]]; then
+        # N's oracle: snapshot the pending ABI-repair markers at transaction
+        # time — the contract is "written before the move lands, consumed
+        # only after the marked recipe's own install".
+        if [[ -n ${GSA_FAKE_MARKER_SNAPSHOT:-} ]]; then
+            {
+                printf 'U:%s:' "$*"
+                ls "${GSA_STATE_DIR:-/nonexistent}/abi-repair" 2>/dev/null | tr '\n' ' '
+                printf '\n'
+            } >>"$GSA_FAKE_MARKER_SNAPSHOT"
+        fi
+        exit 0
+    fi
     printf 'UNEXPECTED pacman -U in a decide-only run\n' >&2
     exit 99
     ;;
@@ -200,6 +229,7 @@ decide() {
         GSA_FAKE_QI_APP="$GSA_FAKE_QI_APP" \
         GSA_FAKE_QI_STOCK="${GSA_FAKE_QI_STOCK:-}" \
         GSA_FAKE_APP_INSTALLED="$GSA_FAKE_APP_INSTALLED" \
+        _GSA_RUN_ORDER="${_GSA_RUN_ORDER:-}" \
         fish "$ws/build-all.fish" --install-decide "$@" 2>"$ws/decide.err")
     FIXTURE_RC=$?
     set -e
@@ -475,5 +505,130 @@ Provides : libapp.so=1-64'
         fail "J: the decide seam must never escalate via sudo: $(cat "$ws/sudo.log")"
     checks=$((checks + 3))
 )
+
+# ─── K. in-run repair coverage: consumer scheduled after the provider ─────
+# The -i contract rebuilds the consumer against the moved surface later in
+# the SAME run (its install is what repairs the move), so a consumer in the
+# exported run order strictly after the provider is COVERED: the plan is
+# clean and carries the non-refusal `repair` row the executor turns into the
+# forced-rebuild marker. This is the run #48 wall: niri-spicy-git WAS in the
+# selection, ordered after libdisplay-info-git, and the gate refused anyway.
+(
+    set -euo pipefail
+    make_archive "$ws" libs-git 'libgreet.so=2-64'
+    GSA_FAKE_QI_LIBS='Name : libs-git
+Version : 1.0.0-1
+Provides : libgreet.so=1-64'
+    GSA_FAKE_QI_APP='Name : app-git
+Version : 1.0.0-1
+Provides : libapp.so=1-64'
+    GSA_FAKE_APP_INSTALLED=1
+    _GSA_RUN_ORDER='libs-git app-git'
+    : >"$ws/pacman.log"
+    decide force "$libs_arch"
+    ((FIXTURE_RC == 0)) ||
+        fail "K: a consumer scheduled after the provider must be repaired in-run (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
+    k_expected="$(planrow repair "$libs_arch" app-git libs-git)
+$(planrow install "$libs_arch")"
+    [[ $FIXTURE_OUTPUT == "$k_expected" ]] ||
+        fail "K: wrong repair plan rows (want tab-framed plan_row output).
+want:
+$k_expected
+got:
+$FIXTURE_OUTPUT"
+    assert_no_u K
+)
+checks=$((checks + 2))
+
+# ─── L. the consumer scheduled BEFORE the provider → refusals ─────────────
+(
+    set -euo pipefail
+    _GSA_RUN_ORDER='app-git libs-git'
+    : >"$ws/pacman.log"
+    decide force "$libs_arch"
+    ((FIXTURE_RC == 1)) ||
+        fail "L: a consumer ordered before the provider is never repaired later (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
+    l_expected="$(planrow refuse abi-soname "$libs_arch" libs-git libgreet.so 1-64 2-64)
+$(planrow refuse abi-consumer "$libs_arch" app-git)"
+    [[ $FIXTURE_OUTPUT == "$l_expected" ]] ||
+        fail "L: wrong refusal rows.
+want:
+$l_expected
+got:
+$FIXTURE_OUTPUT"
+    assert_no_u L
+)
+checks=$((checks + 2))
+
+# ─── M. the consumer absent from the run order → refusals ─────────────────
+(
+    set -euo pipefail
+    _GSA_RUN_ORDER='libs-git other-git'
+    : >"$ws/pacman.log"
+    decide force "$libs_arch"
+    ((FIXTURE_RC == 1)) ||
+        fail "M: a consumer the run never rebuilds must refuse (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
+    m_expected="$(planrow refuse abi-soname "$libs_arch" libs-git libgreet.so 1-64 2-64)
+$(planrow refuse abi-consumer "$libs_arch" app-git)"
+    [[ $FIXTURE_OUTPUT == "$m_expected" ]] ||
+        fail "M: wrong refusal rows.
+want:
+$m_expected
+got:
+$FIXTURE_OUTPUT"
+    assert_no_u M
+)
+checks=$((checks + 2))
+
+# ─── N. the real -i executor: marker written before the move, consumed by
+#        the consumer's own install ─────────────────────────────────────────
+(
+    set -euo pipefail
+    make_archive "$ws" libs-git 'libgreet.so=2-64'
+    make_archive "$ws" app-git 'libapp.so=1-64'
+    GSA_FAKE_QI_LIBS='Name : libs-git
+Version : 1.0.0-1
+Provides : libgreet.so=1-64'
+    GSA_FAKE_QI_APP='Name : app-git
+Version : 1.0.0-1
+Provides : libapp.so=1-64'
+    GSA_FAKE_APP_INSTALLED=1
+    stub_sudo "$ws"
+    stub_makepkg "$ws"
+    # Same toolchain-identity stamps as G: a missing stamp makes the
+    # drift clean delete the pre-made archives before the build.
+    mkdir -p "$ws/state/toolchains"
+    gccline=$(LC_ALL=C gcc --version 2>/dev/null | head -1)
+    [[ -n $gccline ]] || gccline='gcc unavailable'
+    printf '%s\n%s\n' "$ws/packages/libs-git" "$gccline" >"$ws/state/toolchains/libs-git"
+    printf '%s\n%s\n' "$ws/packages/app-git" "$gccline" >"$ws/state/toolchains/app-git"
+    : >"$ws/pacman.log"
+    : >"$ws/marker.snapshot"
+    run_builder env \
+        PATH="$ws/bin:$PATH" \
+        GSA_STATE_DIR="$ws/state" \
+        _IGNOREPKG_CONF="$ws/pacman.conf" \
+        GSA_FAKE_PACMAN_LOG="$ws/pacman.log" \
+        GSA_FAKE_QI_LIBS="$GSA_FAKE_QI_LIBS" \
+        GSA_FAKE_QI_APP="$GSA_FAKE_QI_APP" \
+        GSA_FAKE_APP_INSTALLED=1 \
+        GSA_FAKE_ACCEPT_U=1 \
+        GSA_FAKE_MARKER_SNAPSHOT="$ws/marker.snapshot" \
+        GSA_CPU_THREADS=8 GSA_MEMORY_GIB=16 \
+        fish "$ws/build-all.fish" --allow-broken-rustc --no-deps --no-sync -i libs-git app-git
+    ((FIXTURE_RC == 0)) || fail "N: the in-run repair run must succeed: $FIXTURE_OUTPUT"
+    n_log="$ws/state/logs/libs-git.log"
+    [[ -f $n_log ]] || fail "N: no provider package log was written: $FIXTURE_OUTPUT"
+    grep -Fq 'is scheduled for rebuild later in this run' "$n_log" ||
+        fail "N: the repair note must render into the provider's log: $(cat "$n_log")"
+    snap=$(cat "$ws/marker.snapshot")
+    [[ $(grep -c '^U:' "$ws/marker.snapshot") -ge 2 ]] ||
+        fail "N: expected at least two transactions (provider, then consumer): $snap"
+    head -1 "$ws/marker.snapshot" | grep -Fq 'app-git' ||
+        fail "N: the repair marker must be recorded BEFORE the provider's transaction lands: $snap"
+    [[ ! -e "$ws/state/abi-repair/app-git" ]] ||
+        fail "N: the consumer's install must consume its repair marker: $(ls "$ws/state/abi-repair")"
+)
+checks=$((checks + 4))
 
 printf 'abi-drift-install fixture: PASS (%d checks)\n' "$checks"

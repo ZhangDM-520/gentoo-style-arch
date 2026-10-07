@@ -58,7 +58,13 @@ no-op under `--installall`; a PGO archive that still carries a baked
 `.gcda`/`.profraw` destination is refused (`refuse pgo-*`) and a bare soname
 provide that drifts against the installed database refuses likewise
 (`refuse abi-soname` / `refuse abi-consumer`), before anything is
-written into `/usr`. To see exactly what a run would decide without touching
+written into `/usr` — unless every linked surface consumer is covered: it
+rides the same transaction (`--installall`), or it is scheduled strictly
+later in the same run (in-run repair — the run rebuilds it against the moved
+surface; the plan marks it `repair`, a forced-rebuild marker under
+`$STATE_DIR/abi-repair/` keeps `--skip`/`--skip-built` from skipping that
+rebuild, and the consumer's own install clears the marker). To see exactly
+what a run would decide without touching
 pacman, sudo or the build, ask the hidden seam directly:
 
 ```sh

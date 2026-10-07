@@ -1342,6 +1342,17 @@ function freshness_skip_decision -a pkg_path package_id skip_mode
     set -g _FRESHNESS_VERDICT build
     set -g _FRESHNESS_ARCHIVE
     set -l pkg_name "$package_id"
+    # A pending ABI repair outranks every freshness claim below: the marker
+    # (recorded from the install plan's `repair` rows) names a surface
+    # consumer this run still owes a REBUILD against a moved provider surface.
+    # A skipped consumer is never rebuilt — a skip here would strand its
+    # installed outputs forever — so both skip modes must build instead. The
+    # marker is consumed only when the rebuilt archive actually installs
+    # (install_execute), so a failed build keeps it pending for the next run.
+    if repair_marker_pending "$package_id"
+        ui_info "$pkg_name: pending ABI repair (a provider's soname surface moved) — forcing rebuild, not skip"
+        return 0
+    end
     # Discovery differs per claim: -s keys to the recipe's current
     # pkgver-pkgrel; --skip-built claims the newest complete set at any
     # version (the committed pkgver trails fast-moving VCS builds).
@@ -1582,9 +1593,13 @@ end
 #      change against the installed database's provides for the same pkgname
 #      — or, when the pkgname is not installed, for its abi_stock_name
 #      counterpart (the Stock→house swap: the surface MOVES to a new pkgname,
-#      it does not vanish) — and its surface consumers are not fully included
-#      in the transaction, silent `refuse abi-*` rows abort before any
-#      pacman -U.
+#      it does not vanish) — and its surface consumers are not covered by a
+#      repair, silent `refuse abi-*` rows abort before any pacman -U. A
+#      repair is (a) the consumer riding the same transaction, or (b) the
+#      consumer scheduled strictly later in the run's topological order —
+#      the -i in-run repair, which emits a `repair` row and (via the
+#      executor) a forced-rebuild marker under $_STATE_DIR/abi-repair/ so
+#      `-s` can never skip the repairing consumer.
 #   4. post-install NEEDED probe (install_needed_probe, after a successful
 #      transaction): every installed consumer output's DT_NEEDED must resolve
 #      within the newly installed + existing provide set; unresolved sonames
@@ -2221,23 +2236,111 @@ end
 # fresh-install path. A swap whose bare soname provides match the
 # counterpart's exactly is a clean pass.
 #
-# "Fully included in the transaction" counts the INSTALLED part of the
-# surface-consumer set (an uninstalled consumer has nothing to protect — the
-# batch gate's standing rule); a member counts as included when any of its
-# outputs is among the transaction's pkgnames. Consumers of an archive whose
-# pkgname matches no workspace recipe are vacuously covered (no in-tree
-# surface consumers to open).
+# "Fully included" counts the INSTALLED part of the surface-consumer set (an
+# uninstalled consumer has nothing to protect — the batch gate's standing
+# rule); a member counts as covered by EITHER of two repairs:
+#   (a) transaction coverage — any of its outputs is among the transaction's
+#       pkgnames (it lands in the same pacman -U), or
+#   (b) in-run repair coverage (2026-10-07, run #48 wall) — the member is in
+#       the run's topological order ($_GSA_RUN_ORDER, exported by run_lanes)
+#       strictly AFTER the provider, so this run rebuilds and reinstalls it
+#       against the new surface before finishing. (b) exists because under
+#       -i a consumer can NEVER share its provider's transaction: -i installs
+#       one recipe per pacman -U, so the gate's own long-standing remedy —
+#       "rebuild it in the same batch" — was unsatisfiable and any soname
+#       move with an installed consumer dead-ended the run (libdisplay-info
+#       3-64→5-64 vs niri-spicy-git refused run #48). The -i contract is
+#       already sequential ("installs each package before its dependents
+#       compile"): the moved surface lands first, the consumer's rebuild
+#       repairs it later in the same run — the transient window between the
+#       two is the contract's own intermediate state. Residual risk, accepted
+#       and documented: a run that DIES after the provider's install leaves
+#       the window open until a resume reaches the consumer (resume with -s
+#       finishes it; the forced-rebuild marker below keeps -s from skipping
+#       the repair). Coverage (b) also emits a `repair` row, from which the
+#       executor records that marker — the skip path then can never claim a
+#       stale archive while a repair is owed.
+# Consumers of an archive whose pkgname matches no workspace recipe are
+# vacuously covered (no in-tree surface consumers to open).
 #
 # Row shapes (tab-framed through the plan_row codec, mirroring
 # pgo_payload_refusals):
 #   refuse abi-soname <archive> <pkgname> <provide-name> <installed-ver> <built-ver>
 #   refuse abi-consumer <archive> <consumer>
+#   repair <archive> <consumer> <provider-id>
 # (<built-ver> is '-' when the provide disappears entirely.) The Stock→house
-# swap path reuses these shapes unchanged (no new row): <pkgname> stays the
-# ARCHIVE's pkgname and <installed-ver> comes from the stock counterpart's
-# surface — the counterpart is derivable (abi_stock_name <pkgname>) and the
-# codec/renderer contract stays 7 fields. Returns 0 for
-# every archive that is clean or not comparable, 1 after any refusal row.
+# swap path reuses the refusal shapes unchanged: <pkgname> stays the ARCHIVE's
+# pkgname and <installed-ver> comes from the stock counterpart's surface —
+# the counterpart is derivable (abi_stock_name <pkgname>) and the
+# codec/renderer contract stays 7 fields. `repair` rows are NOT refusals:
+# they ride a clean plan (rc 0) and name the consumers the run itself will
+# rebuild. Returns 0 when no refusal row was emitted (clean, not comparable,
+# or repaired in-run), 1 after any refusal row.
+
+# ─── ABI repair markers (the in-run repair contract's memory) ─────────────────
+# One file per surface consumer under $_STATE_DIR/abi-repair/, written by
+# install_execute from the plan's `repair` rows BEFORE the transaction lands,
+# read by freshness_skip_decision (any skip mode) and cleared by
+# install_execute only after the marked recipe's own archive actually
+# installed. The marker is what keeps `-s` from claiming a stale archive as
+# current while a repair is owed: a skipped consumer is never rebuilt, so
+# without the marker the very resume meant to finish the run would strand the
+# installed consumer forever. State dir, not recipe dir: markers are runtime
+# state and must never be committed.
+function repair_marker_path -a member
+    echo "$_STATE_DIR/abi-repair/$member"
+end
+
+function repair_marker_pending -a member
+    test -e "$_STATE_DIR/abi-repair/$member"
+end
+
+# repair_marker_write MEMBER PROVIDER — fail-closed: install_execute runs
+# this BEFORE pacman -U, so a marker that cannot be recorded aborts the
+# install with nothing mutated (the surface move may not land unannounced).
+function repair_marker_write -a member provider
+    set -l dir "$_STATE_DIR/abi-repair"
+    if not mkdir -p "$dir" 2>/dev/null
+        return 1
+    end
+    printf 'provider=%s\nrecorded=%s\n' "$provider" (date '+%Y-%m-%d %H:%M:%S') \
+        >"$dir/$member" 2>/dev/null
+end
+
+# repair_markers_clear ARCHIVE... — consume markers for every recipe the
+# transaction's archives belong to. Names come from install_register_names'
+# two-rung ladder (archive .PKGINFO, else the recipe dir's committed
+# .SRCINFO) because fixture stub archives are empty — the same published-
+# claim resolution the registration step already fails closed on. Callers
+# pass only what actually installed, so a refused plan, a failed transaction
+# or a probe abort leaves every marker pending (the safe direction).
+function repair_markers_clear
+    set -l names (install_register_names $argv 2>/dev/null)
+    for name in $names
+        set -l id (abi_package_id_for_pkgname "$name")
+        test -n "$id"; or continue
+        if repair_marker_pending "$id"
+            command rm -f -- "$_STATE_DIR/abi-repair/$id"
+        end
+    end
+    return 0
+end
+
+# run_order_repairs_after PROVIDER MEMBER → 0 when both are in the exported
+# run order and the member is scheduled strictly AFTER the provider (so the
+# run rebuilds it against the new surface). No run order (the
+# --install-decide seam, or a consumer outside the selection) = no coverage.
+function run_order_repairs_after -a provider member
+    set -q _GSA_RUN_ORDER; or return 1
+    test -n "$_GSA_RUN_ORDER"; or return 1
+    set -l order (string split ' ' -- "$_GSA_RUN_ORDER")
+    set -l pi (contains -i -- "$provider" $order)
+    test -n "$pi"; or return 1
+    set -l mi (contains -i -- "$member" $order)
+    test -n "$mi"; or return 1
+    test "$mi" -gt "$pi"
+end
+
 function abi_provide_refusals
     # Every pkgname the transaction will install — the surface-consumer
     # coverage side.
@@ -2317,6 +2420,7 @@ function abi_provide_refusals
         set risk_names (printf '%s\n' $risk_names | sort -u)
         set -l provider_id (abi_package_id_for_pkgname "$pkgname")
         set -l open
+        set -l scheduled
         if test -n "$provider_id"
             for member in (abi_surface_consumers "$provider_id")
                 set -l srcinfo (abi_package_srcinfo "$member")
@@ -2336,20 +2440,43 @@ function abi_provide_refusals
                 # outputs on every refusal-path install.
                 abi_pkg_installed "$member"; or continue
                 abi_links_stems "$member" $risk_names; or continue
+                # In-run repair coverage: the run rebuilds and reinstalls
+                # this consumer against the new surface later (see the block
+                # comment) — accepted, but with a `repair` row so the
+                # executor records the forced-rebuild marker.
+                if run_order_repairs_after "$provider_id" "$member"
+                    set -a scheduled "$member"
+                    continue
+                end
                 set -a open "$member"
             end
         end
-        test (count $open) -gt 0; or continue
-        set -a rows $archive_rows
-        for member in $open
-            set -a rows (plan_row refuse abi-consumer "$archive" "$member")
+        if test (count $open) -eq 0; and test (count $scheduled) -eq 0
+            continue
         end
+        # A refusal is only the OPEN-consumer case; when every consumer is
+        # repaired in-run the move itself is accepted and only `repair` rows
+        # ride the plan (the abi-soname rows are refusal rows and must not
+        # appear on a clean plan).
+        if test (count $open) -gt 0
+            set -a rows $archive_rows
+            for member in $open
+                set -a rows (plan_row refuse abi-consumer "$archive" "$member")
+            end
+        end
+        for member in $scheduled
+            set -a rows (plan_row repair "$archive" "$member" "$provider_id")
+        end
+    end
+    set -l refused 0
+    for row in $rows
+        set -l rf (plan_row_fields "$row")
+        test "$rf[1]" = refuse; and set refused 1
     end
     if test (count $rows) -gt 0
         printf '%s\n' $rows | awk '!seen[$0]++'
-        return 1
     end
-    return 0
+    return $refused
 end
 
 # ─── Layer 4: post-install NEEDED probe ─────────────────────────────────────
@@ -3344,10 +3471,19 @@ function install_plan -a mode
     # that disappears/changes against the installed database while an
     # installed surface consumer is open refuses the plan — BEFORE the force
     # branch, so -fi/-ia can never route around it. Decision half stays silent.
+    # Non-refusal `repair` rows (in-run repair coverage) ride the clean plan
+    # through to the executor, which records the forced-rebuild markers.
     set -l abi_rows (abi_provide_refusals $archives)
-    if test $status -ne 0
+    set -l abi_status $status
+    if test $abi_status -ne 0
         printf '%s\n' $abi_rows
         return 1
+    end
+    for row in $abi_rows
+        set -l rf (plan_row_fields "$row")
+        if test "$rf[1]" = repair
+            printf '%s\n' "$row"
+        end
     end
     if test "$mode" = force
         # -fi / -ia: the same-version sanity check is bypassed ENTIRELY —
@@ -3543,6 +3679,7 @@ function install_execute -a log_file sink n_extra
     set -l skips
     set -l skip_versions
     set -l refusals
+    set -l repairs
     for row in $rows
         set -l fields (plan_row_fields "$row")
         switch $fields[1]
@@ -3551,6 +3688,8 @@ function install_execute -a log_file sink n_extra
             case skip
                 set -a skips $fields[2]
                 set -a skip_versions $fields[3]
+            case repair
+                set -a repairs $row
             case noop
                 # force mode with nothing to do — no message, no transaction.
             case '*'
@@ -3591,6 +3730,18 @@ function install_execute -a log_file sink n_extra
             end
         end
         return 1
+    end
+    # ABI-repair markers from the plan's `repair` rows: recorded BEFORE the
+    # transaction, so a surface move can never land without its consumers'
+    # forced-rebuild marker being on disk (and a marker that cannot be
+    # written aborts with nothing mutated — fail-closed).
+    for row in $repairs
+        set -l fields (plan_row_fields "$row")
+        if not repair_marker_write "$fields[3]" "$fields[4]"
+            install_emit "$sink" "$log_file" error "cannot record the ABI-repair marker for "$fields[3]" — refusing to land the surface move unannounced"
+            return 1
+        end
+        install_emit "$sink" "$log_file" warn (basename "$fields[2]")": soname surface moved — "$fields[3]" is scheduled for rebuild later in this run to repair it (forced-rebuild marker recorded)"
     end
     # Dynamic IgnorePkg registration (2026-10-05) runs here — after the
     # refusals, before the transaction: every accepted archive (install AND
@@ -3684,6 +3835,12 @@ function install_execute -a log_file sink n_extra
         install_emit "$sink" "$log_file" error "post-install NEEDED probe: aborting — the transaction landed with outputs whose sonames do not resolve (rebuild the provider in the same batch, or register the name in config/abi-exclusions.conf)"
         return 1
     end
+    # The transaction landed AND the post-install probe is clean: every ABI
+    # repair owed by a recipe in this install set is settled (the system runs
+    # its rebuilt outputs). Consume the markers here at the very end on
+    # purpose — a refused plan, a failed transaction or a probe abort leaves
+    # them pending, so the next run still forces the rebuild.
+    repair_markers_clear $installs
     return 0
 end
 
@@ -4653,7 +4810,7 @@ function log_ownership_hint
 end
 
 function ensure_state_dirs
-    if not mkdir -p "$_STATE_DIR" "$LOG_DIR" "$_STATE_DIR/toolchains"
+    if not mkdir -p "$_STATE_DIR" "$LOG_DIR" "$_STATE_DIR/toolchains" "$_STATE_DIR/abi-repair"
         ui_error "cannot create builder state directories: $_STATE_DIR"
         log_ownership_hint
         return 1
@@ -4668,7 +4825,7 @@ function ensure_state_dirs
             log_ownership_hint
             return 1
         end
-    else if not test -w "$LOG_DIR"; or not test -w "$_STATE_DIR/toolchains"
+    else if not test -w "$LOG_DIR"; or not test -w "$_STATE_DIR/toolchains"; or not test -w "$_STATE_DIR/abi-repair"
         ui_error "cannot write builder state directories: $_STATE_DIR"
         log_ownership_hint
         return 1
@@ -6267,6 +6424,15 @@ function run_lanes -a lanes jobs_override intensity_level install_flag clean_fla
     set -g _lane_done
     set -g _lane_started
     set -g _lane_deferred
+    # The layer-3 ABI gate's in-run repair coverage (abi_provide_refusals): a
+    # surface consumer scheduled strictly AFTER its provider in THIS
+    # topological order is rebuilt and reinstalled later in the run, so the
+    # provider's install may land first (the -i contract's transient window).
+    # Space-joined — topology ids never contain spaces and a fish exported
+    # list would flatten ambiguously across the lane process boundary; the
+    # children read it back with `string split`. Builder-internal, NOT an
+    # ambient knob: it is absent from --help's GSA_* roster on purpose.
+    set -gx _GSA_RUN_ORDER (string join ' ' -- $sorted)
 
     set -l total (count $sorted)
     if test "$total" -eq 0
