@@ -1,0 +1,216 @@
+diff --git a/deps/LIEF/include/LIEF/PE/ResourcesManager.hpp b/deps/LIEF/include/LIEF/PE/ResourcesManager.hpp
+index 6ad660fc652..3447089b0e8 100644
+--- a/deps/LIEF/include/LIEF/PE/ResourcesManager.hpp
++++ b/deps/LIEF/include/LIEF/PE/ResourcesManager.hpp
+@@ -15,6 +15,7 @@
+  */
+ #ifndef LIEF_PE_RESOURCES_MANAGER_H
+ #define LIEF_PE_RESOURCES_MANAGER_H
++#include <sstream>
+ #include <ostream>
+ 
+ #include "LIEF/errors.hpp"
+diff --git a/deps/LIEF/src/COFF/Symbol.cpp b/deps/LIEF/src/COFF/Symbol.cpp
+index 9c74e81ce27..0716aaadd92 100644
+--- a/deps/LIEF/src/COFF/Symbol.cpp
++++ b/deps/LIEF/src/COFF/Symbol.cpp
+@@ -13,6 +13,7 @@
+  * See the License for the specific language governing permissions and
+  * limitations under the License.
+  */
++#include <sstream>
+ #include "LIEF/utils.hpp"
+ #include "LIEF/COFF/Symbol.hpp"
+ #include "LIEF/COFF/String.hpp"
+diff --git a/deps/LIEF/src/ELF/DynamicEntry.cpp b/deps/LIEF/src/ELF/DynamicEntry.cpp
+index 923d6318799..3dfce22bf44 100644
+--- a/deps/LIEF/src/ELF/DynamicEntry.cpp
++++ b/deps/LIEF/src/ELF/DynamicEntry.cpp
+@@ -13,6 +13,7 @@
+  * See the License for the specific language governing permissions and
+  * limitations under the License.
+  */
++#include <sstream>
+ #include "LIEF/Visitor.hpp"
+ 
+ #include "LIEF/ELF/DynamicEntry.hpp"
+diff --git a/deps/LIEF/src/PE/LoadConfigurations/DynamicRelocation/DynamicFixupARM64Kernel.cpp b/deps/LIEF/src/PE/LoadConfigurations/DynamicRelocation/DynamicFixupARM64Kernel.cpp
+index 49a7c2b0271..bf90ba6e313 100644
+--- a/deps/LIEF/src/PE/LoadConfigurations/DynamicRelocation/DynamicFixupARM64Kernel.cpp
++++ b/deps/LIEF/src/PE/LoadConfigurations/DynamicRelocation/DynamicFixupARM64Kernel.cpp
+@@ -13,6 +13,7 @@
+  * See the License for the specific language governing permissions and
+  * limitations under the License.
+  */
++#include <sstream>
+ #include "LIEF/PE/Parser.hpp"
+ #include "LIEF/BinaryStream/SpanStream.hpp"
+ #include "LIEF/PE/LoadConfigurations/DynamicRelocation/DynamicFixupARM64Kernel.hpp"
+diff --git a/deps/LIEF/src/PE/LoadConfigurations/DynamicRelocation/DynamicFixupARM64X.cpp b/deps/LIEF/src/PE/LoadConfigurations/DynamicRelocation/DynamicFixupARM64X.cpp
+index 44c12ca5069..1a9da63f2d7 100644
+--- a/deps/LIEF/src/PE/LoadConfigurations/DynamicRelocation/DynamicFixupARM64X.cpp
++++ b/deps/LIEF/src/PE/LoadConfigurations/DynamicRelocation/DynamicFixupARM64X.cpp
+@@ -13,6 +13,7 @@
+  * See the License for the specific language governing permissions and
+  * limitations under the License.
+  */
++#include <sstream>
+ #include "LIEF/PE/Parser.hpp"
+ #include "LIEF/utils.hpp"
+ #include "LIEF/BinaryStream/SpanStream.hpp"
+diff --git a/deps/LIEF/src/PE/LoadConfigurations/DynamicRelocation/DynamicFixupControlTransfer.cpp b/deps/LIEF/src/PE/LoadConfigurations/DynamicRelocation/DynamicFixupControlTransfer.cpp
+index 52e9f37d276..4d5c815f717 100644
+--- a/deps/LIEF/src/PE/LoadConfigurations/DynamicRelocation/DynamicFixupControlTransfer.cpp
++++ b/deps/LIEF/src/PE/LoadConfigurations/DynamicRelocation/DynamicFixupControlTransfer.cpp
+@@ -13,6 +13,7 @@
+  * See the License for the specific language governing permissions and
+  * limitations under the License.
+  */
++#include <sstream>
+ #include "LIEF/PE/Parser.hpp"
+ #include "LIEF/BinaryStream/SpanStream.hpp"
+ #include "LIEF/PE/LoadConfigurations/DynamicRelocation/DynamicFixupControlTransfer.hpp"
+diff --git a/deps/LIEF/src/PE/LoadConfigurations/DynamicRelocation/DynamicRelocationV1.cpp b/deps/LIEF/src/PE/LoadConfigurations/DynamicRelocation/DynamicRelocationV1.cpp
+index 3e5ad91313d..a8026bda6a4 100644
+--- a/deps/LIEF/src/PE/LoadConfigurations/DynamicRelocation/DynamicRelocationV1.cpp
++++ b/deps/LIEF/src/PE/LoadConfigurations/DynamicRelocation/DynamicRelocationV1.cpp
+@@ -13,6 +13,7 @@
+  * See the License for the specific language governing permissions and
+  * limitations under the License.
+  */
++#include <sstream>
+ #include "LIEF/PE/Relocation.hpp"
+ #include "LIEF/PE/RelocationEntry.hpp"
+ #include "LIEF/BinaryStream/BinaryStream.hpp"
+diff --git a/deps/LIEF/src/PE/LoadConfigurations/DynamicRelocation/FunctionOverride.cpp b/deps/LIEF/src/PE/LoadConfigurations/DynamicRelocation/FunctionOverride.cpp
+index 5a0233b5a87..2f302aa175f 100644
+--- a/deps/LIEF/src/PE/LoadConfigurations/DynamicRelocation/FunctionOverride.cpp
++++ b/deps/LIEF/src/PE/LoadConfigurations/DynamicRelocation/FunctionOverride.cpp
+@@ -13,6 +13,7 @@
+  * See the License for the specific language governing permissions and
+  * limitations under the License.
+  */
++#include <sstream>
+ #include "LIEF/PE/Parser.hpp"
+ #include "LIEF/PE/Binary.hpp"
+ #include "LIEF/PE/Relocation.hpp"
+diff --git a/deps/LIEF/src/PE/LoadConfigurations/DynamicRelocation/FunctionOverrideInfo.cpp b/deps/LIEF/src/PE/LoadConfigurations/DynamicRelocation/FunctionOverrideInfo.cpp
+index 9802a4ba3a9..4eaad5e696f 100644
+--- a/deps/LIEF/src/PE/LoadConfigurations/DynamicRelocation/FunctionOverrideInfo.cpp
++++ b/deps/LIEF/src/PE/LoadConfigurations/DynamicRelocation/FunctionOverrideInfo.cpp
+@@ -13,6 +13,7 @@
+  * See the License for the specific language governing permissions and
+  * limitations under the License.
+  */
++#include <sstream>
+ #include "LIEF/PE/Relocation.hpp"
+ #include "LIEF/PE/RelocationEntry.hpp"
+ #include "LIEF/PE/LoadConfigurations/DynamicRelocation/FunctionOverrideInfo.hpp"
+diff --git a/deps/LIEF/src/PE/LoadConfigurations/EnclaveImport.cpp b/deps/LIEF/src/PE/LoadConfigurations/EnclaveImport.cpp
+index 86276a9930c..ef4a085a4d2 100644
+--- a/deps/LIEF/src/PE/LoadConfigurations/EnclaveImport.cpp
++++ b/deps/LIEF/src/PE/LoadConfigurations/EnclaveImport.cpp
+@@ -13,6 +13,7 @@
+  * See the License for the specific language governing permissions and
+  * limitations under the License.
+  */
++#include <sstream>
+ #include "LIEF/PE/Binary.hpp"
+ #include "LIEF/PE/Parser.hpp"
+ #include "LIEF/PE/LoadConfigurations/EnclaveConfiguration.hpp"
+diff --git a/deps/LIEF/src/PE/ResourcesManager.cpp b/deps/LIEF/src/PE/ResourcesManager.cpp
+index cea6f5ffece..3f3cdea3c7b 100644
+--- a/deps/LIEF/src/PE/ResourcesManager.cpp
++++ b/deps/LIEF/src/PE/ResourcesManager.cpp
+@@ -13,6 +13,7 @@
+  * See the License for the specific language governing permissions and
+  * limitations under the License.
+  */
++#include <sstream>
+ #include "LIEF/Visitor.hpp"
+ #include "LIEF/utils.hpp"
+ 
+diff --git a/deps/LIEF/src/PE/debug/Debug.cpp b/deps/LIEF/src/PE/debug/Debug.cpp
+index a2bf4facaf7..29556e57d25 100644
+--- a/deps/LIEF/src/PE/debug/Debug.cpp
++++ b/deps/LIEF/src/PE/debug/Debug.cpp
+@@ -13,6 +13,7 @@
+  * See the License for the specific language governing permissions and
+  * limitations under the License.
+  */
++#include <sstream>
+ #include "LIEF/Visitor.hpp"
+ #include "LIEF/PE/debug/Debug.hpp"
+ #include "LIEF/PE/Section.hpp"
+diff --git a/deps/LIEF/src/PE/debug/ExDllCharacteristics.cpp b/deps/LIEF/src/PE/debug/ExDllCharacteristics.cpp
+index e148258b832..10894b72604 100644
+--- a/deps/LIEF/src/PE/debug/ExDllCharacteristics.cpp
++++ b/deps/LIEF/src/PE/debug/ExDllCharacteristics.cpp
+@@ -13,6 +13,7 @@
+  * See the License for the specific language governing permissions and
+  * limitations under the License.
+  */
++#include <sstream>
+ #include <algorithm>
+ #include "LIEF/PE/debug/ExDllCharacteristics.hpp"
+ 
+diff --git a/deps/LIEF/src/PE/debug/FPO.cpp b/deps/LIEF/src/PE/debug/FPO.cpp
+index a59377349c8..0842c165672 100644
+--- a/deps/LIEF/src/PE/debug/FPO.cpp
++++ b/deps/LIEF/src/PE/debug/FPO.cpp
+@@ -13,6 +13,7 @@
+  * See the License for the specific language governing permissions and
+  * limitations under the License.
+  */
++#include <sstream>
+ #include "LIEF/PE/debug/FPO.hpp"
+ #include "LIEF/BinaryStream/SpanStream.hpp"
+ 
+diff --git a/deps/LIEF/src/PE/debug/VCFeature.cpp b/deps/LIEF/src/PE/debug/VCFeature.cpp
+index 6dcd211b30b..3fca7a0635c 100644
+--- a/deps/LIEF/src/PE/debug/VCFeature.cpp
++++ b/deps/LIEF/src/PE/debug/VCFeature.cpp
+@@ -13,6 +13,7 @@
+  * See the License for the specific language governing permissions and
+  * limitations under the License.
+  */
++#include <sstream>
+ #include "LIEF/PE/debug/VCFeature.hpp"
+ #include "LIEF/BinaryStream/SpanStream.hpp"
+ 
+diff --git a/deps/LIEF/src/PE/exceptions_info/RuntimeFunctionAArch64.cpp b/deps/LIEF/src/PE/exceptions_info/RuntimeFunctionAArch64.cpp
+index fd405ca3013..63fc7f56d92 100644
+--- a/deps/LIEF/src/PE/exceptions_info/RuntimeFunctionAArch64.cpp
++++ b/deps/LIEF/src/PE/exceptions_info/RuntimeFunctionAArch64.cpp
+@@ -13,6 +13,7 @@
+  * See the License for the specific language governing permissions and
+  * limitations under the License.
+  */
++#include <sstream>
+ #include "LIEF/PE/exceptions_info/RuntimeFunctionAArch64.hpp"
+ #include "LIEF/PE/exceptions_info/AArch64/PackedFunction.hpp"
+ #include "LIEF/PE/exceptions_info/AArch64/UnpackedFunction.hpp"
+diff --git a/deps/LIEF/src/PE/json.cpp b/deps/LIEF/src/PE/json.cpp
+index 9f6d2b8646a..a04da332182 100644
+--- a/deps/LIEF/src/PE/json.cpp
++++ b/deps/LIEF/src/PE/json.cpp
+@@ -14,6 +14,7 @@
+  * limitations under the License.
+  */
+ 
++#include <sstream>
+ #include "logging.hpp"
+ 
+ #include "PE/json_internal.hpp"
+diff --git a/deps/LIEF/src/internal_utils.cpp b/deps/LIEF/src/internal_utils.cpp
+index 3a794ea91dd..922f803f42a 100644
+--- a/deps/LIEF/src/internal_utils.cpp
++++ b/deps/LIEF/src/internal_utils.cpp
+@@ -13,6 +13,7 @@
+  * See the License for the specific language governing permissions and
+  * limitations under the License.
+  */
++#include <sstream>
+ #include "internal_utils.hpp"
+ #include <ctime>
+ #include <chrono>

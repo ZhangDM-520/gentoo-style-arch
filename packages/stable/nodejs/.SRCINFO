@@ -1,7 +1,7 @@
 pkgbase = nodejs
 	pkgdesc = Evented I/O for V8 javascript ("Current" release)
 	pkgver = 26.10.0
-	pkgrel = 2
+	pkgrel = 3
 	url = https://nodejs.org/
 	arch = x86_64
 	license = MIT
@@ -27,6 +27,7 @@ pkgbase = nodejs
 	provides = libnode.so
 	source = git+https://github.com/nodejs/node.git#tag=v26.10.0?signed
 	source = 0001-v8-regexp-special-case-keep-class-walk-bmp-only.patch
+	source = 0002-lief-include-sstream-explicitly.patch
 	validpgpkeys = 8FCCA13FEF1D0C2E91008E09770F7A9A5AE15600
 	validpgpkeys = 890C08DB8579162FEE0DF9DB8BEAB4DFCF555EF4
 	validpgpkeys = C82FA3AE1CBEDC6BE46B9360C43CEC45C17AB93C
@@ -35,5 +36,6 @@ pkgbase = nodejs
 	validpgpkeys = 108F52B48DB57BB0CC439B2997B01419BD92F80A
 	sha512sums = 8484d02eff0c710553d0cc341027db9b362aaa411fff80e6181ab02d410f41698bac5f8944ce58153ab6f8af4c502a4edb87ec662aa377dd4064ca794b774dd1
 	sha512sums = 6d3b819a703faa6f25b118c7467afaf8900472e83f58aed68e643f36b711741d2faf1a9cc025ae222731d7013c98e1d59b61d1717c02eabebc0e8106eef52305
+	sha512sums = f3a15526e9513f050b7923e71badbf4305be72fd7a006f95ffa41435c1ca78701fa02b5d2efee675af45209a14bd8964018674477966384f384b3e5a1d37b08c
 
 pkgname = nodejs
