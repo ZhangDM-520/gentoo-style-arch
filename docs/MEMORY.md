@@ -643,7 +643,17 @@
     as "PAM start failed") points at a soname swap, not the service the
     error names — check `ldd`/loader errors before touching any config.
     Rebuild+install the direct victims (all in the set's build order); never
-    symlink old soname → new.
+    symlink old soname → new. (c) Installability of a bump is decided by
+    EXACT pinners of the OLD provide, found in the LOCAL DB (`expac -Q
+    '%n\t%D' | grep '<soname>='`), not only by the workspace closure: stock
+    `wlroots0.20`'s `libdisplay-info.so=3-64` pin made master's so.5
+    un-installable (run #49, 2026-10-07) however complete the in-run repair
+    was — pacman refuses before repair runs. Disposition split: heal-set
+    (icu) when the pinner must keep working and its local rebuild is
+     acceptable; park the recipe at the last compatible generation when the
+    only exact pinner is stock-side for a secondary stack and the primary
+    consumers bind the bare name (libdisplay-info parked at tag 0.3.0 —
+    NOTE 2026-10-07).
 31. **A `?signed` source must pin a signed ref, and pins must name the
     ACTUAL signer** (2026-10-06 freetype2-git): makepkg verifies the
     *resolved* ref — `#tag=...?signed` verifies the tag, while a floating
@@ -1271,6 +1281,9 @@ going stale.
   too. The guard should consult the local DB's reverse deps of the moving
   provide and name the stock-side consumers in the refusal. Not fixed here —
   fixture blast radius across the install-plan seams; queued deliberately.
+  HIT FOR REAL in run #49 (2026-10-07): stock `wlroots0.20`'s
+  `libdisplay-info.so=3-64` pin killed the install in raw pacman noise
+  exactly as predicted (NOTE 2026-10-07) — raises the priority of this item.
 - **Swap-lint soname-drift findings need disposition** (2026-10-06, from the
   blind-spot fix's new lint half): `fish build-all.fish --audit-lint swap`
   reports 18 real drift rows against this host's installed stock — mostly
@@ -1288,6 +1301,17 @@ going stale.
   should fire for any recipe that will invoke rustc (e.g. rustc in
   makedepends), or once per run before dispatch. Queued deliberately —
   probe-scope change touches the fixture-pinned probe seam.
+- **libdisplay-info-git is parked at tag 0.3.0 (so.3) — owner decision on
+  master (so.5)** (2026-10-07, run #49): the recipe no longer tracks master;
+  the pin is the one-line disposition documented in NOTE 2026-10-07 (rule
+  30(c)). Revisit with the owner: (A) the heal-set — scratch-test wlroots
+  0.20.2 against libdisplay-info 0.4/0.5 headers in `~/Workspace`, and if it
+  compiles+links so.5, rebuild wlroots0.20 locally and install
+  {libdisplay-info-git, wlroots0.20-local} in ONE `pacman -U` (icu
+  precedent), accepting the standing cost that every stock wlroots0.20
+  update re-opens the wall; or (B) keep the park — stock wlroots0.20 then
+  updates normally. Until decided, `--no-sync` or not, nothing breaks: the
+  installed surface stays so.3 everywhere.
 - **Predicted llvm-git install wall: stock `rust` pins `llvm-libs` exactly**
   (2026-10-06, pre-empted, not yet hit): `llvm-libs-git` carries
   `provides=(llvm-libs) conflicts=('llvm-libs')` while stock `rust` depends

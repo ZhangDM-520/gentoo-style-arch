@@ -1,9 +1,23 @@
 # Maintainer: auto-generated
 # Contributor: Eric Engestrom <aur [at] engestrom [dot] ch> (AUR libdisplay-info-git)
+#
+# PINNED 2026-10-07 (run #49 wall) to tag 0.3.0 = 47a5590 — the last so.3
+# generation. meson.build sets `soversion: version_minor`, so master
+# (0.5.0-dev) ships libdisplay-info.so.5 while stock wlroots0.20 depends on
+# `libdisplay-info.so=3-64` and sway 1.12 rides wlroots0.20: swapping so.3
+# for so.5 is a soname bump and therefore a batch (icu precedent, NOTE.md
+# 2026-10-07), not a single package. Until the sway/wlroots stack can move
+# together (owner decision pending), this recipe is the drop-in so.3 swap —
+# content-identical to stock 0.3.0, so the installed surface does not move.
+# Tag 0.3.0 is signed by Simon Ser <contact@emersion.fr> (git verify-tag;
+# fingerprint confirmed against the WKD key published on emersion.fr/about).
+# The key has expired since, so makepkg prints "Passed (WARNING: the key has
+# expired.)" with rc 0 (tested 2026-10-07) — verification is cryptographically
+# good; the expiry warning is expected and must not be silenced or bypassed.
 
 pkgname=libdisplay-info-git
 _pkgname=libdisplay-info
-pkgver=0.4.0.r11.g62a9346
+pkgver=0.3.0.r0.g47a5590
 pkgrel=1
 pkgdesc="EDID and DisplayID library (git build)"
 arch=('x86_64')
@@ -13,8 +27,9 @@ depends=('glibc')
 makedepends=('git' 'hwdata' 'meson' 'ninja' 'python')
 provides=("libdisplay-info=$pkgver" 'libdisplay-info.so')
 conflicts=('libdisplay-info')
-source=("git+$url")
+source=("git+$url#tag=0.3.0?signed")
 b2sums=('SKIP')
+validpgpkeys=('34FF9526CFEF0E97A340E2E40FDE7BE0E88F5E48') # Simon Ser <contact@emersion.fr>, WKD-confirmed (emersion.fr/about)
 
 pkgver() {
   cd "$_pkgname"

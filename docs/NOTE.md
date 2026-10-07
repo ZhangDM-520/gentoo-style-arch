@@ -37,6 +37,67 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-07 — run #49 wall #2: the repaired soname move still could not install — a stock-side exact pinner (wlroots0.20) turns the bump into a batch; libdisplay-info-git pinned to 0.3.0
+
+- **Symptom.** Run #49 (same 516-window, `-s -i`) accepted the run #48
+  repair path — the plan row became `repair … niri-spicy-git`, forced-rebuild
+  marker recorded — and then `pacman -U` itself refused:
+  `:: libdisplay-info-git-0.4.0.r11.g62a9346-1 and libdisplay-info-0.3.0-1.1
+  are in conflict. Remove libdisplay-info?` → `error: failed to prepare
+  transaction` → `:: removing libdisplay-info breaks dependency
+  'libdisplay-info.so=3-64' required by wlroots0.20`. 46 built, 1 wall, 469
+  never-started.
+- **Root cause.** `meson.build` sets `soversion: version_minor`, so upstream
+  master (0.5.0-dev) ships `libdisplay-info.so.5` while the installed
+  consumer surface is `so.3`. The exact pinner is stock-side and outside the
+  workspace — `wlroots0.20` 0.20.2-1.1 (`Depends: libdisplay-info.so=3-64`),
+  riding stock `sway` 1:1.12-4.1 — i.e. the MEMORY blind spot ("the consumer
+  closure is computed workspace-only") firing for real. In-run repair cannot
+  help: pacman refuses the transaction before any repair runs. The primary
+  compositor is not the constraint: `niri-spicy-git` depends on the bare NAME
+  and `ldd /usr/bin/niri` shows `libdisplay-info.so.3` in use today.
+- **Decision** (autonomous; the owner A/B/C prompt timed out): pin the recipe
+  to the last so.3 generation — tag `0.3.0` = `47a5590`, the tip of the 0.3
+  line (0 commits after the tag). Rejected: the icu-style heal-set (rebuild
+  stock wlroots0.20 against a staged so.5 provider, one `pacman -U`) — it
+  needs an untested wlroots-0.20.2-vs-libdisplay-info-0.4/0.5 API result,
+  puts a locally rebuilt wlroots under the owner's sway desktop, and every
+  stock wlroots0.20 update re-opens the wall; dropping the sway stack breaks
+  an in-set member. Reversible in one line if the owner picks the heal-set.
+- **Fix.** `source=("git+$url#tag=0.3.0?signed")` +
+  `validpgpkeys=('34FF9526CFEF0E97A340E2E40FDE7BE0E88F5E48')` — rule 31's
+  two halves: the tag IS signed (`git verify-tag 0.3.0` → good signature from
+  Simon Ser), and the signer fingerprint is confirmed against publisher
+  material (WKD key published on emersion.fr/about, exact match). The key has
+  expired since: makepkg reports `Passed (WARNING: the key has expired.)`
+  with rc 0 (tested in scratch AND against the real recipe). Static
+  `pkgver=0.3.0.r0.g47a5590` equals what `pkgver()` computes at the pinned
+  checkout.
+- **Validation.** `bash -n`; `makepkg --printsrcinfo` regenerated;
+  `makepkg --verifysource` rc 0; `makepkg --nobuild --nodeps` extracted the
+  pinned tree (`git describe` = `0.3.0-0-g47a5590`; `update_pkgver` left the
+  static value untouched); full `makepkg --nodeps` build → `.PKGINFO` carries
+  `conflict = libdisplay-info`, `provides =
+  libdisplay-info=0.3.0.r0.g47a5590`, `provides = libdisplay-info.so=3-64`,
+  and ships `libdisplay-info.so.3` — a drop-in swap that satisfies the
+  wlroots0.20 pin exactly. Builder sweep green (`fish -n`, `--audit` rc 0,
+  `--list` 663 lines, dry-run git/stable/core rc 0); battery 55/55 PASS.
+- **Durable rules.**
+  1. Before letting a `-git` recipe move its soversion, sweep the LOCAL DB
+     for exact pinners of the old provide (`expac -Q '%n\t%D' | grep
+     '<soname>='`), not just the workspace closure: an installed stock-side
+     exact pinner makes the move un-installable no matter how complete the
+     in-run repair is — pacman refuses before any repair runs.
+  2. Disposition split for a bump (both precedents stay valid): heal-set
+     (icu) when the pinner must keep working and its local rebuild is
+     acceptable; pin to the last compatible generation (libmypaint-style
+     parking) when the only exact pinner is stock-side for a secondary stack
+     and the primary consumers bind the bare name. Name the parked reason in
+     the recipe header — a pinned `-git` recipe with no reason reads as drift.
+  3. An expired signing key is not a reason to drop `?signed`: makepkg
+     accepts it with `WARNING: the key has expired` and rc 0. Record the
+     warning; never silence it and never fall back to an unsigned pin.
+
 ## 2026-10-07 — run #48 stopped at pkg 46: the Layer-3 install gate refused a soname move the run itself was about to repair
 
 - **Symptom.** Full-build run #48 (`-s -i`, 516-package window) died at

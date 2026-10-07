@@ -1,6 +1,6 @@
 pkgbase = libdisplay-info-git
 	pkgdesc = EDID and DisplayID library (git build)
-	pkgver = 0.4.0.r11.g62a9346
+	pkgver = 0.3.0.r0.g47a5590
 	pkgrel = 1
 	url = https://gitlab.freedesktop.org/emersion/libdisplay-info
 	arch = x86_64
@@ -11,10 +11,11 @@ pkgbase = libdisplay-info-git
 	makedepends = ninja
 	makedepends = python
 	depends = glibc
-	provides = libdisplay-info=0.4.0.r11.g62a9346
+	provides = libdisplay-info=0.3.0.r0.g47a5590
 	provides = libdisplay-info.so
 	conflicts = libdisplay-info
-	source = git+https://gitlab.freedesktop.org/emersion/libdisplay-info
+	source = git+https://gitlab.freedesktop.org/emersion/libdisplay-info#tag=0.3.0?signed
+	validpgpkeys = 34FF9526CFEF0E97A340E2E40FDE7BE0E88F5E48
 	b2sums = SKIP
 
 pkgname = libdisplay-info-git
