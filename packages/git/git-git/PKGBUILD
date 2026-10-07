@@ -51,6 +51,12 @@ _make_options=(
   MAN_BOLD_LITERAL=1
   NO_PERL_CPAN_FALLBACKS=1
   USE_LIBPCRE2=1
+  # Upstream git compiles an optional Rust core since 2.56 (needs cargo).
+  # rust-git is a build-order consumer of git-git (rust builds invoke git), so
+  # adding rust-git here would cycle the topology; the Rust core is only a perf
+  # subsystem (csum_file/hash/loose/varint), not a feature surface. Revisit if
+  # rust-git's git-git edge can drop — Rust becomes mandatory at git 3.0.
+  NO_RUST=YesPlease
 )
 
 pkgver() {
