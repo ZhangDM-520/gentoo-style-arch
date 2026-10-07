@@ -1059,7 +1059,9 @@ end
 # maps to an expected output at the EVALUATED pkgver-pkgrel, and EVERY
 # expected output has one. "Has an archive" means "has the COMPLETE
 # current-version set", never a subset — a split set cut apart by a
-# mid-packaging SIGKILL must neither skip nor install.
+# mid-packaging SIGKILL must neither skip nor install. The one deliberate
+# exception is the --skip-built claim, which is version-agnostic by design
+# (newest_complete_archives below).
 
 # expected_output_names PKG_PATH → the outputs a complete build must produce.
 # The committed .SRCINFO is the recipe's published claim (already expanded;
@@ -1177,18 +1179,149 @@ function archive_payload_ok -a archive
     pacman -Qp -- "$archive" >/dev/null 2>&1
 end
 
+# newest_complete_archives PKG_PATH → the archives of the NEWEST complete
+# built set at ANY version — the --skip-built claim set — and the state of
+# that set: the same 0/1/2/3 status contract and the same
+# _CURRENT_ARCHIVES_MISSING out-param as current_archives. "Built remains
+# built" is a claim about the BUILD, never about the recipe's recorded
+# pkgver: a fast-moving VCS recipe's committed pkgver trails its archives
+# (makepkg's pkgver() rewrites the in-tree PKGBUILD at build time; the next
+# pull resets the record), so keying the claim to the committed version
+# rebuilt llvm-git on every run (2026-10-07, run #40). Currency here means:
+# every expected output has an archive at one common PV-PR key, and that key
+# owns the newest archive on disk. A NEWER but partial key still reports
+# status 2 — an older complete set must never cover for a split set cut
+# apart by a mid-packaging SIGKILL.
+function newest_complete_archives -a pkg_path
+    set -g _CURRENT_ARCHIVES_MISSING
+    set -l expected (expected_output_names "$pkg_path")
+    if test (count $expected) -eq 0
+        ui_error "$(basename "$pkg_path"): could not establish the expected output set for archive discovery" >&2
+        return 3
+    end
+    # find -printf %T@: nanosecond mtimes, newest first (fish globs would
+    # FATAL on "no matches"; find -name returns 0 with none).
+    set -l rows (find "$pkg_path" -maxdepth 1 -type f -name '*.pkg.tar.zst' \
+        -printf '%T@\t%p\n' 2>/dev/null | sort -rn)
+    # Each archive is assigned to the LONGEST expected name it is prefixed
+    # by (p1-extra-1.0-1-any must never also count as an output named p1),
+    # then grouped by its PV-PR key — only the trailing ARCH token is
+    # dropped, so a pkgver carrying dashes still groups with its siblings.
+    set -l entries
+    set -l newest_key ''
+    for row in $rows
+        set -l fields (string split \t -- "$row")
+        if test (count $fields) -ne 2
+            continue
+        end
+        set -l base (basename -- "$fields[2]")
+        set -l owner ''
+        for name in $expected
+            set -l prefix "$name-"
+            if test (string length -- "$base") -gt (string length -- "$prefix")
+                if test (string sub -s 1 -l (string length -- "$prefix") -- "$base") = "$prefix"
+                    if test (string length -- "$name") -gt (string length -- "$owner")
+                        set owner "$name"
+                    end
+                end
+            end
+        end
+        if test -z "$owner"
+            continue
+        end
+        set -l tail (string replace -r '\.pkg\.tar\.zst$' '' -- (string sub -s (math (string length -- "$owner") + 2) -- "$base"))
+        # '--' before the pattern: '-[^-]+$' starts with a dash and would
+        # otherwise parse as an option.
+        set -l key (string replace -r -- '-[^-]+$' '' "$tail")
+        if test "$key" = "$tail"; or test -z "$key"
+            # No trailing ARCH token to drop — not NAME-PV-PR-ARCH shaped.
+            continue
+        end
+        if test -z "$newest_key"
+            set newest_key "$key"
+        end
+        set -a entries (string join \t -- "$key" "$owner" "$fields[2]")
+    end
+    if test -z "$newest_key"
+        return 1
+    end
+    for name in $expected
+        set -l covered 0
+        for entry in $entries
+            set -l fields (string split \t -- "$entry")
+            if test "$fields[1]" = "$newest_key"; and test "$fields[2]" = "$name"
+                set covered 1
+                break
+            end
+        end
+        if test $covered -eq 0
+            set -a _CURRENT_ARCHIVES_MISSING "$name"
+        end
+    end
+    set -l chosen
+    for entry in $entries
+        set -l fields (string split \t -- "$entry")
+        if test "$fields[1]" = "$newest_key"
+            set -a chosen "$fields[3]"
+        end
+    end
+    if test (count $chosen) -gt 0
+        printf '%s\n' $chosen | sort
+    end
+    if test (count $_CURRENT_ARCHIVES_MISSING) -eq 0
+        return 0
+    end
+    if test (count $chosen) -eq 0
+        return 1
+    end
+    return 2
+end
+
+# recipe_changed_since_build PKG_PATH ARCHIVE → 0 when there is positive
+# evidence the recipe changed after ARCHIVE was written. In a git tree the
+# evidence is the PKGBUILD's last COMMIT time: checkout, pull and makepkg's
+# in-tree pkgver() rewrite all churn the file's mtime without moving the
+# commit, so mtime is churn noise, not evidence. git stamps whole seconds,
+# so a commit MAY postdate the archive once its second reaches ceil(archive
+# mtime) — that doubt rebuilds, never skips. Without git metadata the file's
+# mtime is the only evidence left (the pre-2026-10-07 gate: conservative
+# direction, doubt rebuilds).
+function recipe_changed_since_build -a pkg_path archive
+    set -l commit (env GIT_CONFIG_COUNT=0 git -C "$pkg_path" log -1 --format=%ct -- PKGBUILD 2>/dev/null)
+    if test $status -eq 0; and test -n "$commit"; and string match -qr '^[0-9]+$' -- "$commit"
+        set -l modified (find "$archive" -maxdepth 0 -printf '%T@' 2>/dev/null)
+        if test -z "$modified"
+            return 0
+        end
+        set -l parts (string split . -- "$modified")
+        set -l ceil $parts[1]
+        if test (count $parts) -eq 2
+            set -l fraction (string trim -r -c 0 -- "$parts[2]")
+            if test -n "$fraction"
+                set ceil (math "$parts[1] + 1")
+            end
+        end
+        test "$commit" -ge "$ceil"
+        return $status
+    end
+    test "$pkg_path/PKGBUILD" -nt "$archive"
+end
+
 # freshness_skip_decision PKG_PATH PACKAGE_ID SKIP_MODE — THE skip decision.
 # Both claim sites (build_package's skip block and the toolchain pre-check
 # before a drift clean) call this one function; the two copies that used to
 # live at those sites had already diverged once. SKIP_MODE is build_package's
 # skip_flag (in-params are arguments here, like every other caller seam):
 #   1 = -s           the full freshness analysis below
-#   2 = --skip-built the built-set claim only — no PKGBUILD-vs-archive mtime
-#                    compare, no VCS probes (this function must not touch the
-#                    network in that mode), no waivers (nothing to waive)
+#   2 = --skip-built the built-set claim only — the newest complete set at
+#                    ANY version (newest_complete_archives), no upstream VCS
+#                    probes (this function must not touch the network in that
+#                    mode), no waivers (nothing to waive); the recipe-change
+#                    gate (recipe_changed_since_build) replaces the mtime
+#                    compare
 # Results:
 #   _FRESHNESS_VERDICT  skip | build | defer
-#   _FRESHNESS_ARCHIVE  the current set (skip verdict only)
+#   _FRESHNESS_ARCHIVE  the claimed set (skip verdict only)
 #   _FRESHNESS_WAIVER   waiver line(s) — printed only by an actual skip claim
 #   _FRESHNESS_WAIVER_REASON  the claim token when the skip carries one
 #                             (freshness-waived / abi-provider-waived /
@@ -1198,7 +1331,8 @@ end
 #         makepkg writes all outputs of one build together, so a mixed-age set
 #         is itself evidence of an interrupted build) and every member is
 #         VCS-current or under a recorded waiver. In --skip-built mode the
-#         complete payload-valid set IS the claim.
+#         complete payload-valid set at ANY version IS the claim — unless
+#         the recipe changed since the build (recipe_changed_since_build).
 # build = anything else; the reason is already reported, except the silent
 #         "nothing is current" case.
 # defer = freshness unverifiable and the consumer chain can absorb the wait
@@ -1208,7 +1342,15 @@ function freshness_skip_decision -a pkg_path package_id skip_mode
     set -g _FRESHNESS_VERDICT build
     set -g _FRESHNESS_ARCHIVE
     set -l pkg_name "$package_id"
-    set -l archives (current_archives "$pkg_path")
+    # Discovery differs per claim: -s keys to the recipe's current
+    # pkgver-pkgrel; --skip-built claims the newest complete set at any
+    # version (the committed pkgver trails fast-moving VCS builds).
+    set -l archives
+    if test "$skip_mode" = 2
+        set archives (newest_complete_archives "$pkg_path")
+    else
+        set archives (current_archives "$pkg_path")
+    end
     switch $status
         case 0
             # Complete set — fall through to the gates below.
@@ -1226,10 +1368,17 @@ function freshness_skip_decision -a pkg_path package_id skip_mode
     if test "$skip_mode" != 2
         for archive in $archives
             # `test -nt` compares nanosecond mtimes; a PKGBUILD newer than any
-            # member means the whole set predates the recipe. --skip-built
-            # deliberately drops this gate: a git pull that only touches the
-            # recipe's mtime is not evidence the built set is stale.
+            # member means the whole set predates the recipe.
             if test "$pkg_path/PKGBUILD" -nt "$archive"
+                return 0
+            end
+        end
+    else
+        # --skip-built's recipe-change gate REPLACES the mtime compare: a git
+        # pull that only touches the recipe's mtime is churn, not evidence —
+        # a COMMIT after the set is. One changed member invalidates the set.
+        for archive in $archives
+            if recipe_changed_since_build "$pkg_path" "$archive"
                 return 0
             end
         end
@@ -3942,12 +4091,13 @@ function build_package -a package_id install_flag clean_flag skip_flag no_sync_f
     end
 
     # Skip if already built (only when a skip mode is set). The decision — the
-    # COMPLETE current-version set, payload-valid, and in -s mode newer than
-    # the PKGBUILD, VCS-current or waived — is freshness_skip_decision, shared
-    # with the toolchain pre-check above; only the skip CLAIM renders it. The
-    # claim is made only when the version check above established there was
-    # nothing to do (skip_allowed): over an UNCHECKED repo version "already
-    # built" would be a freshness claim this run never made (2026-10-05).
+    # COMPLETE claimed set, payload-valid, and in -s mode current-version,
+    # newer than the PKGBUILD, VCS-current or waived — is
+    # freshness_skip_decision, shared with the toolchain pre-check above;
+    # only the skip CLAIM renders it. The claim is made only when the version
+    # check above established there was nothing to do (skip_allowed): over an
+    # UNCHECKED repo version "already built" would be a freshness claim this
+    # run never made (2026-10-05).
     if test "$skip_flag" != "0"; and test $skip_allowed -eq 1
         freshness_skip_decision "$pkg_path" "$package_id" "$skip_flag"
         switch $_FRESHNESS_VERDICT
@@ -3970,10 +4120,13 @@ function build_package -a package_id install_flag clean_flag skip_flag no_sync_f
                     ui_info "$pkg_name: already built ("(string join ', ' (basename -- $_FRESHNESS_ARCHIVE))")"
                 end
                 # -s + -i: the skip path installs too — topo order must
-                # hold for already-built packages just the same.
-                # ($log_file isn't defined yet — use the canonical path.)
+                # hold for already-built packages just the same. Install the
+                # CLAIMED set: list_split_pkgs keys to the committed pkgver
+                # and would miss a --skip-built claim made across a version
+                # drift. ($log_file isn't defined yet — use the canonical
+                # path.)
                 if test "$install_flag" = "1"
-                    install_pkgs_now (package_log_file "$package_id") 1 $force_install_flag (list_split_pkgs "$pkg_path"); or return 1
+                    install_pkgs_now (package_log_file "$package_id") 1 $force_install_flag $_FRESHNESS_ARCHIVE; or return 1
                 end
                 return 0
         end
@@ -7449,14 +7602,16 @@ function usage
     echo "                    after transport retries parks that recipe (deferred:"
     echo "                    nothing is skipped or built, the rest of the run"
     echo "                    continues, exit stays non-zero)."
-    echo "  --skip-built      Skip anything already built for the recipe's CURRENT"
-    echo "                    version: a complete, payload-valid archive set stays"
-    echo "                    skipped (row reason skip-built) — freshness analysis"
-    echo "                    is OFF (no PKGBUILD-vs-archive mtime compare, no"
-    echo "                    upstream VCS probes, no network, no waivers). An"
-    echo "                    old-version or incomplete set still rebuilds. With"
-    echo "                    -i the skipped package still installs. Combined with"
-    echo "                    -s, --skip-built wins."
+    echo "  --skip-built      Skip anything already built: the newest complete,"
+    echo "                    payload-valid output set at ANY version stays"
+    echo "                    skipped (row reason skip-built) — no upstream VCS"
+    echo "                    probes, no network, no waivers. A recipe COMMIT"
+    echo "                    newer than the set rebuilds (its file mtime when"
+    echo "                    no git metadata exists; checkout/pull mtime churn"
+    echo "                    never does). An incomplete set or an unreadable"
+    echo "                    archive still rebuilds. With -i the skipped"
+    echo "                    package still installs. Combined with -s,"
+    echo "                    --skip-built wins."
     echo "  --vcs-skip-tolerance N"
     echo "                    The -s waive threshold: a moved Git ref still skips"
     echo "                    while the move is fewer than N commits. Overrides"

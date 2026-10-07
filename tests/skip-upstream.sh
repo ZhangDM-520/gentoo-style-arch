@@ -48,6 +48,32 @@ advance_main() { # $1 = local worktree; $2 = commit message and file content;
     git_fixture -C "$work" push origin main >/dev/null
 }
 
+ws_git_init() { # $1 = workspace; $2 = committer date (default 2020-01-01).
+    # The --skip-built recipe-change gate reads the PKGBUILD's last COMMIT
+    # time, so a fixture workspace must BE a git tree — and the commit date
+    # is fixture state: fixed values keep the gate's second-granularity
+    # arithmetic deterministic (a commit's whole second vs the archive's
+    # nanosecond mtime).
+    local ws=$1 date=${2:-'@1577836800 +0000'}
+    git_fixture -C "$ws" init --initial-branch=main >/dev/null
+    git_fixture -C "$ws" config user.name 'Fixture User'
+    git_fixture -C "$ws" config user.email 'fixture@example.invalid'
+    git_fixture -C "$ws" config commit.gpgsign false
+    git_fixture -C "$ws" config core.hooksPath /dev/null
+    GIT_COMMITTER_DATE=$date GIT_AUTHOR_DATE=$date git_fixture -C "$ws" add -A
+    GIT_COMMITTER_DATE=$date GIT_AUTHOR_DATE=$date \
+        git_fixture -C "$ws" commit -m 'recipe tree' >/dev/null
+}
+
+ws_git_commit() { # $1 = workspace; $2 = committer date; $3 = message.
+    # Commits ALL pending changes (a fixture recipe edit is one commit, the
+    # evidence the change gate exists to see).
+    local ws=$1 date=$2 message=$3
+    GIT_COMMITTER_DATE=$date GIT_AUTHOR_DATE=$date git_fixture -C "$ws" add -A
+    GIT_COMMITTER_DATE=$date GIT_AUTHOR_DATE=$date \
+        git_fixture -C "$ws" commit -m "$message" >/dev/null
+}
+
 mk_fake_archive() { # $1 = archive path; $2 = optional payload text
     # A REAL (if tiny) zstd tarball: the -s payload probe reads archives the
     # way pacman does, so "an archive exists" must model a readable one — a
@@ -1196,13 +1222,18 @@ EOF
     sb_ws=$sb_dir/workspace
     init_git_remote "$sb_dir/repository"
     make_vcs_workspace "$sb_ws" "$sb_dir/repository/remote.git" branch main
+    # The change gate's evidence is the recipe's last COMMIT, so the recipe
+    # tree must be committed before the build (commit 2020 ≪ archive "now").
+    ws_git_init "$sb_ws"
     run_case "$sb_ws" p1
     expect_success 'skip-built mtime: initial build'
     assert_makepkg_count "$sb_ws" 1 'skip-built mtime: initial build'
 
     # The git-pull shape: the recipe file is NEWER than the archive. Under -s
     # that mtime alone forces a rebuild ('newer PKGBUILD mtime' above pins
-    # it); under --skip-built the built set still counts.
+    # it); under --skip-built the built set still counts — mtime churn is not
+    # evidence of a recipe change, the file's commit time is, and it stands
+    # at 2020.
     touch -d '+1 day' "$sb_ws/packages/p1/PKGBUILD"
     run_case "$sb_ws" --skip-built p1
     expect_success 'skip-built skips a built package despite a newer PKGBUILD'
@@ -1211,10 +1242,14 @@ EOF
         fail "skip-built row is not 'succeeded … skip-built':"$'\n'"$FIXTURE_OUTPUT"
 )
 
-# A recipe whose version advanced has NOT built its current version: the
-# old-version archive must not satisfy --skip-built. The PKGBUILD mtime is
-# pinned back into the past after the edit, so the rebuild can only come from
-# the version — --skip-built has no mtime gate to blame.
+# Version drift alone never rebuilds (2026-10-07 doctrine flip): the claim is
+# "built remains built" — a claim about the BUILD, not about the recipe's
+# recorded pkgver. A fast-moving VCS recipe's committed pkgver trails its
+# archives (makepkg's pkgver() rewrites the in-tree PKGBUILD at build time; a
+# pull resets it), so keying the claim to the committed version churned
+# rebuilds on every such recipe (run #40 llvm). Only evidence of a RECIPE
+# CHANGE rebuilds (the commit-gate cases below); here the edit's mtime is
+# pinned away and no git metadata exists, so nothing says "changed".
 (
     sbv_dir=$fixture/skip-built-version
     sbv_ws=$sbv_dir/workspace
@@ -1239,8 +1274,88 @@ EOF
     sed -i 's/^pkgver=1\.0\.0$/pkgver=1.1.0/' "$sbv_ws/packages/p1/PKGBUILD"
     touch -d '2000-01-01 00:00:00 UTC' "$sbv_ws/packages/p1/PKGBUILD"
     run_case "$sbv_ws" --skip-built p1
-    expect_success 'skip-built rebuilds when the recipe version advanced'
-    assert_makepkg_count "$sbv_ws" 2 'skip-built version: an old-version archive is not built for the current recipe'
+    expect_success 'skip-built skips a version-drifted recipe with no change evidence'
+    assert_makepkg_count "$sbv_ws" 1 'skip-built version: version drift alone must not rebuild'
+    [[ $(rr_row p1 reason <<<"$FIXTURE_OUTPUT") == skip-built ]] ||
+        fail "skip-built version row is not 'succeeded … skip-built':"$'\n'"$FIXTURE_OUTPUT"
+)
+
+# The run-#40 llvm shape: the recipe's COMMITTED pkgver trails the built set
+# (makepkg's pkgver() named the archives at a newer revision; a later pull
+# reset the in-tree record and churned its mtime). The claim must survive the
+# drift: complete set at any version + no commit newer than the set = skip —
+# and with -i the CLAIMED set installs, not whatever the committed pkgver
+# names. Then a committed recipe change after the build must rebuild (the
+# gate's whole reason to exist).
+(
+    sbg_dir=$fixture/skip-built-version-drift
+    sbg_ws=$sbg_dir/workspace
+    make_workspace "$sbg_ws" 1 2 low
+    make_install_conf "$sbg_ws/pacman.conf"
+    add_package "$sbg_ws" p1 "$gsa_meta_any"
+    cat >"$sbg_ws/bin/makepkg" <<'EOF'
+#!/usr/bin/env bash
+set -eu
+id=$(basename "$PWD")
+printf '%s\n' "$id" >>"${GSA_FAKE_MAKEPKG_COUNT:?}"
+tar --zstd -cf "$PWD/$id-1.0.0-1-any.pkg.tar.zst" --files-from /dev/null
+EOF
+    chmod +x "$sbg_ws/bin/makepkg"
+    stub_sudo "$sbg_ws"
+    stub_pacman "$sbg_ws"
+    ws_git_init "$sbg_ws" # commit 2020 ≪ the archive written below
+
+    run_case "$sbg_ws" p1
+    expect_success 'skip-built drift: initial build'
+    assert_makepkg_count "$sbg_ws" 1 'skip-built drift: initial build'
+    # The built set drifts past the committed record; the pull that reset the
+    # record also churned the file's mtime.
+    mv "$sbg_ws/packages/p1/p1-1.0.0-1-any.pkg.tar.zst" \
+        "$sbg_ws/packages/p1/p1-1.1.0-1-any.pkg.tar.zst"
+    touch -d '+1 day' "$sbg_ws/packages/p1/PKGBUILD"
+    run_case "$sbg_ws" --skip-built -i p1
+    expect_success 'skip-built drift: version-drifted set still skips'
+    assert_makepkg_count "$sbg_ws" 1 'skip-built drift: a complete drifted set must not rebuild'
+    [[ $(rr_row p1 reason <<<"$FIXTURE_OUTPUT") == skip-built ]] ||
+        fail "skip-built drift row is not 'succeeded … skip-built':"$'\n'"$FIXTURE_OUTPUT"
+    grep -- 'pacman -U' "$sbg_ws/pacman.log" | grep -Fq 'p1-1.1.0-1-any.pkg.tar.zst' ||
+        fail 'skip-built drift: -i did not install the CLAIMED drifted archive'
+
+    # A real recipe change is a COMMIT, and it postdates the build: rebuild.
+    printf '# recipe change after the build\n' >>"$sbg_ws/packages/p1/PKGBUILD"
+    ws_git_commit "$sbg_ws" '@4102444800 +0000' 'recipe change after the build'
+    run_case "$sbg_ws" --skip-built p1
+    expect_success 'skip-built drift: committed recipe change rebuilds'
+    assert_makepkg_count "$sbg_ws" 2 'skip-built drift: a commit newer than the set must rebuild'
+)
+
+# The no-git fallback: without commit metadata the file's mtime is the only
+# change evidence left, and a real edit moves it — conservative direction.
+(
+    sbf_dir=$fixture/skip-built-mtime-fallback
+    sbf_ws=$sbf_dir/workspace
+    make_workspace "$sbf_ws" 1 2 low
+    make_install_conf "$sbf_ws/pacman.conf"
+    add_package "$sbf_ws" p1 "$gsa_meta_any"
+    touch -d '2000-01-01 00:00:00 UTC' "$sbf_ws/packages/p1/PKGBUILD"
+    cat >"$sbf_ws/bin/makepkg" <<'EOF'
+#!/usr/bin/env bash
+set -eu
+id=$(basename "$PWD")
+printf '%s\n' "$id" >>"${GSA_FAKE_MAKEPKG_COUNT:?}"
+tar --zstd -cf "$PWD/$id-1.0.0-1-any.pkg.tar.zst" --files-from /dev/null
+EOF
+    chmod +x "$sbf_ws/bin/makepkg"
+    stub_sudo "$sbf_ws"
+    stub_pacman "$sbf_ws"
+
+    run_case "$sbf_ws" p1
+    expect_success 'skip-built fallback: initial build'
+    assert_makepkg_count "$sbf_ws" 1 'skip-built fallback: initial build'
+    printf '# real edit\n' >>"$sbf_ws/packages/p1/PKGBUILD"
+    run_case "$sbf_ws" --skip-built p1
+    expect_success 'skip-built fallback: mtime evidence rebuilds'
+    assert_makepkg_count "$sbf_ws" 2 'skip-built fallback: without git, a newer PKGBUILD must rebuild'
 )
 
 # The claim is the COMPLETE current-version set: a split recipe missing a

@@ -116,13 +116,16 @@ discovery at all.
 Two flags reshape the skip decision (2026-10-06, `docs/NOTE.md`):
 
 - `--skip-built` claims "built remains built" with the freshness analysis
-  **off**: a complete, payload-valid archive set at the recipe's evaluated
-  current `pkgver-pkgrel` is skipped (run-record row reason `skip-built`) —
-  no `PKGBUILD`-vs-archive mtime compare, no upstream VCS probes (the mode
-  touches no network at all), no waivers. A recipe whose version advanced, an
-  incomplete split set, or an unreadable archive still rebuilds with the same
-  named diagnostics as `-s`. With `--install` the skipped package still
-  installs. Combined with `-s`, `--skip-built` wins — in either order.
+  **off**: the newest complete, payload-valid output set at **any** version is
+  skipped (run-record row reason `skip-built`) — no upstream VCS probes (the
+  mode touches no network at all), no waivers. The claim dies only on a
+  recipe CHANGE: a `PKGBUILD` commit newer than the set rebuilds (its file
+  mtime when no git metadata exists — checkout/pull mtime churn never
+  rebuilds). An incomplete split set or an unreadable archive still rebuilds
+  with the same named diagnostics as `-s`. With `--install` the skipped
+  package still installs — the claimed set, however its version drifts from
+  the committed `pkgver`. Combined with `-s`, `--skip-built` wins — in
+  either order.
 - `--vcs-skip-tolerance N` is the CLI form of the waive threshold described
   above. It overrides `GSA_VCS_SKIP_TOLERANCE` and accepts positive integers
   only; `0`, negatives and non-numbers are a loud usage error (exit non-zero),

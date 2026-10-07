@@ -37,6 +37,54 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-07 — `--skip-built` rebuilt llvm-git every run: the claim was keyed to the committed `pkgver`
+
+**Symptom.** Run #40 (`--install -s --skip-built …`) rebuilt `llvm-git` again
+even though complete 3/3 archive sets sat in the recipe dir at `r600824`,
+`r600881` and `r600914` — the owner's "built remains built" claim was not
+honored on fast-moving VCS recipes. Killed at the wasted rebuild (the wall was
+pure skip churn, not a build failure).
+
+**Root cause.** `--skip-built`'s built-set claim still ran through
+`current_archives`, which matches archives to the recipe's committed
+`pkgver=`/`pkgrel=` (`pkgbuild_version` sources the PKGBUILD; it never runs
+`pkgver()`). makepkg's `pkgver()` rewrites the in-tree PKGBUILD at build time,
+so built archives carry the *new* revision while a later `git pull` resets the
+record to the stale committed value — for llvm-git the committed
+`24.0.0_r600873…` matched none of the built sets, so "nothing is current" won
+silently and the recipe rebuilt every run. The mode's design dropped the mtime
+gate but left the version-match gate standing, which is exactly the wrong
+trade for VCS recipes.
+
+**Fix.** `build-all.fish`: mode 2 now claims through a new
+`newest_complete_archives` — the newest complete, payload-valid output set at
+**any** version (each archive assigned to the longest expected name it is
+prefixed by, grouped by its PV-PR key; a newer *partial* key still reports
+`incomplete`, so an interrupted split build never gets covered by an older
+complete set). The replaced mtime gate becomes a **recipe-change gate**:
+`recipe_changed_since_build` rebuilds only on a PKGBUILD commit newer than the
+set (`git log -1 --format=%ct`, commit-vs-`ceil(archive mtime)` so
+second-granularity doubt rebuilds), falling back to the plain mtime gate
+without git metadata. Mode 1 (`-s`) is unchanged (current-version set + mtime
++ VCS probes). The skip-path install now passes the claimed set
+(`$_FRESHNESS_ARCHIVE`) instead of re-deriving it through the version-keyed
+`list_split_pkgs`, so `-i` installs the drifted claimed archives.
+
+**Validation.** Red-first (`tests/skip-upstream.sh` failed on the flipped
+version-drift check against the unfixed builder), then green; fixture grew
+four pins: version drift + no change evidence SKIPS (git-committed stale
+record + renamed archive + mtime churn, with `-i` installing the claimed
+drifted archive), a commit newer than the set REBUILDS, no-git mtime evidence
+REBUILDS (the old mode 2 had no change gate at all), and the mtime-churn
+section now runs in a git-committed workspace. Full battery 55/55.
+
+**Rule.** A skip claim is about the BUILD, never about the recipe's recorded
+`pkgver` — version-match retention is fundamentally at odds with fast VCS
+upstream. "Recipe changed" evidence in a git tree is the file's COMMIT time
+(checkout/pull/makepkg's in-tree `pkgver()` rewrite all churn mtime without a
+commit); without git metadata, mtime is the only evidence left and doubt
+rebuilds. Never install a skipped set through version-keyed discovery.
+
 ## 2026-10-07 — Hard freeze + black desktop: `-i` swapped `libLLVM` under the live GL stack
 
 **Symptom.** Machine hard-froze (~03:32, recurring "again" per owner), force
