@@ -18,6 +18,8 @@
 #   _SR_ROWS / _PB_ROWS       memoised shared-parse caches (srcinfo_rows,
 #                             pkgbuild_scan_rows) — cross-module read-only
 #   _VCS_ABI_ADVANCE_WINDOW   advance-window constant (vcs_git_advance_distance)
+#   _SRCINFO_EXTRA_SOURCES    provider-only sources after a successful
+#                             srcinfo_matches_sources (reported, never anchored)
 # Reads from the entry (documented coupling, unchanged): _PACKAGE_MAP,
 # _SCRIPT_DIR-derived paths, _STATE_DIR, synced.list state, ui_* printers.
 
@@ -1061,7 +1063,7 @@ function sync_nvchecker_version -a package_id pkg_path
         return 4
     end
     if test "$provider" = aur; and not srcinfo_matches_sources "$aur_srcinfo" "$pkg_path"
-        ui_error "$pkg_name: AUR .SRCINFO sources do not exactly match the rewritten recipe; the recipe was restored"
+        ui_error "$pkg_name: AUR .SRCINFO sources do not cover every source of the rewritten recipe; the recipe was restored"
         restore_version_sync_recipe "$pkg_path" "$original" "$tmp"
         return $lane_outcome_defer
     end
@@ -1976,18 +1978,36 @@ function srcinfo_base_sources -a srcinfo
 end
 
 function srcinfo_matches_sources -a srcinfo pkg_path
+    set -g _SRCINFO_EXTRA_SOURCES
     set -l published_sources (srcinfo_base_sources "$srcinfo")
     set -l recipe_sources (pkgbuild_array_checked "$pkg_path" source)
-    set -l recipe_status $status
-    if test $recipe_status -ne 0; or test (count $published_sources) -ne (count $recipe_sources)
+    if test $status -ne 0
         return 1
     end
-    set -l i 1
-    while test $i -le (count $recipe_sources)
-        if test "$published_sources[$i]" != "$recipe_sources[$i]"
+    # A provider record carrying files the recipe does not is still a
+    # different packaging when the recipe carries none at all (the pre-2026-10-07
+    # count equality caught that).
+    if test (count $recipe_sources) -eq 0; and test (count $published_sources) -gt 0
+        return 1
+    end
+    # COVERAGE, not equality: every source the recipe ships must appear
+    # verbatim in the published list, but a published SUPERSET is valid and
+    # its extras are reported, never anchored (2026-10-07 gcc-snapshot: AUR
+    # carries gcc-ada-repro.patch for the ada frontend this recipe trims, and
+    # byte equality refused a checksum anchor that was correct for every
+    # source the recipe does build).
+    for s in $recipe_sources
+        if not contains -- "$s" $published_sources
             return 1
         end
-        set i (math $i + 1)
+    end
+    for p in $published_sources
+        if not contains -- "$p" $recipe_sources
+            set -a _SRCINFO_EXTRA_SOURCES "$p"
+        end
+    end
+    if test (count $_SRCINFO_EXTRA_SOURCES) -gt 0
+        echo "  note: the provider .SRCINFO carries "(count $_SRCINFO_EXTRA_SOURCES)" source(s) this recipe does not build: "(string join ', ' -- $_SRCINFO_EXTRA_SOURCES)
     end
     return 0
 end
@@ -2396,7 +2416,7 @@ function anchor_sums_from_provider -a pkg_path provider provider_id provider_fil
                 return 3
             end
             if not srcinfo_matches_sources "$srcinfo" "$pkg_path"
-                ui_error "$pkg_name: refusing to build — the AUR .SRCINFO sources for $provider_id do not exactly match the rewritten recipe"
+                ui_error "$pkg_name: refusing to build — the AUR .SRCINFO for $provider_id does not cover every source of the rewritten recipe"
                 echo "$refuse_manual"
                 command rm -rf -- "$tmp"
                 return 3

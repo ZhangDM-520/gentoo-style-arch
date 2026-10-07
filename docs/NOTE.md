@@ -37,6 +37,54 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-07 — run #57 (85/113): the run #56 fixes verified live, then two more walls — python-lxml vs Cython 3.3.0 (the tag's pin lags upstream's own master) and gcc-snapshot refusing a *superset* AUR source list
+
+- **Symptom.** Run #57 (closer window `100..100,139..250`, 113 slots) built
+  85 — including the run #56 walls: `nodejs` ✓ 3m06s (the V8 BMP-only patch),
+  `groff` ✓ 4m35s and `inetutils` ✓ (savannah TLS restored), `libisl-git` ✓
+  (the defer fix) — then `python-lxml` `BUILD FAILED` (13 s): `ERROR Unmet
+  dependencies (checked against /usr/bin/python): Cython<3.3,>=3.2.9
+  wanted … found: 3.3.0`; `gcc-snapshot` DEFERRED (anchoring-refused): `AUR
+  .SRCINFO sources do not exactly match the rewritten recipe; the recipe was
+  restored`. 28 remaining.
+- **Root cause 1 — python-lxml (recipe).** The pinned tag `lxml-6.1.3-1`
+  requires `Cython>=3.2.9,<3.3` in `requirements.txt`/`pyproject.toml`,
+  while upstream master has itself moved to `Cython>=3.3.0` and Arch ships
+  `cython 3.3.0-2.1` — a stale *upper bound* one commit behind upstream's
+  own decision, not a toolchain incompatibility. Arch's current PKGBUILD is
+  byte-identical to ours here (same tag, same `--no-isolation`), so stock
+  hits the same wall whenever it rebuilds.
+- **Root cause 2 — gcc-snapshot (builder anchor guard).**
+  `srcinfo_matches_sources` demanded the provider's source list to equal
+  the recipe's byte for byte. AUR's `gcc-snapshot` carries one extra local
+  source, `gcc-ada-repro.patch`, for the ada frontend this recipe trims — a
+  benign SUPERSET — and the guard that exists to catch URL drift also
+  rejected a checksum anchor that was correct for every source the recipe
+  does build. The refusal is fail-closed working as designed; the design
+  was one predicate too strong.
+- **Fix.** (1) `python-lxml` `prepare()` relaxes the pin to `<3.4` and
+  fails loudly if the pin ever moves so the relaxation cannot silently stop
+  applying. (2) `srcinfo_matches_sources` becomes COVERAGE semantics:
+  every source the recipe ships must appear verbatim in the provider list
+  (a real mismatch still refuses and defers — fixture Case 22 unchanged);
+  provider-only extras are reported in the package log
+  (`_SRCINFO_EXTRA_SOURCES`) and never anchored. Both call-site messages
+  reworded; MEMORY rule 18 updated to the coverage wording.
+- **Validation.** Fixture Case 46 (AUR superset) red-first against the old
+  guard — the run record shows `s1 deferred 99 0 anchoring-refused`, run
+  #57's exact row — then green; Case 21/22 (AUR version/source races)
+  unchanged and green; full battery 55/55. `python-lxml`: `bash -n`,
+  `.SRCINFO` diff-clean, green `makepkg` rehearsal over the run path's
+  dirty `src/` tree (rc 0), and the packaged C extensions built by
+  Cython 3.3.0 import cleanly (`import lxml.etree` → `LXML (6, 1, 3, 0) /
+  LIBXML (2, 15, 4)`). The gcc-snapshot real-path proof (its `re-anchored`
+  line plus the build) lands in run #58's own slot — the fixture pins the
+  predicate, not the gcc build.
+- **Rule.** A provider checksum authority is a COVERAGE relation, not byte
+  equality (MEMORY rule 18): the recipe's sources must all be published by
+  the provider; the provider may carry more (trimmed frontends, split
+  packaging) and those extras are named, never anchored.
+
 ## 2026-10-07 — run #56: three walls in one window — nodejs vs ICU master (Unicode 17), gcc-snapshot deferred by nvchecker 2.22's `new_ver.json` v2 envelope, and a fish 4.9.3 command-substitution `cd` leak that relocated the builder's cwd into deleted temp dirs
 
 - **Symptom.** Run #56 (same 516-window `100..100,139..653` launch shape)

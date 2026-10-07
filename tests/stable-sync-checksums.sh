@@ -1091,7 +1091,10 @@ cmp -s "$dir/fake/PKGBUILD.original" "$dir/packages/core/s1/PKGBUILD" \
 grep -q '^s1 deferred 99 ' "$dir/out.txt" \
     || fail 'aur-version-race: the run record did not classify the metadata race as deferred'
 
-# ─── Case 22: AUR source metadata must match the rewritten recipe exactly ───
+# ─── Case 22: AUR source metadata must cover the rewritten recipe exactly ───
+# A provider source list that does not carry the recipe's own sources refuses
+# (URL drift is indistinguishable from a different file). The converse — a
+# published SUPERSET with provider-only files — anchors fine; Case 46 pins it.
 dir="$fixture/aur-source-race"
 make_aur_version_workspace "$dir"
 set_aur_srcinfo "$dir" s1 "$repo_version" 3 \
@@ -1688,6 +1691,42 @@ GSA_FAKE_MAKEPKG_FAIL=1 run_build "$dir" 'cwd-leak-fail' fail
 grep -q 'fake makepkg' "$(recipe_log "$dir")" \
     || fail 'cwd-leak-fail: the failing build left no log content, so the noise check inspected the wrong artifact'
 assert_no_cwd_noise "$dir" 'cwd-leak-fail'
+)
+
+(
+# ─── Case 46: a published SUPERSET still anchors (provider-only extras) ─────
+# run #56 gcc-snapshot: AUR carries `gcc-ada-repro.patch` for the ada frontend
+# this recipe trims, and the old byte-equality guard refused a checksum anchor
+# that was correct for every source the recipe DOES build. Coverage semantics:
+# every recipe source must appear verbatim in the provider list; provider-only
+# extras are reported in the log and never anchored. Case 22 keeps pinning the
+# real mismatch class.
+dir="$fixture/aur-superset"
+make_aur_version_workspace "$dir"
+{
+    printf 'pkgbase = s1\n'
+    printf '\tpkgver = %s\n' "$repo_version"
+    printf '\tpkgrel = 3\n'
+    printf '\tarch = any\n'
+    printf '\tsource = https://example.invalid/s1-%s.tar.gz\n' "$repo_version"
+    printf '\tsource = only-in-aur.patch\n'
+    printf '\tsha256sums = %s\n' "$published_sha"
+    printf '\tsha256sums = %s\n' "$staged_sum"
+    printf '\n\tpkgname = s1\n'
+} >"$dir/fake/aur_srcinfo"
+set_delivery "$dir" "$published_payload"
+GSA_FAKE_NVCHECK_VERSION="$repo_version" run_build "$dir" 'aur-superset' 0
+
+grep -q "^pkgver=$repo_version$" "$dir/packages/core/s1/PKGBUILD" \
+    || fail 'aur-superset: the AUR pkgver was not applied to the recipe'
+grep -q "^sha256sums=('$published_sha')$" "$dir/packages/core/s1/PKGBUILD" \
+    || fail 'aur-superset: the recipe source was not anchored to the AUR checksum'
+grep -q 're-anchored to AUR' "$(recipe_log "$dir")" \
+    || fail 'aur-superset: the package log does not name the AUR checksum authority'
+grep -q 'does not build: only-in-aur.patch' "$(recipe_log "$dir")" \
+    || fail 'aur-superset: the provider-only source is not reported in the package log'
+[[ -s $dir/fake/makepkg_argv ]] \
+    || fail 'aur-superset: the build did not run although every recipe source was published'
 )
 
 printf 'stable-sync fixture: PASS\n'

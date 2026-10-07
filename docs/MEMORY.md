@@ -361,9 +361,14 @@
     only a validated `version-sync=nvchecker` topology tag selects an external
     provider (`.nvchecker.toml` presence alone is not opt-in). The resolver runs
     one config section with disposable state outside the repo and normal
-    `NVCHECK_STATE_DIR`. AUR `.SRCINFO` must match provider pkgbase, resolved
-    pkgver, and the recipe's expanded sources before it supplies pkgrel/epoch
-    or checksums; at equal pkgver, never lower a local pkgrel. For GitHub, bind
+    `NVCHECK_STATE_DIR`. AUR `.SRCINFO` must match provider pkgbase and
+    resolved pkgver, and must COVER the recipe's expanded sources — every
+    recipe source verbatim in the provider's list, while provider-only
+    extras are reported in the package log and never anchored (2026-10-07
+    gcc-snapshot: AUR carries `gcc-ada-repro.patch` for the ada frontend
+    this recipe trims, and byte equality refused a checksum anchor that was
+    correct for every source the recipe does build) — before it supplies
+    pkgrel/epoch or checksums; at equal pkgver, never lower a local pkgrel. For GitHub, bind
     an asset digest to the configured repository, release tag and remote URL
     basename (not a `name::url` local override);
     when no digest is published, label refreshed sums fetch-only. Provider
