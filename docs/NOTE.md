@@ -37,6 +37,28 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-07 — run #51 wall: libpng-git's `package()` installed `LICENSE` — upstream renamed it to `LICENSE.md` in the v1.6.54→libpng18 restructure
+
+- **Symptom.** Run #51 (resumed at ~50/516) built 68, then `libpng-git`
+  failed in `package()`: `install: cannot stat 'LICENSE': No such file or
+  directory` (22 s, autotools build itself was green).
+- **Root cause.** `-git` recipe tracks master; upstream's v1.6.54 →
+  `libpng18` merge restructured licensing: `LICENSE` → `LICENSE.md` (+ new
+  REUSE-style `LICENSES/{MIT,MIT-0}.txt`). The recipe's license install line
+  still named the old file — the "source tree moved under a packaging step"
+  class, invisible until the recipe rebuilt against new master.
+- **Fix.** `install -Dm644 LICENSE.md …/licenses/$pkgname/LICENSE` — follows
+  the rename, keeps the installed surface (stock parity) unchanged.
+- **Validation.** The exact failing command re-run against the real tree
+  installs `LICENSE.md` (5345 B) — the failing/passing pair is the command
+  itself; `bash -n` + `--printsrcinfo` clean.
+- **Durable rules.**
+  1. A `-git` recipe's `package()` must not assume upstream file names: on
+     rebuild against moved master, every source-tree path a packaging step
+     names is a potential `cannot stat` wall. Look-ahead sweep dispatched
+     (`install-path-sweep`) over run #51's freshly extracted trees to find
+     the rest of the class before their slots.
+
 ## 2026-10-07 — look-ahead relaunch gate: four more walls cleared before their slots — stale digest for its own filename, two SRCDEST one-name-two-upstreams collisions, missing GNU tarballs, and a dead TLS endpoint
 
 - **Symptom (predicted, none hit).** A look-ahead pass over run #51's

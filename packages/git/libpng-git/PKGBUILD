@@ -56,7 +56,10 @@ package() {
   cd "$_pkgname"
 
   make DESTDIR="$pkgdir" install
-  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  # 2026-10-07: upstream renamed LICENSE -> LICENSE.md in the v1.6.54 ->
+  # libpng18 restructure (run #51 wall); installed name kept for surface
+  # parity with stock.
+  install -Dm644 LICENSE.md "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 
   # pngminus tools (stock file-surface parity)
   cd contrib/pngminus
