@@ -37,6 +37,56 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-07 — linux-firmware install wall: the trimmed 7-way split family shipped files owned by repo splits it does not reuse — partition must follow ownership
+
+Symptom: run #45 built `linux-firmware` fine but its single `pacman -U`
+transaction aborted wholesale ("Errors occurred, no packages were upgraded")
+with 700 file conflicts against the already-installed cachyos repo family
+(same upstream version `1:20260916-1`, but a 16-way split the house recipe
+does not mirror). Dispatch stopped after 9 successes (including `git-git` —
+the NO_RUST fix proven live), 507 remaining.
+
+Root cause: the house recipe ships a deliberately trimmed 7-way family whose
+`linux-firmware-other` absorbs everything not picked by its splits. Three
+collision classes against installed repo splits whose names the house family
+does not reuse (conflict census: 668 `linux-firmware-ti`, 23
+`linux-firmware-amd`, 9 `linux-firmware-intel`):
+
+- TI (`ti/`, `ti-connectivity/`, `ti_*.fw`) plus 326 top-level WHENCE
+  `Link:` aliases (e.g. `1534-2-0x8.bin.zst -> ti/audio/tas2783/…`) — a
+  non-target vendor (the target audio chain is Cirrus, wifi is MT7925) that
+  the hardware-trim block missed.
+- OEM-wrapped Intel ISH blobs (`dell/ish`, `HP/ish`, `LENOVO/ish`; the three
+  OEM dirs hold nothing else) — non-target, same miss.
+- `amd/` (SEV), `amdnpu/` (XDNA NPU), `amdtee/` (PMF/TEE) — *target* content
+  (the recipe keeps AMD ACP/USB4 on purpose) left "unsorted" in `other`
+  while the repo ships it as `linux-firmware-amd`.
+
+Fix (`packages/stable/linux-firmware/PKGBUILD`): (1) new split
+`linux-firmware-amd` — reusing the repo split name so the transaction
+upgrades it in place — picking `amd,amdnpu,amdtee`, carrying the matching
+licenses, and added to the metapackage's depends; (2) `other()` hardware
+trim extended with `ti,ti-connectivity,ti_*.fw*` and `{dell,HP,LENOVO}`, and
+the WHENCE alias litter swept after the tree trim with a *scoped*
+`find "$fwdir" -maxdepth 1 -xtype l -lname 'ti/*' -delete` (tarfile audit of
+the built package showed 0 pre-existing dangling links and exactly the 326
+ti-target top-level links dangling post-trim, so the scope is exact).
+
+Validation: `bash -n` clean; `.SRCINFO` regenerated (adds the new pkgname and
+the metapackage dep). Scratch `makepkg --noconfirm` build rc 0; tarfile
+assertions on the archives: `other` carries no TI tree/blob/link and no
+OEM-ISH or `amd*` content (`ti-keystone` intentionally stays — owned by the
+repo's `linux-firmware-other`, so it upgrades cleanly), the new
+`linux-firmware-amd` archive holds the full amd/amdnpu/amdtee set plus its
+three licenses, and the metapackage depends on it. Full fixture battery
+55/55 PASS.
+
+Rule: a trimmed split family that replaces a repo split family must never
+ship files owned by a repo split it does not reuse — either trim that content
+away (if non-target) or reuse the upstream split name (if target). When a
+tree trim removes a WHENCE `Link:` target, sweep the now-broken aliases too;
+they are package files and conflict like any other.
+
 ## 2026-10-07 — git-git build wall: upstream git compiles a Rust core since 2.56, and the only toolchain edge would cycle the topology — NO_RUST is the house choice
 
 Symptom: run #44's `git-git` lane failed at build() — upstream's Makefile now

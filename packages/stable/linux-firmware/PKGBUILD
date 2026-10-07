@@ -11,6 +11,7 @@ pkgname=(
   # Radeon 880M/890M, MediaTek MT7925 wifi/BT, AMD ACP/USB4,
   # Cirrus CS35L41 speaker amps)
   amd-ucode
+  linux-firmware-amd
   linux-firmware-amdgpu
   linux-firmware-mediatek
   linux-firmware-cirrus
@@ -112,6 +113,7 @@ package_linux-firmware() {
   license=(CC0-1.0)
   depends=(
     amd-ucode
+    linux-firmware-amd
     linux-firmware-amdgpu
     linux-firmware-mediatek
     linux-firmware-cirrus
@@ -142,6 +144,11 @@ package_linux-firmware-other() {
   # (needed by the target's audio chain)
   _pick cirrus "${fwdir}"/cirrus "${fwdir}"/cs42l43*
 
+  # AMD platform firmware (SEV, XDNA NPU, TEE) — target content, but it must
+  # live under the upstream split name so it upgrades the repo's
+  # linux-firmware-amd in place instead of colliding with its files.
+  _pick amd "${fwdir}"/{amd,amdnpu,amdtee}
+
   # hardware trim (Strix Halo): drop firmware for vendors outside the target
   rm -rf "${fwdir}"/{ar[0-9]*,ath*,carl9170*,htc_*,qca,wil6210*}                    # Qualcomm Atheros
   rm -rf "${fwdir}"/{bnx2*,brcm,cypress,tigon}                                     # Broadcom/Cypress
@@ -151,6 +158,11 @@ package_linux-firmware-other() {
   rm -rf "${fwdir}"/{qcom,a300_*} "${fwdir}"/{qlogic,qed,ql2???_*,c{b,t,t2}fw-*}    # Qualcomm SoC/QLogic
   rm -rf "${fwdir}"/radeon                                                         # pre-amdgpu Radeon
   rm -rf "${fwdir}"/{realtek,rtlwifi,rtw8*,rtl_*}                                  # Realtek
+  rm -rf "${fwdir}"/{ti,ti-connectivity,ti_*.fw*}                                  # TI audio amps + WLAN
+  rm -rf "${fwdir}"/{dell,HP,LENOVO}                                               # OEM-wrapped Intel ISH
+  # WHENCE 'Link:' aliases for the trimmed TI tree land at the top level;
+  # sweep exactly those broken aliases (targets under ti/), nothing else.
+  find "${fwdir}" -maxdepth 1 -xtype l -lname 'ti/*' -delete
 
   # dedup after splitting
   make -C ${pkgbase} FIRMWAREDIR="${pkgdir}/usr/lib/firmware" dedup
@@ -168,6 +180,22 @@ package_amd-ucode() {
 
   install -Dm644 amd-ucode.img -t "${pkgdir}/boot"
   install -Dm644 ${_licdir}/LICENSE.amd-ucode \
+    -t "${pkgdir}/usr/share/licenses/${pkgname}"
+}
+
+package_linux-firmware-amd() {
+  pkgdesc+=" - Firmware for non-GPU AMD devices (SEV, XDNA NPU, TEE)"
+  license+=(
+    LicenseRef-amd-sev
+    LicenseRef-amd_pmf
+    LicenseRef-amdnpu
+  )
+  depends=(linux-firmware-whence)
+
+  mv -v ${pkgname#linux-firmware-}/* "${pkgdir}"
+  make -C ${pkgbase} FIRMWAREDIR="${pkgdir}/usr/lib/firmware" dedup
+
+  install -Dm644 ${_licdir}/LICENSE.{amd-sev,amd_pmf,amdnpu} \
     -t "${pkgdir}/usr/share/licenses/${pkgname}"
 }
 

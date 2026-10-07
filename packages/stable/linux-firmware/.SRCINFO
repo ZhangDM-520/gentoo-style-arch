@@ -20,6 +20,7 @@ pkgname = linux-firmware
 	pkgdesc = Firmware files for Linux - Default set (trimmed to AMD Strix Halo hardware)
 	license = CC0-1.0
 	depends = amd-ucode
+	depends = linux-firmware-amd
 	depends = linux-firmware-amdgpu
 	depends = linux-firmware-mediatek
 	depends = linux-firmware-cirrus
@@ -34,6 +35,14 @@ pkgname = linux-firmware-other
 pkgname = amd-ucode
 	pkgdesc = Microcode update image for AMD CPUs
 	license = LicenseRef-amd-ucode
+
+pkgname = linux-firmware-amd
+	pkgdesc = Firmware files for Linux - Firmware for non-GPU AMD devices (SEV, XDNA NPU, TEE)
+	license = LicenseRef-WHENCE
+	license = LicenseRef-amd-sev
+	license = LicenseRef-amd_pmf
+	license = LicenseRef-amdnpu
+	depends = linux-firmware-whence
 
 pkgname = linux-firmware-amdgpu
 	pkgdesc = Firmware files for Linux - Firmware for AMD Radeon GPUs
