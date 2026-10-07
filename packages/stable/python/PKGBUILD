@@ -10,7 +10,7 @@ pkgbase=python
 # path below; the test tree is trimmed from the python output instead
 pkgname=(python)
 pkgver=3.14.8
-pkgrel=1
+pkgrel=2
 _pybasever=${pkgver%.*}
 pkgdesc="The Python programming language"
 arch=('x86_64')
@@ -141,5 +141,5 @@ package_python() {
   cd "$pkgdir"/usr/lib/python*/
   rm -r {test,idlelib/idle_test}
 
-  install -Dm644 LICENSE -t "$pkgdir"/usr/share/licenses/$pkgname/
+  install -Dm644 "$srcdir"/Python-${pkgver}/LICENSE -t "$pkgdir"/usr/share/licenses/$pkgname/
 }

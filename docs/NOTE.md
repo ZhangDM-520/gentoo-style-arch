@@ -37,6 +37,33 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-07 — Run #41 `python` packaging wall: the trim's `cd "$pkgdir"` broke the trailing LICENSE install
+
+**Symptom.** Run #41 died at `python` (139/653, 5m58s) in `package_python()`:
+`install: cannot stat 'LICENSE': No such file or directory` — the very last
+step of the split. The recipe had never been reached before (earlier runs died
+at sqlite/fontconfig), so the wall was fresh territory.
+
+**Root cause.** The tests-trim step `cd "$pkgdir"/usr/lib/python*/` (to `rm -r
+{test,idlelib/idle_test}`) moves the function's cwd *into the packaging tree*,
+and the LICENSE install that follows kept a relative source path — from
+`$pkgdir/usr/lib/python3.14/` there is no `LICENSE`, though
+`$srcdir/Python-$pkgver/LICENSE` exists.
+
+**Fix.** `packages/stable/python/PKGBUILD`: the license install now uses the
+absolute `"$srcdir"/Python-${pkgver}/LICENSE`; pkgrel 1→2; `.SRCINFO`
+regenerated.
+
+**Validation.** Clone build green (`python 3.14.8-2`, `makepkg --noconfirm`,
+rc=0); archive members checked: `usr/share/licenses/python/LICENSE` present,
+zero `usr/lib/python3.14/test/` or `idlelib/idle_test` members (the trim
+held). Full battery in the run gap before commit.
+
+**Rule.** A `cd "$pkgdir"` inside `package()` invalidates every later
+relative *source* path — absolute-ize (`$srcdir/...`) or reorder the installs
+before the cd. When a trim moves cwd to operate on `$pkgdir`, the tail of the
+function is the trap.
+
 ## 2026-10-07 — `--skip-built` rebuilt llvm-git every run: the claim was keyed to the committed `pkgver`
 
 **Symptom.** Run #40 (`--install -s --skip-built …`) rebuilt `llvm-git` again
