@@ -21,3 +21,10 @@ path = [
 ]
 SPDX-FileCopyrightText = "Arch Linux contributors"
 SPDX-License-Identifier = "0BSD"
+
+[[annotations]]
+path = [
+    "0001-pcre2-include-before-term-h.patch",
+]
+SPDX-FileCopyrightText = "Zsh Development Group"
+SPDX-License-Identifier = "Zsh"

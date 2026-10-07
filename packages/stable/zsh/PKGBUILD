@@ -3,24 +3,32 @@
 pkgbase=zsh
 pkgname=('zsh' 'zsh-doc')
 pkgver=5.9.2
-pkgrel=1.1
+pkgrel=2
 arch=('x86_64')
 url='https://www.zsh.org/'
 license=('custom')
 makedepends=('pcre2' 'libcap' 'gdbm' 'yodl')
 source=("https://www.zsh.org/pub/zsh-${pkgver}"{,-doc}".tar.xz"{,.asc}
-        'zprofile')
+        'zprofile'
+        '0001-pcre2-include-before-term-h.patch')
 sha512sums=('40bb5eb2cf217e6bcff342fcc9314f082a5d8975abcb56897e86eba5839ddf0ec1ac3feed1e797d4c68cea22228197342916f14bb87309bbcc026a87622bc015'
             'SKIP'
             'ee67fb114e5e3fa1cc4edbe08bfc224a72e57aa9773a3a5784d20d73e8f0f111ac413d69bd98b4f4ae4ddcc75e0e8a381db9575ab0a6acd21ad0bf79fd2e982e'
             'SKIP'
-            'b287e00d8de4dc4cfb1c52bb2aef1d4b191de3512baad4c91dc81e78ddc3e5bb07297f43924b022ac44ff401a348d8a9fa366e19ddc8ea1ea72df311f5ed0034')
+            'b287e00d8de4dc4cfb1c52bb2aef1d4b191de3512baad4c91dc81e78ddc3e5bb07297f43924b022ac44ff401a348d8a9fa366e19ddc8ea1ea72df311f5ed0034'
+            'ae8541ae979dd4321f88879fe9926d56c196528fedb217196ec31d17ae1aa3d36505bce584ea26cb6ac72f4dd9fd40d169c21de0e9aa206032114d479b0f6194')
 validpgpkeys=('F7B2754C7DE2830914661F0EA71D9A9D4BDB27B3'
               'E96646BE08C0AF0AA0F90788A5FEEE3AC7937444'
               '7CA7ECAAF06216B90F894146ACF8146CAE8CBBC4')
 
 prepare() {
   cd "${srcdir}/${pkgbase}-${pkgver}"
+
+  # Include pcre2.h before pcre.mdh pulls in <term.h>: ncurses' term.h
+  # macros (CUR, Strings, ...) collide with pcre2.h's
+  # PCRE2_TYPES_STRUCTURES_AND_FUNCTIONS expansion (pcre2-git 10.49 +
+  # ncurses-git, 2026-10-08).
+  patch -Np1 --fuzz=0 -i "$srcdir/0001-pcre2-include-before-term-h.patch"
 
   # Set correct keymap path
   sed -i 's#/usr/share/keymaps#/usr/share/kbd/keymaps#g' Completion/Unix/Command/_loadkeys
