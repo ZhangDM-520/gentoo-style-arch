@@ -53,9 +53,12 @@ set -euo pipefail
 #   G. ABI-drift batch tightening (the guard's layer 2): a provider whose
 #      soname-provides set (committed .SRCINFO bare stems) differs from the
 #      installed stock package's provides refuses a real build that omits an
-#      installed member of its in-tree consumer closure (--no-deps keeps the
-#      omission reachable); the complete closure builds, and an unchanged
-#      surface or an uninstalled consumer never gates.
+#      installed DIRECT surface consumer (--no-deps keeps the omission
+#      reachable); the complete surface-consumer set builds, and an unchanged
+#      surface or an uninstalled consumer never gates. The relation is ONE
+#      hop over both halves (topology edge + .SRCINFO depend) — G5 pins the
+#      boundary: a consumer of a consumer (hub chain) never links the
+#      provider's sonames and must never gate.
 #   H. Pre-dispatch gate COST at synthetic scale: the keyed/memoized gate
 #      helpers keep the pacman probe count bounded — one installed-member
 #      probe (`pacman -Q <id>`) per unique member id across ALL (anchor ×
@@ -645,15 +648,18 @@ offenders=$(awk -F'|' '
 [[ -z $offenders ]] \
     || fail "F: build-tools without core (membership is always dual core,build-tools): $offenders"
 
-# ─── G. layer 2: soname drift drags the consumer closure into the batch ────
+# ─── G. layer 2: soname drift drags the surface consumers into the batch ───
 # The ABI-drift guard's batch half (build-all.fish, `ABI-drift guard layer
 # 2`): a provider whose soname-provides set (committed .SRCINFO bare stems)
-# differs from the installed stock package's provides must rebuild its FULL
-# in-tree consumer closure in the same selection. Pure gate logic — nothing
+# differs from the installed stock package's provides must rebuild its DIRECT
+# in-tree surface consumers in the same selection. Pure gate logic — nothing
 # is dispatched before it decides — and it REFUSES (never silently expands)
-# an installed closure member left out of the selection. The consumer
+# an installed surface consumer left out of the selection. The consumer
 # relation is pinned in both halves here: a topology edge and a .SRCINFO
-# depend on the provider's soname provide.
+# depend on the provider's soname provide. G5/G6 pin the ONE-hop boundary
+# (2026-10-07 gate fault: a transitive closure degenerates to the whole set
+# through hub chains like boost-libs→gdb→python→glibc→bash — only the direct
+# linkers of a changed soname can break).
 dir_g="$fixture/abi-drift"
 make_workspace "$dir_g" 1 2 low
 add_meta_package "$dir_g" libs-git ''
@@ -669,6 +675,25 @@ set_topology_record "$dir_g" app-git git 'libs-git'
     printf 'pkgname = app-git\n'
     printf '\tdepends = libgreet.so\n'
 } >"$dir_g/packages/app-git/.SRCINFO"
+
+# The hub chain for G5/G6: mid-git is a SECOND direct surface consumer of
+# libs-git (both relation halves, like app-git); leaf-git consumes mid-git
+# only — no topology edge to libs-git, no depend on libgreet.so — so it is a
+# transitive-but-not-surface consumer of libs-git.
+add_meta_package "$dir_g" mid-git ''
+add_meta_package "$dir_g" leaf-git ''
+set_topology_record "$dir_g" mid-git git 'libs-git'
+set_topology_record "$dir_g" leaf-git git 'mid-git'
+{
+    printf 'pkgbase = mid-git\n'
+    printf 'pkgname = mid-git\n'
+    printf '\tdepends = libgreet.so\n'
+} >"$dir_g/packages/mid-git/.SRCINFO"
+{
+    printf 'pkgbase = leaf-git\n'
+    printf 'pkgname = leaf-git\n'
+    printf '\tdepends = mid-git\n'
+} >"$dir_g/packages/leaf-git/.SRCINFO"
 stub_sudo "$dir_g"
 
 # The stub makepkg: B's shape — a BUILD marker plus the trivial archive.
@@ -687,8 +712,9 @@ chmod +x "$dir_g/bin/makepkg"
 # `-Qi libs` answers the INSTALLED STOCK surface from GSA_FAKE_QI_LIBS
 # (changed: `libold.so=1-64` against the house `libgreet.so`; unchanged:
 # `libgreet.so=1-64` — the auto-versioned form of the same bare stem, so the
-# STEM sets compare equal), and `-Q app-git` answers closure-member
-# membership from GSA_FAKE_APP_INSTALLED. Everything else is not installed.
+# STEM sets compare equal), and `-Q NAME` answers surface-consumer
+# membership per package from the GSA_FAKE_{APP,MID,LEAF}_INSTALLED flags.
+# Everything else is not installed.
 cat >"$dir_g/bin/pacman" <<'EOF'
 #!/usr/bin/env bash
 set -u
@@ -707,9 +733,17 @@ case ${args[0]:-} in
     exit 1
     ;;
 -Q)
-    if [[ ${args[1]:-} == app-git ]]; then
+    case ${args[1]:-} in
+    app-git)
         [[ ${GSA_FAKE_APP_INSTALLED:-0} == 1 ]] && exit 0
-    fi
+        ;;
+    mid-git)
+        [[ ${GSA_FAKE_MID_INSTALLED:-0} == 1 ]] && exit 0
+        ;;
+    leaf-git)
+        [[ ${GSA_FAKE_LEAF_INSTALLED:-0} == 1 ]] && exit 0
+        ;;
+    esac
     exit 1
     ;;
 esac
@@ -725,6 +759,8 @@ run_env_g() {
         GSA_FAKE_MAKEPKG_LOG="$dir_g/makepkg.log" \
         GSA_FAKE_QI_LIBS="$GSA_FAKE_QI_LIBS" \
         GSA_FAKE_APP_INSTALLED="$GSA_FAKE_APP_INSTALLED" \
+        GSA_FAKE_MID_INSTALLED="${GSA_FAKE_MID_INSTALLED:-0}" \
+        GSA_FAKE_LEAF_INSTALLED="${GSA_FAKE_LEAF_INSTALLED:-0}" \
         GSA_CPU_THREADS=8 \
         GSA_MEMORY_GIB=16 \
         fish "$dir_g/build-all.fish" "$@"
@@ -804,6 +840,61 @@ if [[ $FIXTURE_RC -ne 0 ]] || grep -Fq 'refusing to build' <<<"$FIXTURE_OUTPUT";
 fi
 if ! grep -Fq 'BUILD libs-git' "$dir_g/makepkg.log"; then
     printf 'G4: libs-git did not build:\n%s\n' "$FIXTURE_OUTPUT" >&2
+    exit 1
+fi
+
+# G5: ONE-hop boundary — the hub chain must not leak past the linkers.
+# leaf-git consumes mid-git, not libs-git (no topology edge to libs-git, no
+# depend on libgreet.so), so a libs-git surface drift can only strand the
+# packages that LINK libgreet.so: app-git and mid-git. leaf-git is installed
+# and omitted here, yet the refusal must never name it (the 2026-10-07 gate
+# fault: a transitive closure walked libs-git→mid-git→leaf-git and degenerated
+# to the whole set through real hub chains).
+GSA_FAKE_QI_LIBS=$qi_changed
+GSA_FAKE_APP_INSTALLED=1
+GSA_FAKE_MID_INSTALLED=1
+GSA_FAKE_LEAF_INSTALLED=1
+: >"$dir_g/makepkg.log"
+run_env_g --no-deps --no-sync --allow-broken-rustc libs-git
+if [[ $FIXTURE_RC -eq 0 ]]; then
+    printf 'G5: a drifted surface with omitted direct consumers built:\n%s\n' \
+        "$FIXTURE_OUTPUT" >&2
+    exit 1
+fi
+for want in 'missing: app-git' 'missing: mid-git'; do
+    if ! grep -Fq "$want" <<<"$FIXTURE_OUTPUT"; then
+        printf 'G5: refusal message is missing %q:\n%s\n' "$want" "$FIXTURE_OUTPUT" >&2
+        exit 1
+    fi
+done
+if grep -Fq 'missing: leaf-git' <<<"$FIXTURE_OUTPUT"; then
+    printf 'G5: the hub chain leaked a non-linking member into the refusal:\n%s\n' \
+        "$FIXTURE_OUTPUT" >&2
+    exit 1
+fi
+if [[ -s "$dir_g/makepkg.log" ]]; then
+    printf 'G5: the refusal came after builds were dispatched:\n%s\n' \
+        "$(cat "$dir_g/makepkg.log")" >&2
+    exit 1
+fi
+
+# G6: the direct surface consumers covered (leaf still installed and
+# omitted) ⇒ clean batch: the three linked packages build, leaf-git is
+# untouched — a non-linking consumer of a consumer is not part of the batch.
+: >"$dir_g/makepkg.log"
+run_env_g --no-deps --no-sync --allow-broken-rustc libs-git app-git mid-git
+if [[ $FIXTURE_RC -ne 0 ]] || ! grep -Fq 'All builds succeeded!' <<<"$FIXTURE_OUTPUT"; then
+    printf 'G6: the covered surface-consumer set was refused or failed:\n%s\n' "$FIXTURE_OUTPUT" >&2
+    exit 1
+fi
+for id in libs-git app-git mid-git; do
+    if ! grep -Fq "BUILD $id" "$dir_g/makepkg.log"; then
+        printf 'G6: %s did not build:\n%s\n' "$id" "$FIXTURE_OUTPUT" >&2
+        exit 1
+    fi
+done
+if grep -Fq 'BUILD leaf-git' "$dir_g/makepkg.log"; then
+    printf 'G6: leaf-git was dragged into the batch:\n%s\n' "$(cat "$dir_g/makepkg.log")" >&2
     exit 1
 fi
 

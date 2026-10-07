@@ -37,6 +37,55 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-07 — Run #42 refused before dispatch: the ABI-drift gate's transitive closure degenerated to the whole set
+
+**Symptom.** Run #42 (full-set run, `boost-libs` Stock→house swap in flight)
+refused at the pre-dispatch ABI gate: `refusing to build boost-libs without
+acl-git — its soname provides changed, so the whole consumer closure must
+rebuild in the same selection`, with a missing list naming **every** workspace
+package (653, `bash` included). Nothing was dispatched.
+
+**Root cause.** `abi_consumer_closure` BFS'd the TRANSITIVE closure over both
+relations (topology reverse adjacency + `.SRCINFO` name matching), and the
+name relation counted `optdepends`/`checkdepends` as ABI surfaces. Both are
+wrong for ABI risk. Real chains make every node reachable
+(`boost-libs → gdb → python → glibc-git → bash`; python's check/optional
+links make it a hub), and link-dependency transitivity is not ABI-surface
+transitivity: a rebuilt consumer ships the same sonames, so its own consumers
+stay valid — only the DIRECT linkers of a changed soname can break. Measured
+on the real topology: the closure was 653 (everything); the direct surface
+consumers of `boost-libs` are 12, of which exactly one (`liborcus`) sits
+outside the 139..653 run window — a true demand (it is installed, built
+against stock boost). The trigger side was a true positive and stays: stock
+`boost-libs 1.92.0-1.1` provides the auto-versioned python sonames
+(`libboost_python314.so=…`) while `packages/stable/boost-libs/.SRCINFO`
+declares the bare stems, so the Stock→house swap really moves the surface.
+
+**Fix** (build-all.fish only): `abi_consumer_closure` →
+`abi_surface_consumers`, ONE hop over both relations (the BFS and its
+`_ABICLSEEN_*` scratch are gone); `abi_name_edges` restricts its D rows to
+`depends`/`makedepends` (an optional or check-time link is not an ABI
+surface); layer-2/layer-3 comments and the refusal text now say "surface
+consumers". Transitive ABI risk stays layer 1's curated `abi=must`/
+`abi=should` tags — the graph never expressed it.
+
+**Validation.** Red-first hub-chain pin `tests/abi-batch-policy.sh` G5/G6
+(`libs-git → {app-git, mid-git}` direct, `leaf-git` consumes `mid-git` only):
+failed on the old gate exactly as predicted (`missing: leaf-git` leaked into
+the refusal; G6 refused a covered set), green after; `fish -n` clean; full
+battery `bash tests/run-all.sh` **55/55**.
+
+**Durable rule** (MEMORY §3 (c)/(d) reworded): an ABI gate tracks the DIRECT
+surface consumers — the packages that LINK the changed sonames — never a
+transitive closure, and name edges come from `depends`/`makedepends` only.
+Transitive risk is expressed by the `abi=` coupled-batch tags.
+
+**Follow-up.** Run #43 window = `liborcus`'s own index + `139..653` (two
+ranges union), `-s` deliberately OFF: the built 1..138 set is left alone
+except the one true demand, and liborcus must actually rebuild against the
+house `boost-libs` — a skip claim would formally satisfy the gate while
+leaving it linked to the stock surface.
+
 ## 2026-10-07 — Run #41 `python` packaging wall: the trim's `cd "$pkgdir"` broke the trailing LICENSE install
 
 **Symptom.** Run #41 died at `python` (139/653, 5m58s) in `package_python()`:

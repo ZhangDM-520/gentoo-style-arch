@@ -506,10 +506,16 @@
     declare NO soname provide and a provide-only probe false-aborts their
     consumers (2026-10-06 full build, `libxpm-git`);
     (c) a provider whose bare-stem provide set changes vs installed stock
-    rebuilds its FULL in-tree consumer closure in one selection (breakage:
-    09-06 rust-git compiled against a minimal llvm-git mid-run);
-    (d) never install a moving/removed soname provide with part of its
-    consumer closure outside the transaction — build the complete set (`-ia`)
+    rebuilds its DIRECT in-tree surface consumers in one selection — one hop
+    over name + topology edges (depends/makedepends only), never a transitive
+    closure: link-dependency transitivity is not ABI-surface transitivity
+    (a rebuilt consumer ships the same sonames), and transitive risk rides
+    the `abi=` coupled tags instead (breakage: 09-06 rust-git compiled
+    against a minimal llvm-git mid-run; 2026-10-07 the transitive gate
+    degenerated to the whole set through boost-libs→gdb→python→glibc hub
+    chains and refused a full run);
+    (d) never install a moving/removed soname provide with any of its
+    surface consumers outside the transaction — build the complete set (`-ia`)
     (breakage: 2026-09-25, the run's own llvm-git install broke rustc after
     preflight had passed);
     (e) the post-install NEEDED probe aborts loudly naming member + soname

@@ -1571,8 +1571,10 @@ end
 #      provider/consumer pair.
 #   2. batch gate tightening (the coupled-batch gate in main): a provider
 #      whose soname-provides set changed against the installed stock package's
-#      provides drags its FULL in-tree consumer closure into the batch —
-#      an installed member omitted from the selection is refused. Pure gate
+#      provides drags its DIRECT in-tree surface consumers into the batch —
+#      one hop over name + topology edges, never a transitive closure (only
+#      the linkers of a changed soname break) — and an installed surface
+#      consumer omitted from the selection is refused. Pure gate
 #      logic: committed .SRCINFO provides + config/topology.conf, no builds.
 #   3. install-time fatal provide-diff refusal (abi_provide_refusals, an
 #      install-plan step alongside pgo_payload_refusals, BEFORE the force
@@ -1580,7 +1582,7 @@ end
 #      change against the installed database's provides for the same pkgname
 #      — or, when the pkgname is not installed, for its abi_stock_name
 #      counterpart (the Stock→house swap: the surface MOVES to a new pkgname,
-#      it does not vanish) — and the consumer closure is not fully included
+#      it does not vanish) — and its surface consumers are not fully included
 #      in the transaction, silent `refuse abi-*` rows abort before any
 #      pacman -U.
 #   4. post-install NEEDED probe (install_needed_probe, after a successful
@@ -1933,18 +1935,19 @@ function abi_id_installed -a id
 end
 
 # abi_name_edges → provider|consumer pairs from the committed .SRCINFO files:
-# consumer C names provider P when a build-time field of C (depends,
-# makedepends, optdepends, checkdepends) names any name P's surface carries
-# (pkgbase, pkgname or provide name). The .SRCINFO half of the closure
-# relation; config/topology.conf's edges are the other (see
-# abi_consumer_closure). One sorted pass, then one awk join — never a nested
-# fish loop over every pair.
+# consumer C names provider P when a LINKABLE build-time field of C (depends,
+# makedepends) names any name P's surface carries (pkgbase, pkgname or
+# provide name). optdepends/checkdepends are deliberately NOT edges: an
+# optional or check-time link is not an ABI surface that breaks when P moves.
+# The .SRCINFO half of the surface-consumer relation; config/topology.conf's
+# edges are the other (see abi_surface_consumers). One sorted pass, then one
+# awk join — never a nested fish loop over every pair.
 function abi_name_edges
     # ONE shared .SRCINFO parse (srcinfo_rows) replaces the six sed forks per
     # recipe. The tagged-row → S/P/A walk is one awk over the row stream — the
     # old fish `for row in (srcinfo_rows)` re-marshalled every row (~40k at
     # scale) through `string split` on EACH call, and this ran once per changed
-    # provider through abi_consumer_closure. The result is memoised per
+    # provider through abi_surface_consumers. The result is memoised per
     # process: the committed .SRCINFOs are static within a caller's window
     # (version sync rewrites them BEFORE any ABI consumer runs in a lane).
     # Row values keep everything after their fixed separator count (the old
@@ -1970,7 +1973,7 @@ function abi_name_edges
                 if (v != "") print "S|" v "|" $2
             } else if (tag == "P") {
                 print "P|" field_rest($0, 3) "|" $2
-            } else if (tag == "D") {
+            } else if (tag == "D" && ($3 == "depends" || $3 == "makedepends")) {
                 print "A|" field_rest($0, 3) "|" $2
             }
         }' | awk -F'|' '
@@ -1998,8 +2001,8 @@ function abi_name_edges
     set -g _ABI_NAME_EDGES_READY 1
     # Provider → consumer adjacency from the name edges, keyed (order per
     # provider preserved: the edges are appended in stream order). Built here
-    # so abi_consumer_closure's BFS is O(closure) instead of scanning the
-    # whole edge list per visited node.
+    # so abi_surface_consumers walks keyed adjacency per provider instead of
+    # scanning the whole edge list per visited node.
     set -l stale (set -n | string match -r '^_ABICONS_.*$')
     if test (count $stale) -gt 0
         set -e $stale
@@ -2012,54 +2015,38 @@ function abi_name_edges
     return 0
 end
 
-# abi_consumer_closure PROVIDER... → the FULL in-tree consumer closure of the
-# provider ids: every workspace package transitively consuming one of them,
-# over BOTH relations — the topology reverse adjacency (_CONSUMER_INDEX from
+# abi_surface_consumers PROVIDER... → the DIRECT in-tree surface consumers of
+# the provider ids: every workspace package consuming one of them over EITHER
+# relation — the topology reverse adjacency (_CONSUMER_INDEX from
 # config/topology.conf) and the committed .SRCINFO name matching
-# (abi_name_edges). Pure gate logic: no builds, no pacman, no network. The
-# providers themselves are never output.
-function abi_consumer_closure
+# (abi_name_edges). ONE hop, deliberately NOT a transitive closure: a rebuilt
+# provider can only strand the packages that LINK its sonames, because a
+# consumer's own ABI surface is unchanged by its rebuild (same shipped
+# sonames) — link-dependency transitivity is not ABI-surface transitivity,
+# and a transitive walk degenerates to the whole set through hub chains
+# (boost-libs→gdb→python→glibc→bash: bash links glibc's sonames, never
+# boost's). Transitive ABI risk is layer 1's curated abi=must/abi=should
+# tags (abi_batch_dependents). Pure gate logic: no builds, no pacman, no
+# network. The providers themselves are never output.
+function abi_surface_consumers
     set -l seeds $argv
     test (count $seeds) -gt 0; or return 0
     # Builds the memoised name-edge stream + its keyed provider→consumer map
-    # (_ABICONS_) once; the BFS below is O(closure) over keyed adjacency.
-    # The old version scanned $_CONSUMER_INDEX AND the whole name-edge list
-    # per visited package — O(V·E) string splits per call — and re-parsed
-    # every .SRCINFO row per call.
+    # (_ABICONS_) once; the walk below is one keyed lookup per seed over both
+    # adjacency maps. The old transitive BFS marked visited nodes through
+    # _ABICLSEEN_* scratch vars and grew a shared queue across the whole
+    # closure — pure overhead now that the relation is one hop.
     abi_name_edges >/dev/null
-    set -l visited
-    set -l queue $seeds
-    set -l qhead 1
-    # CACHED queue length: `count $queue` in the loop head expands the WHOLE
-    # queue into argv every iteration (fish `count` is O(1), its ARGV is not)
-    # — 38 s of self time across the two largest real closures (profile
-    # 2026-10-05). The queue only grows at the two appends below, so qlen is
-    # maintained there.
-    set -l qlen (count $queue)
-    while test $qhead -le $qlen
-        set -l pkg $queue[$qhead]
-        set qhead (math $qhead + 1)
+    set -l found
+    for pkg in $seeds
         set -l key (_topo_key "$pkg")
-        set -l seen_var _ABICLSEEN_$key
-        if set -q $seen_var
-            continue
-        end
-        set -f $seen_var 1
-        set -a visited $pkg
-        set -l cons_var _TCONS_$key
-        if set -q $cons_var
-            set -l cons $$cons_var
-            set -a queue $cons
-            set qlen (math $qlen + (count $cons))
-        end
-        set -l name_var _ABICONS_$key
-        if set -q $name_var
-            set -l ncons $$name_var
-            set -a queue $ncons
-            set qlen (math $qlen + (count $ncons))
+        for cons_var in _TCONS_$key _ABICONS_$key
+            set -q $cons_var; or continue
+            set -a found $$cons_var
         end
     end
-    for pkg in $visited
+    test (count $found) -gt 0; or return 0
+    for pkg in (printf '%s\n' $found | sort -u)
         contains -- "$pkg" $seeds; and continue
         printf '%s\n' "$pkg"
     end
@@ -2099,8 +2086,9 @@ function abi_soname_provides_changed -a id
 end
 
 # abi_package_id_for_pkgname NAME → the workspace id whose committed
-# .SRCINFO outputs NAME (used to find a consumer closure from an archive's
-# own .PKGINFO — never from the path spelling the caller happened to pass).
+# .SRCINFO outputs NAME (used to find the provider's surface consumers from
+# an archive's own .PKGINFO — never from the path spelling the caller
+# happened to pass).
 function abi_package_id_for_pkgname -a name
     # D-F4: answers from the ONE name surface (_pkgname_index), not a private
     # per-recipe scan — a name resolves to the same recipe everywhere.
@@ -2132,7 +2120,7 @@ end
 # package before the swap. A BARE soname
 # provide (auto-versioned by makepkg: `libfoo.so=1-64`) that disappears or
 # changes version is a soname bump: every installed consumer built against the
-# old surface breaks the moment pacman -U lands. If the consumer closure is
+# old surface breaks the moment pacman -U lands. If its surface consumers are
 # not fully included in the transaction, the plan refuses — silently here
 # (the decision half never renders); install_execute renders the rows, and the
 # --install-decide seam prints them verbatim. Runs BEFORE the force branch:
@@ -2152,11 +2140,11 @@ end
 # counterpart's exactly is a clean pass.
 #
 # "Fully included in the transaction" counts the INSTALLED part of the
-# consumer closure (an uninstalled consumer has nothing to protect — the
+# surface-consumer set (an uninstalled consumer has nothing to protect — the
 # batch gate's standing rule); a member counts as included when any of its
 # outputs is among the transaction's pkgnames. Consumers of an archive whose
 # pkgname matches no workspace recipe are vacuously covered (no in-tree
-# closure to open).
+# surface consumers to open).
 #
 # Row shapes (tab-framed through the plan_row codec, mirroring
 # pgo_payload_refusals):
@@ -2169,7 +2157,8 @@ end
 # codec/renderer contract stays 7 fields. Returns 0 for
 # every archive that is clean or not comparable, 1 after any refusal row.
 function abi_provide_refusals
-    # Every pkgname the transaction will install — the closure-coverage side.
+    # Every pkgname the transaction will install — the surface-consumer
+    # coverage side.
     set -l tx_names
     for archive in $argv
         for line in (archive_pkginfo "$archive")
@@ -2231,12 +2220,12 @@ function abi_provide_refusals
             end
         end
         test (count $archive_rows) -gt 0; or continue
-        # The refusal is conditional: a provide change whose consumer closure
-        # is fully covered by the transaction lands safely together.
+        # The refusal is conditional: a provide change whose surface consumers
+        # are fully covered by the transaction lands safely together.
         set -l provider_id (abi_package_id_for_pkgname "$pkgname")
         set -l open
         if test -n "$provider_id"
-            for member in (abi_consumer_closure "$provider_id")
+            for member in (abi_surface_consumers "$provider_id")
                 set -l srcinfo (abi_package_srcinfo "$member")
                 set -l names $member
                 if test -n "$srcinfo"; and test -f "$srcinfo"
@@ -2250,8 +2239,8 @@ function abi_provide_refusals
                 test $covered -eq 1; and continue
                 # The installed-state probe goes through the memoized helper
                 # (at most one `pacman -Q` per output name per process) — the
-                # raw per-name fork here re-probed every closure member's
-                # outputs on every refusal-path install.
+                # the raw per-name fork here re-probed every surface
+                # consumer's outputs on every refusal-path install.
                 abi_pkg_installed "$member"; or continue
                 set -a open "$member"
             end
@@ -3258,9 +3247,9 @@ function install_plan -a mode
         return 1
     end
     # ABI-drift guard layer 3 (abi_provide_refusals): a bare soname provide
-    # that disappears/changes against the installed database while the
-    # consumer closure is open refuses the plan — BEFORE the force branch, so
-    # -fi/-ia can never route around it. Decision half stays silent.
+    # that disappears/changes against the installed database while an
+    # installed surface consumer is open refuses the plan — BEFORE the force
+    # branch, so -fi/-ia can never route around it. Decision half stays silent.
     set -l abi_rows (abi_provide_refusals $archives)
     if test $status -ne 0
         printf '%s\n' $abi_rows
@@ -3497,9 +3486,9 @@ function install_execute -a log_file sink n_extra
                     install_emit "$sink" "$log_file" error "rebuild the recipe so phase 2 really replaces the profiled flags (docs/build-guide.md: PGO)"
                 case abi-soname
                     if test "$fields[7]" = "-"
-                        install_emit "$sink" "$log_file" error (basename "$fields[3]")": soname provide "$fields[5]" (installed "$fields[6]") disappears in this build — its consumer closure is not in this transaction"
+                        install_emit "$sink" "$log_file" error (basename "$fields[3]")": soname provide "$fields[5]" (installed "$fields[6]") disappears in this build — its surface consumers are not in this transaction"
                     else
-                        install_emit "$sink" "$log_file" error (basename "$fields[3]")": soname provide "$fields[5]" moves "$fields[6]" -> "$fields[7]" — its consumer closure is not in this transaction"
+                        install_emit "$sink" "$log_file" error (basename "$fields[3]")": soname provide "$fields[5]" moves "$fields[6]" -> "$fields[7]" — its surface consumers are not in this transaction"
                     end
                 case abi-consumer
                     install_emit "$sink" "$log_file" error "installed consumer "$fields[4]" is not in this transaction — a moved soname provide would leave it broken (rebuild it in the same batch, or install the built set together with -ia)"
@@ -8369,9 +8358,11 @@ function main
         # one: any provider whose soname-provides set (committed .SRCINFO
         # bare stems) differs from the installed stock equivalent's provides
         # (abi_soname_provides_changed — pure gate logic, no builds) drags
-        # its FULL in-tree consumer closure into the batch
-        # (abi_consumer_closure: .SRCINFO name matching + topology edges).
-        # An installed closure member omitted from the selection is refused
+        # its DIRECT in-tree surface consumers into the batch (one hop over
+        # .SRCINFO name matching + topology edges — link-dependency
+        # transitivity is not ABI-surface transitivity; transitive risk is
+        # layer 1's curated tags).
+        # An installed surface consumer omitted from the selection is refused
         # exactly like an omitted abi=must member: the provider's new surface
         # would land beside a consumer still built against the old one. A
         # member that is not installed has nothing to protect and never
@@ -8383,7 +8374,7 @@ function main
                 return $status
             end
             abi_soname_provides_changed "$provider"; or continue
-            for member in (abi_consumer_closure "$provider")
+            for member in (abi_surface_consumers "$provider")
                 contains -- "$member" $sorted; and continue
                 abi_pkg_installed "$member"; or continue
                 set -a abi_open (printf '%s %s' $provider $member)
@@ -8396,16 +8387,16 @@ function main
         if test (count $abi_open) -gt 0
             set abi_open (printf '%s\n' $abi_open | sort -u)
             set -l first_pair (string split ' ' -- $abi_open[1])
-            ui_error "refusing to build $first_pair[1] without $first_pair[2] — its soname provides changed, so the whole consumer closure must rebuild in the same selection"
+            ui_error "refusing to build $first_pair[1] without $first_pair[2] — its soname provides changed, so its surface consumers must rebuild in the same selection"
             echo "  $first_pair[1]'s soname provides differ from the installed stock package's provides:"
             echo "  installing it beside an installed consumer leaves that consumer broken the"
-            echo "  moment the archive lands. Missing consumer(s) of the closure:"
+            echo "  moment the archive lands. Missing surface consumer(s):"
             for entry in $abi_open
                 set -l pair (string split ' ' -- $entry)
                 echo "  missing: $pair[2] — add $pair[2] to the selection (or use --no-deps only for leaves)"
             end
             echo "  if the consumers cannot rebuild yet, build without -i and install the whole"
-            echo "  built set together with -ia once the closure is complete."
+            echo "  built set together with -ia once the surface-consumer set is complete."
             return 1
         end
     end
