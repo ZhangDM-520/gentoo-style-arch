@@ -37,6 +37,35 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-07 — range anchoring: `-n`/`-l` rows now print the stable selection index (the range anchor) even after a range filter
+
+- **Symptom** (owner directive 2026-10-06). `-n`/`-l` renumbered rows from 1
+  whenever a range was applied, while the range parser indexes the
+  *unfiltered* selection — the operator reads "row 5" from a `22..38`
+  listing and a later `5..5` silently selects a different package
+  (mis-anchoring observed as 123 vs 131). Procedure until now: establish
+  anchors only from an unfiltered `-l`/`-n`.
+- **Root cause.** The range filter dropped the pre-range identity of each
+  surviving row; the renderers (`list_packages`, the dry-run printer) then
+  numbered positionally.
+- **Fix.** A `sel_idx` list (stable selection index per row, initialised
+  1..N right after the topological sort) travels with `$sorted` through the
+  range filter; both renderers print it. `list_packages` now takes
+  `INDEX|PACKAGE` pairs. Ranged output shows the anchors: `-n -g git
+  22..24` prints `22. 23. 24.`, not `1. 2. 3.`. No output change without a
+  range (the whole-set listing is byte-identical), no change to the run
+  record, dispatch, or the footer prose.
+- **Validation.** `fish -n`; live `-n -g git 22..24` / `-l -g git 22..24`
+  show anchors 22-24 and the same packages as rows 22-24 of the unfiltered
+  listing; `tests/project.sh` gains the pair of assertions (ranged `-n` and
+  `-l` print `22 23 24`; ranged rows equal the listing's anchors 22-24) and
+  its self-pinning invocation count moves 22→24. Targeted green:
+  `project`, `scheduler-dispatch-order`, `dashboard`, `run-record`,
+  `app-group`.
+- **Durable rule.** Printed indices are an API: whatever number a row shows
+  must be the number a range accepts for that row, under every filter —
+  numbering is stateful and must ride the row, not its position.
+
 ## 2026-10-07 — run #54 wall: libseccomp-git built upstream master's placeholder version — `AC_INIT([libseccomp], [0.0.0])` derives soname `.so.0` and moves the `libseccomp.so` provide `2-64 -> 0-64`
 
 - **Symptom.** Run #54 (resume after the pngminus fix) passed libpng-git

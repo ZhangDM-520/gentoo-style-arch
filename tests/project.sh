@@ -97,7 +97,7 @@ rows() { # print the numbered rows of $out, as bare package names
 # The scrape is self-pinning: if its match count drifts from the number of
 # calls this file actually carries, a call was added/indented without updating
 # the expectation below (or a non-call line started imitating one).
-expected_invocations=22
+expected_invocations=24
 scanned_invocations=$(grep -c -E '^(run|run_split) ' "${BASH_SOURCE[0]}")
 [[ $scanned_invocations -eq $expected_invocations ]] ||
     fail "self-scan found $scanned_invocations column-0 run/run_split calls, expected $expected_invocations (new calls must start at column 0 and bump this count)"
@@ -277,6 +277,25 @@ run -n -g git 22..22
 require_ok 'the range -g git 22..22'
 [[ $(rows) == "$listed_22" ]] ||
     fail "range index 22 selects '$(rows)' but the listing shows '$listed_22'"
+
+# With a range applied the rows keep their SELECTION anchors — the very
+# numbers the range parser addresses — instead of renumbering from 1 (owner
+# directive 2026-10-06: a renumbered listing makes operators mis-anchor and
+# a mis-anchored range costs a whole run).
+run -n -g git 22..24
+require_ok 'the ranged dry run -g git 22..24'
+ranged_nums=$(sed -n 's/^ *\([0-9][0-9]*\)\..*/\1/p' <<<"$out" | paste -sd' ' -)
+[[ $ranged_nums == '22 23 24' ]] ||
+    fail "ranged -n printed row numbers '$ranged_nums' - rows must keep the selection anchors a range addresses"
+expected_rows=$(run -l -g git; rows | sed -n '22,24p' | paste -sd' ' -)
+[[ $(rows | paste -sd' ' -) == "$expected_rows" ]] ||
+    fail "ranged -n rows '$(rows | paste -sd' ' -)' but anchors 22-24 of the listing are '$expected_rows'"
+
+run -l -g git 22..24
+require_ok 'the ranged listing -g git 22..24'
+listed_nums=$(sed -n 's/^ *\([0-9][0-9]*\)\..*/\1/p' <<<"$out" | paste -sd' ' -)
+[[ $listed_nums == '22 23 24' ]] ||
+    fail "ranged -l printed row numbers '$listed_nums' - rows must keep the selection anchors a range addresses"
 
 # --- range mistakes are named ---------------------------------------------
 run -n -g git 900..950

@@ -8059,19 +8059,20 @@ end
 # flag: 1 is the `-l` with no selection listing, which keeps the original
 # heading and group footer byte-for-byte. Otherwise the selection is named, and
 # the footer states what the printed indices are for — a range indexes THIS
-# list, not the whole set. Remaining arguments are the packages, in order.
+# list, not the whole set. Remaining arguments are INDEX|PACKAGE pairs: the
+# index is the stable selection index (the range anchor), never a positional
+# renumber, so the printed numbers stay valid after a range filter.
 function list_packages -a all_flag
-    set -l sorted_list $argv[2..-1]
+    set -l entries $argv[2..-1]
     if test "$all_flag" = 1
         echo "All packages in build order:"
     else
-        echo "Selected packages in build order ("(count $sorted_list)"):"
+        echo "Selected packages in build order ("(count $entries)"):"
     end
     echo ""
-    set -l i 1
-    for pkg in $sorted_list
-        printf "  %2d. %s\n" $i $pkg
-        set i (math $i + 1)
+    for entry in $entries
+        set -l pair (string split '|' -- $entry)
+        printf "  %2d. %s\n" "$pair[1]" "$pair[2]"
     end
     echo ""
     if test "$all_flag" != 1
@@ -8555,6 +8556,12 @@ function main
         return 1
     end
 
+    # Stable selection indices — what a range addresses. They travel with the
+    # rows through every later filter so `-l`/`-n` always print the anchors
+    # the range parser uses (owner directive 2026-10-06: a listing that
+    # renumbers from 1 after a range is applied makes operators mis-anchor).
+    set -l sel_idx (seq (count $sorted))
+
     # Apply range filters (e.g. 22..38, 22.., ..15). Indices address the
     # SELECTION in build order — the list `-l -g GROUP` prints, which is
     # not the whole-set order a bare `-l` prints. Naming the bounds on a miss is
@@ -8608,10 +8615,13 @@ function main
         # Deduplicate indices and sort
         set -l unique_indices (printf '%s\n' $indices | sort -nu)
         set -l filtered
+        set -l filtered_idx
         for i in $unique_indices
             set -a filtered $sorted[$i]
+            set -a filtered_idx $sel_idx[$i]
         end
         set sorted $filtered
+        set sel_idx $filtered_idx
     end
 
     if test (count $sorted) -eq 0
@@ -8764,7 +8774,11 @@ function main
     # List — read-only, and deliberately AFTER the range filter: the printed
     # indices are the ones a range selects, which is the whole point of `-l -g`.
     if test "$list_flag" = 1
-        list_packages (test "$selection_given" = 0; and echo 1; or echo 0) $sorted
+        set -l rows_data
+        for k in (seq (count $sorted))
+            set -a rows_data "$sel_idx[$k]|$sorted[$k]"
+        end
+        list_packages (test "$selection_given" = 0; and echo 1; or echo 0) $rows_data
         return 0
     end
 
@@ -8783,10 +8797,10 @@ function main
     if test "$dry_run" = "1"
         echo "Build order (dry run):"
         echo ""
-        set -l i 1
+        set -l k 1
         for pkg in $sorted
-            printf "  %2d. %s\n" $i $pkg
-            set i (math $i + 1)
+            printf "  %2d. %s\n" "$sel_idx[$k]" $pkg
+            set k (math $k + 1)
         end
         echo ""
         echo "Total: "(count $sorted)" packages"
