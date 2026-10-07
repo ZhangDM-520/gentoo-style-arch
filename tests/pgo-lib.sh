@@ -225,6 +225,9 @@ exec "$@"
 EOF
     chmod +x "$train_work/bin/xvfb-run"
     cp "$train_work/bin/meson" "$train_work/bin/timeout" "$train_work/novfb/"
+    # The pinned-PATH absence scenarios resolve the stubs' env shebangs
+    # inside novfb — bash must be findable there too.
+    ln -s "$(command -v bash)" "$train_work/novfb/bash"
 
     source "$module"
     export GSA_STUB_LOG="$train_work/log"
@@ -263,8 +266,11 @@ EOF
     grep -q '^xvfb-run ' "$GSA_STUB_LOG" ||
         fail "display suite must run under xvfb-run on a displayless host: $(cat "$GSA_STUB_LOG")"
     : >"$GSA_STUB_LOG"
+    # novfb scenarios pin PATH to the stub dir ALONE: absence of xvfb-run is
+    # simulated by PATH, never assumed from the host — the real tool may
+    # legitimately be installed (it is python's makedepend for check()).
     (unset DISPLAY WAYLAND_DISPLAY
-        export PATH="$train_work/novfb:$PATH"
+        export PATH="$train_work/novfb"
         pgo_train_meson --display-suite build 120)
     if grep -q '^xvfb-run ' "$GSA_STUB_LOG"; then
         fail "xvfb-run used although absent: $(cat "$GSA_STUB_LOG")"
@@ -280,7 +286,7 @@ EOF
 
     # pgo_display_available: a display or a virtual-display tool counts.
     (unset DISPLAY WAYLAND_DISPLAY
-        export PATH="$train_work/novfb:$PATH"
+        export PATH="$train_work/novfb"
         pgo_display_available) &&
         fail "pgo_display_available: true on a displayless host without xvfb-run"
     (unset DISPLAY WAYLAND_DISPLAY
