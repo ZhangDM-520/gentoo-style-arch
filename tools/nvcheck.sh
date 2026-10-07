@@ -321,16 +321,27 @@ except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
     print(f"nvcheck: cannot read new_ver.json: {exc}", file=sys.stderr)
     raise SystemExit(2)
 
-if not isinstance(versions, dict) or key not in versions:
+# nvchecker has two state shapes: the legacy flat {key: "version"} map and the
+# v2 envelope {"version": 2, "data": {key: {"version": ..., "url": ...}}}
+# written by nvchecker 2.22 (2026-10-07: gcc-snapshot deferred because the
+# resolver only understood the flat shape). Accept both, and both entry
+# shapes (plain string or an object with a "version" field).
+if isinstance(versions, dict) and "version" in versions and \
+        isinstance(versions.get("data"), dict):
+    versions = versions["data"]
+
+entry = versions.get(key) if isinstance(versions, dict) else None
+if isinstance(entry, dict):
+    entry = entry.get("version")
+if entry is None:
     print(f"nvcheck: new_ver.json has no version for key {key!r}", file=sys.stderr)
     raise SystemExit(2)
 
-version = versions[key]
-if not isinstance(version, str) or not version or any(char.isspace() for char in version):
+if not isinstance(entry, str) or not entry or any(char.isspace() for char in entry):
     print(f"nvcheck: new_ver.json has an invalid version for key {key!r}", file=sys.stderr)
     raise SystemExit(2)
 
-sys.stdout.write(version + "\n")
+sys.stdout.write(entry + "\n")
 PY
         then
             exit 2

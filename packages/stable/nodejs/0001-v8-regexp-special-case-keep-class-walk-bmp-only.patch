@@ -1,0 +1,31 @@
+--- a/deps/v8/src/regexp/gen-regexp-special-case.cc
++++ b/deps/v8/src/regexp/gen-regexp-special-case.cc
+@@ -73,6 +73,15 @@
+     for (int32_t j = 0; j < current.getRangeCount(); j++) {
+       for (UChar32 c = current.getRangeStart(j); c <= current.getRangeEnd(j);
+            c++) {
++        // This table serves ECMAScript's non-unicode matching mode, where
++        // matching happens per UTF-16 code unit: a supplementary-plane class
++        // member can never take part, and Canonicalize asserts exactly that
++        // (CHECK_LE(ch, 0xffff)). ICU 79's Unicode 17 data adds U+1DF95 to
++        // the U+00DF/U+1E9E case classes (measured 2026-10-07), so the walk
++        // must skip non-BMP members instead of canonicalizing them.
++        if (c >= kNonBmpStart) {
++          continue;
++        }
+         if (c == i) {
+           continue;
+         }
+@@ -116,6 +125,12 @@
+       for (int32_t j = 0; j < current.getRangeCount(); j++) {
+         for (UChar32 c2 = current.getRangeStart(j);
+              c2 <= current.getRangeEnd(j); c2++) {
++          // Same BMP-only domain as the classification walk above:
++          // non-BMP members are outside the non-unicode matching
++          // semantics this invariant is checked for.
++          if (c2 >= kNonBmpStart) {
++            continue;
++          }
+           CHECK_EQ(canonical, RegExpCaseFolding::Canonicalize(c2));
+         }
+       }

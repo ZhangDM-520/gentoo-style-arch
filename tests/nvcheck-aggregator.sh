@@ -97,8 +97,19 @@ case ${FAKE_NVCHECKER_MODE:-success} in
     missing-key)
         printf '{"another-package": "9.8.7"}\n' >"$newver"
         ;;
+    missing-key-envelope)
+        printf '{"version": 2, "data": {"another-package": {"version": "9.8.7", "url": "https://example.invalid/9.8.7"}}}\n' >"$newver"
+        ;;
+    invalid-entry)
+        printf '{"bettbox": " "}\n' >"$newver"
+        ;;
     success)
         printf '{"another-package": "9.8.7", "bettbox": "1.2.3-pre4"}\n' >"$newver"
+        ;;
+    success-envelope)
+        # nvchecker 2.22 writes this shape (version 2 envelope, object
+        # entries); the resolver must accept it alongside the flat map.
+        printf '{"version": 2, "data": {"another-package": {"version": "9.8.7", "url": "https://example.invalid/9.8.7"}, "bettbox": {"version": "1.2.3-pre4", "url": "https://example.invalid/bettbox"}}}\n' >"$newver"
         ;;
     *) exit 94 ;;
 esac
@@ -147,6 +158,38 @@ IFS=$'\t' read -r merged_config resolver_newver <"$tmp/nvchecker.log"
 repo_state_after=$(find "$root/packages" -type f \( -name old_ver.json -o -name new_ver.json \) -print | sort)
 [[ $repo_state_after == "$repo_state_before" ]] ||
     fail "--resolve wrote version state into the repository"
+
+# nvchecker's state file comes in two shapes: the legacy flat {key: "ver"}
+# map and the v2 envelope {"version": 2, "data": {key: {"version": ...}}}
+# written by nvchecker 2.22. Both must resolve identically — 2026-10-07
+# gcc-snapshot deferred because only the flat shape was understood.
+if ! PATH="$query_bin:$PATH" TMPDIR="$tmp" NVCHECK_STATE_DIR="$normal_state" \
+    FAKE_NVCHECKER_LOG="$tmp/nvchecker.log" FAKE_NVCHECKER_MODE=success-envelope \
+    "$tool" --resolve "$query_config" bettbox >"$tmp/resolved-envelope"; then
+    fail "--resolve did not resolve the v2-envelope version state"
+fi
+[[ $(cat "$tmp/resolved-envelope") == '1.2.3-pre4' ]] ||
+    fail "--resolve misread the v2-envelope version state"
+
+if PATH="$query_bin:$PATH" TMPDIR="$tmp" NVCHECK_STATE_DIR="$normal_state" \
+    FAKE_NVCHECKER_LOG="$tmp/nvchecker.log" FAKE_NVCHECKER_MODE=missing-key-envelope \
+    "$tool" --resolve "$query_config" missing-section >"$tmp/missing-key-envelope.out" 2>"$tmp/missing-key-envelope.err"; then
+    fail "--resolve accepted a key missing from v2-envelope state"
+fi
+grep -Fq "no version for key 'missing-section'" "$tmp/missing-key-envelope.err" ||
+    fail "--resolve did not explain the missing v2-envelope key"
+[[ ! -s $tmp/missing-key-envelope.out ]] ||
+    fail "--resolve emitted a version for a missing v2-envelope key"
+
+if PATH="$query_bin:$PATH" TMPDIR="$tmp" NVCHECK_STATE_DIR="$normal_state" \
+    FAKE_NVCHECKER_LOG="$tmp/nvchecker.log" FAKE_NVCHECKER_MODE=invalid-entry \
+    "$tool" --resolve "$query_config" bettbox >"$tmp/invalid-entry.out" 2>"$tmp/invalid-entry.err"; then
+    fail "--resolve accepted a whitespace-only version"
+fi
+grep -Fq "invalid version for key 'bettbox'" "$tmp/invalid-entry.err" ||
+    fail "--resolve did not explain the invalid version"
+[[ ! -s $tmp/invalid-entry.out ]] ||
+    fail "--resolve emitted a version for an invalid entry"
 
 # Provider errors, malformed TOML, and missing output keys must fail without
 # emitting a version string or changing the report state.
