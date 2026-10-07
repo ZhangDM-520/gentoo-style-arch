@@ -144,6 +144,15 @@ case ${args[0]:-} in
     fi
     exit 1
     ;;
+-Ql)
+    # File listing for the link-truth probe (gate fix v2): one synthetic ELF
+    # path per installed member; the readelf stub answers its DT_NEEDED.
+    if [[ ${args[1]:-} == app-git && ${GSA_FAKE_APP_INSTALLED:-0} == 1 ]]; then
+        printf '%s /usr/lib/lib-app-git.so\n' "${args[1]}"
+        exit 0
+    fi
+    exit 1
+    ;;
 -Qp) exit 1 ;;
 -U)
     printf 'UNEXPECTED pacman -U in a decide-only run\n' >&2
@@ -153,6 +162,29 @@ esac
 exit 0
 EOF
 chmod +x "$ws/bin/pacman"
+
+# The stub readelf: DT_NEEDED truth for the link filter. app-git LINKS the
+# provider's soname (`libgreet.so.1-64`) — the fixture's installed consumer
+# is exactly the class the gate protects; a consumer that never references
+# the moving soname must not gate (pinned in tests/abi-batch-policy.sh G5).
+cat >"$ws/bin/readelf" <<'EOF'
+#!/usr/bin/env bash
+set -u
+for a in "$@"; do
+    [[ $a == -* ]] && continue
+    printf 'File: %s\n' "$a"
+    case $a in
+    *app-git*)
+        printf ' 0x0000000000000001 (NEEDED)             Shared library: [libgreet.so.1-64]\n'
+        ;;
+    *)
+        printf ' 0x0000000000000001 (NEEDED)             Shared library: [libc.so.6]\n'
+        ;;
+    esac
+done
+exit 0
+EOF
+chmod +x "$ws/bin/readelf"
 
 # decide MODE [ARCHIVE...] — the seam. Stdout only (the rows) in
 # FIXTURE_OUTPUT; stderr is kept apart so user fish-config noise can never
@@ -402,7 +434,7 @@ want:
 $i_expected
 got:
 $FIXTURE_OUTPUT"
-    if grep -Evq '^pacman -(Qi|Q) ' "$ws/pacman.log"; then
+    if grep -Evq '^pacman -(Qi|Ql|Q) ' "$ws/pacman.log"; then
         fail "I: the refusal path must make only read-only pacman probes: $(cat "$ws/pacman.log")"
     fi
     assert_no_u I
@@ -436,7 +468,7 @@ Provides : libapp.so=1-64'
         fail "J: the swap archive must be planned for install: $FIXTURE_OUTPUT"
     grep -Fq 'refuse' <<<"$FIXTURE_OUTPUT" &&
         fail "J: no refusal rows expected: $FIXTURE_OUTPUT"
-    if grep -Evq '^pacman -(Qi|Q) ' "$ws/pacman.log"; then
+    if grep -Evq '^pacman -(Qi|Ql|Q) ' "$ws/pacman.log"; then
         fail "J: the decide seam made a non-probe pacman call: $(cat "$ws/pacman.log")"
     fi
     [[ ! -s "$ws/sudo.log" ]] ||

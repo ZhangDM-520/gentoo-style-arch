@@ -505,17 +505,22 @@
     package owns), because stock Arch providers like libx11/libxt/libxext
     declare NO soname provide and a provide-only probe false-aborts their
     consumers (2026-10-06 full build, `libxpm-git`);
-    (c) a provider whose bare-stem provide set changes vs installed stock
-    rebuilds its DIRECT in-tree surface consumers in one selection — one hop
-    over name + topology edges (depends/makedepends only), never a transitive
-    closure: link-dependency transitivity is not ABI-surface transitivity
-    (a rebuilt consumer ships the same sonames), and transitive risk rides
-    the `abi=` coupled tags instead (breakage: 09-06 rust-git compiled
-    against a minimal llvm-git mid-run; 2026-10-07 the transitive gate
-    degenerated to the whole set through boost-libs→gdb→python→glibc hub
-    chains and refused a full run);
+    (c) a provider whose surface LOSES a soname vs installed stock rebuilds
+    the installed consumers that LINK it in one selection — LINK TRUTH
+    (installed DT_NEEDED ∩ disappearing sonames, `abi_at_risk_stems` +
+    `abi_links_stems`), never name/graph reachability: naming a provider is
+    not linking it (a build tool or a stable-soname user has nothing to
+    break — measured 2026-10-07: across 183 candidate consumers / 12 237
+    installed ELFs the only links to any changing soname were the changed
+    family's own outputs), link-dependency transitivity is not ABI-surface
+    transitivity, and transitive risk rides the `abi=` coupled tags instead
+    (breakage: 09-06 rust-git compiled against a minimal llvm-git mid-run —
+    layer 1's tags; 2026-10-07 the transitive gate degenerated to the whole
+    set through boost-libs→gdb→python→glibc hub chains, and its one-hop
+    repair still demanded tools through name edges (`python`→glibc-git) —
+    both refused full runs);
     (d) never install a moving/removed soname provide with any of its
-    surface consumers outside the transaction — build the complete set (`-ia`)
+    LINKED consumers outside the transaction — build the complete set (`-ia`)
     (breakage: 2026-09-25, the run's own llvm-git install broke rustc after
     preflight had passed);
     (e) the post-install NEEDED probe aborts loudly naming member + soname

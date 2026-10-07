@@ -2053,12 +2053,18 @@ function abi_surface_consumers
     return 0
 end
 
-# abi_soname_provides_changed ID → 0 when the workspace recipe's soname
-# provides (committed .SRCINFO, bare stems) differ from the installed stock
-# equivalent's provides (the stem sets). Layer 2's batch trigger: only a
-# changed surface can strand consumers. Nothing installed to compare against
-# means nothing to protect — never changed.
-function abi_soname_provides_changed -a id
+# abi_at_risk_stems ID → the soname stems the workspace recipe's surface
+# LOSES against the installed stock equivalent's provides (committed .SRCINFO
+# bare stems vs the installed provide stems), one stem per line. Layer 2's
+# batch trigger: only a DISAPPEARING soname can strand a consumer. A newly
+# declared provide never can — nothing named or linked a name that did not
+# exist — and pacman itself refuses any `pacman -U` that breaks an installed
+# package's declared depends, so the provide-name class is enforced at
+# install time. What pacman cannot see is an installed output LINKING a
+# soname that goes away: that is the class this gate protects (matched by
+# abi_links_stems). Nothing installed to compare against means nothing to
+# protect — empty output, rc 1.
+function abi_at_risk_stems -a id
     set -l srcinfo (abi_package_srcinfo "$id")
     if test -z "$srcinfo"; or not test -f "$srcinfo"
         return 1
@@ -2076,11 +2082,87 @@ function abi_soname_provides_changed -a id
         set -a installed (abi_soname_stems $entries)
     end
     test $compared -eq 1; or return 1
-    for stem in $house
-        contains -- "$stem" $installed; or return 0
-    end
+    set -l lost
     for stem in $installed
-        contains -- "$stem" $house; or return 0
+        contains -- "$stem" $house; and continue
+        set -a lost $stem
+    end
+    test (count $lost) -gt 0; or return 1
+    printf '%s\n' $lost | sort -u
+    return 0
+end
+
+# abi_member_needed ID → the DT_NEEDED names of the member's INSTALLED
+# outputs, one per line, memoised per process. This is the link truth the
+# gate matches a disappearing soname against: a consumer breaks when one of
+# its binaries LINKS the name that goes away, while merely naming the
+# provider in depends says only that the package is used — often as a build
+# tool (the 2026-10-07 noise: `makedepends = python` dragged glibc-git into
+# python's batch). readelf runs batched (~200 files per fork) and each NEEDED
+# is attributed to its `File:` header; static files report none.
+function abi_member_needed -a id
+    set -l key (_topo_key "$id")
+    set -l cache_var _ABINEED_$key
+    if set -q $cache_var
+        test (count $$cache_var) -gt 0; and printf '%s\n' $$cache_var
+        return 0
+    end
+    set -l names
+    set -l srcinfo (abi_package_srcinfo "$id")
+    if test -n "$srcinfo"; and test -f "$srcinfo"
+        set names (srcinfo_pkgnames "$srcinfo")
+    end
+    test (count $names) -gt 0; or set names $id
+    set -l files
+    for name in $names
+        for row in (pacman -Ql -- "$name" 2>/dev/null)
+            set -l f (string replace -r '^[^ ]+ ' '' -- "$row")
+            # ELF homes only — headers, man pages and data never carry a
+            # dynamic section and would dominate the scan at scale (a big
+            # toolchain recipe owns 15k paths). No existence test: fixtures
+            # fake -Ql with scratch-free synthetic paths the readelf stub
+            # answers by name, and a missing real path is one suppressed
+            # readelf error.
+            string match -qr '^/usr/(lib|libexec|bin|sbin)/' -- "$f"; or continue
+            set -a files "$f"
+        end
+    end
+    set -l needed
+    set -l n (count $files)
+    set -l i 1
+    while test $i -le $n
+        set -l j (math $i + 199)
+        test $j -gt $n; and set j $n
+        set -a needed (readelf -d $files[$i..$j] 2>/dev/null | awk '
+            /Shared library: \[/ {
+                s = $0
+                sub(/.*Shared library: \[/, "", s)
+                sub(/\].*/, "", s)
+                if (s != "") print s
+            }')
+        set i (math $j + 1)
+    end
+    set -g $cache_var (printf '%s\n' $needed | sort -u)
+    test (count $$cache_var) -gt 0; and printf '%s\n' $$cache_var
+    return 0
+end
+
+# abi_links_stems MEMBER STEM... → 0 when any installed output of MEMBER has
+# a DT_NEEDED naming one of the stems (soname prefix: `libfoo.so` matches
+# `libfoo.so.1.2`). Plain prefix compare — never glob match: provide names
+# carry `+`/`.` characters that would misbehave as patterns (`libstdc++.so`).
+function abi_links_stems -a member
+    set -l stems $argv[2..-1]
+    test (count $stems) -gt 0; or return 1
+    set -l needs (abi_member_needed "$member")
+    test (count $needs) -gt 0; or return 1
+    for s in $stems
+        set -l len (string length -- "$s")
+        for n in $needs
+            if test (string sub -s 1 -l $len -- "$n") = "$s"
+                return 0
+            end
+        end
     end
     return 1
 end
@@ -2220,8 +2302,19 @@ function abi_provide_refusals
             end
         end
         test (count $archive_rows) -gt 0; or continue
-        # The refusal is conditional: a provide change whose surface consumers
-        # are fully covered by the transaction lands safely together.
+        # The refusal is conditional: a provide change whose linked surface
+        # consumers are covered by the transaction lands safely together.
+        # Link truth (2026-10-07 gate fix v2): only a consumer whose
+        # installed outputs DT_NEEDED one of the affected provide names can
+        # break when that surface moves (abi_links_stems) — the pure naming
+        # relation demanded build tools and stable-soname users whose
+        # binaries never reference the moving soname.
+        set -l risk_names
+        for row in $archive_rows
+            set -l rf (plan_row_fields "$row")
+            set -a risk_names "$rf[5]"
+        end
+        set risk_names (printf '%s\n' $risk_names | sort -u)
         set -l provider_id (abi_package_id_for_pkgname "$pkgname")
         set -l open
         if test -n "$provider_id"
@@ -2239,9 +2332,10 @@ function abi_provide_refusals
                 test $covered -eq 1; and continue
                 # The installed-state probe goes through the memoized helper
                 # (at most one `pacman -Q` per output name per process) — the
-                # the raw per-name fork here re-probed every surface
-                # consumer's outputs on every refusal-path install.
+                # raw per-name fork here re-probed every surface consumer's
+                # outputs on every refusal-path install.
                 abi_pkg_installed "$member"; or continue
+                abi_links_stems "$member" $risk_names; or continue
                 set -a open "$member"
             end
         end
@@ -8355,28 +8449,32 @@ function main
 
         # ABI-drift guard layer 2 — batch tightening on soname drift. The
         # tag-based batch above is the policy relation; this is the CONCRETE
-        # one: any provider whose soname-provides set (committed .SRCINFO
-        # bare stems) differs from the installed stock equivalent's provides
-        # (abi_soname_provides_changed — pure gate logic, no builds) drags
-        # its DIRECT in-tree surface consumers into the batch (one hop over
-        # .SRCINFO name matching + topology edges — link-dependency
-        # transitivity is not ABI-surface transitivity; transitive risk is
-        # layer 1's curated tags).
-        # An installed surface consumer omitted from the selection is refused
-        # exactly like an omitted abi=must member: the provider's new surface
-        # would land beside a consumer still built against the old one. A
-        # member that is not installed has nothing to protect and never
-        # gates; read-only modes stay exempt.
+        # one: any provider whose surface LOSES a soname against the
+        # installed stock equivalent's provides (abi_at_risk_stems — pure
+        # gate logic, no builds) must rebuild the installed consumers that
+        # LINK that soname in the same selection. Candidates are the DIRECT
+        # in-tree surface consumers (one hop over .SRCINFO name matching +
+        # topology edges — link-dependency transitivity is not ABI-surface
+        # transitivity; transitive risk is layer 1's curated tags), filtered
+        # to actual linkers by DT_NEEDED (abi_links_stems): naming a
+        # provider is not linking it, so build tools and stable-soname users
+        # have nothing to break. A linked consumer omitted from the
+        # selection is refused exactly like an omitted abi=must member: the
+        # disappearing soname would leave its installed binaries unresolvable
+        # the moment the archive lands. A member that is not installed has
+        # nothing to protect and never gates; read-only modes stay exempt.
         set -l abi_open
         for provider in $sorted
             if test "$_INTERRUPT_HANDLED" = "1"
                 abort_before_dispatch
                 return $status
             end
-            abi_soname_provides_changed "$provider"; or continue
+            set -l at_risk (abi_at_risk_stems "$provider")
+            test (count $at_risk) -gt 0; or continue
             for member in (abi_surface_consumers "$provider")
                 contains -- "$member" $sorted; and continue
                 abi_pkg_installed "$member"; or continue
+                abi_links_stems "$member" $at_risk; or continue
                 set -a abi_open (printf '%s %s' $provider $member)
             end
         end
@@ -8387,10 +8485,10 @@ function main
         if test (count $abi_open) -gt 0
             set abi_open (printf '%s\n' $abi_open | sort -u)
             set -l first_pair (string split ' ' -- $abi_open[1])
-            ui_error "refusing to build $first_pair[1] without $first_pair[2] — its soname provides changed, so its surface consumers must rebuild in the same selection"
+            ui_error "refusing to build $first_pair[1] without $first_pair[2] — its soname provides changed, so the consumers linking them must rebuild in the same selection"
             echo "  $first_pair[1]'s soname provides differ from the installed stock package's provides:"
-            echo "  installing it beside an installed consumer leaves that consumer broken the"
-            echo "  moment the archive lands. Missing surface consumer(s):"
+            echo "  installing it beside an installed linker of a changed soname leaves that"
+            echo "  consumer broken the moment the archive lands. Missing linked consumer(s):"
             for entry in $abi_open
                 set -l pair (string split ' ' -- $entry)
                 echo "  missing: $pair[2] — add $pair[2] to the selection (or use --no-deps only for leaves)"

@@ -37,6 +37,67 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-07 — Gate fix v2: name edges demanded tools and stable-soname users — only LINKERS of a disappearing soname can break
+
+**Symptom.** With the one-hop gate (62633ce) run #43 still refused before
+dispatch, now naming 41 packages — `missing: glibc-git`, `missing: llvm-git`,
+`missing: ncurses-git`, `missing: openssl` … — for a `boost-libs` drift.
+Demanding an `llvm-git` rebuild because `python`'s provides changed is
+unbuildable in practice (the LLVM wave drags Rust/Mesa with it).
+
+**Root cause.** Two proxy layers were being read as truth:
+1. The relation is NAME-based, and name edges match tools and abstract
+   names: `python → glibc-git` (glibc's `makedepends = python` — an
+   interpreter, not a link), `gcc-snapshot → libmspub` (depends `libgcc`/
+   `libstdc++`), `perl → openssl` (Configure), `libtool-git → xmlsec`
+   (name `libltdl`). Naming a provider is not linking it.
+2. The trigger diffed declared provide STENS across two different metadata
+   conventions: stock `python` declares only `python3
+   python-externally-managed`, stock `gcc-libs` only `gcc-libs-multilib`,
+   so the house recipes' auto-declared soname provides looked like a
+   "changed surface" when no shipped soname moved at all.
+
+Measured on the real topology + installed DB: 183 candidate consumers, 12 237
+installed ELF files — the ONLY DT_NEEDED links to any changing soname
+(`libboost_python314.so`, `libboost_numpy314.so`, `libboost_mpi_python314.so`,
+`libgo.so`, `libobjc.so`, …) were the changed family's own outputs. Not one
+third consumer — including `liborcus`, which links `libboost_iostreams.so`
+(stable). The true demand was empty.
+
+**Fix** (build-all.fish, layers 2 + 3): the consumer relation becomes LINK
+TRUTH — candidates stay the direct one-hop set (`abi_surface_consumers`), but
+a consumer is demanded only when its INSTALLED outputs `DT_NEEDED` one of the
+provider's disappearing sonames. New `abi_at_risk_stems` (installed provide
+stems ∖ house declared stems — a NEW provide can strand nothing, and pacman
+itself refuses any `-U` that breaks an installed package's declared depends)
+replaces `abi_soname_provides_changed`; new `abi_member_needed` (memoised
+`pacman -Ql` + batched `readelf -d`, ~200 files/fork) and `abi_links_stems`
+(plain prefix compare — provide names carry `+`/`.` that would misbehave as
+globs). Layer 3 matches against the affected provide names from its own
+`refuse abi-soname` rows. This is the same "runtime file truth" principle the
+layer-4 post-install NEEDED probe already runs on.
+
+**Validation.** Red-first pin `tests/abi-batch-policy.sh` G5 `nlink-git` — a
+DIRECT consumer over both relation halves that names `libgreet.so` but links
+nothing of the moving soname — was demanded by the old gate (`missing:
+nlink-git`) and is silent after; the hub-chain pin (leaf-git) stays green.
+Fixture stubs now model link truth (PATH `readelf` + `pacman -Ql` answers in
+`abi-batch-policy.sh` G/H and `abi-drift-install.sh`; the read-only probe
+oracle admits `-Ql`). `fish -n` clean; real-topology simulation of the run
+window: 4 providers still drift (`gcc-snapshot`, `boost-libs`, `harfbuzz-git`,
+`gnome-desktop`), **0 open consumers**; full battery `bash tests/run-all.sh`
+**55/55**.
+
+**Durable rule** (MEMORY §3 (c)/(d) rewritten): an ABI gate tracks the
+installed consumers that LINK a disappearing soname (ELF truth), never
+name/graph reachability. Known blind spot, documented and accepted: a stock
+package that declares NO soname provides (python) renaming a shipped soname
+is invisible to provide-level triggers and is caught by the layer-4 probe
+instead.
+
+**Follow-up.** Run #44 window `100..100 139..653` (liborcus kept as cheap
+insurance even though the gate no longer demands it), `-s` off.
+
 ## 2026-10-07 — Run #42 refused before dispatch: the ABI-drift gate's transitive closure degenerated to the whole set
 
 **Symptom.** Run #42 (full-set run, `boost-libs` Stock→house swap in flight)

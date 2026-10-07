@@ -679,11 +679,17 @@ set_topology_record "$dir_g" app-git git 'libs-git'
 # The hub chain for G5/G6: mid-git is a SECOND direct surface consumer of
 # libs-git (both relation halves, like app-git); leaf-git consumes mid-git
 # only — no topology edge to libs-git, no depend on libgreet.so — so it is a
-# transitive-but-not-surface consumer of libs-git.
+# transitive-but-not-surface consumer of libs-git. nlink-git is the
+# link-truth pin (2026-10-07 gate fix v2): a DIRECT consumer over both
+# relation halves whose installed outputs do NOT link the disappearing
+# soname — naming a provider is not linking it, and only linkers can break
+# when the soname surface moves.
 add_meta_package "$dir_g" mid-git ''
 add_meta_package "$dir_g" leaf-git ''
+add_meta_package "$dir_g" nlink-git ''
 set_topology_record "$dir_g" mid-git git 'libs-git'
 set_topology_record "$dir_g" leaf-git git 'mid-git'
+set_topology_record "$dir_g" nlink-git git 'libs-git'
 {
     printf 'pkgbase = mid-git\n'
     printf 'pkgname = mid-git\n'
@@ -694,6 +700,11 @@ set_topology_record "$dir_g" leaf-git git 'mid-git'
     printf 'pkgname = leaf-git\n'
     printf '\tdepends = mid-git\n'
 } >"$dir_g/packages/leaf-git/.SRCINFO"
+{
+    printf 'pkgbase = nlink-git\n'
+    printf 'pkgname = nlink-git\n'
+    printf '\tdepends = libgreet.so\n'
+} >"$dir_g/packages/nlink-git/.SRCINFO"
 stub_sudo "$dir_g"
 
 # The stub makepkg: B's shape — a BUILD marker plus the trivial archive.
@@ -743,13 +754,54 @@ case ${args[0]:-} in
     leaf-git)
         [[ ${GSA_FAKE_LEAF_INSTALLED:-0} == 1 ]] && exit 0
         ;;
+    nlink-git)
+        [[ ${GSA_FAKE_NLINK_INSTALLED:-0} == 1 ]] && exit 0
+        ;;
     esac
     exit 1
+    ;;
+-Ql)
+    # File listing for the link-truth probe (gate fix v2): one synthetic ELF
+    # path per installed member; the readelf stub answers their DT_NEEDED.
+    case ${args[1]:-} in
+    app-git) [[ ${GSA_FAKE_APP_INSTALLED:-0} == 1 ]] || exit 1 ;;
+    mid-git) [[ ${GSA_FAKE_MID_INSTALLED:-0} == 1 ]] || exit 1 ;;
+    leaf-git) [[ ${GSA_FAKE_LEAF_INSTALLED:-0} == 1 ]] || exit 1 ;;
+    nlink-git) [[ ${GSA_FAKE_NLINK_INSTALLED:-0} == 1 ]] || exit 1 ;;
+    *) exit 1 ;;
+    esac
+    printf '%s /usr/lib/lib-%s.so\n' "${args[1]}" "${args[1]}"
     ;;
 esac
 exit 1
 EOF
 chmod +x "$dir_g/bin/pacman"
+
+# The stub readelf: DT_NEEDED truth for the link filter. app-git and mid-git
+# LINK the stock soname the swap removes (`libold.so.1-64`); leaf-git links
+# only its mid-git provider; nlink-git links libc — it names libs-git but can
+# never break on libold/libgreet moving.
+cat >"$dir_g/bin/readelf" <<'EOF'
+#!/usr/bin/env bash
+set -u
+for a in "$@"; do
+    [[ $a == -* ]] && continue
+    printf 'File: %s\n' "$a"
+    case $a in
+    *app-git* | *mid-git*)
+        printf ' 0x0000000000000001 (NEEDED)             Shared library: [libold.so.1-64]\n'
+        ;;
+    *leaf-git*)
+        printf ' 0x0000000000000001 (NEEDED)             Shared library: [libmid-git.so.1]\n'
+        ;;
+    *)
+        printf ' 0x0000000000000001 (NEEDED)             Shared library: [libc.so.6]\n'
+        ;;
+    esac
+done
+exit 0
+EOF
+chmod +x "$dir_g/bin/readelf"
 
 run_env_g() {
     run_builder env \
@@ -761,6 +813,7 @@ run_env_g() {
         GSA_FAKE_APP_INSTALLED="$GSA_FAKE_APP_INSTALLED" \
         GSA_FAKE_MID_INSTALLED="${GSA_FAKE_MID_INSTALLED:-0}" \
         GSA_FAKE_LEAF_INSTALLED="${GSA_FAKE_LEAF_INSTALLED:-0}" \
+        GSA_FAKE_NLINK_INSTALLED="${GSA_FAKE_NLINK_INSTALLED:-0}" \
         GSA_CPU_THREADS=8 \
         GSA_MEMORY_GIB=16 \
         fish "$dir_g/build-all.fish" "$@"
@@ -854,6 +907,7 @@ GSA_FAKE_QI_LIBS=$qi_changed
 GSA_FAKE_APP_INSTALLED=1
 GSA_FAKE_MID_INSTALLED=1
 GSA_FAKE_LEAF_INSTALLED=1
+GSA_FAKE_NLINK_INSTALLED=1
 : >"$dir_g/makepkg.log"
 run_env_g --no-deps --no-sync --allow-broken-rustc libs-git
 if [[ $FIXTURE_RC -eq 0 ]]; then
@@ -867,6 +921,14 @@ for want in 'missing: app-git' 'missing: mid-git'; do
         exit 1
     fi
 done
+# Link truth (gate fix v2): nlink-git names libs-git over both relation
+# halves but its installed outputs link nothing of the moving soname — the
+# old name-relation gate demanded it; only linkers may gate.
+if grep -Fq 'missing: nlink-git' <<<"$FIXTURE_OUTPUT"; then
+    printf 'G5: a naming-but-not-linking consumer leaked into the refusal:\n%s\n' \
+        "$FIXTURE_OUTPUT" >&2
+    exit 1
+fi
 if grep -Fq 'missing: leaf-git' <<<"$FIXTURE_OUTPUT"; then
     printf 'G5: the hub chain leaked a non-linking member into the refusal:\n%s\n' \
         "$FIXTURE_OUTPUT" >&2
@@ -897,6 +959,11 @@ if grep -Fq 'BUILD leaf-git' "$dir_g/makepkg.log"; then
     printf 'G6: leaf-git was dragged into the batch:\n%s\n' "$(cat "$dir_g/makepkg.log")" >&2
     exit 1
 fi
+if grep -Fq 'BUILD nlink-git' "$dir_g/makepkg.log"; then
+    printf 'G6: the non-linking nlink-git was dragged into the batch:\n%s\n' \
+        "$(cat "$dir_g/makepkg.log")" >&2
+    exit 1
+fi
 
 # ─── H. gate COST at synthetic scale: probe-count bounds ────────────────────
 # The 2026-10-05 gate rewrite keyed/memoised every helper that forks pacman
@@ -907,10 +974,11 @@ fi
 # machines). The expensive shape for the old per-(anchor × member) probe is
 # synthetic: 4 abi=must anchors sharing ONE pool of 240 installed abi=must
 # members (960 anchor×member visits) and 3 soname-drift providers sharing the
-# same 240 members as their layer-2 consumer closure (720 provider×member
-# visits). The members' .SRCINFO depends name the providers' soname provides,
-# so the closure is pinned in BOTH halves like section G (topology edge +
-# name edge). Decisions are asserted unchanged on the way: B1's tag refusal,
+# same 240 members as their layer-2 linked-consumer set (720 provider×member
+# visits). The members' .SRCINFO depends name the providers' soname provides
+# (the candidate relation's BOTH halves like section G — topology edge + name
+# edge) and the stub readelf has every member LINK the drifting stock soname
+# (`libgone.so.1-64`), so the link-truth filter keeps all 240 in the batch. Decisions are asserted unchanged on the way: B1's tag refusal,
 # G1's layer-2 refusal (both with nothing dispatched), and a complete batch
 # that builds all 244 of its packages.
 (
@@ -1006,10 +1074,30 @@ case ${args[0]:-} in
     [[ ${args[1]:-} == h-mem* ]] && exit 0
     exit 1
     ;;
+-Ql)
+    # File listing for the link-truth probe: one synthetic ELF path per
+    # member; the readelf stub answers its DT_NEEDED.
+    [[ ${args[1]:-} == h-mem* ]] || exit 1
+    printf '%s /usr/lib/lib-%s.so\n' "${args[1]}" "${args[1]}"
+    ;;
 esac
 exit 1
 EOF
     chmod +x "$dir_h/bin/pacman"
+
+    # The stub readelf: every member LINKS the stock soname the drift removes
+    # (`libgone.so.1-64`) — the link-truth filter keeps all 240 in the batch.
+    cat >"$dir_h/bin/readelf" <<'EOF'
+#!/usr/bin/env bash
+set -u
+for a in "$@"; do
+    [[ $a == -* ]] && continue
+    printf 'File: %s\n' "$a"
+    printf ' 0x0000000000000001 (NEEDED)             Shared library: [libgone.so.1-64]\n'
+done
+exit 0
+EOF
+    chmod +x "$dir_h/bin/readelf"
 
     # The stub makepkg: B/G's shape — a BUILD marker plus the trivial archive.
     cat >"$dir_h/bin/makepkg" <<'EOF'
