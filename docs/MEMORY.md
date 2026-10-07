@@ -653,7 +653,10 @@
      acceptable; park the recipe at the last compatible generation when the
     only exact pinner is stock-side for a secondary stack and the primary
     consumers bind the bare name (libdisplay-info parked at tag 0.3.0 —
-    NOTE 2026-10-07).
+      NOTE 2026-10-07). Pin form follows the line's life: `#branch=<named
+      maintenance branch>` while the line receives post-tag fixes (libpng16,
+      run #52), verified `#tag=` once the line is finished (libdisplay-info
+      0.3.0); both are one-line reversible.
 31. **A `?signed` source must pin a signed ref, and pins must name the
     ACTUAL signer** (2026-10-06 freetype2-git): makepkg verifies the
     *resolved* ref — `#tag=...?signed` verifies the tag, while a floating
@@ -1326,16 +1329,27 @@ going stale.
   update re-opens the wall; or (B) keep the park — stock wlroots0.20 then
   updates normally. Until decided, `--no-sync` or not, nothing breaks: the
   installed surface stays so.3 everywhere.
-- **Predicted llvm-git install wall: stock `rust` pins `llvm-libs` exactly**
-  (2026-10-06, pre-empted, not yet hit): `llvm-libs-git` carries
-  `provides=(llvm-libs) conflicts=('llvm-libs')` while stock `rust` depends
-  on `llvm-libs=23.1.1` — the run will refuse llvm-git's install in the same
-  class as the spandsp and icu soname swaps. Heal-set when it hits: sweep
-  exact pinners (`expac -Q '%n\t%D' | grep 'llvm-libs='`); stage the built
-  llvm-git; build `rust-git` against the stage **while stock rustc still
-  runs** (its bootstrap.toml pins `/usr/bin/rustc` as system stage0 —
-  rust-git built against stock llvm would link `libLLVM.so.23.1` and break
-  at the swap); one `pacman -U` of the llvm-git splits + rust-git splits.
+- **libpng-git is parked on `#branch=libpng16` (so.16) — so.18 is a
+  coordinated batch** (2026-10-07, run #52): upstream's default branch is the
+  `libpng18` dev line (SONAME 18) and the branch-less source followed it;
+  the installed base pins `libpng16.so=16-64` (stock `harfbuzz`/`leptonica`
+  are stock-side pinners; house `freetype2-git`/`libzmf`/`zint` are installed
+  and not in the run window), so master is un-installable here (NOTE
+  2026-10-07, rule 30(c)). The 1.6 line is alive (`v1.6.59-2-gd76d510`,
+  1.6.60.git development), hence a branch pin rather than a frozen tag. The
+  so.18 move needs: rebuild {freetype2-git, libzmf, zint, harfbuzz-git,
+  leptonica, …every `libpng16.so` pinner} against staged so.18 and ONE
+  `pacman -U` — schedule with the owner; until then the recipe tracks 1.6.
+- **llvm-git ↔ rust-git coupled-batch procedure (stock-rust preemption checked
+  out 2026-10-07)**: the predicted "stock `rust` pins `llvm-libs` exactly"
+  refusal is void — `pacman -Q rust` reports not installed, so nothing outside
+  the set pins llvm. The real constraint survives: `rust-git` cannot rebuild
+  *after* the swap because its bootstrap.toml pins `/usr/bin/rustc` as system
+  stage0 (a rust-git built against stock llvm links `libLLVM.so.23.1` and
+  breaks at the swap). On an llvm-git bump: sweep exact pinners
+  (`expac -Q '%n\t%D' | grep 'llvm-libs='`); stage the built llvm-git; build
+  `rust-git` against the stage **while the old rustc still runs**; one
+  `pacman -U` of the llvm-git splits + rust-git splits.
 
 Queue items deleted as done in earlier passes (each verified, not assumed):
 the `-Rns hyperv intel-speed-select x86_energy_perf_policy` batch and

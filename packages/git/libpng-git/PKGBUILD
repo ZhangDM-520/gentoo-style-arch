@@ -6,12 +6,21 @@
 # Contributor: Douglas Soares de Andrade <douglas@archlinux.org>
 #
 # git build adapted from AUR libpng-git (reference only) + stock Arch libpng:
-# tracks upstream master directly via the official GitHub mirror (the AUR
+# builds the official GitHub mirror's libpng16 maintenance branch (the AUR
 # reference still clones the SourceForge remote).
+#
+# 2026-10-07 (run #52 wall): upstream's default branch is now libpng18, the
+# 1.8 development line whose SONAME moved to libpng18.so.18 — a branch-less
+# git+ source resolves there and the resulting package cannot install
+# (everything installed pins libpng16.so=16-64, including stock-side pinners
+# outside this workspace like harfbuzz). Pinned to #branch=libpng16, the
+# living 1.6 line (the master alias points there too), same one-line
+# reversibility as the libdisplay-info pin (docs/MEMORY.md rule 30(c)).
+# The so.18 migration is a coordinated consumer batch, parked in MEMORY §5.
 
 pkgname=libpng-git
 _pkgname=libpng
-pkgver=1.6.43.r1.gf1848a3b5
+pkgver=1.6.59.r2.gd76d5106f
 pkgrel=1
 pkgdesc="The official PNG reference library (git build)"
 arch=('x86_64')
@@ -21,12 +30,13 @@ depends=('zlib' 'sh')
 makedepends=('git')
 provides=("libpng=$pkgver" 'libpng16.so')
 conflicts=('libpng')
-# Release tags are signed by the release manager; this recipe tracks master so
-# there is no pinned tag to verify — fingerprints kept for documentation only,
-# taken from the stock Arch PKGBUILD (upstream-published release signers).
+# Release tags are signed by the release manager; this recipe tracks a
+# maintenance branch so there is no pinned tag to verify — fingerprints kept
+# for documentation only, taken from the stock Arch PKGBUILD
+# (upstream-published release signers).
 validpgpkeys=('F57A55036A4D45837074FD92C9E384533403C2F8'  # Cosmin Truta <ctruta@gmail.com>
               '1FED507E3236B4A6E53E922BB292C64843FF5BCF') # Cosmin Truta <ctruta@gmail.com>
-source=("git+https://github.com/pnggroup/libpng.git")
+source=("git+https://github.com/pnggroup/libpng.git#branch=libpng16")
 sha256sums=('SKIP')
 
 pkgver() {
@@ -56,10 +66,11 @@ package() {
   cd "$_pkgname"
 
   make DESTDIR="$pkgdir" install
-  # 2026-10-07: upstream renamed LICENSE -> LICENSE.md in the v1.6.54 ->
-  # libpng18 restructure (run #51 wall); installed name kept for surface
-  # parity with stock.
-  install -Dm644 LICENSE.md "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  # The libpng18 line renamed LICENSE -> LICENSE.md; the 1.6 line keeps
+  # LICENSE. Install whichever exists under the stock name for surface parity.
+  local _license=LICENSE
+  [[ -f LICENSE.md ]] && _license=LICENSE.md
+  install -Dm644 "$_license" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 
   # pngminus tools (stock file-surface parity)
   cd contrib/pngminus

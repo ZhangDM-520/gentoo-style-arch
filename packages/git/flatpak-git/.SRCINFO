@@ -26,6 +26,7 @@ pkgbase = flatpak-git
 	depends = gobject-introspection
 	depends = socat
 	provides = flatpak
+	provides = libflatpak.so
 	conflicts = flatpak
 	options = !debug
 	source = git+https://github.com/flatpak/flatpak.git

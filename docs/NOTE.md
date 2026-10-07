@@ -37,6 +37,117 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-07 — look-ahead gap batch: three recipe-vs-installed downgrades prevented (openssh 10.6p1 / hunspell 1.7.5 / mkinitcpio 42.2) and the harfbuzz-git soname provides completed
+
+- **Symptom.** The batch-planning look-ahead flagged four recipe-vs-installed
+  downgrades (openssh, hunspell, mkinitcpio, nodejs): the host's Oct 5–7
+  CachyOS/Arch updates moved the installed versions past the recipes, and an
+  `-i` run `pacman -U`s each built archive — a numeric downgrade that
+  `pacman` accepts silently. The provides sweep separately flagged three
+  HIT-THIS-RUN bare-soname gaps (harfbuzz-git slot 302, libinput-git 313,
+  flatpak-git 414): missing/decay-ing `libfoo.so` provides cannot satisfy
+  `libfoo.so=N-64` pins and force the stock package back in at install.
+- **Root cause.** Two decay modes of a rolling set: (a) `stable` recipes lag
+  the host's rolling updates whenever upstream releases between passes
+  (version-sync is report-only without the `version-sync=nvchecker` tag);
+  (b) a `-git` recipe's `provides=()` decays as upstream *gains* libraries —
+  harfbuzz master (14.6.0) now builds eight shared objects (`src/meson.build`
+  `library()` targets: core, subset, gobject, cairo, icu plus newer raster,
+  vector, gpu) while the recipe declared five.
+- **Fix.** `openssh` 10.5p1→10.6p1, `hunspell` 1.7.4→1.7.5, `mkinitcpio`
+  42.1→42.2 (house trims/mold blocks untouched in all three). mkinitcpio's
+  nvpcr guard re-validated, **not** adapted: 42.2 moved the `install/systemd`
+  target line 215→219 (new `systemd-tpm2-setup` + PCR services above it) so
+  the patch applies at offset 4, and `install/sd-encrypt:53` is byte-identical
+  — the guarded glob semantics are unchanged (note: the second guard hunk is
+  zero-context, pre-existing fragility). `harfbuzz-git` gains the missing
+  `libharfbuzz-raster.so`/`-vector.so`/`-gpu.so` bare provides (8 total;
+  stock ships gpu but never declared it — declared here per house
+  convention), `libinput-git` gains `libinput.so`, `flatpak-git` gains
+  `libflatpak.so`. **nodejs deliberately not bumped**: 26.10.0-2 vs installed
+  26.10.0-3 is pkgrel-only drift (CachyOS rebuild of the same upstream), so
+  the `pacman -U` "downgrade" is version-surface noise, not a regression —
+  the house pkgrel is its own rebuild counter and must not chase distro
+  rebuilds.
+- **Validation.** Each bump: `makepkg --nobuild`/`-o` reports every source
+  `Passed` (sha256/sha512/b2 per recipe) and `Verifying source file
+  signatures with gpg … Passed` where signed; checksums independently
+  cross-checked against stock Arch's own 10.6p1/1.7.5/42.2 PKGBUILD values;
+  mkinitcpio `v42.2` tag signature verified against the signing subkey of
+  nl6720's primary (already the third `validpgpkeys` entry — stock lists only
+  the primary, per rule 31); hunspell's libtool `version-info` 2:0:2→2:1:2 is
+  revision-only, so `libhunspell-1.7.so` stays and no soname move occurs.
+  `bash -n` + `.SRCINFO` regenerated for all five recipes.
+- **Durable rules.**
+  1. Recipe-vs-installed downgrade is a standing look-ahead class while the
+     host rolls: before a run, compare `expac -Q '%v' <pkg>` against each
+     recipe's `.SRCINFO` pkgver for the window's stable members. A version
+     regression is a bug (bump it); a pkgrel-only delta is noise (record the
+     disposition, do not chase distro rebuilds). Decide per package, never
+     silently.
+  2. A `-git` recipe's provides list follows upstream's shared-library
+     surface, which only grows: on any upstream that adds `library()`/
+     `shared_library()` targets, the bare soname provides must follow in the
+     same change. The surface is readable from the build system without a
+     build (`grep 'library(' src/meson.build` + `soversion`).
+  3. Guard-bump re-validation is: the patch applies AND the guarded upstream
+     lines are identified in the new release (line moves with unchanged
+     semantics are fine; a change in how the optional glob is handled is a
+     stop-and-report).
+
+## 2026-10-07 — run #52 wall: libpng-git built the `libpng18` dev line (SONAME 18) — the branch-less `git+` source inherits upstream's default branch, and default is no longer the stable line
+
+- **Symptom.** Run #52 (resumed at the run #51 boundary) dispatched 65+ and
+  the relaunch gate refused the `libpng-git` install: `soname provide
+  libpng16.so moves 16-64 -> ` (bare), with installed consumers
+  `freetype2-git`/`libzmf`/`zint` and stock-side pinners (`harfbuzz`,
+  `leptonica`) on `libpng16.so=16-64` outside the transaction. Run stopped
+  dispatching, drained, exit 1 (record: 65 ok / 1 failed / rest
+  never-started).
+- **Root cause.** Upstream `pnggroup/libpng` publishes several living lines:
+  `libpng16` (stable, SONAME 16) and `libpng18` (1.8 dev, SONAME 18), and
+  **GitHub's default branch is `libpng18`** (`git ls-remote --symref`:
+  `ref: refs/heads/libpng18 HEAD`). The recipe's source was branch-less
+  `git+https://github.com/pnggroup/libpng.git`, which faithfully resolves to
+  the default — so "tracks upstream master" was building the dev line
+  (built archive shipped `libpng18.so.18*`; the bare `provides=('libpng16.so')`
+  then auto-versioned to *nothing* because the package contains no
+  `libpng16.so.*` ELF). `refs/heads/master` still exists but is an alias of
+  `libpng16` — the recipe's comment described an upstream layout that has
+  changed. Run #51's `LICENSE`→`LICENSE.md` wall was the *same* root cause
+  one wall earlier: the dev line restructured licensing, and patching the
+  packaging step to follow the rename treated the symptom and kept the
+  disease. Lesson recorded: when a VCS recipe starts needing "upstream
+  renamed X" fixes, first ask which branch is actually being built.
+- **Fix.** Pin the source fragment: `#branch=libpng16` — the living stable
+  line (tip `v1.6.59-2-gd76d510`, i.e. `1.6.60.git` development; the `master`
+  alias points here too). Static `pkgver` aligned to `pkgver()` output
+  (`1.6.59.r2.gd76d5106f`), license install made tolerant of both upstream
+  names (`LICENSE` on the 1.6 line, `LICENSE.md` on libpng18). One-line
+  reversible; the so.18 move is a coordinated consumer batch (freetype2-git,
+  libzmf, zint are installed and NOT in the run window; stock harfbuzz/
+  leptonica are stock-side pinners) — parked in `MEMORY.md` §5.
+- **Validation.** Red baseline = run #52's archive: `.PKGINFO` carries bare
+  `provides = libpng16.so`, ships `libpng18.so.18*`. Green = scratch build
+  of the pinned recipe: `.PKGINFO` `provides = libpng16.so=16-64`
+  (auto-versioned from the ELF soname — no provide move, gate passes),
+  ships `usr/lib/libpng16.so.16*`, stock-path LICENSE installed,
+  `png2pnm`/`pnm2png` built; `bash -n` + `.SRCINFO` regenerated.
+- **Durable rules.**
+  1. A `-git` source's fragment is load-bearing: a branch-less `git+` source
+     inherits upstream's **default** branch, which can silently change
+     identity from stable to dev. When a soname provide comes out bare /
+     auto-version-empty, investigate which branch was built before anything
+     else — the provide surface is the branch's truth, not the recipe's.
+  2. Cross-check a `-git` build's self-description (git describe version,
+     shipped `.so` names, license file shape) against the recipe's declared
+     provides on every soname-sensitive package; `LICENSE.md` in a
+     `1.6.x`-versioned tree was the tell here.
+  3. Pin-choice rule (extends MEMORY 30(c)): park on the NAMED maintenance
+     branch (`#branch=`) when the line is alive and receives post-tag fixes
+     (libpng16), and on a verified `#tag=` when the line is finished
+     (libdisplay-info 0.3.0). Both are one-line reversible.
+
 ## 2026-10-07 — run #51 wall: libpng-git's `package()` installed `LICENSE` — upstream renamed it to `LICENSE.md` in the v1.6.54→libpng18 restructure
 
 - **Symptom.** Run #51 (resumed at ~50/516) built 68, then `libpng-git`

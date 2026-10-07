@@ -47,6 +47,9 @@ provides=(
   libharfbuzz-gobject.so
   libharfbuzz-cairo.so
   libharfbuzz-icu.so
+  libharfbuzz-raster.so
+  libharfbuzz-vector.so
+  libharfbuzz-gpu.so
 )
 conflicts=(
   harfbuzz

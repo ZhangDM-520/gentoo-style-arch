@@ -1,6 +1,6 @@
 pkgbase = mkinitcpio
 	pkgdesc = Modular initramfs image creation utility
-	pkgver = 42.1
+	pkgver = 42.2
 	pkgrel = 1
 	url = https://gitlab.archlinux.org/archlinux/mkinitcpio/mkinitcpio
 	arch = any
@@ -34,14 +34,14 @@ pkgbase = mkinitcpio
 	optdepends = systemd-ukify: alternative UKI generator
 	provides = initramfs
 	backup = etc/mkinitcpio.conf
-	source = git+https://gitlab.archlinux.org/archlinux/mkinitcpio/mkinitcpio.git#tag=v42.1?signed
+	source = git+https://gitlab.archlinux.org/archlinux/mkinitcpio/mkinitcpio.git#tag=v42.2?signed
 	source = 0001-skip-missing-optional-nvpcr-files.patch
 	validpgpkeys = ECCAC84C1BA08A6CC8E63FBBF22FB1D78A77AEAB
 	validpgpkeys = BB8E6F1B81CF0BB301D74D1CBF425A01E68B38EF
 	validpgpkeys = 73B3CABFC4BF3F207641BD4B6B5387E670A955AD
-	sha512sums = d98062aa8bccb439cbf964efc0c75520f7e6be4f67a2a9d0a4aedd815081596100655bebef1c6e823688ec32a6de0e5816c8102912104078b102e63f65417f80
+	sha512sums = ddc6cb65586ea690ebdcf04f12eb0b441306efc900fb3045816512ec43b25cdec484d72cb1cbb928911a14ffd8637b14a2b7d0706232dd58797a3a07b0d40fc2
 	sha512sums = 5249b1490794027e50fa083895a0bd614f10e496438211c49a0c053e167922627bf5a9100a757b58d59690c39e19eae769eaa81346b849a3a91606187f526aa1
-	b2sums = ac13bea8601226a3f816cefcb8508c04bb58fdc18abffd50db3e4356367f5ed3b305b877d7643c5c95e890526356678b4d53b7fb61092daa22b85757467183d0
+	b2sums = b2fb0987878f13a26ebae0c2b4a75b15f52d3f1f8d5eb46ba7e8114629889070472232a4cb5cb259a3fae0c1658ac2d049f17933bbaa6bab9fdd31cd8af18640
 	b2sums = d6ff634476ba8ee927a869c846bb91de5ad3c6d9e5b3df0692452e5222203ff61a9768fdcb0ccfe5885dc498a5589522876197358787316c06940251a033b121
 
 pkgname = mkinitcpio
