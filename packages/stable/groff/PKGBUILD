@@ -53,10 +53,15 @@ build() {
   local _mold=""
   command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
   export LDFLAGS+=" ${_mold}"
+  # --without-urw-fonts: the git tree carries no pregenerated devpdf/U-*
+  # descriptions (release tarballs do), and generating them needs URW AFM
+  # files no system package provides. Stock groff ships without U-* too, so
+  # this is parity with the repo package, not a trim.
   ./configure \
     --prefix=/usr \
     --with-x \
-    --with-appresdir=/usr/share/X11/app-defaults
+    --with-appresdir=/usr/share/X11/app-defaults \
+    --without-urw-fonts
   # Stock `!makeflags` is load-bearing: groff's recursive make is not
   # parallel-safe, so GSA_BUILD_JOBS is deliberately not applied here.
   make

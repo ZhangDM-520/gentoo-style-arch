@@ -37,6 +37,45 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-07 — groff install wall: devpdf U-* fonts are release artifacts the git tree cannot generate without URW AFMs — --without-urw-fonts is stock parity
+
+Symptom: run #46 (24 successes, including `linux-firmware` — the split fix
+proven live at 6m44s) stopped on `groff`: `make install` died with
+`install: cannot stat './font/devpdf/U-S'` (plus U-ZD, U-ZCMI, U-AB).
+
+Root cause: the `devpdf/U-*` URW-foundry font descriptions are *release*
+artifacts — automake dist files the maintainer pregenerates on a machine with
+URW AFM files. The signed git-tag build must regenerate them through
+`font/devpdf/util/BuildFoundries`, which **warned "cannot locate AFM file" for
+all 36 and skipped them** (they were never built), while `HAVE_URW_FONTS=1`
+(Configure found `/usr/share/ghostscript/Resource/Font`) kept them in the
+`devpdffont_DATA` install list — so build "succeeds", install explodes. No
+installed package provides AFM files at all (ghostscript ships Type1 sans
+AFM; `gsfonts` ships the fonts and fontconfig snippets; zero `*.afm` under
+`/usr/share/{fonts,ghostscript}`), and the AFM lookup only accepts an
+AFM adjacent to the font file or in a parallel `type1/`→`afm/` tree.
+
+Fix: `packages/stable/groff/PKGBUILD` passes `--without-urw-fonts` to
+configure. This is **exact stock parity, not a trim**: the installed CachyOS
+`groff 1.24.1-1.1` ships 28 `devpdf` entries with zero `U-*` (verified via
+`pacman -Ql`), and the house build keeps the additive AB set that
+`HAVE_URW_FONTS_OR_HAVE_GHOSTSCRIPT` grants through the host's ghostscript.
+
+Validation: `bash -n` clean; `.SRCINFO` byte-identical (configure flags do
+not enter it). Scratch `makepkg --noconfirm` (clean src/pkg first) rc 0;
+tarfile assertions: 0 `U-*` entries, core devpdf entries (CB/CR/DESC/S/TR/
+download/Foundry) all present; functional smoke of the packaged tree:
+`groff -Tutf8 -man` renders and `groff -Tpdf` emits a real `%PDF-` header.
+Full fixture battery 55/55 PASS.
+
+Rule: a git-tag recipe whose release tarball carries pregenerated build
+artifacts needs either the generator's inputs or the corresponding configure
+opt-out — check what the *stock* package ships before deciding which; parity
+is the default. Observed (not fixed, cosmetic): a lane whose build fails also
+prints `cd: /tmp/gsa-version-sync.* does not exist` plus a fish `popd` stack
+trace — a pushd/popd cleanup race on the version-sync temp dir; the run record
+is unaffected.
+
 ## 2026-10-07 — linux-firmware install wall: the trimmed 7-way split family shipped files owned by repo splits it does not reuse — partition must follow ownership
 
 Symptom: run #45 built `linux-firmware` fine but its single `pacman -U`
