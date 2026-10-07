@@ -17,11 +17,13 @@ pkgbase = vim
 	makedepends = tcl
 	makedepends = zlib
 	source = git+https://github.com/vim/vim.git?signed#tag=v9.2.1046
+	source = tcl9-compat.patch
 	source = vimrc
 	source = archlinux.vim
 	source = vimdoc.hook
 	validpgpkeys = 4F19708816918E19AAE19DEEF3F92DA383FDDE09
 	sha256sums = f62ce253ef76ad45060c33eb0f89dc11fcee1133f3c1ce9af4b4ca5974adebe6
+	sha256sums = 891ec2a271a5841b4ab09ca27e279df1bfc2dd813243bef4ea5f42d932249335
 	sha256sums = b16e85e457397ab2043a7ee0a3c84307c6b4eac157fd0b721694761f25b3ed5b
 	sha256sums = cc3d931129854c298eb22e993ec14c2ad86cc1e70a08a64496f5e06559289972
 	sha256sums = 8e9656934d9d7793063230d15a689e10455e6db9b9fe73afa0f294792795d8ae

@@ -35,16 +35,19 @@ makedepends=(
   zlib
 )
 source=(git+https://github.com/vim/vim.git?signed#tag=v${pkgver}
+        tcl9-compat.patch
         vimrc
         archlinux.vim
         vimdoc.hook)
 sha256sums=('f62ce253ef76ad45060c33eb0f89dc11fcee1133f3c1ce9af4b4ca5974adebe6'
+            '891ec2a271a5841b4ab09ca27e279df1bfc2dd813243bef4ea5f42d932249335'
             'b16e85e457397ab2043a7ee0a3c84307c6b4eac157fd0b721694761f25b3ed5b'
             'cc3d931129854c298eb22e993ec14c2ad86cc1e70a08a64496f5e06559289972'
             '8e9656934d9d7793063230d15a689e10455e6db9b9fe73afa0f294792795d8ae')
 validpgpkeys=('4F19708816918E19AAE19DEEF3F92DA383FDDE09') # Christian Brabandt <cb@256bit.org>
 
 prepare() {
+  patch -Np1 -d vim -i "$srcdir"/tcl9-compat.patch
   (cd vim/src
     # define the place for the global (g)vimrc file (set to /etc/vimrc)
     sed -E 's|^.*(#define SYS_.*VIMRC_FILE.*").*$|\1|g' -i feature.h

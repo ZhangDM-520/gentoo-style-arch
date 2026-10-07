@@ -1,0 +1,88 @@
+--- a/src/if_tcl.c
++++ b/src/if_tcl.c
+@@ -111,6 +111,20 @@
+ # define CONST84
+ #endif
+ 
++// Tcl 9 dropped the Tcl-8-era _ANSI_ARGS_() and CONST macros and reshaped
++// size-taking APIs to Tcl_Size (long); restore/bridge them so this file
++// parses against Tcl 9 headers (upstream still ships _ANSI_ARGS_ as of
++// 9.2.1164).
++#ifndef _ANSI_ARGS_
++# define _ANSI_ARGS_(x) x
++#endif
++#ifndef CONST
++# define CONST const
++#endif
++#if TCL_MAJOR_VERSION < 9
++# define Tcl_Size int
++#endif
++
+ /*
+  *  List of Tcl interpreters who reference a vim window or buffer.
+  *  Each buffer and window has its own list in the w_tcl_ref or b_tcl_ref
+@@ -703,7 +717,7 @@
+ 		 * elements, * the lines from {n}+length({list}) through {m}
+ 		 * are deleted.
+ 		 */
+-		int	    lc;
++		Tcl_Size    lc;
+ 		Tcl_Obj	    **lv;
+ 
+ 		err = tclgetlinenum(interp, objv[3], &val2, buf);
+@@ -1649,10 +1663,27 @@
+ }
+ 
+ 
++// Tcl 9 requires non-NULL close2Proc and blockModeProc for channel types.
++    static int
++tcl_channel_close2(ClientData instance, Tcl_Interp *interp, int flags UNUSED)
++{
++    return tcl_channel_close(instance, interp);
++}
++
++    static int
++tcl_channel_blockmode(ClientData instance UNUSED, int mode UNUSED)
++{
++    return 0;
++}
++
+ static Tcl_ChannelType tcl_channel_type =
+ {
+     "vimmessage",	// typeName
++#if TCL_MAJOR_VERSION > 8
++    TCL_CHANNEL_VERSION_5, // version
++#else
+     TCL_CHANNEL_VERSION_2, // version
++#endif
+     tcl_channel_close,	// closeProc
+     tcl_channel_input,	// inputProc
+     tcl_channel_output,	// outputProc
+@@ -1661,21 +1692,19 @@
+     NULL,		// getOptionProc
+     tcl_channel_watch,	// watchProc
+     tcl_channel_gethandle, // getHandleProc
+-    NULL,		// close2Proc
+-    NULL,		// blockModeProc
+-#ifdef TCL_CHANNEL_VERSION_2
++    tcl_channel_close2,	// close2Proc
++    tcl_channel_blockmode, // blockModeProc
++#if TCL_MAJOR_VERSION > 8 || defined(TCL_CHANNEL_VERSION_2)
+     NULL,		// flushProc
+     NULL,		// handlerProc
+ #endif
+-// The following should not be necessary since TCL_CHANNEL_VERSION_2 was
+-// set above
+-#ifdef TCL_CHANNEL_VERSION_3
++#if TCL_MAJOR_VERSION > 8 || defined(TCL_CHANNEL_VERSION_3)
+     NULL,		// wideSeekProc
+ #endif
+-#ifdef TCL_CHANNEL_VERSION_4
++#if TCL_MAJOR_VERSION > 8 || defined(TCL_CHANNEL_VERSION_4)
+     NULL,		// threadActionProc
+ #endif
+-#ifdef TCL_CHANNEL_VERSION_5
++#if TCL_MAJOR_VERSION > 8 || defined(TCL_CHANNEL_VERSION_5)
+     NULL		// truncateProc
+ #endif
+ };

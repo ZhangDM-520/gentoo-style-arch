@@ -37,6 +37,50 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-07 — vim build wall: Tcl 9 dropped the Tcl-8 macros and channel contracts if_tcl.c is written against — compat patch bridges all four gaps
+
+Symptom: run #47 stopped on `vim` (0m51s): `make` died compiling
+`if_tcl.c` — first `error: expected '=', ',', ';', 'asm' or '__attribute__'
+before '_ANSI_ARGS_'` at if_tcl.c:130-142 (the whole prototype block), then
+the cascade (implicit `tclmsg`/`tclerrmsg`, undeclared
+`beepcmd`/`optioncmd`/`exprcmd`).
+
+Root cause: the recipe builds against system **Tcl 9.0.1**, whose headers
+dropped the Tcl-8-era `_ANSI_ARGS_()` *and* `CONST` macros (only `CONST86`
+remains) that every prototype and `Tcl_Obj *CONST objv[]` signature in
+`if_tcl.c` relies on. This was invisible until now because stock
+`vim 9.2.1164-2.1` was built 2026-10-06 06:49 against **tcl 8.6**
+(`-ltclstub8.6` in its link line) and Tcl 9.0.1 landed on the host that
+evening — and upstream vim (checked v9.2.1164 *and* master) is equally
+unpatched, so any Tcl 9 rebuild breaks. Three further Tcl 9 deltas surfaced
+once the file parsed: `Tcl_ListObjGetElements` now takes `Tcl_Size *`
+(= `long *`), `TCL_CHANNEL_VERSION_2..4` are gone (only `_5`), and V5
+channel types must define non-NULL `close2Proc`/`blockModeProc` (runtime
+error `channel type vimmessage must define close2Proc`).
+
+Fix: new recipe patch `packages/stable/vim/tcl9-compat.patch` (applied in
+prepare()): restores `_ANSI_ARGS_`/`CONST` and maps `Tcl_Size`→`int` below
+Tcl 9; declares the list count `Tcl_Size`; selects
+`TCL_CHANNEL_VERSION_5` with full field initialisation on Tcl 9; and adds
+minimal `tcl_channel_close2`/`tcl_channel_blockmode` implementations wired
+into the channel type.
+
+Validation: `bash -n` clean; patch sha256 pinned (the first record build
+actually caught a stale-hash race and failed the validity check — checksum
+enforcement works). Clean scratch `makepkg --noconfirm` rc 0; built vim
+reports `+tcl/dyn`; functional smoke against the packaged sources: `:tcl`
+executes (writes a file from Tcl), `::vim::command` round-trips a vim
+variable (`42` read back), and `:tcl puts` runs clean through the
+`vimmessage` channel that Tcl 9 first rejected. Full fixture battery 55/55
+PASS.
+
+Rule: embedding Tcl in a recipe means tracking Tcl's macro/API generation —
+Tcl 9 removed `_ANSI_ARGS_`, `CONST`, the pre-V5 channel version constants,
+and `int *` size parameters (`Tcl_Size *`), and enforces close2/blockmode on
+V5 channel types. Repo binaries can hide the breakage by lagging a Tcl major
+in their build chroot; verify against the headers the recipe will actually
+build with.
+
 ## 2026-10-07 — groff install wall: devpdf U-* fonts are release artifacts the git tree cannot generate without URW AFMs — --without-urw-fonts is stock parity
 
 Symptom: run #46 (24 successes, including `linux-firmware` — the split fix
