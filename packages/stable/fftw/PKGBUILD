@@ -177,7 +177,6 @@ package_fftw() {
     _pick $pkgbase-openmpi usr/lib/libfftw3{,f,l}_mpi.so.${_soname%%.*}
     _pick $pkgbase-openmpi usr/lib/libfftw3{,f,l}_mpi.so.$_soname
   )
-  install -vDm 644 $pkgname-$pkgver-$_build_types/{AUTHORS,ChangeLog,NEWS,README,TODO} -t "$pkgdir/usr/share/doc/$pkgname"
   # install missing FFTW3LibraryDepends.cmake
   install -vDm 644 build/FFTW3LibraryDepends.cmake -t "$pkgdir/usr/lib/cmake/fftw3/"
   # trim: drop docs/man (this library recipe ships only the shared libs + cmake)

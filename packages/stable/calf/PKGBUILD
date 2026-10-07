@@ -40,9 +40,10 @@ package() {
   # (this recipe ships the LV2 plug-in suite only)
   rm -rf "$pkgdir/usr/share/doc" "$pkgdir/usr/share/locale"
 
-  # license: ship upstream licence text(s) (GPL-2.0-or-later, LGPL-2.0-or-later)
+  # license: ship upstream licence text (LGPL-2.1 text; upstream ships no
+  # separate GPL text, and COPYING.LGPL/LICENSE do not exist at 0.90.9)
   local _l
-  for _l in COPYING COPYING.LGPL LICENSE; do
+  for _l in COPYING; do
     if [[ -f $pkgname/$_l ]]; then install -Dm644 "$pkgname/$_l" -t "$pkgdir/usr/share/licenses/$pkgname/"; fi
   done
 }

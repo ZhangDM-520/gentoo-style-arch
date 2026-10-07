@@ -78,7 +78,9 @@ package() {
   make DESTDIR="${pkgdir}" SBINDIR=/usr/bin SHLIBDIR=/usr/lib install
   make DESTDIR="${pkgdir}" PYTHON=/usr/bin/python3 SBINDIR=/usr/bin SHLIBDIR=/usr/lib install-pywrap
   make DESTDIR="${pkgdir}" RUBY=/usr/bin/ruby SBINDIR=/usr/bin SHLIBDIR=/usr/lib install-rubywrap
-  /usr/bin/python3 -m compileall "${pkgdir}/$(/usr/bin/python3 -c 'from distutils.sysconfig import *; print(get_python_lib(plat_specific=1))')"
+  # sysconfig, not distutils: stdlib distutils is gone (Python 3.12+) and the
+  # setuptools shim is not a contract (2026-10-07 look-ahead)
+  /usr/bin/python3 -m compileall "${pkgdir}/$(/usr/bin/python3 -c 'import sysconfig; print(sysconfig.get_path("platlib"))')"
 
   install -Dm 0644 "${srcdir}"/libselinux.tmpfiles.d "${pkgdir}"/usr/lib/tmpfiles.d/libselinux.conf
 

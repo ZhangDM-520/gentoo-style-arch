@@ -38,9 +38,10 @@ package() {
 	make DESTDIR="${pkgdir}" install
 	# trim: man — lean consumer-rebuild recipe
 	rm -rf "${pkgdir}"/usr/share/man
-	# license: ship upstream licence text (GPL-2.0-or-later)
+	# license: ship upstream licence text (GPL-2.0-or-later; COPYING is the
+	# only licence file upstream ships — COPYING.GPL/LICENSE never existed)
 	local _l
-	for _l in COPYING COPYING.GPL LICENSE; do
+	for _l in COPYING; do
 		if [[ -f $_l ]]; then install -Dm644 "$_l" -t "${pkgdir}/usr/share/licenses/${pkgname}/"; fi
 	done
 }
