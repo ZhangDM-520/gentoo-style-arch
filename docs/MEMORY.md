@@ -1161,6 +1161,16 @@ going stale.
 
 ### Queued (claim by editing this section)
 
+- **Pre-install package-internal NEEDED probe** (2026-10-07, from the run #53
+  wall): the post-install NEEDED probe stops a run but cannot prevent the
+  `pacman -U` landing — run #53 left `png2pnm`/`pnm2png` installed with a
+  `libpng18.so.18` NEEDED nothing provides. Add a pre-install check in
+  `install_plan`/`pgo_payload_refusals`' class: scan the staged archive's own
+  executables/libs (`readelf -d` NEEDED) and refuse when a needed soname is
+  provided neither by the archive's own provides nor by the installed DB —
+  a package-internal inconsistency is a build defect, not a batch case. Fit
+  alongside the existing silent `refuse pgo-*` rows; fixture via the
+  `--install-decide` seam.
 - **ABI-batch install deferral** (2026-10-07, from the libLLVM freeze): the
   coupled-batch gate (build-all.fish ~8145) protects selection completeness
   but never delays the anchor's `-i` install until its batch mates are built

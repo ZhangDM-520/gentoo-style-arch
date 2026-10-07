@@ -37,6 +37,52 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-07 — run #53 wall: stale build products in a reused `src/` tree — `package()` shipped pngminus tools linked against the *previous* build's soname
+
+- **Symptom.** Run #53 rebuilt the freshly pinned `libpng-git` (so.16) and
+  the archive's library surface was correct, but the **post-install NEEDED
+  probe** refused the result: `usr/bin/pnm2png`/`png2pnm` need
+  `libpng18.so.18 — unresolved after the transaction`. The transaction had
+  already landed, so the run stopped with two broken niche binaries installed
+  (healed by the next rebuild/install of this recipe).
+- **Root cause.** makepkg **reuses** `src/` across builds and never runs
+  `make clean`. Run #52's libpng18 build left `contrib/pngminus/{png2pnm,
+  pnm2png,.o}` at 17:14 with `NEEDED libpng18.so.18`; after the branch pin,
+  the sources of those tools were byte-identical on the 1.6 line (unchanged
+  mtimes), so `make … png2pnm pnm2png` reported "up to date" and packaged
+  the old binaries while the library itself correctly rebuilt as
+  `libpng16.so.16*. New wall class: **"source identity moved, build products
+  did not"** — a `package()` step that compiles/links in the source tree can
+  ship a previous build's artifacts. The run #51 class ("upstream renamed a
+  file a packaging step names") is its sibling: both are packaging steps
+  blind to tree state.
+- **Fix.** `make clean` in `contrib/pngminus` before the two-tool build
+  (with an incident comment); the top-level library install is unaffected
+  (install targets are current). Stale run #52 archive
+  (`libpng-git-1.6.59.r150.g18ea3e940`, so.18) removed from the workspace so
+  no later `-ia` can collect it.
+- **Validation.** Red/green pair in the real `$W` tree: red = the recipe's
+  own command line against the dirty tree → `make: 'png2pnm' is up to
+  date.` and `readelf -d png2pnm` still shows `NEEDED libpng18.so.18` (the
+  run #53 failure reproduced line-for-line); green = `make clean` + same
+  link line → both tools show `NEEDED libpng16.so.16`. Same-class sweep:
+  the only `package()` step in the set that links against a library built in
+  the same tree is this one (all other `make` in `package()` are install or
+  text-generation steps).
+- **Durable rules.**
+  1. A `package()` step that compiles or links must leave no artifact it did
+     not just produce: clean that step's products first, always — reuse of
+     `src/` is makepkg's documented behaviour and a branch/tag move changes
+     nothing about file mtimes that make would compare.
+  2. When a VCS recipe changes tracked ref (branch pin, tag pin, upstream
+     rename), assume the tree is dirty from the previous ref and audit every
+     packaging step that names build products, not only source files.
+  3. Gate observation (queued): the post-install NEEDED probe correctly
+     stops the run but cannot prevent the landing — a *pre-install* probe of
+     the staged archive's own binaries against its own provides would refuse
+     a package-internal inconsistency (binaries whose NEEDED is provided by
+     nothing in the archive) before `pacman -U` touches the system.
+
 ## 2026-10-07 — look-ahead gap batch: three recipe-vs-installed downgrades prevented (openssh 10.6p1 / hunspell 1.7.5 / mkinitcpio 42.2) and the harfbuzz-git soname provides completed
 
 - **Symptom.** The batch-planning look-ahead flagged four recipe-vs-installed

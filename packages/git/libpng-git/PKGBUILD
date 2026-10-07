@@ -73,7 +73,14 @@ package() {
   install -Dm644 "$_license" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 
   # pngminus tools (stock file-surface parity)
+  # 2026-10-07 (run #53 wall): these link the library just installed into
+  # $pkgdir, and makepkg reuses the src tree across builds — when the tracked
+  # line moved (libpng18 -> libpng16) the previous build's tools were still
+  # "up to date" and package() shipped binaries whose NEEDED was the old
+  # soname (the post-install NEEDED probe caught it). Clean first: package()
+  # ships only artifacts produced from THIS build.
   cd contrib/pngminus
+  make clean
   make PNGLIB_SHARED="-L$pkgdir/usr/lib -lpng" CFLAGS="$CFLAGS" LDFLAGS="$LDFLAGS" png2pnm pnm2png
   install -m0755 png2pnm pnm2png "$pkgdir/usr/bin/"
 }
