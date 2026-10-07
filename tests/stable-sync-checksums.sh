@@ -325,6 +325,7 @@ for arg in "$@"; do
     fi
 done
 printf 'fake makepkg: %s\n' "$*"
+[[ ${GSA_FAKE_MAKEPKG_FAIL:-0} != 1 ]] || exit 1
 exit 0
 EOF
     chmod +x "$dir/bin/makepkg"
@@ -389,6 +390,7 @@ run_build() {
         GSA_FAKE_SED_LOG="${GSA_FAKE_SED_LOG:-}" \
         GSA_FAKE_TMP_WATCH="${GSA_FAKE_TMP_WATCH:-}" \
         GSA_FAKE_PRINTSRCINFO_FAIL="${GSA_FAKE_PRINTSRCINFO_FAIL:-}" \
+        GSA_FAKE_MAKEPKG_FAIL="${GSA_FAKE_MAKEPKG_FAIL:-}" \
         GSA_CPU_THREADS=4 \
         GSA_MEMORY_GIB=8 \
         fish "$dir/build-all.fish" --allow-broken-rustc --no-deps \
@@ -1629,6 +1631,63 @@ grep -q 'could not be evaluated' <<<"$link_out" \
     || fail 'unevaluable: -ln does not name the evaluation failure'
 grep -q 'packages/stable/broken/PKGBUILD' <<<"$link_out" \
     || fail 'unevaluable: -ln does not say WHICH recipe failed to evaluate'
+)
+
+(
+# ─── Case 45: the version sync must not relocate the builder's cwd ──────────
+# fish 4.9.3 runs command substitutions IN-PROCESS, so `version_sync_temp_dir`'s
+# historical `(cd "$x" && pwd -P)` path resolution silently moved the builder's
+# own cwd into the very temp directory it had just created. That directory is
+# deleted before build_package's pushd, so pushd saved a dead path and the
+# closing popd emitted `cd: The directory '/tmp/gsa-version-sync.*' does not
+# exist` — and because fish's popd still returns 0 after a failed cd, the
+# builder's `if not popd` guard never fired: every later relative operation ran
+# from the wrong directory with nothing but that noise to show for it
+# (2026-10-06, nodejs). The pin is the ABSENCE of the dead-directory cd noise
+# in the package log, on both the success and the failing-build shape.
+assert_no_cwd_noise() { # $1 = workspace · $2 = label
+    local log
+    log=$(recipe_log "$1")
+    if grep -q 'does not exist' "$log" 2>/dev/null; then
+        fail "$2: the package log carries a dead-directory cd error — the builder's cwd was relocated into a deleted temp dir: $(grep -n 'does not exist' "$log")"
+    fi
+    if grep -q "in function 'popd'" "$log" 2>/dev/null; then
+        fail "$2: the package log carries a popd stack trace — the builder's cwd was relocated into a deleted temp dir"
+    fi
+}
+
+dir="$fixture/cwd-leak"
+make_case_workspace "$dir" "$repo_version-1"
+set_official_srcinfo "$dir" "$repo_version" \
+    "	source = https://example.invalid/s1-$repo_version.tar.gz" \
+    "	sha256sums = $published_sha"
+set_delivery "$dir" "$published_payload"
+make_nvchecker_stub "$dir"
+run_build "$dir" 'cwd-leak' 0
+grep -q "^pkgver=$repo_version$" "$(pkgfile "$dir")" \
+    || fail 'cwd-leak: the recipe was not version-synced, so this case is vacuous'
+[[ -s $dir/fake/updpkgsums_calls ]] \
+    || fail 'cwd-leak: the sums were never re-anchored, so the anchor-sums temp dir was not exercised'
+grep -q 'fake makepkg' "$(recipe_log "$dir")" \
+    || fail 'cwd-leak: the build left no log content, so the noise check inspected the wrong artifact'
+assert_no_cwd_noise "$dir" 'cwd-leak'
+
+# The failing-build shape is the one that surfaced the defect (a nodejs log
+# tail): makepkg fails AFTER the sync has already relocated the cwd, and the
+# noise lands in the log the owner reads.
+dir="$fixture/cwd-leak-fail"
+make_case_workspace "$dir" "$repo_version-1"
+set_official_srcinfo "$dir" "$repo_version" \
+    "	source = https://example.invalid/s1-$repo_version.tar.gz" \
+    "	sha256sums = $published_sha"
+set_delivery "$dir" "$published_payload"
+make_nvchecker_stub "$dir"
+GSA_FAKE_MAKEPKG_FAIL=1 run_build "$dir" 'cwd-leak-fail' fail
+[[ -s $dir/fake/makepkg_argv ]] \
+    || fail 'cwd-leak-fail: makepkg never ran, so the failing-build shape was not exercised'
+grep -q 'fake makepkg' "$(recipe_log "$dir")" \
+    || fail 'cwd-leak-fail: the failing build left no log content, so the noise check inspected the wrong artifact'
+assert_no_cwd_noise "$dir" 'cwd-leak-fail'
 )
 
 printf 'stable-sync fixture: PASS\n'

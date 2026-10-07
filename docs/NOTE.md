@@ -37,6 +37,75 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-07 — run #56: three walls in one window — nodejs vs ICU master (Unicode 17), gcc-snapshot deferred by nvchecker 2.22's `new_ver.json` v2 envelope, and a fish 4.9.3 command-substitution `cd` leak that relocated the builder's cwd into deleted temp dirs
+
+- **Symptom.** Run #56 (same 516-window `100..100,139..653` launch shape)
+  built 81, then walled at `nodejs` (`BUILD FAILED (rc=1, 1m32s)`); 435
+  remaining and 3 deferrals — `groff`/`inetutils` (savannah TLS dead from
+  this host, fail-closed freshness probe) and `gcc-snapshot`
+  (`nvchecker could not resolve a version … new_ver.json has no version for
+  key 'gcc-snapshot'`), whose deferral parked its whole consumer chain. The
+  `nodejs` log tail ended in `cd: The directory
+  '/tmp/gsa-version-sync.…' does not exist` from `build_package`'s `popd`
+  (build-all.fish:4614) — noise from a *different* defect than the compile
+  failure underneath it.
+- **Root cause 1 — nodejs build abort (recipe).** V8's regexp case-folding
+  generator feeds every member of a BMP character's
+  `closeOver(USET_CASE_INSENSITIVE)` class into
+  `RegExpCaseFolding::Canonicalize`, which `CHECK`s `ch <= 0xffff` (the
+  table serves ECMAScript's per-code-unit, non-unicode matching). ICU
+  master (79.x, Unicode 17) added U+1DF95 to the U+00DF/U+1E9E classes, so
+  the unpatched generator aborts at build time; measured 2026-10-07.
+- **Root cause 2 — gcc-snapshot deferral (resolver).** `tools/nvcheck.sh
+  --resolve` only understood nvchecker's legacy flat `{key: "version"}`
+  `new_ver.json`; nvchecker 2.22 writes the v2 envelope
+  `{"version": 2, "data": {key: {"version": …, "url": …}}}`, so the
+  resolver found "no version for key" and the recipe deferred even though
+  the version was right there in the state file.
+- **Root cause 3 — the `popd` noise (builder).** fish 4.9.3 executes
+  command substitutions IN-PROCESS: the idiom `(cd "$x" && pwd -P)`
+  silently relocates the *caller's* cwd into `$x`. `version_sync_temp_dir`
+  (`lib/sources.fish`) resolved its repository root, TMPDIR base and fresh
+  temp dir that way, so every version sync/checksum anchor moved the lane's
+  cwd into a temp dir that was then deleted — `build_package`'s `pushd`
+  saved that dead path and the closing `popd` emitted the dead-directory
+  `cd` error. fish's `popd` still returns 0 after a failed `cd`, so the
+  builder's `if not popd` guard never fired: the wrong cwd was silent
+  except for that one log line, and every later relative operation ran
+  from the wrong directory. The same `(cd …; find .)` idiom sat in
+  `pgo_payload_refusals` (build-all.fish) around the archive scan.
+- **Fix.** (1) `packages/stable/nodejs`: local
+  `0001-v8-regexp-special-case-keep-class-walk-bmp-only.patch` (keep the
+  case-folding class walk BMP-only) applied in a new `prepare()` with
+  `patch -Np1 --fuzz=0`; REUSE annotation carries the patch's upstream
+  BSD-3-Clause attribution. (2) `tools/nvcheck.sh`: accept both
+  `new_ver.json` shapes and both entry shapes (plain string or
+  `{"version": …}` object); `tests/nvcheck-aggregator.sh` pins the
+  v2-envelope success, envelope missing-key and invalid-entry cases.
+  (3) Builder: new `resolve_physical_dir` (existence check + `realpath`,
+  no `cd`) replaces the three resolution sites in `version_sync_temp_dir`;
+  the PGO payload scan now runs `find` over the absolute work dir and
+  strips the prefix literally (`string replace`), keeping the `./`-relative
+  refusal rows byte-identical.
+- **Validation.** Nodejs: `.SRCINFO` regenerated and diff-clean against
+  `makepkg --printsrcinfo`, `bash -n` clean, green rehearsal build over
+  the run path's dirty `src/` tree in `$W` (rule 33 — the second build's
+  stale-object shape is what run #57 will see). nvchecker: `tests/nvcheck-aggregator.sh`
+  green, real `--resolve packages/core/gcc-snapshot/.nvchecker.toml
+  gcc-snapshot` → `17.0.0.snapshot20261004` rc 0. Builder: `fish -n` clean
+  on both files; the new `tests/stable-sync-checksums.sh` Case 45 is red
+  with the fix stashed (both cases report the dead-directory `cd` error
+  from the `anchor-sums` temp dir) and green with it; `tests/install-conflict-ask.sh`
+  keeps the `./usr/bin/p2` refusal-row shape pinned; full battery 55/55
+  (the one battery failure during the wave — `recipe-sources.sh` naming
+  the new patch as untracked — is the clean-checkout contract doing its
+  job, green once the file is staged).
+- **Rules.** MEMORY rule 35 (fish command-substitution `cd` leak). The
+  worker lesson for the wall loop stays rule 34's look-ahead, now extended
+  with "a deferral is not only its own recipe's problem": a deferred
+  core/build-tools recipe parks its whole consumer chain, so resolve
+  deferrals before deciding a window is exhausted.
+
 ## 2026-10-07 — run #55 wall (libtool-git): `package()` installed a license path upstream's bootstrap stopped materializing
 
 - **Symptom.** Run #55 (same 516-window launch shape as #52–#54) built 70,

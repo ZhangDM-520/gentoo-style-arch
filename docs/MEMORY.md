@@ -726,6 +726,21 @@
     placeholder class), not the wall loop; the 2026-10-07 pass over the
     516-window found zero surviving walls. See `docs/NOTE.md` 2026-10-07
     run #55.
+35. **Never `cd` inside a fish command substitution — fish 4.9.3 runs the
+    substitution in-process and the `cd` leaks to the caller**
+    (2026-10-07 run #56 nodejs): `(cd "$x" && pwd -P)` silently moved the
+    lane's own cwd into `$x`; the deleted version-sync temp dir then broke
+    `build_package`'s closing `popd` — and because fish's `popd` still
+    returns 0 after a failed `cd`, the `if not popd` guard never fired:
+    every later relative operation ran from the wrong directory with only
+    one `cd: … does not exist` line in the log as evidence. Resolve paths
+    with `resolve_physical_dir` (`lib/sources.fish`: existence check +
+    `realpath`, no `cd`), and scan trees via absolute `find` plus a literal
+    prefix strip (`string replace`), never `cd`-and-`find .` inside `(
+    )`. Any new `(cd …)` site in fish source is a defect by default;
+    `tests/stable-sync-checksums.sh` Case 45 pins the version-sync/anchor
+    family (both the success and failing-build log shapes). See
+    `docs/NOTE.md` 2026-10-07 run #56.
 
 ## 2. Workspace overview
 

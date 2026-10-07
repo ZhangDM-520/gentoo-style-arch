@@ -2809,11 +2809,15 @@ function pgo_payload_refusals
             continue
         end
         # `strings -f` prefixes every line with its file, so one invocation
-        # covers the whole payload and still names the offender. The scan runs
-        # from inside $work, so the reported paths are relative to the archive.
-        set -l hits (cd "$work"; and find . -type f -exec strings -a -f {} + 2>/dev/null \
+        # covers the whole payload and still names the offender. The scan must
+        # NOT run from inside $work via a command substitution: fish 4.9.3 runs
+        # `(cd …)` IN-PROCESS, so that leaked the builder's cwd into the work
+        # dir it then deleted (2026-10-06, same defect as version_sync_temp_dir).
+        # find on the absolute work dir plus a literal prefix strip keeps the
+        # reported paths archive-relative (`./usr/bin/…`) exactly as before.
+        set -l hits (find "$work" -type f -exec strings -a -f {} + 2>/dev/null \
             | grep -E '^[^:]+: /[^[:space:]/*][^[:space:]]*\.(gcda|profraw)' \
-            | cut -d: -f1 | sort -u)
+            | cut -d: -f1 | string replace -- "$work" '.' | sort -u)
         command rm -rf -- "$work"
         if test (count $hits) -gt 0
             for hit in $hits

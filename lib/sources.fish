@@ -355,6 +355,19 @@ function discard_staged_rewrite -a work staged
     end
 end
 
+# resolve_physical_dir PATH — the physical path of an existing directory.
+# Resolution must NOT go through `cd`: fish 4.9.3 runs command substitutions
+# IN-PROCESS, so the historical `(cd "$x" 2>/dev/null && pwd -P)` idiom silently
+# relocated the builder's own cwd into $x (2026-10-06: the deleted version-sync
+# temp dir then broke build_package's closing popd). Emits the path on stdout
+# and fails without output when PATH is not an existing directory.
+function resolve_physical_dir -a path
+    if test -z "$path"; or not test -d "$path"
+        return 1
+    end
+    realpath -- "$path" 2>/dev/null
+end
+
 # version_sync_temp_dir LABEL — the checked temporary-state gate: a verified
 # scratch directory outside the repository, or a named reason in
 # $_VERSION_SYNC_TMP_ERROR with rc 2. Deriving paths from an UNCHECKED mktemp
@@ -364,12 +377,12 @@ end
 # directory it returns.
 function version_sync_temp_dir -a label
     set -g _VERSION_SYNC_TMP_ERROR ""
-    set -l repository_root (cd "$SCRIPT_DIR" 2>/dev/null && pwd -P)
+    set -l repository_root (resolve_physical_dir "$SCRIPT_DIR")
     set -l tmp_base /tmp
     if set -q TMPDIR; and test -n "$TMPDIR"
         set tmp_base "$TMPDIR"
     end
-    set tmp_base (cd -- "$tmp_base" 2>/dev/null && pwd -P)
+    set tmp_base (resolve_physical_dir "$tmp_base")
     if test -z "$repository_root"; or test -z "$tmp_base"
         set -g _VERSION_SYNC_TMP_ERROR "cannot resolve a safe temporary directory"
         return 2
@@ -383,7 +396,7 @@ function version_sync_temp_dir -a label
         set -g _VERSION_SYNC_TMP_ERROR "cannot create an isolated temporary directory"
         return 2
     end
-    set -l resolved (cd "$tmp" 2>/dev/null && pwd -P)
+    set -l resolved (resolve_physical_dir "$tmp")
     if test -z "$resolved"
         command rm -rf -- "$tmp"
         set -g _VERSION_SYNC_TMP_ERROR "cannot resolve the isolated temporary directory"
