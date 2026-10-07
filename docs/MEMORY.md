@@ -729,8 +729,27 @@
     pre-slot look-ahead for this class is upstream-at-ref existence of the
     installed paths (and of upstream version stamps, for the rule-31
     placeholder class), not the wall loop; the 2026-10-07 pass over the
-    516-window found zero surviving walls. See `docs/NOTE.md` 2026-10-07
-    run #55.
+    516-window found zero surviving walls. The tooling-materialized flavor
+    (2026-10-07 run #58 gcc-snapshot): a `package()` step installing
+    *tool-generated* output (doxygen man pages, generated docs) must have
+    its generating tool in `makedepends` — a removed/absent tool must not
+    leave an install step expecting its output — and upstream
+    `Error 1 (ignored)` + stamp-anyway sequences make warm-tree retries
+    sticky, so delete the stamps before re-testing the failing step. See
+    `docs/NOTE.md` 2026-10-07 run #55 and run #58.
+36. **An in-set library that replaces stock *with a soname bump* breaks
+    every stock binary linked against the old soname until each consumer's
+    in-set replacement installs** (2026-10-07 run #58 rescue build):
+    `jsoncpp-git` (floating git source) picked up upstream's soversion move
+    `.so.27 → .so.28`, and stock `cmake` — the only installed linker of
+    `.so.27` — broke mid-window, failing every later cmake-based build.
+    When a rebuilt in-set library's auto-versioned `libfoo.so` provide
+    moves generation, (a) sweep installed ELF consumers
+    (`readelf -d` over `/usr/bin /usr/lib /usr/libexec /opt` for the old
+    soname) and rebuild/install each in-set replacement in the same wave,
+    and (b) treat a tool breaking at *launch* (`error while loading shared
+    libraries`) as this class, not a corrupt-toolchain mystery. See
+    `docs/NOTE.md` 2026-10-07 run #58.
 35. **Never `cd` inside a fish command substitution — fish 4.9.3 runs the
     substitution in-process and the `cd` leaks to the caller**
     (2026-10-07 run #56 nodejs): `(cd "$x" && pwd -P)` silently moved the

@@ -21,7 +21,10 @@ pkgdesc="The GNU Compiler Collection (snapshot)"
 arch=(x86_64)
 license=(GFDL-1.3-or-later GPL-2.0-or-later GPL-3.0-with-GCC-exception LGPL-3.0-only LGPL-3.0-or-later)
 url='https://gcc.gnu.org'
-makedepends=(binutils git lib32-glibc lib32-gcc-libs python zstd)
+# doxygen: package_gcc-snapshot() installs the libstdc++ man3 pages, which
+# `doc-install-man` only materialises when doxygen is present — without it the
+# generation fails "ignored" and the copy walls (2026-10-07 run #58).
+makedepends=(binutils doxygen git lib32-glibc lib32-gcc-libs python zstd)
 options=(!emptydirs !lto)
 _libdir=usr/lib/gcc/${CHOST}/${_realver}
 source=(https://ftp.fu-berlin.de/unix/languages/gcc/snapshots/${_pkgver}/gcc-${_pkgver}.tar.xz

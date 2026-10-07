@@ -10,6 +10,7 @@ pkgbase = gcc-snapshot
 	license = LGPL-3.0-only
 	license = LGPL-3.0-or-later
 	makedepends = binutils
+	makedepends = doxygen
 	makedepends = git
 	makedepends = lib32-glibc
 	makedepends = lib32-gcc-libs

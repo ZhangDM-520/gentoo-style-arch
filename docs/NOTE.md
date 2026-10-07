@@ -37,6 +37,93 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-07 — run #58 (77/113): the anchoring coverage fix verified live, then gcc-snapshot's `package()` asked for doxygen-generated man pages that no declared tool generates — and the doxygen rescue itself tripped over a jsoncpp soname move that broke stock `cmake`
+
+- **Symptom.** Run #58 (same closer window `100..100 139..250`, `-s`) built 77;
+  `gcc-snapshot` FAILED in `package_gcc-snapshot()` —
+  `cp: cannot stat '.../x86_64-pc-linux-gnu/libstdc++-v3/doc/doxygen/man/man3'`
+  after `run_doxygen` printed `error: Could not find Doxygen 1.7.0 in path`
+  and `make … Error 1 (ignored)`; `libisl-git` DEFERRED
+  (`upstream-unverified` — repo.or.cz TLS down, same freshness class as
+  run #56's savannah wall; leaf, parks nothing). 36 remaining. The run #57
+  anchoring fix verified in production on the same slot: `gcc-snapshot`
+  synced 20260927→20261004 with `checksums re-anchored to AUR gcc-snapshot
+  17.0.0.snapshot20261004` before the build failed on the *next* wall.
+- **Root cause 1 — gcc-snapshot (rule-34 tooling-materialized class).**
+  `package_gcc-snapshot()` line 211 installs libstdc++ `man3` output that
+  `doxygen` generates — but `doxygen` was neither on the host nor in
+  `makedepends` (the trimmed recipe's tool materialization was never
+  declared). Worse, libstdc++'s doc Makefile writes its
+  `stamp-man-doxygen`/`stamp-man` stamps *even after* the ignored doxygen
+  failure, so a retry over the warm `src/gcc-build` tree repeats the wall
+  until the stamps are deleted.
+- **Follow-on wall — stock `cmake` vs jsoncpp so.27→.so.28.** The rescue
+  build of the house provider `doxygen-git` failed instantly:
+  `cmake: error while loading shared libraries: libjsoncpp.so.27`. The
+  run had installed in-set `jsoncpp-git` (floating git source picked up
+  upstream's soversion bump, now ships `libjsoncpp.so.28`) while stock
+  `cmake 4.4.4-1.1` — the only installed linker of `.so.27`, a `readelf`
+  sweep of `/usr/bin /usr/lib /usr/libexec /opt` found no other — had not
+  yet reached its in-set replacement slot (`cmake-git`, which conflicts
+  `cmake`). An in-set library that replaces stock *with a soname bump*
+  breaks every stock binary linked against the old soname until each
+  consumer's in-set replacement installs.
+- **Owner decision.** Keep the libstdc++ man pages and *provide doxygen*
+  ("it will be okay to install from repo or built it right now"); trimming
+  line 211 was proposed and rejected. The house provider `doxygen-git`
+  (core, `provides=("doxygen=${pkgver}")`, `conflicts=('doxygen')`) is
+  built instead of stock doxygen, which it would replace later anyway.
+- **Fix.** (1) `gcc-snapshot` `makedepends` += `doxygen` with a why-comment
+  (`.SRCINFO` diff = exactly the one added line). (2) build+install
+  `doxygen-git`. (3) rebuild+install `cmake-git` against `libjsoncpp.so.28`
+  first, restoring a working cmake. (4) gcc-snapshot warm-tree repair:
+  delete `src/gcc-build/**/stamp-man*`, re-run
+  `make … libstdc++-v3/doc DESTDIR=/tmp/gcc-doc-probe doc-install-man` and
+  assert `man3/` materializes before the full rebuild.
+- **Validation.** `cmake-git` ✓ 9m41s (`cmake 4.4.20261007-g243363f`
+  replaces stock cmake and links `libjsoncpp.so.28`; the `readelf` sweep
+  found no other `.so.27` consumer), `doxygen-git` ✓ 3m40s (doxygen
+  1.19.0). After deleting `stamp-man*`, the re-run `doc-install-man`
+  materialized `man3/` with 881 pages, and the warm-tree `gcc-snapshot`
+  rebuild+install ✓ 28m21s — `gcc-snapshot 17.0.0.snapshot20261004-1`
+  with 883 `usr/share/man/man3` entries in the archive. Full battery
+  55/55 in the run gap.
+- **Rule.** MEMORY rule 34 extension: a `package()` step installing
+  *tool-generated* output must have its generating tool in `makedepends`;
+  upstream `Error 1 (ignored)` + stamp-anyway sequences make warm-tree
+  retries sticky, so clear the stamps when re-testing the failing step.
+
+## 2026-10-07 — look-ahead batch: five trim/licence NIT fixes, and two 251..400 audit reports land with four soname movers as open owner decisions
+
+- **NIT fixes (work tree).** `calf` and `stress-ng` licence loops named
+  only `COPYING` (the real file; `COPYING.LGPL`/`LICENSE` never existed at
+  0.90.9 — dead names removed); `fftw` had a dead doc-install line
+  (installed then `rm -rf`'d — removed); `libselinux`'s python binding
+  build used the py2-era `distutils.sysconfig` (→ `sysconfig.get_path
+  ("platlib")`); `systemd` carried three dead bootloader locals
+  (`arch.conf`/`loader.conf`/`splash-arch.bmp`) plus their sums and REUSE
+  entries (files `git rm`'ed; `.SRCINFO` diff = exactly 3 sources + 3
+  sums). Targeted validation green; `recipe-sources.sh` PASS (515 local
+  sources).
+- **Audit reports (251..400 slice, 150 recipes, scratch under
+  `~/Workspace/lookahead-src/`).** version/provides: four would-wall soname
+  movers on floating `-git` sources — `libgexiv2-git` (name+generation
+  move to `libgexiv2-0.16.so.4`), `libunwind-git` (so.8→so.11, 6 in-set
+  linkers), `libjxl-git` (so.0.12→0.13, 4 linkers), `libplist-git`
+  (so.4→so.12, 5 linkers incl. **stock-side `solid`**) — plus
+  rule-30 provides gaps (`rust-git`, `rust-bindgen-git`,
+  `spirv-llvm-translator-git`, `kmod-git` unversioned tool provides;
+  `mimalloc-git` missing `libmimalloc.so`) and stale version stamps
+  (`elfutils-git`, `mold-git`, `doxygen-git` 1.18-vs-1.19, glib2/libdex/
+  libfido2 post-tag bumps). sources/patches: all 71 fetched URLs and 117
+  VCS endpoints alive; four patch sets rely on default fuzz
+  (`rasqal`, `netpbm`×2, `cmake-git`, `rust-git` 0004/0005 — would wall
+  under `--fuzz=0`), `rust-git` 0006/0007 are shipped-but-never-applied,
+  and seven recipes carry stale-src warm-tree risk (`netpbm`, `wev`,
+  `libselinux`, `linux-tools` strong; `ladspa`, `vamp-plugin-sdk`,
+  `libxdp` weak). PGO gates all clean. None of these block the current
+  window; each mover needs an owner park-vs-heal decision before 251..400.
+
 ## 2026-10-07 — run #57 (85/113): the run #56 fixes verified live, then two more walls — python-lxml vs Cython 3.3.0 (the tag's pin lags upstream's own master) and gcc-snapshot refusing a *superset* AUR source list
 
 - **Symptom.** Run #57 (closer window `100..100,139..250`, 113 slots) built
