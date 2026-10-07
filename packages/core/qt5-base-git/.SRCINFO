@@ -42,7 +42,7 @@ pkgbase = qt5-base-git
 	optdepends = perl: for fixqt4headers and syncqt
 	conflicts = qtchooser
 	conflicts = qtchooser-git
-	source = git+https://invent.kde.org/qt/qt/qtbase.git
+	source = kde-qtbase::git+https://invent.kde.org/qt/qt/qtbase.git#branch=kde/5.15
 	source = qt5-base-cflags.patch
 	source = qt5-base-nostrip.patch
 	sha256sums = SKIP

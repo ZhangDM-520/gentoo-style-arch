@@ -50,9 +50,31 @@ set -euo pipefail
 #      the marker dir at every transaction), renders the note into the
 #      package log, and consumes the marker when the consumer's own install
 #      lands.
+#   O. STOCK-SIDE pinner (2026-10-07, run #49 wall #2): an OUT-OF-TREE
+#      installed package (no workspace recipe) whose declared Depends pins
+#      the moving provide EXACTLY (`libgreet.so=1-64`) while the workspace
+#      closure is empty. The pre-fix gate planned a CLEAN install — pacman
+#      would have refused it in raw noise. The gate must consult the LOCAL
+#      DB's reverse deps (the `pacman -Qi --` full-dump seam,
+#      abi_local_depend_rows) and refuse with rows naming the pinner and the
+#      exact depstring: `refuse abi-stock-pinner <archive> <pinner> <dep>`.
+#      The second half renders that refusal through the REAL -i executor
+#      (case G's shape) so the row is a real message, never an
+#      `unrecognized install-plan refusal`;
+#   P. the bare-link shape and the split: a stock pinner with `Depends On :
+#      libgreet.so` (bare) is named too — a bare linker of a moved soname
+#      breaks at runtime exactly like a pin breaks pacman — while a
+#      WORKSPACE recipe output carrying the same moving pin in the local DB
+#      stays the existing class (`refuse abi-consumer`, link truth) and is
+#      never named as a stock-side pinner;
+#   Q. a stock-side pinner whose OWN archive rides the transaction is
+#      covered: pacman re-checks its new depends against the new provides in
+#      the same transaction → clean plan.
 #
-# The pacman stub is read-only (-Qi/-Q probes); every case asserts no
-# `pacman -U` ever ran. Scratch workspaces under $TMPDIR only.
+# The pacman stub is read-only (-Qi/-Q probes plus the `pacman -Qi --`
+# full-dump the stock-pinner query reads, fabricated from GSA_FAKE_QI_ALL);
+# every case asserts no `pacman -U` ever ran. Scratch workspaces under
+# $TMPDIR only.
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 source "$root/tests/lib/fixture-lib.bash"
@@ -136,6 +158,16 @@ for a in "$@"; do
 done
 case ${args[0]:-} in
 -Qi)
+    if [[ -z ${args[1]:-} ]]; then
+        # The full-dump form (`pacman -Qi --`, no target): the local-DB seam
+        # abi_local_depend_rows reads (every installed record's Depends On).
+        # GSA_FAKE_QI_ALL fabricates those records; unset keeps the
+        # pre-existing "no answer" shape (exit 1) so every earlier case's
+        # pacman traffic is unchanged.
+        [[ -n ${GSA_FAKE_QI_ALL:-} ]] || exit 1
+        printf '%s\n' "$GSA_FAKE_QI_ALL"
+        exit 0
+    fi
     case ${args[1]:-} in
     libs-git)
         [[ -n ${GSA_FAKE_QI_LIBS:-} ]] || exit 1
@@ -228,6 +260,7 @@ decide() {
         GSA_FAKE_QI_LIBS="$GSA_FAKE_QI_LIBS" \
         GSA_FAKE_QI_APP="$GSA_FAKE_QI_APP" \
         GSA_FAKE_QI_STOCK="${GSA_FAKE_QI_STOCK:-}" \
+        GSA_FAKE_QI_ALL="${GSA_FAKE_QI_ALL:-}" \
         GSA_FAKE_APP_INSTALLED="$GSA_FAKE_APP_INSTALLED" \
         _GSA_RUN_ORDER="${_GSA_RUN_ORDER:-}" \
         fish "$ws/build-all.fish" --install-decide "$@" 2>"$ws/decide.err")
@@ -630,5 +663,138 @@ Provides : libapp.so=1-64'
         fail "N: the consumer's install must consume its repair marker: $(ls "$ws/state/abi-repair")"
 )
 checks=$((checks + 4))
+
+# ─── O. stock-side exact pinner: named refusal rows, before pacman ──────────
+# The run #49 wall (stock wlroots0.20 pinning `libdisplay-info.so=3-64`):
+# the pinner is OUT-OF-TREE and pins the moving provide exactly, and the
+# workspace closure here is EMPTY (app-git not installed) — the pre-fix gate
+# planned a clean install (`install` row, rc 0) that pacman would have
+# refused in raw noise. The gate must read the local DB's reverse deps and
+# refuse with rows naming the pinner + depstring. The executor half pins the
+# rendering through the real -i path.
+(
+    set -euo pipefail
+    make_archive "$ws" libs-git 'libgreet.so=2-64'
+    GSA_FAKE_QI_LIBS='Name : libs-git
+Version : 1.0.0-1
+Provides : libgreet.so=1-64'
+    GSA_FAKE_QI_APP=''
+    GSA_FAKE_APP_INSTALLED=0
+    GSA_FAKE_QI_ALL='Name : stockpin
+Version : 9.9-1
+Depends On : libgreet.so=1-64'
+    _GSA_RUN_ORDER=''
+    : >"$ws/pacman.log"
+    decide force "$libs_arch"
+    ((FIXTURE_RC == 1)) ||
+        fail "O: a stock-side pinner of the moving provide must refuse (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
+    o_expected="$(planrow refuse abi-soname "$libs_arch" libs-git libgreet.so 1-64 2-64)
+$(planrow refuse abi-stock-pinner "$libs_arch" stockpin libgreet.so=1-64)"
+    [[ $FIXTURE_OUTPUT == "$o_expected" ]] ||
+        fail "O: wrong stock-pinner refusal rows (want tab-framed plan_row output).
+want:
+$o_expected
+got:
+$FIXTURE_OUTPUT"
+    assert_no_u O
+    stub_sudo "$ws"
+    stub_makepkg "$ws"
+    # Same toolchain-identity stamp as G/N: a missing stamp makes the drift
+    # clean delete the pre-made bumped-provide archive before the build.
+    mkdir -p "$ws/state/toolchains"
+    gccline=$(LC_ALL=C gcc --version 2>/dev/null | head -1)
+    [[ -n $gccline ]] || gccline='gcc unavailable'
+    printf '%s\n%s\n' "$ws/packages/libs-git" "$gccline" >"$ws/state/toolchains/libs-git"
+    : >"$ws/pacman.log"
+    run_builder env \
+        PATH="$ws/bin:$PATH" \
+        GSA_STATE_DIR="$ws/state" \
+        _IGNOREPKG_CONF="$ws/pacman.conf" \
+        GSA_FAKE_PACMAN_LOG="$ws/pacman.log" \
+        GSA_FAKE_QI_LIBS="$GSA_FAKE_QI_LIBS" \
+        GSA_FAKE_QI_APP='' \
+        GSA_FAKE_APP_INSTALLED=0 \
+        GSA_FAKE_QI_ALL="$GSA_FAKE_QI_ALL" \
+        GSA_CPU_THREADS=8 GSA_MEMORY_GIB=16 \
+        fish "$ws/build-all.fish" --allow-broken-rustc --no-deps --no-sync -i libs-git
+    ((FIXTURE_RC != 0)) || fail "O: the -i run must fail on the refused plan: $FIXTURE_OUTPUT"
+    o_log="$ws/state/logs/libs-git.log"
+    [[ -f $o_log ]] || fail "O: no package log was written: $FIXTURE_OUTPUT"
+    grep -Fq 'installed stock-side package stockpin requires libgreet.so=1-64' "$o_log" ||
+        fail "O: the refusal must name the pinner and its depstring: $(cat "$o_log")"
+    assert_no_u O-executor
+)
+checks=$((checks + 4))
+
+# ─── P. bare-link stock pinner named; a workspace pin stays the old class ───
+# stockpin2 bare-links the moving provide (`Depends On : libgreet.so`) and
+# must be named; app-git — a WORKSPACE recipe output — carries the same
+# moving pin in the local DB but belongs to the surface-consumer logic (link
+# truth → `refuse abi-consumer`), never to the stock-pinner row. The exact
+# match fails if either half misbehaves (a missing row or an extra
+# `refuse abi-stock-pinner … app-git …` row).
+(
+    set -euo pipefail
+    GSA_FAKE_QI_LIBS='Name : libs-git
+Version : 1.0.0-1
+Provides : libgreet.so=1-64'
+    GSA_FAKE_QI_APP='Name : app-git
+Version : 1.0.0-1
+Provides : libapp.so=1-64'
+    GSA_FAKE_APP_INSTALLED=1
+    GSA_FAKE_QI_ALL='Name : app-git
+Version : 1.0.0-1
+Depends On : libgreet.so=1-64
+
+Name : stockpin2
+Version : 9.9-1
+Depends On : libgreet.so'
+    _GSA_RUN_ORDER=''
+    : >"$ws/pacman.log"
+    decide force "$libs_arch"
+    ((FIXTURE_RC == 1)) ||
+        fail "P: a bare-link stock pinner must refuse (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
+    p_expected="$(planrow refuse abi-soname "$libs_arch" libs-git libgreet.so 1-64 2-64)
+$(planrow refuse abi-consumer "$libs_arch" app-git)
+$(planrow refuse abi-stock-pinner "$libs_arch" stockpin2 libgreet.so)"
+    [[ $FIXTURE_OUTPUT == "$p_expected" ]] ||
+        fail "P: wrong rows for the bare-link/split case (want tab-framed plan_row output).
+want:
+$p_expected
+got:
+$FIXTURE_OUTPUT"
+    assert_no_u P
+)
+checks=$((checks + 2))
+
+# ─── Q. a stock-side pinner riding the transaction is covered ──────────────
+# The pinner's own archive installs in the SAME pacman -U: the old pin dies
+# with the old package and pacman re-checks the new record's depends against
+# the new provides — nothing to protect, clean plan.
+(
+    set -euo pipefail
+    mkdir -p "$ws/packages/stockpin"
+    make_archive "$ws" stockpin 'libstock.so=1-64'
+    stock_arch="$ws/packages/stockpin/stockpin-1.0.0-1-x86_64.pkg.tar.zst"
+    GSA_FAKE_QI_LIBS='Name : libs-git
+Version : 1.0.0-1
+Provides : libgreet.so=1-64'
+    GSA_FAKE_QI_APP=''
+    GSA_FAKE_APP_INSTALLED=0
+    GSA_FAKE_QI_ALL='Name : stockpin
+Version : 9.9-1
+Depends On : libgreet.so=1-64'
+    _GSA_RUN_ORDER=''
+    : >"$ws/pacman.log"
+    decide force "$libs_arch" "$stock_arch"
+    ((FIXTURE_RC == 0)) ||
+        fail "Q: a pinner in the transaction must be covered (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
+    grep -Fq 'refuse' <<<"$FIXTURE_OUTPUT" &&
+        fail "Q: no refusal rows expected: $FIXTURE_OUTPUT"
+    grep -Fxq "$(planrow install "$stock_arch")" <<<"$FIXTURE_OUTPUT" ||
+        fail "Q: the pinner's archive must be planned for install: $FIXTURE_OUTPUT"
+    assert_no_u Q
+)
+checks=$((checks + 3))
 
 printf 'abi-drift-install fixture: PASS (%d checks)\n' "$checks"

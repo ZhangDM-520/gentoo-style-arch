@@ -22,7 +22,10 @@ depends=('glibc'
 provides=('libmagic.so')
 options=('!emptydirs')
 # Release tarball (Arch pins the git tag instead), detached-signed upstream.
-source=("https://ftp.astron.com/pub/file/file-${pkgver}.tar.gz"{,.asc})
+# 2026-10-07: ftp.astron.com answers plaintext on :443 (TLS "wrong version
+# number", persistent) — the canonical astron.com/pub/file path serves the
+# byte-identical tarball (sha256 anchor unchanged) and is the stable endpoint.
+source=("https://astron.com/pub/file/file-${pkgver}.tar.gz"{,.asc})
 validpgpkeys=('BE04995BA8F90ED0C0C176C471112AB16CB33B3A') # Christos Zoulas
 sha256sums=('ed14656883b23a364b4057c05595d93252da9bc473d30106519519d0da141283'
             'SKIP')

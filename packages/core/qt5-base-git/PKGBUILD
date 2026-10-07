@@ -29,19 +29,25 @@ optdepends=('qt5-svg: to use SVG icon themes'
             'qt5-translations: for some native UI translations'
             'perl: for fixqt4headers and syncqt')
 groups=(qt-git qt5-git)
-source=("git+https://invent.kde.org/qt/qt/qtbase.git" qt5-base-cflags.patch qt5-base-nostrip.patch)
+# 2026-10-07: explicit `kde-qtbase::` name + `#branch=kde/5.15` — the SRCDEST
+# git-mirror dir is derived from the source basename, and qt6-base-git's
+# code.qt.io qtbase claims the same `qtbase` name (one dir, one origin: the
+# second fetch gets "is not a clone of"). The branch pin also stops the clone
+# landing on invent.kde.org's default `dev` (Qt6 tip), which `pkgver()` would
+# otherwise read before prepare()'s checkout.
+source=("kde-qtbase::git+https://invent.kde.org/qt/qt/qtbase.git#branch=kde/5.15" qt5-base-cflags.patch qt5-base-nostrip.patch)
 sha256sums=('SKIP'
             'cf707cd970650f8b60f8897692b36708ded9ba116723ec8fcd885576783fe85c'
             '4b93f6a79039e676a56f9d6990a324a64a36f143916065973ded89adc621e094')
 
 pkgver() {
-  cd qtbase/dist
+  cd kde-qtbase/dist
   _ver="$(ls | sort -V | tail -1 | sed 's/changes-//')"
   echo "$_ver+kde_r$(git rev-list --count HEAD).g$(git rev-parse --short HEAD)"
 }
 
 prepare() {
-  cd qtbase
+  cd kde-qtbase
   git checkout kde/5.15
 
   patch -p1 < ../qt5-base-cflags.patch # Use system CFLAGS in qmake
@@ -58,7 +64,7 @@ prepare() {
 }
 
 build() {
-  cd qtbase
+  cd kde-qtbase
 
   if command -v mold >/dev/null 2>&1; then
     export LDFLAGS+=" -fuse-ld=mold"
@@ -93,7 +99,7 @@ package_qt5-base-git() {
   conflicts=(qt5-base)
   provides=(qt5-base=$pkgver)
 
-  cd qtbase
+  cd kde-qtbase
   make INSTALL_ROOT="${pkgdir}" install
 
   install -Dm644 LICENSE* -t "$pkgdir"/usr/share/licenses/${pkgbase%-git}
@@ -103,7 +109,7 @@ package_qt5-base-git() {
     -exec sed -i -e '/^QMAKE_PRL_BUILD_DIR/d' {} \;
 
   # Fix wrong qmake path in pri file
-  sed -i "s|${srcdir}/qtbase|/usr|" \
+  sed -i "s|${srcdir}/kde-qtbase|/usr|" \
     "${pkgdir}"/usr/lib/qt/mkspecs/modules/qt_lib_bootstrap_private.pri
 
   # Symlinks for backwards compatibility
@@ -119,7 +125,7 @@ package_qt5-xcb-private-headers-git() {
   conflicts=(qt5-xcb-private-headers)
   provides=(qt5-xcb-private-headers=$pkgver)
 
-  cd qtbase
+  cd kde-qtbase
   install -d -m755 "$pkgdir"/usr/include/qtxcb-private
   cp -r src/plugins/platforms/xcb/*.h "$pkgdir"/usr/include/qtxcb-private/
 }

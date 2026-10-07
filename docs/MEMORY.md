@@ -667,7 +667,13 @@
     FIRST and compare against the pin; AUR-sourced pins can be plain wrong
     (freetype pinned E3067470…; the real signer of VER-2-13-3..VER-2-14-3
     is DSA 58E0C111…), and a new signer is confirmed against publisher
-    material before pinning (CONTRIBUTING #2–4). Third half, same incident:
+    material before pinning (CONTRIBUTING #2–4). Diagnosis nuance (libass
+    0.17.5, 2026-10-07): makepkg matches `validpgpkeys` against the
+    *primary* fingerprint (`VALIDSIG` arg10), so a subkey-signed tag passes
+    with the primary pinned (list the subkey only as a role-commented
+    documentation entry), while `unknown public key <id>` at verify time is
+    a local-keyring gap — makepkg never fetches keys — not a pin mismatch;
+    fix the keyring before touching the pin. Third half, same incident:
     `arch-meson` passes `--auto-features enabled`, so every meson *feature*
     option defaults ON — a platform-gated feature (freetype `hvf`) errors
     on Linux, and `-D tests=false` is invalid for a feature-type option
@@ -1275,15 +1281,23 @@ going stale.
   **of the same pkgname** only, so a stock predecessor under a different name
   was invisible (`icu` 78 vs the new `icu-git`; run #31's bzip2 wall). That
   half is FIXED: the gate now also resolves the `abi_stock_name` counterpart
-  when the archive's pkgname is not installed. Still open: the consumer
-  closure is computed **workspace-only**, so an out-of-tree consumer of the
-  vanishing provide (`libqalculate`, `firefox-pure`, `smbclient`) is invisible
-  too. The guard should consult the local DB's reverse deps of the moving
-  provide and name the stock-side consumers in the refusal. Not fixed here —
-  fixture blast radius across the install-plan seams; queued deliberately.
+  when the archive's pkgname is not installed. The stock-side CONSUMER half
   HIT FOR REAL in run #49 (2026-10-07): stock `wlroots0.20`'s
   `libdisplay-info.so=3-64` pin killed the install in raw pacman noise
-  exactly as predicted (NOTE 2026-10-07) — raises the priority of this item.
+  exactly as predicted — and is now FIXED too (2026-10-07 gate fix v3, NOTE
+  same day): `abi_local_depend_rows` reads the LOCAL DB's reverse deps of the
+  moving provide through the `pacman` seam and the plan refuses with
+  `refuse abi-stock-pinner <archive> <pinner> <depstring>` naming each
+  out-of-tree pinner (exact pins and bare links) before pacman runs; a pinner
+  riding the transaction is covered, and workspace outputs stay with the
+  surface-consumer logic. Still open (keeps this item queued): a
+  **workspace** consumer whose *installed record* pins the moving provide
+  exactly is gated only by link truth + in-run repair, and run-repair does
+  not satisfy pacman's transaction-time dep check — a non-linking exact
+  pinner (or an exact-pinned one repaired only later in the run) can still
+  wall at `pacman -U` in raw noise. Decide whether the stock-pinner check
+  should also name workspace exact pinners (transaction coverage only) or
+  whether in-run repair should require the consumer's pin to be bare.
 - **Swap-lint soname-drift findings need disposition** (2026-10-06, from the
   blind-spot fix's new lint half): `fish build-all.fish --audit-lint swap`
   reports 18 real drift rows against this host's installed stock — mostly

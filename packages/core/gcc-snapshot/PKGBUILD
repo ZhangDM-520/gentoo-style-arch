@@ -38,7 +38,15 @@ validpgpkeys=(F3691687D867B81B51CE07D9BBE43771487328A9  # bpiotrowski@archlinux.
               343C2FF0FBEE5EC2EDBEF399F3599FF828C67298  # Niels Möller <nisse@lysator.liu.se>
               A534BE3F83E241D918280AEB5831D11A0D4DB02A  # vincent@vinc17.net
               AD17A21EF8AED8F1CC02DBD9F7D5C9BF765C61E3) # Andres Enge <andreas.enge@inria.fr>
-sha256sums=('a53e7de5347e898d42fc0f9b7d719c437e0db6aeef303d990b02a99a5454ca68'
+# 2026-10-07: checksum was stale for its own filename — the digest is
+# snapshot 20260920's (AUR gcc-snapshot 00d56d0~1) while pkgver advanced to
+# 20260927 (the mismatched pair landed in 719112d, 2026-10-04; the recipe
+# had never been built since). Corrected to 20260927's digest:
+# triple-provenanced — AUR's 20260927 pin (00d56d0), the live ftp.fu-berlin
+# bytes, and the cached tarball, all af659098…; the tarball's top-level tree
+# is gcc-17-20260927/. GCC snapshots carry no signature, so the digest chain
+# (this pin + two independent mirrors agreeing) is the only anchor.
+sha256sums=('af6590989210c3a5df6dc1cf42e2ca4c7ee1a79f89cb94372c71d75ce40476a9'
             'SKIP'
             'a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898'
             'SKIP'

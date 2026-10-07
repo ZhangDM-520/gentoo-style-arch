@@ -39,6 +39,13 @@ build() {
   local meson_options=(
     -D crypto-library=nss
     -D crypto-library-kdf=disabled
+    # trim made explicit: arch-meson passes --auto-features enabled, so the
+    # upstream `auto` features would REQUIRE their tools at configure time —
+    # `doc` hard-errors without doxygen (run #50 wall 2026-10-07), and the
+    # trimmed test suite would build its apps for nothing.
+    -D doc=disabled
+    -D tests=disabled
+    -D pcap-tests=disabled
   )
 
   # House style: mold linker when available

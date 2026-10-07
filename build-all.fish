@@ -1775,10 +1775,66 @@ end
 # right after a pacman transaction lands: every later answer must reflect the
 # NEW database, not the pre-install snapshot the plan consulted.
 function abi_installed_cache_clear
-    set -l stale (set -n | string match -r '^_(?:ABIPROV|ABIPROVREADY|ABIQ|ABIQREADY|ABIQID|ABIQIDREADY)_.*$')
+    set -l stale (set -n | string match -r '^_(?:ABIPROV|ABIPROVREADY|ABIQ|ABIQREADY|ABIQID|ABIQIDREADY|ABIDEP)_.*$')
     if test (count $stale) -gt 0
         set -e $stale
     end
+end
+
+# abi_local_depend_rows → "pkgname|depstring" rows: every Depends On entry of
+# every package in the LOCAL installed database (the stock-side pin surface —
+# run #49's wlroots0.20 `libdisplay-info.so=3-64` pin was invisible to the
+# workspace-only consumer closure and died later as raw pacman noise).
+# THE LOCAL-DB SEAM: exactly one read-only `LANG=C pacman -Qi --` full dump
+# per process (the `--` keeps the builder's `--`-before-names shape that
+# fixture stubs and log oracles recognise), parsed into rows, memoised in
+# _ABIDEP_ROWS/_ABIDEP_READY and dropped by abi_installed_cache_clear after
+# every transaction so later plans read the NEW database. Everything this
+# gate learns about the installed system arrives through the `pacman`
+# command — the same seam abi_installed_provides/abi_pkg_installed use — so a
+# fixture that shadows `pacman` on PATH fakes the whole local DB with no
+# builder knob (tests/abi-drift-install.sh answers the dump from
+# GSA_FAKE_QI_ALL). Only Depends On counts: optdepends/checkdepends can never
+# break a transaction. Field-tracked parse (install_needed_probe's rule): a
+# wrapped Depends On continuation must not leak the next field's tokens.
+function abi_local_depend_rows
+    if set -q _ABIDEP_READY
+        test (count $_ABIDEP_ROWS) -gt 0; and printf '%s\n' $_ABIDEP_ROWS
+        return 0
+    end
+    set -g _ABIDEP_ROWS (LANG=C pacman -Qi -- 2>/dev/null | awk '
+        function emit(v,   n, a, i) {
+            gsub(/\t/, " ", v)
+            n = split(v, a, /[ \t]+/)
+            for (i = 1; i <= n; i++)
+                if (a[i] != "" && a[i] != "None" && name != "") print name "|" a[i]
+        }
+        BEGIN { field = "" }
+        /^$/ { name = ""; field = ""; next }
+        /^[ \t]*[A-Za-z][A-Za-z ]*[ \t]*:[ \t]*/ {
+            hdr = $0
+            sub(/[ \t]*:.*$/, "", hdr)
+            gsub(/^[ \t]+|[ \t]+$/, "", hdr)
+            field = hdr
+            if (hdr == "Name") {
+                v = $0
+                sub(/^[^:]*:[ \t]*/, "", v)
+                gsub(/[ \t]+$/, "", v)
+                name = v
+                next
+            }
+            if (hdr == "Depends On") {
+                v = $0
+                sub(/^[^:]*:[ \t]*/, "", v)
+                emit(v)
+            }
+            next
+        }
+        { if (field == "Depends On") emit($0) }
+    ' | sort -u)
+    set -g _ABIDEP_READY 1
+    test (count $_ABIDEP_ROWS) -gt 0; and printf '%s\n' $_ABIDEP_ROWS
+    return 0
 end
 
 # _abi_provides_chunk NAME... → "NAME|provide-entry" rows for one chunk, or a
@@ -2267,6 +2323,7 @@ end
 # pgo_payload_refusals):
 #   refuse abi-soname <archive> <pkgname> <provide-name> <installed-ver> <built-ver>
 #   refuse abi-consumer <archive> <consumer>
+#   refuse abi-stock-pinner <archive> <pinner> <depstring>
 #   repair <archive> <consumer> <provider-id>
 # (<built-ver> is '-' when the provide disappears entirely.) The Stock→house
 # swap path reuses the refusal shapes unchanged: <pkgname> stays the ARCHIVE's
@@ -2276,6 +2333,23 @@ end
 # they ride a clean plan (rc 0) and name the consumers the run itself will
 # rebuild. Returns 0 when no refusal row was emitted (clean, not comparable,
 # or repaired in-run), 1 after any refusal row.
+#
+# Stock-side pinners (run #49 wall #2, 2026-10-07): the surface-consumer
+# closure above is workspace-only, but a moving provide can also be PINNED by
+# an installed OUT-OF-TREE package's declared Depends — and pacman enforces
+# that pin at transaction time (`removing libdisplay-info breaks dependency
+# 'libdisplay-info.so=3-64' required by wlroots0.20`), before any in-run
+# repair could run. The gate therefore reads the LOCAL DB's reverse deps of
+# every affected provide name through abi_local_depend_rows (the pacman seam)
+# and names each uncovered pinner with its exact depstring in a
+# `refuse abi-stock-pinner` row. Matched shapes are the declareable ones:
+# exact pins (`X=ver`, `X.so=N-64`) and bare links (`X`, `X.so`) — a bare
+# linker of a moved soname breaks at runtime exactly like a pin breaks
+# pacman. Split rule: a pinner whose name is a workspace recipe OUTPUT stays
+# with the surface-consumer logic above. Coverage is transaction membership
+# only: a stock-side pinner has no recipe, so in-run repair structurally
+# cannot cover it — and a swap landing later cannot either, because pacman
+# refuses THIS transaction while the pinner is still installed.
 
 # ─── ABI repair markers (the in-run repair contract's memory) ─────────────────
 # One file per surface consumer under $_STATE_DIR/abi-repair/, written by
@@ -2451,18 +2525,38 @@ function abi_provide_refusals
                 set -a open "$member"
             end
         end
-        if test (count $open) -eq 0; and test (count $scheduled) -eq 0
+        # Stock-side pinners (run #49 wall #2): ask the LOCAL DB which
+        # installed packages declare a Depends on any affected provide name
+        # (abi_local_depend_rows — the pacman seam) and name every uncovered
+        # pinner. See the block comment for the match shapes and the split
+        # rule; in-run repair cannot cover a stock-side pinner (nothing in
+        # the run rebuilds an out-of-tree package), so coverage here is
+        # transaction membership only.
+        set -l stock_rows
+        for dep_row in (abi_local_depend_rows)
+            set -l dp (string split -m 1 '|' -- "$dep_row")
+            test (count $dp) -ge 2; or continue
+            set -l depname (abi_provide_name "$dp[2]")
+            contains -- "$depname" $risk_names; or continue
+            set -l spid (abi_package_id_for_pkgname "$dp[1]")
+            test -z "$spid"; or continue
+            contains -- "$dp[1]" $tx_names; and continue
+            set -a stock_rows (plan_row refuse abi-stock-pinner "$archive" "$dp[1]" "$dp[2]")
+        end
+        if test (count $open) -eq 0; and test (count $scheduled) -eq 0; and test (count $stock_rows) -eq 0
             continue
         end
-        # A refusal is only the OPEN-consumer case; when every consumer is
-        # repaired in-run the move itself is accepted and only `repair` rows
-        # ride the plan (the abi-soname rows are refusal rows and must not
-        # appear on a clean plan).
-        if test (count $open) -gt 0
+        # A refusal is only the OPEN-consumer/stock-pinner case; when every
+        # consumer is repaired in-run and no stock-side pinner is open the
+        # move itself is accepted and only `repair` rows ride the plan (the
+        # abi-soname rows are refusal rows and must not appear on a clean
+        # plan).
+        if test (count $open) -gt 0; or test (count $stock_rows) -gt 0
             set -a rows $archive_rows
             for member in $open
                 set -a rows (plan_row refuse abi-consumer "$archive" "$member")
             end
+            set -a rows $stock_rows
         end
         for member in $scheduled
             set -a rows (plan_row repair "$archive" "$member" "$provider_id")
@@ -3725,6 +3819,8 @@ function install_execute -a log_file sink n_extra
                     end
                 case abi-consumer
                     install_emit "$sink" "$log_file" error "installed consumer "$fields[4]" is not in this transaction — a moved soname provide would leave it broken (rebuild it in the same batch, or install the built set together with -ia)"
+                case abi-stock-pinner
+                    install_emit "$sink" "$log_file" error "installed stock-side package "$fields[4]" requires "$fields[5]" — the moving soname provide breaks that pin and no recipe in this run rebuilds it (heal-set it into the batch, or pin the provider to the last compatible generation)"
                 case '*'
                     install_emit "$sink" "$log_file" error "unrecognized install-plan refusal: $row"
             end

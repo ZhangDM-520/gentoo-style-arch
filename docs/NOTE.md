@@ -37,6 +37,344 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-07 — look-ahead relaunch gate: four more walls cleared before their slots — stale digest for its own filename, two SRCDEST one-name-two-upstreams collisions, missing GNU tarballs, and a dead TLS endpoint
+
+- **Symptom (predicted, none hit).** A look-ahead pass over run #51's
+  remaining window found four deterministic walls before their build slots:
+  `gcc-snapshot` (resume pos ~53) would fail its own sha256; `qt5-base-git`
+  and `qt6-base-git` (both first-builds) would fight over the `qtbase`
+  SRCDEST mirror and the second fetch gets `is not a clone of`;
+  `libisl-git` lost its mirror to gcc-snapshot's isl fork (same basename
+  rule, flip side of the mirror fix); `stable/file`'s only endpoint
+  `ftp.astron.com:443` answers plaintext (TLS `wrong version number`,
+  persistent). Plus 4 GNU tarballs absent from the cache (mpfr, wget, grep,
+  tar) and 3 nodejs release keys absent from the keyring.
+- **Root causes.**
+  1. **Stale digest for its own filename** (gcc-snapshot): the digest was
+     snapshot 20260920's (`a53e7de5…`, AUR `00d56d0~1`) while `pkgver`
+     advanced to 20260927 — the mismatched pair landed in bulk commit
+     `719112d` and the recipe had never built since. Not mirror drift, not
+     cache poison: live fu-berlin bytes == cached bytes == AUR's 20260927
+     pin (`af659098…`), and the tarball's top tree is `gcc-17-20260927/`.
+  2. **SRCDEST mirror dir = source name** (one dir, one origin): plain
+     basenames collide whenever two recipes fetch different upstreams with
+     the same repo name — `qtbase` (invent.kde.org qt5 fork vs code.qt.io
+     qt6) and `isl` (repo.or.cz upstream libisl vs Meinersbur gcc fork).
+  3. **Cache/keyring are host state the run assumes**: missing tarballs and
+     missing `validpgpkeys` material surface as fetch/verify walls with no
+     recipe at fault.
+- **Fix.**
+  - gcc-snapshot: digest corrected to `af659098…` with the provenance chain
+    in a comment (AUR pin + live mirror + cached bytes + tree identity; gcc
+    snapshots carry no signature, so the digest chain is the anchor).
+  - `qt5-base-git`: source renamed `kde-qtbase::git+…/qtbase.git#branch=kde/5.15`
+    (+8 `cd`/`${srcdir}` refs, `.SRCINFO`) — sibling convention
+    (qt5-declarative `kde-$_pkgfqn::`); the `#branch` pin also stops the
+    clone landing on invent.kde.org's default `dev` (Qt6 tip) that
+    `pkgver()` would read. `libisl-git`: `isl::` → `libisl::` (+4 refs).
+    gcc-snapshot keeps stock-parity source names.
+  - Seeded `~/.cache/gsa-src` with mpfr-4.2.2{.xz,.asc}, wget-1.25.0.tar.lz{,.sig},
+    grep-3.12.tar.gz{,.sig}, tar-1.35.tar.gz{,.sig} — each verified THROUGH
+    `makepkg --verifysource` (recipe digests + signatures) BEFORE placement;
+    nodejs release-roster keys `5BE8A3F6…`/`C0D62484…`/`108F52B4…` imported.
+  - `stable/file`: source switched to `https://astron.com/pub/file/…` —
+    fresh tarball sha256 identical to the committed anchor, signature still
+    verified (`?signed` untouched).
+- **Validation.** gcc-snapshot `makepkg --verifysource` all `Passed`
+  (incl. seeded mpfr); libisl-git `verifysource` clones the new `libisl`
+  mirror cleanly; qt5-base-git `bash -n` + `--printsrcinfo` clean (full
+  Qt clone deliberately not pulled — `name::` semantics proven in-set by
+  qt5-declarative); file `verifysource` `Passed`; wget/grep/tar `verifysource`
+  `Passed` (checksums + gpg).
+- **Durable rules.**
+  1. A version bump without its digest is a wall with the recipe's own name
+     on it: when `pkgver`/`_pkgver` advances, the checksum arrays must move
+     in the same change, and the digest must belong to THAT filename (a
+     stale-but-valid older digest fails as `FAILED`, indistinguishable from
+     poison until re-provenanced — classify with a second mirror + the
+     upstream package history before rewriting).
+  2. Two recipes fetching same-named repos must carry explicit `name::`
+     source names (house pattern `kde-<repo>::`); basenames are a shared
+     namespace in SRCDEST and the loser gets `is not a clone of`.
+  3. Cache seeding is verify-then-place: authenticate through
+     `makepkg --verifysource` (or the recipe digest) against a scratch
+     SRCDEST, then copy into the shared cache — never the reverse.
+
+## 2026-10-07 — lookahead trim-feature screen: the 25-row wall sweep lands zero configure-proven rows — every trim is install-time or its probe tool survives in the makedepends closure
+
+- **Result.** All 25 candidates of the run #50 sweep (trim-comment × meson ×
+  no disable) classify NONE; no recipe changed. The wall class needs three
+  things at once: the trim removed a TOOL from the build, a configure probe
+  reaches it through a non-disabled option, and the tool is absent at build
+  time. Only python-gobject even matched the "removed tool" shape (sphinx
+  stack dropped with the docs split) — and a pinned-source configure-only
+  probe (arch-meson, `MESON_PACKAGE_CACHE_DIR` subproject injection as the
+  recipe does) is GREEN: pygobject 3.58's meson has no docs option at all
+  (options are `python`/`pycairo`/`tests`/`wheel`; sphinx is wired only in
+  `docs/Makefile`, outside meson), so meson never probes the removed tools.
+- **Near-miss: libxml++.** `maintainer-mode=true` flips
+  `build-documentation` (`if-maintainer-mode`) on, and configure hard-requires
+  `mm-common-get`, `doxygen` and `xsltproc` — none literally in its
+  makedepends. It still cannot wall: the kept `mm-common` makedepends carries
+  `doxygen, graphviz, gtk-doc, libsigc++-docs, perl-xml-parser` in its
+  dependency closure (extra.db) and `makepkg -sf` installs the closure, while
+  `xsltproc` is host-present (and `docbook-xsl`→`libxslt` is the same
+  closure idiom). `IgnorePkg` locks none of the doc tools (verified 2026-10-07
+  against the live conf). Spelling the trim as `-D build-documentation=false`
+  (docs are `rm`'d at install anyway) is hygiene, not a wall fix — left to an
+  owner decision, since the brief forbids heuristic fixes.
+- **Method for the other 23.** Install-time trims (`rm` from `$pkgdir`),
+  already-spelled disables (pavucontrol `-Dlynx=disabled`), or kept-tool
+  builds: scdoc (fcft, swaylock), itstool (loupe, shotwell; file-roller via
+  yelp-tools' `itstool` dep), docbook2x (lxc), gi-docgen (libnotify), doxygen
+  (v4l-utils), docbook-xsl+perl-sgmls (iputils), fop+w3m+docbook (pam),
+  python-docutils (mpv, which also passes `--auto-features auto`). Upstream
+  probe shapes checked where the chain was unclear: gnome-disk-utility
+  51.beta builds no help/yelp at all (`man` boolean + xsltproc); gstreamer
+  1.28.7's `hotdoc` probe is `required: get_option('doc')` and `doc` defaults
+  to `disabled`, which `--auto-features enabled` cannot flip; xorg-server's
+  `docs`/`devel-docs`/`docs-pdf` are combos (not features) and probe
+  `required: (== 'true')` only; usbutils/powertop use static `install_man()`;
+  pkgfile's unconditional `pod2man` (perl) predates its trim. Window cross:
+  23/25 are in the relaunch `order:` window, all first-build except
+  libbluray, whose archive is newer than its PKGBUILD (current recipe already
+  green); libxau/libxkbfile are out of window and likewise archive-newer.
+- **Durable rule.** A trim-comment hit is only row one of the class detector:
+  (tool gone from the **makedepends closure**) × (configure probe through a
+  non-disabled option) × (tool absent at build time). Probes resolve against
+  what `makepkg -s` installs — a tool reachable through a kept makedepends'
+  own dependencies (mm-common→doxygen, yelp-tools→itstool, docbook-xsl→
+  libxslt) is present at configure; and `--auto-features enabled` flips only
+  `auto`, never an upstream default of `disabled`, and never combo/boolean
+  options (xorg-server `docs`, iputils `BUILD_MANS`).
+
+## 2026-10-07 — lookahead SRCDEST mirror screen: two cache dirs are one-name-two-upstreams by construction, and makepkg's clone gate tolerates `.git`-suffix drift
+
+Symptom: the run #50 wall `ERROR: $SRCDEST/llvm-project is not a clone of
+https://github.com/llvm/llvm-project.git` (llvm-project's origin had drifted;
+repaired 2026-10-06 17:15). A lookahead screen of all 475 git mirrors in
+SRCDEST against every recipe's resolved `source` was ordered to catch the
+remaining origin/recipe divergences before the continuation run reaches their
+slots.
+
+Root cause: makepkg's `download_git` gate (`/usr/share/makepkg/source/git.sh`)
+derives the SRCDEST dir name via `get_filename` — an explicit `name::` prefix
+wins, otherwise the URL's last path component with `${filename%%.git*}` — and
+refuses an existing dir when `url%%.git != remote.origin.url%%.git`. Two
+recipe pairs collide under that derivation and cannot share the cache by
+construction: `isl` is the derived name for both `libisl-git`
+(`isl::git+https://repo.or.cz/isl.git`) and `gcc-snapshot`
+(`git+https://github.com/Meinersbur/isl.git`, a fork whose master tip differs
+from repo.or.cz's), and `qtbase` for both `qt6-base-git`
+(`git+https://code.qt.io/qt/qtbase.git`) and `qt5-base-git`
+(`git+https://invent.kde.org/qt/qt/qtbase.git`). One dir, one origin, at most
+one satisfied recipe.
+
+Fix: `isl` was replaced for `gcc-snapshot` on supervisor decision (it sits at
+resume position ~53, minutes away): the repo.or.cz mirror was moved aside to
+`isl.bak-20261007` and `git clone --mirror https://github.com/Meinersbur/isl.git`
+put the fork in its place — gate PASS, `refs/heads/master` @ dc16f8e3 == remote.
+The flip side is deliberate and must travel with it: `libisl-git`
+(`isl::git+https://repo.or.cz/isl.git#tag=isl-0.28`) now mismatches `isl` and
+will refuse at its next rebuild; restoring the preserved mirror (swap the two
+dirs back) serves it again. `elfutils`↔elfutils-git and `qtbase`↔qt6-base-git
+needed no change (configs already rewritten 2026-10-07 03:18, likely by the
+earlier lookahead pass; `ls-remote` green). The `qtbase` collision stays
+escalated — rewriting its origin only moves the wall to the sibling recipe
+(`qt5-base-git` wants invent.kde.org, `qt6-base-git` code.qt.io, both adjacent
+in the run window), so the complete fix is recipe-side: give the losing source
+an explicit `name::` so the derived dir names diverge (and update its
+`$srcdir` references).
+
+Validation: byte-exact `git remote get-url origin` against every recipe's
+resolved `source` URL (`.SRCINFO` basis; the live workspace's recipes were
+checked to carry identical VCS URLs); `ls-remote` green for elfutils
+(0391c894 == local HEAD), qtbase (eb7095e0 == `refs/heads/dev`, present
+locally), isl (6853e0c2 == local HEAD; tag `isl-0.28` present for
+libisl-git's `#tag=`).
+
+Durable rules:
+
+- Compare mirror origins the way makepkg does: strip `#fragment`/`?query`,
+  then ignore a trailing `.git` on both sides. A `.git`-suffix difference
+  (pahole↔libbpf, libqalculate) never refuses a fetch; a different host or
+  path does.
+- The SRCDEST dir name is `name::` if given, else the URL basename after
+  `${filename%%.git*}` — and a bare `git://…` source without `git+` is still
+  a VCS source (libmicrohttpd, libnsgif). Before adding any `git+` source,
+  screen the whole set for derived-basename collisions; two recipes needing
+  different upstreams under the same derived name is unfixable cache-side.
+
+## 2026-10-07 — lookahead PGP/checksum screen: libass's tag is subkey-signed, nodejs lacked a releaser key locally, fcft's archive was Forgejo re-serialized, usbmuxd's asset sum was wrong from day one
+
+- **Symptom.** The run-lookahead source screen flagged four recipes ahead of
+  their build slots: libass `makepkg` verify-pgp failed with `unknown public
+  key 97A08E0CFFD70951` for tag 0.17.5; nodejs's pinned releaser key
+  `5BE8A3F6…` was absent from the local keyring; fcft's cached
+  `fcft-3.3.3.tar.gz` disagreed with the pinned `sha256sums`; usbmuxd's
+  committed `usbmuxd.sysusers` failed its recorded `b2sums`.
+- **Root cause.** (a) libass 0.17.5 is signed by the `[SE]` signing subkey
+  `DDAF C19E …` of pinned primary `5EE63F2A…` (Oneric), and the subkey's
+  material was missing locally — `unknown public key` is a *keyring* gap,
+  not a pin gap. (b) nodejs `v26.10.0` is signed by primary `5BE8A3F6…`
+  (Antoine du Hamel, listed in nodejs/node's published "Release keys"); the
+  recipe pin was already correct and only the local keyring lacked the key.
+  (c) Codeberg/Forgejo re-serialized the fcft 3.3.3 archive server-side on
+  2026-10-06; the tarball tree is byte-identical (`diff -r`) to tag 3.3.3
+  (commit `38de2ae`, tag object `24591f1` unmoved since 2025-12-27) — not
+  cache poison, not source drift. (d) usbmuxd's `b2sums` entry for
+  `usbmuxd.sysusers` never matched the file (both landed together in
+  719112d) — wrong from day one; the file itself is byte-identical to Arch
+  stock's `usbmuxd.sysusers` (`u! usbmux 140 "usbmux user"`).
+- **Fix.** Commits `66ce822` (libass: add the 0.17.5 tag-signing subkey to
+  `validpgpkeys` with a role comment naming its parent primary) and
+  `f2dd8d9` (usbmuxd: `b2sums` corrected to the file's true digest;
+  fcft: `sha256sums` tracks the re-emitted bytes with the evidence comment).
+  nodejs needed **host state only**: `gpg --recv-keys 5BE8A3F6…` into the
+  build user's keyring; no recipe change.
+- **Validation.** Fresh evidence on all four: `git verify-tag 0.17.5` →
+  good signature, primary `5EE63F2A…` / subkey `DDAFC19E…` (rc 0);
+  `git verify-tag v26.10.0` on a blobless tag fetch → good signature from
+  `5BE8A3F6…` (rc 0); fresh fcft download hashes `b0c0f4a5…` = pinned sum =
+  cached copy, and `diff -r` vs tag 3.3.3 clone is clean;
+  `b2sum usbmuxd.sysusers` = pinned `0d62e054…` = Arch stock asset;
+  `makepkg --verifysource` rc 0 on libass (gpg `Passed`), fcft and usbmuxd
+  (small sources; nodejs skipped — would clone the whole node repo);
+  `bash -n` clean and `makepkg --printsrcinfo` diff-clean on all four.
+- **Durable rules.**
+  1. makepkg's `validpgpkeys` check matches the **primary** fingerprint
+     (`VALIDSIG` arg10 — verify_signature.sh), so a subkey-signed tag passes
+     with the primary pinned; adding the subkey with a role comment is
+     documentation, not a load-bearing pin. But `unknown public key <id>`
+     means the *signing key material* is missing from the local keyring —
+     makepkg never fetches keys (no keyserver code in makepkg) — so import
+     before blaming the pin.
+  2. A non-`SKIP` checksum on a pinned VCS source is a real content pin:
+     `calc_checksum_git` hashes `git archive` of the `#tag=`/`#commit=` ref
+     (makepkg ≥ 7). `SKIP` is only the floating-ref norm.
+  3. Forgejo/Codeberg `archive/<ref>.tar.gz` may be re-serialized
+     server-side; classify checksum drift by content-identity against the
+     git tag (`diff -r` of extracted tree vs tag clone) before touching a
+     pin. Note the archive root is `<repo>/`, not `<repo>-<ref>/`.
+  4. `makepkg --config <file>` replaces only the *system* conf;
+     `~/.makepkg.conf` is still sourced afterwards and re-overrides
+     `SRCDEST` etc. — scratch-isolation attempts via `--config` or the
+     environment silently land back in the shared source cache.
+
+## 2026-10-07 — gate fix v3: the ABI provide-refusal now names stock-side pinners — the local DB's reverse deps refuse as `refuse abi-stock-pinner` before pacman runs
+
+- **Symptom.** The run #49 wall #2 class (stock `wlroots0.20`'s
+  `libdisplay-info.so=3-64` pin) was invisible to the Layer-3 install gate:
+  the plan stayed clean and the run died later in raw pacman noise
+  (`removing libdisplay-info breaks dependency 'libdisplay-info.so=3-64'
+  required by wlroots0.20`) — MEMORY §5's "ABI provide-refusal blind spot"
+  firing exactly as predicted. Pre-fix fixture proof (tests/abi-drift-install.sh
+  case O, red-first): with a stock pinner installed and the provider's surface
+  moving, the gate planned a **clean `install` row, rc 0** — a transaction
+  pacman would have refused.
+- **Root cause.** `abi_provide_refusals` computed the moving provide's
+  consumer closure from the WORKSPACE only (topology reverse adjacency +
+  committed .SRCINFO name edges). An out-of-tree installed package's declared
+  `Depends` on the moving provide was never consulted, so exact pins
+  (`X=ver`, `X.so=N-64`) and bare links (`X`, `X.so`) held by stock packages
+  reached `pacman -U` unannounced.
+- **Fix.** New seam `abi_local_depend_rows` (build-all.fish): one read-only
+  `LANG=C pacman -Qi --` full dump per process — the same PATH-shadowable
+  `pacman` seam the gate's other installed-DB probes use; fixtures fake the
+  whole local DB with their pacman stub (`GSA_FAKE_QI_ALL` in
+  tests/abi-drift-install.sh) and need no builder knob. The dump is parsed
+  field-tracked into `pkgname|depstring` rows (Depends On only —
+  optdepends/checkdepends can never break a transaction), memoised and
+  cleared with the other installed-DB memos after every transaction. The gate
+  matches those rows against the moving provide names and emits
+  `refuse abi-stock-pinner <archive> <pinner> <depstring>` for every pinner
+  that is (a) not a workspace recipe output (those stay with the existing
+  surface-consumer logic) and (b) not riding the transaction. Every existing
+  row kind is unchanged; coverage is transaction-only because a stock-side
+  pinner has no recipe — in-run repair cannot cover it, and a swap landing
+  later cannot either (pacman refuses THIS transaction while the pinner is
+  installed). The executor renders the row as a named message (`installed
+  stock-side package <pinner> requires <depstring> …`) with the run #49
+  dispositions (heal-set into the batch, or pin-park the provider).
+- **Validation.** Red-first (mandatory, captured both shapes): new cases
+  O/P/Q in tests/abi-drift-install.sh ran against the pre-fix builder —
+  O failed `O: a stock-side pinner … must refuse (rc=0): install …` (the
+  clean-plan defect), P failed with the `refuse abi-stock-pinner … stockpin2
+  libgreet.so` row missing from the refusal set; after the fix the fixture
+  passes (46 checks), including O's real `-i` executor rendering half.
+  Q pins the coverage direction (a pinner whose own archive rides the
+  transaction plans cleanly). `fish -n build-all.fish` clean; ABI family
+  5/5 (`tests/run-all.sh abi`) and the install-plan neighbours
+  (install-archive-guard, install-conflict-ask, pgo-payload-guard) green.
+- **Durable rules.**
+  1. The local package DB's declared `Depends` are part of the ABI gate's
+     truth surface: link truth decides what breaks at RUNTIME, but an exact
+     pin on a moving provide breaks the TRANSACTION itself, and only a DB
+     read can see out-of-tree holders. All installed-DB knowledge enters
+     through `pacman` (PATH-shadowable seams: `abi_installed_provides`,
+     `abi_pkg_installed`, `abi_local_depend_rows`) — never a direct DB read,
+     or fixtures lose the ability to fake the system.
+  2. Wall vocabulary gains `refuse abi-stock-pinner <archive> <pinner>
+     <depstring>`; disposition per run #49 rule 2 (heal-set when the pinner
+     must keep working and a local rebuild is acceptable, pin-park when the
+     only pinner is stock-side for a secondary stack). A bare-link pinner is
+     refused on the same footing as an exact pin: the soname moved, so the
+     old binary's DT_NEEDED breaks either way.
+  3. Coverage asymmetry is deliberate: workspace consumers may be repaired
+     in-run (`repair` rows), stock-side pinners may only ride the transaction
+     — refusing early is the only safe outcome, because pacman enforces the
+     pin before any later repair exists.
+
+## 2026-10-07 — run #50 wall: libsrtp's trimmed doxygen still got REQUIRED — arch-meson `--auto-features enabled` turns `auto` into `enabled`, so the trim must be spelled as a meson option
+
+- **Symptom.** Run #50 (516-window, `-s -i`) rebuilt the bumped recipes and
+  landed the libdisplay-info so.3 swap cleanly (`✓ libdisplay-info-git`), then
+  died at slot 50/516: `libsrtp` configure failed in 7 s —
+  `libsrtp/doc/meson.build:3:10: ERROR: Program 'doxygen' not found or not
+  executable`. 49 built, 1 wall. (Noise after the real error: `popd` into a
+  vanished `/tmp/gsa-version-sync.*` prints a fish backtrace — cosmetic
+  builder-path noise, queued separately.)
+- **Root cause (trim made invisible to the build system).** The recipe trims
+  doxygen *and* the `libsrtp-docs` split (its own comments say so), but
+  upstream's `doc/meson.build` probes `find_program('doxygen', required:
+  get_option('doc'))` and upstream's `doc` feature defaults to `auto`.
+  `arch-meson` passes `--auto-features enabled` (MEMORY rule 31 third half),
+  so `auto` becomes REQUIRED at configure time and a trimmed tool becomes a
+  hard configure error. The trim was expressed only as removed `makedepends`
+  and skipped build steps — never as `-D doc=disabled`. Stock built docs
+  (doxygen was in stock makedepends for the docs split), so the wall appeared
+  only after the house trim. `doxygen-git` exists in the set but builds at
+  slot 157 — after every configure probe that needs it.
+- **Fix.** `packages/stable/libsrtp/PKGBUILD` meson options gain the trim
+  spelled explicitly: `-D doc=disabled -D tests=disabled -D
+  pcap-tests=disabled` (the test apps ride the same `auto` trap and the trim
+  comment already declares the suite Class-B trimmed). House pattern is the
+  sibling recipes that spell it out: dbus `-D doxygen_docs=disabled`,
+  flatpak-git `-Dgtkdoc=disabled`, libepoxy-git `docs=false`.
+- **Validation.** Red evidence is the run #50 configure error itself (same
+  options, same tool absence). Green: `bash -n`, `makepkg --printsrcinfo`
+  lint, full `makepkg --nodeps` build → `libsrtp 1:2.8.1-1` packaged.
+  Same-class sweep (trim-comment × meson × no disable) found 25 candidates —
+  triage + configure-only ground-truth dispatched as a look-ahead task
+  (`trim-feature-lookahead`); only configure-proven rows get the same fix.
+  Battery note: the concurrent full battery ran 54/55 with
+  `nvcheck-aggregator.sh` failing ONLY while seven look-ahead agents were
+  editing canonical concurrently; it passes standalone — re-run the battery
+  in a clean gap before the next commit (contaminated first repetition
+  dropped).
+- **Durable rules.**
+  1. A trim that removes a TOOL must also disable the build-system feature
+     that probes it. On meson, `auto` is NOT "off if missing" — `arch-meson`
+     enables it (`--auto-features enabled`), so `required: get_option(...)`
+     probes hard-fail on the missing tool. Spell the trim as `-D
+     <feature>=disabled` in the same change that drops the makedepends.
+  2. Trim-check ordering is a look-ahead job: grep for trim comments that
+     name a tool, then confirm the feature is disabled — before the recipe's
+     build slot, not after its wall.
+  3. A battery run concurrent with agents editing the tree is contaminated
+     evidence; only a clean-gap run counts (this one: 54/55 + one
+     standalone-passing flake).
+
 ## 2026-10-07 — run #49 wall #2: the repaired soname move still could not install — a stock-side exact pinner (wlroots0.20) turns the bump into a batch; libdisplay-info-git pinned to 0.3.0
 
 - **Symptom.** Run #49 (same 516-window, `-s -i`) accepted the run #48

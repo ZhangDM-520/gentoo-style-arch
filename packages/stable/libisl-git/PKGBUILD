@@ -22,16 +22,19 @@ provides=(
   libisl.so
 )
 conflicts=(isl libisl)
-source=(isl::git+https://repo.or.cz/isl.git#tag=isl-$pkgver)
+# 2026-10-07: `libisl::` name — the SRCDEST git-mirror dir is the source name,
+# and core/gcc-snapshot's Meinersbur isl fork claims plain `isl` (one dir, one
+# origin). Upstream libisl is tracked here; the fork is gcc's in-tree isl.
+source=(libisl::git+https://repo.or.cz/isl.git#tag=isl-$pkgver)
 sha512sums=('SKIP')
 
 pkgver() {
-  cd isl
+  cd libisl
   git describe --tags | sed 's/^isl-//'
 }
 
 build() {
-  cd isl
+  cd libisl
   # git checkout has no pre-generated configure — bootstrap it
   ./autogen.sh
   ./configure --prefix=/usr
@@ -39,12 +42,12 @@ build() {
 }
 
 check() {
-  cd isl
+  cd libisl
   make check || echo "check failed — continuing (upstream flaky under sandbox)" >&2
 }
 
 package() {
-  cd isl
+  cd libisl
   make DESTDIR="$pkgdir" install
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

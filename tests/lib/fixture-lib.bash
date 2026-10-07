@@ -87,6 +87,10 @@
 #                              (local-db-repair, signal-abort-lock)
 #   GSA_FAKE_QI                install-archive-guard pacman stub: `pacman -Qi`
 #                              answer (was GSA_FIXTURE_QI)
+#   GSA_FAKE_QI_ALL            abi-drift-install pacman stub: the full-dump
+#                              (`pacman -Qi --`) installed database the
+#                              stock-pinner query (abi_local_depend_rows)
+#                              reads
 #   GSA_FAKE_QP                install-archive-guard pacman stub: `pacman -Qp`
 #                              answer (was GSA_FIXTURE_QP)
 #   GSA_FAKE_ROOT_FILE         log-ownership stat stub: the file reported

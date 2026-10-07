@@ -12,7 +12,7 @@ pkgbase = libisl-git
 	provides = libisl.so
 	conflicts = isl
 	conflicts = libisl
-	source = isl::git+https://repo.or.cz/isl.git#tag=isl-0.28
+	source = libisl::git+https://repo.or.cz/isl.git#tag=isl-0.28
 	sha512sums = SKIP
 
 pkgname = libisl-git
