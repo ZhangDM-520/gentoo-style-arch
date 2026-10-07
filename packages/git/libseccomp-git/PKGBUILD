@@ -5,12 +5,22 @@
 # Contributor: Lex Black <autumn-wind at web dot de>
 #
 # git build adapted from AUR libseccomp-git (reference only) + stock Arch
-# libseccomp: tracks upstream master directly. The stock python-libseccomp
-# split is NOT superseded (python bindings are skipped here).
+# libseccomp: builds upstream's release-2.6 maintenance branch. The stock
+# python-libseccomp split is NOT superseded (python bindings are skipped
+# here).
+#
+# 2026-10-07 (run #54 wall): upstream master carries AC_INIT([libseccomp],
+# [0.0.0]) — the release process stamps the real version only into tags and
+# release branches — so a master build derives `-version-number 0:0:0` and
+# ships libseccomp.so.0 while the installed world pins libseccomp.so=2-64
+# (man-db links it and is outside the run window). Pinned to
+# #branch=release-2.6, the living 2.x line (stamped 2.6.1 -> so.2, zero
+# provide move), same one-line reversibility as the libpng/libdisplay-info
+# pins (docs/MEMORY.md rule 30(c)).
 
 pkgname=libseccomp-git
 _pkgname=libseccomp
-pkgver=2.5.4.r126.gf1c3196
+pkgver=2.6.1.r0.ga81cc2d
 pkgrel=1
 pkgdesc="Enhanced seccomp library (git build)"
 arch=('x86_64')
@@ -20,24 +30,23 @@ depends=('glibc')
 makedepends=('git' 'gperf')
 provides=("libseccomp=$pkgver" 'libseccomp.so')
 conflicts=('libseccomp')
-# v2.x release tags are signed; this recipe tracks master so there is no
-# pinned tag to verify — fingerprints kept for documentation only, taken from
-# the stock Arch PKGBUILD (upstream-published release signers).
+# v2.x release tags are signed; this recipe tracks a maintenance branch so
+# there is no pinned tag to verify — fingerprints kept for documentation
+# only, taken from the stock Arch PKGBUILD (upstream-published release
+# signers).
 validpgpkeys=(
   '7100AADFAE6E6E940D2E0AD655E45A5AE8CA7C8A' # Paul Moore <paul@paul-moore.com>
   '47A68FCE37C7D7024FD65E11356CE62C2B524099' # Tom Hromatka <tom.hromatka@oracle.com>
 )
-source=("git+https://github.com/seccomp/${_pkgname}.git")
+source=("git+https://github.com/seccomp/${_pkgname}.git#branch=release-2.6")
 sha256sums=('SKIP')
 
 pkgver() {
   cd "$_pkgname"
 
-  local _tag _rev _hash
-  _tag=$(git tag -l --sort -v:refname | head -n1)
-  _rev=$(git rev-list --count "$_tag"..HEAD)
-  _hash=$(git rev-parse --short HEAD)
-  printf "%s.r%s.g%s" "$_tag" "$_rev" "$_hash" | sed 's/^v//'
+  # Nearest tag in ancestry (a branch tip, not "newest tag overall" — the
+  # latter drifts to unrelated lines' tags as soon as one is cut elsewhere).
+  git describe --long --tags | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g'
 }
 
 prepare() {

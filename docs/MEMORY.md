@@ -1350,6 +1350,14 @@ going stale.
   so.18 move needs: rebuild {freetype2-git, libzmf, zint, harfbuzz-git,
   leptonica, …every `libpng16.so` pinner} against staged so.18 and ONE
   `pacman -U` — schedule with the owner; until then the recipe tracks 1.6.
+- **libseccomp-git is parked on `#branch=release-2.6` (so.2) — master is a
+  placeholder build** (2026-10-07, run #54): upstream master carries
+  `AC_INIT([libseccomp],[0.0.0])` (stamped only into tags/release branches),
+  so a master build derives `-version-number 0:0:0` and ships
+  `libseccomp.so.0` — an artifact, not an ABI era. release-2.6 is stamped
+  2.6.1 and builds so.2 (zero provide move; man-db and `file` are the local
+  pinners). Revisit tracking master only when upstream stamps master's
+  version or a deliberate 3.x ABI lands (then it is a heal-set batch).
 - **llvm-git ↔ rust-git coupled-batch procedure (stock-rust preemption checked
   out 2026-10-07)**: the predicted "stock `rust` pins `llvm-libs` exactly"
   refusal is void — `pacman -Q rust` reports not installed, so nothing outside

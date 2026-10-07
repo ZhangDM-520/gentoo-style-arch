@@ -37,6 +37,51 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-07 — run #54 wall: libseccomp-git built upstream master's placeholder version — `AC_INIT([libseccomp], [0.0.0])` derives soname `.so.0` and moves the `libseccomp.so` provide `2-64 -> 0-64`
+
+- **Symptom.** Run #54 (resume after the pngminus fix) passed libpng-git
+  (`✓ 0m22s`, post-install probe clean — the run #53 fix validated in
+  production) and walled at dispatch 69: the ABI gate refused
+  `libseccomp-git`'s install — `soname provide libseccomp.so moves 2-64 ->
+  0-64`, installed consumer `man-db` (a house build outside the run window)
+  not in the transaction. Gate refused **before** `pacman -U` this time.
+- **Root cause.** Upstream's release process stamps the real version only
+  into tags and release branches; **master carries the placeholder
+  `AC_INIT([libseccomp], [0.0.0])`** (`configure.ac:22`), and the library's
+  `-version-number ${VERSION_MAJOR}:${VERSION_MINOR}:${VERSION_MICRO}`
+  (`src/Makefile.am:66`) derives from it — so a master build produces
+  `libseccomp.so.0.0.0` (SONAME `.so.0`) at *all* times between releases.
+  Not an ABI era: a packaging artifact of upstream's dev convention
+  (autogen.sh is a bare `autoreconf`, no stamping step to reuse). Same wall
+  shape as run #52's libpng default-branch case: the tracked ref's truth
+  differs from the recipe's assumption, and the give-away is a soname
+  provide that auto-versions to something the installed world cannot bind.
+- **Fix.** Pin `#branch=release-2.6` — the living 2.x maintenance line
+  (stamped `2.6.1`, tip `v2.6.1-0-ga81cc2d`), which builds `-version-number
+  2:6:1` → SONAME `.so.2` and a `libseccomp.so=2-64` provide — a **zero
+  move**, so man-db and `file` (the two local pinners) need no heal.
+  `pkgver()` switched from "newest tag overall" (which drifts to other
+  lines' tags once one is cut) to ancestry-nearest `git describe --long
+  --tags`; static pkgver aligned (`2.6.1.r0.ga81cc2d`). One-line reversible;
+  master tracking returns only when upstream stamps master's version (or a
+  deliberate 3.x ABI lands) — parked in MEMORY §5.
+- **Validation.** Red baseline = run #54's archive: `.PKGINFO` bare→auto
+  `provides = libseccomp.so=0-64`, ships `libseccomp.so.0.0.0`. Green =
+  scratch build of the pinned recipe: `provides = libseccomp.so=2-64`
+  (identical to stock's provide — no move), ships `usr/lib/libseccomp.so.2*`;
+  `bash -n` + `.SRCINFO` regenerated.
+- **Durable rules.**
+  1. A `-git` recipe's soname is only as real as the tracked ref's version
+     stamp: before trusting a dev branch as a library source, read its
+     `AC_INIT`/`project()`/`soversion` declarations — placeholders (`0.0.0`)
+     produce placeholder sonames, and makepkg's auto-versioned provides will
+     report the move honestly.
+  2. Disposition refinement for 30(c): when the "new generation" turns out
+     to be a placeholder rather than an ABI, the fix is the stamped
+     maintenance branch (release-N), not a tag freeze and not a heal-set.
+  3. Pin-choice note: `pkgver()` on a branch pin must derive from ancestry
+     (`git describe --long --tags`), not from "newest tag by version sort".
+
 ## 2026-10-07 — run #53 wall: stale build products in a reused `src/` tree — `package()` shipped pngminus tools linked against the *previous* build's soname
 
 - **Symptom.** Run #53 rebuilt the freshly pinned `libpng-git` (so.16) and
