@@ -711,6 +711,21 @@
     the first one's objects is the run path; `nm -D` the shipped `.so` (rule
     32) both times. See `docs/NOTE.md` 2026-10-06 nspr-git (stale in-tree
     objects).
+34. **A file installed from `package()` may be tooling-materialized, not
+    upstream-tracked — its path's truth is the tool's copy list** (2026-10-07
+    run #55 libtool-git): upstream `3fc61c56` made `./bootstrap` copy
+    gnulib's canonical GPL text to top-level `COPYING` (gitignored), killing
+    the recipe's `install doc/COPYINGv2` at `package()` time while
+    `bootstrap.conf` still listed the old name. When a recipe installs doc
+    or license files produced by `./bootstrap`/`autogen`/gnulib, accept
+    every known layout (or re-derive the path from the tool's copy list)
+    instead of one hard-coded path, and re-check after any tooling bump —
+    `git status` proves nothing for gitignored materialized files. The
+    pre-slot look-ahead for this class is upstream-at-ref existence of the
+    installed paths (and of upstream version stamps, for the rule-31
+    placeholder class), not the wall loop; the 2026-10-07 pass over the
+    516-window found zero surviving walls. See `docs/NOTE.md` 2026-10-07
+    run #55.
 
 ## 2. Workspace overview
 

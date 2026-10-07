@@ -37,6 +37,58 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-07 — run #55 wall (libtool-git): `package()` installed a license path upstream's bootstrap stopped materializing
+
+- **Symptom.** Run #55 (same 516-window launch shape as #52–#54) built 70,
+  then walled at `libtool-git` (dispatch 71/516): compile and `make install`
+  fine, `package()` died with `install: cannot stat 'doc/COPYINGv2'`. 439
+  never-started. (Run #55 also proved the run #53/#54 fixes in production:
+  `libpng-git` ✓ 5 s and `libseccomp-git` ✓ 34 s, post-install probes clean.)
+- **Root cause.** Upstream libtool `3fc61c56` ("maint: use gnulib's canonical
+  COPYING files.") deleted the tracked `COPYING`/`libltdl/COPYING.LIB` and made
+  `./bootstrap` copy gnulib's canonical texts in: the GPL-2.0 text now lands at
+  top-level `COPYING` while `doc/COPYINGv2` is gone — even though
+  `bootstrap.conf` still lists `doc/COPYINGv2` in `gnulib_non_module_files`.
+  The recipe comment hard-coded the old layout. Same class as the day's three
+  pins: the tracked ref's truth differs from the recipe's assumption, except
+  here the file's truth lives in *tooling* output, not in upstream git at all
+  (`COPYING` is `.gitignore`d, so `git status` shows nothing).
+- **Fix.** `package()` installs whichever GPL-2.0 layout the tree carries —
+  top-level `COPYING` preferred, `doc/COPYINGv2` as fallback — with the source
+  basename as the license-dir name; `libltdl/COPYING.LIB` unchanged. A path
+  that exists in neither layout still fails loudly in `install`.
+- **Validation.** `bash -n`; `.SRCINFO` regenerated; sweep green (`fish -n`,
+  `--audit` rc 0, `--list` 663, dry-run `git`/`stable`/`core` rc 0); battery
+  55/55 PASS (this change plus the range-anchoring work).
+- **Rules.**
+  1. When a recipe installs a file that `./bootstrap`/`autogen`/gnulib
+     *materializes* rather than upstream git tracking it, the path's truth is
+     the tool's copy list — accept every known layout (or re-derive from that
+     list) instead of one hard-coded path, and re-check on any tooling bump.
+  2. Look-ahead beats the wall loop: the install-path scan can only prove
+     recipes whose tree already exists, so it lags the run. The useful
+     pre-slot check is upstream-at-ref existence for the drift-prone set
+     (tooling-materialized doc/license installs, ~58 window recipes), which is
+     what the 2026-10-07 look-ahead pass covers.
+
+- **Look-ahead pass results (same day, five parallel verification
+  agents).** 91 window recipes in the tooling-materialized install-path
+  class + 106 floating `git describe` recipes for upstream version stamps
+  were checked at their build refs: **zero predicted walls survive
+  verification**. The one candidate (grep's `for mo in *.mo` loop) is
+  disproven — `build()` runs `msgfmt *.po → *.mo` into that same dist `po/`
+  dir (45 `.mo` generated beside the shipped 45 `.gmo`; the built archive
+  ships all 45 translations). Residuals: (a) `libmicrohttpd-git` proven OK
+  by scratch clone (`AC_INIT … [1.0.10]`, soname from `-version-info`) —
+  its `git://` host has no cheap web content route; (b) savannah is
+  unreachable from this host, so `tar` was verified via the GitHub mirror
+  at the same immutable tag; (c) the guarded license loops (`nfs-utils`,
+  `ostree`) silently skip names the tarball lacks — deleting those guards
+  would create walls; (d) mutation surface if a recipe ever starts deriving
+  sonames from version strings: jemalloc's `0.0.0-…missing_version` fallback
+  and the dev-marker stamps (`1.12.99`, `*-DEV`, `*.alpha`, `*-beta`,
+  `2.5b1`).
+
 ## 2026-10-07 — range anchoring: `-n`/`-l` rows now print the stable selection index (the range anchor) even after a range filter
 
 - **Symptom** (owner directive 2026-10-06). `-n`/`-l` renumbered rows from 1

@@ -68,10 +68,15 @@ package() {
   make DESTDIR="$pkgdir" install
 
   # Upstream git carries no license texts; ./bootstrap materializes the
-  # canonical gnulib copies (doc/COPYINGv2 = GPL-2.0 text,
-  # libltdl/COPYING.LIB = LGPL-2.1 text). 'make install' only puts
-  # libltdl/COPYING.LIB under /usr/share/libtool/, so install both under
-  # the license directory as well.
-  install -Dm644 doc/COPYINGv2 "$pkgdir/usr/share/licenses/$pkgname/COPYINGv2"
+  # canonical gnulib copies (GPL-2.0 text and libltdl/COPYING.LIB =
+  # LGPL-2.1 text). 'make install' only puts libltdl/COPYING.LIB under
+  # /usr/share/libtool/, so install both under the license directory as
+  # well. The GPL-2.0 copy landed at doc/COPYINGv2 until upstream
+  # 3fc61c56 ("maint: use gnulib's canonical COPYING files") moved it to
+  # top-level COPYING — accept either layout; a missing path still fails
+  # loudly in install.
+  local gpl=doc/COPYINGv2
+  [[ -f COPYING ]] && gpl=COPYING
+  install -Dm644 "$gpl" "$pkgdir/usr/share/licenses/$pkgname/${gpl##*/}"
   install -Dm644 libltdl/COPYING.LIB "$pkgdir/usr/share/licenses/$pkgname/COPYING.LIB"
 }
