@@ -53,6 +53,17 @@ prepare() {
   # Setting LC_CTYPE to workaround encoding issue
   export LC_CTYPE=en_US.UTF-8
 
+  # The pinned tag demands Cython>=3.2.9,<3.3 while upstream master already
+  # requires Cython>=3.3.0 and the toolchain ships 3.3.x (2026-10-07: `python
+  # -m build --no-isolation` died on "Unmet dependencies"). Relax the upper
+  # bound to the next minor, and fail loudly if the pin ever moves so this
+  # does not silently stop applying.
+  sed -i 's/Cython>=3\.2\.9,<3\.3/Cython>=3.2.9,<3.4/' requirements.txt pyproject.toml
+  grep -q 'Cython>=3\.2\.9,<3\.4' requirements.txt \
+    || { echo 'python-lxml: the Cython pin moved; this relaxation no longer applies' >&2; return 1; }
+  grep -q 'Cython>=3\.2\.9,<3\.4' pyproject.toml \
+    || { echo 'python-lxml: the Cython build pin moved; this relaxation no longer applies' >&2; return 1; }
+
   # extract licenses
   sed -n '/^<!--/,/^-->/p' src/lxml/isoschematron/resources/rng/iso-schematron.rng \
     > iso-schematron.rng.license
