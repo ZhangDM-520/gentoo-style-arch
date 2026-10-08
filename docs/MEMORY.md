@@ -870,6 +870,17 @@
     `.gsa-vcs-revisions` identity row offline; if both are healthy the resume
     re-queries and skips — never force a rebuild merely to "clear" a deferral,
     and never "fix" the recipe or the URL for one.
+45. **A parallel-make failure naming a static archive is a writer/reader
+    overlap until proven otherwise — find which make node mutates the
+    archive** (2026-10-09 run #75 vamp-plugin-sdk): upstream ran `ranlib` as
+    the recipe of the *phony* `sdkstatic` target while the `host`/`rdfgen`
+    links depended only on the `ar` rule's file, so `-j` raced the links
+    against the ranlib in-place rewrite (`lto1: … file too short`). Smell: a
+    phony target whose recipe mutates an artifact its consumers read — it
+    re-runs every invocation and breaks the "recipe finished" assumption. Fix
+    at the seam that survives Makefile regeneration (there: `configure`
+    rebuilds Makefile from Makefile.in, so `build()` phases `make sdk` then
+    `make plugins host rdfgen test`), never by serializing the whole build.
 35. **Never `cd` inside a fish command substitution — fish 4.9.3 runs the
     substitution in-process and the `cd` leaks to the caller**
     (2026-10-07 run #56 nodejs): `(cd "$x" && pwd -P)` silently moved the

@@ -44,7 +44,17 @@ build() {
 
   cd $_source_dir
   ./configure --prefix=/usr
-  make
+  # Upstream's Makefile runs `ranlib` as the phony `sdkstatic` target's recipe
+  # (Makefile.in:240-242) while `host`/`rdfgen` link the same archives: the
+  # link rules depend on the `ar` rule's file but not on `sdkstatic`, so at
+  # parallel make the readers race the ranlib in-place rewrite and lto1 sees a
+  # truncated archive ("./libvamp-hostsdk.a: file too short", run #75
+  # 2026-10-09). `configure` regenerates Makefile from Makefile.in, so the fix
+  # is sequencing, not a patch: phase 1 completes ar+ranlib for both archives
+  # before phase 2 reads them. Never fold phase 2 back into plain `make` —
+  # `sdkstatic` is phony and its ranlib would race the links again.
+  make sdk
+  make plugins host rdfgen test
 }
 
 package() {

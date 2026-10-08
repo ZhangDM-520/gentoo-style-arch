@@ -37,6 +37,49 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-09 — run #75 vamp-plugin-sdk wall: upstream's phony `sdkstatic` runs `ranlib` while the links read the same archive — `file too short` under `-j`
+
+**Symptom.** Run #75 (251..400) died at `vamp-plugin-sdk failed 1 6
+build-failed` with `lto1: error: ./libvamp-hostsdk.a: file too short` and
+`mold: fatal: lto-wrapper failed` — after 100 successful rows (rocm-llvm
+2h07m, autofdo-git, libclc-git, and the wall-B recipe `libxml2-legacy` skipping
+in 3 s among them).
+
+**Root cause.** Upstream's `Makefile.in` builds the static archives with `ar`
+in the archive rule but runs `ranlib` as the recipe of the *phony* `sdkstatic`
+target (`Makefile.in:240-242`). The link rules (`host/vamp-simple-host`,
+`rdf/generator/vamp-rdf-template-generator`) depend on the `ar` rule's file but
+not on `sdkstatic`, so under parallel make the links start as soon as `ar`
+finishes and race the `ranlib` in-place rewrite of the same archive — the
+reader sees a truncated file (run #75's log shows exactly `ar: creating …` →
+both link lines → `ranlib …` → `lto1: error: file too short`). Because
+`sdkstatic` is phony, its `ranlib` re-runs on *every* `make`: the race is
+structural, not a dirty-workspace artifact, and a ccache-warm 6-second build
+collapses the timing enough to hit it.
+
+**Fix.** `build()` now runs `make sdk` and only then `make plugins host rdfgen
+test`: phase 1 completes `ar`+`ranlib` for both archives before phase 2 reads
+them, and phase 2 never runs `sdkstatic`'s recipe. Never fold phase 2 back into
+plain `make`. A `Makefile.in` patch was rejected: `configure` regenerates
+`Makefile` (`ac_config_files="Makefile"`), so a `prepare()`-time edit is
+clobbered — sequencing at the build seam is the smallest sound fix.
+
+**Validation.** `bash -n` parse OK; `makepkg --printsrcinfo` diff-clean. Red is
+run #75's log at `-s -i --lanes 2 --jobs 11 --intensity max` with warm caches.
+Green twice at the same parallelism: a rebuild over the run #75 dirty tree
+(rc 0, `vamp-plugin-sdk succeeded 0 13 ok`) and a `-c` from-scratch rebuild
+(rc 0, `… succeeded 0 11 ok`) whose log shows both `ar`+`ranlib` pairs completing
+before the first link and the `test` phase (`host/vamp-simple-host -l`) passing;
+both installed `vamp-plugin-sdk-1:2.10-1` with `libvamp-hostsdk.so=3-64` /
+`libvamp-sdk.so=2-64`. Battery green in the gap.
+
+**Rule.** When a parallel-make failure names a *static archive* (`ar`/`ranlib`
+family, `file too short`, or LTO choking on an archive), suspect a writer/reader
+overlap on that archive before suspecting the toolchain: check whether the
+archive's writer lives in a different make node than its readers. A phony target
+whose recipe mutates shared artifacts is the smell — it re-runs on every
+invocation and breaks the "recipe finished" assumption its consumers rely on.
+
 ## 2026-10-09 — run #74 libopenraw wall: vendored ahash 0.7.6's nightly probe asked for the removed `stdsimd` feature — and a vendored edit must re-anchor `.cargo-checksum.json`
 
 **Symptom.** Run #74 (251..400) stopped at `libopenraw failed 1 73 build-failed`:
