@@ -860,6 +860,16 @@
     entries or the package checksum. Corollary: build.rs channel probes
     (`version_check`/`autocfg`) are feature gates that stable toolchains never
     enable — a nightly-only cfg in vendored code is a rust-git landmine.
+44. **An `upstream-unverified` deferral on a ref a previous run verified is
+    transport noise until proven otherwise — classify before fixing**
+    (2026-10-09 run #74 libxml2-legacy): the `-s` freshness query hit a
+    transport burst that outlasted `git_ls_remote_quiet`'s 6-attempt/~93 s
+    budget and parked the recipe (a deferral fails the run exactly like a build
+    error). Classification handle: replay the builder's own query shape
+    (`vcs_remote_revision`'s ref-kind case) by hand and recompute the archive's
+    `.gsa-vcs-revisions` identity row offline; if both are healthy the resume
+    re-queries and skips — never force a rebuild merely to "clear" a deferral,
+    and never "fix" the recipe or the URL for one.
 35. **Never `cd` inside a fish command substitution — fish 4.9.3 runs the
     substitution in-process and the `cd` leaks to the caller**
     (2026-10-07 run #56 nodejs): `(cd "$x" && pwd -P)` silently moved the

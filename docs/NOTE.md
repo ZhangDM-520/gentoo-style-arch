@@ -80,6 +80,39 @@ probes (`version_check`/`autocfg`) are feature gates that stable toolchains neve
 enable — a nightly-only cfg is a landmine in "stable" vendored code the moment
 rust-git moves.
 
+## 2026-10-09 — run #74 libxml2-legacy deferral: a transient upstream-query burst exhausted the retry budget — fail-closed defer, self-clearing
+
+**Symptom.** Run #74 also parked `libxml2-legacy deferred 99 115
+upstream-unverified` (`--skip cannot verify upstream VCS freshness: cannot query
+upstream revision for libxml2.git`), and a deferral fails the run exactly like a
+build error.
+
+**Root cause.** The `-s` freshness check must resolve the source tag upstream;
+the query (`git ls-remote --exit-code <url> refs/tags/v2.13.9
+'refs/tags/v2.13.9^{}'` — the tag case of `vcs_remote_revision` in
+`lib/sources.fish`) hit a transport burst and every one of the 6 attempts (the
+~93 s `git_ls_remote_quiet` budget) failed. Nothing was wrong with the recipe,
+the baseline, or the URL: the exact same query answers rc 0 afterwards, and run
+#73 had recorded a healthy baseline for the same tree.
+
+**Fix.** None — the deferral is fail-closed by design and the condition is
+transient (the class of WiFi/dock power events this host already knows). Cleared
+by verification before resuming, not by a rebuild: the archive's
+`.gsa-vcs-revisions` identity row matches the archive exactly (sha `5f0748…`,
+835707 B) and its recorded revision `04af2cab…` equals the current peeled
+`v2.13.9` upstream commit, so the next run's `-s` check re-queries, sees no
+advance, and skips.
+
+**Validation.** The builder's own query shape replayed by hand (rc 0; tag and
+peeled rows both present); baseline identity recomputed offline and equal; full
+fixture battery green in the run gap.
+
+**Rule.** An `upstream-unverified` deferral on a ref a previous run verified is
+transport noise until proven otherwise: classify it with a manual replay of the
+builder's query shape plus a baseline identity check before touching any code.
+Deferral semantics stay as they are — dependents wait, the run exits non-zero,
+and a rebuild is never forced merely to "clear" one.
+
 ## 2026-10-08 — run #73 libyuv wall: a trailing-slash `url=` emptied the VCS recorder's checkout name — green build refused
 
 **Symptom.** Run #73 died after a fully green libyuv build at the
