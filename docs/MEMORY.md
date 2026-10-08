@@ -849,6 +849,17 @@
     through a discovered interpreter. Diagnosis handle: the failing
     command line names a `~/.local/bin/python*`, or `CMakeCache.txt`
     `_Python3_EXECUTABLE`.
+43. **A vendored, checksum-pinned tree is not freely editable — re-anchor the
+    edited file's `.cargo-checksum.json` entry in the same `prepare()` step**
+    (2026-10-09 run #74 libopenraw): cargo directory sources pin every file's
+    sha256 in `.cargo-checksum.json`, so the sed that fixes vendored
+    `ahash 0.7.6`'s build.rs was refused with `the listed checksum of
+    …/build.rs has changed` — the fix moved the wall instead of removing it.
+    Recipe pattern: `sed` the file, then rewrite exactly that file's entry
+    (`"name":"<64 hex>"`) with `sha256sum` output; never touch the other
+    entries or the package checksum. Corollary: build.rs channel probes
+    (`version_check`/`autocfg`) are feature gates that stable toolchains never
+    enable — a nightly-only cfg in vendored code is a rust-git landmine.
 35. **Never `cd` inside a fish command substitution — fish 4.9.3 runs the
     substitution in-process and the `cd` leaks to the caller**
     (2026-10-07 run #56 nodejs): `(cd "$x" && pwd -P)` silently moved the

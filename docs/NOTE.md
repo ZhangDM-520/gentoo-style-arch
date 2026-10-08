@@ -37,6 +37,49 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-09 — run #74 libopenraw wall: vendored ahash 0.7.6's nightly probe asked for the removed `stdsimd` feature — and a vendored edit must re-anchor `.cargo-checksum.json`
+
+**Symptom.** Run #74 (251..400) stopped at `libopenraw failed 1 73 build-failed`:
+`error[E0635]: unknown feature 'stdsimd'` at the vendored
+`lib/mp4/vendor/ahash/src/lib.rs:33`
+(`#![cfg_attr(feature = "stdsimd", feature(stdsimd))]`) — rust-git compiles the
+`lib/mp4` Rust component against the vendored `ahash 0.7.6` and dies in the
+crate's own prologue.
+
+**Root cause.** ahash 0.7.6's `build.rs` probes the toolchain channel
+(`version_check::Channel::supports_features()` — true for any nightly/dev
+channel, and rust-git always is one) and then emits
+`cargo:rustc-cfg=feature="stdsimd"`. That cfg switches on lib.rs's
+`#![feature(stdsimd)]`, and rustc has since *removed* the `stdsimd` feature, so
+the attribute is now a hard E0635. The cfg-gated code (aes_hash on ARM+crypto,
+operations.rs, random_state.rs) is never entered on this x86_64 build; ahash
+0.7.7 upstream deleted the same probe.
+
+**Fix.** `prepare()` deletes the one `rustc-cfg=feature="stdsimd"` emission line
+from the vendored `build.rs` (the sibling `specialize`/`min_specialization`
+probe still resolves and stays), then re-anchors `build.rs`'s entry in the
+vendored `.cargo-checksum.json` to the edited file's sha256. The second half is
+load-bearing: a cargo directory source is checksum-pinned per file, and
+rehearsal #1 failed with `the listed checksum of …/build.rs has changed` —
+editing a vendored file without updating its manifest entry only moves the wall.
+
+**Validation.** `bash -n` parse OK; `makepkg --printsrcinfo` diff-clean (house
+precedent 9112445/480e716: toolchain build fixes do not bump pkgrel). Two
+rehearsals in `$W` over the dirty `src/`: #1 (edit without the checksum
+re-anchor) reproduces the cargo checksum refusal in 22 s; #2
+(`-s -i --no-deps --install libopenraw`) rc 0 in 32 s — run record
+`libopenraw succeeded 0 32 ok`, archive `libopenraw-0.3.7-2.1-x86_64.pkg.tar.zst`
+installed 01:33, `.PKGINFO` carries `libopenraw.so=9-64` /
+`libopenrawgnome.so=9-64`. The `$W` twin got the semantic change by in-place
+edit, keeping the rule 38 version-sync mark (`pkgrel=2.1`).
+
+**Rule.** A vendored, checksum-pinned tree (cargo directory source) is not
+freely editable: every edited file must have its `.cargo-checksum.json` entry
+re-anchored to the new sha256 in the same `prepare()` step. And build.rs channel
+probes (`version_check`/`autocfg`) are feature gates that stable toolchains never
+enable — a nightly-only cfg is a landmine in "stable" vendored code the moment
+rust-git moves.
+
 ## 2026-10-08 — run #73 libyuv wall: a trailing-slash `url=` emptied the VCS recorder's checkout name — green build refused
 
 **Symptom.** Run #73 died after a fully green libyuv build at the
