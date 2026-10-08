@@ -37,6 +37,50 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-09 — run #76 gd wall: `git apply` inside a git work tree silently skips everything outside the current subdirectory
+
+**Symptom.** Run #76 stopped at `gd failed 1 2 build-failed`: `patch`'s
+"can't find file to patch at input line 17 … tests/heif/bug788.c … 1 out of 1
+hunk ignored" in `prepare()`. The *third* prepare() patch is the upstream
+commit that modifies `tests/heif/bug788.c` — and the *second* patch is the
+commit that creates it, so the missing file pointed at the middle step.
+
+**Root cause.** The middle step — `git apply -p1 ../f1a53c08….patch` ("Fix heif
+tests"; carried as `git apply` because it ships the binary test asset
+`bug788.png` that plain `patch` cannot handle) — silently did **nothing**.
+Inside a git work tree `git apply` resolves patch paths against the repository
+root and *skips* every path outside the current subdirectory — printing
+`Skipped patch '…'` only under `--verbose`, still exiting 0. The build
+workspace is itself a git checkout, so the extracted source dir is a nested
+non-repo directory and all five patches were skipped. makepkg runs `prepare()`
+without errexit, so the rc-0 no-op sailed through until the next step died on
+the file the skipped patch should have created. Same family as run #73: git's
+repository-context semantics colliding with makepkg's plain-directory
+assumptions.
+
+**Fix.** The `git apply` call now pins
+`GIT_DIR="$PWD/.gsa-nogit" GIT_WORK_TREE="$PWD"` (plus the standing
+`GIT_CONFIG_COUNT=0`), so `apply` treats the source dir as the repository root
+regardless of any enclosing checkout — correct both inside and outside a repo.
+Class scan of the other `git apply`/`git checkout`/`git cherry-pick` sites:
+`glib2-git` and `hermes-agent-git` run theirs inside their own source clones
+(cwd = repo root) and are unaffected; gd was the only tarball-tree site.
+
+**Validation.** `bash -n` parse OK; `makepkg --printsrcinfo` diff-clean.
+Scratch-tree rehearsal in `/tmp` (outside any repo): full sequence patch 1
+(`-R`) → `git apply` with the override (all five patches "Applied … cleanly",
+binary asset included, rc 0) → patch 3 clean. Workspace rehearsal over the
+dirty `src/`: run record `gd succeeded …`, installed `2.3.3-9` with
+`libgd.so`. Battery green in the gap.
+
+**Rule.** `git apply` (and friends) against a source tree that is *not* its
+own git checkout is repository-context-sensitive: under an enclosing work tree
+its patch paths resolve against that repo's root and non-matching paths are
+silently skipped with exit 0. Either apply inside the source's own clone or
+pin `GIT_DIR`/`GIT_WORK_TREE` to the target directory — and never treat a
+silent `git apply` in a `prepare()` chain as evidence that later steps' inputs
+exist (makepkg discards mid-function failures).
+
 ## 2026-10-09 — run #75 vamp-plugin-sdk wall: upstream's phony `sdkstatic` runs `ranlib` while the links read the same archive — `file too short` under `-j`
 
 **Symptom.** Run #75 (251..400) died at `vamp-plugin-sdk failed 1 6

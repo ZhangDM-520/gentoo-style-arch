@@ -881,6 +881,18 @@
     at the seam that survives Makefile regeneration (there: `configure`
     rebuilds Makefile from Makefile.in, so `build()` phases `make sdk` then
     `make plugins host rdfgen test`), never by serializing the whole build.
+46. **`git apply` against a non-repo source tree is repository-context
+    sensitive — pin `GIT_DIR`/`GIT_WORK_TREE` or work inside the source's
+    own clone** (2026-10-09 run #76 gd): under an enclosing git work tree
+    (the build workspace is one) `git apply` resolves patch paths against
+    the REPO ROOT and silently skips everything outside the current
+    subdirectory — `Skipped patch` is `--verbose`-only and the exit code is
+    0. makepkg's `prepare()` has no errexit, so the no-op sails through
+    until a later step dies on the file the skipped patch should have
+    created. Fix: `GIT_CONFIG_COUNT=0 GIT_DIR="$PWD/.gsa-nogit"
+    GIT_WORK_TREE="$PWD" git apply -p1 …` (correct in and out of a repo).
+    The `git apply` sites inside recipes' own clones (glib2-git,
+    hermes-agent-git) are unaffected — cwd is their repo root.
 35. **Never `cd` inside a fish command substitution — fish 4.9.3 runs the
     substitution in-process and the `cd` leaks to the caller**
     (2026-10-07 run #56 nodejs): `(cd "$x" && pwd -P)` silently moved the
