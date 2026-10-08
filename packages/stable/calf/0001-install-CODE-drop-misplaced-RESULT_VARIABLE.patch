@@ -1,0 +1,52 @@
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -138,33 +138,21 @@
+     endif()
+ 
+     # Create Lv2 install dir
+-    install(CODE "execute_process(COMMAND \"${CMAKE_COMMAND}\" -E make_directory \"\$ENV{DESTDIR}${LV2DIR_PROJ}\")"
+-            RESULT_VARIABLE calfResult)
+-    if(NOT ${calfResult} EQUAL 0)
+-        message(FATAL_ERROR "Could not create ${LV2DIR_PROJ}/")
+-    endif()
++    install(CODE "execute_process(COMMAND \"${CMAKE_COMMAND}\" -E make_directory \"\$ENV{DESTDIR}${LV2DIR_PROJ}\")")
+     # Create symlinks from Lv2 install dir to libs
+     install(CODE "execute_process( \
+         COMMAND \"${CMAKE_COMMAND}\" -E ${COPY_ACTION} \
+ 	\"${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/${PROJECT_NAME}/${LIB_PREFIX}${PROJECT_NAME}${LIB_SUFFIX}\" \
+ 	\"\$ENV{DESTDIR}${LV2DIR_PROJ}/${PROJECT_NAME}${LIB_SUFFIX}\" \
+         )"
+-        RESULT_VARIABLE calfResult
+     )
+-    if(NOT ${calfResult} EQUAL 0)
+-        message(FATAL_ERROR "Could not create ${LV2DIR_PROJ}/${PROJECT_NAME}${LIB_SUFFIX}")
+-    endif()
+     if(USE_GUI)
+         install(CODE "execute_process( \
+             COMMAND \"${CMAKE_COMMAND}\" -E ${COPY_ACTION} \
+             \"${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/${PROJECT_NAME}/${LIB_PREFIX}${PROJECT_NAME}lv2gui${LIB_SUFFIX}\" \
+             \"\$ENV{DESTDIR}${LV2DIR_PROJ}/${PROJECT_NAME}lv2gui${LIB_SUFFIX}\" \
+             )"
+-            RESULT_VARIABLE calfResult
+         )
+-        if(NOT ${calfResult} EQUAL 0)
+-            message(FATAL_ERROR "Could not create ${LV2DIR_PROJ}/${PROJECT_NAME}lv2gui${LIB_SUFFIX}")
+-        endif()
+     endif()
+ 
+     # Remove previous .ttl files
+@@ -181,13 +169,7 @@
+         file(GLOB ttl_files "${LV2DIR_PROJ}/*.ttl")
+         foreach(ttl_file ${ttl_files})
+             install(
+-                CODE "execute_process(COMMAND \"${SORDI}\" -o turtle \"${ttl_file}\")"
+-                RESULT_VARIABLE result
+-                OUTPUT_VARIABLE nothing
+-                )
+-            if(NOT ${result} EQUAL 0)
+-                message(FATAL_ERROR "Sordi failed for ${ttl_file}")
+-            endif()
++                CODE "execute_process(COMMAND \"${SORDI}\" -o turtle \"${ttl_file}\")")
+         endforeach()
+     endif()
+ endif()

@@ -13,8 +13,18 @@ groups=(lv2-plugins pro-audio)
 license=(GPL-2.0-or-later LGPL-2.0-or-later)
 depends=(expat fluidsynth glibc hicolor-icon-theme libgcc libstdc++)
 makedepends=(cmake git lv2)
-source=("git+$_url#tag=$pkgver")
-b2sums=('a62f3617959a73a0b0f23ef4976944f31d9c3bc37d14cf316eee428aa197cfda4e9ebccce12a17d733567523480c3c48d99ada05a0501c709f4f8ab6d2f22a77')
+source=("git+$_url#tag=$pkgver"
+        "0001-install-CODE-drop-misplaced-RESULT_VARIABLE.patch")
+b2sums=('a62f3617959a73a0b0f23ef4976944f31d9c3bc37d14cf316eee428aa197cfda4e9ebccce12a17d733567523480c3c48d99ada05a0501c709f4f8ab6d2f22a77'
+        'fb15c25f7941fc186f3ea4059f03379390dcffde675c210d747fc2eaf5b9f26449585f8f187fce94d7eb09f1a07f853a78d51ac47b7e60577606a0dedf81344a')
+
+prepare() {
+  cd calf
+
+  # upstream misplaces install(CODE)'s RESULT_VARIABLE (an execute_process
+  # keyword) — cmake-git's strict install() parser rejects it at configure
+  patch -Np1 --fuzz=0 < "$srcdir/0001-install-CODE-drop-misplaced-RESULT_VARIABLE.patch"
+}
 
 build() {
   # House style: mold linker when available

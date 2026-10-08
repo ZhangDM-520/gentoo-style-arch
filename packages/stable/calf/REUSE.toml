@@ -2,6 +2,13 @@ version = 1
 
 [[annotations]]
 path = [
+    "0001-install-CODE-drop-misplaced-RESULT_VARIABLE.patch",
+]
+SPDX-FileCopyrightText = "Calf Studio Gear authors"
+SPDX-License-Identifier = "LGPL-2.1-or-later"
+
+[[annotations]]
+path = [
     "PKGBUILD",
     "README.md",
     "keys/**",
