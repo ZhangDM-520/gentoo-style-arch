@@ -31,11 +31,14 @@ build() {
   command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
   export LDFLAGS+=" ${_mold}"
 
+  # Tests are never run (!check) and never installed — build-only surface that
+  # also hard-fails on the GCC 17 snapshot (swbuftest.cpp prints through the
+  # deleted operator<<(ostream&, const wchar_t*)), so the seam keeps them off.
   cmake -B build -S $pkgbase-$pkgver \
       -DCMAKE_BUILD_TYPE='None' \
       -DLIBSWORD_LIBRARY_TYPE="Shared" \
       -DSYSCONF_INSTALL_DIR='/etc' \
-      -DSWORD_BUILD_TESTS="Yes" \
+      -DSWORD_BUILD_TESTS="No" \
       -DSWORD_PYTHON_3=TRUE \
       -DCMAKE_INSTALL_PREFIX=/usr \
       -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \

@@ -37,6 +37,55 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-08 — run #67 sword wall: the never-run test build bit the GCC 17 libstdc++; and the single-file sync variant of the rule-38 mark clobber
+
+**Symptom.** Run #67 (251..400) stopped dispatch 35 min in at `sword`
+(1 failed, everything after `dispatch-stopped`): `tests/swbuftest.cpp:167`
+`cout << (wchar_t *)x.getRawData()` — the GCC 17 snapshot's libstdc++
+*deleted* `operator<<(basic_ostream&, const wchar_t*)`
+(`= delete` in `bits/ostream.h`), so the compile is a hard error, not a
+warning. Wall class is rule 37's toolchain-transition family, but the
+failing code is upstream test harness code, not library code.
+
+**Root cause.** The recipe enabled the test build explicitly
+(`-DSWORD_BUILD_TESTS="Yes"`) for a test tree that nothing consumes:
+`check()` does not exist (and `BUILDENV=(!check)`), and
+`tests/CMakeLists.txt` has no install rules, so the whole tree is
+build-only surface — surface that recompiles against a moving C++
+standard library on every toolchain snapshot.
+
+**Fix.** `packages/stable/sword/PKGBUILD` turns the seam off:
+`-DSWORD_BUILD_TESTS="No"`. Deliberately *not* a `swbuftest.cpp` patch:
+the tree is dead weight by the trimming standard ("remove tests …
+together"), and patching one deleted-API use in one test file leaves the
+same class waiting in the next file (rule 37's scan-the-whole-tree lesson,
+applied to the decision instead of to a patch). Precedent for
+tests-off-at-the-seam: `docs/NOTE.md` 2026-10-08 `-D hvf=disabled -D
+tests=disabled`.
+
+**Validation.** `bash -n` clean; `GIT_CONFIG_COUNT=0 makepkg --printsrcinfo`
+diff-clean (a build-flag change moves no metadata). Rehearsal in `$W` over
+the *dirty* `src/` tree from the failed build (CMake cache carrying the old
+flag): `GIT_CONFIG_COUNT=0 fish build-all.fish -s -i --lanes 2 --jobs 11
+--intensity max --no-deps --install sword` → `outcome: success`, rc 0
+(35 s). Full fixture battery green in the same gap.
+
+**Pitfall — rule 38 has a single-file variant.** The same run's version
+sync had moved `$W`'s sword `pkgrel=18 → 18.1` (repo parity, recorded in
+`.state/synced.list`) and refreshed its `.SRCINFO`. Copying the canonical
+`PKGBUILD` over the `$W` one to stage the fix clobbered that mark and left
+`$W`'s `.SRCINFO` claiming `18.1` — the two files disagreed until the mark
+was restored. Rule 38's mass-`git checkout` warning is the same defect one
+file at a time: a selective sync must reconcile, not blind-copy — apply
+the incoming semantic change and leave `pkgver`/`pkgrel` marks alone
+(canonical keeps `18`; the mark is `$W` runtime state and its disposition
+is the owner's).
+
+**Rule.** Never build a test tree that nothing runs or ships against a
+rolling toolchain — a `*BUILD_TESTS`/`tests=enabled` seam must name what
+consumes it (a `check()` or a fixture), or be off. And every `$W` write,
+including a one-file copy, preserves version-sync marks.
+
 ## 2026-10-08 — look-ahead decisions for 251..400: four soname movers PARKED at their last safe generation, provides discipline adopted, stale-src guards added
 
 - **Context.** The two 251..400 audit reports (2026-10-07) surfaced four

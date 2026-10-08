@@ -781,7 +781,12 @@
     `git checkout -- .` before `pull` resets those marks, updates PKGBUILD
     mtimes past the built archives, and the `-s` freshness check then
     forces a full redundant rebuild of every reset recipe next run (cost:
-    one ~38 min gcc-snapshot per cycle). Sync procedure: leave the marks,
+    one ~38 min gcc-snapshot per cycle). The same defect has a single-file
+    variant: a blind `cp` of a canonical file over its `$W` twin clobbers
+    the mark in that file (2026-10-08 run #67 sword, where it also
+    desynced the file from the marked `.SRCINFO`) — reconcile instead:
+    apply the incoming semantic change, leave `pkgver`/`pkgrel` alone.
+    Sync procedure: leave the marks,
     `git checkout --` only the files the incoming commits touch (resolve
     those), then `pull --ff-only`. The marks converge — once the synced
     content is already in place the next sync writes nothing, mtimes stop
