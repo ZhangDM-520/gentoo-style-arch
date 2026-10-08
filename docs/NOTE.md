@@ -37,6 +37,35 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-08 — range anchors moved to the unfiltered closure space (the fca9ae2 app-prompt gap)
+
+**Symptom.** The fca9ae2 review confirmed the selection-index anchor
+printed by `-n`/`-l` was computed AFTER the app prompt filtered the
+selection, while `-l -g app` never prompts — two index spaces, so the same
+number named different packages across prompt states (`-l -g app` row 2 =
+app2; a prompted run's row 2 = app3, which rides in as a consumer).
+
+**Fix (owner directive).** Anchors now live in the UNFILTERED closure
+space: a row's index is its 1-based position in the whole deduped,
+consumer-expanded, topo-sorted selection BEFORE prompt filtering. Prompt
+survivors keep those anchors — printed numbers may carry gaps, intended
+and honest — and ranges select by ANCHOR VALUE (`k..k` = the package `-l
+-g GROUP` shows at index k), not row slot. Non-prompted paths are
+byte-identical: there anchors already equal slots. The one-row
+`app-cluster` prompt presentation is unchanged (presentation only).
+
+**Validation.** `fish -n`; `bash tests/project.sh` and `bash
+tests/app-group.sh` green in the run-gap battery (55/55). Falsification-
+proven assertions: re-adding the post-prompt `sel_idx` fails app-group.sh
+(`got [1 app2|2 app3], want [2 app2|3 app3]`), rotating row names fails
+the new anchor<->name pairing check in project.sh, and defaulting an open
+range end fails the new `22..` numbering check.
+
+**Rule.** A printed index is a promise: it must name one package in every
+invocation that can select it. When a filter layer (the app prompt) can
+drop rows, index the space the operator can look up (`-l`), never the
+filtered view — gaps are honest, collisions are not.
+
 ## 2026-10-08 — run #70 rust-git wall, part 2: libgit2-sys's [1.9.6,1.10) floor — park libgit2-git at v1.9.7 (`main` declares 1.9.0)
 
 **Symptom.** With the makedepend wall gone (entry below), the rust-git

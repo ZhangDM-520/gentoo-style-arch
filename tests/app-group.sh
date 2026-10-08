@@ -101,6 +101,14 @@ order_seq() {
         | grep -E '^ +[0-9]+\. ' | awk '{print $2}' | tr -d '\r'
 }
 
+# The same rows as 'anchor name' pairs — the printed anchor VALUES (the
+# pairing a later range filter relies on), not just the names. Anchors are
+# unfiltered-closure positions, so a prompt-filtered run prints gaps.
+order_pairs() {
+    sed -n '/Build order (dry run):/,/^Total:/p' "$1" \
+        | grep -E '^ +[0-9]+\. ' | awk '{sub(/\.$/, "", $1); print $1, $2}' | tr -d '\r'
+}
+
 # First menu render of a capture (a toggle input RE-renders the menu; the row
 # structure is decided in the first render, before any input is consumed):
 # from the "choose what to build" header through the input hint line.
@@ -121,6 +129,13 @@ menu_rows() {
 listed_seq() {
     sed -n '/Selected packages in build order/,$p' "$1" \
         | grep -E '^ +[0-9]+\. ' | awk '{print $2}' | tr -d '\r'
+}
+
+# A `-l` listing as 'anchor name' pairs — the unfiltered anchor map a
+# prompted run's printed indices must agree with.
+listed_pairs() {
+    sed -n '/Selected packages in build order/,$p' "$1" \
+        | grep -E '^ +[0-9]+\. ' | awk '{sub(/\.$/, "", $1); print $1, $2}' | tr -d '\r'
 }
 
 # ── 1. Loader: a missing topology file is an error; the roster is six names ─
@@ -203,6 +218,11 @@ grep -qF '[ ]' "$fixture/o5" \
 seq5=$(order_seq "$fixture/o5")
 [ "$seq5" = "$expected3" ] \
     || fail "Enter should build the whole group, got [$(echo "$seq5" | tr '\n' ' ')]" "$fixture/o5"
+# Enter drops nothing, so the printed anchors are the plain 1..3 of the
+# unfiltered closure — identical to the -l -g app listing from scenario 4.
+pairs5=$(order_pairs "$fixture/o5")
+[ "$pairs5" = "$(listed_pairs "$fixture/o4")" ] \
+    || fail "unfiltered prompted anchors diverge from the -l listing: got [$(echo "$pairs5" | tr '\n' '|')], listing [$(listed_pairs "$fixture/o4" | tr '\n' '|')]" "$fixture/o5"
 
 # ── 6. PTY + toggle: only the checked subset — plus its consumers ──────────
 # Row 2 checks app2; app3 consumes app2, so consumer expansion carries it
@@ -215,6 +235,21 @@ seq6=$(order_seq "$fixture/o6")
 expected6=$(printf 'app2\napp3')
 [ "$seq6" = "$expected6" ] \
     || fail "checked-only preview wrong: got [$(echo "$seq6" | tr '\n' ' ')], want [app2 app3]" "$fixture/o6"
+# The printed anchors are the UNFILTERED closure positions: app2/app3 sit at
+# 2/3 in the whole -g app selection (the -l listing from scenario 4), even
+# though the prompt dropped app1 — the gap at 1 is intended and honest (owner
+# directive 2026-10-08: anchors must not renumber after prompt filtering).
+pairs6=$(order_pairs "$fixture/o6")
+expected6_pairs=$(printf '2 app2\n3 app3')
+[ "$pairs6" = "$expected6_pairs" ] \
+    || fail "toggled preview anchors wrong: got [$(echo "$pairs6" | tr '\n' '|')], want [2 app2|3 app3] (unfiltered positions, gaps intended)" "$fixture/o6"
+# Cross-check against the -l -g app listing: the same package carries the
+# same index in a prompted run and in the listing, whatever was toggled.
+while read -r num name; do
+    lnum=$(listed_pairs "$fixture/o4" | awk -v n="$name" '$2 == n { print $1 }')
+    [ "$lnum" = "$num" ] \
+        || fail "anchor drift: $name printed as $num in the prompted run but $lnum in the -l -g app listing" "$fixture/o6"
+done <<<"$pairs6"
 
 # ── 7. PTY + q: abort with non-zero ─────────────────────────────────────────
 if run_pty 'q\n' "$fixture/o7" "$fixture/state-7" -n -g app; then
@@ -230,6 +265,20 @@ seq8=$(order_seq "$fixture/o8")
 expected8=$(printf 'app1\ngitp1')
 [ "$seq8" = "$expected8" ] \
     || fail "combined selection wrong: got [$(echo "$seq8" | tr '\n' ' ')], want [app1 gitp1]" "$fixture/o8"
+# The combined -g app -g git closure is the anchor space here: app1/gitp1
+# keep their unfiltered positions 1/3, with a gap where the prompt dropped
+# the app2/app3 rows — pinned against the matching -l listing.
+run_quiet "$fixture/o8l" -l -g app -g git \
+    || fail "-l -g app -g git failed" "$fixture/o8l"
+pairs8=$(order_pairs "$fixture/o8")
+expected8_pairs=$(printf '1 app1\n3 gitp1')
+[ "$pairs8" = "$expected8_pairs" ] \
+    || fail "combined-run anchors wrong: got [$(echo "$pairs8" | tr '\n' '|')], want [1 app1|3 gitp1] (unfiltered positions in the app+git closure)" "$fixture/o8"
+while read -r num name; do
+    lnum=$(listed_pairs "$fixture/o8l" | awk -v n="$name" '$2 == n { print $1 }')
+    [ "$lnum" = "$num" ] \
+        || fail "anchor drift in combined selection: $name printed as $num in the prompted run but $lnum in the -l -g app -g git listing" "$fixture/o8"
+done <<<"$pairs8"
 
 # ── 9. Real build prompts too, and builds the checked subset + consumers ────
 run_pty '2\n\n' "$fixture/o9" "$fixture/state-9" \

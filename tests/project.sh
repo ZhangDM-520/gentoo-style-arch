@@ -84,6 +84,10 @@ require_not_in() { # description needle
 rows() { # print the numbered rows of $out, as bare package names
     sed -n 's/^ *[0-9][0-9]*\. //p' <<<"$out"
 }
+rows_pairs() { # print the numbered rows of $out as 'anchor name' pairs — the
+               # anchor↔name pairing itself, not just one half of it
+    sed -n 's/^ *\([0-9][0-9]*\)\. /\1 /p' <<<"$out"
+}
 
 # --- parallel pre-execution --------------------------------------------------
 # Every run/run_split below is a read-only listing or dry run that has no
@@ -97,7 +101,7 @@ rows() { # print the numbered rows of $out, as bare package names
 # The scrape is self-pinning: if its match count drifts from the number of
 # calls this file actually carries, a call was added/indented without updating
 # the expectation below (or a non-call line started imitating one).
-expected_invocations=24
+expected_invocations=25
 scanned_invocations=$(grep -c -E '^(run|run_split) ' "${BASH_SOURCE[0]}")
 [[ $scanned_invocations -eq $expected_invocations ]] ||
     fail "self-scan found $scanned_invocations column-0 run/run_split calls, expected $expected_invocations (new calls must start at column 0 and bump this count)"
@@ -296,6 +300,27 @@ require_ok 'the ranged listing -g git 22..24'
 listed_nums=$(sed -n 's/^ *\([0-9][0-9]*\)\..*/\1/p' <<<"$out" | paste -sd' ' -)
 [[ $listed_nums == '22 23 24' ]] ||
     fail "ranged -l printed row numbers '$listed_nums' - rows must keep the selection anchors a range addresses"
+# Pairing, not just numbers: every printed anchor must carry the SAME name
+# the unfiltered listing pairs it with. Names were cross-checked only on the
+# dry-run printer path before, so an anchor↔name mispairing confined to the
+# -l path passed (owner directive 2026-10-08).
+listed_pairs_24=$(rows_pairs | paste -sd' ' -)
+expected_l24=$(run -l -g git; rows_pairs | sed -n '22,24p' | paste -sd' ' -)
+[[ $listed_pairs_24 == "$expected_l24" ]] ||
+    fail "ranged -l pairs '$listed_pairs_24' but the listing pairs anchors 22-24 as '$expected_l24'"
+
+# One open-ended form end-to-end: N.. runs from its anchor to the end of the
+# selection — 22.. is the listing's rows 22 through the last, numbers and
+# names alike.
+run -n -g git 22..
+require_ok 'the open-ended range -g git 22..'
+open_nums=$(sed -n 's/^ *\([0-9][0-9]*\)\..*/\1/p' <<<"$out" | paste -sd' ' -)
+open_nums_want=$(seq 22 "$git_rows" | paste -sd' ' -)
+[[ $open_nums == "$open_nums_want" ]] ||
+    fail "open-ended 22.. printed row numbers '$open_nums', want '$open_nums_want' (anchor 22 through the end of the selection)"
+open_rows_want=$(run -l -g git; rows | sed -n "22,\$p" | paste -sd' ' -)
+[[ $(rows | paste -sd' ' -) == "$open_rows_want" ]] ||
+    fail "open-ended 22.. rows '$(rows | paste -sd' ' -)' but the listing from anchor 22 on is '$open_rows_want'"
 
 # --- range mistakes are named ---------------------------------------------
 run -n -g git 900..950

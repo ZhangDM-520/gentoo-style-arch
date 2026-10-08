@@ -8455,6 +8455,11 @@ function main
     # is what the expansion added, reported for builds and dry runs: a bare name
     # can silently become a whole consumer-closure run.
     set -l requested
+    # The same request WITHOUT the app-prompt filter. It is the anchor space
+    # row indices live in (see "Stable selection indices" below): `-l -g app`
+    # prints it unfiltered, so a prompted run must number its rows from it too.
+    set -l requested_full
+    set -l prompt_filtered 0
     set -l build_list
     if test (count $packages) -gt 0
         set -l canonical_packages
@@ -8473,6 +8478,7 @@ function main
             if test $status -ne 0
                 return 1
             end
+            set -l gl_unfiltered $gl
             # ── app prompt layer (decisions: TTY build/-n prompt, -l and
             # non-TTY take the whole group; filtered $gl then flows through
             # the unchanged pipeline below) ──────────────────────────────
@@ -8487,6 +8493,7 @@ function main
                         return 1
                     end
                     set gl $chosen
+                    set prompt_filtered 1
                 else
                     ui_info "-g app: no TTY — building the whole app group (prompt skipped)"
                 end
@@ -8502,6 +8509,7 @@ function main
                 end
             end
             set -a requested $gl
+            set -a requested_full $gl_unfiltered
         end
     end
     # Positional packages may be combined with groups
@@ -8515,9 +8523,13 @@ function main
             end
         end
         set -a requested $packages
+        set -a requested_full $packages
     end
     if test (count $requested) -gt 0
         set requested (printf '%s\n' $requested | awk '!seen[$0]++')
+    end
+    if test (count $requested_full) -gt 0
+        set requested_full (printf '%s\n' $requested_full | awk '!seen[$0]++')
     end
     # Every selection form — positional refs, group members and app-prompt rows
     # alike — expands to ONE consumer closure over the whole request unless
@@ -8550,8 +8562,22 @@ function main
         return 1
     end
 
-    # Topological sort
-    set -l sorted (topo_sort (string join ' ' $build_list))
+    # Topological sort. When the app prompt filtered the selection, the sort
+    # runs over the UNFILTERED closure (the anchor space) and the run's rows
+    # are cut out of it below; every other path sorts exactly what will build.
+    set -l anchor_list $build_list
+    if test $prompt_filtered -eq 1
+        if test $no_deps_flag -eq 1
+            set anchor_list $requested_full
+        else
+            set -l full_expanded (expand_consumers $requested_full)
+            if test $status -ne 0
+                return 1
+            end
+            set anchor_list $full_expanded
+        end
+    end
+    set -l sorted (topo_sort (string join ' ' $anchor_list))
     if test (count $_TOPO_BLOCKED) -gt 0
         ui_error "selection contains a dependency cycle or unresolved dependency"
         for pkg in $_TOPO_BLOCKED
@@ -8564,14 +8590,44 @@ function main
     # rows through every later filter so `-l`/`-n` always print the anchors
     # the range parser uses (owner directive 2026-10-06: a listing that
     # renumbers from 1 after a range is applied makes operators mis-anchor).
+    # Anchors live in the UNFILTERED closure space: a row's index is its
+    # 1-based position in the whole (deduped, consumer-expanded, topo-sorted)
+    # selection BEFORE any app-prompt filtering, so one package prints one
+    # number in `-l -g app` and in a prompted run alike, across invocations
+    # and prompt toggles (owner directive 2026-10-08). Survivors of a prompt
+    # filter keep those anchors — printed numbers may carry gaps, which is
+    # intended and honest.
     set -l sel_idx (seq (count $sorted))
+    set -l anchor_total (count $sorted)
+    if test $prompt_filtered -eq 1
+        # Cut the run's rows out of the anchor space, in anchor order, each
+        # keeping its anchor. The run set is a subset of the anchor space
+        # (consumer expansion is monotone in its seed), and a subsequence of
+        # a topological order is a valid order of the sub-selection.
+        set -l run_keys (_topo_key $build_list)
+        for key in $run_keys
+            set -f _RUNROW_$key 1
+        end
+        set -l anchor_keys (_topo_key $sorted)
+        set -l kept
+        set -l kept_idx
+        for k in (seq (count $sorted))
+            set -l mbr_var _RUNROW_$anchor_keys[$k]
+            if set -q $mbr_var
+                set -a kept $sorted[$k]
+                set -a kept_idx $sel_idx[$k]
+            end
+        end
+        set sorted $kept
+        set sel_idx $kept_idx
+    end
 
     # Apply range filters (e.g. 22..38, 22.., ..15). Indices address the
     # SELECTION in build order — the list `-l -g GROUP` prints, which is
     # not the whole-set order a bare `-l` prints. Naming the bounds on a miss is
     # the difference between a typo and an unexplained empty build.
     if test (count $ranges) -gt 0
-        set -l total (count $sorted)
+        set -l total $anchor_total
         set -l indices
         for range in $ranges
             set -l parts (string split '..' $range)
@@ -8616,13 +8672,22 @@ function main
                 set -a indices $i
             end
         end
-        # Deduplicate indices and sort
+        # Deduplicate indices and sort. The values are ANCHORS — positions in
+        # the unfiltered closure — not row slots: a prompt-filtered run's rows
+        # carry gaps, and k..k must select the package whose anchor is k, the
+        # same package `-l -g GROUP` shows at index k (2026-10-08).
         set -l unique_indices (printf '%s\n' $indices | sort -nu)
+        for i in $unique_indices
+            set -f _RANGE_SEL_$i 1
+        end
         set -l filtered
         set -l filtered_idx
-        for i in $unique_indices
-            set -a filtered $sorted[$i]
-            set -a filtered_idx $sel_idx[$i]
+        for k in (seq (count $sorted))
+            set -l want_var _RANGE_SEL_$sel_idx[$k]
+            if set -q $want_var
+                set -a filtered $sorted[$k]
+                set -a filtered_idx $sel_idx[$k]
+            end
         end
         set sorted $filtered
         set sel_idx $filtered_idx
