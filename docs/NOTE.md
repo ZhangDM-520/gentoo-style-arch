@@ -37,6 +37,41 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-09 — run #77 libical wall: `package()` reached for license files by bare relative path from `$srcdir`
+
+**Symptom.** Run #77 climbed to 122 green rows (gd, ripgrep and the whole
+earlier tail cleared) and died at `libical failed 1 76 build-failed` — but the
+cmake build and install were fully green; `package()` then failed with
+`install: cannot stat 'LICENSE.txt'` and `'COPYING.LESSER.txt'`.
+
+**Root cause.** makepkg starts every function in `$srcdir`, and this recipe
+never `cd`s in `package()` (the build uses `cmake -S $pkgname -B build` style).
+The license install's bare filenames therefore pointed at nonexistent
+`$srcdir/LICENSE.txt`, while the files live in the extracted clone
+(`$srcdir/libical/…`). A latent first-build bug — libical had never been
+attempted before this window (it sits deep in the 251..400 order) — not an
+icu-remainder casualty despite being one of the rule-30 victims.
+
+**Fix.** Qualify both operands (`$pkgname/LICENSE.txt
+$pkgname/COPYING.LESSER.txt`). Sibling scan of every bare
+`install -Dm644 LICENSE/COPYING…` site in the set: `man-db` and `socat` both
+`cd` into their source dir first and are correct — libical was the only broken
+site.
+
+**Validation.** `bash -n` parse OK; `makepkg --printsrcinfo` diff-clean.
+Rehearsal in `$W` over the dirty tree: run record `libical succeeded 0 37 ok`,
+archive `libical-4.0.6-1.1` installed 06:54 with both license files under
+`/usr/share/licenses/libical/` and `libical.so=4.0-64`-family provides.
+Rule 38 respected — the `$W` twin got the semantic change by in-place edit,
+keeping the version-sync mark `pkgrel=1.1`. Battery green in the gap.
+
+**Rule.** A recipe that skips the `cd` (cmake/meson `-S` style) must qualify
+every path in `package()` — bare source-tree filenames only fail at
+`package()` time, after the entire build has succeeded, which makes them
+look like build failures in the run record. And a rule-30 icu victim failing
+is not automatically an icu failure: read the last lines before reaching for
+the ABI story.
+
 ## 2026-10-09 — run #76 gd wall: `git apply` inside a git work tree silently skips everything outside the current subdirectory
 
 **Symptom.** Run #76 stopped at `gd failed 1 2 build-failed`: `patch`'s

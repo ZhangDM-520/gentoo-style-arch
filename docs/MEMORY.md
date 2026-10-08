@@ -1358,6 +1358,14 @@ going stale.
 
 ### Queued (claim by editing this section)
 
+- **Prune the startup stale-manifest sweep** (2026-10-09, campaign latency):
+  the builder's `*.gsa-vcs-revisions.tmp.*` sweep uses `-not -path '*/src/*'`
+  style filters, which *descend* every `src/`/`pkg/`/`build/` tree first — on
+  the USB workspace that is 6–8 D-state minutes per builder invocation
+  (probe, rehearsal, and run alike), and it grows as the heavy trees
+  accumulate. Same result set at near-zero cost: `find packages \( -name src
+  -o -name pkg -o -name build \) -prune -o -type f -name '*.gsa-vcs-revisions.tmp.*' -print`.
+  Needs a fixture pinning the pruned and unpruned result sets as equal.
 - **Pre-install package-internal NEEDED probe** (2026-10-07, from the run #53
   wall): the post-install NEEDED probe stops a run but cannot prevent the
   `pacman -U` landing — run #53 left `png2pnm`/`pnm2png` installed with a
