@@ -37,6 +37,41 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-08 — run #71 mold-git wall: upstream's 3.x workspace renamed `mold-cli` → `mold`, the PGO phases named the dead member
+
+**Symptom.** Run #71 (251..400) died 19 s into mold-git at PGO Phase 1:
+`error: package ID specification 'mold-cli' did not match any packages`
+(cargo's hint suggested `mold-elf`, its closest-match guess — not the
+right target).
+
+**Root cause.** mold-git tracks upstream master; the 3.x workspace
+restructure renamed the CLI member: `cli/Cargo.toml` now declares
+`name = "mold"` (bin `mold`) where 2.x said `mold-cli`, with `mold-elf`
+being the *library* in `elf/`. The recipe's four `cargo build --frozen
+--release -p mold-cli` invocations (phase 1, two training relinks, and
+the no-profile fallback) plus phase 3 named the dead member. The training
+touch target `cli/main.rs` and the binary path `target/release/mold` were
+already correct.
+
+**Fix.** Rename the package ID in `packages/core/mold-git/PKGBUILD`
+(`-p mold-cli` → `-p mold`, 4 build invocations + the phase-2 comment).
+No metadata moves: printsrcinfo diff empty.
+
+**Validation.** `bash -n`; printsrcinfo diff clean. Rehearsed in `$W`
+over the dirty `src/` (`-s -i --no-deps --install mold-git`): rc 0 in
+472 s, run record `mold-git succeeded 0 472 ok`, full PGO path taken
+(`15 .profraw` files, Phase 3 optimized build — fallback not hit),
+installed 3.0.0.r48.gc28bbdf7-1 with `ld.mold` → `mold` and
+`/usr/libexec/mold/ld` in place. Battery PASS in the gap.
+
+**Rule.** A `-p <member>` pin is a build-time contract with an upstream
+workspace layout the recipe does not own: a workspace restructure breaks
+it with cargo's own error, not a build failure with a cause. Read the
+workspace's current member names (`Cargo.toml` `name` fields) when a
+rolling recipe's cargo invocation stops resolving — and trust cargo's
+"similar name" hint only after checking which member produces the binary
+(the install seam names it: `target/release/<bin>`).
+
 ## 2026-10-08 — range anchors moved to the unfiltered closure space (the fca9ae2 app-prompt gap)
 
 **Symptom.** The fca9ae2 review confirmed the selection-index anchor

@@ -101,7 +101,7 @@ build() {
   msg "PGO Phase 1: instrumented build"
   RUSTFLAGS="${_rustflags} -Cprofile-generate=${_pgo_dir}" \
     CARGO_PROFILE_RELEASE_LTO=false \
-    cargo build --frozen --release -p mold-cli
+    cargo build --frozen --release -p mold
 
   # Phase 2: training by self-relink. The instrumented binary is copied
   # aside and exposed as ld.mold (and mold) at the FRONT of PATH, so the
@@ -124,7 +124,7 @@ build() {
   local _run
   for _run in 1 2; do
     # Removing the output plus touching exactly one crate source dirties only
-    # the mold-cli unit (RUSTFLAGS are identical to phase 1), forcing cargo
+    # the mold cli unit (RUSTFLAGS are identical to phase 1), forcing cargo
     # to recompile that unit and relink through the PATH route.
     rm -f "${_bin}"
     touch cli/main.rs
@@ -132,7 +132,7 @@ build() {
       PATH="${_train}:${PATH}" \
       RUSTFLAGS="${_rustflags} -Cprofile-generate=${_pgo_dir}" \
       CARGO_PROFILE_RELEASE_LTO=false \
-      cargo build --frozen --release -p mold-cli
+      cargo build --frozen --release -p mold
   done
 
   local profraw_count
@@ -142,7 +142,7 @@ build() {
     RUSTFLAGS="${_rustflags} -Cstrip=symbols" \
       CARGO_PROFILE_RELEASE_LTO=fat \
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 \
-      cargo build --frozen --release -p mold-cli
+      cargo build --frozen --release -p mold
     rm -rf "${_pgo_dir}"
     return 0
   fi
@@ -158,7 +158,7 @@ build() {
   RUSTFLAGS="${_rustflags} -Cprofile-use=${_pgo_dir}/merged.profdata -Cstrip=symbols" \
     CARGO_PROFILE_RELEASE_LTO=fat \
     CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 \
-    cargo build --frozen --release -p mold-cli
+    cargo build --frozen --release -p mold
   rm -rf "${_pgo_dir}"
 }
 
