@@ -39,7 +39,16 @@ build() {
   command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
   export LDFLAGS+=" ${_mold}"
 
-  ./configure --prefix=/usr
+  # trim: the python-volume_key split is dropped together with its _pick
+  # helper/path, its split-install path, its optdepends entry and the
+  # python/python-setuptools/swig makedepends (and the python3-config CFLAGS
+  # bit in build()) — this recipe ships the C library + volume_key tool only.
+  # The bindings must ALSO be disabled at configure: the trim removed their
+  # makedepends but the autotools build kept compiling the SWIG wrapper
+  # (run #78 wall — Python.h unresolved, and configure's "Python 2" probe
+  # happily latches onto any `python` >= 2.4). configure.ac gates both
+  # wrappers behind HAVE_PYTHON/HAVE_PYTHON3, so turn both off.
+  ./configure --prefix=/usr --without-python --without-python3
   # prevent excessive overlinking due to libtool
   sed -i -e 's/ -shared / -Wl,-O1,--as-needed\0/g' libtool
   make -j"${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"

@@ -37,6 +37,42 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-09 — run #78 volume_key wall: the trim dropped the python makedepends but not the python *build* — `Python.h` unresolved
+
+**Symptom.** Run #78 reached 135 green rows and died at `volume_key failed 1 12
+build-failed`: `volume_key_wrap.c:149: fatal error: Python.h: No such file or
+directory` — the SWIG wrapper compiling with no python include path at all.
+
+**Root cause.** The recipe's trim (its own header comment) dropped the
+`python-volume_key` split and the python/python-setuptools/swig makedepends —
+but never disabled the bindings in the *build*. `configure.ac` probes "Python
+2" with `AC_PATH_PROGS([PYTHON], [python2.7 … python])` + `AM_PATH_PYTHON([2.4])`,
+which happily latches onto any `python` ≥ 2.4 (here `/usr/bin/python` = 3.14)
+and sets HAVE_PYTHON — so `python/python` kept building the shipped
+`volume_key_wrap.c` with empty `PYTHON_INCLUDES`. The mirror image of the
+"disabled feature leaves packaging steps" rule: the makedepends were removed
+while the feature kept building.
+
+**Fix.** `./configure --prefix=/usr --without-python --without-python3` —
+`configure.ac` gates both wrappers behind HAVE_PYTHON/HAVE_PYTHON3, so the
+switch is exactly the seam the trim should have used, and no makedepend is
+reintroduced.
+
+**Validation.** `bash -n` parse OK; `makepkg --printsrcinfo` diff-clean.
+Rehearsal in `$W` over the dirty tree: run record `volume_key succeeded …`,
+archive installed with `libvolume_key.so` provides and no python payload.
+Battery green in the gap. Rule 38: the `$W` twin was reconciled byte-for-byte
+with canonical except its version-sync mark (`pkgrel=12.1`).
+
+**Rule.** Trimming a split package must disable its *build*, not just its
+makedepends and packaging paths — autotools probes will find a substitute tool
+on PATH and build the feature anyway (here a "Python 2" probe matching Python
+3.14). When a trimmed feature still compiles, the trim is incomplete: find the
+build system's own disable switch. (Campaign note from the same run: the
+`core`-tail starvation of runs #76–#78 was scheduler-correct — core packages
+dispatch solo, so they wait for both lanes to drain; each run failed on a cheap
+package before the drain reached them.)
+
 ## 2026-10-09 — run #77 libical wall: `package()` reached for license files by bare relative path from `$srcdir`
 
 **Symptom.** Run #77 climbed to 122 green rows (gd, ripgrep and the whole

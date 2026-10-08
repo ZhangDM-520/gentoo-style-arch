@@ -893,6 +893,17 @@
     GIT_WORK_TREE="$PWD" git apply -p1 …` (correct in and out of a repo).
     The `git apply` sites inside recipes' own clones (glib2-git,
     hermes-agent-git) are unaffected — cwd is their repo root.
+47. **Trimming a split package must disable its *build*, not just its
+    makedepends and packaging paths** (2026-10-09 run #78 volume_key): the
+    python split was trimmed and its python/swig makedepends removed, but
+    `configure` kept building the SWIG wrapper — its "Python 2" probe
+    (`AC_PATH_PROGS` + `AM_PATH_PYTHON([2.4])`) matches any `python` ≥ 2.4
+    and found 3.14, then compiled `volume_key_wrap.c` with empty
+    `PYTHON_INCLUDES` (`Python.h` unresolved). The build system's own
+    disable switch is the seam (`--without-python --without-python3`
+    → HAVE_PYTHON/HAVE_PYTHON3 conditionals). Diagnostic: a trimmed feature
+    that still compiles means the trim was incomplete — probes find
+    substitute tools on PATH regardless of makedepends.
 35. **Never `cd` inside a fish command substitution — fish 4.9.3 runs the
     substitution in-process and the `cd` leaks to the caller**
     (2026-10-07 run #56 nodejs): `(cd "$x" && pwd -P)` silently moved the
