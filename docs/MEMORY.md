@@ -761,7 +761,11 @@
     tree for the missing include and patch every occurrence in one patch —
     ninja stops at the first failure and the next one will wall the retry.
     Expect one such wall per include-family after a major toolchain move;
-    see `docs/NOTE.md` 2026-10-08 run #59.
+    see `docs/NOTE.md` 2026-10-08 run #59. When the new diagnostic fires
+    in *generated* sources (flex/bison output) instead of code you can
+    patch, drop the build system's `-Werror` promotion at the recipe seam
+    (or use its opt-out variable) — keep the warning visible, never patch
+    generator output (`docs/NOTE.md` 2026-10-08 runs #62–#64).
 38. **`$W` sync must reset only what the incoming commits change — the
     builder's version-sync marks are runtime state** (2026-10-08): each
     run's sync phase rewrites recipe `pkgver`/`pkgrel` in `$W` to track

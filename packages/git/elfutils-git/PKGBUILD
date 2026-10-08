@@ -29,6 +29,13 @@ build() {
 
   cd elfutils
 
+  # GCC-snapshot diagnostics on generated flex/bison sources (-Wyacc,
+  # -Wnull-dereference in i386_lex.c) are promoted to errors by the
+  # maintainer-mode -Werror in config/eu.am. Keep the warnings visible but
+  # non-fatal; maintainer mode itself stays on because a git checkout lacks
+  # the generated files (configure refuses without it).
+  sed -i 's/,-Werror)/,)/g' config/eu.am
+
   autoreconf -fi
   CFLAGS="$CFLAGS -ffat-lto-objects -g" \
   CXXFLAGS="$CXXFLAGS -ffat-lto-objects -g" \

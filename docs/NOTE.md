@@ -76,6 +76,49 @@ dependency edges, and incident root causes are unaffected by the renames.
   contract (the recipe edits that *add* patches use `--fuzz=0`); recorded
   here so the audit's question is answered, not silently dropped.
 
+## 2026-10-08 — runs #62–#64 (251..400 attempts): the parked pre-C23 libunwind wall, then elfutils' maintainer-mode `-Werror` vs GCC-snapshot diagnostics on *generated* flex/bison sources
+
+- **Symptom 1 (run #62, first 251..400 attempt).** `libunwind-git` — one of
+  the four PARKED movers (`#tag=v1.8.3`) — failed to compile: the parked
+  generation predates C23 and GCC 17 now defaults to it. Fix (9112445):
+  add `-std=gnu17` to that recipe's compile flags — pin the language
+  standard the parked code was written for, never the toolchain.
+- **Parked-pkgver note.** The static `pkgver` hints written for the four
+  parked recipes carry 7-char git hashes while each recipe's `pkgver()`
+  emits 8-char (e.g. `1.8.3.r0.g44aa1a5b`); the sync phase self-corrects
+  the committed hints at build time. Left as-is — cosmetic only.
+- **Symptom 2 (run #63, second attempt).** 26/150 built (parked
+  `libplist-git` ✓, `libunwind-git` ✓ 25 s), then `elfutils-git` died 26 s
+  in: `i386_gendis`' LTO link made bison's
+  `libcpu/i386_parse.y:243 … POSIX Yacc does not support %defines [-Wyacc]`
+  fatal (`lto1: all warnings being treated as errors`). Dispatch stopped;
+  124 never-started.
+- **Symptom 2b (run #64, resumed after a host power loss mid-run — not a
+  repo defect).** Same wall, *second warning class*:
+  `-Werror=null-dereference` on the flex-generated `i386_lex.c`, again at
+  the `i386_gendis` LTO link.
+- **Root cause.** elfutils' `config/eu.am` bakes plain `-Werror` into
+  `AM_CFLAGS`/`AM_CXXFLAGS` (per-object `$(*F)_no_Werror` escape hatch),
+  and `--enable-maintainer-mode` is mandatory for a git checkout
+  (configure refuses without generated files such as
+  `libdw/known-dwarf.h`). GCC-snapshot's newer diagnostics fire in code
+  the *generators* emit (flex/bison), which cannot be patched — otherwise
+  one wall per warning class.
+- **Fix.** `packages/git/elfutils-git/PKGBUILD` strips the promotion
+  before `autoreconf`
+  (`sed -i 's/,-Werror)/,)/g' config/eu.am`), keeping maintainer mode on
+  and every warning visible — the house idiom shared with `tar`
+  (`WERROR_CFLAGS=""`), `libosinfo`, `editorconfig-core-c`.
+- **Validation.** `bash -n` + `makepkg --printsrcinfo` diff-clean; green
+  rehearsal on the live run path (`--no-deps --install elfutils-git`,
+  dirty `src/` kept): rc 0, `elfutils-git succeeded`, both outputs
+  `0.196.r15.g0391c894-1` installed, and both former walls reappear in
+  the build log as plain `warning:` lines.
+- **Rule.** When a toolchain-snapshot diagnostic lands in *generated*
+  sources, drop the build system's `-Werror` promotion at the recipe seam
+  (or use its opt-out variable) — never patch generator output, never
+  disable the generator stage.
+
 ## 2026-10-08 — run #61 (113/113): closer window complete — zsh fix verified live, and a sync-churn lesson (rule 38) that was costing one gcc-snapshot rebuild per run
 
 - **Symptom/Outcome.** Run #61 built all 113 slots of the closer window
