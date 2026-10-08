@@ -37,6 +37,36 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-08 — run #69 libebur128-git wall: CMake 4 dropped pre-3.5 compatibility — policy floor goes at the recipe seam
+
+**Symptom.** Run #69 (251..400, 32 dispatched before the wall) stopped 1 s
+into libebur128-git: `CMake Error at CMakeLists.txt:1 (cmake_minimum_required):
+Compatibility with CMake < 3.5 has been removed from CMake` — the configure
+never started.
+
+**Root cause.** Upstream libebur128's top-level `cmake_minimum_required`
+predates 3.5 (last release 2026-era git master still carrying it), and the
+host's cmake-git 4.x removed the compatibility shim.
+
+**Fix.** `packages/git/libebur128-git/PKGBUILD` adds
+`-DCMAKE_POLICY_VERSION_MINIMUM=3.5` to the configure — the seam the
+diagnostic itself names and the one sword already uses. Class scan of the
+window's other plain-CMake recipes (remaining 87 never-started; upstream
+`CMakeLists.txt` floors fetched for the four old-lineage suspects: fdk-aac
+3.10, libmysofa 3.10, OpenJPH 3.12, openjpeg 3.10…3.31.5) — no other
+victim. `tests/run-all.sh` fixtures unchanged (recipe-flag edit).
+
+**Validation.** `bash -n`; `GIT_CONFIG_COUNT=0 makepkg --printsrcinfo`
+diff-clean; rehearsed in `$W` over the dirty `src/` of the failed attempt
+(`-s -i --no-deps --install libebur128-git`) → `outcome: success`, rc 0
+(9 s, archive produced and installed). Battery PASS in the same gap.
+
+**Rule (MEMORY 41).** An upstream whose `cmake_minimum_required` floor is
+below 3.5 must carry `-DCMAKE_POLICY_VERSION_MINIMUM=3.5` at the recipe's
+configure seam; confirm the floor from the upstream `CMakeLists.txt`
+before bulk-adding the flag (a no-op flag on modern projects is still
+unnecessary churn).
+
 ## 2026-10-08 — run #68 doxygen-git wall: `ccache <farm-path>` double-wrap pins the cache key to the farm symlink, so toolchain updates never evict — stale LTO bytecode replayed into the drift-cleaned tree
 
 **Symptom.** Run #68 (251..400, 59 ok) stopped at doxygen-git:

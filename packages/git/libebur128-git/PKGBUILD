@@ -28,10 +28,13 @@ build() {
 
   # CMAKE_BUILD_TYPE=None: makepkg.conf owns the opt level (no hard-coded -O3;
   # the AUR reference's "Release" would inject one)
+  # CMAKE_POLICY_VERSION_MINIMUM=3.5: upstream's cmake_minimum_required predates
+  # 3.5 and CMake 4 removed that compatibility (run #69 wall).
   cmake -B _build -S "$_pkgname" \
     -DCMAKE_BUILD_TYPE=None \
     -DCMAKE_INSTALL_PREFIX=/usr \
-    -DCMAKE_INSTALL_LIBDIR=lib
+    -DCMAKE_INSTALL_LIBDIR=lib \
+    -DCMAKE_POLICY_VERSION_MINIMUM=3.5
   cmake --build _build
 }
 

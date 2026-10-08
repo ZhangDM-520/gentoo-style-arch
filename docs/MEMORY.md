@@ -823,6 +823,15 @@
     update (stale non-LTO codegen is the silent half of this class).
     Recipes keeping the wrap: none — doxygen-git, llvm-git and rocm-llvm
     dropped it 2026-10-08.
+41. **An upstream with a sub-3.5 `cmake_minimum_required` gets the policy
+    floor at the recipe seam** (2026-10-08 run #69 libebur128-git): CMake
+    4 removed the pre-3.5 compatibility, so such a configure dies before
+    any build work. Add `-DCMAKE_POLICY_VERSION_MINIMUM=3.5` to the
+    recipe's cmake invocation (the seam the diagnostic itself names;
+    sword already carries it). Confirm the upstream floor from its
+    top-level `CMakeLists.txt` before bulk-adding — on modern projects
+    the flag is no-op churn. A wall here is 1 s into the build, not a
+    compile error: recognise the shape from the log's first lines.
 35. **Never `cd` inside a fish command substitution — fish 4.9.3 runs the
     substitution in-process and the `cd` leaks to the caller**
     (2026-10-07 run #56 nodejs): `(cd "$x" && pwd -P)` silently moved the
