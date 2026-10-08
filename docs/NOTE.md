@@ -76,6 +76,93 @@ dependency edges, and incident root causes are unaffected by the renames.
   contract (the recipe edits that *add* patches use `--fuzz=0`); recorded
   here so the audit's question is answered, not silently dropped.
 
+## 2026-10-08 — run #66 (42/150) + repair wave: a launcher-env wall, then calf's misplaced `install(CODE)` keyword, then chromaprint exposing the libsodium `.so.30` break
+
+- **Symptom 1 (launcher env).** `calf` and `chromaprint` failed 3–4 s in at
+  `Validating source files with b2sums...` — `fatal: cannot use bare
+  repository '/home/zhangdm/.cache/gsa-src/<pkg>' (safe.bareRepository is
+  'explicit')`, then `One or more files did not pass the validity check`.
+  42/150 had passed before the wall.
+- **Root cause 1.** The relaunch omitted `GIT_CONFIG_COUNT=0` (MEMORY
+  rule 2 — operator error on the agent side). makepkg's git *fetch* path
+  guards bare mirrors (`-c safe.bareRepository=all`, pacman 7's own fix),
+  but the **integrity path for anchored non-SKIP VCS checksums** runs
+  unguarded git on the SRCDEST bare mirror; SKIP-sum recipes never touch
+  it — which is why 42 slots (skips, tarballs, SKIP-sum git sources
+  including a green `zlib-ng-git` "Updating … git repo") passed before
+  the first anchored recipe tripped it.
+- **Fix 1.** Relaunch every builder/makepkg invocation from an agent
+  shell with `GIT_CONFIG_COUNT=0` (precedent: `GIT_CONFIG_COUNT=0 fish
+  build-all.fish --no-deps glibc-git`). No recipe change; with the
+  prefix both recipes passed retrieval/validation and walled on their
+  real build errors instead.
+- **Wall 2 (calf).** `install CODE given unknown argument:
+  "RESULT_VARIABLE"` at every evaluated `install(CODE)` site — upstream
+  0.90.9 *and* master misplace `RESULT_VARIABLE`/`OUTPUT_VARIABLE`
+  (they are `execute_process` keywords) as `install(CODE)` arguments,
+  which cmake-git's strict parser rejects at configure. The paired
+  `if(NOT ${calfResult} EQUAL 0)` checks are dead at configure time
+  (an unset-var `if(NOT EQUAL 0)` parses silently false — verified with
+  a minimal repro).
+- **Fix 2.** `packages/stable/calf/0001-install-CODE-drop-misplaced-
+  RESULT_VARIABLE.patch` — drops the misplaced kwargs and their dead
+  checks at all four sites (three evaluated + the sordi one); applied in
+  `prepare()` with `patch -Np1 --fuzz=0`. REUSE annotation added.
+- **Wall 3 (chromaprint).** CMake's GTest discovery ran the freshly
+  linked `tests/all_tests` → `error while loading shared libraries:
+  libsodium.so.26` → `GoogleTestAddTests: Error running test
+  executable`. Chain: all_tests → ffmpeg libs → libzmq → libsodium.
+- **Root cause 3.** libsodium-git (floating master) built+installed
+  07:31 at `SODIUM_LIBRARY_VERSION 30:0:0` (soname `.so.30`) while
+  every installed linker wants `.so.26` — rule 30's "soname beats
+  pkgver" again (the pkgver still read 1.0.17/1.0.18-era). Stock
+  `libzmq`/`libostree`/`ostree-prepare-root` and in-set `noctalia-git`
+  stranded. Disposition per the look-ahead split: PARK — next entry.
+- **Validation.** After the park + heal batch: `calf 0.90.9-2.1` ✓ 29 s
+  (configure passes, sordi check runs at install) and `chromaprint
+  1.6.1-2.1` ✓ 21 s (discovery lists tests against the healed
+  runtime); both installed.
+
+## 2026-10-08 — libsodium-git PARKED at 1.0.22-RELEASE (`.so.26`) + a four-package heal batch: landing a restoration past the soname gate
+
+- **Decision.** Fifth parked mover (cf. the 2026-10-08 look-ahead four):
+  `libsodium-git` → `#tag=1.0.22-RELEASE?signed`. Master carries
+  `SODIUM_LIBRARY_VERSION 30:0:0` (`.so.30`); 1.0.19-RELEASE through
+  1.0.22-RELEASE all ship `.so.26` (libtool `current-age`), so
+  1.0.22-RELEASE is the newest safe generation and matches every
+  installed linker. One-line reversible — unpin and heal the consumers
+  in one batch when adopting.
+- **Signature.** `git verify-tag 1.0.22-RELEASE` → Good signature by
+  `0C7983A8FD9A104C623172CB62F25B592B6F76DA`, Frank Denis's
+  release-signing **[S] subkey** of the documented primary `54A2B889…`;
+  per rule 31 the subkey fingerprint is added to `validpgpkeys` with a
+  role comment, and the pin carries `?signed`.
+- **The install gate is restoration-blind.** Layer 3 refuses ANY bare
+  soname provide move — including `30-64 → 26-64`, which *repairs* its
+  consumers — until every installed linking consumer is covered:
+  (a) same `pacman -U`, or (b) in-run repair (member in
+  `$_GSA_RUN_ORDER` strictly after the provider). Coverage (a) via
+  `-ia` is a trap for a surface move: consumers would compile against
+  the still-installed old generation and record the old soname.
+  The sanctioned landing path is the heal batch, sequential `-i`:
+  `fish build-all.fish -i --lanes 2 --jobs 11 --intensity max
+  --no-deps libsodium-git zeromq ostree noctalia-git` — order proof:
+  global topo positions 168 < 325/469/541, so the consumers already
+  sort after the provider with no new edges.
+- **Outcome.** rc 0: park built 22 s and installed (gate accepted on
+  `repair` rows), zeromq ✓ 46 s, ostree + noctalia-git rebuilt and
+  installed against `.so.26`. Runtime closure verified: `libsodium.so.26`
+  resolves for libzmq, libostree/ostree-prepare-root and noctalia.
+- **icu 78→79 remainder (rule 30) needs no separate wave.** The
+  residual `libicuuc.so.78 => not found` closure gap (libical,
+  libqalculate-git, Qt5, Qt6, samba chains) names only in-set victims
+  at order positions 327–584 — none in completed slots — so the
+  campaign's own windows rebuild them (libqalculate 327 + libical 388
+  in the current window) and the end-state `ldd clean` check verifies.
+- **Rule.** MEMORY rule 36 extended: a restoration park is still a move
+  to the gate; land it with the heal batch (`--no-deps -i <provider>
+  <installed linking consumers>`), never `-ia` for a surface move.
+
 ## 2026-10-08 — run #65 (32/150): the elfutils fix verified live, then libxdp walled on mold's missing `-b binary` — the host LDFLAGS default, not a recipe choice
 
 - **Outcome.** Window `251..400` resumed (`-s`): `elfutils-git` skipped on

@@ -6,11 +6,16 @@
 # Contributor: Alessio Sergi <asergi at archlinux dot us>
 #
 # git build adapted from AUR libsodium-git (reference only) + stock Arch
-# libsodium: tracks upstream master directly (stock pins signed *-RELEASE
-# tags).
+# libsodium: PARKED 2026-10-08 at the last safe generation — tracks a
+# signed *-RELEASE tag instead of master. Master carries
+# SODIUM_LIBRARY_VERSION 30:0:0 (soname .so.30) while the installed
+# linkers (stock libzmq/libostree + /usr/lib/ostree/ostree-prepare-root,
+# and in-set noctalia) want .so.26; 1.0.19-RELEASE through 1.0.22-RELEASE
+# all ship so.26 (libtool current-age). Unpin and heal the consumers in
+# one batch when adopting the new generation.
 
 pkgname=libsodium-git
-pkgver=1.0.18.r575.g66a68f09
+pkgver=1.0.22.RELEASE.r0.g77e1ce5d
 pkgrel=1
 pkgdesc="A modern, portable, easy to use crypto library (git build)"
 arch=('x86_64')
@@ -20,11 +25,13 @@ depends=('glibc')
 makedepends=('git')
 provides=("libsodium=$pkgver" 'libsodium.so')
 conflicts=('libsodium')
-# x.y.z-RELEASE tags are signed; this recipe tracks master so there is no
-# pinned tag to verify — fingerprint kept for documentation only, taken from
-# the stock Arch PKGBUILD (upstream-published release signer).
-validpgpkeys=('54A2B8892CC3D6A597B92B6C210627AABA709FE1') # Frank Denis
-source=("git+https://github.com/jedisct1/libsodium.git")
+# x.y.z-RELEASE tags are signed and the tag pin above is verified at
+# build time (?signed). Fingerprints: the release tags are signed by
+# Frank Denis's [S] signing subkey; the primary is kept for tags signed
+# directly (both from the stock Arch PKGBUILD / upstream-published key).
+validpgpkeys=('54A2B8892CC3D6A597B92B6C210627AABA709FE1'  # Frank Denis (primary)
+              '0C7983A8FD9A104C623172CB62F25B592B6F76DA') # Frank Denis (release-signing subkey; signs 1.0.22-RELEASE)
+source=("git+https://github.com/jedisct1/libsodium.git#tag=1.0.22-RELEASE?signed")
 sha256sums=('SKIP')
 
 pkgver() {

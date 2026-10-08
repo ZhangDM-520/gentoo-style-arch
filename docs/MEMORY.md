@@ -748,8 +748,16 @@
     (`readelf -d` over `/usr/bin /usr/lib /usr/libexec /opt` for the old
     soname) and rebuild/install each in-set replacement in the same wave,
     and (b) treat a tool breaking at *launch* (`error while loading shared
-    libraries`) as this class, not a corrupt-toolchain mystery. See
-    `docs/NOTE.md` 2026-10-07 run #58.
+    libraries`) as this class, not a corrupt-toolchain mystery. (c) the
+    install gate is restoration-blind: a park that moves the surface
+    *back* to the wanted generation (libsodium `.so.30 → .so.26`,
+    2026-10-08) is still a "move" to it — land it with the heal batch
+    `--no-deps -i <provider> <installed linking consumers>` (consumers
+    must sort after the provider in `fish build-all.fish -l` order so
+    in-run repair covers them), and never `-ia` for a surface move,
+    because consumers would compile against the still-installed old
+    generation and record its soname. See `docs/NOTE.md` 2026-10-07 run
+    #58 and 2026-10-08 libsodium park.
 37. **A toolchain bump in this set is a compile-compatibility transition,
     not just an ABI event** (2026-10-08 run #59 nodejs): installing
     `gcc-snapshot` replaces `/usr/bin/g++`, so every later build compiles
