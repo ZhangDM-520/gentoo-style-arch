@@ -176,7 +176,11 @@ fi
 if [[ -n $name_override ]]; then
     checkout_name=$name_override
 else
-    checkout_name=${remote##*/}
+    checkout_name=$remote
+    # Real makepkg strips trailing slashes before taking the basename and
+    # dropping .git (a `url=` ending in `/` is legal — the libyuv shape).
+    while [[ $checkout_name == */ ]]; do checkout_name=${checkout_name%/}; done
+    checkout_name=${checkout_name##*/}
     checkout_name=${checkout_name%.git}
 fi
 checkout=$PWD/$checkout_name
@@ -1028,6 +1032,26 @@ src_rev=$(GIT_CONFIG_COUNT=0 git -C "$src_suffix/workspace/packages/p1/src/remot
 GSA_FAKE_VCS_LAYOUT=srcdir run_case "$src_suffix/workspace" -s p1
 expect_success 'srcdir basename-style unchanged selected branch'
 assert_makepkg_count "$src_suffix/workspace" 1 'srcdir basename-style unchanged selected branch'
+
+# The libyuv entry shape: `url=` carries a trailing slash, so the expanded
+# source ends in '/' and makepkg still derives the checkout name normally
+# (trailing slashes stripped, then basename, then .git dropped). source_filename
+# used to take the basename of the unstripped URL — empty — so the VCS
+# recorder refused a green build with 'missing local checkout for ' (run #73).
+src_slash=$fixture/srcdir-trailing-slash
+init_git_remote "$src_slash/repository"
+make_vcs_workspace "$src_slash/workspace" "$src_slash/repository/remote.git/" branch main basename
+
+GSA_FAKE_VCS_LAYOUT=srcdir run_case "$src_slash/workspace" p1
+expect_success 'srcdir trailing-slash build'
+assert_makepkg_count "$src_slash/workspace" 1 'srcdir trailing-slash build'
+src_slash_manifest=$src_slash/workspace/packages/p1/p1-1.0.0-1-any.pkg.tar.zst.gsa-vcs-revisions
+[[ -f $src_slash_manifest ]] ||
+    fail 'trailing-slash build did not record its VCS baseline'
+recorded=$(awk -F '\t' 'NR > 2 { print $3 }' "$src_slash_manifest")
+src_rev=$(GIT_CONFIG_COUNT=0 git -C "$src_slash/workspace/packages/p1/src/remote" rev-parse HEAD)
+[[ $recorded == "$src_rev" ]] ||
+    fail "trailing-slash recorded $recorded; src/ checkout is $src_rev"
 
 # ─── Built-output set completeness (R-F2) ────────────────────────────────────
 # A split recipe's currency is a property of the whole OUTPUT SET: an archive

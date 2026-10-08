@@ -37,6 +37,47 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-08 — run #73 libyuv wall: a trailing-slash `url=` emptied the VCS recorder's checkout name — green build refused
+
+**Symptom.** Run #73 died after a fully green libyuv build at the
+builder's post-build step: `✗ libyuv: build succeeded but VCS revisions
+could not be recorded for libyuv-…pkg.tar.zst: missing local checkout
+for ` — note the empty name after "for". The recipe had built and
+packaged normally.
+
+**Root cause.** The recipe's `url=` ends in `/`
+(`https://chromium.googlesource.com/libyuv/libyuv/`) and feeds the source
+line (`git+${url}#commit=…`), so the expanded entry ends in a slash.
+`source_filename` (lib/sources.fish) took the basename by stripping
+`^.*/` from the unstripped URL — which eats the entire empty tail and
+returns nothing — while makepkg derives the checkout name after
+stripping trailing slashes and found `src/libyuv` fine. The recorder is
+fail-closed by design (run #66 lesson), so the empty name refused the
+archive instead of writing a broken record.
+
+**Fix.** `source_filename` now strips trailing slashes before the
+basename (matching makepkg's naming), and the fixture's fake makepkg
+mirrors that derivation (trailing slashes, then basename, then `.git`).
+A new `tests/skip-upstream.sh` case pins the shape end to end: a
+trailing-slash source must record its VCS baseline against the `src/`
+checkout revision.
+
+**Validation.** `fish -n` on build-all.fish + lib/sources.fish; `bash -n`
+on the fixture. Falsification: with the fix reverted, the new case
+reproduces run #73's error byte-for-byte (`missing local checkout for `)
+and the fixture fails; restored, `skip-upstream` and `log-ownership`
+both PASS. Rehearsal in `$W` (`-s -i --no-deps --install libyuv`) rc 0
+in 26 s — run record `libyuv succeeded 0 26 ok`, and the sidecar now
+records the built revision (`…git 644251f252a84bf8ce91ff0aca86a9b16b069ab8`
+= the pinned `#commit=`), installed r2921+644251f25-1.1. Battery in the
+gap before the commit.
+
+**Rule.** URL-derived names must mirror makepkg's derivation exactly —
+strip trailing slashes, then basename, then `.git` — because the recorder
+is fail-closed and a green build can still be refused at the record step.
+An empty name in a recorder error is the signature of a derivation
+mismatch, not a missing checkout.
+
 ## 2026-10-08 — run #71/72 libjxl-git wall: a2x ran under a user-local python shim — pin the manpage interpreter to the system python
 
 **Symptom.** Run #72 died 48 s into libjxl-git at the manpages target:

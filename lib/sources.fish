@@ -1209,6 +1209,11 @@ function source_filename -a entry
     else
         set -l url (source_url $entry); or return 1
         set name (string replace -r '[?#].*$' '' -- $url)
+        # Makepkg derives the checkout name after stripping any trailing
+        # slashes (a `url=` ending in `/` is a legal source, the libyuv
+        # shape): an unstripped slash leaves an empty basename and the VCS
+        # recorder then refuses a green build with 'missing local checkout'.
+        set name (string replace -r '/+$' '' -- $name)
         set name (string replace -r '^.*/' '' -- $name)
     end
     if test -z "$name"
