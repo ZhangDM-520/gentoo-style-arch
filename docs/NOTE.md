@@ -37,6 +37,52 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-08 — run #70 rust-git wall, part 2: libgit2-sys's [1.9.6,1.10) floor — park libgit2-git at v1.9.7 (`main` declares 1.9.0)
+
+**Symptom.** With the makedepend wall gone (entry below), the rust-git
+rehearsal ran 61 min to stage2-tools and died building libgit2-sys
+0.18.7+1.9.6: `failed to probe system libgit2` — the crate probes
+pkg-config for `[1.9.6,1.10.0)` (its build.rs `range_version`) and the
+installed libgit2-git reported 1.9.0.
+
+**Root cause (three parts).** (1) The installed libgit2-git
+(1.9.0.r548.g0551dfd4a) was a freshness-waived-skip survivor — runs
+#67-70 "succeeded" in 3-5 s without rebuilding it. (2) A forced clean
+rebuild proved staleness was not the whole story: upstream `main`'s
+CMakeLists declares `project(libgit2 VERSION "1.9.0")`, so `main` builds
+as 1.9.0 indefinitely and can never satisfy a >=1.9.6 floor. (3) The
+recipe's `pkgver=1.9.7.r279.g935f85131` literal (unreproducible since the
+initial import 719112d — `git describe` on that commit reports
+v1.1.0-279) promised a version no checkout produces and hid the floor
+mismatch until a consumer enforced it.
+
+**Fix.** Park `packages/git/libgit2-git` at `#tag=v1.9.7` (libsodium-git
+park pattern, 6th parked mover): the tag's CMake declares 1.9.7 — inside
+libgit2-sys 0.18.7's `[1.9.6,1.10.0)` and its 0.18.2 sibling's
+`[1.9.0,1.10.0)` alike — and still ships soname libgit2.so.1.9, so every
+consumer relinks unchanged (verified after install: `pkg-config
+--modversion libgit2` = 1.9.7, provide `libgit2.so=1.9-64` identical).
+The tag is lightweight/unannotated upstream, so no `?signed` pin is
+possible. Rejected alternative: vendoring — rust-git's `depends=(libgit2)`
+and the eza/bat `LIBGIT2_NO_VENDOR=1` seams want the system library by
+design.
+
+**Validation.** `bash -n`; printsrcinfo diff = pkgver/provides/source
+(3 lines). Parked rebuild rehearsed in `$W` (`-s -c -i --no-deps
+--install libgit2-git`) rc 0 in 34 s; the rust-git retry then completed
+clean (run record `rust-git succeeded 0 4296 ok`) — libgit2-sys built
+against the system lib, and libssh2-sys (the suspected same-class co-wall)
+compiled clean unmodified. Battery 55/55 PASS in the gap.
+
+**Rule.** A `-sys`/pkg-config version floor is a build-time contract
+invisible in the recipe: a consumer can die on a floor the package's own
+`pkgver` never mentions. When a rolling lib's dev line carries a
+placeholder CMake version (main != release line), park at the release tag
+that declares the version consumers require; and treat an unreproducible
+`pkgver` literal as a red flag — `makepkg --printsrcinfo` echoes whatever
+the literal says, so only `git describe` against the actual checkout
+exposes it.
+
 ## 2026-10-08 — run #70 rust-git wall: the dead `rust` makedepend could not resolve beside house llvm-git — stage0 is downloaded, not system
 
 **Symptom.** Run #70 (251..400, 71 dispatched) died 1 s into rust-git at

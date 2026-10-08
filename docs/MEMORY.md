@@ -1497,6 +1497,15 @@ going stale.
   2.6.1 and builds so.2 (zero provide move; man-db and `file` are the local
   pinners). Revisit tracking master only when upstream stamps master's
   version or a deliberate 3.x ABI lands (then it is a heal-set batch).
+- **libgit2-git is parked at `#tag=v1.9.7` — `main` declares CMake 1.9.0**
+  (2026-10-08, run #70): upstream `main` builds as `project(libgit2 VERSION
+  "1.9.0")` and can never satisfy the pkg-config floors `-sys` consumers
+  enforce at build time (libgit2-sys 0.18.7+1.9.6 probes `[1.9.6,1.10.0)` —
+  rust-git stage2-tools; eza/bat set `LIBGIT2_NO_VENDOR=1` and hit the same
+  probe). v1.9.7 declares 1.9.7 and keeps soname libgit2.so.1.9. The tag is
+  lightweight/unannotated upstream, so no `?signed` pin is possible. Unpin
+  when `main`'s declared version clears the consumers' ranges on both ends.
+  NOTE 2026-10-08 (wall #70 part 2).
 - **llvm-git ↔ rust-git coupled-batch procedure (stock-rust preemption checked
   out 2026-10-07)**: the predicted "stock `rust` pins `llvm-libs` exactly"
   refusal is void — `pacman -Q rust` reports not installed, so nothing outside

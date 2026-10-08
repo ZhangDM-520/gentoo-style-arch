@@ -1,8 +1,18 @@
 # Maintainer: auto-generated
 # AUR reference: libgit2-git (Maintainer: Daniel Micay <danielmicay@gmail.com>)
+# git build adapted from AUR libgit2-git (reference only): PARKED 2026-10-08
+# at the v1.9.7 release tag — upstream `main` declares
+# project(libgit2 VERSION "1.9.0") and can never satisfy the pkg-config
+# floor the -sys consumers enforce at build time (libgit2-sys 0.18.7+1.9.6
+# probes [1.9.6,1.10.0): rust-git stage2-tools; eza/bat set
+# LIBGIT2_NO_VENDOR and hit the same probe). The v1.9.7 tag declares 1.9.7
+# and still ships soname libgit2.so.1.9, so consumers relink unchanged.
+# The tag is lightweight/unannotated upstream, so no ?signed pin is
+# possible. Unpin when `main`'s declared version clears the consumers'
+# ranges on both ends.
 pkgname=libgit2-git
 _pkgname=libgit2
-pkgver=1.9.7.r279.g935f85131
+pkgver=1.9.7.r0.g49e408b32
 pkgrel=1
 pkgdesc="A linkable library for Git (git build)"
 arch=('x86_64')
@@ -13,7 +23,7 @@ depends=('gcc-libs' 'glibc' 'llhttp' 'zlib' 'libssh2' 'openssl' 'pcre2')
 makedepends=('git' 'cmake')
 provides=("libgit2=$pkgver" 'libgit2.so')
 conflicts=('libgit2')
-source=("git+https://github.com/libgit2/libgit2.git")
+source=("git+https://github.com/libgit2/libgit2.git#tag=v1.9.7")
 sha256sums=('SKIP')
 
 pkgver() {

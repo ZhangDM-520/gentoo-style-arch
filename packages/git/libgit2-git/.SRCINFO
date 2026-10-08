@@ -1,6 +1,6 @@
 pkgbase = libgit2-git
 	pkgdesc = A linkable library for Git (git build)
-	pkgver = 1.9.7.r279.g935f85131
+	pkgver = 1.9.7.r0.g49e408b32
 	pkgrel = 1
 	url = https://libgit2.github.com/
 	arch = x86_64
@@ -14,10 +14,10 @@ pkgbase = libgit2-git
 	depends = libssh2
 	depends = openssl
 	depends = pcre2
-	provides = libgit2=1.9.7.r279.g935f85131
+	provides = libgit2=1.9.7.r0.g49e408b32
 	provides = libgit2.so
 	conflicts = libgit2
-	source = git+https://github.com/libgit2/libgit2.git
+	source = git+https://github.com/libgit2/libgit2.git#tag=v1.9.7
 	sha256sums = SKIP
 
 pkgname = libgit2-git
