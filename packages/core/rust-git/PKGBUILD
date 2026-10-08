@@ -37,7 +37,10 @@ makedepends=(
   clang
   cmake
   git
-  rust
+  # no `rust`: bootstrap.toml's /usr/bin pins are stripped below precisely so
+  # x.py falls back to its DOWNLOADED official stage0 (2026-09-08 recovery),
+  # and a stock `rust` makedepend is unresolvable alongside the house
+  # llvm-git (rust-libs pins stock llvm-libs exactly; run #70 wall).
   libffi
   llvm
   ninja

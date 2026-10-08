@@ -236,8 +236,11 @@
     rust-git + mesa-git + spirv-llvm-translator-git + openshadinglanguage IN
     THE SAME PASS (scan victims: /tmp/llvmvictims.sh pattern — grep /usr/lib
     for libLLVM links → pacman -Qo). rustc hits heap corruption/segfault on
-    ANY compile otherwise, and rust-git cannot rebuild itself (bootstrap IS
-    the broken rustc). Recovery when it happens: downgrade-rebuild llvm-libs
+    ANY compile otherwise. (rust-git's stage0 is the DOWNLOADED official
+    one — 2026-09-08 recovery stripped bootstrap.toml's `/usr/bin` pins —
+    so a rebuild works even with a broken or absent system rustc; the old
+    "bootstrap IS the broken rustc" wording no longer holds.) Recovery
+    when it happens: downgrade-rebuild llvm-libs
     at the rust-compatible snapshot (old version from /var/log/pacman.log,
     pin `#commit=` in PKGBUILD source, unpin after install — BPF target is
     build config, survives the snapshot change). Enforced by the builder since
@@ -1497,10 +1500,12 @@ going stale.
 - **llvm-git ↔ rust-git coupled-batch procedure (stock-rust preemption checked
   out 2026-10-07)**: the predicted "stock `rust` pins `llvm-libs` exactly"
   refusal is void — `pacman -Q rust` reports not installed, so nothing outside
-  the set pins llvm. The real constraint survives: `rust-git` cannot rebuild
-  *after* the swap because its bootstrap.toml pins `/usr/bin/rustc` as system
-  stage0 (a rust-git built against stock llvm links `libLLVM.so.23.1` and
-  breaks at the swap). On an llvm-git bump: sweep exact pinners
+  the set pins llvm. (The once-"real" constraint is void too: bootstrap.toml's
+  `/usr/bin/rustc` pins are stripped by the 2026-09-08 recovery, so x.py uses
+  the DOWNLOADED official stage0 and `rust-git` rebuilds fine in any system
+  rustc state — proven by the 2026-10-08 run #70 rehearsals. What still
+  breaks at the swap is a rust-git built against stock llvm linking
+  `libLLVM.so.23.1`.) On an llvm-git bump: sweep exact pinners
   (`expac -Q '%n\t%D' | grep 'llvm-libs='`); stage the built llvm-git; build
   `rust-git` against the stage **while the old rustc still runs**; one
   `pacman -U` of the llvm-git splits + rust-git splits.

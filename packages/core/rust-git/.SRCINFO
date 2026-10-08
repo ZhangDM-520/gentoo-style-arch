@@ -9,7 +9,6 @@ pkgbase = rust-git
 	makedepends = clang
 	makedepends = cmake
 	makedepends = git
-	makedepends = rust
 	makedepends = libffi
 	makedepends = llvm
 	makedepends = ninja

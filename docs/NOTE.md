@@ -37,6 +37,44 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-08 — run #70 rust-git wall: the dead `rust` makedepend could not resolve beside house llvm-git — stage0 is downloaded, not system
+
+**Symptom.** Run #70 (251..400, 71 dispatched) died 1 s into rust-git at
+makepkg's dependency check: `Missing dependencies: -> rust`, with pacman
+refusing the transaction (`compiler-rt-23.1.1-1.1 and llvm-git-24.0.0_… are
+in conflict. Remove llvm-git? [y/N]`).
+
+**Root cause.** `makedepends` still listed `rust` — a leftover from the
+system-stage0 era. Stock `rust` drags `rust-libs`, which pins stock
+`llvm-libs`/`compiler-rt` exactly; those conflict with the installed house
+llvm-git/llvm-libs-git, so the entry is unresolvable by construction on this
+system. It is also unnecessary: the 2026-09-08 recovery deliberately strips
+bootstrap.toml's `/usr/bin/{rustc,cargo,rustfmt}` pins so x.py falls back to
+its **downloaded official stage0** (note `0003-bootstrap-Workaround-for-
+system-stage0.patch` and the strip comments in the recipe).
+
+**Fix.** Drop `rust` from `packages/core/rust-git/PKGBUILD` `makedepends`
+(dead `makedepends` entries are trim targets; this one was also an active
+resolver), regenerate `.SRCINFO` (a deps edit moves metadata). MEMORY
+rule 13's stale "rust-git cannot rebuild itself (bootstrap IS the broken
+rustc)" claim corrected to the downloaded-stage0 truth in the same pass —
+one fact, one home.
+
+**Validation.** `bash -n`; `GIT_CONFIG_COUNT=0 makepkg --printsrcinfo`
+diff = exactly the `makedepends = rust` line. Rehearsed in `$W` with the
+builder's real path (`-s -i --no-deps --install rust-git`, downloaded
+stage0): the dependency wall was gone and the build ran to stage2-tools
+(61 min) before dying on the unrelated libgit2-sys wall — see the part-2
+entry below. After that wall's fix, the retry completed clean: run record
+`rust-git succeeded 0 4296 ok` (~72 min), `pacman -Q rust-git` =
+`1:1.101.0.r342698.g42cfc04-1`. Battery PASS in the gap before the
+rehearsals (battery and heavy builds never share the machine).
+
+**Rule.** A makedepend that names a stock toolchain the house set replaces
+is a resolution hazard and a lie about the bootstrap: the bootstrap source
+(downloaded stage0) must be named by the recipe's own wiring, and the
+`makedepends` entry kept only if the build invokes the tool directly.
+
 ## 2026-10-08 — run #69 libebur128-git wall: CMake 4 dropped pre-3.5 compatibility — policy floor goes at the recipe seam
 
 **Symptom.** Run #69 (251..400, 32 dispatched before the wall) stopped 1 s
