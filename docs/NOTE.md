@@ -37,6 +37,44 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-08 — run #71/72 libjxl-git wall: a2x ran under a user-local python shim — pin the manpage interpreter to the system python
+
+**Symptom.** Run #72 died 48 s into libjxl-git at the manpages target:
+`File "/usr/bin/a2x", line 5 ... ModuleNotFoundError: No module named
+'asciidoc'` (cjxl.1/djxl.1), with the rest of the tree compiling
+normally. Reproduced identically in an isolated rehearsal; `a2x` itself
+worked in every shell context tested (default env and `env -i`).
+
+**Root cause.** Upstream's manpages seam (root `CMakeLists.txt`, the
+`ASCIIDOC_SHEBANG MATCHES "python3"` branch) runs `python3 a2x` through
+`find_package(Python3 COMPONENTS Interpreter)` instead of executing a2x
+via its own shebang. FindPython3 resolved
+`/home/zhangdm/.local/bin/python3.11` — a uv-managed CPython that leads
+`PATH` via `~/.local/bin` — whose site-packages has no `asciidoc`. The
+`asciidoc` makedepend is installed for the SYSTEM python (3.14), which is
+why every shebang-driven test of a2x passed while the build failed.
+(CMakeCache: `_Python3_EXECUTABLE:INTERNAL=/home/zhangdm/.local/bin/python3.11`.)
+
+**Fix.** Pin the seam in `packages/git/libjxl-git/PKGBUILD`:
+`-DPython3_EXECUTABLE:FILEPATH=/usr/bin/python3` on the configure line,
+with the why-comment. printsrcinfo diff empty (configure args are not
+metadata).
+
+**Validation.** `bash -n`. Deterministic reproduction first (same
+builder invocation failed twice with the identical traceback), then the
+pin: rehearsal in `$W` (`-s -i --no-deps --install libjxl-git`) rc 0 in
+321 s, run record `libjxl-git succeeded 0 321 ok`, installed
+0.12.0.r0.ga7a9c787-1 with both manpages generated (2× `Generating …
+.1`) and installed. Battery 55/55 PASS in the gap.
+
+**Rule.** A tool invoked through a *found interpreter* (`find_package(Python3)`
+→ `python3 tool`, not `tool`'s own shebang) inherits whichever python
+leads `PATH`, and user-local shim dirs (`~/.local/bin` — uv/pyenv
+pythons) lead it on this host. The makedepend that supplies the tool's
+module defines which python must run it: pin that interpreter
+(`-D<Var>_EXECUTABLE=/usr/bin/python3`) at the recipe's configure seam
+whenever a recipe's build runs a python module via a discovered python.
+
 ## 2026-10-08 — run #71 mold-git wall: upstream's 3.x workspace renamed `mold-cli` → `mold`, the PGO phases named the dead member
 
 **Symptom.** Run #71 (251..400) died 19 s into mold-git at PGO Phase 1:

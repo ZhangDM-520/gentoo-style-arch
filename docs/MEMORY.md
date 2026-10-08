@@ -835,6 +835,20 @@
     top-level `CMakeLists.txt` before bulk-adding — on modern projects
     the flag is no-op churn. A wall here is 1 s into the build, not a
     compile error: recognise the shape from the log's first lines.
+42. **A tool run through a *found interpreter* binds whichever python
+    leads `PATH` — pin it at the recipe seam** (2026-10-08 run #71/72
+    libjxl-git): upstream's manpages rule runs `python3 a2x` via
+    `find_package(Python3)` instead of a2x's own shebang, and
+    `~/.local/bin` leads `PATH` on this host with uv/pyenv python shims —
+    the bound interpreter's site-packages has no `asciidoc` (a makedepend
+    installed for the SYSTEM python), so the import dies while every
+    shebang-driven test of the same tool passes. The makedepend that
+    supplies the tool's module defines which python must run it: pin
+    `-D<Var>_EXECUTABLE=/usr/bin/python3` in the recipe's configure
+    (libjxl-git carries it) whenever a build invokes a python module
+    through a discovered interpreter. Diagnosis handle: the failing
+    command line names a `~/.local/bin/python*`, or `CMakeCache.txt`
+    `_Python3_EXECUTABLE`.
 35. **Never `cd` inside a fish command substitution — fish 4.9.3 runs the
     substitution in-process and the `cd` leaks to the caller**
     (2026-10-07 run #56 nodejs): `(cd "$x" && pwd -P)` silently moved the

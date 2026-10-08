@@ -81,8 +81,15 @@ build() {
 
     export CFLAGS+=' -DNDEBUG -ffat-lto-objects'
     export CXXFLAGS+=' -DNDEBUG -ffat-lto-objects'
+    # Pin the manpage generator's interpreter to the SYSTEM python: upstream's
+    # manpages seam runs `python3 a2x` via find_package(Python3), and a
+    # user-local python shim earlier in PATH (uv/pyenv in ~/.local/bin) binds
+    # it — that interpreter's site-packages has no `asciidoc` (a makedepend
+    # installed for the system python), so the a2x import dies at configure-
+    # chosen runtime (run #71/72 wall, 2026-10-08).
     cmake -B build -S libjxl \
         -G 'Unix Makefiles' \
+        -DPython3_EXECUTABLE:FILEPATH='/usr/bin/python3' \
         -DCMAKE_BUILD_TYPE:STRING='None' \
         -DCMAKE_INSTALL_PREFIX:PATH='/usr' \
         -DJPEGXL_BUNDLE_LIBPNG:BOOL='NO' \
