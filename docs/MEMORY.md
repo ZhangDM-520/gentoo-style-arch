@@ -800,6 +800,29 @@
     Never patch the build system around the embed, and scan build-rule
     files (not all sources — linker sources merely *mention* the flag)
     for other embedders before assuming the class is unique.
+40. **Never double-wrap ccache (`ccache <ccache-farm-path> …`) — the cache
+    key then pins the farm symlink, and toolchain updates never evict**
+    (2026-10-08 run #68 doxygen-git): makepkg's ccache BUILDENV puts
+    `/usr/lib/ccache/bin` first on `PATH`, so a CMake recipe whose
+    `CMAKE_*_COMPILER` resolves to the farm *and* also sets
+    `CMAKE_*_COMPILER_LAUNCHER=ccache` compiles as
+    `ccache /usr/lib/ccache/bin/cc …`. In that shape ccache keys the entry
+    on the farm symlink's frozen mtime (its `CCACHE_DEBUG` trace names
+    `Compiler: /usr/lib/ccache/bin/cc`, "followed symlinks … to
+    /usr/bin/ccache"), so `compiler_check = mtime` cannot see the real
+    compiler change: after the 17.0.0-20261004 snapshot bump, pre-update
+    entries replayed as hits into the freshly drift-cleaned tree and the
+    slim-LTO objects (`-fno-fat-lto-objects`, no fallback ELF) died at
+    link with `bytecode stream … LTO version 16.0 instead of the expected
+    17.0`. Farm-as-argv[0] (`/usr/lib/ccache/bin/cc …`, no launcher)
+    resolves the real `/usr/bin/cc` for the key and evicts correctly —
+    the launcher line is redundant there and only poisons the key. The
+    builder's toolchain-drift clean (rule from `docs/NOTE.md`
+    2026-10-08 look-ahead) wipes trees but cannot see cache contents: the
+    companion host rule is `ccache -C` after every toolchain package
+    update (stale non-LTO codegen is the silent half of this class).
+    Recipes keeping the wrap: none — doxygen-git, llvm-git and rocm-llvm
+    dropped it 2026-10-08.
 35. **Never `cd` inside a fish command substitution — fish 4.9.3 runs the
     substitution in-process and the `cd` leaks to the caller**
     (2026-10-07 run #56 nodejs): `(cd "$x" && pwd -P)` silently moved the

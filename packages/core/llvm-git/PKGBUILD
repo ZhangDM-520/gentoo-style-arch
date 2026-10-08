@@ -68,13 +68,14 @@ build() {
     # NOTE: MODULE targets (LLVMgold plugin) use CMAKE_MODULE_LINKER_FLAGS;
     # without mold they fall back to bfd, which rejects --color-diagnostics.
     # NOTE: LLVM_ENABLE_LTO=ON (not Full) — GCC's cc1 rejects '-flto=full'.
+    # No CMAKE_*_COMPILER_LAUNCHER=ccache: the farm compiler on PATH already
+    # caches, and a launcher wrap keys ccache on the farm symlink's frozen
+    # mtime (stale LTO bytecode across toolchain updates — doxygen-git, 2026-10-08).
     # BPF target required by scx-scheds/bpftrace BPF compilation (2026-09-07)
     cmake \
         -B _build \
         -S "$srcdir"/llvm-project/llvm  \
         -G Ninja \
-        -D CMAKE_C_COMPILER_LAUNCHER=ccache \
-        -D CMAKE_CXX_COMPILER_LAUNCHER=ccache \
         -D CMAKE_BUILD_TYPE=Release \
         -D CMAKE_INSTALL_PREFIX=/usr \
         -D CMAKE_EXE_LINKER_FLAGS="-fuse-ld=mold" \

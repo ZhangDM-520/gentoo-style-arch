@@ -35,11 +35,15 @@ build() {
     cd "build"
 
     # Phase 1: Generate profile data
+    # No CMAKE_*_COMPILER_LAUNCHER=ccache here: with makepkg's ccache farm on
+    # PATH the compiler already IS /usr/lib/ccache/bin/cc, and the extra
+    # launcher wraps it as `ccache <farm-path>` — a key pinned to the farm
+    # symlink's frozen mtime, so compiler-cache entries survive toolchain
+    # updates and replay stale LTO bytecode (run #68 wall, GCC 16.2.1 stream
+    # into a 17.0.0 link).
     cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr \
         -Dbuild_wizard=NO \
         -Dbuild_search=NO \
-        -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-        -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
         -DCMAKE_EXE_LINKER_FLAGS="-fuse-ld=mold -fprofile-generate" \
         -DCMAKE_C_FLAGS="-fprofile-generate" \
         -DCMAKE_CXX_FLAGS="-fprofile-generate" \
@@ -73,8 +77,6 @@ EOF
     cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr \
         -Dbuild_wizard=NO \
         -Dbuild_search=NO \
-        -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-        -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
         -DCMAKE_EXE_LINKER_FLAGS="-fuse-ld=mold -fprofile-use" \
         -DCMAKE_C_FLAGS="-fprofile-use" \
         -DCMAKE_CXX_FLAGS="-fprofile-use" \

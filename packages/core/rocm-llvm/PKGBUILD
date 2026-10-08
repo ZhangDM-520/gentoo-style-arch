@@ -45,10 +45,11 @@ build() {
     # https://github.com/ROCm/ROCm/blob/87bc26e672e06294bd2a6a1b507ad5c9ae4cffba/tools/rocm-build/build_lightning.sh#L302
     local cmake_args=(
         -G Ninja
+        # No CMAKE_*_COMPILER_LAUNCHER=ccache: the farm compiler on PATH already
+        # caches, and a launcher wrap keys ccache on the farm symlink's frozen
+        # mtime (stale LTO bytecode across toolchain updates — doxygen-git).
         -B build
         -S "$pkgbase/llvm"
-        -D CMAKE_C_COMPILER_LAUNCHER=ccache
-        -D CMAKE_CXX_COMPILER_LAUNCHER=ccache
         -D CMAKE_BUILD_TYPE=Release
         -D CMAKE_INSTALL_PREFIX="/opt/rocm/lib/llvm"
         -D LLVM_HOST_TRIPLE=$CHOST

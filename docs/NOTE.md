@@ -37,6 +37,53 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-08 — run #68 doxygen-git wall: `ccache <farm-path>` double-wrap pins the cache key to the farm symlink, so toolchain updates never evict — stale LTO bytecode replayed into the drift-cleaned tree
+
+**Symptom.** Run #68 (251..400, 59 ok) stopped at doxygen-git:
+`lto1: fatal error: bytecode stream in file 'libmscgen.a' generated with
+LTO version 16.0 instead of the expected 17.0` — in a tree the builder had
+*just* cleaned (its log line 1: "GCC build identity missing or changed;
+cached build artifacts were cleaned before this build"). The library
+objects were written one second after the CMake configure.
+
+**Root cause (evidence chain).**
+1. The toolchain moved this morning (gcc-snapshot `17.0.0 20261004`,
+   installed 07:34; LTO stream version 16 → 17).
+2. The toolchain-drift clean (2026-10-08 look-ahead guard) fired
+   correctly — but it can only see trees, never compiler-cache contents.
+3. The recipe double-wrapped ccache: `CMAKE_C_COMPILER_LAUNCHER=ccache`
+   with the compiler already resolving to makepkg's ccache farm on `PATH`,
+   so every compile ran as `ccache /usr/lib/ccache/bin/cc …`. In that
+   shape ccache keys the entry on the *farm symlink* — its debug trace
+   names `Compiler: /usr/lib/ccache/bin/cc` ("followed symlinks … to
+   /usr/bin/ccache", whose mtime is frozen at ccache install) — so
+   `compiler_check = mtime` stats a path that never moves across compiler
+   updates. Pre-update entries replayed as hits (171 objects in ~1 s)
+   into the fresh tree, carrying GCC 16.2.1 slim-LTO bytecode
+   (`-fno-fat-lto-objects` = no fallback ELF, so the link cannot shrug).
+4. Farm-as-argv[0] (`/usr/lib/ccache/bin/cc …`, no launcher) resolves the
+   real `/usr/bin/cc` for the key and evicts correctly — the launcher line
+   was redundant and only poisoned the key.
+
+**Fix (class, three recipes).** Drop the redundant
+`CMAKE_{C,CXX}_COMPILER_LAUNCHER=ccache` from doxygen-git (both PGO
+phases), llvm-git (`LLVM_ENABLE_LTO=ON` — same class) and rocm-llvm; the
+farm-on-PATH already routes compiles through ccache with a correctly
+keyed hash. Host half: `ccache -C` purges the poisoned entries (the drift
+clean cannot).
+
+**Validation.** `bash -n` and `GIT_CONFIG_COUNT=0 makepkg --printsrcinfo`
+diff-clean for all three recipes; `ccache -C`; doxygen-git rehearsed in
+`$W` from a wiped tree (the wall-fix loop's dirty-`src/` rehearsal is
+deliberately *not* used here — the stale objects were the defect):
+`-s -i --no-deps --install doxygen-git` → `outcome: success`, rc 0
+(289 s, zero LTO-stream diagnostics, archive produced and installed).
+Full fixture battery PASS in the same gap.
+
+**Rule (MEMORY 40).** Never double-wrap ccache; and after any toolchain
+package update, `ccache -C` — the builder's drift clean and ccache's
+`compiler_check` both miss exactly this shape.
+
 ## 2026-10-08 — run #67 sword wall: the never-run test build bit the GCC 17 libstdc++; and the single-file sync variant of the rule-38 mark clobber
 
 **Symptom.** Run #67 (251..400) stopped dispatch 35 min in at `sword`
