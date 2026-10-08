@@ -46,6 +46,11 @@ pkgver() {
 build() {
   cd "libunwind"
 
+  # Parked at v1.8.3 (pre-C23 code): GCC 15+ defaults to -std=gnu23 where
+  # `void f()` means `void f(void)` and the tests' K&R-style function-pointer
+  # declarations stop compiling (2026-10-08). Same treatment as netpbm.
+  export CFLAGS+=' -std=gnu17'
+
   autoreconf -fi
   ./configure \
     --prefix="/usr"
