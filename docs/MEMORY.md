@@ -778,6 +778,15 @@
     those), then `pull --ff-only`. The marks converge — once the synced
     content is already in place the next sync writes nothing, mtimes stop
     moving, and `-s` skips correctly.
+39. **The host's `-fuse-ld=mold` LDFLAGS default is strippable per recipe
+    when the build needs a GNU-ld-only linker feature** (2026-10-08 run
+    #65 libxdp): xdp-tools embeds its BPF blobs via
+    `gcc -r -Wl,--format=binary`, which mold refuses (`-b binary`
+    unsupported). The recipe strips `-fuse-ld=mold` from `LDFLAGS` so
+    bfd links it — the same seam its `options=(!lto)` note documents.
+    Never patch the build system around the embed, and scan build-rule
+    files (not all sources — linker sources merely *mention* the flag)
+    for other embedders before assuming the class is unique.
 35. **Never `cd` inside a fish command substitution — fish 4.9.3 runs the
     substitution in-process and the `cd` leaks to the caller**
     (2026-10-07 run #56 nodejs): `(cd "$x" && pwd -P)` silently moved the

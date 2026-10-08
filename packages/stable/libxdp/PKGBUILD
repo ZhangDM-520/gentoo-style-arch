@@ -24,10 +24,11 @@ b2sums=('7b705e254a8fc09c2358426ba712a9462ac02640dfc790ef2dc984026f5e93761c5636c
 build() {
   cd "${pkgname}-${pkgver}"
 
-  # House style: mold linker when available
-  local _mold=""
-  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
-  export LDFLAGS+=" ${_mold}"
+  # xdp-tools embeds its BPF blobs via `gcc -r -Wl,--format=binary`, a
+  # GNU-ld-only feature — mold refuses `-b binary`. The host makepkg.conf
+  # pins -fuse-ld=mold in LDFLAGS (and the house guard below would re-add
+  # it), so strip it for this build; bfd links everything here.
+  export LDFLAGS="${LDFLAGS//-fuse-ld=mold/}"
 
   export PRODUCTION=1
   export DYNAMIC_LIBXDP=1

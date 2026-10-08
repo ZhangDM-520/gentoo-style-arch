@@ -76,6 +76,34 @@ dependency edges, and incident root causes are unaffected by the renames.
   contract (the recipe edits that *add* patches use `--fuzz=0`); recorded
   here so the audit's question is answered, not silently dropped.
 
+## 2026-10-08 — run #65 (32/150): the elfutils fix verified live, then libxdp walled on mold's missing `-b binary` — the host LDFLAGS default, not a recipe choice
+
+- **Outcome.** Window `251..400` resumed (`-s`): `elfutils-git` skipped on
+  the rehearsal archive ✓, 32/150 dispatched with zero ✗ until `libxdp`
+  failed 6 s into its build.
+- **Symptom.** `mold: fatal: mold does not support '-b binary'` linking
+  `xsk_def_xdp_prog.embed.o`: xdp-tools embeds its BPF blobs via
+  `gcc -r -nostdlib -Wl,--format=binary`, a GNU-ld-only relocatable-link
+  feature.
+- **Root cause.** `/etc/makepkg.conf` pins `-fuse-ld=mold` in `LDFLAGS`
+  (and the recipe's house mold guard re-added it — it appears twice on
+  the link line). The recipe already carries `options=(!lto)` for this
+  same BPF-embed seam.
+- **Fix.** `packages/stable/libxdp/PKGBUILD` strips `-fuse-ld=mold` from
+  `LDFLAGS` in `build()` — bfd links the whole recipe. Class scan
+  (rule 37 discipline): a tree-wide grep of extracted sources matched
+  only llvm lld *implementing* the flag, and a build-rule-only grep
+  (`Makefile*`/`*.mk`/`*.mak`/`*.cmake`/`CMakeLists.txt`) found no other
+  embedder — the class is isolated to this recipe in the current trees.
+- **Validation.** `bash -n` + `makepkg --printsrcinfo` diff-clean; green
+  rehearsal on the live run path (`--no-deps --install libxdp` over the
+  dirty `src/`): rc 0 in 11 s, both outputs `1.6.3-2.1` installed, and
+  the embed link line in the build log is mold-free.
+- **Rule.** MEMORY rule 39: when a recipe's build needs a GNU-ld-only
+  linker feature, strip the host's `-fuse-ld=mold` for that recipe — the
+  host LDFLAGS default is not a constraint on build systems that embed
+  blobs with `-b binary`; never patch the build system around the embed.
+
 ## 2026-10-08 — runs #62–#64 (251..400 attempts): the parked pre-C23 libunwind wall, then elfutils' maintainer-mode `-Werror` vs GCC-snapshot diagnostics on *generated* flex/bison sources
 
 - **Symptom 1 (run #62, first 251..400 attempt).** `libunwind-git` — one of
