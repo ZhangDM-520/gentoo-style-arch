@@ -37,6 +37,87 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-08 — run #61 (113/113): closer window complete — zsh fix verified live, and a sync-churn lesson (rule 38) that was costing one gcc-snapshot rebuild per run
+
+- **Symptom/Outcome.** Run #61 built all 113 slots of the closer window
+  `100..100 139..250` — `outcome: success, rc 0`, including the final
+  twelve (`pixman-git qrencode curl shadow texinfo xz-git libdrm-git fcft
+  libmicrohttpd-git gettext libcmis raptor`) and `zsh` ✓ (the pcre2
+  include-order patch live). Window state: 113/113 built+installed.
+- **Churn root cause (found mid-run).** `gcc-snapshot` rebuilt in three
+  consecutive runs despite a green archive each time. The builder's
+  version-sync phase marks `$W` recipes with what it built (e.g.
+  gcc-snapshot `pkgver 20260927 → 20261004`); my pre-launch
+  `git checkout -- .` reset those marks every sync, moving PKGBUILD mtimes
+  past the archives, and `-s`'s freshness check (archive newer than
+  PKGBUILD) then legitimately rebuilt them — ~38 min per cycle.
+- **Rule.** MEMORY rule 38: sync `$W` by resetting *only* the files the
+  incoming commits touch; the version-sync marks are runtime state and
+  converge on their own (no write when the synced content is already in
+  place, so mtimes stop moving and `-s` skips).
+
+## 2026-10-08 — run #60 (100/113): the nodejs fix verified live — then zsh's pcre module hit a *different* include-order class: rolling pcre2-git headers × rolling ncurses-git `term.h` macros
+
+- **Symptom.** Run #60 built 100 (incl. `nodejs` ✓ 3m39s — the LIEF
+  patch verified live — and `python-lxml` ✓ 44s, its owed run-slot
+  proof), then `zsh` FAILED in 40 s:
+  `/usr/include/pcre2.h:1188: error: expected declaration specifiers or
+  '...' before 'cur_term'` at the bare `PCRE2_TYPES_STRUCTURES_AND_FUNCTIONS`
+  invocation; 12 dispatch-stopped.
+- **Root cause — include-order collision, not the toolchain.**
+  `Src/Modules/pcre.c` includes `pcre.mdh` (→ `zsh_system.h` →
+  `zshterm.h` → `<term.h>`) *before* `<pcre2.h>`. ncurses' `term.h`
+  defines the terminfo struct macros (`CUR` → `((TERMTYPE *)(cur_term))->`,
+  `Strings`, …) and those names occur inside pcre2 10.49's list-macro
+  expansion, corrupting the declarations. Minimal two-line repro: same TU
+  with `term.h` first fails, with `pcre2.h` first compiles clean. Both
+  headers are in-set rolling packages (`pcre2-git 10.49.r130`,
+  `ncurses-git 6.6.20260926`) whose current states merely coexist badly
+  in zsh 5.9.2's include order — distinct from rule 37's missing-include
+  class (that one is `#include` *absent*; this one is order).
+- **Fix.** `0001-pcre2-include-before-term-h.patch`: include
+  `../../config.h` + `<pcre2.h>` before `pcre.mdh` in `pcre.c` (inside
+  the same `HAVE_PCRE2_*` guard), drop the late include; `pkgrel=2`,
+  sums/`.SRCINFO` regenerated, REUSE annotation for the patch. Applied
+  `patch -Np1 --fuzz=0`.
+- **Validation.** fuzz=0 dry-run over the extracted tree rc 0; green
+  run-path rehearsal (`zsh` ✓ 4m10s, `zsh --version 5.9.2`, shell smoke).
+- **Rule.** When a TU parses two third-party system headers and one
+  defines name-space-polluting macros (term.h is the classic), the include
+  ORDER is part of the contract — reproduce with a two-include minimal TU
+  in both orders before blaming either library.
+
+## 2026-10-08 — run #59 (84/113): gcc-snapshot installs fine — but its install *is* a toolchain transition, and nodejs's vendored LIEF is the first C++ victim of libstdc++ 17's include cleanup
+
+- **Symptom.** Run #59 (closer window `100..100 139..250`, `-s -i`, lanes 2
+  × jobs 11) built 84 including `gcc-snapshot` ✓ 38m18s (the run-#58
+  doxygen fix verified on the live run path) — then `nodejs` FAILED after
+  30m: `deps/LIEF/include/LIEF/PE/ResourcesManager.hpp:218: error:
+  'std::ostringstream' has not been declared`, `ninja: build stopped`,
+  and the failure stopped dispatch (29 never-started, incl. `python-lxml`
+  whose green run-slot proof is still owed).
+- **Root cause — toolchain transition, not a source drift.** Installing
+  `gcc-snapshot` replaces the default toolchain (`/usr/bin/g++` is now
+  `gcc-snapshot 17.0.0.snapshot20261004`, `provides=('gcc' …)`), so every
+  build after that slot compiles against GCC 17 trunk's libstdc++, whose
+  header cleanup removed transitive `<sstream>` includes. nodejs is pinned
+  (`#tag=v26.10.0`, unchanged since run #57's green build) and its
+  vendored LIEF used `std::ostringstream` in 18 files without ever
+  including `<sstream>` — the first wall of a class, not a one-off.
+- **Fix.** Local patch `0002-lief-include-sstream-explicitly.patch` adds
+  `#include <sstream>` to all 18 LIEF files that reference the
+  ostringstream family without it (scan: `grep -rln 'ostringstream|
+  istringstream|std::stringstream'` minus files already including
+  `<sstream>`); applied `patch -Np1 --fuzz=0` after the V8 patch,
+  `pkgrel=3`, sums/`.SRCINFO` regenerated (the recipe's `*.patch` REUSE
+  annotation covers it).
+- **Rule.** MEMORY rule 37: a toolchain bump in this set is a
+  compile-compatibility transition — vendored and third-party C++ that
+  leaned on transitive std includes walls one file at a time; fix with
+  explicit-include patches (never by pinning the old toolchain), and scan
+  the whole vendored tree for the missing include at once instead of
+  patching the first failure only.
+
 ## 2026-10-07 — run #58 (77/113): the anchoring coverage fix verified live, then gcc-snapshot's `package()` asked for doxygen-generated man pages that no declared tool generates — and the doxygen rescue itself tripped over a jsoncpp soname move that broke stock `cmake`
 
 - **Symptom.** Run #58 (same closer window `100..100 139..250`, `-s`) built 77;

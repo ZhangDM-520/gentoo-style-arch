@@ -750,6 +750,30 @@
     and (b) treat a tool breaking at *launch* (`error while loading shared
     libraries`) as this class, not a corrupt-toolchain mystery. See
     `docs/NOTE.md` 2026-10-07 run #58.
+37. **A toolchain bump in this set is a compile-compatibility transition,
+    not just an ABI event** (2026-10-08 run #59 nodejs): installing
+    `gcc-snapshot` replaces `/usr/bin/g++`, so every later build compiles
+    against the new libstdc++ headers — whose include cleanup breaks
+    vendored/third-party C++ that relied on transitive std includes
+    (`std::ostringstream` without `<sstream>`). Fix with explicit-include
+    patches against the pinned source (never by pinning an older
+    toolchain), and when the first file walls, scan the whole vendored
+    tree for the missing include and patch every occurrence in one patch —
+    ninja stops at the first failure and the next one will wall the retry.
+    Expect one such wall per include-family after a major toolchain move;
+    see `docs/NOTE.md` 2026-10-08 run #59.
+38. **`$W` sync must reset only what the incoming commits change — the
+    builder's version-sync marks are runtime state** (2026-10-08): each
+    run's sync phase rewrites recipe `pkgver`/`pkgrel` in `$W` to track
+    what it built (e.g. gcc-snapshot's snapshot date); a mass
+    `git checkout -- .` before `pull` resets those marks, updates PKGBUILD
+    mtimes past the built archives, and the `-s` freshness check then
+    forces a full redundant rebuild of every reset recipe next run (cost:
+    one ~38 min gcc-snapshot per cycle). Sync procedure: leave the marks,
+    `git checkout --` only the files the incoming commits touch (resolve
+    those), then `pull --ff-only`. The marks converge — once the synced
+    content is already in place the next sync writes nothing, mtimes stop
+    moving, and `-s` skips correctly.
 35. **Never `cd` inside a fish command substitution — fish 4.9.3 runs the
     substitution in-process and the `cd` leaks to the caller**
     (2026-10-07 run #56 nodejs): `(cd "$x" && pwd -P)` silently moved the
