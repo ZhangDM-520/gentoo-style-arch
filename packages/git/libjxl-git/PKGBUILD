@@ -5,7 +5,7 @@
 
 pkgbase=libjxl-git
 pkgname=('libjxl-git' 'libjxl-doc-git')
-pkgver=0.12.0.r0.g5f92f524f1
+pkgver=0.12.0.r0.ga7a9c78
 pkgrel=1
 pkgdesc='JPEG XL image format reference implementation (git build)'
 arch=('x86_64')
@@ -28,7 +28,10 @@ makedepends=(
     'libpng'
     'python'
     'xdg-utils')
-source=('git+https://github.com/libjxl/libjxl.git'
+# PARKED 2026-10-08 at the last safe generation: main ships .so.0.13 while the
+# installed linkers (ffmpeg, glycin, libcupsfilters, noctalia-git) want .so.0.12
+# — unpin and heal them in one batch when adopting the 0.13 line.
+source=('git+https://github.com/libjxl/libjxl.git#tag=v0.12.0'
         'git+https://github.com/mm2/Little-CMS.git'
         'git+https://github.com/webmproject/sjpeg.git'
         'git+https://github.com/google/skcms.git'

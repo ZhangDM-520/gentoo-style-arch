@@ -13,7 +13,7 @@ depends=('glibc' 'zlib' 'openssl' 'xz' 'zstd')
 # checkdepends (linux-headers, libelf) removed 2026-09-04: check() is commented out
 makedepends=('git' 'meson' 'scdoc')
 #options=('strip' 'debug')
-provides=('module-init-tools=3.16' 'libkmod.so' 'kmod')
+provides=('module-init-tools=3.16' 'libkmod.so' "kmod=$pkgver")
 conflicts=('module-init-tools' 'kmod')
 replaces=('module-init-tools')
 #validpgpkeys=('EAB33C9690013C733916AC839BA2A5A630CBEA53')  # Lucas DeMarchi

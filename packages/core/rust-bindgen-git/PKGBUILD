@@ -16,7 +16,7 @@ url="https://github.com/rust-lang-nursery/rust-bindgen"
 license=('BSD-3-Clause')
 depends=('glibc' 'libgcc' 'clang')
 makedepends=('cargo' 'git')
-provides=('rust-bindgen')
+provides=("rust-bindgen=$pkgver")
 conflicts=('rust-bindgen')
 source=("git+${url}.git")
 sha512sums=('SKIP')

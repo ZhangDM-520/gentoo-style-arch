@@ -1,6 +1,6 @@
 pkgbase = libunwind-git
 	pkgdesc = Portable and efficient C programming interface (API) to determine the call-chain of a program
-	pkgver = 1.8.3.r440.gd9e7b9a2
+	pkgver = 1.8.3.r0.g44aa1a5
 	pkgrel = 1
 	url = https://www.nongnu.org/libunwind/
 	arch = i686
@@ -10,7 +10,7 @@ pkgbase = libunwind-git
 	depends = glibc
 	depends = xz
 	depends = zlib
-	provides = libunwind=1.8.3.r440.gd9e7b9a2
+	provides = libunwind=1.8.3.r0.g44aa1a5
 	provides = libunwind.so
 	provides = libunwind-x86_64.so
 	provides = libunwind-coredump.so
@@ -18,7 +18,7 @@ pkgbase = libunwind-git
 	provides = libunwind-setjmp.so
 	conflicts = libunwind
 	options = staticlibs
-	source = git+https://github.com/libunwind/libunwind.git
+	source = git+https://github.com/libunwind/libunwind.git#tag=v1.8.3
 	sha256sums = SKIP
 
 pkgname = libunwind-git

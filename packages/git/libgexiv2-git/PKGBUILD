@@ -3,7 +3,7 @@
 # Contributor: Ionut Biru <ibiru@archlinux.org>)
 pkgname=libgexiv2-git
 _pkgname=gexiv2
-pkgver=0.14.7.r6.g002edd1
+pkgver=0.14.7.r0.g64ea3b8
 pkgrel=1
 pkgdesc="GObject-based wrapper around the Exiv2 library (git build)"
 arch=('x86_64')
@@ -14,7 +14,11 @@ depends=('exiv2' 'gcc-libs' 'glib2' 'glibc')
 makedepends=('git' 'meson' 'glib2-devel' 'gobject-introspection' 'python-gobject' 'vala')
 provides=("libgexiv2=$pkgver" 'libgexiv2.so')
 conflicts=('libgexiv2')
-source=("git+https://gitlab.gnome.org/GNOME/gexiv2.git")
+# PARKED 2026-10-08 at the last safe generation: upstream master renamed the
+# library (libgexiv2-0.16.so.4) and moved soversion 2 -> 4, which would leave
+# the libgexiv2.so provide auto-versioning against nothing and break installed
+# linkers. Unpin (and heal consumers) as one batch when adopting the 0.16 line.
+source=("git+https://gitlab.gnome.org/GNOME/gexiv2.git#tag=gexiv2-0.14.7")
 b2sums=('SKIP')
 
 pkgver() {

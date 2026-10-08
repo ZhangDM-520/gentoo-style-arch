@@ -1,6 +1,6 @@
 pkgbase = libjxl-git
 	pkgdesc = JPEG XL image format reference implementation (git build)
-	pkgver = 0.12.0.r0.g5f92f524f1
+	pkgver = 0.12.0.r0.ga7a9c78
 	pkgrel = 1
 	url = https://jpeg.org/jpegxl/
 	arch = x86_64
@@ -21,7 +21,7 @@ pkgbase = libjxl-git
 	makedepends = libpng
 	makedepends = python
 	makedepends = xdg-utils
-	source = git+https://github.com/libjxl/libjxl.git
+	source = git+https://github.com/libjxl/libjxl.git#tag=v0.12.0
 	source = git+https://github.com/mm2/Little-CMS.git
 	source = git+https://github.com/webmproject/sjpeg.git
 	source = git+https://github.com/google/skcms.git
@@ -46,7 +46,7 @@ pkgname = libjxl-git
 	depends = libpng
 	depends = libstdc++
 	optdepends = java-runtime: for JNI bindings
-	provides = libjxl=0.12.0.r0.g5f92f524f1
+	provides = libjxl=0.12.0.r0.ga7a9c78
 	provides = libjxl.so
 	provides = libjxl_cms.so
 	provides = libjxl_threads.so
@@ -56,5 +56,5 @@ pkgname = libjxl-doc-git
 	pkgdesc = JPEG XL image format reference implementation (documentation; git build)
 	arch = any
 	depends = 
-	provides = libjxl-doc=0.12.0.r0.g5f92f524f1
+	provides = libjxl-doc=0.12.0.r0.ga7a9c78
 	conflicts = libjxl-doc

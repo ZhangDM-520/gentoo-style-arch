@@ -1,6 +1,6 @@
 pkgbase = libplist-git
 	pkgdesc = A library to handle Apple Property List files (git build)
-	pkgver = 2.7.0.r0.gfe3dc34dc3
+	pkgver = 2.7.0.r0.gcf5897a
 	pkgrel = 1
 	url = https://libimobiledevice.org/
 	arch = x86_64
@@ -12,11 +12,11 @@ pkgbase = libplist-git
 	depends = gcc-libs
 	depends = glibc
 	optdepends = python: Python bindings
-	provides = libplist=2.7.0.r0.gfe3dc34dc3
+	provides = libplist=2.7.0.r0.gcf5897a
 	provides = libplist-2.0.so
 	provides = libplist++-2.0.so
 	conflicts = libplist
-	source = git+https://github.com/libimobiledevice/libplist.git
+	source = git+https://github.com/libimobiledevice/libplist.git#tag=2.7.0
 	b2sums = SKIP
 
 pkgname = libplist-git

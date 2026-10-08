@@ -13,7 +13,7 @@ arch=('x86_64')
 url='https://github.com/microsoft/mimalloc'
 license=('MIT')
 conflicts=("${_pkgbase}")
-provides=("${_pkgbase}")
+provides=("${_pkgbase}" 'libmimalloc.so')
 depends=('glibc')
 makedepends=('git' 'cmake')
 source=("${pkgname}::git+${url}#branch=dev3")

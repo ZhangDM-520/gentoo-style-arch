@@ -65,6 +65,9 @@ build() {
     export LDFLAGS+=" -fuse-ld=mold"
   fi
   CFLAGS+=' -std=gnu17'
+  # stale-src guard (rule 33): common.mk tracks no header deps and the flags
+  # above vary between runs — clear warm-tree objects before building
+  make clean
   make -j"${GSA_BUILD_JOBS:-$(nproc)}"
 
   # trim: man pages generated from the userguide HTML (docs/man; nothing

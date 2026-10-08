@@ -280,7 +280,6 @@ git-git: git
 gtk3-git: gtk3-print-backends
 jack2-git: jack
 jack2-git: jack2-dbus
-kmod-git: kmod
 libadwaita-git: libadwaita
 libcamera-git: libcamera-ipa
 libclc-git: libclc
@@ -322,14 +321,8 @@ pyside6-git: pyside6
 pyside6-git: shiboken6
 qt6-base-git: qt6-base
 qt6-base-git: qt6-xcb-private-headers
-rust-bindgen-git: rust-bindgen
-rust-git: cargo
-rust-git: rust
-rust-git: rust-src
-rust-git: rustfmt
 seatd-git: libseat
 seatd-git: seatd
-spirv-llvm-translator-git: spirv-llvm-translator
 systemd: libsystemd
 systemd: nss-myhostname
 systemd: resolvconf

@@ -10,7 +10,7 @@ pkgbase = rust-bindgen-git
 	depends = glibc
 	depends = libgcc
 	depends = clang
-	provides = rust-bindgen
+	provides = rust-bindgen=0.73.2.r8.g2829d9a5
 	conflicts = rust-bindgen
 	source = git+https://github.com/rust-lang-nursery/rust-bindgen.git
 	sha512sums = SKIP

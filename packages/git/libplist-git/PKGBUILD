@@ -8,7 +8,7 @@
 # reference's epoch=1 is stale AUR history — dropped (stock has no epoch).
 
 pkgname=libplist-git
-pkgver=2.7.0.r0.gfe3dc34dc3
+pkgver=2.7.0.r0.gcf5897a
 pkgrel=1
 pkgdesc="A library to handle Apple Property List files (git build)"
 url="https://libimobiledevice.org/"
@@ -20,7 +20,11 @@ optdepends=('python: Python bindings')
 # sonames shipped: libplist-2.0.so.4, libplist++-2.0.so.4
 provides=("libplist=$pkgver" 'libplist-2.0.so' 'libplist++-2.0.so')
 conflicts=('libplist')
-source=("git+https://github.com/libimobiledevice/libplist.git")
+# PARKED 2026-10-08 at the last safe generation: master carries
+# LIBPLIST_SO_VERSION 12:0:0 (soname .so.12) while the installed linkers
+# (libimobiledevice-glue, libimobiledevice-git, libtatsu, libusbmuxd, solid)
+# want .so.4 — unpin and heal them in one batch.
+source=("git+https://github.com/libimobiledevice/libplist.git#tag=2.7.0")
 b2sums=('SKIP')
 
 pkgver() {

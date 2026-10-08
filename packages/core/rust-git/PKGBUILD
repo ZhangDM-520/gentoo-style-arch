@@ -215,9 +215,9 @@ package_rust-git() {
     'lldb: rust-lldb script'
   )
   provides=(
-    cargo
-    rust
-    rustfmt
+    "cargo=$pkgver"
+    "rust=$pkgver"
+    "rustfmt=$pkgver"
   )
   conflicts=(
     cargo
@@ -238,7 +238,7 @@ package_rust-git() {
 package_rust-src-git() {
   pkgdesc="Source code for the Rust standard library (GIT VERSION)"
   depends=(rust-git)
-  provides=(rust-src)
+  provides=("rust-src=$pkgver")
   conflicts=(rust-src)
 
   cp -a dest-src/* "$pkgdir"

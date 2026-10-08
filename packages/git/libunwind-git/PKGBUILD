@@ -7,7 +7,7 @@
 # Contributor: keystone <phillip.marvin@gmail.com>
 
 pkgname=libunwind-git
-pkgver=1.8.3.r440.gd9e7b9a2
+pkgver=1.8.3.r0.g44aa1a5
 pkgrel=1
 pkgdesc="Portable and efficient C programming interface (API) to determine the call-chain of a program"
 arch=('i686' 'x86_64')
@@ -27,7 +27,10 @@ options=('staticlibs')
 # bare stems only — makepkg auto-versions each from the packaged ELF soname
 # at package time (house rule: never hand-pin the version). Without these,
 # gimp's 'libunwind.so=8-64' dep breaks on install.
-source=("git+https://github.com/libunwind/libunwind.git")
+# PARKED 2026-10-08 at the last safe generation: master carries SOVERSION
+# 11:0:0 (soname .so.11) while every installed linker wants .so.8 — unpin and
+# heal gperftools/libplacebo/libcamera-git/gstreamer/xorg-server* in one batch.
+source=("git+https://github.com/libunwind/libunwind.git#tag=v1.8.3")
 sha256sums=('SKIP')
 
 

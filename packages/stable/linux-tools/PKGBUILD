@@ -93,6 +93,7 @@ build() {
 
   echo ':: cpupower'
   pushd "$_srcname"/tools/power/cpupower
+  make clean  # stale-src guard (rule 33): no header dep tracking
   make VERSION=$pkgver-$pkgrel
   popd
 
@@ -107,12 +108,14 @@ build() {
 
   echo ':: tmon'
   pushd "$_srcname"/tools/thermal/tmon
+  make clean  # stale-src guard (rule 33): no header dep tracking
   make
   popd
 
   if [[ ${CARCH} == x86_64* ]]; then
     echo ':: turbostat'
     pushd "$_srcname"/tools/power/x86/turbostat
+    make clean  # stale-src guard (rule 33): no header dep tracking
     make
     popd
   fi
@@ -129,6 +132,7 @@ build() {
 
   echo ':: bootconfig'
   pushd "$_srcname"/tools/bootconfig
+  make clean  # stale-src guard (rule 33): no header dep tracking
   make
   popd
 

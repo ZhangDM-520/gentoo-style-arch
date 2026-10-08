@@ -9,6 +9,7 @@ pkgbase = mimalloc-git
 	makedepends = cmake
 	depends = glibc
 	provides = mimalloc
+	provides = libmimalloc.so
 	conflicts = mimalloc
 	options = staticlibs
 	source = mimalloc-git::git+https://github.com/microsoft/mimalloc#branch=dev3

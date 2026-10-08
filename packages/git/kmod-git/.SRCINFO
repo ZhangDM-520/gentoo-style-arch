@@ -15,7 +15,7 @@ pkgbase = kmod-git
 	depends = zstd
 	provides = module-init-tools=3.16
 	provides = libkmod.so
-	provides = kmod
+	provides = kmod=v34+335+g65ac890
 	conflicts = module-init-tools
 	conflicts = kmod
 	replaces = module-init-tools

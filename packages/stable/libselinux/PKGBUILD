@@ -47,6 +47,10 @@ prepare() {
 build() {
   cd "${pkgname}-${pkgver}"
 
+  # stale-src guard (rule 33): src/Makefile tracks only policy.h — clear
+  # warm-tree objects before building
+  make clean
+
   # Do not build deprecated rpm_execcon() interface. It is useless on Arch Linux anyway.
   export DISABLE_RPM=y
 

@@ -68,9 +68,9 @@ pkgname = rust-git
 	depends = libssl.so
 	optdepends = gdb: rust-gdb script
 	optdepends = lldb: rust-lldb script
-	provides = cargo
-	provides = rust
-	provides = rustfmt
+	provides = cargo=1.101.0.r342246.g0abfedb
+	provides = rust=1.101.0.r342246.g0abfedb
+	provides = rustfmt=1.101.0.r342246.g0abfedb
 	conflicts = cargo
 	conflicts = rust
 	conflicts = rust-docs<1:1.56.1-3
@@ -83,5 +83,5 @@ pkgname = rust-git
 pkgname = rust-src-git
 	pkgdesc = Source code for the Rust standard library (GIT VERSION)
 	depends = rust-git
-	provides = rust-src
+	provides = rust-src=1.101.0.r342246.g0abfedb
 	conflicts = rust-src

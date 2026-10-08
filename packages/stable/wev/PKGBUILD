@@ -23,6 +23,8 @@ build() {
     export LDFLAGS+=" ${_mold}"
 
     # LDFLAGS are not respected
+    # stale-src guard (rule 33): one-shot compile with no dep tracking
+    make clean
     make -j"${GSA_BUILD_JOBS:-$(nproc)}" CFLAGS="$CFLAGS $LDFLAGS"
 }
 

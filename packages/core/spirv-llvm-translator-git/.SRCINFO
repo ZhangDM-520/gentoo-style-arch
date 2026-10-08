@@ -19,7 +19,7 @@ pkgbase = spirv-llvm-translator-git
 	depends = spirv-tools
 	depends = gcc-libs
 	depends = glibc
-	provides = spirv-llvm-translator
+	provides = spirv-llvm-translator=r2545.01625b9
 	conflicts = spirv-llvm-translator
 	conflicts = spirv-llvm-translator-minimal-git
 	options = !lto

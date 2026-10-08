@@ -37,6 +37,45 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-08 — look-ahead decisions for 251..400: four soname movers PARKED at their last safe generation, provides discipline adopted, stale-src guards added
+
+- **Context.** The two 251..400 audit reports (2026-10-07) surfaced four
+  floating `-git` recipes whose upstream masters move sonames and would
+  break installed linkers on their next build. Each has both in-set
+  consumers (healable) and stock-side linkers (gperftools/libplacebo,
+  ffmpeg, libimobiledevice-glue, and gexiv2's desktop consumers) that a
+  heal-set cannot rebuild — so, per the autopilot disposition, all four
+  are PARKED at the last safe release tag, one-line reversible when the
+  owner wants to adopt the new generation with a heal batch:
+  - `libgexiv2-git` → `#tag=gexiv2-0.14.7` (soversion 2; master renamed
+    the library `libgexiv2-0.16.so` and bumped to 4)
+  - `libunwind-git` → `#tag=v1.8.3` (SOVERSION 10:0:2 = `.so.8`; master
+    is 11:0:0)
+  - `libjxl-git` → `#tag=v0.12.0` (`so.0.12`; main is `so.0.13`)
+  - `libplist-git` → `#tag=2.7.0` (`11:0:7` = `.so.4`; master is `12:0:0`)
+  Pin refs verified by `git ls-remote` (peeled) + raw `meson.build` /
+  `Makefile.am` reads at each tag; each recipe's `pkgver()` was checked to
+  still derive the honest version at the pinned ref (both tag-scan
+  designs resolve to the pinned tag as the newest plain release), and the
+  static `pkgver`/`.SRCINFO` values were regenerated accordingly.
+- **Provides discipline (rule 30) adopted:** `rust-git` (cargo/rust/
+  rustfmt + rust-src split), `rust-bindgen-git`,
+  `spirv-llvm-translator-git`, `kmod-git` now version their tool
+  provides (`"name=$pkgver"`); `mimalloc-git` gains the bare
+  `libmimalloc.so` provide its packaged library warrants.
+- **Dead weight removed:** `rust-git`'s shipped-but-never-applied
+  `0006`/`0007` patches (absent from `source=()`, hunk-fail at HEAD).
+- **Stale-src guards (rule 33)** added to the strong tier the audit
+  flagged — `netpbm`, `wev`, `libselinux`, `linux-tools` (cpupower,
+  tmon, turbostat, bootconfig) now `make clean` before building over a
+  warm tree; the weak tier (ladspa, vamp-plugin-sdk, libxdp) keeps the
+  documented mold-stability assumption.
+- **Fuzz policy decision:** the four fuzz-reliant patch sets (`rasqal`,
+  `netpbm`×2, `cmake-git`, `rust-git` 0004/0005) stay on GNU-default
+  `patch` — they build today and a fuzz=0 enforcement is not the house
+  contract (the recipe edits that *add* patches use `--fuzz=0`); recorded
+  here so the audit's question is answered, not silently dropped.
+
 ## 2026-10-08 — run #61 (113/113): closer window complete — zsh fix verified live, and a sync-churn lesson (rule 38) that was costing one gcc-snapshot rebuild per run
 
 - **Symptom/Outcome.** Run #61 built all 113 slots of the closer window
