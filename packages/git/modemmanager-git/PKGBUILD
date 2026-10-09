@@ -39,8 +39,19 @@ makedepends=(
 )
 # trimmed vs stock: gtk-doc (docs) + its modemmanager-docs output, and
 # bash-completion (only needed to lint the shipped completion)
-source=("git+https://gitlab.freedesktop.org/mobile-broadband/ModemManager.git")
-b2sums=('SKIP')
+source=("git+https://gitlab.freedesktop.org/mobile-broadband/ModemManager.git"
+        "libqmi-devel-compat.patch")
+b2sums=('SKIP'
+        '22d30db3d10914c56e967b262886f1bdef1601e6b79c270c5a94b7a7b3dd2506147ad108be3209afd30a7b1308d4055c361381eb27968f273c50b84cecde6017')
+
+prepare() {
+  cd ModemManager
+  # compat: MM master uses three libqmi-devel-only enums (ETHERNET case
+  # from commit b6d53915 "Fixes build with latest libqmi", WDS NON_IP,
+  # VOICE PRE_ALERTING) that no released libqmi carries — see the notes
+  # at each use site
+  patch -Np1 -i ../libqmi-devel-compat.patch
+}
 
 pkgver() {
   cd ModemManager

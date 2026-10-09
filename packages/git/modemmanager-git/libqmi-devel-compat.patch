@@ -1,0 +1,55 @@
+--- a/src/mm-port-qmi.c
++++ b/src/mm-port-qmi.c
+@@ -160,7 +160,11 @@
+         case QMI_DATA_ENDPOINT_TYPE_UNDEFINED:
+         case QMI_DATA_ENDPOINT_TYPE_HSIC:
+         case QMI_DATA_ENDPOINT_TYPE_BAM_DMUX:
+-        case QMI_DATA_ENDPOINT_TYPE_ETHERNET:
++        /* QMI_DATA_ENDPOINT_TYPE_ETHERNET is deliberately not cased
++         * here: it exists only in libqmi devel (> 1.38), and the default
++         * arm below handles it identically (interface 0). Casing it breaks
++         * the build against every released libqmi (run #104 wall). Drop
++         * this note when a released libqmi carries the enum. */
+         case QMI_DATA_ENDPOINT_TYPE_UNKNOWN:
+         default:
+             self->priv->endpoint_interface_number = 0;
+--- a/src/mm-modem-helpers-qmi.c
++++ b/src/mm-modem-helpers-qmi.c
+@@ -2373,7 +2373,10 @@
+     case QMI_WDS_PDP_TYPE_IPV4_OR_IPV6:
+         return MM_BEARER_IP_FAMILY_IPV4V6;
+     case QMI_WDS_PDP_TYPE_PPP:
+-    case QMI_WDS_PDP_TYPE_NON_IP:
++    /* QMI_WDS_PDP_TYPE_NON_IP is deliberately not cased here: it exists
++     * only in libqmi devel (> 1.38) and PPP/default below handle it
++     * identically (MM_BEARER_IP_FAMILY_NONE). Drop when a released libqmi
++     * carries the enum. */
+     default:
+         return MM_BEARER_IP_FAMILY_NONE;
+     }
+--- a/src/mm-broadband-modem-qmi.c
++++ b/src/mm-broadband-modem-qmi.c
+@@ -11642,7 +11642,10 @@
+                 case QMI_VOICE_CALL_STATE_CC_IN_PROGRESS:
+                     call_info->state = MM_CALL_STATE_DIALING;
+                     break;
+-                case QMI_VOICE_CALL_STATE_PRE_ALERTING:
++                /* QMI_VOICE_CALL_STATE_PRE_ALERTING is deliberately not
++                 * cased here: it exists only in libqmi devel (> 1.38);
++                 * ALERTING below was its only sibling (RINGING_OUT). Drop
++                 * when a released libqmi carries the enum. */
+                 case QMI_VOICE_CALL_STATE_ALERTING:
+                     call_info->state = MM_CALL_STATE_RINGING_OUT;
+                     break;
+@@ -12086,7 +12089,10 @@
+                 case QMI_VOICE_CALL_STATE_CC_IN_PROGRESS:
+                     call_info->state = MM_CALL_STATE_DIALING;
+                     break;
+-                case QMI_VOICE_CALL_STATE_PRE_ALERTING:
++                /* QMI_VOICE_CALL_STATE_PRE_ALERTING is deliberately not
++                 * cased here: it exists only in libqmi devel (> 1.38);
++                 * ALERTING below was its only sibling (RINGING_OUT). Drop
++                 * when a released libqmi carries the enum. */
+                 case QMI_VOICE_CALL_STATE_ALERTING:
+                     call_info->state = MM_CALL_STATE_RINGING_OUT;
+                     break;

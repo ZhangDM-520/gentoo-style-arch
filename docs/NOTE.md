@@ -37,6 +37,57 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-10 — modemmanager-git: master uses three libqmi-*devel*-only enums no released libqmi has — compat patch at the use sites
+
+**Symptom.** run #104 wall, `modemmanager-git` BUILD FAILED (0m10s into
+the compile): `src/mm-port-qmi.c:163: ‘QMI_DATA_ENDPOINT_TYPE_ETHERNET’
+undeclared (did you mean ‘QMI_DATA_ENDPOINT_TYPE_EMBEDDED’?)`, ninja
+`libport.a` task exit 1. Fixing that one symbol exposed two more of the
+same class in the next compile pass:
+`mm-modem-helpers-qmi.c:2376 ‘QMI_WDS_PDP_TYPE_NON_IP’` and
+`mm-broadband-modem-qmi.c` (×2) ‘QMI_VOICE_CALL_STATE_PRE_ALERTING’.
+
+**Root cause.** Upstream MM commit `b6d53915` ("port-qmi: add missing
+QMI_DATA_ENDPOINT_TYPE_ETHERNET — Fixes build with latest libqmi",
+2026-04-15) cases an enum added to **libqmi devel** after 1.38; every
+released libqmi (repo 1.38.0, installed 1.38.0-1.2) lacks it, and the
+repo has no newer version. MM master and libqmi devel are a coupled pair
+that the stable repos don't carry — the `-git` recipe tracks the wrong
+side of the pair. A whole-tree scan (`QMI_[A-Z0-9_]+` tokens vs
+`/usr/include/libqmi-glib/`) classified the rest: string literals and
+MM-local `#define`s are false positives; exactly these three enum names
+are real cross-component gaps.
+
+**Fix.** One recipe patch `libqmi-devel-compat.patch` (generated
+mechanically: `cp` → edit → `diff -u` → splice, 4 hunks / 3 files):
+each offending case label is replaced by a comment at the use site
+documenting the deliberate omission. Behavior-identical everywhere —
+every removed label shares its body with a sibling case or `default:`
+(ETHERNET→interface 0 like UNKNOWN; NON_IP→IP_FAMILY_NONE like PPP;
+PRE_ALERTING→RINGING_OUT like ALERTING). Boundary-free: against a future
+libqmi that ships the enums, `default:`/siblings still cover them, and if
+upstream moves the blocks the patch fails to apply loudly. Recipe gains
+`prepare()` with `patch -Np1`; b2sums entry added; `.SRCINFO`
+regenerated. $W twin edited in place, VCS
+`pkgver=1.25.95.dev.r136.g7f0bf17a` mark preserved.
+
+**Validation.** `patch -Np1 --dry-run` clean on pristine copies of all
+three files; `bash -n` + `makepkg --printsrcinfo`; rehearsal `-s -fi
+--no-deps modemmanager-git` → ✓ 0m39s (ccache), fresh
+`1.25.95.dev.r136.g7f0bf17a-1` archives (modemmanager-git + libmm-glib),
+zero `FAILED` lines, install completed. Battery after this entry.
+
+**Rule.** When a `-git` recipe walled on an undeclared symbol, first ask
+which side of a coupled pair it is tracking: an identifier that exists
+only in another component's *devel* stream is not fixable by any install
+path, and the fix belongs at the use site (compat define/comment/guard),
+not in dependency versions. Then SCAN THE WHOLE TREE for sibling gaps
+(token grep vs installed headers) instead of fixing one symbol per build
+— the second and third enums surfaced only in the next compile pass.
+Enum case labels that share a body can be dropped without behavior
+change. Re-check: when a released libqmi > 1.38 lands in the repos,
+retire the patch.
+
 ## 2026-10-10 — samba: `print_iprint.c` names 14 legacy IPP enums the wave's patch didn't cover — extend the compat block, generate hunks mechanically
 
 **Symptom.** run #103 wall, `samba` BUILD FAILED (4m12s): waf `PRINTING`
