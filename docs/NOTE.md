@@ -37,6 +37,50 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-09 — run #83 pacman wall: `package()` installed from a build dir `build()` never creates — `-C build` after `cd "$pkgname"`
+
+**Symptom.** Run #83 continued `401..` with 16 green and died at `pacman`:
+`build()` compiled and linked all 295 targets, then `package()` failed with
+`Install data not found. Run this command in build directory root.` —
+`==> ERROR: A failure occurred in package()`.
+
+**Root cause.** `build()` runs `arch-meson "$pkgname" build` from `$srcdir`,
+so the build tree is `$srcdir/build` (the ninja log confirms
+`.../pacman/src/build`). `package()` instead does `cd "$pkgname"` and then
+`meson install -C build`, which resolves to `$srcdir/pacman/build` — a
+directory that does not exist, and the install data (`meson-private/install.dat`)
+lives in `$srcdir/build`. The recipe's two functions disagreed about the
+build-dir layout.
+
+**Fix.** `meson install -C "$srcdir/build"` in `package()` (the `cd "$pkgname"`
+stays — the licence loop below reads the source root). A full-repo scan for
+the same class of defect came back clean: every other recipe either keeps
+`build()`/`package()` on the same directory (the `cd`-in-both idiom) or runs
+`meson install`/`cmake --install` before any `cd`, and the non-default build
+dir names (`_build`, `build5`, `build-amd`, …) are paired on both sides.
+pacman was the only mismatch.
+
+**Validation.** `bash -n` parse OK on both twins; `makepkg --printsrcinfo`
+diff-clean. Rehearsal in `$W` over the dirty tree (existing `$srcdir/build`
+reused): run record `pacman succeeded 0 25 ok`, `pacman -Q pacman` functional,
+installed 11:18. Battery green in the gap.
+
+**Observed noise (not a defect of this change).** `pacman -Q` on this host
+warns `unknown key '%INSTALLED_DB%' in local database` for 357 packages: that
+field is a CachyOS pacman-fork extension (origin-repo tracking) written into
+`desc` files on 10-05/10-07 by the fork this host ran before; upstream pacman
+warns and ignores. Evidence it is pre-existing: the desc mtimes predate the
+rehearsal, the fresh desc written by this install lacks the key, and no
+installed binary still contains the string. Cosmetic only; the owner can strip
+it with
+`sudo find /var/lib/pacman/local/ -name desc -exec sed -i '/^%INSTALLED_DB%$/,+2d' {} +`
+if silence is wanted.
+
+**Rule.** When `package()` fails with meson's "Install data not found", do not
+debug meson: diff the build-dir path `build()` creates against the one
+`install -C`/`--destdir` resolves *after* any `cd` — and when one recipe shows
+the mismatch, scan the repo for the class before fixing only the instance.
+
 ## 2026-10-09 — run #82 ananicy-cpp wall: toolchain header hygiene — `std::intN_t`/`std::mem*`/`getpid` stopped resolving across the tree
 
 **Symptom.** Run #82 opened the `401..` window and died at `ananicy-cpp`

@@ -128,7 +128,9 @@ check() {
 package() {
   cd "$pkgname"
 
-  DESTDIR="$pkgdir" meson install -C build
+  # the build dir is $srcdir/build (build() runs arch-meson from $srcdir);
+  # the bare `-C build` here pointed inside the source dir (run #83 wall)
+  DESTDIR="$pkgdir" meson install -C "$srcdir/build"
 
   # trim: man pages, generated docs and gettext locales (runtime payload only)
   rm -rf "$pkgdir/usr/share/man" "$pkgdir/usr/share/doc" "$pkgdir/usr/share/locale"
