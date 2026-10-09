@@ -40,5 +40,10 @@ build() {
 
 package() {
   meson install -C build --destdir "$pkgdir"
+  # stock pkgbase gexiv2 splits the Python GI override into gexiv2-common,
+  # which this recipe deliberately leaves installed (header note) — meson
+  # installs it anyway and the overlap is a pacman file conflict (run #80).
+  # depends carry no python-gobject, so the override is dead weight here.
+  rm -rf "$pkgdir"/usr/lib/python3.*/site-packages
   install -Dm644 "$_pkgname/COPYING" -t "$pkgdir/usr/share/licenses/$pkgname"
 }

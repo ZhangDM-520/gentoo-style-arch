@@ -37,6 +37,46 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-09 — run #80 libgexiv2-git wall: meson shipped the Python GI override the recipe deliberately leaves to stock `gexiv2-common` — install file conflict
+
+**Symptom.** Run #80 reached 142 green rows and stopped at `libgexiv2-git`:
+the build succeeded (archive created), but the install died with
+`error: failed to commit transaction (conflicting files)` —
+`/usr/lib/python3.14/site-packages/gi/overrides/GExiv2.py` (+ two `__pycache__`
+`.pyc`) `exists in filesystem (owned by gexiv2-common)`. With `-i` an install
+failure stops dispatch: 8 packages remained unbuilt.
+
+**Root cause.** The recipe's header already states the contract — stock pkgbase
+`gexiv2` splits the Python GI override into `gexiv2-common`, "left stock (not
+superseded here)" — but `meson install` ships the override tree into `$pkgdir`
+anyway and `package()` trimmed nothing. `comm` of the archive against
+`pacman -Ql gexiv2 gexiv2-common` showed the Python override tree is the *only*
+path overlap: the libraries differ by soname (house `libgexiv2.so.2` vs stock
+`libgexiv2-0.16.so.4`) and the typelib/gir paths do not collide. The recipe's
+`depends` carry no `python-gobject`, so its copy of the override was dead
+weight regardless.
+
+**Fix.** Trim in `package()`: `rm -rf "$pkgdir"/usr/lib/python3.*/site-packages`
+with a why-comment naming the stock split and the run. No metadata change —
+the coexistence-by-soname design and the PARKED 0.14.7 pin are untouched.
+Consumers `gegl-git`/`gimp-git` use the C API via pkg-config, never the GI
+override.
+
+**Validation.** `bash -n` parse OK on canonical + `$W` twins; `makepkg
+--printsrcinfo` diff-clean. Rehearsal in `$W` over the dirty tree: run record
+`libgexiv2-git succeeded 0 8 ok`, `pacman -Qi` shows it installed with
+`libgexiv2.so=2-64` auto-versioned from the packaged soname (parked ABI
+intact), and the rebuilt archive contains zero `site-packages` paths. Battery
+green in the gap.
+
+**Rule.** When a recipe's header comment says a stock split package is "left
+stock", `package()` must *enforce* it: verify the built archive against
+`pacman -Ql` of the stock owners (`comm` on the two file lists) and trim the
+overlap. And when a `pacman -U` fails on `conflicting files`, read who owns the
+file before choosing a side — if the stock owner is a deliberate coexistence
+partner, trim your copy; `conflicts=`/`replaces=` is for a real Stock→house
+swap, not for a path the recipe never meant to own.
+
 ## 2026-10-09 — run #79 mesa-git wall: upstream retired the `anti-lag` Vulkan *layer*
 
 **Symptom.** Run #79's core tail began as predicted (`systemd` solo-built green)
