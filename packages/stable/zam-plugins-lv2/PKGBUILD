@@ -94,5 +94,5 @@ package() {
   find "$pkgdir/usr" -mindepth 1 -maxdepth 1 -not -name lib -exec rm -rf {} +
   find "$pkgdir/usr/lib" -mindepth 1 -maxdepth 1 -not -name lv2 -exec rm -rf {} +
 
-  install -Dm644 -t "$pkgdir/usr/share/licenses/$pkgname/" $_dir/{COPYING,NOTICE.DPF,NOTICE.SFZero}
+  install -Dm644 -t "$pkgdir/usr/share/licenses/$pkgname/" "$srcdir"/$_dir/{COPYING,NOTICE.DPF,NOTICE.SFZero}
 }
