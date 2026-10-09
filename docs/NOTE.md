@@ -37,6 +37,44 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-09 — run #86 rdma-core wall: GitHub *tag archive* lacks `buildlib/pandoc-prebuilt/` — no-pandoc install dies on phantom man paths
+
+**Symptom.** Run #86 continued `401..` (19 green) and died at `rdma-core`:
+build and most of `cmake --install` completed, then
+`CMake Error … file INSTALL cannot find ".../buildlib/pandoc-prebuilt/41bbb0…"`.
+The recipe deliberately trims man pages in `package()`, yet the install step
+wanted them.
+
+**Root cause.** rdma-core's `buildlib/rdma_man.cmake`: without pandoc/rst2man
+at build time, man pages are taken from the prebuilt cache
+`buildlib/pandoc-prebuilt/<sha1-of-source>` — and `pandoc-prebuilt.py
+--retrieve` merely *prints* the path without checking existence, so configure
+records phantom paths and only `cmake --install` fails. Upstream populates
+the cache **only in the release tarball** ("When the release tar file is made
+the man pages are pre-built and included"); the recipe pulled the GitHub
+`/archive/` *tag* tarball, which does not contain the directory. The
+no-pandoc posture is correct for this repo (doc tools are trimmed), the
+source was wrong.
+
+**Fix.** Switch `source=` to the release asset
+(`releases/download/v$pkgver/rdma-core-$pkgver.tar.gz`) with the anchored
+sha512 (verified: same `rdma-core-65.0/` tree, 161 prebuilt files including
+the exact failing hash). `.SRCINFO` regenerated (source+checksum lines only).
+
+**Validation.** `bash -n` parse OK on both twins; `.SRCINFO` diff = the two
+expected lines. Rehearsal in `$W`: run record `rdma-core succeeded 0 25 ok`,
+installed, archive has zero man/doc paths (trim intact) and the full licence
+set. Battery green in the gap.
+
+**Rule.** A no-pandoc/no-doc-tool build of a project that *offers* prebuilt
+docs must source the artifact that carries them — check upstream's own
+"release tarball" comments before assuming a GitHub tag archive is equivalent.
+And when an install fails on a path under the *source* tree that the build
+never produced, check for a configure-time `--retrieve`/lookup that records
+paths without verifying existence. Practical note: `SRCDEST` is
+`~/.cache/gsa-src` — a source-URL switch needs the stale same-name tarball
+removed from the cache first or `makepkg` fails the validity check.
+
 ## 2026-10-09 — run #85 pkgfile wall: bare `LICENSE` in `package()` read from the wrong directory
 
 **Symptom.** Run #85 continued `401..` (pacman now green) with 17 green and

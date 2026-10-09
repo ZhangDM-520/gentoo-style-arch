@@ -56,7 +56,7 @@ pkgbase = rdma-core
 	provides = librdmacm.so
 	backup = etc/rdma/rdma.conf
 	backup = etc/rdma/mlx4.conf
-	source = https://github.com/linux-rdma/rdma-core/archive/v65.0/rdma-core-65.0.tar.gz
-	sha512sums = 83bf1c9a64f83fba6001b5df10de2d5c8887dbe6ac4032b6fdcedd385e4d5e3345411eee17c94675a9c4ea4fc30c30d89c5fea1b1eb6b2dad34354285c90aeef
+	source = https://github.com/linux-rdma/rdma-core/releases/download/v65.0/rdma-core-65.0.tar.gz
+	sha512sums = 2695b1fe25d7b1b8c76873c3da920c45cb1bf1429910e5f4f7d756530a2ef7c29ed8d5229b037112e0eed186ae99c3f2725366720802ae5c2eda0ed43c5c4257
 
 pkgname = rdma-core
