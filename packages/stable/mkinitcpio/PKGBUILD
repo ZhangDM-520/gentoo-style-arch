@@ -2,7 +2,7 @@
 
 pkgname=mkinitcpio
 pkgver=42.2
-pkgrel=1
+pkgrel=2
 pkgdesc="Modular initramfs image creation utility"
 arch=('any')
 url='https://gitlab.archlinux.org/archlinux/mkinitcpio/mkinitcpio'
@@ -20,11 +20,14 @@ optdepends=('xz: Use lzma or xz compression for the initramfs image'
 provides=('initramfs')
 backup=('etc/mkinitcpio.conf')
 source=("git+$url.git#tag=v${pkgver}?signed"
-        '0001-skip-missing-optional-nvpcr-files.patch')
+        '0001-skip-missing-optional-nvpcr-files.patch'
+        '0002-guard-missing-systemd-tpm2-setup.patch')
 sha512sums=('ddc6cb65586ea690ebdcf04f12eb0b441306efc900fb3045816512ec43b25cdec484d72cb1cbb928911a14ffd8637b14a2b7d0706232dd58797a3a07b0d40fc2'
-            '5249b1490794027e50fa083895a0bd614f10e496438211c49a0c053e167922627bf5a9100a757b58d59690c39e19eae769eaa81346b849a3a91606187f526aa1')
+            '5249b1490794027e50fa083895a0bd614f10e496438211c49a0c053e167922627bf5a9100a757b58d59690c39e19eae769eaa81346b849a3a91606187f526aa1'
+            '803d212e24048a627a1e5cf4067edd76c8e76431df48d5a2f670244ea057886a7f901d2fe3456a164898437fdfa0bf3d361e0b83ea8685b01917f812ee8d5f3f')
 b2sums=('b2fb0987878f13a26ebae0c2b4a75b15f52d3f1f8d5eb46ba7e8114629889070472232a4cb5cb259a3fae0c1658ac2d049f17933bbaa6bab9fdd31cd8af18640'
-        'd6ff634476ba8ee927a869c846bb91de5ad3c6d9e5b3df0692452e5222203ff61a9768fdcb0ccfe5885dc498a5589522876197358787316c06940251a033b121')
+        'd6ff634476ba8ee927a869c846bb91de5ad3c6d9e5b3df0692452e5222203ff61a9768fdcb0ccfe5885dc498a5589522876197358787316c06940251a033b121'
+        'bd28e2206250b0b5d20b53f4404a15952b8e3db6d88c3086bc9b68d3ae24a1a957b003803a5820e7097f384212a9e07f2215fab1385de8ead447627f6da3772f')
 validpgpkeys=('ECCAC84C1BA08A6CC8E63FBBF22FB1D78A77AEAB'    # Giancarlo Razzolini
               'BB8E6F1B81CF0BB301D74D1CBF425A01E68B38EF'    # nl6720 primary
               '73B3CABFC4BF3F207641BD4B6B5387E670A955AD')   # nl6720 signing subkey
@@ -32,6 +35,7 @@ validpgpkeys=('ECCAC84C1BA08A6CC8E63FBBF22FB1D78A77AEAB'    # Giancarlo Razzolin
 prepare() {
   cd "$pkgname"
   patch -Np1 -i ../0001-skip-missing-optional-nvpcr-files.patch
+  patch -Np1 -i ../0002-guard-missing-systemd-tpm2-setup.patch
 }
 
 build() {

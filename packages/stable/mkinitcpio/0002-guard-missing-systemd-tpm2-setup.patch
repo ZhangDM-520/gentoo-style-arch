@@ -1,0 +1,67 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Gentoo_Style_Arch maintainers <maintainers@example.invalid>
+Date: Thu, 09 Oct 2026 23:10:00 +0800
+Subject: [PATCH] initcpio: skip absent TPM2/PCR inputs of the systemd hook
+
+systemd 262 dropped systemd-tpm2-setup (replaced by systemd-report-sign-tpm2)
+together with the initrd PCR units, while the systemd initcpio hook still
+hard-requires them. A missing input must not abort the initramfs build.
+---
+ install/systemd | 15 +++++++++++----
+ 1 file changed, 11 insertions(+), 4 deletions(-)
+
+diff --git a/install/systemd b/install/systemd
+index 5d1b890..ee0b1bf 100644
+--- a/install/systemd
++++ b/install/systemd
+@@ -85,13 +85,17 @@ build() {
+         /usr/lib/systemd/systemd-hibernate-resume \
+         /usr/lib/systemd/systemd-shutdown \
+         /usr/lib/systemd/systemd-sulogin-shell \
+-        /usr/lib/systemd/systemd-tpm2-setup \
+         /usr/lib/systemd/systemd-validatefs \
+         /usr/lib/systemd/system-generators/systemd-fstab-generator \
+         /usr/lib/systemd/system-generators/systemd-gpt-auto-generator \
+         /usr/lib/systemd/system-generators/systemd-hibernate-resume-generator \
+         /usr/lib/systemd/system-generators/systemd-debug-generator
+ 
++    # optional when the host systemd dropped it (systemd-report-sign-tpm2 era)
++    if [[ -e /usr/lib/systemd/systemd-tpm2-setup ]]; then
++        add_binary /usr/lib/systemd/systemd-tpm2-setup
++    fi
++
+     add_symlink /usr/bin/halt systemctl
+     add_symlink /usr/bin/reboot systemctl
+     add_symlink /usr/bin/poweroff systemctl
+@@ -136,14 +140,8 @@ build() {
+         systemd-journald-dev-log.socket \
+         systemd-journald.service \
+         systemd-modules-load.service \
+-        systemd-pcrextend.socket \
+-        systemd-pcrextend@.service \
+-        systemd-pcrnvdone.service \
+-        systemd-pcrosseparator.service \
+-        systemd-pcrphase-initrd.service \
+         systemd-tmpfiles-setup.service \
+         systemd-tmpfiles-setup-dev.service \
+-        systemd-tpm2-setup-early.service \
+         systemd-udevd-control.socket \
+         systemd-udevd-kernel.socket \
+         systemd-udevd.service \
+@@ -157,6 +155,14 @@ build() {
+         breakpoint-pre-mount.service \
+         breakpoint-pre-switch-root.service
+ 
++    # optional units absent on systemd builds that dropped TPM2/PCR handling
++    for unit in systemd-pcrextend.socket systemd-pcrextend@.service \
++        systemd-pcrnvdone.service systemd-pcrosseparator.service \
++        systemd-pcrphase-initrd.service systemd-tpm2-setup-early.service; do
++        [[ -e "/usr/lib/systemd/system/${unit}" ]] || continue
++        add_systemd_unit "${unit}"
++    done
++
+     # add libraries dlopen()ed (hard and optional dependencies):
+     #  tss2-*   -> tpm2-util
+     #  kmod     -> systemd-shared
+-- 
+2.53.0
