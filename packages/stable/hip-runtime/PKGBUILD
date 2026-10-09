@@ -54,6 +54,10 @@ build() {
     -DHIP_CATCH_TEST=0
     -DCLR_BUILD_HIP=ON
     -DCLR_BUILD_OCL=OFF
+    # Pin the system interpreter: FindPython3 follows PATH, and a user-local
+    # python earlier in PATH lacks the python-cppheaderparser makedep (its
+    # site-packages belongs to the system python only).
+    -DPython3_EXECUTABLE=/usr/bin/python3
   )
   cmake "${hip_amd_args[@]}"
   cmake --build build-amd

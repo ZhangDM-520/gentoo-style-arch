@@ -37,6 +37,34 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-09 — hip-runtime: CMake found the user-local python3.11 and missed the python-cppheaderparser makedep — PATH-order hazard
+
+**Symptom.** `hip-runtime` configure stopped at
+`hipamd/src/CMakeLists.txt:228`: `ModuleNotFoundError: No module named
+'CppHeaderParser'` — run #96 wall at package 62/253.
+
+**Root cause.** The recipe's makedep `python-cppheaderparser` is installed
+and importable by the system `/usr/bin/python3` (3.14). But FindPython3
+probes PATH, and the owner's `~/.local/bin/python3.11` precedes `/usr/bin`
+in the inherited build PATH — that interpreter has its own site-packages
+without the module. Host-environment interference, same class as the fish
+wrapper/alias hazards: "environment before code".
+
+**Fix.** Pin the interpreter in the hipamd configure:
+`-DPython3_EXECUTABLE=/usr/bin/python3` (hint respected by FindPython3), so
+the build no longer depends on PATH order. `.SRCINFO` regenerated
+byte-identical (no source/deps change).
+
+**Validation.** `bash -n` + `makepkg --printsrcinfo`; both pythons'
+import state measured before the fix (system OK, user-local raises);
+$W twin synced with its `pkgrel=1.1` mark; rehearsal
+`-s -fi --no-deps hip-runtime` → ✓ 3m49s, run record `outcome: success`.
+
+**Rule.** When a configure step needs a python module shipped by a pacman
+makedep, pin the interpreter (`-D Python3_EXECUTABLE=/usr/bin/python3` or
+the build-system equivalent) — never trust PATH order to find the python
+whose site-packages owns the module.
+
 ## 2026-10-09 — zam-plugins-lv2: license install re-entered the source dir it was already in — pkgfile-CLASS path bug
 
 **Symptom.** `package()` failed on its last statement:
