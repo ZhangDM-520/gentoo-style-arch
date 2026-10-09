@@ -41,8 +41,10 @@ makedepends=(
 )
 source=("git+https://gitlab.gnome.org/GNOME/tinysparql.git#tag=${pkgver/[a-z]/.&}")
 b2sums=('0a45bb06e361fce6244340e27943bc987a6ea913ddcc39f5a496f7d9db01cb0d083f7c4b25dad3d7da461cd16b7d6b0fa7fd0e09a342d18e65731f720897af7d')
-# trim: stock pinned tracker3= provide and the conflicts/replaces entries
-# dropped per house standard (bare soname provides only; no conflicts/replaces)
+# the tracker3= rename-compat provide lives in package_tinysparql() (restore
+# 2026-10-09 run #93: installed dependents such as gtk3-git declare
+# `tracker3`; dropping the provide broke the upgrade path). conflicts/replaces
+# against the old name stay dropped — no tracker3 package is in the closure
 
 prepare() {
   cd $pkgname
@@ -72,6 +74,7 @@ check() {
 package_tinysparql() {
   provides=(
     libtinysparql-3.0.so
+    "tracker3=$pkgver"
   )
 
   meson install -C build --no-rebuild --destdir "$pkgdir"

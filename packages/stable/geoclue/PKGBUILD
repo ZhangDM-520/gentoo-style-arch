@@ -31,10 +31,11 @@ makedepends=(
 # trim: gtk-doc (API docs, -D gtk-doc=false below) and libnotify + the demo
 #       agent optdepends (-D demo-agent=false below) dropped together
 #       (docs/demos)
-# trim: stock provides=("geoclue2=$pkgver-$pkgrel") + conflicts/replaces=(geoclue2)
-#       dropped (house: bare soname provides only, no conflicts/replaces)
-# House standard: bare soname provide per ELF output (never pinned).
-provides=(libgeoclue-2.so)
+# the geoclue2= rename-compat provide is restored (2026-10-09 run #93
+# family); conflicts/replaces=(geoclue2) stay dropped — no geoclue2 package
+# is in the house closure
+# House standard: bare soname provide per ELF output (never hand-versioned).
+provides=("geoclue2=$pkgver-$pkgrel" libgeoclue-2.so)
 backup=(etc/geoclue/geoclue.conf)
 source=(
   "git+https://gitlab.freedesktop.org/geoclue/geoclue.git#tag=$pkgver"

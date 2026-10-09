@@ -11,10 +11,13 @@
 # trim: dropped split openjdk-doc (javadoc) together with its package_()
 # function, staging path, its pinned provide and the `docs` make target
 pkgbase=java-openjdk
+# stock merged the old jre-headless/jre/jdk split into one jdk-openjdk
+# package (2026-10-09 run #94 wall: the inherited split shipped three nested
+# supersets of bin/lib/conf/legal — 713 overlapping paths — so no install
+# transaction could ever commit); house trim policy drops split packages and
+# the monolith is stock parity, keeping the full compat provides union
 pkgname=(
   jdk-openjdk
-  jre-openjdk
-  jre-openjdk-headless
   openjdk-src
 )
 # on a majorver change, don't forget to update the misc files that come along this PKGBUILD
@@ -38,7 +41,6 @@ makedepends=(
   freetype2
   giflib
   glibc
-  graphviz
   harfbuzz
   lcms2
   libcups
@@ -54,7 +56,6 @@ makedepends=(
   libxrender
   libxt
   libxtst
-  pandoc
   unzip
   zip
 )
@@ -82,13 +83,6 @@ esac
 _jvmdir=/usr/lib/jvm/java-${_majorver}-openjdk
 _jdkdir=jdk${_majorver}u-${_git_tag//+/-}
 _imgdir=${_jdkdir}/build/linux-${_JARCH}-server-release/images
-
-_nonheadless=(
-  lib/libawt_xawt.so
-  lib/libjawt.so
-  lib/libjsound.so
-  lib/libsplashscreen.so
-)
 
 _commondeps=(
   'java-runtime-common>=3'
@@ -125,6 +119,24 @@ build() {
   local _mold=""
   command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
   _LDFLAGS+=" ${_mold}"
+
+  # OpenJDK's configure hard-refuses a ccache-wrapped compiler — it resolves
+  # the symlink and dies even when --enable-ccache is passed ("ccache usage
+  # must be controlled by a configure option"), so hand it the real
+  # binaries and let --enable-ccache do the wrapping (host makepkg
+  # BUILDENV=ccache; run #93 wall)
+  local _ccache=""
+  if command -v ccache >/dev/null 2>&1; then
+    _ccache="--enable-ccache"
+    export CC=/usr/bin/cc CXX=/usr/bin/c++
+  fi
+
+  # cups 2.5 installs headers under /usr/include/libcups2 (the pkg-config
+  # includedir), while lib-cups.m4's bare AC_CHECK_HEADERS([cups/cups.h])
+  # probe cannot see them ("Could not find cups!") — point the sanctioned
+  # --with-cups-include knob at the resolved dir (same class as hplip's
+  # run #90 wall; run #93)
+  local _cups="--with-cups-include=$(pkg-config --variable=includedir cups 2>/dev/null)"
 
   # TODO: Should be rechecked for the next releases
   # compiling with -fexceptions leads to:
@@ -167,10 +179,17 @@ build() {
     --with-native-debug-symbols=internal \
     --enable-unlimited-crypto \
     --disable-warnings-as-errors \
+    ${_ccache} \
+    ${_cups} \
+    PANDOC= DOT= \
     --with-vendor-name="Arch Linux"
 
-  # trim: `docs` make target goes with the dropped openjdk-doc split
-  # (pandoc/graphviz makedeps kept: man-page/doc toolchain of the image build)
+  # trim: `docs` make target goes with the dropped openjdk-doc split; man
+  # pages and full docs are trimmed below anyway, so the doc tool chain is
+  # disabled at the seam — `PANDOC=`/`DOT=` empty tool overrides ("disabled
+  # by user", util_paths.m4 UTIL_SETUP_TOOL) — and the pandoc/graphviz
+  # makedeps are gone (run #93 wall: a host pandoc broken by the icu 78→79
+  # soname move aborted `images` at BUILD_MAN_PAGES)
   make JOBS="${GSA_BUILD_JOBS:-$(nproc)}" images legacy-jre-image
 
   # https://bugs.openjdk.java.net/browse/JDK-8173610
@@ -181,202 +200,6 @@ check() {
   cd ${_jdkdir}
   # TODO package jtreg
   # make -k check
-}
-
-package_jre-openjdk-headless() {
-  pkgdesc="OpenJDK Java ${_majorver} headless runtime environment"
-  depends=(
-    "${_commondeps[@]}"
-  )
-  optdepends=(
-    'java-rhino: for some JavaScript support'
-  )
-  # house: stock pinned virtual provides (java-runtime-headless=… etc.) dropped
-  # (bare soname provides only, never pinned) and stock conflicts=() dropped
-  # (no conflicts/replaces) — recorded in the recipe NOTE
-  provides=(
-    libawt_headless.so
-    libawt.so
-    libdt_socket.so
-    libextnet.so
-    libfontmanager.so
-    libinstrument.so
-    libj2gss.so
-    libj2pcsc.so
-    libj2pkcs11.so
-    libjavajpeg.so
-    libjava.so
-    libjdwp.so
-    libjimage.so
-    libjli.so
-    libjsig.so
-    libjsvml.so
-    libjvm.so
-    liblcms.so
-    libmanagement_agent.so
-    libmanagement_ext.so
-    libmanagement.so
-    libmlib_image.so
-    libnet.so
-    libnio.so
-    libprefs.so
-    librmi.so
-    libsctp.so
-    libsimdsort.so
-    libsyslookup.so
-    libverify.so
-    libzip.so
-  )
-  backup=(
-    etc/${pkgbase}/logging.properties
-    etc/${pkgbase}/management/jmxremote.access
-    etc/${pkgbase}/management/jmxremote.password.template
-    etc/${pkgbase}/management/management.properties
-    etc/${pkgbase}/net.properties
-    etc/${pkgbase}/security/java.policy
-    etc/${pkgbase}/security/java.security
-    etc/${pkgbase}/security/policy/README.txt
-    etc/${pkgbase}/security/policy/limited/default_US_export.policy
-    etc/${pkgbase}/security/policy/limited/default_local.policy
-    etc/${pkgbase}/security/policy/limited/exempt_local.policy
-    etc/${pkgbase}/security/policy/unlimited/default_US_export.policy
-    etc/${pkgbase}/security/policy/unlimited/default_local.policy
-    etc/${pkgbase}/sound.properties
-  )
-  install=install_jre-openjdk-headless.sh
-
-  cd ${_imgdir}/jre
-
-  install -dm 755 "${pkgdir}${_jvmdir}"
-
-  cp -a bin lib \
-    "${pkgdir}${_jvmdir}"
-
-  for f in "${_nonheadless[@]}"; do
-    rm "${pkgdir}${_jvmdir}/${f}"
-  done
-
-  # Conf
-  install -dm 755 "${pkgdir}/etc"
-  cp -r conf "${pkgdir}/etc/${pkgbase}"
-  ln -s /etc/${pkgbase} "${pkgdir}/${_jvmdir}/conf"
-
-  # Legal
-  install -dm 755 "${pkgdir}/usr/share/licenses"
-  cp -r legal "${pkgdir}/usr/share/licenses/${pkgbase}"
-  ln -s ${pkgbase} "${pkgdir}/usr/share/licenses/${pkgname}"
-  ln -s /usr/share/licenses/${pkgbase} "${pkgdir}/${_jvmdir}/legal"
-
-
-  # trim: man pages (docs) — man1 installs and the jvmdir/man symlink trimmed
-  # Link JKS keystore from ca-certificates-utils
-  rm -f "${pkgdir}${_jvmdir}/lib/security/cacerts"
-  ln -sf /etc/ssl/certs/java/cacerts "${pkgdir}${_jvmdir}/lib/security/cacerts"
-}
-
-package_jre-openjdk() {
-  pkgdesc="OpenJDK Java ${_majorver} full runtime environment"
-  depends=(
-    "${_commondeps[@]}"
-    giflib
-    libgif.so
-    libpng
-  )
-  optdepends=(
-    'alsa-lib: for basic sound support'
-    'gtk3: for the Gtk+ 3 look and feel - desktop usage'
-  )
-  # house: stock pinned virtual provides (java-runtime=… etc.) dropped (bare
-  # soname provides only, never pinned); stock conflicts=() dropped
-  provides=(
-    libawt_headless.so
-    libawt.so
-    libdt_socket.so
-    libextnet.so
-    libfontmanager.so
-    libinstrument.so
-    libj2gss.so
-    libj2pcsc.so
-    libj2pkcs11.so
-    libjavajpeg.so
-    libjava.so
-    libjdwp.so
-    libjimage.so
-    libjli.so
-    libjsig.so
-    libjsvml.so
-    libjvm.so
-    liblcms.so
-    libmanagement_agent.so
-    libmanagement_ext.so
-    libmanagement.so
-    libmlib_image.so
-    libnet.so
-    libnio.so
-    libprefs.so
-    librmi.so
-    libsctp.so
-    libsimdsort.so
-    libsyslookup.so
-    libverify.so
-    libzip.so
-    libawt_xawt.so
-    libjawt.so
-    libjsound.so
-    libsplashscreen.so
-  )
-  backup=(
-    etc/${pkgbase}/logging.properties
-    etc/${pkgbase}/management/jmxremote.access
-    etc/${pkgbase}/management/jmxremote.password.template
-    etc/${pkgbase}/management/management.properties
-    etc/${pkgbase}/net.properties
-    etc/${pkgbase}/security/java.policy
-    etc/${pkgbase}/security/java.security
-    etc/${pkgbase}/security/policy/README.txt
-    etc/${pkgbase}/security/policy/limited/default_US_export.policy
-    etc/${pkgbase}/security/policy/limited/default_local.policy
-    etc/${pkgbase}/security/policy/limited/exempt_local.policy
-    etc/${pkgbase}/security/policy/unlimited/default_US_export.policy
-    etc/${pkgbase}/security/policy/unlimited/default_local.policy
-    etc/${pkgbase}/sound.properties
-  )
-  install=install_jre-openjdk.sh
-
-  cd ${_imgdir}/jre
-
-  install -dm 755 "${pkgdir}${_jvmdir}"
-
-  cp -a bin lib \
-    "${pkgdir}${_jvmdir}"
-
-  for f in "${_nonheadless[@]}"; do
-    install -Dm 755 ${f} "${pkgdir}${_jvmdir}/${f}"
-  done
-
-  # Conf
-  install -dm 755 "${pkgdir}/etc"
-  cp -r conf "${pkgdir}/etc/${pkgbase}"
-  ln -s /etc/${pkgbase} "${pkgdir}/${_jvmdir}/conf"
-
-  # Legal
-  install -dm 755 "${pkgdir}/usr/share/licenses"
-  cp -r legal "${pkgdir}/usr/share/licenses/${pkgbase}"
-  ln -s ${pkgbase} "${pkgdir}/usr/share/licenses/${pkgname}"
-  ln -s /usr/share/licenses/${pkgbase} "${pkgdir}/${_jvmdir}/legal"
-
-
-  # trim: man pages (docs) — man1 installs and the jvmdir/man symlink trimmed
-  # Link JKS keystore from ca-certificates-utils
-  rm -f "${pkgdir}${_jvmdir}/lib/security/cacerts"
-  ln -sf /etc/ssl/certs/java/cacerts "${pkgdir}${_jvmdir}/lib/security/cacerts"
-
-  # Desktop files
-  for f in java; do
-    install -Dm 644 \
-      "${srcdir}/freedesktop-${f}.desktop" \
-      "${pkgdir}/usr/share/applications/${f}-${pkgbase}.desktop"
-  done
 }
 
 package_jdk-openjdk() {
@@ -405,9 +228,19 @@ package_jdk-openjdk() {
     'alsa-lib: for basic sound support'
     'gtk3: for the Gtk+ 3 look and feel - desktop usage'
   )
-  # house: stock pinned virtual provides (java-environment=… etc.) dropped
-  # (bare soname provides only, never pinned); stock conflicts=() dropped
+  # stock's pinned virtual provides restored (2026-10-09 run #93 family):
+  # java-environment/java-runtime/headless virtuals plus the jdkNN/jreNN
+  # names; stock conflicts=() stays dropped.
   provides=(
+    "java-environment=${_majorver}"
+    "java-environment-openjdk=${_majorver}"
+    "jdk${_majorver}-openjdk=${pkgver}-${pkgrel}"
+    "java-runtime=${_majorver}"
+    "java-runtime-openjdk=${_majorver}"
+    "jre${_majorver}-openjdk=${pkgver}-${pkgrel}"
+    "java-runtime-headless=${_majorver}"
+    "java-runtime-headless-openjdk=${_majorver}"
+    "jre${_majorver}-openjdk-headless=${pkgver}-${pkgrel}"
     libattach.so
     libsaproc.so
     libawt_headless.so
@@ -510,8 +343,9 @@ package_openjdk-src() {
   pkgdesc="OpenJDK Java ${_majorver} sources"
   # Depends on JDK to get license files
   depends=("jdk${_majorver}-openjdk=${pkgver}-${pkgrel}")
-  # house: stock pinned provide openjdk${_majorver}-src=$pkgver-$pkgrel dropped
-  # (never pinned); no ELF output here
+  # stock's rename-compat provide stays pinned at stock's value (rule 4: NAME
+  # capabilities are version-pinned; bare-soname-only governs SONAME provides)
+  provides=("openjdk${_majorver}-src=${pkgver}-${pkgrel}")
 
   install -Dm 644 -t "${pkgdir}${_jvmdir}/lib" ${_imgdir}/jdk/lib/src.zip
 

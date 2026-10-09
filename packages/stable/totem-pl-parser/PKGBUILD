@@ -31,12 +31,14 @@ checkdepends=(
 )
 provides=(
   libtotem-plparser{,-mini}.so
+  "totem-plparser=$pkgver-$pkgrel"
 )
 source=("git+https://gitlab.gnome.org/GNOME/totem-pl-parser.git#tag=$pkgver")
 b2sums=('e258bc354dc5d5732dc432c1c4e7ac99f17039d0423d149408d50673858adb8b6428019ec90c0291647c56e6c6f4d4d6e7e3792c1fa9ec117e5c15d19404048b')
-# trim: stock pinned totem-plparser=$pkgver-$pkgrel provide and the
-# conflicts=(totem-plparser)/replaces=() entries dropped per house standard
-# (bare soname provides only; no conflicts/replaces)
+# the totem-plparser= rename-compat provide is restored (2026-10-09 run #93:
+# localsearch declares `totem-plparser` and the trimmed provide broke the
+# upgrade path). conflicts=(totem-plparser)/replaces stay dropped — no
+# totem-plparser package is in the house closure
 
 prepare() {
   cd $pkgname

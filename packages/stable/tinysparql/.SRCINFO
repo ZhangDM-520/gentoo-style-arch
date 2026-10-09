@@ -31,3 +31,4 @@ pkgbase = tinysparql
 
 pkgname = tinysparql
 	provides = libtinysparql-3.0.so
+	provides = tracker3=3.12.0

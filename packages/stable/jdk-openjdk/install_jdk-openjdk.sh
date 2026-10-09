@@ -24,6 +24,9 @@ post_install() {
       ;;
   esac
 
+  echo "when you use a non-reparenting window manager,"
+  echo "set _JAVA_AWT_WM_NONREPARENTING=1 in /etc/profile.d/jre.sh"
+
   if [ ! -f /etc/ssl/certs/java/cacerts ]; then
     /usr/bin/update-ca-trust
   fi

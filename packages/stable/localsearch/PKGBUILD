@@ -81,10 +81,10 @@ build() {
 
 package_localsearch() {
   depends+=(libtinysparql-3.0.so)
-  # trim: the pinned tracker3-miners provide and its replaces/conflicts are
-  # dropped (house standard: bare soname provides only, never pinned; no
-  # conflicts/replaces for same-name upgrade-in-place)
-  provides=('libtracker-extract.so' 'libtracker-extract-zip.so')
+  # the tracker3-miners= rename-compat provide is restored (2026-10-09 run
+  # #93 family: stock pins it and dependents of the old name resolve through
+  # it); conflicts/replaces for the old name stay dropped
+  provides=("tracker3-miners=$pkgver" 'libtracker-extract.so' 'libtracker-extract-zip.so')
 
   meson install -C build --no-rebuild --destdir "$pkgdir"
 
