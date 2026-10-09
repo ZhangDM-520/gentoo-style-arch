@@ -46,3 +46,30 @@
  #endif
  
  #define standard_sub_basic talloc_strdup
+--- a/source3/printing/print_iprint.c
++++ b/source3/printing/print_iprint.c
+@@ -27,6 +27,24 @@
+ #ifdef HAVE_IPRINT
+ #include <cups/cups.h>
+ #include <cups/language.h>
++#if CUPS_VERSION_MAJOR == 2 && CUPS_VERSION_MINOR >= 5
++/* cups 2.5 deleted the legacy IPP spellings (cups 2.4 shipped them as
++   compat defines over the renamed enum values) */
++#define IPP_CANCEL_JOB IPP_OP_CANCEL_JOB
++#define IPP_FORBIDDEN IPP_STATUS_ERROR_FORBIDDEN
++#define IPP_GET_JOBS IPP_OP_GET_JOBS
++#define IPP_GET_PRINTER_ATTRIBUTES IPP_OP_GET_PRINTER_ATTRIBUTES
++#define IPP_HOLD_JOB IPP_OP_HOLD_JOB
++#define IPP_JOB_HELD IPP_JSTATE_HELD
++#define IPP_JOB_PENDING IPP_JSTATE_PENDING
++#define IPP_JOB_STOPPED IPP_JSTATE_STOPPED
++#define IPP_NOT_AUTHENTICATED IPP_STATUS_ERROR_NOT_AUTHENTICATED
++#define IPP_NOT_AUTHORIZED IPP_STATUS_ERROR_NOT_AUTHORIZED
++#define IPP_OK_CONFLICT IPP_STATUS_OK_CONFLICTING
++#define IPP_PRINTER_STOPPED IPP_PSTATE_STOPPED
++#define IPP_PRINT_JOB IPP_OP_PRINT_JOB
++#define IPP_RELEASE_JOB IPP_OP_RELEASE_JOB
++#endif
+ 
+ #define OPERATION_NOVELL_LIST_PRINTERS          0x401A
+ #define OPERATION_NOVELL_MGMT                   0x401C

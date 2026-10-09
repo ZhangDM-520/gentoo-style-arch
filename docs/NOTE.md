@@ -37,6 +37,50 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-10 — samba: `print_iprint.c` names 14 legacy IPP enums the wave's patch didn't cover — extend the compat block, generate hunks mechanically
+
+**Symptom.** run #103 wall, `samba` BUILD FAILED (4m12s): waf `PRINTING`
+task exit 1, 14 undeclared IPP enums in `source3/printing/print_iprint.c`
+(`IPP_CANCEL_JOB`, `IPP_FORBIDDEN`, `IPP_GET_JOBS`,
+`IPP_GET_PRINTER_ATTRIBUTES`, `IPP_HOLD_JOB`, `IPP_JOB_HELD`,
+`IPP_JOB_PENDING`, `IPP_JOB_STOPPED`, `IPP_NOT_AUTHENTICATED`,
+`IPP_NOT_AUTHORIZED`, `IPP_OK_CONFLICT`, `IPP_PRINTER_STOPPED`,
+`IPP_PRINT_JOB`, `IPP_RELEASE_JOB`) — the cups 2.5 enum-removal class the
+b2d6cd0 wave pre-patched.
+
+**Root cause.** The wave's `cups-2.5-enum-compat.patch` copy for samba
+covered `print_cups.c` and `lib/param/loadparm.c` only; samba's iPrint
+backend file uses the same legacy spellings behind `#ifdef HAVE_IPRINT`
+and was never scanned.
+
+**Fix.** Extend `packages/stable/samba/cups-2.5-enum-compat.patch` with a
+third hunk: the same gated compat-define block at `print_iprint.c`'s cups
+include site. Every mapping re-verified against the installed
+`/usr/include/libcups2/cups/ipp.h` (ops → `IPP_OP_*`, job/printer states →
+`IPP_JSTATE_*`/`IPP_PSTATE_*`, statuses → `IPP_STATUS_OK_CONFLICTING` /
+`IPP_STATUS_ERROR_{FORBIDDEN,NOT_AUTHENTICATED,NOT_AUTHORIZED}`). The
+recipe uses **b2sums** — 5th entry updated with the patch's new hash, then
+`.SRCINFO` regenerated; $W twin synced with its `pkgrel=1.1` mark
+preserved and twin `.SRCINFO` regenerated.
+
+**Validation.** `patch -Np1 --dry-run` clean against a pristine
+`samba-4.25.0.tar.gz` extract for all three hunks; `bash -n` +
+`makepkg --printsrcinfo`; rehearsal `-s -fi --no-deps samba` → ✓ 7m00s,
+fresh `2:4.25.0-1.1` split archives (ldb/libwbclient/smbclient/…), one
+`Making package`, install completed (the 86 `error:` lines in the log are
+pidl's benign "Unable to determine origin of type" noise). Full battery
+run after this entry.
+
+**Rule.** (1) A compat patch must be driven by a scan of the consumer's
+*whole* source for legacy tokens, not by the first file that failed —
+`samba` had a second cups consumer behind an `#ifdef` the wave never
+opened. (2) Generate patch hunks mechanically (`cp file{,.orig}` → edit →
+`diff -u` → splice): a hand-written hunk failed `patch --dry-run` on
+invisible whitespace and would have burned a whole build cycle. (3) The
+builder's run lock stays held until `--- run record end ---` even after
+the wall that stopped dispatch (draining lanes can run for an hour) —
+never start a rehearse on a ✗ signal alone; wait for the record end.
+
 ## 2026-10-10 — libppd (and the cups-config shim class): shim echoed `1` for `--image` and broke multi-flag captures — a compatibility shim must match upstream's *output shape*
 
 **Symptom.** run #102 wall, `libppd` BUILD FAILED (rc=1, 0m07s, twice):
