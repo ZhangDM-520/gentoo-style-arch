@@ -47,5 +47,7 @@ package() {
     # trim: man pages (man8 pkgfile, man8 pkgfile-update) (docs) — not shipped
     rm -rf "$pkgdir"/usr/share/man
 
-    install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname/"
+    # explicit licence ship (repo convention); upstream's meson install also
+    # places LICENSE here — path is $srcdir-relative unless qualified
+    install -Dm644 "$srcdir/$pkgname/LICENSE" -t "$pkgdir/usr/share/licenses/$pkgname/"
 }

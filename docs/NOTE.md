@@ -37,6 +37,35 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-09 — run #85 pkgfile wall: bare `LICENSE` in `package()` read from the wrong directory
+
+**Symptom.** Run #85 continued `401..` (pacman now green) with 17 green and
+died at `pkgfile`: build and `meson install` completed, then
+`install: cannot stat 'LICENSE': No such file or directory` → `package()`
+aborted.
+
+**Root cause.** `package()` runs `install -Dm644 LICENSE …` with cwd
+`$srcdir`, but the licence file lives in the clone at `$srcdir/pkgfile/`.
+Upstream's meson install had in fact already shipped it (its own install
+step places LICENSE in `usr/share/licenses/pkgfile`), so the manual step was
+both broken and redundant.
+
+**Fix.** Qualify the path: `install -Dm644 "$srcdir/$pkgname/LICENSE" …`.
+Kept rather than deleted because explicit licence shipping is repo
+convention and the qualified path is independent of upstream's install
+choices on a later version bump.
+
+**Validation.** `bash -n` parse OK on both twins; `makepkg --printsrcinfo`
+diff-clean. Rehearsal in `$W`: run record `pkgfile succeeded 0 13 ok`,
+archive contains `usr/share/licenses/pkgfile/LICENSE` and no man pages
+(the trim held). Battery green in the gap.
+
+**Rule.** Relative paths in `package()` resolve against `$srcdir`, not the
+source clone — a licence/install line must either `cd` first or address
+`"$srcdir/$pkgname/…"`. When `ninja`/`meson install` output shows a file
+already landing in the wanted destination, say so in the comment instead of
+silently duplicating the step.
+
 ## 2026-10-09 — run #84 pacman wall #2: patch-created files survive makepkg's extract — `prepare()` not idempotent on rebuild
 
 **Symptom.** Run #84 rebuilt `pacman` (the `-s` skip re-evaluated to rebuild)
