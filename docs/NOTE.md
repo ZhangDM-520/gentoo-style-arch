@@ -37,6 +37,40 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-09 — run #91 libnvme wall: `package()` reads `COPYING` from `$srcdir`, but the tarball root is one level down
+
+**Symptom.** Run #91 (`401..`) skipped past run #90's finished rows and died
+on `libnvme` in `package()` after a clean meson build:
+`install: cannot stat 'COPYING': No such file or directory`
+(`libnvme failed 1 11 build-failed` — 11 s because the incremental meson
+tree made the compile free).
+
+**Root cause.** makepkg runs `build()`/`package()` with cwd `$srcdir`, and
+the GitHub tarball extracts to `$srcdir/$pkgname-$pkgver/`, so bare
+`COPYING` resolved to `$srcdir/COPYING`. Second occurrence of the run-#85
+pkgfile class (there the clone lived at `$srcdir/pkgfile/`).
+
+**Fix.** `install -Dm644 "$srcdir/$pkgname-$pkgver/COPYING" …` in
+`package()`; `.SRCINFO` untouched (a `package()`-only change, pkgfile
+precedent). Proactive same-shape scan over all recipes
+(`grep -rnE '(install|cp) .*(LICENSE|COPYING)' packages/*/*/PKGBUILD |
+grep -vE '\$|/|\.\.'`) found three other bare-name sites — `nss-git`
+(proven: archive already built), `man-db` (its `package()` `cd`s into the
+source root — the `../$pkgname-remove-cache.hook` use proves it) and
+`socat` (`cd "${pkgname}-${pkgver}"` precedes the installs) — all correct
+as written; no other wall of this shape is pending in `401..`.
+
+**Validation.** `bash -n` clean; `makepkg --printsrcinfo` byte-identical to
+the committed `.SRCINFO`; twins in sync (diff = `pkgrel=2` vs the `2.1`
+rebuild mark only); rehearse over the dirty tree (`-s -fi --no-deps
+libnvme`) = `libnvme succeeded 0 15 ok`, rc 0, installed `1.16.2-2.1`, and
+the archive carries `usr/share/licenses/libnvme/COPYING`.
+
+**Rule.** `package()` starts in `$srcdir`, not the source root — two runs
+now (pkgfile #85, libnvme #91) — so every relative path needs
+`$srcdir/<extract-dir>/…` qualification or an explicit `cd` first
+(MEMORY §1 #48, with the scan one-liner).
+
 ## 2026-10-09 — harness: the `fish_function_path` battery prefix starves fish's vendor autoload — stderr noise fails exact-match fixtures
 
 **Symptom.** Validating the hplip fix, the battery reported 54 passed, 1

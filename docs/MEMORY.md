@@ -910,6 +910,18 @@
     → HAVE_PYTHON/HAVE_PYTHON3 conditionals). Diagnostic: a trimmed feature
     that still compiles means the trim was incomplete — probes find
     substitute tools on PATH regardless of makedepends.
+48. **`package()` starts in `$srcdir`, not the source root — qualify every
+    relative path or `cd` first** (2026-10-09 run #85 pkgfile, run #91
+    libnvme): a bare `install -Dm644 LICENSE`/`COPYING` reads
+    `$srcdir/LICENSE` while the tarball extracts to
+    `$srcdir/$pkgname-$pkgver/` (or a VCS clone subdir) — `install: cannot
+    stat` kills `package()` after the whole compile is done. Qualify
+    (`"$srcdir/$pkgname-$pkgver/COPYING"`) or `cd` into the source root
+    before the install; a recipe already using `../something` in
+    `package()` has cd'd and is fine. Scan:
+    `grep -rnE '(install|cp) .*(LICENSE|COPYING)' packages/*/*/PKGBUILD |
+    grep -vE '\$|/|\.\.'` flags offenders. A `package()`-only fix leaves
+    `.SRCINFO` untouched.
 35. **Never `cd` inside a fish command substitution — fish 4.9.3 runs the
     substitution in-process and the `cd` leaks to the caller**
     (2026-10-07 run #56 nodejs): `(cd "$x" && pwd -P)` silently moved the
