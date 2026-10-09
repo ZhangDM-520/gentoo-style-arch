@@ -76,6 +76,9 @@ build() {
 
   local meson_options=(
     -D graphite2=enabled
+    # upstream's hb-gpu demo needs GLFW (wrap-fetch is off); the demo is not
+    # shipped payload — libharfbuzz-gpu itself stays enabled
+    -D gpu_demo=disabled
   )
 
   arch-meson harfbuzz build "${meson_options[@]}"

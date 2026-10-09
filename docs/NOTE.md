@@ -37,6 +37,32 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-09 — harfbuzz-git: upstream's new hb-gpu demo wanted GLFW and the wrap-fetch is off — disable the demo, keep the library
+
+**Symptom.** meson configure died at `util/gpu/meson.build:58`:
+`Automatic wrap-based subproject downloading is disabled` while probing
+`glfw3` — run #98 wall at package 61/253.
+
+**Root cause.** harfbuzz HEAD gained an experimental GPU stack: a real
+`libharfbuzz-gpu` library behind the `gpu` option (default enabled) and an
+`hb-gpu` **demo tool** behind `gpu_demo` (default auto) that needs
+GLEW/GLFW/GL. GLEW and GL exist on the host, GLFW does not; meson then
+tried the wrap fallback and hit `--wrap-mode=nodownload`.
+
+**Fix.** `-D gpu_demo=disabled` in `meson_options` — the demo is not
+shipped payload and was never built before upstream added it, while
+`libharfbuzz-gpu` stays enabled (its `libharfbuzz-gpu.so` was already in
+the recipe's soname provides). No new makedep.
+
+**Validation.** `bash -n` + `makepkg --printsrcinfo` (`.SRCINFO`
+byte-identical); $W twin synced; rehearsal `-s -fi --no-deps
+harfbuzz-git` → ✓ 1m30s, run record `outcome: success`.
+
+**Rule.** A `-git` recipe meets new upstream features as new meson
+options; disable what the package never shipped and keep what is payload —
+never paper over a demo's new dependency with a makedep the trim would
+delete anyway.
+
 ## 2026-10-09 — mariadb-libs: bare `mkdir build` died on the interrupted build's leftover dir — idempotency class (4147ef1)
 
 **Symptom.** `build()` failed at `mkdir: cannot create directory 'build':
