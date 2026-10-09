@@ -371,7 +371,13 @@
     gcc-snapshot: AUR carries `gcc-ada-repro.patch` for the ada frontend
     this recipe trims, and byte equality refused a checksum anchor that was
     correct for every source the recipe does build) — before it supplies
-    pkgrel/epoch or checksums; at equal pkgver, never lower a local pkgrel. For GitHub, bind
+    pkgrel/epoch or checksums; the coverage direction is one-way, so a
+    recipe-side patch or extra file is a **recipe-superset** that refuses
+    (`anchoring-refused`, deferred, rewrite restored — 2026-10-09
+    gcc-snapshot): local fixes on an anchored recipe are applied from
+    PKGBUILD content inside `prepare()` (heredoc patch, sed, or staging
+    moves, like the mutations that recipe already carries), never added to
+    `source=()`. At equal pkgver, never lower a local pkgrel. For GitHub, bind
     an asset digest to the configured repository, release tag and remote URL
     basename (not a `name::url` local override);
     when no digest is published, label refreshed sums fetch-only. Provider
@@ -1227,6 +1233,13 @@ install history lives in `NOTE.md`.
   `pipewire-jack-client` is kept. `easyeffects-git` replaced `jamesdsp-git`.
 - **blender-git** pairs with house `openshadinglanguage` (same LLVM coupling as
   §6 describes).
+- **gcc-snapshot carries a house compiler patch in `prepare()`** (2026-10-09):
+  `verify_ctor_sanity` is made a no-op for PR c++/127395 (a r17-4199
+  regression false-positiving on abseil/protobuf headers, §6). It is a
+  heredoc patch, NOT a `source=()` entry, because the recipe is
+  version-sync-anchored (golden rule 18). Drop-condition is recorded in the
+  patch comment: remove the block once the upstream fix lands in a snapshot
+  we build.
 
 ## 4. Optimization playbook
 
@@ -1608,6 +1621,30 @@ zero baked `.gcda` destinations — `ctest`'s single hit is the `/*.gcda` glob
 constant, not a baked path).
 
 ## 6. Pitfall digest (full details: NOTE.md sections of same dates)
+
+- **A `$W` twin sync must cover `config/`, and a `--no-deps` selection must
+  cover its members' unmet HOUSE prerequisites** (2026-10-09 Qt6 wall): an
+  edge fix validated in the canonical tree sorted wrongly in the `$W` run
+  because `config/topology.conf` was never copied across (validate ordering
+  against the copy you run); and a hand-picked `--no-deps` set that omitted a
+  makedepends (`qt6-quick3d`) made makepkg silently install **stock** repo
+  replacements — stopped only by a mirror 404. Sync every changed file class,
+  and include unmet house prereqs in the selection or use a group run.
+
+- **A snapshot compiler is allowed to be the wall — reproduce the ICE with a
+  standalone probe before touching recipes** (2026-10-09 opencv, run #87):
+  the build died `internal compiler error: in verify_ctor_sanity` in
+  abseil/protobuf headers at -O0 and -O3 — GCC PR c++/127395 (regression
+  since r17-4199), a false-positive assert on valid C++. Both available
+  snapshots were regressed (downgrade useless) and no upstream fix existed;
+  the recipe-side system-protobuf detour could never help (system abseil
+  ICEs too) and was reverted. Fix = scope the compiler recipe: make the
+  verifier's asserts a no-op in `prepare()` (removing only the firing assert
+  would segfault the compiler — the asserts below dereference the same null
+  pointer), drop it when upstream lands a fix. A ~10-line TU against system
+  headers reproduced the ICE in <5 s where a full build took 30+ min: red
+  the probe on the broken compiler, green it on the rebuilt one, so the
+  compiler change is falsifiable rather than assumed.
 
 - **An `-i` install of an LLVM-ABI provider replaces the SONAMEs the LIVE
   mesa stack dlopens — black desktop + hard freeze** (2026-10-07): house

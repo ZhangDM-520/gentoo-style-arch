@@ -37,6 +37,117 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-09 — Qt6 wall: ICU soname skew behind a missing opencv→Qt edge — plus two sync/selection lessons
+
+**Symptom.** opencv's clean rehearse (after the compiler fix) died at 46% on
+`modules/highgui/qrc_window_QT.cpp`:
+`/usr/lib/qt6/rcc: error while loading shared libraries: libicui18n.so.78`.
+A later hand-rolled heal then had `qt6-multimedia` die in makepkg's
+*dependency phase* downloading `qt6-quick3d`/`qt6-quicktimeline`/`openxr`
+from the CachyOS mirror (404).
+
+**Root cause.** Three layers. (1) The known ICU skew (2026-10-06, MEMORY
+rule 30): house `icu-git` ships `libicu*.so.79` while the stock victims
+(`libQt6Core` in stock `qt6-base`, `libQt6Core5Compat` in stock
+`qt6-5compat`, `libQt5Core`, samba) still need `.78` — and opencv's
+HighGUI build *runs* `qt6-base`'s rcc and links Qt6. (2) opencv's topology
+record carried no edge on `qt6-5compat` (a real `makedepends`) or
+`qt6-base-git` (the rcc/link source), so the scheduler was free to build it
+before its Qt tools were usable; the victims' rebuild slots sit later in
+`401..`. (3) The first heal selection (`--no-deps`, hand-picked) omitted
+`qt6-quick3d` — a real `makedepends` of `qt6-multimedia` — so makepkg fell
+back to installing **stock** repo packages; only a mirror 404 aborted the
+transaction (verified atomic: nothing landed).
+
+**Fix.** opencv's record edges += `qt6-5compat,qt6-base-git`
+(metadata-verified: `.SRCINFO` makedepends `qt6-5compat` +
+optdepends/measured rcc usage of `qt6-base`), then `config/topology.conf`
+synced to the `$W` twin. The Qt6 coupled batch (anchor `qt6-base-git` + the
+installed `abi=must` members `qt6-declarative qt6-shadertools qt6-svg
+qt6-tools qt6-multimedia`) + `qt6-5compat` rebuilt/installed first
+(`-s -fi --no-deps <set>`), then opencv force-rebuilt clean (`-c -fi`)
+against the final set.
+
+**Validation.** Batch run records all `ok` (`qt6-declarative` 42m38s; the
+`qt6-multimedia` failure was the dependency phase above, not compilation);
+the follow-up run `order: qt6-5compat opencv`, both `ok` (56s/500s). End-state
+`ldd`: `/usr/lib/qt6/rcc` and `libQt6Core.so.6` resolve `libicu*.so.79`, and
+`libopencv_highgui.so` resolves the full Qt6 chain with no `not found`.
+
+**Rules.** (1) The `$W` twin sync covers `config/` too — the first heal ran
+opencv at slot 2/8 because the validated edge fix never reached the tree the
+builder actually reads; validate ordering against the copy you run. (2) A
+`--no-deps` selection must include every unmet HOUSE prerequisite of its
+members (or use a group run): makepkg silently installs *stock* repo
+replacements for missing makedepends — the 404 prevented contamination here,
+not the process. (3) Nothing yet checks topology edges against recipe
+metadata (the merge-gated lint work); until it lands, re-verify edges
+whenever a recipe's depends/makedepends change.
+
+## 2026-10-09 — run #87 opencv wall: GCC 17 snapshot ICE on valid C++ (PR c++/127395) — fixed by scoping the compiler recipe
+
+**Symptom.** Run #87 died at `opencv` (5.0.0, pkgrel 12/12.1): vendored
+`3rdparty/protobuf` `map.h:1035` hit `internal compiler error: in
+verify_ctor_sanity, at cp/constexpr.cc:7384` in 3 TUs, and later the same ICE
+fired in `/usr/include/absl/strings/internal/str_join_internal.h:250` across
+10+ TUs. A standalone probe TU (`#include <absl/strings/str_join.h>` plus one
+`StrJoin` instantiation) reproduced the ICE in <5 s at both `-O0` and `-O3`,
+so it was not an optimization-sensitive miscompile.
+
+**Root cause.** The compiler, not the recipe: the ICE is GCC bug **PR
+c++/127395** (regression since r17-4199, i.e. before *both* snapshot pins we
+hold — 20260927 and 20261004), a false-positive `gcc_assert (ctx->ctor)` on
+valid code — abseil-cpp-20260817 and protobuf headers legitimately reach
+`verify_ctor_sanity` with a null ctor. Measured in the extracted source: the
+function is pure `gcc_assert` sanity checks, the firing one is at
+`constexpr.cc:7384`, and the asserts below it dereference `ctx->ctor` — so
+removing only the firing assert would turn a clean ICE into a compiler
+segfault on the same inputs. Upstream re-check (this window): `constexpr.cc`
+was last touched upstream 2026-09-27, no commit references 127395, and AUR
+`gcc-snapshot` is still `snapshot20261004` — there is no fixed snapshot to
+bump to, and downgrading cannot help. A system-protobuf recipe detour tried
+during diagnosis (run #87: `BUILD_PROTOBUF=OFF` + `PROTOBUF_UPDATE_FILES=ON`)
+could never have helped — the system abseil headers ICE the same compiler —
+and had its own generated-header wiring failure; it was reverted in full
+(both twins; the `$W` twin keeps its 12.1 mark).
+
+**Fix.** `packages/core/gcc-snapshot/PKGBUILD` `prepare()` now applies a
+heredoc patch making `verify_ctor_sanity` a no-op wholesale — what
+`--enable-checking=no` does to that function, scoped, with the rest of the
+compiler's checking intact. The block carries the rationale and the
+drop-condition (delete it once the upstream fix lands); a `grep -q 'PR
+c++/127395'` guard keeps `prepare()` idempotent over an already-patched
+`$srcdir`. The patch is **not** a `source=()` entry: the first attempt added
+it as one and the builder's checksum-anchoring gate deferred the run
+(`anchoring-refused — AUR .SRCINFO sources do not cover every source of the
+rewritten recipe; the recipe was restored`) — golden rule 18's coverage
+contract is one-way (AUR-superset allowed, recipe-superset refused), and
+`gcc-snapshot` is version-sync=nvchecker/aur-anchored. Local fixes on
+anchored recipes go into `prepare()` as PKGBUILD content, like the recipe's
+existing `sed` mutations. (The gate is right: an anchored recipe's source
+list is the anchor's subject.) No pkgrel bump (campaign precedent), so the
+heal used `-fi` — plain `-i` would skip the same-version install.
+
+**Validation.** `bash -n` + `makepkg --printsrcinfo` both twins; the heredoc
+diff was dry-run-applied to pristine `constexpr.cc` from *both* snapshot
+tarballs before wiring. Heal run (`-s -fi --no-deps gcc-snapshot`):
+run record `outcome: success`, `gcc-snapshot succeeded 0 1835 ok`, log
+shows `patching file gcc/cp/constexpr.cc` with no failures; installed
+20261004-1 at 14:11. The probe flipped red→green against the installed
+compiler at both -O0 and -O3 (same command, same TU). opencv rehearsal over
+a clean tree with the reverted (vendored-protobuf) recipe then compiled 805
+TUs with **zero ICEs — including the vendored `3rdparty/protobuf` TUs that
+were the original fatal site** — dying only at 46% on a *different* wall
+(Qt6/ICU victims; separate entry below), so the compiler fix is validated on
+the real workload too.
+
+**Rule.** When a build dies in an ICE, reproduce it with a tiny TU first and
+red/green that probe around the compiler rebuild — a 30-minute bootstrap must
+never be the first signal. Read the ICE's source line before choosing the
+scope of a fix: assert chains share state, and narrowing to the firing assert
+can convert a clean ICE into a segfault. And check the anchor contract
+(golden rule 18) before adding any source to a version-synced recipe.
+
 ## 2026-10-09 — run #86 rdma-core wall: GitHub *tag archive* lacks `buildlib/pandoc-prebuilt/` — no-pandoc install dies on phantom man paths
 
 **Symptom.** Run #86 continued `401..` (19 green) and died at `rdma-core`:
