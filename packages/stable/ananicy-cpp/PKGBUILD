@@ -35,6 +35,21 @@ sha512sums=('f1e5c0308d0c6f4c5d56af858e2fcbc3a8a835ecb8a5d78b726d8663d9e7039e8cf
 
 prepare() {
   cd "${srcdir}/${pkgname}"
+  # run #82 wall (rule 37 family): the toolchain stopped pulling
+  # <cstdint>/<cstring>/<unistd.h> transitively, so std::intN_t / std::mem*
+  # / std::strerror / getpid stopped resolving all over this pinned v1.2.0
+  # tree. Sweep every translation unit that uses a symbol without the direct
+  # header (idempotent: grep-guarded, so a dirty src/ re-run adds nothing).
+  local _f
+  for _f in $(grep -rlE 'std::(u?int[0-9]+_t)' src include --include='*.cpp' --include='*.hpp' --include='*.h'); do
+    grep -q '#include <cstdint>' "$_f" || sed -i '1s/^/#include <cstdint>\n/' "$_f"
+  done
+  for _f in $(grep -rlE 'std::(memset|memcpy|memmove|strerror|strlen|strcmp)\b' src include --include='*.cpp' --include='*.hpp' --include='*.h'); do
+    grep -q '#include <cstring>' "$_f" || sed -i '1s/^/#include <cstring>\n/' "$_f"
+  done
+  for _f in $(grep -rlE '[^_.a-zA-Z](getpid|gettid)\s*\(' src include --include='*.cpp' --include='*.hpp' --include='*.h'); do
+    grep -q '#include <unistd.h>' "$_f" || sed -i '1s/^/#include <unistd.h>\n/' "$_f"
+  done
 }
 build() {
   cd "${srcdir}/${pkgname}"

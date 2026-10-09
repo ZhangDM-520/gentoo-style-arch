@@ -37,6 +37,42 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-09 — run #82 ananicy-cpp wall: toolchain header hygiene — `std::intN_t`/`std::mem*`/`getpid` stopped resolving across the tree
+
+**Symptom.** Run #82 opened the `401..` window and died at `ananicy-cpp`
+(`build-failed`, ninja): `backtrace.cpp` — `'int32_t' in namespace 'std' does
+not name a type` (and the `BACKTRACE_LENGTH`/`backtrace_buffer` cascade),
+`argument.cpp` — `'memset' is not a member of 'std'`, `process.cpp` —
+`'getpid' was not declared in this scope`. Fixing those three exposed the next
+ninja batch (`debug.cpp`, `singleton_process.cpp`, `service.cpp`) with the
+same class of error — the breakage is tree-wide, not per-file.
+
+**Root cause.** Rule 37 family (see the nodejs LIEF `<sstream>` wall): the
+toolchain stopped pulling `<cstdint>`/`<cstring>`/`<unistd.h>` transitively,
+and the pinned `v1.2.0` tree (tag + anchored sha512) relies on those
+transitive includes all over. A per-file iterate would cost one ~10-minute
+rehearsal cycle per ninja batch.
+
+**Fix.** One idempotent IWYU sweep in `prepare()`: for every `.cpp`/`.hpp`/`.h`
+under `src/`+`include/`, grep for the symbol class (`std::u?intN_t`,
+`std::mem*`/`std::strerror`, `getpid`/`gettid`) and insert the missing direct
+header at line 1 when absent. Grep-guarded, so re-running over a dirty `src/`
+adds nothing. Deliberately *not* a `CXXFLAGS=-include`/`CMAKE_CXX_FLAGS`
+injection: the CMake cache would swallow a changed flags env on reconfigure
+(MEMORY §6) and it edits the flags domain for a source defect.
+
+**Validation.** `bash -n` parse OK on both twins (edit applied in place to the
+`$W` twin, its `pkgrel=1.1` version-sync mark preserved); `makepkg
+--printsrcinfo` diff-clean. Rehearsal in `$W` over the dirty tree: run record
+`ananicy-cpp succeeded 0 20 ok`, zero `error:` lines in the build log,
+installed (`pacman -Qi` 10:47). Battery green in the gap.
+
+**Rule.** When a pinned source tree trips "X does not name a type / was not
+declared" in several translation units at once, treat it as one tree-wide
+transitive-include defect: sweep for the symbol classes and insert the direct
+headers in `prepare()` — do not play whack-a-mole per ninja batch, and do not
+reach for `-include` flags that the CMake cache will discard.
+
 ## 2026-10-09 — run #80 libgexiv2-git wall: meson shipped the Python GI override the recipe deliberately leaves to stock `gexiv2-common` — install file conflict
 
 **Symptom.** Run #80 reached 142 green rows and stopped at `libgexiv2-git`:
