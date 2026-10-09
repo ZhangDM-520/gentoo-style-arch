@@ -63,7 +63,18 @@
      clean; the recipe-contract ratchet emptied and became a strict gate). A
      versioned provide is for a NAME capability whose consumers constrain it
      by version — `shelly=${pkgver}` and the toolchain `meson=${pkgver}`
-     pattern.
+     pattern. Rename-compat provides after an upstream rename
+     (`tracker3=`, `totem-plparser=`, `geoclue2=`, `tracker3-miners=`) and
+     capability virtuals (`java-runtime=`, `java-runtime-headless=`,
+     `java-environment=`, …) are exactly that kind of NAME capability — keep
+     them pinned at stock's value; the "bare soname only" half of this rule
+     governs SONAME provides and never authorizes dropping them. Counter
+     example: 2026-10-09 run #93, where five recipes trimmed those pins "per
+     house standard" and the upgrades then broke installed dependents
+     (gtk3-git→`tracker3`, localsearch→`totem-plparser`), plus the jdk
+     virtuals every `java-runtime`/`java-environment` consumer resolves
+     through. `conflicts`/`replaces` for the retired old name stay dropped —
+     they matter only while an old-named package is installed.
    - the name side is SONAME + NAME with opposite forms (2026-10-04 Q8
      decision): wherever a recipe MAPS a stock name — swaps it (Class A
      `provides=(<stock>=$pkgver)` + `conflicts=(<stock>)`), is the VCS
@@ -2530,3 +2541,20 @@ constant, not a baked path).
   with want/got blocks that look byte-identical — look for hidden stderr
   pollution before suspecting the lint. Run the battery plain
   (`bash tests/run-all.sh`).
+- **Tree exclusions in `find` are `-prune`, never `-not -path`** (2026-10-09,
+  builder): `-not -path` filters output only, so `sweep_stale_run_artifacts`
+  still descended into every recipe's `src/`/`pkg/`/`build/` trees at run
+  start — 11+ minutes of I/O before the first dispatch of a single-package
+  run. All three staging-excluding finds (run-start sweep, `cleanup_pkgs`,
+  the audit stale listing) now prune the staging dirs instead; exclusion
+  sets unchanged. `tests/log-ownership.sh` §1b pins the boundary (decoys under
+  `src/`/`build/` survive, a recipe-depth temp is swept). Details: NOTE.md
+  2026-10-09.
+- **A systemd bump that drops a hook input is guarded in the mkinitcpio
+  recipe, never worked around on the host** (2026-10-09, mkinitcpio): systemd
+  262 dropped `systemd-tpm2-setup` and the initrd PCR units that
+  `install/systemd` hard-required, breaking `mkinitcpio -P` for every kernel.
+  `0002-guard-missing-systemd-tpm2-setup.patch` guards all seven absent names
+  (0001 covers NvPCR). Scan the whole hook input list against the installed
+  provider in one pass; bump `pkgrel` so a checked install cannot
+  same-version-skip. Details: NOTE.md 2026-10-09.

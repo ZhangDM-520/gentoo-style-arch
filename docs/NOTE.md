@@ -37,6 +37,273 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-09 — every run started with minutes of `find` over staging trees: `-not -path` filters output, not traversal
+
+**Symptom.** Before the first dispatch of any run — even a single-package
+`--no-deps mkinitcpio` — a `find` over `packages/` ran **11+ minutes** on the
+USB workspace, reading every recipe's `src/`/`pkg/`/`build/` trees while no
+build was running.
+
+**Root cause.** `sweep_stale_run_artifacts` (run start, unconditional) hunts
+`*.gsa-vcs-revisions.tmp.*` crash leftovers with `find … -type f -name …
+-not -path '*/src/*' …`. `-not -path` filters the **output** only — `find`
+still descends into every VCS clone and meson build tree just to discard the
+hits. `cleanup_pkgs` (`-cc`) and the audit stale listing (`lib/audit.fish`)
+shared the shape.
+
+**Fix.** All three re-expressed with `-prune` on the staging-dir names.
+`cleanup_pkgs` prunes `src`/`pkg` only — its exclusion set has no `build/`,
+and an archive under a build dir is still a built archive `-cc` must remove.
+Exclusion sets are unchanged; only traversal is. New fixture section
+`tests/log-ownership.sh` §1b pins the boundary: decoy manifest temps under
+`src/`/`build/` survive, a recipe-depth one is swept.
+
+**Validation.** `fish -n build-all.fish`, `bash -n tests/log-ownership.sh`;
+relaunched rehearsal: whole run **42 s** (build itself 40 s) where the
+identical run had spent 11+ min in `find` without dispatching.
+
+**Rule.** Tree exclusions in `find` are `-prune` (traversal), never
+`-not -path` (output filter) — the latter silently walks everything it claims
+to skip. Keep the name-anywhere match and prune only the staging dirs.
+
+## 2026-10-09 — `mkinitcpio -P` wall: systemd 262 dropped TPM2/PCR inputs the systemd hook hard-requires — 0002 guard
+
+**Symptom.** Host initramfs rebuild (`mkinitcpio -P`, via the pacman hook)
+aborted for every installed kernel with `==> ERROR: file not found:
+'/usr/lib/systemd/systemd-tpm2-setup'`.
+
+**Root cause.** systemd 262-1 replaced `systemd-tpm2-setup` with
+`systemd-report-sign-tpm2` and dropped the initrd PCR units, while
+mkinitcpio 42.2's `install/systemd` hook hard-requires the old names through
+its unconditional `map add_binary` / `map add_systemd_unit` lists. A
+proactive scan of the **whole** hook input list against the installed systemd
+found 1 missing binary and 6 missing units: `systemd-pcrextend.socket`,
+`systemd-pcrextend@.service`, `systemd-pcrnvdone.service`,
+`systemd-pcrosseparator.service`, `systemd-pcrphase-initrd.service`,
+`systemd-tpm2-setup-early.service`. Same class as the NvPCR wall (0001).
+
+**Fix.** `packages/stable/mkinitcpio/0002-guard-missing-systemd-tpm2-setup.patch`
+— mirror of 0001's shape: the seven names leave the unconditional lists and
+become `[[ -e … ]]`-guarded adds (the units via a `|| continue` loop; an
+`&&`-list guard returns rc 1 when the last item is absent). `pkgrel` 1→2 so
+a checked `-i` install cannot same-version-skip the reinstall; wired into
+`source`/`sha512sums`/`b2sums`/`prepare()`.
+
+**Validation.** 0001+0002 apply cleanly in sequence to pristine v42.2 and
+`bash -n` the patched hooks; rehearse
+`fish build-all.fish -s -fi --no-deps mkinitcpio` over the dirty workspace →
+built+installed **42.2-2**, run record `outcome: success`; `sudo mkinitcpio
+-P` regenerated the initramfs for **all** kernels (linux-cachyos-lts,
+linux-cachyos, linux-cachyos-rc), each `Initcpio image generation
+successful`, images freshly written under the Limine entry directory.
+
+**Rule.** When a systemd update drops an input mkinitcpio's hooks name, guard
+the absent optional input in the recipe (0001/0002 pattern) — never re-enable
+the bootloader feature and never delete host files to satisfy a hook. Scan
+the whole hook input list against the installed provider in one pass instead
+of fixing one missing name per rebuild.
+
+## 2026-10-09 — IgnorePkg roster audit: dynamic register leaked 444 names — live list backfilled, feature fix dispatched
+
+**Symptom.** "Are all built packages in my IgnorePkg list?" — no. The set
+roster (every `.SRCINFO` `pkgname`, incl. split outputs) is **1001** names;
+`pacman-conf IgnorePkg` held **557** of them (+7 non-set holds): **444**
+missing, **380** of which exist in the sync repos and are therefore live
+`pacman -Syu` clobber targets. 719 set names are installed; 162 were
+unprotected — 9 of them **our own builds** (`pipewire`, `pipewire-{alsa,
+audio,pulse}`, `libpipewire`, `alsa-card-profiles`, `bettbox`,
+`niri-spicy-git`, `xwayland-satellite-git`), 153 distro-owned
+(not-yet-built). **Zero clobbering had occurred** (no earlier-built name is
+distro-owned today).
+
+**Immediate fix (live system).** All 444 missing roster names appended as
+commented `IgnorePkg = …` groups inside `[options]` (dated `cp -p` backup of
+`/etc/pacman.conf` first); verified `pacman-conf IgnorePkg` = 1008 unique
+entries and roster-minus-IgnorePkg = 0.
+
+**Root cause (pending).** The 2026-10-05 dynamic register
+(`install_register_ignorepkg` → `register_ignorepkg_names` → the hidden
+`--install-register` seam) claims to register every accepted archive before
+its `pacman -U`, yet real installs leaked names while
+`tests/ignorepkg-register.sh` stayed green — the fixture misses the real-run
+failure mode. Fix + regression fixture are being developed in the isolated
+clone (`~/Workspace/edge-resolve-proto`) to keep the live tree clean; a
+root-cause entry follows when it lands.
+
+**Rule.** Roster-vs-closure drift is an auditable invariant:
+`comm -23 <(grep -h '^pkgname = ' packages/*/*/.SRCINFO | awk '{print $3}' | sort -u) <(pacman-conf IgnorePkg | tr ' ' '\n' | sort -u)` must be empty; the
+564-entry word-count spot check alone cannot see a *systematic* leak.
+
+## 2026-10-09 — cups 2.5 class: proactive scan + pre-fix wave (libreoffice-fresh, libppd, ghostscript, cups-filters, gutenprint, samba, system-config-printer)
+
+**Why.** The jdk wall above proved the cups-2.5 class still bites; per the
+standing "scan for potential upcoming walls of this kind" directive, the
+whole tree was scanned (18 recipes mention cups/libcups). cups 2.5
+(cups-git master) broke consumers **three** ways: (1) headers moved to
+`/usr/include/libcups2` (pkg-config `cups.pc` carries the Cflags), (2) the
+`cups-config` script is gone (pkg-config only), (3) ~288 legacy compat
+spellings were deleted (superset of the 14-name hplip map; every used token
+is verified absent in the 2.5 headers and its replacement present).
+
+**Scan verdicts (evidence in the recipe/src lines cited by the scan).**
+WALL (pending in `401..`, pre-fixed here): `libreoffice-fresh` (bare
+AC_CHECK_HEADER hard-abort), `libppd` + `cups-filters` + `gutenprint` +
+`ghostscript` + `samba` (`cups-config` missing → abort, or silent cups drop
+for ghostscript/samba), `system-config-printer` (bare include + 8 tokens),
+samba (+23 tokens), gutenprint (+1 `HTTP_URI_OK`). Record-only:
+`python-pycups` (built already; ~75 tokens + include flags on any rebuild),
+`qt6-base-git` (built already; FindCups silently drops CUPS print support
+and a reused `CMakeCache.txt` keeps stale `CUPS_INCLUDE_DIR`), `gtk3-git` and
+`wine` already carry fixes. SAFE: `gtk4-git`, `gimp-git`, `libjxl-git`,
+`bluez-libs`, `foomatic-db-engine`, `libcupsfilters` (pkg-config-native).
+
+**Pre-fixes (this wave).**
+- `libreoffice-fresh`: `export CPPFLAGS+=" $(pkg-config --cflags cups)"`
+  (hplip 496b1a9 idiom) in `build()`.
+- New shared module **`lib/cups-config`** (tested: `sh lib/cups-config
+  --cflags/--libs/--version/...` maps every option onto `cups.pc`;
+  unknown options fail loudly) — the pkg-config-backed replacement for the
+  dropped script, wired (`install -Dm755 … "$srcdir/bin/cups-config"` +
+  `PATH` prepend) into `libppd`, `ghostscript`, `cups-filters`,
+  `gutenprint`, `samba`, each also getting `CPPFLAGS` for the moved headers.
+- Enum-compat patches (hplip's gated `#define` shape):
+  `samba/cups-2.5-enum-compat.patch` (27 spellings across
+  `print_cups.c`/`loadparm.c`; `loadparm.c` needs `#include <cups/cups.h>`
+  for the version gate — it only included `cups/http.h`),
+  `system-config-printer/cups-2.5-enum-compat.patch` (13 spellings in
+  `udev/udev-configure-printer.c`), `gutenprint/cups-2.5-enum-compat.patch`
+  (1 spelling). Not compiled: samba's `print_iprint.c` legacy tokens
+  (`--enable-iprint` default off).
+
+**Validation skew (documented, not lowered).** All seven recipes: `bash -n`
+clean, `.SRCINFO` regenerated where source arrays changed, patches
+`patch -Np1 --dry-run` OK on faithfully-prepared trees, shim functional.
+**No builds were run** for these pre-fixes — the `401..` run is their first
+real compile; a wall found there is fixed in the usual loop.
+
+**Rules.** (1) A `*-config` script dropped upstream is a build-wall class of
+its own: prefer the pkg-config module (or the build system's own lookup
+knob) and, when the release still probes for the script, a shared
+pkg-config-backed shim beats per-recipe configure patches. (2) Deleted
+compat spellings must be mapped mechanically (token absent in new headers +
+replacement present) — never guessed. (3) A tool whose output the trim
+policy deletes must not be a makedep (jdk rule above generalises).
+
+## 2026-10-09 — run #93 provides wall: over-trimmed pinned provides broke the install-time closure — plus jdk-openjdk's four latent build walls (ccache wrapper, cups 2.5 headers, icu-broken pandoc, split-superset install conflicts)
+
+**Symptom.** Run #93 (`401..`, 44 ok / 2 failed): `tinysparql` (0m47s) and
+`totem-pl-parser` (0m24s) built cleanly but their `-i` installs died with
+`error: failed to prepare transaction (could not satisfy dependencies)` →
+`✗ Install failed (rc=1) — stopping: later packages would build against the
+wrong system state`.
+
+**Root cause.** The "bare soname provides only, never pinned" house standard
+had been applied one step too wide. Rename-compat provides (`tracker3=`,
+`totem-plparser=`, `geoclue2=`, `tracker3-miners=`) and capability virtuals
+(`java-runtime=`, `java-runtime-headless=`, `java-environment=`,
+`jdkNN/jreNN-openjdk…=${pkgver}-${pkgrel}`) are **NAME capabilities whose
+consumers constrain them by version** — precisely what a versioned provide is
+for. Installed dependents resolve through them (`gtk3-git` declares
+`tracker3`, `localsearch` declares `totem-plparser`, every Java consumer asks
+the `java-*` virtuals), so trimming the pins made the upgrade transaction
+unsatisfiable. Five recipes were affected: `tinysparql`, `totem-pl-parser`,
+`localsearch`, `geoclue`, and `jdk-openjdk` (its three Java subpackages).
+
+**Fix.** Restored stock's pinned NAME-capability provides in all five
+recipes, byte-identical to stock (`pacman -Si` cross-check), with
+`.SRCINFO` regenerated ×5. `conflicts`/`replaces` for the retired old names
+stay dropped — they matter only while an old-named package is installed (no
+`tracker3`/`geoclue2`/`totem-plparser` package is in the house closure).
+MEMORY rule 4 clarified accordingly: "bare soname provides only" governs
+**SONAME** provides only and never authorizes dropping NAME-capability pins.
+
+**jdk-openjdk latent walls (its rehearsal — separate from the provides
+wall).** Three build-time walls, all environmental:
+1. **ccache wrapper refusal.** Host `BUILDENV=ccache` puts
+   `/usr/lib/ccache/bin` wrappers first in `PATH`; OpenJDK's `toolchain.m4`
+   resolves the compiler symlink and unconditionally errors when the target
+   basename is `ccache` — `Please use --enable-ccache instead of providing a
+   wrapped compiler` / `ccache usage must be controlled by a configure
+   option` — even when `--enable-ccache` **is** passed (rehearse B proved
+   the flag alone cannot pass the check). Fix: pass `--enable-ccache` *and*
+   `export CC=/usr/bin/cc CXX=/usr/bin/c++` (the real binaries — the m4
+   honors a user-supplied complete-path `CC` and its symlink check only
+   rejects ccache targets).
+2. **cups 2.5 moved headers.** `lib-cups.m4`'s bare
+   `AC_CHECK_HEADERS([cups/cups.h cups/ppd.h])` cannot see cups 2.5's
+   `/usr/include/libcups2` layout → `checking for cups/cups.h... no` →
+   `configure: error: Could not find cups!` (same class as hplip's run #90
+   wall, 496b1a9). Fix: feed the sanctioned knob
+   `--with-cups-include=$(pkg-config --variable=includedir cups)`. The jdk
+   source uses **none** of the legacy IPP/CUPS spellings deleted in cups 2.5
+   (grep over the extracted tree), so no enum shim is needed here.
+3. **icu 78→79 soname move broke the host pandoc.** `images` runs
+   `BUILD_MAN_PAGES` (pandoc markdown→man) whenever the tool is found at
+   configure time, and the host's stock `pandoc-cli` links
+   `libicuuc.so.78`/`libicui18n.so.78`/`libicudata.so.78` while our
+   `icu-git` (78.3.r454 = post-release-78-3 master, already ICU 79-dev)
+   ships `.so.79` → `pandoc: error while loading shared libraries` →
+   `BUILD_MAN_PAGES_*.md_post.tmp Error 127` aborted the build 9 minutes in.
+   Class B fix (run #92 rule 1 — the recipe trims man pages and docs in
+   `package()` anyway): disable the feature at the seam with the empty tool
+   overrides `PANDOC= DOT=` on the configure command line
+   (`util_paths.m4` `UTIL_SETUP_TOOL`: an empty command-line override is
+   reported as `[[disabled by user]]`, which flips `ENABLE_PANDOC=false` and
+   the man-page rules at `LauncherCommon.gmk:243` off) and drop the
+   `pandoc`/`graphviz` makedeps in the same change. The wall is then host-
+   independent: no pandoc, no man-page step, no doc tool chain.
+4. **Split-superset install conflicts.** With the build green, the `-i`
+   install died: `error: failed to commit transaction (conflicting files)` —
+   **713** paths owned by two or three outputs at once (`/etc/java-openjdk/*`,
+   `/usr/share/licenses/java-openjdk/**` = 492, `libjvm.so`/`modules`/
+   `tzdb.dat`/… in all three). The inherited jre-openjdk-headless/
+   jre-openjdk/jdk-openjdk split was three *nested supersets* (each
+   `cp -a bin lib` + `conf` + `legal`), so no transaction could ever commit —
+   the recipe had never been installed. Fix: collapse to stock's current
+   layout — one monolithic `jdk-openjdk` (stock retired the split) plus
+   `openjdk-src`, keeping the full compat provides union
+   (`java-{runtime,runtime-headless,environment}[-openjdk]=27` +
+   `jdkNN/jreNN-openjdk[…]` + all sonames) and openjdk-src's pinned
+   `openjdkNN-src=` provide restored per rule 4; the two `jre-*` outputs,
+   their install scripts and the now-unused `_nonheadless` list are deleted
+   (house trim policy: drop split packages). The WM hint from the old
+   `jre-openjdk` install script is folded into `install_jdk-openjdk.sh`.
+   Output count is not a goal input — the 653 counts topology records.
+   **Victim sweep (same class, host-wide).** `ldd` over `/usr/bin` finds 71
+   orphaned binaries after the icu-git 78→79 soname move: all samba/Qt5/
+   nautilus/libvips/tesseract/texlive-bin/sddm/zbar tools — i.e. almost
+   exclusively **set members queued in `401..`** (they carry `icu-git`
+   build-order edges precisely for this), which self-heal as the run rebuilds
+   and `-i`-installs them in order. Stock-only orphans no recipe rebuilds:
+   `pandoc-cli` (haskell/ICU stack — the build wall above; the recipe is now
+   immune), `nuspell`, and `lm_sensors`' `sensord` (`librrd.so.8`+icu — an
+   rrdtool soname move). End-state `ldd` verification must exclude/annotate
+   these three, or they need host-side rebuilds.
+
+**Validation.** Provides wave rehearsal (4 packages): `tinysparql ok 15s`,
+`totem-pl-parser ok 14s`, `localsearch ok 31s`, `geoclue ok 21s` — installed
+provides verified against `pacman -Qi`, byte-identical to stock. jdk-openjdk:
+`bash -n` clean, `.SRCINFO` unchanged for the build()-only edits, twin
+synced unmarked; rehearsal result recorded in the commit body. Battery
+55/55 plain before commit.
+
+**Rules.** (1) Versioned provides exist for two jobs: SONAME auto-versioning
+(never hand-pin those) and **NAME capabilities whose consumers constrain them
+by version** (rename-compat and capability virtuals) — the second kind must
+stay pinned at stock's value; dropping it breaks the install-time closure of
+installed dependents (MEMORY §4). (2) A build system that resolves the
+compiler by symlinks rejects wrapper-first `PATH` layouts regardless of its
+own cache-enable flag — hand it real binaries (or strip the wrapper dir)
+instead of trusting the flag. (3) When a dependency moves its headers to a
+versioned include dir, prefer the build system's own include-dir knob (or
+`pkg-config --cflags`) over patching probes; re-probe the *source* for the
+companion API deletions before assuming the include fix is the whole wall. (4) When a trim policy deletes a
+tool's output anyway, disable the feature at the build system's own
+tool-lookup seam and drop the tool from makedepends — that also makes the
+build immune to the tool breaking on the host (here: a stock binary
+silently orphaned by a `-git` provider's soname move; icu 78→79 victims
+are tracked separately and `pacman -Qk`/`ldd` sweeps find them).
+
 ## 2026-10-09 — run #92 libusb-git wall: upstream's doxygen api-doc runs at `make install` with WARN_AS_ERROR — plus the auto-doc class scan
 
 **Symptom.** Run #92 (`401..`) skipped run #91's finished rows and died on

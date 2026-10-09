@@ -378,11 +378,15 @@ dir whose `meson-info.json` version differs before rebuilding — build dirs sit
 at arbitrary depths, so a `maxdepth` sweep misses them.
 
 **Bootloader boundary.** The set disables systemd's bootloader integration
-(this project boots Limine), so stock `mkinitcpio` 42-1's systemd hooks try to
-add the optional `/usr/lib/nvpcr/*.nvpcr` glob literally. The `mkinitcpio`
-recipe here guards that absent optional input instead. Do not re-enable the
-systemd bootloader feature to satisfy it — rebuild the guard:
+(this project boots Limine), so `mkinitcpio`'s systemd hooks try to add
+optional inputs this host does not ship: the `/usr/lib/nvpcr/*.nvpcr` glob
+(0001) and — after systemd 262 dropped them — `systemd-tpm2-setup` plus six
+initrd PCR units (0002). The `mkinitcpio` recipe guards those absent optional
+inputs instead. Do not re-enable the systemd bootloader feature to satisfy a
+hook, and never delete host files for it — extend the guard, then rebuild:
 `fish build-all.fish --no-deps --install mkinitcpio`, then `sudo mkinitcpio -P`.
+When a systemd bump breaks the hook again, scan the whole hook input list
+against the installed provider in one pass rather than one name per rebuild.
 
 **Local assets and ignore rules.** Two ignore layers must both pass. Some
 recipes default-deny with a bare `*` plus `!` negations (`grep -rl '^\*$'
