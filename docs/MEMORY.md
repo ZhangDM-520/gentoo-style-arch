@@ -961,6 +961,18 @@
     (`subprojects/packagefiles/…`) into the seeded tree like the wrap
     would. New tool makedepends the component needs (`rust`, `cargo`,
     `jq`) come with it. See `docs/NOTE.md` 2026-10-10 dbus-broker-git.
+50. **A compatibility shim must replicate upstream's output *shape*, not
+    just per-flag values — combined-flag invocations are part of the
+    contract** (2026-10-10 run #102 libppd): `lib/cups-config` echoed `1`
+    for `--image`, but upstream `cups-config.in` treats `--image` as "Do
+    nothing" — so libppd's ``CUPS_LIBS=`cups-config --image --libs` ``
+    captured `1\n-lcups`, planting an orphan make-syntax line that died
+    much later as `missing separator` in the depfiles bootstrap. Read the
+    real script when writing a shim (`git -C ~/.cache/gsa-src/cups show
+    v2.4.11:cups-config.in`) and pin the shape with a fixture
+    (`tests/cups-config-shim.sh`, mutation-probed). Symptom heuristic: a
+    "missing separator" in a generated Makefile means look for a
+    multi-line variable *value*, not for a make bug.
 
 ## 2. Workspace overview
 
@@ -1496,6 +1508,16 @@ going stale.
   "identified" as strong, not proven. The freeze-forensics rules that outlive
   the incident (pstore, config-only knobs, the stood-down capture chain and
   its re-arm backups) are in §6.
+  *Data point 2026-10-10 02:50* (full-build run #101): same no-trace hard
+  freeze — journal stops dead mid post-transaction hooks, no OOM/MCE/thermal
+  lines — but on `7.3.0-rc6-1-cachyos-rc`, i.e. **inside the fixed range**
+  (`7.3-rc1+`), with rc6-2 installed but not yet booted. Load at the instant
+  was light (small packages + a ccache-fast `mariadb-libs` reinstall,
+  transaction 2348), so build weight again did not matter. Either the fix
+  is incomplete for this signature, the CachyOS rc6 build lacks it, or this
+  is the separate 2026-09-01 class; pstore empty because the capture chain
+  is stood down. Judged NOT the build campaign's fault: 1 182 completed
+  pacman transactions on this box, freeze predates the campaign.
 - **Decision needed at the next `linux-cachyos` rebuild: AutoFDO + Propeller
   (2026-09-19).** The installed 7.2.5 kernel was built with `AUTOFDO_CLANG=y`
   and `PROPELLER_CLANG=y`; the recipe defaults `_autofdo` and `_propeller` to

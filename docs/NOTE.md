@@ -37,6 +37,45 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-10 — libppd (and the cups-config shim class): shim echoed `1` for `--image` and broke multi-flag captures — a compatibility shim must match upstream's *output shape*
+
+**Symptom.** run #102 wall, `libppd` BUILD FAILED (rc=1, 0m07s, twice):
+`config.status: error: Something went wrong bootstrapping makefile
+fragments for automatic dependency tracking`, with the real error one line
+up: `/tmp/…:650: *** missing separator.  Stop.` from the `sed Makefile |
+make -f - am--depfiles` step.
+
+**Root cause.** The generated Makefile carried
+`CUPS_LIBS = 1` followed by a bare `-lcups` line — an orphan make-syntax
+line, hence "missing separator". libppd's `configure.ac:122` captures
+``CUPS_LIBS=`$CUPSCONFIG --image --libs` `` in ONE invocation. Upstream
+`cups-config.in` (read from the cups mirror at v2.4.11) echoes one line
+per option and treats `--image` as **"Do nothing"**, so the capture is
+exactly the `--libs` line. Our `lib/cups-config` shim echoed `1` for
+`--image`, embedding a newline in the Makefile variable. The shim's
+per-arg echo loop is faithful — the `--image` output was the deviation.
+
+**Fix.** `lib/cups-config`: `--image` becomes a no-op with a comment
+naming upstream's wording and this wall. One implementation on purpose —
+the same fix pre-empts the identical `CUPS_LIBS="…$($CUPS_CONFIG
+--image --libs)"` capture in gutenprint (`m4local/stp_cups.m4:44`), which
+was queued later in the run and would have walled the same way. New
+fixture `tests/cups-config-shim.sh` pins the output shape (`--image
+--libs` = one `-lcups` line, `--image` = empty, unknown option = rc 1).
+
+**Validation.** Fixture green against the fixed shim and **mutation-probed
+red** against a restored pre-fix copy (it named the exact two-line
+capture); rehearse `-s -fi --no-deps libppd` → ✓ 0m17s, fresh archive
+`libppd-2.1.1-2.1`, install completed, and the rebuilt Makefile shows
+`CUPS_LIBS = -lcups` as one line. Full battery run after this entry.
+
+**Rule.** A compatibility shim must replicate upstream's *output shape*,
+not just per-flag values: combined-flag invocations (`--image --libs`)
+are part of the contract. Read the real script before writing the shim
+(here: `git -C ~/.cache/gsa-src/cups show v2.4.11:cups-config.in`) and
+pin the shape with a fixture — a value-correct but shape-wrong shim dies
+in a different subsystem (make's parser) than the one that owns the bug.
+
 ## 2026-10-10 — dbus-broker-git: upstream grew a Rust component — vendor the two new subprojects like the existing seeded set
 
 **Symptom.** meson configure died with

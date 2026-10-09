@@ -39,8 +39,12 @@ for arg in "$@"; do
             echo "-lcups"
             ;;
         --image)
-            # feature probe in consumers; libcupsimage is not what is asked
-            echo "1"
+            # cups 2.4 accepts this modifier and does nothing with it
+            # ("Do nothing" in cups-config.in) — `cups-config --image
+            # --libs` prints just the --libs line, so emitting anything
+            # here corrupts consumers that combine flags into one value
+            # (libppd's CUPS_LIBS=`cups-config --image --libs`, run #102
+            # wall: multi-line Makefile assignment -> "missing separator")
             ;;
         --ldflags)
             pc --libs-only-L
