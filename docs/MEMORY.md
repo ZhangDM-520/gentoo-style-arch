@@ -2550,6 +2550,12 @@ constant, not a baked path).
   sets unchanged. `tests/log-ownership.sh` §1b pins the boundary (decoys under
   `src/`/`build/` survive, a recipe-depth temp is swept). Details: NOTE.md
   2026-10-09.
+- **A build failure blaming a missing makepkg/lib file during a `pacman`
+  recipe install is a self-hosting race, not a recipe wall** (2026-10-09,
+  scheduler): installing our `pacman` replaces `/usr/share/makepkg/*`, and a
+  lane whose `makepkg` starts in that window dies on `util.sh: No such
+  file`. Verify the toolchain and resume (`-s`); never "fix" the victim
+  recipe. Details: NOTE.md 2026-10-09.
 - **A systemd bump that drops a hook input is guarded in the mkinitcpio
   recipe, never worked around on the host** (2026-10-09, mkinitcpio): systemd
   262 dropped `systemd-tpm2-setup` and the initrd PCR units that

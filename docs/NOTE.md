@@ -37,6 +37,32 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-09 — run #94 one-off: `makepkg` startup raced the install of our own `pacman` — transient, resume clears it
+
+**Symptom.** `smartmontools` build-failed in 1 s with
+`/usr/bin/makepkg: line 93: /usr/share/makepkg/util.sh: No such file or
+directory` / `parseopts: command not found`, while lane 2 was mid-build and
+mid-install of `pacman` (the set's own pacman-fork).
+
+**Root cause.** Self-hosting race: the install pipeline replaces
+`/usr/share/makepkg/*` during a `pacman -U` of the `pacman` recipe, and a
+lane whose `makepkg` process starts inside that window sources files that
+are momentarily absent. Transactions are serialized among themselves, but a
+lane's `makepkg` *startup* reads the toolchain outside any transaction.
+
+**Fix.** None needed — the transaction completed and `/usr/share/makepkg/`
+is intact; the victim is a one-off. Resume the queue (`-s` resume idiom);
+`smartmontools` has no archive so it rebuilds.
+
+**Validation.** `pacman -Qo /usr/bin/makepkg` healthy, `util.sh` present;
+run #94's record shows exactly one failure (smartmontools, build-failed);
+run #95 resumed the same `401..` selection.
+
+**Rule.** A build failure whose first line blames a *missing makepkg/lib
+file* during a window where the `pacman` recipe installs is this race, not
+a recipe wall — do not "fix" the victim recipe; verify the toolchain and
+resume. Expect it only when the `pacman` recipe itself rebuilds.
+
 ## 2026-10-09 — every run started with minutes of `find` over staging trees: `-not -path` filters output, not traversal
 
 **Symptom.** Before the first dispatch of any run — even a single-package
