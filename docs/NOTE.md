@@ -37,6 +37,40 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-09 — run #79 mesa-git wall: upstream retired the `anti-lag` Vulkan *layer*
+
+**Symptom.** Run #79's core tail began as predicted (`systemd` solo-built green)
+and then `mesa-git failed 1 26 build-failed` at the first meson setup of its
+PGO phase 1:
+`ERROR: Value "anti-lag" for option "vulkan-layers" is not in allowed choices:
+"device-select, intel-nullhw, overlay, screenshot, vram-report-limit"`.
+
+**Root cause.** The recipe pins `-D vulkan-layers=device-select,anti-lag`, but
+upstream mesa retired the `anti-lag` *layer*: current `meson.options` drops it
+from the choices, and the tree's only anti-lag remnants are the
+`VK_MESA_anti_lag` device-extension handling in `src/vulkan/runtime/vk_device.c`
+— anti-lag became a device-level runtime feature with no layer to build. A
+rolling `-git` recipe outrun by an upstream option removal.
+
+**Fix.** `-D vulkan-layers=device-select` (the remaining wanted layer), with a
+why-comment naming the retirement. Nothing else referenced the layer — no
+packaging path or `_pick` mentions `anti-lag` — and the option's other choices
+are unrelated layers nobody asked for.
+
+**Validation.** `bash -n` parse OK; `makepkg --printsrcinfo` diff-clean.
+Rehearsal in `$W` over the dirty tree: run record `mesa-git succeeded …`
+(including the recipe's PGO instrumented phase 1/2 and the shared PGO gate),
+installed with its `libgallium`-family provides. Battery green in the gap.
+Rule 38: the `$W` twin got the one-line semantic change in place, keeping its
+`pkgver=26.3.0_devel.231050…` mark.
+
+**Rule.** For a rolling `-git` recipe, "Value X for option Y is not in allowed
+choices" is upstream churn, not host state: read the source tree's current
+`meson.options`/`CMakeLists` for the authoritative choice list before touching
+anything else, and if the removed choice maps to a retired *feature* (here a
+layer whose function moved into the runtime) drop it rather than hunt for an
+equivalent.
+
 ## 2026-10-09 — run #78 volume_key wall: the trim dropped the python makedepends but not the python *build* — `Python.h` unresolved
 
 **Symptom.** Run #78 reached 135 green rows and died at `volume_key failed 1 12
