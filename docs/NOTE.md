@@ -37,6 +37,34 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-09 — mariadb-libs: bare `mkdir build` died on the interrupted build's leftover dir — idempotency class (4147ef1)
+
+**Symptom.** `build()` failed at `mkdir: cannot create directory 'build':
+File exists` — run #97 wall at package 28/253.
+
+**Root cause.** Run #96 dispatched mariadb-libs and stopped dispatching
+mid-build (hip-runtime wall); the drained lane left a configured
+`src/build` (CMake cache present, same recipe/version/flags). The next
+attempt re-extracts sources but `build/` survives, and `mkdir build` is not
+idempotent. Same class as the pacman prepare() leftover wall (4147ef1).
+
+**Fix.** `mkdir -p build` in mariadb-libs; same latent shape fixed
+proactively in fluidsynth-git, fcitx5-lua-git (`mkdir -p build && cd
+build`) and curl (`mkdir -p build-curl{,-compat,-gnutls}`). Reuse of the
+stale cache is sound here: version-sync rewrites and toolchain-drift cleans
+both wipe `src/pkg/build`, so a surviving dir is same-version
+same-toolchain by construction.
+
+**Validation.** `bash -n` + `makepkg --printsrcinfo` (`.SRCINFO`
+byte-identical for all four); $W twins synced with marks (mariadb-libs
+`pkgrel=2.1`); rehearsal `-s -fi --no-deps mariadb-libs` **over the dirty
+tree** → ✓ 8m28s, run record `outcome: success`.
+
+**Rule.** A recipe step that creates a directory under `$srcdir` must be
+idempotent (`mkdir -p`, or wipe-then-create when a stale cache would be
+poisonous) — interrupted runs leave partial build trees and the next
+attempt must not die on their existence.
+
 ## 2026-10-09 — hip-runtime: CMake found the user-local python3.11 and missed the python-cppheaderparser makedep — PATH-order hazard
 
 **Symptom.** `hip-runtime` configure stopped at

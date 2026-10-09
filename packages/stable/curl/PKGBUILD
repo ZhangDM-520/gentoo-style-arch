@@ -68,7 +68,7 @@ build() {
     --with-ca-bundle='/etc/ssl/certs/ca-certificates.crt'
   )
 
-  mkdir build-curl{,-compat,-gnutls}
+  mkdir -p build-curl{,-compat,-gnutls}
 
   # build curl
   cd "${srcdir}"/build-curl
