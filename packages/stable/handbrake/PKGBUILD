@@ -32,14 +32,27 @@ _commondeps=(
 _guideps=('gst-plugins-base' 'gtk4' 'librsvg')
 # git included as a build dependency for bundled x265 to work
 # https://bugs.freebsd.org/bugzilla/show_bug.cgi?id=275546#c0
-makedepends=('python' 'nasm' 'wget' 'cmake' 'meson' 'git' 'clang'
+makedepends=('python' 'nasm' 'wget' 'cmake' 'meson' 'git'
              "${_commondeps[@]}" "${_guideps[@]}")
 options=('!lto') # https://bugs.archlinux.org/task/72600
-source=("git+https://github.com/HandBrake/HandBrake.git?signed#tag=${pkgver}")
-sha256sums=('c300160d7a6062dbdecbfb82e38e11692edf371b9e766541b043b61d0cfc8610')
+source=("git+https://github.com/HandBrake/HandBrake.git?signed#tag=${pkgver}"
+        ffmpeg-no-cuda-llvm.patch)
+sha256sums=('c300160d7a6062dbdecbfb82e38e11692edf371b9e766541b043b61d0cfc8610'
+            '1f157eca33be6b7d5d3cf0caba34cdf005f8819cd36c17ebb56f80841f50cd96')
 validpgpkeys=('1629C061B3DDE7EB4AE34B81021DB8B44E4A8645' # HandBrake Team <developers@handbrake.fr>
               'D57F6026431D68DFFB942F0D5759C8A0D1C34D47' # Damiano Galassi <damiog@gmail.com>
 )
+
+prepare() {
+  cd HandBrake
+  # house LLVM builds X86;AMDGPU;BPF only — no NVPTX target, so ffmpeg's
+  # cuda_llvm probe (compile CUDA kernels to PTX with clang) can never
+  # succeed here and the nvdec block's CUDA filters die at configure.
+  # nvdec/cuvid hwaccels use ffnvcodec dynlink headers and stay.
+  # Rerun-safe over a dirty checkout: restore the file before applying.
+  git checkout -- contrib/ffmpeg/module.defs
+  patch -Np1 -i "$srcdir/ffmpeg-no-cuda-llvm.patch"
+}
 
 build() {
   cd HandBrake

@@ -85,7 +85,6 @@ depends=(
 makedepends=(
   amf-headers
   avisynthplus
-  clang
   ffnvcodec-headers
   frei0r-plugins
   git
@@ -145,6 +144,9 @@ build() {
   # fix build with v4l2-utils 1.30 with gcc 14 and later
   export CFLAGS+=' -Wno-error=incompatible-pointer-types'
 
+  # house LLVM builds X86;AMDGPU;BPF only — no NVPTX target, so cuda_llvm
+  # (compile CUDA kernels to PTX with clang) can never probe true and the
+  # flag makes configure die; nvdec/nvenc use ffnvcodec-headers and stay
   ./configure \
       --prefix='/usr' \
       --disable-debug \
@@ -152,7 +154,6 @@ build() {
       --disable-stripping \
       --enable-amf \
       --enable-avisynth \
-      --enable-cuda-llvm \
       --enable-lto \
       --enable-fontconfig \
       --enable-frei0r \

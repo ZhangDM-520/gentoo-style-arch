@@ -10,7 +10,6 @@ pkgbase = handbrake
 	makedepends = cmake
 	makedepends = meson
 	makedepends = git
-	makedepends = clang
 	makedepends = libxml2
 	makedepends = libass
 	makedepends = libvorbis
@@ -34,9 +33,11 @@ pkgbase = handbrake
 	makedepends = librsvg
 	options = !lto
 	source = git+https://github.com/HandBrake/HandBrake.git?signed#tag=1.11.2
+	source = ffmpeg-no-cuda-llvm.patch
 	validpgpkeys = 1629C061B3DDE7EB4AE34B81021DB8B44E4A8645
 	validpgpkeys = D57F6026431D68DFFB942F0D5759C8A0D1C34D47
 	sha256sums = c300160d7a6062dbdecbfb82e38e11692edf371b9e766541b043b61d0cfc8610
+	sha256sums = 1f157eca33be6b7d5d3cf0caba34cdf005f8819cd36c17ebb56f80841f50cd96
 
 pkgname = handbrake
 	pkgdesc = Multithreaded video transcoder

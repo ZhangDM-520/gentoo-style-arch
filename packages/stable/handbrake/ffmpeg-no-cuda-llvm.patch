@@ -1,0 +1,16 @@
+diff --git a/contrib/ffmpeg/module.defs b/contrib/ffmpeg/module.defs
+index 18b552d47..166a75072 100644
+--- a/contrib/ffmpeg/module.defs
++++ b/contrib/ffmpeg/module.defs
+@@ -196,10 +196,7 @@ ifeq (1,$(FEATURE.nvdec))
+ FFMPEG.CONFIGURE.extra += \
+      --enable-hwaccels \
+      --enable-nvdec \
+-     --enable-cuda-llvm \
+-     --enable-cuda \
+-     --enable-filter=colorspace_cuda \
+-     --enable-filter=scale_cuda
++     --enable-cuda
+ endif
+ 
+ ifeq (1,$(FEATURE.mf))

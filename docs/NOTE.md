@@ -37,6 +37,66 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-09 — run #89 handbrake/wine walls: cuda_llvm vs the no-NVPTX toolchain, and the wine casualty of the cups 2.5 renames — plus a family scan
+
+**Symptom.** Run #89 (`401..`, 32 ok) died on two packages. handbrake's
+bundled ffmpeg configure aborted `ERROR: cuda_llvm requested but not found`
+(7m03s), and wine's `dlls/winspool.drv/cups.c` failed on `'HTTP_OK'
+undeclared` (7m03s) — the same cups-2.5 enum deletions that took gtk3-git
+earlier the same day.
+
+**Root cause.** (1) The house `llvm-git` deliberately builds
+`LLVM_TARGETS_TO_BUILD="X86;AMDGPU;BPF"` — there is no NVPTX backend
+(`clang --print-targets`), and `cuda` is a purged system package. HandBrake
+passes `--enable-nvdec`, whose `contrib/ffmpeg/module.defs` block adds
+`--enable-cuda-llvm` and the `scale_cuda`/`colorspace_cuda` filters; those
+need CUDA kernels compiled to PTX with clang (ffmpeg config.log: `unable to
+create target: 'No available targets are compatible with triple
+"nvptx64-nvidia-cuda"'`), and an explicitly requested ffmpeg feature that
+cannot probe true is a `die`. The nvdec/cuvid/nvenc *hwaccels* themselves
+are ffnvcodec dynlink (toolkit-free) and are not the problem. (2) wine's
+winspool.drv PPD fallback uses `HTTP_OK`/`HTTP_NOT_FOUND`, which cups 2.5
+deleted.
+
+**Fix.** handbrake: recipe patch `ffmpeg-no-cuda-llvm.patch` drops
+`--enable-cuda-llvm` + the two CUDA filters from the nvdec block (keeps
+`--enable-hwaccels --enable-nvdec --enable-cuda`), and the now-dead `clang`
+makedepends goes with them. wine: `cups-2.5-enum-compat.patch` shims
+`HTTP_OK`/`HTTP_NOT_FOUND` to the new spellings, gated on
+`CUPS_VERSION_MAJOR == 2 && CUPS_VERSION_MINOR >= 5`. Both applied through
+rerun-safe `prepare()` (`git checkout --` the paths, then `patch -Np1`).
+
+**Validation.** wine's fix was falsified cheaply first: `make
+dlls/winspool.drv/cups.o` in the existing 64-build tree — red in run #89's
+log, green in seconds with the shim. Rehearse over the dirty tree then
+passed all three packages end-to-end (`handbrake ok 1089s`, `wine ok
+1244s`, `ffmpeg-git ok 235s`, rc 0) — ffmpeg-git rode along on the
+*proactive* half of this fix.
+
+**Proactive scan (same family, remaining `401..` set).** CONFIRMED and fixed
+in this wave: `ffmpeg-git` had an unconditional `--enable-cuda-llvm`
+(PKGBUILD:155) plus `clang` makedepends — exact handbrake mechanism. VERIFIED
+SAFE: `gstreamer` (stock `gst-plugins-bad-libs` ships the full `gst/cuda`
+set with `cuda` purged — the plugin builds toolkit-free via its bundled
+`gstcudaloader` dynlink, and `cuda-nvmm` is explicitly disabled);
+`blender-git` (CUDA/OptiX kernels gated on `pacman -Qq cuda`/`optix8`
+probes, which skip cleanly); `opencv` (build-cuda tree already trimmed);
+`hip-runtime` (nvidia split + cuda makedep dropped 2026-09-04);
+`linux-cachyos` (`_build_nvidia_open=no` default); `rocm-llvm` (records the
+NVPTX exclusion itself). Same meta-shape, cups side: the remaining
+`hplip`/`ghostscript`/`samba`/`system-config-printer` may still hit
+old-name enum walls; `libppd`/`libcupsfilters` are Openprinting 2.5-aware.
+
+**Rules.** (1) A configure flag requesting a compiled foreign-target
+feature (`cuda_llvm`, PTX) must be checked against the toolchain's
+capability roster first — `clang --print-targets` is the ground truth, and
+an explicitly `--enable`d ffmpeg feature that cannot probe is fatal by
+design. Drop the flag *and* the makedepends that existed only for it; keep
+dynlink-based hwaccels (ffnvcodec headers, no toolkit). (2) A kitchen-sink
+feature flag (`--enable-nvdec`) can smuggle the wall in through its
+dependency block — read the build system's flag expansion, not just the
+flag you passed.
+
 ## 2026-10-09 — run #88 colord/cups wall chain: stale split names, a moved upstream install layout, a `/var/run` collision, and cups 2.5's enum renames in consumers
 
 **Symptom.** Four stacked walls on one chain. (1) Run #88's dependency phase

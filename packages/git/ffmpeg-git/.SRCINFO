@@ -7,7 +7,6 @@ pkgbase = ffmpeg-git
 	license = GPL-3.0-or-later
 	makedepends = amf-headers
 	makedepends = avisynthplus
-	makedepends = clang
 	makedepends = ffnvcodec-headers
 	makedepends = frei0r-plugins
 	makedepends = git

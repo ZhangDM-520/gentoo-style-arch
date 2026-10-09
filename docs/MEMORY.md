@@ -1622,6 +1622,16 @@ constant, not a baked path).
 
 ## 6. Pitfall digest (full details: NOTE.md sections of same dates)
 
+- **A feature flag requesting compiled foreign-target code must be checked
+  against the toolchain's capability roster** (2026-10-09 handbrake,
+  ffmpeg-git): the house LLVM builds `X86;AMDGPU;BPF` only (no NVPTX) and
+  `cuda` is purged, so `--enable-cuda-llvm` (PTX kernels via clang) makes
+  ffmpeg's configure `die` — explicitly requested + unprobeable = fatal.
+  Read the build system's flag *expansion* too (`--enable-nvdec` smuggled
+  the CUDA filters in through its block). Drop the flag and its now-dead
+  makedepends together; keep dynlink-based hwaccels (ffnvcodec headers).
+  Ground truth: `clang --print-targets`; toolkit-free builds are the norm
+  (gstreamer's `gst/cuda` builds via bundled `gstcudaloader`).
 - **An upstream `-git` API rename with a stale version number breaks every
   consumer that version-gates compat shims — probe the header surface**
   (2026-10-09 cups 2.5 / gtk3): cups 2.5 renamed all legacy IPP/HTTP enums

@@ -1,0 +1,16 @@
+diff --git a/dlls/winspool.drv/cups.c b/dlls/winspool.drv/cups.c
+index 89fc9688de9..ad9356c7a72 100644
+--- a/dlls/winspool.drv/cups.c
++++ b/dlls/winspool.drv/cups.c
+@@ -40,6 +40,11 @@
+ #ifdef HAVE_CUPS_PPD_H
+ #include <cups/ppd.h>
+ #endif
++#if defined(HAVE_CUPS_CUPS_H) && CUPS_VERSION_MAJOR == 2 && CUPS_VERSION_MINOR >= 5
++/* cups 2.5 renamed the http_status_t constants and dropped the old spellings */
++#define HTTP_OK HTTP_STATUS_OK
++#define HTTP_NOT_FOUND HTTP_STATUS_NOT_FOUND
++#endif
+ 
+ #ifdef __APPLE__
+ #define GetCurrentProcess GetCurrentProcess_Mac
