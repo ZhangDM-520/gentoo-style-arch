@@ -1,0 +1,102 @@
+#!/bin/sh
+# lib/cups-config — cups-config compatibility shim backed by pkg-config.
+#
+# cups 2.5 dropped the `cups-config` script (and its headers moved under
+# /usr/include/libcups2); releases that still probe with
+# AC_PATH_TOOL(CUPSCONFIG, cups-config) fail at configure time. Installed as
+# a build-local executable by the recipes that need it:
+#
+#     install -Dm755 "$startdir/../../../lib/cups-config" \
+#       "$srcdir/bin/cups-config"
+#     export PATH="$srcdir/bin:$PATH"
+#
+# Each option maps onto the CUPS pkg-config module (cups.pc carries
+# includedir=/usr/include/libcups2 and the cups_* path variables), so the
+# values track whatever CUPS is installed instead of hard-coding a layout.
+# One implementation on purpose: the per-recipe copies drift (see lib/pgo.sh).
+
+pc() {
+    pkg-config "$@" cups
+}
+
+# cups-config --version prints a bare X.Y.Z; cups.pc may say "2.5b1"
+numeric_version() {
+    pc --modversion | sed 's/[^0-9.].*$//'
+}
+
+for arg in "$@"; do
+    case "$arg" in
+        --help)
+            echo "usage: cups-config --cflags|--libs|--ldflags|--ldlibs|--version|..."
+            ;;
+        --alflags)
+            echo "$(pc --cflags) $(pc --libs)"
+            ;;
+        --cflags)
+            pc --cflags
+            ;;
+        --libs)
+            echo "-lcups"
+            ;;
+        --image)
+            # feature probe in consumers; libcupsimage is not what is asked
+            echo "1"
+            ;;
+        --ldflags)
+            pc --libs-only-L
+            ;;
+        --ldlibs)
+            # cups 2.4 printed the private link deps here
+            pc --libs-only-l --static | sed 's/-lcups//'
+            ;;
+        --link)
+            echo "-lcups"
+            ;;
+        --shared)
+            echo "1"
+            ;;
+        --static)
+            pc --static --libs
+            ;;
+        --version)
+            numeric_version
+            ;;
+        --api-version)
+            numeric_version | sed 's/^\([0-9]*\.[0-9]*\).*/\1/'
+            ;;
+        --prefix)
+            pc --variable=prefix
+            ;;
+        --serverbin)
+            pc --variable=cups_serverbin
+            ;;
+        --serverroot)
+            pc --variable=cups_serverroot
+            ;;
+        --datadir)
+            pc --variable=cups_datadir
+            ;;
+        --etcdir)
+            pc --variable=cups_serverroot
+            ;;
+        --docdir)
+            echo "$(pc --variable=prefix)/share/doc/cups"
+            ;;
+        --icondir)
+            echo "$(pc --variable=prefix)/share/icons"
+            ;;
+        --localedir)
+            echo "$(pc --variable=prefix)/share/locale"
+            ;;
+        --mandir)
+            echo "$(pc --variable=prefix)/share/man"
+            ;;
+        --menudir)
+            echo "$(pc --variable=prefix)/share/applications"
+            ;;
+        *)
+            echo "cups-config shim: unknown option '$arg'" >&2
+            exit 1
+            ;;
+    esac
+done

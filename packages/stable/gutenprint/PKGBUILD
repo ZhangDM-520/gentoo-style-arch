@@ -15,9 +15,12 @@ makedepends=('cups' 'ghostscript'
             # for the docs
             'dialog' 'doxygen' 'docbook-utils' 'texi2html' 'texlive-bin')
 options=('!emptydirs')
-source=(https://downloads.sourceforge.net/gimp-print/$pkgname-$pkgver.tar.xz)
-sha1sums=('65e1ad99e9a3df17d505e719a9123eaa3b50fd67')
-sha256sums=('f5a9f47de28530b1ae2069cfbc647a9a641baeeabe809bb0ef2b3ec5b9668d70')
+source=(https://downloads.sourceforge.net/gimp-print/$pkgname-$pkgver.tar.xz
+        cups-2.5-enum-compat.patch)
+sha1sums=('65e1ad99e9a3df17d505e719a9123eaa3b50fd67'
+          '6a90744410d90e7cb3bab56ba7735d7ef029c6e8')
+sha256sums=('f5a9f47de28530b1ae2069cfbc647a9a641baeeabe809bb0ef2b3ec5b9668d70'
+            'e4e5bf6e7095b64538d020109161ff8bdb7501f6396797b7d47e15b4443b1ad9')
 
 prepare(){
   cd "${pkgbase}"-${pkgver}
@@ -30,9 +33,21 @@ prepare(){
   find -name Makefile.in -exec sed -i 's/$(CURDIR)/BUILDPATH/g' {} +
 
   autoreconf -vfi
+
+  # cups 2.5 renamed HTTP_URI_OK -> HTTP_URI_STATUS_OK (applied last)
+  patch -Np1 -i ../cups-2.5-enum-compat.patch
 }
 
 build() {
+  # cups 2.5 dropped cups-config (pkg-config only) and moved its headers to
+  # /usr/include/libcups2; these releases still probe with cups-config and
+  # bare AC_CHECK_HEADER([cups/cups.h]) — hand them the shared pkg-config-
+  # backed shim from lib/ (run #94 wall class)
+  install -Dm755 "$startdir/../../../lib/cups-config" "$srcdir/bin/cups-config"
+  export PATH="$srcdir/bin:$PATH"
+  # bare AC_CHECK_HEADER([cups/cups.h]) needs the moved include dir too
+  export CPPFLAGS+=" $(pkg-config --cflags cups)"
+
   cd "${pkgbase}"-${pkgver}
 
   # House style: mold linker when available

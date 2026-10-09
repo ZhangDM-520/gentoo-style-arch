@@ -1,0 +1,48 @@
+--- a/source3/printing/print_cups.c
++++ b/source3/printing/print_cups.c
+@@ -33,6 +33,26 @@
+ #include <cups/cups.h>
+ #include <cups/language.h>
+ #include <cups/http.h>
++#if CUPS_VERSION_MAJOR == 2 && CUPS_VERSION_MINOR >= 5
++/* cups 2.5 deleted the legacy IPP spellings (cups 2.4 shipped them as
++   compat defines over the renamed enum values) */
++#define CUPS_GET_CLASSES IPP_OP_CUPS_GET_CLASSES
++#define CUPS_GET_PRINTERS IPP_OP_CUPS_GET_PRINTERS
++#define HTTP_URI_OK HTTP_URI_STATUS_OK
++#define IPP_CANCEL_JOB IPP_OP_CANCEL_JOB
++#define IPP_GET_JOBS IPP_OP_GET_JOBS
++#define IPP_GET_PRINTER_ATTRIBUTES IPP_OP_GET_PRINTER_ATTRIBUTES
++#define IPP_HOLD_JOB IPP_OP_HOLD_JOB
++#define IPP_JOB_HELD IPP_JSTATE_HELD
++#define IPP_JOB_PENDING IPP_JSTATE_PENDING
++#define IPP_JOB_STOPPED IPP_JSTATE_STOPPED
++#define IPP_OK_CONFLICT IPP_STATUS_OK_CONFLICTING
++#define IPP_PAUSE_PRINTER IPP_OP_PAUSE_PRINTER
++#define IPP_PRINTER_STOPPED IPP_PSTATE_STOPPED
++#define IPP_PRINT_JOB IPP_OP_PRINT_JOB
++#define IPP_RELEASE_JOB IPP_OP_RELEASE_JOB
++#define IPP_RESUME_PRINTER IPP_OP_RESUME_PRINTER
++#endif
+ 
+ /* CUPS prior to version 1.7 doesn't have HTTP_URI_STATUS_OK */
+ #if (CUPS_VERSION_MAJOR == 1) && (CUPS_VERSION_MINOR < 7)
+--- a/lib/param/loadparm.c
++++ b/lib/param/loadparm.c
+@@ -81,6 +81,16 @@
+ 
+ #ifdef HAVE_HTTPCONNECTENCRYPT
+ #include <cups/http.h>
++/* cups.h is where the CUPS_VERSION_* macros live (http.h has no version
++   header of its own in cups 2.5) — needed for the gate below */
++#include <cups/cups.h>
++#if CUPS_VERSION_MAJOR == 2 && CUPS_VERSION_MINOR >= 5
++/* cups 2.5 deleted the legacy HTTP spellings (cups 2.4 shipped them as
++   compat defines over the renamed enum values) */
++#define HTTP_ENCRYPT_ALWAYS HTTP_ENCRYPTION_ALWAYS
++#define HTTP_ENCRYPT_NEVER HTTP_ENCRYPTION_NEVER
++#define HTTP_ENCRYPT_REQUIRED HTTP_ENCRYPTION_REQUIRED
++#endif
+ #endif
+ 
+ #define standard_sub_basic talloc_strdup

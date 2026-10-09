@@ -164,6 +164,12 @@ build() {
     export CFLAGS="${CFLAGS/_FORTIFY_SOURCE=3/_FORTIFY_SOURCE=2}"
     export CXXFLAGS="${CXXFLAGS/_FORTIFY_SOURCE=3/_FORTIFY_SOURCE=2}"
 
+    # cups 2.5 installs headers under /usr/include/libcups2 (the pkg-config
+    # Cflags); the bare AC_CHECK_HEADER([cups/cups.h]) probe compiles with
+    # the default include path and would error out (run #94 wall class —
+    # hplip 496b1a9 idiom)
+    export CPPFLAGS+=" $(pkg-config --cflags cups)"
+
     ./autogen.sh --with-extra-buildid="${pkgver}-${pkgrel}" \
         --with-vendor="Arch Linux" \
         --enable-split-app-modules \

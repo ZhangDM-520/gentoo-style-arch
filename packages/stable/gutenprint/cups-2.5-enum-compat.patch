@@ -1,0 +1,11 @@
+--- a/src/cups/gutenprint.c
++++ b/src/cups/gutenprint.c
+@@ -138,7 +138,7 @@
+                                 userpass, sizeof(userpass),
+ 				hostname, sizeof(hostname),
+ 		                &port, resource, sizeof(resource)))
+-				    < HTTP_URI_OK)
++				    < HTTP_URI_STATUS_OK)
+   {
+     fprintf(stderr, "ERROR: Bad ppd-name \"%s\" (%d)!\n", uri, status);
+     return (1);

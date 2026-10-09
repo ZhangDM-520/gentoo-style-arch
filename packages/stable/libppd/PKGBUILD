@@ -17,6 +17,15 @@ source=(https://github.com/OpenPrinting/libppd/releases/download/$pkgver/$pkgnam
 sha256sums=('3fa341cc03964046d2bf6b161d80c1b4b2e20609f38d860bcaa11cb70c1285e4')
 
 build() {
+  # cups 2.5 dropped cups-config (pkg-config only) and moved its headers to
+  # /usr/include/libcups2; these releases still probe with cups-config and
+  # bare AC_CHECK_HEADER([cups/cups.h]) — hand them the shared pkg-config-
+  # backed shim from lib/ (run #94 wall class)
+  install -Dm755 "$startdir/../../../lib/cups-config" "$srcdir/bin/cups-config"
+  export PATH="$srcdir/bin:$PATH"
+  # bare AC_CHECK_HEADER([cups/cups.h]) needs the moved include dir too
+  export CPPFLAGS+=" $(pkg-config --cflags cups)"
+
   cd "$pkgname"-$pkgver
   # House style: mold linker when available
   local _mold=""

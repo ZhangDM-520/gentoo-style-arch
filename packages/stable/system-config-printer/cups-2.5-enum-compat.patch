@@ -1,0 +1,21 @@
+--- a/udev/udev-configure-printer.c
++++ b/udev/udev-configure-printer.c
+@@ -35,6 +35,18 @@
+ 
+ #include <cups/cups.h>
+ #include <cups/http.h>
++#if CUPS_VERSION_MAJOR == 2 && CUPS_VERSION_MINOR >= 5
++/* cups 2.5 deleted the legacy IPP spellings (cups 2.4 shipped them as
++   compat defines over the renamed enum values) */
++#define CUPS_DELETE_PRINTER IPP_OP_CUPS_DELETE_PRINTER
++#define CUPS_GET_DEVICES IPP_OP_CUPS_GET_DEVICES
++#define CUPS_GET_PRINTERS IPP_OP_CUPS_GET_PRINTERS
++#define IPP_NOT_FOUND IPP_STATUS_ERROR_NOT_FOUND
++#define IPP_OK_CONFLICT IPP_STATUS_OK_CONFLICTING
++#define IPP_PAUSE_PRINTER IPP_OP_PAUSE_PRINTER
++#define IPP_PRINTER_STOPPED IPP_PSTATE_STOPPED
++#define IPP_RESUME_PRINTER IPP_OP_RESUME_PRINTER
++#endif
+ #include <errno.h>
+ #include <fcntl.h>
+ #include <libudev.h>

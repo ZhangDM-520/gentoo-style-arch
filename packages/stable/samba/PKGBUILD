@@ -61,19 +61,26 @@ source=(
   samba.logrotate
   samba.pam
   samba.tmpfiles
+  cups-2.5-enum-compat.patch
 )
 validpgpkeys=('81F5E2832BD2545A1897B713AA99442FB680B620') #Samba Distribution Verification Key <samba-bugs@samba.org>
 b2sums=('556455a628732a084826f2cf180c75071ad5f89f0bf8a0e728d79a450e0c1cbab6ba5869ec48816b2a886ad5b6d4db1a18a31d80ba7dc2f7972f4f0e470f67fb'
         'SKIP'
         '72ecb413ca3499af984a0bb391f96e678a24a19d8e5c96050ba227878f0770f03466ac7a0ee328416e08204e92e9d16ec22d63ef25b53c20d957a17221cd3a98'
         '3eab84d332d96678fe6e435ee243c8f1a82b838f601d61d3604d11e918aed7a62202edca5e476c4b9031ed284570e6fcd6c659cfdbd9624aa0019d3233755f81'
-        'e1f49e14d34cf1a48378cad9f427215101ff55b2461340e0dc2376192f07c45fc238463a07672348c0823e3aa7892c83a939a7d358aabac818e2108ca2c1900f')
+        'e1f49e14d34cf1a48378cad9f427215101ff55b2461340e0dc2376192f07c45fc238463a07672348c0823e3aa7892c83a939a7d358aabac818e2108ca2c1900f'
+        'be8462d98fb835e29d54db136f11d686e4a4cbe28d82746afbe2a17be5c052e8b3bf14db12b43a042524cd416c2c419da8ebb9f727b92603114f8f8baab7233b')
 
 ### UNINSTALL dmapi package before building!!!
 
 # Use samba-pkg as a staging directory for the split packages
 # (This is so RPATHS and symlinks are generated correctly via
 # make install, but the otherwise unsplit pieces can be split)
+
+prepare() {
+  cd ${pkgbase}-${pkgver}
+  patch -Np1 -i ../cups-2.5-enum-compat.patch
+}
 
 build() {
 # House style: mold linker when available
@@ -87,6 +94,12 @@ _samba4_auth_modules=auth_unix,auth_wbc,auth_server,auth_netlogond,auth_script,a
 _pkgsrc="${srcdir}"/samba-pkg
   rm -rf ${_pkgsrc}
   cd ${pkgbase}-${pkgver}
+  # cups 2.5 dropped cups-config (pkg-config only) and moved its headers to
+  # /usr/include/libcups2 — hand the probes the shared pkg-config-backed shim
+  # and the moved include dir (run #94 wall class)
+  install -Dm755 "$startdir/../../../lib/cups-config" "$srcdir/bin/cups-config"
+  export PATH="$srcdir/bin:$PATH"
+  export CPPFLAGS+=" $(pkg-config --cflags cups)"
   ./configure --enable-fhs \
     --prefix=/usr \
     --sysconfdir=/etc \
