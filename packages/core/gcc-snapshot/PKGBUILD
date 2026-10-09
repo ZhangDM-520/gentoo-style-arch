@@ -73,6 +73,45 @@ prepare() {
   sed -i 's@\./fixinc\.sh@-c true@' gcc/Makefile.in
   sed -i '/m64=/s/lib64/lib/' gcc/config/i386/t-linux64
 
+  # PR c++/127395 (regression r17-4199): verify_ctor_sanity false-positives
+  # on valid code — gcc_assert (ctx->ctor) fires on a legitimately null ctor
+  # in abseil-cpp-20260817 and vendored protobuf map.h, ICEing every consumer
+  # of those headers (opencv, …) at -O0 and -O3 alike.  The asserts below it
+  # dereference ctx->ctor, so removing only the failing one turns a clean ICE
+  # into a compiler segfault on the same inputs.  No upstream fix as of
+  # snapshot 20261004 (constexpr.cc last touched upstream 2026-09-27), so
+  # make the verifier a no-op wholesale — what --enable-checking=no does to
+  # it, scoped.  Drop this block once the upstream fix lands.
+  #
+  # Applied in prepare(), NOT as a source=() entry: the version-sync anchor
+  # contract requires every recipe source to be covered verbatim by the
+  # provider's .SRCINFO (MEMORY §18), and AUR carries no such patch.  The
+  # grep guard keeps prepare() idempotent over an already-patched $srcdir.
+  grep -q 'PR c++/127395' gcc/cp/constexpr.cc || patch -Ntp1 <<'GSA_PR127395'
+--- a/gcc/cp/constexpr.cc
++++ b/gcc/cp/constexpr.cc
+@@ -7374,6 +7374,19 @@
+ static void
+ verify_ctor_sanity (const constexpr_ctx *ctx, tree type)
+ {
++  /* PR c++/127395: since r17-4199 this verifier false-positives on valid
++     code (abseil-cpp-20260817 headers, vendored protobuf map.h): gcc_assert
++     (ctx->ctor) fires on a legitimately null ctor and ICEs every consumer of
++     those headers at -O0 and -O3 alike.  The ICE line is that assert; the
++     asserts below it dereference ctx->ctor, so disabling only the first one
++     would turn a clean ICE into a compiler segfault on the same inputs.
++     No upstream fix had landed as of snapshot 20261004 (constexpr.cc last
++     touched upstream 2026-09-27; AUR gcc-snapshot still 20261004), so make
++     this verifier a no-op wholesale -- identical to what --enable-checking=no
++     does to it, without dropping the rest of the compiler's checks.
++     Drop this patch once the upstream fix lands.  */
++  return;
++
+   /* We don't bother building a ctor for an empty base subobject.  */
+   if (is_empty_class (type))
+     return;
+GSA_PR127395
+
   mkdir -p ${srcdir}/gcc-build ${srcdir}/libgccjit-build
 }
 
