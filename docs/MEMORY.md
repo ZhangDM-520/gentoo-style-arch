@@ -1622,6 +1622,22 @@ constant, not a baked path).
 
 ## 6. Pitfall digest (full details: NOTE.md sections of same dates)
 
+- **An upstream that moves its header dir *and* deletes legacy compat
+  `#define`s walls a consumer twice — configure probes first, then source
+  spellings** (2026-10-09 hplip / cups 2.5): `AC_CHECK_HEADER([cups/cups.h])`
+  compiles with the bare include path and dies
+  (`cannot find cups-devel support`) although `cups.pc`'s `Cflags
+  -I/usr/include/libcups2` resolves it — export
+  `CPPFLAGS+=" $(pkg-config --cflags cups)"` in `build()` instead of
+  patching configure or symlinking the old path. Then map every legacy
+  `IPP_*`/`CUPS_*`/`HTTP_*` token mechanically against the new headers
+  (and/or the cached previous version's header — deleted names leave no
+  trace), because the renames are non-uniform (`IPP_ERROR`→`IPP_STATE_ERROR`,
+  `CUPS_ADD_PRINTER`→`IPP_OP_CUPS_ADD_MODIFY_PRINTER`) and
+  `CUPS_VERSION_MAJOR` still reports `2`. Patch-on-patch: generate the shim
+  diff against the *fully patched* tree, apply it last in `prepare()`, and
+  trim any foreign hunks out of it (a stray `hplip-hpaio-gcc14.patch` hunk
+  in the first diff would have broken every rebuild).
 - **A feature flag requesting compiled foreign-target code must be checked
   against the toolchain's capability roster** (2026-10-09 handbrake,
   ffmpeg-git): the house LLVM builds `X86;AMDGPU;BPF` only (no NVPTX) and
@@ -2468,12 +2484,21 @@ constant, not a baked path).
   their roster lives in `docs/build-guide.md` § Environment surface), and
   `.SRCINFO` freshness has exactly one owner, `tests/srcinfo-freshness.sh`.
 - **User-level fish wrapper functions intercept the battery's PATH stubs**
-  (2026-09-26, harness): the builder runs under fish, and fish autoloads
-  functions from `$fish_function_path` before any PATH lookup — so a
-  user-level `sudo` wrapper shadows the `sudo` stub a fixture placed in front
-  of `$PATH`, and that wrapper re-execs the real sudo with `--preserve-env`
-  added (a flag the builder never passed; this is why `stub_sudo` in
-  `tests/lib/fixture-lib.bash` strips it). Run the battery as
-  `fish_function_path=/nonexistent-fp bash tests/run-all.sh` so no fish
-  function can intercept a stub. A fixture failure that disappears under that
-  prefix is a host-shell artefact, not a builder regression.
+  (2026-09-26, harness; invocation guidance corrected 2026-10-09): the
+  builder runs under fish, and fish autoloads functions from
+  `$fish_function_path` before any PATH lookup — so a user-level `sudo`
+  wrapper shadows the `sudo` stub a fixture placed in front of `$PATH`, and
+  that wrapper re-execs the real sudo with `--preserve-env` added (a flag
+  the builder never passed; this is why `stub_sudo` in
+  `tests/lib/fixture-lib.bash` strips it — the stripping is the load-bearing
+  mitigation and makes a plain run safe). Do **not** "fix" this with
+  `fish_function_path=/nonexistent-fp bash tests/run-all.sh`: fish imports an
+  env `fish_function_path` as a *single-element* list, so that prefix drops
+  every function dir — including `vendor_functions.d`, where
+  fish-pure-prompt's `_pure_set_default` autoloads from. Every fish
+  startup then spews `Unknown command: _pure_set_default` noise from
+  `vendor_conf.d/pure.fish`, and `run_builder` captures stdout+stderr
+  combined, so exact-match fixtures (e.g. `abi-exposure-audit.sh` §A) fail
+  with want/got blocks that look byte-identical — look for hidden stderr
+  pollution before suspecting the lint. Run the battery plain
+  (`bash tests/run-all.sh`).

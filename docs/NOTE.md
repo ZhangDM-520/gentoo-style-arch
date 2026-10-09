@@ -37,6 +37,107 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-09 — harness: the `fish_function_path` battery prefix starves fish's vendor autoload — stderr noise fails exact-match fixtures
+
+**Symptom.** Validating the hplip fix, the battery reported 54 passed, 1
+failed (`abi-exposure-audit.sh` §A) — but the failure message's `want:` and
+`got:` blocks were visually identical.
+
+**Root cause.** The battery had been launched under the 2026-09-26
+harness prefix `fish_function_path=/nonexistent-fp`. fish imports an env
+`fish_function_path` as a *single-element* list (verified: `count
+$fish_function_path` = 1 even with `\x1e`-separated values), so the prefix
+removes **all** function dirs, including `/usr/share/fish/vendor_functions.d`
+— where fish-pure-prompt's `_pure_set_default` lives. `vendor_conf.d/pure.fish`
+runs at every fish startup and then spews `Unknown command:
+_pure_set_default` on stderr, and `run_builder` captures stdout+stderr
+combined into `FIXTURE_OUTPUT` (`tests/lib/fixture-lib.bash:320`), so an
+exact-match assertion (`[[ $FIXTURE_OUTPUT == "$expected" ]]`) fails on
+invisible pollution. `want`/`got` print identically because the noise lines
+get visually absorbed — diff byte-wise or grep for `Unknown command` before
+suspecting the lint.
+
+**Fix / validation.** Causation isolated in one probe: the same fixture is
+rc 1 under the prefix and rc 0 without it. The battery re-run plain
+(`bash tests/run-all.sh`) = 55/55 PASS. The original stub-interception
+hazard stays covered by `stub_sudo` in `tests/lib/fixture-lib.bash`
+stripping the user `sudo` wrapper's added `--preserve-env` — that stripping,
+not the function-path prefix, is the load-bearing mitigation. MEMORY §6's
+2026-09-26 bullet now records the corrected invocation.
+
+**Rules.** (1) Never override `fish_function_path` via the environment —
+fish cannot round-trip a list through env, so any value starves *all*
+autoload, including vendor prompt machinery whose startup errors then pollute
+combined captures. (2) When a fixture's want/got blocks look identical,
+suspect invisible capture pollution (stderr, CR, trailing space) and print
+byte-wise before touching the code under test.
+
+## 2026-10-09 — run #90 hplip wall: cups 2.5's moved header dir breaks hplip's *configure probes*, and its deleted enum compat defines break the sources
+
+**Symptom.** Run #90 (`401..`) died on `hplip` after 38 ok
+(`hplip failed 1 32 build-failed`): configure linked cups fine
+(`checking for cupsDoFileRequest in -lcups... yes`) but then
+`checking for cups/cups.h... no` → `configure: error: cannot find
+cups-devel support`. (The same log also shows `./configure: line 19753:
+test: syntax error: '-march=native' unexpected` — a pre-existing
+unquoted-flags quirk in hplip's configure that it survives; left alone.)
+
+**Root cause.** Two stacked halves of the already-known cups 2.5 family
+(run #88's header-layout move, run #89's enum deletions). (1) cups 2.5
+installs headers under `/usr/include/libcups2/cups/` (`INCLUDEDIR` move), so
+hplip's `AC_CHECK_HEADER([cups/cups.h])` — compiled with the *bare* include
+path — reports "no" even though `cups.pc`'s `Cflags:
+-I/usr/include/libcups2` would resolve it. (2) Once the headers are visible,
+the sources still fail: hplip uses 14 legacy `IPP_*`/`CUPS_*`/`HTTP_*`
+spellings that cups 2.4 shipped as compat `#define`s over the renamed enum
+values and cups 2.5 deleted outright — while `CUPS_VERSION_MAJOR` still
+reports `2`, so a `< 3` version gate cannot detect the break (same trap as
+gtk3 in run #88). The affected files are `prnt/cupsext/cupsext.c`,
+`protocol/hp_ipp.c`, `scan/sane/hpaio.c`.
+
+**Fix.** (1) `build()` exports `CPPFLAGS+=" $(pkg-config --cflags cups)"` —
+the pkg-config Cflags fix both the autoconf probes and every later compile;
+no configure patching, no `/usr/include/cups` symlink. (2) New recipe patch
+`cups-2.5-enum-compat.patch` (sha512
+`7f567cd8e64082fd8c2de83e0232d96e07f3b8eb7418252cdc11eebfa4a2029738d7e0dc661e85898ec8150070d85f0c9460576bb00fbb43106c69e78ee861d0`)
+inserts a `#if CUPS_VERSION_MAJOR == 2 && CUPS_VERSION_MINOR >= 5` shim
+block of 14 old→new `#define`s after the cups includes in those three files,
+applied **last** in `prepare()` (the diff is generated against the fully
+patched tree). Mapping was mechanical, not guessed: every
+`\b(IPP|CUPS|HTTP)_[A-Z0-9_]+` token in hplip's C files was tested against
+the installed `/usr/include/libcups2/cups/*.h`, and the old spellings were
+cross-checked against cups 2.4's `ipp.h` extracted from the cached
+`libcups-2:2.4.20-1` archive — 2.5's deletion leaves no trace in the new
+headers, so the cached previous header (or a token probe) is the only map.
+The renames are not uniform: `IPP_ERROR`→`IPP_STATE_ERROR` (status→state
+class), `CUPS_ADD_PRINTER`→`IPP_OP_CUPS_ADD_MODIFY_PRINTER` (renamed, not
+just moved), `IPP_OK_CONFLICT`→`IPP_STATUS_OK_CONFLICTING`.
+
+**Pitfall (avoided).** The first generated diff captured a *foreign* hunk —
+`hplip-hpaio-gcc14.patch`'s `const SANE_Device***` change — because it was
+diffed against the already-patched tree. Left in, the double-apply would
+have failed `prepare()` on every rebuild. Trim the diff to its own hunks.
+The trimmed patch was then validated faithfully: pristine tarball + all 14
+existing `prepare()` patches in order, then `patch -Np1 --dry-run -i ours`
+= OK.
+
+**Validation.** Fast falsification first: `gcc -fsyntax-only $(pkg-config
+--cflags cups)` over the three files showed zero cups-enum errors (only
+probe artifacts — orblite stubs / implicit decls the real build suppresses
+with `-Wno-implicit-function-declaration`). Then a rehearse over the dirty
+tree (`-s -fi --lanes 2 --jobs 11 --intensity max --no-deps hplip`) passed
+end-to-end: `hplip succeeded 0 131 ok`, rc 0, installed `1:3.26.6-1.1`
+(fourteenth `prepare()` patch applied cleanly in the real build).
+
+**Rules.** (1) When an upstream moves its header directory, the consumer's
+*configure probes* are the first wall — feed them the pkg-config `Cflags`
+via `CPPFLAGS`, never patch configure or symlink the old path. (2) Compat
+`#define`s deleted upstream are invisible in the new headers: map every
+legacy token mechanically against the new header surface and/or the cached
+previous version's header, and never version-gate on `CUPS_VERSION_MAJOR`.
+(3) Patch-on-patch hygiene: generate against the fully patched tree, apply
+last in `prepare()`, and trim any foreign hunks before committing.
+
 ## 2026-10-09 — run #89 handbrake/wine walls: cuda_llvm vs the no-NVPTX toolchain, and the wine casualty of the cups 2.5 renames — plus a family scan
 
 **Symptom.** Run #89 (`401..`, 32 ok) died on two packages. handbrake's

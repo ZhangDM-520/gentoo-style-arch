@@ -1,0 +1,81 @@
+--- a/prnt/cupsext/cupsext.c
++++ b/prnt/cupsext/cupsext.c
+@@ -80,6 +80,24 @@
+ #include <cups/cups.h>
+ #include <cups/language.h>
+ #include <cups/ppd.h>
++#if CUPS_VERSION_MAJOR == 2 && CUPS_VERSION_MINOR >= 5
++/* cups 2.5 deleted the legacy IPP spellings (cups 2.4 shipped them as
++   compat defines over the renamed enum values) */
++#define IPP_OK IPP_STATUS_OK
++#define IPP_OK_CONFLICT IPP_STATUS_OK_CONFLICTING
++#define IPP_BAD_REQUEST IPP_STATUS_ERROR_BAD_REQUEST
++#define IPP_FORBIDDEN IPP_STATUS_ERROR_FORBIDDEN
++#define IPP_NOT_AUTHENTICATED IPP_STATUS_ERROR_NOT_AUTHENTICATED
++#define IPP_ERROR IPP_STATE_ERROR
++#define IPP_PRINTER_IDLE IPP_PSTATE_IDLE
++#define IPP_GET_PRINTER_ATTRIBUTES IPP_OP_GET_PRINTER_ATTRIBUTES
++#define IPP_PURGE_JOBS IPP_OP_PURGE_JOBS
++#define CUPS_GET_PRINTERS IPP_OP_CUPS_GET_PRINTERS
++#define CUPS_GET_PPDS IPP_OP_CUPS_GET_PPDS
++#define CUPS_SET_DEFAULT IPP_OP_CUPS_SET_DEFAULT
++#define CUPS_ADD_PRINTER IPP_OP_CUPS_ADD_MODIFY_PRINTER
++#define CUPS_DELETE_PRINTER IPP_OP_CUPS_DELETE_PRINTER
++#endif
+ #include <syslog.h>
+ #include <stdarg.h>
+ #include <sys/types.h>
+--- a/protocol/hp_ipp.c
++++ b/protocol/hp_ipp.c
+@@ -21,6 +21,24 @@
+ #include <cups/cups.h>
+ #include <cups/language.h>
+ #include <cups/ppd.h>
++#if CUPS_VERSION_MAJOR == 2 && CUPS_VERSION_MINOR >= 5
++/* cups 2.5 deleted the legacy IPP spellings (cups 2.4 shipped them as
++   compat defines over the renamed enum values) */
++#define IPP_OK IPP_STATUS_OK
++#define IPP_OK_CONFLICT IPP_STATUS_OK_CONFLICTING
++#define IPP_BAD_REQUEST IPP_STATUS_ERROR_BAD_REQUEST
++#define IPP_FORBIDDEN IPP_STATUS_ERROR_FORBIDDEN
++#define IPP_NOT_AUTHENTICATED IPP_STATUS_ERROR_NOT_AUTHENTICATED
++#define IPP_ERROR IPP_STATE_ERROR
++#define IPP_PRINTER_IDLE IPP_PSTATE_IDLE
++#define IPP_GET_PRINTER_ATTRIBUTES IPP_OP_GET_PRINTER_ATTRIBUTES
++#define IPP_PURGE_JOBS IPP_OP_PURGE_JOBS
++#define CUPS_GET_PRINTERS IPP_OP_CUPS_GET_PRINTERS
++#define CUPS_GET_PPDS IPP_OP_CUPS_GET_PPDS
++#define CUPS_SET_DEFAULT IPP_OP_CUPS_SET_DEFAULT
++#define CUPS_ADD_PRINTER IPP_OP_CUPS_ADD_MODIFY_PRINTER
++#define CUPS_DELETE_PRINTER IPP_OP_CUPS_DELETE_PRINTER
++#endif
+ #include <syslog.h>
+ #include <stdarg.h>
+ #include <sys/types.h>
+--- a/scan/sane/hpaio.c
++++ b/scan/sane/hpaio.c
+@@ -35,6 +35,24 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #include <cups/cups.h>
++#if CUPS_VERSION_MAJOR == 2 && CUPS_VERSION_MINOR >= 5
++/* cups 2.5 deleted the legacy IPP spellings (cups 2.4 shipped them as
++   compat defines over the renamed enum values) */
++#define IPP_OK IPP_STATUS_OK
++#define IPP_OK_CONFLICT IPP_STATUS_OK_CONFLICTING
++#define IPP_BAD_REQUEST IPP_STATUS_ERROR_BAD_REQUEST
++#define IPP_FORBIDDEN IPP_STATUS_ERROR_FORBIDDEN
++#define IPP_NOT_AUTHENTICATED IPP_STATUS_ERROR_NOT_AUTHENTICATED
++#define IPP_ERROR IPP_STATE_ERROR
++#define IPP_PRINTER_IDLE IPP_PSTATE_IDLE
++#define IPP_GET_PRINTER_ATTRIBUTES IPP_OP_GET_PRINTER_ATTRIBUTES
++#define IPP_PURGE_JOBS IPP_OP_PURGE_JOBS
++#define CUPS_GET_PRINTERS IPP_OP_CUPS_GET_PRINTERS
++#define CUPS_GET_PPDS IPP_OP_CUPS_GET_PPDS
++#define CUPS_SET_DEFAULT IPP_OP_CUPS_SET_DEFAULT
++#define CUPS_ADD_PRINTER IPP_OP_CUPS_ADD_MODIFY_PRINTER
++#define CUPS_DELETE_PRINTER IPP_OP_CUPS_DELETE_PRINTER
++#endif
+ #include "hpmud.h"
+ 
+ #ifdef HAVE_LIBAVAHI
