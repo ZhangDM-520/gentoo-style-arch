@@ -16,7 +16,7 @@ conflicts=('libv4l')
 backup=(etc/rc_maps.cfg)
 license=('LGPL')
 depends=('hicolor-icon-theme' 'libgcc' 'libbpf' 'libjpeg-turbo'  'systemd-libs' 'json-c')
-makedepends=('qt6-base' 'qt6-5compat' 'alsa-lib' 'meson' 'clang' 'doxygen')
+makedepends=('qt6-base' 'qt6-5compat' 'alsa-lib' 'meson' 'clang')
 optdepends=('qt6-base: for qv4l2 and qvidcap'
             'qt6-5compat: for qv4l2'
             'alsa-lib: for qv4l2')
@@ -36,16 +36,18 @@ build() {
   if command -v mold >/dev/null 2>&1; then
     export LDFLAGS+=" -fuse-ld=mold"
   fi
-  arch-meson -Dgconv=disabled "${pkgname}-${pkgver}" build
+  # -Ddoxygen-doc=disabled: the docs feature is auto and turns on whenever
+  # host doxygen exists; its output was pure waste (dropped in package())
+  # and the doxygen run is a build wall (run #92 class)
+  arch-meson -Dgconv=disabled -Ddoxygen-doc=disabled "${pkgname}-${pkgver}" build
   meson compile -C build -j "${GSA_BUILD_JOBS:-$(nproc)}"
 }
 
 package() {
   meson install -C build --destdir "$pkgdir"
 
-  # trim: doxygen HTML docs, man pages and locale catalogues
-  # (docs/man/i18n; nothing reads them at run time — doxygen, the still-stock
-  # makedep, generates the HTML during the build and it is dropped here)
+  # trim: man pages and locale catalogues (docs/man/i18n; nothing reads them
+  # at run time — the doxygen HTML is no longer built at all, see build())
   rm -rf "$pkgdir"/usr/share/{doc,man,locale}
 
   # license: ship upstream licence texts (LGPL-2.1-or-later family)

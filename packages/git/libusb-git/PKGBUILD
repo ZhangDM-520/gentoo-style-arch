@@ -30,7 +30,10 @@ build() {
 
   cd libusb
   ./bootstrap.sh
-  ./configure --prefix=/usr
+  # Class B trim: no man payload — and this is also the seam that keeps
+  # doxygen out of `make install` (default=auto turns it on whenever host
+  # doxygen exists; its api-doc run is WARN_AS_ERROR and broke install)
+  ./configure --prefix=/usr --disable-man-pages
   make -j"${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
 }
 

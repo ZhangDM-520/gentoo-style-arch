@@ -37,6 +37,76 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-09 — run #92 libusb-git wall: upstream's doxygen api-doc runs at `make install` with WARN_AS_ERROR — plus the auto-doc class scan
+
+**Symptom.** Run #92 (`401..`) skipped run #91's finished rows and died on
+`libusb-git` in `package()` (`libusb-git failed 1 24 build-failed`):
+`make -C doc install-man` → `doxygen doxygen.cfg` → `descriptor.c:1833:
+error: unable to resolve reference to 'libusb_get_string_descriptor' for
+\ref command` (×2) → `make[3]: *** [Makefile:19: api-1.0] Error 1`.
+
+**Root cause.** Two halves. (1) The `\ref`s target
+`libusb_get_string_descriptor`, a `static inline` wrapper in `libusb.h`
+that doxygen never extracts (`EXTRACT_ALL`/`EXTRACT_STATIC = NO`), so the
+ref cannot resolve (upstream doc bug on master's new
+`libusb_get_config_string`/`libusb_get_interface_string` docs). (2)
+Upstream's `doxygen.cfg.in` sets `WARN_AS_ERROR = FAIL_ON_WARNINGS`, turning
+a doc warning into a hard failure — and the run only happens because the
+man-page feature defaults to **auto**: `AC_ARG_ENABLE([man-pages] …
+[default=auto])` + `AC_PATH_PROG([DOXYGEN])` enable it whenever host doxygen
+exists, and `install-data-local` invokes it during `make install`.
+
+**Fix.** The build system's own disable switch (rule-47 seam):
+`./configure --prefix=/usr --disable-man-pages`. doxygen never runs, no man
+payload ships (Class B docs trim, consistent with the repo's 200+ `rm -rf
+usr/share/man` recipes), and the class is retired for this recipe. No patch,
+no source change, `.SRCINFO` untouched.
+
+**Same-class scan (proactive).** Unbuilt `401..` recipes touching doxygen,
+checked against their build systems:
+- **v4l-utils — same exposure, fixed in this wave**: meson `doxygen-doc` is
+  a `feature` defaulting to `auto` (runs whenever doxygen exists;
+  `doxygen-html` defaults true) and the recipe deleted the output right
+  after (`rm -rf usr/share/{doc,man,locale}`) — pure waste plus wall risk.
+  Now `-Ddoxygen-doc=disabled`, the `doxygen` makedep is dropped, comment
+  updated. Rehearse `v4l-utils succeeded 0 54 ok`, payload verified
+  unchanged (no doc/man either way).
+- **SAFE — doxygen cannot run in a normal build**: `qca-qt6`
+  (`add_custom_target(doc)`, not `ALL`), `libpulse-git`
+  (`run_target('doxygen')` in `doxygen/meson.build`; its man pages come
+  from xmltoman and are kept), KF6 `karchive`/`kcrash`/`kguiaddons`/
+  `kwindowsystem`/`kdoctools` (doxygen only feeds `BUILD_QCH`, default
+  OFF), `libreoffice-fresh` (SDK-doc target only). Already trimmed earlier:
+  `jack2-git`, `kio`, `libcaca`, `libgphoto2`, `libmtp`, `libteam`,
+  `libvips`, `solid`.
+
+**Twin-mark lesson (rule 38 refinement).** The `.N` twin pkgrel marks are
+**machine-written**: `sync_stable_version` → `apply_release_metadata`
+(`lib/sources.fish`) rewrites the `$W` twin's pkgver/pkgrel to the Arch
+repo version at build dispatch (verified: `pacman -Si v4l-utils` =
+`1.32.0-2.1` and `pacman -Si hplip` = `1:3.26.6-1.1` — exactly the observed
+marks). `cp` from canonical over a marked twin destroys the mark: edit in
+place, or restore `pkgrel=N.N` after the copy (done here; final diff =
+pkgrel only). $W twin `.SRCINFO` follows the marked PKGBUILD (libnvme
+convention).
+
+**Validation.** libusb-git: `bash -n` clean, `.SRCINFO` untouched, twin
+cp'd (unmarked), rehearse `libusb-git succeeded 0 21 ok` → installed
+`1.0.30.r143.gabba63ed-1`, zero man/doxygen payload, licence + libs
+present. v4l-utils: `bash -n`, `.SRCINFO` regenerated (makedep dropped),
+twins diff = pkgrel mark only, rehearse `v4l-utils succeeded 0 54 ok` →
+installed `1.32.0-2.1` with the trim intact. Battery 55/55 before commit.
+
+**Rules.** (1) A doc-tool feature that is `auto`/default-on will run
+whenever the tool is installed, and the tool's strictness becomes your
+build wall — when the recipe's own trim policy deletes the output anyway,
+disable the feature at the build-system seam AND drop the tool from
+makedepends in the same change (MEMORY §6). (2) A doc build with
+`WARN_AS_ERROR` on a moving git master is a repeat-offender shape; scan for
+it with `grep -rln doxygen packages/*/*/PKGBUILD` and check whether the doc
+target is part of `all` (custom/run targets and `BUILD_QCH`-style gates are
+inert).
+
 ## 2026-10-09 — run #91 libnvme wall: `package()` reads `COPYING` from `$srcdir`, but the tarball root is one level down
 
 **Symptom.** Run #91 (`401..`) skipped past run #90's finished rows and died

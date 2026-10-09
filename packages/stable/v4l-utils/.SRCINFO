@@ -10,7 +10,6 @@ pkgbase = v4l-utils
 	makedepends = alsa-lib
 	makedepends = meson
 	makedepends = clang
-	makedepends = doxygen
 	depends = hicolor-icon-theme
 	depends = libgcc
 	depends = libbpf

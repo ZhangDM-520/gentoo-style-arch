@@ -1634,6 +1634,22 @@ constant, not a baked path).
 
 ## 6. Pitfall digest (full details: NOTE.md sections of same dates)
 
+- **A doc-tool feature that is `auto`/default-on runs whenever the tool is
+  installed — and the tool's strictness becomes your build wall**
+  (2026-10-09 run #92 libusb-git, v4l-utils): libusb's man-pages
+  `default=auto` ran doxygen at `make install` under upstream's
+  `WARN_AS_ERROR=FAIL_ON_WARNINGS` (doc `\ref`s to a `static inline`
+  function doxygen never extracts = hard fail); v4l-utils' meson
+  `doxygen-doc=auto` built HTML the recipe deleted immediately after. When
+  the trim policy drops the output anyway, disable the feature at the build
+  system's own seam (`--disable-man-pages`, `-Ddoxygen-doc=disabled`) and
+  drop the tool from makedepends in the same change. Scan shape:
+  `grep -rln doxygen packages/*/*/PKGBUILD`, then check whether the doc
+  target is part of `all` — `add_custom_target`/`run_target` and
+  `BUILD_QCH`-style gates are inert. Related: twin `pkgrel=N.N` marks are
+  machine-written by `sync_stable_version` to mirror the Arch repo version
+  at build dispatch; `cp` from canonical over a marked twin destroys the
+  mark — edit in place or restore it after the copy (NOTE run #92).
 - **An upstream that moves its header dir *and* deletes legacy compat
   `#define`s walls a consumer twice — configure probes first, then source
   spellings** (2026-10-09 hplip / cups 2.5): `AC_CHECK_HEADER([cups/cups.h])`
