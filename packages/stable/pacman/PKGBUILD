@@ -75,6 +75,13 @@ pkgver() {
 prepare() {
   cd "$pkgname"
 
+  # run #84 wall: patch-created files (the new test, patch(1) .orig backups)
+  # survive makepkg's extract as untracked leftovers — `git checkout --force`
+  # resets tracked files only — so a rebuild's patch loop trips over
+  # "would create the file ... which already exists". Force a pristine base.
+  git reset --hard -q
+  git clean -fdq
+
   # apply patch level commits on top of annotated tag
   if [[ -n ${_git_patch_level_commit} ]]; then
     if [[ v${_git_tag} != $(git describe --tags --abbrev=0 "${_git_patch_level_commit}") ]] then

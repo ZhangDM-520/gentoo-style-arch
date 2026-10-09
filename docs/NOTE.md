@@ -37,6 +37,43 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-09 — run #84 pacman wall #2: patch-created files survive makepkg's extract — `prepare()` not idempotent on rebuild
+
+**Symptom.** Run #84 rebuilt `pacman` (the `-s` skip re-evaluated to rebuild)
+and died in `prepare()`: `The next patch would create the file
+test/pacman/tests/source_date_epoch_install.py, which already exists!
+Skipping patch. 1 out of 1 hunk ignored` → `==> ERROR: A failure occurred in
+prepare()`. The five modifying sections of `patch-reproducible-builds.patch`
+applied fine; only the file-creating section tripped.
+
+**Root cause.** makepkg's `extract_git` refreshes the working copy with
+`git checkout --force` (`/usr/share/makepkg/source/git.sh`), which resets
+*tracked* files but leaves untracked leftovers: the test file a previous
+`prepare()` created, plus `patch(1)` `.orig` backups (made by the default
+`--backup-if-mismatch` when a hunk lands with offset). The next rebuild's
+patch loop then starts from a half-dirty tree and the create-file hunk fails.
+Measured: the leftover's mtime (11:17:59) was the previous prepare's run and
+it was still there at the failing prepare (11:29).
+
+**Fix.** `git reset --hard -q && git clean -fdq` at the top of `prepare()`,
+before the rebase/patch logic — the pristine-base idiom of the meson-
+reconfigure / CMake-cache family. Patch application becomes idempotent no
+matter what the extract path leaves behind.
+
+**Validation.** `bash -n` parse OK on both twins; `makepkg --printsrcinfo`
+diff-clean. Rehearsal in `$W` over the tree that still carried the leftovers
+(the exact failing state): all three patch sections applied cleanly, run
+record `pacman succeeded 0 14 ok`, `pacman -Q pacman` functional. Battery
+green in the gap.
+
+**Rule.** A recipe whose `prepare()` applies patches to a VCS working copy
+must assume the extract is *not* pristine: file-creating patches and
+`patch(1)` `.orig` backups accumulate as untracked state across rebuilds.
+Start `prepare()` from `git reset --hard` + `git clean -fdq` (scoped to the
+clone), never paper over the failure with `patch … || true`, and prefer
+rehearsing over a tree that already carries the leftovers — that is the state
+that breaks.
+
 ## 2026-10-09 — run #83 pacman wall: `package()` installed from a build dir `build()` never creates — `-C build` after `cd "$pkgname"`
 
 **Symptom.** Run #83 continued `401..` with 16 green and died at `pacman`:
