@@ -9,6 +9,9 @@ pkgbase = dbus-broker-git
 	makedepends = meson>=0.60.0
 	makedepends = systemd
 	makedepends = python-docutils
+	makedepends = rust
+	makedepends = cargo
+	makedepends = jq
 	depends = audit>=3.0
 	depends = expat>=2.2
 	depends = libcap-ng>=0.6
@@ -22,6 +25,10 @@ pkgbase = dbus-broker-git
 	source = c-shquote-1::git+https://github.com/c-util/c-shquote#branch=v1
 	source = c-stdaux-1::git+https://github.com/c-util/c-stdaux#branch=v1
 	source = c-utf8-1::git+https://github.com/c-util/c-utf8#branch=v1
+	source = libc-rs-0.2::git+https://github.com/rust-lang/libc#branch=libc-0.2
+	source = sys-1::git+https://github.com/bus1/sys#branch=v1
+	sha256sums = SKIP
+	sha256sums = SKIP
 	sha256sums = SKIP
 	sha256sums = SKIP
 	sha256sums = SKIP

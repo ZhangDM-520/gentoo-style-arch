@@ -948,6 +948,19 @@
     `tests/stable-sync-checksums.sh` Case 45 pins the version-sync/anchor
     family (both the success and failing-build log shapes). See
     `docs/NOTE.md` 2026-10-07 run #56.
+49. **A `-git` recipe that follows upstream into a new build-system
+    component vendors that component's subprojects exactly like the
+    existing seeded set — a meson wrap fallback fetch at build time is a
+    defect** (2026-10-10 run #100 dbus-broker-git): upstream added
+    `dependency('libc-rs-0.2')`/`dependency('libosi-1')`, meson fell
+    through to `git clone` from the wrap, and the build died on the
+    network fetch. Fix shape: named `source=()` entries for the new
+    subproject repos + `prepare()` symlinks into `subprojects/` (the
+    `realpath --relative-to` idiom), and when the subproject comes via a
+    wrap `patch_directory`, also copy the overlay files
+    (`subprojects/packagefiles/…`) into the seeded tree like the wrap
+    would. New tool makedepends the component needs (`rust`, `cargo`,
+    `jq`) come with it. See `docs/NOTE.md` 2026-10-10 dbus-broker-git.
 
 ## 2. Workspace overview
 

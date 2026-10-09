@@ -37,6 +37,48 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-10 — dbus-broker-git: upstream grew a Rust component — vendor the two new subprojects like the existing seeded set
+
+**Symptom.** meson configure died with
+`ERROR: Subproject libc-rs-0.2 is buildable: NO` followed by
+`Git command failed: git clone https://github.com/rust-lang/libc.git`
+from `dbus-broker-git/meson.build:56` — run #100 wall at package 84/253.
+The meson wrap fallback was reaching for the network at build time.
+
+**Root cause.** Upstream HEAD added a Rust layer:
+`dependency('libc-rs-0.2')` (rust-lang/libc, branch `libc-0.2`) and
+`dependency('libosi-1')` (bus1/sys, branch `v1`, via
+`subprojects/sys-1.wrap`). The recipe already pre-seeds every `c-*`
+subproject by symlinking its named source into `subprojects/`, but the two
+new subprojects had no source entries, so meson fell through to the wrap
+fetch — flake-prone and offline-hostile, and this host blocks it. The
+libc-rs wrapper is a wrap `patch_directory` overlay: the
+`subprojects/packagefiles/libc-rs/{meson.build,meson-detect-version.sh}`
+pair is applied on top of the crate checkout and is not in the crate.
+
+**Fix.** Vendor the new subprojects the same way as the existing set:
+`source=()` entries for `libc-rs-0.2::git+…#branch=libc-0.2` and
+`sys-1::git+…#branch=v1` (2× SKIP), `prepare()` symlinks both into
+`subprojects/`, and the overlay's `meson.build` + `meson-detect-version.sh`
+are copied into the seeded `libc-rs-0.2` tree (wrap `patch_directory`
+semantics, probe made executable). makedepends += `rust` `cargo` `jq` —
+the overlay's cargo-metadata version probe and its jq filter.
+
+**Validation.** `bash -n` + `makepkg --printsrcinfo` (sources and
+makedepends regenerated); $W twin synced (pkgver/pkgrel marks identical,
+plain cp); rehearsal `-s -fi --no-deps dbus-broker-git` → ✓ 0m48s, fresh
+archive, both outputs installed. Log confirms both subprojects resolved
+from the seeded trees with no network fetch: `libc-rs-0.2` 0.2.190
+(overlay probe: cargo 1.101.0 + jq 1.8.2) and `libosi-1` 1.0.0 from the
+`sys-1` subproject.
+
+**Rule.** A `-git` recipe that follows upstream into a new build-system
+component must vendor the component's subprojects exactly like the
+existing seeded set (named `source=()` entries + `prepare()` symlinks) —
+never leave a meson wrap fallback to fetch at build time. When the
+subproject comes via a wrap `patch_directory`, replicate the overlay copy
+step too.
+
 ## 2026-10-10 — gobject-introspection: stock exact pin `glib2=$_glibver` unsatisfiable after glib2-git's 2.86→2.90 jump — coupled-stack drift
 
 **Symptom.** makepkg dependency resolution failed:

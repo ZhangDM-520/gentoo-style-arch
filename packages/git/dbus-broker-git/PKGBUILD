@@ -26,6 +26,11 @@ makedepends=(
   'meson>=0.60.0'
   'systemd'
   'python-docutils'
+  # upstream's Rust component: meson's rust compiler, the cargo metadata
+  # probe in subprojects/packagefiles/libc-rs, and its jq filter
+  'rust'
+  'cargo'
+  'jq'
 )
 
 source=(
@@ -37,9 +42,15 @@ source=(
   "c-shquote-1::git+https://github.com/c-util/c-shquote#branch=v1"
   "c-stdaux-1::git+https://github.com/c-util/c-stdaux#branch=v1"
   "c-utf8-1::git+https://github.com/c-util/c-utf8#branch=v1"
+  # wrap-seeded like the c-* set: upstream's new Rust libc binding and the
+  # sys project providing libosi-1/libsys-1/libtmp-1
+  "libc-rs-0.2::git+https://github.com/rust-lang/libc#branch=libc-0.2"
+  "sys-1::git+https://github.com/bus1/sys#branch=v1"
 )
 
 sha256sums=(
+  'SKIP'
+  'SKIP'
   'SKIP'
   'SKIP'
   'SKIP'
@@ -62,6 +73,13 @@ prepare() {
   for sp in {dvar-1,ini-1,list-3,rbtree-3,shquote-1,stdaux-1,utf8-1}; do
     ln -fs "$(realpath --relative-to "subprojects" "$srcdir/c-$sp")" "subprojects/libc$sp"
   done
+  ln -fs "$(realpath --relative-to "subprojects" "$srcdir/libc-rs-0.2")" "subprojects/libc-rs-0.2"
+  ln -fs "$(realpath --relative-to "subprojects" "$srcdir/sys-1")" "subprojects/sys-1"
+
+  # the libc-rs-0.2 wrap's patch_directory: its meson.build + cargo version
+  # probe are not in the crate itself (wrap-overlay semantics)
+  cp subprojects/packagefiles/libc-rs/{meson.build,meson-detect-version.sh} subprojects/libc-rs-0.2/
+  chmod +x subprojects/libc-rs-0.2/meson-detect-version.sh
 
   # Remove [Install] section from system service (static enablement via symlinks)
   sed -i '/^\[Install\]$/,/^Alias=.*$/d' src/units/system/dbus-broker.service.in
