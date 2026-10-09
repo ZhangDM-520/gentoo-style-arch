@@ -2941,10 +2941,16 @@ end
 # -cc / --cleanup: delete every built package archive (including stale
 # old-version files that list_split_pkgs would skip).
 function cleanup_pkgs
-    set -l pkgs (find "$SCRIPT_DIR/packages" -type f -name '*.pkg.tar.zst' \
-        -not -path '*/src/*' -not -path '*/pkg/*' 2>/dev/null | sort)
-    set -l manifests (find "$SCRIPT_DIR/packages" -type f -name '*.pkg.tar.zst.gsa-vcs-revisions' \
-        -not -path '*/src/*' -not -path '*/pkg/*' 2>/dev/null | sort)
+    # -prune the src/pkg staging dirs rather than -not -path-filtering them
+    # (output-only filtering still walks every staging tree). build/ is NOT
+    # pruned: the exclusion set here is src/pkg only and an archive under a
+    # build dir is still a built archive this mode must remove.
+    set -l pkgs (find "$SCRIPT_DIR/packages" \
+        -type d \( -name src -o -name pkg \) -prune -o \
+        -type f -name '*.pkg.tar.zst' -printf '%p\n' 2>/dev/null | sort)
+    set -l manifests (find "$SCRIPT_DIR/packages" \
+        -type d \( -name src -o -name pkg \) -prune -o \
+        -type f -name '*.pkg.tar.zst.gsa-vcs-revisions' -printf '%p\n' 2>/dev/null | sort)
     if test (count $pkgs) -eq 0; and test (count $manifests) -eq 0
         echo "No built packages or VCS revision metadata to remove."
         return 0
@@ -5919,10 +5925,13 @@ function sweep_stale_run_artifacts
         \( -name '*.tmp.*' -o -name '.lane*.result' \) -printf '%p\n' 2>/dev/null)
     # Manifest temps sit beside built archives at RECIPE depth — which is
     # packages/<cat>/<pkg>/ here but packages/<id>/ in fixture workspaces — so
-    # match by name anywhere below packages/, never at a fixed depth.
-    set -a stale (find "$SCRIPT_DIR/packages" -type f \
-        -name '*.gsa-vcs-revisions.tmp.*' \
-        -not -path '*/src/*' -not -path '*/pkg/*' -not -path '*/build/*' \
+    # match by name anywhere below packages/, never at a fixed depth. The
+    # src/pkg/build exclusion must be -prune, not -not -path: -not -path
+    # filters output only, so find still descended into every VCS clone and
+    # build tree — minutes of I/O at run start for a single-package run.
+    set -a stale (find "$SCRIPT_DIR/packages" \
+        -type d \( -name src -o -name pkg -o -name build \) -prune -o \
+        -type f -name '*.gsa-vcs-revisions.tmp.*' \
         -printf '%p\n' 2>/dev/null)
     for path in $stale
         # `command rm`: this host defines a fish `rm` FUNCTION that moves

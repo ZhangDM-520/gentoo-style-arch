@@ -234,6 +234,47 @@ if [[ ! -f $dir/state/logs/.pacman-shim ]]; then
         "$(ls -la "$dir/state/logs")"
 fi
 
+# 1b. behavioral: staging trees are excluded from the sweep — a decoy with the
+#     swept NAME under a recipe's src/ or build/ must survive. The exclusion is
+#     -prune (traversal) rather than -not -path (output-only filtering), and
+#     the run-start sweep must not descend into VCS clones and build trees just
+#     to discard their hits: minutes of I/O before the first dispatch. The
+#     decoys sit in p2, which the run does not build: the build path itself
+#     legitimately wipes a built recipe's src/pkg/build (toolchain-drift
+#     clean), which would race the assertion.
+dir="$fixture/stale-sweep-staging"
+make_case_workspace "$dir"
+add_package "$dir" p2 "$gsa_meta_any"
+mkdir -p "$dir/state/logs" "$dir/packages/p2/src/deep/clone" "$dir/packages/p2/build"
+printf 'stale\n' >"$dir/packages/p2/src/deep/clone/x.gsa-vcs-revisions.tmp.DECOY1"
+printf 'stale\n' >"$dir/packages/p2/build/x.gsa-vcs-revisions.tmp.DECOY2"
+printf 'stale\n' >"$dir/packages/p2/x.gsa-vcs-revisions.tmp.SWEPT"
+
+set +e
+output=$(
+    PATH="$dir/bin:$PATH" \
+        GSA_STATE_DIR="$dir/state" \
+        GSA_CPU_THREADS=8 \
+        GSA_MEMORY_GIB=16 \
+        fish "$dir/build-all.fish" --no-deps --allow-broken-rustc --no-sync p1 \
+        2>&1
+)
+rc=$?
+set -e
+if ((rc != 0)); then
+    fail "the decoy sweep run must succeed, rc=$rc" "$output"
+fi
+if [[ -e $dir/packages/p2/x.gsa-vcs-revisions.tmp.SWEPT ]]; then
+    fail "a recipe-depth manifest temp must be swept" "$output"
+fi
+for decoy in \
+    "$dir/packages/p2/src/deep/clone/x.gsa-vcs-revisions.tmp.DECOY1" \
+    "$dir/packages/p2/build/x.gsa-vcs-revisions.tmp.DECOY2"; do
+    if [[ ! -e $decoy ]]; then
+        fail "sweep crossed into a staging tree (src/pkg/build) and removed: $decoy" "$output"
+    fi
+done
+
 # 2. behavioral: an unremovable leftover is named with its operator command
 #    (rm -f fails inside a read-only directory) and never breaks the run.
 dir="$fixture/stale-unremovable"
@@ -287,6 +328,26 @@ grep -qF -- '*.tmp.*' <<<"$audit_region" ||
     fail "the audit stale listing no longer matches '*.tmp.*' state-dir leftovers"
 grep -qF -- '*.gsa-vcs-revisions.tmp.*' <<<"$audit_region" ||
     fail "the audit stale listing no longer matches '*.gsa-vcs-revisions.tmp.*' package-tree leftovers"
+
+# Static shape: staging-tree exclusions in find are -prune (traversal), never
+# -not -path (output-only filtering — find still walks every VCS clone and
+# build tree, minutes of run-start I/O; 2026-10-09). Behaviour alone cannot
+# pin the difference: both shapes exclude the same paths. The three
+# staging-excluding finds are the run-start sweep and cleanup_pkgs in
+# build-all.fish and the audit stale listing above.
+for check_gf in "$gsa_repo_root/build-all.fish" "$gsa_repo_root/lib/audit.fish"; do
+    if grep -qF -- "-not -path '*/src/*'" "$check_gf"; then
+        fail "staging exclusion reverted to output-only -not -path in $(basename "$check_gf") — use -prune" \
+            "$(grep -nF -- "-not -path '*/src/*'" "$check_gf")"
+    fi
+done
+sweep_region=$(awk '
+    /function sweep_stale_run_artifacts/ { inr = 1 }
+    inr { print }
+    inr && /^end$/ { exit }
+' "$gf")
+grep -qF -- '-prune' <<<"$sweep_region" ||
+    fail "sweep_stale_run_artifacts no longer prunes the staging dirs"
 
 printf 'log-ownership fixture: PASS\n'
 

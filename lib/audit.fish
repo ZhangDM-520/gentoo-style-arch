@@ -1461,8 +1461,8 @@ function audit_workspace
         end
     end
     set -l package_errors (find "$SCRIPT_DIR/packages" \
+        -type d \( -name src -o -name pkg -o -name build \) -prune -o \
         \( -name '.srcinfo.err' -o -name '*.gsa-vcs-revisions.tmp.*' \) \
-        -not -path '*/src/*' -not -path '*/pkg/*' -not -path '*/build/*' \
         -printf '%p\n' 2>/dev/null)
     for path in $package_errors
         if not contains "$path" $stale
