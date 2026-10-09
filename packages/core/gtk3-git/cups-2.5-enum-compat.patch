@@ -1,0 +1,45 @@
+diff --git a/modules/printbackends/cups/gtkcupsutils.c b/modules/printbackends/cups/gtkcupsutils.c
+index 3440264071..a84d14bf9b 100644
+--- a/modules/printbackends/cups/gtkcupsutils.c
++++ b/modules/printbackends/cups/gtkcupsutils.c
+@@ -83,6 +83,8 @@ struct _GtkCupsResult
+ #define ippGetLength(ipp_message) ippLength(ipp_message)
+ #define ippGetPort() ippPort()
+ 
++#if !(CUPS_VERSION_MAJOR == 2 && CUPS_VERSION_MINOR >= 5)
++/* cups 2.5 renamed these enums and dropped the old spellings */
+ #define HTTP_STATUS_ERROR HTTP_ERROR
+ #define HTTP_STATUS_CONTINUE HTTP_CONTINUE
+ #define HTTP_STATUS_OK HTTP_OK
+@@ -94,6 +96,7 @@ struct _GtkCupsResult
+ #define IPP_STATE_ERROR IPP_ERROR
+ #define IPP_STATE_IDLE IPP_IDLE
+ #define IPP_STATE_DATA IPP_DATA
++#endif
+ #else
+ #define _httpConnect(host, port, addrlist, family, encryption, blocking, msec, cancel) httpConnect(host, port, addrlist, family, encryption, blocking, msec, cancel)
+ #endif
+diff --git a/modules/printbackends/cups/gtkprintbackendcups.c b/modules/printbackends/cups/gtkprintbackendcups.c
+index edc3c856bb..33e014160e 100644
+--- a/modules/printbackends/cups/gtkprintbackendcups.c
++++ b/modules/printbackends/cups/gtkprintbackendcups.c
+@@ -107,6 +107,8 @@ static GType print_backend_cups_type = 0;
+ #define CUPS_PTYPE_DEFAULT            CUPS_PRINTER_DEFAULT
+ #define CUPS_PTYPE_REJECTING          CUPS_PRINTER_REJECTING
+ 
++#if !(CUPS_VERSION_MAJOR == 2 && CUPS_VERSION_MINOR >= 5)
++/* cups 2.5 renamed these enums and dropped the old spellings */
+ #define IPP_OP_PRINT_JOB              IPP_PRINT_JOB
+ #define IPP_OP_GET_JOB_ATTRIBUTES     IPP_GET_JOB_ATTRIBUTES
+ #define IPP_OP_GET_PRINTER_ATTRIBUTES IPP_GET_PRINTER_ATTRIBUTES
+@@ -125,6 +127,10 @@ static GType print_backend_cups_type = 0;
+ #define IPP_JSTATE_ABORTED            IPP_JOB_ABORTED
+ #define IPP_JSTATE_COMPLETED          IPP_JOB_COMPLETED
+ #else
++/* cups 2.5 dropped the old HTTP status spelling used at the PPD fallback sites */
++#define HTTP_NOT_FOUND HTTP_STATUS_NOT_FOUND
++#endif
++#else
+ #define _httpConnect(host, port, addrlist, family, encryption, blocking, msec, cancel) httpConnect(host, port, addrlist, family, encryption, blocking, msec, cancel)
+ #endif
+ 

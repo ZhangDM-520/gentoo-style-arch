@@ -7,8 +7,8 @@ pkgbase = cups-git
 	arch = x86_64
 	license = Apache-2.0 WITH LLVM-exception AND BSD-3-Clause AND Zlib AND BSD-2-Clause
 	makedepends = autoconf
-	makedepends = colord
 	makedepends = git
+	makedepends = libcolord
 	makedepends = libusb
 	depends = avahi
 	depends = bash
@@ -50,6 +50,7 @@ pkgname = cups-git
 
 pkgname = libcups-git
 	pkgdesc = OpenPrinting CUPS - client libraries and headers (git build)
+	depends = avahi
 	depends = glibc
 	depends = gnutls
 	depends = zlib

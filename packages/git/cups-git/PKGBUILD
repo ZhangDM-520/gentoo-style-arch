@@ -14,7 +14,7 @@ arch=('x86_64')
 license=('Apache-2.0 WITH LLVM-exception AND BSD-3-Clause AND Zlib AND BSD-2-Clause')
 url="https://openprinting.github.io/cups/"
 depends=('avahi' 'bash' 'gnutls' 'hicolor-icon-theme' 'systemd' 'zlib')
-makedepends=('autoconf' 'colord' 'git' 'libusb')
+makedepends=('autoconf' 'git' 'libcolord' 'libusb')
 optdepends=(
   'colord: for ICC color profile support'
   'libusb: for usb printer backend'
@@ -105,13 +105,14 @@ package_cups-git() {
   make -C cups BUILDROOT="$pkgdir" install-headers install-libs install-data install-exec
 
   # client libraries/headers split out to libcups-git (stock Arch 'libcups' split)
+  # upstream 2.5b1 sets INCLUDEDIR=/usr/include/libcups2, so headers install to
+  # usr/include/libcups2/cups/ (was usr/include/cups/); cupsimage.pc and
+  # cups-config no longer ship — cups.pc is the only pkg-config metadata
   _pick libcups \
     "$pkgdir"/usr/lib/libcups.so* \
     "$pkgdir"/usr/lib/libcupsimage.so* \
-    "$pkgdir"/usr/include/cups \
-    "$pkgdir"/usr/lib/pkgconfig/cups.pc \
-    "$pkgdir"/usr/lib/pkgconfig/cupsimage.pc \
-    "$pkgdir"/usr/bin/cups-config
+    "$pkgdir"/usr/include/libcups2 \
+    "$pkgdir"/usr/lib/pkgconfig/cups.pc
 
   # kill the sysv stuff
   rm -rf "$pkgdir"/etc/rc*.d
@@ -130,8 +131,10 @@ package_cups-git() {
 
   # install ssl directory where to store the certs, solves some samba issues
   install -dm700 -g 209 "$pkgdir"/etc/cups/ssl
-  # remove directory from package, it will be recreated at each server start
-  rm -rf "$pkgdir"/run
+  # remove /var/run (symlink into /run) from the package — it collides with
+  # the 'filesystem' package's /var/run at install; upstream re-creates it at
+  # server start
+  rm -rf "$pkgdir"/run "$pkgdir"/var/run
 
   # create config files that get filled by cupsd
   touch "$pkgdir"/etc/cups/printers.conf
@@ -156,7 +159,8 @@ package_cups-git() {
 
 package_libcups-git() {
   pkgdesc="OpenPrinting CUPS - client libraries and headers (git build)"
-  depends=('glibc' 'gnutls' 'zlib')
+  # libcups.so.2 NEEDs libavahi-common/libavahi-client (readelf -d, 2.5b1)
+  depends=('avahi' 'glibc' 'gnutls' 'zlib')
   provides=("libcups=$pkgver" 'libcups.so' 'libcupsimage.so')
   conflicts=('libcups')
   backup=()

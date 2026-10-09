@@ -1622,6 +1622,23 @@ constant, not a baked path).
 
 ## 6. Pitfall digest (full details: NOTE.md sections of same dates)
 
+- **An upstream `-git` API rename with a stale version number breaks every
+  consumer that version-gates compat shims — probe the header surface**
+  (2026-10-09 cups 2.5 / gtk3): cups 2.5 renamed all legacy IPP/HTTP enums
+  and deleted the old spellings while still reporting
+  `CUPS_VERSION_MAJOR 2`, so gtk3's `#if CUPS_VERSION_MAJOR < 3` new→old
+  shims expanded into deleted names. Check whether the old identifiers exist
+  in the *installed* headers before writing a consumer patch, red/green a
+  single ninja object target (seconds) instead of a full rebuild, and expect
+  the same wall in every other consumer of that header.
+- **A `_pick` split pins upstream install paths — the first missing path is
+  never the only drift** (2026-10-09 cups-git): upstream moved headers to
+  `usr/include/libcups2/` and dropped `cupsimage.pc`/`cups-config` entirely;
+  the `mv` failure aborted the `_pick` loop at the first bad entry, hiding
+  the rest. Enumerate the whole shipped tree against the `_pick` list, and
+  when pruning upstream-created runtime dirs remove `var/run` explicitly —
+  `filesystem` owns it.
+
 - **A `$W` twin sync must cover `config/`, and a `--no-deps` selection must
   cover its members' unmet HOUSE prerequisites** (2026-10-09 Qt6 wall): an
   edge fix validated in the canonical tree sorted wrongly in the `$W` run

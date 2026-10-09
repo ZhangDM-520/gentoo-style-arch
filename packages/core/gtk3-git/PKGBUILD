@@ -27,7 +27,6 @@ depends=(
   'at-spi2-atk'
   'atk'
   'cairo'
-  'colord'
   'glib2'
   "${_pkg}-update-icon-cache"
   'libcups'
@@ -48,7 +47,13 @@ depends=(
   'libcloudproviders'
 )
 makedepends=(
-  'gobject-introspection' 'git' 'meson' 'sassc')
+  'gobject-introspection' 'git' 'libcolord' 'meson' 'sassc')
+# colord notes: stock 'colord' is the daemon split and cannot be installed
+# beside house libcolord-git (its internal libcolord dep is exact-version);
+# the daemon was deliberately trimmed there (client library only). Neither
+# gtk3 nor its print backends link libcolord (measured), so the daemon is
+# not a runtime dep — the -D colord=yes D-Bus glue idles without it. The
+# build auto-detects colord.pc from libcolord, hence the makedepends name.
 optdepends=(
   "${_project}-icon-theme: Default icon theme"
   "${_project}-themes-standard: Default widget theme")
@@ -64,10 +69,12 @@ source=(
   # "git+${_local}#branch=${_pkg}-3-24"
   settings.ini
   "${_pkg}-query-immodules-3.0.hook"
+  cups-2.5-enum-compat.patch
 )
 sha256sums=('SKIP'
             '01fc1d81dc82c4a052ac6e25bf9a04e7647267cc3017bc91f9ce3e63e5eb9202'
-            'a0319b6795410f06d38de1e8695a9bf9636ff2169f40701671580e60a108e229')
+            'a0319b6795410f06d38de1e8695a9bf9636ff2169f40701671580e60a108e229'
+            'c4de1db9592876479463b253091272de47488529265933a43efd22c538a866d3')
 
 pkgver() {
   cd \
@@ -78,6 +85,15 @@ pkgver() {
     sed \
       -r \
         's/([^-]*-g)/r\1/;s/-/./g'
+}
+
+prepare() {
+  cd "${_pkg}"
+  # cups >= 2.5 renamed the IPP/HTTP enums but still reports major version 2,
+  # falling into gtk3's legacy-name shims (upstream only knows cups 2.x-old
+  # and libcups3). Rerun-safe over a dirty checkout: restore the paths first.
+  git checkout -- modules/printbackends/cups
+  patch -Np1 -i "$srcdir/cups-2.5-enum-compat.patch"
 }
 
 _meson_options=(

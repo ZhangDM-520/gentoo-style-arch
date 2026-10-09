@@ -37,6 +37,77 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-09 — run #88 colord/cups wall chain: stale split names, a moved upstream install layout, a `/var/run` collision, and cups 2.5's enum renames in consumers
+
+**Symptom.** Four stacked walls on one chain. (1) Run #88's dependency phase
+refused `colord` beside house `libcolord-git`. (2) cups-git then failed in
+`package_cups-git()`: `mv: cannot stat .../pkg/cups-git/usr/include/cups`.
+(3) With that fixed and the build green, `pacman -U` refused the archive:
+`cups-git: /var/run exists in filesystem (owned by filesystem)`. (4) With
+cups-git installed, gtk3-git's build died on ~20 undeclared IPP/HTTP
+constants in the CUPS print backend (`'IPP_PRINT_JOB' undeclared; did you
+mean 'IPP_OP_PRINT_JOB'?`).
+
+**Root cause.** (1) Stale stock names: `libcolord-git` deliberately ships the
+client library only, so the daemon name `colord` is unsatisfiable beside it —
+the recipes wanted the *library* (`libcolord`); gtk3-git's `colord` depends
+was dead weight (measured: no libcolord linkage in stock `libgtk-3` or
+`libcups`). (2) Upstream cups 2.5b1 moved the header install:
+`INCLUDEDIR=/usr/include/libcups2`, so `install-headers` writes
+`usr/include/libcups2/cups/` instead of `usr/include/cups/`, and
+`cupsimage.pc`/`cups-config` no longer ship at all (only `cups.pc`);
+`install-libs` was fine all along (libcups/libcupsimage staged normally —
+the `mv` failure aborted the `_pick` loop before the pc file moved). (3) The
+same upstream era added `$pkgdir/var/run` (symlink into `/run`) to
+`install-data`; the recipe's `rm -rf "$pkgdir"/run` used to leave the
+dangling symlink for makepkg's empty-dir cleanup to prune, and no longer
+does — stock cups never ships `/var/run`, which collides with the
+`filesystem` package. (4) cups 2.5 renamed *every* legacy enum spelling
+(`IPP_JOB_*`→`IPP_JSTATE_*`, `IPP_*_JOB` ops→`IPP_OP_*`,
+`IPP_OK_CONFLICT`→`IPP_STATUS_OK_CONFLICTING`,
+`IPP_PRINTER_STOPPED`→`IPP_PSTATE_STOPPED`, `HTTP_OK`/`HTTP_NOT_FOUND`→
+`HTTP_STATUS_*`, `HTTP_ENCRYPT_REQUIRED`→`HTTP_ENCRYPTION_REQUIRED`) and
+deleted the old names, but still reports `CUPS_VERSION_MAJOR 2`
+(`cups.h`, MINOR 5). gtk3's `dbf8db4844 "cups: Build with libcups 3"` shims
+new names→old under `#if CUPS_VERSION_MAJOR < 3`, so on 2.5 the shims expand
+to deleted identifiers; two raw `HTTP_NOT_FOUND` uses sit in the PPD fallback
+path (`gtkprintbackendcups.c:4145,4155`).
+
+**Fix.** cups-git: `_pick libcups` now moves `usr/include/libcups2` and only
+the files that still exist (`cupsimage.pc`/`cups-config` dropped), `avahi`
+added to `libcups-git` depends (measured `readelf -d` NEEDs
+libavahi-common/libavahi-client), and `rm -rf "$pkgdir"/run "$pkgdir"/var/run`.
+gtk3-git: recipe patch `cups-2.5-enum-compat.patch` wraps the new→old shim
+blocks in `gtkcupsutils.c`/`gtkprintbackendcups.c` in
+`#if !(CUPS_VERSION_MAJOR == 2 && CUPS_VERSION_MINOR >= 5)` and defines
+`HTTP_NOT_FOUND`→`HTTP_STATUS_NOT_FOUND` in the modern branch (the function
+shims stay — 2.5 keeps the deprecated old functions). Its new `prepare()` is
+rerun-safe (`git checkout -- modules/printbackends/cups` before `patch -Np1`,
+run-#84 family). colord: `libcolord` makedepends on both recipes, dead
+`colord` depends removed from gtk3-git, topology edges += `libcolord-git`.
+
+**Validation.** The enum fix was falsified cheaply first: `ninja -C build
+modules/printbackends/libprintbackend-cups.so` — red on the unpatched tree
+(the run-#2 errors), green after (`[4/4] Linking`, deprecation warnings
+only), no full rebuild needed to prove it. Rehearse over the dirty tree:
+`cups-git succeeded 0 50 ok` (build+install, run-2 record), then
+`gtk3-git succeeded 0 198 ok` rc 0 with the patch applied through the real
+`prepare()` path. Loader sweep AUDIT/LIST/dry-runs green after the topology
+edit.
+
+**Rules.** (1) When an upstream `-git` renames API surface but keeps its old
+version number, every consumer that *version-gates* compat shims misfires —
+probe the installed header for the old spellings before blaming the consumer,
+and red/green one ninja object target instead of a full build. (2) A `_pick`
+split pins upstream install paths: a moved path aborts the whole loop at the
+first missing entry, so enumerate the *entire* shipped layout against the
+`_pick` list — the observed missing path is never the only drift. (3) A
+packaging step that prunes upstream-created runtime dirs must remove
+`/var/run` explicitly; `filesystem` owns it. (4) Parked risk: every other
+cups-header consumer (ghostscript, hplip, cups-filters, libcupsfilters,
+libppd, python-pycups, Qt printsupport) will hit the same enum deletions
+when its next rebuild compiles against cups-git — same patch shape.
+
 ## 2026-10-09 — Qt6 wall: ICU soname skew behind a missing opencv→Qt edge — plus two sync/selection lessons
 
 **Symptom.** opencv's clean rehearse (after the compiler fix) died at 46% on
