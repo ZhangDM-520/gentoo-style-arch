@@ -37,6 +37,36 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-10 — gobject-introspection: stock exact pin `glib2=$_glibver` unsatisfiable after glib2-git's 2.86→2.90 jump — coupled-stack drift
+
+**Symptom.** makepkg dependency resolution failed:
+`error: target not found: glib2=2.86.3` — run #99 wall at package 66/253.
+
+**Root cause.** The stock recipe pins the makedep to its upstream pairing
+(`glib2=$_glibver`, 2.86.3). The set ships **glib2-git** (provides
+`glib2=2.90.1`), so the exact pin was satisfiable only while glib2-git
+tracked 2.86.x — its 2.90.1 rebuild (2026-10-09) made it unsatisfiable by
+construction. gobject-introspection is a `core` consumer of glib2-git in
+the topology, so a rebuild is exactly what the coupled-batch rule demands.
+
+**Fix.** makedep `glib2=$_glibver` → unversioned `glib2` (house style:
+every other recipe already requests `glib2` and resolves through the
+versioned provide). `$_glibver` still pins the glib **source** checkout
+that feeds the GIRepository-2.0 gir/typelib — that is g-i's own upstream
+pairing and untouched.
+
+**Validation.** `bash -n` + `makepkg --printsrcinfo` (makedepends line
+regenerated); $W twin synced with its `pkgrel=2.1` mark; rehearsal
+`-s -fi --no-deps gobject-introspection` → ✓ 0m32s (104 compile steps via
+ccache), all three split outputs repackaged and installed — g-i 1.86.0
+compiles against glib2-git 2.90.1 cleanly.
+
+**Rule.** A stock exact-version makedep pin on a package the set replaces
+with a `-git` provider is unsatisfiable by construction — request the NAME
+(house style) and let the versioned provide resolve it. When a `-git`
+provider jumps its base version, expect the exact-pinned consumers'
+dep-resolution walls next; fix them as one coupled batch.
+
 ## 2026-10-09 — harfbuzz-git: upstream's new hb-gpu demo wanted GLFW and the wrap-fetch is off — disable the demo, keep the library
 
 **Symptom.** meson configure died at `util/gpu/meson.build:58`:

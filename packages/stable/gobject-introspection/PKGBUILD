@@ -25,7 +25,11 @@ license=(
 )
 _glibver=2.86.3
 makedepends=(
-  "glib2=$_glibver"
+  # house style: unversioned glib2 — the set ships glib2-git (versioned
+  # provides), so the stock exact pin "glib2=$_glibver" is unsatisfiable by
+  # construction; $_glibver below still pins the glib SOURCE checkout that
+  # feeds the GIRepository-2.0 gir/typelib (g-i's own upstream pairing)
+  glib2
   cairo
   git
   glibc

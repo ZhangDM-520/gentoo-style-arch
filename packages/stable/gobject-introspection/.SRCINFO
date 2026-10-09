@@ -6,7 +6,7 @@ pkgbase = gobject-introspection
 	arch = x86_64
 	license = GPL-2.0-or-later
 	license = LGPL-2.0-or-later
-	makedepends = glib2=2.86.3
+	makedepends = glib2
 	makedepends = cairo
 	makedepends = git
 	makedepends = glibc
