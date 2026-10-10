@@ -8,7 +8,7 @@
 pkgbase=suil
 pkgname=(suil)
 pkgver=0.10.26
-pkgrel=1
+pkgrel=1.1
 pkgdesc="A lightweight C library for loading and wrapping LV2 plugin UIs"
 arch=(x86_64)
 url="https://drobilla.net/software/suil.html"
@@ -43,6 +43,14 @@ build() {
     # trim: docs=disabled drops the sphinx API docs (suil-docs split)
     -D docs=disabled
   )
+
+  # gtk2-compat (pulled in by pinentry) ships a pkg-config shim for gtk+-2.0/
+  # gtk+-x11-2.0 that redirects to gtk3, so suil's *optional* gtk2 probe resolves
+  # even with -D gtk2=disabled and the wrapper build gate ignores the option —
+  # then genuine GTK2 code fails against gtk3-mapped headers. Gate the build on
+  # the option too (fail-closed: the grep aborts if upstream moves the line).
+  sed -i "s/if gtk2_dep.found() and gtk2_x11_dep.found() and x11_dep.found()/if get_option('gtk2').allowed() and gtk2_dep.found() and gtk2_x11_dep.found() and x11_dep.found()/" $pkgname-$pkgver/meson.build
+  grep -q "get_option('gtk2').allowed() and gtk2_dep.found()" $pkgname-$pkgver/meson.build
 
   arch-meson $pkgname-$pkgver build "${meson_options[@]}"
   meson compile -C build

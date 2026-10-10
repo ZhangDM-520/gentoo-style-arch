@@ -37,6 +37,56 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-10 — run #122 suil build: `gtk2-compat`'s pkg-config shim resolved the optional gtk2 probe despite `-D gtk2=disabled`
+
+**Symptom.** Run #122 walled on `suil` (0.10.26): `src/x11_in_gtk2.c`
+failed with implicit-declaration and pointer-conversion errors on
+`GTK_OBJECT`, `gtk_object_destroy`, `GTK_PLUG` — genuine GTK2 API missing —
+although the recipe passes `-D gtk2=disabled` and the meson summary itself
+printed `gtk2: disabled`.
+
+**Root cause.** suil's `meson.build` probes `gtk2_dep`/`gtk2_x11_dep` with
+`required: get_option('gtk2').enabled()` — for `disabled` that makes the
+probe OPTIONAL — while the wrapper build gate (`if gtk2_dep.found() and
+gtk2_x11_dep.found() and x11_dep.found()`) ignores the option entirely.
+`gtk2-compat` (installed for pinentry's gtk2 backend) ships pkg-config
+shims `gtk+-2.0.pc`/`gtk+-x11-2.0.pc` (Version 3.24.53, redirecting to
+gtk3), so the optional probe resolved (`gtk+-x11-2.0 found: YES 3.24.53`),
+the wrapper target was generated, and true-GTK2 code then failed against
+the gtk3-mapped headers. Systemic hazard: the shim poisons OPTIONAL gtk2
+detection for **every** build probing `gtk+-2.0` — more walls of this class
+can appear in the tail. Recipe-surface sibling scan (`grep
+"gtk+-2\.0\|gtk+-x11-2\.0" packages/ --include=PKGBUILD`, plus patches)
+found no other current consumer.
+
+**Fix.** suil's `build()` seams the meson gate before `arch-meson`: a `sed`
+adds `get_option('gtk2').allowed() and` to the gate condition, followed by
+a fail-closed `grep -q` that aborts if upstream moves the line.
+`libsuil_x11_in_gtk2.so` is dropped, which is intended — the recipe already
+asks for gtk2=disabled and the house is gtk2-free. Rejected: adding
+`gtk2-compat` as a makedep (its headers are gtk3 — `GTK_OBJECT`/`GTK_PLUG`
+cannot compile against them); re-evicting `gtk2-compat` (transient —
+pinentry's makedep reinstalls it on the next rebuild); other meson options
+(the recipe's `gtk2=disabled` was already passed and is not the seam).
+
+**Validation.** `bash -n` + `makepkg --printsrcinfo` clean; rehearsal
+`-fi --no-deps suil` ✓ 18s; the archive and the installed tree carry
+`libsuil_x11_in_gtk3.so`/`_in_qt5`/`_in_qt6` and **no** `_in_gtk2`;
+meson summary `gtk2: disabled` with no `x11_in_gtk2` compile step. Full
+fixture battery green. The same wave adopts run #122's version-sync rows
+into canonical (`speech-dispatcher` 0.12.1-3→3.1, `zbar` 0.23.93-7→7.1,
+`libvips` 8.18.7-1→1.1, `suil` 0.10.26-1→1.1) with `.SRCINFO`
+regenerated; twins were already at those values.
+
+**Rule.** A feature `disabled` must gate the BUILD, not just the probe:
+when the probe is `required: get_option('x').enabled()` it becomes
+optional, and any compat shim or leftover provider for the retired name
+re-enables the feature build behind the option's back. Verify the build
+gate respects the option (`get_option('x').allowed() and …dep.found()`),
+and when a compat shim answers for a retired API name, scan every recipe
+whose upstream probes that name. The remedy is a per-recipe seam — never
+uninstall the shim if another package's makedep reinstalls it.
+
 ## 2026-10-10 — run #121 sdl2-git install: `gegl-git` pinned the stock provider name `sdl2-compat`, blocking the swap
 
 **Symptom.** Run #121 (81-package remainder) built `sdl2-git`

@@ -1,7 +1,7 @@
 pkgbase = speech-dispatcher
 	pkgdesc = High-level device independent layer for speech synthesis interface
 	pkgver = 0.12.1
-	pkgrel = 3
+	pkgrel = 3.1
 	url = http://www.freebsoft.org/speechd
 	arch = x86_64
 	license = GPL2
@@ -20,7 +20,7 @@ pkgbase = speech-dispatcher
 
 pkgname = speech-dispatcher
 	install = speech-dispatcher.install
-	depends = libspeechd=0.12.1-3
+	depends = libspeechd=0.12.1-3.1
 	depends = python-pyxdg
 	depends = dotconf
 	depends = libpulse

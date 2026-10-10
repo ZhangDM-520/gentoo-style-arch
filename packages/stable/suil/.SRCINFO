@@ -1,7 +1,7 @@
 pkgbase = suil
 	pkgdesc = A lightweight C library for loading and wrapping LV2 plugin UIs
 	pkgver = 0.10.26
-	pkgrel = 1
+	pkgrel = 1.1
 	url = https://drobilla.net/software/suil.html
 	arch = x86_64
 	license = 0BSD

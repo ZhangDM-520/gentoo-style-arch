@@ -1,7 +1,7 @@
 pkgbase = zbar
 	pkgdesc = Application and library for reading bar codes from various sources
 	pkgver = 0.23.93
-	pkgrel = 7
+	pkgrel = 7.1
 	url = https://github.com/mchehab/zbar
 	arch = x86_64
 	license = LGPL-2.1-or-later

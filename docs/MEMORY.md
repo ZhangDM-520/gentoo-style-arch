@@ -1725,6 +1725,21 @@ constant, not a baked path).
 
 ## 6. Pitfall digest (full details: NOTE.md sections of same dates)
 
+- **A compat shim answering for a retired API name turns an "optional"
+  feature probe into a false positive — the option must gate the BUILD,
+  not just the probe** (2026-10-10 run #122 suil): `gtk2-compat` (installed
+  for pinentry) ships pkg-config shims `gtk+-2.0.pc`/`gtk+-x11-2.0.pc`
+  redirecting to gtk3 (Version 3.24.53), so suil's `required:
+  get_option('gtk2').enabled()` probe resolved even with `-D gtk2=disabled`
+  and its build gate (`if gtk2_dep.found() and …`) ignored the option —
+  true-GTK2 code then failed against gtk3-mapped headers while the summary
+  said `gtk2: disabled`. Seam the gate with `get_option('x').allowed() and
+  …dep.found()` (+ fail-closed `grep -q`) in the recipe; expect more walls
+  of this class wherever an upstream optionally probes `gtk+-2.0`. Never
+  "fix" it by uninstalling the shim (pinentry's makedep reinstalls it) or
+  by mdepending it (its headers cannot compile the real API). Details:
+  NOTE.md 2026-10-10.
+
 - **A recipe asset that exists to satisfy an external tool probe must be
   wired by the recipe, not by an undocumented host-side placement**
   (2026-10-10 run #114 bettbox): Cargokit (vendored by the `code_forge`
