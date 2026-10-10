@@ -4,7 +4,7 @@
 
 pkgname=zen-browser
 pkgver=1.22.3b
-pkgrel=1
+pkgrel=2
 pkgdesc='Firefox-based web browser built from upstream release source snapshot'
 url='https://zen-browser.app'
 arch=('x86_64')
@@ -253,6 +253,12 @@ package() {
     mv "$pkgdir/usr/lib/firefox" "$_appdir"
     ln -sf firefox "$_appdir/zen"
   fi
+
+  # ./mach install ships an upstream usr/bin/firefox -> /usr/lib/firefox/firefox
+  # symlink; the mv above relocates the app dir, leaving that symlink dangling
+  # and colliding with any firefox-family package on the same path (run #116
+  # install refusal against firefox-pure). The launcher pair below replaces it.
+  rm -f "$pkgdir/usr/bin/firefox"
 
   install -Dm755 /dev/stdin "$pkgdir/usr/bin/$_launcher" <<'EOF'
 #!/bin/sh

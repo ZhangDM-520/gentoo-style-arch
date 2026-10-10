@@ -37,6 +37,52 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-10 — run #116 zen-browser-pgo install wall: upstream's `mach install` launcher symlink dangled into everyone's `/usr/bin/firefox`
+
+**Symptom.** Run #116 reached 143/252; `zen-browser-pgo`'s 94-minute
+3-tier PGO build succeeded but the `-i` install refused:
+`error: failed to commit transaction (conflicting files)
+zen-browser: /usr/bin/firefox exists in filesystem (owned by
+firefox-pure)` → `✗ Install failed (rc=1) — stopping`. The archive
+existed (315 MiB), so only the install layout was wrong.
+
+**Root cause.** Two halves. (1) Recipe-side: upstream `./mach install`
+stages `usr/bin/firefox -> /usr/lib/firefox/firefox`; `package()` then
+relocates the app dir (`mv usr/lib/firefox → usr/lib/zen-browser`), so
+that upstream symlink stays behind as a **dangling** `/usr/bin/firefox`
+entry that collides with any firefox-family owner of the path — the
+recipe's own launcher pair (`usr/bin/zen-browser` + `usr/bin/zen`) is
+all it ever needed. (2) System-side: `firefox-pure` (CachyOS package,
+mutually dependent with `cachyos-firefox-settings`, neither in the 653
+set) owned `/usr/bin/firefox`.
+
+**Fix (owner decision: evict the foreign package).** `pacman -R
+firefox-pure cachyos-firefox-settings` (both — they require each
+other), then the recipe drops the stray symlink
+(`rm -f "$pkgdir/usr/bin/firefox"` right after the app-dir move),
+pkgrel 1→2. Because the change is `package()`-side only, the archive
+was regenerated with `makepkg -Rf` from the surviving objdir — binaries
+bit-identical, no 94-minute rebuild.
+
+**Validation.** Archive `tar -tvf … | grep usr/bin` = only
+`zen -> zen-browser` + `zen-browser`; `-s -fi --no-deps zen-browser-pgo`
+→ `zen-browser-pgo succeeded 0 16 ok`; installed `zen-browser
+1.23.2b-1`, `/usr/bin/firefox` gone, `zen --version` runs (Mozilla
+Firefox 157.0.1). Sibling scan: `grep -rln 'mach install' packages/` →
+this recipe alone. False alarm recorded: the staged
+`usr/lib/zen-browser/libonnxruntime.so` link looks dangling inside
+`pkgdir` but resolves against the system `onnxruntime-cpu` optdepend at
+runtime — intentional, leave it. Battery after this entry.
+
+**Rule.** When a recipe relocates an upstream install tree, sweep the
+tree for absolute symlinks that pointed *into* the moved directory —
+they come out dangling and claim paths other packages own. Drop them in
+the same change; `find "$pkgdir" -xtype l` plus a
+`tar -tvf … | grep ' -> /'` pass is the cheap check. And an
+install-refusal wall has two possible seams — evict the foreign owner
+(owner decision) or stop shipping the path (recipe fix) — do both when
+both are wrong.
+
 ## 2026-10-10 — pacman local-DB noise: `%INSTALLED_DB%` origin-repo section stripped from 289 desc files
 
 **Symptom.** Every pacman local-DB read emitted `warning: <pkg>: unknown
