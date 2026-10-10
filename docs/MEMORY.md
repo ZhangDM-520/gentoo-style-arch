@@ -54,7 +54,12 @@
      can make pacman demand the removal of a package the dependency graph
      needs; `java-runtime` is provided by every JDK and every full JRE. Same
      rule for `java-environment` (JDK), `libgl` (libglvnd), `cron`, etc.
-     The 2026-09-18 logseq incident is the worked example.
+     The 2026-09-18 logseq incident is the worked example; run #121 (2026-10-10
+     sdl2-compat→sdl2-git) is the swap-blocking form — a name pin in
+     `gegl-git`'s depends refused the stock provider's removal, and the same
+     name in `libde265`/`mpg123` makedepends would have pulled it back into
+     rebuilds (scan depends+makedepends+optdepends for the provider name in
+     one wave when a bite surfaces).
    - bare soname provides ONLY — never hand-version a soname: makepkg
      auto-versions a bare `provides=(libfoo.so)` from the package version, so
      a hand-spelled `libfoo.so=…` duplicates the derivation and drifts from

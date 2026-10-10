@@ -14,8 +14,10 @@ depends=(glibc
          libstdc++)
 makedepends=(cmake
              git
-             sdl2-compat)
-optdepends=('sdl2-compat: for the decoder tool')
+             # virtual sdl2: sdl2-compat and the house sdl2-git swap both
+             # provide it — a concrete name would block the swap (run #121)
+             sdl2)
+optdepends=('sdl2: for the decoder tool')
 provides=(libde265.so)
 source=(git+https://github.com/strukturag/libde265#tag=v$pkgver)
 sha256sums=('15b35cc5ed154a31bd825bb22d033d9bb93663d1f85ba971ff04b41a239c99a3')

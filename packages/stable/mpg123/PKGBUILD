@@ -9,9 +9,9 @@ url='https://mpg123.de/'
 arch=('x86_64')
 license=('LGPL-2.1-only')
 depends=('alsa-lib' 'glibc')
-makedepends=('jack' 'libpulse' 'sdl2-compat')
+makedepends=('jack' 'libpulse' 'sdl2')  # virtual sdl2 (sdl2-compat/sdl2-git swap — run #121)
 optdepends=(
-  'sdl2-compat: for sdl audio support'
+  'sdl2: for sdl audio support'
   'jack: for jack audio support'
   'libpulse: for pulse audio support'
   'perl: for conplay'

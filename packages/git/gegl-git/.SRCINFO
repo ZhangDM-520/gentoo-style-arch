@@ -30,7 +30,7 @@ pkgbase = gegl-git
 	depends = babl>=0.1.116
 	depends = libspiro>=0.5.0
 	depends = json-glib>=1.0.0
-	depends = sdl2-compat>=2.0.5
+	depends = sdl2>=2.0.5
 	optdepends = openexr: for using the openexr plugin
 	optdepends = ffmpeg: for using the ffmpeg plugin
 	optdepends = librsvg: for using the svg plugin

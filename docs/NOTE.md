@@ -37,6 +37,49 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-10 — run #121 sdl2-git install: `gegl-git` pinned the stock provider name `sdl2-compat`, blocking the swap
+
+**Symptom.** Run #121 (81-package remainder) built `sdl2-git`
+(2.32.0.r260.g74be4c2836-1) cleanly but its install stopped the run:
+`sdl2-git and sdl2-compat are in conflict (sdl2). Remove sdl2-compat?` —
+auto-YESed by the transaction's `--ask 4` — and then
+`removing sdl2-compat breaks dependency 'sdl2-compat>=2.0.5' required by
+gegl-git`.
+
+**Root cause.** The stock→house swap of `sdl2-compat` → `sdl2-git` was
+blocked by a name-pinned depend: `gegl-git` declared the **concrete
+provider** `sdl2-compat>=2.0.5` instead of the virtual `sdl2` both providers
+ship (stock `sdl2-compat` provides `sdl2=2.32.74`; `sdl2-git` provides
+`libSDL2-2.0.so`/`libSDL2.so`). Pacman therefore refused to remove the stock
+provider. Sibling scan: `libde265` and `mpg123` additionally name-pinned
+`sdl2-compat` in **makedepends** (their next rebuild would have pulled the
+conflicting stock package back in) and in optdepends; `sdl12-compat`, `mpv`
+and `ffmpeg-git` already used the virtual and were clean.
+
+**Fix.** All three recipes now depend on the virtual `sdl2` (version
+constraint kept: `sdl2>=2.0.5` is satisfied by both providers' provide
+versions). gegl-git's `PKGBUILD.in` template carries the same fix. Each was
+rebuilt/reinstalled so the change reaches `.PKGINFO` (depends live there).
+`--audit-lint swap` over the whole set reports only two findings, both the
+deliberate house soname-provides discipline on sdl2-git vs stock sdl2-compat
+(report-only, accepted — stock declares no soname provides at all).
+
+**Validation.** `bash -n` + `makepkg --printsrcinfo` on all six recipe/tree
+combinations; gegl-git rebuilt+installed (0.4.73.r11491.d627a1903-1, its
+`.PKGINFO`/DB depends read `sdl2>=2.0.5`); sdl2-git then installed cleanly
+(`--ask 4` force-YESed the removal — `sdl2-compat` gone, `sdl2-git`
+2.32.0.r260.g74be4c2836-1 provides `sdl2=…`, `libSDL2-2.0.so=0-64`);
+libde265 + mpg123 rebuilt (optdepends/makedepends read `sdl2`, zero
+`sdl2-compat` in their archives); `pacman -Qk` clean on sdl12-compat, mpv,
+ffmpeg-git, gegl-git (0 missing).
+
+**Rule.** A consumer must never pin the concrete provider where a virtual
+exists (`sdl2`, `java-runtime`, `libgl`, …): the name pin blocks every future
+provider swap and pulls the conflicting stock package into rebuilds. When
+one bite surfaces, scan ALL recipes for the provider name (depends,
+makedepends AND optdepends) and the installed DB's `%DEPENDS%` in the same
+wave — this wall had three recipes carrying the name.
+
 ## 2026-10-10 — run #120 openal-git: upstream's C++20-modules mode vs the GCC-snapshot toolchain
 
 **Symptom.** Run #120 (82-package remainder) died 8 s in at `openal-git`,
