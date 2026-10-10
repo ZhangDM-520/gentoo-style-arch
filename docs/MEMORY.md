@@ -1725,6 +1725,20 @@ constant, not a baked path).
 
 ## 6. Pitfall digest (full details: NOTE.md sections of same dates)
 
+- **A version-sync bump of a tag-pinned recipe invalidates every
+  version-pinned patch and checksum in it** (2026-10-10 run #123 mlt): the
+  `pkgver` row moved the `#tag=v$pkgver` source to 7.42.0 while the house
+  `ffmpeg-9.patch` stayed a diff against 7.40.0 — `prepare()` failed 4/4
+  hunks and the run stopped. Upstream had meanwhile merged its own guarded
+  FFmpeg 9 fix (`06c4785f`, `#if LIBAVCODEC_VERSION_INT >= 61.13.100`),
+  superseding the patch entirely. When `pkgver` moves: re-validate each
+  `prepare()` patch against the new tag, adopt the new tag checksum, and
+  check `git log -S <patch's API call>` for an upstream merge before
+  re-rolling — upstream's guarded version beats a house diff. Scan the
+  patch class tree-wide (siblings: `alsa-plugins` stable-tarball patch
+  still valid; `opencv` tag-pinned, walls the same way when its tag
+  moves). Details: NOTE.md 2026-10-10.
+
 - **A compat shim answering for a retired API name turns an "optional"
   feature probe into a false positive — the option must gate the BUILD,
   not just the probe** (2026-10-10 run #122 suil): `gtk2-compat` (installed

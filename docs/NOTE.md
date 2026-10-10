@@ -37,6 +37,51 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-10 — run #123 mlt prepare(): the version-sync tag bump invalidated the house `ffmpeg-9.patch`
+
+**Symptom.** Run #123 (76-package tail, `577..578 580..`) walled on `mlt`
+in `prepare()`: `ffmpeg-9.patch` failed 4/4 hunks on
+`src/modules/avformat/consumer_avformat.c` (`Hunk #1 FAILED at 680` …),
+aborting before build.
+
+**Root cause.** Two drifts met. The version-sync row bumped `pkgver`
+7.40.0 → 7.42.0, so the `#tag=v$pkgver` source now checks out a different
+upstream tag — while the house patch is a version-pinned diff against
+7.40.0's file. Meanwhile upstream had merged its **own** FFmpeg 9 support
+(`06c4785f` "Fix #1280 support for FFmpeg 9") which supersedes the patch:
+7.42.0 guards every migrated site with `#if LIBAVCODEC_VERSION_INT >=
+(61.13.100)` and calls `avcodec_get_supported_config`, keeping the old
+field accesses in the `#else` branch. The patch was therefore both
+unappliable and unnecessary. The run record: 5 succeeded, mlt
+build-failed, rest never-started (dispatch-stopped).
+
+**Fix.** Dropped `ffmpeg-9.patch` (source entry, sha256sums entry,
+`prepare()` call, file deleted — dead code removed with the behavior) and
+adopted the version-sync row into canonical: `pkgver=7.42.0`,
+`pkgrel=1.1`, plus the new **tag checksum** (`sha256sums` entry 1 — a
+tag-pinned git source is checksummed, and the tag moved). Twin edited in
+place; canonical↔twin byte-identical (PKGBUILD + .SRCINFO).
+
+**Validation.** `bash -n` + `makepkg --printsrcinfo`; rehearsal
+`-fi --no-deps mlt` ✓ 2m05s against installed ffmpeg-git 9.1.dev; archive
+`mlt-7.42.0-1.1` carries `libmltavformat.so` + `libmltglaxnimate-qt6.so`;
+installed 7.42.0-1.1; module linkage clean (libavcodec/libavformat/libavutil
+resolved, no `not found`). Full fixture battery green. Sibling scan of the
+class (`grep -rn 'ffmpeg9\|ffmpeg-9' packages/`): `alsa-plugins` 1.2.12 is a
+stable-tarball recipe (patch still applies to its release) and `opencv`
+5.0.0 is tag-pinned the same way mlt was — its `ffmpeg-9.patch` is valid
+for tag 5.0.0 but will hit this same wall the day a version-sync row moves
+that tag.
+
+**Rule.** A version-sync bump of a tag-pinned recipe invalidates EVERY
+version-pinned patch and checksum in it: when `pkgver` moves, re-validate
+each `prepare()` patch against the new tag (and adopt the tag checksum) in
+the same wave — a stale patch does not degrade, it hard-fails in
+`prepare()`. Before re-rolling a patch, check whether upstream merged its
+own fix (here `git log -S <patch's API call>` finds the merge commit);
+upstream's guarded version beats a house diff. Scan the whole tree for the
+patch class when one goes stale.
+
 ## 2026-10-10 — run #122 suil build: `gtk2-compat`'s pkg-config shim resolved the optional gtk2 probe despite `-D gtk2=disabled`
 
 **Symptom.** Run #122 walled on `suil` (0.10.26): `src/x11_in_gtk2.c`
