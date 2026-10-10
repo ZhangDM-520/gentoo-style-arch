@@ -6,7 +6,7 @@
 
 pkgname=obs-studio
 pkgver=32.2.2
-pkgrel=1
+pkgrel=1.1
 pkgdesc="Free, open source software for live streaming and recording"
 arch=('x86_64')
 url="https://obsproject.com"
@@ -24,15 +24,15 @@ source=(
   "${pkgname}-libdshowcapture::git+https://github.com/obsproject/libdshowcapture.git"
   "${pkgname}-obs-browser::git+https://github.com/obsproject/obs-browser.git"
   "${pkgname}-obs-websocket::git+https://github.com/obsproject/obs-websocket.git"
-  "obs-browser-Update-to-C-20.patch"
-  "obs-browser-enable-support-for-CEF-6613+.patch"
+  "obs-studio-ffmpeg-snapshot-version.patch"
+  "obspython-swig-genex.patch"
 )
 sha256sums=('18edf1162e6cc37c192c4532ccfb902a07c5891d5929e95c4f028c6ad5d762d5'
             'SKIP'
             'SKIP'
             'SKIP'
-            '3f40b66cdde76f4ecd62fa852663b556e07b2be98f4d3e3293019547e260d2fb'
-            '3b1d89c7a43e198985407dc9b8cc0e2625fb3879614ccce05c337791793e7f28')
+            'ba9ec63493e251c68c03a191b99aafb6fb3a29eaaaae5088bec63388f20a60e2'
+            '8f74993a30c49aa1729b7014923397d2dda3b52a994812691559552d93462246')
 
 prepare() {
   cd $pkgname
@@ -48,16 +48,20 @@ prepare() {
   # use FindCEF provided by system CEF
   rm cmake/finders/FindCEF.cmake
 
-  # set rpath to /usr/lib/cef for obs-browser plugin
-  sed -e 's|INSTALL_RPATH ".*"|INSTALL_RPATH "/usr/lib/cef/"|' -i plugins/obs-browser/cmake/os-linux.cmake
+  # house: FindFFmpeg's version gate only parses release-style ffversion.h;
+  # ffmpeg git snapshots report "N-<rev>-g<hash>" and were rejected at the
+  # 6.1 floor despite all components being found (NOTE.md 2026-10-10)
+  patch -Np1 -i "$srcdir/obs-studio-ffmpeg-snapshot-version.patch"
 
-  # current CEF requires C++20
-  # https://github.com/obsproject/obs-browser/pull/517
-  patch -d plugins/obs-browser -Np1 -i "$srcdir/obs-browser-Update-to-C-20.patch"
+  # house: UseSWIG's swig command receives SWIG_FLAGS generator expressions
+  # unevaluated under the cmake 4.4 snapshot (obspython.i compile dies);
+  # flatten the two GUI-only flags (NOTE.md 2026-10-10)
+  patch -Np1 -i "$srcdir/obspython-swig-genex.patch"
 
-  # Enable support for CEF 6613+ (Chrome 128 to 147) and Chrome Runtime
-  # https://github.com/obsproject/obs-browser/pull/523
-  patch -d plugins/obs-browser -Np1 -i "$srcdir/obs-browser-enable-support-for-CEF-6613+.patch"
+  # obs-browser's pinned commit (3f0a2cd, 2.26.9) already contains the C++20
+  # (PR #517) and CEF 6613+ (PR #523) changes plus the /usr/lib/cef/ rpath —
+  # the former house patches and the rpath sed are dropped (they reverse-fail
+  # at the pin; NOTE.md 2026-10-10)
 }
 
 build() {
@@ -90,6 +94,11 @@ build() {
     -DOBS_VERSION_OVERRIDE="$pkgver"
     -DCALM_DEPRECATION=ON
     -DENABLE_WEBSOCKET=ON
+    # house: pin the system interpreter — FindPython otherwise picks the
+    # uv/pyenv shims that lead PATH (~/.local/bin/python3.11) and the
+    # outputs embed a libpython the payload cannot ship (NOTE.md 2026-10-10)
+    -DPython_EXECUTABLE=/usr/bin/python
+    -DPython3_EXECUTABLE=/usr/bin/python
     -Wno-dev
   )
   cmake "${cmake_options[@]}"

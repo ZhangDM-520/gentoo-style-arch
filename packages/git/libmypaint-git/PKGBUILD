@@ -1,28 +1,34 @@
 # Maintainer: Albert Westra <odyssyewestra@gmail.com>
 # Maintainer: Iru Cai <mytbk920423@gmail.com>
-# Class A git recipe: tracks upstream libmypaint git directly (HEAD of master =
-# the 2.0 line). AUR libmypaint-git and stock libmypaint are REFERENCES ONLY.
+# Class A git recipe: tracks upstream libmypaint's v1 maintenance line
+# (branch libmypaint-v1 = the 1.6.x API generation). Upstream master is the
+# 2.0-beta line: it REMOVED the MyPaintSurface2 API and renamed the
+# pkg-config module to libmypaint-2.0 — both in-set consumers (gimp-git,
+# krita-git) probe the module name `libmypaint` and use MyPaintSurface2
+# (mypaint_brush_stroke_to_2, …), so master can serve neither. Re-targeted
+# from master 2026-10-10 after gimp-git walled at the meson dependency
+# lookup (NOTE.md same date). AUR libmypaint-git and stock libmypaint are
+# REFERENCES ONLY.
 # The AUR reference is stale and policy-violating: it force-sets
 # -Ofast/-march=native/-mtune=native (dropped — makepkg.conf owns opt level)
 # and omits --enable-gegl; stock builds the GEGL renderer, kept here so the git
 # build supersedes the full stock feature set.
-# ABI NOTE: master is API 2.0 (sonames libmypaint-2.0.so.0 /
-# libmypaint-gegl-2.0.so.0) while stock 1.6.1 ships libmypaint.so.0 /
-# libmypaint-gegl.so.0 — soname drift vs stock is inherent to tracking master.
+# ABI NOTE: the v1 line keeps the stock sonames (libmypaint.so.0 /
+# libmypaint-gegl.so.0), so the swap is ABI-compatible with stock consumers.
 
 pkgname=libmypaint-git
-pkgver=2.0.0.beta.1.r0.gd5a88fbe66
+pkgver=1.6.1.r7.g3c87955
 pkgrel=1
 pkgdesc="A library for making brushstrokes which is used by MyPaint and other projects (git build)"
 arch=('x86_64')
 url="http://mypaint.org/"
 license=('ISC')
-depends=('babl' 'gegl' 'glib2' 'glibc' 'gobject-introspection' 'json-c' 'json-glib')
+depends=('babl' 'gegl' 'glib2' 'glibc' 'gobject-introspection' 'json-c')
 makedepends=('git' 'intltool' 'python')
-# sonames shipped: libmypaint-2.0.so.0, libmypaint-gegl-2.0.so.0
-provides=("libmypaint=$pkgver" 'libmypaint-2.0.so' 'libmypaint-gegl-2.0.so')
+# sonames shipped: libmypaint.so.0, libmypaint-gegl.so.0
+provides=("libmypaint=$pkgver" 'libmypaint.so' 'libmypaint-gegl.so')
 conflicts=('libmypaint')
-source=('git+https://github.com/mypaint/libmypaint.git')
+source=('git+https://github.com/mypaint/libmypaint.git#branch=libmypaint-v1')
 b2sums=('SKIP')
 
 pkgver() {

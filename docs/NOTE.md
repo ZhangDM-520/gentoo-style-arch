@@ -37,6 +37,113 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-10 — run #124 gimp-git: `libmypaint-git` tracked master, an API generation neither consumer can use
+
+**Symptom.** Run #124 (65-package narrowed tail) walled in `gimp-git`'s meson
+setup: `Dependency "libmypaint" not found (tried pkg-config and cmake)` —
+although `libmypaint-git` was installed and satisfies gimp's
+`libmypaint>=1.5.0` at the pacman level.
+
+**Root cause.** The stock→git swap of `libmypaint` is unsound at the API
+level. Upstream `master` is the **2.0-beta** line: it removed the
+`MyPaintSurface2` API and renamed the pkg-config module to
+`libmypaint-2.0` (upstream installs only
+`libmypaint-@API_PLATFORM_VERSION@.pc` by design). GIMP master is written
+against the **1.6** generation: it probes module `libmypaint`, includes
+flat `<mypaint-surface.h>` and calls `MyPaintSurface2`,
+`mypaint_brush_stroke_to_2`, … — which upstream evidence confirms live in
+`v1.6.1`/`libmypaint-v1` and are **absent** from master (raw-header
+counts: 18 hits at v1.6.1, 0 at master). `krita-git` (the second in-set
+consumer) probes the same module name and the `libmypaint/` header layout
+via `cmake/modules/FindLibMyPaint.cmake` — also 1.x generation. The
+declared `provides=("libmypaint=$pkgver")` satisfied pacman, hiding the
+mismatch from every lint.
+
+**Fix.** Re-targeted `libmypaint-git` to upstream branch `libmypaint-v1`
+(describe `1.6.1.r7.g3c87955`): module `libmypaint`, stock sonames
+`libmypaint.so.0`/`libmypaint-gegl.so.0`, `MyPaintSurface2` present.
+provides now `libmypaint=$pkgver` + bare sonames `libmypaint.so`/
+`libmypaint-gegl.so`; dropped the dead `json-glib` depend (the v1 line
+configures against `json-c`). No installed package linked the 2.0 sonames
+(verified), so the swap back is clean. `--enable-gegl` kept.
+
+**Validation.** `bash -n` + `makepkg --printsrcinfo`, canonical↔twin
+parity; rehearsal `-fi --no-deps libmypaint-git` ✓ 27s (1.6.1.r7.g3c87955-1,
+`libmypaint.pc` + `libmypaint-gegl.pc` installed, stock sonames);
+`gimp-git` then rebuilt+installed ✓ 284s against it — the meson
+`dependency('libmypaint')` resolves and the MyPaint brush code compiles
+against the v1 API. Full fixture battery green.
+
+**Rule.** A swap provider must provide the API *generation* its consumers
+use — probe module names, header layout, soname and C API — not just the
+pacman name: a versioned `provides` can satisfy pacman while every
+consumer's build system fails. When a -git provider tracks a line whose
+API generation no consumer can use, re-target it to the maintenance line
+the consumers probe (`git ls-remote --heads` shows the candidate branches;
+verify with raw upstream headers before choosing), rather than porting the
+consumers. Sibling scan: `krita-git` is the second consumer of the same
+generation and is served by the same re-target.
+
+## 2026-10-10 — run #124 obs-studio: three toolchain seams (ffmpeg snapshot version, swig genex, uv python shim) and two obsolete submodule patches
+
+**Symptom.** `obs-studio` walled three times in one campaign hour:
+(1) cmake rejected FFmpeg at the `6.1` floor with all components found;
+(2) after that, `swig` died on a garbled command line
+(`Unrecognized option …obspython.i…PLATFORM_ID:Windows,Darwin`);
+(3) after that, the build+install succeeded but the post-install NEEDED
+probe aborted: outputs require `libpython3.11.so.1.0`, unresolved on the
+host. A fourth attempt then reverse-failed the two `obs-browser` submodule
+patches in `prepare()`.
+
+**Root cause.** (1) obs's `cmake/finders/FindFFmpeg.cmake` parses
+`libavutil/ffversion.h` with a release-shaped regex; `ffmpeg-git` reports
+`FFMPEG_VERSION "N-127271-gba987fe24d"` (git describe), which the regex
+cannot reduce to `X.Y`, so the version floor check fails although every
+library was found. (2) `obspython` passes the generator expression
+`$<$<PLATFORM_ID:Windows,Darwin>:-py3-stable-abi>` as the UseSWIG
+`SWIG_FLAGS` source property; under the cmake 4.4 snapshot the genex
+arrives at the swig command line unevaluated and mangled. (3) CMake's
+FindPython picked `/home/zhangdm/.local/bin/python3.11` — the uv-managed
+CPython behind the PATH-leading `~/.local/bin` shims — so the outputs
+embedded `libpython3.11.so.1.0`, which no package can ship (host python is
+3.14). (4) the pinned `obs-browser` submodule commit (3f0a2cd, 2.26.9)
+already contains the house patches' content (PR #517 C++20, PR #523 CEF
+6613+, the `/usr/lib/cef/` rpath), so both patches reverse-fail at the
+pin.
+
+**Fix.** Two house patches and two pins in the recipe: a
+FindFFmpeg seam mapping `N-<rev>-g<hash>` snapshots to a sentinel version
+(a snapshot postdates every release floor; fail-closed for any other
+unparseable string), a patch flattening the two GUI-only swig genexes
+(both flags are Windows/Darwin-only), `-DPython_EXECUTABLE=/usr/bin/python`
++ `-DPython3_EXECUTABLE=/usr/bin/python` pinning the system interpreter,
+and the two now-merged `obs-browser` patches plus the redundant rpath sed
+dropped (files deleted). The same python pin was added preemptively to
+`blender-git` (its `_pyver` now resolves via `/usr/bin/python`) and
+`krita-git` — the only other python-embedding tail recipes (sibling scan;
+those two ride the run). `obs-studio` adopts the twin's version-sync mark
+`pkgrel=1.1`.
+
+**Validation.** Rehearsals: obs-studio attempt 4 ✓ 75s, built+installed
+32.2.2-1.1, NEEDED probe clean, `/usr/bin/obs` now requires
+`libpython3.14.so.1.0` which resolves from the system python; both new
+patches checksum-validated (`Passed` lines in the log). Sibling scan:
+`libjxl-git`/`hip-runtime` already pin `Python_EXECUTABLE`; krita uses
+sip not swig (no swig-genex exposure). Full fixture battery green.
+
+**Rule.** Three durable ones. (a) When a build glue reads `ffversion.h`
+or otherwise expects release-shaped versions, remember `ffmpeg-git`
+reports `N-<rev>-g<hash>` — the seam is a snapshot→sentinel mapping in the
+finder, never a downgrade of the provider. (b) Generator expressions in
+UseSWIG's `SWIG_FLAGS` source property are not portable across cmake
+snapshots — flatten platform-only flags at the seam. (c) Any recipe whose
+build embeds Python must pin the **system** interpreter
+(`-DPython_EXECUTABLE=/usr/bin/python`): FindPython follows PATH and
+`~/.local/bin` carries uv/pyenv shims whose libpython no package ships —
+the post-install NEEDED probe is what catches it. And (d) re-validate
+submodule patches against the **pinned** commit (not the submodule's
+default branch): upstream merged both obs-browser PRs at the pin.
+
 ## 2026-10-10 — run #123 mlt prepare(): the version-sync tag bump invalidated the house `ffmpeg-9.patch`
 
 **Symptom.** Run #123 (76-package tail, `577..578 580..`) walled on `mlt`

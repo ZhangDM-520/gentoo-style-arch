@@ -86,12 +86,16 @@ prepare() {
 }
 
 build() {
-  _pyver=$(python -c "from sys import version_info; print(\"%d.%d\" % (version_info[0],version_info[1]))")
+  # house: resolve the system interpreter explicitly — uv/pyenv shims lead
+  # PATH (~/.local/bin) and would embed an unshipped libpython (NOTE.md 2026-10-10)
+  _pyver=$(/usr/bin/python -c "from sys import version_info; print(\"%d.%d\" % (version_info[0],version_info[1]))")
   msg "python version detected: ${_pyver}"
   local _build_jobs="${GSA_BUILD_JOBS:-$(nproc)}"
 
   _CMAKE_FLAGS+=( -DPYTHON_VERSION=$_pyver
                   -DPYTHON_LIBRARY=/usr/lib/libpython${_pyver}.so
+                  -DPython_EXECUTABLE=/usr/bin/python
+                  -DPython3_EXECUTABLE=/usr/bin/python
                   -DWITH_PYTHON_INSTALL=OFF
                   -DWITH_PYTHON_SAFETY=OFF )
 

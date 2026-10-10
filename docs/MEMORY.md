@@ -1725,6 +1725,37 @@ constant, not a baked path).
 
 ## 6. Pitfall digest (full details: NOTE.md sections of same dates)
 
+- **A swapped-in -git provider must ship the API *generation* its
+  consumers use — probe module name, header layout, soname AND C API —
+  not just the pacman name** (2026-10-10 run #124 gimp-git): the
+  `libmypaint`→`libmypaint-git` swap tracked upstream master (2.0-beta),
+  which removed `MyPaintSurface2` and renamed the pc module to
+  `libmypaint-2.0`, while both in-set consumers (gimp-git, krita-git)
+  probe `libmypaint` and call the 1.6 API. The versioned `provides`
+  satisfied pacman and hid the mismatch from every lint; meson then died
+  with `Dependency "libmypaint" not found`. Fix shape: re-target the
+  provider to the maintenance line the consumers probe (`libmypaint-v1`,
+  verified against raw upstream headers) rather than porting consumers;
+  a versioned provide can paper over an API-generation mismatch, so when
+  a dep lookup fails against an *installed* provider, suspect the
+  generation before the packaging. Details: NOTE.md 2026-10-10.
+- **Python-embedding recipes must pin the system interpreter; FindPython
+  follows PATH and `~/.local/bin` carries uv/pyenv shims whose libpython
+  no package ships** (2026-10-10 run #124 obs-studio): cmake linked
+  `/home/zhangdm/.local/bin/python3.11` (uv CPython) and the installed
+  outputs required `libpython3.11.so.1.0` — the post-install NEEDED probe
+  aborted the run. Seam: `-DPython_EXECUTABLE=/usr/bin/python` (+
+  `Python3_EXECUTABLE`) in every recipe that embeds Python
+  (`blender-git`, `krita-git` pinned in the same wave). Two neighbouring
+  seams from the same wall: `ffmpeg-git` reports `FFMPEG_VERSION
+  "N-<rev>-g<hash>"`, so any finder parsing `ffversion.h` with a
+  release-shaped regex needs a snapshot→sentinel mapping (obs's
+  FindFFmpeg); and genexes in UseSWIG's `SWIG_FLAGS` source property
+  arrive mangled under the cmake 4.4 snapshot — flatten platform-only
+  flags. Re-validate submodule patches against the PINNED commit: both
+  obs-browser patches were already merged at the pin and reverse-failed
+  `prepare()`. Details: NOTE.md 2026-10-10.
+
 - **A version-sync bump of a tag-pinned recipe invalidates every
   version-pinned patch and checksum in it** (2026-10-10 run #123 mlt): the
   `pkgver` row moved the `#tag=v$pkgver` source to 7.42.0 while the house

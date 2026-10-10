@@ -1,0 +1,20 @@
+--- a/cmake/finders/FindFFmpeg.cmake
++++ b/cmake/finders/FindFFmpeg.cmake
+@@ -291,9 +291,16 @@
+   file(
+     STRINGS "${FFmpeg_avutil_INCLUDE_DIR}/libavutil/ffversion.h"
+     _version_string
+-    REGEX "^.*FFMPEG_VERSION[ \t]+\"n?[0-9a-z\\~+.-]+\"[ \t]*$"
++    REGEX "^.*FFMPEG_VERSION[ \t]+\"[nN]?[0-9a-zA-Z\\~+.-]+\"[ \t]*$"
+   )
+   string(REGEX REPLACE ".*FFMPEG_VERSION[ \t]+\"n?([0-9]+\\.[0-9]).*\".*" "\\1" FFmpeg_VERSION "${_version_string}")
++  # House seam: ffmpeg git snapshots report FFMPEG_VERSION "N-<rev>-g<hash>"
++  # from git describe, which the release-shaped regex cannot reduce to X.Y.
++  # A snapshot postdates every release floor, so map it to a sentinel that
++  # satisfies any minimum; release versions keep their parsed value.
++  if(_version_string MATCHES "FFMPEG_VERSION[ \t]+\"N-[0-9]+-g")
++    set(FFmpeg_VERSION "9999.0")
++  endif()
+ endif()
+ 
+ list(REMOVE_DUPLICATES FFmpeg_INCLUDE_DIRS)

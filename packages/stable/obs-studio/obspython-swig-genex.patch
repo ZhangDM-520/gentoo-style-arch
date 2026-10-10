@@ -1,0 +1,27 @@
+--- a/shared/obs-scripting/obspython/CMakeLists.txt
++++ b/shared/obs-scripting/obspython/CMakeLists.txt
+@@ -21,9 +21,12 @@
+ 
+ include(UseSWIG)
+ 
++# House seam: the SWIG_FLAGS generator expression arrives at UseSWIG's swig
++# command line unevaluated/mangled (cmake 4.4 snapshot), killing the compile.
++# -py3-stable-abi is Windows/Darwin-only anyway; flatten it out for Linux.
+ set_source_files_properties(
+   obspython.i
+-  PROPERTIES USE_TARGET_INCLUDE_DIRECTORIES TRUE SWIG_FLAGS $<$<PLATFORM_ID:Windows,Darwin>:-py3-stable-abi>
++  PROPERTIES USE_TARGET_INCLUDE_DIRECTORIES TRUE
+ )
+ 
+ swig_add_library(obspython LANGUAGE python TYPE MODULE SOURCES obspython.i)
+--- a/shared/obs-scripting/cmake/python.cmake
++++ b/shared/obs-scripting/cmake/python.cmake
+@@ -18,7 +18,7 @@
+     COMMAND ${CMAKE_COMMAND} -E make_directory swig
+     COMMAND
+       ${CMAKE_COMMAND} -E env "SWIG_LIB=${SWIG_DIR}" ${SWIG_EXECUTABLE} -python
+-      $<$<PLATFORM_ID:Windows,Darwin>:-py3-stable-abi> -external-runtime swig/swigpyrun.h
++      -external-runtime swig/swigpyrun.h
+     COMMENT "obs-scripting - generating Python 3 SWIG interface headers"
+   )
+ 

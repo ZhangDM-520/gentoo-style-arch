@@ -88,7 +88,9 @@ build() {
 		-DBUILD_KRITA_QT_DESIGNER_PLUGINS=ON \
 		-DCMAKE_EXE_LINKER_FLAGS="${_mold}" \
 		-DCMAKE_SHARED_LINKER_FLAGS="${_mold}" \
-		-DCMAKE_MODULE_LINKER_FLAGS="${_mold}"
+		-DCMAKE_MODULE_LINKER_FLAGS="${_mold}" \
+		-DPython_EXECUTABLE=/usr/bin/python \
+		-DPython3_EXECUTABLE=/usr/bin/python
 	cmake --build build --clean-first
 }
 
