@@ -9,7 +9,7 @@ pkgbase = logseq-desktop-git
 	makedepends = nodejs
 	makedepends = pnpm
 	makedepends = clojure
-	makedepends = java-runtime
+	makedepends = java-runtime>=21
 	makedepends = ocaml
 	makedepends = opam
 	makedepends = m4

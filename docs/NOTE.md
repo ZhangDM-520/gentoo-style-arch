@@ -37,6 +37,45 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-10 — logseq-desktop-git: Closure Compiler jars need Java 21+ but PATH's `java` was 17 — versioned virtual + JVM picker
+
+**Symptom.** run #108 wall, `logseq-desktop-git` BUILD FAILED (4m41s):
+shadow-cljs died with
+`java.lang.UnsupportedClassVersionError: com/google/javascript/jscomp/CompilerOptions
+has been compiled by a more recent version of the Java Runtime (class
+file version 65.0), this version … up to 61.0` — class 65 = Java 21+,
+runtime = Java 17.
+
+**Root cause.** The host carries side-by-side JDKs (`jdk-openjdk` 27 from
+our set and `jdk17-openjdk` 17) with `java-17-openjdk` as the
+`archlinux-java` default; the build used PATH's `java` = 17, while
+logseq's fresh pnpm closure now ships Closure Compiler jars built for 21.
+Two gaps: the makedep `java-runtime` (unversioned) expressed no floor,
+and nothing steered the build to a JVM that meets it.
+
+**Fix.** makedep `java-runtime` → `java-runtime>=21` (the versioned
+virtual — jdk packages provide `java-runtime=N`, so this stays off
+concrete providers exactly as the recipe's existing comment demands), and
+`build()` picks the newest `/usr/lib/jvm/java-*-openjdk` with major ≥ 21
+(export `JAVA_HOME` + PATH prepending; hard error if none), instead of
+trusting PATH. Twin edited in place (VCS `pkgver` mark preserved), both
+`.SRCINFO`s regenerated. No pkgrel bump — build-environment fix, no
+content change.
+
+**Validation.** `bash -n` + `makepkg --printsrcinfo`
+(`makedepends = java-runtime>=21` recorded); rehearsal `-s -fi --no-deps
+logseq-desktop-git` → ✓ 10m10s, fresh
+`2.0.2.r25861.g4a5f1a253-1` archive (191 MB, 10:03:26), zero
+`UnsupportedClassVersionError` lines, install completed. Battery after
+this entry.
+
+**Rule.** Side-by-side JDKs make `java` a lottery: a JVM-dependent build
+must pin its JVM *by requirement* (`java-runtime>=N` versioned virtual)
+and *by mechanism* (explicit JAVA_HOME selection), never by whatever
+`archlinux-java` default happens to be. A `UnsupportedClassVersionError`
+names the floor directly — the class-file version in the message IS the
+minimum Java version (45+N: 65→21, 61→17).
+
 ## 2026-10-10 — libcaca: the *autodetected* Ruby bindings bit-rotted against Ruby 3.4 — disable the undeclared feature, keep Python
 
 **Symptom.** run #106 wall, `libcaca` BUILD FAILED (0m17s):

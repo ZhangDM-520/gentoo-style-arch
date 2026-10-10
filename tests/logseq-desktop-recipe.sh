@@ -41,9 +41,15 @@ grep -Fq 'src/main/frontend/version.cljs' "$pkgbuild" ||
 
 # The desktop bundle embeds the ClojureScript frontend and the OCaml/Melange
 # CLI runtime; both toolchains must stay declared.
-for dep in clojure java-runtime ocaml opam nodejs pnpm; do
+for dep in clojure ocaml opam nodejs pnpm; do
     has makedepends "$dep" || fail "missing makedepend: $dep"
 done
+# Java is requested through the java-runtime virtual, optionally with a
+# version floor (shadow-cljs runs class-65 Closure jars, so the recipe
+# requires java-runtime>=21 — run #108): a versioned virtual is still the
+# virtual; only concrete names are banned below.
+grep -Eq '^makedepends=java-runtime(>=.*)?$' <<<"$vars" ||
+    fail "missing makedepend: java-runtime (virtual, optionally versioned)"
 
 # Java must be requested through the `java-runtime` virtual. A concrete
 # jre-*/jdk-* package is not just narrower, it is unusable: jre-openjdk

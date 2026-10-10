@@ -67,8 +67,11 @@ makedepends=(
   # (`clojure` depends on java-environment) and refused to resolve the
   # transaction. Every JDK and every full JRE provides java-runtime, so any
   # installed Java satisfies this and nothing is installed twice.
+  # Floor is 21: shadow-cljs runs Closure Compiler jars that are class-65
+  # (run #108 wall) — the versioned virtual expresses that without naming
+  # a concrete provider.
   'clojure'
-  'java-runtime'
+  'java-runtime>=21'
   # OCaml/Melange CLI bundle (cli/): a private opam switch is created in
   # $srcdir, so the build never touches the builder's ~/.opam
   'ocaml'
@@ -121,6 +124,27 @@ build() {
   if command -v mold >/dev/null 2>&1; then
     export LDFLAGS+=" -fuse-ld=mold"
   fi
+
+  # shadow-cljs runs the Closure Compiler jars from its npm closure, which
+  # are class-65 (Java 21+); the system default `java` may be an older
+  # side-by-side JDK (run #108 wall: class 65 vs runtime max 61). Pick the
+  # newest JVM satisfying the floor instead of trusting PATH.
+  local _java_floor=21 _java_home='' _java_best=0 _j _v
+  for _j in /usr/lib/jvm/java-*-openjdk; do
+    [[ -x "$_j/bin/java" ]] || continue
+    _v=$("$_j/bin/java" -version 2>&1 | sed -nE 's/.*version "([0-9]+).*/\1/p' | head -n1)
+    [[ "$_v" =~ ^[0-9]+$ ]] || continue
+    if (( _v >= _java_floor && _v > _java_best )); then
+      _java_best=$_v
+      _java_home=$_j
+    fi
+  done
+  if [[ -z "$_java_home" ]]; then
+    echo "logseq build needs a Java ${_java_floor}+ JVM under /usr/lib/jvm" >&2
+    return 1
+  fi
+  export JAVA_HOME="$_java_home"
+  export PATH="$_java_home/bin:$PATH"
 
   # The tree pins packageManager=pnpm@10; do not let a newer pnpm replace
   # itself from the network in the middle of a build.
