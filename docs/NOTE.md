@@ -37,6 +37,63 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-10 — run #119: probe false-positive on a path-style `DT_NEEDED` (mujs/mpv) + gnupg's concurrent inkscape conversions crashed
+
+**Symptom.** The narrowed run (#119, 88-package tail) built `poppler`,
+`qca-qt6`, `quazip-qt6` and `wireplumber`, then two walls:
+(1) `mpv` **built and its transaction landed** but the post-install NEEDED
+probe aborted: `usr/lib/libmpv.so.2.5.0 needs /usr/lib/libmujs.so —
+unresolved after the transaction`; (2) `gnupg` died in `build()`:
+`convert: FailedToExecuteCommand 'inkscape' … gnupg-module-overview.pdf`.
+
+**Root cause (1) — probe gap, not a broken system.** `mujs` ships
+`libmujs.so` **without a SONAME** (upstream), so `mpv`'s meson linked it by
+absolute path and its `DT_NEEDED` is the literal `/usr/lib/libmujs.so`.
+Neither resolution source handled that shape: provide matching compares bare
+names, and the runtime-file half compared basenames only, so the exact owned
+path (mujs owns it) was never consulted. The loader resolves the literal path
+fine — a false positive that aborted a healthy transaction. Exclusions could
+not even register the name (the id charset excludes `/`).
+
+**Fix (1).** `install_needed_probe` now records both halves of every owned
+file's identity: the owned-file list carries full paths *and* basenames, and
+transaction-shipped members key their relative path as well as their
+basename. Path-style names resolve **only** against exact paths (a
+same-basename file elsewhere must never satisfy the loader); bare names
+behave exactly as before. `tests/abi-postinstall-probe.sh` gains cases I
+(owned exact path resolves) and J (unowned path stays fail-closed even with a
+same-basename owner) — mutation-proven: both fail against the old probe with
+exactly run #119's abort message.
+
+**Root cause (2) — flaky by luck.** gnupg's `doc/Makefile.am` suffix rules
+`.svg.png` and `.svg.pdf` both shell out to ImageMagick `convert`, whose SVG
+delegate is inkscape. Under `make -j11` those conversions run **concurrently**
+and inkscape 1.4.4 aborts (GApplication single-instance race:
+`terminate called after throwing an instance of 'Gio::DBus::Error'`, SIGABRT).
+Reproduced 3-of-8 under parallel invocation, with and without
+`DBUS_SESSION_BUS_ADDRESS`. Earlier gnupg builds passing was luck.
+
+**Fix (2).** `build()` runs `make -C doc -j1` before the parallel build: the
+doc subtree is built serially so the conversions never run concurrently; the
+rest builds at full parallelism. Drift-proof — no figure target names pinned.
+Note the images are build-only (`make install` ships the `.info` docs, not
+the converted figures).
+
+**Also in this wave.** Adopted run #119's version-sync bumps into canonical:
+poppler `26.08.0-1.1`, mpv `1:0.41.0-6.1`, gnupg `2.4.9-3.1` (repo pkgrel
+parity — without it a same-version-superior repo pkgrel makes our archives
+look like downgrades to `pacman -U`). Version-sync rows are reviewed from the
+`git diff` the run prints and then adopted into both trees.
+
+**Rules.**
+- `DT_NEEDED` has a path form: any tooling that maps a NEEDED name to a
+  package must match path names against **exact paths** (owned or shipped),
+  never basenames — and a bare name never matches a path. The loader opens
+  the literal path; that is the runtime truth the probe mirrors.
+- Never rely on concurrent inkscape/ImageMagick SVG conversions — serialize
+  them. Any recipe whose doc build converts figures under `-j` can flake the
+  same way.
+
 ## 2026-10-10 — run #118 pinentry: orphaned `gtk2` (from a dead `libwmf-git` makedep) conflicted with `gtk2-compat`
 
 **Symptom.** Run #118 (the narrowed `563..` tail, 91 packages) died in 1 s at

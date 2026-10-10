@@ -2668,7 +2668,11 @@ function install_needed_probe
     # class) has neither a provide nor a file and still aborts. The owned-file
     # list is one `pacman -Ql` dump per probe, built lazily on the first
     # provide miss (the fixture stub fabricates it; a failure yields an empty
-    # list and the probe stays fail-closed).
+    # list and the probe stays fail-closed). It carries BOTH the full path and
+    # the basename of every owned file, because DT_NEEDED comes in two shapes:
+    # bare names resolve against basenames, and path-style names (a
+    # SONAME-less DSO linked by absolute path) resolve only against the exact
+    # owned path — run #119's `mujs`/`mpv` class (2026-10-10).
     set -l disk_names "$work/disk-names"
     set -l disk_names_ready 0
     for archive in $argv
@@ -2679,6 +2683,12 @@ function install_needed_probe
         for file in (find "$dest" -type f 2>/dev/null)
             set -l rel (string replace "$dest/" '' -- "$file")
             set -f _PROBESHIP_(string replace -a -r '[^A-Za-z0-9]' '' -- (string replace -r '^.*/' '' -- "$file")) 1
+            # Path-style NEEDED names (a SONAME-less DSO linked by absolute
+            # path records the path as its DT_NEEDED — mujs is the standing
+            # example) key on the full name, so register the member's
+            # relative path too: the digest drops non-alphanumerics, so the
+            # leading slash is not part of either key.
+            set -f _PROBESHIP_(string replace -a -r '[^A-Za-z0-9]' '' -- "$rel") 1
             for soname in (readelf -dW "$file" 2>/dev/null \
                 | sed -n 's/^.*NEEDED.*\[\(.*\)\]$/\1/p')
                 abi_base_lib_ok "$soname"; and continue
@@ -2709,7 +2719,7 @@ function install_needed_probe
                 if test $resolved -eq 0
                     if test $disk_names_ready -eq 0
                         command pacman -Ql 2>/dev/null \
-                            | awk '{ p = $0; sub(/^[^ \t]+[ \t]+/, "", p); n = p; sub(/.*\//, "", n); print n }' \
+                            | awk '{ p = $0; sub(/^[^ \t]+[ \t]+/, "", p); print p; n = p; sub(/.*\//, "", n); print n }' \
                             | command sort -u > "$disk_names"
                         set disk_names_ready 1
                     end

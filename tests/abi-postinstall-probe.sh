@@ -28,6 +28,10 @@ set -euo pipefail
 #      The ownership list is `pacman -Ql`'s, fabricated by the stub;
 #   H. the same for a file SHIPPED by the transaction itself (a private lib
 #      in the same batch, no provide declared): shipped bytes resolve too.
+#   I. path-style NEEDED names (a SONAME-less DSO linked by absolute path —
+#      run #119's mujs/mpv class) resolve via their EXACT owned path;
+#   J. …and only via the exact path: a same-basename file owned elsewhere
+#      does not satisfy the loader, so an unowned path stays fail-closed.
 #
 # Everything under $TMPDIR; ELF payloads synthesized with cc (like
 # tests/provides-audit.sh); the real /usr and the real pacman DB are never
@@ -53,7 +57,9 @@ make_workspace "$ws" 1 2 low
 make_install_conf "$ws/pacman.conf" # this run's IgnorePkg registration target (never the host's)
 add_package "$ws" libs-git "$gsa_meta_any"
 add_package "$ws" app-git "$gsa_meta_any"
+add_package "$ws" bareapp-git "$gsa_meta_any"
 set_topology_record "$ws" app-git git 'libs-git'
+set_topology_record "$ws" bareapp-git git ''
 mkdir -p "$ws/db/local"
 
 # Payloads: the provider ships usr/lib/libgreet.so.1 (DT_SONAME); the
@@ -70,6 +76,21 @@ printf 'extern int gsa_probe_anchor;\nint gsa_probe_consumer(void) { return gsa_
         -l:libgreet.so.1 -o "$tmp/payload-app-git/usr/lib/libapp.so.1"
 printf 'pkgname = app-git\npkgver = 1.0.0-1\nprovides = libapp.so=1-64\n' \
     >"$tmp/payload-app-git/.PKGINFO"
+
+# Path-style NEEDED shape (cases I/J, run #119's mujs/mpv class): a
+# SONAME-less DSO linked by ABSOLUTE PATH records that path as its DT_NEEDED
+# (mujs ships no SONAME and mpv's DT_NEEDED is literally /usr/lib/libmujs.so).
+printf 'int gsa_probe_anchor;\n' |
+    cc -shared -fPIC -x c - -o "$tmp/libbare.so"
+mkdir -p "$tmp/payload-bareapp-git/usr/lib"
+printf 'extern int gsa_probe_anchor;\nint gsa_probe_consumer(void) { return gsa_probe_anchor; }\n' |
+    cc -shared -fPIC -x c - -x none -Wl,-soname,libbareapp.so.1 -Wl,-rpath-link,"$tmp" \
+        "$tmp/libbare.so" -o "$tmp/payload-bareapp-git/usr/lib/libbareapp.so.1"
+printf 'pkgname = bareapp-git\npkgver = 1.0.0-1\nprovides = libbareapp.so=1-64\n' \
+    >"$tmp/payload-bareapp-git/.PKGINFO"
+readelf -dW "$tmp/payload-bareapp-git/usr/lib/libbareapp.so.1" |
+    grep -Fq "[$tmp/libbare.so]" ||
+    fail "fixture payload is not path-linked (DT_NEEDED lacks $tmp/libbare.so)"
 
 stage_archive() { # ID — build the id's archive beside its recipe.
     tar --zstd -cf "$ws/packages/$1/$1-1.0.0-1-x86_64.pkg.tar.zst" \
@@ -338,5 +359,37 @@ EOF
     fi
     checks=$((checks + 3))
 )
+
+# ─── I. path-style NEEDED resolves via its exact owned path ────────────────
+# 2026-10-10 run #119 (mujs/mpv class): mujs ships libmujs.so WITHOUT a
+# SONAME, so mpv linked it by absolute path and its DT_NEEDED is literally
+# /usr/lib/libmujs.so — no provide and no bare name to match. The runtime
+# truth is the exact path: `pacman -Ql` owns /usr/lib/libmujs.so, the loader
+# resolves it, so the probe must too.
+reset_case
+stage_archive bareapp-git
+printf 'mujs %s\n' "$tmp/libbare.so" >"$ws/ql.txt"
+: >"$ws/existing.txt"
+run_case I
+((FIXTURE_RC == 0)) ||
+    fail "I: a path NEEDED whose exact path is owned must resolve (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
+grep -Fq 'post-install NEEDED probe' <<<"$FIXTURE_OUTPUT" &&
+    fail "I: no probe output expected when the exact path is owned: $FIXTURE_OUTPUT"
+checks=$((checks + 2))
+
+# ─── J. a path NEEDED resolves ONLY by exact path — and stays fail-closed ──
+# Same basename owned elsewhere must not satisfy a path-style name (the
+# loader opens the literal path), so an unowned path aborts even when a file
+# of the same name is owned. Failure names the member and the full path.
+reset_case
+stage_archive bareapp-git
+printf 'elsewhere /opt/elsewhere/libbare.so\n' >"$ws/ql.txt"
+: >"$ws/existing.txt"
+run_case J
+((FIXTURE_RC != 0)) ||
+    fail "J: an unowned path NEEDED must abort even with a same-basename file owned: $FIXTURE_OUTPUT"
+grep -Fq "usr/lib/libbareapp.so.1 needs $tmp/libbare.so" <<<"$FIXTURE_OUTPUT" ||
+    fail "J: the abort must name the member and the full unresolved path: $FIXTURE_OUTPUT"
+checks=$((checks + 2))
 
 printf 'abi-postinstall-probe fixture: PASS (%d checks)\n' "$checks"

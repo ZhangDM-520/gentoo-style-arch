@@ -8,7 +8,7 @@
 
 pkgname=gnupg
 pkgver=2.4.9
-pkgrel=3
+pkgrel=3.1
 pkgdesc='Complete and free implementation of the OpenPGP standard'
 arch=(x86_64)
 url='https://www.gnupg.org/'
@@ -251,6 +251,13 @@ build() {
 
   cd $pkgname
   ./configure "${configure_options[@]}"
+  # The doc subtree converts its figures through ImageMagick's inkscape
+  # delegate, and CONCURRENT inkscape processes abort (GApplication
+  # single-instance race: SIGABRT 'terminate called after throwing an
+  # instance of Gio::DBus::Error' — reproduced 3-of-8 under parallel
+  # invocation; run #117's gnupg wall). Build doc/ serially first so the
+  # conversions never run concurrently, then the rest in parallel as usual.
+  make -C doc -j1
   make -j"${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
 }
 

@@ -1866,6 +1866,22 @@ constant, not a baked path).
   shipped an undeclared gtk2 module (not in its `provides`) only because gtk2
   was present at build time. When declared `provides`/`depends` define the
   intended surface, spell every optional component `--disable-…`/`--enable-…`.
+- **`DT_NEEDED` has a path form** (2026-10-10 mujs/mpv): a SONAME-less DSO
+  linked by absolute path records the *path* as its NEEDED entry. Tooling
+  that maps NEEDED→package must match such names against exact owned/shipped
+  paths, never basenames (and a bare name never matches a path) — the loader
+  opens the literal path. `install_needed_probe` does; the pinned fixture is
+  `tests/abi-postinstall-probe.sh` cases I/J.
+- **Never run concurrent inkscape/ImageMagick SVG conversions** (2026-10-10
+  gnupg): inkscape 1.4.4's GApplication single-instance registration races
+  under parallel invocation and aborts (`Gio::DBus::Error`, SIGABRT) — a
+  `make -j` doc build with two `convert` suffix rules flaked on gnupg.
+  Serialize any recipe's figure conversions (`make -C doc -j1` pre-pass) or
+  drop the delegate.
+- **Version-sync rows are adopted into canonical on review** (2026-10-10):
+  the builder's "synced with repo" pkgrel bumps (CachyOS fractional pkgrels)
+  must land in both trees — a repo pkgrel numerically newer than ours makes
+  every archive we build look like a downgrade to `pacman -U`.
 - **`makepkg` is a WRITER of the recipe it touches** (2026-10-06): `--nobuild`
   still runs `pkgver()` and rewrites `pkgver=` in place (`/usr/bin/makepkg:190`
   `update_pkgver`) — a "read-only" screening sweep dirtied 12 tracked
