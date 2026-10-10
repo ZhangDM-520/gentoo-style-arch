@@ -335,7 +335,6 @@ vulkan-icd-loader-git: vulkan-icd-loader
 wireplumber: pipewire-session-manager
 xcb-imdkit-git: xcb-imdkit
 xdg-desktop-portal-gnome-git: xdg-desktop-portal-gnome
-xdg-desktop-portal-gtk-git: xdg-desktop-portal-gtk
 xorg-xwayland-git: xorg-server-xwayland
 xorg-xwayland-git: xorg-server-xwayland-git
 xorg-xwayland-git: xorg-xwayland

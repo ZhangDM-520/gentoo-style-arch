@@ -4,7 +4,7 @@
 pkgname=xdg-desktop-portal-gtk-git
 _pkgname=xdg-desktop-portal-gtk
 pkgver=1.15.3+9+g5409af7
-pkgrel=1
+pkgrel=2
 pkgdesc="A GTK backend for xdg-desktop-portal"
 url="https://github.com/flatpak/xdg-desktop-portal-gtk"
 arch=(x86_64)
@@ -12,7 +12,10 @@ license=(LGPL)
 depends=('gtk3' 'xdg-desktop-portal' 'gsettings-desktop-schemas' 'fontconfig')
 makedepends=('git' 'meson' 'cmake' 'glib2-devel')
 optdepends=("evince: Print preview")
-provides=($_pkgname 'xdg-desktop-portal-impl')
+# versioned provide: stock xdg-desktop-portal-gnome requires
+# xdg-desktop-portal-gtk>=1.10.0-2 — an unversioned provide cannot satisfy a
+# versioned constraint and pacman refuses the swap (run #113 install wall)
+provides=("$_pkgname=$pkgver" 'xdg-desktop-portal-impl')
 conflicts=($_pkgname)
 source=("git+https://github.com/flatpak/xdg-desktop-portal-gtk")
 sha256sums=('SKIP')

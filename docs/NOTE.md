@@ -89,6 +89,48 @@ scan); run it after any dep-set change and before each relaunch. A
 cyclic unmet makedep pair is not an edge case to force: it is the
 "prerequisites assumed installed" boundary — name it and move on.
 
+## 2026-10-10 — run #113 xdg-desktop-portal-gtk-git: the unversioned swap provide could not satisfy a versioned consumer constraint — one bite in a 104-name debt register
+
+**Symptom.** Run #113 reached 135/252, then the install pipeline
+refused: `xdg-desktop-portal-gtk-git-… and xdg-desktop-portal-gtk-
+1.15.3-1.1 are in conflict. Remove xdg-desktop-portal-gtk? [y/N]` →
+`removing xdg-desktop-portal-gtk breaks dependency
+'xdg-desktop-portal-gtk>=1.10.0-2' required by xdg-desktop-portal-gnome`
+→ `failed to prepare transaction`. Dispatch stopped (later packages
+would build against the wrong system state).
+
+**Root cause.** The recipe declared `provides=($_pkgname …)`
+**unversioned**. The installed stock `xdg-desktop-portal-gnome`
+constrains the name versionally (`>=1.10.0-2`), and an unversioned
+provide cannot satisfy a versioned constraint (the provides
+discipline) — so pacman refused to remove the stock package. The pair
+was known debt: the `tests/recipe-contract.sh` mapped-name
+versioned-provides register (2026-10-04 Q2 gate) listed
+`xdg-desktop-portal-gtk-git: xdg-desktop-portal-gtk`. Debt became a
+wall the moment an installed consumer added a versioned constraint.
+
+**Fix.** `provides=("$_pkgname=$pkgver" 'xdg-desktop-portal-impl')`
+(house swap convention), pkgrel 1→2; the register row deleted
+(conscious ratchet update — the debt is paid). **Sibling scan over the
+whole 104-name register**: exactly ONE name is versionally constrained
+by any installed package (this one) — the other 103 cannot bite today
+and stay gated per the Q2 decision. (The scan: parse the register
+pairs, then grep every `/var/lib/pacman/local/*/desc` `%DEPENDS%` entry
+for `name<op>` on those names.)
+
+**Validation.** `bash -n` + `makepkg --printsrcinfo` on both twins
+(`provides = xdg-desktop-portal-gtk=1.15.3+9+g5409af7`); battery after
+this entry (register edit pinned by `tests/recipe-contract.sh`). The
+install rides run #114's resume.
+
+**Rule.** A Stock→house swap's `provides` must be versioned from the
+start — the unversioned register is not "safe debt", it is a deferred
+wall with a known trigger: any installed package constraining the name
+versionally. Cheap pre-flight for a swap recipe before a run: grep the
+local DB `%DEPENDS%` for the swapped name with an operator. When a
+register row bites, pay it and delete the row; don't blanket-lift the
+gate.
+
 ## 2026-10-10 — run #112 qemu wall: an IgnorePkg-protected HOUSE provider behind a repo package's dependency chain — transitive unmet-dep inversion
 
 **Symptom.** Run #112 died at `qemu` (3m51s, dependency phase): 18

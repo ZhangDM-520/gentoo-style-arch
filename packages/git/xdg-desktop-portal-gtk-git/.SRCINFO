@@ -1,7 +1,7 @@
 pkgbase = xdg-desktop-portal-gtk-git
 	pkgdesc = A GTK backend for xdg-desktop-portal
 	pkgver = 1.15.3+9+g5409af7
-	pkgrel = 1
+	pkgrel = 2
 	url = https://github.com/flatpak/xdg-desktop-portal-gtk
 	arch = x86_64
 	license = LGPL
@@ -14,7 +14,7 @@ pkgbase = xdg-desktop-portal-gtk-git
 	depends = gsettings-desktop-schemas
 	depends = fontconfig
 	optdepends = evince: Print preview
-	provides = xdg-desktop-portal-gtk
+	provides = xdg-desktop-portal-gtk=1.15.3+9+g5409af7
 	provides = xdg-desktop-portal-impl
 	conflicts = xdg-desktop-portal-gtk
 	source = git+https://github.com/flatpak/xdg-desktop-portal-gtk
