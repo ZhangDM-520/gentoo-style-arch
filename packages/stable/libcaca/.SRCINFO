@@ -1,7 +1,7 @@
 pkgbase = libcaca
 	pkgdesc = Color ASCII art library
 	pkgver = 0.99.beta20
-	pkgrel = 7
+	pkgrel = 8
 	url = http://caca.zoy.org/wiki/libcaca
 	arch = x86_64
 	license = WTFPL

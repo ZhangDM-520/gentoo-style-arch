@@ -4,7 +4,7 @@
 
 pkgname=libcaca
 pkgver=0.99.beta20
-pkgrel=7
+pkgrel=8
 pkgdesc='Color ASCII art library'
 arch=(x86_64)
 url='http://caca.zoy.org/wiki/libcaca'
@@ -49,10 +49,19 @@ prepare() {
 
 build() {
   cd $pkgname
+  # ruby bindings: autodetected accident, never a declared feature (no
+  # ruby makedep), bit-rotted upstream — Ruby 3.4's typed
+  # rb_define_singleton_method dispatch rejects the (void) arity-0
+  # prototypes in ruby/common.h (run #106 wall). Python stays: declared
+  # makedep/optdepend and it ships. Docs likewise autodetected (doxygen +
+  # LaTeX; host texlive now trips them on and the manual dies in TeX
+  # capacity) — and package() deletes usr/share/doc anyway.
   ./configure \
     --prefix=/usr \
     --sysconfdir=/etc \
-    --localstatedir=/var
+    --localstatedir=/var \
+    --disable-ruby \
+    --disable-doc
   sed -i -e 's/ -shared / -Wl,-O1,--as-needed\0/g' libtool
   make
 }
@@ -66,9 +75,11 @@ package() {
   cd $pkgname
   make DESTDIR="$pkgdir" install
 
-  # trim: doxygen API docs (doxygen makedep dropped) and the demo programs
+  # trim: docs (doxygen API docs + the LaTeX manual; --disable-doc in
+  # build(), doxygen makedep dropped), the demo programs
   # cacaball/cacafire/cacamatrix/cacademo (demos — the library, its plugins and
-  # the img2txt/cacaview/cacaplay/cacaclock tools are kept)
+  # the img2txt/cacaview/cacaplay/cacaclock tools are kept) and the ruby
+  # bindings (--disable-ruby in build(); python bindings stay)
   rm -rf "$pkgdir/usr/share/doc"
   rm -f "$pkgdir/usr/bin/cacaball" "$pkgdir/usr/bin/cacafire" \
         "$pkgdir/usr/bin/cacamatrix" "$pkgdir/usr/bin/cacademo"
