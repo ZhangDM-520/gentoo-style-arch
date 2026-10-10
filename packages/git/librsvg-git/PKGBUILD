@@ -6,7 +6,7 @@
 #
 # git build adapted from AUR librsvg-git (reference only) + stock Arch librsvg:
 # tracks upstream master directly (stock pins release tags). The stock
-# librsvg-docs split is NOT superseded — docs are trimmed here (-D docs=false,
+# librsvg-docs split is NOT superseded — docs are trimmed here (-D docs=disabled,
 # gi-docgen dropped).
 # NOTE cargo/rustc: needs rust-git edge.
 
@@ -71,7 +71,8 @@ build() {
     -D avif=enabled
     -D pixbuf-loader=disabled
     # stock splits the API reference into librsvg-docs; house trims docs
-    -D docs=false
+    # (upstream flipped the option to a meson feature; boolean is rejected)
+    -D docs=disabled
   )
 
   arch-meson librsvg build "${meson_options[@]}"

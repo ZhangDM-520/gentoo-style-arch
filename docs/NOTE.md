@@ -37,6 +37,36 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-10 — librsvg-git: upstream flipped `docs` to a meson *feature* — boolean `-D docs=false` is rejected outright
+
+**Symptom.** run #105 wall, `librsvg-git` BUILD FAILED (0m14s, configure):
+`librsvg/meson.build:1:0: ERROR: Value "false" (of type "string") for
+option "docs" is not one of the choices. Possible choices are (as
+string): "enabled", "disabled", "auto".`
+
+**Root cause.** Upstream converted the `docs` meson option from boolean to
+feature; the recipe's `-D docs=false` is now invalid at `meson setup`
+(the `--wrap-mode nodownload` arch-meson path surfaced it immediately).
+This is `-git` option-type drift — nothing in the recipe, sources, or
+host changed.
+
+**Fix.** `-D docs=false` → `-D docs=disabled` in the recipe's
+`meson_options` (both files, twin edited in place keeping its VCS
+`pkgver` mark), header comment updated to match. No `.SRCINFO` delta
+(fixed string, not metadata). A sibling scan (`-D …=false` across
+recipes) found other boolean-style options but on upstreams that still
+take booleans and already build — only librsvg flipped, so nothing else
+touched.
+
+**Validation.** `bash -n`; rehearsal `-s -fi --no-deps librsvg-git` →
+✓ 3m44s, fresh `2:2.63.2.r22.g9dd24204c-1` archive (08:34:54), zero
+`ERROR` lines, install completed. Battery after this entry.
+
+**Rule.** A `-git` recipe pins upstream's meson option *vocabulary* as
+much as its code: option-type flips (boolean ↔ feature) fail at
+`meson setup` with a "not one of the choices" error naming the option —
+the fix is the new spelling (`disabled`), never a pin of the source.
+
 ## 2026-10-10 — modemmanager-git: master uses three libqmi-*devel*-only enums no released libqmi has — compat patch at the use sites
 
 **Symptom.** run #104 wall, `modemmanager-git` BUILD FAILED (0m10s into
