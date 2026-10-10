@@ -37,6 +37,96 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-10 — run #111 evince wall: unmet HOUSE prerequisites sorted after their consumer — missing build-order edges
+
+**Symptom.** Run #111 died at `evince` (0m01s, before compilation): the
+dependency phase reported `Missing dependencies: gnome-desktop gspell
+libhandy`, then makepkg's stock-replacement install spiralled: provider
+prompt for `libicuuc.so=78-64` (repo packages) vs installed `icu-git`
+providing `libicuuc.so=79-64` → `icu-78.3-1.1 and icu-git … are in
+conflict` → `unresolvable package conflicts`. Dispatch stopped at
+121/253.
+
+**Root cause.** `evince` consumes three set members (`depends =
+gnome-desktop gspell libhandy`) but its topology record carried no
+consumer edges for them, so the topological sort placed evince (#521)
+before gspell/libhandy/gnome-desktop (#526/#532/#631 in the pre-fix
+order) — none of them installed on this host, so makepkg reached for
+stock replacements and hit the icu soname drift (repo `=78-64` vs
+icu-git's auto-versioned `=79-64`). This is the consumer-edge
+discipline from the 2026-10-09 Qt6 wall ("re-verify edges whenever a
+recipe's depends/makedepends change") not being applied when evince's
+dep set changed.
+
+**Fix.** Whole-tree scan for the class (recipe .SRCINFO deps ∖ satisfied
+by the installed DB → provider member ordered later): **6 inversions
+found**, 5 fixed by consumer edges — `evince` += `gspell,libhandy,
+gnome-desktop`, `0ad` += `wxwidgets` (consumes `wxwidgets-gtk3`),
+`kvantum-qt5` += `kvantum` (runtime dep, install-order). The 0ad edge
+pushed wxwidgets to 2 edge-consumers, so per the rule-21 hub discipline
+its record gained `core` dual membership (`stable,core`) — caught by
+`tests/abi-batch-policy.sh` F. The 6th inversion (`libpulse-git`
+makedep `gst-plugins-good` → `gstreamer`) is
+**unfixable by construction**: gstreamer already consumes libpulse-git,
+so the reverse edge is a cycle — accepted class, build-time prereq from
+the full-tree meson build (stock installs cleanly and is later upgraded
+by the same-name house output, unlike a renamed provider).
+
+**Validation.** Re-scan: 6→1 (the cycle pair only); `--audit` clean;
+`--list` orders gspell 525, libhandy 531, gnome-desktop 629 all before
+evince 651, kvantum 606 < kvantum-qt5 615, wxwidgets 623 < 0ad 641;
+dry-run sweep (`--group git|stable|core`) passes; battery after this
+entry. evince's own rebuild rides run #112's resume (its prereqs now
+build and install first through `-i`).
+
+**Rule.** A consumer edge is required whenever a recipe consumes a set
+member that a *fresh host* would not have installed: the sort must
+guarantee "prereq built+installed before consumer compiles", and
+consumers are how that is expressed. The cheap audit is host-state
+aware — `pacman -T` each recipe's depends+makedepends and flag any
+unmet dep whose provider member sorts later (the "unmet-dep inversion"
+scan); run it after any dep-set change and before each relaunch. A
+cyclic unmet makedep pair is not an edge case to force: it is the
+"prerequisites assumed installed" boundary — name it and move on.
+
+## 2026-10-10 — run #111 vscodium-insiders-git: partial npm extraction under f2fs checkpoint pressure (host class) — rebuild, no recipe defect
+
+**Symptom.** `vscodium-insiders-git` failed after 23m00s at
+`vscode-linux-x64-min-packing` → `package-linux-x64`:
+`Error: ENOENT: … stat '…/vscode/extensions/node_modules/.bin/tsc'`.
+
+**Root cause (host class).** The extensions workspace's nested
+`typescript@6.0.3` extracted **partially**: `bin/`, `lib/tsc.js`,
+`lib/_tsc.js`, the four top-level `.txt`s and most `.d.ts` files (130
+lib entries where the tarball carries ~2000) never landed, while npm's
+`.package-lock.json` recorded the package complete with the correct
+registry integrity. Directory mtimes sit inside the install window
+(12:08:13) — nothing deleted the files later; they were never written.
+The npm cache is intact: a control `npm install typescript@6.0.3` from
+the same cache produced a byte-complete tree. The published
+typescript-6.0.3.tgz ships all of the missing paths. dmesg shows
+`F2FS-fs (sda): blocked on checkpoint for 17831 ms` at 12:16:56 — the
+write path stalled mid-install and dropped small-file writes silently.
+The dangling `.bin/tsc`/`.bin/tsserver` symlinks then broke the
+packaging step's file walk 18 minutes later.
+
+**Fix.** None in the recipe — single data point, and the recipe is a
+victim. Rebuild (run #112's `-s` resume re-enters it: no archive
+exists).
+
+**Validation.** Control install from the same npm cache → complete
+package (`bin/`, `lib/tsc.js`, all `.txt` present); tarball listing
+confirms upstream ships every missing path; mtimes rule out
+post-install deletion.
+
+**Rule.** Diagnostic signature for an extraction flake on this host: a
+package tree missing *non-contiguous* files with directory mtimes equal
+to the install window, dangling `.bin` symlinks, and an intact cache
+(control-install) — i.e. the write path, not the package or the recipe.
+Remedy is a rebuild; only engineer a verify/repair seam if the same
+package flakes twice. Check `dmesg`/`journalctl -k` for f2fs checkpoint
+stalls before blaming tooling.
+
 ## 2026-10-10 — emacs: the variant splits were mutually exclusive full builds — recipe outputs must be co-installable by construction
 
 **Symptom.** run #110 wall, `emacs`: the build itself succeeded (27m05s,

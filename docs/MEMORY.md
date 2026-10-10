@@ -987,6 +987,20 @@
     the same fix: programmatic excision must search anchors from the cut
     offset, never byte 0 — verify the function list after any scripted
     edit.)
+52. **A consumer edge is required when a recipe consumes a set member a
+    fresh host would not have installed — audit for "unmet-dep
+    inversions"** (2026-10-10 run #111 evince): evince consumed
+    gspell/libhandy/gnome-desktop with no consumer edges, so the sort
+    built it first; makepkg reached for stock replacements and died in
+    the icu soname drift (`libicuuc.so=78-64` wanted vs icu-git's
+    `=79-64`). Scan recipe .SRCINFO depends+makedepends with `pacman -T`
+    and flag any unmet dep whose provider member sorts later; fix by
+    adding the consumer's edge (evince += gspell,libhandy,gnome-desktop;
+    0ad += wxwidgets; kvantum-qt5 += kvantum). A cyclic unmet pair
+    (libpulse-git ↔ gstreamer) is the "prerequisites assumed installed"
+    boundary, not an edge to force: name it and accept the stock
+    build-time prereq. Re-verify after every dep-set change — the
+    topology-edge lint is still merge-gated.
 
 ## 2. Workspace overview
 
