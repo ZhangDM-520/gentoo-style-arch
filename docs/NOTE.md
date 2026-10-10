@@ -37,6 +37,38 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-10 — libayatana-appindicator-git: `ayatana-indicator3-0.4` was an undeclared makedep — hard-required modules must be declared even when the host happens to have them
+
+**Symptom.** run #109 wall, `libayatana-appindicator-git` BUILD FAILED
+(0m02s, CMake configure):
+`-- Checking for modules 'glib-2.0>=2.58;ayatana-indicator3-0.4>=0.8.4;
+gtk+-3.0>=3.24;dbusmenu-gtk3-0.4' — Package 'ayatana-indicator3-0.4'
+not found`.
+
+**Root cause.** `pkg_check_modules` hard-requires four modules, but
+makedepends only declared three generic tools + glib2-devel +
+gobject-introspection + vala. `ayatana-indicator3-0.4` is
+**libayatana-indicator**'s pc file and that package was never installed
+(and never declared) — the recipe had simply never been built on this
+host since its registration.
+
+**Fix.** makedepends += `libayatana-indicator` (the gap) plus `gtk3` and
+`libdbusmenu-gtk3` (the other two undeclared hard requirements; stock
+names resolve through the set's providers — gtk3-git provides gtk3).
+Both `.SRCINFO`s regenerated, twin edited in place.
+
+**Validation.** `bash -n` + `makepkg --printsrcinfo`; rehearsal `-s -fi
+--no-deps libayatana-appindicator-git` → ✓ 0m16s, fresh
+`0.6.0.r1.geaa41f5-1` archive (10:53:25), `pkg-config --exists
+ayatana-indicator3-0.4` now passes (makepkg `-s` pulled the makedep),
+install completed. Battery after this entry.
+
+**Rule.** Every module a build hard-requires at configure time must be a
+declared makedep even while the host happens to provide it —
+"installed by accident" is the same defect class as libcaca's
+autodetected Ruby bindings, just failing later (at the first clean
+host). The configure probe's own module list is the checklist.
+
 ## 2026-10-10 — logseq-desktop-git: Closure Compiler jars need Java 21+ but PATH's `java` was 17 — versioned virtual + JVM picker
 
 **Symptom.** run #108 wall, `logseq-desktop-git` BUILD FAILED (4m41s):

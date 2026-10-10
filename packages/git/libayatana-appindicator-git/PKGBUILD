@@ -10,7 +10,13 @@ arch=('x86_64')
 url="https://github.com/AyatanaIndicators/libayatana-appindicator"
 license=('GPL-3.0-only')
 depends=('glib2' 'glibc' 'gtk3' 'libdbusmenu-glib' 'libdbusmenu-gtk3' 'libgcc')
-makedepends=('cmake' 'git' 'glib2-devel' 'gobject-introspection' 'vala')
+# CMake's pkg_check_modules hard-requires all four modules
+# (glib-2.0, ayatana-indicator3-0.4, gtk+-3.0, dbusmenu-gtk3-0.4);
+# the stock names resolve through the set's providers (gtk3-git
+# provides gtk3). ayatana-indicator3-0.4 is libayatana-indicator's —
+# undeclared before, it walled run #109 when nothing pulled it in.
+makedepends=('cmake' 'git' 'glib2-devel' 'gobject-introspection' 'vala'
+             'libayatana-indicator' 'gtk3' 'libdbusmenu-gtk3')
 provides=("libayatana-appindicator=$pkgver" 'libayatana-appindicator3.so')
 conflicts=('libayatana-appindicator')
 # NOTE: upstream labels this GTK/DBusMenu implementation OBSOLETE in favour of
