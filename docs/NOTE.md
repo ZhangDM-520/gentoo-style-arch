@@ -37,6 +37,62 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-10 — run #114 bettbox wall: cargokit demands a `rustup` binary that this host does not ship — a recipe asset that nothing wired
+
+**Symptom.** Run #114 reached 135/252, then `✗ bettbox: BUILD FAILED
+(rc=1, 3m21s)`. The makepkg log ends with Flutter's terse pair —
+`Building Linux application...` / `Build process failed` — with no
+compiler diagnostic between them, so the visible tail says nothing
+about the failing step.
+
+**Root cause.** Re-running the `flutter build linux` step verbosely in
+the surviving source tree (`-v`, log kept at `/tmp` scratch) surfaced
+the real error: ninja's `Generating libcode_forge.so` step failed with
+`SEVERE: Cargokit BuildTool failed with error: rustup not found in
+PATH.` The `code_forge` plugin's vendored Cargokit constructs its
+`Rustup()` helper unconditionally (`build_tool/lib/src/
+artifacts_provider.dart`), and the constructor runs `rustup toolchain
+list` before any toolchain use. The precompiled-binaries escape is
+dead for this crate (no `cargokit.yaml`, so no `precompiledBinaries`),
+so a `rustup` binary is a hard requirement of every local build. The
+host has only the system `rust`/`rustc` (rust-git) — no `rustup`,
+no `~/.cargo/bin`, no `/usr/local/bin/rustup`.
+
+**Why it built before.** The recipe has always shipped `rustup-shim`,
+a file that translates exactly the subcommands Cargokit probes
+(`toolchain list/install`, `target list/add`, `component`, `run`,
+`show home`, `which`) onto the system toolchain — but its comment said
+"Place in `/usr/local/bin/rustup`", i.e. it depended on an *undocumented
+host-side install step*. Earlier builds passed because that shim (or a
+real rustup) was on the host; the host drifted, and the recipe failed
+on the first rebuild after. The recipe never referenced the file.
+
+**Fix.** Wire the shim recipe-side so a clean checkout builds: add
+`rustup-shim` to `source=()` (sha256 pinned), and in `build()` stage it
+under the name Cargokit resolves — `install -Dm755
+"${srcdir}/rustup-shim" "${srcdir}/rustup-bin/rustup"` plus a PATH
+prepend of that directory. No host mutation, no `/usr/local` dependency.
+Sibling scan: `bettbox` is the repo's only Flutter/Cargokit consumer
+(`grep -rln 'fvm\|flutter' packages/` → one hit), so no sibling exposure.
+
+**Validation.** `bash -n` + `makepkg --printsrcinfo` on both twins
+(canonical `1.19.4-1`, workspace twin keeps its `1.19.5pre1-1`
+version-sync mark; `.SRCINFO`s differ only in the version strings).
+Rehearsal `fish build-all.fish -s -fi --no-deps bettbox` in the
+workspace: `✓ bettbox (2m37s)`, run record `bettbox succeeded 0 157
+ok`, archive `bettbox-1.19.5pre1-1-x86_64.pkg.tar.zst` (16:37) and
+`pacman -Q bettbox` → `1.19.5pre1-1` with `provides =
+bettbox=1.19.5pre1`. Battery after this entry.
+
+**Rule.** A recipe asset that exists to satisfy an external tool probe
+must be *wired by the recipe*, not by a host-side placement step — an
+undocumented `/usr/local` install is host drift waiting to happen, and
+the failure it causes is silent at the makepkg log tail (Cargokit
+swallows the child build output). When a build fails with a
+tool-not-found message that the host cannot satisfy from `makedepends`,
+check the recipe directory for an unwired shim asset before reaching
+for a host install.
+
 ## 2026-10-10 — run #111 evince wall: unmet HOUSE prerequisites sorted after their consumer — missing build-order edges
 
 **Symptom.** Run #111 died at `evince` (0m01s, before compilation): the

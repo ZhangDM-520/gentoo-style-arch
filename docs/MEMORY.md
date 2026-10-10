@@ -1715,6 +1715,24 @@ constant, not a baked path).
 
 ## 6. Pitfall digest (full details: NOTE.md sections of same dates)
 
+- **A recipe asset that exists to satisfy an external tool probe must be
+  wired by the recipe, not by an undocumented host-side placement**
+  (2026-10-10 run #114 bettbox): Cargokit (vendored by the `code_forge`
+  Flutter plugin) constructs `Rustup()` unconditionally and runs `rustup
+  toolchain list` before any toolchain use, and with no `cargokit.yaml`
+  precompiled escape a `rustup` binary is a hard build requirement — but
+  the host ships only rust-git (`rustc`/`cargo`). The recipe already
+  carried `rustup-shim` (a probe-subcommand translator onto the system
+  toolchain) whose comment said "Place in `/usr/local/bin/rustup`" and
+  which nothing referenced: builds passed while that host placement
+  existed, then walled silently on the first rebuild after host drift
+  (Cargokit swallows the child build output — the makepkg tail shows
+  only Flutter's `Build process failed`). Wire such shims in `build()`
+  (`install -Dm755` under the probed name + PATH prepend) and pin them
+  in `source=()`. Scan shape: `grep -rln 'rustup\|flutter\|cargokit'
+  packages/*/*/PKGBUILD` + `grep -rln shim packages/*/*/` for
+  unreferenced assets.
+
 - **A doc-tool feature that is `auto`/default-on runs whenever the tool is
   installed — and the tool's strictness becomes your build wall**
   (2026-10-09 run #92 libusb-git, v4l-utils): libusb's man-pages

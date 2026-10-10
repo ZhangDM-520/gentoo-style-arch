@@ -22,10 +22,11 @@ depends=(
 	'libkeybinder3'
 )
 makedepends=('git' 'clang' 'cmake' 'ninja' 'go' 'rust' 'fvm' 'patchelf')
-source=("${_pkgname}-${_pkgver}.tar.gz::${url}/archive/v${_pkgver}.tar.gz" "restart-bettbox.hook" "bettbox.desktop")
+source=("${_pkgname}-${_pkgver}.tar.gz::${url}/archive/v${_pkgver}.tar.gz" "restart-bettbox.hook" "bettbox.desktop" "rustup-shim")
 sha256sums=('5339629e0adfe4576d1c25fe323dce4be4e45b1a004ca79853c9f3b180732006'
             '03d4aadb32c7a3876ac3dbafeb3d2ecd38b0fc87d19ff57d5dc46d452fd026a2'
-            'd7b7bdb64b1aabcedc8092a1498d743fad66d34b7f592194f805d039004d3e0f')
+            'd7b7bdb64b1aabcedc8092a1498d743fad66d34b7f592194f805d039004d3e0f'
+            '76927a42925c94ce708e027b2e0eca2efe592f27f46b8d0aabbc885d451b61cb')
 prepare() {
 	cd "${_pkgname}-${_pkgver}"
 	fvm use 3.44.8
@@ -37,6 +38,12 @@ build () {
 	cd "${_pkgname}-${_pkgver}"
 	# cargokit (code_forge plugin) requires FLUTTER_ROOT for its dart
 	export FLUTTER_ROOT="$(pwd)/.fvm/flutter_sdk"
+	# cargokit's Rustup() constructor runs `rustup toolchain list` before any
+	# toolchain use, and this host ships only the system rust-git toolchain
+	# (no rustup). Stage the repo's shim under the name cargokit resolves so
+	# the build is self-contained instead of relying on /usr/local/bin/rustup.
+	install -Dm755 "${srcdir}/rustup-shim" "${srcdir}/rustup-bin/rustup"
+	export PATH="${srcdir}/rustup-bin:${PATH}"
 	local app_env=pre
 	[[ "$pkgver" != *pre* ]] && app_env=stable
 	fvm dart run build_runner build -d
