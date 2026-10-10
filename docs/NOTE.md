@@ -37,6 +37,109 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-10 — pacman local-DB noise: `%INSTALLED_DB%` origin-repo section stripped from 289 desc files
+
+**Symptom.** Every pacman local-DB read emitted `warning: <pkg>: unknown
+key '%INSTALLED_DB%' in local database` (289 lines), polluting stderr of
+build-supervisor pacman calls where real warnings must stay visible.
+
+**Root cause.** The CachyOS pacman fork's libalpm extension
+`alpm_pkg_get_installed_db` (origin-repo tracking; CachyOS/kernel-manager
+`CMakeLists.txt:80` probes that symbol) wrote `%INSTALLED_DB%` (one value
+line = sync DB name: `core`, `extra`, `cachyos*`) into `desc` on every
+*sync-DB* install — the Calamares bootstrap (10-05 17:22) and later `-S`
+installs through 10-09 10:58. The house vanilla upstream build (same
+version string `7.1.0.r9.g54d9411-4`) replaced the fork on 10-09 11:18
+and warns on the unknown key; `-U` house installs never carried it (the
+field records a sync DB), which is why only 289/1999 descs were affected.
+
+**Fix.** Pre-image backup `/root/pacman-local-desc-backup-20261010.tar.gz`
+(whole `local/`, 1999 desc entries verified in the archive), then an awk
+loop removing exactly the section (key + value + trailing blank) from each
+affected `desc`, preserving mode/ownership.
+
+**Validation.** (independently re-checked after the fix) warnings 289 →
+**0** (`pacman -Q` stderr line count = 0); `pacman -Q | wc -l` 1999
+unchanged; `grep -rl '^%INSTALLED_DB%$' /var/lib/pacman/local/*/desc` = 0;
+desc line total dropped by exactly 3×289. No transactions were run.
+
+**Rule.** A local-DB `desc` written by a foreign pacman fork may carry
+sections upstream libalpm does not know; after swapping pacman builds,
+strip the unknown sections data-side (dated backup, exact line-delta
+verified) instead of silencing warnings — and note that a fork's
+`-S`/`-U` asymmetry decides which descs got the field.
+
+## 2026-10-10 — run #115 ghostscript wall: cups' `stdbool.h` poisoned the recipe's pinned-`gnu17` `bool` mid-TU — `_Bool` local against `int *` prototype
+
+**Symptom.** Run #115 reached 138/252, then `✗ ghostscript: BUILD
+FAILED (rc=1, 0m23s)`: `cups/gdevcups.c` fails on every `booloption`
+expansion and two explicit calls — `passing argument 3 of
+'param_read_bool' from incompatible pointer type` — `&boolval` is
+`_Bool *` while the prototype wants `bool *` `{aka 'int *'}`. gcc 14+
+makes `-Wincompatible-pointer-types` a hard error, so 23 seconds into
+`make` the build stops at `soobj/gdevcups.o`.
+
+**Root cause.** A type identity split *inside one translation unit*.
+The recipe deliberately pins `export CFLAGS="$CFLAGS -std=gnu17"`
+(Fedora's fix for ghostscript's custom `bool`: upstream `std.h` typedefs
+`bool` as `int`, which fights C23's `bool` keyword — the recipe comment
+and bug 708608 document that choice). Under `gnu17`, `std.h` typedefs
+`bool` = `int`, and `gsparam.h`'s `param_read_bool(..., bool *)`
+prototype is parsed against it. But `cups/raster.h` + `cups/ppd.h`
+(cups 2.5 headers, `/usr/include/libcups2`) drag in `<stdbool.h>`,
+which pre-C23 `#define bool _Bool` — so every `bool` in the file *after*
+the cups includes became `_Bool` (`bool boolval;` at gdevcups.c:3091)
+while the already-parsed prototypes stayed `int *`. The recipe's
+commented-out `# export CFLAGS+=" -Wno-incompatible-pointer-types
+..."` ("gcc14 buildfix") shows the class was seen before and correctly
+not papered over.
+
+**Fix.** House patch `gdevcups-stdbool-bool.patch` — one `#undef bool`
+directly after the cups includes (plus a why-comment), restoring `std.h`'s
+typedef for the rest of the TU. It is a no-op under C23 builds (there
+`bool` is the keyword and the macro never existed). Wired via
+`source=()` + `prepare()`, pkgrel 1→2. Sibling scan: `gdevcups.c` is
+ghostscript's only cups-including file; the other cups consumers
+(hplip, libcupsfilters, cups-git) built clean this campaign — the
+hazard needs a *custom `bool` typedef* plus a `bool *` API boundary, so
+the scan shape is `grep -rln 'std=gnu\|std=c' packages/*/*/PKGBUILD`
+(10 recipes pin a std) intersected with files that include
+stdbool-pulling system headers *after* their own type headers.
+
+**Validation.** `patch -Np1 --dry-run` clean against the pristine
+tree; `bash -n` + `makepkg --printsrcinfo` on both twins (workspace twin
+keeps its `10.08.0-1.1` version-sync mark — that is also why the house
+archive must force-install over the CachyOS `10.08.0-1.1` currently
+installed). Rehearsal `fish build-all.fish --no-deps ghostscript`:
+`ghostscript succeeded 0 69 ok`, artifact
+`ghostscript-10.08.0-1.1-x86_64.pkg.tar.zst` (17:21, `provides =
+libgs.so=10-64`). Install rides the campaign resume (a `-s -fi
+--no-deps ghostscript` install pass before relaunch). Battery after
+this entry.
+
+**Rule.** When a recipe pins `-std=` to protect a custom type alias,
+the pin changes which system headers may silently *redefine* that name
+mid-file (pre-C23 `stdbool.h` is a macro machine) — audit includes that
+follow the project's own headers and `#undef` at the seam instead of
+`-Wno-incompatible-pointer-types`, which hides real pointer mismatches
+(`_Bool` also truncates an int-valued `bool`, so the mismatch was
+semantic, not cosmetic).
+
+**Side incident (same window): USB dock drop mid-diagnosis.** `$W`
+vanished ~17:0x between two reads; `fsck.f2fs -a --dry-run /dev/sda`
+clean (only the expected `sudden-power-off` checkpoint flag),
+`udisksctl mount -b /dev/sda` restored it intact. Run #115's console
+log tail rolled back to the last f2fs checkpoint — it now ends at
+`[lane 1] ghostscript (139/252` with NUL padding although the full run
+record was readable from page cache before the drop. Rule: after a dock
+drop, treat pre-drop *reads* as possibly cache-served and re-verify any
+artifact you intend to build on; five recent archives verified intact
+with `zstd -t` (libpulse-git, both xdg-desktop-portal-gtk-git builds,
+libcupsfilters, bettbox). Battery 56/56 on a clean re-run; a first run
+concurrent with a live `/var/lib/pacman` rewrite showed 8 transient
+scheduler/install-fixture failures — batteries and live pacman work do
+not mix (the queued fixture-lock gap).
+
 ## 2026-10-10 — run #114 bettbox wall: cargokit demands a `rustup` binary that this host does not ship — a recipe asset that nothing wired
 
 **Symptom.** Run #114 reached 135/252, then `✗ bettbox: BUILD FAILED

@@ -1,0 +1,15 @@
+--- a/cups/gdevcups.c
++++ b/cups/gdevcups.c
+@@ -95,6 +95,12 @@
+ #include <cups/ppd.h>
+ #include <math.h>
+ 
++/* cups headers pull in <stdbool.h>, which on pre-C23 builds redefines `bool`
++ * as a macro expanding to _Bool. std.h's `bool` (int) typedef was already
++ * used to parse the base/ prototypes (param_read_bool takes `bool *`), so
++ * keep the macro out of this translation unit and see the typedef again. */
++#undef bool
++
+ /* the extremely noisy DEBUG2 messages are now dependent on CUPS_DEBUG2 */
+ /* this can be enabled during the 'make' or by uncommenting the following */
+ /* #define CUPS_DEBUG2 */

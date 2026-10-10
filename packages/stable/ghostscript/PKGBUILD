@@ -2,7 +2,7 @@
 
 pkgname=ghostscript
 pkgver=10.08.0
-pkgrel=1
+pkgrel=2
 pkgdesc="An interpreter for the PostScript language"
 url="https://www.ghostscript.com/"
 arch=('x86_64')
@@ -16,10 +16,12 @@ makedepends=('gtk3' 'gnutls' 'glu' 'freeglut')
 # dropped (no conflicts/replaces in this recipe set)
 # https://github.com/ArtifexSoftware/ghostpdl-downloads/releases
 source=(https://github.com/ArtifexSoftware/ghostpdl-downloads/releases/download/gs${pkgver//./}/ghostscript-${pkgver}.tar.xz
-        2010_add_build_timestamp_setting.patch)
+        2010_add_build_timestamp_setting.patch
+        gdevcups-stdbool-bool.patch)
 # https://github.com/ArtifexSoftware/ghostpdl-downloads/releases/download/gs10080/SHA512SUMS
 sha512sums=('8006e2a32d03759a905b9548bdd83d4563173041006750e17e428b9eea24ad519aa4452ceecd7c073d3c420a68bf1b07ccc9e0533b1a05935f6b39ea8d9ce875'
-            'cd7794ee4f28b11177021b950196385200b610127ed6cb94a45e3202b690b721a0dfcc0276ff39448d4dab64c1b31a76e6c323696a8315aad9edc22077f18a3d')
+            'cd7794ee4f28b11177021b950196385200b610127ed6cb94a45e3202b690b721a0dfcc0276ff39448d4dab64c1b31a76e6c323696a8315aad9edc22077f18a3d'
+            '4bf3e6923e057d0844eb62521cb253b927c064d796df677270f834f239e0e5dffe025dc33705c2545d7b11407bbf0899680d79dc03f1a7ddace8959fd367f5a9')
 
 ### update jbig2dec first! ###
 
@@ -61,6 +63,11 @@ prepare() {
 
   # Debian: # allow the build timestamp to be externally set
   patch -Np1 -i ../2010_add_build_timestamp_setting.patch
+
+  # run #115 wall: cups headers drag in <stdbool.h>, whose `bool` macro (_Bool)
+  # clashes with std.h's `bool` (int) typedef that the base/ prototypes were
+  # parsed against (gcc14+ makes the gdevcups.c mismatch fatal)
+  patch -Np1 -i ../gdevcups-stdbool-bool.patch
 }
 
 build() {
