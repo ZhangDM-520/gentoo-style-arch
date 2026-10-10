@@ -37,6 +37,61 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-10 — run #118 pinentry: orphaned `gtk2` (from a dead `libwmf-git` makedep) conflicted with `gtk2-compat`
+
+**Symptom.** Run #118 (the narrowed `563..` tail, 91 packages) died in 1 s at
+`pinentry`: makepkg's dependency install aborted with
+`gtk2-compat-1.0.0-5 and gtk2-2.24.33-5 are in conflict. Remove gtk2? [y/N]`
+→ `unresolvable package conflicts detected`. `qt5-tools` and `pulseaudio-qt`
+had already passed; everything else was never-started.
+
+**Root cause.** Three stacked facts. (1) `pinentry` makedepends `gtk2-compat`
+(deliberate house design: the `-gtk` backend is built "to be used with GTK3"
+through the compat shim's `gtk+-2.0.pc`, then renamed `pinentry-gtk-2` →
+`pinentry-gtk`). (2) `gtk2-compat` hard-conflicts real `gtk2`. (3) Real `gtk2`
+was installed — as a **dead** `makedepends` of `libwmf-git`: upstream libwmf
+0.2.16's `configure.ac` contains no GTK usage (one courtesy comment only) and
+the shipped package links no gtk2 — the makedep was cargo-culted from an old
+recipe and merely leaked the package onto the system on 2026-10-07. `gtk2`
+was a pure orphan (`Required By: None`, `Optional For: None`).
+
+**Fix (owner unavailable at diagnosis time — executed autonomously on the
+best-evidenced plan, flagged here for review).**
+1. Evicted orphaned `gtk2` (`pacman -R`; pre-checked: no local-DB `%DEPENDS%`
+   name or provides reference any gtk2 output).
+2. `libwmf-git`: dropped the dead `gtk2` makedep (pkgrel unchanged — package
+   content is provably identical: a no-gtk2 scratch rebuild produced the same
+   file list, sonames and auto-versioned provides).
+3. `libcanberra`: pinned `--disable-gtk` (pkgrel 6→7 / twin 6.1→7.1, marks
+   preserved). Its configure defaults to `auto`, so the presence of ambient
+   gtk2 had made it silently ship `libcanberra-gtk.so` + a `gtk-2.0` module —
+   undeclared in `depends` and absent from `provides` (which list only
+   `libcanberra.so`/`libcanberra-gtk3.so`), i.e. unintended content that would
+   have silently vanished on the next rebuild after the eviction. The
+   `40-libcanberra-gtk-module.sh` hook keeps working: the gtk3 modules install
+   the same `canberra-gtk-module` name.
+
+**Validation.** `bash -n` + `makepkg --printsrcinfo` on all four recipe/tree
+combinations; libcanberra rebuilt+installed through the builder
+(`-fi --no-deps`): archive and installed `1:0.30+r2+gc0620e4-7.1` contain the
+gtk3 modules and zero `gtk-2.0`/`libcanberra-gtk.so` content; libwmf-git
+scratch rebuild without gtk2 (master unmoved: same `0.2.16.r0.ga916f30-1`)
+differs from the installed package only in archive metadata entries; pinentry
+rehearsal build+install green (gtk2-compat auto-resolves now).
+
+**Rules.**
+- A `makedepends` entry must be *used* by the build: a dead one still installs
+  the package system-wide, and that ambient residue later conflicts with other
+  recipes' dependency installs. When trimming one, verify both ways: upstream
+  build-system has no reference to it, and the shipped outputs link none of it.
+- Autoconf `auto` detection makes package *content* depend on what happens to
+  be installed. Pin every optional feature explicitly (`--disable-…` /
+  `--enable-…`) when the package's declared `provides`/`depends` define its
+  intended surface — otherwise the next rebuild silently changes content.
+- House direction is gtk2-free: `gtk2-compat` stands in where a recipe wants
+  the gtk2 build surface (pinentry). A new recipe must not reintroduce real
+  `gtk2`.
+
 ## 2026-10-10 — run #117 graphviz: hardcoded `tcl8.6` dedup path went stale when system Tcl moved to 9.0
 
 **Symptom.** Run #117 reached 161 ok then `graphviz` failed in `package()`

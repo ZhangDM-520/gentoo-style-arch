@@ -1,7 +1,7 @@
 pkgbase = libcanberra
 	pkgdesc = A small and lightweight implementation of the XDG Sound Theme Specification
 	pkgver = 0.30+r2+gc0620e4
-	pkgrel = 6
+	pkgrel = 7
 	epoch = 1
 	url = https://0pointer.net/lennart/projects/libcanberra/
 	arch = x86_64

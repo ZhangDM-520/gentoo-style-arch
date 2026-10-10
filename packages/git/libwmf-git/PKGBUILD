@@ -11,7 +11,11 @@ arch=('x86_64')
 url='https://github.com/caolanm/libwmf'
 license=('LGPL-2.1-or-later')
 depends=('expat' 'freetype2' 'glibc' 'libjpeg-turbo' 'libpng' 'libx11' 'zlib')
-makedepends=('git' 'gtk2' 'libxt')
+# gtk2 dropped from makedepends 2026-10-10: upstream's configure.ac has no
+# GTK usage and the shipped outputs link no gtk2 — it was dead weight that
+# leaked a gtk2 install onto the system and later conflicted with the
+# gtk2-compat pinentry build
+makedepends=('git' 'libxt')
 optdepends=('gdk-pixbuf2: for pixbuf loader')
 # bare soname provides for the shipped libs: libwmf-0.2.so.7, libwmflite-0.2.so.7
 provides=("libwmf=$pkgver" 'libwmf-0.2.so' 'libwmflite-0.2.so')

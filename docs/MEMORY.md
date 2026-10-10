@@ -1851,6 +1851,21 @@ constant, not a baked path).
   (`find -name pkgIndex.tcl`), or match a `tcl*/` glob — never a literal
   versioned dir. On one such drift, sibling-scan every recipe touching the
   same versioned path in the same wave.
+- **A dead `makedepends` is not harmless** (2026-10-10 pinentry wall): the
+  cargo-culted `gtk2` makedep of `libwmf-git` (upstream has no GTK usage; no
+  shipped output links gtk2) leaked real gtk2 onto the system, where it later
+  hard-conflicted with `gtk2-compat` during `pinentry`'s makepkg dependency
+  install and stopped a run 1 s in. Trim makedepends the build never consults
+  (verify: no build-system reference + no shipped-output link) and keep the
+  system free of them; the house direction here is **gtk2-free** with
+  `gtk2-compat` as the stand-in where a recipe wants the gtk2 build surface
+  (pinentry), so a recipe reintroducing real `gtk2` is a policy violation.
+- **Pin optional features explicitly; never trust `auto` detection** (2026-10-10
+  libcanberra): autoconf `auto` probes the *ambient* system, so package content
+  becomes a function of what happens to be installed — libcanberra silently
+  shipped an undeclared gtk2 module (not in its `provides`) only because gtk2
+  was present at build time. When declared `provides`/`depends` define the
+  intended surface, spell every optional component `--disable-…`/`--enable-…`.
 - **`makepkg` is a WRITER of the recipe it touches** (2026-10-06): `--nobuild`
   still runs `pkgver()` and rewrites `pkgver=` in place (`/usr/bin/makepkg:190`
   `update_pkgver`) — a "read-only" screening sweep dirtied 12 tracked

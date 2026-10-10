@@ -3,7 +3,7 @@
 
 pkgname=libcanberra
 pkgver=0.30+r2+gc0620e4
-pkgrel=6
+pkgrel=7
 epoch=1
 pkgdesc="A small and lightweight implementation of the XDG Sound Theme Specification"
 url="https://0pointer.net/lennart/projects/libcanberra/"
@@ -40,9 +40,12 @@ prepare() {
 build() {
   cd libcanberra
   # trim: gtk-doc API docs disabled (gtk-doc makedep dropped)
+  # --disable-gtk: the house set is gtk2-free; upstream defaults to auto and
+  # would silently ship the undeclared gtk2 module (libcanberra-gtk.so — never
+  # in provides) whenever gtk2 happens to be ambient. GTK3 stays auto.
   ./configure --prefix=/usr --sysconfdir=/etc --localstatedir=/var \
       --disable-static --with-builtin=dso --enable-null --disable-oss \
-      --enable-alsa --enable-pulse \
+      --enable-alsa --enable-pulse --disable-gtk \
       --with-systemdsystemunitdir=/usr/lib/systemd/system --disable-gtk-doc
   sed -i -e 's/ -shared / -Wl,-O1,--as-needed\0/g' libtool
   make
