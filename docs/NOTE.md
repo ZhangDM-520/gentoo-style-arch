@@ -37,6 +37,51 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-10 — emacs: the variant splits were mutually exclusive full builds — recipe outputs must be co-installable by construction
+
+**Symptom.** run #110 wall, `emacs`: the build itself succeeded (27m05s,
+all three outputs), then the builder's single `pacman -U` of every output
+failed with `error: failed to commit transaction (conflicting files)` —
+`emacs-nox` and `emacs-wayland` are *full alternative builds* (each ships
+its own `/usr/bin/emacs` plus the whole elisp tree) and collide with
+`emacs` and each other on every path.
+
+**Root cause.** The recipe was adopted from the stock split layout with
+`provides=(emacs)` on the variants and `conflicts=(emacs)` — but the
+conflicts were `# trim:`-ed as "house standard drops stock". That
+misreads the field: for a mutually exclusive variant the `conflicts` is
+*load-bearing*, not stock weight. Deeper, the output set was
+un-installable by construction: the builder installs all outputs of a
+recipe in ONE pacman transaction, so alternative builds that conflict
+with each other can never be splits of the same recipe.
+
+**Fix.** Retire the two variant outputs — `pkgname=(emacs)` keeping the
+gtk3 build unchanged, `prepare()` (variant source-tree clones) and the
+nox/wayland configure+make blocks deleted along with their
+`package_*()` functions, `pkgrel` 2→3. Stale run #110 variant archives
+removed before the rehearsal so the install pipeline could not pick them
+up. Recovery path for a wanted variant = a **separate recipe** with
+`provides=(emacs)` + `conflicts=(emacs)`.
+
+**Validation.** `bash -n` + `makepkg --printsrcinfo` on both twins
+(single `pkgname = emacs`); rehearsal `-s -fi --no-deps emacs` → ✓
+2m15s (ccache hit — same source/flags as run #110's gtk3 variant),
+fresh `emacs-31.1-3-x86_64.pkg.tar.zst` (11:47), `pacman -U` completed
+through pre/post-transaction hooks with no conflicting-files error,
+`pacman -Q emacs` → `31.1-3`, and no variant archives were produced.
+Battery after this entry.
+
+**Rule.** Recipe outputs must be **co-installable by construction**:
+anything the builder would install in one transaction has to live
+together in one filesystem. Mutually exclusive full alternative builds
+are separate recipes (`provides`+`conflicts` against the stock name),
+never split outputs — and a variant's `conflicts` is load-bearing, never
+a trimmable stock leftover. Also: programmatic excision must search
+anchors from the cut offset, never from byte 0 (this fix first
+corrupted the PKGBUILD by matching an earlier occurrence of the anchor
+and duplicating a block; `git checkout --` + edit-tool surgery redid it,
+and the function list is the post-edit structure check).
+
 ## 2026-10-10 — libayatana-appindicator-git: `ayatana-indicator3-0.4` was an undeclared makedep — hard-required modules must be declared even when the host happens to have them
 
 **Symptom.** run #109 wall, `libayatana-appindicator-git` BUILD FAILED

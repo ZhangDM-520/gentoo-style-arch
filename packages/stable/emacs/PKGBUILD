@@ -4,9 +4,14 @@
 # Contributor: Renchi Raju <renchi@green.tam.uiuc.edu>
 
 pkgbase=emacs
-pkgname=(emacs emacs-nox emacs-wayland)
+# One output by construction: the builder installs every output of a recipe in
+# a single pacman transaction, so mutually exclusive full alternative builds
+# (emacs-nox/emacs-wayland each ship their own /usr/bin/emacs and elisp tree)
+# can never be installed together as splits. A variant is a separate recipe
+# with provides=(emacs) conflicts=(emacs) — see docs/NOTE.md 2026-10-10.
+pkgname=(emacs)
 pkgver=31.1
-pkgrel=2
+pkgrel=3
 arch=('x86_64')
 url='https://www.gnu.org/software/emacs/emacs.html'
 license=(GPL-3.0-or-later)
@@ -39,11 +44,6 @@ validpgpkeys=(
   '8DC2487E51ABDD90B5C4753F0F56D0553B6D411B'  # Sean Whitton <spwhitton@spwhitton.name>
 ) 
 
-prepare() {
-  cp --reflink=auto -ar ${pkgname}-${pkgver} ${pkgbase}-${pkgver}-nox
-  cp --reflink=auto -ar ${pkgname}-${pkgver} ${pkgbase}-${pkgver}-wayland
-}
-
 build() {
   local _confflags=(
     --sysconfdir=/etc
@@ -71,22 +71,9 @@ build() {
     --with-x-toolkit=gtk3 \
     "${_confflags[@]}"
   make -j"${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
-
-  cd ../${pkgbase}-${pkgver}-nox
-  ./configure \
-    --without-x \
-    --without-sound \
-    "${_confflags[@]}"
-  make -j"${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
-
-  cd ../${pkgbase}-${pkgver}-wayland
-  ./configure \
-    --with-pgtk \
-    "${_confflags[@]}"
-  make bootstrap -j"${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
 }
 
-# license shim for the three splits: ship upstream licence text (GPL-3.0-or-later)
+# license shim: ship upstream licence text (GPL-3.0-or-later)
 _emacs_licenses() {
   local _l
   for _l in COPYING COPYING.GPLv3 COPYING.LESSER LICENSE; do
@@ -123,65 +110,4 @@ package_emacs() {
   # /usr/share/emacs stays — it is the editor's runtime payload)
   rm -rf "${pkgdir}/usr/share/man" "${pkgdir}/usr/share/info" "${pkgdir}/usr/share/locale"
   _emacs_licenses "${pkgname}-${pkgver}" "${pkgdir}/usr/share/licenses/${pkgname}"
-}
-
-package_emacs-nox() {
-  pkgdesc='The extensible, customizable, self-documenting real-time display editor without X11 support'
-  depends=(
-    gmp
-    gnutls
-    hicolor-icon-theme
-    lcms2
-    libacl.so
-    libdbus-1.so
-    libgccjit
-    libncursesw.so
-    libsystemd.so
-    libtree-sitter.so
-    libxml2.so
-    zlib
-  )
-  provides=(emacs)
-  # trim: conflicts — house standard drops stock
-  # conflicts=(emacs)
-
-  cd ${pkgbase}-${pkgver}-nox
-  make DESTDIR="${pkgdir}" install
-
-  # fix user/root permissions on usr/share files
-  chown -R root:root "${pkgdir}/usr/share/emacs/${pkgver}"
-  # trim: man/info/locales — lean consumer-rebuild recipe
-  rm -rf "${pkgdir}/usr/share/man" "${pkgdir}/usr/share/info" "${pkgdir}/usr/share/locale"
-  _emacs_licenses "${pkgbase}-${pkgver}-nox" "${pkgdir}/usr/share/licenses/${pkgname}"
-}
-
-package_emacs-wayland() {
-  pkgdesc='The extensible, customizable, self-documenting real-time display editor with PGTK enabled'
-  depends+=(
-    libacl.so
-    libdbus-1.so
-    libfontconfig.so
-    libfreetype.so
-    libgdk-3.so
-    libgdk_pixbuf-2.0.so
-    libgif.so
-    libgio-2.0.so
-    libglib-2.0.so
-    libgobject-2.0.so
-    libgtk-3.so
-    libharfbuzz.so
-    libtree-sitter.so
-  )
-  provides=(emacs)
-  # trim: conflicts — house standard drops stock
-  # conflicts=(emacs)
-
-  cd ${pkgbase}-${pkgver}-wayland
-  make DESTDIR="${pkgdir}" install
-
-  # fix user/root permissions on usr/share files
-  chown -R root:root "${pkgdir}/usr/share/emacs/${pkgver}"
-  # trim: man/info/locales — lean consumer-rebuild recipe
-  rm -rf "${pkgdir}/usr/share/man" "${pkgdir}/usr/share/info" "${pkgdir}/usr/share/locale"
-  _emacs_licenses "${pkgbase}-${pkgver}-wayland" "${pkgdir}/usr/share/licenses/${pkgname}"
 }

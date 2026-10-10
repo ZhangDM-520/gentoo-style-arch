@@ -246,7 +246,6 @@ dbus-broker-git: dbus-units
 dbus-broker: dbus-units
 dbus: libdbus
 easyeffects-git: easyeffects
-emacs: emacs
 fcitx5-chinese-addons-git: fcitx5-chinese-addons
 fcitx5-git: fcitx5
 fcitx5-gtk-git: fcitx5-gtk

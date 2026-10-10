@@ -973,6 +973,20 @@
     (`tests/cups-config-shim.sh`, mutation-probed). Symptom heuristic: a
     "missing separator" in a generated Makefile means look for a
     multi-line variable *value*, not for a make bug.
+51. **Recipe outputs must be co-installable by construction — mutually
+    exclusive full alternative builds are separate recipes, never split
+    outputs** (2026-10-10 run #110 emacs): the builder installs every
+    output of a recipe in ONE `pacman -U` transaction, so outputs that
+    ship the same paths (emacs-nox/emacs-wayland each carried their own
+    `/usr/bin/emacs` + elisp tree) are un-installable as splits by
+    construction. A variant is a separate recipe with
+    `provides=(<stock>)` + `conflicts=(<stock>)`, and that `conflicts`
+    is *load-bearing* — never a `# trim:`-able stock leftover. Trim
+    judgment test: would removing this field change installability
+    semantics? If yes, it is not stock weight. (Tooling footnote from
+    the same fix: programmatic excision must search anchors from the cut
+    offset, never byte 0 — verify the function list after any scripted
+    edit.)
 
 ## 2. Workspace overview
 
