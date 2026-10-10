@@ -793,7 +793,12 @@
     in *generated* sources (flex/bison output) instead of code you can
     patch, drop the build system's `-Werror` promotion at the recipe seam
     (or use its opt-out variable) — keep the warning visible, never patch
-    generator output (`docs/NOTE.md` 2026-10-08 runs #62–#64).
+    generator output (`docs/NOTE.md` 2026-10-08 runs #62–#64; recurred
+    2026-10-10 openal-git where the cleaner half of the rule was the
+    upstream `ALSOFT_ENABLE_MODULES=OFF` opt-out — the GCC-snapshot module
+    build broke in toolchain-owned sources and in an entity merge, both
+    unpatchable from the recipe; verify the `install()` file sets before
+    turning an upstream feature mode off).
 38. **`$W` sync must reset only what the incoming commits change — the
     builder's version-sync marks are runtime state** (2026-10-08): each
     run's sync phase rewrites recipe `pkgver`/`pkgrel` in `$W` to track

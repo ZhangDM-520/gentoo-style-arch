@@ -37,6 +37,45 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-10 — run #120 openal-git: upstream's C++20-modules mode vs the GCC-snapshot toolchain
+
+**Symptom.** Run #120 (82-package remainder) died 8 s in at `openal-git`,
+then again at 27 s after the first seam fix. Two stacked failures, both
+inside upstream's `ALSOFT_ENABLE_MODULES` C++20-modules build (auto-on for
+CMake ≥ 3.28 + GCC ≥ 15): (1) CMake's `@cmake_cxx_std@synth_*` targets
+compile the toolchain's own `/usr/include/c++/17.0.0/bits/std.cc` module
+units under upstream's unconditional `-Werror=undef` promotion, and their
+bare `#if __cpp_lib_*` feature tests trip it; (2) past that, a module-build
+entity merge lost `al::Device::OutputMode1`'s enumerators mid-TU
+(`'Any' is not a member of 'OutputMode'` in `alc/alc.cpp` although
+`alc/device.h` defines all ten) — the header is self-consistent and a
+classic (non-module) compile resolves it fine.
+
+**Root cause.** The toolchain transition class (MEMORY rule 37): the
+experimental GCC snapshot's module support plus upstream's promoted
+`-Werror` do not compose. Neither half is fixable from the recipe's own
+code — one failure is in toolchain-owned sources we must not patch, the
+other is a compiler entity bug.
+
+**Fix.** CMake 4 auto-enables per-TU **module scanning** on compilers claiming
+module support — that is what compiled the toolchain's `std` module units and
+what made every plain `.cpp` a module-scanned TU (the entity bug). Upstream's
+`ALSOFT_ENABLE_MODULES=OFF` alone does *not* stop the scanning (it only gates
+the `.cppm` targets) — the recipe now passes all three seams:
+`ALSOFT_ENABLE_MODULES=OFF`, `CMAKE_CXX_SCAN_FOR_MODULES=OFF`,
+`CMAKE_CXX_MODULE_STD=OFF` (verified in a scratch configure: zero
+`synth`/`modmap`/`-fmodules-ts` in the generated ninja). Content-neutral:
+`install()` ships only the `public_headers` FILE set. The stale `src/build`
+module state was wiped before the rehearsal.
+
+**Rule.** When a toolchain bump breaks an upstream *feature mode* (modules,
+new codegen), reach for the opt-out seams at the recipe, and verify the
+**generated build graph** proves them off (no `synth`/`modmap`/`-fmodules-ts`
+in the ninja) — upstream's feature option may not control the build system's
+own auto-behaviour (CMake 4's module scanning). Check the `install()` file
+sets before trading correctness for features. Re-evaluate when the toolchain
+moves — three flags to remove.
+
 ## 2026-10-10 — run #119: probe false-positive on a path-style `DT_NEEDED` (mujs/mpv) + gnupg's concurrent inkscape conversions crashed
 
 **Symptom.** The narrowed run (#119, 88-package tail) built `poppler`,

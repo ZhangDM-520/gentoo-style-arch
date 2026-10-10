@@ -50,9 +50,21 @@ build() {
   fi
 
   # CMAKE_BUILD_TYPE=None: stock convention — uses makepkg CFLAGS, adds no -O3
+  # Modules off (ALSOFT_ENABLE_MODULES=OFF + CMAKE_CXX_SCAN_FOR_MODULES=OFF +
+  # CMAKE_CXX_MODULE_STD=OFF): CMake 4 auto-enables per-TU module scanning on
+  # compilers claiming module support, and that path does not survive the
+  # GCC-snapshot toolchain (run #120, 2026-10-10): CMake synthesized the std
+  # module from the toolchain's own bits/std.cc under upstream's -Werror=undef
+  # promotion, and scanned TUs lost al::Device::OutputMode1's enumerators
+  # mid-compile (module entity merge). The upstream option alone does NOT
+  # stop the scanning (it only gates the .cppm targets) — all three flags are
+  # needed. Content-neutral: install() ships only the public_headers FILE set.
   cmake -S openal-soft -B build -G Ninja \
     -D CMAKE_INSTALL_PREFIX=/usr \
     -D CMAKE_BUILD_TYPE=None \
+    -D ALSOFT_ENABLE_MODULES=OFF \
+    -D CMAKE_CXX_SCAN_FOR_MODULES=OFF \
+    -D CMAKE_CXX_MODULE_STD=OFF \
     -D CMAKE_INSTALL_LIBDIR=lib
   cmake --build build --parallel "${GSA_BUILD_JOBS:-$(nproc)}"
 }
