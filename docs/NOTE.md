@@ -37,6 +37,40 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-10 — run #117 graphviz: hardcoded `tcl8.6` dedup path went stale when system Tcl moved to 9.0
+
+**Symptom.** Run #117 reached 161 ok then `graphviz` failed in `package()`
+(rc=1, 5m57s): `make install` succeeded but the dedup step
+`cd "${pkgdir}/usr/lib/tcl8.6"` exited 1 — the staged tree has no `tcl8.6`
+directory. Dispatch stopped; 91 packages never started.
+
+**Root cause.** Version-path drift. The recipe's Tcl-binding dedup step
+hardcoded the *system* Tcl script dir (`tcl8.6`), but the installed Tcl is now
+9.0.1-1, and graphviz 16.1.0 stages its bindings at
+`$pkgdir/usr/lib/tcl9.0/graphviz` plus the real tree `usr/lib/graphviz/tcl`.
+Any Tcl major-version bump breaks the hardcoded path.
+
+**Fix.** Made the dedup version-agnostic: loop over `$pkgdir/usr/lib/tcl*/`
+dirs that contain a `graphviz` subdir, `rm -fr` then
+`ln -s ../graphviz/tcl graphviz`. pkgrel 1→2. `package()`-side-only change, so
+the archive was regenerated with `makepkg -Rf` from the surviving build tree
+(no full rebuild). Verified in the archive and installed system:
+`usr/lib/tcl9.0/graphviz -> ../graphviz/tcl`, no `tcl8.6`, no absolute
+symlinks (`tar -tvf | grep ' -> /'`); `pacman -Qi graphviz` = 16.1.0-2.
+Sibling scan: `libnewt` (whiptcl-tcl9.patch) and `sqlite` (tcl9-aware
+tclConfig.sh handling) already track Tcl 9 — no drift there.
+
+**Rule.** Never hardcode a package-versioned install path (Tcl script dirs,
+Python site-packages majors, …) in `package()`; match the versioned glob or
+derive the path from the tool (`tclConfig.sh`). When one recipe drifts this
+way, sibling-scan every recipe touching the same versioned path in the same
+wave.
+
+**Operational (owner directive).** Relaunch runs must narrow the selection
+range to the remaining unbuilt tail (start at the failed package's index in
+`-l -g …`) instead of re-sweeping the full range with `-s` — the per-package
+skip check over already-built packages costs real time.
+
 ## 2026-10-10 — run #116 zen-browser-pgo install wall: upstream's `mach install` launcher symlink dangled into everyone's `/usr/bin/firefox`
 
 **Symptom.** Run #116 reached 143/252; `zen-browser-pgo`'s 94-minute

@@ -1841,12 +1841,16 @@ constant, not a baked path).
   package shipped; a pc file other packages `Require` is ABI-adjacent
   interface.
 - **Never pin a tcl-versioned install path in `package()`** (2026-10-07
-  sqlite): tcl 9's `TCL_LIBRARY` is the pseudo-path `zipfs:/lib/tcl/tcl_library`,
+  sqlite; recurred 2026-10-10 graphviz): tcl 9's `TCL_LIBRARY` is the pseudo-path `zipfs:/lib/tcl/tcl_library`,
   so an upstream `install-tcl` wrote a literal `$pkgdir/zipfs:/…` tree and the
   recipe's `mv usr/lib/tcl8.6/*` glob found nothing — a tcl-wave wall in a
-  PACKAGING step, not a compile. Derive the location from `tclConfig.sh`/
-  `TCL_PACKAGE_PATH` (tcl 9: `/usr/lib`) or locate the payload by content
-  (`find -name pkgIndex.tcl`) and move it, pruning the scaffolding fail-loud.
+  PACKAGING step, not a compile. The graphviz recurrence pinned the dedup dir
+  `usr/lib/tcl8.6` itself; after the Tcl 9 bump the bindings staged at
+  `usr/lib/tcl9.0` and `cd` failed. Derive the location from `tclConfig.sh`/
+  `TCL_PACKAGE_PATH` (tcl 9: `/usr/lib`), locate the payload by content
+  (`find -name pkgIndex.tcl`), or match a `tcl*/` glob — never a literal
+  versioned dir. On one such drift, sibling-scan every recipe touching the
+  same versioned path in the same wave.
 - **`makepkg` is a WRITER of the recipe it touches** (2026-10-06): `--nobuild`
   still runs `pkgver()` and rewrites `pkgver=` in place (`/usr/bin/makepkg:190`
   `update_pkgver`) — a "read-only" screening sweep dirtied 12 tracked

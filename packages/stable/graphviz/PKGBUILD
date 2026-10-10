@@ -5,7 +5,7 @@
 
 pkgname=graphviz
 pkgver=16.1.0
-pkgrel=1
+pkgrel=2
 pkgdesc='Graph visualization software'
 url='https://www.graphviz.org/'
 license=('EPL')
@@ -65,8 +65,12 @@ package() {
 
 	install -Dm644 LICENSE -t "${pkgdir}"/usr/share/licenses/$pkgname/
 
-	# Deduplicates TCL libraries
-	cd "${pkgdir}/usr/lib/tcl8.6"
-	rm -fr graphviz
-	ln -s ../graphviz/tcl graphviz
+	# Deduplicates TCL libraries — the Tcl script dir tracks the system Tcl
+	# major version (tcl8.6, tcl9.0, ...), so match any rather than hardcode
+	local _tcl_lib
+	for _tcl_lib in "${pkgdir}"/usr/lib/tcl*/; do
+		[[ -d "$_tcl_lib/graphviz" ]] || continue
+		rm -fr "$_tcl_lib/graphviz"
+		ln -s ../graphviz/tcl "$_tcl_lib/graphviz"
+	done
 }
