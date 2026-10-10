@@ -1000,7 +1000,14 @@
     (libpulse-git ↔ gstreamer) is the "prerequisites assumed installed"
     boundary, not an edge to force: name it and accept the stock
     build-time prereq. Re-verify after every dep-set change — the
-    topology-edge lint is still merge-gated.
+    topology-edge lint is still merge-gated. **Transitive variant**
+    (2026-10-10 run #112 qemu): a REPO package in the dep closure can
+    need an IgnorePkg-protected house name (`brltty` → `libspeechd`,
+    provided by the house `speech-dispatcher` member) — the direct-dep
+    scan cannot see through repo chains. Diagnostic signature in the
+    makepkg log: `warning: ignoring package X` +
+    `cannot resolve "X", a dependency of "Y"` → give X's provider
+    member the consumer edge.
 
 ## 2. Workspace overview
 

@@ -1,0 +1,15 @@
+--- a/build.sh
++++ b/build.sh
+@@ -12,6 +12,12 @@
+ 
+   . prepare_vscode.sh
+ 
++  # house: extensions/postinstall.mjs prunes typescript to lib/+package.json
++  # but leaves npm's .bin/tsc{,server} shims dangling, and the desktop
++  # packaging copies node_modules/.bin/** and dies stat'ing them (ENOENT).
++  # Drop the dangling shims the prune leaves behind.
++  rm -f vscode/extensions/node_modules/.bin/tsc vscode/extensions/node_modules/.bin/tsserver
++
+   cd vscode || { echo "'vscode' dir not found"; exit 1; }
+ 
+   export NODE_OPTIONS="--max-old-space-size=${MAX_OLD_SPACE_SIZE}"

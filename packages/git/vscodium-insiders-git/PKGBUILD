@@ -3,7 +3,7 @@
 
 pkgname=vscodium-insiders-git
 pkgver=1.135.06055.r0.g5a73682c
-pkgrel=1
+pkgrel=2
 pkgdesc="Free/Libre Open Source Software Binaries of VSCode Insiders (git build from latest commit)."
 arch=('x86_64' 'aarch64' 'armv7h')
 url='https://github.com/VSCodium/vscodium.git'
@@ -44,11 +44,13 @@ source=(
     "${pkgname}.desktop"
     "${pkgname}-wayland.desktop"
     "${pkgname}-uri-handler.desktop"
+    "fix-dangling-tsc-shims.patch"
 )
 sha256sums=('SKIP'
             'd5ce6e1efb74cadd1ff006859e11e7c9fa05447a7002ad04f650c4b0f1ed0d70'
             '910e86ff7a8be9ef295c5f6a74f1ddf1610c6f83cbc61aa829eec4ecab9d20cd'
-            '4f0b1c04b0a246dea0edd07dd8dcbc706b037324560d25a766328ab295266674')
+            '4f0b1c04b0a246dea0edd07dd8dcbc706b037324560d25a766328ab295266674'
+            'fee51d54becd6dda555af8bf1151f32924e46b5dffca4ed0baf9ca72fa911b6a')
 provides=(
     'codium'
     'vscodium'

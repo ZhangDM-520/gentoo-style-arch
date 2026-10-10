@@ -3,6 +3,7 @@
 !.SRCINFO
 !BUILDING
 !PKGBUILD
+!fix-dangling-tsc-shims.patch
 !vscodium-insiders-git-uri-handler.desktop
 !vscodium-insiders-git-wayland.desktop
 !vscodium-insiders-git.desktop

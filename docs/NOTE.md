@@ -89,43 +89,109 @@ scan); run it after any dep-set change and before each relaunch. A
 cyclic unmet makedep pair is not an edge case to force: it is the
 "prerequisites assumed installed" boundary — name it and move on.
 
-## 2026-10-10 — run #111 vscodium-insiders-git: partial npm extraction under f2fs checkpoint pressure (host class) — rebuild, no recipe defect
+## 2026-10-10 — run #112 qemu wall: an IgnorePkg-protected HOUSE provider behind a repo package's dependency chain — transitive unmet-dep inversion
 
-**Symptom.** `vscodium-insiders-git` failed after 23m00s at
-`vscode-linux-x64-min-packing` → `package-linux-x64`:
+**Symptom.** Run #112 died at `qemu` (3m51s, dependency phase): 18
+missing deps (brltty, capstone, dtc, libcacard, libiscsi, libslirp,
+multipath-tools, ndctl, python-distlib, rutabaga-ffi, sdl2_image,
+spice-protocol, spice, usbredir, vde2, virglrenderer, vte3,
+zlib-static). The shim's `pacman -S --asdeps` aborted: `warning:
+ignoring package libspeechd-0.12.1-3.1` / `cannot resolve "libspeechd",
+a dependency of "brltty"` → `brltty cannot be upgraded` → `could not
+satisfy dependencies`, so none of the 18 installed.
+
+**Root cause.** One hop past the evince class: qemu's dep `brltty`
+(repo) requires `libspeechd`, whose name is **IgnorePkg-protected**
+(standing anti-stock-replacement registration) and whose only provider
+is the HOUSE `speech-dispatcher` member (path `packages/stable/libspeechd`,
+output `libspeechd`) — ordered *after* qemu. pacman refuses to install
+stock `libspeechd` (ignored), so the whole transaction dies. The
+unmet-dep inversion scan cannot see this: the unmet dep (`brltty`) has
+no set provider; the inversion hides in the repo package's own dep
+chain.
+
+**Fix.** `qemu` record += consumer edge `speech-dispatcher` (cycle-free;
+reason: the dep closure reaches the house `libspeechd` through repo
+`brltty`). All 18 missing names verified in the sync DBs
+(`pacman -Si` × 18: all present) — the one ordering fix suffices.
+
+**Validation.** `--audit`/`--list` + dry-run sweep; the scan's direct
+class re-verified clean; battery after this entry. The qemu rebuild
+rides run #113's resume (speech-dispatcher now builds+installs first
+through `-i`).
+
+**Rule.** The transitive variant of rule 52: when a REPO package in a
+recipe's dep closure needs an IgnorePkg-protected name, the house
+provider member must precede the recipe in the sort. Diagnostic
+signature: `warning: ignoring package X` + `cannot resolve "X", a
+dependency of "Y"` in the makepkg log — X's provider member gets the
+consumer edge. The direct-dep scan does not see through repo chains:
+check this pattern in every dep-phase wall's log tail.
+
+## 2026-10-10 — run #111/#112 vscodium-insiders-git: upstream's typescript prune leaves dangling .bin shims that the desktop packaging stats — house patch + network-dependent pack fetch
+
+**Symptom.** Two runs, one packaging step. Run #111: 23m00s,
+`vscode-linux-x64-min-packing` → `package-linux-x64`,
 `Error: ENOENT: … stat '…/vscode/extensions/node_modules/.bin/tsc'`.
+Run #112: 29m21s, same task, `TypeError: fetch failed` (run #111's
+forensics initially blamed an f2fs/npm extraction flake — WRONG: see
+root cause; the corrected evidence is recorded here).
 
-**Root cause (host class).** The extensions workspace's nested
-`typescript@6.0.3` extracted **partially**: `bin/`, `lib/tsc.js`,
-`lib/_tsc.js`, the four top-level `.txt`s and most `.d.ts` files (130
-lib entries where the tarball carries ~2000) never landed, while npm's
-`.package-lock.json` recorded the package complete with the correct
-registry integrity. Directory mtimes sit inside the install window
-(12:08:13) — nothing deleted the files later; they were never written.
-The npm cache is intact: a control `npm install typescript@6.0.3` from
-the same cache produced a byte-complete tree. The published
-typescript-6.0.3.tgz ships all of the missing paths. dmesg shows
-`F2FS-fs (sda): blocked on checkpoint for 17831 ms` at 12:16:56 — the
-write path stalled mid-install and dropped small-file writes silently.
-The dangling `.bin/tsc`/`.bin/tsserver` symlinks then broke the
-packaging step's file walk 18 minutes later.
+**Root cause.** (a) The "partial" typescript tree is **upstream's
+deliberate prune**: `vscode/extensions/postinstall.mjs` keeps only
+`lib`+`package.json` in `node_modules/typescript` and deletes `bin/`,
+`tsc.js`/`_tsc.js` and the non-`lib.*.d.ts` files (the tsgo migration).
+It does NOT remove npm's `.bin/tsc`/`.bin/tsserver` shims, which are
+created from the package's `bin` field and dangle afterwards. The
+desktop `packageTask` copies production deps with `d/**` globs and —
+unlike the reh/web variants, which exclude `!d/.bin/**` — walks those
+`.bin` symlinks and dies stat'ing the dangling target. (The run-#111
+mtime forensics were correct: nothing deleted files later; the prune
+runs inside the install window.) (b) Run #112's `fetch failed` is a
+different, network-dependent step in the same packaging task — the
+host's registry path was slow/flaky at the time (curl to
+registry.npmjs.org: 200 after ~10s), and the failing raw `fetch` site
+prints no URL at default verbosity.
 
-**Fix.** None in the recipe — single data point, and the recipe is a
-victim. Rebuild (run #112's `-s` resume re-enters it: no archive
-exists).
+**Fix.** Recipe patch `fix-dangling-tsc-shims.patch` on vscodium's
+`build.sh` (applied by the existing prepare() `git apply` loop): drop
+the dangling `vscode/extensions/node_modules/.bin/tsc{,server}` shims
+after `. prepare_vscode.sh` (i.e. after installs, before the gulp
+stages) — completing the prune's own intent. pkgrel 1→2. For (b), no
+patch: `build/lib/fetch.ts`'s `fetchUrl` already retries 10×; the bare
+`TypeError` came from a non-wrapped site not yet identified. Next
+occurrence gets URL capture via the `BUILD_ARTIFACTSTAGINGDIRECTORY`
+verbose trigger (`fetch.ts` logs `Start fetching <url>`), then a
+targeted pre-seed or retry patch.
 
-**Validation.** Control install from the same npm cache → complete
-package (`bin/`, `lib/tsc.js`, all `.txt` present); tarball listing
-confirms upstream ships every missing path; mtimes rule out
-post-install deletion.
+**Validation.** Patch verified applicable (`git apply --check` against
+the pristine checkout), `bash -n` + `makepkg --printsrcinfo` on both
+twins (patch source + sha256 registered). Two rehearsals `-s -fi
+--no-deps vscodium-insiders-git` with `BUILD_ARTIFACTSTAGINGDIRECTORY`
+set: (1) 4m16s — the node-gyp Electron-header download
+(`electronjs.org/headers` 42.8.1) hit the same flaky network path;
+headers pre-seeded into `~/.cache/node-gyp/42.8.1` (host cache, every
+build re-downloaded them before). (2) 34m40s — past the shim walk (the
+`ENOENT .bin/tsc` did NOT recur: the patch works), through the
+built-in extension downloads (verbose trail: js-debug et al. from
+`api.github.com` release assets, all 200), then `TypeError: fetch
+failed` in `package-linux-x64` again at the 13.5-min mark. So the
+fetch failure is reproducible at pack (2/2 attempts reaching it), from
+a raw `fetch()` outside `fetchUrl` (the wrapped path logs under the
+verbose trigger and retried fine). Site not yet identified; next probe
+wraps `globalThis.fetch` with a stack-logging preload (extend the
+house patch's NODE_OPTIONS) to capture URL + caller. vscodium is
+deliberately excluded from the campaign runs (`401..515 517..`) until
+it clears, so it cannot block the ~130 packages behind it.
 
-**Rule.** Diagnostic signature for an extraction flake on this host: a
-package tree missing *non-contiguous* files with directory mtimes equal
-to the install window, dangling `.bin` symlinks, and an intact cache
-(control-install) — i.e. the write path, not the package or the recipe.
-Remedy is a rebuild; only engineer a verify/repair seam if the same
-package flakes twice. Check `dmesg`/`journalctl -k` for f2fs checkpoint
-stalls before blaming tooling.
+**Rule.** When a build tool's own cleanup prunes package contents, it
+must also neutralise the symlinks npm minted from the pruned files —
+and the packaging globs decide whether leftovers are fatal (desktop
+walks `.bin/**`, reh/web excludes it). Generalise before blaming the
+environment: run #111's "flaky extraction" story survived one night
+only because the tree was byte-identical on the second run — a
+deterministic tree is design, not weather. Record corrections in place;
+the wrong diagnosis is part of the history.
 
 ## 2026-10-10 — emacs: the variant splits were mutually exclusive full builds — recipe outputs must be co-installable by construction
 
