@@ -13,6 +13,7 @@ pkgbase = fish
 	makedepends = git
 	makedepends = jq
 	makedepends = llvm
+	makedepends = pcre2
 	makedepends = rust
 	depends = glibc
 	depends = libgcc

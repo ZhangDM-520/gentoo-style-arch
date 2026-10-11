@@ -37,6 +37,44 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-11 — run #134 transmission: a `USE_SYSTEM_*=ON` flag is a build-time dependency — it must be in `makedepends`
+
+**Symptom.** Run #134 built 13 packages clean (wxwidgets … shotwell), then
+`transmission` died 8 s into `build()` at cmake configure: `Could NOT
+find NATPMP (missing: NATPMP_LIBRARY NATPMP_INCLUDE_DIR)`.
+
+**Root cause.** The recipe configures `USE_SYSTEM_NATPMP=ON`,
+`USE_SYSTEM_MINIUPNPC=ON`, `USE_SYSTEM_B64=ON`, `USE_SYSTEM_DEFLATE=ON`,
+`USE_SYSTEM_EVENT2=ON`, `USE_SYSTEM_PSL=ON` — but `makedepends` declared
+none of their providers (only `dht` matched its flag). The runtime
+`depends` of the split outputs name them, and makepkg's dep phase prints
+`Checking runtime dependencies...` — but it installs **makedepends**
+only, so the build-time headers were never pulled: `libnatpmp`,
+`miniupnpc` and `libb64` were absent from the host and each would have
+walled configure in turn (`libdeflate`/`libevent`/`libpsl` were present
+by luck).
+
+**Fix.** Declare the full system surface in `makedepends`:
+`libb64 libdeflate libevent libnatpmp libpsl miniupnpc` alongside the
+existing `dht`. Sibling scan of every `USE_SYSTEM_*` recipe found the
+same latent omission in `fish` (`FISH_USE_SYSTEM_PCRE2=ON` → `pcre2`) and
+`qt6-tools` (`QLITEHTML_USE_SYSTEM_LITEHTML=ON` → `litehtml`) — both
+added in the same wave (their providers happened to be installed, so
+both ride their next rebuild unexercised). `cmake-git`'s mention is a
+comment, not a flag.
+
+**Validation.** `bash -n` + `makepkg --printsrcinfo` on all three
+recipes; rehearsal `-fi --no-deps transmission` ✓ — configure finds all
+six system libs, both outputs (`transmission-cli`, `transmission-gtk`)
+built and installed; fixture battery green.
+
+**Rule.** A `USE_SYSTEM_<X>=ON` configure flag is a *dependency
+declaration*: the provider belongs in `makedepends` even when a split
+output's runtime `depends` already names it — makepkg installs
+makedepends at build time and nothing else, so a name that exists only in
+`depends` builds solely by luck of the host. When auditing, cross-check
+every `USE_SYSTEM_` flag against `makedepends`, not against `depends`.
+
 ## 2026-10-11 — run #133 qt6-multimedia: the PGO trainer linked the stale stock lib, and the no-profile fallback shipped phase-1 binaries
 
 **Symptom.** Run #133's `qt6-multimedia` (PGO recipe, first-ever build in

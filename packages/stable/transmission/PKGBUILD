@@ -26,6 +26,12 @@ makedepends=(cmake
              glibmm-2.68
              gtk4
              gtkmm-4.0
+             libb64
+             libdeflate
+             libevent
+             libnatpmp
+             libpsl
+             miniupnpc
              ninja
              npm)
 _archive="transmission-$pkgver"

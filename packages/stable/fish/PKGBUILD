@@ -13,7 +13,7 @@ url='https://fishshell.com/'
 arch=(x86_64)
 license=('GPL-2.0-only AND BSD-3-Clause AND ISC AND MIT AND PSF-2.0')
 depends=(glibc libgcc pcre2)
-makedepends=(cmake git jq llvm rust)
+makedepends=(cmake git jq llvm pcre2 rust)  # pcre2: FISH_USE_SYSTEM_PCRE2=ON consumer (NOTE.md 2026-10-11)
 checkdepends=(expect procps-ng python-pexpect)
 optdepends=(
   'python: man page completion parser / web config tool'

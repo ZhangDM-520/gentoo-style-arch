@@ -12,6 +12,7 @@ pkgbase = qt6-tools
 	makedepends = clang
 	makedepends = cmake
 	makedepends = git
+	makedepends = litehtml
 	makedepends = llvm
 	makedepends = ninja
 	makedepends = qt6-declarative

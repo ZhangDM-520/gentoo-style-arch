@@ -21,10 +21,11 @@ depends=(glibc
 makedepends=(clang
              cmake
              git
+             litehtml
              llvm
              ninja
              qt6-declarative
-             vulkan-headers)
+             vulkan-headers)  # litehtml: QLITEHTML_USE_SYSTEM_LITEHTML=ON consumer (NOTE.md 2026-10-11)
 optdepends=('clang: for qdoc and lupdate'
             'qt6-declarative: for qdistancefieldgenerator, qdoc and lupdate')
 groups=(qt6)

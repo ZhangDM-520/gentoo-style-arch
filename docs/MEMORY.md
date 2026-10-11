@@ -1726,6 +1726,17 @@ constant, not a baked path).
 
 ## 6. Pitfall digest (full details: NOTE.md sections of same dates)
 
+- **A `USE_SYSTEM_<X>=ON` flag is a dependency declaration — the provider
+  belongs in `makedepends`, not just in the outputs' `depends`**
+  (2026-10-11 run #134 transmission): makepkg installs makedepends at
+  build time and nothing else, so six system libs the configure flags
+  demanded were missing (`libnatpmp`/`miniupnpc`/`libb64` genuinely
+  absent; `libdeflate`/`libevent`/`libpsl` present only by luck) and
+  cmake died on the first find. Same latent omission fixed preemptively
+  in `fish` (pcre2) and `qt6-tools` (litehtml). Audit rule: cross-check
+  every `USE_SYSTEM_` flag against `makedepends`, never against
+  `depends`. Details: NOTE.md 2026-10-11.
+
 - **A PGO fallback must rebuild — and a PGO trainer must link the library
   it trains** (2026-10-11 run #133 qt6-multimedia): the no-profile
   fallback only warned ("Falling back to LTO-only build") while the
