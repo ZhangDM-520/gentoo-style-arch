@@ -1072,12 +1072,14 @@
   multi-select them, non-TTY runs take the whole list, and app members are
   leaf builds — consumer expansion applies like everywhere else, but app
   packages typically have no consumers). `app` membership is
-  EXCLUSIVE — wiring a record into `app` replaces its previous group (22
-  members as of the 2026-09-27 wiring; `qt5ct`/`qt6ct` thereby left `core`,
+  EXCLUSIVE — wiring a record into `app` replaces its previous group (56
+  members as of the 2026-10-11 optional-application wiring: 22 at the
+  2026-09-27 wiring plus 33 leaf applications re-grouped from `stable`;
+  `qt5ct`/`qt6ct` thereby left `core`,
   while their `abi=must` tags are untouched — a Qt ABI batch must name them
   explicitly, since `-g core`'s solo dispatch no longer rebuilds them). A
   record's `app-cluster=<name>` tag collapses members into ONE prompt row
-  (six fcitx-family records show as `fcitx5 [member ids]`, toggled together;
+  (seven fcitx-family records show as `fcitx5 [member ids]`, toggled together;
   "N checked" counts rows) and is presentation only — packages stay separate
   in `-l`, the run record, ranges and lanes, and the tag is inert outside the
   app prompt. The `third-party` group was retired 2026-09-27 (`-g

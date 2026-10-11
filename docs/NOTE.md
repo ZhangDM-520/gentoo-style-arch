@@ -1,3 +1,51 @@
+## 2026-10-11 — optional applications re-grouped into `app` (23 → 56 members): the prompt surface now covers the whole optional desktop
+
+**Motivation.** `app` is the run's optional-application surface (TTY prompt
+multi-select, `-n` renders the rows, exclusion by omission), but it held only
+23 records — the 2026-09-27 wiring plus later leaf apps. Every other
+end-user application still sat in `stable`/`git`, so `-g stable` built wine,
+0ad, inkscape, obs-studio and the rest whether wanted or not and the prompt
+could not exclude them (the class of pain that forced the qt6-webengine
+retirement: heavy optional builds starving the host).
+
+**Change.** 33 leaf application records moved `stable` → `app` (`app`
+membership is exclusive; paths, edges and existing tags untouched): games and
+media `0ad audacity celluloid handbrake mpv obs-studio projectm vlc`;
+GNOME/GTK apps `evince file-roller gnome-calculator gnome-disk-utility loupe
+nautilus shotwell`; editors `emacs vim`; `inkscape` + `graphicsmagick` (its
+only consumer); `transmission kdeconnect`; `system-config-printer` (the
+printing STACK stays in `stable` — hplip, cups, gutenprint); `wine`; look
+tools `hyprpicker nwg-look`; session pieces `sway swaylock`; audio plugin
+packs `calf frei0r-plugins lsp-plugins-lv2 x42-plugins-lv2
+zam-plugins-lv2`; and `fcitx5-configtool`, which additionally joins the
+existing `app-cluster=fcitx5` prompt row — a deliberate tag ADDITION (rule
+21(d) protects existing tags from moves; this wires the seventh family
+record into its cluster).
+
+**Deliberately not moved** (whole-tree consumer scan): `lynx` (consumer
+`xdg-utils`, stable,core) and `wget` (consumer `lxc`) are stack dependencies
+no matter how optional-looking; `kvantum`/`kvantum-qt5`, `alacritty` and the
+CLI utility leaves (`playerctl wl-clipboard wev fsarchiver powertop
+smartmontools stress-ng ripgrep-all s-nail tesseract sword netpbm`) are not
+applications (owner call); `gvfs kio-extras gnome-autoar ffmpegthumbnailer
+totem-pl-parser` are desktop runtime components.
+
+**Coherence.** Every moved record is consumer-free or moves in its pair
+(`projectm`→`vlc`, `graphicsmagick`→`inkscape`, `sway`→`noctalia-git`), so no
+app member has a consumer outside `app` — the group's leaf-build property
+holds, and rule 21(a) is untouched (no ≥2-consumer hub moved).
+
+**Validation.** Loader sweep (`--audit`, `--list`, `--dry-run` for git,
+stable, core and `-g app`) clean; full fixture battery 56/56; group counts
+recomputed with README's own awk: app 56, stable 404, git 140, core 259,
+build-tools 16 — 875 memberships unchanged (pure moves). README table and
+MEMORY's group-state paragraph updated.
+
+**Rule.** Group wiring has one test: is the record an optional end-user
+application with no consumer outside `app`? A move is `app`-exclusive and
+never touches existing tags; a deliberate cluster join is a tag addition
+recorded here, not a move side effect.
+
 ## 2026-10-11 — run #137 nautilus: GNOME renamed `COPYING` → `LICENSE`, walling `package()` (license-file-rename class, second victim)
 
 **Symptom.** `nautilus` failed 39 s in, at the very end of `package()`:
