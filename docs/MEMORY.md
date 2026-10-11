@@ -1726,6 +1726,21 @@ constant, not a baked path).
 
 ## 6. Pitfall digest (full details: NOTE.md sections of same dates)
 
+- **A PGO fallback must rebuild — and a PGO trainer must link the library
+  it trains** (2026-10-11 run #133 qt6-multimedia): the no-profile
+  fallback only warned ("Falling back to LTO-only build") while the
+  phase-1 build dir kept its `-fprofile-generate` objects, so package()
+  shipped instrumented binaries (the `pgo_payload_refusals` gate refused
+  the install — the backstop working as designed); and the trainer linked
+  `-lQt6Multimedia` with no `-L`, picking the stale **stock** lib whose
+  `@Qt_6_PRIVATE_API` tags (QtPrivate_6_11_2) cannot resolve against our
+  Qt 6.13. Fix: `rm -rf build` + clean rebuild in the fallback, and
+  `-L "$srcdir/build/lib"` on the trainer link (first-build-only shape).
+  Sibling scan of the 14 PGO recipes: qt6-declarative carried the same
+  warn-only fallback (fixed, rides its next rebuild); dbus/pipewire/mesa
+  fall back correctly. `@Qt_6_PRIVATE_API` undefined-reference signatures
+  mean stock-vs-house Qt skew. Details: NOTE.md 2026-10-11.
+
 - **A compat shim keyed on a version macro is only as good as the
   macro's promise — gate it on the surface you map to** (2026-10-11 run
   #132 gtk4-git): cups 2.5 renamed the HTTP/IPP enums (`HTTP_STATUS_*`,

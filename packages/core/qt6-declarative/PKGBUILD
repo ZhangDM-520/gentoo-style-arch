@@ -124,6 +124,13 @@ build() {
       _configure_and_build
     else
       echo "  -> WARNING: no profile data generated. Falling back to LTO-only build."
+      # The phase-1 build dir still carries -fprofile-generate flags — an
+      # env restore alone leaves instrumented objects in place (they ship
+      # and the builder's payload gate refuses them). Clean rebuild with
+      # the restored flags (NOTE.md 2026-10-11; same-class sibling fix,
+      # rides the next rebuild).
+      rm -rf build
+      _configure_and_build
     fi
     rm -rf "${_pgo_dir}"
   fi

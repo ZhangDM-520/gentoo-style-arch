@@ -74,13 +74,17 @@ int main(int argc, char **argv) {
     return app.exec();
 }
 EOF
-  # compiled against installed Qt headers; runs against the BUILD-TREE libs
+  # compiled against installed Qt headers; runs against the BUILD-TREE libs.
   # Arch ships NO Qt6 .pc files — pkg-config returns nothing. Use explicit
   # include/lib paths for the trainer (compiled against installed headers,
-  # run against the BUILD-TREE libs).
+  # run against the BUILD-TREE libs). -L points the LINK at the build tree
+  # too: /usr/lib/libQt6Multimedia.so may be a stock build whose Qt private
+  # API tags (QtPrivate_6_11_2) do not resolve against our Qt 6.13
+  # (NOTE.md 2026-10-11).
   if ! g++ "${srcdir}/pgo_train.cpp" -o "${srcdir}/pgo_train" \
       -I/usr/include/qt6 -I/usr/include/qt6/QtCore -I/usr/include/qt6/QtGui \
       -I/usr/include/qt6/QtMultimedia -I/usr/include/qt6/QtNetwork \
+      -L"${srcdir}/build/lib" \
       -lQt6Core -lQt6Gui -lQt6Multimedia -fPIC 2>"${srcdir}/pgo_train.err"; then
     echo "  -> WARNING: trainer compile failed; multimedia training skipped"
     head -5 "${srcdir}/pgo_train.err" || true
@@ -131,6 +135,12 @@ build() {
       _configure_and_build
     else
       echo "  -> WARNING: no profile data generated. Falling back to LTO-only build."
+      # The phase-1 build dir still carries -fprofile-generate flags — an
+      # env restore alone leaves instrumented objects in place (they ship
+      # and the builder's payload gate refuses them). Clean rebuild with
+      # the restored flags (NOTE.md 2026-10-11).
+      rm -rf build
+      _configure_and_build
     fi
     rm -rf "${_pgo_dir}"
   fi

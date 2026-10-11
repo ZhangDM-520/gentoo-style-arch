@@ -37,6 +37,59 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-11 — run #133 qt6-multimedia: the PGO trainer linked the stale stock lib, and the no-profile fallback shipped phase-1 binaries
+
+**Symptom.** Run #133's `qt6-multimedia` (PGO recipe, first-ever build in
+the set) failed at the builder's payload gate: `refusing to install … a
+phase-1 PGO binary is packaged, so libgcov would recreate its build tree
+on every run` — every output carried `.gcda` instrumentation. Upstream
+of that, the lane log showed the trainer had died at link:
+`libQt6Multimedia.so: undefined reference to
+'QObjectPrivate::QObjectPrivate(QtPrivate_6_11_2)@Qt_6_PRIVATE_API'`,
+then `WARNING: trainer compile failed; multimedia training skipped`,
+`Generated 0 profile data files`, `Falling back to LTO-only build`.
+
+**Root cause.** Two coupled defects. (a) The trainer compiles against
+the *installed* Qt and links `-lQt6Multimedia` with no `-L`, so on a
+first-ever build it links the **stock** `/usr/lib/libQt6Multimedia.so`
+(6.11.2) — whose Qt private-API symbol tags (`QtPrivate_6_11_2`) cannot
+resolve against our Qt 6.13 `Qt6Core` — instead of the just-built
+build-tree lib it is meant to train. (b) The no-profile fallback only
+*prints* `Falling back to LTO-only build`: the phase-1 build dir still
+holds objects compiled with `-fprofile-generate`, the env restore
+replaces nothing (the comment in the phase-2 branch says it plainly:
+"env-flag changes require a CLEAN build dir"), and package() then ships
+the instrumented binaries. The builder's fail-closed
+`pgo_payload_refusals` gate caught it — that gate is exactly why this
+wall was a refusal instead of a poisoned install.
+
+**Fix.** Trainer: add `-L"${srcdir}/build/lib"` so the link resolves the
+build-tree `libQt6Multimedia` (the run already loads it via
+`LD_LIBRARY_PATH`); fallback: `rm -rf build` + `_configure_and_build`
+with the restored flags, so a missed training yields a real LTO-only
+rebuild instead of phase-1 payloads. Sibling scan of all 14 PGO recipes:
+the warn-only fallback also existed in `qt6-declarative` (same hunk
+applied there — rides its next rebuild unexercised); `dbus`, `pipewire`
+and `mesa-git` fall back correctly (unconditional phase-2 rebuild or an
+explicit manual-train message); the trainer stale-lib shape is
+first-build-only and unique to `qt6-multimedia` (every other Qt-family
+consumer links the house lib it already installed).
+
+**Validation.** `bash -n` + `makepkg --printsrcinfo` on both recipes;
+rehearsal `-fi --no-deps qt6-multimedia` ✓ — trainer now compiles and
+runs (profile data generated, phase 2 uses it), archives pass the
+payload gate, all three outputs (`qt6-multimedia`, `-ffmpeg`,
+`-gstreamer`) installed at 6.13.0_r9913. Fixture battery green.
+
+**Rule.** A PGO fallback must be a **rebuild**, never a warning: restoring
+env flags does not un-instrument already-compiled objects, and the
+instrumented payload is exactly what the builder's gate refuses. And a
+PGO trainer must link the library it trains — a first-ever build of a
+package whose *stock* version is installed will otherwise link the stale
+stock lib and die on versioned private-API tags (`@Qt_6_PRIVATE_API`
+mismatches are the signature). The fail-closed payload gate stays the
+backstop: it turned a silent instrumentation leak into a loud refusal.
+
 ## 2026-10-11 — run #132 gtk4-git: cups 2.5 renamed the HTTP/IPP enums out from under GTK's cups<3 compat block
 
 **Symptom.** Run #132's `gtk4-git` (PGO recipe) died compiling
