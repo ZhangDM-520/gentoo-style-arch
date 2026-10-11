@@ -41,8 +41,10 @@ pkgbase = 0ad
 	depends = which
 	options = !lto
 	source = https://releases.wildfiregames.com/0ad-0.28.0-unix-build.tar.xz
+	source = FixRustTargetDetection.diff
 	validpgpkeys = A035C8C19219BA821ECEA86B64E628F8D684696D
 	sha512sums = 6b5d7893d27d5fa71ce4cad1b424a7d4b36e8bc438c590cbd86d9872148d5051cd3215f8f8f4b817e48d4fe386d8902ecc0dcd612ca779306ef35dfa2898a878
+	sha512sums = dbd105f60233752cafe5b41c756208ebf8f13f0ad0618274e3511a33766ee30469952de9cc1920323dc82c762b236b764f1914842041f0b3c5eb273ec99892fe
 
 pkgname = 0ad
 	provides = libAtlasUI.so

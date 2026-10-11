@@ -1,0 +1,19 @@
+--- a/build/moz.configure/rust.configure
++++ b/build/moz.configure/rust.configure
+@@ -409,6 +409,16 @@
+         if len(narrowed) == 1:
+             return narrowed[0].rust_target
+ 
++        # rustc's target list carries vendor-specific triples (e.g.
++        # x86_64-oe-linux-gnu) that autoconf never emits; their raw OS collides
++        # with the generic target (both "linux-gnu"), so the steps above can
++        # leave two candidates and vendor disambiguation fails for hosts whose
++        # config.guess vendor ("pc") matches neither. Prefer the generic
++        # "unknown"-vendor target in that case.
++        narrowed = [c for c in candidates if c.target.vendor == "unknown"]
++        if len(narrowed) == 1:
++            return narrowed[0].rust_target
++
+         return None
+ 
+     rustc_target = find_candidate(candidates)

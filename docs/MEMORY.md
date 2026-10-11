@@ -1726,6 +1726,19 @@ constant, not a baked path).
 
 ## 6. Pitfall digest (full details: NOTE.md sections of same dates)
 
+- **A `-git` toolchain that grows new target/tool names can break a consumer's
+  detection logic with no API change** (2026-10-11 run #136 0ad): rust-git's
+  target list gained vendor-specific triples (`x86_64-oe-linux-gnu`,
+  `x86_64-unikraft-linux-musl`) whose raw OS collides with the generic
+  targets inside mozjs-128's autoconf→rustc translation, and the host's
+  config.guess vendor (`pc`) disambiguates nothing — "Don't know how to
+  translate x86_64-pc-linux-gnu for rustc". Fix is a consumer patch
+  (`FixRustTargetDetection.diff`, `"unknown"`-vendor fallback) wired through
+  0ad's bundled-mozjs `patches/patch.sh` seam. Companion trap: 0.28 renamed
+  `LICENSE.txt` → `LICENSE.md` + `license_*.txt`, walling `package()` — check
+  a never-before-exercised recipe's file references against the current
+  source tree. Details: NOTE.md 2026-10-11.
+
 - **A bundled consumer broken by a house `-git` library's API removal gets a
   consumer patch — and gbuild patches carry per-tarball levels**
   (2026-10-11 run #135 libreoffice): bundled firebird 3.0 calls the libtommath

@@ -14,9 +14,30 @@ depends=("0ad-data=$pkgver" 'binutils' 'boost-libs' 'curl' 'enet' 'libogg' 'libp
 makedepends=('boost' 'cmake' 'mesa' 'zip' 'libsm' 'rust' 'git' 'python' 'llvm' 'cbindgen'
              'premake')
 options=('!lto') # breaks spidermonkey linking (https://bugs.gentoo.org/746947)
-source=("https://releases.wildfiregames.com/$pkgname-$pkgver-unix-build.tar.xz")
+source=("https://releases.wildfiregames.com/$pkgname-$pkgver-unix-build.tar.xz"
+        "FixRustTargetDetection.diff")
 validpgpkeys=('A035C8C19219BA821ECEA86B64E628F8D684696D')  # Pablo Galindo Salgado <pablogsal@gmail.com>
-sha512sums=('6b5d7893d27d5fa71ce4cad1b424a7d4b36e8bc438c590cbd86d9872148d5051cd3215f8f8f4b817e48d4fe386d8902ecc0dcd612ca779306ef35dfa2898a878')
+sha512sums=('6b5d7893d27d5fa71ce4cad1b424a7d4b36e8bc438c590cbd86d9872148d5051cd3215f8f8f4b817e48d4fe386d8902ecc0dcd612ca779306ef35dfa2898a878'
+            'dbd105f60233752cafe5b41c756208ebf8f13f0ad0618274e3511a33766ee30469952de9cc1920323dc82c762b236b764f1914842041f0b3c5eb273ec99892fe')
+
+prepare() {
+  cd "$pkgname-$pkgver"
+
+  # rust-git's target list carries vendor-specific triples (x86_64-oe-linux-gnu,
+  # x86_64-unikraft-linux-musl, ...) that collide with the generic targets on
+  # the raw-OS narrowing inside mozjs-128's rust target detection, and the
+  # host's config.guess vendor ("pc") disambiguates nothing — configure dies
+  # with "Don't know how to translate x86_64-pc-linux-gnu for rustc" (run #136
+  # wall). Wire the mozjs-side fix through 0ad's own patch mechanism:
+  # patches/patch.sh is sourced inside the freshly unpacked mozjs on every
+  # build.sh run.
+  install -Dm644 "$srcdir/FixRustTargetDetection.diff" \
+    libraries/source/spidermonkey/patches/FixRustTargetDetection.diff
+  if ! grep -q FixRustTargetDetection libraries/source/spidermonkey/patches/patch.sh; then
+    printf '\npatch -p1 <"${PATCHES}"/FixRustTargetDetection.diff\n' \
+      >> libraries/source/spidermonkey/patches/patch.sh
+  fi
+}
 
 build() {
   cd "$pkgname-$pkgver"
@@ -69,6 +90,9 @@ package() {
   install -Dm644 build/resources/${pkgname}.appdata.xml "${pkgdir}/usr/share/metainfo/${pkgname}.appdata.xml"
   install -Dm644 build/resources/${pkgname}.png "${pkgdir}/usr/share/pixmaps/${pkgname}.png"
 
-  # license: ship the upstream GPL-2.0-or-later (LICENSE.txt) text
-  install -Dm644 LICENSE.txt "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE.txt"
+  # license: 0.28 replaced the top-level LICENSE.txt with LICENSE.md (the
+  # licensing-details index) plus per-license texts; ship both the index and
+  # the operative GPL-2.0-or-later text
+  install -Dm644 LICENSE.md "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE.md"
+  install -Dm644 license_gpl-2.0.txt "${pkgdir}/usr/share/licenses/${pkgname}/license_gpl-2.0.txt"
 }

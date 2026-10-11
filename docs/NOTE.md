@@ -37,6 +37,55 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-11 — run #136 0ad: rust-git's new vendor-specific targets break mozjs's host-triplet translation, and 0.28 renamed its license file
+
+**Symptom.** First-ever build of `0ad` died 6 min in at the bundled mozjs-128
+configure: `checking for rust host triplet... ERROR: Don't know how to
+translate x86_64-pc-linux-gnu for rustc`. With that past, the build completed
+and `package()` then failed on `install: cannot stat 'LICENSE.txt'`.
+
+**Root cause (rust triplet).** mozjs's `build/moz.configure/rust.configure`
+maps autoconf triples to rustc targets by narrowing candidates keyed on
+`(cpu, endianness, canonical os)`. The house `rust-git` (1.101.0-nightly)
+target list now carries vendor-specific triples — `x86_64-oe-linux-gnu`,
+`x86_64-unikraft-linux-musl` — whose *raw OS* collides with the generic
+targets (`linux-gnu` for both `oe` and `unknown`). The raw-OS narrowing
+therefore leaves two candidates, and the vendor disambiguation fails because
+the host's config.guess vendor (`pc`) matches neither (`oe`/`unknown`) —
+emulated exactly: 10 key candidates → 2 after raw-OS → 0 after vendor → die.
+The sanitizer targets (`…-linux-gnuasan` etc.) are red herrings; their raw OS
+differs.
+
+**Root cause (license).** 0.28 replaced the top-level `LICENSE.txt` with
+`LICENSE.md` (licensing-details index) plus `license_gpl-2.0.txt` /
+`license_lgpl-2.1.txt` / `license_mit.txt` / `license_dbghelp.txt`. The
+recipe's `package()` still installed `LICENSE.txt`; nothing had exercised it
+before (0ad was never-started in this workspace).
+
+**Fix.** `FixRustTargetDetection.diff` appends an `"unknown"`-vendor fallback
+to `detect_rustc_target`'s `find_candidate` (after the vendor step, so an
+explicit vendor-specific `--host` still wins), wired through 0ad's own bundled
+mozjs seam: `prepare()` drops it into `libraries/source/spidermonkey/patches/`
+and appends its `patch -p1` line to `patches/patch.sh` behind a `grep -q`
+guard — `patch.sh` is sourced inside the freshly unpacked mozjs on every
+`build.sh` run, so the registration is self-healing across makepkg
+re-extractions. `package()` now ships `LICENSE.md` + `license_gpl-2.0.txt`.
+
+**Validation.** Rehearsal `-fi --no-deps 0ad` (owner CPU `--lanes 2 --jobs 11
+--intensity max`): first pass ✓ past the wall (`checking for rust host
+triplet... x86_64-unknown-linux-gnu`, patch visible as `patching file
+build/moz.configure/rust.configure`) and through the full game build; second
+pass with the license fix ✓ 419 s, run record `0ad succeeded 0 419 ok`,
+installed `0ad 0.28.0-3.1`, archive ships `usr/bin/pyrogenesis` and both
+license files. Source/checksum positional mapping verified against the real
+sha512 (the run-#135 lesson applied).
+
+**Rule.** A `-git` toolchain that grows new target names can break *consumers'
+detection logic* even when no API changed — patch the consumer's detector
+through its own patch seam. And a recipe first exercised after a long time
+should have its `package()` file references checked against the current
+source tree (upstream renames license/readme files without fanfare).
+
 ## 2026-10-11 — run #135 libreoffice: bundled firebird 3.0 speaks libtommath's removed legacy API — plus two patch-machinery pitfalls
 
 **Symptom.** `libreoffice-fresh` failed 10 min into run #135 compiling the
