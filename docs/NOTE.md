@@ -37,6 +37,74 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-11 — qt6-webengine starves this host into a hard freeze (and takes plymouth with it) — both recipes retired by owner decision
+
+**Symptom.** The `qt6-webengine` build (Bundled Chromium, nested ninja
+23k edges, jumbo CXX at -j24) starves the machine into a hard freeze —
+worse than the zen-browser class, per owner observation. The 2026-10-11
+rehearsal froze the host (reboot required; the same day's qemu builds had
+already frozen it 3/3, see the entry below). Owner decision on the spot:
+**retire `qt6-webengine` and `plymouth`** from the set. Stock
+`qt6-webengine` remains the runtime provider — owner confirms stock
+qt6-webengine paired with the self-built stack is fine.
+
+**History (the recipe's last three walls, for the rules below).** Before
+the freeze wall, run #130's `qt6-webengine` walled three times, each one
+layer deeper: (1) ninja `.rsp` **file names** embed the escaped build
+path, and the deep workspace path pushed the jumbo-merge rule name past
+NAME_MAX (fix had been `_build_dir="$HOME/Workspace/qwe-build"`, a short
+scratch dir on the nvme home); (2) `av_stream_get_first_dts` is an
+accessor Chromium adds to its bundled `third_party/ffmpeg` fork only —
+absent from every public FFmpeg n3.4–n8.0 and from the installed
+libavformat, so the system-ffmpeg build could never compile it (fix had
+been `ffmpeg-9.patch` dropping the first-DTS refinement); (3) icu-git
+78.3.r454 (Unicode 18 dev) made `closeOver(USET_CASE_INSENSITIVE)`
+return supplementary members (U+1DF95 case-folds to U+00DF), tripping
+V8's generator `Canonicalize` BMP-only `CHECK_LE` — a silent `int3; ud2`
+SIGTRAP at `ch=0x1df95` (fix had been `v8-icu-supplementary.patch`,
+upstream V8's `RemoveSupplementary` semantic core). Both patches, their
+recipe wiring and the `_build_dir` seam were validated (patch dry-runs,
+makepkg checksum pass, targeted `ninja … gen/v8/src/regexp/
+special-case.cc` probe green) — then the freeze ended the experiment and
+all of it died with the recipe.
+
+**Fix (owner decision).** `git rm` both recipes
+(`packages/stable/qt6-webengine`, `packages/stable/plymouth`) and their
+`config/topology.conf` records; de-dangle the one consumer edge
+(`fcitx5-chinese-addons-git` listed `qt6-webengine` in its build-order
+edges — the record is gone, the edge goes with it, while its pacman
+`depends=('qt6-webengine')` stays: stock repos supply that name, same
+shape as systemd's `qemu-base` optdep); re-derive the README roster
+counts (650 records / 875 group memberships, `stable` 437). Plymouth had
+no wall of its own — retired in the same stroke as unneeded boot-chain
+surface. Nothing is reinstated by this entry.
+
+**Validation.** `fish build-all.fish --audit` rc 0 and `--list` clean at
+650 records; the re-check awk (README) prints the table's numbers once
+comment lines are excluded (the un-filtered version counts the
+`# Record: id|path|groups|…` header and the commented-out `linux-cachyos`
+record — the command now filters `!/^#/`); no live `qt6-webengine`/
+`plymouth` references outside NOTE.md history and stock-name pacman
+deps; full fixture battery PASS.
+
+**Rule.** Same class as the qemu retirement one entry below: a build that
+starves or hard-freezes this host is **retired**, not throttled around —
+the freeze corrupts in-flight state (the USB workspace dock drops
+`sudden-power-off`) and each retry costs the whole machine. If either
+recipe is ever re-added, first reproduce in a bounded observed rehearsal
+(`--lanes 1 --jobs 2`, nothing else running), treat the freeze as a
+kernel/memory-pressure trigger, and capture the freezing step from
+`.state/logs/<pkg>.log` plus `journalctl -b -1` before any further
+attempt. The three transferable wall rules survive the recipe: gn/ninja
+`.rsp` names embed the escaped build path (deep workspaces need short
+build dirs); bundled-fork-only APIs and ICU data assumptions are the two
+shapes of system-library skew (patch the consumer, never the `abi=must`
+provider; backport upstream's semantic core); a silent `int3; ud2`
+SIGTRAP is a lowered `CHECK_*` — `gdb -batch -ex run -ex bt` and the live
+register name the failed assertion in one shot. Patches landing in a git
+**submodule** need an idempotent `prepare()` guard (reverse dry-run):
+repeat makepkg re-runs `prepare()` without resetting the submodule tree.
+
 ## 2026-10-11 — run #129 kguiaddons: pyside6-git mapped five stock names but provided three, and both sides resolved the uv python
 
 **Symptom.** Run #129 (53-package tail) walled in `kguiaddons`'s

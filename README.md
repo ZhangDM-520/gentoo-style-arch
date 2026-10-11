@@ -23,10 +23,10 @@ verification.
 
 ## What is included
 
-The current set has 652 recipe records — one per recipe directory — and 877
+The current set has 650 recipe records — one per recipe directory — and 875
 group memberships (counts of the `groups` tokens in `config/topology.conf`,
 counted 2026-10-11; re-check with
-`awk -F'|' 'NF>2 {n=split($3,a,","); for(i=1;i<=n;i++) c[a[i]]++} END {for (g in c) print g, c[g]}' config/topology.conf`).
+`awk -F'|' '!/^#/ && NF>2 {n=split($3,a,","); for(i=1;i<=n;i++) c[a[i]]++} END {for (g in c) print g, c[g]}' config/topology.conf`).
 The counts differ because many records are dual-members (`stable,core`,
 `core,build-tools`, `git,core`, …), and 81 split-package recipes build many
 pacman package names — one recipe, many pkgnames (`gst-plugins-base`,
@@ -40,7 +40,7 @@ members come from `packages/git/` and `packages/stable/`:
 | Group | Members | Purpose |
 | --- | ---: | --- |
 | `git` | 140 | Top-level development and rolling packages |
-| `stable` | 439 | Stock-name packages synchronized with Arch repositories |
+| `stable` | 437 | Stock-name packages synchronized with Arch repositories |
 | `core` | 259 | Heavy, ABI-coupled, source-heavy, and ROCm packages |
 | `misc` | 0 | Roster slot (group name stays readable; no current member) |
 | `app` | 23 | Optional applications; a TTY build/`-n` run prompts to multi-select (all unchecked + Enter = build all; records sharing an `app-cluster` tag toggle as one row); leaf builds — app packages typically have no consumers to expand |

@@ -1726,6 +1726,26 @@ constant, not a baked path).
 
 ## 6. Pitfall digest (full details: NOTE.md sections of same dates)
 
+- **Bundled-Chromium code against system libraries breaks in two shapes:
+  bundled-fork-only APIs, and ICU data assumptions — and gn `.rsp` names
+  embed the escaped build path** (2026-10-11, qt6-webengine — three walls
+  in its build; the recipe was **retired the same day** for starving the
+  host into a hard freeze (with plymouth), so its three fixes died with it
+  and only the rules survive): deep workspace path → ninja `.rsp` name
+  over NAME_MAX (fix: a short `_build_dir`, e.g.
+  `$HOME/Workspace/qwe-build`); `av_stream_get_first_dts` is Chromium's
+  own `third_party/ffmpeg` accessor, absent from every public FFmpeg
+  (fix: drop the consumer-side refinement, patch the consumer recipe —
+  never the `abi=must` provider); icu-git's `closeOver` can return
+  supplementary members (U+1DF95 → U+00DF) that V8's `Canonicalize`
+  BMP-only assert traps on (fix: upstream V8's RemoveSupplementary
+  semantic core — backport semantics, not refactors). A silent `int3;
+  ud2` SIGTRAP is a lowered `CHECK_*` — `gdb -batch -ex run -ex bt` plus
+  the live register names the failed assertion. Patches landing in a git
+  submodule need an idempotent `prepare()` guard (reverse dry-run) —
+  repeat makepkg re-runs prepare without resetting the submodule. Freeze
+  class + re-add protocol: NOTE.md 2026-10-11 (retirement).
+
 - **A monorepo swap provider needs a versioned name provide for EVERY
   stock output it maps — a missing one becomes a pacman file conflict**
   (2026-10-11 run #129 kguiaddons): pyside6-git builds five stock outputs
