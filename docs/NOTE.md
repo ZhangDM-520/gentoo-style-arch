@@ -37,6 +37,46 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-11 — run #128 qt6-quick3d: the bridge patch's drop condition arrived — upstream adapted
+
+**Symptom.** Run #128 (55-package tail) walled in `qt6-quick3d`'s
+`prepare()`: `0001-bridge-QRhiShaderResourceBinding-Data-stex-rework.patch`
+reverse-failed (`Reversed (or previously applied) patch detected! 1 out of
+1 hunk ignored`) against the freshly fetched `qtquick3d` dev branch.
+
+**Root cause.** The patch was an explicitly temporary bridge ("DROP THIS
+when qtquick3d upstream adapts", base revision `a1a3e7f33`). Upstream
+adapted in dev `e711caa11` "Adapt to the dynamic texture list in
+QRhiShaderResourceBinding" (2026-10-07) — and its adaptation is
+byte-identical to the patch's output (`d->stex.texSamplers.resize(1);` and
+the two element assignments; no `u.stex` remains). The recipe tracks
+`#branch=dev` (floating HEAD), so the adaptation landed under it without
+any version bump of our own. Third instance of the stale-patch class
+(after mlt's `ffmpeg-9.patch` and obs-studio's two obs-browser patches).
+
+**Fix.** Drop the bridge: source entry, sha256sums entry, `patch` call and
+the file are gone. Kept and re-purposed: the recipe's post-patch `grep -qF`
+contract assertions (now asserting upstream's adapted API) as a tripwire
+against the *next* `QRhiShaderResourceBinding::Data` rework — the failure
+moves from mid-compile to `prepare()`. `pkgrel` stays 1: `pkgver()` derives
+from `git describe`, so the rebuilt version is new anyway (nothing
+installed to same-version-skip).
+
+**Validation.** `bash -n` + `makepkg --printsrcinfo`, canonical↔twin
+parity; upstream file inspected pre-drop (the three adapted lines present
+verbatim at `qssgrhicontext.cpp:1809-1811`, zero `u.stex` hits) so the
+assertions pass unpatched; rehearsal `-fi --no-deps qt6-quick3d` ✓ 237s,
+installed. Full fixture battery green.
+
+**Rule.** A bridge patch on a floating-HEAD recipe (`#branch=`) must carry
+its own drop condition in the header AND a contract assertion in
+`prepare()`, so that when upstream lands the real fix the recipe fails
+fast and loudly at `prepare()` instead of reverse-failing mid-wave — and
+the fix is deleting the patch, not re-rolling it. Check
+`git log -S <the API symbol>` on the source before touching any stale
+patch: "already merged upstream" and "context drifted" need opposite
+fixes.
+
 ## 2026-10-11 — run #127 karchive: the license-copy dir branch needs its parent created
 
 **Symptom.** Run #127 (61-package tail, no qemu) walled in `karchive`'s

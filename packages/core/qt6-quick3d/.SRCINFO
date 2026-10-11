@@ -26,8 +26,6 @@ pkgbase = qt6-quick3d
 	depends = zlib
 	optdepends = assimp: assimp import plugin
 	source = git+https://code.qt.io/qt/qtquick3d#branch=dev
-	source = 0001-bridge-QRhiShaderResourceBinding-Data-stex-rework.patch
 	sha256sums = SKIP
-	sha256sums = 11af14441050a1f24749c174a5914c1c4c553f59b4af32f3bc82ba8428b8951f
 
 pkgname = qt6-quick3d

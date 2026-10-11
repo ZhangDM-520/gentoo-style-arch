@@ -1726,6 +1726,18 @@ constant, not a baked path).
 
 ## 6. Pitfall digest (full details: NOTE.md sections of same dates)
 
+- **A bridge patch on a floating-HEAD recipe needs its drop condition in
+  the header and a contract assertion in prepare() — when upstream lands
+  the real fix, delete the patch, never re-roll it** (2026-10-11 run #128
+  qt6-quick3d): the "TEMPORARY BRIDGE … DROP THIS when upstream adapts"
+  patch reverse-failed once qtquick3d dev `e711caa11` adapted to
+  `QRhiShaderResourceBinding::Data` (its output was byte-identical to the
+  patch). Third stale-patch instance (mlt, obs-browser, qt6-quick3d): for
+  any patch that no longer applies, `git log -S <API symbol>` first —
+  merged upstream → delete; context drift → re-roll. The recipe's
+  `grep -qF` contract assertions were kept as the next-rework tripwire.
+  Details: NOTE.md 2026-10-11.
+
 - **A packaging loop's branches must each create their own destination —
   `install -D` hides the missing parent until an upstream layout flips**
   (2026-10-11 run #127 karchive): the license loop's file branch
