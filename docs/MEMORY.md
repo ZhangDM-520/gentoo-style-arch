@@ -1726,6 +1726,18 @@ constant, not a baked path).
 
 ## 6. Pitfall digest (full details: NOTE.md sections of same dates)
 
+- **A packaging loop's branches must each create their own destination —
+  `install -D` hides the missing parent until an upstream layout flips**
+  (2026-10-11 run #127 karchive): the license loop's file branch
+  (`install -Dm644 … -t`) creates the licenses dir as a side effect; the
+  dir branch (`cp -a`) does not, so REUSE-style `LICENSES/`-only sources
+  (KDE 6.30) died at `cp: cannot create directory`. Six recipes shared
+  the shape (`karchive kcrash kguiaddons kvantum kvantum-qt5 libde265`) —
+  fixed with `install -d` before the `cp`. Scan
+  `grep -rln 'cp -a.*licenses' packages/` when one bites; `cp -r`
+  variants watched: jdk-openjdk (works today), vscodium (rides its
+  rework). Details: NOTE.md 2026-10-11.
+
 - **A recipe whose build hard-freezes this host gets retired — 3/3
   deterministic freezes = quarantine, never "fix around"** (2026-10-11
   qemu): every `qemu` build froze the whole machine at the same build

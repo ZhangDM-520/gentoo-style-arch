@@ -1,7 +1,7 @@
 pkgbase = kcrash
 	pkgdesc = Support for application crash analysis and bug report from apps
 	pkgver = 6.30.0
-	pkgrel = 1
+	pkgrel = 1.2
 	url = https://develop.kde.org/products/frameworks/
 	arch = x86_64
 	groups = kf6

@@ -1,7 +1,7 @@
 pkgbase = karchive
 	pkgdesc = Qt addon providing access to numerous types of archives
 	pkgver = 6.30.0
-	pkgrel = 1
+	pkgrel = 1.2
 	url = https://develop.kde.org/products/frameworks/
 	arch = x86_64
 	groups = kf6

@@ -4,7 +4,7 @@
 
 pkgname=kguiaddons
 pkgver=6.30.0
-pkgrel=1
+pkgrel=1.2
 pkgdesc='Addons to QtGui'
 arch=(x86_64)
 url='https://develop.kde.org/products/frameworks/'
@@ -54,6 +54,8 @@ package() {
     if [[ -f $pkgname-$pkgver/$_lic ]]; then
       install -Dm644 "$pkgname-$pkgver/$_lic" -t "$pkgdir/usr/share/licenses/$pkgname/"
     elif [[ -d $pkgname-$pkgver/$_lic ]]; then
+      # parent may not exist yet when only the LICENSES/ dir branch runs
+      install -d "$pkgdir/usr/share/licenses/$pkgname/"
       cp -a "$pkgname-$pkgver/$_lic" "$pkgdir/usr/share/licenses/$pkgname/"
     fi
   done

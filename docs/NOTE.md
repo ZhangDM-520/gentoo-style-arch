@@ -37,6 +37,49 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-11 — run #127 karchive: the license-copy dir branch needs its parent created
+
+**Symptom.** Run #127 (61-package tail, no qemu) walled in `karchive`'s
+`package()` after a clean cmake install:
+`cp: cannot create directory '…/pkg/karchive/usr/share/licenses/karchive/':
+No such file or directory`.
+
+**Root cause.** The license loop's two branches disagree about who creates
+`$pkgdir/usr/share/licenses/$pkgname/`: the FILE branch
+(`install -Dm644 … -t <dir>/`) creates it as a side effect of `-D`, but
+the DIR branch (`cp -a`) does not create parents. The bug is invisible
+while an upstream ships a bare `LICENSE`/`COPYING*` file (loop order hits
+the file branch first and the dir branch then copies into an existing
+parent); KDE Frameworks 6.30 ships only the REUSE `LICENSES/` directory,
+so the dir branch runs first and `cp` dies. Same shape in six recipes
+(`karchive`, `kcrash`, `kguiaddons`, `kvantum`, `kvantum-qt5`,
+`libde265`) — all fixed in one wave.
+
+**Fix.** Insert `install -d "$pkgdir/usr/share/licenses/$pkgname/"` before
+the `cp -a` in the dir branch of all six; pkgrel bumped past the installed
+value so a checked install cannot same-version-skip (karchive/kcrash/
+kguiaddons/libde265 → 1.2, kvantum/kvantum-qt5 → 1.1 — the two kvantums
+are not yet installed). Watched stragglers of the `cp -r` flavor:
+`jdk-openjdk` (`cp -r legal …` — its parent exists today, built ✓) and
+the parked `vscodium-insiders-git` (`cp -r … LICENSE.txt` — fix with its
+rework wave).
+
+**Validation.** `bash -n` + `makepkg --printsrcinfo`, canonical↔twin
+parity for all six; rehearsal `-fi --no-deps karchive` ✓ 24s —
+`karchive-6.30.0-1.2` archive now contains
+`usr/share/licenses/karchive/LICENSES/`, installed 6.30.0-1.2. The other
+five carry the identical mechanical fix and ride the run. Full fixture
+battery green (first parallel run flagged `skip-upstream.sh`, a VCS-timing
+fixture — it passes standalone and on a full re-run; noted as a flake,
+this change touches no builder code).
+
+**Rule.** When a packaging loop has branches with different tool idioms
+(`install -D` vs `cp`), each branch must create its own destination — do
+not rely on loop order or a sibling branch's side effect. The failure only
+surfaces when an upstream layout flips (here: REUSE `LICENSES/`-only
+tarballs), so scan every recipe with the same loop when one bites
+(`grep -rln 'cp -a.*licenses' packages/`).
+
 ## 2026-10-11 — qemu build hard-freezes this host (3/3) — recipe retired by owner decision
 
 **Symptom.** Three complete machine freezes, all at the moment of the

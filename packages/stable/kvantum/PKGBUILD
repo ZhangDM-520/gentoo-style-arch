@@ -6,7 +6,7 @@
 # build5/style install path — this single-output recipe packages only kvantum
 pkgname=kvantum
 pkgver=1.1.8
-pkgrel=1
+pkgrel=1.1
 pkgdesc='SVG-based theme engine for Qt6 (including config tool and extra themes)'
 arch=(x86_64)
 url='https://github.com/tsujan/Kvantum'
@@ -48,6 +48,8 @@ package() {
     if [[ -f Kvantum/$_lic ]]; then
       install -Dm644 "Kvantum/$_lic" -t "$pkgdir/usr/share/licenses/$pkgname/"
     elif [[ -d Kvantum/$_lic ]]; then
+      # parent may not exist yet when only the LICENSES/ dir branch runs
+      install -d "$pkgdir/usr/share/licenses/$pkgname/"
       cp -a "Kvantum/$_lic" "$pkgdir/usr/share/licenses/$pkgname/"
     fi
   done
