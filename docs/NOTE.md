@@ -1,3 +1,49 @@
+## 2026-10-11 — vscodium-insiders-git: a fully cached Electron build still fetches `SHASUMS256.txt` at packaging time, and a dying link walled it
+
+**Symptom.** The 21:54 single-package run of `vscodium-insiders-git`
+(1.135.06055.r4) died at the end of `package-linux-x64`, 9.17 min into the
+`vscode-linux-x64-min-packing` gulp series: `TypeError: fetch failed`, then
+makepkg's `==> ERROR: A failure occurred in build()` / exit 4. Every compile,
+typecheck and extension-bundling task had finished with 0 errors. The host
+went down about a minute later (terminal INT at 22:17:17 → `Build interrupted
+(last signal: INT)`), but the build had already failed on its own.
+
+**Root cause.** The packaging pipeline pipes the output tree through
+`@vscode/gulp-electron` → `@electron/get`. The 123 MB Electron zip (42.8.1)
+was already in the host cache (cache key verified: sha256 of the release
+directory URL equals the cache directory name; `.npmrc` `target="42.8.1"`
+matches), but `@electron/get` deliberately bypasses the cache for checksum
+files (`dist/index.js`: `cacheMode: ElectronDownloadCacheMode.Bypass`, "Never
+use the cache for loading checksums"), so every packaging run re-downloads
+`SHASUMS256.txt` via raw `fetch()` (`dist/FetchDownloader.js:46`) to validate
+the cached zip. The link was dying at 22:10; that fetch hung ~5.9 min (≈
+undici's 300 s headers timeout) and threw. `gulp-electron`'s `withRetry` never
+fired — the undici cause code (socket/headers-timeout class) is not in its
+`TRANSIENT_NETWORK_ERROR_CODES` set — hence zero `[gulp-electron] … retrying`
+lines and a single-shot failure. The same build's earlier SHASUMS fetches
+(node-gyp) returned 200, so the wall was the dying link, not an upstream
+outage.
+
+**Fix.** None in the recipe: sources, node, node-gyp headers and the Electron
+zip are all cached, and the checksum fetch needs nothing but a live network.
+Rerunning the same selection is the whole fix; the leftover `.state/run.lock`
+is flock-based and harmless (owning pid gone).
+
+**Validation.** Diagnosis only — no recipe or builder change. Cache-key hash
+computed and matched against the cached zip; log timeline (22:10:35 task start
+→ 22:16:32 fetch error → 22:17:17 terminal interrupt) separates the build
+failure from the power event; no retry warnings in the log to contradict the
+single-shot path.
+
+**Rule.** A fully cached Electron build is not offline-safe: `@electron/get`
+re-fetches `SHASUMS256.txt` on every run by design, so cache seeding cannot
+remove the wall — and `TypeError: fetch failed` out of gulp packaging with
+everything cached points at that one fetch (and the host network), not at the
+recipe. Check the cached zip and rerun before touching anything. The
+retry/keep-going seam for this class belongs to the fetch-ahead design
+(`plan.md`), which must cover mandatory validation fetches, not just source
+downloads.
+
 ## 2026-10-11 — optional applications re-grouped into `app` (23 → 56 members): the prompt surface now covers the whole optional desktop
 
 **Motivation.** `app` is the run's optional-application surface (TTY prompt
