@@ -37,6 +37,8 @@ depends=(
     'qt5-base' 'qt5-multimedia' 'qt5-x11extras' 'qt5-svg' 'libnotify'
     # System libraries linked in through our patches, rather than bundled
     'libheif'
+    # win-linux/defaults.pri links -lcups against the libcups-git layout
+    'libcups'
 )
 optdepends=('gst-libav: playing embedded video files'
             'gst-plugins-good: playing embedded video files'
@@ -388,6 +390,13 @@ build() {
     export CFLAGS="${CFLAGS/-O2/}"
     export CXXFLAGS="${CXXFLAGS/-O2/}"
     export CXXFLAGS="${CXXFLAGS/-Wp,-D_GLIBCXX_ASSERTIONS/}"
+
+    # cups 2.5/libcups-git installs headers under /usr/include/libcups2 (the
+    # pkg-config Cflags), but src/cprintdata.cpp includes <cups/cups.h> and the
+    # qmake build only ever sees our CFLAGS/CXXFLAGS (run #135 wall class —
+    # hplip 496b1a9 idiom, same seam as libreoffice-fresh's CPPFLAGS).
+    export CFLAGS+=" $(pkg-config --cflags cups)"
+    export CXXFLAGS+=" $(pkg-config --cflags cups)"
 
     ./make.py --no-third-party-update
 }

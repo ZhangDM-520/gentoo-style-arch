@@ -40,6 +40,7 @@ pkgbase = onlyoffice-git
 	depends = qt5-svg
 	depends = libnotify
 	depends = libheif
+	depends = libcups
 	optdepends = gst-libav: playing embedded video files
 	optdepends = gst-plugins-good: playing embedded video files
 	optdepends = libreoffice: OpenSymbol fonts

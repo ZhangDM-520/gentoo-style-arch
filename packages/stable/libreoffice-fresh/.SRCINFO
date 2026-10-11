@@ -156,6 +156,7 @@ pkgbase = libreoffice-fresh
 	source = https://dev-www.libreoffice.org/extern/odfvalidator-1.2.0-incubating-SNAPSHOT-jar-with-dependencies-971c54fd38a968f5860014b44301872706f9e540.jar
 	source = https://dev-www.libreoffice.org/extern/f543e6e2d7275557a839a164941c0a86e5f2c3f2a0042bfc434c88c6dde9e140-opens___.ttf
 	source = soffice-template.desktop.in
+	source = firebird-tommath.patch
 	source = libreoffice-fresh.sh
 	source = libreoffice-fresh.csh
 	validpgpkeys = C2839ECAD9408FBE9531C3E9F434A1EFAFEEAEA3
@@ -188,6 +189,7 @@ pkgbase = libreoffice-fresh
 	sha256sums = 984f2a479df79e27e7b01a5815ac53ae64e07746b882262d8a64566494515504
 	sha256sums = f543e6e2d7275557a839a164941c0a86e5f2c3f2a0042bfc434c88c6dde9e140
 	sha256sums = d0be8099cbee3c9dfda694a828149b881c345b204ab68826f317580aafb50879
+	sha256sums = 0b6ce6fcf8e24047a7ff98f54c8e42f378e8d53e4208b23f456f65f258d9e5cd
 	sha256sums = d7aae12edf82a2a20192ef153ca5132450ae0c6cb9df829b271a2c489c700641
 	sha256sums = e1d7887e815970f3d21e07f58a7a3a4efc823768a1628307c516f14a506ae7dc
 

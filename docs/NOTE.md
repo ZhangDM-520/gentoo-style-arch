@@ -37,6 +37,111 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-11 — run #135 libreoffice: bundled firebird 3.0 speaks libtommath's removed legacy API — plus two patch-machinery pitfalls
+
+**Symptom.** `libreoffice-fresh` failed 10 min into run #135 compiling the
+bundled firebird (`workdir/UnpackedTarball/firebird/src/common/BigInteger.cpp`):
+`mp_read_unsigned_bin`, `mp_to_unsigned_bin`, `mp_unsigned_bin_size` and
+`mp_toradix` "not declared in this scope", plus `cannot convert 'int*' to
+'size_t*'` on `mp_radix_size`.
+
+**Root cause.** The recipe configures `--without-system-firebird` (bundled
+firebird 3.0.13) but `--with-system-libtommath`, and the house `libtommath-git`
+(1.4 development line) has deleted the legacy API those sources call:
+`mp_read_unsigned_bin`→`mp_from_ubin`, `mp_to_unsigned_bin`→`mp_to_ubin` (now
+takes maxlen + written), `mp_unsigned_bin_size`→`mp_ubin_size`,
+`mp_toradix`→`mp_to_radix` (`written` includes the NUL), `mp_radix_size` now
+takes `size_t *`. Firebird is an UnpackedTarball extracted *during* make, so
+the fix cannot be an ordinary source patch applied in `prepare()`.
+
+**Fix.** `firebird-tommath.patch` rewrites the five lines (four functions),
+mapping verified against `/usr/include/tommath.h` and the libtommath sources
+(`mp_from_ubin` zeroes first like the old reader; `mp_to_ubin` writes exactly
+`mp_ubin_size` bytes; `mp_to_radix` stores ≤ maxlen-1 chars + NUL with
+`written` including the NUL; `getText` now sizes in `size_t`). Registered in
+`prepare()` through LO's own patch machinery — an appended
+`gb_UnpackedTarball_add_patches` block in
+`external/firebird/UnpackedTarball_firebird.mk` behind a `grep -q` guard — and
+the registration is self-healing: the unpack preparation target depends on the
+module makefile *and* on the patch files, and the unpack command `rm -rf`s the
+unpack dir first, so an already-unpacked firebird is recreated and re-patched.
+`SecureRemotePassword/misc/prime.cpp` carries the same dead names but is not
+built (no makefile references) — left alone.
+
+**Two patch-machinery pitfalls found on the way (both bit the first attempt).**
+1. *Patch level is per-tarball, not global.* `UnpackedTarball_firebird.mk:14`
+   sets `gb_UnpackedTarball_set_patchlevel,firebird,0`, and a patch filename
+   suffix `.0`/`.1` overrides the level per file. Plain `.patch` files here
+   carry UNPREFIXED paths (`mold.patch`/`c++26.patch` style). The first patch
+   used `a/`/`b/` prefixes expecting `-p1` and died with "No file to patch.
+   2 out of 2 hunks ignored" — even though a hard-coded `patch -p1` dry-run
+   passed. Rule: read the level out of the build files and dry-run with the
+   build's exact flags (here `patch -f -s -p0 --fuzz=0`).
+2. *`source=()` and `sha256sums=()` align by position.* The patch source went
+   in before `libreoffice-fresh.sh` but its sum was appended at the end of the
+   sums array — a one-slot misalignment that `makepkg --printsrcinfo` cannot
+   catch. Worse, the builder's version-sync silently re-derives the *twin's*
+   sums name-matched ("checksums refreshed … review before committing"), which
+   made the rehearsal pass while canonical stayed wrong. Rule: after touching
+   either array, dump the positional mapping
+   (`bash -c 'source PKGBUILD; for i in "${!source[@]}"; do printf "%s %s\n" "${source[$i]##*/}" "${sha256sums[$i]:0:8}"; done'`)
+   and compare it with the real file hashes.
+
+**Twin note.** libreoffice-fresh's twin is version-sync marked (the builder
+rewrites twin `pkgver`/`pkgrel` and fetch-only sums at run time: twin
+26.8.1-1.1 vs canonical 26.8.0-2.1). Canonical edits to marked twins are
+ported in-place, never `cp`'d over them.
+
+**Validation.** Rehearsal `-fi --no-deps libreoffice-fresh` (owner CPU
+`--lanes 2 --jobs 11 --intensity max`): ✓ 3939 s, run record `libreoffice-fresh
+succeeded 0 3939 ok`. `[build PAT] firebird` clean, `BigInteger.o` built from
+the patched source, and the outputs keep the feature: the archive ships
+`usr/lib/libreoffice/program/libfirebird_sdbclo.so` and
+`usr/lib/libreoffice/share/firebird/`; `pacman -Q` reports
+`libreoffice-fresh 26.8.1-1.1`. `bash -n` + `makepkg --printsrcinfo` clean on
+both sides; positional source/sum mapping now equals the real file hashes.
+
+**Rule.** When a bundled consumer breaks because a house `-git` library
+removed an API, patch the consumer — registering through the build's own
+patch machinery when the sources unpack during build — never pin the library
+back. And validate a patch with the exact flags the build will use.
+
+## 2026-10-11 — run #135 onlyoffice: the qmake build only ever sees `CFLAGS`/`CXXFLAGS` — the cups 2.5 cflags must ride there
+
+**Symptom.** `onlyoffice-git` failed 58 min into run #135 at the desktop-apps
+qmake stage: `src/cprintdata.cpp:47:11: fatal error: cups/cups.h: No such
+file or directory`.
+
+**Root cause.** `libcups-git` (2.4.3.r1436 → the cups 2.5 layout) installs its
+headers under `/usr/include/libcups2`, advertised by `pkg-config --cflags
+cups`. `win-linux/defaults.pri` links `-lcups` directly and nothing feeds the
+pkg-config cflags into the qmake compile lines — the build inherits only our
+`CFLAGS`/`CXXFLAGS` (visible in the log: the `_FORTIFY_SOURCE` rewrite and
+`-std=gnu++11` from `_set_flags` appear in every compile line). Same cups 2.5
+header-relocation class as hplip (496b1a9) and libreoffice-fresh's CPPFLAGS
+seam (run #94 wall class).
+
+**Fix.** `build()` now appends `$(pkg-config --cflags cups)` to both `CFLAGS`
+and `CXXFLAGS`, and `depends` declares `libcups` (the shipped binary links
+`-lcups`, previously undeclared). Sibling scan: the run's 14-package tail
+contains no other `<cups/cups.h>` consumer; already-built consumers to watch
+on their next rebuild: cups-filters, ghostscript, gutenprint, jdk-openjdk,
+libppd, samba, wine, system-config-printer (the last three already carry
+`cups-2.5-enum-compat.patch`).
+
+**Validation.** Rehearsal `-fi --no-deps onlyoffice-git` (owner CPU
+`--lanes 2 --jobs 11 --intensity max`): ✓ 49m45s, run record
+`onlyoffice-git succeeded 0 2985 ok`. The cprintdata.cpp compile line now
+carries `-I/usr/include/libcups2`, `DesktopEditors` links with `-lcups`,
+`pacman -Q` reports `onlyoffice-git 9.4.0.130-1`, and
+`ldd DesktopEditors | grep -c 'not found'` is 0. `bash -n` and
+`makepkg --printsrcinfo` clean.
+
+**Rule.** A consumer of `<cups/cups.h>` whose build system does not use
+pkg-config needs the libcups2 cflags seam, delivered through the flag
+variable that build system actually reads (`CPPFLAGS` for autoconf probes,
+`CFLAGS`/`CXXFLAGS` for this qmake path).
+
 ## 2026-10-11 — run #134 transmission: a `USE_SYSTEM_*=ON` flag is a build-time dependency — it must be in `makedepends`
 
 **Symptom.** Run #134 built 13 packages clean (wxwidgets … shotwell), then

@@ -63,6 +63,7 @@ source=(${_mirror}/libreoffice{,-help,-translations}-${_LOver}.tar.xz{,.asc}
     ${_additional_source_url2}/odfvalidator-1.2.0-incubating-SNAPSHOT-jar-with-dependencies-971c54fd38a968f5860014b44301872706f9e540.jar # for test suite
     ${_additional_source_url2}/f543e6e2d7275557a839a164941c0a86e5f2c3f2a0042bfc434c88c6dde9e140-opens___.ttf
     soffice-template.desktop.in
+    firebird-tommath.patch
     libreoffice-fresh.sh libreoffice-fresh.csh)
 noextract=(a7983f859eafb2677d7ff386a023bc40-xsltml_2.1.2.zip
            0168229624cfac409e766913506961a8-ucpp-1.3.2.tar.gz
@@ -117,6 +118,7 @@ sha256sums=('42116e256933aa575974e420ffa04f7cd7096f4b7ca5d0907ddeaf2a07f68f94'
             '984f2a479df79e27e7b01a5815ac53ae64e07746b882262d8a64566494515504'
             'f543e6e2d7275557a839a164941c0a86e5f2c3f2a0042bfc434c88c6dde9e140'
             'd0be8099cbee3c9dfda694a828149b881c345b204ab68826f317580aafb50879'
+            '0b6ce6fcf8e24047a7ff98f54c8e42f378e8d53e4208b23f456f65f258d9e5cd'
             'd7aae12edf82a2a20192ef153ca5132450ae0c6cb9df829b271a2c489c700641'
             'e1d7887e815970f3d21e07f58a7a3a4efc823768a1628307c516f14a506ae7dc')
 
@@ -128,6 +130,27 @@ prepare() {
     # xmlparse.hxx declares std::ofstream params (build broke 2026-09-06)
     sed -i 's/^#include <cstddef>$/#include <cstddef>\n#include <fstream>/' \
         l10ntools/inc/xmlparse.hxx
+
+    # Bundled firebird 3.0 predates libtommath 1.4's rename of the
+    # unsigned-bin/radix API (mp_read_unsigned_bin -> mp_from_ubin,
+    # mp_to_unsigned_bin -> mp_to_ubin, mp_unsigned_bin_size -> mp_ubin_size,
+    # mp_toradix -> mp_to_radix, mp_radix_size's size param is now size_t),
+    # and the house libtommath-git carries none of the legacy names (run #135
+    # wall). Firebird is an UnpackedTarball extracted during make, so the fix
+    # goes through LO's own patch machinery: registering it here appends to
+    # UnpackedTarball_firebird.mk (and the patch file becomes a make
+    # prerequisite of the unpack preparation target), which re-creates the
+    # unpacked dir and applies the whole patch list. The guard keeps the
+    # registration single-shot per extraction.
+    if ! grep -q firebird-tommath.patch external/firebird/UnpackedTarball_firebird.mk; then
+        install -m644 "$srcdir/firebird-tommath.patch" external/firebird/firebird-tommath.patch
+        cat >> external/firebird/UnpackedTarball_firebird.mk <<'MAKE_EOF'
+
+$(eval $(call gb_UnpackedTarball_add_patches,firebird,\
+    external/firebird/firebird-tommath.patch \
+))
+MAKE_EOF
+    fi
 
     # move external sources into place (idempotent: ext_sources survives a
     # failed build/configure re-run)

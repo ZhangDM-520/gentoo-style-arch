@@ -1726,6 +1726,34 @@ constant, not a baked path).
 
 ## 6. Pitfall digest (full details: NOTE.md sections of same dates)
 
+- **A bundled consumer broken by a house `-git` library's API removal gets a
+  consumer patch — and gbuild patches carry per-tarball levels**
+  (2026-10-11 run #135 libreoffice): bundled firebird 3.0 calls the libtommath
+  legacy names that the 1.4 line deleted (`mp_from_ubin`/`mp_to_ubin`/
+  `mp_ubin_size`/`mp_to_radix`, `mp_radix_size` now `size_t *`); the fix is
+  `firebird-tommath.patch` registered via `gb_UnpackedTarball_add_patches`
+  (the unpack preparation target depends on the module makefile and the patch
+  files, so stale unpacks recreate themselves). Two traps: the patch level is
+  per-tarball (`gb_UnpackedTarball_set_patchlevel`; firebird = 0 → unprefixed
+  paths; a filename suffix `.0`/`.1` overrides per file) — a `patch -p1`
+  dry-run proved nothing and the real run failed with "No file to patch"; and
+  `source=()`/`sha256sums=()` align *by position*, a one-slot slip that
+  `--printsrcinfo` cannot catch and the builder's name-matched version-sync
+  masked on the twin. Verify patches with the build's exact flags and dump
+  the positional source/sum mapping after touching either array. Details:
+  NOTE.md 2026-10-11.
+
+- **cups 2.5 moved the headers to `/usr/include/libcups2` — a consumer whose
+  build system does not use pkg-config needs the cflags fed through the flag
+  variable it actually reads** (2026-10-11 run #135 onlyoffice): the qmake
+  desktop-apps build inherits only `CFLAGS`/`CXXFLAGS`, so
+  `$(pkg-config --cflags cups)` goes there (autoconf consumers take it via
+  `CPPFLAGS` — libreoffice-fresh, run #94; hplip 496b1a9). Class victims to
+  watch at rebuild: cups-filters, ghostscript, gutenprint, jdk-openjdk,
+  libppd, samba, wine, system-config-printer. Also: the provider is `libcups`
+  (house `libcups-git`) and a recipe that links `-lcups` must declare it.
+  Details: NOTE.md 2026-10-11.
+
 - **A `USE_SYSTEM_<X>=ON` flag is a dependency declaration — the provider
   belongs in `makedepends`, not just in the outputs' `depends`**
   (2026-10-11 run #134 transmission): makepkg installs makedepends at
