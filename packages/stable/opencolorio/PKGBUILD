@@ -3,7 +3,7 @@
 
 pkgname=opencolorio
 pkgver=2.5.1
-pkgrel=2
+pkgrel=2.2
 pkgdesc="A color management framework for visual effects and animation"
 arch=('x86_64')
 url="https://opencolorio.org"
@@ -26,8 +26,11 @@ build() {
   export LDFLAGS+=" ${_mold}"
 
   CXXFLAGS+=" -ffat-lto-objects"
+  # house: pin the system interpreter (uv/pyenv shims lead PATH; NOTE.md 2026-10-10)
   cmake \
     -GNinja \
+    -DPython_EXECUTABLE=/usr/bin/python \
+    -DPython3_EXECUTABLE=/usr/bin/python \
     -Bbuild \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX=/usr \
