@@ -81,6 +81,11 @@ source=(
   "$_pkgsrc"::"git+https://gitlab.gnome.org/GNOME/gtk.git"
   gtk-update-icon-cache.{hook,script}
   gtk4-querymodules.{hook,script}
+
+  # House: cups 2.5 renamed the HTTP/IPP enums out from under GTK's
+  # cups<3 compat block (NOTE.md 2026-10-11)
+  cups25-legacy-enums.patch
+  cups25-legacy-enums-ops.patch
 )
 sha256sums=(
   'SKIP'
@@ -88,6 +93,8 @@ sha256sums=(
   'f1d3a0dbfd82f7339301abecdbe5f024337919b48bd0e09296bb0e79863b2541'
   'a5074ffc057a3041a4f851b4b4674cfc21f3cb9cc90c5414c3e91816a5d205e9'
   '92d08db5aa30bda276bc3d718e7ff9dd01dc40dcab45b359182dcc290054e24e'
+  '7185a6d43d41fd8fa2c905f5b88db5de078fdd11674763b527d79202068e025a'
+  '961c9b61c5121cf020146c51151505ca6687f8ebeb35c0ce0eaf4e89c7a7198e'
 )
 
 pkgver() {
@@ -105,6 +112,14 @@ prepare() {
   # https://gitlab.gnome.org/GNOME/gtk/-/issues/6153
   sed -E -e 's&^(\s*can_use_objcopy_for_resources) = \S+$&\1 = false&' \
     -i "$_pkgsrc/meson.build"
+
+  # House: gate the legacy cups enum aliases on cups <= 2.4 (NOTE.md
+  # 2026-10-11). Idempotent guard — repeat makepkg re-runs prepare().
+  local _p
+  for _p in cups25-legacy-enums.patch cups25-legacy-enums-ops.patch; do
+    patch -Np1 -R --dry-run -d "$_pkgsrc" -i "$srcdir"/$_p >/dev/null 2>&1 ||
+      patch -Np1 -d "$_pkgsrc" -i "$srcdir"/$_p
+  done
 }
 
 build() {

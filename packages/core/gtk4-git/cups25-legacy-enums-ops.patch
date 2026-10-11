@@ -1,0 +1,44 @@
+--- a/gtk/print/backends/gtkprintbackendcups.c
++++ b/gtk/print/backends/gtkprintbackendcups.c
+@@ -104,6 +104,15 @@
+ #define CUPS_PTYPE_DEFAULT            CUPS_PRINTER_DEFAULT
+ #define CUPS_PTYPE_REJECTING          CUPS_PRINTER_REJECTING
+ 
++/* House (Gentoo_Style_Arch): cups 2.5 (the pre-3 development line) renamed
++ * the HTTP/IPP op/status/state enums to the _STATUS_/_OP_/_JSTATE_/_PSTATE_
++ * spellings while keeping CUPS_VERSION_MAJOR at 2 and dropped the legacy
++ * aliases, so the mapping below only applies up to cups 2.4
++ * (NOTE.md 2026-10-11). The CUPS_PTYPE_* mappings above stay: the
++ * CUPS_PRINTER_* names survive in cups 2.5. */
++#if CUPS_VERSION_MINOR < 5
++#define HTTP_STATUS_NOT_FOUND         HTTP_NOT_FOUND
++
+ #define IPP_OP_PRINT_JOB              IPP_PRINT_JOB
+ #define IPP_OP_GET_JOB_ATTRIBUTES     IPP_GET_JOB_ATTRIBUTES
+ #define IPP_OP_GET_PRINTER_ATTRIBUTES IPP_GET_PRINTER_ATTRIBUTES
+@@ -121,6 +130,7 @@
+ #define IPP_JSTATE_CANCELED           IPP_JOB_CANCELLED
+ #define IPP_JSTATE_ABORTED            IPP_JOB_ABORTED
+ #define IPP_JSTATE_COMPLETED          IPP_JOB_COMPLETED
++#endif
+ #else
+ #define _httpConnect(host, port, addrlist, family, encryption, blocking, msec, cancel) httpConnect(host, port, addrlist, family, encryption, blocking, msec, cancel)
+ #endif
+@@ -4039,7 +4049,7 @@
+       GTK_PRINTER_CUPS (printer)->avahi_browsed ||
+       (gtk_cups_result_is_error (result) &&
+        ((gtk_cups_result_get_error_type (result) == GTK_CUPS_ERROR_HTTP) &&
+-         (gtk_cups_result_get_error_status (result) == HTTP_NOT_FOUND))))
++         (gtk_cups_result_get_error_status (result) == HTTP_STATUS_NOT_FOUND))))
+     {
+       GtkPrinterCups *cups_printer = GTK_PRINTER_CUPS (printer);
+ 
+@@ -4049,7 +4059,7 @@
+       if (!cups_printer->avahi_browsed &&
+           (gtk_cups_result_is_error (result) &&
+            ((gtk_cups_result_get_error_type (result) == GTK_CUPS_ERROR_HTTP) &&
+-            (gtk_cups_result_get_error_status (result) == HTTP_NOT_FOUND))) &&
++            (gtk_cups_result_get_error_status (result) == HTTP_STATUS_NOT_FOUND))) &&
+           cups_printer->remote &&
+           !cups_printer->request_original_uri &&
+           cups_printer->original_device_uri != NULL &&

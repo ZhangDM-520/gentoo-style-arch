@@ -37,6 +37,54 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-11 — run #132 gtk4-git: cups 2.5 renamed the HTTP/IPP enums out from under GTK's cups<3 compat block
+
+**Symptom.** Run #132's `gtk4-git` (PGO recipe) died compiling
+`gtk/print/backends/gtkcupsutils.c`: `HTTP_CONTINUE`, `HTTP_OK`,
+`HTTP_ERROR`, `HTTP_UNAUTHORIZED`, `IPP_IDLE`, `IPP_ERROR`, `IPP_DATA`
+all "undeclared" — every legacy cups enum name.
+
+**Root cause.** The house `cups-git` is the 2.5 development line
+(`CUPS_VERSION 2.0500`, major still **2**): it renamed the enums to the
+modern `_STATUS_`/`_STATE_` spellings and dropped the legacy aliases.
+GTK's print backend carries a compat block for old cups — `#if
+CUPS_VERSION_MAJOR < 3` maps its internal modern names back to the legacy
+ones — and cups 2.5 slips through that gate: major < 3, but the names it
+maps *to* are gone. (Both function-name spellings still exist —
+`cupsEncryption` is merely deprecated next to `cupsGetEncryption` — so
+only the enum aliases broke.) In-tree scan of the whole gtk checkout
+found no other legacy-name use.
+
+**Fix.** Consumer patches — the enum rename hit GTK's compat layer in
+*two* files, so the fix is paired: `cups25-legacy-enums.patch` (in
+`gtkcupsutils.c`) wraps the nine HTTP/IPP-state aliases in `#if
+CUPS_VERSION_MINOR < 5`, and `cups25-legacy-enums-ops.patch` (in
+`gtkprintbackendcups.c`) does the same for the IPP op/status/state
+aliases (the `CUPS_PTYPE_*` mappings stay — `CUPS_PRINTER_*` survives in
+cups 2.5) and converts the two raw `HTTP_NOT_FOUND` use sites to the
+modern `HTTP_STATUS_NOT_FOUND` (aliased back for real cups 2.4). The
+function-name shims are untouched (cups 2.5 keeps both spellings, old
+ones deprecated). `prepare()` applies both with the idempotent
+reverse-dry-run guard. A full identifier inventory of both files against
+the cups headers (every `HTTP_*`/`IPP_*`/`CUPS_*` token checked) proves
+no third file or name is affected. README untouched (no output
+changes).
+
+**Validation.** `bash -n` + `makepkg --printsrcinfo`; targeted red→green
+probe on the exact failing TU (`ninja … print_backends_gtkcupsutils.c.o`
+— the only remaining output is cups' own deprecation notes); full
+rehearsal `-fi --no-deps gtk4-git` ✓; fixture battery green.
+
+**Rule.** A compat shim keyed on a version macro is only as good as the
+macro's promise: cups 2.5 renamed the API *without* bumping
+`CUPS_VERSION_MAJOR`, so `#if MAJOR < 3` no longer means "has the legacy
+names". Gate such shims on the **presence of the surface you map to**
+(here bounded by `MINOR < 5`), and when a `-git` provider tightens or
+renames its API, add "consumers with compat blocks" to the sibling scan.
+Known future victim of the same wall: `gtk3-git`'s identical upstream
+block — apply this same patch when it next rebuilds (it is currently
+built+installed and not in any remaining run).
+
 ## 2026-10-11 — run #131 gstreamer: three layers under one wall — retired WPE1 names, a fatal wpe1 meson probe, and spandsp's opaque `plc_state_t`
 
 **Symptom.** Run #131's `gstreamer` (version-synced to 1.28.8) died

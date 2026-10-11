@@ -1726,6 +1726,22 @@ constant, not a baked path).
 
 ## 6. Pitfall digest (full details: NOTE.md sections of same dates)
 
+- **A compat shim keyed on a version macro is only as good as the
+  macro's promise — gate it on the surface you map to** (2026-10-11 run
+  #132 gtk4-git): cups 2.5 renamed the HTTP/IPP enums (`HTTP_STATUS_*`,
+  `IPP_STATE_*`) and dropped the legacy aliases *without* bumping
+  `CUPS_VERSION_MAJOR`, so GTK's `#if MAJOR < 3` legacy-name mappings
+  broke on the house `cups-git` (two files: the alias blocks in
+  `gtkcupsutils.c` and `gtkprintbackendcups.c`, plus two raw
+  `HTTP_NOT_FOUND` use sites). Fix = paired consumer patches gating the
+  aliases on `CUPS_VERSION_MINOR < 5` (released cups 2.x stops at 2.4;
+  cups 3 takes the other branch) and renaming the use sites to the
+  modern spellings. When a `-git` provider renames/tightens its
+  API, scan consumers for **compat blocks**, not just call sites. Known
+  future victim: gtk3-git's identical upstream block (currently built +
+  installed; apply the same patch on its next rebuild). Details: NOTE.md
+  2026-10-11.
+
 - **`target not found` means the name is gone from the repos — check how
   the current repo packaging solves the feature, then drop what cannot
   resolve** (2026-10-11 run #131 gstreamer): the WPE1 stack

@@ -1,0 +1,22 @@
+--- a/gtk/print/backends/gtkcupsutils.c
++++ b/gtk/print/backends/gtkcupsutils.c
+@@ -84,6 +84,11 @@
+ #define ippGetLength(ipp_message) ippLength(ipp_message)
+ #define ippGetPort() ippPort()
+ 
++/* House (Gentoo_Style_Arch): cups 2.5 (the pre-3 development line) renamed
++ * these enums to the _STATUS_/_STATE_ spellings while keeping
++ * CUPS_VERSION_MAJOR at 2 and dropped the legacy aliases, so the mapping
++ * below only applies up to cups 2.4 (NOTE.md 2026-10-11). */
++#if CUPS_VERSION_MINOR < 5
+ #define HTTP_STATUS_ERROR HTTP_ERROR
+ #define HTTP_STATUS_CONTINUE HTTP_CONTINUE
+ #define HTTP_STATUS_OK HTTP_OK
+@@ -95,6 +100,7 @@
+ #define IPP_STATE_ERROR IPP_ERROR
+ #define IPP_STATE_IDLE IPP_IDLE
+ #define IPP_STATE_DATA IPP_DATA
++#endif
+ #else
+ #define _httpConnect(host, port, addrlist, family, encryption, blocking, msec, cancel) httpConnect(host, port, addrlist, family, encryption, blocking, msec, cancel)
+ #endif
