@@ -1734,10 +1734,13 @@ constant, not a baked path).
   config.guess vendor (`pc`) disambiguates nothing — "Don't know how to
   translate x86_64-pc-linux-gnu for rustc". Fix is a consumer patch
   (`FixRustTargetDetection.diff`, `"unknown"`-vendor fallback) wired through
-  0ad's bundled-mozjs `patches/patch.sh` seam. Companion trap: 0.28 renamed
-  `LICENSE.txt` → `LICENSE.md` + `license_*.txt`, walling `package()` — check
-  a never-before-exercised recipe's file references against the current
-  source tree. Details: NOTE.md 2026-10-11.
+  0ad's bundled-mozjs `patches/patch.sh` seam. Companion trap (now a two-victim
+  class): upstreams rename license files silently — 0.28 `LICENSE.txt` →
+  `LICENSE.md` + `license_*.txt`, nautilus 51 `COPYING` → `LICENSE` (run #137)
+  — walling `package()`. Check a never-before-exercised recipe's file
+  references against the current source tree; for a pinned VCS tag a raw-file
+  probe is cheap deterministic evidence (evince 48.4 verified still
+  `COPYING`). Details: NOTE.md 2026-10-11.
 
 - **A bundled consumer broken by a house `-git` library's API removal gets a
   consumer patch — and gbuild patches carry per-tarball levels**

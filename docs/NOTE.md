@@ -37,6 +37,35 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-11 — run #137 nautilus: GNOME renamed `COPYING` → `LICENSE`, walling `package()` (license-file-rename class, second victim)
+
+**Symptom.** `nautilus` failed 39 s in, at the very end of `package()`:
+`install: cannot stat '.../src/nautilus/COPYING'` (both split packages —
+`package_nautilus` and `package_libnautilus-extension` install the file).
+
+**Root cause.** nautilus 51.0.1 renamed the top-level `COPYING` to `LICENSE`.
+Second incident of the license-file-rename class in one campaign (first: 0ad
+0.28's `LICENSE.txt` → `LICENSE.md` + `license_*.txt`, run #136).
+
+**Fix.** Both `install` lines now reference `nautilus/LICENSE`. Sibling scan
+of the run's remaining four: `evince` carries an `install evince/COPYING`
+line but is **verified safe** — a raw-file probe of its pinned tag
+(gitlab.gnome.org raw `/48.4/`): `COPYING` 200, `LICENSE` 404 (evince 48.4
+predates the rename wave); `xdg-desktop-portal-git`,
+`xdg-desktop-portal-gnome-git` and `networkmanager-openvpn` ship no license
+install line at all.
+
+**Validation.** Rehearsal `-fi --no-deps nautilus` (owner CPU): ✓ 35 s, run
+record `nautilus succeeded 0 35 ok`; `pacman -Q` shows `nautilus
+51.0.1-2.1` + `libnautilus-extension 51.0.1-2.1`, both archives carry their
+`usr/share/licenses/` payload. `bash -n` + `makepkg --printsrcinfo` clean
+both sides (twin marked `pkgrel=2.1`, edited in-place).
+
+**Rule.** Same as run #136: verify a recipe's `package()` file references
+against the source tree at first exercise or after a version bump — upstreams
+rename license/readme files silently. For a pinned VCS tag, a raw-file probe
+is cheap deterministic evidence.
+
 ## 2026-10-11 — run #136 0ad: rust-git's new vendor-specific targets break mozjs's host-triplet translation, and 0.28 renamed its license file
 
 **Symptom.** First-ever build of `0ad` died 6 min in at the bundled mozjs-128

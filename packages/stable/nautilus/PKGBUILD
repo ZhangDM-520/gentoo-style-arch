@@ -117,7 +117,7 @@ package_nautilus() {
   # trim: gettext locales (docs) — not shipped in this recipe
   rm -rf usr/share/locale usr/share/doc
 
-  install -Dm644 "$srcdir"/nautilus/COPYING -t "$pkgdir/usr/share/licenses/$pkgname/"
+  install -Dm644 "$srcdir"/nautilus/LICENSE -t "$pkgdir/usr/share/licenses/$pkgname/"
 }
 
 package_libnautilus-extension() {
@@ -131,7 +131,7 @@ package_libnautilus-extension() {
 
   mv libne/* "$pkgdir"
 
-  install -Dm644 "$srcdir"/nautilus/COPYING -t "$pkgdir/usr/share/licenses/$pkgname/"
+  install -Dm644 "$srcdir"/nautilus/LICENSE -t "$pkgdir/usr/share/licenses/$pkgname/"
 }
 
 # vim:set sw=2 sts=-1 et:
