@@ -164,16 +164,26 @@
    every removal site. (last reviewed 2026-10-04)
 9. **IgnorePkg registration is dynamic** — the static closure contract
    ("every workspace pkgname must appear in the host conf") is retired
-   2026-10-05. An install run (`-i`/`-fi`/`-ia`) registers the
-   pkgbase+pkgname of every ACCEPTED archive (install rows AND skip rows)
-   into the `[options]` `IgnorePkg` closure of the target pacman.conf
-   (`/etc/pacman.conf` by default, `_IGNOREPKG_CONF` seam) before
-   `pacman -U` runs. Name sources per archive, in authority order: the
+   2026-10-05. Registration runs at ARCHIVE-ACCEPTANCE time — build
+   completion and the `-s`/`--skip-built` claim (2026-10-10) — AND again
+   before `pacman -U`: the pkgbase+pkgname of every ACCEPTED archive
+   (built, claimed, install rows AND skip rows) lands in the `[options]`
+   `IgnorePkg` closure of the target pacman.conf (`/etc/pacman.conf` by
+   default, `_IGNOREPKG_CONF` seam) before anything can install it. The
+   acceptance-time step closes the foreign-transaction leak (2026-10-06
+   pipewire set: a build-only run left its archives unprotected and a
+   later hand-run `pacman -U` installed them), so a name is covered even
+   when this run never installs. The acceptance step never blocks on the
+   system db: a HELD `db.lck` skips it LOUDLY (a build must not contend
+   with a foreign transaction) and an empty acceptance set is nothing to
+   protect — while name resolution stays fail-closed in every path. Name
+   sources per archive, in authority order: the
    archive's own `.PKGINFO` `pkgbase`/`pkgname` lines, else the recipe
    directory beside the archive (house layout PKGDEST=$startdir): the
    committed `.SRCINFO` pkgbase+pkgname, else the evaluated PKGBUILD. An
-   archive whose names cannot be established REFUSES the install (fail-closed,
-   never a silent skip). The conf rewrite is deferred until the pacman
+   archive whose names cannot be established REFUSES the acceptance or the
+   install (fail-closed, never a silent skip). The conf rewrite is deferred
+   until the pacman
    database lock clears (bounded wait, default 300 s, `_PACMAN_LOCK_WAIT_S`)
    and the lock is NEVER deleted; a wait timeout or registration failure
    refuses the install before any transaction runs. `--no-register-ignorepkg`
@@ -194,8 +204,12 @@
    silently dropped — diff the pkgbase+pkgname universe against
    `pacman-conf IgnorePkg | sort -u` with `comm -23` (empty = covered;
    `pacman-conf` reads the file directly and needs no database lock). Pinned
-   by `tests/ignorepkg-register.sh`.
-   (last reviewed 2026-10-05)
+   by `tests/ignorepkg-register.sh`. Because registration now fires on every
+   accepted archive, a fixture must point `_IGNOREPKG_CONF` at its own
+   workspace conf — `tests/lib/fixture-lib.bash`'s `make_workspace` exports
+   one, and a synthetic build without the seam escalates through the host's
+   passwordless sudo into the REAL conf (measured 2026-10-09).
+   (last reviewed 2026-10-10)
 10. **Logs**: append one `## YYYY-MM-DD — topic` section per incident to
     NOTE.md: symptom → root cause → fix → rule.
 11. **Install-before-dependents-compile**: never build-then-install-collectively.

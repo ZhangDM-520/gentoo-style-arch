@@ -1,42 +1,3 @@
-# NOTE — Gentoo_Style_Arch maintainer incident journal
-
-Historical journal for the self-built `-git` Arch package set. The current
-project stores one clean recipe per package and keeps runtime `src/`, `pkg/`,
-logs, caches, and source mirrors outside the publishable interface.
-Chronological incident log below (symptom -> root cause -> fix -> rule);
-current consolidated state lives in `MEMORY.md`.
-
-Older entries retain historical directory names where they explain an
-incident. They are not active configuration. Do not add private paths,
-credentials, downloaded sources, or generated build output to this journal.
-
-### Naming history (read this before interpreting old entries)
-
-The workspace was reorganized twice; entries keep whatever names were true when
-they were written. Current names are `packages/<category>/<package-id>/` with
-categories `git`, `stable`, `core`, `misc` (the `third-party` category was
-retired 2026-09-27), and logical groups `git`, `stable`, `core`, `misc`,
-`app`, `build-tools` (stated in `config/topology.conf`).
-
-| In older entries | Was | Now |
-| --- | --- | --- |
-| `.Heavy/`, `.Heavyweight/` | the heavyweight build area | `packages/core/` (or `packages/git/` for rolling recipes) |
-| `.Static/`, `.Stable/` | stock-name packages whose versions track the repos | `packages/stable/` (or `packages/git/`) |
-| `.Core/` | `.Heavyweight/` renamed 2026-09-15 | `packages/core/` |
-| `.3rdP/` | third-party application recipes | `packages/stable/` — directory retired 2026-09-27 (group `third-party` retired with it; the recipes are `app` members) |
-| `.Misc/` | auxiliary recipes | `packages/misc/` |
-| `-g static`, `-g heavy`, `-g critical`, `-g rocm` | four separate groups | `-g stable` and `-g core` (2026-09-15); `core` auto-enables `-i` |
-| `git,stable,core,misc,app` (five-name roster) | the logical-group roster before 2026-10-04 | six names — `build-tools` added 2026-10-04 |
-| `-si`, `--sepinstall` | the separated-install flag | removed 2026-09-17 — `-i`/`--install` is the only spelling |
-| `--installall` at end of run | the old collective install | `-ia` remains as a one-transaction escape hatch; a normal run installs per package with `-i` |
-| `tests/*-pgo-transition.sh` (five 6-line wrappers) | one wrapper per PGO recipe | folded into `tests/pgo-transition.sh` (no args = all five pairs) on 2026-09-24 |
-| `tests/kernel-config-verify.sh`, `kernel-recipe-sums.sh`, `kernel-recipe-version.sh` | three kernel fixtures | one `tests/kernel-recipes.sh` with three sections (2026-09-24) |
-| `tests/log-ownership-root.sh`, `noctalia-pgo-train.sh`, `zen-pgo-workload.sh` + `zen-pgo-speedometer.sh`, `vencord-recipe.sh` + `vencord-inject.sh`, `project-config.sh` + `project-cli-hints.sh` | one file per sub-area | sections of `tests/log-ownership.sh`, `noctalia-pgo.sh`, `zen-pgo.sh`, `vencord.sh`, `project.sh` (2026-09-24) |
-
-So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
-and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
-dependency edges, and incident root causes are unaffected by the renames.
-
 ## 2026-10-11 — run #137 nautilus: GNOME renamed `COPYING` → `LICENSE`, walling `package()` (license-file-rename class, second victim)
 
 **Symptom.** `nautilus` failed 39 s in, at the very end of `package()`:
@@ -1892,6 +1853,80 @@ with a `-git` provider is unsatisfiable by construction — request the NAME
 (house style) and let the versioned provide resolve it. When a `-git`
 provider jumps its base version, expect the exact-pinned consumers'
 dep-resolution walls next; fix them as one coupled batch.
+
+## 2026-10-10 — dynamic IgnorePkg registration missed build-only acceptance: a foreign `pacman -U` installed unregistered names (pipewire set) — registration moved to archive-acceptance time
+
+**Symptom.** The gap audit found 9 our-build names unregistered in the host
+closure (`pipewire`, `pipewire-alsa`, `pipewire-audio`, `pipewire-pulse`,
+`libpipewire`, `alsa-card-profiles`, `bettbox`, `niri-spicy-git`,
+`xwayland-satellite-git`). The six pipewire names were BUILT by a builder run
+(2026-10-06 03:49) but installed by a hand-run cross-recipe `pacman -U` after
+a `-R gst-plugin-pipewire` swap wave — a transaction outside this run's
+install pipeline, so the pre-`pacman -U` registration step never saw it. The
+three older names predate the feature commit entirely (builder install,
+manual `pacman --upgrade`, paru).
+
+**Root cause.** Registration lived ONLY in the install pipeline: a build-only
+run (no `-i`) — and an `-s` freshness claim — leaves accepted archives in the
+workspace with nothing registered, and anything that later installs them
+foreignly reads an open closure. A coverage boundary, not a broken write: the
+pipeline step itself registered install and skip rows correctly (N1–N5 green).
+
+**Fix.** `build_package` now registers at ARCHIVE-ACCEPTANCE time in addition
+to the retained install-pipeline step: (a) the post-build hook registers the
+union of the claimed current set (`list_split_pkgs`) and the CHANGED
+archives — the union, not the intersection, because a pkgver drift leaves the
+committed metadata naming nothing; (b) the skip-claim hook registers
+`$_FRESHNESS_ARCHIVE` before the `-s`/`--skip-built` claim returns. Both
+ride the same core (`install_register_ignorepkg` → mutex RMW →
+`register_ignorepkg_names`), the same `$_IGNOREPKG_CONF` seam and the same
+loud `--no-register-ignorepkg`. Split outputs and epoch'd (`1:2.0-1`)
+filenames resolve through the archives' own `.PKGINFO` rung. The acceptance
+wrapper (`acceptance_register_ignorepkg`) deliberately weakens TWO install-path
+rules, because acceptance is not an install: an EMPTY acceptance set is
+nothing-to-protect (a message-only stub build keeps its old success shape,
+and the install plan keeps its own `refuse empty-list`), and a HELD system
+`db.lck` skips the registration LOUDLY instead of waiting out the bounded
+deferral — a build must never block on or fail for a foreign transaction
+(`tests/signal-abort-lock.sh` phase 5 pins the build-over-a-held-lock
+success). Name resolution stays fail-closed everywhere: an UNNAMEABLE archive
+is refused at acceptance too.
+
+**The fixture blast radius (found the hard way).** With registration firing
+on every built archive, `tests/scheduler-core-solo.sh` — no `_IGNOREPKG_CONF`,
+no sudo stub — escalated through the host's passwordless sudo and appended 5
+synthetic names to the REAL `/etc/pacman.conf` (restored surgically within the
+hour; the file's other same-hour change was a concurrent actor's roster-lock
+block and was left untouched). `tests/lib/fixture-lib.bash`'s `make_workspace`
+now creates and EXPORTS a workspace-local registration target for every
+synthetic workspace, so the battery stays non-mutating even for build-only
+fixtures and a forgotten per-run seam cannot reach the host conf.
+
+**Validation.** `fish -n build-all.fish`, `bash -n` on the fixture;
+`tests/ignorepkg-register.sh` grows N6 (the leak: a split epoch'd build-only
+run with real `.PKGINFO` archives — one carrying a pkgname only the archive
+knows, pinning rung-1 authority — then a foreign stub `pacman -U` whose oracle
+reads the conf at transaction time), N7 (split outputs through the one
+transaction), N8a (an `-s` claim with nothing to install registers), N8b
+(same-version skip rows register and transact nothing), N8c (`-s -fi`: claim
+plus forced rows, covered at U-time). Mutation probes: disabling both
+acceptance hooks reddens N6 while N1–N5 stay green; disabling only the
+skip-claim hook reddens N8a while N6/N7 stay green. The first full battery
+pass was 50/55 — the empty-set refusal and the lock-fail semantics broke
+five pinned contracts (message-only stub builds, `refuse empty-list`
+rendering, build-over-a-held-lock); the wrapper's two weakenings restored
+all five without touching N1–N8. Final: 55/55 green
+(`bash tests/run-all.sh`), plus `--audit`/`--list`/`--dry-run --group git`
+on the modified builder.
+
+**Rule.** Every accepted archive name must be registered before ANYTHING can
+install it — the install pipeline is not the only installer, and a
+build-only run is not a name-free run. Registration is protective metadata,
+not build work: it never blocks on the system db (a held `db.lck` skips it
+loudly), while name resolution is fail-closed everywhere. A fixture that
+lets the builder BUILD must point `_IGNOREPKG_CONF` at its own conf
+(`make_workspace` exports one); a synthetic build without the seam writes
+the HOST conf.
 
 ## 2026-10-09 — harfbuzz-git: upstream's new hb-gpu demo wanted GLFW and the wrap-fetch is off — disable the demo, keep the library
 

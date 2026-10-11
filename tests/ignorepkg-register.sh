@@ -50,6 +50,30 @@ set -euo pipefail
 #   N5 idempotent second install run — `no changes needed`, conf
 #      byte-identical, exactly one dated backup.
 #
+# Acceptance-time sections (N6–N8), each in its own `( subshell )` — the
+# registration that runs when a build (or an -s/--skip-built claim) is
+# ACCEPTED, before this run may ever install anything. The real failure mode
+# they reproduce (2026-10-06 pipewire set): a build-only run leaves its
+# archives in the workspace and a later FOREIGN transaction — hand-run
+# cross-recipe pacman -U, an AUR helper — installs them while /etc/pacman.conf
+# does not cover their names. Split outputs and real tar .PKGINFO payloads
+# throughout (stub archives are EMPTY elsewhere in this file, so only these
+# sections exercise rung 1 of install_register_names):
+#   N6 the leak itself — a split, EPOCH'd build-only run (no -i at all) must
+#      have every archive name covered BEFORE any transaction exists, proven
+#      by a foreign stub pacman -U run afterwards whose oracle reads the conf
+#      at transaction time; one output's .PKGINFO carries an extra pkgname the
+#      recipe metadata does not know, so the coverage can only come from the
+#      archive itself (rung 1 authority);
+#   N7 split outputs through the install pipeline — one transaction covering
+#      pkgbase + every output at U-time;
+#   N8a an -s freshness CLAIM with nothing to install — the claimed set's
+#      names land in the conf even though this run never installs;
+#   N8b same-version skip rows — registration lands, but the skip rows run NO
+#      transaction;
+#   N8c -s + -fi — the claim plus FORCE rows: the forced transaction runs and
+#      finds every name covered.
+#
 # Mutation probes — all RUN on 2026-10-05, each red at its own named assertion,
 # each reversed by pasting the original line back (never `git checkout`/
 # `git stash`). Anchors are function names, not line numbers:
@@ -69,7 +93,12 @@ set -euo pipefail
 #   M-idem idempotence: `if test (count $missing) -gt 0` → `if true` in
 #      register_ignorepkg_names, with case b's twin assertion suspended for
 #      that run → N5 red (the second install run rewrites instead of reporting
-#      `no changes needed`).
+#      `no changes needed`);
+#   M-N6 acceptance hooks: delete the two acceptance-time
+#      `install_register_ignorepkg` calls in build_package (the skip-claim
+#      block and the post-build block) → N6 red (conf empty at the foreign
+#      transaction) and N8a red (nothing registers on a skip claim), while
+#      N1–N5 stay green — that split is exactly what the leak was.
 #
 # rc vocabulary under test: 0 = closure complete afterwards (nothing to
 # append counts), 1 = refusal with nothing changed, 2 = bad usage.
@@ -287,6 +316,158 @@ run_install() {
 run_text() {
     printf '%s\n' "$FIXTURE_OUTPUT"
     cat "$1/state/logs"/*.log 2>/dev/null
+}
+
+# ─── acceptance-time helpers (N6–N8) ─────────────────────────────────────────
+# make_split_ws WS ID EPOCH OUTPUT... — a SPLIT recipe (pkgbase ID, one
+# pkgname per OUTPUT) whose makepkg stub writes REAL package archives: a tar
+# member .PKGINFO per output is what rung 1 of install_register_names reads,
+# so N6–N8 exercise the authority path instead of the empty-archive recipe
+# fallback every other section uses. EPOCH=1 stamps an epoch'd version —
+# archive filenames carry `1:2.0-1`, the shape real makepkg writes (see
+# /var/cache/pacman/pkg/*:*), and `pkgbuild_version` folds the epoch into the
+# discovery stem the same way. The pacman stub is the U-time oracle from
+# make_install_ws plus an `answered` probe mode (GSA_FAKE_PROBE_MODE=answered:
+# -Qp/-Qi report the archive's version as already installed with an install
+# date in 2099), which is exactly what the freshness payload gate and
+# install_skip_reason's same-version skip row need; the default `doubt` mode
+# keeps both queries failing, so a plan installs rather than skips.
+# GSA_FAKE_PKGVER is the version token in the archive filenames (`2.0-1`, or
+# `1:2.0-1` when EPOCH=1); GSA_FAKE_PKGINFO_EXTRA='OUTPUT=extra-name' adds a
+# pkgname line to one output's .PKGINFO only (N6's rung-1 authority pin).
+make_split_ws() {
+    local ws=$1 id=$2 epoch=$3 out
+    shift 3
+    make_workspace "$ws" 1 1 low
+    stub_sudo "$ws"
+    mkdir -p "$ws/packages/$id"
+    {
+        printf 'pkgbase=%s\n' "$id"
+        printf 'pkgname=('
+        printf '%s ' "$@"
+        printf ')\n'
+        if [[ $epoch == 1 ]]; then
+            printf 'epoch=1\n'
+        fi
+        printf 'pkgver=2.0\npkgrel=1\narch=(any)\n'
+    } >"$ws/packages/$id/PKGBUILD"
+    {
+        printf 'pkgbase = %s\n' "$id"
+        for out in "$@"; do
+            printf 'pkgname = %s\n' "$out"
+        done
+        printf 'pkgver = 2.0\npkgrel = 1\n'
+        if [[ $epoch == 1 ]]; then
+            printf 'epoch = 1\n'
+        fi
+    } >"$ws/packages/$id/.SRCINFO"
+    printf '%s|packages/%s|git|\n' "$id" "$id" >>"$ws/config/topology.conf"
+    cat >"$ws/bin/makepkg" <<'EOF'
+#!/usr/bin/env bash
+set -eu
+id=$(basename "$PWD")
+printf '%s\n' "$id" >>"${GSA_FAKE_MAKEPKG_LOG:?}"
+field() { awk -v k="$1" -F' = ' '$1 == k { print $2; exit }' .SRCINFO; }
+epoch=$(field epoch)
+ver="${epoch:+$epoch:}$(field pkgver)-$(field pkgrel)"
+stage="$PWD/.pkginfo-stage"
+rm -rf "$stage"; mkdir -p "$stage"
+while read -r out; do
+    {
+        printf 'pkgbase = %s\n' "$id"
+        printf 'pkgname = %s\n' "$out"
+        extra=$(printf '%s\n' "${GSA_FAKE_PKGINFO_EXTRA:-}" | awk -F= -v o="$out" '$1 == o { print $2 }')
+        if [[ -n $extra ]]; then
+            printf 'pkgname = %s\n' "$extra"
+        fi
+    } >"$stage/.PKGINFO"
+    tar -cf "$PWD/$out-$ver-any.pkg.tar.zst" -C "$stage" .PKGINFO
+done < <(awk -F' = ' '$1 == "pkgname" { print $2 }' .SRCINFO)
+rm -rf "$stage"
+exit 0
+EOF
+    cat >"$ws/bin/pacman" <<'EOF'
+#!/usr/bin/env bash
+set -u
+printf 'pacman %s\n' "$*" >>"${GSA_FAKE_PACMAN_LOG:?}"
+case ${1:-} in
+-Qp)
+    [[ ${GSA_FAKE_PROBE_MODE:-doubt} == answered ]] || exit 1
+    base=$(basename -- "${3:-}")
+    printf '%s %s\n' "${base%"-${GSA_FAKE_PKGVER:?}-any.pkg.tar.zst"}" "$GSA_FAKE_PKGVER"
+    exit 0
+    ;;
+-Qi)
+    [[ ${GSA_FAKE_PROBE_MODE:-doubt} == answered ]] || exit 1
+    printf 'Name            : %s\nVersion         : %s\nInstall Date    : 2099-10-09 00:00:00\n' \
+        "${3:-}" "$GSA_FAKE_PKGVER"
+    exit 0
+    ;;
+-U)
+    conf=${GSA_FAKE_EXPECT_CONF:?fixture forgot GSA_FAKE_EXPECT_CONF}
+    covered=$(awk '
+        /^\[/ { inopt = ($0 == "[options]") }
+        inopt && /^IgnorePkg/ { sub(/^IgnorePkg *= */, ""); print }
+    ' "$conf")
+    state=covered
+    for n in ${GSA_FAKE_EXPECT_NAMES:?fixture forgot GSA_FAKE_EXPECT_NAMES}; do
+        tr ' ' '\n' <<<"$covered" | grep -qxF -- "$n" || state="NOT covered: $n"
+    done
+    printf 'U-time: %s %s\n' "$state" "${GSA_FAKE_EXPECT_NAMES}" \
+        >>"${GSA_FAKE_PACMAN_LOG}"
+    ;;
+esac
+exit 0
+EOF
+    chmod +x "$ws/bin/makepkg" "$ws/bin/pacman"
+}
+
+# prebuild_split WS ID — stage the "already built" state a skip claim sees:
+# the stub makepkg IS the archive factory (called directly, marker cleared
+# afterwards so an unwanted rebuild is still observable), and the toolchain
+# record matches the running compiler so build_package's drift clean cannot
+# delete the set (package_toolchain_state_matches).
+prebuild_split() {
+    local ws=$1 id=$2 gcc_id
+    if command -v gcc >/dev/null 2>&1; then
+        gcc_id=$(env LC_ALL=C gcc --version | head -1)
+    else
+        gcc_id='gcc unavailable'
+    fi
+    mkdir -p "$ws/state/toolchains"
+    printf '%s\n%s\n' "$ws/packages/$id" "$gcc_id" >"$ws/state/toolchains/$id"
+    ( cd "$ws/packages/$id" && GSA_FAKE_MAKEPKG_LOG="$ws/makepkg.log" "$ws/bin/makepkg" >/dev/null )
+    : >"$ws/makepkg.log"
+}
+
+# run_gen WS SEL EXPECT_NAMES [VAR=VAL ...] [BUILD-ARG ...] — the N6–N8 runner
+# (run_install's parameterised twin: the selection and the U-time oracle's
+# expected names are arguments, so a split recipe can assert pkgbase + every
+# output). VAR=VAL arguments are extra stub env; anything else rides the
+# builder's own arguments. _IGNOREPKG_CONF is the WORKSPACE conf — without it
+# the registration would rewrite the host's /etc/pacman.conf.
+run_gen() {
+    local ws=$1 sel=$2 names=$3 arg
+    shift 3
+    local envs=() build=()
+    for arg in "$@"; do
+        if [[ $arg == *=* && $arg != -* ]]; then
+            envs+=("$arg")
+        else
+            build+=("$arg")
+        fi
+    done
+    run_builder env PATH="$ws/bin:$PATH" LC_ALL=C \
+        GSA_STATE_DIR="$ws/state" \
+        _IGNOREPKG_CONF="$ws/pacman.conf" \
+        GSA_FAKE_PACMAN_LOG="$ws/pacman.log" \
+        GSA_FAKE_MAKEPKG_LOG="$ws/makepkg.log" \
+        GSA_FAKE_SUDO_LOG="$ws/sudo.log" \
+        GSA_FAKE_EXPECT_CONF="$ws/pacman.conf" \
+        GSA_FAKE_EXPECT_NAMES="$names" \
+        "${envs[@]}" \
+        fish "$ws/build-all.fish" --allow-broken-rustc --no-deps --no-sync \
+            --lanes 1 --jobs 1 "${build[@]}" "$sel"
 }
 
 # ─── main scenario: one workspace + one conf feeding cases a, b, c, f, g ─────
@@ -623,6 +804,136 @@ printf 'i: stale .SRCINFO = loud named finding, blocked OK\n'
     ((${#baks[@]} == 1)) ||
         fail "two install runs must leave exactly one dated backup, got: ${baks[*]:-none}"
     printf 'N5: second install run is idempotent OK\n'
+)
+
+# ─── N6. the real leak: build-only acceptance must register first ────────────
+(
+    fail() {
+        printf 'ignorepkg-register N6: %s\n' "$1" >&2
+        exit 1
+    }
+    ws=$tmp/ws-n6
+    make_split_ws "$ws" p6 1 p6-a p6-b p6-legacy
+    # N6 builds only: the registration target is user-writable, so a tripwire
+    # sudo (fails, logs) proves nothing escalates on the acceptance path.
+    tripwire_sudo "$ws"
+    run_gen "$ws" p6 "p6 p6-a p6-b p6-legacy p6-extra" \
+        GSA_FAKE_PKGVER='1:2.0-1' GSA_FAKE_PKGINFO_EXTRA='p6-b=p6-extra'
+    ((FIXTURE_RC == 0)) ||
+        fail "the build-only run must succeed, got rc=$FIXTURE_RC: $(run_text "$ws")"
+    text=$(run_text "$ws")
+    grep -q 'appended' <<<"$text" ||
+        fail "the acceptance-time registration must report its write: $text"
+    # p6-extra exists ONLY in the archives' .PKGINFO — no recipe metadata can
+    # produce it, so this coverage failing is rung 1 regressing behind the
+    # recipe-dir fallback.
+    conf_covers "$ws/pacman.conf" p6 p6-a p6-b p6-legacy p6-extra ||
+        fail "build acceptance must cover pkgbase + every output + the .PKGINFO-only name: $(cat "$ws/pacman.conf")"
+    [[ ! -s $ws/sudo.log ]] ||
+        fail "a user-writable registration target must never invoke sudo: $(cat "$ws/sudo.log" 2>/dev/null || true)"
+    if grep -q 'pacman -U' "$ws/pacman.log" 2>/dev/null; then
+        fail "a build-only run must not transact: $(cat "$ws/pacman.log")"
+    fi
+    # FOREIGN transaction — the 2026-10-06 pipewire leak shape: the archives
+    # are installed later by something outside this run's install pipeline.
+    GSA_FAKE_PACMAN_LOG="$ws/pacman.log" GSA_FAKE_EXPECT_CONF="$ws/pacman.conf" \
+        GSA_FAKE_EXPECT_NAMES='p6 p6-a p6-b p6-legacy p6-extra' \
+        "$ws/bin/pacman" -U "$ws/packages/p6/"*.pkg.tar.zst >/dev/null 2>&1
+    grep -qF 'U-time: covered' "$ws/pacman.log" ||
+        fail "the foreign transaction found unregistered names — the leak is open: $(cat "$ws/pacman.log" 2>/dev/null || true)"
+    printf 'N6: build-only acceptance registers before any transaction OK\n'
+)
+
+# ─── N7. split outputs through the install pipeline, rung 1 payloads ─────────
+(
+    fail() {
+        printf 'ignorepkg-register N7: %s\n' "$1" >&2
+        exit 1
+    }
+    ws=$tmp/ws-n7
+    make_split_ws "$ws" p7 0 p7-a p7-b
+    run_gen "$ws" p7 "p7 p7-a p7-b" GSA_FAKE_PKGVER='2.0-1' --install
+    ((FIXTURE_RC == 0)) ||
+        fail "the install run must succeed, got rc=$FIXTURE_RC: $(run_text "$ws")"
+    grep -q 'pacman -U' "$ws/pacman.log" ||
+        fail "the transaction never ran: $(cat "$ws/pacman.log" 2>/dev/null || true)"
+    grep -qF 'U-time: covered p7 p7-a p7-b' "$ws/pacman.log" ||
+        fail "pkgbase + every output must be covered at -U time: $(cat "$ws/pacman.log" 2>/dev/null || true)"
+    conf_covers "$ws/pacman.conf" p7 p7-a p7-b ||
+        fail "the closure must carry pkgbase + every output: $(cat "$ws/pacman.conf")"
+    printf 'N7: split outputs register before the single transaction OK\n'
+)
+
+# ─── N8a. an -s freshness CLAIM registers with nothing to install ────────────
+(
+    fail() {
+        printf 'ignorepkg-register N8a: %s\n' "$1" >&2
+        exit 1
+    }
+    ws=$tmp/ws-n8a
+    make_split_ws "$ws" p8 0 p8-a p8-b
+    prebuild_split "$ws" p8
+    run_gen "$ws" p8 "p8 p8-a p8-b" \
+        GSA_FAKE_PKGVER='2.0-1' GSA_FAKE_PROBE_MODE=answered -s
+    ((FIXTURE_RC == 0)) ||
+        fail "the skip claim must succeed, got rc=$FIXTURE_RC: $(run_text "$ws")"
+    # Lane mode is ALWAYS quiet: the `already built` line is a non-quiet-only
+    # render, so the claim's observable is that makepkg never ran while the
+    # claimed set's names landed in the conf — with no build there is no
+    # post-build hook either, so that write can only be the skip CLAIM's.
+    [[ ! -s $ws/makepkg.log ]] ||
+        fail "a claimed-fresh package must not rebuild: $(cat "$ws/makepkg.log")"
+    if grep -q 'pacman -U' "$ws/pacman.log" 2>/dev/null; then
+        fail "a build-only skip claim must not transact: $(cat "$ws/pacman.log")"
+    fi
+    conf_covers "$ws/pacman.conf" p8 p8-a p8-b ||
+        fail "the skip CLAIM must register the claimed set (a foreign install of it is otherwise unprotected): $(cat "$ws/pacman.conf")"
+    printf 'N8a: skip-claim acceptance registers without any install OK\n'
+)
+
+# ─── N8b. same-version skip rows: registered, but no transaction ─────────────
+(
+    fail() {
+        printf 'ignorepkg-register N8b: %s\n' "$1" >&2
+        exit 1
+    }
+    ws=$tmp/ws-n8b
+    make_split_ws "$ws" p8 0 p8-a p8-b
+    run_gen "$ws" p8 "p8 p8-a p8-b" \
+        GSA_FAKE_PKGVER='2.0-1' GSA_FAKE_PROBE_MODE=answered --install
+    ((FIXTURE_RC == 0)) ||
+        fail "a same-version skip plan must not fail the run, got rc=$FIXTURE_RC: $(run_text "$ws")"
+    text=$(run_text "$ws")
+    grep -q 'already installed at' <<<"$text" ||
+        fail "the skip note must render for the skip rows: $text"
+    if grep -q 'pacman -U' "$ws/pacman.log" 2>/dev/null; then
+        fail "skip rows must run no transaction: $(cat "$ws/pacman.log")"
+    fi
+    conf_covers "$ws/pacman.conf" p8 p8-a p8-b ||
+        fail "skip rows are archives this run keeps — their names must be registered: $(cat "$ws/pacman.conf")"
+    printf 'N8b: same-version skip rows register and transact nothing OK\n'
+)
+
+# ─── N8c. -s + -fi: the claim plus forced rows ───────────────────────────────
+(
+    fail() {
+        printf 'ignorepkg-register N8c: %s\n' "$1" >&2
+        exit 1
+    }
+    ws=$tmp/ws-n8c
+    make_split_ws "$ws" p8 0 p8-a p8-b
+    prebuild_split "$ws" p8
+    run_gen "$ws" p8 "p8 p8-a p8-b" \
+        GSA_FAKE_PKGVER='2.0-1' GSA_FAKE_PROBE_MODE=answered -s -fi
+    ((FIXTURE_RC == 0)) ||
+        fail "the forced install of a claimed set must succeed, got rc=$FIXTURE_RC: $(run_text "$ws")"
+    grep -q 'pacman -U' "$ws/pacman.log" ||
+        fail "-fi must bypass the same-version skip and transact: $(cat "$ws/pacman.log" 2>/dev/null || true)"
+    grep -qF 'U-time: covered p8 p8-a p8-b' "$ws/pacman.log" ||
+        fail "the forced transaction must find every name covered: $(cat "$ws/pacman.log" 2>/dev/null || true)"
+    conf_covers "$ws/pacman.conf" p8 p8-a p8-b ||
+        fail "the closure must carry the claimed set: $(cat "$ws/pacman.conf")"
+    printf 'N8c: -s + -fi forces the transaction with every name covered OK\n'
 )
 
 printf 'ignorepkg-register fixture: PASS\n'

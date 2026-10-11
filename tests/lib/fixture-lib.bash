@@ -157,11 +157,23 @@ EOF
 # fixture that wants to EXERCISE the registry writes entries here), plus
 # packages/ and bin/ for the fixture to fill.
 # Fixture-specific records and anything after that belong to the fixture.
+#
+# The workspace also gets its OWN dynamic IgnorePkg registration target
+# ($_IGNOREPKG_CONF, exported — see make_install_conf) since 2026-10-09:
+# registration runs at archive-ACCEPTANCE time for every built package, not
+# only on installs, so a build-only fixture without this seam would escalate
+# through the host's passwordless sudo and mutate the real /etc/pacman.conf —
+# measured, not hypothetical (the scheduler-core-solo incident that same day).
+# A fixture with several workspaces gets the LAST one exported; runs that
+# must target a specific conf pass _IGNOREPKG_CONF in their own run env
+# (env(1) applies assignments left to right, so the per-run value wins).
 make_workspace() {
     local dir=$1 lanes=${2:-auto} jobs=${3:-auto} intensity=${4:-xhigh}
     mkdir -p "$dir/config" "$dir/packages" "$dir/bin"
     cp "$gsa_repo_root/build-all.fish" "$dir/build-all.fish"
     mkdir -p "$dir/lib" && cp "$gsa_repo_root/lib/sources.fish" "$gsa_repo_root/lib/audit.fish" "$dir/lib/"
+    make_install_conf "$dir/pacman.conf"
+    export _IGNOREPKG_CONF="$dir/pacman.conf"
     cat >"$dir/config/build-defaults.conf" <<EOF
 lanes=$lanes
 jobs=$jobs

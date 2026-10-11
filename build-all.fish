@@ -3695,9 +3695,15 @@ function install_register_names
 end
 
 # install_register_ignorepkg LOG_FILE SINK ARCHIVE... — the dynamic IgnorePkg
-# registration step of the ONE install pipeline, run BEFORE pacman -U so a
-# name is never installed while unprotected (the whole point: the retired
-# static closure in /etc/pacman.conf cannot know what a future build installs).
+# registration step, run at ARCHIVE-ACCEPTANCE time (build completion and the
+# -s/--skip-built freshness claim) AND again before pacman -U, so a name is
+# never installed while unprotected (the whole point: the retired static
+# closure in /etc/pacman.conf cannot know what a future build installs).
+# Acceptance-time registration closes the foreign-transaction leak: archives
+# a build-only run leaves in the workspace can be installed later by a
+# hand-run pacman -U or an AUR helper, outside this run's install pipeline
+# (the 2026-10-06 pipewire set). The install-pipeline call still runs so the
+# fail-closed refusal lands before the transaction it guards.
 # It registers pkgbase+pkgname of every accepted archive (install AND skip rows
 # — both are archives this run keeps), through the shared names-driven core
 # register_ignorepkg_names (lib/audit.fish), into $_IGNOREPKG_CONF when set
@@ -3758,6 +3764,34 @@ function install_register_ignorepkg -a log_file sink
         return 1
     end
     return 0
+end
+
+# acceptance_register_ignorepkg LOG_FILE ARCHIVE... — the ARCHIVE-ACCEPTANCE
+# caller of install_register_ignorepkg (build completion and the
+# -s/--skip-built claim). Two deliberate weakenings of the install-path
+# contract, because acceptance is not an install:
+#   - an EMPTY archive set is not a failure: a build that accepted nothing
+#     exposes no name (the install plan keeps its own `refuse empty-list`
+#     for a run that then tries to install);
+#   - a HELD system pacman db.lck skips the registration LOUDLY instead of
+#     waiting out the bounded deferral — a build must never block on or fail
+#     for a foreign transaction (the busy-lock preflight is report-only, and
+#     tests/signal-abort-lock.sh phase 5 pins that a build over a held lock
+#     still succeeds). The names then stay unprotected until a later -i run
+#     or `--register-ignorepkg` backfill closes the gap, and the log says so.
+# Every other registration failure keeps the fail-closed contract: an
+# unnameable archive is refused at acceptance, never silently unprotected.
+function acceptance_register_ignorepkg -a log_file
+    set -l archives $argv[2..-1]
+    if test (count $archives) -eq 0
+        return 0
+    end
+    set -l lock (pacman_db_lock_path)
+    if test -e "$lock"
+        install_emit quiet "$log_file" warn "IgnorePkg registration SKIPPED: the pacman database lock is held ($lock) — "(count $archives)" accepted archive name(s) stay unprotected until an -i run or 'fish build-all.fish --register-ignorepkg' closes the closure"
+        return 0
+    end
+    install_register_ignorepkg "$log_file" quiet $archives
 end
 
 # install_execute LOG_FILE SINK N_EXTRA EXTRA... PLAN_ROW... — the ONE
@@ -4475,6 +4509,16 @@ function build_package -a package_id install_flag clean_flag skip_flag no_sync_f
                 if test "$_BUILD_QUIET" != "1"
                     ui_info "$pkg_name: already built ("(string join ', ' (basename -- $_FRESHNESS_ARCHIVE))")"
                 end
+                # Acceptance-time IgnorePkg registration (2026-10-09): a
+                # skip CLAIM keeps the archives in the workspace, where a
+                # later FOREIGN transaction (hand-run cross-recipe pacman -U,
+                # paru, …) can install them outside this run's install
+                # pipeline — the real 2026-10-06 pipewire leak class. The
+                # claimed set's names are registered NOW, not only when this
+                # run goes on to install them. ($log_file isn't defined yet —
+                # use the canonical path.)
+                acceptance_register_ignorepkg (package_log_file "$package_id") $_FRESHNESS_ARCHIVE
+                or return 1
                 # -s + -i: the skip path installs too — topo order must
                 # hold for already-built packages just the same. Install the
                 # CLAIMED set: list_split_pkgs keys to the committed pkgver
@@ -4679,6 +4723,26 @@ function build_package -a package_id install_flag clean_flag skip_flag no_sync_f
     if test "$_BUILD_QUIET" != "1"
         ui_success "$pkg_name: build succeeded ("(fmt_dur $dur)")"
     end
+
+    # Acceptance-time IgnorePkg registration (2026-10-09): every archive
+    # this build produced is registered the moment the build is accepted —
+    # a build-only run (-i off) leaves those archives in the workspace,
+    # where a later FOREIGN transaction can install them unprotected (the
+    # real 2026-10-06 pipewire leak class). The claimed current set
+    # (list_split_pkgs: complete split outputs at the evaluated pkgver) and
+    # the CHANGED set ride together: the first covers split outputs, the
+    # second covers an archive a pkgver drift leaves the committed metadata
+    # unable to name. Registering too many names is harmless; the wrapper
+    # refuses an UNNAMEABLE archive (fail-closed) and treats "nothing
+    # accepted" as nothing to protect.
+    set -l accept_archives
+    for accept_archive in (list_split_pkgs "$pkg_path") $changed_archives
+        if not contains -- "$accept_archive" $accept_archives
+            set -a accept_archives "$accept_archive"
+        end
+    end
+    acceptance_register_ignorepkg "$log_file" $accept_archives
+    or return 1
 
     # -i: install IMMEDIATELY, in topo order. A package must be installed
     # before its dependents compile, or they build/link against the old
