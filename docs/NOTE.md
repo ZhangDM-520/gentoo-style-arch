@@ -37,6 +37,48 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-11 — qemu build hard-freezes this host (3/3) — recipe retired by owner decision
+
+**Symptom.** Three complete machine freezes, all at the moment of the
+`qemu` build (2026-10-11 ~01:05, ~07:50, ~08:15 — two of them during
+rehearsal relaunches after the first). Each freeze killed the tool
+session ("interrupted") and dropped the USB workspace dock with f2fs
+`sudden-power-off` state on remount. No other build in the same window
+freezes the machine — including a concurrent `scx-sched-git` build.
+
+**Root cause.** Unresolved below the symptom line: the trigger is
+deterministic and specific to the qemu build (3/3 reproductions at the
+same build moment). Earlier work on this recipe had already walled on the
+icu 78→79 skew (its `brltty`/`vte3` makedeps link the stock icu 78
+sonames and cannot install beside house `icu-git`/soname 79; trimmed to
+`--disable-brlapi`/`--disable-vte`), plus a version-sync 11.1.2 adoption
+and the recipe's dual hash arrays (`sha512sums` is what makepkg validates;
+the `b2sums` array is inert). None of those seams reached a completed
+build — the freeze strikes first.
+
+**Fix (owner decision).** Retire qemu from the set: `git rm` the recipe
+(`packages/stable/qemu-system-x86`), drop its `config/topology.conf`
+record, re-derive the README counts (652 records / 877 group memberships,
+81 split-package recipes / 358 extra output names — the old figures were
+stale well beyond qemu), and reword the two dangling `qemu` citations
+(nfs-utils split-output comment, MEMORY's split-pin precedent). Kept:
+systemd's `qemu-base` optdep for `systemd-vmspawn` — stock repos supply
+that name. Host state after the freezes: `fsck.f2fs --dry-run` reported
+`No error was reported` each time; the workspace is intact.
+
+**Validation.** `bash tests/run-all.sh` green; `fish build-all.fish
+--audit` + `--list` clean at 652 records; `grep -rn qemu` over `config/`,
+`tests/` and recipe sources shows no remaining live reference.
+
+**Rule.** A recipe whose build hard-freezes this host is retired, not
+"fixed around": a freeze corrupts in-flight state (the workspace dock
+drops `sudden-power-off` every time) and each retry costs the whole
+machine. If qemu is ever re-added, first reproduce it in a bounded,
+observed rehearsal (`--jobs 2`, single lane, nothing else running), treat
+the freeze as a kernel/toolchain trigger, and capture the freezing step
+from the `.state/logs/<pkg>.log` tail plus `journalctl -b -1` before any
+further attempt. Never run it unattended or beside another heavy build.
+
 ## 2026-10-10 — run #124 gimp-git: `libmypaint-git` tracked master, an API generation neither consumer can use
 
 **Symptom.** Run #124 (65-package narrowed tail) walled in `gimp-git`'s meson

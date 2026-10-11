@@ -23,26 +23,26 @@ verification.
 
 ## What is included
 
-The current set has 653 recipe records — one per recipe directory — and 707
-group memberships (counts from the `groups` fields in `config/topology.conf`,
-cross-checked with `fish build-all.fish --list -g <group>`). The counts differ
-because `hip-runtime`, `hsa-rocr` and `openssl` are `stable,core` records,
-the 16 toolchain records are `core,build-tools`, each counted in both groups,
-and 11 split-package recipes build many pacman package names — one recipe,
-many pkgnames (`gst-plugins-base`, `vlc-plugin-freetype` and `gnome-desktop-4`
-are package names built by the `gstreamer`, `vlc` and `gnome-desktop` recipes,
-not records of their own), 35 of those output names counted with their
-recipe's group;
-`core` is a logical build group whose 53 members span the physical layout: 48
-live under `packages/core/`, `autofdo-git` and `libclc-git` come from
-`packages/git/`, and the three `stable,core` members from `packages/stable/`:
+The current set has 652 recipe records — one per recipe directory — and 877
+group memberships (counts of the `groups` tokens in `config/topology.conf`,
+counted 2026-10-11; re-check with
+`awk -F'|' 'NF>2 {n=split($3,a,","); for(i=1;i<=n;i++) c[a[i]]++} END {for (g in c) print g, c[g]}' config/topology.conf`).
+The counts differ because many records are dual-members (`stable,core`,
+`core,build-tools`, `git,core`, …), and 81 split-package recipes build many
+pacman package names — one recipe, many pkgnames (`gst-plugins-base`,
+`vlc-plugin-freetype` and `gnome-desktop-4` are package names built by the
+`gstreamer`, `vlc` and `gnome-desktop` recipes, not records of their own),
+358 output names beyond the record count;
+`core` is a logical build group whose 259 members deliberately overlap the
+physical layout: 50 recipes live under `packages/core/`, and further
+members come from `packages/git/` and `packages/stable/`:
 
 | Group | Members | Purpose |
 | --- | ---: | --- |
 | `git` | 140 | Top-level development and rolling packages |
-| `stable` | 474 | Stock-name packages synchronized with Arch repositories (grew 27 → 44 with the 2026-09-28 leaf-utility batch, then to 41 as three ABI hubs moved into `core` on 2026-10-04) |
-| `core` | 53 | Heavy, ABI-coupled, source-heavy, and ROCm packages |
-| `misc` | 1 | Optional CachyOS kernel recipe |
+| `stable` | 439 | Stock-name packages synchronized with Arch repositories |
+| `core` | 259 | Heavy, ABI-coupled, source-heavy, and ROCm packages |
+| `misc` | 0 | Roster slot (group name stays readable; no current member) |
 | `app` | 23 | Optional applications; a TTY build/`-n` run prompts to multi-select (all unchecked + Enter = build all; records sharing an `app-cluster` tag toggle as one row); leaf builds — app packages typically have no consumers to expand |
 | `build-tools` | 16 | Dispatch-priority class: within a run its members are dispatched before all other ready packages but never over build-order edges; membership is always dual `core,build-tools`, and selecting `-g build-tools` does not auto-enable `-i` |
 

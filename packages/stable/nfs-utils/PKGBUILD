@@ -73,7 +73,8 @@ package_nfs-utils() {
   pkgdesc="Support programs for Network File Systems"
   backup=(etc/{exports,nfs.conf,nfsmount.conf}
           var/lib/nfs/{etab,rmtab})
-  # sibling output pinned name=$pkgver-$pkgrel (qemu-system-x86 precedent)
+  # sibling output pinned name=$pkgver-$pkgrel (split-output precedent:
+  # outputs move as one version or pacman sees unsatisfiable exact pins)
   depends=('rpcbind' nfsidmap=$pkgver-$pkgrel 'gssproxy' 'libevent' 'device-mapper'
            'libxml2' 'libtirpc' 'e2fsprogs' 'keyutils' 'util-linux-libs'
            'libnl' 'krb5' 'libcap' 'glibc' 'libgcc' 'sh' 'readline')

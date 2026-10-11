@@ -478,8 +478,9 @@
     done only when its committed `.SRCINFO` regenerates clean
     (`makepkg --printsrcinfo` diff); (d) retry HTTP-killed agents only after
     inspecting and resuming their partial state. Check: `.SRCINFO`
-    presence+freshness sweep over every recipe directory (653/653 after the
-    2026-10-04 sweep).
+    presence+freshness sweep over every recipe directory (full-roster sweep;
+    the record count moves — `awk -F'|' 'NF>2' config/topology.conf | wc -l`
+    gives the current one).
 23. **Swap/ABI install contract** (2026-10-03→04 ingestion hardening):
     `pacman -U --noconfirm --ask 4` auto-confirms
     `ALPM_QUESTION_CONFLICT_PKG` (1<<2) — treat `--ask 4` as *removal
@@ -508,7 +509,7 @@
     scheduler rebuild a merged recipe once per alias, so old split-output
     names stay addressable through pkgname lookup only; supersession is
     expressed as X→X-git edges, never by deleting X's record. Merged split
-    sets pin siblings `name=$pkgver-$pkgrel` (qemu precedent: outputs must
+    sets pin siblings `name=$pkgver-$pkgrel` (split-output precedent: outputs must
     move as one version or pacman sees unsatisfiable exact pins between
     siblings). Unreferenced stock splits are trimmed AND `# trim:`-annotated;
     a candidate whose tests pin a different commit than its source demotes to
@@ -1724,6 +1725,18 @@ zero baked `.gcda` destinations — `ctest`'s single hit is the `/*.gcda` glob
 constant, not a baked path).
 
 ## 6. Pitfall digest (full details: NOTE.md sections of same dates)
+
+- **A recipe whose build hard-freezes this host gets retired — 3/3
+  deterministic freezes = quarantine, never "fix around"** (2026-10-11
+  qemu): every `qemu` build froze the whole machine at the same build
+  moment (3 reproductions) while all other builds stayed clean; each
+  freeze also dropped the USB workspace dock (`sudden-power-off`). The
+  recipe + its topology record are deleted (owner decision); the icu
+  78→79 makedep trims (`--disable-brlapi`/`--disable-vte`) and the
+  11.1.2 sync adoption died with it. Re-adding it requires a bounded,
+  observed rehearsal first (`--jobs 2`, single lane, nothing else
+  running) and kernel/toolchain forensics from the build log tail +
+  `journalctl -b -1`. Details: NOTE.md 2026-10-11.
 
 - **A swapped-in -git provider must ship the API *generation* its
   consumers use — probe module name, header layout, soname AND C API —
