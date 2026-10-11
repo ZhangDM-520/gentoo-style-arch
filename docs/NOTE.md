@@ -37,6 +37,63 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-11 — run #131 gstreamer: three layers under one wall — retired WPE1 names, a fatal wpe1 meson probe, and spandsp's opaque `plc_state_t`
+
+**Symptom.** Run #131's `gstreamer` (version-synced to 1.28.8) died
+three times, one layer deeper each pass. (1) Dependency phase:
+`error: target not found: libwpe` and `wpebackend-fdo` (the other four
+missing makedeps resolve fine). (2) After the trim, meson configure:
+`gst-plugins-bad/ext/wpe/meson.build:66: ERROR: Dependency
+"wpebackend-fdo-1.0" not found`. (3) After disabling wpe1, compile:
+`ext/spandsp/gstspanplc.c:89: invalid use of incomplete typedef
+'plc_state_t'`.
+
+**Root cause.** (1) The WPE1 stack is gone from Arch entirely — verified
+against `archlinux.org/packages/search/json`, not a local-mirror
+artifact: `libwpe`/`wpebackend-fdo` were retired and `wpewebkit` 2.54
+absorbed the platform side (`wpe-platform-2.0.pc`); stock
+`gst-plugins-bad` offers only the **wpe2** plugin. Our recipe still
+declared the wpe1 output (`gst-plugin-wpe`) and both dead makedeps.
+(2) `ext/wpe` (wpe1) hard-requires `wpebackend-fdo-1.0` —
+`get_option('wpe').require(gstgl…)` pins the feature effectively
+enabled, so the probe is fatal — while `ext/wpe2` (the kept plugin)
+needs only `wpe-webkit-2.0`. (3) The house `spandsp-git` made
+`plc_state_t` an opaque type (`typedef struct plc_state_s plc_state_t`,
+no accessors), and the spanplc element poked `->pitch`/`->pitch_offset`
+for its stats structure.
+
+**Fix.** Trimming standard plus two seams. The wpe1 output and its dead
+makedeps are removed together (`pkgname`, optprovides,
+`package_gst-plugin-wpe()` with both `_pick` paths, `libwpe`,
+`wpebackend-fdo`); `-D gst-plugins-bad:wpe=disabled` mirrors Arch's own
+packaging (their `gstreamer` monorepo package disables `wpe` while
+shipping `gst-plugin-wpe2`); `0003-spandsp-opaque-plc_state_t.patch`
+drops the two unreachable pitch fields from the spanplc stats structure
+(consumer-side skew patch, the mlt/alsa-plugins/opencv class).
+`gst-plugin-wpe2` stays unchanged (dep: `wpewebkit`, same as the repo
+package). README output-name count 358 → 357. Sibling scan: no other
+recipe references the retired names, and only gstspanplc.c touches the
+opaque type.
+
+**Validation.** `bash -n` + `makepkg --printsrcinfo` (24 outputs);
+targeted red→green probes at each layer (dep phase passes;
+`ninja … libgstspandsp.so` rebuilds the exact failing TU); full
+rehearsal `-fi --no-deps gstreamer` ✓; fixture battery green; the four
+installable makedeps verified in the sync DB and the retirements verified
+against the Arch package API.
+
+**Rule.** Three one-liners. `target not found` means the name is gone
+from the repositories — unlike `warning: ignoring package` (IgnorePkg/
+provides class) it needs no shim: check `pacman -Si` and then look at how
+the current repository packaging solves the same feature. When the
+ecosystem retires a whole stack (WPE1), drop the split output and every
+reference to it in the same change, and disable the dead build path
+explicitly (`-D …=disabled`) — auto-detection can still select it and
+fail hard. And a version-sync bump's sibling scan must include
+"makedepends that no longer resolve" and "our own -git providers whose
+APIs tightened": both are invisible until the consumer compiles against
+them.
+
 ## 2026-10-11 — qt6-webengine starves this host into a hard freeze (and takes plymouth with it) — both recipes retired by owner decision
 
 **Symptom.** The `qt6-webengine` build (Bundled Chromium, nested ninja

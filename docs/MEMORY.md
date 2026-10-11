@@ -1726,6 +1726,24 @@ constant, not a baked path).
 
 ## 6. Pitfall digest (full details: NOTE.md sections of same dates)
 
+- **`target not found` means the name is gone from the repos — check how
+  the current repo packaging solves the feature, then drop what cannot
+  resolve** (2026-10-11 run #131 gstreamer): the WPE1 stack
+  (`libwpe`/`wpebackend-fdo`) was retired from the repos and stock
+  gst-plugins-bad 1.28.8 ships only the wpe2 plugin (dep: `wpewebkit`
+  alone); our synced recipe still declared `gst-plugin-wpe` + both dead
+  makedeps. Fix = trimming standard: output, optprovides, `package_*`
+  function and makedeps removed together. Unlike `warning: ignoring
+  package` (IgnorePkg/provides class), this class needs no shim —
+  `pacman -Si <name>` distinguishes them. Auto-detection can still select
+  the dead build path and fail hard (ext/wpe's fatal wpebackend-fdo
+  probe) — disable it explicitly (`-D gst-plugins-bad:wpe=disabled`,
+  Arch's own seam). A version-sync bump's sibling scan must include
+  "makedepends that no longer resolve" and "our own -git providers whose
+  APIs tightened" (same run: spandsp-git made `plc_state_t` opaque →
+  consumer patch drops the unreachable stats fields). Details: NOTE.md
+  2026-10-11.
+
 - **Bundled-Chromium code against system libraries breaks in two shapes:
   bundled-fork-only APIs, and ICU data assumptions — and gn `.rsp` names
   embed the escaped build path** (2026-10-11, qt6-webengine — three walls

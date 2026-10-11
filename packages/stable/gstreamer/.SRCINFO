@@ -89,7 +89,6 @@ pkgbase = gstreamer
 	makedepends = libvpl
 	makedepends = libvpx
 	makedepends = libwebp
-	makedepends = libwpe
 	makedepends = libx11
 	makedepends = libxcb
 	makedepends = libxdamage
@@ -164,7 +163,6 @@ pkgbase = gstreamer
 	makedepends = wayland-protocols
 	makedepends = webrtc-audio-processing-1
 	makedepends = wildmidi
-	makedepends = wpebackend-fdo
 	makedepends = wpewebkit
 	makedepends = x264
 	makedepends = x265
@@ -177,12 +175,14 @@ pkgbase = gstreamer
 	source = https://gstreamer.freedesktop.org/src/gstreamer-docs/gstreamer-docs-1.28.7.tar.xz.asc
 	source = 0001-HACK-meson-Disable-broken-tests.patch
 	source = 0002-faac-support-faac-2.0-faac_-API.patch
+	source = 0003-spandsp-opaque-plc_state_t.patch
 	validpgpkeys = D637032E45B8C6585B9456565D2EEE6F6F349D7C
 	b2sums = 1ec502cf77daffc5886cb4c315d00272d4fcea68fdd2ad3796655b20d35ecbe493d9322fecffa550bfccaa74b7d6391ba54aae60aa2fb697244c83a9227baf9b
 	b2sums = 35c721581354b5b4093951c14d56b009caf4f68cb7a0adaf20d1c961f472341787fc073b348607101369d403f38ff6ba8c6d3204f9231a0f7e2ff10ea2a1719c
 	b2sums = SKIP
 	b2sums = 64198edd8f3fe8c8ad36455df34e6df471b96e5ab1bb320db16d8c86718e0122fa03b4ee83e2dd5c508e3a5b893b605be4c652c740fc962b1e907ab0ba0e3f4b
 	b2sums = 4e425222d8fd1fc3c49750ad4920433e3b298698e96e714fb9d6f887ac62509f2b187a131fa31da53dcedd2a150ca59d3bd7d7519b7df91a0cff90c65094edbc
+	b2sums = 732a3ab245e66008f57626248cbcbb03621e4a364b729097a3aa63de8d5f10cf01588730f2c7fd984dea677966534bee07e6bb825966af993fe43bae47736723
 	makedepends_x86_64 = svt-hevc
 
 pkgname = gstreamer
@@ -613,7 +613,6 @@ pkgname = gst-plugins-bad
 	optdepends = gst-plugin-qmlgl: qmlgl plugin
 	optdepends = gst-plugin-qsv: qsv plugin
 	optdepends = gst-plugin-va: va plugin
-	optdepends = gst-plugin-wpe: wpe plugin
 	provides = libgstaes.so
 	provides = libgstanalyticsoverlay.so
 	provides = libgstaom.so
@@ -840,22 +839,6 @@ pkgname = gst-plugin-va
 	depends = libva
 	provides = libgstva.so
 	replaces = gstreamer-vaapi<=1.26.10-5
-
-pkgname = gst-plugin-wpe
-	pkgdesc = Multimedia graph framework - wpe plugin
-	depends = gst-plugins-base-libs=1.28.7-2
-	depends = gstreamer=1.28.7-2
-	depends = glib2
-	depends = glibc
-	depends = libgcc
-	depends = libstdc++
-	depends = libwpe
-	depends = libxkbcommon
-	depends = wayland
-	depends = wpebackend-fdo
-	depends = wpewebkit
-	provides = libgstwpe.so
-	provides = libgstwpeextension.so
 
 pkgname = gst-plugin-wpe2
 	pkgdesc = Multimedia graph framework - wpe2 plugin

@@ -1,0 +1,21 @@
+--- a/subprojects/gst-plugins-bad/ext/spandsp/gstspanplc.c
++++ b/subprojects/gst-plugins-bad/ext/spandsp/gstspanplc.c
+@@ -81,13 +81,15 @@
+ 
+   GST_OBJECT_LOCK (self);
+   if (self->plc_state) {
++    /* House (Gentoo_Style_Arch): current spandsp made plc_state_t an
++     * opaque type (typedef struct plc_state_s plc_state_t) with no
++     * accessors, so the pitch stats are no longer reachable and are
++     * dropped from this stats structure (NOTE.md 2026-10-11). */
+     s = gst_structure_new ("application/x-spanplc-stats",
+         "num-pushed", G_TYPE_UINT64, self->num_pushed,
+         "num-gap", G_TYPE_UINT64, self->num_gap,
+         "plc-num-samples", G_TYPE_UINT64, self->plc_num_samples,
+-        "plc-duration", G_TYPE_UINT64, self->plc_duration,
+-        "pitch", G_TYPE_INT, self->plc_state->pitch,
+-        "pitch-offset", G_TYPE_INT, self->plc_state->pitch_offset, NULL);
++        "plc-duration", G_TYPE_UINT64, self->plc_duration, NULL);
+   }
+   GST_OBJECT_UNLOCK (self);
+ 

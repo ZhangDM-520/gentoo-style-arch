@@ -32,7 +32,7 @@ The counts differ because many records are dual-members (`stable,core`,
 pacman package names — one recipe, many pkgnames (`gst-plugins-base`,
 `vlc-plugin-freetype` and `gnome-desktop-4` are package names built by the
 `gstreamer`, `vlc` and `gnome-desktop` recipes, not records of their own),
-358 output names beyond the record count;
+357 output names beyond the record count;
 `core` is a logical build group whose 259 members deliberately overlap the
 physical layout: 50 recipes live under `packages/core/`, and further
 members come from `packages/git/` and `packages/stable/`:
