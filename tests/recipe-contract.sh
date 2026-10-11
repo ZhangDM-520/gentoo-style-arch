@@ -316,8 +316,6 @@ onlyoffice-git: onlyoffice
 onlyoffice-git: onlyoffice-desktopeditors
 pango-git: pango
 pipewire: pulse-native-provider
-pyside6-git: pyside6
-pyside6-git: shiboken6
 qt6-base-git: qt6-base
 qt6-base-git: qt6-xcb-private-headers
 seatd-git: libseat

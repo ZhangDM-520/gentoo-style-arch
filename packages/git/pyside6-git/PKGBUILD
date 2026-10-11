@@ -27,11 +27,21 @@ makedepends=(clang
              pkgconf
              python-numpy
              python-setuptools)
-provides=(pyside6
-          shiboken6
+# The monorepo builds all five stock pyside/shiboken names — each mapped
+# name gets a versioned provide (unversioned cannot satisfy >=N makedeps,
+# and a missing name makes pacman pull the stock package into a file
+# conflict with these files; NOTE.md 2026-10-11 kguiaddons wall).
+provides=("pyside6=$pkgver"
+          "python-pyside6=$pkgver"
+          "shiboken6=$pkgver"
+          "python-shiboken6=$pkgver"
+          "shiboken6-generator=$pkgver"
           qt6-python-bindings)
 conflicts=(pyside6
-           shiboken6)
+           python-pyside6
+           shiboken6
+           python-shiboken6
+           shiboken6-generator)
 replaces=(pyside6
           shiboken6)
 source=(git+https://code.qt.io/pyside/pyside-setup.git#branch=dev)
@@ -48,9 +58,14 @@ pkgver() {
 }
 
 build() {
+  # house: pin the system interpreter — FindPython follows PATH and
+  # ~/.local/bin carries uv/pyenv shims; the modules must land in the
+  # system python's site-packages (NOTE.md 2026-10-10 obs-studio)
   cmake -B build -S pyside-setup -G Ninja \
     -DCMAKE_INSTALL_PREFIX=/usr \
     -DCMAKE_BUILD_TYPE=None \
+    -DPython_EXECUTABLE=/usr/bin/python \
+    -DPython3_EXECUTABLE=/usr/bin/python \
     -DSHIBOKEN_PYTHON_LIBRARIES=$(pkgconf python3-embed --libs) \
     -DBUILD_TESTS=OFF \
     -DFORCE_LIMITED_API=no \

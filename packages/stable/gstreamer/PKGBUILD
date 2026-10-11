@@ -249,6 +249,11 @@ prepare() {
 }
 
 build() {
+  # house: system python first — meson's python module resolves python3 via
+  # PATH and ~/.local/bin shims (uv 3.11) would place gst-python's module in
+  # a site-packages the system python never reads (NOTE.md 2026-10-11)
+  export PATH=/usr/bin:$PATH
+
   local meson_options=(
     -D benchmarks=disabled
     -D examples=disabled

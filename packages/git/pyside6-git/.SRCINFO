@@ -20,11 +20,17 @@ pkgbase = pyside6-git
 	depends = glibc
 	depends = python
 	depends = qt6-base-git
-	provides = pyside6
-	provides = shiboken6
+	provides = pyside6=6.12.0.r12518.g7fcec1b26
+	provides = python-pyside6=6.12.0.r12518.g7fcec1b26
+	provides = shiboken6=6.12.0.r12518.g7fcec1b26
+	provides = python-shiboken6=6.12.0.r12518.g7fcec1b26
+	provides = shiboken6-generator=6.12.0.r12518.g7fcec1b26
 	provides = qt6-python-bindings
 	conflicts = pyside6
+	conflicts = python-pyside6
 	conflicts = shiboken6
+	conflicts = python-shiboken6
+	conflicts = shiboken6-generator
 	replaces = pyside6
 	replaces = shiboken6
 	source = git+https://code.qt.io/pyside/pyside-setup.git#branch=dev

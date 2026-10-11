@@ -40,7 +40,12 @@ build() {
   command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
   export LDFLAGS+=" ${_mold}"
 
+  # house: pin the system interpreter — Shiboken6's compatibility check
+  # compares against the Python that find_package(Python) detects, and
+  # ~/.local/bin shims (uv 3.11) shadow the system 3.14 (NOTE.md 2026-10-11)
   cmake -B build -S $pkgname-$pkgver \
+    -D Python_EXECUTABLE=/usr/bin/python \
+    -D Python3_EXECUTABLE=/usr/bin/python \
     -DBUILD_TESTING=OFF
   cmake --build build --parallel "${GSA_BUILD_JOBS:-$(nproc)}"
 }

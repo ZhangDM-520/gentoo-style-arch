@@ -175,6 +175,8 @@ build() {
   local cmake_options=(
     -B build
     -D CMAKE_BUILD_TYPE=None
+    -D Python_EXECUTABLE=/usr/bin/python
+    -D Python3_EXECUTABLE=/usr/bin/python
     -D CMAKE_INSTALL_PREFIX:PATH=/usr
     -W no-dev
     -S $pkgname

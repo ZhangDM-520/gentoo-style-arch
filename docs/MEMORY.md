@@ -1726,6 +1726,20 @@ constant, not a baked path).
 
 ## 6. Pitfall digest (full details: NOTE.md sections of same dates)
 
+- **A monorepo swap provider needs a versioned name provide for EVERY
+  stock output it maps — a missing one becomes a pacman file conflict**
+  (2026-10-11 run #129 kguiaddons): pyside6-git builds five stock outputs
+  but provided three (unversioned), so makepkg reached for stock
+  `shiboken6-generator` and died on pyside6-git-owned files. Plus the
+  python-shim half: pyside's modules had landed in `python3.11/
+  site-packages` (uv shim) and shiboken's built-vs-target python check
+  then rejected kguiaddons ('Built with 3.14, Detected 3.11'). Both
+  fixed: five versioned provides + system-python pins (kguiaddons,
+  inkscape, audacity pinned; gstreamer's meson gets `PATH=/usr/bin:$PATH`;
+  mlt/opencolorio/openshadinglanguage are the rebuild victims). Scan:
+  `grep -l "/python3\.[0-9]*/" /var/lib/pacman/local/*/files`. Details:
+  NOTE.md 2026-10-11.
+
 - **A bridge patch on a floating-HEAD recipe needs its drop condition in
   the header and a contract assertion in prepare() — when upstream lands
   the real fix, delete the patch, never re-roll it** (2026-10-11 run #128

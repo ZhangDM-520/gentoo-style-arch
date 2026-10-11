@@ -37,6 +37,62 @@ So `.Static/qt6-base` and `packages/stable/qt6-base` are the same recipe family,
 and `.Heavy/llvm-git` is today's `packages/core/llvm-git`. Package IDs,
 dependency edges, and incident root causes are unaffected by the renames.
 
+## 2026-10-11 — run #129 kguiaddons: pyside6-git mapped five stock names but provided three, and both sides resolved the uv python
+
+**Symptom.** Run #129 (53-package tail) walled in `kguiaddons`'s
+dependency phase: pacman tried to install **stock** `shiboken6-generator`
+and aborted on `conflicting files … exists in filesystem (owned by
+pyside6-git)`. After the provides fix, the build then failed one layer
+down: `Shiboken6Config` rejected the target python — `Built with: '3.14'
+Detected: '3.11'`.
+
+**Root cause.** Two coupled defects in `pyside6-git`/its consumers.
+(a) The pyside-setup monorepo builds all five stock outputs
+(`pyside6`, `python-pyside6`, `shiboken6`, `python-shiboken6`,
+`shiboken6-generator`) but declared only three **unversioned** provides
+(`pyside6 shiboken6 qt6-python-bindings`) — so pacman could not resolve
+the `shiboken6-generator` name to the installed provider and reached for
+the stock package, whose files pyside6-git already owns (the file-level
+shape of the swap-bite class). (b) pyside6-git itself had been built
+against the **uv shim python3.11** (`~/.local/bin` leads PATH): its
+modules landed in `/usr/lib/python3.11/site-packages/`, invisible to the
+system python 3.14 — the same trap obs-studio hit at the NEEDED probe.
+kguiaddons then re-detected python via its own `find_package(Python)`,
+picked 3.11 again, and shiboken's built-vs-target python check refused.
+
+**Fix.** `pyside6-git`: versioned name provides for all five mapped
+names (`pyside6=`, `python-pyside6=`, `shiboken6=`, `python-shiboken6=`,
+`shiboken6-generator=`; `qt6-python-bindings` stays unversioned as a
+capability virtual), conflicts extended to match, and the system
+interpreter pinned (`-DPython_EXECUTABLE/-DPython3_EXECUTABLE`).
+Rebuilt+installed: the archive now ships `python3.14/site-packages` and
+its `.PKGINFO` carries the five provides. `kguiaddons` gained the same
+pin (its Shiboken6 compatibility check compares the detected python).
+Preemptive same-wave pins: `inkscape` and `audacity` (cmake), and
+`gstreamer` gets a `PATH=/usr/bin:$PATH` seam for its meson-built
+`gst-python` module. `onlyoffice-git` (custom build system) is watched.
+Sibling scan of the python3.11-installed set found four victims:
+pyside6-git (fixed here) plus `mlt`, `opencolorio`, `openshadinglanguage`
+— those three got the pin + pkgrel bumps and rebuild in the next run.
+
+**Validation.** pyside6-git rebuild ✓ 314s (artifacts checked as above);
+`kguiaddons` rehearsal ✓ 49s — the makedep resolves through the provides
+and the shiboken compat check passes against python 3.14. `bash -n` +
+`makepkg --printsrcinfo` with canonical↔twin parity on all touched
+recipes. Full fixture battery green.
+
+**Rule.** A swap provider that builds a monorepo's worth of stock outputs
+must declare a versioned name provide for EVERY mapped name — a missing
+one sends pacman for the stock package and the transaction dies on file
+conflicts (the provide lives in `.PKGINFO`, so the fix needs a real
+rebuild). And every recipe that resolves Python for installed paths (CMake
+`find_package(Python)`, Shiboken/Pyside checks, meson's python module)
+must pin the system interpreter — or for meson, put `/usr/bin` first on
+PATH: the uv/pyenv shims will silently place modules where the system
+python never reads them, and the shiboken compat check is what turns it
+loud. Scan for victims with
+`grep -l "/python3\.[0-9]*/" /var/lib/pacman/local/*/files`.
+
 ## 2026-10-11 — run #128 qt6-quick3d: the bridge patch's drop condition arrived — upstream adapted
 
 **Symptom.** Run #128 (55-package tail) walled in `qt6-quick3d`'s

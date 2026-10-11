@@ -91,6 +91,8 @@ build() {
   local cmake_options=(
     -B build
     -D CMAKE_BUILD_TYPE=None
+    -D Python_EXECUTABLE=/usr/bin/python
+    -D Python3_EXECUTABLE=/usr/bin/python
     -D CMAKE_INSTALL_PREFIX=/usr
     -D AUDACITY_BUILD_LEVEL=2
     -D audacity_conan_enabled=OFF
