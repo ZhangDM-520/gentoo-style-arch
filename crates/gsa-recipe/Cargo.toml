@@ -7,3 +7,6 @@ description = "Committed .SRCINFO parser and cache, strict read-only PKGBUILD sc
 
 [dependencies]
 gsa-model = { workspace = true }
+tar = { workspace = true }
+zstd = { workspace = true }
+object = { workspace = true }

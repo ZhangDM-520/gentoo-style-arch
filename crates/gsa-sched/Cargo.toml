@@ -7,3 +7,4 @@ description = "Lane supervisor: budgets, lane-result codec, dispatch state machi
 
 [dependencies]
 gsa-model = { workspace = true }
+gsa-fetch = { workspace = true }

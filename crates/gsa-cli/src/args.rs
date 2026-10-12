@@ -83,6 +83,7 @@ pub enum Hidden {
     StaleLockCheck,
     LocalDbCheck,
     InstallRegister(Vec<String>),
+    RegisterIgnorepkg(Vec<String>),
     QaCheck(Vec<String>),
 }
 
@@ -95,6 +96,7 @@ impl Hidden {
             Hidden::StaleLockCheck => "--stale-lock-check".to_string(),
             Hidden::LocalDbCheck => "--local-db-check".to_string(),
             Hidden::InstallRegister(_) => "--install-register".to_string(),
+            Hidden::RegisterIgnorepkg(_) => "--register-ignorepkg".to_string(),
             Hidden::QaCheck(_) => "--qa-check".to_string(),
         }
     }
@@ -123,6 +125,15 @@ pub struct Invocation {
     pub jobs: Option<String>,
     pub intensity: Option<String>,
     pub state_dir: Option<String>,
+    /// Fetch-ahead knobs (owner decision 1): `--no-prefetch` opts out of
+    /// the dispatcher's background prefetch; `--prefetch-ahead N` bounds the
+    /// lookahead window (default 8). Real on a build run; every other
+    /// spelling keeps the deferred refusal.
+    pub no_prefetch: bool,
+    pub prefetch_ahead: Option<String>,
+    /// `--config PATH`: the target pacman.conf of an install run (-S/-U) —
+    /// the IgnorePkg registration target and the `pacman -U --config`.
+    pub config: Option<String>,
     /// Arguments after `--`, forwarded verbatim to a `pacman -U` transaction.
     pub pacman_args: Option<Vec<String>>,
 }
@@ -149,13 +160,14 @@ pub enum Parsed {
     Hidden(Hidden),
 }
 
-const HIDDEN_SEAMS: [&str; 7] = [
+const HIDDEN_SEAMS: [&str; 8] = [
     "--install-decide",
     "--lane-job",
     "--fetch-job",
     "--stale-lock-check",
     "--local-db-check",
     "--install-register",
+    "--register-ignorepkg",
     "--qa-check",
 ];
 
@@ -197,6 +209,7 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
                 }
                 "--local-db-check" => Hidden::LocalDbCheck,
                 "--install-register" => Hidden::InstallRegister(rest),
+                "--register-ignorepkg" => Hidden::RegisterIgnorepkg(rest),
                 "--qa-check" => Hidden::QaCheck(rest),
                 _ => unreachable!(),
             };
@@ -278,7 +291,10 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
         jobs: None,
         intensity: None,
         state_dir: None,
+        config: None,
         pacman_args: None,
+        no_prefetch: false,
+        prefetch_ahead: None,
     };
 
     let mut rest = &args[1..];
@@ -327,8 +343,15 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
                     // run (§I.3); every other spelling still refuses it.
                     inv.deferred_flags.push(format!("--{name}"));
                 }
+                "no-prefetch" => {
+                    if value.is_some() {
+                        return Err(format!("flag '--{name}' takes no value"));
+                    }
+                    inv.no_prefetch = true;
+                    inv.deferred_flags.push(format!("--{name}"));
+                }
                 "vcs-skip-tolerance" | "lanes" | "jobs" | "intensity" | "state-dir" | "config"
-                | "tail" | "keep" | "show" => {
+                | "tail" | "keep" | "show" | "prefetch-ahead" => {
                     let value = match value {
                         Some(v) => v,
                         None => {
@@ -341,12 +364,17 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
                     };
                     // The four build-run value flags are stored as well as
                     // deferred: a `-B` build reads them (§B.8), every other
-                    // spelling keeps the deferred refusal.
+                    // spelling keeps the deferred refusal. `--config` rides
+                    // along the same way: real on an install run (-S/-U);
+                    // `--prefetch-ahead` is a build-run knob (owner
+                    // decision 1).
                     match name {
                         "lanes" => inv.lanes = Some(value.clone()),
                         "jobs" => inv.jobs = Some(value.clone()),
                         "intensity" => inv.intensity = Some(value.clone()),
                         "state-dir" => inv.state_dir = Some(value.clone()),
+                        "config" => inv.config = Some(value.clone()),
+                        "prefetch-ahead" => inv.prefetch_ahead = Some(value.clone()),
                         _ => {}
                     }
                     inv.deferred_flags.push(format!("--{name}"));
@@ -473,6 +501,40 @@ mod tests {
     }
 
     #[test]
+    fn register_ignorepkg_seam_parses_first_token_only() {
+        // `gsa --register-ignorepkg [conf]` is a hidden seam (first token);
+        // the same spelling as a trailing flag stays a long modifier so a
+        // continuation can classify it.
+        let owned: Vec<String> = ["--register-ignorepkg", "some.conf"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        match parse(&owned).unwrap() {
+            Parsed::Hidden(Hidden::RegisterIgnorepkg(args)) => {
+                assert_eq!(args, vec!["some.conf".to_string()])
+            }
+            other => panic!("expected hidden seam, got {other:?}"),
+        }
+        match parse(&["--register-ignorepkg".to_string()]).unwrap() {
+            Parsed::Hidden(Hidden::RegisterIgnorepkg(args)) => assert!(args.is_empty()),
+            other => panic!("expected hidden seam, got {other:?}"),
+        }
+        let inv = parse_ok(&["-Mi", "--register-ignorepkg"]);
+        assert!(inv
+            .deferred_flags
+            .iter()
+            .any(|f| f == "--register-ignorepkg"));
+    }
+
+    #[test]
+    fn config_value_flag_is_captured_for_install_runs() {
+        let inv = parse_ok(&["-U", "--config", "/etc/pacman.conf", "mesa-git"]);
+        assert_eq!(inv.config.as_deref(), Some("/etc/pacman.conf"));
+        let inv = parse_ok(&["-S", "--config=/scratch/p.conf", "mesa-git"]);
+        assert_eq!(inv.config.as_deref(), Some("/scratch/p.conf"));
+    }
+
+    #[test]
     fn build_run_modifiers_are_captured() {
         let inv = parse_ok(&[
             "-B",
@@ -494,6 +556,20 @@ mod tests {
         // They still record as deferred: only a real build accepts them.
         assert!(inv.deferred_flags.iter().any(|f| f == "--fail-fast"));
         assert!(inv.deferred_flags.iter().any(|f| f == "--state-dir"));
+    }
+
+    #[test]
+    fn prefetch_flags_parse_and_are_build_run_deferred_elsewhere() {
+        let inv = parse_ok(&["-B", "--no-prefetch", "--prefetch-ahead", "2", "mesa-git"]);
+        assert!(inv.no_prefetch);
+        assert_eq!(inv.prefetch_ahead.as_deref(), Some("2"));
+        // Stored as well as deferred: a build run reads them, every other
+        // spelling keeps the deferred refusal (§B.8 pattern).
+        assert!(inv.deferred_flags.iter().any(|f| f == "--no-prefetch"));
+        assert!(inv.deferred_flags.iter().any(|f| f == "--prefetch-ahead"));
+        // `--no-prefetch` takes no value; `--prefetch-ahead` requires one.
+        assert!(parse_err(&["-B", "--no-prefetch=2"]).contains("takes no value"));
+        assert!(parse_err(&["-B", "--prefetch-ahead"]).contains("requires a value"));
     }
 
     #[test]

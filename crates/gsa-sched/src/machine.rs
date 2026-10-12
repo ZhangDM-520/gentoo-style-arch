@@ -56,6 +56,16 @@ pub struct Recorded {
     pub reason: String,
 }
 
+/// Where a node stands in the dispatch machine, as the prefetch window
+/// (plan.md §2.1) sees it: pending (still to build), dispatched (started),
+/// or settled with its run-record status.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NodePhase {
+    Pending,
+    Dispatched,
+    Settled(RowStatus),
+}
+
 /// A lane that should stand down before building (contract §F.1 `parked 98`):
 /// the supervisor writes a park marker the spawned child checks before it
 /// execs makepkg.
@@ -106,6 +116,16 @@ impl Machine {
 
     pub fn node(&self, index: usize) -> &Node {
         &self.nodes[index]
+    }
+
+    /// The node's phase for the prefetch window (plan.md §2.1: the
+    /// dispatcher is the only brain — the window is derived from this).
+    pub fn node_phase(&self, index: usize) -> NodePhase {
+        match &self.states[index] {
+            State::Pending => NodePhase::Pending,
+            State::Dispatched => NodePhase::Dispatched,
+            State::Done(status, ..) => NodePhase::Settled(*status),
+        }
     }
 
     pub fn policy(&self) -> Policy {
@@ -235,6 +255,23 @@ impl Machine {
     /// Record one lane outcome and apply the failure policy. Returns the
     /// stand-down requests for lanes that were spawned but not yet building.
     pub fn record(&mut self, index: usize, recorded: Recorded) -> Vec<ParkRequest> {
+        self.record_with_policy(index, recorded, true)
+    }
+
+    /// Record one lane outcome the interrupt teardown settled (§I.3). The
+    /// row lands exactly once, but the failure policy never parks a cone
+    /// here: what never launched must settle as `never-started
+    /// interrupted-before-start`, never as `waits-on-failed`.
+    pub fn record_teardown(&mut self, index: usize, recorded: Recorded) {
+        self.record_with_policy(index, recorded, false);
+    }
+
+    fn record_with_policy(
+        &mut self,
+        index: usize,
+        recorded: Recorded,
+        apply_policy: bool,
+    ) -> Vec<ParkRequest> {
         assert!(
             matches!(self.states[index], State::Dispatched),
             "record for a node that is not dispatched"
@@ -258,6 +295,7 @@ impl Machine {
         self.states[index] = State::Done(status, rc, dur, reason);
 
         match status {
+            _ if !apply_policy => {}
             RowStatus::Failed => {
                 if self.policy == Policy::FailFast {
                     self.stop_dispatch = true;
@@ -287,6 +325,14 @@ impl Machine {
             _ => {}
         }
         requests
+    }
+
+    /// Halt new dispatch — the fail-fast stop, reached either by the
+    /// `--fail-fast` failure policy or by an install-step `Halt` that asks
+    /// for it (§K.3: a credential lost mid-run stops dispatch exactly once).
+    /// Idempotent; in-flight lanes keep draining (§I.2).
+    pub fn stop_dispatch(&mut self) {
+        self.stop_dispatch = true;
     }
 
     /// Drain end of a `--fail-fast` run: unstarted packages become

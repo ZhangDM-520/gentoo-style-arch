@@ -6,9 +6,10 @@
 //!   user from the moment it is created; a file owned by someone else is
 //!   quarantined as `<path>.stale.<epoch>.<pid>` (preserved, announced) or the
 //!   write fails naming the remedy. There is no root fallback.
-//! - Orphan sweeps: startup and post-run sweeps reap `--lane-job` children of
-//!   dead runs and stale run artifacts (`.tmp.*`, abandoned result files).
-//!   Unrelated `makepkg` processes are never touched (§K.3).
+//! - Orphan sweeps: startup and post-run sweeps reap `--lane-job` /
+//!   `--fetch-job` children of dead runs and stale run artifacts (`.tmp.*`,
+//!   abandoned result files). Unrelated `makepkg` processes are never
+//!   touched (§K.3).
 //! - `--stale-lock-check` is the production pacman-lock probe without a run:
 //!   holder identification via `/proc/*/fd`, never `db.lck` deletion.
 
@@ -121,8 +122,8 @@ pub fn ensure_state_dirs(state_dir: &Path, err: &mut dyn Write) -> Result<(), St
 
 /// Startup/post-run orphan sweep (contract §K.3): remove stale run artifacts
 /// (`.tmp.*`, abandoned result/park files) from dead runs, and reap
-/// `--lane-job` processes of dead runs whose result files are unowned.
-/// Unrelated `makepkg` processes are never touched.
+/// `--lane-job` / `--fetch-job` processes of dead runs whose result files
+/// are unowned. Unrelated `makepkg` processes are never touched.
 pub fn sweep_orphans(state_dir: &Path, current_run: &str, err: &mut dyn Write) {
     let runs = state_dir.join("runs");
     let Ok(entries) = std::fs::read_dir(&runs) else {
@@ -177,7 +178,10 @@ fn reap_dead_run_lanes(state_dir: &Path, err: &mut dyn Write) {
                 .collect::<Vec<_>>(),
             Err(_) => continue,
         };
-        if !cmdline.iter().any(|a| a == "--lane-job") {
+        if !cmdline
+            .iter()
+            .any(|a| a == "--lane-job" || a == "--fetch-job")
+        {
             continue;
         }
         let in_state = cmdline.iter().skip(2).any(|a| a.starts_with(&state_prefix));

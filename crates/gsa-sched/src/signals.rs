@@ -49,17 +49,24 @@ pub fn signal_lane_code(sig: i32) -> i32 {
     }
 }
 
-type SignalHandler = extern "C" fn(i32);
-
 extern "C" {
-    fn signal(sig: i32, handler: SignalHandler) -> usize;
+    /// `signal(2)`; the handler is a raw pointer so `SIG_DFL` (null) and a
+    /// real handler share one declaration.
+    fn signal(sig: i32, handler: usize) -> usize;
     fn kill(pid: i32, sig: i32) -> i32;
     #[link_name = "write"]
     fn write_byte(fd: i32, buf: *const std::ffi::c_void, count: usize) -> isize;
     fn pipe(fds: *mut i32) -> i32;
     fn flock(fd: i32, op: i32) -> i32;
     fn getuid() -> u32;
+    fn fork() -> i32;
+    fn setpgid(pid: i32, pgid: i32) -> i32;
+    fn waitpid(pid: i32, status: *mut i32, options: i32) -> i32;
 }
+
+/// `SIG_DFL` — a terminated child must die on the teardown SIGTERM, so the
+/// forked transaction child resets the receipt handlers to the default.
+const SIG_DFL: usize = 0;
 
 pub const LOCK_EX: i32 = 2;
 pub const LOCK_NB: i32 = 4;
@@ -78,6 +85,71 @@ pub fn send_signal(pid: i32, sig: i32) -> bool {
 /// process group; teardown addresses the group).
 pub fn signal_group(leader_pid: u32, sig: i32) {
     let _ = send_signal(-(leader_pid as i32), sig);
+}
+
+/// Where a [`fork_process_group`] call landed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Forked {
+    Parent { pid: u32 },
+    Child,
+}
+
+/// Fork a supervised child that runs in its OWN process group (contract
+/// §K.3: the teardown SIGTERM addresses that group). The child resets the
+/// signal handlers to `SIG_DFL` first — the parent's self-pipe handlers must
+/// not swallow the teardown signal inside the child. Call this before any
+/// other thread exists (the child then runs single-threaded).
+pub fn fork_process_group() -> Result<Forked, String> {
+    let pid = unsafe { fork() };
+    if pid < 0 {
+        return Err(format!("fork failed: {}", std::io::Error::last_os_error()));
+    }
+    if pid == 0 {
+        unsafe {
+            setpgid(0, 0);
+        }
+        reset_signal_handlers();
+        Ok(Forked::Child)
+    } else {
+        Ok(Forked::Parent { pid: pid as u32 })
+    }
+}
+
+/// A waited child's end state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChildExit {
+    Exited(i32),
+    Signaled(i32),
+}
+
+/// Blocking `waitpid(2)` on one child — readiness is delivered by the kernel
+/// (run it from a waiter thread, as the lane supervisor does).
+pub fn wait_child(pid: u32) -> Result<ChildExit, String> {
+    let mut status = 0i32;
+    let reaped = unsafe { waitpid(pid as i32, &mut status, 0) };
+    if reaped < 0 {
+        return Err(format!(
+            "waitpid({pid}) failed: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let low = status & 0x7f;
+    if low == 0 {
+        Ok(ChildExit::Exited((status >> 8) & 0xff))
+    } else if low == 0x7f {
+        Err(format!("child {pid} stopped instead of exiting"))
+    } else {
+        Ok(ChildExit::Signaled(low))
+    }
+}
+
+/// Reset the three receipt handlers to `SIG_DFL` (forked children only).
+pub fn reset_signal_handlers() {
+    for sig in [SIGHUP, SIGTERM, SIGINT] {
+        unsafe {
+            signal(sig, SIG_DFL);
+        }
+    }
 }
 
 /// The build user (write-time ownership, rule 19): state files are created
@@ -119,13 +191,20 @@ pub struct SignalPipe {
     pub read: std::fs::File,
 }
 
+/// The handler address for `signal(2)`: fn item → fn pointer → address (a
+/// direct item-to-integer cast is not a stable operation).
+fn handler_addr() -> usize {
+    let handler: extern "C" fn(i32) = handle_signal;
+    handler as usize
+}
+
 /// Simple receipt tracking for lane children (contract §K.3: "SIGHUP/SIGTERM/
 /// SIGINT receipt by a child is reported through the lane codes 129/143/130"):
 /// an async-signal-safe flag the child checks when its makepkg child exits.
 pub fn install_receipt_handlers() {
     for sig in [SIGHUP, SIGTERM, SIGINT] {
         unsafe {
-            signal(sig, handle_signal);
+            signal(sig, handler_addr());
         }
     }
 }
@@ -134,6 +213,12 @@ pub fn install_receipt_handlers() {
 pub fn received_signal() -> i32 {
     FIRST_SIGNAL.load(Ordering::SeqCst)
 }
+
+/// Test-only serialization for everything that installs or signals through
+/// the process-global handlers: `install_handlers` owns ONE self-pipe per
+/// process, so two handler-owning tests must never interleave.
+#[cfg(test)]
+pub static TEST_SIGNAL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Install handlers for SIGHUP/SIGTERM/SIGINT and return the self-pipe read
 /// end. The handlers are process-global (one supervisor per process).
@@ -145,7 +230,7 @@ pub fn install_handlers() -> io::Result<SignalPipe> {
     PIPE_WRITE.store(fds[1], Ordering::SeqCst);
     for sig in [SIGHUP, SIGTERM, SIGINT] {
         unsafe {
-            signal(sig, handle_signal);
+            signal(sig, handler_addr());
         }
     }
     // fds[0] is the read end; owned as a File for the reader thread.
@@ -180,6 +265,9 @@ mod tests {
 
     #[test]
     fn self_pipe_delivers_signal_receipt() {
+        let _guard = TEST_SIGNAL_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let pipe = install_handlers().expect("handlers install");
         std::thread::spawn(move || {
             let _ = send_signal(std::process::id() as i32, SIGTERM);

@@ -11,6 +11,8 @@
 
 mod args;
 mod build;
+mod fetch;
+mod install;
 mod record;
 mod render;
 mod select;
@@ -27,8 +29,8 @@ use select::Ctx;
 const RC_OK: i32 = 0;
 const RC_USAGE: i32 = 2;
 
-/// What the engine can execute (contract §B; `-S`/`-U`/`-M` remain deferred
-/// to their phases — Phase 2 adds real `-B` build runs).
+/// What the engine can execute (contract §B; `-M` remains deferred to its
+/// phase — `-S` build+install and `-U` install-from-archives are live).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Command {
     Topology,
@@ -41,6 +43,9 @@ enum Command {
     QuerySearch,
     Plan,
     Build,
+    BuildInstall,
+    Fetch,
+    Upgrade,
 }
 
 enum Disposition {
@@ -52,7 +57,8 @@ enum Disposition {
 pub fn help_text() -> String {
     "\
 gsa — native build-and-install orchestrator for the curated recipe set
-(contract docs/gsa-contract.md; Phase 2: build-only runs)
+(contract docs/gsa-contract.md; build (-B), build+install (-S), fetch-only
+(-Sw) and install-from-archives (-U) runs are live)
 
 Usage: gsa <FAMILY>[cluster] [long-modifiers] [targets…] [ranges…] [-- <pacman args…>]
 
@@ -60,9 +66,9 @@ Families (exactly one per invocation; lowercase letters form the cluster):
   -Q   query the buildable universe (and, later, pacman's installed database)
   -S   build + install the selection (each package installed before its consumers compile)
   -B   build-only: archives beside the recipes, nothing installed
-  -U   install from archives (deferred)
+  -U   install from archives: nothing is built
   -M   maintain engine state (deferred)
-  gsa fetch is exactly gsa -Sw (deferred)
+  gsa fetch is exactly gsa -Sw
 
 Command surface:
   gsa -Qt                        resolved topology records, one per line:
@@ -75,10 +81,28 @@ Command surface:
   gsa -Q [ref…]                  package names with versions over the buildable universe
   gsa -Qi <ref…>                 package info: pacman fields plus the recipe record
   gsa -Qs <pattern…>             search package names/descriptions
+  gsa -S <targets…> [ranges…]    build the selection and install each package's
+                                 archives before its consumers compile
+                                 (install-before-dependents; checked install)
+  gsa -Sf …                      force install: always run pacman -U, no
+                                 same-version skip
+  gsa -Sc …                      prune strength 1 first (src/pkg/build trees and
+                                 archives), then build + install
   gsa -B <targets…> [ranges…]    build the selection to archives beside the recipes
-                                 (Phase 2; nothing is installed, no pacman call)
+                                 (nothing is installed, no pacman call)
+  gsa -U <ref…|archive-path…>    install the named packages' newest complete
+                                 archive sets (or the named paths) in ONE
+                                 pacman -U transaction; nothing is built
+  gsa -Ua                        install every index-complete archive set in the
+                                 workspace in one transaction (force mode)
+  gsa -Uf                        force: bypass the same-version already-installed skip
+  -- <pacman args…>              forwarded verbatim to every pacman -U of an
+                                 install run (-S/-U), e.g. -Ua -- --overwrite '*'
   gsa -S --dry-run <targets…> [ranges…]    build-order plan without building
   gsa -B --dry-run <targets…> [ranges…]    the same plan shape for build-only
+  gsa -Sw <targets…> [ranges…]   fetch and verify the selection's sources
+                                 through makepkg --verifysource — no build,
+                                 no install; verdict rows are advisory (§D)
 Every other spelling answers with a 'deferred to a later phase' usage error (rc 2);
 nothing is stubbed with fake results.
 
@@ -95,10 +119,15 @@ closure); --leaf suppresses the expansion and keeps exactly what you named.
 
 Long modifiers (contract §B.8). A build run accepts: --dry-run, --leaf,
   --fail-fast (stop dispatch on the first failure; cone-stop is the default),
-  --lanes N|auto, --jobs N|auto, --intensity LEVEL, --state-dir PATH.
+  --lanes N|auto, --jobs N|auto, --intensity LEVEL, --state-dir PATH,
+  --no-prefetch (opt out of the advisory fetch-ahead), --prefetch-ahead N
+  (fetch-ahead window, default 8).
+An install run (-S/-U) additionally accepts: --config PATH (the target
+  pacman.conf), --no-register-ignorepkg (skip the dynamic IgnorePkg
+  registration, loudly), and -- <pacman args…> (forwarded to every pacman -U).
 Deferred (parse and refuse, so the message names them): --skip, --skip-built,
-  --vcs-skip-tolerance N, --no-sync, --allow-broken-rustc, --no-register-ignorepkg,
-  --config PATH, --noconfirm, --quiet, --verbose, -- <pacman args…>.
+  --vcs-skip-tolerance N, --no-sync, --allow-broken-rustc,
+  --noconfirm, --quiet, --verbose.
 
 Engine environment inputs: GSA_STATE_DIR, GSA_LANES, GSA_JOBS, GSA_INTENSITY,
   GSA_CPU_THREADS, GSA_MEMORY_GIB, GSA_TARGET_CPU, GSA_VCS_SKIP_TOLERANCE.
@@ -130,22 +159,35 @@ fn find_root() -> Option<PathBuf> {
 }
 
 fn classify(inv: &Invocation) -> Disposition {
-    // The five build-run modifiers (§B.8) are real on a `-B` build and
-    // still deferred on every other spelling; everything else deferred
-    // stays deferred everywhere.
+    // The build-run modifiers (§B.8) are real on the runs that build or
+    // install and still deferred on every other spelling; everything else
+    // deferred stays deferred everywhere.
     let is_build_run = inv.family == Family::B && inv.action.is_none() && !inv.dry_run;
+    let is_install_run = inv.family == Family::S && inv.action.is_none() && !inv.dry_run;
+    let is_upgrade_run = inv.family == Family::U;
+    let accepted: &[&str] = if is_build_run {
+        &build::REAL_BUILD_FLAGS
+    } else if is_install_run {
+        &build::REAL_INSTALL_FLAGS
+    } else if is_upgrade_run {
+        &install::REAL_UPGRADE_FLAGS
+    } else {
+        &[]
+    };
     if let Some(flag) = inv
         .deferred_flags
         .iter()
-        .find(|f| !(is_build_run && build::REAL_BUILD_FLAGS.contains(&f.as_str())))
+        .find(|f| !accepted.contains(&f.as_str()))
     {
         return Disposition::Deferred(format!(
-            "{flag} (a later phase owns it; a build run accepts --fail-fast, --lanes, --jobs, --intensity, --state-dir)"
+            "{flag} (a later phase owns it; a build run accepts --fail-fast, --lanes, --jobs, --intensity, --state-dir; an install run (-S/-U) additionally accepts --no-register-ignorepkg, --config)"
         ));
     }
-    if inv.pacman_args.is_some() {
-        return Disposition::Deferred(
-            "-- <pacman args> (forwarded to a pacman -U transaction — the install phase)"
+    let accepts_pacman_args = matches!(inv.family, Family::S | Family::U) && inv.action.is_none();
+    if inv.pacman_args.is_some() && !accepts_pacman_args {
+        // `-- <pacman args…>` reaches only install transactions (§B.1).
+        return Disposition::Bad(
+            "-- <pacman args…> is forwarded to the pacman -U of an install run (-S/-U) only"
                 .to_string(),
         );
     }
@@ -163,13 +205,9 @@ fn classify(inv: &Invocation) -> Disposition {
         (Family::B, None) if inv.dry_run => Command::Plan,
         (Family::B, None) => Command::Build,
         (Family::B, Some('l')) => Command::List,
-        (Family::S, None) => return Disposition::Deferred(
-            "gsa -S without --dry-run (install-before-dependents arrives with the install phase)"
-                .to_string(),
-        ),
-        (Family::S, Some('w')) => {
-            return Disposition::Deferred("gsa -Sw fetch-only (Phase 4)".to_string())
-        }
+        (Family::S, None) => Command::BuildInstall,
+        (Family::U, None) => Command::Upgrade,
+        (Family::S, Some('w')) => Command::Fetch,
         (Family::S, Some('y')) => {
             return Disposition::Deferred("gsa -Sy version-sync pass (later phase)".to_string())
         }
@@ -183,12 +221,18 @@ fn classify(inv: &Invocation) -> Disposition {
             ))
         }
     };
-    if inv.dry_run && command != Command::Plan {
+    if inv.dry_run && !matches!(command, Command::Plan | Command::Upgrade | Command::Fetch) {
         return Disposition::Bad(
-            "--dry-run applies to build actions (-S/-B); queries are already read-only".to_string(),
+            "--dry-run applies to build/install/fetch actions (-S/-B/-U/-Sw); queries are already read-only"
+                .to_string(),
         );
     }
-    if inv.leaf && !matches!(command, Command::List | Command::Plan | Command::Build) {
+    if inv.leaf
+        && !matches!(
+            command,
+            Command::List | Command::Plan | Command::Build | Command::BuildInstall | Command::Fetch
+        )
+    {
         return Disposition::Bad(
             "--leaf applies to selections (-S/-B builds and their listings)".to_string(),
         );
@@ -283,7 +327,11 @@ fn execute(
     };
 
     match command {
-        Command::Topology | Command::Build => unreachable!(),
+        Command::Topology
+        | Command::Build
+        | Command::BuildInstall
+        | Command::Fetch
+        | Command::Upgrade => unreachable!(),
         Command::List => {
             let (listed, whole_set) = if inv.targets.is_empty() && inv.ranges.is_empty() {
                 (select::whole_set_listing(&ctx), true)
@@ -434,9 +482,27 @@ pub fn run(argv: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
             // file; its exit code IS its lane outcome code (§G.2).
             gsa_build::lane::run_lane_job(&args, err)
         }
+        Ok(Parsed::Hidden(Hidden::FetchJob(args))) => {
+            // The fetch child entry (contract §D.1): one recipe, one typed
+            // result file; `failed` is data, not process failure (exit 0).
+            gsa_fetch::engine::run_fetch_job(&args, err)
+        }
         Ok(Parsed::Hidden(Hidden::StaleLockCheck)) => {
             // The production pacman-lock probe without a run (§D.1).
             gsa_sched::lock::pacman_lock_probe(out, err)
+        }
+        Ok(Parsed::Hidden(Hidden::InstallDecide(args))) => {
+            // The one decision seam in isolation (§D.1): rows on stdout,
+            // nothing else touched.
+            install::run_install_decide(&args, out, err)
+        }
+        Ok(Parsed::Hidden(Hidden::InstallRegister(args))) => {
+            // The IgnorePkg registration write path in isolation (§D.1).
+            install::run_install_register(&args, out, err)
+        }
+        Ok(Parsed::Hidden(Hidden::RegisterIgnorepkg(args))) => {
+            // The one-shot backfill (rule 9).
+            install::run_register_ignorepkg(&args, out, err)
         }
         Ok(Parsed::Hidden(hidden)) => {
             let _ = writeln!(
@@ -456,6 +522,9 @@ pub fn run(argv: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
                 RC_USAGE
             }
             Disposition::Run(Command::Build) => build::run_build(&inv, out, err),
+            Disposition::Run(Command::BuildInstall) => build::run_build_install(&inv, out, err),
+            Disposition::Run(Command::Fetch) => fetch::run_fetch_only(&inv, out, err),
+            Disposition::Run(Command::Upgrade) => install::run_upgrade(&inv, out, err),
             Disposition::Run(command) => match execute(&inv, command, out, err) {
                 Ok(()) => RC_OK,
                 Err(message) => {
@@ -495,9 +564,7 @@ mod tests {
 
     #[test]
     fn deferred_spellings_refuse_with_a_clear_message() {
-        for spelling in [
-            "-Ql", "-Qr", "-Qb", "-Sw", "-Sy", "-Su", "-U", "-Ua", "-Ma", "-Mcc", "-S",
-        ] {
+        for spelling in ["-Ql", "-Qr", "-Qb", "-Sy", "-Su", "-Ma", "-Mcc"] {
             let (code, _out, err) = run_capture(&[spelling]);
             assert_eq!(code, 2, "{spelling} must be deferred");
             assert!(
@@ -510,12 +577,84 @@ mod tests {
         assert_eq!(code, 2);
         assert!(err.contains("deferred to a later phase"), "{err}");
         // The not-yet-real hidden seams defer; --lane-job/--stale-lock-check
-        // are live seams and are exercised by tests/gsa-sched-v2.sh.
-        for seam in ["--fetch-job", "--local-db-check", "--qa-check"] {
+        // /--fetch-job are live seams (tests/gsa-sched-v2.sh,
+        // tests/gsa-fetch-v2.sh).
+        for seam in ["--local-db-check", "--qa-check"] {
             let (code, _out, err) = run_capture(&[seam]);
             assert_eq!(code, 2, "{seam} must be deferred");
             assert!(err.contains("deferred to a later phase"), "{seam}: {err}");
         }
+    }
+
+    #[test]
+    fn fetch_spellings_are_live_and_usage_checked() {
+        // `-Sw` without a selection: usage (§B.1), never a deferred spelling.
+        let (code, _out, err) = run_capture(&["-Sw"]);
+        assert_eq!(code, 2);
+        assert!(err.contains("selection is mandatory"), "{err}");
+        // `gsa fetch` is exactly `gsa -Sw` (§B.1's one word alias).
+        let (code, _out, err) = run_capture(&["fetch"]);
+        assert_eq!(code, 2);
+        assert!(err.contains("selection is mandatory"), "{err}");
+        // The fetch child seam (§D.1) rejects bad payloads with rc 2 and a
+        // message naming the argument — before any fetch work runs.
+        let (code, _out, err) = run_capture(&["--fetch-job", "only-one"]);
+        assert_eq!(code, 2);
+        assert!(err.contains("--fetch-job"), "{err}");
+        let (code, _out, err) = run_capture(&["--fetch-job", "bad pkg", "x.result"]);
+        assert_eq!(code, 2);
+        assert!(err.contains("not a valid recipe id"), "{err}");
+        // A fetch run never takes build-run knobs (they are build-run fetch-
+        // ahead flags and defer elsewhere).
+        let (code, _out, err) = run_capture(&["-Sw", "--no-prefetch", "mesa-git"]);
+        assert_eq!(code, 2);
+        assert!(err.contains("deferred to a later phase"), "{err}");
+    }
+
+    #[test]
+    fn install_spellings_are_usage_checked_not_deferred() {
+        // `gsa -S` without a selection: usage (§B.1), not a deferred spelling.
+        let (code, _out, err) = run_capture(&["-S"]);
+        assert_eq!(code, 2);
+        assert!(err.contains("selection is mandatory"), "{err}");
+        // `gsa -U` with an empty resolution: §C.1's exact reason.
+        let (code, _out, err) = run_capture(&["-U"]);
+        assert_eq!(code, 2);
+        assert!(err.contains("selection resolved to no packages"), "{err}");
+        // `-- <pacman args…>` reaches install runs only (§B.1).
+        let (code, _out, err) = run_capture(&["-B", "--", "--overwrite", "*"]);
+        assert_eq!(code, 2);
+        assert!(err.contains("-- <pacman args"), "{err}");
+    }
+
+    #[test]
+    fn install_seams_reject_bad_usage_with_rc_two() {
+        // --install-decide: unknown mode / unreadable list / non-file argument
+        // (§D.1) — all before any decision code runs.
+        let (code, _out, err) = run_capture(&["--install-decide", "bogus", "x.pkg.tar.zst"]);
+        assert_eq!(code, 2);
+        assert!(err.contains("unknown mode 'bogus'"), "{err}");
+        let (code, _out, err) = run_capture(&["--install-decide", "checked"]);
+        assert_eq!(code, 2);
+        assert!(err.contains("unreadable argument list"), "{err}");
+        let (code, _out, err) = run_capture(&["--install-decide"]);
+        assert_eq!(code, 2);
+        assert!(err.contains("unreadable argument list"), "{err}");
+        let (code, _out, err) = run_capture(&[
+            "--install-decide",
+            "force",
+            "definitely-missing.pkg.tar.zst",
+        ]);
+        assert_eq!(code, 2);
+        assert!(err.contains("malformed archive argument"), "{err}");
+        // --install-register wants <conf> <subject> <names…>.
+        let (code, _out, err) = run_capture(&["--install-register", "a.conf", "subject"]);
+        assert_eq!(code, 2);
+        assert!(err.contains("--install-register"), "{err}");
+        // --register-ignorepkg takes at most one conf argument.
+        let (code, _out, err) = run_capture(&["--register-ignorepkg", "a.conf", "extra"]);
+        assert_eq!(code, 2);
+        assert!(err.contains("--register-ignorepkg"), "{err}");
     }
 
     #[test]
@@ -550,10 +689,17 @@ mod tests {
             "--jobs",
             "--intensity",
             "--state-dir",
+            "--no-prefetch",
+            "--prefetch-ahead",
         ] {
             assert!(out.contains(flag), "--help must name {flag}");
         }
-        for seam in ["--lane-job", "--stale-lock-check", "--install-decide"] {
+        for seam in [
+            "--lane-job",
+            "--stale-lock-check",
+            "--install-decide",
+            "--fetch-job",
+        ] {
             assert!(!out.contains(seam), "--help must hide {seam}");
         }
         let (code, _out, err) = run_capture(&[]);

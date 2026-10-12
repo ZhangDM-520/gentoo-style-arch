@@ -16,3 +16,5 @@ gsa-recipe = { workspace = true }
 gsa-graph = { workspace = true }
 gsa-sched = { workspace = true }
 gsa-build = { workspace = true }
+gsa-install = { workspace = true }
+gsa-fetch = { workspace = true }

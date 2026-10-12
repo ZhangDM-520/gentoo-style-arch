@@ -1,0 +1,749 @@
+//! The install pipeline (contract §E, §I, §K): ONE decision seam producing
+//! typed `DecisionRow`s, then the transaction executor (`pacman -U`
+//! subprocesses, `sudo -n` only) and the dynamic IgnorePkg registration.
+//!
+//! "One decision, one seam" (`docs/MEMORY.md` rule 20): `decide()` computes
+//! the transaction plan ONCE as typed rows (`install|skip|refuse|noop|parked`,
+//! §E.3) with the §E.5 rc contract (0 plan / 1 refusal / 2 bad usage held by
+//! the caller). Rendering and execution never re-decide. The hidden
+//! `--install-decide` seam prints exactly these rows and touches nothing else
+//! — no pacman, sudo, flock, or makepkg (§D.1).
+//!
+//! Every gate is fail-closed (rule 25(h)): a `refuse` row means no `pacman`
+//! call happens anywhere downstream of it.
+
+pub mod exec;
+pub mod gates;
+pub mod localdb;
+pub mod register;
+
+use std::path::{Path, PathBuf};
+
+pub use exec::{execute_txn, preflight_installs, TxnOutcome, TxnRequest};
+pub use localdb::{InstalledPackage, LocalDb};
+pub use register::{names_for_archive, register_ignorepkg, RegisterReport};
+
+use gsa_model::{Decision, DecisionRow};
+use gsa_recipe::pkginfo::{read_pkginfo, Pkginfo};
+
+use gates::{AbiExclusions, ProvideDrift};
+
+/// The decision mode (contract §D.1, §E): `checked` applies the same-version
+/// already-installed skip; `force` bypasses it (always `pacman -U`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DecideMode {
+    #[default]
+    Checked,
+    Force,
+}
+
+/// Parse the seam's mode word. Unknown modes are usage-class (rc 2).
+pub fn decide_mode(word: &str) -> Result<DecideMode, String> {
+    match word {
+        "checked" => Ok(DecideMode::Checked),
+        "force" => Ok(DecideMode::Force),
+        other => Err(format!(
+            "--install-decide: unknown mode '{other}' (want checked|force)"
+        )),
+    }
+}
+
+/// What an empty candidate list means (§B.6, §E.3): a refusal under `-S`
+/// (checked), a `noop empty-list` under `-Ua` (force).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum EmptyListPolicy {
+    Refuse,
+    #[default]
+    Noop,
+}
+
+/// One archive candidate: a built package archive beside its recipe (house
+/// layout, `PKGDEST=$startdir`), or an explicit `-U <archive-path>`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Candidate {
+    pub archive: PathBuf,
+    /// The recipe directory beside the archive, when there is one — the
+    /// second name authority (rule 9) and the PGO-instrumentation witness.
+    pub recipe_dir: Option<PathBuf>,
+}
+
+/// Everything the decision needs beyond the candidates and the installed DB.
+#[derive(Clone, Debug, Default)]
+pub struct DecisionContext {
+    pub mode: DecideMode,
+    /// What a zero-candidate plan means (§B.6).
+    pub empty_list: EmptyListPolicy,
+    /// Subjects that will be installed later in this same run: in-run repair
+    /// coverage for the ABI gate (rule 25(d)) — never a license to skip a
+    /// gate for the archive itself.
+    pub later_installs: Vec<String>,
+    /// Subjects parked before install (cone-stop `waits-on-failed`,
+    /// `waits-on-deferred`, or a deferral key). A parked subject's row is
+    /// `parked <reason>` and is never installed or probed (§E.3).
+    pub parks: Vec<(String, String)>,
+    /// Tier-2 ABI exclusions registry override (`config/abi-exclusions.conf`
+    /// shape, rule 25(f)) — tests point this at a fixture registry. `None`
+    /// resolves `config/abi-exclusions.conf` by walking up from the first
+    /// candidate's recipe directory; absent there means the empty registry
+    /// (synthetic workspaces).
+    pub abi_exclusions: Option<PathBuf>,
+}
+
+/// The discovery result for one recipe directory (house layout: archives
+/// beside the recipe; `gsa -U <ref>` and the `-S` per-package install both
+/// consume this).
+#[derive(Clone, Debug)]
+pub struct RecipeArchives {
+    pub recipe_dir: PathBuf,
+    /// The newest archive per expected pkgname (by `.PKGINFO` truth).
+    pub candidates: Vec<Candidate>,
+    /// Expected pkgnames (committed `.SRCINFO`) with no eligible archive —
+    /// non-empty means `refuse partial-set <pkgdir> <missing>…`.
+    pub missing: Vec<String>,
+    /// The chosen set mixes full versions — `refuse partial-set … mixed-versions`.
+    pub mixed_versions: bool,
+}
+
+/// Discover one recipe's newest archive set. Archives are matched by their
+/// own `.PKGINFO` (never a glob-all fallback, rule 11) and each archive is
+/// chosen newest-first per expected pkgname. An archive whose `.PKGINFO`
+/// cannot be read is NOT a candidate here; the decision seam reports it per
+/// rule 25(h) (`skip unreadable-pkginfo` / `refuse discover-failed`).
+pub fn discover_recipe(recipe_dir: &Path) -> Result<RecipeArchives, String> {
+    // Expected output names: the committed `.SRCINFO`'s `pkgname` lines —
+    // the names built archives actually carry (a recipe whose pkgbase
+    // differs from its outputs must never demand an archive named after the
+    // pkgbase) — falling back to pkgbase for a base-only record. No
+    // `.SRCINFO` means no expectation: every readable archive is eligible.
+    let mut expected: Vec<String> = Vec::new();
+    let srcinfo_path = recipe_dir.join(".SRCINFO");
+    if let Ok(text) = std::fs::read_to_string(&srcinfo_path) {
+        let origin = srcinfo_path.to_string_lossy().into_owned();
+        if let Ok(info) = gsa_recipe::parse_srcinfo(&text, &origin) {
+            if !info.pkgnames.is_empty() {
+                expected = info.pkgnames.clone();
+            } else if let Some(base) = info.pkgbase.clone() {
+                expected.push(base);
+            }
+        }
+    }
+
+    // Newest archive per expected pkgname, matched by the archive's own
+    // `.PKGINFO` truth (never a glob-all fallback, rule 11). An archive
+    // whose `.PKGINFO` cannot be read is NOT a candidate here (rule 25(h):
+    // direct-archive seams report it via decide() gate 1).
+    let mut by_name: Vec<(String, std::time::SystemTime, PathBuf, String)> = Vec::new();
+    let entries = std::fs::read_dir(recipe_dir)
+        .map_err(|e| format!("cannot read recipe dir {}: {e}", recipe_dir.display()))?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if !name.ends_with(".pkg.tar.zst") {
+            continue;
+        }
+        let Ok(pkginfo) = read_pkginfo(&path) else {
+            continue;
+        };
+        if !expected.is_empty() && !expected.contains(&pkginfo.pkgname) {
+            continue;
+        }
+        let mtime = std::fs::metadata(&path)
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::UNIX_EPOCH);
+        by_name.push((pkginfo.pkgname, mtime, path, pkginfo.version));
+    }
+
+    let mut names_in_order: Vec<String> = expected.clone();
+    if names_in_order.is_empty() {
+        names_in_order = by_name.iter().map(|(n, ..)| n.clone()).collect();
+        names_in_order.sort();
+        names_in_order.dedup();
+    }
+
+    let mut candidates: Vec<Candidate> = Vec::new();
+    let mut missing: Vec<String> = Vec::new();
+    let mut versions: Vec<String> = Vec::new();
+    for want in &names_in_order {
+        let mut best: Option<&(String, std::time::SystemTime, PathBuf, String)> = None;
+        for row in &by_name {
+            if &row.0 != want {
+                continue;
+            }
+            if best.map(|b| row.1 > b.1).unwrap_or(true) {
+                best = Some(row);
+            }
+        }
+        match best {
+            Some((_, _, archive, version)) => {
+                candidates.push(Candidate {
+                    archive: archive.clone(),
+                    recipe_dir: Some(recipe_dir.to_path_buf()),
+                });
+                versions.push(version.clone());
+            }
+            None => missing.push(want.clone()),
+        }
+    }
+    versions.sort();
+    versions.dedup();
+
+    Ok(RecipeArchives {
+        recipe_dir: recipe_dir.to_path_buf(),
+        candidates,
+        missing,
+        mixed_versions: versions.len() > 1,
+    })
+}
+
+/// The one decision function (contract §E.1). Produces one typed row per
+/// candidate — full rows, never exceptions-only (§E.2) — gating in this
+/// order: unreadable/name handling, empty list, PGO payload (§E.3 `pgo-*`),
+/// ABI/provide (`abi-soname`, `abi-consumer`, `abi-stock-pinner`), the
+/// package-internal NEEDED probe (rule 25(b)/(e) file-truth resolution),
+/// then the checked same-version skip (`already-current`) or the force
+/// branch (`install`).
+///
+/// `Err` is the "plan failed without a row" class: the caller renders a
+/// single `refuse plan-failed` row (§E.3) and the seam exits 1 (§E.5).
+pub fn decide(
+    candidates: &[Candidate],
+    ctx: &DecisionContext,
+    db: &LocalDb,
+) -> Result<Vec<DecisionRow>, String> {
+    Ok(plan(candidates, ctx, db)?.rows())
+}
+
+/// One candidate's parsed identity plus its row block: the decision is
+/// computed ONCE (rule 20) and this is the single intermediate the
+/// renderer and the executor both consume — never a re-decision.
+struct CandidatePlan {
+    candidate: Candidate,
+    /// The archive's own `.PKGINFO` truth, cached so registration
+    /// (`names_for_archive`) never re-reads what the plan already read.
+    pkginfo: Option<Pkginfo>,
+    rows: Vec<DecisionRow>,
+}
+
+struct Plan {
+    /// Plan-level rows (the empty-list row — no candidate to attach to).
+    plan_rows: Vec<DecisionRow>,
+    candidates: Vec<CandidatePlan>,
+}
+
+impl Plan {
+    fn rows(&self) -> Vec<DecisionRow> {
+        let mut rows = self.plan_rows.clone();
+        for group in &self.candidates {
+            rows.extend(group.rows.iter().cloned());
+        }
+        rows
+    }
+
+    fn refused(&self) -> bool {
+        self.plan_rows
+            .iter()
+            .chain(self.candidates.iter().flat_map(|g| g.rows.iter()))
+            .any(|r| r.decision == Decision::Refuse)
+    }
+}
+
+fn row(subject: &str, decision: Decision, reason: impl Into<String>) -> DecisionRow {
+    DecisionRow {
+        subject: subject.to_string(),
+        decision,
+        reason: reason.into(),
+    }
+}
+
+/// The second name authority (rule 9): the recipe directory's committed
+/// `.SRCINFO` pkgbase + pkgnames.
+fn recipe_srcinfo_names(recipe_dir: Option<&Path>) -> Vec<String> {
+    let Some(dir) = recipe_dir else {
+        return Vec::new();
+    };
+    let path = dir.join(".SRCINFO");
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    let origin = path.to_string_lossy().into_owned();
+    let Ok(info) = gsa_recipe::parse_srcinfo(&text, &origin) else {
+        return Vec::new();
+    };
+    let mut names = Vec::new();
+    if let Some(base) = info.pkgbase {
+        names.push(base);
+    }
+    for name in info.pkgnames {
+        if !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    names
+}
+
+fn resolve_exclusions(
+    ctx: &DecisionContext,
+    candidates: &[Candidate],
+) -> Result<AbiExclusions, String> {
+    if let Some(path) = &ctx.abi_exclusions {
+        return AbiExclusions::load(path);
+    }
+    let start = candidates
+        .iter()
+        .find_map(|c| c.recipe_dir.as_deref())
+        .or(None);
+    match gates::find_repo_exclusions(start) {
+        Some(path) => AbiExclusions::load(&path),
+        None => Ok(AbiExclusions::empty()),
+    }
+}
+
+/// Checked-mode same-version skip (rule 11): exact canonical full-version
+/// match AND an install date (local-DB entry dir mtime) not older than the
+/// archive's mtime (nanosecond precision). Any doubt — no install date, no
+/// readable archive mtime, no exact match — installs.
+fn already_current(info: &Pkginfo, archive: &Path, db: &LocalDb) -> Option<String> {
+    let installed = db.get(&info.pkgname)?;
+    if installed.version != info.version {
+        return None;
+    }
+    let install_date = installed.install_date?;
+    let archive_mtime = std::fs::metadata(archive).ok()?.modified().ok()?;
+    if install_date >= archive_mtime {
+        Some(installed.version.clone())
+    } else {
+        None
+    }
+}
+
+fn plan(candidates: &[Candidate], ctx: &DecisionContext, db: &LocalDb) -> Result<Plan, String> {
+    let exclusions = resolve_exclusions(ctx, candidates)?;
+
+    // Empty candidate list (§B.6, §E.3): a refusal under `-S` (checked), a
+    // `noop empty-list` under `-Ua` (force). Subject `-` because there is no
+    // candidate the row could name.
+    if candidates.is_empty() {
+        let decision = match ctx.empty_list {
+            EmptyListPolicy::Refuse => Decision::Refuse,
+            EmptyListPolicy::Noop => Decision::Noop,
+        };
+        return Ok(Plan {
+            plan_rows: vec![row("-", decision, "empty-list")],
+            candidates: Vec::new(),
+        });
+    }
+
+    // Parse every candidate once (rule 20: one read, one decision).
+    let parsed: Vec<Option<Pkginfo>> = candidates
+        .iter()
+        .map(|c| read_pkginfo(&c.archive).ok())
+        .collect();
+    // The transaction set: every name this plan would install — the
+    // coverage side of the ABI gate.
+    let tx_names: Vec<String> = parsed
+        .iter()
+        .flatten()
+        .flat_map(|p| [p.pkgbase.clone(), p.pkgname.clone()])
+        .collect();
+    // Shipped bytes of the set: the NEEDED probe's resolution source (b)
+    // (rule 25(b)/(e)). Only gate-1-surviving candidates are indexed — an
+    // unreadable-`.PKGINFO` archive is never probed and never transacts.
+    let archives: Vec<&Path> = candidates
+        .iter()
+        .zip(&parsed)
+        .filter(|(_, info)| info.is_some())
+        .map(|(c, _)| c.archive.as_path())
+        .collect();
+    let shipped = gates::ShippedBytes::collect(&archives)?;
+
+    let mut plans: Vec<CandidatePlan> = Vec::new();
+    for (idx, candidate) in candidates.iter().enumerate() {
+        let pkginfo = parsed[idx].clone();
+        let src_names = recipe_srcinfo_names(candidate.recipe_dir.as_deref());
+        let mut name_chain: Vec<String> = Vec::new();
+        if let Some(info) = &pkginfo {
+            name_chain.push(info.pkgbase.clone());
+            name_chain.push(info.pkgname.clone());
+        }
+        for name in &src_names {
+            if !name_chain.contains(name) {
+                name_chain.push(name.clone());
+            }
+        }
+        let subject = name_chain
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "-".to_string());
+
+        // Parked subjects stand down before anything else: never probed,
+        // never installed (§E.3 `parked`).
+        if let Some((_, reason)) = ctx
+            .parks
+            .iter()
+            .find(|(name, _)| name_chain.iter().any(|n| n == name))
+        {
+            plans.push(CandidatePlan {
+                candidate: candidate.clone(),
+                pkginfo,
+                rows: vec![row(&subject, Decision::Parked, reason.clone())],
+            });
+            continue;
+        }
+
+        // Rule 25(h): an unreadable `.PKGINFO` is never probed. Names come
+        // from the second authority (the recipe dir's committed `.SRCINFO`);
+        // established → `skip unreadable-pkginfo`; unestablishable →
+        // `refuse discover-failed` (rule 9 fail-closed).
+        let Some(info) = pkginfo else {
+            let rows = if name_chain.is_empty() {
+                vec![row(
+                    "-",
+                    Decision::Refuse,
+                    format!("discover-failed {}", candidate.archive.display()),
+                )]
+            } else {
+                vec![row(&subject, Decision::Skip, "unreadable-pkginfo")]
+            };
+            plans.push(CandidatePlan {
+                candidate: candidate.clone(),
+                pkginfo: None,
+                rows,
+            });
+            continue;
+        };
+
+        let mut rows: Vec<DecisionRow> = Vec::new();
+        let archive = candidate.archive.display().to_string();
+
+        // PGO payload gate — only recipes that declare instrumentation can
+        // leak a payload (both flag spellings; strict content scan, never
+        // shell). Fires BEFORE the ABI gate and the force branch.
+        if gates::pgo_instrumented_recipe(candidate.recipe_dir.as_deref()) {
+            match gsa_recipe::pkginfo::pgo_hits(&candidate.archive) {
+                Err(_) => {
+                    rows.push(row(
+                        &info.pkgbase,
+                        Decision::Refuse,
+                        format!("pgo-unreadable {archive}"),
+                    ));
+                }
+                Ok(hits) => {
+                    for hit in &hits {
+                        rows.push(row(
+                            &info.pkgbase,
+                            Decision::Refuse,
+                            format!("pgo-hit {archive} {hit}"),
+                        ));
+                    }
+                    if !hits.is_empty() {
+                        rows.push(row(
+                            &info.pkgbase,
+                            Decision::Refuse,
+                            format!("pgo-instrumented {archive}"),
+                        ));
+                    }
+                }
+            }
+            if !rows.is_empty() {
+                plans.push(CandidatePlan {
+                    candidate: candidate.clone(),
+                    pkginfo: Some(info),
+                    rows,
+                });
+                continue;
+            }
+        }
+
+        // ABI/provide gate — a bare `*.so` provide that disappears or
+        // version-moves vs the installed provides of the same pkgname (or
+        // its stock→house counterpart). Runs BEFORE the force branch: force
+        // bypasses the same-version skip, never this gate.
+        let drift = gates::provide_drift(&info.pkgname, &info.provides, db);
+        if !drift.is_empty() {
+            rows.extend(abi_rows(
+                &info.pkgbase,
+                &archive,
+                &drift,
+                db,
+                &tx_names,
+                ctx,
+            ));
+            plans.push(CandidatePlan {
+                candidate: candidate.clone(),
+                pkginfo: Some(info),
+                rows,
+            });
+            continue;
+        }
+
+        // Package-internal NEEDED probe (run #53 wall): the archive's own
+        // ELF members must resolve via the transaction's provides/bytes or
+        // the installed DB's provides/owned files.
+        let misses = gates::needed_misses(
+            &candidate.archive,
+            &info.provides,
+            &shipped,
+            db,
+            &exclusions,
+        )?;
+        for miss in &misses {
+            rows.push(row(
+                &info.pkgbase,
+                Decision::Refuse,
+                format!("needed {} {} {}", archive, miss.member, miss.soname),
+            ));
+        }
+        if !rows.is_empty() {
+            plans.push(CandidatePlan {
+                candidate: candidate.clone(),
+                pkginfo: Some(info),
+                rows,
+            });
+            continue;
+        }
+
+        // Branch: force installs everything that survived the gates; checked
+        // applies the same-version already-current skip (rule 11).
+        let rows = if ctx.mode == DecideMode::Force {
+            vec![row(&info.pkgbase, Decision::Install, "ok")]
+        } else {
+            match already_current(&info, &candidate.archive, db) {
+                Some(version) => vec![row(
+                    &info.pkgbase,
+                    Decision::Skip,
+                    format!("already-current {version}"),
+                )],
+                None => vec![row(&info.pkgbase, Decision::Install, "ok")],
+            }
+        };
+        plans.push(CandidatePlan {
+            candidate: candidate.clone(),
+            pkginfo: Some(info),
+            rows,
+        });
+    }
+
+    Ok(Plan {
+        plan_rows: Vec::new(),
+        candidates: plans,
+    })
+}
+
+/// The ABI gate's rows for one drifted candidate: `abi-soname` per drifted
+/// provide, plus `abi-consumer` per installed LINKED consumer and
+/// `abi-stock-pinner` per installed out-of-tree pinner that this transaction
+/// and in-run repair (rule 25(d), `later_installs`) do not cover.
+fn abi_rows(
+    subject: &str,
+    archive: &str,
+    drift: &[ProvideDrift],
+    db: &LocalDb,
+    tx_names: &[String],
+    ctx: &DecisionContext,
+) -> Vec<DecisionRow> {
+    let mut rows: Vec<DecisionRow> = Vec::new();
+    for d in drift {
+        rows.push(row(
+            subject,
+            Decision::Refuse,
+            format!(
+                "abi-soname {archive} {} {} {} {}",
+                d.pkgname,
+                d.name,
+                d.inst_ver,
+                d.built_ver.clone().unwrap_or_else(|| "-".to_string())
+            ),
+        ));
+    }
+    let affected: Vec<String> = drift.iter().map(|d| d.name.clone()).collect();
+    let covered = |name: &str| {
+        tx_names.iter().any(|t| t == name) || ctx.later_installs.iter().any(|t| t == name)
+    };
+    for consumer in gates::linked_consumers(db, &affected) {
+        if covered(&consumer) {
+            continue;
+        }
+        rows.push(row(
+            subject,
+            Decision::Refuse,
+            format!("abi-consumer {archive} {consumer}"),
+        ));
+    }
+    for (pinner, dep) in gates::stock_pinners(db, &affected) {
+        if covered(&pinner) {
+            continue;
+        }
+        rows.push(row(
+            subject,
+            Decision::Refuse,
+            format!("abi-stock-pinner {archive} {pinner} {dep}"),
+        ));
+    }
+    rows
+}
+
+/// One `-S` install step: decide, then (on a plan without `refuse`) register
+/// the accepted names and run the one `pacman -U` transaction. Returns the
+/// decision rows and the transaction outcome — `None` when nothing
+/// transacted (all rows `skip`/`parked`) or when a `refuse` row aborted the
+/// run in the refusal class before any pacman call (rule 25(h)).
+pub fn install_built_package(
+    recipe_dir: &Path,
+    run: &InstallRun,
+) -> Result<(Vec<DecisionRow>, Option<TxnOutcome>), String> {
+    let discovered = discover_recipe(recipe_dir)?;
+
+    // Discovery damage owns the plan: a shrunken set is never installed
+    // silently (rule 11; fish `install_plan`'s `_GSA_DISCOVER_REFUSALS`).
+    if !discovered.missing.is_empty() {
+        return Ok((
+            vec![row(
+                "-",
+                Decision::Refuse,
+                format!(
+                    "partial-set {} {}",
+                    discovered.recipe_dir.display(),
+                    discovered.missing.join(" ")
+                ),
+            )],
+            None,
+        ));
+    }
+    if discovered.mixed_versions {
+        return Ok((
+            vec![row(
+                "-",
+                Decision::Refuse,
+                format!(
+                    "partial-set {} mixed-versions",
+                    discovered.recipe_dir.display()
+                ),
+            )],
+            None,
+        ));
+    }
+
+    let ctx = DecisionContext {
+        mode: run.mode,
+        empty_list: match run.mode {
+            DecideMode::Checked => EmptyListPolicy::Refuse,
+            DecideMode::Force => EmptyListPolicy::Noop,
+        },
+        later_installs: run.later_installs.clone(),
+        parks: Vec::new(),
+        abi_exclusions: None,
+    };
+    let db_root = localdb::pacman_db_root();
+    let db = LocalDb::load(&db_root)?;
+    let plan = plan(&discovered.candidates, &ctx, &db)?;
+    let rows = plan.rows();
+    if plan.refused() {
+        return Ok((rows, None));
+    }
+
+    // Rule 9: every ACCEPTED archive (install AND skip rows) has its
+    // pkgbase+pkgname registered before anything can install it. Parked
+    // subjects are not accepted.
+    let accepted: Vec<&CandidatePlan> = plan
+        .candidates
+        .iter()
+        .filter(|group| {
+            !group.rows.is_empty()
+                && group
+                    .rows
+                    .iter()
+                    .all(|r| matches!(r.decision, Decision::Install | Decision::Skip))
+        })
+        .collect();
+    if run.register_ignorepkg {
+        if !accepted.is_empty() {
+            let conf = run
+                .conf
+                .clone()
+                .unwrap_or_else(|| PathBuf::from("/etc/pacman.conf"));
+            let mut names: Vec<String> = Vec::new();
+            for group in &accepted {
+                let established = names_for_archive(
+                    group.pkginfo.as_ref(),
+                    group.candidate.recipe_dir.as_deref(),
+                )?;
+                for name in established {
+                    if !names.contains(&name) {
+                        names.push(name);
+                    }
+                }
+            }
+            names.sort();
+            let subject = format!("{} name(s) from {} archive(s)", names.len(), accepted.len());
+            register_ignorepkg(&conf, &subject, &names, &db_root)?;
+        }
+    } else if !accepted.is_empty() {
+        eprintln!(
+            "gsa: warning: IgnorePkg registration skipped (--no-register-ignorepkg) — {} archive name(s) were NOT added to the pacman.conf closure",
+            accepted.len()
+        );
+    }
+
+    let install_archives: Vec<PathBuf> = plan
+        .candidates
+        .iter()
+        .filter(|group| group.rows.iter().any(|r| r.decision == Decision::Install))
+        .map(|group| group.candidate.archive.clone())
+        .collect();
+    if install_archives.is_empty() {
+        return Ok((rows, None));
+    }
+    let outcome = execute_txn(&TxnRequest {
+        state_dir: run.state_dir.clone(),
+        conf: run.conf.clone(),
+        archives: install_archives,
+        pacman_args: run.pacman_args.clone(),
+    });
+    Ok((rows, Some(outcome)))
+}
+
+/// The transaction-side inputs of one `-S`/`-U` run (contract §B.4/§B.6).
+#[derive(Clone, Debug)]
+pub struct InstallRun {
+    pub mode: DecideMode,
+    /// State root (the transaction mutex lives under `<state>/locks/`).
+    pub state_dir: PathBuf,
+    /// Target pacman.conf (`--config`), used for IgnorePkg registration and
+    /// passed to the `pacman -U` subprocess.
+    pub conf: Option<PathBuf>,
+    /// Trailing `-- <pacman args…>` forwarded verbatim to the transaction
+    /// (today's `-ia --overwrite '*'` idiom), before the archive list.
+    pub pacman_args: Vec<String>,
+    /// False under `--no-register-ignorepkg` (the skip is loud).
+    pub register_ignorepkg: bool,
+    /// In-run repair coverage (rule 25(d)).
+    pub later_installs: Vec<String>,
+}
+
+/// Render the seam's stdout rows (§E.2) — one row per line.
+pub fn render_rows(rows: &[DecisionRow]) -> String {
+    let mut out = String::new();
+    for row in rows {
+        out.push_str(&row.render());
+        out.push('\n');
+    }
+    out
+}
+
+/// The seam's rc contract (§E.5): 0 = plan with no `refuse` row, 1 = the
+/// plan contains at least one `refuse` row. (2 is the caller's usage class.)
+pub fn rows_rc(rows: &[DecisionRow]) -> i32 {
+    if rows
+        .iter()
+        .any(|r| r.decision == gsa_model::Decision::Refuse)
+    {
+        1
+    } else {
+        0
+    }
+}

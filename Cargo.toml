@@ -7,6 +7,8 @@ members = [
     "crates/gsa-graph",
     "crates/gsa-sched",
     "crates/gsa-build",
+    "crates/gsa-install",
+    "crates/gsa-fetch",
     "crates/gsa-cli",
 ]
 
@@ -22,11 +24,17 @@ gsa-recipe = { path = "crates/gsa-recipe" }
 gsa-graph = { path = "crates/gsa-graph" }
 gsa-sched = { path = "crates/gsa-sched" }
 gsa-build = { path = "crates/gsa-build" }
+gsa-install = { path = "crates/gsa-install" }
+gsa-fetch = { path = "crates/gsa-fetch" }
 serde = { version = "1", features = ["derive"] }
+tar = "0.4"
+zstd = "0.13"
+object = { version = "0.36", default-features = false, features = ["read", "elf"] }
 
 # Phase 1 of the native package manager (docs/gsa-contract.md). Phase 2 adds
 # gsa-sched (lane supervisor: budgets, result codec, dispatch state machine,
-# signals, locks, orphan sweeps) and gsa-build (makepkg orchestration). The
-# remaining crates (gsa-install/gsa-fetch/gsa-state/gsa-qa/gsa-maint) arrive
-# with their phases and are deliberately not stubbed out here
-# (plan-native-pm.md §3.1, §7).
+# signals, locks, orphan sweeps) and gsa-build (makepkg orchestration).
+# Phase 3 adds gsa-install (the install pipeline) and Phase 4 gsa-fetch
+# (fetch-ahead: `gsa -Sw` + the dispatcher's prefetch window). The remaining
+# crates (gsa-state/gsa-qa/gsa-maint) arrive with their phases and are
+# deliberately not stubbed out here (plan-native-pm.md §3.1, §7).

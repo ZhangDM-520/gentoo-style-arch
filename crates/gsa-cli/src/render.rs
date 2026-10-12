@@ -434,7 +434,49 @@ pub fn render_event(event: &SupEvent, ids: &[RecipeId]) -> String {
         SupEvent::Signal(sig) => format!("signal {sig}\n"),
         SupEvent::Teardown(reason) => format!("teardown {reason}\n"),
         SupEvent::Diagnostic(message) => format!("note: {message}\n"),
+        SupEvent::PrefetchWarning(message) => format!("warning: {message}\n"),
     }
+}
+
+/// The prose prefetch-warning section (owner decision 5 / docs/adr/
+/// 0004-prefetch-advisory.md): a build run's fetch-ahead advisories, loud
+/// but never rows — the lanes remain authoritative and retry at build time.
+/// Empty when the run had none.
+pub fn render_prefetch_notes(warnings: &[gsa_fetch::verdict::FetchResult]) -> String {
+    if warnings.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("Prefetch warnings (advisory — lanes retry at build time):\n");
+    for warning in warnings {
+        out.push_str(&format!(
+            "· {} {} {}\n",
+            warning.pkg, warning.verdict, warning.reason
+        ));
+    }
+    out
+}
+
+/// The prose summary of a `-Sw` fetch-only run (§I.4): the verdict tally.
+/// The verdict rows above it are the per-package surface; the run record
+/// below is the machine rendering of the same outcomes.
+pub fn render_fetch_prose(results: &[gsa_fetch::verdict::FetchResult]) -> String {
+    use gsa_fetch::verdict::FetchVerdict;
+    let fetched = results
+        .iter()
+        .filter(|r| r.verdict == FetchVerdict::Ok)
+        .count();
+    let failed = results
+        .iter()
+        .filter(|r| r.verdict == FetchVerdict::Failed)
+        .count();
+    let skipped = results
+        .iter()
+        .filter(|r| r.verdict == FetchVerdict::Skipped)
+        .count();
+    format!(
+        "Fetch run: {} package(s), {fetched} fetched, {failed} failed, {skipped} skipped\n",
+        results.len()
+    )
 }
 
 /// The prose summary (contract §I.4: loud reporting — every failed package

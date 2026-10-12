@@ -282,6 +282,69 @@ pub struct PlanRow {
     pub reason: String,
 }
 
+/// An install decision (contract §E.3) — the seam vocabulary, distinct from
+/// the run-record plan vocabulary on purpose (`refuse` here, `refused` there).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Decision {
+    Install,
+    Skip,
+    Refuse,
+    Noop,
+    Parked,
+}
+
+impl Decision {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Decision::Install => "install",
+            Decision::Skip => "skip",
+            Decision::Refuse => "refuse",
+            Decision::Noop => "noop",
+            Decision::Parked => "parked",
+        }
+    }
+}
+
+impl fmt::Display for Decision {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// One decision row: `<pkgbase> <decision> <reason…>` (contract §E.2).
+/// Computed ONCE by the one decision seam (`docs/MEMORY.md` rule 20); the
+/// seam's stdout, the run-record plan rows and the prose summary are three
+/// renderings of these rows, never re-decisions.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DecisionRow {
+    pub subject: String,
+    pub decision: Decision,
+    pub reason: String,
+}
+
+impl DecisionRow {
+    /// The §E.2 row rendering (the `--install-decide` stdout framing).
+    pub fn render(&self) -> String {
+        format!(
+            "{} {} {}",
+            self.subject,
+            self.decision.as_str(),
+            self.reason
+        )
+    }
+
+    /// The run-record plan vocabulary this decision renders as (§H.2).
+    pub fn plan_action(self) -> PlanAction {
+        match self.decision {
+            Decision::Install => PlanAction::Install,
+            Decision::Skip => PlanAction::Skip,
+            Decision::Refuse => PlanAction::Refused,
+            Decision::Noop => PlanAction::Noop,
+            Decision::Parked => PlanAction::Parked,
+        }
+    }
+}
+
 /// Run-record per-package status (contract §H.3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum RowStatus {
@@ -325,8 +388,9 @@ pub struct OutcomeRow {
 
 /// The run-level outcome of the rows (contract §G.1), computed once from the
 /// same rows every rendering shows. Precedence on a completed run: refusal
-/// (3) > failure (4 or 1 per policy) > deferral-only (5) > success (0); an
-/// interrupted run exits 130 regardless of earlier failures (§G.1).
+/// (3) > failure (4 or 1 per policy) > deferral-only (5) > success (0); a
+/// signalled run — or a run carrying a signalled lane's `interrupted` row —
+/// exits 130 regardless of earlier failures (§G.1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RunOutcome {
     /// The `outcome:` scalar vocabulary: `planned` (dry run), `success`,
@@ -348,7 +412,12 @@ impl RunOutcome {
         refused: bool,
     ) -> RunOutcome {
         let has = |status: RowStatus| rows.iter().any(|r| r.status == status);
-        if interrupted {
+        if interrupted || has(RowStatus::Interrupted) {
+            // §G.1: a signalled run exits 130 regardless of earlier failures.
+            // "Was signalled" is observable two ways: the supervisor tore the
+            // run down (`interrupted`), or a lane reported a signal death (an
+            // `interrupted` row, §F.1 codes 129/130/143) — either forces the
+            // interrupt class.
             return RunOutcome {
                 outcome: "interrupted",
                 rc: 130,
@@ -413,6 +482,12 @@ pub struct RunRecord {
     pub outcome: String,
     pub rc: i32,
     pub dry_run: bool,
+    /// The additive `prefetch-warnings:` extension scalar (contract §H.2,
+    /// owner decision 5 / docs/adr/0004-prefetch-advisory.md): the count of
+    /// fetch-ahead advisory warnings of a build run. `None` when the run had
+    /// no fetch-ahead participation (plan/txn records). Never rows, never a
+    /// format bump.
+    pub prefetch_warnings: Option<u32>,
     pub plan: Vec<PlanRow>,
     pub outcomes: Vec<OutcomeRow>,
     pub continuation: Continuation,
@@ -464,6 +539,9 @@ impl RunRecord {
             // Extension scalars may follow the fixed set without a format
             // bump (contract §H.2).
             out.push_str("dry-run: yes\n");
+        }
+        if let Some(count) = self.prefetch_warnings {
+            out.push_str(&format!("prefetch-warnings: {count}\n"));
         }
         out.push_str("--- plan ---\n");
         for row in &self.plan {
@@ -608,6 +686,7 @@ mod tests {
             outcome: "planned".to_string(),
             rc: 0,
             dry_run,
+            prefetch_warnings: None,
             plan: vec![
                 PlanRow {
                     pkg: id("glib2-git"),
@@ -755,5 +834,31 @@ mod tests {
         // refusal beats failures on a completed run.
         let out = RunOutcome::compute(&[ok], false, false, true);
         assert_eq!((out.outcome, out.rc), ("refused", 3));
+    }
+
+    #[test]
+    fn a_signalled_lane_row_is_the_interrupt_class() {
+        use RowStatus::*;
+        let ok = row("a", Succeeded, Some(0), "ok");
+        let signalled = row("b", Interrupted, Some(143), "interrupted-mid-build");
+        // §G.1: a run that was signalled exits 130 with the record first —
+        // a signalled lane row can never settle the run as `success` rc 0.
+        let out = RunOutcome::compute(&[ok.clone(), signalled.clone()], false, false, false);
+        assert_eq!(
+            (out.outcome, out.rc),
+            ("interrupted", 130),
+            "a run record with a signalled lane must be outcome interrupted / rc 130 (§G.1), \
+             got {} / {}",
+            out.outcome,
+            out.rc
+        );
+        // The interrupt class wins over failure and deferral classes alike,
+        // and over the refusal class when both are present (§G.1: "an
+        // interrupted run exits 130 regardless of earlier failures").
+        let failed = row("c", Failed, Some(1), "build-failed");
+        let out = RunOutcome::compute(&[failed, signalled.clone()], true, false, false);
+        assert_eq!((out.outcome, out.rc), ("interrupted", 130));
+        let out = RunOutcome::compute(&[signalled], true, false, true);
+        assert_eq!((out.outcome, out.rc), ("interrupted", 130));
     }
 }

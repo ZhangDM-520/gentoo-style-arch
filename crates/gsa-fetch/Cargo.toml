@@ -1,0 +1,10 @@
+[package]
+name = "gsa-fetch"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+gsa-model = { workspace = true }
+gsa-recipe = { workspace = true }
+gsa-topo = { workspace = true }

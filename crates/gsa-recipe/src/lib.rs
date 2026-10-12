@@ -19,6 +19,9 @@ use std::rc::Rc;
 
 use gsa_model::{RecipeId, TopologyRecord};
 
+pub mod elf;
+pub mod pkginfo;
+
 /// A recipe-metadata refusal: names the recipe/file and, when the offender
 /// lives on one, its line.
 #[derive(Clone, Debug, PartialEq, Eq)]

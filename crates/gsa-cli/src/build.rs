@@ -1,8 +1,10 @@
-//! Real build execution (`gsa -B <targets…> [ranges…]`, contract §B.5):
-//! the selection runs through `gsa-build` + `gsa-sched` — makepkg children
-//! in `exec`'d lane supervisors, topological dispatch over the build-order
-//! graph, host-derived budgets (`gsa-sched::budget`, docs/portability.md),
-//! install-free. Cone-stop is the default failure policy (§I.1);
+//! Real build execution (`gsa -B <targets…> [ranges…]`, contract §B.5, and
+//! `gsa -S <targets…> [ranges…]`, §B.4): the selection runs through
+//! `gsa-build` + `gsa-sched` — makepkg children in `exec`'d lane
+//! supervisors, topological dispatch over the build-order graph,
+//! host-derived budgets (`gsa-sched::budget`, docs/portability.md). `-B` is
+//! install-free; `-S` adds the post-build install hook (install-before-
+//! dependents, rule 11). Cone-stop is the default failure policy (§I.1);
 //! `--fail-fast` is the escape (§I.3).
 //!
 //! The run record (§H) is computed once after the machine settles and
@@ -15,13 +17,15 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
 
+use gsa_fetch::candidacy::{classify as classify_candidacy, FetchCandidacy};
 use gsa_graph::Graph;
+use gsa_install::{preflight_installs, DecideMode, InstallRun};
 use gsa_model::{Group, OutcomeRow, RecipeId, RowStatus, RunOutcome};
 use gsa_recipe::RecipeDb;
 use gsa_sched::budget::{self, Baselines, Budget, Override};
 use gsa_sched::lock;
 use gsa_sched::machine::Policy;
-use gsa_sched::supervisor::{self, RunSetup, SupNode};
+use gsa_sched::supervisor::{self, InstallStep, PrefetchSetup, RunSetup, SupNode};
 use gsa_topo::ProjectConfig;
 
 use crate::args::Invocation;
@@ -29,13 +33,30 @@ use crate::select::{self, Ctx, Selection};
 use crate::{record, render};
 
 /// The five build-run modifiers (§B.8): real on a `-B` build, deferred on
-/// every other spelling (the classifier consults this roster).
-pub const REAL_BUILD_FLAGS: [&str; 5] = [
+/// every other spelling (the classifier consults this roster). The two
+/// fetch-ahead knobs (owner decision 1) ride along.
+pub const REAL_BUILD_FLAGS: [&str; 7] = [
     "--fail-fast",
     "--lanes",
     "--jobs",
     "--intensity",
     "--state-dir",
+    "--no-prefetch",
+    "--prefetch-ahead",
+];
+
+/// What a `-S` build+install run additionally accepts (§B.8): the dynamic
+/// IgnorePkg registration switch and the target pacman.conf.
+pub const REAL_INSTALL_FLAGS: [&str; 9] = [
+    "--fail-fast",
+    "--lanes",
+    "--jobs",
+    "--intensity",
+    "--state-dir",
+    "--no-prefetch",
+    "--prefetch-ahead",
+    "--no-register-ignorepkg",
+    "--config",
 ];
 
 /// The default state root (contract §J.3): `--state-dir` beats
@@ -43,9 +64,32 @@ pub const REAL_BUILD_FLAGS: [&str; 5] = [
 /// directory.
 const DEFAULT_STATE_DIR: &str = "/var/lib/gsa";
 
-/// `gsa -B <targets…> [ranges…]` — run the selection. Returns the process
-/// exit code (§G.1) and writes every rendering through `out`/`err`.
+/// `gsa -B <targets…> [ranges…]` — run the selection build-only. Returns the
+/// process exit code (§G.1) and writes every rendering through `out`/`err`.
 pub fn run_build(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
+    run_build_with(inv, out, err, None)
+}
+
+/// `gsa -S <targets…> [ranges…]` (contract §B.4): the build pipeline plus
+/// install-before-dependents — each package's archives install through the
+/// post-build hook BEFORE any consumer compiles (`docs/MEMORY.md` rule 11).
+/// Cluster `f` is force install (no same-version skip); cluster `c` prunes
+/// strength 1 first. Trailing `-- <pacman args…>` reach every transaction.
+pub fn run_build_install(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
+    let mode = if inv.modifiers.contains(&'f') {
+        DecideMode::Force
+    } else {
+        DecideMode::Checked
+    };
+    run_build_with(inv, out, err, Some(mode))
+}
+
+fn run_build_with(
+    inv: &Invocation,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+    install: Option<DecideMode>,
+) -> i32 {
     // ── selection is mandatory (contract §B.1) ───────────────────────────
     if inv.targets.is_empty() {
         let _ = writeln!(
@@ -108,6 +152,14 @@ pub fn run_build(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> 
             return 2;
         }
     };
+    // ── fetch-ahead (owner decision 1): default-on, `--no-prefetch` opt-out ─
+    let prefetch_ahead = match resolve_prefetch(inv) {
+        Ok(ahead) => ahead,
+        Err(message) => {
+            let _ = writeln!(err, "gsa: {message}");
+            return 2;
+        }
+    };
 
     // ── state root (contract §J.3) and startup refusals (§G.1 rc 3) ──────
     let state_dir = inv
@@ -121,22 +173,58 @@ pub fn run_build(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> 
                 .map(PathBuf::from)
         })
         .unwrap_or_else(|| PathBuf::from(DEFAULT_STATE_DIR));
+    // Install preflight (contract §K.3): an install run whose installs
+    // cannot succeed non-interactively refuses BEFORE any build (§G.1 rc 3).
+    if install.is_some() {
+        if let Err(message) = preflight_installs() {
+            let _ = writeln!(err, "gsa: {message}");
+            return refuse_before_dispatch(
+                inv,
+                &selection,
+                &budget,
+                &state_dir,
+                out,
+                "preflight-refused",
+            );
+        }
+    }
     if let Err(message) = lock::ensure_state_dirs(&state_dir, err) {
         let _ = writeln!(err, "gsa: {message}");
-        return refuse_before_dispatch(inv, &selection, &budget, &state_dir, out);
+        return refuse_before_dispatch(
+            inv,
+            &selection,
+            &budget,
+            &state_dir,
+            out,
+            "startup-refused",
+        );
     }
     // The PACMAN shim (§K.3): makepkg's own dependency installs share the
     // transaction lock and run through `sudo -n` — the engine never prompts.
     if let Err(message) = gsa_build::shim::ensure_pacman_shim(&state_dir) {
         let _ = writeln!(err, "gsa: {message}");
-        return refuse_before_dispatch(inv, &selection, &budget, &state_dir, out);
+        return refuse_before_dispatch(
+            inv,
+            &selection,
+            &budget,
+            &state_dir,
+            out,
+            "startup-refused",
+        );
     }
     let run_id = supervisor::run_id_now();
     let _run_lock = match lock::acquire_run_lock(&state_dir) {
         Ok(lock) => lock,
         Err(message) => {
             let _ = writeln!(err, "gsa: {message}");
-            return refuse_before_dispatch(inv, &selection, &budget, &state_dir, out);
+            return refuse_before_dispatch(
+                inv,
+                &selection,
+                &budget,
+                &state_dir,
+                out,
+                "startup-refused",
+            );
         }
     };
     // Startup orphan sweep (§K.3): dead runs' lane jobs and stale artifacts.
@@ -169,10 +257,67 @@ pub fn run_build(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> 
                 err,
                 "gsa: cannot locate the engine binary for lane children: {error}"
             );
-            return refuse_before_dispatch(inv, &selection, &budget, &state_dir, out);
+            return refuse_before_dispatch(
+                inv,
+                &selection,
+                &budget,
+                &state_dir,
+                out,
+                "startup-refused",
+            );
         }
     };
     let ids: Vec<RecipeId> = selection.listed.iter().map(|(_, id)| id.clone()).collect();
+    // The post-build install hook (install-before-dependents, rule 11):
+    // called per package on the supervisor's event loop, before its result
+    // reaches the machine. `later_installs` is the run-order remainder
+    // (in-run repair coverage, rule 25(d)).
+    let install_hook: Option<Box<dyn FnMut(&str, &std::path::Path) -> InstallStep + Send>> =
+        install.map(|mode| {
+            let state_dir = state_dir.clone();
+            let conf = inv.config.as_ref().map(PathBuf::from);
+            let pacman_args = inv.pacman_args.clone().unwrap_or_default();
+            let register_ignorepkg = !inv
+                .deferred_flags
+                .iter()
+                .any(|f| f == "--no-register-ignorepkg");
+            let mut later: Vec<String> = ids.iter().map(|id| id.as_str().to_string()).collect();
+            Box::new(move |pkg: &str, recipe_dir: &std::path::Path| {
+                later.retain(|subject| subject != pkg);
+                let run = InstallRun {
+                    mode,
+                    state_dir: state_dir.clone(),
+                    conf: conf.clone(),
+                    pacman_args: pacman_args.clone(),
+                    register_ignorepkg,
+                    later_installs: later.clone(),
+                };
+                crate::install::install_step_from_result(gsa_install::install_built_package(
+                    recipe_dir, &run,
+                ))
+            }) as Box<dyn FnMut(&str, &std::path::Path) -> InstallStep + Send>
+        });
+    // ── fetch-ahead setup (owner decisions 1/3/5): the lookahead window's
+    // per-node candidacy comes from gsa-recipe's source classification (never
+    // grep), and the advisory log is `$STATE_DIR/prefetch.log`, run-scoped
+    // and truncated at run start like the run's other state.
+    let prefetch_log = state_dir.join("prefetch.log");
+    let prefetch = prefetch_ahead.map(|ahead| {
+        let candidacy = nodes
+            .iter()
+            .map(|node| {
+                db.get(node.id.as_str())
+                    .map(|meta| classify_candidacy(&meta))
+                    .unwrap_or(FetchCandidacy::NoFetchable)
+            })
+            .collect();
+        let _ = std::fs::File::create(&prefetch_log);
+        PrefetchSetup {
+            ahead,
+            candidacy,
+            log_path: prefetch_log,
+        }
+    });
     let setup = RunSetup {
         root,
         state_dir: state_dir.clone(),
@@ -187,6 +332,8 @@ pub fn run_build(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> 
         lane_flags: Vec::new(),
         nodes,
         batches,
+        install: install_hook,
+        prefetch,
     };
 
     // ── the run: streaming dashboard lines as the machine settles ─────────
@@ -200,7 +347,14 @@ pub fn run_build(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> 
         Ok(outcome) => outcome,
         Err(message) => {
             let _ = writeln!(err, "gsa: {message}");
-            return refuse_before_dispatch(inv, &selection, &budget, &state_dir, out);
+            return refuse_before_dispatch(
+                inv,
+                &selection,
+                &budget,
+                &state_dir,
+                out,
+                "startup-refused",
+            );
         }
     };
     // Post-run orphan sweep (§K.3) — the current run's artifacts survive.
@@ -208,8 +362,14 @@ pub fn run_build(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> 
 
     // ── one run record, three renderings (§H) ────────────────────────────
     let rows = outcome.rows;
-    let run_outcome = RunOutcome::compute(&rows, inv.fail_fast, outcome.interrupted, false);
+    let run_outcome =
+        RunOutcome::compute(&rows, inv.fail_fast, outcome.interrupted, outcome.refused);
     let parked_by = parked_by(&graph, &rows);
+    // The `prefetch-warnings` scalar (owner decision 5): the advisory count
+    // of this run's fetch-ahead. `None` when the run had no fetch-ahead
+    // participation (`--no-prefetch`) — never rows, never a format bump.
+    let prefetch_warnings =
+        prefetch_ahead.map(|_| u32::try_from(outcome.prefetch_warnings.len()).unwrap_or(u32::MAX));
     let record = record::build_run_record(
         inv,
         &selection,
@@ -218,14 +378,47 @@ pub fn run_build(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> 
         Some(&budget),
         rows,
         &run_outcome,
+        prefetch_warnings,
     );
     let _ = write!(
         out,
         "{}",
         render::render_run_prose(&record, &state_dir.join("logs"), &parked_by)
     );
+    let _ = write!(
+        out,
+        "{}",
+        render::render_prefetch_notes(&outcome.prefetch_warnings)
+    );
     let _ = write!(out, "{}", record.render_machine());
     run_outcome.rc
+}
+
+/// Fetch-ahead configuration (owner decision 1): prefetch is DEFAULT-ON
+/// with `--no-prefetch` opt-out and `--prefetch-ahead N` (default 8). The
+/// two flags conflict; a bad N is a usage error naming the flag. `None` is
+/// `--no-prefetch`.
+fn resolve_prefetch(inv: &Invocation) -> Result<Option<usize>, String> {
+    if inv.no_prefetch && inv.prefetch_ahead.is_some() {
+        return Err("cannot combine --no-prefetch with --prefetch-ahead".to_string());
+    }
+    if inv.no_prefetch {
+        return Ok(None);
+    }
+    match &inv.prefetch_ahead {
+        Some(raw) => {
+            let ahead: usize = raw
+                .parse()
+                .map_err(|_| format!("--prefetch-ahead: '{raw}' must be a positive integer"))?;
+            if ahead == 0 {
+                return Err(format!(
+                    "--prefetch-ahead: '{raw}' must be a positive integer"
+                ));
+            }
+            Ok(Some(ahead))
+        }
+        None => Ok(Some(gsa_fetch::window::DEFAULT_PREFETCH_AHEAD)),
+    }
 }
 
 /// Resolve the host-derived budget (contract §B.8 / docs/portability.md):
@@ -380,13 +573,16 @@ fn parked_by(graph: &Graph<'_>, rows: &[OutcomeRow]) -> Vec<(String, Vec<String>
 
 /// A run that refused to start (contract §G.1 rc 3; §H.1: the record is
 /// emitted on refusal paths too). Every row is `never-started
-/// startup-refused` — an additive reason key (§H.2).
+/// <reason>` — `preflight-refused` (§H.3) for an install run whose
+/// `sudo -n` preflight failed, `startup-refused` (an additive reason key,
+/// §H.2) for state/startup refusals.
 fn refuse_before_dispatch(
     inv: &Invocation,
     selection: &Selection,
     budget: &Budget,
     state_dir: &std::path::Path,
     out: &mut dyn Write,
+    reason: &str,
 ) -> i32 {
     let outcomes: Vec<OutcomeRow> = selection
         .listed
@@ -396,10 +592,12 @@ fn refuse_before_dispatch(
             status: RowStatus::NeverStarted,
             rc: None,
             dur: None,
-            reason: "startup-refused".to_string(),
+            reason: reason.to_string(),
         })
         .collect();
     let run_outcome = RunOutcome::compute(&outcomes, inv.fail_fast, false, true);
+    // A refused run never reached fetch-ahead participation (owner decision
+    // 5: the scalar counts a build run's prefetch advisories only).
     let record = record::build_run_record(
         inv,
         selection,
@@ -408,6 +606,7 @@ fn refuse_before_dispatch(
         Some(budget),
         outcomes,
         &run_outcome,
+        None,
     );
     let _ = write!(
         out,
