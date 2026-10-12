@@ -23,9 +23,9 @@ verification.
 
 ## What is included
 
-The current set has 650 recipe records — one per recipe directory — and 875
+The current set has 651 recipe records — one per recipe directory — and 877
 group memberships (counts of the `groups` tokens in `config/topology.conf`,
-counted 2026-10-11; re-check with
+counted 2026-10-12; re-check with
 `awk -F'|' '!/^#/ && NF>2 {n=split($3,a,","); for(i=1;i<=n;i++) c[a[i]]++} END {for (g in c) print g, c[g]}' config/topology.conf`).
 The counts differ because many records are dual-members (`stable,core`,
 `core,build-tools`, `git,core`, …), and 81 split-package recipes build many
@@ -33,18 +33,18 @@ pacman package names — one recipe, many pkgnames (`gst-plugins-base`,
 `vlc-plugin-freetype` and `gnome-desktop-4` are package names built by the
 `gstreamer`, `vlc` and `gnome-desktop` recipes, not records of their own),
 357 output names beyond the record count;
-`core` is a logical build group whose 259 members deliberately overlap the
-physical layout: 50 recipes live under `packages/core/`, and further
+`core` is a logical build group whose 260 members deliberately overlap the
+physical layout: 51 recipes live under `packages/core/`, and further
 members come from `packages/git/` and `packages/stable/`:
 
 | Group | Members | Purpose |
 | --- | ---: | --- |
 | `git` | 140 | Top-level development and rolling packages |
 | `stable` | 404 | Stock-name packages synchronized with Arch repositories |
-| `core` | 259 | Heavy, ABI-coupled, source-heavy, and ROCm packages |
+| `core` | 260 | Heavy, ABI-coupled, source-heavy, and ROCm packages |
 | `misc` | 0 | Roster slot (group name stays readable; no current member) |
 | `app` | 56 | Optional applications; a TTY build/`-n` run prompts to multi-select (all unchecked + Enter = build all; records sharing an `app-cluster` tag toggle as one row); leaf builds — app packages typically have no consumers to expand |
-| `build-tools` | 16 | Dispatch-priority class: within a run its members are dispatched before all other ready packages but never over build-order edges; membership is always dual `core,build-tools`, and selecting `-g build-tools` does not auto-enable `-i` |
+| `build-tools` | 17 | Dispatch-priority class: within a run its members are dispatched before all other ready packages but never over build-order edges; membership is always dual `core,build-tools`, and selecting `-g build-tools` does not auto-enable `-i` |
 
 Package records — the ID-to-path binding, group membership, the local
 build-order graph, and coupled-batch tags — are declarative, one record per

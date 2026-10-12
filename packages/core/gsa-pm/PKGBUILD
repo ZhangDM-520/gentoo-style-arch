@@ -1,0 +1,97 @@
+# Maintainer: ZhangDM-520 <jixianqiang1540@gmail.com>
+
+# Bootstrap recipe for the native gsa engine (plan-native-pm.md §7): the PM
+# ships as a recipe in the repo it manages and must build with plain makepkg,
+# never with itself — a broken gsa is always recoverable with makepkg alone.
+# The VCS source is this very repository, so each engine change bumps _commit
+# together with pkgver and the committed .SRCINFO.
+#
+# Checksum pinning (plan §7 vs docs/package-policy.md): plan §7 asked for
+# `cargo vendor`-ed, checksum-pinned crates; package-policy forbids
+# committing fetched sources ("not vendored"). Resolution: `cargo build
+# --locked` — every crates.io entry in Cargo.lock carries its sha256 and
+# cargo verifies fetched content against it, while --locked rejects any
+# manifest/lock drift. The lockfile is the checksum pin; nothing upstream is
+# vendored and nothing is fetched without a hash check.
+
+pkgname=gsa-pm
+pkgver=0.1.0+r322+g238f582d528c
+pkgrel=1
+pkgdesc='Native package manager engine for the Gentoo-style Arch package set'
+arch=('x86_64')
+url='https://github.com/ZhangDM-520/gentoo-style-arch'
+license=('MIT')
+depends=('gcc-libs' 'glibc')
+# rust: rustc + cargo; git: the VCS source. mold stays undeclared — probed in
+# build() like every house recipe.
+makedepends=('git' 'rust')
+# !debug: the release profile carries no debug info (house style: mold-git).
+options=('!debug')
+_commit=238f582d528cef7204c9a84bfe00d0e0c38a3c74
+# Pinned VCS source: the #commit= revision is the integrity anchor (house
+# idiom, cf. glibc-git). A commit pin is not a signed ref, so the plain
+# family form applies (CONTRIBUTING source-verification scope); never widen
+# this to a floating branch. The explicit alias pins the checkout directory
+# name to the repo name, so every cd below is independent of the URL shape.
+source=("gentoo-style-arch::git+https://github.com/ZhangDM-520/gentoo-style-arch#commit=$_commit")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd gentoo-style-arch
+
+  # Base version from the workspace manifest so a version bump is picked up
+  # without editing this function.
+  local _basever
+  _basever=$(sed -n '/^\[workspace\.package\]/,/^\[/{s/^version = "\(.*\)"$/\1/p}' Cargo.toml)
+  test -n "$_basever" || return 1
+  printf '%s+r%s+g%s' "$_basever" \
+    "$(git rev-list --count HEAD)" \
+    "$(git rev-parse --short=12 HEAD)"
+}
+
+prepare() {
+  # Fail closed when the pin predates the Rust workspace: a stale _commit
+  # must be refreshed to a commit whose tree contains crates/, and this
+  # message says so instead of surfacing later as cargo's "could not find
+  # Cargo.toml".
+  if [[ ! -f gentoo-style-arch/Cargo.toml || ! -d gentoo-style-arch/crates ]]; then
+    error "pinned tree _commit=%s carries no Rust workspace" "$_commit"
+    error "refresh _commit (plus pkgver and .SRCINFO) to a commit containing crates/"
+    return 1
+  fi
+}
+
+build() {
+  cd gentoo-style-arch
+
+  export CARGO_HOME="${srcdir}/.cargo"
+  local _rustflags="${RUSTFLAGS:-}"
+  # House style (mold-git): mold is probed, never a makedepend.
+  command -v mold >/dev/null 2>&1 && _rustflags+=" -C link-arg=-fuse-ld=mold"
+  # Keep $srcdir out of the shipped binary (makepkg's srcdir-reference lint).
+  _rustflags+=" --remap-path-prefix=${srcdir}=/"
+
+  # Lane job count when the builder exports one (GSA_BUILD_JOBS); otherwise
+  # the host's online CPU count (house style: jsoncpp-git).
+  local _jobs="${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+  RUSTFLAGS="${_rustflags}" cargo build --release --locked --jobs "$_jobs"
+}
+
+check() {
+  cd gentoo-style-arch
+
+  # Smoke gate: the shipped CLI must start and answer --help. A gate, not a
+  # build oracle — the fixture battery owns behaviour.
+  ./target/release/gsa --help >/dev/null
+}
+
+package() {
+  cd gentoo-style-arch
+
+  # Binary package only: bin + license. Docs and contract material stay in
+  # the repository (trimming standard — no dead weight).
+  install -Dm755 target/release/gsa "$pkgdir/usr/bin/gsa"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
+
+# vim:set ts=2 sw=2 et:

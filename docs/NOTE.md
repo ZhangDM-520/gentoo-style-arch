@@ -1,3 +1,69 @@
+## 2026-10-12 — gsa-pm bootstrap recipe: the native engine ships in the repo it manages, with Cargo.lock as the checksum pin instead of vendored crates
+
+**Motivation.** The native PM (`gsa`, Rust workspace at the repo root) must
+ship as a recipe in this very repository — `packages/core/gsa-pm` — so that
+`gsa build gsa-pm` can self-host later, while remaining buildable with plain
+`makepkg` alone: the PM must never be required to build itself (a broken `gsa`
+stays recoverable with `makepkg`), per `plan-native-pm.md` §7.
+
+**Fix.** New recipe `packages/core/gsa-pm` (topology record
+`gsa-pm|packages/core/gsa-pm|core,build-tools|rust-git` — the `rust-git` edge
+satisfies the toolchain-lint rule (2026-09-25 mold-git ABI-skew class) where
+plan §7 had mandated an edgeless bootstrap; the owner ruled the lint mandatory
+on 2026-10-12. No `abi=` tags, no consumer wiring until it builds itself).
+Source is
+this very repository, pinned by revision
+(`gentoo-style-arch::git+…/gentoo-style-arch#commit=$_commit`, house idiom cf.
+`glibc-git`); the
+commit pin is the integrity anchor, so `sha256sums=('SKIP')` is the forced VCS
+form and `?signed` does not apply to a commit pin (CONTRIBUTING 2026-10-06
+scope: signed refs are `#tag=` sources and pinned release artifacts).
+`pkgver()` derives `0.1.0+rN+gSHA` from the workspace manifest plus the pinned
+revision; `build()` is `cargo build --release --locked` honoring
+`GSA_BUILD_JOBS` (else `getconf _NPROCESSORS_ONLN`), with the house probed-not-
+declared mold reuse; `package()` ships `/usr/bin/gsa` and the `LICENSE` only.
+Vendoring-vs-package-policy tension, resolved: plan §7 asked for `cargo
+vendor`-ed checksum-pinned crates, but `docs/package-policy.md` forbids
+committing fetched sources ("not vendored"). The minimal compliant story is
+`cargo build --locked` — every crates.io entry in `Cargo.lock` (today: the
+serde family) carries its sha256 and cargo verifies fetched content against
+it, while `--locked` rejects manifest/lock drift. The lockfile is the checksum
+pin; nothing upstream is vendored and no checksum/PGP step is weakened.
+
+Known state at landing. (1) Bootstrap pin: `_commit` is refreshed in this same
+change to `238f582d528c…` — the first commit whose tree contains `crates/` —
+together with `pkgver` and the regenerated `.SRCINFO`; `prepare()` still fails
+closed with the exact remediation whenever a future engine change leaves the
+pin stale, so the error names the refresh step instead of surfacing later as
+cargo's "could not find Cargo.toml". (2) The toolchain-lint tension resolved
+by owner decision (edge added in Fix); only the pre-existing `dbus-broker-git`
+finding remains.
+
+**Validation.** `bash -n packages/core/gsa-pm/PKGBUILD` ✓;
+`GIT_CONFIG_COUNT=0 makepkg --printsrcinfo --dir packages/core/gsa-pm` renders
+the committed `.SRCINFO` ✓; `fish build-all.fish --audit` rc 0 (only the
+toolchain-lint findings above) and `--list` rc 0 with `gsa-pm` at core index
+65 ✓; `--dry-run --group core` and `--dry-run --group build-tools` rc 0
+(`gsa-pm` dispatches first in build-tools) ✓; `bash tests/run-all.sh project`
+green ✓; `git check-ignore -v` silent on both new files (root
+`packages/*/*/*/` deny-rule needs no negation — no subdirectories) ✓.
+`bash tests/recipe-sources.sh` fails only its final "every PKGBUILD committed"
+gate because this change is deliberately left uncommitted (no `git add` in the
+task scope); the recipe has no local sources or install scripts, so the walk
+itself has nothing to check. A real `makepkg` build against the refreshed pin
+is the post-push proof step — the pinned revision must be fetchable from the
+remote before makepkg can clone it.
+
+**Rule.** A bootstrap recipe for a component that lives in the repo it manages
+pins its VCS source by commit and fails closed when the pin predates the
+payload — the error must name the refresh step, never surface as cargo's
+"could not find Cargo.toml". Crates are pinned through `Cargo.lock` checksums
+plus `cargo build --locked`, never through committed `cargo vendor` trees:
+`docs/package-policy.md` outranks a plan's vendoring shortcut, and the
+lockfile checksums keep "checksum-pinned like any source" intact. Keep
+README counts moving with the file's own re-check command whenever topology
+records change.
+
 ## 2026-10-11 — vscodium-insiders-git: a fully cached Electron build still fetches `SHASUMS256.txt` at packaging time, and a dying link walled it
 
 **Symptom.** The 21:54 single-package run of `vscodium-insiders-git`
