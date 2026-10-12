@@ -1,0 +1,9 @@
+[package]
+name = "gsa-model"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Core types of the native gsa engine: recipe identity, topology records, run record (format: 2)"
+
+[dependencies]
+serde = { workspace = true }

@@ -1,0 +1,18 @@
+[package]
+name = "gsa-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The gsa binary: action-pass argv parsing, selection semantics, and the read-only command surface"
+
+[[bin]]
+name = "gsa"
+path = "src/main.rs"
+
+[dependencies]
+gsa-model = { workspace = true }
+gsa-topo = { workspace = true }
+gsa-recipe = { workspace = true }
+gsa-graph = { workspace = true }
+gsa-sched = { workspace = true }
+gsa-build = { workspace = true }

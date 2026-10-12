@@ -1,0 +1,9 @@
+[package]
+name = "gsa-sched"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Lane supervisor: budgets, lane-result codec, dispatch state machine, signals, locks, orphan sweeps"
+
+[dependencies]
+gsa-model = { workspace = true }

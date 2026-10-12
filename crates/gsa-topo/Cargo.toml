@@ -1,0 +1,9 @@
+[package]
+name = "gsa-topo"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Strict loaders for config/topology.conf, build-defaults.conf, abi-exclusions.conf and user sets"
+
+[dependencies]
+gsa-model = { workspace = true }

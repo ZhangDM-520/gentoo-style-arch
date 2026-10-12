@@ -1,0 +1,9 @@
+[package]
+name = "gsa-graph"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Build-order graph: consumer expansion, canonical topological sort, coupled batches"
+
+[dependencies]
+gsa-model = { workspace = true }

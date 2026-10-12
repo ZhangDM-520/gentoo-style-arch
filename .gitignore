@@ -1,3 +1,6 @@
+# Rust workspace build output (the native `gsa` engine)
+/target
+
 # Builder runtime state
 .state/
 .build-logs/
@@ -7,6 +10,9 @@
 
 # makepkg outputs and downloaded sources
 **/src/
+# …but the Rust workspace's source trees are repo content, not makepkg state
+!crates/*/src/
+!crates/*/src/**
 **/pkg/
 **/build/
 **/_build/

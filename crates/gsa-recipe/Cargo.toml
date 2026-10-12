@@ -1,0 +1,9 @@
+[package]
+name = "gsa-recipe"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Committed .SRCINFO parser and cache, strict read-only PKGBUILD scan fallback, source classification"
+
+[dependencies]
+gsa-model = { workspace = true }

@@ -1,0 +1,11 @@
+[package]
+name = "gsa-build"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "makepkg orchestration: lane child entry, makepkg argv/env contract, prune strength 1, the PACMAN shim"
+
+[dependencies]
+gsa-model = { workspace = true }
+gsa-topo = { workspace = true }
+gsa-sched = { workspace = true }
