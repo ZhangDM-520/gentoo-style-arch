@@ -539,3 +539,74 @@ GSA_FAKE_TMP_WATCH|stable-sync-checksums makepkg stub: .SRCINFO temp names at ex
 GSA_FAKE_TICKS|dashboard makepkg stub: tail-line count
 EOF
 unset _knob _desc
+
+# ─── §E.2 decision rows — the --install-decide seam's row grammar ────────────
+# docs/gsa-contract.md §E.2: `<pkgbase> <decision> <reason…>`, one row per
+# archive candidate in plan order, single spaces between the first two fields,
+# `<reason…>` the remainder of the line (a kebab reason key, optionally
+# followed by detail). This framing REPLACES the tab-framed plan_row codec of
+# build-all.fish (docs/gsa-fixture-migration.md §6 R-5: the tab codec has no
+# v2 form); these helpers are `format: 2`-independent — decision rows are the
+# seam's stdout, never a run-record block, so rr2_body does not apply.
+#
+# rr2_decisions — the decision-row stream, normalized: `<pkgbase> <decision>
+# <reason-key>` per row in stream (= plan) order, detail after the reason key
+# stripped (docs/gsa-fixture-migration.md §7). The decision vocabulary is
+# §E.3's closed set (install|skip|refuse|noop|parked); reason keys are OPEN
+# (§L.2: additive reason keys do not bump the format), so the key is kept as
+# observed and never matched against a table here. A malformed row is a loud
+# error (reason on stderr, non-zero status) — never a silent truncation. All
+# rr2_* accessors read stdin, so both `<<<"$output"` and `<"$file"` work.
+rr2_decisions() {
+    awk '
+        function bad(msg) {
+            printf("rr2_decisions: %s\n", msg) > "/dev/stderr"
+            exit 1
+        }
+        {
+            sub(/\r$/, "")
+            if ($0 !~ /^[^ ]+ [^ ]+ [^ ]/) \
+                bad("malformed decision row (want pkgbase decision reason): " $0)
+            p = index($0, " ")
+            pkg = substr($0, 1, p - 1)
+            rest = substr($0, p + 1)
+            q = index(rest, " ")
+            decision = substr(rest, 1, q - 1)
+            reason = substr(rest, q + 1)
+            if (pkg !~ /^[A-Za-z0-9@._+-]+$/) bad("decision row: malformed package id " pkg)
+            if (!(decision == "install" || decision == "skip" || decision == "refuse" \
+                  || decision == "noop" || decision == "parked")) \
+                bad("decision row " pkg ": unknown decision " decision " (want install|skip|refuse|noop|parked, §E.3)")
+            s = index(reason, " ")
+            key = (s ? substr(reason, 1, s - 1) : reason)
+            if (key == "") bad("decision row " pkg ": empty reason key")
+            print pkg " " decision " " key
+        }
+    '
+}
+
+# rr2_decision PKGBASE [decision|key] — one subject's FIRST decision row
+# (normalized) or one of its fields. Fails when the subject has no row.
+rr2_decision() {
+    local rows
+    rows=$(rr2_decisions) || return 1
+    printf '%s\n' "$rows" | awk -v pkg="$1" -v field="${2:-}" '
+        $1 == pkg && !found {
+            found = 1
+            if (field == "") { print; next }
+            if (field == "decision") { print $2; next }
+            if (field == "key") { print $3; next }
+            bad = 1
+        }
+        END {
+            if (!found) {
+                printf("rr2_decision: no decision row for %s\n", pkg) > "/dev/stderr"
+                exit 1
+            }
+            if (bad) {
+                printf("rr2_decision: unknown field %s (want decision|key)\n", field) > "/dev/stderr"
+                exit 1
+            }
+        }
+    '
+}

@@ -1,39 +1,65 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Log-ownership crash window (2026-09-23 incident): a root-mode run that dies
-# mid-flight leaves the in-flight per-package logs root-owned, because the
-# supervisor's shell opens them (lane-spawn truncate/redirect), not the
-# user-context build. The next UNPRIVILEGED run then dies at the same redirect
-# with a misleading "BUILD FAILED (rc=125, 0m00s)" and fish's "An error
-# occurred while redirecting file ... open: Permission denied" — before the
-# build even starts, and the crashed run's log content is left unopenable.
+# tests/log-ownership.sh — log/state-file ownership and crash-forensics
+# contract (2026-09-23 incident: a root-mode run that dies mid-flight leaves
+# the in-flight per-package logs root-owned, and the next UNPRIVILEGED run
+# dies at the log redirect with a misleading "BUILD FAILED (rc=125)" before
+# the build even starts). The contract: never a silent truncate of crash
+# evidence — the artifact is PRESERVED and the failure is NAMED.
 #
-# The builder must instead: recognize the log cannot be opened for write by the
-# build user, QUARANTINE it under a .stale.* name (preserving the crash
-# forensics — never a silent truncate), announce the preserved path, and build
-# normally into a fresh log.
+# PARTIAL FLIP to the NATIVE engine (docs/gsa-fixture-migration.md row
+# `tests/log-ownership.sh`, Phase 2): this file now drives BOTH engines — the
+# scenarios the Phase-2 engine expresses run the built `gsa` through
+# run_engine (GSA_TEST_ENGINE=gsa) and assert on `format: 2` records
+# (rr2_*), while the scenarios whose behaviour the engine does not implement
+# yet keep driving the fish builder unchanged (each marked with its engine
+# gap below).
 #
-# Portability note: fixtures never use sudo, so a genuinely root-owned file
-# cannot be produced here. A user-owned 0444 file is the same class — the
-# predicate is test -w by the build user, and open-for-write fails with the
-# same EACCES either way (root-owned 644 vs own 0444). The root-mode branch
-# (chown repair) needs real root and is argued in docs/NOTE.md, not pinned here.
+# Engine mapping (measured against crates/gsa-build/src/lane.rs and
+# crates/gsa-sched/src/lock.rs — re-probe on mismatch):
+#   * §J.5's quarantine (`<path>.stale.<epoch>.<pid>`, preserved + announced)
+#     is the WRONG-OWNER branch of the write-time ownership gate: it needs a
+#     foreign uid, which a fixture cannot produce without sudo (below). A
+#     same-owner 0444 log is the gate's OTHER outcome — the lane publishes
+#     `failed … log-unwritable` (§H.3 reason key) and the log content is
+#     preserved byte-for-byte (the engine appends, never truncates). The
+#     fish-era "quarantine-and-rebuild" round trip therefore re-pins as
+#     preservation + naming (run record + `--lane-job` seam output), not as a
+#     rebuild; the engine fails the lane closed instead.
+#   * The stale runtime artifact sweep (fish R-F34) is `sweep_orphans` (§K.3):
+#     under `runs/` it collects `*.tmp.*` and dead runs' abandoned
+#     `.result`/`.park` files at run start (inside the run lock) and after the
+#     run; the current run's own artifacts survive; unrelated makepkg
+#     processes are never touched. The fish name shapes (`.pacman-shim.tmp.*`,
+#     `toolchains/*.tmp.*`, `*.gsa-vcs-revisions.tmp.*`) are fish runtime
+#     state the engine never creates.
+#   * dispatcher.log is fish-only: the engine's forensics channel is the run
+#     record (§H.1, emitted on the interrupt path). The dispatcher-forensics
+#     meaning — what was running is honestly labelled, the children die —
+#     re-pins from the record rows + ps, and the `--lane-job` spawn check
+#     re-pins to the §D.1 seam spelling.
 #
-# Also pinned here (the stale runtime artifact sweep, R-F34): a crashed run
-# leaves `*.tmp.<pid>` writers (write_lane_result's lane-result temps, the
-# pacman shim, toolchain records) and `*.gsa-vcs-revisions.tmp.*` manifests.
-# The next run sweeps them at run start INSIDE the run lock (no live run can
-# own them): the four crash-leftover shapes are gone afterwards while the
-# run's own fresh `.pacman-shim` (no `.tmp.` in its name) survives; an
-# unremovable leftover (read-only directory) is named with
-# `cannot remove stale runtime artifact` and an `or: sudo rm -f <path>`
-# operator line, never silenced and never fatal; and the `--audit` report's
-# `Stale runtime/error artifacts:` find keeps both swept name shapes
-# (`*.tmp.*` state dir, `*.gsa-vcs-revisions.tmp.*` packages tree — pinned as
-# a static shape check on the builder source).
+# Engine-gap sections, kept fish-driven until the surface lands:
+#   * unremovable-leftover naming (`cannot remove stale runtime artifact` +
+#     `or: sudo rm -f <path>`): the engine's sweep is silent best-effort
+#     (lock.rs `let _ = std::fs::remove_file`).
+#   * root-mode chown repair (§J.5's root supervisor half): the engine has no
+#     root-repair path at all, and `-Ma`/`-Md` listings are deferred (gsa
+#     refuses `-M` with rc 2 "deferred to a later phase").
+#   * the `--audit` stale-listing static shape below is a purely fish-source
+#     listing check (`-Ma` re-pins it at Phase 4).
+#
+# Portability note (fish sections): fixtures never use sudo, so a genuinely
+# root-owned file cannot be produced here. A user-owned 0444 file is the same
+# class for the FISH predicate (test -w by the build user; open-for-write
+# fails with the same EACCES either way). For the ENGINE the two classes
+# diverge by design (its ownership gate is uid-based), which is why the
+# engine section pins `log-unwritable` while the root-mode branch needs real
+# root and is argued in docs/NOTE.md.
 
 source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/rr-v2.bash"
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-log-ownership.XXXXXX")
 trap 'rm -rf -- "$fixture"' EXIT
 
@@ -42,6 +68,18 @@ fail() {
     [[ $# -ge 2 ]] && printf '%s\n' "$2" >&2
     exit 1
 }
+
+# ─── The engine under test: built into the fixture tree (scratch only) ──────
+cargo build --offline --quiet --target-dir "$fixture/cargo" -p gsa-cli \
+    --manifest-path "$gsa_repo_root/Cargo.toml" \
+    || fail "cannot build the gsa binary for the fixture"
+gsa_bin="$fixture/cargo/debug/gsa"
+[ -x "$gsa_bin" ] || fail "cargo did not produce $gsa_bin"
+export GSA_TEST_ENGINE=gsa
+export GSA_TEST_GSA_BIN="$gsa_bin"
+
+# ─── Stub-knob vocabulary (§D.2: declared in the change that adds them) ─────
+rr2_stub_knob GSA_FAKE_ENGINE_PID "log-ownership engine wrapper: pidfile of the engine process to signal"
 
 make_case_workspace() { # $1 = sandbox dir
     local dir=$1
@@ -65,218 +103,343 @@ EOF
 }
 
 # ─── Run B meets run A's poisoned log ────────────────────────────────────────
-dir="$fixture/poisoned"
-make_case_workspace "$dir"
-mkdir -p "$dir/state/logs"
-sentinel='SENTINEL run-A crash evidence'
-printf '%s\n' "$sentinel" >"$dir/state/logs/p1.log"
-chmod 0444 "$dir/state/logs/p1.log" # stand-in for root-owned 644 (see header)
+# Engine mapping (see header): the §J.5 gate quarantines only WRONG-OWNER
+# state files (a foreign uid is unproducible fixture-side); a same-owner 0444
+# log is the `log-unwritable` class (crates/gsa-build/src/lane.rs): the lane
+# fails CLOSED, the run records `failed … log-unwritable` (§H.3), and the
+# crashed run's content is preserved byte-for-byte — the engine opens logs
+# append-only and this open fails, so nothing writes, nothing truncates,
+# nothing renames.
+(
+    set -euo pipefail
+    dir="$fixture/poisoned"
+    make_case_workspace "$dir"
+    mkdir -p "$dir/state/logs"
+    sentinel='SENTINEL run-A crash evidence'
+    printf '%s\n' "$sentinel" >"$dir/state/logs/p1.log"
+    chmod 0444 "$dir/state/logs/p1.log" # the log-unwritable class (see header)
 
-set +e
-output=$(
-    PATH="$dir/bin:$PATH" \
-        GSA_STATE_DIR="$dir/state" \
-        GSA_CPU_THREADS=8 \
-        GSA_MEMORY_GIB=16 \
-        fish "$dir/build-all.fish" --no-deps --allow-broken-rustc --no-sync p1 \
-        2>&1
-)
-rc=$?
-set -e
+    export PATH="$dir/bin:$PATH"
+    export GSA_CPU_THREADS=8 GSA_MEMORY_GIB=16
+    run_engine "$dir" -B --leaf --state-dir "$dir/state" p1
+    output=$FIXTURE_OUTPUT
+    printf '%s\n' "$output" >"$dir/output.txt"
 
-if ((rc != 0)); then
-    fail "run over a poisoned log must succeed (quarantine + rebuild), rc=$rc" "$output"
-fi
-if grep -q 'rc=125' <<<"$output"; then
-    fail "misleading rc=125 lane row reappeared (log open failed before the build)" "$output"
-fi
-if grep -q 'An error occurred while redirecting file' <<<"$output"; then
-    fail "fish redirect error escaped (the poisoned log was not handled)" "$output"
-fi
+    # §G.1: a cone-stop run with a failed row exits 4 — the fish-era
+    # "quarantine-and-rebuild rc 0" is not engine behaviour (header mapping).
+    if [[ $FIXTURE_RC != 4 ]]; then
+        fail "cone-stop run with a failed row must exit 4 (§G.1), got $FIXTURE_RC" "$dir/output.txt"
+    fi
+    if [[ $FIXTURE_RC != "$(rr2_scalar rc <<<"$output")" ]]; then
+        fail "the record's rc scalar disagrees with the process exit code" "$dir/output.txt"
+    fi
+    # The failure is NAMED, in the record: not the fish-era "rc=125" lane row
+    # (a lost reap), and not a plain build failure — the §H.3 reason key of
+    # this class is `log-unwritable`.
+    if [[ $(rr2_outcome p1 status <<<"$output") != failed ]]; then
+        fail "the poisoned-log package is not recorded as failed:" "$dir/output.txt"
+    fi
+    if [[ $(rr2_outcome p1 rc <<<"$output") != 1 ]]; then
+        fail "the log-unwritable class is lane code 1 (§F.1), not the fish-era 125:" "$dir/output.txt"
+    fi
+    if [[ $(rr2_outcome p1 reason <<<"$output") != log-unwritable ]]; then
+        fail "want reason key 'log-unwritable' (§H.3), got '$(rr2_outcome p1 reason <<<"$output")':" "$dir/output.txt"
+    fi
+    remaining_rows=$(rr2_remaining <<<"$output" | tr '\n' ' ' | sed 's/ $//')
+    if [[ $remaining_rows != "$(rr2_continuation remaining <<<"$output")" ]]; then
+        fail "continuation remaining disagrees with the rows-derived set [$remaining_rows]" "$dir/output.txt"
+    fi
 
-log="$dir/state/logs/p1.log"
-if [[ ! -f $log ]]; then
-    fail "fresh build log was not created: $log" "$output"
-fi
-if [[ ! -w $log ]]; then
-    fail "build log still not writable by the build user: $log"
-fi
-if ! grep -q 'fake makepkg' "$log"; then
-    fail "build log missing stub makepkg output — the build never ran" \
-        "$(cat "$log" 2>/dev/null)"
-fi
-
-shopt -s nullglob
-quarantined=("$dir"/state/logs/p1.log.stale.*)
-shopt -u nullglob
-if ((${#quarantined[@]} != 1)); then
-    fail "expected exactly one quarantined log p1.log.stale.*, found ${#quarantined[@]}" \
-        "$(ls -la "$dir/state/logs")"
-fi
-if ! grep -qF "$sentinel" "${quarantined[0]}"; then
-    fail "quarantined log lost the crashed run's content (silent truncate?)" \
-        "$(cat "${quarantined[0]}")"
-fi
-if ! grep -q 'preserved' <<<"$output"; then
-    fail "run output does not name the preserved log path (quarantine must be loud)" \
-        "$output"
-fi
-
-# ─── dispatcher.log poison: forensics appends must survive too ──────────────
-# dispatcher_log swallows its own append errors (2>/dev/null), so a poisoned
-# dispatcher.log used to lose signal forensics silently. Same contract: it must
-# be reopened/quarantined, not dropped.
-dir="$fixture/poisoned-dispatcher"
-make_case_workspace "$dir"
-mkdir -p "$dir/state/logs"
-printf 'SENTINEL run-A dispatcher\n' >"$dir/state/logs/dispatcher.log"
-chmod 0444 "$dir/state/logs/dispatcher.log"
-# A successful run does not write dispatcher.log on its own (it records
-# signals/reap anomalies only), so drive it through the SIGINT path instead:
-# dispatcher.log must be reopened (quarantined + recreated) and the
-# interrupted run's line recorded — the append used to vanish behind
-# dispatcher_log's 2>/dev/null.
-set +e
-output=$(
-    PATH="$dir/bin:$PATH" \
-        GSA_STATE_DIR="$dir/state" \
-        GSA_CPU_THREADS=8 \
-        GSA_MEMORY_GIB=16 \
-        GSA_FAKE_BUILD_SLEEP=30 \
-        fish "$dir/build-all.fish" --no-deps --allow-broken-rustc --no-sync p1 \
-        2>&1 &
-    builder=$!
-    # Interrupt only while the lane (and therefore the dispatcher) is
-    # provably alive; the stub makepkg holds the lane open for 30 s.
-    lane_seen=0
-    for _ in $(seq 100); do
-        if pgrep -f -- "$dir/build-all.fish --lane-job" >/dev/null; then
-            lane_seen=1
-            break
-        fi
-        sleep 0.1
-    done
-    kill -INT "$builder" 2>/dev/null
-    wait "$builder"
-    echo "lane-seen=$lane_seen interrupted-rc=$?"
-)
-set -e
-grep -q 'lane-seen=1' <<<"$output" ||
-    fail "lane child never spawned (cannot drive the signal scenario)" "$output"
-dlog="$dir/state/logs/dispatcher.log"
-if [[ ! -w $dlog ]]; then
-    fail "dispatcher.log still not writable after a poisoned start" "$output"
-fi
-if ! grep -q '\[DEBUG-gsa-term\] signal: INT' "$dlog"; then
-    fail "signal forensics never reached dispatcher.log" \
-        "$(ls -la "$dir/state/logs"; cat "$dlog" 2>/dev/null)"
-fi
-if ! grep -q 'SENTINEL run-A dispatcher' "$dlog"; then
-    # The quarantine must have moved the old content aside, not overwritten it.
+    # KEEP (quarantine preservation → preservation): the crashed run's content
+    # survives byte-for-byte at its path — never a silent truncate, never a
+    # silent destroy, even though the run failed closed on it.
+    log="$dir/state/logs/p1.log"
+    if ! printf '%s\n' "$sentinel" | cmp -s - "$log"; then
+        fail "the poisoned log lost the crashed run's content (silent truncate?)" \
+            "$(cat "$log" 2>/dev/null)"
+    fi
+    # No quarantine rename happened: `.stale.<epoch>.<pid>` is the
+    # WRONG-OWNER branch of the same §J.5 gate (header mapping) — a
+    # same-owner 0444 file must take the log-unwritable path instead.
     shopt -s nullglob
-    dst=("$dir"/state/logs/dispatcher.log.stale.*)
+    stale=("$dir"/state/logs/*.stale.*)
     shopt -u nullglob
-    if ((${#dst[@]} != 1)) || ! grep -q 'SENTINEL run-A dispatcher' "${dst[0]}"; then
-        fail "dispatcher.log forensics were destroyed instead of quarantined" \
-            "$(ls -la "$dir/state/logs"; cat "$dlog" 2>/dev/null)"
+    if ((${#stale[@]} != 0)); then
+        fail "a same-owner poisoned log must take the log-unwritable path, not quarantine:" \
+            "$(ls -la "$dir/state/logs")"
     fi
-fi
 
-# ─── Stale runtime artifact sweep (R-F34) ──────────────────────────────────
-# A crashed run leaves half-written runtime files: the `*.tmp.<pid>` writers
-# (write_lane_result's `.lane…result.tmp.<pid>`, the pacman shim
-# `.pacman-shim.tmp.<pid>`, toolchain records `toolchains/<pkg>.tmp.<pid>`)
-# and VCS-revision manifests (`<archive>.gsa-vcs-revisions.tmp.XXXXXX`) that
-# sit beside built archives. With the run lock held nothing alive can own
-# them, so sweep_stale_run_artifacts collects them at run start — by NAME
-# anywhere under the state dir and packages/ (fixture recipes live at
-# packages/<id>/, the real repo at packages/<cat>/<pkg>/), never at a fixed
-# depth. An unremovable leftover is NAMED with
-# `cannot remove stale runtime artifact` and its `or: sudo rm -f <path>`
-# operator line — never silenced, never fatal (the sweep is best-effort).
-
-# 1. behavioral: the four crash-leftover shapes are swept at run start while
-#    the run's own fresh .pacman-shim (written after the sweep, no `.tmp.`
-#    in its name) survives.
-dir="$fixture/stale-sweep"
-make_case_workspace "$dir"
-mkdir -p "$dir/state/logs" "$dir/state/toolchains"
-printf 'stale\n' >"$dir/state/logs/.pacman-shim.tmp.12345"
-printf 'stale\n' >"$dir/state/logs/.lane.dead.1.result"
-printf 'stale\n' >"$dir/state/toolchains/p1.tmp.12345"
-printf 'stale\n' >"$dir/packages/p1/p1-1.0.0-1-any.pkg.tar.zst.gsa-vcs-revisions.tmp.ABC123"
-
-set +e
-output=$(
-    PATH="$dir/bin:$PATH" \
-        GSA_STATE_DIR="$dir/state" \
-        GSA_CPU_THREADS=8 \
-        GSA_MEMORY_GIB=16 \
-        fish "$dir/build-all.fish" --no-deps --allow-broken-rustc --no-sync p1 \
-        2>&1
+    # KEEP (named): the §D.1 seam names the preserved artifact — the direct
+    # lane child publishes the typed row (`v2 …`, §F.2) and its diagnostic
+    # names the log path (§L.3: seam output, not prose rendering).
+    mkdir -p "$dir/seam"
+    export GSA_STATE_DIR="$dir/state"
+    run_engine "$dir" --lane-job p1 "$dir/seam/p1.result" 2
+    if [[ $FIXTURE_RC != 1 ]]; then
+        fail "a lane child's exit code IS its outcome code (§G.2), want 1, got $FIXTURE_RC" "$FIXTURE_OUTPUT"
+    fi
+    wire=$(cat "$dir/seam/p1.result" 2>/dev/null || true)
+    if [[ $wire != "v2 p1 1 0 log-unwritable" ]]; then
+        fail "want wire row 'v2 p1 1 0 log-unwritable' (§F.2/§H.3), got '$wire'"
+    fi
+    if ! grep -qF -- "$log" <<<"$FIXTURE_OUTPUT"; then
+        fail "the seam diagnostic does not name the preserved log path" "$FIXTURE_OUTPUT"
+    fi
 )
-rc=$?
-set -e
-if ((rc != 0)); then
-    fail "the trivial sweep run must succeed, rc=$rc" "$output"
-fi
-for stale in \
-    "$dir/state/logs/.pacman-shim.tmp.12345" \
-    "$dir/state/logs/.lane.dead.1.result" \
-    "$dir/state/toolchains/p1.tmp.12345" \
-    "$dir/packages/p1/p1-1.0.0-1-any.pkg.tar.zst.gsa-vcs-revisions.tmp.ABC123"; do
-    if [[ -e $stale ]]; then
-        fail "stale runtime artifact survived the run-start sweep: $stale" "$output"
+
+# ─── interrupt forensics (dispatcher forensics re-pinned) ───────────────────
+# The fish engine recorded signals in dispatcher.log (a poisoned one used to
+# swallow the forensics behind its own 2>/dev/null). The engine has no
+# dispatcher.log at all: its forensics channel is the RUN RECORD (§H.1,
+# emitted on the interrupt path) plus honest lane rows. The KEEP meaning
+# re-pins here: one SIGINT mid-build, and (a) what was running is honestly
+# labelled (`interrupted … interrupted-mid-build`, never a build failure),
+# (b) what never launched is told apart (`never-started …
+# interrupted-before-start`), (c) the full record is emitted first and the run
+# exits 130 (§G.1), and (d) the children die (§K.3). The lane-spawn check
+# re-pins to the §D.1 seam spelling `gsa --lane-job <pkg> <result-path>
+# <jobs> <flags…>`.
+(
+    set -euo pipefail
+    dir="$fixture/interrupt"
+    make_case_workspace "$dir"
+    add_package "$dir" p2 "$gsa_meta_any"
+    set_topology_record "$dir" p2 git p1 # p2 cannot start before p1 settles
+
+    export PATH="$dir/bin:$PATH"
+    export GSA_CPU_THREADS=8 GSA_MEMORY_GIB=16
+    export GSA_FAKE_BUILD_SLEEP=30 # the stub holds the lane open for the signal
+
+    # The engine needs one SIGINT mid-build; reach its PID through a one-line
+    # wrapper that records its own pid before `exec` (gsa-sched-v2 §4
+    # technique) — run_engine still performs the invocation.
+    pidfile="$fixture/interrupt/engine.pid"
+    argvfile="$fixture/interrupt/lane-argv.txt"
+    wrap="$fixture/interrupt/gsa-wrap"
+    cat >"$wrap" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$\$" > "\${GSA_FAKE_ENGINE_PID:?}"
+exec "$gsa_bin" "\$@"
+EOF
+    chmod +x "$wrap"
+    (
+        for _ in $(seq 400); do [ -s "$pidfile" ] && break; sleep 0.025; done
+        [ -s "$pidfile" ] || exit 0
+        # Interrupt only while a lane is provably in flight (the stub makepkg
+        # holds it open for 30 s). The captured lane argv is the §D.1 seam
+        # spelling this section re-pins.
+        for _ in $(seq 400); do
+            if pgrep -f -- "--lane-job .*${dir}/state" >/dev/null 2>&1; then
+                pgrep -af -- "--lane-job .*${dir}/state" >"$argvfile"
+                break
+            fi
+            sleep 0.025
+        done
+        kill -INT "$(cat "$pidfile")" 2>/dev/null || true
+    ) &
+    watcher=$!
+    GSA_TEST_GSA_BIN="$wrap" GSA_FAKE_ENGINE_PID="$pidfile" \
+        run_engine "$dir" -B --leaf --state-dir "$dir/state" p1 p2
+    kill "$watcher" 2>/dev/null || true
+    wait "$watcher" 2>/dev/null || true
+    output=$FIXTURE_OUTPUT
+    printf '%s\n' "$output" >"$dir/output.txt"
+
+    # The lane was in flight, and its argv is the §D.1 seam spelling
+    # `--lane-job <pkg> <result-path> <jobs>`.
+    if [[ ! -s $argvfile ]]; then
+        fail "lane child never spawned (cannot drive the signal scenario)" "$dir/output.txt"
     fi
-done
-if [[ ! -f $dir/state/logs/.pacman-shim ]]; then
-    fail "the run's own fresh .pacman-shim is gone — the sweep must collect *.tmp.* names only" \
-        "$(ls -la "$dir/state/logs")"
-fi
+    if ! grep -qF -- "--lane-job p1 $dir/state/runs/" "$argvfile"; then
+        fail "the lane argv is not the §D.1 seam spelling --lane-job <pkg> <result-path> <jobs>:" \
+            "$(cat "$argvfile")"
+    fi
+    if ! grep -qE -- '\.result [0-9]+$' "$argvfile"; then
+        fail "the lane argv does not carry <result-path> <jobs>:" "$(cat "$argvfile")"
+    fi
 
-# 1b. behavioral: staging trees are excluded from the sweep — a decoy with the
-#     swept NAME under a recipe's src/ or build/ must survive. The exclusion is
-#     -prune (traversal) rather than -not -path (output-only filtering), and
-#     the run-start sweep must not descend into VCS clones and build trees just
-#     to discard their hits: minutes of I/O before the first dispatch. The
-#     decoys sit in p2, which the run does not build: the build path itself
-#     legitimately wipes a built recipe's src/pkg/build (toolchain-drift
-#     clean), which would race the assertion.
-dir="$fixture/stale-sweep-staging"
-make_case_workspace "$dir"
-add_package "$dir" p2 "$gsa_meta_any"
-mkdir -p "$dir/state/logs" "$dir/packages/p2/src/deep/clone" "$dir/packages/p2/build"
-printf 'stale\n' >"$dir/packages/p2/src/deep/clone/x.gsa-vcs-revisions.tmp.DECOY1"
-printf 'stale\n' >"$dir/packages/p2/build/x.gsa-vcs-revisions.tmp.DECOY2"
-printf 'stale\n' >"$dir/packages/p2/x.gsa-vcs-revisions.tmp.SWEPT"
+    # §G.1: an interrupted run exits 130 and the record agrees.
+    if [[ $FIXTURE_RC != 130 ]]; then
+        fail "an interrupted run exits 130 (§G.1), got $FIXTURE_RC" "$dir/output.txt"
+    fi
+    if [[ $FIXTURE_RC != "$(rr2_scalar rc <<<"$output")" ]]; then
+        fail "the record's rc scalar disagrees with the process exit code" "$dir/output.txt"
+    fi
+    if [[ $(rr2_scalar outcome <<<"$output") != interrupted ]]; then
+        fail "the record does not record outcome 'interrupted':" "$dir/output.txt"
+    fi
+    # The FULL record is emitted first (rr2_body parses every section).
+    rr2_body <<<"$output" >/dev/null \
+        || fail "the interrupted run emitted no complete run record:" "$dir/output.txt"
+    for pkg in p1 p2; do
+        if [[ -z $(rr2_plan "$pkg" plan <<<"$output") ]]; then
+            fail "the interrupted record is missing the plan row of $pkg:" "$dir/output.txt"
+        fi
+    done
+    # What was running is honestly labelled (§H.3): interrupted, not failed —
+    # the fish dispatcher.log forensics line is retired as rendering (§L.3).
+    if [[ $(rr2_outcome p1 status <<<"$output") != interrupted ]]; then
+        fail "the in-flight package is not recorded as interrupted:" "$dir/output.txt"
+    fi
+    if ! rr2_outcome p1 rc <<<"$output" | grep -Eq '^(129|130|143)$'; then
+        fail "an interrupted row's rc is not a signal lane code (§F.1):" "$dir/output.txt"
+    fi
+    if [[ $(rr2_outcome p1 reason <<<"$output") != interrupted-mid-build ]]; then
+        fail "want reason key 'interrupted-mid-build' (§H.3), got '$(rr2_outcome p1 reason <<<"$output")':" "$dir/output.txt"
+    fi
+    # What never launched is told apart.
+    if [[ $(rr2_outcome p2 status <<<"$output") != never-started ]]; then
+        fail "the unlaunched package is not recorded as never-started:" "$dir/output.txt"
+    fi
+    if [[ $(rr2_outcome p2 reason <<<"$output") != interrupted-before-start ]]; then
+        fail "want reason 'interrupted-before-start' (§H.3), got '$(rr2_outcome p2 reason <<<"$output")':" "$dir/output.txt"
+    fi
+    remaining_rows=$(rr2_remaining <<<"$output" | tr '\n' ' ' | sed 's/ $//')
+    if [[ $remaining_rows != "$(rr2_continuation remaining <<<"$output")" ]]; then
+        fail "continuation remaining disagrees with the rows-derived set [$remaining_rows]" "$dir/output.txt"
+    fi
 
-set +e
-output=$(
-    PATH="$dir/bin:$PATH" \
-        GSA_STATE_DIR="$dir/state" \
-        GSA_CPU_THREADS=8 \
-        GSA_MEMORY_GIB=16 \
-        fish "$dir/build-all.fish" --no-deps --allow-broken-rustc --no-sync p1 \
-        2>&1
+    # The children died (§K.3): nothing of this workspace survives teardown.
+    if ps -eo args= | grep -F "$dir" | grep -v grep >/dev/null; then
+        fail "a lane child of $dir survived the interrupt teardown" "$dir/output.txt"
+    fi
 )
-rc=$?
-set -e
-if ((rc != 0)); then
-    fail "the decoy sweep run must succeed, rc=$rc" "$output"
-fi
-if [[ -e $dir/packages/p2/x.gsa-vcs-revisions.tmp.SWEPT ]]; then
-    fail "a recipe-depth manifest temp must be swept" "$output"
-fi
-for decoy in \
-    "$dir/packages/p2/src/deep/clone/x.gsa-vcs-revisions.tmp.DECOY1" \
-    "$dir/packages/p2/build/x.gsa-vcs-revisions.tmp.DECOY2"; do
-    if [[ ! -e $decoy ]]; then
-        fail "sweep crossed into a staging tree (src/pkg/build) and removed: $decoy" "$output"
-    fi
-done
 
-# 2. behavioral: an unremovable leftover is named with its operator command
-#    (rm -f fails inside a read-only directory) and never breaks the run.
+# ─── Stale run-artifact sweep (§K.3; fish-era R-F34 re-mapped) ─────────────
+# A crashed run leaves half-written runtime files behind. With the run lock
+# held nothing alive can own them, so the engine's sweep_orphans
+# (crates/gsa-sched/src/lock.rs) collects them at run start (before dispatch)
+# and after the run: under `runs/` — `*.tmp.*` of any run plus dead runs'
+# abandoned `.result`/`.park` files — and it reaps dead runs' `--lane-job`/
+# `--fetch-job` processes; unrelated `makepkg` processes are never touched.
+# The current run's own artifacts survive.
+#
+# Mapping from the fish shapes (header): `.pacman-shim.tmp.<pid>`,
+# `toolchains/<pkg>.tmp.<pid>` and `<archive>.gsa-vcs-revisions.tmp.*` are
+# fish runtime state the engine never creates (its state is `logs/<pkg>.log`,
+# `runs/<run-id>/<pkg>.result`, `locks/`), so the KEEP meaning — crash
+# leftovers are reaped at run start, loudly non-fatal, while the live run's
+# own artifacts survive — re-pins against the `runs/` observable below. The
+# unremovable-leftover naming half of R-F34 has NO engine equivalent (the
+# sweep is silent best-effort) and keeps its fish section below.
+
+# 1. behavioral: dead-run leftovers are swept at RUN START (the build-time
+#    snapshot proves the sweep already ran before the first dispatch) while
+#    the current run's own result and its fresh PACMAN shim (locks/pacman-shim,
+#    no `.tmp.` in its name) survive.
+(
+    set -euo pipefail
+    dir="$fixture/stale-sweep"
+    make_case_workspace "$dir"
+    mkdir -p "$dir/state/logs" "$dir/state/runs/dead-run"
+    printf 'stale\n' >"$dir/state/runs/dead-run/dead.tmp.12345"
+    printf 'stale\n' >"$dir/state/runs/dead-run/dead.result"
+    printf 'stale\n' >"$dir/state/runs/dead-run/dead.park"
+    mkdir -p "$dir/obs"
+
+    # The scenario makepkg: snapshot the state tree at build time (a run-start
+    # sweep has already happened by then), then build.
+    cat >"$dir/bin/makepkg" <<'EOF'
+#!/usr/bin/env bash
+set -u
+id=$(basename "$PWD")
+find "${GSA_STATE_DIR:?}" | sort >"${GSA_FAKE_DIR:?}/state-at-build"
+: >"$PWD/$id-1.0.0-1-any.pkg.tar.zst"
+printf 'fake makepkg %s\n' "$PWD"
+exit 0
+EOF
+    chmod +x "$dir/bin/makepkg"
+
+    export PATH="$dir/bin:$PATH"
+    export GSA_CPU_THREADS=8 GSA_MEMORY_GIB=16
+    export GSA_FAKE_DIR="$dir/obs"
+    run_engine "$dir" -B --leaf --state-dir "$dir/state" p1
+    output=$FIXTURE_OUTPUT
+    printf '%s\n' "$output" >"$dir/output.txt"
+
+    if [[ $FIXTURE_RC != 0 ]]; then
+        fail "the trivial sweep run must succeed (the sweep is non-fatal), rc=$FIXTURE_RC" "$dir/output.txt"
+    fi
+    if [[ $(rr2_outcome p1 status <<<"$output") != succeeded ]]; then
+        fail "the sweep run did not record p1 as succeeded:" "$dir/output.txt"
+    fi
+    # Run-start sweep: at build time the dead run's leftovers were already
+    # gone — the sweep ran under the run lock, before any dispatch.
+    if grep -qF 'dead-run' "$dir/obs/state-at-build"; then
+        fail "dead-run leftovers survived until build time (sweep did not run at run start):" \
+            "$(cat "$dir/obs/state-at-build")"
+    fi
+    if grep -qE '\.tmp\.' "$dir/obs/state-at-build"; then
+        fail "a *.tmp.* leftover survived until build time:" \
+            "$(cat "$dir/obs/state-at-build")"
+    fi
+    if [[ -e $dir/state/runs/dead-run ]]; then
+        fail "the emptied dead-run directory survived the sweep: $dir/state/runs/dead-run" "$dir/output.txt"
+    fi
+    # The current run's own artifacts survive: its result row is that run's
+    # record, not litter.
+    own=("$dir"/state/runs/*/*.result)
+    if ((${#own[@]} != 1)) || [[ ! -f ${own[0]} ]]; then
+        fail "the current run's own result did not survive the sweep:" \
+            "$(find "$dir/state/runs" | sort)"
+    fi
+    # …and the run's own fresh PACMAN shim survives (§K.3; no `.tmp.` in its
+    # name — the engine's counterpart of the fish-era `.pacman-shim`).
+    if [[ ! -f $dir/state/locks/pacman-shim ]]; then
+        fail "the run's own PACMAN shim is gone — the sweep must collect *.tmp.* names only" \
+            "$(ls -la "$dir/state/locks")"
+    fi
+)
+
+# 1b. behavioral: the sweep's reach is BOUNDED — staging trees are excluded.
+#     The fish-era `find -prune` vs `-not -path` implementation pin (now §6
+#     R-1, retired) guarded this behaviour: the sweep must not descend into
+#     VCS clones and build trees just to discard their hits — minutes of I/O
+#     before the first dispatch. For the engine the swept scope is `runs/`
+#     (§K.3), so the decoys carry the SWEPT NAME SHAPE (`*.tmp.*`) in the
+#     out-of-scope trees and one swept-shape file inside `runs/` proves the
+#     scenario still collects what it should. The decoys sit in p2, which the
+#     run does not build: the build path itself legitimately wipes a built
+#     recipe's src/pkg/build, which would race the assertion.
+(
+    set -euo pipefail
+    dir="$fixture/stale-sweep-staging"
+    make_case_workspace "$dir"
+    add_package "$dir" p2 "$gsa_meta_any"
+    mkdir -p "$dir/state/logs" "$dir/state/runs/dead-run" \
+        "$dir/packages/p2/src/deep/clone" "$dir/packages/p2/build"
+    printf 'stale\n' >"$dir/state/runs/dead-run/x.tmp.SWEPT"
+    printf 'stale\n' >"$dir/packages/p2/src/deep/clone/x.tmp.DECOY1"
+    printf 'stale\n' >"$dir/packages/p2/build/x.tmp.DECOY2"
+    printf 'stale\n' >"$dir/state/logs/x.tmp.DECOY3"
+
+    export PATH="$dir/bin:$PATH"
+    export GSA_CPU_THREADS=8 GSA_MEMORY_GIB=16
+    run_engine "$dir" -B --leaf --state-dir "$dir/state" p1
+    output=$FIXTURE_OUTPUT
+    printf '%s\n' "$output" >"$dir/output.txt"
+
+    if [[ $FIXTURE_RC != 0 ]]; then
+        fail "the decoy sweep run must succeed, rc=$FIXTURE_RC" "$dir/output.txt"
+    fi
+    if [[ -e $dir/state/runs/dead-run/x.tmp.SWEPT ]]; then
+        fail "a swept-scope *.tmp.* leftover must be collected:" "$dir/output.txt"
+    fi
+    for decoy in \
+        "$dir/packages/p2/src/deep/clone/x.tmp.DECOY1" \
+        "$dir/packages/p2/build/x.tmp.DECOY2" \
+        "$dir/state/logs/x.tmp.DECOY3"; do
+        if [[ ! -e $decoy ]]; then
+            fail "the sweep reached outside runs/ and removed: $decoy" "$dir/output.txt"
+        fi
+    done
+)
+
+# 2. KEPT FISH (engine gap): an unremovable leftover is named with its
+#    operator command (rm -f fails inside a read-only directory) and never
+#    breaks the run. The engine's sweep_orphans is silent best-effort
+#    (`let _ = std::fs::remove_file`, crates/gsa-sched/src/lock.rs) and names
+#    nothing, so this half of the R-F34 contract cannot flip yet.
 dir="$fixture/stale-unremovable"
 make_case_workspace "$dir"
 mkdir -p "$dir/state/logs/trapped"
@@ -309,11 +472,13 @@ if [[ ! -e $dir/state/logs/trapped/f.tmp.9 ]]; then
     fail "the read-only-directory leftover vanished — the scenario proved nothing" "$output"
 fi
 
-# 3. static shape: --audit's "Stale runtime/error artifacts:" section must
-#    LIST the same name shapes the sweep collects. Asserted on the builder
-#    source (a behavioral --audit run probes installed packages and needs
-#    ripgrep, so its output is host-dependent) — the technique
-#    tests/signal-abort-lock.sh phase 6 uses for stop_lane_process.
+# 3. KEPT (fish-source listing check): --audit's "Stale runtime/error
+#    artifacts:" section must LIST the same name shapes the sweep collects.
+#    Asserted on the builder source (a behavioral --audit run probes installed
+#    packages and needs ripgrep, so its output is host-dependent) — the
+#    technique tests/signal-abort-lock.sh phase 6 uses for stop_lane_process.
+#    Purely fish-source: gsa `-Ma` is deferred (rc 2 "deferred to a later
+#    phase"), so this listing re-pins from `gsa -Ma` at Phase 4.
 gf="$gsa_repo_root/build-all.fish"
 # The section lives in audit_workspace, which the Design C split moved to
 # lib/audit.fish — the sweep reads both so the assertion follows the code.
@@ -329,25 +494,9 @@ grep -qF -- '*.tmp.*' <<<"$audit_region" ||
 grep -qF -- '*.gsa-vcs-revisions.tmp.*' <<<"$audit_region" ||
     fail "the audit stale listing no longer matches '*.gsa-vcs-revisions.tmp.*' package-tree leftovers"
 
-# Static shape: staging-tree exclusions in find are -prune (traversal), never
-# -not -path (output-only filtering — find still walks every VCS clone and
-# build tree, minutes of run-start I/O; 2026-10-09). Behaviour alone cannot
-# pin the difference: both shapes exclude the same paths. The three
-# staging-excluding finds are the run-start sweep and cleanup_pkgs in
-# build-all.fish and the audit stale listing above.
-for check_gf in "$gsa_repo_root/build-all.fish" "$gsa_repo_root/lib/audit.fish"; do
-    if grep -qF -- "-not -path '*/src/*'" "$check_gf"; then
-        fail "staging exclusion reverted to output-only -not -path in $(basename "$check_gf") — use -prune" \
-            "$(grep -nF -- "-not -path '*/src/*'" "$check_gf")"
-    fi
-done
-sweep_region=$(awk '
-    /function sweep_stale_run_artifacts/ { inr = 1 }
-    inr { print }
-    inr && /^end$/ { exit }
-' "$gf")
-grep -qF -- '-prune' <<<"$sweep_region" ||
-    fail "sweep_stale_run_artifacts no longer prunes the staging dirs"
+# (2026-10-12: the `find -prune` vs `-not -path` sweep-implementation greps
+#  are retired WITHOUT replacement — docs/gsa-fixture-migration.md §6 R-1;
+#  the staging-exclusion BEHAVIOUR keeps at section 1b above.)
 
 printf 'log-ownership fixture: PASS\n'
 
@@ -355,7 +504,13 @@ printf 'log-ownership fixture: PASS\n'
 (
 
 # Root-mode half of the 2026-09-23 log-ownership contract (the unprivileged
-# quarantine half is pinned by tests/log-ownership.sh).
+# half is pinned by the flipped engine sections above).
+#
+# KEPT FISH (engine gap): `gsa` has no root-repair path — §J.5's write-time
+# ownership gate only quarantines wrong-owner files (the root-supervisor
+# chown repair is a later phase), and `-Ma`/`-Md` listings are deferred (gsa
+# refuses `-M` with rc 2). This whole section therefore keeps driving the
+# fish builder (docs/gsa-fixture-migration.md row `tests/log-ownership.sh`).
 #
 # In root mode the supervisor's shell opens every log, so before the fix the
 # per-package log was created root-owned at lane spawn and only repaired at

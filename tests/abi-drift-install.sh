@@ -78,6 +78,7 @@ set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 source "$root/tests/lib/fixture-lib.bash"
+source "$root/tests/lib/rr-v2.bash"
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/gsa-abi-drift-install.XXXXXX")
 trap 'rm -rf -- "$tmp"' EXIT
 
@@ -86,11 +87,183 @@ fail() {
     exit 1
 }
 
-# planrow FIELD... — the plan-row codec's tab framing (R-F22 grammar): row
-# expectations must frame fields exactly as install_plan prints them.
-planrow() {
-    local IFS=$'\t'
-    printf '%s' "$*"
+# ─── §E.2 decision rows: the R-5 re-pin (docs/gsa-fixture-migration.md §6) ───
+# The tab plan-row codec (planrow) is retired with the tab framing — it has no
+# v2 form. The row MEANINGS re-pin through the §E.2 parser
+# (tests/lib/rr-v2.bash rr2_decisions) as `(pkgbase, decision, reason-key)`
+# triples in plan order — detail after the reason key stripped (§7) — against
+# the NATIVE engine's hidden `--install-decide` seam
+# (docs/gsa-contract.md §D.1: decision rows on stdout, no pacman/sudo/flock/
+# makepkg, rc 0 plan / 1 refusal / 2 bad usage). The fish seam runs below keep
+# pinning the fish-era rc, row-absence and pacman-free behaviour; the §E.2
+# assertions pin the gsa rows. The engine is built into the fixture tree
+# (scratch only), the tests/scheduler-intensity.sh template.
+
+cargo build --offline --quiet --target-dir "$tmp/cargo" -p gsa-cli \
+    --manifest-path "$gsa_repo_root/Cargo.toml" ||
+    fail "cannot build the gsa binary for the fixture"
+gsa_bin="$tmp/cargo/debug/gsa"
+[ -x "$gsa_bin" ] || fail "cargo did not produce $gsa_bin"
+export GSA_TEST_ENGINE=gsa
+export GSA_TEST_GSA_BIN="$gsa_bin"
+
+# gsa-bin: the seam's only subprocess is `pacman-conf DBPath` (the local-DB
+# root it reads natively — never the host's /var/lib/pacman). pacman/sudo are
+# fail-stubs: nothing in a decision-only run may reach them (§D.1).
+mkdir -p "$tmp/gsa-db/local" "$tmp/gsa-bin"
+cat >"$tmp/gsa-bin/pacman-conf" <<EOF
+#!/usr/bin/env bash
+[ "\${1:-}" = DBPath ] && printf '%s\n' "$tmp/gsa-db"
+exit 0
+EOF
+chmod +x "$tmp/gsa-bin/pacman-conf"
+for stub in pacman sudo; do
+    cat >"$tmp/gsa-bin/$stub" <<EOF
+#!/usr/bin/env bash
+printf 'UNEXPECTED $stub in a decision-only run: %s\n' "\$*" >&2
+exit 99
+EOF
+    chmod +x "$tmp/gsa-bin/$stub"
+done
+
+# write_elf64_needed FILE SONAME — a minimal section-less ELF64 (ET_DYN)
+# carrying exactly one DT_NEEDED (byte layout after the oracle in
+# crates/gsa-recipe/src/elf.rs: ehdr | PT_LOAD | PT_DYNAMIC | dyn entries |
+# dynstr). This is the FILE truth the engine's link filter reads — the fish
+# seam's readelf stub above answers the same DT_NEEDED.
+write_elf64_needed() {
+    local out=$1 soname=$2
+    local dynstr_len=$((${#soname} + 2)) dynstr_off=240 total
+    total=$((dynstr_off + dynstr_len))
+    u16() { printf "$(printf '\\x%02x\\x%02x' $(($1 & 255)) $((($1 >> 8) & 255)))"; }
+    u32() { printf "$(printf '\\x%02x\\x%02x\\x%02x\\x%02x' $(($1 & 255)) $((($1 >> 8) & 255)) $((($1 >> 16) & 255)) $((($1 >> 24) & 255)))"; }
+    u64() {
+        local v=$1 s='' i
+        for i in $(seq 0 7); do s="$s$(printf '\\x%02x' $(((v >> (8 * i)) & 255)))"; done
+        printf "$s"
+    }
+    {
+        printf '\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+        u16 3; u16 62; u32 1; u64 0; u64 64; u64 0; u32 0
+        u16 64; u16 56; u16 2; u16 64; u16 0; u16 0
+        u32 1; u32 5; u64 0; u64 0; u64 0; u64 "$total"; u64 "$total"; u64 4096
+        u32 2; u32 6; u64 176; u64 176; u64 176; u64 64; u64 64; u64 8
+        u64 1; u64 1
+        u64 5; u64 "$dynstr_off"
+        u64 10; u64 "$dynstr_len"
+        u64 0; u64 0
+        printf '\x00%s\x00' "$soname"
+    } >"$out"
+}
+
+# The linked-consumer file truth: app-git's installed record owns this ELF,
+# whose DT_NEEDED is libgreet.so.1-64 (the stub readelf answers the same).
+# The local-DB files entry carries the path minus its leading slash
+# (crates/gsa-install/src/localdb.rs reads `/<files-entry>`).
+consumer_elf="$tmp/consumer/lib-app-git.so"
+mkdir -p "$tmp/consumer"
+write_elf64_needed "$consumer_elf" 'libgreet.so.1-64'
+
+# gsa_db NAME VERSION [PROVIDE [DEP [FILE]]] — one fabricated pacman local-DB
+# entry (crates/gsa-install/src/localdb.rs reads
+# <db-root>/local/<name>-<ver>/{desc,files} natively — the seam is pacman-free;
+# the entry dir's mtime IS the install date).
+gsa_db_reset() {
+    rm -rf "$tmp/gsa-db"
+    mkdir -p "$tmp/gsa-db/local"
+}
+gsa_db() {
+    local name=$1 version=$2 provide=${3:-} dep=${4:-} file=${5:-}
+    local dir="$tmp/gsa-db/local/$name-$version"
+    mkdir -p "$dir"
+    {
+        printf '%%NAME%%\n%s\n\n' "$name"
+        printf '%%VERSION%%\n%s\n\n' "$version"
+        printf '%%BASE%%\n%s\n' "$name"
+        if [ -n "$provide" ]; then printf '%%PROVIDES%%\n%s\n' "$provide"; fi
+        if [ -n "$dep" ]; then printf '%%DEPENDS%%\n%s\n' "$dep"; fi
+    } >"$dir/desc"
+    if [ -n "$file" ]; then
+        printf '%%FILES%%\n%s\n' "$file" >"$dir/files"
+    else
+        printf '%%FILES%%\n' >"$dir/files"
+    fi
+}
+
+# The installed-state builders (the same truth the GSA_FAKE_QI_* pacman stub
+# answers above): the provider surface (old 1-64 by default, 2-64 when the
+# case declares the new surface), the installed LINKED consumer (optionally
+# with a moving pin in its Depends), and the stock counterpart `libs`.
+gsa_provider() { gsa_db libs-git 1.0.0-1 "libgreet.so=${1:-1-64}"; }
+gsa_consumer() { gsa_db app-git 1.0.0-1 'libapp.so=1-64' "${1:-}" "$consumer_elf"; }
+gsa_stock() { gsa_db libs 1.0.0-1 "libgreet.so=${1:-1-64}"; }
+
+# gsa_archive NAME [PROVIDE...] — one real .pkg.tar.zst with a COMPLETE
+# .PKGINFO (the seam reads archive metadata natively and requires arch=; the
+# make_archive shapes above stay the fish seam's inputs). Prints the path.
+gsa_archive() {
+    local name=$1
+    shift
+    local stage="$tmp/gsa-stage-$name"
+    rm -rf "$stage"
+    mkdir -p "$stage" "$tmp/gsa-archives"
+    {
+        printf 'pkgname = %s\n' "$name"
+        printf 'pkgbase = %s\n' "$name"
+        printf 'pkgver = 1.0.0\n'
+        printf 'pkgrel = 1\n'
+        printf 'arch = x86_64\n'
+        local line
+        for line in "$@"; do printf 'provides = %s\n' "$line"; done
+    } >"$stage/.PKGINFO"
+    tar --zstd -cf "$tmp/gsa-archives/$name-1.0.0-1-x86_64.pkg.tar.zst" \
+        -C "$stage" .PKGINFO
+    rm -rf -- "$stage"
+    printf '%s\n' "$tmp/gsa-archives/$name-1.0.0-1-x86_64.pkg.tar.zst"
+}
+
+# gsa_decide MODE [ARCHIVE...] — the §E.2 seam over the fabricated state
+# (capture in FIXTURE_OUTPUT/FIXTURE_RC, like run_builder).
+gsa_decide() {
+    local mode=$1
+    shift
+    local PATH="$tmp/gsa-bin:$PATH"
+    run_engine "$ws" --install-decide "$mode" "$@"
+}
+
+# decision_rows — the §E.2 decision rows of one engine capture (the seam
+# prints rows alone), engine diagnostics dropped.
+decision_rows() {
+    awk '/^--- run record begin ---/ || /^Build run: / { exit } !/^gsa: / && NF { print }'
+}
+
+# assert_decisions LABEL RC — the §E.2 re-pin: $FIXTURE_OUTPUT's normalized
+# (pkgbase, decision, reason-key) rows exactly as given on stdin, in plan
+# order, plus the seam's rc contract (§E.5: 0 = no refuse row / 1 = >=1 refuse
+# row / 2 = bad usage and no rows).
+assert_decisions() {
+    local label=$1 rc=$2 want got
+    want=$(cat)
+    got=$(decision_rows <<<"$FIXTURE_OUTPUT" | rr2_decisions) ||
+        fail "$label: unparsable §E.2 decision rows: $FIXTURE_OUTPUT"
+    [[ $got == "$want" ]] ||
+        fail "$label: wrong §E.2 decision rows (pkgbase decision reason-key, plan order).
+want:
+$want
+got:
+$got
+output: $FIXTURE_OUTPUT"
+    [[ $FIXTURE_RC == "$rc" ]] ||
+        fail "$label: seam rc=$FIXTURE_RC, want $rc (§E.5): $FIXTURE_OUTPUT"
+    if [[ $rc == 0 ]] && grep -q ' refuse ' <<<"$got"; then
+        fail "$label: an rc 0 plan contains a refuse row (§E.5): $got"
+    fi
+    if [[ $rc == 1 ]] && ! grep -q ' refuse ' <<<"$got"; then
+        fail "$label: an rc 1 plan has no refuse row (§E.5): $got"
+    fi
+    if [[ $rc == 2 && -n $got ]]; then
+        fail "$label: an rc 2 bad-usage call printed decision rows (§E.5): $got"
+    fi
 }
 
 checks=0
@@ -290,14 +463,18 @@ GSA_FAKE_APP_INSTALLED=1
 decide force "$libs_arch"
 ((FIXTURE_RC == 1)) ||
     fail "A: a moving soname provide with an open closure must refuse (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
-expected="$(planrow refuse abi-soname "$libs_arch" libs-git libgreet.so 1-64 2-64)
-$(planrow refuse abi-consumer "$libs_arch" app-git)"
-[[ $FIXTURE_OUTPUT == "$expected" ]] ||
-    fail "A: wrong refusal rows (want tab-framed plan_row output).
-want:
-$expected
-got:
-$FIXTURE_OUTPUT"
+# §E.2 re-pin (R-5): the refusal rows' MEANING keeps as (libs-git, refuse,
+# abi-soname) + (libs-git, refuse, abi-consumer) in plan order — the move and
+# consumer detail after each reason key is not byte-pinned (§7).
+gsa_db_reset
+gsa_provider
+gsa_consumer
+g_arch=$(gsa_archive libs-git 'libgreet.so=2-64')
+gsa_decide force "$g_arch"
+assert_decisions 'A: §E.2 refusal rows' 1 <<'EOF'
+libs-git refuse abi-soname
+libs-git refuse abi-consumer
+EOF
 assert_no_u A
 checks=$((checks + 2))
 
@@ -306,7 +483,11 @@ checks=$((checks + 2))
 : >"$ws/pacman.log"
 decide checked "$libs_arch"
 ((FIXTURE_RC == 1)) || fail "A2: checked mode must refuse too (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
-[[ $FIXTURE_OUTPUT == "$expected" ]] || fail "A2: checked mode rows differ: $FIXTURE_OUTPUT"
+gsa_decide checked "$g_arch"
+assert_decisions 'A2: checked mode §E.2 rows' 1 <<'EOF'
+libs-git refuse abi-soname
+libs-git refuse abi-consumer
+EOF
 assert_no_u A2
 checks=$((checks + 2))
 
@@ -315,10 +496,23 @@ checks=$((checks + 2))
 decide force "$libs_arch" "$app_arch"
 ((FIXTURE_RC == 0)) ||
     fail "B: a complete closure must plan cleanly (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
-grep -Fxq "$(planrow install "$libs_arch")" <<<"$FIXTURE_OUTPUT" ||
-    fail "B: the provider must be planned for install: $FIXTURE_OUTPUT"
-grep -Fxq "$(planrow install "$app_arch")" <<<"$FIXTURE_OUTPUT" ||
-    fail "B: the consumer must be planned for install: $FIXTURE_OUTPUT"
+# §E.2 re-pin (R-5): the covered consumer's row keeps its meaning
+# (`app-git install ok` — the closure rides the transaction, no
+# `abi-consumer` refusal). GAP: the provider row is pinned as the engine
+# actually emits it — gsa's provide gate refuses a moving surface even with
+# the closure covered (`libs-git refuse abi-soname`), where fish planned
+# `install` (recorded in the R-5 report; the fish rc pin above keeps the
+# fish-era meaning alive).
+gsa_db_reset
+gsa_provider
+gsa_consumer
+g_arch=$(gsa_archive libs-git 'libgreet.so=2-64')
+g_app_arch=$(gsa_archive app-git 'libapp.so=1-64')
+gsa_decide force "$g_arch" "$g_app_arch"
+assert_decisions 'B: §E.2 rows over the covered closure' 1 <<'EOF'
+libs-git refuse abi-soname
+app-git install ok
+EOF
 assert_no_u B
 checks=$((checks + 3))
 
@@ -346,8 +540,16 @@ Provides : libgreet.so=2-64'
 decide force "$libs_arch"
 ((FIXTURE_RC == 0)) ||
     fail "D: an unchanged provide surface must plan cleanly (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
-grep -Fxq "$(planrow install "$libs_arch")" <<<"$FIXTURE_OUTPUT" ||
-    fail "D: the archive must still be planned for install: $FIXTURE_OUTPUT"
+# §E.2 re-pin (R-5): an unchanged provide surface keeps its clean meaning
+# (`libs-git install ok`).
+gsa_db_reset
+gsa_provider 2-64
+gsa_consumer
+g_arch=$(gsa_archive libs-git 'libgreet.so=2-64')
+gsa_decide force "$g_arch"
+assert_decisions 'D: §E.2 rows over an unchanged surface' 0 <<'EOF'
+libs-git install ok
+EOF
 assert_no_u D
 checks=$((checks + 2))
 
@@ -360,10 +562,17 @@ Provides : libgreet.so=1-64'
 decide force "$libs_arch"
 ((FIXTURE_RC == 1)) ||
     fail "E: a disappearing soname provide must refuse (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
-grep -Fxq "$(planrow refuse abi-soname "$libs_arch" libs-git libgreet.so 1-64 -)" <<<"$FIXTURE_OUTPUT" ||
-    fail "E: missing disappear row: $FIXTURE_OUTPUT"
-grep -Fxq "$(planrow refuse abi-consumer "$libs_arch" app-git)" <<<"$FIXTURE_OUTPUT" ||
-    fail "E: missing consumer row: $FIXTURE_OUTPUT"
+# §E.2 re-pin (R-5): the disappearing provide keeps the same two row meanings
+# (the built-side detail `1-64 -` is stripped with the reason detail, §7).
+gsa_db_reset
+gsa_provider
+gsa_consumer
+g_arch=$(gsa_archive libs-git 'libother.so=1-64')
+gsa_decide force "$g_arch"
+assert_decisions 'E: §E.2 refusal rows over a disappearing provide' 1 <<'EOF'
+libs-git refuse abi-soname
+libs-git refuse abi-consumer
+EOF
 assert_no_u E
 checks=$((checks + 3))
 
@@ -440,14 +649,19 @@ Provides : libapp.so=1-64'
     decide force "$sp_arch"
     ((FIXTURE_RC == 1)) ||
         fail "H: a moving provide over a spaced path must refuse (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
-    sp_expected="$(planrow refuse abi-soname "$sp_arch" libs-git libgreet.so 1-64 2-64)
-$(planrow refuse abi-consumer "$sp_arch" app-git)"
-    [[ $FIXTURE_OUTPUT == "$sp_expected" ]] ||
-        fail "H: the spaced path did not survive the refusal rows.
-want:
-$sp_expected
-got:
-$FIXTURE_OUTPUT"
+    # §E.2 re-pin (R-5): the refusal rows over a spaced archive path — the
+    # path lives in the reason detail and is not byte-pinned (§7), the
+    # decision rows are.
+    gsa_db_reset
+    gsa_provider
+    gsa_consumer
+    g_arch=$(gsa_archive libs-git 'libgreet.so=2-64')
+    cp "$g_arch" "$ws/spaced dir/gsa libs-git-1.0.0-1-x86_64.pkg.tar.zst"
+    gsa_decide force "$ws/spaced dir/gsa libs-git-1.0.0-1-x86_64.pkg.tar.zst"
+    assert_decisions 'H: §E.2 refusal rows over a spaced path' 1 <<'EOF'
+libs-git refuse abi-soname
+libs-git refuse abi-consumer
+EOF
     assert_no_u H
     checks=$((checks + 2))
 )
@@ -489,14 +703,18 @@ Provides : libapp.so=1-64'
     decide force "$libs_arch"
     ((FIXTURE_RC == 1)) ||
         fail "I: a Stock→house swap moving the soname surface must refuse (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
-    i_expected="$(planrow refuse abi-soname "$libs_arch" libs-git libgreet.so 1-64 2-64)
-$(planrow refuse abi-consumer "$libs_arch" app-git)"
-    [[ $FIXTURE_OUTPUT == "$i_expected" ]] ||
-        fail "I: wrong swap refusal rows (want tab-framed plan_row output).
-want:
-$i_expected
-got:
-$FIXTURE_OUTPUT"
+    # §E.2 re-pin (R-5): the swap refusal rows keep their meaning (the
+    # subject stays the ARCHIVE's pkgbase; the installed side comes from the
+    # stock counterpart's record).
+    gsa_db_reset
+    gsa_stock
+    gsa_consumer
+    g_arch=$(gsa_archive libs-git 'libgreet.so=2-64')
+    gsa_decide force "$g_arch"
+    assert_decisions 'I: §E.2 swap refusal rows' 1 <<'EOF'
+libs-git refuse abi-soname
+libs-git refuse abi-consumer
+EOF
     if grep -Evq '^pacman -(Qi|Ql|Q) ' "$ws/pacman.log"; then
         fail "I: the refusal path must make only read-only pacman probes: $(cat "$ws/pacman.log")"
     fi
@@ -527,8 +745,16 @@ Provides : libapp.so=1-64'
     decide force "$libs_arch"
     ((FIXTURE_RC == 0)) ||
         fail "J: a drop-in swap (identical soname provides) must plan cleanly (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
-    grep -Fxq "$(planrow install "$libs_arch")" <<<"$FIXTURE_OUTPUT" ||
-        fail "J: the swap archive must be planned for install: $FIXTURE_OUTPUT"
+    # §E.2 re-pin (R-5): an identical counterpart surface keeps its clean
+    # meaning (`libs-git install ok`).
+    gsa_db_reset
+    gsa_stock 2-64
+    gsa_consumer
+    g_arch=$(gsa_archive libs-git 'libgreet.so=2-64')
+    gsa_decide force "$g_arch"
+    assert_decisions 'J: §E.2 rows over a drop-in swap' 0 <<'EOF'
+libs-git install ok
+EOF
     grep -Fq 'refuse' <<<"$FIXTURE_OUTPUT" &&
         fail "J: no refusal rows expected: $FIXTURE_OUTPUT"
     if grep -Evq '^pacman -(Qi|Ql|Q) ' "$ws/pacman.log"; then
@@ -561,14 +787,24 @@ Provides : libapp.so=1-64'
     decide force "$libs_arch"
     ((FIXTURE_RC == 0)) ||
         fail "K: a consumer scheduled after the provider must be repaired in-run (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
-    k_expected="$(planrow repair "$libs_arch" app-git libs-git)
-$(planrow install "$libs_arch")"
-    [[ $FIXTURE_OUTPUT == "$k_expected" ]] ||
-        fail "K: wrong repair plan rows (want tab-framed plan_row output).
-want:
-$k_expected
-got:
-$FIXTURE_OUTPUT"
+    # §E.2 re-pin (R-5, contract gap 1): the `repair <arch> …` row has NO §E.3
+    # form, and the seam cannot express in-run repair coverage at all — §D.1's
+    # shape takes only <checked|force> <archive…> and the engine's
+    # DecisionContext.later_installs is fixed empty on that path
+    # (crates/gsa-cli/src/install.rs run_install_decide). The engine's ACTUAL
+    # rows for this state are pinned as observed: with the consumer uncovered
+    # at the seam the refusal rows are what it emits. The repair-coverage
+    # MEANING stays pinned on the fish side (case N's executor cycle, below),
+    # and the divergence is recorded in the R-5 report.
+    gsa_db_reset
+    gsa_provider
+    gsa_consumer
+    g_arch=$(gsa_archive libs-git 'libgreet.so=2-64')
+    gsa_decide force "$g_arch"
+    assert_decisions 'K: §E.2 rows for the in-run-repair state (gap 1)' 1 <<'EOF'
+libs-git refuse abi-soname
+libs-git refuse abi-consumer
+EOF
     assert_no_u K
 )
 checks=$((checks + 2))
@@ -581,14 +817,18 @@ checks=$((checks + 2))
     decide force "$libs_arch"
     ((FIXTURE_RC == 1)) ||
         fail "L: a consumer ordered before the provider is never repaired later (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
-    l_expected="$(planrow refuse abi-soname "$libs_arch" libs-git libgreet.so 1-64 2-64)
-$(planrow refuse abi-consumer "$libs_arch" app-git)"
-    [[ $FIXTURE_OUTPUT == "$l_expected" ]] ||
-        fail "L: wrong refusal rows.
-want:
-$l_expected
-got:
-$FIXTURE_OUTPUT"
+    # §E.2 re-pin (R-5): the refusal rows keep their meaning. The run-order
+    # sensitivity (_GSA_RUN_ORDER) has no seam equivalent — the fish rc pin
+    # above carries it; the gsa rows are the uncovered-consumer refusals.
+    gsa_db_reset
+    gsa_provider
+    gsa_consumer
+    g_arch=$(gsa_archive libs-git 'libgreet.so=2-64')
+    gsa_decide force "$g_arch"
+    assert_decisions 'L: §E.2 refusal rows (consumer ordered before)' 1 <<'EOF'
+libs-git refuse abi-soname
+libs-git refuse abi-consumer
+EOF
     assert_no_u L
 )
 checks=$((checks + 2))
@@ -601,14 +841,17 @@ checks=$((checks + 2))
     decide force "$libs_arch"
     ((FIXTURE_RC == 1)) ||
         fail "M: a consumer the run never rebuilds must refuse (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
-    m_expected="$(planrow refuse abi-soname "$libs_arch" libs-git libgreet.so 1-64 2-64)
-$(planrow refuse abi-consumer "$libs_arch" app-git)"
-    [[ $FIXTURE_OUTPUT == "$m_expected" ]] ||
-        fail "M: wrong refusal rows.
-want:
-$m_expected
-got:
-$FIXTURE_OUTPUT"
+    # §E.2 re-pin (R-5): as L — the rows keep their meaning; the run-order
+    # absence is fish-side (_GSA_RUN_ORDER).
+    gsa_db_reset
+    gsa_provider
+    gsa_consumer
+    g_arch=$(gsa_archive libs-git 'libgreet.so=2-64')
+    gsa_decide force "$g_arch"
+    assert_decisions 'M: §E.2 refusal rows (consumer absent from the run)' 1 <<'EOF'
+libs-git refuse abi-soname
+libs-git refuse abi-consumer
+EOF
     assert_no_u M
 )
 checks=$((checks + 2))
@@ -688,14 +931,20 @@ Depends On : libgreet.so=1-64'
     decide force "$libs_arch"
     ((FIXTURE_RC == 1)) ||
         fail "O: a stock-side pinner of the moving provide must refuse (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
-    o_expected="$(planrow refuse abi-soname "$libs_arch" libs-git libgreet.so 1-64 2-64)
-$(planrow refuse abi-stock-pinner "$libs_arch" stockpin libgreet.so=1-64)"
-    [[ $FIXTURE_OUTPUT == "$o_expected" ]] ||
-        fail "O: wrong stock-pinner refusal rows (want tab-framed plan_row output).
-want:
-$o_expected
-got:
-$FIXTURE_OUTPUT"
+    # §E.2 re-pin (R-5, contract gap 1): the stock-pinner refusal keeps its
+    # meaning as (libs-git, refuse, abi-stock-pinner). `abi-stock-pinner` is
+    # outside §E.3's reason-key list and is pinned as an ADDITIVE reason key
+    # (§L.2 allows additive keys); the pinner name and depstring are reason
+    # detail (§7, not byte-pinned).
+    gsa_db_reset
+    gsa_provider
+    gsa_db stockpin 9.9-1 '' 'libgreet.so=1-64'
+    g_arch=$(gsa_archive libs-git 'libgreet.so=2-64')
+    gsa_decide force "$g_arch"
+    assert_decisions 'O: §E.2 stock-pinner refusal rows (gap 1)' 1 <<'EOF'
+libs-git refuse abi-soname
+libs-git refuse abi-stock-pinner
+EOF
     assert_no_u O
     stub_sudo "$ws"
     stub_makepkg "$ws"
@@ -754,15 +1003,24 @@ Depends On : libgreet.so'
     decide force "$libs_arch"
     ((FIXTURE_RC == 1)) ||
         fail "P: a bare-link stock pinner must refuse (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
-    p_expected="$(planrow refuse abi-soname "$libs_arch" libs-git libgreet.so 1-64 2-64)
-$(planrow refuse abi-consumer "$libs_arch" app-git)
-$(planrow refuse abi-stock-pinner "$libs_arch" stockpin2 libgreet.so)"
-    [[ $FIXTURE_OUTPUT == "$p_expected" ]] ||
-        fail "P: wrong rows for the bare-link/split case (want tab-framed plan_row output).
-want:
-$p_expected
-got:
-$FIXTURE_OUTPUT"
+    # §E.2 re-pin (R-5): the bare-link pinner's `abi-stock-pinner` row is the
+    # last (the §7-stripped detail carries which pinner). GAP: the engine ALSO
+    # emits an `abi-stock-pinner` row naming the WORKSPACE output app-git (its
+    # stock_pinners scan has no workspace filter), where fish keeps app-git in
+    # the `abi-consumer` class only and never names it as a stock-side pinner
+    # — pinned as emitted, recorded in the R-5 report.
+    gsa_db_reset
+    gsa_provider
+    gsa_consumer 'libgreet.so=1-64'
+    gsa_db stockpin2 9.9-1 '' 'libgreet.so'
+    g_arch=$(gsa_archive libs-git 'libgreet.so=2-64')
+    gsa_decide force "$g_arch"
+    assert_decisions 'P: §E.2 rows for the bare-link/split case' 1 <<'EOF'
+libs-git refuse abi-soname
+libs-git refuse abi-consumer
+libs-git refuse abi-stock-pinner
+libs-git refuse abi-stock-pinner
+EOF
     assert_no_u P
 )
 checks=$((checks + 2))
@@ -791,8 +1049,20 @@ Depends On : libgreet.so=1-64'
         fail "Q: a pinner in the transaction must be covered (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
     grep -Fq 'refuse' <<<"$FIXTURE_OUTPUT" &&
         fail "Q: no refusal rows expected: $FIXTURE_OUTPUT"
-    grep -Fxq "$(planrow install "$stock_arch")" <<<"$FIXTURE_OUTPUT" ||
-        fail "Q: the pinner's archive must be planned for install: $FIXTURE_OUTPUT"
+    # §E.2 re-pin (R-5): the pinner's row keeps its meaning (`stockpin
+    # install ok` — the pinner rides the transaction, no `abi-stock-pinner`
+    # refusal). GAP: the provider row is pinned as the engine emits it
+    # (`libs-git refuse abi-soname` — see B's note; fish planned `install`).
+    gsa_db_reset
+    gsa_provider
+    gsa_db stockpin 9.9-1 '' 'libgreet.so=1-64'
+    g_arch=$(gsa_archive libs-git 'libgreet.so=2-64')
+    g_stock_arch=$(gsa_archive stockpin 'libstock.so=1-64')
+    gsa_decide force "$g_arch" "$g_stock_arch"
+    assert_decisions 'Q: §E.2 rows for a pinner riding the transaction' 1 <<'EOF'
+libs-git refuse abi-soname
+stockpin install ok
+EOF
     assert_no_u Q
 )
 checks=$((checks + 3))

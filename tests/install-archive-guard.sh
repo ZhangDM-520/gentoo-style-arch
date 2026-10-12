@@ -16,6 +16,7 @@ set -euo pipefail
 # must FAIL, because silence is what hid the bug for so long.
 
 source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/rr-v2.bash"
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-install-guard.XXXXXX")
 trap 'rm -rf -- "$fixture"' EXIT
 
@@ -428,12 +429,184 @@ builder_args=(-i p1)
 # implementation" pin). Exact-output matching doubles as the silence pin: any
 # mid-decision chatter breaks the whole-plan equality.
 
-# planrow FIELD... — the plan-row codec's framing (tab-separated fields, the
-# 2026-10-05 R-F22 grammar): fixture expectations must frame rows exactly as
-# install_plan prints them, spaces inside fields and all.
-planrow() {
-    local IFS=$'\t'
-    printf '%s' "$*"
+# ─── §E.2 decision rows: the R-5 re-pin (docs/gsa-fixture-migration.md §6) ───
+# The tab plan-row codec (planrow) is retired with the tab framing — it has no
+# v2 form. The row MEANINGS re-pin through the §E.2 parser
+# (tests/lib/rr-v2.bash rr2_decisions) as `(pkgbase, decision, reason-key)`
+# triples in plan order — detail after the reason key stripped (§7) — against
+# the NATIVE engine's hidden `--install-decide` seam
+# (docs/gsa-contract.md §D.1: decision rows on stdout, no pacman/sudo/flock/
+# makepkg, rc 0 plan / 1 refusal / 2 bad usage). The fish seam runs below keep
+# pinning the fish-era rc and pacman-free behaviour; the §E.2 assertions pin
+# the gsa rows. The engine is built into the fixture tree (scratch only), the
+# tests/scheduler-intensity.sh template.
+
+cargo build --offline --quiet --target-dir "$fixture/cargo" -p gsa-cli \
+    --manifest-path "$gsa_repo_root/Cargo.toml" ||
+    { printf 'install archive guard fixture: cannot build the gsa binary\n' >&2; exit 1; }
+gsa_bin="$fixture/cargo/debug/gsa"
+[ -x "$gsa_bin" ] ||
+    { printf 'install archive guard fixture: cargo did not produce %s\n' "$gsa_bin" >&2; exit 1; }
+export GSA_TEST_ENGINE=gsa
+export GSA_TEST_GSA_BIN="$gsa_bin"
+
+# gsa-bin: the seam's only subprocess is `pacman-conf DBPath` (the local-DB
+# root it reads natively — never the host's /var/lib/pacman). pacman/sudo are
+# fail-stubs: nothing in a decision-only run may reach them (§D.1).
+mkdir -p "$fixture/gsa-db/local" "$fixture/gsa-bin"
+cat >"$fixture/gsa-bin/pacman-conf" <<EOF
+#!/usr/bin/env bash
+[ "\${1:-}" = DBPath ] && printf '%s\n' "$fixture/gsa-db"
+exit 0
+EOF
+chmod +x "$fixture/gsa-bin/pacman-conf"
+for stub in pacman sudo; do
+    cat >"$fixture/gsa-bin/$stub" <<EOF
+#!/usr/bin/env bash
+printf 'UNEXPECTED $stub in a decision-only run: %s\n' "\$*" >&2
+exit 99
+EOF
+    chmod +x "$fixture/gsa-bin/$stub"
+done
+
+# gsa_db_reset / gsa_db NAME VERSION [PROVIDE [DEP [FILE]]] — the fabricated
+# pacman local-DB entries the gsa seam reads natively (crates/gsa-install
+# localdb.rs: <db-root>/local/<name>-<ver>/{desc,files}; the entry dir's mtime
+# IS the install date). Each site materializes the same installed state its
+# fish scenario declares through GSA_FAKE_QP/GSA_FAKE_QI.
+gsa_db_reset() {
+    rm -rf "$fixture/gsa-db"
+    mkdir -p "$fixture/gsa-db/local"
+}
+gsa_db() {
+    local name=$1 version=$2 provide=${3:-} dep=${4:-} file=${5:-}
+    local dir="$fixture/gsa-db/local/$name-$version"
+    mkdir -p "$dir"
+    {
+        printf '%%NAME%%\n%s\n\n' "$name"
+        printf '%%VERSION%%\n%s\n\n' "$version"
+        printf '%%BASE%%\n%s\n' "$name"
+        if [ -n "$provide" ]; then printf '%%PROVIDES%%\n%s\n' "$provide"; fi
+        if [ -n "$dep" ]; then printf '%%DEPENDS%%\n%s\n' "$dep"; fi
+    } >"$dir/desc"
+    if [ -n "$file" ]; then
+        printf '%%FILES%%\n%s\n' "$file" >"$dir/files"
+    else
+        printf '%%FILES%%\n' >"$dir/files"
+    fi
+    printf '%s\n' "$dir"
+}
+
+# gsa_archive NAME [PROVIDE...] — one real .pkg.tar.zst with a complete
+# .PKGINFO (the seam reads archive metadata natively; the fish seam's empty
+# archive files stay the fish side's inputs). Prints the archive path.
+gsa_archive() {
+    local name=$1
+    shift
+    local stage="$fixture/gsa-stage-$name"
+    rm -rf "$stage"
+    mkdir -p "$stage" "$fixture/gsa-archives"
+    {
+        printf 'pkgname = %s\n' "$name"
+        printf 'pkgbase = %s\n' "$name"
+        printf 'pkgver = 1.0.0\n'
+        printf 'pkgrel = 1\n'
+        printf 'arch = any\n'
+        local line
+        for line in "$@"; do printf 'provides = %s\n' "$line"; done
+    } >"$stage/.PKGINFO"
+    tar --zstd -cf "$fixture/gsa-archives/$name-1.0.0-1-any.pkg.tar.zst" \
+        -C "$stage" .PKGINFO
+    rm -rf -- "$stage"
+    printf '%s\n' "$fixture/gsa-archives/$name-1.0.0-1-any.pkg.tar.zst"
+}
+
+# gsa_decide MODE [ARCHIVE...] — the §E.2 seam over the fabricated state
+# (capture in FIXTURE_OUTPUT/FIXTURE_RC, like run_builder).
+gsa_decide() {
+    local mode=$1
+    shift
+    local PATH="$fixture/gsa-bin:$PATH"
+    run_engine "$fixture" --install-decide "$mode" "$@"
+}
+
+# gsa_empty_plan WS MODE [TARGET...] — the empty install plan at its
+# documented entry (§E.3 `empty-list`): the -U family's decision rows over a
+# workspace with nothing built — checked `-U --dry-run <targets>`, force
+# `-Ua --dry-run`. Dry-run only: the plan is never executed. §D.1's seam
+# grammar takes <archive…> and cannot express an empty plan, so the rows live
+# here (the closest documented behaviour; the seam's own zero-archive
+# contract is §E.5 bad usage).
+gsa_empty_plan() {
+    local ws=$1 mode=$2
+    shift 2
+    local PATH="$fixture/gsa-bin:$PATH"
+    make_install_conf "$fixture/gsa-pacman.conf"
+    if [ "$mode" = force ]; then
+        run_engine "$ws" -Ua --dry-run \
+            --state-dir "$fixture/gsa-state" --config "$fixture/gsa-pacman.conf"
+    else
+        run_engine "$ws" -U --dry-run "$@" \
+            --state-dir "$fixture/gsa-state" --config "$fixture/gsa-pacman.conf"
+    fi
+}
+
+# decision_rows — the §E.2 decision rows of one engine capture: the leading
+# rows only (the seam prints rows alone; a -U plan entry prints its rows
+# before the prose and run-record spans), engine diagnostics dropped.
+decision_rows() {
+    awk '/^--- run record begin ---/ || /^Build run: / { exit } !/^gsa: / && NF { print }'
+}
+
+# assert_decisions LABEL RC — the §E.2 re-pin: $FIXTURE_OUTPUT's normalized
+# (pkgbase, decision, reason-key) rows exactly as given on stdin, in plan
+# order, plus the seam's rc contract (§E.5: 0 = no refuse row / 1 = >=1 refuse
+# row / 2 = bad usage and no rows).
+assert_decisions() {
+    local label=$1 rc=$2 want got
+    want=$(cat)
+    got=$(decision_rows <<<"$FIXTURE_OUTPUT" | rr2_decisions) || {
+        printf '%s: unparsable §E.2 decision rows:\n%s\n' "$label" "$FIXTURE_OUTPUT" >&2
+        exit 1
+    }
+    if [[ $got != "$want" ]]; then
+        printf '%s: wrong §E.2 decision rows (pkgbase decision reason-key, plan order).\nwant:\n%s\ngot:\n%s\noutput: %s\n' \
+            "$label" "$want" "$got" "$FIXTURE_OUTPUT" >&2
+        exit 1
+    fi
+    if [[ $FIXTURE_RC != "$rc" ]]; then
+        printf '%s: seam rc=%s want=%s (§E.5):\n%s\n' "$label" "$FIXTURE_RC" "$rc" "$FIXTURE_OUTPUT" >&2
+        exit 1
+    fi
+    if [[ $rc == 0 ]] && grep -q ' refuse ' <<<"$got"; then
+        printf '%s: an rc 0 plan contains a refuse row (§E.5): %s\n' "$label" "$got" >&2
+        exit 1
+    fi
+    if [[ $rc == 1 ]] && ! grep -q ' refuse ' <<<"$got"; then
+        printf '%s: an rc 1 plan has no refuse row (§E.5): %s\n' "$label" "$got" >&2
+        exit 1
+    fi
+    if [[ $rc == 2 && -n $got ]]; then
+        printf '%s: an rc 2 bad-usage call printed decision rows (§E.5): %s\n' "$label" "$got" >&2
+        exit 1
+    fi
+}
+
+# assert_rows LABEL — the §E.2 rows only, for a plan entry that is not the
+# decision seam (a -U dry-run's rc is the run's "planned" class, §H/§G.1,
+# not the seam's §E.5 mapping).
+assert_rows() {
+    local label=$1 want got
+    want=$(cat)
+    got=$(decision_rows <<<"$FIXTURE_OUTPUT" | rr2_decisions) || {
+        printf '%s: unparsable §E.2 decision rows:\n%s\n' "$label" "$FIXTURE_OUTPUT" >&2
+        exit 1
+    }
+    if [[ $got != "$want" ]]; then
+        printf '%s: wrong §E.2 decision rows (pkgbase decision reason-key, plan order).\nwant:\n%s\ngot:\n%s\noutput: %s\n' \
+            "$label" "$want" "$got" "$FIXTURE_OUTPUT" >&2
+        exit 1
+    fi
 }
 
 decide() { # $1 = dir, $2 = mode, $3 = label, rest = archives; env via decide_env
@@ -466,10 +639,12 @@ decide() { # $1 = dir, $2 = mode, $3 = label, rest = archives; env via decide_en
     fi
 }
 
-decide_assert() { # $1 = label, $2 = want rc, $3 = want full output (one row/line)
-    if [[ "$DECIDE_RC" != "$2" || "$DECIDE_OUT" != "$3" ]]; then
-        printf '%s: seam rc=%s want=%s; plan mismatch.\nwant: %s\ngot:\n%s\n' \
-            "$1" "$DECIDE_RC" "$2" "$3" "$DECIDE_OUT" >&2
+decide_assert() { # $1 = label, $2 = want rc (the FISH seam's — the plan-row
+    # equality retired with the tab codec; row meanings re-pin through
+    # assert_decisions/assert_rows, §6 R-5)
+    if [[ "$DECIDE_RC" != "$2" ]]; then
+        printf '%s: seam rc=%s want=%s.\ngot:\n%s\n' \
+            "$1" "$DECIDE_RC" "$2" "$DECIDE_OUT" >&2
         exit 1
     fi
 }
@@ -493,30 +668,67 @@ mkdir -p "$(dirname "$arch")"
 # → the one positive-evidence skip.
 decide_env=(GSA_FAKE_QP='p1 1.0.0-1' "GSA_FAKE_QI=$(fresh_qi 1.0.0-1)")
 decide "$dir_i" checked 'decide I1' "$arch"
-decide_assert 'decide I1 (checked, fresh install)' 0 "$(planrow skip "$arch" 1.0.0-1)"
+decide_assert 'decide I1 (checked, fresh install)' 0
+# §E.2 re-pin (R-5): the same scenario at the native seam — exact version
+# installed with an install date not older than the archive →
+# `skip already-current` (§E.3; the version detail is not byte-pinned, §7).
+gsa_db_reset
+touch -d '+1 day' "$(gsa_db p1 1.0.0-1)"
+g_arch=$(gsa_archive p1)
+gsa_decide checked "$g_arch"
+assert_decisions 'decide I1 (checked, fresh install)' 0 <<'EOF'
+p1 skip already-current
+EOF
 
 # I2: version mismatch → install (doubt installs).
 decide_env=(GSA_FAKE_QP='p1 1.0.0-1' "GSA_FAKE_QI=$(fresh_qi 0.9.0-1)")
 decide "$dir_i" checked 'decide I2' "$arch"
-decide_assert 'decide I2 (checked, version mismatch)' 0 "$(planrow install "$arch")"
+decide_assert 'decide I2 (checked, version mismatch)' 0
+gsa_db_reset
+touch -d '+1 day' "$(gsa_db p1 0.9.0-1)"
+g_arch=$(gsa_archive p1)
+gsa_decide checked "$g_arch"
+assert_decisions 'decide I2 (checked, version mismatch)' 0 <<'EOF'
+p1 install ok
+EOF
 
 # I3: same version but install date older than the archive (a same-version
 # rebuild) → install.
 decide_env=(GSA_FAKE_QP='p1 1.0.0-1' "GSA_FAKE_QI=$(stale_qi 1.0.0-1)")
 decide "$dir_i" checked 'decide I3' "$arch"
-decide_assert 'decide I3 (checked, stale install date)' 0 "$(planrow install "$arch")"
+decide_assert 'decide I3 (checked, stale install date)' 0
+gsa_db_reset
+touch -d '-1 day' "$(gsa_db p1 1.0.0-1)"
+g_arch=$(gsa_archive p1)
+gsa_decide checked "$g_arch"
+assert_decisions 'decide I3 (checked, stale install date)' 0 <<'EOF'
+p1 install ok
+EOF
 
 # I4: neither query answers (doubt) → install.
 decide_env=()
 decide "$dir_i" checked 'decide I4' "$arch"
-decide_assert 'decide I4 (checked, no query answers)' 0 "$(planrow install "$arch")"
+decide_assert 'decide I4 (checked, no query answers)' 0
+gsa_db_reset
+g_arch=$(gsa_archive p1)
+gsa_decide checked "$g_arch"
+assert_decisions 'decide I4 (checked, no query answers)' 0 <<'EOF'
+p1 install ok
+EOF
 
 # I5: force mode over a perfectly fresh install → install anyway, and the
 # pacman stub is never consulted at all: force bypasses install_skip_reason
 # entirely (-ia shares this path; no second implementation).
 decide_env=(GSA_FAKE_QP='p1 1.0.0-1' "GSA_FAKE_QI=$(fresh_qi 1.0.0-1)")
 decide "$dir_i" force 'decide I5' "$arch"
-decide_assert 'decide I5 (force bypasses the skip check)' 0 "$(planrow install "$arch")"
+decide_assert 'decide I5 (force bypasses the skip check)' 0
+gsa_db_reset
+touch -d '+1 day' "$(gsa_db p1 1.0.0-1)"
+g_arch=$(gsa_archive p1)
+gsa_decide force "$g_arch"
+assert_decisions 'decide I5 (force bypasses the skip check)' 0 <<'EOF'
+p1 install ok
+EOF
 if [[ -s "$dir_i/pacman.log" ]]; then
     printf 'decide I5: force mode consulted the installed database:\n%s\n' \
         "$(cat "$dir_i/pacman.log")" >&2
@@ -526,12 +738,28 @@ fi
 # I6: checked + nothing to install → refusal (the 2026-09-20 silence bug).
 decide_env=()
 decide "$dir_i" checked 'decide I6'
-decide_assert 'decide I6 (checked, empty list)' 1 "$(planrow refuse empty-list)"
+decide_assert 'decide I6 (checked, empty list)' 1
+# §E.2 re-pin (R-5): the empty-list row keeps its meaning 1:1 (§E.3
+# `refuse empty-list`) at the -U family's decision rows. §D.1's seam grammar
+# takes <archive…>, so a zero-archive list is bad usage at the seam itself
+# (§E.5 rc 2, no rows) — the closest documented behaviour gap; recorded.
+gsa_decide checked
+assert_decisions 'decide I6: the seam refuses a zero-archive argument list' 2 </dev/null
+gsa_empty_plan "$dir_i" checked p1
+assert_rows 'decide I6 (checked, empty list)' <<'EOF'
+- refuse empty-list
+EOF
 
 # I7: force + nothing to install → a no-op plan, not a refusal (-ia on a
 # workspace with nothing built is a no-op success).
 decide "$dir_i" force 'decide I7'
-decide_assert 'decide I7 (force, empty list)' 0 "$(planrow noop empty-list)"
+decide_assert 'decide I7 (force, empty list)' 0
+gsa_decide force
+assert_decisions 'decide I7: the seam refuses a zero-archive argument list' 2 </dev/null
+gsa_empty_plan "$dir_i" force
+assert_rows 'decide I7 (force, empty list)' <<'EOF'
+- noop empty-list
+EOF
 
 # ─── Split-output set completeness at install discovery (R-F2) ───────────────
 # Installing a SUBSET of a split recipe's outputs is a silent wrong claim: the
@@ -642,18 +870,38 @@ fi
     touch -d '@1700000000.5' "$arch_f"
     decide_env=(GSA_FAKE_QP='p1 1.0.0-1' "GSA_FAKE_QI=$(qi_at 1.0.0-1 1700000000)")
     decide "$dir_f37" checked 'decide F37-same-second' "$arch_f"
-    decide_assert 'F37: ns-newer archive inside the install second must install' 0 "$(planrow install "$arch_f")"
+    decide_assert 'F37: ns-newer archive inside the install second must install' 0
+    # §E.2 re-pin (R-5): the same nanosecond compare at the native seam (the
+    # local-DB entry dir's mtime IS the install date).
+    gsa_db_reset
+    touch -d '@1700000000' "$(gsa_db p1 1.0.0-1)"
+    g_arch_f=$(gsa_archive p1)
+    touch -d '@1700000000.5' "$g_arch_f"
+    gsa_decide checked "$g_arch_f"
+    assert_decisions 'F37: ns-newer archive inside the install second must install' 0 <<'EOF'
+p1 install ok
+EOF
 
     # Archive exactly at the install instant → the one equality that skips.
     touch -d '@1700000000' "$arch_f"
     decide "$dir_f37" checked 'decide F37-exact' "$arch_f"
-    decide_assert 'F37: an archive at the install instant still skips' 0 "$(planrow skip "$arch_f" 1.0.0-1)"
+    decide_assert 'F37: an archive at the install instant still skips' 0
+    touch -d '@1700000000' "$g_arch_f"
+    gsa_decide checked "$g_arch_f"
+    assert_decisions 'F37: an archive at the install instant still skips' 0 <<'EOF'
+p1 skip already-current
+EOF
 
     # Archive a second earlier (ns before the install) → still skips.
     touch -d '@1699999999.5' "$arch_f"
     decide_env=(GSA_FAKE_QP='p1 1.0.0-1' "GSA_FAKE_QI=$(qi_at 1.0.0-1 1700000000)")
     decide "$dir_f37" checked 'decide F37-older' "$arch_f"
-    decide_assert 'F37: an older archive with a fresher install still skips' 0 "$(planrow skip "$arch_f" 1.0.0-1)"
+    decide_assert 'F37: an older archive with a fresher install still skips' 0
+    touch -d '@1699999999.5' "$g_arch_f"
+    gsa_decide checked "$g_arch_f"
+    assert_decisions 'F37: an older archive with a fresher install still skips' 0 <<'EOF'
+p1 skip already-current
+EOF
 )
 
 # ─── R-F22 (decision half): a spaced archive path survives the row codec ────
@@ -665,10 +913,26 @@ fi
     : >"$arch_sp"
     decide_env=()
     decide "$dir_sp" checked 'decide space-install' "$arch_sp"
-    decide_assert 'R-F22: the install row keeps a spaced path intact' 0 "$(planrow install "$arch_sp")"
+    decide_assert 'R-F22: the install row keeps a spaced path intact' 0
+    # §E.2 re-pin (R-5): a §E.2 install row carries no path (reason key `ok`),
+    # so path survival pins as the correct decision computed over the spaced
+    # argv — a split path is a malformed-archive rc 2, not a plan.
+    gsa_db_reset
+    mkdir -p "$dir_sp/gsa archives"
+    g_arch=$(gsa_archive p1)
+    cp "$g_arch" "$dir_sp/gsa archives/p1 with space-1.0.0-1-any.pkg.tar.zst"
+    gsa_decide checked "$dir_sp/gsa archives/p1 with space-1.0.0-1-any.pkg.tar.zst"
+    assert_decisions 'R-F22: the install row keeps a spaced path intact' 0 <<'EOF'
+p1 install ok
+EOF
     decide_env=(GSA_FAKE_QP='p1 1.0.0-1' "GSA_FAKE_QI=$(fresh_qi 1.0.0-1)")
     decide "$dir_sp" checked 'decide space-skip' "$arch_sp"
-    decide_assert 'R-F22: the skip row keeps a spaced path intact' 0 "$(planrow skip "$arch_sp" 1.0.0-1)"
+    decide_assert 'R-F22: the skip row keeps a spaced path intact' 0
+    touch -d '+1 day' "$(gsa_db p1 1.0.0-1)"
+    gsa_decide checked "$dir_sp/gsa archives/p1 with space-1.0.0-1-any.pkg.tar.zst"
+    assert_decisions 'R-F22: the skip row keeps a spaced path intact' 0 <<'EOF'
+p1 skip already-current
+EOF
 )
 
 # ─── R-F25: -ia must not silently install a shrunken set ────────────────────

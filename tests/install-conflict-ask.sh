@@ -25,6 +25,7 @@ set -euo pipefail
 #      absent on a host).
 
 source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/rr-v2.bash"
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-install-conflict-ask.XXXXXX")
 trap 'rm -rf -- "$fixture"' EXIT
 
@@ -98,6 +99,128 @@ u_line() {
     printf '%s\n' "$lines"
 }
 
+# ─── §E.2 decision rows: the R-5 re-pin (docs/gsa-fixture-migration.md §6) ───
+# The tab plan-row codec has no v2 form: the row MEANINGS re-pin through the
+# §E.2 parser (tests/lib/rr-v2.bash rr2_decisions) as `(pkgbase, decision,
+# reason-key)` triples in plan order — detail after the reason key stripped
+# (§7) — against the NATIVE engine's hidden `--install-decide` seam
+# (docs/gsa-contract.md §D.1: decision rows on stdout, no pacman/sudo/flock/
+# makepkg, rc 0 plan / 1 refusal / 2 bad usage). The fish seam runs above keep
+# pinning the fish-era rc and pacman-free behaviour; these assertions pin the
+# gsa rows. The engine is built into the fixture tree (scratch only), the
+# tests/scheduler-intensity.sh template.
+
+cargo build --offline --quiet --target-dir "$fixture/cargo" -p gsa-cli \
+    --manifest-path "$gsa_repo_root/Cargo.toml" ||
+    fail "cannot build the gsa binary for the fixture"
+gsa_bin="$fixture/cargo/debug/gsa"
+[ -x "$gsa_bin" ] || fail "cargo did not produce $gsa_bin"
+export GSA_TEST_ENGINE=gsa
+export GSA_TEST_GSA_BIN="$gsa_bin"
+
+# gsa-bin: the seam's only subprocess is `pacman-conf DBPath` (the local-DB
+# root it reads natively — never the host's /var/lib/pacman). pacman/sudo are
+# fail-stubs: nothing in a decision-only run may reach them (§D.1), and a
+# host pacman must stay unreachable by construction.
+mkdir -p "$fixture/gsa-db/local" "$fixture/gsa-bin"
+cat >"$fixture/gsa-bin/pacman-conf" <<EOF
+#!/usr/bin/env bash
+[ "\${1:-}" = DBPath ] && printf '%s\n' "$fixture/gsa-db"
+exit 0
+EOF
+chmod +x "$fixture/gsa-bin/pacman-conf"
+for stub in pacman sudo; do
+    cat >"$fixture/gsa-bin/$stub" <<EOF
+#!/usr/bin/env bash
+printf 'UNEXPECTED $stub in a decision-only run: %s\n' "\$*" >&2
+exit 99
+EOF
+    chmod +x "$fixture/gsa-bin/$stub"
+done
+
+# gsa_decide MODE [ARCHIVE...] — the §E.2 seam over the fixture's fabricated
+# state (capture in FIXTURE_OUTPUT/FIXTURE_RC, like run_builder).
+gsa_decide() {
+    local mode=$1
+    shift
+    local PATH="$fixture/gsa-bin:$PATH"
+    run_engine "$dir_c" --install-decide "$mode" "$@"
+}
+
+# gsa_empty_plan WS MODE [TARGET...] — the empty install plan at its
+# documented entry (§E.3 `empty-list`): the -U family's decision rows over a
+# workspace with nothing built — checked `-U --dry-run <targets>`, force
+# `-Ua --dry-run`. Dry-run only: the plan is never executed. §D.1's seam
+# grammar takes <archive…> and cannot express an empty plan, so the rows live
+# here (the closest documented behaviour; the seam's own zero-archive
+# contract is §E.5 bad usage).
+gsa_empty_plan() {
+    local ws=$1 mode=$2
+    shift 2
+    local PATH="$fixture/gsa-bin:$PATH"
+    make_install_conf "$fixture/gsa-pacman.conf"
+    if [ "$mode" = force ]; then
+        run_engine "$ws" -Ua --dry-run \
+            --state-dir "$fixture/gsa-state" --config "$fixture/gsa-pacman.conf"
+    else
+        run_engine "$ws" -U --dry-run "$@" \
+            --state-dir "$fixture/gsa-state" --config "$fixture/gsa-pacman.conf"
+    fi
+}
+
+# decision_rows — the §E.2 decision rows of one engine capture: the leading
+# rows only (the seam prints rows alone; a -U plan entry prints its rows
+# before the prose and run-record spans), engine diagnostics dropped.
+decision_rows() {
+    awk '/^--- run record begin ---/ || /^Build run: / { exit } !/^gsa: / && NF { print }'
+}
+
+# assert_decisions LABEL RC — the §E.2 re-pin: $FIXTURE_OUTPUT's normalized
+# (pkgbase, decision, reason-key) rows exactly as given on stdin, in plan
+# order, plus the seam's rc contract (§E.5: 0 = no refuse row / 1 = >=1 refuse
+# row / 2 = bad usage and no rows).
+assert_decisions() {
+    local label=$1 rc=$2 want got
+    want=$(cat)
+    got=$(decision_rows <<<"$FIXTURE_OUTPUT" | rr2_decisions) ||
+        fail "$label: unparsable §E.2 decision rows: $FIXTURE_OUTPUT"
+    [[ $got == "$want" ]] ||
+        fail "$label: wrong §E.2 decision rows (pkgbase decision reason-key, plan order).
+want:
+$want
+got:
+$got
+output: $FIXTURE_OUTPUT"
+    [[ $FIXTURE_RC == "$rc" ]] ||
+        fail "$label: seam rc=$FIXTURE_RC, want $rc (§E.5): $FIXTURE_OUTPUT"
+    if [[ $rc == 0 ]] && grep -q ' refuse ' <<<"$got"; then
+        fail "$label: an rc 0 plan contains a refuse row (§E.5): $got"
+    fi
+    if [[ $rc == 1 ]] && ! grep -q ' refuse ' <<<"$got"; then
+        fail "$label: an rc 1 plan has no refuse row (§E.5): $got"
+    fi
+    if [[ $rc == 2 && -n $got ]]; then
+        fail "$label: an rc 2 bad-usage call printed decision rows (§E.5): $got"
+    fi
+}
+
+# assert_rows LABEL — the §E.2 rows only, for a plan entry that is not the
+# decision seam (a -U dry-run's rc is the run's "planned" class, §H/§G.1,
+# not the seam's §E.5 mapping).
+assert_rows() {
+    local label=$1 want got
+    want=$(cat)
+    got=$(decision_rows <<<"$FIXTURE_OUTPUT" | rr2_decisions) ||
+        fail "$label: unparsable §E.2 decision rows: $FIXTURE_OUTPUT"
+    [[ $got == "$want" ]] ||
+        fail "$label: wrong §E.2 decision rows (pkgbase decision reason-key, plan order).
+want:
+$want
+got:
+$got
+output: $FIXTURE_OUTPUT"
+}
+
 # ─── A. the -i transaction carries exactly -U --noconfirm --ask 4 ───────────
 dir_a="$fixture/case-a"
 make_case_workspace "$dir_a"
@@ -138,8 +261,8 @@ build() {
 }'
 
 # C1: checked mode with nothing to install → `refuse empty-list` row, no
-# execution, no pacman. (Rows are tab-framed — the plan_row codec; a fixture
-# expectation must frame them identically or it pins the OLD grammar.)
+# execution, no pacman. (The row MEANING re-pins through the §E.2 parser
+# against the native seam — R-5: the tab codec has no v2 form.)
 : >"$dir_c/pacman.log"
 rm -f "$dir_c/sudo.log"
 DECIDE_RC=0
@@ -148,8 +271,14 @@ DECIDE_OUT=$(env PATH="$dir_c/bin:$PATH" \
     GSA_FAKE_DB_PATH="$dir_c/db" \
     _IGNOREPKG_CONF="$dir_c/pacman.conf" \
     fish "$dir_c/build-all.fish" --install-decide checked 2>"$dir_c/decide.err") || DECIDE_RC=$?
-[[ $DECIDE_RC == 1 && $DECIDE_OUT == $'refuse\tempty-list' ]] ||
-    fail "C1: seam must print 'refuse<TAB>empty-list' and rc 1, got rc=$DECIDE_RC out=$DECIDE_OUT"
+[[ $DECIDE_RC == 1 ]] ||
+    fail "C1: the fish seam must refuse the empty plan with rc 1, got rc=$DECIDE_RC out=$DECIDE_OUT"
+gsa_decide checked
+assert_decisions 'C1: the seam refuses a zero-archive argument list (§E.5)' 2 </dev/null
+gsa_empty_plan "$dir_c" checked p1
+assert_rows 'C1 (checked, empty list)' <<'EOF'
+- refuse empty-list
+EOF
 [[ ! -s "$dir_c/pacman.log" ]] ||
     fail "C1: a refusal row reached the pacman stub: $(cat "$dir_c/pacman.log")"
 printf 'C1: empty-list refusal never reaches pacman OK\n'
@@ -173,9 +302,29 @@ DECIDE_OUT=$(env PATH="$dir_c/bin:$PATH" \
     GSA_FAKE_DB_PATH="$dir_c/db" \
     _IGNOREPKG_CONF="$dir_c/pacman.conf" \
     fish "$dir_c/build-all.fish" --install-decide force "$arch" 2>"$dir_c/decide.err") || DECIDE_RC=$?
-expected=$'refuse\tpgo-hit\t'"$arch"$'\t./usr/bin/p2\nrefuse\tpgo-instrumented\t'"$arch"
-[[ $DECIDE_RC == 1 && $DECIDE_OUT == "$expected" ]] ||
-    fail "C2: seam must print the pgo refusal rows (tab-framed) and rc 1.\nwant: $expected\ngot (rc=$DECIDE_RC): $DECIDE_OUT"
+[[ $DECIDE_RC == 1 ]] ||
+    fail "C2: the fish seam must refuse the pgo payload with rc 1.\ngot (rc=$DECIDE_RC): $DECIDE_OUT"
+# R-5 §E.2 re-pin: the pgo refusal rows' MEANING keeps as
+# (p2, refuse, pgo-hit) + (p2, refuse, pgo-instrumented) in plan order (the
+# detail after pgo-hit — the member path — is not byte-pinned, §7). The gsa
+# seam reads the archive's own .PKGINFO and the recipe's instrumentation
+# declaration natively, so its archive carries the same payload with complete
+# metadata and the same -fprofile-generate PKGBUILD beside it.
+mkdir -p "$fixture/c2-gsa" "$fixture/c2-stage/usr/bin"
+printf 'pkgname = p2\npkgbase = p2\npkgver = 1.0.0\npkgrel = 1\narch = x86_64\n' \
+    >"$fixture/c2-stage/.PKGINFO"
+printf 'code\0/home/someone/build/pgo-fixture/src/A.dir/b.cxx.gcda\0code\n' \
+    >"$fixture/c2-stage/usr/bin/p2"
+tar --zstd -cf "$fixture/c2-gsa/p2-1.0.0-1-any.pkg.tar.zst" \
+    -C "$fixture/c2-stage" .PKGINFO usr
+rm -rf -- "$fixture/c2-stage"
+printf 'pkgname=p2\npkgver=1.0.0\npkgrel=1\narch=(any)\nbuild() {\n  CFLAGS+=" -fprofile-generate"\n}\n' \
+    >"$fixture/c2-gsa/PKGBUILD"
+gsa_decide force "$fixture/c2-gsa/p2-1.0.0-1-any.pkg.tar.zst"
+assert_decisions 'C2: §E.2 pgo refusal rows' 1 <<'EOF'
+p2 refuse pgo-hit
+p2 refuse pgo-instrumented
+EOF
 [[ ! -s "$dir_c/pacman.log" ]] ||
     fail "C2: a pgo refusal row reached the pacman stub: $(cat "$dir_c/pacman.log")"
 printf 'C2: pgo refusal rows pinned OK\n'

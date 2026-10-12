@@ -1,24 +1,43 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# app group + TTY multi-select prompt fixture.
+# app group + TTY multi-select prompt fixture — PARTIAL FLIP: this file
+# drives BOTH engines. Everything the NATIVE engine (`gsa`,
+# docs/gsa-contract.md §B.4/§B.5/§C/§G.1/§H.2) expresses runs through
+# tests/lib/rr-v2.bash's run_engine (sections `gsa 1`-`gsa 7` below); the PTY
+# multi-select prompt sections stay fish-driven and byte-unchanged (the
+# numbered sections 5-12 at the bottom) because the engine has NO app prompt:
+# §C.4 carries the prompt and the `app-cluster` prompt rows as contract, but
+# no prompt/multi-select code exists in crates/gsa-cli (measured 2026-10-12 —
+# `grep -rniE 'read_line|stdin|toggle|multi.?select' crates/gsa-cli/src/`
+# finds none; the only `prompt` hit is a comment saying the engine never
+# prompts). See docs/gsa-fixture-migration.md row `tests/app-group.sh`.
 #
-# Pins (decisions recorded in docs/NOTE.md 2026-09-23):
-#   1. loader demands config/topology.conf (a missing file = error; group
-#      membership rides in each record's groups field, and the roster is the
-#      builder's six names — git, stable, core, misc, app, build-tools)
-#   2. an app group with NO member refuses with a targeted hint (no phantom member)
-#   3. non-TTY -n -g app builds the whole group and says the prompt was
-#      skipped; the group's edges never pull upstream — a local dependency
-#      edge to a non-app workspace package must NOT drag that package into
-#      the run (expansion walks consumers only)
-#   4. -l never prompts (a prompt on a PTY with no input would abort/hang,
-#      so exit 0 with the whole group proves silence)
+# Pins (decisions recorded in docs/NOTE.md 2026-09-23; bracket = the surface
+# that pins each today):
+#   1. loader demands config/topology.conf (a missing file = rc 2 naming it;
+#      a record naming no group is rc 2 naming the record and its line; the
+#      roster is the builder's six names — git, stable, core, misc, app,
+#      build-tools)      [gsa 1]
+#   2. an app group with NO member refuses (rc 2, `selection resolved to no
+#      packages` §C.1) — never a phantom member      [gsa 2]
+#   3. a non-TTY run takes the whole group silently and the group's edges
+#      never pull upstream — a build-order edge to a non-app workspace
+#      package must NOT drag that package into the run (expansion walks
+#      CONSUMERS only, §C.3)      [gsa 3]
+#   4. a listing never prompts (a prompt on a PTY with no input would
+#      abort/hang, so exit 0 with the whole list proves silence) and never
+#      builds (zero makepkg spawns)      [gsa 4]
 #   5. on a PTY: Enter = whole group, numbers = the checked subset (plus its
-#      consumers), q = non-zero abort
-#   6. -g app combined with -g git: the filter touches only the app portion
-#   7. a REAL build prompts too and builds the checked subset plus its
-#      consumers
+#      consumers), q = non-zero abort      [fish 5-7 — engine gap]
+#   6. -g app combined with -g git: the union of both groups' expansions
+#      dedupes into one topological order and its rows are the anchor space
+#      for ranges (§C.3/§C.5)      [gsa 6]; the prompt filtering only the
+#      app portion is fish 8      [engine gap]
+#   7. a REAL build of a subset builds exactly the subset plus its consumers,
+#      and the run record's `order:` says so (§H.2)      [gsa 7]; the
+#      prompt-mediated version (checked subset, recorded selection) is fish
+#      9      [engine gap]
 #   8. app-cluster=<name> members share ONE toggle row labelled
 #      '<name> [member ids]' (a cluster member never renders its own row);
 #      toggling that row checks/clears EVERY member at once, and the
@@ -27,8 +46,46 @@ set -euo pipefail
 #   9. an untagged member's row toggles independently of the cluster row
 #  10. all-unchecked + Enter still builds the whole group, cluster members
 #      included
+#      [8-10: fish 10-12 — engine gap; cluster presentation is prompt-side
+#       only (§C.4), and the engine's listing keeps the members separate]
+#
+# Flip notes:
+#   * argv: `--list`/`-l` -> `gsa -Sl`, `-g app` -> `@app` (§B.4/§B.9/§C.2),
+#     `-n` -> `gsa -B --dry-run`. DEVIATION from the inventory row's
+#     `gsa -S @app --dry-run`: the scenario is build-only (§B.5 — the fish
+#     `-n` built and installed nothing), and `gsa -S … --dry-run` plans
+#     `build-install` rows (install semantics this fixture never pins;
+#     measured 2026-10-12: `gsa -S @app --dry-run` renders
+#     `appN build-install ok` and transacts nothing itself).
+#   * expectations are DERIVED (docs/MEMORY.md rule 25(j)): membership is a
+#     transitive-consumer closure computed from `gsa -Qt` rows (§B.3 — the
+#     only topology channel, never config/), anchors come from the `gsa -Sl`
+#     output itself, and recorded selections from the run record — never
+#     pinned counts.
+#   * prose: byte-pinned diagnostics retire to meaning, except the loader
+#     roster pin (the inventory's KEEP cell covers old :143-157 and gsa
+#     prints the same six-name list — measured). The `prompt skipped` and
+#     `the app list is empty` sentences are fish rendering; their meanings
+#     (a silent whole-group selection; a refusal aimed at an empty app list)
+#     re-pin structurally.
+#   * rr-format1: the ≈16 `rr_scalar`/`rr_row` sites (old :293-302, :349,
+#     :366) all sit in kept-fish prompt scenarios (prompt-recorded
+#     selections — engine gap) and stay `format: 1` until the prompt lands;
+#     the same record semantics re-pin on the engine as `format: 2` through
+#     rr2_* in `gsa 7`.
+#   * dry-run records render `lanes: -`, which tests/lib/rr-v2.bash's rr2_body
+#     rejects (strict integer rule, §8 G12 of the migration doc); dry-run
+#     scalars are read through the local rr_dry_scalar extractor
+#     (tests/project.sh's pattern). Real-run records parse through rr2_*. Do
+#     not weaken rr-v2.bash.
+#   * kept-fish sections 5/6 cross-check their prompt anchors against the
+#     scenario-4 listing file ($fixture/o4), which the flip now produces with
+#     `gsa -Sl @app` — the row shape (`<index>. <id>`) is shared and both
+#     engines agree on this topology's app order (measured), so the kept
+#     assertions are byte-unchanged.
 
 source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/rr-v2.bash"
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-app-fixture.XXXXXX")
 trap 'rm -rf -- "$fixture"' EXIT
 
@@ -39,6 +96,16 @@ fail() {
     fi
     exit 1
 }
+
+# The engine under test: built into the fixture tree (scratch only). The fish
+# half below still runs build-all.fish from the same workspace verbatim.
+cargo build --offline --quiet --target-dir "$fixture/cargo" -p gsa-cli \
+    --manifest-path "$gsa_repo_root/Cargo.toml" \
+    || fail "cannot build the gsa binary for the fixture"
+gsa_bin="$fixture/cargo/debug/gsa"
+[ -x "$gsa_bin" ] || fail "cargo did not produce $gsa_bin"
+export GSA_TEST_ENGINE=gsa
+export GSA_TEST_GSA_BIN="$gsa_bin"
 
 # ── Synthetic workspace: five fake packages, one topology record each ───────
 make_workspace "$fixture" auto auto xhigh
@@ -61,8 +128,15 @@ set_topology_record "$fixture" app3 app 'app2'
 
 cat >"$fixture/bin/makepkg" <<'EOF'
 #!/usr/bin/env bash
+id=$(basename "$PWD")
 printf 'fake makepkg %s\n' "$PWD"
+# SPAWN/END log: which packages a run actually built. This is the gsa half's
+# built/unbuilt channel — its ABSENCE is the "a listing never builds" pin,
+# and `gsa 7` falsifies the channel by requiring spawns for built packages.
+[ -n "${GSA_FAKE_SPAWN_LOG:-}" ] && printf 'SPAWN %s\n' "$id" >>"$GSA_FAKE_SPAWN_LOG"
 sleep "${GSA_FAKE_BUILD_SECONDS:-0.05}"
+[ -n "${GSA_FAKE_SPAWN_LOG:-}" ] && printf 'END %s\n' "$id" >>"$GSA_FAKE_SPAWN_LOG"
+: >"$PWD/$id-1-1-any.pkg.tar.zst"
 EOF
 chmod +x "$fixture/bin/makepkg"
 
@@ -138,75 +212,366 @@ listed_pairs() {
         | grep -E '^ +[0-9]+\. ' | awk '{sub(/\.$/, "", $1); print $1, $2}' | tr -d '\r'
 }
 
-# ── 1. Loader: a missing topology file is an error; the roster is six names ─
+# The fish half's whole-group pin (kept): Enter builds exactly these three.
+# The gsa half derives its expectations instead (rule 25(j)) and never uses
+# this constant.
+expected3=$(printf 'app1\napp2\napp3')
+
+# ── gsa-half helpers: structural readers and derivations ────────────────────
+
+# listing_rows / listing_pairs — the `gsa -Sl` index rows of a capture, as
+# bare names, or as 'anchor name' pairs (CR-stripped for PTY captures). The
+# indices ARE the anchor semantics (§C.3: ranges address the listing's rows),
+# so the row rendering is data here; no heading or footer wording is matched
+# (tests/scheduler-dispatch-order.sh's listing_rows approach).
+listing_rows() {
+    awk '{ sub(/\r$/, "") } /^ *[0-9]+\.[ ]/ { print $2 }' "$@"
+}
+
+listing_pairs() {
+    awk '{ sub(/\r$/, "") }
+         /^ *[0-9]+\.[ ]/ { sub(/^ */, ""); sub(/\.$/, "", $1); print $1, $2 }' "$@"
+}
+
+# qt_ids / group_members — the `gsa -Qt` topology channel (`id|path|groups|
+# edges|tags`, §B.3): the only topology reader. Every membership and
+# expansion expectation below closes over these rows, never over config/.
+qt_ids() {
+    awk -F'|' '{ print $1 }' "$1"
+}
+
+group_members() { # QT-FILE GROUP — ids whose record lists GROUP, sorted
+    awk -F'|' -v g="$2" \
+        '{ n = split($3, gs, ","); for (i = 1; i <= n; i++) if (gs[i] == g) print $1 }' "$1" | sort
+}
+
+# expanded_set QT-FILE SEEDS-FILE — the seeds plus their transitive
+# CONSUMERS (§C.3: a record listing B in `edges` consumes B), sorted: the set
+# a selection must resolve to. Prerequisites are never expanded — a seed's
+# upstream is in the set only if something else seeds or consumes it.
+expanded_set() {
+    awk -F'|' '
+        NR == FNR { seed[$1] = 1; next }
+        {
+            n = split($4, es, ",")
+            for (i = 1; i <= n; i++) if (es[i] != "") cons[es[i]] = cons[es[i]] " " $1
+        }
+        END {
+            for (s in seed) { seen[s] = 1; queue[++q] = s }
+            while (q > 0) {
+                cur = queue[q--]
+                m = split(cons[cur], cs, " ")
+                for (i = 1; i <= m; i++) \
+                    if (cs[i] != "" && !(cs[i] in seen)) { seen[cs[i]] = 1; queue[++q] = cs[i] }
+            }
+            for (k in seen) print k
+        }' "$2" "$1" | sort
+}
+
+# assert_topological QT-FILE ORDER-LINE — every build-order edge's
+# prerequisite precedes its consumer in ORDER (§C.5: one order everywhere).
+assert_topological() {
+    awk -F'|' -v order="$2" '
+        BEGIN { n = split(order, ids, " "); for (i = 1; i <= n; i++) pos[ids[i]] = i }
+        {
+            m = split($4, es, ",")
+            for (i = 1; i <= m; i++) \
+                if (es[i] != "" && pos[$1] && pos[es[i]] && !(pos[es[i]] < pos[$1])) {
+                    printf("order %s is not topological: %s must precede %s\n", order, es[i], $1) > "/dev/stderr"
+                    bad = 1
+                }
+        }
+        END { exit bad }' "$1" || fail "the reported order violates the fixture's build-order edges"
+}
+
+# sorted_ids IDS — the space-separated id list as sorted lines (set compares).
+sorted_ids() {
+    printf '%s\n' $1 | sort
+}
+
+# rr_dry_scalar KEY — one scalar of a `--dry-run` run record, read from
+# $FIXTURE_OUTPUT. rr2_body rejects that record shape (it renders `lanes: -`
+# and the parser's integer rule is strict — tests/project.sh's recorded
+# deviation, and rr-v2.bash is NOT weakened), so dry-run scalars go through
+# this extractor; real-run records parse through rr2_* unchanged.
+rr_dry_scalar() {
+    printf '%s\n' "$FIXTURE_OUTPUT" | awk -v key="$1" '
+        /^--- run record begin ---$/ { inb = 1; next }
+        /^--- plan ---$/ { exit }
+        inb {
+            p = index($0, ":")
+            if (p && substr($0, 1, p - 1) == key) {
+                v = substr($0, p + 1); sub(/^ /, "", v); print v; found = 1; exit
+            }
+        }
+        END {
+            if (!found) {
+                printf("rr_dry_scalar: no %s scalar in the dry-run record\n", key) > "/dev/stderr"
+                exit 1
+            }
+        }'
+}
+
+# run_pty_gsa <input printf fmt> <outfile> [args...] — the gsa twin of
+# run_pty: the engine under a PTY with scripted stdin (proves a listing never
+# reads its input; nothing here asserts colours or rendering).
+run_pty_gsa() {
+    local input="$1" out="$2"
+    shift 2
+    set +e
+    printf '%b' "$input" | \
+        timeout 60 env TERM=dumb \
+            script -qec "cd '$fixture' && PATH=\"$fixture/bin:\$PATH\" '$gsa_bin' $*" /dev/null >"$out" 2>&1
+    RC=$?
+    set -e
+    return "$RC"
+}
+
+# ── gsa 1. Loader: a missing topology file is an error; the roster is six
+# names (flipped: `--list` -> `gsa -Sl` as the loader driver; rc 2 §G.1) ────
 mv "$fixture/config/topology.conf" "$fixture/topology.conf.bak"
-if run_quiet "$fixture/o1" --list; then
+run_engine "$fixture" -Sl
+printf '%s\n' "$FIXTURE_OUTPUT" >"$fixture/o1"
+if [ "$FIXTURE_RC" = 0 ]; then
     fail "loader accepted a workspace without config/topology.conf" "$fixture/o1"
 fi
-grep -q 'topology not found:' "$fixture/o1" \
+[ "$FIXTURE_RC" = 2 ] \
+    || fail "missing-config error is not a usage error (rc=$FIXTURE_RC, want 2 §G.1)" "$fixture/o1"
+grep -q 'config/topology.conf' "$fixture/o1" \
     || fail "loader error does not name the missing config/topology.conf" "$fixture/o1"
 mv "$fixture/topology.conf.bak" "$fixture/config/topology.conf"
 # The loader's roster wording is its own closed six-name list — pin the text
-# it prints, not just "some roster".
+# it prints, not just "some roster" (KEEP cell :143-157; gsa prints the same
+# list — measured 2026-10-12).
 set_topology_record "$fixture" gitp1 '' ''
-if run_quiet "$fixture/o1g" --list; then
+run_engine "$fixture" -Sl
+printf '%s\n' "$FIXTURE_OUTPUT" >"$fixture/o1g"
+if [ "$FIXTURE_RC" = 0 ]; then
     fail "loader accepted a record naming no group" "$fixture/o1g"
 fi
+[ "$FIXTURE_RC" = 2 ] \
+    || fail "no-group refusal is not a usage error (rc=$FIXTURE_RC, want 2 §G.1)" "$fixture/o1g"
+grep -q 'gitp1' "$fixture/o1g" \
+    || fail "loader error does not name the offending record gitp1" "$fixture/o1g"
+# §G.1/§C.5 name the offender WITH its line — derived from the file itself.
+want_line=$(grep -n '^gitp1|' "$fixture/config/topology.conf" | cut -d: -f1)
+grep -q "topology.conf:$want_line:" "$fixture/o1g" \
+    || fail "loader error does not name the offending record's line $want_line" "$fixture/o1g"
 grep -qF 'names no group (allowed: git,stable,core,misc,app,build-tools)' "$fixture/o1g" \
     || fail "loader roster wording is not the six-name list" "$fixture/o1g"
 set_topology_record "$fixture" gitp1 git ''
 
-# ── 2. Empty app membership: refuse with a hint, never a phantom member ─────
+# ── gsa 2. Empty app membership: refuse with a usage error naming the
+# no-selection reason (§C.1), never a phantom member (flipped: `-n -g app`
+# -> `gsa -B --dry-run @app`) ───────────────────────────────────────────────
 # App members keep their category-group membership in the real tree, so mirror
 # that here: app1..app3 records move to the git group while no record carries
 # app in its groups field.
 set_topology_record "$fixture" app1 git ''
 set_topology_record "$fixture" app2 git 'extdep'
 set_topology_record "$fixture" app3 git 'app2'
-if run_quiet "$fixture/o2" -n -g app; then
-    fail "-n -g app succeeded with no app-group member" "$fixture/o2"
+run_engine "$fixture" -B --dry-run @app
+printf '%s\n' "$FIXTURE_OUTPUT" >"$fixture/o2"
+if [ "$FIXTURE_RC" = 0 ]; then
+    fail "-B --dry-run @app succeeded with no app-group member" "$fixture/o2"
 fi
-grep -q 'the app list is empty' "$fixture/o2" \
-    || fail "empty app membership lacks the populate hint" "$fixture/o2"
+[ "$FIXTURE_RC" = 2 ] \
+    || fail "empty app membership is not a usage error (rc=$FIXTURE_RC, want 2 §G.1)" "$fixture/o2"
+# The fish-era 'the app list is empty' populate hint is fish rendering
+# (retired); the kept meaning is a refusal AIMED at the empty selection — the
+# §C.1 reason key is named.
 grep -q 'selection resolved to no packages' "$fixture/o2" \
     || fail "empty app membership lacks the no-selection error" "$fixture/o2"
+# No phantom member: the refusal carries neither listing rows nor a record.
+grep -qE '^ *[0-9]+\. ' "$fixture/o2" \
+    && fail "empty app membership invented a member row" "$fixture/o2"
+grep -q -- '--- run record begin ---' "$fixture/o2" \
+    && fail "empty app membership produced a run record" "$fixture/o2"
+# The listing surface refuses the same way (a selection that resolves to zero
+# packages is never a successful no-op).
+run_engine "$fixture" -Sl @app
+printf '%s\n' "$FIXTURE_OUTPUT" >"$fixture/o2l"
+[ "$FIXTURE_RC" = 2 ] \
+    || fail "-Sl @app with no member is not a usage error (rc=$FIXTURE_RC)" "$fixture/o2l"
+grep -q 'selection resolved to no packages' "$fixture/o2l" \
+    || fail "the listing refusal lacks the no-selection error" "$fixture/o2l"
 set_topology_record "$fixture" app1 app ''
 set_topology_record "$fixture" app2 app 'extdep'
 set_topology_record "$fixture" app3 app 'app2'
 
-# ── 3. Non-TTY: whole group, prompt skipped, upstream never pulled ─────────
-run_quiet "$fixture/o3" -n -g app \
-    || fail "non-TTY -n -g app failed" "$fixture/o3"
-grep -q 'prompt skipped' "$fixture/o3" \
-    || fail "non-TTY -g app did not report the skipped prompt" "$fixture/o3"
-grep -q 'choose what to build' "$fixture/o3" \
-    && fail "prompt rendered without a TTY" "$fixture/o3"
-seq3=$(order_seq "$fixture/o3")
-expected3=$(printf 'app1\napp2\napp3')
-[ "$seq3" = "$expected3" ] \
-    || fail "non-TTY order wrong: got [$(echo "$seq3" | tr '\n' ' ')], want [app1 app2 app3]" "$fixture/o3"
-grep -q 'extdep' <(order_seq "$fixture/o3") \
-    && fail "app group pulled its non-app dependency extdep into the run" "$fixture/o3"
-# The count is DATA (the listed rows); the "Total: N packages" sentence is
-# rendering, pinned once in tests/dashboard.sh's prose section.
-[ "$(order_seq "$fixture/o3" | grep -c .)" = 3 ] \
-    || fail "non-TTY -n -g app did not preview exactly 3 packages" "$fixture/o3"
+# ── gsa 3. Non-TTY: whole group silently, upstream never pulled ────────────
+# (flipped: `-n -g app` -> `gsa -B --dry-run @app`; build-only §B.5 — see the
+# header's deviation note). The `prompt skipped` sentence is fish rendering
+# (retired): the engine has no prompt at all, so the kept meaning is a
+# non-TTY run taking the WHOLE group with no interactive selection — pinned
+# by the selection itself below.
+#
+# The topology channel snapshot (§B.3) every derivation below closes over.
+run_engine "$fixture" -Qt
+[ "$FIXTURE_RC" = 0 ] || fail "gsa -Qt failed (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
+printf '%s\n' "$FIXTURE_OUTPUT" >"$fixture/topology-channel.txt"
+qt="$fixture/topology-channel.txt"
+group_members "$qt" app >"$fixture/app.seeds"
+expanded_set "$qt" "$fixture/app.seeds" >"$fixture/app.expected"
 
-# ── 4. -l: whole group, no prompt (non-TTY and on a PTY) ────────────────────
-run_quiet "$fixture/o4" -l -g app \
-    || fail "-l -g app failed" "$fixture/o4"
-# The listed rows carry the membership (the header count is rendering).
-[ "$(listed_seq "$fixture/o4")" = "$expected3" ] \
-    || fail "-l -g app did not list all three members: got [$(listed_seq "$fixture/o4" | tr '\n' ' ')]" "$fixture/o4"
-grep -q 'choose what to build' "$fixture/o4" \
-    && fail "-l prompted on a pipe" "$fixture/o4"
-# On a PTY with no input available: a prompting -l would block (timeout) or
-# abort on EOF — exit 0 with the full list proves it never reads.
-if ! run_pty '' "$fixture/o4p" "$fixture/state-l" -l -g app; then
-    fail "-l -g app on a PTY exited non-zero (it must never prompt)" "$fixture/o4p"
+run_engine "$fixture" -B --dry-run @app
+printf '%s\n' "$FIXTURE_OUTPUT" >"$fixture/o3"
+[ "$FIXTURE_RC" = 0 ] || fail "non-TTY -B --dry-run @app failed" "$fixture/o3"
+order=$(rr_dry_scalar order)
+[ "$(sorted_ids "$order")" = "$(cat "$fixture/app.expected")" ] \
+    || fail "non-TTY selection [$(sorted_ids "$order" | tr '\n' ' ')] != @app members + consumers [$(tr '\n' ' ' <"$fixture/app.expected")] (derived from gsa -Qt)" "$fixture/o3"
+assert_topological "$qt" "$order"
+[ "$(rr_dry_scalar selection-source)" = 'sets=@app leaf=no range=-' ] \
+    || fail "the non-TTY run did not record expanded selection: $(rr_dry_scalar selection-source)" "$fixture/o3"
+# The count is DATA (the record's rows — the derived set above), never a
+# pinned count; and that set excludes extdep, the non-app workspace package
+# app2 consumes. Expansion walks CONSUMERS only (§C.3): a build-order edge to
+# a non-app package must never drag it in.
+printf '%s\n' $order | grep -qx extdep \
+    && fail "app group pulled its non-app prerequisite extdep into the run" "$fixture/o3"
+printf '%s\n' $order | grep -qx gitp1 \
+    && fail "app group pulled the unrelated git member gitp1 into the run" "$fixture/o3"
+
+# ── gsa 4. -Sl: whole group, no prompt, no build (flipped: `-l -g app` ->
+# `gsa -Sl @app`) ───────────────────────────────────────────────────────────
+# The listed rows carry the membership (the header count is rendering): the
+# rows are the data channel and must equal the derived selection. This is the
+# listing file the kept fish sections 5/6 cross-check their prompt anchors
+# against (header flip note).
+GSA_FAKE_SPAWN_LOG="$fixture/o4.spawn" run_engine "$fixture" -Sl @app
+printf '%s\n' "$FIXTURE_OUTPUT" >"$fixture/o4"
+[ "$FIXTURE_RC" = 0 ] || fail "gsa -Sl @app failed (rc=$FIXTURE_RC)" "$fixture/o4"
+rows=$(listing_rows <"$fixture/o4")
+[ "$(sorted_ids "$rows")" = "$(cat "$fixture/app.expected")" ] \
+    || fail "-Sl @app rows [$(sorted_ids "$rows" | tr '\n' ' ')] != derived selection [$(tr '\n' ' ' <"$fixture/app.expected")]" "$fixture/o4"
+assert_topological "$qt" "$(printf '%s\n' $rows | paste -sd' ' -)"
+# A listing performs NO build: zero makepkg spawns (the spawn channel is
+# falsified in gsa 7, which requires a spawn for every built package) and no
+# run record — a listing never starts a run.
+[ ! -s "$fixture/o4.spawn" ] \
+    || fail "the listing built packages (makepkg spawned):" "$fixture/o4.spawn"
+grep -q -- '--- run record begin ---' "$fixture/o4" \
+    && fail "the listing emitted a run record (it must never start a run)" "$fixture/o4"
+# Never prompts — on a PTY with no input available a prompting listing would
+# block (timeout) or abort on EOF; exit 0 with the whole list proves it never
+# reads. The prompt MEANING kept here: gsa's listing path cannot prompt — the
+# engine has no prompt code at all (header, engine-gap note), and §C.4 says
+# listings take the whole group silently even on a TTY.
+if ! run_pty_gsa '' "$fixture/o4p" -Sl @app; then
+    fail "gsa -Sl @app on a PTY exited non-zero (it must never prompt)" "$fixture/o4p"
 fi
-[ "$(listed_seq "$fixture/o4p")" = "$expected3" ] \
-    || fail "-l -g app on a PTY did not list all three members: got [$(listed_seq "$fixture/o4p" | tr '\n' ' ')]" "$fixture/o4p"
+[ "$(listing_rows <"$fixture/o4p")" = "$rows" ] \
+    || fail "gsa -Sl @app on a PTY did not list the whole selection: got [$(listing_rows <"$fixture/o4p" | tr '\n' ' ')]" "$fixture/o4p"
+
+# ── gsa 5. Anchor positions: range indices address the UNFILTERED selection
+# (§C.3) — derived from the `gsa -Sl` output itself ─────────────────────────
+# The full listing's 'anchor name' pairs are the unfiltered anchor map; a
+# ranged listing keeps the anchors it addresses. (The prompt-filtered GAP
+# half — anchors not renumbering after the prompt drops rows — is fish 6/8,
+# engine gap.)
+run_engine "$fixture" -Sl @app 2..3
+printf '%s\n' "$FIXTURE_OUTPUT" >"$fixture/o5r"
+[ "$FIXTURE_RC" = 0 ] || fail "gsa -Sl @app 2..3 failed (rc=$FIXTURE_RC)" "$fixture/o5r"
+want_pairs=$(listing_pairs <"$fixture/o4" | sed -n '2,3p')
+got_pairs=$(listing_pairs <"$fixture/o5r")
+[ "$got_pairs" = "$want_pairs" ] \
+    || fail "range 2..3 anchors wrong: got [$(echo "$got_pairs" | tr '\n' '|')], want [$(echo "$want_pairs" | tr '\n' '|')] (unfiltered positions from gsa -Sl @app)" "$fixture/o5r"
+# Open-ended ranges keep the same anchors to the end of the selection.
+run_engine "$fixture" -Sl @app 2..
+printf '%s\n' "$FIXTURE_OUTPUT" >"$fixture/o5b"
+[ "$FIXTURE_RC" = 0 ] || fail "gsa -Sl @app 2.. failed (rc=$FIXTURE_RC)" "$fixture/o5b"
+want_tail=$(listing_pairs <"$fixture/o4" | sed -n '2,$p')
+[ "$(listing_pairs <"$fixture/o5b")" = "$want_tail" ] \
+    || fail "open-ended 2.. rows [$(listing_pairs <"$fixture/o5b" | tr '\n' '|')] but the listing from anchor 2 on is [$(echo "$want_tail" | tr '\n' '|')]" "$fixture/o5b"
+# The dry run of the same range plans exactly those rows — one order
+# everywhere (§C.5).
+run_engine "$fixture" -B --dry-run @app 2..3
+printf '%s\n' "$FIXTURE_OUTPUT" >"$fixture/o5d"
+[ "$FIXTURE_RC" = 0 ] || fail "gsa -B --dry-run @app 2..3 failed (rc=$FIXTURE_RC)" "$fixture/o5d"
+[ "$(rr_dry_scalar order)" = "$(listing_rows <"$fixture/o5r" | paste -sd' ' -)" ] \
+    || fail "ranged dry-run order [$(rr_dry_scalar order)] but the ranged listing is [$(listing_rows <"$fixture/o5r" | paste -sd' ' -)]" "$fixture/o5d"
+[ "$(rr_dry_scalar selection-source)" = 'sets=@app leaf=no range=2..3' ] \
+    || fail "the ranged dry run did not record its selection source: $(rr_dry_scalar selection-source)" "$fixture/o5d"
+
+# ── gsa 6. Mixed groups: @app combined with @git is the deduplicated union of
+# both expansions in one topological order (§C.3/§C.5) ──────────────────────
+# (flipped: `-g app -g git` -> `@app @git`). The prompt half — the filter
+# touching ONLY the app portion — is fish 8 (engine gap).
+{ group_members "$qt" app; group_members "$qt" git; } >"$fixture/o6.seeds"
+expanded_set "$qt" "$fixture/o6.seeds" >"$fixture/o6.expected"
+run_engine "$fixture" -Sl @app @git
+printf '%s\n' "$FIXTURE_OUTPUT" >"$fixture/o6"
+[ "$FIXTURE_RC" = 0 ] || fail "gsa -Sl @app @git failed (rc=$FIXTURE_RC)" "$fixture/o6"
+rows6=$(listing_rows <"$fixture/o6")
+[ "$(sorted_ids "$rows6")" = "$(cat "$fixture/o6.expected")" ] \
+    || fail "combined selection [$(sorted_ids "$rows6" | tr '\n' ' ')] != union of both expansions [$(tr '\n' ' ' <"$fixture/o6.expected")]" "$fixture/o6"
+[ -z "$(printf '%s\n' $rows6 | sort | uniq -d)" ] \
+    || fail "the combined selection lists a package twice (it must dedupe)" "$fixture/o6"
+assert_topological "$qt" "$(printf '%s\n' $rows6 | paste -sd' ' -)"
+# The combined listing is the anchor space (kept meaning of old :262-280:
+# ranges address the UNFILTERED combined closure).
+run_engine "$fixture" -Sl @app @git 3..4
+printf '%s\n' "$FIXTURE_OUTPUT" >"$fixture/o6r"
+[ "$FIXTURE_RC" = 0 ] || fail "gsa -Sl @app @git 3..4 failed (rc=$FIXTURE_RC)" "$fixture/o6r"
+[ "$(listing_pairs <"$fixture/o6r")" = "$(listing_pairs <"$fixture/o6" | sed -n '3,4p')" ] \
+    || fail "combined-range anchors wrong: got [$(listing_pairs <"$fixture/o6r" | tr '\n' '|')], want [$(listing_pairs <"$fixture/o6" | sed -n '3,4p' | tr '\n' '|')]" "$fixture/o6r"
+
+# ── gsa 7. Real build: the named subset plus its consumers, recorded ───────
+# (flipped from fish 9's build half — `subset selected -> builds exactly
+# subset + consumer closure`, old :305-313; the prompt-mediated selection and
+# its format: 1 record pins stay in fish 9 — engine gap. Build-only §B.5.)
+echo app2 >"$fixture/o7.seeds"
+expanded_set "$qt" "$fixture/o7.seeds" >"$fixture/o7.expected"
+GSA_FAKE_SPAWN_LOG="$fixture/o7.spawn" PATH="$fixture/bin:$PATH" \
+    run_engine "$fixture" -B --state-dir "$fixture/state-g7" app2
+printf '%s\n' "$FIXTURE_OUTPUT" >"$fixture/o7"
+[ "$FIXTURE_RC" = 0 ] || fail "gsa -B app2 failed (rc=$FIXTURE_RC)" "$fixture/o7"
+rr2_body <"$fixture/o7" >/dev/null \
+    || fail "the build run emitted no complete format: 2 record:" "$fixture/o7"
+[ "$(rr2_scalar outcome <"$fixture/o7")" = "success" ] \
+    || fail "recorded outcome is not success: $(rr2_scalar outcome <"$fixture/o7")" "$fixture/o7"
+[ "$(rr2_scalar rc <"$fixture/o7")" = "$FIXTURE_RC" ] \
+    || fail "the record's rc scalar disagrees with the process exit code:" "$fixture/o7"
+# Recorded selection = the named subset plus its transitive consumers
+# (§H.2 `order:`), derived from `gsa -Qt` — never a pinned count.
+order7=$(rr2_scalar order <"$fixture/o7")
+[ "$(sorted_ids "$order7")" = "$(cat "$fixture/o7.expected")" ] \
+    || fail "recorded selection [$(sorted_ids "$order7" | tr '\n' ' ')] != app2 + its consumers [$(tr '\n' ' ' <"$fixture/o7.expected")]" "$fixture/o7"
+assert_topological "$qt" "$order7"
+[ "$(rr2_scalar selection-source <"$fixture/o7")" = 'sets=app2 leaf=no range=-' ] \
+    || fail "the build did not record expanded selection: $(rr2_scalar selection-source <"$fixture/o7")" "$fixture/o7"
+# Plan rows are build rows (§B.5 build-only); outcome rows `succeeded 0 … ok`
+# (§H.2/§H.3) for the subset AND the consumers carried along.
+for pkg in $order7; do
+    [ "$(rr2_plan "$pkg" plan <"$fixture/o7")" = "build" ] \
+        || fail "$pkg is not planned as a build (§B.5): $(rr2_plan "$pkg" <"$fixture/o7")" "$fixture/o7"
+    [ "$(rr2_outcome "$pkg" status <"$fixture/o7")" = "succeeded" ] \
+        || fail "$pkg row is not succeeded: $(rr2_outcome "$pkg" <"$fixture/o7")" "$fixture/o7"
+    [ "$(rr2_outcome "$pkg" rc <"$fixture/o7")" = "0" ] \
+        || fail "$pkg row rc is not 0: $(rr2_outcome "$pkg" <"$fixture/o7")" "$fixture/o7"
+    [ "$(rr2_outcome "$pkg" reason <"$fixture/o7")" = "ok" ] \
+        || fail "$pkg row reason is not ok: $(rr2_outcome "$pkg" <"$fixture/o7")" "$fixture/o7"
+    grep -qx "SPAWN $pkg" "$fixture/o7.spawn" \
+        || fail "subset/consumer $pkg was not built (no makepkg spawn)" "$fixture/o7.spawn"
+done
+# Everything else in the workspace — including extdep, app2's UPSTREAM —
+# stays unbuilt (the derived complement of the closure, never a pinned list).
+comm -23 <(qt_ids "$qt" | sort) "$fixture/o7.expected" >"$fixture/o7.unbuilt"
+while read -r pkg; do
+    if grep -q "^SPAWN $pkg$" "$fixture/o7.spawn"; then
+        fail "unselected package $pkg was built" "$fixture/o7.spawn"
+    fi
+done <"$fixture/o7.unbuilt"
+# The continuation's `remaining:` matches the rows-derived set (both empty).
+[ "$(rr2_remaining <"$fixture/o7" | tr '\n' ' ' | sed 's/ $//')" = "$(rr2_continuation remaining <"$fixture/o7")" ] \
+    || fail "continuation remaining disagrees with the rows-derived set:" "$fixture/o7"
+
+# ── fish half — KEPT byte-unchanged: the PTY multi-select prompt ───────────
+# These sections drive `fish build-all.fish` through run_quiet/run_pty because
+# the behaviour they pin lives in the §C.4 prompt, which the engine does not
+# implement yet (header engine-gap note). Their `format: 1` rr_scalar/rr_row
+# pins (old :293-302, :349, :366) come along until the prompt lands. Do not
+# flip these piecemeal: when gsa grows a prompt, re-contract the whole section.
 
 # ── 5. PTY + Enter: menu renders, whole group builds ────────────────────────
 run_pty '\n' "$fixture/o5" "$fixture/state-5" -n -g app \

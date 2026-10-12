@@ -1,420 +1,221 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# One unanchorable recipe must park itself, not strangle the dispatch.
+# tests/anchor-defer.sh — ONE unanchorable recipe defers; its dependent parks
+# on it, unrelated work still builds, and the resume set is exactly the
+# non-succeeded rows. Driven through the NATIVE engine (docs/gsa-contract.md
+# §B.5/§B.8, §F.1, §G.1, §H.2–§H.3, §I.3): synthetic $TMPDIR workspaces and a
+# stub `makepkg`, no package is built, no pacman transaction runs, nothing
+# outside the fixture tree is written. Expectations are DERIVED from the
+# fixture's own build-order edges and the run record (docs/MEMORY.md rule
+# 25(j) / contract §L.3) — never pinned counts, never prose.
 #
-# Before 2026-09-24 the first anchoring refusal exited the lane non-zero, the
-# dispatcher treated that as a failed build, set stop_starting and drained:
-# measured on a full-roster whole-tree run, ONE recipe whose official
-# .SRCINFO published no checksum for a moved source cost the other ~120
-# packages their dispatch (two consecutive runs, "stopped dispatching, drained
-# in-flight lanes"). Anchoring impossibility is not a failed build — it is a
-# recipe that cannot be refreshed right now (no official document, network
-# down, updpkgsums failed). The stance pinned here:
-#
-#   * a-stable (stable, official 404 → cannot anchor) is DEFERRED: named
-#     marker in the summary, its log tail carries the named error AND both
-#     recovery lines ('Refresh them by hand', '--no-sync'), makepkg never
-#     ran for it, and the recipe is not counted as succeeded or failed;
-#   * c-plain, independent of a-stable, still BUILDS — dispatch continues;
-#   * b-dep (a topology edge b-dep → a-stable) is never dispatched: building
-#     it against a package that was never built/installed this run is the
-#     rule-11 hazard -i exists to prevent. It is labelled as waiting on the
-#     deferred recipe, not as a dependency cycle;
-#   * the run exits non-zero (parked work needs the owner), and the resume
-#     command names BOTH unbuilt packages (tests/resume-command.sh pins the
-#     command's flag shape; this fixture pins its honesty about parked work).
-#
-# All collaborators (pacman, curl, updpkgsums, makepkg) are PATH stubs; the
-# run builds nothing real and touches no network.
+# Flip notes (docs/gsa-fixture-migration.md row `tests/anchor-defer.sh`):
+# the fish trigger — a mktemp stub failing the ANCHOR scratch of the version
+# sync, driven through curl/updpkgsums/mktemp stubs — is fish-only machinery
+# and retires. The Phase-2 engine's only deferral path is a makepkg child
+# exiting 99 (crates/gsa-build/src/lane.rs:7-10 documents it as the stand-in
+# for the fetch/anchoring gates that land with gsa-fetch/version-sync), so
+# the deferral is driven by a makepkg stub whose exit 99 is aimed at the
+# deferring package. The inventory row's target `deferred 99
+# anchoring-refused` is NOT producible today: the named refusal surfaces as
+# reason key `source-unfetchable` (§H.3) — a recorded deviation, pinned
+# below. The two fish sync-machinery sections (anchor-scratch failure R-F12,
+# failed recipe restore R-F21) have no gsa-expressible scenario and retire;
+# their "named refusal" meaning re-pins as the reason-key assertion on the
+# deferred row. Prose byte-pins (DEFERRED marker, summary log-tail wording,
+# 'waits on a deferred package', the resume-command rendering) retire as
+# rendering (§L.3): their meanings re-pin from the record. The `blocked`
+# spelling retires for `parked` (§H.3 supersedes it, §6 R-4); `--no-deps`
+# flips to `--leaf` (§B.8) and the fish builder to `gsa -B` via run_engine;
+# fish's non-zero remaps to §G.1's deferral-only 5; the `rr_*` format: 1 pins
+# become `rr2_*` (§H.2). `--allow-broken-rustc` and `--no-sync`-era spellings
+# drop: nothing here has a version-sync provider or a Rust compile.
 
 source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/rr-v2.bash"
+
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-anchor-defer.XXXXXX")
 trap 'rm -rf -- "$fixture"' EXIT
 
 fail() {
-    printf 'anchor defer fixture: %s\n' "$1" >&2
+    printf '%s\n' "$1" >&2
+    if [ -n "${2:-}" ] && [ -f "$2" ]; then
+        sed 's/^/    /' "$2" >&2
+    fi
     exit 1
 }
 
-command -v vercmp >/dev/null || {
-    printf 'vercmp is required (it ships with pacman)\n' >&2
-    exit 1
+# ─── Stub-knob vocabulary (§D.2: declared in the change that adds them) ─────
+rr2_stub_knob GSA_FAKE_DEFER_PACKAGE "anchor-defer makepkg stub: package id whose build exits 99 (deferral)"
+
+# ─── The engine under test: built into the fixture tree (scratch only) ──────
+cargo build --offline --quiet --target-dir "$fixture/cargo" -p gsa-cli \
+    --manifest-path "$gsa_repo_root/Cargo.toml" \
+    || fail "cannot build the gsa binary for the fixture"
+gsa_bin="$fixture/cargo/debug/gsa"
+[ -x "$gsa_bin" ] || fail "cargo did not produce $gsa_bin"
+export GSA_TEST_ENGINE=gsa
+export GSA_TEST_GSA_BIN="$gsa_bin"
+
+# ─── Derivation helpers (inline oracles: the expectations come from the
+# fixture's own edges and the §G.1 rule, never from pinned strings) ──────────
+
+# consumers_closure EDGES-FILE ROOT — the transitive consumer cone of ROOT
+# over the fixture's own build-order edges (`consumer prereq` per line), one
+# id per line. This is how the parked set is derived.
+consumers_closure() {
+    awk -v root="$2" '
+        { edge[++n] = $1; pre[n] = $2 }
+        END {
+            seen[root] = 1; queue[1] = root; q = 1
+            while (q > 0) {
+                cur = queue[q--]
+                for (i = 1; i <= n; i++) {
+                    if (pre[i] == cur && !(edge[i] in seen)) {
+                        seen[edge[i]] = 1; queue[++q] = edge[i]
+                    }
+                }
+            }
+            for (k in seen) if (k != root) print k
+        }' "$1" | sort
 }
 
-dir="$fixture/ws"
-make_workspace "$dir" 1 2 low
-mkdir -p "$dir/packages/stable/a-stable"
+# expected_rc POLICY INTERRUPTED — the run exit code §G.1 derives from the
+# outcome rows on stdin (usage/refusal are pre-run classes and never appear
+# here). The rows are the record's; this function only applies the contract.
+expected_rc() {
+    awk -v policy="$1" -v interrupted="$2" '
+        { counts[$2]++ }
+        END {
+            if (interrupted == 1) { print 130; exit }
+            if (counts["failed"] > 0) { print (policy == "fail-fast") ? 1 : 4; exit }
+            if (counts["deferred"] > 0 || counts["parked"] > 0) { print 5; exit }
+            print 0
+        }'
+}
 
-# a-stable: a stable recipe whose moved source gets NO official document (404)
-# → anchor_sums_from_official refuses with rc 3, which the lane reports as the
-# defer code. $pkgver must be literal: the builder expands source=() by
-# sourcing the recipe. Its recipe path (packages/stable/) is not what
-# add_package records, so its recipe and topology record stay inline.
-{
-    printf 'pkgname=a-stable\n'
-    printf 'pkgver=1.0.0\n'
-    printf 'pkgrel=1\n'
-    printf 'arch=(any)\n'
-    printf 'source=("https://example.invalid/a-$pkgver.tar.gz")\n'
-    printf "sha256sums=('0000000000000000000000000000000000000000000000000000000000000000')\n"
-} >"$dir/packages/stable/a-stable/PKGBUILD"
-printf 'a-stable|packages/stable/a-stable|stable|\n' >>"$dir/config/topology.conf"
+# ─── The scenario: a-stable defers (lane rc 99), b-dep (edge on a-stable)
+# parks on it and is never dispatched, c-plain builds — a deferral-only run ──
+ws="$fixture/ws"
+make_workspace "$ws" 1 2 low
+add_package "$ws" a-stable "$gsa_meta_any" stable
+add_package "$ws" b-dep "$gsa_meta_any" git
+add_package "$ws" c-plain "$gsa_meta_any" git
+set_topology_record "$ws" b-dep git 'a-stable'
+# the fixture's build-order edges (consumer prereq) — the derivation source
+# for the expected park cone and the resume set
+edges="$fixture/edges"
+printf 'b-dep a-stable\n' >"$edges"
 
-# b-dep / c-plain: ordinary recipes with working builds. b-dep's edge on
-# a-stable is why a deferred a-stable parks it.
-add_package "$dir" b-dep "$gsa_meta_any"
-add_package "$dir" c-plain "$gsa_meta_any"
-set_topology_record "$dir" b-dep git 'a-stable'
-
-mkdir -p "$dir/fake"
-printf '2.0.0-1\n' >"$dir/fake/repo_version"
-
-cat >"$dir/bin/pacman" <<'EOF'
-#!/usr/bin/env bash
-if [[ ${1:-} == -Si ]]; then
-    printf 'Repository      : extra\nName            : %s\nVersion         : %s\n' \
-        "$2" "$(cat "$GSA_FAKE_DIR/repo_version")"
-    exit 0
-fi
-exit 0
-EOF
-chmod +x "$dir/bin/pacman"
-
-# Official packaging repo: 404 for everything → no anchor at our version.
-cat >"$dir/bin/curl" <<'EOF'
-#!/usr/bin/env bash
-printf '%s\n' "$*" >>"$GSA_FAKE_DIR/curl_calls"
-exit 22
-EOF
-chmod +x "$dir/bin/curl"
-
-cat >"$dir/bin/updpkgsums" <<'EOF'
-#!/usr/bin/env bash
-printf 'called\n' >>"$GSA_FAKE_DIR/updpkgsums_calls"
-exit 0
-EOF
-chmod +x "$dir/bin/updpkgsums"
-
-cat >"$dir/bin/makepkg" <<'EOF'
+mkdir -p "$ws/fake"
+# The scenario makepkg: one call log, then the outcome the knobs name
+# (defer 99 for the named package / else ok + archive). The rc-99 build is
+# the Phase-2 stand-in for the anchoring gate: a NON-failure deferral (§I.3),
+# never a failed build.
+cat >"$ws/bin/makepkg" <<'EOF'
 #!/usr/bin/env bash
 set -u
 id=$(basename "$PWD")
 printf '%s\n' "$id" >>"$GSA_FAKE_DIR/makepkg_calls"
+if [ "${GSA_FAKE_DEFER_PACKAGE:-}" = "$id" ]; then exit 99; fi
 : >"$PWD/$id-1.0.0-1-any.pkg.tar.zst"
 exit 0
 EOF
-chmod +x "$dir/bin/makepkg"
+chmod +x "$ws/bin/makepkg"
 
-set +e
-output=$(
-    PATH="$dir/bin:$PATH" \
-    GSA_STATE_DIR="$dir/state" \
-    GSA_FAKE_DIR="$dir/fake" \
-    GSA_CPU_THREADS=4 \
-    GSA_MEMORY_GIB=8 \
-    fish "$dir/build-all.fish" --allow-broken-rustc --no-deps \
-        --intensity low a-stable b-dep c-plain 2>&1
-)
-rc=$?
-set -e
-printf '%s' "$output" >"$dir/out.txt"
+export PATH="$ws/bin:$PATH"
+export GSA_FAKE_DIR="$ws/fake"
+export GSA_FAKE_DEFER_PACKAGE=a-stable
 
-# 1. Parked work must keep the run non-zero — a silent green would hide it.
-((rc != 0)) || fail "the run exited 0 although a recipe was parked:
-$output"
-
-# 2. a-stable is parked with a NAMED marker, not reported as a build failure.
-#    The record row is the outcome DATA (deferred = the lane rc-99 anchoring
-#    amendment, rc visible in the row); the DEFERRED marker itself is the
-#    human label, pinned here because only this scenario renders it.
-[[ $(rr_row a-stable status <<<"$output") == deferred ]] \
-    || fail "a-stable row is not deferred:
-$(rr_row a-stable <<<"$output")
-$output"
-[[ $(rr_row a-stable rc <<<"$output") == 99 ]] \
-    || fail "a-stable row does not carry the rc-99 defer code:
-$(rr_row a-stable <<<"$output")"
-[[ $(rr_row a-stable reason <<<"$output") == anchoring-refused ]] \
-    || fail "a-stable row reason is not anchoring-refused:
-$(rr_row a-stable <<<"$output")"
-grep -q 'DEFERRED' "$dir/out.txt" || fail "no DEFERRED marker for a-stable:
-$output"
-grep -q 'a-stable' "$dir/out.txt" || fail 'the DEFERRED marker does not name a-stable'
-if grep -q 'a-stable: BUILD FAILED' "$dir/out.txt"; then
-    fail "a deferral was reported as a build failure:
-$output"
-fi
-[[ -f $dir/packages/stable/a-stable/PKGBUILD ]] || fail 'the parked recipe disappeared'
-
-# 3. The parked recipe's summary carries the named error AND both recovery
-#    lines (the deferred section tails the package log — that tail is the only
-#    place a non-interactive owner can read why it parked).
-grep -q 'refusing to build' "$dir/out.txt" \
-    || fail "the deferred summary does not carry the named refusal:
-$output"
-grep -q 'Refresh them by hand' "$dir/out.txt" \
-    || fail "the deferred summary lost the manual recovery line:
-$output"
-grep -q -- "'--no-sync' builds the committed version as-is" "$dir/out.txt" \
-    || fail "the deferred summary lost the --no-sync escape:
-$output"
-
-# 4. makepkg never ran for the parked recipe…
-if grep -qx 'a-stable' "$dir/fake/makepkg_calls" 2>/dev/null; then
-    fail 'makepkg ran for the recipe that could not be anchored'
-fi
-# …but updpkgsums was never reached either: without an official document
-# there is nothing to classify against, so the refusal precedes any write.
-if [[ -s $dir/fake/updpkgsums_calls ]]; then
-    fail 'updpkgsums ran although no official document could be fetched'
-fi
-
-# 5. THE POINT: the rest of the dispatch continued — c-plain built.
-grep -qx 'c-plain' "$dir/fake/makepkg_calls" 2>/dev/null \
-    || fail "c-plain was never built — one parked recipe still stopped the dispatch:
-$output"
-[[ -f $dir/packages/c-plain/c-plain-1.0.0-1-any.pkg.tar.zst ]] \
-    || fail 'c-plain reports built but produced no archive'
-[[ $(rr_row c-plain status <<<"$output") == succeeded ]] \
-    || fail "c-plain row is not succeeded:
-$(rr_row c-plain <<<"$output")"
-
-# 6. b-dep depends on the parked recipe: never dispatched, honestly labelled —
-#    waiting on a deferral is not a dependency cycle.
-if grep -qx 'b-dep' "$dir/fake/makepkg_calls" 2>/dev/null; then
-    fail 'b-dep built although its dependency a-stable was never built'
-fi
-[[ $(rr_row b-dep status <<<"$output") == blocked ]] \
-    || fail "b-dep row is not blocked:
-$(rr_row b-dep <<<"$output")"
-[[ $(rr_row b-dep reason <<<"$output") == waits-on-deferred ]] \
-    || fail "b-dep row reason is not waits-on-deferred:
-$(rr_row b-dep <<<"$output")"
-# The human label is scenario-bound rendering (the record says
-# 'waits-on-deferred'; only this fixture renders the sentence).
-grep -q 'waits on a deferred package' "$dir/out.txt" \
-    || fail "b-dep's non-dispatch is not labelled as waiting on a deferred package:
-$output"
-
-# 7. The resume set is DATA: the record's non-succeeded rows, in row order —
-#    the parked recipe and its blocked dependent, and ONLY those: a resume
-#    must retry a-stable and b-dep, not re-run c-plain. The suggestion line
-#    must carry that same set (one owner for what remains).
-[[ $(rr_remaining <<<"$output" | tr '\n' ' ') == 'a-stable b-dep ' ]] \
-    || fail "resume set must be exactly a-stable b-dep in row order, got:
-$(rr_remaining <<<"$output" | tr '\n' ' ')
-$output"
-resume=$(grep '^  build-all.fish ' "$dir/out.txt" | head -1) || true
-[[ -n $resume ]] || fail "no resume command in the failure summary:
-$output"
-[[ $resume == *' a-stable b-dep' ]] \
-    || fail "resume command does not carry the run-record resume set [a-stable b-dep]: $resume"
-[[ $resume == *--intensity* ]] || fail "resume command lost its flags: $resume"
-
-(
-# ─── A failed anchor scratch creation is a named refusal, never root-relative
-# paths (R-F12) ─────────────────────────────────────────────────────────────
-# `set -l tmp (mktemp -d)` was unchecked: on failure every derived path
-# collapsed to the filesystem root ("/map", "/PKGBUILD.orig") and the root-mode
-# failure path would have "restored" from /PKGBUILD.orig. The anchor now gates
-# its scratch creation and derives every path from a verified directory.
-dir="$fixture/mktemp-fail"
-make_workspace "$dir" 1 2 low
-mkdir -p "$dir/packages/stable/m1"
+run_engine "$ws" -B --leaf --intensity low --state-dir "$ws/state" a-stable b-dep c-plain
 {
-    printf 'pkgname=m1\n'
-    printf 'pkgver=1.0.0\n'
-    printf 'pkgrel=1\n'
-    printf 'arch=(any)\n'
-    printf 'source=("https://example.invalid/m-$pkgver.tar.gz")\n'
-    printf "sha256sums=('0000000000000000000000000000000000000000000000000000000000000000')\n"
-} >"$dir/packages/stable/m1/PKGBUILD"
-printf 'm1|packages/stable/m1|stable|\n' >>"$dir/config/topology.conf"
-mkdir -p "$dir/fake"
-printf '2.0.0-1\n' >"$dir/fake/repo_version"
-cat >"$dir/bin/pacman" <<'EOF'
-#!/usr/bin/env bash
-if [[ ${1:-} == -Si ]]; then
-    printf 'Repository      : extra\nName            : %s\nVersion         : %s\n' \
-        "$2" "$(cat "$GSA_FAKE_DIR/repo_version")"
-    exit 0
+    echo "$FIXTURE_OUTPUT"
+} >"$fixture/output.txt"
+
+# 1. Parked work keeps the run non-zero — §G.1's deferral-only 5 (the fish-era
+#    non-zero remaps here), derived from the rows, and the record agrees.
+rows=$(rr2_outcome_rows <<<"$FIXTURE_OUTPUT")
+expected=$(printf '%s\n' "$rows" | expected_rc cone-stop 0)
+[ "$FIXTURE_RC" = "$expected" ] \
+    || fail "deferral run rc=$FIXTURE_RC, want $expected (§G.1 from the rows):" "$fixture/output.txt"
+[ "$FIXTURE_RC" = 5 ] \
+    || fail "a deferral-only run exits 5 (§G.1), got $FIXTURE_RC:" "$fixture/output.txt"
+[ "$FIXTURE_RC" = "$(rr2_scalar rc <<<"$FIXTURE_OUTPUT")" ] \
+    || fail "the record's rc scalar disagrees with the process exit code:" "$fixture/output.txt"
+
+# 2. a-stable is DEFERRED (never counted as succeeded or failed): rc 99 and
+#    the NAMED refusal — the reason key is the engine's naming. This is the
+#    named-refusal re-pin of the retired fish sync-machinery sections.
+[ "$(rr2_outcome a-stable status <<<"$FIXTURE_OUTPUT")" = "deferred" ] \
+    || fail "a-stable is not deferred — a deferral is not a build failure:" "$fixture/output.txt"
+[ "$(rr2_outcome a-stable rc <<<"$FIXTURE_OUTPUT")" = "99" ] \
+    || fail "a deferral is lane code 99 (§F.1):" "$fixture/output.txt"
+[ "$(rr2_outcome a-stable reason <<<"$FIXTURE_OUTPUT")" = "source-unfetchable" ] \
+    || fail "the anchoring refusal must name reason key 'source-unfetchable' (§H.3; the engine's rc-99 deferral, the stand-in for the anchoring gate):" "$fixture/output.txt"
+if printf '%s\n' "$rows" | awk '$2 == "failed"' | grep -q .; then
+    fail "the deferral run recorded a failed row — a deferral never fails the run (§I.3):" "$fixture/output.txt"
 fi
-exit 0
-EOF
-chmod +x "$dir/bin/pacman"
-cat >"$dir/bin/curl" <<'EOF'
-#!/usr/bin/env bash
-exit 22
-EOF
-chmod +x "$dir/bin/curl"
-cat >"$dir/bin/updpkgsums" <<'EOF'
-#!/usr/bin/env bash
-printf 'called\n' >>"$GSA_FAKE_DIR/updpkgsums_calls"
-exit 0
-EOF
-chmod +x "$dir/bin/updpkgsums"
-cat >"$dir/bin/makepkg" <<'EOF'
-#!/usr/bin/env bash
-set -u
-id=$(basename "$PWD")
-printf '%s\n' "$id" >>"$GSA_FAKE_DIR/makepkg_calls"
-exit 0
-EOF
-chmod +x "$dir/bin/makepkg"
-# Only the ANCHOR's template fails — the version sync's own snapshot must
-# still work, or the refusal would come from the wrong seam entirely.
-cat >"$dir/bin/mktemp" <<'EOF'
-#!/usr/bin/env bash
-for a in "$@"; do
-    if [[ $a == *gsa-anchor-sums* && ${GSA_FAKE_MKTEMP_FAIL:-} == anchor ]]; then
-        printf 'fake mktemp: requested failure\n' >&2
-        exit 1
-    fi
+if [ -e "$ws/packages/a-stable/a-stable-1.0.0-1-any.pkg.tar.zst" ]; then
+    fail "the deferred recipe produced an archive although its build never completed:" "$fixture/output.txt"
+fi
+[ -f "$ws/packages/a-stable/PKGBUILD" ] \
+    || fail "the deferred recipe's PKGBUILD was mutated or disappeared:" "$fixture/output.txt"
+
+# 3. b-dep (edge on a-stable) parks on the deferral and is never dispatched —
+#    `parked` + `waits-on-deferred` (§H.3: `blocked` is superseded; §6 R-4).
+#    The parked set is derived from the fixture's own edges, never pinned.
+cone=$(consumers_closure "$edges" a-stable)
+parked=$(printf '%s\n' "$rows" | awk '$2 == "parked" { print $1 }' | sort)
+[ "$parked" = "$cone" ] \
+    || fail "parked set [$parked] != consumer cone of a-stable [$cone] (derived from $edges):" "$fixture/output.txt"
+for pkg in $cone; do
+    [ "$(rr2_outcome "$pkg" status <<<"$FIXTURE_OUTPUT")" = "parked" ] \
+        || fail "consumer $pkg of the deferral is not parked:" "$fixture/output.txt"
+    [ "$(rr2_outcome "$pkg" reason <<<"$FIXTURE_OUTPUT")" = "waits-on-deferred" ] \
+        || fail "consumer $pkg must carry waits-on-deferred (§H.3):" "$fixture/output.txt"
 done
-exec /usr/bin/mktemp "$@"
-EOF
-chmod +x "$dir/bin/mktemp"
-
-set +e
-output=$(
-    PATH="$dir/bin:$PATH" \
-    GSA_STATE_DIR="$dir/state" \
-    GSA_FAKE_DIR="$dir/fake" \
-    GSA_FAKE_MKTEMP_FAIL=anchor \
-    GSA_CPU_THREADS=4 \
-    GSA_MEMORY_GIB=8 \
-    fish "$dir/build-all.fish" --allow-broken-rustc --no-deps \
-        --intensity low m1 2>&1
-)
-rc=$?
-set -e
-printf '%s' "$output" >"$dir/out.txt"
-
-((rc != 0)) || fail "mktemp-fail: the run succeeded although no checksum state could be held:
-$output"
-grep -q 'cannot create an isolated temporary directory' "$dir/state/logs/m1.log" \
-    || fail "mktemp-fail: the scratch failure is not named in the log:
-$(cat "$dir/state/logs/m1.log" 2>/dev/null)"
-grep -q 'DEFERRED' "$dir/out.txt" \
-    || fail "mktemp-fail: the unanchorable recipe was not parked:
-$output"
-[[ ! -s $dir/fake/makepkg_calls ]] \
-    || fail 'mktemp-fail: makepkg ran although the sums were never anchored'
-grep -q "^pkgver=2.0.0$" "$dir/packages/stable/m1/PKGBUILD" \
-    || fail 'mktemp-fail: the version sync did not land — the case would test the wrong seam'
-grep -q "^sha256sums=('0000000000000000000000000000000000000000000000000000000000000000')$" \
-    "$dir/packages/stable/m1/PKGBUILD" \
-    || fail 'mktemp-fail: the sums were rewritten although no anchor could be consulted'
-)
-
-(
-# ─── A failed restore is its own named error, never a false claim (R-F21) ──
-# The anchor's failure paths restored with an unchecked `cp` while the message
-# asserted "the recipe was restored": a failed restore left the recipe
-# rewritten behind a claim that never held. The restore is now checked and its
-# failure is folded into the return status — a dirty recipe fails the run
-# instead of parking quietly.
-dir="$fixture/restore-fails"
-make_workspace "$dir" 1 2 low
-mkdir -p "$dir/packages/stable/r1"
-{
-    printf 'pkgname=r1\n'
-    printf 'pkgver=1.0.0\n'
-    printf 'pkgrel=1\n'
-    printf 'arch=(any)\n'
-    printf 'source=("https://example.invalid/r-$pkgver.tar.gz")\n'
-    printf "sha256sums=('0000000000000000000000000000000000000000000000000000000000000000')\n"
-} >"$dir/packages/stable/r1/PKGBUILD"
-printf 'r1|packages/stable/r1|stable|\n' >>"$dir/config/topology.conf"
-mkdir -p "$dir/fake"
-printf '2.0.0-1\n' >"$dir/fake/repo_version"
-cat >"$dir/bin/pacman" <<'EOF'
-#!/usr/bin/env bash
-if [[ ${1:-} == -Si ]]; then
-    printf 'Repository      : extra\nName            : %s\nVersion         : %s\n' \
-        "$2" "$(cat "$GSA_FAKE_DIR/repo_version")"
-    exit 0
+if grep -qx 'b-dep' "$ws/fake/makepkg_calls" 2>/dev/null; then
+    fail "b-dep was dispatched although its prerequisite a-stable was deferred:" "$fixture/output.txt"
 fi
-exit 0
-EOF
-chmod +x "$dir/bin/pacman"
-# The anchor must reach the updater step for this case: serve the official
-# packaging .SRCINFO at the rewritten version, and 404 everything else.
-cat >"$dir/bin/curl" <<'EOF'
-#!/usr/bin/env bash
-out=
-url=
-while (($#)); do
-    case $1 in
-    -o) out=$2; shift 2 ;;
-    --max-time) shift 2 ;;
-    -*) shift ;;
-    *) url=$1; shift ;;
+
+# 4. THE POINT: the rest of the dispatch continued — c-plain built.
+grep -qx 'c-plain' "$ws/fake/makepkg_calls" 2>/dev/null \
+    || fail "c-plain was never built — one deferred recipe stopped the dispatch:" "$fixture/output.txt"
+[ -f "$ws/packages/c-plain/c-plain-1.0.0-1-any.pkg.tar.zst" ] \
+    || fail "c-plain reports built but produced no archive:" "$fixture/output.txt"
+[ "$(rr2_outcome c-plain status <<<"$FIXTURE_OUTPUT")" = "succeeded" ] \
+    || fail "unrelated package c-plain did not run to completion:" "$fixture/output.txt"
+
+# 5. The resume set is DATA: the non-succeeded rows in row order — the
+#    deferred recipe and its parked consumer, and ONLY those. Derived from
+#    the record's `order` filtered through the set the rows imply, then
+#    cross-checked against the continuation's own `remaining:` (§H.2); the
+#    continuation `command:` restates that set for one owner.
+expected_remaining=$(rr2_scalar order <<<"$FIXTURE_OUTPUT" | awk -v want="a-stable $cone" '
+    BEGIN { n = split(want, s, " "); for (i = 1; i <= n; i++) keep[s[i]] = 1 }
+    { for (i = 1; i <= NF; i++) if ($i in keep) printf("%s ", $i) }' | sed 's/ $//')
+remaining_rows=$(rr2_remaining <<<"$FIXTURE_OUTPUT" | tr '\n' ' ' | sed 's/ $//')
+[ "$remaining_rows" = "$expected_remaining" ] \
+    || fail "resume set [$remaining_rows] is not the deferred recipe plus its consumer cone in row order [$expected_remaining]:" "$fixture/output.txt"
+[ "$remaining_rows" = "$(rr2_continuation remaining <<<"$FIXTURE_OUTPUT")" ] \
+    || fail "continuation remaining disagrees with the rows-derived resume set [$remaining_rows]:" "$fixture/output.txt"
+command=$(rr2_continuation command <<<"$FIXTURE_OUTPUT")
+[ -n "$command" ] \
+    || fail "the continuation has no command: line for the owner:" "$fixture/output.txt"
+for pkg in a-stable $cone; do
+    case " $command " in
+    *" $pkg "*) ;;
+    *) fail "the continuation command does not name resume candidate $pkg: $command" ;;
     esac
 done
-if [[ -n ${url:-} && $url == *'/packaging/packages/r1/-/raw/'* && -n $out ]]; then
-    {
-        printf 'pkgbase = r1\n'
-        printf '\tpkgver = 2.0.0\n'
-        printf '\tpkgrel = 1\n'
-        printf 'source = https://example.invalid/r-2.0.0.tar.gz\n'
-        printf 'sha256sums = 0000000000000000000000000000000000000000000000000000000000000000\n'
-        printf 'pkgname = r1\n'
-    } >"$out"
-    exit 0
-fi
-exit 22
-EOF
-chmod +x "$dir/bin/curl"
-# The updater makes the recipe directory unwritable before failing: the
-# restore can then not write, which is exactly the unchecked path.
-cat >"$dir/bin/updpkgsums" <<'EOF'
-#!/usr/bin/env bash
-printf 'called\n' >>"$GSA_FAKE_DIR/updpkgsums_calls"
-chmod 555 "$PWD"
-exit 1
-EOF
-chmod +x "$dir/bin/updpkgsums"
-cat >"$dir/bin/makepkg" <<'EOF'
-#!/usr/bin/env bash
-set -u
-id=$(basename "$PWD")
-printf '%s\n' "$id" >>"$GSA_FAKE_DIR/makepkg_calls"
-exit 0
-EOF
-chmod +x "$dir/bin/makepkg"
+case $command in
+*--leaf*) ;;
+*) fail "the continuation command did not mirror --leaf (§H.2): $command" ;;
+esac
+case $command in
+*--intensity*) ;;
+*) fail "the continuation command did not mirror the resolved --intensity (§H.2): $command" ;;
+esac
 
-set +e
-output=$(
-    PATH="$dir/bin:$PATH" \
-    GSA_STATE_DIR="$dir/state" \
-    GSA_FAKE_DIR="$dir/fake" \
-    GSA_CPU_THREADS=4 \
-    GSA_MEMORY_GIB=8 \
-    fish "$dir/build-all.fish" --allow-broken-rustc --no-deps \
-        --intensity low r1 2>&1
-)
-rc=$?
-set -e
-printf '%s' "$output" >"$dir/out.txt"
-chmod -R u+w "$dir/packages/stable/r1"     # asserts below must not need the mode
-
-((rc != 0)) || fail "restore-fails: the run succeeded over a recipe left dirty:
-$output"
-grep -q 'could NOT be restored' "$dir/state/logs/r1.log" \
-    || fail "restore-fails: the failed restore is not named in the log:
-$(cat "$dir/state/logs/r1.log" 2>/dev/null)"
-if grep -q 'the recipe was restored' "$dir/state/logs/r1.log"; then
-    fail "restore-fails: the log claims a restore that never happened:
-$(cat "$dir/state/logs/r1.log" 2>/dev/null)"
-fi
-if grep -q 'DEFERRED' "$dir/out.txt"; then
-    fail "restore-fails: a dirty recipe was parked instead of failing the run:
-$output"
-fi
-[[ ! -s $dir/fake/makepkg_calls ]] \
-    || fail 'restore-fails: makepkg ran over a recipe left dirty'
-)
-
-printf 'anchor defer fixture: PASS (parked a-stable, waited b-dep, built c-plain)\n'
+printf 'anchor defer fixture: PASS (deferred a-stable, parked b-dep, built c-plain)\n'

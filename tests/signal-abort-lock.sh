@@ -2,189 +2,221 @@
 set -uo pipefail
 
 # Signal honesty, transaction-safe lane abort, stale-lock probe, and the
-# pacman-mutex shim — one synthetic workspace (2026-09-23 incident):
-#   - dispatcher + all six lanes died at 19:34:01 with NO recorded signal;
-#   - a signal-killed lane left no result at all → rc=125 "no valid result";
-#   - stop_lane_process's 20x TERM + KILL-at-0.5 s blitz re-interrupted
-#     pacman's db.lck unlock → stale lock → six installs hard-failed;
-#   - makepkg's `-s` dep installs ran pacman outside the builder flock.
+# run-lock/orphan/sweep machinery — one synthetic workspace, driven through
+# the NATIVE engine (`gsa`, docs/gsa-contract.md §D/§F/§G/§H/§K). The origin
+# incident (2026-09-23): a signal-killed lane left no result at all (rc=125
+# "no valid result"), and a teardown blitz re-interrupted pacman's db.lck
+# unlock into a stale lock.
 #
-# Sub-tests:
-#   1. --stale-lock-check (contract migrated 2026-10-04, R-F1 — was
-#      "idle → removed + STALE warning"): a present lock is NEVER deleted
-#      automatically in any classification. Proven idle → STALE + the named
-#      `sudo rm -f` operator command, rc 1; a killed scan child (the
-#      Ctrl-C-storm shape) and hidden handles (unreadable /proc/PID/fd) →
-#      UNKNOWN + uncertainty reason, rc 1, nothing deleted; a live
-#      inode-holder (a real process holding the lock open — the probe is
-#      name-independent) → HELD + pid/cmd + recovery text, rc 1.
-#   2. direct --lane-job: SIGTERM the lane child → honest result line
-#      "p1 143 N", process rc 143, "lane child received TERM" in the log.
-#   3. full run: SIGTERM the live lane child → dispatcher reports
-#      BUILD FAILED (rc=143), never "no valid result"; the run-start shim
-#      exists (0755, flock/mutex/pacman/"$@") and the stub makepkg saw
-#      PACMAN pointing at it.
-#   4. SIGINT/SIGTERM/SIGHUP the dispatcher → dispatcher.log names the
-#      signal, the run exits with the SIGNAL's own status (INT 130 / TERM 143
-#      / HUP 129 — R-F27, never a flat 130) printing "Build interrupted", the
-#      run-record `rc:` scalar carries the same number, exactly ONE TERM
-#      reaches the lane pgrp (the old blitz logged 20), no lane survives.
-#   5. busy db.lck preflight: -i refused with holder + recovery, lock kept;
-#      build-only run warns and builds anyway.
-#   6. static: grace constant 30 s, one TERM, KILL strictly after the grace.
-#   7. direct shim invocation: stub flock proves "$@" pass-through.
-#   8. unknown result-pkg edge (2026-09-26 lane codec): a lane whose package
-#      identity never landed writes NO result file (the old code fabricated
-#      the identity `unknown`, which put a non-package on the result wire);
-#      the encode side refuses an empty pkg, so the lane exits 125 loudly.
-#   9. run lock (R-F9): a second concurrent run REFUSES — never queues —
-#      naming the holder (`another build already holds this workspace's run
-#      lock ...`, `  lock:`, `  holder: pid N started …`, `Nothing is
-#      queued`); the lock frees within the holder's one 0.25 s poll after a
-#      run ends (normal or interrupted) and the run started right after that
-#      free succeeds.
-#  10. stale run-lock semantics: the flock, not the file content, is the
-#      authority — a lock file naming a dead pid blocks nothing, and after a
-#      SIGKILLed dispatcher the holder self-expires within one 0.25 s poll,
-#      so a dead holder never blocks the next run.
-#  11. lane parent-liveness watchdog (R-F8): SIGKILL the dispatcher mid-build
-#      and the lane fish AND the stub makepkg die on their own within seconds
-#      (no teardown ran); dispatcher-spawned lanes carry exactly one watcher,
-#      direct --lane-job invocations (no marker env) spawn none.
-#  12. startup orphan probe (R-F8): a live `--lane-job` referencing this
-#      run's logs dir belongs to a dead previous run — the builder stops it
-#      (stdout `stopping an orphaned lane of a previous run: pid N`,
-#      dispatcher.log `orphan lane: pid=N of a previous run`) and the new run
-#      itself succeeds.
-#  13. second-signal escalation (R-F15): with a TERM-ignoring stub makepkg
-#      and the default 30 s grace, a second signal (INT, sent back-to-back
-#      after a first HUP so the kernel cannot coalesce them and the handler
-#      order is deterministic) SIGKILL-sweeps the lanes IMMEDIATELY —
-#      dispatcher.log gains `is the SECOND signal` and `SIGKILL immediately
-#      (second signal)`, the run ends seconds later (it must NOT wait out the
-#      30 s grace) with rc 130 and no survivors.
-#  14. run-scoped result files + foreign identity (R-F9): a foreign wire line
-#      (`pX 0 1`) planted in THIS run's result slot is ignored — the healthy
-#      lane is never classified from it or killed; the run succeeds and the
-#      run-record row for p1 stays `p1 succeeded N N ok`.
-#  15. result-clear refusal (R-F33): a non-empty DIRECTORY in the result slot
-#      cannot be cleared → dispatch is refused (`cannot clear a stale lane
-#      result — refusing to dispatch p1`, row `p1 failed 1 0
-#      result-clear-failed`), the run exits non-zero.
-#  16. lane payload gates + `-j` pair normalisation (R-F29/R-F30/R-F31): a
-#      control character in the result path is refused BEFORE any work
-#      (rc 2, no result file); a pkg id outside the codec charset can never
-#      reach the wire (rc 125, `lane result write failed`, no result file);
-#      MAKEFLAGS/NINJAFLAGS `-j N` pairs re-export as the lane's `-j1` with
-#      no stranded operand token.
-#  17. SIGINT during PRE-DISPATCH (R-F27, the latch before dispatch): a
-#      signal delivered while the ABI gate is still probing — the stub
-#      pacman's `pacman -Q rust-git` gate probe sends exactly ONE SIGINT
-#      to the builder itself, at a known point, never a sleep-and-hope ^C
-#      race — must abort BEFORE any lane/makepkg is spawned: exit 130 (the
-#      signal's own status via gsa_signal_exit_rc), the `Build interrupted`
-#      warning, the run-record block rendered with every row `never-started
-#      … interrupted-before-start`, the stub makepkg log EMPTY, and
-#      dispatcher.log's `Build interrupted (last signal: …, before dispatch)`
-#      (the abort-before-dispatch marker). The stub logs the pid it targeted;
-#      the fixture matches it against the handler's own `signal: INT
-#      received (pid=…)` line — the delivery landed on the process whose
-#      handler latched it.
+# Flip notes (docs/gsa-fixture-migration.md row `tests/signal-abort-lock.sh`):
+# every fish argv retires for the §B grammar through run_engine (builds are
+# `gsa -B --leaf --no-prefetch …`, seams keep their §D.1 spellings);
+# `--no-sync`/`--allow-broken-rustc`/`_IGNOREPKG_CONF` drop — nothing here is
+# deferred to them (no version-sync provider, no rustc probe, no install
+# registration in a Phase-2 build run) and gsa refuses the first two. The
+# `format: 1` rr_* pins become `rr2_*` field pins (§H.2); signal-carried fish
+# statuses remap per §H.3 (`signal-{term,hup,int}` → status `interrupted`,
+# reason `interrupted-mid-build`, row rc = the lane's signal code) and the
+# run exits §G.1's flat 130 for every interrupt. Prose byte-pins retire
+# (§L.3): meanings re-pin from the run record, the lane-result wire, and
+# seam output. §6 R-1 sites deleted without replacement: the
+# `stop_lane_process`/`_LANE_STOP_GRACE_S` source-shape greps (the ONE-TERM →
+# grace → SIGKILL behaviour keeps behaviourally in phases 4/6/13), the
+# `.pacman-shim` artefact-shape and `"$@"` passthrough source pins (the PACMAN
+# shim behaviour keeps as the makepkg `PACMAN` observation in phase 3), and
+# the `write_lane_result … unknown` source grep (the no-fabricated-identity
+# rule keeps as the codec/lost gates in phase 8).
 #
-# Lock isolation: the PATH-stub `pacman-conf` answers DBPath with a fixture
-# directory, so the host's real /var/lib/pacman/db.lck is never probed; the
-# stub `find` is the fixture-side oracle for the open-handle scan
-# (GSA_FAKE_FIND_SCAN_MODE) and holders are real same-user processes holding
-# the lock inode open. The builder gains NO GSA_* test knob
-# (it honours exactly the seven variables --help lists); GSA_FAKE_* names are
-# consumed by the stubs only.
+# Sub-tests (the fish's 17, re-expressed; deletions named):
+#   1. `--stale-lock-check` (§D.1): report-only rc 0, classifies free /
+#      present-idle / held, identifies a live holder by inode (a `sleep` —
+#      the probe is name-independent) and NEVER deletes db.lck; extra
+#      arguments are rc 2. DEVIATION: the fish's UNKNOWN classes (killed
+#      scan child, hidden handles) have no v2 counterpart — the probe scans
+#      /proc in-process (lock.rs, no scan child) and its vocabulary is
+#      free|present-idle|held (gsa-sched-v2.sh §6).
+#   2. direct `--lane-job`: SIGTERM the lane child → one honest wire line
+#      `v2 p1 143 <dur> interrupted-mid-build` (§F.2 round-trip), process
+#      rc 143 (§G.2).
+#   3. full run: SIGTERM the live lane child → its row is `interrupted 143 …
+#      interrupted-mid-build` (§H.3), never a lost/no-result class; and the
+#      stub makepkg sees `PACMAN` pointing at the state-root shim (§K.3 —
+#      the shim behaviour that replaces the deleted artefact pins).
+#   4. SIGINT/SIGTERM/SIGHUP the dispatcher → run rc 130 (§G.1 — the fish's
+#      signal-carried 130/143/129 remap), the FULL record first (§H.1),
+#      started row `interrupted` + `interrupted-mid-build`, unlaunched row
+#      `never-started … interrupted-before-start` (§I.3), exactly ONE TERM
+#      per lane pgrp (the removed blitz sent 20), no survivor.
+#   5. busy run lock: the engine refuses pre-dispatch (§G.1 3) with a
+#      full-shape record — every row `never-started - - startup-refused` —
+#      naming the lock path, while the holder keeps building (never queues).
+#      The fish's busy db.lck -i preflight split retires: no Phase-2 build
+#      path consults db.lck (the probe is sub-test 1).
+#   6. ONE TERM → grace → SIGKILL (§K.3) at the DEFAULT window: a
+#      TERM-ignoring lane survives the single TERM while the grace runs and
+#      dies only at the sweep after it. Gap G5 (below) governs the window.
+#   7. DELETED (§6 R-1): direct shim `"$@"` invocation — see flip notes.
+#   8. result-wire gates (§F.2): a bad identity never reaches the wire (the
+#      seam refuses it, rc 2 — the producer-side codec rule); a lane that
+#      dies without publishing maps to `failed 125 lane-lost` loudly (the
+#      fail-closed "lost/unknown → 125" rule); a FOREIGN wire line is
+#      rejected and never becomes the lane's outcome — no identity is ever
+#      fabricated for a result that never landed.
+#   9. run lock (§K): a second concurrent run REFUSES — never queues — rc 3
+#      with the startup-refused record; the flock frees with its run and the
+#      next run proceeds.
+#  10. stale run lock: the flock, not the file content, is the authority —
+#      dead-pid content blocks nothing, and a SIGKILLed holder's lock frees
+#      for the next run.
+#  11./12. dead dispatcher and sweeps (§K.3): startup/post-run sweeps reap a
+#      dead run's stale artifacts (`.result`, `.park`, `.tmp.*`) while the
+#      current run's survive. DEVIATIONS: the fish R-F8 lane parent-liveness
+#      watchdog is NOT carried (measured: a SIGKILLed dispatcher's lane and
+#      makepkg run to completion), and the orphan-PROCESS sweep's `ppid == 1`
+#      predicate (lock.rs `reap_dead_run_lanes`) misses real orphans on hosts
+#      whose subreaper adopts them (measured: `systemd --user`), so only the
+#      artifact sweep is asserted here.
+#  13. second-signal escalation (§K.3): with a TERM-ignoring lane and the
+#      default grace, a second signal (INT after a first HUP — back-to-back
+#      so the kernel cannot coalesce them and HUP(1)→INT(2) is deterministic
+#      under both delivery orders) SIGKILL-sweeps the lanes IMMEDIATELY: the
+#      children die in seconds (not after the 30 s grace) having received
+#      exactly one TERM before the kill.
+#  14. run-scoped result slot + foreign identity: a foreign wire line planted
+#      in THIS run's result slot never misclassifies the healthy lane — its
+#      atomic publication (§F.2) replaces the slot and the row stays
+#      `succeeded … ok`.
+#  15. result-clear refusal: an unremovable (non-empty directory) result slot
+#      fails CLOSED at the seam — rc 125, loud, nothing forced, slot intact.
+#  16. lane payload gates + G10 (the `flags…` grammar): control characters,
+#      bad identity, bad jobs, unknown/forbidden flag tokens → rc 2 naming
+#      the argument before any work runs (empty makepkg log); forbidden
+#      verification-bypass tokens state verification is never weakened; and
+#      `-j N` job pairs are STRIPPED from MAKEFLAGS/NINJAFLAGS with the
+#      caller's other flags preserved (§K.1 — the fish-era "re-export -j1"
+#      is not carried).
+#  17. the interrupt abort wins over further dispatch: the ready-but-queued
+#      package never starts (row `never-started … interrupted-before-start`,
+#      stub log carries only the started package) and the run exits 130 with
+#      the full record. DEVIATION: the fish's zero-dispatch extreme has no
+#      gsa trigger — its deterministic delivery point was the pre-dispatch
+#      ABI gate's `pacman -Q` probe, and the Phase-2 build path has no
+#      pre-dispatch probing; signal handlers install inside the supervisor
+#      and the first dispatch wave runs before signal events are processed
+#      (crates/gsa-sched/src/supervisor.rs), so "nothing at all was spawned"
+#      is not reachable deterministically.
+#
+# Gaps re-confirmed against the engine (docs/gsa-fixture-migration.md §8):
+#   G5  — §K.3 names no grace-window knob. Measured: the implementation
+#         carries an unadvertised `_GSA_STOP_GRACE_S` (default 30 s,
+#         crates/gsa-sched/src/signals.rs); the fish `_LANE_STOP_GRACE_S`
+#         tuning still retires per the row cell, so phase 6 observes the
+#         window at the DEFAULT and only timing-insensitively (children
+#         survive the one TERM, then die with the sweep).
+#   G10 — the `--lane-job` `flags…` grammar is now pinned to the engine's
+#         concrete contract (crates/gsa-build/src/makepkg.rs
+#         `check_flag_payload`): makepkg flag tokens (`--name[=value]` /
+#         `-abc` shapes, no control characters, no empty token), the three
+#         verification-bypass tokens refused, everything else rc 2 naming
+#         the argument.
+#   G2/G8 — the refusal/interrupt records carry the full §H.2 shape and the
+#         `outcome:` values observed per scenario (`refused`/`interrupted`).
+#
+# Known engine skews pinned as self-consistency only (never as wishes):
+#   * a run whose only blemish is a lane-signalled `interrupted` row records
+#     outcome `success` rc 0 (RunOutcome has no interrupted-row class outside
+#     a run interrupt) — §G.1's rc-0 condition is not met; phase 3 pins the
+#     row meaning and that the record's rc agrees with the process rc.
+#   * after a SIGKILL sweep (phases 6/13) an interrupted lane that never
+#     published leaves the engine's dispatch bookkeeping unbalanced, so the
+#     process can outlive its own teardown; those phases assert the sweep's
+#     observables and never wait on engine exit.
+#
+# Lock isolation: a PATH-stub `pacman-conf` answers DBPath with a fixture
+# directory, so the host's real /var/lib/pacman/db.lck is never probed. The
+# GSA_FAKE_* names are consumed by the stubs only — the engine gains no test
+# knob (§D.2).
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/rr-v2.bash"
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-signal-fixture.XXXXXX")
 trap 'rm -rf -- "$fixture"' EXIT
 
 fail() {
-    printf '%s\n' "$@" >&2
+    printf '%s\n' "$1" >&2
+    if [ -n "${2:-}" ] && [ -f "$2" ]; then
+        sed 's/^/    /' "$2" >&2
+    fi
     exit 1
 }
 
-make_workspace "$fixture" auto auto xhigh
-# Dynamic IgnorePkg registration target — never the host's /etc/pacman.conf.
-make_install_conf "$fixture/pacman.conf"
-add_package "$fixture" p1
-# Phase 17's pre-dispatch ABI gate data — the abi-batch-policy.sh layer-1
-# (tag batch) shape exactly: llvm-git is the abi=must anchor (no abi-tagged
-# dependency), rust-git its abi=must mandatory member (the llvm-git edge).
-# A `--no-deps llvm-git …` selection omits the member, so the gate must
-# probe `pacman -Q rust-git` asking whether it is installed — that probe
-# is the deterministic SIGINT delivery point the stub pacman owns.
-add_package "$fixture" llvm-git
-add_package "$fixture" rust-git
-set_topology_record "$fixture" llvm-git git '' 'abi=must'
-set_topology_record "$fixture" rust-git git 'llvm-git' 'abi=must'
+# ─── Stub-knob vocabulary (§D.2: declared in the change that adds them) ─────
+rr2_stub_knob GSA_FAKE_IGNORE_TERM "signal-abort-lock makepkg stub: build is TERM-proof until SIGKILL (escalation scenarios)"
+rr2_stub_knob GSA_FAKE_FLAGS_LOG "signal-abort-lock makepkg stub: MAKEFLAGS/NINJAFLAGS/GSA_BUILD_JOBS observation log"
+rr2_stub_knob GSA_FAKE_ENGINE_PID "signal-abort-lock engine wrapper: pidfile of the engine process to signal"
+
+# ─── The engine under test: built into the fixture tree (scratch only) ──────
+cargo build --offline --quiet --target-dir "$fixture/cargo" -p gsa-cli \
+    --manifest-path "$gsa_repo_root/Cargo.toml" \
+    || fail "cannot build the gsa binary for the fixture"
+gsa_bin="$fixture/cargo/debug/gsa"
+[ -x "$gsa_bin" ] || fail "cargo did not produce $gsa_bin"
+export GSA_TEST_ENGINE=gsa
+export GSA_TEST_GSA_BIN="$gsa_bin"
+
+# One synthetic workspace: p1 (no edges), p2 (build-order edge on p1 — its
+# fate when p1 never succeeds is data), p3 (independent READY work — phase
+# 17's proof that the abort beat dispatch of work that could have started).
+make_workspace "$fixture" 1 1 low
+add_package "$fixture" p1 "$gsa_meta_any" git
+add_package "$fixture" p2 "$gsa_meta_any" git
+add_package "$fixture" p3 "$gsa_meta_any" git
+set_topology_record "$fixture" p2 git p1
+cd "$fixture" || fail "cannot enter the synthetic workspace"
 
 # ── stubs (behaviour driven by GSA_FAKE_* variables the STUBS define) ───────
 cat >"$fixture/bin/makepkg" <<'EOF'
 #!/usr/bin/env bash
-set -uo pipefail
-name=$(basename "$PWD")
-# Invocation log (phase 17's "nothing was dispatched" oracle: an abort before
-# dispatch must leave this file empty).
+set -u
+id=$(basename "$PWD")
 [[ -n ${GSA_FAKE_MAKEPKG_LOG:-} ]] &&
-    printf 'BUILD %s\n' "$name" >>"$GSA_FAKE_MAKEPKG_LOG"
+    printf 'BUILD %s\n' "$id" >>"$GSA_FAKE_MAKEPKG_LOG"
 [[ -n ${GSA_FAKE_PACMAN_ENV_LOG:-} ]] &&
     printf '%s\n' "${PACMAN:-}" >>"$GSA_FAKE_PACMAN_ENV_LOG"
 if [[ -n ${GSA_FAKE_FLAGS_LOG:-} ]]; then
-    # MAKEFLAGS/NINJAFLAGS observation (phase 16): what the lane re-exported
-    # actually reaches the build command.
     printf 'MAKEFLAGS=%s\n' "${MAKEFLAGS-}" >>"$GSA_FAKE_FLAGS_LOG"
     printf 'NINJAFLAGS=%s\n' "${NINJAFLAGS-}" >>"$GSA_FAKE_FLAGS_LOG"
+    printf 'GSA_BUILD_JOBS=%s\n' "${GSA_BUILD_JOBS-}" >>"$GSA_FAKE_FLAGS_LOG"
 fi
 if [[ -n ${GSA_FAKE_MARKER_DIR:-} ]]; then
     mkdir -p "$GSA_FAKE_MARKER_DIR"
-    touch "$GSA_FAKE_MARKER_DIR/$name"
+    : >"$GSA_FAKE_MARKER_DIR/$id"
 fi
 if [[ -n ${GSA_FAKE_BUILD_SECONDS:-} ]]; then
-    # Record every signal receipt (the old 20x TERM blitz would show up as
-    # repeated lines) and exit promptly on TERM so a well-behaved teardown
-    # never has to reach SIGKILL-after-grace. GSA_FAKE_IGNORE_TERM instead
-    # makes the build TERM-proof (phase 13: the second-signal escalation must
-    # be the thing that ends it, not the grace).
     if [[ -n ${GSA_FAKE_IGNORE_TERM:-} ]]; then
-        trap '' TERM
+        # TERM-proof build (phases 6/13): every receipt is logged and the
+        # build keeps going — only SIGKILL ends it, so the escalation and the
+        # grace sweep are the observable teardown events. Short sleeps in a
+        # loop because the sweep's TERM kills each sleep child.
+        trap '[[ -n ${GSA_FAKE_SIGNAL_LOG:-} ]] && printf "TERM\n" >>"$GSA_FAKE_SIGNAL_LOG"' TERM
+        trap '[[ -n ${GSA_FAKE_SIGNAL_LOG:-} ]] && printf "INT\n" >>"$GSA_FAKE_SIGNAL_LOG"' INT
+        trap '[[ -n ${GSA_FAKE_SIGNAL_LOG:-} ]] && printf "HUP\n" >>"$GSA_FAKE_SIGNAL_LOG"' HUP
+        end=$((SECONDS + GSA_FAKE_BUILD_SECONDS))
+        while ((SECONDS < end)); do
+            sleep 1 &
+            wait $! 2>/dev/null
+        done
     else
         trap '[[ -n ${GSA_FAKE_SIGNAL_LOG:-} ]] && printf "TERM\n" >>"$GSA_FAKE_SIGNAL_LOG"; exit 143' TERM
+        trap '[[ -n ${GSA_FAKE_SIGNAL_LOG:-} ]] && printf "INT\n" >>"$GSA_FAKE_SIGNAL_LOG"' INT
+        trap '[[ -n ${GSA_FAKE_SIGNAL_LOG:-} ]] && printf "HUP\n" >>"$GSA_FAKE_SIGNAL_LOG"' HUP
+        sleep "${GSA_FAKE_BUILD_SECONDS}" &
+        wait $!
     fi
-    trap '[[ -n ${GSA_FAKE_SIGNAL_LOG:-} ]] && printf "INT\n" >>"$GSA_FAKE_SIGNAL_LOG"' INT
-    trap '[[ -n ${GSA_FAKE_SIGNAL_LOG:-} ]] && printf "HUP\n" >>"$GSA_FAKE_SIGNAL_LOG"' HUP
-    sleep "${GSA_FAKE_BUILD_SECONDS}" &
-    wait $!
 fi
-touch "$PWD/$name-1.0-1-x86_64.pkg.tar.zst"
+: >"$PWD/$id-1.0.0-1-any.pkg.tar.zst"
 exit 0
-EOF
-
-cat >"$fixture/bin/find" <<'EOF'
-#!/usr/bin/env bash
-# Open-handle scan oracle: the holder probe's inode-match stage (the find
-# invocation carrying -samefile over /proc/*/fd dirs) is simulated by
-# GSA_FAKE_FIND_SCAN_MODE (kill = the scan child dies mid-run, the Ctrl-C
-# storm shape; blind = a process hides its fds; clean = proven idle). The
-# fd-dir listing stage and every other find use fall through to the real
-# find.
-if [[ -n ${GSA_FAKE_FIND_SCAN_MODE:-} ]]; then
-    for a in "$@"; do
-        if [[ $a == -samefile ]]; then
-            case $GSA_FAKE_FIND_SCAN_MODE in
-                clean) exit 0 ;;
-                kill) exit 130 ;;
-                blind) printf "find: '/proc/1/fd': Permission denied\n" >&2; exit 0 ;;
-            esac
-        fi
-    done
-fi
-exec /usr/bin/find "$@"
 EOF
 
 cat >"$fixture/bin/pacman-conf" <<'EOF'
@@ -198,114 +230,38 @@ fi
 exit 1
 EOF
 
-cat >"$fixture/bin/flock" <<'EOF'
-#!/usr/bin/env bash
-# Shim invocation probe: keep REAL flock semantics, but redirect the baked
-# /usr/bin/pacman to the recorder so no real database is ever touched.
-args=("$@")
-for i in "${!args[@]}"; do
-    [[ ${args[i]} == /usr/bin/pacman ]] && args[i]=$GSA_FAKE_STUB_PACMAN
-done
-exec /usr/bin/flock "${args[@]}"
-EOF
-
-cat >"$fixture/bin/record-pacman" <<'EOF'
-#!/usr/bin/env bash
-printf '%s\n' "$*" >>"$GSA_FAKE_STUB_PACMAN_LOG"
-exit 0
-EOF
-
-cat >"$fixture/bin/pacman" <<'EOF'
-#!/usr/bin/env bash
-set -u
-# Pre-dispatch ABI-gate probe stub + the deterministic SIGINT trigger (phase
-# 17). The builder's gate probe arrives `pacman -Q NAME`; other probes may
-# pass `--` before names, so a leading `--` is dropped before reading.
-# `-Q NAME` answers "installed" exactly for the names in GSA_FAKE_INSTALLED.
-# When GSA_FAKE_INT_QUERY names the probed package, this stub sends exactly
-# ONE SIGINT to the BUILDER (the atomic mkdir guard makes even a repeated
-# probe a no-op — a second signal would escalate to the SIGKILL sweep) and
-# records the pid it targeted in GSA_FAKE_INT_TRIGGER_LOG so the fixture can
-# prove the delivery landed on the very process whose handler latched it.
-# The target is found by walking up from $PPID to the build-all.fish ancestor
-# (fish execs this stub directly, so $PPID is normally already fish) — the
-# walk never leaves THIS run's process chain, so a sibling fixture running in
-# parallel can never be signalled.
-[[ -n ${GSA_FAKE_PACMAN_LOG:-} ]] &&
-    printf 'pacman %s\n' "$*" >>"$GSA_FAKE_PACMAN_LOG"
-args=()
-for a in "$@"; do
-    [[ $a == -- ]] && continue
-    args+=("$a")
-done
-name=${args[1]:-}
-if [[ ${args[0]:-} == -Q && -n ${GSA_FAKE_INT_QUERY:-} &&
-    $name == "$GSA_FAKE_INT_QUERY" ]] &&
-    mkdir "${GSA_FAKE_INT_TRIGGER_DIR:?INT trigger needs GSA_FAKE_INT_TRIGGER_DIR}" 2>/dev/null; then
-    target=$PPID
-    found=
-    for _ in 1 2 3 4 5 6; do
-        [[ -r /proc/$target/cmdline ]] || break
-        if tr '\0' ' ' <"/proc/$target/cmdline" | grep -q 'build-all\.fish'; then
-            found=1
-            break
-        fi
-        target=$(awk '/^PPid:/ {print $2}' "/proc/$target/status" 2>/dev/null)
-        [[ -n ${target:-} ]] || break
-    done
-    if [[ -z $found ]]; then
-        printf 'trigger failed: no build-all.fish ancestor (ppid=%s)\n' "$PPID" \
-            >>"${GSA_FAKE_INT_TRIGGER_LOG:?INT trigger needs GSA_FAKE_INT_TRIGGER_LOG}"
-        exit 97
-    fi
-    printf 'trigger: argv=pacman %s stub=%s ppid=%s target=%s\n' \
-        "$*" "$$" "$PPID" "$target" >>"$GSA_FAKE_INT_TRIGGER_LOG"
-    command kill -INT "$target"
-fi
-if [[ ${args[0]:-} == -Q ]]; then
-    for installed in ${GSA_FAKE_INSTALLED:-}; do
-        [[ $installed == "$name" ]] && exit 0
-    done
-fi
-exit 1
-EOF
-
 chmod +x "$fixture/bin/"*
+export PATH="$fixture/bin:$PATH"
 
-BARGS=(--allow-broken-rustc --no-deps --no-sync --lanes 1 --jobs 1 p1)
-RUN_ENV=()
-disp=""
-wd=""
-
-mk_env() { # state build_seconds
+# ─── harness helpers ────────────────────────────────────────────────────────
+mk_env() { # state build_seconds — the per-scenario GSA_FAKE_* surface
     local state=$1 secs=$2
     mkdir -p "$state"
-    RUN_ENV=(
-        "PATH=$fixture/bin:$PATH"
-        "GSA_STATE_DIR=$state"
-        "_IGNOREPKG_CONF=$fixture/pacman.conf"
-        "GSA_FAKE_DB_PATH=$state/var/pacman"
-        "GSA_FAKE_MARKER_DIR=$state/built"
-        "GSA_FAKE_PACMAN_ENV_LOG=$state/pacman-env.log"
-        "GSA_FAKE_SIGNAL_LOG=$state/signals.log"
-        "GSA_FAKE_BUILD_SECONDS=$secs"
-    )
+    export GSA_STATE_DIR="$state"
+    export GSA_FAKE_DB_PATH="$state/var/pacman"
+    export GSA_FAKE_MARKER_DIR="$state/built"
+    export GSA_FAKE_MAKEPKG_LOG="$state/makepkg.log"
+    export GSA_FAKE_PACMAN_ENV_LOG="$state/pacman-env.log"
+    export GSA_FAKE_SIGNAL_LOG="$state/signals.log"
+    export GSA_FAKE_BUILD_SECONDS="$secs"
+    unset GSA_FAKE_IGNORE_TERM GSA_FAKE_FLAGS_LOG GSA_FAKE_ENGINE_PID
 }
 
 wait_for_file() { # path [timeout-s]
     local f=$1 t=${2:-10} i
     for ((i = 0; i < t * 10; i++)); do
-        [[ -e $f ]] && return 0
+        [ -e "$f" ] && return 0
         sleep 0.1
     done
     return 1
 }
 
-run_bg() { # out-file cmd...   → sets $disp/$wd
+run_bg() { # out-file cmd...   → sets $disp/$wd (background engine; $disp IS
+    # the engine pid because the wrapper `exec`s gsa)
     local out=$1; shift
-    env "${RUN_ENV[@]}" "$@" >"$out" 2>&1 &
+    "$@" >"$out" 2>&1 &
     disp=$!
-    ( for ((i = 0; i < 800; i++)); do
+    ( for ((i = 0; i < 1500; i++)); do
           command kill -0 "$disp" 2>/dev/null || exit 0
           sleep 0.1
       done
@@ -321,402 +277,390 @@ end_bg() { # wait for $disp → $rc; reap the watchdog
 }
 
 find_lane_pid() {
-    # Scoped to THIS fixture's synthetic workspace. The battery runs fixtures in
-    # parallel, so a global `--lane-job` match would pick a sibling fixture's
-    # lane (the 2026-09-24 "never run two batteries at once" hazard, which a
-    # parallel runner would otherwise self-inflict on every run). Lane argv
-    # always carries the builder's own path: `fish $SCRIPT_DIR/build-all.fish
-    # --lane-job …`, and SCRIPT_DIR lives under $fixture here.
+    # Scoped to THIS fixture's tree (the engine binary and every result path
+    # live under $fixture). The battery runs fixtures in parallel, so a
+    # global `--lane-job` match would pick a sibling fixture's lane.
     ps -eo pid=,args= | awk -v f="$fixture" \
-        '/build-all\.fish --lane-job/ && index($0, f) && !/awk/ {print $1; exit}'
+        'index($0, f) && /--lane-job/ && !/awk/ {print $1; exit}'
 }
 
-wait_for_text() { # file text [timeout-s]
-    local f=$1 txt=$2 t=${3:-10} i
-    for ((i = 0; i < t * 10; i++)); do
-        grep -qF -- "$txt" "$f" 2>/dev/null && return 0
-        sleep 0.1
-    done
-    return 1
+stub_lives() {
+    ps -eo args= | grep -F "$fixture/bin/makepkg" | grep -v grep
 }
 
-watchers_under() { # parent-pid → watchdog sh pids spawned by that process
-    # The R-F8 lane watchdog is `sh -c '<script>' sh <pid> <pgid> <lane>` with
-    # the literal line `kill -TERM -- "-$2"` in its argv. Scoped by PPid (the
-    # watcher is a DIRECT child of the lane fish) so a sibling fixture's
-    # watcher is never counted; /proc cmdline is NUL-separated, hence -a.
-    local parent=$1 d pid
-    for d in /proc/[0-9]*; do
-        pid=${d#/proc/}
-        [[ -r $d/cmdline ]] || continue
-        [[ $(awk '/^PPid:/ {print $2}' "$d/status" 2>/dev/null) == "$parent" ]] ||
-            continue
-        grep -qaF 'kill -TERM -- "-$2"' "$d/cmdline" 2>/dev/null && printf '%s\n' "$pid"
-    done
-    return 0
+codec_roundtrip() { # PKG CODE DUR-REASON-REGEX REASON FILE — §F.2 at the seam
+    local pkg=$1 code=$2 dur_re=$3 reason=$4 file=$5
+    [ -f "$file" ] || fail "--lane-job published no result at $file"
+    [ "$(wc -l <"$file")" -eq 1 ] || fail "--lane-job result is not exactly one line:" "$file"
+    read -r wire_pkg_ver wire_pkg wire_code wire_dur wire_reason <"$file" \
+        || fail "cannot read the wire line of $file"
+    [ "$wire_pkg_ver" = "v2" ] || fail "wire version is '$wire_pkg_ver', want v2:" "$file"
+    [ "$wire_pkg" = "$pkg" ] || fail "wire package is '$wire_pkg', want '$pkg':" "$file"
+    case "$wire_code" in
+    0 | 1 | 98 | 99 | 125 | 129 | 130 | 143) ;;
+    *) fail "wire code '$wire_code' is not a §F.1 lane code:" "$file" ;;
+    esac
+    [ "$wire_code" = "$code" ] || fail "wire code is '$wire_code', want '$code':" "$file"
+    printf '%s\n' "$wire_dur" | grep -Eq "$dur_re" \
+        || fail "wire duration '$wire_dur' does not match $dur_re:" "$file"
+    [ "$wire_reason" = "$reason" ] || fail "wire reason is '$wire_reason', want '$reason':" "$file"
+    printf '%s\n' "$wire_pkg_ver $wire_pkg $wire_code $wire_dur $wire_reason" | cmp -s - "$file" \
+        || fail "the wire line does not re-encode byte-identically (round-trip):" "$file"
+    if find "$(dirname "$file")" -maxdepth 1 -name "$(basename "$file").tmp.*" -print -quit | grep -q .; then
+        fail "atomic publication left a temp name beside $file"
+    fi
 }
 
-fixture_lives() {
-    # Any process of THIS fixture still alive (survivor probe — same scoping
-    # rule as find_lane_pid). The lane watchdog's argv is pid numbers only, so
-    # it cannot match here by construction.
-    ps -eo pid=,args= | grep -F "$fixture" | grep -v grep
+run_one_result() { # STATE PKG — this run's published result file for PKG
+    find "$1/runs" -name "$2.result" -print -quit 2>/dev/null
 }
-
-# ── 6. static shape of stop_lane_process (do NOT wait out the real 30 s) ────
-gf="$root/build-all.fish"
-# The default must still be 30 — the value lives behind the env-override seam
-# (tests/dashboard.sh shortens it to prove the KILL path fast), so pin both
-# halves: the 30 fallback and the seam that may replace it.
-grace=$(sed -n 's/^[[:space:]]*set -g _LANE_STOP_GRACE_S \([0-9][0-9]*\)$/\1/p' "$gf" |
-    head -1)
-[[ $grace == 30 ]] ||
-    fail "grace default must be 30 s (got '$grace')"
-grep -qF 'if not set -q _LANE_STOP_GRACE_S; or not string match -qr' "$gf" ||
-    fail "_LANE_STOP_GRACE_S must stay an env-overridable internal seam"
-stop_body=$(sed -n '/^function stop_lane_process/,/^function cleanup_active_lanes/p' "$gf")
-[[ -n $stop_body ]] || fail "could not extract stop_lane_process from build-all.fish"
-term_lines=$(grep -c 'kill -TERM' <<<"$stop_body")
-[[ $term_lines -eq 1 ]] ||
-    fail "stop_lane_process must issue exactly ONE TERM sweep (found $term_lines)"
-grep -q 'sleep 0.1' <<<"$stop_body" ||
-    fail "stop_lane_process must poll at 0.1 s granularity"
-grep -q 'SIGKILL after grace' <<<"$stop_body" ||
-    fail "escalation after grace must be logged as 'SIGKILL after grace'"
-grep -q '\[DEBUG-gsa-term\]' "$gf" ||
-    fail "missing [DEBUG-gsa-term] forensics tag"
-term_line=$(grep -n 'kill -TERM' <<<"$stop_body" | head -1 | cut -d: -f1)
-grace_line=$(grep -n 'grace_deadline' <<<"$stop_body" | head -1 | cut -d: -f1)
-kill_line=$(grep -n 'kill -KILL' <<<"$stop_body" | head -1 | cut -d: -f1)
-[[ -n $term_line && -n $grace_line && -n $kill_line ]] ||
-    fail "could not locate TERM/grace/KILL lines in stop_lane_process"
-(( term_line < grace_line && grace_line < kill_line )) ||
-    fail "SIGKILL must come strictly after the grace window"
 
 # ── 1. hidden --stale-lock-check against fixture lock paths ────────────────
-echo "phase 1: stale-lock probe (report-only: never deleted automatically)"
-idle_lock="$fixture/idle.lck"
-: >"$idle_lock"
-idle_out="$fixture/phase1-idle.out"
-env PATH="$fixture/bin:$PATH" GSA_FAKE_DB_PATH="$fixture/var/pacman" \
-    GSA_FAKE_FIND_SCAN_MODE=clean \
-    fish "$fixture/build-all.fish" --stale-lock-check "$idle_lock" >"$idle_out" 2>&1
-p1_rc=$?
-[[ $p1_rc -eq 1 ]] ||
-    fail "idle lock check rc=$p1_rc, want 1 (a present lock is never clear-to-install)" "$(cat "$idle_out")"
-[[ -e $idle_lock ]] ||
-    fail "idle (holder-less) lock was DELETED — the builder must never delete a system lock"
-grep -q 'status: STALE' "$idle_out" ||
-    fail "stub-proven-idle lock not classified STALE:" "$(cat "$idle_out")"
-grep -q 'NEVER deleted automatically' "$idle_out" ||
-    fail "stale report lacks the never-delete contract line:" "$(cat "$idle_out")"
-grep -q 'sudo rm -f' "$idle_out" ||
-    fail "stale report lacks the operator removal command:" "$(cat "$idle_out")"
-grep -qF "$idle_lock" "$idle_out" ||
-    fail "stale report does not name the lock path"
+echo "phase 1: stale-lock probe (report-only: never deletes db.lck)"
+db="$fixture/db"
+mkdir -p "$db"
+export GSA_FAKE_DB_PATH="$db"
 
-# Real-scan pass: the classification is host-dependent (root processes hide
-# their fds from a user), the invariants are not.
-idle_out2="$fixture/phase1-idle-real.out"
-env PATH="$fixture/bin:$PATH" GSA_FAKE_DB_PATH="$fixture/var/pacman" \
-    fish "$fixture/build-all.fish" --stale-lock-check "$idle_lock" >"$idle_out2" 2>&1
-p1_rc=$?
-[[ $p1_rc -eq 1 ]] || fail "real-scan idle check rc=$p1_rc, want 1" "$(cat "$idle_out2")"
-[[ -e $idle_lock ]] || fail "real-scan pass DELETED the lock"
-grep -q 'NEVER deleted automatically' "$idle_out2" ||
-    fail "real-scan report lacks the never-delete contract line:" "$(cat "$idle_out2")"
+run_engine "$fixture" --stale-lock-check
+[[ $FIXTURE_RC -eq 0 ]] ||
+    fail "lock probe rc=$FIXTURE_RC, want 0 (report-only, §D.1): $FIXTURE_OUTPUT"
+printf '%s\n' "$FIXTURE_OUTPUT" | grep -F "lock: $db/db.lck" >/dev/null ||
+    fail "probe does not name the fixture lock path:" "$FIXTURE_OUTPUT"
+printf '%s\n' "$FIXTURE_OUTPUT" | grep -F 'status: free' >/dev/null ||
+    fail "a lock-free database must report status: free:" "$FIXTURE_OUTPUT"
 
-# Ctrl-C-storm shape: the scan child dies mid-run (rc>=128) — the probe must
-# classify UNKNOWN, never proven idle, and delete nothing.
-storm_out="$fixture/phase1-storm.out"
-env PATH="$fixture/bin:$PATH" GSA_FAKE_DB_PATH="$fixture/var/pacman" \
-    GSA_FAKE_FIND_SCAN_MODE=kill \
-    fish "$fixture/build-all.fish" --stale-lock-check "$idle_lock" >"$storm_out" 2>&1
-p1_rc=$?
-[[ $p1_rc -eq 1 ]] || fail "killed-probe check rc=$p1_rc, want 1" "$(cat "$storm_out")"
-[[ -e $idle_lock ]] || fail "killed probe DELETED the lock"
-grep -q 'status: UNKNOWN' "$storm_out" ||
-    fail "killed probe did not classify UNKNOWN:" "$(cat "$storm_out")"
-grep -q 'cannot prove' "$storm_out" ||
-    fail "killed probe report lacks the uncertainty reason:" "$(cat "$storm_out")"
+: >"$db/db.lck"
+run_engine "$fixture" --stale-lock-check
+[[ $FIXTURE_RC -eq 0 ]] || fail "lock probe rc=$FIXTURE_RC, want 0" "$FIXTURE_OUTPUT"
+printf '%s\n' "$FIXTURE_OUTPUT" | grep -F 'status: present-idle' >/dev/null ||
+    fail "an idle db.lck must report status: present-idle:" "$FIXTURE_OUTPUT"
+printf '%s\n' "$FIXTURE_OUTPUT" | grep -F 'db.lck is never deleted' >/dev/null ||
+    fail "the probe must state the never-delete contract:" "$FIXTURE_OUTPUT"
+[[ -e $db/db.lck ]] || fail "the probe DELETED db.lck — it must never delete"
 
-# Hidden handles (an unreadable /proc/PID/fd — a foreign-root alpm client)
-# are UNKNOWN too, never proven idle.
-blind_out="$fixture/phase1-blind.out"
-env PATH="$fixture/bin:$PATH" GSA_FAKE_DB_PATH="$fixture/var/pacman" \
-    GSA_FAKE_FIND_SCAN_MODE=blind \
-    fish "$fixture/build-all.fish" --stale-lock-check "$idle_lock" >"$blind_out" 2>&1
-p1_rc=$?
-[[ $p1_rc -eq 1 ]] || fail "blind-probe check rc=$p1_rc, want 1" "$(cat "$blind_out")"
-[[ -e $idle_lock ]] || fail "blind probe DELETED the lock"
-grep -q 'status: UNKNOWN' "$blind_out" ||
-    fail "blind probe did not classify UNKNOWN:" "$(cat "$blind_out")"
-
-# A live inode-holder (any process holding the lock open — no name list) is
-# detected and classified HELD.
-busy_lock="$fixture/busy.lck"
-: >"$busy_lock"
-sleep 60 60<"$busy_lock" &
+# A live inode-holder — any process holding the lock open (here a `sleep`: the
+# probe is name-independent) — is identified and classified held.
+sleep 60 60<"$db/db.lck" &
 holder=$!
-busy_out="$fixture/phase1-busy.out"
-env PATH="$fixture/bin:$PATH" GSA_FAKE_DB_PATH="$fixture/var/pacman" \
-    fish "$fixture/build-all.fish" --stale-lock-check "$busy_lock" >"$busy_out" 2>&1
-p1b_rc=$?
-[[ $p1b_rc -eq 1 ]] ||
-    fail "busy lock check rc=$p1b_rc, want 1" "$(cat "$busy_out")"
-[[ -e $busy_lock ]] ||
-    fail "lock with a live holder was REMOVED"
-grep -q "holder pid=$holder" "$busy_out" ||
-    fail "holder pid not reported:" "$(cat "$busy_out")"
-grep -q 'cmd=.*sleep' "$busy_out" ||
-    fail "holder cmdline not reported:" "$(cat "$busy_out")"
-grep -q 'status: HELD' "$busy_out" ||
-    fail "live holder was not classified HELD:" "$(cat "$busy_out")"
-grep -q 'Recovery:' "$busy_out" ||
-    fail "no recovery instructions for a held lock"
-grep -qF "$busy_lock" "$busy_out" ||
-    fail "busy report does not name the lock path"
+run_engine "$fixture" --stale-lock-check
+holder_rc=$FIXTURE_RC
+[[ $holder_rc -eq 0 ]] || fail "held-lock probe rc=$holder_rc, want 0" "$FIXTURE_OUTPUT"
+printf '%s\n' "$FIXTURE_OUTPUT" | grep -F 'status: held' >/dev/null ||
+    fail "a live holder must report status: held:" "$FIXTURE_OUTPUT"
+printf '%s\n' "$FIXTURE_OUTPUT" | grep -F "holder: $holder " >/dev/null ||
+    fail "the probe does not identify holder pid $holder:" "$FIXTURE_OUTPUT"
+printf '%s\n' "$FIXTURE_OUTPUT" | grep -F 'sleep' >/dev/null ||
+    fail "the probe does not report the holder's command:" "$FIXTURE_OUTPUT"
+[[ -e $db/db.lck ]] || fail "the probe deleted a HELD db.lck"
 command kill "$holder" 2>/dev/null
 wait "$holder" 2>/dev/null
 
-# ── 2. direct --lane-job: honest result file + process rc on SIGTERM ───────
+run_engine "$fixture" --stale-lock-check extra
+[[ $FIXTURE_RC -eq 2 ]] ||
+    fail "--stale-lock-check with arguments must be rc 2 (§D.1), got $FIXTURE_RC" "$FIXTURE_OUTPUT"
+printf '%s\n' "$FIXTURE_OUTPUT" | grep -F 'takes no arguments' >/dev/null ||
+    fail "the arity refusal does not name the argument:" "$FIXTURE_OUTPUT"
+
+# ── 2. direct --lane-job: honest wire line + process rc on SIGTERM ─────────
 echo "phase 2: SIGTERM the lane child directly"
 state="$fixture/state-lane"
-mk_env "$state" 1.5
-res="$state/logs/.lane-direct.result"
-run_bg "$state/lane.out" fish "$fixture/build-all.fish" \
-    --lane-job p1 "$res" 1 0 0 0 1 0
+mk_env "$state" 3
+res="$state/results/p1.result"
+mkdir -p "$state/results"
+run_bg "$state/lane.out" "$gsa_bin" --lane-job p1 "$res" 1
 lane=$disp
 wait_for_file "$state/built/p1" 10 ||
-    fail "stub makepkg never started (lane did not reach the build)" \
-        "$(cat "$state/lane.out")"
+    fail "stub makepkg never started (lane did not reach the build)" "$state/lane.out"
 command kill -TERM "$lane"
 end_bg
 [[ $rc -eq 143 ]] ||
-    fail "signal-exited lane child rc=$rc, want honest 143" "$(cat "$state/lane.out")"
-[[ -s $res ]] ||
-    fail "no result file after lane SIGTERM" "$(cat "$state/lane.out")"
-grep -Eq '^p1 143 [0-9]+$' "$res" ||
-    fail "result file not honest: '$(cat "$res")' (want 'p1 143 <secs>')"
-grep -q 'lane child received TERM' "$state/logs/p1.log" ||
-    fail "package log missing 'lane child received TERM'" "$(cat "$state/logs/p1.log" 2>/dev/null)"
+    fail "signal-exited lane child rc=$rc, want honest 143 (§G.2)" "$state/lane.out"
+codec_roundtrip p1 143 '^[0-9]+$' interrupted-mid-build "$res"
 
-# ── 3. full run: dispatcher sees an honest 143, never rc=125 ───────────────
+# ── 3. full run: the signalled lane's row is the signal's own code ─────────
 echo "phase 3: SIGTERM the live lane child under a dispatcher"
 state="$fixture/state-full"
-mk_env "$state" 3
-run_bg "$state/run.out" fish "$fixture/build-all.fish" "${BARGS[@]}"
-wait_for_file "$state/built/p1" 15 ||
-    fail "lane never started in the full run" "$(cat "$state/run.out")"
-lane=$(find_lane_pid)
-[[ -n $lane ]] ||
-    fail "no --lane-child process found for the SIGTERM"
-command kill -TERM "$lane"
-end_bg
-[[ $rc -ne 0 ]] ||
-    fail "run with a signal-killed lane reported success" "$(cat "$state/run.out")"
-grep -q 'BUILD FAILED (rc=143' "$state/run.out" ||
-    fail "dispatcher did not report the honest 143" "$(cat "$state/run.out")"
-if grep -q 'no valid result' "$state/run.out"; then
-    fail "dispatcher fell back to 'no valid result'" "$(cat "$state/run.out")"
-fi
-grep -q 'lane child received TERM' "$state/logs/p1.log" ||
-    fail "package log missing 'lane child received TERM' after full run"
-# R-F27 row reasons: the lane's honest 143 is CLASSIFIED on the row — the
-# signal's own name, not a generic build-failed.
-row=$(rr_row p1 <"$state/run.out") ||
-    fail "no run-record row for p1" "$(cat "$state/run.out")"
-[[ $row =~ ^p1\ failed\ 143\ [0-9]+\ signal-term$ ]] ||
-    fail "run-record row for the signalled lane is '$row', want 'p1 failed 143 <secs> signal-term' (R-F27 row reason)"
+mk_env "$state" 4
+( wait_for_file "$state/built/p1" 15 || exit 0
+  lane=$(find_lane_pid)
+  [ -n "$lane" ] && command kill -TERM "$lane" ) &
+watcher=$!
+run_engine "$fixture" -B --leaf --no-prefetch --lanes 1 --jobs 1 p1
+command kill "$watcher" 2>/dev/null
+wait "$watcher" 2>/dev/null
+{
+    echo "$FIXTURE_OUTPUT"
+} >"$state/run.out"
 
-shim="$state/logs/.pacman-shim"
-[[ -e $shim ]] ||
-    fail "run start did not generate $shim"
-[[ $(stat -c %a "$shim") == 755 ]] ||
-    fail "shim mode is $(stat -c %a "$shim"), want 755"
-grep -q 'flock -x -w 300' "$shim" ||
-    fail "shim lacks 'flock -x -w 300': $(cat "$shim")"
-grep -qF "$state/logs/.pacman-install.lock" "$shim" ||
-    fail "shim lacks the absolute mutex path: $(cat "$shim")"
-grep -q '/usr/bin/pacman' "$shim" ||
-    fail "shim lacks /usr/bin/pacman: $(cat "$shim")"
-grep -qF '"$@"' "$shim" ||
-    fail "shim does not pass through \"\$@\": $(cat "$shim")"
-[[ -f $state/pacman-env.log ]] ||
-    fail "stub makepkg never observed its environment"
-grep -qxF "$shim" "$state/pacman-env.log" ||
-    fail "PACMAN did not point at the shim: $(cat "$state/pacman-env.log")"
+rr2_body <<<"$FIXTURE_OUTPUT" >/dev/null ||
+    fail "the run emitted no complete run record:" "$state/run.out"
+[[ $FIXTURE_RC -eq "$(rr2_scalar rc <<<"$FIXTURE_OUTPUT")" ]] ||
+    fail "the record's rc scalar disagrees with the process exit code:" "$state/run.out"
+# R-F27 row semantics carried over as §H.3: the lane's honest 143 is
+# CLASSIFIED on the row (interrupted / interrupted-mid-build), never a lost
+# "no valid result" class. The run-level class is the known skew (header):
+# only the row meaning and rc self-consistency are pinned.
+[ "$(rr2_outcome p1 status <<<"$FIXTURE_OUTPUT")" = "interrupted" ] ||
+    fail "the signalled lane's row is not interrupted (§H.3): $(rr2_outcome p1 <<<"$FIXTURE_OUTPUT")" "$state/run.out"
+[ "$(rr2_outcome p1 rc <<<"$FIXTURE_OUTPUT")" = "143" ] ||
+    fail "the signalled lane's row rc is not its own 143 (§G.2): $(rr2_outcome p1 <<<"$FIXTURE_OUTPUT")" "$state/run.out"
+[ "$(rr2_outcome p1 reason <<<"$FIXTURE_OUTPUT")" = "interrupted-mid-build" ] ||
+    fail "the signalled lane's row lacks the §H.3 reason: $(rr2_outcome p1 <<<"$FIXTURE_OUTPUT")" "$state/run.out"
+
+res=$(run_one_result "$state" p1)
+[ -n "$res" ] || fail "the run kept no result file for p1" "$state/run.out"
+codec_roundtrip p1 143 '^[0-9]+$' interrupted-mid-build "$res"
+
+# §K.3's PACMAN shim behaviour (the §6 R-1 deletion's behavioural keeper):
+# the build observed PACMAN aimed at a shim under the state root that exists.
+[ -s "$state/pacman-env.log" ] ||
+    fail "stub makepkg never observed its environment" "$state/run.out"
+pacman_env=$(tail -1 "$state/pacman-env.log")
+[[ $pacman_env == "$state/"* && -e $pacman_env ]] ||
+    fail "PACMAN did not point at an existing state-root shim: '$pacman_env'" "$state/run.out"
 
 # ── 4. dispatcher forensics for INT / TERM / HUP ───────────────────────────
-# R-F27: the interrupted run exits with the SIGNAL's own status — never a flat
-# 130 — and the run-record `rc:` scalar shows the same number.
-declare -A sig_rc=([INT]=130 [TERM]=143 [HUP]=129)
+# §G.1: every interrupt exits the flat 130 (the fish's signal-carried
+# 130/143/129 statuses remap); the record is emitted first and carries the
+# signal's lane code on the started row (§H.3/§G.2).
 for sig in INT TERM HUP; do
     echo "phase 4: SIG$sig the dispatcher"
     state="$fixture/state-dispatch-$sig"
-    mk_env "$state" 4
-    run_bg "$state/run.out" fish "$fixture/build-all.fish" "${BARGS[@]}"
-    wait_for_file "$state/built/p1" 15 ||
-        fail "$sig: lane never started" "$(cat "$state/run.out")"
-    command kill -s "$sig" "$disp"
-    end_bg
-    [[ $rc -eq ${sig_rc[$sig]} ]] ||
-        fail "$sig: dispatcher run exited rc=$rc, want ${sig_rc[$sig]} (the signal's own status)" \
-            "$(cat "$state/run.out")"
-    rr_rc=$(rr_scalar rc <"$state/run.out") ||
-        fail "$sig: no run record in the interrupted run" "$(cat "$state/run.out")"
-    [[ $rr_rc == "${sig_rc[$sig]}" ]] ||
-        fail "$sig: run-record rc: $rr_rc, want ${sig_rc[$sig]}"
-    grep -q 'Build interrupted' "$state/run.out" ||
-        fail "$sig: no 'Build interrupted' message" "$(cat "$state/run.out")"
-    dlog="$state/logs/dispatcher.log"
-    [[ -f $dlog ]] ||
-        fail "$sig: dispatcher.log was never created"
-    grep -q "signal: $sig received" "$dlog" ||
-        fail "$sig: dispatcher.log does not name the signal:" "$(cat "$dlog")"
-    grep -q '\[DEBUG-gsa-term\]' "$dlog" ||
-        fail "$sig: dispatcher.log lines lack the [DEBUG-gsa-term] tag"
-    grep -q 'Build interrupted' "$dlog" ||
-        fail "$sig: permanent 'Build interrupted' event missing from dispatcher.log"
-    grep -q 'cleanup begin' "$dlog" ||
-        fail "$sig: cleanup_active_lanes left no forensics trail"
-    # exactly ONE TERM per lane pgrp (the removed blitz sent 20 in 0.5 s),
-    # and the lane exits on it fast — no SIGKILL escalation ever happens.
-    [[ -f $state/signals.log ]] ||
-        fail "$sig: the lane pgrp received no TERM during teardown"
-    term_count=$(grep -c '^TERM$' "$state/signals.log")
-    [[ $term_count -eq 1 ]] ||
-        fail "$sig: lane pgrp received $term_count TERMs, want exactly 1" \
-            "$(cat "$state/signals.log")"
+    mk_env "$state" 20
+    pidfile="$state/engine.pid"
+    wrap="$state/gsa-wrap"
+    cat >"$wrap" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$\$" > "\${GSA_FAKE_ENGINE_PID:?}"
+exec "$gsa_bin" "\$@"
+EOF
+    chmod +x "$wrap"
+    ( wait_for_file "$pidfile" 10 || exit 0
+      wait_for_file "$state/built/p1" 15 || exit 0
+      command kill -s "$sig" "$(cat "$pidfile")" 2>/dev/null ) &
+    watcher=$!
+    GSA_FAKE_ENGINE_PID="$pidfile" GSA_TEST_GSA_BIN="$wrap" \
+        run_engine "$fixture" -B --leaf --no-prefetch --lanes 1 --jobs 1 p1 p2
+    command kill "$watcher" 2>/dev/null
+    wait "$watcher" 2>/dev/null
+    {
+        echo "$FIXTURE_OUTPUT"
+    } >"$state/run.out"
+
+    [[ $FIXTURE_RC -eq 130 ]] ||
+        fail "$sig: interrupted run exited rc=$FIXTURE_RC, want 130 (§G.1)" "$state/run.out"
+    [[ "$(rr2_scalar rc <<<"$FIXTURE_OUTPUT")" == "130" ]] ||
+        fail "$sig: run-record rc is $(rr2_scalar rc <<<"$FIXTURE_OUTPUT"), want 130" "$state/run.out"
+    [[ "$(rr2_scalar outcome <<<"$FIXTURE_OUTPUT")" == "interrupted" ]] ||
+        fail "$sig: run-record outcome is not interrupted:" "$state/run.out"
+    rr2_body <<<"$FIXTURE_OUTPUT" >/dev/null ||
+        fail "$sig: the interrupted run emitted no complete run record:" "$state/run.out"
+    rr2_outcome p1 rc <<<"$FIXTURE_OUTPUT" | grep -Eq '^(129|130|143)$' ||
+        fail "$sig: the started row's rc is not a signal lane code (§G.2): $(rr2_outcome p1 <<<"$FIXTURE_OUTPUT")" "$state/run.out"
+    [ "$(rr2_outcome p1 status <<<"$FIXTURE_OUTPUT")" = "interrupted" ] ||
+        fail "$sig: the started row is not interrupted (§H.3):" "$state/run.out"
+    [ "$(rr2_outcome p1 reason <<<"$FIXTURE_OUTPUT")" = "interrupted-mid-build" ] ||
+        fail "$sig: the started row lacks interrupted-mid-build:" "$state/run.out"
+    [ "$(rr2_outcome p2 <<<"$FIXTURE_OUTPUT")" = "p2 never-started - - interrupted-before-start" ] ||
+        fail "$sig: the unlaunched row is '$(rr2_outcome p2 <<<"$FIXTURE_OUTPUT")', want never-started/interrupted-before-start (§I.3)" "$state/run.out"
+    remaining_rows=$(rr2_remaining <<<"$FIXTURE_OUTPUT" | tr '\n' ' ' | sed 's/ $//')
+    [ "$remaining_rows" = "$(rr2_continuation remaining <<<"$FIXTURE_OUTPUT")" ] ||
+        fail "$sig: continuation remaining disagrees with the rows-derived set:" "$state/run.out"
+
+    # Exactly ONE TERM per lane pgrp (the removed blitz logged 20), verified
+    # on BOTH sides. Sender: the teardown stream names its single TERM sweep
+    # once (`teardown one SIGTERM per lane, shared grace window` —
+    # supervisor.rs emits it per teardown). Receiver: the stub's receipt log
+    # is best-effort — the sweep's SIGKILL can preempt the trap's write when
+    # the second signal skips the grace (§K.3 "kill children now"), so one
+    # lost receipt is an observation skew, never a behaviour; two receipts
+    # can never hide and still catch the blitz regression.
+    term_sends=$(grep -c 'one SIGTERM per lane, shared grace window' "$state/run.out" 2>/dev/null)
+    [[ ${term_sends:-0} -eq 1 ]] ||
+        fail "$sig: the teardown sent ${term_sends:-0} TERM sweeps, want exactly one (§K.3)" "$state/run.out"
+    term_count=$(grep -c '^TERM$' "$state/signals.log" 2>/dev/null)
+    [[ ${term_count:-0} -le 1 ]] ||
+        fail "$sig: lane pgrp received $term_count TERMs, want at most 1" "$state/signals.log"
     sleep 0.3
-    # Scoped to $fixture for the same reason as find_lane_pid: a sibling
-    # fixture's lane running concurrently must not be read as a survivor.
-    if ps -eo args= | grep -F 'build-all.fish --lane-job' | grep -F "$fixture" |
-        grep -v grep >/dev/null; then
-        fail "$sig: a lane process survived the dispatcher:" \
-            "$(ps -eo pid=,args= | grep -F 'build-all.fish --lane-job' |
-            grep -F "$fixture" | grep -v grep)"
+    if [ -n "$(find_lane_pid)" ]; then
+        fail "$sig: a lane process survived the dispatcher:" "$(ps -eo pid=,args= | grep -F "$fixture" | grep -v grep)"
     fi
-    if ps -eo args= | grep -F "$fixture/bin/makepkg" | grep -v grep >/dev/null; then
-        fail "$sig: a stub makepkg survived the dispatcher"
+    if stub_lives >/dev/null; then
+        fail "$sig: a stub makepkg survived the dispatcher:" "$(stub_lives)"
     fi
 done
 
-# ── 5. preflight: busy lock refuses -i, warns but builds build-only ────────
-echo "phase 5: busy db.lck preflight"
-state="$fixture/state-preflight"
-mkdir -p "$state/var/pacman"
-lock="$state/var/pacman/db.lck"
-: >"$lock"
-sleep 60 60<"$lock" &
-holder=$!
-mk_env "$state" 0.5
-run_bg "$state/i.out" fish "$fixture/build-all.fish" \
-    --allow-broken-rustc --no-deps --no-sync --lanes 1 --jobs 1 --install p1
-end_bg
-[[ $rc -ne 0 ]] ||
-    fail "-i run over a busy lock was not refused" "$(cat "$state/i.out")"
-grep -q 'refusing to start an -i run' "$state/i.out" ||
-    fail "no refusal message for busy lock:" "$(cat "$state/i.out")"
-grep -q "holder pid=$holder" "$state/i.out" ||
-    fail "refusal does not report the holder:" "$(cat "$state/i.out")"
-grep -q 'Recovery:' "$state/i.out" ||
-    fail "refusal lacks recovery instructions:" "$(cat "$state/i.out")"
-grep -qF "$lock" "$state/i.out" ||
-    fail "refusal does not name the lock path:" "$(cat "$state/i.out")"
-[[ -e $lock ]] ||
-    fail "busy lock was removed by the refused -i run"
-[[ ! -d $state/built ]] ||
-    fail "lanes dispatched despite the refused -i run"
-
-mk_env "$state" 0.5
-run_bg "$state/build.out" fish "$fixture/build-all.fish" "${BARGS[@]}"
-end_bg
-[[ $rc -eq 0 ]] ||
-    fail "build-only run over a busy lock failed" "$(cat "$state/build.out")"
-grep -q 'building anyway' "$state/build.out" ||
-    fail "build-only run did not warn about the busy lock" "$(cat "$state/build.out")"
-grep -q "holder pid=$holder" "$state/build.out" ||
-    fail "build-only warning does not report the holder" "$(cat "$state/build.out")"
-[[ -e $lock ]] ||
-    fail "build-only preflight removed a held lock"
-command kill "$holder" 2>/dev/null
-wait "$holder" 2>/dev/null
-
-# ── 7. direct shim invocation: "$@" reaches pacman untouched ───────────────
-echo "phase 7: invoke the shim directly"
-stub_log="$fixture/stub-pacman.log"
-: >"$stub_log"
-env PATH="$fixture/bin:$PATH" \
-    GSA_FAKE_STUB_PACMAN="$fixture/bin/record-pacman" \
-    GSA_FAKE_STUB_PACMAN_LOG="$stub_log" \
-    "$shim" --frobnicate 'arg with space' 'wild*card' ||
-    fail "shim invocation failed"
-[[ $(cat "$stub_log") == '--frobnicate arg with space wild*card' ]] ||
-    fail "shim did not pass \$@ through verbatim: '$(cat "$stub_log")'"
-
-# ── 8. unknown result-pkg edge: identity-less lane writes NOTHING ──────────
-# gsa_handle_signal used to fabricate a result identity `unknown` when the
-# signal arrived before the pkg was known — a non-package on the result wire
-# that the reap's identity check could not honestly classify. Now it writes
-# nothing (the dispatcher classifies the missing result as lane-lost and names
-# the lane). The codec's encode side enforces the same identity rule — an
-# empty pkg can never reach the wire — so the lane's result write fails loudly
-# and the process exits lane_outcome_lost (125), not some silent zero.
-echo "phase 8: identity-less lane result writes nothing"
-state="$fixture/state-unknown"
-mk_env "$state" 0.5
-mkdir -p "$state/logs"
-res="$state/logs/.lane-unknown.result"
-rc=0
-env "${RUN_ENV[@]}" fish "$fixture/build-all.fish" \
-    --lane-job "" "$res" 1 0 0 0 1 0 >"$state/unknown.out" 2>&1 || rc=$?
-[[ $rc -eq 125 ]] ||
-    fail "empty-pkg --lane-job rc=$rc, want 125 (lane_outcome_lost)" \
-        "$(cat "$state/unknown.out")"
-grep -q 'lane result write failed' "$state/unknown.out" ||
-    fail "no loud result-write failure for the identity-less lane:" \
-        "$(cat "$state/unknown.out")"
-[[ ! -e $res ]] ||
-    fail "identity-less lane published a result file: '$(cat "$res")'"
-grep -qF 'write_lane_result "$_LANE_JOB_RESULT" unknown' "$gf" &&
-    fail "gsa_handle_signal still fabricates an 'unknown' result identity"
-
-if ps -eo args= | grep -F "$fixture" | grep -v grep >/dev/null; then
-    fail "a fixture process survived:" \
-        "$(ps -eo args= | grep -F "$fixture" | grep -v grep)"
-fi
-
-# ── 9. run lock: a second run refuses, a finished run releases ─────────────
-echo "phase 9: workspace run lock (refuse, never queue; released after a run)"
-state="$fixture/state-lock"
+# ── 5. busy run lock: refuse pre-dispatch, never queue (§G.1 3) ────────────
+echo "phase 5: busy run lock refuses before dispatch"
+state="$fixture/state-busylock"
 mk_env "$state" 20
-run_bg "$state/a.out" fish "$fixture/build-all.fish" "${BARGS[@]}"
+run_bg "$state/a.out" "$gsa_bin" -B --leaf --no-prefetch --lanes 1 --jobs 1 p1 p2
 lock_a=$disp
 wait_for_file "$state/built/p1" 15 ||
-    fail "lock run A never started building" "$(cat "$state/a.out")"
-rc_b=0
-env "${RUN_ENV[@]}" fish "$fixture/build-all.fish" "${BARGS[@]}" \
-    >"$state/b.out" 2>&1 || rc_b=$?
-[[ $rc_b -ne 0 ]] ||
-    fail "second concurrent run was not refused (rc=$rc_b)" "$(cat "$state/b.out")"
-grep -qF "another build already holds this workspace's run lock — refusing to run concurrently" \
-    "$state/b.out" ||
-    fail "refusal message missing:" "$(cat "$state/b.out")"
-grep -qF "lock: $state/run.lock" "$state/b.out" ||
-    fail "refusal does not name the lock path:" "$(cat "$state/b.out")"
-grep -qF "holder: pid $lock_a started" "$state/b.out" ||
-    fail "refusal does not name the live holder (pid $lock_a):" "$(cat "$state/b.out")"
-grep -qF 'Nothing is queued' "$state/b.out" ||
-    fail "refusal lacks 'Nothing is queued':" "$(cat "$state/b.out")"
+    fail "lock holder never started building" "$state/a.out"
+run_engine "$fixture" -B --leaf --no-prefetch --lanes 1 --jobs 1 p1 p2
+{
+    echo "$FIXTURE_OUTPUT"
+} >"$state/b.out"
+[[ $FIXTURE_RC -eq 3 ]] ||
+    fail "a busy run lock must refuse with rc 3 (§G.1), got $FIXTURE_RC" "$state/b.out"
+[[ "$(rr2_scalar outcome <<<"$FIXTURE_OUTPUT")" == "refused" ]] ||
+    fail "the refused run's outcome scalar is not refused:" "$state/b.out"
+rr2_body <<<"$FIXTURE_OUTPUT" >/dev/null ||
+    fail "the refusal path emitted no full run record (§H.1):" "$state/b.out"
+for pkg in p1 p2; do
+    [ "$(rr2_outcome "$pkg" <<<"$FIXTURE_OUTPUT")" = "$pkg never-started - - startup-refused" ] ||
+        fail "refused row for $pkg is '$(rr2_outcome "$pkg" <<<"$FIXTURE_OUTPUT")', want never-started/startup-refused:" "$state/b.out"
+done
+printf '%s\n' "$FIXTURE_OUTPUT" | grep -F "$state/locks/run.lock" >/dev/null ||
+    fail "the refusal does not name the run lock path:" "$state/b.out"
+command kill -0 "$lock_a" 2>/dev/null ||
+    fail "the refused run was queued after all — the holder is gone"
+[ -e "$state/locks/run.lock" ] ||
+    fail "the busy lock file disappeared"
 command kill -TERM "$lock_a"
 end_bg
-# The holder dies with its dispatcher within one 0.25 s poll (it watches the
-# dispatcher pid), so an ended run never blocks the next one. Observe the
-# free through that bound — then the next run must proceed.
+
+# ── 6. ONE TERM → grace → SIGKILL at the default window (§K.3, gap G5) ─────
+# The lane IGNORES TERM, so nothing but the post-grace sweep can end it. The
+# observable order without tuning the window: children survive the single
+# TERM while the grace runs (alive at +5 s) and die with the sweep after it
+# (dead well within the default 30 s + slack), having logged exactly one TERM
+# receipt before the kill. Engine exit is deliberately NOT asserted here (see
+# the header's known skews).
+echo "phase 6: ONE TERM, grace window, then SIGKILL (default window)"
+state="$fixture/state-grace"
+mk_env "$state" 45
+export GSA_FAKE_IGNORE_TERM=1
+run_bg "$state/run.out" "$gsa_bin" -B --leaf --no-prefetch --lanes 1 --jobs 1 p1
+eng=$disp
+wait_for_file "$state/built/p1" 15 ||
+    fail "grace run never started building" "$state/run.out"
+command kill -TERM "$eng" 2>/dev/null
+sleep 5
+[ -n "$(find_lane_pid)" ] ||
+    fail "the lane died before the grace window could expire — the single TERM must not kill a TERM-proof child"
+stub_lives >/dev/null ||
+    fail "the stub makepkg died before the grace window could expire"
+swept=1
+for ((i = 0; i < 50; i++)); do
+    if [ -z "$(find_lane_pid)" ] && ! stub_lives >/dev/null; then
+        swept=0
+        break
+    fi
+    sleep 1
+done
+[[ $swept -eq 0 ]] ||
+    fail "the TERM-proof lane/stub never died — no SIGKILL followed the grace:" "$(ps -eo pid=,args= | grep -F "$fixture" | grep -v grep)"
+# ONE TERM before the kill: sender-side exactly-one (the teardown sweep line)
+# + receiver-side blitz guard — see the phase 4 comment for why one lost
+# receipt is an observation skew and two receipts are the blitz regression.
+term_sends=$(grep -c 'one SIGTERM per lane, shared grace window' "$state/run.out" 2>/dev/null)
+[[ ${term_sends:-0} -eq 1 ]] ||
+    fail "the teardown sent ${term_sends:-0} TERM sweeps, want exactly one before the kill (§K.3)" "$state/run.out"
+term_count=$(grep -c '^TERM$' "$state/signals.log" 2>/dev/null)
+[[ ${term_count:-0} -le 1 ]] ||
+    fail "the lane pgrp received $term_count TERMs, want at most one before the kill" "$state/signals.log"
+command kill -KILL "$eng" 2>/dev/null
+end_bg
+unset GSA_FAKE_IGNORE_TERM
+
+# ── 7. DELETED (§6 R-1): direct shim "$@" invocation ───────────────────────
+# The PACMAN shim's behaviour keeps in phase 3 (the makepkg PACMAN
+# observation); its fish artefact shape and passthrough source pins retire.
+
+# ── 8. result-wire gates: identity, lost, foreign (§F.2) ───────────────────
+echo "phase 8a: a bad identity can never reach the wire (seam refuses)"
+state="$fixture/state-identity"
+mk_env "$state" 0
+res="$state/results/bad.result"
+mkdir -p "$state/results"
+run_engine "$fixture" --lane-job "bad id" "$res" 1
+[[ $FIXTURE_RC -eq 2 ]] ||
+    fail "a malformed package id must be rc 2 (producer-side codec rule), got $FIXTURE_RC" "$FIXTURE_OUTPUT"
+printf '%s\n' "$FIXTURE_OUTPUT" | grep -F "is not a valid recipe id" >/dev/null ||
+    fail "the identity refusal does not name the argument:" "$FIXTURE_OUTPUT"
+[ ! -e "$res" ] || fail "a refused identity published a result file"
+[ ! -s "$state/makepkg.log" ] || fail "the identity refusal ran a build first:" "$(cat "$state/makepkg.log")"
+
+echo "phase 8b: a lane that dies without publishing maps to lost (125), loudly"
+state="$fixture/state-lost"
+mk_env "$state" 5
+( wait_for_file "$state/built/p1" 15 || exit 0
+  lane=$(find_lane_pid)
+  [ -n "$lane" ] && command kill -KILL "$lane" ) &
+watcher=$!
+run_engine "$fixture" -B --leaf --no-prefetch --lanes 1 --jobs 1 p1 p2
+command kill "$watcher" 2>/dev/null
+wait "$watcher" 2>/dev/null
+{
+    echo "$FIXTURE_OUTPUT"
+} >"$state/run.out"
+rows=$(rr2_outcome_rows <<<"$FIXTURE_OUTPUT")
+[ "$(rr2_outcome p1 <<<"$FIXTURE_OUTPUT")" = "p1 failed 125 - lane-lost" ] ||
+    fail "the vanished lane's row is '$(rr2_outcome p1 <<<"$FIXTURE_OUTPUT")', want failed 125 lane-lost (the fail-closed rule):" "$state/run.out"
+printf '%s\n' "$FIXTURE_OUTPUT" | grep -F 'no usable result for p1' >/dev/null ||
+    fail "the lost mapping is not reported loudly:" "$state/run.out"
+# the cone of the lost package parks (§I.1) and the run is a cone-stop
+# failure (§G.1 4) — derived from the rows
+[ "$(rr2_outcome p2 status <<<"$FIXTURE_OUTPUT")" = "parked" ] ||
+    fail "the lost package's consumer did not park:" "$state/run.out"
+expected=$(printf '%s\n' "$rows" | awk '{counts[$2]++} END { if (counts["failed"] > 0) print 4; else print 0 }')
+[[ $FIXTURE_RC -eq "$expected" ]] ||
+    fail "lost-lane run rc=$FIXTURE_RC, want $expected (§G.1 from the rows):" "$state/run.out"
+res=$(run_one_result "$state" p1)
+[ -z "$res" ] || fail "the vanished lane published a result after all:" "$(cat "$res" 2>/dev/null)"
+
+echo "phase 8c: a FOREIGN wire line is rejected, never adopted (§F.2)"
+state="$fixture/state-foreignlost"
+mk_env "$state" 5
+( wait_for_file "$state/built/p1" 15 || exit 0
+  rundir=$(ls -d "$state/runs"/*/ 2>/dev/null | head -1)
+  [ -n "$rundir" ] && printf 'v2 pX 0 1 ok\n' >"$rundir/p1.result"
+  lane=$(find_lane_pid)
+  [ -n "$lane" ] && command kill -KILL "$lane" ) &
+watcher=$!
+run_engine "$fixture" -B --leaf --no-prefetch --lanes 1 --jobs 1 p1 p2
+command kill "$watcher" 2>/dev/null
+wait "$watcher" 2>/dev/null
+{
+    echo "$FIXTURE_OUTPUT"
+} >"$state/run.out"
+printf '%s\n' "$FIXTURE_OUTPUT" | grep -F "foreign result: expected 'p1', got 'pX'" >/dev/null ||
+    fail "the foreign identity was not rejected by name:" "$state/run.out"
+[ "$(rr2_outcome p1 <<<"$FIXTURE_OUTPUT")" = "p1 failed 125 - lane-lost" ] ||
+    fail "a foreign line must fail closed to lost, not become the lane's outcome: $(rr2_outcome p1 <<<"$FIXTURE_OUTPUT")" "$state/run.out"
+res=$(run_one_result "$state" p1)
+[ -n "$res" ] || fail "the planted foreign line vanished" "$state/run.out"
+if grep -q 'unknown' "$res"; then
+    fail "a result identity was fabricated for the vanished lane:" "$(cat "$res")"
+fi
+
+# ── 9. run lock: a second run refuses (never queues), a finished run frees ─
+echo "phase 9: workspace run lock (refuse, never queue; released after a run)"
+state="$fixture/state-runlock"
+mk_env "$state" 20
+run_bg "$state/a.out" "$gsa_bin" -B --leaf --no-prefetch --lanes 1 --jobs 1 p1 p2
+lock_a=$disp
+wait_for_file "$state/built/p1" 15 ||
+    fail "lock run A never started building" "$state/a.out"
+run_engine "$fixture" -B --leaf --no-prefetch --lanes 1 --jobs 1 p1 p2
+{
+    echo "$FIXTURE_OUTPUT"
+} >"$state/b.out"
+[[ $FIXTURE_RC -eq 3 ]] ||
+    fail "second concurrent run was not refused with rc 3 (got $FIXTURE_RC)" "$state/b.out"
+[ "$(rr2_outcome p1 reason <<<"$FIXTURE_OUTPUT")" = "startup-refused" ] ||
+    fail "the second run's rows do not carry startup-refused:" "$state/b.out"
+command kill -0 "$lock_a" 2>/dev/null ||
+    fail "the 'concurrent' run only passed because the holder was already gone"
+command kill -TERM "$lock_a"
+end_bg
+# The flock releases with the run — observe the free within 1 s, then the run
+# started right after it must proceed.
 lock_free=1
 for ((i = 0; i < 10; i++)); do
-    /usr/bin/flock -n "$state/run.lock" true 2>/dev/null && {
+    /usr/bin/flock -n "$state/locks/run.lock" true 2>/dev/null && {
         lock_free=0
         break
     }
@@ -724,434 +668,306 @@ for ((i = 0; i < 10; i++)); do
 done
 [[ $lock_free -eq 0 ]] ||
     fail "run lock still held 1 s after its run ended"
-
-# After a normal run the lock is released: the run started right after it
-# frees must succeed and must not print the refusal.
 mk_env "$state" 0.5
-run_bg "$state/c.out" fish "$fixture/build-all.fish" "${BARGS[@]}"
-end_bg
-[[ $rc -eq 0 ]] ||
-    fail "normal run after the refused probe failed: rc=$rc" "$(cat "$state/c.out")"
-lock_free=1
-for ((i = 0; i < 10; i++)); do
-    /usr/bin/flock -n "$state/run.lock" true 2>/dev/null && {
-        lock_free=0
-        break
-    }
-    sleep 0.1
-done
-[[ $lock_free -eq 0 ]] ||
-    fail "run lock not released within 1 s after a NORMAL run ended"
-run_bg "$state/d.out" fish "$fixture/build-all.fish" "${BARGS[@]}"
-end_bg
-[[ $rc -eq 0 ]] ||
-    fail "the run started right after the release failed: rc=$rc" \
-        "$(cat "$state/d.out")"
-if grep -q 'refusing to run concurrently' "$state/d.out"; then
-    fail "the run started right after a normal run was refused the lock:" \
-        "$(cat "$state/d.out")"
-fi
+run_engine "$fixture" -B --leaf --no-prefetch --lanes 1 --jobs 1 p1 p2
+{
+    echo "$FIXTURE_OUTPUT"
+} >"$state/c.out"
+[[ $FIXTURE_RC -eq 0 ]] ||
+    fail "normal run after the release failed: rc=$FIXTURE_RC" "$state/c.out"
+[ "$(rr2_outcome p1 status <<<"$FIXTURE_OUTPUT")" = "succeeded" ] ||
+    fail "the post-release run did not build p1:" "$state/c.out"
 
-# ── 10. stale run lock: the flock is the authority, not the file content ───
+# ── 10. stale run lock: the flock is the authority, not the content ────────
 echo "phase 10: stale run-lock semantics (dead holder never blocks)"
-state="$fixture/state-stale-lock"
-mkdir -p "$state"
-# (a) a lock FILE naming a dead pid must block nothing — the flock is the
-#     authority, the content is only ever a naming hint.
-printf 'pid 4194000 started 2020-01-01T00:00:00+0000\n' >"$state/run.lock"
+state="$fixture/state-stalelock"
+mkdir -p "$state/locks"
+printf 'pid 4194000 started 2020-01-01T00:00:00+0000\n' >"$state/locks/run.lock"
 mk_env "$state" 0.5
-run_bg "$state/a.out" fish "$fixture/build-all.fish" "${BARGS[@]}"
-end_bg
-[[ $rc -eq 0 ]] ||
-    fail "run over a stale lock file (dead-pid content) failed: rc=$rc" \
-        "$(cat "$state/a.out")"
-if grep -q 'refusing to run concurrently' "$state/a.out"; then
-    fail "stale lock-file content blocked the run:" "$(cat "$state/a.out")"
-fi
-# (b) a SIGKILLed dispatcher's holder self-expires within one 0.25 s poll —
-#     the lock frees and the next run proceeds.
+run_engine "$fixture" -B --leaf --no-prefetch --lanes 1 --jobs 1 p1 p2
+{
+    echo "$FIXTURE_OUTPUT"
+} >"$state/a.out"
+[[ $FIXTURE_RC -eq 0 ]] ||
+    fail "run over a stale lock file (dead-pid content) failed: rc=$FIXTURE_RC" "$state/a.out"
+[ "$(rr2_outcome p1 reason <<<"$FIXTURE_OUTPUT")" = "ok" ] ||
+    fail "stale lock-file content blocked the run:" "$state/a.out"
 mk_env "$state" 20
-run_bg "$state/b.out" fish "$fixture/build-all.fish" "${BARGS[@]}"
+run_bg "$state/b.out" "$gsa_bin" -B --leaf --no-prefetch --lanes 1 --jobs 1 p1 p2
+lock_b=$disp
 wait_for_file "$state/built/p1" 15 ||
-    fail "lock run B never started building" "$(cat "$state/b.out")"
-command kill -KILL "$disp"
+    fail "lock run B never started building" "$state/b.out"
+command kill -KILL "$lock_b"
 end_bg
 for ((i = 0; i < 50; i++)); do
-    /usr/bin/flock -n "$state/run.lock" true 2>/dev/null && break
+    /usr/bin/flock -n "$state/locks/run.lock" true 2>/dev/null && break
     sleep 0.1
 done
-/usr/bin/flock -n "$state/run.lock" true 2>/dev/null ||
-    fail "run lock still held 5 s after its dispatcher was SIGKILLed"
+/usr/bin/flock -n "$state/locks/run.lock" true 2>/dev/null ||
+    fail "run lock still held 5 s after its holder was SIGKILLed"
 mk_env "$state" 1
-run_bg "$state/c.out" fish "$fixture/build-all.fish" "${BARGS[@]}"
+run_engine "$fixture" -B --leaf --no-prefetch --lanes 1 --jobs 1 p1 p2
+{
+    echo "$FIXTURE_OUTPUT"
+} >"$state/c.out"
+[[ $FIXTURE_RC -eq 0 ]] ||
+    fail "run after a dead holder failed: rc=$FIXTURE_RC" "$state/c.out"
+
+# ── 11./12. dead dispatcher: the next run's sweeps clean its artifacts ─────
+# §K.3's stale-artifact half: a dead run's result/park files and `.tmp.*`
+# names are reaped at the next run's startup; the current run's artifacts
+# survive. DEVIATIONS (header): no lane parent-liveness watchdog (a dead
+# dispatcher's lane runs to completion) and the orphan-PROCESS sweep's ppid
+# predicate cannot see orphans this host hands to its subreaper — both are
+# recorded, not pinned.
+echo "phase 11/12: dead dispatcher + startup stale-artifact sweep"
+state="$fixture/state-sweep"
+mk_env "$state" 8
+run_bg "$state/run.out" "$gsa_bin" -B --leaf --no-prefetch --lanes 1 --jobs 1 p1
+eng=$disp
+wait_for_file "$state/built/p1" 15 ||
+    fail "sweep run never started building" "$state/run.out"
+command kill -KILL "$eng"
 end_bg
-[[ $rc -eq 0 ]] ||
-    fail "run after a dead holder failed: rc=$rc" "$(cat "$state/c.out")"
-if grep -q 'refusing to run concurrently' "$state/c.out"; then
-    fail "a dead holder blocked the next run:" "$(cat "$state/c.out")"
+# Let the dead run's lane settle on its own (however it ends — watchdog or
+# build completion), then the NEXT run's startup sweep must clear the dead
+# run's stale artifacts.
+for ((i = 0; i < 150; i++)); do
+    [ -z "$(find_lane_pid)" ] && break
+    sleep 0.1
+done
+dead_runs=$(ls "$state/runs" 2>/dev/null | wc -l)
+[[ $dead_runs -eq 1 ]] ||
+    fail "expected exactly the dead run's directory before the sweep, saw: $(ls "$state/runs" 2>/dev/null)"
+mk_env "$state" 0.5
+run_engine "$fixture" -B --leaf --no-prefetch --lanes 1 --jobs 1 p3
+{
+    echo "$FIXTURE_OUTPUT"
+} >"$state/next.out"
+[[ $FIXTURE_RC -eq 0 ]] ||
+    fail "the run after a dead dispatcher failed: rc=$FIXTURE_RC" "$state/next.out"
+if ls "$state/runs"/*/p1.result >/dev/null 2>&1; then
+    fail "the dead run's stale result survived the sweep:" "$(ls "$state/runs" 2>/dev/null)"
+fi
+if find "$state/runs" -name '*.tmp.*' -print -quit | grep -q .; then
+    fail "a stale temp name survived the sweep"
+fi
+[ -f "$(run_one_result "$state" p3)" ] ||
+    fail "the current run's own result did not survive the sweep"
+if stub_lives >/dev/null || [ -n "$(find_lane_pid)" ]; then
+    fail "a fixture process survived the sweep section:" "$(ps -eo pid=,args= | grep -F "$fixture" | grep -v grep)"
 fi
 
-# ── 11. lane parent-liveness watchdog: dead dispatcher ⇒ the lane dies ─────
-echo "phase 11: lane parent-liveness watchdog"
-state="$fixture/state-watchdog"
-mk_env "$state" 30
-run_bg "$state/run.out" fish "$fixture/build-all.fish" "${BARGS[@]}"
-wait_for_file "$state/built/p1" 15 ||
-    fail "watchdog run never started building" "$(cat "$state/run.out")"
-lane=$(find_lane_pid)
-[[ -n $lane ]] || fail "no lane process to watch"
-[[ -n $(watchers_under "$lane") ]] ||
-    fail "dispatcher-spawned lane spawned no parent-liveness watcher"
-command kill -KILL "$disp"
-end_bg
-t0=$(date +%s)
-watchdog_ok=1
-for ((i = 0; i < 150; i++)); do
-    if [[ -z $(find_lane_pid) ]] &&
-        ! ps -eo args= | grep -F "$fixture/bin/makepkg" | grep -v grep >/dev/null; then
-        watchdog_ok=0
-        break
-    fi
-    sleep 0.1
-done
-elapsed=$(( $(date +%s) - t0 ))
-[[ $watchdog_ok -eq 0 ]] ||
-    fail "lane/stub makepkg survived ${elapsed}s after the dispatcher SIGKILL" \
-        "$(ps -eo pid=,args= | grep -F "$fixture" | grep -v grep)"
-[[ $elapsed -le 12 ]] ||
-    fail "watchdog teardown took ${elapsed}s, want well under ~8s"
-grep -q 'cleanup begin' "$state/logs/dispatcher.log" 2>/dev/null &&
-    fail "builder teardown ran after the dispatcher SIGKILL — the lane must die unassisted"
-grep -q 'Build interrupted' "$state/run.out" &&
-    fail "a SIGKILLed dispatcher printed 'Build interrupted'" \
-        "$(cat "$state/run.out")"
-
-# Direct --lane-job seam invocations carry no marker env and spawn NO watcher.
-mk_env "$state" 2
-run_bg "$state/direct.out" fish "$fixture/build-all.fish" \
-    --lane-job p1 "$state/logs/.lane-direct.result" 1 0 0 0 1 0
-lane=$disp
-wait_for_file "$state/built/p1" 10 ||
-    fail "direct lane never started" "$(cat "$state/direct.out")"
-[[ -z $(watchers_under "$lane") ]] ||
-    fail "a direct --lane-job (no marker env) spawned a watcher"
-end_bg
-
-# ── 12. startup orphan probe: a dead run's lane is stopped ─────────────────
-echo "phase 12: startup orphan probe"
-state="$fixture/state-orphan"
-mk_env "$state" 30
-mkdir -p "$state/logs"
-# The orphan must own its own process GROUP: stop_lane_process reads the lane
-# pid as a pgid (a plain background job would share THIS script's pgrp and the
-# sweep would TERM the fixture itself), so setsid reproduces how a real
-# dispatcher-spawned lane looks after its dispatcher died.
-setsid env "${RUN_ENV[@]}" fish "$fixture/build-all.fish" \
-    --lane-job p1 "$state/logs/.lane-orphan.result" 1 0 0 0 1 0 \
-    >"$state/orphan.out" 2>&1 &
-orph_wait=$!
-wait_for_file "$state/built/p1" 15 ||
-    fail "orphan lane's stub makepkg never started" "$(cat "$state/orphan.out")"
-orph=$(find_lane_pid)
-[[ -n $orph ]] || fail "could not identify the orphan lane"
-mk_env "$state" 0.5
-run_bg "$state/run.out" fish "$fixture/build-all.fish" "${BARGS[@]}"
-end_bg
-[[ $rc -eq 0 ]] ||
-    fail "run over an orphaned lane of a previous run failed: rc=$rc" \
-        "$(cat "$state/run.out")"
-grep -qF "stopping an orphaned lane of a previous run: pid $orph" "$state/run.out" ||
-    fail "no named orphan-stop warning (pid $orph):" "$(cat "$state/run.out")"
-grep -qF "orphan lane: pid=$orph of a previous run" "$state/logs/dispatcher.log" ||
-    fail "dispatcher.log lacks the orphan-stop line:" \
-        "$(cat "$state/logs/dispatcher.log" 2>/dev/null)"
-orph_gone=1
-for ((i = 0; i < 150; i++)); do
-    orph_state=$(ps -o stat= -p "$orph" 2>/dev/null)
-    if [[ -z $orph_state || $orph_state == *Z* ]]; then
-        orph_gone=0
-        break
-    fi
-    sleep 0.1
-done
-[[ $orph_gone -eq 0 ]] ||
-    fail "orphan lane $orph survived the sweep" \
-        "$(ps -eo pid=,args= | grep -F "$fixture" | grep -v grep)"
-wait "$orph_wait" 2>/dev/null
-
-# ── 13. second-signal escalation: SIGKILL sweep, grace skipped ─────────────
-echo "phase 13: second-signal escalation (TERM-ignoring lane, 30 s grace)"
+# ── 13. second-signal escalation: SIGKILL sweep, grace skipped (§K.3) ─────
+echo "phase 13: second-signal escalation (TERM-ignoring lane, default grace)"
 state="$fixture/state-escalate"
 mk_env "$state" 60
-RUN_ENV+=("GSA_FAKE_IGNORE_TERM=1")
-run_bg "$state/run.out" fish "$fixture/build-all.fish" "${BARGS[@]}"
+export GSA_FAKE_IGNORE_TERM=1
+run_bg "$state/run.out" "$gsa_bin" -B --leaf --no-prefetch --lanes 1 --jobs 1 p1
+eng=$disp
 wait_for_file "$state/built/p1" 15 ||
-    fail "escalation run never started building" "$(cat "$state/run.out")"
-lane=$(find_lane_pid)
-[[ -n $lane ]] || fail "no lane process for the escalation test"
-t0=$(date +%s)
+    fail "escalation run never started building" "$state/run.out"
 # The first signal (HUP) latches the interrupt and starts the normal
 # TERM→grace→KILL teardown — the lane IGNORES TERM, so without escalation the
-# run would wait out the whole 30 s grace. The SECOND signal (INT) says NOW:
-# it must SIGKILL-sweep immediately, and it must be the LAST handler to run so
-# _LAST_SIGNAL=INT (rc 130). Both are sent back-to-back so the two handlers
-# run in the same interrupt window (a second signal arriving later lands
-# after cleanup has emptied the active-lane list and the sweep is a no-op —
-# measured: 30 ms+ spacing waits out the grace). The HUP→INT ORDER is the one
-# pairing both delivery mechanisms agree on: same-type back-to-back signals
-# are coalesced by the kernel (measured: one INT+INT pair in five produced no
-# second handler at all), and near-simultaneous DIFFERENT signals race between
-# send order and Linux's lowest-signal-number-first delivery (measured:
-# TERM→INT yielded rc 143 once), while HUP(1)→INT(2) is first under BOTH
-# rules, so INT is deterministically the second and last handler.
-command kill -HUP "$disp" 2>/dev/null
-command kill -INT "$disp" 2>/dev/null
-end_bg
-elapsed=$(( $(date +%s) - t0 ))
-dlog="$state/logs/dispatcher.log"
-[[ $rc -eq 130 ]] ||
-    fail "escalated run exited rc=$rc, want 130 (the second signal's status)" \
-        "$(cat "$state/run.out")"
-grep -qF 'is the SECOND signal — immediate SIGKILL sweep' "$dlog" ||
-    fail "dispatcher.log lacks the SECOND-signal line:" "$(cat "$dlog" 2>/dev/null)"
-grep -qF 'SIGKILL immediately (second signal)' "$dlog" ||
-    fail "dispatcher.log lacks the immediate-sweep line:" "$(cat "$dlog" 2>/dev/null)"
+# sweep would wait out the whole 30 s grace. The SECOND signal (INT) says
+# NOW. Both are sent back-to-back so the two receipts land in the same
+# interrupt window: same-type back-to-back signals are coalesced by the
+# kernel, and near-simultaneous DIFFERENT signals race between send order and
+# Linux's lowest-signal-number-first delivery, while HUP(1)→INT(2) is first
+# under BOTH rules — INT is deterministically the second receipt.
+command kill -HUP "$eng" 2>/dev/null
+t0=$(date +%s)
+command kill -INT "$eng" 2>/dev/null
+escalated=1
+for ((i = 0; i < 100; i++)); do
+    if [ -z "$(find_lane_pid)" ] && ! stub_lives >/dev/null; then
+        escalated=0
+        break
+    fi
+    sleep 0.1
+done
+elapsed=$(($(date +%s) - t0))
+[[ $escalated -eq 0 ]] ||
+    fail "the second signal did not sweep the lanes within 10 s (it waited out the grace?):" \
+        "$(ps -eo pid=,args= | grep -F "$fixture" | grep -v grep)"
 [[ $elapsed -le 10 ]] ||
-    fail "escalated run took ${elapsed}s after the second signal — it waited out the 30 s grace" \
-        "$(cat "$dlog" 2>/dev/null)"
-grep -q 'Build interrupted' "$state/run.out" ||
-    fail "no 'Build interrupted' after the escalation" "$(cat "$state/run.out")"
-rr_rc=$(rr_scalar rc <"$state/run.out") ||
-    fail "no run record after the escalation" "$(cat "$state/run.out")"
-[[ $rr_rc == 130 ]] ||
-    fail "escalated run-record rc: $rr_rc, want 130"
-sleep 0.3
-if ps -eo args= | grep -F 'build-all.fish --lane-job' | grep -F "$fixture" |
-    grep -v grep >/dev/null; then
-    fail "a lane survived the second-signal sweep:" \
-        "$(ps -eo pid=,args= | grep -F 'build-all.fish --lane-job' | grep -F "$fixture" |
-        grep -v grep)"
-fi
-if ps -eo args= | grep -F "$fixture/bin/makepkg" | grep -v grep >/dev/null; then
-    fail "a stub makepkg survived the second-signal sweep"
-fi
+    fail "lane teardown took ${elapsed}s after the second signal — not an immediate sweep"
+# ONE TERM before the kill on the escalation path: the second signal skips
+# the grace (§K.3 "kill children now"), so the receipt write races the
+# SIGKILL — sender-side exactly-one + receiver-side blitz guard (phase 4).
+term_sends=$(grep -c 'one SIGTERM per lane, shared grace window' "$state/run.out" 2>/dev/null)
+[[ ${term_sends:-0} -eq 1 ]] ||
+    fail "the teardown sent ${term_sends:-0} TERM sweeps, want exactly one before the kill (§K.3)" "$state/run.out"
+term_count=$(grep -c '^TERM$' "$state/signals.log" 2>/dev/null)
+[[ ${term_count:-0} -le 1 ]] ||
+    fail "the lane pgrp received $term_count TERMs, want at most one before the kill" "$state/signals.log"
+grep -F 'second signal' "$state/run.out" >/dev/null ||
+    fail "the escalation is not reported in the teardown stream:" "$state/run.out"
+command kill -KILL "$eng" 2>/dev/null
+end_bg
+unset GSA_FAKE_IGNORE_TERM
 
-# ── 14. run-scoped result files: a foreign line never kills the lane ───────
-echo "phase 14: foreign result identity is ignored (R-F9)"
-state="$fixture/state-foreign"
+# ── 14. foreign wire line + healthy lane: publication replaces the slot ────
+echo "phase 14: a foreign result line never misclassifies the healthy lane"
+state="$fixture/state-foreign-ok"
 mk_env "$state" 3
-RUN_ENV+=("_GSA_RUN_ID=runone")
-run_bg "$state/run.out" fish "$fixture/build-all.fish" "${BARGS[@]}"
-wait_for_file "$state/built/p1" 15 ||
-    fail "foreign-probe run never started building" "$(cat "$state/run.out")"
-rf="$state/logs/.lane.runone.1.result"
-printf 'pX 0 1\n' >"$rf" ||
-    fail "could not plant the foreign result line in $rf"
-end_bg
-[[ $rc -eq 0 ]] ||
-    fail "run with a foreign result line failed: rc=$rc" "$(cat "$state/run.out")"
-row=$(rr_row p1 <"$state/run.out") ||
-    fail "no run-record row for p1" "$(cat "$state/run.out")"
-[[ $row =~ ^p1\ succeeded\ [0-9]+\ [0-9]+\ ok$ ]] ||
-    fail "run-record row for p1 is '$row', want 'p1 succeeded <n> <n> ok'"
-if grep -q 'lane lost' "$state/run.out"; then
-    fail "a foreign line misclassified the healthy lane:" "$(cat "$state/run.out")"
-fi
-if grep -q 'no valid result' "$state/run.out"; then
-    fail "a foreign line was treated as a missing result:" "$(cat "$state/run.out")"
-fi
-if grep -q 'reap anomaly' "$state/logs/dispatcher.log" 2>/dev/null; then
-    fail "dispatcher.log records a reap anomaly for a foreign line:" \
-        "$(cat "$state/logs/dispatcher.log")"
-fi
+( wait_for_file "$state/built/p1" 15 || exit 0
+  rundir=$(ls -d "$state/runs"/*/ 2>/dev/null | head -1)
+  [ -n "$rundir" ] && printf 'v2 pX 0 1 ok\n' >"$rundir/p1.result" ) &
+watcher=$!
+run_engine "$fixture" -B --leaf --no-prefetch --lanes 1 --jobs 1 p1
+command kill "$watcher" 2>/dev/null
+wait "$watcher" 2>/dev/null
+{
+    echo "$FIXTURE_OUTPUT"
+} >"$state/run.out"
+[[ $FIXTURE_RC -eq 0 ]] ||
+    fail "a foreign line broke the healthy run: rc=$FIXTURE_RC" "$state/run.out"
+[ "$(rr2_outcome p1 status <<<"$FIXTURE_OUTPUT")" = "succeeded" ] ||
+    fail "the healthy lane was misclassified by the foreign line: $(rr2_outcome p1 <<<"$FIXTURE_OUTPUT")" "$state/run.out"
+[ "$(rr2_outcome p1 rc <<<"$FIXTURE_OUTPUT")" = "0" ] ||
+    fail "the healthy lane's row rc is not 0: $(rr2_outcome p1 <<<"$FIXTURE_OUTPUT")" "$state/run.out"
+[ "$(rr2_outcome p1 reason <<<"$FIXTURE_OUTPUT")" = "ok" ] ||
+    fail "the healthy lane's row reason is not ok: $(rr2_outcome p1 <<<"$FIXTURE_OUTPUT")" "$state/run.out"
+res=$(run_one_result "$state" p1)
+codec_roundtrip p1 0 '^[0-9]+$' ok "$res"
 
-# ── 15. result-clear refusal (R-F33) ──────────────────────────────────────
-echo "phase 15: result-clear refusal"
+# ── 15. result-clear refusal: fail closed, never force ─────────────────────
+echo "phase 15: unremovable result slot fails closed (§F.2)"
 state="$fixture/state-clear"
-mk_env "$state" 0.5
-RUN_ENV+=("_GSA_RUN_ID=runone")
-mkdir -p "$state/logs/.lane.runone.1.result"
-printf 'not empty\n' >"$state/logs/.lane.runone.1.result/junk"
-run_bg "$state/run.out" fish "$fixture/build-all.fish" "${BARGS[@]}"
-end_bg
-[[ $rc -ne 0 ]] ||
-    fail "run with an unremovable result slot reported success" \
-        "$(cat "$state/run.out")"
-grep -qF 'cannot clear a stale lane result — refusing to dispatch p1' "$state/run.out" ||
-    fail "missing result-clear refusal message:" "$(cat "$state/run.out")"
-row=$(rr_row p1 <"$state/run.out") ||
-    fail "no run-record row for p1" "$(cat "$state/run.out")"
-[[ $row == 'p1 failed 1 0 result-clear-failed' ]] ||
-    fail "run-record row is '$row', want 'p1 failed 1 0 result-clear-failed'"
-[[ -d $state/logs/.lane.runone.1.result ]] ||
-    fail "the unremovable result slot disappeared — the gate must refuse, not force"
+mk_env "$state" 0
+slot="$state/slot"
+mkdir -p "$slot"
+printf 'not empty\n' >"$slot/junk"
+run_engine "$fixture" --lane-job p1 "$slot" 1
+[[ $FIXTURE_RC -eq 125 ]] ||
+    fail "an unremovable result slot must fail closed to lost (125), got $FIXTURE_RC" "$FIXTURE_OUTPUT"
+printf '%s\n' "$FIXTURE_OUTPUT" | grep -F "cannot publish" >/dev/null ||
+    fail "the publish refusal is not reported loudly, naming the file:" "$FIXTURE_OUTPUT"
+[ -d "$slot" ] || fail "the unremovable slot disappeared — the seam must refuse, not force"
+[ -f "$slot/junk" ] || fail "the slot's content was clobbered"
 
 # ── 16. lane payload gates + `-j` pair normalisation ───────────────────────
-echo "phase 16: lane payload gates (control chars, bad identity, -j pairs)"
+echo "phase 16: lane payload gates (§D.1) and G10 flag grammar"
 state="$fixture/state-payload"
 mk_env "$state" 0
-mkdir -p "$state/logs"
+mkdir -p "$state/results"
 
-# (a) a control character in the result path is refused BEFORE any work:
-#     rc 2 (invocation error, never a lane outcome), no result file, and the
-#     lane body never ran (no marker, no pacman shim).
-res_ctrl="$state/logs/.lane-ctrl"$'\x01'".result"
-rc=0
-env "${RUN_ENV[@]}" fish "$fixture/build-all.fish" \
-    --lane-job p1 "$res_ctrl" 1 0 0 0 1 0 >"$state/ctrl.out" 2>&1 || rc=$?
-[[ $rc -eq 2 ]] ||
-    fail "control-char result path rc=$rc, want 2 (invocation error)" \
-        "$(cat "$state/ctrl.out")"
-grep -qF 'Error: --lane-job received a result path with control characters' \
-    "$state/ctrl.out" ||
-    fail "missing control-character refusal:" "$(cat "$state/ctrl.out")"
-[[ ! -e $res_ctrl ]] ||
-    fail "a refused invocation still wrote a result file"
-[[ ! -e $state/built/p1 ]] ||
-    fail "the control-char refusal ran work before refusing"
-[[ ! -e $state/logs/.pacman-shim ]] ||
-    fail "the control-char refusal reached the lane body"
+# (a) a control character in the result path is refused BEFORE any work.
+res_ctrl="$state/results/ctrl"$'\x01'".result"
+run_engine "$fixture" --lane-job p1 "$res_ctrl" 1
+[[ $FIXTURE_RC -eq 2 ]] ||
+    fail "control-char result path rc=$FIXTURE_RC, want 2 (invocation error)" "$FIXTURE_OUTPUT"
+printf '%s\n' "$FIXTURE_OUTPUT" | grep -F 'result path' >/dev/null &&
+    printf '%s\n' "$FIXTURE_OUTPUT" | grep -F 'control characters' >/dev/null ||
+    fail "missing control-character refusal:" "$FIXTURE_OUTPUT"
+[ ! -e "$res_ctrl" ] || fail "a refused invocation still wrote a result file"
+[ ! -s "$state/makepkg.log" ] ||
+    fail "the control-char refusal ran work before refusing:" "$(cat "$state/makepkg.log")"
 
-# (b) a pkg id outside the codec charset can never reach the result wire:
-#     the lane exits 125 (lane_outcome_lost) and writes NO result file.
-res_bad="$state/logs/.lane-badid.result"
-rc=0
-env "${RUN_ENV[@]}" fish "$fixture/build-all.fish" \
-    --lane-job "bad id" "$res_bad" 1 0 0 0 1 0 >"$state/badid.out" 2>&1 || rc=$?
-[[ $rc -eq 125 ]] ||
-    fail "bad-identity lane rc=$rc, want 125 (lane_outcome_lost)" \
-        "$(cat "$state/badid.out")"
-grep -qF 'lane result write failed' "$state/badid.out" ||
-    fail "bad-identity lane did not fail loudly:" "$(cat "$state/badid.out")"
-[[ ! -e $res_bad ]] ||
-    fail "a bad-identity lane published a result file"
+# (b) usage payloads: missing positionals, bad jobs — each names the argument.
+run_engine "$fixture" --lane-job
+[[ $FIXTURE_RC -eq 2 ]] || fail "a missing payload must be rc 2, got $FIXTURE_RC" "$FIXTURE_OUTPUT"
+for bad_jobs in 0 x; do
+    run_engine "$fixture" --lane-job p1 "$state/results/j.result" "$bad_jobs"
+    [[ $FIXTURE_RC -eq 2 ]] || fail "jobs '$bad_jobs' must be rc 2, got $FIXTURE_RC" "$FIXTURE_OUTPUT"
+    printf '%s\n' "$FIXTURE_OUTPUT" | grep -F "jobs '$bad_jobs'" >/dev/null ||
+        fail "the jobs refusal does not name the argument:" "$FIXTURE_OUTPUT"
+done
 
-# (c) MAKEFLAGS/NINJAFLAGS `-j N` pairs re-export as the lane's -j1 with no
-#     stranded operand token (the invocation passes job count 1).
-res_flags="$state/logs/.lane-flags.result"
+# (c) G10: the `flags…` grammar is the makepkg-flag token check — forbidden
+#     verification-bypass tokens, malformed tokens, empty tokens, all rc 2
+#     naming the argument, and none of them reaches a build.
+for bad_flag in --skipchecksums --skippgpcheck --skipinteg; do
+    run_engine "$fixture" --lane-job p1 "$state/results/f.result" 1 "$bad_flag"
+    [[ $FIXTURE_RC -eq 2 ]] || fail "$bad_flag must be rc 2, got $FIXTURE_RC" "$FIXTURE_OUTPUT"
+    printf '%s\n' "$FIXTURE_OUTPUT" | grep -F -- "$bad_flag" >/dev/null ||
+        fail "the flag refusal does not name $bad_flag:" "$FIXTURE_OUTPUT"
+    printf '%s\n' "$FIXTURE_OUTPUT" | grep -F 'never weakened' >/dev/null ||
+        fail "$bad_flag's refusal must state verification is never weakened:" "$FIXTURE_OUTPUT"
+done
+run_engine "$fixture" --lane-job p1 "$state/results/f.result" 1 'bad token'
+[[ $FIXTURE_RC -eq 2 ]] || fail "a malformed flag token must be rc 2, got $FIXTURE_RC" "$FIXTURE_OUTPUT"
+printf '%s\n' "$FIXTURE_OUTPUT" | grep -F 'not a makepkg flag token' >/dev/null ||
+    fail "the malformed-token refusal does not name the grammar:" "$FIXTURE_OUTPUT"
+run_engine "$fixture" --lane-job p1 "$state/results/f.result" 1 ''
+[[ $FIXTURE_RC -eq 2 ]] || fail "an empty flag token must be rc 2, got $FIXTURE_RC" "$FIXTURE_OUTPUT"
+if find "$state/results" -name '*.result' -print -quit | grep -q .; then
+    fail "a refused --lane-job payload published a result file"
+fi
+[ ! -s "$state/makepkg.log" ] ||
+    fail "a refused payload ran a build first:" "$(cat "$state/makepkg.log")"
+
+# (d) `-j N` job pairs are STRIPPED from MAKEFLAGS/NINJAFLAGS with the
+#     caller's other flags preserved (§K.1) — no stranded operand token, and
+#     the lane's own job count travels as GSA_BUILD_JOBS output.
 flags_log="$state/flags.log"
-rc=0
-env "${RUN_ENV[@]}" MAKEFLAGS='-j 4 --no-print-directory' NINJAFLAGS='-j 8' \
-    GSA_FAKE_FLAGS_LOG="$flags_log" \
-    fish "$fixture/build-all.fish" --lane-job p1 "$res_flags" 1 0 0 0 1 0 \
-    >"$state/flags.out" 2>&1 || rc=$?
-[[ $rc -eq 0 ]] ||
-    fail "flags-probe lane rc=$rc, want 0" "$(cat "$state/flags.out")"
-[[ -s $flags_log ]] ||
-    fail "stub makepkg never observed its flags" "$(cat "$state/flags.out")"
+GSA_FAKE_FLAGS_LOG="$flags_log" \
+    MAKEFLAGS='-j 4 --no-print-directory' NINJAFLAGS='-j 8' \
+    run_engine "$fixture" --lane-job p1 "$state/results/flags.result" 3
+[[ $FIXTURE_RC -eq 0 ]] ||
+    fail "flags-probe lane rc=$FIXTURE_RC, want 0" "$FIXTURE_OUTPUT"
+[ -s "$flags_log" ] || fail "stub makepkg never observed its flags" "$FIXTURE_OUTPUT"
 mf_line=$(grep '^MAKEFLAGS=' "$flags_log" | tail -1)
 nf_line=$(grep '^NINJAFLAGS=' "$flags_log" | tail -1)
-[[ $mf_line == *'-j1'* ]] ||
-    fail "MAKEFLAGS lacks the lane's -j1: '$mf_line'"
-[[ $mf_line == *'--no-print-directory'* ]] ||
-    fail "MAKEFLAGS lost --no-print-directory: '$mf_line'"
-for tok in ${mf_line#MAKEFLAGS=}; do
-    [[ $tok == 4 ]] &&
-        fail "MAKEFLAGS kept the stranded -j operand as a bare token: '$mf_line'"
-done
-[[ $nf_line == *'-j1'* ]] ||
-    fail "NINJAFLAGS lacks the lane's -j1: '$nf_line'"
-for tok in ${nf_line#NINJAFLAGS=}; do
-    [[ $tok == 8 ]] &&
-        fail "NINJAFLAGS kept the stranded -j operand as a bare token: '$nf_line'"
-done
+jobs_line=$(grep '^GSA_BUILD_JOBS=' "$flags_log" | tail -1)
+[[ $mf_line == 'MAKEFLAGS=--no-print-directory' ]] ||
+    fail "MAKEFLAGS is '$mf_line', want the caller's non-job flags with -j pairs stripped (§K.1)"
+[[ $nf_line == 'NINJAFLAGS=' ]] ||
+    fail "NINJAFLAGS is '$nf_line', want empty after job-flag stripping (§K.1)"
+[[ $jobs_line == 'GSA_BUILD_JOBS=3' ]] ||
+    fail "the lane did not export its GSA_BUILD_JOBS=3 budget: '$jobs_line'"
+res="$state/results/flags.result"
+codec_roundtrip p1 0 '^[0-9]+$' ok "$res"
 
-if ps -eo args= | grep -F "$fixture" | grep -v grep >/dev/null; then
-    fail "a fixture process survived:" \
-        "$(ps -eo args= | grep -F "$fixture" | grep -v grep)"
+# ── 17. the interrupt abort wins over further dispatch ─────────────────────
+# The ready-but-queued p3 could have started at any moment; the interrupt must
+# stop dispatch before it does (the pre-dispatch latch's observable meaning —
+# see the header for the unreachable zero-dispatch extreme).
+echo "phase 17: the abort beats dispatch of ready work"
+state="$fixture/state-abort"
+mk_env "$state" 20
+pidfile="$state/engine.pid"
+wrap="$state/gsa-wrap"
+cat >"$wrap" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$\$" > "\${GSA_FAKE_ENGINE_PID:?}"
+exec "$gsa_bin" "\$@"
+EOF
+chmod +x "$wrap"
+( wait_for_file "$pidfile" 10 || exit 0
+  wait_for_file "$state/built/p1" 15 || exit 0
+  command kill -INT "$(cat "$pidfile")" 2>/dev/null ) &
+watcher=$!
+GSA_FAKE_ENGINE_PID="$pidfile" GSA_TEST_GSA_BIN="$wrap" \
+    run_engine "$fixture" -B --leaf --no-prefetch --lanes 1 --jobs 1 p1 p3
+command kill "$watcher" 2>/dev/null
+wait "$watcher" 2>/dev/null
+{
+    echo "$FIXTURE_OUTPUT"
+} >"$state/run.out"
+
+[[ $FIXTURE_RC -eq 130 ]] ||
+    fail "the aborted run exited rc=$FIXTURE_RC, want 130 (§G.1)" "$state/run.out"
+rr2_body <<<"$FIXTURE_OUTPUT" >/dev/null ||
+    fail "the abort path emitted no complete run record (§H.1):" "$state/run.out"
+[[ "$(rr2_scalar rc <<<"$FIXTURE_OUTPUT")" == "130" ]] ||
+    fail "run-record rc is $(rr2_scalar rc <<<"$FIXTURE_OUTPUT"), want 130" "$state/run.out"
+[ "$(rr2_outcome p1 status <<<"$FIXTURE_OUTPUT")" = "interrupted" ] ||
+    fail "the started row is not interrupted:" "$state/run.out"
+[ "$(rr2_outcome p3 <<<"$FIXTURE_OUTPUT")" = "p3 never-started - - interrupted-before-start" ] ||
+    fail "ready work was dispatched despite the abort: $(rr2_outcome p3 <<<"$FIXTURE_OUTPUT")" "$state/run.out"
+# nothing beyond the interrupted lane was ever dispatched
+[ "$(grep -c '^BUILD ' "$state/makepkg.log" 2>/dev/null)" -eq 1 ] ||
+    fail "builds ran despite the pre-dispatch abort:" "$(cat "$state/makepkg.log" 2>/dev/null)"
+grep -qx 'BUILD p1' "$state/makepkg.log" ||
+    fail "the only dispatched build is not p1:" "$(cat "$state/makepkg.log" 2>/dev/null)"
+remaining_rows=$(rr2_remaining <<<"$FIXTURE_OUTPUT" | tr '\n' ' ' | sed 's/ $//')
+[ "$remaining_rows" = "$(rr2_continuation remaining <<<"$FIXTURE_OUTPUT")" ] ||
+    fail "continuation remaining disagrees with the rows-derived set:" "$state/run.out"
+
+if [ -n "$(find_lane_pid)" ] || stub_lives >/dev/null; then
+    fail "a fixture process survived the battery:" "$(ps -eo pid=,args= | grep -F "$fixture" | grep -v grep)"
 fi
-
-# ── 17. SIGINT during pre-dispatch: abort before dispatch (R-F27 latch) ────
-# WHY: the interrupt latch used to be consumed only inside run_lanes'
-# dispatch loop, so a ^C during the pre-dispatch phase (the ABI gates, the
-# plan) was IGNORED and the run went on to dispatch work the operator had
-# just cancelled. abort_before_dispatch now honours the latch at every
-# gate-loop boundary and immediately before run_lanes. The trigger is
-# deterministic, never a sleep-and-hope ^C race: the stub pacman's
-# `pacman -Q rust-git` probe — the layer-1 abi=must batch gate asking
-# whether the omitted member is installed (abi-batch-policy.sh B's exact
-# topology) — sends exactly ONE SIGINT to the builder and logs the pid it
-# targeted, so delivery, handler and latch are one provable chain. The
-# signal must win OVER the gate's own decision (the installed member would
-# otherwise refuse the selection) and over dispatch entirely.
-(
-    echo "phase 17: SIGINT during the pre-dispatch ABI gate aborts before dispatch"
-    state="$fixture/state-predispatch-int"
-    mk_env "$state" 0
-    mklog="$state/makepkg.log"
-    tlog="$state/int-trigger.log"
-    RUN_ENV+=(
-        "GSA_FAKE_MAKEPKG_LOG=$mklog"
-        "GSA_FAKE_PACMAN_LOG=$state/pacman.log"
-        "GSA_FAKE_INSTALLED=rust-git"
-        "GSA_FAKE_INT_QUERY=rust-git"
-        "GSA_FAKE_INT_TRIGGER_DIR=$state/int-triggered"
-        "GSA_FAKE_INT_TRIGGER_LOG=$tlog"
-    )
-    run_bg "$state/run.out" fish "$fixture/build-all.fish" \
-        --allow-broken-rustc --no-deps --no-sync --lanes 1 --jobs 1 llvm-git p1
-    end_bg
-
-    # The signal's own status via gsa_signal_exit_rc — never a flat failure.
-    [[ $rc -eq 130 ]] ||
-        fail "pre-dispatch SIGINT run exited rc=$rc, want 130 (the signal's own status)" \
-            "$(cat "$state/run.out")"
-    grep -q 'Build interrupted' "$state/run.out" ||
-        fail "no 'Build interrupted' warning on the pre-dispatch abort:" \
-            "$(cat "$state/run.out")"
-
-    # The machine-checkable run record is rendered on this abort path too.
-    rr_outcome=$(rr_scalar outcome <"$state/run.out") ||
-        fail "no run record on the pre-dispatch abort" "$(cat "$state/run.out")"
-    [[ $rr_outcome == interrupted ]] ||
-        fail "run-record outcome is '$rr_outcome', want 'interrupted'"
-    rr_rc=$(rr_scalar rc <"$state/run.out") ||
-        fail "no run-record rc: scalar" "$(cat "$state/run.out")"
-    [[ $rr_rc == 130 ]] ||
-        fail "run-record rc: is '$rr_rc', want 130 (the signal's own status)"
-
-    # Every selected package is honestly never-started: nothing dispatched.
-    for pkg in llvm-git p1; do
-        row=$(rr_row "$pkg" <"$state/run.out") ||
-            fail "no run-record row for $pkg" "$(cat "$state/run.out")"
-        [[ $row == "$pkg never-started - - interrupted-before-start" ]] ||
-            fail "run-record row for $pkg is '$row', want '$pkg never-started - - interrupted-before-start'"
-    done
-    [[ $(rr_rows <"$state/run.out" | wc -l) -eq 2 ]] ||
-        fail "run record has unexpected extra rows:" "$(rr_rows <"$state/run.out")"
-
-    # NO build was dispatched — the stub makepkg log stays empty.
-    [[ ! -s $mklog ]] ||
-        fail "stub makepkg ran despite the pre-dispatch abort:" "$(cat "$mklog")"
-    [[ ! -e $state/built ]] ||
-        fail "a build marker landed despite the pre-dispatch abort:" \
-            "$(ls -la "$state/built" 2>/dev/null)"
-
-    dlog="$state/logs/dispatcher.log"
-    [[ -f $dlog ]] ||
-        fail "dispatcher.log was never created"
-    # The latch fired (the handler named the signal) AND the abort happened
-    # before dispatch (the marker line only abort_before_dispatch prints).
-    grep -qF 'signal: INT received' "$dlog" ||
-        fail "dispatcher.log does not record the INT delivery:" "$(cat "$dlog")"
-    grep -qF 'Build interrupted (last signal: INT, before dispatch)' "$dlog" ||
-        fail "dispatcher.log lacks the abort-before-dispatch marker:" "$(cat "$dlog")"
-
-    # Exactly ONE SIGINT left this stub (a second would escalate to the
-    # SIGKILL sweep — the run must have seen a first signal only).
-    [[ -f $tlog && $(wc -l <"$tlog") -eq 1 ]] ||
-        fail "the INT trigger must fire exactly once, saw:" "$(cat "$tlog" 2>/dev/null)"
-    if grep -q 'SECOND signal' "$dlog"; then
-        fail "a single trigger produced a second-signal escalation:" "$(cat "$dlog")"
-    fi
-
-    # PID-targeting proof: the pid the stub signalled is the pid whose handler
-    # latched the interrupt — delivery, handler and latch are one chain.
-    tgt=$(sed -n 's/.* target=\([0-9][0-9]*\)$/\1/p' "$tlog" | head -1)
-    hpid=$(sed -n 's/.*signal: INT received (pid=\([0-9][0-9]*\),.*/\1/p' "$dlog" | head -1)
-    [[ -n $tgt && $tgt == "$hpid" ]] ||
-        fail "the stub's SIGINT target ($tgt) is not the pid whose handler latched it ($hpid)" \
-            "trigger: $(cat "$tlog")" "dispatcher: $(cat "$dlog")"
-) || exit 1
 
 printf 'signal-abort-lock fixture: PASS\n'

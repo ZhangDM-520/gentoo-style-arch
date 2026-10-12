@@ -1,389 +1,483 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# The run record — the machine block's contract.
+# The run record — the machine block's contract, `format: 2`
+# (docs/gsa-contract.md §H), driven through the NATIVE engine (`gsa`).
+# Everything is synthetic: $TMPDIR workspaces with stub `makepkg`
+# executables, no package is built, no pacman transaction runs.
 #
-# print_run_record emits one bounded block at the end of EVERY started run
-# (success, failure, sudo-preflight refusal, interrupt): two stable markers,
-# `key: value` plan scalars, and one `pkg status rc dur reason` row per
-# package in topological order. The block is the data seam the battery
-# asserts on; the human summary above it is rendering, pinned once in
-# tests/dashboard.sh's prose section.
+# Behaviour kept from the fish-era fixture: ONE record on every exit path
+# (success, failure, refusal-before-dispatch, deferral, interrupt), one
+# outcome row per selected package in the `order:` sequence, the row's rc is
+# the lane's own outcome code, and the continuation's `remaining:` is the
+# resume set (the non-succeeded rows in row order).
 #
-# Pinned here:
-#   1. block shape — the markers exactly once each, `format: 1`, the plan
-#      scalars (selection-source / order / lanes / normal-jobs / core-jobs /
-#      intensity) and outcome/rc;
-#   2. row grammar — one row per selected package, in `order:` sequence,
-#      fields `pkg status rc dur reason`, rc/dur an integer or '-';
-#   3. the status enum END TO END — every status print_run_record can emit is
-#      produced by a scenario below: succeeded (ok), failed (build-failed),
-#      deferred = the lane rc-99 anchoring amendment (anchoring-refused, the
-#      rc visible in the row), blocked (waits-on-deferred), never-started
-#      (dispatch-stopped / preflight-refused / interrupted-before-start) and
-#      interrupted (interrupted-mid-build). The reasons the stub machinery
-#      cannot force stay whitelist-checked only: lane-lost, log-unwritable,
-#      never-ready, mutex-timeout (the builder pacman MUTEX wait timed out),
-#      result-clear-failed (a named dispatch refusal when the run-scoped
-#      result slot cannot be cleared) and the signal names signal-hup /
-#      signal-int / signal-term — an externally signalled lane's honest rc
-#      129/130/143 records the signal name as its row reason instead of
-#      build-failed;
-#   4. the continuation output of an INTERRUPTED run — summary + record +
-#      resume suggestion naming the non-succeeded rows in order (the
-#      interrupt path used to exit 130 silently, with nothing to resume by).
+# Pinned here (five ( subshell ) sections + an enum closure):
+#   1. block shape + scalars — the markers exactly once each, `format: 2`,
+#      the fixed-order scalars (selection-source / order / lanes /
+#      normal-jobs / core-jobs / intensity / outcome / rc) over a
+#      deterministic plan (--lanes 1 --jobs 2 --intensity low), one plan row
+#      and one outcome row per selected package;
+#   2. failure under --fail-fast (§I.3 — the fish-era failure policy): rc 1,
+#      the failed row's rc is the lane's own 1, unstarted rows are
+#      `never-started dispatch-stopped`, and the resume set is the failed
+#      package BEFORE the unattempted one (a failed package must rebuild
+#      before its dependents);
+#   3. refusal before dispatch (§G.1 rc 3): nothing starts, every row is
+#      `never-started`, everything remains. NOTE (gap G8): this pins the
+#      record the engine actually emits on a refusal path — a FULL §H.2
+#      record with plan rows — and the reason key that path produces;
+#   4. deferral (the lane rc-99 amendment) and its parked dependent: the
+#      deferring row is `deferred 99 …` (the rc is DATA in the row), only its
+#      consumers park (`parked waits-on-deferred`), unrelated work builds,
+#      and the run exits §G.1's deferral-only 5;
+#   5. interrupt: one SIGINT mid-build tears the run down, the FULL record
+#      (plan, outcomes, continuation) is emitted first, rc 130.
 #
-# Synthesis comes from tests/lib/fixture-lib.bash; the block parsing helpers
-# (rr_extract / rr_scalar / rr_rows / rr_row / rr_remaining) live there too.
+# Flip notes (docs/gsa-fixture-migration.md row `tests/run-record.sh`):
+# the fish argv (`--no-deps`/`--no-sync`/`--allow-broken-rustc`) retires for
+# the §B grammar: the scenarios are build-only (`gsa -B`), `--no-deps`
+# becomes `--leaf`, and `--no-sync`/`--allow-broken-rustc` are dropped —
+# neither is deferred to anything observable here (no version-sync provider,
+# no rustc probe) and gsa refuses both spellings. The format: 1 rr_* pins
+# re-pin through rr2_* against the format: 2 block (§H.2); exit codes follow
+# §G.1 (fail-fast failure 1, refusal 3, deferral-only 5, interrupt 130).
+# §6 R-2: the format:1 single-token reason rule is retired WITHOUT
+# replacement — the v2 reason is the remainder of the row and rr2_body
+# enforces that grammar (tests/gsa-v2-lib.sh pins the parser), so the old
+# REASONS whitelist is gone (§L.2 makes reason keys additive anyway).
+# §6 R-4: `blocked` is superseded by `parked` + reason `waits-on-deferred`
+# (§H.3) — the behaviour is unchanged, only the spelling moved.
+# Engine-coupled reason keys the fish triggers produced are re-driven on the
+# engine's own paths and pin what the engine prints (gap G2/G8 evidence):
+# the deferral trigger is now a makepkg rc-99 lane (reason
+# `source-unfetchable` — the engine's only deferral key, lane.rs:7-10; the
+# fish-era `anchoring-refused` anchor flow is not producible through a stub),
+# and the refusal-before-dispatch trigger is a broken state root (reason
+# `startup-refused`; `preflight-refused` is the -S sudo-preflight key and a
+# build-only run cannot reach it). The run-level `outcome` scalar values are
+# pinned per scenario as observed (gap G2: no contract vocabulary).
+# The interrupted row's rc is the LANE's signal code (§H.3: 129/130/143) —
+# teardown's SIGTERM makes it 143 in practice — while the run rc is INT's
+# own 130 (§G.1).
 
 source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/rr-v2.bash"
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-run-record.XXXXXX")
 trap 'rm -rf -- "$fixture"' EXIT
 
 fail() {
     printf 'run record fixture: %s\n' "$1" >&2
+    if [ -n "${2:-}" ] && [ -f "$2" ]; then
+        sed 's/^/    /' "$2" >&2
+    fi
     exit 1
 }
 
-STATUSES='succeeded failed deferred blocked never-started interrupted'
-REASONS='ok build-failed lane-lost log-unwritable anchoring-refused upstream-unverified waits-on-deferred never-ready dispatch-stopped preflight-refused interrupted-before-start interrupted-mid-build mutex-timeout signal-hup signal-int signal-term result-clear-failed'
-seen_statuses=$fixture/seen-statuses
-: >"$seen_statuses"
+# ─── Stub-knob vocabulary (§D.2: declared in the change that adds them) ────
+rr2_stub_knob GSA_FAKE_DEFER_PACKAGE "run-record makepkg stub: package id whose build exits 99 (deferral)"
+rr2_stub_knob GSA_FAKE_ENGINE_PID "run-record engine wrapper: pidfile of the engine process to signal"
 
-# Grammar + enum + whitelist over one saved output; observed statuses are
-# accumulated for the coverage closure at the end.
-check_rows() { # $1 = saved output file
-    local out=$1 pkg status rc dur reason extra n
-    n=0
-    while read -r pkg status rc dur reason extra; do
-        [[ -n $pkg ]] || continue
-        n=$((n + 1))
-        [[ -z ${extra:-} ]] ||
-            fail "$out: row for $pkg carries a multi-word reason ('$reason $extra') — the reason is one kebab-case token"
-        [[ " $STATUSES " == *" $status "* ]] ||
-            fail "$out: row for $pkg has status '$status', not one of: $STATUSES"
-        [[ " $REASONS " == *" $reason "* ]] ||
-            fail "$out: row for $pkg has reason '$reason', not one of: $REASONS"
-        [[ $rc == - || $rc =~ ^[0-9]+$ ]] ||
-            fail "$out: row for $pkg has non-numeric rc '$rc'"
-        [[ $dur == - || $dur =~ ^[0-9]+$ ]] ||
-            fail "$out: row for $pkg has non-numeric dur '$dur'"
-        printf '%s\n' "$status" >>"$seen_statuses"
-    done < <(rr_rows <"$out")
-    ((n > 0)) || fail "$out: the run record carries no package rows"
+# ─── The engine under test: built into the fixture tree (scratch only) ──────
+cargo build --offline --quiet --target-dir "$fixture/cargo" -p gsa-cli \
+    --manifest-path "$gsa_repo_root/Cargo.toml" \
+    || fail "cannot build the gsa binary for the fixture"
+gsa_bin="$fixture/cargo/debug/gsa"
+[ -x "$gsa_bin" ] || fail "cargo did not produce $gsa_bin"
+export GSA_TEST_ENGINE=gsa
+export GSA_TEST_GSA_BIN="$gsa_bin"
+
+# ─── Oracle helpers (inline: §D.2 keeps oracles in the fixture that gives
+# them meaning) ─────────────────────────────────────────────────────────────
+
+# write_stub_makepkg DIR — the scenario makepkg: a start marker for interrupt
+# timing, one optional sleep, then the outcome the GSA_FAKE_* knobs name
+# (fail 1 / defer 99 / else ok + archive).
+write_stub_makepkg() {
+    cat >"$1/bin/makepkg" <<'EOF'
+#!/usr/bin/env bash
+set -u
+id=$(basename "$PWD")
+[ -n "${GSA_FAKE_MARKER_DIR:-}" ] && : >"$GSA_FAKE_MARKER_DIR/$id"
+sleep "${GSA_FAKE_BUILD_SECONDS:-0}"
+if [ "${GSA_FAKE_FAIL_PACKAGE:-}" = "$id" ]; then exit 1; fi
+if [ "${GSA_FAKE_DEFER_PACKAGE:-}" = "$id" ]; then exit 99; fi
+: >"$PWD/$id-1.0.0-1-any.pkg.tar.zst"
+exit 0
+EOF
+    chmod +x "$1/bin/makepkg"
 }
 
-# The suggestion line's trailing payload is the resume set
-# (continuation_args joins flags then packages), so the expected list must be
-# the line's suffix.
-assert_suggestion() { # $1 = saved output file, $2 = expected package list
-    local out=$1 want=$2 line
-    line=$(grep '^  build-all\.fish ' "$out" | head -1) ||
-        fail "$out: no continuation suggestion in the output"
-    [[ $line == *" $want" ]] ||
-        fail "$out: suggestion does not end with '$want': $line"
-    printf '%s\n' "$line"
-}
-
-# ─── Workspaces ─────────────────────────────────────────────────────────────
-
-# Three independent packages, one lane, deterministic plan (lanes=1 jobs=2
-# intensity=low → record: lanes 1, normal-jobs 2, core-jobs 2 under
-# GSA_CPU_THREADS=8 / GSA_MEMORY_GIB=16).
-make_case_workspace() { # $1 = dir
+# make_case_workspace DIR — three no-edge packages p1 p2 p3, one lane, the
+# deterministic plan the scalar pins quote (lanes=1 jobs=2 intensity=low).
+make_case_workspace() {
     local dir=$1 id
     make_workspace "$dir" 1 2 low
     for id in p1 p2 p3; do
-        add_package "$dir" "$id" "$gsa_meta_any"
+        add_package "$dir" "$id" "$gsa_meta_any" git
     done
-    stub_makepkg "$dir"
-    stub_sudo "$dir"
-    stub_pacman "$dir"
+    write_stub_makepkg "$dir"
 }
 
-run_case() { # $1 = dir, $2 = saved output name, rest = builder args
-    local dir=$1 out=$2
-    shift 2
-    run_builder env \
-        PATH="$dir/bin:$PATH" \
-        GSA_STATE_DIR="$dir/state" \
-        GSA_FAKE_PACMAN_LOG="$dir/pacman.log" \
-        GSA_CPU_THREADS=8 \
-        GSA_MEMORY_GIB=16 \
-        fish "$dir/build-all.fish" "$@"
-    printf '%s\n' "$FIXTURE_OUTPUT" >"$fixture/$out"
+# The §H.3 status enum, produced END TO END by the scenarios below (the
+# closure at the end proves it). The format:1 row-grammar/whitelist helpers
+# retired: rr2_body IS the grammar test now, and §L.2 keeps the reason-key
+# vocabulary additive, so per-scenario field pins carry the reasons.
+STATUSES='succeeded failed deferred parked never-started interrupted'
+seen_statuses=$fixture/seen-statuses
+: >"$seen_statuses"
+
+# record_ok OUT — one record on every exit path: the block markers exactly
+# once each and the whole block parses under the strict `format: 2` grammar
+# (scalars, plan rows, outcome rows, continuation).
+record_ok() {
+    local out=$1
+    [ "$(grep -c '^--- run record begin ---$' "$out")" -eq 1 ] ||
+        fail "$out: the block begin marker is not printed exactly once"
+    [ "$(grep -c '^--- run record end ---$' "$out")" -eq 1 ] ||
+        fail "$out: the block end marker is not printed exactly once"
+    rr2_body <"$out" >/dev/null ||
+        fail "$out: the run record does not parse as a complete format: 2 block" "$out"
+}
+
+# record_statuses OUT — accumulate the observed status enum for the closure.
+record_statuses() {
+    rr2_outcome_rows <"$1" | awk '{print $2}' >>"$seen_statuses"
+}
+
+# assert_rc RECORD-FILE — the process exit code IS the record's rc scalar.
+assert_rc() {
+    [ "$FIXTURE_RC" = "$(rr2_scalar rc <"$1")" ] ||
+        fail "process exit $FIXTURE_RC disagrees with the record's rc scalar:" "$1"
+}
+
+# remaining_matches OUT — the continuation's `remaining:` is exactly the
+# resume set the outcome rows imply (non-succeeded, in row order).
+remaining_matches() {
+    local out=$1 rows line
+    rows=$(rr2_remaining <"$out" | tr '\n' ' ' | sed 's/ $//')
+    line=$(rr2_continuation remaining <"$out")
+    [ "$rows" = "$line" ] ||
+        fail "continuation remaining [$line] != rows-derived remaining [$rows]:" "$out"
+    printf '%s\n' "$rows"
 }
 
 # ─── 1. Success: block shape, scalars, one row per package ──────────────────
-ws=$fixture/ws-success
-make_case_workspace "$ws"
-run_case "$ws" s1.out --allow-broken-rustc --no-deps --no-sync --intensity low p1 p2 p3
-[[ $FIXTURE_RC -eq 0 ]] || fail "the all-success run exited $FIXTURE_RC: $(cat "$fixture/s1.out")"
+(
+    set -euo pipefail
+    ws="$fixture/success/ws"
+    make_case_workspace "$ws"
+    export PATH="$ws/bin:$PATH"
+    export GSA_CPU_THREADS=8 GSA_MEMORY_GIB=16
 
-[[ $(grep -c '^--- run record begin ---$' "$fixture/s1.out") -eq 1 ]] ||
-    fail "the block begin marker is not printed exactly once"
-[[ $(grep -c '^--- run record end ---$' "$fixture/s1.out") -eq 1 ]] ||
-    fail "the block end marker is not printed exactly once"
-[[ $(rr_scalar format <"$fixture/s1.out") == 1 ]] ||
-    fail "unexpected record format: $(rr_scalar format <"$fixture/s1.out")"
-[[ $(rr_scalar selection-source <"$fixture/s1.out") == 'groups=- packages=p1,p2,p3 ranges=-' ]] ||
-    fail "selection-source wrong: $(rr_scalar selection-source <"$fixture/s1.out")"
-[[ $(rr_scalar order <"$fixture/s1.out") == 'p1 p2 p3' ]] ||
-    fail "order wrong: $(rr_scalar order <"$fixture/s1.out")"
-[[ $(rr_scalar lanes <"$fixture/s1.out") == 1 ]] ||
-    fail "lanes scalar wrong: $(rr_scalar lanes <"$fixture/s1.out")"
-[[ $(rr_scalar normal-jobs <"$fixture/s1.out") == 2 ]] ||
-    fail "normal-jobs scalar wrong: $(rr_scalar normal-jobs <"$fixture/s1.out")"
-[[ $(rr_scalar core-jobs <"$fixture/s1.out") == 2 ]] ||
-    fail "core-jobs scalar wrong: $(rr_scalar core-jobs <"$fixture/s1.out")"
-[[ $(rr_scalar intensity <"$fixture/s1.out") == low ]] ||
-    fail "intensity scalar wrong: $(rr_scalar intensity <"$fixture/s1.out")"
-[[ $(rr_scalar outcome <"$fixture/s1.out") == success ]] ||
-    fail "outcome wrong: $(rr_scalar outcome <"$fixture/s1.out")"
-[[ $(rr_scalar rc <"$fixture/s1.out") == 0 ]] ||
-    fail "rc scalar wrong: $(rr_scalar rc <"$fixture/s1.out")"
+    run_engine "$ws" -B --leaf --lanes 1 --jobs 2 --intensity low \
+        --state-dir "$fixture/success/state" p1 p2 p3
+    printf '%s\n' "$FIXTURE_OUTPUT" >"$fixture/s1.out"
 
-rows1=$(rr_rows <"$fixture/s1.out")
-[[ $(wc -l <<<"$rows1") -eq 3 ]] ||
-    fail "expected 3 rows for 3 packages, got:
-$rows1"
-[[ $(awk '{print $1}' <<<"$rows1" | tr '\n' ' ') == 'p1 p2 p3 ' ]] ||
-    fail "rows do not follow the order: scalar:
-$rows1"
-for id in p1 p2 p3; do
-    [[ $(rr_row "$id" status <"$fixture/s1.out") == succeeded ]] ||
-        fail "$id did not succeed: $(rr_row "$id" <"$fixture/s1.out")"
-    [[ $(rr_row "$id" rc <"$fixture/s1.out") == 0 ]] ||
-        fail "$id succeeded with rc $(rr_row "$id" rc <"$fixture/s1.out")"
-    [[ $(rr_row "$id" reason <"$fixture/s1.out") == ok ]] ||
-        fail "$id reason wrong: $(rr_row "$id" reason <"$fixture/s1.out")"
-done
-check_rows "$fixture/s1.out"
+    [ "$FIXTURE_RC" = 0 ] || fail "the all-success run exited $FIXTURE_RC:" "$fixture/s1.out"
+    assert_rc "$fixture/s1.out"
+    record_ok "$fixture/s1.out"
+    record_statuses "$fixture/s1.out"
 
-# ─── 2. Failure: rc preserved, never-started rows say why ───────────────────
-ws=$fixture/ws-failure
-make_case_workspace "$ws"
-GSA_FAKE_FAIL_PACKAGE=p2 run_case "$ws" s2.out \
-    --allow-broken-rustc --no-deps --no-sync --intensity low p1 p2 p3
-[[ $FIXTURE_RC -ne 0 ]] || fail "the failing run exited 0"
-[[ $(rr_scalar outcome <"$fixture/s2.out") == failed ]] ||
-    fail "outcome wrong: $(rr_scalar outcome <"$fixture/s2.out")"
-[[ $(rr_scalar rc <"$fixture/s2.out") == 1 ]] ||
-    fail "rc scalar wrong: $(rr_scalar rc <"$fixture/s2.out")"
-[[ $(rr_row p1 status <"$fixture/s2.out") == succeeded ]] ||
-    fail "p1 row wrong: $(rr_row p1 <"$fixture/s2.out")"
-[[ $(rr_row p2 status <"$fixture/s2.out") == failed ]] ||
-    fail "p2 row wrong: $(rr_row p2 <"$fixture/s2.out")"
-# The row's rc is the lane's own exit status, not a summary guess.
-[[ $(rr_row p2 rc <"$fixture/s2.out") == 1 ]] ||
-    fail "p2 row rc is $(rr_row p2 rc <"$fixture/s2.out"), want the makepkg status 1"
-[[ $(rr_row p2 reason <"$fixture/s2.out") == build-failed ]] ||
-    fail "p2 reason wrong: $(rr_row p2 reason <"$fixture/s2.out")"
-[[ $(rr_row p3 status <"$fixture/s2.out") == never-started ]] ||
-    fail "p3 row wrong: $(rr_row p3 <"$fixture/s2.out")"
-[[ $(rr_row p3 reason <"$fixture/s2.out") == dispatch-stopped ]] ||
-    fail "p3 reason wrong: $(rr_row p3 reason <"$fixture/s2.out")"
-[[ $(rr_row p3 rc <"$fixture/s2.out") == - && $(rr_row p3 dur <"$fixture/s2.out") == - ]] ||
-    fail "p3 never ran but carries rc/dur: $(rr_row p3 <"$fixture/s2.out")"
-# The resume set is the failed package BEFORE the unattempted one — a failed
-# package must rebuild before its dependents (2026-09-26).
-[[ $(rr_remaining <"$fixture/s2.out" | tr '\n' ' ') == 'p2 p3 ' ]] ||
-    fail "resume set wrong: $(rr_remaining <"$fixture/s2.out" | tr '\n' ' ')"
-assert_suggestion "$fixture/s2.out" 'p2 p3' >/dev/null
-check_rows "$fixture/s2.out"
+    # The fixed-order scalar set (§H.2); the budget values are the argv's
+    # own overrides (--lanes 1 --jobs 2), not profile arithmetic.
+    [ "$(rr2_scalar format <"$fixture/s1.out")" = 2 ] ||
+        fail "unexpected record format:" "$fixture/s1.out"
+    [ "$(rr2_scalar selection-source <"$fixture/s1.out")" = 'sets=p1,p2,p3 leaf=yes range=-' ] ||
+        fail "selection-source wrong: $(rr2_scalar selection-source <"$fixture/s1.out")" "$fixture/s1.out"
+    [ "$(rr2_scalar order <"$fixture/s1.out")" = 'p1 p2 p3' ] ||
+        fail "order wrong: $(rr2_scalar order <"$fixture/s1.out")" "$fixture/s1.out"
+    [ "$(rr2_scalar lanes <"$fixture/s1.out")" = 1 ] ||
+        fail "lanes scalar wrong: $(rr2_scalar lanes <"$fixture/s1.out")" "$fixture/s1.out"
+    [ "$(rr2_scalar normal-jobs <"$fixture/s1.out")" = 2 ] ||
+        fail "normal-jobs scalar wrong: $(rr2_scalar normal-jobs <"$fixture/s1.out")" "$fixture/s1.out"
+    [ "$(rr2_scalar core-jobs <"$fixture/s1.out")" = 2 ] ||
+        fail "core-jobs scalar wrong: $(rr2_scalar core-jobs <"$fixture/s1.out")" "$fixture/s1.out"
+    [ "$(rr2_scalar intensity <"$fixture/s1.out")" = low ] ||
+        fail "intensity scalar wrong: $(rr2_scalar intensity <"$fixture/s1.out")" "$fixture/s1.out"
+    # gap G2: the run-level outcome vocabulary is opaque — pin the value the
+    # engine prints for this scenario class.
+    [ "$(rr2_scalar outcome <"$fixture/s1.out")" = success ] ||
+        fail "outcome wrong: $(rr2_scalar outcome <"$fixture/s1.out")" "$fixture/s1.out"
 
-# ─── 3. Preflight refusal: nothing dispatched, nothing started ──────────────
-ws=$fixture/ws-preflight
-make_case_workspace "$ws"
-# A sudo that can never install: the -i preflight must refuse before dispatch.
-cat >"$ws/bin/sudo" <<'EOF'
+    # One plan row and one outcome row per selected package; row sequence
+    # agreement with `order:` is the parser's cross-check (§C.5), the field
+    # meanings are pinned here.
+    [ "$(rr2_plan_rows <"$fixture/s1.out" | wc -l)" -eq 3 ] ||
+        fail "expected 3 plan rows for 3 packages:" "$fixture/s1.out"
+    [ "$(rr2_outcome_rows <"$fixture/s1.out" | wc -l)" -eq 3 ] ||
+        fail "expected 3 outcome rows for 3 packages:" "$fixture/s1.out"
+    for id in p1 p2 p3; do
+        [ "$(rr2_plan "$id" plan <"$fixture/s1.out")" = build ] ||
+            fail "$id is not planned as a plain build:" "$fixture/s1.out"
+        [ "$(rr2_outcome "$id" status <"$fixture/s1.out")" = succeeded ] ||
+            fail "$id did not succeed: $(rr2_outcome "$id" <"$fixture/s1.out")" "$fixture/s1.out"
+        [ "$(rr2_outcome "$id" rc <"$fixture/s1.out")" = 0 ] ||
+            fail "$id succeeded with rc $(rr2_outcome "$id" rc <"$fixture/s1.out")" "$fixture/s1.out"
+        [ "$(rr2_outcome "$id" reason <"$fixture/s1.out")" = ok ] ||
+            fail "$id reason wrong: $(rr2_outcome "$id" reason <"$fixture/s1.out")" "$fixture/s1.out"
+    done
+
+    # A clean run resumes nothing.
+    [ -z "$(remaining_matches "$fixture/s1.out")" ] ||
+        fail "a clean run must leave an empty resume set:" "$fixture/s1.out"
+
+    # The continuation mirrors the run's own flags (§H.2) and never the
+    # hidden seams.
+    command=$(rr2_continuation command <"$fixture/s1.out")
+    for flag in '--leaf' '--lanes 1' '--jobs 2' '--intensity low'; do
+        case "$command" in
+        *"$flag"*) ;;
+        *) fail "continuation command dropped '$flag': $command" "$fixture/s1.out" ;;
+        esac
+    done
+    for seam in --lane-job --stale-lock-check --install-decide --fetch-job; do
+        rr2_continuation not-mirrored <"$fixture/s1.out" | tr ' ' '\n' | grep -Fx -- "$seam" >/dev/null \
+            || fail "hidden seam $seam is not in the not-mirrored list:" "$fixture/s1.out"
+    done
+)
+
+# ─── 2. Failure under --fail-fast: rc 1, dispatch stopped, resume set ───────
+(
+    set -euo pipefail
+    ws="$fixture/failfast/ws"
+    make_case_workspace "$ws"
+    export PATH="$ws/bin:$PATH"
+    export GSA_CPU_THREADS=8 GSA_MEMORY_GIB=16
+    export GSA_FAKE_FAIL_PACKAGE=p2
+
+    run_engine "$ws" -B --leaf --fail-fast --lanes 1 --jobs 2 --intensity low \
+        --state-dir "$fixture/failfast/state" p1 p2 p3
+    printf '%s\n' "$FIXTURE_OUTPUT" >"$fixture/s2.out"
+
+    # §G.1: a build failure under --fail-fast is rc 1 (that code means
+    # dispatch stopped; the default cone-stop policy would exit 4 — pinned
+    # in tests/gsa-sched-v2.sh §1, deliberately not duplicated here).
+    [ "$FIXTURE_RC" = 1 ] || fail "the failing run exited $FIXTURE_RC, want 1 (§G.1):" "$fixture/s2.out"
+    assert_rc "$fixture/s2.out"
+    record_ok "$fixture/s2.out"
+    record_statuses "$fixture/s2.out"
+    [ "$(rr2_scalar outcome <"$fixture/s2.out")" = failed ] ||
+        fail "outcome wrong: $(rr2_scalar outcome <"$fixture/s2.out")" "$fixture/s2.out"
+
+    [ "$(rr2_outcome p1 status <"$fixture/s2.out")" = succeeded ] ||
+        fail "p1 row wrong: $(rr2_outcome p1 <"$fixture/s2.out")" "$fixture/s2.out"
+    [ "$(rr2_outcome p2 status <"$fixture/s2.out")" = failed ] ||
+        fail "p2 row wrong: $(rr2_outcome p2 <"$fixture/s2.out")" "$fixture/s2.out"
+    # The row's rc is the lane's own exit status, not a summary guess.
+    [ "$(rr2_outcome p2 rc <"$fixture/s2.out")" = 1 ] ||
+        fail "p2 row rc is $(rr2_outcome p2 rc <"$fixture/s2.out"), want the makepkg status 1" "$fixture/s2.out"
+    [ "$(rr2_outcome p2 reason <"$fixture/s2.out")" = build-failed ] ||
+        fail "p2 reason wrong: $(rr2_outcome p2 reason <"$fixture/s2.out")" "$fixture/s2.out"
+    [ "$(rr2_outcome p3 status <"$fixture/s2.out")" = never-started ] ||
+        fail "p3 row wrong: $(rr2_outcome p3 <"$fixture/s2.out")" "$fixture/s2.out"
+    [ "$(rr2_outcome p3 reason <"$fixture/s2.out")" = dispatch-stopped ] ||
+        fail "p3 reason wrong: $(rr2_outcome p3 reason <"$fixture/s2.out")" "$fixture/s2.out"
+    [ "$(rr2_outcome p3 rc <"$fixture/s2.out")" = - ] && [ "$(rr2_outcome p3 dur <"$fixture/s2.out")" = - ] ||
+        fail "p3 never ran but carries rc/dur: $(rr2_outcome p3 <"$fixture/s2.out")" "$fixture/s2.out"
+
+    # The resume set is the failed package BEFORE the unattempted one — a
+    # failed package must rebuild before its dependents (2026-09-26).
+    [ "$(remaining_matches "$fixture/s2.out")" = 'p2 p3' ] ||
+        fail "resume set wrong: $(rr2_remaining <"$fixture/s2.out" | tr '\n' ' ')" "$fixture/s2.out"
+
+    # The continuation restates the run's flags and ends with the resume set
+    # (the fish-era prose suggestion, re-pinned from the record's fields).
+    command=$(rr2_continuation command <"$fixture/s2.out")
+    for flag in '--leaf' '--fail-fast' '--lanes 1' '--jobs 2' '--intensity low'; do
+        case "$command" in
+        *"$flag"*) ;;
+        *) fail "continuation command dropped '$flag': $command" "$fixture/s2.out" ;;
+        esac
+    done
+    case "$command" in
+    *' p2 p3') ;;
+    *) fail "continuation command does not end with the resume set: $command" "$fixture/s2.out" ;;
+    esac
+)
+
+# ─── 3. Refusal before dispatch: rc 3, nothing starts, everything remains ───
+(
+    set -euo pipefail
+    ws="$fixture/refusal/ws"
+    make_case_workspace "$ws"
+    export PATH="$ws/bin:$PATH"
+    export GSA_CPU_THREADS=8 GSA_MEMORY_GIB=16
+    # A regular file where the state root must be created: the engine's
+    # startup refusal fires before any dispatch (refuse_before_dispatch,
+    # build.rs) — the gsa successor of the fish-era sudo preflight refusal.
+    : >"$fixture/refusal/not-a-dir"
+
+    run_engine "$ws" -B --leaf --lanes 1 --jobs 2 --intensity low \
+        --state-dir "$fixture/refusal/not-a-dir" p1 p2 p3
+    printf '%s\n' "$FIXTURE_OUTPUT" >"$fixture/s3.out"
+
+    [ "$FIXTURE_RC" = 3 ] || fail "the refused run exited $FIXTURE_RC, want 3 (§G.1):" "$fixture/s3.out"
+    assert_rc "$fixture/s3.out"
+    # gap G8 probe: the engine's refusal record IS the full §H.2 shape (plan
+    # rows included), so the strict parser accepts it unweakened.
+    record_ok "$fixture/s3.out"
+    record_statuses "$fixture/s3.out"
+    [ "$(rr2_scalar outcome <"$fixture/s3.out")" = refused ] ||
+        fail "outcome wrong: $(rr2_scalar outcome <"$fixture/s3.out")" "$fixture/s3.out"
+    for id in p1 p2 p3; do
+        [ "$(rr2_plan "$id" plan <"$fixture/s3.out")" = build ] ||
+            fail "$id is missing its plan row in the refusal record:" "$fixture/s3.out"
+        # `startup-refused` is the additive key this refusal path carries
+        # (the fish-era `preflight-refused` key belongs to the -S sudo
+        # preflight, which a build-only run cannot reach).
+        [ "$(rr2_outcome "$id" <"$fixture/s3.out")" = "$id never-started - - startup-refused" ] ||
+            fail "$id row wrong: $(rr2_outcome "$id" <"$fixture/s3.out")" "$fixture/s3.out"
+    done
+    # Everything was refused, so everything must remain.
+    [ "$(remaining_matches "$fixture/s3.out")" = 'p1 p2 p3' ] ||
+        fail "resume set wrong: $(rr2_remaining <"$fixture/s3.out" | tr '\n' ' ')" "$fixture/s3.out"
+)
+
+# ─── 4. Deferral (rc 99): not a failure, parks only its consumers, rc 5 ─────
+(
+    set -euo pipefail
+    ws="$fixture/defer/ws"
+    make_workspace "$ws" 1 2 low
+    add_package "$ws" defer-a "$gsa_meta_any" git
+    add_package "$ws" dep-b "$gsa_meta_any" git
+    add_package "$ws" plain-c "$gsa_meta_any" git
+    # dep-b consumes defer-a over a build-order edge — its park's reason.
+    set_topology_record "$ws" dep-b git defer-a
+    write_stub_makepkg "$ws"
+    export PATH="$ws/bin:$PATH"
+    export GSA_CPU_THREADS=8 GSA_MEMORY_GIB=16
+    export GSA_FAKE_DEFER_PACKAGE=defer-a
+
+    run_engine "$ws" -B --leaf --lanes 1 --jobs 2 --intensity low \
+        --state-dir "$fixture/defer/state" defer-a dep-b plain-c
+    printf '%s\n' "$FIXTURE_OUTPUT" >"$fixture/s4.out"
+
+    [ "$FIXTURE_RC" = 5 ] || fail "the deferral-only run exited $FIXTURE_RC, want 5 (§G.1):" "$fixture/s4.out"
+    assert_rc "$fixture/s4.out"
+    record_ok "$fixture/s4.out"
+    record_statuses "$fixture/s4.out"
+    [ "$(rr2_scalar outcome <"$fixture/s4.out")" = deferral ] ||
+        fail "outcome wrong: $(rr2_scalar outcome <"$fixture/s4.out")" "$fixture/s4.out"
+
+    # The rc-99 amendment is DATA in the row, not folklore: deferred, not
+    # failed and not parked.
+    [ "$(rr2_outcome defer-a status <"$fixture/s4.out")" = deferred ] ||
+        fail "defer-a row wrong: $(rr2_outcome defer-a <"$fixture/s4.out")" "$fixture/s4.out"
+    [ "$(rr2_outcome defer-a rc <"$fixture/s4.out")" = 99 ] ||
+        fail "defer-a row rc is $(rr2_outcome defer-a rc <"$fixture/s4.out"), want 99" "$fixture/s4.out"
+    # The engine's only deferral reason key (the fish-era anchoring-refused
+    # trigger is not producible through a makepkg stub — flip notes above).
+    [ "$(rr2_outcome defer-a reason <"$fixture/s4.out")" = source-unfetchable ] ||
+        fail "defer-a reason wrong: $(rr2_outcome defer-a reason <"$fixture/s4.out")" "$fixture/s4.out"
+
+    # §6 R-4: the `blocked` spelling is superseded by `parked` + the
+    # waits-on-deferred reason (§H.3); the deferral semantics are unchanged.
+    [ "$(rr2_outcome dep-b status <"$fixture/s4.out")" = parked ] ||
+        fail "dep-b row wrong: $(rr2_outcome dep-b <"$fixture/s4.out")" "$fixture/s4.out"
+    [ "$(rr2_outcome dep-b reason <"$fixture/s4.out")" = waits-on-deferred ] ||
+        fail "dep-b reason wrong: $(rr2_outcome dep-b reason <"$fixture/s4.out")" "$fixture/s4.out"
+    [ "$(rr2_outcome dep-b rc <"$fixture/s4.out")" = - ] ||
+        fail "dep-b never ran but carries rc: $(rr2_outcome dep-b <"$fixture/s4.out")" "$fixture/s4.out"
+
+    # The dispatch CONTINUED around the parked pair: plain-c built.
+    [ "$(rr2_outcome plain-c status <"$fixture/s4.out")" = succeeded ] ||
+        fail "plain-c row wrong: $(rr2_outcome plain-c <"$fixture/s4.out")" "$fixture/s4.out"
+
+    [ "$(remaining_matches "$fixture/s4.out")" = 'defer-a dep-b' ] ||
+        fail "resume set wrong: $(rr2_remaining <"$fixture/s4.out" | tr '\n' ' ')" "$fixture/s4.out"
+)
+
+# ─── 5. Interrupt: full record + continuation on the 130 path ───────────────
+(
+    set -euo pipefail
+    ws="$fixture/interrupt/ws"
+    make_case_workspace "$ws"
+    export PATH="$ws/bin:$PATH"
+    export GSA_CPU_THREADS=8 GSA_MEMORY_GIB=16
+    # Event markers: the fixture waits for p1's start before signalling INT,
+    # so the interrupt deterministically lands mid-build instead of racing
+    # the pre-dispatch phase on wall-clock time.
+    markerdir="$fixture/interrupt/markers"
+    mkdir -p "$markerdir"
+    export GSA_FAKE_MARKER_DIR="$markerdir"
+    export GSA_FAKE_BUILD_SECONDS=20
+
+    # The engine needs one SIGINT mid-build: run_engine performs the
+    # invocation while a watcher signals the engine PID this wrapper records
+    # (`exec` keeps the pid) once the stub build is provably in flight.
+    pidfile="$fixture/interrupt/engine.pid"
+    wrap="$fixture/interrupt/gsa-wrap"
+    cat >"$wrap" <<EOF
 #!/usr/bin/env bash
-exit 1
+printf '%s\n' "\$\$" > "\${GSA_FAKE_ENGINE_PID:?}"
+exec "$gsa_bin" "\$@"
 EOF
-chmod +x "$ws/bin/sudo"
-run_case "$ws" s3.out --allow-broken-rustc --no-deps --no-sync --intensity low --install p1 p2 p3
-[[ $FIXTURE_RC -ne 0 ]] || fail "the preflight-refused run exited 0"
-[[ $(rr_scalar outcome <"$fixture/s3.out") == failed ]] ||
-    fail "outcome wrong: $(rr_scalar outcome <"$fixture/s3.out")"
-for id in p1 p2 p3; do
-    [[ $(rr_row "$id" <"$fixture/s3.out") == "$id never-started - - preflight-refused" ]] ||
-        fail "$id row wrong: $(rr_row "$id" <"$fixture/s3.out")"
-done
-[[ $(rr_remaining <"$fixture/s3.out" | wc -l) -eq 3 ]] ||
-    fail "everything was refused, so everything must remain"
-check_rows "$fixture/s3.out"
+    chmod +x "$wrap"
+    (
+        for _ in $(seq 1 400); do [ -s "$pidfile" ] && break; sleep 0.025; done
+        [ -s "$pidfile" ] || exit 0
+        for _ in $(seq 1 400); do [ -f "$markerdir/p1" ] && break; sleep 0.025; done
+        kill -INT "$(cat "$pidfile")" 2>/dev/null || true
+    ) &
+    watcher=$!
+    GSA_TEST_GSA_BIN="$wrap" GSA_FAKE_ENGINE_PID="$pidfile" \
+        run_engine "$ws" -B --leaf --lanes 1 --jobs 2 --intensity low \
+        --state-dir "$fixture/interrupt/state" p1 p2 p3
+    kill "$watcher" 2>/dev/null || true
+    wait "$watcher" 2>/dev/null || true
+    printf '%s\n' "$FIXTURE_OUTPUT" >"$fixture/s5.out"
 
-# ─── 4. Deferral (the rc-99 anchoring amendment) and its blocked dependent ──
-command -v vercmp >/dev/null || fail 'vercmp is required (it ships with pacman)'
-ws=$fixture/ws-defer
-make_workspace "$ws" 1 2 low
-mkdir -p "$ws/fake"
-printf '2.0.0-1\n' >"$ws/fake/repo_version"
-# a-stable: a stable recipe whose moved source gets NO official document (404)
-# → anchor_sums_from_official refuses, the lane parks it with rc 99 and the
-# record row must say `deferred 99 … anchoring-refused` — not a failed build.
-# The sync/anchor flow keys on the physical packages/stable/ path (the same
-# inline recipe+record layout tests/anchor-defer.sh uses).
-mkdir -p "$ws/packages/stable/a-stable"
-{
-    printf 'pkgname=a-stable\n'
-    printf 'pkgver=1.0.0\n'
-    printf 'pkgrel=1\n'
-    printf 'arch=(any)\n'
-    printf 'source=("https://example.invalid/a-$pkgver.tar.gz")\n'
-    printf "sha256sums=('0000000000000000000000000000000000000000000000000000000000000000')\n"
-} >"$ws/packages/stable/a-stable/PKGBUILD"
-printf 'a-stable|packages/stable/a-stable|stable|\n' >>"$ws/config/topology.conf"
-# b-dep is parked when a-stable defers: its edge is the reason.
-add_package "$ws" b-dep "$gsa_meta_any"
-add_package "$ws" c-plain "$gsa_meta_any"
-set_topology_record "$ws" b-dep git 'a-stable'
+    # the signal landed mid-build (the stub had started)
+    [ -f "$markerdir/p1" ] || fail "the interrupt did not land mid-build (no start marker)" "$fixture/s5.out"
 
-cat >"$ws/bin/pacman" <<'EOF'
-#!/usr/bin/env bash
-if [[ ${1:-} == -Si ]]; then
-    printf 'Repository      : extra\nName            : %s\nVersion         : %s\n' \
-        "$2" "$(cat "$GSA_FAKE_DIR/repo_version")"
-    exit 0
-fi
-exit 0
-EOF
-chmod +x "$ws/bin/pacman"
-cat >"$ws/bin/curl" <<'EOF'
-#!/usr/bin/env bash
-printf '%s\n' "$*" >>"$GSA_FAKE_DIR/curl_calls"
-exit 22
-EOF
-chmod +x "$ws/bin/curl"
-cat >"$ws/bin/updpkgsums" <<'EOF'
-#!/usr/bin/env bash
-printf 'called\n' >>"$GSA_FAKE_DIR/updpkgsums_calls"
-exit 0
-EOF
-chmod +x "$ws/bin/updpkgsums"
-cat >"$ws/bin/makepkg" <<'EOF'
-#!/usr/bin/env bash
-set -u
-id=$(basename "$PWD")
-printf '%s\n' "$id" >>"$GSA_FAKE_DIR/makepkg_calls"
-: >"$PWD/$id-1.0.0-1-any.pkg.tar.zst"
-exit 0
-EOF
-chmod +x "$ws/bin/makepkg"
-stub_sudo "$ws"
+    # An interrupted run exits with the signal's own status — INT's 130
+    # (§G.1) — with the full record emitted first.
+    [ "$FIXTURE_RC" = 130 ] || fail "the interrupted run exited $FIXTURE_RC, want 130:" "$fixture/s5.out"
+    assert_rc "$fixture/s5.out"
+    record_ok "$fixture/s5.out"
+    record_statuses "$fixture/s5.out"
+    [ "$(rr2_scalar outcome <"$fixture/s5.out")" = interrupted ] ||
+        fail "outcome wrong: $(rr2_scalar outcome <"$fixture/s5.out")" "$fixture/s5.out"
 
-run_builder env \
-    PATH="$ws/bin:$PATH" \
-    GSA_STATE_DIR="$ws/state" \
-    GSA_FAKE_DIR="$ws/fake" \
-    GSA_FAKE_PACMAN_LOG="$ws/pacman.log" \
-    GSA_CPU_THREADS=8 \
-    GSA_MEMORY_GIB=16 \
-    fish "$ws/build-all.fish" --allow-broken-rustc --no-deps \
-    --intensity low a-stable b-dep c-plain
-printf '%s\n' "$FIXTURE_OUTPUT" >"$fixture/s4.out"
-[[ $FIXTURE_RC -ne 0 ]] || fail "the deferral run exited 0 although a recipe was parked"
-[[ $(rr_row a-stable status <"$fixture/s4.out") == deferred ]] ||
-    fail "a-stable row wrong: $(rr_row a-stable <"$fixture/s4.out")"
-# The rc-99 _ANCHOR_DEFER_RC amendment is DATA in the row, not folklore.
-[[ $(rr_row a-stable rc <"$fixture/s4.out") == 99 ]] ||
-    fail "a-stable row rc is $(rr_row a-stable rc <"$fixture/s4.out"), want 99"
-[[ $(rr_row a-stable reason <"$fixture/s4.out") == anchoring-refused ]] ||
-    fail "a-stable reason wrong: $(rr_row a-stable reason <"$fixture/s4.out")"
-[[ $(rr_row b-dep status <"$fixture/s4.out") == blocked ]] ||
-    fail "b-dep row wrong: $(rr_row b-dep <"$fixture/s4.out")"
-[[ $(rr_row b-dep reason <"$fixture/s4.out") == waits-on-deferred ]] ||
-    fail "b-dep reason wrong: $(rr_row b-dep reason <"$fixture/s4.out")"
-[[ $(rr_row b-dep rc <"$fixture/s4.out") == - ]] ||
-    fail "b-dep never ran but carries rc: $(rr_row b-dep <"$fixture/s4.out")"
-# The dispatch CONTINUED around the parked recipe: c-plain built.
-[[ $(rr_row c-plain status <"$fixture/s4.out") == succeeded ]] ||
-    fail "c-plain row wrong: $(rr_row c-plain <"$fixture/s4.out")"
-[[ $(rr_remaining <"$fixture/s4.out" | tr '\n' ' ') == 'a-stable b-dep ' ]] ||
-    fail "resume set wrong: $(rr_remaining <"$fixture/s4.out" | tr '\n' ' ')"
-check_rows "$fixture/s4.out"
+    # The package in flight is interrupted-mid-build with the LANE's signal
+    # code as its row rc (§H.3: 129/130/143 — teardown's SIGTERM makes 143
+    # the observed value); the rest were never dispatched — and both facts
+    # are in the record, not just in prose.
+    [ "$(rr2_outcome p1 status <"$fixture/s5.out")" = interrupted ] ||
+        fail "p1 row wrong: $(rr2_outcome p1 <"$fixture/s5.out")" "$fixture/s5.out"
+    rr2_outcome p1 rc <"$fixture/s5.out" | grep -Eq '^(129|130|143)$' ||
+        fail "an interrupted row's rc is not a signal lane code (§F.1): $(rr2_outcome p1 <"$fixture/s5.out")" "$fixture/s5.out"
+    [ "$(rr2_outcome p1 reason <"$fixture/s5.out")" = interrupted-mid-build ] ||
+        fail "p1 reason wrong: $(rr2_outcome p1 reason <"$fixture/s5.out")" "$fixture/s5.out"
+    for id in p2 p3; do
+        [ "$(rr2_outcome "$id" <"$fixture/s5.out")" = "$id never-started - - interrupted-before-start" ] ||
+            fail "$id row wrong: $(rr2_outcome "$id" <"$fixture/s5.out")" "$fixture/s5.out"
+    done
 
-# ─── 5. Interrupt: record + continuation on the 130 path ────────────────────
-ws=$fixture/ws-interrupt
-make_case_workspace "$ws"
-cat >"$ws/bin/makepkg" <<'EOF'
-#!/usr/bin/env bash
-set -u
-id=$(basename "$PWD")
-# Event marker: the fixture waits for this file before signalling INT, so the
-# interrupt deterministically lands mid-build instead of racing the
-# pre-dispatch phase on wall-clock time.
-: >"$(cd "$(dirname "$0")/.." && pwd)/makepkg-started"
-printf 'fake makepkg %s\n' "$PWD"
-sleep 3
-: >"$PWD/$id-1.0.0-1-any.pkg.tar.zst"
-exit 0
-EOF
-chmod +x "$ws/bin/makepkg"
-set +e
-env PATH="$ws/bin:$PATH" \
-    GSA_STATE_DIR="$ws/state" \
-    GSA_FAKE_PACMAN_LOG="$ws/pacman.log" \
-    GSA_CPU_THREADS=8 \
-    GSA_MEMORY_GIB=16 \
-    _LANE_STOP_GRACE_S=2 \
-    fish "$ws/build-all.fish" --allow-broken-rustc --no-deps --no-sync \
-    --intensity low p1 p2 p3 >"$fixture/s5.out" 2>&1 &
-builder_pid=$!
-# Wait (bounded) for the first lane's makepkg to actually start before
-# signalling — an event, not a wall-clock guess. Under battery parallelism the
-# pre-dispatch phase outlasts any fixed sleep, and an interrupt that lands
-# BEFORE dispatch is a different, equally correct outcome (all rows
-# never-started / interrupted-before-start) pinned by signal-abort-lock.sh;
-# this scenario exists to pin the MID-build half and must not flake into it.
-for _ in $(seq 1 300); do
-    [[ -e $ws/makepkg-started ]] && break
-    sleep 0.1
-done
-[[ -e $ws/makepkg-started ]] \
-    || fail "the fake makepkg never started, so the interrupt cannot be timed:
-$(cat "$fixture/s5.out")"
-kill -INT "$builder_pid"
-wait "$builder_pid"
-int_rc=$?
-set -e
-# This scenario signals INT (kill -INT above), and an interrupted run exits
-# with the signal's own status (gsa_signal_exit_rc: HUP 129 / INT 130 /
-# TERM 143) — so 130 below is INT's status, not a flat default; a TERM or
-# HUP scenario would pin 143 or 129 instead (the signal sent here stays INT).
-[[ $int_rc -eq 130 ]] ||
-    fail "the interrupted run exited $int_rc, want 130:
-$(cat "$fixture/s5.out")"
-[[ $(rr_scalar outcome <"$fixture/s5.out") == interrupted ]] ||
-    fail "outcome wrong: $(rr_scalar outcome <"$fixture/s5.out")"
-[[ $(rr_scalar rc <"$fixture/s5.out") == 130 ]] ||
-    fail "rc scalar wrong: $(rr_scalar rc <"$fixture/s5.out")"
-# The package in flight is interrupted-mid-build; the rest were never
-# dispatched — and both facts are in the record, not just in prose.
-[[ $(rr_row p1 <"$fixture/s5.out") == 'p1 interrupted - - interrupted-mid-build' ]] ||
-    fail "p1 row wrong: $(rr_row p1 <"$fixture/s5.out")"
-for id in p2 p3; do
-    [[ $(rr_row "$id" <"$fixture/s5.out") == "$id never-started - - interrupted-before-start" ]] ||
-        fail "$id row wrong: $(rr_row "$id" <"$fixture/s5.out")"
-done
-# Continuation output on the interrupt path (the run used to exit 130 with no
-# summary, no record and nothing to resume by): the suggestion carries the
-# plan triple + the semantics flags the run used, and ends with the resume
-# set in row order.
-suggest=$(assert_suggestion "$fixture/s5.out" 'p1 p2 p3')
-for flag in '--lanes 1' '--jobs 2' '--intensity low' --no-deps --no-sync --allow-broken-rustc; do
-    [[ $suggest == *"$flag"* ]] ||
-        fail "interrupted-run suggestion dropped '$flag': $suggest"
-done
-check_rows "$fixture/s5.out"
+    # Continuation output on the interrupt path (the fish-era run used to
+    # exit 130 with nothing to resume by): the command carries the plan
+    # triple + the semantics flags the run used, and ends with the resume
+    # set in row order; `remaining:` agrees with the rows.
+    [ "$(remaining_matches "$fixture/s5.out")" = 'p1 p2 p3' ] ||
+        fail "resume set wrong: $(rr2_remaining <"$fixture/s5.out" | tr '\n' ' ')" "$fixture/s5.out"
+    command=$(rr2_continuation command <"$fixture/s5.out")
+    for flag in '--leaf' '--lanes 1' '--jobs 2' '--intensity low'; do
+        case "$command" in
+        *"$flag"*) ;;
+        *) fail "interrupted-run continuation dropped '$flag': $command" "$fixture/s5.out" ;;
+        esac
+    done
+    case "$command" in
+    *' p1 p2 p3') ;;
+    *) fail "continuation command does not end with the resume set: $command" "$fixture/s5.out" ;;
+    esac
+)
 
-# ─── 6. Enum closure: the whitelist and full status coverage ────────────────
-for out in "$fixture"/s*.out; do
-    check_rows "$out"
-done
+# ─── 6. Enum closure: every §H.3 status was produced by some scenario ───────
 for status in $STATUSES; do
     grep -qx "$status" "$seen_statuses" ||
         fail "status '$status' was never produced by any scenario — the enum pin is incomplete"
 done
 
-printf 'run record fixture: PASS (block, rows, enum incl. deferred=rc99, interrupt continuation)\n'
+printf 'run record fixture: PASS (format: 2 block, scalars, rows, enum, continuation incl. interrupt 130)\n'
