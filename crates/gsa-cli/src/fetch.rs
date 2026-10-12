@@ -134,7 +134,8 @@ pub fn run_fetch_only(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write
             "Fetch run (dry run): {} package(s) — nothing fetched",
             selection.listed.len()
         );
-        let _ = write!(out, "{}", record.render_machine());
+        // A dry-run record mutates nothing: emit renders it, never stores it.
+        record::emit_machine_record(out, &record, &crate::install::state_dir_of(inv), err);
         return outcome.rc;
     }
 
@@ -175,7 +176,7 @@ pub fn run_fetch_only(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write
         &outcome,
     );
     let _ = write!(out, "{}", render::render_fetch_prose(&results));
-    let _ = write!(out, "{}", record.render_machine());
+    record::emit_machine_record(out, &record, &crate::install::state_dir_of(inv), err);
     outcome.rc
 }
 

@@ -13,6 +13,33 @@ use gsa_model::{
 use crate::args::{Family, Invocation};
 use crate::select::Selection;
 
+/// Emit the `format: 2` machine block AND persist the same record into the
+/// side-car run history (contract §H.1's amendment): persistence is storage
+/// of the one structure, never a fourth derivation. A dry-run record
+/// mutates nothing (§B.8) — it renders but is never stored. A persistence
+/// failure is loud (naming `--state-dir` as the remedy, §J.3) and never
+/// changes the record or its rc.
+pub fn emit_machine_record(
+    out: &mut dyn std::io::Write,
+    record: &RunRecord,
+    state_dir: &std::path::Path,
+    err: &mut dyn std::io::Write,
+) {
+    let _ = write!(out, "{}", record.render_machine());
+    if record.dry_run {
+        return;
+    }
+    let mut notes = Vec::new();
+    let result = gsa_state::StateRoot::open(state_dir)
+        .and_then(|root| gsa_state::RunHistory::append(&root, record, &mut notes));
+    if !notes.is_empty() {
+        let _ = err.write_all(&notes);
+    }
+    if let Err(error) = result {
+        let _ = writeln!(err, "gsa: error: run history not persisted: {error}");
+    }
+}
+
 /// The engine environment input roster (`gsa --help` must print it).
 /// `GSA_BUILD_JOBS` is engine output and deliberately absent.
 pub const ENV_ROSTER: [&str; 8] = [

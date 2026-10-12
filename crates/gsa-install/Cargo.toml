@@ -8,6 +8,7 @@ license.workspace = true
 gsa-model = { workspace = true }
 gsa-recipe = { workspace = true }
 gsa-build = { workspace = true }
+gsa-qa = { workspace = true }
 
 [dev-dependencies]
 tar = { workspace = true }

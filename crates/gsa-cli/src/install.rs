@@ -495,7 +495,13 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
             rc: 0,
         };
         let record = record::build_txn_record(inv, &inv.targets, plan, outcomes, &run_outcome);
-        let _ = write!(out, "{}", render::render_run_prose(&record, &log_dir, &[]));
+        // A dry run executes nothing: the install-time QA report surface
+        // (contract §E.4) belongs to a run that reached its record finish.
+        let _ = write!(
+            out,
+            "{}",
+            render::render_run_prose(&record, &log_dir, &[], None)
+        );
         let _ = write!(out, "{}", record.render_machine());
         return 0;
     }
@@ -527,7 +533,7 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
                 reason: "preflight-refused".to_string(),
             })
             .collect();
-        return finish_record(inv, out, plan, outcomes, true, false, &log_dir);
+        return finish_record(inv, out, err, plan, outcomes, true, false, &log_dir);
     }
     if let Err(message) = gsa_sched::lock::ensure_state_dirs(&state_dir, err) {
         let _ = writeln!(err, "gsa: {message}");
@@ -691,11 +697,11 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
                 }
             })
             .collect();
-        return finish_record(inv, out, plan, outcomes, false, true, &log_dir);
+        return finish_record(inv, out, err, plan, outcomes, false, true, &log_dir);
     }
 
     let outcomes = txn_outcome_rows(&rows, &txn, dur);
-    finish_record(inv, out, plan, outcomes, false, false, &log_dir)
+    finish_record(inv, out, err, plan, outcomes, false, false, &log_dir)
 }
 
 /// One `refuse` row for the "plan failed without a row" class (§E.3).
@@ -753,7 +759,7 @@ fn note_subject_substitutions(rows: &[DecisionRow], err: &mut dyn Write) {
 
 /// The state root of a run (contract §J.3): `--state-dir` beats
 /// `GSA_STATE_DIR`; never a silent workspace fallback.
-fn state_dir_of(inv: &Invocation) -> PathBuf {
+pub(crate) fn state_dir_of(inv: &Invocation) -> PathBuf {
     inv.state_dir
         .as_ref()
         .map(PathBuf::from)
@@ -783,16 +789,17 @@ fn finish_refused(
     others: &str,
     log_dir: &Path,
 ) -> i32 {
-    let _ = err;
     let outcomes = refusal_outcome_rows(&rows, overrides, others);
     let plan: Vec<PlanRow> = rows.iter().map(record::decision_plan_row).collect();
-    finish_record(inv, out, plan, outcomes, true, false, log_dir)
+    finish_record(inv, out, err, plan, outcomes, true, false, log_dir)
 }
 
-/// Render the one run record three ways (§H) and return its rc.
+/// Render the one run record three ways (§H) and return its rc. The machine
+/// block and the side-car run history are one emission (§H.1's amendment).
 fn finish_record(
     inv: &Invocation,
     out: &mut dyn Write,
+    err: &mut dyn Write,
     plan: Vec<PlanRow>,
     outcomes: Vec<OutcomeRow>,
     refused: bool,
@@ -800,9 +807,23 @@ fn finish_record(
     log_dir: &Path,
 ) -> i32 {
     let run_outcome = RunOutcome::compute(&outcomes, inv.fail_fast, interrupted, refused);
+    // The install-time QA report surface (contract §E.4): every
+    // report-severity check over the run's subjects, appended to the prose
+    // summary (prose-only — the §H.2 choice in `gsa-qa::report`). It never
+    // touches the decision rows above: those were computed once, by the one
+    // decision seam (rule 20).
+    let qa_targets: Vec<String> = plan
+        .iter()
+        .map(|row| row.pkg.as_str().to_string())
+        .collect();
+    let qa = crate::qa::report_lines(&qa_targets);
     let record = record::build_txn_record(inv, &inv.targets, plan, outcomes, &run_outcome);
-    let _ = write!(out, "{}", render::render_run_prose(&record, log_dir, &[]));
-    let _ = write!(out, "{}", record.render_machine());
+    let _ = write!(
+        out,
+        "{}",
+        render::render_run_prose(&record, log_dir, &[], qa.as_deref())
+    );
+    record::emit_machine_record(out, &record, &state_dir_of(inv), err);
     run_outcome.rc
 }
 

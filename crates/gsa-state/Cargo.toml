@@ -1,0 +1,19 @@
+[package]
+name = "gsa-state"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The side-car state database under the state root: hash-bound binpkg index, run history, key-value (docs/gsa-contract.md §J)"
+
+[dependencies]
+gsa-model = { workspace = true }
+gsa-graph = { workspace = true }
+gsa-recipe = { workspace = true }
+gsa-sched = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+
+[dev-dependencies]
+tar = { workspace = true }
+zstd = { workspace = true }

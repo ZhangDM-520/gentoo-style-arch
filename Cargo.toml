@@ -9,6 +9,8 @@ members = [
     "crates/gsa-build",
     "crates/gsa-install",
     "crates/gsa-fetch",
+    "crates/gsa-state",
+    "crates/gsa-qa",
     "crates/gsa-cli",
 ]
 
@@ -26,7 +28,11 @@ gsa-sched = { path = "crates/gsa-sched" }
 gsa-build = { path = "crates/gsa-build" }
 gsa-install = { path = "crates/gsa-install" }
 gsa-fetch = { path = "crates/gsa-fetch" }
+gsa-state = { path = "crates/gsa-state" }
+gsa-qa = { path = "crates/gsa-qa" }
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
 tar = "0.4"
 zstd = "0.13"
 object = { version = "0.36", default-features = false, features = ["read", "elf"] }
@@ -35,6 +41,10 @@ object = { version = "0.36", default-features = false, features = ["read", "elf"
 # gsa-sched (lane supervisor: budgets, result codec, dispatch state machine,
 # signals, locks, orphan sweeps) and gsa-build (makepkg orchestration).
 # Phase 3 adds gsa-install (the install pipeline) and Phase 4 gsa-fetch
-# (fetch-ahead: `gsa -Sw` + the dispatcher's prefetch window). The remaining
-# crates (gsa-state/gsa-qa/gsa-maint) arrive with their phases and are
-# deliberately not stubbed out here (plan-native-pm.md §3.1, §7).
+# (fetch-ahead: `gsa -Sw` + the dispatcher's prefetch window) and gsa-state
+# (the side-car state database under the state root: binpkg index, run
+# history, key-value — docs/gsa-contract.md §J) and gsa-qa (the QA check
+# registry: named checks with scope + severity + stable keyword, the
+# install-qa-check.d analogue — plan-native-pm.md §5.3). The remaining crate
+# (gsa-maint) arrives with its phase and is deliberately not stubbed out here
+# (plan-native-pm.md §3.1, §7).

@@ -13,6 +13,8 @@ mod args;
 mod build;
 mod fetch;
 mod install;
+mod qa;
+mod query;
 mod record;
 mod render;
 mod select;
@@ -41,6 +43,8 @@ enum Command {
     QueryList,
     QueryInfo,
     QuerySearch,
+    QueryBinpkg,
+    QueryProbe,
     Plan,
     Build,
     BuildInstall,
@@ -81,6 +85,11 @@ Command surface:
   gsa -Q [ref…]                  package names with versions over the buildable universe
   gsa -Qi <ref…>                 package info: pacman fields plus the recipe record
   gsa -Qs <pattern…>             search package names/descriptions
+  gsa -Qb [ref…]                 binpkg index rows: the retained built instances
+                                 the side-car DB records (hash-bound, §J.4)
+  gsa -Qp <archive…>             archive probe: the archive's .PKGINFO matched
+                                 against its index row, hash/size agreement
+                                 reported
   gsa -S <targets…> [ranges…]    build the selection and install each package's
                                  archives before its consumers compile
                                  (install-before-dependents; checked install)
@@ -122,6 +131,8 @@ Long modifiers (contract §B.8). A build run accepts: --dry-run, --leaf,
   --lanes N|auto, --jobs N|auto, --intensity LEVEL, --state-dir PATH,
   --no-prefetch (opt out of the advisory fetch-ahead), --prefetch-ahead N
   (fetch-ahead window, default 8).
+The side-car queries (-Qb/-Qp) accept --state-dir PATH — the state-root
+  override (§J.3), flag beats GSA_STATE_DIR.
 An install run (-S/-U) additionally accepts: --config PATH (the target
   pacman.conf), --no-register-ignorepkg (skip the dynamic IgnorePkg
   registration, loudly), and -- <pacman args…> (forwarded to every pacman -U).
@@ -165,12 +176,17 @@ fn classify(inv: &Invocation) -> Disposition {
     let is_build_run = inv.family == Family::B && inv.action.is_none() && !inv.dry_run;
     let is_install_run = inv.family == Family::S && inv.action.is_none() && !inv.dry_run;
     let is_upgrade_run = inv.family == Family::U;
+    // The side-car queries (§B.3 `-Qb`/`-Qp`) read the state root, so they
+    // take `--state-dir` like every other state-root surface (§J.3).
+    let is_side_car_query = inv.family == Family::Q && matches!(inv.action, Some('b') | Some('p'));
     let accepted: &[&str] = if is_build_run {
         &build::REAL_BUILD_FLAGS
     } else if is_install_run {
         &build::REAL_INSTALL_FLAGS
     } else if is_upgrade_run {
         &install::REAL_UPGRADE_FLAGS
+    } else if is_side_car_query {
+        &["--state-dir"]
     } else {
         &[]
     };
@@ -196,6 +212,8 @@ fn classify(inv: &Invocation) -> Disposition {
         (Family::Q, None) => Command::QueryList,
         (Family::Q, Some('i')) => Command::QueryInfo,
         (Family::Q, Some('s')) => Command::QuerySearch,
+        (Family::Q, Some('b')) => Command::QueryBinpkg,
+        (Family::Q, Some('p')) => Command::QueryProbe,
         (Family::Q, Some('t')) => Command::Topology,
         (Family::S, None) if inv.dry_run => Command::Plan,
         (Family::S, Some('l')) => Command::List,
@@ -431,6 +449,12 @@ fn execute(
             require_refs(inv, "at least one search pattern")?;
             let _ = write!(out, "{}", render::render_query_search(&ctx, &inv.targets));
         }
+        Command::QueryBinpkg => {
+            query::query_binpkg(&ctx, inv, out, err).map_err(cmd_error)?;
+        }
+        Command::QueryProbe => {
+            query::query_probe(inv, out, err).map_err(cmd_error)?;
+        }
         Command::Plan => {
             if inv.targets.is_empty() {
                 return Err(cmd_error(
@@ -504,13 +528,15 @@ pub fn run(argv: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
             // The one-shot backfill (rule 9).
             install::run_register_ignorepkg(&args, out, err)
         }
-        Ok(Parsed::Hidden(hidden)) => {
-            let _ = writeln!(
-                err,
-                "gsa: deferred to a later phase: {} (fixture seam of a later phase)",
-                hidden.spelling()
-            );
-            RC_USAGE
+        Ok(Parsed::Hidden(Hidden::LocalDbCheck(args))) => {
+            // The side-car self-check without a run (§D.1), including the
+            // run-history read of the §H.1 persistence amendment.
+            query::run_local_db_check(&args, out, err)
+        }
+        Ok(Parsed::Hidden(Hidden::QaCheck(args))) => {
+            // The QA check registry's single-entry point (§D.1): one named
+            // check, its findings on stdout, rc per §G.
+            qa::run_qa_check(&args, out, err)
         }
         Ok(Parsed::Invoke(inv)) => match classify(&inv) {
             Disposition::Deferred(why) => {
@@ -564,7 +590,7 @@ mod tests {
 
     #[test]
     fn deferred_spellings_refuse_with_a_clear_message() {
-        for spelling in ["-Ql", "-Qr", "-Qb", "-Sy", "-Su", "-Ma", "-Mcc"] {
+        for spelling in ["-Ql", "-Qr", "-Qa", "-Sy", "-Su", "-Ma", "-Mcc"] {
             let (code, _out, err) = run_capture(&[spelling]);
             assert_eq!(code, 2, "{spelling} must be deferred");
             assert!(
@@ -577,13 +603,40 @@ mod tests {
         assert_eq!(code, 2);
         assert!(err.contains("deferred to a later phase"), "{err}");
         // The not-yet-real hidden seams defer; --lane-job/--stale-lock-check
-        // /--fetch-job are live seams (tests/gsa-sched-v2.sh,
-        // tests/gsa-fetch-v2.sh).
-        for seam in ["--local-db-check", "--qa-check"] {
-            let (code, _out, err) = run_capture(&[seam]);
-            assert_eq!(code, 2, "{seam} must be deferred");
-            assert!(err.contains("deferred to a later phase"), "{seam}: {err}");
-        }
+        // /--fetch-job/--local-db-check/--qa-check are live seams
+        // (tests/gsa-sched-v2.sh, tests/gsa-fetch-v2.sh,
+        // tests/gsa-state-v2.sh, tests/gsa-qa-v2.sh) — the QA seam's bare
+        // and unknown-name invocations are usage-class (§G), never deferred.
+        let (code, _out, err) = run_capture(&["--qa-check"]);
+        assert_eq!(code, 2, "--qa-check without a name is usage (§G)");
+        assert!(err.contains("requires a check name"), "{err}");
+        let (code, _out, err) = run_capture(&["--qa-check", "no-such-check"]);
+        assert_eq!(code, 2, "an unknown check name is usage (§G)");
+        assert!(err.contains("unknown check 'no-such-check'"), "{err}");
+    }
+
+    #[test]
+    fn side_car_surfaces_are_live_and_usage_checked() {
+        // -Qp with a nonexistent archive: rc 2 naming the argument (§D.1's
+        // seam shape — bad argv is named before any state is touched).
+        let (code, _out, err) = run_capture(&["-Qp", "no-such-archive.pkg.tar.zst"]);
+        assert_eq!(code, 2);
+        assert!(err.contains("malformed archive argument"), "{err}");
+        let (code, _out, err) = run_capture(&["-Qp"]);
+        assert_eq!(code, 2);
+        assert!(err.contains("requires at least one archive"), "{err}");
+        // --local-db-check rejects an unknown verb with rc 2, naming it.
+        let (code, _out, err) = run_capture(&["--local-db-check", "bogus"]);
+        assert_eq!(code, 2);
+        assert!(err.contains("unknown argument 'bogus'"), "{err}");
+        // -Qb over an empty scratch state root: rc 0, no rows, and the
+        // scratch tree is where every byte landed (§J.3).
+        let scratch = std::env::temp_dir().join(format!("gsa-cli-qbin-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).unwrap();
+        let (code, out, err) = run_capture(&["-Qb", "--state-dir", scratch.to_str().unwrap()]);
+        assert_eq!(code, 0, "{err}");
+        assert!(out.is_empty(), "an empty index prints no rows: {out}");
     }
 
     #[test]

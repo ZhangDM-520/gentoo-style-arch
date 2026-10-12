@@ -484,10 +484,15 @@ pub fn render_fetch_prose(results: &[gsa_fetch::verdict::FetchResult]) -> String
 /// and the failure that parked it, every deferred package with its reason).
 /// `parked_by` maps each parked package id to the package ids whose event
 /// parked it (computed once from the same rows and topology, never here).
+/// `qa` appends the install-time QA report surface's `report`-severity
+/// findings (contract §E.4) — `None` when the run had no QA surface
+/// (build-only and dry runs); the finding lines themselves are computed by
+/// `gsa-qa` and never re-derived here.
 pub fn render_run_prose(
     record: &RunRecord,
     log_dir: &Path,
     parked_by: &[(String, Vec<String>)],
+    qa: Option<&[String]>,
 ) -> String {
     let mut out = String::new();
     let (lanes, normal, core) = match (record.lanes, record.normal_jobs, record.core_jobs) {
@@ -547,5 +552,22 @@ pub fn render_run_prose(
         }
     }
     out.push_str(&format!("outcome: {} (rc {})\n", record.outcome, record.rc));
+    // The QA report surface (contract §E.4): report-severity findings
+    // appended to the prose summary — additive, prose-only (the §H.2
+    // choice recorded in `gsa-qa::report`), never a decision and never a
+    // machine row.
+    if let Some(findings) = qa {
+        if findings.is_empty() {
+            out.push_str("QA report (report-only): clean\n");
+        } else {
+            out.push_str(&format!(
+                "QA report (report-only): {} finding(s)\n",
+                findings.len()
+            ));
+            for line in findings {
+                out.push_str(&format!("· {line}\n"));
+            }
+        }
+    }
     out
 }

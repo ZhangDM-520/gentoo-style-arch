@@ -224,6 +224,111 @@ pub fn parse_srcinfo_bytes(bytes: &[u8], origin: &str) -> Result<Srcinfo, Recipe
 }
 
 // ---------------------------------------------------------------------------
+// Section-tagged .SRCINFO rows (QA lints, fish `srcinfo_rows`)
+// ---------------------------------------------------------------------------
+
+/// Section-tagged committed-`.SRCINFO` rows. The QA lints (`gsa-qa`) need to
+/// know WHICH section a `provides`/`conflicts`/dependency row belongs to:
+/// the pkgbase section (handle `''` — makepkg merges it into every output) or
+/// one output's own `pkgname` section (handle = that output name). A sibling
+/// output's section never counts for an output (the swap rule's counterpart
+/// test), which the flattened [`Srcinfo`] cannot express. Grammar and
+/// strictness are byte-identical to [`parse_srcinfo`]: one `key = value` per
+/// row, keys `[a-z0-9_-]+`, and a non-conforming line is an error naming the
+/// line — never a silent drop.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SrcinfoRows {
+    pub pkgbase: Option<String>,
+    pub pkgnames: Vec<String>,
+    /// `(handle, value)` pairs; handle `''` is the pkgbase section.
+    pub provides: Vec<(String, String)>,
+    /// `(handle, value)` pairs; handle `''` is the pkgbase section. Empty
+    /// values are KEPT (a split output's unset array slot ships as
+    /// `provides = `, metadata that names nothing — the swap lint flags it).
+    pub conflicts: Vec<(String, String)>,
+    /// `(field, handle, value)` for `depends|makedepends|optdepends|checkdepends`.
+    pub deps: Vec<(String, String, String)>,
+}
+
+impl SrcinfoRows {
+    /// The declared name set of the recipe (fish `B`/`N` rows): pkgbase plus
+    /// every pkgname, deduped in declaration order.
+    pub fn names(&self) -> Vec<String> {
+        let mut names = Vec::new();
+        if let Some(base) = &self.pkgbase {
+            names.push(base.clone());
+        }
+        for name in &self.pkgnames {
+            if !names.contains(name) {
+                names.push(name.clone());
+            }
+        }
+        names
+    }
+
+    /// The output names (fish `N` rows), falling back to the pkgbase when a
+    /// record carries no `pkgname` row at all.
+    pub fn outputs(&self) -> Vec<String> {
+        if self.pkgnames.is_empty() {
+            self.pkgbase.clone().into_iter().collect()
+        } else {
+            self.pkgnames.clone()
+        }
+    }
+}
+
+/// Parse committed `.SRCINFO` into section-tagged rows ([`SrcinfoRows`]).
+/// Section tracking is the file's own: rows before the first `pkgname` row
+/// belong to the pkgbase section (handle `''`); a `pkgname = <out>` row
+/// switches the current section to that output.
+pub fn parse_srcinfo_rows(content: &str, origin: &str) -> Result<SrcinfoRows, RecipeError> {
+    let mut rows = SrcinfoRows::default();
+    let mut handle = String::new();
+    for (idx, raw_line) in content.lines().enumerate() {
+        let line_no = idx + 1;
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            return Err(RecipeError::at(
+                origin,
+                line_no,
+                format!("malformed .SRCINFO line (expected 'key = value'): {line}"),
+            ));
+        };
+        let key = key.trim();
+        let value = value.trim();
+        if !key_is_wellformed(key) {
+            return Err(RecipeError::at(
+                origin,
+                line_no,
+                format!("malformed .SRCINFO key '{key}' (expected [a-z0-9_-]+): {line}"),
+            ));
+        }
+        match key {
+            "pkgbase" => {
+                if rows.pkgbase.is_none() {
+                    rows.pkgbase = Some(value.to_string());
+                }
+            }
+            "pkgname" => {
+                rows.pkgnames.push(value.to_string());
+                handle = value.to_string();
+            }
+            "provides" => rows.provides.push((handle.clone(), value.to_string())),
+            "conflicts" => rows.conflicts.push((handle.clone(), value.to_string())),
+            "depends" | "makedepends" | "optdepends" | "checkdepends" => {
+                rows.deps
+                    .push((key.to_string(), handle.clone(), value.to_string()))
+            }
+            _ => {}
+        }
+    }
+    Ok(rows)
+}
+
+// ---------------------------------------------------------------------------
 // Strict read-only PKGBUILD scan
 // ---------------------------------------------------------------------------
 

@@ -15,16 +15,33 @@ use object::read::StringTable;
 /// yield an empty list (a member that is not an ELF has nothing to probe).
 pub fn needed_libs(bytes: &[u8]) -> Vec<String> {
     match object::File::parse(bytes) {
-        Ok(object::File::Elf32(file)) => needed_in(&file),
-        Ok(object::File::Elf64(file)) => needed_in(&file),
+        Ok(object::File::Elf32(file)) => dynamic_names(&file).0,
+        Ok(object::File::Elf64(file)) => dynamic_names(&file).0,
         _ => Vec::new(),
     }
 }
 
-fn needed_in<'data, Elf: FileHeader>(file: &ElfFile<'data, Elf, &'data [u8]>) -> Vec<String> {
+/// The `DT_SONAME` of one ELF image (the shipped soname surface the ABI
+/// closure lint compares against the recipe's declared provides). Non-ELF
+/// bytes yield `None`.
+pub fn soname(bytes: &[u8]) -> Option<String> {
+    match object::File::parse(bytes) {
+        Ok(object::File::Elf32(file)) => dynamic_names(&file).1,
+        Ok(object::File::Elf64(file)) => dynamic_names(&file).1,
+        _ => None,
+    }
+}
+
+/// The (`DT_NEEDED` list, `DT_SONAME`) pair of one ELF image, read from one
+/// dynamic-segment walk (`DT_STRTAB` mapped through the `PT_LOAD` segments —
+/// section headers are never required).
+fn dynamic_names<'data, Elf: FileHeader>(
+    file: &ElfFile<'data, Elf, &'data [u8]>,
+) -> (Vec<String>, Option<String>) {
     let endian = file.endian();
     let data: &'data [u8] = file.data();
-    let mut out = Vec::new();
+    let mut needed = Vec::new();
+    let mut soname: Option<String> = None;
     for segment in file.elf_program_headers() {
         let Ok(Some(dyns)) = segment.dynamic(endian, data) else {
             continue;
@@ -39,7 +56,7 @@ fn needed_in<'data, Elf: FileHeader>(file: &ElfFile<'data, Elf, &'data [u8]>) ->
             }
         }
         let Some(addr) = strtab_addr else {
-            return out;
+            return (needed, soname);
         };
         // Map the string table's virtual address to file offsets through the
         // PT_LOAD segments (the same mapping ld.so performs).
@@ -59,33 +76,39 @@ fn needed_in<'data, Elf: FileHeader>(file: &ElfFile<'data, Elf, &'data [u8]>) ->
             }
         }
         let Some((start, end)) = strtab_range else {
-            return out;
+            return (needed, soname);
         };
         let strtab = StringTable::new(data, start, end);
         for d in dyns {
-            if d.tag32(endian) == Some(elf::DT_NEEDED) {
-                if let Ok(name) = d.string(endian, strtab) {
-                    out.push(String::from_utf8_lossy(name).into_owned());
+            match d.tag32(endian) {
+                Some(elf::DT_NEEDED) => {
+                    if let Ok(name) = d.string(endian, strtab) {
+                        needed.push(String::from_utf8_lossy(name).into_owned());
+                    }
                 }
+                Some(elf::DT_SONAME) => {
+                    if let Ok(name) = d.string(endian, strtab) {
+                        soname = Some(String::from_utf8_lossy(name).into_owned());
+                    }
+                }
+                _ => {}
             }
         }
-        return out;
+        return (needed, soname);
     }
-    out
+    (needed, soname)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// A minimal section-less ELF64 image carrying one `DT_NEEDED` entry.
+    /// A minimal section-less ELF64 image carrying the given dynamic entries
+    /// (`(tag, value)` pairs, terminated with DT_NULL) over the given dynstr.
     /// Layout: ehdr (64) | PT_LOAD phdr (56) | PT_DYNAMIC phdr (56) |
-    /// 4 dynamic entries (64) | dynstr.
-    fn elf64_with_needed(soname: &str) -> Vec<u8> {
-        let mut dynstr = vec![0u8];
-        dynstr.extend_from_slice(soname.as_bytes());
-        dynstr.push(0);
-        let dynstr_off: u64 = 64 + 56 + 56 + 64;
+    /// dynamic entries (16 each) | dynstr.
+    fn elf64_with(dyn_entries: &[(u64, u64)], dynstr: Vec<u8>) -> Vec<u8> {
+        let dynstr_off: u64 = 64 + 56 + 56 + 16 * (dyn_entries.len() as u64 + 1);
         let total = dynstr_off + dynstr.len() as u64;
 
         let mut out = Vec::new();
@@ -123,18 +146,39 @@ mod tests {
         out.extend_from_slice(&64u64.to_le_bytes());
         out.extend_from_slice(&64u64.to_le_bytes());
         out.extend_from_slice(&8u64.to_le_bytes());
-        // Dynamic entries: DT_NEEDED, DT_STRTAB, DT_STRSZ, DT_NULL
-        for (tag, val) in [
-            (1u64, 1u64),
-            (5u64, dynstr_off),
-            (10u64, dynstr.len() as u64),
-            (0u64, 0u64),
-        ] {
+        // Dynamic entries + DT_NULL
+        for (tag, val) in dyn_entries {
             out.extend_from_slice(&tag.to_le_bytes());
             out.extend_from_slice(&val.to_le_bytes());
         }
+        out.extend_from_slice(&0u64.to_le_bytes());
+        out.extend_from_slice(&0u64.to_le_bytes());
         out.extend_from_slice(&dynstr);
         out
+    }
+
+    /// One `DT_NEEDED` entry pointing at dynstr offset 1.
+    fn elf64_with_needed(needed: &str) -> Vec<u8> {
+        let mut dynstr = vec![0u8];
+        dynstr.extend_from_slice(needed.as_bytes());
+        dynstr.push(0);
+        let off = 64 + 56 + 56 + 16 * 4;
+        elf64_with(
+            &[(1u64, 1u64), (5u64, off), (10u64, dynstr.len() as u64)],
+            dynstr,
+        )
+    }
+
+    /// One `DT_SONAME` entry pointing at dynstr offset 1.
+    fn elf64_with_soname(name: &str) -> Vec<u8> {
+        let mut dynstr = vec![0u8];
+        dynstr.extend_from_slice(name.as_bytes());
+        dynstr.push(0);
+        let off = 64 + 56 + 56 + 16 * 4;
+        elf64_with(
+            &[(14u64, 1u64), (5u64, off), (10u64, dynstr.len() as u64)],
+            dynstr,
+        )
     }
 
     #[test]
@@ -147,5 +191,17 @@ mod tests {
     fn needed_libs_is_empty_for_non_elf() {
         assert!(needed_libs(b"not an elf").is_empty());
         assert!(needed_libs(&[]).is_empty());
+    }
+
+    #[test]
+    fn soname_reads_dt_soname() {
+        let bytes = elf64_with_soname("libx.so.2");
+        assert_eq!(soname(&bytes), Some("libx.so.2".to_string()));
+    }
+
+    #[test]
+    fn soname_is_none_for_non_elf_and_for_missing_dt_soname() {
+        assert_eq!(soname(b"not an elf"), None);
+        assert_eq!(soname(&elf64_with_needed("libmissing.so.1")), None);
     }
 }

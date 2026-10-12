@@ -15,8 +15,6 @@ use std::path::Path;
 use tar::Archive as TarArchive;
 use zstd::stream::read::Decoder;
 
-use crate::elf::needed_libs;
-
 /// One archive's `.PKGINFO` (`%BASE%`, `%NAME%`, `%VERSION%`/`%EPOCH%`,
 /// `%PROVIDES%`, `%DEPENDS%`, `%ARCH%`).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -207,6 +205,20 @@ pub fn member_names(archive: &Path) -> Result<Vec<String>, String> {
 /// is bounded by the largest single member. `Err` = the archive could not be
 /// read.
 pub fn members_with_needed(archive: &Path) -> Result<Vec<(String, Vec<String>)>, String> {
+    Ok(members_with_dynamic(archive)?
+        .into_iter()
+        .map(|(name, _, needed)| (name, needed))
+        .collect())
+}
+
+/// One member's dynamic surface, per member, in archive order:
+/// `(member, DT_SONAME, DT_NEEDED)` — the ABI closure lint's per-member
+/// probe (fish `readelf -dW` rows). Non-ELF members contribute `None` and an
+/// empty list. Read one member at a time — memory is bounded by the largest
+/// single member. `Err` = the archive could not be read.
+pub fn members_with_dynamic(
+    archive: &Path,
+) -> Result<Vec<(String, Option<String>, Vec<String>)>, String> {
     let mut tar = open_archive(archive)?;
     let entries = tar.entries().map_err(|e| e.to_string())?;
     let mut out = Vec::new();
@@ -219,8 +231,9 @@ pub fn members_with_needed(archive: &Path) -> Result<Vec<(String, Vec<String>)>,
             .into_owned();
         let mut bytes = Vec::new();
         entry.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
-        let needed = needed_libs(&bytes);
-        out.push((name, needed));
+        let soname = crate::elf::soname(&bytes);
+        let needed = crate::elf::needed_libs(&bytes);
+        out.push((name, soname, needed));
     }
     Ok(out)
 }

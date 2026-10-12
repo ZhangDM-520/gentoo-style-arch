@@ -205,6 +205,7 @@ pub fn discover_recipe(recipe_dir: &Path) -> Result<RecipeArchives, String> {
 /// order: unreadable/name handling, empty list, PGO payload (§E.3 `pgo-*`),
 /// ABI/provide (`abi-soname`, `abi-consumer`, `abi-stock-pinner`), the
 /// package-internal NEEDED probe (rule 25(b)/(e) file-truth resolution),
+/// the QA registry's install-refusing checks (§E.4 `refuse <keyword> …`),
 /// then the checked same-version skip (`already-current`) or the force
 /// branch (`install`).
 ///
@@ -321,6 +322,52 @@ fn already_current(info: &Pkginfo, archive: &Path, db: &LocalDb) -> Option<Strin
     }
 }
 
+/// The QA gate (contract §E.4): the check registry's install-refusing
+/// checks — and only those — extend the ONE decision seam's row stream with
+/// `refuse <keyword> …` rows (`gsa_qa::gate`; report-severity checks cannot
+/// reach that conversion at all). The input is one candidate's archive plus
+/// the recipe beside it (both name authorities, rule 9) and the installed
+/// DB; a candidate with no readable committed `.SRCINFO` leaves the check
+/// nothing to compare and it stands down (that damage is the discovery
+/// gate's `partial-set`/`discover-failed` class).
+fn qa_refusals(
+    candidate: &Candidate,
+    info: &Pkginfo,
+    qa_installed: &[gsa_qa::QaInstalled],
+) -> Vec<DecisionRow> {
+    let mut recipes: Vec<gsa_qa::QaRecipe> = Vec::new();
+    let mut recipe_id = String::new();
+    if let Some(dir) = candidate.recipe_dir.as_deref() {
+        recipe_id = dir
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let srcinfo = dir.join(".SRCINFO");
+        if let Ok(content) = std::fs::read_to_string(&srcinfo) {
+            if let Ok(rows) = gsa_recipe::parse_srcinfo_rows(&content, &srcinfo.to_string_lossy()) {
+                recipes.push(gsa_qa::QaRecipe {
+                    id: recipe_id.clone(),
+                    dir: dir.to_path_buf(),
+                    rows,
+                });
+            }
+        }
+    }
+    let archives = vec![gsa_qa::QaArchive {
+        recipe_id,
+        path: candidate.archive.clone(),
+        pkginfo: Some(info.clone()),
+    }];
+    let input = gsa_qa::QaInput {
+        recipes: &recipes,
+        targets: &[],
+        archives: &archives,
+        installed: qa_installed,
+        exclusions: &[],
+    };
+    gsa_qa::gate::install_refusals(&input)
+}
+
 fn plan(candidates: &[Candidate], ctx: &DecisionContext, db: &LocalDb) -> Result<Plan, String> {
     let exclusions = resolve_exclusions(ctx, candidates)?;
 
@@ -360,6 +407,19 @@ fn plan(candidates: &[Candidate], ctx: &DecisionContext, db: &LocalDb) -> Result
         .map(|(c, _)| c.archive.as_path())
         .collect();
     let shipped = gates::ShippedBytes::collect(&archives)?;
+
+    // The QA gate's installed-DB view (contract §E.4): one conversion per
+    // plan, shared by every candidate's registry consult.
+    let qa_installed: Vec<gsa_qa::QaInstalled> = db
+        .packages()
+        .into_iter()
+        .map(|pkg| gsa_qa::QaInstalled {
+            name: pkg.name.clone(),
+            version: pkg.version.clone(),
+            provides: pkg.provides.clone(),
+            depends: pkg.depends.clone(),
+        })
+        .collect();
 
     let mut plans: Vec<CandidatePlan> = Vec::new();
     for (idx, candidate) in candidates.iter().enumerate() {
@@ -499,6 +559,21 @@ fn plan(candidates: &[Candidate], ctx: &DecisionContext, db: &LocalDb) -> Result
             ));
         }
         if !rows.is_empty() {
+            plans.push(CandidatePlan {
+                candidate: candidate.clone(),
+                pkginfo: Some(info),
+                rows,
+            });
+            continue;
+        }
+
+        // QA gate (contract §E.4): the registry's install-refusing checks
+        // emit `refuse <keyword> …` rows in THIS seam (never a second one;
+        // rule 20). Runs BEFORE the force branch — force bypasses the
+        // same-version skip, never a gate.
+        let qa_rows = qa_refusals(candidate, &info, &qa_installed);
+        if !qa_rows.is_empty() {
+            rows.extend(qa_rows);
             plans.push(CandidatePlan {
                 candidate: candidate.clone(),
                 pkginfo: Some(info),

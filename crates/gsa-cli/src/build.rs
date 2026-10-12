@@ -184,6 +184,7 @@ fn run_build_with(
                 &budget,
                 &state_dir,
                 out,
+                err,
                 "preflight-refused",
             );
         }
@@ -196,6 +197,7 @@ fn run_build_with(
             &budget,
             &state_dir,
             out,
+            err,
             "startup-refused",
         );
     }
@@ -209,6 +211,7 @@ fn run_build_with(
             &budget,
             &state_dir,
             out,
+            err,
             "startup-refused",
         );
     }
@@ -223,6 +226,7 @@ fn run_build_with(
                 &budget,
                 &state_dir,
                 out,
+                err,
                 "startup-refused",
             );
         }
@@ -263,11 +267,15 @@ fn run_build_with(
                 &budget,
                 &state_dir,
                 out,
+                err,
                 "startup-refused",
             );
         }
     };
     let ids: Vec<RecipeId> = selection.listed.iter().map(|(_, id)| id.clone()).collect();
+    // Whether this run installs (the install-time QA report surface rides
+    // install runs only — contract §E.4, install-qa-check.d timing).
+    let is_install_run = install.is_some();
     // The post-build install hook (install-before-dependents, rule 11):
     // called per package on the supervisor's event loop, before its result
     // reaches the machine. `later_installs` is the run-order remainder
@@ -297,6 +305,50 @@ fn run_build_with(
                 ))
             }) as Box<dyn FnMut(&str, &std::path::Path) -> InstallStep + Send>
         });
+    // ── the post-build registration hook (contract §J.4) ────────────────
+    // Every successful build records its instance in the hash-bound binpkg
+    // index and enforces the topology-derived retention budget (N=2 hubs /
+    // N=1 elsewhere); the in-flight lane ids the supervisor passes are the
+    // guard — pruning never deletes an archive the run is using.
+    let retention = gsa_state::Retention::from_graph(&graph);
+    let register_hook: Box<
+        dyn FnMut(&str, &std::path::Path, &std::collections::BTreeSet<String>) -> Vec<String>
+            + Send,
+    > = {
+        let state_dir = state_dir.clone();
+        Box::new(move |pkg, recipe_dir, in_flight| {
+            let mut notes = Vec::new();
+            let mut gate = Vec::new();
+            let outcome = gsa_state::StateRoot::open(&state_dir).and_then(|state| {
+                let archives = match gsa_install::discover_recipe(recipe_dir) {
+                    Ok(found) => found
+                        .candidates
+                        .into_iter()
+                        .map(|c| c.archive)
+                        .collect::<Vec<_>>(),
+                    Err(error) => {
+                        return Err(gsa_state::StateError::Io(format!(
+                            "cannot discover built archives in {} ({error})",
+                            recipe_dir.display()
+                        )))
+                    }
+                };
+                gsa_state::register_instance(
+                    &state, pkg, &archives, &retention, in_flight, &mut gate,
+                )
+            });
+            for line in String::from_utf8_lossy(&gate).lines() {
+                notes.push(line.strip_prefix("gsa: note: ").unwrap_or(line).to_string());
+            }
+            match outcome {
+                Ok(done) => notes.extend(done.notes),
+                Err(error) => notes.push(format!(
+                    "binpkg index: registration failed for {pkg}: {error}"
+                )),
+            }
+            notes
+        })
+    };
     // ── fetch-ahead setup (owner decisions 1/3/5): the lookahead window's
     // per-node candidacy comes from gsa-recipe's source classification (never
     // grep), and the advisory log is `$STATE_DIR/prefetch.log`, run-scoped
@@ -333,6 +385,7 @@ fn run_build_with(
         nodes,
         batches,
         install: install_hook,
+        register: Some(register_hook),
         prefetch,
     };
 
@@ -353,6 +406,7 @@ fn run_build_with(
                 &budget,
                 &state_dir,
                 out,
+                err,
                 "startup-refused",
             );
         }
@@ -380,17 +434,30 @@ fn run_build_with(
         &run_outcome,
         prefetch_warnings,
     );
+    // The install-time QA report surface (contract §E.4): report-severity
+    // findings over the run's subjects appended to the prose summary
+    // (prose-only — the §H.2 choice in `gsa-qa::report`). Install runs only
+    // (install-qa-check.d timing); the findings never touch the per-package
+    // install decisions, which the one decision seam made (rule 20).
+    let qa = if is_install_run {
+        let qa_targets: Vec<String> = ids.iter().map(|id| id.as_str().to_string()).collect();
+        crate::qa::report_lines(&qa_targets)
+    } else {
+        None
+    };
     let _ = write!(
         out,
         "{}",
-        render::render_run_prose(&record, &state_dir.join("logs"), &parked_by)
+        render::render_run_prose(&record, &state_dir.join("logs"), &parked_by, qa.as_deref())
     );
     let _ = write!(
         out,
         "{}",
         render::render_prefetch_notes(&outcome.prefetch_warnings)
     );
-    let _ = write!(out, "{}", record.render_machine());
+    // The machine block AND the side-car run history: the §H.1 amendment
+    // stores the same structure, never a fourth derivation.
+    record::emit_machine_record(out, &record, &state_dir, err);
     run_outcome.rc
 }
 
@@ -582,6 +649,7 @@ fn refuse_before_dispatch(
     budget: &Budget,
     state_dir: &std::path::Path,
     out: &mut dyn Write,
+    err: &mut dyn Write,
     reason: &str,
 ) -> i32 {
     let outcomes: Vec<OutcomeRow> = selection
@@ -611,8 +679,10 @@ fn refuse_before_dispatch(
     let _ = write!(
         out,
         "{}",
-        render::render_run_prose(&record, &state_dir.join("logs"), &[])
+        render::render_run_prose(&record, &state_dir.join("logs"), &[], None)
     );
-    let _ = write!(out, "{}", record.render_machine());
+    // A refused run is still a completed run record (§H.1) — persisted
+    // like every other emission through the one store path.
+    record::emit_machine_record(out, &record, state_dir, err);
     run_outcome.rc
 }

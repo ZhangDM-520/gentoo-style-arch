@@ -81,25 +81,10 @@ pub enum Hidden {
     LaneJob(Vec<String>),
     FetchJob(Vec<String>),
     StaleLockCheck,
-    LocalDbCheck,
+    LocalDbCheck(Vec<String>),
     InstallRegister(Vec<String>),
     RegisterIgnorepkg(Vec<String>),
     QaCheck(Vec<String>),
-}
-
-impl Hidden {
-    pub fn spelling(&self) -> String {
-        match self {
-            Hidden::InstallDecide(_) => "--install-decide".to_string(),
-            Hidden::LaneJob(_) => "--lane-job".to_string(),
-            Hidden::FetchJob(_) => "--fetch-job".to_string(),
-            Hidden::StaleLockCheck => "--stale-lock-check".to_string(),
-            Hidden::LocalDbCheck => "--local-db-check".to_string(),
-            Hidden::InstallRegister(_) => "--install-register".to_string(),
-            Hidden::RegisterIgnorepkg(_) => "--register-ignorepkg".to_string(),
-            Hidden::QaCheck(_) => "--qa-check".to_string(),
-        }
-    }
 }
 
 /// One parsed invocation.
@@ -207,7 +192,10 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
                     }
                     Hidden::StaleLockCheck
                 }
-                "--local-db-check" => Hidden::LocalDbCheck,
+                // `--local-db-check [health|runs]` (§D.1's seam, with the
+                // run-history read of the §H.1 amendment): the verb list is
+                // validated by the seam, which answers rc 2 on anything else.
+                "--local-db-check" => Hidden::LocalDbCheck(rest),
                 "--install-register" => Hidden::InstallRegister(rest),
                 "--register-ignorepkg" => Hidden::RegisterIgnorepkg(rest),
                 "--qa-check" => Hidden::QaCheck(rest),

@@ -62,6 +62,19 @@ pub struct RunSetup {
     /// after the install landed. Runs on the supervisor's single event loop,
     /// which is what makes "one `pacman -U` at a time" structural (§K.3).
     pub install: Option<Box<dyn FnMut(&str, &std::path::Path) -> InstallStep + Send>>,
+    /// The post-build registration hook (contract §J.4): called with
+    /// (package id, recipe directory, in-flight recipe ids) when a lane
+    /// published `ok`, before the install hook — the instance is recorded
+    /// while the run still knows which lanes are in flight, so retention
+    /// pruning never deletes an archive the run is using. The return value
+    /// is the hook's diagnostic notes, which surface as
+    /// [`SupEvent::Diagnostic`] rows (loud reporting, §I.4).
+    pub register: Option<
+        Box<
+            dyn FnMut(&str, &std::path::Path, &std::collections::BTreeSet<String>) -> Vec<String>
+                + Send,
+        >,
+    >,
     /// Fetch-ahead (contract §B.8 `--prefetch-ahead`/`--no-prefetch`, plan.md
     /// §2): `None` is `--no-prefetch`. Advisory by construction — a fetch
     /// outcome never reaches [`Machine`] and never changes a run-record row.
@@ -668,6 +681,27 @@ pub fn run(
                             result.reason.clone()
                         };
                         if code == gsa_model::LaneOutcome::Ok {
+                            // Post-build registration hook (contract §J.4):
+                            // record the instance while the in-flight set is
+                            // still knowable here — every other lane that is
+                            // still building, minus this one (its lane is
+                            // done; its own retention sweep may proceed).
+                            if let Some(hook) = setup.register.as_mut() {
+                                let pkg = machine.node(index).id.as_str().to_string();
+                                let recipe_dir = setup.nodes[index].recipe_dir.clone();
+                                let in_flight: std::collections::BTreeSet<String> =
+                                    (0..setup.nodes.len())
+                                        .filter(|&j| j != index)
+                                        .filter(|&j| {
+                                            machine.node_phase(j)
+                                                == crate::machine::NodePhase::Dispatched
+                                        })
+                                        .map(|j| setup.nodes[j].id.as_str().to_string())
+                                        .collect();
+                                for note in hook(&pkg, &recipe_dir, &in_flight) {
+                                    events(&SupEvent::Diagnostic(note));
+                                }
+                            }
                             if let Some(hook) = setup.install.as_mut() {
                                 let pkg = machine.node(index).id.as_str().to_string();
                                 let recipe_dir = setup.nodes[index].recipe_dir.clone();
@@ -963,6 +997,7 @@ mod tests {
             }],
             batches: Vec::new(),
             install: None,
+            register: None,
             prefetch: None,
         }
     }
