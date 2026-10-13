@@ -14,9 +14,11 @@ gsa-model = { workspace = true }
 gsa-topo = { workspace = true }
 gsa-recipe = { workspace = true }
 gsa-graph = { workspace = true }
+gsa-abi = { workspace = true }
 gsa-sched = { workspace = true }
 gsa-build = { workspace = true }
 gsa-install = { workspace = true }
 gsa-fetch = { workspace = true }
 gsa-qa = { workspace = true }
 gsa-state = { workspace = true }
+gsa-maint = { workspace = true }

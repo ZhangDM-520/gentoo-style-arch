@@ -1,0 +1,14 @@
+[package]
+name = "gsa-abi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The ABI subsystem: derived abi-tokens with the abi-rev= override, := subscription records and computed rebuild waves, preserved-libs detection, revdep queries, and the install-seam ABI refusal rows"
+
+[dependencies]
+gsa-model = { workspace = true }
+gsa-graph = { workspace = true }
+gsa-recipe = { workspace = true }
+sha2 = { workspace = true }
+tar = { workspace = true }
+zstd = { workspace = true }

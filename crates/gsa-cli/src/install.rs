@@ -16,12 +16,13 @@
 //! bounded grace window (`signals::stop_grace_seconds`), then SIGKILL —
 //! exit 130 with the full run record (§I.3).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+use gsa_abi::{plan_waves, stage_swap, Subscriptions, TokenMove, WaveInputs, WavePlan};
 use gsa_graph::Graph;
 use gsa_install::localdb::pacman_db_root;
 use gsa_install::{
@@ -53,7 +54,7 @@ pub const REAL_UPGRADE_FLAGS: [&str; 4] = [
 /// The default state root (contract §J.3) — shared with the build path.
 const DEFAULT_STATE_DIR: &str = "/var/lib/gsa";
 /// The default target pacman.conf (rule 9).
-const DEFAULT_CONF: &str = "/etc/pacman.conf";
+pub(crate) const DEFAULT_CONF: &str = "/etc/pacman.conf";
 
 // ---------------------------------------------------------------------------
 // Pure mappings (unit-tested; no gsa-install behaviour is touched here)
@@ -224,6 +225,249 @@ pub fn refusal_outcome_rows(
 }
 
 // ---------------------------------------------------------------------------
+// The ABI wave + staged swap (plan-native-pm.md §4.3/§4.5)
+// ---------------------------------------------------------------------------
+
+/// One staged-swap transaction's fate (§H.3, per group).
+#[derive(Clone, Debug)]
+enum GroupFate {
+    Landed,
+    /// The transaction's failure reason already in `install-failed …` form.
+    Failed(String),
+    /// A later group after an earlier failure — never transacted.
+    Held,
+}
+
+/// The recipe id of one candidate ("record matched via recipe dir name"):
+/// the recipe directory's name when it names a topology record or a record
+/// path, else that name as-is, else the archive's pkgname.
+fn candidate_id(graph: &Graph<'_>, candidate: &Candidate, pkgname: &str) -> String {
+    let Some(name) = candidate
+        .recipe_dir
+        .as_deref()
+        .and_then(|d| d.file_name())
+        .map(|n| n.to_string_lossy().into_owned())
+    else {
+        return pkgname.to_string();
+    };
+    if graph.records().iter().any(|r| r.id.as_str() == name) {
+        return name;
+    }
+    if let Some(record) = graph.records().iter().find(|r| {
+        std::path::Path::new(&r.path)
+            .file_name()
+            .map(|f| f.to_string_lossy() == name)
+            .unwrap_or(false)
+    }) {
+        return record.id.as_str().to_string();
+    }
+    name
+}
+
+/// The `-U` wave computation (plan-native-pm.md §4.3): which candidate
+/// provider's token moved against its consumers' recorded `:=` tokens, and
+/// the swap waves that movement demands. The wave itself is `gsa-abi`'s one
+/// planner (record mismatches ∪ content truth ∪ coupled batches,
+/// fail-toward-whole-closure when records are missing); this seam only
+/// feeds it the candidate tokens (each merged with the recipe's declared
+/// `abi-rev=`) and the installed-ELF view. Reads only — pacman-free.
+fn compute_swap(
+    graph: &Graph<'_>,
+    candidates: &[Candidate],
+    localdb: &LocalDb,
+    state_dir: &Path,
+) -> Result<WavePlan, String> {
+    let subs = Subscriptions::load(&gsa_abi::subscriptions_path(state_dir))?;
+    let view = gsa_install::abi_view(localdb);
+    let mut moves: Vec<TokenMove> = Vec::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    let mut planned: BTreeSet<String> = BTreeSet::new();
+    for candidate in candidates {
+        // An unreadable archive stays out of the wave input; the decision
+        // seam refuses it by name (rule 25(h)).
+        let Ok(info) = read_pkginfo(&candidate.archive) else {
+            continue;
+        };
+        let id = candidate_id(graph, candidate, &info.pkgname);
+        planned.insert(id.clone());
+        if !seen.insert(id.clone()) {
+            continue;
+        }
+        let rev = graph
+            .records()
+            .iter()
+            .find(|r| r.id.as_str() == id)
+            .and_then(|r| gsa_abi::abi_rev_of(&r.tags));
+        let Ok(token) = gsa_abi::token_for_archive(&candidate.archive, rev) else {
+            continue;
+        };
+        let recorded = subs.for_provider(&id);
+        if recorded.is_empty() || recorded.iter().all(|s| s.token == token.effective) {
+            continue;
+        }
+        moves.push(TokenMove {
+            provider: id,
+            old: recorded.first().map(|s| s.token.clone()),
+            new: token.effective.clone(),
+            changed_provides: gsa_abi::provide_drift(&info.pkgname, &info.provides, &view)
+                .into_iter()
+                .map(|drift| drift.name)
+                .collect(),
+        });
+    }
+    if moves.is_empty() {
+        return Ok(WavePlan::default());
+    }
+    Ok(plan_waves(&WaveInputs {
+        graph,
+        subs: &subs,
+        moves: &moves,
+        installed: Some(&view),
+        planned: &planned,
+    }))
+}
+
+/// Stage the swap transactions (plan-native-pm.md §4.5): ONE group per wave
+/// carrying every wave archive (the provider first), then one leftover
+/// group for the non-wave install archives. With no computed wave this is
+/// exactly today's single transaction. `Err` carries the §E.3 refusal rows
+/// of a wave whose member archive cannot resolve — a wave is never
+/// transacted half-covered.
+fn stage_groups(
+    plan: &WavePlan,
+    install_archives: &[(String, PathBuf)],
+) -> Result<Vec<Vec<(String, PathBuf)>>, Vec<DecisionRow>> {
+    let archive_of = |id: &str| -> Option<PathBuf> {
+        install_archives
+            .iter()
+            .find(|(rid, _)| rid == id)
+            .map(|(_, archive)| archive.clone())
+    };
+    let swap = stage_swap(&plan.waves, &archive_of);
+    if !swap.refusals.is_empty() {
+        return Err(swap.refusals);
+    }
+    let id_of = |archive: &Path| -> Option<String> {
+        install_archives
+            .iter()
+            .find(|(_, a)| a == archive)
+            .map(|(id, _)| id.clone())
+    };
+    let mut groups: Vec<Vec<(String, PathBuf)>> = swap
+        .transactions
+        .iter()
+        .map(|group| {
+            group
+                .iter()
+                .filter_map(|archive| id_of(archive).map(|id| (id, archive.clone())))
+                .collect()
+        })
+        .collect();
+    // Split outputs beyond `stage_swap`'s one-archive-per-id contract join
+    // their wave's group; everything else rides the leftover group.
+    let mut leftover: Vec<(String, PathBuf)> = Vec::new();
+    for (id, archive) in install_archives {
+        if groups.iter().any(|g| g.iter().any(|(_, a)| a == archive)) {
+            continue;
+        }
+        let wave = plan
+            .waves
+            .iter()
+            .position(|w| w.provider == *id || w.members.iter().any(|m| &m.id == id));
+        match wave {
+            Some(wi) if wi < groups.len() => groups[wi].push((id.clone(), archive.clone())),
+            _ => leftover.push((id.clone(), archive.clone())),
+        }
+    }
+    if !leftover.is_empty() {
+        groups.push(leftover);
+    }
+    Ok(groups)
+}
+
+/// Outcome rows for a grouped staged swap (§H.3 per group): install rows
+/// carry their group's fate (`ok` / `install-failed …` / held after an
+/// earlier failure), every other row keeps its decision mapping.
+fn grouped_txn_outcome_rows(
+    paired: &[(DecisionRow, Option<Candidate>)],
+    fates: &BTreeMap<PathBuf, GroupFate>,
+    dur: i64,
+) -> Vec<OutcomeRow> {
+    paired
+        .iter()
+        .map(|(row, candidate)| {
+            let pkg = record::subject_id(&row.subject);
+            if row.decision != Decision::Install {
+                return txn_outcome_rows(std::slice::from_ref(row), &TxnOutcome::Ok, dur)
+                    .into_iter()
+                    .next()
+                    .expect("one row in, one row out");
+            }
+            let fate = candidate
+                .as_ref()
+                .and_then(|c| fates.get(&c.archive))
+                .unwrap_or(&GroupFate::Held);
+            let (status, rc, reason) = match fate {
+                GroupFate::Landed => (RowStatus::Succeeded, Some(0), "ok".to_string()),
+                GroupFate::Failed(message) => (RowStatus::Failed, Some(1), message.to_string()),
+                GroupFate::Held => (
+                    RowStatus::NeverStarted,
+                    None,
+                    "held-after-install-failed".to_string(),
+                ),
+            };
+            OutcomeRow {
+                pkg,
+                status,
+                rc,
+                dur: if matches!(fate, GroupFate::Held) {
+                    None
+                } else {
+                    Some(dur)
+                },
+                reason,
+            }
+        })
+        .collect()
+}
+
+/// The wave's same-version-skip suppression set (plan §4.5): the wave's
+/// provider and members, in recipe ids AND the names the decision seam's
+/// name chain carries (pkgbase/pkgname of the candidate archives).
+fn wave_heal_names(graph: &Graph<'_>, plan: &WavePlan, candidates: &[Candidate]) -> Vec<String> {
+    let mut ids: BTreeSet<String> = BTreeSet::new();
+    for wave in &plan.waves {
+        ids.insert(wave.provider.clone());
+        ids.extend(wave.members.iter().map(|m| m.id.clone()));
+    }
+    let mut names = ids.clone();
+    for candidate in candidates {
+        let Ok(info) = read_pkginfo(&candidate.archive) else {
+            continue;
+        };
+        if ids.contains(&candidate_id(graph, candidate, &info.pkgname)) {
+            names.insert(info.pkgbase);
+            names.insert(info.pkgname);
+        }
+    }
+    names.into_iter().collect()
+}
+
+/// The transaction's reason vocabulary (§H.3), shared by the group fates.
+fn txn_reason(txn: &TxnOutcome) -> GroupFate {
+    match txn {
+        TxnOutcome::Ok => GroupFate::Landed,
+        TxnOutcome::Failed { message, .. } => {
+            GroupFate::Failed(format!("install-failed {message}"))
+        }
+        TxnOutcome::MutexTimeout => GroupFate::Failed("install-failed mutex-timeout".to_string()),
+        TxnOutcome::SudoLost => GroupFate::Failed(
+            "install-failed sudo credential expired and cannot be refreshed".to_string(),
+        ),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // gsa -U (contract §B.6)
 // ---------------------------------------------------------------------------
 
@@ -380,7 +624,7 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
     }
 
     // ── the one decision seam (contract §E.1) ────────────────────────────
-    let candidates: Vec<Candidate> = items
+    let mut candidates: Vec<Candidate> = items
         .iter()
         .flat_map(|item| match item {
             Item::Direct(candidate) => vec![candidate.clone()],
@@ -395,17 +639,17 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
     } else {
         DecideMode::Checked
     };
-    let decision_ctx = DecisionContext {
-        mode,
-        empty_list: if mode == DecideMode::Force {
-            EmptyListPolicy::Noop
-        } else {
-            EmptyListPolicy::Refuse
-        },
-        later_installs: Vec::new(),
-        parks: Vec::new(),
-        abi_exclusions: None,
-    };
+
+    // ── the ABI wave + staged swap (plan-native-pm.md §4.3/§4.5) ────────
+    // BEFORE the decision seam (§E.3): a candidate provider whose token
+    // moved against its consumers' recorded `:=` tokens drags its consumer
+    // wave into this plan — the additions become candidates and each wave
+    // stages into ONE `pacman -U` carrying all of its archives. Under-
+    // coverage refuses pacman-free (rc 3). `-Ua` is exempt: it installs
+    // the whole workspace, so its single transaction already carries every
+    // consumer (contract §B.6).
+    let state_dir = state_dir_of(inv);
+    let log_dir = state_dir.join("logs");
     let db_root = pacman_db_root();
     let localdb = match LocalDb::load(&db_root) {
         Ok(localdb) => localdb,
@@ -417,9 +661,93 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
                 vec![plan_failed_row(&message)],
                 &[],
                 "refused-plan-pacman-free",
-                &default_log_dir(inv),
+                &log_dir,
             );
         }
+    };
+    let swap_plan = if all {
+        WavePlan::default()
+    } else {
+        match compute_swap(&graph, &candidates, &localdb, &state_dir) {
+            Ok(plan) => plan,
+            Err(message) => {
+                return finish_refused(
+                    inv,
+                    out,
+                    err,
+                    vec![plan_failed_row(&message)],
+                    &[],
+                    "refused-plan-pacman-free",
+                    &log_dir,
+                );
+            }
+        }
+    };
+    if !swap_plan.uncovered.is_empty() {
+        return finish_refused(
+            inv,
+            out,
+            err,
+            swap_plan.refusal_rows(),
+            &[],
+            "refused-plan-pacman-free",
+            &log_dir,
+        );
+    }
+    // Wave members the user did not name join the plan as candidates —
+    // their archive sets must resolve, or the wave cannot land wholly and
+    // the member is named `refuse abi-consumer-uncovered` (§E.3).
+    for id in &swap_plan.additions {
+        let provider = swap_plan
+            .waves
+            .iter()
+            .find(|w| w.members.iter().any(|m| &m.id == id))
+            .map(|w| w.provider.clone())
+            .unwrap_or_else(|| "-".to_string());
+        let recipe_dir = match graph.index_of(id) {
+            Some(idx) => root.join(&graph.record(idx).path),
+            None => {
+                items.push(Item::Rejected(vec![gsa_abi::abi_uncovered_row(
+                    &provider, id,
+                )]));
+                continue;
+            }
+        };
+        match discover_recipe(&recipe_dir) {
+            Ok(found)
+                if !found.candidates.is_empty()
+                    && found.missing.is_empty()
+                    && !found.mixed_versions =>
+            {
+                items.push(Item::Recipe(found.candidates));
+            }
+            _ => items.push(Item::Rejected(vec![gsa_abi::abi_uncovered_row(
+                &provider, id,
+            )])),
+        }
+    }
+    candidates = items
+        .iter()
+        .flat_map(|item| match item {
+            Item::Direct(candidate) => vec![candidate.clone()],
+            Item::Recipe(candidates) => candidates.clone(),
+            Item::Rejected(_) => Vec::new(),
+        })
+        .collect();
+    // A wave must land wholly (plan §4.5): its members' (and provider's)
+    // same-version skip is suppressed so the swap cannot half-land.
+    let wave_heal = wave_heal_names(&graph, &swap_plan, &candidates);
+    let decision_ctx = DecisionContext {
+        mode,
+        empty_list: if mode == DecideMode::Force {
+            EmptyListPolicy::Noop
+        } else {
+            EmptyListPolicy::Refuse
+        },
+        later_installs: Vec::new(),
+        parks: Vec::new(),
+        abi_exclusions: None,
+        wave_heal,
     };
     let decided = match decide(&candidates, &decision_ctx, &localdb) {
         Ok(rows) => rows,
@@ -431,7 +759,7 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
                 vec![plan_failed_row(&message)],
                 &[],
                 "refused-plan-pacman-free",
-                &default_log_dir(inv),
+                &log_dir,
             );
         }
     };
@@ -475,7 +803,6 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
     let rows: Vec<DecisionRow> = paired.iter().map(|(row, _)| row.clone()).collect();
     let plan: Vec<PlanRow> = rows.iter().map(record::decision_plan_row).collect();
     note_subject_substitutions(&rows, err);
-    let log_dir = state_dir_of(inv).join("logs");
 
     // ── --dry-run: the rows and the record, execute nothing (§B.8) ──────
     if inv.dry_run {
@@ -519,8 +846,7 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
         );
     }
 
-    // ── state root, preflight, run lock (§J.3, §K.3) ────────────────────
-    let state_dir = state_dir_of(inv);
+    // ── preflight, run lock (§K.3) ──────────────────────────────────────
     if let Err(message) = preflight_installs() {
         let _ = writeln!(err, "gsa: {message}");
         let outcomes = rows
@@ -650,26 +976,103 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
         }
     }
 
-    // ── the ONE transaction (§K.3) ──────────────────────────────────────
-    let install_archives: Vec<PathBuf> = paired
+    // ── the staged transactions (§K.3, plan §4.5): ONE `pacman -U` per
+    //    wave carrying ALL of the wave's archives (the provider first),
+    //    then the leftover group for the non-wave install archives. With
+    //    no wave computed this is exactly today's single transaction ─────
+    let install_archives: Vec<(String, PathBuf)> = paired
         .iter()
         .filter(|(row, candidate)| row.decision == Decision::Install && candidate.is_some())
-        .map(|(_, candidate)| candidate.as_ref().expect("checked").archive.clone())
+        .map(|(row, candidate)| {
+            let candidate = candidate.as_ref().expect("checked");
+            let id = read_pkginfo(&candidate.archive)
+                .map(|info| candidate_id(&graph, candidate, &info.pkgname))
+                .unwrap_or_else(|_| record::subject_id(&row.subject).as_str().to_string());
+            (id, candidate.archive.clone())
+        })
         .collect();
-    let started = Instant::now();
-    let (txn, interrupted, signal) = if install_archives.is_empty() {
-        // Nothing transacted (everything skipped/parked): no pacman call.
-        (TxnOutcome::Ok, false, 0)
-    } else {
-        let request = TxnRequest {
-            state_dir: state_dir.clone(),
-            conf: Some(conf.clone()),
-            archives: install_archives,
-            pacman_args: inv.pacman_args.clone().unwrap_or_default(),
-        };
-        execute_supervised(&request, &state_dir, &run_id, out, err)
+    let groups = match stage_groups(&swap_plan, &install_archives) {
+        Ok(groups) => groups,
+        Err(refusals) => {
+            // A wave that cannot land wholly is a refusal (§E.3) — and a
+            // refusing plan is pacman-free end to end (rule 25(h)).
+            let mut all_rows = rows.clone();
+            all_rows.extend(refusals);
+            return finish_refused(
+                inv,
+                out,
+                err,
+                all_rows,
+                &[],
+                "refused-plan-pacman-free",
+                &log_dir,
+            );
+        }
     };
+    let started = Instant::now();
+    let mut fates: BTreeMap<PathBuf, GroupFate> = BTreeMap::new();
+    let mut interrupted = false;
+    let mut signal = 0;
+    let mut halted = false;
+    for group in &groups {
+        let archives: Vec<PathBuf> = group.iter().map(|(_, archive)| archive.clone()).collect();
+        let fate = if halted {
+            // An earlier group failed: this one never starts (§H.3).
+            GroupFate::Held
+        } else {
+            let request = TxnRequest {
+                state_dir: state_dir.clone(),
+                conf: Some(conf.clone()),
+                archives: archives.clone(),
+                pacman_args: inv.pacman_args.clone().unwrap_or_default(),
+            };
+            let (txn, was_interrupted, sig) =
+                execute_supervised(&request, &state_dir, &run_id, out, err);
+            if was_interrupted {
+                interrupted = true;
+                signal = sig;
+                break;
+            }
+            let fate = txn_reason(&txn);
+            if !matches!(fate, GroupFate::Landed) {
+                halted = true;
+            }
+            fate
+        };
+        for archive in &archives {
+            fates.insert(archive.clone(), fate.clone());
+        }
+    }
     let dur = started.elapsed().as_secs() as i64;
+
+    // ── record the `:=` subscriptions of what landed (plan §4.1) ─────────
+    // Loud on failure, never aborting: the wave planner fails toward
+    // whole-closure on missing records (never under).
+    for (row, candidate) in &paired {
+        if row.decision != Decision::Install {
+            continue;
+        }
+        let Some(candidate) = candidate else { continue };
+        if !matches!(fates.get(&candidate.archive), Some(GroupFate::Landed)) {
+            continue;
+        }
+        let Ok(info) = read_pkginfo(&candidate.archive) else {
+            continue;
+        };
+        let id = candidate_id(&graph, candidate, &info.pkgname);
+        if let Err(error) = gsa_install::record_subscriptions(
+            &state_dir,
+            &id,
+            &info.version,
+            &candidate.archive,
+            &localdb,
+        ) {
+            let _ = writeln!(
+                err,
+                "gsa: note: subscription record failed for {id}: {error} (wave planning will fail toward whole-closure)"
+            );
+        }
+    }
 
     if interrupted {
         // §I.3: the full record still runs; the run exits 130.
@@ -700,7 +1103,7 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
         return finish_record(inv, out, err, plan, outcomes, false, true, &log_dir);
     }
 
-    let outcomes = txn_outcome_rows(&rows, &txn, dur);
+    let outcomes = grouped_txn_outcome_rows(&paired, &fates, dur);
     finish_record(inv, out, err, plan, outcomes, false, false, &log_dir)
 }
 
@@ -770,10 +1173,6 @@ pub(crate) fn state_dir_of(inv: &Invocation) -> PathBuf {
                 .map(PathBuf::from)
         })
         .unwrap_or_else(|| PathBuf::from(DEFAULT_STATE_DIR))
-}
-
-fn default_log_dir(inv: &Invocation) -> PathBuf {
-    state_dir_of(inv).join("logs")
 }
 
 /// Finish a refused run (contract §G.1 rc 3): the record is still emitted
@@ -1077,6 +1476,7 @@ pub fn run_install_decide(args: &[String], out: &mut dyn Write, err: &mut dyn Wr
         later_installs: Vec::new(),
         parks: Vec::new(),
         abi_exclusions: None,
+        wave_heal: Vec::new(),
     };
     let rows = match LocalDb::load(&pacman_db_root()) {
         Ok(localdb) => match decide(&candidates, &ctx, &localdb) {

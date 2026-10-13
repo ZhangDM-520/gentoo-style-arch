@@ -25,12 +25,12 @@ mod ownership;
 
 pub use health::{check, Finding, HealthReport};
 pub use index::{
-    register_instance, verify_row, wire_row, BinpkgIndex, IndexRow, Match, RegisterOutcome,
-    Retention, Verification,
+    prune_instance, reindex_archives, register_instance, verify_row, wire_row, BinpkgIndex,
+    IndexRow, Match, RegisterOutcome, Retention, Verification,
 };
 pub use kv::Kv;
 pub use ownership::StateError;
-pub use runs::RunHistory;
+pub use runs::{wire_run, RunHistory};
 pub use store::CorruptLine;
 
 use std::path::{Path, PathBuf};

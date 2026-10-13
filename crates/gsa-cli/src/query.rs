@@ -13,6 +13,7 @@
 use std::io::Write;
 use std::path::Path;
 
+use gsa_install::localdb::{pacman_db_root, LocalDb};
 use gsa_recipe::pkginfo::read_pkginfo;
 
 use crate::args::Invocation;
@@ -230,4 +231,140 @@ pub fn run_local_db_check(args: &[String], out: &mut dyn Write, err: &mut dyn Wr
             }
         }
     }
+}
+
+/// `gsa -Qa <ref…>` — the ABI report (contract §B.3): the derived
+/// abi-token, the `abi-rev=` override state, and the subscription records
+/// in/out (`consumer|version|provider|token`, plan-native-pm.md §4.1).
+/// One row per fact: `<id> <kind> <detail…>`, deterministic order.
+///
+/// Token sources, best first: the newest binpkg index row's recorded token,
+/// the recipe's newest built archive (`gsa-abi`'s derivation over
+/// `.PKGINFO` provides + shipped ELF `DT_SONAME`), else the committed
+/// `.SRCINFO` declared provides (`source=declared` — no shipped payload was
+/// scanned). Read-only; rc 0.
+pub fn query_abi(
+    ctx: &Ctx<'_>,
+    inv: &Invocation,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<(), String> {
+    if !inv.ranges.is_empty() {
+        return Err("index ranges address an -S/-B selection (see 'gsa -Sl')".to_string());
+    }
+    if inv.targets.is_empty() {
+        return Err("requires at least one reference".to_string());
+    }
+    let indices = crate::resolve_records(&ctx, &inv.targets, err)?;
+    let root = StateRoot::open(&gsa_state::resolve_state_root(inv.state_dir.as_deref()))
+        .map_err(|e| e.to_string())?;
+    let index = BinpkgIndex::load(&root).map_err(|e| e.to_string())?;
+    let subs = gsa_abi::Subscriptions::load(&gsa_abi::subscriptions_path(root.path()))
+        .map_err(|e| e.to_string())?;
+    for line in &subs.corrupt {
+        let _ = writeln!(err, "gsa: note: {line}");
+    }
+    let repo = crate::find_root();
+    for &idx in &indices {
+        let record = ctx.graph.record(idx);
+        let id = record.id.as_str();
+        let rev = gsa_abi::abi_rev_of(&record.tags);
+        let recipe_dir = repo.as_ref().map(|r| r.join(&record.path));
+
+        // Token truth: archive-derived when an archive exists (the shipped
+        // surface), declared otherwise; the index row's recorded token is
+        // reported alongside.
+        let (token, source) = match recipe_dir
+            .as_deref()
+            .and_then(|dir| gsa_install::discover_recipe(dir).ok())
+            .and_then(|found| found.candidates.into_iter().map(|c| c.archive).next_back())
+        {
+            Some(archive) => match gsa_abi::token_for_archive(&archive, rev) {
+                Ok(token) => (token, "archive"),
+                Err(error) => {
+                    let _ = writeln!(err, "gsa: note: {id}: archive unreadable ({error})");
+                    let declared = declared_provides(recipe_dir.as_deref());
+                    (gsa_abi::token_declared(&declared, rev), "declared")
+                }
+            },
+            None => {
+                let declared = declared_provides(recipe_dir.as_deref());
+                (gsa_abi::token_declared(&declared, rev), "declared")
+            }
+        };
+        let _ = writeln!(
+            out,
+            "{id} token {} source={source} derived={} {}",
+            token.effective,
+            token.derived,
+            token.override_state()
+        );
+        if let Some(row) = index.rows_for(id).first() {
+            let _ = writeln!(out, "{id} index-token {}", row.abi_token);
+        }
+        for sub in subs.for_provider(id) {
+            let _ = writeln!(
+                out,
+                "{id} subscription-in {} {} {}",
+                sub.consumer, sub.version, sub.token
+            );
+        }
+        for sub in subs.for_consumer(id) {
+            let _ = writeln!(out, "{id} subscription-out {} {}", sub.provider, sub.token);
+        }
+    }
+    Ok(())
+}
+
+/// The committed `.SRCINFO` provides of one recipe (the declared fallback).
+fn declared_provides(recipe_dir: Option<&Path>) -> Vec<String> {
+    let Some(dir) = recipe_dir else {
+        return Vec::new();
+    };
+    let path = dir.join(".SRCINFO");
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    gsa_recipe::parse_srcinfo(&text, &path.to_string_lossy())
+        .map(|info| info.provides)
+        .unwrap_or_default()
+}
+
+/// `gsa -Qr` — the revdep report over the installed-ELF view (contract
+/// §B.3): unresolved `DT_NEEDED`, preserved-lib survivors, exact-pin
+/// leftovers (`gsa_abi::revdep`). Read-only; rc 0 — report-only like every
+/// query (§E.4: a query never refuses).
+pub fn query_revdep(
+    inv: &Invocation,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<(), String> {
+    if !inv.ranges.is_empty() {
+        return Err("index ranges address an -S/-B selection (see 'gsa -Sl')".to_string());
+    }
+    if !inv.targets.is_empty() {
+        return Err(
+            "gsa -Qr takes no references (it reports the whole installed view)".to_string(),
+        );
+    }
+    let db = LocalDb::load(&pacman_db_root()).map_err(|e| e.to_string())?;
+    let view =
+        gsa_abi::InstalledView::new(db.packages().into_iter().map(|pkg| gsa_abi::InstalledPkg {
+            name: pkg.name.clone(),
+            version: pkg.version.clone(),
+            provides: pkg.provides.clone(),
+            depends: pkg.depends.clone(),
+            files: pkg.files.clone(),
+        }));
+    let root = StateRoot::open(&gsa_state::resolve_state_root(inv.state_dir.as_deref()))
+        .map_err(|e| e.to_string())?;
+    let (report, corrupt) =
+        gsa_abi::revdep_report_with_state(&view, root.path()).map_err(|e| e.to_string())?;
+    for line in corrupt {
+        let _ = writeln!(err, "gsa: note: {line}");
+    }
+    for row in gsa_abi::render_revdep(&report) {
+        let _ = writeln!(out, "{row}");
+    }
+    Ok(())
 }

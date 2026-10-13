@@ -84,6 +84,20 @@ pub const NOT_MIRRORED: &[&str] = &[
     "-Ms",
     "-Mw",
     "-Mh",
+    // The -M sub-flags (§B.7): one-shot action modifiers, never replayed.
+    "--fix",
+    "--prune",
+    "--backfill",
+    "--tail",
+    "--keep",
+    "--show",
+    "--add",
+    "--remove",
+    "--noconfirm",
+    // Parse-deferred globals (§B.8) — absent from any live spelling, so a
+    // continuation must never carry them either.
+    "--quiet",
+    "--verbose",
     "--install-decide",
     "--lane-job",
     "--fetch-job",
@@ -560,6 +574,9 @@ mod tests {
             intensity: None,
             state_dir: None,
             config: None,
+            tail: None,
+            keep: None,
+            show: None,
             pacman_args: None,
             no_prefetch: false,
             prefetch_ahead: None,
@@ -598,6 +615,9 @@ mod tests {
             intensity: None,
             state_dir: None,
             config: None,
+            tail: None,
+            keep: None,
+            show: None,
             pacman_args: None,
             no_prefetch: false,
             prefetch_ahead: None,
@@ -634,6 +654,9 @@ mod tests {
             intensity: None,
             state_dir: Some("/scratch/state".to_string()),
             config: None,
+            tail: None,
+            keep: None,
+            show: None,
             pacman_args: None,
             no_prefetch: false,
             prefetch_ahead: None,
@@ -722,6 +745,9 @@ mod tests {
             intensity: None,
             state_dir: None,
             config: None,
+            tail: None,
+            keep: None,
+            show: None,
             pacman_args: None,
             no_prefetch: false,
             prefetch_ahead: None,
@@ -839,5 +865,49 @@ mod tests {
             record.continuation.command
         );
         assert!(!record.continuation.command.contains("-Ua"));
+    }
+
+    #[test]
+    fn maint_spellings_and_sub_flags_are_never_mirrored() {
+        // §L.1's three places: every `-M` spelling and every §B.7 sub-flag
+        // lands in the continuation flag-rule table as not-mirrored — a
+        // maintain action is one-shot and a continuation must never replay
+        // one.
+        for spelling in [
+            "-Ma",
+            "-Mc",
+            "-Mcc",
+            "-Mccc",
+            "-Md",
+            "-Mi",
+            "-Ml",
+            "-Mm",
+            "-Ms",
+            "-Mw",
+            "-Mh",
+            "--fix",
+            "--prune",
+            "--backfill",
+            "--tail",
+            "--keep",
+            "--show",
+            "--add",
+            "--remove",
+            "--noconfirm",
+        ] {
+            assert!(
+                NOT_MIRRORED.contains(&spelling),
+                "{spelling} must be in the not-mirrored list"
+            );
+        }
+        // A build continuation's `command:` carries no -M token at all.
+        let mut inv = inv_for(Family::B);
+        inv.targets = vec!["pkg1".to_string()];
+        let record = build_plan_record(&inv, &selection(1), &["pkg1".to_string()], &[], "xhigh");
+        let command = record.continuation.command.clone();
+        assert!(
+            !command.split_whitespace().any(|tok| tok.starts_with("-M")),
+            "{command}"
+        );
     }
 }

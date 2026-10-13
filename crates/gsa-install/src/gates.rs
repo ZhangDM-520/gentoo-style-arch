@@ -24,37 +24,12 @@ use std::path::{Path, PathBuf};
 
 use gsa_recipe::pkginfo::{member_names, members_with_needed};
 
-use crate::localdb::{provide_covers, provide_name, soname_stem, LocalDb};
+use crate::localdb::{provide_covers, soname_stem, LocalDb};
 
-/// Expected base-system sonames — the glibc + gcc-libs runtime every Arch
-/// system carries (`base` depends on both). Any other non-workspace soname
-/// must resolve through a provide, shipped bytes, an owned file, or the
-/// exclusions registry (fish `abi_base_lib_ok`).
-pub const BASE_LIBS: &[&str] = &[
-    "libc.so.6",
-    "libm.so.6",
-    "libmvec.so.1",
-    "libdl.so.2",
-    "libpthread.so.0",
-    "librt.so.1",
-    "libresolv.so.2",
-    "libutil.so.1",
-    "libnsl.so.1",
-    "libthread_db.so.1",
-    "ld-linux-x86-64.so.2",
-    "ld-linux.so.2",
-    "ld64.so.2",
-    "libgcc_s.so.1",
-    "libstdc++.so.6",
-    "libgomp.so.1",
-    "libatomic.so.1",
-    "libquadmath.so.0",
-];
-
-/// Is this soname covered by the expected base-system runtime?
-pub fn base_lib_ok(soname: &str) -> bool {
-    BASE_LIBS.contains(&soname)
-}
+// The base-system soname roster and its predicate are SHARED with the ABI
+// subsystem (`gsa-abi::provides`); re-exported here so the gate surface
+// keeps one home for the rule-25(b) roster.
+pub use gsa_abi::provides::{base_lib_ok, BASE_LIBS};
 
 /// Tier-2 ABI exclusions (`config/abi-exclusions.conf`, rule 25(f)): a
 /// strict-loader `id|reason|review-by` registry — entries match a package id
@@ -181,150 +156,11 @@ fn pgo_flag_in(text: &str) -> bool {
     false
 }
 
-/// One installed bare-soname provide that disappears or version-moves in a
-/// build (fish `abi_provide_refusals`' per-archive diff).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ProvideDrift {
-    /// The ARCHIVE's pkgname (the surface's home).
-    pub pkgname: String,
-    /// The provide name (`libfoo.so`).
-    pub name: String,
-    /// The installed auto-version (`1-64`), `-` when the entry is bare.
-    pub inst_ver: String,
-    /// The built auto-version; `None` = the provide disappears entirely.
-    pub built_ver: Option<String>,
-}
-
-/// The Stock→house counterpart name (fish `abi_stock_name`): the VCS suffix
-/// stripped. A swap MOVES the surface to a new pkgname instead of vanishing
-/// it, so "nothing installed for this pkgname" is not evidence that nothing
-/// can disappear (run #31, bzip2-git).
-pub fn stock_name(name: &str) -> String {
-    for suffix in ["-git", "-svn", "-hg", "-snapshot"] {
-        if let Some(stem) = name.strip_suffix(suffix) {
-            return stem.to_string();
-        }
-    }
-    name.to_string()
-}
-
-fn ver_of(entry: &str) -> String {
-    match entry.split_once('=') {
-        Some((_, v)) if !v.trim().is_empty() => v.trim().to_string(),
-        _ => "-".to_string(),
-    }
-}
-
-/// The bare-soname provide drift of one build against the installed DB:
-/// compare the archive's `.PKGINFO` provides against the installed provides
-/// of the same pkgname — or of its stock counterpart when the pkgname is not
-/// installed. Nothing installed for either name means nothing can disappear
-/// (a true fresh install). Only bare `*.so` provide names are compared
-/// (makepkg auto-versions them; rule 25(a)).
-pub fn provide_drift(pkgname: &str, built_provides: &[String], db: &LocalDb) -> Vec<ProvideDrift> {
-    let installed: Vec<String> = match db.get(pkgname) {
-        Some(pkg) => pkg.provides.clone(),
-        None => {
-            let stock = stock_name(pkgname);
-            if stock == pkgname {
-                return Vec::new();
-            }
-            match db.get(&stock) {
-                Some(pkg) => pkg.provides.clone(),
-                None => return Vec::new(),
-            }
-        }
-    };
-    let mut drift = Vec::new();
-    for entry in &installed {
-        let name = provide_name(entry);
-        if !name.ends_with(".so") {
-            continue;
-        }
-        let inst_ver = ver_of(entry);
-        let built = built_provides.iter().find(|b| provide_name(b) == name);
-        match built {
-            None => drift.push(ProvideDrift {
-                pkgname: pkgname.to_string(),
-                name: name.to_string(),
-                inst_ver,
-                built_ver: None,
-            }),
-            Some(b) => {
-                let built_ver = ver_of(b);
-                if built_ver != inst_ver {
-                    drift.push(ProvideDrift {
-                        pkgname: pkgname.to_string(),
-                        name: name.to_string(),
-                        inst_ver,
-                        built_ver: Some(built_ver),
-                    });
-                }
-            }
-        }
-    }
-    drift
-}
-
-/// Link truth (rule 25(c)/(d)): the INSTALLED packages whose ELF outputs
-/// `DT_NEEDED` one of the affected provide names. Name/graph reachability is
-/// never consulted — naming a provider is not linking it. Owned files in ELF
-/// homes (or ELF-shaped names) are read from the running system; a missing
-/// file is skipped.
-pub fn linked_consumers(db: &LocalDb, affected: &[String]) -> Vec<String> {
-    if affected.is_empty() {
-        return Vec::new();
-    }
-    let mut out: BTreeSet<String> = BTreeSet::new();
-    for pkg in db.packages() {
-        for file in &pkg.files {
-            if !elf_home(file) {
-                continue;
-            }
-            let Ok(bytes) = std::fs::read(format!("/{file}")) else {
-                continue;
-            };
-            let needed = gsa_recipe::elf::needed_libs(&bytes);
-            if needed
-                .iter()
-                .any(|n| affected.iter().any(|a| n == a || n.starts_with(a.as_str())))
-            {
-                out.insert(pkg.name.clone());
-                break;
-            }
-        }
-    }
-    out.into_iter().collect()
-}
-
-fn elf_home(path: &str) -> bool {
-    path.starts_with("usr/lib")
-        || path.starts_with("usr/libexec")
-        || path.starts_with("usr/bin")
-        || path.starts_with("usr/sbin")
-        || path.contains(".so")
-}
-
-/// Stock-side pinners (fish `abi_local_depend_rows`): every installed package
-/// declaring a `Depends` on an affected provide name — the pin pacman will
-/// enforce at transaction time before any in-run repair could run. Only
-/// exact declareable shapes match (`X`, `X=ver`, `X.so=N-64`, `X.so`): the
-/// depend name must equal the affected provide name.
-pub fn stock_pinners(db: &LocalDb, affected: &[String]) -> Vec<(String, String)> {
-    if affected.is_empty() {
-        return Vec::new();
-    }
-    let mut out: Vec<(String, String)> = Vec::new();
-    for pkg in db.packages() {
-        for dep in &pkg.depends {
-            let name = provide_name(dep);
-            if affected.iter().any(|a| a == name) {
-                out.push((pkg.name.clone(), dep.clone()));
-            }
-        }
-    }
-    out
-}
+// The ABI drift/link-truth/stock-pinner computations moved VERBATIM to
+// `gsa-abi::rows` (the ABI subsystem owns them; the install seam renders
+// the rows). `gsa_abi::provide_drift`, `gsa_abi::linked_consumers`,
+// `gsa_abi::stock_pinners` and `gsa_abi::stock_name` are the ONE
+// implementation.
 
 /// The transaction's shipped bytes index: basename + relative path of every
 /// member of every candidate (rule 25(b)/(e) resolution source (b)).
@@ -464,12 +300,5 @@ mod tests {
         std::fs::write(&conf, "id|reason|2027-01-01\nid|again|2027-01-01\n").unwrap();
         assert!(AbiExclusions::load(&conf).is_err());
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn stock_name_strips_vcs_suffixes() {
-        assert_eq!(stock_name("bzip2-git"), "bzip2");
-        assert_eq!(stock_name("foo-snapshot"), "foo");
-        assert_eq!(stock_name("foo"), "foo");
     }
 }

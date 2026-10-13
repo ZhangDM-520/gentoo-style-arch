@@ -238,6 +238,7 @@ mod tests {
             &[archive],
             &retention(),
             &std::collections::BTreeSet::new(),
+            None,
             &mut err,
         )
         .unwrap();
@@ -260,6 +261,7 @@ mod tests {
             &[archive.clone()],
             &retention(),
             &std::collections::BTreeSet::new(),
+            None,
             &mut err,
         )
         .unwrap();
@@ -308,6 +310,7 @@ mod tests {
             &[archive.clone()],
             &retention(),
             &std::collections::BTreeSet::new(),
+            None,
             &mut err,
         )
         .unwrap();

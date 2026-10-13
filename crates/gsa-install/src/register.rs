@@ -384,56 +384,6 @@ pub fn register_ignorepkg(
     // The conf rewrite is deferred until the pacman database lock clears.
     wait_for_db_lock(db_root)?;
 
-    // Dated pre-image backup before the first modification of the day;
-    // never rewritten — a differing one is kept as the day's pre-image.
-    let backup = PathBuf::from(format!("{}.bak-{}", conf.display(), date_tag()));
-    let need_sudo = !is_writable_dir(conf.parent().unwrap_or(Path::new(".")));
-    if backup.exists() {
-        let identical = std::fs::read(&backup)
-            .map(|b| b == std::fs::read(conf).unwrap_or_default())
-            .unwrap_or(false);
-        if identical {
-            eprintln!(
-                "register-ignorepkg: backup {} already present (identical pre-image)",
-                backup.display()
-            );
-        } else {
-            eprintln!(
-                "register-ignorepkg: backup {} already present (kept as the day's pre-image)",
-                backup.display()
-            );
-        }
-    } else if need_sudo {
-        run_sudo(&[
-            "cp",
-            "-p",
-            "--",
-            &conf.display().to_string(),
-            &backup.display().to_string(),
-        ])
-        .map_err(|e| {
-            format!(
-                "register-ignorepkg: cannot write backup {} — nothing changed ({e})",
-                backup.display()
-            )
-        })?;
-        eprintln!(
-            "register-ignorepkg: backup {} (pre-image)",
-            backup.display()
-        );
-    } else {
-        std::fs::copy(conf, &backup).map_err(|e| {
-            format!(
-                "register-ignorepkg: cannot write backup {} — nothing changed ({e})",
-                backup.display()
-            )
-        })?;
-        eprintln!(
-            "register-ignorepkg: backup {} (pre-image)",
-            backup.display()
-        );
-    }
-
     // ~10 names per cumulative `IgnorePkg =` line, in sorted order.
     let mut new_lines: Vec<String> = Vec::new();
     for chunk in missing.chunks(10) {
@@ -441,59 +391,7 @@ pub fn register_ignorepkg(
     }
     let new_text = splice(&text, insert, &new_lines);
 
-    // Atomicity: write a temp file in the conf's directory and rename(2)
-    // over the conf — a SIGINT mid-write never leaves a half-registered
-    // closure. Non-writable targets escalate with `sudo -n` only.
-    let tmp_name = format!(".gsa-ignorepkg.tmp.{}", std::process::id());
-    let tmp_path = conf.parent().unwrap_or(Path::new(".")).join(&tmp_name);
-    if need_sudo {
-        // The conf's directory needs root: stage the content where the user
-        // can write, then `sudo -n install` + `sudo -n mv` it into place.
-        let staging =
-            std::env::temp_dir().join(format!("gsa-ignorepkg.stage.{}", std::process::id()));
-        std::fs::write(&staging, &new_text).map_err(|e| {
-            let _ = std::fs::remove_file(&staging);
-            format!("register-ignorepkg: cannot stage the rewrite — nothing changed ({e})")
-        })?;
-        let mode = std::fs::metadata(conf)
-            .map(|m| format!("{:o}", m.permissions().mode() & 0o7777))
-            .unwrap_or_else(|_| "644".to_string());
-        let result = run_sudo(&[
-            "install",
-            "-m",
-            &mode,
-            "--",
-            &staging.display().to_string(),
-            &tmp_path.display().to_string(),
-        ])
-        .and_then(|_| {
-            run_sudo(&[
-                "mv",
-                "-f",
-                "--",
-                &tmp_path.display().to_string(),
-                &conf.display().to_string(),
-            ])
-        });
-        let _ = std::fs::remove_file(&staging);
-        if let Err(e) = result {
-            let _ = run_sudo(&["rm", "-f", "--", &tmp_path.display().to_string()]);
-            return Err(format!(
-                "register-ignorepkg: cannot write {} — nothing changed ({e})",
-                conf.display()
-            ));
-        }
-    } else {
-        let write =
-            std::fs::write(&tmp_path, &new_text).and_then(|_| std::fs::rename(&tmp_path, conf));
-        if let Err(e) = write {
-            let _ = std::fs::remove_file(&tmp_path);
-            return Err(format!(
-                "register-ignorepkg: cannot write {} — nothing changed ({e})",
-                conf.display()
-            ));
-        }
-    }
+    let backup = backup_and_write(conf, subject, &new_text, "register-ignorepkg")?;
 
     // Post-condition: re-parse through the same walker; the write only
     // counts when the closure it ships is provably complete.
@@ -521,9 +419,262 @@ pub fn register_ignorepkg(
     );
     Ok(RegisterReport {
         added: missing,
-        backup: Some(backup),
+        backup,
         skipped: false,
     })
+}
+
+/// The conf write shared by the registration and its maint prune (one
+/// implementation per rule): dated pre-image backup before the first
+/// modification of the day (never rewritten), then an atomic rewrite
+/// (temp + rename in the conf's directory) so an interrupt never leaves a
+/// half-written closure. Non-writable targets escalate with `sudo -n` only.
+/// Returns the backup written, if the conf was modified.
+fn backup_and_write(
+    conf: &Path,
+    subject: &str,
+    new_text: &str,
+    verb: &str,
+) -> Result<Option<PathBuf>, String> {
+    let backup = PathBuf::from(format!("{}.bak-{}", conf.display(), date_tag()));
+    let need_sudo = !is_writable_dir(conf.parent().unwrap_or(Path::new(".")));
+    if backup.exists() {
+        let identical = std::fs::read(&backup)
+            .map(|b| b == std::fs::read(conf).unwrap_or_default())
+            .unwrap_or(false);
+        if identical {
+            eprintln!(
+                "{verb}: backup {} already present (identical pre-image)",
+                backup.display()
+            );
+        } else {
+            eprintln!(
+                "{verb}: backup {} already present (kept as the day's pre-image)",
+                backup.display()
+            );
+        }
+    } else if need_sudo {
+        run_sudo(&[
+            "cp",
+            "-p",
+            "--",
+            &conf.display().to_string(),
+            &backup.display().to_string(),
+        ])
+        .map_err(|e| {
+            format!(
+                "{verb}: cannot write backup {} — nothing changed ({e})",
+                backup.display()
+            )
+        })?;
+        eprintln!("{verb}: backup {} (pre-image)", backup.display());
+    } else {
+        std::fs::copy(conf, &backup).map_err(|e| {
+            format!(
+                "{verb}: cannot write backup {} — nothing changed ({e})",
+                backup.display()
+            )
+        })?;
+        eprintln!("{verb}: backup {} (pre-image)", backup.display());
+    }
+
+    let tmp_name = format!(".gsa-ignorepkg.tmp.{}", std::process::id());
+    let tmp_path = conf.parent().unwrap_or(Path::new(".")).join(&tmp_name);
+    if need_sudo {
+        // The conf's directory needs root: stage the content where the user
+        // can write, then `sudo -n install` + `sudo -n mv` it into place.
+        let staging =
+            std::env::temp_dir().join(format!("gsa-ignorepkg.stage.{}", std::process::id()));
+        std::fs::write(&staging, new_text).map_err(|e| {
+            let _ = std::fs::remove_file(&staging);
+            format!("{verb}: cannot stage the rewrite — nothing changed ({e})")
+        })?;
+        let mode = std::fs::metadata(conf)
+            .map(|m| format!("{:o}", m.permissions().mode() & 0o7777))
+            .unwrap_or_else(|_| "644".to_string());
+        let result = run_sudo(&[
+            "install",
+            "-m",
+            &mode,
+            "--",
+            &staging.display().to_string(),
+            &tmp_path.display().to_string(),
+        ])
+        .and_then(|_| {
+            run_sudo(&[
+                "mv",
+                "-f",
+                "--",
+                &tmp_path.display().to_string(),
+                &conf.display().to_string(),
+            ])
+        });
+        let _ = std::fs::remove_file(&staging);
+        if let Err(e) = result {
+            let _ = run_sudo(&["rm", "-f", "--", &tmp_path.display().to_string()]);
+            return Err(format!(
+                "{verb}: cannot write {} — nothing changed ({e})",
+                conf.display()
+            ));
+        }
+    } else {
+        let write =
+            std::fs::write(&tmp_path, new_text).and_then(|_| std::fs::rename(&tmp_path, conf));
+        if let Err(e) = write {
+            let _ = std::fs::remove_file(&tmp_path);
+            return Err(format!(
+                "{verb}: cannot write {} — nothing changed ({e})",
+                conf.display()
+            ));
+        }
+    }
+    let _ = subject;
+    Ok(Some(backup))
+}
+
+/// The parsed `[options]` `IgnorePkg` closure of a conf — the read half the
+/// maint verbs (`gsa -Mi`) report drift and prune against. Same walker as
+/// the registration write, so report and write can never disagree on what
+/// pacman actually reads (cumulative `IgnorePkg =` inside `[options]` only).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IgnorepkgClosure {
+    /// The cumulative closure, sorted.
+    pub names: Vec<String>,
+    /// `IgnorePkg` lines inside repo sections (dropped by pacman — warn).
+    pub repo_drops: Vec<(usize, String)>,
+    /// `[options]` `Include` lines (closure unfollowable — warn).
+    pub options_includes: Vec<usize>,
+    /// False when the conf has no `[options]` section at all.
+    pub has_options: bool,
+}
+
+/// Read one conf's `[options]` `IgnorePkg` closure.
+pub fn read_ignorepkg(conf: &Path) -> Result<IgnorepkgClosure, String> {
+    let text = std::fs::read_to_string(conf)
+        .map_err(|e| format!("read-ignorepkg: cannot read {} ({e})", conf.display()))?;
+    let walk = walk_conf(&text);
+    Ok(IgnorepkgClosure {
+        names: walk.ignored.into_iter().collect(),
+        repo_drops: walk.repo_drops,
+        options_includes: walk.options_includes,
+        has_options: walk.has_options,
+    })
+}
+
+/// What one prune write did (the maint `gsa -Mi --prune` path).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PruneReport {
+    /// Names actually removed from the closure (sorted).
+    pub removed: Vec<String>,
+    /// The dated pre-image backup written, if the conf was modified.
+    pub backup: Option<PathBuf>,
+}
+
+/// Remove `names` from the `[options]` `IgnorePkg` closure — the documented
+/// closure semantics and nothing else: only `IgnorePkg =` assignment lines
+/// inside `[options]` are rewritten (a repo-section line stays byte-for-byte
+/// — pacman drops it anyway), a line that empties out disappears, and every
+/// other directive and comment is untouched. Rewritten lines are normalized
+/// to `IgnorePkg = <names…>` in their surviving order. The same dated
+/// pre-image backup, atomic rewrite and bounded `db.lck` wait as the
+/// registration; names not in the closure are a no-op, never an error.
+pub fn prune_ignorepkg(
+    conf: &Path,
+    subject: &str,
+    names: &[String],
+    db_root: &Path,
+) -> Result<PruneReport, String> {
+    let text = std::fs::read_to_string(conf).map_err(|e| {
+        format!(
+            "prune-ignorepkg: cannot read {} ({e}) — nothing changed",
+            conf.display()
+        )
+    })?;
+    let walk = walk_conf(&text);
+    if !walk.has_options {
+        return Err(format!(
+            "prune-ignorepkg: {}: no [options] section — IgnorePkg lines have nowhere to live — nothing changed",
+            conf.display()
+        ));
+    }
+    let remove: BTreeSet<&str> = names
+        .iter()
+        .map(|n| n.as_str())
+        .filter(|n| walk.ignored.contains(*n))
+        .collect();
+    if remove.is_empty() {
+        return Ok(PruneReport {
+            removed: Vec::new(),
+            backup: None,
+        });
+    }
+
+    // The conf rewrite is deferred until the pacman database lock clears.
+    wait_for_db_lock(db_root)?;
+
+    // Rewrite: the same section tracking as walk_conf; only in-[options]
+    // `IgnorePkg =` assignments change, and only by dropping names.
+    let mut out = String::new();
+    let mut in_options = false;
+    for raw_line in text.lines() {
+        let trimmed = raw_line.split('#').next().unwrap_or("").trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') && trimmed.len() >= 2 {
+            in_options = trimmed[1..trimmed.len() - 1].trim() == "options";
+            out.push_str(raw_line);
+            out.push('\n');
+            continue;
+        }
+        if in_options
+            && trimmed.starts_with("IgnorePkg")
+            && trimmed.split('=').next().unwrap_or("").trim() == "IgnorePkg"
+        {
+            let kept: Vec<&str> = trimmed
+                .split_once('=')
+                .map(|(_, values)| {
+                    values
+                        .split_whitespace()
+                        .filter(|n| !remove.contains(n))
+                        .collect()
+                })
+                .unwrap_or_default();
+            if !kept.is_empty() {
+                out.push_str("IgnorePkg = ");
+                out.push_str(&kept.join(" "));
+                out.push('\n');
+            }
+            continue;
+        }
+        out.push_str(raw_line);
+        out.push('\n');
+    }
+
+    let backup = backup_and_write(conf, subject, &out, "prune-ignorepkg")?;
+
+    // Post-condition through the same walker: the removed names must be
+    // gone, and nothing that was not asked for may disappear.
+    let after = walk_conf(&std::fs::read_to_string(conf).map_err(|e| {
+        format!(
+            "prune-ignorepkg: cannot re-read {} after the write ({e})",
+            conf.display()
+        )
+    })?);
+    let still: Vec<&str> = remove
+        .iter()
+        .copied()
+        .filter(|n| after.ignored.contains(*n))
+        .collect();
+    if !still.is_empty() {
+        return Err(format!(
+            "prune-ignorepkg: verification failed — {} still in the closure after the write",
+            still.join(", ")
+        ));
+    }
+    let removed: Vec<String> = remove.iter().map(|n| n.to_string()).collect();
+    eprintln!(
+        "prune-ignorepkg: {subject}, removed {} name(s) from the closure",
+        removed.len()
+    );
+    Ok(PruneReport { removed, backup })
 }
 
 fn is_writable_dir(dir: &Path) -> bool {
@@ -673,6 +824,51 @@ mod tests {
         let empty = dir.join("empty");
         fs::create_dir_all(&empty).unwrap();
         assert!(names_for_archive(None, Some(&empty)).is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prune_removes_only_the_named_closure_entries() {
+        let dir = scratch("prune");
+        let conf = dir.join("pacman.conf");
+        fs::write(
+            &conf,
+            "[options]\nHoldPkg = pacman\nIgnorePkg = stale keep-me\nIgnorePkg = also-stale\n\n[core]\nIgnorePkg = repo-line\nServer = example\n",
+        )
+        .unwrap();
+        let db = dir.join("db");
+
+        // The read half sees exactly what pacman reads.
+        let closure = read_ignorepkg(&conf).unwrap();
+        assert!(closure.has_options);
+        assert_eq!(closure.names, names(&["also-stale", "keep-me", "stale"]));
+        assert_eq!(closure.repo_drops, vec![(7, "core".to_string())]);
+
+        let report =
+            prune_ignorepkg(&conf, "drift", &names(&["stale", "also-stale"]), &db).unwrap();
+        assert_eq!(report.removed, names(&["also-stale", "stale"]));
+        let text = fs::read_to_string(&conf).unwrap();
+        assert!(text.contains("IgnorePkg = keep-me"), "{text}");
+        assert!(!text.contains("stale"), "{text}");
+        // Everything outside the [options] closure is byte-identical.
+        assert!(text.contains("HoldPkg = pacman"));
+        assert!(text.contains("IgnorePkg = repo-line"));
+        assert!(text.contains("Server = example"));
+        assert!(report.backup.unwrap().exists());
+
+        // A name not in the closure is a no-op, never an error.
+        let report2 = prune_ignorepkg(&conf, "again", &names(&["absent"]), &db).unwrap();
+        assert!(report2.removed.is_empty());
+        assert!(report2.backup.is_none());
+
+        // No [options] section: refuse, nothing changed.
+        let bare = dir.join("bare.conf");
+        fs::write(&bare, "[core]\nServer = example\n").unwrap();
+        assert!(prune_ignorepkg(&bare, "x", &names(&["keep-me"]), &db).is_err());
+        assert_eq!(
+            fs::read_to_string(&bare).unwrap(),
+            "[core]\nServer = example\n"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 }

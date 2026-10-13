@@ -7,6 +7,8 @@ license.workspace = true
 [dependencies]
 gsa-model = { workspace = true }
 gsa-recipe = { workspace = true }
+gsa-abi = { workspace = true }
+gsa-state = { workspace = true }
 gsa-build = { workspace = true }
 gsa-qa = { workspace = true }
 

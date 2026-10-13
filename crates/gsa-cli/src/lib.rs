@@ -13,6 +13,7 @@ mod args;
 mod build;
 mod fetch;
 mod install;
+mod maint;
 mod qa;
 mod query;
 mod record;
@@ -30,9 +31,13 @@ use select::Ctx;
 
 const RC_OK: i32 = 0;
 const RC_USAGE: i32 = 2;
+/// The refusal class (§G.1): the run computed a plan it will not start —
+/// e.g. the ABI wave check's under-coverage (`abi-consumer-uncovered`).
+const RC_REFUSED: i32 = 3;
 
-/// What the engine can execute (contract §B; `-M` remains deferred to its
-/// phase — `-S` build+install and `-U` install-from-archives are live).
+/// What the engine can execute (contract §B; the `-M` maintain surface is
+/// live with its phase — `gsa-maint` — and `-S`/`-B`/`-U`/`-Sw` runs carry
+/// the build/install/fetch families).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Command {
     Topology,
@@ -45,11 +50,14 @@ enum Command {
     QuerySearch,
     QueryBinpkg,
     QueryProbe,
+    QueryAbi,
+    QueryRevdep,
     Plan,
     Build,
     BuildInstall,
     Fetch,
     Upgrade,
+    Maint,
 }
 
 enum Disposition {
@@ -62,7 +70,7 @@ pub fn help_text() -> String {
     "\
 gsa — native build-and-install orchestrator for the curated recipe set
 (contract docs/gsa-contract.md; build (-B), build+install (-S), fetch-only
-(-Sw) and install-from-archives (-U) runs are live)
+(-Sw), install-from-archives (-U) and maintain (-M) runs are live)
 
 Usage: gsa <FAMILY>[cluster] [long-modifiers] [targets…] [ranges…] [-- <pacman args…>]
 
@@ -71,7 +79,8 @@ Families (exactly one per invocation; lowercase letters form the cluster):
   -S   build + install the selection (each package installed before its consumers compile)
   -B   build-only: archives beside the recipes, nothing installed
   -U   install from archives: nothing is built
-  -M   maintain engine state (deferred)
+  -M   maintain engine state: audit, doctor, IgnorePkg closure, logs,
+       mirrors, prune strengths, sets/world, run history
   gsa fetch is exactly gsa -Sw
 
 Command surface:
@@ -112,6 +121,35 @@ Command surface:
   gsa -Sw <targets…> [ranges…]   fetch and verify the selection's sources
                                  through makepkg --verifysource — no build,
                                  no install; verdict rows are advisory (§D)
+Maintain verbs (contract §B.7; side-car self-healing only — never /usr or
+  /var/lib/pacman):
+  gsa -Ma                        audit report: legacy paths, package drift,
+                                 stale runtime artifacts, recipe-contract
+                                 lints (report-only; exit 0, read the report)
+  gsa -Md [--fix]                doctor: runtime-state reconciliation report;
+                                 --fix applies the named side-car repairs
+  gsa -Mi [--prune|--backfill]   IgnorePkg closure of the target pacman.conf:
+                                 default reports drift; --prune removes stale
+                                 entries, --backfill adds missing ones
+  gsa -Ml [--tail <ref>] [--keep N]   per-package log browse/tail; --keep N
+                                 is the log-retention prune
+  gsa -Mm                        shared-source mirrors: dedupe VCS clones into
+                                 canonical mirrors (asks first: prints its
+                                 targets and stops rc 3 without --noconfirm)
+  gsa -Mc <targets…>             prune strength 1: src/pkg/build trees and
+                                 archives of the selection
+  gsa -Mcc                       prune strength 2: every built archive in the
+                                 workspace plus its VCS-revision sidecar
+                                 (symlinks are never deleted or followed)
+  gsa -Mccc                      prune strength 3: additionally pulled sources
+                                 (prints its target list and asks first)
+  gsa -Ms [name…] [--add|--remove <ref…>]   named sets: list sets and members;
+                                 user sets are managed in the kv store against
+                                 config/sets/ (computed sets are not editable)
+  gsa -Mw [--add|--remove <ref…>]   world: the explicitly wanted set
+  gsa -Mh [--prune] [--show <run-id>]   run history: list recorded runs and
+                                 their continuations; --show re-renders one;
+                                 --prune enforces the bounded retention
 Every other spelling answers with a 'deferred to a later phase' usage error (rc 2);
 nothing is stubbed with fake results.
 
@@ -136,9 +174,14 @@ The side-car queries (-Qb/-Qp) accept --state-dir PATH — the state-root
 An install run (-S/-U) additionally accepts: --config PATH (the target
   pacman.conf), --no-register-ignorepkg (skip the dynamic IgnorePkg
   registration, loudly), and -- <pacman args…> (forwarded to every pacman -U).
+A maintain run (-M) accepts its verb's sub-flags (§B.7): --fix, --prune,
+  --backfill, --tail <ref>, --keep N, --show <run-id>, --add, --remove,
+  --noconfirm (the engine's own confirmations — -Mm/-Mccc — never a pacman
+  question), and (-Mi) --config PATH; --dry-run renders a mutating verb's
+  plan and rows without touching anything.
 Deferred (parse and refuse, so the message names them): --skip, --skip-built,
   --vcs-skip-tolerance N, --no-sync, --allow-broken-rustc,
-  --noconfirm, --quiet, --verbose.
+  --quiet, --verbose.
 
 Engine environment inputs: GSA_STATE_DIR, GSA_LANES, GSA_JOBS, GSA_INTENSITY,
   GSA_CPU_THREADS, GSA_MEMORY_GIB, GSA_TARGET_CPU, GSA_VCS_SKIP_TOLERANCE.
@@ -178,22 +221,33 @@ fn classify(inv: &Invocation) -> Disposition {
     let is_upgrade_run = inv.family == Family::U;
     // The side-car queries (§B.3 `-Qb`/`-Qp`) read the state root, so they
     // take `--state-dir` like every other state-root surface (§J.3).
-    let is_side_car_query = inv.family == Family::Q && matches!(inv.action, Some('b') | Some('p'));
-    let accepted: &[&str] = if is_build_run {
-        &build::REAL_BUILD_FLAGS
+    let is_side_car_query = inv.family == Family::Q
+        && matches!(inv.action, Some('b') | Some('p') | Some('a') | Some('r'));
+    let is_maint = inv.family == Family::M;
+    // A `-M` cluster's accepted flags are per-verb (§B.7's sub-flags); a
+    // cluster that spells no verb yet reports its own usage error from
+    // `maint::run`, so the flag gate stands down and the cluster error —
+    // the root cause — is what the user reads.
+    let maint_gate_stands_down = is_maint && maint::verb_of(inv).is_err();
+    let accepted: Vec<&str> = if is_build_run {
+        build::REAL_BUILD_FLAGS.to_vec()
     } else if is_install_run {
-        &build::REAL_INSTALL_FLAGS
+        build::REAL_INSTALL_FLAGS.to_vec()
     } else if is_upgrade_run {
-        &install::REAL_UPGRADE_FLAGS
+        install::REAL_UPGRADE_FLAGS.to_vec()
     } else if is_side_car_query {
-        &["--state-dir"]
+        vec!["--state-dir"]
+    } else if is_maint {
+        maint::verb_of(inv)
+            .map(maint::accepted_flags)
+            .unwrap_or_default()
     } else {
-        &[]
+        Vec::new()
     };
     if let Some(flag) = inv
         .deferred_flags
         .iter()
-        .find(|f| !accepted.contains(&f.as_str()))
+        .find(|f| !maint_gate_stands_down && !accepted.contains(&f.as_str()))
     {
         return Disposition::Deferred(format!(
             "{flag} (a later phase owns it; a build run accepts --fail-fast, --lanes, --jobs, --intensity, --state-dir; an install run (-S/-U) additionally accepts --no-register-ignorepkg, --config)"
@@ -214,6 +268,8 @@ fn classify(inv: &Invocation) -> Disposition {
         (Family::Q, Some('s')) => Command::QuerySearch,
         (Family::Q, Some('b')) => Command::QueryBinpkg,
         (Family::Q, Some('p')) => Command::QueryProbe,
+        (Family::Q, Some('a')) => Command::QueryAbi,
+        (Family::Q, Some('r')) => Command::QueryRevdep,
         (Family::Q, Some('t')) => Command::Topology,
         (Family::S, None) if inv.dry_run => Command::Plan,
         (Family::S, Some('l')) => Command::List,
@@ -225,6 +281,7 @@ fn classify(inv: &Invocation) -> Disposition {
         (Family::B, Some('l')) => Command::List,
         (Family::S, None) => Command::BuildInstall,
         (Family::U, None) => Command::Upgrade,
+        (Family::M, _) => Command::Maint,
         (Family::S, Some('w')) => Command::Fetch,
         (Family::S, Some('y')) => {
             return Disposition::Deferred("gsa -Sy version-sync pass (later phase)".to_string())
@@ -239,20 +296,31 @@ fn classify(inv: &Invocation) -> Disposition {
             ))
         }
     };
-    if inv.dry_run && !matches!(command, Command::Plan | Command::Upgrade | Command::Fetch) {
+    if inv.dry_run
+        && !matches!(
+            command,
+            Command::Plan | Command::Upgrade | Command::Fetch | Command::Maint
+        )
+    {
         return Disposition::Bad(
-            "--dry-run applies to build/install/fetch actions (-S/-B/-U/-Sw); queries are already read-only"
+            "--dry-run applies to build/install/fetch actions (-S/-B/-U/-Sw) and the -M maintain verbs; queries are already read-only"
                 .to_string(),
         );
     }
     if inv.leaf
         && !matches!(
             command,
-            Command::List | Command::Plan | Command::Build | Command::BuildInstall | Command::Fetch
+            Command::List
+                | Command::Plan
+                | Command::Build
+                | Command::BuildInstall
+                | Command::Fetch
+                | Command::Maint
         )
     {
         return Disposition::Bad(
-            "--leaf applies to selections (-S/-B builds and their listings)".to_string(),
+            "--leaf applies to selections (-S/-B builds and their listings, -Mc's pruning selection)"
+                .to_string(),
         );
     }
     Disposition::Run(command)
@@ -317,7 +385,7 @@ fn execute(
     command: Command,
     out: &mut dyn Write,
     err: &mut dyn Write,
-) -> Result<(), String> {
+) -> Result<i32, String> {
     let root = find_root().ok_or_else(|| {
         cmd_error(
             "cannot find config/topology.conf from the current directory upward (run inside the recipe repository)",
@@ -334,7 +402,7 @@ fn execute(
             db: &RecipeDb::load(&root, &[]).map_err(|e| cmd_error(e.to_string()))?,
         };
         let _ = write!(out, "{}", render::render_topology_channel(&ctx));
-        return Ok(());
+        return Ok(RC_OK);
     }
 
     let db = RecipeDb::load(&root, graph.records()).map_err(|e| cmd_error(e.to_string()))?;
@@ -349,7 +417,8 @@ fn execute(
         | Command::Build
         | Command::BuildInstall
         | Command::Fetch
-        | Command::Upgrade => unreachable!(),
+        | Command::Upgrade
+        | Command::Maint => unreachable!(),
         Command::List => {
             let (listed, whole_set) = if inv.targets.is_empty() && inv.ranges.is_empty() {
                 (select::whole_set_listing(&ctx), true)
@@ -455,15 +524,29 @@ fn execute(
         Command::QueryProbe => {
             query::query_probe(inv, out, err).map_err(cmd_error)?;
         }
+        Command::QueryAbi => {
+            no_ranges(inv)?;
+            query::query_abi(&ctx, inv, out, err).map_err(cmd_error)?;
+        }
+        Command::QueryRevdep => {
+            query::query_revdep(inv, out, err).map_err(cmd_error)?;
+        }
         Command::Plan => {
             if inv.targets.is_empty() {
                 return Err(cmd_error(
                     "selection is mandatory: a build never starts without a selection".to_string(),
                 ));
             }
-            let selection = select::build_selection(&ctx, &inv.targets, &inv.ranges, inv.leaf)
+            let mut selection = select::build_selection(&ctx, &inv.targets, &inv.ranges, inv.leaf)
                 .map_err(|e| cmd_error(e.to_string()))?;
             write_notes(err, &selection.notes);
+            // The same pre-dispatch ABI wave check the build pipeline runs
+            // (§E.3): the dry-run shows the wave it would build — additions
+            // join the plan, and an under-covered member refuses (rc 3).
+            let state_dir = gsa_state::resolve_state_root(inv.state_dir.as_deref());
+            let wave = build::wave_check(out, err, ctx.graph, &selection, &state_dir)
+                .map_err(cmd_error)?;
+            build::extend_selection(&mut selection, &wave.additions);
             let intensity = resolve_intensity(&project).map_err(cmd_error)?;
             let expansion_added = selection.closure_size.saturating_sub(selection.seeds.len());
             let _ = write!(
@@ -480,9 +563,12 @@ fn execute(
             let rec =
                 record::build_plan_record(inv, &selection, &inv.targets, &inv.ranges, &intensity);
             let _ = write!(out, "{}", rec.render_machine());
+            if wave.uncovered {
+                return Ok(RC_REFUSED);
+            }
         }
     }
-    Ok(())
+    Ok(RC_OK)
 }
 
 fn require_refs(inv: &Invocation, what: &str) -> Result<(), String> {
@@ -551,8 +637,9 @@ pub fn run(argv: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
             Disposition::Run(Command::BuildInstall) => build::run_build_install(&inv, out, err),
             Disposition::Run(Command::Fetch) => fetch::run_fetch_only(&inv, out, err),
             Disposition::Run(Command::Upgrade) => install::run_upgrade(&inv, out, err),
+            Disposition::Run(Command::Maint) => maint::run(&inv, out, err),
             Disposition::Run(command) => match execute(&inv, command, out, err) {
-                Ok(()) => RC_OK,
+                Ok(code) => code,
                 Err(message) => {
                     let _ = writeln!(err, "gsa: {message}");
                     RC_USAGE
@@ -590,7 +677,7 @@ mod tests {
 
     #[test]
     fn deferred_spellings_refuse_with_a_clear_message() {
-        for spelling in ["-Ql", "-Qr", "-Qa", "-Sy", "-Su", "-Ma", "-Mcc"] {
+        for spelling in ["-Ql", "-Sy", "-Su"] {
             let (code, _out, err) = run_capture(&[spelling]);
             assert_eq!(code, 2, "{spelling} must be deferred");
             assert!(
@@ -598,6 +685,12 @@ mod tests {
                 "{spelling}: {err}"
             );
         }
+        // -Qa/-Qr are live (the ABI subsystem's query surface): usage-class
+        // errors, never the deferred refusal.
+        let (code, _out, err) = run_capture(&["-Qa"]);
+        assert_eq!(code, 2, "-Qa without a ref is usage");
+        assert!(err.contains("requires at least one reference"), "{err}");
+        assert!(!err.contains("deferred to a later phase"), "{err}");
         // Build-run modifiers stay deferred outside a real build.
         let (code, _out, err) = run_capture(&["-Sl", "--lanes", "2"]);
         assert_eq!(code, 2);
@@ -727,6 +820,41 @@ mod tests {
     }
 
     #[test]
+    fn maint_spellings_are_live_and_usage_checked() {
+        // A bare -M spells no action (§B.7): usage, never a deferred
+        // spelling and never a run.
+        let (code, _out, err) = run_capture(&["-M"]);
+        assert_eq!(code, 2);
+        assert!(err.contains("no default action"), "{err}");
+        assert!(!err.contains("deferred to a later phase"), "{err}");
+        // An unknown action letter is named by the parser, never
+        // auto-corrected.
+        let (code, _out, err) = run_capture(&["-Mx"]);
+        assert_eq!(code, 2);
+        assert!(err.contains("unknown option letter 'x'"), "{err}");
+        // The -M cluster's usage fences fire before any state is touched.
+        let (code, _out, err) = run_capture(&["-Mi", "--prune", "--backfill"]);
+        assert_eq!(code, 2);
+        assert!(err.contains("ONE of --prune / --backfill"), "{err}");
+        let (code, _out, err) = run_capture(&["-Ms", "--add", "--remove"]);
+        assert_eq!(code, 2);
+        assert!(err.contains("--add and --remove are alternatives"), "{err}");
+        let (code, _out, err) = run_capture(&["-Ml", "mesa-git"]);
+        assert_eq!(code, 2);
+        assert!(err.contains("-Ml takes no targets"), "{err}");
+        // --leaf is a selection modifier: real on -Mc's pruning selection,
+        // usage-class everywhere else in the family.
+        let (code, _out, err) = run_capture(&["-Ms", "--leaf"]);
+        assert_eq!(code, 2);
+        assert!(err.contains("--leaf applies to -Mc"), "{err}");
+        // A flag outside a verb's roster keeps the deferred refusal —
+        // per-verb acceptance is §B.7's, not the family's.
+        let (code, _out, err) = run_capture(&["-Mc", "--skip", "mesa-git"]);
+        assert_eq!(code, 2);
+        assert!(err.contains("deferred to a later phase"), "{err}");
+    }
+
+    #[test]
     fn help_and_bare_invocation() {
         let (code, out, _err) = run_capture(&["--help"]);
         assert_eq!(code, 0);
@@ -744,6 +872,17 @@ mod tests {
             "--state-dir",
             "--no-prefetch",
             "--prefetch-ahead",
+            // The -M sub-flags (§B.7) are real flags and belong in the
+            // roster (§L.1: a flag absent from --help does not exist).
+            "--fix",
+            "--prune",
+            "--backfill",
+            "--tail",
+            "--keep",
+            "--show",
+            "--add",
+            "--remove",
+            "--noconfirm",
         ] {
             assert!(out.contains(flag), "--help must name {flag}");
         }

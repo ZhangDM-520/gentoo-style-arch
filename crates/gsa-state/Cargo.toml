@@ -9,6 +9,7 @@ description = "The side-car state database under the state root: hash-bound binp
 gsa-model = { workspace = true }
 gsa-graph = { workspace = true }
 gsa-recipe = { workspace = true }
+gsa-abi = { workspace = true }
 gsa-sched = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

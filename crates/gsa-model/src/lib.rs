@@ -121,6 +121,11 @@ pub enum Tag {
     AppCluster(String),
     /// `version-sync=nvchecker`: explicit build-time provider opt-in.
     VersionSyncNvchecker,
+    /// `abi-rev=<n>`: the declared ABI-revision override (contract §J.4,
+    /// plan-native-pm.md §4.1) — for ABI moves derivation cannot see (LLVM
+    /// C++ snapshots, Qt private API). Participates in the derived abi-token
+    /// so a revision bump alone moves the token.
+    AbiRev(u64),
 }
 
 impl Tag {
@@ -130,6 +135,15 @@ impl Tag {
             "abi=should" => Some(Tag::AbiShould),
             "version-sync=nvchecker" => Some(Tag::VersionSyncNvchecker),
             _ => {
+                if let Some(rev) = s.strip_prefix("abi-rev=") {
+                    // Strict: decimal digits only, no empty value — a
+                    // malformed override must refuse the record, never
+                    // silently drop out of the token.
+                    if !rev.is_empty() && rev.bytes().all(|b| b.is_ascii_digit()) {
+                        return rev.parse::<u64>().ok().map(Tag::AbiRev);
+                    }
+                    return None;
+                }
                 let name = s.strip_prefix("app-cluster=")?;
                 if !name.is_empty()
                     && name
@@ -150,6 +164,7 @@ impl Tag {
             Tag::AbiShould => "abi=should".to_string(),
             Tag::VersionSyncNvchecker => "version-sync=nvchecker".to_string(),
             Tag::AppCluster(name) => format!("app-cluster={name}"),
+            Tag::AbiRev(n) => format!("abi-rev={n}"),
         }
     }
 }

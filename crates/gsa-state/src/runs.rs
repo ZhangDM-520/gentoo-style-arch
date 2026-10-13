@@ -21,8 +21,18 @@ enum RunEntry {
     Run { record: RunRecord },
 }
 
-/// The side-car run history store. Bounded retention (`-Mh --prune`) is a
-/// later phase's verb (§B.7); the store itself is append-only.
+/// The append-only line one stored run occupies (the §H.1 line vocabulary).
+/// The compaction (`-Mh --prune`) re-emits exactly the lines
+/// [`RunHistory::append`] writes, so the two can never drift.
+pub fn wire_run(record: &RunRecord) -> String {
+    serde_json::to_string(&RunEntry::Run {
+        record: record.clone(),
+    })
+    .expect("a run record always serializes")
+}
+
+/// The side-car run history store. Bounded retention (`-Mh --prune`) is the
+/// maint verb's compaction (contract §B.7); the store itself is append-only.
 pub struct RunHistory;
 
 impl RunHistory {

@@ -13,12 +13,14 @@
 //! and the `format: 2` machine block. Exit codes are §G.1's, computed from
 //! the same rows (`gsa_model::RunOutcome`).
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::io::Write;
 use std::path::PathBuf;
 
+use gsa_abi::{plan_waves, Subscriptions, TokenMove, WaveInputs};
 use gsa_fetch::candidacy::{classify as classify_candidacy, FetchCandidacy};
 use gsa_graph::Graph;
+use gsa_install::localdb::{pacman_db_root, LocalDb};
 use gsa_install::{preflight_installs, DecideMode, InstallRun};
 use gsa_model::{Group, OutcomeRow, RecipeId, RowStatus, RunOutcome};
 use gsa_recipe::RecipeDb;
@@ -135,7 +137,7 @@ fn run_build_with(
         graph: &graph,
         db: &db,
     };
-    let selection = match select::build_selection(&ctx, &inv.targets, &inv.ranges, inv.leaf) {
+    let mut selection = match select::build_selection(&ctx, &inv.targets, &inv.ranges, inv.leaf) {
         Ok(selection) => selection,
         Err(error) => {
             let _ = writeln!(err, "gsa: {}", error.message);
@@ -143,6 +145,33 @@ fn run_build_with(
         }
     };
     crate::write_notes(err, &selection.notes);
+
+    // ── state root (contract §J.3) ──────────────────────────────────────
+    let state_dir = inv
+        .state_dir
+        .as_ref()
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var("GSA_STATE_DIR")
+                .ok()
+                .filter(|v| !v.is_empty())
+                .map(PathBuf::from)
+        })
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_STATE_DIR));
+
+    // ── the pre-dispatch ABI wave check (plan-native-pm.md §4.3, §E.3) ──
+    // A provider whose registered token already moved (newest binpkg index
+    // row ≠ what its consumers recorded at install) drags its consumer
+    // wave into the plan: wave members outside the selection are added,
+    // and an uncovered member refuses the run (rc 3) before anything runs.
+    let wave = match wave_check(out, err, &graph, &selection, &state_dir) {
+        Ok(wave) => wave,
+        Err(message) => {
+            let _ = writeln!(err, "gsa: {message}");
+            return 2;
+        }
+    };
+    extend_selection(&mut selection, &wave.additions);
 
     // ── resource budget (host-derived; the parallelism line is the truth) ─
     let budget = match resolve_budget(inv, &project, selection.listed.len()) {
@@ -161,18 +190,21 @@ fn run_build_with(
         }
     };
 
-    // ── state root (contract §J.3) and startup refusals (§G.1 rc 3) ──────
-    let state_dir = inv
-        .state_dir
-        .as_ref()
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var("GSA_STATE_DIR")
-                .ok()
-                .filter(|v| !v.is_empty())
-                .map(PathBuf::from)
-        })
-        .unwrap_or_else(|| PathBuf::from(DEFAULT_STATE_DIR));
+    // ── startup refusals (§G.1 rc 3) ─────────────────────────────────────
+    // Under-coverage (§E.3): a wave member the topology cannot build —
+    // the refusal rows are already printed; nothing transacts, nothing
+    // builds.
+    if wave.uncovered {
+        return refuse_before_dispatch(
+            inv,
+            &selection,
+            &budget,
+            &state_dir,
+            out,
+            err,
+            "abi-consumer-uncovered",
+        );
+    }
     // Install preflight (contract §K.3): an install run whose installs
     // cannot succeed non-interactively refuses BEFORE any build (§G.1 rc 3).
     if install.is_some() {
@@ -311,6 +343,18 @@ fn run_build_with(
     // N=1 elsewhere); the in-flight lane ids the supervisor passes are the
     // guard — pruning never deletes an archive the run is using.
     let retention = gsa_state::Retention::from_graph(&graph);
+    // The declared `abi-rev=` override per recipe id (§J.4): the registration
+    // hook passes it to the one shared token derivation — never re-derives.
+    let abi_revs: std::collections::BTreeMap<String, Option<u64>> = graph
+        .records()
+        .iter()
+        .map(|record| {
+            (
+                record.id.as_str().to_string(),
+                gsa_abi::abi_rev_of(&record.tags),
+            )
+        })
+        .collect();
     let register_hook: Box<
         dyn FnMut(&str, &std::path::Path, &std::collections::BTreeSet<String>) -> Vec<String>
             + Send,
@@ -333,8 +377,9 @@ fn run_build_with(
                         )))
                     }
                 };
+                let abi_rev = abi_revs.get(pkg).copied().flatten();
                 gsa_state::register_instance(
-                    &state, pkg, &archives, &retention, in_flight, &mut gate,
+                    &state, pkg, &archives, &retention, in_flight, abi_rev, &mut gate,
                 )
             });
             for line in String::from_utf8_lossy(&gate).lines() {
@@ -596,6 +641,177 @@ fn build_batches(graph: &Graph<'_>, selection: &Selection) -> Vec<Vec<usize>> {
         }
     }
     batches
+}
+
+/// The pre-dispatch ABI wave check's outcome (plan-native-pm.md §4.3).
+#[derive(Default)]
+pub(crate) struct WaveCheck {
+    /// Wave members outside the run's selection — appended to the plan.
+    pub additions: Vec<String>,
+    /// The under-coverage refusal class fired (§E.3): every `refuse
+    /// abi-consumer-uncovered …` row is already printed.
+    pub uncovered: bool,
+}
+
+/// The `-S`/`-B` pre-dispatch ABI wave check (plan-native-pm.md §4.3,
+/// contract §E.3) — shared by the build pipeline and the `-n` plan. A
+/// provider whose registered token already moved (its newest binpkg index
+/// row ≠ what at least one consumer recorded at install) drags its consumer
+/// wave into the plan. `abi-wave <provider> <member> <basis>` rows print for
+/// EVERY wave member (additive diagnostics, deliberately outside the
+/// `format: 2` block); wave members outside the selection come back as
+/// `additions`; a wave member the topology cannot build prints its `refuse
+/// abi-consumer-uncovered …` row and refuses the run. The wave itself is
+/// `gsa-abi`'s one computation (record mismatches ∪ content truth ∪
+/// coupled batches, fail-toward-whole-closure when records are missing) —
+/// this seam only feeds it the state truth and renders its answer.
+pub(crate) fn wave_check(
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+    graph: &Graph<'_>,
+    selection: &Selection,
+    state_dir: &std::path::Path,
+) -> Result<WaveCheck, String> {
+    // State truth, read-only and best-effort: the binpkg index (the
+    // registered tokens) and the install-time `:=` subscription records.
+    // This seam never creates state and never fails the run — no readable
+    // state means no OBSERVABLE token move (loudly noted where it matters),
+    // and the run's own startup paths own state-root refusals (§G.1 rc 3).
+    if !state_dir.is_dir() {
+        return Ok(WaveCheck::default());
+    }
+    let state = match gsa_state::StateRoot::open(state_dir) {
+        Ok(state) => state,
+        Err(error) => {
+            let _ = writeln!(err, "gsa: note: ABI wave check skipped ({error})");
+            return Ok(WaveCheck::default());
+        }
+    };
+    let index = match gsa_state::BinpkgIndex::load(&state) {
+        Ok(index) => index,
+        Err(error) => {
+            let _ = writeln!(err, "gsa: note: ABI wave check skipped: {error}");
+            return Ok(WaveCheck::default());
+        }
+    };
+    for corrupt in &index.corrupt {
+        let _ = writeln!(
+            err,
+            "gsa: note: binpkg index: {}:{}: {} {}",
+            corrupt.store, corrupt.line, corrupt.name, corrupt.detail
+        );
+    }
+    let subs = match Subscriptions::load(&gsa_abi::subscriptions_path(state_dir)) {
+        Ok(subs) => subs,
+        Err(error) => {
+            let _ = writeln!(err, "gsa: note: ABI wave check skipped: {error}");
+            return Ok(WaveCheck::default());
+        }
+    };
+    for corrupt in &subs.corrupt {
+        let _ = writeln!(err, "gsa: note: {corrupt}");
+    }
+
+    // A token move: a SELECTED recipe whose newest registered token differs
+    // from what at least one consumer recorded (`:=` semantics — the
+    // recorded token must track the provider's). No index row or no record
+    // is no observable move here; the planner's fail-toward fallback owns
+    // the record-less case. The installed-ELF view (the content-truth
+    // input) is read ONLY below, once a move exists — the common case
+    // costs no installed-DB parse.
+    let mut moves: Vec<TokenMove> = Vec::new();
+    let mut drift_inputs: Vec<(String, Vec<String>)> = Vec::new();
+    for (_, id) in &selection.listed {
+        let rows = index.rows_for(id.as_str());
+        let Some(row) = rows.first().copied() else {
+            continue;
+        };
+        let recorded = subs.for_provider(id.as_str());
+        if recorded.is_empty() || recorded.iter().all(|s| s.token == row.abi_token) {
+            continue;
+        }
+        let pkgname = row
+            .pkgnames
+            .first()
+            .map(|name| name.as_str())
+            .unwrap_or(row.pkgbase.as_str());
+        drift_inputs.push((pkgname.to_string(), row.provides.clone()));
+        moves.push(TokenMove {
+            provider: id.as_str().to_string(),
+            old: recorded.first().map(|s| s.token.clone()),
+            new: row.abi_token.clone(),
+            changed_provides: Vec::new(),
+        });
+    }
+    if moves.is_empty() {
+        return Ok(WaveCheck::default());
+    }
+
+    // The content-truth term's input: the installed-ELF view over the
+    // parsed local DB. An unreadable installed DB is "nothing installed":
+    // the record terms still run, only the content-truth term goes quiet
+    // (and loudly so).
+    let db = match LocalDb::load(&pacman_db_root()) {
+        Ok(db) => db,
+        Err(error) => {
+            let _ = writeln!(
+                err,
+                "gsa: note: ABI wave check: installed view unavailable ({error}) — content-truth term disabled"
+            );
+            LocalDb::default()
+        }
+    };
+    let view = gsa_install::abi_view(&db);
+    for (movement, (pkgname, provides)) in moves.iter_mut().zip(drift_inputs) {
+        movement.changed_provides = gsa_abi::provide_drift(&pkgname, &provides, &view)
+            .into_iter()
+            .map(|drift| drift.name)
+            .collect();
+    }
+
+    let planned: BTreeSet<String> = selection
+        .listed
+        .iter()
+        .map(|(_, id)| id.as_str().to_string())
+        .collect();
+    let plan = plan_waves(&WaveInputs {
+        graph,
+        subs: &subs,
+        moves: &moves,
+        installed: Some(&view),
+        planned: &planned,
+    });
+    for wave in &plan.waves {
+        for member in &wave.members {
+            let _ = writeln!(
+                out,
+                "abi-wave {} {} {}",
+                wave.provider,
+                member.id,
+                member.basis.wire()
+            );
+        }
+    }
+    for row in plan.refusal_rows() {
+        let _ = writeln!(out, "{}", row.render());
+    }
+    Ok(WaveCheck {
+        additions: plan.additions,
+        uncovered: !plan.uncovered.is_empty(),
+    })
+}
+
+/// Append computed wave additions to the plan (anchors continue past the
+/// closure: `closure_size + n`). Listing order does not steer dispatch —
+/// the supervisor honours the build-order edges — but every anchor stays a
+/// distinct 1-based position.
+pub(crate) fn extend_selection(selection: &mut Selection, additions: &[String]) {
+    for (n, id) in additions.iter().enumerate() {
+        selection.listed.push((
+            selection.closure_size + n + 1,
+            RecipeId::new(id).expect("wave additions come from the topology"),
+        ));
+    }
 }
 
 /// For every parked row, the failed/deferred packages whose event parked it

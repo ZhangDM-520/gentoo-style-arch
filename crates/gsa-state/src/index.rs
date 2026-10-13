@@ -10,8 +10,9 @@
 //! registration share `instance`, and retention counts instances so a split
 //! set is never pruned in half (the texlive 38 GB landmine is the budget
 //! argument: N=2 for provider/hub recipes, N=1 elsewhere, owner decision).
-//! The ABI token is a placeholder here (`-`); the derived token lands with
-//! the ABI phase (§J.4).
+//! The ABI token is derived per archive by `gsa-abi`'s ONE computation
+//! (contract §J.4: hash of the shipped bare-soname provide set, merged with
+//! the recipe's declared `abi-rev=` override) — never re-derived here.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -46,7 +47,8 @@ pub struct IndexRow {
     pub size: u64,
     /// Unix epoch seconds of the registration (the build's completion).
     pub built_at: u64,
-    /// Derived ABI token; `-` is the pre-ABI-phase placeholder (§J.4).
+    /// Derived ABI token (`gsa-abi`: bare-soname provide-set hash merged
+    /// with the declared `abi-rev=` override — §J.4).
     pub abi_token: String,
     /// Raw `.PKGINFO` provides as shipped.
     pub provides: Vec<String>,
@@ -308,6 +310,101 @@ impl Retention {
     }
 }
 
+/// Tombstone one recipe's built instance (the maint doctor's and the prune
+/// strengths' side-car repair): its rows die in the fold, exactly like the
+/// retention sweep's tombstones. Archive files are the CALLER's business —
+/// this never touches bytes on disk. `true` when at least one live row was
+/// tombstoned; `false` when the instance was already gone.
+pub fn prune_instance(
+    root: &StateRoot,
+    recipe_id: &str,
+    instance: u64,
+    err: &mut dyn Write,
+) -> Result<bool, StateError> {
+    let index = BinpkgIndex::load(root)?;
+    let live = index
+        .rows
+        .iter()
+        .any(|r| r.recipe_id == recipe_id && r.instance == instance);
+    if !live {
+        return Ok(false);
+    }
+    store::append_json(
+        &root.index_path(),
+        &IndexEntry::Prune {
+            recipe_id: recipe_id.to_string(),
+            instance,
+        },
+        err,
+    )?;
+    Ok(true)
+}
+
+/// Reindex one archive that has no live row (the maint doctor's
+/// `reindex-orphans` repair): `.PKGINFO` truth plus `sha256`+`size` from one
+/// read of the bytes, fail closed exactly like [`register_instance`]. The
+/// archive becomes its OWN instance beyond every instance id ever recorded
+/// (tombstoned ones included — an id is never reused) — the doctor cannot
+/// recover which build produced which file, and inventing a shared instance
+/// would fake a split set. No retention is enforced here: a repair never
+/// deletes anything.
+pub fn reindex_archives(
+    root: &StateRoot,
+    recipe_id: &str,
+    archives: &[PathBuf],
+    err: &mut dyn Write,
+) -> Result<Vec<IndexRow>, StateError> {
+    let index = BinpkgIndex::load(root)?;
+    let read: store::StoreRead<IndexEntry> = store::read_json(&root.index_path(), "index")?;
+    let mut instance = read
+        .rows
+        .iter()
+        .filter_map(|entry| match entry {
+            IndexEntry::Row { row } if row.recipe_id == recipe_id => Some(row.instance),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0);
+    let mut out = Vec::new();
+    for archive in archives {
+        if index.rows.iter().any(|r| r.archive == *archive) {
+            continue;
+        }
+        let info = gsa_recipe::pkginfo::read_pkginfo(archive).map_err(|e| {
+            StateError::Diverge(format!(
+                "{}: {e} — no index row without .PKGINFO truth",
+                archive.display()
+            ))
+        })?;
+        let (sha256, size) = hash_archive(archive)?;
+        instance += 1;
+        let row = IndexRow {
+            recipe_id: recipe_id.to_string(),
+            pkgbase: info.pkgbase,
+            pkgnames: vec![info.pkgname],
+            version: info.version,
+            archive: archive.clone(),
+            sha256,
+            size,
+            built_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+            abi_token: "-".to_string(),
+            provides: info.provides,
+            vcs_baseline: "-".to_string(),
+            instance,
+        };
+        store::append_json(
+            &root.index_path(),
+            &IndexEntry::Row { row: row.clone() },
+            err,
+        )?;
+        out.push(row);
+    }
+    Ok(out)
+}
+
 /// What one registration + retention sweep did (the builder renders these
 /// rows as `note:` diagnostics, §K.1's loud reporting).
 #[derive(Clone, Debug, Default)]
@@ -325,7 +422,10 @@ pub struct RegisterOutcome {
 /// Record one successful build's archive set in the index, then enforce the
 /// retention budget (§J.4). Fail closed: a row is written only with both
 /// `sha256` and `size` known from the same read of the archive bytes, and
-/// an instance whose metadata cannot be read is recorded not at all.
+/// an instance whose metadata cannot be read is recorded not at all. Each
+/// row's `abi_token` comes from `gsa-abi`'s ONE derivation (the archive's
+/// `.PKGINFO` provides + shipped ELF `DT_SONAME`, merged with the recipe's
+/// declared `abi-rev=` override).
 ///
 /// `in_flight` is the run's set of recipe ids whose lanes are still
 /// building (contract §K.1): pruning never deletes an archive a run is
@@ -338,6 +438,7 @@ pub fn register_instance(
     archives: &[PathBuf],
     retention: &Retention,
     in_flight: &BTreeSet<String>,
+    abi_rev: Option<u64>,
     err: &mut dyn Write,
 ) -> Result<RegisterOutcome, StateError> {
     let mut outcome = RegisterOutcome::default();
@@ -359,6 +460,14 @@ pub fn register_instance(
             ))
         })?;
         let (sha256, size) = hash_archive(archive)?;
+        // The one shared abi-token derivation (gsa-abi, §J.4): fail closed —
+        // no row without token truth, so a later wave can trust every row.
+        let token = gsa_abi::token_for_archive(archive, abi_rev).map_err(|e| {
+            StateError::Diverge(format!(
+                "{}: {e} — no index row without derived abi-token truth",
+                archive.display()
+            ))
+        })?;
         rows.push(IndexRow {
             recipe_id: recipe_id.to_string(),
             pkgbase: info.pkgbase,
@@ -368,7 +477,7 @@ pub fn register_instance(
             sha256,
             size,
             built_at,
-            abi_token: "-".to_string(),
+            abi_token: token.effective,
             provides: info.provides,
             vcs_baseline: "-".to_string(),
             instance,
@@ -540,6 +649,7 @@ mod tests {
             &[archive.clone()],
             &retention,
             &BTreeSet::new(),
+            None,
             &mut err,
         )
         .unwrap();
@@ -548,7 +658,13 @@ mod tests {
         assert_eq!(row.recipe_id, "leaf");
         assert_eq!(row.version, "0:1.0.0-1");
         assert_eq!(row.pkgnames, vec!["leaf".to_string()]);
-        assert_eq!(row.abi_token, "-");
+        // The ABI token is derived truth (§J.4): the shipped bare-soname
+        // provide set, computed by gsa-abi — never the `-` placeholder.
+        let expected = gsa_abi::token_declared(&["libleaf.so".to_string()], None).effective;
+        assert_eq!(
+            row.abi_token, expected,
+            "derived abi-token lands at registration"
+        );
         assert_eq!(row.instance, 1);
 
         // The store round-trips the row and the hash verifies its bytes.
@@ -579,12 +695,30 @@ mod tests {
         // The leaf: two registrations → the newest instance survives.
         for version in ["1.0.0-1", "1.0.1-1"] {
             let archive = make_archive(&dir, "leaf", version);
-            register_instance(&root, "leaf", &[archive], &retention, &in_flight, &mut err).unwrap();
+            register_instance(
+                &root,
+                "leaf",
+                &[archive],
+                &retention,
+                &in_flight,
+                None,
+                &mut err,
+            )
+            .unwrap();
         }
         // The hub (core): three registrations → two survive.
         for version in ["1.0.0-1", "1.0.1-1", "1.0.2-1"] {
             let archive = make_archive(&dir, "hub", version);
-            register_instance(&root, "hub", &[archive], &retention, &in_flight, &mut err).unwrap();
+            register_instance(
+                &root,
+                "hub",
+                &[archive],
+                &retention,
+                &in_flight,
+                None,
+                &mut err,
+            )
+            .unwrap();
         }
 
         let index = BinpkgIndex::load(&root).unwrap();
@@ -627,9 +761,16 @@ mod tests {
         // registration is still within budget — no deferral needed.
         for (n, version) in ["1.0.0-1", "1.0.1-1"].into_iter().enumerate() {
             let archive = make_archive(&dir, "leaf", version);
-            let outcome =
-                register_instance(&root, "leaf", &[archive], &retention, &in_flight, &mut err)
-                    .unwrap();
+            let outcome = register_instance(
+                &root,
+                "leaf",
+                &[archive],
+                &retention,
+                &in_flight,
+                None,
+                &mut err,
+            )
+            .unwrap();
             assert!(outcome.pruned.is_empty());
             if n == 0 {
                 assert!(
@@ -654,8 +795,16 @@ mod tests {
         // Once the lane settles, the next sweep converges to the budget.
         in_flight.clear();
         let archive = make_archive(&dir, "leaf", "1.0.2-1");
-        let outcome =
-            register_instance(&root, "leaf", &[archive], &retention, &in_flight, &mut err).unwrap();
+        let outcome = register_instance(
+            &root,
+            "leaf",
+            &[archive],
+            &retention,
+            &in_flight,
+            None,
+            &mut err,
+        )
+        .unwrap();
         assert!(!outcome.pruned.is_empty());
         let index = BinpkgIndex::load(&root).unwrap();
         assert_eq!(index.instances_for("leaf"), vec![3]);
@@ -674,10 +823,60 @@ mod tests {
             &[missing.clone()],
             &retention,
             &BTreeSet::new(),
+            None,
             &mut err,
         );
         assert!(result.is_err(), "no metadata truth, no row (fail closed)");
         let index = BinpkgIndex::load(&root).unwrap();
         assert!(index.rows.is_empty());
+    }
+
+    #[test]
+    fn prune_instance_tombstones_rows_and_reindex_rebuilds_them() {
+        let dir = scratch("maint");
+        let root = StateRoot::open(&dir).unwrap();
+        let retention = Retention::from_records(&synthetic_topology()).unwrap();
+        let mut err = Vec::new();
+        let archive = make_archive(&dir, "leaf", "1.0.0-1");
+        register_instance(
+            &root,
+            "leaf",
+            &[archive.clone()],
+            &retention,
+            &BTreeSet::new(),
+            None,
+            &mut err,
+        )
+        .unwrap();
+
+        // Tombstone: the instance dies in the fold; the archive is the
+        // caller's business and survives untouched here.
+        assert!(prune_instance(&root, "leaf", 1, &mut err).unwrap());
+        let index = BinpkgIndex::load(&root).unwrap();
+        assert!(index.rows.is_empty(), "the tombstone kills the row");
+        assert!(archive.exists(), "prune_instance never touches bytes");
+        assert!(
+            !prune_instance(&root, "leaf", 1, &mut err).unwrap(),
+            "an already-dead instance reports no-op"
+        );
+
+        // Reindex: the orphan archive's bytes become a fresh, hash-bound
+        // row — fail closed on a missing .PKGINFO, and never a duplicate
+        // row for an already-indexed archive.
+        let rows = reindex_archives(&root, "leaf", &[archive.clone()], &mut err).unwrap();
+        assert_eq!(rows.len(), 1);
+        let row = &rows[0];
+        assert_eq!(row.instance, 2, "the reindexed archive is its own instance");
+        assert!(verify_row(row).agrees(), "the row binds the bytes");
+        let again = reindex_archives(&root, "leaf", &[archive.clone()], &mut err).unwrap();
+        assert!(again.is_empty(), "an indexed archive is never re-indexed");
+        let not_an_archive = dir.join("stray.pkg.tar.zst");
+        std::fs::write(&not_an_archive, b"no pkginfo truth").unwrap();
+        assert!(
+            reindex_archives(&root, "leaf", &[not_an_archive], &mut err).is_err(),
+            "no .PKGINFO truth, no row (fail closed)"
+        );
+        let index = BinpkgIndex::load(&root).unwrap();
+        assert_eq!(index.rows.len(), 1, "the failed reindex wrote nothing");
     }
 }

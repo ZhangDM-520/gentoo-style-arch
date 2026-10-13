@@ -5,12 +5,14 @@ members = [
     "crates/gsa-topo",
     "crates/gsa-recipe",
     "crates/gsa-graph",
+    "crates/gsa-abi",
     "crates/gsa-sched",
     "crates/gsa-build",
     "crates/gsa-install",
     "crates/gsa-fetch",
     "crates/gsa-state",
     "crates/gsa-qa",
+    "crates/gsa-maint",
     "crates/gsa-cli",
 ]
 
@@ -24,12 +26,14 @@ gsa-model = { path = "crates/gsa-model" }
 gsa-topo = { path = "crates/gsa-topo" }
 gsa-recipe = { path = "crates/gsa-recipe" }
 gsa-graph = { path = "crates/gsa-graph" }
+gsa-abi = { path = "crates/gsa-abi" }
 gsa-sched = { path = "crates/gsa-sched" }
 gsa-build = { path = "crates/gsa-build" }
 gsa-install = { path = "crates/gsa-install" }
 gsa-fetch = { path = "crates/gsa-fetch" }
 gsa-state = { path = "crates/gsa-state" }
 gsa-qa = { path = "crates/gsa-qa" }
+gsa-maint = { path = "crates/gsa-maint" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
@@ -45,6 +49,8 @@ object = { version = "0.36", default-features = false, features = ["read", "elf"
 # (the side-car state database under the state root: binpkg index, run
 # history, key-value — docs/gsa-contract.md §J) and gsa-qa (the QA check
 # registry: named checks with scope + severity + stable keyword, the
-# install-qa-check.d analogue — plan-native-pm.md §5.3). The remaining crate
-# (gsa-maint) arrives with its phase and is deliberately not stubbed out here
-# (plan-native-pm.md §3.1, §7).
+# install-qa-check.d analogue — plan-native-pm.md §5.3) and gsa-maint (the
+# `-M` maintain surface: host-state hygiene, IgnorePkg closure repair,
+# world/sets over the kv store, run-history inspection, the prune strengths,
+# shared-source mirrors and the audit/doctor reports — plan-native-pm.md
+# §5.1's `maintain`/`logs`/`clean` verbs, contract §B.7).

@@ -194,60 +194,10 @@ impl LocalDb {
     }
 }
 
-/// The name half of a provide/depend entry (`libfoo.so=1-64` → `libfoo.so`,
-/// `meson>=1.8` → `meson`) — fish `abi_provide_name`.
-pub fn provide_name(entry: &str) -> &str {
-    entry.split(['=', '<', '>']).next().unwrap_or("").trim()
-}
-
-/// The bare soname stem of a provide NAME (`libfoo.so` or `libfoo.so.1.2` →
-/// `libfoo.so`); `None` when the name is not soname-shaped — fish
-/// `_lint_soname_stem`.
-pub fn soname_stem(name: &str) -> Option<&str> {
-    if name.ends_with(".so") {
-        return Some(name);
-    }
-    let idx = name.find(".so.")?;
-    Some(&name[..idx + 3])
-}
-
-/// Does one provide entry cover a dependency string? Bare soname provides
-/// (`libfoo.so`, makepkg-auto-versioned to `libfoo.so=<ver>`) cover the
-/// `libfoo.so.N` soname family (`docs/MEMORY.md` rule 25(a)); a versioned
-/// NAME provide covers the name itself (constraint satisfaction stays
-/// pacman's job at transaction time). This is the ONE matcher every
-/// resolution source shares (fish `abi_provide_covers`).
-/// The auto-versioned form covers only its own generation: `libfoo.so=1-64`
-/// covers `libfoo.so` and `libfoo.so.1` (the `-64` pkgrel-ish suffix
-/// stripped) but NOT `libfoo.so.2`, so a bumped consumer NEEDED no longer
-/// resolves to the old provider and the violation can name both sides.
-pub fn provide_covers(provide: &str, dep: &str) -> bool {
-    let (name, ver) = match provide.split_once('=') {
-        Some((n, v)) => (n.trim(), Some(v.trim())),
-        None => (provide.trim(), None),
-    };
-    if name.is_empty() || dep.is_empty() {
-        return false;
-    }
-    if name == dep {
-        return true;
-    }
-    if soname_stem(dep) == Some(name) {
-        let Some(ver) = ver else {
-            return true;
-        };
-        if ver.is_empty() {
-            return true;
-        }
-        // `1-64` → `1`: makepkg's auto-version is `<generation>-<pkgrel-ish>`.
-        let generation = match ver.rfind('-') {
-            Some(idx) => &ver[..idx],
-            None => ver,
-        };
-        return dep == format!("{name}.{generation}");
-    }
-    false
-}
+// The provide/soname semantics are SHARED with the ABI subsystem — the
+// ONE matcher lives in `gsa-abi::provides` (rule 25(a)/(b)); these
+// re-exports keep the local-DB surface stable without forking the logic.
+pub use gsa_abi::{provide_covers, provide_name, soname_stem};
 
 /// The pacman DB root (`pacman-conf DBPath`, falling back to
 /// `/var/lib/pacman`). `pacman-conf` is a read-only configuration reader,

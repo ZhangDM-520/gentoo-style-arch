@@ -104,6 +104,7 @@ fn one_state_root_serves_every_surface() {
         &[archive.clone()],
         &retention,
         &BTreeSet::new(),
+        None,
         &mut err,
     )
     .unwrap();

@@ -26,7 +26,7 @@ pub use register::{names_for_archive, register_ignorepkg, RegisterReport};
 use gsa_model::{Decision, DecisionRow};
 use gsa_recipe::pkginfo::{read_pkginfo, Pkginfo};
 
-use gates::{AbiExclusions, ProvideDrift};
+use gates::AbiExclusions;
 
 /// The decision mode (contract §D.1, §E): `checked` applies the same-version
 /// already-installed skip; `force` bypasses it (always `pacman -U`).
@@ -87,6 +87,11 @@ pub struct DecisionContext {
     /// candidate's recipe directory; absent there means the empty registry
     /// (synthetic workspaces).
     pub abi_exclusions: Option<PathBuf>,
+    /// Subjects computed into an ABI rebuild wave (`plan-native-pm.md` §4.3):
+    /// a wave member's same-version skip is suppressed — the wave must land
+    /// wholly, so its archive installs even when the exact version is
+    /// already present. Gates are untouched (force never bypasses them).
+    pub wave_heal: Vec<String>,
 }
 
 /// The discovery result for one recipe directory (house layout: archives
@@ -287,6 +292,19 @@ fn recipe_srcinfo_names(recipe_dir: Option<&Path>) -> Vec<String> {
     names
 }
 
+/// The ABI subsystem's installed-ELF view over the parsed local DB — the
+/// one conversion point; every ABI term (drift, link truth, stock pinners)
+/// reads the same rows the decision seam already parsed.
+pub fn abi_view(db: &LocalDb) -> gsa_abi::InstalledView {
+    gsa_abi::InstalledView::new(db.packages().into_iter().map(|pkg| gsa_abi::InstalledPkg {
+        name: pkg.name.clone(),
+        version: pkg.version.clone(),
+        provides: pkg.provides.clone(),
+        depends: pkg.depends.clone(),
+        files: pkg.files.clone(),
+    }))
+}
+
 fn resolve_exclusions(
     ctx: &DecisionContext,
     candidates: &[Candidate],
@@ -370,6 +388,9 @@ fn qa_refusals(
 
 fn plan(candidates: &[Candidate], ctx: &DecisionContext, db: &LocalDb) -> Result<Plan, String> {
     let exclusions = resolve_exclusions(ctx, candidates)?;
+    // The ABI subsystem's installed-ELF view over the same parsed DB (one
+    // conversion per plan — the drift/link/pinner terms all read it).
+    let view = abi_view(db);
 
     // Empty candidate list (§B.6, §E.3): a refusal under `-S` (checked), a
     // `noop empty-list` under `-Ua` (force). Subject `-` because there is no
@@ -523,15 +544,17 @@ fn plan(candidates: &[Candidate], ctx: &DecisionContext, db: &LocalDb) -> Result
         // version-moves vs the installed provides of the same pkgname (or
         // its stock→house counterpart). Runs BEFORE the force branch: force
         // bypasses the same-version skip, never this gate.
-        let drift = gates::provide_drift(&info.pkgname, &info.provides, db);
+        let drift = gsa_abi::provide_drift(&info.pkgname, &info.provides, &view);
         if !drift.is_empty() {
-            rows.extend(abi_rows(
+            // The ABI subsystem computes the refusal rows (contract §E.3's
+            // frozen shapes); this seam only folds them into its one plan.
+            rows.extend(gsa_abi::abi_refusal_rows(
                 &info.pkgbase,
                 &archive,
                 &drift,
-                db,
+                &view,
                 &tx_names,
-                ctx,
+                &ctx.later_installs,
             ));
             plans.push(CandidatePlan {
                 candidate: candidate.clone(),
@@ -583,8 +606,14 @@ fn plan(candidates: &[Candidate], ctx: &DecisionContext, db: &LocalDb) -> Result
         }
 
         // Branch: force installs everything that survived the gates; checked
-        // applies the same-version already-current skip (rule 11).
-        let rows = if ctx.mode == DecideMode::Force {
+        // applies the same-version already-current skip (rule 11) — except
+        // for a computed ABI-wave member, whose skip is suppressed so the
+        // wave lands wholly (plan-native-pm.md §4.5).
+        let wave_heal = ctx
+            .wave_heal
+            .iter()
+            .any(|n| name_chain.iter().any(|c| c == n));
+        let rows = if ctx.mode == DecideMode::Force || wave_heal {
             vec![row(&info.pkgbase, Decision::Install, "ok")]
         } else {
             match already_current(&info, &candidate.archive, db) {
@@ -607,59 +636,6 @@ fn plan(candidates: &[Candidate], ctx: &DecisionContext, db: &LocalDb) -> Result
         plan_rows: Vec::new(),
         candidates: plans,
     })
-}
-
-/// The ABI gate's rows for one drifted candidate: `abi-soname` per drifted
-/// provide, plus `abi-consumer` per installed LINKED consumer and
-/// `abi-stock-pinner` per installed out-of-tree pinner that this transaction
-/// and in-run repair (rule 25(d), `later_installs`) do not cover.
-fn abi_rows(
-    subject: &str,
-    archive: &str,
-    drift: &[ProvideDrift],
-    db: &LocalDb,
-    tx_names: &[String],
-    ctx: &DecisionContext,
-) -> Vec<DecisionRow> {
-    let mut rows: Vec<DecisionRow> = Vec::new();
-    for d in drift {
-        rows.push(row(
-            subject,
-            Decision::Refuse,
-            format!(
-                "abi-soname {archive} {} {} {} {}",
-                d.pkgname,
-                d.name,
-                d.inst_ver,
-                d.built_ver.clone().unwrap_or_else(|| "-".to_string())
-            ),
-        ));
-    }
-    let affected: Vec<String> = drift.iter().map(|d| d.name.clone()).collect();
-    let covered = |name: &str| {
-        tx_names.iter().any(|t| t == name) || ctx.later_installs.iter().any(|t| t == name)
-    };
-    for consumer in gates::linked_consumers(db, &affected) {
-        if covered(&consumer) {
-            continue;
-        }
-        rows.push(row(
-            subject,
-            Decision::Refuse,
-            format!("abi-consumer {archive} {consumer}"),
-        ));
-    }
-    for (pinner, dep) in gates::stock_pinners(db, &affected) {
-        if covered(&pinner) {
-            continue;
-        }
-        rows.push(row(
-            subject,
-            Decision::Refuse,
-            format!("abi-stock-pinner {archive} {pinner} {dep}"),
-        ));
-    }
-    rows
 }
 
 /// One `-S` install step: decide, then (on a plan without `refuse`) register
@@ -712,6 +688,7 @@ pub fn install_built_package(
         later_installs: run.later_installs.clone(),
         parks: Vec::new(),
         abi_exclusions: None,
+        wave_heal: Vec::new(),
     };
     let db_root = localdb::pacman_db_root();
     let db = LocalDb::load(&db_root)?;
@@ -779,7 +756,86 @@ pub fn install_built_package(
         archives: install_archives,
         pacman_args: run.pacman_args.clone(),
     });
+    // The installed-ABI record (plan §4.1): every archive this step
+    // INSTALLED records its `:=` subscriptions — what its DT_NEEDED linked
+    // at build time, against the providers' recorded tokens. A recording
+    // failure is loud but never aborts a landed transaction: the wave
+    // planner fails toward whole-closure on missing records (never under).
+    if outcome == TxnOutcome::Ok {
+        for group in &plan.candidates {
+            if !group.rows.iter().any(|r| r.decision == Decision::Install) {
+                continue;
+            }
+            let Some(info) = group.pkginfo.as_ref() else {
+                continue;
+            };
+            let recipe_id = group
+                .candidate
+                .recipe_dir
+                .as_deref()
+                .and_then(|d| d.file_name())
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| info_name(group));
+            if let Err(error) = record_subscriptions(
+                &run.state_dir,
+                &recipe_id,
+                &info.version,
+                &group.candidate.archive,
+                &db,
+            ) {
+                eprintln!(
+                    "gsa: note: subscription record failed for {recipe_id}: {error} (wave planning will fail toward whole-closure)"
+                );
+            }
+        }
+    }
     Ok((rows, Some(outcome)))
+}
+
+/// The pkgname fallback for a consumer identity without a recipe dir.
+fn info_name(group: &CandidatePlan) -> String {
+    group
+        .pkginfo
+        .as_ref()
+        .map(|i| i.pkgname.clone())
+        .unwrap_or_else(|| "-".to_string())
+}
+
+/// Record one freshly installed consumer's `:=` subscriptions into the
+/// state root (the installed-ABI record, plan §4.1/contract §J.1) — the ONE
+/// recording path both install families share. Provider identity and token
+/// come from the binpkg index when a built instance is recorded (its
+/// `abi_token` is `gsa-abi`'s one derivation), else from the provider's
+/// installed surface (derived; the recipe's `abi-rev=` is unknown at this
+/// seam, so a derived-only record can only ever OVER-fire a wave, never
+/// under — the fail-toward direction).
+pub fn record_subscriptions(
+    state_root: &Path,
+    consumer: &str,
+    version: &str,
+    consumer_archive: &Path,
+    db: &LocalDb,
+) -> Result<Vec<gsa_abi::Subscription>, String> {
+    let view = abi_view(db);
+    let state = gsa_state::StateRoot::open(state_root).map_err(|e| e.to_string())?;
+    let index = gsa_state::BinpkgIndex::load(&state).map_err(|e| e.to_string())?;
+    let resolve = |pkg: &gsa_abi::InstalledPkg| -> Option<(String, String)> {
+        for row in &index.rows {
+            if row.pkgnames.iter().any(|n| n == &pkg.name) {
+                return Some((row.recipe_id.clone(), row.abi_token.clone()));
+            }
+        }
+        let token = gsa_abi::token_for_installed(pkg, &view, None);
+        Some((pkg.name.clone(), token.effective))
+    };
+    gsa_abi::record_install(
+        state_root,
+        consumer,
+        version,
+        consumer_archive,
+        &view,
+        &resolve,
+    )
 }
 
 /// The transaction-side inputs of one `-S`/`-U` run (contract §B.4/§B.6).

@@ -112,6 +112,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "gsa-abi"
+version = "0.1.0"
+dependencies = [
+ "gsa-graph",
+ "gsa-model",
+ "gsa-recipe",
+ "sha2",
+ "tar",
+ "zstd",
+]
+
+[[package]]
 name = "gsa-build"
 version = "0.1.0"
 dependencies = [
@@ -124,10 +136,12 @@ dependencies = [
 name = "gsa-cli"
 version = "0.1.0"
 dependencies = [
+ "gsa-abi",
  "gsa-build",
  "gsa-fetch",
  "gsa-graph",
  "gsa-install",
+ "gsa-maint",
  "gsa-model",
  "gsa-qa",
  "gsa-recipe",
@@ -156,10 +170,31 @@ dependencies = [
 name = "gsa-install"
 version = "0.1.0"
 dependencies = [
+ "gsa-abi",
  "gsa-build",
  "gsa-model",
  "gsa-qa",
  "gsa-recipe",
+ "gsa-state",
+ "tar",
+ "zstd",
+]
+
+[[package]]
+name = "gsa-maint"
+version = "0.1.0"
+dependencies = [
+ "gsa-build",
+ "gsa-fetch",
+ "gsa-graph",
+ "gsa-install",
+ "gsa-model",
+ "gsa-qa",
+ "gsa-recipe",
+ "gsa-sched",
+ "gsa-state",
+ "gsa-topo",
+ "serde_json",
  "tar",
  "zstd",
 ]
@@ -204,6 +239,7 @@ dependencies = [
 name = "gsa-state"
 version = "0.1.0"
 dependencies = [
+ "gsa-abi",
  "gsa-graph",
  "gsa-model",
  "gsa-recipe",

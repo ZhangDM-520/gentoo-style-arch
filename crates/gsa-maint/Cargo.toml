@@ -1,0 +1,23 @@
+[package]
+name = "gsa-maint"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The gsa -M maintain surface: host-state hygiene, IgnorePkg closure repair, world/sets, run history, prune strengths, mirrors, audit/doctor"
+
+[dependencies]
+gsa-model = { workspace = true }
+gsa-topo = { workspace = true }
+gsa-graph = { workspace = true }
+gsa-recipe = { workspace = true }
+gsa-state = { workspace = true }
+gsa-install = { workspace = true }
+gsa-qa = { workspace = true }
+gsa-build = { workspace = true }
+gsa-sched = { workspace = true }
+gsa-fetch = { workspace = true }
+
+[dev-dependencies]
+tar = { workspace = true }
+zstd = { workspace = true }
+serde_json = { workspace = true }

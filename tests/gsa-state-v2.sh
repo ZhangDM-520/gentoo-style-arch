@@ -207,11 +207,13 @@ index_rows() {
 }
 
 # wire_from_record LINE ARCHIVE — the §J.4 wire row EXPECTED for one index
-# record: every field from the record, the hash and size re-derived from the
-# archive's bytes (so `-Qb` must agree with both the record and the file).
+# record: every field from the record — including `abi_token`, the one
+# shared derivation (`gsa-abi`) registered at write time — with the hash and
+# size re-derived from the archive's bytes (so `-Qb` must agree with both
+# the record and the file).
 wire_from_record() {
     local line=$1 archive=$2
-    local pkgbase name version fname sha size built
+    local pkgbase name version fname sha size built token
     pkgbase=$(json_field "$line" pkgbase)
     name=$(printf '%s\n' "$line" | sed -n 's/.*"pkgnames":\["\([^"]*\)"\].*/\1/p')
     version=$(json_field "$line" version)
@@ -219,8 +221,9 @@ wire_from_record() {
     sha=$(sha256sum "$archive" | awk '{print $1}')
     size=$(stat -c%s "$archive")
     built=$(json_num "$line" built_at)
-    printf '%s|%s|%s|%s|%s|%s|-|-|-|%s\n' \
-        "$pkgbase" "$name" "$version" "$fname" "$sha" "$size" "$built"
+    token=$(json_field "$line" abi_token)
+    printf '%s|%s|%s|%s|%s|%s|%s|-|-|%s\n' \
+        "$pkgbase" "$name" "$version" "$fname" "$sha" "$size" "$token" "$built"
 }
 
 # ─── a. index registration after a stub build (§J.4) ───────────────────────

@@ -45,7 +45,7 @@ impl Family {
             Family::S => "silgwyu",
             Family::B => "l",
             Family::U => "",
-            Family::M => "adilmcsh",
+            Family::M => "adilmcshw",
         }
     }
 
@@ -68,7 +68,7 @@ impl Family {
             Family::S => "silgwyu",
             Family::B => "l",
             Family::U => "",
-            Family::M => "adilmsh",
+            Family::M => "adilmshw",
         }
     }
 }
@@ -119,6 +119,11 @@ pub struct Invocation {
     /// `--config PATH`: the target pacman.conf of an install run (-S/-U) —
     /// the IgnorePkg registration target and the `pacman -U --config`.
     pub config: Option<String>,
+    /// The maintain verbs' value sub-flags (contract §B.7): `--tail <ref>`
+    /// and `--keep N` on `-Ml`, `--show <run-id>` on `-Mh`.
+    pub tail: Option<String>,
+    pub keep: Option<String>,
+    pub show: Option<String>,
     /// Arguments after `--`, forwarded verbatim to a `pacman -U` transaction.
     pub pacman_args: Option<Vec<String>>,
 }
@@ -280,6 +285,9 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
         intensity: None,
         state_dir: None,
         config: None,
+        tail: None,
+        keep: None,
+        show: None,
         pacman_args: None,
         no_prefetch: false,
         prefetch_ahead: None,
@@ -363,6 +371,9 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
                         "state-dir" => inv.state_dir = Some(value.clone()),
                         "config" => inv.config = Some(value.clone()),
                         "prefetch-ahead" => inv.prefetch_ahead = Some(value.clone()),
+                        "tail" => inv.tail = Some(value.clone()),
+                        "keep" => inv.keep = Some(value.clone()),
+                        "show" => inv.show = Some(value.clone()),
                         _ => {}
                     }
                     inv.deferred_flags.push(format!("--{name}"));

@@ -249,7 +249,7 @@ pub fn parse_topology(
                         file,
                         line_no,
                         format!(
-                            "unknown tag in topology record {id}: {tag} (allowed: abi=must,abi=should,app-cluster=<name>,version-sync=nvchecker)"
+                            "unknown tag in topology record {id}: {tag} (allowed: abi=must,abi=should,abi-rev=<n>,app-cluster=<name>,version-sync=nvchecker)"
                         ),
                     ));
                 };
@@ -279,6 +279,15 @@ pub fn parse_topology(
                     file,
                     line_no,
                     format!("topology record for {id} names more than one app-cluster tag"),
+                ));
+            }
+            // At most one abi-rev override: two revisions would make the
+            // derived token ambiguous (the loader refuses, never picks one).
+            if tags.iter().filter(|t| matches!(t, Tag::AbiRev(_))).count() > 1 {
+                return Err(TopologyError::at(
+                    file,
+                    line_no,
+                    format!("topology record for {id} names more than one abi-rev tag"),
                 ));
             }
         }
