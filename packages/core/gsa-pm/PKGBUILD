@@ -15,7 +15,7 @@
 # vendored and nothing is fetched without a hash check.
 
 pkgname=gsa-pm
-pkgver=0.1.0+r322+g238f582d528c
+pkgver=0.1.0+r330+ged4eea23cacd
 pkgrel=1
 pkgdesc='Native package manager engine for the Gentoo-style Arch package set'
 arch=('x86_64')
@@ -27,7 +27,7 @@ depends=('gcc-libs' 'glibc')
 makedepends=('git' 'rust')
 # !debug: the release profile carries no debug info (house style: mold-git).
 options=('!debug')
-_commit=238f582d528cef7204c9a84bfe00d0e0c38a3c74
+_commit=ed4eea23cacd674bb65fc38ad16b8f5a39edd0d7
 # Pinned VCS source: the #commit= revision is the integrity anchor (house
 # idiom, cf. glibc-git). A commit pin is not a signed ref, so the plain
 # family form applies (CONTRIBUTING source-verification scope); never widen
