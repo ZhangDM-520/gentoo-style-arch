@@ -18,7 +18,21 @@ license=('GPL3' 'LGPL3')
 depends=('babl>=@_babl_version@'
          'libspiro>=@_libspiro_version@'
          'json-glib>=@_json-glib_version@'
-         'sdl2>=@_sdl2_version@')
+         'sdl2>=@_sdl2_version@'
+         'cairo'
+         'gdk-pixbuf2'
+         'jasper>=@_jasper_version@'
+         'lensfun>=@_lensfun_version@'
+         'libnsgif>=@_libnsgif_version@'
+         'libpng'
+         'libraw>=@_libraw_version@'
+         'librsvg>=@_librsvg_version@'
+         'luajit>=@_luajit_version@'
+         'openexr>=@_openexr_version@'
+         'pango'
+         'poppler-glib'
+         'sdl3'
+         'suitesparse')
 makedepends=('git' 'meson' 'intltool' 'python' 'ruby'
              'luajit>=@_luajit_version@'
              'libraw>=@_libraw_version@'
@@ -35,17 +49,9 @@ makedepends=('git' 'meson' 'intltool' 'python' 'ruby'
              'python-gobject>=@_pygobject_version@'
              'suitesparse'
              'gobject-introspection')
-optdepends=('openexr: for using the openexr plugin'
-            'ffmpeg: for using the ffmpeg plugin'
-            'librsvg: for using the svg plugin'
+optdepends=('ffmpeg: for using the ffmpeg plugin'
             'libtiff: tiff plugin'
-            'jasper: for using the jasper plugin'
-            'libraw: raw plugin'
-            'suitesparse: matting-levin plugin'
-            'luajit: lua plugin'
-            'libgexiv2: for image metadata'
-            'lensfun: for lens distortion'
-            'libnsgif: gif plugin')
+            'libgexiv2: for image metadata')
 provides=("gegl=${pkgver%%.r*}")
 conflicts=('gegl')
 options=(!libtool)

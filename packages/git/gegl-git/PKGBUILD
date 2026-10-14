@@ -9,7 +9,7 @@
 
 _pkgname=gegl
 pkgname="${_pkgname}-git"
-pkgver=0.4.73.r11485.75214d1e6
+pkgver=0.4.73.r11493.5a15f6d2b
 pkgrel=1
 pkgdesc="Graph based image processing framework"
 arch=('i686' 'x86_64')
@@ -21,7 +21,21 @@ depends=('babl>=0.1.116'
          # virtual sdl2: stock sdl2-compat and the house sdl2-git swap both
          # provide it — a concrete provider name blocks the swap's removal
          # (run #121 wall, 2026-10-10)
-         'sdl2>=2.0.5')
+         'sdl2>=2.0.5'
+         'cairo'
+         'gdk-pixbuf2'
+         'jasper>=1.900.1'
+         'lensfun>=0.2.5'
+         'libnsgif>=1.0.0'
+         'libpng'
+         'libraw>=0.15.4'
+         'librsvg>=2.40.6'
+         'luajit>=2.0.4'
+         'openexr>=1.6.1'
+         'pango'
+         'poppler-glib'
+         'sdl3'
+         'suitesparse')
 makedepends=('git' 'meson' 'intltool' 'python' 'ruby'
              'luajit>=2.0.4'
              'libraw>=0.15.4'
@@ -38,17 +52,9 @@ makedepends=('git' 'meson' 'intltool' 'python' 'ruby'
              'python-gobject>=3.2.0'
              'suitesparse'
              'gobject-introspection')
-optdepends=('openexr: for using the openexr plugin'
-            'ffmpeg: for using the ffmpeg plugin'
-            'librsvg: for using the svg plugin'
+optdepends=('ffmpeg: for using the ffmpeg plugin'
             'libtiff: tiff plugin'
-            'jasper: for using the jasper plugin'
-            'libraw: raw plugin'
-            'suitesparse: matting-levin plugin'
-            'luajit: lua plugin'
-            'libgexiv2: for image metadata'
-            'lensfun: for lens distortion'
-            'libnsgif: gif plugin')
+            'libgexiv2: for image metadata')
 provides=("gegl=${pkgver%%.r*}"
           # Bare sonames: makepkg versions them at packaging time from the
           # built libs' SONAMEs (makepkg 7.1 doesn't derive provides without

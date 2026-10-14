@@ -13,14 +13,11 @@ makedepends=(# Currently highway does provide a static library only, that libjxl
              # This introduces a build dependency for now...
              'highway'
              'git' 'libheif' 'libid3tag' 'libjxl' 'librsvg' 'libspectre' 'libwebp' 'openjpeg2')
-depends=('bzip2' 'freetype2' 'giflib' 'libjpeg-turbo' 'libpng' 'libtiff' 'libxext' 'xz')
-optdepends=('libheif: HEIF loader (for AVIF)'
-            'libid3tag: ID3 loader'
-            'libjxl: JXL loader'
-            'librsvg: SVG loader'
-            'libspectre: PS loader'
-            'libwebp: WEBP loader'
-            'openjpeg2: J2K loader')
+depends=('bzip2' 'cairo' 'freetype2' 'giflib' 'glib2'
+         'libavif' 'libheif' 'libid3tag' 'libjpeg-turbo' 'libjxl'
+         'libpng' 'libraw' 'librsvg' 'libspectre' 'libtiff'
+         'libxext' 'libyuv' 'openjpeg2' 'xz')
+optdepends=('libwebp: WEBP loader')
 provides=('libImlib2.so')
 source=("${pkgname}::git+https://git.enlightenment.org/old/legacy-imlib2.git#tag=v${pkgver}")
 sha512sums=('47a77967bdd96b779794c4b35947984dfa0890e646e20a2c6498e73f40a95025de09513ef730fe5ff92a4c0556ab36e54e6c8e588f2a6844e0a6e3ffc228f01e')

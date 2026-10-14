@@ -1,6 +1,6 @@
 pkgbase = gegl-git
 	pkgdesc = Graph based image processing framework
-	pkgver = 0.4.73.r11485.75214d1e6
+	pkgver = 0.4.73.r11493.5a15f6d2b
 	pkgrel = 1
 	url = https://www.gegl.org
 	arch = i686
@@ -31,17 +31,23 @@ pkgbase = gegl-git
 	depends = libspiro>=0.5.0
 	depends = json-glib>=1.0.0
 	depends = sdl2>=2.0.5
-	optdepends = openexr: for using the openexr plugin
+	depends = cairo
+	depends = gdk-pixbuf2
+	depends = jasper>=1.900.1
+	depends = lensfun>=0.2.5
+	depends = libnsgif>=1.0.0
+	depends = libpng
+	depends = libraw>=0.15.4
+	depends = librsvg>=2.40.6
+	depends = luajit>=2.0.4
+	depends = openexr>=1.6.1
+	depends = pango
+	depends = poppler-glib
+	depends = sdl3
+	depends = suitesparse
 	optdepends = ffmpeg: for using the ffmpeg plugin
-	optdepends = librsvg: for using the svg plugin
 	optdepends = libtiff: tiff plugin
-	optdepends = jasper: for using the jasper plugin
-	optdepends = libraw: raw plugin
-	optdepends = suitesparse: matting-levin plugin
-	optdepends = luajit: lua plugin
 	optdepends = libgexiv2: for image metadata
-	optdepends = lensfun: for lens distortion
-	optdepends = libnsgif: gif plugin
 	provides = gegl=0.4.73
 	provides = libgegl-0.4.so
 	provides = libgegl-npd-0.4.so

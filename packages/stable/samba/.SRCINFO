@@ -56,13 +56,17 @@ pkgname = libwbclient
 pkgname = ldb
 	pkgdesc = Schema-less, ldap like, API and database
 	url = https://ldb.samba.org/
+	depends = gnutls
+	depends = gpgme
+	depends = libldap
 	depends = libtevent.so
 	depends = lmdb
 	depends = popt
+	depends = python
 	depends = talloc
 	depends = tdb
 	depends = libtdb.so
-	optdepends = python: for python bindings
+	depends = smbclient=2:4.25.0-1
 	provides = libldb.so
 
 pkgname = smbclient
@@ -77,6 +81,7 @@ pkgname = smbclient
 	depends = libcups
 	depends = libldap
 	depends = libldb.so
+	depends = libngtcp2
 	depends = libnsl
 	depends = libreadline.so
 	depends = libtdb.so

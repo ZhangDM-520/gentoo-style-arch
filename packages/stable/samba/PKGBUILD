@@ -166,15 +166,18 @@ package_ldb() {
 pkgdesc='Schema-less, ldap like, API and database'
 url="https://ldb.samba.org/"
 depends=(
+  gnutls
+  gpgme
+  libldap
   libtevent.so
   lmdb
   popt
+  python
   talloc
   tdb
   libtdb.so
-)
-optdepends=(
-  'python: for python bindings'
+  # ldb's payload links samba's internal libs shipped by the smbclient output
+  "smbclient=$epoch:$pkgver-$pkgrel"
 )
 _ldb_bins=(
   ldbadd
@@ -240,6 +243,7 @@ depends=(
   libcups
   libldap
   libldb.so
+  libngtcp2
   libnsl
   libreadline.so
   libtdb.so

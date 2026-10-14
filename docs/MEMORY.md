@@ -1107,7 +1107,16 @@
     installed file ownership** (the no-provide stock provider class), then
     base-system/`config/abi-exclusions.conf`; transitive coverage counts,
     and a soname no owner anywhere explains is `unresolvable-link` (the
-    rare, meaningful class). See `docs/NOTE.md` 2026-10-14 orphan wall.
+    rare, meaningful class). Two shape refinements (2026-10-15 wave-3): a
+    split output's leak can point at a *sibling* output of the same
+    PKGBUILD — declare the versioned sibling name (`"smbclient=$epoch:$pkgver-$pkgrel"`),
+    never a stem list; the QA closure walk strips version constraints and
+    one recipe's output archives transact in a single `pacman -U`, so the
+    mutual sibling dep installs in-transaction. And once a leaked link is
+    declared, its matching `optdepends` entry is denial-table and retires
+    in the same edit (an optional-dependency table describing shipped
+    binaries is a depends table in denial). See `docs/NOTE.md` 2026-10-14
+    orphan wall and 2026-10-15 wave-3.
 
 55. **A provider SONAME bump needs its direct NEEDED consumers rebuilt in
     the same pass — pacman keeps them installed while they are

@@ -11,14 +11,12 @@ arch=('x86_64')
 license=('GPL')
 depends=(
   'glibc' 'ncurses' 'libassuan' 'libsecret' 'glib2'
+  # Not trimmable: each shipped pinentry backend hard-links its toolkit
+  # (gtk/Qt5/Qt6/gcr), so these are runtime links, not optional backends.
+  'gcr-4' 'gtk3' 'kguiaddons' 'kwindowsystem'
+  'libx11' 'qt5-base' 'qt5-x11extras' 'qt6-base'
 )
 makedepends=('qt6-base' 'gtk2-compat' 'gcr' 'kguiaddons' 'kwindowsystem')
-optdepends=(
-  'gcr: GNOME backend'
-  'gtk3: GTK backend'
-  'kguiaddons: Qt6 backend'
-  'kwindowsystem: Qt6 backend'
-)
 source=("https://www.gnupg.org/ftp/gcrypt/${pkgname}/${pkgname}-${pkgver}.tar.bz2"{,.sig}
         'pinentry')
 sha256sums=('c2970f16d6afb66ecddfca767d743936c86239bff936eed7fd7597a678414b63'

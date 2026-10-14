@@ -29,21 +29,31 @@ arch=(x86_64)
 options=(!lto pestrip)
 license=(LGPL-2.1-or-later)
 depends=(
+  alsa-lib
   desktop-file-utils
+  ffmpeg
   fontconfig
   freetype2
   libgcc
   gettext
   glib2
   glibc
+  gst-plugins-base-libs
+  gstreamer
+  libgphoto2
   libpcap
+  libpulse
   libunwind
+  libusb
   libx11
   libxcursor
   libxext
   libxkbcommon
   libxi
   libxrandr
+  ocl-icd
+  pcsclite
+  sane
   systemd-libs
   wayland
   ntsync-autoload
@@ -75,28 +85,18 @@ makedepends=(
   vulkan-icd-loader
 )
 optdepends=(
-  alsa-lib
   alsa-plugins
   cups
   dosbox
-  ffmpeg
   gnutls
   gst-plugins-bad
   gst-plugins-base
-  gst-plugins-base-libs
   gst-plugins-good
   gst-plugins-ugly
-  gstreamer
-  libgphoto2
-  libpulse
-  libusb
   libxcomposite
   libxinerama
-  opencl-icd-loader
-  pcsclite
   perl
   samba
-  sane
   sdl2
   unixodbc
   v4l-utils

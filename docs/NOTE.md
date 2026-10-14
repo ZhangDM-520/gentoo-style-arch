@@ -1,3 +1,69 @@
+## 2026-10-15 — wave-3 burn-down: wine/gegl-git/samba/imlib2/pinentry declare 71 leaked links; a split output's internal libs close the loop through a sibling dep
+
+**Symptom.** The installed-set sweep recomputed from the installed payloads
+(after the wave-2 rebuilds shifted the set: 418 gap rows across 154 outputs
+of 896 installed workspace outputs, vs the 2026-10-14 table's ~449/158)
+ranks the next five offenders, all rule-54 shape — build systems
+auto-detect a lib present at build time and hard-link it into shipped
+modules while the recipe declares it only as `makedepends`/`optdepends`:
+`wine` (16 rows), `gegl-git` (15), `samba` (`ldb` 14 + `smbclient` 2),
+`pinentry` (13), `imlib2` (13).
+
+**Root cause.** Each recipe ships an optdepends-per-shipped-module table in
+denial: wine's per-feature unix libs (gstreamer/sane/libgphoto2/pcsclite/
+OpenCL…), gegl's per-format plugins, imlib2's per-format loaders,
+pinentry's per-toolkit backend binaries — every one a hard `DT_NEEDED`
+inside a shipped file. `samba` adds a fifth shape: its bundled `ldb` output
+links samba's *internal* libs (`libndr.so.6`, `libsamba-util.so.0`, … with
+up to 30 refs each) which the same PKGBUILD ships in the sibling
+`smbclient` output — split outputs leaking into each other.
+
+**Fix.** Declare what the payload links: wine +10 owners (retired 10
+matching optdepends), gegl-git +14 owner entries — `pango` covers both its
+sonames — (retired 5 now-hard optdepends, kept ffmpeg/libtiff/libgexiv2
+which have no leaked link; mirrored into `PKGBUILD.in`, the generator
+template, or the next regen reverts it), imlib2 +11 (retired 6; `libwebp`
+kept — its loader carries no row), pinentry +8 (retired all 4 backends),
+samba `ldb` +5 (`gnutls` `gpgme` `libldap` `python` plus the versioned
+sibling `"smbclient=$epoch:$pkgver-$pkgrel"` covering all 11 internal-soname
+rows) and `smbclient` +1 (`libngtcp2`; its two sonames are one owner).
+Spellings are evidence-based (`expac '%n :: %P'`): stock names where the
+house providers carry them (`ffmpeg` ← ffmpeg-git, `libpulse`,
+`libusb`, `gnutls`, `gtk3`, `libx11`, `qt5-base`, `qt6-base`, `cairo`,
+`gdk-pixbuf2`, `libpng`, `libraw`, `librsvg`, `pango`, `libnsgif`,
+`libheif`, `libjxl`, `glib2`, `libngtcp2`), plain names otherwise; and when
+two packages of one family provide different sonames the provide match
+decides — `gcr-4` over `gcr`, because `libgcr-4.so.4` is provided only by
+`gcr-4`.
+
+**Validation.** `bash -n` ×6 (incl. `PKGBUILD.in`), `.SRCINFO` regenerated
+per recipe (gegl-git twice — the rebuild's VCS `pkgver()` write-back
+r11485→r11493 landed after the agents' regen). Rebuild chain
+(`makepkg -sfC`, one heavy build at a time) + one `pacman -U` per recipe:
+pinentry 1.3.3-1, imlib2 1.12.7-3, gegl-git 0.4.73.r11493.5a15f6d2b-1,
+samba 2:4.25.0-1 (its **three output archives in ONE transaction** — the
+new ldb↔smbclient mutual dep resolves in-transaction exactly because
+gsa-install transacts one recipe's output archives together),
+wine 11.19-1. `gsa --qa-check declared-deps <id>` clean for all five and for
+the full seam over every on-disk archive. Full battery **65/65 PASS**.
+
+**Durable rules.** (1) A split output's leak can point at a sibling output:
+declare the versioned sibling name, never a stem list — the QA closure walk
+strips version constraints, and the cycle is installable only because one
+recipe's archives ride one `pacman -U`; never hand-split such an install.
+(2) Retiring the matched `optdepends` entries is part of the fix, not a
+follow-up — wave-2's rule 1 also covers entries whose capability was
+previously only a `makedepends` name. (3) Re-verified no-`pkgrel`-bump
+precedent for declaration-only fixes (`git show` of the wave-1/2 commits
+carries none) — the rebuilt archive replaces the installed metadata
+in-place. (4) Sweep cost is a shape problem, not a size problem: the
+per-soname `ldconfig -p`/`pacman -Qo` fork-per-lookup script needed ~96 min
+over 896 outputs; batching the same semantics (one `readelf` per 400 files,
+one `pacman -Ql` owner table, one ldconfig cache) runs in 80 s with
+byte-identical output on a 40-package cross-check — worth promoting to
+`tools/` (with the fixture pinning every sibling tool gets) if the
+remaining ~150-output backlog keeps burning waves.
+
 ## 2026-10-14 — wave-2 burn-down: mlt/opencv/libreoffice-fresh/gimp-git declare the 58 leaked links; the optdepends-per-plugin shape is the leak's home
 
 **Symptom.** The declared-deps lint + installed-set sweep attributed the
