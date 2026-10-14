@@ -14,41 +14,48 @@ arch=(x86_64)
 url='https://www.mltframework.org'
 license=(LGPL-2.1-only)
 provides=('libmlt-7.so' 'libmlt++-7.so')
-depends=(glibc
+# links: the shipped plugin modules link these (rule-54 class —
+# optdepends-only or undeclared before). Not trimmable.
+depends=(ffmpeg
+         fftw
+         fontconfig
+         gdk-pixbuf2
+         glib2
+         glibc
+         jack
          libebur128
+         libepoxy
+         libexif
          libgcc
-         libstdc++)
-optdepends=('ffmpeg: ffmpeg plugin'
-            'fftw: plus plugin'
-            'fontconfig: gdk plugin'
-            'frei0r-plugins: for additional effects'
-            'gdk-pixbuf2: gdk plugin'
-            'glib2: gdk plugin'
-            'jack: JACK sound output plugin'
+         libglvnd
+         libgomp
+         libplacebo
+         libsamplerate
+         libstdc++
+         libvorbis
+         libx11
+         libxml2
+         lilv
+         movit
+         opencv
+         pango
+         qt6-base
+         qt6-svg
+         rnnoise
+         rtaudio
+         rubberband
+         sdl2
+         sox
+         vid.stab
+         zlib)
+# optionality kept only where nothing shipped LINKS the lib (dlopen/plugin
+# sets and bindings): frei0r-plugins, ladspa, python, qt6-5compat, SDL1 stack
+optdepends=('frei0r-plugins: for additional effects'
             'ladspa: LADSPA plugins'
-            'libepoxy: opengl plugin'
-            'libexif: auto rotate plugin'
-            'libglvnd: opengl plugin'
-            'libsamplerate: libavresample plugin'
-            'libvorbis: vorbis plugin'
-            'libx11: SDL1 plugin'
-            'libxml2: XML plugin'
-            'movit: opengl plugin'
-            'opencv: openCV plugin'
             'qt6-5compat: Qt6 plugin'
-            'qt6-base: Qt6 plugin'
-            'qt6-svg: Qt6 plugin'
-            'pango: gdk plugin'
             'python: python bindings'
-            'rnnoise: rnnoise plugin'
-            'rtaudio: rtaudio plugin'
-            'rubberband: audio pitch plugin'
-            'sdl2: SDL2 plugin'
             'sdl_image: SDL1 plugin'
-            'sdl12-compat: SDL1 plugin'
-            'sox: SOX (Audio Swiss Army Knife) plugin'
-            'vid.stab: video stabilize plugin'
-            'zlib: glaxnimate plugin')
+            'sdl12-compat: SDL1 plugin')
 makedepends=(cmake
              eigen
              ffmpeg

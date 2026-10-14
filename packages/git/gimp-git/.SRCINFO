@@ -60,17 +60,20 @@ pkgbase = gimp-git
 	depends = cairo>=1.14.0
 	depends = appstream>=0.16.1
 	depends = gobject-introspection>=1.32.0
+	depends = gtk3
+	depends = libxpm
+	depends = libmng
+	depends = libgudev
+	depends = libbacktrace
+	depends = ghostscript
+	depends = alsa-lib
+	depends = aalib
 	optdepends = gutenprint: for sophisticated printing only as gimp has built-in cups print support
-	optdepends = alsa-lib: for MIDI event controller module
 	optdepends = curl: for URI support
-	optdepends = ghostscript: for postscript support
-	optdepends = libxpm: XPM support
 	optdepends = webkit2gtk-4.1: HTML renderer and web content engine
 	optdepends = libheif: HEIF support
 	optdepends = libwebp: WebP support
-	optdepends = libmng: MNG support
 	optdepends = iso-codes: Language support
-	optdepends = aalib: ASCII art support
 	optdepends = zlib: Compression routines
 	optdepends = gjs: JavaScript scripting support
 	optdepends = luajit: LUA scripting support

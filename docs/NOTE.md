@@ -1,3 +1,45 @@
+## 2026-10-14 — wave-2 burn-down: mlt/opencv/libreoffice-fresh/gimp-git declare the 58 leaked links; the optdepends-per-plugin shape is the leak's home
+
+**Symptom.** The declared-deps lint + installed-set sweep attributed the
+bulk of the backlog to four recipes: `mlt` (45 rows — it enumerates every
+plugin's libraries as `optdepends` while **shipping the linked plugins**),
+`opencv` (30 — vtk/qt6/tesseract/jsoncpp/hdf5/google-glog modules),
+`libreoffice-fresh` (21 — gtk3/gtk4/Qt6/gstreamer/kio/coin outputs),
+`gimp-git` (148 refs, 111 of them `libgtk-3.so.0` with no gtk3 declaration
+anywhere).
+
+**Fix.** Declare what the payload links: mlt +28 `depends` (25 matching
+`optdepends` retired — frei0r/ladspa/python/qt6-5compat stay optional,
+nothing ships a link to them), opencv +6 (retired 3), libreoffice-fresh +16
+in the **main output** (verified the SDK output links none of them; retired
+10 optdepends), gimp-git +8 (retired 5; mirrored into `PKGBUILD.in`, the
+generator template, or the fix dies on regen). Spellings are evidence-based
+(`pacman -Qi` Provides): stock names where house packages provide them
+(`gtk3` ← gtk3-git, `qt6-base` ← qt6-base-git, `jack` ← jack2-git,
+`libgomp` ← libgomp-snapshot, `zlib` ← zlib-ng-compat-git), literal names
+where nothing provides the stock name (`google-glog` provides only
+`libglog.so=2-64`, `kio`/`coin-or-mp` ship no matching provide).
+
+**Validation.** Recipe-level: `bash -n` ×5 (incl. `PKGBUILD.in`), `.SRCINFO`
+regenerated per recipe, `srcinfo-freshness` PASS (651 recipes),
+`tests/run-all.sh recipe` PASS, full battery **65/65 PASS**. Archive-level
+(.PKGINFO carrying the new depends + the lint's verdict) is **pending a
+rebuild wave blocked by the host's TUN proxy outage** — all outbound
+traffic routes through the `Bettbox` fake-IP tunnel and its upstream is
+EOF-ing mid-TLS; the SRCDEST cache was emptied in the same cache-cleaning
+event that emptied `~/.cargo/registry`, so no `--holdver` offline path
+exists either. Record the split honestly rather than claiming the
+archive-level proof.
+
+**Durable rules.** (1) The `optdepends`-per-plugin shape is a rule-54 leak
+whenever the plugin ships linked in the payload — an optional-dependency
+table describing shipped binaries is a depends table in denial. (2) A
+split recipe's declarations belong to the output that carries the linking
+files (libreoffice-fresh's SDK links none of these). (3) A recipe with a
+generator template (`PKGBUILD.in`) needs every manual edit mirrored or the
+next regen reverts it. (4) `makepkg --holdver` is the offline path for VCS
+rebuilds — but only when SRCDEST actually holds the mirror.
+
 ## 2026-10-14 — live breakage sweep: a jbigkit SONAME drift poisoned four consumers and two apps, and libadwaita carried a stale shared subproject link
 
 **Symptom.** The undeclared-deps sweep (same-day) found two sonames

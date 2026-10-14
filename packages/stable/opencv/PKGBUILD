@@ -32,16 +32,22 @@ pkgdesc='Open Source Computer Vision Library'
 arch=(x86_64)
 license=(Apache-2.0)
 url='https://opencv.org/'
+# google-glog, hdf5, jsoncpp, qt6-base, tesseract, vtk: the shipped payload
+# links these (rule-54 class — optdepends-only or undeclared before).
+# Not trimmable.
 depends=(abseil-cpp
          cblas
          ffmpeg
          freetype2
          glib2
          glibc
+         google-glog
          gst-plugins-base
          gst-plugins-base-libs
          gstreamer
          harfbuzz
+         hdf5
+         jsoncpp
          lapack
          libdc1394
          libgcc
@@ -56,7 +62,10 @@ depends=(abseil-cpp
          openjpeg2
          verdict
          protobuf
+         qt6-base
          tbb
+         tesseract
+         vtk
          zlib)
 # trim: cuda/cudnn dropped together with the opencv-cuda and
 # python-opencv-cuda split outputs (the build-cuda tree is not built)
@@ -79,10 +88,9 @@ makedepends=(ant
              qt6-5compat
              vtk)
 # trim: the 'opencv-samples' optdepend dropped with the opencv-samples split output
-optdepends=('vtk: for the viz module'
-            'glew: for the viz module'
-            'qt6-base: for the HighGUI module'
-            'hdf5: for the HDF5 module'
+# vtk/qt6-base/hdf5 retired from here: the shipped payload links them
+# (rule-54 class), so they are depends now
+optdepends=('glew: for the viz module'
             'opencl-icd-loader: For coding with OpenCL'
             'java-runtime: Java interface')
 source=(git+https://github.com/opencv/opencv#tag=$pkgver

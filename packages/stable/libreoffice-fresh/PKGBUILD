@@ -339,25 +339,20 @@ package_libreoffice-fresh() {
         'zxing-cpp' 'xdg-utils'
         'libldap' 'fontconfig' 'zlib' 'libpng' 'freetype2' 'raptor' 'libxml2'
         'cairo' 'libx11' 'expat' 'glib2' 'boost-libs' 'libtiff' 'dbus' 'glibc'
-        'librevenge' 'libxext' 'openjpeg2' 'argon2' 'md4c')
+        'librevenge' 'libxext' 'openjpeg2' 'argon2' 'md4c'
+        # qt6-base qt6-multimedia gtk3 gtk4 gst-plugins-base-libs postgresql-libs mariadb-libs libwpg libsm libmythes libice kio gstreamer coin-or-mp coin-or-coinutils at-spi2-core: the shipped payload links these (rule-54 class — undeclared or makedepends-only before). Not trimmable.
+        'qt6-base' 'qt6-multimedia' 'gtk3' 'gtk4' 'gst-plugins-base-libs'
+        'postgresql-libs' 'mariadb-libs' 'libwpg' 'libsm' 'libmythes'
+        'libice' 'kio' 'gstreamer' 'coin-or-mp' 'coin-or-coinutils'
+        'at-spi2-core')
     optdepends=('libreoffice-fresh-i18n: Localizations'
         'java-runtime:     adds java support'
         'java-environment>=17: required by extension-wiki-publisher and extension-nlpsolver'
         'pstoedit:         translates PostScript and PDF graphics into other vector formats'
-        'libmythes:        for use in thesaurus'
         'beanshell:        interactive java -- good for prototyping/macros'
-        'libwpg:           library for importing and converting WordPerfect Graphics format'
         'sane:             for scanner access'
         'unixodbc:         adds ODBC database support'
-        'gst-plugins-base-libs: for multimedia content, e.g. in Impress'
         'libpaper:         takes care of papersize'
-        'postgresql-libs:  for postgresql-connector'
-        'mariadb-libs:     for mysql-connector'
-        'coin-or-mp:       required by the Calc solver'
-        'gtk3:             for GTK3 integration'
-        'gtk4:             for GTK4 integration (experimental)'
-        'kio:              for KF6 KDE desktop integration'
-        'qt6-multimedia:   for Qt6 desktop integration'
         'rhino:            for JavaScript support')
     backup=(etc/libreoffice/sofficerc
         etc/libreoffice/bootstraprc
