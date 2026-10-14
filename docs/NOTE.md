@@ -23,13 +23,24 @@ where nothing provides the stock name (`google-glog` provides only
 **Validation.** Recipe-level: `bash -n` ×5 (incl. `PKGBUILD.in`), `.SRCINFO`
 regenerated per recipe, `srcinfo-freshness` PASS (651 recipes),
 `tests/run-all.sh recipe` PASS, full battery **65/65 PASS**. Archive-level
-(.PKGINFO carrying the new depends + the lint's verdict) is **pending a
-rebuild wave blocked by the host's TUN proxy outage** — all outbound
-traffic routes through the `Bettbox` fake-IP tunnel and its upstream is
-EOF-ing mid-TLS; the SRCDEST cache was emptied in the same cache-cleaning
+was blocked for ~92 min by the host's TUN proxy outage (all outbound
+traffic routes through the `Bettbox` fake-IP tunnel; its upstream EOF'd
+mid-TLS, and the SRCDEST cache had been emptied in the same cache-cleaning
 event that emptied `~/.cargo/registry`, so no `--holdver` offline path
-exists either. Record the split honestly rather than claiming the
-archive-level proof.
+existed). After recovery the chain rebuilt and installed all four —
+`.PKGINFO` dep counts match the arithmetic exactly (mlt 4+28=32, opencv
+26+6→35 after two more, gimp-git 22+8=30) — and `gsa --qa-check
+declared-deps` went **clean**. Two follow-ups surfaced from actually
+rebuilding: opencv 5.0.0's newer tree grew three more direct links
+(`libavif`, `ceres-solver`, `gflags` — the pre-build analysis could not
+see them), and `libreoffice-fresh`'s `libofficebean.so` NEEDs `libjawt.so`
+— a **runtime-choice capability** (a JVM supplies it; the JDKs are
+mutually exclusive, so a concrete `jdk-openjdk` dep would violate the
+house virtual-only rule) registered as a documented, review-dated entry in
+`config/abi-exclusions.conf` instead. Gimp-git's VCS `pkgver()`
+write-back landed after the agents' `.SRCINFO` regen and briefly reddened
+`srcinfo-freshness` — regenerate `.SRCINFO` after any build of a VCS
+recipe before calling the tree done.
 
 **Durable rules.** (1) The `optdepends`-per-plugin shape is a rule-54 leak
 whenever the plugin ships linked in the payload — an optional-dependency
@@ -38,7 +49,14 @@ split recipe's declarations belong to the output that carries the linking
 files (libreoffice-fresh's SDK links none of these). (3) A recipe with a
 generator template (`PKGBUILD.in`) needs every manual edit mirrored or the
 next regen reverts it. (4) `makepkg --holdver` is the offline path for VCS
-rebuilds — but only when SRCDEST actually holds the mirror.
+rebuilds — but only when SRCDEST actually holds the mirror. (5) A
+runtime-choice capability whose concrete provider is mutually exclusive
+with alternatives (JDK `libjawt.so`/`libjvm.so`) belongs in
+`config/abi-exclusions.conf` with a review date — never as a dependency on
+one concrete provider. (6) Rebuilding is part of the analysis: a source
+tree that moved between sweep and rebuild can grow new links (opencv's
+three), so the lint's post-build verdict is the acceptance gate, not the
+pre-build worklist.
 
 ## 2026-10-14 — live breakage sweep: a jbigkit SONAME drift poisoned four consumers and two apps, and libadwaita carried a stale shared subproject link
 

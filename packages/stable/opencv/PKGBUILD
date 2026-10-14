@@ -37,8 +37,10 @@ url='https://opencv.org/'
 # Not trimmable.
 depends=(abseil-cpp
          cblas
+         ceres-solver
          ffmpeg
          freetype2
+         gflags
          glib2
          glibc
          google-glog
@@ -49,6 +51,7 @@ depends=(abseil-cpp
          hdf5
          jsoncpp
          lapack
+         libavif
          libdc1394
          libgcc
          libglvnd
@@ -67,6 +70,9 @@ depends=(abseil-cpp
          tesseract
          vtk
          zlib)
+# libavif/ceres-solver/gflags: linked by the shipped imgcodecs and sfm
+# modules (rule-54 class) — the 5.0.0 rebuild grew these beyond the
+# pre-build analysis. Not trimmable.
 # trim: cuda/cudnn dropped together with the opencv-cuda and
 # python-opencv-cuda split outputs (the build-cuda tree is not built)
 makedepends=(ant
