@@ -26,6 +26,7 @@ fn installed_view() -> Vec<QaInstalled> {
             version: pkg.version.clone(),
             provides: pkg.provides.clone(),
             depends: pkg.depends.clone(),
+            files: pkg.files.clone(),
         })
         .collect()
 }

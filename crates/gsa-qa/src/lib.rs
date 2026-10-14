@@ -339,6 +339,7 @@ pub fn registry() -> Registry {
             report_check("swap-drift", Scope::InstalledDb, checks::swap_drift),
             report_check("abi-closure", Scope::Archive, checks::abi_closure),
             report_check("abi-exposure", Scope::InstalledDb, checks::abi_exposure),
+            report_check("declared-deps", Scope::Archive, checks::declared_deps),
         ],
         refusing: vec![refusing_check(
             "stale-ignorepkg",

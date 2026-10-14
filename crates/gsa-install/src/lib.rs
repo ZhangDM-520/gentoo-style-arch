@@ -439,6 +439,7 @@ fn plan(candidates: &[Candidate], ctx: &DecisionContext, db: &LocalDb) -> Result
             version: pkg.version.clone(),
             provides: pkg.provides.clone(),
             depends: pkg.depends.clone(),
+            files: pkg.files.clone(),
         })
         .collect();
 

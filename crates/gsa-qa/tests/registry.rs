@@ -178,6 +178,7 @@ fn registry_resolves_every_keyword_with_its_scope_and_severity() {
         ("swap-drift", "installed-db", Severity::Report),
         ("abi-closure", "archive", Severity::Report),
         ("abi-exposure", "installed-db", Severity::Report),
+        ("declared-deps", "archive", Severity::Report),
         ("stale-ignorepkg", "archive", Severity::InstallRefusing),
     ] {
         let handle = registry
@@ -219,6 +220,7 @@ fn the_five_lints_can_never_produce_a_refuse_row() {
         version: "1.0.0-1".to_string(),
         provides: vec!["liby.so=2-64".to_string()],
         depends: Vec::new(),
+        files: Vec::new(),
     }];
     let input = QaInput {
         recipes: &recipes,

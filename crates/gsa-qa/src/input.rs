@@ -30,16 +30,24 @@ pub struct QaArchive {
 }
 
 /// One installed package as the installed-DB-scope checks need it (name,
-/// version, provides, depends — the `pacman -Qi`-equivalent view). The
-/// caller converts its own DB reader (`gsa-install`'s `LocalDb`, or a
-/// fixture's fabricated `local/` tree behind the `pacman-conf DBPath` stub)
-/// into this shape; `gsa-qa` never shells to pacman.
+/// version, provides, depends — the `pacman -Qi`-equivalent view — plus the
+/// owned-path list, the runtime file truth of rule 25(b)). The caller
+/// converts its own DB reader (`gsa-install`'s `LocalDb`, or a fixture's
+/// fabricated `local/` tree behind the `pacman-conf DBPath` stub) into this
+/// shape; `gsa-qa` never shells to pacman.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct QaInstalled {
     pub name: String,
     pub version: String,
     pub provides: Vec<String>,
     pub depends: Vec<String>,
+    /// Owned paths from the local-DB `files` list (slash-less, as pacman
+    /// records them). A soname maps to its owner by basename — the
+    /// `pacman -Qo` equivalent for providers that carry no soname provide
+    /// (`gsa-install::gates::needed_misses` consults the same truth; the
+    /// vocabulary is mirrored here rather than imported because
+    /// `gsa-install` depends on `gsa-qa`, not the other way round).
+    pub files: Vec<String>,
 }
 
 /// What one check run inspects.

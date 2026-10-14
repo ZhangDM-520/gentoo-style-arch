@@ -255,6 +255,7 @@ pub fn report(ctx: &MaintCtx<'_>) -> Vec<Row> {
                             version: pkg.version.clone(),
                             provides: pkg.provides.clone(),
                             depends: pkg.depends.clone(),
+                            files: pkg.files.clone(),
                         })
                         .collect()
                 })

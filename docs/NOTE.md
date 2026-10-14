@@ -1,3 +1,40 @@
+## 2026-10-14 — live breakage sweep: a jbigkit SONAME drift poisoned four consumers and two apps, and libadwaita carried a stale shared subproject link
+
+**Symptom.** The undeclared-deps sweep (same-day) found two sonames
+unresolvable at load time, i.e. breakage happening *now*: `libjbig.so.2.1`
+(NEEDED by `libtiff-git`, `graphicsmagick`, `imagemagick`, `netpbm`) against
+an installed `jbigkit 2.2` that ships `libjbig.so.2.2`; and
+`libministream.so.1` (NEEDED by `libadwaita-git`'s `libadwaita-1.so`, owned
+by no package) — `gnome-calculator`/`loupe` failed to load.
+
+**Root causes.** (1) jbigkit bumped its SONAME and no rebuild wave followed:
+the four consumers kept their archives and their NEEDED entries pointed at
+a gone soname — the ABI-coupled-batch rule violated at a leaf. (2) The
+installed libadwaita predated upstream's ministream subproject pin: an
+older build linked the subproject **shared** while meson never installs it
+(upstream now pins `default_library=static`,
+`src/libadwaita/meson.build` `dependency('ministream', …)`), so the archive
+shipped a NEEDED for a file that could not exist on any host.
+
+**Fix.** Rebuild wave, `makepkg -sfC`, install each, order dictated by the
+blocker graph: `libtiff-git` first (its `g-ir-scanner`/loader breakage
+walled other builds), then `graphicsmagick`, `imagemagick`, `netpbm`, then
+`libadwaita-git`. Verified per archive with `readelf -d` (all jbig links
+now `libjbig.so.2.2`; libadwaita has **zero** ministream references) and
+post-install `ldd | grep 'not found'` = 0 across every previously-broken
+consumer. The three orphan-wall recipes' proofs rode the same pass.
+
+**Durable rules.** (1) MEMORY rule 55: a provider SONAME bump needs the
+direct NEEDED consumers rebuilt in the same pass — scan `ldd` for "not
+found" after any leaf library update; pacman keeps the consumers
+"installed" while they are load-broken. (2) A meson wrap subproject linked
+shared but not installed ships a broken archive by construction — when a
+recipe allows wrap fallback (libadwaita/ministream, deliberately), confirm
+the subproject's `default_library` matches what the payload can satisfy.
+(3) Build order for a repair wave follows the blocker graph, not the
+symptom list: `libtiff-git`'s loader breakage failed unrelated builds at
+their introspection step.
+
 ## 2026-10-14 — orphan-removal broke shared libs: three recipes shipped runtime links their `depends` never declared (auto-detected optionals under `!autodeps`)
 
 **Symptom.** After a whole-set build, `pacman -Qdt` flagged 31 packages as
@@ -53,9 +90,15 @@ DT_NEEDED closure against the provides-aware declared closure; makedepends
 is a leak whenever the link survives into the payload. (2) Spell a dep so
 the provider can satisfy it: bare `X.so` stems only where the provider
 carries the soname provide, plain name otherwise. (3) A gap class with no
-guard re-drifts: the declared-deps axis is unguarded today (`abi-closure`
-resolves NEEDED against the provide surface, the install `needed` gate
-against runtime truth) — a `declared-deps` QA lint is the proposed guard.
+guard re-drifts — and the guard now exists: the `declared-deps` QA lint
+landed in `crates/gsa-qa` (same-day, `tests/recipe-contract.sh` section G,
+mutation-probed) and reproduces the incident class live (its first real
+findings include `libtiff-git`'s `tiffgt`→`libglut.so.3`/`libGL.so.1` with
+`freeglut`/`mesa` in makedepends+optdepends only); soname→provider
+resolution consults installed file ownership as well as provides, so
+no-provide stock providers (the `libxres` class) verify coverage instead
+of drowning the report, and `unresolvable-link` stays reserved for sonames
+no owner anywhere explains.
 
 ## 2026-10-14 — gsa-pm bootstrap proof wall: an IgnorePkg-pinned `ccache` against a moved `hiredis` soname kills every makepkg compile through the injected compiler farm; the recipe now probes the shim before trusting it
 

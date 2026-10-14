@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Recipe-contract lints: provides versioning and the purged-tools denylist (the
-# static IgnorePkg closure lint was retired 2026-10-05 in favour of dynamic
-# install-time registration). One implementation per rule lives in the
-# engine's QA registry (crates/gsa-qa/src/checks.rs `provides-versioning` /
-# `purged-tools` — the ports of build-all.fish audit_lint_provides /
-# audit_lint_purged); `gsa -Ma` renders them in its report and the hidden
-# `gsa --qa-check <name>` seam (contract §D.1) runs one of them — the seam is
-# the interface, and this fixture is its gating walker (red/green per rule,
-# then the real-repo gates).
+# Recipe-contract lints: provides versioning, the purged-tools denylist and
+# the declared-deps archive lint (the static IgnorePkg closure lint was
+# retired 2026-10-05 in favour of dynamic install-time registration). One
+# implementation per rule lives in the engine's QA registry
+# (crates/gsa-qa/src/checks.rs `provides-versioning` / `purged-tools` /
+# `declared-deps` — the first two are ports of build-all.fish
+# audit_lint_provides / audit_lint_purged, the third is the
+# DT_NEEDED-vs-declared-deps guard of docs/MEMORY.md rule 54); `gsa -Ma`
+# renders them in its report and the hidden `gsa --qa-check <name>` seam
+# (contract §D.1) runs one of them — the seam is the interface, and this
+# fixture is its gating walker (red/green per rule, then the real-repo
+# gates).
 #
 # Enforcement mapping (the settled two-tier rule):
 #   deterministic + must-gate  provides-versioning, purged-tools → QA lints,
@@ -20,6 +23,11 @@ set -euo pipefail
 # Section F pins the CLI name surface instead of a lint: pkgbase + pkgname from
 # a recipe's committed .SRCINFO both resolve as package references, and an
 # unknown name is refused (red-first probe, see the section's header).
+#
+# Section G pins the `declared-deps` archive lint: a consumer archive's ELF
+# DT_NEEDED closure against the provides-aware transitive closure of its
+# declared depends (real ELF payloads, cc + -Wl,-soname like
+# tests/abi-closure-lint.sh).
 #
 # Every scratch workspace and conf lives under $TMPDIR; the real-repo sections
 # are read-only.
@@ -536,4 +544,251 @@ EOF
 #      red; reverse → green.
 # ─────────────────────────────────────────────────────────────────────────────
 
-printf 'recipe contract fixture: PASS (2 lint seams gated, name surface pinned, real-repo gates green)\n'
+# ─── G. declared-deps: the DT_NEEDED-vs-declared-deps axis, red/green ───────
+# The guard for docs/MEMORY.md rule 54's gap (docs/NOTE.md 2026-10-14
+# "orphan-removal broke shared libs"): with !autodeps an archive's depends is
+# exactly what its PKGBUILD declares, so a payload link whose provider is not
+# in the declared-depends closure leaves the provider dep-installed,
+# orphan-flagged and removable. The staged shape is the incident's, in a
+# synthetic workspace: prov-git ships usr/lib/libfoo.so.3 and declares
+# provides = libfoo.so; app-git's usr/lib/libapp.so.1 NEEDs libfoo.so.3
+# (undeclared → undeclared-link), libghost.so.1 (nothing provides it →
+# unresolvable-link) and libself.so.1 (shipped inside the SAME archive as
+# usr/lib/libself.so.1.0 → self-shipped, covered), while cc's own libc/libgcc_s
+# links pin the base-system rule. G5/G6 then grow the ghost an OWNER — a
+# fabricated installed package with NO provides owning usr/lib/libghost.so.1
+# (the `pacman -Qo` truth): the row must flip unresolvable-link →
+# undeclared-link naming the owner, and clear once the owner is declared by
+# plain name (the at-spi2→libxres shape). Real ELF payloads, cc + -Wl,-soname,
+# like tests/abi-closure-lint.sh.
+(
+    set -euo pipefail
+    command -v cc >/dev/null 2>&1 || fail 'G: cc is required to synthesize ELF payloads'
+
+    # The installed-DB view answers the fixture's fabricated root, never the
+    # host's /var/lib/pacman (fixtures never read host state) — the same
+    # pacman-conf stub tests/abi-closure-lint.sh wires in.
+    mkdir -p "$tmp/declared-db" "$tmp/declared-bin"
+    cat >"$tmp/declared-bin/pacman-conf" <<'EOF'
+#!/usr/bin/env bash
+[ "${1:-}" = DBPath ] && printf '%s\n' "${GSA_FAKE_DB_PATH:?}"
+exit 0
+EOF
+    chmod +x "$tmp/declared-bin/pacman-conf"
+    export GSA_FAKE_DB_PATH="$tmp/declared-db"
+    export PATH="$tmp/declared-bin:$PATH"
+
+    # make_lib DIR FILE SONAME — one tiny shared object carrying DT_SONAME
+    # and an anchor symbol consumers reference (so the linker cannot drop
+    # the dependency). Symbols key on the FILE name, so a file name that
+    # differs from its soname still links.
+    make_lib() {
+        mkdir -p "$1"
+        printf 'int gsa_decl_anchor_%s;\n' "${2//[^A-Za-z0-9]/_}" |
+            cc -shared -fPIC -x c - -Wl,-soname,"$3" -o "$1/$2"
+    }
+
+    # make_consumer FILE SONAME NEED_DIR NEED_FILE... — a shared object with
+    # DT_SONAME SONAME and one DT_NEEDED per NEED_FILE's own DT_SONAME.
+    make_consumer() {
+        local out=$1 soname=$2 need_dir=$3
+        shift 3
+        local refs=() links=() f sym
+        for f in "$@"; do
+            sym="gsa_decl_anchor_${f//[^A-Za-z0-9]/_}"
+            refs+=("extern int $sym;" "int gsa_decl_ref_${f//[^A-Za-z0-9]/_}(void) { return $sym; }")
+            links+=(-l:"$f")
+        done
+        mkdir -p "$(dirname "$out")"
+        printf '%s\n' "${refs[@]}" |
+            cc -shared -fPIC -x c - -Wl,-soname,"$soname" -L"$need_dir" \
+                -Wl,-rpath-link,"$need_dir" "${links[@]}" -o "$out"
+    }
+
+    # make_archive DIR PKGNAME STAGE — a makepkg-shaped archive beside the
+    # recipe (payload + .PKGINFO), the artifact shape discovery reads.
+    make_archive() {
+        local dir=$1 name=$2 stage=$3
+        {
+            printf 'pkgname = %s\n' "$name"
+            printf 'pkgver = 1.0.0-1\n'
+            printf 'arch = x86_64\n'
+        } >"$stage/.PKGINFO"
+        tar --zstd -cf "$dir/packages/$name/$name-1.0.0-1-x86_64.pkg.tar.zst" -C "$stage" .
+    }
+
+    # db_install DBROOT NAME VERSION FILE... — one fabricated pacman local-DB
+    # entry with an owned-files list and NO provides (the ownership tier's
+    # `pacman -Qo` truth; the shape tests/gsa-qa-v2.sh's db_install writes).
+    db_install() {
+        local db=$1 name=$2 version=$3
+        shift 3
+        local dir="$db/local/$name-$version"
+        mkdir -p "$dir"
+        {
+            printf '%%NAME%%\n%s\n\n' "$name"
+            printf '%%VERSION%%\n%s\n\n' "$version"
+            printf '%%BASE%%\n%s\n' "$name"
+        } >"$dir/desc"
+        {
+            printf '%%FILES%%\n'
+            printf '%s\n' "$@"
+        } >"$dir/files"
+    }
+
+    ws=$tmp/declared-ws
+    make_workspace "$ws" 1 2 low
+    add_package "$ws" prov-git "$gsa_meta_any"
+    add_package "$ws" mid-git "$gsa_meta_any"
+    add_package "$ws" app-git "$gsa_meta_any"
+
+    # The link directory: one stub per NEEDED (file name != soname for the
+    # self-shipped member on purpose).
+    link=$tmp/declared-link
+    make_lib "$link" libfoo.so.3 libfoo.so.3
+    make_lib "$link" libghost.so.1 libghost.so.1
+    make_lib "$link" libself.so.1.0 libself.so.1
+
+    # prov-git's payload: the provider, shipped and provided.
+    stage=$tmp/declared-stage-prov
+    make_lib "$stage/usr/lib" libfoo.so.3 libfoo.so.3
+    make_archive "$ws" prov-git "$stage"
+    write_srcinfo "$ws/packages/prov-git" prov-git
+    printf '\tprovides = libfoo.so\n' >>"$ws/packages/prov-git/.SRCINFO"
+
+    # mid-git: the transitive middleman (declares the provider, ships nothing).
+    write_srcinfo "$ws/packages/mid-git" mid-git
+    printf '\tdepends = prov-git\n' >>"$ws/packages/mid-git/.SRCINFO"
+
+    # app-git's payload: NEEDs libfoo.so.3 + libghost.so.1 + libself.so.1 and
+    # ships its own libself (so the third is self-shipped).
+    stage=$tmp/declared-stage-app
+    make_consumer "$stage/usr/lib/libapp.so.1" libapp.so.1 "$link" libfoo.so.3 libghost.so.1 libself.so.1.0
+    make_lib "$stage/usr/lib" libself.so.1.0 libself.so.1
+    make_archive "$ws" app-git "$stage"
+
+    # G0: no built outputs at all → the loud skipped class (never a vacuous
+    # clean), abi-closure's precedent.
+    ws_empty=$tmp/declared-ws-empty
+    make_workspace "$ws_empty" 1 2 low
+    add_package "$ws_empty" lonely-git "$gsa_meta_any"
+    lint "$ws_empty" declared-deps
+    ((FIXTURE_RC == 0)) || fail "G0: --qa-check must stay report-only (rc=$FIXTURE_RC)"
+    grep -Fq 'qa-check declared-deps: skipped' <<<"$FIXTURE_OUTPUT" ||
+        fail "G0: no built outputs must report skipped, got: $FIXTURE_OUTPUT"
+    grep -Fq 'qa-check declared-deps: clean' <<<"$FIXTURE_OUTPUT" &&
+        fail "G0: a skipped lint must not claim clean, got: $FIXTURE_OUTPUT"
+
+    # G1 (red): app-git declares no depends at all — exactly two findings,
+    # one per (soname, provider-or-unresolved): the workspace provider lies
+    # outside the declared closure (undeclared-link), the ghost resolves to
+    # nothing (unresolvable-link). The self-shipped and base-system needs
+    # must stay silent.
+    write_srcinfo "$ws/packages/app-git" app-git
+    lint "$ws" declared-deps
+    ((FIXTURE_RC == 0)) || fail "G1: --qa-check must stay report-only (rc=$FIXTURE_RC)"
+    grep -Fq 'qa-check declared-deps: 2 finding(s)' <<<"$FIXTURE_OUTPUT" ||
+        fail "G1: expected exactly 2 findings, got: $FIXTURE_OUTPUT"
+    grep -Fq "consumer app-git (" <<<"$FIXTURE_OUTPUT" ||
+        fail "G1: the finding must name the recipe and member, got: $FIXTURE_OUTPUT"
+    grep -Fq "usr/lib/libapp.so.1): needs 'libfoo.so.3'" <<<"$FIXTURE_OUTPUT" ||
+        fail "G1: the finding must name the member and soname, got: $FIXTURE_OUTPUT"
+    grep -Fq 'undeclared-link' <<<"$FIXTURE_OUTPUT" ||
+        fail "G1: missing the undeclared-link class marker, got: $FIXTURE_OUTPUT"
+    grep -Fq 'provider prov-git' <<<"$FIXTURE_OUTPUT" ||
+        fail "G1: the finding must name the resolved provider, got: $FIXTURE_OUTPUT"
+    grep -Fq "needs 'libghost.so.1'" <<<"$FIXTURE_OUTPUT" ||
+        fail "G1: missing the ghost soname, got: $FIXTURE_OUTPUT"
+    grep -Fq 'unresolvable-link' <<<"$FIXTURE_OUTPUT" ||
+        fail "G1: missing the unresolvable-link class marker, got: $FIXTURE_OUTPUT"
+    if grep -Fq 'libself.so.1' <<<"$FIXTURE_OUTPUT" || grep -Fq 'libc.so.6' <<<"$FIXTURE_OUTPUT"; then
+        fail "G1: self-shipped and base-system needs must stay silent, got: $FIXTURE_OUTPUT"
+    fi
+
+    # G2 (green, direct): a depends entry resolving to the provider clears
+    # the undeclared-link finding; the unverifiable ghost stays.
+    write_srcinfo "$ws/packages/app-git" app-git
+    printf '\tdepends = prov-git\n' >>"$ws/packages/app-git/.SRCINFO"
+    lint "$ws" declared-deps
+    ((FIXTURE_RC == 0)) || fail "G2: --qa-check must stay report-only (rc=$FIXTURE_RC)"
+    grep -Fq 'qa-check declared-deps: 1 finding(s)' <<<"$FIXTURE_OUTPUT" ||
+        fail "G2: expected exactly 1 finding, got: $FIXTURE_OUTPUT"
+    if grep -Fq 'undeclared-link' <<<"$FIXTURE_OUTPUT"; then
+        fail "G2: the declared provider must clear undeclared-link, got: $FIXTURE_OUTPUT"
+    fi
+
+    # G3 (green, transitive): the provider is reached only through mid-git —
+    # rule 4: transitive coverage counts.
+    write_srcinfo "$ws/packages/app-git" app-git
+    printf '\tdepends = mid-git\n' >>"$ws/packages/app-git/.SRCINFO"
+    lint "$ws" declared-deps
+    ((FIXTURE_RC == 0)) || fail "G3: --qa-check must stay report-only (rc=$FIXTURE_RC)"
+    grep -Fq 'qa-check declared-deps: 1 finding(s)' <<<"$FIXTURE_OUTPUT" ||
+        fail "G3: transitive coverage must clear undeclared-link (count != 1), got: $FIXTURE_OUTPUT"
+    if grep -Fq 'undeclared-link' <<<"$FIXTURE_OUTPUT"; then
+        fail "G3: transitive coverage counts — no undeclared-link may survive, got: $FIXTURE_OUTPUT"
+    fi
+
+    # G4 (green, exclusions): the unverifiable class has the documented
+    # escape hatch — a registered soname stem silences it (rule 25(f)).
+    cat >>"$ws/config/abi-exclusions.conf" <<'EOF'
+libghost.so|fixture: documented dangling soname|2099-01-01
+EOF
+    lint "$ws" declared-deps
+    ((FIXTURE_RC == 0)) || fail "G4: --qa-check must stay report-only (rc=$FIXTURE_RC)"
+    grep -Fq 'qa-check declared-deps: clean' <<<"$FIXTURE_OUTPUT" ||
+        fail "G4: the registered soname must clear the verdict, got: $FIXTURE_OUTPUT"
+
+    # G5 (ownership red): the ghost GROWS an owner — a fabricated installed
+    # package carrying NO provides owns the file (the `pacman -Qo` truth).
+    # The G4 exclusion is dropped first so the row is live again: it must
+    # FLIP from unresolvable-link to undeclared-link naming the owner, never
+    # vanish silently.
+    sed -i '$d' "$ws/config/abi-exclusions.conf"
+    db_install "$GSA_FAKE_DB_PATH" ghostprov 1.0.0-1 usr/lib/libghost.so.1
+    lint "$ws" declared-deps
+    ((FIXTURE_RC == 0)) || fail "G5: --qa-check must stay report-only (rc=$FIXTURE_RC)"
+    grep -Fq 'qa-check declared-deps: 1 finding(s)' <<<"$FIXTURE_OUTPUT" ||
+        fail "G5: expected exactly 1 finding, got: $FIXTURE_OUTPUT"
+    grep -Fq 'undeclared-link' <<<"$FIXTURE_OUTPUT" ||
+        fail "G5: an owned soname must resolve to undeclared-link, got: $FIXTURE_OUTPUT"
+    grep -Fq 'provider ghostprov' <<<"$FIXTURE_OUTPUT" ||
+        fail "G5: the finding must name the owning package, got: $FIXTURE_OUTPUT"
+    if grep -Fq 'unresolvable-link' <<<"$FIXTURE_OUTPUT"; then
+        fail "G5: an owned soname must not stay unresolvable, got: $FIXTURE_OUTPUT"
+    fi
+
+    # G6 (ownership green): declaring the owner by plain name — the spelling
+    # a no-provide provider forces (the at-spi2→libxres shape) — covers it.
+    write_srcinfo "$ws/packages/app-git" app-git
+    printf '\tdepends = mid-git\n' >>"$ws/packages/app-git/.SRCINFO"
+    printf '\tdepends = ghostprov\n' >>"$ws/packages/app-git/.SRCINFO"
+    lint "$ws" declared-deps
+    ((FIXTURE_RC == 0)) || fail "G6: --qa-check must stay report-only (rc=$FIXTURE_RC)"
+    grep -Fq 'qa-check declared-deps: clean' <<<"$FIXTURE_OUTPUT" ||
+        fail "G6: the declared owner must clear the verdict, got: $FIXTURE_OUTPUT"
+    printf 'G: declared-deps red/green OK\n'
+)
+
+# ─── G mutation probes (the red-first probe was run live for the change that
+# added the section — see its change report). Each probe is a one-spot
+# perturbation of the ENGINE source followed by `bash tests/recipe-contract.sh`
+# → the named assertion goes red; REVERSE the edit (paste the original line
+# back — never `git checkout`/`git stash`) → green again. The function names
+# are the stable handles.
+#   M5 coverage always true: in `declared_deps` (crates/gsa-qa/src/checks.rs,
+#      the `providers.iter().any(|provider| closure.covers(provider))` gate)
+#      make the gate unconditional → G1's "2 finding(s)" assertion red and
+#      `checks::tests::undeclared_link_names_recipe_member_and_soname` red;
+#      reverse → green.
+#   M6 self-shipped off: drop the `shipped.iter().any(...)` filter → G1's
+#      silent-needs assertion red; reverse → green.
+#   M7 base-system off: drop the `abi::base_lib_ok` filter → G1's count
+#      assertion red (libc/libgcc_s rows appear); reverse → green.
+#   M8 ownership off: drop the `pkg.files.iter().any(|path| owns(path))` arm
+#      of `installed_providers` (crates/gsa-qa/src/checks.rs) →
+#      `checks::tests::file_ownership_resolves_a_no_provide_provider` red
+#      and G5's flip assertion red; reverse → green.
+# ─────────────────────────────────────────────────────────────────────────────
+
+printf 'recipe contract fixture: PASS (3 lint seams gated, name surface pinned, real-repo gates green)\n'

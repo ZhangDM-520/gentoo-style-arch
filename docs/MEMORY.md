@@ -1100,10 +1100,32 @@
     every DT_NEEDED of a consumer's files to owning packages and diff
     against the provides-aware transitive closure of its declared depends
     (transitive coverage keeps the provider installed; direct is tidier).
-    Note the guard gap: `abi-closure` resolves NEEDED against the provide
-    surface and the install `needed` gate against runtime truth — neither
-    compares against the manifest. See `docs/NOTE.md` 2026-10-14 orphan
-    wall.
+    The guard exists: `gsa --qa-check declared-deps` (Scope::Archive,
+    report-only) diffs every built archive's DT_NEEDED against the
+    transitive closure of its declared depends — sonames resolve to
+    providers via workspace provides, then installed provides **or
+    installed file ownership** (the no-provide stock provider class), then
+    base-system/`config/abi-exclusions.conf`; transitive coverage counts,
+    and a soname no owner anywhere explains is `unresolvable-link` (the
+    rare, meaningful class). See `docs/NOTE.md` 2026-10-14 orphan wall.
+
+55. **A provider SONAME bump needs its direct NEEDED consumers rebuilt in
+    the same pass — pacman keeps them installed while they are
+    load-broken** (2026-10-14 jbigkit wall): jbigkit 2.2 ships
+    `libjbig.so.2.2`; `libtiff-git`, `graphicsmagick`, `imagemagick` and
+    `netpbm` still NEEDED `libjbig.so.2.1`, and their loader breakage
+    poisoned unrelated builds at `g-ir-scanner` time too. Detection is one
+    line — `ldd <file> | grep 'not found'` across a provider's consumers —
+    run it after any leaf library update, alongside the house ABI-batch
+    discipline (which already covers the big toolchain sonames; leaf
+    libraries move silently). Repair order follows the blocker graph:
+    rebuild the direct consumers first (`libtiff-git`), then their
+    dependents' users, installing as you go. Companion finding from the
+    same pass: a meson wrap subproject that is linked but not installed
+    (libadwaita's ministream, when built shared) ships a broken archive by
+    construction — check `default_library` when a recipe enables
+    `--wrap-mode default` deliberately. See `docs/NOTE.md` 2026-10-14 live
+    breakage sweep.
 
 ## 2. Workspace overview
 
