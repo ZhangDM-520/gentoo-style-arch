@@ -3,7 +3,7 @@
 
 pkgname=libayatana-appindicator-git
 _pkgname=libayatana-appindicator
-pkgver=0.6.0.r1.geaa41f5
+pkgver=0.6.1.r0.g836356d
 pkgrel=1
 pkgdesc="Ayatana Application Indicators shared library (git build)"
 arch=('x86_64')

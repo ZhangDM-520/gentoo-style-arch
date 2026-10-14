@@ -1,6 +1,6 @@
 pkgbase = flatpak-git
 	pkgdesc = Linux application sandboxing and distribution framework (formerly xdg-app) (git)
-	pkgver = 1.19.2+4+gacb9dc795
+	pkgver = 1.19.2+18+g84f5777b7
 	pkgrel = 1
 	url = https://github.com/flatpak/flatpak
 	arch = x86_64

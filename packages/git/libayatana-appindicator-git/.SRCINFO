@@ -1,6 +1,6 @@
 pkgbase = libayatana-appindicator-git
 	pkgdesc = Ayatana Application Indicators shared library (git build)
-	pkgver = 0.6.0.r1.geaa41f5
+	pkgver = 0.6.1.r0.g836356d
 	pkgrel = 1
 	url = https://github.com/AyatanaIndicators/libayatana-appindicator
 	arch = x86_64
@@ -20,7 +20,7 @@ pkgbase = libayatana-appindicator-git
 	depends = libdbusmenu-glib
 	depends = libdbusmenu-gtk3
 	depends = libgcc
-	provides = libayatana-appindicator=0.6.0.r1.geaa41f5
+	provides = libayatana-appindicator=0.6.1.r0.g836356d
 	provides = libayatana-appindicator3.so
 	conflicts = libayatana-appindicator
 	source = git+https://github.com/AyatanaIndicators/libayatana-appindicator

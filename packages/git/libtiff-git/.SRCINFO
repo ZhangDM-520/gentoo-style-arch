@@ -1,6 +1,6 @@
 pkgbase = libtiff-git
 	pkgdesc = Library for manipulation of TIFF images (git build)
-	pkgver = 4.7.2.r0.gd01a94be
+	pkgver = 4.7.2.r59.gd2324997
 	pkgrel = 1
 	url = https://libtiff.gitlab.io/libtiff/
 	arch = x86_64
@@ -21,7 +21,7 @@ pkgbase = libtiff-git
 	depends = zlib
 	depends = zstd
 	optdepends = freeglut: for using tiffgt
-	provides = libtiff=4.7.2.r0.gd01a94be
+	provides = libtiff=4.7.2.r59.gd2324997
 	provides = libtiff.so
 	provides = libtiffxx.so
 	conflicts = libtiff
