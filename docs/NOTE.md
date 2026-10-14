@@ -1,3 +1,32 @@
+## 2026-10-15 — wave-6 burn-down: xdg-desktop-portal-git/sddm/libinput-git/groff/graphviz declare 25 links; graphviz's tree grows three plugin rows at rebuild
+
+**Symptom / root cause.** Next five by rows (5 each), same rule-54 shape.
+**Fix.** One entry per owner with `expac`-evidenced spellings:
+xdg-desktop-portal-git +5 (`gst-plugins-base-libs` `gstreamer` `libdex`
+`libgudev` `libwireplumber`), sddm +2 (`qt5-base` `qt5-declarative`, the
+Qt5-themes optdepends retired), libinput-git +5 (`cairo` `gtk4` `libx11`
+`lua54` — not `lua`, a different provider — `wayland`), groff +5
+(`libx11` `libxaw` `libxmu` `libxt` `uchardet`; `libxaw: for gxditview`
+retired), graphviz +3 first pass (`guile` `lua` `qt6-base`; its
+bindings optdepends trimmed to the unlinked remainder).
+**Validation.** `bash -n` ×5, `.SRCINFO` regenerated before gating,
+serial rebuild+install, scoped gates clean. Rule 6 hit graphviz once
+more at rebuild: its tree auto-built R/ruby/poppler plugins the pre-build
+sweep could not see (`libR.so`→`r`, `libruby.so.3.4`→`ruby` ×2 members,
+`libpoppler-glib.so.8`→ the split `poppler` recipe's `poppler-glib`
+output) — declared (`poppler-glib` is the precise output spelling;
+fixture F pins that output names resolve), `r: r bindings` retired,
+rebuilt, gate clean. Full archive seam clean, full battery **65/65
+PASS**.
+
+**Durable rules.** (1) A build that auto-builds *language binding*
+plugins (graphviz's R/ruby) leaks rows even when the binding language
+appears nowhere in the PKGBUILD's feature list — the post-build gate is
+the only honest worklist (rule 6, second strike). (2) For a split
+provider recipe, spell the output that ships the linked file
+(`poppler-glib`, not `poppler`) — precise for pacman and resolvable for
+the gate (the pkgbase+pkgname name surface).
+
 ## 2026-10-15 — wave-5 burn-down: tesseract/libheif-git/zbar/fcitx5-configtool/enchant declare 32 links — and the closure walk's provide-matching is fixed (it worked for one token per walk)
 
 **Symptom.** Next five offenders by rows (`tesseract` 7, `libheif-git` 7,

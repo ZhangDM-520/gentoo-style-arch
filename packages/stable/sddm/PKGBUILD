@@ -16,6 +16,8 @@ depends=(bash
          libxau
          libxcb
          pam
+         qt5-base
+         qt5-declarative
          qt6-base
          qt6-declarative
          systemd-libs
@@ -29,7 +31,6 @@ makedepends=(extra-cmake-modules
              qt5-tools
              qt6-tools)
 # trim: python-docutils (makedepends) went with the man pages below (docs)
-optdepends=('qt5-declarative: for using Qt5 themes')
 backup=('usr/share/sddm/scripts/Xsetup'
         'usr/share/sddm/scripts/Xstop'
         'etc/pam.d/sddm'

@@ -10,7 +10,8 @@ pkgdesc='Graph visualization software'
 url='https://www.graphviz.org/'
 license=('EPL')
 arch=('x86_64')
-depends=('libltdl' 'gd' 'librsvg' 'ghostscript' 'pango' 'gts' 'gsfonts')
+depends=('libltdl' 'gd' 'librsvg' 'ghostscript' 'pango' 'gts' 'gsfonts'
+         'guile' 'lua' 'qt6-base' 'poppler-glib' 'r' 'ruby')
 # bare soname provides for every sonamed ELF output (core libs + gvplugin
 # loadable plugins); the swig/luarocks binding modules carry no sonames
 provides=('libcdt.so' 'libcgraph.so' 'libgvc.so' 'libgvpr.so' 'libpathplan.so' 'libxdot.so'
@@ -20,13 +21,9 @@ provides=('libcdt.so' 'libcgraph.so' 'libgvc.so' 'libgvpr.so' 'libpathplan.so' '
           'libgvplugin_webp.so' 'libgvplugin_xlib.so')
 makedepends=('swig' 'mono' 'guile' 'lua' 'perl' 'python' 'r' 'tk' 'qt6-base')
 optdepends=('mono: sharp bindings'
-            'guile: guile bindings'
-            'lua: lua bindings'
             'perl: perl bindings'
             'python: python bindings'
-            'r: r bindings'
             'tcl: tcl bindings'
-            'qt6-base: gvedit'
             'xterm: vimdot')
 source=("https://gitlab.com/graphviz/graphviz/-/archive/$pkgver/$pkgname-$pkgver.tar.gz")
 sha256sums=('1e028b2b3e84e946c1d3e8c47590f8f0741bba1041fe6eff36eee87e598ea249')

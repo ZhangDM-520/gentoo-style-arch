@@ -4,7 +4,7 @@
 
 pkgname=xdg-desktop-portal-git
 _pkgname="${pkgname%-git}"
-pkgver=1.22.0.r194.g7b17a329
+pkgver=1.22.0.r196.gee298d18
 pkgrel=1
 pkgdesc="Desktop integration portals for sandboxed apps"
 url="https://github.com/flatpak/${_pkgname}"
@@ -15,6 +15,11 @@ depends=(
   gdk-pixbuf2
   geoclue
   glib2
+  gst-plugins-base-libs
+  gstreamer
+  libdex
+  libgudev
+  libwireplumber
   pipewire
   rtkit
   systemd

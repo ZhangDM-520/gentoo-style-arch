@@ -6,13 +6,14 @@
 source "$startdir/../../../lib/pgo.sh"
 
 pkgname=libinput-git
-pkgver=1.32.0.r0.g5cf833b5
+pkgver=1.32.0.r6.ge5159497
 pkgrel=1
 pkgdesc="Input device management and event handling library"
 url="https://gitlab.freedesktop.org/libinput/libinput"
 arch=(x86_64)
 license=(MIT)
-depends=('mtdev' 'libevdev' 'libwacom' 'systemd-libs' 'glibc')
+depends=('mtdev' 'libevdev' 'libwacom' 'systemd-libs' 'glibc'
+         'libx11' 'wayland' 'cairo' 'gtk4' 'lua54')
 # upstream doesn't recommend building docs
 makedepends=('git' 'meson' 'wayland-protocols' 'check') # gtk4 dropped 2026-09-04 (debug-gui only); tests kept for PGO training
 checkdepends=('python-pytest')
