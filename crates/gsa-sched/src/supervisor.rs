@@ -39,6 +39,57 @@ pub struct SupNode {
     pub prereqs: Vec<usize>,
     pub consumers: Vec<usize>,
     pub batch: Option<usize>,
+    /// A pre-dispatch settlement (contract §B.8): `--skip` claims settle at
+    /// readiness through the register+install hooks with NO lane; deferrals
+    /// settle before any dispatch and park their consumer cone.
+    pub pre: Option<PreSettle>,
+    /// A remediation-latent node (never dispatched unless activated).
+    pub latent: bool,
+}
+
+/// A pre-dispatch settlement for one node (contract §B.8).
+#[derive(Clone, Debug)]
+pub enum PreSettle {
+    /// A `--skip`/`--skip-built` claim: no lane, but on an install run the
+    /// claimed archives still install (and register) before consumers
+    /// compile. The row is `succeeded - - <reason>`.
+    Skip {
+        /// The §H.3 claim key (`ok` / `skip-built` / `freshness-waived` /
+        /// `abi-provider-waived`).
+        reason: String,
+        /// The claimed archive set (informational — the install hook
+        /// discovers the same newest complete set itself).
+        archives: Vec<PathBuf>,
+    },
+    /// A pre-dispatch deferral: `deferred 99 - <reason>`, consumer cone
+    /// parked `waits-on-deferred`.
+    Defer {
+        /// The §H.3 deferral key (`anchoring-refused` /
+        /// `source-unfetchable` / `upstream-unverified`).
+        reason: String,
+    },
+}
+
+/// The toolchain-remediation wiring (owner rule 2026-10-02): a mid-run
+/// `rustc_sanity_probe` failure after one of `trigger_installs` lands
+/// FORCE-BUILDS the at-risk chain instead of refusing while remediation is
+/// possible. Everything topological comes from the CLI's one graph view —
+/// this seam never re-parses topology.
+pub struct RemediationSetup {
+    /// Probe scratch base ([`gsa_recipe::toolchain::resolve_probe_scratch`]).
+    pub scratch_base: PathBuf,
+    /// The install-time trigger packages (house: `llvm-git`, `llvm-libs-git`).
+    pub trigger_installs: Vec<String>,
+    /// The broken consumer a narrow chain names (house: `rust-git`).
+    pub broken_consumer: String,
+    /// Every recipe id the topology knows (`remediation_plan`'s `known`).
+    pub known: Vec<String>,
+    /// The `core` roster in canonical order (escalation chain order).
+    pub core_members: Vec<String>,
+    /// `toolchain_pkg` → its consumer closure in the topology's ABI
+    /// direction (the `is_consumer_of_toolchain` oracle bound to that
+    /// trigger package).
+    pub toolchain_consumers: std::collections::HashMap<String, Vec<String>>,
 }
 
 /// Everything a run needs (contract §K).
@@ -57,21 +108,30 @@ pub struct RunSetup {
     /// Coupled batches (`abi=must`/`abi=should`), member indices per batch.
     pub batches: Vec<Vec<usize>>,
     /// The post-build install hook (install-before-dependents, rule 11):
-    /// called with (package id, recipe directory) when a lane published `ok`,
-    /// BEFORE its result reaches the machine — so consumers only compile
-    /// after the install landed. Runs on the supervisor's single event loop,
-    /// which is what makes "one `pacman -U` at a time" structural (§K.3).
-    pub install: Option<Box<dyn FnMut(&str, &std::path::Path) -> InstallStep + Send>>,
+    /// called with (package id, recipe directory, forced) when a lane
+    /// published `ok`, BEFORE its result reaches the machine — so consumers
+    /// only compile after the install landed. `forced` is the remediation
+    /// force-install mode (fish `lane_force_install=1`): such installs never
+    /// take the same-version skip. Runs on the supervisor's single event
+    /// loop, which is what makes "one `pacman -U` at a time" structural (§K.3).
+    pub install: Option<Box<dyn FnMut(&str, &std::path::Path, bool) -> InstallStep + Send>>,
     /// The post-build registration hook (contract §J.4): called with
-    /// (package id, recipe directory, in-flight recipe ids) when a lane
-    /// published `ok`, before the install hook — the instance is recorded
-    /// while the run still knows which lanes are in flight, so retention
-    /// pruning never deletes an archive the run is using. The return value
-    /// is the hook's diagnostic notes, which surface as
+    /// (package id, recipe directory, in-flight recipe ids, built) when a
+    /// lane published `ok`, before the install hook — the instance is
+    /// recorded while the run still knows which lanes are in flight, so
+    /// retention pruning never deletes an archive the run is using.
+    /// `built` distinguishes a real build (`true` — the VCS baselines and
+    /// toolchain marker hook half) from a `--skip` claim (`false`). The
+    /// return value is the hook's diagnostic notes, which surface as
     /// [`SupEvent::Diagnostic`] rows (loud reporting, §I.4).
     pub register: Option<
         Box<
-            dyn FnMut(&str, &std::path::Path, &std::collections::BTreeSet<String>) -> Vec<String>
+            dyn FnMut(
+                    &str,
+                    &std::path::Path,
+                    &std::collections::BTreeSet<String>,
+                    bool,
+                ) -> Vec<String>
                 + Send,
         >,
     >,
@@ -79,6 +139,10 @@ pub struct RunSetup {
     /// §2): `None` is `--no-prefetch`. Advisory by construction — a fetch
     /// outcome never reaches [`Machine`] and never changes a run-record row.
     pub prefetch: Option<PrefetchSetup>,
+    /// The toolchain-remediation wiring: `None` on build-only runs and runs
+    /// that carry `--allow-broken-rustc` past the PREFLIGHT only (the
+    /// mid-run trigger is a real ABI mismatch and always engages).
+    pub remediation: Option<RemediationSetup>,
 }
 
 /// Prefetch-ahead configuration (owner decision 1/6): the lookahead window
@@ -144,6 +208,10 @@ pub enum SupEvent {
 
 pub struct SupOutcome {
     pub rows: Vec<OutcomeRow>,
+    /// The run-record `order` (contract §H.2, fish `_RR_ORDER`): the
+    /// selection's node ids plus the remediation latents that were ACTIVATED
+    /// (appended). Plan and outcome rows key to this list.
+    pub order: Vec<RecipeId>,
     pub interrupted: bool,
     /// The signal's lane-code-class number (129/130/143) when interrupted.
     pub signal_code: i32,
@@ -154,6 +222,79 @@ pub struct SupOutcome {
     /// Prefetch advisory records (owner decision 5): rendered in the prose
     /// summary and counted by the `prefetch-warnings` scalar. Never rows.
     pub prefetch_warnings: Vec<FetchResult>,
+}
+
+/// The mid-run toolchain-remediation state machine (fish 6960-7130 /
+/// 7180-7345, owner rule 2026-10-02): the force-built chain, its phases
+/// (`narrow` → `core`), and the refusal latch.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum RemediationPhase {
+    Narrow,
+    Core,
+}
+
+struct Remediation {
+    phase: RemediationPhase,
+    /// Chain members queued but not yet dispatched (chain order).
+    pending: Vec<usize>,
+    /// Chain members currently in lanes.
+    active: Vec<usize>,
+    /// Chain members that settled (completion order — fish `_REMED_ATTEMPTED`).
+    attempted: Vec<usize>,
+    /// The trigger package whose install broke rustc (message subject).
+    trigger: String,
+    /// The probe failure engaged remediation (fish `probe_remediating`).
+    started: bool,
+    /// The refusal contract latched (fish `probe_stopped`): no new dispatch.
+    probe_stopped: bool,
+}
+
+impl Remediation {
+    fn owns(&self, index: usize) -> bool {
+        self.pending.contains(&index)
+            || self.active.contains(&index)
+            || self.attempted.contains(&index)
+    }
+
+    fn landed(&self) -> bool {
+        self.pending.is_empty() && self.active.is_empty()
+    }
+
+    /// Queue one chain member (fish `force_queue_packages` + force
+    /// semantics): already-queued ids keep their position; a settled node is
+    /// re-dispatched, a latent one activated, an in-flight/ready one keeps
+    /// building. Returns the indices that were appended, in chain order.
+    fn queue(&mut self, machine: &mut Machine, chain: &[usize]) -> Vec<usize> {
+        let mut appended = Vec::new();
+        for &index in chain {
+            if self.owns(index) {
+                continue;
+            }
+            self.pending.push(index);
+            appended.push(index);
+            if machine.is_latent(index) {
+                machine.activate(index);
+            } else if machine.is_settled(index) {
+                machine.force_rebuild(index);
+            }
+        }
+        appended
+    }
+
+    /// One chain member settled: move it to `attempted`.
+    fn settle(&mut self, index: usize) {
+        self.pending.retain(|&i| i != index);
+        self.active.retain(|&i| i != index);
+        self.attempted.push(index);
+    }
+
+    /// The chain member left the pending queue at dispatch.
+    fn dispatched(&mut self, index: usize) {
+        if self.pending.contains(&index) {
+            self.pending.retain(|&i| i != index);
+            self.active.push(index);
+        }
+    }
 }
 
 enum Event {
@@ -454,6 +595,356 @@ fn write_park_markers(setup: &RunSetup, requests: &[ParkRequest]) {
     }
 }
 
+/// One `--skip` claim settling at readiness (contract §B.8): no lane runs,
+/// but the registration + install hooks do — a claimed set still installs
+/// (and registers, and takes the acceptance-time IgnorePkg registration)
+/// before its consumers compile. The row keeps the CLAIM reason
+/// (`succeeded - - <reason>`); a hook that halts settles it as a failure.
+#[allow(clippy::too_many_arguments)]
+fn settle_skip(
+    setup: &mut RunSetup,
+    machine: &mut Machine,
+    index: usize,
+    events: &mut dyn FnMut(&SupEvent),
+    err: &mut dyn Write,
+    refused: &mut bool,
+    dispatch_halted: &mut bool,
+) {
+    let _ = err;
+    let Some(PreSettle::Skip { reason, .. }) = setup.nodes[index].pre.clone() else {
+        return;
+    };
+    let pkg = machine.node(index).id.as_str().to_string();
+    let recipe_dir = setup.nodes[index].recipe_dir.clone();
+    if let Some(hook) = setup.register.as_mut() {
+        let in_flight: std::collections::BTreeSet<String> = (0..setup.nodes.len())
+            .filter(|&j| machine.node_phase(j) == NodePhase::Dispatched)
+            .map(|j| setup.nodes[j].id.as_str().to_string())
+            .collect();
+        for note in hook(&pkg, &recipe_dir, &in_flight, false) {
+            events(&SupEvent::Diagnostic(note));
+        }
+    }
+    let mut status = RowStatus::Succeeded;
+    let mut rc = None;
+    let mut row_reason = reason;
+    if let Some(hook) = setup.install.as_mut() {
+        match hook(&pkg, &recipe_dir, false) {
+            InstallStep::Done(_) => {}
+            InstallStep::Halt {
+                reason: halt_reason,
+                stop_dispatch,
+            } => {
+                status = RowStatus::Failed;
+                rc = Some(1);
+                row_reason = halt_reason;
+                if is_install_refusal(&row_reason) {
+                    *refused = true;
+                }
+                if stop_dispatch {
+                    machine.stop_dispatch();
+                    *dispatch_halted = true;
+                    events(&SupEvent::Diagnostic(format!(
+                        "install halted dispatch: {row_reason}"
+                    )));
+                }
+            }
+        }
+    }
+    let row = OutcomeRow {
+        pkg: machine.node(index).id.clone(),
+        status,
+        rc,
+        dur: None,
+        reason: row_reason.clone(),
+    };
+    events(&SupEvent::Finished { index, row });
+    let requests = machine.record_pre(index, status, rc, &row_reason);
+    write_park_markers(setup, &requests);
+    for request in &requests {
+        events(&SupEvent::Parked {
+            index: request.index,
+            reason: request.reason.clone(),
+        });
+    }
+}
+
+/// The remediation refusal latch (fish `probe_stopped` + `stop_starting`):
+/// the named refusal, the one probe-refusal prose, and dispatch halted
+/// exactly once. Every refusal end of the remediation machine funnels here.
+#[allow(clippy::too_many_arguments)]
+fn remediation_refuse(
+    remediation: &mut Remediation,
+    machine: &mut Machine,
+    message: String,
+    events: &mut dyn FnMut(&SupEvent),
+    err: &mut dyn Write,
+    refused: &mut bool,
+    dispatch_halted: &mut bool,
+) {
+    let _ = writeln!(err, "gsa: {message}");
+    let _ = writeln!(err, "{}", gsa_recipe::toolchain::remediation_refusal_text());
+    remediation.probe_stopped = true;
+    machine.stop_dispatch();
+    *dispatch_halted = true;
+    *refused = true;
+    events(&SupEvent::Diagnostic(message));
+}
+
+/// The mid-run toolchain-remediation bookkeeping (fish 6960-7130 /
+/// 7180-7345, owner rule 2026-10-02), run after every settled lane. A
+/// settled chain member decides the remediation; a successful install of a
+/// trigger package re-probes and, on failure, FORCE-BUILDS the at-risk
+/// chain (narrow `rust-git` first, the whole `core` group on escalation)
+/// instead of refusing while remediation is possible.
+#[allow(clippy::too_many_arguments)]
+fn remediation_settle(
+    remediation: &mut Option<Remediation>,
+    cfg: Option<&RemediationSetup>,
+    setup_nodes: &mut [SupNode],
+    machine: &mut Machine,
+    index: usize,
+    code: gsa_model::LaneOutcome,
+    install_run: bool,
+    events: &mut dyn FnMut(&SupEvent),
+    err: &mut dyn Write,
+    refused: &mut bool,
+    dispatch_halted: &mut bool,
+) {
+    let (Some(rem), Some(cfg)) = (remediation.as_mut(), cfg) else {
+        return;
+    };
+    let pkg = machine.node(index).id.as_str().to_string();
+    let id_text = |machine: &Machine, indices: &[usize]| -> String {
+        indices
+            .iter()
+            .map(|&i| machine.node(i).id.as_str().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+
+    if rem.owns(index) {
+        // A chain member settled: its outcome decides the remediation.
+        rem.settle(index);
+        match code {
+            gsa_model::LaneOutcome::Ok => {
+                if !rem.landed() || rem.probe_stopped {
+                    return;
+                }
+                match gsa_recipe::toolchain::rustc_sanity_probe(&cfg.scratch_base) {
+                    gsa_recipe::toolchain::ProbeStatus::Ok
+                    | gsa_recipe::toolchain::ProbeStatus::Skipped { .. } => {
+                        let _ = writeln!(
+                            err,
+                            "gsa: toolchain remediation reconciled the at-risk chain (rebuilt {}) — rustc sanity probe passes, resuming dispatch",
+                            id_text(machine, &rem.attempted)
+                        );
+                        machine.set_restrict(None);
+                        rem.started = false;
+                        rem.attempted.clear();
+                        rem.phase = RemediationPhase::Narrow;
+                    }
+                    gsa_recipe::toolchain::ProbeStatus::Failed { detail } => {
+                        let _ = writeln!(err, "gsa: {detail}");
+                        match rem.phase {
+                            RemediationPhase::Narrow => {
+                                let _ = writeln!(
+                                    err,
+                                    "gsa: remediation by {} was insufficient — the tool-clang/llvm consumer chain is still broken",
+                                    id_text(machine, &rem.attempted)
+                                );
+                                let _ = writeln!(
+                                    err,
+                                    "  Escalating to a full core-group force-build (owner rule 2026-10-02)."
+                                );
+                                rem.phase = RemediationPhase::Core;
+                                let attempted_ids: Vec<String> = rem
+                                    .attempted
+                                    .iter()
+                                    .map(|&i| machine.node(i).id.as_str().to_string())
+                                    .collect();
+                                let chain: Vec<usize> = cfg
+                                    .core_members
+                                    .iter()
+                                    .filter(|id| !attempted_ids.contains(id))
+                                    .filter_map(|id| {
+                                        (0..setup_nodes.len())
+                                            .find(|&i| setup_nodes[i].id.as_str() == id.as_str())
+                                    })
+                                    .collect();
+                                if chain.is_empty() {
+                                    remediation_refuse(
+                                        rem,
+                                        machine,
+                                        "core-group remediation has nothing left to force-build — refusing to continue".to_string(),
+                                        events,
+                                        err,
+                                        refused,
+                                        dispatch_halted,
+                                    );
+                                    return;
+                                }
+                                let ids = id_text(machine, &chain);
+                                for &i in &chain {
+                                    setup_nodes[i].pre = None;
+                                }
+                                rem.queue(machine, &chain);
+                                machine.set_restrict(Some(chain));
+                                let _ = writeln!(
+                                    err,
+                                    "gsa: toolchain remediation (phase core): force-building {ids}"
+                                );
+                            }
+                            RemediationPhase::Core => {
+                                remediation_refuse(
+                                    rem,
+                                    machine,
+                                    format!(
+                                        "core-group remediation rebuilt {} and the sanity probe still fails — refusing to continue",
+                                        id_text(machine, &rem.attempted)
+                                    ),
+                                    events,
+                                    err,
+                                    refused,
+                                    dispatch_halted,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            gsa_model::LaneOutcome::Defer | gsa_model::LaneOutcome::Parked => {
+                remediation_refuse(
+                    rem,
+                    machine,
+                    format!(
+                        "toolchain remediation build for {pkg} was deferred — the at-risk chain cannot be reconciled; refusing to continue"
+                    ),
+                    events,
+                    err,
+                    refused,
+                    dispatch_halted,
+                );
+            }
+            _ => {
+                remediation_refuse(
+                    rem,
+                    machine,
+                    format!(
+                        "toolchain remediation build for {pkg} failed — the at-risk chain could not be reconciled; refusing to continue"
+                    ),
+                    events,
+                    err,
+                    refused,
+                    dispatch_halted,
+                );
+            }
+        }
+        return;
+    }
+
+    // The trigger (fish: install runs only, once per remediation cycle):
+    // a successful install of a trigger package re-probes — this run's own
+    // llvm install can break rustc after the preflight passed.
+    if !install_run
+        || code != gsa_model::LaneOutcome::Ok
+        || !cfg.trigger_installs.iter().any(|t| t == &pkg)
+        || rem.started
+        || rem.probe_stopped
+    {
+        return;
+    }
+    let gsa_recipe::toolchain::ProbeStatus::Failed { detail } =
+        gsa_recipe::toolchain::rustc_sanity_probe(&cfg.scratch_base)
+    else {
+        return;
+    };
+    let _ = writeln!(err, "gsa: {detail}");
+    let _ = writeln!(
+        err,
+        "gsa: rustc sanity probe failed after {pkg} was installed — this run's own llvm install broke rustc"
+    );
+    for line in [
+        "  Toolchain risk detected for the tool-clang/llvm consumer chain — not",
+        "  just rustc. Owner rule 2026-10-02: the builder FORCE-BUILDS the at-risk",
+        "  chain to reconcile it — first rust-git (rust), or the whole core group",
+        "  when the broken consumer cannot be identified narrowly — and refuses",
+        "  only if that remediation build also fails. This probe stays loud but",
+        "  does not refuse builds while remediation is possible.",
+    ] {
+        let _ = writeln!(err, "{line}");
+    }
+    let known = |id: &str| cfg.known.iter().any(|k| k == id);
+    let is_consumer_of_toolchain = |id: &str| {
+        cfg.toolchain_consumers
+            .get(&pkg)
+            .map(|closure| closure.iter().any(|c| c == id))
+            .unwrap_or(false)
+    };
+    let plan = gsa_recipe::toolchain::remediation_plan(
+        &pkg,
+        &cfg.broken_consumer,
+        &known,
+        &is_consumer_of_toolchain,
+        &cfg.core_members,
+    );
+    let (phase, chain_ids) = match plan {
+        gsa_recipe::toolchain::Remediation::Narrow(ids) => (RemediationPhase::Narrow, ids),
+        gsa_recipe::toolchain::Remediation::Core(ids) => (RemediationPhase::Core, ids),
+        gsa_recipe::toolchain::Remediation::Impossible => {
+            remediation_refuse(
+                rem,
+                machine,
+                format!(
+                    "no force-build remediation chain is identifiable for {pkg} — refusing to continue"
+                ),
+                events,
+                err,
+                refused,
+                dispatch_halted,
+            );
+            return;
+        }
+    };
+    let chain: Vec<usize> = chain_ids
+        .iter()
+        .filter_map(|id| {
+            (0..setup_nodes.len()).find(|&i| setup_nodes[i].id.as_str() == id.as_str())
+        })
+        .collect();
+    if chain.is_empty() {
+        remediation_refuse(
+            rem,
+            machine,
+            format!(
+                "no force-build remediation chain is identifiable for {pkg} — refusing to continue"
+            ),
+            events,
+            err,
+            refused,
+            dispatch_halted,
+        );
+        return;
+    }
+    let ids = id_text(machine, &chain);
+    for &i in &chain {
+        setup_nodes[i].pre = None;
+    }
+    rem.phase = phase;
+    rem.trigger = pkg.clone();
+    rem.started = true;
+    rem.queue(machine, &chain);
+    machine.set_restrict(Some(chain));
+    let phase_name = match rem.phase {
+        RemediationPhase::Narrow => "narrow",
+        RemediationPhase::Core => "core",
+    };
+    let _ = writeln!(
+        err,
+        "gsa: toolchain remediation (phase {phase_name}): force-building {ids} to reconcile the at-risk chain before anything else compiles"
+    );
+}
+
 /// Run one build: dispatch lanes until the machine settles, applying the
 /// failure policy (§I) and signal teardown (§K.3). `events` receives the
 /// streaming dashboard view; `err` receives loud diagnostics (foreign or
@@ -476,6 +967,7 @@ pub fn run(
             core: n.core,
             build_tools: n.build_tools,
             batch: n.batch,
+            latent: n.latent,
         })
         .collect();
     let mut machine = Machine::new(
@@ -484,6 +976,48 @@ pub fn run(
         setup.policy,
         setup.budget.lanes as usize,
     );
+    // Pre-settled deferrals (contract §B.8) land BEFORE any dispatch: the
+    // row is `deferred 99 - <reason>` and the consumer cone parks
+    // `waits-on-deferred`, so unrelated work runs and dependents wait.
+    let pre_defers: Vec<usize> = setup
+        .nodes
+        .iter()
+        .enumerate()
+        .filter(|(_, node)| matches!(node.pre, Some(PreSettle::Defer { .. })))
+        .map(|(index, _)| index)
+        .collect();
+    for index in pre_defers {
+        let Some(PreSettle::Defer { reason }) = setup.nodes[index].pre.clone() else {
+            continue;
+        };
+        let row = OutcomeRow {
+            pkg: machine.node(index).id.clone(),
+            status: RowStatus::Deferred,
+            rc: Some(99),
+            dur: None,
+            reason: reason.clone(),
+        };
+        events(&SupEvent::Finished { index, row });
+        let requests = machine.record_pre(index, RowStatus::Deferred, Some(99), &reason);
+        write_park_markers(&setup, &requests);
+        for request in &requests {
+            events(&SupEvent::Parked {
+                index: request.index,
+                reason: request.reason.clone(),
+            });
+        }
+    }
+    // The toolchain-remediation state (owner rule 2026-10-02): present on
+    // install runs whose CLI wired the trigger chain.
+    let mut remediation: Option<Remediation> = setup.remediation.as_ref().map(|_| Remediation {
+        phase: RemediationPhase::Narrow,
+        pending: Vec::new(),
+        active: Vec::new(),
+        attempted: Vec::new(),
+        trigger: String::new(),
+        started: false,
+        probe_stopped: false,
+    });
     // Fetch-ahead (plan.md §2.1): the dispatcher is the only brain — the
     // lookahead window is derived from live dispatch state every tick.
     let mut prefetch: Option<Prefetcher> = setup
@@ -522,6 +1056,27 @@ pub fn run(
     let mut settle_deadline: Option<std::time::Instant> = None;
 
     'outer: loop {
+        // `--skip` claims settle at readiness (contract §B.8): no lane runs,
+        // but the registration + install hooks do — a claimed set still
+        // installs before its consumers compile.
+        while interrupted.is_none() {
+            let Some(index) = machine
+                .pick()
+                .into_iter()
+                .find(|&i| matches!(setup.nodes[i].pre, Some(PreSettle::Skip { .. })))
+            else {
+                break;
+            };
+            settle_skip(
+                &mut setup,
+                &mut machine,
+                index,
+                events,
+                err,
+                &mut refused,
+                &mut dispatch_halted,
+            );
+        }
         // Dispatch everything the machine allows right now.
         while interrupted.is_none() {
             let Some(index) = machine
@@ -540,6 +1095,9 @@ pub fn run(
                 Ok(mut child) => {
                     let pid = child.id();
                     machine.dispatch(index);
+                    if let Some(rem) = remediation.as_mut() {
+                        rem.dispatched(index);
+                    }
                     active.insert(
                         index,
                         ActiveLane {
@@ -590,6 +1148,19 @@ pub fn run(
                             reason: "build-failed".to_string(),
                         },
                     );
+                    remediation_settle(
+                        &mut remediation,
+                        setup.remediation.as_ref(),
+                        &mut setup.nodes,
+                        &mut machine,
+                        index,
+                        gsa_model::LaneOutcome::Failed,
+                        setup.install.is_some(),
+                        events,
+                        err,
+                        &mut refused,
+                        &mut dispatch_halted,
+                    );
                 }
             }
         }
@@ -611,6 +1182,37 @@ pub fn run(
             }
         }
 
+        // A remediation chain that can make no progress (active lanes gone,
+        // chain members queued but nothing dispatchable) is a refusal, not a
+        // hang: name the stuck ids and latch the refusal contract.
+        if interrupted.is_none() {
+            if let (Some(rem), Some(_)) = (remediation.as_mut(), setup.remediation.as_ref()) {
+                if rem.started
+                    && !rem.probe_stopped
+                    && !rem.landed()
+                    && machine.active() == 0
+                    && machine.pick().is_empty()
+                {
+                    let ids = rem
+                        .pending
+                        .iter()
+                        .map(|&i| machine.node(i).id.as_str().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    remediation_refuse(
+                        rem,
+                        &mut machine,
+                        format!(
+                            "toolchain remediation stalled — {ids} cannot be dispatched; refusing to continue"
+                        ),
+                        events,
+                        err,
+                        &mut refused,
+                        &mut dispatch_halted,
+                    );
+                }
+            }
+        }
         let nothing_left = machine.active() == 0
             && (machine.finished() || interrupted.is_some() || machine.pick().is_empty());
         if nothing_left {
@@ -649,6 +1251,13 @@ pub fn run(
             Event::LaneDone { index, killed_by } => {
                 active.remove(&index);
                 let was_interrupted = interrupted.is_some();
+                // A remediation force build installs in force mode (fish
+                // `lane_force_install=1`): never the same-version skip.
+                let forced = remediation
+                    .as_ref()
+                    .map(|rem| rem.owns(index))
+                    .unwrap_or(false);
+                let settled_code: Option<gsa_model::LaneOutcome>;
                 let result = reap_result(&setup, index, err);
                 match result {
                     Some(result) => {
@@ -698,14 +1307,14 @@ pub fn run(
                                         })
                                         .map(|j| setup.nodes[j].id.as_str().to_string())
                                         .collect();
-                                for note in hook(&pkg, &recipe_dir, &in_flight) {
+                                for note in hook(&pkg, &recipe_dir, &in_flight, true) {
                                     events(&SupEvent::Diagnostic(note));
                                 }
                             }
                             if let Some(hook) = setup.install.as_mut() {
                                 let pkg = machine.node(index).id.as_str().to_string();
                                 let recipe_dir = setup.nodes[index].recipe_dir.clone();
-                                match hook(&pkg, &recipe_dir) {
+                                match hook(&pkg, &recipe_dir, forced) {
                                     InstallStep::Done(step_reason) => {
                                         reason = step_reason;
                                     }
@@ -752,6 +1361,7 @@ pub fn run(
                             index,
                             row: row.clone(),
                         });
+                        settled_code = Some(code.clone());
                         let requests = machine.record(
                             index,
                             Recorded {
@@ -811,6 +1421,7 @@ pub fn run(
                             index,
                             row: row.clone(),
                         });
+                        settled_code = Some(code.clone());
                         if was_interrupted {
                             // §I.3: the teardown owns what never launched —
                             // no failure policy may park the cone here.
@@ -832,6 +1443,27 @@ pub fn run(
                                 },
                             );
                         }
+                    }
+                }
+                // Toolchain-remediation bookkeeping (owner rule 2026-10-02):
+                // a settled chain member decides the remediation; a trigger
+                // package's successful install re-probes and may FORCE-BUILD
+                // the at-risk chain before anything else compiles.
+                if let Some(code) = settled_code {
+                    if !was_interrupted {
+                        remediation_settle(
+                            &mut remediation,
+                            setup.remediation.as_ref(),
+                            &mut setup.nodes,
+                            &mut machine,
+                            index,
+                            code,
+                            setup.install.is_some(),
+                            events,
+                            err,
+                            &mut refused,
+                            &mut dispatch_halted,
+                        );
                     }
                 }
             }
@@ -935,6 +1567,7 @@ pub fn run(
     let prefetch_warnings = prefetch.map(|pf| pf.warnings).unwrap_or_default();
     Ok(SupOutcome {
         rows: machine.rows(),
+        order: machine.order(),
         interrupted: interrupted.is_some(),
         signal_code: interrupted.map(signal_lane_code).unwrap_or(0),
         refused,
@@ -994,11 +1627,14 @@ mod tests {
                 prereqs: Vec::new(),
                 consumers: Vec::new(),
                 batch: None,
+                pre: None,
+                latent: false,
             }],
             batches: Vec::new(),
             install: None,
             register: None,
             prefetch: None,
+            remediation: None,
         }
     }
 

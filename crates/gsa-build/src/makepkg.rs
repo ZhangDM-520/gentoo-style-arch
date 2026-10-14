@@ -10,10 +10,18 @@
 //! `MAKEFLAGS`/`NINJAFLAGS` without discarding the caller's other flags
 //! (§K.1): each `-jN` / `-j N` is stripped and the rest is preserved.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// The base makepkg argv every lane uses (fish lane shape).
 pub const MAKEPKG_BASE_ARGS: [&str; 2] = ["-sf", "--noconfirm"];
+
+/// Paths handed to makepkg must be absolute: makepkg runs with the RECIPE's
+/// cwd (§K.1), so a relative path resolves against the recipe directory —
+/// a relative `PACMAN` shim then does not exist there and makepkg's
+/// dependency handling dies with a bare "An unknown error has occurred".
+pub(crate) fn absolute_for_child(path: &Path) -> PathBuf {
+    std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf())
+}
 
 /// Verification-bypass tokens that must never appear anywhere in `gsa`
 /// (contract §A.3.4 / §L.8): a lane argv carrying one is a usage error, not a
@@ -117,7 +125,7 @@ pub fn makepkg_command(
     }
     let shim = crate::shim::shim_path(state_dir);
     if shim.is_file() {
-        cmd.env("PACMAN", &shim);
+        cmd.env("PACMAN", absolute_for_child(&shim));
     }
     cmd
 }
@@ -125,6 +133,17 @@ pub fn makepkg_command(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paths_handed_to_makepkg_are_absolute() {
+        // makepkg runs with the RECIPE's cwd (§K.1): a relative PACMAN shim
+        // path resolves against the recipe directory and does not exist
+        // there — the lane's `makepkg -sf` then dies with a bare
+        // "An unknown error has occurred" (real smoke, 2026-10-14).
+        let abs = absolute_for_child(Path::new("relative/state/locks/pacman-shim"));
+        assert!(abs.is_absolute(), "{abs:?}");
+        assert!(abs.ends_with("relative/state/locks/pacman-shim"), "{abs:?}");
+    }
 
     #[test]
     fn verification_bypass_tokens_are_rejected_naming_the_argument() {

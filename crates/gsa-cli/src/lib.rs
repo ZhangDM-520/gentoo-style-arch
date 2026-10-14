@@ -14,6 +14,7 @@ mod build;
 mod fetch;
 mod install;
 mod maint;
+mod prepare;
 mod qa;
 mod query;
 mod record;
@@ -29,11 +30,11 @@ use gsa_recipe::RecipeDb;
 use gsa_topo::load_project;
 use select::Ctx;
 
-const RC_OK: i32 = 0;
-const RC_USAGE: i32 = 2;
+pub(crate) const RC_OK: i32 = 0;
+pub(crate) const RC_USAGE: i32 = 2;
 /// The refusal class (§G.1): the run computed a plan it will not start —
 /// e.g. the ABI wave check's under-coverage (`abi-consumer-uncovered`).
-const RC_REFUSED: i32 = 3;
+pub(crate) const RC_REFUSED: i32 = 3;
 
 /// What the engine can execute (contract §B; the `-M` maintain surface is
 /// live with its phase — `gsa-maint` — and `-S`/`-B`/`-U`/`-Sw` runs carry
@@ -56,6 +57,8 @@ enum Command {
     Build,
     BuildInstall,
     Fetch,
+    SyncPass,
+    Update,
     Upgrade,
     Maint,
 }
@@ -65,6 +68,17 @@ enum Disposition {
     Deferred(String),
     Bad(String),
 }
+
+/// The five §B.8 sync/freshness/toolchain modifiers made LIVE on every run
+/// that builds or installs (`-B`, `-S`, `-Su`): the classifier consults this
+/// roster and record.rs's flag-rule table mirrors them in continuations.
+pub const SYNC_FLAGS: [&str; 5] = [
+    "--skip",
+    "--skip-built",
+    "--vcs-skip-tolerance",
+    "--no-sync",
+    "--allow-broken-rustc",
+];
 
 pub fn help_text() -> String {
     "\
@@ -121,6 +135,13 @@ Command surface:
   gsa -Sw <targets…> [ranges…]   fetch and verify the selection's sources
                                  through makepkg --verifysource — no build,
                                  no install; verdict rows are advisory (§D)
+  gsa -Sy [targets…] [ranges…]   version-sync pass only: provider queries,
+                                 transactional recipe rewrites left UNCOMMITTED
+                                 (review with 'git diff', then commit), and the
+                                 run-level disposition block (rule 18 anchoring)
+  gsa -Su [targets…] [ranges…]   update: the -Sy pass, then build+install the
+                                 stale set (recipes whose tracked version moved
+                                 past their newest built instance)
 Maintain verbs (contract §B.7; side-car self-healing only — never /usr or
   /var/lib/pacman):
   gsa -Ma                        audit report: legacy paths, package drift,
@@ -165,10 +186,20 @@ A selection expands to its transitive consumers (the reverse build-order
 closure); --leaf suppresses the expansion and keeps exactly what you named.
 
 Long modifiers (contract §B.8). A build run accepts: --dry-run, --leaf,
+  --skip (skip-if-fresh resume: claim a complete verified-fresh archive set;
+  waiver reasons freshness-waived / abi-provider-waived ride the record rows),
+  --skip-built (claim anything already built — newest complete set at any
+  version, no upstream probes; a recipe commit newer than the set rebuilds),
+  --vcs-skip-tolerance N (the --skip waive threshold, positive integers only;
+  beats GSA_VCS_SKIP_TOLERANCE), --no-sync (build the committed version and
+  sums as-is: no provider query, no anchoring, no rewrite),
+  --allow-broken-rustc (skip the rustc sanity probe — escape hatch for runs
+  that compile no Rust, never a way past a real ABI mismatch),
   --fail-fast (stop dispatch on the first failure; cone-stop is the default),
   --lanes N|auto, --jobs N|auto, --intensity LEVEL, --state-dir PATH,
   --no-prefetch (opt out of the advisory fetch-ahead), --prefetch-ahead N
-  (fetch-ahead window, default 8).
+  (fetch-ahead window, default 8). --skip and --skip-built are different
+  claims and cannot combine.
 The side-car queries (-Qb/-Qp) accept --state-dir PATH — the state-root
   override (§J.3), flag beats GSA_STATE_DIR.
 An install run (-S/-U) additionally accepts: --config PATH (the target
@@ -179,9 +210,7 @@ A maintain run (-M) accepts its verb's sub-flags (§B.7): --fix, --prune,
   --noconfirm (the engine's own confirmations — -Mm/-Mccc — never a pacman
   question), and (-Mi) --config PATH; --dry-run renders a mutating verb's
   plan and rows without touching anything.
-Deferred (parse and refuse, so the message names them): --skip, --skip-built,
-  --vcs-skip-tolerance N, --no-sync, --allow-broken-rustc,
-  --quiet, --verbose.
+Deferred (parse and refuse, so the message names them): --quiet, --verbose.
 
 Engine environment inputs: GSA_STATE_DIR, GSA_LANES, GSA_JOBS, GSA_INTENSITY,
   GSA_CPU_THREADS, GSA_MEMORY_GIB, GSA_TARGET_CPU, GSA_VCS_SKIP_TOLERANCE.
@@ -219,6 +248,11 @@ fn classify(inv: &Invocation) -> Disposition {
     let is_build_run = inv.family == Family::B && inv.action.is_none() && !inv.dry_run;
     let is_install_run = inv.family == Family::S && inv.action.is_none() && !inv.dry_run;
     let is_upgrade_run = inv.family == Family::U;
+    // `-Su` (§B.4): `-Sy`, then build+install the stale set — a build run
+    // plus the five §B.8 sync/freshness/toolchain modifiers.
+    let is_update_run = inv.family == Family::S && inv.action == Some('u');
+    // `-Sy` (§B.4): the version-sync pass only; it takes no build modifiers.
+    let is_sync_pass = inv.family == Family::S && inv.action == Some('y');
     // The side-car queries (§B.3 `-Qb`/`-Qp`) read the state root, so they
     // take `--state-dir` like every other state-root surface (§J.3).
     let is_side_car_query = inv.family == Family::Q
@@ -230,11 +264,17 @@ fn classify(inv: &Invocation) -> Disposition {
     // the root cause — is what the user reads.
     let maint_gate_stands_down = is_maint && maint::verb_of(inv).is_err();
     let accepted: Vec<&str> = if is_build_run {
-        build::REAL_BUILD_FLAGS.to_vec()
-    } else if is_install_run {
-        build::REAL_INSTALL_FLAGS.to_vec()
+        let mut flags = build::REAL_BUILD_FLAGS.to_vec();
+        flags.extend_from_slice(&SYNC_FLAGS);
+        flags
+    } else if is_install_run || is_update_run {
+        let mut flags = build::REAL_INSTALL_FLAGS.to_vec();
+        flags.extend_from_slice(&SYNC_FLAGS);
+        flags
     } else if is_upgrade_run {
         install::REAL_UPGRADE_FLAGS.to_vec()
+    } else if is_sync_pass {
+        Vec::new()
     } else if is_side_car_query {
         vec!["--state-dir"]
     } else if is_maint {
@@ -250,7 +290,7 @@ fn classify(inv: &Invocation) -> Disposition {
         .find(|f| !maint_gate_stands_down && !accepted.contains(&f.as_str()))
     {
         return Disposition::Deferred(format!(
-            "{flag} (a later phase owns it; a build run accepts --fail-fast, --lanes, --jobs, --intensity, --state-dir; an install run (-S/-U) additionally accepts --no-register-ignorepkg, --config)"
+            "{flag} (a later phase owns it; a build run accepts --skip, --skip-built, --vcs-skip-tolerance, --no-sync, --allow-broken-rustc, --fail-fast, --lanes, --jobs, --intensity, --state-dir; an install run (-S/-U) additionally accepts --no-register-ignorepkg, --config)"
         ));
     }
     let accepts_pacman_args = matches!(inv.family, Family::S | Family::U) && inv.action.is_none();
@@ -283,12 +323,8 @@ fn classify(inv: &Invocation) -> Disposition {
         (Family::U, None) => Command::Upgrade,
         (Family::M, _) => Command::Maint,
         (Family::S, Some('w')) => Command::Fetch,
-        (Family::S, Some('y')) => {
-            return Disposition::Deferred("gsa -Sy version-sync pass (later phase)".to_string())
-        }
-        (Family::S, Some('u')) => {
-            return Disposition::Deferred("gsa -Su update (Phase 4)".to_string())
-        }
+        (Family::S, Some('y')) => Command::SyncPass,
+        (Family::S, Some('u')) => Command::Update,
         _ => {
             return Disposition::Deferred(format!(
                 "{} (later phase; the build-only family -B is what Phase 2 executes)",
@@ -299,11 +335,11 @@ fn classify(inv: &Invocation) -> Disposition {
     if inv.dry_run
         && !matches!(
             command,
-            Command::Plan | Command::Upgrade | Command::Fetch | Command::Maint
+            Command::Plan | Command::Update | Command::Upgrade | Command::Fetch | Command::Maint
         )
     {
         return Disposition::Bad(
-            "--dry-run applies to build/install/fetch actions (-S/-B/-U/-Sw) and the -M maintain verbs; queries are already read-only"
+            "--dry-run applies to build/install/fetch/update actions (-S/-B/-U/-Sw/-Su) and the -M maintain verbs; queries are already read-only and `gsa -Sy` is the rewrite pass itself (recipe rewrites left uncommitted — there is no dry form)"
                 .to_string(),
         );
     }
@@ -315,6 +351,7 @@ fn classify(inv: &Invocation) -> Disposition {
                 | Command::Build
                 | Command::BuildInstall
                 | Command::Fetch
+                | Command::Update
                 | Command::Maint
         )
     {
@@ -326,7 +363,7 @@ fn classify(inv: &Invocation) -> Disposition {
     Disposition::Run(command)
 }
 
-fn resolve_intensity(project: &gsa_topo::ProjectConfig) -> Result<String, String> {
+pub(crate) fn resolve_intensity(project: &gsa_topo::ProjectConfig) -> Result<String, String> {
     match std::env::var("GSA_INTENSITY") {
         Ok(value) if !value.is_empty() => {
             if gsa_topo::INTENSITY_LEVELS.contains(&value.as_str()) {
@@ -417,6 +454,8 @@ fn execute(
         | Command::Build
         | Command::BuildInstall
         | Command::Fetch
+        | Command::SyncPass
+        | Command::Update
         | Command::Upgrade
         | Command::Maint => unreachable!(),
         Command::List => {
@@ -532,40 +571,7 @@ fn execute(
             query::query_revdep(inv, out, err).map_err(cmd_error)?;
         }
         Command::Plan => {
-            if inv.targets.is_empty() {
-                return Err(cmd_error(
-                    "selection is mandatory: a build never starts without a selection".to_string(),
-                ));
-            }
-            let mut selection = select::build_selection(&ctx, &inv.targets, &inv.ranges, inv.leaf)
-                .map_err(|e| cmd_error(e.to_string()))?;
-            write_notes(err, &selection.notes);
-            // The same pre-dispatch ABI wave check the build pipeline runs
-            // (§E.3): the dry-run shows the wave it would build — additions
-            // join the plan, and an under-covered member refuses (rc 3).
-            let state_dir = gsa_state::resolve_state_root(inv.state_dir.as_deref());
-            let wave = build::wave_check(out, err, ctx.graph, &selection, &state_dir)
-                .map_err(cmd_error)?;
-            build::extend_selection(&mut selection, &wave.additions);
-            let intensity = resolve_intensity(&project).map_err(cmd_error)?;
-            let expansion_added = selection.closure_size.saturating_sub(selection.seeds.len());
-            let _ = write!(
-                out,
-                "{}",
-                render::render_plan_prose(
-                    &selection.listed,
-                    expansion_added,
-                    selection.closure_size,
-                    inv.leaf,
-                    true,
-                )
-            );
-            let rec =
-                record::build_plan_record(inv, &selection, &inv.targets, &inv.ranges, &intensity);
-            let _ = write!(out, "{}", rec.render_machine());
-            if wave.uncovered {
-                return Ok(RC_REFUSED);
-            }
+            return Ok(build::plan_only(&ctx, inv, &project, out, err).map_err(cmd_error)?);
         }
     }
     Ok(RC_OK)
@@ -636,6 +642,8 @@ pub fn run(argv: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
             Disposition::Run(Command::Build) => build::run_build(&inv, out, err),
             Disposition::Run(Command::BuildInstall) => build::run_build_install(&inv, out, err),
             Disposition::Run(Command::Fetch) => fetch::run_fetch_only(&inv, out, err),
+            Disposition::Run(Command::SyncPass) => prepare::run_sync_pass(&inv, out, err),
+            Disposition::Run(Command::Update) => build::run_update(&inv, out, err),
             Disposition::Run(Command::Upgrade) => install::run_upgrade(&inv, out, err),
             Disposition::Run(Command::Maint) => maint::run(&inv, out, err),
             Disposition::Run(command) => match execute(&inv, command, out, err) {
@@ -677,12 +685,26 @@ mod tests {
 
     #[test]
     fn deferred_spellings_refuse_with_a_clear_message() {
-        for spelling in ["-Ql", "-Sy", "-Su"] {
+        for spelling in ["-Ql"] {
             let (code, _out, err) = run_capture(&[spelling]);
             assert_eq!(code, 2, "{spelling} must be deferred");
             assert!(
                 err.contains("deferred to a later phase"),
                 "{spelling}: {err}"
+            );
+        }
+        // -Sy/-Su are LIVE (contract §B.4). Assert at the classifier — never
+        // through `run`, which would execute a real version-sync pass against
+        // whatever repository the test runs in.
+        for spelling in ["-Sy", "-Su"] {
+            let argv: Vec<String> = [spelling].iter().map(|s| s.to_string()).collect();
+            let parsed = args::parse(&argv).expect("a bare spelling parses");
+            let Parsed::Invoke(inv) = parsed else {
+                panic!("{spelling} must parse as an invocation");
+            };
+            assert!(
+                matches!(classify(&inv), Disposition::Run(_)),
+                "{spelling} is live and must not defer"
             );
         }
         // -Qa/-Qr are live (the ABI subsystem's query surface): usage-class

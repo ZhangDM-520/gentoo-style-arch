@@ -146,13 +146,30 @@ pub fn decision_plan_row(row: &DecisionRow) -> PlanRow {
 }
 
 /// The mirrored flags of a continuation's `command:` line (contract §H.2) —
-/// everything the run made real restated as explicit flags: `--fail-fast`,
+/// everything the run made real restated as explicit flags: the five
+/// §B.8 sync/freshness/toolchain modifiers (`--skip`, `--skip-built`,
+/// `--vcs-skip-tolerance N`, `--no-sync`, `--allow-broken-rustc`), `--fail-fast`,
 /// `--state-dir`, `--config`, `--no-register-ignorepkg`, `--no-prefetch`,
 /// `--prefetch-ahead` (mirrored when non-default, per the flag-rule table —
 /// docs/adr/0004-prefetch-advisory.md), and the resolved
 /// `--lanes`/`--jobs`/`--intensity` values.
 fn mirror_flags(inv: &Invocation, budget: Option<&gsa_sched::budget::Budget>) -> String {
     let mut out = String::new();
+    if inv.skip {
+        out.push_str(" --skip");
+    }
+    if inv.skip_built {
+        out.push_str(" --skip-built");
+    }
+    if let Some(tolerance) = &inv.vcs_skip_tolerance {
+        out.push_str(&format!(" --vcs-skip-tolerance {tolerance}"));
+    }
+    if inv.no_sync {
+        out.push_str(" --no-sync");
+    }
+    if inv.allow_broken_rustc {
+        out.push_str(" --allow-broken-rustc");
+    }
     if inv.fail_fast {
         out.push_str(" --fail-fast");
     }
@@ -286,34 +303,24 @@ pub fn build_plan_record(
 }
 
 /// Build the one run record for a real build run (contract §H): plan rows
-/// from the selection, outcome rows as the dispatch machine settled them
-/// (never re-derived here), and a continuation that restates the resume.
-/// The same structure is rendered three ways by the caller (streaming
-/// dashboard events during the run, prose summary, machine block).
+/// and `order` from the pre-dispatch pass and the dispatch machine
+/// (§H.2 — the supervisor's carried nodes: the selection plus any activated
+/// remediation latent), outcome rows as the machine settled them (never
+/// re-derived here), and a continuation that restates the resume. The same
+/// structure is rendered three ways by the caller (streaming dashboard
+/// events during the run, prose summary, machine block).
 pub fn build_run_record(
     inv: &Invocation,
-    selection: &Selection,
     targets: &[String],
     ranges: &[String],
     budget: Option<&gsa_sched::budget::Budget>,
+    plan: Vec<PlanRow>,
+    order: Vec<RecipeId>,
     outcomes: Vec<OutcomeRow>,
     outcome: &gsa_model::RunOutcome,
     prefetch_warnings: Option<u32>,
 ) -> RunRecord {
     let selection_source = selection_source(targets, inv.leaf, ranges);
-    let plan_action = match inv.family {
-        Family::B => PlanAction::Build,
-        _ => PlanAction::BuildInstall,
-    };
-    let plan: Vec<PlanRow> = selection
-        .listed
-        .iter()
-        .map(|(_, id)| PlanRow {
-            pkg: id.clone(),
-            action: plan_action,
-            reason: "ok".to_string(),
-        })
-        .collect();
 
     // Restated invocation (contract §H.2): family + action + mirrored
     // cluster letters (`f` mirrors, the prune strength `c` never does), the
@@ -348,7 +355,7 @@ pub fn build_run_record(
 
     RunRecord {
         selection_source,
-        order: selection.listed.iter().map(|(_, id)| id.clone()).collect(),
+        order,
         lanes: budget.map(|b| b.lanes),
         normal_jobs: budget.map(|b| b.normal_jobs),
         core_jobs: budget.map(|b| b.core_jobs),
@@ -580,6 +587,11 @@ mod tests {
             pacman_args: None,
             no_prefetch: false,
             prefetch_ahead: None,
+            skip: false,
+            skip_built: false,
+            vcs_skip_tolerance: None,
+            no_sync: false,
+            allow_broken_rustc: false,
         };
         let record = build_plan_record(&inv, &selection(2), &["@git".to_string()], &[], "xhigh");
         assert_eq!(record.outcome, "planned");
@@ -621,6 +633,11 @@ mod tests {
             pacman_args: None,
             no_prefetch: false,
             prefetch_ahead: None,
+            skip: false,
+            skip_built: false,
+            vcs_skip_tolerance: None,
+            no_sync: false,
+            allow_broken_rustc: false,
         };
         let record = build_plan_record(
             &inv,
@@ -660,6 +677,11 @@ mod tests {
             pacman_args: None,
             no_prefetch: false,
             prefetch_ahead: None,
+            skip: false,
+            skip_built: false,
+            vcs_skip_tolerance: None,
+            no_sync: false,
+            allow_broken_rustc: false,
         };
         let outcomes = vec![
             OutcomeRow {
@@ -686,12 +708,14 @@ mod tests {
         ];
         let run_outcome = gsa_model::RunOutcome::compute(&outcomes, true, false, false);
         assert_eq!((run_outcome.outcome, run_outcome.rc), ("failed", 1));
+        let (plan, order) = plan_and_order(&selection(3), PlanAction::Build);
         let record = build_run_record(
             &inv,
-            &selection(3),
             &["@git".to_string()],
             &[],
             None,
+            plan,
+            order,
             outcomes,
             &run_outcome,
             None,
@@ -729,6 +753,25 @@ mod tests {
             .any(|n| n == "GSA_STATE_DIR"));
     }
 
+    /// The plan/order pair a plain run would carry (one build row per
+    /// selection id, in selection order).
+    fn plan_and_order(selection: &Selection, action: PlanAction) -> (Vec<PlanRow>, Vec<RecipeId>) {
+        let mut plan = Vec::new();
+        let mut order = Vec::new();
+        for (_, id) in &selection.listed {
+            plan.push(PlanRow {
+                pkg: id.clone(),
+                action: match action {
+                    PlanAction::Build => PlanAction::Build,
+                    _ => PlanAction::BuildInstall,
+                },
+                reason: "ok".to_string(),
+            });
+            order.push(id.clone());
+        }
+        (plan, order)
+    }
+
     fn inv_for(family: Family) -> Invocation {
         Invocation {
             family,
@@ -751,6 +794,11 @@ mod tests {
             pacman_args: None,
             no_prefetch: false,
             prefetch_ahead: None,
+            skip: false,
+            skip_built: false,
+            vcs_skip_tolerance: None,
+            no_sync: false,
+            allow_broken_rustc: false,
         }
     }
 
@@ -811,12 +859,14 @@ mod tests {
             reason: "ok".to_string(),
         }];
         let run_outcome = gsa_model::RunOutcome::compute(&outcomes, true, false, false);
+        let (plan, order) = plan_and_order(&selection(1), PlanAction::BuildInstall);
         let record = build_run_record(
             &inv,
-            &selection(1),
             &["pkg1".to_string()],
             &[],
             None,
+            plan,
+            order,
             outcomes,
             &run_outcome,
             None,

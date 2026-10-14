@@ -766,9 +766,6 @@ pub fn install_built_package(
             if !group.rows.iter().any(|r| r.decision == Decision::Install) {
                 continue;
             }
-            let Some(info) = group.pkginfo.as_ref() else {
-                continue;
-            };
             let recipe_id = group
                 .candidate
                 .recipe_dir
@@ -776,6 +773,19 @@ pub fn install_built_package(
                 .and_then(|d| d.file_name())
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_else(|| info_name(group));
+            // The in-run repair contract (rule 25(d)): the marked recipe's
+            // own install consumes its forced-rebuild marker — only what
+            // actually installed clears it, so a skipped build, a refused
+            // plan or a failed transaction leaves the marker pending (fish
+            // `repair_markers_clear`). Without this the read side would make
+            // a marked recipe rebuild forever.
+            let marker = run.state_dir.join("abi-repair").join(&recipe_id);
+            if marker.exists() {
+                let _ = std::fs::remove_file(&marker);
+            }
+            let Some(info) = group.pkginfo.as_ref() else {
+                continue;
+            };
             if let Err(error) = record_subscriptions(
                 &run.state_dir,
                 &recipe_id,

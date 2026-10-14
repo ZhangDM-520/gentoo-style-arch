@@ -25,7 +25,7 @@ mod ownership;
 
 pub use health::{check, Finding, HealthReport};
 pub use index::{
-    prune_instance, reindex_archives, register_instance, verify_row, wire_row, BinpkgIndex,
+    prune_instance, register_instance, reindex_archives, verify_row, wire_row, BinpkgIndex,
     IndexRow, Match, RegisterOutcome, Retention, Verification,
 };
 pub use kv::Kv;

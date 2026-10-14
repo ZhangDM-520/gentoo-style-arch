@@ -1,3 +1,108 @@
+## 2026-10-14 — gsa engine waves 2–4: seven engine bugs retired at the sync/freshness/install seams, repair markers get their consume half, and the real-tree smoke exposes a relative-path hazard in the lane's makepkg contract
+
+**Symptoms.** Flipping `tests/skip-upstream.sh` and running the fixture battery
+against the native engine surfaced seven engine defects (reported as B1–B7 by
+the fixture fleet) plus three fixture-model bugs; a real-tree `gsa -B --skip`
+smoke then found one more engine bug the synthetic fixtures structurally
+could not.
+
+**Root causes and fixes.**
+
+1. **B1 — retention pruned the archive a kept row still referenced.** Same-
+   version rebuilds write a new index row for the *same* PKGDEST name
+   (`p1-1.0.0-1-any.pkg.tar.zst`), and `register_instance`'s budget sweep
+   deleted the oldest instance's file unconditionally — so the archive a
+   `--skip` claim had just claimed disappeared ("the claim consumed its own
+   evidence") and later baselines failed to fingerprint. Fix
+   (`crates/gsa-state/src/index.rs`): decide the whole prune set first, then
+   delete only paths no surviving row references; a kept file is reported
+   (`retention pruned … (archive kept — a kept row still references it)`).
+2. **B2 — doubled article + dropped log.** `classify_sync` re-rendered anchor
+   lines with a hard-coded `"the provider"` owner while `SyncReport::log` —
+   the owner-labelled render plus the provider's superset-extras note — went
+   unread ("does not match the **the the** provider published checksum").
+   Fix (`crates/gsa-recipe/src/sync.rs`, `crates/gsa-cli/src/prepare.rs`):
+   `SyncReport::log` is now the complete loud render (the Defer/IntegrityStop/
+   Refused arms extend it too), `classify_sync` prints it verbatim
+   (`push_once` de-dupes the outcome message), and `log_lines`'s integrity
+   wording normalises the article ("the official"/"AUR" labels carry their
+   own article or none).
+3. **B3 — single-pkgname tracker sections refused.** `prepare::nvchecker_provider`
+   keyed sections by pkgbase + directory name only, so a split recipe whose
+   `.nvchecker.toml` section is its single output name (`zen-browser-pgo`)
+   refused with `no such section`. Fix: the key list is now
+   `RecipeInfo::read`'s identity rule — pkgbase, then the single pkgname,
+   then the directory name.
+4. **B4 — a rejected `GSA_VCS_SKIP_TOLERANCE` was silently absorbed.**
+   `pass_config` kept `ToleranceResolution::tolerance` and dropped its
+   `warning`, so the loud "…is not a positive integer — using the default 5"
+   line was unrenderable. Fix: `PassConfig::notes` carries it and the build
+   pipeline prints it as `gsa: note:`.
+5. **B5 — freshness build reasons lost their detail.** `Verdict::Build` is
+   `"<key>: <detail>"`, and prepare logged the key only. Fix: the full reason
+   reaches the log; run-record rows keep the §H.3 keys (details are
+   diagnostics, not row reasons).
+6. **B6 — `gsa -B --dry-run` discarded its own refusal.** The `Command::Plan`
+   arm of `crates/gsa-cli/src/lib.rs` ignored `plan_only`'s rc, so an
+   under-covered ABI wave exited 0 instead of 3. Fix: the arm returns the rc.
+7. **B7 (decision) — the toolchain preflight's `pacman -Q rust-git` probe runs
+   on every build-family run** (the contract says "the toolchain preflight
+   refuses before building unless `--allow-broken-rustc`", unconditioned on
+   selection; `--allow-broken-rustc` is the documented escape for runs
+   compiling no Rust). Fixture pacman oracles therefore count TRANSACTIONS
+   (`pacman -U`), never invocations: `tests/gsa-fetch-v2.sh`
+   `assert_no_transactions` tolerates exactly the probe line,
+   `tests/gsa-install-v2.sh` counts `pacman -U` and its §K.3 argv-shape loop
+   skips the probe.
+8. **Repair markers only had a read half.** `prepare` already forced a rebuild
+   for a pending `<state>/abi-repair/<id>` marker, but nothing consumed it —
+   a marked recipe would rebuild forever (the exact stranding fish's
+   `repair_markers_clear` prevents). Fix
+   (`crates/gsa-install/src/lib.rs`): install acceptance consumes the marker
+   for every recipe whose archive actually installed, after a successful
+   `pacman -U` — a skipped build, a refused plan or a failed transaction
+   leaves it pending. The write half (plan `repair` rows staging markers
+   before the transaction) remains contract gap G1 and stays fish-driven in
+   `tests/abi-drift-install.sh` case N.
+9. **Relative `--state-dir` killed every lane build.** `shim_path` handed
+   makepkg `PACMAN=.state/locks/pacman-shim`; makepkg runs with the *recipe's*
+   cwd (§K.1), so the shim did not exist there and `makepkg -sf` died with a
+   bare "An unknown error has occurred. Exiting..." — reproducible only on a
+   real tree, because every fixture passes an absolute state root. Fix
+   (`crates/gsa-build/src/makepkg.rs`): paths handed to makepkg are absolute
+   (`absolute_for_child`), pinned by `tests/gsa-sched-v2.sh` §7 (relative
+   `--state-dir`, stub records the `PACMAN` it saw).
+10. **Fixture-model bugs (found peeling `skip-upstream` to green).** (a) GNU
+    tar emits byte-identical archives for same-content repeats within one
+    second (verified: equal sha256), so the "replaced bytes under the live
+    manifest" case never replaced anything and its skip claim was *correct* —
+    `pkginfo_archive` gained a MARKER member so a replacement is a different
+    payload by construction. (b) Eight `--skip-built`-before-the-family call
+    sites are usage errors ("a bare invocation needs a family") — reordered
+    family-first, matching the fixture's own header. (c) The pacman-oracle
+    pins above (B7).
+
+**Validation.** `cargo build/test/fmt --all --check` green, zero warnings;
+mutation probes proved the new pins can fail (B1 guard removed → unit test
+red; §7 fix reverted → `PACMAN=state/locks/pacman-shim` red) and restored;
+full battery `TMPDIR=$HOME/Workspace/gsa-battery RUN_ALL_JOBS=8 bash
+tests/run-all.sh` **65/65 PASS**; real-tree smoke `gsa -B --skip --no-sync
+--state-dir .state --leaf brightnessctl` builds (rc 0, binpkg instance 1) and
+then claims `skip ok`, whose retention sweep prints the B1 fix live
+(`retention pruned brightnessctl instance 1 (archive kept — a kept row still
+references it)`).
+
+**Durable rules.** (1) Binpkg retention may only delete a file no surviving
+index row references — same-version rebuilds share one PKGDEST name. (2) A
+sync report's `log` is the authoritative render; never re-render anchors with
+a guessed owner label. (3) nvchecker tracker keys follow
+`pkgbase → single pkgname → directory`. (4) Fixture pacman oracles count
+`pacman -U` transactions; read-only `pacman -Q` probes (the toolchain
+preflight) are not transactions. (5) Paths crossing into makepkg must be
+absolute. (6) A fixture modelling "replaced bytes" must change the payload —
+same-second `tar` output is byte-identical. (7) A pending repair marker is
+consumed only by the marked recipe's own successful install.
+
 ## 2026-10-12 — gsa-pm bootstrap recipe: the native engine ships in the repo it manages, with Cargo.lock as the checksum pin instead of vendored crates
 
 **Motivation.** The native PM (`gsa`, Rust workspace at the repo root) must

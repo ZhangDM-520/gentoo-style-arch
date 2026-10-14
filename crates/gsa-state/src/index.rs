@@ -411,7 +411,8 @@ pub fn reindex_archives(
 pub struct RegisterOutcome {
     /// The rows written for this build's instance.
     pub rows: Vec<IndexRow>,
-    /// Rows pruned away (their archive files deleted).
+    /// Rows pruned away (their archive files deleted, unless a surviving
+    /// row still references the same path — see the delete guard).
     pub pruned: Vec<IndexRow>,
     /// Recipes whose pruning was deferred — their lanes are still in
     /// flight and their archives are in use by the run (§J.4's guard).
@@ -512,6 +513,13 @@ pub fn register_instance(
         .entry(recipe_id.to_string())
         .or_default()
         .push(instance);
+    // Decide the whole prune set BEFORE deleting anything. A same-version
+    // rebuild writes a new row for the SAME PKGDEST path, so one file can be
+    // referenced by rows on both sides of the budget line; deleting a file a
+    // kept row references destroys the very evidence a `--skip` claim just
+    // used ("the claim consumed its own archive"). The delete half is
+    // therefore guarded by path: a file any surviving row references stays.
+    let mut drops: Vec<(String, u64)> = Vec::new();
     for (id, instances) in by_recipe {
         let mut instances = instances;
         instances.sort_unstable();
@@ -529,37 +537,57 @@ pub fn register_instance(
             continue;
         }
         for dropped in &instances[keep..] {
-            for row in index
-                .rows
-                .iter()
-                .filter(|r| r.recipe_id == id && r.instance == *dropped)
-            {
-                store::append_json(
-                    &root.index_path(),
-                    &IndexEntry::Prune {
-                        recipe_id: id.clone(),
-                        instance: *dropped,
-                    },
-                    err,
-                )?;
-                let file = row.archive.clone();
-                match std::fs::remove_file(&file) {
-                    Ok(()) => outcome.notes.push(format!(
-                        "binpkg index: retention pruned {id} instance {dropped} ({})",
-                        file.file_name()
-                            .map(|n| n.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| file.to_string_lossy().into_owned())
-                    )),
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => outcome.notes.push(
-                        format!("binpkg index: retention pruned {id} instance {dropped} (archive already gone)"),
-                    ),
-                    Err(e) => outcome.notes.push(format!(
-                        "binpkg index: retention could not delete {} ({e}) — remove it by hand",
-                        file.display()
-                    )),
-                }
+            drops.push((id.clone(), *dropped));
+        }
+    }
+    let dropped_keys: BTreeSet<(String, u64)> = drops.iter().cloned().collect();
+    let mut kept_paths: BTreeSet<PathBuf> = BTreeSet::new();
+    for row in &index.rows {
+        if !dropped_keys.contains(&(row.recipe_id.clone(), row.instance)) {
+            kept_paths.insert(row.archive.clone());
+        }
+    }
+    for row in &outcome.rows {
+        kept_paths.insert(row.archive.clone());
+    }
+    for (id, dropped) in drops {
+        for row in index
+            .rows
+            .iter()
+            .filter(|r| r.recipe_id == id && r.instance == dropped)
+        {
+            store::append_json(
+                &root.index_path(),
+                &IndexEntry::Prune {
+                    recipe_id: id.clone(),
+                    instance: dropped,
+                },
+                err,
+            )?;
+            let file = row.archive.clone();
+            if kept_paths.contains(&file) {
+                outcome.notes.push(format!(
+                    "binpkg index: retention pruned {id} instance {dropped} (archive kept — a kept row still references it)"
+                ));
                 outcome.pruned.push(row.clone());
+                continue;
             }
+            match std::fs::remove_file(&file) {
+                Ok(()) => outcome.notes.push(format!(
+                    "binpkg index: retention pruned {id} instance {dropped} ({})",
+                    file.file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| file.to_string_lossy().into_owned())
+                )),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => outcome.notes.push(format!(
+                    "binpkg index: retention pruned {id} instance {dropped} (archive already gone)"
+                )),
+                Err(e) => outcome.notes.push(format!(
+                    "binpkg index: retention could not delete {} ({e}) — remove it by hand",
+                    file.display()
+                )),
+            }
+            outcome.pruned.push(row.clone());
         }
     }
     Ok(outcome)
@@ -745,6 +773,51 @@ mod tests {
             .filter(|e| e.file_name().to_string_lossy().starts_with("hub-"))
             .collect();
         assert_eq!(hub_archives.len(), 2);
+    }
+
+    #[test]
+    fn retention_prune_never_deletes_a_path_a_kept_row_references() {
+        // A same-version rebuild writes a new row for the SAME PKGDEST name,
+        // so one file sits behind two instances. Pruning the older instance
+        // must tombstone its row but leave the file: the kept row's evidence
+        // (and the `--skip` claim built on it) may never be deleted by
+        // retention ("the claim consumed its own archive").
+        let dir = scratch("shared-path");
+        let root = StateRoot::open(&dir).unwrap();
+        let retention = Retention::from_records(&synthetic_topology()).unwrap();
+        let mut err = Vec::new();
+        let in_flight = BTreeSet::new();
+
+        let mut outcome = None;
+        for _ in 0..2 {
+            let archive = make_archive(&dir, "leaf", "1.0.0-1");
+            outcome = Some(
+                register_instance(
+                    &root,
+                    "leaf",
+                    &[archive.clone()],
+                    &retention,
+                    &in_flight,
+                    None,
+                    &mut err,
+                )
+                .unwrap(),
+            );
+        }
+        let outcome = outcome.unwrap();
+        assert_eq!(outcome.pruned.len(), 1, "the older instance is pruned");
+        assert_eq!(outcome.pruned[0].instance, 1);
+        assert!(
+            outcome.notes.iter().any(|n| n.contains("archive kept")),
+            "the kept file is reported, not deleted: {:?}",
+            outcome.notes
+        );
+        assert!(
+            dir.join("leaf-1.0.0-1-any.pkg.tar.zst").exists(),
+            "the archive a kept row references survives the sweep"
+        );
+        let index = BinpkgIndex::load(&root).unwrap();
+        assert_eq!(index.instances_for("leaf"), vec![2]);
     }
 
     #[test]

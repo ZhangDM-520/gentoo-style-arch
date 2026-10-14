@@ -20,7 +20,10 @@ use std::rc::Rc;
 use gsa_model::{RecipeId, TopologyRecord};
 
 pub mod elf;
+pub mod freshness;
 pub mod pkginfo;
+pub mod sync;
+pub mod toolchain;
 
 /// A recipe-metadata refusal: names the recipe/file and, when the offender
 /// lives on one, its line.

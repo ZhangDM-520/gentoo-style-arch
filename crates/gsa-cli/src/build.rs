@@ -22,15 +22,17 @@ use gsa_fetch::candidacy::{classify as classify_candidacy, FetchCandidacy};
 use gsa_graph::Graph;
 use gsa_install::localdb::{pacman_db_root, LocalDb};
 use gsa_install::{preflight_installs, DecideMode, InstallRun};
-use gsa_model::{Group, OutcomeRow, RecipeId, RowStatus, RunOutcome};
+use gsa_model::{Group, OutcomeRow, PlanAction, PlanRow, RecipeId, RowStatus, RunOutcome};
+use gsa_recipe::toolchain;
 use gsa_recipe::RecipeDb;
 use gsa_sched::budget::{self, Baselines, Budget, Override};
 use gsa_sched::lock;
 use gsa_sched::machine::Policy;
-use gsa_sched::supervisor::{self, InstallStep, PrefetchSetup, RunSetup, SupNode};
+use gsa_sched::supervisor::{self, InstallStep, PreSettle, PrefetchSetup, RunSetup, SupNode};
 use gsa_topo::ProjectConfig;
 
 use crate::args::Invocation;
+use crate::prepare;
 use crate::select::{self, Ctx, Selection};
 use crate::{record, render};
 
@@ -281,8 +283,96 @@ fn run_build_with(
         }
     }
 
+    // ── the pre-dispatch decision pass (contract §B.4/§B.8) ──────────────
+    // 1. the toolchain PREFLIGHT (owner rule 2026-09-25): a broken rustc
+    //    refuses before anything builds (§G.1 rc 3) unless
+    //    `--allow-broken-rustc` — that escape hatch is for runs that compile
+    //    no Rust, never a way past a real ABI mismatch (the MID-RUN trigger
+    //    in the supervisor always engages).
+    if !inv.allow_broken_rustc {
+        match toolchain::rustc_sanity_probe(&probe_scratch()) {
+            toolchain::ProbeStatus::Ok => {}
+            toolchain::ProbeStatus::Skipped { reason } => {
+                let _ = writeln!(err, "gsa: note: rustc sanity probe skipped ({reason})");
+            }
+            toolchain::ProbeStatus::Failed { detail } => {
+                let _ = writeln!(err, "gsa: {detail}");
+                let _ = writeln!(err, "{}", toolchain::remediation_refusal_text());
+                return refuse_before_dispatch(
+                    inv,
+                    &selection,
+                    &budget,
+                    &state_dir,
+                    out,
+                    err,
+                    "preflight-refused",
+                );
+            }
+        }
+    }
+    // 2. the version-sync + freshness pass (one pass, canonical order).
+    let cfg = match prepare::pass_config(inv) {
+        Ok(cfg) => cfg,
+        Err(message) => {
+            let _ = writeln!(err, "gsa: {message}");
+            return 2;
+        }
+    };
+    for line in &cfg.notes {
+        let _ = writeln!(err, "gsa: note: {line}");
+    }
+    let prepared = prepare::prepare_all(&root, &state_dir, &graph, &selection, &cfg);
+    for prep in &prepared.packages {
+        for line in &prep.log {
+            let _ = writeln!(err, "gsa: note: {line}");
+        }
+    }
+    // 3. a fail-closed refusal (integrity stop / named sync refusal) aborts
+    //    BEFORE any makepkg (§G.1 rc 3): the offending row fails, every
+    //    other row is `never-started - - startup-refused`, plan rows keep
+    //    the planned action.
+    if let Some(at) = prepared.first_refusal() {
+        return refuse_prepared(
+            inv, &selection, &budget, &state_dir, &prepared, at, out, err,
+        );
+    }
+    // 4. per-node pre-settlements (§B.8) ride the supervisor's nodes: a
+    //    `--skip` claim settles at readiness (register+install hooks, no
+    //    lane), a deferral settles before dispatch (its cone parks).
+    let mut pre: std::collections::BTreeMap<String, crate::prepare::NodePlan> =
+        std::collections::BTreeMap::new();
+    for (prep, (_, id)) in prepared.packages.iter().zip(&selection.listed) {
+        if matches!(
+            prep.plan,
+            crate::prepare::NodePlan::Skip { .. } | crate::prepare::NodePlan::Defer { .. }
+        ) {
+            pre.insert(id.as_str().to_string(), prep.plan.clone());
+        }
+    }
+    // 5. the remediation latent set (owner rule 2026-10-02): every possible
+    //    remediation target not already in the selection, in force-queue
+    //    order — the broken consumer first, then the `core` roster (the
+    //    escalated chain's order, fish `_GROUP_core`).
+    let core_members: Vec<String> = graph
+        .records()
+        .iter()
+        .filter(|record| record.groups.contains(&Group::Core))
+        .map(|record| record.id.as_str().to_string())
+        .collect();
+    let mut latents: Vec<String> = Vec::new();
+    if install.is_some() {
+        for id in std::iter::once("rust-git".to_string()).chain(core_members.iter().cloned()) {
+            if graph.index_of(id.as_str()).is_some()
+                && !selection.listed.iter().any(|(_, sel)| sel.as_str() == id)
+                && !latents.contains(&id)
+            {
+                latents.push(id);
+            }
+        }
+    }
+
     // ── dispatch nodes: the selection in canonical build order ────────────
-    let nodes = build_nodes(&root, &graph, &selection);
+    let nodes = build_nodes(&root, &graph, &selection, &pre, &latents);
     let batches = build_batches(&graph, &selection);
 
     let _ = writeln!(out, "{}", budget.parallelism_line());
@@ -312,7 +402,7 @@ fn run_build_with(
     // called per package on the supervisor's event loop, before its result
     // reaches the machine. `later_installs` is the run-order remainder
     // (in-run repair coverage, rule 25(d)).
-    let install_hook: Option<Box<dyn FnMut(&str, &std::path::Path) -> InstallStep + Send>> =
+    let install_hook: Option<Box<dyn FnMut(&str, &std::path::Path, bool) -> InstallStep + Send>> =
         install.map(|mode| {
             let state_dir = state_dir.clone();
             let conf = inv.config.as_ref().map(PathBuf::from);
@@ -322,26 +412,35 @@ fn run_build_with(
                 .iter()
                 .any(|f| f == "--no-register-ignorepkg");
             let mut later: Vec<String> = ids.iter().map(|id| id.as_str().to_string()).collect();
-            Box::new(move |pkg: &str, recipe_dir: &std::path::Path| {
-                later.retain(|subject| subject != pkg);
-                let run = InstallRun {
-                    mode,
-                    state_dir: state_dir.clone(),
-                    conf: conf.clone(),
-                    pacman_args: pacman_args.clone(),
-                    register_ignorepkg,
-                    later_installs: later.clone(),
-                };
-                crate::install::install_step_from_result(gsa_install::install_built_package(
-                    recipe_dir, &run,
-                ))
-            }) as Box<dyn FnMut(&str, &std::path::Path) -> InstallStep + Send>
+            Box::new(
+                move |pkg: &str, recipe_dir: &std::path::Path, forced: bool| {
+                    later.retain(|subject| subject != pkg);
+                    // A remediation force build installs in force mode (fish
+                    // `lane_force_install=1`): never the same-version skip.
+                    let mode = if forced { DecideMode::Force } else { mode };
+                    let run = InstallRun {
+                        mode,
+                        state_dir: state_dir.clone(),
+                        conf: conf.clone(),
+                        pacman_args: pacman_args.clone(),
+                        register_ignorepkg,
+                        later_installs: later.clone(),
+                    };
+                    crate::install::install_step_from_result(gsa_install::install_built_package(
+                        recipe_dir, &run,
+                    ))
+                },
+            ) as Box<dyn FnMut(&str, &std::path::Path, bool) -> InstallStep + Send>
         });
     // ── the post-build registration hook (contract §J.4) ────────────────
     // Every successful build records its instance in the hash-bound binpkg
     // index and enforces the topology-derived retention budget (N=2 hubs /
     // N=1 elsewhere); the in-flight lane ids the supervisor passes are the
-    // guard — pruning never deletes an archive the run is using.
+    // guard — pruning never deletes an archive the run is using. The same
+    // hook carries the post-BUILD half of "skip and resume"
+    // (docs/build-guide.md): the VCS freshness baselines and the GCC
+    // identity marker — never for a `--skip` claim (`built = false`), whose
+    // existing manifest is the claim's evidence and must not be re-blessed.
     let retention = gsa_state::Retention::from_graph(&graph);
     // The declared `abi-rev=` override per recipe id (§J.4): the registration
     // hook passes it to the one shared token derivation — never re-derives.
@@ -356,27 +455,28 @@ fn run_build_with(
         })
         .collect();
     let register_hook: Box<
-        dyn FnMut(&str, &std::path::Path, &std::collections::BTreeSet<String>) -> Vec<String>
+        dyn FnMut(&str, &std::path::Path, &std::collections::BTreeSet<String>, bool) -> Vec<String>
             + Send,
     > = {
         let state_dir = state_dir.clone();
-        Box::new(move |pkg, recipe_dir, in_flight| {
+        Box::new(move |pkg, recipe_dir, in_flight, built| {
             let mut notes = Vec::new();
             let mut gate = Vec::new();
+            let archives = match gsa_install::discover_recipe(recipe_dir) {
+                Ok(found) => found
+                    .candidates
+                    .into_iter()
+                    .map(|c| c.archive)
+                    .collect::<Vec<_>>(),
+                Err(error) => {
+                    notes.push(format!(
+                        "binpkg index: registration failed for {pkg}: cannot discover built archives in {} ({error})",
+                        recipe_dir.display()
+                    ));
+                    return notes;
+                }
+            };
             let outcome = gsa_state::StateRoot::open(&state_dir).and_then(|state| {
-                let archives = match gsa_install::discover_recipe(recipe_dir) {
-                    Ok(found) => found
-                        .candidates
-                        .into_iter()
-                        .map(|c| c.archive)
-                        .collect::<Vec<_>>(),
-                    Err(error) => {
-                        return Err(gsa_state::StateError::Io(format!(
-                            "cannot discover built archives in {} ({error})",
-                            recipe_dir.display()
-                        )))
-                    }
-                };
                 let abi_rev = abi_revs.get(pkg).copied().flatten();
                 gsa_state::register_instance(
                     &state, pkg, &archives, &retention, in_flight, abi_rev, &mut gate,
@@ -390,6 +490,44 @@ fn run_build_with(
                 Err(error) => notes.push(format!(
                     "binpkg index: registration failed for {pkg}: {error}"
                 )),
+            }
+            if built {
+                // VCS freshness baselines first, then the toolchain marker —
+                // the marker ONLY after the baselines recorded (the module's
+                // caller contract: a failed attempt must drift again).
+                match gsa_recipe::sync::pkgbuild_array_checked(recipe_dir, "source") {
+                    Ok(entries) => {
+                        let mut baselines_ok = true;
+                        for archive in &archives {
+                            match gsa_recipe::freshness::record_vcs_archive_revisions(
+                                recipe_dir, archive, &entries,
+                            ) {
+                                Ok(_) => {}
+                                Err(error) => {
+                                    baselines_ok = false;
+                                    notes.push(format!("vcs baseline: {pkg}: {error}"));
+                                }
+                            }
+                        }
+                        if baselines_ok {
+                            match gsa_recipe::toolchain::gcc_identity() {
+                                Ok(identity) => {
+                                    if let Err(error) = gsa_recipe::toolchain::write_marker(
+                                        &state_dir, pkg, &identity,
+                                    ) {
+                                        notes.push(format!("toolchain marker: {pkg}: {error}"));
+                                    }
+                                }
+                                Err(error) => notes.push(format!(
+                                    "toolchain marker: {pkg}: cannot determine the GCC build identity ({error})"
+                                )),
+                            }
+                        }
+                    }
+                    Err(error) => notes.push(format!(
+                        "vcs baseline: {pkg}: cannot evaluate the PKGBUILD source array ({error})"
+                    )),
+                }
             }
             notes
         })
@@ -415,6 +553,37 @@ fn run_build_with(
             log_path: prefetch_log,
         }
     });
+    // The toolchain-remediation wiring (owner rule 2026-10-02): install runs
+    // only — the mid-run trigger is a real ABI mismatch and engages even
+    // under `--allow-broken-rustc` (that flag is a PREFLIGHT escape hatch,
+    // contract §B.8). The topology oracles come from the one graph view.
+    let remediation = install.map(|_| supervisor::RemediationSetup {
+        scratch_base: probe_scratch(),
+        trigger_installs: vec!["llvm-git".to_string(), "llvm-libs-git".to_string()],
+        broken_consumer: "rust-git".to_string(),
+        known: graph
+            .records()
+            .iter()
+            .map(|record| record.id.as_str().to_string())
+            .collect(),
+        core_members: core_members.clone(),
+        toolchain_consumers: {
+            let mut map = std::collections::HashMap::new();
+            for trigger in ["llvm-git", "llvm-libs-git"] {
+                if let Some(idx) = graph.index_of(trigger) {
+                    map.insert(
+                        trigger.to_string(),
+                        graph
+                            .consumer_closure(&[idx])
+                            .into_iter()
+                            .map(|i| graph.record(i).id.as_str().to_string())
+                            .collect::<Vec<_>>(),
+                    );
+                }
+            }
+            map
+        },
+    });
     let setup = RunSetup {
         root,
         state_dir: state_dir.clone(),
@@ -432,13 +601,17 @@ fn run_build_with(
         install: install_hook,
         register: Some(register_hook),
         prefetch,
+        remediation,
     };
 
     // ── the run: streaming dashboard lines as the machine settles ─────────
+    // The event view covers every node the machine carries (the selection
+    // plus any activated remediation latent).
+    let event_ids: Vec<RecipeId> = setup.nodes.iter().map(|node| node.id.clone()).collect();
     let outcome = match supervisor::run(
         setup,
         &mut |event| {
-            let _ = write!(out, "{}", render::render_event(event, &ids));
+            let _ = write!(out, "{}", render::render_event(event, &event_ids));
         },
         err,
     ) {
@@ -461,6 +634,7 @@ fn run_build_with(
 
     // ── one run record, three renderings (§H) ────────────────────────────
     let rows = outcome.rows;
+    let run_order = outcome.order;
     let run_outcome =
         RunOutcome::compute(&rows, inv.fail_fast, outcome.interrupted, outcome.refused);
     let parked_by = parked_by(&graph, &rows);
@@ -469,12 +643,31 @@ fn run_build_with(
     // participation (`--no-prefetch`) — never rows, never a format bump.
     let prefetch_warnings =
         prefetch_ahead.map(|_| u32::try_from(outcome.prefetch_warnings.len()).unwrap_or(u32::MAX));
+    // Plan rows (§H.2): the pre-dispatch pass's answers (`skip <reason>`
+    // for a claim, the family's build action otherwise), then the activated
+    // remediation latents appended in `order` — plan, outcome and `order`
+    // always key to the same subject list.
+    let mut plan = prepared.plan_rows(&ids, install.is_some());
+    for id in &run_order {
+        if !ids.contains(id) {
+            plan.push(PlanRow {
+                pkg: id.clone(),
+                action: if install.is_some() {
+                    PlanAction::BuildInstall
+                } else {
+                    PlanAction::Build
+                },
+                reason: "ok".to_string(),
+            });
+        }
+    }
     let record = record::build_run_record(
         inv,
-        &selection,
         &inv.targets,
         &inv.ranges,
         Some(&budget),
+        plan,
+        run_order,
         rows,
         &run_outcome,
         prefetch_warnings,
@@ -504,6 +697,187 @@ fn run_build_with(
     // stores the same structure, never a fourth derivation.
     record::emit_machine_record(out, &record, &state_dir, err);
     run_outcome.rc
+}
+
+/// The rustc sanity probe scratch for THIS engine process: the module's
+/// per-user base ([`toolchain::resolve_probe_scratch`]) plus the pid. Two
+/// concurrent runs of the same user must never share the probe's
+/// output-named codegen temporaries — they collide on the same
+/// `*.rcgu.o` names and fail each other's links (the spurious "cannot open
+/// … rcgu.o" / undefined-symbol failures this prefix removes).
+fn probe_scratch() -> std::path::PathBuf {
+    let base = toolchain::resolve_probe_scratch();
+    std::path::PathBuf::from(format!("{}_{}", base.display(), std::process::id()))
+}
+
+/// The `-n` plan rendering (contract §B `--dry-run`) shared by `gsa -S
+/// --dry-run` and `gsa -Su --dry-run`: the pre-dispatch ABI wave check, the
+/// plan prose and the `format: 2` plan record — no mutation, no dispatch.
+pub(crate) fn plan_only(
+    ctx: &select::Ctx,
+    inv: &Invocation,
+    project: &ProjectConfig,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<i32, String> {
+    if inv.targets.is_empty() {
+        return Err("selection is mandatory: a build never starts without a selection".to_string());
+    }
+    let mut selection = select::build_selection(ctx, &inv.targets, &inv.ranges, inv.leaf)
+        .map_err(|error| error.message)?;
+    crate::write_notes(err, &selection.notes);
+    // The same pre-dispatch ABI wave check the build pipeline runs (§E.3):
+    // the dry-run shows the wave it would build — additions join the plan,
+    // and an under-covered member refuses (rc 3).
+    let state_dir = gsa_state::resolve_state_root(inv.state_dir.as_deref());
+    let wave = wave_check(out, err, ctx.graph, &selection, &state_dir)?;
+    extend_selection(&mut selection, &wave.additions);
+    let intensity = crate::resolve_intensity(project)?;
+    let expansion_added = selection.closure_size.saturating_sub(selection.seeds.len());
+    let _ = write!(
+        out,
+        "{}",
+        render::render_plan_prose(
+            &selection.listed,
+            expansion_added,
+            selection.closure_size,
+            inv.leaf,
+            true
+        )
+    );
+    let rec = record::build_plan_record(inv, &selection, &inv.targets, &inv.ranges, &intensity);
+    let _ = write!(out, "{}", rec.render_machine());
+    if wave.uncovered {
+        return Ok(crate::RC_REFUSED);
+    }
+    Ok(crate::RC_OK)
+}
+
+/// `gsa -Su` (contract §B.4): `-Sy`, then build+install the stale set.
+///
+/// The sync phase runs first over the selection (default: every recipe) —
+/// its disposition block prints and a sync refusal aborts (§G.1 rc 3)
+/// before anything builds. The stale set is then computed from the
+/// REWRITTEN (tracked) versions against the newest complete built set and
+/// handed to the normal build+install pipeline; that pipeline's own
+/// pre-dispatch pass re-runs the sync for the stale subset (idempotent —
+/// `NoChange`), which is what keeps the deferral row shapes (`deferred 99 -
+/// <reason>`) intact instead of losing them across a phase boundary. A
+/// `--dry-run` never rewrites recipes and renders the plan record only. An
+/// empty stale set is the §E.3 `noop empty-list` row, rc 0.
+pub fn run_update(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
+    let root = match crate::find_root() {
+        Some(root) => root,
+        None => {
+            let _ = writeln!(
+                err,
+                "gsa: cannot find config/topology.conf from the current directory upward (run inside the recipe repository)"
+            );
+            return 2;
+        }
+    };
+    let project = match gsa_topo::load_project(&root) {
+        Ok(project) => project,
+        Err(error) => {
+            let _ = writeln!(err, "gsa: {error}");
+            return 2;
+        }
+    };
+    let graph = match Graph::build(&project.topology.records) {
+        Ok(graph) => graph,
+        Err(error) => {
+            let _ = writeln!(err, "gsa: config/topology.conf: {error}");
+            return 2;
+        }
+    };
+    let db = match RecipeDb::load(&root, graph.records()) {
+        Ok(db) => db,
+        Err(error) => {
+            let _ = writeln!(err, "gsa: {error}");
+            return 2;
+        }
+    };
+    let ctx = Ctx {
+        project: &project,
+        graph: &graph,
+        db: &db,
+    };
+    let selection = match prepare::pass_selection(&ctx, inv) {
+        Ok(selection) => selection,
+        Err(error) => {
+            let _ = writeln!(err, "gsa: {error}");
+            return 2;
+        }
+    };
+    crate::write_notes(err, &selection.notes);
+    let ids: Vec<RecipeId> = selection.listed.iter().map(|(_, id)| id.clone()).collect();
+    let state_dir = gsa_state::resolve_state_root(inv.state_dir.as_deref());
+
+    // ── 1. the `-Sy` phase. A dry run never rewrites recipes, so it runs
+    //    no sync at all; a sync refusal aborts before anything builds, and
+    //    a deferral is reported and carried into the build rows below.
+    if !inv.dry_run {
+        let (refused, _deferred) = prepare::sync_phase(&root, &graph, &selection, out, err);
+        if refused {
+            return crate::RC_REFUSED;
+        }
+    }
+
+    // ── 2. the stale set (§B.3 `-Qu` / §B.4 `-Su`) ────────────────────────
+    let stale = prepare::stale_set(&root, &graph, &ids);
+    if stale.is_empty() {
+        let subject = record::subject_id("-");
+        let plan = vec![PlanRow {
+            pkg: subject.clone(),
+            action: PlanAction::Noop,
+            reason: "empty-list".to_string(),
+        }];
+        let outcomes = vec![OutcomeRow {
+            pkg: subject.clone(),
+            status: RowStatus::Succeeded,
+            rc: Some(0),
+            dur: None,
+            reason: "empty-list".to_string(),
+        }];
+        let run_outcome = RunOutcome::compute(&outcomes, inv.fail_fast, false, false);
+        let mut record = record::build_run_record(
+            inv,
+            &inv.targets,
+            &inv.ranges,
+            None,
+            plan,
+            vec![subject],
+            outcomes,
+            &run_outcome,
+            None,
+        );
+        // A dry run renders but never persists (§H.1).
+        record.dry_run = inv.dry_run;
+        let _ = write!(
+            out,
+            "{}",
+            render::render_run_prose(&record, &state_dir.join("logs"), &[], None)
+        );
+        record::emit_machine_record(out, &record, &state_dir, err);
+        return run_outcome.rc;
+    }
+
+    // ── 3. build+install the stale set through the normal pipeline ───────
+    let mut update_inv = inv.clone();
+    update_inv.targets = stale.iter().map(|id| id.as_str().to_string()).collect();
+    update_inv.ranges = Vec::new();
+    if inv.dry_run {
+        return plan_only(&ctx, &update_inv, &project, out, err).unwrap_or_else(|message| {
+            let _ = writeln!(err, "gsa: {message}");
+            2
+        });
+    }
+    let mode = if inv.modifiers.contains(&'f') {
+        DecideMode::Force
+    } else {
+        DecideMode::Checked
+    };
+    run_build_with(&update_inv, out, err, Some(mode))
 }
 
 /// Fetch-ahead configuration (owner decision 1): prefetch is DEFAULT-ON
@@ -585,14 +959,31 @@ fn override_value(flag: Option<&str>, env_name: &str, conf: &str) -> Result<Over
 /// The scheduling nodes: the selection in canonical build order, with
 /// build-order edges resolved to selection-local indices (prerequisites
 /// outside the selection are assumed installed — §C.3), `core` /
-/// `build-tools` membership from the topology record only (§K.2).
-fn build_nodes(root: &std::path::Path, graph: &Graph<'_>, selection: &Selection) -> Vec<SupNode> {
+/// `build-tools` membership from the topology record only (§K.2). The
+/// remediation latents (owner rule 2026-10-02) append after the selection in
+/// force-queue order — a latent's edges resolve over selection+latent
+/// indices (chain-internal order), while a selection node's edges stay
+/// selection-local (a latent is never a normal prerequisite). `pre` carries
+/// the pre-dispatch settlements (§B.8) per recipe id.
+fn build_nodes(
+    root: &std::path::Path,
+    graph: &Graph<'_>,
+    selection: &Selection,
+    pre: &std::collections::BTreeMap<String, crate::prepare::NodePlan>,
+    latents: &[String],
+) -> Vec<SupNode> {
     let mut node_of: HashMap<usize, usize> = HashMap::new();
     for (node_idx, (_, id)) in selection.listed.iter().enumerate() {
         node_of.insert(
             graph.index_of(id.as_str()).expect("selection ids resolve"),
             node_idx,
         );
+    }
+    let mut latent_of: HashMap<usize, usize> = HashMap::new();
+    for (offset, id) in latents.iter().enumerate() {
+        if let Some(idx) = graph.index_of(id.as_str()) {
+            latent_of.insert(idx, selection.listed.len() + offset);
+        }
     }
     let mut nodes: Vec<SupNode> = Vec::new();
     for (_, id) in &selection.listed {
@@ -611,6 +1002,30 @@ fn build_nodes(root: &std::path::Path, graph: &Graph<'_>, selection: &Selection)
             prereqs,
             consumers: Vec::new(),
             batch: None,
+            pre: pre.get(id.as_str()).and_then(pre_settle),
+            latent: false,
+        });
+    }
+    for id in latents {
+        let Some(idx) = graph.index_of(id.as_str()) else {
+            continue;
+        };
+        let record = graph.record(idx);
+        let prereqs: Vec<usize> = graph
+            .prerequisites(idx)
+            .into_iter()
+            .filter_map(|p| node_of.get(&p).or_else(|| latent_of.get(&p)).copied())
+            .collect();
+        nodes.push(SupNode {
+            id: RecipeId::new(id).expect("latents come from the topology"),
+            recipe_dir: root.join(&record.path),
+            core: record.groups.contains(&Group::Core),
+            build_tools: record.groups.contains(&Group::BuildTools),
+            prereqs,
+            consumers: Vec::new(),
+            batch: None,
+            pre: None,
+            latent: true,
         });
     }
     for node in 0..nodes.len() {
@@ -619,6 +1034,21 @@ fn build_nodes(root: &std::path::Path, graph: &Graph<'_>, selection: &Selection)
         }
     }
     nodes
+}
+
+/// The pre-dispatch settlement for one prepared node plan (§B.8): claims
+/// and deferrals settle without a lane; builds dispatch normally.
+fn pre_settle(plan: &crate::prepare::NodePlan) -> Option<PreSettle> {
+    match plan {
+        crate::prepare::NodePlan::Skip { reason, archives } => Some(PreSettle::Skip {
+            reason: reason.clone(),
+            archives: archives.clone(),
+        }),
+        crate::prepare::NodePlan::Defer { reason } => Some(PreSettle::Defer {
+            reason: reason.clone(),
+        }),
+        _ => None,
+    }
 }
 
 /// Coupled batches (`abi=must`/`abi=should`) with at least two selected
@@ -879,15 +1309,92 @@ fn refuse_before_dispatch(
             reason: reason.to_string(),
         })
         .collect();
+    let order: Vec<RecipeId> = selection.listed.iter().map(|(_, id)| id.clone()).collect();
+    let plan_action = if inv.family == crate::args::Family::B {
+        PlanAction::Build
+    } else {
+        PlanAction::BuildInstall
+    };
+    let plan: Vec<PlanRow> = order
+        .iter()
+        .map(|id| PlanRow {
+            pkg: id.clone(),
+            action: plan_action.clone(),
+            reason: "ok".to_string(),
+        })
+        .collect();
+    emit_refusal_record(inv, plan, order, outcomes, budget, state_dir, out, err)
+}
+
+/// A run the pre-dispatch pass refused (§G.1 rc 3 — integrity stop or a
+/// named sync refusal): the offending package is `failed 1 - <reason>`,
+/// everything else `never-started - - startup-refused`, and the plan rows
+/// keep the planned action (the run-record refusal precedent).
+fn refuse_prepared(
+    inv: &Invocation,
+    selection: &Selection,
+    budget: &Budget,
+    state_dir: &std::path::Path,
+    prepared: &prepare::Prepared,
+    at: usize,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> i32 {
+    let order: Vec<RecipeId> = selection.listed.iter().map(|(_, id)| id.clone()).collect();
+    let build_install = inv.family != crate::args::Family::B;
+    let plan = prepared.plan_rows(&order, build_install);
+    let outcomes: Vec<OutcomeRow> = order
+        .iter()
+        .enumerate()
+        .map(|(index, id)| {
+            if index == at {
+                let reason = match &prepared.packages[index].plan {
+                    prepare::NodePlan::Refuse { reason } => reason.clone(),
+                    _ => "startup-refused".to_string(),
+                };
+                OutcomeRow {
+                    pkg: id.clone(),
+                    status: RowStatus::Failed,
+                    rc: Some(1),
+                    dur: None,
+                    reason,
+                }
+            } else {
+                OutcomeRow {
+                    pkg: id.clone(),
+                    status: RowStatus::NeverStarted,
+                    rc: None,
+                    dur: None,
+                    reason: "startup-refused".to_string(),
+                }
+            }
+        })
+        .collect();
+    emit_refusal_record(inv, plan, order, outcomes, budget, state_dir, out, err)
+}
+
+/// The one refusal-record emitter: plan + order + outcome rows → the three
+/// renderings, `refused` outcome (§G.1 rc 3).
+fn emit_refusal_record(
+    inv: &Invocation,
+    plan: Vec<PlanRow>,
+    order: Vec<RecipeId>,
+    outcomes: Vec<OutcomeRow>,
+    budget: &Budget,
+    state_dir: &std::path::Path,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> i32 {
     let run_outcome = RunOutcome::compute(&outcomes, inv.fail_fast, false, true);
     // A refused run never reached fetch-ahead participation (owner decision
     // 5: the scalar counts a build run's prefetch advisories only).
     let record = record::build_run_record(
         inv,
-        selection,
         &inv.targets,
         &inv.ranges,
         Some(budget),
+        plan,
+        order,
         outcomes,
         &run_outcome,
         None,

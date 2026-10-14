@@ -116,6 +116,22 @@ pub struct Invocation {
     /// spelling keeps the deferred refusal.
     pub no_prefetch: bool,
     pub prefetch_ahead: Option<String>,
+    /// `--skip`: skip-if-fresh resume (§B.8) — the freshness analysis
+    /// (current-version set, VCS probes with waivers). Mutually exclusive
+    /// with `--skip-built` (one skip MODE per run, like fish `skip_flag`).
+    pub skip: bool,
+    /// `--skip-built`: the built-set claim only — newest complete set at any
+    /// version, no upstream probes, recipe-change gate (§B.8).
+    pub skip_built: bool,
+    /// `--vcs-skip-tolerance N` (raw; the freshness resolver validates and
+    /// beats `GSA_VCS_SKIP_TOLERANCE`, §B.8). Positive integers only.
+    pub vcs_skip_tolerance: Option<String>,
+    /// `--no-sync`: build the committed version and sums as-is — no provider
+    /// query, no anchoring, no rewrite (§B.8).
+    pub no_sync: bool,
+    /// `--allow-broken-rustc`: skip the rustc sanity probe entirely (§B.8;
+    /// escape hatch for runs that compile no Rust).
+    pub allow_broken_rustc: bool,
     /// `--config PATH`: the target pacman.conf of an install run (-S/-U) —
     /// the IgnorePkg registration target and the `pacman -U --config`.
     pub config: Option<String>,
@@ -291,6 +307,11 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
         pacman_args: None,
         no_prefetch: false,
         prefetch_ahead: None,
+        skip: false,
+        skip_built: false,
+        vcs_skip_tolerance: None,
+        no_sync: false,
+        allow_broken_rustc: false,
     };
 
     let mut rest = &args[1..];
@@ -311,11 +332,38 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
                 "help" => return Ok(Parsed::Help),
                 // The rest of the contract's roster (§B.8) and the maintain
                 // verbs' own modifiers parse so the refusal names them.
-                "skip"
-                | "skip-built"
-                | "no-sync"
-                | "allow-broken-rustc"
-                | "no-register-ignorepkg"
+                // The five §B.8 sync/freshness/toolchain modifiers are
+                // stored AND recorded as deferred: real on a build run,
+                // refused (naming them) everywhere else.
+                "skip" => {
+                    if value.is_some() {
+                        return Err("flag '--skip' takes no value".to_string());
+                    }
+                    inv.skip = true;
+                    inv.deferred_flags.push("--skip".to_string());
+                }
+                "skip-built" => {
+                    if value.is_some() {
+                        return Err("flag '--skip-built' takes no value".to_string());
+                    }
+                    inv.skip_built = true;
+                    inv.deferred_flags.push("--skip-built".to_string());
+                }
+                "no-sync" => {
+                    if value.is_some() {
+                        return Err("flag '--no-sync' takes no value".to_string());
+                    }
+                    inv.no_sync = true;
+                    inv.deferred_flags.push("--no-sync".to_string());
+                }
+                "allow-broken-rustc" => {
+                    if value.is_some() {
+                        return Err("flag '--allow-broken-rustc' takes no value".to_string());
+                    }
+                    inv.allow_broken_rustc = true;
+                    inv.deferred_flags.push("--allow-broken-rustc".to_string());
+                }
+                "no-register-ignorepkg"
                 | "noconfirm"
                 | "quiet"
                 | "verbose"
@@ -371,6 +419,7 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
                         "state-dir" => inv.state_dir = Some(value.clone()),
                         "config" => inv.config = Some(value.clone()),
                         "prefetch-ahead" => inv.prefetch_ahead = Some(value.clone()),
+                        "vcs-skip-tolerance" => inv.vcs_skip_tolerance = Some(value.clone()),
                         "tail" => inv.tail = Some(value.clone()),
                         "keep" => inv.keep = Some(value.clone()),
                         "show" => inv.show = Some(value.clone()),
@@ -397,6 +446,11 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
         } else {
             inv.targets.push(token.clone());
         }
+    }
+    // One skip MODE per invocation (§B.8; fish `skip_flag` is a mode, not a
+    // boolean): the two claims are different analyses, not combinable.
+    if inv.skip && inv.skip_built {
+        return Err("cannot combine --skip with --skip-built (pick one skip claim: --skip is freshness-gated, --skip-built is the built-set claim)".to_string());
     }
     Ok(Parsed::Invoke(inv))
 }

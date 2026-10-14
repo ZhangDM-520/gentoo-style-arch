@@ -223,6 +223,8 @@ version = "0.1.0"
 dependencies = [
  "gsa-model",
  "object",
+ "serde_json",
+ "sha2",
  "tar",
  "zstd",
 ]
@@ -233,6 +235,7 @@ version = "0.1.0"
 dependencies = [
  "gsa-fetch",
  "gsa-model",
+ "gsa-recipe",
 ]
 
 [[package]]

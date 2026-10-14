@@ -1742,6 +1742,44 @@ constant, not a baked path).
 
 ## 6. Pitfall digest (full details: NOTE.md sections of same dates)
 
+- **A fixture pacman oracle must count TRANSACTIONS, never invocations — the
+  toolchain preflight's read-only `pacman -Q rust-git` probe runs on every
+  build-family run** (2026-10-14, gsa engine): the contract's "the toolchain
+  preflight refuses before building unless `--allow-broken-rustc`" is
+  unconditioned on selection, so a `-B`/`-S` run always logs one probe call.
+  "the pacman stub log must stay empty" pins go red on it; assert on
+  `pacman -U` lines (or tolerate exactly the probe line) instead — the same
+  accommodation `install-archive-guard.sh` already made. Related: the same
+  probe is not a `pacman -U` transaction and must not count in §K.3 argv
+  shape or overlap checks. Details: NOTE.md 2026-10-14.
+
+- **GNU tar emits byte-identical archives for same-content repeats within the
+  same second — a fixture modelling "replaced bytes" must change the payload**
+  (2026-10-14, gsa engine): `tar --zstd` of a regenerated `.PKGINFO` produced
+  equal sha256 for two back-to-back writes (whole-second mtimes), so the
+  "archive replaced under a live VCS manifest" case never replaced anything
+  and the engine's skip claim was *correct* — the pin was flaky on wall-clock
+  luck. Give the replacement a different member/payload by construction.
+  Details: NOTE.md 2026-10-14.
+
+- **Paths handed to makepkg must be absolute — makepkg runs with the recipe's
+  cwd** (2026-10-14, gsa engine): a relative `--state-dir` handed makepkg
+  `PACMAN=.state/locks/pacman-shim`, which does not exist under
+  `packages/<cat>/<pkg>/`, and `makepkg -sf` died with a bare "An unknown
+  error has occurred. Exiting..." — invisible to fixtures (they all pass
+  absolute state roots), caught only by a real-tree smoke. Absolutise every
+  path that crosses into the makepkg child. Details: NOTE.md 2026-10-14.
+
+- **Binpkg index rows share one PKGDEST path across same-version rebuilds:
+  retention may only delete a file no surviving row references, and a repair
+  marker is consumed only by the marked recipe's own successful install**
+  (2026-10-14, gsa engine): the retention sweep used to delete the older
+  instance's file unconditionally, destroying the archive a `--skip` claim had
+  just claimed ("the claim consumed its own evidence"); and the
+  `<state>/abi-repair/<id>` marker had a read half (force rebuild) with no
+  consume half, which would strand a marked recipe in permanent rebuild.
+  Details: NOTE.md 2026-10-14.
+
 - **A `-git` toolchain that grows new target/tool names can break a consumer's
   detection logic with no API change** (2026-10-11 run #136 0ad): rust-git's
   target list gained vendor-specific triples (`x86_64-oe-linux-gnu`,

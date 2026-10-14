@@ -39,10 +39,18 @@ pub struct Node {
     pub build_tools: bool,
     /// Coupled-batch index (`abi=must`/`abi=should`), if any.
     pub batch: Option<usize>,
+    /// A remediation-latent node (toolchain remediation, owner rule
+    /// 2026-10-02): carried from run start but never dispatched unless
+    /// [`Machine::activate`] promotes it. A latent node that was never
+    /// activated has NO run-record row and NO `order` entry.
+    pub latent: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum State {
+    /// Latent (never activated) — settled for `finished()`, absent from
+    /// `rows()`/`order()`.
+    Latent,
     Pending,
     Dispatched,
     Done(RowStatus, Option<i32>, Option<i64>, String),
@@ -84,6 +92,10 @@ pub struct Machine {
     active: usize,
     core_running: bool,
     stop_dispatch: bool,
+    /// The toolchain-remediation restrict set (node indices, chain order):
+    /// while set, ONLY these nodes dispatch and [`Machine::pick`] answers in
+    /// list order — force semantics for a mid-run rebuild chain.
+    restrict: Option<Vec<usize>>,
 }
 
 impl Machine {
@@ -93,7 +105,16 @@ impl Machine {
         policy: Policy,
         lanes: usize,
     ) -> Machine {
-        let states = vec![State::Pending; nodes.len()];
+        let states = nodes
+            .iter()
+            .map(|node| {
+                if node.latent {
+                    State::Latent
+                } else {
+                    State::Pending
+                }
+            })
+            .collect();
         Machine {
             nodes,
             batches,
@@ -103,6 +124,7 @@ impl Machine {
             active: 0,
             core_running: false,
             stop_dispatch: false,
+            restrict: None,
         }
     }
 
@@ -120,8 +142,11 @@ impl Machine {
 
     /// The node's phase for the prefetch window (plan.md §2.1: the
     /// dispatcher is the only brain — the window is derived from this).
+    /// A never-activated latent node reads as settled (it is never
+    /// prefetched and never dispatchable).
     pub fn node_phase(&self, index: usize) -> NodePhase {
         match &self.states[index] {
+            State::Latent => NodePhase::Settled(RowStatus::NeverStarted),
             State::Pending => NodePhase::Pending,
             State::Dispatched => NodePhase::Dispatched,
             State::Done(status, ..) => NodePhase::Settled(*status),
@@ -136,9 +161,14 @@ impl Machine {
         self.active
     }
 
-    /// Every node has a terminal outcome.
+    /// Every node has a terminal outcome (a latent node that was never
+    /// activated is settled by construction — it has no run to settle).
     pub fn finished(&self) -> bool {
-        self.active == 0 && self.states.iter().all(|s| matches!(s, State::Done(..)))
+        self.active == 0
+            && self
+                .states
+                .iter()
+                .all(|s| matches!(s, State::Done(..) | State::Latent))
     }
 
     fn is_done_ok(&self, index: usize) -> bool {
@@ -149,23 +179,54 @@ impl Machine {
         matches!(self.states[index], State::Done(..))
     }
 
-    /// Ready nodes: every build-order edge inside the selection succeeded.
+    /// Whether the node is a never-activated remediation latent.
+    pub fn is_latent(&self, index: usize) -> bool {
+        matches!(self.states[index], State::Latent)
+    }
+
+    /// Whether the node has settled (any outcome).
+    pub fn is_settled(&self, index: usize) -> bool {
+        self.is_terminal(index)
+    }
+
+    /// Whether one build-order edge is satisfied. Normal dispatch: the
+    /// prerequisite settled successfully. Under the remediation restrict
+    /// set (force semantics): an in-chain prerequisite only has to settle —
+    /// its rebuild outcome is the remediation monitor's business — while
+    /// anything out-of-chain must stand succeeded as usual.
+    fn prereq_clear(&self, prereq: usize) -> bool {
+        match &self.restrict {
+            Some(chain) if chain.contains(&prereq) => self.is_terminal(prereq),
+            _ => self.is_done_ok(prereq),
+        }
+    }
+
+    /// Ready nodes: every build-order edge inside the selection is clear.
     fn ready(&self) -> Vec<usize> {
         (0..self.nodes.len())
             .filter(|&i| {
                 if !matches!(self.states[i], State::Pending) || self.stop_dispatch {
                     return false;
                 }
-                self.nodes[i].prereqs.iter().all(|&p| self.is_done_ok(p))
+                self.nodes[i].prereqs.iter().all(|&p| self.prereq_clear(p))
             })
             .collect()
     }
 
     /// Dispatch preference: `build-tools` band members first, then canonical
     /// build order — the band changes *when* a ready package dispatches and
-    /// never the order the record reports (§K.2, §C.5).
+    /// never the order the record reports (§K.2, §C.5). Under the
+    /// remediation restrict set the pick is the chain's own order and only
+    /// chain members (fish `pick_next_ready` force mode).
     pub fn pick(&self) -> Vec<usize> {
         let mut ready = self.ready();
+        if let Some(chain) = &self.restrict {
+            return chain
+                .iter()
+                .copied()
+                .filter(|index| ready.contains(index))
+                .collect();
+        }
         ready.sort_by_key(|&i| (!self.nodes[i].build_tools, i));
         ready
     }
@@ -221,6 +282,9 @@ impl Machine {
 
     fn park_one(&mut self, index: usize, reason: &str, requests: &mut Vec<ParkRequest>) {
         match &self.states[index] {
+            // A latent node is not part of the run's cone traffic: it stays
+            // latent and only enters the run through `activate`.
+            State::Latent => {}
             State::Pending => {
                 self.states[index] = State::Done(RowStatus::Parked, None, None, reason.to_string());
             }
@@ -327,6 +391,78 @@ impl Machine {
         requests
     }
 
+    /// Record one pre-dispatch settlement (contract §B.8): a `--skip` claim
+    /// (`succeeded - - <reason>`) or a pre-dispatch deferral (`deferred 99 -
+    /// <reason>`, whose cone parks `waits-on-deferred` like any deferral).
+    /// The node was never dispatched, so the lane accounting never engaged;
+    /// the failure policy still applies to `Failed`/`Deferred`.
+    pub fn record_pre(
+        &mut self,
+        index: usize,
+        status: RowStatus,
+        rc: Option<i32>,
+        reason: &str,
+    ) -> Vec<ParkRequest> {
+        assert!(
+            matches!(self.states[index], State::Pending),
+            "pre-dispatch settlement for a node that is not pending"
+        );
+        let mut requests = Vec::new();
+        self.states[index] = State::Done(status, rc, None, reason.to_string());
+        match status {
+            RowStatus::Failed => {
+                if self.policy == Policy::FailFast {
+                    self.stop_dispatch = true;
+                } else {
+                    let cone = self.consumer_cone(index);
+                    self.park_event(&cone, "waits-on-failed", &mut requests);
+                    if let Some(batch) = self.nodes[index].batch {
+                        let mates: Vec<usize> = self.batches[batch]
+                            .iter()
+                            .copied()
+                            .filter(|&m| m != index && !self.is_terminal(m))
+                            .collect();
+                        self.park_event(&mates, "coupled-batch", &mut requests);
+                    }
+                }
+            }
+            RowStatus::Deferred => {
+                let cone = self.consumer_cone(index);
+                self.park_event(&cone, "waits-on-deferred", &mut requests);
+            }
+            _ => {}
+        }
+        requests
+    }
+
+    /// Make a latent remediation node schedulable (owner rule 2026-10-02).
+    pub fn activate(&mut self, index: usize) {
+        assert!(
+            matches!(self.states[index], State::Latent),
+            "activate of a non-latent node"
+        );
+        self.states[index] = State::Pending;
+    }
+
+    /// Re-dispatch a node that already settled (the remediation force
+    /// rebuild IS the point, fish `pick_next_ready` force mode). The row is
+    /// replaced by the new outcome and the node keeps its position in the
+    /// run-record order.
+    pub fn force_rebuild(&mut self, index: usize) {
+        assert!(
+            self.is_terminal(index),
+            "force_rebuild of a node that has not settled"
+        );
+        self.states[index] = State::Pending;
+    }
+
+    /// Restrict dispatch to one remediation chain (node indices, chain
+    /// order — [`pick`](Self::pick) answers in that order) or lift the
+    /// restriction (`None`).
+    pub fn set_restrict(&mut self, chain: Option<Vec<usize>>) {
+        self.restrict = chain;
+    }
+
     /// Halt new dispatch — the fail-fast stop, reached either by the
     /// `--fail-fast` failure policy or by an install-step `Halt` that asks
     /// for it (§K.3: a credential lost mid-run stops dispatch exactly once).
@@ -357,6 +493,7 @@ impl Machine {
     pub fn finalize_interrupted(&mut self, signal_code: i32) {
         for state in &mut self.states {
             match state {
+                State::Latent => {}
                 State::Pending => {
                     *state = State::Done(
                         RowStatus::NeverStarted,
@@ -392,12 +529,14 @@ impl Machine {
         }
     }
 
-    /// Outcome rows in node (= topological) order — one row per selected
-    /// package (contract §H.2).
+    /// Outcome rows in node (= topological) order — one row per package the
+    /// run actually carried (contract §H.2). A latent node that was never
+    /// activated has no row.
     pub fn rows(&self) -> Vec<OutcomeRow> {
         self.nodes
             .iter()
             .zip(&self.states)
+            .filter(|(_, state)| !matches!(state, State::Latent))
             .map(|(node, state)| match state {
                 State::Done(status, rc, dur, reason) => OutcomeRow {
                     pkg: node.id.clone(),
@@ -413,7 +552,21 @@ impl Machine {
                     dur: None,
                     reason: "never-ready".to_string(),
                 },
+                State::Latent => unreachable!("filtered above"),
             })
+            .collect()
+    }
+
+    /// The run-record `order` (contract §H.2): the carried nodes' ids in
+    /// node order — the selection's ids plus the remediation latents that
+    /// were ACTIVATED (appended after the selection at setup time, fish
+    /// `_RR_ORDER`).
+    pub fn order(&self) -> Vec<RecipeId> {
+        self.nodes
+            .iter()
+            .zip(&self.states)
+            .filter(|(_, state)| !matches!(state, State::Latent))
+            .map(|(node, _)| node.id.clone())
             .collect()
     }
 }
@@ -458,6 +611,7 @@ mod tests {
                 core: false,
                 build_tools: false,
                 batch: None,
+                latent: false,
             })
             .collect()
     }
