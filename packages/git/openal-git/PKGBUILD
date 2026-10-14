@@ -10,7 +10,7 @@ pkgname=(
   openal-git
   openal-examples-git
 )
-pkgver=1.25.2.r219.g49f28b69
+pkgver=1.25.2.r263.g96c394c82
 pkgrel=1
 pkgdesc="Cross-platform 3D audio library, software implementation (git build)"
 arch=('x86_64')
@@ -83,12 +83,12 @@ package_openal-git() {
   depends=(
     glibc
     libgcc
+    libmysofa
     libstdc++
+    qt6-base
   )
   optdepends=(
-    'qt6-base: alsoft-config GUI Configurator'
     'fluidsynth: MIDI rendering'
-    'libmysofa: makemhr tool'
   )
   provides=("openal=$pkgver" 'libopenal.so')
   # bare libopenal.so: pacman 7.1 derives libopenal.so=1-64 (soname

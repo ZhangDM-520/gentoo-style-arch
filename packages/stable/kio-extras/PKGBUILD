@@ -9,6 +9,9 @@ pkgdesc='Additional components to increase the functionality of KIO'
 arch=(x86_64)
 url='https://www.kde.org/'
 license=(LGPL-2.0-or-later)
+# libappimage/openexr/plasma-activities-stats/taglib: the shipped thumbnailer
+# and kioslave plugins link these (rule-54 class — opt/makedepends-only before,
+# so the providers were orphan-removable). Not trimmable.
 depends=(glibc
          karchive
          kcmutils
@@ -23,6 +26,7 @@ depends=(glibc
          knotifications
          kservice
          kwidgetsaddons
+         libappimage
          libgcc
          libimobiledevice
          libkexiv2
@@ -33,14 +37,17 @@ depends=(glibc
          libstdc++
          libtirpc
          libxcursor
+         openexr
          plasma-activities
+         plasma-activities-stats
          qt6-base
          qt6-svg
          ripgrep-all
          sh
          smbclient
          solid
-         syntax-highlighting)
+         syntax-highlighting
+         taglib)
 # trim: kdoctools dropped (the BUILD_DOC=OFF switch below skips doc/ and the
 # DocBook handbook together with its kdoctools dependency)
 makedepends=(extra-cmake-modules
@@ -51,12 +58,8 @@ makedepends=(extra-cmake-modules
              qcoro
              taglib)
 optdepends=('kimageformats: thumbnails for additional image formats'
-            'libappimage: AppImage thumbnails'
-            'openexr: EXR format thumbnails'
             'perl: info kioslave'
-            'plasma-activities-stats: recently used kioslave'
-            'qt6-imageformats: thumbnails for additional image formats'
-            'taglib: audio file thumbnails')
+            'qt6-imageformats: thumbnails for additional image formats')
 groups=(kde-applications
         kde-network)
 provides=(libkioarchive6.so)

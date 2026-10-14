@@ -1,3 +1,36 @@
+## 2026-10-15 — wave-7 burn-down: nine recipes declare 36 links; libcanberra's rebuild parks on an upstream TLS outage
+
+**Symptom / root cause.** Rows-4/3 tier of the sweep (same rule-54
+shape): openal-git(4) mpg123(4) libcanberra(4) kguiaddons(4)
+wxwidgets-gtk3(4) subversion(4) imagemagick(4) ghostscript(4)
+kio-extras(4) libwmf-git(3).
+**Fix.** One entry per owner, `expac`-evidenced spellings; capability
+virtuals held (`mpg123` declares `jack` and `sdl2` as virtuals, never the
+concrete providers). Optdepends denial-tables retired where matched
+(mpg123's three audio-module entries, openal's qt6/libmysofa tools,
+imagemagick's DNG/EXR/JPEG2000 coders, kio-extras' four thumbnailers,
+ghostscript's gsx-gtk3, wxwidgets' webview, subversion's keyring+ruby,
+libcanberra's gtk3, libwmf's pixbuf loader). kguiaddons' rebuild grew
+one straggler (`libQt6WaylandClient.so.6`→`qt6-wayland`) — declared,
+rebuilt, clean (rule 6, third strike).
+**Validation.** `bash -n` ×10, `.SRCINFO` regenerated before gating,
+serial rebuild+install, scoped gates clean for all nine rebuilt recipes,
+full seam clean, full battery **65/65 PASS**.
+**Parked: libcanberra.** Its VCS source host is down —
+`git.0pointer.net` serves a TLS certificate that does not match its
+hostname and the redirect chain dead-ends (curl returns nothing);
+`makepkg` cannot clone, no SRCDEST mirror survives the 2026-10-14 cache
+wipe, and `--holdver` needs the mirror. The declaration edit is correct
+and lands here; the rebuild+gate joins a later wave when upstream
+recovers. Do not "fix" this by swapping the source URL in a dep-deps
+wave — a source change needs its own verification (identity of the new
+host, checksums).
+
+**Durable rules.** (1) A recipe whose upstream is unreachable parks its
+*rebuild*, not its fix — declarations are source-independent. (2) The
+straggler loop is now three-for-three on medium+ recipes: budget one
+fix→rebuild→gate round per recipe rather than treating it as failure.
+
 ## 2026-10-15 — wave-6 burn-down: xdg-desktop-portal-git/sddm/libinput-git/groff/graphviz declare 25 links; graphviz's tree grows three plugin rows at rebuild
 
 **Symptom / root cause.** Next five by rows (5 each), same rule-54 shape.

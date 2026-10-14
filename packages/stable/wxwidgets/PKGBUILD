@@ -128,9 +128,11 @@ package_wxwidgets-gtk3() {
            gdk-pixbuf2
            glib2
            glibc
+           gspell
            gst-plugins-bad-libs
            gstreamer
            gtk3
+           libayatana-appindicator
            libgcc
            libglvnd
            libjpeg-turbo
@@ -146,8 +148,8 @@ package_wxwidgets-gtk3() {
            pango
            sdl2
            wayland
+           webkit2gtk-4.1
            wxwidgets-common=$pkgver-$pkgrel)
-  optdepends=('webkit2gtk-4.1: for webview support')
   provides=(libwx_gtk3u_adv-3.2.so
             libwx_gtk3u_aui-3.2.so
             libwx_gtk3u_core-3.2.so

@@ -12,7 +12,11 @@ license=(LGPL-2.0-only LGPL-3.0-only)
 depends=(glibc
          libstdc++
          libx11
+         pyside6
+         python
          qt6-base
+         qt6-declarative
+         qt6-wayland
          wayland)
 makedepends=(doxygen
              extra-cmake-modules
@@ -24,8 +28,6 @@ makedepends=(doxygen
              qt6-tools
              shiboken6-generator
              wayland-protocols)
-optdepends=('pyside6: Python bindings'
-            'qt6-declarative: QML bindings')
 groups=(kf6)
 provides=(libKF6GuiAddons.so)
 source=(https://download.kde.org/stable/frameworks/${pkgver%.*}/$pkgname-$pkgver.tar.xz{,.sig})

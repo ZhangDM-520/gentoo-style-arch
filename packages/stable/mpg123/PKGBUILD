@@ -8,12 +8,9 @@ pkgdesc='Console based real time MPEG Audio Player for Layer 1, 2 and 3'
 url='https://mpg123.de/'
 arch=('x86_64')
 license=('LGPL-2.1-only')
-depends=('alsa-lib' 'glibc')
+depends=('alsa-lib' 'glibc' 'jack' 'libpulse' 'sdl2')
 makedepends=('jack' 'libpulse' 'sdl2')  # virtual sdl2 (sdl2-compat/sdl2-git swap — run #121)
 optdepends=(
-  'sdl2: for sdl audio support'
-  'jack: for jack audio support'
-  'libpulse: for pulse audio support'
   'perl: for conplay'
 )
 # bare soname provides per ELF output: 3 linkable libs (sonames

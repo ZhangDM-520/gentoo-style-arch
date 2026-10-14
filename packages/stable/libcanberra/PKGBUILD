@@ -9,9 +9,10 @@ pkgdesc="A small and lightweight implementation of the XDG Sound Theme Specifica
 url="https://0pointer.net/lennart/projects/libcanberra/"
 arch=(x86_64)
 license=(LGPL-2.1-or-later)
-depends=(libvorbis libltdl alsa-lib libpulse tdb sound-theme-freedesktop)
+# gstreamer gtk3 libx11: the shipped payload links these (rule-54 class —
+# undeclared or opt/makedepends only before). Not trimmable.
+depends=(libvorbis libltdl alsa-lib libpulse tdb sound-theme-freedesktop gstreamer gtk3 libx11)
 makedepends=(gtk3 git)
-optdepends=('gtk3: canberra-gtk-play')
 provides=(libcanberra-pulse libcanberra{,-gtk3}.so)
 options=(libtool)
 _commit=c0620e432650e81062c1967cc669829dbd29b310  # master

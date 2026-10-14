@@ -27,14 +27,17 @@ depends=(
   'serf'
   'sqlite'
   'zlib'
+  # rule 54: shipped modules hard-link these (libsvn_auth_gnome_keyring-1.so
+  # -> glib2/libsecret, libsvn_swig_ruby-1.so -> libruby) — not trimmable
+  'glib2'
+  'libsecret'
+  'ruby'
 )
 makedepends=('apache' 'python' 'python-py3c' 'perl' 'swig' 'java-environment>=8'
              'libsecret' 'ruby' 'ruby-nkf' 'python-setuptools')
-optdepends=('libsecret: for GNOME Keyring for auth credentials'
-            'bash-completion: for svn bash completion'
+optdepends=('bash-completion: for svn bash completion'
             'python: for some hook scripts'
-            'java-environment: for Java support'
-            'ruby: for some hook scripts')
+            'java-environment: for Java support')
 provides=(
   'svn'
   libsvn_auth_gnome_keyring-1.so
