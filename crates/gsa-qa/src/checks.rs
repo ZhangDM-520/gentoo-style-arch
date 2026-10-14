@@ -942,11 +942,16 @@ fn declared_closure(
             }
         }
         for pkg in input.installed {
-            if !walked_installed.insert(pkg.name.clone()) {
+            // Match by name/provide for EVERY token; only the depends
+            // recursion is once-per-package (the cycle guard). Skipping a
+            // package before matching would starve every later token's
+            // resolution with the first token's scan (2026-10-15 wall:
+            // `fcitx5-qt` → fcitx5-qt6-git's provide, pinned by fixture G7).
+            if !token_resolves_installed(pkg, &token) {
                 continue;
             }
-            if token_resolves_installed(pkg, &token) {
-                closure.names.insert(pkg.name.clone());
+            closure.names.insert(pkg.name.clone());
+            if walked_installed.insert(pkg.name.clone()) {
                 for value in &pkg.depends {
                     let name = abi::provide_name(value);
                     if !name.is_empty() && name != "None" {

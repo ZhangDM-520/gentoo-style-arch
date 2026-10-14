@@ -636,6 +636,33 @@ EOF
         } >"$dir/files"
     }
 
+    # db_install_prov DBROOT NAME VERSION PROV... -- FILE... — the same
+    # fabricated entry plus a %PROVIDES% block: an installed package whose
+    # provides (not its name) are what a depends token spells.
+    db_install_prov() {
+        local db=$1 name=$2 version=$3
+        shift 3
+        local provs=()
+        while [ "$1" != "--" ]; do
+            provs+=("$1")
+            shift
+        done
+        shift
+        local dir="$db/local/$name-$version"
+        mkdir -p "$dir"
+        {
+            printf '%%NAME%%\n%s\n\n' "$name"
+            printf '%%VERSION%%\n%s\n\n' "$version"
+            printf '%%BASE%%\n%s\n' "$name"
+            printf '%%PROVIDES%%\n'
+            printf '%s\n' "${provs[@]}"
+        } >"$dir/desc"
+        {
+            printf '%%FILES%%\n'
+            printf '%s\n' "$@"
+        } >"$dir/files"
+    }
+
     ws=$tmp/declared-ws
     make_workspace "$ws" 1 2 low
     add_package "$ws" prov-git "$gsa_meta_any"
@@ -767,6 +794,30 @@ EOF
     ((FIXTURE_RC == 0)) || fail "G6: --qa-check must stay report-only (rc=$FIXTURE_RC)"
     grep -Fq 'qa-check declared-deps: clean' <<<"$FIXTURE_OUTPUT" ||
         fail "G6: the declared owner must clear the verdict, got: $FIXTURE_OUTPUT"
+
+    # G7 (green, provide-match to a NON-workspace installed provider): the
+    # depends token spells a PROVIDE of an installed package whose name it
+    # is not (the fcitx5-qt → fcitx5-qt6-git shape, 2026-10-15 wave-5): the
+    # closure walk must match installed packages by provides for EVERY
+    # token, not just the first one scanned — a walked-package guard that
+    # skips a package before matching starves every later token's
+    # resolution. The virtual row is seeded FIRST so a LIFO queue pops it
+    # LAST: the case fails on any walk that stops resolving after its first
+    # token, and must pass regardless of seed order.
+    make_lib "$link" libvirtprov.so.1 libvirtprov.so.1
+    db_install_prov "$GSA_FAKE_DB_PATH" holder-qt6-git 1.0.0-1 virtcap -- usr/lib/libvirtprov.so.1
+    add_package "$ws" app2-git "$gsa_meta_any"
+    stage=$tmp/declared-stage-app2
+    make_consumer "$stage/usr/lib/libapp2.so.1" libapp2.so.1 "$link" libvirtprov.so.1
+    make_archive "$ws" app2-git "$stage"
+    write_srcinfo "$ws/packages/app2-git" app2-git
+    printf '\tdepends = virtcap\n' >>"$ws/packages/app2-git/.SRCINFO"
+    printf '\tdepends = mid-git\n' >>"$ws/packages/app2-git/.SRCINFO"
+    lint "$ws" declared-deps
+    ((FIXTURE_RC == 0)) || fail "G7: --qa-check must stay report-only (rc=$FIXTURE_RC)"
+    if grep -Fq "libapp2.so.1" <<<"$FIXTURE_OUTPUT"; then
+        fail "G7: a depends token resolving via an installed provide must cover its provider, got: $FIXTURE_OUTPUT"
+    fi
     printf 'G: declared-deps red/green OK\n'
 )
 
