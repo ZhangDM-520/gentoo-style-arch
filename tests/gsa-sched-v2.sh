@@ -12,7 +12,7 @@ set -euo pipefail
 # the outcome rows by §G.1's precedence, and `remaining:` is cross-checked
 # against the set the rows imply.
 #
-# Pinned here (six ( subshell ) sections, one per scenario):
+# Pinned here (seven ( subshell ) sections, one per scenario):
 #   1. cone-stop (the DEFAULT): a failure parks exactly its consumer cone
 #      (`parked waits-on-failed` rows), unrelated work runs to completion,
 #      rc is §G.1's 4 for a cone-stop run with >=1 failed row.
@@ -33,6 +33,10 @@ set -euo pipefail
 #   6. `--stale-lock-check` (§D.1): the pacman-lock probe reports
 #      free / present-idle / held, identifies holders via /proc fd scan, and
 #      NEVER deletes db.lck; extra arguments are rc 2.
+#   7. the makepkg PACMAN shim path survives the recipe cwd (§K.1): a
+#      relative `--state-dir` still hands makepkg an ABSOLUTE shim path —
+#      makepkg runs with the recipe's cwd, so a relative one would not exist
+#      there and the build dies with "An unknown error has occurred".
 #
 # House conventions: `( subshell )` sections (each an isolated scenario with
 # its own workspace), inline oracle stubs (§D.2), `fail()` prefixes, and
@@ -552,6 +556,42 @@ EOF
     [ "$FIXTURE_RC" = 2 ] || fail "--stale-lock-check with arguments must be rc 2, got $FIXTURE_RC"
     printf '%s\n' "$FIXTURE_OUTPUT" | grep -F "takes no arguments" >/dev/null \
         || fail "the arity refusal does not name the argument: $FIXTURE_OUTPUT"
+)
+
+# ─── 7. makepkg's PACMAN shim path survives the recipe cwd (§K.1) ──────────
+# makepkg runs with the RECIPE's cwd: a relative `--state-dir` must never hand
+# it a relative `PACMAN` shim path — the shim would not exist there and
+# `makepkg -sf` dies with a bare "An unknown error has occurred" (real-tree
+# smoke, 2026-10-14). The lane hands makepkg an ABSOLUTE path.
+(
+    set -euo pipefail
+    ws="$fixture/relstate/ws"
+    make_workspace "$ws" 1 1 low
+    add_package "$ws" p1 "$gsa_meta_any" git
+    cat >"$ws/bin/makepkg" <<'EOF'
+#!/usr/bin/env bash
+set -u
+printf 'PACMAN=%s\n' "${PACMAN:-}" >>"${GSA_FAKE_PACMAN_ENV_LOG:?}"
+: >"$PWD/$(basename "$PWD")-1.0.0-1-any.pkg.tar.zst"
+exit 0
+EOF
+    chmod +x "$ws/bin/makepkg"
+    export PATH="$ws/bin:$PATH"
+    export GSA_FAKE_PACMAN_ENV_LOG="$fixture/relstate/pacman-env.log"
+    export GSA_FAKE_SPAWN_LOG="$fixture/relstate/spawn.log"
+    : >"$GSA_FAKE_PACMAN_ENV_LOG"
+
+    # the state root is RELATIVE on purpose (run_engine cds into $ws)
+    run_engine "$ws" -B --state-dir state --leaf --no-prefetch --allow-broken-rustc p1
+    [ "$FIXTURE_RC" = 0 ] \
+        || fail "relative state root build rc=$FIXTURE_RC, want 0:" "$FIXTURE_OUTPUT"
+    [ -s "$GSA_FAKE_PACMAN_ENV_LOG" ] \
+        || fail "the makepkg stub never ran:" "$FIXTURE_OUTPUT"
+    if grep -v '^PACMAN=/' "$GSA_FAKE_PACMAN_ENV_LOG" | grep -q .; then
+        fail "makepkg saw a non-absolute PACMAN path (it runs with the recipe's cwd):" "$GSA_FAKE_PACMAN_ENV_LOG"
+    fi
+    grep -q '^PACMAN=.*/state/locks/pacman-shim$' "$GSA_FAKE_PACMAN_ENV_LOG" \
+        || fail "no makepkg invocation saw the state root's pacman shim:" "$GSA_FAKE_PACMAN_ENV_LOG"
 )
 
 printf 'gsa-sched-v2 fixture: PASS\n'

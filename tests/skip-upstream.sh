@@ -1,11 +1,51 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Regression fixture for upstream-aware -s and the skip modes (--skip-built's
-# freshness-free built-set claim, --vcs-skip-tolerance's CLI waive threshold).
-# Every workspace and local remote is
-# isolated under $TMPDIR; only the Git adapter is exercised end to end here.
+# tests/skip-upstream.sh — upstream-aware `--skip` / `--skip-built` /
+# `--vcs-skip-tolerance N` on the NATIVE engine (`gsa`): freshness tolerance
+# and its waiver, ABI-provider waivers, VCS baseline/manifest integrity,
+# transport retry/deferral/park/fallback, the built-set claim, the toolchain
+# drift gate that outranks every claim, and claim durability. Driven through
+# synthetic $TMPDIR workspaces and stub `makepkg`/`git`/`svn`/`hg`/`bzr`/
+# `pacman`/`sudo`/`gcc` executables at the process boundary — no package is
+# built, no real pacman transaction runs, nothing outside the fixture tree is
+# written, no network is used (remotes are local `file://` bare repos and the
+# non-git adapters answer from stubs).
+#
+# Flip notes (docs/gsa-fixture-migration.md row `tests/skip-upstream.sh`):
+# the fish builder (`fish build-all.fish -s …`) becomes `gsa -B|-S --skip …`
+# via tests/lib/rr-v2.bash's run_engine; `--no-deps` flips to `--leaf`
+# (§B.8), `-i` retires into the `-S` family, `-c`/`-cc` flip to the cluster
+# letter `c` / the `-Mc`/`-Mcc` maintain verbs (§B.7), and the fish
+# `format: 1` rows become `format: 2` rows asserted through rr2_*:
+#   * a `--skip` claim runs NO lane: plan `skip <reason>`, outcome
+#     `succeeded - - <reason>`, reason ∈ ok|skip-built|freshness-waived|
+#     abi-provider-waived (§H.3), yet on `gsa -S` the claim still installs;
+#   * a build is plan `build[-install] ok`, outcome `succeeded 0 <dur> ok`;
+#   * an unverifiable upstream parks the recipe as `deferred 99 -
+#     upstream-unverified` and its consumer cone as `parked - -
+#     waits-on-deferred`, rc 5 (§G.1 deferral-only); the fallback (consumers
+#     cannot wait, waiter cap 3) is a normal build;
+#   * policy/prose output is the run's merged STDERR (`gsa: note: …`) — it
+#     never lands in per-package logs, so every prose pin greps
+#     FIXTURE_OUTPUT. Fish-era decision DIAGNOSTIC greps ('is incomplete',
+#     'cannot be read as a package archive', 'a different build of', …) have
+#     no gsa rendering today (the freshness verdict's build detail is
+#     computed in crates/gsa-recipe/src/freshness.rs `decide()` and dropped
+#     by the CLI — recorded deviation, see the report) and their meanings
+#     re-pin as DECISIONS paired with a control run over the same staged
+#     state (§L.3/§L.5: prose byte-pins retire, meanings re-pin).
+# The engine has STATE the fish builder never had (the hash-bound binpkg
+# index and its retention sweep), so scenario setup STAGES the built set it
+# needs (archive + `.gsa-vcs-revisions` manifest + toolchain marker + mtimes)
+# instead of building it — one engine run per freshness scenario, with
+# build→claim pairs where the round trip itself is the semantics. The final
+# section pins CLAIM DURABILITY (a claim must leave its evidence in place so
+# the next run keeps skipping); that is where the engine's retention sweep
+# today deletes the claimed archive (engine bug, evidence in the report).
+
 source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/rr-v2.bash"
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-skip-upstream.XXXXXX")
 trap 'rm -rf -- "$fixture"' EXIT
 
@@ -14,6 +54,27 @@ fail() {
     exit 1
 }
 
+# ─── Stub-knob vocabulary (§D.2: declared in the change that adds them) ─────
+rr2_stub_knob GSA_FAKE_VCS_LAYOUT "skip-upstream makepkg stub: checkout layout (root|srcdir)"
+rr2_stub_knob GSA_FAKE_EXPECT_CLEAN "skip-upstream makepkg stub: fail if a stale VCS baseline survives the clean"
+rr2_stub_knob GSA_FAKE_VCS_REMOTE_REV "skip-upstream svn/hg/bzr stubs: remote revision answer"
+rr2_stub_knob GSA_FAKE_VCS_BUILT_REV "skip-upstream svn/hg/bzr stubs: local checkout revision answer"
+
+# The identity the gcc stub reports (and every staged toolchain marker
+# carries) when no run overrides GSA_FAKE_GCC_VERSION.
+GSA_FAKE_GCC_ID='gcc (fixture) fixture' 
+
+# ─── The engine under test: built into the fixture tree (scratch only) ──────
+cargo build --offline --quiet --target-dir "$fixture/cargo" -p gsa-cli \
+    --manifest-path "$gsa_repo_root/Cargo.toml" \
+    || fail "cannot build the gsa binary for the fixture"
+gsa_bin="$fixture/cargo/debug/gsa"
+[ -x "$gsa_bin" ] || fail "cargo did not produce $gsa_bin"
+export GSA_TEST_ENGINE=gsa
+export GSA_TEST_GSA_BIN="$gsa_bin"
+
+# ─── Repository fixtures (a build-order claim is compared against a real
+# remote revision, so the upstreams are real bare repos under $TMPDIR) ──────
 git_fixture() {
     GIT_CONFIG_COUNT=0 git "$@"
 }
@@ -36,7 +97,7 @@ init_git_remote() { # $1 = isolated root; creates remote.git and work/
 
 advance_main() { # $1 = local worktree; $2 = commit message and file content;
     # $3 = commit count (default 1). A caller that expects a REBUILD must move
-    # at least the freshness tolerance (5) commits: -s deliberately waives
+    # at least the freshness tolerance (5) commits: --skip deliberately waives
     # moves below it (see the freshness-tolerance section).
     local work=$1 message=$2 count=${3:-1}
     local i
@@ -66,38 +127,160 @@ ws_git_init() { # $1 = workspace; $2 = committer date (default 2020-01-01).
 }
 
 ws_git_commit() { # $1 = workspace; $2 = committer date; $3 = message.
-    # Commits ALL pending changes (a fixture recipe edit is one commit, the
-    # evidence the change gate exists to see).
     local ws=$1 date=$2 message=$3
     GIT_COMMITTER_DATE=$date GIT_AUTHOR_DATE=$date git_fixture -C "$ws" add -A
     GIT_COMMITTER_DATE=$date GIT_AUTHOR_DATE=$date \
         git_fixture -C "$ws" commit -m "$message" >/dev/null
 }
 
-mk_fake_archive() { # $1 = archive path; $2 = optional payload text
-    # A REAL (if tiny) zstd tarball: the -s payload probe reads archives the
-    # way pacman does, so "an archive exists" must model a readable one — a
-    # zero-byte file models exactly the interrupted write this seam rejects.
-    if [[ -n ${2:-} ]]; then
-        local stage=$fixture/.mk-archive.$$
-        mkdir -p "$stage"
-        printf '%s\n' "$2" >"$stage/payload"
-        tar --zstd -cf "$1" -C "$stage" payload
-        rm -rf "$stage"
-    else
-        tar --zstd -cf "$1" --files-from /dev/null
+# ─── Staged state (the built sets the freshness engine reads) ───────────────
+# pkginfo_archive OUT NAME [MARKER] — one REAL (if tiny) zstd tarball carrying
+# its own `.PKGINFO` truth: the payload probe reads archives the way pacman
+# does (a zero-byte file models exactly the interrupted write that probe
+# rejects), the binpkg-index registration and the install name authority read
+# the `.PKGINFO`, so "an archive exists" must model a readable, nameable one.
+# MARKER adds a second tar member: a plain repeat call within the same second
+# is byte-identical (GNU tar records whole-second mtimes), so a replacement
+# that must differ needs a different payload to model "replaced bytes".
+pkginfo_archive() {
+    local out=$1 name=$2 marker=${3:-}
+    local stage=$fixture/.mk-archive.$$
+    mkdir -p "$stage"
+    printf 'pkgbase = %s\npkgname = %s\npkgver = 1.0.0\npkgrel = 1\narch = any\n' \
+        "$name" "$name" >"$stage/.PKGINFO"
+    if [ -n "$marker" ]; then
+        printf '%s\n' "$marker" >"$stage/BUILD-MARKER"
     fi
+    tar --zstd -cf "$out" -C "$stage" .PKGINFO ${marker:+BUILD-MARKER}
+    rm -rf "$stage"
 }
 
-make_vcs_workspace() { # $1 workspace; $2 remote path; $3 branch|tag; $4 ref;
+# vcs_manifest ARCHIVE ENTRY PROTOCOL REVISION — manifest format 2 bound to
+# the archive's exact bytes (sha256 + size identity), one row for the source
+# ENTRY at REVISION: the shape the engine's recorder writes after a build and
+# its detector accepts at a --skip probe.
+vcs_manifest() {
+    local archive=$1 entry=$2 protocol=$3 revision=$4
+    local key size sha
+    key=$(printf '%s' "$entry" | sha256sum | awk '{print $1}')
+    size=$(stat -c %s "$archive")
+    sha=$(sha256sum "$archive" | awk '{print $1}')
+    {
+        printf 'gsa-vcs-revisions\t2\n'
+        printf 'archive\t%s\t%s\n' "$sha" "$size"
+        printf '%s\t%s\t%s\n' "$key" "$protocol" "$revision"
+    } >"$archive.gsa-vcs-revisions"
+}
+
+# stage_marker WS [IDENTITY] — the GCC build-identity marker the drift gate
+# reads (`<state>/toolchains/<id>`). Staging the CURRENT identity keeps the
+# drift gate quiet so a scenario tests the freshness engine and not the
+# one-time clean; the drift section stages missing/changed markers on purpose.
+stage_marker() {
+    local ws=$1 identity=${2:-$GSA_FAKE_GCC_ID}
+    mkdir -p "$ws/state/toolchains"
+    printf '%s\n' "$identity" >"$ws/state/toolchains/p1"
+}
+
+# stage_vcs_set WS ENTRY PROTOCOL REVISION — one claimed-ready built set for
+# p1 beside its recipe: archive + bound VCS manifest + toolchain marker +
+# the PKGBUILD-mtime pin (2000 ≪ the archive, so the mtime gate stays quiet).
+stage_vcs_set() {
+    local ws=$1 entry=$2 protocol=$3 revision=$4
+    local pkg=$ws/packages/p1 archive=$ws/packages/p1/p1-1.0.0-1-any.pkg.tar.zst
+    pkginfo_archive "$archive" p1
+    vcs_manifest "$archive" "$entry" "$protocol" "$revision"
+    stage_marker "$ws"
+    touch -d '2000-01-01 00:00:00 UTC' "$pkg/PKGBUILD"
+}
+
+# stage_plain_set WS [NAME…] — a claimed-ready non-VCS built set (default
+# p1): one archive per output name, marker, mtime pin.
+stage_plain_set() { # $1 = workspace; remaining args = output names (default p1)
+    local dir=$1
+    shift
+    local names=${*:-p1} name
+    for name in $names; do
+        pkginfo_archive "$dir/packages/p1/$name-1.0.0-1-any.pkg.tar.zst" "$name"
+    done
+}
+
+# ─── Workspace synthesis ────────────────────────────────────────────────────
+# The gcc stub pins the drift gate's identity input (GSA_FAKE_GCC_VERSION is
+# fixture-side; tests/toolchain-drift.sh owns the LTO-object half of the
+# gate), and every workspace's makepkg/pacman/sudo stubs live at the process
+# boundary like the other flipped fixtures'.
+write_gcc_stub() {
+    cat >"$1/bin/gcc" <<'EOF'
+#!/usr/bin/env bash
+set -u
+[[ ${1:-} == --version ]] || exit 2
+printf 'gcc (fixture) %s\n' "${GSA_FAKE_GCC_VERSION:-fixture}"
+EOF
+    chmod +x "$1/bin/gcc"
+}
+
+# The pacman the engine's probes reach: `pacman -Qp` models pacman's own
+# archive validation (it decompresses the whole zstd stream before answering,
+# so a write killed at ANY offset fails this probe exactly as it fails real
+# pacman), everything else is logged and answered "not installed"/ok.
+write_pacman_stub() {
+    cat >"$1/bin/pacman" <<'EOF'
+#!/usr/bin/env bash
+set -u
+printf 'pacman %s\n' "$*" >>"${GSA_FAKE_PACMAN_LOG:?}"
+case ${1:-} in
+-Qp)
+    file=
+    for arg in "$@"; do file=$arg; done
+    [[ -n $file ]] || exit 1
+    tar --zstd -t -f "$file" >/dev/null 2>&1
+    exit $?
+    ;;
+-Qi) exit 1 ;;
+esac
+exit 0
+EOF
+    chmod +x "$1/bin/pacman"
+}
+
+# The sudo passthrough (fixture-lib) plus a fabricated pacman DB root, so an
+# install decision never reads the HOST's /var/lib/pacman.
+write_db_stub() {
+    mkdir -p "$fixture/db"
+    cat >"$1/bin/pacman-conf" <<EOF
+#!/usr/bin/env bash
+[ "\${1:-}" = DBPath ] && printf '%s\n' "$fixture/db"
+exit 0
+EOF
+    chmod +x "$1/bin/pacman-conf"
+}
+
+make_workspace_common() { # $1 = workspace
+    make_workspace "$1" 1 2 low
+    make_install_conf "$1/pacman.conf"
+    write_gcc_stub "$1"
+    write_pacman_stub "$1"
+    write_db_stub "$1"
+    stub_sudo "$1"
+    # Every workspace carries the fake makepkg — including the staged-set
+    # workspaces that normally only CLAIM: a rebuild trigger must never fall
+    # through to the HOST's real makepkg (it would clone into the engine's
+    # shared SRCDEST cache and print real build output into the lane log).
+    # The non-git adapter workspaces overwrite it with their own stub.
+    write_git_makepkg_stub "$1"
+    # The SUT's retry backoffs and dispatcher polls are pure latency here —
+    # nothing in this fixture asserts on wall-clock time (see stub_sleep).
+    stub_sleep "$1"
+}
+
+make_vcs_workspace() { # $1 workspace; $2 remote path; $3 branch|tag|default; $4 ref;
     # $5 entry style: override (default — 'upstream::url') or basename (no
     #    override, URL basename carries .git — the xdg-utils shape). The
     #    checkout layout is not baked here: the fake makepkg decides it at
-    #    run time from the stub variable GSA_FAKE_VCS_LAYOUT (root = clone
-    #    beside the PKGBUILD, the layout this fixture used before 2026-10-02;
+    #    run time from GSA_FAKE_VCS_LAYOUT (root = clone beside the PKGBUILD;
     #    srcdir = clone under $PWD/src/<name>, where real makepkg's
-    #    extract_git puts the working copy), passed per run_case call like
-    #    the other GSA_FAKE_* stub variables.
+    #    extract_git puts the working copy).
     local dir=$1 remote=$2 kind=$3 ref=$4
     local style=${5:-override}
     case $style in
@@ -112,22 +295,42 @@ make_vcs_workspace() { # $1 workspace; $2 remote path; $3 branch|tag; $4 ref;
     fi
     [[ $kind == default ]] || source+="#$kind=$ref"
     local extra="$gsa_meta_any"$'\n'"source=(\"$source\")"$'\n'"sha256sums=('SKIP')"
-    make_workspace "$dir" 1 2 low
-    # The SUT's retry backoffs and dispatcher polls are pure latency here —
-    # nothing in this fixture asserts on wall-clock time (see stub_sleep).
-    stub_sleep "$dir"
-    # Dynamic IgnorePkg registration target — never the host's /etc/pacman.conf.
-    make_install_conf "$dir/pacman.conf"
+    make_workspace_common "$dir"
     add_package "$dir" p1 "$extra"
     # Keep the archive-mtime condition deterministic on the first build.
     touch -d '2000-01-01 00:00:00 UTC' "$dir/packages/p1/PKGBUILD"
+    write_git_makepkg_stub "$dir"
+}
 
-    cat >"$dir/bin/makepkg" <<'EOF'
+# write_git_makepkg_stub DIR — the Git-capable fake makepkg: clones the local
+# file:// remote the way real makepkg's extract_git would (layout chosen by
+# GSA_FAKE_VCS_LAYOUT) and leaves one nameable archive per packaged output.
+# Source-less synthetic packages (multi-package workspaces' extra rows) just
+# get their archive.
+write_git_makepkg_stub() {
+    cat >"$1/bin/makepkg" <<'EOF'
 #!/usr/bin/env bash
 set -eu
 
 git_config0() {
     GIT_CONFIG_COUNT=0 git "$@"
+}
+
+# One archive per packaged output: a split recipe must leave a COMPLETE set.
+emit_archives() {
+    local names=() n
+    case $(declare -p pkgname 2>/dev/null || true) in
+    'declare -a'*) names=("${pkgname[@]}") ;;
+    *) names=("$id") ;;
+    esac
+    local stage="$PWD/.pkginfo-stage"
+    mkdir -p "$stage"
+    for n in "${names[@]}"; do
+        printf 'pkgbase = %s\npkgname = %s\npkgver = 1.0.0\npkgrel = 1\narch = any\n' \
+            "$id" "$n" >"$stage/.PKGINFO"
+        tar --zstd -cf "$PWD/$n-1.0.0-1-any.pkg.tar.zst" -C "$stage" .PKGINFO
+    done
+    rm -rf "$stage"
 }
 
 id=$(basename "$PWD")
@@ -136,6 +339,10 @@ source "$PWD/PKGBUILD"
 entry=${source[0]:-}
 case $entry in
 *git+file://*) ;;
+"")
+    emit_archives
+    exit 0
+    ;;
 *)
     printf 'fake makepkg: expected a local Git source, got %s\n' "$entry" >&2
     exit 1
@@ -171,8 +378,7 @@ fi
 
 # Where the working copy lands: the name makepkg would derive (the name::
 # override verbatim, else the URL basename with .git stripped) under the
-# selected layout. GSA_FAKE_VCS_LAYOUT is fixture-side only, like the rest of
-# the GSA_FAKE_* stub variables.
+# selected layout.
 if [[ -n $name_override ]]; then
     checkout_name=$name_override
 else
@@ -219,55 +425,10 @@ tag=*)
     ;;
 esac
 
-tar --zstd -cf "$PWD/$id-1.0.0-1-any.pkg.tar.zst" --files-from /dev/null
+# A nameable archive (the engine reads each archive's own .PKGINFO):
+emit_archives
 EOF
-    chmod +x "$dir/bin/makepkg"
-    stub_sudo "$dir"
-    cat >"$dir/bin/pacman" <<'EOF'
-#!/usr/bin/env bash
-set -u
-printf 'pacman %s\n' "$*" >>"${GSA_FAKE_PACMAN_LOG:?}"
-case ${1:-} in
--Qp)
-    # Model pacman's own archive validation: it decompresses the whole zstd
-    # stream before answering, so a write killed at ANY offset fails this
-    # probe exactly as it fails real pacman.
-    file=
-    for arg in "$@"; do file=$arg; done
-    [[ -n $file ]] || exit 1
-    tar --zstd -t -f "$file" >/dev/null 2>&1
-    exit $?
-    ;;
--Qi) exit 1 ;;
-esac
-exit 0
-EOF
-    chmod +x "$dir/bin/pacman"
-}
-
-run_case() { # $1 = workspace; remaining args = builder selection/flags
-    local dir=$1
-    shift
-    # Hermetic SRCDEST: the recorder probes the builder's exported SRCDEST, so
-    # the host's real source cache must never leak into a fixture decision.
-    mkdir -p "$dir/makepkg-srcdest"
-    run_builder env \
-        PATH="$dir/bin:$PATH" \
-        GIT_CONFIG_COUNT=0 \
-        SRCDEST="$dir/makepkg-srcdest" \
-        GSA_FAKE_VCS_LAYOUT="${GSA_FAKE_VCS_LAYOUT:-root}" \
-        GSA_STATE_DIR="$dir/state" \
-        _IGNOREPKG_CONF="$dir/pacman.conf" \
-        GSA_FAKE_MAKEPKG_COUNT="$dir/makepkg.count" \
-        GSA_FAKE_PACMAN_LOG="$dir/pacman.log" \
-        GSA_FAKE_EXPECT_CLEAN="${GSA_FAKE_EXPECT_CLEAN:-0}" \
-        GSA_FAKE_VCS_REMOTE_REV="${GSA_FAKE_VCS_REMOTE_REV:-}" \
-        GSA_FAKE_VCS_BUILT_REV="${GSA_FAKE_VCS_BUILT_REV:-}" \
-        GSA_CPU_THREADS=8 \
-        GSA_MEMORY_GIB=16 \
-        fish_function_path=/nonexistent-fp \
-        fish "$dir/build-all.fish" \
-        --allow-broken-rustc --no-deps --no-sync "$@"
+    chmod +x "$1/bin/makepkg"
 }
 
 make_non_git_workspace() { # $1 = workspace; $2 = svn|hg|bzr; $3 = optional fragment
@@ -275,12 +436,7 @@ make_non_git_workspace() { # $1 = workspace; $2 = svn|hg|bzr; $3 = optional frag
     local source="upstream::${protocol}+https://example.invalid/repo"
     [[ -n $fragment ]] && source+="#$fragment"
     local extra="$gsa_meta_any"$'\n'"source=(\"$source\")"$'\n'"sha256sums=('SKIP')"
-    make_workspace "$dir" 1 2 low
-    # The SUT's retry backoffs and dispatcher polls are pure latency here —
-    # nothing in this fixture asserts on wall-clock time (see stub_sleep).
-    stub_sleep "$dir"
-    # Dynamic IgnorePkg registration target — never the host's /etc/pacman.conf.
-    make_install_conf "$dir/pacman.conf"
+    make_workspace_common "$dir"
     add_package "$dir" p1 "$extra"
     touch -d '2000-01-01 00:00:00 UTC' "$dir/packages/p1/PKGBUILD"
 
@@ -290,17 +446,27 @@ set -eu
 id=$(basename "$PWD")
 printf '%s\n' "$id" >>"${GSA_FAKE_MAKEPKG_COUNT:?}"
 mkdir -p "$PWD/upstream"
-tar --zstd -cf "$PWD/$id-1.0.0-1-any.pkg.tar.zst" --files-from /dev/null
+# A nameable archive (the engine reads each archive's own .PKGINFO):
+stage="$PWD/.pkginfo-stage"
+mkdir -p "$stage"
+printf 'pkgbase = %s\npkgname = %s\npkgver = 1.0.0\npkgrel = 1\narch = any\n' \
+    "$id" "$id" >"$stage/.PKGINFO"
+tar --zstd -cf "$PWD/$id-1.0.0-1-any.pkg.tar.zst" -C "$stage" .PKGINFO
+rm -rf "$stage"
 EOF
     chmod +x "$dir/bin/makepkg"
 
+    # The adapter stubs answer the ENGINE's probes (crates/gsa-recipe/
+    # src/freshness.rs vcs_remote_revision / vcs_local_revision argv shapes):
+    # remote revisions come from the URL-bearing call, the built revision from
+    # the checkout-bearing call.
     cat >"$dir/bin/svn" <<'EOF'
 #!/usr/bin/env bash
 set -u
 target=
 for arg in "$@"; do target=$arg; done
 if [[ $target == *://* ]]; then
-    [[ " $* " == *' --revision HEAD '* ]] || exit 31
+    [[ " $* " == *' --revision '* ]] || exit 31
     printf '%s\n' "${GSA_FAKE_VCS_REMOTE_REV:?}"
 else
     [[ " $* " == *' info --show-item revision '* ]] || exit 32
@@ -313,7 +479,7 @@ set -u
 target=
 for arg in "$@"; do target=$arg; done
 if [[ $target == *://* ]]; then
-    [[ " $* " == *' --rev default '* ]] || exit 33
+    [[ " $* " == *' --rev '* ]] || exit 33
     printf '%s\n' "${GSA_FAKE_VCS_REMOTE_REV:?}"
 else
     [[ " $* " == *' log -r . --template {node} '* ]] || exit 34
@@ -334,180 +500,11 @@ else
 fi
 EOF
     chmod +x "$dir/bin/svn" "$dir/bin/hg" "$dir/bin/bzr"
-    stub_sudo "$dir"
-    cat >"$dir/bin/pacman" <<'EOF'
-#!/usr/bin/env bash
-set -u
-printf 'pacman %s\n' "$*" >>"${GSA_FAKE_PACMAN_LOG:?}"
-case ${1:-} in
--Qp)
-    # Model pacman's own archive validation: it decompresses the whole zstd
-    # stream before answering, so a write killed at ANY offset fails this
-    # probe exactly as it fails real pacman.
-    file=
-    for arg in "$@"; do file=$arg; done
-    [[ -n $file ]] || exit 1
-    tar --zstd -t -f "$file" >/dev/null 2>&1
-    exit $?
-    ;;
--Qi) exit 1 ;;
-esac
-exit 0
-EOF
-    chmod +x "$dir/bin/pacman"
 }
 
-expect_success() { # $1 = case label
-    if ((FIXTURE_RC != 0)); then
-        fail "$1 failed (rc=$FIXTURE_RC):"$'\n'"$FIXTURE_OUTPUT"
-    fi
-}
-
-makepkg_count() { # $1 = workspace
-    local count_file=$1/makepkg.count
-    if [[ -f $count_file ]]; then
-        awk 'END { print NR }' "$count_file"
-    else
-        printf '0\n'
-    fi
-}
-
-assert_makepkg_count() { # $1 = workspace; $2 = expected; $3 = label
-    local got
-    got=$(makepkg_count "$1")
-    [[ $got == "$2" ]] || fail "$3: makepkg ran $got times, expected $2"
-}
-
-diagnostics_with_logs() { # $1 = workspace — the captured run output plus every
-    # package log: the lane's stdout IS its log, so decision lines a quiet
-    # lane printed live there (the idiom expect_unverifiable_defer uses).
-    printf '%s\n' "$FIXTURE_OUTPUT"
-    if [[ -d $1/state/logs ]]; then
-        find "$1/state/logs" -maxdepth 1 -type f -exec cat {} + 2>/dev/null || true
-    fi
-}
-
-expect_unverifiable_defer() { # $1 = workspace; $2 = prior makepkg count; $3 = label; $4 = diagnostic regex
-    local dir=$1 want_count=$2 label=$3 words=$4 diagnostics=$FIXTURE_OUTPUT
-    if ((FIXTURE_RC == 0)); then
-        fail "$label unexpectedly succeeded (a parked run is not green):"$'\n'"$FIXTURE_OUTPUT"
-    fi
-    assert_makepkg_count "$dir" "$want_count" "$label (a parked recipe must not run makepkg)"
-    grep -Eq '^p1 deferred 99 [0-9]+ upstream-unverified$' <<<"$FIXTURE_OUTPUT" ||
-        fail "$label row is not 'deferred 99 … upstream-unverified':"$'\n'"$FIXTURE_OUTPUT"
-    if [[ -d $dir/state/logs ]]; then
-        diagnostics+=$'\n'"$(find "$dir/state/logs" -maxdepth 1 -type f -exec cat {} + 2>/dev/null || true)"
-    fi
-    if ! grep -Fq 'p1' <<<"$diagnostics" || ! grep -Eiq "$words" <<<"$diagnostics"; then
-        fail "$label did not report a package-specific VCS freshness warning:"$'\n'"$diagnostics"
-    fi
-}
-
-# A single branch-following recipe pins unchanged-ref skips, -s -i install
-# behavior, selected-ref advancement, and the original PKGBUILD-mtime check.
-branch_dir=$fixture/branch
-init_git_remote "$branch_dir/repository"
-branch_remote=$branch_dir/repository/remote.git
-branch_work=$branch_dir/repository/work
-make_vcs_workspace "$branch_dir/workspace" "$branch_remote" branch main
-skip_help=$(fish "$branch_dir/workspace/build-all.fish" --help 2>/dev/null) ||
-    fail 'builder help command failed'
-grep -Fq -- 'an unusable baseline rebuilds' <<<"$skip_help" ||
-    fail 'builder help does not describe legacy VCS baseline recovery'
-
-run_case "$branch_dir/workspace" p1
-expect_success 'initial branch build'
-assert_makepkg_count "$branch_dir/workspace" 1 'initial branch build'
-
-run_case "$branch_dir/workspace" -s p1
-expect_success 'unchanged selected branch'
-assert_makepkg_count "$branch_dir/workspace" 1 'unchanged selected branch'
-
-# This is a real skip, not a build followed by an install: pacman must still
-# install the existing archive while makepkg's invocation count stays fixed.
-run_case "$branch_dir/workspace" -s -i p1
-expect_success 'unchanged branch with install'
-assert_makepkg_count "$branch_dir/workspace" 1 'unchanged branch with install'
-grep -q -- 'pacman -U' "$branch_dir/workspace/pacman.log" ||
-    fail 'unchanged branch -s -i did not install the skipped archive'
-grep -- 'pacman -U' "$branch_dir/workspace/pacman.log" | grep -Fq 'p1-1.0.0-1-any.pkg.tar.zst' ||
-    fail 'unchanged branch -s -i installed without the existing archive'
-
-# The rebuild trigger below must clear the freshness tolerance (-s waives
-# moves of fewer than 5 commits by design); the case still pins "a moved
-# selected ref rebuilds".
-advance_main "$branch_work" 'advanced selected branch' 5
-run_case "$branch_dir/workspace" -s p1
-expect_success 'advanced selected branch'
-assert_makepkg_count "$branch_dir/workspace" 2 'advanced selected branch'
-
-touch -d '+1 day' "$branch_dir/workspace/packages/p1/PKGBUILD"
-run_case "$branch_dir/workspace" -s p1
-expect_success 'newer PKGBUILD mtime'
-assert_makepkg_count "$branch_dir/workspace" 3 'newer PKGBUILD mtime'
-
-# A fresh legacy archive cannot be trusted without a recorded build revision.
-# Rebuild once after confirming the selected refs are reachable, then skip it
-# normally on later runs.
-missing_dir=$fixture/missing-baseline
-init_git_remote "$missing_dir/repository"
-missing_remote=$missing_dir/repository/remote.git
-make_vcs_workspace "$missing_dir/workspace" "$missing_remote" branch main
-archive=$missing_dir/workspace/packages/p1/p1-1.0.0-1-any.pkg.tar.zst
-mk_fake_archive "$archive"
-run_case "$missing_dir/workspace" -s p1
-expect_success 'legacy archive rebuilds once to record its baseline'
-assert_makepkg_count "$missing_dir/workspace" 1 'legacy archive rebuild'
-[[ -f $archive.gsa-vcs-revisions ]] ||
-    fail 'legacy archive rebuild did not record its VCS baseline'
-run_case "$missing_dir/workspace" -s p1
-expect_success 'legacy archive skips after recording its baseline'
-assert_makepkg_count "$missing_dir/workspace" 1 'legacy archive subsequent skip'
-printf 'malformed VCS baseline\n' >"$archive.gsa-vcs-revisions"
-run_case "$missing_dir/workspace" -s p1
-expect_success 'malformed legacy baseline triggers a rebuild'
-assert_makepkg_count "$missing_dir/workspace" 2 'malformed legacy baseline rebuild'
-grep -Fq $'gsa-vcs-revisions\t2' "$archive.gsa-vcs-revisions" ||
-    fail 'malformed legacy baseline was not replaced after rebuilding'
-
-# A missing baseline does not license a skip or a build when upstream cannot
-# be queried; the refusal must happen before makepkg.
-legacy_offline_dir=$fixture/missing-baseline-offline
-init_git_remote "$legacy_offline_dir/repository"
-legacy_offline_remote=$legacy_offline_dir/repository/remote.git
-make_vcs_workspace "$legacy_offline_dir/workspace" "$legacy_offline_remote" branch main
-mk_fake_archive "$legacy_offline_dir/workspace/packages/p1/p1-1.0.0-1-any.pkg.tar.zst"
-mv "$legacy_offline_remote" "$legacy_offline_dir/repository/remote.offline"
-run_case "$legacy_offline_dir/workspace" -s p1
-expect_unverifiable_defer "$legacy_offline_dir/workspace" 0 \
-    'unreachable legacy upstream' 'cannot query|upstream|remote'
-
-# A previously recorded baseline cannot license a skip when the selected
-# remote ref is no longer queryable; with no consumers to break, the recipe
-# parks (deferred) — never fails the run, never skips.
-unreachable_dir=$fixture/unreachable
-init_git_remote "$unreachable_dir/repository"
-make_vcs_workspace "$unreachable_dir/workspace" "$unreachable_dir/repository/remote.git" branch main
-run_case "$unreachable_dir/workspace" p1
-expect_success 'initial reachable build'
-assert_makepkg_count "$unreachable_dir/workspace" 1 'initial reachable build'
-mv "$unreachable_dir/repository/remote.git" "$unreachable_dir/repository/remote.offline"
-run_case "$unreachable_dir/workspace" -s p1
-expect_unverifiable_defer "$unreachable_dir/workspace" 1 'unreachable upstream' 'remote|revision|upstream|baseline'
-
-# ─── Transport failures: classify, retry, DEFER — never fail the run ────────
-# 2026-10-02 defect: a momentary git ls-remote transport error (TLS flake,
-# NOT a moved ref) made rc 2 fail the package, and fail-fast stopped dispatch
-# — one unreachable upstream aborted a 147-package run (131 never-started).
-# These cases pin the replacement contract:
-#   * a transient failure is retried and, once answered, the normal skip /
-#     moved-ref decisions apply unchanged;
-#   * a persistent failure PARKS the recipe when its consumer chain can
-#     absorb the wait (no or few waiters — owner 2026-10-02): deferred with
-#     reason upstream-unverified, dependents honestly held, run continues;
-#   * a heavy or unresolvable consumer chain falls back to a NORMAL BUILD
-#     attempt: the recipe builds (or fails on its own merits) and installs
-#     under -i — never silently skips, never parks what others need.
+# install_lsremote_stub $1 workspace — $1/lsremote.mode = off|once|always:
+# `git ls-remote` fails per mode (exit 128 = transport failure, the retryable
+# class) and counts every attempt; everything else execs the real git.
 install_lsremote_stub() { # $1 workspace — $1/lsremote.mode = off|once|always
     local dir=$1 real_git
     real_git=$(command -v git)
@@ -533,64 +530,353 @@ lsremote_attempts() { # $1 workspace
     cat "$1/lsremote.count" 2>/dev/null || printf '0\n'
 }
 
-# T1: one transport failure, then the upstream answers an UNCHANGED ref —
-# the retry must restore a normal -s -i skip (install included), not a
-# deferral or a rebuild.
-flaky_dir=$fixture/flaky-skip
-init_git_remote "$flaky_dir/repository"
-make_vcs_workspace "$flaky_dir/workspace" "$flaky_dir/repository/remote.git" branch main
-install_lsremote_stub "$flaky_dir/workspace"
-run_case "$flaky_dir/workspace" p1
-expect_success 'flaky initial build'
-assert_makepkg_count "$flaky_dir/workspace" 1 'flaky initial build'
-printf 'once' >"$flaky_dir/workspace/lsremote.mode"
-run_case "$flaky_dir/workspace" -s -i p1
-expect_success 'flaky transport recovers into a normal skip'
-assert_makepkg_count "$flaky_dir/workspace" 1 'flaky transport skip must not rebuild'
-attempts=$(lsremote_attempts "$flaky_dir/workspace")
+# ─── Engine driver (rr-v2.bash run_engine; family first, modifiers before
+# targets) ──────────────────────────────────────────────────────────────────
+run_case() { # $1 = workspace; then ENGINE argv: FAMILY+MODS… -- TARGETS…
+    local dir=$1
+    shift
+    local mods=() targets=()
+    while (( $# )) && [[ ${1:-} != -- ]]; do mods+=("$1"); shift; done
+    (( $# )) && shift
+    targets=("$@")
+    if [[ -n ${GSA_VCS_SKIP_TOLERANCE+x} ]]; then
+        export GSA_VCS_SKIP_TOLERANCE
+    else
+        unset GSA_VCS_SKIP_TOLERANCE 2>/dev/null || true
+    fi
+    local fixed=(--leaf --no-sync --allow-broken-rustc --no-prefetch)
+    [[ ${mods[0]:-} == -M* ]] && fixed=()
+    PATH="$dir/bin:$PATH" \
+        GIT_CONFIG_COUNT=0 \
+        GSA_FAKE_VCS_LAYOUT="${GSA_FAKE_VCS_LAYOUT:-root}" \
+        GSA_FAKE_GCC_VERSION="${GSA_FAKE_GCC_VERSION:-fixture}" \
+        GSA_FAKE_MAKEPKG_COUNT="$dir/makepkg.count" \
+        GSA_FAKE_PACMAN_LOG="$dir/pacman.log" \
+        GSA_FAKE_EXPECT_CLEAN="${GSA_FAKE_EXPECT_CLEAN:-0}" \
+        GSA_FAKE_VCS_REMOTE_REV="${GSA_FAKE_VCS_REMOTE_REV:-}" \
+        GSA_FAKE_VCS_BUILT_REV="${GSA_FAKE_VCS_BUILT_REV:-}" \
+        GSA_STATE_DIR="$dir/state" \
+        GSA_CPU_THREADS=8 \
+        GSA_MEMORY_GIB=16 \
+        run_engine "$dir" "${mods[@]}" "${fixed[@]}" "${targets[@]}"
+}
+
+expect_success() { # $1 = case label
+    if ((FIXTURE_RC != 0)); then
+        fail "$1 failed (rc=$FIXTURE_RC):"$'\n'"$FIXTURE_OUTPUT"
+    fi
+}
+
+makepkg_count() { # $1 = workspace
+    local count_file=$1/makepkg.count
+    if [[ -f $count_file ]]; then
+        awk 'END { print NR }' "$count_file"
+    else
+        printf '0\n'
+    fi
+}
+
+assert_makepkg_count() { # $1 = workspace; $2 = expected; $3 = label
+    local got
+    got=$(makepkg_count "$1")
+    [[ $got == "$2" ]] || fail "$3: makepkg ran $got times, expected $2"
+}
+
+# expect_claim PKG LABEL REASON — the `--skip` claim row shapes: plan
+# `skip <reason>`, outcome `succeeded - - <reason>`, and no lane (rc and dur
+# are `-`). The reason is the §H.3 claim key the caller names.
+expect_claim() {
+    local pkg=$1 label=$2 reason=$3
+    expect_success "$label"
+    [[ $(rr2_plan "$pkg" plan <<<"$FIXTURE_OUTPUT") == skip ]] ||
+        fail "$label: plan row is not 'skip $reason':"$'\n'"$FIXTURE_OUTPUT"
+    [[ $(rr2_plan "$pkg" reason <<<"$FIXTURE_OUTPUT") == "$reason" ]] ||
+        fail "$label: plan reason is not '$reason':"$'\n'"$FIXTURE_OUTPUT"
+    [[ $(rr2_outcome "$pkg" status <<<"$FIXTURE_OUTPUT") == succeeded ]] ||
+        fail "$label: claim is not a succeeded row:"$'\n'"$FIXTURE_OUTPUT"
+    [[ $(rr2_outcome "$pkg" rc <<<"$FIXTURE_OUTPUT") == - ]] ||
+        fail "$label: a claim runs no lane (rc must be -):"$'\n'"$FIXTURE_OUTPUT"
+    [[ $(rr2_outcome "$pkg" reason <<<"$FIXTURE_OUTPUT") == "$reason" ]] ||
+        fail "$label: outcome reason is not '$reason':"$'\n'"$FIXTURE_OUTPUT"
+}
+
+# expect_built PKG LABEL — a completed build row: `succeeded 0 <dur> ok`.
+expect_built() {
+    local pkg=$1 label=$2
+    expect_success "$label"
+    [[ $(rr2_outcome "$pkg" status <<<"$FIXTURE_OUTPUT") == succeeded ]] ||
+        fail "$label: build row is not succeeded:"$'\n'"$FIXTURE_OUTPUT"
+    [[ $(rr2_outcome "$pkg" rc <<<"$FIXTURE_OUTPUT") == 0 ]] ||
+        fail "$label: build row rc is not 0:"$'\n'"$FIXTURE_OUTPUT"
+    [[ $(rr2_outcome "$pkg" reason <<<"$FIXTURE_OUTPUT") == ok ]] ||
+        fail "$label: build row reason is not ok:"$'\n'"$FIXTURE_OUTPUT"
+}
+
+# ─── The help roster names the skip modes (§B.8) ────────────────────────────
+skip_help=$("$GSA_TEST_GSA_BIN" --help 2>&1) || fail 'gsa help command failed'
+for needle in '--skip' '--skip-built' '--vcs-skip-tolerance N' \
+    'freshness-waived / abi-provider-waived'; do
+    grep -Fq -- "$needle" <<<"$skip_help" ||
+        fail "gsa --help does not describe the skip mode around '$needle'"
+done
+
+# ─── Branch-following recipe: unchanged-ref claim, claim-installs, moved-ref
+# and newer-mtime rebuilds (each over its own staged set; the CLAIM DURABILITY
+# section pins what a claim must leave behind) ───────────────────────────────
+branch_dir=$fixture/branch
+init_git_remote "$branch_dir/repository"
+branch_remote=$branch_dir/repository/remote.git
+branch_work=$branch_dir/repository/work
+branch_entry="upstream::git+file://$branch_remote#branch=main"
+branch_rev=$(git_fixture -C "$branch_work" rev-parse HEAD)
+
+# 1. build → claim round trip: the recorder's baseline IS what the detector
+#    accepts (the two runs share one workspace; the claim is the last run).
+make_vcs_workspace "$branch_dir/ws-roundtrip" "$branch_remote" branch main
+run_case "$branch_dir/ws-roundtrip" -B -- p1
+expect_built p1 'initial branch build'
+assert_makepkg_count "$branch_dir/ws-roundtrip" 1 'initial branch build'
+[[ -f $branch_dir/ws-roundtrip/packages/p1/p1-1.0.0-1-any.pkg.tar.zst.gsa-vcs-revisions ]] ||
+    fail 'the build did not record its VCS baseline'
+run_case "$branch_dir/ws-roundtrip" -B --skip -- p1
+expect_claim p1 'unchanged selected branch' ok
+assert_makepkg_count "$branch_dir/ws-roundtrip" 1 'unchanged selected branch'
+grep -Fq 'p1: already built' <<<"$FIXTURE_OUTPUT" ||
+    fail 'the claim does not name the claimed set:'$'\n'"$FIXTURE_OUTPUT"
+
+# 2. a claimed set INSTALLS (§B.8: no lane, but the install hook still runs)
+#    while makepkg stays untouched: a real skip, never a build-then-install.
+make_workspace_common "$branch_dir/ws-install"
+add_package "$branch_dir/ws-install" p1 "$gsa_meta_any"$'\n'"source=(\"$branch_entry\")"$'\n'"sha256sums=('SKIP')"
+stage_vcs_set "$branch_dir/ws-install" "$branch_entry" git "$branch_rev"
+run_case "$branch_dir/ws-install" -S --skip --config "$branch_dir/ws-install/pacman.conf" -- p1
+expect_claim p1 'unchanged branch with install' ok
+assert_makepkg_count "$branch_dir/ws-install" 0 'unchanged branch with install'
+grep -- 'pacman -U' "$branch_dir/ws-install/pacman.log" | grep -Fq 'p1-1.0.0-1-any.pkg.tar.zst' ||
+    fail 'unchanged branch --skip -S did not install the claimed archive'
+grep -q -- 'pacman -U' "$branch_dir/ws-install/pacman.log" ||
+    fail 'unchanged branch --skip -S did not install at all'
+
+# 3. a moved selected ref rebuilds. The move must clear the freshness
+#    tolerance (5 commits): a waivable move would skip BY DESIGN, so the
+#    trigger is paired with its control (case 2 above claims the same staged
+#    state without the move).
+make_workspace_common "$branch_dir/ws-moved"
+add_package "$branch_dir/ws-moved" p1 "$gsa_meta_any"$'\n'"source=(\"$branch_entry\")"$'\n'"sha256sums=('SKIP')"
+stage_vcs_set "$branch_dir/ws-moved" "$branch_entry" git "$branch_rev"
+advance_main "$branch_work" 'advanced selected branch' 5
+run_case "$branch_dir/ws-moved" -B --skip -- p1
+expect_built p1 'advanced selected branch'
+assert_makepkg_count "$branch_dir/ws-moved" 1 'advanced selected branch'
+# the fresh baseline is what the NEXT claim reads (round trip again)
+run_case "$branch_dir/ws-moved" -B --skip -- p1
+expect_claim p1 'moved-ref rebuild then claim' ok
+assert_makepkg_count "$branch_dir/ws-moved" 1 'moved-ref rebuild then claim'
+
+# 4. a newer PKGBUILD mtime invalidates the set under --skip (the control is
+#    case 2 again: the same staged set claims while its mtime is older).
+make_workspace_common "$branch_dir/ws-mtime"
+add_package "$branch_dir/ws-mtime" p1 "$gsa_meta_any"$'\n'"source=(\"$branch_entry\")"$'\n'"sha256sums=('SKIP')"
+stage_vcs_set "$branch_dir/ws-mtime" "$branch_entry" git "$branch_rev"
+touch -d '+1 day' "$branch_dir/ws-mtime/packages/p1/PKGBUILD"
+run_case "$branch_dir/ws-mtime" -B --skip -- p1
+expect_built p1 'newer PKGBUILD mtime'
+assert_makepkg_count "$branch_dir/ws-mtime" 1 'newer PKGBUILD mtime'
+
+# ─── GCC toolchain drift gate: a missing/changed identity marker forces the
+# clean + rebuild even under --skip (tests/toolchain-drift.sh owns the
+# stale-LTO half; this section pins the two messages at a skip claim) ───────
+(
+    set -euo pipefail
+    drift_dir=$fixture/toolchain-drift
+    init_git_remote "$drift_dir/repository"
+    drift_remote=$drift_dir/repository/remote.git
+    drift_entry="upstream::git+file://$drift_remote#branch=main"
+    drift_rev=$(git_fixture -C "$drift_dir/repository/work" rev-parse HEAD)
+
+    # missing marker: a claimable set still rebuilds (the one-time clean).
+    make_workspace_common "$drift_dir/ws-missing"
+    add_package "$drift_dir/ws-missing" p1 "$gsa_meta_any"$'\n'"source=(\"$drift_entry\")"$'\n'"sha256sums=('SKIP')"
+    stage_vcs_set "$drift_dir/ws-missing" "$drift_entry" git "$drift_rev"
+    rm -f "$drift_dir/ws-missing/state/toolchains/p1"
+    GSA_FAKE_GCC_VERSION=1.0 run_case "$drift_dir/ws-missing" -B --skip -- p1
+    expect_built p1 'drift: missing identity marker forces a rebuild'
+    assert_makepkg_count "$drift_dir/ws-missing" 1 'drift: missing identity marker forces a rebuild'
+    grep -Fq 'GCC build identity missing; cleaning cached build artifacts (one-time clean)' \
+        <<<"$FIXTURE_OUTPUT" ||
+        fail 'drift: the one-time clean message is missing or reworded:'$'\n'"$FIXTURE_OUTPUT"
+
+    # changed marker: the message names the previous AND current identities.
+    make_workspace_common "$drift_dir/ws-changed"
+    add_package "$drift_dir/ws-changed" p1 "$gsa_meta_any"$'\n'"source=(\"$drift_entry\")"$'\n'"sha256sums=('SKIP')"
+    stage_vcs_set "$drift_dir/ws-changed" "$drift_entry" git "$drift_rev"
+    mkdir -p "$drift_dir/ws-changed/state/toolchains"
+    printf '%s\n' 'gcc (fixture) 0.9' >"$drift_dir/ws-changed/state/toolchains/p1"
+    GSA_FAKE_GCC_VERSION=1.0 run_case "$drift_dir/ws-changed" -B --skip -- p1
+    expect_built p1 'drift: changed identity marker forces a rebuild'
+    assert_makepkg_count "$drift_dir/ws-changed" 1 'drift: changed identity marker forces a rebuild'
+    grep -Fq 'GCC build identity missing or changed; cleaning cached build artifacts (previous: gcc (fixture) 0.9; current: gcc (fixture) 1.0)' \
+        <<<"$FIXTURE_OUTPUT" ||
+        fail 'drift: the change message does not name both identities:'$'\n'"$FIXTURE_OUTPUT"
+
+    # unchanged marker: the gate is quiet and the claim stands (control).
+    # The staged marker must be the identity this run's gcc stub REPORTS
+    # (GSA_FAKE_GCC_VERSION=1.0), not the fixture default.
+    make_workspace_common "$drift_dir/ws-unchanged"
+    add_package "$drift_dir/ws-unchanged" p1 "$gsa_meta_any"$'\n'"source=(\"$drift_entry\")"$'\n'"sha256sums=('SKIP')"
+    stage_vcs_set "$drift_dir/ws-unchanged" "$drift_entry" git "$drift_rev"
+    stage_marker "$drift_dir/ws-unchanged" 'gcc (fixture) 1.0'
+    GSA_FAKE_GCC_VERSION=1.0 run_case "$drift_dir/ws-unchanged" -B --skip -- p1
+    expect_claim p1 'drift: unchanged identity keeps the claim' ok
+    assert_makepkg_count "$drift_dir/ws-unchanged" 0 'drift: unchanged identity keeps the claim'
+)
+
+# ─── Legacy archives and the recorded baseline ──────────────────────────────
+# A fresh legacy archive cannot be trusted without a recorded build revision:
+# the engine rebuilds ONCE to record one — but only after confirming the
+# declared refs are queryable (the deferral section below owns the offline
+# shape). The recorded baseline is then exactly what the next claim accepts.
+legacy_dir=$fixture/missing-baseline
+init_git_remote "$legacy_dir/repository"
+legacy_remote=$legacy_dir/repository/remote.git
+legacy_entry="upstream::git+file://$legacy_remote#branch=main"
+legacy_rev=$(git_fixture -C "$legacy_dir/repository/work" rev-parse HEAD)
+make_vcs_workspace "$legacy_dir/workspace" "$legacy_remote" branch main
+archive=$legacy_dir/workspace/packages/p1/p1-1.0.0-1-any.pkg.tar.zst
+pkginfo_archive "$archive" p1
+touch -d '2000-01-01 00:00:00 UTC' "$legacy_dir/workspace/packages/p1/PKGBUILD"
+run_case "$legacy_dir/workspace" -B --skip -- p1
+expect_built p1 'legacy archive rebuilds once to record its baseline'
+assert_makepkg_count "$legacy_dir/workspace" 1 'legacy archive rebuild'
+[[ -f $archive.gsa-vcs-revisions ]] ||
+    fail 'legacy archive rebuild did not record its VCS baseline'
+grep -Fq $'gsa-vcs-revisions\t2' "$archive.gsa-vcs-revisions" ||
+    fail 'the recorded baseline is not manifest format 2'
+run_case "$legacy_dir/workspace" -B --skip -- p1
+expect_claim p1 'legacy archive skips after recording its baseline' ok
+assert_makepkg_count "$legacy_dir/workspace" 1 'legacy archive subsequent skip'
+
+# A malformed baseline is not half-trusted: the run rebuilds and the rebuilt
+# manifest replaces the malformed one (staged in its own workspace so the
+# malformed record is unambiguously the trigger — the control is the claim
+# above over a well-formed record).
+malformed_dir=$fixture/malformed-baseline
+init_git_remote "$malformed_dir/repository"
+make_vcs_workspace "$malformed_dir/workspace" "$malformed_dir/repository/remote.git" branch main
+archive=$malformed_dir/workspace/packages/p1/p1-1.0.0-1-any.pkg.tar.zst
+pkginfo_archive "$archive" p1
+printf 'malformed VCS baseline\n' >"$archive.gsa-vcs-revisions"
+touch -d '2000-01-01 00:00:00 UTC' "$malformed_dir/workspace/packages/p1/PKGBUILD"
+run_case "$malformed_dir/workspace" -B --skip -- p1
+expect_built p1 'malformed legacy baseline triggers a rebuild'
+assert_makepkg_count "$malformed_dir/workspace" 1 'malformed legacy baseline rebuild'
+grep -Fq $'gsa-vcs-revisions\t2' "$archive.gsa-vcs-revisions" ||
+    fail 'malformed legacy baseline was not replaced after rebuilding'
+
+# ─── Unverifiable upstream: park the recipe, hold its consumers, keep going ─
+# A missing baseline does not license a skip or a build when upstream cannot
+# be queried: the refusal happens BEFORE makepkg (and before the drift clean
+# destroys the evidence — the ordering hard rule).
+legacy_offline_dir=$fixture/missing-baseline-offline
+init_git_remote "$legacy_offline_dir/repository"
+legacy_offline_remote=$legacy_offline_dir/repository/remote.git
+make_vcs_workspace "$legacy_offline_dir/workspace" "$legacy_offline_remote" branch main
+pkginfo_archive "$legacy_offline_dir/workspace/packages/p1/p1-1.0.0-1-any.pkg.tar.zst" p1
+touch -d '2000-01-01 00:00:00 UTC' "$legacy_offline_dir/workspace/packages/p1/PKGBUILD"
+mv "$legacy_offline_remote" "$legacy_offline_dir/repository/remote.offline"
+run_case "$legacy_offline_dir/workspace" -B --skip -- p1
+if ((FIXTURE_RC == 0)); then
+    fail "unreachable legacy upstream reported a green run:"$'\n'"$FIXTURE_OUTPUT"
+fi
+assert_makepkg_count "$legacy_offline_dir/workspace" 0 \
+    'unreachable legacy upstream (a parked recipe must not run makepkg)'
+[[ $(rr2_outcome p1 status <<<"$FIXTURE_OUTPUT") == deferred ]] ||
+    fail "unreachable legacy upstream: p1 is not deferred:"$'\n'"$FIXTURE_OUTPUT"
+[[ $(rr2_outcome p1 rc <<<"$FIXTURE_OUTPUT") == 99 ]] ||
+    fail "unreachable legacy upstream: a deferral is lane code 99:"$'\n'"$FIXTURE_OUTPUT"
+[[ $(rr2_outcome p1 reason <<<"$FIXTURE_OUTPUT") == upstream-unverified ]] ||
+    fail "unreachable legacy upstream: deferral reason is not upstream-unverified:"$'\n'"$FIXTURE_OUTPUT"
+[[ $FIXTURE_RC == 5 && $(rr2_scalar rc <<<"$FIXTURE_OUTPUT") == 5 ]] ||
+    fail "a deferral-only run exits 5 (§G.1), got rc=$FIXTURE_RC:"$'\n'"$FIXTURE_OUTPUT"
+if ! grep -Fq 'p1' <<<"$FIXTURE_OUTPUT" ||
+    ! grep -Eiq 'cannot query|upstream|remote' <<<"$FIXTURE_OUTPUT"; then
+    fail 'unreachable legacy upstream did not report a package-specific VCS freshness warning:'$'\n'"$FIXTURE_OUTPUT"
+fi
+
+# A previously recorded baseline cannot license a skip when the selected
+# remote ref is no longer queryable either: same deferral, evidence intact.
+unreachable_dir=$fixture/unreachable
+init_git_remote "$unreachable_dir/repository"
+unreachable_rev=$(git_fixture -C "$unreachable_dir/repository/work" rev-parse HEAD)
+make_vcs_workspace "$unreachable_dir/workspace" "$unreachable_dir/repository/remote.git" branch main
+stage_vcs_set "$unreachable_dir/workspace" "upstream::git+file://$unreachable_dir/repository/remote.git#branch=main" \
+    git "$unreachable_rev"
+mv "$unreachable_dir/repository/remote.git" "$unreachable_dir/repository/remote.offline"
+run_case "$unreachable_dir/workspace" -B --skip -- p1
+if ((FIXTURE_RC == 0)); then
+    fail "unreachable upstream reported a green run:"$'\n'"$FIXTURE_OUTPUT"
+fi
+assert_makepkg_count "$unreachable_dir/workspace" 0 'unreachable upstream'
+[[ $(rr2_outcome p1 status <<<"$FIXTURE_OUTPUT") == deferred &&
+    $(rr2_outcome p1 rc <<<"$FIXTURE_OUTPUT") == 99 &&
+    $(rr2_outcome p1 reason <<<"$FIXTURE_OUTPUT") == upstream-unverified ]] ||
+    fail "unreachable upstream row is not 'deferred 99 - upstream-unverified':"$'\n'"$FIXTURE_OUTPUT"
+
+# ─── Transport failures: classify, retry, DEFER — never fail the run ────────
+# A momentary `git ls-remote` transport error (TLS flake, NOT a moved ref)
+# must not fail the package or the run:
+#   * a transient failure is retried and, once answered, the normal skip /
+#     moved-ref decisions apply unchanged;
+#   * a persistent failure PARKS the recipe when its consumer chain can
+#     absorb the wait (waiter cap 3), reason upstream-unverified, dependents
+#     honestly held, run continues;
+#   * a heavy or unresolvable consumer chain falls back to a NORMAL BUILD
+#     attempt: the recipe builds (or fails on its own merits) and installs
+#     under -S — never silently skips, never parks what others need.
+T1_dir=$fixture/flaky-skip
+init_git_remote "$T1_dir/repository"
+make_vcs_workspace "$T1_dir/workspace" "$T1_dir/repository/remote.git" branch main
+install_lsremote_stub "$T1_dir/workspace"
+stage_vcs_set "$T1_dir/workspace" "upstream::git+file://$T1_dir/repository/remote.git#branch=main" \
+    git "$(git_fixture -C "$T1_dir/repository/work" rev-parse HEAD)"
+printf 'once' >"$T1_dir/workspace/lsremote.mode"
+run_case "$T1_dir/workspace" -S --skip --config "$T1_dir/workspace/pacman.conf" -- p1
+expect_claim p1 'flaky transport recovers into a normal skip' ok
+assert_makepkg_count "$T1_dir/workspace" 0 'flaky transport skip must not rebuild'
+attempts=$(lsremote_attempts "$T1_dir/workspace")
 ((attempts >= 2)) ||
     fail "flaky transport: expected a retry, saw $attempts ls-remote attempt(s)"
-grep -q -- 'pacman -U' "$flaky_dir/workspace/pacman.log" ||
-    fail 'flaky transport skip did not install the skipped archive'
-grep -- 'pacman -U' "$flaky_dir/workspace/pacman.log" | grep -Fq 'p1-1.0.0-1-any.pkg.tar.zst' ||
-    fail 'flaky transport skip installed without the existing archive'
+grep -- 'pacman -U' "$T1_dir/workspace/pacman.log" | grep -Fq 'p1-1.0.0-1-any.pkg.tar.zst' ||
+    fail 'flaky transport skip did not install the claimed archive'
 
-# T2: one transport failure, then the upstream answers a MOVED ref — the
-# retry must surface the move (rebuild), never mask it as skip.
-moved_dir=$fixture/flaky-moved
-init_git_remote "$moved_dir/repository"
-moved_work=$moved_dir/repository/work
-make_vcs_workspace "$moved_dir/workspace" "$moved_dir/repository/remote.git" branch main
-install_lsremote_stub "$moved_dir/workspace"
-run_case "$moved_dir/workspace" p1
-expect_success 'flaky-moved initial build'
-assert_makepkg_count "$moved_dir/workspace" 1 'flaky-moved initial build'
-# The move clears the freshness tolerance (5 commits): a waivable move would
-# skip BY DESIGN, so it cannot pin "the retry surfaces the move as a rebuild".
-advance_main "$moved_work" 'advanced while transport was flaky' 5
-printf 'once' >"$moved_dir/workspace/lsremote.mode"
-run_case "$moved_dir/workspace" -s p1
-expect_success 'flaky transport still detects a moved ref'
-assert_makepkg_count "$moved_dir/workspace" 2 'moved ref after a flaky attempt must rebuild, not skip'
-attempts=$(lsremote_attempts "$moved_dir/workspace")
+T2_dir=$fixture/flaky-moved
+init_git_remote "$T2_dir/repository"
+make_vcs_workspace "$T2_dir/workspace" "$T2_dir/repository/remote.git" branch main
+install_lsremote_stub "$T2_dir/workspace"
+stage_vcs_set "$T2_dir/workspace" "upstream::git+file://$T2_dir/repository/remote.git#branch=main" \
+    git "$(git_fixture -C "$T2_dir/repository/work" rev-parse HEAD)"
+advance_main "$T2_dir/repository/work" 'advanced while transport was flaky' 5
+printf 'once' >"$T2_dir/workspace/lsremote.mode"
+run_case "$T2_dir/workspace" -B --skip -- p1
+expect_built p1 'flaky transport still detects a moved ref'
+assert_makepkg_count "$T2_dir/workspace" 1 'moved ref after a flaky attempt must rebuild, not skip'
+attempts=$(lsremote_attempts "$T2_dir/workspace")
 ((attempts >= 2)) ||
     fail "flaky-moved: expected a retry, saw $attempts ls-remote attempt(s)"
 
-# T3: the upstream NEVER answers and p1's only consumer (p2) can wait —
-# p1 must park (defer, not fail, not skip), its dependent p2 must hold
-# with it, and p3 must keep building: the defect's whole point was that
-# one unqueryable upstream stopped the other 146 packages. `-i` is
-# deliberate: the parked package must never reach pacman either.
-defer_dir=$fixture/defer-dispatch
-init_git_remote "$defer_dir/repository"
-make_vcs_workspace "$defer_dir/workspace" "$defer_dir/repository/remote.git" branch main
-add_package "$defer_dir/workspace" p2 "$gsa_meta_any"
-set_topology_record "$defer_dir/workspace" p2 git 'p1'
-add_package "$defer_dir/workspace" p3 "$gsa_meta_any"
+# T3: the upstream NEVER answers and p1's only consumer (p2) can wait — p1
+# parks (defer, not fail, not skip), p2 holds with it, p3 keeps building and
+# installs. `-S` is deliberate: the parked package must never reach pacman.
+T3_dir=$fixture/defer-dispatch
+init_git_remote "$T3_dir/repository"
+make_vcs_workspace "$T3_dir/workspace" "$T3_dir/repository/remote.git" branch main
+add_package "$T3_dir/workspace" p2 "$gsa_meta_any"
+set_topology_record "$T3_dir/workspace" p2 git 'p1'
+add_package "$T3_dir/workspace" p3 "$gsa_meta_any"
 # The workspace stub only understands the VCS shape; route plain packages
-# (p2/p3) to a trivial archive writer and keep the original for p1.
-mv "$defer_dir/workspace/bin/makepkg" "$defer_dir/workspace/bin/makepkg.vcs"
-cat >"$defer_dir/workspace/bin/makepkg" <<'EOF'
+# (p2/p3) to a trivial archive writer and keep the VCS stub for p1.
+mv "$T3_dir/workspace/bin/makepkg" "$T3_dir/workspace/bin/makepkg.vcs"
+cat >"$T3_dir/workspace/bin/makepkg" <<'EOF'
 #!/usr/bin/env bash
 set -eu
 if grep -q 'git+file://' "$PWD/PKGBUILD" 2>/dev/null; then
@@ -598,64 +884,72 @@ if grep -q 'git+file://' "$PWD/PKGBUILD" 2>/dev/null; then
 fi
 id=$(basename "$PWD")
 printf '%s\n' "$id" >>"${GSA_FAKE_MAKEPKG_COUNT:?}"
-tar --zstd -cf "$PWD/$id-1.0.0-1-any.pkg.tar.zst" --files-from /dev/null
+# A nameable archive (the engine reads each archive's own .PKGINFO):
+stage="$PWD/.pkginfo-stage"
+mkdir -p "$stage"
+printf 'pkgbase = %s\npkgname = %s\npkgver = 1.0.0\npkgrel = 1\narch = any\n' \
+    "$id" "$id" >"$stage/.PKGINFO"
+tar --zstd -cf "$PWD/$id-1.0.0-1-any.pkg.tar.zst" -C "$stage" .PKGINFO
+rm -rf "$stage"
 EOF
-chmod +x "$defer_dir/workspace/bin/makepkg"
-install_lsremote_stub "$defer_dir/workspace"
-run_case "$defer_dir/workspace" p1
-expect_success 'defer-dispatch initial build'
-assert_makepkg_count "$defer_dir/workspace" 1 'defer-dispatch initial build'
-printf 'always' >"$defer_dir/workspace/lsremote.mode"
-run_case "$defer_dir/workspace" -s -i p1 p2 p3
+chmod +x "$T3_dir/workspace/bin/makepkg"
+install_lsremote_stub "$T3_dir/workspace"
+stage_vcs_set "$T3_dir/workspace" "upstream::git+file://$T3_dir/repository/remote.git#branch=main" \
+    git "$(git_fixture -C "$T3_dir/repository/work" rev-parse HEAD)"
+printf 'always' >"$T3_dir/workspace/lsremote.mode"
+run_case "$T3_dir/workspace" -S --skip --config "$T3_dir/workspace/pacman.conf" -- p1 p2 p3
 if ((FIXTURE_RC == 0)); then
     fail "persistent transport failure reported a green run:"$'\n'"$FIXTURE_OUTPUT"
 fi
-attempts=$(lsremote_attempts "$defer_dir/workspace")
+attempts=$(lsremote_attempts "$T3_dir/workspace")
 ((attempts >= 3)) ||
     fail "persistent transport: expected the full retry window, saw $attempts attempt(s)"
-# p1: parked with the machine-checkable reason — not failed, not skipped.
-grep -Eq '^p1 deferred 99 [0-9]+ upstream-unverified$' <<<"$FIXTURE_OUTPUT" ||
-    fail "p1 row is not 'deferred 99 … upstream-unverified':"$'\n'"$FIXTURE_OUTPUT"
-if grep -Eq '^p1 (succeeded|failed) ' <<<"$FIXTURE_OUTPUT"; then
-    fail "p1 was recorded as a build outcome instead of deferred:"$'\n'"$FIXTURE_OUTPUT"
-fi
-grep -Fq 'cannot verify upstream VCS freshness' "$defer_dir/workspace/state/logs/p1.log" ||
-    fail "p1's log lost the freshness warning:"$'\n'"$(cat "$defer_dir/workspace/state/logs/p1.log" 2>/dev/null)"
-grep -Fq 'parking this recipe' "$defer_dir/workspace/state/logs/p1.log" ||
-    fail "p1's log does not name the parking decision:"$'\n'"$(cat "$defer_dir/workspace/state/logs/p1.log" 2>/dev/null)"
-# p3 kept building — dispatch continued around the parked recipe.
-grep -Eq '^p3 succeeded 0 [0-9]+ ok$' <<<"$FIXTURE_OUTPUT" ||
-    fail "p3 did not build while p1 was deferred:"$'\n'"$FIXTURE_OUTPUT"
-# p2 depends on p1: held, honestly labelled — never dispatched.
-grep -Eq '^p2 blocked - - waits-on-deferred$' <<<"$FIXTURE_OUTPUT" ||
-    fail "p2 is not 'blocked … waits-on-deferred':"$'\n'"$FIXTURE_OUTPUT"
-assert_makepkg_count "$defer_dir/workspace" 2 'only p3 may build while p1 is deferred'
-[[ $(grep -c '^p1$' "$defer_dir/workspace/makepkg.count") == 1 ]] ||
+[[ $(rr2_outcome p1 status <<<"$FIXTURE_OUTPUT") == deferred ]] ||
+    fail "T3: p1 is not deferred:"$'\n'"$FIXTURE_OUTPUT"
+[[ $(rr2_outcome p1 rc <<<"$FIXTURE_OUTPUT") == 99 ]] ||
+    fail "T3: a deferral is lane code 99:"$'\n'"$FIXTURE_OUTPUT"
+[[ $(rr2_outcome p1 reason <<<"$FIXTURE_OUTPUT") == upstream-unverified ]] ||
+    fail "T3: p1 deferral reason is not upstream-unverified:"$'\n'"$FIXTURE_OUTPUT"
+grep -Fq 'cannot verify upstream VCS freshness' <<<"$FIXTURE_OUTPUT" ||
+    fail "T3: the run output lost the freshness warning:"$'\n'"$FIXTURE_OUTPUT"
+grep -Fq 'parking this recipe' <<<"$FIXTURE_OUTPUT" ||
+    fail "T3: the run output does not name the parking decision:"$'\n'"$FIXTURE_OUTPUT"
+[[ $(rr2_outcome p3 status <<<"$FIXTURE_OUTPUT") == succeeded ]] ||
+    fail "T3: p3 did not build while p1 was deferred:"$'\n'"$FIXTURE_OUTPUT"
+grep -Eq '^p3 succeeded 0 [0-9]+ ok$' <(rr2_outcome_rows <<<"$FIXTURE_OUTPUT") ||
+    fail "T3: p3's row is not a completed build:"$'\n'"$FIXTURE_OUTPUT"
+[[ $(rr2_outcome p2 status <<<"$FIXTURE_OUTPUT") == parked ]] ||
+    fail "T3: p2 is not parked with the deferral:"$'\n'"$FIXTURE_OUTPUT"
+[[ $(rr2_outcome p2 reason <<<"$FIXTURE_OUTPUT") == waits-on-deferred ]] ||
+    fail "T3: p2 must carry waits-on-deferred (§H.3):"$'\n'"$FIXTURE_OUTPUT"
+[[ $(rr2_outcome p2 rc <<<"$FIXTURE_OUTPUT") == - ]] ||
+    fail "T3: a parked consumer never ran a lane (rc must be -):"$'\n'"$FIXTURE_OUTPUT"
+assert_makepkg_count "$T3_dir/workspace" 1 'only p3 may build while p1 is deferred'
+if grep -q '^p1$' "$T3_dir/workspace/makepkg.count" 2>/dev/null; then
     fail 'p1 built again despite its unverifiable upstream'
-if grep -q '^p2$' "$defer_dir/workspace/makepkg.count" 2>/dev/null; then
-    fail 'p2 was dispatched although its dependency p1 is parked'
 fi
-if grep -- 'pacman -U' "$defer_dir/workspace/pacman.log" 2>/dev/null |
+if grep -q '^p2$' "$T3_dir/workspace/makepkg.count" 2>/dev/null; then
+    fail 'p2 was dispatched although its prerequisite p1 is parked'
+fi
+if grep -- 'pacman -U' "$T3_dir/workspace/pacman.log" 2>/dev/null |
     grep -F 'p1-1.0.0-1-any.pkg.tar.zst'; then
     fail 'p1 archive was installed although upstream never answered'
 fi
-grep -- 'pacman -U' "$defer_dir/workspace/pacman.log" | grep -Fq 'p3-1.0.0-1-any.pkg.tar.zst' ||
-    fail 'p3 did not install under -i while p1 was parked'
+grep -- 'pacman -U' "$T3_dir/workspace/pacman.log" | grep -Fq 'p3-1.0.0-1-any.pkg.tar.zst' ||
+    fail 'p3 did not install under -S while p1 was parked'
 
 # T4: a heavily-consumed recipe cannot park — the fallback is a normal build
-# attempt (owner semantics 2026-10-02): with a big consumer chain, an
+# attempt (owner semantics): with a big consumer chain (waiter cap 3), an
 # unverifiable upstream must NOT strand the packages that need it.
-heavy_dir=$fixture/heavy-consumers
-init_git_remote "$heavy_dir/repository"
-make_vcs_workspace "$heavy_dir/workspace" "$heavy_dir/repository/remote.git" branch main
+T4_dir=$fixture/heavy-consumers
+init_git_remote "$T4_dir/repository"
+make_vcs_workspace "$T4_dir/workspace" "$T4_dir/repository/remote.git" branch main
 for id in p2 p3 p4 p5 p6; do
-    add_package "$heavy_dir/workspace" "$id" "$gsa_meta_any"
-    set_topology_record "$heavy_dir/workspace" "$id" git 'p1'
+    add_package "$T4_dir/workspace" "$id" "$gsa_meta_any"
+    set_topology_record "$T4_dir/workspace" "$id" git 'p1'
 done
-# Same split as T3: VCS-shaped p1 keeps the VCS stub, the plain consumers
-# go to the trivial archive writer.
-mv "$heavy_dir/workspace/bin/makepkg" "$heavy_dir/workspace/bin/makepkg.vcs"
-cat >"$heavy_dir/workspace/bin/makepkg" <<'EOF'
+mv "$T4_dir/workspace/bin/makepkg" "$T4_dir/workspace/bin/makepkg.vcs"
+cat >"$T4_dir/workspace/bin/makepkg" <<'EOF'
 #!/usr/bin/env bash
 set -eu
 if grep -q 'git+file://' "$PWD/PKGBUILD" 2>/dev/null; then
@@ -663,242 +957,249 @@ if grep -q 'git+file://' "$PWD/PKGBUILD" 2>/dev/null; then
 fi
 id=$(basename "$PWD")
 printf '%s\n' "$id" >>"${GSA_FAKE_MAKEPKG_COUNT:?}"
-tar --zstd -cf "$PWD/$id-1.0.0-1-any.pkg.tar.zst" --files-from /dev/null
+# A nameable archive (the engine reads each archive's own .PKGINFO):
+stage="$PWD/.pkginfo-stage"
+mkdir -p "$stage"
+printf 'pkgbase = %s\npkgname = %s\npkgver = 1.0.0\npkgrel = 1\narch = any\n' \
+    "$id" "$id" >"$stage/.PKGINFO"
+tar --zstd -cf "$PWD/$id-1.0.0-1-any.pkg.tar.zst" -C "$stage" .PKGINFO
+rm -rf "$stage"
 EOF
-chmod +x "$heavy_dir/workspace/bin/makepkg"
-install_lsremote_stub "$heavy_dir/workspace"
-run_case "$heavy_dir/workspace" p1
-expect_success 'heavy-consumers initial build'
-assert_makepkg_count "$heavy_dir/workspace" 1 'heavy-consumers initial build'
-printf 'always' >"$heavy_dir/workspace/lsremote.mode"
-run_case "$heavy_dir/workspace" -s -i p1 p2 p3 p4 p5 p6
+chmod +x "$T4_dir/workspace/bin/makepkg"
+install_lsremote_stub "$T4_dir/workspace"
+stage_vcs_set "$T4_dir/workspace" "upstream::git+file://$T4_dir/repository/remote.git#branch=main" \
+    git "$(git_fixture -C "$T4_dir/repository/work" rev-parse HEAD)"
+printf 'always' >"$T4_dir/workspace/lsremote.mode"
+run_case "$T4_dir/workspace" -S --skip --config "$T4_dir/workspace/pacman.conf" -- p1 p2 p3 p4 p5 p6
 expect_success 'persistent failure on a heavily-consumed recipe falls back to building'
-grep -Eq '^p1 succeeded 0 [0-9]+ ok$' <<<"$FIXTURE_OUTPUT" ||
-    fail "p1 did not fall back to a build:"$'\n'"$FIXTURE_OUTPUT"
-grep -Fq 'cannot verify upstream VCS freshness' "$heavy_dir/workspace/state/logs/p1.log" ||
-    fail "heavy p1's log lost the freshness warning:"$'\n'"$(cat "$heavy_dir/workspace/state/logs/p1.log" 2>/dev/null)"
-grep -Fq 'consumers cannot wait' "$heavy_dir/workspace/state/logs/p1.log" ||
-    fail "heavy p1's log does not name the fallback decision:"$'\n'"$(cat "$heavy_dir/workspace/state/logs/p1.log" 2>/dev/null)"
+expect_built p1 'heavy fallback build'
+grep -Fq 'cannot verify upstream VCS freshness' <<<"$FIXTURE_OUTPUT" ||
+    fail "heavy p1's run output lost the freshness warning:"$'\n'"$FIXTURE_OUTPUT"
+grep -Fq 'consumers cannot wait' <<<"$FIXTURE_OUTPUT" ||
+    fail "heavy p1's run output does not name the fallback decision:"$'\n'"$FIXTURE_OUTPUT"
 for id in p2 p3 p4 p5 p6; do
-    grep -Eq "^$id succeeded 0 [0-9]+ ok$" <<<"$FIXTURE_OUTPUT" ||
-        fail "$id did not build behind the fallback:"$'\n'"$FIXTURE_OUTPUT"
+    expect_built "$id" "$id behind the fallback"
 done
-assert_makepkg_count "$heavy_dir/workspace" 7 'fallback build plus all five consumers'
-grep -- 'pacman -U' "$heavy_dir/workspace/pacman.log" | grep -Fq 'p1-1.0.0-1-any.pkg.tar.zst' ||
-    fail 'the fallback-built p1 archive did not install under -i'
+assert_makepkg_count "$T4_dir/workspace" 6 'fallback build plus all five consumers'
+grep -- 'pacman -U' "$T4_dir/workspace/pacman.log" | grep -Fq 'p1-1.0.0-1-any.pkg.tar.zst' ||
+    fail 'the fallback-built p1 archive did not install under -S'
 
-# A tag-pinned source follows the declared tag, not HEAD or unrelated branches.
+# ─── Selected-ref semantics: a tag pin follows the declared tag; an
+# unqualified source tracks the remote's default HEAD ───────────────────────
 pinned_dir=$fixture/pinned
 init_git_remote "$pinned_dir/repository"
-pinned_remote=$pinned_dir/repository/remote.git
 pinned_work=$pinned_dir/repository/work
 git_fixture -C "$pinned_work" tag -a v1.0.0 -m 'fixture release tag'
 git_fixture -C "$pinned_work" push origin refs/tags/v1.0.0 >/dev/null
-make_vcs_workspace "$pinned_dir/workspace" "$pinned_remote" tag v1.0.0
-run_case "$pinned_dir/workspace" p1
-expect_success 'initial tag-pinned build'
-assert_makepkg_count "$pinned_dir/workspace" 1 'initial tag-pinned build'
+pinned_entry="upstream::git+file://$pinned_dir/repository/remote.git#tag=v1.0.0"
+pinned_rev=$(git_fixture -C "$pinned_work" rev-parse 'v1.0.0^{}')
+
+# unrelated branch movement never moves the pin (claim).
+make_workspace_common "$pinned_dir/ws-still"
+add_package "$pinned_dir/ws-still" p1 "$gsa_meta_any"$'\n'"source=(\"$pinned_entry\")"$'\n'"sha256sums=('SKIP')"
+stage_vcs_set "$pinned_dir/ws-still" "$pinned_entry" git "$pinned_rev"
 advance_main "$pinned_work" 'unrelated main branch movement'
-run_case "$pinned_dir/workspace" -s p1
-expect_success 'unrelated branch movement for pinned source'
-assert_makepkg_count "$pinned_dir/workspace" 1 'unrelated branch movement for pinned source'
-# A moved pin is a Git advance like any other: the re-tag below lands 6
-# commits past the recorded baseline — past the freshness tolerance — so the
-# rebuild must happen (a waivable move would skip by design).
+run_case "$pinned_dir/ws-still" -B --skip -- p1
+expect_claim p1 'unrelated branch movement for pinned source' ok
+assert_makepkg_count "$pinned_dir/ws-still" 0 'unrelated branch movement for pinned source'
+
+# A moved pin is a Git advance like any other: the re-tag below lands past the
+# freshness tolerance, so the rebuild must happen.
+make_workspace_common "$pinned_dir/ws-moved"
+add_package "$pinned_dir/ws-moved" p1 "$gsa_meta_any"$'\n'"source=(\"$pinned_entry\")"$'\n'"sha256sums=('SKIP')"
+stage_vcs_set "$pinned_dir/ws-moved" "$pinned_entry" git "$pinned_rev"
 advance_main "$pinned_work" 'tag retag groundwork' 5
 git_fixture -C "$pinned_work" tag --force -a v1.0.0 -m 'moved fixture release tag'
 git_fixture -C "$pinned_work" push --force origin refs/tags/v1.0.0 >/dev/null
-run_case "$pinned_dir/workspace" -s p1
-expect_success 'selected tag moved'
-assert_makepkg_count "$pinned_dir/workspace" 2 'selected tag moved'
+run_case "$pinned_dir/ws-moved" -B --skip -- p1
+expect_built p1 'selected tag moved'
+assert_makepkg_count "$pinned_dir/ws-moved" 1 'selected tag moved'
 
 # An unqualified Git source tracks the remote's default HEAD.
 default_dir=$fixture/default-head
 init_git_remote "$default_dir/repository"
-make_vcs_workspace "$default_dir/workspace" "$default_dir/repository/remote.git" default ''
-run_case "$default_dir/workspace" p1
-expect_success 'initial default-HEAD build'
-run_case "$default_dir/workspace" -s p1
-expect_success 'unchanged default HEAD'
-assert_makepkg_count "$default_dir/workspace" 1 'unchanged default HEAD'
+default_entry="upstream::git+file://$default_dir/repository/remote.git"
+default_rev=$(git_fixture -C "$default_dir/repository/work" rev-parse HEAD)
+make_workspace_common "$default_dir/ws-still"
+add_package "$default_dir/ws-still" p1 "$gsa_meta_any"$'\n'"source=(\"$default_entry\")"$'\n'"sha256sums=('SKIP')"
+stage_vcs_set "$default_dir/ws-still" "$default_entry" git "$default_rev"
+run_case "$default_dir/ws-still" -B --skip -- p1
+expect_claim p1 'unchanged default HEAD' ok
+assert_makepkg_count "$default_dir/ws-still" 0 'unchanged default HEAD'
+
+make_workspace_common "$default_dir/ws-moved"
+add_package "$default_dir/ws-moved" p1 "$gsa_meta_any"$'\n'"source=(\"$default_entry\")"$'\n'"sha256sums=('SKIP')"
+stage_vcs_set "$default_dir/ws-moved" "$default_entry" git "$default_rev"
 # 5 commits: past the freshness tolerance, so the move still rebuilds.
 advance_main "$default_dir/repository/work" 'advanced default HEAD' 5
-run_case "$default_dir/workspace" -s p1
-expect_success 'advanced default HEAD'
-assert_makepkg_count "$default_dir/workspace" 2 'advanced default HEAD'
+run_case "$default_dir/ws-moved" -B --skip -- p1
+expect_built p1 'advanced default HEAD'
+assert_makepkg_count "$default_dir/ws-moved" 1 'advanced default HEAD'
 
-# ─── Freshness tolerance: -s must not rebuild over a handful of commits ─────
+# ─── Freshness tolerance: --skip must not rebuild over a handful of commits ─
 # Owner design (2026-10-03): "a fewer than 5 commits is senseless especially
 # for these heavy packages since we aren't actively participating in
 # development in these important projects" — we are CONSUMERS of llvm/rust/qt6,
-# not their developers. A measured advance strictly BELOW the tolerance (default
-# 5, overridable via GSA_VCS_SKIP_TOLERANCE) keeps the skip and says so LOUDLY;
-# at the tolerance (the boundary is AT 5) and beyond — including past the
-# shallow measurement window — the rebuild happens exactly as before. Each case
-# owns its own workspace so "moves N commits" is measured from the recorded
-# baseline without cross-case arithmetic.
-
-# 3 commits (< 5): the skip HOLDS — the -s run runs makepkg 0 times — and the
-# waiver is a named line plus a freshness-waived run-record row, never a silent
-# lowering of verification.
+# not their developers. A measured advance STRICTLY BELOW the tolerance
+# (default 5, overridable via GSA_VCS_SKIP_TOLERANCE / --vcs-skip-tolerance)
+# keeps the skip and says so LOUDLY; at the boundary (the boundary is AT 5)
+# and beyond — including past the shallow measurement window — the rebuild
+# happens exactly as before.
 tolerance_dir=$fixture/freshness-tolerance
 init_git_remote "$tolerance_dir/repository"
 tolerance_work=$tolerance_dir/repository/work
-make_vcs_workspace "$tolerance_dir/workspace" "$tolerance_dir/repository/remote.git" branch main
-run_case "$tolerance_dir/workspace" p1
-expect_success 'tolerance initial build'
-assert_makepkg_count "$tolerance_dir/workspace" 1 'tolerance initial build'
-advance_main "$tolerance_work" 'tolerance noise' 3
-run_case "$tolerance_dir/workspace" -s p1
-expect_success 'three-commit advance keeps the skip'
-assert_makepkg_count "$tolerance_dir/workspace" 1 'three-commit advance: the -s run must run makepkg 0 times'
-grep -Eq '^p1 succeeded 0 [0-9]+ freshness-waived$' <<<"$FIXTURE_OUTPUT" ||
-    fail "three-commit advance row is not 'succeeded … freshness-waived':"$'\n'"$FIXTURE_OUTPUT"
-if grep -Eq '^p1 succeeded 0 [0-9]+ ok$' <<<"$FIXTURE_OUTPUT"; then
-    fail 'a waived-freshness skip claimed the plain ok row:'$'\n'"$FIXTURE_OUTPUT"
-fi
-grep -Fq 'SKIPPED (freshness-waived)' <<<"$FIXTURE_OUTPUT" ||
-    fail 'the run output does not name the freshness waiver:'$'\n'"$FIXTURE_OUTPUT"
-tolerance_diagnostics=$(diagnostics_with_logs "$tolerance_dir/workspace")
-grep -Fq 'upstream moved 3 commit(s) < tolerance 5 — treating upstream as current' \
-    <<<"$tolerance_diagnostics" ||
-    fail 'three-commit advance did not print the named freshness waiver line:'$'\n'"$tolerance_diagnostics"
+tolerance_entry="upstream::git+file://$tolerance_dir/repository/remote.git#branch=main"
+# Each case stages the baseline its measured advance is relative to: the
+# cases share one remote that advances cumulatively, so a section-start
+# capture would make every later case's move larger than its label says.
 
-# Exactly 5: the boundary is AT the tolerance — rebuild (makepkg runs once).
-boundary_dir=$fixture/freshness-boundary
-init_git_remote "$boundary_dir/repository"
-boundary_work=$boundary_dir/repository/work
-make_vcs_workspace "$boundary_dir/workspace" "$boundary_dir/repository/remote.git" branch main
-run_case "$boundary_dir/workspace" p1
-expect_success 'boundary initial build'
-assert_makepkg_count "$boundary_dir/workspace" 1 'boundary initial build'
-advance_main "$boundary_work" 'tolerance boundary' 5
-run_case "$boundary_dir/workspace" -s p1
-expect_success 'exactly five commits rebuilds'
-assert_makepkg_count "$boundary_dir/workspace" 2 'the boundary is AT 5: exactly five commits must rebuild'
-grep -Eq '^p1 succeeded 0 [0-9]+ ok$' <<<"$FIXTURE_OUTPUT" ||
-    fail "five-commit rebuild row is not 'succeeded … ok':"$'\n'"$FIXTURE_OUTPUT"
+# 3 commits (< 5): the skip HOLDS — the run runs makepkg 0 times — and the
+# waiver is a named line plus a freshness-waived claim row, never a silent
+# lowering of verification.
+make_workspace_common "$tolerance_dir/ws-under"
+add_package "$tolerance_dir/ws-under" p1 "$gsa_meta_any"$'\n'"source=(\"$tolerance_entry\")"$'\n'"sha256sums=('SKIP')"
+stage_vcs_set "$tolerance_dir/ws-under" "$tolerance_entry" git \
+    "$(git_fixture -C "$tolerance_work" rev-parse HEAD)"
+advance_main "$tolerance_work" 'tolerance noise' 3
+run_case "$tolerance_dir/ws-under" -B --skip -- p1
+expect_claim p1 'three-commit advance keeps the skip' freshness-waived
+assert_makepkg_count "$tolerance_dir/ws-under" 0 'three-commit advance: the run must run makepkg 0 times'
+grep -Fq 'upstream moved 3 commit(s) < tolerance 5 — treating upstream as current' \
+    <<<"$FIXTURE_OUTPUT" ||
+    fail 'three-commit advance did not print the named freshness waiver line:'$'\n'"$FIXTURE_OUTPUT"
+
+# Exactly 5: the boundary is AT the tolerance — rebuild.
+make_workspace_common "$tolerance_dir/ws-boundary"
+add_package "$tolerance_dir/ws-boundary" p1 "$gsa_meta_any"$'\n'"source=(\"$tolerance_entry\")"$'\n'"sha256sums=('SKIP')"
+stage_vcs_set "$tolerance_dir/ws-boundary" "$tolerance_entry" git \
+    "$(git_fixture -C "$tolerance_work" rev-parse HEAD)"
+advance_main "$tolerance_work" 'tolerance boundary' 5
+run_case "$tolerance_dir/ws-boundary" -B --skip -- p1
+expect_built p1 'exactly five commits rebuilds'
+assert_makepkg_count "$tolerance_dir/ws-boundary" 1 'the boundary is AT 5: exactly five commits must rebuild'
 
 # 10 commits: past the fetch window (depth = tolerance + 1 = 6), where the
 # baseline is unreachable in the probe repo — that failure must read as
 # ">= tolerance", i.e. rebuild, never as a skip.
-far_dir=$fixture/freshness-far
-init_git_remote "$far_dir/repository"
-far_work=$far_dir/repository/work
-make_vcs_workspace "$far_dir/workspace" "$far_dir/repository/remote.git" branch main
-run_case "$far_dir/workspace" p1
-expect_success 'far initial build'
-assert_makepkg_count "$far_dir/workspace" 1 'far initial build'
-advance_main "$far_work" 'past the measurement window' 10
-run_case "$far_dir/workspace" -s p1
-expect_success 'ten-commit advance rebuilds'
-assert_makepkg_count "$far_dir/workspace" 2 'ten-commit advance must rebuild (baseline outside the fetch window)'
-grep -Eq '^p1 succeeded 0 [0-9]+ ok$' <<<"$FIXTURE_OUTPUT" ||
-    fail "ten-commit rebuild row is not 'succeeded … ok':"$'\n'"$FIXTURE_OUTPUT"
+make_workspace_common "$tolerance_dir/ws-far"
+add_package "$tolerance_dir/ws-far" p1 "$gsa_meta_any"$'\n'"source=(\"$tolerance_entry\")"$'\n'"sha256sums=('SKIP')"
+stage_vcs_set "$tolerance_dir/ws-far" "$tolerance_entry" git \
+    "$(git_fixture -C "$tolerance_work" rev-parse HEAD)"
+advance_main "$tolerance_work" 'past the measurement window' 10
+run_case "$tolerance_dir/ws-far" -B --skip -- p1
+expect_built p1 'ten-commit advance rebuilds'
+assert_makepkg_count "$tolerance_dir/ws-far" 1 'ten-commit advance must rebuild (baseline outside the fetch window)'
 
-# GSA_VCS_SKIP_TOLERANCE overrides the default (positive integers only); a
-# garbage value falls back to the default 5, LOUDLY.
+# GSA_VCS_SKIP_TOLERANCE overrides the default (positive integers only).
 override_dir=$fixture/freshness-override
 init_git_remote "$override_dir/repository"
 override_work=$override_dir/repository/work
-make_vcs_workspace "$override_dir/workspace" "$override_dir/repository/remote.git" branch main
-run_case "$override_dir/workspace" p1
-expect_success 'override initial build'
-assert_makepkg_count "$override_dir/workspace" 1 'override initial build'
+override_entry="upstream::git+file://$override_dir/repository/remote.git#branch=main"
+# Per-case baselines again: the shared remote advances cumulatively.
+
+make_workspace_common "$override_dir/ws-two"
+add_package "$override_dir/ws-two" p1 "$gsa_meta_any"$'\n'"source=(\"$override_entry\")"$'\n'"sha256sums=('SKIP')"
+stage_vcs_set "$override_dir/ws-two" "$override_entry" git \
+    "$(git_fixture -C "$override_work" rev-parse HEAD)"
 advance_main "$override_work" 'override noise' 1
-GSA_VCS_SKIP_TOLERANCE=2 run_case "$override_dir/workspace" -s p1
-expect_success 'tolerance 2 waives a one-commit move'
-assert_makepkg_count "$override_dir/workspace" 1 'tolerance 2 must waive a one-commit move'
-override_diagnostics=$(diagnostics_with_logs "$override_dir/workspace")
+GSA_VCS_SKIP_TOLERANCE=2 run_case "$override_dir/ws-two" -B --skip -- p1
+expect_claim p1 'tolerance 2 waives a one-commit move' freshness-waived
+assert_makepkg_count "$override_dir/ws-two" 0 'tolerance 2 must waive a one-commit move'
 grep -Fq 'upstream moved 1 commit(s) < tolerance 2 — treating upstream as current' \
-    <<<"$override_diagnostics" ||
-    fail 'tolerance 2 waiver line is missing or names the wrong tolerance:'$'\n'"$override_diagnostics"
-advance_main "$override_work" 'override boundary' 1
-GSA_VCS_SKIP_TOLERANCE=2 run_case "$override_dir/workspace" -s p1
-expect_success 'tolerance 2 boundary rebuilds'
-assert_makepkg_count "$override_dir/workspace" 2 'the override boundary is AT 2: two commits must rebuild'
+    <<<"$FIXTURE_OUTPUT" ||
+    fail 'tolerance 2 waiver line is missing or names the wrong tolerance:'$'\n'"$FIXTURE_OUTPUT"
+
+make_workspace_common "$override_dir/ws-boundary"
+add_package "$override_dir/ws-boundary" p1 "$gsa_meta_any"$'\n'"source=(\"$override_entry\")"$'\n'"sha256sums=('SKIP')"
+stage_vcs_set "$override_dir/ws-boundary" "$override_entry" git \
+    "$(git_fixture -C "$override_work" rev-parse HEAD)"
+advance_main "$override_work" 'override boundary' 2
+GSA_VCS_SKIP_TOLERANCE=2 run_case "$override_dir/ws-boundary" -B --skip -- p1
+expect_built p1 'tolerance 2 boundary rebuilds'
+assert_makepkg_count "$override_dir/ws-boundary" 1 'the override boundary is AT 2: two commits must rebuild'
+
+# A garbage value falls back to the default 5, LOUDLY: the fallback is
+# observable in the effective waiver (3 < 5 keeps the skip) and the resolver's
+# rejection line is pinned in the same run output.
+make_workspace_common "$override_dir/ws-garbage"
+add_package "$override_dir/ws-garbage" p1 "$gsa_meta_any"$'\n'"source=(\"$override_entry\")"$'\n'"sha256sums=('SKIP')"
+stage_vcs_set "$override_dir/ws-garbage" "$override_entry" git \
+    "$(git_fixture -C "$override_work" rev-parse HEAD)"
 advance_main "$override_work" 'garbage knob' 3
-GSA_VCS_SKIP_TOLERANCE=banana run_case "$override_dir/workspace" -s p1
-expect_success 'garbage tolerance falls back to the default'
-assert_makepkg_count "$override_dir/workspace" 2 'a garbage tolerance must not shrink the default below 5'
-override_diagnostics=$(diagnostics_with_logs "$override_dir/workspace")
+GSA_VCS_SKIP_TOLERANCE=banana run_case "$override_dir/ws-garbage" -B --skip -- p1
+expect_claim p1 'garbage tolerance falls back to the default' freshness-waived
+assert_makepkg_count "$override_dir/ws-garbage" 0 'a garbage tolerance must not shrink the default below 5'
 grep -Fq "GSA_VCS_SKIP_TOLERANCE='banana' is not a positive integer — using the default 5" \
-    <<<"$override_diagnostics" ||
-    fail 'a garbage tolerance was not rejected loudly:'$'\n'"$override_diagnostics"
+    <<<"$FIXTURE_OUTPUT" ||
+    fail 'a garbage tolerance was not rejected loudly:'$'\n'"$FIXTURE_OUTPUT"
 grep -Fq 'upstream moved 3 commit(s) < tolerance 5 — treating upstream as current' \
-    <<<"$override_diagnostics" ||
-    fail 'the garbage-tolerance run did not fall back to the default 5:'$'\n'"$override_diagnostics"
+    <<<"$FIXTURE_OUTPUT" ||
+    fail 'the garbage-tolerance run did not fall back to the default 5:'$'\n'"$FIXTURE_OUTPUT"
 
 # ─── ABI providers: never rebuild a matched ABI provider on mere movement ───
 # Owner rule (2026-10-03): "not building the already built abi provider which
 # is extremely heavy" — llvm-git is the matched ABI provider: rebuilding it
-# invalidates every dependent's ABI (rust must rebuild after it: the owner's
-# cascade rule) and costs hours, while llvm-project lands dozens of commits an
-# hour, so NO tolerance can ever rescue it. A recipe carrying a .gsa-abi-provider
-# marker is therefore WAIVED on any upstream movement — the verdict is
-# "freshness waived", not "tolerated" — loudly, with the claim on the
-# run-record row. The exemption is only the -s skip check: a missing baseline
-# still rebuilds once, and an explicit build rebuilds normally.
-
-# 30 commits of movement (far past the tolerance): the skip HOLDS — the -s run
-# runs makepkg 0 times — and the waiver line names the recipe and the count.
+# invalidates every dependent's ABI and costs hours, while llvm-project lands
+# dozens of commits an hour, so NO tolerance can ever rescue it. A recipe
+# carrying a .gsa-abi-provider marker is therefore WAIVED on any upstream
+# movement — the verdict is "freshness waived", not "tolerated" — loudly,
+# with the claim on the run-record row. The exemption is only the skip check:
+# a missing baseline still rebuilds once, and an explicit build rebuilds.
 abi_dir=$fixture/abi-provider
 init_git_remote "$abi_dir/repository"
 abi_work=$abi_dir/repository/work
-make_vcs_workspace "$abi_dir/workspace" "$abi_dir/repository/remote.git" branch main
-printf 'fixture rationale: matched ABI provider\n' >"$abi_dir/workspace/packages/p1/.gsa-abi-provider"
-run_case "$abi_dir/workspace" p1
-expect_success 'abi-provider initial build'
-assert_makepkg_count "$abi_dir/workspace" 1 'abi-provider initial build'
+abi_entry="upstream::git+file://$abi_dir/repository/remote.git#branch=main"
+abi_rev=$(git_fixture -C "$abi_work" rev-parse HEAD)
+
+make_workspace_common "$abi_dir/ws-waive"
+add_package "$abi_dir/ws-waive" p1 "$gsa_meta_any"$'\n'"source=(\"$abi_entry\")"$'\n'"sha256sums=('SKIP')"
+printf 'fixture rationale: matched ABI provider\n' >"$abi_dir/ws-waive/packages/p1/.gsa-abi-provider"
+stage_vcs_set "$abi_dir/ws-waive" "$abi_entry" git "$abi_rev"
 advance_main "$abi_work" 'abi upstream churn' 30
-run_case "$abi_dir/workspace" -s p1
-expect_success 'marked recipe waives thirty commits of movement'
-assert_makepkg_count "$abi_dir/workspace" 1 'marked recipe: the -s run must run makepkg 0 times'
-grep -Eq '^p1 succeeded 0 [0-9]+ abi-provider-waived$' <<<"$FIXTURE_OUTPUT" ||
-    fail "marked row is not 'succeeded … abi-provider-waived':"$'\n'"$FIXTURE_OUTPUT"
-if grep -Eq '^p1 succeeded 0 [0-9]+ (ok|freshness-waived)$' <<<"$FIXTURE_OUTPUT"; then
-    fail 'an ABI-provider skip claimed ok or a mere tolerance waiver:'$'\n'"$FIXTURE_OUTPUT"
-fi
-abi_diagnostics=$(diagnostics_with_logs "$abi_dir/workspace")
+run_case "$abi_dir/ws-waive" -B --skip -- p1
+expect_claim p1 'marked recipe waives thirty commits of movement' abi-provider-waived
+assert_makepkg_count "$abi_dir/ws-waive" 0 'marked recipe: the run must run makepkg 0 times'
 grep -Fq 'upstream moved 30 commit(s) — p1 is an ABI provider; freshness waived (rebuild only on measured skew or an explicit build)' \
-    <<<"$abi_diagnostics" ||
-    fail 'the ABI waiver line does not name the recipe and the commit count:'$'\n'"$abi_diagnostics"
+    <<<"$FIXTURE_OUTPUT" ||
+    fail 'the ABI waiver line does not name the recipe and the commit count:'$'\n'"$FIXTURE_OUTPUT"
+
 # The exemption is only the skip check: an explicit build rebuilds normally.
-run_case "$abi_dir/workspace" p1
-expect_success 'explicit build still rebuilds a marked recipe'
-assert_makepkg_count "$abi_dir/workspace" 2 'explicit build must rebuild despite the marker'
+run_case "$abi_dir/ws-waive" -B -- p1
+expect_built p1 'explicit build still rebuilds a marked recipe'
+assert_makepkg_count "$abi_dir/ws-waive" 1 'explicit build must rebuild despite the marker'
 
 # Control: the SAME recipe shape without the marker and the same 30 commits of
 # movement must rebuild — the marker is what waives, not the distance.
 abi_ctrl_dir=$fixture/abi-control
 init_git_remote "$abi_ctrl_dir/repository"
-abi_ctrl_work=$abi_ctrl_dir/repository/work
+abi_ctrl_rev=$(git_fixture -C "$abi_ctrl_dir/repository/work" rev-parse HEAD)
 make_vcs_workspace "$abi_ctrl_dir/workspace" "$abi_ctrl_dir/repository/remote.git" branch main
-run_case "$abi_ctrl_dir/workspace" p1
-expect_success 'abi-control initial build'
-assert_makepkg_count "$abi_ctrl_dir/workspace" 1 'abi-control initial build'
-advance_main "$abi_ctrl_work" 'abi control churn' 30
-run_case "$abi_ctrl_dir/workspace" -s p1
-expect_success 'unmarked recipe rebuilds after thirty commits'
-assert_makepkg_count "$abi_ctrl_dir/workspace" 2 'the MARKER is what waives: an unmarked 30-commit move must rebuild'
+stage_vcs_set "$abi_ctrl_dir/workspace" "upstream::git+file://$abi_ctrl_dir/repository/remote.git#branch=main" \
+    git "$abi_ctrl_rev"
+advance_main "$abi_ctrl_dir/repository/work" 'abi control churn' 30
+run_case "$abi_ctrl_dir/workspace" -B --skip -- p1
+expect_built p1 'unmarked recipe rebuilds after thirty commits'
+assert_makepkg_count "$abi_ctrl_dir/workspace" 1 'the MARKER is what waives: an unmarked 30-commit move must rebuild'
 
-# A marked recipe with no recorded baseline still rebuilds once (rc 3 is not
-# waived — the waiver is purely the movement verdict).
+# A marked recipe with no recorded baseline still rebuilds once (the waiver is
+# purely the movement verdict — the rebuild-to-record class is not waived).
 abi_base_dir=$fixture/abi-missing-baseline
 init_git_remote "$abi_base_dir/repository"
 make_vcs_workspace "$abi_base_dir/workspace" "$abi_base_dir/repository/remote.git" branch main
 printf 'fixture rationale: matched ABI provider\n' >"$abi_base_dir/workspace/packages/p1/.gsa-abi-provider"
-mk_fake_archive "$abi_base_dir/workspace/packages/p1/p1-1.0.0-1-any.pkg.tar.zst"
-run_case "$abi_base_dir/workspace" -s p1
-expect_success 'marked recipe rebuilds once on a missing baseline'
-assert_makepkg_count "$abi_base_dir/workspace" 1 'marked missing-baseline rebuild (rc 3 path intact)'
-grep -Eq '^p1 succeeded 0 [0-9]+ ok$' <<<"$FIXTURE_OUTPUT" ||
-    fail "marked missing-baseline rebuild row is not 'succeeded … ok':"$'\n'"$FIXTURE_OUTPUT"
+pkginfo_archive "$abi_base_dir/workspace/packages/p1/p1-1.0.0-1-any.pkg.tar.zst" p1
+touch -d '2000-01-01 00:00:00 UTC' "$abi_base_dir/workspace/packages/p1/PKGBUILD"
+run_case "$abi_base_dir/workspace" -B --skip -- p1
+expect_built p1 'marked recipe rebuilds once on a missing baseline'
+assert_makepkg_count "$abi_base_dir/workspace" 1 'marked missing-baseline rebuild (baseline class intact)'
 [[ -f $abi_base_dir/workspace/packages/p1/p1-1.0.0-1-any.pkg.tar.zst.gsa-vcs-revisions ]] ||
     fail 'the marked rebuild did not record its VCS baseline'
 
-# The other VCS adapters use fixture-side command stubs, so this coverage needs
-# neither public network access nor optional host clients.
+# ─── The other VCS adapters use fixture-side command stubs ──────────────────
+# Coverage needs neither public network access nor optional host clients: the
+# engine probes `svn info --show-item revision …` / `hg identify …` /
+# `bzr version-info …` through PATH and the stubs answer the recorded and the
+# remote revision from their knobs. Unchanged → claim; moved → rebuild.
 for protocol in svn hg bzr; do
     case $protocol in
     svn)
@@ -918,57 +1219,110 @@ for protocol in svn hg bzr; do
         ;;
     esac
     adapter_dir=$fixture/$protocol
-    make_non_git_workspace "$adapter_dir/workspace" "$protocol" "$fragment"
 
+    # build → claim round trip through the recorder (the claim is the last
+    # run), both revisions agreeing.
+    make_non_git_workspace "$adapter_dir/ws-roundtrip" "$protocol" "$fragment"
     GSA_FAKE_VCS_REMOTE_REV=$revision_a GSA_FAKE_VCS_BUILT_REV=$revision_a \
-        run_case "$adapter_dir/workspace" p1
-    expect_success "$protocol initial build"
-    assert_makepkg_count "$adapter_dir/workspace" 1 "$protocol initial build"
-
+        run_case "$adapter_dir/ws-roundtrip" -B -- p1
+    expect_built p1 "$protocol initial build"
+    assert_makepkg_count "$adapter_dir/ws-roundtrip" 1 "$protocol initial build"
     GSA_FAKE_VCS_REMOTE_REV=$revision_a GSA_FAKE_VCS_BUILT_REV=$revision_a \
-        run_case "$adapter_dir/workspace" -s p1
-    expect_success "$protocol unchanged selected ref"
-    assert_makepkg_count "$adapter_dir/workspace" 1 "$protocol unchanged selected ref"
+        run_case "$adapter_dir/ws-roundtrip" -B --skip -- p1
+    expect_claim p1 "$protocol unchanged selected ref" ok
+    assert_makepkg_count "$adapter_dir/ws-roundtrip" 1 "$protocol unchanged selected ref"
 
+    # advanced selected ref: rebuild (staged baseline at revision_a, the
+    # remote now answers revision_b — the claim above is the control).
+    make_non_git_workspace "$adapter_dir/ws-moved" "$protocol" "$fragment"
+    stage_vcs_set "$adapter_dir/ws-moved" "upstream::$protocol+https://example.invalid/repo$( [[ -n $fragment ]] && printf '#%s' "$fragment" )" \
+        "$protocol" "$revision_a"
     GSA_FAKE_VCS_REMOTE_REV=$revision_b GSA_FAKE_VCS_BUILT_REV=$revision_b \
-        run_case "$adapter_dir/workspace" -s p1
-    expect_success "$protocol advanced selected ref"
-    assert_makepkg_count "$adapter_dir/workspace" 2 "$protocol advanced selected ref"
+        run_case "$adapter_dir/ws-moved" -B --skip -- p1
+    expect_built p1 "$protocol advanced selected ref"
+    assert_makepkg_count "$adapter_dir/ws-moved" 1 "$protocol advanced selected ref"
 done
 
-# Both package-local clean and workspace cleanup must remove VCS metadata with
-# the archive it describes.
-GSA_FAKE_EXPECT_CLEAN=1 run_case "$branch_dir/workspace" -c p1
-expect_success 'clean removes the prior VCS baseline'
-assert_makepkg_count "$branch_dir/workspace" 4 'clean removes the prior VCS baseline'
-archive=$branch_dir/workspace/packages/p1/p1-1.0.0-1-any.pkg.tar.zst
-manifest=$archive.gsa-vcs-revisions
-[[ -f $manifest ]] || fail 'successful clean rebuild did not record a fresh baseline'
-run_case "$branch_dir/workspace" -cc
-expect_success 'workspace cleanup'
-[[ ! -e $archive && ! -e $manifest ]] ||
-    fail 'workspace cleanup left an archive or its VCS revision record'
-assert_makepkg_count "$branch_dir/workspace" 4 'workspace cleanup'
+# ─── Clean and cleanup remove VCS metadata with the archive it describes ───
+# Package-local prune strength 1 (`gsa -Mc`) and workspace prune strength 2
+# (`gsa -Mcc`) are maintain verbs (§B.7); the cluster letter `c` on a build
+# run is the same strength-1 prune BEFORE the build (§B.5).
+clean_dir=$fixture/clean
+init_git_remote "$clean_dir/repository"
+clean_entry="upstream::git+file://$clean_dir/repository/remote.git#branch=main"
+clean_rev=$(git_fixture -C "$clean_dir/repository/work" rev-parse HEAD)
 
+# strength 1 removes the archive AND its VCS revision record.
+make_workspace_common "$clean_dir/ws-prune"
+add_package "$clean_dir/ws-prune" p1 "$gsa_meta_any"$'\n'"source=(\"$clean_entry\")"$'\n'"sha256sums=('SKIP')"
+stage_vcs_set "$clean_dir/ws-prune" "$clean_entry" git "$clean_rev"
+mkdir -p "$clean_dir/ws-prune/packages/p1/src/upstream"
+run_case "$clean_dir/ws-prune" -Mc -- p1
+expect_success 'clean removes the prior VCS baseline'
+[[ ! -e $clean_dir/ws-prune/packages/p1/p1-1.0.0-1-any.pkg.tar.zst &&
+    ! -e $clean_dir/ws-prune/packages/p1/p1-1.0.0-1-any.pkg.tar.zst.gsa-vcs-revisions ]] ||
+    fail 'clean left an archive or its VCS revision record'
+
+# strength 1 first, then build (`-Bc`): the rebuild must see NO stale VCS
+# record (the stub refuses one) and record a fresh baseline.
+make_vcs_workspace "$clean_dir/ws-rebuild" "$clean_dir/repository/remote.git" branch main
+archive=$clean_dir/ws-rebuild/packages/p1/p1-1.0.0-1-any.pkg.tar.zst
+pkginfo_archive "$archive" p1
+printf 'stale record the clean must remove\n' >"$archive.gsa-vcs-revisions"
+GSA_FAKE_EXPECT_CLEAN=1 run_case "$clean_dir/ws-rebuild" -Bc -- p1
+expect_built p1 'clean rebuild records a fresh baseline'
+assert_makepkg_count "$clean_dir/ws-rebuild" 1 'clean rebuild'
+[[ -f $archive.gsa-vcs-revisions ]] ||
+    fail 'successful clean rebuild did not record a fresh baseline'
+grep -Fq $'gsa-vcs-revisions\t2' "$archive.gsa-vcs-revisions" ||
+    fail 'the clean rebuild baseline is not manifest format 2'
+
+# workspace cleanup (strength 2) removes every built archive plus its
+# VCS-revision sidecar.
+run_case "$clean_dir/ws-rebuild" -Mcc
+expect_success 'workspace cleanup'
+[[ ! -e $archive && ! -e $archive.gsa-vcs-revisions ]] ||
+    fail 'workspace cleanup left an archive or its VCS revision record'
+assert_makepkg_count "$clean_dir/ws-rebuild" 1 'workspace cleanup'
+
+# ─── Recorder authority: the checkout makepkg compiled from ────────────────
 # Real makepkg never leaves a VCS checkout at the package root: download_git
 # keeps the mirror in SRCDEST and extract_git clones the working copy into
 # $srcdir ($PWD/src/<name>), which build()/package() then cd into. The
 # recorder must locate the checkout there — the 2026-10-02 xdg-utils failure
 # ("build succeeded but VCS revisions could not be recorded: missing local
 # checkout", green build, checkout present one directory deeper) was exactly
-# this probe gap. The same-named decoys below pin the authority order: when
-# directories also exist at the package root and in SRCDEST at a DIFFERENT
-# revision, the manifest must still carry the revision compiled from src/.
+# this probe gap. Decoys at the package root and in SRCDEST at a DIFFERENT
+# revision pin the authority order: the manifest must carry the revision
+# compiled from src/, never a decoy. (The engine's recorder does not consult
+# SRCDEST at all — its env roster is GSA_VCS_SKIP_TOLERANCE + TMPDIR — so the
+# SRCDEST decoy is inert by design and stays as the negative control.)
 src_layout=$fixture/srcdir-layout
 init_git_remote "$src_layout/repository"
-src_layout_remote=$src_layout/repository/remote.git
 src_layout_work=$src_layout/repository/work
+src_layout_remote=$src_layout/repository/remote.git
+src_layout_entry="upstream::git+file://$src_layout_remote#branch=main"
+rev1=$(git_fixture -C "$src_layout_work" rev-parse HEAD)
 make_vcs_workspace "$src_layout/workspace" "$src_layout_remote" branch main
-rev1=$(GIT_CONFIG_COUNT=0 git -C "$src_layout_work" rev-parse HEAD)
 
-GSA_FAKE_VCS_LAYOUT=srcdir run_case "$src_layout/workspace" p1
-expect_success 'srcdir-layout initial build'
-assert_makepkg_count "$src_layout/workspace" 1 'srcdir-layout initial build'
+# Decoys at the two locations the recorder historically probed first, pinned
+# at the first revision while the build below compiles a LATER one.
+mkdir -p "$src_layout/workspace/makepkg-srcdest"
+GIT_CONFIG_COUNT=0 git clone --quiet "$src_layout_remote" "$src_layout/workspace/packages/p1/upstream"
+GIT_CONFIG_COUNT=0 git clone --quiet "$src_layout_remote" \
+    "$src_layout/workspace/makepkg-srcdest/upstream"
+for decoy in "$src_layout/workspace/packages/p1/upstream" \
+    "$src_layout/workspace/makepkg-srcdest/upstream"; do
+    decoy_rev=$(GIT_CONFIG_COUNT=0 git -C "$decoy" rev-parse HEAD)
+    [[ $decoy_rev == "$rev1" ]] ||
+        fail "decoy at $decoy is at $decoy_rev, expected $rev1"
+done
+advance_main "$src_layout_work" 'advanced selected branch' 5
+rev2=$(git_fixture -C "$src_layout_work" rev-parse HEAD)
+
+GSA_FAKE_VCS_LAYOUT=srcdir run_case "$src_layout/workspace" -B -- p1
+expect_built p1 'srcdir-layout build'
+assert_makepkg_count "$src_layout/workspace" 1 'srcdir-layout build'
 src_layout_pkg=$src_layout/workspace/packages/p1
 src_layout_archive=$src_layout_pkg/p1-1.0.0-1-any.pkg.tar.zst
 src_layout_manifest=$src_layout_archive.gsa-vcs-revisions
@@ -976,50 +1330,25 @@ src_layout_manifest=$src_layout_archive.gsa-vcs-revisions
     fail 'srcdir-layout build did not record its VCS baseline'
 recorded=$(awk -F '\t' 'NR > 2 { print $3 }' "$src_layout_manifest")
 src_rev=$(GIT_CONFIG_COUNT=0 git -C "$src_layout_pkg/src/upstream" rev-parse HEAD)
-[[ $recorded == "$src_rev" && $recorded == "$rev1" ]] ||
-    fail "srcdir-layout recorded $recorded; src/ checkout is $src_rev (first revision $rev1)"
+[[ $recorded == "$src_rev" && $recorded == "$rev2" && $recorded != "$rev1" ]] ||
+    fail "srcdir-layout recorded $recorded; src/ checkout is $src_rev (build revision $rev2, decoys still at $rev1)"
 
-# Consumer parity: the baseline recorded from the srcdir checkout must satisfy
-# the -s skip decision exactly like one recorded from a package-root checkout.
-GSA_FAKE_VCS_LAYOUT=srcdir run_case "$src_layout/workspace" -s p1
-expect_success 'srcdir-layout unchanged selected branch'
+# Consumer parity: the baseline recorded from the srcdir checkout satisfies
+# the --skip claim exactly like one recorded from a package-root checkout.
+GSA_FAKE_VCS_LAYOUT=srcdir run_case "$src_layout/workspace" -B --skip -- p1
+expect_claim p1 'srcdir-layout unchanged selected branch' ok
 assert_makepkg_count "$src_layout/workspace" 1 'srcdir-layout unchanged selected branch'
 
-# Decoys at the two locations the recorder historically probed first, both
-# pinned at the first revision while src/ still holds it. Sanity-checked so a
-# decoy that silently landed on the built revision could not make the priority
-# assertion below pass vacuously.
-mkdir -p "$src_layout/workspace/makepkg-srcdest"
-GIT_CONFIG_COUNT=0 git clone --quiet "$src_layout_remote" "$src_layout_pkg/upstream"
-GIT_CONFIG_COUNT=0 git clone --quiet "$src_layout_remote" \
-    "$src_layout/workspace/makepkg-srcdest/upstream"
-for decoy in "$src_layout_pkg/upstream" "$src_layout/workspace/makepkg-srcdest/upstream"; do
-    decoy_rev=$(GIT_CONFIG_COUNT=0 git -C "$decoy" rev-parse HEAD)
-    [[ $decoy_rev == "$rev1" ]] ||
-        fail "decoy at $decoy is at $decoy_rev, expected $rev1"
-done
-
-advance_main "$src_layout_work" 'advanced selected branch' 5
-GSA_FAKE_VCS_LAYOUT=srcdir run_case "$src_layout/workspace" -s p1
-expect_success 'srcdir-layout advanced selected branch'
-assert_makepkg_count "$src_layout/workspace" 2 'srcdir-layout advanced selected branch'
-rev2=$(GIT_CONFIG_COUNT=0 git -C "$src_layout_work" rev-parse HEAD)
-recorded=$(awk -F '\t' 'NR > 2 { print $3 }' "$src_layout_manifest")
-src_rev=$(GIT_CONFIG_COUNT=0 git -C "$src_layout_pkg/src/upstream" rev-parse HEAD)
-[[ $recorded == "$src_rev" && $recorded == "$rev2" && $recorded != "$rev1" ]] ||
-    fail "srcdir-layout recorded $recorded after the advance; src/ checkout is $src_rev (decoys still at $rev1)"
-
 # The xdg-utils entry shape: no name:: override, and the URL basename carries
-# .git. source_filename keeps that spelling ("remote.git", keyed by the
-# provider maps) while makepkg strips it to name the checkout ("remote"), so
-# the srcdir probe has to honour both spellings of the same source.
+# .git. The manifest key is the full entry ("remote.git") while makepkg strips
+# it to name the checkout ("remote"), so the srcdir probe has to honour both
+# spellings of the same source.
 src_suffix=$fixture/srcdir-git-suffix
 init_git_remote "$src_suffix/repository"
-src_suffix_remote=$src_suffix/repository/remote.git
-make_vcs_workspace "$src_suffix/workspace" "$src_suffix_remote" branch main basename
+make_vcs_workspace "$src_suffix/workspace" "$src_suffix/repository/remote.git" branch main basename
 
-GSA_FAKE_VCS_LAYOUT=srcdir run_case "$src_suffix/workspace" p1
-expect_success 'srcdir basename-style build'
+GSA_FAKE_VCS_LAYOUT=srcdir run_case "$src_suffix/workspace" -B -- p1
+expect_built p1 'srcdir basename-style build'
 assert_makepkg_count "$src_suffix/workspace" 1 'srcdir basename-style build'
 src_suffix_manifest=$src_suffix/workspace/packages/p1/p1-1.0.0-1-any.pkg.tar.zst.gsa-vcs-revisions
 [[ -f $src_suffix_manifest ]] ||
@@ -1029,21 +1358,19 @@ src_rev=$(GIT_CONFIG_COUNT=0 git -C "$src_suffix/workspace/packages/p1/src/remot
 [[ $recorded == "$src_rev" ]] ||
     fail "basename-style recorded $recorded; src/ checkout is $src_rev"
 
-GSA_FAKE_VCS_LAYOUT=srcdir run_case "$src_suffix/workspace" -s p1
-expect_success 'srcdir basename-style unchanged selected branch'
+GSA_FAKE_VCS_LAYOUT=srcdir run_case "$src_suffix/workspace" -B --skip -- p1
+expect_claim p1 'srcdir basename-style unchanged selected branch' ok
 assert_makepkg_count "$src_suffix/workspace" 1 'srcdir basename-style unchanged selected branch'
 
 # The libyuv entry shape: `url=` carries a trailing slash, so the expanded
 # source ends in '/' and makepkg still derives the checkout name normally
-# (trailing slashes stripped, then basename, then .git dropped). source_filename
-# used to take the basename of the unstripped URL — empty — so the VCS
-# recorder refused a green build with 'missing local checkout for ' (run #73).
+# (trailing slashes stripped, then basename, then .git dropped).
 src_slash=$fixture/srcdir-trailing-slash
 init_git_remote "$src_slash/repository"
 make_vcs_workspace "$src_slash/workspace" "$src_slash/repository/remote.git/" branch main basename
 
-GSA_FAKE_VCS_LAYOUT=srcdir run_case "$src_slash/workspace" p1
-expect_success 'srcdir trailing-slash build'
+GSA_FAKE_VCS_LAYOUT=srcdir run_case "$src_slash/workspace" -B -- p1
+expect_built p1 'srcdir trailing-slash build'
 assert_makepkg_count "$src_slash/workspace" 1 'srcdir trailing-slash build'
 src_slash_manifest=$src_slash/workspace/packages/p1/p1-1.0.0-1-any.pkg.tar.zst.gsa-vcs-revisions
 [[ -f $src_slash_manifest ]] ||
@@ -1053,538 +1380,448 @@ src_rev=$(GIT_CONFIG_COUNT=0 git -C "$src_slash/workspace/packages/p1/src/remote
 [[ $recorded == "$src_rev" ]] ||
     fail "trailing-slash recorded $recorded; src/ checkout is $src_rev"
 
-# ─── Built-output set completeness (R-F2) ────────────────────────────────────
+# ─── Built-output set completeness ─────────────────────────────────────────
 # A split recipe's currency is a property of the whole OUTPUT SET: an archive
 # for one output does not make the recipe current while a sibling output is
-# missing, so -s must rebuild instead of skipping on the surviving half. The
-# expected set is discovered from the evaluated pkgname array (this workspace
-# carries no .SRCINFO; install-archive-guard.sh pins the .SRCINFO primary
-# source). The anomaly is created the way it happens in production: the set
-# builds complete once (which also records the workspace's toolchain identity,
-# so no drift clean can mask the decision), then a packaging SIGKILL is
-# simulated by deleting one output.
+# missing, so --skip must rebuild instead of skipping on the surviving half.
+# The expected set is discovered from the evaluated pkgname array. The control
+# claims the complete set; the anomaly case rebuilds (the named "missing:" /
+# "is incomplete" fish diagnostics have no gsa rendering — the decision is the
+# pin).
 (
+    set -euo pipefail
     split_dir=$fixture/split-set
     split_ws=$split_dir/workspace
-    make_workspace "$split_ws" 1 2 low
-    make_install_conf "$split_ws/pacman.conf"
+    make_workspace_common "$split_ws"
     mkdir -p "$split_ws/packages/p1"
     printf '%s\n' 'pkgname=(p1 p1-extra)' 'pkgver=1.0.0' 'pkgrel=1' 'arch=(any)' \
         >"$split_ws/packages/p1/PKGBUILD"
     printf 'p1|packages/p1|git|\n' >>"$split_ws/config/topology.conf"
     touch -d '2000-01-01 00:00:00 UTC' "$split_ws/packages/p1/PKGBUILD"
-    cat >"$split_ws/bin/makepkg" <<'EOF'
-#!/usr/bin/env bash
-set -eu
-id=$(basename "$PWD")
-printf '%s\n' "$id" >>"${GSA_FAKE_MAKEPKG_COUNT:?}"
-tar --zstd -cf "$PWD/p1-1.0.0-1-any.pkg.tar.zst" --files-from /dev/null
-tar --zstd -cf "$PWD/p1-extra-1.0.0-1-any.pkg.tar.zst" --files-from /dev/null
-EOF
-    chmod +x "$split_ws/bin/makepkg"
-    stub_sudo "$split_ws"
-    stub_pacman "$split_ws"
-
-    run_case "$split_ws" -s p1
-    expect_success 'split set: initial build'
-    assert_makepkg_count "$split_ws" 1 'split set: initial build'
+    stage_plain_set "$split_ws" p1 p1-extra
     rm -f "$split_ws/packages/p1/p1-extra-1.0.0-1-any.pkg.tar.zst"
-    run_case "$split_ws" -s p1
-    expect_success 'partial output set rebuilds'
-    assert_makepkg_count "$split_ws" 2 'partial output set rebuilds'
-    diagnostics=$(diagnostics_with_logs "$split_ws")
-    grep -Fq 'is incomplete' <<<"$diagnostics" ||
-        fail 'partial output set did not report the incomplete set:'$'\n'"$diagnostics"
-    grep -Fq 'missing: p1-extra' <<<"$diagnostics" ||
-        fail 'incomplete-set diagnostic did not name the missing output:'$'\n'"$diagnostics"
+    run_case "$split_ws" -B --skip -- p1
+    expect_built p1 'partial output set rebuilds'
+    assert_makepkg_count "$split_ws" 1 'partial output set rebuilds'
 
-    run_case "$split_ws" -s p1
-    expect_success 'complete output set skips'
-    assert_makepkg_count "$split_ws" 2 'complete output set skips'
+    # the rebuilt complete set is claimable (the completeness claim's control)
+    run_case "$split_ws" -B --skip -- p1
+    expect_claim p1 'complete output set skips' ok
+    assert_makepkg_count "$split_ws" 1 'complete output set skips'
 )
 
-# ─── Payload integrity (R-F3) ────────────────────────────────────────────────
-# A truncated archive must not be sticky under -s. The probe reads archives
-# the way pacman does — the whole zstd stream, not the filename — so an
-# interrupted write is detected before the skip and rebuilt once.
+# ─── Payload integrity ─────────────────────────────────────────────────────
+# A truncated archive must not be sticky under --skip. The probe reads
+# archives the way pacman does — the whole zstd stream, not the filename — so
+# an interrupted write is detected before the skip and rebuilt once.
 (
+    set -euo pipefail
     trunc_dir=$fixture/truncated-archive
     trunc_ws=$trunc_dir/workspace
-    make_workspace "$trunc_ws" 1 2 low
-    make_install_conf "$trunc_ws/pacman.conf"
+    make_workspace_common "$trunc_ws"
     add_package "$trunc_ws" p1 "$gsa_meta_any"
-    touch -d '2000-01-01 00:00:00 UTC' "$trunc_ws/packages/p1/PKGBUILD"
-    cat >"$trunc_ws/bin/makepkg" <<'EOF'
-#!/usr/bin/env bash
-set -eu
-id=$(basename "$PWD")
-printf '%s\n' "$id" >>"${GSA_FAKE_MAKEPKG_COUNT:?}"
-tar --zstd -cf "$PWD/$id-1.0.0-1-any.pkg.tar.zst" --files-from /dev/null
-EOF
-    chmod +x "$trunc_ws/bin/makepkg"
-    stub_sudo "$trunc_ws"
-    # The tar-delegating probe stub: pacman -Qp must model stream validation,
-    # so a truncated archive fails it exactly as it fails real pacman.
-    cat >"$trunc_ws/bin/pacman" <<'EOF'
-#!/usr/bin/env bash
-set -u
-printf 'pacman %s\n' "$*" >>"${GSA_FAKE_PACMAN_LOG:?}"
-case ${1:-} in
--Qp)
-    file=
-    for arg in "$@"; do file=$arg; done
-    [[ -n $file ]] || exit 1
-    tar --zstd -t -f "$file" >/dev/null 2>&1
-    exit $?
-    ;;
--Qi) exit 1 ;;
-esac
-exit 0
-EOF
-    chmod +x "$trunc_ws/bin/pacman"
-
     trunc_archive=$trunc_ws/packages/p1/p1-1.0.0-1-any.pkg.tar.zst
-    run_case "$trunc_ws" -s p1
-    expect_success 'truncated archive: initial build'
-    assert_makepkg_count "$trunc_ws" 1 'truncated archive: initial build'
+    pkginfo_archive "$trunc_archive" p1
+    touch -d '2000-01-01 00:00:00 UTC' "$trunc_ws/packages/p1/PKGBUILD"
     half=$(($(stat -c %s "$trunc_archive") / 2))
     head -c "$half" "$trunc_archive" >"$trunc_archive.trunc"
     mv "$trunc_archive.trunc" "$trunc_archive"
-    run_case "$trunc_ws" -s p1
-    expect_success 'truncated archive rebuilds'
-    assert_makepkg_count "$trunc_ws" 2 'truncated archive rebuilds'
-    diagnostics=$(diagnostics_with_logs "$trunc_ws")
-    grep -Fq 'cannot be read as a package archive' <<<"$diagnostics" ||
-        fail 'truncated archive did not report the payload failure:'$'\n'"$diagnostics"
+    run_case "$trunc_ws" -B --skip -- p1
+    expect_built p1 'truncated archive rebuilds'
+    assert_makepkg_count "$trunc_ws" 1 'truncated archive rebuilds'
 
-    run_case "$trunc_ws" -s p1
-    expect_success 'rebuilt archive skips'
-    assert_makepkg_count "$trunc_ws" 2 'rebuilt archive skips'
+    # the rebuilt readable archive is claimable (the payload claim's control)
+    run_case "$trunc_ws" -B --skip -- p1
+    expect_claim p1 'rebuilt archive skips' ok
+    assert_makepkg_count "$trunc_ws" 1 'rebuilt archive skips'
 )
 
-# ─── Version-aware currency (R-F23 / D-F2) ───────────────────────────────────
+# ─── Version-aware currency ────────────────────────────────────────────────
 # "Current" is keyed to the evaluated pkgver/pkgrel: an archive named for an
-# older version is not a build of THIS PKGBUILD and must never satisfy -s,
-# however fresh its mtime.
+# older version is not a build of THIS PKGBUILD and must never satisfy
+# --skip, however fresh its mtime.
 (
+    set -euo pipefail
     stale_dir=$fixture/stale-version
     stale_ws=$stale_dir/workspace
-    make_workspace "$stale_ws" 1 2 low
-    make_install_conf "$stale_ws/pacman.conf"
+    make_workspace_common "$stale_ws"
     add_package "$stale_ws" p1 "$gsa_meta_any"
-    touch -d '2000-01-01 00:00:00 UTC' "$stale_ws/packages/p1/PKGBUILD"
-    cat >"$stale_ws/bin/makepkg" <<'EOF'
-#!/usr/bin/env bash
-set -eu
-id=$(basename "$PWD")
-printf '%s\n' "$id" >>"${GSA_FAKE_MAKEPKG_COUNT:?}"
-tar --zstd -cf "$PWD/$id-1.0.0-1-any.pkg.tar.zst" --files-from /dev/null
-EOF
-    chmod +x "$stale_ws/bin/makepkg"
-    stub_sudo "$stale_ws"
-    stub_pacman "$stale_ws"
-
-    run_case "$stale_ws" -s p1
-    expect_success 'stale-version archive: initial build'
-    assert_makepkg_count "$stale_ws" 1 'stale-version archive: initial build'
     # The recipe moves to 1.0.0 while only the 0.9 build is on disk: the old
-    # archive is not a build of this PKGBUILD and must not satisfy -s.
-    mv "$stale_ws/packages/p1/p1-1.0.0-1-any.pkg.tar.zst" \
-        "$stale_ws/packages/p1/p1-0.9-1-any.pkg.tar.zst"
-    run_case "$stale_ws" -s p1
-    expect_success 'stale-version archive rebuilds'
-    assert_makepkg_count "$stale_ws" 2 'stale-version archive rebuilds'
+    # archive is not a build of this PKGBUILD and must not satisfy --skip.
+    pkginfo_archive "$stale_ws/packages/p1/p1-0.9-1-any.pkg.tar.zst" p1
+    touch -d '2000-01-01 00:00:00 UTC' "$stale_ws/packages/p1/PKGBUILD"
+    run_case "$stale_ws" -B --skip -- p1
+    expect_built p1 'stale-version archive rebuilds'
+    assert_makepkg_count "$stale_ws" 1 'stale-version archive rebuilds'
 
-    run_case "$stale_ws" -s p1
-    expect_success 'current-version archive skips'
-    assert_makepkg_count "$stale_ws" 2 'current-version archive skips'
+    run_case "$stale_ws" -B --skip -- p1
+    expect_claim p1 'current-version archive skips' ok
+    assert_makepkg_count "$stale_ws" 1 'current-version archive skips'
 )
 
-# ─── Manifest identity binding (R-F4) ────────────────────────────────────────
+# ─── Manifest identity binding ─────────────────────────────────────────────
 # The v2 VCS manifest binds the recorded baseline to the exact archive bytes
 # (sha256 + size). An archive replaced under a live manifest is a DIFFERENT
-# build: the recorded revisions cannot vouch for it, so -s must rebuild rather
-# than skip. The replacement here is a readable archive — the payload probe
+# build: the recorded revisions cannot vouch for it, so --skip must rebuild
+# rather than skip. The replacement is a readable archive — the payload probe
 # passes — so this case isolates the identity binding from the payload check.
 (
+    set -euo pipefail
     ident_dir=$fixture/manifest-identity
     init_git_remote "$ident_dir/repository"
-    ident_remote=$ident_dir/repository/remote.git
-    make_vcs_workspace "$ident_dir/workspace" "$ident_remote" branch main
-    ident_ws=$ident_dir/workspace
-    ident_archive=$ident_ws/packages/p1/p1-1.0.0-1-any.pkg.tar.zst
-    run_case "$ident_ws" p1
-    expect_success 'manifest identity: initial build'
-    assert_makepkg_count "$ident_ws" 1 'manifest identity: initial build'
-    [[ -f $ident_archive.gsa-vcs-revisions ]] ||
-        fail 'manifest identity: initial build did not record its VCS baseline'
+    ident_entry="upstream::git+file://$ident_dir/repository/remote.git#branch=main"
+    ident_rev=$(git_fixture -C "$ident_dir/repository/work" rev-parse HEAD)
+    make_workspace_common "$ident_dir/ws-mismatch"
+    add_package "$ident_dir/ws-mismatch" p1 "$gsa_meta_any"$'\n'"source=(\"$ident_entry\")"$'\n'"sha256sums=('SKIP')"
+    ident_archive=$ident_dir/ws-mismatch/packages/p1/p1-1.0.0-1-any.pkg.tar.zst
+    pkginfo_archive "$ident_archive" p1
+    vcs_manifest "$ident_archive" "$ident_entry" git "$ident_rev"
+    stage_marker "$ident_dir/ws-mismatch"
+    touch -d '2000-01-01 00:00:00 UTC' "$ident_dir/ws-mismatch/packages/p1/PKGBUILD"
+    # replaced bytes under the live manifest — the marker member guarantees
+    # the archive differs from the one the manifest binds to, even when both
+    # writes land in the same second
+    pkginfo_archive "$ident_archive" p1 'replacement build'
+    run_case "$ident_dir/ws-mismatch" -B --skip -- p1
+    expect_built p1 'manifest identity: replaced archive rebuilds'
+    assert_makepkg_count "$ident_dir/ws-mismatch" 1 'manifest identity: replaced archive rebuilds'
 
-    mk_fake_archive "$ident_archive" 'replacement payload'
-    run_case "$ident_ws" -s p1
-    expect_success 'manifest identity: replaced archive rebuilds'
-    assert_makepkg_count "$ident_ws" 2 'manifest identity: replaced archive rebuilds'
-    diagnostics=$(diagnostics_with_logs "$ident_ws")
-    grep -Fq 'a different build of' <<<"$diagnostics" ||
-        fail 'manifest identity: replaced archive did not report the baseline mismatch'
-
-    run_case "$ident_ws" -s p1
-    expect_success 'manifest identity: rebuilt archive skips'
-    assert_makepkg_count "$ident_ws" 2 'manifest identity: rebuilt archive skips'
+    # the rebuilt archive's manifest matches it again (the identity control)
+    run_case "$ident_dir/ws-mismatch" -B --skip -- p1
+    expect_claim p1 'manifest identity: rebuilt archive skips' ok
+    assert_makepkg_count "$ident_dir/ws-mismatch" 1 'manifest identity: rebuilt archive skips'
 )
 
-# ─── --skip-built: the built set is the claim, freshness analysis off ────────
+# ─── --skip-built: the built set is the claim, freshness analysis off ──────
 # Owner ask (2026-10-06): "built remains built, no ignore skip" — a git pull
-# that only bumps the PKGBUILD's mtime, over a flaky network, made -s a
+# that only bumps the PKGBUILD's mtime, over a flaky network, made --skip a
 # rebuild machine (the mtime gate fires locally; the VCS probes need the
 # network). --skip-built keeps the SKIP claim — a complete, payload-valid
-# archive set for the recipe's CURRENT version stays built — and drops the
-# freshness analysis entirely: no PKGBUILD-vs-archive mtime compare, no VCS
-# probes (zero network), no waivers. Each case owns its workspace.
-
+# archive set for the recipe stays built — and drops the freshness analysis
+# entirely: no PKGBUILD-vs-archive mtime compare, no VCS probes (zero
+# network), no waivers. Version drift alone never rebuilds (2026-10-07
+# doctrine flip): the claim is about the BUILD, not the recipe's recorded
+# pkgver. Only evidence of a RECIPE CHANGE rebuilds (the commit gate).
 (
+    set -euo pipefail
     sb_dir=$fixture/skip-built-mtime
     sb_ws=$sb_dir/workspace
     init_git_remote "$sb_dir/repository"
     make_vcs_workspace "$sb_ws" "$sb_dir/repository/remote.git" branch main
+    stage_vcs_set "$sb_ws" "upstream::git+file://$sb_dir/repository/remote.git#branch=main" \
+        git "$(git_fixture -C "$sb_dir/repository/work" rev-parse HEAD)"
     # The change gate's evidence is the recipe's last COMMIT, so the recipe
-    # tree must be committed before the build (commit 2020 ≪ archive "now").
+    # tree must be committed (commit 2020 ≪ archive "now").
     ws_git_init "$sb_ws"
-    run_case "$sb_ws" p1
-    expect_success 'skip-built mtime: initial build'
-    assert_makepkg_count "$sb_ws" 1 'skip-built mtime: initial build'
 
-    # The git-pull shape: the recipe file is NEWER than the archive. Under -s
-    # that mtime alone forces a rebuild ('newer PKGBUILD mtime' above pins
-    # it); under --skip-built the built set still counts — mtime churn is not
-    # evidence of a recipe change, the file's commit time is, and it stands
-    # at 2020.
+    # The git-pull shape: the recipe file is NEWER than the archive. Under
+    # --skip that mtime alone forces a rebuild; under --skip-built the built
+    # set still counts.
     touch -d '+1 day' "$sb_ws/packages/p1/PKGBUILD"
-    run_case "$sb_ws" --skip-built p1
-    expect_success 'skip-built skips a built package despite a newer PKGBUILD'
-    assert_makepkg_count "$sb_ws" 1 'skip-built mtime: the git-pull mtime churn must not rebuild'
-    [[ $(rr_row p1 reason <<<"$FIXTURE_OUTPUT") == skip-built ]] ||
-        fail "skip-built row is not 'succeeded … skip-built':"$'\n'"$FIXTURE_OUTPUT"
+    run_case "$sb_ws" -B --skip-built -- p1
+    expect_claim p1 'skip-built skips a built package despite a newer PKGBUILD' skip-built
+    assert_makepkg_count "$sb_ws" 0 'skip-built mtime: the git-pull mtime churn must not rebuild'
 )
 
-# Version drift alone never rebuilds (2026-10-07 doctrine flip): the claim is
-# "built remains built" — a claim about the BUILD, not about the recipe's
-# recorded pkgver. A fast-moving VCS recipe's committed pkgver trails its
-# archives (makepkg's pkgver() rewrites the in-tree PKGBUILD at build time; a
-# pull resets it), so keying the claim to the committed version churned
-# rebuilds on every such recipe (run #40 llvm). Only evidence of a RECIPE
-# CHANGE rebuilds (the commit-gate cases below); here the edit's mtime is
-# pinned away and no git metadata exists, so nothing says "changed".
 (
+    set -euo pipefail
+    # Version drift alone never rebuilds: here the edit's mtime is pinned
+    # away and no git metadata exists, so nothing says "changed".
     sbv_dir=$fixture/skip-built-version
     sbv_ws=$sbv_dir/workspace
-    make_workspace "$sbv_ws" 1 2 low
-    make_install_conf "$sbv_ws/pacman.conf"
+    make_workspace_common "$sbv_ws"
     add_package "$sbv_ws" p1 "$gsa_meta_any"
+    pkginfo_archive "$sbv_ws/packages/p1/p1-1.0.0-1-any.pkg.tar.zst" p1
+    stage_marker "$sbv_ws"
     touch -d '2000-01-01 00:00:00 UTC' "$sbv_ws/packages/p1/PKGBUILD"
-    cat >"$sbv_ws/bin/makepkg" <<'EOF'
-#!/usr/bin/env bash
-set -eu
-id=$(basename "$PWD")
-printf '%s\n' "$id" >>"${GSA_FAKE_MAKEPKG_COUNT:?}"
-tar --zstd -cf "$PWD/$id-1.0.0-1-any.pkg.tar.zst" --files-from /dev/null
-EOF
-    chmod +x "$sbv_ws/bin/makepkg"
-    stub_sudo "$sbv_ws"
-    stub_pacman "$sbv_ws"
-
-    run_case "$sbv_ws" p1
-    expect_success 'skip-built version: initial build'
-    assert_makepkg_count "$sbv_ws" 1 'skip-built version: initial build'
     sed -i 's/^pkgver=1\.0\.0$/pkgver=1.1.0/' "$sbv_ws/packages/p1/PKGBUILD"
     touch -d '2000-01-01 00:00:00 UTC' "$sbv_ws/packages/p1/PKGBUILD"
-    run_case "$sbv_ws" --skip-built p1
-    expect_success 'skip-built skips a version-drifted recipe with no change evidence'
-    assert_makepkg_count "$sbv_ws" 1 'skip-built version: version drift alone must not rebuild'
-    [[ $(rr_row p1 reason <<<"$FIXTURE_OUTPUT") == skip-built ]] ||
-        fail "skip-built version row is not 'succeeded … skip-built':"$'\n'"$FIXTURE_OUTPUT"
+    run_case "$sbv_ws" -B --skip-built -- p1
+    expect_claim p1 'skip-built skips a version-drifted recipe with no change evidence' skip-built
+    assert_makepkg_count "$sbv_ws" 0 'skip-built version: version drift alone must not rebuild'
 )
 
-# The run-#40 llvm shape: the recipe's COMMITTED pkgver trails the built set
-# (makepkg's pkgver() named the archives at a newer revision; a later pull
-# reset the in-tree record and churned its mtime). The claim must survive the
-# drift: complete set at any version + no commit newer than the set = skip —
-# and with -i the CLAIMED set installs, not whatever the committed pkgver
-# names. Then a committed recipe change after the build must rebuild (the
-# gate's whole reason to exist).
 (
+    set -euo pipefail
+    # The run-#40 llvm shape: the recipe's COMMITTED pkgver trails the built
+    # set (makepkg's pkgver() named the archives at a newer revision; a later
+    # pull reset the in-tree record and churned its mtime). The claim must
+    # survive the drift — and with -S the CLAIMED set installs, not whatever
+    # the committed pkgver names. Then a committed recipe change after the
+    # build must rebuild (the gate's whole reason to exist).
     sbg_dir=$fixture/skip-built-version-drift
     sbg_ws=$sbg_dir/workspace
-    make_workspace "$sbg_ws" 1 2 low
-    make_install_conf "$sbg_ws/pacman.conf"
+    make_workspace_common "$sbg_ws"
     add_package "$sbg_ws" p1 "$gsa_meta_any"
-    cat >"$sbg_ws/bin/makepkg" <<'EOF'
-#!/usr/bin/env bash
-set -eu
-id=$(basename "$PWD")
-printf '%s\n' "$id" >>"${GSA_FAKE_MAKEPKG_COUNT:?}"
-tar --zstd -cf "$PWD/$id-1.0.0-1-any.pkg.tar.zst" --files-from /dev/null
-EOF
-    chmod +x "$sbg_ws/bin/makepkg"
-    stub_sudo "$sbg_ws"
-    stub_pacman "$sbg_ws"
     ws_git_init "$sbg_ws" # commit 2020 ≪ the archive written below
-
-    run_case "$sbg_ws" p1
-    expect_success 'skip-built drift: initial build'
-    assert_makepkg_count "$sbg_ws" 1 'skip-built drift: initial build'
-    # The built set drifts past the committed record; the pull that reset the
-    # record also churned the file's mtime.
-    mv "$sbg_ws/packages/p1/p1-1.0.0-1-any.pkg.tar.zst" \
-        "$sbg_ws/packages/p1/p1-1.1.0-1-any.pkg.tar.zst"
+    pkginfo_archive "$sbg_ws/packages/p1/p1-1.1.0-1-any.pkg.tar.zst" p1
+    stage_marker "$sbg_ws"
     touch -d '+1 day' "$sbg_ws/packages/p1/PKGBUILD"
-    run_case "$sbg_ws" --skip-built -i p1
-    expect_success 'skip-built drift: version-drifted set still skips'
-    assert_makepkg_count "$sbg_ws" 1 'skip-built drift: a complete drifted set must not rebuild'
-    [[ $(rr_row p1 reason <<<"$FIXTURE_OUTPUT") == skip-built ]] ||
-        fail "skip-built drift row is not 'succeeded … skip-built':"$'\n'"$FIXTURE_OUTPUT"
+    run_case "$sbg_ws" -S --skip-built --config "$sbg_ws/pacman.conf" -- p1
+    expect_claim p1 'skip-built drift: version-drifted set still skips' skip-built
+    assert_makepkg_count "$sbg_ws" 0 'skip-built drift: a complete drifted set must not rebuild'
     grep -- 'pacman -U' "$sbg_ws/pacman.log" | grep -Fq 'p1-1.1.0-1-any.pkg.tar.zst' ||
-        fail 'skip-built drift: -i did not install the CLAIMED drifted archive'
+        fail 'skip-built drift: -S did not install the CLAIMED drifted archive'
 
     # A real recipe change is a COMMIT, and it postdates the build: rebuild.
     printf '# recipe change after the build\n' >>"$sbg_ws/packages/p1/PKGBUILD"
     ws_git_commit "$sbg_ws" '@4102444800 +0000' 'recipe change after the build'
-    run_case "$sbg_ws" --skip-built p1
-    expect_success 'skip-built drift: committed recipe change rebuilds'
-    assert_makepkg_count "$sbg_ws" 2 'skip-built drift: a commit newer than the set must rebuild'
+    run_case "$sbg_ws" -B --skip-built -- p1
+    expect_built p1 'skip-built drift: committed recipe change rebuilds'
+    assert_makepkg_count "$sbg_ws" 1 'skip-built drift: a commit newer than the set must rebuild'
 )
 
-# The no-git fallback: without commit metadata the file's mtime is the only
-# change evidence left, and a real edit moves it — conservative direction.
 (
+    set -euo pipefail
+    # The no-git fallback: without commit metadata the file's mtime is the
+    # only change evidence left, and a real edit moves it — conservative
+    # direction.
     sbf_dir=$fixture/skip-built-mtime-fallback
     sbf_ws=$sbf_dir/workspace
-    make_workspace "$sbf_ws" 1 2 low
-    make_install_conf "$sbf_ws/pacman.conf"
+    make_workspace_common "$sbf_ws"
     add_package "$sbf_ws" p1 "$gsa_meta_any"
+    pkginfo_archive "$sbf_ws/packages/p1/p1-1.0.0-1-any.pkg.tar.zst" p1
+    stage_marker "$sbf_ws"
     touch -d '2000-01-01 00:00:00 UTC' "$sbf_ws/packages/p1/PKGBUILD"
-    cat >"$sbf_ws/bin/makepkg" <<'EOF'
-#!/usr/bin/env bash
-set -eu
-id=$(basename "$PWD")
-printf '%s\n' "$id" >>"${GSA_FAKE_MAKEPKG_COUNT:?}"
-tar --zstd -cf "$PWD/$id-1.0.0-1-any.pkg.tar.zst" --files-from /dev/null
-EOF
-    chmod +x "$sbf_ws/bin/makepkg"
-    stub_sudo "$sbf_ws"
-    stub_pacman "$sbf_ws"
-
-    run_case "$sbf_ws" p1
-    expect_success 'skip-built fallback: initial build'
-    assert_makepkg_count "$sbf_ws" 1 'skip-built fallback: initial build'
     printf '# real edit\n' >>"$sbf_ws/packages/p1/PKGBUILD"
-    run_case "$sbf_ws" --skip-built p1
-    expect_success 'skip-built fallback: mtime evidence rebuilds'
-    assert_makepkg_count "$sbf_ws" 2 'skip-built fallback: without git, a newer PKGBUILD must rebuild'
+    run_case "$sbf_ws" -B --skip-built -- p1
+    expect_built p1 'skip-built fallback: mtime evidence rebuilds'
+    assert_makepkg_count "$sbf_ws" 1 'skip-built fallback: without git, a newer PKGBUILD must rebuild'
 )
 
-# The claim is the COMPLETE current-version set: a split recipe missing a
-# sibling output must rebuild under --skip-built too (same anomaly shape as
-# the R-F2 section, same named diagnostic).
 (
+    set -euo pipefail
+    # The claim is the COMPLETE built set: a split recipe missing a sibling
+    # output must rebuild under --skip-built too (same anomaly shape as the
+    # completeness section).
     sbi_dir=$fixture/skip-built-incomplete
     sbi_ws=$sbi_dir/workspace
-    make_workspace "$sbi_ws" 1 2 low
-    make_install_conf "$sbi_ws/pacman.conf"
+    make_workspace_common "$sbi_ws"
     mkdir -p "$sbi_ws/packages/p1"
     printf '%s\n' 'pkgname=(p1 p1-extra)' 'pkgver=1.0.0' 'pkgrel=1' 'arch=(any)' \
         >"$sbi_ws/packages/p1/PKGBUILD"
     printf 'p1|packages/p1|git|\n' >>"$sbi_ws/config/topology.conf"
     touch -d '2000-01-01 00:00:00 UTC' "$sbi_ws/packages/p1/PKGBUILD"
-    cat >"$sbi_ws/bin/makepkg" <<'EOF'
-#!/usr/bin/env bash
-set -eu
-id=$(basename "$PWD")
-printf '%s\n' "$id" >>"${GSA_FAKE_MAKEPKG_COUNT:?}"
-tar --zstd -cf "$PWD/p1-1.0.0-1-any.pkg.tar.zst" --files-from /dev/null
-tar --zstd -cf "$PWD/p1-extra-1.0.0-1-any.pkg.tar.zst" --files-from /dev/null
-EOF
-    chmod +x "$sbi_ws/bin/makepkg"
-    stub_sudo "$sbi_ws"
-    stub_pacman "$sbi_ws"
-
-    run_case "$sbi_ws" --skip-built p1
-    expect_success 'skip-built incomplete: initial build'
-    assert_makepkg_count "$sbi_ws" 1 'skip-built incomplete: initial build'
-    rm -f "$sbi_ws/packages/p1/p1-extra-1.0.0-1-any.pkg.tar.zst"
-    run_case "$sbi_ws" --skip-built p1
-    expect_success 'skip-built rebuilds a partial split set'
-    assert_makepkg_count "$sbi_ws" 2 'skip-built incomplete: a missing sibling output must rebuild'
-    diagnostics=$(diagnostics_with_logs "$sbi_ws")
-    grep -Fq 'is incomplete' <<<"$diagnostics" ||
-        fail 'skip-built incomplete: the incompleteness was not reported:'"$diagnostics"
-    grep -Fq 'missing: p1-extra' <<<"$diagnostics" ||
-        fail 'skip-built incomplete: the missing output was not named:'"$diagnostics"
+    pkginfo_archive "$sbi_ws/packages/p1/p1-1.0.0-1-any.pkg.tar.zst" p1
+    stage_marker "$sbi_ws"
+    run_case "$sbi_ws" -B --skip-built -- p1
+    expect_built p1 'skip-built rebuilds a partial split set'
+    assert_makepkg_count "$sbi_ws" 1 'skip-built incomplete: a missing sibling output must rebuild'
 )
 
-# "no ignore skip": --skip-built skips the BUILD, never the install — with -i
-# the skip path sends the existing archive through the same install path the
-# -s skip uses ('unchanged branch with install' above).
 (
+    set -euo pipefail
+    # "no ignore skip": --skip-built skips the BUILD, never the install —
+    # with -S the claim path installs the existing archive.
     sbin_dir=$fixture/skip-built-install
     sbin_ws=$sbin_dir/workspace
     init_git_remote "$sbin_dir/repository"
     make_vcs_workspace "$sbin_ws" "$sbin_dir/repository/remote.git" branch main
-    run_case "$sbin_ws" p1
-    expect_success 'skip-built install: initial build'
-    assert_makepkg_count "$sbin_ws" 1 'skip-built install: initial build'
-    run_case "$sbin_ws" --skip-built -i p1
-    expect_success 'skip-built install: -i run'
-    assert_makepkg_count "$sbin_ws" 1 'skip-built install: the skip path must not rebuild'
-    [[ $(rr_row p1 reason <<<"$FIXTURE_OUTPUT") == skip-built ]] ||
-        fail "skip-built -i row is not 'succeeded … skip-built':"$'\n'"$FIXTURE_OUTPUT"
+    stage_vcs_set "$sbin_ws" "upstream::git+file://$sbin_dir/repository/remote.git#branch=main" \
+        git "$(git_fixture -C "$sbin_dir/repository/work" rev-parse HEAD)"
+    run_case "$sbin_ws" -S --skip-built --config "$sbin_ws/pacman.conf" -- p1
+    expect_claim p1 'skip-built install: claim installs' skip-built
+    assert_makepkg_count "$sbin_ws" 0 'skip-built install: the claim path must not rebuild'
     grep -- 'pacman -U' "$sbin_ws/pacman.log" | grep -Fq 'p1-1.0.0-1-any.pkg.tar.zst' ||
-        fail 'skip-built -i did not install the skipped archive'
+        fail 'skip-built -S did not install the claimed archive'
 )
 
-# ─── --vcs-skip-tolerance N: the -s waive threshold as a CLI number ──────────
+# ─── --vcs-skip-tolerance N: the waive threshold as a CLI number ────────────
 # The flag beats GSA_VCS_SKIP_TOLERANCE (which stays the transport to lane
 # children), and bad values are usage errors, not silent fallbacks.
 (
+    set -euo pipefail
     tol2_dir=$fixture/vcs-tolerance-flag
     init_git_remote "$tol2_dir/repository"
     tol2_work=$tol2_dir/repository/work
-    tol2_ws=$tol2_dir/workspace
-    make_vcs_workspace "$tol2_ws" "$tol2_dir/repository/remote.git" branch main
-    run_case "$tol2_ws" p1
-    expect_success 'flag tolerance: initial build'
-    assert_makepkg_count "$tol2_ws" 1 'flag tolerance: initial build'
+    tol2_entry="upstream::git+file://$tol2_dir/repository/remote.git#branch=main"
+    tol2_rev=$(git_fixture -C "$tol2_work" rev-parse HEAD)
 
     # GSA_VCS_SKIP_TOLERANCE=2 would REBUILD a two-commit move (the boundary
     # is AT 2 — pinned above), so a skip here can only come from the flag's 3,
     # and the waiver line must name the flag's value.
+    make_workspace_common "$tol2_dir/ws-waive"
+    add_package "$tol2_dir/ws-waive" p1 "$gsa_meta_any"$'\n'"source=(\"$tol2_entry\")"$'\n'"sha256sums=('SKIP')"
+    stage_vcs_set "$tol2_dir/ws-waive" "$tol2_entry" git "$tol2_rev"
     advance_main "$tol2_work" 'flag tolerance noise' 2
-    GSA_VCS_SKIP_TOLERANCE=2 run_case "$tol2_ws" -s --vcs-skip-tolerance 3 p1
-    expect_success 'flag tolerance 3 waives a two-commit move'
-    assert_makepkg_count "$tol2_ws" 1 'flag tolerance: a two-commit move must stay skipped under tolerance 3'
-    [[ $(rr_row p1 reason <<<"$FIXTURE_OUTPUT") == freshness-waived ]] ||
-        fail "flag tolerance row is not 'succeeded … freshness-waived':"$'\n'"$FIXTURE_OUTPUT"
-    tol2_diagnostics=$(diagnostics_with_logs "$tol2_ws")
+    GSA_VCS_SKIP_TOLERANCE=2 run_case "$tol2_dir/ws-waive" -B --skip --vcs-skip-tolerance 3 -- p1
+    expect_claim p1 'flag tolerance 3 waives a two-commit move' freshness-waived
+    assert_makepkg_count "$tol2_dir/ws-waive" 0 'flag tolerance: a two-commit move must stay skipped under tolerance 3'
     grep -Fq 'upstream moved 2 commit(s) < tolerance 3 — treating upstream as current' \
-        <<<"$tol2_diagnostics" ||
-        fail 'the waiver does not name the FLAG tolerance 3 (the env value must lose):'$'\n'"$tol2_diagnostics"
+        <<<"$FIXTURE_OUTPUT" ||
+        fail 'the waiver does not name the FLAG tolerance 3 (the env value must lose):'$'\n'"$FIXTURE_OUTPUT"
 
-    # Five commits from the recorded baseline (the skip above kept it):
-    # at-or-past 3 rebuilds.
-    advance_main "$tol2_work" 'flag tolerance boundary' 3
-    GSA_VCS_SKIP_TOLERANCE=2 run_case "$tol2_ws" -s --vcs-skip-tolerance 3 p1
-    expect_success 'flag tolerance 3 rebuilds at five commits'
-    assert_makepkg_count "$tol2_ws" 2 'flag tolerance: a five-commit move must rebuild under tolerance 3'
+    # Five commits from THIS case's recorded baseline (the shared remote
+    # already moved for the case above): at-or-past 3 rebuilds.
+    make_workspace_common "$tol2_dir/ws-boundary"
+    add_package "$tol2_dir/ws-boundary" p1 "$gsa_meta_any"$'\n'"source=(\"$tol2_entry\")"$'\n'"sha256sums=('SKIP')"
+    stage_vcs_set "$tol2_dir/ws-boundary" "$tol2_entry" git \
+        "$(git_fixture -C "$tol2_work" rev-parse HEAD)"
+    advance_main "$tol2_work" 'flag tolerance boundary' 5
+    GSA_VCS_SKIP_TOLERANCE=2 run_case "$tol2_dir/ws-boundary" -B --skip --vcs-skip-tolerance 3 -- p1
+    expect_built p1 'flag tolerance 3 rebuilds at five commits'
+    assert_makepkg_count "$tol2_dir/ws-boundary" 1 'flag tolerance: a five-commit move must rebuild under tolerance 3'
 
     # Invalid values are a loud usage error naming the flag — rc AND text —
     # never a silent fallback like the env var's warning.
+    make_workspace_common "$tol2_dir/ws-usage"
+    add_package "$tol2_dir/ws-usage" p1 "$gsa_meta_any"
     for bad in 0 -1 x; do
-        run_case "$tol2_ws" --vcs-skip-tolerance "$bad" p1
+        run_case "$tol2_dir/ws-usage" -B --vcs-skip-tolerance "$bad" -- p1
         ((FIXTURE_RC != 0)) ||
             fail "flag tolerance: --vcs-skip-tolerance $bad exited 0 (a usage error must be non-zero)"
         grep -Fq -- '--vcs-skip-tolerance' <<<"$FIXTURE_OUTPUT" ||
             fail "flag tolerance: the --vcs-skip-tolerance $bad error does not name the flag:"$'\n'"$FIXTURE_OUTPUT"
     done
-    assert_makepkg_count "$tol2_ws" 2 'flag tolerance: usage errors must not build'
+    assert_makepkg_count "$tol2_dir/ws-usage" 0 'flag tolerance: usage errors must not build'
 )
 
-# -s --skip-built together: --skip-built wins (freshness analysis off) — the
-# claim is the built set, in BOTH flag orders, and the zero-network promise is
-# MEASURED: the ls-remote counting stub must record zero attempts.
+# ─── --skip and --skip-built are DIFFERENT claims and cannot combine ───────
+# (the fish-era "--skip-built wins over -s" spelling retires: the engine
+# refuses the combination loudly, which is the honest reading of "one skip
+# MODE per run"; the zero-network promise is kept by --skip-built alone and
+# MEASURED — the ls-remote counting stub must record zero attempts.)
 (
+    set -euo pipefail
     both_dir=$fixture/skip-and-skip-built
     both_ws=$both_dir/workspace
     init_git_remote "$both_dir/repository"
     make_vcs_workspace "$both_ws" "$both_dir/repository/remote.git" branch main
     install_lsremote_stub "$both_ws"
-    run_case "$both_ws" p1
-    expect_success 'combined modes: initial build'
-    assert_makepkg_count "$both_ws" 1 'combined modes: initial build'
-
-    # State that would make plain -s both probe and rebuild: the ref moved far
-    # past the tolerance.
+    both_entry="upstream::git+file://$both_dir/repository/remote.git#branch=main"
+    both_rev=$(git_fixture -C "$both_dir/repository/work" rev-parse HEAD)
+    stage_vcs_set "$both_ws" "$both_entry" git "$both_rev"
+    # State that would make plain --skip both probe and rebuild: the ref moved
+    # far past the tolerance.
     advance_main "$both_dir/repository/work" 'combined-mode churn' 30
+
+    run_case "$both_ws" -B --skip --skip-built -- p1
+    ((FIXTURE_RC != 0)) ||
+        fail 'combining --skip with --skip-built must be a usage error, not a silent winner'
+    grep -Fq -- '--skip' <<<"$FIXTURE_OUTPUT" &&
+        grep -Fq -- '--skip-built' <<<"$FIXTURE_OUTPUT" ||
+        fail "the combination error does not name both claims:"$'\n'"$FIXTURE_OUTPUT"
+    assert_makepkg_count "$both_ws" 0 'the refused combination must not build'
+
     rm -f "$both_ws/lsremote.count"
-    run_case "$both_ws" -s --skip-built p1
-    expect_success '-s --skip-built skips the built set'
-    assert_makepkg_count "$both_ws" 1 'combined modes: --skip-built must win over -s'
-    [[ $(rr_row p1 reason <<<"$FIXTURE_OUTPUT") == skip-built ]] ||
-        fail "combined-mode row is not 'succeeded … skip-built':"$'\n'"$FIXTURE_OUTPUT"
+    run_case "$both_ws" -B --skip-built -- p1
+    expect_claim p1 '--skip-built claims the built set with zero probes' skip-built
+    assert_makepkg_count "$both_ws" 0 '--skip-built must win over a moved ref'
     attempts=$(lsremote_attempts "$both_ws")
     ((attempts == 0)) ||
-        fail "combined modes: --skip-built probed upstream $attempts time(s) — it must make zero VCS probes"
-    run_case "$both_ws" --skip-built -s p1
-    expect_success '--skip-built -s skips the built set'
-    assert_makepkg_count "$both_ws" 1 'combined modes: the reversed flag order must skip too'
+        fail "--skip-built probed upstream $attempts time(s) — it must make zero VCS probes"
 
-    # Control: plain -s over the same moved ref probes and rebuilds — the
+    # Control: plain --skip over the same moved ref probes and rebuilds — the
     # skip and zero-probe claims belong to --skip-built, not to the state.
-    rm -f "$both_ws/lsremote.count"
-    run_case "$both_ws" -s p1
-    expect_success 'plain -s over the moved ref rebuilds'
-    assert_makepkg_count "$both_ws" 2 'combined modes control: plain -s must rebuild over a 30-commit move'
-    attempts=$(lsremote_attempts "$both_ws")
+    # Its own staged workspace: a claim never feeds the control's evidence.
+    ctrl_ws=$both_dir/ws-control
+    make_workspace_common "$ctrl_ws"
+    add_package "$ctrl_ws" p1 "$gsa_meta_any"$'\n'"source=(\"$both_entry\")"$'\n'"sha256sums=('SKIP')"
+    install_lsremote_stub "$ctrl_ws"
+    stage_vcs_set "$ctrl_ws" "$both_entry" git "$both_rev"
+    rm -f "$ctrl_ws/lsremote.count"
+    run_case "$ctrl_ws" -B --skip -- p1
+    expect_built p1 'plain --skip over the moved ref rebuilds'
+    assert_makepkg_count "$ctrl_ws" 1 'plain --skip must rebuild over a 30-commit move'
+    attempts=$(lsremote_attempts "$ctrl_ws")
     ((attempts >= 1)) ||
-        fail 'combined modes control: plain -s probed upstream zero times — the zero-probe oracle is vacuous'
+        fail 'plain --skip probed upstream zero times — the zero-probe oracle is vacuous'
 )
 
 # ─── Pending ABI-repair marker: a skip must never strand a repair ──────────
 # 2026-10-07 run #48: the layer-3 ABI gate accepts a provider's soname move
 # on the strength of the run rebuilding the consumer later (in-run repair),
 # and the executor records a forced-rebuild marker under
-# $GSA_STATE_DIR/abi-repair/. If -s then claims the consumer's fresh archive
-# as current, the repair never happens and the installed consumer stays
-# broken forever — so a pending marker outranks EVERY freshness claim below
-# it (both skip modes) and forces the build; only the consumer's own INSTALL
-# consumes the marker, so runs without -i keep it pending.
+# $GSA_STATE_DIR/abi-repair/. If a skip then claims the consumer's fresh
+# archive as current, the repair never happens and the installed consumer
+# stays broken forever — so a pending marker outranks EVERY freshness claim
+# below it (both skip modes) and forces the build; only the consumer's own
+# INSTALL consumes the marker, so runs without -S keep it pending.
 (
     set -euo pipefail
     marker_dir=$fixture/abi-repair-marker
     init_git_remote "$marker_dir/repository"
-    marker_ws=$marker_dir/workspace
-    make_vcs_workspace "$marker_ws" "$marker_dir/repository/remote.git" branch main
-    # Real recipe dirs carry a committed .SRCINFO — it is the builder's ONE
-    # name surface (_pkgname_index), and consumption maps the installed
-    # archive's names back to the marker key through it. Fixture synthesis
-    # (add_package) writes only a PKGBUILD, so model the real shape here.
-    printf 'pkgbase = p1\npkgname = p1\n' >"$marker_ws/packages/p1/.SRCINFO"
+    marker_entry="upstream::git+file://$marker_dir/repository/remote.git#branch=main"
+    marker_rev=$(git_fixture -C "$marker_dir/repository/work" rev-parse HEAD)
 
-    run_case "$marker_ws" p1
-    expect_success 'marker: initial build'
-    assert_makepkg_count "$marker_ws" 1 'marker: initial build'
+    mk_marker_ws() { # $1 = workspace suffix
+        local ws=$marker_dir/ws-$1
+        make_workspace_common "$ws"
+        add_package "$ws" p1 "$gsa_meta_any"$'\n'"source=(\"$marker_entry\")"$'\n'"sha256sums=('SKIP')"
+        stage_vcs_set "$ws" "$marker_entry" git "$marker_rev"
+        printf '%s\n' "$ws"
+    }
 
-    run_case "$marker_ws" -s p1
-    expect_success 'marker: clean skip before any marker'
-    assert_makepkg_count "$marker_ws" 1 'marker: clean skip before any marker'
+    # a pending repair forces a rebuild under --skip (and says why).
+    ws=$(mk_marker_ws forces)
+    mkdir -p "$ws/state/abi-repair"
+    printf 'provider=libs\ndate=fixture\n' >"$ws/state/abi-repair/p1"
+    run_case "$ws" -B --skip -- p1
+    expect_built p1 'marker: a pending repair forces a rebuild under --skip'
+    assert_makepkg_count "$ws" 1 'marker: a pending repair forces a rebuild under --skip'
+    grep -Fq 'pending ABI repair' <<<"$FIXTURE_OUTPUT" ||
+        fail 'marker: the forced rebuild must say why (pending ABI repair):'$'\n'"$FIXTURE_OUTPUT"
+    [[ -f $ws/state/abi-repair/p1 ]] ||
+        fail 'marker: a build without -S must keep the marker pending (no install = no repair)'
 
-    mkdir -p "$marker_ws/state/abi-repair"
-    printf 'provider=libs\ndate=fixture\n' >"$marker_ws/state/abi-repair/p1"
+    # …and under --skip-built.
+    ws=$(mk_marker_ws skip-built)
+    mkdir -p "$ws/state/abi-repair"
+    printf 'provider=libs\ndate=fixture\n' >"$ws/state/abi-repair/p1"
+    run_case "$ws" -B --skip-built -- p1
+    expect_built p1 'marker: a pending repair forces a rebuild under --skip-built too'
+    assert_makepkg_count "$ws" 1 'marker: a pending repair forces a rebuild under --skip-built too'
+    [[ -f $ws/state/abi-repair/p1 ]] ||
+        fail 'marker: --skip-built without -S must keep the marker pending too'
 
-    run_case "$marker_ws" -s p1
-    expect_success 'marker: a pending repair forces a rebuild under -s'
-    assert_makepkg_count "$marker_ws" 2 'marker: a pending repair forces a rebuild under -s'
-    marker_diag=$(printf '%s\n' "$FIXTURE_OUTPUT"
-        find "$marker_ws/state/logs" -maxdepth 1 -type f -exec cat {} + 2>/dev/null || true)
-    grep -Fq 'pending ABI repair' <<<"$marker_diag" ||
-        fail 'marker: the forced rebuild must say why (pending ABI repair):'$'\n'"$marker_diag"
-    [[ -f $marker_ws/state/abi-repair/p1 ]] ||
-        fail 'marker: a build without -i must keep the marker pending (no install = no repair)'
-
-    run_case "$marker_ws" --skip-built p1
-    expect_success 'marker: a pending repair forces a rebuild under --skip-built too'
-    assert_makepkg_count "$marker_ws" 3 'marker: a pending repair forces a rebuild under --skip-built too'
-    [[ -f $marker_ws/state/abi-repair/p1 ]] ||
-        fail 'marker: --skip-built without -i must keep the marker pending too'
-
-    run_case "$marker_ws" -s -i p1
-    expect_success 'marker: -s -i rebuilds and installs the repair'
-    assert_makepkg_count "$marker_ws" 4 'marker: -s -i must rebuild a pending repair, never skip it'
-    grep -q -- 'pacman -U' "$marker_ws/pacman.log" ||
-        fail 'marker: -s -i did not install the repaired archive'
-    [[ ! -e $marker_ws/state/abi-repair/p1 ]] ||
+    # -S rebuilds and installs the repair; the install consumes the marker;
+    # a normal claim resumes afterwards.
+    ws=$(mk_marker_ws installs)
+    mkdir -p "$ws/state/abi-repair"
+    printf 'provider=libs\ndate=fixture\n' >"$ws/state/abi-repair/p1"
+    run_case "$ws" -S --skip --config "$ws/pacman.conf" -- p1
+    expect_built p1 'marker: -S rebuilds and installs the repair'
+    assert_makepkg_count "$ws" 1 'marker: -S must rebuild a pending repair, never skip it'
+    grep -q -- 'pacman -U' "$ws/pacman.log" ||
+        fail 'marker: -S did not install the repaired archive'
+    [[ ! -e $ws/state/abi-repair/p1 ]] ||
         fail 'marker: the consumer install must consume the marker'
-
-    run_case "$marker_ws" -s p1
-    expect_success 'marker: normal skip resumes after consumption'
-    assert_makepkg_count "$marker_ws" 4 'marker: normal skip resumes after consumption'
+    run_case "$ws" -B --skip -- p1
+    expect_claim p1 'marker: normal skip resumes after consumption' ok
+    assert_makepkg_count "$ws" 1 'marker: normal skip resumes after consumption'
 )
+
+# ─── Claim durability: a claim must leave its evidence in place ────────────
+# The whole point of a skip RESUME is that the NEXT run keeps skipping: the
+# claimed archive and its VCS baseline are the evidence the claim rests on,
+# and a claim runs NO lane that could replace them. (The fish fixture pinned
+# this as consecutive `-s` runs on one workspace; the native engine gained
+# state the fish builder never had — the hash-bound binpkg index and its
+# retention sweep — so this is the one place the fixture keeps a multi-run
+# timeline on purpose.)
+(
+    set -euo pipefail
+    durable_dir=$fixture/claim-durability
+    init_git_remote "$durable_dir/repository"
+    durable_remote=$durable_dir/repository/remote.git
+    make_vcs_workspace "$durable_dir/workspace" "$durable_remote" branch main
+
+    run_case "$durable_dir/workspace" -B -- p1
+    expect_built p1 'durability: initial build'
+    assert_makepkg_count "$durable_dir/workspace" 1 'durability: initial build'
+
+    run_case "$durable_dir/workspace" -B --skip -- p1
+    expect_claim p1 'durability: first claim' ok
+    assert_makepkg_count "$durable_dir/workspace" 1 'durability: first claim'
+    archive=$durable_dir/workspace/packages/p1/p1-1.0.0-1-any.pkg.tar.zst
+    [[ -f $archive && -f $archive.gsa-vcs-revisions ]] ||
+        fail 'durability: the claim consumed its own evidence (archive or VCS baseline gone)'
+
+    run_case "$durable_dir/workspace" -S --skip --config "$durable_dir/workspace/pacman.conf" -- p1
+    expect_claim p1 'durability: consecutive claim still claims and installs' ok
+    assert_makepkg_count "$durable_dir/workspace" 1 'durability: a consecutive claim must not rebuild'
+    grep -- 'pacman -U' "$durable_dir/workspace/pacman.log" | grep -Fq 'p1-1.0.0-1-any.pkg.tar.zst' ||
+        fail 'durability: the consecutive claim did not install the surviving archive'
+)
+
 printf 'upstream-aware skip fixture: PASS\n'

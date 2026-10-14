@@ -3,32 +3,69 @@ set -uo pipefail
 
 # makepkg's `-s` syncdeps runs pacman through $PACMAN OUTSIDE the builder's
 # flock (run_pacman in /usr/bin/makepkg; six dep-pacmans raced the builder's
-# `pacman -U` at 19:33:58 on 2026-09-23). build-all.fish answers with a
-# generated $LOG_DIR/.pacman-shim (flock -x -w 300 <absolute mutex>
-# /usr/bin/pacman "$@") exported as PACMAN into every lane, so dep installs
-# serialise on the same mutex as `pacman -U`.
+# `pacman -U` at 19:33:58 on 2026-09-23). The engine answers with a generated
+# PACMAN shim exported into every lane, so dep installs serialise on the same
+# mutex as `pacman -U`.
 #
-# Pins:
-#   1. an install-mode run generates the shim at run start: mode 0755,
-#      contains 'flock -x -w 300', the absolute mutex path and
-#      /usr/bin/pacman, and the stub makepkg observed PACMAN = the shim;
-#   2. the install itself went through run_pacman_locked (the builder mutex
-#      line in the package log + sudo saw `pacman -U`);
+# Pins (flip notes below):
+#   1. an install-mode run generates the shim at run start: mode 0755, a
+#      flock line naming the absolute mutex path and /usr/bin/pacman, and
+#      `"$@"` passthrough; the stub makepkg observed PACMAN = the shim;
+#   2. the install itself serialises on that mutex (a live holder on the
+#      mutex delays the transaction until release) and sudo saw `pacman -U`;
 #   3. invoking the shim directly passes "$@" through to pacman verbatim
-#      (stub flock redirects the baked /usr/bin/pacman to a recorder).
+#      (stub flock redirects the baked /usr/bin/pacman to a recorder);
 #   4. (R-F17, 2026-10-04) read-only queries (-T/-Q) run UNLOCKED while a
 #      transaction (-S) takes the mutex — the old shim flocked every call,
 #      so a healthy queue behind a long transaction timed out a dep probe;
-#   5. a flock timeout is named (`builder pacman mutex timed out`) and
-#      propagates as rc 75;
-#   6. an install that hits the mutex wait lands in the run record as a
-#      `mutex-timeout` row instead of a generic build-failed.
+#   5. a flock failure is propagated verbatim (75 stays 75, pacman never
+#      runs) and a rc-1 failure is NAMED by the shim;
+#   6. (FISH-DRIVEN, see DEVIATION 2) an install that hits the mutex wait
+#      lands in the run record as a `mutex-timeout` row instead of a generic
+#      build-failed.
+#
+# Flip notes (docs/gsa-fixture-migration.md row `tests/pacman-mutex-shim.sh`):
+# argv `fish build-all.fish --allow-broken-rustc --no-deps --no-sync --lanes 1
+# --jobs 1 --install p1` -> `gsa -S --leaf --lanes 1 --jobs 1 p1` (§B.4/§B.8);
+# the IgnorePkg registration target is `--config <conf>` (gap G6). The
+# shim's fish-era spellings re-pin to the engine's (crates/gsa-build/src/shim.rs):
+# `$STATE_DIR/logs/.pacman-shim` -> `$STATE_DIR/locks/pacman-shim` (§J.1 puts
+# the mutex and its shim under `locks/`), `flock -x -w 300 <mutex>
+# /usr/bin/pacman "$@"` -> `flock -x -w 600 <mutex> sudo -n "$P" "$@"` (the
+# shim itself runs transactions through `sudo -n`, §K.3), and the mutex file
+# `.pacman-install.lock` -> `locks/pacman-mutex`. The `waiting for builder
+# pacman mutex` package-log prose (:153-154) retires as rendering (§L.3):
+# serialisation re-pins as the live holder probe in section 2, and the
+# `run_pacman_locked` source shape is R-1 (no engine source to grep).
+# DEVIATION 1 (section 5 naming): the fish shim named a flock timeout
+# (`builder pacman mutex timed out`) and mapped it to rc 75. The engine shim
+# propagates flock's exit status VERBATIM and names only rc-1 failures
+# (`gsa pacman shim: transaction failed (sudo -n never prompts)`) — there is
+# no timeout-specific wording and no 75 mapping to pin. The kept behaviour
+# (a shim failure propagates and runs no pacman) re-pins against the engine's
+# own message; the fish wording's meaning rides the `mutex-timeout` reason of
+# the run-record row (section 6 / DEVIATION 2).
+# DEVIATION 2 (section 6, inventory cell "REWRITE: rr-format1 1 (:264 row
+# regex — reason `mutex-timeout`, gap G3)"): the `mutex-timeout` run-record
+# row has NO engine trigger at fixture scale — the transaction mutex wait is
+# a hard-coded 600 s poll (crates/gsa-install/src/exec.rs `acquire_mutex`,
+# `Duration::from_secs(600)`) with no knob or seam, and the shim path turns a
+# flock failure into an ordinary `build-failed` build outcome. The end-to-end
+# row pin stays fish-driven (the local-db-repair pattern), against the
+# still-shipped fish builder this fixture's workspace carries.
+# DEVIATION 3 (inventory argv cell `gsa -S --leaf --no-sync …`): `--no-sync`
+# is parse-and-refuse on the engine today (rc 2, deferred_flags disposition)
+# and its live wiring belongs to the concurrent sync stream; the scenario has
+# no version-sync tags and no VCS sources, so the run passes no sync flags
+# and nothing behavioural is lost.
 #
 # Lock isolation: the PATH-stub `pacman-conf` answers DBPath with a fixture
-# directory, so the host's real /var/lib/pacman/db.lck is never probed. No
+# directory, so the host's real /var/lib/pacman/db.lck is never probed. The
+# engine reads the installed DB through that answer (never the host's). No
 # GSA_* test knob is added — GSA_FAKE_* is consumed by the stubs only.
 
 source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/rr-v2.bash"
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-shim-fixture.XXXXXX")
 trap 'rm -rf -- "$fixture"' EXIT
 
@@ -37,10 +74,23 @@ fail() {
     exit 1
 }
 
+# ─── The engine under test: built into the fixture tree (scratch only).
+# GSA_TEST_GSA_BIN, when already set to an executable, is that engine (the
+# rr-v2.bash run_engine convention) and the scratch build is skipped. ──────
+if [ -z "${GSA_TEST_GSA_BIN:-}" ]; then
+    cargo build --offline --quiet --target-dir "$fixture/cargo" -p gsa-cli \
+        --manifest-path "$gsa_repo_root/Cargo.toml" ||
+        fail "cannot build the gsa binary for the fixture"
+    GSA_TEST_GSA_BIN="$fixture/cargo/debug/gsa"
+fi
+[ -x "$GSA_TEST_GSA_BIN" ] || fail "the engine under test is not executable: $GSA_TEST_GSA_BIN"
+export GSA_TEST_ENGINE=gsa
+export GSA_TEST_GSA_BIN
+
 make_workspace "$fixture" auto auto xhigh
 add_package "$fixture" p1 $'pkgver=1.0\npkgrel=1\narch=(x86_64)'
 # Dynamic IgnorePkg registration target — never the host's /etc/pacman.conf
-# (the battery must be non-mutating).
+# (the battery must be non-mutating). The engine takes it as `--config`.
 make_install_conf "$fixture/pacman.conf"
 
 cat >"$fixture/bin/makepkg" <<'EOF'
@@ -51,7 +101,18 @@ printf '%s\n' "${PACMAN:-}" >>"${GSA_FAKE_PACMAN_ENV_LOG:?fixture forgot GSA_FAK
 mkdir -p "${GSA_FAKE_MARKER_DIR:?}"
 touch "$GSA_FAKE_MARKER_DIR/$name"
 sleep "${GSA_FAKE_BUILD_SECONDS:-0.2}"
-touch "$PWD/$name-1.0-1-x86_64.pkg.tar.zst"
+# REAL archive (staged .PKGINFO tar): the engine's install discovery reads
+# each archive's own .PKGINFO, and an empty file refuses `empty-list`.
+stage="$PWD/.stage-$name"
+mkdir -p "$stage"
+{
+    printf 'pkgbase = %s\n' "$name"
+    printf 'pkgname = %s\n' "$name"
+    printf 'pkgver = 1.0-1\n'
+    printf 'arch = x86_64\n'
+} >"$stage/.PKGINFO"
+tar --zstd -cf "$PWD/$name-1.0-1-x86_64.pkg.tar.zst" -C "$stage" .PKGINFO
+rm -rf "$stage"
 exit 0
 EOF
 
@@ -67,8 +128,10 @@ EOF
 
 cat >"$fixture/bin/sudo" <<'EOF'
 #!/usr/bin/env bash
-# Password-free host stub: record the call, never touch a real database.
-printf '%s\n' "$*" >>"${GSA_FAKE_SUDO_LOG:?fixture forgot GSA_FAKE_SUDO_LOG}"
+# Password-free host stub: record the call (timestamp|argv — the timestamp
+# lets section 2 order the transaction against an external mutex holder),
+# never touch a real database.
+printf '%s|%s\n' "$(date +%s.%N)" "$*" >>"${GSA_FAKE_SUDO_LOG:?fixture forgot GSA_FAKE_SUDO_LOG}"
 exit 0
 EOF
 
@@ -90,9 +153,16 @@ fi
 if [[ -n ${GSA_FAKE_FLOCK_RC:-} ]]; then
     exit "$GSA_FAKE_FLOCK_RC"
 fi
-args=("$@")
-for i in "${!args[@]}"; do
-    [[ ${args[i]} == /usr/bin/pacman ]] && args[i]=$GSA_FAKE_STUB_PACMAN
+# The engine shim chains `sudo -n "$P" "$@"` under flock (the fish shim
+# called pacman directly): drop the shim's own sudo -n pair so the recorder
+# sees the pacman argv VERBATIM, and point the baked pacman at the recorder.
+args=()
+skip=0
+for a in "$@"; do
+    if ((skip)); then skip=0; continue; fi
+    if [[ $a == sudo ]]; then skip=1; continue; fi
+    [[ $a == /usr/bin/pacman ]] && a=$GSA_FAKE_STUB_PACMAN
+    args+=("$a")
 done
 exec /usr/bin/flock "${args[@]}"
 EOF
@@ -109,53 +179,69 @@ chmod +x "$fixture/bin/"*
 
 state="$fixture/state"
 mkdir -p "$state"
-run_rc=0
-run_output=$(
-    env PATH="$fixture/bin:$PATH" \
-        GSA_STATE_DIR="$state" \
-        _IGNOREPKG_CONF="$fixture/pacman.conf" \
-        GSA_FAKE_DB_PATH="$state/var/pacman" \
-        GSA_FAKE_MARKER_DIR="$state/built" \
-        GSA_FAKE_PACMAN_ENV_LOG="$state/pacman-env.log" \
-        GSA_FAKE_SUDO_LOG="$state/sudo.log" \
-        GSA_FAKE_BUILD_SECONDS=0.3 \
-        fish "$fixture/build-all.fish" \
-        --allow-broken-rustc --no-deps --no-sync \
-        --lanes 1 --jobs 1 --install p1 2>&1
-) || run_rc=$?
+export GSA_STATE_DIR="$state"
+export GSA_FAKE_DB_PATH="$state/var/pacman"
+export GSA_FAKE_MARKER_DIR="$state/built"
+export GSA_FAKE_PACMAN_ENV_LOG="$state/pacman-env.log"
+export GSA_FAKE_SUDO_LOG="$state/sudo.log"
+export GSA_FAKE_BUILD_SECONDS=1.0
+export PATH="$fixture/bin:$PATH"
+
+# Section 2's serialisation probe: hold the engine's transaction mutex from
+# outside and let go after a beat. The install must not reach pacman before
+# the release — the mutex is the one lock both the shim's dep-pacmans and the
+# engine's `pacman -U` serialise on (§K.3).
+mutex="$state/locks/pacman-mutex"
+release_marker="$fixture/holder-release"
+mkdir -p "$state/locks"
+(
+    flock -x -w 30 "$mutex" -c "sleep 2.0; date +%s.%N >'$release_marker'"
+) &
+holder=$!
+
+run_engine "$fixture" -S --leaf --config "$fixture/pacman.conf" --lanes 1 --jobs 1 p1
+run_output=$FIXTURE_OUTPUT
+run_rc=$FIXTURE_RC
+wait "$holder" 2>/dev/null
 
 if [[ $run_rc -ne 0 ]]; then
     fail "install-mode run failed (rc=$run_rc)" "$run_output"
 fi
-if ! grep -q 'All builds succeeded' <<<"$run_output"; then
-    fail "run did not report success:" "$run_output"
-fi
+rr2_body <<<"$run_output" >/dev/null ||
+    fail "no complete format: 2 run record:" "$run_output"
+[[ $(rr2_scalar outcome <<<"$run_output") == success ]] ||
+    fail "run record outcome is not success:" "$run_output"
 
 # 1. shim generated at run start: mode, mutex wiring, absolute paths.
-shim="$state/logs/.pacman-shim"
+shim="$state/locks/pacman-shim"
 [[ -e $shim ]] ||
     fail "run start did not generate $shim"
 [[ $(stat -c %a "$shim") == 755 ]] ||
     fail "shim mode is $(stat -c %a "$shim"), want 755"
-grep -q 'flock -x -w 300' "$shim" ||
-    fail "shim lacks 'flock -x -w 300': $(cat "$shim")"
-grep -qF "$state/logs/.pacman-install.lock" "$shim" ||
-    fail "shim lacks the absolute mutex path: $(cat "$shim")"
+grep -q 'flock -x -w 600' "$shim" ||
+    fail "shim lacks 'flock -x -w 600': $(cat "$shim")"
+grep -qF "$mutex" "$shim" ||
+    fail "shim lacks the absolute mutex path $mutex: $(cat "$shim")"
 grep -q '/usr/bin/pacman' "$shim" ||
     fail "shim lacks /usr/bin/pacman: $(cat "$shim")"
 grep -qF '"$@"' "$shim" ||
     fail "shim does not pass through \"\$@\": $(cat "$shim")"
+grep -q 'sudo -n' "$shim" ||
+    fail "shim transactions do not run through sudo -n (§K.3): $(cat "$shim")"
 
-# 2. the lane exported PACMAN to makepkg, and installs used the builder mutex.
+# 2. the lane exported PACMAN to makepkg, the install went through the one
+#    mutex (it waited for the external holder), and sudo saw `pacman -U`.
 grep -qxF "$shim" "$state/pacman-env.log" ||
     fail "stub makepkg did not see PACMAN=$shim:" "$(cat "$state/pacman-env.log")"
-[[ -f $state/logs/p1.log ]] ||
-    fail "package log missing"
-grep -q 'waiting for builder pacman mutex' "$state/logs/p1.log" ||
-    fail "install did not go through run_pacman_locked (no mutex line)" \
-        "$(cat "$state/logs/p1.log")"
 grep -q -- '-n pacman -U' "$state/sudo.log" ||
     fail "sudo never saw the lane install:" "$(cat "$state/sudo.log" 2>/dev/null)"
+[[ -s $release_marker ]] ||
+    fail "the mutex holder never released"
+txn_ts=$(grep -- '-n pacman -U' "$state/sudo.log" | head -1 | cut -d'|' -f1)
+rel_ts=$(cat "$release_marker")
+awk -v txn="$txn_ts" -v rel="$rel_ts" 'BEGIN { exit !(txn + 0 >= rel + 0) }' ||
+    fail "the install transaction ran at $txn_ts, before the mutex holder released at $rel_ts:" \
+        "$(cat "$state/sudo.log")"
 
 # 3. direct invocation: "$@" reaches the (stubbed) pacman verbatim.
 stub_log="$fixture/stub-pacman.log"
@@ -204,8 +290,11 @@ shim_call "$qlog" -S --noconfirm pkgname
 [[ $(cat "$qlog") == '3|-S --noconfirm pkgname' ]] ||
     fail "transaction args not passed verbatim: '$(cat "$qlog")'"
 
-# 5. a mutex timeout is named by the shim and propagated as rc 75 (R-F17).
-echo "section 5: flock timeout is named and propagated"
+# 5. a flock failure is propagated verbatim and runs no pacman; a rc-1
+#    failure is named by the shim (DEVIATION 1: the engine names rc 1 only,
+#    the fish `builder pacman mutex timed out`/75 mapping has no engine
+#    counterpart).
+echo "section 5: flock failures propagate and are named (rc 1)"
 : >"$qlog"
 rc=0
 env PATH="$fixture/bin:$PATH" \
@@ -214,17 +303,29 @@ env PATH="$fixture/bin:$PATH" \
     GSA_FAKE_FLOCK_RC=75 \
     "$qshim" -S --noconfirm pkgname >"$fixture/timeout.out" 2>&1 || rc=$?
 [[ $rc -eq 75 ]] ||
-    fail "shim timeout rc=$rc, want 75" "$(cat "$fixture/timeout.out")"
-grep -q 'builder pacman mutex timed out' "$fixture/timeout.out" ||
-    fail "shim does not name the mutex timeout:" "$(cat "$fixture/timeout.out")"
+    fail "shim timeout rc=$rc, want 75 verbatim" "$(cat "$fixture/timeout.out")"
 [[ ! -s $qlog ]] ||
     fail "timeout path still ran pacman: '$(cat "$qlog")'"
+: >"$qlog"
+rc=0
+env PATH="$fixture/bin:$PATH" \
+    GSA_FAKE_STUB_PACMAN="$fixture/bin/record-pacman" \
+    GSA_FAKE_STUB_PACMAN_LOG="$qlog" \
+    GSA_FAKE_FLOCK_RC=1 \
+    "$qshim" -S --noconfirm pkgname >"$fixture/fail.out" 2>&1 || rc=$?
+[[ $rc -eq 1 ]] ||
+    fail "shim failure rc=$rc, want 1" "$(cat "$fixture/fail.out")"
+grep -q 'gsa pacman shim: transaction failed' "$fixture/fail.out" ||
+    fail "shim does not name the rc-1 transaction failure:" "$(cat "$fixture/fail.out")"
+[[ ! -s $qlog ]] ||
+    fail "failure path still ran pacman: '$(cat "$qlog")'"
 
-# 6. end-to-end (R-F17): an install that hits the builder mutex wait lands
-#    in the run record as a `mutex-timeout` row — not a generic build-failed
-#    — the named line reaches the package log, and NO lock/db recovery probe
-#    runs on rc 75 (the db state seeded mid-run must stay unreported).
-echo "section 6: mutex timeout lands as a mutex-timeout run-record row"
+# 6. (FISH-DRIVEN — DEVIATION 2: no engine trigger for `mutex-timeout`) an
+#    install that hits the builder mutex wait lands in the run record as a
+#    `mutex-timeout` row — not a generic build-failed — the named line
+#    reaches the package log, and NO lock/db recovery probe runs on rc 75
+#    (the db state seeded mid-run must stay unreported).
+echo "section 6: mutex timeout lands as a mutex-timeout run-record row (fish engine)"
 state2="$fixture/state-timeout"
 mkdir -p "$state2"
 run_rc2=0

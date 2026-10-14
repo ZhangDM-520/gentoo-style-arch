@@ -3,16 +3,17 @@ set -euo pipefail
 
 # Recipe-contract lints: provides versioning and the purged-tools denylist (the
 # static IgnorePkg closure lint was retired 2026-10-05 in favour of dynamic
-# install-time registration). One implementation per rule lives in
-# build-all.fish (audit_lint_provides / audit_lint_purged);
-# `fish build-all.fish --audit` renders them in its report and the hidden
-# `--audit-lint <name>` seam runs one of them — the seam is the interface, and
-# this fixture is its gating walker (red/green per rule, then the real-repo
-# gates).
+# install-time registration). One implementation per rule lives in the
+# engine's QA registry (crates/gsa-qa/src/checks.rs `provides-versioning` /
+# `purged-tools` — the ports of build-all.fish audit_lint_provides /
+# audit_lint_purged); `gsa -Ma` renders them in its report and the hidden
+# `gsa --qa-check <name>` seam (contract §D.1) runs one of them — the seam is
+# the interface, and this fixture is its gating walker (red/green per rule,
+# then the real-repo gates).
 #
 # Enforcement mapping (the settled two-tier rule):
-#   deterministic + must-gate  provides-versioning, purged-tools → --audit
-#                              lints, GATED here (fixture rc, never --audit's);
+#   deterministic + must-gate  provides-versioning, purged-tools → QA lints,
+#                              GATED here (fixture rc, never -Ma's);
 #   heavy/ELF                  soname-presence → tools/provides-audit.sh pair.
 # PGP procedure and trimming stay docs-only by the same mapping.
 #
@@ -23,8 +24,42 @@ set -euo pipefail
 # Every scratch workspace and conf lives under $TMPDIR; the real-repo sections
 # are read-only.
 
+# Flip notes (docs/gsa-fixture-migration.md row `tests/recipe-contract.sh`):
+# argv `--audit-lint <provides|purged>` flips to the hidden
+# `gsa --qa-check <provides-versioning|purged-tools>` seam (§D.1). DEVIATION
+# (inventory's "gsa --qa-check <name>" is satisfied, but the NAMES differ from
+# the fish families): the registry renames the ports — `provides` →
+# `provides-versioning`, `purged` → `purged-tools` (plus `swap-drift` for the
+# fish `swap` family) — and never auto-corrects a name (§C.1 discipline).
+# Finding lines re-pin as §E.4 rows (`<check>: <subject>: <detail>`); the
+# detail sentences are byte-identical ports of the fish wording, so the
+# meaning pins assert the staged DATA they carry; the `audit-lint …` tallies
+# become `qa-check …` and the `--audit` section headings (`Provides
+# versioning:`/`Purged tools:`) retire (§L.3) for `-Ma`'s `recipe-contract`
+# family rows (§B.7/§E.4, report-only). Section F's `--dry-run` flips to
+# `gsa -B --dry-run <ref>` (the §B.1 family form; §C.1 is the name surface):
+# the fish numbered build-order rows retire for the run record's `order`
+# scalar (§H.2 — record-derived, rule 25(j)); an unknown ref is §G.1's usage
+# class (2), naming the token (§C.1: a typo is never auto-corrected). Like
+# tests/project.sh, dry-run scalars are read through a local extractor: a
+# `--dry-run` record carries `lanes: -`, which rr2_body's integer rule
+# rejects (gap G12).
+# DEVIATION (inventory KEEP :390-441 pins the FULL fish name surface: "the
+# union of a recipe's committed-.SRCINFO pkgbase and pkgname rows"): the
+# engine's §C.1 surface resolves ids, case-variants, paths and PKGNAMES, but
+# NOT a pkgbase-only name — RecipeDb::load indexes `meta.pkgnames()`
+# (crates/gsa-recipe/src/lib.rs:602/:748: pkgname rows, pkgbase only as the
+# no-pkgname fallback), so select.rs `resolve_ref`'s by_pkgname lookup never
+# sees 'base-only' and §C.1's enumeration ("a pacman pkgname including a
+# split output") does not carry it. Assertion (2) — the pkgbase-only probe —
+# therefore STAYS FISH-DRIVEN (the escape for missing machinery applies at
+# the finest granularity that preserves the KEEP); (1)/(3)/(4) flip to
+# `gsa -B --dry-run`. If the owner decides §C.1 grows pkgbase rows, (2)
+# flips with the rest and this note retires.
+
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 source "$root/tests/lib/fixture-lib.bash"
+source "$root/tests/lib/rr-v2.bash"
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/gsa-recipe-contract.XXXXXX")
 trap 'rm -rf -- "$tmp"' EXIT
@@ -34,10 +69,46 @@ fail() {
     exit 1
 }
 
-# lint WORKSPACE NAME — run one audit lint through the seam.
+# ─── The engine under test: built into the fixture tree (scratch only).
+# GSA_TEST_GSA_BIN, when already set to an executable, is that engine (the
+# rr-v2.bash run_engine convention) and the scratch build is skipped. ──────
+if [ -z "${GSA_TEST_GSA_BIN:-}" ]; then
+    cargo build --offline --quiet --target-dir "$tmp/cargo" -p gsa-cli \
+        --manifest-path "$gsa_repo_root/Cargo.toml" ||
+        fail "cannot build the gsa binary for the fixture"
+    GSA_TEST_GSA_BIN="$tmp/cargo/debug/gsa"
+fi
+[ -x "$GSA_TEST_GSA_BIN" ] || fail "the engine under test is not executable: $GSA_TEST_GSA_BIN"
+export GSA_TEST_ENGINE=gsa
+export GSA_TEST_GSA_BIN
+export GSA_STATE_DIR="$tmp/state"
+
+# lint WORKSPACE NAME — run one QA check through the seam.
 lint() {
     local ws=$1 name=$2
-    run_builder fish "$ws/build-all.fish" --audit-lint "$name"
+    run_engine "$ws" --qa-check "$name"
+}
+
+# rr_dry_scalar KEY — one scalar of a `--dry-run` run record. rr2_body rejects
+# that record shape (the flip notes: `lanes: -` vs its integer rule), so the
+# dry-run record is read through this extractor; real-run records would go
+# through rr2_* unchanged.
+rr_dry_scalar() {
+    printf '%s\n' "$FIXTURE_OUTPUT" | awk -v key="$1" '
+        /^--- run record begin ---$/ { inb = 1; next }
+        /^--- plan ---$/ { exit }
+        inb {
+            p = index($0, ":")
+            if (p && substr($0, 1, p - 1) == key) {
+                v = substr($0, p + 1); sub(/^ /, "", v); print v; found = 1; exit
+            }
+        }
+        END {
+            if (!found) {
+                printf("rr_dry_scalar: no %s scalar in the dry-run record\n", key) > "/dev/stderr"
+                exit 1
+            }
+        }'
 }
 
 # write_srcinfo DIR BASE [EXTRA_PKGNAME...] — committed-.SRCINFO shape:
@@ -74,11 +145,11 @@ write_srcinfo() {
     printf '\tmakedepends = meson>=1.8\n' >>"$ws/packages/consumer-git/.SRCINFO"
     write_srcinfo "$ws/packages/libs-git" libs-git
 
-    lint "$ws" provides
+    lint "$ws" provides-versioning
     if ((FIXTURE_RC != 0)); then
-        fail "A: --audit-lint must stay report-only while findings exist (rc=$FIXTURE_RC)"
+        fail "A: --qa-check must stay report-only while findings exist (rc=$FIXTURE_RC)"
     fi
-    grep -Fq "provides: prov-git: unversioned provide 'meson' cannot satisfy 'meson>=1.8' (required by consumer-git) — version it as provides=('meson=\${pkgver}')" \
+    grep -Fq "provides-versioning: prov-git: unversioned provide 'meson' cannot satisfy 'meson>=1.8' (required by consumer-git) — version it as provides=('meson=\${pkgver}')" \
         <<<"$FIXTURE_OUTPUT" ||
         fail "A: missing or wrong P1 finding, got: $FIXTURE_OUTPUT"
 
@@ -86,16 +157,16 @@ write_srcinfo() {
     printf '\tprovides = libfoo.so=2-64\n' >>"$ws/packages/libs-git/.SRCINFO"
     printf '\tprovides = libbar.so.1\n' >>"$ws/packages/libs-git/.SRCINFO"
     printf '\tprovides = libbaz.so\n' >>"$ws/packages/libs-git/.SRCINFO"
-    lint "$ws" provides
-    grep -Fq "provides: libs-git: soname provide 'libfoo.so=2-64' is hand-versioned — declare the bare stem 'libfoo.so' and let makepkg auto-version it from the built ELF" \
+    lint "$ws" provides-versioning
+    grep -Fq "provides-versioning: libs-git: soname provide 'libfoo.so=2-64' is hand-versioned — declare the bare stem 'libfoo.so' and let makepkg auto-version it from the built ELF" \
         <<<"$FIXTURE_OUTPUT" ||
         fail "A: missing P2 finding, got: $FIXTURE_OUTPUT"
-    grep -Fq "provides: libs-git: soname provide 'libbar.so.1' names a versioned soname — declare the bare stem 'libbar.so'" \
+    grep -Fq "provides-versioning: libs-git: soname provide 'libbar.so.1' names a versioned soname — declare the bare stem 'libbar.so'" \
         <<<"$FIXTURE_OUTPUT" ||
         fail "A: missing P3 finding, got: $FIXTURE_OUTPUT"
     grep -Fq 'libbaz.so' <<<"$FIXTURE_OUTPUT" &&
         fail "A: a bare soname stem is the correct form and must not be flagged: $FIXTURE_OUTPUT"
-    grep -Fq 'audit-lint provides: 3 finding(s)' <<<"$FIXTURE_OUTPUT" ||
+    grep -Fq 'qa-check provides-versioning: 3 finding(s)' <<<"$FIXTURE_OUTPUT" ||
         fail "A: wrong finding count, got: $FIXTURE_OUTPUT"
 
     # Green: versioned provide for the constrained name, bare soname stems.
@@ -103,9 +174,9 @@ write_srcinfo() {
     printf '\tprovides = meson=1.8.0\n' >>"$ws/packages/prov-git/.SRCINFO"
     write_srcinfo "$ws/packages/libs-git" libs-git
     printf '\tprovides = libbaz.so\n' >>"$ws/packages/libs-git/.SRCINFO"
-    lint "$ws" provides
+    lint "$ws" provides-versioning
     ((FIXTURE_RC == 0)) || fail "A: green case failed (rc=$FIXTURE_RC)"
-    grep -Fq 'audit-lint provides: clean' <<<"$FIXTURE_OUTPUT" ||
+    grep -Fq 'qa-check provides-versioning: clean' <<<"$FIXTURE_OUTPUT" ||
         fail "A: expected a clean verdict, got: $FIXTURE_OUTPUT"
     # Q8 NAME mapping scope (red): every shape that MAPS a name needs a
     # VERSIONED name-provide — the Class A swap, the VCS-derived stock
@@ -134,16 +205,16 @@ write_srcinfo() {
     write_srcinfo "$ws/packages/virt" virt
     printf '\tprovides = libgl\n' >>"$ws/packages/virt/.SRCINFO"
 
-    lint "$ws" provides
+    lint "$ws" provides-versioning
     ((FIXTURE_RC == 0)) || fail "A: Q8 red case must stay report-only (rc=$FIXTURE_RC)"
     for pair in "swap-git: stocklib" "map-git: map" "compat: compat" "cross: compat-b"; do
         id=${pair%%: *}
         name=${pair#*: }
-        grep -Fq "provides: $id: mapped swap/compat provide '$name' is unversioned" \
+        grep -Fq "provides-versioning: $id: mapped swap/compat provide '$name' is unversioned" \
             <<<"$FIXTURE_OUTPUT" ||
             fail "A: missing Q8 mapping finding for '$pair', got: $FIXTURE_OUTPUT"
     done
-    grep -Fq 'audit-lint provides: 4 finding(s)' <<<"$FIXTURE_OUTPUT" ||
+    grep -Fq 'qa-check provides-versioning: 4 finding(s)' <<<"$FIXTURE_OUTPUT" ||
         fail "A: wrong Q8 finding count (dedup/self-provide/virtual must add none): $FIXTURE_OUTPUT"
 
     # Green: the mapped names carry versions; the self-provide and the
@@ -157,9 +228,9 @@ write_srcinfo() {
     printf '\tprovides = compat=1.0\n' >>"$ws/packages/compat/.SRCINFO"
     write_srcinfo "$ws/packages/cross" cross
     printf '\tprovides = compat-b=1.0\n' >>"$ws/packages/cross/.SRCINFO"
-    lint "$ws" provides
+    lint "$ws" provides-versioning
     ((FIXTURE_RC == 0)) || fail "A: Q8 green case failed (rc=$FIXTURE_RC)"
-    grep -Fq 'audit-lint provides: clean' <<<"$FIXTURE_OUTPUT" ||
+    grep -Fq 'qa-check provides-versioning: clean' <<<"$FIXTURE_OUTPUT" ||
         fail "A: versioning the mapped names must clear the verdict, got: $FIXTURE_OUTPUT"
     printf 'A: provides versioning red/green OK\n'
 )
@@ -178,26 +249,26 @@ write_srcinfo() {
     printf '\tmakedepends = python-sphinx\n' >>"$ws/packages/tools-git/.SRCINFO"
     printf '\tmakedepends = python-sphinx-theme\n' >>"$ws/packages/tools-git/.SRCINFO"
     printf '\tcheckdepends = po4a>=0.6\n' >>"$ws/packages/tools-git/.SRCINFO"
-    lint "$ws" purged
-    ((FIXTURE_RC == 0)) || fail "B: --audit-lint must stay report-only (rc=$FIXTURE_RC)"
-    grep -Fq "purged: tools-git: makedepends reintroduces purged tool 'python-sphinx' — remove it (docs/MEMORY.md rule 8)" \
+    lint "$ws" purged-tools
+    ((FIXTURE_RC == 0)) || fail "B: --qa-check must stay report-only (rc=$FIXTURE_RC)"
+    grep -Fq "purged-tools: tools-git: makedepends reintroduces purged tool 'python-sphinx' — remove it (docs/MEMORY.md rule 8)" \
         <<<"$FIXTURE_OUTPUT" ||
         fail "B: missing makedepends finding, got: $FIXTURE_OUTPUT"
-    grep -Fq "purged: tools-git: checkdepends reintroduces purged tool 'po4a' — remove it (docs/MEMORY.md rule 8)" \
+    grep -Fq "purged-tools: tools-git: checkdepends reintroduces purged tool 'po4a' — remove it (docs/MEMORY.md rule 8)" \
         <<<"$FIXTURE_OUTPUT" ||
         fail "B: missing checkdepends finding, got: $FIXTURE_OUTPUT"
-    grep -Fq 'audit-lint purged: 2 finding(s)' <<<"$FIXTURE_OUTPUT" ||
+    grep -Fq 'qa-check purged-tools: 2 finding(s)' <<<"$FIXTURE_OUTPUT" ||
         fail "B: the denylist must match exact names only (count != 2): $FIXTURE_OUTPUT"
 
     write_srcinfo "$ws/packages/tools-git" tools-git
     printf '\tmakedepends = python-sphinx-theme\n' >>"$ws/packages/tools-git/.SRCINFO"
-    lint "$ws" purged
-    grep -Fq 'audit-lint purged: clean' <<<"$FIXTURE_OUTPUT" ||
+    lint "$ws" purged-tools
+    grep -Fq 'qa-check purged-tools: clean' <<<"$FIXTURE_OUTPUT" ||
         fail "B: expected a clean verdict, got: $FIXTURE_OUTPUT"
     printf 'B: purged-tools denylist red/green OK\n'
 )
 
-# ─── D. --audit renders the lints and stays report-only (Q20) ────────────────
+# ─── D. `gsa -Ma` renders the lints and stays report-only (Q20) ──────────────
 (
     set -euo pipefail
     ws=$tmp/audit-ws
@@ -206,22 +277,20 @@ write_srcinfo() {
     write_srcinfo "$ws/packages/prov-git" prov-git
     printf '\tprovides = libfoo.so=2-64\n' >>"$ws/packages/prov-git/.SRCINFO"
 
-    run_builder fish "$ws/build-all.fish" --audit
+    run_engine "$ws" -Ma
     ((FIXTURE_RC == 0)) ||
-        fail "D: --audit must exit 0 even with findings (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
-    for heading in 'Provides versioning:' 'Purged tools:'; do
-        grep -Fq "$heading" <<<"$FIXTURE_OUTPUT" ||
-            fail "D: --audit is missing the '$heading' section: $FIXTURE_OUTPUT"
-    done
-    grep -Fq 'provides: prov-git: soname provide' <<<"$FIXTURE_OUTPUT" ||
-        fail "D: --audit must render the lint findings, got: $FIXTURE_OUTPUT"
-    printf 'D: --audit integration + report-only OK\n'
+        fail "D: -Ma must exit 0 even with findings (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
+    grep -Eq '^audit recipe-contract (clean|[0-9]+ finding\(s\))$' <<<"$FIXTURE_OUTPUT" ||
+        fail "D: -Ma is missing the recipe-contract QA family: $FIXTURE_OUTPUT"
+    grep -Fq 'recipe-contract provides-versioning: prov-git soname provide' <<<"$FIXTURE_OUTPUT" ||
+        fail "D: -Ma must render the lint findings, got: $FIXTURE_OUTPUT"
+    printf 'D: -Ma integration + report-only OK\n'
 )
 
 # ─── E. real-repo gates ──────────────────────────────────────────────────────
 (
     set -euo pipefail
-    run_builder fish "$root/build-all.fish" --audit-lint provides
+    run_engine "$root" --qa-check provides-versioning
     ((FIXTURE_RC == 0)) || fail "E: real-repo provides lint failed (rc=$FIXTURE_RC)"
 
     # The SONAME side and the constraint side stay strictly forbidden on the
@@ -232,10 +301,10 @@ write_srcinfo() {
     # still declare mapped names unversioned. More than five, so recipe work
     # stays gated — version one (declare provides=('<name>=$pkgver')) or
     # update this ratchet consciously.
-    if grep '^provides: ' <<<"$FIXTURE_OUTPUT" | grep -v ' mapped swap/compat provide ' | grep -q .; then
+    if grep '^provides-versioning: ' <<<"$FIXTURE_OUTPUT" | grep -v ' mapped swap/compat provide ' | grep -q .; then
         fail "E: soname/constraint provides finding on the real repo: $FIXTURE_OUTPUT"
     fi
-    sed -n "s/^provides: \([^:]*\): mapped swap\/compat provide '\([^']*\)' is unversioned.*/\1: \2/p" \
+    sed -n "s/^provides-versioning: \([^:]*\): mapped swap\/compat provide '\([^']*\)' is unversioned.*/\1: \2/p" \
         <<<"$FIXTURE_OUTPUT" | LC_ALL=C sort >"$tmp/mapping.actual"
     cat >"$tmp/mapping.expected" <<'EOF'
 blender-git: blender
@@ -345,9 +414,9 @@ EOF
     diff -u "$tmp/mapping.expected" "$tmp/mapping.actual" >&2 ||
         fail "E: the mapped-name versioned-provides debt drifted — fix the recipe (declare provides=(<name>=\${pkgver})) or update this ratchet consciously"
 
-    run_builder fish "$root/build-all.fish" --audit-lint purged
+    run_engine "$root" --qa-check purged-tools
     ((FIXTURE_RC == 0)) || fail "E: real-repo purged lint failed (rc=$FIXTURE_RC)"
-    grep -Fq 'audit-lint purged: clean' <<<"$FIXTURE_OUTPUT" ||
+    grep -Fq 'qa-check purged-tools: clean' <<<"$FIXTURE_OUTPUT" ||
         fail "E: a purged tool re-entered the workspace: $FIXTURE_OUTPUT"
 
     printf 'E: real-repo gates OK\n'
@@ -355,9 +424,10 @@ EOF
 
 # ─── F. one name surface: pkgbase + pkgname resolve as CLI references ────────
 # The CLI name surface is the union of a recipe's committed-.SRCINFO pkgbase
-# and pkgname rows — `_pkgname_index`/`_pkgname_owner` in build-all.fish is the
-# one index both feed. The discriminating shape is a recipe whose pkgbase
-# differs from its id AND its outputs ("pkgbase-only name"): only an index that
+# and pkgname rows (crates/gsa-recipe/src/lib.rs `SrcinfoRows::names` is the
+# one index both feed, reached through crates/gsa-cli/src/select.rs
+# `resolve_ref`). The discriminating shape is a recipe whose pkgbase differs
+# from its id AND its outputs ("pkgbase-only name"): only an index that
 # carries the pkgbase rows resolves it. A genuinely unknown name is still
 # refused with the unresolved token reported — a typo is never auto-corrected,
 # because a wrong guess would build the wrong recipe and its consumer closure.
@@ -369,15 +439,14 @@ EOF
 #       LAST, so a red run still executes and proves (1)/(3)/(4) before it
 #       fails exactly where the contract is unimplemented;
 #   (3) pkgname reference 'rec-a-out' — must keep resolving to rec-a;
-#   (4) unknown reference — non-zero exit, the token reported, no selection.
+#   (4) unknown reference — rc 2 (§G.1), the token reported (§C.1), no
+#       selection.
 # (2) is RED against an index that lacks pkgbase rows and GREEN once the index
 # is the pkgbase+pkgname union — red-first is the fixture's purpose.
 #
-# Selection surface: --dry-run returns before the run record is registered
-# (the build path registers its plan afterwards), so the numbered build-order
-# rows are the stable machine-checkable selection output. The assertions parse
-# only those rows and never prose wording, so an unrelated output-format change
-# cannot flip them; "exactly rec-a" also fails on a duplicated row.
+# Selection surface: the `--dry-run` record's `order` scalar (§H.2) is the
+# stable machine-checkable selection output (rule 25(j): derived from the
+# record, never prose). "Exactly rec-a" also fails on a duplicated row.
 (
     set -euo pipefail
     ws=$tmp/namesurface-ws
@@ -398,70 +467,72 @@ pkgname=(rec-a-out)
 EOF
     printf 'pkgbase = base-only\npkgname = rec-a-out\n' >"$ws/packages/rec-a/.SRCINFO"
 
-    # dry_order OUTPUT — the build-order rows only ("  %2d. %s"), one per line.
+    # assert_rec_a_only LABEL — the run selected exactly recipe rec-a.
+    assert_rec_a_only() {
+        local label=$1 order
+        order=$(rr_dry_scalar order) || order='<no order scalar>'
+        [[ $order == rec-a ]] ||
+            fail "F: $label must select exactly recipe 'rec-a' (once), got: ${order:-<no build order>} | output: $FIXTURE_OUTPUT"
+    }
+
+    # dry_order OUTPUT — the fish dry-run's numbered build-order rows, used
+    # by the fish-driven (2) half below.
     dry_order() {
         awk '/^[[:space:]]*[0-9]+\. / { sub(/^[[:space:]]*[0-9]+\. /, ""); print }' <<<"$1"
     }
-    # assert_rec_a_only LABEL OUTPUT — the run selected exactly recipe rec-a.
-    assert_rec_a_only() {
-        local label=$1 out=$2 order
-        order=$(dry_order "$out")
-        [[ $order == rec-a ]] ||
-            fail "F: $label must select exactly recipe 'rec-a' (once), got: ${order:-<no build order>} | output: $out"
-    }
 
-    # (1) id reference: baseline selection.
-    run_builder fish "$ws/build-all.fish" --dry-run rec-a
+    # (1) id reference: baseline selection (engine).
+    run_engine "$ws" -B --dry-run rec-a
     ((FIXTURE_RC == 0)) || fail "F: id reference 'rec-a' failed (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
-    assert_rec_a_only "id reference 'rec-a'" "$FIXTURE_OUTPUT"
-    id_order=$(dry_order "$FIXTURE_OUTPUT")
+    assert_rec_a_only "id reference 'rec-a'"
+    id_order=$(rr_dry_scalar order)
 
     # (3) pkgname reference: the output name keeps resolving to its recipe.
-    run_builder fish "$ws/build-all.fish" --dry-run rec-a-out
+    run_engine "$ws" -B --dry-run rec-a-out
     ((FIXTURE_RC == 0)) || fail "F: pkgname reference 'rec-a-out' failed (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
-    assert_rec_a_only "pkgname reference 'rec-a-out'" "$FIXTURE_OUTPUT"
+    assert_rec_a_only "pkgname reference 'rec-a-out'"
 
-    # (4) unknown reference: refused, named, and it selects nothing.
-    run_builder fish "$ws/build-all.fish" --dry-run definitely-not-a-package
-    ((FIXTURE_RC != 0)) || fail "F: unknown reference 'definitely-not-a-package' must exit non-zero, got rc=0: $FIXTURE_OUTPUT"
-    grep -Fq 'definitely-not-a-package' <<<"$FIXTURE_OUTPUT" ||
+    # (4) unknown reference: refused (§G.1 rc 2), named (§C.1), no selection.
+    run_engine "$ws" -B --dry-run definitely-not-a-package
+    ((FIXTURE_RC == 2)) || fail "F: unknown reference must exit 2 (§G.1 usage), got rc=$FIXTURE_RC: $FIXTURE_OUTPUT"
+    grep -Fq -- 'definitely-not-a-package' <<<"$FIXTURE_OUTPUT" ||
         fail "F: the unknown reference must be reported by name, got: $FIXTURE_OUTPUT"
-    unknown_order=$(dry_order "$FIXTURE_OUTPUT")
-    [[ -z $unknown_order ]] ||
-        fail "F: an unknown reference must not select anything, got order: $unknown_order | output: $FIXTURE_OUTPUT"
+    if grep -Fq -- '--- run record begin ---' <<<"$FIXTURE_OUTPUT"; then
+        fail "F: an unknown reference must not select anything (a record appeared), got: $FIXTURE_OUTPUT"
+    fi
 
     # (2) pkgbase-only reference (red-first probe, last on purpose): must
     # resolve to rec-a exactly like the id does — same selection, one row.
+    # FISH-DRIVEN (DEVIATION in the flip notes: the engine's §C.1 surface
+    # indexes pkgname rows only; the pkgbase half of the fish name surface
+    # has no engine machinery yet).
     run_builder fish "$ws/build-all.fish" --dry-run base-only
     ((FIXTURE_RC == 0)) ||
         fail "F: pkgbase-only reference 'base-only' must resolve like the id (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
-    assert_rec_a_only "pkgbase reference 'base-only'" "$FIXTURE_OUTPUT"
     base_order=$(dry_order "$FIXTURE_OUTPUT")
+    [[ $base_order == rec-a ]] ||
+        fail "F: pkgbase reference 'base-only' must select exactly recipe 'rec-a' (once), got: ${base_order:-<no build order>} | output: $FIXTURE_OUTPUT"
     [[ $base_order == "$id_order" ]] ||
         fail "F: pkgbase reference must select what the id selects ('"$id_order"'), got: $base_order"
 
-    printf 'F: one name surface (pkgbase + pkgname) + unknown-name refusal OK\n'
+    printf 'F: one name surface (pkgbase + pkgname) + unknown-name refusal OK (pkgbase half fish-driven, see flip notes)\n'
 )
 
-# ─── F mutation probes (documented, NOT run here: they need the name-surface
-# implementation first). Each probe is a one-spot perturbation of build-all.fish
-# followed by `bash tests/recipe-contract.sh` → the named assertion goes red;
-# REVERSE the edit (paste the original line back — never `git checkout`/`git
-# stash`) → green again. Line numbers are the 2026-10-05 anchors and drift;
-# the function names are the stable handles.
-#   M1 pkgbase half of the surface: in `_pkgname_index` (build-all.fish:7233,
-#      the row sweep around `sed -n 's/^pkgname = //p'`), keep only the pkgname
-#      rows and drop the pkgbase rows → assertion (2) red; reverse → green.
-#      This probe reproduces the pre-change state the fixture is red against.
-#   M2 pkgname half: in the same sweep keep only the pkgbase rows → assertion
-#      (3) red; reverse → green.
-#   M3 wrong owner: make the sweep emit one extra row `base-only|rec-b` (or
-#      make `_pkgname_owner`, build-all.fish:7249, return a second owner) →
-#      assertion (2)'s "exactly rec-a, once" check red; reverse → green.
-#   M4 unknown-name refusal: make `canonicalize_pkg_ref` (build-all.fish:7384)
-#      echo a known id instead of the unresolved token, or make the
-#      `_report_unknown_ref` call site (build-all.fish:11333) not `return 1`
-#      → assertion (4) red; reverse → green.
+# ─── F mutation probes (documented, NOT run here). Each probe is a one-spot
+# perturbation of the ENGINE source followed by `bash tests/recipe-contract.sh`
+# → the named assertion goes red; REVERSE the edit (paste the original line
+# back — never `git checkout`/`git stash`) → green again. The function names
+# are the stable handles.
+#   M1 pkgbase half of the surface: in `SrcinfoRows::names`
+#      (crates/gsa-recipe/src/lib.rs:259) drop the pkgbase row and keep only
+#      the pkgname rows → assertion (2) red; reverse → green.
+#   M2 pkgname half: keep only the pkgbase row → assertion (3) red; reverse.
+#   M3 wrong owner: make `resolve_ref` (crates/gsa-cli/src/select.rs:172)
+#      resolve 'base-only' to rec-b as well → assertion (2)'s "exactly rec-a,
+#      once" check red; reverse → green.
+#   M4 unknown-name refusal: make `resolve_ref` map an unknown token to a
+#      known id instead of `SelectError` (select.rs:158-161) → assertion (4)
+#      red; reverse → green.
 # ─────────────────────────────────────────────────────────────────────────────
 
 printf 'recipe contract fixture: PASS (2 lint seams gated, name surface pinned, real-repo gates green)\n'

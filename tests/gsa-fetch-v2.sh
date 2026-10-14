@@ -189,9 +189,14 @@ event_ts() {
     awk -v kind="$1" -v id="$2" '$1 == kind && $2 == id { print $3; exit }' "$GSA_FAKE_FETCH_LOG"
 }
 
-# assert_no_transactions WHAT — fetch-ahead never touches pacman or sudo.
+# assert_no_transactions WHAT — fetch-ahead never transacts. The toolchain
+# preflight's read-only `pacman -Q rust-git` probe runs on every build-family
+# run (2026-10-14, the probe-gating decision) and is tolerated here; what must
+# stay absent is any TRANSACTION or any other pacman call.
 assert_no_transactions() {
-    [ ! -s "$GSA_FAKE_PACMAN_LOG" ] || fail "$1: the pacman stub log must stay empty:" "$GSA_FAKE_PACMAN_LOG"
+    if grep -v '^pacman -Q rust-git$' "$GSA_FAKE_PACMAN_LOG" 2>/dev/null | grep -q .; then
+        fail "$1: the pacman stub logged a call beyond the rust-git probe:" "$GSA_FAKE_PACMAN_LOG"
+    fi
     [ ! -s "$GSA_FAKE_SUDO_LOG" ] || fail "$1: the sudo stub log must stay empty:" "$GSA_FAKE_SUDO_LOG"
 }
 

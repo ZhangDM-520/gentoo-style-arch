@@ -331,7 +331,10 @@ record_section() {
 }
 
 # txn_count / txn_argv / txn_intervals — the pacman stub log's facts.
-txn_count() { grep -c '^pacman ' "$1" || true; }
+# txn_count counts TRANSACTIONS (`pacman -U`), not invocations: the toolchain
+# preflight's read-only `pacman -Q rust-git` probe runs on every build-family
+# run (2026-10-14, the probe-gating decision) and is never a transaction.
+txn_count() { grep -c '^pacman -U ' "$1" || true; }
 txn_argv() { sed -n 's/^pacman //p' "$1"; }
 txn_intervals() { awk '/^TXN-START /{print "s", $2} /^TXN-END /{print "e", $2}' "$1"; }
 
@@ -659,11 +662,15 @@ if want c; then
         [ "$(txn_count "$GSA_FAKE_PACMAN_LOG")" = "$expected" ] \
             || fail "want $expected transactions (one per installed package), got $(txn_count "$GSA_FAKE_PACMAN_LOG"):" "$GSA_FAKE_PACMAN_LOG"
 
-        # every argv is the §K.3 transaction shape and carries the §B.1
-        # `-- <pacman args…>` passthrough verbatim, BEFORE the archives
+        # every TRANSACTION argv is the §K.3 shape and carries the §B.1
+        # `-- <pacman args…>` passthrough verbatim, BEFORE the archives. The
+        # toolchain preflight's read-only `pacman -Q rust-git` probe runs on
+        # every build-family run (2026-10-14, the probe-gating decision) and
+        # is no transaction.
         while read -r argv; do
             case "$argv" in
             "-U --noconfirm --ask 4"*) ;;
+            "-Q rust-git") continue ;;
             *) fail "transaction argv is not the §K.3 shape (-U --noconfirm --ask 4 …): $argv" "$GSA_FAKE_PACMAN_LOG" ;;
             esac
             printf '%s\n' "$argv" | grep -q -- '--overwrite \* .*\.pkg\.tar\.zst' \

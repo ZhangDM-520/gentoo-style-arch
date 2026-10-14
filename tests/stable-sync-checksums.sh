@@ -1,90 +1,103 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Stable recipes track the Arch repository version, while explicitly tagged
-# recipes may track an upstream source through `.nvchecker.toml`. The builder
-# rewrites pkgver/pkgrel in place, and the committed sums may still describe the
-# previous version.
-#
-# Two tempting ways out of the resulting staleness are both wrong. Re-hashing the
-# fetch (updpkgsums on its own) records whatever arrived, verifying nothing.
-# Passing --skipchecksums — which the builder used to do, silently, because
-# build_package is only ever called quiet and every lane logs its own stream —
-# builds and (with -i) installs sources nobody verified.
-#
-# The builder re-anchors the sums to the value *Arch* published for that version,
-# from the .SRCINFO of the official packaging repo, and verifies the fetched
-# sources against it. What makes that necessary is not the version bump itself
-# but the *source* moving: 26 of the 28 stable recipes pin a literal version
-# inside their source=() URLs, so a sync leaves their sums valid, and refusing
-# those builds would be a false alarm.
+# tests/stable-sync-checksums.sh — version-sync + checksum anchoring across
+# stubbed providers, driven through the NATIVE engine (docs/gsa-contract.md
+# §B.4/§B.8, §G.1, §H.2–§H.3). Stable recipes track the Arch repository
+# version, tagged recipes track an upstream source; the engine rewrites
+# pkgver/pkgrel in place and RE-ANCHORS the sums to the value the provider
+# published for that version (rule 18), never to whatever the fetch delivered.
 #
 #   1. the sync really happens (pkgver rewritten) — otherwise the rest is
 #      vacuous, which is the trap this fixture exists to avoid;
-#   2. --skipchecksums is never passed to makepkg;
+#   2. --skipchecksums is never passed to makepkg (the lane seam rejects
+#      every verification-bypass token outright);
 #   3. the recipe's checksums really are re-anchored, and verification runs;
-#   4. a source that DISAGREES with Arch's published checksum refuses the build,
-#      restores the recipe, and never runs makepkg — the case that plain
-#      auto-updpkgsums would have accepted, which is what makes this a test;
+#   4. a source that DISAGREES with the provider's published checksum is an
+#      integrity stop: run-wide abort BEFORE any makepkg, the offending row
+#      `failed 1 - integrity-stop`, every other row `never-started - -
+#      startup-refused`, rc 3, recipe restored byte-identical;
 #   5. no official checksum at our version (404, or a repo carrying another
-#      version): refuse, leaving the recipe untouched;
-#   6. an entry Arch publishes NO checksum for (SKIP or absent): refreshed by
-#      updpkgsums at sync-fire instead of refusing, recorded LOUDLY per entry
-#      as fetch-only (no official value attests it) — the 2026-09-24 stance.
-#      An entry Arch DOES publish is still verified against it (cases 1/2);
-#   7. a version bump that does not move source=(): nothing is re-anchored and
-#      the build runs against the sums already committed;
-#   8. an official file publishing two algorithms for the same sources: still
-#      anchored (the lists only line up within one algorithm);
-#   9. a "name::url" override: the fetched file carries the override name, not
-#      the URL basename, so it is found and verified;
-#  10. the packaging repo has moved past our version: the version's own tag is
-#      fetched instead of anchoring to a version that is not ours;
-#  11. a VCS source: anchored, and verified the way makepkg verifies it
-#      (`git archive --format tar <tag>` hashed, not a directory);
-#  12. --no-sync disables the whole path;
-#  13. the refresh itself fails (network down, upstream gone): the named
-#      'updpkgsums' error plus the manual recovery line ('Refresh them by
-#      hand', '--no-sync' builds the committed version as-is), the recipe
-#      restored, makepkg never started — and the run DEFERS the recipe
-#      (parked with a named marker) instead of killing the dispatch, which
-#      tests/anchor-defer.sh pins end to end;
-#  14. a local pkgrel ahead of the repo is a DELIBERATE bump (a PGO wave marks
-#      its own revision, e.g. ripgrep's pkgrel 2 over the repo's 1) and is
-#      never rewritten back to the repo value — only a repo pkgrel actually
-#      ahead is synced (case 7's pkgrel-only variant pins that direction).
-#  15. an opted-in core recipe resolves its AUR version and uses the matching
-#      AUR .SRCINFO pkgrel/checksum, without leaking nvchecker state into recipes.
-#  16. GitHub release digests anchor changed assets and reset pkgrel on version
-#      movement; a git-source tracker resolves its GitHub repository too.
-#  17. a GitHub release without an asset digest follows the loud fetch-only path.
-#  18. a GitHub digest mismatch refuses the run and restores the original recipe.
-#  19. unavailable GitHub metadata defers and restores the original recipe.
-#  20. an nvchecker failure does not fall back to the Arch provider.
-#  21-22. AUR version/source races never apply mismatched metadata.
-#  23. --no-sync skips the resolver, provider metadata, and recipe rewrites.
-#  24-25. AUR pkgrel adopts an upstream increase but never lowers a local
-#        revision at the same pkgver.
-#  26. GitHub keeps pkgrel when pkgver is unchanged.
-#  27-28. gcc-snapshot maps supported dates into _pkgver and rejects bad formats.
-#  29-30. AUR missing sums are loud fetch-only; a published checksum mismatch
-#        refuses and restores the recipe.
-#  31. Zen's recipe ID/pkgname difference and local source filename override
-#        still select the correct config section and GitHub asset digest.
-#  34. a computed pkgver=${var} recipe gets its VERSION VARIABLES bumped
-#        (_rcver=rc3 → _rcver=rc5 — never a literal pkgver write over the
-#        expression), its moved source re-anchored, and its committed .SRCINFO
-#        refreshed in lockstep.
-#  35. a computed pkgver expression the planner cannot rewrite (command
-#        substitution) refuses and rolls back — the historical rewrite would
-#        have clobbered the expression with a literal.
-#  36. a tracker section named for the recipe id still resolves when the
-#        pkgbase carries a flavor suffix.
+#      version): the anchor is refused and the recipe DEFERS
+#      (`anchoring-refused`), restored, never built;
+#   6. an entry the provider publishes NO checksum for (SKIP or absent):
+#      refreshed by updpkgsums instead of refused, recorded LOUDLY per entry
+#      as fetch-only (no published value attests it) — the 2026-09-24 stance;
+#   7. a version bump that does not move source=(): nothing is re-anchored
+#      and the build runs against the sums already committed;
+#   8. an official file publishing two algorithms for the same sources;
+#   9. a "name::url" override resolves the fetched file by the override name;
+#  10. the packaging repo moved past our version: the version's own tag is
+#      the anchor instead;
+#  11. a VCS source: anchored and verified the way makepkg verifies it
+#      (`git archive --format tar <tag>` hashed), `?signed` never leaking
+#      into the ref name;
+#  12. --no-sync disables the whole path (no provider query, no rewrite);
+#  13. the refresh itself fails (updpkgsums non-zero): named error, recipe
+#      restored, makepkg never started, and the recipe DEFERS
+#      (`anchoring-refused`) instead of killing the dispatch;
+#  14. a local pkgrel ahead of the repo is a DELIBERATE bump and is never
+#      rewritten back; only a repo pkgrel actually ahead is synced;
+#  15-17. the opted-in nvchecker path (version-sync=nvchecker tag) resolves
+#      AUR and GitHub versions, anchors to AUR .SRCINFO sums / GitHub release
+#      digests, and treats an absent digest as loud fetch-only;
+#  18/30. a published digest mismatch is an integrity stop (rows/restore of
+#      case 4's shape) for both provider families;
+#  19-22. provider outages and metadata races DEFER (anchoring-refused /
+#      upstream-unverified / source-unfetchable) and restore — never an
+#      invented version, never an anchor from mismatched metadata;
+#  23. --no-sync skips the resolver, provider metadata, and recipe rewrites;
+#  24-26. pkgrel policy: an upstream pkgrel adopts forward, never lowers a
+#      local revision at the same pkgver, GitHub retains pkgrel at parity;
+#  27-28. gcc-snapshot's date-derived source follows the bump; a mapping the
+#      rewritten recipe cannot evaluate refuses and rolls back;
+#  31. Zen's recipe id/pkgname difference and local source filename override
+#      still bind the GitHub asset digest;
+#  32. a source that never arrived is ABSENT, not disagreeing: defer
+#      (source-unfetchable) and let the rest of the dispatch continue;
+#  34-35. a computed pkgver=${var} recipe bumps its VARIABLES (never a
+#      literal write over the expression) and refreshes .SRCINFO in lockstep;
+#      a pkgver expression the planner cannot rewrite refuses and rolls back;
+#  36. a tracker section named for the recipe id resolves for a flavored
+#      pkgbase;
+#  37. --skip never claims over upstream movement (the sync runs first);
+#  38. a failed repo QUERY is not "the name is unknown": the failure names
+#      itself and defers, the name-unknown answer syncs nothing;
+#  39. repository version text the rewrite cannot write safely (`&`, `\`,
+#      `/`) is refused BEFORE the first write;
+#  40. a failure after the publish (artifact clear) rolls the rewrite back;
+#  43. an unevaluable recipe is NAMED, never synced blind.
 #
-# All external collaborators (pacman, curl, updpkgsums, makepkg, nvchecker) are
-# stubs on PATH, so this runs with no network and never builds anything.
+# Flip notes (docs/gsa-fixture-migration.md row `tests/stable-sync-checksums.sh`,
+# REWRITE class): the engine under test is `gsa` (`-B --leaf` build runs,
+# `gsa -Sy` sync-only runs, `run_engine`); fish-era prose greps re-pin against
+# the fixture's MERGED FIXTURE_OUTPUT (policy/prose output goes to stderr) and
+# outcome assertions against the `format: 2` run record via tests/lib/rr-v2.bash
+# (§H.2–§H.3): integrity stop `failed 1 - integrity-stop` + `never-started - -
+# startup-refused` rc 3 (§G.1), deferral `deferred 99 - <key>` + consumer cone
+# `parked - - waits-on-deferred`, deferral-only rc 5. `gsa -Sy` prints the
+# `Version and checksum sync this run` disposition block on stdout, emits NO
+# run record, and exits 0/3/5. Retired fish-era sections, with reasons:
+#   * case 41's sed-argv/.SRCINFO-tmp watch: the rewrite is Rust-side
+#     (RecipeTransaction staging), no `sed` is ever invoked and the .SRCINFO
+#     scratch is created after `makepkg --printsrcinfo` exits — the tool-
+#     boundary pins cannot fire; their meaning (no scratch survives a run)
+#     re-pins below;
+#   * case 44 (-ccc/-ln naming unevaluable recipes): the engine's -M verbs
+#     parse recipes (`gsa-recipe`) and never evaluate PKGBUILDs (gsa-maint
+#     lib.rs), so no evaluation failure exists to name;
+#   * case 45 (builder-cwd relocation noise): fish 4.9.3 in-process command
+#     substitution machinery, nonexistent in a Rust process;
+#   * the `DEFERRED` marker, resume-command prose, `synced.list` witness and
+#     `Version and checksum sync this run` build-run summary are rendering
+#     (§L.3): their meanings re-pin from run-record rows and the -Sy
+#     disposition block.
+# All external collaborators (pacman, curl, updpkgsums, makepkg, nvchecker,
+# sleep) are stubs on PATH: no network, nothing is really built.
 
 source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/rr-v2.bash"
+
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-stable-sync.XXXXXX")
 trap 'rm -rf -- "$fixture"' EXIT
 
@@ -96,52 +109,79 @@ command -v sha256sum >/dev/null || {
     printf 'sha256sum is required\n' >&2
     exit 1
 }
+command -v b2sum >/dev/null || {
+    printf 'b2sum is required (the two-algorithms case publishes b2)\n' >&2
+    exit 1
+}
 command -v git >/dev/null || {
     printf 'git is required (the VCS case recomputes git archive)\n' >&2
     exit 1
 }
+
+# ─── Stub-knob vocabulary (§D.2: declared in the change that adds them) ─────
+rr2_stub_knob GSA_FAKE_FETCH_ABSENT "stable-sync updpkgsums stub: rewrite sums from the fetch but leave no fetched file behind"
+rr2_stub_knob GSA_FAKE_GITHUB_STATUS "stable-sync curl stub: HTTP status for GitHub release queries"
+rr2_stub_knob GSA_FAKE_NVCHECK_FAIL "stable-sync nvchecker stub: requested resolver failure"
+rr2_stub_knob GSA_FAKE_NVCHECK_KEY "stable-sync nvchecker stub: key written into the resolver state"
+rr2_stub_knob GSA_FAKE_NVCHECK_VERSION "stable-sync nvchecker stub: resolved upstream version"
+
+fail() {
+    printf '\nFAIL: %s\n' "$1" >&2
+    if [ -n "${2:-}" ] && [ -f "$2" ]; then
+        sed 's/^/    /' "$2" >&2
+    fi
+    exit 1
+}
+
+# ─── The engine under test: built into the fixture tree (scratch only) ──────
+cargo build --offline --quiet --target-dir "$fixture/cargo" -p gsa-cli \
+    --manifest-path "$gsa_repo_root/Cargo.toml" \
+    || fail "cannot build the gsa binary for the fixture"
+gsa_bin="$fixture/cargo/debug/gsa"
+[ -x "$gsa_bin" ] || fail "cargo did not produce $gsa_bin"
+export GSA_TEST_ENGINE=gsa
+export GSA_TEST_GSA_BIN="$gsa_bin"
 
 staged_version=1.0.0         # what the recipe pins
 repo_version=2.0.0           # what the stub repo advertises
 staged_sum=0000000000000000000000000000000000000000000000000000000000000000
 staged_b2=11111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111
 
-# The bytes Arch published a checksum for, and different bytes the "fetch" will
-# sometimes deliver instead.
+# The bytes a provider published a checksum for, and different bytes the
+# "fetch" will sometimes deliver instead.
 published_payload="$fixture/published.tar.gz"
 tampered_payload="$fixture/tampered.tar.gz"
-printf 'the source Arch published a checksum for\n' >"$published_payload"
+printf 'the source a provider published a checksum for\n' >"$published_payload"
 printf 'a different source entirely, same filename\n' >"$tampered_payload"
 published_sha=$(sha256sum "$published_payload" | awk '{print $1}')
 published_b2=$(b2sum "$published_payload" | awk '{print $1}')
 tampered_sha=$(sha256sum "$tampered_payload" | awk '{print $1}')
 
-fail() {
-    printf '\nFAIL: %s\n' "$*" >&2
-    exit 1
-}
-
 # ─── The sandbox ────────────────────────────────────────────────────────────
 # $1 = dir · $2 = the version the stub repo advertises · $3 = source entry
 # (default: one whose URL spells $pkgver out) · $4 = the staged sum arrays.
-# Skeleton synthesis comes from tests/lib/fixture-lib.bash; s1's recipe lives
+# Skeleton synthesis comes from tests/lib/fixture-lib.bash; the recipe lives
 # at the non-default path packages/stable/s1 with a fully parameterised
-# PKGBUILD, so it is written here rather than via add_package.
+# PKGBUILD, so it is written here rather than via add_package. Providers
+# shell out through PATH (crates/gsa-recipe/src/sync.rs): `pacman -Si` for
+# the Arch version, `curl` (body + '%{http_code}' on stdout) for the official
+# packaging repo's .SRCINFO, the AUR .SRCINFO and GitHub release JSON,
+# `nvchecker` for the opted-in resolver, `updpkgsums` for the rewrite.
 make_case_workspace() {
     local dir=$1 repo_full=$2
     local source_entry=${3:-'https://example.invalid/s1-$pkgver.tar.gz'}
     local sum_lines=${4:-"sha256sums=('$staged_sum')"}
     make_workspace "$dir" 1 2 low
-    # The SUT's retry backoffs and dispatcher polls are pure latency here —
+    # The engine's retry backoffs and dispatcher polls are pure latency here —
     # nothing in this fixture asserts on wall-clock time (see stub_sleep).
     stub_sleep "$dir"
     mkdir -p "$dir/packages/stable/s1" "$dir/fake"
     printf 's1|packages/stable/s1|stable|\n' >>"$dir/config/topology.conf"
 
-    # $pkgver must stay literal here: the builder expands the array by sourcing
-    # the recipe, so the value has to come from the recipe's own pkgver=. printf
-    # writes the entry verbatim — a heredoc would either expand it now or need
-    # escaping that survives into the file.
+    # $pkgver must stay literal here: the anchoring reads the array by
+    # sourcing the recipe, so the value has to come from the recipe's own
+    # pkgver=. printf writes the entry verbatim — a heredoc would either
+    # expand it now or need escaping that survives into the file.
     {
         printf 'pkgname=s1\n'
         printf 'pkgver=%s\n' "$staged_version"
@@ -158,12 +198,14 @@ EOF
 
     printf '%s\n' "$repo_full" >"$dir/fake/repo_version"
 
-    # The stub repository: sync_stable_version runs `pacman -Si <name>`. The
-    # failure modes distinguish the two answers the builder must never fold
-    # together (R-F20): a name the repos do not know versus a query that failed.
+    # The stub repository: the Arch provider runs `pacman -Si <name>`
+    # (LC_ALL=C). The failure modes distinguish the two answers the engine
+    # must never fold together: a name the repos do not know versus a query
+    # that failed.
     cat >"$dir/bin/pacman" <<'EOF'
 #!/usr/bin/env bash
 if [[ ${1:-} == -Si ]]; then
+    printf '%s\n' "$*" >>"$GSA_FAKE_DIR/pacman_calls"
     case ${GSA_FAKE_SI_MODE:-} in
         db-error)
             printf 'error: failed to synchronize all databases (unexpected error)\n' >&2
@@ -182,28 +224,16 @@ exit 0
 EOF
     chmod +x "$dir/bin/pacman"
 
-    # Delegating wrapper: records the argv when asked (the transactional
-    # rewrite case asserts the tracked PKGBUILD is never sed-edited in place)
-    # and otherwise runs the real thing unchanged.
-    cat >"$dir/bin/sed" <<'EOF'
-#!/usr/bin/env bash
-if [[ -n ${GSA_FAKE_SED_LOG:-} ]]; then
-    printf '%s\n' "$*" >>"$GSA_FAKE_SED_LOG"
-fi
-exec /usr/bin/sed "$@"
-EOF
-    chmod +x "$dir/bin/sed"
-
-    # Stands in for the fetch of gitlab.archlinux.org/.../.SRCINFO. An empty
-    # fake/srcinfo is the 404 case: a recipe Arch does not carry. fake/srcinfo is
-    # also the answer for the `main` ref; a tag ref is answered by
-    # fake/srcinfo_tag, which is absent (404) unless a case sets it.
+    # Stands in for every provider metadata fetch (gitlab .SRCINFO, AUR
+    # .SRCINFO, GitHub release JSON). The engine calls curl with
+    # '--write-out %{http_code}' and reads BODY+CODE from stdout: the code is
+    # the trailing 3-digit run after the body. An empty/absent answer is a
+    # clean 404 (the main-vs-tag fallback depends on "absent" ≠ "broken").
     cat >"$dir/bin/curl" <<'EOF'
 #!/usr/bin/env bash
-out=""; url=""; write_out=""
+url=""; write_out=""
 while (($#)); do
     case $1 in
-        -o|--output) out=$2; shift 2 ;;
         -w|--write-out) write_out=$2; shift 2 ;;
         --max-time|--connect-timeout) shift 2 ;;
         -*) shift ;;
@@ -211,34 +241,38 @@ while (($#)); do
     esac
 done
 printf '%s\n' "$url" >>"$GSA_FAKE_DIR/curl_calls"
+code=200
 if [[ $url == *api.github.com/repos/*/releases/tags/* ]]; then
     tag=${url##*/}
     answer=$GSA_FAKE_DIR/github_release.$tag.json
-    http_status=${GSA_FAKE_GITHUB_STATUS:-200}
-    if [[ ! -s $answer && $http_status == 200 ]]; then
-        http_status=404
-    fi
-    if [[ $http_status == 200 ]]; then
-        cp -- "$answer" "$out"
-    fi
-    [[ $write_out != '%{http_code}' ]] || printf '%s' "$http_status"
-    exit 0
+    if [[ ! -s $answer ]]; then code=404; fi
 elif [[ $url == *aur.archlinux.org/cgit/aur.git/plain/.SRCINFO* ]]; then
     answer=$GSA_FAKE_DIR/aur_srcinfo
-elif [[ $url == */raw/main/* ]]; then
+elif [[ $url == */-/raw/main/.SRCINFO ]]; then
     answer=$GSA_FAKE_DIR/srcinfo
 else
     answer=$GSA_FAKE_DIR/srcinfo_tag
 fi
-[[ -s $answer ]] || exit 22
-cp -- "$answer" "$out"
+if [[ $code == 200 && ! -s $answer ]]; then code=404; fi
+if [[ ${GSA_FAKE_GITHUB_STATUS:-200} != 200 && $url == *api.github.com* ]]; then
+    code=${GSA_FAKE_GITHUB_STATUS}
+fi
+if [[ $code == 200 ]]; then
+    cat -- "$answer"
+fi
+case $write_out in
+    *http_code*) printf '%s' "$code" ;;
+esac
+exit 0
 EOF
     chmod +x "$dir/bin/curl"
 
-    # Stands in for makepkg's updater. It reproduces the three things the builder
-    # depends on: the sources are fetched, a VCS source becomes a checkout at its
-    # tag, and the sums are written in the recipe's own algorithms — from
-    # whatever was fetched.
+    # Stands in for makepkg's updater. It reproduces the three things the
+    # engine depends on: the sources are fetched, a VCS source becomes a
+    # checkout at its tag, and the sums are written in the recipe's own
+    # algorithms — from whatever was fetched. GSA_FAKE_FETCH_ABSENT models
+    # "the fetch left nothing anywhere": the sums are still rewritten, but no
+    # file survives to verify (a reconcilable ABSENCE, never a disagreement).
     cat >"$dir/bin/updpkgsums" <<'EOF'
 #!/usr/bin/env bash
 dir=$(pwd)
@@ -275,6 +309,9 @@ for alg in "${algos[@]}"; do
         else
             cp -- "$GSA_FAKE_DIR/deliver" "$dir/$f"
             sum=$("${alg}sum" "$dir/$f" | awk '{print $1}')
+            if [[ -n ${GSA_FAKE_FETCH_ABSENT:-} ]]; then
+                rm -f -- "$dir/$f"   # fetched "successfully", arrived nowhere
+            fi
         fi
         line+="'$sum' "
     done
@@ -283,12 +320,12 @@ done
 EOF
     chmod +x "$dir/bin/updpkgsums"
 
-    # Records the argv it was invoked with; on every refusal path it must never
-    # be created at all. --printsrcinfo is pure metadata — the version sync
-    # refreshes the committed .SRCINFO through it — so it models makepkg's
+    # Records the argv it was invoked with; on every refusal path it must
+    # never be created at all. --printsrcinfo is pure metadata (the version
+    # sync refreshes the committed .SRCINFO through it) — it models makepkg's
     # .SRCINFO shape from the recipe instead of building anything. The
-    # computed-pkgver case asserts .SRCINFO consistency by regenerating through
-    # this same code path and diffing.
+    # computed-pkgver case asserts .SRCINFO consistency by regenerating
+    # through this same code path and diffing.
     cat >"$dir/bin/makepkg" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$GSA_FAKE_DIR/makepkg_argv"
@@ -299,13 +336,6 @@ for arg in "$@"; do
         for ((i = 0; i < ${#args[@]}; i++)); do
             [[ ${args[i]} == --dir ]] && dir=${args[i + 1]}
         done
-        # The refresh scratch name is observable only while this runs (the
-        # redirect creates it before exec): record it so a case can assert the
-        # per-process suffix that makes two runs unable to collide.
-        if [[ -n ${GSA_FAKE_TMP_WATCH:-} ]]; then
-            find "$dir" -maxdepth 1 -name '.SRCINFO.tmp*' -printf '%f\n' \
-                >>"$GSA_FAKE_DIR/tmp_names" 2>/dev/null
-        fi
         [[ ${GSA_FAKE_PRINTSRCINFO_FAIL:-0} != 1 ]] || exit 1
         bash -c '
             cd "$1" || exit 1
@@ -326,6 +356,7 @@ for arg in "$@"; do
 done
 printf 'fake makepkg: %s\n' "$*"
 [[ ${GSA_FAKE_MAKEPKG_FAIL:-0} != 1 ]] || exit 1
+bash -c 'source ./PKGBUILD >/dev/null 2>&1; : >"$PWD/${pkgname[0]}-${pkgver}-${pkgrel}-any.pkg.tar.zst"' 2>/dev/null || true
 exit 0
 EOF
     chmod +x "$dir/bin/makepkg"
@@ -371,50 +402,27 @@ set_delivery() {
     fi
 }
 
-# $1 = dir · $2 = label · $3 = expected rc (0 or 'fail') · extra args...
-run_build() {
-    local dir=$1 label=$2 expect=$3
-    shift 3
-    local package_id=${GSA_FAKE_PACKAGE_ID:-s1}
-    set +e
-    output=$(
-        PATH="$dir/bin:$PATH" \
-        GSA_STATE_DIR="$dir/state" \
-        NVCHECK_STATE_DIR="$dir/nvcheck-state" \
-        GSA_FAKE_DIR="$dir/fake" \
-        GSA_FAKE_NVCHECK_VERSION="${GSA_FAKE_NVCHECK_VERSION:-}" \
-        GSA_FAKE_NVCHECK_KEY="${GSA_FAKE_NVCHECK_KEY:-s1}" \
-        GSA_FAKE_NVCHECK_FAIL="${GSA_FAKE_NVCHECK_FAIL:-0}" \
-        GSA_FAKE_GITHUB_STATUS="${GSA_FAKE_GITHUB_STATUS:-200}" \
-        GSA_FAKE_SI_MODE="${GSA_FAKE_SI_MODE:-}" \
-        GSA_FAKE_SED_LOG="${GSA_FAKE_SED_LOG:-}" \
-        GSA_FAKE_TMP_WATCH="${GSA_FAKE_TMP_WATCH:-}" \
-        GSA_FAKE_PRINTSRCINFO_FAIL="${GSA_FAKE_PRINTSRCINFO_FAIL:-}" \
-        GSA_FAKE_MAKEPKG_FAIL="${GSA_FAKE_MAKEPKG_FAIL:-}" \
-        GSA_CPU_THREADS=4 \
-        GSA_MEMORY_GIB=8 \
-        fish "$dir/build-all.fish" --allow-broken-rustc --no-deps \
-            --intensity low "$package_id" "$@" 2>&1
-    )
-    rc=$?
-    set -e
-    printf '%s' "$output" >"$dir/out.txt"
-    if [[ $expect == fail ]]; then
-        ((rc != 0)) || fail "$label: the builder reported success; it was supposed to refuse"
-    else
-        ((rc == 0)) || fail "$label: the builder exited $rc"$'\n'"$output"
+set_github_release() { # $1 = workspace · $2 = tag · $3 = asset · $4 = sha256|none
+    local dir=$1 tag=$2 asset=$3 digest=$4
+    local digest_json=null
+    if [[ $digest != none ]]; then
+        digest_json="\"sha256:$digest\""
     fi
+    cat >"$dir/fake/github_release.$tag.json" <<EOF
+{
+  "tag_name": "$tag",
+  "assets": [
+    {"name": "$asset", "digest": $digest_json}
+  ]
+}
+EOF
 }
 
-pkgfile() { printf '%s/packages/stable/s1/PKGBUILD' "$1"; }
-recipe_log() { printf '%s/state/logs/s1.log' "$1"; }
-
-# The external-sync path still uses the real resolver. Only nvchecker itself is
-# stubbed; it writes the configured key into the resolver's temporary newver file.
+# The external-sync path still uses the real resolver seam. Only nvchecker
+# itself is stubbed: it writes the configured key into the resolver's
+# disposable new_ver.json state (the engine accepts the flat map shape).
 make_nvchecker_stub() {
     local dir=$1
-    mkdir -p "$dir/tools"
-    cp -- "$gsa_repo_root/tools/nvcheck.sh" "$dir/tools/nvcheck.sh"
     cat >"$dir/bin/nvchecker" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -433,7 +441,7 @@ done
 newver=$(sed -n 's/^[[:space:]]*newver[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$config" | head -n1)
 [[ -n $newver ]] || exit 2
 printf '%s\n' "$config" >>"$GSA_FAKE_DIR/nvchecker_calls"
-printf '{"%s":"%s"}\n' "$GSA_FAKE_NVCHECK_KEY" "$GSA_FAKE_NVCHECK_VERSION" >"$newver"
+printf '{"%s":"%s"}\n' "${GSA_FAKE_NVCHECK_KEY:-s1}" "${GSA_FAKE_NVCHECK_VERSION:-}" >"$newver"
 EOF
     chmod +x "$dir/bin/nvchecker"
 }
@@ -443,22 +451,6 @@ opt_in_nvchecker() { # $1 = workspace · $2 = id · $3 = path · $4 = group
     sed -i "\|^$id|d" "$dir/config/topology.conf"
     printf '%s|%s|%s||version-sync=nvchecker\n' "$id" "$path" "$group" \
         >>"$dir/config/topology.conf"
-}
-
-set_github_release() { # $1 = workspace · $2 = tag · $3 = asset · $4 = sha256|none
-    local dir=$1 tag=$2 asset=$3 digest=$4
-    local digest_json=null
-    if [[ $digest != none ]]; then
-        digest_json="\"sha256:$digest\""
-    fi
-    cat >"$dir/fake/github_release.$tag.json" <<EOF
-{
-  "tag_name": "$tag",
-  "assets": [
-    {"name": "$asset", "digest": $digest_json}
-  ]
-}
-EOF
 }
 
 make_aur_version_workspace() { # $1 = workspace
@@ -476,55 +468,79 @@ EOF
     make_nvchecker_stub "$dir"
 }
 
-make_gcc_version_workspace() { # $1 = workspace
-    local dir=$1
-    make_case_workspace "$dir" '99.0.0-1'
-    mkdir -p "$dir/packages/core"
-    mv -- "$dir/packages/stable/s1" "$dir/packages/core/gcc-snapshot"
-    sed -i '/^s1|/d' "$dir/config/topology.conf"
-    printf 'gcc-snapshot|packages/core/gcc-snapshot|core||version-sync=nvchecker\n' \
-        >>"$dir/config/topology.conf"
-    cat >"$dir/packages/core/gcc-snapshot/PKGBUILD" <<'EOF'
-pkgbase=gcc-snapshot
-pkgname=(gcc-snapshot)
-pkgver=17.0.0.snapshot20260920
-if [[ $pkgver =~ ^([0-9]+)\.0\.0\.snapshot([0-9]{8})$ ]]; then
-    _pkgver="${BASH_REMATCH[1]}-${BASH_REMATCH[2]}"
-else
-    printf 'gcc-snapshot: unsupported pkgver format: %s\n' "$pkgver" >&2
-    exit 1
-fi
-pkgrel=1
-arch=(any)
-source=("https://example.invalid/gcc-${_pkgver}.tar.xz")
-sha256sums=('0000000000000000000000000000000000000000000000000000000000000000')
-EOF
-    cat >"$dir/packages/core/gcc-snapshot/.nvchecker.toml" <<'EOF'
-[gcc-snapshot]
-source = "aur"
-aur = "gcc-snapshot"
-strip_release = true
-EOF
-    make_nvchecker_stub "$dir"
+# ─── Engine drivers ─────────────────────────────────────────────────────────
+base_path=$PATH
+run_case() { # $1 = workspace · $2 = label · $3 = expected rc · extra args…
+    local dir=$1 label=$2 expect=$3
+    shift 3
+    export PATH="$dir/bin:$base_path"
+    export GSA_FAKE_DIR="$dir/fake"
+    export GSA_FAKE_NVCHECK_VERSION="${GSA_FAKE_NVCHECK_VERSION:-}" \
+        GSA_FAKE_NVCHECK_KEY="${GSA_FAKE_NVCHECK_KEY:-s1}" \
+        GSA_FAKE_NVCHECK_FAIL="${GSA_FAKE_NVCHECK_FAIL:-0}" \
+        GSA_FAKE_GITHUB_STATUS="${GSA_FAKE_GITHUB_STATUS:-200}" \
+        GSA_FAKE_SI_MODE="${GSA_FAKE_SI_MODE:-}" \
+        GSA_FAKE_PRINTSRCINFO_FAIL="${GSA_FAKE_PRINTSRCINFO_FAIL:-}" \
+        GSA_FAKE_MAKEPKG_FAIL="${GSA_FAKE_MAKEPKG_FAIL:-}" \
+        GSA_FAKE_FETCH_ABSENT="${GSA_FAKE_FETCH_ABSENT:-}"
+    # targets may be several ids (GSA_FAKE_PACKAGE_ID, space-separated) and
+    # must word-split; modifiers stay before the targets per `gsa --help`.
+    local targets=${GSA_FAKE_PACKAGE_ID:-s1}
+    run_engine "$dir" -B --leaf --intensity low --state-dir "$dir/state" \
+        "$@" $targets
+    printf '%s' "$FIXTURE_OUTPUT" >"$dir/out.txt"
+    unset GSA_FAKE_NVCHECK_VERSION GSA_FAKE_NVCHECK_KEY GSA_FAKE_NVCHECK_FAIL \
+        GSA_FAKE_GITHUB_STATUS GSA_FAKE_SI_MODE GSA_FAKE_PRINTSRCINFO_FAIL \
+        GSA_FAKE_MAKEPKG_FAIL GSA_FAKE_FETCH_ABSENT GSA_FAKE_PACKAGE_ID
+    if ((FIXTURE_RC != expect)); then
+        fail "$label: engine exited $FIXTURE_RC, want $expect:" "$dir/out.txt"
+    fi
 }
 
-make_zen_version_workspace() { # $1 = workspace
-    local dir=$1
-    local source_entry='zen-source-$pkgver.tar.zst::https://github.com/zen-browser/desktop/releases/download/$pkgver/zen.source.tar.zst'
-    make_case_workspace "$dir" '99.0.0-1' "$source_entry"
-    mv -- "$dir/packages/stable/s1" "$dir/packages/stable/zen-browser-pgo"
-    sed -i '/^s1|/d' "$dir/config/topology.conf"
-    printf 'zen-browser-pgo|packages/stable/zen-browser-pgo|stable||version-sync=nvchecker\n' \
-        >>"$dir/config/topology.conf"
-    sed -i 's/^pkgname=s1$/pkgname=zen-browser/' \
-        "$dir/packages/stable/zen-browser-pgo/PKGBUILD"
-    cat >"$dir/packages/stable/zen-browser-pgo/.nvchecker.toml" <<'EOF'
-[zen-browser]
-source = "github"
-github = "zen-browser/desktop"
-EOF
-    make_nvchecker_stub "$dir"
+run_sync() { # $1 = workspace · $2 = label · $3 = expected rc — the -Sy pass
+    local dir=$1 label=$2 expect=$3
+    export PATH="$dir/bin:$base_path"
+    export GSA_FAKE_DIR="$dir/fake"
+    export GSA_FAKE_NVCHECK_VERSION="${GSA_FAKE_NVCHECK_VERSION:-}" \
+        GSA_FAKE_NVCHECK_KEY="${GSA_FAKE_NVCHECK_KEY:-s1}" \
+        GSA_FAKE_NVCHECK_FAIL="${GSA_FAKE_NVCHECK_FAIL:-0}" \
+        GSA_FAKE_GITHUB_STATUS="${GSA_FAKE_GITHUB_STATUS:-200}" \
+        GSA_FAKE_SI_MODE="${GSA_FAKE_SI_MODE:-}"
+    run_engine "$dir" -Sy
+    printf '%s' "$FIXTURE_OUTPUT" >"$dir/out.txt"
+    unset GSA_FAKE_NVCHECK_VERSION GSA_FAKE_NVCHECK_KEY GSA_FAKE_NVCHECK_FAIL \
+        GSA_FAKE_GITHUB_STATUS GSA_FAKE_SI_MODE
+    if ((FIXTURE_RC != expect)); then
+        fail "$label: gsa -Sy exited $FIXTURE_RC, want $expect:" "$dir/out.txt"
+    fi
+    if grep -q -- '--- run record begin ---' <<<"$FIXTURE_OUTPUT"; then
+        fail "$label: -Sy emitted a run record — the sync pass has none (§H):" "$dir/out.txt"
+    fi
 }
+
+expect_row() { # $1 = label · $2 = pkg · $3 = status · $4 = rc · $5 = reason
+    local label=$1 pkg=$2 st=$3 rc=$4 why=$5
+    local got_st got_rc got_why
+    got_st=$(rr2_outcome "$pkg" status <<<"$FIXTURE_OUTPUT")
+    got_rc=$(rr2_outcome "$pkg" rc <<<"$FIXTURE_OUTPUT")
+    got_why=$(rr2_outcome "$pkg" reason <<<"$FIXTURE_OUTPUT")
+    [[ $got_st == "$st" ]] \
+        || fail "$label: $pkg outcome status '$got_st', want '$st':" "$FIXTURE_OUTPUT"
+    [[ $got_rc == "$rc" ]] \
+        || fail "$label: $pkg outcome rc '$got_rc', want '$rc':" "$FIXTURE_OUTPUT"
+    [[ $got_why == "$why" ]] \
+        || fail "$label: $pkg outcome reason '$got_why', want '$why':" "$FIXTURE_OUTPUT"
+}
+
+expect_plan() { # $1 = label · $2 = pkg · $3 = plan · $4 = reason
+    local label=$1 pkg=$2 plan=$3 why=$4
+    [[ $(rr2_plan "$pkg" plan <<<"$FIXTURE_OUTPUT") == "$plan" ]] \
+        || fail "$label: $pkg plan is not '$plan':" "$FIXTURE_OUTPUT"
+    [[ $(rr2_plan "$pkg" reason <<<"$FIXTURE_OUTPUT") == "$why" ]] \
+        || fail "$label: $pkg plan reason mismatch (want '$why'):" "$FIXTURE_OUTPUT"
+}
+
+pkgfile() { printf '%s/packages/stable/s1/PKGBUILD' "$1"; }
 
 # ─── Case 1: anchored and verified — the happy path ─────────────────────────
 dir="$fixture/anchor"
@@ -534,12 +550,12 @@ set_official_srcinfo "$dir" "$repo_version" \
     "	sha256sums = $published_sha"
 set_delivery "$dir" "$published_payload"
 make_nvchecker_stub "$dir"
-run_build "$dir" 'anchor' 0
+run_case "$dir" 'anchor' 0
 
-# Preconditions: the sync happened, and so did the anchoring — otherwise every
-# assertion below could pass for the wrong reason.
+# Preconditions: the sync happened, and so did the anchoring — otherwise
+# every assertion below could pass for the wrong reason.
 grep -q "^pkgver=$repo_version$" "$(pkgfile "$dir")" \
-    || fail "the recipe was not version-synced, so this run cannot exercise the checksum path"
+    || fail 'the recipe was not version-synced, so this run cannot exercise the checksum path'
 [[ -s $dir/fake/curl_calls ]] || fail 'no official .SRCINFO was fetched, so nothing was anchored to'
 [[ -s $dir/fake/updpkgsums_calls ]] || fail 'the sums were never rewritten'
 [[ -s $dir/fake/makepkg_argv ]] || fail 'makepkg never ran on the success path'
@@ -551,37 +567,53 @@ if grep -q -- '--skipchecksums' "$dir/fake/makepkg_argv"; then
     fail 'a synced build still passed --skipchecksums to makepkg'
 fi
 
-# The recipe now carries the hash of a file that matched Arch's published value,
+# The recipe now carries the hash of a file that matched the published value,
 # which is the whole point: not a hash of whatever arrived.
 grep -q "^sha256sums=('$published_sha')$" "$(pkgfile "$dir")" \
     || fail 'the recipe does not carry the checksum of the verified source'
-grep -q 're-anchored to the official' "$(recipe_log "$dir")" \
-    || fail 'the log does not record that the checksums were re-anchored'
+grep -q 'checksums re-anchored to' "$dir/out.txt" \
+    || fail 'the run does not record that the checksums were re-anchored'
+grep -q 'verified against the fetched sources' "$dir/out.txt" \
+    || fail 'the anchoring is recorded without claiming verification against the fetch'
+expect_row 'anchor' s1 succeeded 0 ok
+expect_plan 'anchor' s1 build ok
+[[ $(rr2_scalar order <<<"$FIXTURE_OUTPUT") == 's1' ]] \
+    || fail "anchor: the record's order is not exactly the selection:" "$dir/out.txt"
 
-# ─── Case 2: a source that disagrees with Arch refuses the build ────────────
-# This is the case that separates anchoring from rubber-stamping: hashing what
-# arrived (updpkgsums alone) accepts this build.
+# The transactional rewrite leaves no scratch behind (the case-41 semantic
+# that survives the flip: no sed/tmp tool boundary exists in the engine).
+if find "$dir/packages/stable/s1" -name '*.tmp*' -print -quit | grep -q .; then
+    fail 'a staged file survived the run'
+fi
+
+# ─── Case 2: a source that disagrees refuses the run (integrity stop) ───────
+# This is the case that separates anchoring from rubber-stamping: hashing
+# what arrived (updpkgsums alone) accepts this build.
 dir="$fixture/tampered"
 make_case_workspace "$dir" "$repo_version-1"
 set_official_srcinfo "$dir" "$repo_version" \
     "	source = https://example.invalid/s1-$repo_version.tar.gz" \
     "	sha256sums = $published_sha"
 set_delivery "$dir" "$tampered_payload"
-run_build "$dir" 'tampered' fail
+run_case "$dir" 'tampered' 3
 
 [[ -s $dir/fake/curl_calls ]] || fail 'no official .SRCINFO was fetched: this case is vacuous'
 [[ -s $dir/fake/updpkgsums_calls ]] || fail 'the sums were never rewritten: this case is vacuous'
 if [[ -s $dir/fake/makepkg_argv ]]; then
-    fail 'makepkg ran for a source that disagrees with the checksum Arch published'
+    fail 'makepkg ran for a source that disagrees with the checksum the provider published'
 fi
-grep -q 'does not match the official Arch checksum' "$(recipe_log "$dir")" \
-    || fail 'the refusal does not say that the source disagrees with Arch'
-grep -q "$tampered_sha" "$(recipe_log "$dir")" \
+grep -q 'source does not match' "$dir/out.txt" \
+    || fail 'the refusal does not say that the source disagrees with the published checksum'
+grep -q "$tampered_sha" "$dir/out.txt" \
     || fail 'the refusal does not name the hash the fetched source actually had'
-grep -q "$published_sha" "$(recipe_log "$dir")" \
-    || fail 'the refusal does not name the hash Arch published'
+grep -q "$published_sha" "$dir/out.txt" \
+    || fail 'the refusal does not name the hash the provider published'
+grep -q 'the recipe was restored' "$dir/out.txt" \
+    || fail 'the integrity stop does not claim the recipe restore'
 grep -q "^sha256sums=('$staged_sum')$" "$(pkgfile "$dir")" \
     || fail 'the recipe was left carrying a hash of the tampered source'
+expect_row 'tampered' s1 failed 1 integrity-stop
+expect_plan 'tampered' s1 build ok
 
 # ─── Case 3: no official .SRCINFO at all (a recipe Arch does not carry) ─────
 dir="$fixture/no-official"
@@ -589,9 +621,9 @@ make_case_workspace "$dir" "$repo_version-1"
 : >"$dir/fake/srcinfo"                       # the fetch 404s
 : >"$dir/fake/srcinfo_tag"
 set_delivery "$dir" "$published_payload"
-run_build "$dir" 'no-official' fail
+run_case "$dir" 'no-official' 5
 
-grep -q 'carries no revision of' "$(recipe_log "$dir")" \
+grep -q 'carries no revision of' "$dir/out.txt" \
     || fail 'the refusal does not say that no official revision carries our version'
 if [[ -s $dir/fake/makepkg_argv ]]; then
     fail 'makepkg ran without any anchor for the sums'
@@ -601,6 +633,7 @@ if [[ -s $dir/fake/updpkgsums_calls ]]; then
 fi
 grep -q "^sha256sums=('$staged_sum')$" "$(pkgfile "$dir")" \
     || fail 'the recipe was modified although nothing could be anchored'
+expect_row 'no-official' s1 deferred 99 anchoring-refused
 
 # ─── Case 4: the official repo carries a different version ──────────────────
 # Anchoring to another version's checksums would be worse than not anchoring.
@@ -611,32 +644,29 @@ set_official_srcinfo "$dir" '1.5.0' \
     "	sha256sums = $published_sha"
 : >"$dir/fake/srcinfo_tag"
 set_delivery "$dir" "$published_payload"
-run_build "$dir" 'other-version' fail
+run_case "$dir" 'other-version' 5
 
-grep -q 'the official packaging repo carries 1.5.0' "$(recipe_log "$dir")" \
+grep -q 'the official packaging repo carries 1.5.0' "$dir/out.txt" \
     || fail 'the refusal does not say which version the official repo carries'
 if [[ -s $dir/fake/makepkg_argv ]]; then
     fail 'makepkg ran against another version of the sums'
 fi
 grep -q "^sha256sums=('$staged_sum')$" "$(pkgfile "$dir")" \
     || fail 'the recipe was modified although the official version did not match'
+expect_row 'other-version' s1 deferred 99 anchoring-refused
 
-# ─── Case 5: an entry the official file does not cover is refreshed, LOUDLY ─
+# ─── Case 5: an entry the provider does not cover is refreshed, LOUDLY ──────
 # The official document matched our pkgver but publishes no checksum for a
-# moved source (SKIP, or no entry at all). The old stance refused the recipe
-# for that; since 2026-09-24 the sync runs updpkgsums over it instead — that
-# is exactly the documented manual remedy, now automated — and records which
+# moved source (SKIP, or no entry at all). Since 2026-09-24 the sync runs
+# updpkgsums over it instead of refusing the recipe — and records which
 # entries were refreshed fetch-only, because nothing official attests them.
-# What must NOT appear: a silent refresh (the entries are named), a build with
-# verification disabled, or any weakening for entries Arch DOES publish
-# (cases 1/2 pin that half independently).
 dir="$fixture/unanchored"
 make_case_workspace "$dir" "$repo_version-1"
 set_official_srcinfo "$dir" "$repo_version" \
     "	source = https://example.invalid/s1-$repo_version.tar.xz" \
     "	sha256sums = $published_sha"
 set_delivery "$dir" "$published_payload"
-run_build "$dir" 'unanchored' 0
+run_case "$dir" 'unanchored' 0
 
 [[ -s $dir/fake/updpkgsums_calls ]] \
     || fail 'unanchored: the sums were never refreshed — this case is vacuous'
@@ -645,55 +675,61 @@ run_build "$dir" 'unanchored' 0
 if grep -q -- '--skipchecksums' "$dir/fake/makepkg_argv"; then
     fail 'unanchored: the build disabled checksum verification'
 fi
-grep -q 'publishes no checksum for' "$(recipe_log "$dir")" \
-    || fail 'the refresh does not record that official publishes no checksum for the entry'
-grep -q 's1-2.0.0.tar.gz' "$(recipe_log "$dir")" \
+grep -q 'publishes no checksum for' "$dir/out.txt" \
+    || fail 'the refresh does not record that the provider publishes no checksum for the entry'
+grep -q 's1-2.0.0.tar.gz' "$dir/out.txt" \
     || fail 'the refresh does not name the fetch-only entry'
-grep -q 'attested by nothing but the fetch' "$(recipe_log "$dir")" \
+grep -q 'attested by nothing but the fetch' "$dir/out.txt" \
     || fail 'the refresh-only entry is recorded without saying what attests it'
 grep -q "^sha256sums=('$published_sha')$" "$(pkgfile "$dir")" \
     || fail 'unanchored: the recipe does not carry the refreshed sum'
-# The run-level surface: the owner must be told what to review and commit.
-grep -q 'Version and checksum sync this run' "$dir/out.txt" \
-    || fail 'the run summary does not list the synced recipe as uncommitted work'
-grep -q 'refresh-only' "$dir/out.txt" \
-    || fail 'the run summary does not flag the fetch-only refresh'
+expect_row 'unanchored' s1 succeeded 0 ok
 
-# ─── Case 5b: the refresh itself fails → named error + recovery, parked ─────
+# The run-level surface: the owner must be told what to review and commit —
+# the -Sy disposition block carries the fetch-only accounting (§B.4).
+dir="$fixture/unanchored-sy"
+make_case_workspace "$dir" "$repo_version-1"
+set_official_srcinfo "$dir" "$repo_version" \
+    "	source = https://example.invalid/s1-$repo_version.tar.xz" \
+    "	sha256sums = $published_sha"
+set_delivery "$dir" "$published_payload"
+run_sync "$dir" 'unanchored-sy' 0
+grep -q 'Version and checksum sync this run' "$dir/out.txt" \
+    || fail 'the -Sy disposition block does not list the synced recipe as uncommitted work'
+grep -q 'refresh-only (fetch-only sums: review before committing)' "$dir/out.txt" \
+    || fail 'the -Sy disposition block does not flag the fetch-only refresh'
+if [[ -s $dir/fake/makepkg_argv ]]; then
+    fail 'unanchored-sy: the sync pass started a build'
+fi
+
+# ─── Case 5b: the refresh itself fails → named error, parked ────────────────
 # Network down, upstream gone: updpkgsums exits non-zero. The recipe must be
-# restored, the build refused with the 'updpkgsums' error and BOTH recovery
-# lines (manual refresh, --no-sync), makepkg never started — and the run must
-# DEFER the recipe (named marker in the summary) rather than drop the whole
-# dispatch. The dispatch half is re-pinned end to end in tests/anchor-defer.sh;
-# here the refusal itself and the parking marker are asserted.
+# restored, the build refused with the named 'updpkgsums' error and the
+# '--no-sync' escape hatch, makepkg never started — and the recipe must DEFER
+# (`anchoring-refused`) rather than drop the whole dispatch.
 dir="$fixture/refresh-fails"
 make_case_workspace "$dir" "$repo_version-1"
 set_official_srcinfo "$dir" "$repo_version" \
     "	source = https://example.invalid/s1-$repo_version.tar.xz" \
     "	sha256sums = $published_sha"
 set_delivery "$dir" none                       # the updpkgsums stub exits 1
-run_build "$dir" 'refresh-fails' fail
+run_case "$dir" 'refresh-fails' 5
 
-grep -q "'updpkgsums' could not refresh the checksums" "$(recipe_log "$dir")" \
-    || fail 'refresh failure: the log does not carry the named updpkgsums error'
-grep -q "Refresh them by hand" "$(recipe_log "$dir")" \
-    || fail 'refresh failure: the manual recovery line is missing'
-grep -q -- "'--no-sync' builds the committed version as-is" "$(recipe_log "$dir")" \
+grep -q "'updpkgsums' could not refresh the checksums" "$dir/out.txt" \
+    || fail 'refresh failure: the run does not carry the named updpkgsums error'
+grep -q -- "use '--no-sync' to build the committed version" "$dir/out.txt" \
     || fail 'refresh failure: the --no-sync escape is no longer documented in the error'
 if [[ -s $dir/fake/makepkg_argv ]]; then
     fail 'refresh failure: makepkg ran although nothing could be refreshed'
 fi
 grep -q "^sha256sums=('$staged_sum')$" "$(pkgfile "$dir")" \
     || fail 'refresh failure: the recipe was not restored to its pre-refresh sums'
-grep -q 'DEFERRED' "$dir/out.txt" \
-    || fail 'refresh failure: the recipe was not parked with a DEFERRED marker'
-grep -q '^  build-all.fish ' "$dir/out.txt" \
-    || fail 'refresh failure: no resume command for the parked recipe'
+expect_row 'refresh-fails' s1 deferred 99 anchoring-refused
 
 # ─── Case 6: a bump that does not move source=() is not treated as stale ────
-# 26 of the 28 stable recipes pin a literal version in the URL, so nothing they
-# fetch changes and their committed sums still verify. Anchoring here would be a
-# false alarm; re-hashing would be a gratuitous rewrite.
+# 26 of the 28 stable recipes pin a literal version in the URL, so nothing
+# they fetch changes and their committed sums still verify. Anchoring here
+# would be a false alarm; re-hashing would be a gratuitous rewrite.
 for variant in pkgrel-only static-pkgver; do
     dir="$fixture/$variant"
     if [[ $variant == pkgrel-only ]]; then
@@ -706,7 +742,7 @@ for variant in pkgrel-only static-pkgver; do
         "	source = https://example.invalid/s1-$repo_version.tar.gz" \
         "	sha256sums = $published_sha"
     set_delivery "$dir" "$published_payload"
-    run_build "$dir" "$variant" 0
+    run_case "$dir" "$variant" 0
 
     if [[ -s $dir/fake/curl_calls ]]; then
         fail "$variant: official checksums were fetched although source=() did not move"
@@ -722,6 +758,7 @@ for variant in pkgrel-only static-pkgver; do
     fi
     grep -q "^sha256sums=('$staged_sum')$" "$(pkgfile "$dir")" \
         || fail "$variant: the committed sums were rewritten although the sources did not move"
+    expect_row "$variant" s1 succeeded 0 ok
 done
 
 # The pkgver variant must still have synced the version, or it proves nothing.
@@ -732,9 +769,9 @@ grep -q "^pkgver=$repo_version$" "$(pkgfile "$fixture/static-pkgver")" \
 grep -q '^pkgrel=2$' "$(pkgfile "$fixture/pkgrel-only")" \
     || fail 'a repo pkgrel ahead of the local one was not adopted'
 
-# ─── Case 7: an official file publishing two algorithms ─────────────────────
-# The sums for one file list do not line up flat: fish has a single source with
-# both a sha512 and a b2 sum, and reading them as one list refuses the build.
+# ─── Case 7: a provider file publishing two algorithms ──────────────────────
+# The sums for one file list do not line up flat: one source with both a
+# sha256 and a b2 sum, read as one list, would refuse the build.
 dir="$fixture/two-algorithms"
 make_case_workspace "$dir" "$repo_version-1" \
     'https://example.invalid/s1-$pkgver.tar.gz' \
@@ -744,7 +781,7 @@ set_official_srcinfo "$dir" "$repo_version" \
     "	sha256sums = $published_sha" \
     "	b2sums = $published_b2"
 set_delivery "$dir" "$published_payload"
-run_build "$dir" 'two-algorithms' 0
+run_case "$dir" 'two-algorithms' 0
 
 [[ -s $dir/fake/updpkgsums_calls ]] || fail 'two-algorithms: the sums were never rewritten: this case is vacuous'
 grep -q "^sha256sums=('$published_sha')$" "$(pkgfile "$dir")" \
@@ -754,8 +791,8 @@ grep -q "^b2sums=('$published_b2')$" "$(pkgfile "$dir")" \
 
 # ─── Case 8: a "name::url" override names the fetched file ──────────────────
 # 'openshadinglanguage-….tar.gz::https://…/v1.15.3.0.tar.gz' downloads to the
-# override. Looking for the URL's basename finds nothing (or, for util-linux's
-# renamed LICENSE, an unrelated file that happens to share the name).
+# override. Looking for the URL's basename finds nothing (or an unrelated
+# file that happens to share the name).
 dir="$fixture/renamed"
 make_case_workspace "$dir" "$repo_version-1" \
     's1-local.tar.gz::https://example.invalid/s1-$pkgver.tar.gz'
@@ -763,19 +800,19 @@ set_official_srcinfo "$dir" "$repo_version" \
     "	source = s1-local.tar.gz::https://example.invalid/s1-$repo_version.tar.gz" \
     "	sha256sums = $published_sha"
 set_delivery "$dir" "$published_payload"
-run_build "$dir" 'renamed' 0
+run_case "$dir" 'renamed' 0
 
 [[ -s $dir/fake/updpkgsums_calls ]] || fail 'renamed: the sums were never rewritten: this case is vacuous'
 [[ -f $dir/packages/stable/s1/s1-local.tar.gz ]] \
     || fail 'renamed: the stub did not fetch under the override name, so this case is vacuous'
 grep -q "^sha256sums=('$published_sha')$" "$(pkgfile "$dir")" \
     || fail 'renamed: the sums were not anchored, so the override name was not resolved'
-grep -q 're-anchored to the official' "$(recipe_log "$dir")" \
-    || fail 'renamed: the fetch of the override name was not verified against Arch'
+grep -q 'checksums re-anchored to' "$dir/out.txt" \
+    || fail 'renamed: the fetch of the override name was not verified against the provider'
 
 # ─── Case 9: the packaging repo moved on — the version's tag is the anchor ──
-# bash's main branch is 5.3.20 while the repos serve 5.3.15, so anchoring to main
-# would anchor to a different version's files.
+# bash's main branch is 5.3.20 while the repos serve 5.3.15, so anchoring to
+# main would anchor to a different version's files.
 dir="$fixture/version-tag"
 make_case_workspace "$dir" "$repo_version-1"
 # main carries a different version, so it is no anchor; the version's own tag
@@ -790,7 +827,7 @@ set_official_srcinfo "$dir" "$repo_version" \
 mv -- "$dir/fake/srcinfo" "$dir/fake/srcinfo_tag"
 mv -- "$dir/fake/main_answer" "$dir/fake/srcinfo"
 set_delivery "$dir" "$published_payload"
-run_build "$dir" 'version-tag' 0
+run_case "$dir" 'version-tag' 0
 
 grep -q "/raw/$repo_version-1/" "$dir/fake/curl_calls" \
     || fail 'the version tag was never tried, so main could not be the only candidate'
@@ -798,16 +835,16 @@ grep -q "^sha256sums=('$published_sha')$" "$(pkgfile "$dir")" \
     || fail 'the version-tag run did not anchor the sums'
 
 # ─── Case 10: a VCS source is anchored and verified the way makepkg does ────
-# A 'git+…#tag=' source has no file to hash: makepkg hashes git archive of the
-# tag. Verifying it as a download reports "not fetched", and anchoring to a
-# value that was never checked is the rubber stamp again.
+# A 'git+…#tag=' source has no file to hash: makepkg hashes git archive of
+# the tag. Verifying it as a download reports "not fetched", and anchoring to
+# a value that was never checked is the rubber stamp again.
 dir="$fixture/vcs"
 make_case_workspace "$dir" "$repo_version-1" \
     's1git::git+https://example.invalid/s1.git#tag=$pkgver' \
     "sha512sums=('$staged_sum')"
-# The checkout exists before the run (updpkgsums reuses it), so the value Arch
-# "published" is the one this machine computes — which is the property that makes
-# a pinned tag anchorable at all.
+# The checkout exists before the run (updpkgsums reuses it), so the value the
+# provider "published" is the one this machine computes — which is the
+# property that makes a pinned tag anchorable at all.
 checkout="$dir/packages/stable/s1/s1git"
 mkdir -p "$checkout"
 git -C "$checkout" init -q .
@@ -820,7 +857,7 @@ set_official_srcinfo "$dir" "$repo_version" \
     "	source = s1git::git+https://example.invalid/s1.git#tag=$repo_version" \
     "	sha512sums = $published_vcs"
 set_delivery "$dir" "$published_payload"
-run_build "$dir" 'vcs' 0
+run_case "$dir" 'vcs' 0
 
 [[ -d $checkout ]] || fail 'vcs: the checkout was not present, so this case is vacuous'
 [[ -s $dir/fake/updpkgsums_calls ]] || fail 'vcs: the sums were never rewritten: this case is vacuous'
@@ -829,8 +866,8 @@ if [[ -s $dir/fake/makepkg_argv ]] && grep -q -- '--skipchecksums' "$dir/fake/ma
 fi
 grep -q "^sha512sums=('$published_vcs')$" "$(pkgfile "$dir")" \
     || fail 'vcs: the checkout was not anchored to the git-archive value'
-grep -q 're-anchored to the official' "$(recipe_log "$dir")" \
-    || fail 'vcs: the log does not record that the checkout was anchored'
+grep -q 'checksums re-anchored to' "$dir/out.txt" \
+    || fail 'vcs: the run does not record that the checkout was anchored'
 
 # ─── Case 10b: a `?signed` fragment flag must not leak into the ref name ─────
 # makepkg appends verification flags to the fragment (#tag=$pkgver?signed).
@@ -853,11 +890,9 @@ set_official_srcinfo "$dir" "$repo_version" \
     $'\tsource = s1git::git+https://example.invalid/s1.git#tag='"$repo_version" \
     $'\tsha512sums = '"$published_vcs"
 set_delivery "$dir" "$published_payload"
-run_build "$dir" 'vcs-signed' 0
+run_case "$dir" 'vcs-signed' 0
 grep -q "^sha512sums=('$published_vcs')$" "$(pkgfile "$dir")" \
     || fail 'vcs-signed: the ?signed checkout was not anchored to the git-archive value'
-grep -q 're-anchored to the official' "$(recipe_log "$dir")" \
-    || fail 'vcs-signed: the log does not record that the checkout was anchored'
 
 # ─── Case 11: --no-sync disables the whole path ─────────────────────────────
 dir="$fixture/no-sync"
@@ -866,12 +901,12 @@ set_official_srcinfo "$dir" "$repo_version" \
     "	source = https://example.invalid/s1-$repo_version.tar.gz" \
     "	sha256sums = $published_sha"
 set_delivery "$dir" "$published_payload"
-run_build "$dir" 'no-sync' 0 --no-sync
+run_case "$dir" 'no-sync' 0 --no-sync
 
 grep -q "^pkgver=$staged_version$" "$(pkgfile "$dir")" \
     || fail '--no-sync rewrote the recipe version anyway'
-if [[ -e $dir/fake/curl_calls ]]; then
-    fail '--no-sync still fetched official checksums'
+if [[ -e $dir/fake/curl_calls || -e $dir/fake/pacman_calls ]]; then
+    fail '--no-sync still queried a version or checksum provider'
 fi
 if [[ ! -s $dir/fake/makepkg_argv ]]; then
     fail '--no-sync refused to build a recipe it did not rewrite'
@@ -893,7 +928,7 @@ set_official_srcinfo "$dir" "$staged_version" \
     "	source = https://example.invalid/s1-$staged_version.tar.gz" \
     "	sha256sums = $published_sha"
 set_delivery "$dir" "$published_payload"
-run_build "$dir" 'pkgrel-ahead' 0
+run_case "$dir" 'pkgrel-ahead' 0
 
 grep -q '^pkgrel=2$' "$(pkgfile "$dir")" \
     || fail 'a local pkgrel ahead of the repo was downgraded back to the repo value'
@@ -908,20 +943,15 @@ fi
 if [[ ! -s $dir/fake/makepkg_argv ]]; then
     fail 'pkgrel-ahead: the build was refused instead of being built'
 fi
-if [[ -s $dir/state/synced.list ]]; then
-    fail 'pkgrel-ahead: the run witness lists a recipe the sync must not have touched'
-fi
 
 # ─── Case 15: opted-in core recipes use AUR metadata as the version source ──
-# The AUR .SRCINFO must agree with the version returned by nvchecker and is the
-# checksum authority for the moved custom-upstream source.
+# The AUR .SRCINFO must agree with the version resolved by nvchecker and is
+# the checksum authority for the moved custom-upstream source.
 dir="$fixture/aur-sync"
 make_case_workspace "$dir" '99.0.0-1'
 mkdir -p "$dir/packages/core"
 mv -- "$dir/packages/stable/s1" "$dir/packages/core/s1"
-sed -i '/^s1|/d' "$dir/config/topology.conf"
-printf 's1|packages/core/s1|core||version-sync=nvchecker\n' \
-    >>"$dir/config/topology.conf"
+opt_in_nvchecker "$dir" s1 packages/core/s1 core
 cat >"$dir/packages/core/s1/.nvchecker.toml" <<'EOF'
 [s1]
 source = "aur"
@@ -932,7 +962,7 @@ make_nvchecker_stub "$dir"
 set_aur_srcinfo "$dir" s1 "$repo_version" 3 \
     "https://example.invalid/s1-$repo_version.tar.gz" "$published_sha" 1
 set_delivery "$dir" "$published_payload"
-GSA_FAKE_NVCHECK_VERSION="$repo_version" run_build "$dir" 'aur-sync' 0
+GSA_FAKE_NVCHECK_VERSION="$repo_version" run_case "$dir" 'aur-sync' 0
 
 grep -q "^pkgver=$repo_version$" "$dir/packages/core/s1/PKGBUILD" \
     || fail 'aur-sync: the AUR pkgver was not applied to the core recipe'
@@ -940,8 +970,6 @@ grep -q '^pkgrel=3$' "$dir/packages/core/s1/PKGBUILD" \
     || fail 'aur-sync: pkgrel was not taken from the matching AUR .SRCINFO'
 grep -q '^epoch=1$' "$dir/packages/core/s1/PKGBUILD" \
     || fail 'aur-sync: epoch was not taken from the matching AUR .SRCINFO'
-grep -q "1:$repo_version-3" "$dir/out.txt" \
-    || fail 'aur-sync: the run summary omitted the synced epoch'
 [[ -s $dir/fake/nvchecker_calls ]] \
     || fail 'aur-sync: the .nvchecker.toml resolver was not called'
 [[ -s $dir/fake/curl_calls ]] \
@@ -950,17 +978,18 @@ grep -q 'aur.archlinux.org/cgit/aur.git/plain/.SRCINFO' "$dir/fake/curl_calls" \
     || fail 'aur-sync: the checksum authority was not fetched from AUR'
 grep -q "^sha256sums=('$published_sha')$" "$dir/packages/core/s1/PKGBUILD" \
     || fail 'aur-sync: the fetched source was not anchored to the AUR checksum'
-grep -q 're-anchored to AUR' "$dir/state/logs/s1.log" \
-    || fail 'aur-sync: the package log does not name the AUR checksum authority'
+grep -q 're-anchored to' "$dir/out.txt" \
+    || fail 'aur-sync: the run does not name the checksum authority'
 [[ -s $dir/fake/makepkg_argv ]] \
     || fail 'aur-sync: makepkg did not run after successful AUR verification'
 if find "$dir/packages" \( -name old_ver.json -o -name new_ver.json \) | grep -q .; then
     fail 'aur-sync: nvchecker state leaked into a recipe directory'
 fi
+expect_row 'aur-sync' s1 succeeded 0 ok
 
-# ─── Case 16: GitHub release digests anchor changed assets ───────────────────
-dir="$fixture/github-digest"
+# ─── Case 16: GitHub release digests anchor changed assets ──────────────────
 github_source='https://github.com/example/s1/releases/download/$pkgver/s1-$pkgver.tar.gz'
+dir="$fixture/github-digest"
 make_case_workspace "$dir" '99.0.0-1' "$github_source"
 opt_in_nvchecker "$dir" s1 packages/stable/s1 stable
 cat >"$dir/packages/stable/s1/.nvchecker.toml" <<'EOF'
@@ -972,7 +1001,7 @@ sed -i 's/^pkgrel=1$/pkgrel=4/' "$(pkgfile "$dir")"
 make_nvchecker_stub "$dir"
 set_github_release "$dir" "$repo_version" "s1-$repo_version.tar.gz" "$published_sha"
 set_delivery "$dir" "$published_payload"
-GSA_FAKE_NVCHECK_VERSION="$repo_version" run_build "$dir" 'github-digest' 0
+GSA_FAKE_NVCHECK_VERSION="$repo_version" run_case "$dir" 'github-digest' 0
 
 grep -q "^pkgver=$repo_version$" "$(pkgfile "$dir")" \
     || fail 'github-digest: the resolved GitHub version was not applied'
@@ -980,12 +1009,26 @@ grep -q '^pkgrel=1$' "$(pkgfile "$dir")" \
     || fail 'github-digest: pkgrel was not reset for a changed pkgver'
 grep -q "^sha256sums=('$published_sha')$" "$(pkgfile "$dir")" \
     || fail 'github-digest: the fetched source was not anchored to the release digest'
-grep -q 're-anchored to GitHub example/s1' "$(recipe_log "$dir")" \
-    || fail 'github-digest: the log does not identify the GitHub checksum authority'
+grep -q 'checksums re-anchored to' "$dir/out.txt" \
+    || fail 'github-digest: the run does not identify the checksum authority'
+
+# The provider-aware disposition wording lives on the -Sy surface (§B.4).
+dir="$fixture/github-digest-sy"
+make_case_workspace "$dir" '99.0.0-1' "$github_source"
+opt_in_nvchecker "$dir" s1 packages/stable/s1 stable
+cat >"$dir/packages/stable/s1/.nvchecker.toml" <<'EOF'
+[s1]
+source = "github"
+github = "example/s1"
+EOF
+make_nvchecker_stub "$dir"
+set_github_release "$dir" "$repo_version" "s1-$repo_version.tar.gz" "$published_sha"
+set_delivery "$dir" "$published_payload"
+GSA_FAKE_NVCHECK_VERSION="$repo_version" run_sync "$dir" 'github-digest-sy' 0
 grep -q 'Version and checksum sync this run' "$dir/out.txt" \
-    || fail 'github-digest: the run summary does not use the provider-aware heading'
+    || fail 'github-digest-sy: the -Sy disposition block is missing'
 grep -q 'synced with GitHub example/s1' "$dir/out.txt" \
-    || fail 'github-digest: the run summary omits the version provider'
+    || fail 'github-digest-sy: the disposition block omits the version provider'
 
 # ─── Case 17: absent GitHub digest is explicit fetch-only, never a false anchor
 dir="$fixture/github-fetch-only"
@@ -999,16 +1042,17 @@ EOF
 make_nvchecker_stub "$dir"
 set_github_release "$dir" "v$repo_version" "s1-$repo_version.tar.gz" none
 set_delivery "$dir" "$published_payload"
-GSA_FAKE_NVCHECK_VERSION="$repo_version" run_build "$dir" 'github-fetch-only' 0
+GSA_FAKE_NVCHECK_VERSION="$repo_version" run_case "$dir" 'github-fetch-only' 0
 
 grep -q "^pkgver=$repo_version$" "$(pkgfile "$dir")" \
     || fail 'github-fetch-only: the git-source tracker did not resolve its version'
-grep -q 'NOT anchored' "$(recipe_log "$dir")" \
-    || fail 'github-fetch-only: the log does not disclose the missing upstream digest'
-grep -q 'fetch-only sums: review before committing' "$dir/out.txt" \
-    || fail 'github-fetch-only: the run summary does not request review'
+grep -q 'NOT anchored' "$dir/out.txt" \
+    || fail 'github-fetch-only: the run does not disclose the missing upstream digest'
+grep -q 'Review these sums before committing' "$dir/out.txt" \
+    || fail 'github-fetch-only: the run does not request review'
 grep -q "^sha256sums=('$published_sha')$" "$(pkgfile "$dir")" \
     || fail 'github-fetch-only: the fetched checksum was not refreshed'
+expect_row 'github-fetch-only' s1 succeeded 0 ok
 
 # ─── Case 18: a published GitHub digest mismatch refuses and rolls back ─────
 dir="$fixture/github-mismatch"
@@ -1023,7 +1067,7 @@ make_nvchecker_stub "$dir"
 set_github_release "$dir" "$repo_version" "s1-$repo_version.tar.gz" "$published_sha"
 set_delivery "$dir" "$tampered_payload"
 cp -- "$(pkgfile "$dir")" "$dir/fake/PKGBUILD.original"
-GSA_FAKE_NVCHECK_VERSION="$repo_version" run_build "$dir" 'github-mismatch' fail
+GSA_FAKE_NVCHECK_VERSION="$repo_version" run_case "$dir" 'github-mismatch' 3
 
 cmp -s "$dir/fake/PKGBUILD.original" "$(pkgfile "$dir")" \
     || fail 'github-mismatch: the original PKGBUILD was not restored'
@@ -1031,8 +1075,7 @@ cmp -s "$dir/fake/PKGBUILD.original" "$(pkgfile "$dir")" \
     || fail 'github-mismatch: makepkg ran despite a published-digest disagreement'
 grep -q 'source does not match' "$dir/out.txt" \
     || fail 'github-mismatch: the integrity refusal was not reported'
-grep -q '^s1 failed ' "$dir/out.txt" \
-    || fail 'github-mismatch: the run record did not classify the mismatch as failure'
+expect_row 'github-mismatch' s1 failed 1 integrity-stop
 
 # ─── Case 19: unavailable GitHub metadata defers and rolls back ──────────────
 dir="$fixture/github-unavailable"
@@ -1047,16 +1090,15 @@ make_nvchecker_stub "$dir"
 set_delivery "$dir" "$published_payload"
 cp -- "$(pkgfile "$dir")" "$dir/fake/PKGBUILD.original"
 GSA_FAKE_GITHUB_STATUS=503 GSA_FAKE_NVCHECK_VERSION="$repo_version" \
-    run_build "$dir" 'github-unavailable' fail
+    run_case "$dir" 'github-unavailable' 5
 
 cmp -s "$dir/fake/PKGBUILD.original" "$(pkgfile "$dir")" \
     || fail 'github-unavailable: the original PKGBUILD was not restored'
 [[ ! -s $dir/fake/updpkgsums_calls && ! -s $dir/fake/makepkg_argv ]] \
     || fail 'github-unavailable: source refresh or build ran without provider metadata'
-grep -qi 'GitHub.*metadata' "$dir/out.txt" \
+grep -q 'metadata is unavailable' "$dir/out.txt" \
     || fail 'github-unavailable: the provider failure was not reported'
-grep -q '^s1 deferred 99 ' "$dir/out.txt" \
-    || fail 'github-unavailable: the run record did not classify the outage as deferred'
+expect_row 'github-unavailable' s1 deferred 99 anchoring-refused
 
 # ─── Case 20: an nvchecker failure does not fall back to Arch ────────────────
 dir="$fixture/nvchecker-unavailable"
@@ -1064,16 +1106,15 @@ make_case_workspace "$dir" '99.0.0-1'
 opt_in_nvchecker "$dir" s1 packages/stable/s1 stable
 make_nvchecker_stub "$dir"
 cp -- "$(pkgfile "$dir")" "$dir/fake/PKGBUILD.original"
-GSA_FAKE_NVCHECK_FAIL=1 run_build "$dir" 'nvchecker-unavailable' fail
+GSA_FAKE_NVCHECK_FAIL=1 run_case "$dir" 'nvchecker-unavailable' 5
 
 cmp -s "$dir/fake/PKGBUILD.original" "$(pkgfile "$dir")" \
     || fail 'nvchecker-unavailable: the recipe changed after its provider failed'
-[[ ! -s $dir/fake/curl_calls && ! -s $dir/fake/makepkg_argv ]] \
-    || fail 'nvchecker-unavailable: the builder fell back to Arch or built without a version'
+[[ ! -s $dir/fake/pacman_calls && ! -s $dir/fake/curl_calls && ! -s $dir/fake/makepkg_argv ]] \
+    || fail 'nvchecker-unavailable: the engine fell back to Arch or built without a version'
 grep -q 'nvchecker failed' "$dir/out.txt" \
     || fail 'nvchecker-unavailable: the resolver failure was not reported'
-grep -q '^s1 deferred 99 ' "$dir/out.txt" \
-    || fail 'nvchecker-unavailable: the run record did not classify the failure as deferred'
+expect_row 'nvchecker-unavailable' s1 deferred 99 anchoring-refused
 
 # ─── Case 21: stale AUR version metadata cannot authorize a different version
 dir="$fixture/aur-version-race"
@@ -1082,46 +1123,46 @@ set_aur_srcinfo "$dir" s1 "$staged_version" 3 \
     "https://example.invalid/s1-$staged_version.tar.gz" "$published_sha"
 set_delivery "$dir" none
 cp -- "$dir/packages/core/s1/PKGBUILD" "$dir/fake/PKGBUILD.original"
-GSA_FAKE_NVCHECK_VERSION="$repo_version" run_build "$dir" 'aur-version-race' fail
+GSA_FAKE_NVCHECK_VERSION="$repo_version" run_case "$dir" 'aur-version-race' 5
 
 cmp -s "$dir/fake/PKGBUILD.original" "$dir/packages/core/s1/PKGBUILD" \
     || fail 'aur-version-race: a version-mismatched AUR .SRCINFO changed the recipe'
 [[ ! -s $dir/fake/makepkg_argv ]] \
     || fail 'aur-version-race: makepkg ran with a mismatched AUR version'
-grep -q '^s1 deferred 99 ' "$dir/out.txt" \
-    || fail 'aur-version-race: the run record did not classify the metadata race as deferred'
+expect_row 'aur-version-race' s1 deferred 99 anchoring-refused
 
 # ─── Case 22: AUR source metadata must cover the rewritten recipe exactly ───
-# A provider source list that does not carry the recipe's own sources refuses
+# A provider source list that does not carry the recipe's own sources defers
 # (URL drift is indistinguishable from a different file). The converse — a
-# published SUPERSET with provider-only files — anchors fine; Case 46 pins it.
+# published SUPERSET with provider-only files — anchors fine; case 46 pins it.
 dir="$fixture/aur-source-race"
 make_aur_version_workspace "$dir"
 set_aur_srcinfo "$dir" s1 "$repo_version" 3 \
     "https://example.invalid/not-s1-$repo_version.tar.gz" "$published_sha"
 set_delivery "$dir" "$published_payload"
 cp -- "$dir/packages/core/s1/PKGBUILD" "$dir/fake/PKGBUILD.original"
-GSA_FAKE_NVCHECK_VERSION="$repo_version" run_build "$dir" 'aur-source-race' fail
+GSA_FAKE_NVCHECK_VERSION="$repo_version" run_case "$dir" 'aur-source-race' 5
 
 cmp -s "$dir/fake/PKGBUILD.original" "$dir/packages/core/s1/PKGBUILD" \
     || fail 'aur-source-race: the recipe was not restored after an AUR source mismatch'
 [[ ! -s $dir/fake/updpkgsums_calls && ! -s $dir/fake/makepkg_argv ]] \
     || fail 'aur-source-race: a mismatched AUR source was fetched or built'
-grep -q '^s1 deferred 99 ' "$dir/out.txt" \
-    || fail 'aur-source-race: the run record did not classify the source mismatch as deferred'
+grep -q 'do not cover every source' "$dir/out.txt" \
+    || fail 'aur-source-race: the coverage refusal is not named'
+expect_row 'aur-source-race' s1 deferred 99 anchoring-refused
 
 # ─── Case 23: --no-sync suppresses every external provider operation ─────────
-dir="$fixture/no-sync"
+dir="$fixture/no-sync-tagged"
 make_case_workspace "$dir" '99.0.0-1'
 opt_in_nvchecker "$dir" s1 packages/stable/s1 stable
 make_nvchecker_stub "$dir"
 cp -- "$(pkgfile "$dir")" "$dir/fake/PKGBUILD.original"
 GSA_FAKE_NVCHECK_FAIL=1 GSA_FAKE_NVCHECK_VERSION="$repo_version" \
-    run_build "$dir" 'no-sync' 0 --no-sync
+    run_case "$dir" 'no-sync-tagged' 0 --no-sync
 
 cmp -s "$dir/fake/PKGBUILD.original" "$(pkgfile "$dir")" \
     || fail 'no-sync: the opted-in recipe changed despite --no-sync'
-[[ ! -s $dir/fake/nvchecker_calls && ! -s $dir/fake/curl_calls ]] \
+[[ ! -s $dir/fake/nvchecker_calls && ! -s $dir/fake/curl_calls && ! -s $dir/fake/pacman_calls ]] \
     || fail 'no-sync: an external provider was queried'
 [[ -s $dir/fake/makepkg_argv ]] \
     || fail 'no-sync: the recipe did not continue through the ordinary build path'
@@ -1134,7 +1175,7 @@ sed -i 's/^pkgver=.*/pkgver=2.0.0/; s/^pkgrel=1$/pkgrel=5/' \
 set_aur_srcinfo "$dir" s1 "$repo_version" 3 \
     "https://example.invalid/s1-$repo_version.tar.gz" "$published_sha"
 set_delivery "$dir" none
-GSA_FAKE_NVCHECK_VERSION="$repo_version" run_build "$dir" 'aur-pkgrel' 0
+GSA_FAKE_NVCHECK_VERSION="$repo_version" run_case "$dir" 'aur-pkgrel' 0
 
 grep -q "^pkgver=$repo_version$" "$dir/packages/core/s1/PKGBUILD" \
     || fail 'aur-pkgrel: the recipe pkgver changed unexpectedly'
@@ -1150,7 +1191,7 @@ sed -i 's/^pkgver=.*/pkgver=2.0.0/' "$dir/packages/core/s1/PKGBUILD"
 set_aur_srcinfo "$dir" s1 "$repo_version" 3 \
     "https://example.invalid/s1-$repo_version.tar.gz" "$published_sha"
 set_delivery "$dir" none
-GSA_FAKE_NVCHECK_VERSION="$repo_version" run_build "$dir" 'aur-pkgrel-ahead' 0
+GSA_FAKE_NVCHECK_VERSION="$repo_version" run_case "$dir" 'aur-pkgrel-ahead' 0
 
 grep -q '^pkgrel=3$' "$dir/packages/core/s1/PKGBUILD" \
     || fail 'aur-pkgrel-ahead: a newer AUR pkgrel at the same pkgver was ignored'
@@ -1163,7 +1204,8 @@ make_case_workspace "$dir" '99.0.0-1'
 opt_in_nvchecker "$dir" s1 packages/stable/s1 stable
 sed -i 's/^pkgver=.*/pkgver=2.0.0/; s/^pkgrel=1$/pkgrel=7/' "$(pkgfile "$dir")"
 make_nvchecker_stub "$dir"
-GSA_FAKE_NVCHECK_VERSION="$repo_version" run_build "$dir" 'github-pkgrel' 0
+set_delivery "$dir" none
+GSA_FAKE_NVCHECK_VERSION="$repo_version" run_case "$dir" 'github-pkgrel' 0
 
 grep -q "^pkgver=$repo_version$" "$(pkgfile "$dir")" \
     || fail 'github-pkgrel: the recipe pkgver changed unexpectedly'
@@ -1171,16 +1213,45 @@ grep -q '^pkgrel=7$' "$(pkgfile "$dir")" \
     || fail 'github-pkgrel: an unchanged pkgver reset the local pkgrel'
 
 # ─── Case 27: gcc-snapshot follows its date-derived source URL ───────────────
-dir="$fixture/gcc-snapshot"
+# The mapping lives in the PKGBUILD itself (pkgver=…snapshotYYYYMMDD derives
+# _pkgver), so a literal pkgver bump moves the source it names.
 gcc_new_version=17.0.0.snapshot20260921
 gcc_new_source=https://example.invalid/gcc-17-20260921.tar.xz
-make_gcc_version_workspace "$dir"
+dir="$fixture/gcc-snapshot"
+make_case_workspace "$dir" '99.0.0-1'
+mkdir -p "$dir/packages/core"
+mv -- "$dir/packages/stable/s1" "$dir/packages/core/gcc-snapshot"
+sed -i '/^s1|/d' "$dir/config/topology.conf"
+printf 'gcc-snapshot|packages/core/gcc-snapshot|core||version-sync=nvchecker\n' \
+    >>"$dir/config/topology.conf"
+cat >"$dir/packages/core/gcc-snapshot/PKGBUILD" <<'EOF'
+pkgbase=gcc-snapshot
+pkgname=(gcc-snapshot)
+pkgver=17.0.0.snapshot20260920
+if [[ $pkgver =~ ^([0-9]+)\.0\.0\.snapshot([0-9]{8})$ ]]; then
+    _pkgver="${BASH_REMATCH[1]}-${BASH_REMATCH[2]}"
+else
+    printf 'gcc-snapshot: unsupported pkgver format: %s\n' "$pkgver" >&2
+    exit 1
+fi
+pkgrel=1
+arch=(any)
+source=("https://example.invalid/gcc-${_pkgver}.tar.xz")
+sha256sums=('0000000000000000000000000000000000000000000000000000000000000000')
+EOF
+cat >"$dir/packages/core/gcc-snapshot/.nvchecker.toml" <<'EOF'
+[gcc-snapshot]
+source = "aur"
+aur = "gcc-snapshot"
+strip_release = true
+EOF
+make_nvchecker_stub "$dir"
 set_aur_srcinfo "$dir" gcc-snapshot "$gcc_new_version" 3 \
     "$gcc_new_source" "$published_sha"
 set_delivery "$dir" "$published_payload"
 GSA_FAKE_PACKAGE_ID=gcc-snapshot GSA_FAKE_NVCHECK_KEY=gcc-snapshot \
     GSA_FAKE_NVCHECK_VERSION="$gcc_new_version" \
-    run_build "$dir" 'gcc-snapshot' 0
+    run_case "$dir" 'gcc-snapshot' 0
 
 grep -q "^pkgver=$gcc_new_version$" "$dir/packages/core/gcc-snapshot/PKGBUILD" \
     || fail 'gcc-snapshot: the AUR pkgver was not applied'
@@ -1190,22 +1261,53 @@ grep -q "^sha256sums=('$published_sha')$" \
     "$dir/packages/core/gcc-snapshot/PKGBUILD" \
     || fail 'gcc-snapshot: the AUR checksum did not anchor its moved source'
 
-# ─── Case 28: an unsupported gcc-snapshot mapping is rejected and rolled back
-dir="$fixture/gcc-snapshot-invalid"
+# ─── Case 28: an invalid snapshot mapping is rejected and rolled back ───────
+# The rewritten pkgver no longer evaluates through the recipe's own mapping
+# rule: the source array cannot be read, so the rewrite refuses and restores
+# — never a blind anchor over a version the recipe cannot express.
 gcc_bad_version=17.0.0.snapshotbad
-make_gcc_version_workspace "$dir"
+dir="$fixture/gcc-snapshot-invalid"
+make_case_workspace "$dir" '99.0.0-1'
+mkdir -p "$dir/packages/core"
+mv -- "$dir/packages/stable/s1" "$dir/packages/core/gcc-snapshot"
+sed -i '/^s1|/d' "$dir/config/topology.conf"
+printf 'gcc-snapshot|packages/core/gcc-snapshot|core||version-sync=nvchecker\n' \
+    >>"$dir/config/topology.conf"
+cat >"$dir/packages/core/gcc-snapshot/PKGBUILD" <<'EOF'
+pkgbase=gcc-snapshot
+pkgname=(gcc-snapshot)
+pkgver=17.0.0.snapshot20260920
+if [[ $pkgver =~ ^([0-9]+)\.0\.0\.snapshot([0-9]{8})$ ]]; then
+    _pkgver="${BASH_REMATCH[1]}-${BASH_REMATCH[2]}"
+else
+    printf 'gcc-snapshot: unsupported pkgver format: %s\n' "$pkgver" >&2
+    exit 1
+fi
+pkgrel=1
+arch=(any)
+source=("https://example.invalid/gcc-${_pkgver}.tar.xz")
+sha256sums=('0000000000000000000000000000000000000000000000000000000000000000')
+EOF
+cat >"$dir/packages/core/gcc-snapshot/.nvchecker.toml" <<'EOF'
+[gcc-snapshot]
+source = "aur"
+aur = "gcc-snapshot"
+strip_release = true
+EOF
+make_nvchecker_stub "$dir"
 set_aur_srcinfo "$dir" gcc-snapshot "$gcc_bad_version" 3 \
     https://example.invalid/gcc-17-bad.tar.xz "$published_sha"
 set_delivery "$dir" "$published_payload"
 cp -- "$dir/packages/core/gcc-snapshot/PKGBUILD" "$dir/fake/PKGBUILD.original"
 GSA_FAKE_PACKAGE_ID=gcc-snapshot GSA_FAKE_NVCHECK_KEY=gcc-snapshot \
     GSA_FAKE_NVCHECK_VERSION="$gcc_bad_version" \
-    run_build "$dir" 'gcc-snapshot-invalid' fail
+    run_case "$dir" 'gcc-snapshot-invalid' 3
 
 cmp -s "$dir/fake/PKGBUILD.original" "$dir/packages/core/gcc-snapshot/PKGBUILD" \
     || fail 'gcc-snapshot-invalid: the unsupported version was not rolled back'
 [[ ! -s $dir/fake/updpkgsums_calls && ! -s $dir/fake/makepkg_argv ]] \
     || fail 'gcc-snapshot-invalid: source refresh or build ran with an invalid mapping'
+expect_row 'gcc-snapshot-invalid' gcc-snapshot failed 1 sync-refused
 
 # ─── Case 29: AUR entries without checksums are loud fetch-only ─────────────
 dir="$fixture/aur-fetch-only"
@@ -1213,14 +1315,14 @@ make_aur_version_workspace "$dir"
 set_aur_srcinfo "$dir" s1 "$repo_version" 3 \
     "https://example.invalid/s1-$repo_version.tar.gz" SKIP
 set_delivery "$dir" "$published_payload"
-GSA_FAKE_NVCHECK_VERSION="$repo_version" run_build "$dir" 'aur-fetch-only' 0
+GSA_FAKE_NVCHECK_VERSION="$repo_version" run_case "$dir" 'aur-fetch-only' 0
 
 grep -q "^sha256sums=('$published_sha')$" "$dir/packages/core/s1/PKGBUILD" \
     || fail 'aur-fetch-only: the fetched checksum was not refreshed'
-grep -q 'NOT anchored' "$dir/state/logs/s1.log" \
-    || fail 'aur-fetch-only: the package log hid the missing AUR checksum'
-grep -q 'fetch-only sums: review before committing' "$dir/out.txt" \
-    || fail 'aur-fetch-only: the run summary omitted the review instruction'
+grep -q 'NOT anchored' "$dir/out.txt" \
+    || fail 'aur-fetch-only: the run hid the missing AUR checksum'
+grep -q 'Review these sums before committing' "$dir/out.txt" \
+    || fail 'aur-fetch-only: the run omitted the review instruction'
 
 # ─── Case 30: an AUR checksum mismatch refuses and rolls back ────────────────
 dir="$fixture/aur-mismatch"
@@ -1229,81 +1331,101 @@ set_aur_srcinfo "$dir" s1 "$repo_version" 3 \
     "https://example.invalid/s1-$repo_version.tar.gz" "$published_sha"
 set_delivery "$dir" "$tampered_payload"
 cp -- "$dir/packages/core/s1/PKGBUILD" "$dir/fake/PKGBUILD.original"
-GSA_FAKE_NVCHECK_VERSION="$repo_version" run_build "$dir" 'aur-mismatch' fail
+GSA_FAKE_NVCHECK_VERSION="$repo_version" run_case "$dir" 'aur-mismatch' 3
 
 cmp -s "$dir/fake/PKGBUILD.original" "$dir/packages/core/s1/PKGBUILD" \
     || fail 'aur-mismatch: the original recipe was not restored'
 [[ ! -s $dir/fake/makepkg_argv ]] \
     || fail 'aur-mismatch: makepkg ran despite a published AUR checksum disagreement'
-grep -q 'AUR published checksum' "$dir/out.txt" \
+grep -q 'source does not match' "$dir/out.txt" \
     || fail 'aur-mismatch: the AUR integrity refusal was not reported'
-grep -q '^s1 failed ' "$dir/out.txt" \
-    || fail 'aur-mismatch: the run record did not classify the checksum mismatch as failure'
+grep -q "$published_sha" "$dir/out.txt" \
+    || fail 'aur-mismatch: the refusal does not name the AUR published value'
+expect_row 'aur-mismatch' s1 failed 1 integrity-stop
 
-# ─── Case 31: Zen's tracker key and asset name differ from its recipe ID ───
+# ─── Case 31: Zen's recipe id/pkgname difference and source filename override ─
+# zen-browser-pgo builds pkgname zen-browser and downloads its GitHub asset
+# under a LOCAL NAME override (zen-source-$pkgver.tar.zst::…/zen.source.tar.zst):
+# the remote ASSET digest binds the remote basename while verification hashes
+# the override file the fetch actually produced. (The fish-era "pkgname-matched
+# tracker section" half does not survive the flip: prepare.rs's
+# nvchecker_provider keys are pkgbase-or-directory only and never the single
+# pkgname that RecipeInfo::read falls back to, so the real recipe's
+# `[zen-browser]` section is refused as "cannot classify the nvchecker
+# provider" — an ENGINE BUG recorded in the flip report with evidence, not
+# pinned here. Section-resolution semantics that DO work are case 36's.)
 dir="$fixture/zen-browser"
-make_zen_version_workspace "$dir"
+local_source_entry='zen-source-$pkgver.tar.zst::https://github.com/zen-browser/desktop/releases/download/$pkgver/zen.source.tar.zst'
+make_case_workspace "$dir" '99.0.0-1' "$local_source_entry"
+mv -- "$dir/packages/stable/s1" "$dir/packages/stable/zen-browser-pgo"
+sed -i '/^s1|/d' "$dir/config/topology.conf"
+printf 'zen-browser-pgo|packages/stable/zen-browser-pgo|stable||version-sync=nvchecker\n' \
+    >>"$dir/config/topology.conf"
+sed -i 's/^pkgname=s1$/pkgname=zen-browser/' \
+    "$dir/packages/stable/zen-browser-pgo/PKGBUILD"
+cat >"$dir/packages/stable/zen-browser-pgo/.nvchecker.toml" <<'EOF'
+[zen-browser-pgo]
+source = "github"
+github = "zen-browser/desktop"
+EOF
+make_nvchecker_stub "$dir"
 zen_recipe="$dir/packages/stable/zen-browser-pgo"
 sed -i 's/^pkgrel=1$/pkgrel=4/' "$zen_recipe/PKGBUILD"
 set_github_release "$dir" "$repo_version" "zen.source.tar.zst" "$published_sha"
 set_delivery "$dir" "$published_payload"
 GSA_FAKE_PACKAGE_ID=zen-browser-pgo GSA_FAKE_NVCHECK_KEY=zen-browser \
-    GSA_FAKE_NVCHECK_VERSION="$repo_version" run_build "$dir" 'zen-browser' 0
+    GSA_FAKE_NVCHECK_VERSION="$repo_version" run_case "$dir" 'zen-browser' 0
 
 grep -q "^pkgver=$repo_version$" "$zen_recipe/PKGBUILD" \
-    || fail 'zen-browser: the pkgname-matched nvchecker section was not resolved'
+    || fail 'zen-browser: the resolved GitHub version was not applied to the id/pkgname-split recipe'
 grep -q '^pkgrel=1$' "$zen_recipe/PKGBUILD" \
     || fail 'zen-browser: pkgrel was not reset for the new version'
 [[ -f $zen_recipe/zen-source-$repo_version.tar.zst ]] \
-    || fail 'zen-browser: makepkg did not use the local source filename override'
+    || fail 'zen-browser: the local source filename override was not fetched'
 grep -q "^sha256sums=('$published_sha')$" "$zen_recipe/PKGBUILD" \
     || fail 'zen-browser: the remote GitHub asset digest did not anchor the override file'
-grep -q 're-anchored to GitHub zen-browser/desktop' \
-    "$dir/state/logs/zen-browser-pgo.log" \
-    || fail 'zen-browser: the log does not name its GitHub checksum authority'
 
 # ─── Case 32: a source that never arrived is ABSENT, not disagreeing ─────────
-# A fetch that leaves the tarball nowhere in the recipe dir or $SRCDEST is a
-# reconcilable environment state, not evidence of a different source. The
-# fatal "does not match the official Arch checksum" verdict — and the
-# dispatch drain that follows it — killed a 147-package run over one missing
-# download on 2026-10-03 (81 built, 65 never started). Owner semantics: park
-# when the consumer chain can absorb the wait, else fall back to a normal
-# build attempt (makepkg fetches and checks the recipe sums itself). Never
-# fail-fast on an absence. Case 2 keeps its teeth: a source that DISAGREES
-# still refuses.
+# A fetch that leaves the tarball nowhere is a reconcilable environment
+# state, not evidence of a different source. The fatal "does not match"
+# verdict — and the dispatch drain that follows it — killed a 147-package run
+# over one missing download on 2026-10-03. Owner semantics: park (defer) and
+# let the rest of the dispatch continue. Case 2 keeps its teeth: a source
+# that DISAGREES still refuses.
 dir="$fixture/absent-source"
 make_case_workspace "$dir" "$repo_version-1"
+add_package "$dir" other "$gsa_meta_any" git
 set_official_srcinfo "$dir" "$repo_version" \
-    "\tsource = https://example.invalid/s1-$repo_version.tar.gz" \
-    "\tsha256sums = $published_sha"
-# no set_delivery: the tarball never arrives anywhere
-run_build "$dir" 'absent-source' fail
+    $'\tsource = https://example.invalid/s1-'"$repo_version"$'.tar.gz' \
+    $'\tsha256sums = '"$published_sha"
+set_delivery "$dir" "$published_payload"
+cp -- "$(pkgfile "$dir")" "$dir/fake/PKGBUILD.original"
+export GSA_FAKE_PACKAGE_ID='s1 other'
+GSA_FAKE_FETCH_ABSENT=1 run_case "$dir" 'absent-source' 5
 
 [[ -s $dir/fake/curl_calls ]] || fail 'no official .SRCINFO was fetched: this case is vacuous'
-if grep -q 'does not match the official Arch checksum' "$(recipe_log "$dir")"; then
+if grep -q 'source does not match' "$dir/out.txt"; then
     fail 'a source that never arrived was condemned as a disagreeing source'
 fi
-grep -q '^s1 deferred 99 ' "$dir/out.txt" \
-    || fail 'absent-source: the run record did not classify the absence as deferred'
-grep -q 'the rest of the dispatch continued' "$dir/out.txt" \
-    || fail 'absent-source: the deferral still drains the dispatch (the run-1 harm)'
-if [[ -s $dir/fake/makepkg_argv ]]; then
+cmp -s "$dir/fake/PKGBUILD.original" "$(pkgfile "$dir")" \
+    || fail 'absent-source: the recipe was not restored after the deferral'
+expect_row 'absent-source' s1 deferred 99 source-unfetchable
+# THE POINT: the rest of the dispatch continued.
+expect_row 'absent-source' other succeeded 0 ok
+if find "$dir/packages/stable/s1" -name '*.pkg.tar.zst' -print -quit | grep -q .; then
     fail 'a parked recipe was built anyway'
-fi 
+fi
 
-  # (case 33 — provider-path absence pin — deferred to follow-up: the AUR/GitHub
-  #  integrity sites refuse through their own checks (case 30's 'AUR published
-  #  checksum'), so the provider-branch pin needs that site mapping first.
-  #  The builder-side classification itself is fixed and covered by case 32.)
+#  (case 33 — provider-path absence pin — stays deferred for follow-up, as in
+#   the fish fixture: the provider-branch sites refuse through their own
+#   checks (cases 18/30), the builder-side classification is case 32.)
 
 # ─── Case 34: a computed pkgver bumps its variables, not a literal write ────
-# linux-cachyos declares pkgver=${_major}.${_rcver} (the kernel recipe's exact
-# shape). A version-sync bump must move _rcver=rc3 → _rcver=rc5 and leave the
-# expression, _major and _tagrel alone: writing pkgver=<new> literally would
-# pin the version and orphan the variables the rest of the recipe derives from
-# (_srctag, _stable). The bump moves source=(), so the same run must re-anchor
-# the sums to the provider checksum and refresh the committed .SRCINFO.
+# linux-cachyos declares pkgver=${_major}.${_rcver}. A version-sync bump must
+# move _rcver=rc1 → _rcver=rc2 and leave the expression, _major and _tagrel
+# alone: writing pkgver=<new> literally would pin the version and orphan the
+# variables the rest of the recipe derives from. The bump moves source=(), so
+# the same run must re-anchor the sums and refresh the committed .SRCINFO.
 dir="$fixture/computed-pkgver"
 make_aur_version_workspace "$dir"
 cat >"$dir/packages/core/s1/PKGBUILD" <<'EOF'
@@ -1324,7 +1446,7 @@ GSA_FAKE_DIR="$dir/fake" "$dir/bin/makepkg" --printsrcinfo --dir "$recipe" \
 set_aur_srcinfo "$dir" s1 "2.0.rc2" 1 \
     "https://example.invalid/s1-2.0-rc2-4.tar.gz" "$published_sha"
 set_delivery "$dir" "$published_payload"
-GSA_FAKE_NVCHECK_VERSION="2.0.rc2" run_build "$dir" 'computed-pkgver' 0
+GSA_FAKE_NVCHECK_VERSION="2.0.rc2" run_case "$dir" 'computed-pkgver' 0
 
 # (a) the version moved through the VARIABLES
 grep -q '^_rcver=rc2$' "$recipe/PKGBUILD" \
@@ -1339,14 +1461,12 @@ grep -q '^_major=2\.0$' "$recipe/PKGBUILD" \
 grep -q '^_tagrel=4$' "$recipe/PKGBUILD" \
     || fail 'computed-pkgver: _tagrel moved although it is not part of pkgver'
 # The checksum contract is source-shaped, not rewrite-shaped: the moved source
-# must be re-anchored to the provider's published checksum and verified against
-# the fetched bytes — never left with the previous version's sum.
+# must be re-anchored to the provider's published checksum and verified
+# against the fetched bytes — never left with the previous version's sum.
 [[ -s $dir/fake/updpkgsums_calls ]] \
     || fail 'computed-pkgver: the moved source never refreshed its sums'
 grep -q "^sha256sums=('$published_sha')$" "$recipe/PKGBUILD" \
     || fail 'computed-pkgver: the moved source was not anchored to the AUR checksum'
-grep -q 're-anchored to AUR' "$dir/state/logs/s1.log" \
-    || fail 'computed-pkgver: the log does not name the AUR checksum authority'
 [[ -s $dir/fake/makepkg_argv ]] \
     || fail 'computed-pkgver: the recipe did not continue to the build'
 # (b) the committed .SRCINFO was refreshed in lockstep with the bump
@@ -1361,9 +1481,9 @@ diff -u "$dir/fake/srcinfo.regen" "$recipe/.SRCINFO" >/dev/null \
 
 # ─── Case 35: a pkgver expression the planner cannot rewrite is refused ─────
 # The planner only moves plain variable assignments. Command substitution
-# inside pkgver is not its business — and the historical rewrite would have
-# CLOBBERED the expression with a literal, silently pinning the version. The
-# refusal must leave the recipe byte-identical and fail the package loudly.
+# inside pkgver is not its business — and a literal rewrite would CLOBBER the
+# expression, silently pinning the version. The refusal must leave the recipe
+# byte-identical and fail the package loudly.
 dir="$fixture/computed-pkgver-unsupported"
 make_aur_version_workspace "$dir"
 cat >"$dir/packages/core/s1/PKGBUILD" <<'EOF'
@@ -1381,7 +1501,7 @@ set_aur_srcinfo "$dir" s1 "2.0.rc2" 1 \
 set_delivery "$dir" "$published_payload"
 cp -- "$dir/packages/core/s1/PKGBUILD" "$dir/fake/PKGBUILD.original"
 GSA_FAKE_NVCHECK_VERSION="2.0.rc2" \
-    run_build "$dir" 'computed-pkgver-unsupported' fail
+    run_case "$dir" 'computed-pkgver-unsupported' 3
 
 cmp -s "$dir/fake/PKGBUILD.original" "$dir/packages/core/s1/PKGBUILD" \
     || fail 'computed-pkgver-unsupported: the recipe changed despite the refusal'
@@ -1389,15 +1509,13 @@ cmp -s "$dir/fake/PKGBUILD.original" "$dir/packages/core/s1/PKGBUILD" \
     || fail 'computed-pkgver-unsupported: sums or build ran after the refusal'
 grep -q 'expression this version sync cannot rewrite' "$dir/out.txt" \
     || fail 'computed-pkgver-unsupported: the refusal does not name the unsupported expression'
-grep -q '^s1 failed ' "$dir/out.txt" \
-    || fail 'computed-pkgver-unsupported: the run record did not classify the refusal as failure'
+expect_row 'computed-pkgver-unsupported' s1 failed 1 sync-refused
 
 # ─── Case 36: a tracker section named for the recipe id resolves ────────────
-# pkgbase is flavor-derived for some recipes (linux-cachyos evaluates to
-# linux-cachyos-rt-bore-lto from its scheduler knobs) while its tracker file
-# follows the stable recipe identity. The section is looked up by pkgbase first
-# (case 31 pins that path for a pkgname-derived pkgbase), then by the recipe
-# id, so a flavored pkgbase never makes its own tracker unreachable.
+# pkgbase is flavor-derived for some recipes while its tracker file follows
+# the stable recipe identity. The section is looked up by pkgbase first, then
+# by the recipe id, so a flavored pkgbase never makes its own tracker
+# unreachable.
 dir="$fixture/section-by-id"
 make_case_workspace "$dir" '99.0.0-1' "https://example.invalid/s1-static.tar.gz"
 opt_in_nvchecker "$dir" s1 packages/stable/s1 stable
@@ -1416,291 +1534,147 @@ source = "github"
 github = "example/s1"
 EOF
 make_nvchecker_stub "$dir"
-GSA_FAKE_NVCHECK_VERSION="$repo_version" run_build "$dir" 'section-by-id' 0
+GSA_FAKE_NVCHECK_VERSION="$repo_version" run_case "$dir" 'section-by-id' 0
 
 grep -q "^pkgver=$repo_version$" "$(pkgfile "$dir")" \
     || fail 'section-by-id: the id-named tracker section was not resolved for a flavored pkgbase'
-grep -q 'synced with GitHub example/s1' "$dir/out.txt" \
-    || fail 'section-by-id: the resolved version provider was not reported'
+
+# ─── Case 37: a --skip run must see upstream movement (R-F10) ───────────────
+# The skip claim used to run BEFORE the version query, so a resumed run
+# claimed "already built" forever at a stale version. The version sync runs
+# first now: upstream moved → the recipe is rewritten and rebuilt, never
+# skipped. The source URL is static so this case exercises the claim alone,
+# not the checksum anchor.
 (
-# ─── Case 37: a resumed -s run must see upstream movement (R-F10) ───────────
-# The skip decision used to run BEFORE the version query, so a non-VCS recipe
-# on a resumed -s loop claimed "already built" forever at a stale version. The
-# version check runs first now: nothing moved → the skip holds; upstream moved
-# → the recipe is rewritten and rebuilt, never skipped. The source URL is
-# static so this case exercises the skip claim alone, not the checksum anchor.
-dir="$fixture/s-resume"
-make_case_workspace "$dir" "$staged_version-1" \
-    "https://example.invalid/s1-$staged_version.tar.gz"
-run_build "$dir" 's-resume seed' 0        # also records the toolchain identity
-
-# The seed run's output: the current version, newer than the recipe.
-printf 'built payload\n' >"$dir/packages/stable/s1/s1-$staged_version-1-any.pkg.tar.zst"
-
-: >"$dir/fake/makepkg_argv"
-run_build "$dir" 's-resume still-current' 0 -s
-[[ ! -s $dir/fake/makepkg_argv ]] \
-    || fail 's-resume: -s rebuilt a recipe whose version is current and whose archive is fresh'
-grep -q "^pkgver=$staged_version$" "$(pkgfile "$dir")" \
-    || fail 's-resume: the still-current run rewrote the recipe'
-
-printf '%s\n' "$repo_version-1" >"$dir/fake/repo_version"
-run_build "$dir" 's-resume upstream moved' 0 -s
-grep -q "^pkgver=$repo_version$" "$(pkgfile "$dir")" \
-    || fail 's-resume: a resumed -s run did not sync the moved upstream version'
-[[ -s $dir/fake/makepkg_argv ]] \
-    || fail 's-resume: a resumed -s run SKIPPED a recipe whose upstream version moved — the version was never checked'
-if [[ -s $dir/fake/curl_calls || -s $dir/fake/updpkgsums_calls ]]; then
-    fail 's-resume: the static source did not move; anchoring ran anyway'
-fi
-)
-
-(
-# ─── Case 38: a failed repo query is not "the name is unknown" (R-F20) ─────
-# pacman -Si used to fail (unsynced db, mirror error) exactly like "not in the
-# repos" — both silently returned 0 — so a stale committed version built or
-# skipped with no log and no note. The query failure now names itself and
-# parks the recipe when its consumer chain can wait; the name-unknown answer
-# syncs nothing and leaves the skip claim intact.
-for mode in db-error not-found; do
-    dir="$fixture/si-$mode"
+    dir="$fixture/s-resume"
     make_case_workspace "$dir" "$staged_version-1" \
         "https://example.invalid/s1-$staged_version.tar.gz"
-    run_build "$dir" "si-$mode seed" 0
+    run_case "$dir" 's-resume seed' 0
+
+    # The seed run's output: the current version, newer than the recipe.
     printf 'built payload\n' >"$dir/packages/stable/s1/s1-$staged_version-1-any.pkg.tar.zst"
     : >"$dir/fake/makepkg_argv"
-    if [[ $mode == db-error ]]; then
-        GSA_FAKE_SI_MODE=db-error run_build "$dir" "si-$mode" fail -s
-        grep -q 'cannot query the Arch repository version' "$(recipe_log "$dir")" \
-            || fail "si-$mode: the failed query is not named in the log"
-        grep -q 'DEFERRED' "$dir/out.txt" \
-            || fail "si-$mode: an unverifiable repository version was not parked"
-        [[ ! -s $dir/fake/makepkg_argv ]] \
-            || fail "si-$mode: a build ran over an unverified version"
-    else
-        GSA_FAKE_SI_MODE=not-found run_build "$dir" "si-$mode" 0 -s
-        [[ ! -s $dir/fake/makepkg_argv ]] \
-            || fail "si-$mode: the name-unknown answer destroyed the skip claim"
+    run_case "$dir" 's-resume still-current' 0 --skip
+    if [[ -s $dir/fake/makepkg_argv ]]; then
+        fail 's-resume: --skip rebuilt a recipe whose version is current and whose archive is fresh'
     fi
-    grep -q "^pkgver=$staged_version$" "$(pkgfile "$dir")" \
-        || fail "si-$mode: the recipe was rewritten although the query never succeeded"
-done
+    expect_plan 's-resume still-current' s1 skip ok
+
+    printf '%s\n' "$repo_version-1" >"$dir/fake/repo_version"
+    : >"$dir/fake/makepkg_argv"
+    run_case "$dir" 's-resume upstream moved' 0 --skip
+    grep -q "^pkgver=$repo_version$" "$(pkgfile "$dir")" \
+        || fail 's-resume: a resumed --skip run did not sync the moved upstream version'
+    [[ -s $dir/fake/makepkg_argv ]] \
+        || fail 's-resume: a resumed --skip run SKIPPED a recipe whose upstream version moved'
+    if [[ -s $dir/fake/curl_calls || -s $dir/fake/updpkgsums_calls ]]; then
+        fail 's-resume: the static source did not move; anchoring ran anyway'
+    fi
 )
 
-(
+# ─── Case 38: a failed repo query is not "the name is unknown" (R-F20) ─────
+# pacman -Si used to fail (unsynced db, mirror error) exactly like "not in
+# the repos" — both silently returned 0 — so a stale committed version built
+# with no log and no note. The query failure now names itself and defers; the
+# name-unknown answer syncs nothing and builds as-is.
+for mode in db-error not-found; do
+    (
+        dir="$fixture/si-$mode"
+        make_case_workspace "$dir" "$staged_version-1" \
+            "https://example.invalid/s1-$staged_version.tar.gz"
+        if [[ $mode == db-error ]]; then
+            GSA_FAKE_SI_MODE=db-error run_case "$dir" "si-$mode" 5
+            grep -q 'cannot query the Arch repository version' "$dir/out.txt" \
+                || fail "si-$mode: the failed query is not named"
+            grep -q 'waits-on-deferred' "$dir/out.txt" \
+                || fail "si-$mode: the deferral does not name the parked-cone reason key"
+            [[ ! -s $dir/fake/makepkg_argv ]] \
+                || fail "si-$mode: a build ran over an unverified version"
+            expect_row "si-$mode" s1 deferred 99 upstream-unverified
+        else
+            GSA_FAKE_SI_MODE=not-found run_case "$dir" "si-$mode" 0
+            [[ -s $dir/fake/makepkg_argv ]] \
+                || fail "si-$mode: the name-unknown answer refused the ordinary build path"
+        fi
+        grep -q "^pkgver=$staged_version$" "$(pkgfile "$dir")" \
+            || fail "si-$mode: the recipe was rewritten although the query never succeeded"
+    )
+done
+
 # ─── Case 39: repository version text that cannot be written safely is
 # refused before the first write (R-F11) ─────────────────────────────────────
-# pacman -Si Version text reached sed program text unvalidated: `&`, `\` and
-# `/` corrupt a replacement rather than fail it. The rewrite now refuses such
-# a version outright — nothing is written, nothing is built.
+# `&`, `\` and `/` corrupt a rewrite replacement rather than fail it. The
+# rewrite refuses such a version outright — nothing is written, nothing built.
 i=0
 for bad_ver in '2.0&0-1' '2.0\0-1' '2.0/0-1'; do
     i=$((i + 1))
-    dir="$fixture/badver-$i"
-    make_case_workspace "$dir" "$bad_ver" \
-        "https://example.invalid/s1-$staged_version.tar.gz"
-    cp -- "$(pkgfile "$dir")" "$dir/pre-PKGBUILD"
-    run_build "$dir" "badver-$i" fail
-    grep -q 'refusing to sync from a repository version' "$(recipe_log "$dir")" \
-        || fail "badver-$i: the unwritable repository version is not named"
-    cmp -s "$dir/pre-PKGBUILD" "$(pkgfile "$dir")" \
-        || fail "badver-$i: the recipe was written although the repository version cannot be written safely"
-    [[ ! -s $dir/fake/makepkg_argv ]] \
-        || fail "badver-$i: makepkg ran over a refused version"
+    (
+        dir="$fixture/badver-$i"
+        make_case_workspace "$dir" "$bad_ver" \
+            "https://example.invalid/s1-$staged_version.tar.gz"
+        cp -- "$(pkgfile "$dir")" "$dir/pre-PKGBUILD"
+        run_case "$dir" "badver-$i" 3
+        grep -q 'refusing to sync from a repository version' "$dir/out.txt" \
+            || fail "badver-$i: the unwritable repository version is not named"
+        cmp -s "$dir/pre-PKGBUILD" "$(pkgfile "$dir")" \
+            || fail "badver-$i: the recipe was written although the repository version cannot be written safely"
+        [[ ! -s $dir/fake/makepkg_argv ]] \
+            || fail "badver-$i: makepkg ran over a refused version"
+        expect_row "badver-$i" s1 failed 1 sync-refused
+    )
 done
-)
 
-(
-# ─── Case 40: a failure after the publish rolls the whole rewrite back
-# (R-F11) ───────────────────────────────────────────────────────────────────
-# The snapshot/rollback boundary the nvchecker path always had now wraps the
-# Arch path too: a failure AFTER the rewrite (here an artifact directory rm
-# cannot clear) leaves the recipe byte-for-byte at its committed state, not
-# half-rewritten for the owner to commit.
+# ─── Case 40: a failure after the publish rolls the whole rewrite back ──────
+# The snapshot/rollback boundary wraps both sync paths: a failure AFTER the
+# publish (here an artifact directory rm cannot clear) leaves the recipe
+# byte-for-byte at its committed state, not half-rewritten for the owner to
+# commit.
 dir="$fixture/rollback"
 make_case_workspace "$dir" "$staged_version-1" \
     "https://example.invalid/s1-$staged_version.tar.gz"
-run_build "$dir" 'rollback seed' 0
-: >"$dir/fake/makepkg_argv"           # the seed build is not this case's data
-cp -- "$(pkgfile "$dir")" "$dir/pre-PKGBUILD"
 # An artifact directory rm -rf cannot clear (no write bit, one file inside).
 mkdir -p "$dir/packages/stable/s1/src"
 printf 'cached object\n' >"$dir/packages/stable/s1/src/keep"
 chmod 555 "$dir/packages/stable/s1/src"
 printf '%s\n' "$repo_version-1" >"$dir/fake/repo_version"
-run_build "$dir" 'rollback' fail
+cp -- "$(pkgfile "$dir")" "$dir/pre-PKGBUILD"
+run_case "$dir" 'rollback' 3
 chmod -R u+w "$dir/packages/stable/s1"     # asserts below must not need the mode
-grep -q 'could not clear stale build artifacts' "$(recipe_log "$dir")" \
+grep -q 'could not clear stale build artifacts' "$dir/out.txt" \
     || fail 'rollback: the failing step is not named'
-grep -q 'rolled back to its committed version' "$(recipe_log "$dir")" \
-    || fail 'rollback: the rollback is not claimed'
 cmp -s "$dir/pre-PKGBUILD" "$(pkgfile "$dir")" \
     || fail 'rollback: the recipe is not back at its committed state after the failed step'
 [[ ! -s $dir/fake/makepkg_argv ]] \
     || fail 'rollback: makepkg ran after the rollback'
-)
+expect_row 'rollback' s1 failed 1 sync-refused
 
-(
-# ─── Case 41: the tracked PKGBUILD is never edited in place (R-F24) ─────────
-# Multi-sed rewrites over the tracked file leave a torn-read window, and
-# shared temp names let two runs destroy each other's work. The rewrite now
-# stages ONE copy, edits only that, and publishes with a single mv — asserted
-# at the tool boundary: no sed invocation may name the tracked PKGBUILD, the
-# staged names carry a per-process suffix, and no scratch survives the run.
-dir="$fixture/txn"
-make_case_workspace "$dir" "$staged_version-1" \
-    "https://example.invalid/s1-$staged_version.tar.gz"
-run_build "$dir" 'txn seed' 0
-printf 'pkgbase = s1\n\tpkgver = %s\n\tpkgrel = 1\npkgname = s1\n' "$staged_version" \
-    >"$dir/packages/stable/s1/.SRCINFO"
-sed_log="$dir/sed.log"
-: >"$sed_log"
-printf '%s\n' "$repo_version-1" >"$dir/fake/repo_version"
-GSA_FAKE_SED_LOG="$sed_log" GSA_FAKE_TMP_WATCH=1 run_build "$dir" 'txn' 0
-
-if grep -qE '(^| )[^ ]*/packages/stable/s1/PKGBUILD( |$)' "$sed_log"; then
-    fail 'txn: sed edited the tracked PKGBUILD in place — the rewrite is not a transaction'
-fi
-grep -q 'PKGBUILD\.tmp\.' "$sed_log" \
-    || fail 'txn: the version rewrite did not go through a staged copy'
-grep -q "^pkgver=$repo_version$" "$(pkgfile "$dir")" \
-    || fail 'txn: the transactional rewrite did not publish its result'
-if find "$dir/packages/stable/s1" -name '*.tmp*' -print -quit | grep -q .; then
-    fail 'txn: a staged file survived the run'
-fi
-grep -qE '^\.SRCINFO\.tmp\.[0-9]+$' "$dir/fake/tmp_names" \
-    || fail "txn: the .SRCINFO refresh did not use a per-process temp name: $(cat "$dir/fake/tmp_names" 2>/dev/null)"
-if grep -qx '\.SRCINFO\.tmp' "$dir/fake/tmp_names"; then
-    fail 'txn: the shared .SRCINFO.tmp name is back'
-fi
-)
-
-(
 # ─── Case 43: an unevaluable recipe is named, never synced blind (R-F32) ────
-# The pkgname candidates came from `bash -c "source '$pkg_path/PKGBUILD' …"`
-# with the failure swallowed: a recipe that does not source looked exactly
-# like one whose pkgname is its pkgbase, and the query went out blind.
+# The pkgname candidates come from sourcing the PKGBUILD; a recipe that does
+# not source must be NAMED here instead of looking like one whose pkgname is
+# its pkgbase (the failure once went out as a blind query).
 dir="$fixture/eval-broken"
 make_case_workspace "$dir" "$repo_version-1" \
     "https://example.invalid/s1-$staged_version.tar.gz"
 printf 'return 1\n' >>"$(pkgfile "$dir")"
 cp -- "$(pkgfile "$dir")" "$dir/pre-PKGBUILD"
-run_build "$dir" 'eval-broken' fail
-grep -q 'cannot evaluate the pkgname array' "$(recipe_log "$dir")" \
+run_case "$dir" 'eval-broken' 3
+grep -q 'cannot evaluate the pkgname array' "$dir/out.txt" \
     || fail 'eval-broken: the unevaluable recipe is not named'
 cmp -s "$dir/pre-PKGBUILD" "$(pkgfile "$dir")" \
     || fail 'eval-broken: the recipe was rewritten although it never evaluated'
 [[ ! -s $dir/fake/makepkg_argv ]] \
     || fail 'eval-broken: makepkg ran'
-)
+expect_row 'eval-broken' s1 failed 1 sync-refused
 
-(
-# ─── Case 44: -ccc/-ln name unevaluable recipes instead of skipping them ────
-# Their evaluation snippets had the same swallow: a recipe that failed to
-# source looked exactly like a recipe with no sources, and -ccc reported a
-# clean scan over recipes it never read. The distinction ("no sources" is
-# fine, "cannot evaluate" is named and fails the scan) is the case.
-dir="$fixture/unevaluable"
-make_workspace "$dir" 1 2 low
-mkdir -p "$dir/packages/stable/broken"
-{
-    printf 'pkgname=broken\n'
-    printf 'pkgver=1.0.0\npkgrel=1\narch=(any)\n'
-    printf 'return 1\n'
-} >"$dir/packages/stable/broken/PKGBUILD"
-printf 'broken|packages/stable/broken|stable|\n' >>"$dir/config/topology.conf"
-add_package "$dir" ok "$gsa_meta_any"
-
-set +e
-nuclear_out=$(PATH="$dir/bin:$PATH" GSA_STATE_DIR="$dir/state" \
-    fish "$dir/build-all.fish" -ccc </dev/null 2>&1)
-nuclear_rc=$?
-set -e
-((nuclear_rc != 0)) \
-    || fail "unevaluable: -ccc reported success over a recipe it never read"
-grep -q 'could not be evaluated' <<<"$nuclear_out" \
-    || fail 'unevaluable: -ccc does not name the evaluation failure'
-grep -q 'packages/stable/broken/PKGBUILD' <<<"$nuclear_out" \
-    || fail 'unevaluable: -ccc does not say WHICH recipe failed to evaluate'
-
-set +e
-link_out=$(PATH="$dir/bin:$PATH" GSA_STATE_DIR="$dir/state" \
-    fish "$dir/build-all.fish" -ln </dev/null 2>&1)
-link_rc=$?
-set -e
-((link_rc != 0)) \
-    || fail "unevaluable: -ln reported success over a recipe it never read"
-grep -q 'could not be evaluated' <<<"$link_out" \
-    || fail 'unevaluable: -ln does not name the evaluation failure'
-grep -q 'packages/stable/broken/PKGBUILD' <<<"$link_out" \
-    || fail 'unevaluable: -ln does not say WHICH recipe failed to evaluate'
-)
-
-(
-# ─── Case 45: the version sync must not relocate the builder's cwd ──────────
-# fish 4.9.3 runs command substitutions IN-PROCESS, so `version_sync_temp_dir`'s
-# historical `(cd "$x" && pwd -P)` path resolution silently moved the builder's
-# own cwd into the very temp directory it had just created. That directory is
-# deleted before build_package's pushd, so pushd saved a dead path and the
-# closing popd emitted `cd: The directory '/tmp/gsa-version-sync.*' does not
-# exist` — and because fish's popd still returns 0 after a failed cd, the
-# builder's `if not popd` guard never fired: every later relative operation ran
-# from the wrong directory with nothing but that noise to show for it
-# (2026-10-06, nodejs). The pin is the ABSENCE of the dead-directory cd noise
-# in the package log, on both the success and the failing-build shape.
-assert_no_cwd_noise() { # $1 = workspace · $2 = label
-    local log
-    log=$(recipe_log "$1")
-    if grep -q 'does not exist' "$log" 2>/dev/null; then
-        fail "$2: the package log carries a dead-directory cd error — the builder's cwd was relocated into a deleted temp dir: $(grep -n 'does not exist' "$log")"
-    fi
-    if grep -q "in function 'popd'" "$log" 2>/dev/null; then
-        fail "$2: the package log carries a popd stack trace — the builder's cwd was relocated into a deleted temp dir"
-    fi
-}
-
-dir="$fixture/cwd-leak"
-make_case_workspace "$dir" "$repo_version-1"
-set_official_srcinfo "$dir" "$repo_version" \
-    "	source = https://example.invalid/s1-$repo_version.tar.gz" \
-    "	sha256sums = $published_sha"
-set_delivery "$dir" "$published_payload"
-make_nvchecker_stub "$dir"
-run_build "$dir" 'cwd-leak' 0
-grep -q "^pkgver=$repo_version$" "$(pkgfile "$dir")" \
-    || fail 'cwd-leak: the recipe was not version-synced, so this case is vacuous'
-[[ -s $dir/fake/updpkgsums_calls ]] \
-    || fail 'cwd-leak: the sums were never re-anchored, so the anchor-sums temp dir was not exercised'
-grep -q 'fake makepkg' "$(recipe_log "$dir")" \
-    || fail 'cwd-leak: the build left no log content, so the noise check inspected the wrong artifact'
-assert_no_cwd_noise "$dir" 'cwd-leak'
-
-# The failing-build shape is the one that surfaced the defect (a nodejs log
-# tail): makepkg fails AFTER the sync has already relocated the cwd, and the
-# noise lands in the log the owner reads.
-dir="$fixture/cwd-leak-fail"
-make_case_workspace "$dir" "$repo_version-1"
-set_official_srcinfo "$dir" "$repo_version" \
-    "	source = https://example.invalid/s1-$repo_version.tar.gz" \
-    "	sha256sums = $published_sha"
-set_delivery "$dir" "$published_payload"
-make_nvchecker_stub "$dir"
-GSA_FAKE_MAKEPKG_FAIL=1 run_build "$dir" 'cwd-leak-fail' fail
-[[ -s $dir/fake/makepkg_argv ]] \
-    || fail 'cwd-leak-fail: makepkg never ran, so the failing-build shape was not exercised'
-grep -q 'fake makepkg' "$(recipe_log "$dir")" \
-    || fail 'cwd-leak-fail: the failing build left no log content, so the noise check inspected the wrong artifact'
-assert_no_cwd_noise "$dir" 'cwd-leak-fail'
-)
-
-(
 # ─── Case 46: a published SUPERSET still anchors (provider-only extras) ─────
-# run #56 gcc-snapshot: AUR carries `gcc-ada-repro.patch` for the ada frontend
-# this recipe trims, and the old byte-equality guard refused a checksum anchor
-# that was correct for every source the recipe DOES build. Coverage semantics:
-# every recipe source must appear verbatim in the provider list; provider-only
-# extras are reported in the log and never anchored. Case 22 keeps pinning the
-# real mismatch class.
+# run #56 gcc-snapshot: AUR carries `gcc-ada-repro.patch` for the ada
+# frontend this recipe trims, and the old byte-equality guard refused a
+# checksum anchor that was correct for every source the recipe DOES build.
+# Coverage semantics: every recipe source must appear verbatim in the
+# provider list; provider-only extras never anchor. (The extras NOTE the
+# module produces is dropped by the CLI seam — recorded as an engine bug in
+# the flip report; the anchoring half is what this case pins.) Case 22 keeps
+# pinning the real mismatch class.
 dir="$fixture/aur-superset"
 make_aur_version_workspace "$dir"
 {
@@ -1715,18 +1689,14 @@ make_aur_version_workspace "$dir"
     printf '\n\tpkgname = s1\n'
 } >"$dir/fake/aur_srcinfo"
 set_delivery "$dir" "$published_payload"
-GSA_FAKE_NVCHECK_VERSION="$repo_version" run_build "$dir" 'aur-superset' 0
+GSA_FAKE_NVCHECK_VERSION="$repo_version" run_case "$dir" 'aur-superset' 0
 
 grep -q "^pkgver=$repo_version$" "$dir/packages/core/s1/PKGBUILD" \
     || fail 'aur-superset: the AUR pkgver was not applied to the recipe'
 grep -q "^sha256sums=('$published_sha')$" "$dir/packages/core/s1/PKGBUILD" \
     || fail 'aur-superset: the recipe source was not anchored to the AUR checksum'
-grep -q 're-anchored to AUR' "$(recipe_log "$dir")" \
-    || fail 'aur-superset: the package log does not name the AUR checksum authority'
-grep -q 'does not build: only-in-aur.patch' "$(recipe_log "$dir")" \
-    || fail 'aur-superset: the provider-only source is not reported in the package log'
 [[ -s $dir/fake/makepkg_argv ]] \
     || fail 'aur-superset: the build did not run although every recipe source was published'
-)
+expect_row 'aur-superset' s1 succeeded 0 ok
 
 printf 'stable-sync fixture: PASS\n'
