@@ -14,8 +14,9 @@ set -euo pipefail
 #      plan/status values, bad rc shapes and status/code mismatches, unknown
 #      continuation keys, missing/duplicate sections, two blocks, stray
 #      markers, control characters, row/order disagreement).
-#   3. run_engine dispatches to the selected engine (fish builder today, gsa
-#      at cutover) and captures output and exit status like run_builder.
+#   3. run_engine dispatches to the selected engine (gsa by default since the
+#      Phase 5 cutover; GSA_TEST_ENGINE=fish runs the frozen oracle copy) and
+#      captures output and exit status like run_builder.
 #   4. the GSA_FAKE_* stub-knob registry (§D.2) accepts declared knobs and
 #      rejects non-GSA_FAKE_* names and conflicting redeclarations.
 #
@@ -60,7 +61,7 @@ gtk4-git parked - - waits-on-failed
 gimp-git parked - - waits-on-failed
 niri-spicy-git succeeded 0 1450 ok
 --- continuation ---
-command: gsa -S --leaf=no glib2-git gtk4-git gimp-git
+command: gsa -S glib2-git gtk4-git gimp-git
 remaining: glib2-git gtk4-git gimp-git
 not-mirrored: -Mcc -Mccc -Sy
 env-required: GSA_STATE_DIR
@@ -119,7 +120,7 @@ EOF
         || fail "rr2_outcome niri-spicy-git status wrong"
 
     # continuation lines, and derived vs declared resume set
-    [[ $(rr2_continuation command <"$fixture/golden.txt") == "gsa -S --leaf=no glib2-git gtk4-git gimp-git" ]] \
+    [[ $(rr2_continuation command <"$fixture/golden.txt") == "gsa -S glib2-git gtk4-git gimp-git" ]] \
         || fail "rr2_continuation command wrong"
     [[ $(rr2_continuation remaining <"$fixture/golden.txt") == "glib2-git gtk4-git gimp-git" ]] \
         || fail "rr2_continuation remaining wrong"
@@ -226,23 +227,28 @@ EOF
     done
     export PATH="$fixture/engine/bin:$PATH"
     export GSA_FAKE_ENGINE_LOG="$fixture/engine/engine.log"
+    export GSA_TEST_GSA_BIN="$fixture/engine/bin/gsa"
 
-    # default engine is the fish builder: `fish "$WORKSPACE/build-all.fish" …`
+    # default engine (no GSA_TEST_ENGINE) is the NATIVE one since the Phase 5
+    # cutover: `gsa …` run inside the workspace
+    unset GSA_TEST_ENGINE
     run_engine "$ws" -Sl @git
-    ((FIXTURE_RC == 0)) || fail "run_engine fish rc=$FIXTURE_RC: $FIXTURE_OUTPUT"
-    [[ $(tail -n1 "$GSA_FAKE_ENGINE_LOG") == "fish $ws/build-all.fish -Sl @git" ]] \
-        || fail "run_engine fish argv = [$(tail -n1 "$GSA_FAKE_ENGINE_LOG")]"
+    ((FIXTURE_RC == 0)) || fail "run_engine gsa rc=$FIXTURE_RC: $FIXTURE_OUTPUT"
+    [[ $(tail -n1 "$GSA_FAKE_ENGINE_LOG") == "gsa -Sl @git" ]] \
+        || fail "run_engine default argv = [$(tail -n1 "$GSA_FAKE_ENGINE_LOG")] (want the native engine)"
     [[ $FIXTURE_OUTPUT == *"engine stdout:"*"-Sl @git"* ]] \
         || fail "run_engine lost engine stdout: $FIXTURE_OUTPUT"
     [[ $FIXTURE_OUTPUT == *"engine stderr:"*"-Sl @git"* ]] \
         || fail "run_engine does not capture stderr (2>&1): $FIXTURE_OUTPUT"
 
-    # GSA_TEST_ENGINE=gsa runs the native engine inside the workspace
-    export GSA_TEST_ENGINE=gsa
+    # GSA_TEST_ENGINE=fish runs the FROZEN ORACLE copy beside the workspace
+    # (tests/lib/fixture-lib.bash install_fish_oracle) — oracle comparison
+    # only, never an engine
+    export GSA_TEST_ENGINE=fish
     run_engine "$ws" -Sl @git
-    ((FIXTURE_RC == 0)) || fail "run_engine gsa rc=$FIXTURE_RC: $FIXTURE_OUTPUT"
-    [[ $(tail -n1 "$GSA_FAKE_ENGINE_LOG") == "gsa -Sl @git" ]] \
-        || fail "run_engine gsa argv = [$(tail -n1 "$GSA_FAKE_ENGINE_LOG")]"
+    ((FIXTURE_RC == 0)) || fail "run_engine fish rc=$FIXTURE_RC: $FIXTURE_OUTPUT"
+    [[ $(tail -n1 "$GSA_FAKE_ENGINE_LOG") == "fish $ws/build-all.fish -Sl @git" ]] \
+        || fail "run_engine fish argv = [$(tail -n1 "$GSA_FAKE_ENGINE_LOG")]"
     unset GSA_TEST_ENGINE
 
     # the engine's exit status passes through untouched (like run_builder)

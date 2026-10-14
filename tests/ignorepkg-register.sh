@@ -38,9 +38,9 @@ set -euo pipefail
 # parse-and-refuse rc 2 (deferred to a later phase; `gsa --help` "Deferred
 # (parse and refuse)"), so a freshness CLAIM cannot be driven through it. The
 # kept behaviour (acceptance-time registration for a skip CLAIM, and the
-# claim + forced transaction of `-s -fi`) keeps its fish-era shape against the
-# fish builder this workspace still carries (the tests/abi-postinstall-probe.sh
-# mixed pattern).
+# claim + forced transaction of `-s -fi`) keeps its fish-era shape against
+# the FROZEN fish oracle (docs/gsa-fixture-migration.md §3 staging rules: no
+# engine in the workspace since the cutover; run_fish_gen installs it).
 # DEVIATION 2 (N6 stays FISH-DRIVEN — inventory pins cell "acceptance-time
 # registration for builds/skip claims"): the engine registers ACCEPTED
 # archives only in the install step (`install_built_package`,
@@ -298,6 +298,13 @@ run_backfill() {
 run_fish_register() {
     local ws=$1 conf=$2
     shift 2
+    # DEVIATION 4's findings (h/i) are semantics of the RETIRED fish engine
+    # the native engine does not have (§4 inventory row
+    # `tests/ignorepkg-register.sh`, KEEP cell conf-mutation semantics), and
+    # §3 staging rules leave the scratch workspace engineless since the
+    # cutover — so drive the FROZEN oracle, installed beside the workspace
+    # for this deliberate fish-driven deviation only.
+    install_fish_oracle "$ws"
     run_builder env LC_ALL=C \
         PATH="$ws/bin:$PATH" \
         GSA_STATE_DIR="$ws/state" \
@@ -689,6 +696,12 @@ run_install() {
             build+=("$arg")
         fi
     done
+    # N4's fast timeout is DEVIATION 3: a fish-era semantics with no engine
+    # surface (§4 inventory row `tests/ignorepkg-register.sh`, pins cell
+    # "bounded db.lck wait"; §3 staging rules leave no engine in the
+    # workspace), so this run drives the FROZEN oracle, installed beside the
+    # workspace for this deliberate fish-driven deviation only.
+    install_fish_oracle "$ws"
     run_builder env PATH="$ws/bin:$PATH" LC_ALL=C \
         GSA_STATE_DIR="$ws/state" \
         _IGNOREPKG_CONF="$ws/pacman.conf" \
@@ -1068,6 +1081,13 @@ run_fish_gen() {
             build+=("$arg")
         fi
     done
+    # N6/N8a/N8c's acceptance-time registration is DEVIATION 1/2: fish-era
+    # semantics with no engine surface (§4 inventory row
+    # `tests/ignorepkg-register.sh`, run-shapes cell :877 `--skip`/:927
+    # `-s -fi`; §3 staging rules leave no engine in the workspace), so these
+    # runs drive the FROZEN oracle, installed beside the workspace for the
+    # deliberate fish-driven deviations only.
+    install_fish_oracle "$ws"
     run_builder env PATH="$ws/bin:$PATH" LC_ALL=C \
         GSA_STATE_DIR="$ws/state" \
         _IGNOREPKG_CONF="$ws/pacman.conf" \

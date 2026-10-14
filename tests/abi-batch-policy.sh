@@ -104,12 +104,10 @@ set -euo pipefail
 # pacman/sudo/makepkg invocations, and the scale decisions naming exactly the
 # 240 linked members. The fish section H keeps its per-name pins against the
 # fish gate (its keyed helpers live only in the fish builder).
-# DEVIATION 5 (§H.2 known debt — format-2 scalars on plan records):
-# `gsa -B --dry-run` (and `-U`) run records render `lanes: -` and extension
-# scalars (`dry-run: yes`), which rr2_body rejects (strict integer budget
-# scalars — tests/gsa-install-v2.sh records the same debt). Those sites
-# extract their scalars inline (record_scalar below); every -B/-S run record
-# in this fixture parses through rr2_*.
+# DEVIATION 5 (retired at cutover — was §H.2 format-2-scalar debt): plan and
+# -U run records render integer budget scalars and one row per subject since
+# the gap-(a) fix, so record_scalar below is a strict rr2_scalar wrapper and
+# every record in this fixture parses through rr2_*.
 # DEVIATION 6 (inventory prose :495-499 — E's rendering pins): the
 # 'same-pass candidates not in this selection: fcitx5-qt-git' note and the
 # fish bug-grep 'test: Missing argument at index 3' retire as rendering
@@ -360,13 +358,11 @@ from:
 $FIXTURE_OUTPUT"
 }
 
-# record_scalar KEY — one scalar of the machine block of the CURRENT capture.
-# Inline (never rr2_scalar) for plan records: their `lanes: -` is the §H.2
-# format-2-scalar debt (DEVIATION 5).
+# record_scalar KEY — one scalar of the machine block of the CURRENT
+# capture, through the strict `format: 2` parser (plan records are
+# §H.2-conformant since the cutover gap-(a) fix — integer budget scalars).
 record_scalar() {
-    printf '%s\n' "$FIXTURE_OUTPUT" |
-        sed -n '/^--- run record begin ---$/,/^--- run record end ---$/p' |
-        sed -n "s/^$1: //p" | head -n 1
+    rr2_scalar "$1" <<<"$FIXTURE_OUTPUT"
 }
 
 order_pos() { # $1 = package id; 1-based position in the record's order scalar
@@ -589,6 +585,7 @@ $FIXTURE_OUTPUT"
     set -euo pipefail
     dir_c="$fixture/dispatch"
     make_workspace "$dir_c" 1 2 low
+    install_fish_oracle "$dir_c"
     make_install_conf "$dir_c/pacman.conf" # the -i run's IgnorePkg registration target (never the host's)
     add_meta_package "$dir_c" llvm-git ''
     add_meta_package "$dir_c" p2 ''
@@ -1198,6 +1195,7 @@ $(cat "$GSA_FAKE_PACMAN_CONF_LOG")"
     # order: H1/H3 are pre-dispatch refusals counted as probe forks, and H2
     # counts dispatches as an unordered set.
     make_workspace "$dir_h" 8 2 low
+    install_fish_oracle "$dir_h"
 
     # anchors: abi=must with no abi-tagged dependency — the batch origins.
     # providers: UNTAGGED (the tag gate must never claim them, or layer 2

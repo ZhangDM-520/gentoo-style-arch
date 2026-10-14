@@ -838,3 +838,39 @@ rr_dry_cont() {
 
     printf 'consumer expansion order fixture: PASS (diamond, record-order tie-break, duplicate seed)\n'
 )
+
+# ─── 8. the retired-engine surface: root shim + frozen oracle (Phase 5) ─────
+# The root build-all.fish is the migration shim: every spelling maps to its
+# gsa spelling and the run exits non-zero — muscle memory fails loudly, and
+# nothing builds. The fish ENGINE lives under tests/assets/ as the frozen
+# oracle and must keep parsing (fixtures' fish-only deviation sections run a
+# copy of it). Pinned here so neither surface can rot silently.
+(
+    set -euo pipefail
+
+    fish -n "$gsa_repo_root/tests/assets/build-all.fish" ||
+        fail "the frozen fish oracle no longer parses (tests/assets/build-all.fish)"
+    fish -n "$gsa_repo_root/tests/assets/lib/sources.fish" ||
+        fail "the frozen oracle's lib/sources.fish no longer parses"
+    fish -n "$gsa_repo_root/tests/assets/lib/audit.fish" ||
+        fail "the frozen oracle's lib/audit.fish no longer parses"
+
+    shim=$(cd "$gsa_repo_root" && fish build-all.fish --list @git 2>&1) && rc=0 || rc=$?
+    [ "$rc" != 0 ] ||
+        fail "the retired-engine shim must exit non-zero, got 0"
+    grep -Fq -- 'Migration table' <<<"$shim" ||
+        fail "the shim prints no migration table: $shim"
+    # every mapping begins with '-', so every pattern needs '--' or grep eats
+    # it as an option and the assert fails against a healthy shim
+    for mapping in '-g GRP / --group GRP' '--no-deps' '-ccc / --nuclear' '--audit' '--topology' '-ia / --installall [--overwrite …]'; do
+        grep -Fq -- "$mapping" <<<"$shim" ||
+            fail "the shim's migration table drops '$mapping': $shim"
+    done
+    grep -Fq -- 'gsa -Sl' <<<"$shim" || fail "the shim maps no spelling to gsa: $shim"
+    grep -Fq -- 'deprecation window' <<<"$shim" ||
+        fail "the shim states no deprecation window: $shim"
+    if grep -Fq -- '--- run record begin ---' <<<"$shim"; then
+        fail "the shim emitted a run record — it must build nothing: $shim"
+    fi
+    printf 'retired-engine surface fixture: PASS (root shim migration table, frozen oracle parses)\n'
+)

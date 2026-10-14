@@ -2,106 +2,130 @@
 
 ## Prerequisites
 
-Use an Arch-based system with `fish`, `makepkg`, `nproc`, `ps`, `awk`, `sed`,
-`tail`, and `getent`. Add `ripgrep` (`rg`) for `--audit` and `git` for
-`--link-sources`. Building and installing also needs `pacman` (adding `flock`,
-plus `sudo` unless you run as root supervisor) and `base-devel` for the
-recipes themselves. A working compiler, enough disk space, and the package
-dependencies named by the selected recipes are also required.
+Use an Arch-based system with the native `gsa` engine (the cargo workspace at
+the repo root), `makepkg`, `nproc`, `ps`, `awk`, `sed`, `tail`, and `getent`.
+Add `ripgrep` (`rg`) for `-Ma` and `git` for `-Mm`. Building and installing
+also needs `pacman` (adding `flock`, plus `sudo` unless you run as root
+supervisor) and `base-devel` for the recipes themselves. A working compiler,
+enough disk space, and the package dependencies named by the selected recipes
+are also required. `gsa --help` is the authoritative flag roster — check it
+(contract §B.9 maps every retired `build-all.fish` spelling onto its `gsa`
+one).
 
-`--audit` needs `rg`, and `--link-sources` needs `git`. The upstream-aware
-`-s/--skip` check also needs the client for each declared source protocol
-(`git`, `svn`, `hg`, or `bzr`) and access to its remote when a selected recipe
-has VCS sources; a non-VCS recipe keeps the mtime-only skip check.
+`-Ma` needs `rg`, and `-Mm` needs `git`. The upstream-aware `--skip` check
+also needs the client for each declared source protocol (`git`, `svn`, `hg`,
+or `bzr`) and access to its remote when a selected recipe has VCS sources; a
+non-VCS recipe keeps the mtime-only skip check.
 
 ## Inspect, dry-run, then build
 
 ```sh
-fish build-all.fish --help
-fish build-all.fish --audit
-fish build-all.fish --list
-fish build-all.fish --dry-run --group core
-fish build-all.fish --group git --intensity xhigh
+gsa --help
+gsa -Ma
+gsa -Sl
+gsa -S --dry-run @core
+gsa -B @git --intensity xhigh
 ```
 
-The builder refuses an empty selection. Every selection expands to the named
+The retired fish entry point still exists at the repo root as a **retirement
+shim**: `build-all.fish` prints the old-spelling → `gsa` migration table
+(contract §B.9) and exits non-zero without running anything. It is kept for
+one release cycle after the 2026-10-14 cutover; the fish engine itself is
+frozen as a fixture oracle under `tests/assets/`, not an engine any more.
+
+The engine refuses an empty selection. Every selection expands to the named
 packages plus their transitive consumers — the packages that must rebuild
 after them — because rebuilding a package cannot break what it consumes, while
 its consumers carry the ABI risk. Prerequisites are assumed installed and
-current, so nothing upstream is pulled in; bootstrap and fresh builds use `-g`
-group runs. `--no-deps` is for a deliberately scoped leaf rebuild of exactly
-the named packages, whose installed prerequisites are already known to be
-current.
+current, so nothing upstream is pulled in; bootstrap and fresh builds use `@`
+group runs (`gsa -S @git`). `--leaf` is for a deliberately scoped leaf rebuild
+of exactly the named packages (`gsa -S --leaf <pkg>`), whose installed
+prerequisites are already known to be current.
 
 ## Installation modes
 
-Without `--install`, a successful build leaves package archives for later
-review or `--installall`. With `--install`, each split package is installed
-immediately after its build, before dependents are dispatched. This avoids
-compiling against an older ABI. Core selection automatically enables
-immediate installation because its ABI coupling makes a collective install
-unsafe.
+Without a family that installs, a successful build leaves package archives
+for later review: `gsa -B` builds to archives and installs nothing. `gsa -S`
+builds the selection and installs each split package immediately after its
+build, before dependents are dispatched (install-before-dependents). This
+avoids compiling against an older ABI. A `core` selection needs no special
+flag — `-S @core` installs as it builds (its ABI coupling makes a collective
+install unsafe); `-B @core` is a deliberate build-only choice whose archives
+are installed later with `-U`.
 
-`--installall` (`-ia`) installs every discoverable archive whose filename
-matches its recipe's evaluated current `pkgver-pkgrel` in **one** pacman
-transaction. Archives with stale versions or unknown version metadata are not
-eligible; no eligible archives is a no-op. Because the transaction cannot
-honour the install-before-dependents rule, use it only to re-install a set that
-does not depend on each other (for example after `--cleanup`, or with
-`--overwrite`), never as a substitute for `--install` in a run whose packages
-are chained in build order.
+`gsa -Ua` (the old `-ia`) installs every index-complete archive in the
+workspace in **one** pacman transaction. Archives with stale versions or
+unknown version metadata are not eligible; no eligible archives is a no-op.
+Because the transaction cannot honour the install-before-dependents rule, use
+it only to re-install a set that does not depend on each other (for example
+after `gsa -Mcc`, or with `--`-forwarded pacman arguments:
+`gsa -Ua -- --overwrite '*'`), never as a substitute for `-S` in a run whose
+packages are chained in build order.
 
 Install decisions are fail-closed and computed once: an empty archive list is
-a refusal under `--install` (`refuse empty-list` — a run that installs nothing
+a refusal under `-S` (`refuse empty-list` — a run that installs nothing
 would leave later packages compiling against the old system version) and a
-no-op under `--installall`; a PGO archive that still carries a baked
+no-op under `-Ua`; a PGO archive that still carries a baked
 `.gcda`/`.profraw` destination is refused (`refuse pgo-*`) and a bare soname
 provide that drifts against the installed database refuses likewise
 (`refuse abi-soname` / `refuse abi-consumer`), before anything is
 written into `/usr` — unless every linked surface consumer is covered: it
-rides the same transaction (`--installall`), or it is scheduled strictly
+rides the same transaction (`-Ua`), or it is scheduled strictly
 later in the same run (in-run repair — the run rebuilds it against the moved
-surface; the plan marks it `repair`, a forced-rebuild marker under
-`$STATE_DIR/abi-repair/` keeps `--skip`/`--skip-built` from skipping that
-rebuild, and the consumer's own install clears the marker). To see exactly
+surface; the provider's plan-row reason marks it `repair <consumer>
+<provider-id>`, a forced-rebuild marker under
+`<state root>/abi-repair/` keeps `--skip`/`--skip-built` from skipping that
+rebuild, and the consumer's own install clears the marker — contract §E.3's
+2026-10-14 amendment). To see exactly
 what a run would decide without touching
-pacman, sudo or the build, ask the hidden seam directly:
+pacman, sudo or the build, ask the hidden seam directly (contract §D.1):
 
 ```sh
-fish build-all.fish --install-decide checked <archive...>   # rc 0 plan / 1 refusal / 2 bad usage
+gsa --install-decide checked <archive...>   # rc 0 plan / 1 refusal / 2 bad usage
 ```
+
+The seam prints one row per candidate **finding**, in plan order, shaped
+`<pkgbase> <decision> <reason…>` (the reason is the remainder of the line).
+The decision vocabulary is `install`, `skip`, `refuse`, `noop`, `parked`
+(contract §E.3; a refusing PGO/ABI candidate can carry several rows sharing
+its subject). The rc contract is fixed: **0** a plan with no `refuse` row,
+**1** a plan containing at least one `refuse` row (the full plan still
+prints, pacman-free end to end), **2** bad usage. `parked` alone never yields
+rc 1.
 
 Root-supervisor mode is:
 
 ```sh
-sudo fish build-all.fish --group core
+sudo gsa -S @core
 ```
 
-The supervisor installs as root but runs `makepkg` as the invoking user and
-resolves that user's real home directory. A bare root shell without an
-invoking user is rejected. Runtime-state ownership is settled at write time:
-the supervisor repairs wrong owners (announced), creates every state file as
-the invoking user — never as root — and a run killed mid-flight can no longer
-leave logs that poison the next one.
+The supervisor installs as root but runs `makepkg` as the invoking user
+(`makepkg` never runs as root — contract §K.1). Runtime-state ownership is
+settled at write time (contract §J.5): the supervisor repairs wrong owners
+(announced), creates every state file as the invoking user — never as root —
+and a run killed mid-flight can no longer leave logs that poison the next
+one.
 
 ### Skip and resume
 
-Before any `-s/--skip` decision, the builder compares the recipe's recorded
+Before any `--skip` decision, the engine compares the recipe's recorded
 GCC identity with the current `gcc --version` build line. A missing or changed
 identity removes that recipe's `src/`, `pkg/`, and `build/` trees, its package
-archives, and their VCS revision records, then rebuilds even if `-s` was
+archives, and their VCS revision records, then rebuilds even if `--skip` was
 requested. The marker is written only after a successful build and VCS
 revision recording, so a failed attempt is cleaned again on retry. Markers are
-under `.state/toolchains/` (or `GSA_STATE_DIR`); changing the state directory
+under the state root's `toolchains/` (contract §J.1; `--state-dir` beats
+`GSA_STATE_DIR`); changing the state directory
 intentionally causes a one-time clean for each selected recipe. This is
 per-recipe state, not a scan or bulk cleanup of the workspace.
-When `-s` has a current-mtime VCS archive, the selected refs are resolved
+When `--skip` has a current-mtime VCS archive, the selected refs are resolved
 before this automatic clean; an unreachable ref still refuses before the
 archive and its baseline are removed.
 
-After that check, `-s/--skip` keeps the archive-mtime versus
+After that check, `--skip` (long-only — the short `-s` is dropped; `s` is
+pacman's search idiom) keeps the archive-mtime versus
 `PKGBUILD`-mtime predicate. For non-VCS recipes, that remains the full
-freshness check. For a VCS recipe, it is only the first gate: the builder
+freshness check. For a VCS recipe, it is only the first gate: the engine
 compares the actual source revisions recorded for that archive after a
 successful build with the current remote revision of each VCS source's
 declared ref (`git`, `svn`, `hg`, or `bzr`). Every declared ref must still
@@ -128,9 +152,9 @@ Two flags reshape the skip decision (2026-10-06, `docs/NOTE.md`):
   recipe CHANGE: a `PKGBUILD` commit newer than the set rebuilds (its file
   mtime when no git metadata exists — checkout/pull mtime churn never
   rebuilds). An incomplete split set or an unreadable archive still rebuilds
-  with the same named diagnostics as `-s`. With `--install` the skipped
+  with the same named diagnostics as `--skip`. With `-S` the skipped
   package still installs — the claimed set, however its version drifts from
-  the committed `pkgver`. Combined with `-s`, `--skip-built` wins — in
+  the committed `pkgver`. Combined with `--skip`, `--skip-built` wins — in
   either order.
 - `--vcs-skip-tolerance N` is the CLI form of the waive threshold described
   above. It overrides `GSA_VCS_SKIP_TOLERANCE` and accepts positive integers
@@ -138,11 +162,11 @@ Two flags reshape the skip decision (2026-10-06, `docs/NOTE.md`):
   unlike the env var, whose garbage values fall back to the default of 5 with
   a warning.
 
-If an archive has no usable revision baseline, `-s` never assumes that the
-current upstream ref produced it. The builder first checks that each declared
+If an archive has no usable revision baseline, `--skip` never assumes that the
+current upstream ref produced it. The engine first checks that each declared
 ref can be parsed and resolved, then performs one normal build to record the
-actual source revisions used for the replacement archive. A later `-s` can
-skip it normally. If a ref cannot be resolved, the builder stops before
+actual source revisions used for the replacement archive. A later `--skip` can
+skip it normally. If a ref cannot be resolved, the engine stops before
 `makepkg`; it does not skip the archive or begin an unverified migration.
 Git ref queries classify transport failures by `ls-remote` exit status: 0/2
 are completed answers (2 = clean "no such ref", never retried), anything
@@ -153,13 +177,41 @@ wait, the rest of the run continues, and the run exits non-zero — an
 unverifiable upstream parks one recipe, it never fails the run and never
 licenses a skip (2026-10-02, `docs/NOTE.md`). A valid baseline whose ref
 moved follows the normal build path. On a genuine
-skip, `-s -i` continues through the existing install path; a one-time legacy
-rebuild follows the normal build/install path.
+skip, `-S --skip` continues through the existing install path; a one-time
+legacy rebuild follows the normal build/install path.
+
+### Fetch-ahead (prefetch)
+
+Build runs prefetch by default: an advisory lookahead window over the plan
+order fetches sources for upcoming recipes while earlier ones build — one
+fetch child at a time (`gsa --fetch-job`, contract §D.1), re-derived from live
+run state so started, parked, deferred and skipped packages never consume a
+slot. The verdicts are advisory by construction: they never write a run-record
+row and never change the run rc; the per-run advisory log is
+`<state root>/prefetch.log` (truncated at run start) and the warning count is
+the `prefetch-warnings:` extension scalar of the run record (contract §H.2).
+
+Tune or disable it with the two `gsa --help` modifiers:
+
+- `--no-prefetch` — opt out entirely.
+- `--prefetch-ahead N` — window size (default 8, positive integers only).
+
+The two conflict and combining them is a usage error. How to check what a run
+carried: the flags are mirrored in the run record's continuation per the
+2026-10-14 amendment to §H.2 — `--no-prefetch` and a **non-default**
+`--prefetch-ahead N` show up in `command:` (a default window mirrors
+nothing), so
+
+```sh
+gsa -S --dry-run @git | sed -n '/run record begin/,/run record end/p' | grep '^command:'
+```
+
+settles which form a continuation replays.
 
 ### Stable version sync and checksum verification
 
 Untagged `packages/stable` recipes track the Arch repository version and are
-updated automatically before they build: the builder reads the repo's version
+updated automatically before they build: the engine reads the repo's version
 with `pacman -Si` and rewrites `pkgver`/`pkgrel` in the recipe **in place** when
 the repo is newer. A downgrade is never written: a higher content `pkgver` is
 kept, and at equal `pkgver` a local `pkgrel` **ahead** of the repo is a
@@ -167,7 +219,7 @@ deliberate bump (a PGO wave marks its own revision — ripgrep's `pkgrel=2` over
 the repo's 1) and is kept too; only a repo `pkgrel` actually ahead is adopted,
 and a `pkgver` move resets `pkgrel` to the repo's. A `pkgver()`-driven recipe
 is skipped entirely. The edit is left in the working tree for you to commit,
-uncommitted. When a source URL moves, the builder refreshes its checksum and
+uncommitted. When a source URL moves, the engine refreshes its checksum and
 `.SRCINFO` from the official anchor; when no source moves, the committed sums
 remain valid, though the `.SRCINFO` may need regeneration after a version-field
 change. Review the diff before committing.
@@ -176,8 +228,8 @@ change. Review the diff before committing.
 
 Build-time nvchecker is opt-in through the validated topology tag
 `version-sync=nvchecker`; an existing `.nvchecker.toml` alone does not change
-the version source. Run `fish build-all.fish --topology` to inspect which
-records currently opt in. The builder reads the provider from the selected
+the version source. Run `gsa -Qt` to inspect which
+records currently opt in. The engine reads the provider from the selected
 config section, then runs only that section with temporary
 `old_ver.json`/`new_ver.json` state outside the repository and
 `NVCHECK_STATE_DIR`. This path requires `nvchecker` and Python 3.11+; moved
@@ -222,7 +274,7 @@ What makes the sums stale is not the version bump but a **moved source**: 26 of
 the 28 `packages/stable` recipes pin a literal version inside their `source=()`
 URLs, so a rewrite leaves them fetching exactly what they fetched before and
 their committed sums still verify. Only `linux-api-headers` and
-`linux-firmware` spell the version into a URL. The builder therefore diffs the
+`linux-firmware` spell the version into a URL. The engine therefore diffs the
 expanded `source=()` array around the rewrite and only acts when an entry
 actually changed; otherwise the build runs against the committed sums.
 
@@ -321,7 +373,7 @@ Version and checksum sync this run (uncommitted — review with 'git diff', then
 anchoring, no refusal, and no refresh-only record. The committed version and
 sums build as-is, at the cost of not tracking Arch or opted-in upstream
 versions. **`--skipchecksums` is never passed by
-the builder.** In the default Arch path, a missing official document carries
+the engine.** In the default Arch path, a missing official document carries
 the manual `updpkgsums` recovery line. An opted-in provider outage or AUR
 metadata race instead defers for a retry; never clear it by treating a
 fetch-generated hash as provider verification. A published-checksum mismatch
@@ -330,78 +382,78 @@ Signature verification is a separate check throughout — it is enforced
 wherever the recipe has a `validpgpkeys` source, and 13 of the 28
 `packages/stable` recipes anchor authenticity that way rather than by checksum.
 
-### sudo during `--install`
+### sudo during install runs
 
-Unprivileged `--install` installs happen inside lane children, which have no
-terminal, so every transaction is `sudo -n` — and as of 2026-09-26 **every**
-privilege escalation in the builder is `sudo -n`. The builder never prompts
-for a password (`sudo_elevate_interactively` is gone). It keeps "I cannot
+Unprivileged installs happen inside lane children, which have no
+terminal, so every transaction is `sudo -n` — and **every**
+privilege escalation in the engine is `sudo -n`. The engine never prompts
+for a password and a TTY changes nothing (contract §K.3). It keeps "I cannot
 refresh a credential" distinct from "installs are impossible":
 
-- Before dispatch it probes what sudo can actually do, and **refuses to
-  start** (`sudo cannot install non-interactively`) when installs could not
-  succeed — rather than building for an hour first. A TTY changes nothing:
-  with a cold credential and a terminal attached the run still refuses
-  (`tests/sudo-keepalive.sh` scenario 4 pins this).
-- While running it keeps the timestamp warm with a non-interactive
-  `sudo -n -v` refresh at `_SUDO_KEEPALIVE_S` (150 s, well inside the sudo
-  timeout). If that refresh is refused but a plain install command works — a
-  sudoers `NOPASSWD` entry covers the installs — there is no credential to
-  keep warm and it stops probing instead of stopping the run.
+- Before dispatch the install preflight probes what sudo can actually do, and
+  **refuses to start** before any build (`preflight-refused` — contract §G.1
+  rc 3) when installs could not succeed non-interactively.
+- While running, installs go through one serialized `pacman -U` at a time,
+  each via the engine's PACMAN shim (`flock` + `sudo -n`), so makepkg's own
+  dependency installs share the same mutex (contract §K.3).
 - If the credential is genuinely lost mid-run, dispatch stops once
-  (`sudo credential expired and cannot be refreshed`, one message, not one
-  per poll), in-flight lanes drain, and the run lists the unstarted packages
-  as remaining and exits non-zero. A stopped dispatch is never reported as a
-  successful build. There is no prompt to fall back to: rerun under `sudo
-  fish build-all.fish …` or prime `sudo -v` yourself first.
+  (`install-failed sudo credential expired and cannot be refreshed`, one
+  message, not one per poll), in-flight lanes drain, and the run lists the
+  unstarted packages as remaining and exits non-zero. A stopped dispatch is
+  never reported as a successful build. There is no prompt to fall back to:
+  rerun under `sudo gsa …` or prime `sudo -v` yourself first.
 
-`--installall` behaves the same way — it never prompts either.
-`sudo fish build-all.fish …` remains the option-free way to avoid credential
+`gsa -Ua` behaves the same way — it never prompts either.
+`sudo gsa …` remains the option-free way to avoid credential
 expiry altogether: installs run as root and `makepkg` still builds as you.
 
 ## Runtime state and cleanup
 
-Builder state is under `.state/` by default. Set `GSA_STATE_DIR` to put logs,
-lane results, lock files, and per-recipe toolchain identities elsewhere.
-makepkg source mirrors and archives follow its `SRCDEST`/`PKGDEST`
-configuration:
+Engine state lives under **one** state root: `/var/lib/gsa` by default — logs,
+lane results, run history, locks, the binpkg index, and per-recipe toolchain
+identities (contract §J.1). Relocate the entire root with `--state-dir PATH`
+or `GSA_STATE_DIR` (the flag wins — contract §J.3). When the default is
+unwritable and no override is given, the run fails early naming `--state-dir`
+as the remedy; there is never a silent fallback to a workspace-local
+directory. makepkg source mirrors and archives stay beside each recipe and
+follow its `SRCDEST`/`PKGDEST` configuration (contract §J.2):
 
 ```sh
-GSA_STATE_DIR="$HOME/.local/state/gentoo-style-arch" \
-  fish build-all.fish --group git
+gsa -S @git --state-dir "$HOME/.local/state/gentoo-style-arch"
 ```
 
-State files are owned by the build user from the moment they are created. If
-a previous root-mode run was killed mid-flight and left an unopenable file
-behind, an unprivileged run preserves it under a
-`<file>.stale.<epoch>.<pid>` name — announced — and starts a fresh log rather
+State files are owned by the build user from the moment they are created
+(contract §J.5). If a previous root-mode run was killed mid-flight and left an
+unopenable file behind, an unprivileged run preserves it under a
+`<path>.stale.<epoch>.<pid>` name — announced — and starts a fresh log rather
 than failing; running the same command once under `sudo` repairs ownership of
 the whole state directory at startup instead.
 
-`--cleanup` removes package archives. `--nuclear` interactively removes
+`gsa -Mcc` removes package archives. `gsa -Mccc` additionally removes
 downloaded sources, VCS clones, and makepkg staging directories while keeping
 recipe-local patches and intentional symlinks. Review its target list before
-confirming. Ctrl-C terminates isolated lane process groups and restores the
-terminal dashboard.
+confirming — and note the engine never prompts (contract §K.3): `gsa -Mccc`
+prints the target list and stops rc 3 (`confirmation-required`) without
+`--noconfirm`; `gsa -Mccc --noconfirm` deletes, and `gsa -Mccc --dry-run`
+renders the targets without mutating anything. Ctrl-C terminates isolated
+lane process groups (one `SIGTERM` each, shared grace window, `SIGKILL` for
+survivors), writes the full run record, and exits 130 (contract §K.3).
 
-A downloaded remote archive is deleted only if its URL source's filename has one
-of the extensions in `_DOWNLOAD_ARCHIVE_EXTS` — the same set the root
-`.gitignore` denies, so a `-ccc` sweep and the ignore rules cannot disagree about
-what a download is (`tests/cleanup-extensions.sh` fails if they do). Because the
+A downloaded remote archive is deleted only if its URL source's filename has
+one of the download extensions the root `.gitignore` denies, so a `-Mccc`
+sweep and the ignore rules cannot disagree about what a download is
+(`tests/cleanup-extensions.sh` fails if they do). Because the
 match is on URL-backed sources, a *local* asset in a recipe directory is never a
-target even when it carries one of those extensions. `--nuclear` reads its
-confirmation from stdin and prints the same target list to a pipe as to a
-terminal, so `printf 'n\n' | fish build-all.fish -ccc` lists what it would
-delete and then aborts — answering `y` deletes it.
+target even when it carries one of those extensions.
 
 ## Environment surface
 
-The builder's environment contract in three lists: the `GSA_*` inputs it
+The engine's environment contract in three lists: the `GSA_*` inputs it
 reads, the inherited environment that silently changes its behaviour, and what
-it exports. `fish build-all.fish --help` is the authoritative input roster —
-check it (or grep the builder for a variable name) rather than counting names.
+it exports. `gsa --help` is the authoritative input roster — check it (or grep
+`crates/` for a variable name) rather than counting names.
 
-**Inputs the builder reads** (the `--help` roster; a run-time flag overrides
+**Inputs the engine reads** (the `--help` roster; a run-time flag overrides
 the three planning defaults):
 
 - `GSA_LANES` — default lane count. Default: `lanes` in
@@ -411,145 +463,156 @@ the three planning defaults):
 - `GSA_INTENSITY` — default intensity level (`low`, `medium`, `high`, `xhigh`,
   `max`). Default: `intensity` in `config/build-defaults.conf`.
 - `GSA_CPU_THREADS` — overrides the detected CPU thread count the parallelism
-  plan is computed from; must be a positive integer (anything else aborts).
-  Default: CPU detection.
+  plan is computed from; must be a positive integer (anything else is a usage
+  error). Default: CPU detection.
 - `GSA_MEMORY_GIB` — overrides the detected available memory in GiB the
   parallelism plan is computed from; must be a positive integer (anything else
-  aborts). Default: memory detection.
-- `GSA_STATE_DIR` — where builder-owned state (logs, lane results, locks,
-  per-recipe toolchain identities) lives. Default: `.state/` in the workspace.
-- `GSA_TARGET_CPU` — forwarded unchanged into build lanes for recipes that
-  read it (CPU tuning); the builder itself does not consume it. Default: unset
-  — the host `makepkg.conf` tuning applies.
+  is a usage error). Default: memory detection.
+- `GSA_STATE_DIR` — the state-root override of contract §J.3; `--state-dir
+  PATH` beats it, and the default is `/var/lib/gsa`.
+- `GSA_TARGET_CPU` — the engine does **not** consume it: it reaches recipes
+  through the inherited environment (CPU tuning; the host `makepkg.conf`
+  applies when unset), and a continuation warns about it via `env-required:`
+  rather than mirroring it (contract §H.2).
 - `GSA_VCS_SKIP_TOLERANCE` — how many upstream commits a recorded baseline may
-  trail a moving Git ref before `-s` refuses to waive the rebuild; must be a
-  positive integer, anything else falls back to the default with a warning.
-  Default: `5`. The `--vcs-skip-tolerance` flag overrides this value (and
-  rejects non-positive-integer input outright instead of falling back); the
-  env var remains the transport that carries the effective value into build
-  lanes.
+  trail a moving Git ref before `--skip` refuses to waive the rebuild. The
+  `--vcs-skip-tolerance` flag overrides this value and rejects
+  non-positive-integer input outright; the env var remains the transport that
+  carries the effective value into build lanes.
 
 **Inherited environment that changes behaviour** without being validated
 configuration:
 
-- `SRCDEST` — makepkg's source-mirror root; the builder also consults it when
-  locating declared sources and `-s` baselines.
-- `TMPDIR` — scratch root for version-sync work (`mktemp` honours it); version
+- `SRCDEST` — makepkg's source-mirror root; the version-sync path consults it
+  when locating declared sources.
+- `TMPDIR` — scratch root for version-sync and toolchain-probe work; version
   sync refuses a `TMPDIR` inside the repository.
-- `MAKEFLAGS` / `NINJAFLAGS` — forwarded into build lanes; the builder strips
+- `MAKEFLAGS` / `NINJAFLAGS` — forwarded into build lanes; the engine strips
   any `-jN` and appends the lane's own job count, preserving the caller's other
-  flags.
-- `PACMAN` — makepkg's dependency-install command
-  (`PACMAN=${PACMAN:-pacman}`); the builder forwards it and, when it can,
-  replaces the lane's value with its own mutex-routing shim so makepkg's `-s`
-  dep installs share the builder's pacman lock.
-- `COLUMNS` — dashboard width when it is numeric.
-- `TERM` — a terminal with a non-`dumb` `TERM` set selects the interactive
-  dashboard; a pipe, a dumb terminal, or an unset `TERM` gets plain output.
+  flags (contract §K.1).
+- `PACMAN` — the engine exports its **own** `PACMAN` shim to each lane
+  (`flock` + `sudo -n`) so makepkg's `-s` dep installs share the engine's
+  pacman mutex (contract §K.3); a caller-set `PACMAN` is replaced by that
+  shim, not honoured.
 - `GIT_CONFIG_COUNT` — injected agent-shell git config breaks bare-repo and
-  makepkg VCS operations; the builder runs its own git calls under
-  `GIT_CONFIG_COUNT=0`, and so must any hand-run `makepkg --printsrcinfo`.
+  makepkg VCS operations; the engine runs its own git calls under
+  `GIT_CONFIG_COUNT=0` (and `GIT_TERMINAL_PROMPT=0`), and so must any hand-run
+  `makepkg --printsrcinfo`.
 
-**Outputs the builder exports** (never inputs):
+**Outputs the engine exports** (never inputs):
 
 - `GSA_BUILD_JOBS` — the lane's job count, exported per lane so a recipe reads
   it instead of calling `nproc` or hard-coding `-j`.
 
-## Builder output contract
+Names outside that roster are not engine vocabulary: `_GSA_*` and `GSA_FAKE_*`
+knobs are fixture seams only (contract §D.2 and the 2026-10-14 §K.3
+amendment), and a scenario is expressed with a stub rather than a new engine
+knob.
 
-One run record per run — plan plus one outcome row per package — is rendered
-three ways: the interactive dashboard (live), the prose summary, and the
-machine block below. The machine block is default-on, printed to stdout after
-the dashboard has finished (so its ANSI renderer cannot garble it), and on the
-interrupt and sudo-preflight paths too:
+## Engine output contract
+
+One run record per run — plan plus one outcome row per package plus the
+continuation — is computed once, as one typed structure, and rendered three
+ways: the interactive dashboard (live), the prose summary, and the machine
+block below. The machine block is default-on, printed to stdout after the
+dashboard has finished (so its ANSI renderer cannot garble it), and on the
+interrupt and preflight-refusal paths too. Since the 2026-10-14 cutover the
+same structure is also persisted into the state root's run history
+(`gsa -Mh`) — storage of one record, not a fourth derivation (contract
+§H.1).
+
+To read a run's block, cut it out of the stream — never scrape the prose:
+
+```sh
+gsa -S --dry-run @git | sed -n '/run record begin/,/run record end/p'
+```
+
+The grammar is contract §H.2: scalars first (fixed order), then three row
+sections —
 
 ```
 --- run record begin ---
-format: 1
-selection-source: groups=… packages=… ranges=…
+format: 2
+selection-source: sets=<targets,…> leaf=<yes|no> range=<ranges,…>
 order: <the selection, topological>
 lanes: …
 normal-jobs: …
 core-jobs: …
 intensity: …
-outcome: success|failed|interrupted
+outcome: planned|success|refused|failed|deferral|interrupted
 rc: <run exit code>
-<pkg> <status> <rc> <dur> <reason>
+--- plan ---
+<pkg> <plan> <reason…>
+--- outcome ---
+<pkg> <status> <rc> <dur> <reason…>
+--- continuation ---
+command: …
+remaining: …
+not-mirrored: …
+env-required: …
 --- run record end ---
 ```
 
-Rows are full, never exceptions-only, one per package in topological order,
-space-separated `pkg status rc dur reason` (the reason is the remainder of the
-line). `rc` and `dur` are integers (`dur` in seconds) or `-` when the package
-never produced one. The status enum, with its reasons:
+The budget scalars `lanes`, `normal-jobs` and `core-jobs` are always
+non-negative integers — they render `0`, never `-`, for any record whose run
+dispatched nothing (dry-run plans, `-U` transactions, preflight refusals);
+the 2026-10-14 amendment to §H.2 fixes that, and `-` remains valid only for a
+row's `rc`/`dur`. Rows are full, never exceptions-only: **one plan row and
+one outcome row per selected package**, in topological order, `order` free of
+duplicates — even when the decision seam emitted several findings for one
+subject, the record collapses per subject (§H.2, 2026-10-14). A row's reason
+is the remainder of the line.
 
-- `succeeded` — `ok`; or, without building, `skip-built` (`--skip-built`
-  skipped a complete, payload-valid archive set for the recipe's current
-  version — no freshness analysis, so this is never a claim that upstream is
-  unchanged), `freshness-waived` (`-s` skipped
-  an archive whose selected Git ref moved fewer than
-  `GSA_VCS_SKIP_TOLERANCE` commits) or `abi-provider-waived` (`-s` skipped an
-  archive of a `.gsa-abi-provider` recipe such as `llvm-git` — upstream
-  movement alone never rebuilds a matched ABI provider). The waiver line is in
-  the package log; the row reason keeps a waiver from claiming to be `ok`.
-- `failed` — `build-failed` (lane ran, rc is in the row), `lane-lost` (reap
-  anomaly, rc 125), `log-unwritable` (dispatch refused: log not openable).
-- `deferred` — rc **99**, reason `anchoring-refused` (checksum anchoring was
-  impossible), `upstream-unverified` (`-s` could not confirm the recorded
-  refs: transport retries exhausted), or `source-unfetchable` (a declared
-  source never arrived in the recipe or `SRCDEST`, so its checksum could not
-  be applied, and the consumer chain can absorb the wait): the recipe is
-  parked rather than failed, dispatch continues and its dependents wait. Not a
-  failed build.
-- `blocked` — `waits-on-deferred` (dependent of a parked recipe) or
-  `never-ready` (dependency cycle / missing dep).
-- `never-started` — `dispatch-stopped`, `preflight-refused`, or
-  `interrupted-before-start`.
-- `interrupted` — `interrupted-mid-build`: started and in flight when the run
-  was interrupted.
+Plan values (`build`, `build-install`, `install`, `fetch`, `skip`, `parked`,
+`refused`, `noop`) are listed in §H.2; outcome statuses
+(`succeeded|failed|deferred|parked|never-started|interrupted`) and every
+reason key are §H.3, including the 2026-10-14 additive-keys amendment. A
+reason never claims more than its row means — a waiver row keeps
+`freshness-waived`/`abi-provider-waived`/`skip-built`, not `ok` — and
+`parked` is not a failure: dependents of a deferred or failed package wait
+while dispatch continues, and the run still exits non-zero (exit codes §G).
 
-An interrupted or partial run always ends with a continuation suggestion under
-"To resume, run:" — a command rendered from the builder's single
-continuation-flag table: the plan values (`--lanes`/`--jobs`/`--intensity`),
-the install flavour (`-i` → `--install`, `-fi` → `--forceinstall`), the
-semantics flags (`--no-deps`/`--no-sync`/`--allow-broken-rustc`), and the
-remaining package list in place of the original selection (failed packages
-included — they must rebuild before their dependents). `-c`/`--clean`,
-`-s`/`--skip`, `--skip-built` and `--vcs-skip-tolerance` are deliberately not
-mirrored (`-c` would wipe the archives a
-resume needs; the skip modes are the user's call — the printed tip says to
-add them), and
-one-shot actions (`-n`, `-l`, `-ia`, `-cc`, `-ccc`, `-ln`, `--audit`,
-`--help`) are never mirrored. Environment inputs are never baked into the
-command either: the summary warns when `GSA_TARGET_CPU`, `GSA_STATE_DIR` or
-`GSA_VCS_SKIP_TOLERANCE` is set — the continuation must then run under the
-same values. The resolved `--lanes`/`--jobs`/`--intensity` values are mirrored
-as explicit flags, so different `GSA_LANES`/`GSA_JOBS`/`GSA_INTENSITY` pins
-cannot drift a continuation. `GSA_CPU_THREADS`/`GSA_MEMORY_GIB` are **not**
-warned about and not mirrored: the core-solo job budget is derived from them
-afresh on every run, so resume under the same pins and compare the
-`parallelism:` line both runs print. The interrupt
-path prints the summary, the machine block and this suggestion before exiting
-130, so a Ctrl-C run leaves the same three artifacts as a completed one.
+The continuation section has four keys: `command:` (the restated
+invocation), `remaining:` (space-separated package IDs — every row not
+`succeeded`, in row order; a failed package must rebuild before its
+consumers), `not-mirrored:` (the flags deliberately not replayed), and
+`env-required:` (ambient variables the resume must set). Which flags are
+mirrored is the engine's single flag-rule table — the 2026-10-14 amendment to
+§H.2 names the full set (`--leaf` mirrors only in its true form; prune
+strengths, one-shot actions and hidden seams never replay) — read the table
+there rather than a copy here. Environment inputs are warned about through
+`env-required:`, never baked into the command; the resolved
+`--lanes`/`--jobs`/`--intensity` values are mirrored as explicit flags.
+
+Fixtures assert on the record, never on prose, through the strict `format: 2`
+parser `tests/lib/rr-v2.bash rr2_body` (contract §H.2's 2026-10-14
+strictness amendment): it rejects blank lines, control characters, duplicate
+scalars/rows/continuation keys, plan or outcome rows that disagree with
+`order`, `rc` values that match neither the status's lane code nor `-`, and
+unknown continuation keys. When checking a change by hand, compare blocks (or
+`gsa -Mh --show <run-id>` renderings), not summary text.
 
 ## Troubleshooting
 
-Read the per-package log named in a failure message. A stale system pacman
-lock is not removed automatically. Resume with the remaining package IDs
-printed by the failure summary, usually adding `--skip --install` after
-checking whether the archive was already produced (or `--skip-built
---install` to trust the built set outright — see **Skip and resume**). Under `--install`, a
+Read the per-package log named in a failure message (`gsa -Ml --tail <ref>`
+browses them). A stale system pacman lock is not removed automatically. Resume
+with the remaining package IDs printed by the failure summary, usually adding
+`--skip` to a `-S` resume after checking whether the archive was already
+produced (or `--skip-built` to trust the built set outright — see **Skip and
+resume**). Under `-S`, a
 package whose exact version is already installed with an install date not
-older than its archive skips its transaction automatically; add
-`--forceinstall` (implies `--install`) when the install must run anyway —
-for example after repackaging a same-version payload.
+older than its archive skips its transaction automatically; add the `f`
+cluster letter (`gsa -Sf`, or `gsa -Uf` for an archive install) when the
+install must run anyway — for example after repackaging a same-version
+payload.
 
-Per-package logs live in `.state/logs/` — Git-ignored, and removed with the
-state directory. If a run may need post-mortem forensics (a long build, a
-machine that stalls), put them somewhere durable first:
+Per-package logs live under the state root's `logs/` (contract §J.1) —
+Git-ignored, and removed with the state directory. If a run may need
+post-mortem forensics (a long build, a machine that stalls), put them
+somewhere durable first:
 
 ```sh
-GSA_STATE_DIR="$HOME/.local/state/gentoo-style-arch" fish build-all.fish -g core -i
+gsa -S @core --state-dir "$HOME/.local/state/gentoo-style-arch"
 ```
 
 ### When the machine freezes during a build
@@ -592,7 +655,7 @@ hooks still try to add that glob literally. The project carries a patched
 `mkinitcpio` recipe that skips absent optional definitions:
 
 ```sh
-fish build-all.fish --no-deps --install mkinitcpio
+gsa -S --leaf mkinitcpio
 sudo mkinitcpio -P
 ```
 
@@ -607,8 +670,8 @@ package must not contain that instrumentation. If an older `glib2-git` or
 before removing the residual tree:
 
 ```sh
-fish build-all.fish --no-deps --install glib2-git
-fish build-all.fish --no-deps --install cairo-git
+gsa -S --leaf glib2-git
+gsa -S --leaf cairo-git
 readelf -sW /usr/lib/libglib-2.0.so.0 | grep -E '__gcov_|__llvm_profile'
 strings -a /usr/lib/libglib-2.0.so.0 | grep -cE '/[^[:space:]]*\.gcda'
 ```
@@ -622,7 +685,7 @@ entries, no match) while `strings -a` found all 348 paths.
 
 Restart applications that were running against the old libraries, then remove
 only the now-inactive residual build trees. Do not treat GLib warnings from a
-portal or sandboxed application as evidence of a builder process; correlate
+portal or sandboxed application as evidence of a engine process; correlate
 them with the installed library symbols and profile-file paths first.
 
 The same verification applies to `gtk3-git`, `gtk4-git`, and
@@ -639,7 +702,7 @@ predicate:
 | Seam | Where | Predicate |
 | --- | --- | --- |
 | Recipe | `package()`, against the staged `$pkgdir` tree, before makepkg strips | `readelf` **and** `strings` (shared gate `lib/pgo.sh`) |
-| Builder | `install_pkgs_now()` / `install_all()`, against the finished `.pkg.tar.zst` | `strings` only |
+| Engine | the install pipeline's PGO payload gate (`gsa-install`; `pgo-*` refusal rows, contract §E.3), against the finished `.pkg.tar.zst` | whole-archive profile-destination string scan (`gsa-recipe::pkginfo::pgo_hits`) |
 
 A recipe-level check must be able to **fail the build**, and the shared gate is
 built so it cannot do anything else. `verify_no_profile_instrumentation` lives
@@ -663,15 +726,18 @@ it, and `tests/pgo-transition.sh` drives each recipe's profile *and*
 below-threshold fallback branches.
 
 Both are deliberate. The recipe seam sees unstripped files, which is the only
-place `readelf -sW` is meaningful. The builder seam is the durable one: it
+place `readelf -sW` is meaningful. The engine seam is the durable one: it
 covers every recipe rather than the handful that remember to call a guard, and
 it runs immediately before files are added to `/usr`, so the check is worth
-its cost. `verify_pgo_payload()` in `build-all.fish` implements it and is
-gated on the sibling `PKGBUILD` containing `-fprofile-generate`, so
-non-PGO recipes are untouched.
+its cost. The engine seam is `gsa-install`'s PGO payload gate — the fail-closed
+`refuse pgo-*` decision rows of contract §E.3 — and it engages only for a
+PGO-instrumented recipe (`gates::pgo_instrumented_recipe` gates on the
+sibling `PKGBUILD` containing `-fprofile-generate`), so non-PGO recipes are
+untouched.
 
-The builder seam extracts and scans the **whole archive**, not a
-`usr/bin`+`usr/lib` subtree. Subtree scoping embeds an assumption about where
+The engine seam extracts and scans the **whole archive**, not a
+`usr/bin`+`usr/lib` subtree: `gsa-recipe::pkginfo::pgo_hits` walks every
+member. Subtree scoping embeds an assumption about where
 a recipe installs files, and it is wrong for a leak under `usr/libexec` (the
 fixture's `deep-bad` payload demonstrates the miss). Whole-archive scanning is
 precise as well as complete: archive metadata (`.PKGINFO`, `.BUILDINFO`,
@@ -681,16 +747,13 @@ quoting one all pass, because the predicate matches a standalone
 `.BUILDINFO` is not a trap in either direction — it records
 `-fprofile-generate` in `buildenv` but contains no `.gcda` string at all.
 
-The scan **fails closed**. `tar` with member names that match nothing exits
-non-zero and extracts nothing, which would make the scan pass vacuously; the
-check therefore treats a non-zero `tar` status or an empty extraction as a
-hard failure rather than a clean result.
+The scan **fails closed**. An archive that cannot be read or whose member
+stream errors mid-scan is refused (`pgo-unreadable` — contract §E.3), never
+treated as a clean result.
 
 Replacing the packages is only half the fix — stale installs keep leaking
-until they are rebuilt. `build-all.fish --audit` reports every installed file
-owned by a PGO recipe that still carries a baked `.gcda` path, and names the
-PGO recipes that are not installed at all, so a recurrence is visible without
-re-deriving the sweep.
+until they are rebuilt. `gsa -Ma` carries the installed-PGO-payload report
+(contract §B.7), so a recurrence is visible without re-deriving the sweep.
 
 During a Meson PGO transition, the final reconfigure must replace both
 compiler and linker argument caches (`c_args`, `cpp_args`, `c_link_args`, and

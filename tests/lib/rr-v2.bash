@@ -406,14 +406,18 @@ rr2_remaining() {
 # reason to trip the fixture's own `set -e`) — assert on FIXTURE_RC explicitly,
 # exactly like fixture-lib.bash's run_builder.
 #
-# Engine selection: GSA_TEST_ENGINE=fish|gsa (default fish).
-#   fish — the staging engine: `fish "$WORKSPACE/build-all.fish" ARG...`,
-#          byte-identical to how the existing fixtures invoke it today.
+# Engine selection: GSA_TEST_ENGINE=gsa|fish (default gsa — the engine of
+# record since the Phase 5 cutover).
 #   gsa  — the native engine: `gsa ARG...` with WORKSPACE as the working
-#          directory (docs/gsa-contract.md is silent on how gsa locates a
-#          workspace; see docs/gsa-fixture-migration.md "Contract gaps found").
-#          The binary may be overridden with GSA_TEST_GSA_BIN (a fixture stub
-#          path, or the real binary at cutover).
+#          directory (docs/gsa-contract.md §B.8: the workspace is found from
+#          the cwd upward). The binary is GSA_TEST_GSA_BIN (a fixture's
+#          `cargo build --offline --target-dir <fixture>/cargo -p gsa-cli`
+#          product, or a prebuilt binary) or `gsa` from PATH.
+#   fish — the FROZEN ORACLE (docs/gsa-fixture-migration.md): `fish
+#          "$WORKSPACE/build-all.fish" ARG...`, only for the fixtures'
+#          fish-only deviation sections, which install the oracle copy with
+#          tests/lib/fixture-lib.bash's install_fish_oracle. It is an oracle
+#          comparison, never an engine.
 #
 # ARG... is always the CURRENT engine's own argv — the per-fixture argv
 # re-contract (docs/gsa-fixture-migration.md) flips the spelling at each phase;
@@ -426,7 +430,7 @@ run_engine() {
     local had_errexit=0
     [[ $- == *e* ]] && had_errexit=1
     set +e
-    case ${GSA_TEST_ENGINE:-fish} in
+    case ${GSA_TEST_ENGINE:-gsa} in
     fish)
         FIXTURE_OUTPUT=$(fish "$ws/build-all.fish" "$@" 2>&1)
         FIXTURE_RC=$?

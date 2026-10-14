@@ -749,18 +749,31 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
         abi_exclusions: None,
         wave_heal,
     };
-    let decided = match decide(&candidates, &decision_ctx, &localdb) {
-        Ok(rows) => rows,
-        Err(message) => {
-            return finish_refused(
-                inv,
-                out,
-                err,
-                vec![plan_failed_row(&message)],
-                &[],
-                "refused-plan-pacman-free",
-                &log_dir,
-            );
+    // A plan whose rows already explain themselves — every item rejected
+    // before the seam (a shrunken split set, a failed discovery) — never
+    // synthesizes the `empty-list` row: §E.3's `empty-list` belongs to a
+    // GENUINELY empty candidate plan (a named ref that produced no eligible
+    // archive still refuses through it). This is the cutover gap-(a) fix for
+    // the phantom `refused empty-list` row of a `-U <ref>` refusal record.
+    let self_explaining = candidates.is_empty()
+        && !items.is_empty()
+        && items.iter().all(|item| matches!(item, Item::Rejected(_)));
+    let decided = if self_explaining {
+        Vec::new()
+    } else {
+        match decide(&candidates, &decision_ctx, &localdb) {
+            Ok(rows) => rows,
+            Err(message) => {
+                return finish_refused(
+                    inv,
+                    out,
+                    err,
+                    vec![plan_failed_row(&message)],
+                    &[],
+                    "refused-plan-pacman-free",
+                    &log_dir,
+                );
+            }
         }
     };
 
@@ -1211,10 +1224,15 @@ fn finish_record(
     // summary (prose-only — the §H.2 choice in `gsa-qa::report`). It never
     // touches the decision rows above: those were computed once, by the one
     // decision seam (rule 20).
-    let qa_targets: Vec<String> = plan
-        .iter()
-        .map(|row| row.pkg.as_str().to_string())
-        .collect();
+    // Unique subjects (a multi-row candidate is one QA subject), first
+    // appearance order.
+    let mut qa_targets: Vec<String> = Vec::new();
+    for row in &plan {
+        let target = row.pkg.as_str().to_string();
+        if !qa_targets.contains(&target) {
+            qa_targets.push(target);
+        }
+    }
     let qa = crate::qa::report_lines(&qa_targets);
     let record = record::build_txn_record(inv, &inv.targets, plan, outcomes, &run_outcome);
     let _ = write!(

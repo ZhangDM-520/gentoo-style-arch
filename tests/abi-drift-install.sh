@@ -95,9 +95,9 @@ set -euo pipefail
 # outcome rows (§H.3) with outcome: refused / rc 3 (§G.1). R-1/R-2 (§6):
 # this fixture carries no fish source-shape greps and no format: 1 row
 # grammar, so nothing of either class remains to retire.
-# The executor runs' records are NOT rr2-parseable (`lanes: -` — known §H
-# debt), so those sections extract record fields inline, the
-# tests/gsa-install-v2.sh pattern.
+# The executor runs' records parse through the strict rr2_* parser since the
+# cutover gap-(a) fix (integer budget scalars, one row per subject); the
+# record_scalar/record_section helpers below are thin rr2_* wrappers.
 #
 # DEVIATION 1 (gap G1, docs/gsa-fixture-migration.md §8.1; inventory KEEP
 # cell "repair coverage (:542-663)"): cases K/L/M/N stay FISH-DRIVEN. The
@@ -362,21 +362,18 @@ seam_row_has() {
 }
 
 # record_scalar KEY / record_section plan|outcome / record_row_has — the
-# machine block of a -U run capture, parsed INLINE: those records render
-# `lanes: -` and cannot feed the strict rr2_* parser (known §H debt; the
-# tests/gsa-install-v2.sh pattern).
+# machine block of a -U run capture, through the STRICT `format: 2` parser
+# (rr2_body): `-U` records are §H.2-conformant since the cutover gap-(a) fix
+# (integer budget scalars, one row per subject).
 record_scalar() {
-    printf '%s\n' "$FIXTURE_OUTPUT" |
-        sed -n '/^--- run record begin ---$/,/^--- run record end ---$/p' |
-        sed -n "s/^$1: //p" | head -n 1
+    rr2_scalar "$1" <<<"$FIXTURE_OUTPUT"
 }
 record_section() {
-    printf '%s\n' "$FIXTURE_OUTPUT" |
-        sed -n '/^--- run record begin ---$/,/^--- run record end ---$/p' |
-        awk -v sec="$1" '
-            $0 == "--- " sec " ---" { p = 1; next }
-            /^--- / { p = 0 }
-            p { print }'
+    case $1 in
+    plan) rr2_plan_rows <<<"$FIXTURE_OUTPUT" ;;
+    outcome) rr2_outcome_rows <<<"$FIXTURE_OUTPUT" ;;
+    *) fail "record_section: unknown section $1" ;;
+    esac
 }
 record_row_has() {
     local label=$1 needle=$2
@@ -439,6 +436,7 @@ write_srcinfo() {
 
 ws="$tmp/ws"
 make_workspace "$ws" 1 2 low
+install_fish_oracle "$ws"
 make_install_conf "$ws/pacman.conf" # this run's IgnorePkg registration target (never the host's)
 add_package "$ws" libs-git "$gsa_meta_any"
 add_package "$ws" app-git "$gsa_meta_any"

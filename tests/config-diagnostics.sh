@@ -18,6 +18,7 @@ trap 'rm -rf -- "$fixture"' EXIT
 make_case_workspace() {
     local dir=$1
     make_workspace "$dir" 1 2 low
+    install_fish_oracle "$dir"
     add_package "$dir" p1 $'pkgver=1\npkgrel=1\narch=(any)'
     add_package "$dir" p2 $'pkgver=1\npkgrel=1\narch=(any)'
 }
@@ -193,6 +194,7 @@ chmod 644 "$dir/config/build-defaults.conf"
 
     ws="$smoke/ws"
     make_workspace "$ws" 1 2 low
+    install_fish_oracle "$ws"
     add_package "$ws" p1 "$gsa_meta_any"
     add_package "$ws" p2 "$gsa_meta_any" core
 

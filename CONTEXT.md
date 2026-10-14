@@ -36,7 +36,7 @@ _Avoid_: category (that is the directory layout)
 **build-tools group**:
 The dispatch-priority class: within a run its members are dispatched before
 all other ready packages, but the band never overrides build-order edges and
-the plan, `--list`, run-record and range order stay topological build order.
+the plan, `gsa -Sl`, run-record and range order stay topological build order.
 Membership is always dual `core,build-tools`.
 _Avoid_: toolchain dependency (that is a build-order edge; build-tools is
 scheduling, not dependency)
@@ -106,7 +106,7 @@ post-strip, strings-only.
 _Avoid_: central gate (ambiguous)
 
 **Audit lint**:
-A read-only drift check run via `--audit` over recipes, topology, or host
+A read-only drift check run via `gsa -Ma` over recipes, topology, or host
 state, reported with the offender named. Report-only by contract; gating
 happens in fixtures.
 _Avoid_: check, linter

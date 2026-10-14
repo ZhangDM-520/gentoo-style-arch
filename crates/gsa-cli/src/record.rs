@@ -265,11 +265,13 @@ pub fn build_plan_record(
         command.push('f');
     }
     command.push_str(" --dry-run");
-    command.push_str(if inv.leaf {
-        " --leaf=yes"
-    } else {
-        " --leaf=no"
-    });
+    // `--leaf` is mirrored ONLY in its true form (contract §H.2's flag-rule
+    // table): a leaf=no run mirrors nothing — the absence of the flag IS the
+    // negation, and `--leaf=no`/`--leaf=yes` are not replayable spellings
+    // (§B.8 defines the bare boolean; gap G4's replay hazard).
+    if inv.leaf {
+        command.push_str(" --leaf");
+    }
     command.push_str(&mirror_flags(inv, None));
     for (_, id) in &selection.listed {
         command.push(' ');
@@ -445,13 +447,123 @@ pub fn build_fetch_record(
     }
 }
 
+/// The `-U` record's per-subject collapse (contract §H.2: "Rows are full —
+/// one per selected package"): a multi-row candidate — several PGO hits, a
+/// stacked PGO+ABI refusal, a split output set — is ONE package in the run
+/// record, so `order`, the plan rows and the outcome rows stay one-to-one
+/// under the strict `format: 2` grammar (duplicate rows and duplicate
+/// `order` entries are rejected). The seam's per-candidate rows are
+/// untouched: they are the FIRST rendering (§E.1), this is the second.
+///
+/// Merge rules (the record never re-decides — it aggregates what the one
+/// decision computed): the plan action is the strongest of the group
+/// (`refused` > `parked` > `install` > `skip` > `noop`), the outcome status
+/// the worst (`failed` > `interrupted` > `deferred` > `parked` >
+/// `never-started` > `succeeded` — so `remaining:` keeps any subject that
+/// did not fully succeed), `rc`/`dur` come from the winning outcome row,
+/// and the reason is every row's reason in row order joined by single
+/// spaces with exact repeats dropped (the reason is the remainder of the
+/// line, §H.2 — a join stays grammatical and lossless).
+fn collapse_txn_rows(
+    plan: Vec<PlanRow>,
+    outcomes: Vec<OutcomeRow>,
+) -> (Vec<PlanRow>, Vec<OutcomeRow>) {
+    fn plan_rank(action: PlanAction) -> u8 {
+        match action {
+            PlanAction::Refused => 5,
+            PlanAction::Parked => 4,
+            PlanAction::Install | PlanAction::BuildInstall | PlanAction::Build => 3,
+            PlanAction::Skip | PlanAction::Fetch => 2,
+            PlanAction::Noop => 1,
+        }
+    }
+    fn status_rank(status: RowStatus) -> u8 {
+        match status {
+            RowStatus::Failed => 6,
+            RowStatus::Interrupted => 5,
+            RowStatus::Deferred => 4,
+            RowStatus::Parked => 3,
+            RowStatus::NeverStarted => 2,
+            RowStatus::Succeeded => 1,
+        }
+    }
+    fn join_reasons(reasons: impl Iterator<Item = String>) -> String {
+        let mut seen: Vec<String> = Vec::new();
+        for reason in reasons {
+            if reason.is_empty() || seen.contains(&reason) {
+                continue;
+            }
+            seen.push(reason);
+        }
+        seen.join(" ")
+    }
+
+    let mut plan_order: Vec<RecipeId> = Vec::new();
+    let mut plan_groups: Vec<Vec<PlanRow>> = Vec::new();
+    for row in plan {
+        match plan_order.iter().position(|pkg| *pkg == row.pkg) {
+            Some(idx) => plan_groups[idx].push(row),
+            None => {
+                plan_order.push(row.pkg.clone());
+                plan_groups.push(vec![row]);
+            }
+        }
+    }
+    let plan: Vec<PlanRow> = plan_groups
+        .into_iter()
+        .map(|group| {
+            let best = group
+                .iter()
+                .max_by_key(|row| plan_rank(row.action))
+                .expect("non-empty group");
+            PlanRow {
+                pkg: best.pkg.clone(),
+                action: best.action,
+                reason: join_reasons(group.into_iter().map(|row| row.reason)),
+            }
+        })
+        .collect();
+
+    let mut out_order: Vec<RecipeId> = Vec::new();
+    let mut out_groups: Vec<Vec<OutcomeRow>> = Vec::new();
+    for row in outcomes {
+        match out_order.iter().position(|pkg| *pkg == row.pkg) {
+            Some(idx) => out_groups[idx].push(row),
+            None => {
+                out_order.push(row.pkg.clone());
+                out_groups.push(vec![row]);
+            }
+        }
+    }
+    let outcomes: Vec<OutcomeRow> = out_groups
+        .into_iter()
+        .map(|group| {
+            let worst = group
+                .iter()
+                .max_by_key(|row| status_rank(row.status))
+                .expect("non-empty group");
+            OutcomeRow {
+                pkg: worst.pkg.clone(),
+                status: worst.status,
+                rc: worst.rc,
+                dur: worst.dur,
+                reason: join_reasons(group.into_iter().map(|row| row.reason)),
+            }
+        })
+        .collect();
+    (plan, outcomes)
+}
+
 /// The one run record for a `-U` install-from-archives run (contract §H):
 /// the plan rows ARE the decision rows' run-record rendering (§E.1 — one
 /// decision, one seam; the `--install-decide` stdout is the first rendering,
-/// this is the second, the prose summary the third), the outcome rows come
-/// from the transaction result, and the continuation restates the remaining
-/// subjects. `-Ua` is one-shot and never mirrored: the continuation reissues
-/// `-U` with the remaining subjects named explicitly.
+/// this is the second, the prose summary the third), collapsed per subject
+/// ([`collapse_txn_rows`]) so the block is strict-`format: 2`-parseable, the
+/// outcome rows come from the transaction result, and the continuation
+/// restates the remaining subjects. `-Ua` is one-shot and never mirrored:
+/// the continuation reissues `-U` with the remaining subjects named
+/// explicitly. A transaction run dispatches no lanes: its budget scalars
+/// render `0` (§H.2's strict grammar).
 pub fn build_txn_record(
     inv: &Invocation,
     targets: &[String],
@@ -459,6 +571,7 @@ pub fn build_txn_record(
     outcomes: Vec<OutcomeRow>,
     outcome: &gsa_model::RunOutcome,
 ) -> RunRecord {
+    let (plan, outcomes) = collapse_txn_rows(plan, outcomes);
     let source_targets: Vec<String> = if targets.is_empty() && inv.modifiers.contains(&'a') {
         vec!["all".to_string()]
     } else {
@@ -598,11 +711,9 @@ mod tests {
         assert_eq!(record.rc, 0);
         assert_eq!(record.plan.len(), 2);
         assert_eq!(record.plan[0].action, PlanAction::BuildInstall);
-        // The prune strength 'c' is never mirrored; --dry-run and --leaf are.
-        assert_eq!(
-            record.continuation.command,
-            "gsa -S --dry-run --leaf=no pkg1 pkg2"
-        );
+        // The prune strength 'c' is never mirrored; --dry-run is; --leaf only
+        // in its true form (G4 — absence IS the negation).
+        assert_eq!(record.continuation.command, "gsa -S --dry-run pkg1 pkg2");
         assert!(record.continuation.not_mirrored.iter().any(|f| f == "-Mcc"));
         let block = record.render_machine();
         assert!(block.contains("selection-source: sets=@git leaf=no range=-"));
@@ -647,10 +758,7 @@ mod tests {
             "high",
         );
         assert_eq!(record.plan[0].action, PlanAction::Build);
-        assert_eq!(
-            record.continuation.command,
-            "gsa -B --dry-run --leaf=yes pkg1"
-        );
+        assert_eq!(record.continuation.command, "gsa -B --dry-run --leaf pkg1");
         assert_eq!(record.selection_source, "sets=mesa-git leaf=yes range=1..1");
     }
 
@@ -882,6 +990,99 @@ mod tests {
             .not_mirrored
             .iter()
             .any(|f| f == "--register-ignorepkg"));
+    }
+
+    #[test]
+    fn txn_record_collapses_multi_row_candidates_and_keeps_budgets_integer() {
+        use gsa_model::Decision;
+        // One candidate refusing on two PGO hits plus a stacked ABI row —
+        // three decision rows, ONE package in the record (§H.2).
+        let rows = [
+            ("mesa-git", Decision::Refuse, "pgo-hit /train/a.gcda"),
+            ("mesa-git", Decision::Refuse, "pgo-hit /train/b.gcda"),
+            (
+                "mesa-git",
+                Decision::Refuse,
+                "abi-soname /a libfoo.so=1-64 1 2",
+            ),
+        ];
+        let plan: Vec<PlanRow> = rows
+            .iter()
+            .map(|(subject, decision, reason)| {
+                decision_plan_row(&DecisionRow {
+                    subject: subject.to_string(),
+                    decision: *decision,
+                    reason: reason.to_string(),
+                })
+            })
+            .collect();
+        let outcomes = vec![
+            OutcomeRow {
+                pkg: RecipeId::new("mesa-git").unwrap(),
+                status: RowStatus::NeverStarted,
+                rc: None,
+                dur: None,
+                reason: "install-refused pgo-hit /train/a.gcda".to_string(),
+            },
+            OutcomeRow {
+                pkg: RecipeId::new("mesa-git").unwrap(),
+                status: RowStatus::Succeeded,
+                rc: Some(0),
+                dur: Some(1),
+                reason: "ok".to_string(),
+            },
+        ];
+        let mut inv = inv_for(Family::U);
+        inv.modifiers = vec!['a'];
+        let run_outcome = gsa_model::RunOutcome::compute(&outcomes, false, false, true);
+        let record = build_txn_record(&inv, &[], plan, outcomes, &run_outcome);
+
+        assert_eq!(record.order.len(), 1, "order must not repeat a subject");
+        assert_eq!(record.plan.len(), 1);
+        assert_eq!(record.plan[0].action, PlanAction::Refused);
+        assert_eq!(
+            record.plan[0].reason,
+            "pgo-hit /train/a.gcda pgo-hit /train/b.gcda abi-soname /a libfoo.so=1-64 1 2"
+        );
+        assert_eq!(record.outcomes.len(), 1);
+        // The worst row wins, so a partly-succeeded subject stays in
+        // `remaining:` — and one subject appears there once.
+        assert_eq!(record.outcomes[0].status, RowStatus::NeverStarted);
+        assert_eq!(record.continuation.remaining.len(), 1);
+
+        // Strict §H.2 grammar: budget scalars are integers, rows agree with
+        // the order scalar one position each.
+        let block = record.render_machine();
+        for line in ["lanes: 0", "normal-jobs: 0", "core-jobs: 0"] {
+            assert!(block.contains(line), "{line} missing:\n{block}");
+        }
+        assert!(!block.contains("lanes: -"), "{block}");
+    }
+
+    #[test]
+    fn plan_record_mirrors_leaf_only_in_its_true_form() {
+        // G4: `--leaf=no`/`--leaf=yes` are not replayable spellings — a
+        // continuation mirrors `--leaf` or nothing (absence IS the negation).
+        let mut inv = inv_for(Family::S);
+        inv.leaf = true;
+        let record = build_plan_record(&inv, &selection(1), &["pkg1".to_string()], &[], "xhigh");
+        assert!(
+            record
+                .continuation
+                .command
+                .split(' ')
+                .any(|tok| tok == "--leaf"),
+            "{}",
+            record.continuation.command
+        );
+
+        inv.leaf = false;
+        let record = build_plan_record(&inv, &selection(1), &["pkg1".to_string()], &[], "xhigh");
+        assert!(
+            !record.continuation.command.contains("--leaf"),
+            "{}",
+            record.continuation.command
+        );
     }
 
     #[test]

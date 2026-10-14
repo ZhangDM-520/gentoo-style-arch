@@ -105,6 +105,7 @@ checks=0
 
 ws="$tmp/ws"
 make_workspace "$ws" 1 2 low
+install_fish_oracle "$ws"
 make_install_conf "$ws/pacman.conf" # this run's IgnorePkg registration target (never the host's)
 add_package "$ws" libs-git "$gsa_meta_any"
 add_package "$ws" app-git "$gsa_meta_any"

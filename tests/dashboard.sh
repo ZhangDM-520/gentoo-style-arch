@@ -114,6 +114,7 @@ export GSA_TEST_GSA_BIN="$gsa_bin"
 make_case_workspace() { # $1 = dir, $2 = columns
     local dir=$1 cols=$2 id
     make_workspace "$dir" 2 2 low
+    install_fish_oracle "$dir"
     for id in p1 p2 p3; do
         add_package "$dir" "$id" "$gsa_meta_any"
     done

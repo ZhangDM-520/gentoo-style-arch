@@ -5,7 +5,6 @@ root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$root" || exit 1
 
 recipe=packages/core/glibc-git
-builder=$root/build-all.fish
 
 fail() {
     printf 'glibc package fixture: %s\n' "$1" >&2
@@ -17,6 +16,27 @@ fail() {
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/gsa-glibc-package.XXXXXX")
 trap 'rm -rf -- "$tmp"' EXIT
+
+# ─── The engine under test: built into the fixture tree (scratch only).
+# GSA_TEST_GSA_BIN, when already set to an executable, is that engine and the
+# scratch build is skipped. GSA_STATE_DIR stays in scratch too — this is a
+# read-only real-tree fixture (migration §4 row, 2026-10-14). ────────────────
+if [ -z "${GSA_TEST_GSA_BIN:-}" ]; then
+    cargo build --offline --quiet --target-dir "$tmp/cargo" -p gsa-cli \
+        --manifest-path "$root/Cargo.toml" ||
+        fail "cannot build the gsa binary for the fixture"
+    GSA_TEST_GSA_BIN="$tmp/cargo/debug/gsa"
+fi
+[ -x "$GSA_TEST_GSA_BIN" ] || fail "the engine under test is not executable: $GSA_TEST_GSA_BIN"
+export GSA_TEST_GSA_BIN
+export GSA_STATE_DIR="$tmp/state"
+
+# `order:` scalar of the format: 2 run record (contract §H.2): recipe ids in
+# build order, space-separated. Reading the machine block replaces the retired
+# numbered-listing prose parsing (migration §4 row).
+run_order() {
+    sed -n 's/^order: //p' <<<"$1"
+}
 
 makepkg --printsrcinfo --dir "$recipe" >"$tmp/.SRCINFO" ||
     fail 'makepkg --printsrcinfo failed'
@@ -42,23 +62,26 @@ exact_dep=$(printf '\tdepends = glibc-git=%s' "$pkgver")
 [[ $(grep -Fxc "$exact_dep" "$tmp/.SRCINFO") -eq 2 ]] ||
     fail 'lib32 and locales outputs must depend on the matching glibc-git version'
 
-topology=$(fish "$builder" --topology) || fail 'builder --topology failed'
+# The engine locates the workspace from the cwd upward (contract §B.8
+# amendment G11); the fixture already runs from $root.
+topology=$("$GSA_TEST_GSA_BIN" -Qt) || fail 'gsa -Qt failed'
 grep -Fqx 'glibc-git|packages/core/glibc-git|core|linux-api-headers|' \
     <<<"$topology" || fail 'glibc-git topology row or linux-api-headers edge is missing'
 grep -Fqx 'gcc-snapshot|packages/core/gcc-snapshot|core,build-tools|glibc-git,binutils,git-git,python,zstd-git|version-sync=nvchecker' \
     <<<"$topology" || fail 'gcc-snapshot topology row, build-tools groups, edge, or version-sync opt-in is missing'
 
 for pkgname in lib32-glibc-git glibc-locales-git; do
-    output=$(fish "$builder" --dry-run --no-deps "$pkgname" 2>&1) ||
-        fail "builder rejected split output $pkgname: $output"
-    rows=$(sed -n 's/^ *[0-9][0-9]*\. //p' <<<"$output")
-    [[ $rows == glibc-git ]] ||
-        fail "$pkgname should resolve to the single glibc-git recipe, got: $rows"
+    output=$("$GSA_TEST_GSA_BIN" -S --dry-run --leaf "$pkgname" 2>&1) ||
+        fail "gsa rejected split output $pkgname: $output"
+    order=$(run_order "$output")
+    [[ $order == glibc-git ]] ||
+        fail "$pkgname should resolve to the single glibc-git recipe, got: $order"
 done
 
-output=$(fish "$builder" --dry-run linux-api-headers 2>&1) ||
-    fail "builder could not dry-run the glibc toolchain chain: $output"
-rows=$(sed -n 's/^ *[0-9][0-9]*\. //p' <<<"$output")
+output=$("$GSA_TEST_GSA_BIN" -S --dry-run linux-api-headers 2>&1) ||
+    fail "gsa could not dry-run the glibc toolchain chain: $output"
+order=$(run_order "$output")
+rows=$(tr ' ' '\n' <<<"$order")
 awk '
     $0 == "linux-api-headers" { headers = NR }
     $0 == "glibc-git" { glibc = NR }

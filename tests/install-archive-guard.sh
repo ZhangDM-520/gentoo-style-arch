@@ -32,9 +32,9 @@ set -euo pipefail
 # "REWRITE argv … runs `gsa -S`, `-Uf`, `-Ua`, `--skip`, `--leaf`"): the
 # engine defers `--skip` (parse-and-refuse rc 2, "gsa: deferred to a later
 # phase: --skip"), so cases G/H cannot exercise real skip-if-fresh behaviour
-# through it. They keep driving the fish builder these workspaces carry (the
-# tests/abi-postinstall-probe.sh mixed pattern) with their build-skip and
-# skip/force-install assertions intact.
+# through it. They keep driving the FROZEN fish oracle these workspaces
+# install with install_fish_oracle (the tests/abi-postinstall-probe.sh mixed
+# pattern) with their build-skip and skip/force-install assertions intact.
 # DEVIATION 2 (discovery mechanism — inventory KEEP cell "discovery
 # semantics"): the engine takes each archive's version from its OWN
 # `.PKGINFO` and selects the newest archive per output name
@@ -556,12 +556,14 @@ txn_argv "$ws/pacman.log" | grep -F -- "$arch_run" >/dev/null ||
 # The engine defers `--skip` (parse-and-refuse rc 2), so the resume idiom's
 # two halves — the BUILD is skipped (a skipped build never reaches makepkg)
 # and the already-installed package is not reinstalled (or IS reinstalled
-# under force) — keep driving the fish builder these workspaces carry.
-# These sites keep their fish-era assertions on purpose.
+# under force) — keep driving the FROZEN fish oracle these workspaces install
+# with install_fish_oracle. These sites keep their fish-era assertions on
+# purpose.
 
 make_case_workspace() { # $1 = sandbox dir — the FISH-era workspace for G/H
     local dir=$1
     make_workspace "$dir" 1 2 low
+    install_fish_oracle "$dir"
     stub_sleep "$dir"
     make_install_conf "$dir/pacman.conf"
     add_package "$dir" p1 $'pkgver=1.0.0\npkgrel=1\narch=(any)'

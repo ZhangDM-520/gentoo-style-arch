@@ -45,12 +45,12 @@ set -euo pipefail
 # `p2 refuse partial-set …` is unreachable through `gsa --install-decide` —
 # that seam takes direct archive paths only and never runs recipe discovery
 # (crates/gsa-cli/src/install.rs `run_install_decide`), so a shrunken split set
-# cannot refuse there. `gsa -U <ref>` does render `refused partial-set …` plan
-# rows and `never-started … install-refused partial-set …` outcome rows, but
-# its record carries known §H conformance defects (`lanes: -`, a phantom
-# `refused empty-list` row) deferred to the cutover fix and cannot feed rr2_*.
-# The refusal therefore re-pins through the -S run record: §E.3's decision
-# `refuse partial-set <dir> <missing>` maps to the outcome reason
+# cannot refuse there. `gsa -U <ref>` renders `refused partial-set …` plan
+# rows and `never-started … install-refused partial-set …` outcome rows in a
+# strict-`format: 2`-parseable record (the cutover gap-(a) fix retired its
+# `lanes: -` and phantom `refused empty-list` defects — pinned below through
+# the -U record). The refusal ALSO re-pins through the -S run record: §E.3's
+# decision `refuse partial-set <dir> <missing>` maps to the outcome reason
 # `install-refused partial-set <dir> p2-extra` (§H.3; install.rs `install_step`
 # prefixes `install-refused`), the run is `outcome: refused` rc 3 (§G.1), the
 # package that never dispatched stays `never-started` (§H.3), and the refusal
@@ -379,6 +379,41 @@ fi
     if grep -v -e '^pacman -Q' -e "p1-1.0.0-1-any.pkg.tar.zst" "$dir/pacman.log" | grep -q .; then
         printf 'plan refusal: a refused plan reached pacman:\n' >&2
         cat "$dir/pacman.log" >&2
+        exit 1
+    fi
+
+    # ── the -U <ref> rendering of the same refusal (cutover gap (a)) ──────
+    # The discovery path renders `refused partial-set …` plan rows and
+    # `never-started … install-refused partial-set …` outcome rows, and the
+    # record is strict-`format: 2`-parseable (integer budget scalars) with
+    # NO phantom `refused empty-list` row: §E.3's `empty-list` belongs to a
+    # genuinely empty candidate plan, never to a plan whose rows already
+    # explain the refusal.
+    : >"$dir/pacman.log"
+    run_engine "$dir" -U --state-dir "$dir/u-state" --config "$dir/pacman.conf" p2
+    U_OUTPUT=$FIXTURE_OUTPUT
+    if ((FIXTURE_RC != 3)); then
+        printf 'plan refusal (-U): a partial-set refusal must exit 3 (§G.1), got %s:\n%s\n' \
+            "$FIXTURE_RC" "$U_OUTPUT" >&2
+        exit 1
+    fi
+    if ! rr2_body <<<"$U_OUTPUT" >/dev/null; then
+        printf 'plan refusal (-U): the -U record is not strict-format-2-parseable:\n%s\n' "$U_OUTPUT" >&2
+        exit 1
+    fi
+    if [[ $(rr2_plan p2 plan <<<"$U_OUTPUT") != refused ]] ||
+        [[ $(rr2_plan p2 reason <<<"$U_OUTPUT") != "partial-set $dir/packages/p2 p2-extra" ]]; then
+        printf 'plan refusal (-U): p2 plan row is [%s], want [refused partial-set %s/packages/p2 p2-extra]:\n%s\n' \
+            "$(rr2_plan p2 <<<"$U_OUTPUT")" "$dir" "$U_OUTPUT" >&2
+        exit 1
+    fi
+    if rr2_plan_rows <<<"$U_OUTPUT" | grep -q 'empty-list'; then
+        printf 'plan refusal (-U): phantom empty-list row in a self-explaining refusal plan:\n%s\n' "$U_OUTPUT" >&2
+        exit 1
+    fi
+    if [[ $(rr2_scalar rc <<<"$U_OUTPUT") != 3 ]]; then
+        printf 'plan refusal (-U): record rc is %s, want 3:\n%s\n' \
+            "$(rr2_scalar rc <<<"$U_OUTPUT")" "$U_OUTPUT" >&2
         exit 1
     fi
 )

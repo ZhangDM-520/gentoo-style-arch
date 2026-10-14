@@ -50,10 +50,13 @@ set -euo pipefail
 # House conventions: `( subshell )` sections (each an isolated scenario with
 # its own workspace), inline oracle stubs (§D.2), `fail()` prefixes, and
 # tests/lib/rr-v2.bash's `format: 2` parser + run_engine with
-# GSA_TEST_ENGINE=gsa. `-U` run records render `lanes: -` (no budget) and one
-# plan row per DECISION row (a refusing PGO/ABI candidate emits several), so
-# rr2_* (strict: integer budget scalars, one row per order position) cannot
-# read them — those sections extract record fields inline and say so.
+# GSA_TEST_ENGINE=gsa. `-U` run records are strict-`format: 2`-parseable
+# since the cutover gap-(a) fix: integer budget scalars (a transaction run
+# dispatches no lanes — `lanes: 0`) and one plan/outcome row per SUBJECT
+# (multi-row candidates — several PGO hits, a split set — collapse in the
+# record; the seam's per-candidate §E.2 rows are the first rendering and
+# keep full granularity), so every record below parses through rr2_*. The
+# helpers `record_scalar`/`record_section` are thin rr2_* wrappers.
 
 source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/rr-v2.bash"
@@ -314,20 +317,20 @@ $blob"
     fi
 }
 
-# record_scalar KEY — one scalar of the machine block of a capture (the -U
-# record sections (d)/(e)/(g) parse inline: rr2_* rejects their `lanes: -`).
+# record_scalar KEY — one scalar of the machine block of a capture, through
+# the STRICT `format: 2` parser (rr2_body fails loudly on any grammar break,
+# which is exactly the §H.2 conformance check this fixture keeps).
 record_scalar() {
-    printf '%s\n' "$FIXTURE_OUTPUT" | sed -n '/^--- run record begin ---$/,/^--- run record end ---$/p' \
-        | sed -n "s/^$1: //p" | head -n 1
+    rr2_scalar "$1" <<<"$FIXTURE_OUTPUT"
 }
 
 # record_section plan|outcome — one section's rows of the machine block.
 record_section() {
-    printf '%s\n' "$FIXTURE_OUTPUT" | sed -n '/^--- run record begin ---$/,/^--- run record end ---$/p' \
-        | awk -v sec="$1" '
-            $0 == "--- " sec " ---" { p = 1; next }
-            /^--- / { p = 0 }
-            p { print }'
+    case $1 in
+    plan) rr2_plan_rows <<<"$FIXTURE_OUTPUT" ;;
+    outcome) rr2_outcome_rows <<<"$FIXTURE_OUTPUT" ;;
+    *) fail "record_section: unknown section $1" ;;
+    esac
 }
 
 # txn_count / txn_argv / txn_intervals — the pacman stub log's facts.
@@ -543,6 +546,42 @@ $rows"
         fi
         [ "$(txn_count "$GSA_FAKE_PACMAN_LOG")" = 0 ] \
             || fail "a parked plan transacts nothing (rule 25(h)):" "$GSA_FAKE_PACMAN_LOG"
+
+        # ── self-explaining refusal (§H.2 amendment (a), 2026-10-14): a
+        # shrunken split set refuses through its OWN rows (partial-set) and
+        # must never synthesize a phantom `empty-list` row — `empty-list`
+        # belongs to a genuinely empty candidate plan (the `-Ua` noop above).
+        # (Pinned at cutover after a mutation probe showed the fix was
+        # uncovered: collapsing the phantom row is what keeps the strict
+        # format: 2 grammar — the extra row's `-` subject is not in `order`.)
+        shrink="$fixture/a/shrink-ws"
+        make_workspace "$shrink" 1 auto low
+        install_ws "$shrink" "$db"
+        add_package "$shrink" split "$gsa_meta_any" git
+        printf 'pkgbase = split\npkgname = split\npkgname = split-libs\npkgver = 1.0.0\npkgrel = 1\narch = any\n' \
+            >"$shrink/packages/split/.SRCINFO"
+        stage="$fixture/a/shrink-stage"
+        stage_pkginfo "$stage" split split 1.0.0-1 0
+        make_archive "$shrink/packages/split/split-1.0.0-1-any.pkg.tar.zst" "$stage"
+        export GSA_FAKE_PACMAN_LOG="$fixture/a/shrink-pacman.log"
+        export GSA_FAKE_SUDO_LOG="$fixture/a/shrink-sudo.log"
+        : >"$GSA_FAKE_PACMAN_LOG"
+        : >"$GSA_FAKE_SUDO_LOG"
+        run_engine "$shrink" -U --state-dir "$fixture/a/shrink-state" --config "$shrink/pacman.conf" split
+        [ "$FIXTURE_RC" = 3 ] || fail "a shrunken split set must refuse rc 3 (§G.1), got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        rr2_body <<<"$FIXTURE_OUTPUT" >/dev/null \
+            || fail "the self-explaining refusal record must parse strict format: 2 (§H.2): $FIXTURE_OUTPUT"
+        record_section plan | grep -Eq '^split refused partial-set ' \
+            || fail "the plan must record the partial-set refusal (§H.2): $FIXTURE_OUTPUT"
+        if grep -q 'empty-list' <<<"$FIXTURE_OUTPUT"; then
+            fail "a self-explaining refusal must never synthesize an empty-list row (§H.2 amendment (a)): $FIXTURE_OUTPUT"
+        fi
+        [ "$(rr2_outcome split status <<<"$FIXTURE_OUTPUT")" = never-started ] \
+            || fail "the refused subject is never-started (§H.3): $FIXTURE_OUTPUT"
+        [ "$(rr2_continuation remaining <<<"$FIXTURE_OUTPUT")" = split ] \
+            || fail "the refused subject stays in remaining: (§H.2): $FIXTURE_OUTPUT"
+        [ "$(txn_count "$GSA_FAKE_PACMAN_LOG")" = 0 ] \
+            || fail "a self-explaining refusal transacts nothing (rule 25(h)):" "$GSA_FAKE_PACMAN_LOG"
     )
 fi
 
@@ -754,6 +793,7 @@ if want e; then
         stage_pkginfo "$stage" pgopkg pgopkg "$ver" 7
         mkdir -p "$stage/usr/lib"
         printf '# baked /home/u/build/train.gcda\n' >"$stage/usr/lib/libp.so"
+        printf '# baked /home/u/build/train2.gcda\n' >"$stage/usr/lib/libq.so"
         make_archive "$ws/packages/pgopkg/pgopkg-$ver-any.pkg.tar.zst" "$stage"
         printf 'pkgname=pgopkg\npkgver=1.2.3\npkgrel=4\narch=(any)\nCFLAGS+=" -fprofile-generate=/tmp/p"\n' \
             >"$ws/packages/pgopkg/PKGBUILD"
@@ -774,6 +814,18 @@ if want e; then
         [ "$(record_scalar outcome)" = "refused" ] || fail "the record must record outcome 'refused':" "$fixture/e/output.txt"
         record_section outcome | grep -q ' install-refused pgo-' \
             || fail "the refusal rows must carry install-refused reasons (§H.3):" "$fixture/e/output.txt"
+        # Two PGO hits = two §E.2 decision rows but ONE record row per
+        # SUBJECT (§H.2; the collapse the strict parser above enforces):
+        # both hit members survive in the joined reason.
+        [ "$(record_section plan | wc -l)" = 1 ] \
+            || fail "a multi-row candidate must collapse to one plan row (§H.2): $(record_section plan)" "$fixture/e/output.txt"
+        [ "$(record_section outcome | wc -l)" = 1 ] \
+            || fail "a multi-row candidate must collapse to one outcome row (§H.2): $(record_section outcome)" "$fixture/e/output.txt"
+        plan_row=$(record_section plan)
+        case $plan_row in
+        *libp.so*libq.so*) ;;
+        *) fail "the collapsed plan row must keep both PGO hit reasons: $plan_row" "$fixture/e/output.txt" ;;
+        esac
         [ "$(txn_count "$GSA_FAKE_PACMAN_LOG")" = 0 ] \
             || fail "a refusing plan is pacman-free end to end (rule 25(h)):" "$GSA_FAKE_PACMAN_LOG"
         [ ! -s "$GSA_FAKE_SUDO_LOG" ] \

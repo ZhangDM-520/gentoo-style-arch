@@ -25,96 +25,14 @@
 # `( subshell )` section structure of multi-subject fixtures also stay inline.
 #
 # ─── Stub-variable vocabulary (fixture-side only; the builder must NOT change) ─
-# Every knob a stub script reads is named GSA_FAKE_*. The builder's own seven
-# inputs (GSA_LANES, GSA_JOBS, GSA_INTENSITY, GSA_CPU_THREADS, GSA_MEMORY_GIB,
-# GSA_STATE_DIR, GSA_TARGET_CPU) and its output GSA_BUILD_JOBS keep their
-# names and are NOT part of this vocabulary. Full final table:
-#
-#   GSA_FAKE_BUILD_SECONDS     sleep duration of a stallable makepkg stub
-#                              (app-group, pacman-mutex-shim, scheduler-intensity,
-#                              signal-abort-lock, sudo-keepalive)
-#   GSA_FAKE_BUILD_SLEEP       log-ownership's makepkg: hold the lane open so a
-#                              signal can land mid-run (was GSA_FIXTURE_BUILD_SLEEP)
-#   GSA_FAKE_CHOWN_LOG         log-ownership chown stub: invocation log
-#   GSA_FAKE_DATE_COUNTER      sudo-keepalive fake `date`: virtual-clock counter
-#   GSA_FAKE_DB_PATH           pacman-conf stub's DBPath answer (pacman-mutex-shim,
-#                              signal-abort-lock, ignorepkg-register) — never the
-#                              host's real db.lck
-#   GSA_FAKE_DB_SEED           ignorepkg-register makepkg stub: drop a db.lck at
-#                              build end (the registration's bounded lock wait)
-#   GSA_FAKE_DIR               stub scratch dir for curl/updpkgsums/makepkg call
-#                              logs (anchor-defer, stable-sync-checksums)
-#   GSA_FAKE_DURATIONS         scheduler-core-solo: per-package duration table
-#   GSA_FAKE_EXPECT_CONF       ignorepkg-register pacman stub: conf the `pacman -U`
-#                              oracle reads at transaction time
-#   GSA_FAKE_EXPECT_NAMES      that oracle's names (space-separated) that the conf
-#                              must already cover when the transaction runs
-#   GSA_FAKE_FAIL_PACKAGE      trivial makepkg stub: package id whose build must
-#                              fail (was GSA_FAIL_PACKAGE)
-#   GSA_FAKE_GCC_VERSION       toolchain-drift's gcc stub: reported compiler
-#                              identity used to detect build-tree drift
-#   GSA_FAKE_INSTALLED_DIR     pacman stub: "$DIR/<pkg>" existing = `pacman -Q
-#                              <pkg>` answers installed (toolchain-remediation)
-#   GSA_FAKE_LANE_INTERVALS    scheduler-core-solo: START/END timestamp log
-#   GSA_FAKE_LANE_MARKER       dashboard makepkg stub: lane-child PID log
-#                              (was GSA_LANE_MARKER)
-#   GSA_FAKE_MAKEPKG_COUNT     install-archive-guard makepkg stub: invocation
-#                              counter (was GSA_FIXTURE_MAKEPKG_COUNT)
-#   GSA_FAKE_MAKEPKG_LOG       abi-batch makepkg stub: BUILD marker log
-#                              (was GSA_FIXTURE_MAKEPKG_LOG)
-#   GSA_FAKE_MKTEMP_FAIL       anchor-defer mktemp stub: 'anchor' fails only
-#                              the checksum anchor's scratch template
-#   GSA_FAKE_MARKER_DIR        per-package build marker dir (abi-batch,
-#                              log-ownership, pacman-mutex-shim, signal-abort-lock,
-#                              sudo-keepalive)
-#   GSA_FAKE_NO_ARCHIVE        install-archive-guard makepkg stub: "build
-#                              succeeded, archive absent" (was GSA_FIXTURE_NO_ARCHIVE)
-#   GSA_FAKE_PACMAN_ENV_LOG    PACMAN env-observation log (pacman-mutex-shim,
-#                              signal-abort-lock)
-#   GSA_FAKE_PACMAN_LOG        trivial pacman stub: argv log — `${VAR:?}`-guarded
-#                              (was GSA_FIXTURE_PACMAN_LOG in install-archive-guard,
-#                              resume-command, abi-batch-policy; the name also
-#                              covers pgo-payload-guard's same-purpose stub)
-#   GSA_FAKE_PACMAN_RC         install-archive-guard pacman stub: exit status
-#                              (was GSA_FIXTURE_PACMAN_RC)
-#   GSA_FAKE_ARCHIVE_NAME      install-archive-guard makepkg stub: archive name
-#                              for shell-expanded pkgver coverage
-#   GSA_FAKE_CALL_PKGVER       install-archive-guard makepkg stub: run pkgver()
-#                              and model makepkg's updated PKGBUILD version
-#   GSA_FAKE_PRINTSRCINFO_FAIL stable-sync-checksums makepkg stub: `--printsrcinfo`
-#                              exits 1 (the .SRCINFO refresh-failure seam)
-#   GSA_FAKE_PGREP_HOLDER      pgrep stub: THE pid "holding" the lock/db
-#                              (local-db-repair, signal-abort-lock)
-#   GSA_FAKE_QI                install-archive-guard pacman stub: `pacman -Qi`
-#                              answer (was GSA_FIXTURE_QI)
-#   GSA_FAKE_QI_ALL            abi-drift-install pacman stub: the full-dump
-#                              (`pacman -Qi --`) installed database the
-#                              stock-pinner query (abi_local_depend_rows)
-#                              reads
-#   GSA_FAKE_QP                install-archive-guard pacman stub: `pacman -Qp`
-#                              answer (was GSA_FIXTURE_QP)
-#   GSA_FAKE_ROOT_FILE         log-ownership stat stub: the file reported
-#                              root-owned
-#   GSA_FAKE_ROOT_MODE         log-ownership id stub: answer "root"
-#   GSA_FAKE_SIGNAL_LOG        signal-abort-lock makepkg stub: signal-receipt log
-#   GSA_FAKE_SPAWN_LOG         spawned-helper argv log (abi-batch-policy,
-#                              texlive-split) (was GSA_SPAWN_LOG)
-#   GSA_FAKE_SED_LOG           stable-sync-checksums sed wrapper: argv log
-#                              proving which file the version rewrite edits
-#   GSA_FAKE_SI_MODE           stable-sync-checksums pacman stub: `pacman -Si`
-#                              scenario (db-error|not-found)
-#   GSA_FAKE_SRCINFO_JOBS      srcinfo-freshness: parallelism of its own
-#                              printsrcinfo sweep (was GSA_SRCINFO_JOBS)
-#   GSA_FAKE_STUB_PACMAN       path to the recorder the flock shim redirects the
-#                              baked /usr/bin/pacman to (pacman-mutex-shim,
-#                              signal-abort-lock)
-#   GSA_FAKE_STUB_PACMAN_LOG   that recorder's argv log
-#   GSA_FAKE_SUDO_LOG          sudo stub: argv log
-#   GSA_FAKE_SUDO_MODE         sudo stub: scenario mode (sudo-keepalive)
-#   GSA_FAKE_SUDO_STATE        sudo stub: state dir (sudo-keepalive)
-#   GSA_FAKE_TMP_WATCH         stable-sync-checksums makepkg stub: record the
-#                              .SRCINFO temp names visible at exec
-#   GSA_FAKE_TICKS             dashboard makepkg stub: tail-line count
+# Every knob a stub script reads is named GSA_FAKE_*. The builder's own
+# inputs (the §B.8 roster: GSA_STATE_DIR, GSA_LANES, GSA_JOBS, GSA_INTENSITY,
+# GSA_CPU_THREADS, GSA_MEMORY_GIB, GSA_TARGET_CPU, GSA_VCS_SKIP_TOLERANCE)
+# and its output GSA_BUILD_JOBS keep their names and are NOT part of this
+# vocabulary. ONE table owns the vocabulary since the Phase 5 cutover:
+# tests/lib/rr-v2.bash's declared knob set (`rr2_stub_knob` / `rr2_stub_knobs`
+# print it) — one fact, one home; a new knob is declared in the change that
+# introduces it (docs/gsa-contract.md §D.2).
 
 # Repo root from this file's own location: tests/lib/fixture-lib.bash → repo.
 _gsa_lib_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -170,8 +88,11 @@ EOF
 make_workspace() {
     local dir=$1 lanes=${2:-auto} jobs=${3:-auto} intensity=${4:-xhigh}
     mkdir -p "$dir/config" "$dir/packages" "$dir/bin"
-    cp "$gsa_repo_root/build-all.fish" "$dir/build-all.fish"
-    mkdir -p "$dir/lib" && cp "$gsa_repo_root/lib/sources.fish" "$gsa_repo_root/lib/audit.fish" "$dir/lib/"
+    # No engine is installed: since the Phase 5 cutover the engine of record
+    # is the native `gsa`, which locates the workspace from its working
+    # directory (docs/gsa-contract.md §B.8) — a synthetic workspace needs
+    # only config/ + packages/. A fixture's fish-only deviation section
+    # installs the FROZEN ORACLE explicitly with install_fish_oracle below.
     make_install_conf "$dir/pacman.conf"
     export _IGNOREPKG_CONF="$dir/pacman.conf"
     cat >"$dir/config/build-defaults.conf" <<EOF
@@ -191,6 +112,21 @@ EOF
 # ABI-guard exception registry: id|reason|review-by (format doc in
 # config/abi-exclusions.conf of the real repo; empty registry here)
 EOF
+}
+
+# install_fish_oracle DIR — install the FROZEN fish oracle beside a scratch
+# workspace for a fish-only deviation section (docs/gsa-fixture-migration.md;
+# the deviations are named in each fixture's header). The oracle under
+# tests/assets/ is a frozen REFERENCE (the retired engine, kept byte-identical
+# for differential comparison), never an engine of record. It resolves its
+# workspace from its own location (build-all.fish SCRIPT_DIR/config), so a
+# section runs it from a COPY beside the workspace it exercises — the copy
+# source is always tests/assets/, explicitly, so the retired root
+# build-all.fish (the migration shim) can never be picked up by accident.
+install_fish_oracle() {
+    cp "$gsa_repo_root/tests/assets/build-all.fish" "$1/build-all.fish"
+    mkdir -p "$1/lib"
+    cp "$gsa_repo_root/tests/assets/lib/sources.fish" "$gsa_repo_root/tests/assets/lib/audit.fish" "$1/lib/"
 }
 
 # add_package DIR ID [extra-pkglines [group]]

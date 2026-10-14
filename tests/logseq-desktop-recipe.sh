@@ -10,6 +10,23 @@ fail() {
     exit 1
 }
 
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/gsa-logseq-desktop.XXXXXX")
+trap 'rm -rf -- "$tmp"' EXIT
+
+# ─── The engine under test: built into the fixture tree (scratch only).
+# GSA_TEST_GSA_BIN, when already set to an executable, is that engine and the
+# scratch build is skipped. GSA_STATE_DIR stays in scratch too — this is a
+# read-only real-tree fixture (migration §4 row, 2026-10-14). ────────────────
+if [ -z "${GSA_TEST_GSA_BIN:-}" ]; then
+    cargo build --offline --quiet --target-dir "$tmp/cargo" -p gsa-cli \
+        --manifest-path "$root/Cargo.toml" ||
+        fail "cannot build the gsa binary for the fixture"
+    GSA_TEST_GSA_BIN="$tmp/cargo/debug/gsa"
+fi
+[ -x "$GSA_TEST_GSA_BIN" ] || fail "the engine under test is not executable: $GSA_TEST_GSA_BIN"
+export GSA_TEST_GSA_BIN
+export GSA_STATE_DIR="$tmp/state"
+
 assets=(PKGBUILD .SRCINFO BUILDING .gitignore logseq-desktop-git.desktop)
 for asset in "${assets[@]}"; do
     test -f "$root/$recipe/$asset" || fail "missing asset: $recipe/$asset"
@@ -117,9 +134,10 @@ grep -Fq 'dist/linux-unpacked' "$pkgbuild" || fail "unpacked Electron tree unuse
 
 # Topology: the recipe must be reachable through a topology record (id+path)
 # and an app-group membership (the 2026-09-27 app-group expansion moved this
-# desktop application from git to app), read through the builder's --topology
-# channel.
-topo=$(fish "$root/build-all.fish" --topology) || fail "--topology failed"
+# desktop application from git to app), read through the engine's topology
+# channel gsa -Qt (the engine finds the workspace from the cwd upward,
+# contract §B.8 amendment G11 — migration §4 row, 2026-10-14).
+topo=$(cd "$root" && "$GSA_TEST_GSA_BIN" -Qt) || fail "gsa -Qt failed"
 rec=$(printf '%s\n' "$topo" | awk -F'|' -v id=logseq-desktop-git '$1 == id')
 [[ -n $rec ]] || fail "not registered in config/topology.conf (no record)"
 [[ $(printf '%s\n' "$rec" | cut -d'|' -f2) == "$recipe" ]] ||
@@ -128,6 +146,7 @@ rec=$(printf '%s\n' "$topo" | awk -F'|' -v id=logseq-desktop-git '$1 == id')
     fail "not a member of the app group"
 
 # .SRCINFO freshness is owned by tests/srcinfo-freshness.sh (it regenerates and
-# diffs every recipe from the --topology channel), so it is not re-asserted here.
+# diffs every recipe from the engine's topology channel gsa -Qt), so it is not
+# re-asserted here.
 
 printf 'logseq-desktop-git recipe fixture: PASS\n'

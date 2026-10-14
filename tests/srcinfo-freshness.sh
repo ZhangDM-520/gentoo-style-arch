@@ -127,6 +127,7 @@ fail() {
 }
 dir="$tmp/refresh-fail"
 make_workspace "$dir" 1 2 low
+install_fish_oracle "$dir"
 mkdir -p "$dir/packages/stable/s1" "$dir/fake"
 cat >"$dir/packages/stable/s1/PKGBUILD" <<'EOF'
 pkgname=s1

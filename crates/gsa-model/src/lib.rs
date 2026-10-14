@@ -486,8 +486,11 @@ pub struct Continuation {
 pub struct RunRecord {
     pub selection_source: String,
     pub order: Vec<RecipeId>,
-    /// Resolved lane count; `-` in the machine block when no run is
-    /// dispatched and no override resolves one (Phase 1 dry runs).
+    /// Resolved lane count. The machine block renders a non-negative integer
+    /// ALWAYS (contract §H.2's strict grammar — the `format: 2` parser
+    /// accepts nothing else): `None` — a record whose run dispatched no
+    /// lanes (dry runs, `-U` transactions, preflight refusals) — renders `0`,
+    /// never `-`. The `-` spelling is reserved for per-row `rc`/`dur`.
     pub lanes: Option<u32>,
     pub normal_jobs: Option<u32>,
     pub core_jobs: Option<u32>,
@@ -544,9 +547,9 @@ impl RunRecord {
             .collect::<Vec<_>>()
             .join(" ");
         out.push_str(&format!("order: {}\n", scalar(&order)));
-        out.push_str(&format!("lanes: {}\n", opt_num(self.lanes)));
-        out.push_str(&format!("normal-jobs: {}\n", opt_num(self.normal_jobs)));
-        out.push_str(&format!("core-jobs: {}\n", opt_num(self.core_jobs)));
+        out.push_str(&format!("lanes: {}\n", self.lanes.unwrap_or(0)));
+        out.push_str(&format!("normal-jobs: {}\n", self.normal_jobs.unwrap_or(0)));
+        out.push_str(&format!("core-jobs: {}\n", self.core_jobs.unwrap_or(0)));
         out.push_str(&format!("intensity: {}\n", scalar(&self.intensity)));
         out.push_str(&format!("outcome: {}\n", scalar(&self.outcome)));
         out.push_str(&format!("rc: {}\n", self.rc));
@@ -731,7 +734,7 @@ mod tests {
                 },
             ],
             continuation: Continuation {
-                command: "gsa -S --dry-run --leaf=no glib2-git gtk4-git".to_string(),
+                command: "gsa -S --dry-run glib2-git gtk4-git".to_string(),
                 remaining: vec![id("glib2-git"), id("gtk4-git")],
                 not_mirrored: vec!["-Mc".to_string(), "-Mcc".to_string()],
                 env_required: vec!["GSA_STATE_DIR".to_string()],
@@ -765,6 +768,11 @@ mod tests {
             ]
         );
         assert_eq!(lines[10], "dry-run: yes");
+        // Budget scalars are ALWAYS integers (§H.2 strict grammar): a record
+        // that dispatched no lanes renders 0, never `-`.
+        assert_eq!(lines[4], "lanes: 0");
+        assert_eq!(lines[5], "normal-jobs: 0");
+        assert_eq!(lines[6], "core-jobs: 0");
         let plan_at = lines.iter().position(|l| *l == "--- plan ---").unwrap();
         let outcome_at = lines.iter().position(|l| *l == "--- outcome ---").unwrap();
         let cont_at = lines
@@ -777,7 +785,7 @@ mod tests {
         assert_eq!(lines[outcome_at + 2], "gtk4-git never-started - - dry-run");
         assert_eq!(
             lines[cont_at + 1],
-            "command: gsa -S --dry-run --leaf=no glib2-git gtk4-git"
+            "command: gsa -S --dry-run glib2-git gtk4-git"
         );
         assert_eq!(lines[cont_at + 2], "remaining: glib2-git gtk4-git");
     }

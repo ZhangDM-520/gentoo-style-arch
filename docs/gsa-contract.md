@@ -228,6 +228,7 @@ cache-prune shape. `-Mm`, `-Mccc` and `-Mh --show` accept a confirmation or a
 | `--fail-fast` | restore the stop-dispatch-and-drain failure policy (§I) |
 | `--lanes N\|auto`, `--jobs N\|auto`, `--intensity LEVEL` | parallelism overrides (kept; a flag beats its env twin) |
 | `--state-dir PATH` | state-root override (§J.3); flag beats `GSA_STATE_DIR` |
+| `--no-prefetch`, `--prefetch-ahead N` | advisory fetch-ahead window (default-on): `--no-prefetch` opts out, `--prefetch-ahead N` sizes it; the two are mutually exclusive (added 2026-10-14, see amendment 4) |
 | `--config PATH`, `--noconfirm`, `--quiet`, `--verbose` | pacman-familiar globals; `--noconfirm` applies to the engine's own confirmations (`-Mm`, `-Mccc`) and never to a pacman question flag |
 
 Engine environment inputs (the roster `gsa --help` must print): `GSA_STATE_DIR`,
@@ -235,6 +236,35 @@ Engine environment inputs (the roster `gsa --help` must print): `GSA_STATE_DIR`,
 `GSA_TARGET_CPU`, `GSA_VCS_SKIP_TOLERANCE`. `GSA_BUILD_JOBS` is engine OUTPUT
 exported per lane, never an input. `GSA_FAKE_*` is not an engine vocabulary
 (§D.2).
+
+*Amendments (2026-10-14, cutover gaps G6/G11 + G4).* Three operational
+points this section was silent on, resolved as the code behaves:
+
+1. **Workspace discovery (G11):** `gsa` locates the workspace from the
+   current directory upward, stopping at the directory holding
+   `config/topology.conf`; nothing else selects a workspace (`gsa-cli::find_root`,
+   `gsa-build::find_root`). A run outside a workspace is a usage error (rc 2)
+   that names the search. The frozen fish oracle under `tests/assets/` is the
+   one exception: it resolves its workspace from its own location (historical
+   engine behaviour, `build-all.fish` `SCRIPT_DIR`) — which is why a fixture
+   runs it from a copy beside the workspace it exercises.
+2. **IgnorePkg registration target (G6):** `--config PATH` names the ONE
+   `pacman.conf` an install run reads and rewrites (`[options]` `IgnorePkg`
+   closure; default `/etc/pacman.conf`); `--no-register-ignorepkg` skips the
+   write, and hidden `--install-register <conf> <subject> <names…>` (§D.1)
+   names its conf explicitly because it is the isolated write seam.
+3. **`--leaf` (G4):** the bare boolean of this table is the only spelling.
+   Continuations mirror it only in its true form (§H.2); `--leaf=no` and
+   `--leaf=yes` are not accepted spellings and no engine output may contain
+   them.
+4. **Fetch-ahead modifiers (cutover re-point finding, 2026-10-14):** the
+   table above had omitted `--no-prefetch`/`--prefetch-ahead N` although the
+   code ships them (`gsa-cli::build::resolve_prefetch`; `--help` roster) and
+   §H.2's flag-rule table already mirrored them. Code truth is the decided
+   truth here: the table row is the definition, the mirroring rule stays
+   §H.2's (non-default values only), and the advisory run log is
+   `$STATE/prefetch.log` with the `prefetch-warnings` extension scalar (§H.2
+   permits extension scalars without a format bump).
 
 ### B.9 Capability disposition — every current spelling
 
@@ -376,6 +406,16 @@ invocations with rc 2, and are callable only by fixtures.
 | `--install-register` | `gsa --install-register <conf> <subject> <names…>` | the IgnorePkg registration write path in isolation, including its bounded `db.lck` wait |
 | `--qa-check` | `gsa --qa-check <name> …` | run exactly one QA check (today `--audit-lint <family>`); the check registry's single-entry point |
 
+*Amendment (2026-10-14, cutover gap G10 — the `--lane-job` flags payload
+grammar).* `<flags…>` is the makepkg argument set the lane forwards verbatim
+(job flags included — `GSA_BUILD_JOBS`/`MAKEFLAGS` shaping happens before).
+Each token is validated by `gsa-build::makepkg::check_flag_payload`: non-empty,
+no control characters, short flags `-<alnum…>`, long flags `--<name[=value]>`
+(name `[a-z-]+`, value free of control characters), and the three
+verification-bypass tokens `--skipchecksums`, `--skippgpcheck`, `--skipinteg`
+are **forbidden anywhere in `gsa`** (§A.3.4/§L.8) — a payload carrying one is
+a usage error naming the argument (rc 2), never a build.
+
 ### D.2 Stub-knob convention
 
 `GSA_FAKE_*` names belong to FIXTURES, never to the engine. Every knob a stub
@@ -414,15 +454,33 @@ This framing replaces the tab-framed `plan_row` codec of `build-all.fish`;
 fixtures parse fields positionally with the reason as the remainder, as the
 run-record rows do.
 
+*Amendment (2026-10-14, cutover gap G1/§E.2).* "One row per archive
+candidate" is one row per candidate **finding**: a candidate with several
+findings — several PGO hits, a PGO refusal stacked on an ABI refusal —
+carries several rows sharing its subject (code truth:
+`gsa-install::decide`; the fixtures pin "a refusing PGO/ABI candidate emits
+several"). The seam keeps that granularity; the run record collapses it per
+subject (§H.2, same date).
+
 ### E.3 Row vocabulary
 
 | Decision | Meaning |
 | --- | --- |
 | `install` | the archive clears every gate and joins the transaction |
 | `skip` | deliberately not transacted, with a named reason — `already-current` (checked mode: exact version installed with an install date not older than the archive), `skip-built`/`freshness-waived`/`abi-provider-waived` installs of a skipped build (the archive still installs), `unreadable-pkginfo` (excluded from discovery, never probed — `docs/MEMORY.md` rule 25(h)) |
-| `refuse` | fail-closed: this row and everything downstream of it abort before any `pacman` call. Reasons include `empty-list`, `pgo-*` (baked profiling destination), `abi-soname`, `abi-consumer`, `abi-consumer-uncovered` (a moving/removed soname provide with a linked consumer outside the transaction — rule 25(d)), `partial-set`, `discover-failed`, `plan-failed`, and any `severity: refuse` QA keyword (§E.4) |
+| `refuse` | fail-closed: this row and everything downstream of it abort before any `pacman` call. Reasons include `empty-list`, `pgo-*` (baked profiling destination), `abi-soname`, `abi-consumer`, `abi-consumer-uncovered` (a moving/removed soname provide with a linked consumer outside the transaction — rule 25(d)), `abi-stock-pinner` (an out-of-tree package pins the moving provide exactly — 2026-10-14 amendment: named here as the code emits it, `gsa-abi::rows::abi_refusal_rows`), `partial-set`, `discover-failed`, `plan-failed`, and any `severity: refuse` QA keyword (§E.4) |
 | `noop` | nothing to do and that is not a failure — `empty-list` under `-Ua` |
 | `parked` | **new**: the package is parked — `waits-on-failed` (cone-stop) or `waits-on-deferred` / a deferral reason (`anchoring-refused`, `upstream-unverified`, `source-unfetchable`). The seam neither installs nor refuses; the row records the park |
+
+*Amendment (2026-10-14, gap G1 — the repair surface).* In-run repair
+coverage (rule 25(d)) never adds a decision kind: when the ABI gate's
+`abi-consumer`/`abi-stock-pinner` refusal is suppressed because the consumer
+is scheduled later in the same run (`DecisionContext.later_installs`), the
+provider's plan row carries `repair <consumer> <provider-id>` detail in its
+open REASON, and the provider's install stages the consumer's forced-rebuild
+marker (`<state>/abi-repair/<consumer-id>`) before the transaction. The seam
+itself stays order-blind (`--install-decide` takes no run order), so its rows
+for that state are the refusal rows. Write half deferred — see §M.
 
 ### E.4 QA gate line
 
@@ -562,6 +620,25 @@ Scalars (fixed order): `format` (`2`), `selection-source`, `order`, `lanes`,
 be appended after the fixed set without a format bump. Values never contain a
 newline or a line starting with `--- `.
 
+*Amendment (2026-10-14, cutover gap G2 + budget conformance).* Three
+tightenings of this grammar, all code truth (`gsa-model::RunRecord::
+render_machine`, `gsa-model::RunOutcome`, and the strict `format: 2` parser
+`tests/lib/rr-v2.bash rr2_body`), recorded here rather than invented in the
+parser:
+
+1. **Budget scalars are always non-negative integers.** `lanes`,
+   `normal-jobs` and `core-jobs` render `0` — never `-` — for any record
+   whose run dispatched nothing (dry-run plan records, `-U` transaction
+   records, preflight refusals). `-` remains valid ONLY for a row's
+   `rc`/`dur`.
+2. **`selection-source:` grammar** (previously example-only):
+   `sets=<targets,…|-> leaf=<yes|no> range=<ranges,…|->`. The `leaf=no`
+   VALUE is a value, not a flag spelling — see §B.8's `--leaf` mirroring.
+3. **`outcome:` vocabulary (gap G2, previously opaque):** `planned` (dry
+   run), `success`, `refused`, `failed`, `deferral`, `interrupted`. A new
+   outcome value is a grammar change (§L.2) and lands here in the same
+   change.
+
 **Rows are now first-class** — plan rows, outcome rows and the continuation
 section coexist with distinct column grammars. That is why this is a new
 format: in `format: 1` any non-scalar line was a package row, so a plan or
@@ -572,6 +649,22 @@ Plan row `plan` values: `build`, `build-install`, `install`, `fetch`, `skip`
 (reason `skip-built`/`freshness-waived`/`abi-provider-waived`), `parked`
 (reason `waits-on-failed`/`waits-on-deferred`), `refused`, `noop`. Rows are
 full (one per selected package), in topological order.
+
+*Amendment (2026-10-14, cutover gap (a) — multi-row candidates).* "One per
+selected package" is normative for the record even when the decision seam
+produced several rows for one package (§E.2's per-finding rows): a `-U`
+record **collapses per subject** — one plan row and one outcome row per
+package, `order` free of duplicates (the strict parser rejects duplicates).
+The plan action is the strongest of the group (`refused` > `parked` >
+`install` > `skip` > `noop`), the outcome status the worst (`failed` >
+`interrupted` > `deferred` > `parked` > `never-started` > `succeeded`, so
+`remaining:` keeps any subject that did not fully succeed), `rc`/`dur` come
+from the winning outcome row, and the reason is every row's reason joined in
+row order (exact repeats dropped). The `--install-decide` stdout keeps full
+per-finding granularity (it is the first rendering, §E.1). A plan whose rows
+already explain a refusal (every candidate rejected before the seam — a
+shrunken split set, a failed discovery) never synthesizes an `empty-list`
+row: `empty-list` belongs to a genuinely empty candidate plan.
 
 Continuation lines: `command:` (the restated invocation), `remaining:` (space-
 separated package IDs — every row not `succeeded`, in row order: failed,
@@ -585,6 +678,28 @@ arguments come from ONE flag-rule table with an explicit not-mirrored list;
 prune strengths, one-shot actions (`-Q*`, `-Sy`, `-Ua`, `-M*`), and hidden
 seams are never mirrored. Environment inputs are warned about (`env-required`),
 never baked in.
+
+*Amendment (2026-10-14, cutover gap (b)/G4 — the flag-rule table as
+implemented).* The mirrored set is exactly what
+`crates/gsa-cli/src/record.rs` (`mirror_flags`/`NOT_MIRRORED`) replays, and
+the resume fixtures pin that a dropped semantic flag is a bug. Mirrored:
+`--dry-run`, `--leaf` (**true form only**), `--skip`, `--skip-built`,
+`--vcs-skip-tolerance N`, `--no-sync`, `--allow-broken-rustc`, `--fail-fast`,
+`--state-dir PATH`, `--config PATH`, `--no-register-ignorepkg`,
+`--no-prefetch`, `--prefetch-ahead N` (non-default only), the `f` cluster
+letter, and the resolved `--lanes`/`--jobs`/`--intensity` values. Never
+mirrored: the prune-strength `c` and `-Mc`/`-Mcc`/`-Mccc`; one-shot actions
+(`-Q*`, `-Sy`, `-Su`, `-Ua`, `-M*`) and their sub-flags (`--fix`, `--prune`,
+`--backfill`, `--tail`, `--keep`, `--show`, `--add`, `--remove`);
+`--noconfirm`, `--quiet`, `--verbose`; and every hidden seam (`--install-decide`,
+`--lane-job`, `--fetch-job`, `--stale-lock-check`, `--local-db-check`,
+`--install-register`, `--register-ignorepkg`, `--qa-check`). **`--leaf` is
+mirrored only as the bare flag when true (gap G4): `--leaf=no`/`--leaf=yes`
+are not spellings §B.8 defines and must never appear in `command:` — a
+non-leaf continuation mirrors nothing and the absence IS the negation.**
+`--state-dir`/`--config` are mirrored because a resume that loses the state
+root or the IgnorePkg registration target changes behaviour — the previous
+list here was incomplete, not the code excessive.
 
 ### H.3 Status vocabulary and reason keys
 
@@ -601,6 +716,17 @@ never baked in.
 `parked`; deferral semantics themselves are unchanged (§I.3). A reason key
 never claims more than the row means — a waiver row keeps its waiver reason,
 not `ok`.
+
+*Amendment (2026-10-14, cutover gap G3 — additive keys named).* §L.2 makes
+reason keys open; this closes their opacity. Observed additions beyond the
+table above (fixtures pin them): `mutex-timeout` (failed),
+`result-clear-failed` (failed), `signal-term`/`signal-hup`/`signal-int`
+(interrupted — the signal that ended the lane; `interrupted-mid-build` stays
+the no-signal case), `install-refused <cause>` (never-started — the §E.3
+refusal seen through the outcome rendering), `dry-run` (never-started),
+`held-after-install-failed` (never-started — a staged wave group after an
+earlier group failed), `log-unwritable` and `interrupted-mid-build` as
+listed. Any new key lands here in the same change.
 
 ### H.4 Annotated example
 
@@ -626,7 +752,7 @@ gtk4-git parked - - waits-on-failed        <- consumer cone parked (§I.1)
 gimp-git parked - - waits-on-failed        <- cone reaches it through gtk4-git
 niri-spicy-git succeeded 0 1450 ok         <- unrelated work ran to completion
 --- continuation ---
-command: gsa -S --leaf=no glib2-git gtk4-git gimp-git
+command: gsa -S glib2-git gtk4-git gimp-git
 remaining: glib2-git gtk4-git gimp-git
 not-mirrored: -Mcc -Mccc -Sy
 env-required: GSA_STATE_DIR
@@ -798,6 +924,11 @@ dispatch; a failure parks a cone (§I).
   signal escalates immediately (kill children now, no further grace). The run
   then writes the full run record (§H) and exits 130. SIGHUP/SIGTERM/SIGINT
   receipt by a child is reported through the lane codes 129/143/130.
+  *Amendment (2026-10-14, gap G5 closed by documentation):* the grace window
+  is 30 s (`gsa-sched::signals::STOP_GRACE_DEFAULT_S`) and its knob is
+  `_GSA_STOP_GRACE_S` — deliberately **not** in the §B.8 roster: an
+  unadvertised fixture override (the fish `_LANE_STOP_GRACE_S` seam carried
+  over unchanged), unparsable values falling back to the default.
 - **Orphan sweeps**: startup and post-run sweeps reap `--lane-job` /
   `--fetch-job` processes from earlier runs whose result files are unowned,
   and stale run artifacts (`.tmp.*`, abandoned result files). Unrelated
@@ -862,3 +993,30 @@ dispatch; a failure parks a cone (§I).
    consumer of the `format: 1` block needs a compatibility window** (the
    55 fixtures and `rr_*` are re-contracted anyway per the clean-slate
    decision).
+
+---
+
+## M. Cutover amendments and deferrals (2026-10-14)
+
+The Phase 5 cutover (engine of record = `gsa`; the fish engine frozen under
+`tests/assets/` as an oracle) landed these amendments, each also marked in
+place above. Nothing here is silent; the deferred items carry one line of
+rationale each.
+
+| Gap | Disposition | Where |
+| --- | --- | --- |
+| (a) `-U`/plan record conformance | **fixed**: budget scalars always integers (`0` when nothing dispatches), per-subject row collapse (order/plan/outcome one-to-one), the phantom `refused empty-list` row of a self-explaining refusal plan retired | §H.2 amendments; `gsa-model::RunRecord::render_machine`, `gsa-cli::record::collapse_txn_rows`, `gsa-cli::install` (self-explaining plans) |
+| (b) `mirror_flags` vs the flag-rule table | **fixed by amendment**: the table now lists the full mirrored set (`--state-dir`/`--config`/`--no-register-ignorepkg`/`--no-prefetch`/`--prefetch-ahead`/`f` included — a resume that drops them changes behaviour) | §H.2 amendment |
+| (c) G1 — repair-marker write half | **write surface decided, implementation deferred**: the marker is staged by the provider's install step for every consumer its ABI refusal was suppressed for (`gsa-abi::rows` coverage via `later_installs`), written under `<state>/abi-repair/<consumer-id>` BEFORE the transaction and fail-closed on write error; the surface rides the existing plan-row **reason** (`repair <consumer> <provider-id>` detail on the provider's row), never a new `plan` value — so no format bump (§L.2). Deferred one line: the consume half (2026-10-14) and the fish oracle's K/L/M/N cases pin the semantics; the write half lands with the ABI-wave hardening pass rather than at cutover | §E.3 note; `tests/abi-drift-install.sh` K/L/M/N (fish oracle) |
+| (d) G2 outcome vocabulary | **fixed by documentation**: `planned\|success\|refused\|failed\|deferral\|interrupted` | §H.2 amendment |
+| (d) G4 `--leaf=no` replay hazard | **fixed**: `--leaf` mirrors only in its true form; the negated spellings appear nowhere | §B.8/§H.2 amendments; `gsa-cli::record::build_plan_record` |
+| G3 reason-key opacity | **fixed by documentation**: additive keys named | §H.3 amendment |
+| G5 teardown grace knob | **closed by documentation**: `_GSA_STOP_GRACE_S`, non-roster fixture override | §K.3 amendment |
+| G6 registration target conf | **closed by documentation**: `--config PATH`, default `/etc/pacman.conf` | §B.8 amendment |
+| G8 preflight-refusal block shape | **closed by documentation**: the preflight-refusal and refusing-plan paths emit the FULL block (one plan and one outcome row per selected package, matching `order`) — the strict parser accepts no other shape | §H.2 amendment |
+| G10 `--lane-job` flags grammar | **closed by documentation**: `check_flag_payload` grammar + the three forbidden verification-bypass tokens | §D.1 amendment |
+| G11 workspace discovery | **closed by documentation**: `config/topology.conf` found from the cwd upward; the frozen fish oracle is the one self-located exception | §B.8 amendment |
+| G12 parser strictness | **closed by documentation**: the strict `format: 2` rules (no blank lines/control characters, no duplicate scalars/rows/continuation keys, plan/outcome rows agree with `order`, `rc` is the status's lane code or `-`, all four sections required, unknown continuation keys rejected, extension scalars accepted) are the normative reading, implemented by `tests/lib/rr-v2.bash rr2_body` | §H.2 amendment |
+| G7 phase mapping | **no action needed**: the phases were the migration plan's, not the contract's; the inventory assigned them and all five have landed | `docs/gsa-fixture-migration.md` |
+| G9 v2 prose spec | **deferred**: prose wording is pinned in exactly one rendering test only (§L.5); a normative prose spec is a design task, not a cutover fix | §L.5 |
+| selection-source grammar (G2 half) | **fixed by documentation**: `sets=<…> leaf=<yes\|no> range=<…>` | §H.2 amendment |

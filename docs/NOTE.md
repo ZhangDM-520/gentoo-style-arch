@@ -1,3 +1,95 @@
+## 2026-10-14 — Phase 5 cutover: the native `gsa` engine becomes the engine of record, the fish engine freezes as the oracle, and three classes of run-record breakage die at the strict `format: 2` gate
+
+**Symptoms.** Flipping the engine of record to `gsa` (`plan-native-pm.md` §7
+Phase 5) left the tree half-migrated: eight battery fixtures still drove the
+retired root `build-all.fish` (battery 57/65), `-U` run records broke the
+strict `format: 2` grammar (`lanes: -`, duplicated `order:` entries for
+multi-row candidates, a phantom `refused empty-list` row on self-explaining
+refusal plans), `--leaf=no`/`--leaf=yes` leaked into continuation `command:`
+lines (not replayable spellings), and the living docs still taught fish
+spellings — including three `gsa --dry-run -S …` examples that `gsa` rejects
+(family-first grammar).
+
+**Root causes and fixes.**
+
+1. **Cutover mechanics.** Root `build-all.fish` is now a retirement shim: it
+   prints the old→new spelling migration table (contract §B.9) and exits 2
+   running nothing (one-release deprecation window). The fish engine is
+   frozen verbatim under `tests/assets/` (`build-all.fish` + `lib/`) as the
+   oracle; `lib/sources.fish`/`lib/audit.fish` are deleted and `lib/pgo.sh`
+   stays (recipes source it).
+2. **Run-record conformance** (contract §H.2 amendments + §M (a);
+   `gsa-model::RunRecord::render_machine`, `gsa-cli::record::
+   collapse_txn_rows`, `gsa-cli::install`): budget scalars are always
+   integers (`0` when nothing dispatches), `-U` records collapse per subject
+   (order/plan/outcome one-to-one; the `--install-decide` seam keeps its
+   per-finding rows as the first rendering, §E.1), and a plan whose rows
+   already explain a refusal never synthesizes `empty-list`.
+3. **G4 leaf mirroring** (`gsa-cli::record::build_plan_record`): `--leaf` is
+   mirrored only in its true form; the negated spellings appear nowhere.
+4. **Fixture re-points** (migration §4 rows): five recipe fixtures to
+   `gsa -Qt` (glibc's numbered-listing parse → the `format: 2` `order:`
+   scalar; texlive's `_DOWNLOAD_ARCHIVE_EXTS`/svn-regex source greps retired
+   per §6 R-1); install-conflict-ask C3 record pins → per-subject collapse
+   (§H.2 amendment (a)); the fish-driven deviation sections of
+   ignorepkg-register and log-ownership run the frozen oracle via
+   `install_fish_oracle` (§3); log-ownership's fish-source audit-listing grep
+   re-pinned behaviourally from `gsa -Ma` `stale-artifact` rows; and
+   `tests/gsa-install-v2.sh` grew the missing self-explaining-refusal pin
+   after a mutation probe proved the fix was uncovered by the battery.
+5. **Docs re-point in the same change**: `docs/build-guide.md` (§B surface,
+   `format: 2` block, install-decision rows, fetch-ahead section),
+   `docs/MEMORY.md` (module-level rule handles + three cutover pitfalls),
+   `README.md` (`gsa` spellings + shim note), `CONTEXT.md` (two term cites
+   that named retired spellings); `docs/gsa-contract.md` §B.8 gains the
+   `--no-prefetch`/`--prefetch-ahead N` row (code truth — amendment 4) and
+   `docs/gsa-fixture-migration.md` §8 points at the §M dispositions (G1–G12:
+   G1's marker write half deferred with its decided write surface, G9's
+   prose spec deferred; the rest fixed or closed by amendment).
+
+**Validation.** `cargo build` zero warnings; `cargo test` 372 passed 0
+failed; `cargo fmt --check` clean (the cutover patch had left rustfmt drift
+in new tests — fixed here); full battery `TMPDIR=$HOME/Workspace/
+gsa-battery-tmp RUN_ALL_JOBS=6 bash tests/run-all.sh` **65/65 PASS**;
+`bash -n` on every touched shell file and `fish -n` on both fish files
+(oracle + shim) parse; the shim prints its table and exits 2 (asserted).
+Red-first mutation probes, each restored byte-identical (md5-verified) and
+`touch`ed: budget scalars → `gsa-model::tests::machine_block_grammar_is_
+rendered` red; collapse disabled → `record::tests::txn_record_collapses_
+multi_row_candidates_and_keeps_budgets_integer` red ("order must not repeat
+a subject"); `--leaf=yes/no` restored → `record::tests::plan_record_
+mirrors_leaf_only_in_its_true_form` red; self-explaining refusal disabled →
+`tests/gsa-install-v2.sh` red (`a self-explaining refusal must never
+synthesize an empty-list row (§H.2 amendment (a))`). Real-tree smokes:
+`gsa -B --leaf --no-sync --state-dir .state brightnessctl` rc 0
+(`brightnessctl succeeded 0 1 ok`, strict `format: 2` block,
+`prefetch-warnings: 0`); `gsa -Sw --leaf brightnessctl` rc 0 on a clean
+recipe dir (`brightnessctl ok 0 ok`, 1 fetched) — see rule 7 for the
+built-archive wrinkle.
+
+**Durable rules.** (1) A run record is one row per SUBJECT even when the
+decision seam produced several finding rows; budget scalars are always
+integers (§H.2 amendments). (2) A continuation mirrors `--leaf` only bare —
+a negated boolean is never a spelling (absence IS the negation). (3)
+`empty-list` belongs to a genuinely empty candidate plan; a refusal whose
+rows already explain themselves never gains a synthetic row. (4)
+Fish-driven deviation sections run the FROZEN ORACLE from `tests/assets/`
+via `install_fish_oracle`; the root `build-all.fish` is a shim that runs
+nothing. (5) `gsa` argv is family-first: a modifier before its family is
+rc 2, so `gsa --dry-run -S …` must never appear in docs or fixtures. (6) A
+fixture pin superseded by a dated contract amendment cites the section in
+place — never a silent rewrite. (7) `gsa -Sw` on a recipe whose built
+archive is present reports an advisory `fetch-failed` (rc 4 run): `makepkg
+--verifysource` stops at "A package has already been built. (use -f to
+overwrite)" before verifying; fetch is advisory and a later build
+re-fetches (owner decision pending: pass `-f`, or document the clean-tree
+precondition).
+
+**Recorded post-push step (NOT performed at cutover).** Once the cutover
+commit lands on the remote, refresh `packages/core/gsa-pm`'s `_commit` +
+`pkgver` + `.SRCINFO` to that commit; its `prepare()` fails closed with the
+remediation message until then.
+
 ## 2026-10-14 — gsa engine waves 2–4: seven engine bugs retired at the sync/freshness/install seams, repair markers get their consume half, and the real-tree smoke exposes a relative-path hazard in the lane's makepkg contract
 
 **Symptoms.** Flipping `tests/skip-upstream.sh` and running the fixture battery

@@ -10,6 +10,23 @@ fail() {
     exit 1
 }
 
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/gsa-texlive-recipe.XXXXXX")
+trap 'rm -rf -- "$tmp"' EXIT
+
+# ─── The engine under test: built into the fixture tree (scratch only).
+# GSA_TEST_GSA_BIN, when already set to an executable, is that engine and the
+# scratch build is skipped. GSA_STATE_DIR stays in scratch too — this is a
+# read-only real-tree fixture (migration §4 row, 2026-10-14). ────────────────
+if [ -z "${GSA_TEST_GSA_BIN:-}" ]; then
+    cargo build --offline --quiet --target-dir "$tmp/cargo" -p gsa-cli \
+        --manifest-path "$root/Cargo.toml" ||
+        fail "cannot build the gsa binary for the fixture"
+    GSA_TEST_GSA_BIN="$tmp/cargo/debug/gsa"
+fi
+[ -x "$GSA_TEST_GSA_BIN" ] || fail "the engine under test is not executable: $GSA_TEST_GSA_BIN"
+export GSA_TEST_GSA_BIN
+export GSA_STATE_DIR="$tmp/state"
+
 # Trimmed to texlive-meta and its depends closure: 22 non-lang collections.
 expected_collections=(
     basic bibtexextra binextra context fontsextra fontsrecommended fontutils
@@ -164,25 +181,27 @@ for script in texlive-fmtutil texlive-language texlive-updmap; do
         fail "missing alpm script install: $script"
 done
 
-# Topology registration, read through the builder's --topology channel
-# (id|path|groups|edges|tags).
-topo=$(fish "$root/build-all.fish" --topology) || fail "--topology failed"
+# Topology registration, read through the engine's topology channel gsa -Qt
+# (id|path|groups|edges|tags; the engine finds the workspace from the cwd
+# upward, contract §B.8 amendment G11 — migration §4 row, 2026-10-14).
+topo=$(cd "$root" && "$GSA_TEST_GSA_BIN" -Qt) || fail "gsa -Qt failed"
 rec=$(printf '%s\n' "$topo" | awk -F'|' -v id=texlive-texmf '$1 == id')
 [[ -n $rec ]] || fail "not registered in config/topology.conf (no record)"
 [[ $(printf '%s\n' "$rec" | cut -d'|' -f2) == "$recipe" ]] ||
     fail "topology record does not point at $recipe"
 [[ ",$(printf '%s\n' "$rec" | cut -d'|' -f3)," == *,git,* ]] ||
     fail "not a member of the git group"
-grep -Fq "'^svn\+|^svn://'" "$root/build-all.fish" ||
-    fail "build-all.fish does not clean svn source checkouts"
-# This recipe downloads a wheel, so the builder's cleanup list must cover
-# `.whl`. The list is `_DOWNLOAD_ARCHIVE_EXTS` (one set shared with the ignore
-# rules — the general cross-check lives in tests/cleanup-extensions.sh); assert
-# the membership rather than the old inline match, which the list replaced.
-grep -q '^set -g _DOWNLOAD_ARCHIVE_EXTS .*\(^\| \)whl\( \|$\)' "$root/build-all.fish" ||
-    fail "build-all.fish does not clean downloaded wheels"
+
+# 2026-10-14 — RETIRED WITHOUT REPLACEMENT (migration §6 R-1): the svn-regex
+# and `_DOWNLOAD_ARCHIVE_EXTS` greps pinned the retired fish builder's cleanup
+# implementation; gsa is a shipped binary with no engine source to grep. The
+# cleanup-ext behaviour re-pins behaviourally at its flip (`gsa -Mccc` target
+# rendering, contract §B.7; synthetic-workspace precedent in
+# tests/cleanup-extensions.sh) — no mutating prune verb runs against the real
+# tree here.
 
 # .SRCINFO freshness is owned by tests/srcinfo-freshness.sh (it regenerates and
-# diffs every recipe from the --topology channel), so it is not re-asserted here.
+# diffs every recipe from the engine's topology channel gsa -Qt), so it is not
+# re-asserted here.
 
 printf 'texlive-texmf recipe fixture: PASS\n'

@@ -451,6 +451,7 @@ EOF
     set -euo pipefail
     ws=$tmp/namesurface-ws
     make_workspace "$ws" 1 2 low
+    install_fish_oracle "$ws"
 
     # rec-b is a decoy: not a consumer of rec-a, so it must never appear in
     # any of these selections — "exactly rec-a" means the closure is one row.

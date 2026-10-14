@@ -11,6 +11,23 @@ fail() {
     exit 1
 }
 
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/gsa-onlyoffice-recipe.XXXXXX")
+trap 'rm -rf -- "$tmp"' EXIT
+
+# ─── The engine under test: built into the fixture tree (scratch only).
+# GSA_TEST_GSA_BIN, when already set to an executable, is that engine and the
+# scratch build is skipped. GSA_STATE_DIR stays in scratch too — this is a
+# read-only real-tree fixture (migration §4 row, 2026-10-14). ────────────────
+if [ -z "${GSA_TEST_GSA_BIN:-}" ]; then
+    cargo build --offline --quiet --target-dir "$tmp/cargo" -p gsa-cli \
+        --manifest-path "$root/Cargo.toml" ||
+        fail "cannot build the gsa binary for the fixture"
+    GSA_TEST_GSA_BIN="$tmp/cargo/debug/gsa"
+fi
+[ -x "$GSA_TEST_GSA_BIN" ] || fail "the engine under test is not executable: $GSA_TEST_GSA_BIN"
+export GSA_TEST_GSA_BIN
+export GSA_STATE_DIR="$tmp/state"
+
 # The PKGBUILD's own commentary discusses `git describe` and makepkg's `error`,
 # so structural checks below must look at code only, never at comments.
 pkgcode=$(grep -v '^[[:space:]]*#' "$pkgbuild")
@@ -220,11 +237,13 @@ grep -Fq 'v8.data' "$pkgbuild" ||
     fail "the v8.data sentinel is missing; upstream would re-clone V8"
 
 # ----------------------------------------------------------------- topology
-# Read through the builder's --topology channel (id|path|groups|edges|tags):
+# Read through the engine's topology channel gsa -Qt (id|path|groups|edges|tags
+# — the row grammar is unchanged; the engine finds the workspace from the cwd
+# upward, contract §B.8 amendment G11 — migration §4 row, 2026-10-14):
 # the record must exist, point at the recipe, and carry the app membership
 # (onlyoffice-git moved from git to app with the 2026-09-27 app-group
 # expansion).
-topo=$(fish "$root/build-all.fish" --topology) || fail "--topology failed"
+topo=$(cd "$root" && "$GSA_TEST_GSA_BIN" -Qt) || fail "gsa -Qt failed"
 rec=$(printf '%s\n' "$topo" | awk -F'|' -v id=onlyoffice-git '$1 == id')
 [[ -n $rec ]] || fail "not registered in config/topology.conf (no record)"
 [[ $(printf '%s\n' "$rec" | cut -d'|' -f2) == "$recipe" ]] ||

@@ -11,6 +11,23 @@ fail() {
     exit 1
 }
 
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/gsa-vencord.XXXXXX")
+trap 'rm -rf -- "$tmp"' EXIT
+
+# ─── The engine under test: built into the fixture tree (scratch only).
+# GSA_TEST_GSA_BIN, when already set to an executable, is that engine and the
+# scratch build is skipped. GSA_STATE_DIR stays in scratch too — this is a
+# read-only real-tree fixture (migration §4 row, 2026-10-14). ────────────────
+if [ -z "${GSA_TEST_GSA_BIN:-}" ]; then
+    cargo build --offline --quiet --target-dir "$tmp/cargo" -p gsa-cli \
+        --manifest-path "$root/Cargo.toml" ||
+        fail "cannot build the gsa binary for the fixture"
+    GSA_TEST_GSA_BIN="$tmp/cargo/debug/gsa"
+fi
+[ -x "$GSA_TEST_GSA_BIN" ] || fail "the engine under test is not executable: $GSA_TEST_GSA_BIN"
+export GSA_TEST_GSA_BIN
+export GSA_STATE_DIR="$tmp/state"
+
 # Assets must exist and survive both .gitignore layers (the root rule that
 # denies every subdirectory under a recipe, and any recipe-local file). The
 # initiation files ship as local sources/scriptlets, so they are part of the
@@ -160,9 +177,10 @@ grep -Fxq 'Target = usr/share/applications/discord.desktop' \
 
 # Topology: the recipe must be reachable through a topology record (id+path)
 # and an app-group membership (the 2026-09-27 app-group expansion moved this
-# desktop application from git to app), read through the builder's --topology
-# channel.
-topo=$(fish "$root/build-all.fish" --topology) || fail "--topology failed"
+# desktop application from git to app), read through the engine's topology
+# channel gsa -Qt (the engine finds the workspace from the cwd upward,
+# contract §B.8 amendment G11 — migration §4 row, 2026-10-14).
+topo=$(cd "$root" && "$GSA_TEST_GSA_BIN" -Qt) || fail "gsa -Qt failed"
 rec=$(printf '%s\n' "$topo" | awk -F'|' -v id=vencord-git '$1 == id')
 [[ -n $rec ]] || fail "not registered in config/topology.conf (no record)"
 [[ $(printf '%s\n' "$rec" | cut -d'|' -f2) == "$recipe" ]] ||

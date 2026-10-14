@@ -36,11 +36,11 @@ set -uo pipefail
 #   4. desc present, files missing → also broken (both members are universal
 #      on a healthy box: measured 1754/1754), kept and reported; rc 1.
 #   5. empty/absent dir → rc 0, no broken-entry noise.
-#   6. static: the --local-db-check seam exists and check_pacman_db_health is
-#      wired at all three sites (the shared install preflight that serves
-#      both -i's preflight and -ia's entry, the interrupt teardown, and
-#      run_pacman_locked's failure path), and the probe contains no
-#      deletion command at all.
+#   6. (RETIRED under docs/gsa-fixture-migration.md R-1) the fish-source
+#      wiring pins — --local-db-check seam existence, the
+#      check_pacman_db_health three-site wiring and the pacman_db_local_path
+#      helper, and the probe's no-deletion source shape — are deleted at
+#      cutover; the never-delete behaviour they guarded re-pins in cases 1-5.
 #
 # Lock isolation: the PATH-stub `find` is a fixture-side oracle for the
 # open-handle scan (GSA_FAKE_FIND_SCAN_MODE), so host processes cannot make
@@ -59,6 +59,9 @@ fail() {
 }
 
 make_workspace "$fixture" auto auto xhigh
+# The probe seam (--local-db-check) is fish-oracle-only; the frozen oracle
+# runs from a copy beside this workspace (docs/gsa-fixture-migration.md).
+install_fish_oracle "$fixture"
 add_package "$fixture" p1
 
 cat >"$fixture/bin/find" <<'EOF'
@@ -176,30 +179,6 @@ grep -q 'BROKEN' "$out5" &&
 run_check "$fixture/var/pacman/absent-local" "$out5" ; rc=$?
 [[ $rc -eq 0 ]] || fail "absent local dir rc=$rc, want 0"
 
-# ── 6. static wiring pins ───────────────────────────────────────────────────
-echo "phase 6: seam + three call sites present"
-grep -q -- '--local-db-check' "$fixture/build-all.fish" ||
-    fail "--local-db-check seam missing from build-all.fish"
-grep -q 'function check_pacman_db_health' "$fixture/build-all.fish" ||
-    fail "check_pacman_db_health function missing"
-# Three direct wires after the 2026-09-26 install_preflight consolidation:
-# the shared install preflight (called by check_runtime_prereqs for -i and by
-# install_all for -ia), the interrupt teardown, and run_pacman_locked's
-# failure path. (Was four sites before -i's preflight and -ia's entry were
-# merged into install_preflight.)
-wires=$(grep -c 'check_pacman_db_health (pacman_db_local_path)' \
-    "$fixture/build-all.fish")
-[[ "$wires" -ge 3 ]] ||
-    fail "check_pacman_db_health wired at $wires site(s), want >=3" \
-        "(shared install preflight, interrupt teardown, run_pacman_locked)"
-grep -q 'function pacman_db_local_path' "$fixture/build-all.fish" ||
-    fail "pacman_db_local_path helper missing (DBPath seam)"
-# The report-only contract: no deletion command may remain in the probe
-# itself (the operator command is printed as TEXT by its report helper).
-health_body=$(sed -n '/^function check_pacman_db_health/,/^function /p' \
-    "$fixture/build-all.fish")
-if grep -qE '(^|[[:space:]])rm -rf' <<<"$health_body"; then
-    fail "check_pacman_db_health still deletes local-db entries"
-fi
+# ── 6. static wiring pins — RETIRED under docs/gsa-fixture-migration.md R-1 (fish-implementation source-shape greps; never-delete behaviour keeps in cases 1-5)
 
 echo "local-db repair fixture: PASS"

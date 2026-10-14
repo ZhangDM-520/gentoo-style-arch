@@ -52,7 +52,8 @@ set -uo pipefail
 # `Duration::from_secs(600)`) with no knob or seam, and the shim path turns a
 # flock failure into an ordinary `build-failed` build outcome. The end-to-end
 # row pin stays fish-driven (the local-db-repair pattern), against the
-# still-shipped fish builder this fixture's workspace carries.
+# FROZEN fish oracle this fixture's workspace installs with
+# install_fish_oracle.
 # DEVIATION 3 (inventory argv cell `gsa -S --leaf --no-sync …`): `--no-sync`
 # is parse-and-refuse on the engine today (rc 2, deferred_flags disposition)
 # and its live wiring belongs to the concurrent sync stream; the scenario has
@@ -88,6 +89,7 @@ export GSA_TEST_ENGINE=gsa
 export GSA_TEST_GSA_BIN
 
 make_workspace "$fixture" auto auto xhigh
+install_fish_oracle "$fixture"
 add_package "$fixture" p1 $'pkgver=1.0\npkgrel=1\narch=(x86_64)'
 # Dynamic IgnorePkg registration target — never the host's /etc/pacman.conf
 # (the battery must be non-mutating). The engine takes it as `--config`.

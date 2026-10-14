@@ -122,6 +122,12 @@ fish-era parser.
 
 ## 4. Inventory (56 fixtures)
 
+Spelling note (2026-10-14): the Replacement column's spellings are
+family-first — `gsa` rejects a modifier before its family (`gsa --dry-run -S
+@git` is rc 2 "unknown flag"; the working spelling is `gsa -S --dry-run
+@git`, §B.1). Where a row writes `gsa --dry-run` standalone, read it as the
+family-qualified form the fixture's action needs.
+
 | fixture | pins | KEEP / REWRITE | new-contract target | phase |
 | --- | --- | --- | --- | --- |
 | `tests/abi-batch-policy.sh` | ABI-batch/soname-drift gate: omitted batch members and surface consumers refuse BEFORE dispatch; complete batches build; rustc probe stops dispatch and drains; gate probes memoised | KEEP: refusal-before-dispatch (:242-244, :850-852), probe-stop-drain (:356-361), gate boundary + negatives (:872-941), topology-data grouping (:531-645), gate cost (:1186-1245); REWRITE: argv ≈18 (`--audit`, `--topology`, `-i`, `-n`, `-l`, `--no-deps`; :122, :226, :350, :388), prose ≈13 (refusal/probe text :232-236, :368-370, :842-844), rr-format1 2 (:501, :506) | `gsa -S`/`-B`/`--dry-run`/`--leaf` (§B.4–B.8), `gsa -Ma` (§B.7), `gsa -Qt` (§B.3); refusals → `refuse` rows `abi-soname`/`abi-consumer-uncovered` (§E.2–E.3); `format: 2` scalars `outcome`/`rc` + outcome rows (§H.2); rc 3 (§G.1) | 3 (build+install gates); `-Qt` at 1, `-Ma` at 4 |
@@ -287,6 +293,11 @@ is written.
   harness retires with the fish engine in Phase 5.
 
 ## 8. Contract gaps found
+
+Dispositions for every numbered item below (fixed / fixed-by-amendment /
+closed-by-documentation / deferred-with-rationale) live in
+`docs/gsa-contract.md` §M (2026-10-14) — this section stays the gap
+inventory only, so the two never drift apart.
 
 Each item names the `docs/gsa-contract.md` section that is silent. No
 semantics were invented for these; where a fixture must pin something

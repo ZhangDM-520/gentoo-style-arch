@@ -13,8 +13,10 @@ set -euo pipefail
 # scenarios the Phase-2 engine expresses run the built `gsa` through
 # run_engine (GSA_TEST_ENGINE=gsa) and assert on `format: 2` records
 # (rr2_*), while the scenarios whose behaviour the engine does not implement
-# yet keep driving the fish builder unchanged (each marked with its engine
-# gap below).
+# yet keep driving the FROZEN fish oracle unchanged (tests/assets/, installed
+# per scratch workspace by install_fish_oracle — docs/gsa-fixture-migration.md
+# §3 fish-driven deviation, 2026-10-14; each marked with its engine gap
+# below).
 #
 # Engine mapping (measured against crates/gsa-build/src/lane.rs and
 # crates/gsa-sched/src/lock.rs — re-probe on mismatch):
@@ -40,15 +42,20 @@ set -euo pipefail
 #     re-pins from the record rows + ps, and the `--lane-job` spawn check
 #     re-pins to the §D.1 seam spelling.
 #
-# Engine-gap sections, kept fish-driven until the surface lands:
+# Engine-gap sections, kept fish-driven on the FROZEN ORACLE until the
+# surface lands (docs/gsa-fixture-migration.md §3 fish-driven deviation):
 #   * unremovable-leftover naming (`cannot remove stale runtime artifact` +
 #     `or: sudo rm -f <path>`): the engine's sweep is silent best-effort
 #     (lock.rs `let _ = std::fs::remove_file`).
 #   * root-mode chown repair (§J.5's root supervisor half): the engine has no
-#     root-repair path at all, and `-Ma`/`-Md` listings are deferred (gsa
-#     refuses `-M` with rc 2 "deferred to a later phase").
-#   * the `--audit` stale-listing static shape below is a purely fish-source
-#     listing check (`-Ma` re-pins it at Phase 4).
+#     in-run root-repair path — `gsa -Md`'s wrong-owner rows stay report-only
+#     even under `--fix` ("the root supervisor's startup repair owns that
+#     remedy", crates/gsa-maint/src/doctor.rs; measured 2026-10-14, after
+#     `-M` landed live at the Phase 5 cutover).
+# No longer an engine gap (2026-10-14): the stale-listing shape below
+# re-pins BEHAVIORALLY against `gsa -Ma` in the scratch workspace (§B.7's
+# "stale runtime artifacts" family) — the fish-source grep retires per
+# docs/gsa-fixture-migration.md §6 R-1.
 #
 # Portability note (fish sections): fixtures never use sudo, so a genuinely
 # root-owned file cannot be produced here. A user-owned 0444 file is the same
@@ -321,7 +328,7 @@ EOF
 # leftovers are reaped at run start, loudly non-fatal, while the live run's
 # own artifacts survive — re-pins against the `runs/` observable below. The
 # unremovable-leftover naming half of R-F34 has NO engine equivalent (the
-# sweep is silent best-effort) and keeps its fish section below.
+# sweep is silent best-effort) and keeps its fish-oracle section below.
 
 # 1. behavioral: dead-run leftovers are swept at RUN START (the build-time
 #    snapshot proves the sweep already ran before the first dispatch) while
@@ -439,9 +446,12 @@ EOF
 #    operator command (rm -f fails inside a read-only directory) and never
 #    breaks the run. The engine's sweep_orphans is silent best-effort
 #    (`let _ = std::fs::remove_file`, crates/gsa-sched/src/lock.rs) and names
-#    nothing, so this half of the R-F34 contract cannot flip yet.
+#    nothing, so this half of the R-F34 contract cannot flip yet — a
+#    deliberate fish-driven deviation on the FROZEN ORACLE
+#    (docs/gsa-fixture-migration.md §3, 2026-10-14), its fish argv unchanged.
 dir="$fixture/stale-unremovable"
 make_case_workspace "$dir"
+install_fish_oracle "$dir" # §3 fish-driven deviation; frozen oracle (2026-10-14)
 mkdir -p "$dir/state/logs/trapped"
 printf 'stale\n' >"$dir/state/logs/trapped/f.tmp.9"
 chmod 555 "$dir/state/logs/trapped" # rm -f needs write permission on the DIRECTORY
@@ -472,27 +482,42 @@ if [[ ! -e $dir/state/logs/trapped/f.tmp.9 ]]; then
     fail "the read-only-directory leftover vanished — the scenario proved nothing" "$output"
 fi
 
-# 3. KEPT (fish-source listing check): --audit's "Stale runtime/error
-#    artifacts:" section must LIST the same name shapes the sweep collects.
-#    Asserted on the builder source (a behavioral --audit run probes installed
-#    packages and needs ripgrep, so its output is host-dependent) — the
-#    technique tests/signal-abort-lock.sh phase 6 uses for stop_lane_process.
-#    Purely fish-source: gsa `-Ma` is deferred (rc 2 "deferred to a later
-#    phase"), so this listing re-pins from `gsa -Ma` at Phase 4.
-gf="$gsa_repo_root/build-all.fish"
-# The section lives in audit_workspace, which the Design C split moved to
-# lib/audit.fish — the sweep reads both so the assertion follows the code.
-audit_region=$(awk '
-    /echo "Stale runtime\/error artifacts:"/ { inr = 1 }
-    inr { print }
-    inr && /Installed PGO payloads:/ { exit }
-' "$gf" "$gsa_repo_root/lib/audit.fish")
-[[ -n $audit_region ]] ||
-    fail "could not extract the Stale runtime/error artifacts section from build-all.fish"
-grep -qF -- '*.tmp.*' <<<"$audit_region" ||
-    fail "the audit stale listing no longer matches '*.tmp.*' state-dir leftovers"
-grep -qF -- '*.gsa-vcs-revisions.tmp.*' <<<"$audit_region" ||
-    fail "the audit stale listing no longer matches '*.gsa-vcs-revisions.tmp.*' package-tree leftovers"
+# 3. KEPT (re-pinned behaviorally, 2026-10-14): the audit's stale-artifact
+#    listing must LIST the same name shapes the sweep collects. The
+#    fish-source grep of the `--audit` "Stale runtime/error artifacts:"
+#    section retires per docs/gsa-fixture-migration.md §6 R-1 (gsa is a
+#    shipped binary; the root engine is a migration shim and lib/audit.fish
+#    is gone), and the listing re-pins against `gsa -Ma` (§B.7's "stale
+#    runtime artifacts" family) IN THE SCRATCH WORKSPACE ONLY — `-Ma` probes
+#    installed packages and must never run against the real tree. Measured
+#    2026-10-14: two `-Ma` runs over one planted workspace are byte-identical
+#    (rc 0), so the minimal pin is one planted file per pinned name shape,
+#    each named by its `stale-artifact` row.
+(
+    set -euo pipefail
+    dir="$fixture/stale-listing"
+    make_case_workspace "$dir"
+    mkdir -p "$dir/state/logs" "$dir/packages/p1"
+    printf 'stale\n' >"$dir/state/logs/y.tmp.9"
+    printf 'stale\n' >"$dir/packages/p1/z.gsa-vcs-revisions.tmp.9"
+
+    export PATH="$dir/bin:$PATH"
+    run_engine "$dir" -Ma --state-dir "$dir/state"
+    output=$FIXTURE_OUTPUT
+    printf '%s\n' "$output" >"$dir/output.txt"
+
+    # Report-only by contract (§E.4): exit 0, read the report.
+    if [[ $FIXTURE_RC != 0 ]]; then
+        fail "gsa -Ma is report-only (exit 0), rc=$FIXTURE_RC" "$dir/output.txt"
+    fi
+    grep -qF -- "stale-artifact $dir/state/logs/y.tmp.9 tmp-artifact" <<<"$output" ||
+        fail "the audit stale listing no longer covers '*.tmp.*' state-dir leftovers" "$dir/output.txt"
+    # `*.gsa-vcs-revisions.tmp.*` is fish runtime state the native engine
+    # never creates (header) — the listing must still COVER it so legacy
+    # package-tree litter stays reportable.
+    grep -qF -- "stale-artifact $dir/packages/p1/z.gsa-vcs-revisions.tmp.9 vcs-revisions-tmp" <<<"$output" ||
+        fail "the audit stale listing no longer covers '*.gsa-vcs-revisions.tmp.*' package-tree leftovers" "$dir/output.txt"
+)
 
 # (2026-10-12: the `find -prune` vs `-not -path` sweep-implementation greps
 #  are retired WITHOUT replacement — docs/gsa-fixture-migration.md §6 R-1;
@@ -508,9 +533,11 @@ printf 'log-ownership fixture: PASS\n'
 #
 # KEPT FISH (engine gap): `gsa` has no root-repair path — §J.5's write-time
 # ownership gate only quarantines wrong-owner files (the root-supervisor
-# chown repair is a later phase), and `-Ma`/`-Md` listings are deferred (gsa
-# refuses `-M` with rc 2). This whole section therefore keeps driving the
-# fish builder (docs/gsa-fixture-migration.md row `tests/log-ownership.sh`).
+# chown repair is a later phase: `gsa -Md`'s wrong-owner rows stay
+# report-only even under `--fix`, crates/gsa-maint/src/doctor.rs, measured
+# 2026-10-14). This whole section therefore keeps driving the FROZEN ORACLE
+# (docs/gsa-fixture-migration.md §3 fish-driven deviation; row
+# `tests/log-ownership.sh`).
 #
 # In root mode the supervisor's shell opens every log, so before the fix the
 # per-package log was created root-owned at lane spawn and only repaired at
@@ -547,6 +574,7 @@ fail() {
 
 dir="$fixture/rootmode"
 make_workspace "$dir" 2 2 low
+install_fish_oracle "$dir" # §3 fish-driven deviation; frozen oracle (2026-10-14)
 for id in p1 p2; do
     add_package "$dir" "$id" "$gsa_meta_any"
 done

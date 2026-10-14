@@ -109,6 +109,7 @@ export GSA_TEST_GSA_BIN="$gsa_bin"
 
 # ── Synthetic workspace: five fake packages, one topology record each ───────
 make_workspace "$fixture" auto auto xhigh
+install_fish_oracle "$fixture"
 
 # pkgver=1 (not the helper's $gsa_meta_any default) keeps these PKGBUILDs
 # byte-identical to the hand-written skeleton this replaced.
