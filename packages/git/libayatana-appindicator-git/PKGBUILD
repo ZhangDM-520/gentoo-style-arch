@@ -9,12 +9,15 @@ pkgdesc="Ayatana Application Indicators shared library (git build)"
 arch=('x86_64')
 url="https://github.com/AyatanaIndicators/libayatana-appindicator"
 license=('GPL-3.0-only')
-depends=('glib2' 'glibc' 'gtk3' 'libdbusmenu-glib' 'libdbusmenu-gtk3' 'libgcc')
+depends=('glib2' 'glibc' 'gtk3' 'libayatana-indicator' 'libdbusmenu-glib' 'libdbusmenu-gtk3' 'libgcc')
 # CMake's pkg_check_modules hard-requires all four modules
 # (glib-2.0, ayatana-indicator3-0.4, gtk+-3.0, dbusmenu-gtk3-0.4);
 # the stock names resolve through the set's providers (gtk3-git
 # provides gtk3). ayatana-indicator3-0.4 is libayatana-indicator's —
-# undeclared before, it walled run #109 when nothing pulled it in.
+# undeclared before, it walled run #109 when nothing pulled it in. It is a
+# runtime dependency too (libayatana-indicator3.so.7 is NEEDED by the
+# shipped lib): the makedepends-only half let it become an orphan whose
+# removal broke every consumer (2026-10-14). Not trimmable.
 makedepends=('cmake' 'git' 'glib2-devel' 'gobject-introspection' 'vala'
              'libayatana-indicator' 'gtk3' 'libdbusmenu-gtk3')
 provides=("libayatana-appindicator=$pkgver" 'libayatana-appindicator3.so')

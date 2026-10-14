@@ -16,6 +16,7 @@ pkgbase = libayatana-appindicator-git
 	depends = glib2
 	depends = glibc
 	depends = gtk3
+	depends = libayatana-indicator
 	depends = libdbusmenu-glib
 	depends = libdbusmenu-gtk3
 	depends = libgcc

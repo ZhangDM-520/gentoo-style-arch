@@ -15,6 +15,7 @@ pkgbase = at-spi2-core-git
 	depends = gsettings-desktop-schemas
 	depends = libx11
 	depends = libxml2
+	depends = libxres
 	depends = libxtst
 	depends = systemd
 	depends = xorg-xprop

@@ -1080,6 +1080,31 @@
     the causation handle), then re-prove with the helper healthy. See
     `docs/NOTE.md` 2026-10-14 gsa-pm.
 
+54. **A lib the build auto-detects and links into the payload is a `depends`
+    candidate — diff the shipped DT_NEEDED closure against the declared
+    one** (2026-10-14 orphan wall): with `!autodeps` an archive's depends is
+    exactly what the PKGBUILD says (`find_libdepends` only auto-versions
+    declared `X.so` stems; it never synthesizes entries), so a meson/cmake
+    optional feature that merely happened to be present at build time ships
+    an undeclared link; its provider is dep-installed, later orphan-flagged,
+    and removing the orphan breaks every consumer (at-spi2-core-git→libxres
+    broke GTK accessibility system-wide; flatpak-git→libmalcontent;
+    libayatana-appindicator-git→libayatana-indicator, whose run #109 fix
+    covered only the makedepends half — a makedepends-only entry is a leak
+    whenever the link survives into the payload). Spelling: bare `X.so` stem
+    only where the provider carries the soname provide (it is auto-versioned
+    from NEEDED), plain package name otherwise — `libxres`/
+    `libayatana-indicator` provide nothing, so a stem dep is unsatisfiable.
+    The entry is not trimmable: nothing else in the PKGBUILD mentions the
+    feature, so carry the reason as a comment. Detection recipe: resolve
+    every DT_NEEDED of a consumer's files to owning packages and diff
+    against the provides-aware transitive closure of its declared depends
+    (transitive coverage keeps the provider installed; direct is tidier).
+    Note the guard gap: `abi-closure` resolves NEEDED against the provide
+    surface and the install `needed` gate against runtime truth — neither
+    compares against the manifest. See `docs/NOTE.md` 2026-10-14 orphan
+    wall.
+
 ## 2. Workspace overview
 
 - The public tree is `Gentoo_Style_Arch/`; recipes live under

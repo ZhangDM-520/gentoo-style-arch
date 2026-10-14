@@ -1,3 +1,62 @@
+## 2026-10-14 — orphan-removal broke shared libs: three recipes shipped runtime links their `depends` never declared (auto-detected optionals under `!autodeps`)
+
+**Symptom.** After a whole-set build, `pacman -Qdt` flagged 31 packages as
+orphans (dep-installed during builds, required by nothing); removing them
+broke shared libs and they had to be reinstalled by hand.
+
+**Root cause.** The host builds with `!autodeps`, so an archive's `depends`
+is exactly what the PKGBUILD declares — makepkg's unconditional
+`find_libdepends` only auto-versions declared `X.so` stems and never
+synthesizes new entries (the docs' provides discipline is that unconditional
+machinery, not autodeps). Three recipes had build systems that auto-detected
+an optional lib present in the build env and linked it into the shipped
+payload with no declared runtime dep, so pacman installed the provider as a
+bare dependency and any orphan sweep removed it, breaking every consumer:
+
+- `at-spi2-core-git` → `libXRes.so.1` (`libxres`): meson auto-detect; NEEDED
+  by `libatspi.so` — removing the orphan broke accessibility for every GTK
+  app;
+- `flatpak-git` → `libmalcontent-0.so.0` (`libmalcontent`): meson
+  auto-detect of the parental-controls feature;
+- `libayatana-appindicator-git` → `libayatana-indicator3.so.7`
+  (`libayatana-indicator`): run #109 (2026-10-10) added it to **makedepends**
+  for the CMake `pkg_check_modules` wall and the runtime half was never
+  declared.
+
+The other 28 names are legitimately orphanable at the ELF level:
+build-time-only (wasi-libc\*, zlib-static, python-distlib,
+perl-devel-checklib, ocaml-compiler-libs, libsigc++-docs), qemu-retirement
+collateral (13c8415, 2026-10-11: libcacard, libiscsi, libslirp, libaemu,
+python-distlib, zlib-static), or zero-linker leaves whose canonical consumers
+are not installed. A DT_NEEDED-vs-declared-deps sweep (provides-aware
+transitive closure of each consumer's depends) found exactly the three pairs
+above and nothing else in the installed set.
+
+**Fix.** Declare the missing runtime dep in each recipe with a
+`Not trimmable` why-comment (nothing else in the PKGBUILD mentions the
+feature, so a future dead-dep trim would re-break it). Spelling is plain
+provider names — forced here, not merely stylistic: `libxres` and
+`libayatana-indicator` carry **no** soname provides, so a bare `X.so` stem
+would be unsatisfiable (only `libmalcontent` carries
+`libmalcontent-0.so=0-64`). **Validation.** `bash -n` ×3; `.SRCINFO`
+regeneration shows each recipe gaining exactly one `depends =` line; real
+build of `at-spi2-core-git` → archive `.PKGINFO` carries `depend = libxres`
+(the line that makes pacman keep the provider through any orphan sweep).
+`libayatana-appindicator-git`'s build proof is walled by the same incident
+class one level up: its makedepend `vala` was itself orphan-removed and
+cannot be re-pulled while `graphviz` stays IgnorePkg-pinned (run #117 wall) —
+owner call, nothing in the recipe is at fault.
+
+**Durable rules.** (1) MEMORY rule 54: a lib the build auto-detects and
+links into the payload is a `depends` candidate — diff the shipped ELF
+DT_NEEDED closure against the provides-aware declared closure; makedepends
+is a leak whenever the link survives into the payload. (2) Spell a dep so
+the provider can satisfy it: bare `X.so` stems only where the provider
+carries the soname provide, plain name otherwise. (3) A gap class with no
+guard re-drifts: the declared-deps axis is unguarded today (`abi-closure`
+resolves NEEDED against the provide surface, the install `needed` gate
+against runtime truth) — a `declared-deps` QA lint is the proposed guard.
+
 ## 2026-10-14 — gsa-pm bootstrap proof wall: an IgnorePkg-pinned `ccache` against a moved `hiredis` soname kills every makepkg compile through the injected compiler farm; the recipe now probes the shim before trusting it
 
 **Symptom.** The real-build proof of `packages/core/gsa-pm` (`makepkg -s`)

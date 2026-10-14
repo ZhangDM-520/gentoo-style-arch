@@ -10,7 +10,11 @@ pkgdesc="Linux application sandboxing and distribution framework (formerly xdg-a
 arch=(x86_64 aarch64)
 url="https://github.com/flatpak/flatpak"
 license=(LGPL2.1)
-depends=('ostree' 'libarchive' 'bubblewrap' 'appstream-glib' 'polkit' 'appstream' 'xdg-dbus-proxy' 'glib2-devel' 'gobject-introspection' 'socat')
+# libmalcontent: meson auto-detects it and links the parental-controls
+# support into libflatpak (NEEDED libmalcontent-0.so.0). Undeclared, the
+# dep-install became an orphan whose removal broke flatpak (2026-10-14).
+# Not trimmable.
+depends=('ostree' 'libarchive' 'bubblewrap' 'appstream-glib' 'polkit' 'appstream' 'xdg-dbus-proxy' 'glib2-devel' 'gobject-introspection' 'socat' 'libmalcontent')
 makedepends=('git' 'meson' 'ninja' 'gtk-doc' 'docbook-xsl' 'docbook-xml' 'python' 'python-pyparsing' 'gi-docgen')
 provides=('flatpak' 'libflatpak.so')
 conflicts=('flatpak')

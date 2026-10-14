@@ -14,12 +14,16 @@ arch=('x86_64')
 # Upstream meson.build declares LGPLv2.1+ and root COPYING is LGPL-2.1
 # (the AUR/stock metadata says GPL-2 — follows upstream here)
 license=('LGPL-2.1-or-later')
+# libxres: upstream meson auto-detects XRes and links it into libatspi
+# (NEEDED libXRes.so.1). Undeclared, the dep-install became an orphan whose
+# removal broke every at-spi consumer (2026-10-14). Not trimmable.
 depends=(
   dbus
   glib2
   gsettings-desktop-schemas
   libx11
   libxml2
+  libxres
   libxtst
   systemd
   xorg-xprop
