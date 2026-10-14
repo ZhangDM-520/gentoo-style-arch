@@ -12,20 +12,21 @@ pkgdesc="Not Erik's Windowing Toolkit - text mode windowing with slang"
 arch=(x86_64)
 url='https://pagure.io/newt'
 license=(GPL-2.0-only)
+# python/tcl: the shipped _snack.so and whiptcl.so link them (rule-54
+# class — opt/makedepends only before). Not trimmable.
 depends=(
   glibc
   gpm
   popt
+  python
   slang
+  tcl
 )
 makedepends=(
   "tcl>=$_tclver"
   python
 )
-optdepends=(
-  'python: libnewt support with the _snack module'
-  'tcl: whiptcl support'
-)
+optdepends=()
 provides=(libnewt.so)
 # Source note (2026-10-06): pagure.io's archive endpoint started returning
 # 404 for every snapshot URL (tag r0-52-25 still exists — verified via

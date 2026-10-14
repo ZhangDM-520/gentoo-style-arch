@@ -8,6 +8,8 @@ pkgdesc='A toolkit for manipulation of graphic images'
 arch=(x86_64)
 license=(Artistic-1.0 GPL-2.0-only LGPL-2.0-only MIT)
 url="http://netpbm.sourceforge.net/"
+# libx11: the shipped pamx links it (rule-54 class — no declaration
+# before). Not trimmable.
 depends=(bash
          glibc
          jbigkit
@@ -15,6 +17,7 @@ depends=(bash
          libjpeg-turbo
          libpng
          libtiff
+         libx11
          libxml2
          perl
          zlib)

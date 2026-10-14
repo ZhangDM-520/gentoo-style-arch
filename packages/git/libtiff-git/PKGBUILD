@@ -15,11 +15,15 @@ pkgdesc='Library for manipulation of TIFF images (git build)'
 arch=('x86_64')
 url='https://libtiff.gitlab.io/libtiff/'
 license=('libtiff')
+# freeglut/libgl: the shipped tiffgt links libglut.so.3/libGL.so.1
+# (rule-54 class — freeglut was optdepends-only). Not trimmable.
 depends=(
   libstdc++
   glibc
   jbigkit
   libdeflate
+  freeglut
+  libgl
   libjpeg-turbo
   libjpeg.so
   libwebp
@@ -34,9 +38,7 @@ makedepends=(
   glu
   mesa
 )
-optdepends=(
-  'freeglut: for using tiffgt'
-)
+optdepends=()
 provides=("libtiff=$pkgver" 'libtiff.so' 'libtiffxx.so')
 conflicts=('libtiff')
 # v4.x release tags are signed; this recipe tracks master so there is no

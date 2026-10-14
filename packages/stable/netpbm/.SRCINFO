@@ -17,6 +17,7 @@ pkgbase = netpbm
 	depends = libjpeg-turbo
 	depends = libpng
 	depends = libtiff
+	depends = libx11
 	depends = libxml2
 	depends = perl
 	depends = zlib

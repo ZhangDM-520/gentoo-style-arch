@@ -14,13 +14,14 @@ pkgbase = libtiff-git
 	depends = glibc
 	depends = jbigkit
 	depends = libdeflate
+	depends = freeglut
+	depends = libgl
 	depends = libjpeg-turbo
 	depends = libjpeg.so
 	depends = libwebp
 	depends = xz
 	depends = zlib
 	depends = zstd
-	optdepends = freeglut: for using tiffgt
 	provides = libtiff=4.7.2.r59.gd2324997
 	provides = libtiff.so
 	provides = libtiffxx.so

@@ -11,15 +11,23 @@ pkgdesc='Image processing system'
 url='http://www.graphicsmagick.org/'
 arch=(x86_64)
 license=(MIT)
+# jasper/libheif/libjxl/libwmf/libzip: the shipped coder modules link them
+# (rule-54 class — declared only as opt/makedepends before, so the providers
+# were orphan-removable). Not trimmable.
 depends=(bzip2
          freetype2
+         jasper
          lcms2
+         libheif
+         libjxl
          libltdl
          libpng
          libsm
          libtiff
          libwebp
+         libwmf
          libxext
+         libzip
          xz)
 makedepends=(jasper
              libheif
@@ -27,12 +35,8 @@ makedepends=(jasper
              libwmf
              libxml2
              perl)
-optdepends=('jasper: jp2 module'
-            'libwmf: wmf module'
-            'libxml2: msl, svg, url modules'
-            'ghostscript: pdf, ps modules'
-            'libheif: heic module'
-            'libjxl: jpeg-xl module')
+optdepends=('libxml2: msl, svg, url modules'
+            'ghostscript: pdf, ps modules')
 provides=(libGraphicsMagickWand.so
           libGraphicsMagick.so
           libGraphicsMagick++.so
