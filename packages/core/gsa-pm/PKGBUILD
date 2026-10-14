@@ -68,6 +68,27 @@ build() {
   local _rustflags="${RUSTFLAGS:-}"
   # House style (mold-git): mold is probed, never a makedepend.
   command -v mold >/dev/null 2>&1 && _rustflags+=" -C link-arg=-fuse-ld=mold"
+
+  # Probe before trusting the compiler wrapper (same idiom as the mold probe
+  # above): makepkg's ccache buildenv prepends /usr/lib/ccache/bin to PATH on a
+  # bare `test -d` (libmakepkg buildenv_ccache; host BUILDENV=ccache), so a
+  # ccache binary that cannot even load — e.g. a ccache↔hiredis soname skew —
+  # shadows cc and every compile (here: cargo's link step) dies 127. A farm
+  # shim that fails its own --version probe is dropped from PATH so the real
+  # compiler is used; any other broken cc stays fatal.
+  if ! cc --version >/dev/null 2>&1; then
+    case "$(command -v cc)" in
+      /usr/lib/ccache/bin/*)
+        local _path=":${PATH}:"
+        _path="${_path//':/usr/lib/ccache/bin:'/:}"
+        PATH="${_path#:}"
+        PATH="${PATH%:}"
+        export PATH
+        warning "ccache shim unusable; dropped /usr/lib/ccache/bin from PATH"
+        ;;
+    esac
+    cc --version >/dev/null 2>&1 || { error "no usable C compiler on PATH"; return 1; }
+  fi
   # Keep $srcdir out of the shipped binary (makepkg's srcdir-reference lint).
   _rustflags+=" --remap-path-prefix=${srcdir}=/"
 

@@ -1060,6 +1060,26 @@
     `cannot resolve "X", a dependency of "Y"` → give X's provider
     member the consumer edge.
 
+53. **Probe an injected compiler wrapper before trusting it — makepkg's
+    ccache farm reaches `PATH` on a bare `test -d`, so a broken `ccache`
+    shadows `cc` for every recipe, not just ccache users** (2026-10-14
+    gsa-pm): host `BUILDENV=ccache` makes `libmakepkg buildenv_ccache`
+    prepend `/usr/lib/ccache/bin` with no health check, and an
+    `IgnorePkg`-pinned `ccache 4.14-1.1` left against a moved `hiredis`
+    soname (`pacman -Qu` showed `ccache 4.14-1.1 -> 4.14.1-1.1 [ignored]`)
+    turned every compile into exit 127 (`libhiredis.so.1.3.0 … not found`)
+    — cargo's link step included. Recipe seam (gsa-pm `build()`, the house
+    probed-not-declared idiom like the mold probe): `cc --version` first;
+    if it fails and `command -v cc` resolves into `/usr/lib/ccache/bin`,
+    drop that dir from `PATH` and `warning`; any other broken `cc` is
+    fatal. Never heal a soname gap with a compat symlink (ABI gamble), and
+    repair the host (`pacman -S <helper>`) instead of shimming around an
+    `IgnorePkg` skew silently. Companion to rule 40 (never double-wrap:
+    farm-as-argv[0] is the correct keying *when the shim runs*). Prove such
+    a workaround against the broken environment first (the warning line is
+    the causation handle), then re-prove with the helper healthy. See
+    `docs/NOTE.md` 2026-10-14 gsa-pm.
+
 ## 2. Workspace overview
 
 - The public tree is `Gentoo_Style_Arch/`; recipes live under

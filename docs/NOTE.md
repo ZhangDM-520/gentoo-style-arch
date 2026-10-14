@@ -1,3 +1,50 @@
+## 2026-10-14 — gsa-pm bootstrap proof wall: an IgnorePkg-pinned `ccache` against a moved `hiredis` soname kills every makepkg compile through the injected compiler farm; the recipe now probes the shim before trusting it
+
+**Symptom.** The real-build proof of `packages/core/gsa-pm` (`makepkg -s`)
+died in `build()` with every compile exiting 127 —
+`cc: error while loading shared libraries: libhiredis.so.1.3.0` — while the
+same compiler invoked directly ran fine. No recipe file named ccache.
+
+**Root cause.** A host partial-upgrade skew held in place by `IgnorePkg`:
+`ccache 4.14-1.1` (linked against hiredis 1.3) stayed pinned while
+`hiredis 1.4.1-1` (soname `.1.4.0`) moved underneath it, so
+`/usr/bin/ccache` cannot even load. makepkg's ccache buildenv
+(`libmakepkg buildenv_ccache`, driven by the host `BUILDENV=ccache`)
+prepends `/usr/lib/ccache/bin` to `PATH` on a bare `test -d` — the injection
+is makepkg's, not any recipe's — so the dead farm shim shadowed `cc` for
+every compile including cargo's link step. `pacman -Qu` names the skew
+directly: `ccache 4.14-1.1 -> 4.14.1-1.1 [ignored]`.
+
+**Fix.** Two halves, both owner-approved. Host: `sudo pacman -S ccache` →
+`ccache 4.14.1-1.1` (its payload was verified to link
+`libhiredis.so.1.4.0` and run *before* installing). Recipe: `build()` in
+`packages/core/gsa-pm` probes before trusting the injected wrapper (the
+house probed-not-declared idiom, same shape as the mold probe) — `cc
+--version` first; when it fails and `command -v cc` resolves into
+`/usr/lib/ccache/bin`, drop that directory from `PATH` and `warning`; any
+other broken `cc` stays fatal (`no usable C compiler on PATH`). A Rust
+recipe gains nothing from ccache, but its link step goes through `cc`
+regardless. Rejected: a `libhiredis.so.1.3.0` compat symlink (host mutation
++ ABI gamble) and skipping the proof.
+
+**Validation.** `bash -n` on the PKGBUILD; `makepkg --printsrcinfo`
+byte-identical (a `build()`-only change, so `.SRCINFO` does not move).
+Causation order, deliberately red-environment first: with the host still
+broken, `makepkg -s` rc 0 and the log carries `WARNING: ccache shim
+unusable; dropped /usr/lib/ccache/bin from PATH` — the hardening alone
+carries the build — and the packaged `usr/bin/gsa` answers `--help` rc 0;
+then, after the host fix, `makepkg --cleanbuild -f -s` rc 0 through the
+now-working shim with zero warnings (full recompile, `ccache` live).
+
+**Durable rules.** (1) MEMORY rule 53: a compiler wrapper on `PATH` is
+trusted only after a probe — makepkg injects the ccache farm on a bare
+`test -d`, so wrapper breakage is every recipe's wall, not the wrapper
+user's. (2) An `IgnorePkg` pin on a helper package is a partial-upgrade
+skew: check `pacman -Qu` for `[ignored]` rows before diagnosing any build
+wall, and repair at the host rather than shimming around it silently.
+(3) Prove a wrapper workaround against the broken environment first, then
+re-prove clean — the warning firing in the log is the causation handle.
+
 ## 2026-10-14 — Phase 5 cutover: the native `gsa` engine becomes the engine of record, the fish engine freezes as the oracle, and three classes of run-record breakage die at the strict `format: 2` gate
 
 **Symptoms.** Flipping the engine of record to `gsa` (`plan-native-pm.md` §7
