@@ -1115,7 +1115,9 @@
     mutual sibling dep installs in-transaction. And once a leaked link is
     declared, its matching `optdepends` entry is denial-table and retires
     in the same edit (an optional-dependency table describing shipped
-    binaries is a depends table in denial). See `docs/NOTE.md` 2026-10-14
+    binaries is a depends table in denial). The gate seeds its declared
+    closure from the committed `.SRCINFO`, not the PKGBUILD — regenerate
+    before gating or the verdict is stale. See `docs/NOTE.md` 2026-10-14
     orphan wall and 2026-10-15 wave-3.
 
 55. **A provider SONAME bump needs its direct NEEDED consumers rebuilt in

@@ -73,7 +73,14 @@ build() {
 package_alsa-plugins() {
   depends=(
     alsa-lib libasound.so
+    dbus
+    ffmpeg
     glibc
+    jack
+    libavtp
+    libpulse
+    libsamplerate
+    speexdsp
   )
   provides=(
     libasound_module_conf_pulse.so
@@ -95,16 +102,6 @@ package_alsa-plugins() {
     libasound_module_rate_samplerate.so
     libasound_module_rate_speexrate.so
   )
-  optdepends=(
-    'dbus: for maemo plugin'
-    'ffmpeg: for pcm_a52 plugin'
-    'jack: for pcm_jack plugin'
-    'libavtp: for pcm_aaf plugin'
-    'libsamplerate: for rate_samplerate plugin'
-    'libpulse: for conf_pulse, ctl_pulse and pcm_pulse plugins'
-    'speexdsp: for pcm_speex and rate_speexrate plugins'
-  )
-
   cd $pkgbase-$pkgver
   make DESTDIR="$pkgdir" install
 

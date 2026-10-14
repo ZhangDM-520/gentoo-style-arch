@@ -1,3 +1,55 @@
+## 2026-10-15 — wave-4 burn-down: openimageio/fcitx5-gtk-git/apr-util/alsa-plugins/v4l-utils declare 48 leaked links — and the post-build gate grows openimageio's worklist by two
+
+**Symptom.** Next five offenders by rows from the 2026-10-15 installed-set
+sweep, same rule-54 shape (shipped modules hard-linking libs declared only
+as `makedepends`/`optdepends`): `openimageio` (12 rows — format modules +
+the Qt-linked `iv` viewer), `fcitx5-gtk-git` (10 — the gtk3/gtk4 IM
+modules), `apr-util` (9 — the per-DBD/per-crypto backends), `alsa-plugins`
+(9 — the per-plugin modules), `v4l-utils` (8 — qv4l2's Qt GUI).
+
+**Root cause.** Identical denial-table shape to wave-3: each recipe's
+`optdepends` described binaries that ship hard-linked. `alsa-plugins`'
+rows all belong to its `alsa-plugins` output (`pulseaudio-alsa` is clean),
+so a split recipe's declarations must land in the block governing the
+output that carries the linking files.
+
+**Fix.** One `depends` entry per owner, evidence-based spellings
+(`expac '%n :: %P'`): openimageio +5 (`ffmpeg` `libjxl` `libultrahdr`
+`onetbb` `qt6-base`), fcitx5-gtk-git +8 (`cairo` `gdk-pixbuf2` `graphene`
+`gtk3` `gtk4` `libx11` `libxkbcommon` `pango`), apr-util +9 (`db` `gdbm`
+`libldap` `mariadb-libs` `nspr` `nss` `openssl` `postgresql-libs`
+`unixodbc`), alsa-plugins +7 (`dbus` `ffmpeg` `jack` `libavtp` `libpulse`
+`libsamplerate` `speexdsp` — `jack` via jack2-git's virtual provide,
+wave-2 precedent), v4l-utils +4 (`alsa-lib` `libgl` `qt6-base`
+`qt6-5compat` — `libgl` the *virtual* over concrete `libglvnd`, house
+capability rule). Matched optdepends retired wholesale (apr-util kept
+`sqlite` — no link; openimageio kept `python`). openimageio's stale
+`qt5-base: iv image viewer` entry died with the finding that shipped `iv`
+links Qt6, not Qt5.
+
+**Validation.** `bash -n` ×5, `.SRCINFO` regenerated per recipe, serial
+rebuild chain (`makepkg -sfC`, one heavy build at a time) with installs
+(alsa-plugins' two output archives in ONE `pacman -U`), scoped
+`gsa --qa-check declared-deps` clean for all five, full archive seam
+clean, full battery **65/65 PASS**. Rule 6 struck again mid-wave:
+openimageio's freshly built tree leaked **two more** rows the pre-build
+sweep could not see (`libPtex.so.2.5`→`ptex`,
+`libopenvdb.so.13.0`→`openvdb` — both already named in the recipe's own
+stale `# TODO: Consider adding these deps` comment); declared, rebuilt,
+gate clean. `qt5-base-git` (9 rows) is deferred out of this wave: its VCS
+rebuild can move Qt's private ABI and drags the coupled consumer batch —
+that belongs to an owner-scheduled ABI wave, not a depend-fix rebuild.
+
+**Durable rules.** (1) The gate seeds its declared closure from the
+**committed `.SRCINFO`**, not the PKGBUILD — regenerate before gating, or
+the verdict is stale (this wave lost a confusion cycle to phantom rows
+from a pre-regen gate run). (2) A pre-build sweep over an *installed*
+payload undercounts whenever the tree moved — the post-build gate is both
+the acceptance gate and the follow-up worklist (openimageio +2), so keep
+the fix→rebuild→gate loop tight and cheap. (3) When the gate names the
+provider in its message, the follow-up is a one-line declare — do not
+re-derive the analysis.
+
 ## 2026-10-15 — wave-3 burn-down: wine/gegl-git/samba/imlib2/pinentry declare 71 leaked links; a split output's internal libs close the loop through a sibling dep
 
 **Symptom.** The installed-set sweep recomputed from the installed payloads

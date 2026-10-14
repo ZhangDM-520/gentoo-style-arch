@@ -16,9 +16,10 @@ pkgbase = v4l-utils
 	depends = libjpeg-turbo
 	depends = systemd-libs
 	depends = json-c
-	optdepends = qt6-base: for qv4l2 and qvidcap
-	optdepends = qt6-5compat: for qv4l2
-	optdepends = alsa-lib: for qv4l2
+	depends = alsa-lib
+	depends = libgl
+	depends = qt6-base
+	depends = qt6-5compat
 	provides = libv4l=1.32.0
 	provides = libdvbv5.so
 	provides = libv4l1.so

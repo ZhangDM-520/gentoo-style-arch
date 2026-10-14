@@ -12,9 +12,18 @@ url="https://apr.apache.org/"
 license=(Apache-2.0)
 depends=(
   apr
+  db
   expat
+  gdbm
   glibc
+  libldap
   libxcrypt
+  mariadb-libs
+  nspr
+  nss
+  openssl
+  postgresql-libs
+  unixodbc
 )
 provides=('libaprutil-1.so')
 makedepends=(
@@ -30,15 +39,7 @@ makedepends=(
   unixodbc
 )
 optdepends=(
-  'gdbm: enable gdbm support'
-  'libldap: enable ldap support'
-  'unixodbc: enable odbc support'
-  'mariadb-libs: enable mysql/mariadb support'
-  'postgresql-libs: enable postgres support'
-  'db: enable berkley db support'
   'sqlite: enable sqlite support'
-  'nss: enable nss crypto support'
-  'openssl: enable openssl crypto support'
 )
 source=(
   "https://www.apache.org/dist/apr/apr-util-$pkgver.tar.bz2"{,.asc}

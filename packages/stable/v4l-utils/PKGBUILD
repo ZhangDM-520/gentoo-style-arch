@@ -15,11 +15,9 @@ replaces=('libv4l')
 conflicts=('libv4l')
 backup=(etc/rc_maps.cfg)
 license=('LGPL')
-depends=('hicolor-icon-theme' 'libgcc' 'libbpf' 'libjpeg-turbo'  'systemd-libs' 'json-c')
+depends=('hicolor-icon-theme' 'libgcc' 'libbpf' 'libjpeg-turbo'  'systemd-libs' 'json-c'
+         'alsa-lib' 'libgl' 'qt6-base' 'qt6-5compat')
 makedepends=('qt6-base' 'qt6-5compat' 'alsa-lib' 'meson' 'clang')
-optdepends=('qt6-base: for qv4l2 and qvidcap'
-            'qt6-5compat: for qv4l2'
-            'alsa-lib: for qv4l2')
 source=(https://linuxtv.org/downloads/v4l-utils/${pkgname}-${pkgver}.tar.xz{,.asc})
 sha256sums=('6828828a17775526eb93fb258a9294d1d1073d633c344dd71ecd4e7a1ffb7dfc'
             'SKIP')
