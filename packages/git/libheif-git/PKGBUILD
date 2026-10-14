@@ -2,21 +2,19 @@
 # AUR reference: libheif-git (Maintainer: Daniel Bermond <dbermond@archlinux.org>)
 pkgname=libheif-git
 _pkgname=libheif
-pkgver=1.23.5.r6.gd035da94
+pkgver=1.23.6.r12.gf223c23c
 pkgrel=1
 pkgdesc="HEIF and AVIF file format decoder and encoder (git build)"
 arch=('x86_64')
 url="https://github.com/strukturag/libheif/"
 license=('LGPL-3.0-or-later' 'MIT')
-depends=('aom' 'gcc-libs' 'glibc' 'libde265' 'libjpeg-turbo' 'libpng'
-         'libstdc++' 'libtiff' 'libwebp' 'openh264' 'x264' 'x265')
+depends=('aom' 'dav1d' 'ffmpeg' 'gcc-libs' 'glibc' 'libde265' 'libjpeg-turbo'
+         'libpng' 'libstdc++' 'libtiff' 'libwebp' 'openh264' 'openjpeg2' 'rav1e'
+         # virtual sdl2: stock sdl2-compat and the house sdl2-git swap both
+         # provide it — a concrete provider name blocks the swap's removal
+         # (run #121 wall, 2026-10-10)
+         'sdl2' 'svt-av1' 'x264' 'x265')
 makedepends=('git' 'cmake' 'dav1d' 'ffmpeg' 'openjpeg2' 'rav1e' 'svt-av1')
-optdepends=(
-    'dav1d: AV1 decoding'
-    'ffmpeg: hardware decode (plugin)'
-    'openjpeg2: JPEG2000 decoding'
-    'rav1e: AV1 encoding'
-    'svt-av1: AV1 encoding')
 provides=("libheif=$pkgver" 'libheif.so')
 conflicts=('libheif')
 source=("git+https://github.com/strukturag/libheif.git")

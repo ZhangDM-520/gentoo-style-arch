@@ -10,13 +10,11 @@ pkgdesc="Application and library for reading bar codes from various sources"
 arch=('x86_64')
 url="https://github.com/mchehab/zbar"
 license=('LGPL-2.1-or-later')
-depends=('dbus' 'imagemagick' 'libxv' 'v4l-utils')
+depends=('dbus' 'gtk3' 'imagemagick' 'libxv' 'qt5-base' 'qt5-x11extras' 'v4l-utils')
 # trim: xmlto + docbook-xsl (man pages — configure auto-disables docs when
 #       xmlto is absent, installed doc/man trimmed in package())
 makedepends=('gtk3' 'qt5-x11extras' 'python' 'gobject-introspection' 'glib2-devel')
-optdepends=('gtk3: for zbar-gtk'
-            'qt5-x11extras: for zbar-qt'
-            'python: for zbar python bindings')
+optdepends=('python: for zbar python bindings')
 # bare soname provides per ELF output: libzbar/libzbargtk/libzbarqt
 # (sonames .so.0 each) + the python zbar module (filename SONAME);
 # conflicts/replaces dropped (house rule)

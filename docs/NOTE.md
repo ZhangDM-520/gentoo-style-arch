@@ -1,3 +1,56 @@
+## 2026-10-15 — wave-5 burn-down: tesseract/libheif-git/zbar/fcitx5-configtool/enchant declare 32 links — and the closure walk's provide-matching is fixed (it worked for one token per walk)
+
+**Symptom.** Next five offenders by rows (`tesseract` 7, `libheif-git` 7,
+`zbar` 6, `fcitx5-configtool` 6, `enchant` 6), same rule-54 shape.
+Mid-wave, `fcitx5-configtool`'s post-build gate flagged its `fcitx5-qt`
+depends entry as never reaching the provider `fcitx5-qt6-git` — although
+that installed package *provides* `fcitx5-qt`, and every other non-work-
+space provider in waves 3–4 had passed.
+
+**Root cause.** Two layers. The packaging layer is the same denial-table
+shape again (per-backend/per-module optdepends over shipped hard links).
+The gate layer is an engine bug in `gsa-qa`'s `declared_closure`: its
+`walked_installed` cycle guard marked every installed package during the
+**first** token's scan and skipped them for all later tokens, so the
+name/provide match against the installed tier ran for at most one token
+per walk. Earlier waves hid it because their non-workspace providers were
+covered by name equality (`depends = pcsclite` covers provider `pcsclite`
+as the "external name it spells"); `fcitx5-qt` → `fcitx5-qt6-git` is the
+first row that needed a provide match — and the walk could not make one.
+
+**Fix.** Packaging: one entry per owner with `expac`-evidenced spellings —
+tesseract +5 (`cairo` `fontconfig` `glib2` `harfbuzz` `pango`, `pango`
+optdepends retired), libheif-git +6 (`dav1d` `ffmpeg` `openjpeg2` `rav1e`
+`svt-av1` + `sdl2` **virtual** with the run-#121 comment; its 5-entry
+optdepends table deleted), zbar +3 (`gtk3` `qt5-base` `qt5-x11extras`; 2
+optdepends retired), fcitx5-configtool +5 (`kcmutils` `kcoreaddons`
+`ki18n` `ksvg` `libplasma`; 3 retired), enchant +6 (`aspell` `hspell`
+`hunspell` `icu` `libvoikko` `nuspell`; the whole backend optdepends
+table deleted). Engine: the installed scan now matches by name/provide
+for **every** token and the walked guard protects only the depends
+recursion (cycle safety unchanged).
+
+**Validation.** Red-first: the new fixture case
+(`tests/recipe-contract.sh` G7 + `db_install_prov` helper writing
+`%PROVIDES%`) failed against the unfixed engine exactly as designed —
+the LIFO seed order starved the virtual token — and passed after the fix
+(`G: declared-deps red/green OK`); `cargo test -p gsa-qa` ok. Causation:
+fcitx5-configtool's same archive and same `fcitx5-qt` spelling flipped
+red→clean across *only* the engine rebuild. Packaging side: `bash -n` ×5,
+`.SRCINFO` regenerated (before gating — the gate seeds from the committed
+one), serial rebuild+install chain, scoped gates clean for all five, full
+archive seam clean, full battery **65/65 PASS**.
+
+**Durable rules.** (1) A recursion-once guard must protect only the
+recursion — putting it in front of the *match* silently converts a
+transitive walk into a first-token-only scan; the fixture G7 pair (virtual
+token seeded first, LIFO queue) pins the shape. (2) Name-equality coverage
+(`depends = <provider-name>`, the "external name it spells" rule) hides
+provide-matching bugs — a capability spelled as a virtual is the test
+case that finds them. (3) Keep capability spellings (`fcitx5-qt`, `sdl2`,
+`libgl`) even when a concrete-name spelling would satisfy a buggy
+verdict: fix the guard, never launder the declaration.
+
 ## 2026-10-15 — wave-4 burn-down: openimageio/fcitx5-gtk-git/apr-util/alsa-plugins/v4l-utils declare 48 leaked links — and the post-build gate grows openimageio's worklist by two
 
 **Symptom.** Next five offenders by rows from the 2026-10-15 installed-set

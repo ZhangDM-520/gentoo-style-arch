@@ -10,10 +10,16 @@ url="https://rrthomas.github.io/enchant/"
 arch=('x86_64')
 license=('LGPL-2.1-or-later')
 depends=(
+  'aspell'
   'glib2'
   'glibc'
+  'hspell'
+  'hunspell'
+  'icu'
   'libgcc'
   'libstdc++'
+  'libvoikko'
+  'nuspell'
 )
 makedepends=(
   'aspell'
@@ -26,13 +32,6 @@ makedepends=(
 )
 # trim: unittestpp (checkdepends) + check()/make check test suite dropped
 #       together (Class B tests)
-optdepends=(
-  'aspell: for aspell based spell checking support'
-  'hspell: for hspell based spell checking support'
-  'hunspell: for hunspell based spell checking support'
-  'libvoikko: for libvoikko based spell checking support'
-  'nuspell: for nuspell based spell checking support'
-)
 # House standard: bare soname provide per ELF output (never pinned) — stock kept.
 provides=('libenchant-2.so')
 source=(

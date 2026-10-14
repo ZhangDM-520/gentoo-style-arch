@@ -1,6 +1,6 @@
 pkgbase = libheif-git
 	pkgdesc = HEIF and AVIF file format decoder and encoder (git build)
-	pkgver = 1.23.5.r6.gd035da94
+	pkgver = 1.23.6.r12.gf223c23c
 	pkgrel = 1
 	url = https://github.com/strukturag/libheif/
 	arch = x86_64
@@ -14,6 +14,8 @@ pkgbase = libheif-git
 	makedepends = rav1e
 	makedepends = svt-av1
 	depends = aom
+	depends = dav1d
+	depends = ffmpeg
 	depends = gcc-libs
 	depends = glibc
 	depends = libde265
@@ -23,14 +25,13 @@ pkgbase = libheif-git
 	depends = libtiff
 	depends = libwebp
 	depends = openh264
+	depends = openjpeg2
+	depends = rav1e
+	depends = sdl2
+	depends = svt-av1
 	depends = x264
 	depends = x265
-	optdepends = dav1d: AV1 decoding
-	optdepends = ffmpeg: hardware decode (plugin)
-	optdepends = openjpeg2: JPEG2000 decoding
-	optdepends = rav1e: AV1 encoding
-	optdepends = svt-av1: AV1 encoding
-	provides = libheif=1.23.5.r6.gd035da94
+	provides = libheif=1.23.6.r12.gf223c23c
 	provides = libheif.so
 	conflicts = libheif
 	source = git+https://github.com/strukturag/libheif.git

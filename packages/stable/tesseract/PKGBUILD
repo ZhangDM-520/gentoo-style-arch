@@ -26,10 +26,14 @@ depends=(
   curl
   libarchive
   leptonica
+  cairo
+  fontconfig
+  glib2
+  harfbuzz
+  pango
 )
 makedepends=(icu pango asciidoc)
-optdepends=('icu: for text2image'
-            'pango: for text2image')
+optdepends=('icu: for text2image')
 for _lang in "${_langs[@]}"; do
   optdepends+=("${_lang/#/tesseract-data-}: OCR data ($_lang)")
 done

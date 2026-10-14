@@ -12,12 +12,10 @@ groups=('fcitx5-im')
 provides=('fcitx5-config-qt' 'kcm-fcitx5' 'libFcitx5Migrator.so')
 # trim: stock conflicts=(kcm-fcitx5) + replaces=(kcm-fcitx5) dropped — house
 # rule (no conflicts/replaces); the kcm-fcitx5 name stays a provides entry
-depends=('fcitx5' 'fcitx5-qt' 'kdbusaddons' 'kwidgetsaddons' 'kitemviews' 'kwindowsystem')
-optdepends=('kcmutils: for KCM support'
-            'kdeclarative: for KCM support'
-            'kirigami: for KCM support'
-            'ksvg: for KCM support'
-            'libplasma: for fcitx5-plasma-theme-generator')
+depends=('fcitx5' 'fcitx5-qt' 'kdbusaddons' 'kwidgetsaddons' 'kitemviews' 'kwindowsystem'
+         'kcmutils' 'kcoreaddons' 'ki18n' 'ksvg' 'libplasma')
+optdepends=('kdeclarative: for KCM support'
+            'kirigami: for KCM support')
 makedepends=('git' 'extra-cmake-modules' 'kcmutils' 'kdeclarative' 'kirigami' 'ksvg' 'libplasma'
              'ninja' 'python')
 source=("git+https://github.com/fcitx/fcitx5-configtool.git#tag=$pkgver?signed")
