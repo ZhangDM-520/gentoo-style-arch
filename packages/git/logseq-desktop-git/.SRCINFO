@@ -1,6 +1,6 @@
 pkgbase = logseq-desktop-git
 	pkgdesc = Privacy-first, open-source platform for knowledge management and collaboration (desktop, git build)
-	pkgver = 2.0.2.r25842.gb51731181
+	pkgver = 2.0.2.r25883.g059ab7fce
 	pkgrel = 1
 	url = https://github.com/logseq/logseq
 	arch = x86_64
@@ -28,6 +28,8 @@ pkgbase = logseq-desktop-git
 	depends = libxss
 	depends = libxtst
 	depends = nss
+	depends = libaio
+	depends = libaio.so
 	optdepends = libappindicator-gtk3: system tray icon
 	optdepends = xdg-utils: open external links in the browser
 	provides = logseq

@@ -134,6 +134,7 @@ pkgname = libvlc
 	depends = dbus
 	depends = glibc
 	depends = libgcc
+	depends = libidn
 	provides = libvlc.so
 	provides = libvlccore.so
 

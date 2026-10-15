@@ -11,7 +11,8 @@ pkgbase = libplist-git
 	makedepends = python-setuptools
 	depends = gcc-libs
 	depends = glibc
-	optdepends = python: Python bindings
+	depends = python
+	depends = libpython3.14.so
 	provides = libplist=2.7.0.r0.gcf5897a
 	provides = libplist-2.0.so
 	provides = libplist++-2.0.so

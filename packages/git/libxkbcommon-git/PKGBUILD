@@ -16,7 +16,7 @@ pkgname=(
   libxkbcommon-x11-git
   libxkbcommon-doc-git
 )
-pkgver=1.14.0.beta2.r18.g66e702d
+pkgver=1.14.0.beta2.r57.gcd0eea20
 pkgrel=1
 pkgdesc='Keymap handling library for toolkits and window systems (git build)'
 url='https://xkbcommon.org/'
@@ -82,10 +82,10 @@ package_libxkbcommon-git() {
     glibc
     libxml2
     xkeyboard-config
+    wayland libwayland-client.so # xkbcli-{dump-keymap,interactive}-wayland
   )
   optdepends=(
     'libxkbcommon-x11-git: xkbcli interactive-x11'
-    'wayland: xkbcli interactive-wayland'
   )
   provides=("libxkbcommon=$pkgver" 'libxkbcommon.so' 'libxkbregistry.so')
   conflicts=('libxkbcommon')

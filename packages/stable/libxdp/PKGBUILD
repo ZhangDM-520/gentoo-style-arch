@@ -74,6 +74,10 @@ package_libxdp() {
 
   # trim: man/doc/locale payload — Class B trim standard (docs/man/locales)
   rm -rf "${pkgdir}"/usr/share/man "${pkgdir}"/usr/share/doc "${pkgdir}"/usr/share/locale
+  # trim: the xdp-tools selftests tree (Class B — tests; the xdp-tools output
+  # deletes the same path). Left untrimmed it shipped test binaries whose
+  # libcap-ng link leaked into this output's closure.
+  rm -rf "${pkgdir}"/usr/share/xdp-tools
 
   install -d "${pkgdir}/usr/share/licenses/${pkgname}"
   install -Dm644 LICENSE LICENSES/* -t "${pkgdir}/usr/share/licenses/${pkgname}"

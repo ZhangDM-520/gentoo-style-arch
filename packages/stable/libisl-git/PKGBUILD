@@ -14,7 +14,8 @@ pkgdesc='Library for manipulating sets and relations of integer points bounded b
 arch=(x86_64)
 url='https://libisl.sourceforge.io/'
 license=(MIT)
-depends=(glibc)
+depends=(glibc
+         gmp) # libgmp.so.10; provider carries no provide to pair with
 makedepends=(git)
 provides=(
   isl

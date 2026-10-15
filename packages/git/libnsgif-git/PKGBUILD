@@ -6,13 +6,14 @@
 # (git.netsurf-browser.org has no https git) — kept as upstream-published.
 
 pkgname=libnsgif-git
-pkgver=1.0.0.r0.g22e99eb681
+pkgver=1.0.0.r8.g22e99eb
 pkgrel=1
 pkgdesc='Decoding library for the gif image file format (git build)'
 url='http://www.netsurf-browser.org/projects/libnsgif/'
 license=('MIT')
 arch=('x86_64')
 makedepends=('git' 'netsurf-buildsystem')
+depends=('glibc') # libc.so.6
 # soname shipped: libnsgif.so.1
 provides=("libnsgif=$pkgver" 'libnsgif.so')
 conflicts=('libnsgif')

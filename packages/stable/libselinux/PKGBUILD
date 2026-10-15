@@ -17,11 +17,11 @@ url='https://github.com/SELinuxProject/selinux'
 license=('libselinux-1.0')
 groups=('selinux')
 makedepends=('pkgconf' 'python' 'python-build' 'python-pip' 'python-setuptools' 'ruby' 'xz' 'swig')
-depends=('libsepol>=3.11' 'pcre2')
+depends=('libsepol>=3.11' 'pcre2'
+         'ruby' 'libruby.so') # ruby bindings (vendor_ruby/…/selinux.so)
 # trim: stock conflicts=("selinux-usr-libselinux") dropped (house: no
 # conflicts/replaces) — the versioned selinux-usr-libselinux provide stays
-optdepends=('python: python bindings'
-            'ruby: ruby bindings')
+optdepends=('python: python bindings')
 provides=("selinux-usr-${pkgname}=${pkgver}-${pkgrel}")
 validpgpkeys=(
   '63191CE94183098689CAB8DB7EF137EC935B0EAF'  # Jason Zaman <perfinion@gentoo.org>

@@ -13,7 +13,8 @@ pkgrel=2
 pkgdesc="Linux Containers"
 arch=('x86_64')
 url="https://linuxcontainers.org"
-depends=('bash' 'perl' 'libseccomp' 'libcap' 'python' 'rsync' 'wget' 'dbus')
+depends=('bash' 'perl' 'libseccomp' 'libcap' 'python' 'rsync' 'wget' 'dbus'
+         'libselinux' 'libselinux.so') # libselinux.so.1 (liblxc, auto-detected)
 makedepends=('docbook2x' 'systemd' 'meson' 'python-setuptools' 'apparmor' 'git')
 # House standard: bare soname provide per ELF output (never pinned).
 # Upstream soname is liblxc.so.1.

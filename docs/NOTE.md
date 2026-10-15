@@ -1,3 +1,78 @@
+## 2026-10-16 — wave-11 burn-down: twelve tail recipes close twelve rows — one trim-beats-declare variant, one dual-generation straggler, one upstream-route park
+
+**Symptom / root cause.** The w10C remainder (53 rows) split into 40
+owner-deferred rows (the ABI/toolchain batches: gcc-snapshot's seventeen
+incl. `lib32-gcc-libs-snapshot`, llvm-git + `llvm-libs-git` four,
+`zen-browser` two (the `zen-browser-pgo` recipe), krita-git five,
+qt5-base-git three, the qt6-speech/declarative/multimedia/quick3d five,
+mesa-git two, glibc-git one, pyside6-git one) and thirteen 1-row tail rows
+— this wave. All rule-54 shape: shipped DT_NEEDED links the recipes never
+declared. Twelve rows land; `libisl-git` parks.
+
+**Fix.** Eleven stamped pairings (name + bare `.so` provide stem, expac-
+evidenced): `python`+`libpython3.14.so` ×2 (libimobiledevice-git,
+libplist-git — their Python bindings ship and link),
+`rdma-core`+`libibverbs.so` (libpcap), `ruby`+`libruby.so` (libselinux —
+only the RUBY binding links; readelf proves the python bindings link no
+libpython, so that frame stays), `gd`+`libgd.so` (libsixel),
+`wayland`+`libwayland-client.so` (libxkbcommon-git main output),
+`libaio`+`libaio.so` (logseq-desktop-git's zvec plugin),
+`libselinux`+`libselinux.so` (lxc), `opus`+`libopus.so` (pipewire MAIN
+output's `libpipewire-module-raop-sink.so`; pipewire-audio already pairs it
+for its own files). Two plain names where the provider carries no provide
+at all: `gmp` (libisl-git), `libidn` (libvlc — auto-detected, recipe never
+mentioned it). `libnsgif-git` declared NO depends at all — it gets the
+house `glibc` line. Four matched optdepends denial-frames retire in the
+same edits (×2 `python: Python bindings`, `ruby: ruby bindings`,
+`wayland: xkbcli interactive-wayland`).
+
+**Variant — trim beats declare (libxdp).** The row's only linker was a
+SHIPPED TEST binary (`/usr/share/xdp-tools/tests/libxdp/test_xsk_non_privileged`
+→ `libcap-ng.so.0`) left behind by `make libxdp_install`, while the sibling
+`xdp-tools` output already `rm -rf`'s the whole `/usr/share/xdp-tools`
+tree. Fix is the Class B tests trim in `package_libxdp`, not a runtime dep
+for a test.
+
+**Straggler (the w9/w10A class, caught by the gate's clean-tail
+assertion).** The pipewire rebuild's MAIN output shipped
+`usr/lib/spa-0.2/aec/libspa-aec-webrtc.so` NEEDing
+`libwebrtc-audio-processing-2.so.1` while the recipe pairs the **v1**
+family (`webrtc-audio-processing-1`) for pipewire-audio's files: both
+generations are installed and meson auto-detect picked v2 for the aec
+module. The scoped gate named the provider and the chain aborted before
+vlc (report-only rc was 0 — the tail assertion is the seal). One-line
+declare `webrtc-audio-processing`+`libwebrtc-audio-processing-2.so`
+(stamped `=1-64`, w10B's exact pair) — declarations follow the MEASURED
+payload.
+
+**Wall — upstream route (libisl-git, parked).** `https://repo.or.cz/isl.git`
+is unreachable through the host route (TLS EOF; github fine, `git://`
+netsurf fine) and SRCDEST holds no `libisl` mirror — the first chain entry
+died in `download_git`. The declare (`gmp`) and `.SRCINFO` regen landed;
+the rebuild+install+gate rides the route's recovery (w7 libcanberra
+precedent). Its one row is the only survivor of this wave's thirteen.
+
+**Validation.** `bash -n` ×13; `.SRCINFO` regenerated per recipe before and
+after build (absorbing VCS `pkgver()` write-backs); serial chain 12/12
+landed (`makepkg -sfC --noconfirm` → ONE `pacman -U --noconfirm --ask 4`
+transaction per recipe — pipewire's ten outputs, vlc's fifty-three,
+libxkbcommon-git's three, xdp-tools' two ride one transaction each),
+scoped `gsa --qa-check declared-deps <id>` asserted `: clean` per id (the
+pipewire straggler reddened exactly this assertion mid-chain and the fix
+re-ran it green). Full archive-seam `qa-check declared-deps: clean`. Fresh
+declgap2.py sweep (896 sections): **53 → 41 rows**, deletions-only —
+twelve closed, zero new rows (the 41 = 40 deferred + libisl-git's parked
+row). Fixture battery **66/66 PASS**.
+
+**Durable rules** (rule 54 amended). (1) When a leaked link's only carrier
+is a shipped TEST tree that the recipe's own sibling output deletes, the
+fix is the trim — a runtime dep for a test binary is the wrong answer
+(libxdp). (2) With two provider generations installed, one build can link
+different modules against different generations (pipewire webrtc v1/v2);
+declarations follow the measured payload and the post-build gate is the
+acceptance, never the pre-build sweep alone. (3) A provider with NO
+provides (`gmp`, `libidn`) can only take the plain name — re-affirmed.
+
 ## 2026-10-15 — scx-scheds-git `makepkg -sif` abort: poisoned shared-SRCDEST worktree after mirror replacement (dangling `lucjan/workbench` ref; no PKGBUILD lever exists)
 
 **Symptom.** `makepkg -sif` in the `~/Workspace` copy of

@@ -195,6 +195,8 @@ package_pipewire() {
     glibc
     libgcc
     ncurses libncursesw.so
+    opus libopus.so # libpipewire-module-raop-sink.so
+    webrtc-audio-processing libwebrtc-audio-processing-2.so # spa-aec-webrtc (build-env straggler)
     readline libreadline.so
     systemd-libs libsystemd.so libudev.so
   )

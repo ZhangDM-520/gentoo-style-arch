@@ -11,6 +11,8 @@ pkgbase = libpcap
 	depends = glibc
 	depends = libnl
 	depends = sh
+	depends = rdma-core
+	depends = libibverbs.so
 	provides = libpcap.so
 	source = git+https://github.com/the-tcpdump-group/libpcap?signed#tag=libpcap-1.11.0
 	validpgpkeys = 1F166A5742ABB9E0249A8D30E089DEF1D9C15D0D
@@ -21,4 +23,6 @@ pkgname = libpcap
 	depends = glibc
 	depends = libnl
 	depends = sh
+	depends = rdma-core
+	depends = libibverbs.so
 	depends = libdbus-1.so

@@ -1168,6 +1168,15 @@
     DT_NEEDED** — a no-SONAME lib (mujs → `/usr/lib/libmujs.so`) records
     the path in the link row; resolution matches by basename (fixed
     2026-10-15).
+    Two wave-11 refinements (2026-10-16): **(d) trim beats declare** —
+    when a leaked link's only carrier is a shipped TEST tree the recipe's
+    own sibling output already deletes (xdp-tools `libxdp`), the Class B
+    tests trim is the fix; a runtime dep for a test binary is the wrong
+    answer. **(e) dual-generation auto-detect drift** — with two provider
+    generations installed, one build can link different modules against
+    different generations (pipewire's aec module picked webrtc v2 while
+    pipewire-audio pairs v1); declarations follow the MEASURED payload and
+    the post-build gate is the acceptance, never the pre-build sweep alone.
 
 55. **A provider SONAME bump needs its direct NEEDED consumers rebuilt in
     the same pass — pacman keeps them installed while they are

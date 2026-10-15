@@ -19,8 +19,9 @@ pkgbase = libselinux
 	makedepends = swig
 	depends = libsepol>=3.11
 	depends = pcre2
+	depends = ruby
+	depends = libruby.so
 	optdepends = python: python bindings
-	optdepends = ruby: ruby bindings
 	provides = selinux-usr-libselinux=3.11-1
 	source = https://github.com/SELinuxProject/selinux/releases/download/3.11/libselinux-3.11.tar.gz
 	source = https://github.com/SELinuxProject/selinux/releases/download/3.11/libselinux-3.11.tar.gz.asc

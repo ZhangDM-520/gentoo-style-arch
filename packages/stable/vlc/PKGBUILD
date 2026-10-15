@@ -390,6 +390,7 @@ package_libvlc() {
     dbus
     glibc
     libgcc
+    libidn # libidn.so.12 (libvlccore, auto-detected; provider carries no provide)
   )
 
   make -C $pkgbase DESTDIR="$srcdir/root" install

@@ -25,7 +25,7 @@
 
 pkgname=logseq-desktop-git
 _pkgname=logseq
-pkgver=2.0.2.r25842.gb51731181
+pkgver=2.0.2.r25883.g059ab7fce
 pkgrel=1
 pkgdesc="Privacy-first, open-source platform for knowledge management and collaboration (desktop, git build)"
 arch=('x86_64')
@@ -49,6 +49,7 @@ depends=(
   'libxss'
   'libxtst'
   'nss'
+  'libaio' 'libaio.so' # libaio.so.1 (zvec diskann plugin)
 )
 optdepends=(
   'libappindicator-gtk3: system tray icon'

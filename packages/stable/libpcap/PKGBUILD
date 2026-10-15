@@ -14,6 +14,7 @@ depends=(
   glibc
   libnl
   sh
+  rdma-core libibverbs.so # libibverbs.so.1 (RDMAD support, auto-detected)
 )
 makedepends=(
   bluez-libs
