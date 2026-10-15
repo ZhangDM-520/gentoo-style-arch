@@ -166,12 +166,25 @@ _pick() {
 
 package_postgresql() {
   depends+=("postgresql-libs>=${pkgver}")
+  # python/tcl/perl: the shipped plpython3.so + hstore/jsonb/ltree_plpython3.so
+  # carry hard DT_NEEDED libpython3.14.so.1.0, pltcl.so carries libtcl9.0.so
+  # and plperl.so (+3) carry libperl.so (rule-54 declared-deps sweep — the
+  # perl half is a sweep blind spot: its RPATH-loaded libperl.so is absent
+  # from ldconfig, found via file ownership) — the former optdepends entries
+  # were denial tables and are retired. Stock spellings (expac-evidenced).
+  # Soname pairing only where the stamp is satisfiable: python's
+  # libpython3.14.so versions to =1.0-64 and python provides exactly that,
+  # but tcl's libtcl9.0.so and perl's libperl.so have no .so.N suffix so
+  # makepkg stamps =libtcl9.0.so-64-style fallbacks no provider carries —
+  # plain names there (2026-10-15 wall).
+  depends+=(
+    python libpython3.14.so
+    tcl
+    perl
+  )
   optdepends=(
     'logrotate: rotates system logs automatically'
-    'perl: for PL/Perl support'
     'postgresql-old-upgrade: upgrade from previous major version using pg_upgrade'
-    'python: for PL/Python 3 support'
-    'tcl: for PL/Tcl support'
   )
   options+=(staticlibs)
   install=postgresql.install

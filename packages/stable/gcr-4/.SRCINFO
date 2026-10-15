@@ -15,11 +15,12 @@ pkgbase = gcr-4
 	depends = glib2
 	depends = glibc
 	depends = gnutls
+	depends = gtk4
 	depends = libp11-kit
 	depends = libsecret
 	depends = openssh
+	depends = pango
 	depends = systemd-libs
-	optdepends = gtk4: gcr-viewer-gtk4
 	provides = libgck-2.so
 	provides = libgcr-4.so
 	source = git+https://gitlab.gnome.org/GNOME/gcr.git?signed#tag=4.4.1

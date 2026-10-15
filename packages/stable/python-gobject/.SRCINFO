@@ -10,6 +10,7 @@ pkgbase = pygobject
 	makedepends = meson
 	makedepends = python-cairo
 	makedepends = python-setuptools
+	depends = cairo
 	depends = glib2
 	depends = glibc
 	depends = gobject-introspection-runtime

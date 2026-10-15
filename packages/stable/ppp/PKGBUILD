@@ -8,7 +8,13 @@ pkgdesc="A daemon which implements the Point-to-Point Protocol for dial-up netwo
 arch=(x86_64)
 url="https://www.samba.org/ppp/"
 license=('GPL-2.0-or-later' 'BSD-3-Clause')
-depends=('glibc' 'libpcap' 'libxcrypt' 'openssl')
+# links: /usr/bin/pppd links libpam.so.0 and the shipped pppoatm.so plugin
+# links libatm.so.1 (declared-deps sweep) — hard DT_NEEDED, not optional.
+# linux-atm carries no soname provides (expac-evidenced), so plain name;
+# pam pairs with its libpam.so virtual per the openssh/shadow idiom.
+depends=('glibc' 'libpcap' 'libxcrypt' 'openssl'
+         'linux-atm'
+         'pam' 'libpam.so')
 makedepends=('git')
 backup=(etc/ppp/{chap-secrets,ip-down,ip-down.d/00-dns.sh,ip-up,ip-up.d/00-dns.sh,ipv6-down,ipv6-up,ipv6-up.d/00-iface-config.sh,options,pap-secrets})
 source=(git+https://github.com/ppp-project/ppp.git?signed#tag=v$pkgver

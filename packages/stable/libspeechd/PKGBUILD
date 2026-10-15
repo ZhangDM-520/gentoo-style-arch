@@ -39,9 +39,15 @@ package_speech-dispatcher() {
   # bare soname provides per ELF output: 5 spd_* dlopen modules (filename
   # SONAMEs); the libspeechd.so library is provided by the libspeechd split
   provides=(spd_{alsa,libao,oss,pipewire,pulse}.so)
-  depends=("libspeechd=$pkgver-$pkgrel" 'python-pyxdg' 'dotconf' 'libpulse' 'libao')
+  depends=("libspeechd=$pkgver-$pkgrel" 'python-pyxdg' 'dotconf' 'libpulse' 'libao'
+           # sd_espeak-ng + sd_espeak-ng-mbrola link libespeak-ng.so.1 (declared-deps
+           # sweep); stock provider carries no libespeak-ng.so provide, so the plain
+           # name — its optdepends entry was a denial table and retires here
+           'espeak-ng'
+           # spd_pipewire links libpipewire-0.3.so.0 (declared-deps sweep); the house
+           # libpipewire split carries its stock name (sibling idiom fluidsynth-git)
+           'libpipewire')
   optdepends=('festival: Speech output using Festival'
-              'espeak-ng: Speech output using ESpeak-ng'
               'pulseaudio: PulseAudio support'
               'pipewire: Pipewire support')
   backup=('etc/speech-dispatcher/clients/emacs.conf'

@@ -1095,6 +1095,9 @@
     only where the provider carries the soname provide (it is auto-versioned
     from NEEDED), plain package name otherwise — `libxres`/
     `libayatana-indicator` provide nothing, so a stem dep is unsatisfiable;
+    and a stem whose soname has no `.so.N` suffix (`libtcl9.0.so`,
+    `libperl.so`) is NEVER pairable: makepkg stamps a `<soname>-64` fallback
+    version no provider carries (2026-10-15 wall) — use the plain name.
     and the plain name is the STOCK name wherever the house provider carries
     it (`glib2` ← glib2-git, `krb5` ← krb5-git — expac-evidenced
     `'%n :: %P'`, 2026-10-15 wave-8 spelling audit), except when two

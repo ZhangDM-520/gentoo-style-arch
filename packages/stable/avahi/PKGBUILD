@@ -17,6 +17,11 @@ depends=(
   gdbm
   glib2
   glibc
+  # gtk3: libavahi-ui-gtk3.so + avahi-discover-standalone/bshell/bssh/bvnc
+  # hard-link libgtk-3.so.0/libgdk-3.so.0 (declared-deps sweep) — hard
+  # DT_NEEDED, so the gtk3 optdepends is retired. Stock spelling: the house
+  # provider gtk3-git carries gtk3 (expac-evidenced).
+  gtk3
   libcap
   libdaemon
   systemd-libs
@@ -36,8 +41,10 @@ makedepends=(
   python-gobject
   systemd
 )
+# gtk3 optdepends retired with the declared-deps fix above: every tool it
+# named (avahi-discover-standalone/bshell/bssh/bvnc, plus avahi-discover via
+# the GI typelibs) hard-requires gtk3, now a hard depends.
 optdepends=(
-  'gtk3: avahi-discover, avahi-discover-standalone, bshell, bssh, bvnc'
   'libevent: libevent bindings'
   'nss-mdns: NSS support for mDNS'
   'python-dbus: avahi-bookmarks, avahi-discover'

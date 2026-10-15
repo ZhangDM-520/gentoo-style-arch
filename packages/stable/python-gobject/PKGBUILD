@@ -15,6 +15,10 @@ url="https://pygobject.gnome.org/"
 arch=(x86_64)
 license=(LGPL-2.1-or-later)
 depends=(
+  # rule 54: gi/_gi_cairo*.so carries hard DT_NEEDED libcairo.so.2 +
+  # libcairo-gobject.so.2 (declared-deps sweep) — not trimmable. Stock
+  # spelling: cairo-git carries cairo (expac-evidenced; sibling idiom hwloc).
+  cairo
   glib2
   glibc
   gobject-introspection-runtime

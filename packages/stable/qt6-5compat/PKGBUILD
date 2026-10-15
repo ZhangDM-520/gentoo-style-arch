@@ -17,13 +17,17 @@ depends=(glibc
          icu
          libstdc++
          qt6-base
+         # GraphicalEffects qml plugins link libQt6Qml.so.6 (x2) +
+         # libQt6Quick.so.6 at runtime (declared-deps sweep) — hard
+         # DT_NEEDED, so the former qt6-declarative optdepends entry
+         # was a denial table and is retired.
+         qt6-declarative
          qt6-shadertools)
 provides=(libQt6Core5Compat.so)
 makedepends=(cmake
              git
              ninja
              qt6-declarative)
-optdepends=('qt6-declarative: for QtGraphicalEffects')
 groups=(qt6)
 _pkgfn=${pkgname/6-/}
 source=(git+https://code.qt.io/qt/$_pkgfn#tag=v$_pkgver)

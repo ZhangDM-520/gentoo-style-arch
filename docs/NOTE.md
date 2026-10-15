@@ -1,3 +1,43 @@
+## 2026-10-15 — wave-9 burn-down: eighteen recipes declare the 2-row tier; two source/dep walls (GitHub patch drift, unsatisfiable no-.N stems)
+
+**Symptom / root cause.** Rows-2 tier minus the ABI/toolchain-coupled
+members: xfsprogs sysprof-git speech-dispatcher qt6-5compat qca(qt6+qt5)
+python-gobject python ppp postgresql libelf-git libdecor-git libart-lgpl
+jdk-openjdk gd gcr-4 fluidsynth-git ffmpeg-git avahi — 38 GAP rows, all
+shipped DT_NEEDED links their recipes never declared. The fleet briefs
+now carry the corrected spelling rule (stock names where the house
+providers carry them) and every report came back expac-evidenced; xfsprogs
+kept the provide-match spelling `icu-git` (.79 generation unprovided by
+stock).
+**Wall 1 — GitHub patch drift (python).** `python-posix-2024.patch` is
+GitHub's mail rendering of pinned commit `927eb448`; its sha512 stopped
+matching what GitHub serves. Verified before re-pinning: patch header
+`From 927eb448…` + subject match the commit, and the diff body is
+byte-identical to `gh api -H Accept:application/vnd.github.v3.diff` of
+the same commit (index lines aside). Rendering drift, not content drift —
+re-pinned with a dated comment. A `.patch` URL is not stable content;
+verify against the content-addressed commit before touching a checksum.
+**Wall 2 — no-.N sonames break the pairing idiom (postgresql).** The
+build stamps a declared `X.so` stem from NEEDED, but a soname without a
+`.so.N` suffix (here `libtcl9.0.so`, also `libperl.so`) falls back to a
+`=libtcl9.0.so-64` version stamp while the provider (`tcl :: libtcl9.0.so`)
+stays unversioned — unsatisfiable, and `pacman -U` refused the archive.
+Plain names for that class; pairing stays where stamp meets provide
+(`libpython3.14.so=1.0-64`). The same pass declared `perl` — plperl.so
+(+3) hard-link the RPATH-loaded `libperl.so` that declgap2.py cannot see
+(no ldconfig entry; the gsa seam gate resolves it by file ownership) —
+and retired the `perl: for PL/Perl` denial-table. Rule 54 amended.
+**Validation.** `bash -n` ×18, `.SRCINFO` regenerated per recipe, serial
+rebuild chain (`makepkg -sfC --noconfirm`, one heavy build at a time) +
+one `pacman -U` per recipe — 18 rebuilt and installed — scoped gates
+clean; the full archive-seam gate then caught one straggler the sweep
+blind spot hid (`elfutils-git` `eu-stackprof` → `libpfm.so.4`; declared
+`libpfm`+`libpfm.so`, rebuilt, gated clean) and the re-run seam is clean;
+fixture battery **65/65 PASS**. Remaining rows sit in the 1-row tail and
+the ABI/toolchain batches (qt5-base-git, qt6-base-git + qt6 consumers,
+krita-git, llvm-git, pyside6-git, mesa-git, zen-browser-pgo, gcc-snapshot
+outputs, glibc-git, rocm-llvm).
+
 ## 2026-10-15 — wave-8 burn-down: sixteen recipes declare 49 links; libcanberra rebuilt from a content-addressed mirror; spelling audit restores the stock-name rule
 
 **Symptom / root cause.** Rows-3 tier of the sweep plus the boost split

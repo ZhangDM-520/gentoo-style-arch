@@ -6,7 +6,7 @@
 # The AUR package of the same name was used as a reference only.
 
 pkgname=ffmpeg-git
-pkgver=8.2.r125668.g70a5df6d27
+pkgver=9.1.dev.r127554.gbc139b7812
 pkgrel=1
 pkgdesc='Complete solution to record, convert and stream audio and video (git version)'
 arch=('x86_64')
@@ -17,6 +17,10 @@ depends=(
   aom
   bzip2
   cairo
+  # libavformat.so.63 links libcurl.so.4 at runtime (declared-deps sweep) —
+  # hard DT_NEEDED auto-detected at build time, not trimmable. Stock spelling:
+  # curl carries libcurl.so=4-64 (expac-evidenced); sibling idiom git-git.
+  curl
   dav1d
   fontconfig
   freetype2
@@ -67,6 +71,10 @@ depends=(
   rubberband
   sdl2
   snappy
+  # libavdevice.so.63 links libsndio.so.7 at runtime (declared-deps sweep) —
+  # hard DT_NEEDED auto-detected at build time, not trimmable. Stock spelling:
+  # sndio carries libsndio.so=7-64 (expac-evidenced); sibling idiom obs-studio.
+  sndio
   speex
   srt
   svt-av1

@@ -7,7 +7,10 @@ pkgdesc="Library for the dynamic creation of images by programmers"
 arch=('x86_64')
 url="https://libgd.github.io/"
 license=('custom')
-depends=('fontconfig' 'libxpm' 'libwebp' 'libavif' 'libheif')
+# libimagequant/libraqm: libgd links libimagequant.so.0.4 + libraqm.so.0 at
+# runtime (declared-deps sweep) — hard DT_NEEDED. Stock spellings: libraqm-git
+# carries libraqm=… and libimagequant is the concrete provider (expac-evidenced).
+depends=('fontconfig' 'libxpm' 'libwebp' 'libavif' 'libheif' 'libimagequant' 'libraqm')
 makedepends=('git')
 optdepends=('perl: bdftogd script')
 checkdepends=('ttf-liberation')

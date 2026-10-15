@@ -10,8 +10,11 @@ pkgdesc="Client-side decorations library for Wayland clients (git build)"
 arch=('x86_64')
 url="https://gitlab.freedesktop.org/libdecor/libdecor"
 license=('MIT')
-depends=('dbus' 'pango' 'wayland')
-makedepends=('git' 'gtk3' 'meson' 'ninja' 'wayland-protocols')
+# libdecor-gtk.so (the GTK plugin the single package() ships) hard-links
+# libgtk-3.so.0 and libgdk-3.so.0, so gtk3 is a runtime link, not a build-only
+# one — not trimmable (rule 54, 2026-10-15 declared-deps sweep)
+depends=('dbus' 'gtk3' 'pango' 'wayland')
+makedepends=('git' 'meson' 'ninja' 'wayland-protocols')
 provides=("libdecor=$pkgver" 'libdecor-0.so')
 conflicts=('libdecor')
 # Track the 0.2 stable-series branch: the 0.2.3-0.2.5 release tags live there

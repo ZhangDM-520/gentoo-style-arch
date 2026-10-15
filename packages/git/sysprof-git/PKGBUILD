@@ -16,7 +16,7 @@ pkgname=(
   sysprof-git
   libsysprof-capture-git
 )
-pkgver=3.40.0+1+g7353f8d
+pkgver=51.0.r15.ga764eb90
 pkgrel=1
 pkgdesc="Kernel based performance profiler (git build)"
 url="https://apps.gnome.org/Sysprof/"
@@ -24,6 +24,12 @@ license=('GPL-3.0-or-later')
 arch=('x86_64')
 depends=(
   cairo
+  # elfutils: the sysprof output links libdebuginfod.so.1 (sysprof,
+  # sysprof-{agent,cat,cli}, libsysprof-6.so* — 7 refs) and libdw.so.1
+  # (/usr/lib/sysprof-live-unwinder) at runtime (declared-deps sweep) —
+  # hard DT_NEEDED. Stock spelling: house elfutils-git carries
+  # elfutils=… + debuginfod=… (expac-evidenced).
+  elfutils
   glib2
   glibc
   graphene

@@ -57,6 +57,8 @@ pkgname = jdk-openjdk
 	depends = libstdc++
 	depends = nss
 	depends = java-environment-common=3
+	depends = alsa-lib
+	depends = libasound.so
 	depends = ca-certificates-utils
 	depends = freetype2
 	depends = harfbuzz
@@ -71,9 +73,9 @@ pkgname = jdk-openjdk
 	depends = liblcms2.so
 	depends = libnet
 	depends = libpng
+	depends = libxtst
 	depends = nss
 	optdepends = java-rhino: for some JavaScript support
-	optdepends = alsa-lib: for basic sound support
 	optdepends = gtk3: for the Gtk+ 3 look and feel - desktop usage
 	provides = java-environment=27
 	provides = java-environment-openjdk=27

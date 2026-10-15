@@ -12,6 +12,12 @@ license=(
 url="https://xfs.wiki.kernel.org"
 depends=(
   device-mapper
+  # icu-git (provide-match, not stock icu): xfs_scrub DT_NEEDED-links
+  # libicui18n.so.79 + libicuuc.so.79, a soname generation only icu-git
+  # ships (stock icu provides =78-64; expac-evidenced) — gcr-4-over-gcr
+  # idiom, sibling sword. The former optdepends 'icu: for xfs_scrub' was
+  # a denial table for exactly this link and is retired (declared-deps sweep).
+  icu-git
   libedit
   libinih
   liburcu
@@ -20,7 +26,6 @@ depends=(
 )
 provides=(libhandle.so)
 optdepends=(
-  'icu: for xfs_scrub'
   'python-dbus: for xfs_scrub_all script'
   'smtp-forwarder: for xfs_scrub_fail script'
 )

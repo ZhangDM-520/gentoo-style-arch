@@ -11,6 +11,10 @@ pkgdesc="A library for high-performance 2D graphics"
 url="https://www.levien.com/libart/"
 arch=('x86_64')
 license=('LGPL')
+# glibc: the shipped libart_lgpl_2.so links libc.so.6 and libm.so.6 at runtime
+# (2026-10-15 declared-deps sweep) — stock spelling: glibc-git carries the
+# glibc name (expac-evidenced).
+depends=('glibc')
 source=("https://download.gnome.org/sources/libart_lgpl/2.3/libart_lgpl-${pkgver}.tar.bz2")
 sha256sums=('fdc11e74c10fc9ffe4188537e2b370c0abacca7d89021d4d303afdf7fd7476fa')
 provides=('libart_lgpl_2.so')

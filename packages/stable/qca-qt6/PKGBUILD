@@ -11,16 +11,20 @@ pkgdesc='Qt Cryptographic Architecture'
 arch=(x86_64)
 url='https://userbase.kde.org/QCA'
 license=(LGPL-2.1-or-later)
-depends=(ca-certificates
+# rule 54: both outputs ship libqca-botan.so / libqca-pkcs11.so linking
+# libbotan-3.so.13 / libpkcs11-helper.so.1 (sweep 2026-10-15, refs=1 each).
+# botan carries no soname provide (expac), so the plain stock name; the
+# pkcs11 pair is the openvpn sibling idiom.
+depends=(botan
+         ca-certificates
          glibc
          libgcc
          libstdc++
-         nss)
-optdepends=('botan: botan plugin'
-            'libgcrypt: gcrypt plugin'
+         nss
+         'pkcs11-helper' 'libpkcs11-helper.so')
+optdepends=('libgcrypt: gcrypt plugin'
             'libsasl: SASL plugin'
-            'openssl: SSL plugin'
-            'pkcs11-helper: PKCS-11 plugin')
+            'openssl: SSL plugin')
 makedepends=(botan
              cmake
              doxygen

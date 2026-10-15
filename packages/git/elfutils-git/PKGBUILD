@@ -4,13 +4,16 @@
 
 pkgbase=elfutils-git
 pkgname=(elfutils-git libelf-git)
-pkgver=0.194.r34.g9129bee5
+pkgver=0.196.r15.g0391c894
 pkgrel=1
 pkgdesc="Utilities and libraries to handle ELF object files and DWARF debugging information (git build)"
 arch=('x86_64')
 url="https://sourceware.org/elfutils/"
 license=('GPL-2.0-or-later AND GPL-3.0-or-later AND LGPL-3.0-or-later')
-depends=('glibc' 'libgcc' 'libstdc++' 'json-c' 'libarchive.so' 'libbz2.so' 'libcurl.so' 'liblzma.so' 'libmicrohttpd.so' 'libsqlite3.so' 'libz.so' 'libzstd.so' 'sh')
+# libpfm: eu-stackprof hard-links libpfm.so.4 (rule-54; surfaced by the
+# gsa seam gate 2026-10-15 — the declgap2.py sweep misses RPATH/ldconfig-
+# invisible links).
+depends=('glibc' 'libgcc' 'libstdc++' 'json-c' 'libpfm' 'libpfm.so' 'libarchive.so' 'libbz2.so' 'libcurl.so' 'liblzma.so' 'libmicrohttpd.so' 'libsqlite3.so' 'libz.so' 'libzstd.so' 'sh')
 makedepends=('bzip2' 'curl' 'git' 'libarchive' 'libmicrohttpd' 'sqlite' 'xz' 'zlib' 'zstd')
 options=('staticlibs')
 source=("git+https://sourceware.org/git/elfutils.git")
@@ -86,7 +89,10 @@ package_elfutils-git() {
 
 package_libelf-git() {
   pkgdesc="Libraries to handle ELF object files (git build)"
-  depends=('glibc')
+  # zlib/zstd: libelf.so + libelf.so.1 carry DT_NEEDED libz.so.1 + libzstd.so.1
+  # (declared-deps sweep) — stock+soname pairing per curl/file/mariadb-libs;
+  # expac: zlib-ng-compat-git :: zlib libz.so=1-64, zstd-git :: zstd libzstd.so=1-64
+  depends=('glibc' 'zlib' 'libz.so' 'zstd' 'libzstd.so')
   provides=("libelf=$pkgver" 'libelf.so')
   conflicts=('libelf')
   backup=()

@@ -8,13 +8,19 @@ pkgdesc="A library for bits of crypto UI and parsing"
 url="https://gitlab.gnome.org/GNOME/gcr"
 arch=(x86_64)
 license=(LGPL-2.1-or-later)
+# gtk4/pango: gcr-viewer-gtk4 hard-links libgtk-4.so.1 + libpango-1.0.so.0
+# at runtime (declared-deps sweep) — hard DT_NEEDED, so the former gtk4
+# optdepends is retired. Stock spellings: the house -git providers carry
+# these names (expac-evidenced: gtk4-git :: gtk4=…, pango-git :: pango).
 depends=(
   glib2
   glibc
   gnutls
+  gtk4
   libp11-kit
   libsecret
   openssh
+  pango
   systemd-libs
 )
 makedepends=(
@@ -26,7 +32,6 @@ makedepends=(
   systemd
   vala
 )
-optdepends=('gtk4: gcr-viewer-gtk4')
 # trim: gcr-4-docs split + gi-docgen makedep dropped together with
 #       -D gtk_doc=false below and the doc staging move in package() (docs)
 # House standard: bare soname provides per ELF output (never pinned) — stock kept.

@@ -204,9 +204,16 @@ check() {
 
 package_jdk-openjdk() {
   pkgdesc="OpenJDK Java ${_majorver} development kit"
+  # rule 54: libjsound.so links libasound.so.2 and libawt_xawt.so links
+  # libXtst.so.6 at runtime (declared-deps sweep) — hard DT_NEEDED, so the
+  # former 'alsa-lib: for basic sound support' optdepends entry was a denial
+  # table and is retired. Stock spellings (expac-evidenced): the house
+  # providers carry these names; alsa-lib paired with its soname per sibling
+  # idiom (libao/alsa-utils/pipewire), libxtst bare per sibling idiom.
   depends=(
     "${_commondeps[@]}"
     'java-environment-common=3'
+    alsa-lib libasound.so
     ca-certificates-utils
     freetype2
     harfbuzz
@@ -221,11 +228,11 @@ package_jdk-openjdk() {
     liblcms2.so
     libnet
     libpng
+    libxtst
     nss
   )
   optdepends=(
     'java-rhino: for some JavaScript support'
-    'alsa-lib: for basic sound support'
     'gtk3: for the Gtk+ 3 look and feel - desktop usage'
   )
   # stock's pinned virtual provides restored (2026-10-09 run #93 family):

@@ -1,6 +1,6 @@
 pkgbase = sysprof-git
 	pkgdesc = Kernel based performance profiler (git build)
-	pkgver = 3.40.0+1+g7353f8d
+	pkgver = 51.0.r15.ga764eb90
 	pkgrel = 1
 	url = https://apps.gnome.org/Sysprof/
 	arch = x86_64
@@ -10,6 +10,7 @@ pkgbase = sysprof-git
 	makedepends = meson
 	makedepends = yelp-tools
 	depends = cairo
+	depends = elfutils
 	depends = glib2
 	depends = glibc
 	depends = graphene
@@ -32,6 +33,7 @@ pkgbase = sysprof-git
 pkgname = sysprof-git
 	groups = gnome-extra
 	depends = cairo
+	depends = elfutils
 	depends = glib2
 	depends = glibc
 	depends = graphene
@@ -48,13 +50,13 @@ pkgname = sysprof-git
 	depends = pango
 	depends = polkit
 	depends = systemd-libs
-	depends = libsysprof-capture-git=3.40.0+1+g7353f8d-1
-	provides = sysprof=3.40.0+1+g7353f8d
+	depends = libsysprof-capture-git=51.0.r15.ga764eb90-1
+	provides = sysprof=51.0.r15.ga764eb90
 	conflicts = sysprof
 
 pkgname = libsysprof-capture-git
 	pkgdesc = Kernel based performance profiler (git build) - capture library (git build)
 	license = BSD-2-Clause-Patent
 	depends = 
-	provides = libsysprof-capture=3.40.0+1+g7353f8d
+	provides = libsysprof-capture=51.0.r15.ga764eb90
 	conflicts = libsysprof-capture

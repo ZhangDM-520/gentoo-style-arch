@@ -1,13 +1,17 @@
 # Maintainer: carstene1ns <arch carsten-teibes de> - http://git.io/ctPKG
 
 pkgname=fluidsynth-git
-pkgver=1.1.8.r868.e485129
+pkgver=2.6.1.r3480.ae31c514
 pkgrel=1
 pkgdesc="A real-time software synthesizer based on the SoundFont 2 specifications (development version)"
 arch=('i686' 'x86_64')
 url="http://www.fluidsynth.org/"
 license=('LGPL')
-depends=('glib2' 'jack' 'libpulse' 'alsa-lib' 'ladspa')
+depends=('glib2' 'jack' 'libpulse' 'alsa-lib' 'ladspa'
+         # fluidsynth + libfluidsynth.so* all NEEDED libpipewire-0.3.so.0 (PipeWire driver; declared-deps sweep)
+         'libpipewire'
+         # the same four files NEEDED libSDL3.so.0 (SDL driver; declared-deps sweep)
+         'sdl3')
 makedepends=('git' 'cmake')
 optdepends=('pulseaudio: PulseAudio sound support')
 conflicts=('fluidsynth')
