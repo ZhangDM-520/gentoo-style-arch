@@ -10,13 +10,17 @@ arch=('x86_64')
 license=('GPL-2.0-or-later')
 url='https://git.kernel.org/pub/scm/network/iproute2/iproute2.git'
 depends=('glibc'
+         'db' # libdb-6.2.so (arpd)
          'libxtables.so' # from iptables or iptables-legacy
          'libcap' 'libcap.so'
          'libelf'
-         'libbpf' 'libbpf.so')
-makedepends=('git' 'db' 'linux-atm' 'iptables')
-optdepends=('db: userspace arp daemon'
-            'linux-atm: ATM support'
+         'libbpf' 'libbpf.so'
+         # libselinux/libselinux.so: ip and ss hard-link libselinux.so.1 when
+         # libselinux is present at build time (straggler row surfaced by the
+         # w10C rebuild); libselinux carries stamped libselinux.so=1-64.
+         'libselinux' 'libselinux.so')
+makedepends=('git' 'linux-atm' 'iptables')
+optdepends=('linux-atm: ATM support'
             'python: for routel')
 provides=('iproute')
 options=('!emptydirs')

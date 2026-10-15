@@ -91,6 +91,12 @@ package_libblockdev() {
     glib2 libglib-2.0.so libgio-2.0.so libgobject-2.0.so
     glibc
     kmod libkmod.so
+    # libbytesize/libbytesize.so: usr/bin/lvm-cache-stats hard-links
+    # libbytesize.so.1 (declared-deps sweep, 1 ref). Stock+soname pairing
+    # per evince/gstreamer: libbytesize carries the stamped
+    # libbytesize.so=1-64 provide (expac-evidenced), so the declared
+    # libbytesize.so stem stamps to the same pair and both sides meet.
+    libbytesize libbytesize.so
     systemd-libs libudev.so
   )
   optdepends=(

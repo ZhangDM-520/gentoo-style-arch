@@ -6,13 +6,13 @@
 pkgname=jack2-git
 _pkgname=jack2
 epoch=2
-pkgver=1.9.22.r41.g1795946
+pkgver=1.9.22.r41.g17959465
 pkgrel=1
 pkgdesc="The JACK low-latency audio server (git build)"
 arch=('x86_64')
 url="https://github.com/jackaudio/jack2"
 license=('GPL-2.0-or-later' 'LGPL-2.1-or-later')
-depends=('alsa-lib' 'db5.3' 'dbus' 'expat' 'glibc' 'libgcc' 'libsamplerate' 'libstdc++' 'opus' 'systemd-libs')
+depends=('alsa-lib' 'db5.3' 'dbus' 'expat' 'glibc' 'libgcc' 'portaudio' 'libportaudio.so' 'libsamplerate' 'libstdc++' 'opus' 'systemd-libs')
 makedepends=('git' 'waf')
 # One output supersedes stock jack2 + jack2-dbus (dbus integration merged in);
 # stock jack2-docs is dropped (doxygen docs trimmed).

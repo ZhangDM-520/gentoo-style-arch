@@ -13,6 +13,8 @@ depends=(
   glibc
   glu
   libglvnd
+  libheif-git
+  libheif.so
   libjpeg-turbo
 )
 makedepends=(

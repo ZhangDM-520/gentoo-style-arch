@@ -2,13 +2,13 @@
 # AUR reference: libei-git (Maintainer: PisonJay <PisonJay@outlook.com>)
 pkgname=libei-git
 _pkgname=libei
-pkgver=1.6.0.r0.g82cdbc9
+pkgver=1.6.0.r35.ga9bf31d
 pkgrel=1
 pkgdesc="Library for Emulated Input (git build)"
 arch=('x86_64')
 url="https://gitlab.freedesktop.org/libinput/libei"
 license=('MIT')
-depends=('gcc-libs' 'glibc' 'libevdev' 'systemd-libs')
+depends=('gcc-libs' 'glibc' 'libevdev' 'libxkbcommon-git' 'libxkbcommon.so' 'systemd-libs')
 # python-dbusmock/python-pytest/python-structlog dropped: test-only and
 # tests are disabled below
 makedepends=('git' 'meson' 'libxkbcommon' 'python-attrs' 'python-jinja' 'python-yaml')

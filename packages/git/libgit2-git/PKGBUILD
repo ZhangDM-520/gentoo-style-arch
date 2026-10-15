@@ -19,7 +19,10 @@ arch=('x86_64')
 url="https://libgit2.github.com/"
 license=('LicenseRef-GPL-2.0-only-with-linking-exception')
 # AUR ref depends on http-parser: stale; upstream switched to llhttp (stock dep)
-depends=('gcc-libs' 'glibc' 'llhttp' 'zlib' 'libssh2' 'openssl' 'pcre2')
+# pcre/libpcre.so: sweep row libpcre.so.1 refs=4 (rule-54 declared-deps) —
+# pcre1, not the pcre2 above: pcre carries stamped libpcre.so=1-64
+# (expac-evidenced), so pairing spelling where stamp meets provide.
+depends=('gcc-libs' 'glibc' 'llhttp' 'zlib' 'libssh2' 'openssl' 'pcre2' 'pcre' 'libpcre.so')
 makedepends=('git' 'cmake')
 provides=("libgit2=$pkgver" 'libgit2.so')
 conflicts=('libgit2')

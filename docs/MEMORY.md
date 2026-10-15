@@ -1098,6 +1098,13 @@
     and a stem whose soname has no `.so.N` suffix (`libtcl9.0.so`,
     `libperl.so`) is NEVER pairable: makepkg stamps a `<soname>-64` fallback
     version no provider carries (2026-10-15 wall) — use the plain name.
+    The declared stem is the **provide name ending exactly in `.so`**
+    (`libpcre.so`), never the NEEDED soname (`libpcre.so.1`):
+    `find_libdepends` stamps only deps matching `case *.so`, deriving
+    `libfoo.so=<soversion>-<soarch>` from NEEDED, so an `X.so.N` dep ships
+    unversioned and satisfies nothing (`pacman -T` confirms
+    `libSDL2-2.0.so.0` unsatisfiable while `libSDL2-2.0.so` resolves —
+    2026-10-15 w10C wall).
     A stem is likewise unsatisfiable when the provider's provide is
     **bare/unstamped**: makepkg stamps the declared stem from NEEDED
     (`libdebuginfod.so` → `libdebuginfod.so=1-64`) and a bare

@@ -27,3 +27,5 @@ pkgname = libao
 	depends = libpulse
 	depends = libpulse.so
 	depends = libpulse-simple.so
+	depends = sndio
+	depends = libsndio.so

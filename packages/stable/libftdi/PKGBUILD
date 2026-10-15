@@ -15,6 +15,14 @@ depends=(
   sh
   libusb
   confuse
+  # python/libpython3.14.so: the shipped python bindings (PYTHON_BINDINGS=ON,
+  # LINK_PYTHON_LIBRARY=ON) hard-link libpython3.14.so.1.0 — hard DT_NEEDED,
+  # so the 'python: library bindings' optdepends is retired. Stock+soname
+  # pairing (wave-10B rule): python carries the stamped libpython3.14.so=1.0-64
+  # provide (expac-evidenced) and makepkg stamps the declared stem from NEEDED
+  # to the same stamp — both sides stamped.
+  python
+  libpython3.14.so
 )
 makedepends=(
   boost
@@ -24,7 +32,6 @@ makedepends=(
   python
   python-setuptools
 )
-optdepends=('python: library bindings')
 provides=(libftdi.so
           libftdipp.so)
 #source=("$pkgname::git+")

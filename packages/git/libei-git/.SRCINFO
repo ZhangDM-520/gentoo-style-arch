@@ -1,6 +1,6 @@
 pkgbase = libei-git
 	pkgdesc = Library for Emulated Input (git build)
-	pkgver = 1.6.0.r0.g82cdbc9
+	pkgver = 1.6.0.r35.ga9bf31d
 	pkgrel = 1
 	url = https://gitlab.freedesktop.org/libinput/libei
 	arch = x86_64
@@ -14,8 +14,10 @@ pkgbase = libei-git
 	depends = gcc-libs
 	depends = glibc
 	depends = libevdev
+	depends = libxkbcommon-git
+	depends = libxkbcommon.so
 	depends = systemd-libs
-	provides = libei=1.6.0.r0.g82cdbc9
+	provides = libei=1.6.0.r35.ga9bf31d
 	provides = libei.so
 	provides = libeis.so
 	provides = liboeffis.so

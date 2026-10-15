@@ -1,3 +1,57 @@
+## 2026-10-15 — wave-10C burn-down: thirteen rows, twelve pairings and one plain name; the stem-spelling wall (`X.so` provide name, never the `X.so.N` soname)
+
+**Symptom / root cause.** 1-row tier batch three: hplip iproute2 jack2-git
+jasper kio libao libayatana-appindicator-git libblockdev libde265 libei-git
+libfido2-git libftdi libgit2-git — thirteen GAP rows, twelve PKGBUILD edits.
+One row needed **no edit**: libayatana-appindicator-git→`libayatana-indicator`
+was already declared (`af9e9f1`, 2026-10-14) — same stale-installed class as
+w10B's at-spi2-core-git/flatpak-git rows; the rebuild alone closed it.
+Eleven rows declare stamped pairings (plain name + bare `.so` provide stem):
+`sane`+`libsane.so`, `portaudio`+`libportaudio.so`, `libheif-git`+`libheif.so`,
+`kdoctools`+`libKF6DocTools.so`, `sndio`+`libsndio.so`,
+`libbytesize`+`libbytesize.so` (libblockdev core split),
+`sdl2`+`libSDL2-2.0.so`, `libxkbcommon-git`+`libxkbcommon.so`,
+`pcsclite`+`libpcsclite.so`, `python`+`libpython3.14.so`,
+`pcre`+`libpcre.so` (pcre1, not the pcre2 already declared). iproute2 is the
+one plain-name row: `db` carries **no provide at all** (expac-evidenced), so
+the pairing branch is impossible and `db` declares the link. Five matched
+`optdepends` denial-frames retire in the same edits (hplip `sane: for scanner
+support`, iproute2 `db: userspace arp daemon` + its makedepends entry,
+kio `kdoctools: for the help kioslave`, libde265 `sdl2: for the decoder
+tool`, libftdi `python: library bindings`).
+
+**Wall — stem spelling (rule 54 amended).** The declared stem is the
+provider's **provide name ending exactly in `.so`** (`libpcre.so`), never the
+NEEDED soname (`libpcre.so.1`). makepkg `find_libdepends` stamps only deps
+matching `case "$d" in *.so)`, deriving `soname="${sofile%.so?(+(.+([0-9])))}".so`
+and stamping `libfoo.so=<soversion>-<soarch>` from NEEDED; an `X.so.N` dep
+falls through unversioned and satisfies nothing. First-pass briefs carried
+the wrong example and six recipes landed `X.so.N` forms before two fix
+agents (libblockdev, libgit2-git) caught the mismatch against `/usr/bin/makepkg`
+and in-tree precedents (evince `kpathsea`+`libkpathsea.so`, gstreamer
+`webrtc-audio-processing`+`libwebrtc-audio-processing-2.so`); all six were
+corrected to the pairing form before the chain. `pacman -T` corroborates:
+`libSDL2-2.0.so.0` unsatisfiable, `libSDL2-2.0.so` resolves.
+
+**Straggler — build-env-dependent link (iproute2).** The rebuild surfaced a
+row absent from the installed snapshot: `usr/bin/ip` and `usr/bin/ss` hard
+-link `libselinux.so.1` whenever libselinux is present at build time, and the
+declared closure never reached `libselinux`. Fixed with the
+`libselinux`+`libselinux.so` pairing (stamped `libselinux.so=1-64`). The
+scoped gate's **tail** assertion caught it — the report-only rc was 0 with
+two findings, re-proving the w10B seal lesson: a gate asserts
+`qa-check declared-deps: clean`, never the exit code.
+
+**Validation.** `bash -n` ×13; `.SRCINFO` regenerated per recipe after build
+(absorbing `pkgver()` write-back); serial chain 13/13 — `makepkg -sfC
+--noconfirm`, one `pacman -U --noconfirm --ask 4` per recipe (libblockdev's
+ten outputs as one transaction), scoped gate clean per id — then full
+archive-seam `qa-check declared-deps: clean`. Fresh declgap2.py sweep (896
+sections): **66 → 53 rows**, every w10C row gone and the diff against w10B
+is deletions-only — zero new rows. Fixture battery **65/65 PASS**. The
+`downgrading … -1.1 => -1` install warnings from w10B persist unchanged
+(established anomaly, provenance still unaccounted).
+
 ## 2026-10-15 — wave-10B burn-down: ten recipes declare twelve links; two stale rows clear on rebuild; two walls (flatpak meson option drift, gdb's stamped-stem/bare-provide mismatch)
 
 **Symptom / root cause.** 1-row tier batch two: at-spi2-core-git binutils

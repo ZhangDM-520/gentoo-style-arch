@@ -11,13 +11,19 @@ url='https://github.com/strukturag/libde265'
 license=(LGPL-3.0-or-later)
 depends=(glibc
          libgcc
-         libstdc++)
+         libstdc++
+         # sdl2/libSDL2-2.0.so: the decoder tool hard-links libSDL2-2.0.so.0
+         # (declared-deps sweep) — hard DT_NEEDED, so the optdepends is
+         # retired. Stock+soname pairing per evince/gstreamer: the sdl2-git
+         # (or sdl2-compat) swap carries stamped libSDL2-2.0.so=0-64
+         # (expac-evidenced).
+         sdl2
+         libSDL2-2.0.so)
 makedepends=(cmake
              git
              # virtual sdl2: sdl2-compat and the house sdl2-git swap both
              # provide it — a concrete name would block the swap (run #121)
              sdl2)
-optdepends=('sdl2: for the decoder tool')
 provides=(libde265.so)
 source=(git+https://github.com/strukturag/libde265#tag=v$pkgver)
 sha256sums=('15b35cc5ed154a31bd825bb22d033d9bb93663d1f85ba971ff04b41a239c99a3')

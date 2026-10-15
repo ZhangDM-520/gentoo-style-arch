@@ -1,6 +1,6 @@
 pkgbase = jack2-git
 	pkgdesc = The JACK low-latency audio server (git build)
-	pkgver = 1.9.22.r41.g1795946
+	pkgver = 1.9.22.r41.g17959465
 	pkgrel = 1
 	epoch = 2
 	url = https://github.com/jackaudio/jack2
@@ -15,6 +15,8 @@ pkgbase = jack2-git
 	depends = expat
 	depends = glibc
 	depends = libgcc
+	depends = portaudio
+	depends = libportaudio.so
 	depends = libsamplerate
 	depends = libstdc++
 	depends = opus
@@ -24,7 +26,7 @@ pkgbase = jack2-git
 	optdepends = libffado: for firewire support using FFADO
 	optdepends = python-dbus: for the jack_control script
 	optdepends = realtime-privileges: for realtime privileges
-	provides = jack2=1.9.22.r41.g1795946
+	provides = jack2=1.9.22.r41.g17959465
 	provides = jack
 	provides = jack2-dbus
 	provides = libjack.so

@@ -59,6 +59,11 @@ package() {
   depends+=(
     alsa-lib libasound.so
     libpulse libpulse.so libpulse-simple.so
+    # sndio: the shipped payload hard-links libsndio.so.7 (declared-deps
+    # sweep, refs=1) — configure links the sndio backend when present, so
+    # the link is not trimmable. sndio carries libsndio.so=7-64
+    # (expac-evidenced); the bare stem stamps from NEEDED to the same pair.
+    sndio libsndio.so
   )
 
   cd $pkgname-$pkgver

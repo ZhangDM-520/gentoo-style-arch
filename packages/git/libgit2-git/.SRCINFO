@@ -14,6 +14,8 @@ pkgbase = libgit2-git
 	depends = libssh2
 	depends = openssl
 	depends = pcre2
+	depends = pcre
+	depends = libpcre.so
 	provides = libgit2=1.9.7.r0.g49e408b32
 	provides = libgit2.so
 	conflicts = libgit2

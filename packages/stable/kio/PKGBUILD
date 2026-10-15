@@ -20,6 +20,7 @@ depends=(acl
          kcoreaddons
          kcrash
          kdbusaddons
+         kdoctools
          kguiaddons
          ki18n
          kiconthemes
@@ -29,19 +30,20 @@ depends=(acl
          kwallet
          kwidgetsaddons
          kwindowsystem
+         libKF6DocTools.so
          libxml2
          libxslt
          qt6-base
          solid
          util-linux-libs)
-# trim: doxygen + kdoctools dropped (API docs and the DocBook handbook are
-# not built — KF6DocTools is found non-REQUIRED and the docs/ subdirectory is
-# skipped when it is absent; kdoctools stays an optdepend for the help kioslave)
+# trim: doxygen dropped (API docs and the DocBook handbook are not built —
+# KF6DocTools is found non-REQUIRED and the docs/ subdirectory is skipped when
+# it is absent); kdoctools + libKF6DocTools.so pairing is declared because the
+# built binaries link libKF6DocTools.so.6 (help kioslave) at runtime
 makedepends=(extra-cmake-modules
              qt6-tools)
 optdepends=('audiocd-kio: for accessing audio CDs'
             'kded: proxy management and cookie storage'
-            'kdoctools: for the help kioslave'
             'kio-extras: extra protocols support (sftp, fish and more)'
             'kio-fuse: to mount remote filesystems via FUSE'
             'switcheroo-control: hybrid GPU support')
