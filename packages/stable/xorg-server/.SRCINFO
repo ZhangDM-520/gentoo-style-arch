@@ -110,6 +110,10 @@ pkgname = xorg-server-xephyr
 	depends = libxau
 	depends = libxshmfence
 	depends = glibc
+	depends = libbsd
+	depends = libmd
+	depends = libselinux
+	depends = audit
 
 pkgname = xorg-server-xvfb
 	pkgdesc = Virtual framebuffer X server
@@ -128,6 +132,10 @@ pkgname = xorg-server-xvfb
 	depends = sh
 	depends = glibc
 	depends = libxau
+	depends = libbsd
+	depends = libmd
+	depends = libselinux
+	depends = audit
 
 pkgname = xorg-server-xnest
 	pkgdesc = A nested X server that runs as an X application
@@ -143,6 +151,10 @@ pkgname = xorg-server-xnest
 	depends = glibc
 	depends = libx11
 	depends = libxau
+	depends = libbsd
+	depends = libmd
+	depends = libselinux
+	depends = audit
 
 pkgname = xorg-server-common
 	pkgdesc = Xorg server common files

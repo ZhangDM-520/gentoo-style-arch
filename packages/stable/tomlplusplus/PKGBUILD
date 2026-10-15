@@ -8,9 +8,13 @@ pkgdesc="TOML config file parser and serializer for C++17"
 arch=(x86_64)
 url="https://marzer.github.io/tomlplusplus/"
 license=(MIT)
+# rule 54: the shipped libtomlplusplus.so links the toolchain runtime
+# (libstdc++.so.6) — not trimmable
 depends=(
   glibc
   libgcc
+  libstdc++
+  libstdc++.so
 )
 makedepends=(cmake meson)
 provides=(libtomlplusplus.so)

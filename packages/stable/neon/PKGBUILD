@@ -15,6 +15,10 @@ depends=(
   expat
   glibc
   krb5
+  # libproxy: proxy support auto-detected at build time and the shipped lib
+  # hard-links libproxy.so.1 (rule-54 declared-deps sweep) — libproxy-git
+  # carries stock libproxy + libproxy.so=1-64 (expac-evidenced). Not trimmable.
+  libproxy libproxy.so
   openssl
   zlib
 )

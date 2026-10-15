@@ -10,7 +10,7 @@ pkgdesc='Graph visualization software'
 url='https://www.graphviz.org/'
 license=('EPL')
 arch=('x86_64')
-depends=('libltdl' 'gd' 'librsvg' 'ghostscript' 'pango' 'gts' 'gsfonts'
+depends=('libltdl' 'gd' 'librsvg' 'ghostscript' 'pango' 'gts' 'gsfonts' 'aalib'
          'guile' 'lua' 'qt6-base' 'poppler-glib' 'r' 'ruby')
 # bare soname provides for every sonamed ELF output (core libs + gvplugin
 # loadable plugins); the swig/luarocks binding modules carry no sonames

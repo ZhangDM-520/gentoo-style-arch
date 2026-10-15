@@ -33,7 +33,8 @@ makedepends=(
   zlib
 )
 optdepends=(
-  'libfido2: FIDO/U2F support'
+  # libfido2 entry retired with the declared-deps fix above: the shipped
+  # binaries hard-link libfido2.so.1, so FIDO/U2F support is a hard depends
   'sh: for ssh-copy-id and findssl.sh'
   'x11-ssh-askpass: input passphrase in X'
   'xorg-xauth: X11 forwarding'
@@ -148,9 +149,13 @@ check() {
 }
 
 package() {
+  # libfido2 + libfido2.so: the shipped binaries hard-link libfido2.so.1
+  # (declared-deps sweep) — hard DT_NEEDED, not the optional feature the
+  # retired optdepends entry claimed (rule 54)
   depends+=(
     krb5 libkrb5.so libgssapi_krb5.so
     libedit libedit.so
+    libfido2 libfido2.so
     libxcrypt libcrypt.so
     openssl libcrypto.so
     pam libpam.so

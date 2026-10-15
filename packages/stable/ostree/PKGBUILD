@@ -114,12 +114,15 @@ check() {
 }
 
 package() {
+  # libselinux + libselinux.so: libostree-1.so hard-links libselinux.so.1
+  # (declared-deps sweep) — auto-detected SELinux support, not trimmable (rule 54)
   depends+=(
     avahi libavahi-client.so libavahi-common.so libavahi-glib.so
     curl libcurl.so
     glib2 libgio-2.0.so libglib-2.0.so libgobject-2.0.so
     gpgme libgpgme.so
     libarchive libarchive.so
+    libselinux libselinux.so
     openssl libcrypto.so
     systemd-libs libsystemd.so
     xz liblzma.so

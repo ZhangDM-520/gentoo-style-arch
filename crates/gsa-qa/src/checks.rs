@@ -806,13 +806,24 @@ pub fn declared_deps(input: &QaInput<'_>) -> CheckResult {
         );
         for (member, _, needs) in &members {
             for soname in needs {
-                if shipped.iter().any(|s| s == soname) {
+                // A DT_NEEDED row can spell a full path when the linked
+                // library has no SONAME — the linker records the path the
+                // library was found at (e.g. /usr/lib/libmujs.so). The
+                // resolution tiers match SONAME spellings, so resolve such a
+                // need by its basename while the finding keeps reporting the
+                // raw row.
+                let lookup = std::path::Path::new(soname.as_str())
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| soname.clone());
+                if shipped.iter().any(|s| s == &lookup) {
                     continue;
                 }
-                if abi::base_lib_ok(soname) {
+                if abi::base_lib_ok(&lookup) {
                     continue;
                 }
-                if abi::excluded(input.exclusions, soname) {
+                if abi::excluded(input.exclusions, soname) || abi::excluded(input.exclusions, &lookup)
+                {
                     continue;
                 }
                 let subject = format!("consumer {} ({member})", archive.recipe_id);
@@ -820,12 +831,12 @@ pub fn declared_deps(input: &QaInput<'_>) -> CheckResult {
                 // consulted first, the installed truth (provides + owned
                 // files) second — the first tier that explains the soname
                 // decides alone.
-                let mut providers = workspace_providers(input, soname);
+                let mut providers = workspace_providers(input, &lookup);
                 if providers.is_empty() {
-                    providers = installed_providers(input, soname);
+                    providers = installed_providers(input, &lookup);
                 }
                 if providers.is_empty() {
-                    let stem = abi::soname_stem(soname).unwrap_or(soname);
+                    let stem = abi::soname_stem(&lookup).unwrap_or(&lookup);
                     result = result.with(
                         subject,
                         format!(
@@ -912,11 +923,35 @@ fn declared_closure(
     let mut walked: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut walked_installed: std::collections::BTreeSet<String> =
         std::collections::BTreeSet::new();
+    // The workspace recursion is once-per-(recipe, output-handle): each
+    // token resolves to the OUTPUT package it names, and two tokens can
+    // reach two different outputs of one recipe.
+    let mut walked_outputs: std::collections::BTreeSet<(String, String)> =
+        std::collections::BTreeSet::new();
+    // An output's own `depends` rows REPLACE the pkgbase section's rows for
+    // that output (the `pkgname` block of a committed `.SRCINFO` is the
+    // effective set makepkg stamps into the archive: an array assigned
+    // inside `package_<out>()` overrides the top-level one). Unioning both
+    // would over-cover exactly the shadowed declaration this check exists to
+    // catch (2026-10-15 wall: elfutils-git's `libpfm` landed pkgbase-only
+    // while `package_elfutils-git()` overrode `depends` — the installed
+    // metadata never carried it and the row re-drifted).
+    let output_overrides = output.is_some_and(|out| {
+        recipe
+            .rows
+            .deps
+            .iter()
+            .any(|(field, handle, _)| field == "depends" && handle == out)
+    });
     for (field, handle, value) in &recipe.rows.deps {
         if field != "depends" || value.is_empty() {
             continue;
         }
-        if !handle.is_empty() && output.is_some_and(|out| out != handle) {
+        if handle.is_empty() {
+            if output_overrides {
+                continue;
+            }
+        } else if output.is_some_and(|out| out != handle) {
             continue;
         }
         queue.push(abi::provide_name(value.trim()).to_string());
@@ -929,14 +964,15 @@ fn declared_closure(
         // name it spells (`depends = libxres` keeps `libxres` installed).
         closure.names.insert(token.clone());
         for other in input.recipes {
-            if closure.ids.contains(&other.id) {
-                continue;
-            }
-            if token_resolves(&other.rows, &token) {
+            for handle in token_match_handles(&other.rows, &token) {
+                if !walked_outputs.insert((other.id.clone(), handle.clone())) {
+                    continue;
+                }
                 closure.ids.insert(other.id.clone());
-                for (field, _, value) in &other.rows.deps {
-                    if field == "depends" && !value.is_empty() {
-                        queue.push(abi::provide_name(value.trim()).to_string());
+                for value in effective_depends(&other.rows, &handle) {
+                    let name = abi::provide_name(value.trim());
+                    if !name.is_empty() && name != "None" {
+                        queue.push(name.to_string());
                     }
                 }
             }
@@ -964,16 +1000,60 @@ fn declared_closure(
     closure
 }
 
-/// Does a depends token name this workspace recipe — by name (including the
-/// stock↔house counterpart) or by provide?
-fn token_resolves(rows: &gsa_recipe::SrcinfoRows, token: &str) -> bool {
-    rows.names()
+/// The output handles that explain a depends token for a workspace recipe —
+/// by name (the pkgbase name matches handle `''`, a `pkgname` its own
+/// handle, stock↔house counterparts included) or by provide (the handle its
+/// row sits in). Empty means the token does not name this recipe.
+fn token_match_handles(rows: &gsa_recipe::SrcinfoRows, token: &str) -> Vec<String> {
+    let mut handles: Vec<String> = Vec::new();
+    let push = |handles: &mut Vec<String>, handle: &str| {
+        if !handles.iter().any(|h| h == handle) {
+            handles.push(handle.to_string());
+        }
+    };
+    if let Some(base) = &rows.pkgbase {
+        if base == token || abi::stock_name(base) == token {
+            push(&mut handles, "");
+        }
+    }
+    for name in &rows.pkgnames {
+        if name == token || abi::stock_name(name) == token {
+            push(&mut handles, name);
+        }
+    }
+    for (handle, value) in &rows.provides {
+        let name = abi::provide_name(value);
+        if !name.is_empty() && (name == token || abi::provide_covers(value, token)) {
+            push(&mut handles, handle);
+        }
+    }
+    handles
+}
+
+/// The `depends` rows makepkg stamps for one output: an output's own rows
+/// REPLACE the pkgbase section's (the `pkgname` block of a committed
+/// `.SRCINFO` is the effective set), and an output without its own rows
+/// inherits the pkgbase defaults.
+fn effective_depends<'a>(rows: &'a gsa_recipe::SrcinfoRows, handle: &str) -> Vec<&'a str> {
+    let specific: Vec<&str> = rows
+        .deps
         .iter()
-        .any(|name| name == token || abi::stock_name(name) == token)
-        || rows.provides.iter().any(|(_, value)| {
-            let name = abi::provide_name(value);
-            !name.is_empty() && (name == token || abi::provide_covers(value, token))
+        .filter(|(field, row_handle, value)| {
+            field == "depends" && row_handle == handle && !value.is_empty()
         })
+        .map(|(_, _, value)| value.as_str())
+        .collect();
+    if !specific.is_empty() {
+        return specific;
+    }
+    rows
+        .deps
+        .iter()
+        .filter(|(field, row_handle, value)| {
+            field == "depends" && row_handle.is_empty() && !value.is_empty()
+        })
+        .map(|(_, _, value)| value.as_str())
+        .collect()
 }
 
 /// Does a depends token name this installed package — by name (including
@@ -1192,6 +1272,23 @@ mod tests {
             recipe_id: recipe_id.to_string(),
             path,
             pkginfo: None,
+        }
+    }
+
+    /// An archive whose `.PKGINFO` names its output (`%NAME%`) — the seam
+    /// selects per-output rows from it.
+    fn archive_out(recipe_id: &str, path: PathBuf, output: &str) -> QaArchive {
+        QaArchive {
+            recipe_id: recipe_id.to_string(),
+            path,
+            pkginfo: Some(gsa_recipe::pkginfo::Pkginfo {
+                pkgbase: recipe_id.to_string(),
+                pkgname: output.to_string(),
+                version: "1-1".to_string(),
+                provides: Vec::new(),
+                depends: Vec::new(),
+                arch: "x86_64".to_string(),
+            }),
         }
     }
 
@@ -1480,6 +1577,175 @@ mod tests {
             "{}",
             result.findings[0].detail
         );
+    }
+
+    #[test]
+    fn path_shaped_needed_resolves_by_basename() {
+        // The no-SONAME shape: the linker records the full path the library
+        // was found at (mujs ships /usr/lib/libmujs.so with no SONAME), so
+        // the DT_NEEDED row spells a path. It resolves through the same
+        // installed-truth tiers by basename — the owning provider must be
+        // reachable from the declared depends like any other link.
+        let scratch = Scratch::new("pathneeded");
+        let installed = vec![QaInstalled {
+            name: "mujs".to_string(),
+            version: "1.3.10-1".to_string(),
+            provides: vec!["libmujs.so".to_string()],
+            depends: Vec::new(),
+            files: vec!["usr/lib/libmujs.so".to_string()],
+        }];
+        let path = scratch.archive(
+            "app.pkg.tar.zst",
+            &[("usr/bin/app", elf64_with(&["/usr/lib/libmujs.so"], None))],
+        );
+        let declared = vec![recipe(
+            "app-git",
+            "pkgbase = app-git\npkgname = app-git\ndepends = mujs\n",
+        )];
+        let result = run(&declared, &[archive("app-git", path.clone())], &installed, &[]);
+        assert!(result.findings.is_empty(), "{:?}", result.findings);
+
+        // Undeclared: the owner resolves by basename but lies outside the
+        // closure — same undeclared-link class as a soname-shaped row.
+        let undeclared = vec![recipe("app-git", "pkgbase = app-git\npkgname = app-git\n")];
+        let result = run(&undeclared, &[archive("app-git", path)], &installed, &[]);
+        assert_eq!(result.findings.len(), 1, "{:?}", result.findings);
+        assert!(
+            result.findings[0].detail.contains("undeclared-link"),
+            "{}",
+            result.findings[0].detail
+        );
+        assert!(
+            result.findings[0].detail.contains("mujs"),
+            "{}",
+            result.findings[0].detail
+        );
+    }
+
+    #[test]
+    fn an_output_depends_override_replaces_the_pkgbase_rows() {
+        // The shadowed-declaration wall (elfutils-git/libpfm, 2026-10-15): a
+        // `depends` array assigned inside `package_<out>()` REPLACES the
+        // pkgbase one, so a pkgbase-only row must not cover that output —
+        // unioning the sections hides the exact leak the check exists to
+        // catch.
+        let scratch = Scratch::new("shadow");
+        let installed = vec![QaInstalled {
+            name: "libpfm".to_string(),
+            version: "4.0-1".to_string(),
+            provides: vec!["libpfm.so=4-64".to_string()],
+            depends: Vec::new(),
+            files: Vec::new(),
+        }];
+        let path = scratch.archive(
+            "elf.pkg.tar.zst",
+            &[("usr/bin/eu-stackprof", elf64_with(&["libpfm.so.4"], None))],
+        );
+        // Shadowed: the row sits in the pkgbase section while the output
+        // overrides `depends` — it never reaches the built metadata.
+        let shadowed = vec![recipe(
+            "elf-git",
+            "pkgbase = elf-git\ndepends = libpfm\npkgname = elf-git\ndepends = glibc\n",
+        )];
+        let result = run(
+            &shadowed,
+            &[archive_out("elf-git", path.clone(), "elf-git")],
+            &installed,
+            &[],
+        );
+        assert_eq!(result.findings.len(), 1, "{:?}", result.findings);
+        assert!(
+            result.findings[0].detail.contains("undeclared-link"),
+            "{}",
+            result.findings[0].detail
+        );
+
+        // The same row reaches the output inside the override.
+        let effective = vec![recipe(
+            "elf-git",
+            "pkgbase = elf-git\ndepends = glibc\npkgname = elf-git\ndepends = libpfm\n",
+        )];
+        let result = run(
+            &effective,
+            &[archive_out("elf-git", path.clone(), "elf-git")],
+            &installed,
+            &[],
+        );
+        assert!(result.findings.is_empty(), "{:?}", result.findings);
+
+        // No override at all: the pkgbase rows are the output's defaults.
+        let defaulted = vec![recipe(
+            "elf-git",
+            "pkgbase = elf-git\ndepends = libpfm\npkgname = elf-git\n",
+        )];
+        let result = run(
+            &defaulted,
+            &[archive_out("elf-git", path, "elf-git")],
+            &installed,
+            &[],
+        );
+        assert!(result.findings.is_empty(), "{:?}", result.findings);
+    }
+
+    #[test]
+    fn the_shadow_holds_transitively_too() {
+        // The wall's exact shape: the consumer reaches the sibling OUTPUT
+        // `libelf-git`, whose own `depends` override shadows the pkgbase-only
+        // `libpfm` row. The walk must follow the output's effective rows —
+        // unioning the sections would hide the leak transitively.
+        let scratch = Scratch::new("shadowtrans");
+        let installed = vec![QaInstalled {
+            name: "libpfm".to_string(),
+            version: "4.0-1".to_string(),
+            provides: vec!["libpfm.so=4-64".to_string()],
+            depends: Vec::new(),
+            files: Vec::new(),
+        }];
+        let recipes = vec![
+            recipe(
+                "app-git",
+                "pkgbase = app-git\npkgname = app-git\ndepends = libelf-git\n",
+            ),
+            recipe(
+                "elf-git",
+                "pkgbase = elf-git\ndepends = libpfm\npkgname = libelf-git\ndepends = glibc\n",
+            ),
+        ];
+        let path = scratch.archive(
+            "app.pkg.tar.zst",
+            &[("usr/bin/app", elf64_with(&["libpfm.so.4"], None))],
+        );
+        let result = run(
+            &recipes,
+            &[archive_out("app-git", path.clone(), "app-git")],
+            &installed,
+            &[],
+        );
+        assert_eq!(result.findings.len(), 1, "{:?}", result.findings);
+        assert!(
+            result.findings[0].detail.contains("undeclared-link"),
+            "{}",
+            result.findings[0].detail
+        );
+
+        // The same row inside the output's override reaches the consumer.
+        let recipes = vec![
+            recipe(
+                "app-git",
+                "pkgbase = app-git\npkgname = app-git\ndepends = libelf-git\n",
+            ),
+            recipe(
+                "elf-git",
+                "pkgbase = elf-git\ndepends = glibc\npkgname = libelf-git\ndepends = libpfm\n",
+            ),
+        ];
+        let result = run(
+            &recipes,
+            &[archive_out("app-git", path, "app-git")],
+            &installed,
+            &[],
+        );
+        assert!(result.findings.is_empty(), "{:?}", result.findings);
     }
 
     #[test]

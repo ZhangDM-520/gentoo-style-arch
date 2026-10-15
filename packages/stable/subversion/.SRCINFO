@@ -33,6 +33,7 @@ pkgbase = subversion
 	depends = glib2
 	depends = libsecret
 	depends = ruby
+	depends = perl
 	optdepends = bash-completion: for svn bash completion
 	optdepends = python: for some hook scripts
 	optdepends = java-environment: for Java support

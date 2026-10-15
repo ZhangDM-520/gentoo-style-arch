@@ -24,6 +24,11 @@ pkgbase = pahole
 	b2sums = 91a39841e4d432877a3ef384faf3eaffdeca6587c3002e50db20325075b1f438422a5ac30c2d9f344f0921f82473ae05bbb383870bc559b2c8caaf28d3e4470f
 
 pkgname = pahole
+	depends = bash
+	depends = glibc
+	depends = libelf
+	depends = zlib
+	depends = elfutils
 	optdepends = ostra-cg: Generate call graphs from encoded traces
 	provides = libdwarves.so
 	provides = libdwarves_emit.so

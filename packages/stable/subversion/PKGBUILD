@@ -32,6 +32,9 @@ depends=(
   'glib2'
   'libsecret'
   'ruby'
+  # rule 54: the SVN::* perl bindings hard-link RPATH'd libperl.so (bare
+  # linker name — never pairable), the w9 postgresql wall class
+  'perl'
 )
 makedepends=('apache' 'python' 'python-py3c' 'perl' 'swig' 'java-environment>=8'
              'libsecret' 'ruby' 'ruby-nkf' 'python-setuptools')

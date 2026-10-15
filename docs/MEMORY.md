@@ -1130,6 +1130,20 @@
     closure from the committed `.SRCINFO`, not the PKGBUILD — regenerate
     before gating or the verdict is stale. See `docs/NOTE.md` 2026-10-14
     orphan wall and 2026-10-15 wave-3.
+    Three wave-10A refinements (2026-10-15): **(a) split-output shadow** —
+    an array ASSIGNED inside `package_<out>()` replaces the pkgbase-level
+    one, so the declaration must land in the output whose payload ships
+    the link (a sibling's `xorg-server` rows never cover `Xvfb`'s); the
+    QA closure now follows the output's effective rows (roots honor the
+    override, the recursion is handle-aware). A pkgbase-only declare is
+    invisible to the built metadata — the w9 elfutils-git `libpfm` seal
+    was the pre-fix union bug. **(b) the seal is output-text** —
+    `--qa-check` is report-only and exits 0 WITH findings (fixture-pinned
+    by `tests/abi-closure-lint.sh`); gate scripts must assert the
+    `qa-check <name>: clean` tail, never the exit code. **(c) path-shaped
+    DT_NEEDED** — a no-SONAME lib (mujs → `/usr/lib/libmujs.so`) records
+    the path in the link row; resolution matches by basename (fixed
+    2026-10-15).
 
 55. **A provider SONAME bump needs its direct NEEDED consumers rebuilt in
     the same pass — pacman keeps them installed while they are

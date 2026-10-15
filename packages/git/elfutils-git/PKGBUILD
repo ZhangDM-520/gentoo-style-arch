@@ -62,7 +62,11 @@ _pick() {
 
 package_elfutils-git() {
   pkgdesc="Utilities and libraries to handle ELF object files and DWARF debugging information (git build)"
-  depends=('glibc' 'libelf-git' 'libgcc' 'libstdc++' 'json-c' 'libarchive.so' 'libbz2.so' 'libcurl.so' 'liblzma.so' 'libmicrohttpd.so' 'libsqlite3.so' 'libz.so' 'libzstd.so' 'sh')
+  # libpfm: eu-stackprof hard-links libpfm.so.4 — the declaration must live
+  # IN this override: an array assigned here replaces the pkgbase-level
+  # `depends`, so a pkgbase-only row never reaches the built metadata (the
+  # 2026-10-15 shadowed-declaration wall).
+  depends=('glibc' 'libelf-git' 'libgcc' 'libstdc++' 'json-c' 'libpfm' 'libpfm.so' 'libarchive.so' 'libbz2.so' 'libcurl.so' 'liblzma.so' 'libmicrohttpd.so' 'libsqlite3.so' 'libz.so' 'libzstd.so' 'sh')
   provides=("elfutils=$pkgver" "debuginfod=$pkgver" 'libdw.so' 'libasm.so' 'libdebuginfod.so')
   conflicts=('elfutils' 'debuginfod')
 

@@ -1,3 +1,68 @@
+## 2026-10-15 — wave-10A burn-down: eighteen 1-row recipes; three checker walls (path-shaped NEEDED, split-output shadow, report-only seal)
+
+**Symptom / root cause.** The 1-row tier's first eighteen: zeromq vim
+vamp-plugin-sdk util-linux(§util-linux-libs) tomlplusplus tk texinfo
+phonon-qt6 pahole ostree openssh obs-studio networkmanager-openvpn
+net-snmp neon mtools mpv mimalloc-git — one leaked DT_NEEDED link each,
+declared with the rule-54 spellings (stock names via expac; pairing where
+stamp meets provide — ostree/openssh/obs-studio/net-snmp/tk/tomlplusplus/
+util-linux-libs/neon/mimalloc-git; plain names where the provider carries
+no satisfiable stamp — zeromq `libbsd`, mpv `sndio`, mtools `libx11`,
+phonon-qt6 `qt6-tools`; split-output placement for util-linux-libs) and
+three denial-tables retired (vamp-plugin-sdk, openssh, mtools, plus
+networkmanager-openvpn/obs-studio).
+**Wall 1 — vim's link set drifted under the toolchain.** The snapshot row
+(`libpixman-1.so.0` refs=4) is unreproducible: the clean rebuild's payload
+links `libselinux`+`libsodium` (4 files) and zero pixman, with the
+PKGBUILD untouched since `c4ecbb3` — environmental auto-detect drift
+across toolchain states, root cause unresolved. Declarations follow the
+MEASURED payload (the rebuild is the deliverable); the sweep+seam guard
+re-drift. Anomaly recorded rather than papered over.
+**Wall 2 — path-shaped DT_NEEDED (mpv→`/usr/lib/libmujs.so`).** A
+no-SONAME library (mujs) makes the linker record the path it found the
+lib at, and the QA owned-file tier compared an owned path's basename
+against the *whole* soname string — a path-shaped row could never
+resolve, manufacturing `unresolvable-link` for a link whose provider
+(mujs owns the file) was already declared. Fixed in `declared_deps`:
+resolve path-shaped needs by basename, findings keep reporting the raw
+row. Test `path_shaped_needed_resolves_by_basename`.
+**Wall 3 — the split-output shadow (elfutils-git→libpfm; corrects the
+w9 seal).** The w9 declare landed in the pkgbase-level `depends`, while
+`package_elfutils-git()` ASSIGNS `depends` (an array assigned in a
+package function replaces the top-level one) — the built metadata never
+carried `libpfm`, and the row re-drifted exactly as before. The QA
+closure unioned pkgbase+output rows, so the w9 "gated clean" was this
+false-clean, not coverage. Red-proven live (undeclared-link on
+`eu-stackprof`→`libpfm.so.4`) before the recipe fix; then fixed in the
+checker twice: roots honor the output's override, and the workspace
+recursion is handle-aware (token → the output handle it names → that
+output's effective rows; once-per-(recipe,handle) walk).
+Tests `an_output_depends_override_replaces_the_pkgbase_rows` and
+`the_shadow_holds_transitively_too`. `libpfm`+`libpfm.so` moved into the
+override.
+**Report-only seal lesson.** `gsa --qa-check` exits 0 WITH findings
+(report-only, fixture-pinned by `tests/abi-closure-lint.sh`) — the first
+chain asserted rc and silently passed four findings (vim ×2, mpv ×2).
+A gate must assert the `qa-check <name>: clean` tail, never the exit
+code; chain scripts updated accordingly.
+**Straggler rounds.** graphviz→`aalib` and hwloc→`ocl-icd` (plain names:
+no soname provides) surfaced from this morning's 05:53/07:10 rebuilds —
+their old rows closed via new transitive edges while the rebuilt payloads
+leaked new links. The stricter closure then exposed two more real gaps:
+subversion's seven RPATH'd `libperl.so` perl bindings (plain `perl` — the
+no-.N-stem class of the w9 postgresql wall) and xorg-server's Xephyr/
+Xnest/Xvfb linking `libbsd`/`libmd`/`libselinux`/`audit` — declared in
+the three OUTPUTS' depends, because a sibling output's payload is never
+covered by the `xorg-server` output's rows.
+**Validation.** `bash -n` ×23 edited recipes; `.SRCINFO` regenerated per
+recipe after each build; serial chains (24 rebuilds, one heavy build at a
+time, `makepkg -sfC --noconfirm` → `pacman -U --noconfirm --ask 4`,
+`GIT_CONFIG_COUNT=0`) with output-asserted scoped gates — all PASS; full
+archive-seam gate **clean**; fresh declgap2 sweep 85 → 80 rows, every
+remaining row in the w10B/C 1-row tail or the deferred ABI/toolchain
+batches; `cargo test -p gsa-qa` **24/24** (two new tests); fixture
+battery **65/65 PASS**.
+
 ## 2026-10-15 — wave-9 burn-down: eighteen recipes declare the 2-row tier; two source/dep walls (GitHub patch drift, unsatisfiable no-.N stems)
 
 **Symptom / root cause.** Rows-2 tier minus the ABI/toolchain-coupled

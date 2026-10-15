@@ -8,9 +8,12 @@ pkgdesc='A windowing toolkit for use with tcl'
 arch=(x86_64)
 url="http://tcl.sourceforge.net/"
 license=(TCL)
+# rule 54: libtcl9tk9.0.so links libcups.so.2 (auto-detected cups print support)
 depends=(tcl
          libxss
-         libxft)
+         libxft
+         libcups
+         libcups.so)
 makedepends=(zip)
 options=(staticlibs)
 # house: bare soname provide for the shipped shared library (libtk9.0.so)

@@ -146,7 +146,11 @@ package_xorg-server-xephyr() {
   depends=(libxfont2 libgl libepoxy libunwind systemd-libs pixman xorg-server-common
            xcb-util-image xcb-util-renderutil xcb-util-wm xcb-util-keysyms
            nettle libtirpc
-           xcb-util libxdmcp libx11 libxau libxshmfence glibc)
+           xcb-util libxdmcp libx11 libxau libxshmfence glibc
+           # rule 54: Xephyr hard-links libbsd/libmd/libselinux/libaudit —
+           # declared per-output: the xorg-server output's depends do NOT
+           # cover a sibling's payload (2026-10-15 shadow class)
+           libbsd libmd libselinux audit)
 
   _install fakeinstall/usr/bin/Xephyr
 
@@ -160,7 +164,10 @@ package_xorg-server-xvfb() {
   license=('MIT' 'GPL-2.0-only')
   depends=(libxfont2 libunwind pixman xorg-server-common xorg-xauth 
            libgl nettle libtirpc systemd-libs
-           libxdmcp sh glibc libxau)
+           libxdmcp sh glibc libxau
+           # rule 54: Xvfb hard-links libbsd/libmd/libselinux/libaudit —
+           # declared per-output (2026-10-15 shadow class)
+           libbsd libmd libselinux audit)
 
   _install fakeinstall/usr/bin/Xvfb
 
@@ -174,7 +181,10 @@ package_xorg-server-xnest() {
   pkgdesc="A nested X server that runs as an X application"
   depends=(libxfont2 libunwind libxext pixman xorg-server-common nettle
            libtirpc systemd-libs
-           libxdmcp glibc libx11 libxau)
+           libxdmcp glibc libx11 libxau
+           # rule 54: Xnest hard-links libbsd/libmd/libselinux/libaudit —
+           # declared per-output (2026-10-15 shadow class)
+           libbsd libmd libselinux audit)
 
   _install fakeinstall/usr/bin/Xnest
 

@@ -30,8 +30,9 @@ pkgname = networkmanager-openvpn
 	depends = libnm
 	depends = libnma-gtk4
 	depends = libsecret
+	depends = libnma
+	depends = libnma.so
 	depends = networkmanager-vpn-plugin-openvpn=1.12.5-1.1
-	optdepends = libnma: GUI support (GTK 3)
 
 pkgname = networkmanager-vpn-plugin-openvpn
 	pkgdesc = NetworkManager VPN plugin for OpenVPN (VPN plugin only)

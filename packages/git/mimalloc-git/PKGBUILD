@@ -6,7 +6,7 @@
 
 _pkgbase=mimalloc
 pkgname=mimalloc-git
-pkgver=3.5.4.r0.gf8401bef
+pkgver=3.5.4.r77.ga0c58a2f
 pkgrel=1
 pkgdesc='General-purpose allocator with excellent performance characteristics'
 arch=('x86_64')
@@ -14,7 +14,10 @@ url='https://github.com/microsoft/mimalloc'
 license=('MIT')
 conflicts=("${_pkgbase}")
 provides=("${_pkgbase}" 'libmimalloc.so')
-depends=('glibc')
+# libatomic/libatomic.so: x4 shipped DT_NEEDED libatomic.so.1 (rule-54 declared-deps
+# sweep) — libatomic-snapshot carries stock libatomic + stamped libatomic.so=1-64
+# (expac-evidenced; sibling idiom boost's 'libgcc' 'libgcc_s.so').
+depends=('glibc' 'libatomic' 'libatomic.so')
 makedepends=('git' 'cmake')
 source=("${pkgname}::git+${url}#branch=dev3")
 sha256sums=('SKIP')

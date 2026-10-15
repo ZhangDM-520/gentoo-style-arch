@@ -13,11 +13,14 @@ depends=(libstdc++
          glibc
          libpulse
          qt6-5compat
-         qt6-base)
+         qt6-base
+         # plugins/designer/phonon4qt6widgets.so hard-links libQt6Designer.so.6
+         # (rule-54 declared-deps sweep) — hard DT_NEEDED, so the qt6-tools
+         # optdepends entries were denial tables and are retired.
+         qt6-tools)
 makedepends=(extra-cmake-modules
              qt6-tools)
-optdepends=('pulseaudio: PulseAudio support'
-            'qt6-tools: Designer plugin')
+optdepends=('pulseaudio: PulseAudio support')
 source=(https://download.kde.org/stable/$pkgbase/$pkgver/$pkgbase-$pkgver.tar.xz{,.sig})
 sha256sums=('3287ffe0fbcc2d4aa1363f9e15747302d0b080090fe76e5f211d809ecb43f39a'
             'SKIP')
@@ -37,7 +40,6 @@ build() {
 
 package_phonon-qt6(){
   depends+=(phonon-qt6-backend)
-  optdepends+=('qt6-tools: Designer plugin')
   provides=(libphonon4qt6.so libphonon4qt6experimental.so)
 
   DESTDIR="$pkgdir" cmake --install build

@@ -12,6 +12,7 @@ pkgbase = zeromq
 	depends = util-linux
 	depends = libsodium
 	depends = libpgm
+	depends = libbsd
 	depends = libgcc
 	depends = libstdc++
 	optdepends = cppzmq: C++ binding for libzmq

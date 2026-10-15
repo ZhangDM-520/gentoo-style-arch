@@ -35,6 +35,8 @@ pkgbase = obs-studio
 	depends = qrcodegencpp-cmake
 	depends = python
 	depends = luajit
+	depends = libfdk-aac
+	depends = libfdk-aac.so
 	provides = libobs.so
 	provides = libobs-frontend-api.so
 	provides = libobs-opengl.so
@@ -53,7 +55,6 @@ pkgbase = obs-studio
 	sha256sums = 8f74993a30c49aa1729b7014923397d2dda3b52a994812691559552d93462246
 
 pkgname = obs-studio
-	optdepends = libfdk-aac: FDK AAC codec support
 	optdepends = libva-intel-driver: hardware encoding for older Intel GPUs
 	optdepends = intel-media-driver: hardware encoding for recent Intel GPUs
 	optdepends = libva-mesa-driver: hardware encoding

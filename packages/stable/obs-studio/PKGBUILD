@@ -12,9 +12,13 @@ arch=('x86_64')
 url="https://obsproject.com"
 license=('GPL-2.0-only')
 provides=('libobs.so' 'libobs-frontend-api.so' 'libobs-opengl.so' 'libobs-scripting.so')
+# libfdk-aac + libfdk-aac.so: obs-libfdk.so hard-links libfdk-aac.so.2
+# (declared-deps sweep) — ENABLE_LIBFDK=ON auto-detects it at build time
+# (rule 54); the matching optdepends entry was a denial table and retires
 depends=('ffmpeg' 'jansson' 'libxinerama' 'libxkbcommon-x11' 'mbedtls3' 'rnnoise' 'pciutils'
          'qt6-svg' 'curl' 'jack' 'gtk-update-icon-cache' 'pipewire' 'libxcomposite'
-         'libdatachannel' 'uthash' 'simde' 'qrcodegencpp-cmake' 'python' 'luajit')
+         'libdatachannel' 'uthash' 'simde' 'qrcodegencpp-cmake' 'python' 'luajit'
+         'libfdk-aac' 'libfdk-aac.so')
 # trim: cef dropped together with the obs-studio-plugin-browser split output
 makedepends=('cmake' 'libfdk-aac' 'x264' 'swig' 'sndio' 'nlohmann-json'
              'ffnvcodec-headers' 'websocketpp' 'asio' 'extra-cmake-modules'
@@ -106,8 +110,9 @@ build() {
 }
 
 package() {
-  optdepends=('libfdk-aac: FDK AAC codec support'
-              'libva-intel-driver: hardware encoding for older Intel GPUs'
+  # libfdk-aac optdepends retired with the declared-deps fix above:
+  # obs-libfdk.so hard-links libfdk-aac.so.2, so it is a hard depends now
+  optdepends=('libva-intel-driver: hardware encoding for older Intel GPUs'
               'intel-media-driver: hardware encoding for recent Intel GPUs'
               'libva-mesa-driver: hardware encoding'
               'sndio: Sndio input client'

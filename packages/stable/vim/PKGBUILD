@@ -127,7 +127,12 @@ package_vim-runtime() {
 }
 
 package_vim() {
-  depends=("vim-runtime=${pkgver}-${pkgrel}" 'gpm' 'acl' 'glibc' 'libgcrypt' 'zlib')
+  # libselinux/libsodium: the four shipped binaries hard-link libselinux.so.1
+  # and libsodium.so.26 (declared-deps sweep + archive-seam) — hard DT_NEEDED
+  # from configure auto-detection. Stock spellings: libselinux carries
+  # libselinux=…/libselinux.so=1-64, libsodium-git carries
+  # libsodium=…/libsodium.so=26-64 (expac-evidenced).
+  depends=("vim-runtime=${pkgver}-${pkgrel}" 'gpm' 'acl' 'glibc' 'libgcrypt' 'libselinux' 'libsodium' 'zlib')
   optdepends=('python: Python language support'
               'ruby: Ruby language support'
               'lua: Lua language support'

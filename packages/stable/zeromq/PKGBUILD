@@ -14,6 +14,10 @@ depends=(
   util-linux
   libsodium
   libpgm
+  # libbsd: libzmq.so hard-links libbsd.so.0 (declared-deps sweep) — hard
+  # DT_NEEDED. Single name entry: libbsd carries no auto-stamp provide
+  # (expac-evidenced: libbsd :: —), so no provider+soname pairing.
+  libbsd
   libgcc
   libstdc++
 )

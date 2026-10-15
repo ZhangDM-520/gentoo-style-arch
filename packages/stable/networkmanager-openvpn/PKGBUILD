@@ -71,11 +71,13 @@ _pick() {
 
 package_networkmanager-openvpn() {
   pkgdesc+=" (with GUI)"
+  # libnma: the shipped libnm-vpn-plugin-openvpn-editor.so hard-links
+  # libnma.so.0 (rule-54 declared-deps sweep) — libnma-git carries stock
+  # libnma + libnma.so=0-64 (expac-evidenced); the former "libnma: GUI
+  # support" optdepends entry was a denial table and is retired.
   depends+=(
+    libnma libnma.so
     "networkmanager-vpn-plugin-openvpn=$pkgver-$pkgrel"
-  )
-  optdepends=(
-    "libnma: GUI support (GTK 3)"
   )
 
   cd NetworkManager-openvpn

@@ -8,7 +8,9 @@ pkgdesc='A suite of applications used to implement SNMP v1, SNMP v2c and SNMP v3
 arch=('x86_64')
 url='http://www.net-snmp.org/'
 license=('BSD')
-depends=('libnsl' 'libpcap' 'lm_sensors' 'openssl' 'pciutils' 'pcre2' 'perl')
+# pcre: six shipped files hard-link libpcre.so.1 (rule-54 declared-deps
+# sweep) — pcre1, not pcre2: pcre carries libpcre.so=1-64 (expac-evidenced)
+depends=('libnsl' 'libpcap' 'lm_sensors' 'openssl' 'pciutils' 'pcre' 'libpcre.so' 'pcre2' 'perl')
 makedepends=('git' 'python-setuptools')
 optdepends=('perl-term-readkey: for snmpcheck application'
             'perl-tk: for snmpcheck and tkmib applications'

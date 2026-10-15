@@ -16,13 +16,13 @@ license=(
 depends=(
   bash
   glibc
+  libx11  # floppyd hard-links libX11.so.6 (rule-54 declared-deps sweep); libx11-git carries stock libx11 (expac-evidenced)
 )
 makedepends=(
   libx11
   texinfo
 )
 optdepends=(
-  'libx11: required by floppyd'
   'libxau: required by floppyd'
 )
 backup=(etc/$pkgname.conf)

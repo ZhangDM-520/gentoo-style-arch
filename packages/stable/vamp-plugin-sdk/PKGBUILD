@@ -18,9 +18,15 @@ depends=(
   libgcc
   libstdc++
   glibc
+  # libsndfile: vamp-simple-host hard-links libsndfile.so.1 (declared-deps
+  # sweep) — hard DT_NEEDED, so the libsndfile optdepends is retired. Stock
+  # spelling: the house provider libsndfile-git carries libsndfile
+  # (expac-evidenced: libsndfile-git :: libsndfile=…).
+  libsndfile
 )
 makedepends=(libsndfile)
-optdepends=('libsndfile: for vamp-simple-host')
+# libsndfile optdepends retired with the declared-deps fix above: its one
+# named consumer (vamp-simple-host) hard-requires libsndfile at runtime.
 provides=(
   libvamp-hostsdk.so
   libvamp-sdk.so

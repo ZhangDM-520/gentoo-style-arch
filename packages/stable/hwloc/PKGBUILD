@@ -23,6 +23,7 @@ depends=(
   'libx11'
   'libxml2'
   'ncurses'
+  'ocl-icd'
   'systemd-libs'
 )
 makedepends=(

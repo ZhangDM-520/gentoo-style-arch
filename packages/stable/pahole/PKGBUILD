@@ -78,6 +78,12 @@ _pick() {
 }
 
 package_pahole() {
+  # elfutils: the shipped libdwarves.so* hard-link libdw.so.1 (3 refs,
+  # rule-54 declared-deps sweep) — hard DT_NEEDED. Stock spelling from
+  # elfutils-git's provides (expac: elfutils=…); no soname pairing — its
+  # libdw.so provide is bare, so the =1-64 stamp a libdw.so entry would get
+  # is not satisfiable (wave-9 postgresql wall class).
+  depends+=(elfutils)
   optdepends=('ostra-cg: Generate call graphs from encoded traces')
   # Stock legacy virtual provides kept as delivered (bare, never pinned); the
   # 1.32 payload ships no shared libraries, so no soname provide is added.

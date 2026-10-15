@@ -220,8 +220,10 @@ package_util-linux() {
 
 package_util-linux-libs() {
   pkgdesc='util-linux runtime libraries'
+  # rule 54: libmount links libsystemd.so.0 (auto-detected) — not trimmable
   depends=('glibc'
-           'sqlite')
+           'sqlite'
+           'systemd-libs' 'libsystemd.so')
   provides=('libutil-linux' 'libblkid.so' 'libfdisk.so' 'libmount.so' 'libsmartcols.so' 'libuuid.so')
   conflicts=('libutil-linux')
   replaces=('libutil-linux')
