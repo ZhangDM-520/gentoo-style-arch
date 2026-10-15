@@ -8,6 +8,11 @@ pkgdesc='A heap memory profiler for Linux'
 url='https://apps.kde.org/heaptrack/'
 license=(LGPL-2.1-or-later)
 depends=(boost-libs
+         # elfutils: the shipped /usr/lib/heaptrack/libexec/heaptrack_interpret
+         # hard-links libdw.so.1 (1 ref, declared-deps sweep + archive-seam) —
+         # hard DT_NEEDED from the unwinder's DWARF reading. Stock spelling:
+         # house elfutils-git carries elfutils=… + libdw.so (expac-evidenced).
+         elfutils
          glibc
          kcolorscheme
          kconfig

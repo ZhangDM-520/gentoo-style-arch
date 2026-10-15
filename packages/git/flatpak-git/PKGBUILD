@@ -4,7 +4,7 @@
 
 pkgname=flatpak-git
 _pkgname=flatpak
-pkgver=1.19.2+18+g84f5777b7
+pkgver=1.19.2+21+gddbee83f4
 pkgrel=1
 pkgdesc="Linux application sandboxing and distribution framework (formerly xdg-app) (git)"
 arch=(x86_64 aarch64)
@@ -15,7 +15,7 @@ license=(LGPL2.1)
 # dep-install became an orphan whose removal broke flatpak (2026-10-14).
 # Not trimmable.
 depends=('ostree' 'libarchive' 'bubblewrap' 'appstream-glib' 'polkit' 'appstream' 'xdg-dbus-proxy' 'glib2-devel' 'gobject-introspection' 'socat' 'libmalcontent')
-makedepends=('git' 'meson' 'ninja' 'gtk-doc' 'docbook-xsl' 'docbook-xml' 'python' 'python-pyparsing' 'gi-docgen')
+makedepends=('git' 'meson' 'ninja' 'docbook-xsl' 'docbook-xml' 'python' 'python-pyparsing' 'gi-docgen')
 provides=('flatpak' 'libflatpak.so')
 conflicts=('flatpak')
 source=("git+https://github.com/flatpak/flatpak.git")
@@ -35,6 +35,8 @@ build() {
   command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
   export LDFLAGS+=" ${_mold}"
 
+  # api_docs (2026-10-15): upstream dropped the gtkdoc meson option for
+  # gi-docgen-driven api_docs — the old -Dgtkdoc=disabled broke the build.
   meson setup \
     --prefix=/usr \
     --sysconfdir=/etc \
@@ -47,7 +49,7 @@ build() {
     -Dsystem_dbus_proxy=xdg-dbus-proxy \
     -Dsystemdsystemunitdir=/usr/lib/systemd/system \
     -Dsystemdsystemenvgendir=/usr/lib/systemd/system-environment-generators \
-    -Dgtkdoc=disabled \
+    -Dapi_docs=disabled \
   build
   meson compile -C build
 }

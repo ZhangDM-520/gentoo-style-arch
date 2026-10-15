@@ -14,6 +14,7 @@ pkgbase = binutils
 	checkdepends = dejagnu
 	checkdepends = debuginfod
 	makedepends = git
+	depends = elfutils
 	depends = glibc
 	depends = jansson
 	depends = libelf

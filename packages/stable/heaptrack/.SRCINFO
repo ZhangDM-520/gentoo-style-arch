@@ -9,6 +9,7 @@ pkgbase = heaptrack
 	makedepends = extra-cmake-modules
 	makedepends = kitemmodels
 	depends = boost-libs
+	depends = elfutils
 	depends = glibc
 	depends = kcolorscheme
 	depends = kconfig

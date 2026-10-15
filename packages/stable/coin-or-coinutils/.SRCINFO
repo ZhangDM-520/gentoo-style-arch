@@ -13,6 +13,7 @@ pkgbase = coin-or-coinutils
 	depends = coin-or-data-sample
 	depends = glibc
 	depends = glpk
+	depends = lapack
 	depends = libgcc
 	depends = libstdc++
 	depends = zlib

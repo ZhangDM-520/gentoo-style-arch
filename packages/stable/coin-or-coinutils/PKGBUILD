@@ -14,6 +14,13 @@ depends=(blas
          coin-or-data-sample
          glibc
          glpk
+         # lapack: all three shipped libCoinUtils.so* paths hard-link
+         # liblapack.so.3 (declared-deps sweep + archive-seam) — hard
+         # DT_NEEDED from configure's --with-lapack-lib='-llapack'.
+         # Stock spelling: lapack carries no provides at all
+         # (expac '%n\t%P' lapack → empty), so the package name is the
+         # only capability spelling.
+         lapack
          libgcc
          libstdc++
          zlib)

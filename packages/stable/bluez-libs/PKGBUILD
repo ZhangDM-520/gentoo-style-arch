@@ -122,9 +122,13 @@ package_bluez() {
 
 package_bluez-utils() {
   pkgdesc="Development and debugging utilities for the bluetooth protocol stack"
-  depends=('dbus' 'systemd-libs' 'glib2' 'glibc' 'readline')
-  optdepends=('ell: for btpclient'
-              'perl: for parse_companies.pl')
+  # ell: the shipped /usr/bin/btpclient hard-links libell.so.0 (declared-deps
+  # sweep + archive-seam) — hard DT_NEEDED from configure auto-detection, so
+  # this supersedes the former 'ell: for btpclient' optdepend. ell carries no
+  # provides (expac '%n|%v|%P' ell -> empty provides), so the bare package
+  # name is the only spelling.
+  depends=('dbus' 'systemd-libs' 'glib2' 'glibc' 'readline' 'ell')
+  optdepends=('perl: for parse_companies.pl')
   
   provides=('bluez-plugins')
   replaces=('bluez-plugins')

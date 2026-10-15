@@ -11,6 +11,7 @@ pkgbase = guile
 	depends = gc
 	depends = libffi
 	depends = libxcrypt
+	depends = readline
 	provides = libguile-3.0.so
 	source = https://ftp.gnu.org/pub/gnu/guile/guile-3.0.11.tar.gz
 	source = https://ftp.gnu.org/pub/gnu/guile/guile-3.0.11.tar.gz.sig

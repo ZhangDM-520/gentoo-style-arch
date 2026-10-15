@@ -39,6 +39,7 @@ pkgname = gdb
 	depends = glibc
 	depends = gmp
 	depends = guile
+	depends = elfutils
 	depends = libelf
 	depends = liblzma.so
 	depends = libmpfr.so

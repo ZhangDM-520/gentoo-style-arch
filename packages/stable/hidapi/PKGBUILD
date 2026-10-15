@@ -10,8 +10,12 @@ pkgdesc='Simple library for communicating with USB and Bluetooth HID devices'
 arch=(x86_64)
 url='https://github.com/libusb/hidapi'
 license=('GPL3' 'BSD' 'custom')
-depends=('systemd-libs')
-optdepends=('libusb: for hidapi-libusb')
+# libusb: the three shipped libhidapi-libusb.so* files hard-link libusb-1.0.so.0
+# (declared-deps sweep + archive-seam) — hard DT_NEEDED from the libusb backend,
+# previously only an optdepend. Stock spelling: libusb carries
+# libusb=1.0.30.r143.gabba63ed / libusb-1.0.so=0-64, satisfied by the house
+# libusb-git through its provides (expac-evidenced).
+depends=('libusb' 'systemd-libs')
 makedepends=('cmake' 'libusb')
 provides=('libhidapi-hidraw.so' 'libhidapi-libusb.so')
 source=("https://github.com/libusb/${pkgname}/archive/${pkgname}-${pkgver}.tar.gz")

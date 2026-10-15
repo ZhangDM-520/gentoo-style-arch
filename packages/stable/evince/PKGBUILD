@@ -33,6 +33,13 @@ depends=(
   gtk3
   gvfs
   hicolor-icon-theme
+  # kpathsea/libkpathsea.so: /usr/lib/evince/4/backends/libdvidocument.so
+  # hard-links libkpathsea.so.6 (declared-deps sweep + archive-seam) — hard
+  # DT_NEEDED, so the texlive-bin optdepends is retired. Stock+soname
+  # pairing per curl/file/mariadb-libs: texlive-bin carries kpathsea +
+  # stamped libkpathsea.so=6-64 (expac-evidenced).
+  kpathsea
+  libkpathsea.so
   libarchive
   libgcc
   libgxps
@@ -91,7 +98,6 @@ check() {
 
 package_evince() {
   provides=(libev{document,view}3.so)
-  optdepends=('texlive-bin: DVI support')
 
   meson install -C build --destdir "$pkgdir"
 

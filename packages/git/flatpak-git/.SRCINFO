@@ -1,6 +1,6 @@
 pkgbase = flatpak-git
 	pkgdesc = Linux application sandboxing and distribution framework (formerly xdg-app) (git)
-	pkgver = 1.19.2+18+g84f5777b7
+	pkgver = 1.19.2+21+gddbee83f4
 	pkgrel = 1
 	url = https://github.com/flatpak/flatpak
 	arch = x86_64
@@ -9,7 +9,6 @@ pkgbase = flatpak-git
 	makedepends = git
 	makedepends = meson
 	makedepends = ninja
-	makedepends = gtk-doc
 	makedepends = docbook-xsl
 	makedepends = docbook-xml
 	makedepends = python

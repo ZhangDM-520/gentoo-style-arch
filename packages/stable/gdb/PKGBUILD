@@ -82,6 +82,14 @@ package_gdb() {
     glibc
     gmp
     guile
+    # elfutils: /usr/bin/gdb hard-links libdebuginfod.so.1 (declared-deps
+    # sweep + archive-seam) — hard DT_NEEDED from configure auto-detection of
+    # the debuginfod client. Plain stock name (NOT a libdebuginfod.so stem):
+    # makepkg stamps a declared stem to libdebuginfod.so=1-64, which
+    # elfutils-git's BARE libdebuginfod.so provide cannot satisfy — the
+    # stamped dependency made pacman -U refuse the archive (w9 postgresql
+    # wall class). elfutils=… is the satisfiable provide (expac-evidenced).
+    elfutils
     libelf
     liblzma.so
     libmpfr.so

@@ -29,6 +29,8 @@ pkgbase = evince
 	depends = gtk3
 	depends = gvfs
 	depends = hicolor-icon-theme
+	depends = kpathsea
+	depends = libkpathsea.so
 	depends = libarchive
 	depends = libgcc
 	depends = libgxps
@@ -45,6 +47,5 @@ pkgbase = evince
 	b2sums = 8270950b1ee6ed489b2f018a29dde676303a8ac195aae810d09f6a6ff9d3f5f44292eadc4b4d5fe59d82c333f4bdb4e69c938a1e1ff92c808ea373dd7b1d161a
 
 pkgname = evince
-	optdepends = texlive-bin: DVI support
 	provides = libevdocument3.so
 	provides = libevview3.so

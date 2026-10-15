@@ -1,3 +1,61 @@
+## 2026-10-15 — wave-10B burn-down: ten recipes declare twelve links; two stale rows clear on rebuild; two walls (flatpak meson option drift, gdb's stamped-stem/bare-provide mismatch)
+
+**Symptom / root cause.** 1-row tier batch two: at-spi2-core-git binutils
+bluez-utils(§bluez-libs) cmake-git coin-or-coinutils evince flatpak-git gdb
+gstreamer+gst-plugins-bad guile heaptrack hidapi — thirteen GAP rows across
+twelve PKGBUILDs (the two gstreamer rows live in different outputs of one
+pkgbase). Two rows needed **no edit**: at-spi2-core-git→`libxres` and
+flatpak-git→`libmalcontent` were already declared (`af9e9f1`, 2026-10-14) —
+declgap2.py measures the **installed** db, and those installed builds
+predated the fix, so the rows were stale-installed noise that a rebuild
+alone closes. The other ten edits declare the leaked links with
+expac-evidenced spellings (plain `elfutils` ×4 (binutils, gdb, heaptrack,
+gstreamer output), `expat`, `lapack`, `readline`, `libusb`,
+`ell`; pairing where stamp meets provide: `kpathsea`+`libkpathsea.so`
+(evince), `webrtc-audio-processing`+`libwebrtc-audio-processing-2.so`
+(gst-plugins-bad output)); three matched `optdepends` denial-tables retire
+in the same edits (bluez-utils `ell: for btpclient`, evince
+`texlive-bin: DVI support`, hidapi `libusb: for hidapi-libusb`).
+
+**Wall 1 — flatpak-git meson option drift.** The rebuild failed
+`meson.build:4: ERROR: Unknown option: "gtkdoc"`: upstream replaced the
+gtkdoc feature option with gi-docgen-driven `api_docs`, so the recipe's
+`-Dgtkdoc=disabled` no longer parses. Fixed to `-Dapi_docs=disabled` and
+the `gtk-doc` makedep retired in the same edit (dead: zero upstream
+references outside the failed build's own logs). A `-git` recipe's build
+flags track upstream option renames — the rebuild is the drift detector.
+
+**Wall 2 — stamped-stem vs bare-provide mismatch (gdb).** Declaring the
+bare stem `libdebuginfod.so` looked sanctioned (elfutils-git *carries* a
+`libdebuginfod.so` provide) but makepkg stamps a declared stem from NEEDED
+— gdb's archive transacted `depend = libdebuginfod.so=1-64` — while
+elfutils-git's provide is **bare** (expac: `libdw.so libasm.so
+libdebuginfod.so`, no stamps). `pacman -U` refused the archive
+(`cannot resolve "libdebuginfod.so=1-64"`). Pairing works only when BOTH
+sides are stamped (the same wave's `libwebrtc-audio-processing-2.so` pair
+meets `…=1-64`); a bare/unstamped provider provide needs the plain stock
+name (`elfutils` — the spelling binutils/heaptrack/gstreamer already used
+for the same provider). Red-proof note: `--qa-check` cannot see this class
+(the QA closure strips version constraints), so the satisfiability proof
+is the `pacman -U` transaction itself — gate order matters (install, then
+gate). Rule 54 amended.
+
+**Anomaly (unresolved).** Every transaction warned `downgrading … -1.1 =>
+-1`: several installed pkgrels (guile, hidapi, gdb) sat one `.1` ahead of
+the committed recipes, and no commit or local edit explains the `.1`.
+Harmless — the transactions landed and both gates are clean — but the
+provenance is unaccounted for and the next rebuild will re-warn.
+
+**Validation.** `bash -n` ×11 edited PKGBUILDs; `.SRCINFO` regenerated per
+recipe after build (absorbing `pkgver()` write-back); serial chain — 12
+recipes rebuilt+installed (`makepkg -sfC --noconfirm` → `pacman -U
+--noconfirm --ask 4`, `GIT_CONFIG_COUNT=0`, one heavy build at a time;
+gdb re-run after the wall fix) — scoped gates clean for every gated id;
+full archive-seam gate clean; fresh declgap2 sweep **80 → 66 rows** (the
+13 w10B rows plus rocm-llvm's `libpfm` row, which closed transitively via
+the w10A elfutils-git→`libpfm` seal whose install postdates the pre-wave
+snapshot), zero new rows; fixture battery **65/65 PASS**.
+
 ## 2026-10-15 — wave-10A burn-down: eighteen 1-row recipes; three checker walls (path-shaped NEEDED, split-output shadow, report-only seal)
 
 **Symptom / root cause.** The 1-row tier's first eighteen: zeromq vim

@@ -1098,6 +1098,16 @@
     and a stem whose soname has no `.so.N` suffix (`libtcl9.0.so`,
     `libperl.so`) is NEVER pairable: makepkg stamps a `<soname>-64` fallback
     version no provider carries (2026-10-15 wall) — use the plain name.
+    A stem is likewise unsatisfiable when the provider's provide is
+    **bare/unstamped**: makepkg stamps the declared stem from NEEDED
+    (`libdebuginfod.so` → `libdebuginfod.so=1-64`) and a bare
+    `libdebuginfod.so` provide cannot meet the stamp — `pacman -U` refused
+    gdb's archive (2026-10-15 w10B wall). Pairing needs BOTH sides stamped
+    (`libwebrtc-audio-processing-2.so` meets `…=1-64`); measure the
+    provider's provides raw with expac (no version stripping) before
+    pairing, and note the QA closure strips version constraints, so this
+    class is invisible to `--qa-check` — the `pacman -U` transaction is
+    the satisfiability red-proof (install, then gate).
     and the plain name is the STOCK name wherever the house provider carries
     it (`glib2` ← glib2-git, `krb5` ← krb5-git — expac-evidenced
     `'%n :: %P'`, 2026-10-15 wave-8 spelling audit), except when two

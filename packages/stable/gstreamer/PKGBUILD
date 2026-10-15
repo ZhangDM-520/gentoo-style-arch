@@ -353,6 +353,12 @@ package_gstreamer() {
     libgstreamer-1.0.so
   )
   depends=(
+    # elfutils: the shipped libgstreamer-1.0.so* hard-link libdw.so.1 (3
+    # refs, rule-54 declared-deps sweep) — hard DT_NEEDED. Stock spelling:
+    # elfutils-git carries elfutils=… + a bare libdw.so (expac-evidenced);
+    # no soname pairing — the bare provide cannot meet the =1-64 stamp a
+    # libdw.so entry would get (wave-9 postgresql wall class, pahole idiom).
+    elfutils
     glib2
     glibc
     libcap
@@ -1118,6 +1124,14 @@ package_gst-plugins-bad() {
     spandsp
     srt
     svt-av1
+    # webrtc-audio-processing: libgstwebrtcdsp.so hard-links
+    # libwebrtc-audio-processing-2.so.1 (1 ref, rule-54 declared-deps
+    # sweep) — hard DT_NEEDED, the v2 generation next to the v1 row below.
+    # Stock spelling + soname pairing (stamp meets provide): the stock
+    # webrtc-audio-processing carries libwebrtc-audio-processing-2.so=1-64
+    # (expac-evidenced) — sibling idiom pipewire's
+    # webrtc-audio-processing-1 libwebrtc-audio-processing-1.so.
+    webrtc-audio-processing libwebrtc-audio-processing-2.so
     webrtc-audio-processing-1
     wildmidi
     x265
