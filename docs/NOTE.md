@@ -1,3 +1,55 @@
+## 2026-10-15 — scx-scheds-git `makepkg -sif` abort: poisoned shared-SRCDEST worktree after mirror replacement (dangling `lucjan/workbench` ref; no PKGBUILD lever exists)
+
+**Symptom.** `makepkg -sif` in the `~/Workspace` copy of
+`packages/git/scx-scheds-git`: `download_git` re-cloned the bare mirror
+`~/.cache/gsa-src/scx` (75 093 objects, clean), then `extract_git` died —
+`fatal: bad object refs/remotes/origin/lucjan/workbench`,
+`error: /home/zhangdm/.cache/gsa-src/scx did not send all necessary objects`,
+`Failure while updating working copy of scx git repo`.
+
+**Root cause.** Three facts coincide. (1) The recipe's `src/scx` worktree
+(2026-10-11 engine build) owns NO objects —
+`.git/objects/info/alternates` points into the SRCDEST mirror's `objects/`.
+(2) That mirror was deleted between 10-11 and 10-15 and the failing run's own
+download step re-cloned it fresh (the `Cloning into bare repository` line).
+(3) Upstream force-pushed `lucjan/workbench`: the worktree's recorded tip
+`b1177459b2e9…` is unreachable now (fresh mirror carries `e4f6ac0b6eae…`), so
+the worktree's ref dangles. makepkg's `extract_git` takes the *update* path
+whenever `$srcdir/<repo>` exists (`git fetch` inside it) and aborts on the
+dangling ref — `git -C src/scx fetch` reproduced the exact error (rc 1),
+before any build step ran.
+
+**Fix.** Delete the poisoned worktree (`rm -rf src/scx`; equivalent to
+`makepkg --cleanbuild`) so extraction re-clones from the healthy mirror. No
+recipe change is possible or needed: `extract_sources` dispatches
+`extract_git` unconditionally for `git+` sources and `noextract` is honoured
+only by `extract_file` (`/usr/share/makepkg/source/file.sh:93`); the update
+path keys on `$srcdir/<repo>` existence before any fragment handling; no
+PKGBUILD code runs before extract (flow: download → integrity → [CLEANBUILD
+wipes `$srcdir`] → extract → prepare → pkgver, `/usr/bin/makepkg:1470-1520`).
+Source style is house-standard (52 of 199 in-tree `git+` sources carry a
+fragment at all; this one's bare `git+URL` matches).
+
+**Validation.** Pre-fix, `git -C src/scx fetch` reproduced the reported
+error verbatim (causation: same command, before/after). Post-fix,
+`GIT_CONFIG_COUNT=0 makepkg -sif --noconfirm` in the workspace recipe dir —
+rc 0 end-to-end (retrieval → extract → pkgver → prepare → build → package →
+`pacman -U` installed `scx-scheds-git 1.1.3.r628.gf396a010f-1`); the follow-up
+run's extract took the update path again and succeeded (`Switched to a new
+branch 'makepkg'`), proving the worktree healthy.
+
+**Durable rule.** A shared-SRCDEST mirror is the *only* object store for its
+`clone -s` worktrees — replacing (or gc'ing) a mirror strands every surviving
+worktree whose refs cite old tips. After any SRCDEST mirror rebuild, or an
+upstream force-push landing in a shared mirror, drop the recipe's
+`src/<repo>` worktree (or run `makepkg --cleanbuild`) before the next
+makepkg; the abort is not fixable at PKGBUILD level. Detect with
+`git -C <worktree> show-ref 2>&1 | grep 'fatal: git show-ref: bad ref'` —
+grepping `bad ref` alone false-positives on shas ending `…bad refs/…` (caught
+live this session). 49 worktrees across `~/Projects` + `~/Workspace` currently
+carry dangling refs (reported, not swept — engine/recipe scope owned
+elsewhere).
+
 ## 2026-10-15 — wave-10C burn-down: thirteen rows, twelve pairings and one plain name; the stem-spelling wall (`X.so` provide name, never the `X.so.N` soname)
 
 **Symptom / root cause.** 1-row tier batch three: hplip iproute2 jack2-git

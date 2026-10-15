@@ -1917,6 +1917,19 @@ constant, not a baked path).
 
 ## 6. Pitfall digest (full details: NOTE.md sections of same dates)
 
+- **A `clone -s` worktree dies when its shared SRCDEST mirror is rebuilt
+  under it — drop the worktree, never chase the PKGBUILD** (2026-10-15
+  scx-scheds-git): makepkg's `extract_git` updates `$srcdir/<repo>` in place
+  (`git fetch`) whenever it exists, but the worktree owns no objects
+  (alternates → mirror), so a replaced/gc'd mirror plus an upstream
+  force-push leaves a dangling ref that aborts extraction (`fatal: bad object
+  … did not send all necessary objects`). No recipe lever exists (`noextract`
+  skips only `extract_file`; nothing in the PKGBUILD runs before extract).
+  Remediation: `rm -rf src/<repo>` or `makepkg --cleanbuild`.
+  Detection: `git -C <worktree> show-ref 2>&1 | grep 'fatal: git show-ref:
+  bad ref'` (plain `bad ref` grep false-positives on shas ending `…bad`).
+  Details: NOTE.md 2026-10-15.
+
 - **Budget scalars are integers and a run record is one row per subject —
   the strict `format: 2` parser rejects `lanes: -` and duplicate `order:`
   entries** (2026-10-14 cutover gap (a)): the pre-cutover `-U` run records
