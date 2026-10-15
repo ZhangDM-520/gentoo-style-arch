@@ -16,8 +16,8 @@ pkgbase = qt5-tools
 	makedepends = git
 	depends = qt5-base
 	depends = hicolor-icon-theme
-	optdepends = clang: for qdoc
-	optdepends = qt5-declarative: for qdistancefieldgenerator
+	depends = llvm-git
+	depends = qt5-declarative
 	conflicts = qtchooser
 	source = kde-qttools::git+https://invent.kde.org/qt/qt/qttools#commit=3e3ab58b40734a1b9bbb7e72b2969d1f752351b1
 	sha256sums = 3ebda6953d46ecb154d50b68085971a95fdd72c4cc2634b867adcac8d1030b1a

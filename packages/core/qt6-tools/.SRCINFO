@@ -1,6 +1,6 @@
 pkgbase = qt6-tools
 	pkgdesc = A cross-platform application and UI framework (Development Tools, QtHelp)
-	pkgver = 6.13.0_r7584.gf7b399a94
+	pkgver = 6.13.0_r7614.g3496da5f9
 	pkgrel = 1
 	url = https://www.qt.io
 	arch = x86_64
@@ -21,9 +21,9 @@ pkgbase = qt6-tools
 	depends = libstdc++
 	depends = litehtml
 	depends = qt6-base
+	depends = qt6-declarative
 	depends = zstd
 	optdepends = clang: for qdoc and lupdate
-	optdepends = qt6-declarative: for qdistancefieldgenerator, qdoc and lupdate
 	source = git+https://code.qt.io/qt/qttools#branch=dev
 	source = git+https://code.qt.io/playground/qlitehtml
 	sha256sums = SKIP

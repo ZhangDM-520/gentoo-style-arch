@@ -10,10 +10,13 @@ arch=('x86_64')
 url='https://www.qt.io'
 license=('GPL3' 'LGPL3' 'FDL' 'custom')
 pkgdesc='A cross-platform application and UI framework (Development Tools, QtHelp)'
-depends=('qt5-base' 'hicolor-icon-theme')
+# llvm-git: qdoc links libclang.so.24.0 (x2 with its -qt5 symlink);
+# qt5-declarative: qdistancefieldgenerator links libQt5Quick.so.5 (x2 with its
+# -qt5 symlink) and the designer qquickwidget plugin links
+# libQt5QuickWidgets.so.5 — rule-54 class: opt/makedepends-only before, so the
+# providers were orphan-removable. Not trimmable.
+depends=('qt5-base' 'hicolor-icon-theme' 'llvm-git' 'qt5-declarative')
 makedepends=('qt5-declarative' 'vulkan-headers' 'llvm' 'clang' 'git')
-optdepends=('clang: for qdoc'
-            'qt5-declarative: for qdistancefieldgenerator')
 groups=('qt5')
 conflicts=('qtchooser')
 _pkgfqn=${pkgname/5-/}

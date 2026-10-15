@@ -3,7 +3,7 @@
 
 pkgname=qt6-positioning
 # placeholder — overridden by pkgver() (git describe on dev branch)
-pkgver=6.13.0_r4385.g793ef50c
+pkgver=6.13.0_r4386.g4c70c89a
 pkgrel=1
 arch=(x86_64)
 url='https://www.qt.io'
@@ -15,15 +15,15 @@ pkgdesc='Provides access to position, satellite and area monitoring classes'
 depends=(glibc
          libgcc
          libstdc++
-         qt6-base)
+         qt6-base
+         qt6-declarative  # libQt6PositioningQuick.so + qml/QtPositioning/libpositioningquickplugin.so (libQt6Qml.so.6), libQt6PositioningQuick.so (libQt6Quick.so.6)
+         qt6-serialport)  # plugins/position/libqtposition_nmea.so (libQt6SerialPort.so.6)
 makedepends=(cmake
              git
              ninja
              qt6-declarative
              qt6-serialport)
-optdepends=('geoclue: geoclue2 plugin'
-            'qt6-declarative: QML bindings'
-            'qt6-serialport: NMEA plugin')
+optdepends=('geoclue: geoclue2 plugin')
 groups=(qt6)
 _pkgfn=${pkgname/6-/}
 source=(git+https://code.qt.io/qt/$_pkgfn#branch=dev)

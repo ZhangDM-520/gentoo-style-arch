@@ -82,6 +82,17 @@ package_boost() {
     python -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
 
   pkgdesc+=' (development headers)'
+  # rule 54: the shipped b2/bjam executables link the toolchain runtime
+  # (libc.so.6, libgcc_s.so.1, libstdc++.so.6) — not trimmable. Stock
+  # spellings: the snapshot providers carry libgcc/libstdc++ and glibc-git
+  # carries glibc (expac-evidenced; sibling idiom smartmontools/postgresql-libs).
+  depends=(
+    'glibc'
+    'libgcc'
+    'libgcc_s.so'
+    'libstdc++'
+    'libstdc++.so'
+  )
   optdepends=('python: for python bindings')
 
   install -d "$pkgdir"/usr/lib
@@ -105,13 +116,17 @@ package_boost-libs() {
     'bzip2'
     'glibc'
     'icu'
+    'libcrypto.so'
     'libgcc'
+    'libssl.so'
     'libstdc++'
+    'openmpi'
+    'openssl'
+    'python'
     'xz'
     'zlib'
     'zstd'
   )
-  optdepends=('openmpi: for mpi support')
   options=('staticlibs')
   provides=(
     libboost_atomic.so

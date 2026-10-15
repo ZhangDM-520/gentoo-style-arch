@@ -4,7 +4,7 @@
 
 pkgname=qt6-tools
 # placeholder — overridden by pkgver() (git describe on dev branch)
-pkgver=6.13.0_r7584.gf7b399a94
+pkgver=6.13.0_r7614.g3496da5f9
 pkgrel=1
 arch=(x86_64)
 url='https://www.qt.io'
@@ -17,6 +17,7 @@ depends=(glibc
          libstdc++
          litehtml
          qt6-base
+         qt6-declarative  # linguist/ltext2id/lupdate* (libQt6Qml), qdistancefieldgenerator + designer/libqquickwidget (libQt6Quick{,Widgets})
          zstd)
 makedepends=(clang
              cmake
@@ -26,8 +27,7 @@ makedepends=(clang
              ninja
              qt6-declarative
              vulkan-headers)  # litehtml: QLITEHTML_USE_SYSTEM_LITEHTML=ON consumer (NOTE.md 2026-10-11)
-optdepends=('clang: for qdoc and lupdate'
-            'qt6-declarative: for qdistancefieldgenerator, qdoc and lupdate')
+optdepends=('clang: for qdoc and lupdate')
 groups=(qt6)
 _pkgfn=${pkgname/6-/}
 source=(git+https://code.qt.io/qt/$_pkgfn#branch=dev

@@ -3,14 +3,15 @@
 
 _name=git
 pkgname=$_name-git
-pkgver=2.56.0.r50.gc46c1e3772
+pkgver=2.56.0.r116.g6de20f6092
 pkgrel=1
 pkgdesc='A fast distributed version control system'
 arch=('i686' 'x86_64')
 url='https://git-scm.com/'
 license=('GPL2')
 depends=('curl' 'expat' 'perl-error' 'perl' 'openssl'
-         'perl-mailtools' 'pcre2' 'grep' 'shadow' 'zlib')
+         'perl-mailtools' 'pcre2' 'grep' 'shadow' 'zlib'
+         'glib2' 'libsecret')
 makedepends=('python' 'xmlto' 'asciidoc' 'git')
 optdepends=('tk: gitk and git gui'
             'perl-libwww: git svn'
@@ -23,8 +24,7 @@ optdepends=('tk: gitk and git gui'
             'perl-cgi: gitweb (web interface) support'
             'python: git svn & git p4'
             'subversion: git svn'
-            'org.freedesktop.secrets: keyring credential helper'
-            'libsecret: libsecret credential helper')
+            'org.freedesktop.secrets: keyring credential helper')
 conflicts=('git')
 provides=('git')
 options=()

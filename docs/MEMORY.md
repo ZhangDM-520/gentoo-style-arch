@@ -1094,7 +1094,15 @@
     whenever the link survives into the payload). Spelling: bare `X.so` stem
     only where the provider carries the soname provide (it is auto-versioned
     from NEEDED), plain package name otherwise — `libxres`/
-    `libayatana-indicator` provide nothing, so a stem dep is unsatisfiable.
+    `libayatana-indicator` provide nothing, so a stem dep is unsatisfiable;
+    and the plain name is the STOCK name wherever the house provider carries
+    it (`glib2` ← glib2-git, `krb5` ← krb5-git — expac-evidenced
+    `'%n :: %P'`, 2026-10-15 wave-8 spelling audit), except when two
+    packages of one family ship different soname generations and the
+    provide match decides (`icu-git` for `libicu*.so.79`, `llvm-git` for
+    `libclang.so.24.0` — the `gcr-4`-over-`gcr` precedent). The raw owner
+    name (`glib2-git`) is never the right spelling where a mapped stock
+    name exists.
     The entry is not trimmable: nothing else in the PKGBUILD mentions the
     feature, so carry the reason as a comment. Detection recipe: resolve
     every DT_NEEDED of a consumer's files to owning packages and diff
@@ -1137,6 +1145,15 @@
     construction — check `default_library` when a recipe enables
     `--wrap-mode default` deliberately. See `docs/NOTE.md` 2026-10-14 live
     breakage sweep.
+56. **A non-interactive `makepkg` chain must pass `--noconfirm` — `-s`
+    (syncdeps) otherwise prompts "Proceed with installation? [Y/n]" and
+    aborts** (2026-10-15 wave-8): five serial rebuilds died rc 8 in seconds
+    on missing makedepends (`python-installer`, `python-ply`,
+    `gengetopt`/`ragel`/`scons`, `xmlto`, `xtrans`/`xorg-font-util`) that
+    the prompt could not install. `makepkg -sfC --noconfirm` (the flag
+    exists) or preinstalling the makedepends both fix it; the retry chain
+    went 5/5 green. Same class as the `pacman -U --noconfirm --ask 4`
+    idiom: any pacman call the builder spawns runs unattended.
 
 ## 2. Workspace overview
 

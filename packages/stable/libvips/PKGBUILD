@@ -8,9 +8,10 @@ arch=('x86_64')
 license=('LGPL-2.1-or-later')
 url="https://libvips.github.io/libvips/"
 depends=('cairo' 'cfitsio' 'expat' 'fftw' 'fontconfig' 'glib2' 'glibc' 'highway'
-         'lcms2' 'libarchive' 'libcgif' 'libexif' 'libgcc' 'libimagequant'
-         'libjpeg-turbo' 'libmatio' 'libpng' 'libraw' 'librsvg' 'libstdc++'
-         'libtiff' 'libwebp' 'openexr' 'openjpeg2' 'pango' 'zlib')
+         'imagemagick' 'lcms2' 'libarchive' 'libcgif' 'libexif' 'libgcc'
+         'libimagequant' 'libjpeg-turbo' 'libmatio' 'libpng' 'libraw' 'librsvg'
+         'libstdc++' 'libtiff' 'libwebp' 'openexr' 'openjpeg2' 'openslide'
+         'pango' 'poppler-glib' 'zlib')
 # trim: doxygen/gi-docgen/graphviz dropped together with the libvips-docs
 # split output (docs are not built in this recipe)
 makedepends=('glib2-devel' 'gobject-introspection'
@@ -49,11 +50,10 @@ check() {
 }
 
 package_libvips() {
-  optdepends=('imagemagick: for magick module'
-              'libheif: for heif module'
+  # imagemagick/openslide/poppler-glib promoted to depends (2026-10-15
+  # declared-deps sweep: the shipped vips-modules link their libraries)
+  optdepends=('libheif: for heif module'
               'libjxl: for jxl module'
-              'openslide: for openslide module'
-              'poppler-glib: for poppler module'
               'python: for vipsprofile')
   provides=('libvips.so' 'libvips-cpp.so')
 

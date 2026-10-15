@@ -10,12 +10,18 @@ license=(
   CC0-1.0
   MPL-2.0
 )
+# declared-deps sweep: the shipped tools link libpulse.so.0, libsndfile.so.1
+# and libsox_ng.so.3 at runtime — libpulse/sox were optdepends before.
+# Stock spellings: the house -git providers carry these names (expac-evidenced).
 depends=(
   glibc
+  libpulse
+  libsndfile
   libstdc++
   libunwind
   libuv
   openssl
+  sox
 )
 # trim: cpputest (test suite) — --enable-tests dropped below
 makedepends=(
@@ -27,10 +33,6 @@ makedepends=(
   scons
   sox
   speexdsp
-)
-optdepends=(
-  'libpulse: for roc-conv, roc-receive and roc-send'
-  'sox: for roc-conv, roc-receive and roc-send'
 )
 provides=(libroc.so)
 source=(

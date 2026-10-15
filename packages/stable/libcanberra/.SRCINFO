@@ -21,7 +21,7 @@ pkgbase = libcanberra
 	provides = libcanberra.so
 	provides = libcanberra-gtk3.so
 	options = libtool
-	source = git+https://git.0pointer.net/clone/libcanberra.git#commit=c0620e432650e81062c1967cc669829dbd29b310
+	source = git+https://github.com/Distrotech/libcanberra.git#commit=c0620e432650e81062c1967cc669829dbd29b310
 	source = 40-libcanberra-gtk-module.sh
 	source = libcanberra-multi-backend.patch
 	sha256sums = SKIP

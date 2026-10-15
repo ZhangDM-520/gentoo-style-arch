@@ -11,9 +11,17 @@ pkgdesc='Portable Hardware Locality is a portable abstraction of hierarchical ar
 url='https://www.open-mpi.org/projects/hwloc/'
 arch=('x86_64')
 license=('BSD-3-Clause')
+# cairo/libx11/libxml2: lstopo links libcairo.so.2 + libX11.so.6 and the
+# shipped hwloc_xml_libxml.so plugin links libxml2.so.16 at runtime
+# (declared-deps sweep) — hard DT_NEEDED, so the former optdepends entries
+# were denial tables and are retired. Stock spellings: the house -git
+# providers carry these names with the same sonames (expac-evidenced).
 depends=(
+  'cairo'
   'glibc'
   'libpciaccess'
+  'libx11'
+  'libxml2'
   'ncurses'
   'systemd-libs'
 )
@@ -26,10 +34,6 @@ makedepends=(
 provides=(libhwloc.so
           hwloc_pci.so
           hwloc_xml_libxml.so)
-optdepends=(
-  'cairo: PDF, Postscript, and PNG export support'
-  'libxml2: full XML import/export support'
-)
 options=('!docs')
 source=("https://www.open-mpi.org/software/hwloc/v${pkgver%.*}/downloads/${pkgname}-${pkgver}.tar.bz2")
 sha512sums=('3eca90872686c5887c6430b9d0b1e7ad50942f2afe77d599a79677c55072183809ca3cef2a68f727e8fa12183b4d2da0a5dea06aee4a9ea416059d3df3e18126')

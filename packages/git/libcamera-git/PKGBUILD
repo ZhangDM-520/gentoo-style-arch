@@ -4,7 +4,7 @@
 
 pkgname=libcamera-git
 _pkgname=libcamera
-pkgver=0.7.2.r159.gc0049ea06
+pkgver=0.7.2.r165.ga92285e9c
 pkgrel=1
 pkgdesc="A complex camera support library for Linux, Android, and ChromeOS (git build)"
 arch=('x86_64')
@@ -18,7 +18,7 @@ license=(
   'GPL-2.0-or-later WITH Linux-syscall-note OR BSD-3-Clause'
   'GPL-2.0-or-later WITH Linux-syscall-note OR MIT'
 )
-depends=('glibc' 'gnutls' 'libelf' 'libgcc' 'libstdc++' 'libunwind' 'libyaml' 'libyuv' 'sh' 'systemd-libs')
+depends=('elfutils' 'glibc' 'gnutls' 'libegl' 'libelf' 'libgcc' 'libgles' 'libstdc++' 'libunwind' 'libyaml' 'libyuv' 'sh' 'systemd-libs')
 makedepends=('cmake' 'git' 'meson' 'ninja' 'python-jinja' 'python-ply' 'python-pyyaml')
 # Delivers stock libcamera + libcamera-ipa (usr/lib/libcamera/ IPA modules and
 # v4l2 compat layer, stock's -ipa split). Stock -tools/-docs/gst-plugin/python

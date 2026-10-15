@@ -14,8 +14,8 @@ pkgbase = libnice
 	depends = glib2
 	depends = glibc
 	depends = gnutls
+	depends = gstreamer
 	depends = gupnp-igd
-	optdepends = gstreamer: "nice" GStreamer plugin
 	provides = libnice.so
 	source = git+https://gitlab.freedesktop.org/libnice/libnice.git#tag=0.1.24
 	source = 0001-Update-for-gupnp-igd-1.6.patch

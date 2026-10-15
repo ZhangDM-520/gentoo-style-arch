@@ -81,6 +81,9 @@ pkgname = xorg-server
 	depends = libdrm
 	depends = libxshmfence
 	depends = libxcvt
+	depends = libbsd
+	depends = libmd
+	depends = libselinux
 	provides = X-ABI-VIDEODRV_VERSION=25.2
 	provides = X-ABI-XINPUT_VERSION=24.4
 	provides = X-ABI-EXTENSION_VERSION=10.0

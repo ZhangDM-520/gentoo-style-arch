@@ -158,13 +158,18 @@ build() {
 
 package_mariadb-libs() {
   pkgdesc='MariaDB libraries'
-  depends=('liburing' 'liburing.so'
+  # links: shipped outputs link these (rule-54 class — gssapi was
+  # optdepends-only before)
+  depends=('krb5' 'libgssapi_krb5.so'
+           'libaio' 'libaio.so'
+           'liburing' 'liburing.so'
            'libxcrypt' 'libcrypt.so'
+           'numactl' 'libnuma.so'
            'openssl' 'libcrypto.so' 'libssl.so'
            'pcre2' 'libpcre2-8.so'
            'zlib' 'libz.so'
            'zstd' 'libzstd.so')
-  optdepends=('krb5: for gssapi authentication')
+  optdepends=()
   # conflicts/replaces dropped (house rule)
   provides=('libmariadbclient'
 	    'mariadb-connector-c'

@@ -21,6 +21,8 @@ pkgname = sword
 	depends = curl
 	depends = clucene
 	depends = xz
+	depends = bzip2
+	depends = icu-git
 	provides = libsword.so
 	backup = etc/sword.conf
 

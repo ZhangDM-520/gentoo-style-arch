@@ -13,8 +13,9 @@ pkgbase = qt5-speech
 	makedepends = flite
 	makedepends = speech-dispatcher
 	depends = qt5-multimedia
-	optdepends = flite: flite TTS backend
-	optdepends = speech-dispatcher: speech-dispatcher TTS backend
+	depends = flite
+	depends = libspeechd
+	optdepends = speech-dispatcher: speech-dispatcher daemon for the speechd TTS backend
 	source = kde-qtspeech::git+https://invent.kde.org/qt/qt/qtspeech#commit=a384f0d4fb8a2d0743d5dfdf12e40f6d76f8714c
 	sha256sums = 9f0f00812eb0a15ed058385fce2a646b503372e9b61718d737d48b3a3d1496ef
 

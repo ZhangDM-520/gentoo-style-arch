@@ -49,7 +49,7 @@ build() {
 }
 
 package_sword() {
-  depends=('curl' 'clucene' 'xz')
+  depends=('curl' 'clucene' 'xz' 'bzip2' 'icu-git')
   provides=('libsword.so')
   backup=('etc/sword.conf')
 

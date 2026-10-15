@@ -9,10 +9,13 @@ pkgdesc="Nice: GLib ICE library"
 url="https://libnice.freedesktop.org/"
 arch=(x86_64)
 license=('MPL-1.1 OR LGPL-2.1-only')
+# gstreamer: shipped libgstnice.so links the GStreamer libs at runtime
+# (declared-deps sweep) — was an optdepends before.
 depends=(
   glib2
   glibc
   gnutls
+  gstreamer
   gupnp-igd
 )
 # trim: gtk-doc (API docs) + graphviz (gtk-doc inheritance diagrams) go
@@ -27,7 +30,6 @@ makedepends=(
 checkdepends=(
   gst-plugins-base-libs
 )
-optdepends=('gstreamer: "nice" GStreamer plugin')
 provides=(libnice.so)
 source=(
   "git+https://gitlab.freedesktop.org/libnice/libnice.git#tag=$pkgver"

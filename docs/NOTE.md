@@ -1,3 +1,44 @@
+## 2026-10-15 — wave-8 burn-down: sixteen recipes declare 49 links; libcanberra rebuilt from a content-addressed mirror; spelling audit restores the stock-name rule
+
+**Symptom / root cause.** Rows-3 tier of the sweep plus the boost split
+outputs (same rule-54 shape): xorg-server sword roc-toolkit qt6-tools
+qt6-positioning qt5-tools qt5-speech qt5-multimedia mariadb-libs libvips
+libnice libcamera-git hwloc git-git boost(3) boost-libs(4) — 49 GAP rows,
+every one a shipped DT_NEEDED its recipe never declared.
+**Fix.** One entry per owner, matched `optdepends` denial-tables retired
+in the same edit (qt5-speech keeps its `speech-dispatcher` daemon entry —
+only the `libspeechd` link became hard). **Spelling audit caught a brief
+bug**: the fleet briefs said "declare the row's owner name verbatim",
+which contradicts the wave-3/4 durable rule — spellings are expac-evidenced
+**stock names where the house providers carry them**; nine declarations
+were corrected to `glib2` `cairo` `libx11` `libxml2` `bzip2` `krb5`
+`elfutils` `libpulse` `libsndfile`, while `icu-git` and `llvm-git` stay
+literal under the provide-match exception (family members ship different
+soname generations — `.79`/`.24` — the `gcr-4`-over-`gcr` precedent).
+Provider+soname pairing idiom kept (`'openssl' 'libcrypto.so' 'libssl.so'`,
+`'libgcc' 'libgcc_s.so'`). Rule 54 extended in `docs/MEMORY.md`.
+**libcanberra unblocked.** `git.0pointer.net` still serves a TLS
+certificate with no SAN for its hostname (`git ls-remote` rc 128,
+2026-10-15). The source host moved to the `Distrotech/libcanberra` GitHub
+mirror **in its own change, `#commit` pin kept**: fetching the pinned
+`c0620e43…` by SHA from the mirror returned exactly that hash, so the
+payload is content-addressed identical to upstream's. Rebuilt, installed,
+scoped gate clean. Restore the 0pointer URL when its TLS is fixed.
+**Chain wall.** `makepkg -sfC`'s syncdeps half prompted
+"Proceed with installation? [Y/n]" and aborted five builds (rc 8, seconds)
+on missing makedepends (`python-installer` `python-ply` `gengetopt`
+`ragel` `scons` `xmlto` `xtrans` `xorg-font-util`); `makepkg -sfC
+--noconfirm` retry went 5/5. Durable rule 56 in `docs/MEMORY.md`.
+Also noted: `gsa --qa-check declared-deps` takes recipe ids/paths only —
+the split output `boost` is not a resolvable ref there (its rows ride the
+full-seam check and the closing `declgap2.py` sweep).
+**Validation.** `bash -n` ×16, `.SRCINFO` regenerated per recipe (after
+build, absorbing VCS `pkgver()` write-back), serial rebuild chain
+(`makepkg -sfC --noconfirm`, one heavy build at a time) + one `pacman -U`
+per recipe — 16 recipes rebuilt and installed (libcanberra included) —
+scoped `gsa --qa-check declared-deps` clean for every gated id, full
+archive-seam check clean, fixture battery **65/65 PASS**.
+
 ## 2026-10-15 — wave-7 burn-down: nine recipes declare 36 links; libcanberra's rebuild parks on an upstream TLS outage
 
 **Symptom / root cause.** Rows-4/3 tier of the sweep (same rule-54
