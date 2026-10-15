@@ -1,8 +1,8 @@
-//! Write-time ownership (contract §J.5, `docs/MEMORY.md` rule 19): every
-//! state file is owned by the build user from the moment it is created. A
-//! file owned by someone else is quarantined as `<path>.stale.<epoch>.<pid>`
-//! (preserved, announced) before any write opens it — there is no root
-//! fallback and no silent adoption. The quarantine itself is
+//! Write-time ownership (contract §J.5, `docs/MEMORY.md` rule 19): engine
+//! state is owned by the privileged runner (mutating runs are root —
+//! contract §B.10). A file owned by anyone the running engine is not is
+//! quarantined as `<path>.stale.<epoch>.<pid>` (preserved, announced) before
+//! any write opens it — no silent adoption. The quarantine itself is
 //! `gsa-sched::lock`'s (rule 19 has one home); this module is the gate every
 //! `gsa-state` write path passes through.
 
@@ -17,7 +17,7 @@ pub enum StateError {
     Create(String),
     /// A file could not be read/written.
     Io(String),
-    /// The file is not owned by the build user and could not be quarantined.
+    /// The file is not owned by the running engine and could not be quarantined.
     Ownership(String),
     /// A row was written without a known `sha256`+`size` — fail closed
     /// (§J.4: the row is written only after both are known).

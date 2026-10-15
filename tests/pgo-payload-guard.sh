@@ -61,7 +61,7 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/rr-v2.bash"
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-pgo-payload.XXXXXX")
-trap 'rm -rf -- "$fixture"' EXIT
+trap '/usr/bin/sudo -n rm -rf -- "$fixture" 2>/dev/null || rm -rf -- "$fixture" 2>/dev/null || true' EXIT
 
 fail() {
     printf 'PGO payload guard fixture: %s\n' "$1" >&2
@@ -238,9 +238,9 @@ refuses() {
         exit 1
     fi
     rows=$output
-    printf '%s\n' "$rows" | grep -Eq "^$id refuse pgo-hit " ||
+    vgrep "$rows" -Eq "^$id refuse pgo-hit " ||
         { printf 'refusal rows for %s carry no pgo-hit row (§E.3):\n%s\n' "$id" "$rows" >&2; exit 1; }
-    printf '%s\n' "$rows" | grep -Eq "^$id refuse pgo-instrumented " ||
+    vgrep "$rows" -Eq "^$id refuse pgo-instrumented " ||
         { printf 'refusal rows for %s carry no pgo-instrumented row (§E.3):\n%s\n' "$id" "$rows" >&2; exit 1; }
     printf '%s\n' "$rows" | grep -F -- "$member" >/dev/null ||
         { printf 'refusal rows for %s did not name the member %s:\n%s\n' "$id" "$member" "$rows" >&2; exit 1; }
@@ -253,7 +253,7 @@ refuses() {
             "$id" "$output" >&2
         exit 1
     fi
-    printf '%s\n' "$output" | grep -Eq "install-refused pgo-" ||
+    vgrep "$output" -Eq "install-refused pgo-" ||
         { printf 'the -Ua run for %s did not carry install-refused pgo-* outcome rows:\n%s\n' "$id" "$output" >&2; exit 1; }
     printf '%s\n' "$output" | grep -F -- "$member" >/dev/null ||
         { printf 'the -Ua refusal for %s did not name %s:\n%s\n' "$id" "$member" "$output" >&2; exit 1; }

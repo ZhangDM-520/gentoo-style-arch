@@ -49,7 +49,8 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/rr-v2.bash"
 
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-sched-v2.XXXXXX")
-trap 'rm -rf -- "$fixture"' EXIT
+# root-safe cleanup: engine state under $fixture is root-owned (W5 §B.10)
+trap '/usr/bin/sudo -n rm -rf -- "$fixture" 2>/dev/null || rm -rf -- "$fixture" 2>/dev/null || true' EXIT
 
 fail() {
     printf '%s\n' "$1" >&2
@@ -63,11 +64,15 @@ fail() {
 rr2_stub_knob GSA_FAKE_DEFER_PACKAGE "gsa-sched-v2 makepkg stub: package id whose build exits 99 (deferral)"
 rr2_stub_knob GSA_FAKE_ENGINE_PID "gsa-sched-v2 engine wrapper: pidfile of the engine process to signal"
 
-# ─── The engine under test: built into the fixture tree (scratch only) ──────
-cargo build --offline --quiet --target-dir "$fixture/cargo" -p gsa-cli \
-    --manifest-path "$gsa_repo_root/Cargo.toml" \
-    || fail "cannot build the gsa binary for the fixture"
-gsa_bin="$fixture/cargo/debug/gsa"
+# ─── The engine under test: scratch build only when GSA_TEST_GSA_BIN is not
+# already set (the rr-v2.bash run_engine convention) ──────────────────────
+if [ -z "${GSA_TEST_GSA_BIN:-}" ]; then
+    cargo build --offline --quiet --target-dir "$fixture/cargo" -p gsa-cli \
+        --manifest-path "$gsa_repo_root/Cargo.toml" \
+        || fail "cannot build the gsa binary for the fixture"
+    GSA_TEST_GSA_BIN="$fixture/cargo/debug/gsa"
+fi
+gsa_bin="$GSA_TEST_GSA_BIN"
 [ -x "$gsa_bin" ] || fail "cargo did not produce $gsa_bin"
 export GSA_TEST_ENGINE=gsa
 export GSA_TEST_GSA_BIN="$gsa_bin"
@@ -160,12 +165,12 @@ codec_roundtrip() {
     *) fail "wire code '$wire_code' is not a §F.1 lane code:" "$file" ;;
     esac
     [ "$wire_code" = "$code" ] || fail "wire code is '$wire_code', want '$code':" "$file"
-    printf '%s\n' "$wire_dur" | grep -Eq "$dur_re" \
+    vgrep "$wire_dur" -Eq "$dur_re" \
         || fail "wire duration '$wire_dur' does not match $dur_re:" "$file"
     [ "$wire_reason" = "$reason" ] || fail "wire reason is '$wire_reason', want '$reason':" "$file"
     printf '%s\n' "$wire_pkg_ver $wire_pkg $wire_code $wire_dur $wire_reason" | cmp -s - "$file" \
         || fail "the wire line does not re-encode byte-identically (round-trip):" "$file"
-    if find "$(dirname "$file")" -maxdepth 1 -name "$(basename "$file").tmp.*" -print -quit | grep -q .; then
+    if grep < <(find "$(dirname "$file")" -maxdepth 1 -name "$(basename "$file").tmp.*" -print -quit) -q .; then
         fail "atomic publication left a temp name beside $file"
     fi
 }
@@ -280,7 +285,7 @@ codec_roundtrip() {
     # nothing is parked (fail-fast stops dispatch; it does not park)
     failed=$(printf '%s\n' "$rows" | awk '$2 == "failed" { print $1 }')
     [ "$failed" = "a" ] || fail "expected exactly the failing package in failed rows, got [$failed]"
-    if printf '%s\n' "$rows" | awk '$2 == "parked"' | grep -q .; then
+    if grep < <(printf '%s\n' "$rows" | awk '$2 == "parked"') -q .; then
         fail "--fail-fast must not park rows:" "$fixture/failfast/output.txt"
     fi
     for pkg in b c u; do
@@ -333,7 +338,7 @@ codec_roundtrip() {
             || fail "$policy: the deferring package must be deferred, not parked:" "$fixture/defer/output-$policy.txt"
         [ "$(rr2_outcome a rc <<<"$FIXTURE_OUTPUT")" = "99" ] \
             || fail "$policy: deferral is lane code 99 (§F.1):" "$fixture/defer/output-$policy.txt"
-        rr2_outcome a reason <<<"$FIXTURE_OUTPUT" | grep -Eq '^(anchoring-refused|upstream-unverified|source-unfetchable)$' \
+        grep < <(rr2_outcome a reason <<<"$FIXTURE_OUTPUT") -Eq '^(anchoring-refused|upstream-unverified|source-unfetchable)$' \
             || fail "$policy: deferral reason is not a §H.3 deferral key:" "$fixture/defer/output-$policy.txt"
 
         cone=$(consumers_closure "$edges" a)
@@ -383,7 +388,9 @@ EOF
         for _ in $(seq 1 400); do [ -s "$pidfile" ] && break; sleep 0.025; done
         [ -s "$pidfile" ] || exit 0
         for _ in $(seq 1 400); do [ -f "$markerdir/slow" ] && break; sleep 0.025; done
-        kill -INT "$(cat "$pidfile")" 2>/dev/null || true
+        # the engine is root under W5 (run_engine's sudo) — signal it through
+        # the host's REAL sudo, never the PATH stub
+        /usr/bin/sudo -n kill -INT "$(cat "$pidfile")" 2>/dev/null || true
     ) &
     watcher=$!
     GSA_TEST_GSA_BIN="$wrap" GSA_FAKE_ENGINE_PID="$pidfile" \
@@ -415,7 +422,7 @@ EOF
     done
     [ "$(rr2_outcome slow status <<<"$FIXTURE_OUTPUT")" = "interrupted" ] \
         || fail "the in-flight package is not recorded as interrupted (§H.3):" "$fixture/interrupt/output.txt"
-    rr2_outcome slow rc <<<"$FIXTURE_OUTPUT" | grep -Eq '^(129|130|143)$' \
+    grep < <(rr2_outcome slow rc <<<"$FIXTURE_OUTPUT") -Eq '^(129|130|143)$' \
         || fail "an interrupted row's rc is not a signal lane code (§F.1):" "$fixture/interrupt/output.txt"
     [ "$(rr2_outcome after status <<<"$FIXTURE_OUTPUT")" = "never-started" ] \
         || fail "the unlaunched package is not recorded as never-started:" "$fixture/interrupt/output.txt"
@@ -476,20 +483,20 @@ EOF
     # invalid payloads are rc 2 with a message naming the argument (§D.1)
     run_engine "$ws" --lane-job okp "$results/bad1.result" 0
     [ "$FIXTURE_RC" = 2 ] || fail "jobs=0 must be a usage error, got $FIXTURE_RC"
-    printf '%s\n' "$FIXTURE_OUTPUT" | grep -F "jobs '0'" >/dev/null \
+    vgrep "$FIXTURE_OUTPUT" -F "jobs '0'" >/dev/null \
         || fail "the jobs refusal does not name the argument: $FIXTURE_OUTPUT"
     run_engine "$ws" --lane-job okp "$results/bad2.result" 2 --skippgpcheck
     [ "$FIXTURE_RC" = 2 ] || fail "a verification-bypass flag must be a usage error, got $FIXTURE_RC"
-    printf '%s\n' "$FIXTURE_OUTPUT" | grep -F -- "--skippgpcheck" >/dev/null \
+    vgrep "$FIXTURE_OUTPUT" -F -- "--skippgpcheck" >/dev/null \
         || fail "the flag refusal does not name the flag: $FIXTURE_OUTPUT"
-    printf '%s\n' "$FIXTURE_OUTPUT" | grep -F "never weakened" >/dev/null \
+    vgrep "$FIXTURE_OUTPUT" -F "never weakened" >/dev/null \
         || fail "the flag refusal must state verification is never weakened: $FIXTURE_OUTPUT"
     run_engine "$ws" --lane-job "bad pkg" "$results/bad3.result" 2
     [ "$FIXTURE_RC" = 2 ] || fail "a malformed package id must be a usage error, got $FIXTURE_RC"
     run_engine "$ws" --lane-job
     [ "$FIXTURE_RC" = 2 ] || fail "a missing payload must be a usage error, got $FIXTURE_RC"
     # none of the refusals published a result
-    find "$results" -maxdepth 1 -name 'bad*.result' -print -quit | grep -q . \
+    grep < <(find "$results" -maxdepth 1 -name 'bad*.result' -print -quit) -q . \
         && fail "a refused --lane-job payload published a result file"
 
     # coherence (§L.1/§D.1): the roster lists the build flags; the hidden
@@ -527,17 +534,17 @@ EOF
     # free: no db.lck at all
     run_engine "$ws" --stale-lock-check
     [ "$FIXTURE_RC" = 0 ] || fail "the lock probe is report-only (rc 0), got $FIXTURE_RC"
-    printf '%s\n' "$FIXTURE_OUTPUT" | grep -F "status: free" >/dev/null \
+    vgrep "$FIXTURE_OUTPUT" -F "status: free" >/dev/null \
         || fail "a lock-free database must report status: free: $FIXTURE_OUTPUT"
 
     # present-idle: db.lck exists, no open holder
     : >"$db/db.lck"
     run_engine "$ws" --stale-lock-check
     [ "$FIXTURE_RC" = 0 ] || fail "the lock probe is report-only (rc 0), got $FIXTURE_RC"
-    printf '%s\n' "$FIXTURE_OUTPUT" | grep -F "status: present-idle" >/dev/null \
+    vgrep "$FIXTURE_OUTPUT" -F "status: present-idle" >/dev/null \
         || fail "an idle db.lck must report status: present-idle: $FIXTURE_OUTPUT"
     [ -f "$db/db.lck" ] || fail "the probe deleted db.lck (it must never delete)"
-    printf '%s\n' "$FIXTURE_OUTPUT" | grep -F "db.lck is never deleted" >/dev/null \
+    vgrep "$FIXTURE_OUTPUT" -F "db.lck is never deleted" >/dev/null \
         || fail "the probe must state db.lck is never deleted: $FIXTURE_OUTPUT"
 
     # held: this section holds db.lck open — the fd scan must find the holder
@@ -545,16 +552,16 @@ EOF
     run_engine "$ws" --stale-lock-check
     exec 9>&-
     [ "$FIXTURE_RC" = 0 ] || fail "the lock probe is report-only (rc 0), got $FIXTURE_RC"
-    printf '%s\n' "$FIXTURE_OUTPUT" | grep -F "status: held" >/dev/null \
+    vgrep "$FIXTURE_OUTPUT" -F "status: held" >/dev/null \
         || fail "an open holder must report status: held: $FIXTURE_OUTPUT"
-    printf '%s\n' "$FIXTURE_OUTPUT" | grep -F "holder: " >/dev/null \
+    vgrep "$FIXTURE_OUTPUT" -F "holder: " >/dev/null \
         || fail "the probe must identify the holder: $FIXTURE_OUTPUT"
     [ -f "$db/db.lck" ] || fail "the probe deleted a held db.lck (it must never delete)"
 
     # invalid invocation: rc 2 naming the argument (§D.1)
     run_engine "$ws" --stale-lock-check extra
     [ "$FIXTURE_RC" = 2 ] || fail "--stale-lock-check with arguments must be rc 2, got $FIXTURE_RC"
-    printf '%s\n' "$FIXTURE_OUTPUT" | grep -F "takes no arguments" >/dev/null \
+    vgrep "$FIXTURE_OUTPUT" -F "takes no arguments" >/dev/null \
         || fail "the arity refusal does not name the argument: $FIXTURE_OUTPUT"
 )
 
@@ -587,7 +594,7 @@ EOF
         || fail "relative state root build rc=$FIXTURE_RC, want 0:" "$FIXTURE_OUTPUT"
     [ -s "$GSA_FAKE_PACMAN_ENV_LOG" ] \
         || fail "the makepkg stub never ran:" "$FIXTURE_OUTPUT"
-    if grep -v '^PACMAN=/' "$GSA_FAKE_PACMAN_ENV_LOG" | grep -q .; then
+    if grep < <(grep -v '^PACMAN=/' "$GSA_FAKE_PACMAN_ENV_LOG") -q .; then
         fail "makepkg saw a non-absolute PACMAN path (it runs with the recipe's cwd):" "$GSA_FAKE_PACMAN_ENV_LOG"
     fi
     grep -q '^PACMAN=.*/state/locks/pacman-shim$' "$GSA_FAKE_PACMAN_ENV_LOG" \

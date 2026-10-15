@@ -143,7 +143,9 @@ root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 source "$root/tests/lib/fixture-lib.bash"
 source "$root/tests/lib/rr-v2.bash"
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/gsa-abi-drift-install.XXXXXX")
-trap 'rm -rf -- "$tmp"' EXIT
+# Root-safe cleanup: the engine writes its state tree as root (W5), so the
+# plain rm would leave Permission denied noise even on a passing run.
+trap '/usr/bin/sudo -n rm -rf -- "$tmp" 2>/dev/null || rm -rf -- "$tmp" 2>/dev/null || true' EXIT
 
 fail() {
     printf 'abi-drift-install fixture: %s\n' "$1" >&2
@@ -437,6 +439,13 @@ write_srcinfo() {
 ws="$tmp/ws"
 make_workspace "$ws" 1 2 low
 install_fish_oracle "$ws"
+# Fixture-owned builder state tree (W5): the engine creates state/ as root,
+# but the fish sections run the UNPRIVILEGED oracle — N seeds toolchain
+# stamps and the oracle must write logs/, toolchains/ and abi-repair/ itself
+# (ensure_state_dirs' writability contract) — so create those directories
+# BEFORE any engine run first creates state/. Engine writes then land inside
+# fixture-owned directories; only the cleanup needs to be root-safe.
+mkdir -p "$ws/state/logs" "$ws/state/toolchains" "$ws/state/abi-repair"
 make_install_conf "$ws/pacman.conf" # this run's IgnorePkg registration target (never the host's)
 add_package "$ws" libs-git "$gsa_meta_any"
 add_package "$ws" app-git "$gsa_meta_any"
@@ -931,7 +940,7 @@ Provides : libapp.so=1-64'
     snap=$(cat "$ws/marker.snapshot")
     [[ $(grep -c '^U:' "$ws/marker.snapshot") -ge 2 ]] ||
         fail "N: expected at least two transactions (provider, then consumer): $snap"
-    head -1 "$ws/marker.snapshot" | grep -Fq 'app-git' ||
+    grep < <(head -1 "$ws/marker.snapshot") -Fq 'app-git' ||
         fail "N: the repair marker must be recorded BEFORE the provider's transaction lands: $snap"
     [[ ! -e "$ws/state/abi-repair/app-git" ]] ||
         fail "N: the consumer's install must consume its repair marker: $(ls "$ws/state/abi-repair")"
@@ -997,7 +1006,7 @@ Depends On : libgreet.so'
         fail "P: the workspace pin must stay the abi-consumer class: $p_rows"
     grep -Fq "refuse abi-stock-pinner $libs_arch stockpin2 libgreet.so" <<<"$p_rows" ||
         fail "P: the bare-link stock pinner must be named: $p_rows"
-    if grep 'refuse abi-stock-pinner' <<<"$p_rows" | grep -Fq ' app-git'; then
+    if grep < <(grep 'refuse abi-stock-pinner' <<<"$p_rows") -Fq ' app-git'; then
         fail "P: a workspace output must never be named as a stock-side pinner: $p_rows"
     fi
     assert_no_u P

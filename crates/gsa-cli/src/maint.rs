@@ -85,6 +85,48 @@ fn has_flag(inv: &Invocation, name: &str) -> bool {
 
 /// Run one `-M` invocation. rc is §G.1's: 0 reported/applied, 2 usage,
 /// 3 refusal (confirmation, run-in-flight, failed write).
+/// The privilege class of one `-M` invocation (contract §B.10): report forms
+/// are reads, each mutation flag upgrades the verb to root, and `-Mm` alone
+/// stays build-user-only (it rewrites the user's source-mirror tree).
+pub(crate) fn privilege(inv: &Invocation) -> super::Privilege {
+    use super::Privilege::*;
+    if inv.dry_run {
+        return ReadOnly;
+    }
+    let Ok(verb) = verb_of(inv) else {
+        // The cluster error is what the user reads (§B.7); no privilege
+        // opinion is needed.
+        return ReadOnly;
+    };
+    let mutates = has_flag(inv, "--fix")
+        || has_flag(inv, "--prune")
+        || has_flag(inv, "--backfill")
+        || has_flag(inv, "--add")
+        || has_flag(inv, "--remove")
+        || inv.keep.is_some();
+    match verb {
+        MaintVerb::Audit => ReadOnly,
+        MaintVerb::Mirrors => BuildUserOnly,
+        MaintVerb::Prune(_) => Root {
+            needs_build_user: false,
+        },
+        MaintVerb::Doctor
+        | MaintVerb::IgnorePkg
+        | MaintVerb::Logs
+        | MaintVerb::History
+        | MaintVerb::Sets
+        | MaintVerb::World => {
+            if mutates {
+                Root {
+                    needs_build_user: false,
+                }
+            } else {
+                ReadOnly
+            }
+        }
+    }
+}
+
 pub fn run(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
     let verb = match verb_of(inv) {
         Ok(verb) => verb,
@@ -181,6 +223,12 @@ pub fn run(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
             return RC_USAGE;
         }
     };
+    // ── privilege gate (contract §B.10; after every usage preflight and
+    //    before the first state access) ──────────────────────────────────
+    if let Some(code) = crate::privilege_gate(&inv.spelling(), privilege(inv), true, err) {
+        return code;
+    }
+
     let state_dir = gsa_state::resolve_state_root(inv.state_dir.as_deref());
     let state = match StateRoot::open(&state_dir) {
         Ok(state) => state,

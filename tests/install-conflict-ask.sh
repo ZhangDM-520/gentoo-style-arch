@@ -72,7 +72,7 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/rr-v2.bash"
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-install-conflict-ask.XXXXXX")
-trap 'rm -rf -- "$fixture"' EXIT
+trap '/usr/bin/sudo -n rm -rf -- "$fixture" 2>/dev/null || rm -rf -- "$fixture" 2>/dev/null || true' EXIT
 
 fail() {
     printf 'install conflict-ask fixture: %s\n' "$1" >&2
@@ -358,7 +358,7 @@ assert_argv 'A: the -U transaction must be exactly -U --noconfirm --ask 4 --conf
     -U --noconfirm --ask 4 --config "$dir_a/pacman.conf" "$arch_a"
 [[ $(record_scalar outcome) == success && $(record_scalar rc) == 0 ]] ||
     fail "A: the run record must be outcome success rc 0: $FIXTURE_OUTPUT"
-record_section outcome | grep -Eq '^p1 succeeded 0 [0-9]+ ok$' ||
+grep < <(record_section outcome) -Eq '^p1 succeeded 0 [0-9]+ ok$' ||
     fail "A: the record must row 'p1 succeeded 0 <dur> ok' (§H.3): $FIXTURE_OUTPUT"
 printf 'A: -U transaction flags pinned OK\n'
 
@@ -432,9 +432,9 @@ run_install "$dir_c" -U --state-dir "$dir_c/state" --config "$dir_c/pacman.conf"
     fail "C1: an executed empty-list refusal is rc 3 (§G.1), got rc=$FIXTURE_RC: $FIXTURE_OUTPUT"
 [[ $(record_scalar outcome) == refused && $(record_scalar rc) == 3 ]] ||
     fail "C1: the record must be outcome refused rc 3: $FIXTURE_OUTPUT"
-record_section plan | grep -qxF -- '- refused empty-list' ||
+grep < <(record_section plan) -qxF -- '- refused empty-list' ||
     fail "C1: the plan row must record the empty-list refusal (§H.2): $FIXTURE_OUTPUT"
-record_section outcome | grep -qxF -- '- never-started - - install-refused empty-list' ||
+grep < <(record_section outcome) -qxF -- '- never-started - - install-refused empty-list' ||
     fail "C1: the outcome row must record install-refused empty-list (§H.3): $FIXTURE_OUTPUT"
 [[ ! -s "$dir_c/pacman.log" ]] ||
     fail "C1: a refusal row reached the pacman stub: $(cat "$dir_c/pacman.log")"
@@ -486,11 +486,11 @@ run_install "$dir_c" -U --state-dir "$dir_c/state" --config "$dir_c/pacman.conf"
     fail "C3: the order scalar must list p2 once per subject (contract §H.2 amendment (a), 2026-10-14): $FIXTURE_OUTPUT"
 [[ $(record_section plan | grep -c '^p2 ') == 1 ]] ||
     fail "C3: the plan must carry one row for p2 (contract §H.2 amendment (a), 2026-10-14): $FIXTURE_OUTPUT"
-record_section plan | grep -Eq '^p2 refused pgo-hit .*pgo-instrumented' ||
+grep < <(record_section plan) -Eq '^p2 refused pgo-hit .*pgo-instrumented' ||
     fail "C3: the plan row must record the pgo-hit and pgo-instrumented refusals joined (§H.2, amendment (a) 2026-10-14): $FIXTURE_OUTPUT"
 [[ $(record_section outcome | grep -c '^p2 ') == 1 ]] ||
     fail "C3: the outcome must carry one row for p2 (contract §H.2 amendment (a), 2026-10-14): $FIXTURE_OUTPUT"
-record_section outcome | grep -Eq '^p2 never-started - - install-refused pgo-hit .*install-refused pgo-instrumented' ||
+grep < <(record_section outcome) -Eq '^p2 never-started - - install-refused pgo-hit .*install-refused pgo-instrumented' ||
     fail "C3: the outcome row must record install-refused pgo-hit and install-refused pgo-instrumented joined (§H.3, amendment (a) 2026-10-14): $FIXTURE_OUTPUT"
 [[ ! -s "$dir_c/pacman.log" ]] ||
     fail "C3: install execution ran pacman despite a refusal row: $(cat "$dir_c/pacman.log")"
@@ -512,11 +512,11 @@ run_install "$dir_c" -Ua --state-dir "$dir_c/state" --config "$dir_c/pacman.conf
     fail "C3: the -Ua order scalar must list p2 once per subject (contract §H.2 amendment (a), 2026-10-14): $FIXTURE_OUTPUT"
 [[ $(record_section plan | grep -c '^p2 ') == 1 ]] ||
     fail "C3: the -Ua plan must carry one row for p2 (contract §H.2 amendment (a), 2026-10-14): $FIXTURE_OUTPUT"
-record_section plan | grep -Eq '^p2 refused pgo-hit .*pgo-instrumented' ||
+grep < <(record_section plan) -Eq '^p2 refused pgo-hit .*pgo-instrumented' ||
     fail "C3: the -Ua plan row must record the pgo-hit and pgo-instrumented refusals joined (§H.2, amendment (a) 2026-10-14): $FIXTURE_OUTPUT"
 [[ $(record_section outcome | grep -c '^p2 ') == 1 ]] ||
     fail "C3: the -Ua outcome must carry one row for p2 (contract §H.2 amendment (a), 2026-10-14): $FIXTURE_OUTPUT"
-record_section outcome | grep -Eq '^p2 never-started - - install-refused pgo-hit .*install-refused pgo-instrumented' ||
+grep < <(record_section outcome) -Eq '^p2 never-started - - install-refused pgo-hit .*install-refused pgo-instrumented' ||
     fail "C3: the -Ua outcome row must record install-refused pgo-hit and install-refused pgo-instrumented joined (§H.3, amendment (a) 2026-10-14): $FIXTURE_OUTPUT"
 [[ ! -s "$dir_c/pacman.log" ]] ||
     fail "C3: install execution ran pacman despite a refusal row: $(cat "$dir_c/pacman.log")"

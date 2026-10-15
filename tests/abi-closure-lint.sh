@@ -49,7 +49,7 @@ root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 source "$root/tests/lib/fixture-lib.bash"
 source "$root/tests/lib/rr-v2.bash"
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/gsa-abi-closure-lint.XXXXXX")
-trap 'rm -rf -- "$tmp"' EXIT
+trap '/usr/bin/sudo -n rm -rf -- "$tmp" 2>/dev/null || rm -rf -- "$tmp" 2>/dev/null || true' EXIT
 
 fail() {
     printf 'abi-closure-lint fixture: %s\n' "$1" >&2

@@ -21,8 +21,8 @@ pub fn mutex_path(state_dir: &Path) -> PathBuf {
     state_dir.join("locks").join("pacman-mutex")
 }
 
-/// Write the shim once, executable, owned by the invoking user from the
-/// moment it is created (rule 19). Idempotent: an existing shim is left as
+/// Write the shim once, executable, owned by the privileged runner (rule 19:
+/// engine state is root-owned). Idempotent: an existing shim is left as
 /// it is (its baked paths never change for one state root).
 pub fn ensure_pacman_shim(state_dir: &Path) -> Result<PathBuf, String> {
     let path = shim_path(state_dir);
@@ -46,7 +46,7 @@ pub fn ensure_pacman_shim(state_dir: &Path) -> Result<PathBuf, String> {
          if [ -n \"$q\" ] && [ -z \"$t\" ]; then\n\
          \x20   exec \"$P\" \"$@\"\n\
          fi\n\
-         flock -x -w 600 {mutex} sudo -n \"$P\" \"$@\"\n\
+         sudo -n flock -x -w 600 {mutex} \"$P\" \"$@\"\n\
          rc=$?\n\
          if [ \"$rc\" -eq 1 ]; then\n\
          \x20   echo \"gsa pacman shim: transaction failed (sudo -n never prompts)\" >&2\n\

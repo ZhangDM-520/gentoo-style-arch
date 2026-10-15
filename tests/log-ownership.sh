@@ -57,18 +57,21 @@ set -euo pipefail
 # "stale runtime artifacts" family) — the fish-source grep retires per
 # docs/gsa-fixture-migration.md §6 R-1.
 #
-# Portability note (fish sections): fixtures never use sudo, so a genuinely
-# root-owned file cannot be produced here. A user-owned 0444 file is the same
-# class for the FISH predicate (test -w by the build user; open-for-write
-# fails with the same EACCES either way). For the ENGINE the two classes
+# Portability note (fish sections): the fish halves still never use sudo, so
+# a genuinely root-owned file cannot be produced there. A user-owned 0444 file
+# is the same class for the FISH predicate (test -w by the build user;
+# open-for-write fails with the same EACCES either way). The ENGINE halves
+# stage real root-owned files through /usr/bin/sudo (W5): the two classes
 # diverge by design (its ownership gate is uid-based), which is why the
-# engine section pins `log-unwritable` while the root-mode branch needs real
-# root and is argued in docs/NOTE.md.
+# engine section pins `log-unwritable` via an immutable same-owner log while
+# the root-mode branch needs real root and is argued in docs/NOTE.md.
 
 source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/rr-v2.bash"
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-log-ownership.XXXXXX")
-trap 'rm -rf -- "$fixture"' EXIT
+# root-safe cleanup: engine state under $fixture is root-owned (W5 §B.10);
+# the poisoned log is immutable, so lift that first or rm cannot unlink it
+trap '/usr/bin/sudo -n chattr -R -i -- "$fixture" 2>/dev/null; /usr/bin/sudo -n rm -rf -- "$fixture" 2>/dev/null || rm -rf -- "$fixture" 2>/dev/null || true' EXIT
 
 fail() {
     printf 'log-ownership: %s\n' "$1" >&2
@@ -76,11 +79,15 @@ fail() {
     exit 1
 }
 
-# ─── The engine under test: built into the fixture tree (scratch only) ──────
-cargo build --offline --quiet --target-dir "$fixture/cargo" -p gsa-cli \
-    --manifest-path "$gsa_repo_root/Cargo.toml" \
-    || fail "cannot build the gsa binary for the fixture"
-gsa_bin="$fixture/cargo/debug/gsa"
+# ─── The engine under test: scratch build only when GSA_TEST_GSA_BIN is not
+# already set (the rr-v2.bash run_engine convention) ──────────────────────
+if [ -z "${GSA_TEST_GSA_BIN:-}" ]; then
+    cargo build --offline --quiet --target-dir "$fixture/cargo" -p gsa-cli \
+        --manifest-path "$gsa_repo_root/Cargo.toml" \
+        || fail "cannot build the gsa binary for the fixture"
+    GSA_TEST_GSA_BIN="$fixture/cargo/debug/gsa"
+fi
+gsa_bin="$GSA_TEST_GSA_BIN"
 [ -x "$gsa_bin" ] || fail "cargo did not produce $gsa_bin"
 export GSA_TEST_ENGINE=gsa
 export GSA_TEST_GSA_BIN="$gsa_bin"
@@ -110,13 +117,16 @@ EOF
 }
 
 # ─── Run B meets run A's poisoned log ────────────────────────────────────────
-# Engine mapping (see header): the §J.5 gate quarantines only WRONG-OWNER
-# state files (a foreign uid is unproducible fixture-side); a same-owner 0444
-# log is the `log-unwritable` class (crates/gsa-build/src/lane.rs): the lane
-# fails CLOSED, the run records `failed … log-unwritable` (§H.3), and the
-# crashed run's content is preserved byte-for-byte — the engine opens logs
-# append-only and this open fails, so nothing writes, nothing truncates,
-# nothing renames.
+# Engine mapping (see header): under W1/W5 the privileged runner OWNS state
+# (plan-gsa-isolation.md: `run.lock` root-owned is correct state), so the
+# same-owner case is a ROOT-owned log the root lane cannot append to — 0444 is
+# not enough (CAP_DAC_OVERRIDE writes through it), the poison is `chattr +i`.
+# A wrong-owner (fixture-uid) log would take the §J.5 quarantine branch
+# instead; same-owner + unopenable is the `log-unwritable` class
+# (crates/gsa-build/src/lane.rs): the lane fails CLOSED, the run records
+# `failed … log-unwritable` (§H.3), and the crashed run's content is preserved
+# byte-for-byte — the engine opens logs append-only and this open fails, so
+# nothing writes, nothing truncates, nothing renames.
 (
     set -euo pipefail
     dir="$fixture/poisoned"
@@ -124,7 +134,12 @@ EOF
     mkdir -p "$dir/state/logs"
     sentinel='SENTINEL run-A crash evidence'
     printf '%s\n' "$sentinel" >"$dir/state/logs/p1.log"
-    chmod 0444 "$dir/state/logs/p1.log" # the log-unwritable class (see header)
+    chmod 0444 "$dir/state/logs/p1.log"
+    # same-owner poison: the runner (root) owns it, so the §J.5 uid gate has
+    # nothing to repair, and immutability is what makes the append-open fail
+    # (measured: /usr/bin/sudo -n chattr +i works on the tmpfs scratch).
+    /usr/bin/sudo -n chown root:root "$dir/state/logs/p1.log"
+    /usr/bin/sudo -n chattr +i "$dir/state/logs/p1.log" # the log-unwritable class (see header)
 
     export PATH="$dir/bin:$PATH"
     export GSA_CPU_THREADS=8 GSA_MEMORY_GIB=16
@@ -242,7 +257,9 @@ EOF
             fi
             sleep 0.025
         done
-        kill -INT "$(cat "$pidfile")" 2>/dev/null || true
+        # the engine is root under W5 (run_engine's sudo) — signal it through
+        # the host's REAL sudo, never the PATH stub
+        /usr/bin/sudo -n kill -INT "$(cat "$pidfile")" 2>/dev/null || true
     ) &
     watcher=$!
     GSA_TEST_GSA_BIN="$wrap" GSA_FAKE_ENGINE_PID="$pidfile" \
@@ -288,7 +305,7 @@ EOF
     if [[ $(rr2_outcome p1 status <<<"$output") != interrupted ]]; then
         fail "the in-flight package is not recorded as interrupted:" "$dir/output.txt"
     fi
-    if ! rr2_outcome p1 rc <<<"$output" | grep -Eq '^(129|130|143)$'; then
+    if ! grep < <(rr2_outcome p1 rc <<<"$output") -Eq '^(129|130|143)$'; then
         fail "an interrupted row's rc is not a signal lane code (§F.1):" "$dir/output.txt"
     fi
     if [[ $(rr2_outcome p1 reason <<<"$output") != interrupted-mid-build ]]; then
@@ -564,7 +581,8 @@ printf 'log-ownership fixture: PASS\n'
 # produce (they name directories, never the log file).
 
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-log-ownership-root.XXXXXX")
-trap 'rm -rf -- "$fixture"' EXIT
+# root-safe cleanup: engine state under $fixture is root-owned (W5 §B.10)
+trap '/usr/bin/sudo -n rm -rf -- "$fixture" 2>/dev/null || rm -rf -- "$fixture" 2>/dev/null || true' EXIT
 
 fail() {
     printf 'log-ownership-root: %s\n' "$1" >&2

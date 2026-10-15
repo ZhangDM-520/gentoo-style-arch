@@ -362,7 +362,10 @@ fn valid_name(name: &str) -> bool {
 }
 
 fn bash_eval(script: &str, args: &[&Path]) -> Result<std::process::Output, EvalError> {
-    let mut cmd = Command::new("bash");
+    // Build-domain command: `script` evaluates recipe code (arbitrary shell
+    // from the PKGBUILD), so under a privileged run it is dropped to the
+    // build user — a recipe never executes as root.
+    let mut cmd = gsa_model::privilege::build_command("bash");
     cmd.arg("-c").arg(script).arg("_");
     for a in args {
         cmd.arg(a);
@@ -756,6 +759,8 @@ impl RecipeTransaction {
     pub fn publish(&mut self) -> Result<(), SyncError> {
         fs::rename(&self.staged, self.recipe_dir.join("PKGBUILD"))
             .map_err(|_| sync_err("could not publish the version rewrite"))?;
+        gsa_model::privilege::own_to_build_user(&self.recipe_dir.join("PKGBUILD"))
+            .map_err(|e| sync_err(format!("could not hand the published recipe back to the build user: {e}")))?;
         self.dirty = true;
         Ok(())
     }
@@ -786,6 +791,9 @@ impl RecipeTransaction {
         if let Err(e) = fs::rename(&work, self.recipe_dir.join("PKGBUILD")) {
             let _ = fs::remove_file(&work);
             return RestoreStatus::Failed(format!("could not republish the snapshot: {e}"));
+        }
+        if let Err(e) = gsa_model::privilege::own_to_build_user(&self.recipe_dir.join("PKGBUILD")) {
+            return RestoreStatus::Failed(format!("restored the recipe but could not hand it back to the build user: {e}"));
         }
         self.dirty = false;
         RestoreStatus::Restored
@@ -1010,15 +1018,15 @@ impl SrcinfoRefresh {
 }
 
 /// Regenerate the committed `.SRCINFO` through `makepkg` (PATH) and publish it
-/// atomically. `updpkgsums` and this step run as the invoking user even in
-/// root mode — `makepkg` refuses to run as root; privilege dropping is the
-/// caller's concern.
+/// atomically. `updpkgsums` and this step run as the build user even in root
+/// mode — `makepkg` refuses to run as root; `gsa-model::priv` drops the spawn
+/// and hands the published file back to the build user.
 pub fn refresh_package_srcinfo(recipe_dir: &Path) -> SrcinfoRefresh {
     let committed = recipe_dir.join(".SRCINFO");
     if !committed.is_file() {
         return SrcinfoRefresh::NonePresent;
     }
-    let out = match Command::new("makepkg")
+    let out = match gsa_model::privilege::build_command("makepkg")
         .arg("--printsrcinfo")
         .arg("--dir")
         .arg(recipe_dir)
@@ -1040,6 +1048,11 @@ pub fn refresh_package_srcinfo(recipe_dir: &Path) -> SrcinfoRefresh {
     if fs::rename(&tmp, &committed).is_err() {
         let _ = fs::remove_file(&tmp);
         return SrcinfoRefresh::PublishFailed("could not replace the committed .SRCINFO".into());
+    }
+    if let Err(e) = gsa_model::privilege::own_to_build_user(&committed) {
+        return SrcinfoRefresh::PublishFailed(format!(
+            "refreshed the .SRCINFO but could not hand it back to the build user: {e}"
+        ));
     }
     SrcinfoRefresh::Refreshed
 }

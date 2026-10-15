@@ -62,7 +62,8 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/rr-v2.bash"
 
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-install-v2.XXXXXX")
-trap 'rm -rf -- "$fixture"' EXIT
+# root-safe cleanup: engine state under $fixture is root-owned (W5 §B.10)
+trap '/usr/bin/sudo -n rm -rf -- "$fixture" 2>/dev/null || rm -rf -- "$fixture" 2>/dev/null || true' EXIT
 
 fail() {
     printf '%s\n' "$1" >&2
@@ -299,9 +300,9 @@ rows_only() {
 # (§E.2 grammar: `subject decision reason…`, the reason is the remainder).
 assert_row() {
     local blob=$1 subject=$2 decision=$3 reason_re=$4 what=$5
-    printf '%s\n' "$blob" | awk -v s="$subject" -v d="$decision" '
+    grep < <(printf '%s\n' "$blob" | awk -v s="$subject" -v d="$decision" '
         $1 == s && $2 == d { print; found = 1 }
-        END { exit !found }' | grep -Eq "^[^ ]+ $decision $reason_re$" \
+        END { exit !found }') -Eq "^[^ ]+ $decision $reason_re$" \
         || fail "$what: want row '$subject $decision $reason_re …' (§E.2), got rows:
 $blob"
 }
@@ -505,11 +506,11 @@ $rows"
         # ── usage errors are rc 2 and name the argument (§D.1/§E.5)
         run_engine "$ws" --install-decide bogus "$one"
         [ "$FIXTURE_RC" = 2 ] || fail "an unknown mode is rc 2 (§E.5), got $FIXTURE_RC"
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -F "unknown mode 'bogus'" >/dev/null \
+        vgrep "$FIXTURE_OUTPUT" -F "unknown mode 'bogus'" >/dev/null \
             || fail "the mode refusal must name the argument: $FIXTURE_OUTPUT"
         run_engine "$ws" --install-decide checked "$ws/packages/one/absent.pkg.tar.zst"
         [ "$FIXTURE_RC" = 2 ] || fail "a malformed archive argument is rc 2 (§E.5), got $FIXTURE_RC"
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -F "malformed archive argument" >/dev/null \
+        vgrep "$FIXTURE_OUTPUT" -F "malformed archive argument" >/dev/null \
             || fail "the archive refusal must name the argument: $FIXTURE_OUTPUT"
         run_engine "$ws" --install-decide
         [ "$FIXTURE_RC" = 2 ] || fail "an empty argument list is rc 2 (§E.5), got $FIXTURE_RC"
@@ -571,7 +572,7 @@ $rows"
         [ "$FIXTURE_RC" = 3 ] || fail "a shrunken split set must refuse rc 3 (§G.1), got $FIXTURE_RC: $FIXTURE_OUTPUT"
         rr2_body <<<"$FIXTURE_OUTPUT" >/dev/null \
             || fail "the self-explaining refusal record must parse strict format: 2 (§H.2): $FIXTURE_OUTPUT"
-        record_section plan | grep -Eq '^split refused partial-set ' \
+        grep < <(record_section plan) -Eq '^split refused partial-set ' \
             || fail "the plan must record the partial-set refusal (§H.2): $FIXTURE_OUTPUT"
         if grep -q 'empty-list' <<<"$FIXTURE_OUTPUT"; then
             fail "a self-explaining refusal must never synthesize an empty-list row (§H.2 amendment (a)): $FIXTURE_OUTPUT"
@@ -712,7 +713,7 @@ if want c; then
             "-Q rust-git") continue ;;
             *) fail "transaction argv is not the §K.3 shape (-U --noconfirm --ask 4 …): $argv" "$GSA_FAKE_PACMAN_LOG" ;;
             esac
-            printf '%s\n' "$argv" | grep -q -- '--overwrite \* .*\.pkg\.tar\.zst' \
+            vgrep "$argv" -q -- '--overwrite \* .*\.pkg\.tar\.zst' \
                 || fail "the -- passthrough must land before the archives (§B.1): $argv" "$GSA_FAKE_PACMAN_LOG"
         done <<<"$(txn_argv "$GSA_FAKE_PACMAN_LOG")"
     )
@@ -812,7 +813,7 @@ if want e; then
         [ "$FIXTURE_RC" = 3 ] || fail "an install refusal is rc 3 (§G.1), got $FIXTURE_RC:" "$fixture/e/output.txt"
         [ "$(record_scalar rc)" = 3 ] || fail "the record's rc scalar must be 3 for a refusal:" "$fixture/e/output.txt"
         [ "$(record_scalar outcome)" = "refused" ] || fail "the record must record outcome 'refused':" "$fixture/e/output.txt"
-        record_section outcome | grep -q ' install-refused pgo-' \
+        grep < <(record_section outcome) -q ' install-refused pgo-' \
             || fail "the refusal rows must carry install-refused reasons (§H.3):" "$fixture/e/output.txt"
         # Two PGO hits = two §E.2 decision rows but ONE record row per
         # SUBJECT (§H.2; the collapse the strict parser above enforces):
@@ -862,7 +863,7 @@ if want e; then
         [ "$FIXTURE_RC" = 3 ] || fail "an -S install refusal is rc 3 (§G.1), got $FIXTURE_RC:" "$fixture/e/output2.txt"
         [ "$FIXTURE_RC" = "$(rr2_scalar rc <<<"$FIXTURE_OUTPUT")" ] \
             || fail "the record's rc scalar disagrees with the process exit code:" "$fixture/e/output2.txt"
-        rr2_outcome provider reason <<<"$FIXTURE_OUTPUT" | grep -q '^install-refused needed ' \
+        grep < <(rr2_outcome provider reason <<<"$FIXTURE_OUTPUT") -q '^install-refused needed ' \
             || fail "the refusing row must name the NEEDED gate (§H.3):" "$fixture/e/output2.txt"
         [ "$(txn_count "$GSA_FAKE_PACMAN_LOG")" = 0 ] \
             || fail "a refusing -S plan is pacman-free (rule 25(h)):" "$GSA_FAKE_PACMAN_LOG"
@@ -895,7 +896,7 @@ if want f; then
             echo "$FIXTURE_OUTPUT"
         } >"$fixture/f/output.txt"
         [ "$FIXTURE_RC" = 0 ] || fail "the registration seam is rc 0 (§D.1), got $FIXTURE_RC:" "$fixture/f/output.txt"
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -F 'without touching it' >/dev/null \
+        vgrep "$FIXTURE_OUTPUT" -F 'without touching it' >/dev/null \
             || fail "a stale db.lck must be announced as never touched (rule 23):" "$fixture/f/output.txt"
         cmp -s "$db/db.lck" "$fixture/f/db.lck.pre" \
             || fail "the registration deleted or rewrote db.lck (it must never be deleted):" "$db/db.lck"
@@ -949,7 +950,9 @@ EOF
                 grep -q '^TXN-START ' "$GSA_FAKE_PACMAN_LOG" 2>/dev/null && break
                 sleep 0.025
             done
-            kill -INT "$(cat "$pidfile")" 2>/dev/null || true
+            # the engine is root under W5 (run_engine's sudo) — signal it
+            # through the host's REAL sudo, never the PATH stub
+            /usr/bin/sudo -n kill -INT "$(cat "$pidfile")" 2>/dev/null || true
         ) &
         watcher=$!
         GSA_TEST_GSA_BIN="$wrap" GSA_FAKE_ENGINE_PID="$pidfile" run_engine "$ws" -Uf \
@@ -973,7 +976,7 @@ EOF
         grep -q '^--- run record begin ---$' "$fixture/g/output.txt" \
             && grep -q '^--- run record end ---$' "$fixture/g/output.txt" \
             || fail "the interrupted run must emit the full record (§I.3):" "$fixture/g/output.txt"
-        record_section outcome | grep -q '^alpha interrupted 130 ' \
+        grep < <(record_section outcome) -q '^alpha interrupted 130 ' \
             || fail "the interrupted install rows must carry a signal lane code (§F.1):" "$fixture/g/output.txt"
 
         # no half-registered IgnorePkg: the closure covers EVERY accepted
@@ -986,7 +989,7 @@ EOF
             || fail "the interrupt left a half-registered IgnorePkg closure (missing: $missing):" "$ws/pacman.conf"
         grep -q '^\[options\]$' "$ws/pacman.conf" \
             || fail "the rewritten conf lost its [options] section:" "$ws/pacman.conf"
-        if find "$ws" -maxdepth 1 -name '.gsa-ignorepkg.tmp.*' -print -quit | grep -q .; then
+        if grep < <(find "$ws" -maxdepth 1 -name '.gsa-ignorepkg.tmp.*' -print -quit) -q .; then
             fail "the atomic registration left a temp name beside the conf:" "$ws"
         fi
         if ! ls "$ws"/pacman.conf.bak-* >/dev/null 2>&1; then

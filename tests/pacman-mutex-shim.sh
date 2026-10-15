@@ -68,7 +68,9 @@ set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/rr-v2.bash"
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-shim-fixture.XXXXXX")
-trap 'rm -rf -- "$fixture"' EXIT
+# Root-safe cleanup: the privileged engine's state files are root-owned, so a
+# plain user-side rm cannot unlink them (and the litter would survive).
+trap '/usr/bin/sudo -n rm -rf -- "$fixture" 2>/dev/null || rm -rf -- "$fixture" 2>/dev/null || true' EXIT
 
 fail() {
     printf '%s\n' "$@" >&2
@@ -132,8 +134,18 @@ cat >"$fixture/bin/sudo" <<'EOF'
 #!/usr/bin/env bash
 # Password-free host stub: record the call (timestamp|argv — the timestamp
 # lets section 2 order the transaction against an external mutex holder),
-# never touch a real database.
+# never touch a real database. Two domains call it: the ENGINE's own
+# `sudo -n …` subprocesses run as root and stay RECORD-ONLY (forwarding them
+# would exec a real pacman), while sections 3–5 invoke the generated shim
+# directly and the shim now chains `sudo -n flock … "$P" "$@"` (sudo OUTSIDE
+# flock, crates/gsa-build/src/shim.rs) — there GSA_FAKE_SUDO_MODE=forward
+# drops the `-n` and execs the rest through PATH so the flock stub's recorder
+# still sees the pacman argv VERBATIM.
 printf '%s|%s\n' "$(date +%s.%N)" "$*" >>"${GSA_FAKE_SUDO_LOG:?fixture forgot GSA_FAKE_SUDO_LOG}"
+if [[ ${GSA_FAKE_SUDO_MODE:-} == forward ]]; then
+    [[ ${1:-} == -n ]] && shift
+    exec "$@"
+fi
 exit 0
 EOF
 
@@ -155,14 +167,12 @@ fi
 if [[ -n ${GSA_FAKE_FLOCK_RC:-} ]]; then
     exit "$GSA_FAKE_FLOCK_RC"
 fi
-# The engine shim chains `sudo -n "$P" "$@"` under flock (the fish shim
-# called pacman directly): drop the shim's own sudo -n pair so the recorder
-# sees the pacman argv VERBATIM, and point the baked pacman at the recorder.
+# The engine shim runs `sudo -n flock … "$P" "$@"` (§K.3: sudo OUTSIDE flock,
+# crates/gsa-build/src/shim.rs) and the sudo stub forwards that here in its
+# GSA_FAKE_SUDO_MODE=forward form: point the baked pacman at the recorder so
+# the argv is observable VERBATIM without touching a real database.
 args=()
-skip=0
 for a in "$@"; do
-    if ((skip)); then skip=0; continue; fi
-    if [[ $a == sudo ]]; then skip=1; continue; fi
     [[ $a == /usr/bin/pacman ]] && a=$GSA_FAKE_STUB_PACMAN
     args+=("$a")
 done
@@ -186,6 +196,12 @@ export GSA_FAKE_DB_PATH="$state/var/pacman"
 export GSA_FAKE_MARKER_DIR="$state/built"
 export GSA_FAKE_PACMAN_ENV_LOG="$state/pacman-env.log"
 export GSA_FAKE_SUDO_LOG="$state/sudo.log"
+# sudo.log is appended from BOTH domains — the engine's internal stub sudo
+# runs as root (the engine is privileged since W1) while sections 3–5 run the
+# same stub as the plain user — so the fixture seeds it world-writable: a
+# root-created log would be unappendable by the user side (and unremovable).
+: >"$state/sudo.log"
+chmod 666 "$state/sudo.log"
 export GSA_FAKE_BUILD_SECONDS=1.0
 export PATH="$fixture/bin:$PATH"
 
@@ -249,6 +265,7 @@ awk -v txn="$txn_ts" -v rel="$rel_ts" 'BEGIN { exit !(txn + 0 >= rel + 0) }' ||
 stub_log="$fixture/stub-pacman.log"
 : >"$stub_log"
 env PATH="$fixture/bin:$PATH" \
+    GSA_FAKE_SUDO_MODE=forward \
     GSA_FAKE_STUB_PACMAN="$fixture/bin/record-pacman" \
     GSA_FAKE_STUB_PACMAN_LOG="$stub_log" \
     "$shim" -S --noconfirm 'arg with space' 'wild*card' ||
@@ -269,6 +286,7 @@ shim_call() { # $1 = pacman-record log; rest = shim args
     local out=$1; shift
     : >"$flog"; : >"$out"
     env PATH="$fixture/bin:$PATH" \
+        GSA_FAKE_SUDO_MODE=forward \
         GSA_FAKE_STUB_PACMAN="$fixture/bin/record-pacman" \
         GSA_FAKE_STUB_PACMAN_LOG="$out" \
         GSA_FAKE_FLOCK_LOG="$flog" \
@@ -300,6 +318,7 @@ echo "section 5: flock failures propagate and are named (rc 1)"
 : >"$qlog"
 rc=0
 env PATH="$fixture/bin:$PATH" \
+    GSA_FAKE_SUDO_MODE=forward \
     GSA_FAKE_STUB_PACMAN="$fixture/bin/record-pacman" \
     GSA_FAKE_STUB_PACMAN_LOG="$qlog" \
     GSA_FAKE_FLOCK_RC=75 \
@@ -311,6 +330,7 @@ env PATH="$fixture/bin:$PATH" \
 : >"$qlog"
 rc=0
 env PATH="$fixture/bin:$PATH" \
+    GSA_FAKE_SUDO_MODE=forward \
     GSA_FAKE_STUB_PACMAN="$fixture/bin/record-pacman" \
     GSA_FAKE_STUB_PACMAN_LOG="$qlog" \
     GSA_FAKE_FLOCK_RC=1 \

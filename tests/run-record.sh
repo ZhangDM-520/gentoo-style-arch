@@ -64,7 +64,8 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/rr-v2.bash"
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-run-record.XXXXXX")
-trap 'rm -rf -- "$fixture"' EXIT
+# root-safe cleanup: engine state under $fixture is root-owned (W5 §B.10)
+trap '/usr/bin/sudo -n rm -rf -- "$fixture" 2>/dev/null || rm -rf -- "$fixture" 2>/dev/null || true' EXIT
 
 fail() {
     printf 'run record fixture: %s\n' "$1" >&2
@@ -78,11 +79,15 @@ fail() {
 rr2_stub_knob GSA_FAKE_DEFER_PACKAGE "run-record makepkg stub: package id whose build exits 99 (deferral)"
 rr2_stub_knob GSA_FAKE_ENGINE_PID "run-record engine wrapper: pidfile of the engine process to signal"
 
-# ─── The engine under test: built into the fixture tree (scratch only) ──────
-cargo build --offline --quiet --target-dir "$fixture/cargo" -p gsa-cli \
-    --manifest-path "$gsa_repo_root/Cargo.toml" \
-    || fail "cannot build the gsa binary for the fixture"
-gsa_bin="$fixture/cargo/debug/gsa"
+# ─── The engine under test: scratch build only when GSA_TEST_GSA_BIN is not
+# already set (the rr-v2.bash run_engine convention) ──────────────────────
+if [ -z "${GSA_TEST_GSA_BIN:-}" ]; then
+    cargo build --offline --quiet --target-dir "$fixture/cargo" -p gsa-cli \
+        --manifest-path "$gsa_repo_root/Cargo.toml" \
+        || fail "cannot build the gsa binary for the fixture"
+    GSA_TEST_GSA_BIN="$fixture/cargo/debug/gsa"
+fi
+gsa_bin="$GSA_TEST_GSA_BIN"
 [ -x "$gsa_bin" ] || fail "cargo did not produce $gsa_bin"
 export GSA_TEST_ENGINE=gsa
 export GSA_TEST_GSA_BIN="$gsa_bin"
@@ -418,7 +423,9 @@ EOF
         for _ in $(seq 1 400); do [ -s "$pidfile" ] && break; sleep 0.025; done
         [ -s "$pidfile" ] || exit 0
         for _ in $(seq 1 400); do [ -f "$markerdir/p1" ] && break; sleep 0.025; done
-        kill -INT "$(cat "$pidfile")" 2>/dev/null || true
+        # the engine is root under W5 (run_engine's sudo) — signal it through
+        # the host's REAL sudo, never the PATH stub
+        /usr/bin/sudo -n kill -INT "$(cat "$pidfile")" 2>/dev/null || true
     ) &
     watcher=$!
     GSA_TEST_GSA_BIN="$wrap" GSA_FAKE_ENGINE_PID="$pidfile" \
@@ -446,7 +453,7 @@ EOF
     # are in the record, not just in prose.
     [ "$(rr2_outcome p1 status <"$fixture/s5.out")" = interrupted ] ||
         fail "p1 row wrong: $(rr2_outcome p1 <"$fixture/s5.out")" "$fixture/s5.out"
-    rr2_outcome p1 rc <"$fixture/s5.out" | grep -Eq '^(129|130|143)$' ||
+    grep < <(rr2_outcome p1 rc <"$fixture/s5.out") -Eq '^(129|130|143)$' ||
         fail "an interrupted row's rc is not a signal lane code (§F.1): $(rr2_outcome p1 <"$fixture/s5.out")" "$fixture/s5.out"
     [ "$(rr2_outcome p1 reason <"$fixture/s5.out")" = interrupted-mid-build ] ||
         fail "p1 reason wrong: $(rr2_outcome p1 reason <"$fixture/s5.out")" "$fixture/s5.out"

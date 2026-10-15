@@ -62,11 +62,17 @@ set -euo pipefail
 # phase B is expressed through a workspace whose records put core first —
 # the two phases need opposite orders, hence one workspace each.
 
+# Diagnostic: this fixture is silent until PASS, so a bare command dying under
+# `set -e` (e.g. a $(...) assignment whose pipeline exits non-zero) vanishes
+# without a word in a battery run. The ERR trap names the dying line; it
+# reports only, the exit status is still errexit's.
+trap 'printf "scheduler-core-solo: silent set -e death: rc=%s at line %s: %s\n" "$?" "$LINENO" "$(sed -n "${LINENO}p" "$0")" >&2' ERR
+
 source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/rr-v2.bash"
 
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-core-solo.XXXXXX")
-trap 'rm -rf -- "$fixture"' EXIT
+trap '/usr/bin/sudo -n rm -rf -- "$fixture" 2>/dev/null || rm -rf -- "$fixture" 2>/dev/null || true' EXIT
 
 fail() {
     printf '%s\n' "$1" >&2
@@ -76,11 +82,15 @@ fail() {
     exit 1
 }
 
-# The engine under test: built into the fixture tree (scratch only).
-cargo build --offline --quiet --target-dir "$fixture/cargo" -p gsa-cli \
-    --manifest-path "$gsa_repo_root/Cargo.toml" \
-    || fail "cannot build the gsa binary for the fixture"
-gsa_bin="$fixture/cargo/debug/gsa"
+# The engine under test: scratch build only when GSA_TEST_GSA_BIN is not
+# already set (the rr-v2.bash run_engine convention).
+if [ -z "${GSA_TEST_GSA_BIN:-}" ]; then
+    cargo build --offline --quiet --target-dir "$fixture/cargo" -p gsa-cli \
+        --manifest-path "$gsa_repo_root/Cargo.toml" \
+        || fail "cannot build the gsa binary for the fixture"
+    GSA_TEST_GSA_BIN="$fixture/cargo/debug/gsa"
+fi
+gsa_bin="$GSA_TEST_GSA_BIN"
 [ -x "$gsa_bin" ] || fail "cargo did not produce $gsa_bin"
 export GSA_TEST_ENGINE=gsa
 export GSA_TEST_GSA_BIN="$gsa_bin"
@@ -276,7 +286,7 @@ for id in "${selection[@]}"; do
     [ -f "$fixture/state/logs/$id.log" ] \
         || fail "$id has no per-package log under $fixture/state/logs/" "$fixture/output-a.txt"
 done
-if find "$fixture/state" -name '*.tmp.*' -print -quit | grep -q .; then
+if grep < <(find "$fixture/state" -name '*.tmp.*' -print -quit) -q .; then
     fail "a lane publication temp name remained in the state tree" "$fixture/output-a.txt"
 fi
 

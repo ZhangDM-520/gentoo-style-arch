@@ -79,6 +79,16 @@ pub fn run_fetch_only(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write
     };
     crate::write_notes(err, &selection.notes);
 
+    // ── privilege gate (contract §B.10; after every usage preflight) ─────
+    if let Some(code) = crate::privilege_gate(
+        &inv.spelling(),
+        crate::invocation_privilege(inv, &crate::Command::Fetch),
+        true,
+        err,
+    ) {
+        return code;
+    }
+
     // ── plan rows: `fetch` for candidates, `skip <reason>` for the rest ──
     // Candidacy is the gsa-recipe source classification (owner decision 3:
     // never grep), decided before anything fetches — so a pure-VCS recipe

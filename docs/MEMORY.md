@@ -451,7 +451,14 @@
     unprivileged runs only verify readable (flock(1) opens read-only;
     measured: `flock -x` succeeds on root-owned 0644 and 0444 files). Pinned by
     `tests/log-ownership.sh` (both halves — the unprivileged quarantine and
-    the root-repair section).
+    the root-repair section). **gsa engine (2026-10-15,
+    plan-gsa-isolation.md W1):** under the native engine the gate compares
+    against the *privileged runner* — mutating runs are root (contract
+    §B.10), so root-owned state is correct state, never corruption; a build
+    user hitting a mutating verb is refused early (rc 3) and never reaches
+    the gate, while build-side commands and recipe-tree writes are
+    dropped/chowned to the build user (`gsa-model::priv`) — the workspace is
+    never left root-owned. Pinned by `tests/gsa-privilege.sh`.
 20. **One install decision, one seam**: `gsa-install::decide` computes the
     transaction plan once as typed rows (`install`/`skip`/`refuse`/`noop`/
     `parked`, contract §E.3)
@@ -1283,6 +1290,17 @@ retired: frozen verbatim under `tests/assets/` (`build-all.fish` +
 retirement shim that prints the §B.9 migration table and exits non-zero
 running nothing (§6, 2026-10-14 cutover).
 
+Privilege model (W1, contract §B.10; 2026-10-15): mutating verbs require root
+(rc 3 otherwise); a privileged run is a root supervisor that drops EVERY
+build-side child — lane makepkg and the fetch half's `makepkg --verifysource`
+alike — to the sudo build user through
+`gsa_model::privilege::build_command` (the `setpriv` wrap), while a bare root
+shell (`SUDO_*` absent) refuses build runs with guidance. A new build-side
+command must be constructed through `build_command`, never plain
+`Command::new`: the fetch half leaked root exactly that way until
+`gsa-privilege.sh` section f pinned the drop (red-first on the unfixed
+binary).
+
 `--intensity xhigh` is the default automatic plan. It derives bounded lanes
 and a global normal-lane job budget from CPU threads and available memory
 (`gsa-sched`'s budget; formulas in `docs/portability.md`);
@@ -1479,6 +1497,19 @@ OpenShadingLanguage -> blender.
   load-bearing — a call indented off column 0 is never pre-executed and its
   replay fails). A change to the topology commands the fixture drives must
   update the pin in the same change, or the self-scan fails.
+- Fixture assertions never pipe a producer into an early-exit `grep`
+  (`printf '%s\n' "$VAR" | grep -q …`): under `pipefail`, contention can
+  SIGPIPE the producer after `grep -q` matched, reddening a passing capture.
+  Use `vgrep VALUE ARG…` (`tests/lib/rr-v2.bash`) for a value producer or
+  `grep … < <(PRODUCER)` for a command producer (176 sites converted
+  2026-10-15, NOTE.md same date). Privilege/drop assertions belong ONLY in
+  `tests/gsa-privilege.sh` (real `sudo -n`, euid 0 observable): a fixture
+  that stubs `sudo` cannot see the build-user drop, and a uid assertion there
+  passes vacuously. Engine fixtures honour-or-build `GSA_TEST_GSA_BIN`:
+  `tests/run-all.sh` prebuilds the engine once into `target/` and exports it
+  — never cargo-build a private engine tree per fixture (concurrent ~5 GiB
+  trees once filled the 16 GiB `/tmp` tmpfs mid-battery). (last reviewed
+  2026-10-15)
 
 ## 3. Stack facts
 

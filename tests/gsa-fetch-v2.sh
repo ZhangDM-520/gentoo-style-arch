@@ -49,7 +49,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/rr-v2.bash"
 
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-fetch-v2.XXXXXX")
-trap 'rm -rf -- "$fixture"' EXIT
+trap '/usr/bin/sudo -n rm -rf -- "$fixture" 2>/dev/null || rm -rf -- "$fixture" 2>/dev/null || true' EXIT
 
 fail() {
     printf '%s\n' "$1" >&2
@@ -77,11 +77,15 @@ rr2_stub_knob GSA_FAKE_FETCH_BADFILE "gsa-fetch-v2 makepkg stub: package whose f
 # pacman stub: argv log) are the shared vocabulary's knobs — declared there,
 # used here.
 
-# ─── The engine under test: built into the fixture tree (scratch only) ──────
-cargo build --offline --quiet --target-dir "$fixture/cargo" -p gsa-cli \
-    --manifest-path "$gsa_repo_root/Cargo.toml" \
-    || fail "cannot build the gsa binary for the fixture"
-gsa_bin="$fixture/cargo/debug/gsa"
+# ─── The engine under test: scratch build only when GSA_TEST_GSA_BIN is not
+# already set (the rr-v2.bash run_engine convention) ──────────────────────
+if [ -z "${GSA_TEST_GSA_BIN:-}" ]; then
+    cargo build --offline --quiet --target-dir "$fixture/cargo" -p gsa-cli \
+        --manifest-path "$gsa_repo_root/Cargo.toml" \
+        || fail "cannot build the gsa binary for the fixture"
+    GSA_TEST_GSA_BIN="$fixture/cargo/debug/gsa"
+fi
+gsa_bin="$GSA_TEST_GSA_BIN"
 [ -x "$gsa_bin" ] || fail "cargo did not produce $gsa_bin"
 export GSA_TEST_ENGINE=gsa
 export GSA_TEST_GSA_BIN="$gsa_bin"
@@ -194,7 +198,7 @@ event_ts() {
 # run (2026-10-14, the probe-gating decision) and is tolerated here; what must
 # stay absent is any TRANSACTION or any other pacman call.
 assert_no_transactions() {
-    if grep -v '^pacman -Q rust-git$' "$GSA_FAKE_PACMAN_LOG" 2>/dev/null | grep -q .; then
+    if grep < <(grep -v '^pacman -Q rust-git$' "$GSA_FAKE_PACMAN_LOG" 2>/dev/null) -q .; then
         fail "$1: the pacman stub logged a call beyond the rust-git probe:" "$GSA_FAKE_PACMAN_LOG"
     fi
     [ ! -s "$GSA_FAKE_SUDO_LOG" ] || fail "$1: the sudo stub log must stay empty:" "$GSA_FAKE_SUDO_LOG"
@@ -203,7 +207,7 @@ assert_no_transactions() {
 # assert_verdict_row PKG VERDICT REASON WHAT — one `-Sw` verdict row
 # (`<pkg> <verdict> <dur> <reason…>`, §D.1's own vocabulary on stdout).
 assert_verdict_row() {
-    printf '%s\n' "$FIXTURE_OUTPUT" | grep -Eq "^$1 $2 [0-9]+ $3$" \
+    vgrep "$FIXTURE_OUTPUT" -Eq "^$1 $2 [0-9]+ $3$" \
         || fail "$4: want verdict row '$1 $2 <dur> $3' (§D.1), got:
 $FIXTURE_OUTPUT"
 }
@@ -269,9 +273,9 @@ if want b; then
         [ "$(rr2_outcome p2 status <<<"$FIXTURE_OUTPUT")" = succeeded ] || fail_out "b: p2's build row must succeed:"
         [ "$(rr2_outcome p2 reason <<<"$FIXTURE_OUTPUT")" = ok ] || fail_out "b: p2's build row keeps the build's reason, not the flake:"
         # The advisory: prose section + one warning + the scalar (never rows).
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -q 'Prefetch warnings (advisory — lanes retry at build time):' \
+        vgrep "$FIXTURE_OUTPUT" -q 'Prefetch warnings (advisory — lanes retry at build time):' \
             || fail_out "b: the prose prefetch-warning section is missing:"
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -q '· p2 ok retry-ok' \
+        vgrep "$FIXTURE_OUTPUT" -q '· p2 ok retry-ok' \
             || fail_out "b: want warning '· p2 ok retry-ok':"
         [ "$(rr2_scalar prefetch-warnings <<<"$FIXTURE_OUTPUT")" = 1 ] \
             || fail_out "b: want prefetch-warnings: 1 (owner decision 5):"
@@ -404,8 +408,12 @@ if want f; then
         [ "$FIXTURE_RC" = 0 ] || fail_out "f: the fetch run must succeed after quarantine+retry (rc $FIXTURE_RC):"
 
         assert_verdict_row p-q ok quarantined-retry-ok f
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -q 'quarantined-retry-ok' \
-            || fail_out "f: the quarantine must be loud (warning line):"
+        # Diagnostic: keep the pipeline but capture its rc, so a red names the
+        # class (1 = content missing, 141 = SIGPIPE, 126/127 = spawn failure).
+        greprc=0
+        vgrep "$FIXTURE_OUTPUT" -q 'quarantined-retry-ok' || greprc=$?
+        [ "$greprc" = 0 ] \
+            || fail_out "f: the quarantine must be loud (warning line) — pipeline rc $greprc:"
         [ "$(fetch_attempts p-q)" = 2 ] || fail "f: exactly 2 attempts (quarantine, then the one retry)" "$GSA_FAKE_FETCH_LOG"
         # A bad file is never left at its final name (plan.md §3.5).
         [ ! -e "$SRCDEST/bad.tar.gz" ] || fail "f: bad.tar.gz must not survive at its final name" "$SRCDEST"
@@ -429,16 +437,16 @@ if want g; then
 
         run_engine "$ws" --help
         [ "$FIXTURE_RC" = 0 ] || fail_out "g: --help must succeed"
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -q -- '--no-prefetch' || fail_out "g: --help must name --no-prefetch (§L.1)"
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -q -- '--prefetch-ahead' || fail_out "g: --help must name --prefetch-ahead (§L.1)"
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -q -- '--fetch-job' && fail_out "g: --help must hide --fetch-job (§D.1)"
+        vgrep "$FIXTURE_OUTPUT" -q -- '--no-prefetch' || fail_out "g: --help must name --no-prefetch (§L.1)"
+        vgrep "$FIXTURE_OUTPUT" -q -- '--prefetch-ahead' || fail_out "g: --help must name --prefetch-ahead (§L.1)"
+        vgrep "$FIXTURE_OUTPUT" -q -- '--fetch-job' && fail_out "g: --help must hide --fetch-job (§D.1)"
 
         # --no-prefetch: zero fetch spawns, no scalar (owner decision 5).
         run_engine "$ws" -B --state-dir "$ws/state" --no-prefetch p1
         [ "$FIXTURE_RC" = 0 ] || fail_out "g: --no-prefetch run must succeed (rc $FIXTURE_RC):"
         [ "$(fetch_attempts p1)" = 0 ] && [ "$(fetch_attempts p2)" = 0 ] \
             || fail "g: --no-prefetch must spawn zero fetch children" "$GSA_FAKE_FETCH_LOG"
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -q '^prefetch-warnings: ' \
+        vgrep "$FIXTURE_OUTPUT" -q '^prefetch-warnings: ' \
             && fail_out "g: --no-prefetch runs print no prefetch-warnings scalar:"
 
         # The --fetch-job seam (§D.1): one recipe, one typed result row.

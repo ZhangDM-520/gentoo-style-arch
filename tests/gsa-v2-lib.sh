@@ -26,7 +26,7 @@ set -euo pipefail
 
 source "$(dirname "${BASH_SOURCE[0]}")/lib/rr-v2.bash"
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-v2-lib.XXXXXX")
-trap 'rm -rf -- "$fixture"' EXIT
+trap '/usr/bin/sudo -n rm -rf -- "$fixture" 2>/dev/null || rm -rf -- "$fixture" 2>/dev/null || true' EXIT
 
 fail() {
     printf '%s\n' "$1" >&2
@@ -226,7 +226,10 @@ EOF
         chmod +x "$fixture/engine/bin/$name"
     done
     export PATH="$fixture/engine/bin:$PATH"
-    export GSA_FAKE_ENGINE_LOG="$fixture/engine/engine.log"
+    # One log per case: run_engine is the `sudo gsa …` form since the W5
+    # migration, so the engine stub's log lands root-owned and a later
+    # user-side stub must never append to it (each case reads only its own).
+    export GSA_FAKE_ENGINE_LOG="$fixture/engine/engine-gsa.log"
     export GSA_TEST_GSA_BIN="$fixture/engine/bin/gsa"
 
     # default engine (no GSA_TEST_ENGINE) is the NATIVE one since the Phase 5
@@ -245,6 +248,7 @@ EOF
     # (tests/lib/fixture-lib.bash install_fish_oracle) — oracle comparison
     # only, never an engine
     export GSA_TEST_ENGINE=fish
+    export GSA_FAKE_ENGINE_LOG="$fixture/engine/engine-fish.log"
     run_engine "$ws" -Sl @git
     ((FIXTURE_RC == 0)) || fail "run_engine fish rc=$FIXTURE_RC: $FIXTURE_OUTPUT"
     [[ $(tail -n1 "$GSA_FAKE_ENGINE_LOG") == "fish $ws/build-all.fish -Sl @git" ]] \

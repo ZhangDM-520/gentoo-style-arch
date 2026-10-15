@@ -87,7 +87,7 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/rr-v2.bash"
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-app-fixture.XXXXXX")
-trap 'rm -rf -- "$fixture"' EXIT
+trap '/usr/bin/sudo -n rm -rf -- "$fixture" 2>/dev/null || rm -rf -- "$fixture" 2>/dev/null || true' EXIT
 
 fail() {
     printf '%s\n' "$1" >&2
@@ -97,12 +97,16 @@ fail() {
     exit 1
 }
 
-# The engine under test: built into the fixture tree (scratch only). The fish
-# half below still runs build-all.fish from the same workspace verbatim.
-cargo build --offline --quiet --target-dir "$fixture/cargo" -p gsa-cli \
-    --manifest-path "$gsa_repo_root/Cargo.toml" \
-    || fail "cannot build the gsa binary for the fixture"
-gsa_bin="$fixture/cargo/debug/gsa"
+# The engine under test: scratch build only when GSA_TEST_GSA_BIN is not
+# already set (the rr-v2.bash run_engine convention). The fish half below
+# still runs build-all.fish from the same workspace verbatim.
+if [ -z "${GSA_TEST_GSA_BIN:-}" ]; then
+    cargo build --offline --quiet --target-dir "$fixture/cargo" -p gsa-cli \
+        --manifest-path "$gsa_repo_root/Cargo.toml" \
+        || fail "cannot build the gsa binary for the fixture"
+    GSA_TEST_GSA_BIN="$fixture/cargo/debug/gsa"
+fi
+gsa_bin="$GSA_TEST_GSA_BIN"
 [ -x "$gsa_bin" ] || fail "cargo did not produce $gsa_bin"
 export GSA_TEST_ENGINE=gsa
 export GSA_TEST_GSA_BIN="$gsa_bin"
@@ -428,9 +432,9 @@ assert_topological "$qt" "$order"
 # pinned count; and that set excludes extdep, the non-app workspace package
 # app2 consumes. Expansion walks CONSUMERS only (§C.3): a build-order edge to
 # a non-app package must never drag it in.
-printf '%s\n' $order | grep -qx extdep \
+grep < <(printf '%s\n' $order) -qx extdep \
     && fail "app group pulled its non-app prerequisite extdep into the run" "$fixture/o3"
-printf '%s\n' $order | grep -qx gitp1 \
+grep < <(printf '%s\n' $order) -qx gitp1 \
     && fail "app group pulled the unrelated git member gitp1 into the run" "$fixture/o3"
 
 # ── gsa 4. -Sl: whole group, no prompt, no build (flipped: `-l -g app` ->

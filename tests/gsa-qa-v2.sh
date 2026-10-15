@@ -44,12 +44,22 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/rr-v2.bash"
 
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-qa-v2.XXXXXX")
-trap 'rm -rf -- "$fixture"' EXIT
+# Root-safe cleanup: a privileged -U run leaves ROOT-owned state behind (§B.10
+# — engine-side state is root-owned), so the EXIT trap escalates first through
+# the ABSOLUTE /usr/bin/sudo (never the PATH stub).
+trap '/usr/bin/sudo -n rm -rf -- "$fixture" 2>/dev/null || rm -rf -- "$fixture" 2>/dev/null || true' EXIT
 
 fail() {
     printf '%s\n' "$1" >&2
     if [ -n "${2:-}" ] && [ -f "$2" ]; then
         sed 's/^/    /' "$2" >&2
+    fi
+    # Always show the engine output the assertions just checked: many call
+    # sites pass "$FIXTURE_OUTPUT" as $2 (text, not a file), so without this
+    # a battery failure prints no captured output at all.
+    if [ -n "${FIXTURE_OUTPUT:-}" ]; then
+        printf '%s\n' '--- captured engine output ---' >&2
+        printf '%s\n' "$FIXTURE_OUTPUT" >&2
     fi
     exit 1
 }
@@ -244,17 +254,17 @@ pkgname = clean"
         # staged makedepends), rc 0 — report findings never change rc.
         run_engine "$ws" --qa-check purged-tools
         [ "$FIXTURE_RC" = 0 ] || fail "a report check is rc 0 (§G), got $FIXTURE_RC: $FIXTURE_OUTPUT"
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -Fqx \
+        vgrep "$FIXTURE_OUTPUT" -Fqx \
             "purged-tools: viol: makedepends reintroduces purged tool 'cuda' — remove it (docs/MEMORY.md rule 8)" \
             || fail "the staged purged tool must be named verbatim:" "$fixture/a/out"
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -Fqx "qa-check purged-tools: 1 finding(s)" \
+        vgrep "$FIXTURE_OUTPUT" -Fqx "qa-check purged-tools: 1 finding(s)" \
             || fail "the tally line must count the staged finding:" "$fixture/a/out"
 
         # provides-versioning: the versioned soname provide is flagged with
         # its bare stem.
         run_engine "$ws" --qa-check provides-versioning
         [ "$FIXTURE_RC" = 0 ] || fail "provides-versioning is rc 0, got $FIXTURE_RC"
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -Fqx \
+        vgrep "$FIXTURE_OUTPUT" -Fqx \
             "provides-versioning: viol: soname provide 'libx.so.1' names a versioned soname — declare the bare stem 'libx.so'" \
             || fail "the versioned soname provide must be named verbatim:" "$fixture/a/out"
 
@@ -262,29 +272,29 @@ pkgname = clean"
         # two declarations the rule demands).
         run_engine "$ws" --qa-check swap-drift
         [ "$FIXTURE_RC" = 0 ] || fail "swap-drift is rc 0, got $FIXTURE_RC"
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -Fqx \
+        vgrep "$FIXTURE_OUTPUT" -Fqx \
             "swap-drift: kit-git: stock counterpart 'kit' missing from provides — declare provides=('kit=\${pkgver}') so versioned dependents of the mapped name resolve here" \
-            || { printf '%s\n' "$FIXTURE_OUTPUT" | grep -Fq \
+            || { vgrep "$FIXTURE_OUTPUT" -Fq \
                 "swap-drift: kit-git: stock counterpart 'kit' missing from provides — declare provides=('kit=\${pkgver}')" \
                 || fail "the missing provides counterpart must be named verbatim:" "$fixture/a/out"; }
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -Fq \
+        vgrep "$FIXTURE_OUTPUT" -Fq \
             "swap-drift: kit-git: stock counterpart 'kit' missing from conflicts — declare conflicts=('kit')" \
             || fail "the missing conflicts counterpart must be named verbatim:" "$fixture/a/out"
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -Fqx "qa-check swap-drift: 2 finding(s)" \
+        vgrep "$FIXTURE_OUTPUT" -Fqx "qa-check swap-drift: 2 finding(s)" \
             || fail "the tally must count the two counterpart findings:" "$fixture/a/out"
 
         # abi-closure with no built outputs: the loud skipped class (never a
         # vacuous clean).
         run_engine "$ws" --qa-check abi-closure
         [ "$FIXTURE_RC" = 0 ] || fail "a skipped check is rc 0, got $FIXTURE_RC"
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -Fqx \
+        vgrep "$FIXTURE_OUTPUT" -Fqx \
             "qa-check abi-closure: skipped — no workspace-built outputs (build the recipes to enable the closure probe)" \
             || fail "the skipped witness must name its reason:" "$fixture/a/out"
 
         # The focus filter: one clean reference alone is clean.
         run_engine "$ws" --qa-check purged-tools clean
         [ "$FIXTURE_RC" = 0 ] || fail "the focus run is rc 0, got $FIXTURE_RC"
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -Fqx "qa-check purged-tools: clean" \
+        vgrep "$FIXTURE_OUTPUT" -Fqx "qa-check purged-tools: clean" \
             || fail "the clean focus must report clean:" "$fixture/a/out"
     )
     echo "section a ok"
@@ -313,9 +323,9 @@ pkgname = viol"
         # rows stay install/skip/noop/parked (§E.3), rc 0 (§E.5).
         run_engine "$ws" --install-decide checked "$archive"
         [ "$FIXTURE_RC" = 0 ] || fail "a lint-violating plan stays rc 0 (§E.5), got $FIXTURE_RC: $FIXTURE_OUTPUT"
-        decision_rows | grep -Eq '^viol install ok$' \
+        grep < <(decision_rows) -Eq '^viol install ok$' \
             || fail "the clean install decision must survive the lint findings:" "$FIXTURE_OUTPUT"
-        if decision_rows | grep -q ' refuse '; then
+        if grep < <(decision_rows) -q ' refuse '; then
             fail "a report-severity finding must never emit a refuse row (§E.4):" "$FIXTURE_OUTPUT"
         fi
 
@@ -328,13 +338,13 @@ pkgname = viol"
             || fail "the transaction must run exactly once:" "$GSA_FAKE_PACMAN_LOG"
         [ "$(record_scalar outcome)" = success ] || fail "record outcome must be success:" "$FIXTURE_OUTPUT"
         [ "$(record_scalar rc)" = 0 ] || fail "record rc must be 0:" "$FIXTURE_OUTPUT"
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -Fq "QA report (report-only): 2 finding(s)" \
+        vgrep "$FIXTURE_OUTPUT" -Fq "QA report (report-only): 2 finding(s)" \
             || fail "the QA block must count the two staged violations:" "$fixture/b/out"
-        qa_lines | grep -Fq "purged-tools: viol: makedepends reintroduces purged tool 'cuda'" \
+        grep < <(qa_lines) -Fq "purged-tools: viol: makedepends reintroduces purged tool 'cuda'" \
             || fail "the purged finding must be in the QA block:" "$FIXTURE_OUTPUT"
-        qa_lines | grep -Fq "provides-versioning: viol: soname provide 'libx.so.1'" \
+        grep < <(qa_lines) -Fq "provides-versioning: viol: soname provide 'libx.so.1'" \
             || fail "the provides finding must be in the QA block:" "$FIXTURE_OUTPUT"
-        if record_section plan | grep -q refused; then
+        if grep < <(record_section plan) -q refused; then
             fail "the machine plan rows must not carry a refusal:" "$FIXTURE_OUTPUT"
         fi
         # The rule-9 registration still lands: report findings never skip it.
@@ -370,14 +380,14 @@ pkgname = stale"
         # with the keyword first (§E.3), rc 1 (§E.5).
         run_engine "$ws" --install-decide checked "$archive"
         [ "$FIXTURE_RC" = 1 ] || fail "a refusing plan is rc 1 (§E.5), got $FIXTURE_RC: $FIXTURE_OUTPUT"
-        decision_rows | grep -Eq "^stale-ghost refuse stale-ignorepkg $archive stale-ghost not-declared$" \
+        grep < <(decision_rows) -Eq "^stale-ghost refuse stale-ignorepkg $archive stale-ghost not-declared$" \
             || fail "the refuse row must name the keyword, archive and name:" "$FIXTURE_OUTPUT"
 
         # Force mode never bypasses a gate (it bypasses only the same-version
         # skip): the same refusal.
         run_engine "$ws" --install-decide force "$archive"
         [ "$FIXTURE_RC" = 1 ] || fail "force mode must not bypass the QA gate (§E.3), got $FIXTURE_RC: $FIXTURE_OUTPUT"
-        decision_rows | grep -q ' refuse stale-ignorepkg ' \
+        grep < <(decision_rows) -q ' refuse stale-ignorepkg ' \
             || fail "the refusing row must survive force mode:" "$FIXTURE_OUTPUT"
 
         # The install run: the rc 3 refusal class (§G.1) with the full run
@@ -385,11 +395,11 @@ pkgname = stale"
         # (rule 25(h): a refusing plan is pacman-free end to end).
         run_engine "$ws" -U --state-dir "$fixture/c/state" --config "$ws/pacman.conf" stale
         [ "$FIXTURE_RC" = 3 ] || fail "an install refusal is rc 3 (§G.1), got $FIXTURE_RC: $FIXTURE_OUTPUT"
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -q '^--- run record begin ---$' \
+        vgrep "$FIXTURE_OUTPUT" -q '^--- run record begin ---$' \
             || fail "a refused run still emits the run record (§H.1):" "$fixture/c/out"
         [ "$(record_scalar outcome)" = refused ] || fail "record outcome must be refused:" "$FIXTURE_OUTPUT"
         [ "$(record_scalar rc)" = 3 ] || fail "record rc must be 3:" "$FIXTURE_OUTPUT"
-        record_section plan | grep -q ' refused ' \
+        grep < <(record_section plan) -q ' refused ' \
             || fail "the record's plan rows must carry the refusal:" "$FIXTURE_OUTPUT"
         [ ! -s "$GSA_FAKE_PACMAN_LOG" ] || fail "a refusing plan must make zero pacman calls:" "$GSA_FAKE_PACMAN_LOG"
         [ ! -s "$GSA_FAKE_SUDO_LOG" ] || fail "a refusing plan must never escalate:" "$GSA_FAKE_SUDO_LOG"
@@ -400,7 +410,7 @@ pkgname = stale"
         # §G) — the severity attribute speaks in both surfaces.
         run_engine "$ws" --qa-check stale-ignorepkg
         [ "$FIXTURE_RC" = 3 ] || fail "an install-refusing finding is rc 3 at the seam (§G), got $FIXTURE_RC"
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -q '^stale-ignorepkg: stale-ghost: ' \
+        vgrep "$FIXTURE_OUTPUT" -q '^stale-ignorepkg: stale-ghost: ' \
             || fail "the seam must print the finding:" "$fixture/c/out"
     )
     echo "section c ok"
@@ -423,19 +433,19 @@ pkgname = clean"
 
         run_engine "$ws" --qa-check no-such-check
         [ "$FIXTURE_RC" = 2 ] || fail "an unknown check name is rc 2 (§G), got $FIXTURE_RC: $FIXTURE_OUTPUT"
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -q "unknown check 'no-such-check'" \
+        vgrep "$FIXTURE_OUTPUT" -q "unknown check 'no-such-check'" \
             || fail "the unknown name must be named:" "$fixture/d/out"
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -q 'purged-tools' \
+        vgrep "$FIXTURE_OUTPUT" -q 'purged-tools' \
             || fail "the known roster must be printed (a keyword is never auto-corrected):" "$fixture/d/out"
 
         run_engine "$ws" --qa-check
         [ "$FIXTURE_RC" = 2 ] || fail "a missing check name is rc 2 (§G), got $FIXTURE_RC"
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -q 'requires a check name' \
+        vgrep "$FIXTURE_OUTPUT" -q 'requires a check name' \
             || fail "the missing name must be reported:" "$fixture/d/out"
 
         run_engine "$ws" --qa-check purged-tools nonesuch
         [ "$FIXTURE_RC" = 2 ] || fail "an unknown recipe reference is rc 2 (§G), got $FIXTURE_RC"
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -q "unknown recipe reference 'nonesuch'" \
+        vgrep "$FIXTURE_OUTPUT" -q "unknown recipe reference 'nonesuch'" \
             || fail "the unknown reference must be named:" "$fixture/d/out"
     )
     echo "section d ok"

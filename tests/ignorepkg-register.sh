@@ -166,7 +166,9 @@ source "$root/tests/lib/fixture-lib.bash"
 source "$root/tests/lib/rr-v2.bash"
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/gsa-ignorepkg-register.XXXXXX")
-trap 'rm -rf -- "$tmp"' EXIT
+# Root-safe cleanup: privileged runs leave root-owned state litter a user-side
+# rm cannot unlink, and section d's immutable guard must be lifted first.
+trap '/usr/bin/sudo -n chattr -i "$tmp/d" 2>/dev/null || true; /usr/bin/sudo -n rm -rf -- "$tmp" 2>/dev/null || rm -rf -- "$tmp" 2>/dev/null || true' EXIT
 
 fail() {
     printf 'ignorepkg-register fixture: %s\n' "$1" >&2
@@ -332,7 +334,7 @@ conf_covers() {
         inopt && /^IgnorePkg/ { sub(/^IgnorePkg *= */, ""); print }
     ' "$conf")
     for n in "$@"; do
-        tr ' ' '\n' <<<"$covered" | grep -qxF -- "$n" || return 1
+        grep < <(tr ' ' '\n' <<<"$covered") -qxF -- "$n" || return 1
     done
     return 0
 }
@@ -472,44 +474,47 @@ printf 'j: second write proceeds, original .bak kept OK\n'
 # ─── d. non-writable target + dead sudo = refusal, file unchanged ────────────
 # DEVIATION 5: rc 3 (§G.1) and the escalation is the engine's own `sudo -n cp`
 # write path (the fish `sudo -n true` probe pin retires). The engine tests the
-# conf DIRECTORY's writability, so the scenario is a 0555 directory; the
-# subshell restores it so the fixture tree stays removable.
-if [[ $(id -u) == 0 ]]; then
-    printf 'd: skipped — running as root, a 0555 directory is still writable there\n'
-else
-    (
-        fail() {
-            printf 'ignorepkg-register d: %s\n' "$1" >&2
-            exit 1
-        }
-        ws_d=$tmp/ws-d
-        make_register_ws "$ws_d"
-        mkdir -p "$tmp/d"
-        conf_d=$tmp/d/pacman.conf
-        make_conf "$conf_d"
-        cp "$conf_d" "$conf_d.orig"
-        chmod 555 "$tmp/d"
-        trap 'chmod 755 "$tmp/d" 2>/dev/null || true' EXIT
-        run_backfill "$ws_d" "$conf_d"
-        ((FIXTURE_RC == 3)) ||
-            fail "refusal rc 3 expected (§G.1), got rc=$FIXTURE_RC: $FIXTURE_OUTPUT"
-        grep -Fq 'cannot write backup' <<<"$FIXTURE_OUTPUT" ||
-            fail "the refusal must name the blocked backup write, got: $FIXTURE_OUTPUT"
-        grep -Fq 'nothing changed' <<<"$FIXTURE_OUTPUT" ||
-            fail "the refusal must say nothing changed, got: $FIXTURE_OUTPUT"
-        cmp "$conf_d" "$conf_d.orig" >/dev/null ||
-            fail "the conf must be unchanged byte-for-byte after the refusal"
-        no_backup "$conf_d" d
-        # The only escalation is non-interactive (`sudo -n cp …`): the engine
-        # runs the write itself through `sudo -n` and never probes or prompts
-        # (§K.3 "the builder never prompts").
-        [[ $(wc -l <"$ws_d/sudo.log") == 1 ]] ||
-            fail "exactly one escalation attempt expected, log: $(cat "$ws_d/sudo.log" 2>/dev/null || true)"
-        grep -Eq -- '^sudo -n cp -p -- ' "$ws_d/sudo.log" ||
-            fail "the escalation must be the non-interactive 'sudo -n cp -p', log: $(cat "$ws_d/sudo.log")"
-        printf 'd: non-writable target + dead sudo = rc 3, byte-identical OK\n'
-    )
-fi
+# conf DIRECTORY's writability with a probe file, and since W1 the engine IS
+# root — a 0555 mode is no longer enough (CAP_DAC_OVERRIDE writes through
+# it), so the directory is staged IMMUTABLE instead: root cannot create there
+# either, the probe fails, and the escalation runs into the dead (tripwire)
+# sudo exactly as the scenario means. The subshell lifts the flag so the
+# fixture tree stays removable; chattr makes the scenario hold for a root-run
+# fixture too, so the old `id -u == 0` skip is obsolete.
+(
+    fail() {
+        printf 'ignorepkg-register d: %s\n' "$1" >&2
+        exit 1
+    }
+    ws_d=$tmp/ws-d
+    make_register_ws "$ws_d"
+    mkdir -p "$tmp/d"
+    conf_d=$tmp/d/pacman.conf
+    make_conf "$conf_d"
+    cp "$conf_d" "$conf_d.orig"
+    chmod 555 "$tmp/d"
+    /usr/bin/sudo -n chattr +i "$tmp/d" ||
+        fail "chattr +i on $tmp/d failed — the root-unwritable target cannot be staged"
+    trap '/usr/bin/sudo -n chattr -i "$tmp/d" 2>/dev/null || true; chmod 755 "$tmp/d" 2>/dev/null || true' EXIT
+    run_backfill "$ws_d" "$conf_d"
+    ((FIXTURE_RC == 3)) ||
+        fail "refusal rc 3 expected (§G.1), got rc=$FIXTURE_RC: $FIXTURE_OUTPUT"
+    grep -Fq 'cannot write backup' <<<"$FIXTURE_OUTPUT" ||
+        fail "the refusal must name the blocked backup write, got: $FIXTURE_OUTPUT"
+    grep -Fq 'nothing changed' <<<"$FIXTURE_OUTPUT" ||
+        fail "the refusal must say nothing changed, got: $FIXTURE_OUTPUT"
+    cmp "$conf_d" "$conf_d.orig" >/dev/null ||
+        fail "the conf must be unchanged byte-for-byte after the refusal"
+    no_backup "$conf_d" d
+    # The only escalation is non-interactive (`sudo -n cp …`): the engine
+    # runs the write itself through `sudo -n` and never probes or prompts
+    # (§K.3 "the builder never prompts").
+    [[ $(wc -l <"$ws_d/sudo.log") == 1 ]] ||
+        fail "exactly one escalation attempt expected, log: $(cat "$ws_d/sudo.log" 2>/dev/null || true)"
+    grep -Eq -- '^sudo -n cp -p -- ' "$ws_d/sudo.log" ||
+        fail "the escalation must be the non-interactive 'sudo -n cp -p', log: $(cat "$ws_d/sudo.log")"
+    printf 'd: non-writable target + dead sudo = rc 3, byte-identical OK\n'
+)
 
 # ─── e. bad usage = rc 2 on the hidden seam (§D.1 vocabulary) ────────────────
 run_engine "$ws" --register-ignorepkg "$conf" extra

@@ -70,7 +70,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/rr-v2.bash"
 
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-dispatch-order.XXXXXX")
-trap 'rm -rf -- "$fixture"' EXIT
+trap '/usr/bin/sudo -n rm -rf -- "$fixture" 2>/dev/null || rm -rf -- "$fixture" 2>/dev/null || true' EXIT
 
 fail() {
     printf '%s\n' "$1" >&2
@@ -80,11 +80,15 @@ fail() {
     exit 1
 }
 
-# ─── The engine under test: built into the fixture tree (scratch only) ──────
-cargo build --offline --quiet --target-dir "$fixture/cargo" -p gsa-cli \
-    --manifest-path "$gsa_repo_root/Cargo.toml" \
-    || fail "cannot build the gsa binary for the fixture"
-gsa_bin="$fixture/cargo/debug/gsa"
+# ─── The engine under test: scratch build only when GSA_TEST_GSA_BIN is not
+# already set (the rr-v2.bash run_engine convention) ──────────────────────
+if [ -z "${GSA_TEST_GSA_BIN:-}" ]; then
+    cargo build --offline --quiet --target-dir "$fixture/cargo" -p gsa-cli \
+        --manifest-path "$gsa_repo_root/Cargo.toml" \
+        || fail "cannot build the gsa binary for the fixture"
+    GSA_TEST_GSA_BIN="$fixture/cargo/debug/gsa"
+fi
+gsa_bin="$GSA_TEST_GSA_BIN"
 [ -x "$gsa_bin" ] || fail "cargo did not produce $gsa_bin"
 export GSA_TEST_ENGINE=gsa
 export GSA_TEST_GSA_BIN="$gsa_bin"
@@ -177,7 +181,7 @@ assert_clean() { # $1 = workspace, $2 = state dir — children drained, no temp 
     fi
     # Atomic publication (§F.2) leaves no temp names; the run's own
     # runs/<run-id>/*.result files are that run's record, not litter.
-    if find "$2" -name '*.tmp.*' -print -quit | grep -q .; then
+    if grep < <(find "$2" -name '*.tmp.*' -print -quit) -q .; then
         printf 'a publication temp name remained after the run of %s\n' "$1" >&2
         exit 1
     fi
@@ -262,21 +266,21 @@ assert_clean() { # $1 = workspace, $2 = state dir — children drained, no temp 
     run_engine "$bad" -Qt
     ((FIXTURE_RC == 2)) \
         || fail "a record naming unknown group bogusgrp must be loader rc 2 (§G.1), got rc=$FIXTURE_RC: $FIXTURE_OUTPUT"
-    printf '%s\n' "$FIXTURE_OUTPUT" | grep -F 'bad1' >/dev/null \
+    vgrep "$FIXTURE_OUTPUT" -F 'bad1' >/dev/null \
         || fail "the loader error does not name the offending record: $FIXTURE_OUTPUT"
-    printf '%s\n' "$FIXTURE_OUTPUT" | grep -F 'bogusgrp' >/dev/null \
+    vgrep "$FIXTURE_OUTPUT" -F 'bogusgrp' >/dev/null \
         || fail "the loader error does not name the offending group: $FIXTURE_OUTPUT"
 
     run_engine "$ws" -Sl @bogusgrp
     ((FIXTURE_RC == 2)) \
         || fail "an unknown @group must be usage rc 2 (§C.1/§G.1), got rc=$FIXTURE_RC: $FIXTURE_OUTPUT"
-    printf '%s\n' "$FIXTURE_OUTPUT" | grep -F '@bogusgrp' >/dev/null \
+    vgrep "$FIXTURE_OUTPUT" -F '@bogusgrp' >/dev/null \
         || fail "the unknown-reference error does not name the reference: $FIXTURE_OUTPUT"
 
     run_engine "$ws" -Sl @build-tool
     ((FIXTURE_RC == 2)) \
         || fail "a typo'd @group must be usage rc 2 (§C.1/§G.1), got rc=$FIXTURE_RC: $FIXTURE_OUTPUT"
-    printf '%s\n' "$FIXTURE_OUTPUT" | grep -F '@build-tools' >/dev/null \
+    vgrep "$FIXTURE_OUTPUT" -F '@build-tools' >/dev/null \
         || fail "the typo error does not report the nearest candidates: $FIXTURE_OUTPUT"
 )
 

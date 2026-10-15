@@ -70,7 +70,7 @@ source "$root/tests/lib/fixture-lib.bash"
 source "$root/tests/lib/rr-v2.bash"
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/gsa-recipe-contract.XXXXXX")
-trap 'rm -rf -- "$tmp"' EXIT
+trap '/usr/bin/sudo -n rm -rf -- "$tmp" 2>/dev/null || rm -rf -- "$tmp" 2>/dev/null || true' EXIT
 
 fail() {
     printf 'recipe contract fixture: %s\n' "$1" >&2
@@ -309,7 +309,7 @@ write_srcinfo() {
     # still declare mapped names unversioned. More than five, so recipe work
     # stays gated — version one (declare provides=('<name>=$pkgver')) or
     # update this ratchet consciously.
-    if grep '^provides-versioning: ' <<<"$FIXTURE_OUTPUT" | grep -v ' mapped swap/compat provide ' | grep -q .; then
+    if grep -q . < <(grep -v ' mapped swap/compat provide ' < <(grep '^provides-versioning: ' <<<"$FIXTURE_OUTPUT")); then
         fail "E: soname/constraint provides finding on the real repo: $FIXTURE_OUTPUT"
     fi
     sed -n "s/^provides-versioning: \([^:]*\): mapped swap\/compat provide '\([^']*\)' is unversioned.*/\1: \2/p" \

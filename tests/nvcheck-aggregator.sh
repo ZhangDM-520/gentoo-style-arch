@@ -34,7 +34,7 @@ grep -Fq 'packages/git/onlyoffice-git/.nvchecker.toml' <<<"$listed" ||
 multi="$root/packages/stable/bash/.nvchecker.toml"
 if [[ -f $multi ]]; then
     merged=$("$tool" --print-config "$multi")
-    head -n1 <<<"$merged" | grep -Fxq '[__config__]' ||
+    grep < <(head -n1 <<<"$merged") -Fxq '[__config__]' ||
         fail "--print-config does not start with a [__config__] table"
     grep -Fq 'oldver = "' <<<"$merged" || fail "the merged config has no oldver"
     grep -Fq 'newver = "' <<<"$merged" || fail "the merged config has no newver"

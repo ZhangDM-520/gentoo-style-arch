@@ -141,7 +141,8 @@ root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/rr-v2.bash"
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-signal-fixture.XXXXXX")
-trap 'rm -rf -- "$fixture"' EXIT
+# root-safe cleanup: engine state under $fixture is root-owned (W5 §B.10)
+trap '/usr/bin/sudo -n rm -rf -- "$fixture" 2>/dev/null || rm -rf -- "$fixture" 2>/dev/null || true' EXIT
 
 fail() {
     printf '%s\n' "$1" >&2
@@ -156,11 +157,15 @@ rr2_stub_knob GSA_FAKE_IGNORE_TERM "signal-abort-lock makepkg stub: build is TER
 rr2_stub_knob GSA_FAKE_FLAGS_LOG "signal-abort-lock makepkg stub: MAKEFLAGS/NINJAFLAGS/GSA_BUILD_JOBS observation log"
 rr2_stub_knob GSA_FAKE_ENGINE_PID "signal-abort-lock engine wrapper: pidfile of the engine process to signal"
 
-# ─── The engine under test: built into the fixture tree (scratch only) ──────
-cargo build --offline --quiet --target-dir "$fixture/cargo" -p gsa-cli \
-    --manifest-path "$gsa_repo_root/Cargo.toml" \
-    || fail "cannot build the gsa binary for the fixture"
-gsa_bin="$fixture/cargo/debug/gsa"
+# ─── The engine under test: scratch build only when GSA_TEST_GSA_BIN is not
+# already set (the rr-v2.bash run_engine convention) ──────────────────────
+if [ -z "${GSA_TEST_GSA_BIN:-}" ]; then
+    cargo build --offline --quiet --target-dir "$fixture/cargo" -p gsa-cli \
+        --manifest-path "$gsa_repo_root/Cargo.toml" \
+        || fail "cannot build the gsa binary for the fixture"
+    GSA_TEST_GSA_BIN="$fixture/cargo/debug/gsa"
+fi
+gsa_bin="$GSA_TEST_GSA_BIN"
 [ -x "$gsa_bin" ] || fail "cargo did not produce $gsa_bin"
 export GSA_TEST_ENGINE=gsa
 export GSA_TEST_GSA_BIN="$gsa_bin"
@@ -256,21 +261,45 @@ wait_for_file() { # path [timeout-s]
     return 1
 }
 
-run_bg() { # out-file cmd...   → sets $disp/$wd (background engine; $disp IS
-    # the engine pid because the wrapper `exec`s gsa)
+run_bg() { # out-file cmd...   → sets $disp/$bg/$wd (background engine;
+    # $disp IS the engine pid because the wrapper `exec`s it, $bg is the
+    # sudo monitor `end_bg` waits on)
     local out=$1; shift
-    "$@" >"$out" 2>&1 &
-    disp=$!
+    # W5 §B.10: the engine is root — launch through the host's REAL sudo
+    # (/usr/bin/sudo, never the PATH stub) with run_engine's env whitelist.
+    # The wrapper records the ENGINE's pid ($$ survives `exec`) because every
+    # kill must reach the engine itself: SIGKILL is never relayed, so a kill
+    # aimed at the sudo monitor would orphan a lock-holding engine.
+    local wrap="$out.gsa-wrap" pidfile="$out.engine.pid"
+    cat >"$wrap" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$$" >"$1"
+shift
+exec "$@"
+EOF
+    chmod +x "$wrap"
+    local -a fwd=()
+    rr2_env_forward fwd
+    /usr/bin/sudo -n env "${fwd[@]}" "$wrap" "$pidfile" "$@" >"$out" 2>&1 &
+    bg=$!
+    local i
+    for ((i = 0; i < 200; i++)); do
+        [ -s "$pidfile" ] && break
+        sleep 0.01
+    done
+    disp=$(cat "$pidfile" 2>/dev/null) || disp=$bg
+    [ -n "$disp" ] || disp=$bg
     ( for ((i = 0; i < 1500; i++)); do
-          command kill -0 "$disp" 2>/dev/null || exit 0
+          /usr/bin/sudo -n kill -0 "$disp" 2>/dev/null || exit 0
           sleep 0.1
       done
-      command kill -KILL "$disp" 2>/dev/null ) &
+      /usr/bin/sudo -n kill -KILL "$disp" 2>/dev/null ) &
     wd=$!
 }
 
-end_bg() { # wait for $disp → $rc; reap the watchdog
-    wait "$disp" 2>/dev/null
+end_bg() { # wait for $bg → $rc (sudo passes the engine's exit through); reap
+    # the watchdog (this fixture's own subshell — a plain kill)
+    wait "$bg" 2>/dev/null
     rc=$?
     command kill "$wd" 2>/dev/null || true
     wait "$wd" 2>/dev/null || true
@@ -301,12 +330,12 @@ codec_roundtrip() { # PKG CODE DUR-REASON-REGEX REASON FILE — §F.2 at the sea
     *) fail "wire code '$wire_code' is not a §F.1 lane code:" "$file" ;;
     esac
     [ "$wire_code" = "$code" ] || fail "wire code is '$wire_code', want '$code':" "$file"
-    printf '%s\n' "$wire_dur" | grep -Eq "$dur_re" \
+    vgrep "$wire_dur" -Eq "$dur_re" \
         || fail "wire duration '$wire_dur' does not match $dur_re:" "$file"
     [ "$wire_reason" = "$reason" ] || fail "wire reason is '$wire_reason', want '$reason':" "$file"
     printf '%s\n' "$wire_pkg_ver $wire_pkg $wire_code $wire_dur $wire_reason" | cmp -s - "$file" \
         || fail "the wire line does not re-encode byte-identically (round-trip):" "$file"
-    if find "$(dirname "$file")" -maxdepth 1 -name "$(basename "$file").tmp.*" -print -quit | grep -q .; then
+    if grep < <(find "$(dirname "$file")" -maxdepth 1 -name "$(basename "$file").tmp.*" -print -quit) -q .; then
         fail "atomic publication left a temp name beside $file"
     fi
 }
@@ -324,17 +353,17 @@ export GSA_FAKE_DB_PATH="$db"
 run_engine "$fixture" --stale-lock-check
 [[ $FIXTURE_RC -eq 0 ]] ||
     fail "lock probe rc=$FIXTURE_RC, want 0 (report-only, §D.1): $FIXTURE_OUTPUT"
-printf '%s\n' "$FIXTURE_OUTPUT" | grep -F "lock: $db/db.lck" >/dev/null ||
+vgrep "$FIXTURE_OUTPUT" -F "lock: $db/db.lck" >/dev/null ||
     fail "probe does not name the fixture lock path:" "$FIXTURE_OUTPUT"
-printf '%s\n' "$FIXTURE_OUTPUT" | grep -F 'status: free' >/dev/null ||
+vgrep "$FIXTURE_OUTPUT" -F 'status: free' >/dev/null ||
     fail "a lock-free database must report status: free:" "$FIXTURE_OUTPUT"
 
 : >"$db/db.lck"
 run_engine "$fixture" --stale-lock-check
 [[ $FIXTURE_RC -eq 0 ]] || fail "lock probe rc=$FIXTURE_RC, want 0" "$FIXTURE_OUTPUT"
-printf '%s\n' "$FIXTURE_OUTPUT" | grep -F 'status: present-idle' >/dev/null ||
+vgrep "$FIXTURE_OUTPUT" -F 'status: present-idle' >/dev/null ||
     fail "an idle db.lck must report status: present-idle:" "$FIXTURE_OUTPUT"
-printf '%s\n' "$FIXTURE_OUTPUT" | grep -F 'db.lck is never deleted' >/dev/null ||
+vgrep "$FIXTURE_OUTPUT" -F 'db.lck is never deleted' >/dev/null ||
     fail "the probe must state the never-delete contract:" "$FIXTURE_OUTPUT"
 [[ -e $db/db.lck ]] || fail "the probe DELETED db.lck — it must never delete"
 
@@ -345,11 +374,11 @@ holder=$!
 run_engine "$fixture" --stale-lock-check
 holder_rc=$FIXTURE_RC
 [[ $holder_rc -eq 0 ]] || fail "held-lock probe rc=$holder_rc, want 0" "$FIXTURE_OUTPUT"
-printf '%s\n' "$FIXTURE_OUTPUT" | grep -F 'status: held' >/dev/null ||
+vgrep "$FIXTURE_OUTPUT" -F 'status: held' >/dev/null ||
     fail "a live holder must report status: held:" "$FIXTURE_OUTPUT"
-printf '%s\n' "$FIXTURE_OUTPUT" | grep -F "holder: $holder " >/dev/null ||
+vgrep "$FIXTURE_OUTPUT" -F "holder: $holder " >/dev/null ||
     fail "the probe does not identify holder pid $holder:" "$FIXTURE_OUTPUT"
-printf '%s\n' "$FIXTURE_OUTPUT" | grep -F 'sleep' >/dev/null ||
+vgrep "$FIXTURE_OUTPUT" -F 'sleep' >/dev/null ||
     fail "the probe does not report the holder's command:" "$FIXTURE_OUTPUT"
 [[ -e $db/db.lck ]] || fail "the probe deleted a HELD db.lck"
 command kill "$holder" 2>/dev/null
@@ -358,7 +387,7 @@ wait "$holder" 2>/dev/null
 run_engine "$fixture" --stale-lock-check extra
 [[ $FIXTURE_RC -eq 2 ]] ||
     fail "--stale-lock-check with arguments must be rc 2 (§D.1), got $FIXTURE_RC" "$FIXTURE_OUTPUT"
-printf '%s\n' "$FIXTURE_OUTPUT" | grep -F 'takes no arguments' >/dev/null ||
+vgrep "$FIXTURE_OUTPUT" -F 'takes no arguments' >/dev/null ||
     fail "the arity refusal does not name the argument:" "$FIXTURE_OUTPUT"
 
 # ── 2. direct --lane-job: honest wire line + process rc on SIGTERM ─────────
@@ -371,7 +400,8 @@ run_bg "$state/lane.out" "$gsa_bin" --lane-job p1 "$res" 1
 lane=$disp
 wait_for_file "$state/built/p1" 10 ||
     fail "stub makepkg never started (lane did not reach the build)" "$state/lane.out"
-command kill -TERM "$lane"
+# the lane is root under run_bg's sudo (W5 §B.10) — signal via real sudo
+/usr/bin/sudo -n kill -TERM "$lane"
 end_bg
 [[ $rc -eq 143 ]] ||
     fail "signal-exited lane child rc=$rc, want honest 143 (§G.2)" "$state/lane.out"
@@ -383,7 +413,8 @@ state="$fixture/state-full"
 mk_env "$state" 4
 ( wait_for_file "$state/built/p1" 15 || exit 0
   lane=$(find_lane_pid)
-  [ -n "$lane" ] && command kill -TERM "$lane" ) &
+  # lane children are root-owned (W5 §B.10) — signal via real sudo
+  [ -n "$lane" ] && /usr/bin/sudo -n kill -TERM "$lane" ) &
 watcher=$!
 run_engine "$fixture" -B --leaf --no-prefetch --lanes 1 --jobs 1 p1
 command kill "$watcher" 2>/dev/null
@@ -437,7 +468,8 @@ EOF
     chmod +x "$wrap"
     ( wait_for_file "$pidfile" 10 || exit 0
       wait_for_file "$state/built/p1" 15 || exit 0
-      command kill -s "$sig" "$(cat "$pidfile")" 2>/dev/null ) &
+      # the engine is root (W5 §B.10) — signal it through real sudo
+      /usr/bin/sudo -n kill -s "$sig" "$(cat "$pidfile")" 2>/dev/null ) &
     watcher=$!
     GSA_FAKE_ENGINE_PID="$pidfile" GSA_TEST_GSA_BIN="$wrap" \
         run_engine "$fixture" -B --leaf --no-prefetch --lanes 1 --jobs 1 p1 p2
@@ -455,7 +487,7 @@ EOF
         fail "$sig: run-record outcome is not interrupted:" "$state/run.out"
     rr2_body <<<"$FIXTURE_OUTPUT" >/dev/null ||
         fail "$sig: the interrupted run emitted no complete run record:" "$state/run.out"
-    rr2_outcome p1 rc <<<"$FIXTURE_OUTPUT" | grep -Eq '^(129|130|143)$' ||
+    grep < <(rr2_outcome p1 rc <<<"$FIXTURE_OUTPUT") -Eq '^(129|130|143)$' ||
         fail "$sig: the started row's rc is not a signal lane code (§G.2): $(rr2_outcome p1 <<<"$FIXTURE_OUTPUT")" "$state/run.out"
     [ "$(rr2_outcome p1 status <<<"$FIXTURE_OUTPUT")" = "interrupted" ] ||
         fail "$sig: the started row is not interrupted (§H.3):" "$state/run.out"
@@ -512,13 +544,14 @@ for pkg in p1 p2; do
     [ "$(rr2_outcome "$pkg" <<<"$FIXTURE_OUTPUT")" = "$pkg never-started - - startup-refused" ] ||
         fail "refused row for $pkg is '$(rr2_outcome "$pkg" <<<"$FIXTURE_OUTPUT")', want never-started/startup-refused:" "$state/b.out"
 done
-printf '%s\n' "$FIXTURE_OUTPUT" | grep -F "$state/locks/run.lock" >/dev/null ||
+vgrep "$FIXTURE_OUTPUT" -F "$state/locks/run.lock" >/dev/null ||
     fail "the refusal does not name the run lock path:" "$state/b.out"
-command kill -0 "$lock_a" 2>/dev/null ||
+# the holder is a root-owned engine (W5 §B.10) — probe/signal via real sudo
+/usr/bin/sudo -n kill -0 "$lock_a" 2>/dev/null ||
     fail "the refused run was queued after all — the holder is gone"
 [ -e "$state/locks/run.lock" ] ||
     fail "the busy lock file disappeared"
-command kill -TERM "$lock_a"
+/usr/bin/sudo -n kill -TERM "$lock_a"
 end_bg
 
 # ── 6. ONE TERM → grace → SIGKILL at the default window (§K.3, gap G5) ─────
@@ -536,7 +569,8 @@ run_bg "$state/run.out" "$gsa_bin" -B --leaf --no-prefetch --lanes 1 --jobs 1 p1
 eng=$disp
 wait_for_file "$state/built/p1" 15 ||
     fail "grace run never started building" "$state/run.out"
-command kill -TERM "$eng" 2>/dev/null
+# the engine is root (W5 §B.10) — signal it through real sudo
+/usr/bin/sudo -n kill -TERM "$eng" 2>/dev/null
 sleep 5
 [ -n "$(find_lane_pid)" ] ||
     fail "the lane died before the grace window could expire — the single TERM must not kill a TERM-proof child"
@@ -561,7 +595,8 @@ term_sends=$(grep -c 'one SIGTERM per lane, shared grace window' "$state/run.out
 term_count=$(grep -c '^TERM$' "$state/signals.log" 2>/dev/null)
 [[ ${term_count:-0} -le 1 ]] ||
     fail "the lane pgrp received $term_count TERMs, want at most one before the kill" "$state/signals.log"
-command kill -KILL "$eng" 2>/dev/null
+# the engine is root (W5 §B.10) — signal it through real sudo
+/usr/bin/sudo -n kill -KILL "$eng" 2>/dev/null
 end_bg
 unset GSA_FAKE_IGNORE_TERM
 
@@ -578,7 +613,7 @@ mkdir -p "$state/results"
 run_engine "$fixture" --lane-job "bad id" "$res" 1
 [[ $FIXTURE_RC -eq 2 ]] ||
     fail "a malformed package id must be rc 2 (producer-side codec rule), got $FIXTURE_RC" "$FIXTURE_OUTPUT"
-printf '%s\n' "$FIXTURE_OUTPUT" | grep -F "is not a valid recipe id" >/dev/null ||
+vgrep "$FIXTURE_OUTPUT" -F "is not a valid recipe id" >/dev/null ||
     fail "the identity refusal does not name the argument:" "$FIXTURE_OUTPUT"
 [ ! -e "$res" ] || fail "a refused identity published a result file"
 [ ! -s "$state/makepkg.log" ] || fail "the identity refusal ran a build first:" "$(cat "$state/makepkg.log")"
@@ -588,7 +623,8 @@ state="$fixture/state-lost"
 mk_env "$state" 5
 ( wait_for_file "$state/built/p1" 15 || exit 0
   lane=$(find_lane_pid)
-  [ -n "$lane" ] && command kill -KILL "$lane" ) &
+  # lane children are root-owned (W5 §B.10) — signal via real sudo
+  [ -n "$lane" ] && /usr/bin/sudo -n kill -KILL "$lane" ) &
 watcher=$!
 run_engine "$fixture" -B --leaf --no-prefetch --lanes 1 --jobs 1 p1 p2
 command kill "$watcher" 2>/dev/null
@@ -599,7 +635,7 @@ wait "$watcher" 2>/dev/null
 rows=$(rr2_outcome_rows <<<"$FIXTURE_OUTPUT")
 [ "$(rr2_outcome p1 <<<"$FIXTURE_OUTPUT")" = "p1 failed 125 - lane-lost" ] ||
     fail "the vanished lane's row is '$(rr2_outcome p1 <<<"$FIXTURE_OUTPUT")', want failed 125 lane-lost (the fail-closed rule):" "$state/run.out"
-printf '%s\n' "$FIXTURE_OUTPUT" | grep -F 'no usable result for p1' >/dev/null ||
+vgrep "$FIXTURE_OUTPUT" -F 'no usable result for p1' >/dev/null ||
     fail "the lost mapping is not reported loudly:" "$state/run.out"
 # the cone of the lost package parks (§I.1) and the run is a cone-stop
 # failure (§G.1 4) — derived from the rows
@@ -616,9 +652,12 @@ state="$fixture/state-foreignlost"
 mk_env "$state" 5
 ( wait_for_file "$state/built/p1" 15 || exit 0
   rundir=$(ls -d "$state/runs"/*/ 2>/dev/null | head -1)
-  [ -n "$rundir" ] && printf 'v2 pX 0 1 ok\n' >"$rundir/p1.result"
+  # the run directory is engine-owned state (W5 §B.10) — plant the foreign
+  # wire line through real sudo
+  [ -n "$rundir" ] && printf 'v2 pX 0 1 ok\n' | /usr/bin/sudo -n tee "$rundir/p1.result" >/dev/null
   lane=$(find_lane_pid)
-  [ -n "$lane" ] && command kill -KILL "$lane" ) &
+  # lane children are root-owned (W5 §B.10) — signal via real sudo
+  [ -n "$lane" ] && /usr/bin/sudo -n kill -KILL "$lane" ) &
 watcher=$!
 run_engine "$fixture" -B --leaf --no-prefetch --lanes 1 --jobs 1 p1 p2
 command kill "$watcher" 2>/dev/null
@@ -626,7 +665,7 @@ wait "$watcher" 2>/dev/null
 {
     echo "$FIXTURE_OUTPUT"
 } >"$state/run.out"
-printf '%s\n' "$FIXTURE_OUTPUT" | grep -F "foreign result: expected 'p1', got 'pX'" >/dev/null ||
+vgrep "$FIXTURE_OUTPUT" -F "foreign result: expected 'p1', got 'pX'" >/dev/null ||
     fail "the foreign identity was not rejected by name:" "$state/run.out"
 [ "$(rr2_outcome p1 <<<"$FIXTURE_OUTPUT")" = "p1 failed 125 - lane-lost" ] ||
     fail "a foreign line must fail closed to lost, not become the lane's outcome: $(rr2_outcome p1 <<<"$FIXTURE_OUTPUT")" "$state/run.out"
@@ -652,9 +691,10 @@ run_engine "$fixture" -B --leaf --no-prefetch --lanes 1 --jobs 1 p1 p2
     fail "second concurrent run was not refused with rc 3 (got $FIXTURE_RC)" "$state/b.out"
 [ "$(rr2_outcome p1 reason <<<"$FIXTURE_OUTPUT")" = "startup-refused" ] ||
     fail "the second run's rows do not carry startup-refused:" "$state/b.out"
-command kill -0 "$lock_a" 2>/dev/null ||
+# the holder is a root-owned engine (W5 §B.10) — probe/signal via real sudo
+/usr/bin/sudo -n kill -0 "$lock_a" 2>/dev/null ||
     fail "the 'concurrent' run only passed because the holder was already gone"
-command kill -TERM "$lock_a"
+/usr/bin/sudo -n kill -TERM "$lock_a"
 end_bg
 # The flock releases with the run — observe the free within 1 s, then the run
 # started right after it must proceed.
@@ -697,7 +737,8 @@ run_bg "$state/b.out" "$gsa_bin" -B --leaf --no-prefetch --lanes 1 --jobs 1 p1 p
 lock_b=$disp
 wait_for_file "$state/built/p1" 15 ||
     fail "lock run B never started building" "$state/b.out"
-command kill -KILL "$lock_b"
+# the engine is root (W5 §B.10) — signal it through real sudo
+/usr/bin/sudo -n kill -KILL "$lock_b"
 end_bg
 for ((i = 0; i < 50; i++)); do
     /usr/bin/flock -n "$state/locks/run.lock" true 2>/dev/null && break
@@ -727,7 +768,8 @@ run_bg "$state/run.out" "$gsa_bin" -B --leaf --no-prefetch --lanes 1 --jobs 1 p1
 eng=$disp
 wait_for_file "$state/built/p1" 15 ||
     fail "sweep run never started building" "$state/run.out"
-command kill -KILL "$eng"
+# the engine is root (W5 §B.10) — signal it through real sudo
+/usr/bin/sudo -n kill -KILL "$eng"
 end_bg
 # Let the dead run's lane settle on its own (however it ends — watchdog or
 # build completion), then the NEXT run's startup sweep must clear the dead
@@ -749,7 +791,7 @@ run_engine "$fixture" -B --leaf --no-prefetch --lanes 1 --jobs 1 p3
 if ls "$state/runs"/*/p1.result >/dev/null 2>&1; then
     fail "the dead run's stale result survived the sweep:" "$(ls "$state/runs" 2>/dev/null)"
 fi
-if find "$state/runs" -name '*.tmp.*' -print -quit | grep -q .; then
+if grep < <(find "$state/runs" -name '*.tmp.*' -print -quit) -q .; then
     fail "a stale temp name survived the sweep"
 fi
 [ -f "$(run_one_result "$state" p3)" ] ||
@@ -775,9 +817,10 @@ wait_for_file "$state/built/p1" 15 ||
 # kernel, and near-simultaneous DIFFERENT signals race between send order and
 # Linux's lowest-signal-number-first delivery, while HUP(1)→INT(2) is first
 # under BOTH rules — INT is deterministically the second receipt.
-command kill -HUP "$eng" 2>/dev/null
+# the engine is root (W5 §B.10) — signal it through real sudo
+/usr/bin/sudo -n kill -HUP "$eng" 2>/dev/null
 t0=$(date +%s)
-command kill -INT "$eng" 2>/dev/null
+/usr/bin/sudo -n kill -INT "$eng" 2>/dev/null
 escalated=1
 for ((i = 0; i < 100; i++)); do
     if [ -z "$(find_lane_pid)" ] && ! stub_lives >/dev/null; then
@@ -803,7 +846,8 @@ term_count=$(grep -c '^TERM$' "$state/signals.log" 2>/dev/null)
     fail "the lane pgrp received $term_count TERMs, want at most one before the kill" "$state/signals.log"
 grep -F 'second signal' "$state/run.out" >/dev/null ||
     fail "the escalation is not reported in the teardown stream:" "$state/run.out"
-command kill -KILL "$eng" 2>/dev/null
+# the engine is root (W5 §B.10) — signal it through real sudo
+/usr/bin/sudo -n kill -KILL "$eng" 2>/dev/null
 end_bg
 unset GSA_FAKE_IGNORE_TERM
 
@@ -813,7 +857,9 @@ state="$fixture/state-foreign-ok"
 mk_env "$state" 3
 ( wait_for_file "$state/built/p1" 15 || exit 0
   rundir=$(ls -d "$state/runs"/*/ 2>/dev/null | head -1)
-  [ -n "$rundir" ] && printf 'v2 pX 0 1 ok\n' >"$rundir/p1.result" ) &
+  # the run directory is engine-owned state (W5 §B.10) — plant the foreign
+  # wire line through real sudo
+  [ -n "$rundir" ] && printf 'v2 pX 0 1 ok\n' | /usr/bin/sudo -n tee "$rundir/p1.result" >/dev/null ) &
 watcher=$!
 run_engine "$fixture" -B --leaf --no-prefetch --lanes 1 --jobs 1 p1
 command kill "$watcher" 2>/dev/null
@@ -842,7 +888,7 @@ printf 'not empty\n' >"$slot/junk"
 run_engine "$fixture" --lane-job p1 "$slot" 1
 [[ $FIXTURE_RC -eq 125 ]] ||
     fail "an unremovable result slot must fail closed to lost (125), got $FIXTURE_RC" "$FIXTURE_OUTPUT"
-printf '%s\n' "$FIXTURE_OUTPUT" | grep -F "cannot publish" >/dev/null ||
+vgrep "$FIXTURE_OUTPUT" -F "cannot publish" >/dev/null ||
     fail "the publish refusal is not reported loudly, naming the file:" "$FIXTURE_OUTPUT"
 [ -d "$slot" ] || fail "the unremovable slot disappeared — the seam must refuse, not force"
 [ -f "$slot/junk" ] || fail "the slot's content was clobbered"
@@ -858,8 +904,8 @@ res_ctrl="$state/results/ctrl"$'\x01'".result"
 run_engine "$fixture" --lane-job p1 "$res_ctrl" 1
 [[ $FIXTURE_RC -eq 2 ]] ||
     fail "control-char result path rc=$FIXTURE_RC, want 2 (invocation error)" "$FIXTURE_OUTPUT"
-printf '%s\n' "$FIXTURE_OUTPUT" | grep -F 'result path' >/dev/null &&
-    printf '%s\n' "$FIXTURE_OUTPUT" | grep -F 'control characters' >/dev/null ||
+vgrep "$FIXTURE_OUTPUT" -F 'result path' >/dev/null &&
+    vgrep "$FIXTURE_OUTPUT" -F 'control characters' >/dev/null ||
     fail "missing control-character refusal:" "$FIXTURE_OUTPUT"
 [ ! -e "$res_ctrl" ] || fail "a refused invocation still wrote a result file"
 [ ! -s "$state/makepkg.log" ] ||
@@ -871,7 +917,7 @@ run_engine "$fixture" --lane-job
 for bad_jobs in 0 x; do
     run_engine "$fixture" --lane-job p1 "$state/results/j.result" "$bad_jobs"
     [[ $FIXTURE_RC -eq 2 ]] || fail "jobs '$bad_jobs' must be rc 2, got $FIXTURE_RC" "$FIXTURE_OUTPUT"
-    printf '%s\n' "$FIXTURE_OUTPUT" | grep -F "jobs '$bad_jobs'" >/dev/null ||
+    vgrep "$FIXTURE_OUTPUT" -F "jobs '$bad_jobs'" >/dev/null ||
         fail "the jobs refusal does not name the argument:" "$FIXTURE_OUTPUT"
 done
 
@@ -881,18 +927,18 @@ done
 for bad_flag in --skipchecksums --skippgpcheck --skipinteg; do
     run_engine "$fixture" --lane-job p1 "$state/results/f.result" 1 "$bad_flag"
     [[ $FIXTURE_RC -eq 2 ]] || fail "$bad_flag must be rc 2, got $FIXTURE_RC" "$FIXTURE_OUTPUT"
-    printf '%s\n' "$FIXTURE_OUTPUT" | grep -F -- "$bad_flag" >/dev/null ||
+    vgrep "$FIXTURE_OUTPUT" -F -- "$bad_flag" >/dev/null ||
         fail "the flag refusal does not name $bad_flag:" "$FIXTURE_OUTPUT"
-    printf '%s\n' "$FIXTURE_OUTPUT" | grep -F 'never weakened' >/dev/null ||
+    vgrep "$FIXTURE_OUTPUT" -F 'never weakened' >/dev/null ||
         fail "$bad_flag's refusal must state verification is never weakened:" "$FIXTURE_OUTPUT"
 done
 run_engine "$fixture" --lane-job p1 "$state/results/f.result" 1 'bad token'
 [[ $FIXTURE_RC -eq 2 ]] || fail "a malformed flag token must be rc 2, got $FIXTURE_RC" "$FIXTURE_OUTPUT"
-printf '%s\n' "$FIXTURE_OUTPUT" | grep -F 'not a makepkg flag token' >/dev/null ||
+vgrep "$FIXTURE_OUTPUT" -F 'not a makepkg flag token' >/dev/null ||
     fail "the malformed-token refusal does not name the grammar:" "$FIXTURE_OUTPUT"
 run_engine "$fixture" --lane-job p1 "$state/results/f.result" 1 ''
 [[ $FIXTURE_RC -eq 2 ]] || fail "an empty flag token must be rc 2, got $FIXTURE_RC" "$FIXTURE_OUTPUT"
-if find "$state/results" -name '*.result' -print -quit | grep -q .; then
+if grep < <(find "$state/results" -name '*.result' -print -quit) -q .; then
     fail "a refused --lane-job payload published a result file"
 fi
 [ ! -s "$state/makepkg.log" ] ||
@@ -937,7 +983,8 @@ EOF
 chmod +x "$wrap"
 ( wait_for_file "$pidfile" 10 || exit 0
   wait_for_file "$state/built/p1" 15 || exit 0
-  command kill -INT "$(cat "$pidfile")" 2>/dev/null ) &
+  # the engine is root (W5 §B.10) — signal it through real sudo
+  /usr/bin/sudo -n kill -INT "$(cat "$pidfile")" 2>/dev/null ) &
 watcher=$!
 GSA_FAKE_ENGINE_PID="$pidfile" GSA_TEST_GSA_BIN="$wrap" \
     run_engine "$fixture" -B --leaf --no-prefetch --lanes 1 --jobs 1 p1 p3

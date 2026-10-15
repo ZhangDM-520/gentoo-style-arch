@@ -50,6 +50,72 @@ live this session). 49 worktrees across `~/Projects` + `~/Workspace` currently
 carry dangling refs (reported, not swept — engine/recipe scope owned
 elsewhere).
 
+## 2026-10-15 — W1/W5 privilege isolation closeout: the fetch half leaked root; the fixture battery's random reds were three separate mechanisms (tmpfs storm, SIGPIPE-on-match assertions, one engine drop gap)
+
+The consolidated closeout of the privilege-isolation stream (W1 engine model,
+W5 fixture migration), written from live validation after the last defect was
+fixed. Two durable fixture rules and one engine rule came out of it.
+
+**W5 fixture migration (earlier in the day; symptom → root cause → fix).**
+`tests/sudo-keepalive.sh`, `tests/gsa-maint-v2.sh`, `tests/gsa-qa-v2.sh`
+migrated to the §B.10 privilege model:
+
+* `sudo-keepalive.sh` scenario 4 (`cold+TTY`) invoked the engine unprivileged and expected the `sudo cannot install non-interactively` preflight; the §B.10 gate now refuses first (rc 3, `you cannot perform this operation unless you are root`) and the preflight is unreachable unprivileged. Matrix re-derived: credential scenarios 1–4 ride the root supervisor (`run_engine` = `/usr/bin/sudo -n env … gsa`), the TTY sub-case wraps that same supervisor in `script(1)`, and a new scenario 5 pins the gate itself (plain `run_engine_user` + pty form): rc 3, root message exactly once, zero preflight text, zero builds, zero engine-side sudo calls. Gate-refusal record emission stays unpinned — §H.1 lists only interrupt/preflight-refusal as the non-run emission paths (contract silence, reported).
+* `gsa-maint-v2.sh` appended retention seeds to the engine's `history.jsonl` and truncated/opened `run.lock` for write — both ROOT-owned since the run_engine supervisor is real sudo. Fixture-side writes into engine state now escalate through the absolute `/usr/bin/sudo` (`tee -a`, `touch`); the flock holder opens the lock READ-ONLY (flock(2) locks the file description regardless of access mode).
+* `gsa-qa-v2.sh` passed every section; only its EXIT trap broke on root-owned state. All three traps are now root-safe (`/usr/bin/sudo -n rm -rf … || rm -rf … || true`).
+* The `assert_varlib_unchanged` battery trip was NOT `gsa-maint-v2.sh`: `/var/lib/gsa/runs/history.jsonl` holds zero rows for its packages and four rows whose `selection_source` names `sets=p-plain,p-mixed,p-vcs`/`p-q`/`nautilus` (mtime 17:04) — `tests/gsa-fetch-v2.sh` invocations reach the DEFAULT state root and need the same explicit `--state-dir`/`GSA_STATE_DIR` treatment. Reported to the migration owner, not touched (single-writer).
+
+**Mechanism 1 — the tmpfs storm (the "impossible" battery-only reds).** Every
+engine fixture built its own ~5 GiB cargo debug tree under `$TMPDIR`; one
+battery run spawns ~15 concurrently into the 16 GiB `/tmp` tmpfs (sampler
+caught `min_avail=99M`). On exhaustion bash `<<<` here-strings fail with
+"cannot create temp file for here-document", child spawns fail under RAM
+pressure, and the run_one capture redirect loses the evidence — which is why
+the reds showed empty captures and moved between fixtures. Fix:
+`tests/run-all.sh` prebuilds the engine ONCE into the repo `target/` and
+exports `GSA_TEST_GSA_BIN`; every engine fixture now honours-or-builds that
+variable instead of cargo-building its own tree.
+
+**Mechanism 2 — SIGPIPE-on-match assertions.** The idiom
+`printf '%s\n' "$VAR" | grep -q …` under `set -o pipefail` couples the
+assertion's rc to the *producer*: under CPU contention `grep -q` exits on its
+early match before `printf` finishes writing, `printf` dies 141, and the
+assertion reddens on a matching capture (quiet-machine trials never preempt
+mid-write; the battery races it repeatedly). Fix repo-wide: `vgrep VALUE
+ARG…` in `tests/lib/rr-v2.bash` (process substitution, grep's rc alone) for
+value producers, and `grep … < <(PRODUCER)` for command producers
+(`record_section`/`decision_rows`/`rr2_*`/`find`/`tr`/multi-stage) — 176
+sites. Justified non-conversions: stub-internal pipelines (no pipefail in the
+stub), here-string-only forms (bash backs `<<<` with a temp file), and small
+single-write `$(… | head -1)` captures (atomic ≤4 KiB writes).
+
+**Mechanism 3 — the fetch half leaked root (engine bug).**
+`gsa-fetch`'s `makepkg_verifysource` built its child with plain
+`Command::new("makepkg")`, so under the W1 root supervisor the fetch half's
+`makepkg --verifysource` ran as root while every build-half makepkg dropped to
+the build user. Fix: construct through `gsa_model::privilege::build_command`.
+Red-first: a new `tests/gsa-privilege.sh` section f (`gsa -Sw` under real
+sudo, uid-recording stub) went red on the unfixed binary (`uid=0 want 1000`)
+and green with the fix. A uid assertion first added to `tests/gsa-fetch-v2.sh`
+was VACUOUS there — that fixture stubs `sudo` itself, so euid is never 0 and
+the drop cannot be observed; privilege assertions live in
+`gsa-privilege.sh`, which uses real `sudo -n`.
+
+**Validation.** 12 fixtures touched by the idiom sweep, parallel: rc 0 all;
+`cargo test --workspace`: green (every suite); full battery 66/66 twice,
+quiet, back to back. Real smoke (host quiet, no makepkg in flight):
+`sudo gsa -S brightnessctl` builds+installs as root supervisor with every
+recipe-workspace file owned by the invoking build user (none root-owned,
+verified with `find ! -user`); unprivileged `gsa -Q`/`gsa -Sl` pass; a stale
+`run.lock` (dead pid text) does not block the next run (flock is the truth);
+a synthetic stale `/var/lib/pacman/db.lck` replays `status: present-idle (no
+open holder)` and is never deleted by gsa; a bare root build run refuses rc 3
+(`a build run needs a build user`); `GSA_TEST_GSA_BIN=/usr/bin/gsa bash
+tests/gsa-qa-v2.sh` green. Release binary rebuilt and installed to
+`/usr/bin/gsa` (pre-image backed up at `/var/tmp/gsa.pre-w1w5-20261015`).
+
+**Durable rules.** (1) Engine-side state is ROOT-owned under the W5 model — a fixture that seeds, truncates or appends into `<state>` must escalate through the ABSOLUTE `/usr/bin/sudo` (the PATH stub is the engine's observation point only), and its EXIT trap must be root-safe. (2) Fixture assertions never pipe a producer into an early-exit `grep`: `vgrep` or `grep … < <(producer)` — pipefail turns a SIGPIPE-on-match into a red on a matching capture. (3) A privilege/drop assertion belongs only where euid is actually 0 (`gsa-privilege.sh`, real `sudo -n`); a fixture that stubs `sudo` cannot observe the drop, and a passing assertion there is vacuous. (4) Engine build-side children — including the fetch half's `makepkg --verifysource` — always go through `gsa_model::privilege::build_command`.
+
 ## 2026-10-15 — wave-10C burn-down: thirteen rows, twelve pairings and one plain name; the stem-spelling wall (`X.so` provide name, never the `X.so.N` soname)
 
 **Symptom / root cause.** 1-row tier batch three: hplip iproute2 jack2-git

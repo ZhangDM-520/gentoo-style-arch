@@ -38,18 +38,22 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/rr-v2.bash"
 # checked at once (one job per hardware thread; override with GSA_FAKE_SRCINFO_JOBS).
 jobs=${GSA_FAKE_SRCINFO_JOBS:-$(nproc 2>/dev/null || echo 8)}
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/gsa-srcinfo-fixture.XXXXXX")
-trap 'rm -rf -- "$tmp"' EXIT
+trap '/usr/bin/sudo -n rm -rf -- "$tmp" 2>/dev/null || rm -rf -- "$tmp" 2>/dev/null || true' EXIT
 
 fail() {
     printf '\nFAIL: %s\n' "$*" >&2
     exit 1
 }
 
-# The engine under test: built into the fixture tree (scratch only).
-cargo build --offline --quiet --target-dir "$tmp/cargo" -p gsa-cli \
-    --manifest-path "$gsa_repo_root/Cargo.toml" \
-    || fail "cannot build the gsa binary for the fixture"
-gsa_bin="$tmp/cargo/debug/gsa"
+# The engine under test: scratch build only when GSA_TEST_GSA_BIN is not
+# already set (the rr-v2.bash run_engine convention).
+if [ -z "${GSA_TEST_GSA_BIN:-}" ]; then
+    cargo build --offline --quiet --target-dir "$tmp/cargo" -p gsa-cli \
+        --manifest-path "$gsa_repo_root/Cargo.toml" \
+        || fail "cannot build the gsa binary for the fixture"
+    GSA_TEST_GSA_BIN="$tmp/cargo/debug/gsa"
+fi
+gsa_bin="$GSA_TEST_GSA_BIN"
 [ -x "$gsa_bin" ] || fail "cargo did not produce $gsa_bin"
 export GSA_TEST_ENGINE=gsa
 export GSA_TEST_GSA_BIN="$gsa_bin"
@@ -199,7 +203,7 @@ grep -q '(synced with repo) — the committed .SRCINFO could NOT be refreshed' \
 $output"
 cmp -s "$dir/pre-SRCINFO" "$dir/packages/stable/s1/.SRCINFO" \
     || fail 'refresh-fail: the committed .SRCINFO was replaced although the refresh failed'
-if find "$dir/packages/stable/s1" -name '.SRCINFO.tmp*' -print -quit | grep -q .; then
+if grep < <(find "$dir/packages/stable/s1" -name '.SRCINFO.tmp*' -print -quit) -q .; then
     fail 'refresh-fail: a staged .SRCINFO scratch survived the failed refresh'
 fi
 )
@@ -271,7 +275,7 @@ if grep -q -- '--printsrcinfo' "$dir/fake/makepkg_argv"; then
 fi
 cmp -s "$dir/pre-SRCINFO" "$dir/packages/stable/s1/.SRCINFO" \
     || fail 'build-nonmut: the committed .SRCINFO was rewritten by a build run'
-if find "$dir/packages/stable/s1" -name '.SRCINFO.tmp*' -print -quit | grep -q .; then
+if grep < <(find "$dir/packages/stable/s1" -name '.SRCINFO.tmp*' -print -quit) -q .; then
     fail 'build-nonmut: a staged .SRCINFO scratch survived the build run'
 fi
 )

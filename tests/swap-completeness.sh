@@ -64,7 +64,7 @@ source "$root/tests/lib/fixture-lib.bash"
 source "$root/tests/lib/rr-v2.bash"
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/gsa-swap-completeness.XXXXXX")
-trap 'rm -rf -- "$tmp"' EXIT
+trap '/usr/bin/sudo -n rm -rf -- "$tmp" 2>/dev/null || rm -rf -- "$tmp" 2>/dev/null || true' EXIT
 
 fail() {
     printf 'swap completeness fixture: %s\n' "$1" >&2

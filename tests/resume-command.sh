@@ -63,7 +63,7 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/rr-v2.bash"
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-resume-cmd.XXXXXX")
-trap 'rm -rf -- "$fixture"' EXIT
+trap '/usr/bin/sudo -n rm -rf -- "$fixture" 2>/dev/null || rm -rf -- "$fixture" 2>/dev/null || true' EXIT
 
 fail() {
     printf 'resume command fixture: %s\n' "$1" >&2
@@ -376,7 +376,7 @@ fi
     # `pacman -Q rust-git` probe (crates/gsa-recipe/src/toolchain.rs) is a
     # query, not a transaction (the query/transaction split
     # tests/pacman-mutex-shim.sh pins), so it may ride in the log.
-    if grep -v -e '^pacman -Q' -e "p1-1.0.0-1-any.pkg.tar.zst" "$dir/pacman.log" | grep -q .; then
+    if grep < <(grep -v -e '^pacman -Q' -e "p1-1.0.0-1-any.pkg.tar.zst" "$dir/pacman.log") -q .; then
         printf 'plan refusal: a refused plan reached pacman:\n' >&2
         cat "$dir/pacman.log" >&2
         exit 1
@@ -407,7 +407,7 @@ fi
             "$(rr2_plan p2 <<<"$U_OUTPUT")" "$dir" "$U_OUTPUT" >&2
         exit 1
     fi
-    if rr2_plan_rows <<<"$U_OUTPUT" | grep -q 'empty-list'; then
+    if grep < <(rr2_plan_rows <<<"$U_OUTPUT") -q 'empty-list'; then
         printf 'plan refusal (-U): phantom empty-list row in a self-explaining refusal plan:\n%s\n' "$U_OUTPUT" >&2
         exit 1
     fi

@@ -130,7 +130,9 @@ root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/rr-v2.bash"
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-abi-batch.XXXXXX")
-trap 'rm -rf -- "$fixture"' EXIT
+# Root-safe cleanup: the engine writes its state tree as root (W5), so the
+# plain rm would leave Permission denied noise even on a passing run.
+trap '/usr/bin/sudo -n rm -rf -- "$fixture" 2>/dev/null || rm -rf -- "$fixture" 2>/dev/null || true' EXIT
 
 fail() {
     printf 'abi-batch-policy fixture: %s\n' "$*" >&2
@@ -252,6 +254,13 @@ engine_ws() {
     export GSA_FAKE_PACMAN_CONF_LOG="$ws/pacman-conf.log"
     export GSA_CPU_THREADS=8
     export GSA_MEMORY_GIB=16
+    # Pre-create the stub logs fixture-side (W5): the engine runs the
+    # pacman/sudo/pacman-conf stubs as root, so a root-created log would
+    # block the sections' plain `: >` resets with Permission denied.
+    : >"$GSA_FAKE_MAKEPKG_LOG"
+    : >"$GSA_FAKE_PACMAN_LOG"
+    : >"$GSA_FAKE_SUDO_LOG"
+    : >"$GSA_FAKE_PACMAN_CONF_LOG"
 }
 
 # write_elf64_needed FILE SONAME — one minimal ET_DYN carrying exactly one
@@ -473,11 +482,15 @@ $FIXTURE_OUTPUT"
     # only its abi=must batch membership can pull it in — under --leaf, which
     # suppresses consumer expansion. The anchor can never build without its
     # member, and the run builds the complete batch.
-    mkdir -p "$GSA_STATE_DIR/abi"
+    # The seeded subscription records are fixture-side writes into the
+    # engine-owned state tree (W5: state/ is root-owned after the build pass
+    # above), so they land through the real sudo — the record must exist
+    # regardless of who owns the directory.
+    /usr/bin/sudo -n mkdir -p "$GSA_STATE_DIR/abi"
     {
         printf 'q1|0:1.0.0-1|llvm-git|stale-token\n'
         printf 'rust-git|0:1.0.0-1|llvm-git|%s\n' "$tok"
-    } >"$GSA_STATE_DIR/abi/subscriptions"
+    } | /usr/bin/sudo -n tee "$GSA_STATE_DIR/abi/subscriptions" >/dev/null
     : >"$GSA_FAKE_MAKEPKG_LOG"
     : >"$GSA_FAKE_PACMAN_LOG"
     run_engine "$dir" -B --no-prefetch --leaf llvm-git
@@ -510,7 +523,8 @@ $FIXTURE_OUTPUT"
     # subscriber the topology has no record for can never be built here, so
     # the plan is under-covered: the run refuses by name (§E.2–E.3), exits 3
     # (§G.1), every row is never-started, and nothing is dispatched.
-    printf 'ghost|0:1.0.0-1|llvm-git|stale-token\n' >"$GSA_STATE_DIR/abi/subscriptions"
+    printf 'ghost|0:1.0.0-1|llvm-git|stale-token\n' \
+        | /usr/bin/sudo -n tee "$GSA_STATE_DIR/abi/subscriptions" >/dev/null
     : >"$GSA_FAKE_MAKEPKG_LOG"
     : >"$GSA_FAKE_PACMAN_LOG"
     run_engine "$dir" -B --no-prefetch --leaf llvm-git
@@ -704,14 +718,14 @@ EOF
     topo_out=$FIXTURE_OUTPUT
     mold_edges=$(awk -F'|' '$1 == "mold-git" { print $4 }' <<<"$topo_out")
     [ -n "$mold_edges" ] || fail "D: no mold-git record in the -Qt output"
-    tr ',' '\n' <<<"$mold_edges" | grep -qx 'rust-git' ||
+    grep < <(tr ',' '\n' <<<"$mold_edges") -qx 'rust-git' ||
         fail "D: mold-git declares no rust-git edge (got: $mold_edges)"
 
     # Batch membership is data now, not prose: llvm-git is the anchor and
     # rust-git its mandatory member — both must carry the abi=must tag.
     for id in llvm-git rust-git; do
         tags=$(awk -F'|' -v id="$id" '$1 == id { print $5 }' <<<"$topo_out")
-        tr ',' '\n' <<<"$tags" | grep -qx 'abi=must' ||
+        grep < <(tr ',' '\n' <<<"$tags") -qx 'abi=must' ||
             fail "D: $id is not tagged abi=must in the committed topology (got: $tags)"
     done
 
@@ -1001,11 +1015,11 @@ $FIXTURE_OUTPUT"
     grep -Fq "abi-consumer $a_libs mid-git" <<<"$FIXTURE_OUTPUT" ||
         fail "G1: the refusal does not name the missing linker mid-git:
 $FIXTURE_OUTPUT"
-    if printf '%s\n' "$FIXTURE_OUTPUT" | rows_only | grep -Fq 'leaf-git'; then
+    if grep < <(printf '%s\n' "$FIXTURE_OUTPUT" | rows_only) -Fq 'leaf-git'; then
         fail "G1: the hub chain leaked a non-linking member into the refusal:
 $FIXTURE_OUTPUT"
     fi
-    if printf '%s\n' "$FIXTURE_OUTPUT" | rows_only | grep -Fq 'nlink-git'; then
+    if grep < <(printf '%s\n' "$FIXTURE_OUTPUT" | rows_only) -Fq 'nlink-git'; then
         fail "G1: a naming-but-not-linking consumer leaked into the refusal:
 $FIXTURE_OUTPUT"
     fi
@@ -1034,7 +1048,7 @@ $FIXTURE_OUTPUT"
 app-git install ok
 libs-git refuse abi-soname
 EOF
-    if printf '%s\n' "$FIXTURE_OUTPUT" | rows_only | grep -Fq 'abi-consumer'; then
+    if grep < <(printf '%s\n' "$FIXTURE_OUTPUT" | rows_only) -Fq 'abi-consumer'; then
         fail "G2: a covered consumer was named in a refusal:
 $FIXTURE_OUTPUT"
     fi
@@ -1068,7 +1082,7 @@ $FIXTURE_OUTPUT"
     want_rows G4 <<'EOF'
 libs-git refuse abi-soname
 EOF
-    if printf '%s\n' "$FIXTURE_OUTPUT" | rows_only | grep -Fq 'abi-consumer'; then
+    if grep < <(printf '%s\n' "$FIXTURE_OUTPUT" | rows_only) -Fq 'abi-consumer'; then
         fail "G4: an uninstalled consumer produced a refusal row:
 $FIXTURE_OUTPUT"
     fi
@@ -1093,7 +1107,7 @@ app-git install ok
 libs-git refuse abi-soname
 mid-git install ok
 EOF
-    if printf '%s\n' "$FIXTURE_OUTPUT" | rows_only | grep -Eq 'leaf-git|nlink-git'; then
+    if grep < <(printf '%s\n' "$FIXTURE_OUTPUT" | rows_only) -Eq 'leaf-git|nlink-git'; then
         fail "G6: a non-linking package was dragged into the batch:
 $FIXTURE_OUTPUT"
     fi

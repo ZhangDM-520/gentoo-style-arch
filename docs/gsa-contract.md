@@ -320,6 +320,33 @@ Deliberately NOT carried over, with reasons:
 
 ---
 
+### B.10 Privilege (the transparent handle)
+
+gsa is pacman-shaped: **reads run as any user; mutations require root.**
+
+| Class | Spellings | Rule |
+| --- | --- | --- |
+| read-only | every `-Q*`, `-Ss/-Si/-Sl/-Sg`, `-Bl`, `--dry-run` plans, `-Ma`, report forms of `-Md/-Mi/-Ml/-Mh/-Ms/-Mw`, the hidden read seams (`--install-decide`, `--local-db-check`, `--qa-check`, `--stale-lock-check`), `--help` | any user; never writes state |
+| mutating | `-S`, `-B`, `-U`, `-Sw`, `-Sy`, `-Su`, `-Mi --prune/--backfill`, `-Md --fix`, `-Ml --keep`, `-Mh --prune`, `-Ms/-Mw --add/--remove`, every `-Mc/-Mcc/-Mccc`, hidden write seams (`--install-register`, `--register-ignorepkg`) | **root required**; unprivileged → early refusal, **rc 3** (§G.1), wording `you cannot perform this operation unless you are root` plus a `sudo` remedy |
+| build-user-only | `-Mm` (mirrors) | never under a root supervisor (`docs/source-sharing.md`); refused with rc 3 when euid 0 |
+
+Under root (`sudo gsa …`):
+
+- every build-side command (the makepkg family, recipe-code evals) is dropped
+  to the **build user** (`SUDO_UID`/`SUDO_GID`) via `setpriv`, so `makepkg`
+  never runs as root and recipe code never executes as root; the environment
+  survives the drop (`GSA_BUILD_JOBS`, `MAKEFLAGS`, `SRCDEST`, fixture stubs);
+- a bare root shell (no `SUDO_UID`) is refused for build-touching verbs with
+  guidance to `sudo` from the build user — the engine never improvises a user;
+- engine-side writes into build-user paths (recipe-tree publishes) are chowned
+  back to the build user — the workspace is never left root-owned;
+- one banner line on `err` names the split (`engine and pacman as root; makepkg
+  and build-cache writes as <user> (uid N)`). Hidden seams stay quiet.
+
+The gate runs **after each entry's usage preflights** and before the first
+state write: §G.1's precedence (usage 2 > refusal 3) means a typo is always
+reported before privilege. `--dry-run` renders plans and is never gated.
+
 ## C. Selection semantics
 
 Vocabulary is `CONTEXT.md`'s and is normative: **recipe**, **topology record**,
@@ -561,7 +588,7 @@ mapping from lane code to status is total and defined in §H.3.
 | 0 | success | every selected package `succeeded` (including skip reasons); no `failed`, `deferred`, or `parked` row |
 | 1 | build failure under `--fail-fast` | ≥1 `failed` row and dispatch stopped (drain completed) |
 | 2 | usage error | bad flags, unknown reference/typo (with nearest candidates), invalid range, **empty selection** (`selection resolved to no packages`), malformed config record |
-| 3 | refusal | the run refused to start or aborted at a fail-closed gate: preflight (`sudo cannot install non-interactively`), integrity stop (published checksum mismatch — `docs/build-guide.md`), install refusal (a `refuse` decision row reached execution) |
+| 3 | refusal | the run refused to start or aborted at a fail-closed gate: privilege refusal (§B.10 — not root, no build user, or `-Mm` under root), preflight (`sudo cannot install non-interactively`), integrity stop (published checksum mismatch — `docs/build-guide.md`), install refusal (a `refuse` decision row reached execution) |
 | 4 | parked-cone-with-failures | **cone-stop (default) run with ≥1 `failed` row** — dispatch continued with unrelated work; parked rows may be empty when the failed package is a leaf |
 | 5 | deferral-only | ≥1 `deferred`/`parked` row and no `failed` row (extension of the six-class list; preserves "a deferral exits non-zero" without claiming a build failure) |
 | 130 | interrupted | a signal terminated the run; the full run record is emitted first |
@@ -877,14 +904,17 @@ content hashes.
 
 ### J.5 Write-time ownership (rule 19)
 
-Every state file is owned by the build user from the moment it is created. The
-root supervisor repairs wrong owners loudly at startup and creates files as the
-invoking user (never root, no root fallback); an unprivileged run that cannot
-open a state file quarantines it as `<path>.stale.<epoch>.<pid>` (preserved,
-announced) or fails naming the remedy. The pacman mutex inode is the exception
-that proves the rule: never rename a possibly-held lock inode; root pre-creates
-it as the build user. Any new state-write site must pass the ownership gate
-before opening.
+Every state file is owned by the **privileged runner** from the moment it is
+created: mutating runs are root (§B.10), so engine state (`index/`, `runs/`,
+`logs/`, `locks/`, `kv/`) is root-owned and `run.lock` root-owned is correct
+state, not corruption (plan-gsa-isolation.md). The write-time gate quarantines
+any file owned by someone the running engine is not as
+`<path>.stale.<epoch>.<pid>` (preserved, announced — never a silent adoption)
+before the write opens it, or fails naming the remedy (`--state-dir`). The
+pacman mutex inode is the exception that proves the rule: a transaction flocks
+it in place (`sudo -n flock -x -w 600`, `crates/gsa-build/src/shim.rs`) and a
+possibly-held lock inode is never renamed. Any new state-write site must pass
+the ownership gate before opening.
 
 ---
 
@@ -893,11 +923,11 @@ before opening.
 ### K.1 Lanes
 
 A lane is an isolated child process group per package that **exec's** the
-makepkg supervisor — no interpreter per lane. Lanes build as the invoking user;
-`makepkg` never runs as root. The engine exports the lane's job count as
-`GSA_BUILD_JOBS` and rewrites `MAKEFLAGS`/`NINJAFLAGS` (stripping their `-jN`,
-preserving the caller's other flags). Per-package logs are written under the
-state root through the ownership gate (§J.5).
+makepkg supervisor — no interpreter per lane. Build-side commands are dropped
+to the build user (§B.10); `makepkg` never runs as root. The engine exports
+the lane's job count as `GSA_BUILD_JOBS` and rewrites `MAKEFLAGS`/`NINJAFLAGS`
+(stripping their `-jN`, preserving the caller's other flags). Per-package logs
+are written under the state root through the ownership gate (§J.5).
 
 ### K.2 Scheduling invariants (kept)
 

@@ -78,7 +78,9 @@ root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 source "$root/tests/lib/fixture-lib.bash"
 source "$root/tests/lib/rr-v2.bash"
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/gsa-abi-postinstall-probe.XXXXXX")
-trap 'rm -rf -- "$tmp"' EXIT
+# Root-safe cleanup: privileged engine runs leave root-owned state litter a
+# user-side rm cannot unlink.
+trap '/usr/bin/sudo -n rm -rf -- "$tmp" 2>/dev/null || rm -rf -- "$tmp" 2>/dev/null || true' EXIT
 
 fail() {
     printf 'abi-postinstall-probe fixture: %s\n' "$1" >&2
@@ -246,6 +248,11 @@ stub_sudo "$ws"
 
 export PATH="$ws/bin:$PATH"
 export GSA_STATE_DIR="$ws/state"
+# The fish-driven cases (E/F/J) run in the PLAIN user domain while the engine
+# runs above run as root — the engine's root-owned $ws/state subdirs refuse
+# user-side mkdir — so the fish builder gets its own state root: one domain
+# owns each state tree.
+mkdir -p "$ws/state-fish"
 export GSA_FAKE_PACMAN_LOG="$ws/pacman.log"
 export GSA_FAKE_DB_DIR="$ws/db"
 export GSA_FAKE_DB_PATH="$ws/db"
@@ -270,9 +277,14 @@ run_ua() { # LABEL — the collective install run over whatever is staged.
 }
 
 run_case() { # LABEL — the FISH-driven -ia run (cases E/F only).
+    # The engine's atomic conf rewrite (temp + rename) leaves
+    # $ws/pacman.conf root-owned, and the fish-era register overwrites the
+    # file IN PLACE as the user — hand the conf back to the user domain
+    # before the fish run (its writes must succeed, not its assertions).
+    /usr/bin/sudo -n chown "$(id -u):$(id -g)" "$ws/pacman.conf" 2>/dev/null || true
     run_builder env \
         PATH="$ws/bin:$PATH" \
-        GSA_STATE_DIR="$ws/state" \
+        GSA_STATE_DIR="$ws/state-fish" \
         _IGNOREPKG_CONF="$ws/pacman.conf" \
         GSA_FAKE_PACMAN_LOG="$ws/pacman.log" \
         GSA_FAKE_DB_DIR="$ws/db" \
@@ -316,7 +328,7 @@ db_install unrelated 1-1 'libother.so=9-64'
 seam_rows B
 [[ $SEAM_RC == 1 ]] ||
     fail "B: a refuse row is seam rc 1 (§E.5), got $SEAM_RC: $SEAM_OUTPUT"
-rr2_decision app-git decision <<<"$SEAM_OUTPUT" | grep -qx refuse ||
+grep < <(rr2_decision app-git decision <<<"$SEAM_OUTPUT") -qx refuse ||
     fail "B: the decision is not refuse: $SEAM_OUTPUT"
 b_row=$(rr2_decisions <<<"$SEAM_OUTPUT" | grep '^app-git refuse ' || true)
 [[ "$b_row" == 'app-git refuse needed' ]] ||
@@ -446,7 +458,7 @@ EOF
     : >"$ws/existing.txt"
     run_builder env \
         PATH="$ws/bin:$farm" \
-        GSA_STATE_DIR="$ws/state" \
+        GSA_STATE_DIR="$ws/state-fish" \
         _IGNOREPKG_CONF="$ws/pacman.conf" \
         GSA_FAKE_PACMAN_LOG="$ws/pacman.log" \
         GSA_FAKE_DB_DIR="$ws/db" \

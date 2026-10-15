@@ -7,10 +7,16 @@ set -euo pipefail
 # run as failed — seen once, 2026-09-18. Re-run it on an idle machine before
 # believing a failure here.
 #
-# Sudo liveness for unprivileged install runs. Lane installs run `sudo -n`
-# (lane children have no tty), so the engine must decide, without ever
-# hanging: is sudo still usable, and what happens when it is not? This
-# fixture pins that decision — each mode is a real sudoers shape:
+# Sudo liveness for privileged install runs. Under the W5 privilege model
+# (docs/gsa-contract.md §B.10) a mutating run is a ROOT run: the user's call
+# is `sudo gsa -S …` (run_engine models it with the host's REAL sudo), the
+# engine and its pacman transactions run as root, build-side commands drop
+# to the build user, and the engine's own `sudo -n pacman` calls — observed
+# through the PATH stub — are the credential surface this fixture pins.
+# Lane installs run `sudo -n` (lane children have no tty), so the engine must
+# decide, without ever hanging: is sudo still usable, and what happens when
+# it is not? This fixture pins that decision — each mode is a real sudoers
+# shape:
 #
 #   1. nopasswd  — the host never uses credentials (dual rule "(ALL) ALL" +
 #                  "(ALL : ALL) NOPASSWD: ALL"). Stopping the run here is
@@ -23,7 +29,15 @@ set -euo pipefail
 #   4. cold+TTY  — a terminal is attached but the policy is ALL `sudo -n`, so
 #                  there is nothing to prompt for: the run must REFUSE at
 #                  preflight with the same named message as 2 and never ask
-#                  for a credential (pty sub-case; zero bare `sudo -v`).
+#                  for a credential (pty sub-case; zero bare `sudo -v`). The
+#                  pty attaches to the ROOT supervisor (`script` around
+#                  `/usr/bin/sudo -n env …`) — an unprivileged mutating run
+#                  never reaches this preflight at all (mode 5).
+#   5. gate      — the §B.10 privilege gate: an unprivileged mutating run
+#                  refuses rc 3 with `you cannot perform this operation
+#                  unless you are root` BEFORE any sudo call (the root
+#                  message replaces the preflight message at this layer),
+#                  builds nothing, and a TTY changes nothing here either.
 #
 # Flip notes (docs/gsa-fixture-migration.md row `tests/sudo-keepalive.sh`):
 # argv `fish build-all.fish --allow-broken-rustc --no-deps --no-sync --lanes 2
@@ -58,16 +72,35 @@ set -euo pipefail
 # where the fish case used `--lanes 2` + long builds to outlive the poll
 # window. Scenario 2 keeps `--lanes 2`.
 #
+# W5 re-derivation (2026-10-15, privilege model): mutating verbs require
+# root (§B.10), so the credential scenarios 1–4 run through run_engine (the
+# root supervisor: `/usr/bin/sudo -n env … gsa`) and the engine's internal
+# `sudo -n pacman` calls — the PATH stub — remain the credential surface; the
+# engine never prompts (§K.3), so the pty sub-case pins "a TTY changes
+# nothing" at both layers. An unprivileged mutating run is its own scenario
+# now (5): the gate refuses with the root message before the sudo surface is
+# reachable — driven through run_engine_user, its pty form wrapping the plain
+# invocation because run_engine_user has no pty. Gate refusals carry no run
+# record (§H.1 names interrupt and preflight-refusal as the non-run emission
+# paths; the gate runs before the first state write) — observed, deliberately
+# not pinned while the contract stays silent on it.
+#
 # Lock isolation: the PATH-stub `pacman-conf`-less workspace never touches a
 # real database — `sudo` is a stub that records and answers from
 # GSA_FAKE_SUDO_MODE; `pacman` is a no-op stub. State lives under the
-# fixture's own GSA_STATE_DIR (never /var/lib/gsa). No GSA_* test knob is
-# added — GSA_FAKE_* is consumed by the stubs only.
+# fixture's own GSA_STATE_DIR (never /var/lib/gsa). Fixture-side sudo is
+# always the ABSOLUTE /usr/bin/sudo (the PATH stub is the ENGINE's
+# observation point only) and the EXIT trap is root-safe — engine state is
+# root-owned under the W5 model. No GSA_* test knob is added — GSA_FAKE_* is
+# consumed by the stubs only.
 
 source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/rr-v2.bash"
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-sudo-fixture.XXXXXX")
-trap 'rm -rf -- "$fixture"' EXIT
+# Root-safe cleanup: a privileged run leaves ROOT-owned state behind (§B.10 —
+# engine-side state is root-owned), so the EXIT trap escalates first through
+# the ABSOLUTE /usr/bin/sudo (never the PATH stub).
+trap '/usr/bin/sudo -n rm -rf -- "$fixture" 2>/dev/null || rm -rf -- "$fixture" 2>/dev/null || true' EXIT
 
 # ─── The engine under test: built into the fixture tree (scratch only).
 # GSA_TEST_GSA_BIN, when already set to an executable, is that engine (the
@@ -152,9 +185,11 @@ run_rc=0
 run_output=""
 
 # One scenario run through the capture runner; the scenario knobs (state
-# name, sudo mode, build length, lanes) stay fixture-side.
+# name, sudo mode, build length, lanes) stay fixture-side. The optional
+# runner names the invocation form: run_engine (the root supervisor — every
+# credential scenario) or run_engine_user (the §B.10 gate scenario).
 run_scenario() {
-    local state=$1 mode=$2 build_s=${3:-0.1} lanes=${4:-2}
+    local state=$1 mode=$2 build_s=${3:-0.1} lanes=${4:-2} runner=${5:-run_engine}
     mkdir -p "$fixture/state-$state"
     make_install_conf "$fixture/state-$state/pacman.conf" # this case's IgnorePkg registration target (never the host's)
     export PATH="$fixture/bin:$PATH"
@@ -164,7 +199,7 @@ run_scenario() {
     export GSA_FAKE_SUDO_STATE="$fixture/state-$state"
     export GSA_FAKE_MARKER_DIR="$fixture/state-$state/built"
     export GSA_FAKE_BUILD_SECONDS="$build_s"
-    run_engine "$fixture" -S --leaf \
+    "$runner" "$fixture" -S --leaf \
         --config "$fixture/state-$state/pacman.conf" \
         --lanes "$lanes" --jobs 2 \
         "${ids[@]}"
@@ -187,6 +222,7 @@ built_count() {
 
 STOPPED='cannot be refreshed'
 REFUSED='cannot install non-interactively'
+GATE='you cannot perform this operation unless you are root'
 want_all=$(printf '%s\n' "${ids[@]}")
 
 # 1. Password-free installs must not stop the run.
@@ -281,7 +317,7 @@ if grep -q -E -- '^-v$' "$fixture/state-expires/sudo.log"; then
     fail "expired-credential run prompted a password with no terminal attached:" \
         "$(cat "$fixture/state-expires/sudo.log")"
 fi
-if find "$fixture/state-expires/logs" -maxdepth 1 -name '.lane*.result*' -print -quit | grep -q .; then
+if grep < <(find "$fixture/state-expires/logs" -maxdepth 1 -name '.lane*.result*' -print -quit) -q .; then
     fail "lane result artifact remained after the sudo stop"
 fi
 
@@ -289,13 +325,17 @@ fi
 #    `sudo -n` (the engine never prompts — the old interactive re-elevation is
 #    gone), so a TTY must change NOTHING: refuse at preflight with the named
 #    message, build nothing, and never ask for a credential (zero bare `sudo
-#    -v` in the log — a prompt attempt is the regression this pins).
+#    -v` in the log — a prompt attempt is the regression this pins). The pty
+#    attaches to the ROOT supervisor (`script` around `/usr/bin/sudo -n env …`
+#    — the run_engine shape): the §B.10 gate keeps an unprivileged mutating
+#    run from ever reaching this preflight (scenario 5).
 if command -v script >/dev/null 2>&1; then
     mkdir -p "$fixture/state-tty-cold"
     make_install_conf "$fixture/state-tty-cold/pacman.conf" # this case's IgnorePkg registration target (never the host's)
     pty_rc=0
     pty_output=$(
-        script -qec "cd '$fixture' && env PATH=\"$fixture/bin:\$PATH\" \
+        script -qec "cd '$fixture' && /usr/bin/sudo -n env \
+PATH='$fixture/bin:$PATH' \
 GSA_STATE_DIR='$fixture/state-tty-cold' \
 GSA_FAKE_SUDO_MODE=cold GSA_FAKE_SUDO_LOG='$fixture/state-tty-cold/sudo.log' \
 GSA_FAKE_SUDO_STATE='$fixture/state-tty-cold' \
@@ -334,6 +374,62 @@ GSA_FAKE_MARKER_DIR='$fixture/state-tty-cold/built' GSA_FAKE_BUILD_SECONDS=1.2 \
         [[ $(rr2_outcome "$id" <<<"$pty_output") == "$id never-started - - preflight-refused" ]] \
             || fail "cold-credential TTY run's $id row is wrong: $(rr2_outcome "$id" <<<"$pty_output")"
     done
+fi
+
+# 5. Privilege gate (§B.10): mutating verbs require root. An unprivileged
+#    mutating run refuses rc 3 with the root message BEFORE any sudo call —
+#    the preflight message of scenarios 2/4 must NOT appear (the gate runs
+#    after the usage preflights and before the first state write) — and
+#    builds nothing. The plain form goes through run_engine_user; the pty
+#    form wraps the plain invocation (run_engine_user has no pty): a TTY
+#    must change NOTHING at this layer either (§K.3 — never a prompt).
+run_scenario gate cold 0.1 2 run_engine_user
+if [[ $run_rc -ne 3 ]]; then
+    fail "unprivileged mutating run must refuse at the gate with rc 3 (§B.10/§G.1), got rc=$run_rc" "$run_output"
+fi
+if [[ $(count_occurrences "$run_output" "$GATE") -ne 1 ]]; then
+    fail "unprivileged mutating run did not refuse exactly once with the root message:" "$run_output"
+fi
+if [[ $(count_occurrences "$run_output" "$REFUSED") -ne 0 ]]; then
+    fail "the privilege gate must fire before the sudo preflight:" "$run_output"
+fi
+if [[ $(count_occurrences "$run_output" "$STOPPED") -ne 0 ]]; then
+    fail "an unprivileged run never reaches dispatch:" "$run_output"
+fi
+if [[ $(built_count gate) -ne 0 ]]; then
+    fail "the gate run built $(built_count gate) package(s) before refusing"
+fi
+if [ -s "$fixture/state-gate/sudo.log" ]; then
+    fail "the gate run escalated before refusing: $(cat "$fixture/state-gate/sudo.log")"
+fi
+if command -v script >/dev/null 2>&1; then
+    pty_rc=0
+    pty_output=$(
+        script -qec "cd '$fixture' && env \
+PATH='$fixture/bin:$PATH' \
+GSA_STATE_DIR='$fixture/state-gate' \
+GSA_FAKE_SUDO_MODE=cold GSA_FAKE_SUDO_LOG='$fixture/state-gate/sudo.log' \
+GSA_FAKE_SUDO_STATE='$fixture/state-gate' \
+GSA_FAKE_MARKER_DIR='$fixture/state-gate/built' GSA_FAKE_BUILD_SECONDS=1.2 \
+'$GSA_TEST_GSA_BIN' -S --leaf --config '$fixture/state-gate/pacman.conf' \
+--lanes 2 --jobs 2 ${ids[*]}" /dev/null 2>&1
+    ) || pty_rc=$?
+    if [[ $pty_rc -ne 3 ]]; then
+        fail "the TTY gate run must refuse with rc 3 (§B.10/§G.1), got rc=$pty_rc" "$pty_output"
+    fi
+    if [[ $(count_occurrences "$pty_output" "$GATE") -ne 1 ]]; then
+        fail "the TTY gate run did not refuse exactly once with the root message:" "$pty_output"
+    fi
+    if [[ $(count_occurrences "$pty_output" "$REFUSED") -ne 0 ]] ||
+        [[ $(count_occurrences "$pty_output" "$STOPPED") -ne 0 ]]; then
+        fail "the TTY gate run must refuse before the sudo surface, like the plain one:" "$pty_output"
+    fi
+    if [[ $(built_count gate) -ne 0 ]]; then
+        fail "the TTY gate run built $(built_count gate) package(s) before refusing"
+    fi
+    if [ -s "$fixture/state-gate/sudo.log" ]; then
+        fail "the TTY gate run escalated before refusing: $(cat "$fixture/state-gate/sudo.log")"
+    fi
 fi
 
 if ps -eo args= | grep -F "$fixture" | grep -v grep >/dev/null; then

@@ -107,7 +107,9 @@ pub fn makepkg_command(
     payload_flags: &[String],
     state_dir: &Path,
 ) -> std::process::Command {
-    let mut cmd = std::process::Command::new("makepkg");
+    // Build-domain command: under a privileged run makepkg is dropped to the
+    // build user (makepkg refuses root; plan-gsa-isolation.md W1).
+    let mut cmd = gsa_model::privilege::build_command("makepkg");
     cmd.args(MAKEPKG_BASE_ARGS)
         .args(payload_flags)
         .current_dir(recipe_dir)

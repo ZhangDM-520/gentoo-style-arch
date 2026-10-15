@@ -148,6 +148,16 @@ fn run_build_with(
     };
     crate::write_notes(err, &selection.notes);
 
+    // ── privilege gate (contract §B.10; after every usage preflight) ─────
+    if let Some(code) = crate::privilege_gate(
+        &inv.spelling(),
+        crate::invocation_privilege(inv, &crate::Command::Build),
+        true,
+        err,
+    ) {
+        return code;
+    }
+
     // ── state root (contract §J.3) ──────────────────────────────────────
     let state_dir = inv
         .state_dir
@@ -810,6 +820,17 @@ pub fn run_update(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) ->
         }
     };
     crate::write_notes(err, &selection.notes);
+
+    // ── privilege gate (contract §B.10; after every usage preflight) ─────
+    if let Some(code) = crate::privilege_gate(
+        &inv.spelling(),
+        crate::invocation_privilege(inv, &crate::Command::Update),
+        true,
+        err,
+    ) {
+        return code;
+    }
+
     let ids: Vec<RecipeId> = selection.listed.iter().map(|(_, id)| id.clone()).collect();
     let state_dir = gsa_state::resolve_state_root(inv.state_dir.as_deref());
 

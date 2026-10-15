@@ -29,16 +29,35 @@
 #   rr2_continuation [K] continuation lines, or one key's value
 #   rr2_remaining       resume set derived from the outcome rows (status !=
 #                       succeeded, in row order) — the §H.2 `remaining:` rule
-#   run_engine          invoke the current engine (fish builder today, gsa at
-#                       cutover) and capture FIXTURE_OUTPUT / FIXTURE_RC
+#   run_engine          invoke the current engine (`sudo gsa …` since the W1
+#                       privilege redesign) and capture FIXTURE_OUTPUT /
+#                       FIXTURE_RC
+#   run_engine_user     the unprivileged form (`gsa …`) — §B.10 gate tests and
+#                       build-user-only verbs
 #   rr2_stub_knob       declare one GSA_FAKE_* stub knob (§D.2)
 #   rr2_stub_knobs      print the declared vocabulary (name<TAB>description)
+#   vgrep VALUE ARG...  grep one variable's lines without a pipe (SIGPIPE-proof
+#                       assertion idiom; see its comment)
 #
 # All rr2_* accessors read stdin (like their rr_* predecessors) and expect the
 # RAW stream — the captured run output containing exactly one block, markers
 # included (rr2_body does the extraction; an already-extracted body has no
 # markers and is loudly rejected) — so both `<<<"$output"` and `<"$file"` work;
 # a trailing CR is stripped first so PTY captures parse like pipe output.
+
+# ─── pipe-free grep — the assertion idiom ──────────────────────────────────
+# vgrep VALUE GREP-ARG... — grep the lines of VALUE, returning grep's status
+# alone. Use it INSTEAD OF `printf '%s\n' "$VALUE" | grep …`: under CPU
+# contention `grep -q` can exit on its early match before `printf` finishes
+# writing, `printf` then dies of SIGPIPE (141), and `set -o pipefail` reddens
+# an assertion whose capture DID match — the battery-only flake mechanism.
+# Process substitution feeds grep the identical bytes with no pipe in the
+# pipeline, so the rc a fixture captures is always grep's own.
+vgrep() {
+    local vgrep_value=$1
+    shift
+    grep "$@" < <(printf '%s\n' "$vgrep_value")
+}
 
 # ─── format: 2 grammar — docs/gsa-contract.md §H.2 ──────────────────────────
 # block   = "--- run record begin ---" NL *scalar
@@ -246,15 +265,15 @@ rr2_scalar() {
     local body
     body=$(rr2_body) || return 1
     printf '%s\n' "$body" | awk -v key="$1" '
-        /^--- plan ---$/ { exit }
-        {
+        /^--- plan ---$/ { done = 1 }
+        !done {
             p = index($0, ":")
             if (p && substr($0, 1, p - 1) == key) {
                 v = substr($0, p + 1)
                 sub(/^ /, "", v)
                 print v
                 found = 1
-                exit
+                done = 1
             }
         }
         END {
@@ -273,7 +292,8 @@ rr2_plan_rows() {
     body=$(rr2_body) || return 1
     printf '%s\n' "$body" | awk '
         /^--- plan ---$/ { p = 1; next }
-        /^--- outcome ---$/ { exit }
+        /^--- outcome ---$/ { done = 1 }
+        done { next }
         p { print }
     '
 }
@@ -285,7 +305,8 @@ rr2_plan() {
     body=$(rr2_body) || return 1
     rows=$(printf '%s\n' "$body" | awk '
         /^--- plan ---$/ { p = 1; next }
-        /^--- outcome ---$/ { exit }
+        /^--- outcome ---$/ { done = 1 }
+        done { next }
         p { print }
     ')
     printf '%s\n' "$rows" | awk -v pkg="$1" -v field="${2:-}" '
@@ -320,7 +341,8 @@ rr2_outcome_rows() {
     body=$(rr2_body) || return 1
     printf '%s\n' "$body" | awk '
         /^--- outcome ---$/ { p = 1; next }
-        /^--- continuation ---$/ { exit }
+        /^--- continuation ---$/ { done = 1 }
+        done { next }
         p { print }
     '
 }
@@ -333,7 +355,8 @@ rr2_outcome() {
     body=$(rr2_body) || return 1
     rows=$(printf '%s\n' "$body" | awk '
         /^--- outcome ---$/ { p = 1; next }
-        /^--- continuation ---$/ { exit }
+        /^--- continuation ---$/ { done = 1 }
+        done { next }
         p { print }
     ')
     printf '%s\n' "$rows" | awk -v pkg="$1" -v field="${2:-}" '
@@ -370,7 +393,7 @@ rr2_continuation() {
     body=$(rr2_body) || return 1
     printf '%s\n' "$body" | awk -v key="${1:-}" '
         /^--- continuation ---$/ { p = 1; next }
-        p {
+        !done && p {
             if (key == "") { print; next }
             c = index($0, ":")
             if (c && substr($0, 1, c - 1) == key) {
@@ -378,7 +401,7 @@ rr2_continuation() {
                 sub(/^ /, "", v)
                 print v
                 found = 1
-                exit
+                done = 1
             }
         }
         END {
@@ -406,6 +429,16 @@ rr2_remaining() {
 # reason to trip the fixture's own `set -e`) — assert on FIXTURE_RC explicitly,
 # exactly like fixture-lib.bash's run_builder.
 #
+# Privilege (contract §B.10): the gsa engine is pacman-shaped — mutations need
+# root — so `run_engine` models the call a real user makes: `sudo gsa …`
+# through the host's REAL sudo (absolute path: PATH may carry a stub sudo that
+# the engine's own `sudo -n` calls must still find, so only the wrapper here
+# is real). The fixture's environment is forwarded explicitly (rr2_env_forward)
+# because sudo's env_reset/secure_path would otherwise strip the stub PATH and
+# every GSA_FAKE_* knob the stubs read. run_engine_user is the unprivileged
+# form for the call sites that must stay a plain user: the §B.10 gate tests
+# and build-user-only verbs (`-Mm`).
+#
 # Engine selection: GSA_TEST_ENGINE=gsa|fish (default gsa — the engine of
 # record since the Phase 5 cutover).
 #   gsa  — the native engine: `gsa ARG...` with WORKSPACE as the working
@@ -425,6 +458,22 @@ rr2_remaining() {
 # never touches the invocation mechanics. An unknown GSA_TEST_ENGINE is a loud
 # usage error (FIXTURE_RC=2) naming the value and the two spellings.
 run_engine() {
+    rr2_invoke sudo "$@"
+}
+
+# run_engine_user WORKSPACE [ARG...] — the same, as a PLAIN unprivileged user
+# (no sudo): the §B.10 gate tests (an unprivileged mutation must refuse rc 3;
+# reads pass untouched) and build-user-only verbs such as `-Mm`, which must
+# never run under a root supervisor (docs/source-sharing.md). Everything else
+# goes through run_engine.
+run_engine_user() {
+    rr2_invoke user "$@"
+}
+
+# rr2_invoke sudo|user WORKSPACE [ARG...] — the shared capture machinery.
+rr2_invoke() {
+    local mode=${1:?rr2_invoke: mode (sudo|user) required}
+    shift
     local ws=${1:?run_engine: WORKSPACE argument required}
     shift
     local had_errexit=0
@@ -436,7 +485,23 @@ run_engine() {
         FIXTURE_RC=$?
         ;;
     gsa)
-        FIXTURE_OUTPUT=$(cd "$ws" && "${GSA_TEST_GSA_BIN:-gsa}" "$@" 2>&1)
+        # §J.3 fail-safe state isolation: a fixture run must NEVER reach the
+        # live /var/lib/gsa (the default state root — under the W5 root model
+        # an unoverridden run really writes it; a battery run did, see
+        # docs/NOTE.md). When the caller gives neither GSA_STATE_DIR nor
+        # --state-dir, route state to a scratch root beside the workspace —
+        # inside the fixture tree, removed with the fixture.
+        local -a guard=()
+        if [[ -z ${GSA_STATE_DIR:-} ]] && ! rr2_has_state_root "$@"; then
+            guard=(GSA_STATE_DIR="$ws/../.rr2-state")
+        fi
+        if [[ $mode == sudo ]]; then
+            local -a fwd=()
+            rr2_env_forward fwd
+            FIXTURE_OUTPUT=$(cd "$ws" && /usr/bin/sudo -n env "${fwd[@]}" "${guard[@]}" "${GSA_TEST_GSA_BIN:-gsa}" "$@" 2>&1)
+        else
+            FIXTURE_OUTPUT=$(cd "$ws" && env "${guard[@]}" "${GSA_TEST_GSA_BIN:-gsa}" "$@" 2>&1)
+        fi
         FIXTURE_RC=$?
         ;;
     *)
@@ -447,6 +512,38 @@ run_engine() {
     esac
     ((had_errexit)) && set -e
     return 0
+}
+
+# rr2_has_state_root ARG... — true when the argv already carries a state root
+# (--state-dir, either spelling), so rr2_invoke's §J.3 fail-safe stays out of
+# the way of a fixture that is explicit.
+rr2_has_state_root() {
+    local a
+    for a in "$@"; do
+        case $a in
+        --state-dir | --state-dir=*) return 0 ;;
+        esac
+    done
+    return 1
+}
+
+# rr2_env_forward ARRNAME — append the fixture environment a privileged run
+# must carry across sudo (`NAME=VALUE` elements). Whitelisted on purpose (the
+# wrapper runs as root, so a blanket env passthrough is not acceptable): the
+# engine's own inputs (§B.8 roster and any other GSA_* — which is also every
+# GSA_FAKE_* stub knob), the build env the setpriv drop must see, and the
+# paths the stubs live behind. SUDO_* is deliberately NOT forwarded — sudo
+# sets its own identity variables for the child.
+rr2_env_forward() {
+    local -n _rr2_fwd_out=$1
+    local v
+    for v in $(compgen -e); do
+        case $v in
+        PATH | HOME | TMPDIR | TZ | LANG | LC_* | MAKEFLAGS | NINJAFLAGS | SRCDEST | PKGDEST | BUILDDIR | GSA_* | _GSA_*)
+            _rr2_fwd_out+=("$v=${!v}")
+            ;;
+        esac
+    done
 }
 
 # ─── Stub-knob vocabulary (docs/gsa-contract.md §D.2) ───────────────────────

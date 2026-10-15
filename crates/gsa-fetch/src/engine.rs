@@ -20,7 +20,6 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::candidacy::{classify, FetchCandidacy};
@@ -363,9 +362,11 @@ pub fn run_fetch_attempts(
 
 /// One real `makepkg --verifysource` attempt in the recipe directory
 /// (contract §D.1 / owner decision 2 — the argv is a constant, so no
-/// verification bypass can be constructed).
+/// verification bypass can be constructed). The makepkg child is a build-side
+/// command (W1 privilege isolation): under a privileged run it runs as the
+/// build user, like every other makepkg invocation.
 pub fn makepkg_verifysource(recipe_dir: &Path) -> Attempt {
-    let mut cmd = Command::new("makepkg");
+    let mut cmd = gsa_model::privilege::build_command("makepkg");
     cmd.arg("--verifysource")
         .current_dir(recipe_dir)
         .env("GIT_CONFIG_COUNT", "0");

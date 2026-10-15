@@ -80,7 +80,8 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/rr-v2.bash"
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-dashboard.XXXXXX")
-trap 'rm -rf -- "$fixture"' EXIT
+# root-safe cleanup: engine state under $fixture is root-owned (W5 §B.10)
+trap '/usr/bin/sudo -n rm -rf -- "$fixture" 2>/dev/null || rm -rf -- "$fixture" 2>/dev/null || true' EXIT
 
 command -v script >/dev/null || {
     printf 'script(1) is required to drive a pty\n' >&2
@@ -92,15 +93,19 @@ command -v script >/dev/null || {
 rr2_stub_knob GSA_FAKE_ENGINE_PID "dashboard engine wrapper: pidfile of the engine process to signal"
 rr2_stub_knob GSA_FAKE_DEFER_PACKAGE "dashboard makepkg stub: package id whose build exits 99 (deferral)"
 
-# The engine under test for the flipped sections (built into the fixture
-# tree; scratch only). The fish-driven sections never see it.
-cargo build --offline --quiet --target-dir "$fixture/cargo" -p gsa-cli \
-    --manifest-path "$gsa_repo_root/Cargo.toml" \
-    || {
-    printf 'cannot build the gsa binary for the fixture\n' >&2
-    exit 1
-}
-gsa_bin="$fixture/cargo/debug/gsa"
+# The engine under test for the flipped sections: scratch build only when
+# GSA_TEST_GSA_BIN is not already set (the rr-v2.bash run_engine convention).
+# The fish-driven sections never see it.
+if [ -z "${GSA_TEST_GSA_BIN:-}" ]; then
+    cargo build --offline --quiet --target-dir "$fixture/cargo" -p gsa-cli \
+        --manifest-path "$gsa_repo_root/Cargo.toml" \
+        || {
+        printf 'cannot build the gsa binary for the fixture\n' >&2
+        exit 1
+    }
+    GSA_TEST_GSA_BIN="$fixture/cargo/debug/gsa"
+fi
+gsa_bin="$GSA_TEST_GSA_BIN"
 if [ ! -x "$gsa_bin" ]; then
     printf 'cargo did not produce %s\n' "$gsa_bin" >&2
     exit 1
@@ -393,7 +398,8 @@ fi
         # failure path: never leave the long-running stub lanes behind
         if [ -n "$marker" ] && [ -f "$marker" ]; then
             while read -r _tag _id pid; do
-                kill -KILL "$pid" 2>/dev/null || true
+                # lane children are root-owned under W5 — signal via real sudo
+                /usr/bin/sudo -n kill -KILL "$pid" 2>/dev/null || true
             done <"$marker"
         fi
         exit 1
@@ -452,14 +458,16 @@ EOF
             [ "$n" -ge 2 ] && break
             sleep 0.05
         done
-        kill -INT "$(cat "$pidfile")" 2>/dev/null || true
+        # the engine is root under W5 (run_engine's sudo) — signal it through
+        # the host's REAL sudo, never the PATH stub
+        /usr/bin/sudo -n kill -INT "$(cat "$pidfile")" 2>/dev/null || true
         for _ in $(seq 1 400); do
             state=$(ps -o stat= -p "$(cat "$pidfile")" 2>/dev/null | tr -d ' ') || state=
             if [ -z "$state" ] || [ "${state#*Z}" != "$state" ]; then exit 0; fi
             sleep 0.05
         done
         printf 'the engine was still running 20s after SIGINT\n' >"$watchdog"
-        kill -KILL "$(cat "$pidfile")" 2>/dev/null || true
+        /usr/bin/sudo -n kill -KILL "$(cat "$pidfile")" 2>/dev/null || true
     ) &
     watcher=$!
     GSA_TEST_GSA_BIN="$wrap" run_engine "$ws" -B --leaf --lanes 2 --intensity low \
@@ -499,7 +507,7 @@ EOF
                 || fail "$pkg was in flight but is recorded $status:" "$dir/output.txt"
             [ "$reason" = interrupted-mid-build ] \
                 || fail "$pkg lacks the interrupted-mid-build reason (§H.3):" "$dir/output.txt"
-            rr2_outcome "$pkg" rc <<<"$out" | grep -Eq '^(129|130|143)$' \
+            grep < <(rr2_outcome "$pkg" rc <<<"$out") -Eq '^(129|130|143)$' \
                 || fail "an interrupted row's rc is not a signal lane code (§F.1):" "$dir/output.txt"
         else
             [ "$status" = never-started ] \
@@ -553,7 +561,8 @@ printf 'dashboard fixture: PASS\n'
 (
     source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
     fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-prose-render.XXXXXX")
-    trap 'rm -rf -- "$fixture"' EXIT
+    # root-safe cleanup: engine state under $fixture is root-owned (W5 §B.10)
+    trap '/usr/bin/sudo -n rm -rf -- "$fixture" 2>/dev/null || rm -rf -- "$fixture" 2>/dev/null || true' EXIT
 
     fail() {
         printf 'prose rendering fixture: %s\n' "$1" >&2

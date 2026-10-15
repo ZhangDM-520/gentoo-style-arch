@@ -47,7 +47,7 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/rr-v2.bash"
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-skip-upstream.XXXXXX")
-trap 'rm -rf -- "$fixture"' EXIT
+trap '/usr/bin/sudo -n rm -rf -- "$fixture" 2>/dev/null || rm -rf -- "$fixture" 2>/dev/null || true' EXIT
 
 fail() {
     printf 'skip-upstream: %s\n' "$*" >&2
@@ -64,11 +64,15 @@ rr2_stub_knob GSA_FAKE_VCS_BUILT_REV "skip-upstream svn/hg/bzr stubs: local chec
 # carries) when no run overrides GSA_FAKE_GCC_VERSION.
 GSA_FAKE_GCC_ID='gcc (fixture) fixture' 
 
-# ─── The engine under test: built into the fixture tree (scratch only) ──────
-cargo build --offline --quiet --target-dir "$fixture/cargo" -p gsa-cli \
-    --manifest-path "$gsa_repo_root/Cargo.toml" \
-    || fail "cannot build the gsa binary for the fixture"
-gsa_bin="$fixture/cargo/debug/gsa"
+# ─── The engine under test: scratch build only when GSA_TEST_GSA_BIN is not
+# already set (the rr-v2.bash run_engine convention) ──────────────────────
+if [ -z "${GSA_TEST_GSA_BIN:-}" ]; then
+    cargo build --offline --quiet --target-dir "$fixture/cargo" -p gsa-cli \
+        --manifest-path "$gsa_repo_root/Cargo.toml" \
+        || fail "cannot build the gsa binary for the fixture"
+    GSA_TEST_GSA_BIN="$fixture/cargo/debug/gsa"
+fi
+gsa_bin="$GSA_TEST_GSA_BIN"
 [ -x "$gsa_bin" ] || fail "cargo did not produce $gsa_bin"
 export GSA_TEST_ENGINE=gsa
 export GSA_TEST_GSA_BIN="$gsa_bin"
@@ -652,7 +656,7 @@ stage_vcs_set "$branch_dir/ws-install" "$branch_entry" git "$branch_rev"
 run_case "$branch_dir/ws-install" -S --skip --config "$branch_dir/ws-install/pacman.conf" -- p1
 expect_claim p1 'unchanged branch with install' ok
 assert_makepkg_count "$branch_dir/ws-install" 0 'unchanged branch with install'
-grep -- 'pacman -U' "$branch_dir/ws-install/pacman.log" | grep -Fq 'p1-1.0.0-1-any.pkg.tar.zst' ||
+grep < <(grep -- 'pacman -U' "$branch_dir/ws-install/pacman.log") -Fq 'p1-1.0.0-1-any.pkg.tar.zst' ||
     fail 'unchanged branch --skip -S did not install the claimed archive'
 grep -q -- 'pacman -U' "$branch_dir/ws-install/pacman.log" ||
     fail 'unchanged branch --skip -S did not install at all'
@@ -846,7 +850,7 @@ assert_makepkg_count "$T1_dir/workspace" 0 'flaky transport skip must not rebuil
 attempts=$(lsremote_attempts "$T1_dir/workspace")
 ((attempts >= 2)) ||
     fail "flaky transport: expected a retry, saw $attempts ls-remote attempt(s)"
-grep -- 'pacman -U' "$T1_dir/workspace/pacman.log" | grep -Fq 'p1-1.0.0-1-any.pkg.tar.zst' ||
+grep < <(grep -- 'pacman -U' "$T1_dir/workspace/pacman.log") -Fq 'p1-1.0.0-1-any.pkg.tar.zst' ||
     fail 'flaky transport skip did not install the claimed archive'
 
 T2_dir=$fixture/flaky-moved
@@ -935,7 +939,7 @@ if grep -- 'pacman -U' "$T3_dir/workspace/pacman.log" 2>/dev/null |
     grep -F 'p1-1.0.0-1-any.pkg.tar.zst'; then
     fail 'p1 archive was installed although upstream never answered'
 fi
-grep -- 'pacman -U' "$T3_dir/workspace/pacman.log" | grep -Fq 'p3-1.0.0-1-any.pkg.tar.zst' ||
+grep < <(grep -- 'pacman -U' "$T3_dir/workspace/pacman.log") -Fq 'p3-1.0.0-1-any.pkg.tar.zst' ||
     fail 'p3 did not install under -S while p1 was parked'
 
 # T4: a heavily-consumed recipe cannot park — the fallback is a normal build
@@ -981,7 +985,7 @@ for id in p2 p3 p4 p5 p6; do
     expect_built "$id" "$id behind the fallback"
 done
 assert_makepkg_count "$T4_dir/workspace" 6 'fallback build plus all five consumers'
-grep -- 'pacman -U' "$T4_dir/workspace/pacman.log" | grep -Fq 'p1-1.0.0-1-any.pkg.tar.zst' ||
+grep < <(grep -- 'pacman -U' "$T4_dir/workspace/pacman.log") -Fq 'p1-1.0.0-1-any.pkg.tar.zst' ||
     fail 'the fallback-built p1 archive did not install under -S'
 
 # ─── Selected-ref semantics: a tag pin follows the declared tag; an
@@ -1560,7 +1564,7 @@ src_rev=$(GIT_CONFIG_COUNT=0 git -C "$src_slash/workspace/packages/p1/src/remote
     run_case "$sbg_ws" -S --skip-built --config "$sbg_ws/pacman.conf" -- p1
     expect_claim p1 'skip-built drift: version-drifted set still skips' skip-built
     assert_makepkg_count "$sbg_ws" 0 'skip-built drift: a complete drifted set must not rebuild'
-    grep -- 'pacman -U' "$sbg_ws/pacman.log" | grep -Fq 'p1-1.1.0-1-any.pkg.tar.zst' ||
+    grep < <(grep -- 'pacman -U' "$sbg_ws/pacman.log") -Fq 'p1-1.1.0-1-any.pkg.tar.zst' ||
         fail 'skip-built drift: -S did not install the CLAIMED drifted archive'
 
     # A real recipe change is a COMMIT, and it postdates the build: rebuild.
@@ -1622,7 +1626,7 @@ src_rev=$(GIT_CONFIG_COUNT=0 git -C "$src_slash/workspace/packages/p1/src/remote
     run_case "$sbin_ws" -S --skip-built --config "$sbin_ws/pacman.conf" -- p1
     expect_claim p1 'skip-built install: claim installs' skip-built
     assert_makepkg_count "$sbin_ws" 0 'skip-built install: the claim path must not rebuild'
-    grep -- 'pacman -U' "$sbin_ws/pacman.log" | grep -Fq 'p1-1.0.0-1-any.pkg.tar.zst' ||
+    grep < <(grep -- 'pacman -U' "$sbin_ws/pacman.log") -Fq 'p1-1.0.0-1-any.pkg.tar.zst' ||
         fail 'skip-built -S did not install the claimed archive'
 )
 
@@ -1820,7 +1824,7 @@ src_rev=$(GIT_CONFIG_COUNT=0 git -C "$src_slash/workspace/packages/p1/src/remote
     run_case "$durable_dir/workspace" -S --skip --config "$durable_dir/workspace/pacman.conf" -- p1
     expect_claim p1 'durability: consecutive claim still claims and installs' ok
     assert_makepkg_count "$durable_dir/workspace" 1 'durability: a consecutive claim must not rebuild'
-    grep -- 'pacman -U' "$durable_dir/workspace/pacman.log" | grep -Fq 'p1-1.0.0-1-any.pkg.tar.zst' ||
+    grep < <(grep -- 'pacman -U' "$durable_dir/workspace/pacman.log") -Fq 'p1-1.0.0-1-any.pkg.tar.zst' ||
         fail 'durability: the consecutive claim did not install the surviving archive'
 )
 

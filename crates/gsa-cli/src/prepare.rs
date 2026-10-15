@@ -828,6 +828,16 @@ pub fn run_sync_pass(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write)
     };
     crate::write_notes(err, &selection.notes);
 
+    // ── privilege gate (contract §B.10; after every usage preflight) ─────
+    if let Some(code) = crate::privilege_gate(
+        &inv.spelling(),
+        crate::invocation_privilege(inv, &crate::Command::SyncPass),
+        true,
+        err,
+    ) {
+        return code;
+    }
+
     let (refused, deferred) = sync_phase(&root, &graph, &selection, out, err);
     if refused {
         return 3;

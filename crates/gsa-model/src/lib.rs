@@ -12,6 +12,8 @@
 //! Nothing here evaluates recipes or reads the filesystem: this crate is
 //! pure data and rendering.
 
+pub mod privilege;
+
 use std::fmt;
 
 use serde::{Deserialize, Serialize};

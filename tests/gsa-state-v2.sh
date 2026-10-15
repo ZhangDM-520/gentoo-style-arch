@@ -53,7 +53,8 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/rr-v2.bash"
 
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-state-v2.XXXXXX")
-trap 'rm -rf -- "$fixture"' EXIT
+# root-safe cleanup: engine state under $fixture is root-owned (W5 §B.10)
+trap '/usr/bin/sudo -n rm -rf -- "$fixture" 2>/dev/null || rm -rf -- "$fixture" 2>/dev/null || true' EXIT
 
 fail() {
     printf '%s\n' "$1" >&2
@@ -271,9 +272,9 @@ got:  $FIXTURE_OUTPUT"
         # `-Qp` agrees: .PKGINFO + index row + bytes (§B.3).
         run_engine "$ws" -Qp --state-dir "$state" "$archive"
         [ "$FIXTURE_RC" = 0 ] || fail "-Qp is rc 0, got $FIXTURE_RC"
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -F "agrees pkginfo=ok" >/dev/null \
+        vgrep "$FIXTURE_OUTPUT" -F "agrees pkginfo=ok" >/dev/null \
             || fail "-Qp must report agreement for a registered archive (§B.3): $FIXTURE_OUTPUT"
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -F "hash=agree size=agree" >/dev/null \
+        vgrep "$FIXTURE_OUTPUT" -F "hash=agree size=agree" >/dev/null \
             || fail "-Qp must report hash/size agreement (§B.3): $FIXTURE_OUTPUT"
     )
 fi
@@ -362,8 +363,10 @@ if want c; then
         make_archive "$old" "$stage"
         sha=$(sha256sum "$old" | awk '{print $1}')
         size=$(stat -c%s "$old")
+        # the index is engine-owned state (W5 §B.10) — seed the row through
+        # the host's REAL sudo, never the PATH stub
         printf '{"op":"row","recipe_id":"slow","pkgbase":"slow","pkgnames":["slow"],"version":"0:1.0.9-1","archive":"%s","sha256":"%s","size":%s,"built_at":1,"abi_token":"-","provides":[],"vcs_baseline":"-","instance":2}\n' \
-            "$old" "$sha" "$size" >>"$state/index/binpkg.jsonl"
+            "$old" "$sha" "$size" | /usr/bin/sudo -n tee -a "$state/index/binpkg.jsonl" >/dev/null
         [ "$(index_rows "$state" slow | grep -c '"op":"row"')" = 2 ] \
             || fail "the staged history must read back as two slow instances"
 
@@ -375,7 +378,13 @@ if want c; then
         export GSA_FAKE_RELEASE_FILE="$release"
         (
             cd "$ws"
-            "$GSA_TEST_GSA_BIN" -B --no-prefetch --state-dir "$state" slow quick \
+            # W5 §B.10: a direct engine invocation must model run_engine's
+            # privileged form — /usr/bin/sudo -n env <forwarded fixture env>
+            # (sudo's env_reset strips the stub PATH and every GSA_FAKE_*
+            # knob; rr2_env_forward is the same whitelist run_engine uses)
+            fwd=()
+            rr2_env_forward fwd
+            /usr/bin/sudo -n env "${fwd[@]}" "$GSA_TEST_GSA_BIN" -B --no-prefetch --state-dir "$state" slow quick \
                 >"$runlog" 2>&1
             echo $? >"$fixture/c/run.rc"
         ) &
@@ -437,16 +446,16 @@ got:  $FIXTURE_OUTPUT"
             || fail "-Qb with a matching ref prints the same row: $FIXTURE_OUTPUT"
         run_engine "$ws" -Qb --state-dir "$state" nonesuch
         [ "$FIXTURE_RC" = 2 ] || fail "an unknown ref is a usage error (§G.1 rc 2), got $FIXTURE_RC"
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -i "nonesuch" >/dev/null \
+        vgrep "$FIXTURE_OUTPUT" -i "nonesuch" >/dev/null \
             || fail "the ref refusal names the offender: $FIXTURE_OUTPUT"
 
         # `-Qp` on a tampered archive: the hash binding fires (§J.4).
         printf 'x' >>"$archive"
         run_engine "$ws" -Qp --state-dir "$state" "$archive"
         [ "$FIXTURE_RC" = 0 ] || fail "-Qp is a report-only query (rc 0), got $FIXTURE_RC"
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -F "mismatch" >/dev/null \
+        vgrep "$FIXTURE_OUTPUT" -F "mismatch" >/dev/null \
             || fail "-Qp must report the tampered archive as a mismatch (§J.4): $FIXTURE_OUTPUT"
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -F "hash=disagree size=disagree" >/dev/null \
+        vgrep "$FIXTURE_OUTPUT" -F "hash=disagree size=disagree" >/dev/null \
             || fail "-Qp must report hash/size disagreement: $FIXTURE_OUTPUT"
 
         # `-Qp` on an unrecorded archive: absent is reported, never guessed.
@@ -456,19 +465,19 @@ got:  $FIXTURE_OUTPUT"
         make_archive "$stray" "$stage"
         run_engine "$ws" -Qp --state-dir "$state" "$stray"
         [ "$FIXTURE_RC" = 0 ] || fail "-Qp on an unrecorded archive is rc 0, got $FIXTURE_RC"
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -F "unindexed" >/dev/null \
+        vgrep "$FIXTURE_OUTPUT" -F "unindexed" >/dev/null \
             || fail "-Qp must report an unrecorded archive as unindexed (§J.4): $FIXTURE_OUTPUT"
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -F "hash=unrecorded" >/dev/null \
+        vgrep "$FIXTURE_OUTPUT" -F "hash=unrecorded" >/dev/null \
             || fail "-Qp must not invent agreement for an unrecorded archive: $FIXTURE_OUTPUT"
 
         # Usage refusals name the argument (§D.1's seam shape, §G.1 rc 2).
         run_engine "$ws" -Qp --state-dir "$state" "$ws/packages/probe/absent.pkg.tar.zst"
         [ "$FIXTURE_RC" = 2 ] || fail "a malformed archive argument is rc 2, got $FIXTURE_RC"
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -F "malformed archive argument" >/dev/null \
+        vgrep "$FIXTURE_OUTPUT" -F "malformed archive argument" >/dev/null \
             || fail "the refusal names the argument: $FIXTURE_OUTPUT"
         run_engine "$ws" -Qp --state-dir "$state"
         [ "$FIXTURE_RC" = 2 ] || fail "-Qp without archives is rc 2, got $FIXTURE_RC"
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -F "requires at least one archive" >/dev/null \
+        vgrep "$FIXTURE_OUTPUT" -F "requires at least one archive" >/dev/null \
             || fail "the refusal says what is missing: $FIXTURE_OUTPUT"
     )
 fi
@@ -495,7 +504,7 @@ if want e; then
         # The seam verbs: health is clean, runs renders the stored record.
         run_engine "$ws" --local-db-check health
         [ "$FIXTURE_RC" = 0 ] || fail "a clean side-car is rc 0 (§G), got $FIXTURE_RC: $FIXTURE_OUTPUT"
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -F "0 finding(s)" >/dev/null \
+        vgrep "$FIXTURE_OUTPUT" -F "0 finding(s)" >/dev/null \
             || fail "the health summary must report zero findings: $FIXTURE_OUTPUT"
         run_engine "$ws" --local-db-check runs
         [ "$FIXTURE_RC" = 0 ] || fail "the run-history read is rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
@@ -507,21 +516,26 @@ if want e; then
 $(diff -u "$emitted" "$stored" || true)"
 
         # An interrupted run: exit 130, full record, stored (§H.1/§K.3).
-        # `exec` makes the background pid the engine's own, so the SIGTERM
-        # reaches it and `wait` observes its rc directly.
+        # `exec` stays INSIDE the sudo'd chain (W5 §B.10 — the invocation is
+        # run_engine's privileged form), so the background pid is the root-
+        # owned sudo monitor: the SIGTERM must reach it through the host's
+        # REAL sudo (it relays to the engine) and `wait` observes the rc
+        # sudo passes through unchanged.
         export GSA_FAKE_STALL_PACKAGE=hist
         export GSA_FAKE_RELEASE_FILE="$fixture/e/never"
         (
-            cd "$ws" &&
-                exec "$GSA_TEST_GSA_BIN" -B --no-prefetch --leaf --state-dir "$state" hist \
-                    >"$fixture/e/interrupt.log" 2>&1
+            cd "$ws" || exit 1
+            fwd=()
+            rr2_env_forward fwd
+            exec /usr/bin/sudo -n env "${fwd[@]}" "$GSA_TEST_GSA_BIN" -B --no-prefetch --leaf --state-dir "$state" hist \
+                >"$fixture/e/interrupt.log" 2>&1
         ) &
         engine=$!
         for _ in $(seq 1 300); do
             [ "$(cat "$GSA_FAKE_COUNT_DIR/hist" 2>/dev/null || echo 0)" = 2 ] && break
             sleep 0.05
         done
-        kill -TERM "$engine"
+        /usr/bin/sudo -n kill -TERM "$engine"
         set +e
         wait "$engine"
         rc=$?
@@ -547,16 +561,18 @@ $(diff -u "$emitted" "$stored" || true)"
         row=$(index_rows "$state" hist | head -n 1)
         name=$(basename "$(json_field "$row" archive)")
         garbled=$(printf '%s' "$row" | sed 's/..........$//')
+        # the index is engine-owned state (W5 §B.10) — garble it through the
+        # host's REAL sudo, never the PATH stub
         awk -v repl="$garbled" '
             /"op":"row"/ && /hist-1\.0\./ { print repl; next }
             { print }
-        ' "$state/index/binpkg.jsonl" >"$state/index/binpkg.jsonl.tmp"
-        mv "$state/index/binpkg.jsonl.tmp" "$state/index/binpkg.jsonl"
+        ' "$state/index/binpkg.jsonl" | /usr/bin/sudo -n tee "$state/index/binpkg.jsonl.tmp" >/dev/null
+        /usr/bin/sudo -n mv "$state/index/binpkg.jsonl.tmp" "$state/index/binpkg.jsonl"
         run_engine "$ws" --local-db-check health
         [ "$FIXTURE_RC" = 1 ] || fail "a corrupted row makes the check fail (rc 1), got $FIXTURE_RC: $FIXTURE_OUTPUT"
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -E "^corrupt-row index " >/dev/null \
+        vgrep "$FIXTURE_OUTPUT" -E "^corrupt-row index " >/dev/null \
             || fail "the corruption is reported: $FIXTURE_OUTPUT"
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -F "$name" >/dev/null \
+        vgrep "$FIXTURE_OUTPUT" -F "$name" >/dev/null \
             || fail "the corrupted row is named ($name): $FIXTURE_OUTPUT"
 
         # An orphan archive (beside a recipe, no row) is named too.
@@ -565,13 +581,13 @@ $(diff -u "$emitted" "$stored" || true)"
         make_archive "$ws/packages/hist/ghost-0.1-1-any.pkg.tar.zst" "$stage"
         run_engine "$ws" --local-db-check health
         [ "$FIXTURE_RC" = 1 ] || fail "an orphan archive makes the check fail (rc 1), got $FIXTURE_RC"
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -E "^orphan-archive ghost-0.1-1-any.pkg.tar.zst " >/dev/null \
+        vgrep "$FIXTURE_OUTPUT" -E "^orphan-archive ghost-0.1-1-any.pkg.tar.zst " >/dev/null \
             || fail "the orphan archive is named: $FIXTURE_OUTPUT"
 
         # Bad usage is rc 2 and names the argument (§D.1).
         run_engine "$ws" --local-db-check bogus
         [ "$FIXTURE_RC" = 2 ] || fail "an unknown verb is rc 2 (§G.1), got $FIXTURE_RC"
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -F "unknown argument 'bogus'" >/dev/null \
+        vgrep "$FIXTURE_OUTPUT" -F "unknown argument 'bogus'" >/dev/null \
             || fail "the usage refusal names the argument: $FIXTURE_OUTPUT"
     )
 fi
@@ -609,7 +625,7 @@ if want f; then
         run_engine "$envws" --local-db-check health
         [ "$FIXTURE_RC" = 0 ] || fail "the env override seam is rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
         run_engine "$ws" -Qb --state-dir "$state"
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -F "boxed|" >/dev/null \
+        vgrep "$FIXTURE_OUTPUT" -F "boxed|" >/dev/null \
             || fail "-Qb reads the overridden state root: $FIXTURE_OUTPUT"
 
         # Everything landed inside the fixture tree; /var/lib/gsa is

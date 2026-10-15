@@ -52,7 +52,9 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/rr-v2.bash"
 
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-abi-v2.XXXXXX")
-trap 'rm -rf -- "$fixture"' EXIT
+# Root-safe cleanup: the engine writes its state tree as root (W5), so the
+# plain rm would leave Permission denied noise even on a passing run.
+trap '/usr/bin/sudo -n rm -rf -- "$fixture" 2>/dev/null || rm -rf -- "$fixture" 2>/dev/null || true' EXIT
 
 fail() {
     printf '%s\n' "$1" >&2
@@ -421,7 +423,7 @@ if want a; then
         [ "$FIXTURE_RC" = 0 ] || fail "a: -Qa on a built archive is rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
         first=$(qa_row "$FIXTURE_OUTPUT" tok token)
         [ -n "$first" ] || fail "a: -Qa prints a token row for tok: $FIXTURE_OUTPUT"
-        printf '%s\n' "$first" | grep -Eq \
+        vgrep "$first" -Eq \
             '^tok token [^ ]+ source=archive derived=[0-9a-f]+ -$' \
             || fail "a: token row shape (§B.3), got: $first"
 
@@ -436,7 +438,7 @@ if want a; then
         run_engine "$ws" -Qa --state-dir "$state" tok
         [ "$FIXTURE_RC" = 0 ] || fail "a: -Qa after the override is rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
         third=$(qa_row "$FIXTURE_OUTPUT" tok token)
-        printf '%s\n' "$third" | grep -Eq \
+        vgrep "$third" -Eq \
             '^tok token rev7-[0-9a-f]+ source=archive derived=[0-9a-f]+ abi-rev=7$' \
             || fail "a: the override wins over derivation (rev7-… token, abi-rev=7), got: $third"
 
@@ -498,12 +500,15 @@ if want b; then
         # The records this fixture installs: c1 recorded a STALE token of
         # lib (mismatch → rebuild), c2 recorded lib's CURRENT token (match →
         # stays out), c3 recorded c1's current token (no c1 move at all).
-        mkdir -p "$state/abi"
+        # Fixture-side writes into the engine-owned state tree (W5: state/ is
+        # root-owned after the build pass above), so the seeded records land
+        # through the real sudo — the record must exist regardless of owner.
+        /usr/bin/sudo -n mkdir -p "$state/abi"
         {
             printf 'c1|0:1.0.0-1|lib|stale-token\n'
             printf 'c2|0:1.0.0-1|lib|%s\n' "$t_lib"
             printf 'c3|0:1.0.0-1|c1|%s\n' "$t_c1"
-        } >"$state/abi/subscriptions"
+        } | /usr/bin/sudo -n tee "$state/abi/subscriptions" >/dev/null
 
         run_engine "$ws" -B --dry-run lib c1 c2 c3
         [ "$FIXTURE_RC" = 0 ] || fail "b: the plan is rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
@@ -516,7 +521,7 @@ $FIXTURE_OUTPUT"
         [ "$got" = "c1
 c3" ] || fail "b: derived expectation must be the mismatch set + closure (c1, c3), got [$got]"
         # The matching record stays out — the wave never over-expands here.
-        printf '%s\n' "$got" | grep -qx c2 \
+        vgrep "$got" -qx c2 \
             && fail "b: c2's record MATCHES the provider token — it must stay out of the wave:"
         echo "section b ok"
     )
@@ -556,11 +561,12 @@ if want c; then
         # c1's record MATCHES (it would stay out of any exact wave), c2's
         # MISMATCHES (the move is observable), and c3 has NO record at all —
         # the missing record is what must fail toward the whole closure.
-        mkdir -p "$state/abi"
+        # (W5: seeded through the real sudo — state/ is engine-owned.)
+        /usr/bin/sudo -n mkdir -p "$state/abi"
         {
             printf 'c1|0:1.0.0-1|lib|%s\n' "$t_lib"
             printf 'c2|0:1.0.0-1|lib|stale-token\n'
-        } >"$state/abi/subscriptions"
+        } | /usr/bin/sudo -n tee "$state/abi/subscriptions" >/dev/null
 
         run_engine "$ws" -B --dry-run lib c1 c2 c3
         [ "$FIXTURE_RC" = 0 ] || fail "c: the plan is rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
@@ -575,10 +581,10 @@ c2
 c3" ] || fail "c: derived expectation must be the full closure (c1, c2, c3), got [$got]"
         # A matching record cannot shrink the whole-closure rule, and the
         # missing record is NAMED `unrecorded` (the fail-toward markers).
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -q '^abi-wave lib c1 closure$' \
+        vgrep "$FIXTURE_OUTPUT" -q '^abi-wave lib c1 closure$' \
             || fail "c: c1 must join the wave despite its matching record (the fail-toward whole-closure sweep):
 $FIXTURE_OUTPUT"
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -q '^abi-wave lib c3 unrecorded$' \
+        vgrep "$FIXTURE_OUTPUT" -q '^abi-wave lib c3 unrecorded$' \
             || fail "c: the record-less consumer is named 'unrecorded' (the fail-toward default):
 $FIXTURE_OUTPUT"
         echo "section c ok"
@@ -609,16 +615,19 @@ if want d; then
 
         # A recorded subscriber (`ghost`) the topology has no record for:
         # it can never be built here, so the swap is under-covered.
-        mkdir -p "$state/abi"
-        printf 'ghost|0:1.0.0-1|lib|stale-token\n' >"$state/abi/subscriptions"
+        # (W5: seeded through the real sudo — state/ may already be
+        # engine-owned from an earlier section's runs.)
+        /usr/bin/sudo -n mkdir -p "$state/abi"
+        printf 'ghost|0:1.0.0-1|lib|stale-token\n' \
+            | /usr/bin/sudo -n tee "$state/abi/subscriptions" >/dev/null
 
         run_engine "$ws" -U --state-dir "$state" --config "$ws/pacman.conf" lib
         [ "$FIXTURE_RC" = 3 ] \
             || fail "d: under-coverage refuses with rc 3 (§G.1), got $FIXTURE_RC: $FIXTURE_OUTPUT"
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -Eq '^ghost refused abi-consumer-uncovered lib$' \
+        vgrep "$FIXTURE_OUTPUT" -Eq '^ghost refused abi-consumer-uncovered lib$' \
             || fail "d: the refusal is named per member (§E.3), got:
 $FIXTURE_OUTPUT"
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -q 'install-refused abi-consumer-uncovered lib' \
+        vgrep "$FIXTURE_OUTPUT" -q 'install-refused abi-consumer-uncovered lib' \
             || fail "d: the outcome names the refusal class, got:
 $FIXTURE_OUTPUT"
         if grep -q '^pacman ' "$GSA_FAKE_PACMAN_LOG"; then
@@ -707,7 +716,7 @@ if want e; then
             esac
         done
         # app2 was not named by the user — it joined as the wave's addition.
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -Eq '^app2 install ok$' \
+        vgrep "$FIXTURE_OUTPUT" -Eq '^app2 install ok$' \
             || fail "e: the wave's unnamed member is an install row (wave_heal), got:
 $FIXTURE_OUTPUT"
         echo "section e ok"
@@ -735,26 +744,27 @@ if want f; then
         run_engine "$ws" -B --no-prefetch --state-dir "$state" lib ghostpkg
         [ "$FIXTURE_RC" = 0 ] || fail "f: the stub build pass is rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
 
-        mkdir -p "$state/abi"
+        # (W5: seeded through the real sudo — state/ is engine-owned.)
+        /usr/bin/sudo -n mkdir -p "$state/abi"
         {
             printf 'ghostpkg|0:1.0.0-1|lib|recorded-token\n'
-        } >"$state/abi/subscriptions"
+        } | /usr/bin/sudo -n tee "$state/abi/subscriptions" >/dev/null
 
         # -Qa: the token fact, the index's recorded token, and the
         # subscription rows in/out — all derived from the state truth.
         run_engine "$ws" -Qa --state-dir "$state" lib
         [ "$FIXTURE_RC" = 0 ] || fail "f: -Qa is rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
-        printf '%s\n' "$(qa_row "$FIXTURE_OUTPUT" lib token)" | grep -Eq \
+        vgrep "$(qa_row "$FIXTURE_OUTPUT" lib token)" -Eq \
             '^lib token [^ ]+ source=archive derived=[0-9a-f]+ -$' \
             || fail "f: token row shape (§B.3), got: $FIXTURE_OUTPUT"
-        printf '%s\n' "$(qa_row "$FIXTURE_OUTPUT" lib index-token)" | grep -Eq \
+        vgrep "$(qa_row "$FIXTURE_OUTPUT" lib index-token)" -Eq \
             '^lib index-token [^ ]+$' \
             || fail "f: index-token row shape (§B.3), got: $FIXTURE_OUTPUT"
-        printf '%s\n' "$(qa_row "$FIXTURE_OUTPUT" lib subscription-in)" | grep -Eq \
+        vgrep "$(qa_row "$FIXTURE_OUTPUT" lib subscription-in)" -Eq \
             '^lib subscription-in ghostpkg 0:1\.0\.0-1 recorded-token$' \
             || fail "f: subscription-in row shape (§B.3), got: $FIXTURE_OUTPUT"
         run_engine "$ws" -Qa --state-dir "$state" ghostpkg
-        printf '%s\n' "$(qa_row "$FIXTURE_OUTPUT" ghostpkg subscription-out)" | grep -Eq \
+        vgrep "$(qa_row "$FIXTURE_OUTPUT" ghostpkg subscription-out)" -Eq \
             '^ghostpkg subscription-out lib recorded-token$' \
             || fail "f: subscription-out row shape (§B.3), got: $FIXTURE_OUTPUT"
 
@@ -766,7 +776,7 @@ if want f; then
         db_file "$e_ghost" "$fixture/f/dbfiles/ghostpkg/usr/lib/libghost.so"
         run_engine "$ws" -Qr --state-dir "$state"
         [ "$FIXTURE_RC" = 0 ] || fail "f: -Qr is rc 0 (report-only), got $FIXTURE_RC: $FIXTURE_OUTPUT"
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -Eq \
+        vgrep "$FIXTURE_OUTPUT" -Eq \
             '^unresolved ghostpkg [^ ]*libghost\.so libmissing\.so\.9$' \
             || fail "f: -Qr names the unresolved need (consumer member soname), got:
 $FIXTURE_OUTPUT"

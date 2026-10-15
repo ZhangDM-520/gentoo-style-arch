@@ -85,16 +85,27 @@ exit 0
     ws
 }
 
-fn engine_command(ws: &Path) -> Command {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_gsa"));
+/// The engine as root through real `sudo -n` (contract §B.10: `-B` is a
+/// mutating verb and requires root). `env` carries PATH, the stubs and every
+/// knob explicitly so they survive sudo's env_reset; the engine then drops
+/// its build-side commands back to the build user via `setpriv`, so the
+/// stubs run as the test user and write their logs unprivileged.
+fn engine_command(ws: &Path, extra: &[(&str, &str)]) -> Command {
+    let mut cmd = Command::new("sudo");
+    cmd.arg("-n").arg("env");
+    cmd.arg(format!(
+        "PATH={}/bin:{}",
+        ws.display(),
+        std::env::var("PATH").unwrap()
+    ));
+    cmd.arg(format!("SRCDEST={}", ws.join("srcdest").display()));
+    cmd.arg(format!("GSA_FAKE_FETCH_LOG={}", ws.join("fetch.log").display()));
+    cmd.arg("_GSA_FETCH_RETRY_S=0");
+    for (key, value) in extra {
+        cmd.arg(format!("{key}={value}"));
+    }
     cmd.current_dir(ws)
-        .env(
-            "PATH",
-            format!("{}/bin:{}", ws.display(), std::env::var("PATH").unwrap()),
-        )
-        .env("SRCDEST", ws.join("srcdest"))
-        .env("GSA_FAKE_FETCH_LOG", ws.join("fetch.log"))
-        .env("_GSA_FETCH_RETRY_S", "0")
+        .arg(env!("CARGO_BIN_EXE_gsa"))
         .args([
             "-B",
             "--state-dir",
@@ -102,6 +113,14 @@ fn engine_command(ws: &Path) -> Command {
             "p1",
         ]);
     cmd
+}
+
+/// Root-owned scratch teardown (a sudo run leaves root-owned state behind).
+fn cleanup(ws: &Path) {
+    let _ = std::process::Command::new("sudo")
+        .args(["-n", "rm", "-rf", "--"])
+        .arg(ws)
+        .output();
 }
 
 /// Live processes of THIS workspace whose argv still carries `extra` (the
@@ -135,9 +154,10 @@ fn survivors(ws: &Path, extra: &str) -> Vec<u32> {
 #[test]
 fn a_prefetch_failure_is_advisory_and_never_gates_the_run() {
     let ws = workspace("advisory");
-    let mut cmd = engine_command(&ws);
-    cmd.env("GSA_FAKE_FETCH_FAIL", "p2");
-    cmd.env("GSA_FAKE_BUILD_SECONDS", "1");
+    let mut cmd = engine_command(
+        &ws,
+        &[("GSA_FAKE_FETCH_FAIL", "p2"), ("GSA_FAKE_BUILD_SECONDS", "1")],
+    );
     let out = cmd.output().expect("engine must run");
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -163,14 +183,16 @@ fn a_prefetch_failure_is_advisory_and_never_gates_the_run() {
     // The advisory log exists and names the failure (owner decision 5).
     let log = std::fs::read_to_string(ws.join("state/prefetch.log")).unwrap_or_default();
     assert!(log.contains("attempt 1 failed"), "prefetch.log: {log}");
+    cleanup(&ws);
 }
 
 #[test]
 fn b_sigint_tears_down_the_fetch_child_with_the_run() {
     let ws = workspace("sigint");
-    let mut cmd = engine_command(&ws);
-    cmd.env("GSA_FAKE_FETCH_STALL", "p2");
-    cmd.env("GSA_FAKE_BUILD_SECONDS", "30");
+    let mut cmd = engine_command(
+        &ws,
+        &[("GSA_FAKE_FETCH_STALL", "p2"), ("GSA_FAKE_BUILD_SECONDS", "30")],
+    );
     cmd.stdout(Stdio::from(
         std::fs::File::create(ws.join("stdout.txt")).unwrap(),
     ))
@@ -235,4 +257,5 @@ fn b_sigint_tears_down_the_fetch_child_with_the_run() {
         left.is_empty(),
         "orphan processes of this workspace: {left:?}"
     );
+    cleanup(&ws);
 }

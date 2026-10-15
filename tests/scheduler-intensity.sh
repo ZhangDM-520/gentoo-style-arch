@@ -26,7 +26,9 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/rr-v2.bash"
 
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-intensity-fixture.XXXXXX")
-trap 'rm -rf -- "$fixture"' EXIT
+# Root-safe cleanup: the engine writes its state tree as root (W5), so the
+# plain rm would leave Permission denied noise even on a passing run.
+trap '/usr/bin/sudo -n rm -rf -- "$fixture" 2>/dev/null || rm -rf -- "$fixture" 2>/dev/null || true' EXIT
 
 fail() {
     printf '%s\n' "$1" >&2
@@ -37,13 +39,17 @@ fail() {
 }
 
 # The engine under test: built into the fixture tree (scratch only).
-cargo build --offline --quiet --target-dir "$fixture/cargo" -p gsa-cli \
-    --manifest-path "$gsa_repo_root/Cargo.toml" \
-    || fail "cannot build the gsa binary for the fixture"
-gsa_bin="$fixture/cargo/debug/gsa"
-[ -x "$gsa_bin" ] || fail "cargo did not produce $gsa_bin"
+# GSA_TEST_GSA_BIN, when already set to an executable, is that engine (the
+# rr-v2.bash run_engine convention) and the scratch build is skipped.
+if [ -z "${GSA_TEST_GSA_BIN:-}" ]; then
+    cargo build --offline --quiet --target-dir "$fixture/cargo" -p gsa-cli \
+        --manifest-path "$gsa_repo_root/Cargo.toml" \
+        || fail "cannot build the gsa binary for the fixture"
+    GSA_TEST_GSA_BIN="$fixture/cargo/debug/gsa"
+fi
+[ -x "$GSA_TEST_GSA_BIN" ] || fail "the engine under test is not executable: $GSA_TEST_GSA_BIN"
 export GSA_TEST_ENGINE=gsa
-export GSA_TEST_GSA_BIN="$gsa_bin"
+export GSA_TEST_GSA_BIN
 
 make_workspace "$fixture" auto auto xhigh
 
@@ -116,11 +122,15 @@ $output"
     done
     # Atomic publication (§F.2) leaves no temp names; the run's own result
     # files live under runs/<run-id>/ and are that run's record, not litter.
-    if find "$fixture/state-$level" -name '*.tmp.*' -print -quit | grep -q .; then
+    if grep < <(find "$fixture/state-$level" -name '*.tmp.*' -print -quit) -q .; then
         fail "a lane publication temp name remained for $level"
     fi
 done
 
+# Fixture-owned state tree (W5): the engine creates state-failure/ as root,
+# but the output.txt capture below is a fixture-side write INTO that tree —
+# create the directory first so it stays fixture-owned and the redirect lands.
+mkdir -p "$fixture/state-failure"
 PATH="$fixture/bin:$PATH" \
     GSA_CPU_THREADS=24 \
     GSA_MEMORY_GIB=21 \
@@ -139,7 +149,7 @@ printf '%s\n' "$failing_output" >"$fixture/state-failure/output.txt"
     || fail "cone-stop failure run exited $FIXTURE_RC, want 4 (§G.1):" "$fixture/state-failure/output.txt"
 [[ $FIXTURE_RC == "$(rr2_scalar rc <<<"$failing_output")" ]] \
     || fail "the record's rc scalar disagrees with the process exit code:" "$fixture/state-failure/output.txt"
-if ! rr2_scalar outcome <<<"$failing_output" | grep -qx failed; then
+if ! grep < <(rr2_scalar outcome <<<"$failing_output") -qx failed; then
     fail "failure run recorded outcome $(rr2_scalar outcome <<<"$failing_output"):" "$fixture/state-failure/output.txt"
 fi
 if [[ $(rr2_outcome p1 status <<<"$failing_output") != failed ]]; then
@@ -174,7 +184,7 @@ fi
 if ps -eo args= | grep -F "$fixture" | grep -v grep >/dev/null; then
     fail "lane child remained after failure drain"
 fi
-if find "$fixture/state-failure" -name '*.tmp.*' -print -quit | grep -q .; then
+if grep < <(find "$fixture/state-failure" -name '*.tmp.*' -print -quit) -q .; then
     fail "a lane publication temp name remained after failure drain"
 fi
 

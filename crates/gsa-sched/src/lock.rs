@@ -2,10 +2,12 @@
 //!
 //! - The run lock is an `flock(2)` on `<state>/locks/run.lock`: one engine run
 //!   at a time over one state root. A held lock is a refusal, never a wait.
-//! - Write-time ownership (rule 19): every state file is owned by the build
-//!   user from the moment it is created; a file owned by someone else is
-//!   quarantined as `<path>.stale.<epoch>.<pid>` (preserved, announced) or the
-//!   write fails naming the remedy. There is no root fallback.
+//! - Write-time ownership (rule 19, plan-gsa-isolation.md W1): engine state is
+//!   owned by the privileged runner — mutating runs are root (contract §B.10),
+//!   so root-owned state is the correct state, never corruption. A state file
+//!   owned by anyone the running engine is not is quarantined as
+//!   `<path>.stale.<epoch>.<pid>` (preserved, announced) or the write fails
+//!   naming the remedy. There is no silent adoption.
 //! - Orphan sweeps: startup and post-run sweeps reap `--lane-job` /
 //!   `--fetch-job` children of dead runs and stale run artifacts (`.tmp.*`,
 //!   abandoned result files). Unrelated `makepkg` processes are never
@@ -77,7 +79,7 @@ pub fn quarantine_foreign(path: &Path, err: &mut dyn Write) -> Result<bool, Stri
     ));
     std::fs::rename(path, &stale).map_err(|e| {
         format!(
-            "state file {} is not owned by the build user and cannot be quarantined ({e}) — move it aside by hand",
+            "state file {} is not owned by the running engine user and cannot be quarantined ({e}) — move it aside as the state owner (sudo), then rerun",
             path.display()
         )
     })?;

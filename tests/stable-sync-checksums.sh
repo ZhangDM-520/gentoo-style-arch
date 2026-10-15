@@ -99,7 +99,10 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/rr-v2.bash"
 
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-stable-sync.XXXXXX")
-trap 'rm -rf -- "$fixture"' EXIT
+# Root-safe cleanup: privileged runs leave root-owned state litter a user-side
+# rm cannot unlink, and case 40's immutable artifact guard must be lifted
+# first or the tree cannot go at all.
+trap '/usr/bin/sudo -n chattr -i "$fixture/rollback/packages/stable/s1/src" 2>/dev/null || true; /usr/bin/sudo -n rm -rf -- "$fixture" 2>/dev/null || rm -rf -- "$fixture" 2>/dev/null || true' EXIT
 
 command -v vercmp >/dev/null || {
     printf 'vercmp is required (it ships with pacman)\n' >&2
@@ -133,11 +136,15 @@ fail() {
     exit 1
 }
 
-# ─── The engine under test: built into the fixture tree (scratch only) ──────
-cargo build --offline --quiet --target-dir "$fixture/cargo" -p gsa-cli \
-    --manifest-path "$gsa_repo_root/Cargo.toml" \
-    || fail "cannot build the gsa binary for the fixture"
-gsa_bin="$fixture/cargo/debug/gsa"
+# ─── The engine under test: scratch build only when GSA_TEST_GSA_BIN is not
+# already set (the rr-v2.bash run_engine convention) ──────────────────────
+if [ -z "${GSA_TEST_GSA_BIN:-}" ]; then
+    cargo build --offline --quiet --target-dir "$fixture/cargo" -p gsa-cli \
+        --manifest-path "$gsa_repo_root/Cargo.toml" \
+        || fail "cannot build the gsa binary for the fixture"
+    GSA_TEST_GSA_BIN="$fixture/cargo/debug/gsa"
+fi
+gsa_bin="$GSA_TEST_GSA_BIN"
 [ -x "$gsa_bin" ] || fail "cargo did not produce $gsa_bin"
 export GSA_TEST_ENGINE=gsa
 export GSA_TEST_GSA_BIN="$gsa_bin"
@@ -582,7 +589,7 @@ expect_plan 'anchor' s1 build ok
 
 # The transactional rewrite leaves no scratch behind (the case-41 semantic
 # that survives the flip: no sed/tmp tool boundary exists in the engine).
-if find "$dir/packages/stable/s1" -name '*.tmp*' -print -quit | grep -q .; then
+if grep < <(find "$dir/packages/stable/s1" -name '*.tmp*' -print -quit) -q .; then
     fail 'a staged file survived the run'
 fi
 
@@ -982,7 +989,7 @@ grep -q 're-anchored to' "$dir/out.txt" \
     || fail 'aur-sync: the run does not name the checksum authority'
 [[ -s $dir/fake/makepkg_argv ]] \
     || fail 'aur-sync: makepkg did not run after successful AUR verification'
-if find "$dir/packages" \( -name old_ver.json -o -name new_ver.json \) | grep -q .; then
+if grep < <(find "$dir/packages" \( -name old_ver.json -o -name new_ver.json \)) -q .; then
     fail 'aur-sync: nvchecker state leaked into a recipe directory'
 fi
 expect_row 'aur-sync' s1 succeeded 0 ok
@@ -1412,7 +1419,7 @@ cmp -s "$dir/fake/PKGBUILD.original" "$(pkgfile "$dir")" \
 expect_row 'absent-source' s1 deferred 99 source-unfetchable
 # THE POINT: the rest of the dispatch continued.
 expect_row 'absent-source' other succeeded 0 ok
-if find "$dir/packages/stable/s1" -name '*.pkg.tar.zst' -print -quit | grep -q .; then
+if grep < <(find "$dir/packages/stable/s1" -name '*.pkg.tar.zst' -print -quit) -q .; then
     fail 'a parked recipe was built anyway'
 fi
 
@@ -1633,12 +1640,20 @@ dir="$fixture/rollback"
 make_case_workspace "$dir" "$staged_version-1" \
     "https://example.invalid/s1-$staged_version.tar.gz"
 # An artifact directory rm -rf cannot clear (no write bit, one file inside).
+# Since W1 the engine's clear step runs as ROOT (it is in-process, not a
+# build-side command), so the 555 mode alone no longer stops it
+# (CAP_DAC_OVERRIDE writes through): the directory is also staged IMMUTABLE,
+# root cannot unlink inside it either, and the post-publish failure the
+# rollback wraps still fires.
 mkdir -p "$dir/packages/stable/s1/src"
 printf 'cached object\n' >"$dir/packages/stable/s1/src/keep"
 chmod 555 "$dir/packages/stable/s1/src"
+/usr/bin/sudo -n chattr +i "$dir/packages/stable/s1/src" ||
+    fail 'rollback: chattr +i failed — the root-unclearable artifact dir cannot be staged'
 printf '%s\n' "$repo_version-1" >"$dir/fake/repo_version"
 cp -- "$(pkgfile "$dir")" "$dir/pre-PKGBUILD"
 run_case "$dir" 'rollback' 3
+/usr/bin/sudo -n chattr -i "$dir/packages/stable/s1/src" 2>/dev/null || true
 chmod -R u+w "$dir/packages/stable/s1"     # asserts below must not need the mode
 grep -q 'could not clear stale build artifacts' "$dir/out.txt" \
     || fail 'rollback: the failing step is not named'

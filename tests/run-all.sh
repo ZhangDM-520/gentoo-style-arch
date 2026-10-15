@@ -80,6 +80,27 @@ fi
 work=$(mktemp -d "${TMPDIR:-/tmp}/gsa-battery.XXXXXX") || exit 1
 trap 'rm -rf -- "$work"' EXIT
 
+# One engine, built once. Fixtures honour the rr-v2.bash GSA_TEST_GSA_BIN
+# convention (an already-set executable is used as-is); when it is unset every
+# engine fixture builds its own ~5 GiB debug tree under $TMPDIR, and a battery
+# run exhausting the 16 GiB /tmp tmpfs (99 MiB free observed, 2026-10-15)
+# fails at random: bash here-string temp files and child spawns die with
+# ENOSPC/EAGAIN and fixtures fail in unrelated-looking ways. The prebuild
+# lands in the repository's target/ (disk, git-ignored), never in $TMPDIR
+# scratch; a standalone fixture still builds its own engine as before.
+if [[ -z ${GSA_TEST_GSA_BIN:-} || ! -x ${GSA_TEST_GSA_BIN} ]]; then
+    cargo build --offline --quiet -p gsa-cli --manifest-path "$root/Cargo.toml" || {
+        printf 'run-all.sh: cannot build the gsa binary the fixtures test\n' >&2
+        exit 1
+    }
+    GSA_TEST_GSA_BIN="$root/target/debug/gsa"
+fi
+[[ -x $GSA_TEST_GSA_BIN ]] || {
+    printf 'run-all.sh: engine under test is not executable: %s\n' "$GSA_TEST_GSA_BIN" >&2
+    exit 1
+}
+export GSA_TEST_GSA_BIN
+
 # One fixture in a child shell: stdout+stderr to its own file, rc to its own
 # file, so the parent can report everything alphabetically at the end.
 run_one() {
@@ -107,6 +128,8 @@ for fixture in "${fixtures[@]}"; do
         failed+=("$fixture")
         printf '  ✗ %s\n' "$fixture"
         sed 's/^/      /' "$work/$fixture.out"
+        [[ -s $work/$fixture.out ]] ||
+            printf '      (fixture produced no output; rc %s)\n' "$rc"
     fi
 done
 

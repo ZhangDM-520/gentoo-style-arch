@@ -88,6 +88,11 @@ gsa — native build-and-install orchestrator for the curated recipe set
 
 Usage: gsa <FAMILY>[cluster] [long-modifiers] [targets…] [ranges…] [-- <pacman args…>]
 
+Privilege (contract §B.10, like pacman): -Q and every report/plan verb run
+unprivileged; -S/-B/-U and write-side -M verbs require root — rerun with
+sudo. Builds always run as your user (makepkg is dropped from the root run),
+and a root shell without a build user is refused with guidance.
+
 Families (exactly one per invocation; lowercase letters form the cluster):
   -Q   query the buildable universe (and, later, pacman's installed database)
   -S   build + install the selection (each package installed before its consumers compile)
@@ -361,6 +366,111 @@ fn classify(inv: &Invocation) -> Disposition {
         );
     }
     Disposition::Run(command)
+}
+
+/// The privilege class of one command (plan-gsa-isolation.md W1; contract
+/// §B.10): reads run as any user, mutations require root, and `-Mm` alone
+/// stays build-user-only. Each run entry gates AFTER its usage preflights —
+/// §G.1 ranks usage (2) above refusal (3), so a typo is always reported
+/// before privilege.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Privilege {
+    ReadOnly,
+    Root { needs_build_user: bool },
+    BuildUserOnly,
+}
+
+/// The privilege of one invocation: dry runs render plans (read-only), `-M`
+/// is refined per verb by `maint::privilege`, everything else by command.
+pub(crate) fn invocation_privilege(inv: &Invocation, command: &Command) -> Privilege {
+    if inv.dry_run {
+        return Privilege::ReadOnly;
+    }
+    match command {
+        Command::Maint => maint::privilege(inv),
+        other => command_privilege(other),
+    }
+}
+
+pub(crate) fn command_privilege(command: &Command) -> Privilege {
+    match command {
+        Command::Topology
+        | Command::List
+        | Command::RecipeInfo
+        | Command::UniverseSearch
+        | Command::Groups
+        | Command::QueryList
+        | Command::QueryInfo
+        | Command::QuerySearch
+        | Command::QueryBinpkg
+        | Command::QueryProbe
+        | Command::QueryAbi
+        | Command::QueryRevdep
+        | Command::Plan => Privilege::ReadOnly,
+        Command::Build
+        | Command::BuildInstall
+        | Command::Fetch
+        | Command::SyncPass
+        | Command::Update => Privilege::Root {
+            needs_build_user: true,
+        },
+        Command::Upgrade => Privilege::Root {
+            needs_build_user: false,
+        },
+        // Refined per verb (and its mutation flags) by `maint::privilege`.
+        Command::Maint => Privilege::ReadOnly,
+    }
+}
+
+/// The transparent privilege gate (contract §B.10): pacman's shape —
+/// `you cannot perform this operation unless you are root` — plus one banner
+/// line naming who builds. Returns `Some(rc)` when the run must stop here
+/// (§G.1 rc 3, "the run refused to start"), before any state is written.
+/// `announce` is false for hidden fixture seams, whose output is parsed.
+pub(crate) fn privilege_gate(
+    spelling: &str,
+    privilege: Privilege,
+    announce: bool,
+    err: &mut dyn Write,
+) -> Option<i32> {
+    use gsa_model::privilege as p;
+    match privilege {
+        Privilege::ReadOnly => None,
+        Privilege::BuildUserOnly => {
+            if p::effective_uid() == 0 {
+                let _ = writeln!(
+                    err,
+                    "gsa: {spelling} rewrites your source-mirror tree and must run as the build user, never under a root supervisor (docs/source-sharing.md)"
+                );
+                return Some(RC_REFUSED);
+            }
+            None
+        }
+        Privilege::Root { needs_build_user } => {
+            if p::effective_uid() != 0 {
+                let _ = writeln!(
+                    err,
+                    "gsa: error: you cannot perform this operation unless you are root"
+                );
+                let _ = writeln!(
+                    err,
+                    "gsa: hint: rerun as 'sudo gsa {spelling} …' — the engine and pacman run as root; builds run as your user"
+                );
+                return Some(RC_REFUSED);
+            }
+            if needs_build_user && p::build_user().is_none() {
+                let _ = writeln!(
+                    err,
+                    "gsa: a build run needs a build user: run 'sudo gsa {spelling} …' from your build user's shell (makepkg cannot run as root, and a root shell has no user to drop to)"
+                );
+                return Some(RC_REFUSED);
+            }
+            if announce {
+                let _ = writeln!(err, "{}", p::privileged_banner(needs_build_user));
+            }
+            None
+        }
+    }
 }
 
 pub(crate) fn resolve_intensity(project: &gsa_topo::ProjectConfig) -> Result<String, String> {
@@ -919,5 +1029,91 @@ mod tests {
         let (code, _out, err) = run_capture(&[]);
         assert_eq!(code, 2);
         assert!(err.contains("Usage: gsa"));
+    }
+
+    #[test]
+    fn mutating_verbs_gate_and_reads_never_do() {
+        use gsa_model::privilege as p;
+        // The §B.10 classification: reads are never gated, builds need root
+        // plus a build user, installs need root only.
+        assert_eq!(command_privilege(&Command::QueryList), Privilege::ReadOnly);
+        assert_eq!(command_privilege(&Command::Plan), Privilege::ReadOnly);
+        assert_eq!(
+            command_privilege(&Command::Build),
+            Privilege::Root {
+                needs_build_user: true
+            }
+        );
+        assert_eq!(
+            command_privilege(&Command::Upgrade),
+            Privilege::Root {
+                needs_build_user: false
+            }
+        );
+        if p::effective_uid() != 0 {
+            let mut err = Vec::new();
+            assert_eq!(
+                privilege_gate(
+                    "-B",
+                    Privilege::Root {
+                        needs_build_user: true
+                    },
+                    true,
+                    &mut err
+                ),
+                Some(RC_REFUSED)
+            );
+            let err = String::from_utf8_lossy(&err);
+            assert!(
+                err.contains("you cannot perform this operation unless you are root"),
+                "{err}"
+            );
+            assert!(err.contains("sudo gsa -B"), "{err}");
+            // A read passes untouched and prints nothing.
+            let mut quiet = Vec::new();
+            assert_eq!(
+                privilege_gate("-Q", Privilege::ReadOnly, true, &mut quiet),
+                None
+            );
+            assert!(quiet.is_empty(), "{quiet:?}");
+        }
+    }
+
+    #[test]
+    fn maint_privilege_follows_the_verb_and_its_mutation_flags() {
+        fn inv(args: &[&str]) -> Invocation {
+            let argv: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+            match args::parse(&argv) {
+                Ok(Parsed::Invoke(inv)) => inv,
+                other => panic!("not an invocation: {other:?}"),
+            }
+        }
+        assert_eq!(maint::privilege(&inv(&["-Ma"])), Privilege::ReadOnly);
+        assert_eq!(maint::privilege(&inv(&["-Mm"])), Privilege::BuildUserOnly);
+        assert_eq!(maint::privilege(&inv(&["-Md"])), Privilege::ReadOnly);
+        assert_eq!(
+            maint::privilege(&inv(&["-Md", "--fix"])),
+            Privilege::Root {
+                needs_build_user: false
+            }
+        );
+        assert_eq!(maint::privilege(&inv(&["-Ml"])), Privilege::ReadOnly);
+        assert_eq!(
+            maint::privilege(&inv(&["-Ml", "--keep", "2"])),
+            Privilege::Root {
+                needs_build_user: false
+            }
+        );
+        assert_eq!(
+            maint::privilege(&inv(&["-Mc", "mesa-git"])),
+            Privilege::Root {
+                needs_build_user: false
+            }
+        );
+        // A dry run is a plan: never gated.
+        assert_eq!(
+            invocation_privilege(&inv(&["-Mc", "--dry-run", "mesa-git"]), &Command::Maint),
+            Privilege::ReadOnly
+        );
     }
 }

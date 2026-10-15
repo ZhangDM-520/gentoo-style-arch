@@ -55,6 +55,7 @@ set -euo pipefail
 # its own workspace), inline oracle stubs (§D.2), `fail()` prefixes, and
 # tests/lib/rr-v2.bash's `format: 2` parser + run_engine. Two deliberate
 # deviations, both precedented: the `-Sy` sections invoke the engine DIRECTLY
+# through the §B.10 privileged wrapper (`/usr/bin/sudo -n env …`, see run_sy)
 # with stdout/stderr captured separately (its contract is stream-split — the
 # disposition block on stdout, policy notes on stderr — while run_engine
 # merges), and the two §B.4 budget-less records (`-Su`'s empty-stale noop
@@ -66,7 +67,9 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/rr-v2.bash"
 
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-sync-v2.XXXXXX")
-trap 'rm -rf -- "$fixture"' EXIT
+# Root-safe cleanup: the engine writes its state tree as root (W5), so the
+# plain rm would leave Permission denied noise even on a passing run.
+trap '/usr/bin/sudo -n rm -rf -- "$fixture" 2>/dev/null || rm -rf -- "$fixture" 2>/dev/null || true' EXIT
 
 fail() {
     printf '%s\n' "$1" >&2
@@ -89,13 +92,17 @@ rr2_stub_knob GSA_FAKE_SYNC_STAGED_NAME "gsa-sync-v2 updpkgsums stub: makepkg so
 rr2_stub_knob GSA_FAKE_SYNC_MAKEPKG_LOG "gsa-sync-v2 makepkg stub: invocation log"
 
 # ─── The engine under test: built into the fixture tree (scratch only) ──────
-cargo build --offline --quiet --target-dir "$fixture/cargo" -p gsa-cli \
-    --manifest-path "$gsa_repo_root/Cargo.toml" \
-    || fail "cannot build the gsa binary for the fixture"
-gsa_bin="$fixture/cargo/debug/gsa"
-[ -x "$gsa_bin" ] || fail "cargo did not produce $gsa_bin"
+# GSA_TEST_GSA_BIN, when already set to an executable, is that engine (the
+# rr-v2.bash run_engine convention) and the scratch build is skipped.
+if [ -z "${GSA_TEST_GSA_BIN:-}" ]; then
+    cargo build --offline --quiet --target-dir "$fixture/cargo" -p gsa-cli \
+        --manifest-path "$gsa_repo_root/Cargo.toml" \
+        || fail "cannot build the gsa binary for the fixture"
+    GSA_TEST_GSA_BIN="$fixture/cargo/debug/gsa"
+fi
+[ -x "$GSA_TEST_GSA_BIN" ] || fail "the engine under test is not executable: $GSA_TEST_GSA_BIN"
 export GSA_TEST_ENGINE=gsa
-export GSA_TEST_GSA_BIN="$gsa_bin"
+export GSA_TEST_GSA_BIN
 
 # ─── Workspace/stub synthesis (oracle-shaped inline: §D.2 keeps the meaning
 # in the fixture that asserts it) ────────────────────────────────────────────
@@ -261,13 +268,29 @@ EOF
     chmod +x "$1/bin/pacman-conf"
 }
 
-# run_sy WS OUT ERR — `gsa -Sy` with STREAMS SEPARATED (the pass's contract:
-# the disposition block on stdout, policy/deferral notes on stderr). RC is
+# run_sy WS OUT ERR STATE — `gsa -Sy` with STREAMS SEPARATED (the pass's
+# contract: the disposition block on stdout, policy/deferral notes on stderr)
+# in the §B.10 privileged form: -Sy MUTATES, so it runs under the REAL
+# /usr/bin/sudo (PATH may carry stub sudos) with the fixture env forwarded
+# the way run_engine forwards it (sudo's env_reset would strip the stub PATH
+# and every GSA_FAKE_* knob). STATE is the run's state root: the -Sy phase
+# grammar DEFERS --state-dir to a later phase (rc 2, 2026-10-15), so the root
+# rides GSA_STATE_DIR and no -Sy here can reach the live /var/lib/gsa. RC is
 # returned in SY_RC; the engine always runs inside WS.
 run_sy() {
-    local ws=$1
+    local ws=$1 state=$4
+    local -a fwd=() env_args=()
+    rr2_env_forward fwd
+    local kv
+    for kv in "${fwd[@]}"; do
+        # the explicit GSA_STATE_DIR below must win over any ambient copy
+        [[ $kv == GSA_STATE_DIR=* ]] && continue
+        env_args+=("$kv")
+    done
+    env_args+=("GSA_STATE_DIR=$state")
     set +e
-    ( cd "$ws" && "$GSA_TEST_GSA_BIN" -Sy ) >"$2" 2>"$3"
+    ( cd "$ws" && /usr/bin/sudo -n env "${env_args[@]}" \
+        "$GSA_TEST_GSA_BIN" -Sy ) >"$2" 2>"$3"
     SY_RC=$?
     set -e
 }
@@ -306,7 +329,7 @@ record_block() {
 
     recipe="$ws/packages/stable/demo"
     cp "$recipe/PKGBUILD" "$fixture/s1/PKGBUILD.pre"
-    run_sy "$ws" "$fixture/s1/out" "$fixture/s1/err"
+    run_sy "$ws" "$fixture/s1/out" "$fixture/s1/err" "$fixture/s1/state"
 
     [ "$SY_RC" = 0 ] \
         || fail "-Sy happy path rc=$SY_RC, want 0:" "$fixture/s1/err"
@@ -386,7 +409,7 @@ record_block() {
 
     recipe="$ws/packages/stable/demo"
     cp "$recipe/PKGBUILD" "$fixture/s2a/PKGBUILD.pre"
-    run_sy "$ws" "$fixture/s2a/out" "$fixture/s2a/err"
+    run_sy "$ws" "$fixture/s2a/out" "$fixture/s2a/err" "$fixture/s2a/state"
 
     [ "$SY_RC" = 5 ] \
         || fail "a query-outage deferral exits 5 (§G.1), got $SY_RC:" "$fixture/s2a/err"
@@ -425,7 +448,7 @@ record_block() {
 
     recipe="$ws/packages/stable/demo"
     cp "$recipe/PKGBUILD" "$fixture/s2b/PKGBUILD.pre"
-    run_sy "$ws" "$fixture/s2b/out" "$fixture/s2b/err"
+    run_sy "$ws" "$fixture/s2b/out" "$fixture/s2b/err" "$fixture/s2b/state"
 
     [ "$SY_RC" = 5 ] \
         || fail "an anchoring-time outage defers (rc 5), got $SY_RC:" "$fixture/s2b/err"
@@ -466,7 +489,7 @@ record_block() {
 
     recipe="$ws/packages/stable/demo"
     cp "$recipe/PKGBUILD" "$fixture/s3/PKGBUILD.pre"
-    run_sy "$ws" "$fixture/s3/out" "$fixture/s3/err"
+    run_sy "$ws" "$fixture/s3/out" "$fixture/s3/err" "$fixture/s3/state"
 
     [ "$SY_RC" = 3 ] \
         || fail "an integrity stop exits 3 (§G.1), got $SY_RC:" "$fixture/s3/err"
@@ -574,7 +597,7 @@ record_block() {
     export GSA_FAKE_SYNC_STAGED_NAME=demo-3.0.0.tar.gz
     digest3=$(sha256sum "$GSA_FAKE_SYNC_PAYLOAD")
     provider_srcinfo "$GSA_FAKE_SYNC_SRCINFO" demo 3.0.0 "${digest3%% *}"
-    run_sy "$ws" "$fixture/s4/sy3.out" "$fixture/s4/sy3.err"
+    run_sy "$ws" "$fixture/s4/sy3.out" "$fixture/s4/sy3.err" "$state"
     [ "$SY_RC" = 0 ] || fail "staging -Sy rc=$SY_RC, want 0:" "$fixture/s4/sy3.err"
     grep -Fx 'pkgver=3.0.0' "$recipe/PKGBUILD" >/dev/null \
         || fail "the staging -Sy did not rewrite pkgver to 3.0.0:" "$recipe/PKGBUILD"
@@ -627,6 +650,12 @@ record_block() {
     digest=$(sha256sum "$GSA_FAKE_SYNC_PAYLOAD")
     provider_srcinfo "$GSA_FAKE_SYNC_SRCINFO" qdemo 1.0.0 "${digest%% *}"
     state="$fixture/s5/state"
+    # Pre-create the stub logs fixture-side (W5): the engine runs the pacman
+    # stubs as root, so a root-created log would block the plain `: >` reset
+    # before the --no-sync proof below with Permission denied.
+    : >"$GSA_FAKE_SYNC_SI_LOG"
+    : >"$GSA_FAKE_SYNC_PACMAN_LOG"
+    : >"$GSA_FAKE_SYNC_MAKEPKG_LOG"
 
     # run A: a REAL build — it stages the claim's evidence (the archive) and
     # the toolchain marker the drift gate reads on the claim runs

@@ -70,7 +70,7 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/rr-v2.bash"
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-install-guard.XXXXXX")
-trap 'rm -rf -- "$fixture"' EXIT
+trap '/usr/bin/sudo -n rm -rf -- "$fixture" 2>/dev/null || rm -rf -- "$fixture" 2>/dev/null || true' EXIT
 
 fail() {
     printf 'install archive guard fixture: %s\n' "$1" >&2
@@ -261,11 +261,11 @@ assert_decisions() {
         printf '%s: seam rc=%s want=%s (§E.5):\n%s\n' "$label" "$FIXTURE_RC" "$rc" "$FIXTURE_OUTPUT" >&2
         exit 1
     fi
-    if [ "$rc" = 0 ] && printf '%s\n' "$got" | grep -q ' refuse '; then
+    if [ "$rc" = 0 ] && vgrep "$got" -q ' refuse '; then
         printf '%s: an rc 0 plan contains a refuse row (§E.5): %s\n' "$label" "$got" >&2
         exit 1
     fi
-    if [ "$rc" = 1 ] && ! printf '%s\n' "$got" | grep -q ' refuse '; then
+    if [ "$rc" = 1 ] && ! vgrep "$got" -q ' refuse '; then
         printf '%s: an rc 1 plan has no refuse row (§E.5): %s\n' "$label" "$got" >&2
         exit 1
     fi
@@ -461,7 +461,7 @@ rr2_body <<<"$FIXTURE_OUTPUT" >/dev/null || fail "B: no complete format: 2 run r
     fail "B: the run must record outcome refused, never success: $FIXTURE_OUTPUT"
 [ "$(rr2_scalar rc <<<"$FIXTURE_OUTPUT")" = "$FIXTURE_RC" ] ||
     fail "B: the record's rc scalar disagrees with the process exit code: $FIXTURE_OUTPUT"
-rr2_outcome p1 reason <<<"$FIXTURE_OUTPUT" | grep -q '^install-refused empty-list' ||
+grep < <(rr2_outcome p1 reason <<<"$FIXTURE_OUTPUT") -q '^install-refused empty-list' ||
     fail "B: the failing row must name the empty install set: $FIXTURE_OUTPUT"
 [ "$(pacman_mut_count "$ws/pacman.log")" = 0 ] ||
     fail "B: pacman ran with nothing to install:" "$ws/pacman.log"

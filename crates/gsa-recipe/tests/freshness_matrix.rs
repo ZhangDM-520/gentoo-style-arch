@@ -43,14 +43,19 @@ impl Drop for EnvRestore {
 }
 
 /// One test's private scratch + PATH stub dir + restored environment.
+/// Field order is load-bearing: fields drop in declaration order, so
+/// `_restore` must be declared BEFORE `_lock` — the environment is restored
+/// while ENV_LOCK is still held, never after it is released (a later test
+/// could otherwise acquire the lock, swap PATH to its own stubs, and have
+/// this test's still-pending restore clobber them).
 struct Fixture {
     #[allow(dead_code)]
     dir: PathBuf,
     stubs: PathBuf,
     recipe: PathBuf,
     log: PathBuf,
-    _lock: MutexGuard<'static, ()>,
     _restore: EnvRestore,
+    _lock: MutexGuard<'static, ()>,
 }
 
 fn write_script(path: &Path, body: &str) {

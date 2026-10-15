@@ -545,6 +545,16 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
         db: &db,
     };
 
+    // ── privilege gate (contract §B.10; after every usage preflight) ─────
+    if let Some(code) = crate::privilege_gate(
+        &inv.spelling(),
+        crate::invocation_privilege(inv, &crate::Command::Upgrade),
+        true,
+        err,
+    ) {
+        return code;
+    }
+
     // ── items in plan order: archives, discovered sets, refusals ─────────
     let mut items: Vec<Item> = Vec::new();
     if all {
@@ -1522,6 +1532,18 @@ pub fn run_install_register(args: &[String], out: &mut dyn Write, err: &mut dyn 
     let conf = Path::new(&args[0]);
     let subject = &args[1];
     let names = &args[2..];
+    // Privilege gate (contract §B.10) AFTER the usage fence — §G.1 ranks
+    // usage (2) above refusal (3).
+    if let Some(code) = crate::privilege_gate(
+        "--install-register",
+        crate::Privilege::Root {
+            needs_build_user: false,
+        },
+        false,
+        err,
+    ) {
+        return code;
+    }
     match register_ignorepkg(conf, subject, names, &pacman_db_root()) {
         Ok(report) => {
             let _ = writeln!(out, "{}", register_report_line(subject, conf, &report));
@@ -1569,6 +1591,18 @@ pub fn run_register_ignorepkg(args: &[String], out: &mut dyn Write, err: &mut dy
             return 2;
         }
     };
+    // Privilege gate (contract §B.10) AFTER the usage fences — §G.1 ranks
+    // usage (2) above refusal (3).
+    if let Some(code) = crate::privilege_gate(
+        "--register-ignorepkg",
+        crate::Privilege::Root {
+            needs_build_user: false,
+        },
+        false,
+        err,
+    ) {
+        return code;
+    }
     let mut names: BTreeSet<String> = BTreeSet::new();
     for id in &db.order {
         let Some(meta) = db.get(id.as_str()) else {

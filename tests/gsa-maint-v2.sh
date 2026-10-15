@@ -97,7 +97,10 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/rr-v2.bash"
 
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-maint-v2.XXXXXX")
-trap 'rm -rf -- "$fixture"' EXIT
+# Root-safe cleanup: a privileged run leaves ROOT-owned state behind (§B.10 —
+# engine-side state is root-owned), so the EXIT trap escalates first through
+# the ABSOLUTE /usr/bin/sudo (never the PATH stub).
+trap '/usr/bin/sudo -n rm -rf -- "$fixture" 2>/dev/null || rm -rf -- "$fixture" 2>/dev/null || true' EXIT
 
 fail() {
     printf '%s\n' "$1" >&2
@@ -251,7 +254,7 @@ if want a; then
         has_row "$FIXTURE_OUTPUT" "stale-artifact $state/junk.tmp.1 tmp-artifact" "stale tmp artifact"
 
         # Report-only means findings never change rc — prove findings exist.
-        [ "$(printf '%s\n' "$FIXTURE_OUTPUT" | grep -c ' unregistered-recipe-dir')" -ge 1 ] ||
+        [ "$(vgrep "$FIXTURE_OUTPUT" -c ' unregistered-recipe-dir')" -ge 1 ] ||
             fail "-Ma must actually report findings (else rc 0 proves nothing): $FIXTURE_OUTPUT"
 
         # Each family summary agrees with its own finding rows (derived).
@@ -475,12 +478,12 @@ source=("git+https://example.invalid/clone.git")' git
             # refusal IS the assertion here.
             run_engine "$ws" -Mm --noconfirm --state-dir "$state"
             [ "$FIXTURE_RC" = 3 ] || fail "as root -Mm must refuse (rc 3), got $FIXTURE_RC: $FIXTURE_OUTPUT"
-            printf '%s\n' "$FIXTURE_OUTPUT" | grep -F "must run as the build user" >/dev/null ||
+            vgrep "$FIXTURE_OUTPUT" -F "must run as the build user" >/dev/null ||
                 fail "the root refusal must say why: $FIXTURE_OUTPUT"
             echo "skip: -Mm apply model (fixture runs as root; the engine's refusal was asserted)"
         else
             # --dry-run: the plan renders, rc 0, nothing is touched.
-            run_engine "$ws" -Mm --dry-run --state-dir "$state"
+            run_engine_user "$ws" -Mm --dry-run --state-dir "$state"
             [ "$FIXTURE_RC" = 0 ] || fail "-Mm --dry-run is rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
             has_row "$FIXTURE_OUTPUT" "link planned -> ../mfirst/mirror" "planned dangling link"
             has_row "$FIXTURE_OUTPUT" "skip populated-non-git msecond" "populated non-git skip row"
@@ -491,9 +494,9 @@ source=("git+https://example.invalid/clone.git")' git
 
             # Without --noconfirm the plan prints and the run STOPS rc 3
             # (the engine never prompts, §K.3) — nothing applied.
-            run_engine "$ws" -Mm --state-dir "$state"
+            run_engine_user "$ws" -Mm --state-dir "$state"
             [ "$FIXTURE_RC" = 3 ] || fail "-Mm without --noconfirm must stop rc 3, got $FIXTURE_RC: $FIXTURE_OUTPUT"
-            printf '%s\n' "$FIXTURE_OUTPUT" | grep -F "confirmation-required" >/dev/null ||
+            vgrep "$FIXTURE_OUTPUT" -F "confirmation-required" >/dev/null ||
                 fail "the stop must name confirmation-required: $FIXTURE_OUTPUT"
             has_row "$FIXTURE_OUTPUT" "link planned -> ../mfirst/mirror" "the plan is printed"
             [ ! -e "$ws/packages/mthird/mirror" ] || fail "the unconfirmed run must apply nothing"
@@ -501,7 +504,7 @@ source=("git+https://example.invalid/clone.git")' git
 
             # --noconfirm applies: the link lands (dangling at its missing
             # canonical), the populated non-git dir survives untouched.
-            run_engine "$ws" -Mm --noconfirm --state-dir "$state"
+            run_engine_user "$ws" -Mm --noconfirm --state-dir "$state"
             [ "$FIXTURE_RC" = 0 ] || fail "-Mm --noconfirm is rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
             has_row "$FIXTURE_OUTPUT" "link applied -> ../mfirst/mirror" "applied link row"
             [ -L "$ws/packages/mthird/mirror" ] || fail "the twin must become a symlink"
@@ -566,7 +569,7 @@ if want f; then
         # adapter gates the name before any kv work).
         [ "$FIXTURE_RC" = 2 ] ||
             fail "a computed-set edit is usage (rc 2), got $FIXTURE_RC: $FIXTURE_OUTPUT"
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -F "computed set" >/dev/null ||
+        vgrep "$FIXTURE_OUTPUT" -F "computed set" >/dev/null ||
             fail "the refusal must name the computed set: $FIXTURE_OUTPUT"
         [ "$(config_sha)" = "$config_before" ] || fail "a refused edit must never rewrite config/sets"
 
@@ -672,11 +675,15 @@ $(diff -u "$fixture/g/emitted2" "$fixture/g/show2" || true)"
             fail "the unfinished seed did not take (wire shape drift?): $base"
         seed_finished=55
         seed_unfinished=2
+        # The engine's state root is ROOT-owned under the W5 privilege model
+        # (run_engine's supervisor is real sudo), so the fixture's history
+        # seeds escalate through the ABSOLUTE /usr/bin/sudo — the PATH stub
+        # never sees fixture-side writes.
         for _ in $(seq 1 "$seed_finished"); do
-            printf '%s\n' "$base" >>"$hist"
+            printf '%s\n' "$base" | /usr/bin/sudo -n tee -a "$hist" >/dev/null
         done
         for _ in $(seq 1 "$seed_unfinished"); do
-            printf '%s\n' "$unfinished_line" >>"$hist"
+            printf '%s\n' "$unfinished_line" | /usr/bin/sudo -n tee -a "$hist" >/dev/null
         done
 
         # Derived retention math (history.rs: newest RUN_HISTORY_KEEP=50
@@ -769,7 +776,9 @@ source=("git+https://example.invalid/gsrc.git")' git
             sed 's/"remaining":\[\]/"remaining":["pralpha"]/')
         [ "$protected_line" != "$base" ] ||
             fail "the protected seed did not take (wire shape drift?): $base"
-        printf '%s\n' "$protected_line" >>"$hist"
+        # Root-owned state root (W5): the seed escalates through the ABSOLUTE
+        # /usr/bin/sudo, like every fixture-side write into engine state.
+        printf '%s\n' "$protected_line" | /usr/bin/sudo -n tee -a "$hist" >/dev/null
 
         # Synthetic makepkg state beside the recipes (§J.2).
         for id in pralpha prbeta prgamma; do
@@ -792,15 +801,19 @@ source=("git+https://example.invalid/gsrc.git")' git
         ln -s "$outside" "$ws/packages/prbeta/prbeta-link-1.0.0-1-any.pkg.tar.zst"
 
         # ── run-in-flight gate (§K.3): a mutating verb refuses rc 3 ──────
-        mkdir -p "$state/locks"
-        : >"$state/locks/run.lock"
+        # Root-owned state root (W5): the lock file the engine probes is
+        # created as root; the fixture holder opens it READ-ONLY — flock(2)
+        # locks the open file description regardless of access mode — so the
+        # holder stays an ordinary fixture child.
+        /usr/bin/sudo -n mkdir -p "$state/locks"
+        /usr/bin/sudo -n touch "$state/locks/run.lock"
         ready="$fixture/h/lock.ready"
         # flock(1) in fd mode: the subshell holds the flock through fd 9 and
         # execs `sleep`, so the background pid IS the lock holder and
         # killing it releases the lock (a forked `flock … sleep` child would
         # outlive its killer and keep the lock fd).
         (
-            exec 9>>"$state/locks/run.lock"
+            exec 9<"$state/locks/run.lock"
             flock -x 9
             : >"$ready"
             exec sleep 30
@@ -813,7 +826,7 @@ source=("git+https://example.invalid/gsrc.git")' git
         [ -f "$ready" ] || fail "the flock holder never took the run lock"
         run_engine "$ws" -Mc --state-dir "$state" prbeta
         [ "$FIXTURE_RC" = 3 ] || fail "a mutating verb under a held run lock is rc 3 (§K.3), got $FIXTURE_RC: $FIXTURE_OUTPUT"
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -F "run-in-flight" >/dev/null ||
+        vgrep "$FIXTURE_OUTPUT" -F "run-in-flight" >/dev/null ||
             fail "the refusal must name run-in-flight: $FIXTURE_OUTPUT"
         [ -f "$ws/packages/prbeta/prbeta-1.0.0-1-any.pkg.tar.zst" ] ||
             fail "a refused prune must delete nothing"
@@ -874,7 +887,7 @@ source=("git+https://example.invalid/gsrc.git")' git
         # ── strength 3 (-Mccc): confirmation model + pulled sources ──────
         run_engine "$ws" -Mccc --state-dir "$state"
         [ "$FIXTURE_RC" = 3 ] || fail "-Mccc without --noconfirm stops rc 3, got $FIXTURE_RC: $FIXTURE_OUTPUT"
-        printf '%s\n' "$FIXTURE_OUTPUT" | grep -F "confirmation-required" >/dev/null ||
+        vgrep "$FIXTURE_OUTPUT" -F "confirmation-required" >/dev/null ||
             fail "the stop must name confirmation-required: $FIXTURE_OUTPUT"
         has_row "$FIXTURE_OUTPUT" "$ws/packages/prbeta/bsrc.tar.gz prune source-download" "the plan lists the pulled download"
         has_row "$FIXTURE_OUTPUT" "$ws/packages/prgamma/gsrc prune source-clone" "the plan lists the source clone"
@@ -895,7 +908,7 @@ source=("git+https://example.invalid/gsrc.git")' git
         done
         # The pulled source clone is a directory target: strength 3 removes
         # it recursively and the row agrees with the filesystem.
-        clone_row=$(printf '%s\n' "$FIXTURE_OUTPUT" | grep -F "$ws/packages/prgamma/gsrc " || true)
+        clone_row=$(vgrep "$FIXTURE_OUTPUT" -F "$ws/packages/prgamma/gsrc " || true)
         case $clone_row in
         *" pruned source-clone"*)
             [ ! -e "$ws/packages/prgamma/gsrc" ] ||

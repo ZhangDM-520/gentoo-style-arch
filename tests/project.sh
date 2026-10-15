@@ -81,7 +81,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/rr-v2.bash"
 
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-project.XXXXXX")
-trap 'rm -rf -- "$fixture"' EXIT
+trap '/usr/bin/sudo -n rm -rf -- "$fixture" 2>/dev/null || rm -rf -- "$fixture" 2>/dev/null || true' EXIT
 
 fail() {
     printf '%s\n' "$1" >&2
@@ -94,11 +94,15 @@ fail() {
 # ─── Stub-knob vocabulary (§D.2: declared here in the change that adds them) ─
 rr2_stub_knob GSA_FAKE_STDOUT_LOG "project.sh gsa-split wrapper: pure-stdout capture (stderr sidecar at <log>.err)"
 
-# ─── The engine under test: built into the fixture tree (scratch only) ──────
-cargo build --offline --quiet --target-dir "$fixture/cargo" -p gsa-cli \
-    --manifest-path "$gsa_repo_root/Cargo.toml" \
-    || fail "cannot build the gsa binary for the fixture"
-gsa_bin="$fixture/cargo/debug/gsa"
+# ─── The engine under test: scratch build only when GSA_TEST_GSA_BIN is not
+# already set (the rr-v2.bash run_engine convention) ──────────────────────
+if [ -z "${GSA_TEST_GSA_BIN:-}" ]; then
+    cargo build --offline --quiet --target-dir "$fixture/cargo" -p gsa-cli \
+        --manifest-path "$gsa_repo_root/Cargo.toml" \
+        || fail "cannot build the gsa binary for the fixture"
+    GSA_TEST_GSA_BIN="$fixture/cargo/debug/gsa"
+fi
+gsa_bin="$GSA_TEST_GSA_BIN"
 [ -x "$gsa_bin" ] || fail "cargo did not produce $gsa_bin"
 export GSA_TEST_ENGINE=gsa
 export GSA_TEST_GSA_BIN="$gsa_bin"
@@ -711,7 +715,7 @@ rr_dry_cont() {
         fail "f: the dry-run continuation does not mirror --dry-run (§H.2): $(rr_dry_cont command)"
     [ "$(rr_dry_cont remaining)" = 'x c1 c2' ] ||
         fail "f: dry-run remaining [$(rr_dry_cont remaining)] != its rows [x c1 c2]"
-    if find "$ws/packages" -name '*.pkg.tar.zst' -print -quit | grep -q .; then
+    if grep < <(find "$ws/packages" -name '*.pkg.tar.zst' -print -quit) -q .; then
         fail "f: --dry-run built an archive (it must never build)"
     fi
 
