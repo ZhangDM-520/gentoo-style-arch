@@ -34,7 +34,7 @@ pub fn run_fetch_only(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write
         return 2;
     }
     // ── workspace, topology, selection (usage class: rc 2) ────────────────
-    let root = match crate::resolve_root(true) {
+    let root = match crate::resolve_workspace(inv) {
         Ok(root) => root,
         Err(message) => {
             let _ = writeln!(err, "gsa: {message}");

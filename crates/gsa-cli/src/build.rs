@@ -98,7 +98,9 @@ fn run_build_with(
         return 2;
     }
     // ── workspace, topology, selection (usage class: rc 2) ────────────────
-    let root = match crate::resolve_root(true) {
+    // A standalone-target run staged its own workspace (plan W4); the rest
+    // discover the recipe workspace as before.
+    let root = match crate::resolve_workspace(inv) {
         Ok(root) => root,
         Err(message) => {
             let _ = writeln!(err, "gsa: {message}");
@@ -793,7 +795,7 @@ pub(crate) fn plan_only(
 /// `--dry-run` never rewrites recipes and renders the plan record only. An
 /// empty stale set is the §E.3 `noop empty-list` row, rc 0.
 pub fn run_update(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
-    let root = match crate::resolve_root(true) {
+    let root = match crate::resolve_workspace(inv) {
         Ok(root) => root,
         Err(message) => {
             let _ = writeln!(err, "gsa: {message}");

@@ -1334,6 +1334,21 @@ over another recipe's archive. Fixtures route `GSA_BUILD_DIR` into `$TMPDIR`
 (rr-v2's guard + `run-all.sh` export) — an engine run must never create real
 home directories.
 
+Standalone-PKGBUILD input (W4c; 2026-10-16): a target may be a shared recipe
+directly — a `PKGBUILD` file path, a directory holding one (copied minus
+top-level `src/`/`pkg/`/`build/` and `*.pkg.tar.zst`), or a URL of one. The
+run stages each as its own recipe in a one-node workspace under
+`<state>/standalone/` (rewritten wholesale per run) and builds THERE — "gsa +
+the recipe, no project clone required". Workspace references win the
+disambiguation (a token the discoverable workspace answers stays a ref), a
+run never mixes the two (rc 2), and query/report verbs refuse standalone
+targets (v1). `--dry-run` and gate-refused runs stage ephemerally in the
+temp dir — a refused run must leave no state behind. Each staged recipe tree
+is chowned to the build user (`own_to_build_user`): $startdir is a
+build-domain path and a root-owned tree poisons build-side writes (a fixture
+stub caught exactly that: `mkdir .stage-…: Permission denied`, red-first).
+Pinned by `tests/gsa-standalone.sh` (a–e).
+
 `--intensity xhigh` is the default automatic plan. It derives bounded lanes
 and a global normal-lane job budget from CPU threads and available memory
 (`gsa-sched`'s budget; formulas in `docs/portability.md`);

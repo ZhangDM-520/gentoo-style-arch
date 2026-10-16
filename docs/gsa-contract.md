@@ -347,6 +347,37 @@ The gate runs **after each entry's usage preflights** and before the first
 state write: §G.1's precedence (usage 2 > refusal 3) means a typo is always
 reported before privilege. `--dry-run` renders plans and is never gated.
 
+### B.11 Configuration, workspace resolution, and staging
+
+**The `gsa.conf` layers** (plan-gsa-isolation.md W2): the engine auto-reads
+`/etc/gsa.conf` (system) then `~/.config/gsa/gsa.conf` (user), user over
+system over built-in defaults. Keys: `project`, `recipe_url`, `build_dir`,
+`state_dir`. `~` expands to the build user's home (`SUDO_UID`'s home when
+running under `sudo`, else `HOME`); an unknown key or malformed line is an
+error naming file:line and key — never a silent default (usage class, rc 2).
+`GSA_CONF` replaces both auto-read layers with exactly one file (fixture and
+hermetic control, like `GSA_STATE_DIR`).
+
+**Workspace resolution** (plan-gsa-isolation.md W3), in order: the `project`
+config key (dev/deployment override); the cwd walk (deprecated — a TTY run
+notes it, pipe output stays byte-stable); the canonical recipe store
+`<state-dir>/recipes` (§J.1), fetched on demand from `recipe_url` (default: the
+recipe repository) by mutating runs and refreshed in place by `gsa -Sy`. The
+store is root-owned engine state and never hand-edited.
+
+**Standalone staging** (plan-gsa-isolation.md W4, target shapes in §C.1): a
+run of standalone targets stages each as `packages/misc/<id>/` in its own
+one-node workspace under `<state-dir>/standalone/` (`config/topology.conf`
+record `<id>|packages/misc/<id>|misc|`, the build-defaults skeleton, no
+edges), rewritten wholesale on every run (delete first). A `--dry-run` and a
+run the privilege gate will refuse stage **ephemerally** under the temp dir
+and clean up after dispatch — a dry run writes nothing (§B.10) and a refused
+run leaves no state. The staged ids replace the run's targets and the entry
+resolves its workspace as the staged one; each staged recipe tree is handed to
+the build user (`own_to_build_user`, §B.10) so build-side commands may write
+there. Staging failures (unreadable target, `curl` failure, unusable name) are
+usage errors naming the target.
+
 ## C. Selection semantics
 
 Vocabulary is `CONTEXT.md`'s and is normative: **recipe**, **topology record**,
@@ -365,6 +396,29 @@ naming the unknown reference and the nearest candidates. A selection that
 resolves to zero packages (for example a roster group with no members) is a
 usage error (rc 2) with the reason `selection resolved to no packages` — never
 a successful no-op.
+
+**Standalone PKGBUILD input** (plan-gsa-isolation.md W4's distribution unit:
+"sharing a package = sharing its PKGBUILD; rebuilding = gsa + the recipe, no
+project clone required"). A target may also name a shared recipe directly:
+
+- a `PKGBUILD` **file path** (only that file is staged; sibling local sources
+  must be URLs — the v1 limitation is documented, not hidden),
+- a **directory holding a `PKGBUILD`** (copied minus makepkg's output dirs
+  `src/`, `pkg/`, `build/` and `*.pkg.tar.zst` archives at the top level), or
+- a **URL** of a `PKGBUILD` (`http(s)://…`, or `file://…` for a local mirror —
+  whatever `curl` speaks; only the PKGBUILD is fetched).
+
+Each such target is **staged** as its own recipe in a one-node workspace and
+the run operates on that workspace (§B.11's staging model). Workspace
+references win: a token a discoverable workspace answers as a reference (the
+vocabulary above) stays one even if it also names a directory holding a
+`PKGBUILD` — documented recipe-path refs keep working inside the recipe
+repository. A run cannot mix standalone targets with workspace references
+(usage error naming both sets). Build/install/fetch/maintain runs and their
+`--dry-run` plan take standalone targets; query/report verbs do not (yet) and
+answer a usage error naming the limitation. The staged id is derived from the
+target (directory name; the file's parent directory name; the URL path segment
+before the `PKGBUILD` leaf), sanitized to the topology id charset.
 
 ### C.2 Groups and sets
 
@@ -587,7 +641,7 @@ mapping from lane code to status is total and defined in §H.3.
 | --- | --- | --- |
 | 0 | success | every selected package `succeeded` (including skip reasons); no `failed`, `deferred`, or `parked` row |
 | 1 | build failure under `--fail-fast` | ≥1 `failed` row and dispatch stopped (drain completed) |
-| 2 | usage error | bad flags, unknown reference/typo (with nearest candidates), invalid range, **empty selection** (`selection resolved to no packages`), malformed config record |
+| 2 | usage error | bad flags, unknown reference/typo (with nearest candidates), invalid range, **empty selection** (`selection resolved to no packages`), malformed config record or `gsa.conf` layer (§B.11), a standalone-target refusal (mixed with workspace references, query/report verb, staging failure — §C.1) |
 | 3 | refusal | the run refused to start or aborted at a fail-closed gate: privilege refusal (§B.10 — not root, no build user, or `-Mm` under root), preflight (`sudo cannot install non-interactively`), integrity stop (published checksum mismatch — `docs/build-guide.md`), install refusal (a `refuse` decision row reached execution) |
 | 4 | parked-cone-with-failures | **cone-stop (default) run with ≥1 `failed` row** — dispatch continued with unrelated work; parked rows may be empty when the failed package is a leaf |
 | 5 | deferral-only | ≥1 `deferred`/`parked` row and no `failed` row (extension of the six-class list; preserves "a deferral exits non-zero" without claiming a build failure) |
@@ -851,6 +905,8 @@ escape flag**, and both are normative here:
 | Path | Content |
 | --- | --- |
 | `/var/lib/gsa/index/` | the binpkg index (J.4) |
+| `/var/lib/gsa/recipes/` | the canonical recipe store (§B.11): root-fetched from `recipe_url`, refreshed by `gsa -Sy`, never hand-edited |
+| `/var/lib/gsa/standalone/` | standalone-target staging work areas (§B.11, §C.1): one staged one-node workspace per run, rewritten wholesale |
 | `/var/lib/gsa/abi/` | ABI token records and subscription records (`consumer\|version\|provider\|token`), installed-ELF index (Phase 4), preserved-lib registry (Phase 4) |
 | `/var/lib/gsa/world`, `/var/lib/gsa/sets/` | the world file and user sets (`config/sets/` remains the committed source; the state root holds the runtime copy) |
 | `/var/lib/gsa/runs/` | run history: one recorded run record per run (the `format: 2` struct), its continuation, and the bounded retention bookkeeping |
@@ -863,22 +919,31 @@ Logs live under the state root, not `/var/log/gsa`: one root means one
 ownership rule (§J.5), one override, and one prune story; these are per-run
 engine artifacts, not syslog material.
 
-### J.2 What stays beside recipes (unchanged)
+### J.2 What stays with the build user (W4's relocation)
 
-makepkg state — source mirrors (`SRCDEST`), `src/`, `pkg/`, `build/`, and the
-finished `.pkg.tar.zst` archives — stays **beside each recipe** (`PKGDEST`
-defaults to `$startdir`). The binpkg index refers to those archives by
-hash; it does not move them. Per-archive VCS revision baselines stay with
-their archives.
+makepkg's working state lands in the **build user's cache**, never beside the
+recipe: the engine passes `BUILDDIR` (build trees), `PKGDIR` (staging) and
+`PKGDEST` (finished `.pkg.tar.zst` archives) at `$GSA_BUILD_DIR` /
+config `build_dir` / `<build-user-home>/.cache/gsa` (`build/`, `pkg/`, `pkgs/`
+below it), creating and handing those dirs to the build user (§B.10).
+`SRCDEST` stays governed by `makepkg.conf` untouched. The binpkg index refers
+to the archives by hash wherever they live; archive discovery scans the shared
+`PKGDEST` plus the recipe dir (pre-W4 trees) and matches every candidate by
+`.PKGINFO`/output-name truth, so a shared `PKGDEST` can never hand over
+another recipe's archive. Per-archive VCS revision baselines stay with their
+archives.
 
 ### J.3 State-dir override (first-class)
 
-`--state-dir PATH` (flag beats env) and `GSA_STATE_DIR` relocate the ENTIRE
-state root — fixtures use a `$TMPDIR` workspace, unprivileged runs may use a
-user-writable path. The default is `/var/lib/gsa`; when it is unwritable and no
-override is given, the run fails early, naming `--state-dir` as the remedy.
-There is never a silent fallback to a home or workspace-local directory: a
-split state root is the failure mode §J.5 exists to prevent.
+`--state-dir PATH` beats `GSA_STATE_DIR` beats the `gsa.conf` layers'
+`state_dir` (§B.11) beats the built-in `/var/lib/gsa` — fixtures use a
+`$TMPDIR` workspace, unprivileged runs may use a user-writable path. When the
+resolved root is unwritable and no override is given, the run fails early,
+naming `--state-dir` as the remedy. There is never a silent fallback to a home
+or workspace-local directory: a split state root is the failure mode §J.5
+exists to prevent. `GSA_BUILD_DIR` (or config `build_dir`, §J.2) is the
+matching override for the build cache — the two roots are relocated
+separately and never silently merged.
 
 ### J.4 The binpkg index (hash-bound, manifest-v2 style)
 
@@ -926,8 +991,11 @@ A lane is an isolated child process group per package that **exec's** the
 makepkg supervisor — no interpreter per lane. Build-side commands are dropped
 to the build user (§B.10); `makepkg` never runs as root. The engine exports
 the lane's job count as `GSA_BUILD_JOBS` and rewrites `MAKEFLAGS`/`NINJAFLAGS`
-(stripping their `-jN`, preserving the caller's other flags). Per-package logs
-are written under the state root through the ownership gate (§J.5).
+(stripping their `-jN`, preserving the caller's other flags). Every makepkg
+spawn additionally carries `BUILDDIR`/`PKGDIR`/`PKGDEST` for the build-user
+cache (§J.2) and `GIT_CONFIG_COUNT=0`; the `PACMAN` shim keeps makepkg's own
+dependency installs on the transaction lock (§K.3). Per-package logs are
+written under the state root through the ownership gate (§J.5).
 
 ### K.2 Scheduling invariants (kept)
 

@@ -1,19 +1,23 @@
 # plan-gsa-isolation.md — pacman-class isolation for the gsa engine (directories, privilege, distribution)
 
-**Status:** W1 implemented and verified 2026-10-15 (privilege handle;
-`gsa-model::privilege` is the landed home, not `gsa-build::priv`).
-W2 (config surface) and W3 (canonical recipe store) implemented and verified
-2026-10-16 (`gsa_model::config`, `gsa_state::recipes`, `tests/gsa-store-v2.sh`;
-docs/NOTE.md same date records the settled design decisions and the W1
-audit). W4 first half (build/cache relocation to the build user's cache,
-`GSA_BUILD_DIR`, truth-filtered dual-location archive discovery) landed and
-verified 2026-10-16; W4's remainder is the strict single-location flip of the
-archive-writing fixture stubs, the standalone-PKGBUILD distribution input, and
-the contract amendments (`docs/gsa-contract.md` §B/§G/§J/§K,
-`plan-native-pm.md` addendum). Supersedes the deployment/directory
-assumptions in `plan-native-pm.md` where they conflict (the engine
-architecture itself stands); `plan.md` (fetch-ahead) is untouched and stays a
-subsystem design.
+**Status: COMPLETE (2026-10-16).** W1 implemented and verified 2026-10-15
+(privilege handle; `gsa-model::privilege` is the landed home, not
+`gsa-build::priv`). W2 (config surface) and W3 (canonical recipe store)
+implemented and verified 2026-10-16 (`gsa_model::config`, `gsa_state::recipes`,
+`tests/gsa-store-v2.sh`; docs/NOTE.md same date records the settled design
+decisions and the W1 audit). W4 (build/cache relocation to the build user's
+cache with `GSA_BUILD_DIR`, truth-filtered dual-location archive discovery,
+the standalone-PKGBUILD distribution input — stage → build → index,
+`tests/gsa-standalone.sh` a–e — and the contract amendments
+(`docs/gsa-contract.md` §B.11/§C.1/§G/§J/§K, this file's addendum in
+`plan-native-pm.md`, `docs/MEMORY.md`, `docs/NOTE.md`) landed and verified
+2026-10-16. The one item carried as follow-up hardening beyond this plan: the
+strict single-location flip of the archive-writing fixture stubs (discovery
+stays truth-filtered across `PKGDEST` + recipe dir meanwhile — a plan
+non-goal keeps fixture semantics intact). Supersedes the
+deployment/directory assumptions in `plan-native-pm.md` where they conflict
+(the engine architecture itself stands); `plan.md` (fetch-ahead) is untouched
+and stays a subsystem design.
 
 ## TL;DR
 

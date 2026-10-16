@@ -1,3 +1,76 @@
+## 2026-10-16 — restructure waves W4c+W4d: standalone-PKGBUILD target input (stage → build → index) and the contract amendments — plan complete
+
+**What landed (plan-gsa-isolation.md W4, second half — the plan is now
+COMPLETE).** `gsa` accepts a shared recipe as a target: a `PKGBUILD` file
+path, a directory holding one (copied minus top-level `src/`/`pkg/`/`build/`
+and `*.pkg.tar.zst`), or a URL of one (any scheme `curl` speaks — `file://` is
+the network-free fixture seam). New `crates/gsa-cli/src/standalone.rs` stages
+each such target as its own recipe (`packages/misc/<id>/`, record
+`<id>|packages/misc/<id>|misc|`) in a one-node workspace under
+`<state>/standalone/`, rewritten wholesale per run (delete first), then runs
+the normal pipeline there — the distribution unit is the PKGBUILD and no
+project clone is needed. Staged ids replace the selection; the 6 inv-carrying
+entry sites resolve their workspace through `crate::resolve_workspace`
+(prefer `inv.standalone_root`; the hidden `--register-ignorepkg` seam keeps
+`resolve_root` — raw args, no Invocation). The post-build hook then indexes
+the instance as usual, closing the plan's "stage → build → index".
+
+**Design decisions settled this wave.**
+- Workspace references win the disambiguation: a token a discoverable
+  workspace answers (the exact `select::resolve_ref` vocabulary) stays a ref
+  even if it names a directory with a PKGBUILD — documented recipe-path refs
+  keep working inside the repo. A run never mixes standalone and workspace
+  targets (rc 2 naming both sets); query/report verbs refuse standalone
+  targets (v1, documented in help + contract §C.1).
+- `classify` maps `--dry-run` builds to `Command::Plan` (dispatched through
+  `execute()`), so Plan is a supported standalone verb and `execute()`'s root
+  resolution honors `standalone_root` too. Ephemeral staging (temp dir,
+  cleaned after dispatch) covers `--dry-run` AND runs the privilege gate will
+  refuse — a refused run must leave no state behind (fixture (c) pins it).
+- Staged ids derive from the target (dir name / parent-dir name / URL segment
+  before the `PKGBUILD` leaf), sanitized to the topology id charset with
+  collision bumps and a `standalone` fallback.
+
+**Bug caught red-first (the fixture stub, and it was real).** The staged
+recipe tree was root-owned while makepkg runs as the build user: the stub's
+in-tree stage write died `mkdir .stage-…: Permission denied`, and because the
+stub exited 0 anyway the archive was a bogus empty file — the binpkg index
+(fail closed on `.PKGINFO` truth) stayed empty and only the index assertion
+caught it. Fix: every staged recipe tree is handed to the build user
+(`own_to_build_user`) — $startdir is a build-domain path, the W1 rule "an
+engine-side write into a build-user path is chowned back" applies to staging
+as it does to the cache dirs — and the fixture stub now runs `set -eu` with a
+real `.pkg.tar.zst` (`.PKGINFO` truth, gsa-state-v2's synthesis shape) so a
+failure can never fake green again.
+
+**W4d (contract amendments).** `docs/gsa-contract.md`: new §B.11 (gsa.conf
+layers, workspace resolution order, staging model), §C.1 standalone target
+input, §G.1 usage-class additions, §J.1 (`recipes/`, `standalone/` rows),
+§J.2 rewritten ("what stays with the build user" — the pre-W4 "stays beside
+recipes" text was stale after W4a), §J.3 (layer precedence + `GSA_BUILD_DIR`),
+§K.1 (spawn env `BUILDDIR`/`PKGDIR`/`PKGDEST`). `plan-native-pm.md` gained the
+dated supersede addendum; `plan-gsa-isolation.md` is marked COMPLETE (the one
+carry-over: the strict single-location fixture-stub flip, follow-up hardening
+beyond the plan). `docs/MEMORY.md` gained the W4c paragraph beside the W2/W3
+and W4a ones. `--help` documents the standalone target input and drops two
+stale "archives beside the recipes" claims.
+
+**Validation.** `cargo test --workspace` green (standalone.rs adds 6 unit
+tests: classification incl. `file://`, name derivation/sanitization, staging
+content and collision dedupe). Full battery green **68/68** — the new
+`tests/gsa-standalone.sh` pins a–e: dir target (staged id in the record, dry
+run writes no state), bare PKGBUILD file, mixed-target and query-verb
+refusals, the real `sudo` run (stage → build → index: record names the staged
+id, archive in `GSA_BUILD_DIR/pkgs` never beside the recipe, index row, staged
+work area persists) and the URL intake.
+
+**Durable rules.** (1) A staged recipe tree is a build-domain path: hand it to
+the build user before any build-side command runs. (2) Fixture stubs that
+model makepkg must exit non-zero when their real work fails — a stub that
+errors then exits 0 converts a broken run into a fake-green one. (3) The
+standalone/workspace disambiguation is decided by the workspace: only tokens
+no workspace answers may be staged.
+
 ## 2026-10-16 — restructure wave W4a: the build cache moves to the build user's `~/.cache/gsa` (makepkg BUILDDIR/PKGDIR/PKGDEST), archive discovery goes truth-filtered dual-location
 
 **What landed (plan-gsa-isolation.md W4, first half).** makepkg's build trees,

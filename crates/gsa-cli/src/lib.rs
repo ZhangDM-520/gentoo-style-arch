@@ -20,6 +20,7 @@ mod query;
 mod record;
 mod render;
 mod select;
+mod standalone;
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -96,7 +97,7 @@ and a root shell without a build user is refused with guidance.
 Families (exactly one per invocation; lowercase letters form the cluster):
   -Q   query the buildable universe (and, later, pacman's installed database)
   -S   build + install the selection (each package installed before its consumers compile)
-  -B   build-only: archives beside the recipes, nothing installed
+  -B   build-only: archives to the build cache (PKGDEST), nothing installed
   -U   install from archives: nothing is built
   -M   maintain engine state: audit, doctor, IgnorePkg closure, logs,
        mirrors, prune strengths, sets/world, run history
@@ -125,8 +126,9 @@ Command surface:
                                  same-version skip
   gsa -Sc …                      prune strength 1 first (src/pkg/build trees and
                                  archives), then build + install
-  gsa -B <targets…> [ranges…]    build the selection to archives beside the recipes
-                                 (nothing is installed, no pacman call)
+  gsa -B <targets…> [ranges…]    build the selection to archives in the build
+                                 cache (PKGDEST; nothing is installed, no
+                                 pacman call)
   gsa -U <ref…|archive-path…>    install the named packages' newest complete
                                  archive sets (or the named paths) in ONE
                                  pacman -U transaction; nothing is built
@@ -187,6 +189,12 @@ Selection targets (contract §C; exact lookup only — a typo is never auto-corr
   group / user set     @git, @core, @<set>
   index ranges         22..38, 22.., ..15 — 1-based over the -Sl listing of the
                        same selection; a bare range is a usage error
+  standalone PKGBUILD  a PKGBUILD file path, a directory holding one, or a
+                       URL of one: staged into its own one-node workspace
+                       and built there — gsa + the recipe, no project clone
+                       required (build/install/fetch/maintain runs and their
+                       --dry-run plan; never mixed with workspace references,
+                       and query/report verbs do not take them yet)
 A selection expands to its transitive consumers (the reverse build-order
 closure); --leaf suppresses the expansion and keeps exactly what you named.
 
@@ -294,6 +302,16 @@ fn cwd_workspace() -> Option<PathBuf> {
         if !dir.pop() {
             return None;
         }
+    }
+}
+
+/// The workspace a run operates on: the staged standalone workspace when
+/// `standalone::apply` staged one (plan-gsa-isolation.md W4), else the
+/// normal discovery with its on-demand store fetch.
+pub(crate) fn resolve_workspace(inv: &Invocation) -> Result<PathBuf, String> {
+    match &inv.standalone_root {
+        Some(root) => Ok(root.clone()),
+        None => resolve_root(true),
     }
 }
 
@@ -584,11 +602,16 @@ fn execute(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<i32, String> {
-    let root = find_root().ok_or_else(|| {
-        cmd_error(
-            "cannot find config/topology.conf from the current directory upward (run inside the recipe repository)",
-        )
-    })?;
+    let root = match &inv.standalone_root {
+        // A standalone-target run staged its own workspace (plan W4); the
+        // report verbs' own discovery never fetches (read-only, §B.10).
+        Some(root) => root.clone(),
+        None => find_root().ok_or_else(|| {
+            cmd_error(
+                "cannot find config/topology.conf from the current directory upward (run inside the recipe repository)",
+            )
+        })?,
+    };
     let project = load_project(&root).map_err(|e| cmd_error(e.to_string()))?;
     let graph = Graph::build(&project.topology.records)
         .map_err(|e| cmd_error(format!("config/topology.conf: {e}")))?;
@@ -791,7 +814,7 @@ pub fn run(argv: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
             // check, its findings on stdout, rc per §G.
             qa::run_qa_check(&args, out, err)
         }
-        Ok(Parsed::Invoke(inv)) => match classify(&inv) {
+        Ok(Parsed::Invoke(mut inv)) => match classify(&inv) {
             Disposition::Deferred(why) => {
                 let _ = writeln!(err, "gsa: deferred to a later phase: {why}");
                 RC_USAGE
@@ -800,20 +823,41 @@ pub fn run(argv: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
                 let _ = writeln!(err, "gsa: {message}");
                 RC_USAGE
             }
-            Disposition::Run(Command::Build) => build::run_build(&inv, out, err),
-            Disposition::Run(Command::BuildInstall) => build::run_build_install(&inv, out, err),
-            Disposition::Run(Command::Fetch) => fetch::run_fetch_only(&inv, out, err),
-            Disposition::Run(Command::SyncPass) => prepare::run_sync_pass(&inv, out, err),
-            Disposition::Run(Command::Update) => build::run_update(&inv, out, err),
-            Disposition::Run(Command::Upgrade) => install::run_upgrade(&inv, out, err),
-            Disposition::Run(Command::Maint) => maint::run(&inv, out, err),
-            Disposition::Run(command) => match execute(&inv, command, out, err) {
-                Ok(code) => code,
-                Err(message) => {
-                    let _ = writeln!(err, "gsa: {message}");
-                    RC_USAGE
+            Disposition::Run(command) => {
+                // Standalone targets (plan-gsa-isolation.md W4): stage the
+                // shared recipe(s) and rewrite the selection to the staged
+                // ids BEFORE dispatch. An ephemeral staging area (a dry run,
+                // or a run the privilege gate will refuse) is cleaned up
+                // after the entry returns.
+                match standalone::apply(&mut inv, &command) {
+                    Err(message) => {
+                        let _ = writeln!(err, "gsa: {message}");
+                        RC_USAGE
+                    }
+                    Ok(staged) => {
+                        let code = match command {
+                            Command::Build => build::run_build(&inv, out, err),
+                            Command::BuildInstall => build::run_build_install(&inv, out, err),
+                            Command::Fetch => fetch::run_fetch_only(&inv, out, err),
+                            Command::SyncPass => prepare::run_sync_pass(&inv, out, err),
+                            Command::Update => build::run_update(&inv, out, err),
+                            Command::Upgrade => install::run_upgrade(&inv, out, err),
+                            Command::Maint => maint::run(&inv, out, err),
+                            command => match execute(&inv, command, out, err) {
+                                Ok(code) => code,
+                                Err(message) => {
+                                    let _ = writeln!(err, "gsa: {message}");
+                                    RC_USAGE
+                                }
+                            },
+                        };
+                        if let Some(staged) = staged {
+                            staged.cleanup();
+                        }
+                        code
+                    }
                 }
-            },
+            }
         },
         Err(message) => {
             let _ = writeln!(err, "gsa: {message}");

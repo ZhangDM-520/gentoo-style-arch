@@ -707,6 +707,7 @@ mod tests {
             vcs_skip_tolerance: None,
             no_sync: false,
             allow_broken_rustc: false,
+            standalone_root: None,
         };
         let record = build_plan_record(&inv, &selection(2), &["@git".to_string()], &[], "xhigh");
         assert_eq!(record.outcome, "planned");
@@ -751,6 +752,7 @@ mod tests {
             vcs_skip_tolerance: None,
             no_sync: false,
             allow_broken_rustc: false,
+            standalone_root: None,
         };
         let record = build_plan_record(
             &inv,
@@ -792,6 +794,7 @@ mod tests {
             vcs_skip_tolerance: None,
             no_sync: false,
             allow_broken_rustc: false,
+            standalone_root: None,
         };
         let outcomes = vec![
             OutcomeRow {
@@ -909,6 +912,7 @@ mod tests {
             vcs_skip_tolerance: None,
             no_sync: false,
             allow_broken_rustc: false,
+            standalone_root: None,
         }
     }
 

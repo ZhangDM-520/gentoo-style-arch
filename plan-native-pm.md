@@ -706,3 +706,33 @@ them. Both, deliberately.** The argument:
   M4), glsa-check/@security (no advisory feed).
 - Reimplementing makepkg, its phase runner, or its verification machinery — checksums/PGP
   stay exactly where they are and are never bypassed.
+
+---
+
+## Addendum (2026-10-16) — deployment assumptions superseded by plan-gsa-isolation.md
+
+The engine architecture above stands; its **deployment and directory
+assumptions are superseded** by `plan-gsa-isolation.md` (landed, verified
+2026-10-16). Where this plan and the live contract (`docs/gsa-contract.md`)
+conflict, the contract wins:
+
+- **Directories.** Engine state is `/var/lib/gsa` (root-owned at write time —
+  rule 19), the canonical recipe store is `/var/lib/gsa/recipes` (root-fetched
+  from `recipe_url`, refreshed by `gsa -Sy`, never hand-edited), makepkg's
+  build trees/staging/archives are the **build user's cache** (`GSA_BUILD_DIR`
+  > config `build_dir` > `~/.cache/gsa`), and `SRCDEST` stays governed by
+  `makepkg.conf`. Nothing "stays beside the recipe" except what the recipe
+  itself ships.
+- **Distribution.** The shared **PKGBUILD is the distribution unit**: `gsa`
+  accepts a standalone target (a `PKGBUILD` file path, a directory holding one,
+  or a URL of one), stages it into its own one-node workspace under
+  `<state>/standalone/`, and builds there — "gsa + the recipe, no project
+  clone required" (contract §C.1, §B.11).
+- **Configuration.** Users get config only: `gsa.conf` layers (`/etc/gsa.conf`
+  then `~/.config/gsa/gsa.conf`, user over system over built-in) carry
+  `project`, `recipe_url`, `build_dir`, `state_dir`; `GSA_CONF`/`GSA_STATE_DIR`
+  are the hermetic overrides (contract §B.11, §J.3).
+- **Privilege.** Mutations run under `sudo` as a root supervisor; every
+  build-side command drops to the build user (`setpriv`), and a bare root shell
+  is refused with guidance (contract §B.10). The §5.1 verb list is superseded
+  by the action-pass grammar (contract §B.1).

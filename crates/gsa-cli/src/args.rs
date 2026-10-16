@@ -6,6 +6,8 @@
 //! single action letter combines with modifier letters in any position — a
 //! shape clap's subcommand/flag model fights at every step.
 
+use std::path::PathBuf;
+
 /// The five action families (contract §B.2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Family {
@@ -142,6 +144,11 @@ pub struct Invocation {
     pub show: Option<String>,
     /// Arguments after `--`, forwarded verbatim to a `pacman -U` transaction.
     pub pacman_args: Option<Vec<String>>,
+    /// The staged workspace of a standalone-target run (plan-gsa-isolation.md
+    /// W4). Set by `standalone::apply`, which also rewrites `targets` to the
+    /// staged ids; `crate::resolve_workspace` prefers this root over
+    /// workspace discovery.
+    pub standalone_root: Option<PathBuf>,
 }
 
 impl Invocation {
@@ -312,6 +319,7 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
         vcs_skip_tolerance: None,
         no_sync: false,
         allow_broken_rustc: false,
+        standalone_root: None,
     };
 
     let mut rest = &args[1..];

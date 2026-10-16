@@ -784,7 +784,7 @@ pub fn sync_phase(
 /// the run-level disposition block. rc: 0 clean, 3 refusal class (§G.1
 /// integrity stop), 5 deferral-only.
 pub fn run_sync_pass(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
-    let root = match crate::resolve_root(true) {
+    let root = match crate::resolve_workspace(inv) {
         Ok(root) => root,
         Err(message) => {
             let _ = writeln!(err, "gsa: {message}");
