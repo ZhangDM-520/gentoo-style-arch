@@ -126,6 +126,7 @@ done
 # each archive's own .PKGINFO and refuses an empty file `empty-list`.
 cat >"$fixture/bin/makepkg" <<'EOF'
 #!/usr/bin/env bash
+set -eu
 name=$(basename "$PWD")
 mkdir -p "$GSA_FAKE_MARKER_DIR"
 touch "$GSA_FAKE_MARKER_DIR/$name"

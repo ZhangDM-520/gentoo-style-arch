@@ -76,7 +76,7 @@ if [[ -n ${GSA_FAKE_FIND_SCAN_MODE:-} ]]; then
             case $GSA_FAKE_FIND_SCAN_MODE in
                 clean) exit 0 ;;
                 kill) exit 130 ;;
-                blind) printf "find: '/proc/1/fd': Permission denied\n" >&2; exit 0 ;;
+                blind) printf "find: '/proc/1/fd': Permission denied\n" >&2; exit 1 ;;
             esac
         fi
     done

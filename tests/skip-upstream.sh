@@ -254,8 +254,12 @@ write_db_stub() {
     mkdir -p "$fixture/db"
     cat >"$1/bin/pacman-conf" <<EOF
 #!/usr/bin/env bash
-[ "\${1:-}" = DBPath ] && printf '%s\n' "$fixture/db"
-exit 0
+set -u
+if [ "\${1:-}" = DBPath ]; then
+    printf '%s\n' "$fixture/db"
+    exit 0
+fi
+exit 1
 EOF
     chmod +x "$1/bin/pacman-conf"
 }
@@ -1585,6 +1589,14 @@ src_rev=$(GIT_CONFIG_COUNT=0 git -C "$src_slash/workspace/packages/p1/src/remote
     make_workspace_common "$sbf_ws"
     add_package "$sbf_ws" p1 "$gsa_meta_any"
     pkginfo_archive "$sbf_ws/packages/p1/p1-1.0.0-1-any.pkg.tar.zst" p1
+    # Pin the ARCHIVE's mtime to a fixed past value: the engine's no-git
+    # fallback compares STRICTLY (`test PKGBUILD -nt archive` semantics), and
+    # the archive write above plus the real edit below can land inside one
+    # coarse clock tick — equal mtimes then read as "not newer" and the claim
+    # wrongly survives (observed flake: both files at the identical ns
+    # mtime). "The build happened, then the edit moved the recipe" is the
+    # scenario; a fixed past build time states it unambiguously.
+    touch -d '2000-01-01 00:00:01 UTC' "$sbf_ws/packages/p1/p1-1.0.0-1-any.pkg.tar.zst"
     stage_marker "$sbf_ws"
     touch -d '2000-01-01 00:00:00 UTC' "$sbf_ws/packages/p1/PKGBUILD"
     printf '# real edit\n' >>"$sbf_ws/packages/p1/PKGBUILD"

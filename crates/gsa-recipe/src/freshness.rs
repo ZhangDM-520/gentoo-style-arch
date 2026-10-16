@@ -1023,33 +1023,24 @@ impl VcsBaseline {
 // Baseline recording (fail-closed, atomic publish)
 // ---------------------------------------------------------------------------
 
-/// Locate the checkout makepkg actually compiled from: `$srcdir`
-/// (`<recipe>/src/<name>`) first — a mirror's HEAD is the remote's default
-/// branch, not the built ref — then the package root. Git strips `.git` from
-/// its default source name, so both spellings are tried. (The fish recorder
-/// also probes `$SRCDEST`; the engine's env roster is exactly
-/// `GSA_VCS_SKIP_TOLERANCE` + `TMPDIR`, so that root is not ported.)
-pub fn vcs_source_checkout(recipe_dir: &Path, entry: &str) -> Option<PathBuf> {
+/// Locate the checkout makepkg actually compiled from — the W4a
+/// `<build_dir>/<pkgbase>/src` home first, then the pre-W4a roots beside
+/// the recipe (see [`gsa_model::config::checkout_roots`]; git strips `.git`
+/// from its default source name, so both spellings are tried). The
+/// `SRCDEST` mirror is NOT consulted here: a mirror's HEAD is the remote's
+/// default branch, not the built ref (the fish recorder probed it only as a
+/// last resort; the engine refuses that evidence for revisions).
+/// `pkgbase` scopes the cache lookup to this recipe's own tree — a
+/// same-named checkout under another pkgbase is someone else's evidence
+/// (2026-10-17 sweep); `None` (nothing to scope by) degrades to scanning
+/// every tree.
+pub fn vcs_source_checkout(recipe_dir: &Path, entry: &str, pkgbase: Option<&str>) -> Option<PathBuf> {
     let name = source_filename(entry)?;
     let mut names = vec![name.clone()];
     if let Some(stripped) = name.strip_suffix(".git") {
         names.push(stripped.to_string());
     }
-    let mut roots = vec![recipe_dir.join("src"), recipe_dir.to_path_buf()];
-    // W4's build cache (makepkg `BUILDDIR`): the checkout lives at
-    // `<builddir>/<pkgbase>/src/<name>` and never beside the recipe any more
-    // (2026-10-16 smoke: the freshness baseline recorded "missing local
-    // checkout" while the checkout sat in the cache). Any pkgbase qualifies:
-    // the source name is the discriminator.
-    if let Ok(layout) =
-        gsa_model::config::load().and_then(|c| gsa_model::config::build_layout(&c))
-    {
-        if let Ok(entries) = std::fs::read_dir(&layout.builddir) {
-            for pkgbase in entries.flatten() {
-                roots.push(pkgbase.path().join("src"));
-            }
-        }
-    }
+    let roots = gsa_model::config::checkout_roots(recipe_dir, pkgbase, false);
     find_checkout(&roots, &names)
 }
 
@@ -1201,11 +1192,14 @@ pub fn record_vcs_archive_revisions(
 
     // Resolve every row first (fish resolves while writing; resolving first
     // keeps the tmp+mv publish a single atomic step and never leaves a tmp).
+    // The pkgbase scopes the cache lookup to this recipe's own build tree.
+    let pkgbase = recipe_pkgbase(recipe_dir);
     let mut rows = Vec::new();
     for entry in &vcs_entries {
         let info = vcs_source_ref_info(entry)
             .ok_or_else(|| FreshnessError::Record("cannot parse a VCS source ref".to_string()))?;
-        let checkout = vcs_source_checkout(recipe_dir, entry).ok_or_else(|| {
+        let checkout =
+            vcs_source_checkout(recipe_dir, entry, pkgbase.as_deref()).ok_or_else(|| {
             let name = source_filename(entry).unwrap_or_default();
             FreshnessError::Record(format!("missing local checkout for {name}"))
         })?;
@@ -1275,6 +1269,29 @@ fn scan_recipe(recipe_dir: &Path) -> Result<crate::PkgbuildScan, FreshnessError>
         FreshnessError::Unestablished(format!("cannot read {}: {e}", path.display()))
     })?;
     Ok(scan_pkgbuild(&content))
+}
+
+/// The recipe's pkgbase for cache-tree scoping, or `None` when it cannot be
+/// established (the crate's read order: committed `.SRCINFO`, then the
+/// PKGBUILD scan; a dynamic value is unestablished — never guess). `None`
+/// degrades callers to the unscoped lookup, never to wrong evidence.
+pub(crate) fn recipe_pkgbase(recipe_dir: &Path) -> Option<String> {
+    let srcinfo_path = recipe_dir.join(".SRCINFO");
+    if let Ok(content) = fs::read_to_string(&srcinfo_path) {
+        if let Ok(info) = parse_srcinfo(&content, &srcinfo_path.display().to_string()) {
+            if let Some(base) = info.pkgbase.filter(|b| !b.is_empty()) {
+                return Some(base);
+            }
+        }
+    }
+    let scan = scan_recipe(recipe_dir).ok()?;
+    match scan_literal(&scan, "pkgbase").ok().flatten() {
+        Some(base) => Some(base),
+        None => match scan.vars.get("pkgbase") {
+            Some(ScanValue::Scalar(base)) if !base.is_empty() => Some(base.clone()),
+            _ => None,
+        },
+    }
 }
 
 fn scan_literal(scan: &crate::PkgbuildScan, key: &str) -> Result<Option<String>, FreshnessError> {

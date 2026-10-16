@@ -5,8 +5,10 @@
 //! scratch tree.
 #![allow(dead_code)]
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, SystemTime};
 
 use gsa_model::{
@@ -17,6 +19,59 @@ use gsa_state::{RunHistory, StateRoot};
 use gsa_maint::Row;
 
 static COUNTER: AtomicU32 = AtomicU32::new(0);
+
+/// The build-cache subtree under the fixture root that [`Fixture::with_ctx`]
+/// pins `GSA_BUILD_DIR` to (the W4a live homes live below it).
+pub const CACHE_DIR: &str = ".gsa-cache";
+/// The pulled-source home `Fixture::with_ctx` pins `SRCDEST` to.
+pub const SRCDEST_DIR: &str = ".gsa-srcdest";
+
+/// The layout seams (`GSA_CONF`/`GSA_BUILD_DIR`/`SRCDEST`) are resolved from
+/// process env, and Rust runs one test binary's tests in parallel threads —
+/// so every ctx pass pins them to THIS fixture's scratch under a crate-wide
+/// lock (tests/lib/rr-v2.bash's `rr2_invoke` guard, mirrored for unit tests:
+/// a scan must never reach the host's real build cache or SRCDEST mirror)
+/// and restores the previous values on the way out.
+static LAYOUT_LOCK: Mutex<()> = Mutex::new(());
+
+struct LayoutEnv {
+    _lock: MutexGuard<'static, ()>,
+    saved: Vec<(&'static str, Option<OsString>)>,
+}
+
+impl LayoutEnv {
+    fn pin(root: &Path) -> LayoutEnv {
+        let lock = LAYOUT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Filesystem-silent: the conf file itself is fixture construction
+        // (`Fixture::new`), because dry-run tests snapshot the tree across
+        // a `with_ctx` pass and must see no change.
+        let pinned: [(&'static str, OsString); 3] = [
+            ("GSA_CONF", root.join("gsa.conf").into_os_string()),
+            ("GSA_BUILD_DIR", root.join(CACHE_DIR).into_os_string()),
+            ("SRCDEST", root.join(SRCDEST_DIR).into_os_string()),
+        ];
+        let mut saved = Vec::new();
+        for (key, value) in pinned {
+            saved.push((key, std::env::var_os(key)));
+            std::env::set_var(key, &value);
+        }
+        LayoutEnv {
+            _lock: lock,
+            saved,
+        }
+    }
+}
+
+impl Drop for LayoutEnv {
+    fn drop(&mut self) {
+        for (key, value) in self.saved.drain(..) {
+            match value {
+                Some(value) => std::env::set_var(key, value),
+                None => std::env::remove_var(key),
+            }
+        }
+    }
+}
 
 /// A unique scratch directory under the harness `$TMPDIR`, removed first so
 /// a crashed previous run cannot fake a result.
@@ -53,6 +108,10 @@ impl Fixture {
         // every before/after snapshot (opening is construction, never a
         // verb mutation).
         StateRoot::open(&state_dir).unwrap();
+        // The empty gsa.conf the layout pin points GSA_CONF at (also
+        // construction: dry-run snapshots must stay stable across a
+        // `with_ctx` pass).
+        std::fs::write(root.join("gsa.conf"), "# fixture: empty layers\n").unwrap();
         Fixture {
             root,
             state_dir,
@@ -109,7 +168,12 @@ impl Fixture {
     }
 
     /// Run one closure with a fully loaded `MaintCtx` over the fixture.
+    /// The layout env is pinned to this fixture's scratch for the closure's
+    /// duration (see [`LayoutEnv`]), so every maintain scan resolves its
+    /// live homes (`<cache>/build|pkg|pkgs`, `SRCDEST`) inside the scratch
+    /// tree and can never touch the host's real ones.
     pub fn with_ctx<R>(&self, f: impl FnOnce(&gsa_maint::MaintCtx<'_>) -> R) -> R {
+        let _layout_env = LayoutEnv::pin(&self.root);
         let project = gsa_topo::load_project(&self.root).expect("fixture project loads");
         let graph =
             gsa_graph::Graph::build(&project.topology.records).expect("fixture graph builds");

@@ -26,10 +26,17 @@ pub fn wanted_names(ctx: &MaintCtx<'_>) -> BTreeSet<String> {
 
 /// The names on-disk archives actually ship (`.PKGINFO` truth, the
 /// registration's FIRST authority) — read-only context for the stale
-/// reason. An unreadable archive is skipped, never probed (rule 25(h)).
-pub fn shipped_names(ctx: &MaintCtx<'_>) -> BTreeSet<String> {
+/// reason. Scans the TWO homes archives live in: the shared PKGDEST (walked
+/// once — every name it ships belongs to the universe) and every recipe
+/// dir (§J.2's legacy home). An unreadable archive is skipped, never
+/// probed (rule 25(h)). The engine's ONE layout error policy applies: an
+/// unusable build-cache layout is fatal for the calling operation.
+pub fn shipped_names(ctx: &MaintCtx<'_>) -> Result<BTreeSet<String>, String> {
+    let layout = gsa_model::config::build_layout_for_run()?;
+    let mut dirs = vec![layout.pkgdest];
+    dirs.extend(ctx.recipe_dirs().into_iter().map(|(_, dir)| dir));
     let mut names = BTreeSet::new();
-    for (_id, dir) in ctx.recipe_dirs() {
+    for dir in dirs {
         let Ok(entries) = std::fs::read_dir(&dir) else {
             continue;
         };
@@ -49,7 +56,7 @@ pub fn shipped_names(ctx: &MaintCtx<'_>) -> BTreeSet<String> {
             }
         }
     }
-    names
+    Ok(names)
 }
 
 /// The names a readable installed database carries (package names and bare
@@ -118,7 +125,7 @@ fn classify(
 pub fn report(ctx: &MaintCtx<'_>, conf: &Path) -> Result<Vec<Row>, String> {
     let closure = read_ignorepkg(conf)?;
     let wanted = wanted_names(ctx);
-    let shipped = shipped_names(ctx);
+    let shipped = shipped_names(ctx)?;
     let (installed, note) = installed_names();
     let mut rows = vec![Row::new("ignorepkg", "closure", note)];
     for name in &closure.names {
@@ -183,7 +190,7 @@ pub fn backfill(ctx: &MaintCtx<'_>, conf: &Path, apply: bool) -> Result<Vec<Row>
 /// false` is the dry-run plan (no write).
 pub fn prune(ctx: &MaintCtx<'_>, conf: &Path, apply: bool) -> Result<Vec<Row>, String> {
     let closure = read_ignorepkg(conf)?;
-    let shipped = shipped_names(ctx);
+    let shipped = shipped_names(ctx)?;
     let (installed, note) = installed_names();
     let mut rows = vec![Row::new("ignorepkg", "closure", note)];
     let mut remove: Vec<String> = Vec::new();

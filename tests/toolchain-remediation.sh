@@ -150,14 +150,15 @@ EOF
 set -u
 if [[ ${1:-} == DBPath ]]; then
     printf '%s\n' "${GSA_FAKE_DB_PATH:?}"
+    exit 0
 fi
-exit 0
+exit 1
 EOF
     chmod +x "$dir/bin/pacman-conf"
 
     cat >"$dir/bin/makepkg" <<'EOF'
 #!/usr/bin/env bash
-set -u
+set -eu
 id=$(basename "$PWD")
 printf 'BUILD %s\n' "$id" >>"${GSA_FAKE_SPAWN_LOG:?}"
 if [[ ${GSA_FAKE_FAIL_PACKAGE:-} == "$id" ]]; then

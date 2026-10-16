@@ -171,7 +171,7 @@ make_archive() {
 write_stub_makepkg() {
     cat >"$1/bin/makepkg" <<'EOF'
 #!/usr/bin/env bash
-set -u
+set -eu
 case " $* " in
 *" --verifysource "*) exit 0 ;; # fetch children are advisory here
 esac

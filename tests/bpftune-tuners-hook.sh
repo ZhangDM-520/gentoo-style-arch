@@ -104,6 +104,13 @@ trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/bin"
 cat >"$work/bin/systemctl" <<'STUB'
 #!/bin/sh
+# Fail closed: an unmodeled verb or a missing argument is a refusal (exit 2),
+# never a silent success. The modeled verbs keep propagating their own
+# status (is-active/is-failed answer the stub state with the test's rc).
+if [ $# -lt 1 ]; then
+    echo "systemctl: missing verb" >&2
+    exit 2
+fi
 verb=$1
 shift
 while [ $# -gt 0 ]; do
@@ -116,9 +123,13 @@ case $verb in
     is-active) [ "$(cat "$STUB_STATE")" = active ] ;;
     is-failed) [ "$(cat "$STUB_STATE")" = failed ] ;;
     stop | start | try-restart)
+        if [ $# -lt 1 ]; then
+            echo "systemctl: missing unit for $verb" >&2
+            exit 2
+        fi
         printf '%s %s\n' "$verb" "$1" >>"$STUB_LOG"
         ;;
-    *) exit 0 ;;
+    *) echo "systemctl: unknown verb '$verb'" >&2; exit 2 ;;
 esac
 STUB
 chmod 755 "$work/bin/systemctl"

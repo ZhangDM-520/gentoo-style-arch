@@ -233,3 +233,39 @@ fn protect_referenced_by_run_tracks_the_newest_remaining_set() {
     append_run(&state, &common::run_record("delta", &[]));
     assert!(protect::referenced_by_run(&state).is_empty());
 }
+
+#[test]
+fn shipped_names_sees_the_pkgdest_home_too() {
+    let mut fx = Fixture::new("ignorepkg-pkgdest");
+    fx.add_recipe(
+        "alpha",
+        "git",
+        "git",
+        "",
+        &srcinfo("gsatest-alpha", &["gsatest-alpha"], "1.0", "1", &[]),
+    );
+    // The only shipper of `gsatest-pkgdest` lives in the live PKGDEST home;
+    // its classification must consult it (stale superseded, not
+    // archives-gone).
+    let pkgdest = fx.root.join(common::CACHE_DIR).join("pkgs");
+    std::fs::create_dir_all(&pkgdest).unwrap();
+    common::make_archive(
+        &pkgdest.join("gsatest-pkgdest-1.0-1-any.pkg.tar.zst"),
+        "gsatest-pkgdest",
+        "gsatest-pkgdest",
+        "1.0-1",
+    );
+    let conf = fx.root.join("pacman.conf");
+    std::fs::write(&conf, "[options]\nIgnorePkg = gsatest-pkgdest\n").unwrap();
+
+    fx.with_ctx(|ctx| {
+        let rows = ignorepkg::report(ctx, &conf).unwrap();
+        common::assert_row_grammar(&rows);
+        let row = find_row(&rows, "gsatest-pkgdest", "stale").expect("stale named");
+        assert!(
+            row.reason.contains("superseded"),
+            "the PKGDEST archive is the shipper: {}",
+            row.reason
+        );
+    });
+}

@@ -306,10 +306,18 @@ fn splice(text: &str, insert: Insert, new_lines: &[String]) -> String {
     out
 }
 
+/// The `sudo -n` command for one register/prune escalation (one builder, so
+/// the C-locale pin lives in exactly one place). `LC_ALL=C` keeps sudo's own
+/// diagnostics C-locale by construction, like the transaction executor's
+/// spawn.
+fn sudo_command(args: &[&str]) -> Command {
+    let mut cmd = Command::new("sudo");
+    cmd.arg("-n").args(args).env("LC_ALL", "C");
+    cmd
+}
+
 fn run_sudo(args: &[&str]) -> Result<(), String> {
-    let output = Command::new("sudo")
-        .arg("-n")
-        .args(args)
+    let output = sudo_command(args)
         .output()
         .map_err(|e| format!("cannot run sudo: {e}"))?;
     if output.status.success() {
@@ -825,6 +833,23 @@ mod tests {
         fs::create_dir_all(&empty).unwrap();
         assert!(names_for_archive(None, Some(&empty)).is_err());
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sudo_escalation_pins_the_c_locale() {
+        let cmd = sudo_command(&["install", "-m", "644", "--", "a", "b"]);
+        assert!(
+            cmd.get_envs().any(|(key, value)| {
+                key == std::ffi::OsStr::new("LC_ALL") && value == Some(std::ffi::OsStr::new("C"))
+            }),
+            "register/prune sudo -n must pin LC_ALL=C so its diagnostics are C-locale"
+        );
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(args[0], "-n");
+        assert_eq!(&args[1..3], ["install", "-m"]);
     }
 
     #[test]

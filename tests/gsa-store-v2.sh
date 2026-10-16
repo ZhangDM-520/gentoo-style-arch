@@ -133,7 +133,9 @@ if [ -z "$only" ] || [ "$only" = c ]; then
         make_workspace "$ws" 1 auto low
         add_package "$ws" alpha "$gsa_meta_any"
         : >"$conf"
-        FIXTURE_OUTPUT=$(cd "$ws" && GSA_CONF="$conf" "$engine" -B --dry-run alpha 2>&1) || true
+        rc=0
+        FIXTURE_OUTPUT=$(cd "$ws" && GSA_CONF="$conf" "$engine" -B --dry-run alpha 2>&1) || rc=$?
+        [ "$rc" -eq 0 ] || fail "c: the dry-run must succeed, rc=$rc: $FIXTURE_OUTPUT"
         case $FIXTURE_OUTPUT in
         *deprecated*) fail "c: the deprecation note must stay TTY-only: $FIXTURE_OUTPUT" ;;
         esac

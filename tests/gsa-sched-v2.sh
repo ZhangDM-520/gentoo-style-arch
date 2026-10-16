@@ -86,7 +86,7 @@ export GSA_TEST_GSA_BIN="$gsa_bin"
 write_stub_makepkg() {
     cat >"$1/bin/makepkg" <<'EOF'
 #!/usr/bin/env bash
-set -u
+set -eu
 id=$(basename "$PWD")
 printf 'SPAWN %s %s\n' "$id" "$(date +%s%N)" >>"${GSA_FAKE_SPAWN_LOG:?}"
 [ -n "${GSA_FAKE_MARKER_DIR:-}" ] && : >"$GSA_FAKE_MARKER_DIR/$id"
@@ -525,8 +525,12 @@ EOF
     # the probe resolves pacman's DBPath like makepkg does: `pacman-conf`
     cat >"$ws/bin/pacman-conf" <<EOF
 #!/usr/bin/env bash
-[ "\${1:-}" = DBPath ] && printf '%s\n' "$db"
-exit 0
+set -u
+if [ "\${1:-}" = DBPath ]; then
+    printf '%s\n' "$db"
+    exit 0
+fi
+exit 1
 EOF
     chmod +x "$ws/bin/pacman-conf"
     export PATH="$ws/bin:$PATH"
@@ -577,7 +581,7 @@ EOF
     add_package "$ws" p1 "$gsa_meta_any" git
     cat >"$ws/bin/makepkg" <<'EOF'
 #!/usr/bin/env bash
-set -u
+set -eu
 printf 'PACMAN=%s\n' "${PACMAN:-}" >>"${GSA_FAKE_PACMAN_ENV_LOG:?}"
 : >"$PWD/$(basename "$PWD")-1.0.0-1-any.pkg.tar.zst"
 exit 0

@@ -101,7 +101,7 @@ export GSA_TEST_GSA_BIN="$gsa_bin"
 write_stub_makepkg() {
     cat >"$1/bin/makepkg" <<'EOF'
 #!/usr/bin/env bash
-set -u
+set -eu
 id=$(basename "$PWD")
 [ -n "${GSA_FAKE_MARKER_DIR:-}" ] && : >"$GSA_FAKE_MARKER_DIR/$id"
 sleep "${GSA_FAKE_BUILD_SECONDS:-0}"

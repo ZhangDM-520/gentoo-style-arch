@@ -212,7 +212,7 @@ EOF
 stub_makepkg() {
     cat >"$1/bin/makepkg" <<'EOF'
 #!/usr/bin/env bash
-set -u
+set -eu
 id=$(basename "$PWD")
 [[ "${GSA_FAKE_FAIL_PACKAGE:-}" == "$id" ]] && exit 1
 : >"$PWD/$id-1.0.0-1-any.pkg.tar.zst"

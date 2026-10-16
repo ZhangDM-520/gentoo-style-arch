@@ -158,7 +158,7 @@ chmod +x "$dir/bin/pacman"
 # while the build itself succeeds on the rewritten version.
 cat >"$dir/bin/makepkg" <<'EOF'
 #!/usr/bin/env bash
-set -u
+set -eu
 printf '%s\n' "$*" >>"$GSA_FAKE_DIR/makepkg_argv"
 for a in "$@"; do
     if [[ $a == --printsrcinfo ]]; then
@@ -243,7 +243,7 @@ cp -- "$dir/packages/stable/s1/.SRCINFO" "$dir/pre-SRCINFO"
 # purpose, so a green run proves the engine never attempted the refresh.
 cat >"$dir/bin/makepkg" <<'EOF'
 #!/usr/bin/env bash
-set -u
+set -eu
 printf '%s\n' "$*" >>"$GSA_FAKE_DIR/makepkg_argv"
 for a in "$@"; do
     if [[ $a == --printsrcinfo ]]; then

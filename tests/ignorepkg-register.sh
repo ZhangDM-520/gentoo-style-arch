@@ -647,7 +647,7 @@ exit 1
 EOF
     cat >"$ws/bin/makepkg" <<'EOF'
 #!/usr/bin/env bash
-set -u
+set -eu
 id=$(basename "$PWD")
 : >"$PWD/$id-1.0.0-1-any.pkg.tar.zst"
 if [[ ${GSA_FAKE_DB_SEED:-0} == 1 ]]; then

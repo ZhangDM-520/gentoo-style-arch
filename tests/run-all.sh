@@ -103,14 +103,18 @@ export GSA_TEST_GSA_BIN
 
 # W4 build-cache isolation: engine runs create their build cache at the
 # resolved root (default: the build user's ~/.cache/gsa). The battery keeps
-# that hermetic — one scratch cache per battery run, inside $TMPDIR.
-export GSA_BUILD_DIR="${GSA_BUILD_DIR:-${TMPDIR:-/tmp}/gsa-battery-build}"
+# that hermetic — ONE scratch cache PER FIXTURE, under this run's $work so
+# it dies with the run and parallel fixtures never see each other's archives
+# (2026-10-17 sweep: a single shared ${TMPDIR}/gsa-battery-build export
+# defeated rr-v2's per-fixture guard and let cross-run debris surface as
+# fake oracles in gsa-state-v2).
 
 # One fixture in a child shell: stdout+stderr to its own file, rc to its own
 # file, so the parent can report everything alphabetically at the end.
 run_one() {
     local fixture=$1
-    if bash "$root/tests/$fixture" >"$work/$fixture.out" 2>&1; then
+    if GSA_BUILD_DIR="$work/build-cache/$fixture" \
+        bash "$root/tests/$fixture" >"$work/$fixture.out" 2>&1; then
         printf '0\n' >"$work/$fixture.rc"
     else
         printf '%s\n' "$?" >"$work/$fixture.rc"

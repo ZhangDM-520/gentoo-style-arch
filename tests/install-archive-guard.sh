@@ -162,8 +162,12 @@ exec "${args[@]}"
 EOF
     cat >"$ws/bin/pacman-conf" <<EOF
 #!/usr/bin/env bash
-[ "\${1:-}" = DBPath ] && printf '%s\n' "$db"
-exit 0
+set -u
+if [ "\${1:-}" = DBPath ]; then
+    printf '%s\n' "$db"
+    exit 0
+fi
+exit 1
 EOF
     printf '#!/usr/bin/env bash\nexit 0\n' >"$ws/bin/makepkg"
     chmod +x "$ws/bin/pacman" "$ws/bin/sudo" "$ws/bin/pacman-conf" "$ws/bin/makepkg"
@@ -309,8 +313,12 @@ txn_argv() { sed -n 's/^pacman //p' "$1" 2>/dev/null || true; }
 mkdir -p "$fixture/gsa-db/local" "$fixture/gsa-bin"
 cat >"$fixture/gsa-bin/pacman-conf" <<EOF
 #!/usr/bin/env bash
-[ "\${1:-}" = DBPath ] && printf '%s\n' "$fixture/gsa-db"
-exit 0
+set -u
+if [ "\${1:-}" = DBPath ]; then
+    printf '%s\n' "$fixture/gsa-db"
+    exit 0
+fi
+exit 1
 EOF
 chmod +x "$fixture/gsa-bin/pacman-conf"
 for stub in pacman sudo; do
@@ -569,7 +577,7 @@ make_case_workspace() { # $1 = sandbox dir — the FISH-era workspace for G/H
     add_package "$dir" p1 $'pkgver=1.0.0\npkgrel=1\narch=(any)'
     cat >"$dir/bin/makepkg" <<'EOF'
 #!/usr/bin/env bash
-set -u
+set -eu
 : >"$PWD/p1-1.0.0-1-any.pkg.tar.zst"
 # Invocation counter: the -s cases must observe that a SKIPPED build never
 # reaches makepkg — the lane's "already built" line is silent in quiet mode.
@@ -743,7 +751,7 @@ make_split_ws() { # $1 = dir, $2 = 1 (drop the second output at build time)
     if [ "$drop" = 1 ]; then
         cat >"$ws/bin/makepkg" <<'EOF'
 #!/usr/bin/env bash
-set -u
+set -eu
 stage="$PWD/.stage-p1"
 mkdir -p "$stage"
 { printf 'pkgbase = p1\npkgname = p1\npkgver = 1.0.0\npkgrel = 1\narch = any\n'; } >"$stage/.PKGINFO"

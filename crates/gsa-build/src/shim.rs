@@ -6,6 +6,12 @@
 //! Read-only pacman queries (`-Q*`, `-T`, search/info listings) run unlocked
 //! and unprivileged; every transaction queues on the state-root mutex. The
 //! system `db.lck` is never touched by the shim (makepkg/pacman own it).
+//!
+//! The generated body is a root-executed shell script, so the one piece of
+//! engine data baked into it — the mutex path — is rendered through
+//! [`shell_single_quote`]: inside `'…'` no byte of a `--state-dir` value is
+//! ever shell syntax, so spaces break nothing and `$(…)`/`;`/newlines can
+//! never become code execution in the shim.
 
 use std::path::{Path, PathBuf};
 
@@ -21,6 +27,13 @@ pub fn mutex_path(state_dir: &Path) -> PathBuf {
     state_dir.join("locks").join("pacman-mutex")
 }
 
+/// POSIX-sh single-quote one value for a generated script: inside `'…'`
+/// nothing is interpreted, and the only breakout byte (`'`) is
+/// closed-reopened (`'\''`), so the result is always literal data.
+fn shell_single_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', r"'\''"))
+}
+
 /// Write the shim once, executable, owned by the privileged runner (rule 19:
 /// engine state is root-owned). Idempotent: an existing shim is left as
 /// it is (its baked paths never change for one state root).
@@ -29,7 +42,7 @@ pub fn ensure_pacman_shim(state_dir: &Path) -> Result<PathBuf, String> {
     if path.is_file() {
         return Ok(path);
     }
-    let mutex = mutex_path(state_dir);
+    let mutex = shell_single_quote(&mutex_path(state_dir).display().to_string());
     let body = format!(
         "#!/bin/sh\n\
          # gsa PACMAN shim — generated; makepkg dependency installs share the\n\
@@ -52,7 +65,7 @@ pub fn ensure_pacman_shim(state_dir: &Path) -> Result<PathBuf, String> {
          \x20   echo \"gsa pacman shim: transaction failed (sudo -n never prompts)\" >&2\n\
          fi\n\
          exit \"$rc\"\n",
-        mutex = mutex.display()
+        mutex = mutex
     );
     std::fs::write(&path, body).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
     #[cfg(unix)]
@@ -87,5 +100,71 @@ mod tests {
         ensure_pacman_shim(&dir).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "#!/bin/sh\ntrue\n");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn shim_quoting_never_lets_a_state_dir_become_shell_syntax() {
+        // A hostile state root: spaces, a command substitution and a quote
+        // in the path. The generated shim is root-executed — the path must
+        // stay literal data, never shell syntax.
+        let base = std::env::temp_dir().join(format!("gsa-shim-inject-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let marker = base.join("pwned");
+        let hostile = base.join("state $(touch pwned); 'quote& space");
+        std::fs::create_dir_all(hostile.join("locks")).unwrap();
+        let path = ensure_pacman_shim(&hostile).unwrap();
+        let body = std::fs::read_to_string(&path).unwrap();
+        // The generated body must parse as shell at all ...
+        let syntax = std::process::Command::new("sh")
+            .arg("-n")
+            .arg(&path)
+            .status()
+            .expect("sh runs");
+        assert!(syntax.success(), "the generated shim must parse: {body}");
+        // ... and a transaction must run without ever executing the
+        // substitution embedded in the mutex path.
+        let stub = base.join("bin");
+        std::fs::create_dir_all(&stub).unwrap();
+        let sudo = stub.join("sudo");
+        std::fs::write(&sudo, "#!/bin/sh\nprintf '%s|' \"$@\" >>\"$GSA_SHIM_LOG\"\nexit 0\n")
+            .unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&sudo, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let log = base.join("shim.log");
+        let status = std::process::Command::new("sh")
+            .arg(&path)
+            .arg("-S")
+            .arg("--noconfirm")
+            .arg("pkg")
+            .current_dir(&base)
+            .env(
+                "PATH",
+                format!("{}:{}", stub.display(), std::env::var("PATH").unwrap_or_default()),
+            )
+            .env("GSA_SHIM_LOG", &log)
+            .status()
+            .expect("sh runs the shim");
+        assert!(status.success(), "the shim transaction must succeed");
+        assert!(
+            !marker.exists(),
+            "the state-dir path executed as shell — injection into the root shim!"
+        );
+        let seen = std::fs::read_to_string(&log).unwrap_or_default();
+        assert!(
+            seen.contains(&mutex_path(&hostile).display().to_string()),
+            "the mutex must reach flock as one literal argv item: {seen}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn shell_quoting_escapes_the_only_breakout_byte() {
+        assert_eq!(shell_single_quote("/plain/path"), "'/plain/path'");
+        assert_eq!(shell_single_quote("a b"), "'a b'");
+        assert_eq!(shell_single_quote("a'b"), r"'a'\''b'");
+        assert_eq!(shell_single_quote("$(reboot); x"), "'$(reboot); x'");
     }
 }

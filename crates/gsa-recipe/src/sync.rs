@@ -155,8 +155,16 @@ impl VersionFields {
 /// `vercmp` semantics: shell out to pacman-contrib's `vercmp` through `PATH`
 /// and read its -1/0/1 answer; `None` means the tool is absent and callers
 /// fall back to exact-string comparison (the fish reference's fallback).
+/// The spawn is build-side (makepkg family) and goes through
+/// [`gsa_model::privilege::build_command`] so it runs as the build user under
+/// a privileged engine — 2026-10-16 sweep: it was the one makepkg-family
+/// tool still spawned as root.
 pub fn vercmp(a: &str, b: &str) -> Option<i32> {
-    let out = Command::new("vercmp").arg(a).arg(b).output().ok()?;
+    let out = gsa_model::privilege::build_command("vercmp")
+        .arg(a)
+        .arg(b)
+        .output()
+        .ok()?;
     if !out.status.success() {
         return None;
     }
@@ -971,11 +979,24 @@ fn join_lines(lines: &[String], trailing_newline: bool) -> String {
     s
 }
 
+/// Write `content` and publish it atomically: a sibling temp file, fsynced,
+/// then renamed over the target. (The 2026-10-17 sweep found this creating
+/// the file in place despite the name — a crash could leave a half-written
+/// staged copy.)
 fn write_atomic(path: &Path, content: &str) -> std::io::Result<()> {
-    let mut f = fs::File::create(path)?;
-    f.write_all(content.as_bytes())?;
-    f.sync_all().ok();
-    Ok(())
+    let mut tmp_name = path.as_os_str().to_owned();
+    tmp_name.push(format!(".tmp.{}", std::process::id()));
+    let tmp = std::path::PathBuf::from(tmp_name);
+    let result = (|| {
+        let mut f = fs::File::create(&tmp)?;
+        f.write_all(content.as_bytes())?;
+        f.sync_all()?;
+        fs::rename(&tmp, path)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    result
 }
 
 // ---------------------------------------------------------------------------
@@ -1442,24 +1463,49 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// A hash attempt's outcome. `ToolMissing` is its own reason: a stripped
+/// PATH must never masquerade as "cannot verify" (2026-10-17 sweep).
+pub enum Hashed {
+    /// The digest.
+    Sum(String),
+    /// The `"<alg>sum"` tool is not on PATH.
+    ToolMissing(String),
+    /// The file could not be read, the tool failed, or its output was
+    /// unusable — an absence, never a disagreement.
+    Unusable,
+}
+
 /// Hash a fetched file. md5/b2 shell out (`md5sum`/`b2sum`, PATH); a missing
-/// tool reads as "cannot verify" (an absence, never a disagreement).
-pub fn hash_file(alg: &str, path: &Path) -> Option<String> {
+/// tool is [`Hashed::ToolMissing`], never a silent "cannot verify".
+pub fn hash_file(alg: &str, path: &Path) -> Hashed {
     if matches!(alg, "sha256" | "sha512") {
-        let data = fs::read(path).ok()?;
-        return hash_bytes(alg, &data);
+        let data = match fs::read(path) {
+            Ok(data) => data,
+            Err(_) => return Hashed::Unusable,
+        };
+        return match hash_bytes(alg, &data) {
+            Some(sum) => Hashed::Sum(sum),
+            None => Hashed::Unusable,
+        };
     }
     let tool = format!("{alg}sum");
-    let out = Command::new(&tool).arg(path).output().ok()?;
+    let out = match Command::new(&tool).arg(path).output() {
+        Ok(out) => out,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Hashed::ToolMissing(tool);
+        }
+        Err(_) => return Hashed::Unusable,
+    };
     if !out.status.success() {
-        return None;
+        return Hashed::Unusable;
     }
     let text = String::from_utf8_lossy(&out.stdout);
-    let first = text.split_whitespace().next()?;
-    if matches!(first.len(), 32 | 64 | 128) {
-        Some(first.to_ascii_lowercase())
-    } else {
-        None
+    let first = text.split_whitespace().next();
+    match first {
+        Some(first) if matches!(first.len(), 32 | 64 | 128) => {
+            Hashed::Sum(first.to_ascii_lowercase())
+        }
+        _ => Hashed::Unusable,
     }
 }
 
@@ -1479,8 +1525,12 @@ pub enum VcsSum {
 /// provider's published value a cross-check rather than a local echo (fish
 /// 4.9.3 and ccache 4.14 matched Arch byte for byte). The archive is captured
 /// to memory and any git failure is a failure: a failing git must not hash
-/// empty input and report a confident wrong sum.
-pub fn vcs_source_sum(recipe_dir: &Path, entry: &SourceEntry, alg: &str) -> VcsSum {
+/// empty input and report a confident wrong sum. `pkgbase` scopes the
+/// checkout lookup to this recipe's build tree
+/// ([`gsa_model::config::checkout_roots`] with the mirror tier on: the
+/// recomputation is ref-addressed, so a `SRCDEST` mirror is valid evidence
+/// here even though revision probing refuses it).
+pub fn vcs_source_sum(recipe_dir: &Path, pkgbase: Option<&str>, entry: &SourceEntry, alg: &str) -> VcsSum {
     let Some((_, value)) = entry.vcs_ref() else {
         return VcsSum::NoCheckout;
     };
@@ -1491,12 +1541,7 @@ pub fn vcs_source_sum(recipe_dir: &Path, entry: &SourceEntry, alg: &str) -> VcsS
     // …/pipewire.git lands in `pipewire`), while the provider map is keyed by
     // the URL spelling — try both (2026-09-30).
     let stripped = name.strip_suffix(".git").unwrap_or(&name).to_string();
-    let mut roots = vec![recipe_dir.to_path_buf()];
-    // The resolved SRCDEST (the build user's makepkg.conf), never the raw
-    // env alone — see `gsa_model::config::resolve_srcdest`.
-    if let Some(srcdest) = gsa_model::config::resolve_srcdest() {
-        roots.push(srcdest);
-    }
+    let roots = gsa_model::config::checkout_roots(recipe_dir, pkgbase, true);
     let mut repo = None;
     'outer: for root in &roots {
         for cand in [&name, &stripped] {
@@ -1510,7 +1555,13 @@ pub fn vcs_source_sum(recipe_dir: &Path, entry: &SourceEntry, alg: &str) -> VcsS
     let Some(repo) = repo else {
         return VcsSum::NoCheckout;
     };
-    let out = match Command::new("git")
+    // Build-side: the checkout lives in the build user's SRCDEST/cache, and
+    // `GIT_CONFIG_COUNT=0` (parity with every other git site) keeps root's or
+    // an agent's git config — a tar.*.command filter would change the
+    // archived bytes and thus the checksum — out of the recompute.
+    let out = match gsa_model::privilege::build_command("git")
+        .env("GIT_CONFIG_COUNT", "0")
+        .env("GIT_TERMINAL_PROMPT", "0")
         .arg("-c")
         .arg("core.abbrev=no")
         .arg("-C")
@@ -1838,7 +1889,12 @@ impl NvcheckerRunner {
             config_text
         );
         fs::write(&merged, body).map_err(|e| ProviderError::Invalid(format!("{e}")))?;
-        let out = Command::new("nvchecker")
+        // Build-domain probe: dropped to the build user like every tool that
+        // can materialize or read user-home state (2026-10-17 sweep), with
+        // its scratch handed over so the dropped nvchecker can write.
+        gsa_model::privilege::own_to_build_user(scratch.path())
+            .map_err(|e| ProviderError::Invalid(format!("cannot hand nvchecker scratch over: {e}")))?;
+        let out = gsa_model::privilege::build_command("nvchecker")
             .arg("-c")
             .arg(&merged)
             .output()
@@ -2621,7 +2677,7 @@ pub fn anchor_sums(
             .map(|(_, e)| e.clone())
             .expect("anchored entry came from candidates");
         let got = if entry.vcs().is_some() {
-            match vcs_source_sum(&info.dir, &entry, &sum.algorithm) {
+            match vcs_source_sum(&info.dir, Some(&info.pkgbase), &entry, &sum.algorithm) {
                 VcsSum::Sum(s) => Some(s),
                 VcsSum::NoCheckout => {
                     unverifiable.push(format!(
@@ -2643,7 +2699,23 @@ pub fn anchor_sums(
             }
         } else {
             match locate_fetched(&info.dir, fnm) {
-                Some(p) => hash_file(&sum.algorithm, &p),
+                Some(p) => match hash_file(&sum.algorithm, &p) {
+                    Hashed::Sum(sum) => Some(sum),
+                    Hashed::ToolMissing(tool) => {
+                        unverifiable.push(format!(
+                            "{fnm}: '{tool}' is not on PATH, so {label_owner}'s {} checksum could not be computed",
+                            sum.algorithm
+                        ));
+                        None
+                    }
+                    Hashed::Unusable => {
+                        unverifiable.push(format!(
+                            "{fnm}: the fetched file could not be hashed with {}, so {label_owner}'s checksum could not be applied to it",
+                            sum.algorithm
+                        ));
+                        None
+                    }
+                },
                 None => {
                     unverifiable.push(format!(
                         "{fnm}: not fetched into the recipe or $SRCDEST, so {label_owner}'s checksum could not be applied to it"

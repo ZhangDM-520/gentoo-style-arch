@@ -231,7 +231,7 @@ db_file() {
 write_stub_makepkg() {
     cat >"$1/bin/makepkg" <<'EOF'
 #!/usr/bin/env bash
-set -u
+set -eu
 case " $* " in
 *" --verifysource "*) exit 0 ;; # fetch children are advisory here
 esac
@@ -286,8 +286,12 @@ EOF
 write_stub_pacman_conf() {
     cat >"$1/bin/pacman-conf" <<EOF
 #!/usr/bin/env bash
-[ "\${1:-}" = DBPath ] && printf '%s\n' "$2"
-exit 0
+set -u
+if [ "\${1:-}" = DBPath ]; then
+    printf '%s\n' "$2"
+    exit 0
+fi
+exit 1
 EOF
     chmod +x "$1/bin/pacman-conf"
 }

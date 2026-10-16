@@ -195,9 +195,15 @@ pub fn run_local_db_check(args: &[String], out: &mut dyn Write, err: &mut dyn Wr
             }
         },
         _ => {
-            // The orphan-archive oracle: every recipe directory the
-            // topology knows (§J.2's layout — archives beside recipes).
-            let recipe_dirs = match crate::find_root() {
+            // The orphan-archive oracle scans the two homes archives
+            // actually live in: every recipe directory the topology knows
+            // (§J.2's legacy home) AND the W4a shared PKGDEST the index
+            // rows point at. The layout is resolved here — the caller owns
+            // the workspace knowledge, `gsa_state::check` just scans what
+            // it is given — under the engine's ONE layout error policy: an
+            // unusable layout is fatal for the operation, never a silent
+            // home switch.
+            let mut scan_dirs = match crate::find_root() {
                 Some(root) => match gsa_topo::load_project(&root) {
                     Ok(project) => project
                         .topology
@@ -212,7 +218,14 @@ pub fn run_local_db_check(args: &[String], out: &mut dyn Write, err: &mut dyn Wr
                 },
                 None => Vec::new(),
             };
-            match gsa_state::check(&root, &recipe_dirs) {
+            match gsa_model::config::build_layout_for_run() {
+                Ok(layout) => scan_dirs.push(layout.pkgdest),
+                Err(error) => {
+                    let _ = writeln!(err, "gsa: {error}");
+                    return 3;
+                }
+            }
+            match gsa_state::check(&root, &scan_dirs) {
                 Ok(report) => {
                     for finding in &report.findings {
                         let _ = writeln!(out, "{}", finding.render());
@@ -367,4 +380,78 @@ pub fn query_revdep(
         let _ = writeln!(out, "{row}");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Pin the process-global layout/state seams to one scratch tree for
+    /// the closure (env is process-global and test threads share it), and
+    /// restore whatever was there before on the way out.
+    struct EnvPin {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        saved: Vec<(&'static str, Option<std::ffi::OsString>)>,
+    }
+
+    impl EnvPin {
+        fn take(root: &Path) -> EnvPin {
+            static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+            let lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let conf = root.join("gsa.conf");
+            std::fs::write(&conf, "# fixture: empty layers\n").unwrap();
+            let pinned: [(&'static str, std::ffi::OsString); 3] = [
+                ("GSA_CONF", conf.into_os_string()),
+                ("GSA_BUILD_DIR", root.join("cache").into_os_string()),
+                ("GSA_STATE_DIR", root.join("state").into_os_string()),
+            ];
+            let mut saved = Vec::new();
+            for (key, value) in pinned {
+                saved.push((key, std::env::var_os(key)));
+                std::env::set_var(key, &value);
+            }
+            EnvPin { _lock: lock, saved }
+        }
+    }
+
+    impl Drop for EnvPin {
+        fn drop(&mut self) {
+            for (key, value) in self.saved.drain(..) {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+    }
+
+    /// The orphan-archive oracle must see the two homes archives actually
+    /// live in: the topology's recipe dirs (§J.2's legacy home) AND the
+    /// W4a PKGDEST the index rows point at — a PKGDEST orphan with no row
+    /// is a finding, named.
+    #[test]
+    fn local_db_check_scans_the_pkgdest_home_for_orphans() {
+        let scratch = std::env::temp_dir().join(format!("gsa-cli-query-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).unwrap();
+        let _env = EnvPin::take(&scratch);
+
+        // A clean state root; one orphan archive in the live PKGDEST home.
+        let pkgdest = scratch.join("cache").join("pkgs");
+        std::fs::create_dir_all(&pkgdest).unwrap();
+        let orphan = pkgdest.join("stray-1.0-1-any.pkg.tar.zst");
+        std::fs::write(&orphan, b"not a real archive (the oracle is name-shaped)\n").unwrap();
+
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let rc = run_local_db_check(&[], &mut out, &mut err);
+        let text = String::from_utf8_lossy(&out).into_owned();
+        assert_eq!(rc, 1, "a PKGDEST orphan is a finding: {text}");
+        assert!(
+            text.contains("orphan-archive stray-1.0-1-any.pkg.tar.zst"),
+            "the PKGDEST orphan is named: {text}"
+        );
+
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
 }

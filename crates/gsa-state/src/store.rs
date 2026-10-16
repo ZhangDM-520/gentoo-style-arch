@@ -7,7 +7,10 @@
 //! class): a line that does not parse — including a truncated final line
 //! with no newline — is skipped and reported by name, and every row before
 //! it is kept. That tolerance is the whole reason the format is plain
-//! append-only JSONL rather than a database page file.
+//! append-only JSONL rather than a database page file. Appended rows are
+//! durable only after a later repair pass has re-read the store (no fsync
+//! on purpose): a power loss may silently drop the tail, and a vanished
+//! row is not a "corrupt line" a reader ever notices.
 
 use std::io::Write;
 use std::path::Path;

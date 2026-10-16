@@ -224,9 +224,18 @@ pub struct CleanTargets {
     pub sidecars: Vec<PathBuf>,
 }
 
-/// Computes one recipe dir's drift-clean targets (top level only — the trees
-/// cover their own recursion; classification mirrors `find -maxdepth 1 -type
-/// f`).
+/// Computes one recipe's drift-clean targets: the recipe-dir half (top level
+/// only — the trees cover their own recursion; classification mirrors `find
+/// -maxdepth 1 -type f`) plus the W4 half (§J.2) — the live trees at
+/// `<build_dir>/<pkgbase>` and `<pkgdir>/<pkgbase>`, and this recipe's
+/// archives + baselines in the shared `PKGDEST`. The shared half is
+/// NAME-TRUTH filtered (exact output names + this recipe's version key,
+/// never a filename prefix — a `python` clean may not touch
+/// `python-attrs`): an unestablishable output set or version skips that
+/// half entirely rather than deleting someone else's evidence. With no
+/// establishable pkgbase the live trees cannot be named and are skipped —
+/// same fail-safe. The recipe-dir scan stays: old trees and fixture stubs
+/// still write there (contract §J.2).
 ///
 /// ORDERING HARD RULE for the wiring (`docs/build-guide.md` "Skip and
 /// resume"): when `--skip` might skip this recipe's current-mtime VCS
@@ -234,6 +243,16 @@ pub struct CleanTargets {
 /// unreachable ref must refuse while the archive and its VCS baseline still
 /// exist. Cleaning first destroys the evidence the refusal needs.
 pub fn clean_targets(recipe_dir: &Path) -> io::Result<CleanTargets> {
+    let layout = gsa_model::config::build_layout_for_run().ok();
+    clean_targets_in(recipe_dir, layout.as_ref())
+}
+
+/// [`clean_targets`] against a given layout (`None` = recipe-dir half only).
+/// The pure seam tests pin both halves through.
+pub fn clean_targets_in(
+    recipe_dir: &Path,
+    layout: Option<&gsa_model::config::BuildLayout>,
+) -> io::Result<CleanTargets> {
     let mut archives = Vec::new();
     let mut sidecars = Vec::new();
     for entry in fs::read_dir(recipe_dir)? {
@@ -251,17 +270,62 @@ pub fn clean_targets(recipe_dir: &Path) -> io::Result<CleanTargets> {
             archives.push(entry.path());
         }
     }
+    let mut trees = vec![
+        recipe_dir.join("src"),
+        recipe_dir.join("pkg"),
+        recipe_dir.join("build"),
+    ];
+    // The W4 half: live trees plus name-truth shared-PKGDEST artifacts.
+    let pkgbase = crate::freshness::recipe_pkgbase(recipe_dir);
+    if let Some(layout) = layout {
+        if let Some(base) = &pkgbase {
+            trees.push(layout.builddir.join(base));
+            trees.push(layout.pkgdir.join(base));
+        }
+        if let (Ok(outputs), Ok((pv, pr))) = (
+            crate::freshness::expected_output_names(recipe_dir),
+            crate::freshness::current_version_key(recipe_dir),
+        ) {
+            if let Ok(entries) = fs::read_dir(&layout.pkgdest) {
+                for entry in entries.flatten() {
+                    let Ok(file_type) = entry.file_type() else {
+                        continue;
+                    };
+                    if !file_type.is_file() {
+                        continue;
+                    }
+                    let path = entry.path();
+                    let name = entry.file_name();
+                    let name = name.to_string_lossy();
+                    let is_sidecar = name.ends_with(".pkg.tar.zst.gsa-vcs-revisions");
+                    let is_archive = name.ends_with(".pkg.tar.zst");
+                    if !is_sidecar && !is_archive {
+                        continue;
+                    }
+                    // The sidecar shares its archive's identity.
+                    let stem = if is_sidecar {
+                        path.with_extension("")
+                    } else {
+                        path.clone()
+                    };
+                    if !outputs
+                        .iter()
+                        .any(|o| crate::freshness::archive_matches_output(&stem, o, &pv, &pr))
+                    {
+                        continue;
+                    }
+                    if is_sidecar {
+                        sidecars.push(path);
+                    } else {
+                        archives.push(path);
+                    }
+                }
+            }
+        }
+    }
     archives.sort();
     sidecars.sort();
-    Ok(CleanTargets {
-        trees: vec![
-            recipe_dir.join("src"),
-            recipe_dir.join("pkg"),
-            recipe_dir.join("build"),
-        ],
-        archives,
-        sidecars,
-    })
+    Ok(CleanTargets { trees, archives, sidecars })
 }
 
 // ─── rustc/cargo sanity probe ────────────────────────────────────────────────
@@ -480,14 +544,31 @@ pub fn rustc_sanity_probe(scratch_base: &Path) -> ProbeStatus {
             ),
         };
     }
+    // Hand the scratch source to the build user: the dropped rustc must be
+    // able to read it whatever the engine's umask made of it (a root 0600
+    // probe would misdiagnose as "rustc is BROKEN").
+    if let Err(err) = gsa_model::privilege::own_to_build_user(&probe_rs) {
+        return finish_probe(
+            ProbeStatus::Failed {
+                detail: format!(
+                    "cannot hand the rustc sanity probe {} to the build user: {err}",
+                    probe_rs.display()
+                ),
+            },
+            &[&probe_rs, &probe_bin],
+        );
+    }
     let verdict = probe_chain(&probe_rs, &probe_bin);
     finish_probe(verdict, &[&probe_rs, &probe_bin])
 }
 
 /// Both subprocess probes, in order: a failing rustc compile short-circuits
-/// (cargo state cannot matter more than the compiler dying).
+/// (cargo state cannot matter more than the compiler dying). Both are
+/// build-side compiles and run as the build user via
+/// [`gsa_model::privilege::build_command`] — a root run would read
+/// `/root/.cargo` and friends, the 2026-10-16 smoke's leaked-HOME shape.
 fn probe_chain(probe_rs: &Path, probe_bin: &Path) -> ProbeStatus {
-    let compile = Command::new("rustc")
+    let compile = gsa_model::privilege::build_command("rustc")
         .arg("-o")
         .arg(probe_bin)
         .arg(probe_rs)
@@ -521,7 +602,7 @@ fn probe_chain(probe_rs: &Path, probe_bin: &Path) -> ProbeStatus {
         Ok(_) => {}
     }
 
-    match Command::new("cargo").arg("--version").output() {
+    match gsa_model::privilege::build_command("cargo").arg("--version").output() {
         Err(err) => ProbeStatus::Failed {
             detail: format!(
                 "cargo probe failed — `cargo --version` could not run ({err}) while rust-git is installed.

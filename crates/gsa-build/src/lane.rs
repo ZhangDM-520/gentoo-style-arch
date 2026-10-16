@@ -8,9 +8,16 @@
 //! `defer 99 source-unfetchable` (the Phase-2 stand-in for the fetch and
 //! anchoring gates, which land with `gsa-fetch`/version-sync and are the only
 //! other paths allowed to emit deferral); any other exit → `failed 1
-//! build-failed`; signal receipt by this child is reported through the lane
-//! codes 129/143/130 (§K.3); a park marker published before the build began
-//! → `parked 98 <reason>` (§F.1, spawn-to-build race).
+//! build-failed`. The classification reads the child's own end state first:
+//! a makepkg killed by a signal carries its cause (HUP/INT/TERM → the lane
+//! codes 129/143/130, §K.3; any other signal → `failed 1
+//! build-killed-by-signal-<n>`), and this child's own received signal is
+//! the fallback only for a normal makepkg exit — a late signal never
+//! downgrades a good build. A park marker published before the build began
+//! → `parked 98 <reason>` (§F.1, spawn-to-build race); an unusable state
+//! root or build-cache layout fails the lane (`failed 1 state-dir-unusable`
+//! / `failed 1 layout-unusable`, §J.3/§J.2) instead of building in the
+//! wrong place.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -29,6 +36,65 @@ fn valid_pkg(s: &str) -> bool {
     !s.is_empty()
         && s.chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '+'))
+}
+
+/// The lane's state root (contract §J.3): `--state-dir` is supervisor-side;
+/// the lane child reads the SAME precedence through the model's one resolver
+/// (`GSA_STATE_DIR` — the supervisor's export — then the gsa.conf layers,
+/// then `/var/lib/gsa`). A second, simplified copy here once answered
+/// env-or-`/var/lib/gsa` only, so a `--lane-job` invoked outside the
+/// supervisor silently got the wrong root; a resolution failure is fatal
+/// for the lane (§J.3 has no silent fallback).
+pub fn lane_state_dir() -> Result<PathBuf, String> {
+    gsa_model::config::resolve_state_dir(None)
+}
+
+/// Classify one makepkg end state (contract §F.1) from the CHILD's own exit
+/// status first: a successful build stays `ok` even when a late signal
+/// reached this lane, and a makepkg that died to a signal carries its own
+/// cause — HUP/INT/TERM map to the lane codes 129/143/130, anything else
+/// (an OOM-killer SIGKILL, a compiler SIGSEGV) is a failed build whose
+/// reason NAMES the signal, never plain `build-failed`. A normal child exit
+/// under the lane's own received run-stopping signal is an INTERRUPT
+/// (§H.3, `signal-abort-lock.sh` phase 2): a lane TERMed mid-build reports
+/// `interrupted-mid-build` even when its makepkg happened to finish — the
+/// run aborted this package. (The reverse sliver — a signal landing after
+/// makepkg exited but before classification — errs the same conservative
+/// way: the row says unfinished and the continuation re-runs it, `-s`
+/// skipping the rebuild; closing it would need exit-vs-receipt timestamps.)
+pub fn classify_build_exit(
+    exit: gsa_sched::signals::ChildExit,
+    received: i32,
+) -> (gsa_model::LaneOutcome, String) {
+    use gsa_model::LaneOutcome;
+    use gsa_sched::signals::ChildExit;
+    let received_class = match received {
+        gsa_sched::signals::SIGHUP => Some((LaneOutcome::Hup, "interrupted-mid-build")),
+        gsa_sched::signals::SIGINT => Some((LaneOutcome::Int, "interrupted-mid-build")),
+        gsa_sched::signals::SIGTERM => Some((LaneOutcome::Term, "interrupted-mid-build")),
+        _ => None,
+    };
+    match exit {
+        ChildExit::Signaled(sig) => match sig {
+            gsa_sched::signals::SIGHUP => (LaneOutcome::Hup, "interrupted-mid-build".to_string()),
+            gsa_sched::signals::SIGINT => (LaneOutcome::Int, "interrupted-mid-build".to_string()),
+            gsa_sched::signals::SIGTERM => (LaneOutcome::Term, "interrupted-mid-build".to_string()),
+            other => (
+                LaneOutcome::Failed,
+                format!("build-killed-by-signal-{other}"),
+            ),
+        },
+        ChildExit::Exited(code) => match received_class {
+            Some((outcome, reason)) => (outcome, reason.to_string()),
+            None => match code {
+                0 => (LaneOutcome::Ok, "ok".to_string()),
+                // The deferral stand-in (see the module docs): the only
+                // Phase-2 path that emits `defer` (§F.1).
+                99 => (LaneOutcome::Defer, "source-unfetchable".to_string()),
+                _ => (LaneOutcome::Failed, "build-failed".to_string()),
+            },
+        },
+    }
 }
 
 fn usage(message: &str, err: &mut dyn Write) -> i32 {
@@ -94,9 +160,21 @@ pub fn run_lane_job(args: &[String], err: &mut dyn Write) -> i32 {
     };
     let recipe_dir = root.join(&record.path);
 
-    let state_dir = match std::env::var("GSA_STATE_DIR") {
-        Ok(v) if !v.is_empty() => PathBuf::from(v),
-        _ => PathBuf::from("/var/lib/gsa"),
+    let state_dir = match lane_state_dir() {
+        Ok(dir) => dir,
+        Err(message) => {
+            // §J.3: a state root that cannot be resolved is fatal for the
+            // lane — never a silent fallback to another root.
+            let _ = writeln!(err, "gsa --lane-job: {message}");
+            let result = LaneResult::new(pkg, LaneOutcome::Failed, 0, "state-dir-unusable").unwrap();
+            return match codec::publish(&result_path, &result) {
+                Ok(()) => LaneOutcome::Failed.code(),
+                Err(message) => {
+                    let _ = writeln!(err, "gsa --lane-job: {message}");
+                    LaneOutcome::Lost.code()
+                }
+            };
+        }
     };
 
     // Signal honesty (§K.3): receipt by this child is reported through the
@@ -157,7 +235,24 @@ pub fn run_lane_job(args: &[String], err: &mut dyn Write) -> i32 {
 
     // ── the build: makepkg in the recipe directory (§K.1) ────────────────
     let start = Instant::now();
-    let mut cmd = crate::makepkg::makepkg_command(&recipe_dir, jobs, flags, &state_dir);
+    let mut cmd = match crate::makepkg::makepkg_command(&recipe_dir, jobs, flags, &state_dir) {
+        Ok(cmd) => cmd,
+        Err(message) => {
+            // §J.2/§J.3's one layout error policy: fatal for the lane with
+            // the message, never a build that lands beside the recipe and
+            // reports success.
+            let _ = writeln!(err, "gsa --lane-job: {message}");
+            let _ = writeln!(&log, "gsa --lane-job: {message}");
+            let result = LaneResult::new(pkg, LaneOutcome::Failed, 0, "layout-unusable").unwrap();
+            return match codec::publish(&result_path, &result) {
+                Ok(()) => LaneOutcome::Failed.code(),
+                Err(message) => {
+                    let _ = writeln!(err, "gsa --lane-job: {message}");
+                    LaneOutcome::Lost.code()
+                }
+            };
+        }
+    };
     let log_out = log.try_clone();
     let log_err = log.try_clone();
     cmd.stdin(Stdio::null());
@@ -172,25 +267,16 @@ pub fn run_lane_job(args: &[String], err: &mut dyn Write) -> i32 {
 
     let (code, reason) = match status {
         Ok(status) => {
-            let received = signals::received_signal();
-            if received != 0 {
-                (
-                    match received {
-                        signals::SIGHUP => LaneOutcome::Hup,
-                        signals::SIGINT => LaneOutcome::Int,
-                        _ => LaneOutcome::Term,
-                    },
-                    "interrupted-mid-build".to_string(),
-                )
-            } else if status.success() {
-                (LaneOutcome::Ok, "ok".to_string())
-            } else if status.code() == Some(99) {
-                // The deferral stand-in (see the module docs): the only
-                // Phase-2 path that emits `defer` (§F.1).
-                (LaneOutcome::Defer, "source-unfetchable".to_string())
-            } else {
-                (LaneOutcome::Failed, "build-failed".to_string())
-            }
+            // §F.1's classification is the child's own exit status first
+            // (`ChildExit`), with this lane's received signal only as the
+            // normal-exit fallback — a late signal never downgrades a good
+            // build, and a signal death the lane never received still
+            // reports its cause.
+            let exit = match std::os::unix::process::ExitStatusExt::signal(&status) {
+                Some(sig) => signals::ChildExit::Signaled(sig),
+                None => signals::ChildExit::Exited(status.code().unwrap_or(1)),
+            };
+            classify_build_exit(exit, signals::received_signal())
         }
         Err(error) => {
             let _ = writeln!(err, "gsa --lane-job: cannot run makepkg: {error}");
@@ -212,4 +298,108 @@ pub fn run_lane_job(args: &[String], err: &mut dyn Write) -> i32 {
 /// supervisor and the child share).
 pub fn lane_result_path(run_dir: &Path, pkg: &str) -> PathBuf {
     run_dir.join(format!("{pkg}.result"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Env-mutating tests serialize: `GSA_CONF`/`GSA_STATE_DIR` are
+    /// process-global.
+    static ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn lane_state_dir_follows_the_j3_precedence() {
+        let _guard = ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let dir = std::env::temp_dir().join(format!("gsa-lane-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let conf = dir.join("gsa.conf");
+        let state = dir.join("state");
+        std::fs::write(&conf, format!("state_dir = {}\n", state.display())).unwrap();
+        let saved_conf = std::env::var("GSA_CONF").ok();
+        let saved_state = std::env::var("GSA_STATE_DIR").ok();
+        std::env::set_var("GSA_CONF", &conf);
+        std::env::remove_var("GSA_STATE_DIR");
+        // Without the supervisor's export, the gsa.conf layer decides
+        // (§J.3) — never a hard-coded `/var/lib/gsa`.
+        let from_conf = lane_state_dir();
+        // The supervisor's GSA_STATE_DIR export stays above the config.
+        std::env::set_var("GSA_STATE_DIR", "/from-env");
+        let from_env = lane_state_dir();
+        // Restoration keeps the process-global env as it was found, before
+        // any assertion can panic.
+        match saved_conf {
+            Some(v) => std::env::set_var("GSA_CONF", v),
+            None => std::env::remove_var("GSA_CONF"),
+        }
+        match saved_state {
+            Some(v) => std::env::set_var("GSA_STATE_DIR", v),
+            None => std::env::remove_var("GSA_STATE_DIR"),
+        }
+        assert_eq!(
+            from_conf.unwrap(),
+            state,
+            "the gsa.conf state_dir layer must decide when GSA_STATE_DIR is unset"
+        );
+        assert_eq!(from_env.unwrap(), PathBuf::from("/from-env"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn build_exit_classification_honours_the_interrupt_contract_and_signal_causes() {
+        use gsa_model::LaneOutcome;
+        use gsa_sched::signals::ChildExit;
+        // §H.3: a normal child exit under the lane's received run-stopping
+        // signal is an interrupt (signal-abort-lock.sh phase 2 pins rc 143
+        // + `interrupted-mid-build` even when makepkg finished).
+        assert_eq!(
+            classify_build_exit(ChildExit::Exited(0), signals::SIGTERM),
+            (LaneOutcome::Term, "interrupted-mid-build".to_string())
+        );
+        assert_eq!(
+            classify_build_exit(ChildExit::Exited(0), signals::SIGINT),
+            (LaneOutcome::Int, "interrupted-mid-build".to_string())
+        );
+        // Without a receipt the child's own status stands: ok / defer /
+        // failed.
+        assert_eq!(
+            classify_build_exit(ChildExit::Exited(0), 0),
+            (LaneOutcome::Ok, "ok".to_string())
+        );
+        assert_eq!(
+            classify_build_exit(ChildExit::Exited(99), 0),
+            (LaneOutcome::Defer, "source-unfetchable".to_string())
+        );
+        // A signal death carries its own cause — even one this lane never
+        // received (the OOM-killer case is not plain `build-failed`).
+        assert_eq!(
+            classify_build_exit(ChildExit::Signaled(signals::SIGKILL), 0),
+            (
+                LaneOutcome::Failed,
+                "build-killed-by-signal-9".to_string()
+            )
+        );
+        assert_eq!(
+            classify_build_exit(ChildExit::Signaled(signals::SIGTERM), 0),
+            (LaneOutcome::Term, "interrupted-mid-build".to_string())
+        );
+        // The lane's own receipt classifies any normal exit (a teardown
+        // SIGTERM that makepkg caught and exited non-zero under is an
+        // interrupt, not a build failure).
+        assert_eq!(
+            classify_build_exit(ChildExit::Exited(1), signals::SIGTERM),
+            (LaneOutcome::Term, "interrupted-mid-build".to_string())
+        );
+        assert_eq!(
+            classify_build_exit(ChildExit::Exited(1), 0),
+            (LaneOutcome::Failed, "build-failed".to_string())
+        );
+        assert_eq!(
+            classify_build_exit(ChildExit::Exited(99), 0),
+            (LaneOutcome::Defer, "source-unfetchable".to_string())
+        );
+    }
 }

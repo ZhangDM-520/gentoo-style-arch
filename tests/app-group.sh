@@ -133,6 +133,7 @@ set_topology_record "$fixture" app3 app 'app2'
 
 cat >"$fixture/bin/makepkg" <<'EOF'
 #!/usr/bin/env bash
+set -eu
 id=$(basename "$PWD")
 printf 'fake makepkg %s\n' "$PWD"
 # SPAWN/END log: which packages a run actually built. This is the gsa half's

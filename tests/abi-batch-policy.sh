@@ -174,7 +174,7 @@ rr2_stub_knob GSA_FAKE_PACMAN_CONF_LOG "abi-batch pacman-conf stub: DBPath consu
 write_real_makepkg() {
     cat >"$1/bin/makepkg" <<'EOF'
 #!/usr/bin/env bash
-set -u
+set -eu
 id=$(basename "$PWD")
 printf 'BUILD %s\n' "$id" >>"${GSA_FAKE_MAKEPKG_LOG:?}"
 stage="$PWD/.stage-$id"
@@ -231,8 +231,11 @@ write_stub_pacman_conf() {
 #!/usr/bin/env bash
 set -u
 printf 'pacman-conf %s\n' "\$*" >>"\${GSA_FAKE_PACMAN_CONF_LOG:?}"
-[ "\${1:-}" = DBPath ] && printf '%s\n' "$2"
-exit 0
+if [ "\${1:-}" = DBPath ]; then
+    printf '%s\n' "$2"
+    exit 0
+fi
+exit 1
 EOF
     chmod +x "$1/bin/pacman-conf"
 }
@@ -1295,9 +1298,14 @@ case ${args[0]:-} in
     ;;
 -Ql)
     # File listing for the link-truth probe: one synthetic ELF path per
-    # member; the readelf stub answers its DT_NEEDED.
+    # member; the readelf stub answers its DT_NEEDED. The listing is the
+    # answer (the frozen gate's abi_member_needed reads stdout in a fish
+    # command substitution and its disk-name dump is piped — pacman's rc is
+    # never consulted), so a successful listing exits 0 like real `pacman
+    # -Ql` (the honest twin tests/abi-drift-install.sh's stub does the same).
     [[ ${args[1]:-} == h-mem* ]] || exit 1
     printf '%s /usr/lib/lib-%s.so\n' "${args[1]}" "${args[1]}"
+    exit 0
     ;;
 esac
 exit 1
@@ -1321,7 +1329,7 @@ EOF
     # The stub makepkg: B/G's shape — a BUILD marker plus the trivial archive.
     cat >"$dir_h/bin/makepkg" <<'EOF'
 #!/usr/bin/env bash
-set -u
+set -eu
 id=$(basename "$PWD")
 printf 'BUILD %s\n' "$id" >>"${GSA_FAKE_MAKEPKG_LOG:?}"
 : >"$PWD/$id-1.0.0-1-any.pkg.tar.zst"

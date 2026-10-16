@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
 use gsa_recipe::toolchain::{
-    check_identity, clean_targets, force_queue, gcc_identity, marker_path, probe_scratch_base,
+    check_identity, clean_targets_in, force_queue, gcc_identity, marker_path, probe_scratch_base,
     read_marker, remediation_plan, remediation_refusal_text, resolve_probe_scratch,
     rustc_sanity_probe, sanitize_user_tag, write_marker, CleanTargets, IdentityState, ProbeStatus,
     Remediation, GCC_UNAVAILABLE_IDENTITY,
@@ -417,7 +417,7 @@ fn identity_missing_lists_every_clean_target() {
     );
     assert!(verdict.forces_clean_rebuild());
 
-    let targets = clean_targets(&recipe).unwrap();
+    let targets = clean_targets_in(&recipe, None).unwrap();
     clean_targets_cover(&targets, &recipe).unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(
         targets.archives,
@@ -438,10 +438,68 @@ fn identity_missing_lists_every_clean_target() {
 }
 
 #[test]
+fn clean_targets_reach_the_w4_cache_homes_with_name_truth() {
+    let root = scratch("clean-targets-w4");
+    let recipe = recipe_fixture(&root);
+    // Metadata that establishes pkgbase, outputs and the version key.
+    fs::write(
+        recipe.join("PKGBUILD"),
+        b"pkgbase=p1\npkgname=p1\npkgver=1.0.0\npkgrel=1\n",
+    )
+    .unwrap();
+    fs::write(
+        recipe.join(".SRCINFO"),
+        b"pkgbase = p1\npkgname = p1\npkgver = 1.0.0\npkgrel = 1\n",
+    )
+    .unwrap();
+    let layout = gsa_model::config::BuildLayout {
+        root: root.join("cache"),
+        builddir: root.join("cache/build"),
+        pkgdir: root.join("cache/pkg"),
+        pkgdest: root.join("cache/pkgs"),
+    };
+    fs::create_dir_all(&layout.pkgdest).unwrap();
+    // This recipe's live artifacts in the shared PKGDEST …
+    fs::write(layout.pkgdest.join("p1-1.0.0-1-any.pkg.tar.zst"), b"").unwrap();
+    fs::write(
+        layout.pkgdest.join("p1-1.0.0-1-any.pkg.tar.zst.gsa-vcs-revisions"),
+        b"rev\n",
+    )
+    .unwrap();
+    // … and a hyphen-extended name-prefix neighbour that must survive (the
+    // `python` clean may never touch `python-libs`).
+    fs::write(
+        layout.pkgdest.join("p1-libs-2.0-1-any.pkg.tar.zst"),
+        b"",
+    )
+    .unwrap();
+
+    let targets = clean_targets_in(&recipe, Some(&layout)).unwrap();
+    assert!(
+        targets.trees.contains(&layout.builddir.join("p1")),
+        "the live build tree is a clean target: {:?}",
+        targets.trees
+    );
+    assert!(targets.trees.contains(&layout.pkgdir.join("p1")));
+    assert!(targets
+        .archives
+        .contains(&layout.pkgdest.join("p1-1.0.0-1-any.pkg.tar.zst")));
+    assert!(targets
+        .sidecars
+        .contains(&layout.pkgdest.join("p1-1.0.0-1-any.pkg.tar.zst.gsa-vcs-revisions")));
+    assert!(
+        !targets
+            .archives
+            .contains(&layout.pkgdest.join("p1-libs-2.0-1-any.pkg.tar.zst")),
+        "a name-prefix neighbour in the shared PKGDEST must never be a clean target"
+    );
+}
+
+#[test]
 fn falsify_clean_targets_checker_names_the_missing_class() {
     let root = scratch("clean-targets-falsify");
     let recipe = recipe_fixture(&root);
-    let targets = clean_targets(&recipe).unwrap();
+    let targets = clean_targets_in(&recipe, None).unwrap();
     // Mutated input: drop one whole class at a time and require the checker
     // to name exactly the class that went missing.
     let mutated = CleanTargets {

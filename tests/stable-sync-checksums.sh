@@ -335,6 +335,7 @@ EOF
     # through this same code path and diffing.
     cat >"$dir/bin/makepkg" <<'EOF'
 #!/usr/bin/env bash
+set -eu
 printf '%s\n' "$*" >>"$GSA_FAKE_DIR/makepkg_argv"
 for arg in "$@"; do
     if [[ $arg == --printsrcinfo ]]; then
@@ -363,7 +364,7 @@ for arg in "$@"; do
 done
 printf 'fake makepkg: %s\n' "$*"
 [[ ${GSA_FAKE_MAKEPKG_FAIL:-0} != 1 ]] || exit 1
-bash -c 'source ./PKGBUILD >/dev/null 2>&1; : >"$PWD/${pkgname[0]}-${pkgver}-${pkgrel}-any.pkg.tar.zst"' 2>/dev/null || true
+bash -c 'source ./PKGBUILD >/dev/null 2>&1; : >"$PWD/${pkgname[0]}-${pkgver}-${pkgrel}-any.pkg.tar.zst"' 2>/dev/null || exit 1
 exit 0
 EOF
     chmod +x "$dir/bin/makepkg"

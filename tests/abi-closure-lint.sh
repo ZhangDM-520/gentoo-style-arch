@@ -129,8 +129,12 @@ write_srcinfo() {
 mkdir -p "$tmp/db" "$tmp/bin"
 cat >"$tmp/bin/pacman-conf" <<'EOF'
 #!/usr/bin/env bash
-[ "${1:-}" = DBPath ] && printf '%s\n' "${GSA_FAKE_DB_PATH:?}"
-exit 0
+set -u
+if [ "${1:-}" = DBPath ]; then
+    printf '%s\n' "${GSA_FAKE_DB_PATH:?}"
+    exit 0
+fi
+exit 1
 EOF
 chmod +x "$tmp/bin/pacman-conf"
 export GSA_FAKE_DB_PATH="$tmp/db"

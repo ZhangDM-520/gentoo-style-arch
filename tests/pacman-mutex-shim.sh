@@ -99,7 +99,7 @@ make_install_conf "$fixture/pacman.conf"
 
 cat >"$fixture/bin/makepkg" <<'EOF'
 #!/usr/bin/env bash
-set -uo pipefail
+set -euo pipefail
 name=$(basename "$PWD")
 printf '%s\n' "${PACMAN:-}" >>"${GSA_FAKE_PACMAN_ENV_LOG:?fixture forgot GSA_FAKE_PACMAN_ENV_LOG}"
 mkdir -p "${GSA_FAKE_MARKER_DIR:?}"

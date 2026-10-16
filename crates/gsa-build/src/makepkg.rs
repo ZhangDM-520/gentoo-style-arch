@@ -101,12 +101,62 @@ pub fn strip_job_flags(value: &str) -> String {
 /// `GIT_CONFIG_COUNT=0` so agent-shell git config can never break VCS
 /// sources, and the `PACMAN` shim so makepkg's own dependency installs share
 /// the transaction lock (§K.1/K.3).
+///
+/// Errors are FATAL for the calling lane (contract §J.2/§J.3's one layout
+/// error policy): an unusable build-cache layout, a cache directory that
+/// cannot be created, or one that cannot be handed to the build user all
+/// refuse the build — never a silent degrade to `src/`/`pkg/`/archives
+/// beside the recipe (the pre-W4 shape §J.2 forbids), and never a
+/// root-owned cache dir the dropped makepkg cannot write.
+/// Create `dir` for the build user, one level at a time: every missing
+/// ancestor the engine brings into existence is handed to the build user as
+/// it is created. A `create_dir_all` as root would leave the whole new chain
+/// root-owned and unremovable by the build user (rule 19; 2026-10-17 sweep:
+/// the battery's fresh per-fixture caches ended up `rm`-proof one level
+/// above the cache root).
+fn create_owned_dir(dir: &Path) -> Result<(), String> {
+    let mut missing: Vec<&Path> = Vec::new();
+    let mut cursor = dir;
+    while !cursor.exists() {
+        missing.push(cursor);
+        cursor = cursor
+            .parent()
+            .ok_or_else(|| format!("cannot resolve the parent of {}", dir.display()))?;
+    }
+    for path in missing.into_iter().rev() {
+        // Concurrent lanes resolve the same layout: another one may create
+        // a level between our exists() walk and here — EEXIST is success.
+        match std::fs::create_dir(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(format!("cannot create {}: {error}", path.display())),
+        }
+        gsa_model::privilege::own_to_build_user(path)
+            .map_err(|error| format!("cannot hand {} to the build user: {error}", path.display()))?;
+    }
+    Ok(())
+}
+
 pub fn makepkg_command(
     recipe_dir: &Path,
     jobs: u32,
     payload_flags: &[String],
     state_dir: &Path,
-) -> std::process::Command {
+) -> Result<std::process::Command, String> {
+    let layout = gsa_model::config::build_layout_for_run()?;
+    makepkg_command_in(recipe_dir, jobs, payload_flags, state_dir, &layout)
+}
+
+/// [`makepkg_command`] against an already-resolved [`BuildLayout`] (the
+/// fixture seam; the public entry resolves the layout under the one error
+/// policy).
+pub fn makepkg_command_in(
+    recipe_dir: &Path,
+    jobs: u32,
+    payload_flags: &[String],
+    state_dir: &Path,
+    layout: &gsa_model::config::BuildLayout,
+) -> Result<std::process::Command, String> {
     // Build-domain command: under a privileged run makepkg is dropped to the
     // build user (makepkg refuses root; plan-gsa-isolation.md W1).
     let mut cmd = gsa_model::privilege::build_command("makepkg");
@@ -128,22 +178,41 @@ pub fn makepkg_command(
     // W4 build cache: makepkg's build trees, staging and archives land in
     // the build user's cache (plan-gsa-isolation.md), never beside the
     // recipe. The dirs are created (and chowned back) here — build-side
-    // writes into build-user paths are owned by the build user (W1).
-    if let Ok(layout) = gsa_model::config::load().and_then(|c| gsa_model::config::build_layout(&c)) {
-        for dir in [&layout.builddir, &layout.pkgdir, &layout.pkgdest] {
-            if std::fs::create_dir_all(dir).is_ok() {
-                let _ = gsa_model::privilege::own_to_build_user(dir);
-            }
-        }
-        cmd.env("BUILDDIR", absolute_for_child(&layout.builddir));
-        cmd.env("PKGDIR", absolute_for_child(&layout.pkgdir));
-        cmd.env("PKGDEST", absolute_for_child(&layout.pkgdest));
+    // writes into build-user paths are owned by the build user (W1). Both
+    // steps are fatal on failure with the remedy named: a root-owned cache
+    // dir is exactly the workspace poisoning privilege.rs exists to make
+    // impossible, and a half-created layout writes beside the recipe.
+    for dir in [&layout.builddir, &layout.pkgdir, &layout.pkgdest] {
+        create_owned_dir(dir).map_err(|error| {
+            format!(
+                "cannot create build-cache directory {}: {error} — point build_dir (gsa.conf) or GSA_BUILD_DIR at a writable cache",
+                dir.display()
+            )
+        })?;
+        gsa_model::privilege::own_to_build_user(dir).map_err(|error| {
+            format!(
+                "{error} — the build cache must belong to the build user; fix its ownership or point build_dir (gsa.conf) / GSA_BUILD_DIR at their cache"
+            )
+        })?;
     }
+    // The cache ROOT is build-user domain too: `create_dir_all` above may
+    // have created it as root, and a root-owned root leaves every later
+    // `rmdir`/fresh subdir to the build user impossible (2026-10-17 sweep:
+    // the battery's per-fixture caches ended up unremovable). Recursive —
+    // it covers the three subdirs above and anything makepkg parked there.
+    gsa_model::privilege::own_to_build_user(&layout.root).map_err(|error| {
+        format!(
+            "{error} — the build cache must belong to the build user; fix its ownership or point build_dir (gsa.conf) / GSA_BUILD_DIR at their cache"
+        )
+    })?;
+    cmd.env("BUILDDIR", absolute_for_child(&layout.builddir));
+    cmd.env("PKGDIR", absolute_for_child(&layout.pkgdir));
+    cmd.env("PKGDEST", absolute_for_child(&layout.pkgdest));
     let shim = crate::shim::shim_path(state_dir);
     if shim.is_file() {
         cmd.env("PACMAN", absolute_for_child(&shim));
     }
-    cmd
+    Ok(cmd)
 }
 
 #[cfg(test)]
@@ -211,7 +280,22 @@ mod tests {
 
     #[test]
     fn makepkg_argv_keeps_the_lane_shape_and_never_weakens_verification() {
-        let cmd = makepkg_command(Path::new("/recipes/mesa-git"), 6, &[], Path::new("/state"));
+        let dir = std::env::temp_dir().join(format!("gsa-makepkg-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let layout = gsa_model::config::BuildLayout {
+            builddir: dir.join("build"),
+            pkgdir: dir.join("pkg"),
+            pkgdest: dir.join("pkgs"),
+            root: dir.clone(),
+        };
+        let cmd = makepkg_command_in(
+            Path::new("/recipes/mesa-git"),
+            6,
+            &[],
+            Path::new("/state"),
+            &layout,
+        )
+        .expect("the layout is usable");
         let argv: Vec<String> = cmd
             .get_args()
             .map(|a| a.to_string_lossy().into_owned())
@@ -221,5 +305,72 @@ mod tests {
         for forbidden in FORBIDDEN_ARGS {
             assert!(!argv.iter().any(|a| a == forbidden));
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn makepkg_writes_only_into_the_w4_build_cache() {
+        let dir = std::env::temp_dir().join(format!("gsa-makepkg-layout-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let layout = gsa_model::config::BuildLayout {
+            builddir: dir.join("build"),
+            pkgdir: dir.join("pkg"),
+            pkgdest: dir.join("pkgs"),
+            root: dir.clone(),
+        };
+        let cmd = makepkg_command_in(
+            Path::new("/recipes/mesa-git"),
+            6,
+            &[],
+            Path::new("/state"),
+            &layout,
+        )
+        .expect("the layout is usable");
+        // The cache dirs exist and makepkg is pointed at them — never at
+        // the recipe directory (§J.2).
+        for (key, dir) in [
+            ("BUILDDIR", &layout.builddir),
+            ("PKGDIR", &layout.pkgdir),
+            ("PKGDEST", &layout.pkgdest),
+        ] {
+            assert!(dir.is_dir(), "{key} dir {} was not created", dir.display());
+            let env = cmd
+                .get_envs()
+                .find(|(k, _)| k.to_string_lossy() == key)
+                .and_then(|(_, v)| v.map(|v| v.to_string_lossy().into_owned()))
+                .unwrap_or_default();
+            assert_eq!(env, dir.display().to_string(), "{key} must point at the cache");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn makepkg_refuses_a_layout_it_cannot_create() {
+        let dir = std::env::temp_dir().join(format!("gsa-makepkg-bad-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // A regular file where the cache root must be: create_dir_all fails
+        // and the failure is fatal, never a silent recipe-dir fallback.
+        std::fs::write(dir.join("occupied"), "not a directory").unwrap();
+        let layout = gsa_model::config::BuildLayout {
+            builddir: dir.join("occupied").join("build"),
+            pkgdir: dir.join("pkg"),
+            pkgdest: dir.join("pkgs"),
+            root: dir.clone(),
+        };
+        let error = makepkg_command_in(
+            Path::new("/recipes/mesa-git"),
+            6,
+            &[],
+            Path::new("/state"),
+            &layout,
+        )
+        .unwrap_err();
+        assert!(error.contains("build-cache directory"), "{error}");
+        assert!(
+            error.contains("GSA_BUILD_DIR"),
+            "the remedy must be named: {error}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

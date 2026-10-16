@@ -199,3 +199,62 @@ fn audit_report_is_read_only_and_renders_row_grammar() {
     });
     assert_eq!(fx.snapshot(), before, "the audit never mutates the tree");
 }
+
+#[test]
+fn doctor_scans_the_pkgdest_home_and_attributes_by_pkginfo_truth() {
+    let fx = doctor_fixture("doctor-pkgdest");
+    let pkgdest = fx.root.join(common::CACHE_DIR).join("pkgs");
+    std::fs::create_dir_all(&pkgdest).unwrap();
+    // One orphan in each home: the live PKGDEST and the legacy recipe dir.
+    let live = pkgdest.join("alpha-1.0-1-any.pkg.tar.zst");
+    make_archive(&live, "alpha", "alpha", "1.0-1");
+    let legacy = fx
+        .root
+        .join("packages/git/alpha/alpha-0.9-1-any.pkg.tar.zst");
+    make_archive(&legacy, "alpha", "alpha", "0.9-1");
+    // A PKGDEST file no committed recipe declares and no row binds: rule
+    // 11's truth filter drops it — it is not any recipe's orphan, so it is
+    // never reported and never re-indexed under a wrong recipe id.
+    let stray = pkgdest.join("stray-9.9.9-1-any.pkg.tar.zst");
+    make_archive(&stray, "stray", "stray", "9.9.9-1");
+
+    fx.with_ctx(|ctx| {
+        let rows = doctor::report(ctx);
+        common::assert_row_grammar(&rows);
+        let orphan = common::find_row(&rows, &live.display().to_string(), "orphan-archive")
+            .expect("the PKGDEST orphan is named");
+        assert_eq!(orphan.reason, "no-index-row alpha");
+        assert!(
+            common::find_row(&rows, &legacy.display().to_string(), "orphan-archive").is_some(),
+            "the legacy-home orphan is still named"
+        );
+        assert!(
+            common::find_row(&rows, &stray.display().to_string(), "orphan-archive").is_none(),
+            "the unattributed stray is nobody's orphan (rule 11 truth filter)"
+        );
+
+        let outcome = doctor::fix(ctx, true).unwrap();
+        assert_eq!(outcome.failed, 0);
+    });
+
+    let state = fx.state();
+    let index = BinpkgIndex::load(&state).unwrap();
+    assert_eq!(
+        index.rows.len(),
+        2,
+        "both attributed orphans re-indexed; the unattributed stray never is"
+    );
+    let archived: Vec<String> = index
+        .rows
+        .iter()
+        .map(|r| r.archive.display().to_string())
+        .collect();
+    assert!(archived.contains(&live.display().to_string()));
+    assert!(archived.contains(&legacy.display().to_string()));
+    assert!(!archived.contains(&stray.display().to_string()));
+
+    fx.with_ctx(|ctx| {
+        let rows = doctor::report(ctx);
+        assert!(rows.iter().all(|r| r.action != "orphan-archive"));
+    });
+}

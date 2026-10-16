@@ -16,10 +16,14 @@
 //! Attribution of the failing file is makepkg's own failure report (`<file>
 //! … FAILED` lines, `/usr/share/makepkg/integrity/verify_checksum.sh` and
 //! `verify_signature.sh`); this module never parses makepkg output to
-//! *decide* verification — only to name the file to quarantine.
+//! *decide* verification — only to name the file to quarantine. makepkg
+//! gettext-translates that prose and its exit codes carry no class, so the
+//! spawn pins `LC_ALL=C`: every prose match below is C-locale by
+//! construction (see [`verifysource_command`]).
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::candidacy::{classify, FetchCandidacy};
@@ -129,7 +133,9 @@ pub fn disk_floor_ok(cache_path: &Path) -> bool {
 
 /// makepkg's per-file failure report names the file whose pin failed
 /// (`    <file> … FAILED` on stderr; checksums and PGP share the shape).
-/// Used ONLY to attribute a quarantine — verification is makepkg's.
+/// Used ONLY to attribute a quarantine — verification is makepkg's. The
+/// match is C-locale by construction: [`verifysource_command`] pins
+/// `LC_ALL=C`, so makepkg's gettext-translated `FAILED` token is English.
 pub fn failing_files(output: &str) -> Vec<String> {
     let mut names = Vec::new();
     for line in output.lines() {
@@ -146,7 +152,8 @@ pub fn failing_files(output: &str) -> Vec<String> {
 
 /// Was this failure a verification (integrity) failure rather than a
 /// transport failure? makepkg's summary marker, used only to pick the
-/// advisory reason key.
+/// advisory reason key. C-locale by construction (`LC_ALL=C` at the spawn):
+/// makepkg gettext-translates the summary prose.
 pub fn is_verify_failure(output: &str) -> bool {
     output.contains("did not pass the validity check")
         || output.contains("Integrity checks")
@@ -318,17 +325,27 @@ pub fn run_fetch_attempts(
     }
 }
 
-/// One real `makepkg --verifysource` attempt in the recipe directory
-/// (contract §D.1 / owner decision 2 — the argv is a constant, so no
-/// verification bypass can be constructed). The makepkg child is a build-side
-/// command (W1 privilege isolation): under a privileged run it runs as the
-/// build user, like every other makepkg invocation.
-pub fn makepkg_verifysource(recipe_dir: &Path) -> Attempt {
+/// The ONE `makepkg --verifysource` command (contract §D.1 / owner decision
+/// 2 — the argv is a constant, so no verification bypass can be
+/// constructed). `LC_ALL=C` pins makepkg's failure prose to C: makepkg
+/// gettext-translates `FAILED` and its validity summary, and its exit codes
+/// are all 1 (`exit 1 # TODO: error code` in `verify_checksum.sh`) so they
+/// discriminate nothing — C-locale prose is the only attribution channel.
+pub(crate) fn verifysource_command(recipe_dir: &Path) -> Command {
     let mut cmd = gsa_model::privilege::build_command("makepkg");
     cmd.arg("--verifysource")
         .current_dir(recipe_dir)
-        .env("GIT_CONFIG_COUNT", "0");
-    let output = cmd.output();
+        .env("GIT_CONFIG_COUNT", "0")
+        .env("LC_ALL", "C");
+    cmd
+}
+
+/// One real `makepkg --verifysource` attempt in the recipe directory
+/// (contract §D.1 / owner decision 2). The makepkg child is a build-side
+/// command (W1 privilege isolation): under a privileged run it runs as the
+/// build user, like every other makepkg invocation.
+pub fn makepkg_verifysource(recipe_dir: &Path) -> Attempt {
+    let output = verifysource_command(recipe_dir).output();
     match output {
         Ok(output) => {
             let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
@@ -696,6 +713,34 @@ ERROR: One or more files did not pass the validity check!
                     "argv construction carries {forbidden}: {line}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn verifysource_command_pins_the_c_locale_and_keeps_the_constant_argv() {
+        // The failure prose `failing_files`/`is_verify_failure` parse is
+        // gettext-translated by makepkg; the spawn must pin it to C.
+        let cmd = verifysource_command(Path::new("/nonexistent-recipe-dir"));
+        assert!(
+            cmd.get_envs().any(|(key, value)| {
+                key == std::ffi::OsStr::new("LC_ALL") && value == Some(std::ffi::OsStr::new("C"))
+            }),
+            "makepkg --verifysource must pin LC_ALL=C so prose parsing is C-locale by construction"
+        );
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert!(args.contains(&"--verifysource".to_string()));
+        for forbidden in [
+            "--skipchecksums",
+            "--skippgpcheck",
+            "--skipinteg",
+            "-s",
+            "-o",
+            "--holdver",
+        ] {
+            assert!(!args.contains(&forbidden.to_string()), "argv carries {forbidden}");
         }
     }
 

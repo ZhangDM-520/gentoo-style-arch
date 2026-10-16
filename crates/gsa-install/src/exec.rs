@@ -75,14 +75,23 @@ fn acquire_mutex(path: &Path, timeout: Duration) -> Option<File> {
     }
 }
 
+/// The preflight's `sudo -n true` (one builder per sudo spawn, so the
+/// C-locale pin lives in exactly one place each). `LC_ALL=C` makes sudo's
+/// own diagnostics C-locale by construction — the `SudoLost` match in
+/// [`sudo_credential_lost`] then sees stable English on any host.
+fn sudo_true_command() -> Command {
+    let mut cmd = Command::new("sudo");
+    cmd.args(["-n", "true"]).env("LC_ALL", "C");
+    cmd
+}
+
 /// Preflight (§K.3): a `-S`/`-U` run whose installs cannot succeed
 /// non-interactively refuses BEFORE building starts (rc 3,
 /// `sudo cannot install non-interactively`). Proven with `sudo -n true` —
 /// never `sudo -v` (a NOPASSWD entry makes `-v` fail while every install
 /// succeeds, `docs/MEMORY.md` rule 11).
 pub fn preflight_installs() -> Result<(), String> {
-    let output = Command::new("sudo")
-        .args(["-n", "true"])
+    let output = sudo_true_command()
         .output()
         .map_err(|e| format!("sudo cannot install non-interactively ({e})"))?;
     if output.status.success() {
@@ -90,6 +99,51 @@ pub fn preflight_installs() -> Result<(), String> {
     } else {
         Err("sudo cannot install non-interactively".to_string())
     }
+}
+
+/// The ONE `sudo -n pacman -U …` command for a transaction (§K.3).
+/// `LC_ALL=C` pins sudo's and pacman's own messages to C-locale (the same
+/// pin `gsa-recipe`'s `pacman -Si` sync uses), so the credential-loss
+/// classification below matches stable English whatever the host locale.
+fn sudo_pacman_command(req: &TxnRequest) -> Command {
+    let mut cmd = Command::new("sudo");
+    cmd.arg("-n")
+        .arg("pacman")
+        .arg("-U")
+        .arg("--noconfirm")
+        .arg("--ask")
+        .arg("4")
+        .env("LC_ALL", "C");
+    if let Some(conf) = &req.conf {
+        cmd.arg("--config").arg(conf);
+    }
+    for arg in &req.pacman_args {
+        cmd.arg(arg);
+    }
+    for archive in &req.archives {
+        cmd.arg(archive);
+    }
+    cmd
+}
+
+/// Credential-loss classification (§K.3) for one failed `sudo -n pacman -U`
+/// attempt: the credential is gone and cannot be refreshed without prompting,
+/// so dispatch must stop exactly once. The English phrase match is the belt
+/// over the silent-rc-1 rule; sudo's exit codes discriminate nothing finer
+/// (sudo exits 1 for nearly every failure and propagates pacman's rc), so no
+/// rc-only classification exists to prefer.
+pub fn sudo_credential_lost(rc: i32, stdout: &str, stderr: &str) -> bool {
+    let lower = stderr.to_lowercase();
+    if lower.contains("password")
+        || lower.contains("prompt")
+        || lower.contains("no tty")
+        || lower.contains("a terminal is required")
+    {
+        return true;
+    }
+    // sudo failed with rc 1 and pacman never spoke (§K.3 — the engine never
+    // prompts).
+    rc == 1 && stdout.trim().is_empty() && stderr.trim().is_empty()
 }
 
 /// Run the ONE `pacman -U` transaction for this call, serialized through the
@@ -102,22 +156,7 @@ pub fn execute_txn(req: &TxnRequest) -> TxnOutcome {
         None => return TxnOutcome::MutexTimeout,
     };
 
-    let mut cmd = Command::new("sudo");
-    cmd.arg("-n")
-        .arg("pacman")
-        .arg("-U")
-        .arg("--noconfirm")
-        .arg("--ask")
-        .arg("4");
-    if let Some(conf) = &req.conf {
-        cmd.arg("--config").arg(conf);
-    }
-    for arg in &req.pacman_args {
-        cmd.arg(arg);
-    }
-    for archive in &req.archives {
-        cmd.arg(archive);
-    }
+    let mut cmd = sudo_pacman_command(req);
     match cmd.output() {
         Err(e) => {
             if e.kind() == std::io::ErrorKind::PermissionDenied {
@@ -136,18 +175,10 @@ pub fn execute_txn(req: &TxnRequest) -> TxnOutcome {
             }
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
-            let lower = stderr.to_lowercase();
             // The credential is gone and cannot be refreshed without
             // prompting: sudo says so, or sudo failed with rc 1 and pacman
             // never spoke (§K.3 — the engine never prompts).
-            if lower.contains("password")
-                || lower.contains("prompt")
-                || lower.contains("no tty")
-                || lower.contains("a terminal is required")
-            {
-                return TxnOutcome::SudoLost;
-            }
-            if rc == 1 && stdout.trim().is_empty() && stderr.trim().is_empty() {
+            if sudo_credential_lost(rc, &stdout, &stderr) {
                 return TxnOutcome::SudoLost;
             }
             let message = stderr
@@ -189,5 +220,69 @@ mod tests {
         }
         assert!(released, "the mutex releases when the guard drops");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn pinned_c(cmd: &Command) -> bool {
+        cmd.get_envs().any(|(key, value)| {
+            key == std::ffi::OsStr::new("LC_ALL") && value == Some(std::ffi::OsStr::new("C"))
+        })
+    }
+
+    #[test]
+    fn sudo_spawns_pin_the_c_locale() {
+        let req = TxnRequest {
+            state_dir: PathBuf::from("/state"),
+            conf: Some(PathBuf::from("/etc/pacman.conf")),
+            archives: vec![PathBuf::from("/a.pkg.tar.zst")],
+            pacman_args: vec!["--overwrite".to_string(), "*".to_string()],
+        };
+        let txn = sudo_pacman_command(&req);
+        assert!(
+            pinned_c(&txn),
+            "sudo -n pacman -U must pin LC_ALL=C so the SudoLost match is locale-stable"
+        );
+        let args: Vec<String> = txn
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            args[..6],
+            ["-n", "pacman", "-U", "--noconfirm", "--ask", "4"],
+            "the transaction argv is the documented one"
+        );
+        assert!(args.contains(&"--config".to_string()));
+        assert!(args.contains(&"/a.pkg.tar.zst".to_string()));
+        assert!(pinned_c(&sudo_true_command()), "the preflight pins LC_ALL=C");
+    }
+
+    #[test]
+    fn credential_loss_matches_the_c_locale_sudo_phrases() {
+        for stderr in [
+            "sudo: a password is required",
+            "sudo: no tty present and no askpass program specified",
+            "sudo: a terminal is required to read the password",
+            "sudo: 3 incorrect password attempts",
+        ] {
+            assert!(
+                sudo_credential_lost(1, "", stderr),
+                "{stderr:?} must classify as SudoLost"
+            );
+        }
+        // The silent-rc-1 belt: sudo failed and pacman never spoke.
+        assert!(sudo_credential_lost(1, "", ""));
+    }
+
+    #[test]
+    fn pacman_failures_are_never_credential_loss() {
+        // pacman's own error prose is not sudo asking for anything.
+        assert!(!sudo_credential_lost(
+            1,
+            "",
+            "error: failed to commit transaction (conflicting files)\n"
+        ));
+        // pacman spoke → the failure is pacman's, not a lost credential.
+        assert!(!sudo_credential_lost(1, "progress output\n", ""));
+        // Non-1 silent failures are not the §K.3 signature.
+        assert!(!sudo_credential_lost(2, "", ""));
     }
 }

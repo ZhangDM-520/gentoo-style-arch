@@ -186,23 +186,15 @@ fn reap_dead_run_lanes(state_dir: &Path, err: &mut dyn Write) {
         {
             continue;
         }
-        let in_state = cmdline.iter().skip(2).any(|a| a.starts_with(&state_prefix));
+        let in_state = cmdline.iter().skip(2).any(|a| arg_in_state(a, &state_prefix));
         if !in_state {
             continue;
         }
         // Orphan check: the parent is pid 1 (or absent).
         let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
-        let after = stat.rsplit_once(')').map(|(_, rest)| rest).unwrap_or("");
-        let ppid: i32 = after
-            .split_whitespace()
-            .nth(1)
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0);
-        let pgid: i32 = after
-            .split_whitespace()
-            .nth(2)
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(pid);
+        let Some((ppid, pgid)) = orphan_ppid_pgid(&stat, pid) else {
+            continue;
+        };
         if ppid == 1 || ppid == 0 {
             let _ = writeln!(
                 err,
@@ -213,14 +205,63 @@ fn reap_dead_run_lanes(state_dir: &Path, err: &mut dyn Write) {
     }
 }
 
+/// Does one argv item belong to the state root? Whole path components only:
+/// `/var/lib/gsa-alt` merely SHARES the name prefix of `/var/lib/gsa` and is
+/// a different state root — prefix matching let a concurrent run's live
+/// lane be swept.
+pub fn arg_in_state(arg: &str, state_root: &str) -> bool {
+    let root = state_root.trim_end_matches('/');
+    if root.is_empty() {
+        return arg.starts_with('/');
+    }
+    arg == root || arg.starts_with(&format!("{root}/"))
+}
+
+/// The `(ppid, pgid)` pair of one `/proc/<pid>/stat` line (the `pid` stands
+/// in for an unreadable process group). `None` = the ppid is UNKNOWN — a
+/// parse failure is never evidence of orphanhood, and an unknown pid is
+/// never touched.
+pub fn orphan_ppid_pgid(stat_line: &str, pid: i32) -> Option<(i32, i32)> {
+    // The comm field is parenthesised and may itself carry `)` — the ppid
+    // arrives only after the LAST one.
+    let after = stat_line.rsplit_once(')').map(|(_, rest)| rest)?;
+    let mut fields = after.split_whitespace();
+    fields.next()?; // state
+    let ppid: i32 = fields.next()?.parse().ok()?;
+    let pgid: i32 = fields
+        .next()
+        .map(str::parse)
+        .and_then(Result::ok)
+        .unwrap_or(pid);
+    Some((ppid, pgid))
+}
+
 /// `--stale-lock-check` (contract §D.1): the production pacman-lock probe
 /// without a run. Reports `db.lck` presence and identifies any holder by an
 /// open-file-descriptor scan over `/proc/*/fd` — never by filename heuristics,
-/// never by deleting `db.lck`. Report-only: rc 0.
+/// never by deleting `db.lck`. Report-only on the lock report itself (rc 0);
+/// the db-root resolution failing loudly is rc 1 (a report on a silently
+/// guessed root is worse than no report).
 pub fn pacman_lock_probe(out: &mut dyn Write, err: &mut dyn Write) -> i32 {
-    let db_path = pacman_db_path();
+    let (db_path, fallback) = match pacman_db_path() {
+        Ok(resolved) => resolved,
+        Err(message) => {
+            let _ = writeln!(err, "gsa: cannot resolve pacman's DBPath: {message}");
+            let _ = writeln!(out, "db-path: unresolved");
+            return 1;
+        }
+    };
+    if let Some(note) = fallback {
+        let _ = writeln!(err, "gsa: note: {note}");
+        let _ = writeln!(
+            out,
+            "db-path: {} (fallback: pacman-conf is missing — not established)",
+            db_path.display()
+        );
+    } else {
+        let _ = writeln!(out, "db-path: {}", db_path.display());
+    }
     let lock_path = db_path.join("db.lck");
-    let _ = writeln!(out, "db-path: {}", db_path.display());
     let _ = writeln!(out, "lock: {}", lock_path.display());
     let Ok(meta) = std::fs::metadata(&lock_path) else {
         let _ = writeln!(out, "status: free");
@@ -264,26 +305,44 @@ pub fn pacman_lock_probe(out: &mut dyn Write, err: &mut dyn Write) -> i32 {
     0
 }
 
-/// Resolve pacman's database root the way makepkg does: `pacman-conf DBPath`,
-/// falling back to `/var/lib/pacman` when the tool is missing or silent.
-fn pacman_db_path() -> PathBuf {
-    if let Ok(output) = std::process::Command::new("pacman-conf")
-        .arg("DBPath")
-        .output()
-    {
-        if output.status.success() {
+/// Resolve pacman's database root the way makepkg does: `pacman-conf
+/// DBPath`. A `pacman-conf` that exists but errors (or answers empty) is a
+/// hard failure — the probe must never report on a silently guessed db
+/// root. A MISSING tool cannot answer: the built-in `/var/lib/pacman` stands
+/// in, but only loudly — the note rides along for the caller to print, so
+/// the guess is never silent for a probe that reports on it.
+fn pacman_db_path() -> Result<(PathBuf, Option<String>), String> {
+    match std::process::Command::new("pacman-conf").arg("DBPath").output() {
+        Ok(output) if output.status.success() => {
             let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !text.is_empty() {
-                return PathBuf::from(text);
+            if text.is_empty() {
+                return Err("pacman-conf DBPath answered with an empty path".to_string());
             }
+            Ok((PathBuf::from(text), None))
         }
+        Ok(output) => Err(format!(
+            "pacman-conf DBPath failed ({}): {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok((
+            PathBuf::from("/var/lib/pacman"),
+            Some(
+                "pacman-conf is missing: falling back to the built-in default /var/lib/pacman, which may not be pacman's real DBPath"
+                    .to_string(),
+            ),
+        )),
+        Err(error) => Err(format!("cannot run pacman-conf: {error}")),
     }
-    PathBuf::from("/var/lib/pacman")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// PATH-mutating tests serialize: the probe resolves `pacman-conf`
+    /// through the process-global PATH.
+    static PATH_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("gsa-lock-test-{name}-{}", std::process::id()));
@@ -355,6 +414,9 @@ mod tests {
 
     #[test]
     fn lock_probe_never_deletes_the_lock_file() {
+        let _guard = PATH_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let dir = scratch("probe");
         let lock = dir.join("db.lck");
         std::fs::write(&lock, "").unwrap();
@@ -375,6 +437,102 @@ mod tests {
         let text = String::from_utf8_lossy(&out).into_owned();
         assert!(text.contains("lock:"), "{text}");
         assert!(lock.exists(), "the probe must never delete db.lck");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn orphan_ppid_pgid_is_none_when_the_ppid_cannot_be_read() {
+        // A healthy stat line answers (ppid, pgid).
+        assert_eq!(
+            orphan_ppid_pgid("42 (gsa --lane-job) S 1 77 77 0 -1 0 0", 42),
+            Some((1, 77))
+        );
+        // The ppid may arrive only after the last `)` — comm may itself
+        // carry parentheses.
+        assert_eq!(
+            orphan_ppid_pgid("42 (a)b) S 3 88 88 0 -1 0 0", 42),
+            Some((3, 88))
+        );
+        // An unparseable ppid is UNKNOWN — never an orphan to SIGKILL.
+        assert_eq!(
+            orphan_ppid_pgid("", 42),
+            None,
+            "an unreadable /proc stat line is UNKNOWN, never ppid 0"
+        );
+        assert_eq!(orphan_ppid_pgid("42 (x) S", 42), None);
+        assert_eq!(orphan_ppid_pgid("42 (x) S junk 5 5", 42), None);
+    }
+
+    #[test]
+    fn state_matching_is_whole_path_components() {
+        assert!(arg_in_state("/var/lib/gsa/runs/1/x.result", "/var/lib/gsa"));
+        assert!(arg_in_state("/var/lib/gsa", "/var/lib/gsa"));
+        assert!(arg_in_state("/var/lib/gsa/runs/x", "/var/lib/gsa/"));
+        // A sibling state root that merely SHARES the name prefix is not
+        // inside it — prefix matching let a concurrent run's live lane be
+        // swept.
+        assert!(!arg_in_state("/var/lib/gsa-alt/runs/1/x.result", "/var/lib/gsa"));
+        assert!(!arg_in_state("/var/lib/gsa-extra", "/var/lib/gsa"));
+    }
+
+    fn shadow_pacman_conf(dir: &Path, body: &str) -> String {
+        let bin = dir.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let stub = bin.join("pacman-conf");
+        std::fs::write(&stub, body).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let path = std::env::var("PATH").unwrap_or_default();
+        std::env::set_var("PATH", format!("{}:{}", bin.display(), path));
+        path
+    }
+
+    #[test]
+    fn lock_probe_fails_loud_when_pacman_conf_errors() {
+        let _guard = PATH_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let dir = scratch("conf-err");
+        let path = shadow_pacman_conf(&dir, "#!/bin/sh\necho boom >&2\nexit 3\n");
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let rc = pacman_lock_probe(&mut out, &mut err);
+        std::env::set_var("PATH", path);
+        assert_ne!(
+            rc, 0,
+            "a pacman-conf that exists but errors must fail loud, never silently mean /var/lib/pacman"
+        );
+        let text = String::from_utf8_lossy(&err).into_owned();
+        assert!(text.contains("DBPath"), "{text}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn lock_probe_announces_the_fallback_when_pacman_conf_is_missing() {
+        let _guard = PATH_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let dir = scratch("conf-missing");
+        let bin = dir.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let path = std::env::var("PATH").unwrap_or_default();
+        // No pacman-conf anywhere on PATH.
+        std::env::set_var("PATH", bin.display().to_string());
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let rc = pacman_lock_probe(&mut out, &mut err);
+        std::env::set_var("PATH", path);
+        assert_eq!(rc, 0, "the lock report itself is report-only (§D.1)");
+        let text = String::from_utf8_lossy(&err).into_owned();
+        assert!(
+            text.contains("pacman-conf"),
+            "a missing pacman-conf must be announced: {text}"
+        );
+        let out = String::from_utf8_lossy(&out).into_owned();
+        assert!(
+            out.contains("fallback"),
+            "the report must mark the guessed db root as a fallback: {out}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -88,11 +88,14 @@ pub fn build_command<S: AsRef<OsStr>>(program: S) -> Command {
 /// the dropped makepkg kept `HOME=/root`, so cargo wrote to `/root/.cargo`
 /// and `~/.makepkg.conf` (the user's `SRCDEST`) was never read. PATH,
 /// `GSA_*`, `MAKEFLAGS`, `SRCDEST`, fixture stubs and the rest pass through
-/// unchanged (the module contract above).
+/// unchanged (the module contract above). HOME is ALWAYS reset: when the
+/// build user's home cannot be resolved, the conventional absent home
+/// `/nonexistent` stands in — a half-reset env that leaves root's HOME in
+/// place is the exact failure this function exists to make impossible
+/// (2026-10-17 sweep).
 fn drop_identity_env(cmd: &mut Command, bu: &BuildUser, home: Option<std::path::PathBuf>) {
-    if let Some(home) = home {
-        cmd.env("HOME", home);
-    }
+    let home = home.unwrap_or_else(|| std::path::PathBuf::from("/nonexistent"));
+    cmd.env("HOME", home);
     cmd.env("USER", &bu.name);
     cmd.env("LOGNAME", &bu.name);
 }
@@ -196,6 +199,25 @@ mod tests {
         assert!(env.contains(&(OsString::from("LOGNAME"), OsString::from("builder"))));
         assert!(env.contains(&(OsString::from("MAKEFLAGS"), OsString::from("-j2"))),
             "non-identity env must survive the drop");
+    }
+
+    #[test]
+    fn drop_identity_never_leaves_root_home_when_the_home_is_unresolvable() {
+        let bu = BuildUser {
+            uid: 1000,
+            gid: 1000,
+            name: "builder".into(),
+        };
+        let mut cmd = Command::new("makepkg");
+        drop_identity_env(&mut cmd, &bu, None);
+        let env: Vec<(OsString, OsString)> = cmd.get_envs().map(|(k, v)| {
+            (
+                k.to_os_string(),
+                v.map(|v| v.to_os_string()).unwrap_or_default(),
+            )
+        }).collect();
+        assert!(env.contains(&(OsString::from("HOME"), OsString::from("/nonexistent"))),
+            "an unresolvable home must not leave the engine's own HOME in place");
     }
 
     #[test]

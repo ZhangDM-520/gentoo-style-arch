@@ -327,3 +327,202 @@ fn a_run_referenced_archive_is_never_pruned() {
         "an unreferenced archive is pruned"
     );
 }
+
+// ── the post-W4a live homes (the build user's cache + SRCDEST): every
+// strength scans them AS WELL AS the legacy recipe-dir home (§J.2 keeps the
+// legacy scans — old trees and fixture stubs still write there). ──────────
+
+/// Seed one recipe's artifacts in BOTH homes: legacy trees/archives beside
+/// the recipe (as `workspace()` does) plus the live per-pkgbase staging
+/// trees, the shared PKGDEST archives and the sidecar.
+fn seed_live_home(fx: &Fixture, id: &str, pkgbase: &str) -> (PathBuf, PathBuf) {
+    let cache = fx.root.join(common::CACHE_DIR);
+    let pkgdest = cache.join("pkgs");
+    for tree in [cache.join("build").join(pkgbase), cache.join("pkg").join(pkgbase)] {
+        std::fs::create_dir_all(&tree).unwrap();
+        std::fs::write(tree.join("inner.txt"), "inner\n").unwrap();
+    }
+    std::fs::create_dir_all(&pkgdest).unwrap();
+    make_archive(
+        &pkgdest.join(format!("{id}-1.0-1-any.pkg.tar.zst")),
+        pkgbase,
+        id,
+        "1.0-1",
+    );
+    std::fs::write(
+        pkgdest.join(format!("{id}-1.0-1-any.pkg.tar.zst.gsa-vcs-revisions")),
+        "rev baseline\n",
+    )
+    .unwrap();
+    (cache, pkgdest)
+}
+
+#[test]
+fn strength1_prunes_both_homes_for_the_selection() {
+    let (fx, alpha, beta) = workspace("prune-strength1-live");
+    let (cache, pkgdest) = seed_live_home(&fx, "alpha", "alpha");
+    let (beta_cache, beta_pkgdest) = seed_live_home(&fx, "beta", "beta");
+    let beta_before = common::snapshot_tree(&beta);
+
+    fx.with_ctx(|ctx| {
+        let plan = prune::strength1(ctx, &["alpha".to_string()], false);
+        common::assert_row_grammar(&plan);
+        assert!(common::has_row(
+            &plan,
+            &pkgdest.join("alpha-1.0-1-any.pkg.tar.zst").display().to_string(),
+            "prune"
+        ));
+        assert!(
+            pkgdest.join("alpha-1.0-1-any.pkg.tar.zst").exists(),
+            "dry-run deletes nothing"
+        );
+
+        let rows = prune::strength1(ctx, &["alpha".to_string()], true);
+        common::assert_row_grammar(&rows);
+        for (gone, kind) in [
+            (
+                pkgdest.join("alpha-1.0-1-any.pkg.tar.zst"),
+                "live archive",
+            ),
+            (
+                pkgdest.join("alpha-1.0-1-any.pkg.tar.zst.gsa-vcs-revisions"),
+                "live sidecar",
+            ),
+            (cache.join("build").join("alpha"), "live build tree"),
+            (cache.join("pkg").join("alpha"), "live staging tree"),
+            (alpha.join("src"), "legacy tree"),
+            (
+                alpha.join("alpha-1.0-1-any.pkg.tar.zst"),
+                "legacy archive",
+            ),
+        ] {
+            assert!(
+                common::has_row(&rows, &gone.display().to_string(), "pruned"),
+                "{kind} named as pruned"
+            );
+            assert!(
+                std::fs::symlink_metadata(&gone).is_err(),
+                "{kind} removed ({})",
+                gone.display()
+            );
+        }
+    });
+
+    // Selection scope holds across both homes: beta's live artifacts — and
+    // beta's whole legacy tree — survive.
+    assert!(
+        beta_pkgdest.join("beta-1.0-1-any.pkg.tar.zst").exists(),
+        "an unselected recipe's PKGDEST archive survives strength 1"
+    );
+    assert!(beta_cache.join("build").join("beta").is_dir());
+    assert_eq!(
+        common::snapshot_tree(&beta),
+        beta_before,
+        "strength 1 touches only the named recipes (legacy home)"
+    );
+}
+
+#[test]
+fn strength2_sweeps_archives_in_both_homes() {
+    let (fx, alpha, _beta) = workspace("prune-strength2-live");
+    let (cache, pkgdest) = seed_live_home(&fx, "alpha", "alpha");
+
+    fx.with_ctx(|ctx| {
+        let rows = prune::strength2(ctx, true);
+        common::assert_row_grammar(&rows);
+    });
+
+    for gone in [
+        pkgdest.join("alpha-1.0-1-any.pkg.tar.zst"),
+        pkgdest.join("alpha-1.0-1-any.pkg.tar.zst.gsa-vcs-revisions"),
+        alpha.join("alpha-1.0-1-any.pkg.tar.zst"),
+        alpha.join("alpha-1.0-1-any.pkg.tar.zst.gsa-vcs-revisions"),
+    ] {
+        assert!(
+            std::fs::symlink_metadata(&gone).is_err(),
+            "{} removed",
+            gone.display()
+        );
+    }
+    assert!(
+        cache.join("build").join("alpha").is_dir(),
+        "strength 2 leaves the live staging trees"
+    );
+    assert!(
+        alpha.join("src").is_dir(),
+        "strength 2 leaves the legacy staging trees"
+    );
+}
+
+#[test]
+fn strength3_prunes_pulled_sources_in_both_homes() {
+    let mut fx = Fixture::new("prune-strength3-live");
+    let alpha = fx.add_recipe(
+        "alpha",
+        "git",
+        "git",
+        "",
+        &srcinfo(
+            "alpha",
+            &["alpha"],
+            "1.0",
+            "1",
+            &[
+                "git+https://example.test/src/widget.git",
+                "https://example.test/dl/gsapkg-1.0.tar.gz",
+                "https://example.test/dl/notes.txt",
+            ],
+        ),
+    );
+    std::fs::write(fx.root.join(".gitignore"), "*.tar.gz\n").unwrap();
+    let (cache, pkgdest) = seed_live_home(&fx, "alpha", "alpha");
+
+    // The live pulled-source home: the resolved SRCDEST.
+    let srcdest = fx.root.join(common::SRCDEST_DIR);
+    std::fs::create_dir_all(srcdest.join("widget")).unwrap();
+    std::fs::write(srcdest.join("widget").join("cloned.txt"), "clone\n").unwrap();
+    std::fs::write(srcdest.join("gsapkg-1.0.tar.gz"), "download\n").unwrap();
+    std::fs::write(srcdest.join("gsapkg-1.0.tar.gz.sig"), "sig\n").unwrap();
+    std::fs::write(srcdest.join("notes.txt"), "not extension-matched\n").unwrap();
+
+    // …and the legacy home keeps its own pulled sources (§J.2).
+    let clone = alpha.join("widget");
+    std::fs::create_dir_all(&clone).unwrap();
+    std::fs::write(clone.join("cloned.txt"), "clone\n").unwrap();
+
+    fx.with_ctx(|ctx| {
+        let rows = prune::strength3(ctx, true);
+        common::assert_row_grammar(&rows);
+        assert!(common::has_row(
+            &rows,
+            &srcdest.join("widget").display().to_string(),
+            "pruned"
+        ));
+        assert!(common::has_row(
+            &rows,
+            &srcdest.join("gsapkg-1.0.tar.gz").display().to_string(),
+            "pruned"
+        ));
+        assert!(common::has_row(&rows, &clone.display().to_string(), "pruned"));
+    });
+
+    for gone in [
+        srcdest.join("widget"),
+        srcdest.join("gsapkg-1.0.tar.gz"),
+        srcdest.join("gsapkg-1.0.tar.gz.sig"),
+        clone,
+        cache.join("build").join("alpha"),
+        cache.join("pkg").join("alpha"),
+        pkgdest.join("alpha-1.0-1-any.pkg.tar.zst"),
+    ] {
+        assert!(
+            std::fs::symlink_metadata(&gone).is_err(),
+            "{} removed",
+            gone.display()
+        );
+    }
+    assert!(
+        srcdest.join("notes.txt").exists(),
+        "an extension-unmatched download survives in SRCDEST"
+    );
+}

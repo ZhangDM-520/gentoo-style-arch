@@ -119,7 +119,7 @@ mkdir -p "$ws/fake"
 # never a failed build.
 cat >"$ws/bin/makepkg" <<'EOF'
 #!/usr/bin/env bash
-set -u
+set -eu
 id=$(basename "$PWD")
 printf '%s\n' "$id" >>"$GSA_FAKE_DIR/makepkg_calls"
 if [ "${GSA_FAKE_DEFER_PACKAGE:-}" = "$id" ]; then exit 99; fi

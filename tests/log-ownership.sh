@@ -102,7 +102,7 @@ make_case_workspace() { # $1 = sandbox dir
 
     cat >"$dir/bin/makepkg" <<'EOF'
 #!/usr/bin/env bash
-set -u
+set -eu
 id=$(basename "$PWD")
 # Scenario knob (fixture-defined, like GSA_FAKE_FAIL_PACKAGE): hold the lane open
 # so a signal can land mid-run while the dispatcher is alive.
@@ -365,7 +365,7 @@ EOF
     # sweep has already happened by then), then build.
     cat >"$dir/bin/makepkg" <<'EOF'
 #!/usr/bin/env bash
-set -u
+set -eu
 id=$(basename "$PWD")
 find "${GSA_STATE_DIR:?}" | sort >"${GSA_FAKE_DIR:?}/state-at-build"
 : >"$PWD/$id-1.0.0-1-any.pkg.tar.zst"
@@ -599,7 +599,7 @@ done
 
 cat >"$dir/bin/makepkg" <<'EOF'
 #!/usr/bin/env bash
-set -u
+set -eu
 id=$(basename "$PWD")
 mkdir -p "$GSA_FAKE_MARKER_DIR"
 touch "$GSA_FAKE_MARKER_DIR/$id"
@@ -640,7 +640,12 @@ EOF
 # Record every chown invocation and succeed. The helper's follow-up chmod
 # (real, unstubbed) is what makes the poisoned file writable again; owner is
 # already correct in the fixture, so a no-op chown + real chmod + stat
-# verify is exactly the repair sequence asserted below.
+# verify is exactly the repair sequence asserted below. Always-0 is the
+# honest model here: the modeled repair runs with the privilege the poisoned
+# file's owner already holds (the stat stub only LIES about the owner), so
+# this chown cannot fail in any scenario this fixture drives — a failing
+# chown would need its own scenario and a GSA_FAKE_CHOWN_RC knob, and no
+# section here pins one.
 cat >"$dir/bin/chown" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"${GSA_FAKE_CHOWN_LOG:?fixture forgot GSA_FAKE_CHOWN_LOG}"

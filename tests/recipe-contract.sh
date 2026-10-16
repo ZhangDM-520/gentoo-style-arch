@@ -571,8 +571,12 @@ EOF
     mkdir -p "$tmp/declared-db" "$tmp/declared-bin"
     cat >"$tmp/declared-bin/pacman-conf" <<'EOF'
 #!/usr/bin/env bash
-[ "${1:-}" = DBPath ] && printf '%s\n' "${GSA_FAKE_DB_PATH:?}"
-exit 0
+set -u
+if [ "${1:-}" = DBPath ]; then
+    printf '%s\n' "${GSA_FAKE_DB_PATH:?}"
+    exit 0
+fi
+exit 1
 EOF
     chmod +x "$tmp/declared-bin/pacman-conf"
     export GSA_FAKE_DB_PATH="$tmp/declared-db"

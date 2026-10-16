@@ -62,7 +62,9 @@ done
 
 cat >"$fixture/bin/makepkg" <<'EOF'
 #!/usr/bin/env bash
-if [[ "${GSA_FAKE_FAIL_PACKAGE:-}" == "$(basename "$PWD")" ]]; then
+set -eu
+id=$(basename "$PWD")
+if [[ "${GSA_FAKE_FAIL_PACKAGE:-}" == "$id" ]]; then
     exit 1
 fi
 printf 'fake makepkg %s\n' "$PWD"
@@ -72,6 +74,7 @@ printf 'fake makepkg %s\n' "$PWD"
 printf 'job flags: MAKEFLAGS=%s NINJAFLAGS=%s GSA_BUILD_JOBS=%s\n' \
     "${MAKEFLAGS:-unset}" "${NINJAFLAGS:-unset}" "${GSA_BUILD_JOBS:-unset}"
 sleep "${GSA_FAKE_BUILD_SECONDS:-0.05}"
+: >"$PWD/$id-1.0.0-1-any.pkg.tar.zst"
 EOF
 chmod +x "$fixture/bin/makepkg"
 

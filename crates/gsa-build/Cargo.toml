@@ -7,5 +7,10 @@ description = "makepkg orchestration: lane child entry, makepkg argv/env contrac
 
 [dependencies]
 gsa-model = { workspace = true }
+gsa-recipe = { workspace = true }
 gsa-topo = { workspace = true }
 gsa-sched = { workspace = true }
+
+[dev-dependencies]
+tar = { workspace = true }
+zstd = { workspace = true }

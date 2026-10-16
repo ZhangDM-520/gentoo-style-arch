@@ -158,6 +158,27 @@ impl MaintCtx<'_> {
     }
 }
 
+/// Rule 11's truth filter for a shared-home archive entry: which recipe
+/// does this archive belong to? The index row's `recipe_id` first
+/// (authoritative — rows record archive paths wherever they live), else
+/// the archive's own `.PKGINFO` names against the committed declared-name
+/// universe. `None` = provably nobody's — such an entry is never deleted
+/// and never reindexed under a wrong id.
+pub(crate) fn archive_owner(
+    index: &gsa_state::BinpkgIndex,
+    declared: &BTreeMap<String, Vec<String>>,
+    path: &Path,
+) -> Option<String> {
+    if let Some(row) = index.find_archive(path) {
+        return Some(row.recipe_id.clone());
+    }
+    let info = gsa_recipe::pkginfo::read_pkginfo(path).ok()?;
+    declared
+        .iter()
+        .find(|(_, names)| names.iter().any(|n| *n == info.pkgbase || *n == info.pkgname))
+        .map(|(id, _)| id.clone())
+}
+
 /// The confirmation gate shared by `-Mm` and `-Mccc` (contract §B.8:
 /// `--noconfirm` applies to the engine's own confirmations). The engine
 /// never prompts (§K.3): without `--noconfirm` the caller prints its target

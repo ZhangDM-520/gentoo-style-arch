@@ -128,8 +128,11 @@ name = "gsa-build"
 version = "0.1.0"
 dependencies = [
  "gsa-model",
+ "gsa-recipe",
  "gsa-sched",
  "gsa-topo",
+ "tar",
+ "zstd",
 ]
 
 [[package]]

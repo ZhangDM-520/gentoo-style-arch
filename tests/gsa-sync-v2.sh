@@ -168,8 +168,16 @@ case "${1:-}" in
         printf 'error: failed retrieving file "core.db" (fixture outage)\n' >&2
         exit 1
         ;;
+    *)
+        # Real `pacman -Si NAME` on a name the repos do not carry: the
+        # not-found answer on stderr plus exit 1 (never a silent rc-0 empty
+        # answer). The engine folds exactly this spelling into
+        # VersionAnswer::UnknownName (gsa-recipe sync.rs query_name keeps
+        # "was not found" distinct from a query failure).
+        printf "error: package '%s' was not found\n" "${2:-}" >&2
+        exit 1
+        ;;
     esac
-    exit 0
     ;;
 -Q)
     if [ "${2:-}" = rust-git ] && [ "${GSA_FAKE_SYNC_RUSTGIT:-absent}" = installed ]; then
@@ -195,7 +203,7 @@ if [ "${GSA_FAKE_SYNC_CURL_MODE:-ok}" = outage ]; then
     printf 'curl: (7) Failed to connect to fixture.invalid port 443\n' >&2
     exit 7
 fi
-cat "${GSA_FAKE_SYNC_SRCINFO:?}"
+cat "${GSA_FAKE_SYNC_SRCINFO:?}" || exit 1
 printf '200'
 EOF
     chmod +x "$1/bin/curl"
@@ -221,7 +229,7 @@ fi
 cp "${GSA_FAKE_SYNC_PAYLOAD:?}" "$PWD/${GSA_FAKE_SYNC_STAGED_NAME:?}" || exit 1
 sum=$(sha256sum "$PWD/${GSA_FAKE_SYNC_STAGED_NAME}") || exit 1
 sum=${sum%% *}
-sed -i "s/^sha256sums=.*/sha256sums=('$sum')/" "$PWD/PKGBUILD"
+sed -i "s/^sha256sums=.*/sha256sums=('$sum')/" "$PWD/PKGBUILD" || exit 1
 exit 0
 EOF
     chmod +x "$1/bin/updpkgsums"
@@ -269,8 +277,12 @@ EOF
 write_stub_pacman_conf() {
     cat >"$1/bin/pacman-conf" <<EOF
 #!/usr/bin/env bash
-[ "\${1:-}" = DBPath ] && printf '%s\n' "$2"
-exit 0
+set -u
+if [ "\${1:-}" = DBPath ]; then
+    printf '%s\n' "$2"
+    exit 0
+fi
+exit 1
 EOF
     chmod +x "$1/bin/pacman-conf"
 }
@@ -647,6 +659,10 @@ record_block() {
     export PATH="$ws/bin:$PATH"
     export GSA_FAKE_SYNC_PACMAN_LOG="$fixture/s5/pacman.log"
     export GSA_FAKE_SYNC_SI_LOG="$fixture/s5/si.log"
+    # `unknown` models real `pacman -Si` on a name the repos do not carry
+    # (stderr "was not found" + rc 1). The engine folds that spelling into
+    # VersionAnswer::UnknownName — nothing to sync to — so every expectation
+    # below pins the engine's real not-found contract, not a stub fiction.
     export GSA_FAKE_SYNC_SI_MODE=unknown
     export GSA_FAKE_SYNC_CURL_MODE=ok
     export GSA_FAKE_SYNC_MAKEPKG_LOG="$fixture/s5/makepkg.log"
@@ -747,6 +763,9 @@ record_block() {
     export PATH="$ws/bin:$PATH"
     export GSA_FAKE_SYNC_PACMAN_LOG="$fixture/s6/pacman.log"
     export GSA_FAKE_SYNC_SI_LOG="$fixture/s6/si.log"
+    # Same honest not-found model as section 5: stderr "was not found" +
+    # rc 1 folds to VersionAnswer::UnknownName, so the preflight refusal
+    # below is asserted against the engine's real not-found contract.
     export GSA_FAKE_SYNC_SI_MODE=unknown
     export GSA_FAKE_SYNC_RUSTGIT=installed # the probe's engagement gate
     export GSA_FAKE_SYNC_MAKEPKG_LOG="$fixture/s6/makepkg.log"

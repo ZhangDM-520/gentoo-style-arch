@@ -97,7 +97,7 @@ chmod +x "$ws/bin/gcc"
 # minimal zstd package so the engine's `.PKGINFO`-truth discovery sees it.
 cat >"$ws/bin/makepkg" <<'EOF'
 #!/usr/bin/env bash
-set -u
+set -eu
 id=$(basename "$PWD")
 printf 'run\n' >>"${GSA_FAKE_MAKEPKG_COUNT:?}"
 mkdir -p "$PWD/src"

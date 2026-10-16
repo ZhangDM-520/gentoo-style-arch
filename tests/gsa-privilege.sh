@@ -120,11 +120,12 @@ make_stubs() {
     mkdir -p "$dir"
     cat >"$dir/makepkg" <<'STUB'
 #!/usr/bin/env bash
+set -eu
 printf 'uid=%s home=%s argv=%s\n' "$(id -u)" "$HOME" "$*" >>"${GSA_FAKE_MAKEPKG_LOG:?}"
 # W4: the engine passes PKGDEST (the build-user cache); honour it like real
 # makepkg does so fixtures can assert the archive location.
 id=$(basename "$PWD")
-: >"${PKGDEST:-$PWD}/$id-1.0.0-1-any.pkg.tar.zst"
+: >"${PKGDEST:-$PWD}/$id-1.0.0-1-any.pkg.tar.zst" || exit 1
 exit 0
 STUB
     chmod +x "$dir/makepkg"
@@ -182,6 +183,8 @@ if [ -z "$only" ] || [ "$only" = c ]; then
         make_stubs "$fixture/c/bin"
         PATH="$fixture/c/bin:$PATH" \
             run_engine_root "$state" "$log" "$ws" --lane-job pkg1 "$fixture/c/result.row" 1
+        [ "$FIXTURE_RC" -eq 0 ] ||
+            fail "c: the lane-job run must succeed, rc=$FIXTURE_RC: $FIXTURE_OUTPUT"
         [ -s "$log" ] || fail "c: stub makepkg never ran: $FIXTURE_OUTPUT"
         want=$(id -u)
         got=$(sed -n 's/^uid=\([0-9]*\).*/\1/p' "$log" | head -1)
@@ -263,6 +266,8 @@ if [ -z "$only" ] || [ "$only" = g ]; then
         make_stubs "$fixture/g/bin"
         PATH="$fixture/g/bin:$PATH" GSA_BUILD_DIR="$fixture/g/cache" \
             run_engine_root "$state" "$log" "$ws" -B pkg1
+        [ "$FIXTURE_RC" -eq 0 ] ||
+            fail "g: the build run must succeed, rc=$FIXTURE_RC: $FIXTURE_OUTPUT"
         [ -s "$log" ] || fail "g: stub makepkg never ran: $FIXTURE_OUTPUT"
         want=$(id -u)
         got=$(sed -n 's/^uid=\([0-9]*\).*/\1/p' "$log" | head -1)

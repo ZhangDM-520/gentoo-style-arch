@@ -82,6 +82,86 @@ pub fn archive_dirs(recipe_dir: &Path, layout: &BuildLayout) -> Vec<PathBuf> {
     dirs
 }
 
+/// The run's build layout under the engine's ONE error policy: a failure is
+/// fatal for the operation that asked, with this message — never a silent
+/// degrade to legacy in-recipe `src/`/`pkg/`/archive trees (contract §J.3
+/// has no silent fallback; 2026-10-17 sweep: three call sites each chose
+/// their own swallow and the build landed where discovery only looks by
+/// legacy fallback).
+pub fn build_layout_for_run() -> Result<BuildLayout, String> {
+    load().and_then(|c| build_layout(&c)).map_err(|err| {
+        format!(
+            "the build-cache layout is unusable ({err}); refusing to fall back to recipe-dir trees"
+        )
+    })
+}
+
+/// The live source-tree dir makepkg compiles one pkgbase in (§J.2):
+/// `<build_dir>/<pkgbase>/src` — the home of every built-from checkout
+/// since W4a, never the recipe dir.
+pub fn build_tree_srcdir(layout: &BuildLayout, pkgbase: &str) -> PathBuf {
+    layout.builddir.join(pkgbase).join("src")
+}
+
+/// Where one recipe's VCS checkouts may live, in probe order — the live
+/// homes first: the W4a [`build_tree_srcdir`] scoped to this recipe's
+/// pkgbase, then the pre-W4a roots beside the recipe (old trees persist),
+/// then the resolved `SRCDEST` mirror when `srcdest` is given.
+///
+/// A mirror tier is passed only by ref-addressed recomputation (`git
+/// archive <ref>`): a mirror's HEAD is the remote's default branch, never
+/// the built ref, so revision probing must not consult it. A scoped root
+/// miss fails closed rather than falling back to another pkgbase's tree —
+/// a same-named checkout there is someone else's evidence (2026-10-17
+/// sweep; the 2026-10-16 stopgap scanned every tree).
+pub fn checkout_roots_in(
+    recipe_dir: &Path,
+    pkgbase: Option<&str>,
+    layout: &BuildLayout,
+    srcdest: Option<&Path>,
+) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    match pkgbase {
+        Some(base) => roots.push(build_tree_srcdir(layout, base)),
+        None => {
+            // pkgbase unknown (nothing to scope by): every tree stands in
+            // for the scoped root — the old stopgap, kept only for this
+            // degraded case.
+            let mut trees: Vec<PathBuf> = match std::fs::read_dir(&layout.builddir) {
+                Ok(entries) => entries.flatten().map(|e| e.path().join("src")).collect(),
+                Err(_) => Vec::new(),
+            };
+            trees.sort();
+            roots.extend(trees);
+        }
+    }
+    roots.push(recipe_dir.join("src"));
+    roots.push(recipe_dir.to_path_buf());
+    if let Some(srcdest) = srcdest {
+        roots.push(srcdest.to_path_buf());
+    }
+    roots
+}
+
+/// [`checkout_roots_in`] with the process-resolved layout and SRCDEST
+/// (`include_mirror` gates the mirror tier exactly as above). A
+/// layout-resolution failure degrades to the legacy roots only — the
+/// caller's lookup then simply finds nothing in the cache, which fails
+/// closed at its own seam.
+pub fn checkout_roots(recipe_dir: &Path, pkgbase: Option<&str>, include_mirror: bool) -> Vec<PathBuf> {
+    let srcdest = if include_mirror { resolve_srcdest() } else { None };
+    match load().and_then(|c| build_layout(&c)) {
+        Ok(layout) => checkout_roots_in(recipe_dir, pkgbase, &layout, srcdest.as_deref()),
+        Err(_) => {
+            let mut roots = vec![recipe_dir.join("src"), recipe_dir.to_path_buf()];
+            if let Some(srcdest) = srcdest {
+                roots.push(srcdest);
+            }
+            roots
+        }
+    }
+}
+
 /// The known key roster — one place, reused by the parse error message.
 const KEYS: [&str; 4] = ["project", "recipe_url", "build_dir", "state_dir"];
 
@@ -214,23 +294,50 @@ pub fn resolve_srcdest() -> Option<PathBuf> {
             return Some(PathBuf::from(dir));
         }
     }
+    // The home the conf's shell would expand against is the BUILD USER's
+    // (same identity-follows-the-drop rule as `privilege::drop_identity_env`).
+    let home = build_user_home().ok();
     for conf in [
-        build_user_home().ok().map(|home| home.join(".makepkg.conf")),
+        home.as_ref().map(|home| home.join(".makepkg.conf")),
         Some(PathBuf::from("/etc/makepkg.conf")),
     ] {
         let Some(conf) = conf else { continue };
         if let Ok(content) = std::fs::read_to_string(&conf) {
             if let Some(dir) = makepkg_conf_assign(&content, "SRCDEST") {
-                return Some(PathBuf::from(dir));
+                return Some(expand_home_path(&dir, home.as_deref()));
             }
         }
     }
     None
 }
 
+/// Makepkg.conf is shell and a path-valued key realistically takes the two
+/// home-relative shapes expanded here (`~`, `$HOME`/`${HOME}`); anything
+/// else (command substitution, `include` directives) stays literal — the
+/// approximate parse is documented behaviour, and a dropped
+/// `bash -c 'source <conf>'` adapter is the honest future seam (2026-10-17
+/// sweep).
+fn expand_home_path(value: &str, home: Option<&Path>) -> PathBuf {
+    let Some(home) = home else {
+        return PathBuf::from(value);
+    };
+    if value == "~" {
+        return home.to_path_buf();
+    }
+    for prefix in ["~/", "$HOME/", "${HOME}/"] {
+        if let Some(rest) = value.strip_prefix(prefix) {
+            return home.join(rest);
+        }
+    }
+    PathBuf::from(value)
+}
+
 /// One `NAME=value` assignment from a makepkg.conf-shaped file (comments and
-/// shell quoting tolerated enough for the path-valued keys we read).
+/// shell quoting tolerated enough for the path-valued keys we read). Shell
+/// semantics: a LATER assignment wins — the 2026-10-17 sweep found the scan
+/// returning the first, resolving a different path than makepkg uses.
 fn makepkg_conf_assign(content: &str, name: &str) -> Option<String> {
+    let mut found = None;
     for raw in content.lines() {
         let line = raw.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -244,10 +351,10 @@ fn makepkg_conf_assign(content: &str, name: &str) -> Option<String> {
         }
         let value = value.trim().trim_matches(|c| c == '"' || c == '\'');
         if !value.is_empty() {
-            return Some(value.to_string());
+            found = Some(value.to_string());
         }
     }
-    None
+    found
 }
 
 /// Load both layers, user over system over built-ins. Missing files are
@@ -319,6 +426,88 @@ mod tests {
         );
         assert_eq!(makepkg_conf_assign("SRCDEST=\n", "SRCDEST"), None);
         assert_eq!(makepkg_conf_assign("PKGDEST=/z\n", "SRCDEST"), None);
+    }
+
+    #[test]
+    fn makepkg_conf_assign_follows_shell_last_assignment_wins() {
+        assert_eq!(
+            makepkg_conf_assign("SRCDEST=/first\nSRCDEST=/second\n", "SRCDEST"),
+            Some("/second".to_string())
+        );
+    }
+
+    #[test]
+    fn expand_home_path_grows_the_two_home_relative_shapes() {
+        let home = PathBuf::from("/home/u");
+        assert_eq!(expand_home_path("~", Some(&home)), home);
+        assert_eq!(expand_home_path("~/src", Some(&home)), home.join("src"));
+        assert_eq!(
+            expand_home_path("$HOME/src", Some(&home)),
+            home.join("src")
+        );
+        assert_eq!(
+            expand_home_path("${HOME}/src", Some(&home)),
+            home.join("src")
+        );
+        assert_eq!(expand_home_path("/abs/src", Some(&home)), PathBuf::from("/abs/src"));
+        // No home known: every shape stays literal rather than guessing.
+        assert_eq!(expand_home_path("~/src", None), PathBuf::from("~/src"));
+    }
+
+    #[test]
+    fn checkout_roots_probe_live_homes_first_and_the_mirror_last() {
+        let layout = BuildLayout {
+            root: PathBuf::from("/cache"),
+            builddir: PathBuf::from("/cache/build"),
+            pkgdir: PathBuf::from("/cache/pkg"),
+            pkgdest: PathBuf::from("/cache/pkgs"),
+        };
+        let recipe = PathBuf::from("/ws/packages/misc/demo");
+        let srcdest = PathBuf::from("/home/u/.cache/gsa-src");
+        assert_eq!(
+            checkout_roots_in(&recipe, Some("demo"), &layout, Some(&srcdest)),
+            vec![
+                PathBuf::from("/cache/build/demo/src"),
+                recipe.join("src"),
+                recipe.clone(),
+                srcdest,
+            ]
+        );
+        // Revision probing passes no mirror tier at all.
+        assert_eq!(
+            checkout_roots_in(&recipe, Some("demo"), &layout, None),
+            vec![
+                PathBuf::from("/cache/build/demo/src"),
+                recipe.join("src"),
+                recipe.clone(),
+            ]
+        );
+    }
+
+    #[test]
+    fn checkout_roots_without_pkgbase_scan_the_cache_trees_in_stable_order() {
+        let tmp = std::env::temp_dir().join(format!("gsa-roots-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("build/bbb/src")).unwrap();
+        std::fs::create_dir_all(tmp.join("build/aaa/src")).unwrap();
+        let layout = BuildLayout {
+            root: tmp.clone(),
+            builddir: tmp.join("build"),
+            pkgdir: tmp.join("pkg"),
+            pkgdest: tmp.join("pkgs"),
+        };
+        let recipe = PathBuf::from("/ws/packages/misc/demo");
+        let roots = checkout_roots_in(&recipe, None, &layout, None);
+        assert_eq!(
+            roots,
+            vec![
+                tmp.join("build/aaa/src"),
+                tmp.join("build/bbb/src"),
+                recipe.join("src"),
+                recipe.clone(),
+            ]
+        );
+        std::fs::remove_dir_all(&tmp).unwrap();
     }
 
     #[test]

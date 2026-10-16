@@ -126,7 +126,7 @@ make_case_workspace() { # $1 = dir, $2 = columns
 
     cat >"$dir/bin/makepkg" <<'EOF'
 #!/usr/bin/env bash
-set -u
+set -eu
 id=$(basename "$PWD")
 # Case C records every lane child so its survival can be decided by PID
 # rather than by matching `ps` argv — the builder execs makepkg by its bare
@@ -412,7 +412,7 @@ fi
     done
     cat >"$ws/bin/makepkg" <<'EOF'
 #!/usr/bin/env bash
-set -u
+set -eu
 id=$(basename "$PWD")
 # Every lane child records itself (id + pid) so the survival check can be
 # decided by PID rather than by matching `ps` argv.
@@ -586,7 +586,7 @@ printf 'dashboard fixture: PASS\n'
     set_topology_record "$ws" parkC git deferp
     cat >"$ws/bin/makepkg" <<'EOF'
 #!/usr/bin/env bash
-set -u
+set -eu
 id=$(basename "$PWD")
 if [ "${GSA_FAKE_FAIL_PACKAGE:-}" = "$id" ]; then exit 1; fi
 if [ "${GSA_FAKE_DEFER_PACKAGE:-}" = "$id" ]; then exit 99; fi

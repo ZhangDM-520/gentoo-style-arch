@@ -138,13 +138,14 @@ pub fn discover_recipe(recipe_dir: &Path) -> Result<RecipeArchives, String> {
     // whose `.PKGINFO` cannot be read is NOT a candidate here (rule 25(h):
     // direct-archive seams report it via decide() gate 1).
     // W4: archives live in the shared build-user `PKGDEST`; the recipe dir
-    // stays in the scan set (pre-W4 trees and fixture stubs write there)
-    // and `.PKGINFO` truth keeps the shared dir from handing over another
-    // recipe's archive.
-    let scan_dirs = match gsa_model::config::load().and_then(|c| gsa_model::config::build_layout(&c)) {
-        Ok(layout) => gsa_model::config::archive_dirs(recipe_dir, &layout),
-        Err(_) => vec![recipe_dir.to_path_buf()],
-    };
+    // stays in the scan set (pre-W4 trees and fixture stubs write there —
+    // contract §J.2) and `.PKGINFO` truth keeps the shared dir from handing
+    // over another recipe's archive. The layout comes from the engine's ONE
+    // error policy (`build_layout_for_run`): an unusable layout is FATAL for
+    // discovery — never a silent fall back to recipe-dir-only trees the
+    // build half would not have written to.
+    let layout = gsa_model::config::build_layout_for_run()?;
+    let scan_dirs = gsa_model::config::archive_dirs(recipe_dir, &layout);
     let mut by_name: Vec<(String, std::time::SystemTime, PathBuf, String)> = Vec::new();
     let mut scanned = false;
     for scan_dir in &scan_dirs {
@@ -658,6 +659,25 @@ fn plan(candidates: &[Candidate], ctx: &DecisionContext, db: &LocalDb) -> Result
     })
 }
 
+/// The IgnorePkg rollback computation (rule 9's complement): what one step's
+/// registration must un-register when its `pacman -U` did not succeed. Only
+/// names THIS registration added (`added`) for install-bearing archives are
+/// undone — a failed pacman transaction installs nothing — while a name a
+/// skip-only (already-current) archive also protects stays registered: it IS
+/// installed, and that protection is rule 9's whole point. Names already in
+/// the closure before this step are never touched.
+fn rollback_registration_names(
+    added: &[String],
+    install_names: &[String],
+    keep_names: &[String],
+) -> Vec<String> {
+    added
+        .iter()
+        .filter(|name| install_names.contains(name) && !keep_names.contains(name))
+        .cloned()
+        .collect()
+}
+
 /// One `-S` install step: decide, then (on a plan without `refuse`) register
 /// the accepted names and run the one `pacman -U` transaction. Returns the
 /// decision rows and the transaction outcome — `None` when nothing
@@ -732,6 +752,10 @@ pub fn install_built_package(
                     .all(|r| matches!(r.decision, Decision::Install | Decision::Skip))
         })
         .collect();
+    // The registration's write set, kept for the failed-transaction rollback
+    // (rule 9's complement): (conf, added, install-bearing names,
+    // already-current names).
+    let mut registered: Option<(PathBuf, Vec<String>, Vec<String>, Vec<String>)> = None;
     if run.register_ignorepkg {
         if !accepted.is_empty() {
             let conf = run
@@ -739,20 +763,37 @@ pub fn install_built_package(
                 .clone()
                 .unwrap_or_else(|| PathBuf::from("/etc/pacman.conf"));
             let mut names: Vec<String> = Vec::new();
+            // The transaction-role partition the failed-transaction rollback
+            // (below) needs: install-bearing archives vs already-current
+            // skips.
+            let mut install_names: Vec<String> = Vec::new();
+            let mut keep_names: Vec<String> = Vec::new();
             for group in &accepted {
                 let established = names_for_archive(
                     group.pkginfo.as_ref(),
                     group.candidate.recipe_dir.as_deref(),
                 )?;
+                let installs = group.rows.iter().any(|r| r.decision == Decision::Install);
                 for name in established {
                     if !names.contains(&name) {
-                        names.push(name);
+                        names.push(name.clone());
+                    }
+                    let bucket = if installs {
+                        &mut install_names
+                    } else {
+                        &mut keep_names
+                    };
+                    if !bucket.contains(&name) {
+                        bucket.push(name);
                     }
                 }
             }
             names.sort();
             let subject = format!("{} name(s) from {} archive(s)", names.len(), accepted.len());
-            register_ignorepkg(&conf, &subject, &names, &db_root)?;
+            let report = register_ignorepkg(&conf, &subject, &names, &db_root)?;
+            // The registration's exact write set: the only names the
+            // rollback below may ever un-register.
+            registered = Some((conf, report.added, install_names, keep_names));
         }
     } else if !accepted.is_empty() {
         eprintln!(
@@ -776,6 +817,38 @@ pub fn install_built_package(
         archives: install_archives,
         pacman_args: run.pacman_args.clone(),
     });
+    // Rule 9's complement: the before-ordering stands, but a transaction that
+    // did not succeed must never leave names registered that it never
+    // installed (a failed `pacman -U` installs nothing — the transaction is
+    // atomic), or future `-Syu` silently skips them forever. Roll back this
+    // registration's install-bearing additions; a hard crash between the
+    // registration and this point is the known residual — the dated pre-image
+    // backup (`<conf>.bak-YYYYMMDD`) is the manual recovery.
+    if outcome != TxnOutcome::Ok {
+        if let Some((conf, added, install_names, keep_names)) = &registered {
+            let rollback = rollback_registration_names(added, install_names, keep_names);
+            if !rollback.is_empty() {
+                match register::prune_ignorepkg(
+                    conf,
+                    "rollback: the install transaction did not succeed",
+                    &rollback,
+                    &db_root,
+                ) {
+                    Ok(pruned) => eprintln!(
+                        "gsa: note: rolled back IgnorePkg registration of {} name(s) never installed ({})",
+                        pruned.removed.len(),
+                        pruned.removed.join(", ")
+                    ),
+                    Err(error) => eprintln!(
+                        "gsa: warning: IgnorePkg rollback failed in {} ({error}) — {} stay registered although the transaction did not install them (pre-image backup: {}.bak-<YYYYMMDD>)",
+                        conf.display(),
+                        rollback.join(", "),
+                        conf.display()
+                    ),
+                }
+            }
+        }
+    }
     // The installed-ABI record (plan §4.1): every archive this step
     // INSTALLED records its `:=` subscriptions — what its DT_NEEDED linked
     // at build time, against the providers' recorded tokens. A recording
@@ -801,7 +874,12 @@ pub fn install_built_package(
             // a marked recipe rebuild forever.
             let marker = run.state_dir.join("abi-repair").join(&recipe_id);
             if marker.exists() {
-                let _ = std::fs::remove_file(&marker);
+                if let Err(error) = std::fs::remove_file(&marker) {
+                    eprintln!(
+                        "gsa: note: abi-repair marker {} could not be consumed after install: {error} (the read side will mark {recipe_id} for rebuild again)",
+                        marker.display()
+                    );
+                }
             }
             let Some(info) = group.pkginfo.as_ref() else {
                 continue;
@@ -906,5 +984,50 @@ pub fn rows_rc(rows: &[DecisionRow]) -> i32 {
         1
     } else {
         0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn names(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn rollback_unregisters_only_this_steps_added_uninstalled_names() {
+        // Plain case: everything the step added for its install-bearing
+        // archive goes back when the transaction does not succeed.
+        assert_eq!(
+            rollback_registration_names(
+                &names(&["foo", "foo-docs"]),
+                &names(&["foo", "foo-docs"]),
+                &[]
+            ),
+            names(&["foo", "foo-docs"])
+        );
+        // A name already in the closure before this step (not in `added`) is
+        // never touched.
+        assert_eq!(
+            rollback_registration_names(&names(&["foo-docs"]), &names(&["foo", "foo-docs"]), &[]),
+            names(&["foo-docs"])
+        );
+        // Split package: the skip-only sibling IS installed — its names stay
+        // registered, including the pkgbase shared with the failed output.
+        assert_eq!(
+            rollback_registration_names(
+                &names(&["z", "z-sub1", "z-sub2"]),
+                &names(&["z", "z-sub1"]),
+                &names(&["z", "z-sub2"]),
+            ),
+            names(&["z-sub1"])
+        );
+        // Skip-only step (already-current names): nothing transacted, so
+        // nothing rolls back.
+        assert_eq!(
+            rollback_registration_names(&names(&["bar"]), &[], &names(&["bar"])),
+            Vec::<String>::new()
+        );
     }
 }

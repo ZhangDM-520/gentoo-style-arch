@@ -115,7 +115,7 @@ set_topology_record "$fixture" "$core_id" 'git,core' ''
 # reconstructed afterwards. Pipe-delimited so flag values may contain spaces.
 cat >"$fixture/bin/makepkg" <<'EOF'
 #!/usr/bin/env bash
-set -u
+set -eu
 id=$(basename "$PWD")
 printf 'START|%s|%s|%s|%s|%s\n' \
     "$id" "$(date +%s%N)" "${MAKEFLAGS:-unset}" "${GSA_BUILD_JOBS:-unset}" "${NINJAFLAGS:-unset}" \

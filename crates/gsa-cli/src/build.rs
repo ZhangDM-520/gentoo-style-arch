@@ -272,9 +272,25 @@ fn run_build_with(
     // ── prune strength 1 first (§B.5 cluster letter `c`) ─────────────────
     if inv.modifiers.contains(&'c') {
         let mut report = gsa_build::clean::CleanReport::default();
-        let layout = gsa_model::config::load()
-            .and_then(|c| gsa_model::config::build_layout(&c))
-            .ok();
+        // §J.2/§J.3's one layout error policy: the shared-PKGDEST leg needs
+        // the layout, and a failure is fatal for the run — never a silent
+        // prune of only the recipe-dir trees (`.ok()` swallowed the error
+        // and the prune quietly stopped covering the cache).
+        let layout = match gsa_model::config::build_layout_for_run() {
+            Ok(layout) => layout,
+            Err(message) => {
+                let _ = writeln!(err, "gsa: {message}");
+                return refuse_before_dispatch(
+                    inv,
+                    &selection,
+                    &budget,
+                    &state_dir,
+                    out,
+                    err,
+                    "startup-refused",
+                );
+            }
+        };
         for (_, id) in &selection.listed {
             let record = graph.record(graph.index_of(id.as_str()).expect("selection ids resolve"));
             let recipe_dir = root.join(&record.path);
@@ -300,7 +316,7 @@ fn run_build_with(
                 &recipe_dir,
                 &pkgbase,
                 &outputs,
-                layout.as_ref(),
+                Some(&layout),
                 &mut report,
             );
         }
@@ -575,7 +591,15 @@ fn run_build_with(
                     .unwrap_or(FetchCandidacy::NoFetchable)
             })
             .collect();
-        let _ = std::fs::File::create(&prefetch_log);
+        let _ = std::fs::File::create(&prefetch_log).inspect_err(|error| {
+            // Loud, never fatal: one advisory log going missing must never
+            // take the run with it — but it must never vanish silently.
+            let _ = writeln!(
+                err,
+                "gsa: warning: cannot truncate prefetch log {}: {error}",
+                prefetch_log.display()
+            );
+        });
         PrefetchSetup {
             ahead,
             candidacy,

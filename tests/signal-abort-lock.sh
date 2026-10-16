@@ -196,7 +196,7 @@ if [[ -n ${GSA_FAKE_FLAGS_LOG:-} ]]; then
 fi
 if [[ -n ${GSA_FAKE_MARKER_DIR:-} ]]; then
     mkdir -p "$GSA_FAKE_MARKER_DIR"
-    : >"$GSA_FAKE_MARKER_DIR/$id"
+    : >"$GSA_FAKE_MARKER_DIR/$id" || exit 1
 fi
 if [[ -n ${GSA_FAKE_BUILD_SECONDS:-} ]]; then
     if [[ -n ${GSA_FAKE_IGNORE_TERM:-} ]]; then
@@ -220,7 +220,11 @@ if [[ -n ${GSA_FAKE_BUILD_SECONDS:-} ]]; then
         wait $!
     fi
 fi
-: >"$PWD/$id-1.0.0-1-any.pkg.tar.zst"
+# No set -e in this stub: the TERM-proof loop above must survive the sweep's
+# killed-sleep `wait` failures (only SIGKILL ends that build). The archive
+# touch is guarded explicitly so a failed touch can never fall through to a
+# success exit.
+: >"$PWD/$id-1.0.0-1-any.pkg.tar.zst" || exit 1
 exit 0
 EOF
 

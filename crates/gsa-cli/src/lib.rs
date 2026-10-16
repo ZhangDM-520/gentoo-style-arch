@@ -542,8 +542,23 @@ pub(crate) fn privilege_gate(
     }
 }
 
-pub(crate) fn resolve_intensity(project: &gsa_topo::ProjectConfig) -> Result<String, String> {
-    match std::env::var("GSA_INTENSITY") {
+/// Build-domain hidden seams run at the INVOKER's identity (fixtures drive
+/// them as any user), but a bare root shell must not reach them: there is no
+/// build user to drop to and the work — including recipe-shell eval — would
+/// run as root (contract §B.10's never-improvise rule; 2026-10-17 sweep).
+fn bare_root_refusal(err: &mut dyn Write) -> Option<i32> {
+    use gsa_model::privilege as p;
+    if p::effective_uid() == 0 && p::build_user().is_none() {
+        let _ = writeln!(
+            err,
+            "gsa: a build-domain entry needs a build user: run 'sudo gsa …' from your build user's shell (a root shell has no user to drop to)"
+        );
+        return Some(RC_REFUSED);
+    }
+    None
+}
+
+pub(crate) fn resolve_intensity(project: &gsa_topo::ProjectConfig) -> Result<String, String> {    match std::env::var("GSA_INTENSITY") {
         Ok(value) if !value.is_empty() => {
             if gsa_topo::INTENSITY_LEVELS.contains(&value.as_str()) {
                 Ok(value)
@@ -780,11 +795,17 @@ pub fn run(argv: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
         Ok(Parsed::Hidden(Hidden::LaneJob(args))) => {
             // The lane child entry (contract §D.1): one package, one result
             // file; its exit code IS its lane outcome code (§G.2).
+            if let Some(rc) = bare_root_refusal(err) {
+                return rc;
+            }
             gsa_build::lane::run_lane_job(&args, err)
         }
         Ok(Parsed::Hidden(Hidden::FetchJob(args))) => {
             // The fetch child entry (contract §D.1): one recipe, one typed
             // result file; `failed` is data, not process failure (exit 0).
+            if let Some(rc) = bare_root_refusal(err) {
+                return rc;
+            }
             gsa_fetch::engine::run_fetch_job(&args, err)
         }
         Ok(Parsed::Hidden(Hidden::StaleLockCheck)) => {

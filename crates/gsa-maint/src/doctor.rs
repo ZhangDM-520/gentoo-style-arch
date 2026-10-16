@@ -6,7 +6,7 @@
 //! (deliverable fence: side-car self-healing only — reindex from archives,
 //! prune orphans; never `/usr`, never `/var/lib/pacman`).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use gsa_state::{prune_instance, reindex_archives, verify_row, BinpkgIndex, IndexRow, Match};
 
@@ -21,11 +21,27 @@ pub struct Findings {
     pub local_db: String,
     pub mismatch: Vec<(IndexRow, String)>,
     pub orphan_rows: Vec<IndexRow>,
+    /// Orphan archives attributed to their recipe (the reindexable class —
+    /// every `orphan-archive` row `--fix` can clear).
     pub orphan_archives: Vec<(String, PathBuf)>,
     pub no_pacman: Vec<(String, String)>,
     /// True when the installed view was readable (the no-pacman family only
     /// means something then).
     pub installed_known: bool,
+    /// The build-cache layout could not be resolved: the live-home half of
+    /// the orphan scan is missing, and `--fix` refuses to run (the engine's
+    /// ONE layout error policy — never a silent home switch).
+    pub layout_error: Option<String>,
+}
+
+/// The output-name truth filter of the orphan scan: the makepkg archive
+/// name shape (`.pkg.tar.<compression>`, `zst` today). The same filter for
+/// both homes.
+fn is_archive_name(path: &Path) -> bool {
+    path.file_name()
+        .map(|n| n.to_string_lossy().contains(".pkg.tar."))
+        .unwrap_or(false)
+        && path.extension().and_then(|e| e.to_str()) == Some("zst")
 }
 
 /// Gather every doctor family in one read-only pass.
@@ -79,25 +95,50 @@ pub fn findings(ctx: &MaintCtx<'_>) -> Findings {
         }
     }
 
-    // Orphan archives: beside a recipe, no live index row.
+    // Orphan archives: the TWO homes archives live in (post-W4a). The
+    // recipe-dir half (§J.2's legacy home) is exclusive to its recipe and
+    // keeps its name-shape filter and dir attribution; the shared PKGDEST
+    // half is walked once and gated by rule 11's truth filter (the index
+    // row's recipe_id first, else the archive's own `.PKGINFO` names
+    // against the committed declared-name universe) — a shared PKGDEST can
+    // never hand over another recipe's archive. The orphan family is
+    // deliberately the REINDEXABLE class: an entry no recipe can be proven
+    // to own is simply not any recipe's orphan (and never reindexed under a
+    // wrong id), exactly as a non-archive beside a recipe was never one.
     for (id, dir) in ctx.recipe_dirs() {
         let Ok(entries) = std::fs::read_dir(&dir) else {
             continue;
         };
         for entry in entries.flatten() {
             let path = entry.path();
-            if !path
-                .file_name()
-                .map(|n| n.to_string_lossy().contains(".pkg.tar."))
-                .unwrap_or(false)
-                || path.extension().and_then(|e| e.to_str()) != Some("zst")
-            {
+            if !is_archive_name(&path) {
                 continue;
             }
             if index.find_archive(&path).is_none() {
                 out.orphan_archives.push((id.clone(), path));
             }
         }
+    }
+    match gsa_model::config::build_layout_for_run() {
+        Ok(layout) => {
+            let declared = ctx.declared_names();
+            let Ok(entries) = std::fs::read_dir(&layout.pkgdest) else {
+                return out;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !is_archive_name(&path) {
+                    continue;
+                }
+                if index.find_archive(&path).is_some() {
+                    continue;
+                }
+                if let Some(id) = crate::archive_owner(&index, &declared, &path) {
+                    out.orphan_archives.push((id, path));
+                }
+            }
+        }
+        Err(error) => out.layout_error = Some(error),
     }
     out
 }
@@ -138,6 +179,9 @@ pub fn report(ctx: &MaintCtx<'_>) -> Vec<Row> {
             format!("no-index-row {id}"),
         ));
     }
+    if let Some(error) = &found.layout_error {
+        rows.push(Row::new("build-layout", "failed", error.clone()));
+    }
     if found.installed_known {
         for (base, version) in &found.no_pacman {
             rows.push(Row::new(
@@ -170,17 +214,26 @@ pub struct FixOutcome {
 /// - `prune-orphan-rows` — a binpkg index row whose archive is GONE is
 ///   tombstoned. A row whose archive exists is never pruned (the archive is
 ///   the row's referent).
-/// - `reindex-orphans` — an archive beside a recipe with no row is
-///   re-indexed from its own `.PKGINFO` + bytes (fail closed, no retention).
+/// - `reindex-orphans` — an archive in one of the two homes (the shared
+///   PKGDEST or a recipe dir) with no row is re-indexed from its own
+///   `.PKGINFO` + bytes (fail closed, no retention). The family is the
+///   REINDEXABLE class only: a shared-PKGDEST entry no recipe can be
+///   proven to own (rule 11) is not any recipe's orphan and is never
+///   re-indexed under a wrong id.
 /// - `prune-stale-artifacts` — the state root's dead temporaries (§K.3's
 ///   sweep class) are removed; packages-tree artifacts are kept and named
 ///   (a maintain repair never writes outside the state root).
 ///
 /// Log ownership is report-only even here (§J.5: the root supervisor's
 /// startup repair owns that remedy), and the pacman local DB is never
-/// touched.
+/// touched. The build-cache layout is the engine's ONE error policy: an
+/// unusable layout is fatal for the repair (`Err`) — never a silent home
+/// switch to repairing only what happens to be visible.
 pub fn fix(ctx: &MaintCtx<'_>, apply: bool) -> Result<FixOutcome, String> {
     let found = findings(ctx);
+    if let Some(error) = &found.layout_error {
+        return Err(error.clone());
+    }
     let mut rows = Vec::new();
     let mut failed = 0;
 

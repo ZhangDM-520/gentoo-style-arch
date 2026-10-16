@@ -13,6 +13,20 @@
 //! The ABI token is derived per archive by `gsa-abi`'s ONE computation
 //! (contract §J.4: hash of the shipped bare-soname provide set, merged with
 //! the recipe's declared `abi-rev=` override) — never re-derived here.
+//!
+//! Two invariants the repair paths rely on:
+//!
+//! - **An instance id is never reused.** Allocation goes through the ONE
+//!   seam [`next_instance`], which takes the max over every id EVER
+//!   recorded — live rows AND tombstones alike. The fold-level
+//!   [`BinpkgIndex::instances_for`] is a view for retention and reporting,
+//!   never an allocator: a doctor tombstone must not free its id.
+//! - **A tombstone never outruns its files.** An instance is tombstoned
+//!   only after its archive files are deleted (or proven kept by a
+//!   surviving row) — see [`register_instance`]'s sweep and
+//!   [`prune_instance`]'s caller precondition. A crash can therefore never
+//!   leave a deliberately pruned archive on disk for `reindex-orphans` to
+//!   resurrect under a fresh id.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -40,7 +54,8 @@ pub struct IndexRow {
     pub pkgnames: Vec<String>,
     /// Canonical full version `epoch:pkgver-pkgrel` (rule 27(a) family).
     pub version: String,
-    /// The archive, still beside its recipe (§J.2) — referred to by hash,
+    /// The archive wherever makepkg wrote it (the W4a shared `PKGDEST`, or
+    /// beside its recipe in a legacy tree, §J.2) — referred to by hash,
     /// never moved.
     pub archive: PathBuf,
     pub sha256: String,
@@ -176,7 +191,9 @@ impl BinpkgIndex {
         Some(row)
     }
 
-    /// Live instance ids of one recipe, newest first.
+    /// Live instance ids of one recipe, newest first. A VIEW of the live
+    /// fold for retention and reporting — never an allocator (allocation
+    /// is [`next_instance`]'s job, which counts tombstones too).
     pub fn instances_for(&self, recipe_id: &str) -> Vec<u64> {
         let mut ids: Vec<u64> = self
             .rows
@@ -310,10 +327,37 @@ impl Retention {
     }
 }
 
+/// The ONE instance-id allocator seam: the first id beyond every instance
+/// id EVER recorded for `recipe_id` — live rows and tombstones alike (the
+/// append-only store never forgets a Row entry, and a `Prune` entry names
+/// its instance too, so the max is the truth). "An id is never reused"
+/// (§J.4): [`BinpkgIndex::instances_for`] only sees the live fold, so
+/// allocating from it would let a doctor tombstone free an id.
+fn next_instance(root: &StateRoot, recipe_id: &str) -> Result<u64, StateError> {
+    let read: store::StoreRead<IndexEntry> = store::read_json(&root.index_path(), "index")?;
+    let max = read
+        .rows
+        .iter()
+        .filter_map(|entry| match entry {
+            IndexEntry::Row { row } if row.recipe_id == recipe_id => Some(row.instance),
+            IndexEntry::Prune {
+                recipe_id: id,
+                instance,
+            } if id == recipe_id => Some(*instance),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0);
+    Ok(max + 1)
+}
+
 /// Tombstone one recipe's built instance (the maint doctor's and the prune
 /// strengths' side-car repair): its rows die in the fold, exactly like the
 /// retention sweep's tombstones. Archive files are the CALLER's business —
-/// this never touches bytes on disk. `true` when at least one live row was
+/// this never touches bytes on disk. The caller must therefore have removed
+/// the instance's archives first (or proven them kept by a surviving row):
+/// a tombstone over a file still on disk is the `reindex-orphans`
+/// resurrection window (module doc). `true` when at least one live row was
 /// tombstoned; `false` when the instance was already gone.
 pub fn prune_instance(
     root: &StateRoot,
@@ -343,11 +387,12 @@ pub fn prune_instance(
 /// Reindex one archive that has no live row (the maint doctor's
 /// `reindex-orphans` repair): `.PKGINFO` truth plus `sha256`+`size` from one
 /// read of the bytes, fail closed exactly like [`register_instance`]. The
-/// archive becomes its OWN instance beyond every instance id ever recorded
-/// (tombstoned ones included — an id is never reused) — the doctor cannot
-/// recover which build produced which file, and inventing a shared instance
-/// would fake a split set. No retention is enforced here: a repair never
-/// deletes anything.
+/// archive becomes its OWN instance via the ONE allocator seam
+/// [`next_instance`] — beyond every instance id ever recorded (tombstoned
+/// ones included — an id is never reused) — the doctor cannot recover which
+/// build produced which file, and inventing a shared instance would fake a
+/// split set. No retention is enforced here: a repair never deletes
+/// anything.
 pub fn reindex_archives(
     root: &StateRoot,
     recipe_id: &str,
@@ -355,16 +400,7 @@ pub fn reindex_archives(
     err: &mut dyn Write,
 ) -> Result<Vec<IndexRow>, StateError> {
     let index = BinpkgIndex::load(root)?;
-    let read: store::StoreRead<IndexEntry> = store::read_json(&root.index_path(), "index")?;
-    let mut instance = read
-        .rows
-        .iter()
-        .filter_map(|entry| match entry {
-            IndexEntry::Row { row } if row.recipe_id == recipe_id => Some(row.instance),
-            _ => None,
-        })
-        .max()
-        .unwrap_or(0);
+    let mut instance = next_instance(root, recipe_id)?;
     let mut out = Vec::new();
     for archive in archives {
         if index.rows.iter().any(|r| r.archive == *archive) {
@@ -377,6 +413,7 @@ pub fn reindex_archives(
             ))
         })?;
         let (sha256, size) = hash_archive(archive)?;
+        let mine = instance;
         instance += 1;
         let row = IndexRow {
             recipe_id: recipe_id.to_string(),
@@ -393,7 +430,7 @@ pub fn reindex_archives(
             abi_token: "-".to_string(),
             provides: info.provides,
             vcs_baseline: "-".to_string(),
-            instance,
+            instance: mine,
         };
         store::append_json(
             &root.index_path(),
@@ -412,7 +449,9 @@ pub struct RegisterOutcome {
     /// The rows written for this build's instance.
     pub rows: Vec<IndexRow>,
     /// Rows pruned away (their archive files deleted, unless a surviving
-    /// row still references the same path — see the delete guard).
+    /// row still references the same path — see the delete guard; an
+    /// instance whose files could not be deleted stays live and is not
+    /// pruned).
     pub pruned: Vec<IndexRow>,
     /// Recipes whose pruning was deferred — their lanes are still in
     /// flight and their archives are in use by the run (§J.4's guard).
@@ -444,7 +483,7 @@ pub fn register_instance(
 ) -> Result<RegisterOutcome, StateError> {
     let mut outcome = RegisterOutcome::default();
     let index = BinpkgIndex::load(root)?;
-    let instance = index.instances_for(recipe_id).first().copied().unwrap_or(0) + 1;
+    let instance = next_instance(root, recipe_id)?;
     let built_at = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -551,25 +590,25 @@ pub fn register_instance(
         kept_paths.insert(row.archive.clone());
     }
     for (id, dropped) in drops {
-        for row in index
+        let rows_of: Vec<&IndexRow> = index
             .rows
             .iter()
             .filter(|r| r.recipe_id == id && r.instance == dropped)
-        {
-            store::append_json(
-                &root.index_path(),
-                &IndexEntry::Prune {
-                    recipe_id: id.clone(),
-                    instance: dropped,
-                },
-                err,
-            )?;
+            .collect();
+        // Delete BEFORE the tombstone (module-doc invariant): a tombstone
+        // is recorded only with its instance's archives gone or kept by a
+        // surviving row, so a crash can never leave a deliberately pruned
+        // archive on disk for `reindex-orphans` to resurrect under a fresh
+        // id. A failed deletion therefore keeps the instance LIVE (over
+        // budget — the next sweep retries) instead of tombstoning over a
+        // file that still exists.
+        let mut deletable = true;
+        for row in &rows_of {
             let file = row.archive.clone();
             if kept_paths.contains(&file) {
                 outcome.notes.push(format!(
                     "binpkg index: retention pruned {id} instance {dropped} (archive kept — a kept row still references it)"
                 ));
-                outcome.pruned.push(row.clone());
                 continue;
             }
             match std::fs::remove_file(&file) {
@@ -582,11 +621,27 @@ pub fn register_instance(
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => outcome.notes.push(format!(
                     "binpkg index: retention pruned {id} instance {dropped} (archive already gone)"
                 )),
-                Err(e) => outcome.notes.push(format!(
-                    "binpkg index: retention could not delete {} ({e}) — remove it by hand",
-                    file.display()
-                )),
+                Err(e) => {
+                    deletable = false;
+                    outcome.notes.push(format!(
+                        "binpkg index: retention could not delete {} ({e}) — remove it by hand",
+                        file.display()
+                    ));
+                }
             }
+        }
+        if !deletable {
+            continue;
+        }
+        store::append_json(
+            &root.index_path(),
+            &IndexEntry::Prune {
+                recipe_id: id.clone(),
+                instance: dropped,
+            },
+            err,
+        )?;
+        for row in rows_of {
             outcome.pruned.push(row.clone());
         }
     }
@@ -951,5 +1006,97 @@ mod tests {
         );
         let index = BinpkgIndex::load(&root).unwrap();
         assert_eq!(index.rows.len(), 1, "the failed reindex wrote nothing");
+    }
+
+    #[test]
+    fn a_tombstoned_instance_id_is_never_reallocated() {
+        // The ONE allocator seam takes the max over every instance id EVER
+        // recorded (rows AND tombstones): a doctor tombstone must not free
+        // its id for reuse ("an id is never reused", §J.4).
+        let dir = scratch("no-reuse");
+        let root = StateRoot::open(&dir).unwrap();
+        let retention = Retention::from_records(&synthetic_topology()).unwrap();
+        let mut err = Vec::new();
+        let first = make_archive(&dir, "leaf", "1.0.0-1");
+        register_instance(
+            &root,
+            "leaf",
+            &[first],
+            &retention,
+            &BTreeSet::new(),
+            None,
+            &mut err,
+        )
+        .unwrap();
+        assert!(prune_instance(&root, "leaf", 1, &mut err).unwrap());
+        let second = make_archive(&dir, "leaf", "1.0.1-1");
+        let outcome = register_instance(
+            &root,
+            "leaf",
+            &[second],
+            &retention,
+            &BTreeSet::new(),
+            None,
+            &mut err,
+        )
+        .unwrap();
+        assert_eq!(
+            outcome.rows[0].instance, 2,
+            "instance 1 is tombstoned but never reused"
+        );
+    }
+
+    #[test]
+    fn a_failed_archive_delete_keeps_the_instance_live() {
+        // The delete-before-tombstone invariant (module doc): a tombstone
+        // exists only with its instance's archives gone (or kept by a
+        // surviving row). A deletion that fails leaves the instance LIVE —
+        // never a tombstone over a file that `reindex-orphans` would then
+        // resurrect under a fresh id.
+        let dir = scratch("delete-first");
+        let root = StateRoot::open(&dir).unwrap();
+        let retention = Retention::from_records(&synthetic_topology()).unwrap();
+        let mut err = Vec::new();
+        let first = make_archive(&dir, "leaf", "1.0.0-1");
+        register_instance(
+            &root,
+            "leaf",
+            &[first.clone()],
+            &retention,
+            &BTreeSet::new(),
+            None,
+            &mut err,
+        )
+        .unwrap();
+        // Turn the dropped instance's archive into a deletion-proof
+        // directory: remove_file fails, so the tombstone must not happen.
+        std::fs::remove_file(&first).unwrap();
+        std::fs::create_dir_all(first.join("occupied")).unwrap();
+        let second = make_archive(&dir, "leaf", "1.0.1-1");
+        let outcome = register_instance(
+            &root,
+            "leaf",
+            &[second],
+            &retention,
+            &BTreeSet::new(),
+            None,
+            &mut err,
+        )
+        .unwrap();
+        assert!(
+            outcome.notes.iter().any(|n| n.contains("could not delete")),
+            "the failed deletion is reported loudly: {:?}",
+            outcome.notes
+        );
+        assert!(
+            outcome.pruned.is_empty(),
+            "an instance whose files could not be deleted is not pruned"
+        );
+        let index = BinpkgIndex::load(&root).unwrap();
+        assert_eq!(
+            index.instances_for("leaf"),
+            vec![2, 1],
+            "the un-tombstoned instance 1 stays live (over budget: the next sweep retries)"
+        );
     }
 }

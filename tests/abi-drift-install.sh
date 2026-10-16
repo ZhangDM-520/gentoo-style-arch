@@ -181,8 +181,12 @@ rr2_stub_knob GSA_FAKE_MARKER_SNAPSHOT 'abi-drift-install pacman stub: ABI-repai
 mkdir -p "$tmp/gsa-db/local" "$tmp/gsa-bin"
 cat >"$tmp/gsa-bin/pacman-conf" <<EOF
 #!/usr/bin/env bash
-[ "\${1:-}" = DBPath ] && printf '%s\n' "$tmp/gsa-db"
-exit 0
+set -u
+if [ "\${1:-}" = DBPath ]; then
+    printf '%s\n' "$tmp/gsa-db"
+    exit 0
+fi
+exit 1
 EOF
 chmod +x "$tmp/gsa-bin/pacman-conf"
 for stub in pacman sudo; do

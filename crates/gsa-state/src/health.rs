@@ -1,9 +1,9 @@
 //! The side-car self-check (`gsa --local-db-check`, contract §D.1's hidden
 //! seam): unreadable rows (named, never quoted as raw bytes), hash/size
 //! disagreements between index rows and archive bytes (§J.4), rows whose
-//! archive is gone, and orphan archives — `.pkg.tar.zst` files sitting
-//! beside a recipe with no index row. Report-only surface: the caller maps
-//! findings to the seam's rc (§G: 0 clean, 1 findings, 2 bad usage).
+//! archive is gone, and orphan archives — `.pkg.tar.zst` files in one of
+//! the caller's scan dirs with no index row. Report-only surface: the caller
+//! maps findings to the seam's rc (§G: 0 clean, 1 findings, 2 bad usage).
 
 use std::path::{Path, PathBuf};
 
@@ -25,8 +25,8 @@ pub enum Finding {
     Mismatch { name: String, detail: String },
     /// An index row whose archive file is gone (kind `missing-archive`).
     MissingArchive { name: String, detail: String },
-    /// An archive beside a recipe with no live index row (kind
-    /// `orphan-archive`).
+    /// An archive in one of the caller's scan dirs with no live index row
+    /// (kind `orphan-archive`).
     OrphanArchive { name: String, detail: String },
 }
 
@@ -75,10 +75,11 @@ impl HealthReport {
     }
 }
 
-/// Check the side-car DB. `recipe_dirs` are the topology's recipe
-/// directories (the oracle for orphan archives — the index never guesses a
-/// workspace layout).
-pub fn check(root: &StateRoot, recipe_dirs: &[PathBuf]) -> Result<HealthReport, StateError> {
+/// Check the side-car DB. `scan_dirs` are the directories the caller knows
+/// archives live in — the two-home set (the topology's recipe dirs and the
+/// live `PKGDEST`); the index never guesses a workspace layout, the caller
+/// owns that knowledge and passes every home to scan.
+pub fn check(root: &StateRoot, scan_dirs: &[PathBuf]) -> Result<HealthReport, StateError> {
     let mut findings = Vec::new();
 
     let index = BinpkgIndex::load(root)?;
@@ -126,8 +127,8 @@ pub fn check(root: &StateRoot, recipe_dirs: &[PathBuf]) -> Result<HealthReport, 
         }
     }
 
-    // Orphan archives: `.pkg.tar.zst` files beside a recipe that no live
-    // row binds. Path match first, file name as the unambiguous fallback.
+    // Orphan archives: `.pkg.tar.zst` files in a scan dir that no live row
+    // binds. Path match first, file name as the unambiguous fallback.
     let row_paths: std::collections::BTreeSet<&Path> =
         index.rows.iter().map(|r| r.archive.as_path()).collect();
     let row_names: std::collections::BTreeSet<&str> = index
@@ -136,7 +137,7 @@ pub fn check(root: &StateRoot, recipe_dirs: &[PathBuf]) -> Result<HealthReport, 
         .filter_map(|r| r.archive.file_name().map(|n| n.to_str().unwrap_or("")))
         .filter(|n| !n.is_empty())
         .collect();
-    for dir in recipe_dirs {
+    for dir in scan_dirs {
         let Ok(entries) = std::fs::read_dir(dir) else {
             continue;
         };

@@ -382,13 +382,18 @@ impl Prefetcher {
         &mut self,
         setup: &RunSetup,
         run_dir: &std::path::Path,
+        err: &mut dyn Write,
     ) -> Option<(usize, std::process::Child)> {
         if self.active.is_some() {
             return None;
         }
         let index = self.window.next_to_fetch()?;
         let pkg = setup.nodes[index].id.as_str().to_string();
-        let cache = engine::resolve_srcdest().unwrap_or_else(|| setup.root.clone());
+        // The disk-floor probe follows where the fetch writes: the resolved
+        // SRCDEST mirror, else makepkg's `$startdir` default — the node's
+        // recipe dir (the same fallback gsa-fetch's engine takes).
+        let cache = engine::resolve_srcdest()
+            .unwrap_or_else(|| setup.nodes[index].recipe_dir.clone());
         if !engine::disk_floor_ok(&cache) {
             // Below the free-space floor: pause prefetch with an advisory,
             // never fail (owner decision 6).
@@ -422,9 +427,10 @@ impl Prefetcher {
                     FetchResult::new(&pkg, FetchVerdict::Failed, 0, REASON_RESULT_LOST)
                         .expect("pkg id is typed"),
                 );
-                self.note(&format!(
-                    "prefetch {pkg}: cannot spawn fetch child: {error}"
-                ));
+                self.note(
+                    &format!("prefetch {pkg}: cannot spawn fetch child: {error}"),
+                    err,
+                );
                 None
             }
         }
@@ -438,6 +444,7 @@ impl Prefetcher {
         setup: &RunSetup,
         run_dir: &std::path::Path,
         index: usize,
+        err: &mut dyn Write,
     ) -> Option<FetchResult> {
         self.active = None;
         let pkg = setup.nodes[index].id.as_str().to_string();
@@ -452,10 +459,13 @@ impl Prefetcher {
                 }
             }
             Err(error) => {
-                self.note(&format!(
-                    "prefetch result rejected for {pkg} ({}): {error}",
-                    result_path.display()
-                ));
+                self.note(
+                    &format!(
+                        "prefetch result rejected for {pkg} ({}): {error}",
+                        result_path.display()
+                    ),
+                    err,
+                );
                 self.window.mark_lost(index);
                 Some(
                     FetchResult::new(&pkg, FetchVerdict::Failed, 0, REASON_RESULT_LOST)
@@ -470,14 +480,22 @@ impl Prefetcher {
     }
 
     /// One advisory line in `$STATE_DIR/prefetch.log` (owner decision 5).
-    fn note(&self, line: &str) {
-        if let Ok(mut log) = std::fs::OpenOptions::new()
+    /// A log that cannot be written is a LOUD one-line diagnostic, never a
+    /// silently swallowed `writeln` — but never fatal: the log is advisory
+    /// surface and the run continues.
+    fn note(&self, line: &str, err: &mut dyn Write) {
+        use std::io::Write as _;
+        let written = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&self.log_path)
-        {
-            use std::io::Write;
-            let _ = writeln!(log, "gsa: {line}");
+            .and_then(|mut log| writeln!(log, "gsa: {line}"));
+        if let Err(error) = written {
+            let _ = writeln!(
+                err,
+                "gsa: warning: cannot write prefetch log {}: {error}",
+                self.log_path.display()
+            );
         }
     }
 
@@ -588,10 +606,87 @@ fn signal_cause(killed_by: Option<i32>) -> Option<gsa_model::LaneOutcome> {
     }
 }
 
-fn write_park_markers(setup: &RunSetup, requests: &[ParkRequest]) {
-    for request in requests {
+/// The run-record reason for a node whose park stand-down could not be
+/// delivered (§F.1): it settles as `lost 125 park-marker-unwritable`.
+const PARK_MARKER_UNWRITABLE: &str = "park-marker-unwritable";
+
+/// Deliver the stand-down markers for a batch of park requests (contract
+/// §F.1's spawn-to-build race). A marker that cannot be written is a BROKEN
+/// stand-down: the spawned lane cannot be told to stand down and would
+/// build and install anyway — the ABI half-wave the park exists to prevent.
+/// That node is therefore settled LOUDLY as lost (125,
+/// `park-marker-unwritable`) through the machine's own outcome vocabulary
+/// (`LaneOutcome::Lost`), its cone and batch mates re-park through the
+/// normal policy, and its late lane result is never authoritative (the
+/// `LaneDone` handler skips a node that settled under it). The file
+/// handshake itself is kept: a kill-based stand-down is a separate redesign.
+#[allow(clippy::too_many_arguments)]
+fn write_park_markers(
+    setup: &mut RunSetup,
+    machine: &mut Machine,
+    requests: Vec<ParkRequest>,
+    remediation: &mut Option<Remediation>,
+    events: &mut dyn FnMut(&SupEvent),
+    err: &mut dyn Write,
+    refused: &mut bool,
+    dispatch_halted: &mut bool,
+) {
+    let mut queue = requests;
+    let mut handled: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+    while let Some(request) = queue.pop() {
+        if !handled.insert(request.index) || machine.is_settled(request.index) {
+            continue;
+        }
         let path = park_marker_path(setup, request.index);
-        let _ = std::fs::write(&path, format!("{}\n", request.reason));
+        match std::fs::write(&path, format!("{}\n", request.reason)) {
+            Ok(()) => {
+                events(&SupEvent::Parked {
+                    index: request.index,
+                    reason: request.reason.clone(),
+                });
+            }
+            Err(error) => {
+                let pkg = machine.node(request.index).id.clone();
+                let message = format!(
+                    "gsa: park marker {} cannot be written ({error}) — {pkg} cannot stand down; settling it as lost (125)",
+                    path.display()
+                );
+                let _ = writeln!(err, "{message}");
+                events(&SupEvent::Diagnostic(message));
+                events(&SupEvent::Finished {
+                    index: request.index,
+                    row: OutcomeRow {
+                        pkg: pkg.clone(),
+                        status: RowStatus::Failed,
+                        rc: Some(125),
+                        dur: None,
+                        reason: PARK_MARKER_UNWRITABLE.to_string(),
+                    },
+                });
+                let more = machine.record(
+                    request.index,
+                    Recorded {
+                        code: gsa_model::LaneOutcome::Lost,
+                        dur: None,
+                        reason: PARK_MARKER_UNWRITABLE.to_string(),
+                    },
+                );
+                remediation_settle(
+                    remediation,
+                    setup.remediation.as_ref(),
+                    &mut setup.nodes,
+                    machine,
+                    request.index,
+                    gsa_model::LaneOutcome::Lost,
+                    setup.install.is_some(),
+                    events,
+                    err,
+                    refused,
+                    dispatch_halted,
+                );
+                queue.extend(more);
+            }
+        }
     }
 }
 
@@ -605,12 +700,12 @@ fn settle_skip(
     setup: &mut RunSetup,
     machine: &mut Machine,
     index: usize,
+    remediation: &mut Option<Remediation>,
     events: &mut dyn FnMut(&SupEvent),
     err: &mut dyn Write,
     refused: &mut bool,
     dispatch_halted: &mut bool,
 ) {
-    let _ = err;
     let Some(PreSettle::Skip { reason, .. }) = setup.nodes[index].pre.clone() else {
         return;
     };
@@ -660,13 +755,16 @@ fn settle_skip(
     };
     events(&SupEvent::Finished { index, row });
     let requests = machine.record_pre(index, status, rc, &row_reason);
-    write_park_markers(setup, &requests);
-    for request in &requests {
-        events(&SupEvent::Parked {
-            index: request.index,
-            reason: request.reason.clone(),
-        });
-    }
+    write_park_markers(
+        setup,
+        machine,
+        requests,
+        remediation,
+        events,
+        err,
+        refused,
+        dispatch_halted,
+    );
 }
 
 /// The remediation refusal latch (fish `probe_stopped` + `stop_starting`):
@@ -976,6 +1074,21 @@ pub fn run(
         setup.policy,
         setup.budget.lanes as usize,
     );
+    // The toolchain-remediation state (owner rule 2026-10-02): present on
+    // install runs whose CLI wired the trigger chain. Declared before the
+    // pre-settle pass: a park-delivery failure settles through the same
+    // `remediation_settle` tail a lane's outcome takes.
+    let mut refused = false;
+    let mut dispatch_halted = false;
+    let mut remediation: Option<Remediation> = setup.remediation.as_ref().map(|_| Remediation {
+        phase: RemediationPhase::Narrow,
+        pending: Vec::new(),
+        active: Vec::new(),
+        attempted: Vec::new(),
+        trigger: String::new(),
+        started: false,
+        probe_stopped: false,
+    });
     // Pre-settled deferrals (contract §B.8) land BEFORE any dispatch: the
     // row is `deferred 99 - <reason>` and the consumer cone parks
     // `waits-on-deferred`, so unrelated work runs and dependents wait.
@@ -999,25 +1112,17 @@ pub fn run(
         };
         events(&SupEvent::Finished { index, row });
         let requests = machine.record_pre(index, RowStatus::Deferred, Some(99), &reason);
-        write_park_markers(&setup, &requests);
-        for request in &requests {
-            events(&SupEvent::Parked {
-                index: request.index,
-                reason: request.reason.clone(),
-            });
-        }
+        write_park_markers(
+            &mut setup,
+            &mut machine,
+            requests,
+            &mut remediation,
+            events,
+            err,
+            &mut refused,
+            &mut dispatch_halted,
+        );
     }
-    // The toolchain-remediation state (owner rule 2026-10-02): present on
-    // install runs whose CLI wired the trigger chain.
-    let mut remediation: Option<Remediation> = setup.remediation.as_ref().map(|_| Remediation {
-        phase: RemediationPhase::Narrow,
-        pending: Vec::new(),
-        active: Vec::new(),
-        attempted: Vec::new(),
-        trigger: String::new(),
-        started: false,
-        probe_stopped: false,
-    });
     // Fetch-ahead (plan.md §2.1): the dispatcher is the only brain — the
     // lookahead window is derived from live dispatch state every tick.
     let mut prefetch: Option<Prefetcher> = setup
@@ -1051,8 +1156,6 @@ pub fn run(
     let mut active: HashMap<usize, ActiveLane> = HashMap::new();
     let mut interrupted: Option<i32> = None;
     let mut grace_started = false;
-    let mut refused = false;
-    let mut dispatch_halted = false;
     let mut settle_deadline: Option<std::time::Instant> = None;
 
     'outer: loop {
@@ -1071,6 +1174,7 @@ pub fn run(
                 &mut setup,
                 &mut machine,
                 index,
+                &mut remediation,
                 events,
                 err,
                 &mut refused,
@@ -1171,7 +1275,7 @@ pub fn run(
         if let Some(pf) = prefetch.as_mut() {
             pf.sync(&machine);
             if interrupted.is_none() {
-                if let Some((index, child)) = pf.spawn_next(&setup, &run_dir(&setup)) {
+                if let Some((index, child)) = pf.spawn_next(&setup, &run_dir(&setup), err) {
                     let waiter_tx = tx.clone();
                     std::thread::spawn(move || {
                         let mut child = child;
@@ -1214,6 +1318,7 @@ pub fn run(
             }
         }
         let nothing_left = machine.active() == 0
+            && active.is_empty()
             && (machine.finished() || interrupted.is_some() || machine.pick().is_empty());
         if nothing_left {
             let fetch_in_flight = prefetch
@@ -1236,7 +1341,7 @@ pub fn run(
             }
         }
 
-        let event = if interrupted.is_some() && machine.active() == 0 {
+        let event = if interrupted.is_some() && machine.active() == 0 && active.is_empty() {
             // Teardown drained every lane.
             break 'outer;
         } else {
@@ -1250,6 +1355,20 @@ pub fn run(
         match event {
             Event::LaneDone { index, killed_by } => {
                 active.remove(&index);
+                // §F.1: a node settled out from under its lane (a park
+                // marker that could not be written settled it as lost) —
+                // the late result is never authoritative: the row landed
+                // exactly once and no install hook may run for it.
+                if machine.is_settled(index) {
+                    let message = format!(
+                        "gsa: late lane result for {} ignored — the node already settled ({}), it must not install",
+                        machine.node(index).id,
+                        PARK_MARKER_UNWRITABLE
+                    );
+                    let _ = writeln!(err, "{message}");
+                    events(&SupEvent::Diagnostic(message));
+                    continue 'outer;
+                }
                 let was_interrupted = interrupted.is_some();
                 // A remediation force build installs in force mode (fish
                 // `lane_force_install=1`): never the same-version skip.
@@ -1370,13 +1489,16 @@ pub fn run(
                                 reason,
                             },
                         );
-                        write_park_markers(&setup, &requests);
-                        for request in &requests {
-                            events(&SupEvent::Parked {
-                                index: request.index,
-                                reason: request.reason.clone(),
-                            });
-                        }
+                        write_park_markers(
+                            &mut setup,
+                            &mut machine,
+                            requests,
+                            &mut remediation,
+                            events,
+                            err,
+                            &mut refused,
+                            &mut dispatch_halted,
+                        );
                     }
                     None => {
                         // §F.1: nothing usable was published — the reap
@@ -1470,7 +1592,7 @@ pub fn run(
             Event::FetchDone { index } => {
                 // Advisory reap (plan.md §3.1): warn and log, never a row.
                 if let Some(pf) = prefetch.as_mut() {
-                    if let Some(warning) = pf.reap(&setup, &run_dir(&setup), index) {
+                    if let Some(warning) = pf.reap(&setup, &run_dir(&setup), index, err) {
                         let message = format!(
                             "prefetch {}: {} — the lane will retry at build time",
                             warning.pkg, warning.reason
@@ -1751,6 +1873,75 @@ mod tests {
         assert_eq!(
             row.reason, "interrupted-mid-build",
             "the §H.3 reason key: {row:?}"
+        );
+    }
+
+    /// §F.1: a park stand-down marker that cannot be written is a broken
+    /// handshake — the dispatched node settles LOUDLY as lost (125,
+    /// `park-marker-unwritable`) instead of building on, and its late lane
+    /// result is ignored (the row lands exactly once and never installs).
+    #[test]
+    fn an_unwritable_park_marker_settles_the_node_as_lost() {
+        let dir = scratch("parklost");
+        let run_id = format!("test-parklost-{}", std::process::id());
+        // The stand-down channel is sabotaged up front: the `.park` path is
+        // a DIRECTORY, so the marker write fails no matter when it runs.
+        let run_dir = dir.join("state/runs").join(&run_id);
+        std::fs::create_dir_all(run_dir.join("p2.result.park")).unwrap();
+        // Coupled batch (no build-order edge): both lanes dispatch at once.
+        // p1 fails immediately; p2 is still building when its stand-down is
+        // demanded, later reports `ok` on the wire.
+        let stub = write_stub(
+            &dir,
+            "stub-lane",
+            "#!/usr/bin/env bash\n\
+             case \"$2\" in\n\
+             \x20 p1) printf 'v2 p1 1 1 build-failed\\n' >\"$3\"; exit 1 ;;\n\
+             \x20 p2) sleep 2; printf 'v2 p2 0 1 ok\\n' >\"$3\"; exit 0 ;;\n\
+             esac\n\
+             exit 0\n",
+        );
+        let mut setup = one_node_setup(&dir, &stub, "parklost");
+        setup.run_id = run_id;
+        setup.budget.lanes = 2;
+        setup.nodes.push(SupNode {
+            id: RecipeId::new("p2").expect("p2 is a valid id"),
+            recipe_dir: dir.join("root/packages/p2"),
+            core: false,
+            build_tools: false,
+            prereqs: Vec::new(),
+            consumers: Vec::new(),
+            batch: Some(0),
+            pre: None,
+            latent: false,
+        });
+        setup.nodes[0].batch = Some(0);
+        setup.batches = vec![vec![0, 1]];
+
+        let (outcome, finished, err) = run_watched(setup);
+        assert_eq!(
+            finished, 2,
+            "exactly one Finished event per row: p1's failure plus the park-loss settle — the late ok must not settle again: {:?}",
+            outcome.rows
+        );
+        let row = &outcome.rows[1];
+        assert_eq!(row.pkg.as_str(), "p2");
+        assert_eq!(
+            (row.status, row.rc),
+            (RowStatus::Failed, Some(125)),
+            "a broken stand-down settles the node as lost (§F.1): {row:?}"
+        );
+        assert_eq!(
+            row.reason, "park-marker-unwritable",
+            "the reason names the broken handshake: {row:?}"
+        );
+        assert!(
+            err.contains("cannot be written") && err.contains("park marker"),
+            "the marker failure is loud: {err}"
+        );
+        assert!(
+            err.contains("late lane result for p2 ignored"),
+            "the late result of a settled node is ignored, loudly: {err}"
         );
     }
 }

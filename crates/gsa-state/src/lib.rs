@@ -12,7 +12,8 @@
 //! stays the only installed database (hybrid model, owner decision). Every
 //! write passes the write-time ownership gate (rule 19, §J.5) before the
 //! file is opened; every read tolerates a truncated tail line without losing
-//! the rows before it. Archives stay beside their recipes (§J.2) — the
+//! the rows before it. Archives stay wherever makepkg wrote them (the W4a
+//! shared `PKGDEST`, or beside their recipe in a legacy tree — §J.2); the
 //! index refers to them by hash, it never moves them.
 
 pub mod health;

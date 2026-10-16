@@ -102,7 +102,7 @@ export GSA_TEST_GSA_BIN="$gsa_bin"
 write_dispatch_stub() {
     cat >"$1/bin/makepkg" <<'EOF'
 #!/usr/bin/env bash
-set -u
+set -eu
 id=$(basename "$PWD")
 printf 'SPAWN %s %s\n' "$id" "$(date +%s%N)" >>"${GSA_FAKE_SPAWN_LOG:?}"
 sleep "${GSA_FAKE_BUILD_SECONDS:-0.05}"

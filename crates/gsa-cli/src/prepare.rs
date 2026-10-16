@@ -402,11 +402,15 @@ pub fn drift_clean(recipe_dir: &Path, log: &mut Vec<String>) {
     };
     for tree in &targets.trees {
         if tree.exists() {
-            let _ = std::fs::remove_dir_all(tree);
+            if let Err(error) = std::fs::remove_dir_all(tree) {
+                log.push(format!("cannot remove {}: {error}", tree.display()));
+            }
         }
     }
     for file in targets.archives.iter().chain(targets.sidecars.iter()) {
-        let _ = std::fs::remove_file(file);
+        if let Err(error) = std::fs::remove_file(file) {
+            log.push(format!("cannot remove {}: {error}", file.display()));
+        }
     }
 }
 
