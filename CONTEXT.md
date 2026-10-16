@@ -1,7 +1,8 @@
 # gentoo-style-arch
 
-A curated Arch Linux package set (recipes + declarative topology) with an
-automatic-parallelism build scheduler. This glossary names the project's own
+A curated Arch Linux package set (recipes + declarative topology) built and
+installed by `gsa`, the native Rust engine (workspace `crates/`; interface
+contract in `docs/gsa-contract.md`). This glossary names the project's own
 concepts; implementation lives in `docs/architecture.md`, history in
 `docs/NOTE.md`, rules in `docs/MEMORY.md`.
 
@@ -57,15 +58,40 @@ A set of packages whose ABIs must move in the same rebuild pass, declared as
 membership tags on topology records with `must`/`should` severity.
 _Avoid_: ABI group, batch prose
 
+### Interface
+
+**Action family**:
+One of the five pacman-shaped verb clusters `gsa` accepts — `-Q` query, `-S`
+build+install, `-B` build-only, `-U` install archives, `-M` maintain — each
+with its own letter cluster of action and modifier letters.
+_Avoid_: subcommand, verb (word verbs are retired)
+
+**`@` target**:
+A selection reference naming a group or user set (`@git`); groups and sets
+share one `@` namespace, and membership comes from the topology record only.
+_Avoid_: group flag, second selection grammar
+
+**Leaf-only mode** (`--leaf`):
+A selection modifier that suppresses consumer expansion and builds exactly
+the named recipes.
+_Avoid_: no-deps mode, dependency pruning ("dependency" is pacman's)
+
+**Pruning strengths**:
+The three maintain wipes, weakest first: `-Mc` (the selection's build trees
+and archives), `-Mcc` (every built archive in the workspace plus its
+VCS-revision sidecar), `-Mccc` (additionally pulled sources; prints its
+targets and stops for confirmation).
+_Avoid_: clean/cleanup/nuclear (the retired spellings)
+
 ### Build run
 
 **Lane**:
-An isolated builder child process that builds (and optionally installs) one
-package at a time under a shared CPU/memory budget.
+An isolated engine child process group that builds one package at a time
+(exec'ing the makepkg supervisor) under a shared CPU/memory budget.
 _Avoid_: worker, thread
 
 **Run record**:
-One builder invocation's plan and outcome as data: selection, order, budgets,
+One engine run's plan and outcome as data: selection, order, budgets,
 per-package status, and the continuation. Prose, dashboard, and machine output
 are renderings of it.
 _Avoid_: summary (that is one rendering)
@@ -88,8 +114,28 @@ _Avoid_: preset, level
 
 **Install plan**:
 The decision data for one install transaction: which archives install, which
-skip as already-current, which are refused and why. Execution is separate.
+skip as already-current, which are refused and why. Execution is separate; the
+data is emitted as decision rows.
 _Avoid_: install policy (that names the rules; the plan is their output)
+
+**Decision row**:
+One typed install-decision line, `<pkgbase> <decision> <reason…>`, drawn from
+`install`/`skip`/`refuse`/`noop`/`parked`; computed once, then rendered and
+executed without re-deciding.
+_Avoid_: log line, message, plan prose
+
+**State root**:
+The engine-owned state directory — `/var/lib/gsa` by default, overridable via
+`--state-dir`/`GSA_STATE_DIR` — holding the binpkg index, run history, logs,
+locks, world and sets.
+_Avoid_: `.state` (the pre-gsa layout), workspace state
+
+**Build cache**:
+The build user's makepkg working state — build trees (`BUILDDIR`), staging
+(`PKGDIR`) and finished archives (`PKGDEST`) — under `~/.cache/gsa` by
+default (`GSA_BUILD_DIR` overrides). Defined against the recipe directory,
+which holds only the recipe and its committed assets.
+_Avoid_: recipe-dir output, in-tree builds
 
 ### Verification
 
@@ -100,7 +146,7 @@ strips. Its symbol predicate is only reachable at this seam.
 _Avoid_: per-recipe verify copy (the pre-2026-09-26 recurrence engine)
 
 **Payload verification**:
-The builder-side, fail-closed check at the install seam that an archive from an
+The engine-side, fail-closed check at the install seam that an archive from an
 instrumented recipe carries no baked profiling destination. Whole-set,
 post-strip, strings-only.
 _Avoid_: central gate (ambiguous)
@@ -112,8 +158,8 @@ happens in fixtures.
 _Avoid_: check, linter
 
 **Fetched-only pattern**:
-A recipe-declared list of build outputs that are downloaded state, not
-committed assets, exempting them from the local-asset walk.
+A recipe's own `FETCHED-ONLY` file: source-basename globs that are fetched at
+build time and excused from the local-asset checks.
 _Avoid_: carve-out, exception
 
 ### Fixtures
@@ -129,6 +175,6 @@ fixture drives through `GSA_FAKE_*` variables.
 _Avoid_: mock
 
 **Frozen oracle**:
-A committed reference implementation kept under `tests/assets/` for
-differential testing against a rewritten one.
+A committed reference implementation kept under `tests/assets/` (today the
+retired fish engine) for differential testing against its rewrite.
 _Avoid_: golden file

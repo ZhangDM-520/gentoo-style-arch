@@ -1,3 +1,156 @@
+## 2026-10-17 — living-docs rewrite: gsa-era de-fishing, README becomes a landing page
+
+**Symptom.** The living docs still read as fish-script-era material: the README
+was a fact dump (recipe counts, a group table, a whole adaptive-parallelism
+section — a selling point of the early scheduler, now operational detail), and
+several guides carried pre-W4a claims ("archives/src/pkg live beside the
+recipe") and retired spellings (`-g`, `-l`, `--no-deps`, `fish build-all.fish`)
+as current usage.
+
+**Root cause.** The Phase-5 cutover to the native `gsa` engine (2026-10-14)
+migrated the code and the contract but only patched docs in place; the W4a
+build-cache relocation (2026-10-16) landed after most guide text. Docs taught
+the old world in the old voice.
+
+**Fix.** One truth packet (gsa grammar §B.9, W4a cache semantics §J.2, state
+root §J, scheduler §K, privilege §B.10) applied across five non-overlapping
+batches: README rewritten as a landing page (what/why/who → quickstart →
+mental model → doc map; detail pushed down), build-guide restructured as the
+operations manual, portability absorbed the parallelism content (formulas
+re-derived from `crates/gsa-sched/src/budget.rs`), architecture restructured
+around recipe set + engine crates + runtime state by owner (W4a corrected),
+maintainer-guide gained the group table, the small docs (CONTRIBUTING,
+SECURITY, package-policy, source-sharing, CONTEXT) refreshed (CONTEXT gained
+the gsa-era vocabulary: action families, `@` targets, leaf-only mode, pruning
+strengths, decision rows, state root, build cache), and
+`.github/copilot-instructions.md` + `docs/MEMORY.md` §2/§3 rewritten to
+current state. History stayed untouched: NOTE.md, docs/adr/, and
+docs/gsa-contract.md.
+
+**Validation.** Staleness sweep (`rg` over every living doc for fish commands,
+retired spellings, "beside the recipe" claims) leaves only intentional
+mentions (retirement shim, frozen oracle, the §J.2 legacy-fallback sentence);
+MEMORY.md rules and §4–§6 verified byte-identical around the §2/§3 rewrite;
+every documented command cross-checked against `gsa --help` + contract §B/§C.
+
+**Contract drift found and documented as code truth (queued, contract not
+edited):** §B.5 still says `-B` builds "beside their recipes" (§J.2 + code say
+build cache); §B.7 says `-Mm` confirms interactively while the engine never
+prompts (plan + rc 3 `confirmation-required`); `--skip` + `--skip-built`:
+help says cannot combine, code silently prefers `--skip` (an engine
+follow-up); `--quiet`/`--verbose` parse-and-refuse per help vs §B.8 "carried".
+
+**Rule.** MEMORY rule 58: a doc teaches how to CHECK (commands, dated facts),
+never the shape of a retired era — when an engine change moves a home or
+renames a spelling, the living docs move with it in the same change, and the
+contract is the one place a retired spelling survives (as the §B.9 table).
+
+## 2026-10-17 — post-smoke robustness sweep of the Rust engine (`/improve-codebase-architecture`, no HTML at owner's choice): four audits, ~40 findings, every point fixed or explicitly deferred; battery 68/68
+
+**Symptom.** The 2026-10-16 smoke found three bugs of three shapes (root
+identity leak across the drop, a makepkg-family tool spawned as root,
+SRCDEST invisible engine-side). The owner asked for a systematic hunt for
+the remaining instances of those shapes and any other breakage points:
+explore everything, strengthen, report textually.
+
+**Method.** Four parallel read-only audits over `crates/` (~41k lines) and
+`tests/`: (A) every process-spawn site — 33 production sites, only 5 went
+through `privilege::build_command`; (B) every env read + path lookup (34 env
+reads, 38 path lookups — 11 still pointed at legacy pre-W4a homes); (C)
+fixture-stub honesty (~185 stubs, ~60 dishonest); (D) a general robustness
+walk (25 ranked findings, PROVEN vs SPECULATIVE marked). Fixes were then
+split by file ownership into four non-overlapping batches (core seams;
+build/sched; install/fetch; maint/state + fixtures) and each batch red-first.
+
+**Root causes and fixes (classes, not incidents).**
+1. *Identity/env leakage* — `vercmp`, `git archive` (VCS-sum recompute),
+   `rustc`/`cargo` probes and `nvchecker` ran with the engine's identity;
+   `drop_identity_env` could leave root `HOME` in place when the build
+   user's home was unresolvable. All build-domain spawns now go through
+   `privilege::build_command`; HOME always follows the drop (conventional
+   `/nonexistent` when no home resolves — a half-reset env is now
+   unrepresentable). The hidden `--lane-job`/`--fetch-job` seams refuse a
+   bare root shell (rc 3) instead of running recipe/build work as root.
+2. *Source/location drift after W4a* — 11 lookups still treated the recipe
+   dir as the live home (checkout probing, VCS-sum recompute, drift-clean
+   targets, prune strengths 1–3, doctor/ignorepkg/shipped-name scans, the
+   health orphan oracle). One seam now answers "where do this recipe's
+   artifacts live": `gsa_model::config::checkout_roots*` (W4a
+   `<build_dir>/<pkgbase>/src` scoped FIRST — a same-named checkout under
+   another pkgbase is someone else's evidence and a scoped miss fails
+   closed; legacy roots next; the SRCDEST mirror only for ref-addressed
+   recomputation, never for revision probing — a mirror HEAD is the remote's
+   default branch) and `build_layout_for_run()` (the ONE fatal error policy:
+   an unusable layout stops the operation; the three silent
+   `Err(_)=>recipe-dir` swallows are gone — §J.3 has no silent fallback).
+   Shared-PKGDEST membership everywhere is output-name/`.PKGINFO` truth,
+   never a filename prefix (`python` may not prune `python-attrs`), and
+   `clean_targets` takes sidecars exactly with their archives.
+3. *Swallowed failures / fail-open test doubles* — `own_to_build_user` and
+   park-marker writes that silently continued, `let _ =` deletions the docs
+   promised were loud, an IgnorePkg registration committed before its
+   transaction (now rolled back on txn failure), an instance-id allocator
+   that reused tombstoned ids and a prune order that let crash-resurrection
+   (now allocate over ALL rows, delete before tombstone), a shim whose
+   unquoted `--state-dir` path was shell-injection into a root-executed
+   script (now `shell_single_quote`), makepkg/sudo prose parsed without
+   `LC_ALL=C` (now pinned at the spawn), a `/proc`-parse race that could
+   SIGKILL live lanes (unknown ppid now means never-touch; state roots match
+   by path component), and ~60 fixture stubs that could not fail (all
+   ranked sites fixed: fail-closed pacman-conf, honest `-Si` not-found, rc
+   pins on `gsa-privilege` c/g and `gsa-store-v2` c — each red-first).
+4. *Battery hygiene* — `run-all.sh` exported ONE shared never-cleaned
+   `GSA_BUILD_DIR`, defeating `rr-v2`'s per-fixture guard and feeding
+   cross-run debris to `gsa-state-v2`'s orphan oracle; each fixture now gets
+   its own cache under the per-run `$work`. The engine's cache creation left
+   fresh ancestor dirs root-owned (rule-19 poisoning; the battery's caches
+   were `rm`-proof) — `create_owned_dir` now hands every created level to
+   the build user at creation.
+
+**Semantic adjudication (fixture vs fix).** `signal-abort-lock.sh` phase 2
+pins `interrupted-mid-build` (rc 143) for a lane TERMed mid-build whose
+makepkg exits 0 — the contract (§H.3) — while the audit wanted a
+"good build never downgraded" rule. Resolution: a received run-stopping
+signal classifies a NORMAL child exit (§H.3 holds verbatim); a child
+killed by a signal classifies on its own cause (an OOM SIGKILL names the
+signal — the audit's real win). The residual post-exit-receipt sliver errs
+conservative (row says unfinished; the continuation re-runs it and `-s`
+skips the rebuild) and is documented at `classify_build_exit`.
+
+**Validation.** `cargo test --workspace` green (gsa-model 26, gsa-recipe
+115, gsa-build 15, gsa-sched 35, gsa-install 34, gsa-fetch 31, gsa-maint
+34, gsa-state 23, gsa-cli 49+real-tree) and `bash tests/run-all.sh` 68/68
+TWICE consecutively with the honest stubs and per-fixture caches; new pins
+proven red-first (e.g. `clean_targets_reach_the_w4_cache_homes_with_name_truth`
+panics with the layout arm disabled; `gsa-privilege` c/g rc asserts invert
+to red; LC_ALL pins red pre-fix; index tombstone pins red pre-fix). The
+noise bar mattered: the first `create_owned_dir` rewrite made one lane fail
+`layout-unusable` per battery run at RANDOM victims (gsa-fetch-v2,
+scheduler-core-solo) — concurrent lanes raced `create_dir` past each other
+and the loser's EEXIST was treated as fatal (the original `create_dir_all`
+had swallowed it); EEXIST is success between lanes, fixed, then two
+consecutive clean runs. One pre-existing failure remains:
+`gsa-cli/tests/prefetch.rs::b_sigint_tears_down_the_fetch_child_with_the_run`
+waits out the 30 s stop-grace instead of exiting 130 — reproduced 2/2 at
+pristine `c194a45` in a throwaway worktree, so it predates this sweep (the
+SIGINT teardown gap is real and queued; not claimed fixed here).
+
+**Deferred, with reasons** (each explored, none silently dropped):
+recipe-rewrite journaling for the sync pass (crash-interrupt consistency
+needs its own design + fixtures); version-ranked archive selection
+(semantics change needing dedicated red-first fixtures — mtime+truth-filter
+is defensible today); hash-binding the install decide→execute window (an
+install-pipeline redesign); the fd-based (O_NOFOLLOW) ownership gate; the
+full bash-sourcing SRCDEST adapter (the parser now expands `~`/`$HOME` and
+takes the LAST assignment; `include` directives remain unported and the
+approximation is documented); post-transaction IgnorePkg ordering (the
+contract says before `pacman -U`; rollback covers failure, a hard crash in
+between keeps the `.bak-YYYYMMDD` manual recovery); kill-based park
+stand-down (the file handshake stays; marker-write failure now settles the
+node `lost`).
+
+**Durable rule.** MEMORY rule 57.
+
 ## 2026-10-16 — real-system smoke (external build drive, installed engine): the scheduler and record are sound; the drop leaked root identity twice and SRCDEST was invisible engine-side — three bugs, all fixed red-first
 
 **Scope and setup (plan-gsa-isolation.md's first real-world smoke after the
@@ -13787,3 +13940,4 @@ and §6, and the commit/version identifiers of each fix are kept inline.
   1.6.9-1.1, wireplumber 0.5.18-1.1). Sums refreshed with `updpkgsums` and verified byte-identical
   to the b2 Arch publishes for each VCS source (`git archive` of the tag): pipewire `85867001…`,
   wireplumber `eea6a3e0…`.
+## 2026-10-17 — living-docs rewrite: gsa-era de-fishing, README becomes a landing page

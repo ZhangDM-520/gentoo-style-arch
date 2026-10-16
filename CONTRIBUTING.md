@@ -1,6 +1,6 @@
 # Contributing
 
-Contributions should improve a recipe or the builder for a clean Arch
+Contributions should improve a recipe or the `gsa` engine for a clean Arch
 checkout. **This set is maintained for AMD laptops** — AMD CPUs with
 amdgpu/radeon graphics — and the hardware-support trims follow from that
 target: a recipe may drop Intel- and NVIDIA-only firmware, drivers and code
@@ -24,27 +24,31 @@ belong in `docs/NOTE.md`; `docs/MEMORY.md` §5 holds a live decision.
    source URLs intact.
 3. Put necessary local patches, hooks, install files, and desktop assets next
    to the recipe. Explain non-obvious compatibility patches in the recipe.
-   **A new local asset must survive `.gitignore`.** Nine recipes default-deny
-   with a bare `*` (or `/*`) plus `!` negations, so a file added without a
-   matching negation is silently dropped from the commit while still building
-   locally — a clean checkout then fails with "was not found in the build
-   directory" (2026-09-16). Add the negation in the same change and confirm
-   with `git check-ignore -v <asset>` (no output = visible). Never let a recipe
-   `.gitignore` match itself: an ignore file that hides itself cannot be
-   committed, so on a clean checkout the rule is simply absent.
+   **A new local asset must survive two ignore layers.** Some recipes
+   default-deny with a bare `*` (or `/*`) plus `!` negations, so a file added
+   without a matching negation is silently dropped from the commit while still
+   building locally — a clean checkout then fails with "was not found in the
+   build directory" (2026-09-16). The ROOT `.gitignore` is the second layer:
+   it denies every new subdirectory under a recipe and negates only
+   `LICENSES/`, so a recipe that gains a directory of its own needs the
+   matching root negation too. Add the negations in the same change and
+   confirm with `git check-ignore -v <asset>` (no output = visible). Never let
+   a recipe `.gitignore` match itself: an ignore file that hides itself cannot
+   be committed, so on a clean checkout the rule is simply absent.
 4. Update `config/topology.conf` when adding or relocating a recipe. The
    record format is exactly `id|path|groups|edges[|tags]`; the loader rejects
    any other shape, and the record is the only place that binds an ID to a
    path.
-5. Record group membership (`groups`, a comma list of the five group names)
-   and any local dependency edges (`edges`) in the same record, and only after
-   verifying a dependency with the package metadata and a build-order reason.
-   Coupled-batch tags (`abi=must`/`abi=should`) belong in the same record's
-   `tags` field — see "Updating coupled stacks" in `docs/maintainer-guide.md`.
-6. Regenerate `.SRCINFO`:
+5. Record group membership (`groups`, a comma list from the group roster —
+   `gsa -Sg` prints it) and any local build-order edges (`edges`) in the same
+   record, and only after verifying the relationship against the package
+   metadata and a build-order reason. Coupled-batch tags
+   (`abi=must`/`abi=should`) belong in the same record's `tags` field — see
+   "Updating coupled stacks" in `docs/maintainer-guide.md`.
+6. Regenerate `.SRCINFO` from the repository root:
 
    ```sh
-   makepkg --printsrcinfo > .SRCINFO
+   makepkg --printsrcinfo --dir packages/<category>/<pkg> > packages/<category>/<pkg>/.SRCINFO
    ```
 
 ### Source verification and signing keys
@@ -72,6 +76,24 @@ belong in `docs/NOTE.md`; `docs/MEMORY.md` §5 holds a live decision.
 4. If a fingerprint cannot be confirmed against a published key, stop and
    report the mismatch instead of trusting it.
 
+### Provides discipline
+
+Toolchain `-git` packages carry *versioned* provides
+(`provides=("meson=${pkgver}")`): an unversioned provide cannot satisfy a
+`>=N` makedepend, and pacman silently falls back to the conflicting repo
+package. Every library-shipping package declares *bare* soname provides
+(`libfoo.so`); makepkg then auto-versions them from the packaged ELF soname.
+Request a capability through its virtual (`java-runtime`, `java-environment`,
+`libgl`, …), never through one concrete provider — Arch's OpenJDK packages
+are mutually exclusive, so naming `jre-openjdk` can make pacman demand
+removal of a package the dependency graph needs. Provides live in
+`.PKGINFO`, so a provides change requires a real rebuild (`makepkg -Rf` only
+repackages):
+
+```sh
+tar -xOf <archive>.pkg.tar.zst .PKGINFO | grep provides
+```
+
 ## Optimization and trimming standard
 
 Use the host's `makepkg.conf` as the default optimization policy. Do not
@@ -95,8 +117,8 @@ Trim packaging to the maintained target:
   gate (`lib/pgo.sh`) as the last statement of its package function(s) —
   never copy its implementation; a new PGO family earns a fixture and extends
   the module when its leak shapes are new (the 2026-09-28 C-autotools and Go
-  flavors needed no module change) — and the builder's central gate does not
-  make the call optional; and
+  flavors needed no module change) — and the engine's fail-closed payload
+  check at the install seam does not make the call optional; and
 - never use invalid `options` such as `!check` or `autodeps` to paper over a
   recipe problem.
 
@@ -108,17 +130,17 @@ capability.
 
 ## Validation
 
-Before submitting a change, run:
+Engine changes live in the Rust workspace (`crates/`); `cargo build
+--release` produces `target/release/gsa`, which the `gsa-pm` recipe installs
+as `/usr/bin/gsa`. Before submitting a change, run:
 
 ```sh
-fish -n build-all.fish
-fish build-all.fish --audit
-fish build-all.fish --list
-fish build-all.fish --dry-run --group git
-fish build-all.fish --dry-run --group stable
-fish build-all.fish --dry-run --group core
-bash -n packages/path/to/PKGBUILD
-makepkg --printsrcinfo --dir packages/path/to
+cargo test --workspace
+bash -n packages/<category>/<pkg>/PKGBUILD
+makepkg --printsrcinfo --dir packages/<category>/<pkg> > packages/<category>/<pkg>/.SRCINFO
+gsa -Ma                       # audit lints are report-only; read the report
+gsa -Sl                       # listing re-validates map, graph and sort
+gsa -S --dry-run @git         # repeat for @stable, @core
 bash tests/run-all.sh
 ```
 
@@ -133,12 +155,12 @@ than only the file matching the recipe you touched — the map-format change of
 2026-09-17 was caught by two unrelated recipe fixtures.
 
 Install behaviour has a dedicated entry point: the hidden
-`--install-decide <checked|force>` seam prints `install_plan`'s rows
-(`install`/`skip`/`refuse`/`noop`) and exits 0 for an executable plan, 1 for a
-refusal, 2 for bad usage — fixtures assert those rows and statuses, never
-rendered output.
+`gsa --install-decide <checked|force> <archive…>` seam prints the install
+decision rows (`install`/`skip`/`refuse`/`noop`/`parked`) and exits 0 for an
+executable plan, 1 for a refusal, 2 for bad usage — fixtures assert those rows
+and statuses, never rendered output.
 
-`--audit` also reports installed files under a PGO recipe that still carry a
+`gsa -Ma` also reports installed files under a PGO recipe that still carry a
 baked `.gcda` path, and names PGO recipes that are not installed at all, so it
 is the quickest way to spot a stale install that predates a recipe fix.
 

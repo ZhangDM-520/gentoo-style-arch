@@ -1205,12 +1205,60 @@
     went 5/5 green. Same class as the `pacman -U --noconfirm --ask 4`
     idiom: any pacman call the builder spawns runs unattended.
 
+57. **Build-domain spawns, layout resolution and tool-prose parsing each
+    have ONE honest seam — 2026-10-17 robustness sweep** (the post-smoke
+    class hunt; NOTE.md same date). (a) Every makepkg-family or
+    home-touching tool — makepkg, updpkgsums, `vercmp`, rustc, cargo,
+    nvchecker, recipe-shell evals, git over build-user checkouts — spawns
+    via `privilege::build_command`; the drop's identity vars ALWAYS follow
+    it (`HOME` never survives as root's; `/nonexistent` beats a leaked
+    home), and a bare root shell may not reach build-domain seams at all.
+    (b) Layout resolution goes through
+    `gsa_model::config::build_layout_for_run()`: an unusable layout is
+    fatal with its message — never a silent fallback to recipe-dir trees
+    (§J.3 has no silent fallback). (c) The build cache is build-user domain
+    end to end: `create_owned_dir` hands every created level, including
+    fresh ancestors, to the build user at creation — a root-owned cache
+    root is rule-19 poisoning and leaves the tree `rm`-proof. (d) VCS
+    checkout lookup is `checkout_roots`: the W4a
+    `<build_dir>/<pkgbase>/src` tree scoped to the recipe's OWN pkgbase
+    first (another pkgbase's same-named checkout is someone else's
+    evidence; a scoped miss fails closed), legacy recipe-dir roots next,
+    and the SRCDEST mirror only for ref-addressed recomputation — a mirror
+    HEAD is the remote's default branch, never the built ref. (e) Any tool
+    output parsed for classification (makepkg prose, sudo errors) is
+    matched under `LC_ALL=C` pinned at the spawn; gettext prose is not a
+    stable interface. (f) A generated shell adapter (the PACMAN shim)
+    quotes every interpolated path — operator paths (`--state-dir`) must
+    never become shell syntax. (g) Shared-PKGDEST membership is
+    output-name/`.PKGINFO` truth, never a filename prefix (`python` may
+    not prune `python-attrs`); sidecars are pruned exactly with their
+    archives. (h) Fixtures: stubs fail closed (a modeled failure exits
+    non-zero; `pacman-conf` answers only `DBPath`), fixtures assert the
+    engine's rc, and the battery gives each fixture its own
+    `GSA_BUILD_DIR` under the per-run `$work` — never one shared cache.
+
+58. **A living doc teaches how to CHECK, never the shape of a retired era**
+    (2026-10-17 docs rewrite): when an engine change moves a home (the W4a
+    build cache) or renames a spelling (`--no-deps`→`--leaf`, `-g`→`@name`),
+    the living docs move with it in the same change; a retired spelling
+    survives in exactly one place — the contract's §B.9 migration table.
+    Volatile facts (recipe counts, host numbers) are shown as dated values
+    or as the command that prints them (`gsa -Sl`, the awk one-liners),
+    never as standing prose.
+
 ## 2. Workspace overview
 
-- The public tree is `Gentoo_Style_Arch/`; recipes live under
-  `packages/{git,stable,core,misc}/` (the `packages/third-party/` category
+- Workspace layout, top level: `packages/{git,stable,core,misc}/` is the
+  recipe set (the `packages/third-party/` category
   was retired 2026-09-27; `zen-browser-pgo` and `bettbox` relocated to
-  `packages/stable/` as pure renames).
+  `packages/stable/` as pure renames — `app` is a logical group, never a
+  directory); `config/` is the declarative topology and build budgets;
+  `crates/` is the `gsa` Rust workspace; `lib/` holds the files recipes
+  source (`pgo.sh`, `cups-config`); `tests/` is the fixture battery
+  (`tests/lib/` shared helpers, `tests/assets/` frozen oracle);
+  `tools/` is host diagnostics that stay outside the battery; `docs/` is
+  this file plus the interface contract and the incident journal.
 - `config/topology.conf` is the ONE topology source: one record per package,
   `id|path|groups|edges[|tags]` — the only id→path binding, group membership
   (comma list ⊂ the six names `git`, `stable`, `core`, `misc`, `app`,
@@ -1228,13 +1276,16 @@
   never by parsing `config/` directly.
 - Engine runtime state lives in the state root (default `/var/lib/gsa`;
   contract §J) — per-package logs, the pacman mutex, lane result files, the
-  binpkg index and run history — relocated as a whole by `--state-dir PATH`
-  (flag beats `GSA_STATE_DIR`), with no silent fallback to a workspace-local
-  directory. makepkg's own source trees and archives
-  land **beside each
-  recipe** (`SRCDEST`/`PKGDEST` default to `$startdir`), which is why the
-  recipe directories carry ignore rules; both classes are ignored runtime
-  state where they fall inside the tree.
+  binpkg index and run history — resolved `--state-dir PATH` >
+  `GSA_STATE_DIR` > `gsa.conf` `state_dir`, with no silent fallback to a
+  workspace-local directory and a write-time ownership gate (rule 19).
+  makepkg's own state is the BUILD USER's cache since the W4a move
+  (2026-10-16): the engine passes `BUILDDIR`/`PKGDIR`/`PKGDEST` as
+  `<build_dir>/build|pkg|pkgs` (`GSA_BUILD_DIR` > config `build_dir` >
+  `<build-user-home>/.cache/gsa`), so built archives no longer land next to
+  their recipe — a pre-W4 recipe dir is only a truth-filtered legacy fallback
+  for old archives — and `SRCDEST` stays makepkg.conf-governed. Both classes
+  are ignored runtime state where they fall inside the tree.
 - The logical groups are `git`, `stable`, `core`, `misc`, `app` and
   `build-tools` (the dispatch-priority class — membership rules and dispatch
   semantics: rule 21; `app` is the
@@ -1242,27 +1293,23 @@
   multi-select them, non-TTY runs take the whole list, and app members are
   leaf builds — consumer expansion applies like everywhere else, but app
   packages typically have no consumers). `app` membership is
-  EXCLUSIVE — wiring a record into `app` replaces its previous group (56
-  members as of the 2026-10-11 optional-application wiring: 22 at the
-  2026-09-27 wiring plus 33 leaf applications re-grouped from `stable`;
-  `qt5ct`/`qt6ct` thereby left `core`,
+  EXCLUSIVE — wiring a record into `app` replaces its previous group
+  (`qt5ct`/`qt6ct` thereby left `core`,
   while their `abi=must` tags are untouched — a Qt ABI batch must name them
   explicitly, since `@core`'s solo dispatch no longer rebuilds them). A
   record's `app-cluster=<name>` tag collapses members into ONE prompt row
-  (seven fcitx-family records show as `fcitx5 [member ids]`, toggled together;
+  (the fcitx-family records show as `fcitx5 [member ids]`, toggled together;
   "N checked" counts rows) and is presentation only — packages stay separate
   in `-Sl`, the run record, ranges and lanes, and the tag is inert outside the
   app prompt. The `third-party` group was retired 2026-09-27 (`@
   third-party`/`third_party`/`3rdp` now fail the unknown-group path); the
   audit's legacy `.3rdP/` path-drift regex intentionally remains — it scans
   for pre-Git filesystem paths, not group names. Membership counts are
-  deliberately not recorded here (the 22 above is dated history, not a
-  maintained figure) — they are hand-maintained and the first
+  deliberately not recorded here — they are hand-maintained and the first
   thing a batch invalidates — so `gsa -Sl` is the source
-  of truth. (2026-09-28 batch: `stable` grew 27 → 44 and the set 128 → 145
-  recipes — dated figures again.) `core` intentionally overlaps stable
+  of truth. `core` intentionally overlaps stable
   packages whose ABI must be rebuilt and installed as one batch.
-- **Leaf-utility class** (2026-09-28, 17 recipes under `packages/stable/`):
+- **Leaf-utility class** (wired 2026-09-28; under `packages/stable/`):
   release-tracked utilities whose topology records are
   `id|packages/stable/<id>|stable|` — no tags and no incoming edges (edges
   empty except ripgrep and fd, which carry a `rust-git` build-order edge —
@@ -1289,15 +1336,21 @@ builds use `@group` runs.
 
 Engine shape (2026-10-14 Phase 5 cutover): the engine of record is the native
 `gsa` binary — the Rust workspace under `crates/`, built by
-`cargo build --release` (`./target/release/gsa`; the `packages/core/gsa-pm`
-recipe ships it as `/usr/bin/gsa`). The crates: `gsa-model`, `gsa-topo`,
-`gsa-recipe`, `gsa-graph`, `gsa-sched`, `gsa-build`, `gsa-install`,
+`cargo build --release` (`./target/release/gsa`; tested with
+`cargo test --workspace`; the `packages/core/gsa-pm`
+recipe ships it as `/usr/bin/gsa`, and an engine change bumps that recipe's
+`_commit` pin + `pkgver` + the committed `.SRCINFO` in the same change). The crates: `gsa-model`, `gsa-topo`, `gsa-recipe`, `gsa-graph`, `gsa-sched`, `gsa-build`, `gsa-install`,
 `gsa-fetch`, `gsa-state`, `gsa-qa`, `gsa-maint`, `gsa-abi`, `gsa-cli` —
 their roles are stated once in `docs/architecture.md` §3. The fish engine is
-retired: frozen verbatim under `tests/assets/` (`build-all.fish` +
-`lib/`) as the differential oracle, and the root `build-all.fish` is a
-retirement shim that prints the §B.9 migration table and exits non-zero
-running nothing (§6, 2026-10-14 cutover).
+retired: its implementation is frozen verbatim under `tests/assets/`
+(the fish entry plus its `lib/`) as the differential oracle, and the repo-root
+copy is a retirement shim that prints the §B.9 migration table and exits non-zero
+running nothing (file names and the deprecation window: §6, 2026-10-14 cutover).
+
+Validation surface: `cargo test --workspace` for the engine, and the fixture
+battery `bash tests/run-all.sh` (parallel by default, substring filter,
+`--serial`; non-mutating, `$TMPDIR`-scoped, stubs fail closed). There is no
+CI.
 
 Privilege model (W1, contract §B.10; 2026-10-15, amended 2026-10-16 after the
 real-system smoke): mutating verbs require root (rc 3 otherwise); a privileged
@@ -1496,7 +1549,7 @@ OpenShadingLanguage -> blender.
   ID GROUPS [EDGES [TAGS]]` is the single writer for records that need
   multiple groups, edges or tags (replace-or-append); `stub_sudo`/`stub_pacman`/`stub_makepkg`/`stub_sleep` write the trivial
   byte-identical PATH stubs. A fixture section that exercises the frozen fish
-  oracle installs it explicitly beside its scratch workspace with
+  oracle installs it explicitly next to its scratch workspace with
   `install_fish_oracle` (the root shim is never picked up by accident).
   `stub_sudo` is a passthrough that strips the
   builder's non-interactive flags (`-n`, `-v`, `--`) **and `--preserve-env`** —
@@ -1570,7 +1623,9 @@ OpenShadingLanguage -> blender.
 
 ## 3. Stack facts
 
-Durable shape of the stack, re-verified 2026-09-17. Deliberately no version
+Durable shape of the stack, re-verified 2026-10-17 (against the committed
+recipes; against the installed database where the claim is about installed
+names). Deliberately no version
 numbers: they rot within days and `pacman -Q <pkg>` is authoritative. Dated
 install history lives in `NOTE.md`.
 
@@ -1581,7 +1636,10 @@ install history lives in `NOTE.md`.
 - **Qt dev stack**: every Qt6/Qt5 private-API-coupled module is house-built;
   `qt5-base-git` carries `-ffat-lto-objects` for the LTO-strip hazard (§6).
   `pyside6-git` is scoped with `-DMODULES='Core;Gui;Widgets'` because the rest
-  of Qt is still stock. Stock-only by design: qt6-translations, qt5ct, qt6ct.
+  of Qt is still stock. Stock-only by design: `qt6-translations` — the claim
+  no longer covers `qt5ct`/`qt6ct`: both are release-tracked house recipes
+  (`packages/core/qt5ct`, `packages/core/qt6ct`), `app` members carrying
+  `abi=must` against house Qt.
 - **Toolchain `-git` packages carry VERSIONED provides** (`meson-git` →
   `meson=<ver>`, likewise ninja-git, cmake-git, doxygen-git) — unversioned
   provides cannot satisfy `>=N` makedepends (golden rule 4).
@@ -1595,8 +1653,9 @@ install history lives in `NOTE.md`.
   `-Dtranslate-docs=disabled` (po4a was purged; the feature HARD-FAILS rather
   than skipping, §6). Its `libuuid`/`libblkid` verdefs need mold's
   `-Wl,--undefined-version` (§6).
-- **linux-firmware** is trimmed to the maintained hardware set (AMD Strix Halo
-  + MediaTek MT7925 + Cirrus amps). In `pipewire`, the `pipewire-jack` split is
+- **linux-firmware** is trimmed to the maintained hardware set (`amd-ucode`,
+  `linux-firmware-amdgpu`, `linux-firmware-mediatek`,
+  `linux-firmware-cirrus`). In `pipewire`, the `pipewire-jack` split is
   NOT built because it conflicts with the system's `jack2`, while
   `pipewire-jack-client` is kept. `easyeffects-git` replaced `jamesdsp-git`.
 - **blender-git** pairs with house `openshadinglanguage` (same LLVM coupling as
