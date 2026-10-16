@@ -468,8 +468,16 @@ the three planning defaults):
 - `GSA_MEMORY_GIB` — overrides the detected available memory in GiB the
   parallelism plan is computed from; must be a positive integer (anything else
   is a usage error). Default: memory detection.
+- `GSA_CONF` — replaces the auto-read `gsa.conf` layers (`/etc/gsa.conf`,
+  `~/.config/gsa/gsa.conf`) with exactly one file; fixture and hermetic
+  control (plan-gsa-isolation.md W2).
 - `GSA_STATE_DIR` — the state-root override of contract §J.3; `--state-dir
   PATH` beats it, and the default is `/var/lib/gsa`.
+- `GSA_BUILD_DIR` — the build-cache root (plan-gsa-isolation.md W4): makepkg
+  `BUILDDIR`/`PKGDIR`/`PKGDEST` land below it (`build/`, `pkg/`, `pkgs/`).
+  Beats the config `build_dir` key; default: the build user's
+  `~/.cache/gsa`. `SRCDEST` is NOT part of this surface — `makepkg.conf`
+  governs sources.
 - `GSA_TARGET_CPU` — the engine does **not** consume it: it reaches recipes
   through the inherited environment (CPU tuning; the host `makepkg.conf`
   applies when unset), and a continuation warns about it via `env-required:`
