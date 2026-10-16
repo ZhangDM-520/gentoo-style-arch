@@ -270,9 +270,37 @@ fn run_build_with(
     // ── prune strength 1 first (§B.5 cluster letter `c`) ─────────────────
     if inv.modifiers.contains(&'c') {
         let mut report = gsa_build::clean::CleanReport::default();
+        let layout = gsa_model::config::load()
+            .and_then(|c| gsa_model::config::build_layout(&c))
+            .ok();
         for (_, id) in &selection.listed {
             let record = graph.record(graph.index_of(id.as_str()).expect("selection ids resolve"));
-            gsa_build::clean::clean_recipe(&root.join(&record.path), &mut report);
+            let recipe_dir = root.join(&record.path);
+            // W4: the prune also covers the recipe's cache trees and its
+            // archives in the shared PKGDEST (names from the committed
+            // .SRCINFO — the same truth the gate seeds from).
+            let mut pkgbase: String = id.to_string();
+            let mut outputs: Vec<String> = Vec::new();
+            let srcinfo = recipe_dir.join(".SRCINFO");
+            if let Ok(text) = std::fs::read_to_string(&srcinfo) {
+                if let Ok(info) = gsa_recipe::parse_srcinfo(&text, &srcinfo.display().to_string()) {
+                    if let Some(base) = info.pkgbase {
+                        pkgbase = base;
+                    }
+                    outputs = if info.pkgnames.is_empty() {
+                        vec![pkgbase.clone()]
+                    } else {
+                        info.pkgnames
+                    };
+                }
+            }
+            gsa_build::clean::clean_recipe(
+                &recipe_dir,
+                &pkgbase,
+                &outputs,
+                layout.as_ref(),
+                &mut report,
+            );
         }
         for removed in &report.removed {
             let _ = writeln!(err, "gsa: note: pruned {removed}");

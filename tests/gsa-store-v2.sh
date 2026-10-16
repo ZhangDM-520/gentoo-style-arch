@@ -50,6 +50,7 @@ run_store() { # STATE CONF DIR ARG... — the engine as root through real sudo
     set +e
     FIXTURE_OUTPUT=$(cd "$dir" && /usr/bin/sudo -n env \
         PATH="$PATH" GSA_STATE_DIR="$state" GSA_CONF="$conf" \
+        GSA_BUILD_DIR="${GSA_BUILD_DIR:-$state/../build-cache}" \
         "$engine" "$@" 2>&1)
     FIXTURE_RC=$?
     ((had_errexit)) && set -e

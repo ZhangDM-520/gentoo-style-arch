@@ -5,8 +5,12 @@
 W2 (config surface) and W3 (canonical recipe store) implemented and verified
 2026-10-16 (`gsa_model::config`, `gsa_state::recipes`, `tests/gsa-store-v2.sh`;
 docs/NOTE.md same date records the settled design decisions and the W1
-audit). W4 (build/cache relocation + standalone-PKGBUILD distribution) and the
-W4 contract amendments remain. Supersedes the deployment/directory
+audit). W4 first half (build/cache relocation to the build user's cache,
+`GSA_BUILD_DIR`, truth-filtered dual-location archive discovery) landed and
+verified 2026-10-16; W4's remainder is the strict single-location flip of the
+archive-writing fixture stubs, the standalone-PKGBUILD distribution input, and
+the contract amendments (`docs/gsa-contract.md` §B/§G/§J/§K,
+`plan-native-pm.md` addendum). Supersedes the deployment/directory
 assumptions in `plan-native-pm.md` where they conflict (the engine
 architecture itself stands); `plan.md` (fetch-ahead) is untouched and stays a
 subsystem design.

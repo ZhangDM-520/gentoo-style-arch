@@ -101,6 +101,11 @@ fi
 }
 export GSA_TEST_GSA_BIN
 
+# W4 build-cache isolation: engine runs create their build cache at the
+# resolved root (default: the build user's ~/.cache/gsa). The battery keeps
+# that hermetic — one scratch cache per battery run, inside $TMPDIR.
+export GSA_BUILD_DIR="${GSA_BUILD_DIR:-${TMPDIR:-/tmp}/gsa-battery-build}"
+
 # One fixture in a child shell: stdout+stderr to its own file, rc to its own
 # file, so the parent can report everything alphabetically at the end.
 run_one() {

@@ -1351,26 +1351,35 @@ struct ArchiveRow {
 
 fn list_archives(recipe_dir: &Path) -> Vec<ArchiveRow> {
     let mut rows: Vec<ArchiveRow> = Vec::new();
-    let Ok(dir) = fs::read_dir(recipe_dir) else {
-        return rows;
+    // W4: the shared build-user PKGDEST plus the recipe dir (pre-W4 trees
+    // and fixture stubs write there); callers filter by output-name truth.
+    let scan_dirs = match gsa_model::config::load().and_then(|c| gsa_model::config::build_layout(&c))
+    {
+        Ok(layout) => gsa_model::config::archive_dirs(recipe_dir, &layout),
+        Err(_) => vec![recipe_dir.to_path_buf()],
     };
-    for entry in dir.flatten() {
-        let path = entry.path();
-        if !path.is_file() {
+    for scan_dir in scan_dirs {
+        let Ok(dir) = fs::read_dir(scan_dir) else {
             continue;
+        };
+        for entry in dir.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let name = entry.file_name();
+            if !name.to_string_lossy().ends_with(".pkg.tar.zst") {
+                continue;
+            }
+            let mtime = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .map(|d| (d.as_secs(), d.subsec_nanos()))
+                .unwrap_or((0, 0));
+            rows.push(ArchiveRow { mtime, path });
         }
-        let name = entry.file_name();
-        if !name.to_string_lossy().ends_with(".pkg.tar.zst") {
-            continue;
-        }
-        let mtime = entry
-            .metadata()
-            .and_then(|m| m.modified())
-            .ok()
-            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-            .map(|d| (d.as_secs(), d.subsec_nanos()))
-            .unwrap_or((0, 0));
-        rows.push(ArchiveRow { mtime, path });
     }
     // Newest first (fish `find -printf %T@ | sort -rn`; equal mtimes fall
     // back to a reverse path compare, the full-line tiebreak of `sort -rn`).

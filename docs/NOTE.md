@@ -1,3 +1,39 @@
+## 2026-10-16 — restructure wave W4a: the build cache moves to the build user's `~/.cache/gsa` (makepkg BUILDDIR/PKGDIR/PKGDEST), archive discovery goes truth-filtered dual-location
+
+**What landed (plan-gsa-isolation.md W4, first half).** makepkg's build trees,
+staging and archives leave the recipe directories: `makepkg_command` now passes
+`BUILDDIR`/`PKGDIR`/`PKGDEST` (absolute) into the build-user cache —
+`GSA_BUILD_DIR` env > config `build_dir` > `<build-user-home>/.cache/gsa`
+(`build/` trees, `pkg/` staging, `pkgs/` archives), creating and chowning the
+dirs to the build user. `SRCDEST` stays governed by `makepkg.conf` untouched
+(the plan's explicit non-goal). Archive discovery (`gsa_install::discover_recipe`,
+`gsa_recipe::freshness::list_archives`) scans **both** the shared `PKGDEST` and
+the recipe dir — the pre-W4 location the 16 archive-writing fixture stubs still
+use — with `.PKGINFO`-truth/output-name filtering, so a shared `PKGDEST` can
+never hand over another recipe's archive (rule 11). `clean_recipe` gained the
+cache half: PKGDEST archives by exact `NAME-` prefixes plus the recipe's
+`build/`/`pkg/` cache trees (names from the committed `.SRCINFO`), keeping
+`-c`'s force-rebuild semantics intact with cache archives.
+
+**Hermeticity rule.** The engine creates the cache at the resolved root, so
+fixture runs must never resolve the real home: `GSA_BUILD_DIR` (new engine env
+input, ENV_ROSTER 9→10) is guarded by rr-v2 into `$ws/../.rr2-build`, exported
+by `run-all.sh` to a `$TMPDIR` scratch, and forwarded by the gsa-privilege /
+gsa-store-v2 helpers. `tests/gsa-privilege.sh` section g now pins the plan's
+test-(c) cache half: the stub makepkg honours `$PKGDEST` and the archive must
+land in `<cache>/pkgs/`, never beside the recipe.
+
+**Validation.** Crate tests green (gsa-build clean tests incl. the new cache
+cases, gsa-install discovery, gsa-recipe freshness, gsa-cli 42 with the roster
+pin); `tests/gsa-privilege.sh` §g green (banner-once + dropped uid + cache
+placement); fixture battery **67/67 PASS**.
+
+**Remaining W4 (next waves).** (4b) flip the 16 archive-writing stubs to
+honour `$PKGDEST` and drop the recipe-dir scan (strict single location);
+(4c) standalone-PKGBUILD target input (stage → build → index); (4d) the
+contract amendments (`docs/gsa-contract.md` §B/§G/§J/§K, `plan-native-pm.md`
+addendum).
+
 ## 2026-10-16 — restructure waves W2+W3: the `gsa.conf` surface and the canonical recipe store; plus the W1 unsettled-facts audit
 
 **What landed (plan-gsa-isolation.md W2+W3).** The restructure's middle waves,

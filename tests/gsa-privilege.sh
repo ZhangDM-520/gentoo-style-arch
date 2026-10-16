@@ -61,6 +61,7 @@ run_engine_root() {
     FIXTURE_OUTPUT=$(cd "$ws" && sudo -n env \
         PATH="$PATH" \
         GSA_STATE_DIR="$state" \
+        GSA_BUILD_DIR="${GSA_BUILD_DIR:-$state/../build-cache}" \
         GSA_FAKE_MAKEPKG_LOG="$log" \
         "$engine" "$@" 2>&1)
     FIXTURE_RC=$?
@@ -79,6 +80,7 @@ run_engine_root_stripped() {
     FIXTURE_OUTPUT=$(cd "$ws" && sudo -n env -u SUDO_UID -u SUDO_GID -u SUDO_USER \
         PATH="$PATH" \
         GSA_STATE_DIR="$state" \
+        GSA_BUILD_DIR="${GSA_BUILD_DIR:-$state/../build-cache}" \
         GSA_FAKE_MAKEPKG_LOG="$log" \
         "$engine" "$@" 2>&1)
     FIXTURE_RC=$?
@@ -118,6 +120,10 @@ make_stubs() {
     cat >"$dir/makepkg" <<'STUB'
 #!/usr/bin/env bash
 printf 'uid=%s argv=%s\n' "$(id -u)" "$*" >>"${GSA_FAKE_MAKEPKG_LOG:?}"
+# W4: the engine passes PKGDEST (the build-user cache); honour it like real
+# makepkg does so fixtures can assert the archive location.
+id=$(basename "$PWD")
+: >"${PKGDEST:-$PWD}/$id-1.0.0-1-any.pkg.tar.zst"
 exit 0
 STUB
     chmod +x "$dir/makepkg"
@@ -248,7 +254,7 @@ if [ -z "$only" ] || [ "$only" = g ]; then
         log="$fixture/g/makepkg.log"
         make_ws "$ws"
         make_stubs "$fixture/g/bin"
-        PATH="$fixture/g/bin:$PATH" \
+        PATH="$fixture/g/bin:$PATH" GSA_BUILD_DIR="$fixture/g/cache" \
             run_engine_root "$state" "$log" "$ws" -B pkg1
         [ -s "$log" ] || fail "g: stub makepkg never ran: $FIXTURE_OUTPUT"
         want=$(id -u)
@@ -256,6 +262,12 @@ if [ -z "$only" ] || [ "$only" = g ]; then
         [ "$got" = "$want" ] || fail "g: makepkg ran as uid=$got want $want (the drop is broken)"
         n=$(vgrep "$FIXTURE_OUTPUT" -c 'gsa: privileged run:')
         [ "$n" = 1 ] || fail "g: exactly one banner line expected, got $n: $FIXTURE_OUTPUT"
+        # W4 (plan test (c)): the archive lands in the build-user cache, not
+        # beside the recipe (the stub honours the engine's PKGDEST).
+        [ -f "$fixture/g/cache/pkgs/pkg1-1.0.0-1-any.pkg.tar.zst" ] ||
+            fail "g: the archive must land in the build cache: $(ls -R "$fixture/g" 2>&1)"
+        [ ! -e "$ws/packages/misc/pkg1/pkg1-1.0.0-1-any.pkg.tar.zst" ] ||
+            fail "g: the archive must not land beside the recipe"
     )
 fi
 

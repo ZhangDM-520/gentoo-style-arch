@@ -32,6 +32,56 @@ pub const USER_CONFIG: &str = ".config/gsa/gsa.conf";
 /// The built-in recipe-store upstream (the recipe repository's origin).
 pub const DEFAULT_RECIPE_URL: &str = "https://github.com/ZhangDM-520/gentoo-style-arch.git";
 
+/// The build-cache layout (plan-gsa-isolation.md W4): the build user's
+/// `~/.cache/gsa` (config `build_dir`; `GSA_BUILD_DIR` env = fixture control
+/// like `GSA_STATE_DIR`), with `build/` trees (makepkg `BUILDDIR`), `pkg/`
+/// staging (`PKGDIR`) and `pkgs/` archives (`PKGDEST`) below it. Sources
+/// keep honouring `makepkg.conf` `SRCDEST` untouched.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BuildLayout {
+    pub root: PathBuf,
+    pub builddir: PathBuf,
+    pub pkgdir: PathBuf,
+    pub pkgdest: PathBuf,
+}
+
+/// The build cache root: `GSA_BUILD_DIR` env > config `build_dir` > the
+/// build user's `~/.cache/gsa`.
+pub fn build_root(cfg: &GsaConfig) -> Result<PathBuf, String> {
+    if let Ok(v) = std::env::var("GSA_BUILD_DIR") {
+        if !v.trim().is_empty() {
+            return Ok(PathBuf::from(v));
+        }
+    }
+    if let Some(v) = &cfg.build_dir {
+        return Ok(v.clone());
+    }
+    Ok(build_user_home()?.join(".cache").join("gsa"))
+}
+
+/// The full layout for a run.
+pub fn build_layout(cfg: &GsaConfig) -> Result<BuildLayout, String> {
+    let root = build_root(cfg)?;
+    Ok(BuildLayout {
+        builddir: root.join("build"),
+        pkgdir: root.join("pkg"),
+        pkgdest: root.join("pkgs"),
+        root,
+    })
+}
+
+/// The archive scan set for one recipe: the shared `PKGDEST` first, then the
+/// recipe dir (the pre-W4 location — fixtures and old trees still write
+/// there until the stubs flip). Every scan is `.PKGINFO`-truth filtered, so
+/// a shared PKGDEST can never hand over another recipe's archive (rule 11).
+pub fn archive_dirs(recipe_dir: &Path, layout: &BuildLayout) -> Vec<PathBuf> {
+    let mut dirs = vec![layout.pkgdest.clone()];
+    if recipe_dir != layout.pkgdest {
+        dirs.push(recipe_dir.to_path_buf());
+    }
+    dirs
+}
+
 /// The known key roster — one place, reused by the parse error message.
 const KEYS: [&str; 4] = ["project", "recipe_url", "build_dir", "state_dir"];
 

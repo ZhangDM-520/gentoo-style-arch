@@ -495,6 +495,13 @@ rr2_invoke() {
         if [[ -z ${GSA_STATE_DIR:-} ]] && ! rr2_has_state_root "$@"; then
             guard=(GSA_STATE_DIR="$ws/../.rr2-state")
         fi
+        # W4 build-cache isolation: the engine creates its build cache at the
+        # resolved root (default: the build user's ~/.cache/gsa). A fixture
+        # run must never create real home directories — route the cache into
+        # the fixture tree when the caller gave no GSA_BUILD_DIR.
+        if [[ -z ${GSA_BUILD_DIR:-} ]]; then
+            guard+=(GSA_BUILD_DIR="$ws/../.rr2-build")
+        fi
         if [[ $mode == sudo ]]; then
             local -a fwd=()
             rr2_env_forward fwd

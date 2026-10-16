@@ -219,11 +219,12 @@ A maintain run (-M) accepts its verb's sub-flags (§B.7): --fix, --prune,
   plan and rows without touching anything.
 Deferred (parse and refuse, so the message names them): --quiet, --verbose.
 
-Engine environment inputs: GSA_CONF, GSA_STATE_DIR, GSA_LANES, GSA_JOBS,
-  GSA_INTENSITY, GSA_CPU_THREADS, GSA_MEMORY_GIB, GSA_TARGET_CPU,
+Engine environment inputs: GSA_CONF, GSA_STATE_DIR, GSA_BUILD_DIR, GSA_LANES,
+  GSA_JOBS, GSA_INTENSITY, GSA_CPU_THREADS, GSA_MEMORY_GIB, GSA_TARGET_CPU,
   GSA_VCS_SKIP_TOLERANCE. GSA_CONF replaces the auto-read gsa.conf layers
   (/etc/gsa.conf, ~/.config/gsa/gsa.conf) with exactly one file — fixture and
-  hermetic control.
+  hermetic control. GSA_BUILD_DIR redirects the build cache (makepkg
+  BUILDDIR/PKGDIR/PKGDEST; default: the build user's ~/.cache/gsa).
   GSA_BUILD_JOBS is engine output, never an input.
 
 Exit codes (contract §G): 0 success; 1 build failure under --fail-fast;

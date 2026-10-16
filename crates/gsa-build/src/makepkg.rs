@@ -125,6 +125,20 @@ pub fn makepkg_command(
             }
         }
     }
+    // W4 build cache: makepkg's build trees, staging and archives land in
+    // the build user's cache (plan-gsa-isolation.md), never beside the
+    // recipe. The dirs are created (and chowned back) here — build-side
+    // writes into build-user paths are owned by the build user (W1).
+    if let Ok(layout) = gsa_model::config::load().and_then(|c| gsa_model::config::build_layout(&c)) {
+        for dir in [&layout.builddir, &layout.pkgdir, &layout.pkgdest] {
+            if std::fs::create_dir_all(dir).is_ok() {
+                let _ = gsa_model::privilege::own_to_build_user(dir);
+            }
+        }
+        cmd.env("BUILDDIR", absolute_for_child(&layout.builddir));
+        cmd.env("PKGDIR", absolute_for_child(&layout.pkgdir));
+        cmd.env("PKGDEST", absolute_for_child(&layout.pkgdest));
+    }
     let shim = crate::shim::shim_path(state_dir);
     if shim.is_file() {
         cmd.env("PACMAN", absolute_for_child(&shim));

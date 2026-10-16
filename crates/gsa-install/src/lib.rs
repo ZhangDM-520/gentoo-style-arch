@@ -137,30 +137,49 @@ pub fn discover_recipe(recipe_dir: &Path) -> Result<RecipeArchives, String> {
     // `.PKGINFO` truth (never a glob-all fallback, rule 11). An archive
     // whose `.PKGINFO` cannot be read is NOT a candidate here (rule 25(h):
     // direct-archive seams report it via decide() gate 1).
+    // W4: archives live in the shared build-user `PKGDEST`; the recipe dir
+    // stays in the scan set (pre-W4 trees and fixture stubs write there)
+    // and `.PKGINFO` truth keeps the shared dir from handing over another
+    // recipe's archive.
+    let scan_dirs = match gsa_model::config::load().and_then(|c| gsa_model::config::build_layout(&c)) {
+        Ok(layout) => gsa_model::config::archive_dirs(recipe_dir, &layout),
+        Err(_) => vec![recipe_dir.to_path_buf()],
+    };
     let mut by_name: Vec<(String, std::time::SystemTime, PathBuf, String)> = Vec::new();
-    let entries = std::fs::read_dir(recipe_dir)
-        .map_err(|e| format!("cannot read recipe dir {}: {e}", recipe_dir.display()))?;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+    let mut scanned = false;
+    for scan_dir in &scan_dirs {
+        let Ok(entries) = std::fs::read_dir(scan_dir) else {
             continue;
         };
-        if !name.ends_with(".pkg.tar.zst") {
-            continue;
+        scanned = true;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            if !name.ends_with(".pkg.tar.zst") {
+                continue;
+            }
+            let Ok(pkginfo) = read_pkginfo(&path) else {
+                continue;
+            };
+            if !expected.is_empty() && !expected.contains(&pkginfo.pkgname) {
+                continue;
+            }
+            let mtime = std::fs::metadata(&path)
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::UNIX_EPOCH);
+            by_name.push((pkginfo.pkgname, mtime, path, pkginfo.version));
         }
-        let Ok(pkginfo) = read_pkginfo(&path) else {
-            continue;
-        };
-        if !expected.is_empty() && !expected.contains(&pkginfo.pkgname) {
-            continue;
-        }
-        let mtime = std::fs::metadata(&path)
-            .and_then(|m| m.modified())
-            .unwrap_or(std::time::UNIX_EPOCH);
-        by_name.push((pkginfo.pkgname, mtime, path, pkginfo.version));
+    }
+    if !scanned {
+        return Err(format!(
+            "cannot read recipe dir {}: no archive location is readable",
+            recipe_dir.display()
+        ));
     }
 
     let mut names_in_order: Vec<String> = expected.clone();

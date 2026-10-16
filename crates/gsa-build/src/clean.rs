@@ -15,9 +15,18 @@ pub struct CleanReport {
 }
 
 /// Prune strength 1 for one recipe directory: `src/`, `pkg/`, `build/` and
-/// every `*.pkg.tar.zst` archive beside the recipe (makepkg state lives
-/// beside the recipe, contract §J.2).
-pub fn clean_recipe(recipe_dir: &Path, report: &mut CleanReport) {
+/// every `*.pkg.tar.zst` archive beside the recipe (legacy location and
+/// fixture stubs), plus — when the W4 build layout is known — the recipe's
+/// archives in the shared `PKGDEST`, and its `build/`/`pkg/` trees under the
+/// build user's cache. A shared PKGDEST is only touched by exact output-name
+/// prefixes (`NAME-`), never a glob-all.
+pub fn clean_recipe(
+    recipe_dir: &Path,
+    pkgbase: &str,
+    outputs: &[String],
+    layout: Option<&gsa_model::config::BuildLayout>,
+    report: &mut CleanReport,
+) {
     for name in ["src", "pkg", "build"] {
         let path = recipe_dir.join(name);
         let Ok(meta) = std::fs::symlink_metadata(&path) else {
@@ -32,21 +41,49 @@ pub fn clean_recipe(recipe_dir: &Path, report: &mut CleanReport) {
             Ok(()) => report.removed.push(path.display().to_string()),
             Err(error) => report
                 .errors
-                .push(format!("cannot remove {}: {error}", path.display())),
+                .push(format!("cannot remove {}: {e}", path.display(), e = error)),
         }
     }
-    let Ok(entries) = std::fs::read_dir(recipe_dir) else {
+    remove_archives_in(recipe_dir, &|_| true, report);
+    if let Some(layout) = layout {
+        remove_archives_in(
+            &layout.pkgdest,
+            &|name| outputs.iter().any(|o| name.starts_with(&format!("{o}-"))),
+            report,
+        );
+        for tree in [layout.builddir.join(pkgbase), layout.pkgdir.join(pkgbase)] {
+            if !tree.exists() {
+                continue;
+            }
+            match std::fs::remove_dir_all(&tree) {
+                Ok(()) => report.removed.push(tree.display().to_string()),
+                Err(error) => report.errors.push(format!(
+                    "cannot remove {}: {error}",
+                    tree.display()
+                )),
+            }
+        }
+    }
+}
+
+fn remove_archives_in(
+    dir: &Path,
+    keep_name: &dyn Fn(&str) -> bool,
+    report: &mut CleanReport,
+) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
-        if name.ends_with(".pkg.tar.zst") {
-            match std::fs::remove_file(entry.path()) {
-                Ok(()) => report.removed.push(entry.path().display().to_string()),
-                Err(error) => report
-                    .errors
-                    .push(format!("cannot remove {}: {error}", entry.path().display())),
-            }
+        if !name.ends_with(".pkg.tar.zst") || !keep_name(&name) {
+            continue;
+        }
+        match std::fs::remove_file(entry.path()) {
+            Ok(()) => report.removed.push(entry.path().display().to_string()),
+            Err(error) => report
+                .errors
+                .push(format!("cannot remove {}: {error}", entry.path().display())),
         }
     }
 }
@@ -67,7 +104,7 @@ mod tests {
         std::fs::write(recipe.join("PKGBUILD"), "pkgname=pkg1\n").unwrap();
         std::fs::write(recipe.join(".SRCINFO"), "pkgbase = pkg1\n").unwrap();
         let mut report = CleanReport::default();
-        clean_recipe(&recipe, &mut report);
+        clean_recipe(&recipe, "a", &["a".to_string()], None, &mut report);
         assert!(!recipe.join("src").exists());
         assert!(!recipe.join("pkg").exists());
         assert!(!recipe.join("build").exists());

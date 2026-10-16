@@ -1323,6 +1323,17 @@ config key supersedes it for dev checkouts. Workspace resolution is
 discovery needs a fixture replacement first (the battery runs synthetic
 workspaces from cwd).
 
+Build cache (W4a; 2026-10-16): makepkg's `BUILDDIR`/`PKGDIR`/`PKGDEST` are
+passed by the engine and land in the build user's cache — `GSA_BUILD_DIR` env
+> config `build_dir` > `<build-user-home>/.cache/gsa`, with `build/` trees,
+`pkg/` staging and `pkgs/` archives below it; `SRCDEST` stays governed by
+`makepkg.conf` untouched. Archive discovery scans `PKGDEST` plus the recipe
+dir (the pre-W4 location fixture stubs still write to) and every candidate is
+matched by `.PKGINFO`/output-name truth, so a shared `PKGDEST` can never hand
+over another recipe's archive. Fixtures route `GSA_BUILD_DIR` into `$TMPDIR`
+(rr-v2's guard + `run-all.sh` export) — an engine run must never create real
+home directories.
+
 `--intensity xhigh` is the default automatic plan. It derives bounded lanes
 and a global normal-lane job budget from CPU threads and available memory
 (`gsa-sched`'s budget; formulas in `docs/portability.md`);
