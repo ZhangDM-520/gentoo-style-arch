@@ -51,8 +51,6 @@ pub const REAL_UPGRADE_FLAGS: [&str; 4] = [
     "--no-register-ignorepkg",
 ];
 
-/// The default state root (contract §J.3) — shared with the build path.
-const DEFAULT_STATE_DIR: &str = "/var/lib/gsa";
 /// The default target pacman.conf (rule 9).
 pub(crate) const DEFAULT_CONF: &str = "/etc/pacman.conf";
 
@@ -508,13 +506,10 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
     }
 
     // ── workspace, topology (usage class: rc 2) ─────────────────────────
-    let root = match crate::find_root() {
-        Some(root) => root,
-        None => {
-            let _ = writeln!(
-                err,
-                "gsa: cannot find config/topology.conf from the current directory upward (run inside the recipe repository)"
-            );
+    let root = match crate::resolve_root(true) {
+        Ok(root) => root,
+        Err(message) => {
+            let _ = writeln!(err, "gsa: {message}");
             return 2;
         }
     };
@@ -658,7 +653,13 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
     // coverage refuses pacman-free (rc 3). `-Ua` is exempt: it installs
     // the whole workspace, so its single transaction already carries every
     // consumer (contract §B.6).
-    let state_dir = state_dir_of(inv);
+    let state_dir = match state_dir_of(inv) {
+        Ok(dir) => dir,
+        Err(message) => {
+            let _ = writeln!(err, "gsa: {message}");
+            return 2;
+        }
+    };
     let log_dir = state_dir.join("logs");
     let db_root = pacman_db_root();
     let localdb = match LocalDb::load(&db_root) {
@@ -1184,18 +1185,25 @@ fn note_subject_substitutions(rows: &[DecisionRow], err: &mut dyn Write) {
 }
 
 /// The state root of a run (contract §J.3): `--state-dir` beats
-/// `GSA_STATE_DIR`; never a silent workspace fallback.
-pub(crate) fn state_dir_of(inv: &Invocation) -> PathBuf {
-    inv.state_dir
-        .as_ref()
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var("GSA_STATE_DIR")
-                .ok()
-                .filter(|v| !v.is_empty())
-                .map(PathBuf::from)
-        })
-        .unwrap_or_else(|| PathBuf::from(DEFAULT_STATE_DIR))
+/// `GSA_STATE_DIR` beats the gsa.conf layers beats `/var/lib/gsa`; never a
+/// silent workspace fallback. Run entries resolve this fail-fast (rc 2 on a
+/// malformed config); record emission uses `record_state_dir`.
+pub(crate) fn state_dir_of(inv: &Invocation) -> Result<PathBuf, String> {
+    gsa_model::config::resolve_state_dir(inv.state_dir.as_deref())
+}
+
+/// The state root for best-effort record persistence: a config error here
+/// is loud but cannot stop the rendering (the run entries already failed
+/// fast on the same error before any record exists), so it falls back to
+/// the built-in root with a note.
+pub(crate) fn record_state_dir(inv: &Invocation, err: &mut dyn std::io::Write) -> PathBuf {
+    match state_dir_of(inv) {
+        Ok(dir) => dir,
+        Err(message) => {
+            let _ = writeln!(err, "gsa: note: {message}");
+            PathBuf::from(gsa_model::config::DEFAULT_STATE_DIR)
+        }
+    }
 }
 
 /// Finish a refused run (contract §G.1 rc 3): the record is still emitted
@@ -1250,7 +1258,8 @@ fn finish_record(
         "{}",
         render::render_run_prose(&record, log_dir, &[], qa.as_deref())
     );
-    record::emit_machine_record(out, &record, &state_dir_of(inv), err);
+    let rec_state = record_state_dir(inv, err);
+    record::emit_machine_record(out, &record, &rec_state, err);
     run_outcome.rc
 }
 
@@ -1574,13 +1583,10 @@ pub fn run_register_ignorepkg(args: &[String], out: &mut dyn Write, err: &mut dy
             .cloned()
             .unwrap_or_else(|| DEFAULT_CONF.to_string()),
     );
-    let root = match crate::find_root() {
-        Some(root) => root,
-        None => {
-            let _ = writeln!(
-                err,
-                "gsa: cannot find config/topology.conf from the current directory upward (run inside the recipe repository)"
-            );
+    let root = match crate::resolve_root(true) {
+        Ok(root) => root,
+        Err(message) => {
+            let _ = writeln!(err, "gsa: {message}");
             return 2;
         }
     };

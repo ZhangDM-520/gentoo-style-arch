@@ -9,9 +9,11 @@
 //! the machine block and a prose view from `gsa-cli`; the dashboard lands
 //! with the scheduler (`gsa-sched`, plan-native-pm.md §3.1).
 //!
-//! Nothing here evaluates recipes or reads the filesystem: this crate is
-//! pure data and rendering.
+//! Nothing here evaluates recipes; it is pure data and rendering, plus the
+//! two host-surface modules the engine shares: `privilege` (the W1 drop) and
+//! `config` (the W2 `gsa.conf` layers).
 
+pub mod config;
 pub mod privilege;
 
 use std::fmt;

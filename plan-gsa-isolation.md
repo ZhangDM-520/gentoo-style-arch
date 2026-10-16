@@ -1,10 +1,15 @@
 # plan-gsa-isolation.md — pacman-class isolation for the gsa engine (directories, privilege, distribution)
 
-**Status:** W1 implemented statically on 2026-10-15 (no compile, no runs — owner
-is on battery and tests together at AC return). W2–W5 not started. Supersedes
-the deployment/directory assumptions in `plan-native-pm.md` where they conflict
-(the engine architecture itself stands); `plan.md` (fetch-ahead) is untouched
-and stays a subsystem design.
+**Status:** W1 implemented and verified 2026-10-15 (privilege handle;
+`gsa-model::privilege` is the landed home, not `gsa-build::priv`).
+W2 (config surface) and W3 (canonical recipe store) implemented and verified
+2026-10-16 (`gsa_model::config`, `gsa_state::recipes`, `tests/gsa-store-v2.sh`;
+docs/NOTE.md same date records the settled design decisions and the W1
+audit). W4 (build/cache relocation + standalone-PKGBUILD distribution) and the
+W4 contract amendments remain. Supersedes the deployment/directory
+assumptions in `plan-native-pm.md` where they conflict (the engine
+architecture itself stands); `plan.md` (fetch-ahead) is untouched and stays a
+subsystem design.
 
 ## TL;DR
 

@@ -63,11 +63,6 @@ pub const REAL_INSTALL_FLAGS: [&str; 9] = [
     "--config",
 ];
 
-/// The default state root (contract §J.3): `--state-dir` beats
-/// `GSA_STATE_DIR`, and there is never a silent fallback to a workspace
-/// directory.
-const DEFAULT_STATE_DIR: &str = "/var/lib/gsa";
-
 /// `gsa -B <targets…> [ranges…]` — run the selection build-only. Returns the
 /// process exit code (§G.1) and writes every rendering through `out`/`err`.
 pub fn run_build(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
@@ -103,13 +98,10 @@ fn run_build_with(
         return 2;
     }
     // ── workspace, topology, selection (usage class: rc 2) ────────────────
-    let root = match crate::find_root() {
-        Some(root) => root,
-        None => {
-            let _ = writeln!(
-                err,
-                "gsa: cannot find config/topology.conf from the current directory upward (run inside the recipe repository)"
-            );
+    let root = match crate::resolve_root(true) {
+        Ok(root) => root,
+        Err(message) => {
+            let _ = writeln!(err, "gsa: {message}");
             return 2;
         }
     };
@@ -158,18 +150,15 @@ fn run_build_with(
         return code;
     }
 
-    // ── state root (contract §J.3) ──────────────────────────────────────
-    let state_dir = inv
-        .state_dir
-        .as_ref()
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var("GSA_STATE_DIR")
-                .ok()
-                .filter(|v| !v.is_empty())
-                .map(PathBuf::from)
-        })
-        .unwrap_or_else(|| PathBuf::from(DEFAULT_STATE_DIR));
+    // ── state root (contract §J.3): --state-dir > GSA_STATE_DIR > the
+    //    gsa.conf layers (user > system) > /var/lib/gsa ─────────────────
+    let state_dir = match gsa_model::config::resolve_state_dir(inv.state_dir.as_deref()) {
+        Ok(dir) => dir,
+        Err(message) => {
+            let _ = writeln!(err, "gsa: {message}");
+            return 2;
+        }
+    };
 
     // ── the pre-dispatch ABI wave check (plan-native-pm.md §4.3, §E.3) ──
     // A provider whose registered token already moved (newest binpkg index
@@ -776,13 +765,10 @@ pub(crate) fn plan_only(
 /// `--dry-run` never rewrites recipes and renders the plan record only. An
 /// empty stale set is the §E.3 `noop empty-list` row, rc 0.
 pub fn run_update(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
-    let root = match crate::find_root() {
-        Some(root) => root,
-        None => {
-            let _ = writeln!(
-                err,
-                "gsa: cannot find config/topology.conf from the current directory upward (run inside the recipe repository)"
-            );
+    let root = match crate::resolve_root(true) {
+        Ok(root) => root,
+        Err(message) => {
+            let _ = writeln!(err, "gsa: {message}");
             return 2;
         }
     };

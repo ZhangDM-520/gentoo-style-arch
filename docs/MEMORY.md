@@ -1310,6 +1310,19 @@ command must be constructed through `build_command`, never plain
 `gsa-privilege.sh` section f pinned the drop (red-first on the unfixed
 binary).
 
+Config + store (W2/W3, plan-gsa-isolation.md; 2026-10-16): `gsa.conf` layers
+auto-read `/etc/gsa.conf` then `~/.config/gsa/gsa.conf` (user > system >
+built-in; `GSA_CONF` replaces both with one file for fixtures/hermetic runs;
+an unknown key is a named error, never a silent default). The state root
+resolves `--state-dir` > `GSA_STATE_DIR` > config > `/var/lib/gsa`. The
+canonical recipe store is `<state-dir>/recipes`, root-fetched from `recipe_url`
+(default: the recipe repository's origin) and never hand-edited; `gsa -Sy`
+refreshes it (fetch/reset), mutating runs fetch it on demand, and the `project`
+config key supersedes it for dev checkouts. Workspace resolution is
+`project` config > cwd walk (deprecated, TTY-only note) > store; removing cwd
+discovery needs a fixture replacement first (the battery runs synthetic
+workspaces from cwd).
+
 `--intensity xhigh` is the default automatic plan. It derives bounded lanes
 and a global normal-lane job budget from CPU threads and available memory
 (`gsa-sched`'s budget; formulas in `docs/portability.md`);

@@ -784,13 +784,57 @@ pub fn sync_phase(
 /// the run-level disposition block. rc: 0 clean, 3 refusal class (§G.1
 /// integrity stop), 5 deferral-only.
 pub fn run_sync_pass(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
-    let Some(root) = crate::find_root() else {
-        let _ = writeln!(
-            err,
-            "gsa: cannot find config/topology.conf from the current directory upward (run inside the recipe repository)"
-        );
-        return 2;
+    let root = match crate::resolve_root(true) {
+        Ok(root) => root,
+        Err(message) => {
+            let _ = writeln!(err, "gsa: {message}");
+            return 2;
+        }
     };
+    // W3 store semantics: `-Sy` refreshes the canonical store alongside the
+    // version-sync pass. A `project` override (dev checkout) supersedes the
+    // store and is never refreshed; a cwd workspace is the deprecated path
+    // and refreshes nothing (the note keeps that visible).
+    match gsa_model::config::load() {
+        Ok(cfg) if cfg.project.is_some() => {
+            let _ = writeln!(
+                err,
+                "gsa: note: project override active — the recipe store is not refreshed"
+            );
+        }
+        Ok(cfg) => {
+            let state = match gsa_model::config::resolve_state_dir(None) {
+                Ok(state) => state,
+                Err(message) => {
+                    let _ = writeln!(err, "gsa: {message}");
+                    return 2;
+                }
+            };
+            if root == gsa_state::recipes::store_dir(&state) {
+                let url = cfg
+                    .recipe_url
+                    .unwrap_or_else(|| gsa_model::config::DEFAULT_RECIPE_URL.to_string());
+                match gsa_state::recipes::refresh(&state, &url) {
+                    Ok(head) => {
+                        let _ = writeln!(err, "gsa: recipe store refreshed: {head}");
+                    }
+                    Err(message) => {
+                        let _ = writeln!(err, "gsa: {message}");
+                        return 2;
+                    }
+                }
+            } else {
+                let _ = writeln!(
+                    err,
+                    "gsa: note: workspace is not the recipe store — nothing to refresh"
+                );
+            }
+        }
+        Err(message) => {
+            let _ = writeln!(err, "gsa: {message}");
+            return 2;
+        }
+    }
     let project = match load_project(&root) {
         Ok(project) => project,
         Err(error) => {

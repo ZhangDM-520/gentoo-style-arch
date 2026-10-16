@@ -192,13 +192,10 @@ pub fn run(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
         return RC_USAGE;
     }
 
-    let root = match crate::find_root() {
-        Some(root) => root,
-        None => {
-            let _ = writeln!(
-                err,
-                "gsa: cannot find config/topology.conf from the current directory upward (run inside the recipe repository)"
-            );
+    let root = match crate::resolve_root(true) {
+        Ok(root) => root,
+        Err(message) => {
+            let _ = writeln!(err, "gsa: {message}");
             return RC_USAGE;
         }
     };

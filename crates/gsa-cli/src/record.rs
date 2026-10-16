@@ -42,7 +42,8 @@ pub fn emit_machine_record(
 
 /// The engine environment input roster (`gsa --help` must print it).
 /// `GSA_BUILD_JOBS` is engine output and deliberately absent.
-pub const ENV_ROSTER: [&str; 8] = [
+pub const ENV_ROSTER: [&str; 9] = [
+    "GSA_CONF",
     "GSA_STATE_DIR",
     "GSA_LANES",
     "GSA_JOBS",

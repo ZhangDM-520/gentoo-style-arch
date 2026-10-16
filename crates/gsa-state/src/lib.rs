@@ -18,6 +18,7 @@
 pub mod health;
 pub mod index;
 pub mod kv;
+pub mod recipes;
 pub mod runs;
 pub mod store;
 

@@ -6,8 +6,8 @@ set -euo pipefail
 # stub `makepkg`, `GSA_STATE_DIR` overrides; the real /var/lib/gsa is never
 # read or written.
 #
-# Pinned here (six ( subshell ) sections, run one alone with
-# GSA_PRIV_ONLY=a…f):
+# Pinned here (seven ( subshell ) sections, run one alone with
+# GSA_PRIV_ONLY=a…g):
 #   a. an unprivileged mutating verb refuses early (§G.1 rc 3) with the
 #      pacman-worded message and creates NO state;
 #   b. unprivileged read-only verbs pass the gate untouched;
@@ -17,7 +17,10 @@ set -euo pipefail
 #      with guidance instead of improvising a build user;
 #   e. `-Mm` refuses under a root supervisor (build-user-only verb);
 #   f. the fetch half drops too: `gsa -Sw`'s `makepkg --verifysource` child
-#      runs as the build user (the §D.1 fetch engine is a build-side command).
+#      runs as the build user (the §D.1 fetch engine is a build-side command);
+#   g. a real `-B` run under sudo prints the ONE banner line and its makepkg
+#      child runs as the build user (plan-gsa-isolation.md test (c); the
+#      cache-placement half of that scenario lands with W4's build_dir).
 #
 # Sections c–e use real `sudo -n` (passwordless by the host contract) with
 # `env PATH="$PATH" …` so the stubs and knobs survive sudo's secure_path and
@@ -234,6 +237,25 @@ if [ -z "$only" ] || [ "$only" = f ]; then
         want=$(id -u)
         got=$(sed -n 's/^uid=\([0-9]*\).*/\1/p' "$log" | head -1)
         [ "$got" = "$want" ] || fail "f: makepkg --verifysource ran as uid=$got want $want (the fetch-half drop is broken)"
+    )
+fi
+
+# ── g. real build run: banner once, makepkg as the build user ────────────
+if [ -z "$only" ] || [ "$only" = g ]; then
+    (
+        ws="$fixture/g/ws"
+        state="$fixture/g/state"
+        log="$fixture/g/makepkg.log"
+        make_ws "$ws"
+        make_stubs "$fixture/g/bin"
+        PATH="$fixture/g/bin:$PATH" \
+            run_engine_root "$state" "$log" "$ws" -B pkg1
+        [ -s "$log" ] || fail "g: stub makepkg never ran: $FIXTURE_OUTPUT"
+        want=$(id -u)
+        got=$(sed -n 's/^uid=\([0-9]*\).*/\1/p' "$log" | head -1)
+        [ "$got" = "$want" ] || fail "g: makepkg ran as uid=$got want $want (the drop is broken)"
+        n=$(vgrep "$FIXTURE_OUTPUT" -c 'gsa: privileged run:')
+        [ "$n" = 1 ] || fail "g: exactly one banner line expected, got $n: $FIXTURE_OUTPUT"
     )
 fi
 

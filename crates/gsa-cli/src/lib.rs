@@ -206,7 +206,9 @@ Long modifiers (contract §B.8). A build run accepts: --dry-run, --leaf,
   (fetch-ahead window, default 8). --skip and --skip-built are different
   claims and cannot combine.
 The side-car queries (-Qb/-Qp) accept --state-dir PATH — the state-root
-  override (§J.3), flag beats GSA_STATE_DIR.
+  override (§J.3): --state-dir beats GSA_STATE_DIR beats the gsa.conf layers
+  (/etc/gsa.conf and ~/.config/gsa/gsa.conf, user over system) beats
+  /var/lib/gsa.
 An install run (-S/-U) additionally accepts: --config PATH (the target
   pacman.conf), --no-register-ignorepkg (skip the dynamic IgnorePkg
   registration, loudly), and -- <pacman args…> (forwarded to every pacman -U).
@@ -217,8 +219,11 @@ A maintain run (-M) accepts its verb's sub-flags (§B.7): --fix, --prune,
   plan and rows without touching anything.
 Deferred (parse and refuse, so the message names them): --quiet, --verbose.
 
-Engine environment inputs: GSA_STATE_DIR, GSA_LANES, GSA_JOBS, GSA_INTENSITY,
-  GSA_CPU_THREADS, GSA_MEMORY_GIB, GSA_TARGET_CPU, GSA_VCS_SKIP_TOLERANCE.
+Engine environment inputs: GSA_CONF, GSA_STATE_DIR, GSA_LANES, GSA_JOBS,
+  GSA_INTENSITY, GSA_CPU_THREADS, GSA_MEMORY_GIB, GSA_TARGET_CPU,
+  GSA_VCS_SKIP_TOLERANCE. GSA_CONF replaces the auto-read gsa.conf layers
+  (/etc/gsa.conf, ~/.config/gsa/gsa.conf) with exactly one file — fixture and
+  hermetic control.
   GSA_BUILD_JOBS is engine output, never an input.
 
 Exit codes (contract §G): 0 success; 1 build failure under --fail-fast;
@@ -232,9 +237,54 @@ Exit codes (contract §G): 0 success; 1 build failure under --fail-fast;
     .to_string()
 }
 
-/// Find the recipe repository: walk up from the current directory until
-/// `config/topology.conf` is found (the strict loader's home).
+/// The recipe workspace of a run (plan-gsa-isolation.md W3). Resolution:
+/// 1. `project` from the gsa.conf layers (dev/deployment override);
+/// 2. the cwd walk — deprecated (fixtures and dev checkouts still use it;
+///    a TTY run notes the deprecation, pipes stay byte-stable);
+/// 3. the canonical store `<state-dir>/recipes` (gsa-owned, fetched by
+///    `gsa -Sy` or — for mutating runs — on demand).
+/// `fetch` enables that on-demand store fetch; read paths pass `false`.
 fn find_root() -> Option<PathBuf> {
+    resolve_root(false).ok()
+}
+
+pub(crate) fn resolve_root(fetch: bool) -> Result<PathBuf, String> {
+    let cfg = gsa_model::config::load()?;
+    if let Some(project) = &cfg.project {
+        return Ok(project.clone());
+    }
+    if let Some(root) = cwd_workspace() {
+        // Demoted, not removed (plan W3): cwd discovery stays for the
+        // fixture battery and dev checkouts. The note is TTY-only —
+        // fixtures capture combined output and assert on its text.
+        use std::io::IsTerminal;
+        if std::io::stderr().is_terminal() {
+            eprintln!(
+                "gsa: note: workspace discovered from cwd (deprecated) — set `project` in gsa.conf or run `sudo gsa -Sy` to use the recipe store"
+            );
+        }
+        return Ok(root);
+    }
+    let state = gsa_model::config::resolve_state_dir(None)?;
+    let store = gsa_state::recipes::store_dir(&state);
+    if store.join("config").join("topology.conf").is_file() {
+        return Ok(store);
+    }
+    if fetch {
+        let url = cfg
+            .recipe_url
+            .clone()
+            .unwrap_or_else(|| gsa_model::config::DEFAULT_RECIPE_URL.to_string());
+        let (store, head) = gsa_state::recipes::fetch(&state, &url)?;
+        eprintln!("gsa: recipe store fetched: {} at {head}", store.display());
+        return Ok(store);
+    }
+    Err("cannot find a recipe workspace: set `project` in gsa.conf, run inside the recipe repository, or fetch the store with `sudo gsa -Sy`".to_string())
+}
+
+/// The pre-W3 discovery: walk up from the current directory until
+/// `config/topology.conf` is found (the strict loader's home).
+fn cwd_workspace() -> Option<PathBuf> {
     let mut dir = std::env::current_dir().ok()?;
     loop {
         if dir.join("config").join("topology.conf").is_file() {

@@ -34,13 +34,10 @@ pub fn run_fetch_only(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write
         return 2;
     }
     // ── workspace, topology, selection (usage class: rc 2) ────────────────
-    let root = match crate::find_root() {
-        Some(root) => root,
-        None => {
-            let _ = writeln!(
-                err,
-                "gsa: cannot find config/topology.conf from the current directory upward (run inside the recipe repository)"
-            );
+    let root = match crate::resolve_root(true) {
+        Ok(root) => root,
+        Err(message) => {
+            let _ = writeln!(err, "gsa: {message}");
             return 2;
         }
     };
@@ -145,7 +142,8 @@ pub fn run_fetch_only(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write
             selection.listed.len()
         );
         // A dry-run record mutates nothing: emit renders it, never stores it.
-        record::emit_machine_record(out, &record, &crate::install::state_dir_of(inv), err);
+        let rec_state = crate::install::record_state_dir(inv, err);
+        record::emit_machine_record(out, &record, &rec_state, err);
         return outcome.rc;
     }
 
@@ -186,7 +184,8 @@ pub fn run_fetch_only(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write
         &outcome,
     );
     let _ = write!(out, "{}", render::render_fetch_prose(&results));
-    record::emit_machine_record(out, &record, &crate::install::state_dir_of(inv), err);
+    let rec_state = crate::install::record_state_dir(inv, err);
+        record::emit_machine_record(out, &record, &rec_state, err);
     outcome.rc
 }
 

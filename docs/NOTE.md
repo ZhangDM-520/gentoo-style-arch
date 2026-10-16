@@ -1,3 +1,62 @@
+## 2026-10-16 — restructure waves W2+W3: the `gsa.conf` surface and the canonical recipe store; plus the W1 unsettled-facts audit
+
+**What landed (plan-gsa-isolation.md W2+W3).** The restructure's middle waves,
+each independently verified. **W2 config surface:** `gsa_model::config` auto-reads
+`/etc/gsa.conf` then `~/.config/gsa/gsa.conf` (user over system over built-ins),
+keys `project`/`recipe_url`/`build_dir`/`state_dir`, strict parse that names
+file:line on an unknown key (a typo'd key must never silently mean "default"),
+`~` expanding to the build user's home (SUDO_UID's passwd home under sudo).
+`GSA_ENV`-style hermetic control: `GSA_CONF` replaces both layers with exactly
+one file (fixture vocabulary, like `GSA_STATE_DIR`; ENV_ROSTER 8→9). State-root
+resolution is now one seam everywhere: `--state-dir` > `GSA_STATE_DIR` > user
+config > system config > `/var/lib/gsa` (build.rs/install.rs deduplicated;
+record emission stays best-effort with a loud note). **W3 canonical recipe
+store:** `gsa_state::recipes` owns `<state-dir>/recipes` — clone-on-demand and
+`fetch origin HEAD` + hard reset (the store is never hand-edited), `GIT_CONFIG_COUNT=0`,
+`recipes.last-fetch` stamp. Resolution (`resolve_root`): `project` config > the
+cwd walk > the store; mutating entries fetch the store on demand when nothing
+else resolves, `-Sy` refreshes it in place (or notes a `project` override /
+non-store workspace). The cwd walk is *demoted, not removed*: a TTY run notes
+the deprecation, pipes stay byte-stable — the fixture battery captures combined
+output and asserts on its text, so removal needs a fixture replacement first.
+
+**W1 audit — unsettled facts settled.** (1) Plan imprecision: `-Mi` is read by
+default and mutating only with `--prune`/`--backfill` (contract §B.7); the
+code's flag-based split was right, the plan's flat "-Mi mutating" is wrong.
+(2) Plan test-plan (e) (shim flock against root-owned locks) is covered by
+`tests/pacman-mutex-shim.sh`, not `gsa-privilege.sh`. (3) Test-plan (c)'s banner
+assertion was MISSING — pinned now (`tests/gsa-privilege.sh` section g: real
+`sudo gsa -B`, exactly one banner line + dropped uid; its cache-placement half
+belongs to W4's `build_dir`). (4) Locked decision 1 holds: no `--state-dir`
+escape hatch (the gate fires before any state write). (5) Naming: the plan's
+`gsa-build::priv` landed as `gsa-model::privilege`. (6) Plan drift: "battery 65"
+→ 67 fixtures now.
+
+**Design decisions (deliberate, for the record).** The plan's fifth config key
+group ("defaults") is NOT implemented: `build-defaults.conf` already owns
+project defaults and a second surface for the same knobs is a trap. The store
+follows `resolve_state_dir(None)` (env/config/default) while `--state-dir`
+stays the runtime-state override — fixtures point `GSA_STATE_DIR` at scratch
+for hermetic store tests. `recipe_url`'s built-in default is the recipe
+repository's origin.
+
+**Validation.** `cargo test` green (gsa-cli 42, gsa-model 19+19 incl. 6 new
+config tests, gsa-state 2+); new `tests/gsa-store-v2.sh` (three sections:
+fetch-on-demand + in-place refresh following an upstream move with the
+announced HEAD matching upstream; `project` config beats cwd; the deprecation
+note never reaches a pipe) green standalone; fixture battery **67/67 PASS**.
+Parser facts that bit the fixture: the family token comes first
+(`-B --dry-run`, never `--dry-run -B`) and `--no-sync` is build-run-only
+(the deferral message names the family that owns it).
+
+**Durable rules.** (1) gsa.conf keys are fail-closed: unknown key = error
+naming file:line; precedence is user > system > built-in, with `--state-dir` >
+`GSA_STATE_DIR` > config > `/var/lib/gsa` for the state root. (2) The recipe
+store is `<state-dir>/recipes`, root-fetched from `recipe_url` and never
+hand-edited; `-Sy` refreshes it; `project` config supersedes it (dev checkouts
+are edit-only). (3) A deprecation note that a fixture would capture must be
+TTY-only; fixture assertions read combined stdout+stderr.
+
 ## 2026-10-16 — wave-11 burn-down: twelve tail recipes close twelve rows — one trim-beats-declare variant, one dual-generation straggler, one upstream-route park
 
 **Symptom / root cause.** The w10C remainder (53 rows) split into 40
