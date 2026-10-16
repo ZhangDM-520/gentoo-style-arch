@@ -1492,10 +1492,10 @@ pub fn vcs_source_sum(recipe_dir: &Path, entry: &SourceEntry, alg: &str) -> VcsS
     // the URL spelling — try both (2026-09-30).
     let stripped = name.strip_suffix(".git").unwrap_or(&name).to_string();
     let mut roots = vec![recipe_dir.to_path_buf()];
-    if let Some(srcdest) = std::env::var_os("SRCDEST") {
-        if !srcdest.is_empty() {
-            roots.push(PathBuf::from(srcdest));
-        }
+    // The resolved SRCDEST (the build user's makepkg.conf), never the raw
+    // env alone — see `gsa_model::config::resolve_srcdest`.
+    if let Some(srcdest) = gsa_model::config::resolve_srcdest() {
+        roots.push(srcdest);
     }
     let mut repo = None;
     'outer: for root in &roots {
@@ -2563,7 +2563,15 @@ pub fn anchor_sums(
     }
 
     tx.mark_dirty();
-    let upd = match Command::new("updpkgsums").current_dir(&info.dir).output() {
+    // Build-side command (the makepkg family): under a root supervisor this
+    // is dropped to the build user like every other one — updpkgsums runs
+    // makepkg internally and REFUSES root (2026-10-16 smoke: the plain spawn
+    // ran as root and fzf deferred anchoring-refused on makepkg's root
+    // refusal).
+    let upd = match gsa_model::privilege::build_command("updpkgsums")
+        .current_dir(&info.dir)
+        .output()
+    {
         Ok(o) => o,
         Err(e) => {
             let restored = tx.restore();
@@ -2710,12 +2718,12 @@ fn locate_fetched(recipe_dir: &Path, file: &str) -> Option<PathBuf> {
     if p.is_file() {
         return Some(p);
     }
-    if let Some(srcdest) = std::env::var_os("SRCDEST") {
-        if !srcdest.is_empty() {
-            let p = PathBuf::from(srcdest).join(file);
-            if p.is_file() {
-                return Some(p);
-            }
+    // The resolved SRCDEST (the build user's makepkg.conf), never the raw
+    // env alone — see `gsa_model::config::resolve_srcdest`.
+    if let Some(srcdest) = gsa_model::config::resolve_srcdest() {
+        let p = srcdest.join(file);
+        if p.is_file() {
+            return Some(p);
         }
     }
     None

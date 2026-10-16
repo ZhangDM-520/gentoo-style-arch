@@ -1035,8 +1035,28 @@ pub fn vcs_source_checkout(recipe_dir: &Path, entry: &str) -> Option<PathBuf> {
     if let Some(stripped) = name.strip_suffix(".git") {
         names.push(stripped.to_string());
     }
-    for root in [recipe_dir.join("src"), recipe_dir.to_path_buf()] {
-        for candidate_name in &names {
+    let mut roots = vec![recipe_dir.join("src"), recipe_dir.to_path_buf()];
+    // W4's build cache (makepkg `BUILDDIR`): the checkout lives at
+    // `<builddir>/<pkgbase>/src/<name>` and never beside the recipe any more
+    // (2026-10-16 smoke: the freshness baseline recorded "missing local
+    // checkout" while the checkout sat in the cache). Any pkgbase qualifies:
+    // the source name is the discriminator.
+    if let Ok(layout) =
+        gsa_model::config::load().and_then(|c| gsa_model::config::build_layout(&c))
+    {
+        if let Ok(entries) = std::fs::read_dir(&layout.builddir) {
+            for pkgbase in entries.flatten() {
+                roots.push(pkgbase.path().join("src"));
+            }
+        }
+    }
+    find_checkout(&roots, &names)
+}
+
+/// The pure lookup over prepared roots (testable without process env).
+fn find_checkout(roots: &[PathBuf], names: &[String]) -> Option<PathBuf> {
+    for root in roots {
+        for candidate_name in names {
             let candidate = root.join(candidate_name);
             if candidate.is_dir() {
                 return Some(candidate);
@@ -1044,6 +1064,31 @@ pub fn vcs_source_checkout(recipe_dir: &Path, entry: &str) -> Option<PathBuf> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod checkout_tests {
+    use super::*;
+
+    #[test]
+    fn find_checkout_walks_roots_and_both_name_spellings() {
+        let tmp = std::env::temp_dir().join(format!(
+            "gsa-checkout-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        // The W4 layout: <builddir>/<pkgbase>/src/<stripped-name>.
+        let cache_src = tmp.join("build").join("demo").join("src").join("demo");
+        std::fs::create_dir_all(&cache_src).unwrap();
+        let roots = vec![tmp.join("recipe").join("src"), tmp.join("build").join("demo").join("src")];
+        let names = vec!["demo.git".to_string(), "demo".to_string()];
+        assert_eq!(find_checkout(&roots, &names), Some(cache_src));
+        assert_eq!(find_checkout(&[tmp.join("nowhere")], &names), None);
+        std::fs::remove_dir_all(&tmp).unwrap();
+    }
 }
 
 /// The revision one local checkout was built at (fish `vcs_local_revision`),

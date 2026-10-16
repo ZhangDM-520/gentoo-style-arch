@@ -78,52 +78,10 @@ pub fn find_root(start: &Path) -> Option<PathBuf> {
 /// the fetch child then skips quarantine and says so loudly rather than
 /// touching recipe directories (contract §D.1: the child touches only the
 /// shared source cache).
+/// The makepkg `SRCDEST` seam — one resolution lives in `gsa-model::config`
+/// (the build user's makepkg.conf, never the raw env alone).
 pub fn resolve_srcdest() -> Option<PathBuf> {
-    if let Ok(dir) = std::env::var("SRCDEST") {
-        if !dir.is_empty() {
-            return Some(PathBuf::from(dir));
-        }
-    }
-    for conf in [home_conf(), Some(PathBuf::from("/etc/makepkg.conf"))] {
-        let Some(conf) = conf else { continue };
-        if let Ok(content) = std::fs::read_to_string(&conf) {
-            if let Some(dir) = simple_assign(&content, "SRCDEST") {
-                return Some(PathBuf::from(dir));
-            }
-        }
-    }
-    None
-}
-
-fn home_conf() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".makepkg.conf"))
-}
-
-/// One `NAME=value` assignment from a makepkg.conf-style file: uncommented
-/// lines only, first occurrence, surrounding quotes stripped.
-fn simple_assign(content: &str, name: &str) -> Option<String> {
-    for raw in content.lines() {
-        let line = raw.trim();
-        if line.starts_with('#') {
-            continue;
-        }
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-        if key.trim() != name {
-            continue;
-        }
-        let value = value.trim();
-        let value = value
-            .strip_prefix('\'')
-            .and_then(|v| v.strip_suffix('\''))
-            .or_else(|| value.strip_prefix('"').and_then(|v| v.strip_suffix('"')))
-            .unwrap_or(value);
-        if !value.is_empty() {
-            return Some(value.to_string());
-        }
-    }
-    None
+    gsa_model::config::resolve_srcdest()
 }
 
 #[repr(C)]

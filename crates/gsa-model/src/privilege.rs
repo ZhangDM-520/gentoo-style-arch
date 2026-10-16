@@ -5,7 +5,9 @@
 //! runs in the **build-user domain**. Under `sudo` the build user is
 //! `SUDO_UID`/`SUDO_GID`; the drop goes through `setpriv` so the environment
 //! survives intact — stub `PATH`s in fixtures, `GSA_BUILD_JOBS`, `MAKEFLAGS`,
-//! `SRCDEST` all reach the dropped command unchanged.
+//! `SRCDEST` all reach the dropped command unchanged — EXCEPT the identity
+//! vars (`HOME`/`USER`/`LOGNAME`), which follow the drop (a leaked root `HOME`
+//! sent cargo to `/root/.cargo`, 2026-10-16 smoke).
 //!
 //! A bare root shell has no build user: build-touching verbs are refused there
 //! (the CLI gate owns that message) and this module never improvises a user.
@@ -77,7 +79,22 @@ pub fn build_command<S: AsRef<OsStr>>(program: S) -> Command {
         .arg(bu.gid.to_string())
         .arg("--init-groups")
         .arg(inner);
+    drop_identity_env(&mut wrapped, &bu, crate::config::build_user_home().ok());
     wrapped
+}
+
+/// Identity follows the drop; everything else survives it. The root
+/// supervisor's `HOME`/`USER`/`LOGNAME` leak otherwise — 2026-10-16 smoke:
+/// the dropped makepkg kept `HOME=/root`, so cargo wrote to `/root/.cargo`
+/// and `~/.makepkg.conf` (the user's `SRCDEST`) was never read. PATH,
+/// `GSA_*`, `MAKEFLAGS`, `SRCDEST`, fixture stubs and the rest pass through
+/// unchanged (the module contract above).
+fn drop_identity_env(cmd: &mut Command, bu: &BuildUser, home: Option<std::path::PathBuf>) {
+    if let Some(home) = home {
+        cmd.env("HOME", home);
+    }
+    cmd.env("USER", &bu.name);
+    cmd.env("LOGNAME", &bu.name);
 }
 
 /// One banner line for a privileged run (the "transparent handle"): who the
@@ -127,6 +144,7 @@ fn own_recursive(path: &Path, bu: &BuildUser) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
 
     #[test]
     fn build_user_parses_the_sudo_triplet_and_defaults_the_name() {
@@ -155,6 +173,29 @@ mod tests {
         // The test binary is never root, so no wrap may happen here.
         let cmd = build_command("makepkg");
         assert_eq!(cmd.get_program(), OsStr::new("makepkg"));
+    }
+
+    #[test]
+    fn drop_identity_moves_home_and_login_to_the_build_user() {
+        let bu = BuildUser {
+            uid: 1000,
+            gid: 1000,
+            name: "builder".into(),
+        };
+        let mut cmd = Command::new("makepkg");
+        cmd.env("MAKEFLAGS", "-j2"); // caller env must survive
+        drop_identity_env(&mut cmd, &bu, Some(std::path::PathBuf::from("/home/builder")));
+        let env: Vec<(OsString, OsString)> = cmd.get_envs().map(|(k, v)| {
+            (
+                k.to_os_string(),
+                v.map(|v| v.to_os_string()).unwrap_or_default(),
+            )
+        }).collect();
+        assert!(env.contains(&(OsString::from("HOME"), OsString::from("/home/builder"))));
+        assert!(env.contains(&(OsString::from("USER"), OsString::from("builder"))));
+        assert!(env.contains(&(OsString::from("LOGNAME"), OsString::from("builder"))));
+        assert!(env.contains(&(OsString::from("MAKEFLAGS"), OsString::from("-j2"))),
+            "non-identity env must survive the drop");
     }
 
     #[test]

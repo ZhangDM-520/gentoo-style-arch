@@ -200,6 +200,56 @@ pub fn build_user_home() -> Result<PathBuf, String> {
     Err("no home directory: neither SUDO_UID nor HOME is set — set HOME or run via sudo".to_string())
 }
 
+/// The makepkg `SRCDEST` of the build domain: the `SRCDEST` env (explicit
+/// and fixture control) beats the BUILD USER's `~/.makepkg.conf` beats
+/// `/etc/makepkg.conf`. Engine-side lookups must resolve through this, never
+/// the raw env alone — under a root supervisor `SRCDEST` is not in the
+/// environment at all and lives in the user's makepkg.conf (2026-10-16
+/// smoke: the checkout was invisible and the anchor deferred
+/// source-unfetchable), and `$HOME` there is root's (same
+/// identity-follows-the-drop rule as `privilege::drop_identity_env`).
+pub fn resolve_srcdest() -> Option<PathBuf> {
+    if let Ok(dir) = std::env::var("SRCDEST") {
+        if !dir.is_empty() {
+            return Some(PathBuf::from(dir));
+        }
+    }
+    for conf in [
+        build_user_home().ok().map(|home| home.join(".makepkg.conf")),
+        Some(PathBuf::from("/etc/makepkg.conf")),
+    ] {
+        let Some(conf) = conf else { continue };
+        if let Ok(content) = std::fs::read_to_string(&conf) {
+            if let Some(dir) = makepkg_conf_assign(&content, "SRCDEST") {
+                return Some(PathBuf::from(dir));
+            }
+        }
+    }
+    None
+}
+
+/// One `NAME=value` assignment from a makepkg.conf-shaped file (comments and
+/// shell quoting tolerated enough for the path-valued keys we read).
+fn makepkg_conf_assign(content: &str, name: &str) -> Option<String> {
+    for raw in content.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if key.trim() != name {
+            continue;
+        }
+        let value = value.trim().trim_matches(|c| c == '"' || c == '\'');
+        if !value.is_empty() {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
 /// Load both layers, user over system over built-ins. Missing files are
 /// fine (the layer simply contributes nothing); malformed files fail loud.
 /// `GSA_CONF` (fixture/hermetic control, like `GSA_STATE_DIR`) replaces the
@@ -259,6 +309,16 @@ mod tests {
 
     fn home() -> PathBuf {
         PathBuf::from("/home/u")
+    }
+
+    #[test]
+    fn makepkg_conf_assign_reads_quoted_path_values() {
+        assert_eq!(
+            makepkg_conf_assign("# comment\nSRCDEST = \"/x/y\"\n", "SRCDEST"),
+            Some("/x/y".to_string())
+        );
+        assert_eq!(makepkg_conf_assign("SRCDEST=\n", "SRCDEST"), None);
+        assert_eq!(makepkg_conf_assign("PKGDEST=/z\n", "SRCDEST"), None);
     }
 
     #[test]

@@ -1,3 +1,69 @@
+## 2026-10-16 — real-system smoke (external build drive, installed engine): the scheduler and record are sound; the drop leaked root identity twice and SRCDEST was invisible engine-side — three bugs, all fixed red-first
+
+**Scope and setup (plan-gsa-isolation.md's first real-world smoke after the
+restructure).** `/dev/sda` (external f2fs build drive) mounted via
+`udisksctl`; its checkout (`…/Workspace/gentoo-style-arch` — the `Worspace`
+typo renamed this session) pulled to `e6b490b` (769-entry uncommitted drift
+stashed as `stash@{0}` plus `~/Workspace/external-gsa-{drift,untracked}-20261016.*`
+backups — the drift was older-era WIP superseded upstream). `gsa-pm` rebuilt
+via plain `makepkg` from its recipe (pin refreshed `ed4eea2`→`e6b490b` +
+pkgver/.SRCINFO per the recipe's own bump contract) and installed with
+`pacman -U`. `~/.config/gsa/gsa.conf` sets `build_dir` on the external disk —
+the W2 config surface in real use. Per owner instruction the smoke's scope is
+gsa itself: any recipe/ABI-side failure would be recorded here and queued;
+**no non-gsa failure occurred, nothing to queue**.
+
+**What is verified working (green).** Consumer expansion and build order
+(`gsa -B --dry-run ripgrep` → `ripgrep, ripgrep-all, shelly`), core-runs-alone
+(ripgrep alone at `-j4`, then both consumers parallel), cone-stop parking of
+consumers on failure with rc 4, the `format: 2` run record and continuation,
+`--dry-run` statelessness, the build cache on the external disk (archives in
+`<build_dir>/pkgs/`, build-user-owned, never beside the recipe), the binpkg
+index incl. split outputs (`shelly` → 2 rows), `-U`'s single-transaction
+install + IgnorePkg registration + QA report, and `-S`'s version-sync →
+re-anchor → verified-against-fetched-bytes → build → install chain (`fzf`
+0.74.4→0.74.5 re-anchored to the official checksums, built, installed,
+indexed; a `--no-sync` rebuild recorded the VCS freshness baseline cleanly).
+
+**Bug 1 — root `HOME` leaked through the W1 drop (gsa's blame; red-first).**
+The dropped makepkg kept `HOME=/root`: cargo wrote `/root/.cargo` (Permission
+denied) and `~/.makepkg.conf` (the user's `SRCDEST`) was never read —
+`gsa -B ripgrep` failed build-failed in 10s. Fix:
+`gsa_model::privilege::drop_identity_env` — `HOME`/`USER`/`LOGNAME` follow the
+drop, everything else (PATH, `GSA_*`, `MAKEFLAGS`, fixture stubs) survives.
+Pinned by `tests/gsa-privilege.sh` section c (the stub now logs `HOME`;
+asserted red on the old engine with `HOME=/root want /home/zhangdm`).
+
+**Bug 2 — `updpkgsums` spawned plainly (gsa's blame; red-first).**
+`gsa-recipe::sync`'s anchor step called `Command::new("updpkgsums")` instead of
+`build_command`; under root its internal makepkg refused ("Running makepkg as
+root is not allowed") and fzf deferred `anchoring-refused` — the deferral
+vocabulary itself was correct. Fix: the drop at the call site. Pinned by
+`tests/gsa-sync-v2.sh`'s stub, which now models real updpkgsums' root refusal
+(red on the old engine, green on the fixed one).
+
+**Bug 3 — SRCDEST invisible engine-side (gsa's blame; W4a/W3 seam).**
+`vcs_source_sum`/`locate_fetched` looked only at the `SRCDEST` ENV VAR (never
+`~/.makepkg.conf`, where it actually lives) and `gsa-fetch::resolve_srcdest`
+read root's `~/.makepkg.conf` under sudo: the cached checkout was invisible
+and fzf deferred `source-unfetchable`. The one true resolution now lives in
+`gsa_model::config::resolve_srcdest` (env > build user's makepkg.conf >
+`/etc/makepkg.conf`) and every lookup delegates. Plus a W4a regression in the
+freshness baseline: `vcs_source_checkout` searched `recipe_dir/src` only,
+while makepkg's src trees moved to `<build_dir>/<pkgbase>/src` — the baseline
+noted "missing local checkout" on every VCS build (advisory, but it degrades
+`--skip` freshness evidence). It now walks the cache layout too (pure
+`find_checkout` unit-pinned).
+
+**Durable rules.** (1) Identity follows the drop everywhere: any build-side
+command AND any engine-side path resolution that means "the build user's
+home/makepkg.conf" — `$HOME` and the `SRCDEST` env var are never the truth
+under a root supervisor. (2) A build-side tool that runs makepkg internally
+(updpkgsums, and anything new) must go through `build_command`, never plain
+`Command::new`. (3) Source-location lookups must follow the W4 layout: the
+recipe dir is legacy; `<build_dir>/<pkgbase>/src` and the resolved SRCDEST are
+the live homes.
+
 ## 2026-10-16 — restructure waves W4c+W4d: standalone-PKGBUILD target input (stage → build → index) and the contract amendments — plan complete
 
 **What landed (plan-gsa-isolation.md W4, second half — the plan is now

@@ -211,6 +211,13 @@ write_stub_updpkgsums() {
     cat >"$1/bin/updpkgsums" <<'EOF'
 #!/usr/bin/env bash
 set -u
+# Real updpkgsums runs makepkg and REFUSES root: model it, so any engine
+# that leaks root into this build-side command turns every section red
+# (the drop contract — 2026-10-16 smoke, fzf anchoring-refused on root).
+if [ "$(id -u)" = 0 ]; then
+    echo "ERROR: Running makepkg as root is not allowed" >&2
+    exit 1
+fi
 cp "${GSA_FAKE_SYNC_PAYLOAD:?}" "$PWD/${GSA_FAKE_SYNC_STAGED_NAME:?}" || exit 1
 sum=$(sha256sum "$PWD/${GSA_FAKE_SYNC_STAGED_NAME}") || exit 1
 sum=${sum%% *}

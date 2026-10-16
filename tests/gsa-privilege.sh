@@ -112,14 +112,15 @@ PKGB
             >"$ws/packages/misc/pkg1/.SRCINFO"
 }
 
-# make_stubs DIR — stub `makepkg` that records the uid it runs as (the drop
-# is the subject of section c) and always succeeds.
+# make_stubs DIR — stub `makepkg` that records the uid and HOME it runs as
+# (the drop is the subject of section c; the identity env must follow it) and
+# always succeeds.
 make_stubs() {
     local dir=$1
     mkdir -p "$dir"
     cat >"$dir/makepkg" <<'STUB'
 #!/usr/bin/env bash
-printf 'uid=%s argv=%s\n' "$(id -u)" "$*" >>"${GSA_FAKE_MAKEPKG_LOG:?}"
+printf 'uid=%s home=%s argv=%s\n' "$(id -u)" "$HOME" "$*" >>"${GSA_FAKE_MAKEPKG_LOG:?}"
 # W4: the engine passes PKGDEST (the build-user cache); honour it like real
 # makepkg does so fixtures can assert the archive location.
 id=$(basename "$PWD")
@@ -185,6 +186,12 @@ if [ -z "$only" ] || [ "$only" = c ]; then
         want=$(id -u)
         got=$(sed -n 's/^uid=\([0-9]*\).*/\1/p' "$log" | head -1)
         [ "$got" = "$want" ] || fail "c: makepkg ran as uid=$got want $want (the drop is broken)"
+        # Identity follows the drop (2026-10-16 smoke: a leaked root HOME
+        # sent cargo to /root/.cargo): HOME is the build user's home.
+        want_home=$(getent passwd "$want" | cut -d: -f6)
+        got_home=$(sed -n 's/^uid=[0-9]* home=\([^ ]*\).*/\1/p' "$log" | head -1)
+        [ "$got_home" = "$want_home" ] ||
+            fail "c: makepkg ran with HOME=$got_home want $want_home (identity must follow the drop)"
     )
 fi
 

@@ -1299,16 +1299,22 @@ retired: frozen verbatim under `tests/assets/` (`build-all.fish` +
 retirement shim that prints the §B.9 migration table and exits non-zero
 running nothing (§6, 2026-10-14 cutover).
 
-Privilege model (W1, contract §B.10; 2026-10-15): mutating verbs require root
-(rc 3 otherwise); a privileged run is a root supervisor that drops EVERY
-build-side child — lane makepkg and the fetch half's `makepkg --verifysource`
-alike — to the sudo build user through
+Privilege model (W1, contract §B.10; 2026-10-15, amended 2026-10-16 after the
+real-system smoke): mutating verbs require root (rc 3 otherwise); a privileged
+run is a root supervisor that drops EVERY build-side child — lane makepkg and
+the fetch half's `makepkg --verifysource` alike — to the sudo build user through
 `gsa_model::privilege::build_command` (the `setpriv` wrap), while a bare root
 shell (`SUDO_*` absent) refuses build runs with guidance. A new build-side
 command must be constructed through `build_command`, never plain
 `Command::new`: the fetch half leaked root exactly that way until
 `gsa-privilege.sh` section f pinned the drop (red-first on the unfixed
-binary).
+binary), and `updpkgsums` repeated it (smoke 2026-10-16). **Identity follows
+the drop**: `HOME`/`USER`/`LOGNAME` are the build user's
+(`privilege::drop_identity_env`) and every engine-side "build user's home /
+makepkg.conf / SRCDEST" resolution goes through `gsa_model::config`
+(`build_user_home`, `resolve_srcdest`) — under sudo the raw `$HOME` is root's
+and the `SRCDEST` env var is empty; trusting either hid the user's cache
+(cargo → `/root/.cargo`; anchor deferrals) until the smoke exposed it.
 
 Config + store (W2/W3, plan-gsa-isolation.md; 2026-10-16): `gsa.conf` layers
 auto-read `/etc/gsa.conf` then `~/.config/gsa/gsa.conf` (user > system >
@@ -1330,7 +1336,10 @@ passed by the engine and land in the build user's cache — `GSA_BUILD_DIR` env
 `makepkg.conf` untouched. Archive discovery scans `PKGDEST` plus the recipe
 dir (the pre-W4 location fixture stubs still write to) and every candidate is
 matched by `.PKGINFO`/output-name truth, so a shared `PKGDEST` can never hand
-over another recipe's archive. Fixtures route `GSA_BUILD_DIR` into `$TMPDIR`
+over another recipe's archive. Source-checkout lookups (the VCS freshness
+baseline) walk `<build_dir>/<pkgbase>/src` too — the recipe dir stopped being
+makepkg's work area the moment `BUILDDIR` moved (2026-10-16 smoke). Fixtures
+route `GSA_BUILD_DIR` into `$TMPDIR`
 (rr-v2's guard + `run-all.sh` export) — an engine run must never create real
 home directories.
 
