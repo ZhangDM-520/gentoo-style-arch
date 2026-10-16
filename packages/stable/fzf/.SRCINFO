@@ -1,6 +1,6 @@
 pkgbase = fzf
 	pkgdesc = Command-line fuzzy finder
-	pkgver = 0.74.4
+	pkgver = 0.74.5
 	pkgrel = 1.1
 	url = https://github.com/junegunn/fzf
 	arch = x86_64
@@ -14,9 +14,9 @@ pkgbase = fzf
 	optdepends = vim: plugin
 	optdepends = zsh: zsh keybindings
 	options = !lto
-	source = git+https://github.com/junegunn/fzf.git#tag=v0.74.4?signed
+	source = git+https://github.com/junegunn/fzf.git#tag=v0.74.5?signed
 	validpgpkeys = B5FB4AB5F32EC1A0C9DE9637254BC280FEF9C627
 	validpgpkeys = 23F9CCD32FBC4A8D4E822AB8D9770615D226D94C
-	sha256sums = 5ad68d4221cf133773e58fa583b927dd47df6ea7d414b2f804663dd72899adde
+	sha256sums = 4fe00f1c21e43db7d72d958f44bee32b51074d7ceacd3f384436227f835f3e71
 
 pkgname = fzf
