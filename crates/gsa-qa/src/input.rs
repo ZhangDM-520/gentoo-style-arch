@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use gsa_recipe::pkginfo::{read_pkginfo, Pkginfo};
+use gsa_recipe::pkginfo::{read_pkginfo, version_rank, Pkginfo};
 use gsa_recipe::{parse_srcinfo_rows, SrcinfoRows};
 
 /// One workspace recipe as the QA checks see it: its id and directory plus
@@ -158,6 +158,12 @@ pub fn collect_archives(recipes: &[QaRecipe], targets: &[String]) -> Vec<QaArchi
                 .unwrap_or(std::time::UNIX_EPOCH);
             by_name.push((pkginfo.pkgname.clone(), mtime, path, pkginfo));
         }
+        // Version-ranked, the same order install discovery uses (the
+        // wrong-skip fix): `vercmp` decides, version ties break to the
+        // newest mtime, and pairs `vercmp` cannot rank keep the mtime order
+        // — never string order. The mtime presort keeps ties deterministic.
+        by_name.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.2.cmp(&b.2)));
+        by_name.sort_by(|a, b| version_rank(&a.3.version, &b.3.version));
         // Complete set only: every expected name must answer (a recipe with
         // no expectations at all takes whatever is readable).
         if !expected.is_empty() {
@@ -169,10 +175,7 @@ pub fn collect_archives(recipes: &[QaRecipe], targets: &[String]) -> Vec<QaArchi
             }
         }
         for want in &expected {
-            let best = by_name
-                .iter()
-                .filter(|(name, ..)| name == want)
-                .max_by_key(|(_, mtime, ..)| *mtime);
+            let best = by_name.iter().find(|(name, ..)| name == want);
             if let Some((_, _, path, pkginfo)) = best {
                 out.push(QaArchive {
                     recipe_id: recipe.id.clone(),

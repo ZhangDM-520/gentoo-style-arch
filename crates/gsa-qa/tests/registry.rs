@@ -6,6 +6,7 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, UNIX_EPOCH};
 
 use gsa_qa::input::{collect_archives, load_workspace, QaArchive, QaInput, QaRecipe};
 use gsa_qa::{registry, CheckHandle, Severity};
@@ -92,6 +93,41 @@ impl Scratch {
         enc.finish().unwrap();
         path
     }
+
+    /// The same at an explicit full version (`pkgver-pkgrel` as makepkg
+    /// writes it) — version-ranking fixtures need two versions of one name.
+    fn archive_at_version(
+        &self,
+        recipe_id: &str,
+        pkgbase: &str,
+        pkgname: &str,
+        version: &str,
+    ) -> PathBuf {
+        let dir = self.root.join("packages").join(recipe_id);
+        let path = dir.join(format!("{pkgname}-{version}-any.pkg.tar.zst"));
+        let pkginfo =
+            format!("pkgbase = {pkgbase}\npkgname = {pkgname}\npkgver = {version}\narch = any\n");
+        let file = std::fs::File::create(&path).unwrap();
+        let enc = zstd::stream::write::Encoder::new(file, 0).unwrap();
+        let mut tar = tar::Builder::new(enc);
+        let mut header = tar::Header::new_gnu();
+        header.set_size(pkginfo.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        tar.append_data(&mut header, ".PKGINFO", pkginfo.as_bytes())
+            .unwrap();
+        let enc = tar.into_inner().unwrap();
+        enc.finish().unwrap();
+        path
+    }
+}
+
+fn set_mtime(path: &Path, seconds_after_epoch: u64) {
+    let file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+    file.set_times(
+        std::fs::FileTimes::new().set_modified(UNIX_EPOCH + Duration::from_secs(seconds_after_epoch)),
+    )
+    .unwrap();
 }
 
 /// A minimal section-less ELF64 image (ET_DYN) carrying exactly one
@@ -389,5 +425,29 @@ fn report_lines_render_the_prose_shape() {
             .iter()
             .any(|line| line.starts_with("purged-tools: viol: ")),
         "{lines:?}"
+    );
+}
+
+#[test]
+fn collect_archives_prefers_the_higher_version_over_the_newer_mtime() {
+    let scratch = Scratch::new("version-rank");
+    scratch.recipe(
+        "qafoo",
+        "pkgbase = qafoo\npkgname = qafoo\npkgver = 2.0\npkgrel = 1\n",
+    );
+    // The lower-version archive is the newer rebuild (mtime 200 vs 100):
+    // mtime ranking probes the shadow and misses the higher-version archive
+    // (the wrong-skip class). Version order decides; mtime breaks ties.
+    let low = scratch.archive_at_version("qafoo", "qafoo", "qafoo", "1.0-1");
+    set_mtime(&low, 200);
+    let high = scratch.archive_at_version("qafoo", "qafoo", "qafoo", "2.0-1");
+    set_mtime(&high, 100);
+
+    let workspace = load_workspace(&scratch.root).unwrap();
+    let archives = collect_archives(&workspace.recipes, &[]);
+    assert_eq!(archives.len(), 1);
+    assert_eq!(
+        archives[0].path, high,
+        "the higher version must win over the newer-mtime shadow"
     );
 }

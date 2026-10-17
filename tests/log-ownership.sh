@@ -70,8 +70,13 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/rr-v2.bash"
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-log-ownership.XXXXXX")
 # root-safe cleanup: engine state under $fixture is root-owned (W5 §B.10);
-# the poisoned log is immutable, so lift that first or rm cannot unlink it
-trap '/usr/bin/sudo -n chattr -R -i -- "$fixture" 2>/dev/null; /usr/bin/sudo -n rm -rf -- "$fixture" 2>/dev/null || rm -rf -- "$fixture" 2>/dev/null || true' EXIT
+# the poisoned log is immutable, so lift that first or rm cannot unlink it.
+# Symlinks go before the chattr sweep — chattr -R errors on a symlink
+# ("Operation not supported") and, under set -e inside the EXIT trap, that
+# error aborted the trap before the rm ever ran (2026-10-17: the symlinked-log
+# case leaves a symlink by design), leaking the whole fixture tree. Every trap
+# step is best-effort: cleanup must always reach the rm.
+trap '/usr/bin/sudo -n find "$fixture" -type l -delete 2>/dev/null || true; /usr/bin/sudo -n chattr -R -i -- "$fixture" 2>/dev/null || true; /usr/bin/sudo -n rm -rf -- "$fixture" 2>/dev/null || rm -rf -- "$fixture" 2>/dev/null || true' EXIT
 
 fail() {
     printf 'log-ownership: %s\n' "$1" >&2
@@ -206,6 +211,74 @@ EOF
     fi
     if ! grep -qF -- "$log" <<<"$FIXTURE_OUTPUT"; then
         fail "the seam diagnostic does not name the preserved log path" "$FIXTURE_OUTPUT"
+    fi
+)
+
+# ─── symlinked log: the gate refuses redirection, the append never follows ──
+# §J.5 hardening (red-first, 2026-10-17): the write-time gate used to stat
+# THROUGH the path (std::fs::metadata follows symlinks) and the caller then
+# opened the path again — a symlink at the log path passed the gate and every
+# append landed in the TARGET. The gate is now fd-based (open O_NOFOLLOW +
+# fstat), so a symlink is refused before anything writes through it. The
+# refusal is a refusal, not a quarantine: the log path is same-owner, so rule
+# 19's wrong-owner `.stale.*` remedy does not apply — the lane fails closed
+# (`log-unwritable`) and both the symlink and its target survive byte-for-byte
+# as forensics.
+(
+    set -euo pipefail
+    dir="$fixture/symlinked"
+    make_case_workspace "$dir"
+    mkdir -p "$dir/state/logs" "$dir/seam"
+    target="$dir/state/logs/p1.target"
+    sentinel='SENTINEL symlink target, never written through'
+    printf '%s\n' "$sentinel" >"$target"
+    ln -s "$target" "$dir/state/logs/p1.log"
+    # The run is a root-mode run (W5): make the symlink and its target
+    # run-user-owned, so the OLD gate's followed stat saw a passing uid and
+    # the append landed in the target — that is the red this case captures.
+    /usr/bin/sudo -n chown -h root:root "$dir/state/logs/p1.log"
+    /usr/bin/sudo -n chown root:root "$target"
+
+    export PATH="$dir/bin:$PATH"
+    export GSA_CPU_THREADS=8 GSA_MEMORY_GIB=16
+    export GSA_STATE_DIR="$dir/state"
+    run_engine "$dir" --lane-job p1 "$dir/seam/p1.result" 2
+    output=$FIXTURE_OUTPUT
+    printf '%s\n' "$output" >"$dir/output.txt"
+    log="$dir/state/logs/p1.log"
+
+    # A lane child's exit code IS its outcome code (§G.2): the gate refusal is
+    # warn-only (rule 19), but the open attempt then fails, so the lane settles
+    # `failed … log-unwritable` (§H.3) and nothing is written.
+    if [[ $FIXTURE_RC != 1 ]]; then
+        fail "a refused symlinked log must settle the lane closed (rc 1), got $FIXTURE_RC" "$dir/output.txt"
+    fi
+    wire=$(cat "$dir/seam/p1.result" 2>/dev/null || true)
+    if [[ $wire != "v2 p1 1 0 log-unwritable" ]]; then
+        fail "want wire row 'v2 p1 1 0 log-unwritable' (§F.2/§H.3), got '$wire'" "$dir/output.txt"
+    fi
+    # The gate must REPORT the redirection — a silent pass is the red.
+    if ! grep -qF -- "symlink" <<<"$output"; then
+        fail "the gate refusal does not name the symlink:" "$dir/output.txt"
+    fi
+    if ! grep -qF -- "$log" <<<"$output"; then
+        fail "the gate refusal does not name the log path:" "$dir/output.txt"
+    fi
+    # The append must NOT have followed the symlink: the target keeps its
+    # sentinel byte-for-byte (RED before the fix: build output landed in it).
+    if ! printf '%s\n' "$sentinel" | cmp -s - "$target"; then
+        fail "the append followed the log symlink into its target:" "$(cat "$target" 2>/dev/null)"
+    fi
+    # The symlink itself survives as a symlink (preserved forensics)…
+    if [[ ! -L "$log" ]]; then
+        fail "the log path stopped being a symlink (silently replaced?):" "$(ls -la "$dir/state/logs")"
+    fi
+    # …and a same-owner symlink is a REFUSAL, never rule 19's quarantine.
+    shopt -s nullglob
+    stale=("$dir"/state/logs/*.stale.*)
+    shopt -u nullglob
+    if ((${#stale[@]} != 0)); then
+        fail "a same-owner symlink must be refused, not quarantined:" "$(ls -la "$dir/state/logs")"
     fi
 )
 

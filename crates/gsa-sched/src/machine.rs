@@ -100,11 +100,23 @@ pub struct Machine {
 
 impl Machine {
     pub fn new(
-        nodes: Vec<Node>,
+        mut nodes: Vec<Node>,
         batches: Vec<Vec<usize>>,
         policy: Policy,
         lanes: usize,
     ) -> Machine {
+        // Coupled-batch policy must key off the batches table itself: the
+        // table is what callers compute from the topology tags, and a node
+        // whose `batch` index was left unfilled would silently escape its
+        // mate-parking duty (the park handshake then never reaches its
+        // in-flight lane at all).
+        for (batch, members) in batches.iter().enumerate() {
+            for &member in members {
+                if nodes[member].batch.is_none() {
+                    nodes[member].batch = Some(batch);
+                }
+            }
+        }
         let states = nodes
             .iter()
             .map(|node| {

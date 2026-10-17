@@ -172,14 +172,33 @@ given (behaviour kept). A `core` selection needs no special flag: `-S @core`
 installs as it builds; `-B @core` is a deliberate build-only choice whose
 archives are installed later by `-U`.
 
+*Amendment (2026-10-17, version-sync seam — sticky mixed state, honesty).*
+The rewrite is transactional per file (each publish is one tmp+mv), but the
+PKGBUILD and the committed `.SRCINFO` publish in two separate steps: a crash
+between the PKGBUILD publish and the `.SRCINFO` rename leaves a **sticky
+mixed state** — the PKGBUILD at the new version, the committed `.SRCINFO`
+still at the old one. A re-run does **not** repair it: the pass compares the
+PKGBUILD's own `pkgver`/`pkgrel` against the provider and short-circuits
+`NoChangeReason::Current` (`gsa-recipe::sync`) before any `.SRCINFO` work.
+The named repair is `makepkg --printsrcinfo` + manual re-anchor (rule 18's
+checksum anchor). A skew lint is explicitly out of scope.
+
 ### B.5 `-B` — build-only
 
 | Spelling | Action |
 | --- | --- |
-| `gsa -B <targets…> [ranges…]` | build the selection to archives beside their recipes; no install, no `pacman` call |
+| `gsa -B <targets…> [ranges…]` | build the selection to archives in the build cache (§J.2: `$GSA_BUILD_DIR` > config `build_dir` > `<build-user-home>/.cache/gsa`; the recipe dir is only the pre-W4 legacy scan fallback) — no install, no `pacman` call |
 | `gsa -Bl [targets…] [ranges…]` | same listing as `-Sl` (the listing is selection-shaped, not family-shaped) |
 
 Cluster letters: `c` = prune strength 1 first. Long modifiers as in B.6.
+
+*Amendment (2026-10-17, §B.5 archive location).* The row previously said
+"archives beside their recipes" — that is the pre-W4 layout, not the code.
+Code truth (`gsa-model::config::build_root`): `$GSA_BUILD_DIR` env > config
+`build_dir` > the build user's `~/.cache/gsa`, exactly as §J.2 already
+states; the recipe dir survives only as the pre-W4 legacy scan fallback in
+archive discovery (§J.2). Wording-only correction (§L.2: no `format:` bump);
+behaviour is pinned elsewhere, no fixture changes.
 
 ### B.6 `-U` — install from archives
 
@@ -201,17 +220,31 @@ refusal under `-S` (§E).
 | `gsa -Md [--fix]` | doctor: runtime-state reconciliation — log ownership, stale lane/run artifacts, pacman local-DB health report, binpkg index/`sha256+size` consistency, side-car rows with no pacman counterpart. Default reports; `--fix` applies the named repairs |
 | `gsa -Mi [--prune\|--backfill]` | IgnorePkg closure repair of the target `pacman.conf`: default reports drift; `--prune` removes stale entries; `--backfill` adds missing ones (today's hidden `--register-ignorepkg`) |
 | `gsa -Ml [--tail <ref>] [--keep N]` | per-package log browse/tail; `--keep N` is the log-retention prune |
-| `gsa -Mm` | mirrors: dedupe VCS source clones into canonical mirrors (today `--link-sources`). Interactive confirmation; must run as the build user, never under a root supervisor |
+| `gsa -Mm` | mirrors: dedupe VCS source clones into canonical mirrors (today `--link-sources`). Confirmation-gated, never prompts (§K.3): without `--noconfirm` it prints its plan/targets and stops rc 3 `confirmation-required`; must run as the build user, never under a root supervisor |
 | `gsa -Mc <targets…>` | prune strength 1: `src/`/`pkg/`/`build/` trees and archives of the selection (today `-c` as a wipe) |
 | `gsa -Mcc` | prune strength 2: every built archive in the workspace plus its VCS-revision sidecar; symlinks are never deleted or followed (today `-cc`) |
-| `gsa -Mccc` | prune strength 3: additionally remove pulled sources — source clones, downloaded tarballs (extension-matched to the root `.gitignore` set), staging dirs. Prints its target list and asks first (today `-ccc`) |
+| `gsa -Mccc` | prune strength 3: additionally remove pulled sources — source clones, downloaded tarballs (extension-matched to the root `.gitignore` set), staging dirs. Prints its target list and stops rc 3 `confirmation-required` without `--noconfirm` (today `-ccc`) |
 | `gsa -Ms [name…] [--add\|--remove <ref…>]` | named sets: list sets and members; manage user sets under `config/sets/`. Computed sets (`@preserved-rebuild`, `@stale`, `@live-rebuild`) are listed but not editable — **`@preserved-rebuild` is Phase 4** |
 | `gsa -Mw [--add\|--remove <ref…>]` | world: the explicitly wanted set. Default lists it; `--add`/`--remove` edit it (remove = deselect) |
 | `gsa -Mh [--prune] [--show <run-id>]` | run history: list recorded run records and their continuations; `--show` renders one; `--prune` enforces the bounded retention |
 
 The strength idiom `-Mc`/`-Mcc`/`-Mccc` is deliberately pacman's `-Sc`/`-Scc`
-cache-prune shape. `-Mm`, `-Mccc` and `-Mh --show` accept a confirmation or a
-`--dry-run` rendering of their targets before mutating.
+cache-prune shape. `-Mm` and `-Mccc` are confirmation-gated and **never
+prompt** (§K.3): without `--noconfirm` each prints its plan/targets and stops
+rc 3 `confirmation-required`; `--dry-run` renders the same targets at rc 0;
+`--noconfirm` applies. `-Mh --show` is a pure read — no confirmation, no gate.
+
+*Amendment (2026-10-17, §B.7 confirmation semantics).* The `-Mm` row
+("Interactive confirmation"), the `-Mccc` row ("asks first"), and the trailing
+line (`-Mm`, `-Mccc` and `-Mh --show` "accept a confirmation or a `--dry-run`
+rendering") all contradicted §K.3 and the code. Code truth
+(`gsa-cli::maint` MaintVerb::Mirrors / strength-≥3 Maintenance gates;
+`gsa-maint` `CONFIRMATION_REQUIRED` + `RC_REFUSAL` = 3): the engine never
+prompts (a TTY changes nothing) — without `--noconfirm` the verb prints its
+plan/targets and stops rc 3 `confirmation-required`; `--dry-run` renders at
+rc 0; `--noconfirm` applies. The gate covers `-Mm`/`-Mccc` only: `-Mh --show`
+is a pure read with no confirmation at all. Wording-only (§L.2); pinned by
+`tests/gsa-maint-v2.sh`, no fixture changes.
 
 ### B.8 Global long modifiers (combinable with the families that can act)
 
@@ -229,7 +262,8 @@ cache-prune shape. `-Mm`, `-Mccc` and `-Mh --show` accept a confirmation or a
 | `--lanes N\|auto`, `--jobs N\|auto`, `--intensity LEVEL` | parallelism overrides (kept; a flag beats its env twin) |
 | `--state-dir PATH` | state-root override (§J.3); flag beats `GSA_STATE_DIR` |
 | `--no-prefetch`, `--prefetch-ahead N` | advisory fetch-ahead window (default-on): `--no-prefetch` opts out, `--prefetch-ahead N` sizes it; the two are mutually exclusive (added 2026-10-14, see amendment 4) |
-| `--config PATH`, `--noconfirm`, `--quiet`, `--verbose` | pacman-familiar globals; `--noconfirm` applies to the engine's own confirmations (`-Mm`, `-Mccc`) and never to a pacman question flag |
+| `--config PATH`, `--noconfirm` | pacman-familiar globals; `--noconfirm` applies to the engine's own confirmations (`-Mm`, `-Mccc`) and never to a pacman question flag |
+| `--quiet`, `--verbose` | **deferred**: recognised and refused (rc 2, naming the flag) by every command; never mirrored (§H.2) |
 
 Engine environment inputs (the roster `gsa --help` must print): `GSA_STATE_DIR`,
 `GSA_LANES`, `GSA_JOBS`, `GSA_INTENSITY`, `GSA_CPU_THREADS`, `GSA_MEMORY_GIB`,
@@ -265,6 +299,30 @@ points this section was silent on, resolved as the code behaves:
    §H.2's (non-default values only), and the advisory run log is
    `$STATE/prefetch.log` with the `prefetch-warnings` extension scalar (§H.2
    permits extension scalars without a format bump).
+
+*Amendment (2026-10-17, `--quiet`/`--verbose` disposition).* The table
+previously listed `--quiet`/`--verbose` among live "pacman-familiar globals"
+alongside `--config`/`--noconfirm`. Code truth is parse-and-refuse: both are
+recognised into `deferred_flags` (`gsa-cli::args`) and every command answers
+rc 2 `gsa: deferred to a later phase: <flag> …` (`gsa-cli::classify` plus the
+rc-usage print) — they appear in no accepted roster (`build::REAL_BUILD_FLAGS`
+/ `REAL_INSTALL_FLAGS`, `install::REAL_UPGRADE_FLAGS`, `maint::accepted_flags`)
+and are never mirrored (§H.2). `--help` already said exactly this ("Deferred
+(parse and refuse, so the message names them)"); the row is split to match.
+Wording-only (§L.2); the flag pin lives in `gsa-cli`'s
+`deferred_spellings_refuse_with_a_clear_message`.
+
+*Amendment (2026-10-17, "newest" = version-ranked).* Archive and set
+selection rank by **version first** (`vercmp` order over the canonical
+`epoch:pkgver-pkgrel`), newest-mtime as tiebreak, and keep mtime order when
+`vercmp` is unavailable — never lexical order. This defines what `-U`'s
+"newest index-complete archives" (§B.6) and `--skip-built`'s "newest complete
+set" mean: the highest-version set, set-scoped so the split outputs of one
+version stay together. `--skip` set membership is unchanged (it was already
+version-keyed). Build **registration** (§J.4) is not selection: a finished
+build registers the outputs it just wrote (newest-mtime rank), never the
+version-ranked winner — a stale higher-version archive lying beside the
+recipe must not become that build's row.
 
 ### B.9 Capability disposition — every current spelling
 
@@ -611,6 +669,17 @@ Codes are stable wire values; names are the typed enum. `parked` (98) is the
 cone-stop state crossing the boundary; a package parked before dispatch never
 gets a lane and appears only as a run-record row (§H).
 
+*Amendment (2026-10-17, teardown classification + receipt discipline).*
+`lost` (125) is the **non-teardown** reap anomaly only. In an interrupted
+run, a lane that dies without a publishable result during teardown settles
+`interrupted-mid-build` under the interrupted signal's code — the no-result
+branch now matches the long-standing late-result rule — while a vanished lane
+in a run that was never interrupted still settles `lane-lost` (125). And a
+lane child now acts on its signal receipt: it never spawns makepkg under a
+pending receipt and TERMs its own makepkg on receipt mid-build (§K.3's
+one-TERM-per-group discipline is the supervisor's group sweep; a lane
+signalling its own child is not a second group TERM).
+
 Run-record per-package statuses are a second, coarser vocabulary
 (`succeeded|failed|deferred|parked|never-started|interrupted`, §H.3); the
 mapping from lane code to status is total and defined in §H.3.
@@ -642,7 +711,7 @@ mapping from lane code to status is total and defined in §H.3.
 | 0 | success | every selected package `succeeded` (including skip reasons); no `failed`, `deferred`, or `parked` row |
 | 1 | build failure under `--fail-fast` | ≥1 `failed` row and dispatch stopped (drain completed) |
 | 2 | usage error | bad flags, unknown reference/typo (with nearest candidates), invalid range, **empty selection** (`selection resolved to no packages`), malformed config record or `gsa.conf` layer (§B.11), a standalone-target refusal (mixed with workspace references, query/report verb, staging failure — §C.1) |
-| 3 | refusal | the run refused to start or aborted at a fail-closed gate: privilege refusal (§B.10 — not root, no build user, or `-Mm` under root), preflight (`sudo cannot install non-interactively`), integrity stop (published checksum mismatch — `docs/build-guide.md`), install refusal (a `refuse` decision row reached execution) |
+| 3 | refusal | the run refused to start or aborted at a fail-closed gate: privilege refusal (§B.10 — not root, no build user, or `-Mm` under root), preflight (`sudo cannot install non-interactively`), integrity stop (published checksum mismatch — `docs/build-guide.md`), install refusal (a `refuse` decision row reached execution), confirmation gate (`-Mm`/`-Mccc` without `--noconfirm`: plan printed, `confirmation-required` — the engine never prompts, §K.3) |
 | 4 | parked-cone-with-failures | **cone-stop (default) run with ≥1 `failed` row** — dispatch continued with unrelated work; parked rows may be empty when the failed package is a leaf |
 | 5 | deferral-only | ≥1 `deferred`/`parked` row and no `failed` row (extension of the six-class list; preserves "a deferral exits non-zero" without claiming a build failure) |
 | 130 | interrupted | a signal terminated the run; the full run record is emitted first |
@@ -980,6 +1049,13 @@ pacman mutex inode is the exception that proves the rule: a transaction flocks
 it in place (`sudo -n flock -x -w 600`, `crates/gsa-build/src/shim.rs`) and a
 possibly-held lock inode is never renamed. Any new state-write site must pass
 the ownership gate before opening.
+
+*Amendment (2026-10-17, fd-based gate).* The gate opens the target with
+`O_NOFOLLOW` and checks the fstat of the very fd the write uses (one seam,
+`gsa-sched::lock`; the `gsa-state` gate is a thin wrapper), closing the
+symlink-follow and check-then-use races on the final path component. Residual
+(scope, not oversight): parent path components still trust the runner-owned
+state root.
 
 ---
 

@@ -943,6 +943,17 @@ mod tests {
         let (code, _out, err) = run_capture(&["-Sl", "--lanes", "2"]);
         assert_eq!(code, 2);
         assert!(err.contains("deferred to a later phase"), "{err}");
+        // --quiet/--verbose are parse-and-refuse deferred spellings (§B.8):
+        // every command answers rc 2 naming the flag — never mirrored (§H.2).
+        for spelling in ["--quiet", "--verbose"] {
+            let (code, _out, err) = run_capture(&["-Sl", spelling]);
+            assert_eq!(code, 2, "{spelling} must be refused rc 2");
+            assert!(
+                err.contains("deferred to a later phase"),
+                "{spelling}: {err}"
+            );
+            assert!(err.contains(spelling), "{spelling} must be named: {err}");
+        }
         // The not-yet-real hidden seams defer; --lane-job/--stale-lock-check
         // /--fetch-job/--local-db-check/--qa-check are live seams
         // (tests/gsa-sched-v2.sh, tests/gsa-fetch-v2.sh,

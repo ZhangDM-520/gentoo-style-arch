@@ -237,10 +237,17 @@ fn b_sigint_tears_down_the_fetch_child_with_the_run() {
     }
     assert_eq!(code, Some(130), "an interrupted run exits 130 (§G.1)");
 
-    // The full run record renders on the interrupt path (§H.1).
+    // The full run record renders on the interrupt path (§H.1), and the
+    // teardown rows are honest (§I.3): p1 settled as the interrupt — never
+    // as `failed 125 - lane-lost` — while the run's rc stays 130.
     let stdout = std::fs::read_to_string(ws.join("stdout.txt")).unwrap_or_default();
     assert!(stdout.contains("--- run record begin ---"), "{stdout}");
     assert!(stdout.contains("rc: 130"), "{stdout}");
+    assert!(stdout.contains("p1 interrupted"), "{stdout}");
+    assert!(
+        !stdout.contains("lane-lost"),
+        "a teardown never settles a lost reap anomaly: {stdout}"
+    );
 
     // No orphan fetch child, no orphan makepkg of one (§K.3). The fetch
     // child's argv carries this workspace's result path, so the workspace

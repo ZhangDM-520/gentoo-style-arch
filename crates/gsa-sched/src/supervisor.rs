@@ -618,13 +618,21 @@ const PARK_MARKER_UNWRITABLE: &str = "park-marker-unwritable";
 /// `park-marker-unwritable`) through the machine's own outcome vocabulary
 /// (`LaneOutcome::Lost`), its cone and batch mates re-park through the
 /// normal policy, and its late lane result is never authoritative (the
-/// `LaneDone` handler skips a node that settled under it). The file
-/// handshake itself is kept: a kill-based stand-down is a separate redesign.
+/// `LaneDone` handler skips a node that settled under it). The rogue lane is
+/// ALSO killed: its process group gets SIGKILL right here, because a lane
+/// that cannot be told to stand down must not keep building (wasted work,
+/// shared SRCDEST/build caches). SIGKILL, never SIGTERM — a TERM death is
+/// attributable (143) or swallowed by the lane's receipt handlers and would
+/// corrupt the row semantics, while a SIGKILL death is the `lost 125` reap
+/// anomaly the settlement already records. The file handshake itself stays
+/// the normal path; a kill-based stand-down for every park is a separate
+/// redesign.
 #[allow(clippy::too_many_arguments)]
 fn write_park_markers(
     setup: &mut RunSetup,
     machine: &mut Machine,
     requests: Vec<ParkRequest>,
+    active: &HashMap<usize, ActiveLane>,
     remediation: &mut Option<Remediation>,
     events: &mut dyn FnMut(&SupEvent),
     err: &mut dyn Write,
@@ -646,6 +654,13 @@ fn write_park_markers(
                 });
             }
             Err(error) => {
+                // The kill lands before the settlement so the rogue lane
+                // stops as early as possible; `signal_group` ignores ESRCH
+                // (a lane that already exited is its own reap), and the
+                // later `LaneDone` is skipped by `is_settled` below.
+                if let Some(lane) = active.get(&request.index) {
+                    signal_group(lane.pid, SIGKILL);
+                }
                 let pkg = machine.node(request.index).id.clone();
                 let message = format!(
                     "gsa: park marker {} cannot be written ({error}) — {pkg} cannot stand down; settling it as lost (125)",
@@ -700,6 +715,7 @@ fn settle_skip(
     setup: &mut RunSetup,
     machine: &mut Machine,
     index: usize,
+    active: &HashMap<usize, ActiveLane>,
     remediation: &mut Option<Remediation>,
     events: &mut dyn FnMut(&SupEvent),
     err: &mut dyn Write,
@@ -759,6 +775,7 @@ fn settle_skip(
         setup,
         machine,
         requests,
+        active,
         remediation,
         events,
         err,
@@ -1089,6 +1106,10 @@ pub fn run(
         started: false,
         probe_stopped: false,
     });
+    // Spawned lanes, keyed by node index — declared before the pre-settled
+    // deferrals so every write_park_markers call can reach the lane a broken
+    // stand-down must kill.
+    let mut active: HashMap<usize, ActiveLane> = HashMap::new();
     // Pre-settled deferrals (contract §B.8) land BEFORE any dispatch: the
     // row is `deferred 99 - <reason>` and the consumer cone parks
     // `waits-on-deferred`, so unrelated work runs and dependents wait.
@@ -1116,6 +1137,7 @@ pub fn run(
             &mut setup,
             &mut machine,
             requests,
+            &active,
             &mut remediation,
             events,
             err,
@@ -1153,7 +1175,6 @@ pub fn run(
         });
     }
 
-    let mut active: HashMap<usize, ActiveLane> = HashMap::new();
     let mut interrupted: Option<i32> = None;
     let mut grace_started = false;
     let mut settle_deadline: Option<std::time::Instant> = None;
@@ -1174,6 +1195,7 @@ pub fn run(
                 &mut setup,
                 &mut machine,
                 index,
+                &active,
                 &mut remediation,
                 events,
                 err,
@@ -1493,6 +1515,7 @@ pub fn run(
                             &mut setup,
                             &mut machine,
                             requests,
+                            &active,
                             &mut remediation,
                             events,
                             err,
@@ -1504,12 +1527,21 @@ pub fn run(
                         // §F.1: nothing usable was published — the reap
                         // anomaly maps to `lost 125` unless the lane's death
                         // cause is an attributable signal (§K.3: SIGHUP/
-                        // SIGINT/SIGTERM → 129/130/143). Either way the row
-                        // settles exactly once — continuing past
-                        // `machine.record` leaked the machine's active count
-                        // and hung the dispatcher.
+                        // SIGINT/SIGTERM → 129/130/143) or the run was
+                        // interrupted: §I.3's honesty reaches the vanished
+                        // lane too, and an unattributable teardown death (the
+                        // grace SIGKILL) settles with the interrupted signal's
+                        // lane code — the late-result rule's mapping — never
+                        // as a lost reap anomaly. Either way the row settles
+                        // exactly once — continuing past `machine.record`
+                        // leaked the machine's active count and hung the
+                        // dispatcher.
                         let (code, reason) = match signal_cause(killed_by) {
                             Some(code) => (code, "interrupted-mid-build".to_string()),
+                            None if was_interrupted => (
+                                signal_cause(interrupted).unwrap_or(gsa_model::LaneOutcome::Term),
+                                "interrupted-mid-build".to_string(),
+                            ),
                             None => (gsa_model::LaneOutcome::Lost, "lane-lost".to_string()),
                         };
                         let message = if code == gsa_model::LaneOutcome::Lost {
@@ -1519,7 +1551,7 @@ pub fn run(
                             )
                         } else {
                             format!(
-                                "gsa: no usable result for {} — killed by a signal, mapping to {} ({})",
+                                "gsa: no usable result for {} — mapping to {} ({})",
                                 machine.node(index).id,
                                 reason,
                                 code.code()
@@ -1797,16 +1829,14 @@ mod tests {
 
     /// §F.1: a lane that exits without publishing a result is the reap
     /// anomaly — exactly one settled `lost 125` row — and the run terminates.
+    /// An unattributable death outside teardown stays lost (an OOM-killed
+    /// lane names no cause); only an interrupted run re-maps rows (§I.3).
     #[test]
     fn a_lane_that_exits_without_a_result_settles_as_one_lost_row() {
         let dir = scratch("lost");
-        // TERM-proof stub lane: latch the teardown on its parent (the test
-        // process — `run` owns the handlers), then exit WITHOUT publishing.
-        let stub = write_stub(
-            &dir,
-            "stub-lane",
-            "#!/usr/bin/env bash\ntrap '' TERM INT HUP\nkill -TERM \"$PPID\" 2>/dev/null\nsleep 1\nexit 0\n",
-        );
+        // Stub lane that exits WITHOUT publishing — no teardown in play, so
+        // the death has no interrupt to inherit.
+        let stub = write_stub(&dir, "stub-lane", "#!/usr/bin/env bash\nsleep 1\nexit 0\n");
         let setup = one_node_setup(&dir, &stub, "lost");
         let (outcome, finished, err) = run_watched(setup);
 
@@ -1831,6 +1861,55 @@ mod tests {
         assert!(
             err.contains("no usable result for p1"),
             "the lost mapping is loud (§F.2): {err}"
+        );
+        assert!(
+            !outcome.interrupted,
+            "the reap anomaly must stay lost when no teardown is in play (§F.1)"
+        );
+    }
+
+    /// §I.3: a lane that vanishes without a result DURING teardown is the
+    /// run's interrupt, not a lost reap anomaly — the grace SIGKILL carries no
+    /// cause, so the row settles with the interrupted signal's lane code (the
+    /// late-result rule's mapping) and the interrupt owns what started.
+    #[test]
+    fn a_lane_that_vanishes_during_teardown_settles_as_one_interrupted_row() {
+        let dir = scratch("lost-teardown");
+        // TERM-proof stub lane: latch the teardown on its parent (the test
+        // process — `run` owns the handlers), then exit WITHOUT publishing.
+        let stub = write_stub(
+            &dir,
+            "stub-lane",
+            "#!/usr/bin/env bash\ntrap '' TERM INT HUP\nkill -TERM \"$PPID\" 2>/dev/null\nsleep 1\nexit 0\n",
+        );
+        let setup = one_node_setup(&dir, &stub, "lost-teardown");
+        let (outcome, finished, err) = run_watched(setup);
+
+        assert_eq!(
+            outcome.rows.len(),
+            1,
+            "exactly one settled outcome row (single-node topology), got {:?}",
+            outcome.rows
+        );
+        assert_eq!(finished, 1, "the lane settles exactly once");
+        let row = &outcome.rows[0];
+        assert_eq!(
+            row.status,
+            RowStatus::Interrupted,
+            "the teardown owns what started (§I.3): {row:?}"
+        );
+        assert_eq!(
+            row.rc,
+            Some(143),
+            "the row carries the interrupted signal's lane code (§H.3): {row:?}"
+        );
+        assert_eq!(
+            row.reason, "interrupted-mid-build",
+            "the §H.3 reason key: {row:?}"
+        );
+        assert!(
+            err.contains("no usable result for p1"),
+            "the mapping is loud (§F.2): {err}"
         );
         assert!(outcome.interrupted, "the run was signalled (§K.3)");
     }
@@ -1878,8 +1957,10 @@ mod tests {
 
     /// §F.1: a park stand-down marker that cannot be written is a broken
     /// handshake — the dispatched node settles LOUDLY as lost (125,
-    /// `park-marker-unwritable`) instead of building on, and its late lane
-    /// result is ignored (the row lands exactly once and never installs).
+    /// `park-marker-unwritable`) instead of building on, its lane process
+    /// group is killed so the rogue lane cannot keep building, and its late
+    /// lane result is ignored (the row lands exactly once and never
+    /// installs).
     #[test]
     fn an_unwritable_park_marker_settles_the_node_as_lost() {
         let dir = scratch("parklost");
@@ -1897,7 +1978,7 @@ mod tests {
             "#!/usr/bin/env bash\n\
              case \"$2\" in\n\
              \x20 p1) printf 'v2 p1 1 1 build-failed\\n' >\"$3\"; exit 1 ;;\n\
-             \x20 p2) sleep 2; printf 'v2 p2 0 1 ok\\n' >\"$3\"; exit 0 ;;\n\
+             \x20 p2) printf '%s\\n' \"$$\" >\"$3.pid\"; sleep 2; : >\"$3.built\"; printf 'v2 p2 0 1 ok\\n' >\"$3\"; exit 0 ;;\n\
              esac\n\
              exit 0\n",
         );
@@ -1943,5 +2024,24 @@ mod tests {
             err.contains("late lane result for p2 ignored"),
             "the late result of a settled node is ignored, loudly: {err}"
         );
+        // The rogue lane must not build on past a stand-down that could not
+        // be delivered: it never reached its build artifact, and its process
+        // is gone (the broken-handshake path kills the lane's process group).
+        assert!(
+            !run_dir.join("p2.result.built").exists(),
+            "the parked lane kept building after its stand-down failed — its process group must be killed"
+        );
+        // A lane killed before it could even record its pid (the kill can
+        // land inside the pidfile write) is gone by definition; one that
+        // recorded a pid must not survive it.
+        if let Some(pid) = std::fs::read_to_string(run_dir.join("p2.result.pid"))
+            .ok()
+            .and_then(|text| text.trim().parse::<u32>().ok())
+        {
+            assert!(
+                !std::path::Path::new(&format!("/proc/{pid}")).exists(),
+                "the parked lane's process must be gone after the run settled (pid {pid})"
+            );
+        }
     }
 }

@@ -12,8 +12,8 @@ set -euo pipefail
 # expected names come from the staged `.PKGINFO`s, expected order/parks come
 # from the fixture's own build-order edges.
 #
-# Pinned here (seven ( subshell ) sections, one per scenario; run one alone
-# with GSA_INSTALL_V2_ONLY=a…g):
+# Pinned here (eight ( subshell ) sections, one per scenario; run one alone
+# with GSA_INSTALL_V2_ONLY=a…h):
 #   a. decision rows (§E.2/§E.3) through `--install-decide checked|force`
 #      (§D.1: rc 0 plan / 1 refusal / 2 bad usage, touches nothing): install,
 #      skip (`already-current` — the same-version + install-date rule, plus
@@ -42,10 +42,15 @@ set -euo pipefail
 #      transacts nothing.
 #   f. `db.lck` is never deleted (rule 23/§K.3): a stale lock is announced,
 #      never touched, and the registration still lands beside it.
-#   g. an interrupt mid-install (§I.3/§K.3) leaves no half-registered
-#      IgnorePkg closure: the registration is atomic (every accepted name or
-#      none, no temp residue, dated pre-image kept) while the run exits 130
-#      with the full record.
+#   g. an interrupt mid-install (§I.3/§K.3) rolls the run's IgnorePkg
+#      registration back (rule 9's complement: the interrupted transaction
+#      installs nothing): the end state keeps none of the run's names — the
+#      conf returns to its pre-run bytes, no temp residue, dated pre-image
+#      kept — while the run exits 130 with the full record.
+#   h. a failed wave rolls back exactly its own IgnorePkg registrations
+#      (rule 9's complement, multi-wave partial success): the landed wave
+#      keeps its names, the failed wave and the held leftover drop theirs,
+#      and an already-current skip keeps its names (it IS installed).
 #
 # House conventions: `( subshell )` sections (each an isolated scenario with
 # its own workspace), inline oracle stubs (§D.2), `fail()` prefixes, and
@@ -73,11 +78,12 @@ fail() {
     exit 1
 }
 
-# Section filter: GSA_INSTALL_V2_ONLY=<a..g> runs exactly one section.
+# Section filter: GSA_INSTALL_V2_ONLY=<a..h> runs exactly one section.
 want() { [ -z "${GSA_INSTALL_V2_ONLY:-}" ] || [ "${GSA_INSTALL_V2_ONLY}" = "$1" ]; }
 
 # ─── Stub-knob vocabulary (§D.2: declared here in the change that adds them) ─
 rr2_stub_knob GSA_FAKE_PACMAN_SLEEP "gsa-install-v2 pacman stub: stall inside one transaction (interrupt and overlap probes)"
+rr2_stub_knob GSA_FAKE_PACMAN_FAIL_AT "gsa-install-v2 pacman stub: fail the Nth pacman -U transaction of the log (failed-wave rollback probes)"
 rr2_stub_knob GSA_FAKE_ELF_PACKAGE "gsa-install-v2 makepkg stub: package id whose archive ships the DT_NEEDED probe ELF"
 rr2_stub_knob GSA_FAKE_ELF_SRC "gsa-install-v2 makepkg stub: path of the probe ELF copied into the archive"
 rr2_stub_knob GSA_FAKE_PGO_PACKAGE "gsa-install-v2 makepkg stub: package id whose archive ships a baked .gcda destination"
@@ -249,16 +255,26 @@ EOF
 
 # write_stub_pacman DIR — the transaction oracle: one TXN-START / argv /
 # TXN-END triple per invocation (nanosecond timestamps: overlap and
-# install-ordering asserts read these), and a stall inside the transaction
-# window (GSA_FAKE_PACMAN_SLEEP) so an interrupt can land mid-`pacman -U`.
+# install-ordering asserts read these), a stall inside the transaction
+# window (GSA_FAKE_PACMAN_SLEEP) so an interrupt can land mid-`pacman -U`,
+# and a failing transaction on demand (GSA_FAKE_PACMAN_FAIL_AT counts this
+# log's `pacman -U` transactions — one at a time, §K.3 — and fails the Nth
+# after closing its window).
 write_stub_pacman() {
     cat >"$1/bin/pacman" <<'EOF'
 #!/usr/bin/env bash
 set -u
 printf 'TXN-START %s\n' "$(date +%s%N)" >>"${GSA_FAKE_PACMAN_LOG:?}"
 printf 'pacman %s\n' "$*" >>"${GSA_FAKE_PACMAN_LOG:?}"
+nth=0
+case ${1:-} in
+-U) nth=$(grep -c '^pacman -U ' "${GSA_FAKE_PACMAN_LOG:?}") ;;
+esac
 sleep "${GSA_FAKE_PACMAN_SLEEP:-0}"
 printf 'TXN-END %s\n' "$(date +%s%N)" >>"${GSA_FAKE_PACMAN_LOG:?}"
+if [ "$nth" != 0 ] && [ "$nth" = "${GSA_FAKE_PACMAN_FAIL_AT:-}" ]; then
+    exit 1
+fi
 exit 0
 EOF
     chmod +x "$1/bin/pacman"
@@ -936,6 +952,7 @@ if want g; then
         : >"$GSA_FAKE_PACMAN_LOG"
         # linger inside the transaction so the signal lands mid-`pacman -U`
         export GSA_FAKE_PACMAN_SLEEP=20
+        cp "$ws/pacman.conf" "$fixture/g/conf.pre"
 
         # the engine needs one SIGINT mid-transaction; run_engine performs the
         # invocation while a wrapper records the engine pid (exec keeps it)
@@ -983,14 +1000,18 @@ EOF
         grep < <(record_section outcome) -q '^alpha interrupted 130 ' \
             || fail "the interrupted install rows must carry a signal lane code (§F.1):" "$fixture/g/output.txt"
 
-        # no half-registered IgnorePkg: the closure covers EVERY accepted
-        # name (derived from the staged .PKGINFOs — all or nothing), the conf
-        # parses, and no temp name survives the atomic rewrite
+        # rule 9's complement: the interrupted transaction installed
+        # NOTHING, so the whole registration write set rolls back — the
+        # closure keeps none of the run's names (derived from the staged
+        # .PKGINFOs), the conf is back to its pre-run bytes, and no temp
+        # name survives the atomic rewrite
         closure="$fixture/g/closure"
         sed -n 's/^IgnorePkg = //p' "$ws/pacman.conf" | tr ' ' '\n' | sed '/^$/d' | sort >"$closure"
-        missing=$(comm -23 "$expected_names" "$closure" | tr '\n' ' ' | sed 's/ $//')
-        [ -z "$missing" ] \
-            || fail "the interrupt left a half-registered IgnorePkg closure (missing: $missing):" "$ws/pacman.conf"
+        leaked=$(comm -12 "$expected_names" "$closure" | tr '\n' ' ' | sed 's/ $//')
+        [ -z "$leaked" ] \
+            || fail "an interrupted transaction installs nothing — its IgnorePkg registrations must roll back (still registered: $leaked):" "$ws/pacman.conf"
+        cmp -s "$ws/pacman.conf" "$fixture/g/conf.pre" \
+            || fail "the rollback must return the conf to its pre-run bytes:" "$ws/pacman.conf"
         grep -q '^\[options\]$' "$ws/pacman.conf" \
             || fail "the rewritten conf lost its [options] section:" "$ws/pacman.conf"
         if grep < <(find "$ws" -maxdepth 1 -name '.gsa-ignorepkg.tmp.*' -print -quit) -q .; then
@@ -999,6 +1020,98 @@ EOF
         if ! ls "$ws"/pacman.conf.bak-* >/dev/null 2>&1; then
             fail "the registration must leave its dated pre-image backup:" "$ws"
         fi
+    )
+fi
+
+if want h; then
+    # ─── 8. a failed wave rolls back exactly its own IgnorePkg
+    # registrations (rule 9's complement, multi-wave partial success) ────
+    (
+        set -euo pipefail
+        ws="$fixture/h/ws"
+        db="$fixture/h/db"
+        state="$fixture/h/state"
+        make_workspace "$ws" 1 auto low
+        install_ws "$ws" "$db"
+        mkdir -p "$db"
+        ver="1.0.0-1"
+
+        # Two disjoint swap waves (lib1←app1, lib2←app2 — the stale `:=`
+        # records below move both providers' tokens) plus a leftover install
+        # and an already-current skip: three staged groups, the SECOND
+        # transaction (the lib2 wave) fails, so the leftover group is held
+        # and never starts (§H.3).
+        for id in lib1 app1 lib2 app2 solo skipper; do
+            add_package "$ws" "$id" "$gsa_meta_any" git
+            stage="$fixture/h/stage-$id"
+            stage_pkginfo "$stage" "$id" "$id" "$ver" 0
+            make_archive "$ws/packages/$id/$id-$ver-any.pkg.tar.zst" "$stage"
+        done
+        set_topology_record "$ws" app1 git lib1
+        set_topology_record "$ws" app2 git lib2
+
+        # skipper is already current: same canonical version (0:pkgver),
+        # installed "now" — not older than its archive
+        skipper_dir=$(db_install "$db" skipper "0:$ver")
+        touch "$skipper_dir"
+
+        # Stale `:=` records — the providers' archives carry derived tokens,
+        # so both providers move and stage one swap wave each (plan §4.3).
+        # (W5: seeded through the real sudo — state/ is engine-owned.)
+        /usr/bin/sudo -n mkdir -p "$state/abi"
+        printf 'app1|0:%s|lib1|stale1\napp2|0:%s|lib2|stale2\n' "$ver" "$ver" \
+            | /usr/bin/sudo -n tee "$state/abi/subscriptions" >/dev/null
+
+        export GSA_FAKE_PACMAN_LOG="$fixture/h/pacman.log"
+        export GSA_FAKE_SUDO_LOG="$fixture/h/sudo.log"
+        export GSA_FAKE_SPAWN_LOG="$fixture/h/spawn.log"
+        : >"$GSA_FAKE_PACMAN_LOG"
+        : >"$GSA_FAKE_SUDO_LOG"
+        export GSA_FAKE_PACMAN_FAIL_AT=2
+
+        run_engine "$ws" -U --state-dir "$state" --config "$ws/pacman.conf" \
+            "$ws/packages/lib1/lib1-$ver-any.pkg.tar.zst" \
+            "$ws/packages/app1/app1-$ver-any.pkg.tar.zst" \
+            "$ws/packages/lib2/lib2-$ver-any.pkg.tar.zst" \
+            "$ws/packages/app2/app2-$ver-any.pkg.tar.zst" \
+            "$ws/packages/solo/solo-$ver-any.pkg.tar.zst" \
+            "$ws/packages/skipper/skipper-$ver-any.pkg.tar.zst"
+        {
+            echo "$FIXTURE_OUTPUT"
+        } >"$fixture/h/output.txt"
+        [ "$FIXTURE_RC" = 4 ] || fail "h: a run with a failed transaction is rc 4 (§G.1), got $FIXTURE_RC:" "$fixture/h/output.txt"
+        [ "$(record_scalar rc)" = 4 ] || fail "h: the record's rc scalar must be 4:" "$fixture/h/output.txt"
+        [ "$(record_scalar outcome)" = "failed" ] || fail "h: the record must record outcome 'failed':" "$fixture/h/output.txt"
+
+        # the wave shape derives from this scenario's own topology and
+        # records: two swap waves stage two transactions (the second is the
+        # failing one) and the leftover group is HELD — never started
+        # (§H.3), so it transacts nothing
+        [ "$(txn_count "$GSA_FAKE_PACMAN_LOG")" = 2 ] \
+            || fail "h: the run must stage one transaction per swap wave (2 pacman -U calls):" "$GSA_FAKE_PACMAN_LOG"
+        [ "$(rr2_outcome lib1 reason <<<"$FIXTURE_OUTPUT")" = "ok" ] \
+            || fail "h: the first wave landed (lib1 ok):" "$fixture/h/output.txt"
+        case $(rr2_outcome lib2 reason <<<"$FIXTURE_OUTPUT") in
+        install-failed*) ;;
+        *) fail "h: the second wave's transaction failed (lib2 install-failed …):" "$fixture/h/output.txt" ;;
+        esac
+        [ "$(rr2_outcome solo reason <<<"$FIXTURE_OUTPUT")" = "held-after-install-failed" ] \
+            || fail "h: the leftover group must be held after the failed wave (never started):" "$fixture/h/output.txt"
+
+        # Multi-wave partial success (rule 9's complement): the landed wave
+        # and the already-current skip stay registered (they ARE installed);
+        # the failed wave and the held leftover roll back. Every set is
+        # DERIVED from the staged .PKGINFOs and this scenario's roles.
+        closure="$fixture/h/closure"
+        sed -n 's/^IgnorePkg = //p' "$ws/pacman.conf" | tr ' ' '\n' | sed '/^$/d' | sort >"$closure"
+        printf 'app1\nlib1\nskipper\n' | sort >"$fixture/h/kept"
+        printf 'app2\nlib2\nsolo\n' | sort >"$fixture/h/gone"
+        missing=$(comm -23 "$fixture/h/kept" "$closure" | tr '\n' ' ' | sed 's/ $//')
+        [ -z "$missing" ] \
+            || fail "h: the landed wave's and the skip's names must stay registered (missing: $missing):" "$ws/pacman.conf"
+        leaked=$(comm -12 "$fixture/h/gone" "$closure" | tr '\n' ' ' | sed 's/ $//')
+        [ -z "$leaked" ] \
+            || fail "h: the failed wave and the held leftover must roll their IgnorePkg registrations back (leaked: $leaked):" "$ws/pacman.conf"
     )
 fi
 

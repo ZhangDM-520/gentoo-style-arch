@@ -100,7 +100,9 @@ pub struct DecisionContext {
 #[derive(Clone, Debug)]
 pub struct RecipeArchives {
     pub recipe_dir: PathBuf,
-    /// The newest archive per expected pkgname (by `.PKGINFO` truth).
+    /// The chosen archive per expected pkgname (by `.PKGINFO` truth):
+    /// version-ranked, and one version-coherent set whenever the on-disk
+    /// rows admit one.
     pub candidates: Vec<Candidate>,
     /// Expected pkgnames (committed `.SRCINFO`) with no eligible archive —
     /// non-empty means `refuse partial-set <pkgdir> <missing>…`.
@@ -109,12 +111,38 @@ pub struct RecipeArchives {
     pub mixed_versions: bool,
 }
 
-/// Discover one recipe's newest archive set. Archives are matched by their
-/// own `.PKGINFO` (never a glob-all fallback, rule 11) and each archive is
-/// chosen newest-first per expected pkgname. An archive whose `.PKGINFO`
+/// How discovery ranks same-name candidates.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Rank {
+    /// Highest canonical version first (install/claim selection — the
+    /// default; equal versions fall to newest mtime, `vercmp` non-answers to
+    /// the mtime order).
+    Version,
+    /// Newest mtime first — build REGISTRATION's rank, not a selection: a
+    /// finished build registers the outputs it just wrote (the newest files
+    /// in the scan set), never the version-ranked winner. A stale
+    /// higher-version archive lying beside the recipe must not become that
+    /// build's row — the retention sweep would then protect the stale file
+    /// and delete the fresh one (gsa-state-v2's in-flight-guard section).
+    Mtime,
+}
+
+/// Discover one recipe's best-ranked archive set. Archives are matched by
+/// their own `.PKGINFO` (never a glob-all fallback, rule 11) and each
+/// archive is chosen version-first per expected pkgname (highest canonical
+/// version, newest mtime on a version tie, mtime order whenever `vercmp`
+/// cannot rank — never string order). An archive whose `.PKGINFO`
 /// cannot be read is NOT a candidate here; the decision seam reports it per
 /// rule 25(h) (`skip unreadable-pkginfo` / `refuse discover-failed`).
 pub fn discover_recipe(recipe_dir: &Path) -> Result<RecipeArchives, String> {
+    discover_recipe_ranked(recipe_dir, Rank::Version)
+}
+
+/// [`discover_recipe`] with an explicit ranking policy (see [`Rank`]).
+pub fn discover_recipe_ranked(
+    recipe_dir: &Path,
+    rank: Rank,
+) -> Result<RecipeArchives, String> {
     // Expected output names: the committed `.SRCINFO`'s `pkgname` lines —
     // the names built archives actually carry (a recipe whose pkgbase
     // differs from its outputs must never demand an archive named after the
@@ -133,7 +161,7 @@ pub fn discover_recipe(recipe_dir: &Path) -> Result<RecipeArchives, String> {
         }
     }
 
-    // Newest archive per expected pkgname, matched by the archive's own
+    // The chosen archive per expected pkgname, matched by the archive's own
     // `.PKGINFO` truth (never a glob-all fallback, rule 11). An archive
     // whose `.PKGINFO` cannot be read is NOT a candidate here (rule 25(h):
     // direct-archive seams report it via decide() gate 1).
@@ -190,19 +218,55 @@ pub fn discover_recipe(recipe_dir: &Path) -> Result<RecipeArchives, String> {
         names_in_order.dedup();
     }
 
+    // Rank candidates version-first: `vercmp` decides, equal versions fall
+    // to the newest mtime, and the mtime presort (path-tiebroken) survives
+    // as the order for every pair `vercmp` cannot rank — including its total
+    // absence, which must degrade to mtime order, never to string order
+    // (epochs and 1.10-vs-1.9 defeat that). A stable sort over the presort
+    // keeps every tie deterministic regardless of `read_dir` order.
+    by_name.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.2.cmp(&b.2)));
+    if rank == Rank::Version {
+        by_name.sort_by(|a, b| gsa_recipe::pkginfo::version_rank(&a.3, &b.3));
+    }
+
+    // In Version rank a version-coherent set outranks per-name bests: split
+    // outputs of one version must move together, and splicing a half-built
+    // higher-version output into a complete lower-version set manufactures a
+    // `partial-set … mixed-versions` refusal where the mtime-ranked chooser
+    // installed a coherent set. When no single version covers every wanted
+    // name, the per-name winners stand and the mixed refusal speaks — that
+    // class predates this fix and must survive it. Mtime rank is the
+    // pre-version-rank registration behaviour and stays per-name bests.
+    let chosen_key: Option<String> = if rank == Rank::Version {
+        let mut keys: Vec<(String, std::time::SystemTime)> = Vec::new();
+        for row in &by_name {
+            if let Some(entry) = keys.iter_mut().find(|entry| entry.0 == row.3) {
+                if row.1 > entry.1 {
+                    entry.1 = row.1;
+                }
+            } else {
+                keys.push((row.3.clone(), row.1));
+            }
+        }
+        keys.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        keys.sort_by(|a, b| gsa_recipe::pkginfo::version_rank(&a.0, &b.0));
+        keys.iter().map(|(key, _)| key.clone()).find(|key| {
+            names_in_order
+                .iter()
+                .filter(|want| by_name.iter().any(|row| &row.0 == *want))
+                .all(|want| by_name.iter().any(|row| &row.0 == want && &row.3 == key))
+        })
+    } else {
+        None
+    };
+
     let mut candidates: Vec<Candidate> = Vec::new();
     let mut missing: Vec<String> = Vec::new();
     let mut versions: Vec<String> = Vec::new();
     for want in &names_in_order {
-        let mut best: Option<&(String, std::time::SystemTime, PathBuf, String)> = None;
-        for row in &by_name {
-            if &row.0 != want {
-                continue;
-            }
-            if best.map(|b| row.1 > b.1).unwrap_or(true) {
-                best = Some(row);
-            }
-        }
+        let best = by_name
+            .iter()
+            .find(|row| &row.0 == want && chosen_key.as_deref().map_or(true, |key| row.3 == key));
         match best {
             Some((_, _, archive, version)) => {
                 candidates.push(Candidate {
@@ -666,7 +730,12 @@ fn plan(candidates: &[Candidate], ctx: &DecisionContext, db: &LocalDb) -> Result
 /// skip-only (already-current) archive also protects stays registered: it IS
 /// installed, and that protection is rule 9's whole point. Names already in
 /// the closure before this step are never touched.
-fn rollback_registration_names(
+///
+/// The `-U` path reuses this computation unchanged: its `keep_names` also
+/// carries the names of archives whose staged wave LANDED (a landed wave IS
+/// installed), so a multi-wave partial success keeps exactly its landed
+/// registrations.
+pub fn rollback_registration_names(
     added: &[String],
     install_names: &[String],
     keep_names: &[String],

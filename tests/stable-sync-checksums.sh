@@ -283,13 +283,14 @@ EOF
     cat >"$dir/bin/updpkgsums" <<'EOF'
 #!/usr/bin/env bash
 dir=$(pwd)
+buildfile=${1:-$dir/PKGBUILD}   # pacman-contrib's tool takes [build file]
 set -e
 set -o pipefail   # a failed git archive must fail the shim, never hash empty input
 printf '%s\n' "$dir" >>"$GSA_FAKE_DIR/updpkgsums_calls"
 [[ -s $GSA_FAKE_DIR/deliver ]] || exit 1          # nothing to fetch
 
-mapfile -t sources < <(bash -c 'source "$1" >/dev/null 2>&1; printf "%s\n" "${source[@]}"' _ "$dir/PKGBUILD")
-mapfile -t algos < <(bash -c 'source "$1" >/dev/null 2>&1; for a in sha256 sha512 b2; do declare -p "${a}sums" >/dev/null 2>&1 && printf "%s\n" "$a"; done' _ "$dir/PKGBUILD")
+mapfile -t sources < <(bash -c 'source "$1" >/dev/null 2>&1; printf "%s\n" "${source[@]}"' _ "$buildfile")
+mapfile -t algos < <(bash -c 'source "$1" >/dev/null 2>&1; for a in sha256 sha512 b2; do declare -p "${a}sums" >/dev/null 2>&1 && printf "%s\n" "$a"; done' _ "$buildfile")
 
 file_of() {   # the name makepkg gives one source entry
     local e=$1 u
@@ -322,7 +323,7 @@ for alg in "${algos[@]}"; do
         fi
         line+="'$sum' "
     done
-    sed -i "s|^${alg}sums=.*|${alg}sums=(${line% })|" "$dir/PKGBUILD"
+    sed -i "s|^${alg}sums=.*|${alg}sums=(${line% })|" "$buildfile"
 done
 EOF
     chmod +x "$dir/bin/updpkgsums"

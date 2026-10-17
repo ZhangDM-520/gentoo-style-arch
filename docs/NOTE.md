@@ -1,3 +1,199 @@
+## 2026-10-17 — follow-up implementation: decision-map items 1–7 land; the integration battery catches three cross-cutting regressions, all fixed red-first
+
+**Scope.** Owner: "implement all 1-7 fixes" (the map is the entry below).
+Two waves of parallel implementation agents (items 1–4, then 5–7 where
+`lane.rs`/`supervisor.rs`/`gsa-install` overlapped), red-first fixtures
+throughout, then one master validation pass — which is where the real story
+was: every agent's focused tests were green, and the FULL battery still broke
+three fixtures, each exposing a seam the per-item scope could not see.
+
+**Items landed** (paths are the decisive handles; full red-first evidence in
+each item's pin):
+1. **`b_sigint` teardown (F1+F3).** The lane now acts on its receipt: both
+   spawn boundaries refuse to start makepkg under a pending signal
+   (`gsa-build/src/lane.rs` `settle_pending_receipt`), and the wait loop is
+   receipt-aware instead of a bare `status()`. The supervisor's `LaneDone`
+   no-result branch settles `interrupted-mid-build` under the interrupted
+   signal's code when the run was interrupted (`gsa-sched/src/supervisor.rs`);
+   `lost 125` remains the NON-teardown reap anomaly. Pins:
+   `gsa-cli/tests/prefetch.rs` (was red at 30 s grace-wait, now green in
+   0.27 s ×3) and the new `gsa-build/tests/lane-interrupt.rs` (red-first
+   against the stashed fix).
+2. **Contract amendment pass** (`docs/gsa-contract.md`, wording-only per
+   §L.2): §B.5 build-cache truth, §B.7 + §G.1 confirmation-gate-never-prompts,
+   §B.8 `--quiet`/`--verbose` split out as deferred parse-and-refuse (+ a
+   flag pin with a mutation probe proving it bites), and the sticky
+   PKGBUILD↔`.SRCINFO` sync-skew honesty note (re-run does not repair;
+   `makepkg --printsrcinfo` + manual re-anchor is the named repair). Plus the
+   defensive `prepare.rs` `pass_config` both-skip refusal (red-first unit) —
+   the "silently prefers `--skip`" residue the queued list had flagged was
+   unreachable dead precedence, not a live bug.
+3. **IgnorePkg `-U` rollback.** The proven `rollback_registration_names`
+   computation (`added ∩ install-bearing \ keep`) is now wired into the `-U`
+   failure, interrupt and stage-refusal paths
+   (`gsa-cli/src/install.rs` `rollback_uninstalled`); multi-wave runs prune
+   only the leaked wave's names and landed waves stay protected. Pins:
+   `gsa-install/tests/decision_rows.rs` + `tests/gsa-install-v2.sh` sections
+   g/h (red-first: "still registered: alpha…" / "leaked: app2 lib2 solo").
+   Hard-crash between registration and rollback stays the documented
+   residual (dated pre-image backup = manual recovery).
+4. **Sync-transaction residuals.** `updpkgsums` runs against a staged copy
+   and republishes atomically — the committed PKGBUILD is never an external
+   tool's in-place target (red-first pin: the stub logged the committed
+   file's inode being mutated mid-transaction); `publish()`/`.SRCINFO`
+   publish fsync before rename; a transaction begin sweeps its own stale
+   `PKGBUILD.tmp.*`/`.SRCINFO.tmp.*` litter (red-first; exact prefixes,
+   regular files only — `PKGBUILD`, `.SRCINFO`, near-miss `*.tmp` and
+   directories can never match).
+5. **fd-based ownership gate.** One seam,
+   `gsa-sched::lock::open_state_file_with_uid`: `O_NOFOLLOW` open + fstat of
+   the very fd the write uses (std-only, documented constant), quarantine on
+   mismatch as before. All three call sites keep their exact semantics (lane
+   log gate stays warn-only per rule 19; state store and run.lock stay
+   fatal). Symlinked-log pin in `tests/log-ownership.sh` (red-first: the
+   target file received the append before the fix). Residual documented:
+   parent path components still trust the runner-owned state root.
+6. **Park stand-down C1.** When the park-marker write fails, the
+   already-settled `lost 125 park-marker-unwritable` node's lane process
+   group is SIGKILLed — never TERMed, which would reclassify the row — so a
+   failed stand-down cannot still build (fixture: `tests/gsa-sched-v2.sh`
+   section 8, red-first "the rogue lane survived the broken stand-down";
+   the stub is TERM-proof so a TERM implementation stays red). C2 (full
+   kill-based stand-down + started-marker wire) stays deferred. Deliberate
+   scope restoration riding along: `gsa-sched/src/machine.rs` now derives an
+   unfilled `Node.batch` from the `batches` table — the coupled-batch
+   mate-parking path was dead through the CLI (`build.rs` passes
+   `batch: None`) and the mandated fixture could not fire a ParkRequest
+   without it.
+7. **Version-ranked selection.** `gsa-recipe::pkginfo::version_rank`
+   (`vercmp` order; mtime tiebreak; mtime order when `vercmp` is absent —
+   never lexical) drives `discover_recipe` (per-name winners + a
+   version-coherent set so split outputs move together and no new
+   `mixed-versions` refusals appear), `freshness.rs`'s `newest_key`, and the
+   QA input. `--skip` membership unchanged; `--skip-built` now claims the
+   highest-version set. Eight red-first fixtures (incl. the 1.9-vs-1.10
+   lexical trap and the vercmp-absent fallback).
+
+**Integration regressions the FULL battery caught (each invisible to the
+item's own focused tests):**
+- **`signal-abort-lock.sh` phase 6 — one-TERM discipline broken.** The new
+  lane wait-loop forwarded its TERM to its OWN process group, so the
+  TERM-proof stub logged a second receipt (the sweep's TERM + the lane's).
+  Fix: `signals.rs` stamps the first receipt with a monotonic
+  `received_signal_at_ns()`, and the lane TERMs the child pid — never the
+  group — only when the receipt predates the spawn (the child escaped the
+  sweep's single TERM and needs one of its own). A child that was already in
+  the group got the sweep's TERM and must not be re-signalled.
+- **`stable-sync-checksums.sh` — stub emulation drift.** The fixture's
+  `updpkgsums` stub only knew the no-arg form (it rewrote `./PKGBUILD`),
+  while item 4 legitimately passes the staged build file; the stub's
+  in-place write was then clobbered by the atomic publish. Fix: the stub
+  honours `[build file]` exactly like the real pacman-contrib tool (and
+  `gsa-sync-v2.sh`'s stub already did). A fixture-fidelity fix, not an
+  engine rollback.
+- **`gsa-state-v2.sh` in-flight guard — item 7 leaked into build
+  REGISTRATION.** `build.rs`'s register hook discovered archives through the
+  now version-ranked `discover_recipe`, so the fixture's planted stale
+  1.0.9-1 archive outranked the fresh 1.0.1-1 build output: the new index
+  row referenced the STALE file, and the retention sweep then (correctly,
+  per its path guard) kept the stale archive and deleted the fresh one.
+  Fix: discovery grows an explicit `Rank` policy — registration uses
+  `Rank::Mtime` (the pre-batch truth: a build registers the outputs it just
+  wrote), install/claims keep `Rank::Version`. The contract's
+  "newest = version-ranked" amendment now states the exception: registration
+  is not selection.
+
+**Validation.** `cargo test --workspace` green; `bash tests/run-all.sh`
+**68/68** after the three fixes (65/68 before them — the regressions above
+were real at that point). Red-first evidence for every item is quoted in its
+pin's fixture history (stash-the-source-probe style: e.g. `lane-interrupt.rs`
+goes red against the stashed `lane.rs`; `gsa-install-v2.sh` g/h print the
+leaked names; the sync stub logs the committed inode mutation).
+
+**Durable rules.** Contract amendments in `docs/gsa-contract.md` (§B.4/§B.5/
+§B.7/§B.8/§G.1/§J.4/§J.5/§F.1, all dated); `docs/MEMORY.md` rule 9 (rollback
+scope), rule 18 (staged `updpkgsums` + fsync + litter sweep), rule 19 (fd
+gate), the skip-modes block ("newest" = highest version), and new **rule 59**
+(a lane's signal receipt is load-bearing; a failed stand-down is killed).
+
+## 2026-10-17 — follow-up exploration: five parallel probes over the queued list; prioritized decision map (explore-only, nothing implemented)
+
+**Scope.** Owner: "let's move on to explore the follow-ups". Five read-only
+probes (contract drifts; `b_sigint` teardown; crash-consistency pair;
+selection hardening; seam hardening) verified the queued list against the tree
+at `38058c6`. No code changed this round; the map below is the owner's pick
+list.
+
+**Corrections to the queued list (verified against code, not memory).**
+- `--skip`+`--skip-built` is NOT an engine bug: `crates/gsa-cli/src/args.rs`
+  (the "One skip MODE per invocation" check) refuses the combination at parse
+  time, rc 2 naming both flags, exactly as help states. The "silently prefers
+  `--skip`" residue is unreachable internal precedence in
+  `crates/gsa-cli/src/prepare.rs` `pass_config` plus the fish-era oracle
+  (`tests/assets/build-all.fish`: "`--skip-built` wins").
+- `-Mm`/`-Mccc` never prompt: plan rows + rc 3 `confirmation-required`
+  (`crates/gsa-cli/src/maint.rs` `MaintVerb::Mirrors`), which §K.3 ("the
+  engine never prompts") already mandates — §B.7 is the stale side, and §G.1's
+  rc-3 condition list omits the confirmation gate.
+- `b_sigint` root cause: the lane child re-installs receipt handlers
+  (`crates/gsa-build/src/lane.rs`) that only *record* SIGTERM, then spawns
+  makepkg after the supervisor's one-shot group TERM (`crates/gsa-sched/src/
+  supervisor.rs` teardown) — live trace: makepkg spawned ~70 ms after the
+  signal and ran untouched until the grace SIGKILL, whose unattributable kill
+  settles `lost 125` instead of an interrupt row.
+- The `-U` install path has NO IgnorePkg rollback at all (only
+  `install_built_package` prunes; `crates/gsa-cli/src/install.rs` never does)
+  — the queued note understated the leak window.
+
+**Decision map (priority = urgency × impact ÷ cost).**
+1. `b_sigint` fix — F1: lane acts on its receipt (publish `interrupted-mid-build`
+   and exit without spawning when a signal is pending; replace bare
+   `cmd.status()` with a wait loop that TERMs makepkg on receipt) + F3: honest
+   interrupt rows for teardown kills (the `LaneDone` no-result branch scoped to
+   `was_interrupted`) — M. The only red test in the tree; F3 needs an owner call
+   on `lost 125` vs interrupt-row semantics during teardown.
+2. Contract amendment pass (all S, one bundle): §B.5 `-B` row → build cache
+   (§J.2 truth); §B.7 confirmation-gated-never-interactive wording (+§G.1 rc-3
+   list); §B.8 split `--quiet`/`--verbose` out as deferred parse-and-refuse
+   (+ one test line — §L.1 wants a fixture per flag); optional `prepare.rs`
+   defensive match + unit test. Also journal the sticky sync-skew truth: re-run
+   does NOT repair the PKGBUILD↔.SRCINFO publish window (`NoChangeReason::
+   Current` short-circuit) — document `makepkg --printsrcinfo` + manual
+   re-anchor as the repair and consider a skew lint.
+3. IgnorePkg `-U` rollback (B4): extend the proven `rollback_registration_names`
+   computation to the `-U` failure/interrupt paths — S-M. Post-transaction
+   reordering (B1) stays deferred: contract amendment + it re-opens rule 9's
+   protection gap.
+4. Sync-transaction residual (A3): route `updpkgsums` through a staged copy (its
+   in-place write is the transaction's one non-atomic writer), fsync the
+   `.SRCINFO` tmp before rename, sweep tmp litter — S. Full pre-image journaling
+   (A1, M-L) and sync signal receipts (A2, M) stay deferred.
+5. O_NOFOLLOW+fstat ownership gate (A1): unify the two gate copies
+   (`gsa-sched::lock::ownership_gate`, `gsa-state::ownership::gate_with_uid`)
+   onto an fd check — `std::fs::metadata` follows symlinks today, and the lane
+   log gate is warn-only by design (rule 19) — M.
+6. Park stand-down C1: kill the lane's process group only when the marker write
+   fails (node already settled `lost 125 park-marker-unwritable`) — S-M. C2
+   (full kill-based stand-down + started-marker wire) stays deferred (L).
+7. Version-ranked archive selection: A1 in `gsa-install::discover_recipe` first
+   (today's rank is mtime-only; vercmp + mtime tiebreak fixes the wrong-skip
+   class where a same-version newer-mtime rebuild shadows a higher version),
+   then A2-set for `freshness.rs`'s `newest_key` — S then M. Fallback when
+   `vercmp` is absent: keep mtime order, never string-order.
+8. Deferred/dropped with reasons: decide→execute hash-binding (B1, M) — defer
+   unless the threat model includes concurrent PKGDEST replacement; bash-sourcing
+   SRCDEST adapter (M) — drop, take only the empty-clear honesty fix
+   (`SRCDEST=` should clear; the approximate parser's gaps stay documented);
+   register-after-txn IgnorePkg (needs rule-9 amendment) and kill-as-stand-down
+   (L) — defer.
+
+**Validation.** Exploration only — no code changed. Spot-verified decisive
+handles before journaling: `args.rs` skip refusal, `prepare.rs` latent
+precedence, `gsa-model/src/config.rs` build-cache root, `lane.rs` warn-only log
+gate, `gsa-state/src/ownership.rs` symlink-following metadata,
+`gsa-install/src/lib.rs` mtime-only rank. This entry also drops a stray
+duplicated section heading the a47e5a6 rewrite left at this file's tail.
+
 ## 2026-10-17 — living-docs rewrite: gsa-era de-fishing, README becomes a landing page
 
 **Symptom.** The living docs still read as fish-script-era material: the README
@@ -13940,4 +14136,3 @@ and §6, and the commit/version identifiers of each fix are kept inline.
   1.6.9-1.1, wireplumber 0.5.18-1.1). Sums refreshed with `updpkgsums` and verified byte-identical
   to the b2 Arch publishes for each VCS source (`git archive` of the tag): pipewire `85867001…`,
   wireplumber `eea6a3e0…`.
-## 2026-10-17 — living-docs rewrite: gsa-era de-fishing, README becomes a landing page

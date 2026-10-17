@@ -18,7 +18,7 @@
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::os::fd::AsRawFd;
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
 use crate::signals::{current_uid, flock_exclusive_nonblocking, send_signal, SIGKILL};
@@ -47,12 +47,14 @@ pub fn acquire_run_lock(state_dir: &Path) -> Result<RunLock, String> {
     std::fs::create_dir_all(&locks)
         .map_err(|e| format!("cannot create {}: {e}", locks.display()))?;
     let path = locks.join("run.lock");
-    let file = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(&path)
-        .map_err(|e| format!("cannot open run lock {}: {e}", path.display()))?;
+    // The gate's checked handle IS the lock file: the flock and the pid write
+    // land on the inode the ownership check saw, never a second open. The
+    // quarantine note goes to stderr because this entry predates an err sink
+    // and its callers surface only the error string.
+    let mut opts = OpenOptions::new();
+    opts.create(true).truncate(false).write(true);
+    let file = open_state_file_with_uid(&path, &mut opts, current_uid(), &mut std::io::stderr())
+        .map_err(|e| e.to_string())?;
     if !flock_exclusive_nonblocking(file.as_raw_fd()) {
         return Err(format!(
             "another gsa run holds {} (a second run over the same state root is refused)",
@@ -92,16 +94,111 @@ pub fn quarantine_foreign(path: &Path, err: &mut dyn Write) -> Result<bool, Stri
     Ok(true)
 }
 
-/// The write-time ownership gate (rule 19): before opening a state file for
-/// write, a wrong owner is repaired loudly. A create failure names the
-/// remedy (`--state-dir`).
-pub fn ownership_gate(path: &Path, err: &mut dyn Write) -> Result<(), String> {
-    if let Ok(meta) = std::fs::metadata(path) {
-        if meta.uid() != current_uid() {
-            quarantine_foreign(path, err)?;
+/// `O_NOFOLLOW(2)`'s Linux value. Hard-coded like signals.rs's `LOCK_EX`:
+/// this tree keeps libc out of the dependency list, and Linux's `O_*` values
+/// are ABI-stable.
+const O_NOFOLLOW: i32 = 0o400000;
+
+/// Why the ownership gate refused to hand back an open state file. The split
+/// preserves the error classes callers already route: `Ownership` is the gate
+/// refusing (wrong owner, redirection), `Open` is the open itself failing.
+#[derive(Debug)]
+pub enum GateError {
+    Ownership(String),
+    Open(String),
+}
+
+impl std::fmt::Display for GateError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GateError::Ownership(m) | GateError::Open(m) => f.write_str(m),
         }
     }
-    Ok(())
+}
+
+fn open_nofollow(path: &Path, opts: &mut OpenOptions) -> std::io::Result<File> {
+    opts.custom_flags(O_NOFOLLOW);
+    opts.open(path)
+}
+
+/// Shape an open failure as the gate's refusal: a symlinked final component
+/// is named as the redirection it is (its own remedy), everything else keeps
+/// the §J.3 state-root remedy. The re-stat is diagnostic only — the refusal
+/// itself already happened in `open(2)`, and `ErrorKind::FilesystemLoop` is
+/// still unstable.
+fn open_refusal(path: &Path, e: std::io::Error) -> GateError {
+    let redirected = path
+        .symlink_metadata()
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false);
+    if redirected {
+        GateError::Ownership(format!(
+            "state file {} is a symlink — the ownership gate refuses to write through it; replace it with a regular file as the state owner (sudo), then rerun",
+            path.display()
+        ))
+    } else {
+        GateError::Open(format!(
+            "cannot open state file {} ({e}) — pass --state-dir PATH or set GSA_STATE_DIR",
+            path.display()
+        ))
+    }
+}
+
+fn fd_owned_by(file: &File, path: &Path, uid: u32) -> Result<bool, GateError> {
+    let meta = file
+        .metadata()
+        .map_err(|e| GateError::Open(format!("cannot stat {}: {e}", path.display())))?;
+    Ok(meta.uid() == uid)
+}
+
+/// The write-time ownership gate (rule 19, §J.5), fd-based: the file is
+/// opened with `O_NOFOLLOW` and ownership is checked via `fstat` on that same
+/// fd, so the check and the write share one inode — no symlink redirection,
+/// no check-then-use window between gate and open. The caller gets the
+/// checked handle back and must write through it, never re-open the path.
+/// A wrong owner is quarantined and the repaired path re-verified on its own
+/// fd: quarantine is forensics, not the boundary (the rename races like any
+/// path operation), so a re-planted foreign file is refused, never adopted.
+/// Residual: `O_NOFOLLOW` guards only the final path component; parent
+/// directories are trusted as part of the runner-owned state root (§J.5).
+pub fn open_state_file_with_uid(
+    path: &Path,
+    opts: &mut OpenOptions,
+    uid: u32,
+    err: &mut dyn Write,
+) -> Result<File, GateError> {
+    let file = open_nofollow(path, opts).map_err(|e| open_refusal(path, e))?;
+    if fd_owned_by(&file, path, uid)? {
+        return Ok(file);
+    }
+    drop(file);
+    quarantine_foreign(path, err).map_err(GateError::Ownership)?;
+    let file = open_nofollow(path, opts).map_err(|e| open_refusal(path, e))?;
+    if fd_owned_by(&file, path, uid)? {
+        return Ok(file);
+    }
+    drop(file);
+    Err(GateError::Ownership(format!(
+        "state file {} is still not owned by the running engine user after quarantine — move it aside as the state owner (sudo), then rerun",
+        path.display()
+    )))
+}
+
+/// The append-shaped production entry (lane logs): the checked handle every
+/// state write must use instead of opening the path again.
+pub fn open_state_append(path: &Path, err: &mut dyn Write) -> Result<File, GateError> {
+    let mut opts = OpenOptions::new();
+    opts.create(true).append(true);
+    open_state_file_with_uid(path, &mut opts, current_uid(), err)
+}
+
+/// The warn-only caller's open after a gate refusal (rule 19: forensics
+/// appends report and continue). Same no-symlink discipline as the gate — a
+/// refused redirection can never be recovered into its target.
+pub fn open_state_append_nofollow(path: &Path) -> std::io::Result<File> {
+    let mut opts = OpenOptions::new();
+    opts.create(true).append(true);
+    open_nofollow(path, &mut opts)
 }
 
 /// Create the state-root layout this phase owns (§J.1 subset): `logs/`,
@@ -118,7 +215,17 @@ pub fn ensure_state_dirs(state_dir: &Path, err: &mut dyn Write) -> Result<(), St
             )
         })?;
     }
-    ownership_gate(&state_dir.join("locks").join("run.lock"), err)?;
+    // The run.lock gate is fatal and fd-based (the checked open is the gate;
+    // `acquire_run_lock` gates its own open again and keeps that handle).
+    let mut opts = OpenOptions::new();
+    opts.create(true).truncate(false).write(true);
+    open_state_file_with_uid(
+        &state_dir.join("locks").join("run.lock"),
+        &mut opts,
+        current_uid(),
+        err,
+    )
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 

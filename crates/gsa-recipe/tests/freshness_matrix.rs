@@ -675,6 +675,74 @@ fn discovery_never_counts_a_longer_output_as_a_shorter_one() {
 }
 
 #[test]
+fn discovery_ranks_sets_by_version_before_mtime() {
+    let fx = Fixture::new("discovery_version_rank");
+    fx.write(
+        ".SRCINFO",
+        b"pkgbase = p1\npkgver = 1.0\npkgrel = 1\npkgname = p1\n",
+    );
+    // The higher-version set is the OLDER one on disk: mtime order claims the
+    // 1.0-1 set, so `--skip-built` under-reports what is built (the wrong-skip
+    // class). Version order must decide; mtime only breaks version ties.
+    let low = fx.write("p1-1.0-1-x86_64.pkg.tar.zst", b"low version");
+    set_mtime(&low, 200, 0);
+    let high = fx.write("p1-2.0-1-x86_64.pkg.tar.zst", b"high version");
+    set_mtime(&high, 100, 0);
+
+    let discovery = discover_newest_complete_set(&fx.recipe);
+    assert_eq!(discovery.status(), DiscoveryStatus::Complete);
+    assert_eq!(discovery.version_key.as_deref(), Some("2.0-1"));
+    assert_eq!(discovery.archives, vec![high]);
+}
+
+#[test]
+fn discovery_keeps_split_outputs_of_one_version_together() {
+    let fx = Fixture::new("discovery_set_scoped");
+    fx.write(
+        ".SRCINFO",
+        b"pkgbase = p1\npkgver = 1.0\npkgrel = 1\npkgname = p1\npkgname = p1-extra\n",
+    );
+    // Two complete sets whose mtimes rank the OLDER version newest. The claim
+    // set is chosen set-scoped: both split outputs of the winning version
+    // together, never one output spliced from each set (a spliced set mixes
+    // versions and manufactures downstream `partial-set … mixed-versions`
+    // refusals).
+    let low_main = fx.write("p1-1.0-1-x86_64.pkg.tar.zst", b"low main");
+    set_mtime(&low_main, 300, 0);
+    let low_extra = fx.write("p1-extra-1.0-1-any.pkg.tar.zst", b"low extra");
+    set_mtime(&low_extra, 300, 0);
+    let high_main = fx.write("p1-2.0-1-x86_64.pkg.tar.zst", b"high main");
+    set_mtime(&high_main, 100, 0);
+    let high_extra = fx.write("p1-extra-2.0-1-any.pkg.tar.zst", b"high extra");
+    set_mtime(&high_extra, 100, 0);
+
+    let discovery = discover_newest_complete_set(&fx.recipe);
+    assert_eq!(discovery.status(), DiscoveryStatus::Complete);
+    assert_eq!(discovery.version_key.as_deref(), Some("2.0-1"));
+    assert_eq!(discovery.archives, vec![high_main, high_extra]);
+    assert_eq!(discovery.missing, Vec::<String>::new());
+}
+
+#[test]
+fn discovery_without_vercmp_keeps_the_mtime_order() {
+    let fx = Fixture::new("discovery_no_vercmp");
+    fx.write(
+        ".SRCINFO",
+        b"pkgbase = p1\npkgver = 1.0\npkgrel = 1\npkgname = p1\n",
+    );
+    let low = fx.write("p1-1.0-1-x86_64.pkg.tar.zst", b"low version");
+    set_mtime(&low, 200, 0);
+    let high = fx.write("p1-2.0-1-x86_64.pkg.tar.zst", b"high version");
+    set_mtime(&high, 100, 0);
+    // PATH without vercmp (the stub dir carries no stubs at all): the version
+    // rank degrades to the mtime order, never to string order.
+    std::env::set_var("PATH", &fx.stubs);
+    let discovery = discover_newest_complete_set(&fx.recipe);
+    assert_eq!(discovery.version_key.as_deref(), Some("1.0-1"));
+    assert_eq!(discovery.archives, vec![low]);
+}
+
+#[test]
 fn payload_probe_runs_pacman_through_path() {
     let fx = Fixture::new("payload_probe");
     let archive = fx.write("p1-1.0-1-x86_64.pkg.tar.zst", b"payload");

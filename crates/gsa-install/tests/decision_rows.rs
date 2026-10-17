@@ -7,11 +7,13 @@
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::time::{Duration, SystemTime};
+use std::sync::Mutex;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use gsa_install::{
-    decide, decide_mode, install_built_package, rows_rc, Candidate, DecideMode, DecisionContext,
-    EmptyListPolicy, InstallRun, InstalledPackage, LocalDb,
+    decide, decide_mode, discover_recipe, install_built_package, rollback_registration_names,
+    rows_rc, Candidate, DecideMode, DecisionContext, EmptyListPolicy, InstallRun, InstalledPackage,
+    LocalDb,
 };
 use gsa_model::Decision;
 
@@ -670,5 +672,213 @@ fn install_built_package_refuses_a_mixed_version_set() {
     assert!(rows[0]
         .reason
         .starts_with(&format!("partial-set {} mixed-versions", recipe.display())));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ─── the IgnorePkg rollback computation (rule 9's complement) ───────────────
+// The `-U` path feeds the same computation its staged-swap shape: `keep`
+// carries the skip (already-current) names AND the names whose archives
+// LANDED, so a multi-wave partial success keeps exactly its landed
+// registrations.
+
+fn name_list(list: &[&str]) -> Vec<String> {
+    list.iter().map(|s| s.to_string()).collect()
+}
+
+#[test]
+fn rollback_registration_names_keeps_the_landed_waves_names() {
+    // Multi-wave partial success: wave 1 landed (lib1, app1 — kept), wave 2
+    // failed (lib2, app2), the leftover was held (solo), and a name shared
+    // by a landed and a failed archive stays — it IS installed via the
+    // landed one. Only the never-installed additions go back.
+    assert_eq!(
+        rollback_registration_names(
+            &name_list(&["lib1", "app1", "shared", "lib2", "app2", "solo", "skipper"]),
+            &name_list(&["lib1", "app1", "shared", "lib2", "app2", "solo"]),
+            // keep = skip (already-current) ∪ landed waves
+            &name_list(&["skipper", "lib1", "app1", "shared"]),
+        ),
+        name_list(&["lib2", "app2", "solo"])
+    );
+}
+
+#[test]
+fn rollback_registration_names_on_the_interrupt_set() {
+    // Interrupt with nothing landed (the in-flight transaction was torn
+    // down): every install-bearing added name goes back, while a skip
+    // (already-current) name stays — it IS installed.
+    assert_eq!(
+        rollback_registration_names(
+            &name_list(&["alpha", "alpha-out", "skipper"]),
+            &name_list(&["alpha", "alpha-out"]),
+            &name_list(&["skipper"]),
+        ),
+        name_list(&["alpha", "alpha-out"])
+    );
+}
+
+// ─── version-ranked discovery (the wrong-skip fix) ──────────────────────────
+//
+// Selection ranks archives by canonical version first and breaks version ties
+// (and unrankable pairs) by mtime: a same-version rebuild with a newer mtime
+// must never shadow a higher-version archive into an `already-current` skip.
+// Ranking resolves `vercmp` through PATH, so the fixtures whose outcome
+// DEPENDS on version order hold `ENV_LOCK` against the one fixture that
+// empties PATH — the others are deliberately fallback-invariant.
+
+static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+fn discovered_archives(found: &gsa_install::RecipeArchives) -> Vec<PathBuf> {
+    found.candidates.iter().map(|c| c.archive.clone()).collect()
+}
+
+#[test]
+fn discovery_ranks_by_version_before_mtime() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = scratch("version-rank");
+    let recipe = dir.join("recipe");
+    std::fs::create_dir_all(&recipe).unwrap();
+    std::fs::write(recipe.join(".SRCINFO"), "pkgbase = foo\npkgname = foo\n").unwrap();
+    // The 1.0-1 archive is the newer rebuild (mtime 200 vs 100): mtime order
+    // picks it and the checked skip then fires against the installed 1.0-1,
+    // shadowing the higher-version archive on disk (the wrong-skip).
+    let low = recipe.join("foo-1.0-1-x86_64.pkg.tar.zst");
+    write_archive(&low, &[(".PKGINFO", &pkginfo_body("foo", "1.0-1", &[]))]);
+    set_mtime(&low, UNIX_EPOCH + Duration::from_secs(200));
+    let high = recipe.join("foo-2.0-1-x86_64.pkg.tar.zst");
+    write_archive(&high, &[(".PKGINFO", &pkginfo_body("foo", "2.0-1", &[]))]);
+    set_mtime(&high, UNIX_EPOCH + Duration::from_secs(100));
+
+    let found = discover_recipe(&recipe).unwrap();
+    assert_eq!(
+        discovered_archives(&found),
+        vec![high.clone()],
+        "the higher version must win over the newer-mtime shadow"
+    );
+
+    // Checked mode must INSTALL the version mismatch, never skip.
+    let db = LocalDb::from_packages(vec![installed(
+        "foo",
+        "0:1.0-1",
+        &[],
+        &[],
+        Some(SystemTime::now()),
+    )]);
+    let rows = decide(&found.candidates, &checked_ctx(), &db).unwrap();
+    assert_eq!(rendered(&rows), vec!["foo install ok".to_string()]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn discovery_ranks_versions_numerically_not_lexically() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = scratch("version-lexical");
+    let recipe = dir.join("recipe");
+    std::fs::create_dir_all(&recipe).unwrap();
+    std::fs::write(recipe.join(".SRCINFO"), "pkgbase = foo\npkgname = foo\n").unwrap();
+    // 1.9 wins on mtime AND lexically (`9` > `1`); only vercmp order ranks
+    // 1.10 above it — string order must never stand in for version order.
+    let nine = recipe.join("foo-1.9-1-x86_64.pkg.tar.zst");
+    write_archive(&nine, &[(".PKGINFO", &pkginfo_body("foo", "1.9-1", &[]))]);
+    set_mtime(&nine, UNIX_EPOCH + Duration::from_secs(200));
+    let ten = recipe.join("foo-1.10-1-x86_64.pkg.tar.zst");
+    write_archive(&ten, &[(".PKGINFO", &pkginfo_body("foo", "1.10-1", &[]))]);
+    set_mtime(&ten, UNIX_EPOCH + Duration::from_secs(100));
+
+    let found = discover_recipe(&recipe).unwrap();
+    assert_eq!(discovered_archives(&found), vec![ten]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn discovery_breaks_version_ties_by_the_newest_mtime() {
+    let dir = scratch("version-tie");
+    let recipe = dir.join("recipe");
+    std::fs::create_dir_all(&recipe).unwrap();
+    std::fs::write(recipe.join(".SRCINFO"), "pkgbase = foo\npkgname = foo\n").unwrap();
+    // Same canonical version: the newest rebuild wins (rule 11's freshness
+    // direction). Outcome is identical without vercmp, so no PATH lock.
+    let x86 = recipe.join("foo-1.0-1-x86_64.pkg.tar.zst");
+    write_archive(&x86, &[(".PKGINFO", &pkginfo_body("foo", "1.0-1", &[]))]);
+    set_mtime(&x86, UNIX_EPOCH + Duration::from_secs(100));
+    let any = recipe.join("foo-1.0-1-any.pkg.tar.zst");
+    write_archive(&any, &[(".PKGINFO", &pkginfo_body("foo", "1.0-1", &[]))]);
+    set_mtime(&any, UNIX_EPOCH + Duration::from_secs(200));
+
+    let found = discover_recipe(&recipe).unwrap();
+    assert_eq!(discovered_archives(&found), vec![any]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn discovery_keeps_split_outputs_of_one_version_together() {
+    let dir = scratch("set-scoped");
+    let recipe = dir.join("recipe");
+    std::fs::create_dir_all(&recipe).unwrap();
+    std::fs::write(
+        recipe.join(".SRCINFO"),
+        "pkgbase = foo\npkgname = foo\npkgname = foo-docs\n",
+    )
+    .unwrap();
+    // A half-built 2.0-1 set (foo only) beside a complete 1.0-1 set carrying
+    // the newer mtimes. Splicing foo-2.0-1 into the 1.0-1 pair manufactures a
+    // `partial-set … mixed-versions` refusal where the mtime-ranked chooser
+    // installed a coherent set: selection must stay set-scoped, one version's
+    // split outputs together.
+    let foo_20 = recipe.join("foo-2.0-1-x86_64.pkg.tar.zst");
+    write_archive(&foo_20, &[(".PKGINFO", &pkginfo_body("foo", "2.0-1", &[]))]);
+    set_mtime(&foo_20, UNIX_EPOCH + Duration::from_secs(300));
+    let foo_10 = recipe.join("foo-1.0-1-x86_64.pkg.tar.zst");
+    write_archive(&foo_10, &[(".PKGINFO", &pkginfo_body("foo", "1.0-1", &[]))]);
+    set_mtime(&foo_10, UNIX_EPOCH + Duration::from_secs(100));
+    let docs_10 = recipe.join("foo-docs-1.0-1-any.pkg.tar.zst");
+    write_archive(
+        &docs_10,
+        &[(".PKGINFO", &pkginfo_body("foo-docs", "1.0-1", &[]))],
+    );
+    set_mtime(&docs_10, UNIX_EPOCH + Duration::from_secs(300));
+
+    let found = discover_recipe(&recipe).unwrap();
+    assert_eq!(
+        discovered_archives(&found),
+        vec![foo_10, docs_10],
+        "the set-scoped choice: one version's outputs together"
+    );
+    assert!(!found.mixed_versions, "no new mixed-versions refusal");
+    assert!(found.missing.is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn discovery_without_vercmp_keeps_the_mtime_order() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = scratch("no-vercmp");
+    let recipe = dir.join("recipe");
+    std::fs::create_dir_all(&recipe).unwrap();
+    std::fs::write(recipe.join(".SRCINFO"), "pkgbase = foo\npkgname = foo\n").unwrap();
+    let low = recipe.join("foo-1.0-1-x86_64.pkg.tar.zst");
+    write_archive(&low, &[(".PKGINFO", &pkginfo_body("foo", "1.0-1", &[]))]);
+    set_mtime(&low, UNIX_EPOCH + Duration::from_secs(200));
+    let high = recipe.join("foo-2.0-1-x86_64.pkg.tar.zst");
+    write_archive(&high, &[(".PKGINFO", &pkginfo_body("foo", "2.0-1", &[]))]);
+    set_mtime(&high, UNIX_EPOCH + Duration::from_secs(100));
+
+    // PATH without vercmp: the rank degrades to mtime order, never to string
+    // order (which would pick the 2.0-1 archive here).
+    let empty_path = dir.join("path");
+    std::fs::create_dir_all(&empty_path).unwrap();
+    let saved = std::env::var_os("PATH");
+    std::env::set_var("PATH", &empty_path);
+    let found = discover_recipe(&recipe);
+    match saved {
+        Some(path) => std::env::set_var("PATH", path),
+        None => std::env::remove_var("PATH"),
+    }
+    let found = found.unwrap();
+    assert_eq!(
+        discovered_archives(&found),
+        vec![low],
+        "without vercmp the chooser must keep the mtime order"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }

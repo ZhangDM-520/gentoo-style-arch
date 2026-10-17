@@ -26,6 +26,7 @@
 //! `svn`, `hg`, `bzr`) so tests and fixtures can stub them, and every retry
 //! sleep goes through an injected sleeper so no caller ever blocks in a test.
 
+use std::cmp::Ordering;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -34,6 +35,7 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use sha2::{Digest, Sha256};
 
+use crate::pkginfo::version_rank;
 use crate::{parse_srcinfo, scan_pkgbuild, ScanValue, VcsKind};
 
 // ---------------------------------------------------------------------------
@@ -1443,8 +1445,12 @@ fn list_archives(recipe_dir: &Path) -> Vec<ArchiveRow> {
             rows.push(ArchiveRow { mtime, path });
         }
     }
-    // Newest first (fish `find -printf %T@ | sort -rn`; equal mtimes fall
-    // back to a reverse path compare, the full-line tiebreak of `sort -rn`).
+    // Mtime order here is the tiebreak/data order only: the discovery seams
+    // rank by version first, so the fish `find -printf %T@ | sort -rn`
+    // parity is deliberately broken at the choice site (a newer-mtime
+    // lower-version rebuild must never shadow a higher-version set). Equal
+    // mtimes still fall back to a reverse path compare, the full-line
+    // tiebreak of `sort -rn`.
     rows.sort_by(|a, b| b.mtime.cmp(&a.mtime).then_with(|| b.path.cmp(&a.path)));
     rows
 }
@@ -1503,16 +1509,20 @@ pub fn discover_current_set(recipe_dir: &Path) -> Discovery {
     }
 }
 
-/// `newest_complete_archives` (fish): the archives of the NEWEST complete
-/// built set at ANY version — the `--skip-built` claim set. Currency is a
-/// BUILD claim, never the committed pkgver (a fast-moving VCS recipe's
-/// committed pkgver trails its archives; keying to it rebuilt llvm-git on
-/// every run, 2026-10-07 run #40). Each archive is assigned to the LONGEST
-/// expected name it is prefixed by (`p1-extra-1.0-1-any` must never count as
-/// output `p1`), then grouped by its PV-PR key (only the trailing ARCH token
-/// is dropped, so a pkgver carrying dashes groups with its siblings). A
-/// NEWER but partial key still reports `Partial` — an older complete set must
-/// never cover for a split set cut apart by a mid-packaging SIGKILL.
+/// `newest_complete_archives` (fish): the archives of the highest-VERSION
+/// complete built set at ANY version — the `--skip-built` claim set (mtime
+/// breaks version ties; the fish mtime-first choice is deliberately gone,
+/// the wrong-skip fix). Currency is a BUILD claim, never the committed
+/// pkgver (a fast-moving VCS recipe's committed pkgver trails its archives;
+/// keying to it rebuilt llvm-git on every run, 2026-10-07 run #40). Each
+/// archive is assigned to the LONGEST expected name it is prefixed by
+/// (`p1-extra-1.0-1-any` must never count as output `p1`), then grouped by
+/// its PV-PR key (only the trailing ARCH token is dropped, so a pkgver
+/// carrying dashes groups with its siblings) — set-scoped, so split outputs
+/// of one version stay together and never splice into a mixed set. A
+/// higher-version but partial key still reports `Partial` — a lower-version
+/// complete set must never cover for a split set cut apart by a
+/// mid-packaging SIGKILL.
 pub fn discover_newest_complete_set(recipe_dir: &Path) -> Discovery {
     let names = match expected_output_names(recipe_dir) {
         Ok(n) => n,
@@ -1520,7 +1530,6 @@ pub fn discover_newest_complete_set(recipe_dir: &Path) -> Discovery {
     };
     let rows = list_archives(recipe_dir);
     let mut entries: Vec<(String, String, PathBuf)> = Vec::new(); // (key, owner, path)
-    let mut newest_key = String::new();
     for row in &rows {
         let base = short_name(&row.path);
         let mut owner = String::new();
@@ -1548,10 +1557,16 @@ pub fn discover_newest_complete_set(recipe_dir: &Path) -> Discovery {
         if key == tail || key.is_empty() {
             continue;
         }
-        if newest_key.is_empty() {
+        entries.push((key, owner, row.path.clone()));
+    }
+    // The claim key is version-ranked; `rows` arrives mtime-ranked, so
+    // keeping the incumbent on a version tie or a `vercmp` non-answer IS the
+    // newest-mtime tiebreak and the mtime fallback in one rule.
+    let mut newest_key = String::new();
+    for (key, _, _) in &entries {
+        if newest_key.is_empty() || matches!(version_rank(key, &newest_key), Ordering::Less) {
             newest_key = key.clone();
         }
-        entries.push((key, owner, row.path.clone()));
     }
     if newest_key.is_empty() {
         return Discovery {

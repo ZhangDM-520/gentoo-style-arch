@@ -193,11 +193,20 @@ esac"#,
             "updpkgsums",
             r#"#!/bin/bash
 printf 'updpkgsums %s\n' "$*" >> "$STUB_LOG"
-if [ -n "$STUB_UPDPKGSUMS_FAIL" ]; then
-    printf 'updpkgsums: cannot download sources\n' >&2
-    exit 1
-fi
-source ./PKGBUILD 2>/dev/null || exit 1
+# The real tool takes an optional build file and rewrites it IN PLACE, so
+# log which file this run targets with both inode identities as they stand
+# mid-transaction: the transaction contract is that the committed PKGBUILD
+# is never the file an external writer mutates.
+buildfile=${1:-PKGBUILD}
+case "$buildfile" in
+    */*) ;;
+    *) buildfile=./$buildfile ;;
+esac
+printf 'updpkgsums-mutates %s target-ino=%s committed-ino=%s\n' \
+    "$buildfile" \
+    "$(stat -c %i "$buildfile" 2>/dev/null || printf none)" \
+    "$(stat -c %i ./PKGBUILD 2>/dev/null || printf none)" >> "$STUB_LOG"
+source "$buildfile" 2>/dev/null || exit 1
 q=$'\x27'
 vals=()
 for s in "${source[@]}"; do
@@ -224,7 +233,13 @@ for v in "${vals[@]:1}"; do
     line="$line $q$v$q"
 done
 line="$line)"
-sed -i "s/^sha256sums=.*/$line/" ./PKGBUILD"#,
+sed -i "s/^sha256sums=.*/$line/" "$buildfile"
+if [ -n "$STUB_UPDPKGSUMS_FAIL" ]; then
+    # Fail AFTER the in-place rewrite: the crash shape the transaction must
+    # survive is a partially rewritten build file, not a clean no-op.
+    printf 'updpkgsums: died mid-rewrite\n' >&2
+    exit 1
+fi"#,
         );
         self.stub_script(
             "makepkg",
@@ -1233,6 +1248,72 @@ fn staged_publish_failure_keeps_recipe_bytes() {
     assert!(dir.join(staged_name()).is_dir());
 }
 
+/// The stub's mutation log must show the committed PKGBUILD was never the
+/// file the in-place writer touched — inode identities sampled by the stub
+/// at mutation time, so the claim is mid-transaction, not reconstructed
+/// after a rename could have hidden it.
+fn assert_never_mutated_committed(s: &Scratch) {
+    let log = s.log();
+    let rows: Vec<&str> = log
+        .lines()
+        .filter(|l| l.starts_with("updpkgsums-mutates "))
+        .collect();
+    assert!(!rows.is_empty(), "the stub must log what it mutated: {log}");
+    for row in rows {
+        let target = log_field(row, "target-ino=");
+        let committed = log_field(row, "committed-ino=");
+        assert_ne!(
+            target, committed,
+            "updpkgsums must never rewrite the committed PKGBUILD in place: {row}"
+        );
+    }
+}
+
+fn log_field<'a>(row: &'a str, key: &str) -> &'a str {
+    let i = row
+        .find(key)
+        .unwrap_or_else(|| panic!("missing {key} in {row}"));
+    row[i + key.len()..]
+        .split_whitespace()
+        .next()
+        .expect("field value")
+}
+
+/// `updpkgsums` rewrites its build file IN PLACE — the run must hand it the
+/// staged copy and bring the result back through the transaction's publish,
+/// so the committed PKGBUILD is never the mutated file.
+#[test]
+fn updpkgsums_rewrites_a_staged_copy_never_the_committed_pkgbuild() {
+    let s = Scratch::new("updpkgsums_staged");
+    let dir = s.recipe("stable", "staged", RULE18_PKG);
+    let (a, b, _c) = stage_rule18_fetches(&s, &dir);
+
+    let provider = FakeProvider::new(ProviderFamily::Arch, "1.1").with_sums(
+        vec![
+            ("a-1.1.tar.gz", "sha256", &sha256(&a)),
+            ("b-1.1.tar.gz", "sha256", &sha256(&b)),
+        ],
+        "staged",
+    );
+    let report = sync_arch(&dir, &provider, &s.policy());
+    assert!(
+        matches!(report.outcome, SyncOutcome::VersionMoved { .. }),
+        "got {:?}",
+        report.outcome
+    );
+    assert_never_mutated_committed(&s);
+    // The refreshed sums still land in the committed recipe — via publish.
+    let sums_line = read(&dir.join("PKGBUILD"))
+        .lines()
+        .find(|l| l.starts_with("sha256sums="))
+        .unwrap()
+        .to_string();
+    assert!(
+        sums_line.contains(&sha256(&b)),
+        "the staged sums must reach the recipe: {sums_line}"
+    );
+}
+
 /// `updpkgsums` failing after the rewrite is a deferral — and the rewrite is
 /// restored byte-identical (a genuine mid-rewrite failure, not a no-op path).
 #[test]
@@ -1250,11 +1331,73 @@ fn updpkgsums_failure_defers_and_restores_byte_identical() {
     let report = sync_arch(&dir, &provider, &s.policy());
 
     assert_eq!(report.deferral(), Some("anchoring-refused"));
+    assert_never_mutated_committed(&s);
     assert_eq!(
         pkgbuild_bytes(&dir),
         before,
         "the recipe must be restored byte-identical after updpkgsums failure"
     );
+}
+
+/// A crashed run leaves its sibling staging litter behind; the next
+/// transaction sweeps exactly the names this module's own writers create —
+/// and nothing else (the tracked files, near-miss names, and a directory
+/// that merely shares a pattern all survive).
+#[test]
+fn transaction_begin_sweeps_own_staging_litter_only() {
+    let s = Scratch::new("staging_litter");
+    let dir = policy_recipe(&s, "sweep", "1.0", "1", "");
+    fs::write(dir.join(".SRCINFO"), "pkgbase = sweep\n\tpkgver = 1.0\n").unwrap();
+    let litter = [
+        "PKGBUILD.tmp.99999",
+        "PKGBUILD.tmp.99999.tmp.99999",
+        "PKGBUILD.tmp.99999.restore",
+        ".SRCINFO.tmp.99999",
+    ];
+    for name in litter {
+        fs::write(dir.join(name), b"crash litter").unwrap();
+    }
+    let survivors = ["PKGBUILD", ".SRCINFO", "PKGBUILD.tmp", ".SRCINFO.tmp", "PKGBUILD.orig"];
+    for name in ["PKGBUILD.tmp", ".SRCINFO.tmp", "PKGBUILD.orig"] {
+        fs::write(dir.join(name), b"not ours").unwrap();
+    }
+    fs::create_dir(dir.join("PKGBUILD.tmp.keepme")).unwrap();
+
+    let mut provider = FakeProvider::new(ProviderFamily::Arch, "1.0");
+    provider.answer = Ok(VersionAnswer::Found(VersionFields::parse("1.0-2").unwrap()));
+    let report = sync_arch(&dir, &provider, &s.policy());
+    assert!(
+        matches!(report.outcome, SyncOutcome::ReleaseMoved { .. }),
+        "got {:?}",
+        report.outcome
+    );
+
+    for name in litter {
+        assert!(
+            !dir.join(name).exists(),
+            "crash litter must not survive the next transaction: {name}"
+        );
+    }
+    for name in survivors {
+        assert!(
+            dir.join(name).is_file(),
+            "the sweep must never touch a non-litter name: {name}"
+        );
+    }
+    assert!(
+        dir.join("PKGBUILD.tmp.keepme").is_dir(),
+        "a directory squatting on the pattern is never this module's litter"
+    );
+    // The run itself leaves none of its own behind either: every remaining
+    // pattern match is the surviving directory above.
+    for entry in fs::read_dir(&dir).unwrap().flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let ours = name.starts_with("PKGBUILD.tmp.") || name.starts_with(".SRCINFO.tmp.");
+        assert!(
+            !ours || entry.path().is_dir(),
+            "staging litter survived the run: {name}"
+        );
+    }
 }
 
 /// A failed `.SRCINFO` refresh folds into the disposition line loudly — the

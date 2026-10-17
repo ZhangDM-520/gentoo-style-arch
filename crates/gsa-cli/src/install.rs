@@ -58,6 +58,39 @@ pub(crate) const DEFAULT_CONF: &str = "/etc/pacman.conf";
 // Pure mappings (unit-tested; no gsa-install behaviour is touched here)
 // ---------------------------------------------------------------------------
 
+/// The IgnorePkg write set one `-U` registration made (rule 9), kept for the
+/// failed-transaction rollback (rule 9's complement).
+struct RegisteredNames {
+    /// The exact names this run appended — names already in the closure
+    /// before the run are never un-registered.
+    added: Vec<String>,
+    /// Names of install-bearing archives (`install` rows).
+    install_names: Vec<String>,
+    /// Per install-bearing archive, the names it establishes — a landed
+    /// archive's names join the keep side below.
+    archive_names: Vec<(PathBuf, Vec<String>)>,
+    /// Names a skip (already-current) archive also protects: they ARE
+    /// installed, so they stay registered whatever the transactions did.
+    skip_names: Vec<String>,
+}
+
+impl RegisteredNames {
+    /// What to un-register once the staged transactions have settled:
+    /// `added ∩ install-bearing \ keep`, with `keep` extended by every name
+    /// whose archive actually landed. A landed wave IS installed, so a
+    /// multi-wave partial success keeps its landed registrations while the
+    /// failed, held or never-started waves' names roll back.
+    fn names_to_rollback(&self, fates: &BTreeMap<PathBuf, GroupFate>) -> Vec<String> {
+        let mut keep: Vec<String> = self.skip_names.clone();
+        for (archive, names) in &self.archive_names {
+            if matches!(fates.get(archive), Some(GroupFate::Landed)) {
+                keep.extend(names.iter().cloned());
+            }
+        }
+        gsa_install::rollback_registration_names(&self.added, &self.install_names, &keep)
+    }
+}
+
 /// Fold one `-S` install step's result into the supervisor's [`InstallStep`]
 /// (contract §E rows → §G.1 classes):
 ///
@@ -924,14 +957,22 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
         .deferred_flags
         .iter()
         .any(|f| f == "--no-register-ignorepkg");
+    // The registration's write set, kept for the failed-transaction
+    // rollback (rule 9's complement): what this run added, split by
+    // transaction role.
+    let mut registered: Option<RegisteredNames> = None;
     if !register {
         let _ = writeln!(
             err,
             "gsa: note: --no-register-ignorepkg: skipping the dynamic IgnorePkg registration"
         );
     } else {
-        // Names for every ACCEPTED archive (install AND skip rows — rule 9).
+        // Names for every ACCEPTED archive (install AND skip rows — rule 9),
+        // partitioned the way the rollback below needs them.
         let mut names: BTreeSet<String> = BTreeSet::new();
+        let mut install_names: BTreeSet<String> = BTreeSet::new();
+        let mut skip_names: BTreeSet<String> = BTreeSet::new();
+        let mut archive_names: Vec<(PathBuf, Vec<String>)> = Vec::new();
         let mut accepted: Vec<String> = Vec::new();
         for (row, candidate) in &paired {
             if !matches!(row.decision, Decision::Install | Decision::Skip) {
@@ -941,6 +982,12 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
             let pkginfo = read_pkginfo(&candidate.archive).ok();
             match names_for_archive(pkginfo.as_ref(), candidate.recipe_dir.as_deref()) {
                 Ok(found) => {
+                    if row.decision == Decision::Install {
+                        install_names.extend(found.iter().cloned());
+                        archive_names.push((candidate.archive.clone(), found.clone()));
+                    } else {
+                        skip_names.extend(found.iter().cloned());
+                    }
                     names.extend(found);
                     accepted.push(row.subject.clone());
                 }
@@ -980,6 +1027,14 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
                     "gsa: note: {}",
                     register_report_line(&subject_label, &conf, &report)
                 );
+                // The exact write set (`added`) — the only names the
+                // rollback below may ever un-register.
+                registered = Some(RegisteredNames {
+                    added: report.added,
+                    install_names: install_names.into_iter().collect(),
+                    archive_names,
+                    skip_names: skip_names.into_iter().collect(),
+                });
             }
             Err(message) => {
                 let _ = writeln!(err, "gsa: install-refused register-failed: {message}");
@@ -1019,7 +1074,13 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
         Ok(groups) => groups,
         Err(refusals) => {
             // A wave that cannot land wholly is a refusal (§E.3) — and a
-            // refusing plan is pacman-free end to end (rule 25(h)).
+            // refusing plan is pacman-free end to end (rule 25(h)). Nothing
+            // transacted, so every name this run registered is uninstalled:
+            // rule 9's complement prunes the whole write set (nothing has a
+            // `Landed` fate yet).
+            if let Some(registered) = &registered {
+                rollback_uninstalled(err, &conf, &db_root, registered, &BTreeMap::new());
+            }
             let mut all_rows = rows.clone();
             all_rows.extend(refusals);
             return finish_refused(
@@ -1068,6 +1129,18 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
         }
     }
     let dur = started.elapsed().as_secs() as i64;
+
+    // Rule 9's complement: whatever did not land — a failed transaction, a
+    // group held behind one, or (an interrupt) a group that never started
+    // or whose in-flight transaction the teardown tore down (its fate is
+    // never recorded) — must never leave names registered that pacman did
+    // not install, or future `-Syu` silently skips them forever. The landed
+    // waves keep theirs: they ARE installed. A hard crash between the
+    // registration and this point stays the accepted residual — the dated
+    // pre-image backup (`<conf>.bak-<YYYYMMDD>`) is the manual recovery.
+    if let Some(registered) = &registered {
+        rollback_uninstalled(err, &conf, &db_root, registered, &fates);
+    }
 
     // ── record the `:=` subscriptions of what landed (plan §4.1) ─────────
     // Loud on failure, never aborting: the wave planner fails toward
@@ -1467,6 +1540,48 @@ fn register_report_line(subject: &str, conf: &Path, report: &RegisterReport) -> 
     )
 }
 
+/// Roll back one `-U` run's uninstalled IgnorePkg registrations (rule 9's
+/// complement) through the same computation and writer as the `-S` step. A
+/// hard crash between the registration and this point stays the accepted
+/// residual — the dated pre-image backup (`<conf>.bak-<YYYYMMDD>`) is the
+/// manual recovery.
+fn rollback_uninstalled(
+    err: &mut dyn Write,
+    conf: &Path,
+    db_root: &Path,
+    registered: &RegisteredNames,
+    fates: &BTreeMap<PathBuf, GroupFate>,
+) {
+    let rollback = registered.names_to_rollback(fates);
+    if rollback.is_empty() {
+        return;
+    }
+    match gsa_install::register::prune_ignorepkg(
+        conf,
+        "rollback: the install transaction did not succeed",
+        &rollback,
+        db_root,
+    ) {
+        Ok(pruned) => {
+            let _ = writeln!(
+                err,
+                "gsa: note: rolled back IgnorePkg registration of {} name(s) never installed ({})",
+                pruned.removed.len(),
+                pruned.removed.join(", ")
+            );
+        }
+        Err(error) => {
+            let _ = writeln!(
+                err,
+                "gsa: warning: IgnorePkg rollback failed in {} ({error}) — {} stay registered although the transaction did not install them (pre-image backup: {}.bak-<YYYYMMDD>)",
+                conf.display(),
+                rollback.join(", "),
+                conf.display()
+            );
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Hidden seams (contract §D.1)
 // ---------------------------------------------------------------------------
@@ -1818,5 +1933,98 @@ mod tests {
         }
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir(&dir);
+    }
+
+    fn reg(
+        added: &[&str],
+        install: &[&str],
+        archive_names: &[(&str, &[&str])],
+        skip: &[&str],
+    ) -> RegisteredNames {
+        let strs = |list: &[&str]| -> Vec<String> {
+            list.iter().map(|s| s.to_string()).collect()
+        };
+        RegisteredNames {
+            added: strs(added),
+            install_names: strs(install),
+            archive_names: archive_names
+                .iter()
+                .map(|(archive, names)| (PathBuf::from(archive), strs(names)))
+                .collect(),
+            skip_names: strs(skip),
+        }
+    }
+
+    fn fate_map(rows: &[(&str, GroupFate)]) -> BTreeMap<PathBuf, GroupFate> {
+        rows.iter()
+            .map(|(archive, fate)| (PathBuf::from(archive), fate.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn rollback_of_a_multi_wave_partial_success_keeps_the_landed_names() {
+        // Wave 1 (lib1←app1) landed, wave 2 (lib2←app2) failed and the
+        // leftover (solo) was held: only the names that never installed
+        // roll back. A name shared by a landed and a failed archive stays
+        // too — it IS installed via the landed one.
+        let registered = reg(
+            &["lib1", "app1", "shared", "lib2", "app2", "solo", "skipper"],
+            &["lib1", "app1", "shared", "lib2", "app2", "solo"],
+            &[
+                ("lib1.arch", &["lib1"]),
+                ("app1.arch", &["app1"]),
+                ("lib2.arch", &["lib2", "shared"]),
+                ("app2.arch", &["app2"]),
+                ("solo.arch", &["solo"]),
+                ("ok.arch", &["shared"]),
+            ],
+            &["skipper"],
+        );
+        let fates = fate_map(&[
+            ("lib1.arch", GroupFate::Landed),
+            ("app1.arch", GroupFate::Landed),
+            ("ok.arch", GroupFate::Landed),
+            ("lib2.arch", GroupFate::Failed("install-failed boom".into())),
+            ("app2.arch", GroupFate::Failed("install-failed boom".into())),
+            ("solo.arch", GroupFate::Held),
+        ]);
+        let rollback = registered.names_to_rollback(&fates);
+        assert_eq!(rollback, vec!["lib2", "app2", "solo"]);
+    }
+
+    #[test]
+    fn rollback_of_the_interrupt_set_drops_only_what_never_installed() {
+        // Interrupt with nothing landed: the whole install-bearing write
+        // set rolls back while a skip (already-current) name stays — it IS
+        // installed. The interrupted group's fate is never recorded, which
+        // is exactly what an empty map (or a map without that archive)
+        // expresses.
+        let registered = reg(
+            &["alpha", "alpha-out", "skipper"],
+            &["alpha", "alpha-out"],
+            &[("alpha.arch", &["alpha", "alpha-out"])],
+            &["skipper"],
+        );
+        assert_eq!(
+            registered.names_to_rollback(&fate_map(&[])),
+            vec!["alpha", "alpha-out"]
+        );
+        // Interrupt mid-multi-wave: the wave that landed keeps its names.
+        let registered = reg(
+            &["lib1", "app1", "lib2", "app2"],
+            &["lib1", "app1", "lib2", "app2"],
+            &[
+                ("lib1.arch", &["lib1"]),
+                ("app1.arch", &["app1"]),
+                ("lib2.arch", &["lib2"]),
+                ("app2.arch", &["app2"]),
+            ],
+            &[],
+        );
+        let fates = fate_map(&[
+            ("lib1.arch", GroupFate::Landed),
+            ("app1.arch", GroupFate::Landed),
+        ]);
+        assert_eq!(registered.names_to_rollback(&fates), vec!["lib2", "app2"]);
     }
 }

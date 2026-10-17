@@ -210,11 +210,12 @@ EOF
 }
 
 # write_stub_updpkgsums DIR — makepkg's fetch+rewrite step at the process
-# boundary (real updpkgsums is an in-place writer the sync snapshots first):
-# stage the "fetched" source beside the recipe (locate_fetched's recipe-dir
-# root) and rewrite the recipe's own sums to hash it. The PUBLISHED value the
-# anchor grades against stays the curl stub's — a staged file can never
-# become the anchor.
+# boundary (real updpkgsums is an in-place writer — the sync hands it a
+# STAGED build file, mirroring the real tool's `[build file]` argument, so
+# the committed PKGBUILD is never the in-place target): stage the "fetched"
+# source beside the recipe (locate_fetched's recipe-dir root) and rewrite the
+# ARGUED build file's sums to hash it. The PUBLISHED value the anchor grades
+# against stays the curl stub's — a staged file can never become the anchor.
 write_stub_updpkgsums() {
     cat >"$1/bin/updpkgsums" <<'EOF'
 #!/usr/bin/env bash
@@ -226,10 +227,15 @@ if [ "$(id -u)" = 0 ]; then
     echo "ERROR: Running makepkg as root is not allowed" >&2
     exit 1
 fi
+buildfile=${1:-PKGBUILD}
+case "$buildfile" in
+    */*) ;;
+    *) buildfile=./$buildfile ;;
+esac
 cp "${GSA_FAKE_SYNC_PAYLOAD:?}" "$PWD/${GSA_FAKE_SYNC_STAGED_NAME:?}" || exit 1
 sum=$(sha256sum "$PWD/${GSA_FAKE_SYNC_STAGED_NAME}") || exit 1
 sum=${sum%% *}
-sed -i "s/^sha256sums=.*/sha256sums=('$sum')/" "$PWD/PKGBUILD" || exit 1
+sed -i "s/^sha256sums=.*/sha256sums=('$sum')/" "$buildfile" || exit 1
 exit 0
 EOF
     chmod +x "$1/bin/updpkgsums"

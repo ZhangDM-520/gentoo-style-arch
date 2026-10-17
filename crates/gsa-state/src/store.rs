@@ -1,7 +1,8 @@
 //! The append-only JSONL line store all three side-car databases share.
 //!
 //! One file per store; every logical change is one JSON line appended whole.
-//! Writes pass the write-time ownership gate (§J.5) before opening and
+//! Writes pass the fd-based write-time ownership gate (§J.5), which hands
+//! back the checked handle they append through, and
 //! terminate a truncated tail first, so a later row never rides on the same
 //! line as a partial one. Reads are corruption-tolerant (§J.5's failure
 //! class): a line that does not parse — including a truncated final line
@@ -88,26 +89,23 @@ pub(crate) fn append_json<T: Serialize>(
 /// Append one already-serialized line (the fixture-visible seam keeps this
 /// in `store` so every write site shares the gate and the tail repair).
 pub(crate) fn append_line(path: &Path, line: &str, err: &mut dyn Write) -> Result<(), StateError> {
-    ownership_gate(path, err)?;
+    let mut file = ownership_gate(path, err)?;
     // A truncated tail (a prior write that died mid-line) must not swallow
-    // this row: terminate it first so this row starts on its own line.
+    // this row: terminate it first so this row starts on its own line. The
+    // tail is read through the gated fd itself — a path read here would
+    // re-open the check-then-use window the gate just closed.
     let mut prefix = String::new();
-    if let Ok(bytes) = std::fs::read(path) {
-        if !bytes.is_empty() && *bytes.last().unwrap() != b'\n' {
+    {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut last = [0u8; 1];
+        if file.seek(SeekFrom::End(-1)).is_ok()
+            && file.read_exact(&mut last).is_ok()
+            && last[0] != b'\n'
+        {
             prefix.push('\n');
         }
     }
     let payload = format!("{prefix}{line}\n");
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .map_err(|e| {
-            StateError::Io(format!(
-                "cannot open state file {} ({e}) — pass --state-dir PATH or set GSA_STATE_DIR",
-                path.display()
-            ))
-        })?;
     file.write_all(payload.as_bytes()).map_err(|e| {
         StateError::Io(format!(
             "cannot append to state file {} ({e}) — pass --state-dir PATH or set GSA_STATE_DIR",

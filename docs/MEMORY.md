@@ -194,7 +194,12 @@
    skips the step loudly (deliberate escape hatch, mirrored into the resume
    continuation arguments). A dated pre-image backup `<conf>.bak-YYYYMMDD` is
    written before the first modification of the day, never rewritten
-   afterwards, never blocking a later write.
+   afterwards, never blocking a later write. Rollback (2026-10-17):
+   when a run fails, is interrupted, or refuses before its transaction, the
+   names it registered that never landed are pruned again (added ∩
+   install-bearing \ keep — landed waves stay protected) in BOTH the `-U` and
+   `-S` paths; the hard-crash window between registration and rollback is the
+   named residual (the dated pre-image backup is the manual recovery).
    `gsa -Mi --backfill` is the one-shot
    BACKFILL of a target conf (it computes the pkgbase+pkgname universe
    from the committed `.SRCINFO`s — never a PKGBUILD grep: the kernel's
@@ -428,7 +433,16 @@
     checksum mismatch stops the run and restores the recipe. Unsupported
     version mappings refuse. `--no-sync` suppresses Arch and nvchecker lookups,
     rewrites and checksum refreshes. Open the package log before sync so
-    provider errors and anchor decisions survive the build path.
+    provider errors and anchor decisions survive the build path. The
+    PKGBUILD→`.SRCINFO` publish pair is not crash-atomic (2026-10-17): a crash
+    between the two leaves a sticky mixed state a re-run does not repair
+    (`NoChangeReason::Current` short-circuit — the pass reads the PKGBUILD's
+    own version); the named repair is `makepkg --printsrcinfo` + manual
+    re-anchor (contract §B.4 amendment). The staging is enforced (2026-10-17):
+    `updpkgsums` runs against a staged copy and the result republishes
+    atomically — the committed PKGBUILD is never an external tool's in-place
+    target — `.SRCINFO` publishes fsync-before-rename, and a transaction begin
+    sweeps its own stale `PKGBUILD.tmp.*`/`.SRCINFO.tmp.*` litter.
 19. **Runtime state is owned at WRITE time** (09-23 log-ownership incident):
     root mode's logs/locks/dirs are opened by the SUPERVISOR's shell, so
     repair-at-package-exit had a crash window: a killed root run left its
@@ -444,7 +458,10 @@
     QUARANTINES an unopenable file to `<path>.stale.<epoch>.<pid>` with a
     `preserved` announcement — forensics are renamed aside, never truncated —
     or fails naming the remedy. Any new state-file open
-    site must go through that gate first; forensics appends guard it
+    site must go through that gate first — the gate is fd-based (2026-10-17):
+    `O_NOFOLLOW` open + fstat of the very fd the write uses, so a final-
+    component symlink swap or check-then-use race cannot redirect the write
+    (parent dirs still trust the state root); forensics appends guard it
     best-effort (report, don't break, the run being recorded). The pacman
     mutex is the exception that proves the rule: never rename a
     possibly-held lock inode — root pre-creates it as the build user and
@@ -1247,6 +1264,18 @@
     or as the command that prints them (`gsa -Sl`, the awk one-liners),
     never as standing prose.
 
+59. **A lane's signal receipt is load-bearing, and a failed stand-down is
+    killed** (2026-10-17): the lane child acts on its receipt — no makepkg is
+    spawned under a pending signal, and a receipt mid-build TERMs the lane's
+    own makepkg — and the supervisor settles an unattributable teardown death
+    as `interrupted-mid-build` when the run was interrupted (`lost` 125 stays
+    the non-teardown reap anomaly, contract §F.1 amendment). When a park
+    marker cannot be written, the already-settled `lost 125
+    park-marker-unwritable` node's lane process group is SIGKILLed — never
+    TERMed, which would reclassify the row: a failed stand-down must not
+    still build. Pinned by `crates/gsa-cli/tests/prefetch.rs`,
+    `crates/gsa-build/tests/lane-interrupt.rs`, `tests/gsa-sched-v2.sh`.
+
 ## 2. Workspace overview
 
 - Workspace layout, top level: `packages/{git,stable,core,misc}/` is the
@@ -1456,7 +1485,9 @@ never reaches install discovery (the missing outputs are named and nothing
 claims a set), and anomaly diagnostics print even in quiet output.
 Skip modes (2026-10-07): `--skip` is freshness-gated (mtime, VCS probes, waivers
 — rows `freshness-waived`/`abi-provider-waived`); `--skip-built` claims the
-newest complete payload-valid set at ANY version with freshness OFF (no VCS
+newest complete payload-valid set at ANY version — newest = highest version
+(`vercmp` order, newest-mtime tiebreak; mtime order when `vercmp` is absent,
+never lexical; 2026-10-17) — with freshness OFF (no VCS
 probes or any network, no waivers — row `skip-built`), dying only on recipe
 CHANGE evidence: a PKGBUILD commit newer than the set (file-mtime fallback
 without git metadata; checkout/pull/pkgver() mtime churn never rebuilds). It

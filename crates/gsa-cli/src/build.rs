@@ -507,7 +507,19 @@ fn run_build_with(
         Box::new(move |pkg, recipe_dir, in_flight, built| {
             let mut notes = Vec::new();
             let mut gate = Vec::new();
-            let archives = match gsa_install::discover_recipe(recipe_dir) {
+            // A finished build registers the outputs it just wrote — the
+            // newest-mtime rank (Rank::Mtime), never the version-ranked
+            // winner: a stale higher-version archive lying in the scan set
+            // must not become this build's row (the retention sweep would
+            // then protect the stale file and delete the fresh one). A
+            // claim (`built == false`) registers what was claimed, which is
+            // exactly the version-ranked discovery winner.
+            let found = if built {
+                gsa_install::discover_recipe_ranked(recipe_dir, gsa_install::Rank::Mtime)
+            } else {
+                gsa_install::discover_recipe(recipe_dir)
+            };
+            let archives = match found {
                 Ok(found) => found
                     .candidates
                     .into_iter()

@@ -8,6 +8,7 @@
 //! in `.gcda`/`.profraw` baked into any member (fish
 //! `pgo_payload_refusals`'s `strings -a` predicate).
 
+use std::cmp::Ordering;
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::Path;
@@ -62,6 +63,19 @@ pub fn canonical_version(raw: &str) -> String {
         raw.to_string()
     } else {
         format!("0:{raw}")
+    }
+}
+
+/// Order two canonical versions for archive/set selection, HIGHER FIRST —
+/// the `sort_by` comparator the discovery seams share. `Ordering::Equal`
+/// covers both a genuine version tie and a `vercmp` non-answer (the tool is
+/// absent from `PATH`, or its output is unparseable): the caller's mtime
+/// order then decides, which is the fish reference's fallback. Lexical
+/// order must never stand in — epochs and `1.10` vs `1.9` defeat it.
+pub fn version_rank(a: &str, b: &str) -> Ordering {
+    match crate::sync::vercmp(a, b) {
+        Some(cmp) => cmp.cmp(&0).reverse(),
+        None => Ordering::Equal,
     }
 }
 

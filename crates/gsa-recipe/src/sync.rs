@@ -719,13 +719,46 @@ pub fn staged_name() -> String {
     format!("PKGBUILD.tmp.{}", std::process::id())
 }
 
+/// Sweep the staging litter this module's own writers leave behind when a
+/// run crashes mid-write: the staged copy, `write_atomic`'s sibling temps,
+/// the restore work copy (`PKGBUILD.tmp.*`) and the `.SRCINFO` refresh temp
+/// (`.SRCINFO.tmp.*`). Exact prefixes with a non-empty suffix only — the
+/// tracked `PKGBUILD`/`.SRCINFO`, a near-miss name (`PKGBUILD.tmp`), and
+/// anything merely sharing a prefix (a directory squatting on the staged
+/// name) can never match; only regular files directly inside the recipe dir
+/// are touched. Best-effort: litter cleanup must never block a sync. Runs at
+/// transaction begin, BEFORE this transaction writes anything, so the
+/// in-process `restore()` work copy cannot be caught mid-use — and a dead
+/// run's `*.restore` snapshot is swept like the rest (same prefix, same
+/// crash origin).
+fn sweep_staging_litter(recipe_dir: &Path) {
+    let Ok(entries) = fs::read_dir(recipe_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        let ours = ["PKGBUILD.tmp.", ".SRCINFO.tmp."]
+            .iter()
+            .any(|p| name.strip_prefix(p).is_some_and(|rest| !rest.is_empty()));
+        if !ours {
+            continue;
+        }
+        if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+}
+
 /// Owns the snapshot → staged write → one tmp+mv publish → restore lifecycle
 /// of one recipe rewrite. The snapshot is taken BEFORE the first write; every
 /// failure path of every pass funnels through [`RecipeTransaction::restore`],
 /// which publishes the snapshot through its own tmp+mv (a reader never sees a
-/// half-copied recipe). The tracked PKGBUILD is never edited in place — the
-/// one exception is `updpkgsums`, an external in-place writer the anchor step
-/// guards with this same snapshot.
+/// half-copied recipe). The tracked PKGBUILD is never edited in place — even
+/// `updpkgsums`, an external in-place writer, only ever receives a staged
+/// copy whose result comes back through the same one tmp+mv publish.
 pub struct RecipeTransaction {
     recipe_dir: PathBuf,
     _scratch: ScratchDir,
@@ -739,6 +772,9 @@ impl RecipeTransaction {
     /// repository. Fails closed: without a rollback-safe snapshot the version
     /// sync must not start at all.
     pub fn begin(recipe_dir: &Path, repo_root: &Path) -> Result<RecipeTransaction, SyncError> {
+        // Sweep a previous crashed run's debris before this transaction can
+        // add any of its own.
+        sweep_staging_litter(recipe_dir);
         let scratch = ScratchDir::new("version-sync", repo_root)?;
         let snapshot = scratch.path().join("PKGBUILD.original");
         if fs::copy(recipe_dir.join("PKGBUILD"), &snapshot).is_err() {
@@ -765,18 +801,19 @@ impl RecipeTransaction {
     /// reader and no second run can observe the recipe between two of its own
     /// fields.
     pub fn publish(&mut self) -> Result<(), SyncError> {
+        // fsync before the rename — the staged bytes may come from an
+        // external writer (`updpkgsums`) that never synced them itself, and a
+        // rename over unsynced data is the half-published recipe this path
+        // exists to prevent (`write_atomic`'s standard).
+        if let Err(e) = fs::File::open(&self.staged).and_then(|f| f.sync_all()) {
+            return Err(sync_err(format!("could not flush the staged rewrite: {e}")));
+        }
         fs::rename(&self.staged, self.recipe_dir.join("PKGBUILD"))
             .map_err(|_| sync_err("could not publish the version rewrite"))?;
         gsa_model::privilege::own_to_build_user(&self.recipe_dir.join("PKGBUILD"))
             .map_err(|e| sync_err(format!("could not hand the published recipe back to the build user: {e}")))?;
         self.dirty = true;
         Ok(())
-    }
-
-    /// An external step (`updpkgsums`) rewrote the tracked file in place; the
-    /// snapshot must now guard it.
-    pub fn mark_dirty(&mut self) {
-        self.dirty = true;
     }
 
     /// Drop an unpublished staged copy on an abort.
@@ -787,13 +824,15 @@ impl RecipeTransaction {
     /// Restore the pre-pass bytes: copy the snapshot to a fresh staged name
     /// and rename it over the recipe. The status is measured, not claimed.
     pub fn restore(&mut self) -> RestoreStatus {
+        // Any staged copy is unpublished by definition — the tracked file is
+        // about to be republished from the snapshot — so it must not survive
+        // the abort as litter.
+        self.discard_staged();
         if !self.dirty {
-            self.discard_staged();
             return RestoreStatus::NothingToRestore;
         }
         let work = self.recipe_dir.join(format!("{}.restore", staged_name()));
         if let Err(e) = fs::copy(&self.snapshot, &work) {
-            self.discard_staged();
             return RestoreStatus::Failed(format!("could not copy the snapshot back: {e}"));
         }
         if let Err(e) = fs::rename(&work, self.recipe_dir.join("PKGBUILD")) {
@@ -1063,7 +1102,15 @@ pub fn refresh_package_srcinfo(recipe_dir: &Path) -> SrcinfoRefresh {
         ));
     }
     let tmp = recipe_dir.join(format!(".SRCINFO.tmp.{}", std::process::id()));
-    if fs::write(&tmp, &out.stdout).is_err() {
+    // fsync before the rename — `write_atomic`'s standard — so a crash
+    // cannot leave the committed .SRCINFO renamed over unwritten bytes.
+    let staged = (|| {
+        let mut f = fs::File::create(&tmp)?;
+        f.write_all(&out.stdout)?;
+        f.sync_all()
+    })();
+    if staged.is_err() {
+        let _ = fs::remove_file(&tmp);
         return SrcinfoRefresh::PublishFailed("could not stage the refreshed .SRCINFO".into());
     }
     if fs::rename(&tmp, &committed).is_err() {
@@ -2618,13 +2665,35 @@ pub fn anchor_sums(
         }
     }
 
-    tx.mark_dirty();
+    // Stage the sums rewrite: `updpkgsums` rewrites its build file IN PLACE,
+    // so it only ever receives the staged copy — the committed PKGBUILD must
+    // never be the file an external tool mutates (a crash mid-write would
+    // leave the tracked recipe half-rewritten). Its result reaches the
+    // recipe through the transaction's one tmp+mv publish below; the
+    // anchoring semantics are unchanged, because the tool runs exactly where
+    // it ran before and still fetches the bytes that are then verified
+    // against the provider's published sums.
+    let staged = match tx.stage() {
+        Ok(s) => s,
+        Err(e) => {
+            let restored = tx.restore();
+            return AnchorOutcome::Defer {
+                reason: DeferReason::AnchoringRefused,
+                message: format!(
+                    "refusing to build — pkgver was synced to {}-{} but the checksum rewrite could not be staged ({})",
+                    version.pkgver, version.pkgrel, e.message
+                ),
+                restored,
+            };
+        }
+    };
     // Build-side command (the makepkg family): under a root supervisor this
     // is dropped to the build user like every other one — updpkgsums runs
     // makepkg internally and REFUSES root (2026-10-16 smoke: the plain spawn
     // ran as root and fzf deferred anchoring-refused on makepkg's root
     // refusal).
     let upd = match gsa_model::privilege::build_command("updpkgsums")
+        .arg(&staged)
         .current_dir(&info.dir)
         .output()
     {
@@ -2647,6 +2716,20 @@ pub fn anchor_sums(
             message: format!(
                 "refusing to build — 'updpkgsums' could not refresh the checksums (exit {}); {tail}",
                 upd.status
+            ),
+            restored,
+        };
+    }
+
+    // Bring the refreshed sums back through the transaction's atomic
+    // publish: ONE rename over the recipe, never an in-place rewrite.
+    if let Err(e) = tx.publish() {
+        let restored = tx.restore();
+        return AnchorOutcome::Defer {
+            reason: DeferReason::AnchoringRefused,
+            message: format!(
+                "refusing to build — 'updpkgsums' refreshed the checksums but they could not be published ({})",
+                e.message
             ),
             restored,
         };

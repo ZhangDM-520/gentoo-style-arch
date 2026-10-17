@@ -151,12 +151,20 @@ pub fn pass_config(inv: &Invocation) -> Result<PassConfig, String> {
         None => None,
     };
     let resolution = freshness::resolve_vcs_skip_tolerance(tolerance_flag);
-    let skip_mode = if inv.skip {
-        Some(SkipMode::Skip)
-    } else if inv.skip_built {
-        Some(SkipMode::SkipBuilt)
-    } else {
-        None
+    // One skip MODE per run (§B.8): the two claims are different analyses,
+    // not combinable. `args::parse` refuses the both-set spelling at parse
+    // time; this gate keeps the invariant at the seam itself for callers
+    // that construct an Invocation directly — never silent precedence.
+    let skip_mode = match (inv.skip, inv.skip_built) {
+        (true, true) => {
+            return Err(
+                "cannot combine --skip with --skip-built (pick one skip claim: --skip is freshness-gated, --skip-built is the built-set claim)"
+                    .to_string(),
+            )
+        }
+        (true, false) => Some(SkipMode::Skip),
+        (false, true) => Some(SkipMode::SkipBuilt),
+        (false, false) => None,
     };
     Ok(PassConfig {
         skip_mode,
@@ -925,4 +933,32 @@ pub fn stale_set(root: &Path, graph: &Graph<'_>, ids: &[RecipeId]) -> Vec<Recipe
         }
     }
     stale
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::args::{parse, Parsed};
+
+    /// One skip MODE is an invariant of this seam, not only of the parser
+    /// (§B.8). `args::parse` refuses the both-set spelling at parse time
+    /// (rc 2); an Invocation built directly must be refused with the SAME
+    /// wording here — never resolved by silent precedence.
+    #[test]
+    fn pass_config_refuses_both_skip_claims() {
+        let argv: Vec<String> = ["-B", "--skip"].iter().map(|s| s.to_string()).collect();
+        let Parsed::Invoke(mut inv) = parse(&argv).expect("--skip alone parses") else {
+            panic!("expected an invocation");
+        };
+        // Construct the parse-unreachable both-set state directly.
+        inv.skip_built = true;
+        let err = match pass_config(&inv) {
+            Err(e) => e,
+            Ok(_) => panic!("both skip claims must be refused"),
+        };
+        assert_eq!(
+            err,
+            "cannot combine --skip with --skip-built (pick one skip claim: --skip is freshness-gated, --skip-built is the built-set claim)"
+        );
+    }
 }

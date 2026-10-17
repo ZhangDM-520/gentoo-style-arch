@@ -12,7 +12,7 @@ set -euo pipefail
 # the outcome rows by §G.1's precedence, and `remaining:` is cross-checked
 # against the set the rows imply.
 #
-# Pinned here (seven ( subshell ) sections, one per scenario):
+# Pinned here (eight ( subshell ) sections, one per scenario):
 #   1. cone-stop (the DEFAULT): a failure parks exactly its consumer cone
 #      (`parked waits-on-failed` rows), unrelated work runs to completion,
 #      rc is §G.1's 4 for a cone-stop run with >=1 failed row.
@@ -37,6 +37,10 @@ set -euo pipefail
 #      relative `--state-dir` still hands makepkg an ABSOLUTE shim path —
 #      makepkg runs with the recipe's cwd, so a relative one would not exist
 #      there and the build dies with "An unknown error has occurred".
+#   8. a broken stand-down: a park marker that cannot be written settles the
+#      node as `failed 125 park-marker-unwritable` AND kills the parked
+#      lane's process group — a rogue lane must not build on past a
+#      stand-down that could not be delivered.
 #
 # House conventions: `( subshell )` sections (each an isolated scenario with
 # its own workspace), inline oracle stubs (§D.2), `fail()` prefixes, and
@@ -63,6 +67,9 @@ fail() {
 # ─── Stub-knob vocabulary (§D.2: declared here in the change that adds them) ─
 rr2_stub_knob GSA_FAKE_DEFER_PACKAGE "gsa-sched-v2 makepkg stub: package id whose build exits 99 (deferral)"
 rr2_stub_knob GSA_FAKE_ENGINE_PID "gsa-sched-v2 engine wrapper: pidfile of the engine process to signal"
+rr2_stub_knob GSA_FAKE_PARK_SABOTAGE_PACKAGE "gsa-sched-v2 makepkg stub: package id whose stand-down the fixture sabotages and whose stub dies only by SIGKILL (TERM-proof)"
+rr2_stub_knob GSA_FAKE_SLOW_PACKAGE "gsa-sched-v2 makepkg stub: package id whose build sleeps GSA_FAKE_SLOW_SECONDS instead of GSA_FAKE_BUILD_SECONDS"
+rr2_stub_knob GSA_FAKE_SLOW_SECONDS "gsa-sched-v2 makepkg stub: sleep duration for GSA_FAKE_SLOW_PACKAGE"
 
 # ─── The engine under test: scratch build only when GSA_TEST_GSA_BIN is not
 # already set (the rr-v2.bash run_engine convention) ──────────────────────
@@ -90,7 +97,19 @@ set -eu
 id=$(basename "$PWD")
 printf 'SPAWN %s %s\n' "$id" "$(date +%s%N)" >>"${GSA_FAKE_SPAWN_LOG:?}"
 [ -n "${GSA_FAKE_MARKER_DIR:-}" ] && : >"$GSA_FAKE_MARKER_DIR/$id"
-sleep "${GSA_FAKE_BUILD_SECONDS:-0}"
+if [ "${GSA_FAKE_PARK_SABOTAGE_PACKAGE:-}" = "$id" ]; then
+    # This package's stand-down is sabotaged out-of-band (the fixture turns
+    # its park-marker path into a directory, through the host's REAL sudo —
+    # the run dir is root-owned and this stub runs as the build user). The
+    # stub ignores TERM/INT/HUP so the scenario proves the kill is a real
+    # SIGKILL: a TERM stand-down leaves this build running.
+    trap '' TERM INT HUP
+fi
+if [ "${GSA_FAKE_SLOW_PACKAGE:-}" = "$id" ]; then
+    sleep "${GSA_FAKE_SLOW_SECONDS:-8}"
+else
+    sleep "${GSA_FAKE_BUILD_SECONDS:-0}"
+fi
 printf 'END %s %s\n' "$id" "$(date +%s%N)" >>"${GSA_FAKE_SPAWN_LOG:?}"
 if [ "${GSA_FAKE_FAIL_PACKAGE:-}" = "$id" ]; then exit 1; fi
 if [ "${GSA_FAKE_DEFER_PACKAGE:-}" = "$id" ]; then exit 99; fi
@@ -603,6 +622,103 @@ EOF
     fi
     grep -q '^PACMAN=.*/state/locks/pacman-shim$' "$GSA_FAKE_PACMAN_ENV_LOG" \
         || fail "no makepkg invocation saw the state root's pacman shim:" "$GSA_FAKE_PACMAN_ENV_LOG"
+)
+
+# ─── 8. broken stand-down: an unwritable park marker settles the node as lost
+#        125 AND kills the parked lane's process group (§F.1: a stand-down
+#        that cannot be delivered must not leave a rogue lane building) ─────
+(
+    set -euo pipefail
+    ws="$fixture/parkkill/ws"
+    make_workspace "$ws" 2 auto xhigh
+    add_package "$ws" a "$gsa_meta_any" git
+    add_package "$ws" b "$gsa_meta_any" git
+    # coupled batch, NO build-order edge (abi=must): both lanes dispatch at
+    # once, and a's failure parks its IN-FLIGHT batch mate b through the
+    # marker handshake — the one path that writes a park marker for a live
+    # lane (a Pending consumer just settles as a parked row).
+    set_topology_record "$ws" a git '' 'abi=must'
+    set_topology_record "$ws" b git '' 'abi=must'
+    write_stub_makepkg "$ws"
+    export PATH="$ws/bin:$PATH"
+    export GSA_FAKE_SPAWN_LOG="$fixture/parkkill/spawn.log"
+    export GSA_FAKE_FAIL_PACKAGE=a
+    # a builds 2 s then fails; b builds for 8 s after the fixture breaks its
+    # stand-down channel — the stand-down demand lands mid-build, and any
+    # survivor is observable for seconds afterwards.
+    export GSA_FAKE_BUILD_SECONDS=2
+    export GSA_FAKE_SLOW_PACKAGE=b
+    export GSA_FAKE_SLOW_SECONDS=8
+    export GSA_FAKE_PARK_SABOTAGE_PACKAGE=b
+
+    # The watcher stages the sabotage (the run dir is root-owned under the
+    # sudo engine, so the marker path becomes a directory through the host's
+    # REAL sudo — EISDIR defeats even root's write) once b is provably
+    # building, then samples the lane argv (log-ownership's pgrep idiom) 1 s
+    # after the failure that demanded the stand-down (a's END line, which
+    # precedes the marker write) and records any survivor as a verdict file.
+    verdict="$fixture/parkkill/lane-survived"
+    (
+        for _ in $(seq 1 800); do
+            grep -q '^SPAWN b ' "$GSA_FAKE_SPAWN_LOG" 2>/dev/null && break
+            sleep 0.025
+        done
+        for d in "$fixture/parkkill/state/runs/"*; do
+            if [ -d "$d" ]; then /usr/bin/sudo -n mkdir -p "$d/b.result.park"; fi
+        done
+        for _ in $(seq 1 800); do
+            grep -q '^END a ' "$GSA_FAKE_SPAWN_LOG" 2>/dev/null && break
+            sleep 0.025
+        done
+        sleep 1
+        if pgrep -f -- "--lane-job b " >/dev/null 2>&1; then
+            pgrep -af -- "--lane-job b " >"$verdict" 2>/dev/null || : >"$verdict"
+        fi
+    ) &
+    watcher=$!
+
+    run_engine "$ws" -B --state-dir "$fixture/parkkill/state" a b
+    kill "$watcher" 2>/dev/null || true
+    wait "$watcher" 2>/dev/null || true
+    {
+        echo "$FIXTURE_OUTPUT"
+    } >"$fixture/parkkill/output.txt"
+
+    rows=$(rr2_outcome_rows <<<"$FIXTURE_OUTPUT")
+    expected=$(printf '%s\n' "$rows" | expected_rc cone-stop 0)
+    [ "$FIXTURE_RC" = "$expected" ] \
+        || fail "broken stand-down rc=$FIXTURE_RC, want $expected (§G.1 from the rows):" "$fixture/parkkill/output.txt"
+    [ "$FIXTURE_RC" = "$(rr2_scalar rc <<<"$FIXTURE_OUTPUT")" ] \
+        || fail "the record's rc scalar disagrees with the process exit code:" "$fixture/parkkill/output.txt"
+
+    # (a) the node settles loudly as lost 125 park-marker-unwritable
+    [ "$(rr2_outcome a status <<<"$FIXTURE_OUTPUT")" = "failed" ] \
+        || fail "the failing package is not recorded as failed:" "$fixture/parkkill/output.txt"
+    [ "$(rr2_outcome b status <<<"$FIXTURE_OUTPUT")" = "failed" ] \
+        || fail "the broken stand-down must settle b as failed (§F.1):" "$fixture/parkkill/output.txt"
+    [ "$(rr2_outcome b rc <<<"$FIXTURE_OUTPUT")" = "125" ] \
+        || fail "the broken stand-down settles as lost (125):" "$fixture/parkkill/output.txt"
+    [ "$(rr2_outcome b reason <<<"$FIXTURE_OUTPUT")" = "park-marker-unwritable" ] \
+        || fail "the row does not name the broken handshake (§H.3):" "$fixture/parkkill/output.txt"
+    vgrep "$FIXTURE_OUTPUT" -F "park marker" >/dev/null \
+        || fail "the marker failure is loud:" "$fixture/parkkill/output.txt"
+    vgrep "$FIXTURE_OUTPUT" -F "cannot be written" >/dev/null \
+        || fail "the marker failure is loud:" "$fixture/parkkill/output.txt"
+    vgrep "$FIXTURE_OUTPUT" -F "late lane result for b ignored" >/dev/null \
+        || fail "the late result of the settled node is ignored, loudly:" "$fixture/parkkill/output.txt"
+
+    # (b) the rogue lane is GONE and never built: a stand-down that cannot be
+    # delivered must not leave the lane building (shared SRCDEST/build caches)
+    if [ -f "$verdict" ]; then
+        fail "the rogue lane survived the broken stand-down:" "$verdict"
+    fi
+    [ ! -f "$ws/packages/b/b-1.0.0-1-any.pkg.tar.zst" ] \
+        || fail "the rogue lane kept building after its stand-down failed:" "$fixture/parkkill/output.txt"
+
+    # child-process hygiene: nothing survives the run (§K.3)
+    if ps -eo args= | grep -F "$ws" | grep -v grep >/dev/null; then
+        fail "a lane child of $ws remained after the run"
+    fi
 )
 
 printf 'gsa-sched-v2 fixture: PASS\n'

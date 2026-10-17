@@ -15,7 +15,7 @@
 
 use std::io;
 use std::os::unix::io::FromRawFd;
-use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU64, AtomicUsize, Ordering};
 
 pub const SIGINT: i32 = 2;
 pub const SIGHUP: i32 = 1;
@@ -62,6 +62,31 @@ extern "C" {
     fn fork() -> i32;
     fn setpgid(pid: i32, pgid: i32) -> i32;
     fn waitpid(pid: i32, status: *mut i32, options: i32) -> i32;
+    fn clock_gettime(clk_id: i32, ts: *mut Timespec) -> i32;
+}
+
+/// `struct timespec` for `clock_gettime(2)`.
+#[repr(C)]
+struct Timespec {
+    tv_sec: i64,
+    tv_nsec: i64,
+}
+
+const CLOCK_MONOTONIC: i32 = 1;
+
+/// Monotonic nanoseconds. Async-signal-safe (a raw `clock_gettime`), so the
+/// handler can stamp a receipt and the lane can stamp its makepkg spawn on
+/// one common clock: the ordering of the two tells a lane whether its child
+/// was in the process group when the teardown TERM was delivered (and so
+/// already got the sweep's single TERM) or escaped it by being forked later.
+pub fn monotonic_ns() -> u64 {
+    let mut ts = Timespec { tv_sec: 0, tv_nsec: 0 };
+    if unsafe { clock_gettime(CLOCK_MONOTONIC, &mut ts) } != 0 {
+        return 0;
+    }
+    (ts.tv_sec as u64)
+        .saturating_mul(1_000_000_000)
+        .saturating_add(ts.tv_nsec as u64)
 }
 
 /// `SIG_DFL` — a terminated child must die on the teardown SIGTERM, so the
@@ -161,10 +186,12 @@ pub fn current_uid() -> u32 {
 static PIPE_WRITE: AtomicI32 = AtomicI32::new(-1);
 static SIGNAL_COUNT: AtomicUsize = AtomicUsize::new(0);
 static FIRST_SIGNAL: AtomicI32 = AtomicI32::new(0);
+static FIRST_SIGNAL_AT_NS: AtomicU64 = AtomicU64::new(0);
 
 extern "C" fn handle_signal(sig: i32) {
     SIGNAL_COUNT.fetch_add(1, Ordering::SeqCst);
     let _ = FIRST_SIGNAL.compare_exchange(0, sig, Ordering::SeqCst, Ordering::SeqCst);
+    let _ = FIRST_SIGNAL_AT_NS.compare_exchange(0, monotonic_ns(), Ordering::SeqCst, Ordering::SeqCst);
     let fd = PIPE_WRITE.load(Ordering::SeqCst);
     if fd >= 0 {
         let byte = sig as u8;
@@ -212,6 +239,15 @@ pub fn install_receipt_handlers() {
 /// The signal a lane child last received, 0 when none.
 pub fn received_signal() -> i32 {
     FIRST_SIGNAL.load(Ordering::SeqCst)
+}
+
+/// Monotonic ns timestamp of the first receipt, 0 when none. Compare against
+/// [`monotonic_ns`] taken at spawn: a receipt stamped BEFORE the spawn means
+/// the child was not in the process group when the teardown TERM was
+/// delivered and must be signalled by hand; a later stamp means the child
+/// already got the group's single TERM (§K.3) and must not be re-signalled.
+pub fn received_signal_at_ns() -> u64 {
+    FIRST_SIGNAL_AT_NS.load(Ordering::SeqCst)
 }
 
 /// Test-only serialization for everything that installs or signals through

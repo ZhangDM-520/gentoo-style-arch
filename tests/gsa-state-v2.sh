@@ -415,7 +415,7 @@ if want c; then
         end=$(index_rows "$state" slow | grep -c '"op":"row"')
         [ "$end" = 1 ] \
             || fail "after the lane settles, the sweep converges to the budget (1 slow instance), got $end"
-        [ ! -f "$old" ] || fail "the pruned instance's archive must be deleted once swept"
+        [ ! -f "$old" ] || fail "the pruned instance's archive must be deleted once swept" "$runlog"
     )
 fi
 

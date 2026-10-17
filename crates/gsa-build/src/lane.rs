@@ -17,7 +17,10 @@
 //! → `parked 98 <reason>` (§F.1, spawn-to-build race); an unusable state
 //! root or build-cache layout fails the lane (`failed 1 state-dir-unusable`
 //! / `failed 1 layout-unusable`, §J.3/§J.2) instead of building in the
-//! wrong place.
+//! wrong place. A receipt already pending at either spawn boundary never
+//! hands a build to a tearing-down run (`interrupted-mid-build` instead) — a
+//! makepkg started there escapes the supervisor's one-shot group TERM and
+//! lives until the grace SIGKILL, whose death names no cause.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -62,18 +65,27 @@ pub fn lane_state_dir() -> Result<PathBuf, String> {
 /// makepkg exited but before classification — errs the same conservative
 /// way: the row says unfinished and the continuation re-runs it, `-s`
 /// skipping the rebuild; closing it would need exit-vs-receipt timestamps.)
+/// The §H.3 interrupt class of this child's own receipt: a run-stopping
+/// signal this lane received settles `interrupted-mid-build` under its lane
+/// code (129/143/130, §K.3) — the one vocabulary every interrupt row uses,
+/// whether the build ended, never started, or is being torn down here.
+fn received_interrupt(received: i32) -> Option<(gsa_model::LaneOutcome, &'static str)> {
+    use gsa_model::LaneOutcome;
+    match received {
+        gsa_sched::signals::SIGHUP => Some((LaneOutcome::Hup, "interrupted-mid-build")),
+        gsa_sched::signals::SIGINT => Some((LaneOutcome::Int, "interrupted-mid-build")),
+        gsa_sched::signals::SIGTERM => Some((LaneOutcome::Term, "interrupted-mid-build")),
+        _ => None,
+    }
+}
+
 pub fn classify_build_exit(
     exit: gsa_sched::signals::ChildExit,
     received: i32,
 ) -> (gsa_model::LaneOutcome, String) {
     use gsa_model::LaneOutcome;
     use gsa_sched::signals::ChildExit;
-    let received_class = match received {
-        gsa_sched::signals::SIGHUP => Some((LaneOutcome::Hup, "interrupted-mid-build")),
-        gsa_sched::signals::SIGINT => Some((LaneOutcome::Int, "interrupted-mid-build")),
-        gsa_sched::signals::SIGTERM => Some((LaneOutcome::Term, "interrupted-mid-build")),
-        _ => None,
-    };
+    let received_class = received_interrupt(received);
     match exit {
         ChildExit::Signaled(sig) => match sig {
             gsa_sched::signals::SIGHUP => (LaneOutcome::Hup, "interrupted-mid-build".to_string()),
@@ -100,6 +112,24 @@ pub fn classify_build_exit(
 fn usage(message: &str, err: &mut dyn Write) -> i32 {
     let _ = writeln!(err, "gsa --lane-job: {message}");
     2
+}
+
+/// A receipt already pending when makepkg is about to be handed the build:
+/// the run aborted this package — settle `interrupted-mid-build` under the
+/// receipt's own lane code and never spawn. A build started under a pending
+/// receipt escapes the supervisor's one-shot group TERM (it did not exist
+/// yet) and runs until the grace SIGKILL — a death whose cause cannot be
+/// attributed back to the interrupt.
+fn settle_pending_receipt(pkg: &str, result_path: &Path, err: &mut dyn Write) -> Option<i32> {
+    let (code, reason) = received_interrupt(signals::received_signal())?;
+    let result = LaneResult::new(pkg, code, 0, reason).unwrap();
+    match codec::publish(result_path, &result) {
+        Ok(()) => Some(code.code()),
+        Err(message) => {
+            let _ = writeln!(err, "gsa --lane-job: {message}");
+            Some(LaneOutcome::Lost.code())
+        }
+    }
 }
 
 /// `gsa --lane-job <pkg> <result-path> <jobs> <flags…>` — the lane child.
@@ -180,6 +210,11 @@ pub fn run_lane_job(args: &[String], err: &mut dyn Write) -> i32 {
     // Signal honesty (§K.3): receipt by this child is reported through the
     // lane codes when the build ends.
     signals::install_receipt_handlers();
+    // First spawn boundary: a receipt already on file means the run is
+    // tearing down — no build may begin under it.
+    if let Some(rc) = settle_pending_receipt(pkg, &result_path, err) {
+        return rc;
+    }
 
     // ── the spawn-to-build race (contract §F.1 `parked 98`) ──────────────
     let marker = PathBuf::from(format!("{}.park", result_path.display()));
@@ -207,27 +242,30 @@ pub fn run_lane_job(args: &[String], err: &mut dyn Write) -> i32 {
     if let Some(parent) = log_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    if let Err(message) = gsa_sched::lock::ownership_gate(&log_path, err) {
-        let _ = writeln!(err, "gsa --lane-job: {message}");
-    }
-    let log = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path);
-    let log = match log {
+    // Rule 19: forensics appends guard best-effort — a gate refusal is
+    // announced, then the attempt continues under the same no-symlink open
+    // discipline; only its own failure settles the lane (log-unwritable).
+    let log = match gsa_sched::lock::open_state_append(&log_path, err) {
         Ok(file) => file,
-        Err(error) => {
-            let _ = writeln!(
-                err,
-                "gsa --lane-job: cannot write build log {}: {error}",
-                log_path.display()
-            );
-            let result = LaneResult::new(pkg, LaneOutcome::Failed, 0, "log-unwritable").unwrap();
-            match codec::publish(&result_path, &result) {
-                Ok(()) => return LaneOutcome::Failed.code(),
-                Err(message) => {
-                    let _ = writeln!(err, "gsa --lane-job: {message}");
-                    return LaneOutcome::Lost.code();
+        Err(refusal) => {
+            let _ = writeln!(err, "gsa --lane-job: {refusal}");
+            match gsa_sched::lock::open_state_append_nofollow(&log_path) {
+                Ok(file) => file,
+                Err(error) => {
+                    let _ = writeln!(
+                        err,
+                        "gsa --lane-job: cannot write build log {}: {error}",
+                        log_path.display()
+                    );
+                    let result =
+                        LaneResult::new(pkg, LaneOutcome::Failed, 0, "log-unwritable").unwrap();
+                    match codec::publish(&result_path, &result) {
+                        Ok(()) => return LaneOutcome::Failed.code(),
+                        Err(message) => {
+                            let _ = writeln!(err, "gsa --lane-job: {message}");
+                            return LaneOutcome::Lost.code();
+                        }
+                    }
                 }
             }
         }
@@ -262,7 +300,41 @@ pub fn run_lane_job(args: &[String], err: &mut dyn Write) -> i32 {
     if let Ok(err_file) = log_err {
         cmd.stderr(Stdio::from(err_file));
     }
-    let status = cmd.status();
+    // Second spawn boundary: startup work (recipe resolution, layout
+    // creation) is long enough for a teardown signal to land in it — a
+    // receipt here must still keep makepkg from ever starting.
+    if let Some(rc) = settle_pending_receipt(pkg, &result_path, err) {
+        return rc;
+    }
+    // Wait in a receipt-aware loop (§K.3), not a bare `status()`: a lane that
+    // merely records its signal and then blocks leaves its makepkg building
+    // through the whole teardown until the grace SIGKILL. On receipt, a
+    // makepkg that ESCAPED the sweep's single group TERM (forked after that
+    // TERM was delivered) gets one TERM at its own pid so this package stops
+    // now; a makepkg that was already in the group received that TERM and
+    // must NOT be re-signalled — a second receipt breaks §K.3's one-TERM
+    // discipline (signal-abort-lock.sh counts receipts). The child pid, never
+    // the group, targets the straggler alone; anything it leaves behind dies
+    // with the grace SIGKILL sweep. Then reap and classify as ever.
+    let spawn_at_ns = signals::monotonic_ns();
+    let status = match cmd.spawn() {
+        Ok(mut child) => loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break Ok(status),
+                Ok(None) => {
+                    if signals::received_signal() != 0 {
+                        if signals::received_signal_at_ns() < spawn_at_ns {
+                            let _ = signals::send_signal(child.id() as i32, signals::SIGTERM);
+                        }
+                        break child.wait();
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                Err(error) => break Err(error),
+            }
+        },
+        Err(error) => Err(error),
+    };
     let dur = start.elapsed().as_secs();
 
     let (code, reason) = match status {
