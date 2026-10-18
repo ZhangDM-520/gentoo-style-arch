@@ -155,16 +155,20 @@ pub struct Discovery {
 }
 
 impl Discovery {
-    /// The fish 0/1/2/3 contract, typed.
+    /// The fish 0/1/2/3 contract, typed. Zero archives is ALWAYS `Nothing`
+    /// (status 1 — "nothing current (fresh workspace…)") even when `missing`
+    /// is empty: a claim set with no archives blesses nothing, and the
+    /// vacuous "every expected output is covered" read of an empty set must
+    /// never reach a skip verdict (2026-10-18 rsync).
     pub fn status(&self) -> DiscoveryStatus {
         if !self.established {
             return DiscoveryStatus::Unestablished;
         }
-        if self.missing.is_empty() {
-            return DiscoveryStatus::Complete;
-        }
         if self.archives.is_empty() {
             return DiscoveryStatus::Nothing;
+        }
+        if self.missing.is_empty() {
+            return DiscoveryStatus::Complete;
         }
         DiscoveryStatus::Partial
     }
@@ -1569,10 +1573,14 @@ pub fn discover_newest_complete_set(recipe_dir: &Path) -> Discovery {
         }
     }
     if newest_key.is_empty() {
+        // No claim set at all (never built, or nothing mappable): every
+        // expected output is missing — never an empty `missing` list, which
+        // the status read as a vacuously complete set and skipped on.
         return Discovery {
+            archives: Vec::new(),
+            missing: names,
             established: true,
             version_key: None,
-            ..Discovery::default()
         };
     }
     let mut missing = Vec::new();
@@ -1595,6 +1603,64 @@ pub fn discover_newest_complete_set(recipe_dir: &Path) -> Discovery {
         missing,
         established: true,
         version_key: Some(newest_key),
+    }
+}
+
+#[cfg(test)]
+mod discovery_tests {
+    use super::*;
+
+    fn recipe_with_srcinfo(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "gsa-discovery-test-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(".SRCINFO"),
+            "pkgbase = demo\npkgname = demo\npkgver = 1.0.0\npkgrel = 1\n",
+        )
+        .unwrap();
+        dir
+    }
+
+    /// A claim set with zero archives blesses nothing: a fresh workspace is
+    /// `Nothing` (status 1) — never the vacuous `Complete` — or `--skip-built`
+    /// skips a never-built recipe and the install gate then halts the run on
+    /// its empty set (2026-10-18 rsync `install-refused partial-set`).
+    #[test]
+    fn zero_archives_are_never_a_complete_set() {
+        let empty = Discovery {
+            established: true,
+            ..Discovery::default()
+        };
+        assert_eq!(empty.status(), DiscoveryStatus::Nothing);
+    }
+
+    /// The `--skip-built` discovery of a never-built recipe must name every
+    /// expected output as missing — the empty-set early return used to leave
+    /// `missing` empty and the caller read that as a complete set (`already
+    /// built ()`).
+    #[test]
+    fn newest_set_without_archives_reports_every_output_missing() {
+        let dir = recipe_with_srcinfo("newest");
+        let discovery = discover_newest_complete_set(&dir);
+        assert_eq!(discovery.missing, vec!["demo".to_string()]);
+        assert_eq!(discovery.archives, Vec::<std::path::PathBuf>::new());
+        assert_eq!(discovery.status(), DiscoveryStatus::Nothing);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn current_set_without_archives_is_nothing() {
+        let dir = recipe_with_srcinfo("current");
+        let discovery = discover_current_set(&dir);
+        assert_eq!(discovery.status(), DiscoveryStatus::Nothing);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
 

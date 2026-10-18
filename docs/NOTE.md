@@ -1,3 +1,44 @@
+## 2026-10-18 — `--skip-built` blessed an EMPTY set (`already built ()`) and the install gate halted the run on the phantom (rsync `install-refused partial-set`)
+
+**Symptom.** Smoke-2 resume (`gsa -S --no-sync --skip-built @core`): at the
+first never-built recipe in dispatch order (rsync) the run printed
+`gsa: note: rsync: already built ()`, planned `skip skip-built`, registered
+`0 archive(s)`, then the install gate refused `partial-set
+…/packages/stable/rsync rsync` — and an install refusal halts dispatch
+(§G.1, fail-closed): rc 3, ~575 packages `never-started`/parked.
+
+**Root cause (two halves, one phantom).**
+`freshness::discover_newest_complete_set`'s empty-set early return
+(`newest_key.is_empty()`) reported `Discovery { archives: [], missing: [],
+established: true }` — it never computed `missing` from the expected
+outputs — and `Discovery::status()` read `missing.is_empty()` BEFORE
+`archives.is_empty()`, so a zero-archive set landed in the vacuous
+`Complete` arm ("every expected output has an archive" read over an empty
+expectation). `decide()` then returned `Verdict::Skip { archives: [] }`,
+the build was skipped, and the install gate's own discovery correctly
+found the output missing and halted the run. Per the enum's own contract a
+fresh workspace is status 1 `Nothing` — never a blessing.
+
+**Fix (red-first).** (1) the early return reports `missing: names` — every
+expected output uncovered; (2) `status()` checks `archives.is_empty()` →
+`Nothing` before the `missing`-based arms. (`expected_output_names` never
+returns an empty `Ok` — it errors — so the reorder is defense in depth
+over the same class.) Two unit tests and the fixture run below failed
+before the fix and pass after.
+
+**Validation.** `cargo test -p gsa-recipe` green incl. 3 new pins
+(`zero_archives_are_never_a_complete_set`,
+`newest_set_without_archives_reports_every_output_missing`,
+`current_set_without_archives_is_nothing`); fixture pin in
+`tests/gsa-sync-v2.sh` §5 run E — `--skip-built` on a never-built recipe
+plans `build`, logs the `nothing-built` diagnosis, and settles `succeeded`
+with a real lane rc (a claim row's rc is `-`); full battery green.
+
+**Durable rule.** An empty archive set is never a claim: skip claims
+require a non-empty complete set, and "no archives" is `nothing-built` →
+build. Build plan rows carry `ok` (§H.3 named keys); the reason detail
+(`nothing-built: …`) rides the log note only.
+
 ## 2026-10-18 — ship: design-B engine + nss-git land on main (gsa-pm r365 installed), smoke 2 resumes as a full coherent rebuild
 
 **Scope.** Owner: "commit and push". Three commits to origin/main:

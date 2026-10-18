@@ -663,6 +663,7 @@ record_block() {
     make_workspace "$ws" 1 1 low
     add_package "$ws" skipdemo "$gsa_meta_any" git
     stable_recipe "$ws" qdemo # the -Sy-eligible recipe for the --no-sync proof
+    stable_recipe "$ws" ndemo # never built: the --skip-built empty-set pin (run E)
     write_stub_pacman "$ws"
     write_stub_curl "$ws"
     write_stub_updpkgsums "$ws"
@@ -760,6 +761,27 @@ record_block() {
     [ "$FIXTURE_RC" = 0 ] || fail "the control build rc=$FIXTURE_RC, want 0"
     [ -s "$GSA_FAKE_SYNC_SI_LOG" ] \
         || fail "the provider-query log is dead — the --no-sync proof proves nothing"
+
+    # run E: --skip-built against a NEVER-BUILT recipe must BUILD. An empty
+    # archive set is `nothing-built`, never a vacuous complete claim — the
+    # 2026-10-18 rsync shape: `already built ()` skipped the build and the
+    # install gate then halted the whole run on `install-refused partial-set`.
+    run_engine "$ws" -B --skip-built --state-dir "$state" --no-prefetch ndemo
+    {
+        echo "$FIXTURE_OUTPUT"
+    } >"$fixture/s5/runE.txt"
+    [ "$FIXTURE_RC" = 0 ] \
+        || fail "--skip-built on a never-built recipe rc=$FIXTURE_RC, want 0:" "$fixture/s5/runE.txt"
+    [ "$(rr2_plan ndemo plan <<<"$FIXTURE_OUTPUT")" = "build" ] \
+        || fail "--skip-built on a never-built recipe must plan 'build':" "$fixture/s5/runE.txt"
+    [ "$(rr2_plan ndemo reason <<<"$FIXTURE_OUTPUT")" = "ok" ] \
+        || fail "a build plan row's reason must be ok (§H.3 rows carry the named keys):" "$fixture/s5/runE.txt"
+    grep -F "ndemo: nothing-built" <<<"$FIXTURE_OUTPUT" >/dev/null \
+        || fail "the never-built diagnosis (nothing-built) must reach the log:" "$fixture/s5/runE.txt"
+    [ "$(rr2_outcome ndemo status <<<"$FIXTURE_OUTPUT")" = "succeeded" ] \
+        || fail "--skip-built on a never-built recipe must actually build (outcome row):" "$fixture/s5/runE.txt"
+    [ "$(rr2_outcome ndemo rc <<<"$FIXTURE_OUTPUT")" = "0" ] \
+        || fail "a real build settles with a lane rc, not a claim's '-':" "$fixture/s5/runE.txt"
 )
 
 # ─── 6. toolchain preflight: broken rustc refuses, --allow-broken-rustc goes ─
