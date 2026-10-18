@@ -1,0 +1,26 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: gentoo-style-arch maintainers <jixianqiang1540@gmail.com>
+Date: Sun, 18 Oct 2026 04:10:00 +0800
+Subject: [PATCH] nss-tool/util.h: add missing <fstream> include
+
+util.h declares GetStreamFromFileOrStdin(std::string&, std::ifstream&)
+but never includes <fstream>; it only compiled via transitive includes
+that current libstdc++ no longer provides (strict-toolchain build break:
+"'std::ifstream' has not been declared").
+---
+ nss-tool/common/util.h | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/nss-tool/common/util.h b/nss-tool/common/util.h
+--- a/nss-tool/common/util.h
++++ b/nss-tool/common/util.h
+@@ -9,6 +9,7 @@
+ #include "nss_scoped_ptrs.h"
+ 
+ #include <secmodt.h>
++#include <fstream>
+ #include <string>
+ #include <vector>
+ 
+-- 
+2.50.1
