@@ -1,3 +1,73 @@
+## 2026-10-18 — the llvm-git VRP fix landed a new libLLVM.so and broke rustc (rule-13 recurrence): healing recipe = same-pass rust-git rebuild under `--allow-broken-rustc`
+
+**Symptom.** The resumed run installed the rebuilt llvm-git (`lane done
+llvm-git succeeded 0 4724 ok`) and every rustc invocation died on it:
+`rustc: symbol lookup error: /usr/lib/librustc_driver-87131f346535a543.so:
+undefined symbol: _ZN4llvm27timeTraceProfilerInitializeEjNS_9StringRefEb,
+version LLVM_24.0`. The engine's rustc sanity probe caught it ("this run's
+own llvm install broke rustc") and entered narrow remediation
+(force-build rust-git first), which then **stalled**: `--skip-built` had
+blessed the stale rust-git archive, so rust-git could not be dispatched
+and the run refused (rc 3, "toolchain remediation stalled"). A follow-up
+run without rust-git in the selection was preflight-refused with the same
+stall for the whole rust consumer chain.
+
+**Cause.** The documented 2026-09-07 rule-13 recurrence: LLVM snapshots
+have no stable C++ ABI, so a new `libLLVM.so` invalidates the rustc built
+against the old one. Not a recipe defect — the run's own llvm install is
+the breaker, exactly the ABI-coupled-batch hazard the `abi=must` policy
+exists for (`abi-wave lilv-git llvm-git coupled-must`).
+
+**Recovery (the documented 2026-09-08 path, followed verbatim).** The
+stall is a resume-flag artifact: `--skip-built` blesses *any* already-built
+archive, including a rust-git built against the previous LLVM — it is the
+wrong resume flag after a toolchain move. Resume with `--skip`
+(freshness-gated) and name rust-git in the selection so it is force-built
+before anything else compiles; when the system rustc is the broken one,
+the preflight refusal is bypassed with `--allow-broken-rustc`, which is
+safe here because rust-git's bootstrap strips the system-stage0 pins and
+`x.py` falls back to the **downloaded official stage0** (rust-git
+PKGBUILD comment; NOTE 2026-09-08) — so "rust-git cannot rebuild itself
+once broken" does not hold. The last-resort alternative (downgrade-rebuild
+llvm-libs at the snapshot rust-git was built against) stayed in reserve
+and was not used. Kick command:
+`sudo /usr/bin/gsa -S --no-sync --skip --allow-broken-rustc rust-git @core`.
+
+**Desktop face (the same swap, second victim set).** The 20:25 install of
+the rebuilt `llvm-libs-git` (r600914 → r603159) also landed under the
+UN-rebuilt `mesa-git` 26.3.0 (built 2026-10-09 against r600914) and killed
+the live GL/Vulkan stack: `vulkaninfo` shows
+`libvulkan_radeon.so: undefined symbol:
+_ZN4llvm21PipelineTuningOptionsC1Ev, version LLVM_24.0` (RADV ICD refuses
+to load), nautilus SIGSEGVs inside `libvulkan_lvp.so` (lavapipe, an LLVM
+consumer) from gtk4's Vulkan renderer at `vkCreateDevice`, and the whole
+GL stack is dead (`glxinfo`: "couldn't find RGB GLX visual or fbconfig";
+`eglinfo`: "eglInitialize failed") — which is exactly alacritty's
+`NotSupported("provided display handle is not supported")` on the
+Wayland/EGL path and "failed to find suitable GL configuration" on the
+GLX path. Same class, same fix: mesa rides the same wave (`abi-wave
+lilv-git mesa-git closure`, `nothing-built`) and heals the desktop when
+its lane installs. **2026-10-07 rule recurrence:** the coupled-batch gate
+selects a complete wave but does not sequence installs — see the rule
+below and the corrected install-deferral design in MEMORY §5. Owner
+disposition 2026-10-18: wait for the run's mesa lane (no downgrade, no
+run kill); install-deferral seam stays queued as engine work.
+
+**Validation.** Reconciliation run in flight at journal time — the
+rust-git verdict and final run record land in the follow-up entry below
+once the run settles.
+
+**Durable rule.** After any llvm-git bump that installs a new
+`libLLVM.so`, rebuild rust-git in the **same pass** (name it in the
+selection) and resume with `--skip`, never `--skip-built`; reach for
+`--allow-broken-rustc` when the preflight probe fails on the broken
+system rustc — the downloaded official stage0 bootstrap makes the rebuild
+self-healing. The wave must carry the rest of the ABI-coupled consumers
+(mesa, SPIR-V, libclc, OpenShadingLanguage, the Rust family) — but note
+wave completeness does not buy desktop safety: the anchor's install still
+exposes the live stack until the batchmates land (2026-10-07 rule, and
+the corrected deferral design in MEMORY §5).
+
 ## 2026-10-18 — resume run #1 (108/3/513, rc 4): debugedit's trimmed man pages still demanded help2man, python-pycups met cups 2.5's renamed enums, llvm-git ate a GCC-snapshot VRP ICE
 
 **Symptom.** The resumed 624-target run ended rc 4 (cone-stop): 108
@@ -49,9 +119,10 @@ runs, in the LTO recompile of libLLVM.so. The recipe's
 `LLVM_ENABLE_LTO=ON` is intentional (its `!lto` only neutralizes
 makepkg's LTOFLAGS — cf. mold-git/rust-git), so the fix keeps LTO and
 disables the crashing pass for this build: `CXXFLAGS+=" -fno-tree-vrp"`
-with the ICE signature and drop-when-fixed note inline. pkgrel 1→2.
-Validation: full llvm-git rebuild in flight at journal time — verdict
-lands with the commit.
+with the ICE signature and drop-when-fixed note inline. pkgrel 1→2. **Validated:** full rebuild
+(`gsa -B --leaf llvm-git`) → `lane done llvm-git succeeded 0 5336 ok`
+(89 min, 3 archives) — LTO on, VRP off; the ICE is gone and the 513-package
+consumer cone is unblocked.
 
 **Validation (batch).** `bash -n` + `.SRCINFO` regenerated (3 recipes);
 topology validated `gsa -S --dry-run @core/@git/@stable` rc 0 ×3;

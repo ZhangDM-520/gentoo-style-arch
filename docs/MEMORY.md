@@ -1936,20 +1936,27 @@ going stale.
   a package-internal inconsistency is a build defect, not a batch case. Fit
   alongside the existing silent `refuse pgo-*` rows; fixture via the
   `--install-decide` seam.
-- **ABI-batch install deferral** (2026-10-07, from the libLLVM freeze): the
+- **ABI-batch install deferral** (2026-10-07 libLLVM freeze; design hole
+  corrected 2026-10-18 after the nautilus/alacritty recurrence): the
   coupled-batch gate (`gsa-graph`'s `coupled_batches`) protects selection
-  completeness
-  but never delays the anchor's `-S` install until its batch mates are built
-  — the anchor lands at its lane position and leaves an ABI-stale live-stack
-  window (black desktop + freeze, see Pitfall digest). Design: when a
-  package belongs to a multi-member ABI batch (anchor + abi
-  batchmates incl. the soname-drift closure), `gsa-install::decide` emits a
-  `parked` row (contract §E.3 vocabulary)
-  until every batchmate has a built archive, then the executor
-  issues ONE `pacman -U` for the batch. Needs fixtures via the hidden
+  completeness but never sequences installs — the anchor lands at its lane
+  position and leaves an ABI-stale live-stack window (black desktop +
+  freeze; 2026-10-18: nautilus SIGSEGV in `libvulkan_lvp.so`, alacritty
+  "display handle"/GL-config dead — see NOTE.md 2026-10-18). **Trap (owner
+  catch, 2026-10-18):** plain install deferral is unsound — `-S` builds
+  consumers against the INSTALLED system, so parking the anchor's install
+  makes batchmates compile against the OLD ABI and the batch lands wrong.
+  Deferral needs a second mechanism. Corrected designs: (a) staged anchor —
+  unpack each built anchor archive into a per-batch staging root and expose
+  it to batchmate builds (`PKG_CONFIG_PATH`/`CPATH`/`LIBRARY_PATH`/
+  `LD_LIBRARY_PATH` or a sysroot), then ONE `pacman -U` for the batch
+  (window shrinks to a single transaction); (b) SONAME coexistence — ship
+  each llvm snapshot under a distinct SONAME so old consumers keep
+  resolving their old lib until rebuilt (the 2026-10-07 splice, automated);
+  (c) status quo — anchor installs at its lane position, GUI stopped / one
+  session restart around the batch. Needs fixtures via the hidden
   `--install-decide` seam (plan rows: contract §E.3 vocabulary) plus a
-  run-record rendering row. Owner decision: implement, or keep the
-  operational rule (GUI stopped during batch installs).
+  run-record rendering row. Owner decision: which design to implement.
 - **Fixture-safe pacman lock preflight** (2026-10-06): give the fixtures a
   `pacman-conf` stub whose DBPath points inside the workspace, so the install
   preflight's `db.lck` check reads a stub lock and batteries can run beside a
