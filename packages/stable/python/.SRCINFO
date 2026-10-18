@@ -27,14 +27,14 @@ pkgbase = python
 	depends = tk
 	source = https://www.python.org/ftp/python/3.14.8/Python-3.14.8.tar.xz
 	source = EXTERNALLY-MANAGED
-	source = python-posix-2024.patch::https://github.com/python/cpython/commit/927eb448aad6436d794ec9f55780013e25609600.patch
+	source = python-posix-2024.patch
 	validpgpkeys = 0D96DF4D4110E5C43FBFB17F2D347EA6AA65421D
 	validpgpkeys = E3FF2839C048B25C084DEBE9B26995E310250568
 	validpgpkeys = A035C8C19219BA821ECEA86B64E628F8D684696D
 	validpgpkeys = 7169605F62C751356D054A26A821E680E5FA6305
 	sha512sums = f9e6809b0c45d90fcc174b8051e15058a3037981c9136c598d110a118a22cbbb8263fbd677e07b2b9d93e1aa83cd9cb835b61b6af898fd301d1080a29c2156fe
 	sha512sums = 62a6fbfbaeaa3ba7c54e109d9c3b7f67e73bb21986da4c1fcc5d28cca83d71e0fcae28e1fc70ee8ddce7dea8cd0b64e18d1031dae3a2eae5eaa379c53efd53a0
-	sha512sums = 6fecb7ae06e1dcb2b26bcb6ee8ceb0a7c93320522be6483bb858e1e1bbcbf28d1d15f4b723ef0266a329344dbb43255b5c2c99bfb247a15cabf6d58af9224a57
+	sha512sums = 3bcbc57e903fb880d437e7683bffdadc478988a116c2f5c11f190eaf879148b406b0f7ab40660ca6acdfd138546296a3dbaf1997a0b0c705b3985e51c241bffe
 
 pkgname = python
 	optdepends = python-setuptools: for building Python packages using tooling that is usually bundled with Python

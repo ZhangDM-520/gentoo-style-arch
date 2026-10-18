@@ -21,14 +21,15 @@ depends=('bzip2' 'expat' 'gdbm' 'libffi' 'libnsl' 'libxcrypt' 'openssl' 'zlib' '
 makedepends=('tk' 'sqlite' 'bluez-libs' 'llvm' 'gdb' 'xorg-server-xvfb' 'ttf-font')
 source=("https://www.python.org/ftp/python/${pkgver%rc*}/Python-${pkgver}.tar.xz"
         EXTERNALLY-MANAGED
-        python-posix-2024.patch::https://github.com/python/cpython/commit/927eb448aad6436d794ec9f55780013e25609600.patch)
+        python-posix-2024.patch)
 sha512sums=('f9e6809b0c45d90fcc174b8051e15058a3037981c9136c598d110a118a22cbbb8263fbd677e07b2b9d93e1aa83cd9cb835b61b6af898fd301d1080a29c2156fe'
             '62a6fbfbaeaa3ba7c54e109d9c3b7f67e73bb21986da4c1fcc5d28cca83d71e0fcae28e1fc70ee8ddce7dea8cd0b64e18d1031dae3a2eae5eaa379c53efd53a0'
-            # python-posix-2024.patch is GitHub's mail rendering of pinned
-            # commit 927eb448; the rendering drifted 2026-10-15 (checksum
-            # wall) — body verified byte-identical to the API diff of the
-            # same commit (header hash + subject match), re-pinned.
-            '6fecb7ae06e1dcb2b26bcb6ee8ceb0a7c93320522be6483bb858e1e1bbcbf28d1d15f4b723ef0266a329344dbb43255b5c2c99bfb247a15cabf6d58af9224a57')
+            # python-posix-2024.patch is VENDORED (2026-10-19): the stable
+            # API diff of pinned commit 927eb448, body verified byte-identical
+            # to GitHub's mail rendering. The moving `.patch` URL retired
+            # after TWO checksum walls (2026-10-15, 2026-10-19) — GitHub
+            # re-renders the mail preamble of a pinned commit at will.
+            '3bcbc57e903fb880d437e7683bffdadc478988a116c2f5c11f190eaf879148b406b0f7ab40660ca6acdfd138546296a3dbaf1997a0b0c705b3985e51c241bffe')
 validpgpkeys=('0D96DF4D4110E5C43FBFB17F2D347EA6AA65421D'  # Ned Deily (Python release signing key) <nad@python.org>
               'E3FF2839C048B25C084DEBE9B26995E310250568'  # Łukasz Langa (GPG langa.pl) <lukasz@langa.pl>
               'A035C8C19219BA821ECEA86B64E628F8D684696D'  # Pablo Galindo Salgado <pablogsal@gmail.com>
