@@ -16,7 +16,7 @@
 
 
 pkgname=('llvm-git' 'llvm-libs-git' 'clang-opencl-headers-git')  # llvm-ocaml-git split dropped 2026-09-04 (no consumer)
-pkgver=24.0.0_r600873.1a79ebf21526
+pkgver=24.0.0_r603149.908f46792fb9
 pkgrel=1
 arch=('x86_64')
 url="https://llvm.org/"
@@ -65,6 +65,13 @@ pkgver() {
 build() {
     export CFLAGS+=" ${CPPFLAGS}"
     export CXXFLAGS+=" ${CPPFLAGS}"
+    # GCC-snapshot VRP ICE (deterministic, 2026-10-18): LowerFCOPYSIGN
+    # (X86ISelLowering.cpp:23234) segfaults 'during GIMPLE pass: vrp' in
+    # the LTO recompile — reproduced twice, byte-identical. Keep the
+    # recipe's intended LTO (LLVM_ENABLE_LTO=ON below) and disable the
+    # crashing pass for this build only; drop the flag once the snapshot
+    # compiler's VRP survives this TU.
+    export CXXFLAGS+=" -fno-tree-vrp"
     # NOTE: MODULE targets (LLVMgold plugin) use CMAKE_MODULE_LINKER_FLAGS;
     # without mold they fall back to bfd, which rejects --color-diagnostics.
     # NOTE: LLVM_ENABLE_LTO=ON (not Full) — GCC's cc1 rejects '-flto=full'.
