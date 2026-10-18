@@ -32,7 +32,12 @@ before the fix and pass after.
 `current_set_without_archives_is_nothing`); fixture pin in
 `tests/gsa-sync-v2.sh` §5 run E — `--skip-built` on a never-built recipe
 plans `build`, logs the `nothing-built` diagnosis, and settles `succeeded`
-with a real lane rc (a claim row's rc is `-`); full battery green.
+with a real lane rc (a claim row's rc is `-`); full battery green. The
+production proof is the resume itself: at the exact spot where the
+previous run halted, rsync now reports `nothing-built: no built archive
+for any expected output`, builds (`registered 1 archive(s)`), and settles
+`lane done rsync succeeded 0 73 ok` — 25th in dispatch order and the run
+continues past it.
 
 **Durable rule.** An empty archive set is never a claim: skip claims
 require a non-empty complete set, and "no archives" is `nothing-built` →
