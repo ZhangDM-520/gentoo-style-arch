@@ -1,6 +1,6 @@
 pkgbase = gsa-pm
 	pkgdesc = Native package manager engine for the Gentoo-style Arch package set
-	pkgver = 0.1.0+r360+ga47e5a6cb8d9
+	pkgver = 0.1.0+r365+g6bc7dd2dc77f
 	pkgrel = 1
 	url = https://github.com/ZhangDM-520/gentoo-style-arch
 	arch = x86_64
@@ -10,7 +10,7 @@ pkgbase = gsa-pm
 	depends = gcc-libs
 	depends = glibc
 	options = !debug
-	source = gentoo-style-arch::git+https://github.com/ZhangDM-520/gentoo-style-arch#commit=a47e5a6cb8d98aa7960f730bba2dbfe5e389b7f0
+	source = gentoo-style-arch::git+https://github.com/ZhangDM-520/gentoo-style-arch#commit=6bc7dd2dc77f1c3352224eb1dbe64b500e68833f
 	sha256sums = SKIP
 
 pkgname = gsa-pm
