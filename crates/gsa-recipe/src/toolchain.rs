@@ -437,9 +437,12 @@ const SKEW_NOTE: &str =
     "Almost certainly llvm-libs-git is NEWER than rust-git (LLVM snapshots have no
 stable C++ ABI — see docs/NOTE.md 2026-09-07 – 09). Every build using rustc
 in this run would fail or miscompile.
-Recovery: downgrade-rebuild llvm-libs at the snapshot rust-git was built
-against (old version in /var/log/pacman.log; procedure in docs/NOTE.md), or
-rebuild the core group once a working bootstrap exists.
+Recovery: rebuild rust-git — its bootstrap uses the DOWNLOADED official
+stage0, so no working system rustc is needed (gsa -S --leaf rust-git; for a
+direct makepkg use a scratch copy of the recipe OUTSIDE the repo — an
+in-tree build collides with the engine's own Rust workspace). LAST resort:
+downgrade-rebuild llvm-libs at the snapshot rust-git was built against
+(old version in /var/log/pacman.log; procedure in docs/NOTE.md).
 Bypass anyway: --allow-broken-rustc";
 
 /// Removes the probe scratch (rm -f semantics) and folds any leftover into
@@ -686,8 +689,9 @@ pub fn remediation_refusal_text() -> &'static str {
     "  The selection must rebuild rust-git in the same pass before anything
   else compiles with rustc — stopping dispatch, draining in-flight lanes.
   Recovery: rebuild rust-git in the same run (add rust-git to the selection
-  and resume with --skip), or downgrade-rebuild llvm-libs at the snapshot
-  rust-git was built against.
+  and resume with --skip; the force-build jumps the queue — its downloaded
+  stage0 bootstrap needs no working system rustc), or as a LAST resort
+  downgrade-rebuild llvm-libs at the snapshot rust-git was built against.
 "
 }
 

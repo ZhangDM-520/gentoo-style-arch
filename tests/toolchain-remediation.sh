@@ -9,7 +9,7 @@ set -euo pipefail
 # probe stays loud (its verbatim error is asserted below) but must not start
 # refusing builds while remediation is possible.
 #
-# Five scenarios, one workspace each, all offline (PATH stubs only), driven
+# Six scenarios, one workspace each, all offline (PATH stubs only), driven
 # as `gsa -S` INSTALL runs — the mid-run trigger is install-only (it re-probes
 # after the successful install of llvm-git/llvm-libs-git):
 #
@@ -36,6 +36,13 @@ set -euo pipefail
 #   E. the whole core group lands but the probe STILL fails → the escalation
 #      ladder's refusal end: `core-group remediation rebuilt … and the sanity
 #      probe still fails`, the same probe-refusal block, rc 3.
+#
+#   F. force semantics jump the QUEUE (2026-10-18 real-run regression): the
+#      chain member (rust-git) has an out-of-chain build-order prereq (pre1)
+#      that is still queued when the remediation fires. The force-build must
+#      dispatch rust-git anyway — prerequisites are assumed installed (§C) —
+#      instead of stalling with `toolchain remediation stalled — rust-git
+#      cannot be dispatched` and refusing (the resume-5/resume-6 wall).
 #
 # Section C of tests/abi-batch-policy.sh pins the remaining "remediation
 # impossible" refusal (a probe failure with no identifiable chain at all).
@@ -554,6 +561,57 @@ REFUSAL_BLOCK_LINE='  The selection must rebuild rust-git in the same pass befor
     assert_builds "$dir_e/spawn.log" llvm-git rust-git llvm-git tc1 c2
     if [[ $(rr2_outcome p2 status <<<"$FIXTURE_OUTPUT") != never-started ]]; then
         fail "E: p2 must be never-started after the refusal" "$out_e"
+    fi
+)
+
+# ─── F. force semantics jump the queue: a queued out-of-chain prereq must ──
+#        never stall the chain (2026-10-18 real-run regression) ────────────
+(
+    set -euo pipefail
+    dir_f="$fixture/queue-jump"
+    make_workspace "$dir_f" 1 2 low
+    add_meta_package "$dir_f" llvm-git
+    add_meta_package "$dir_f" rust-git
+    add_meta_package "$dir_f" pre1
+    add_meta_package "$dir_f" p2
+    set_topology_record "$dir_f" llvm-git core ''
+    set_topology_record "$dir_f" pre1 git ''
+    set_topology_record "$dir_f" rust-git core 'llvm-git,pre1'
+    set_topology_record "$dir_f" p2 git 'llvm-git,rust-git'
+    prepare "$dir_f"
+    export GSA_FAKE_RUST_FIX=1
+
+    run_scenario "$dir_f" llvm-git pre1 p2
+    echo "$FIXTURE_OUTPUT" >"$fixture/f.txt"
+    out_f="$fixture/f.txt"
+
+    # Without force semantics this run stalls and refuses rc 3 while pre1 is
+    # still queued: the chain member must jump it.
+    if [[ $FIXTURE_RC -ne 0 ]]; then
+        fail "F: the force-build could not jump rust-git's queued prereq (rc=$FIXTURE_RC)" "$out_f"
+    fi
+    if [[ $(rr2_scalar outcome <<<"$FIXTURE_OUTPUT") != success ]]; then
+        fail "F: run record did not report success" "$out_f"
+    fi
+    if grep -Fq 'remediation stalled' <<<"$FIXTURE_OUTPUT"; then
+        fail "F: the remediation stalled although the chain member may jump its queued prereq" "$out_f"
+    fi
+    assert_record "$out_f"
+    require_msgs "$out_f" F \
+        'toolchain remediation (phase narrow): force-building rust-git to reconcile the at-risk chain before anything else compiles' \
+        'toolchain remediation reconciled the at-risk chain (rebuilt rust-git) — rustc sanity probe passes, resuming dispatch'
+
+    # The force-build lands second (right after the trigger build), ahead of
+    # the queued prereq pre1 and the held-back consumer p2.
+    assert_builds "$dir_f/spawn.log" llvm-git rust-git pre1 p2
+    if [[ $(rr2_scalar order <<<"$FIXTURE_OUTPUT") != 'llvm-git pre1 p2 rust-git' ]]; then
+        fail "F: unexpected run-record order '$(rr2_scalar order <<<"$FIXTURE_OUTPUT")'" "$out_f"
+    fi
+    if [[ $(rr2_outcome pre1 status <<<"$FIXTURE_OUTPUT") != succeeded ]]; then
+        fail "F: the queued prereq pre1 did not run to completion after the chain landed" "$out_f"
+    fi
+    if [[ $(rr2_outcome p2 status <<<"$FIXTURE_OUTPUT") != succeeded ]]; then
+        fail "F: the held-back consumer p2 did not run to completion" "$out_f"
     fi
 )
 

@@ -168,8 +168,8 @@ fn clean_targets_cover(targets: &CleanTargets, recipe_dir: &Path) -> Result<(), 
     Ok(())
 }
 
-/// A probe failure detail must name the llvm-libs-git/rust-git skew and BOTH
-/// recovery options.
+/// A probe failure detail must name the llvm-libs-git/rust-git skew and the
+/// recovery ladder (rebuild rust-git first; downgrade-rebuild LAST).
 fn failure_detail_names_skew(detail: &str) -> Result<(), String> {
     for want in [
         "llvm-libs-git",

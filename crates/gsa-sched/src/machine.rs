@@ -204,11 +204,17 @@ impl Machine {
     /// Whether one build-order edge is satisfied. Normal dispatch: the
     /// prerequisite settled successfully. Under the remediation restrict
     /// set (force semantics): an in-chain prerequisite only has to settle —
-    /// its rebuild outcome is the remediation monitor's business — while
-    /// anything out-of-chain must stand succeeded as usual.
-    fn prereq_clear(&self, prereq: usize) -> bool {
+    /// its rebuild outcome is the remediation monitor's business — while an
+    /// out-of-chain prerequisite never gates a chain member at all: the
+    /// selection contract assumes prerequisites installed and current (§C),
+    /// so a force rebuild jumps the queue instead of waiting on an upstream
+    /// cone that is itself queued for rebuild (2026-10-18: rust-git's nine
+    /// queued prereqs made `pick()` empty and the remediation stalled and
+    /// refused — the documented recovery was unreachable on a large run).
+    fn prereq_clear(&self, consumer: usize, prereq: usize) -> bool {
         match &self.restrict {
             Some(chain) if chain.contains(&prereq) => self.is_terminal(prereq),
+            Some(chain) if chain.contains(&consumer) => true,
             _ => self.is_done_ok(prereq),
         }
     }
@@ -220,7 +226,10 @@ impl Machine {
                 if !matches!(self.states[i], State::Pending) || self.stop_dispatch {
                     return false;
                 }
-                self.nodes[i].prereqs.iter().all(|&p| self.prereq_clear(p))
+                self.nodes[i]
+                    .prereqs
+                    .iter()
+                    .all(|&p| self.prereq_clear(i, p))
             })
             .collect()
     }
@@ -798,6 +807,45 @@ mod tests {
             assert_eq!(rows[2].status, RowStatus::Parked);
             assert_eq!(rows[2].reason, "coupled-batch");
         }
+    }
+
+    #[test]
+    fn restrict_force_dispatch_jumps_queued_out_of_chain_prereqs() {
+        // Remediation force semantics (2026-10-18): a chain member's
+        // out-of-chain prerequisites never gate it — the contract assumes
+        // prerequisites installed and current (§C), and on a large run those
+        // prereqs are themselves queued for rebuild, so waiting on them made
+        // `pick()` empty and the remediation stall and refuse.
+        let prereqs = vec![vec![], vec![0], vec![1]];
+        let nodes = nodes_from(&prereqs);
+        let mut m = Machine::new(nodes, Vec::new(), Policy::ConeStop, 4);
+        m.set_restrict(Some(vec![1]));
+        assert_eq!(
+            m.pick(),
+            vec![1],
+            "the chain member must be dispatchable while its out-of-chain prereq is still queued"
+        );
+        m.dispatch(1);
+        assert_eq!(
+            m.pick(),
+            Vec::<usize>::new(),
+            "only the chain dispatches while the restrict set is active"
+        );
+    }
+
+    #[test]
+    fn restrict_in_chain_prereq_still_settles_before_its_consumer() {
+        // Force semantics jump the QUEUE, not the chain's own order: an
+        // in-chain prerequisite must settle before its in-chain consumer.
+        let prereqs = vec![vec![], vec![0]];
+        let nodes = nodes_from(&prereqs);
+        let mut m = Machine::new(nodes, Vec::new(), Policy::ConeStop, 4);
+        m.set_restrict(Some(vec![0, 1]));
+        assert_eq!(
+            m.pick(),
+            vec![0],
+            "the in-chain prerequisite settles first even under force semantics"
+        );
     }
 
     #[test]
