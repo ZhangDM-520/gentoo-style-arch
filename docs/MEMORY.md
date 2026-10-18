@@ -1890,11 +1890,14 @@ going stale.
 ### Queued (claim by editing this section)
 
 - **Resolve the sqlite doc-zip checksum mismatch before trusting its sums**
-  (2026-10-18 smoke 2): `sqlite-doc-3540000.zip` fetches `a1795ac5…` but the
-  official publishes `76742cbf…` — upstream regenerated the artifact, so the
-  committed sum and the fetched bytes describe different files. Verify
-  against sqlite.org/Arch packaging before any re-anchor; until then every
-  whole-run `-S` without `--no-sync` aborts at the §G.1 integrity gate.
+  (2026-10-18 smoke 2; verified same day): the stop only bites the version
+  move to 3.54.0 — `sqlite-doc-3540000.zip` serves `a1795ac5…`, Arch
+  publishes `76742cbf…`, and sqlite.org (now at 3.54.1) publishes no
+  digest for the 3540000 artifact → unverifiable → fail-closed stands.
+  The committed 3.53.4-era sources re-verified byte-exact (doc-3530400
+  `a1d0f5de…`, src-3530400 `d18fa15a…`), so `--no-sync` builds clean. At
+  the 3.54.x bump: drop the dead `sqlite-doc-*` source (split trimmed) or
+  verify the regenerated artifact — never blind re-anchor.
 - **"One-time clean" prints per recipe per invocation** (2026-10-18 smoke
   2): "GCC build identity missing; cleaning cached build artifacts (one-time
   clean)" fired dozens of times in one run's prep — a one-time clean that

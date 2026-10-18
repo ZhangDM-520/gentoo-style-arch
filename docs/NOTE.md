@@ -1,3 +1,38 @@
+## 2026-10-18 — ship: design-B engine + nss-git land on main (gsa-pm r365 installed), smoke 2 resumes as a full coherent rebuild
+
+**Scope.** Owner: "commit and push". Three commits to origin/main:
+`2ffc2e2` (nss-git: absorbed patch dropped + nss-tool `<fstream>` fix),
+`6bc7dd2` (design-B store-privilege wave + workspace-hint consolidation +
+journals; validated `cargo test --workspace` green + battery 68/68 before
+landing), `a983bf1` (gsa-pm pin bump to 6bc7dd2, pkgver
+0.1.0+r365+g6bc7dd2dc77f). gsa-pm rebuilt with plain makepkg and
+installed — `/usr/bin/gsa` now carries the consolidated hint: the
+reported `gsa -Q` "run in the project directory" teaching is gone from
+the shipped binary (strings: the bare cwd-only clause no longer exists).
+
+**sqlite doc-zip stop resolved as far as it can be** (queued item
+updated): the stop only bites the version move to 3.54.0 —
+`sqlite-doc-3540000.zip` serves `a1795ac5…` while Arch publishes
+`76742cbf…`, and sqlite.org has moved on to 3.54.1 and publishes no
+digest for the 3540000 artifact → unverifiable → fail-closed stands. The
+committed 3.53.4-era sources re-verified byte-exact today (doc-3530400
+`a1d0f5de…`, src-3530400 `d18fa15a…`), so the `--no-sync` build path is
+clean. At the 3.54.x bump: drop the dead `sqlite-doc-*` source (the
+split is already trimmed) or verify the regenerated artifact — never
+blind re-anchor.
+
+**Smoke 2 resumes — as a FULL coherent rebuild.** `sudo gsa -Sy`
+(refreshed the store to `a983bf1`, the nss fix lands; 66 recipes
+re-anchored; shelly/libreoffice-fresh/zen-browser-pgo honest refusals;
+sqlite's integrity stop held and the recipe was restored byte-for-byte)
+then `sudo gsa -S --no-sync --skip-built @core` dispatching. Watch the
+§B.8 semantics: `--skip-built` skips "newest complete … set at any
+version … a recipe commit newer than the set rebuilds" — the store
+refresh moved every recipe's commit past the smoke-2 sets, so the run
+rebuilds the whole selection, and the engine's `abi-wave` coupled
+closures expand on top. One coherent system from the freshly synced set;
+hours to go. Log `/tmp/gsa-smoke2-resume.log`.
+
 ## 2026-10-18 — nss-git: stale local patch (upstream absorbed it) killed `prepare()` — the patch dies, never re-diffed around
 
 **Symptom.** Smoke 2 build run: `lane done nss-git failed 1 27 build-failed`
