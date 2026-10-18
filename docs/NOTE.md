@@ -1,3 +1,63 @@
+## 2026-10-18 — resume run #1 (108/3/513, rc 4): debugedit's trimmed man pages still demanded help2man, python-pycups met cups 2.5's renamed enums, llvm-git ate a GCC-snapshot VRP ICE
+
+**Symptom.** The resumed 624-target run ended rc 4 (cone-stop): 108
+succeeded, 3 failed, 513 parked — every park in llvm-git's consumer cone.
+Three independent failures, none engine-side.
+
+**Failure 1 — debugedit (trim inconsistency).** `build()` generated the
+man pages via help2man (not a host tool here) while `package()` trims
+`/usr/share/man` outright — a trimmed output still demanded its generator
+(`Makefile:1366 find-debuginfo.1 Error 127`). Fix: pre-empt all four
+help2man rules (`debugedit.1`, `sepdebugcrcfix.1`,
+`debugedit-classify-ar.1`, `find-debuginfo.1`) by touching their targets
+post-configure — the rules only fire when the .c/.in or configure.ac are
+newer, so the empty targets survive `make install` and package() drops
+them. pkgrel 2→3. Durable rule: when package() trims generated output,
+neutralize the generation in build() — never reintroduce the generator.
+**Validated:** `gsa -B --leaf debugedit` → `succeeded 0 7 ok` (the
+pre-fix run reproduces the old failure in 4s).
+
+**Failure 2 — python-pycups (cups 2.5's moved headers AND renamed
+enums).** `cups/http.h: No such file` — upstream 2.5 installs headers
+under `/usr/include/libcups2/` and dropped cups-config; pyCUPS' setup.py
+assumes the stock layout. Fix: `CFLAGS+=" $(pkg-config --cflags cups)"`
+— flags from the capability's metadata, never a hard-coded path. With
+that the build reached the real wall: cups 2.5 renamed the IPP/HTTP enums
+to the `IPP_OP_`/`IPP_STATUS_`/`IPP_JSTATE_`/`IPP_PSTATE_`/
+`HTTP_ENCRYPTION_` spellings and dropped the legacy aliases pycups 2.0.4
+predates (upstream has no fix — checked master). Fix: recipe-local
+`cups25-compat.h` (force-included via `-include`, every macro
+`#ifndef`-guarded) restoring the ~80 legacy names — same wave as NOTE.md
+2026-10-11's gtk3/gtk4 enum-compat patches. Two retired flags
+(`CUPS_PRINTER_IMPLICIT`/`DELETE`) and the retired
+`IPP_OP_SEND_HARDCOPY_DOCUMENT` keep their historical/aliased meanings,
+documented in the header. pkgrel 4→5. **Validated:** `gsa -B --leaf
+python-pycups` → `succeeded 0 3 ok`.
+Whole-class scan: the build-order edges for the libcups surface were
+missing on four records — python-pycups, cups-filters, gtk3-git, gtk4-git
+all build against `libcups` (the cups-git recipe's split output) but only
+qt5/qt6-base-git and libcupsfilters carried the `cups-git` edge. Added
+the edge to all four (metadata-verified: each declares `libcups` in
+depends/makedepends; reason: the cups headers/libs must exist before
+these compile — pycups is the observed failure, and cups-filters/gtk
+carry cups-2.5 patches that document the same coupling).
+
+**Failure 3 — llvm-git: deterministic GCC-snapshot ICE.**
+`internal compiler error: Segmentation fault during GIMPLE pass: vrp` in
+`LowerFCOPYSIGN` (`X86ISelLowering.cpp:23234`), byte-identical across two
+runs, in the LTO recompile of libLLVM.so. The recipe's
+`LLVM_ENABLE_LTO=ON` is intentional (its `!lto` only neutralizes
+makepkg's LTOFLAGS — cf. mold-git/rust-git), so the fix keeps LTO and
+disables the crashing pass for this build: `CXXFLAGS+=" -fno-tree-vrp"`
+with the ICE signature and drop-when-fixed note inline. pkgrel 1→2.
+Validation: full llvm-git rebuild in flight at journal time — verdict
+lands with the commit.
+
+**Validation (batch).** `bash -n` + `.SRCINFO` regenerated (3 recipes);
+topology validated `gsa -S --dry-run @core/@git/@stable` rc 0 ×3;
+`tests/run-all.sh recipe` 8/8; `gsa -Ma` clean (one pre-existing
+version-sync-skew note on cups-filters).
+
 ## 2026-10-18 — `--skip-built` blessed an EMPTY set (`already built ()`) and the install gate halted the run on the phantom (rsync `install-refused partial-set`)
 
 **Symptom.** Smoke-2 resume (`gsa -S --no-sync --skip-built @core`): at the

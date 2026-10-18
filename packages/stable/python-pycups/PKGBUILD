@@ -4,7 +4,7 @@
 pkgbase=pycups
 pkgname=('python-pycups')
 pkgver=2.0.4
-pkgrel=4
+pkgrel=5
 arch=('x86_64')
 url="https://github.com/OpenPrinting/pycups"
 license=('GPL-2.0-or-later')
@@ -12,8 +12,10 @@ pkgdesc="Python bindings for libcups"
 depends=('libcups' 'python' 'glibc')
 makedepends=('python-setuptools')
 provides=('pycups')
-source=(${pkgname}-${pkgver}.tar.gz::https://github.com/OpenPrinting/pycups/archive/v${pkgver}.tar.gz)
-sha256sums=('31d9cf62df7884fe430d11970a8c9278282a47a0ff6b1529c58c7d26e8eb4789')
+source=(${pkgname}-${pkgver}.tar.gz::https://github.com/OpenPrinting/pycups/archive/v${pkgver}.tar.gz
+        'cups25-compat.h')
+sha256sums=('31d9cf62df7884fe430d11970a8c9278282a47a0ff6b1529c58c7d26e8eb4789'
+            '8b671f53bf9348e3a68af2b9077965f8f47d77aa779790f6266b6d631dc96c98')
 
 build() {
   cd ${pkgbase}-${pkgver}
@@ -22,6 +24,14 @@ build() {
   local _mold=""
   command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
   export LDFLAGS+=" ${_mold}"
+
+  # cups 2.5 (libcups-git) installs headers under libcups2/ (cups/http.h →
+  # libcups2/cups/http.h) and dropped cups-config; pyCUPS' setup.py assumes
+  # the stock include layout and adds no -I of its own — take the include
+  # flags from the capability's pkg-config metadata, never a hard-coded path.
+  # The force-included compat header restores the legacy IPP/HTTP enum names
+  # cups 2.5 renamed away (see the header's comment; NOTE.md 2026-10-18).
+  export CFLAGS+=" $(pkg-config --cflags cups) -include \"$srcdir\"/cups25-compat.h"
 
   python setup.py build
 }

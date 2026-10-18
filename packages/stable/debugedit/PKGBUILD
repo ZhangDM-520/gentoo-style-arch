@@ -4,7 +4,7 @@
 
 pkgname=debugedit
 pkgver=5.3
-pkgrel=2
+pkgrel=3
 pkgdesc='Tool to mangle source locations in .debug files'
 arch=('x86_64')
 url='https://sourceware.org/debugedit/'
@@ -32,6 +32,13 @@ build() {
     command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
     export LDFLAGS+=" ${_mold}"
     ./configure --prefix=/usr
+    # trim: the man pages are dropped in package() — pre-empt their help2man
+    # generation rules (help2man is not a host tool here) by marking the
+    # targets up-to-date; `make install` ships them empty and package()
+    # removes the man tree. The rules only fire when the .c/.in or
+    # configure.ac are newer than the target, so a post-configure touch
+    # holds through install.
+    touch debugedit.1 sepdebugcrcfix.1 debugedit-classify-ar.1 find-debuginfo.1
     make -j"${GSA_BUILD_JOBS:-$(nproc)}"
 }
 
