@@ -525,8 +525,9 @@ isolated lane process groups (one `SIGTERM` each, shared grace window,
 
 Engine state lives under **one** state root: `/var/lib/gsa` by default —
 binpkg index, ABI records, world/sets, run history, logs, locks, per-recipe
-toolchain identities, `abi-repair/` markers, and the recipe store (contract
-§J.1). Relocate the entire root with `--state-dir PATH`, `GSA_STATE_DIR`, or
+toolchain identities, `abi-repair/` markers, and the `recipes.last-fetch`
+store-refresh stamp (contract §J.1). The canonical recipe store is **not**
+here (see below). Relocate the entire root with `--state-dir PATH`, `GSA_STATE_DIR`, or
 the gsa.conf `state_dir` key (contract §J.3: flag beats env beats config beats
 the built-in default). When the resolved root is unwritable and no override is
 given, the run fails early naming `--state-dir` as the remedy; there is never
@@ -541,6 +542,19 @@ privileged runner owns what it writes, so **root-owned state is correct
 state**. A file owned by someone else is preserved under a
 `<path>.stale.<epoch>.<pid>` name — announced, never silently adopted — before
 the write opens it; a possibly-held pacman-lock inode is never renamed.
+
+The canonical recipe store is build-user working data and lives **outside**
+the state root: `GSA_RECIPES_DIR` > the gsa.conf `recipe_dir` key > the build
+user's `~/.local/share/gsa/recipes` (contract §B.11/§J.2); `--state-dir` and
+`GSA_STATE_DIR` never move it. `gsa -Sy` (or a mutating run's on-demand
+fetch) populates it from `recipe_url`, refreshes it in place with a fetch +
+hard reset (hand edits to the store are not preserved — point `project` at a
+dev checkout for that), and hands it to the build user — as it does after the
+one-shot migration of a legacy `<state>/recipes` (`.git` and any dirty
+worktree survive the move; when both trees exist the resolved store wins and
+the legacy tree is left in place, never deleted; a move failure is a hard
+error). A root-owned store is never correct state: the makepkg family writes
+there as the build user.
 
 makepkg's working state is the **build user's cache**, never the recipe tree
 (the W4a layout, contract §J.2). The engine passes `BUILDDIR`, `PKGDIR` and
@@ -579,7 +593,8 @@ counting names. Planning defaults and the intensity formulas live in
 **Configuration files** (contract §B.11): the engine auto-reads
 `/etc/gsa.conf` (system) then `~/.config/gsa/gsa.conf` (user) — user wins —
 and `GSA_CONF` replaces both with exactly one file (fixture and hermetic
-control). The keys are `project`, `recipe_url`, `build_dir`, `state_dir`; `~`
+control). The keys are `project`, `recipe_url`, `build_dir`, `state_dir`,
+`recipe_dir`; `~`
 expands to the build user's home (`SUDO_UID`'s home under `sudo`). An unknown
 key or malformed line is an error naming file:line and key — never a silent
 default.
@@ -609,6 +624,11 @@ the three planning defaults):
   `pkg/`, `pkgs/`). Beats the config `build_dir` key; default: the build
   user's `~/.cache/gsa`. `SRCDEST` is NOT part of this surface — `makepkg.conf`
   governs sources.
+- `GSA_RECIPES_DIR` — the canonical recipe store root (**Runtime state and the
+  build cache**): build-user working data, never below the state root. Beats
+  the gsa.conf `recipe_dir` key; default: the build user's
+  `~/.local/share/gsa/recipes`. `--state-dir`/`GSA_STATE_DIR` never influence
+  the store.
 - `GSA_TARGET_CPU` — the engine does **not** consume it: it reaches recipes
   through the inherited environment (CPU tuning; the host `makepkg.conf`
   applies when unset), and a continuation warns about it via `env-required:`
@@ -748,6 +768,16 @@ somewhere durable first:
 ```sh
 gsa -S @core --state-dir "$HOME/.local/state/gentoo-style-arch"
 ```
+
+### `anchoring-refused` / `updpkgsums` cannot write the recipe store
+
+A store `PKGBUILD` the build user cannot write makes checksum refresh refuse
+(`updpkgsums could not refresh the checksums … No write permission in …` →
+`anchoring-refused` deferrals). The store is build-user working data
+(contract §J.2): run `sudo gsa -Sy` once — it refreshes the store and hands
+it to the build user, and migrates a legacy `<state>/recipes` on sight (one
+loud note; move failure is a hard error, move the tree manually then retry).
+A root-owned store is never correct state.
 
 ### When the machine freezes during a build
 

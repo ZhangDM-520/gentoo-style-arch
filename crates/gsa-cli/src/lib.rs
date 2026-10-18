@@ -227,13 +227,16 @@ A maintain run (-M) accepts its verb's sub-flags (§B.7): --fix, --prune,
   plan and rows without touching anything.
 Deferred (parse and refuse, so the message names them): --quiet, --verbose.
 
-Engine environment inputs: GSA_CONF, GSA_STATE_DIR, GSA_BUILD_DIR, GSA_LANES,
-  GSA_JOBS, GSA_INTENSITY, GSA_CPU_THREADS, GSA_MEMORY_GIB, GSA_TARGET_CPU,
-  GSA_VCS_SKIP_TOLERANCE. GSA_CONF replaces the auto-read gsa.conf layers
-  (/etc/gsa.conf, ~/.config/gsa/gsa.conf) with exactly one file — fixture and
-  hermetic control. GSA_BUILD_DIR redirects the build cache (makepkg
-  BUILDDIR/PKGDIR/PKGDEST; default: the build user's ~/.cache/gsa).
-  GSA_BUILD_JOBS is engine output, never an input.
+Engine environment inputs: GSA_CONF, GSA_STATE_DIR, GSA_BUILD_DIR,
+  GSA_RECIPES_DIR, GSA_LANES, GSA_JOBS, GSA_INTENSITY, GSA_CPU_THREADS,
+  GSA_MEMORY_GIB, GSA_TARGET_CPU, GSA_VCS_SKIP_TOLERANCE. GSA_CONF replaces
+  the auto-read gsa.conf layers (/etc/gsa.conf, ~/.config/gsa/gsa.conf) with
+  exactly one file — fixture and hermetic control. GSA_BUILD_DIR redirects
+  the build cache (makepkg BUILDDIR/PKGDIR/PKGDEST; default: the build
+  user's ~/.cache/gsa). GSA_RECIPES_DIR redirects the canonical recipe store
+  (gsa.conf `recipe_dir`; default: the build user's ~/.local/share/gsa/
+  recipes — never below the state root). GSA_BUILD_JOBS is engine output,
+  never an input.
 
 Exit codes (contract §G): 0 success; 1 build failure under --fail-fast;
   2 usage error (bad flags, unknown reference with nearest candidates, invalid
@@ -250,8 +253,11 @@ Exit codes (contract §G): 0 success; 1 build failure under --fail-fast;
 /// 1. `project` from the gsa.conf layers (dev/deployment override);
 /// 2. the cwd walk — deprecated (fixtures and dev checkouts still use it;
 ///    a TTY run notes the deprecation, pipes stay byte-stable);
-/// 3. the canonical store `<state-dir>/recipes` (gsa-owned, fetched by
-///    `gsa -Sy` or — for mutating runs — on demand).
+/// 3. the canonical store — the build user's working copy at
+///    `recipe_root` (`GSA_RECIPES_DIR` > `recipe_dir` > the build user's
+///    `~/.local/share/gsa/recipes`), fetched by `gsa -Sy` or — for
+///    mutating runs — on demand. A legacy `<state>/recipes` is migrated
+///    into place on sight (gsa_state::recipes::ensure_store).
 /// `fetch` enables that on-demand store fetch; read paths pass `false`.
 fn find_root() -> Option<PathBuf> {
     resolve_root(false).ok()
@@ -275,7 +281,10 @@ pub(crate) fn resolve_root(fetch: bool) -> Result<PathBuf, String> {
         return Ok(root);
     }
     let state = gsa_model::config::resolve_state_dir(None)?;
-    let store = gsa_state::recipes::store_dir(&state);
+    let (store, note) = gsa_state::recipes::ensure_store(&state)?;
+    if let Some(note) = note {
+        eprintln!("gsa: note: {note}");
+    }
     if store.join("config").join("topology.conf").is_file() {
         return Ok(store);
     }
@@ -288,7 +297,10 @@ pub(crate) fn resolve_root(fetch: bool) -> Result<PathBuf, String> {
         eprintln!("gsa: recipe store fetched: {} at {head}", store.display());
         return Ok(store);
     }
-    Err("cannot find a recipe workspace: set `project` in gsa.conf, run inside the recipe repository, or fetch the store with `sudo gsa -Sy`".to_string())
+    Err(format!(
+        "cannot find a recipe workspace: {} (missing config/topology.conf)",
+        gsa_model::config::WORKSPACE_HINT
+    ))
 }
 
 /// The pre-W3 discovery: walk up from the current directory until
@@ -622,9 +634,10 @@ fn execute(
         // report verbs' own discovery never fetches (read-only, §B.10).
         Some(root) => root.clone(),
         None => find_root().ok_or_else(|| {
-            cmd_error(
-                "cannot find config/topology.conf from the current directory upward (run inside the recipe repository)",
-            )
+            cmd_error(format!(
+                "cannot find a recipe workspace: {} (missing config/topology.conf)",
+                gsa_model::config::WORKSPACE_HINT
+            ))
         })?,
     };
     let project = load_project(&root).map_err(|e| cmd_error(e.to_string()))?;

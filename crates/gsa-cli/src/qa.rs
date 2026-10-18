@@ -39,7 +39,8 @@ pub fn run_qa_check(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -
     let Some(root) = crate::find_root() else {
         let _ = writeln!(
             err,
-            "gsa: cannot find config/topology.conf from the current directory upward (run inside the recipe repository)"
+            "gsa: cannot find a recipe workspace: {}",
+            gsa_model::config::WORKSPACE_HINT
         );
         return 2;
     };

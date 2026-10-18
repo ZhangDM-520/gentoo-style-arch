@@ -177,7 +177,10 @@ pub fn run_lane_job(args: &[String], err: &mut dyn Write) -> i32 {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let Some(root) = crate::find_root(&cwd) else {
         return usage(
-            "cannot find config/topology.conf from the current directory upward",
+            concat!(
+                "cannot find config/topology.conf from the current directory upward — ",
+                "set `project` in gsa.conf, run inside the recipe repository, or fetch the store with `sudo gsa -Sy`"
+            ),
             err,
         );
     };

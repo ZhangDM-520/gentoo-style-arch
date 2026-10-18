@@ -619,7 +619,10 @@ pub fn load_project(root: &Path) -> Result<ProjectConfig, TopologyError> {
     if !topology_path.is_file() {
         return Err(TopologyError::whole(
             topology_path.to_string_lossy().as_ref(),
-            "topology file not found (run inside the recipe repository)",
+            format!(
+                "topology file not found ({})",
+                gsa_model::config::WORKSPACE_HINT
+            ),
         ));
     }
     let topology = parse_topology(

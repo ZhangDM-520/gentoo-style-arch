@@ -40,6 +40,12 @@ sudo pacman -S --needed base-devel git ripgrep rust
 cargo build --release        # produces ./target/release/gsa
 ```
 
+A run finds its workspace from the `project` key in `gsa.conf`, from the
+current directory inside this recipe repository, or from the canonical recipe
+store — `sudo gsa -Sy` fetches the store into your
+`~/.local/share/gsa/recipes` (your user's working data; `GSA_RECIPES_DIR` or
+the gsa.conf `recipe_dir` key point it elsewhere).
+
 Inspect before building anything:
 
 ```sh

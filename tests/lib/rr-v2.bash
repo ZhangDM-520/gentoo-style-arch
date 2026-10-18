@@ -502,6 +502,15 @@ rr2_invoke() {
         if [[ -z ${GSA_BUILD_DIR:-} ]]; then
             guard+=(GSA_BUILD_DIR="$ws/../.rr2-build")
         fi
+        # Recipe-store isolation (design B, 2026-10-17): the store default is
+        # the build user's ~/.local/share/gsa/recipes. A fixture run must
+        # never read or write the live store — an unguarded negative test
+        # (missing config/topology.conf) resolved the real migrated store and
+        # passed against it. When the caller gives no GSA_RECIPES_DIR, route
+        # it beside the workspace, removed with the fixture.
+        if [[ -z ${GSA_RECIPES_DIR:-} ]]; then
+            guard+=(GSA_RECIPES_DIR="$ws/../.rr2-recipes")
+        fi
         if [[ $mode == sudo ]]; then
             local -a fwd=()
             rr2_env_forward fwd

@@ -12,7 +12,7 @@ set -euo pipefail
 # `format: 2` run record (rule 25(j) / contract §L.3) — never from prose
 # alone.
 #
-# Pinned here (six ( subshell ) sections, one per scenario):
+# Pinned here (seven ( subshell ) sections, one per scenario):
 #   1. `gsa -Sy` happy path: the stubbed Arch provider reports a newer
 #      version, the PKGBUILD is rewritten (pkgver/pkgrel) and RULE-18
 #      re-anchors the checksums to the provider's published digest over the
@@ -44,6 +44,11 @@ set -euo pipefail
 #      refuses before dispatch (rc 3, every row `never-started - -
 #      preflight-refused`, no build), and `--allow-broken-rustc` proceeds to
 #      build.
+#   7. the store is the build user's working copy (2026-10-17 relocation):
+#      a root-owned legacy store under the state root is the production bug
+#      (`updpkgsums`, dropped to the build user, cannot write where the sync
+#      stages → anchoring-refused); after the one-shot migration the same
+#      run anchors IN-STORE and the store's PKGBUILD ends with the new sums.
 #
 # Complement to tests/anchor-defer.sh (do not duplicate): that fixture drives
 # a BUILD run's pre-dispatch deferral through a makepkg rc 99 and pins the
@@ -819,6 +824,76 @@ record_block() {
         || fail "the bypass build row's rc is not 0:" "$fixture/s6/bypass.txt"
     grep -F 'makepkg ' "$GSA_FAKE_SYNC_MAKEPKG_LOG" >/dev/null \
         || fail "the bypass run never invoked makepkg:" "$GSA_FAKE_SYNC_MAKEPKG_LOG"
+)
+
+# ─── 7. anchoring runs against the store the build user can write ─────────
+(
+    set -euo pipefail
+    up="$fixture/s7/upstream"
+    store="$fixture/s7/recipe-store"
+    state="$fixture/s7/state"
+    empty="$fixture/s7/empty"
+    mkdir -p "$empty" "$fixture/s7/stubs/bin"
+
+    # The upstream the store refreshes from: this fixture's stable recipe.
+    make_workspace "$up" 1 1 low
+    stable_recipe "$up" demo
+    (cd "$up" && git init -q -b main . &&
+        git -c user.name=fixture -c user.email=fixture@invalid add -A &&
+        git -c user.name=fixture -c user.email=fixture@invalid commit -qm "fixture upstream") ||
+        fail "s7: cannot commit the fixture upstream"
+
+    # Production shape: the pre-relocation store sits under the state root
+    # and is root-owned — the build user cannot write where updpkgsums runs
+    # (its staged source and in-place rewrite land in the recipe dir).
+    mkdir -p "$state"
+    git clone -q "$up" "$state/recipes" || fail "s7: cannot seed the legacy store"
+    /usr/bin/sudo -n chown -R root:root "$state/recipes" ||
+        fail "s7: cannot shape the legacy store root-owned"
+
+    write_stub_pacman "$fixture/s7/stubs"
+    write_stub_curl "$fixture/s7/stubs"
+    write_stub_updpkgsums "$fixture/s7/stubs"
+    write_stub_makepkg "$fixture/s7/stubs"
+    export PATH="$fixture/s7/stubs/bin:$PATH"
+    export GSA_FAKE_SYNC_PACMAN_LOG="$fixture/s7/pacman.log"
+    export GSA_FAKE_SYNC_SI_LOG="$fixture/s7/si.log"
+    export GSA_FAKE_SYNC_SI_MODE=found
+    export GSA_FAKE_SYNC_SI_VERSION=2.0.0-2
+    export GSA_FAKE_SYNC_CURL_MODE=ok
+    export GSA_FAKE_SYNC_MAKEPKG_LOG="$fixture/s7/makepkg.log"
+    export GSA_FAKE_SYNC_PAYLOAD="$fixture/s7/payload"
+    export GSA_FAKE_SYNC_STAGED_NAME=demo-2.0.0.tar.gz
+    printf 'demo payload for 2.0.0\n' >"$GSA_FAKE_SYNC_PAYLOAD"
+    digest=$(sha256sum "$GSA_FAKE_SYNC_PAYLOAD")
+    digest=${digest%% *}
+    export GSA_FAKE_SYNC_SRCINFO="$fixture/s7/provider.SRCINFO"
+    provider_srcinfo "$GSA_FAKE_SYNC_SRCINFO" demo 2.0.0 "$digest"
+    export GSA_RECIPES_DIR="$store"
+    printf 'recipe_url = %s\n' "$up" >"$fixture/s7/gsa.conf"
+    export GSA_CONF="$fixture/s7/gsa.conf"
+
+    # From a non-workspace cwd the run resolves the STORE — never a cwd
+    # walk. The engine runs under real sudo (run_sy): root-side git hands
+    # the tree to the build user, and the dropped updpkgsums then writes it.
+    run_sy "$empty" "$fixture/s7/out" "$fixture/s7/err" "$state"
+
+    [ "$SY_RC" = 0 ] \
+        || fail "s7: the sync must anchor against the store (rc $SY_RC): $(cat "$fixture/s7/err")"
+    grep -F 'recipe store moved to' "$fixture/s7/err" >/dev/null \
+        || fail "s7: the legacy store migration must be announced:" "$fixture/s7/err"
+    if grep -F 'anchoring-refused' "$fixture/s7/err" >/dev/null; then
+        fail "s7: anchoring must not defer against the migrated store:" "$fixture/s7/err"
+    fi
+    recipe="$store/packages/stable/demo"
+    grep -Fx 'pkgver=2.0.0' "$recipe/PKGBUILD" >/dev/null \
+        || fail "s7: pkgver was not rewritten in the store:" "$recipe/PKGBUILD"
+    grep -F "sha256sums=('$digest')" "$recipe/PKGBUILD" >/dev/null \
+        || fail "s7: the store PKGBUILD must end with the new sums:" "$recipe/PKGBUILD"
+    [ ! -e "$state/recipes" ] \
+        || fail "s7: the legacy store must be gone after the move"
+    [ "$(stat -c %u "$recipe/PKGBUILD")" = "$(id -u)" ] \
+        || fail "s7: the rewritten PKGBUILD must be owned by the run user"
 )
 
 printf 'gsa sync v2 fixture: PASS\n'

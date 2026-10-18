@@ -794,6 +794,16 @@ impl RecipeTransaction {
     pub fn stage(&self) -> Result<PathBuf, SyncError> {
         fs::copy(self.recipe_dir.join("PKGBUILD"), &self.staged)
             .map_err(|_| sync_err("could not stage the version rewrite"))?;
+        // The staged copy is the build user's work file: `updpkgsums` (makepkg
+        // family, dropped to the build user) rewrites it in place, so a
+        // root-owned copy is unwritable for it — the second half of the
+        // 2026-10-17 store privilege bug (the first half was the store's own
+        // directory ownership).
+        gsa_model::privilege::own_to_build_user(&self.staged).map_err(|e| {
+            sync_err(&format!(
+                "could not hand the staged rewrite to the build user: {e}"
+            ))
+        })?;
         Ok(self.staged.clone())
     }
 
@@ -1030,6 +1040,10 @@ fn write_atomic(path: &Path, content: &str) -> std::io::Result<()> {
         let mut f = fs::File::create(&tmp)?;
         f.write_all(content.as_bytes())?;
         f.sync_all()?;
+        // Recipe files are the build user's working data (canonical store or
+        // dev checkout); a root-created temp renamed over one must not
+        // re-root the file the build user's tools rewrite next.
+        gsa_model::privilege::own_to_build_user(&tmp).map_err(std::io::Error::other)?;
         fs::rename(&tmp, path)
     })();
     if result.is_err() {
@@ -1502,7 +1516,57 @@ pub fn hash_bytes(alg: &str, data: &[u8]) -> Option<String> {
             use sha2::{Digest, Sha512};
             Some(hex(&Sha512::digest(data)))
         }
+        // md5/b2 ride their coreutils tools through PATH like the fish
+        // engine and [`hash_file`] (no in-process MD5/BLAKE2 dependency):
+        // the bytes go to the tool's stdin and the first output field is the
+        // digest. A missing tool or failed run is a non-answer — callers
+        // report "could not recompute", never a confident wrong sum.
+        "md5" | "b2" => {
+            let tool = if alg == "md5" { "md5sum" } else { "b2sum" };
+            let mut child = gsa_model::privilege::build_command(tool)
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .spawn()
+                .ok()?;
+            {
+                let mut stdin = child.stdin.take()?;
+                stdin.write_all(data).ok()?;
+            }
+            let out = child.wait_with_output().ok()?;
+            if !out.status.success() {
+                return None;
+            }
+            let text = String::from_utf8_lossy(&out.stdout);
+            text.split_whitespace().next().map(|s| s.to_string())
+        }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::hash_bytes;
+
+    #[test]
+    fn hash_bytes_covers_the_coreutils_matrix() {
+        // Published KATs for "abc" — BLAKE2b-512/MD5 via the coreutils tools
+        // on PATH, sha256 in-process; a refactor must not silently drop an
+        // algorithm (the VCS recompute reports "cannot hash a git archive
+        // with <alg>" otherwise, which deferred whole recipes in production
+        // on 2026-10-17).
+        assert_eq!(
+            hash_bytes("md5", b"abc").as_deref(),
+            Some("900150983cd24fb0d6963f7d28e17f72")
+        );
+        assert_eq!(
+            hash_bytes("b2", b"abc").as_deref(),
+            Some("ba80a53f981c4d0d6a2797b69f12f6e94c212f14685ac4b74b12bb6fdbffa2d17d87c5392aab792dc252d5de4533cc9518d38aa8dbf1925ab92386edd4009923")
+        );
+        assert_eq!(
+            hash_bytes("sha256", b"abc").as_deref(),
+            Some("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+        );
+        assert_eq!(hash_bytes("nope", b"abc"), None);
     }
 }
 

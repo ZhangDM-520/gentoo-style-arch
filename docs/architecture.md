@@ -7,7 +7,8 @@ engine. Three parts, deliberately separate:
 2. **The `gsa` engine** — the Rust workspace under `crates/`, shipped as one
    binary.
 3. **Runtime state** — split by who owns it: engine state under the state
-   root, makepkg state in the build user's cache.
+   root, makepkg state in the build user's cache, and the canonical recipe
+   store as build-user working data.
 
 The earlier four-module framing (recipes / topology / a fish builder /
 runtime state) predates the engine migration and is gone.
@@ -92,7 +93,10 @@ disagree, the contract wins.
 - `gsa-fetch` — fetch-ahead through `makepkg --verifysource` as the only
   fetch/verify engine, plus the dispatcher's bounded prefetch window.
 - `gsa-state` — the side-car state database under the state root (binpkg
-  index, run history, key-value) and its write-time ownership gate.
+  index, run history, key-value), its write-time ownership gate, and the
+  canonical recipe store (`recipes.rs`: fetch/refresh, the one-shot
+  `ensure_store` migration — the store itself is build-user working data,
+  "Runtime state, split by owner" below).
 - `gsa-qa` — the QA check registry: named report-only audit lints (the
   `-Ma` semantics) and install-refusing checks, plus the hidden `--qa-check`
   seam.
@@ -195,12 +199,25 @@ records), `world` and `sets/`, `runs/` (run history), `logs/`, `locks/` (the
 pacman mutex and the run lock), `toolchains/` (per-recipe toolchain identity
 records; a missing or changed identity invalidates that recipe's incremental
 build tree before skip decisions), `abi-repair/` (forced-rebuild markers),
-and `recipes/` (the canonical recipe store fetched from `recipe_url`). The
+and `recipes.last-fetch` (the recipe store's refresh stamp — state, not
+store). The
 whole root relocates with `--state-dir PATH` (flag beats `GSA_STATE_DIR`
 beats the `gsa.conf` `state_dir` key; contract §J.3) and there is never a
 silent fallback. Every state write passes `gsa-state`'s write-time ownership
 gate: engine state is root-owned, and root-owned is correct state, not
-corruption (contract §J.5).
+corruption (contract §J.5) — the gate covers the state root only.
+
+**The canonical recipe store** is build-user working data, owned by the build
+user (2026-10-17 relocation): `GSA_RECIPES_DIR` beats the gsa.conf
+`recipe_dir` key beats `<build-user-home>/.local/share/gsa/recipes`
+(`gsa_model::config::recipe_root`) — deliberately never below the state root,
+because build-domain tools (makepkg, `updpkgsums`, recipe-eval bash) run as
+the build user and must be able to write where they run; `--state-dir`/
+`GSA_STATE_DIR` never influence it. The engine chowns what it lands (after
+fetch, after migration, after a root-side git reset), and one-shot
+`ensure_store` migration moves a legacy `<state>/recipes` into place
+preserving `.git` and any dirty worktree (both trees → the resolved store
+wins, the legacy tree is left in place; a move failure is a hard error).
 
 **makepkg state** — build trees, staging, and finished package archives —
 lands in the **build user's cache**, never beside the recipe (the W4a
@@ -213,8 +230,8 @@ shared `PKGDEST` plus the pre-W4 recipe dirs as a truth-filtered LEGACY
 fallback for old archives — every candidate is matched by its
 `.PKGINFO`/output-name truth, so a shared `PKGDEST` can never hand over
 another recipe's archive (contract §J.2). Per-archive VCS revision baselines
-stay with their archives. Both classes of state are Git-ignored where they
-fall inside the tree and absent from a clean checkout.
+stay with their archives. All three classes of runtime state are Git-ignored
+where they fall inside the tree and absent from a clean checkout.
 
 The source-sharing seam is intentionally between a recipe's VCS source name
 and its runtime mirror. A missing canonical mirror is valid on a clean

@@ -822,7 +822,17 @@ pub fn run_sync_pass(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write)
                     return 2;
                 }
             };
-            if root == gsa_state::recipes::store_dir(&state) {
+            // The workspace comparison uses the RESOLVED store root (pure);
+            // resolve_workspace already ran the ensure/migrate step and
+            // printed its note — a second ensure here would double-print.
+            let store = match gsa_state::recipes::store_dir() {
+                Ok(store) => store,
+                Err(message) => {
+                    let _ = writeln!(err, "gsa: {message}");
+                    return 2;
+                }
+            };
+            if root == store {
                 let url = cfg
                     .recipe_url
                     .unwrap_or_else(|| gsa_model::config::DEFAULT_RECIPE_URL.to_string());

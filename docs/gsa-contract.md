@@ -265,9 +265,10 @@ is a pure read with no confirmation at all. Wording-only (§L.2); pinned by
 | `--config PATH`, `--noconfirm` | pacman-familiar globals; `--noconfirm` applies to the engine's own confirmations (`-Mm`, `-Mccc`) and never to a pacman question flag |
 | `--quiet`, `--verbose` | **deferred**: recognised and refused (rc 2, naming the flag) by every command; never mirrored (§H.2) |
 
-Engine environment inputs (the roster `gsa --help` must print): `GSA_STATE_DIR`,
-`GSA_LANES`, `GSA_JOBS`, `GSA_INTENSITY`, `GSA_CPU_THREADS`, `GSA_MEMORY_GIB`,
-`GSA_TARGET_CPU`, `GSA_VCS_SKIP_TOLERANCE`. `GSA_BUILD_JOBS` is engine OUTPUT
+Engine environment inputs (the roster `gsa --help` must print): `GSA_CONF`,
+`GSA_STATE_DIR`, `GSA_BUILD_DIR`, `GSA_RECIPES_DIR`, `GSA_LANES`, `GSA_JOBS`,
+`GSA_INTENSITY`, `GSA_CPU_THREADS`, `GSA_MEMORY_GIB`, `GSA_TARGET_CPU`,
+`GSA_VCS_SKIP_TOLERANCE`. `GSA_BUILD_JOBS` is engine OUTPUT
 exported per lane, never an input. `GSA_FAKE_*` is not an engine vocabulary
 (§D.2).
 
@@ -410,7 +411,7 @@ reported before privilege. `--dry-run` renders plans and is never gated.
 **The `gsa.conf` layers** (plan-gsa-isolation.md W2): the engine auto-reads
 `/etc/gsa.conf` (system) then `~/.config/gsa/gsa.conf` (user), user over
 system over built-in defaults. Keys: `project`, `recipe_url`, `build_dir`,
-`state_dir`. `~` expands to the build user's home (`SUDO_UID`'s home when
+`state_dir`, `recipe_dir`. `~` expands to the build user's home (`SUDO_UID`'s home when
 running under `sudo`, else `HOME`); an unknown key or malformed line is an
 error naming file:line and key — never a silent default (usage class, rc 2).
 `GSA_CONF` replaces both auto-read layers with exactly one file (fixture and
@@ -418,10 +419,18 @@ hermetic control, like `GSA_STATE_DIR`).
 
 **Workspace resolution** (plan-gsa-isolation.md W3), in order: the `project`
 config key (dev/deployment override); the cwd walk (deprecated — a TTY run
-notes it, pipe output stays byte-stable); the canonical recipe store
-`<state-dir>/recipes` (§J.1), fetched on demand from `recipe_url` (default: the
-recipe repository) by mutating runs and refreshed in place by `gsa -Sy`. The
-store is root-owned engine state and never hand-edited.
+notes it, pipe output stays byte-stable); the canonical recipe store — the
+build user's working copy at `GSA_RECIPES_DIR` > config `recipe_dir` >
+`<build-user-home>/.local/share/gsa/recipes` (§J.2), fetched on demand from
+`recipe_url` (default: the recipe repository) by mutating runs and refreshed in
+place by `gsa -Sy`. The store is BUILD-USER working data, never below the
+state root (`--state-dir`/`GSA_STATE_DIR` never influence it), and a refresh
+hard-resets it, so hand edits to it are not preserved — the dev checkout is
+edit-only and `project` is the dev override (ownership and the one-shot
+migration: §J.2). Every user-visible workspace-not-found path renders the
+shared hint (code truth: `gsa_model::config::WORKSPACE_HINT`): *set `project`
+in gsa.conf, run inside the recipe repository, or fetch the store with
+`sudo gsa -Sy`* — the old cwd-only advice is retired.
 
 **Standalone staging** (plan-gsa-isolation.md W4, target shapes in §C.1): a
 run of standalone targets stages each as `packages/misc/<id>/` in its own
@@ -435,6 +444,22 @@ resolves its workspace as the staged one; each staged recipe tree is handed to
 the build user (`own_to_build_user`, §B.10) so build-side commands may write
 there. Staging failures (unreadable target, `curl` failure, unusable name) are
 usage errors naming the target.
+
+*Amendment (2026-10-17, recipe-store relocation out of the state root).* The
+canonical store is no longer `<state-dir>/recipes`. Production class: makepkg-
+family tools run AS THE BUILD USER (`setpriv`; makepkg refuses root) but their
+write surface was the ROOT-OWNED store — `sudo gsa -Sy` died at `updpkgsums
+could not refresh the checksums … ERROR: No write permission in
+/var/lib/gsa/recipes/packages/stable/curl` → `anchoring-refused` — and the
+sync's chown-back had already made store PKGBUILDs build-user-owned. Decided
+semantics: the store resolves `GSA_RECIPES_DIR` env > config `recipe_dir`
+(new key, `~` expands) > `<build-user-home>/.local/share/gsa/recipes`, is
+build-user working data (the engine chowns what it lands: after fetch, after
+migration, after a root-side git reset), and `--state-dir`/`GSA_STATE_DIR`
+never influence it (§J.2/§J.3). §B.8's env roster gains `GSA_RECIPES_DIR`,
+the twin of `recipe_dir` (`build_dir`/`GSA_BUILD_DIR` precedent). Pinned by
+`tests/gsa-store-v2.sh` sections a/d/e/f/g and `tests/gsa-sync-v2.sh`
+section 7.
 
 ## C. Selection semantics
 
@@ -974,7 +999,7 @@ escape flag**, and both are normative here:
 | Path | Content |
 | --- | --- |
 | `/var/lib/gsa/index/` | the binpkg index (J.4) |
-| `/var/lib/gsa/recipes/` | the canonical recipe store (§B.11): root-fetched from `recipe_url`, refreshed by `gsa -Sy`, never hand-edited |
+| `recipes.last-fetch` (in the state root) | the recipe store's fetch/refresh stamp — state, not store: the store itself lives outside the state root (§J.2) |
 | `/var/lib/gsa/standalone/` | standalone-target staging work areas (§B.11, §C.1): one staged one-node workspace per run, rewritten wholesale |
 | `/var/lib/gsa/abi/` | ABI token records and subscription records (`consumer\|version\|provider\|token`), installed-ELF index (Phase 4), preserved-lib registry (Phase 4) |
 | `/var/lib/gsa/world`, `/var/lib/gsa/sets/` | the world file and user sets (`config/sets/` remains the committed source; the state root holds the runtime copy) |
@@ -987,6 +1012,14 @@ escape flag**, and both are normative here:
 Logs live under the state root, not `/var/log/gsa`: one root means one
 ownership rule (§J.5), one override, and one prune story; these are per-run
 engine artifacts, not syslog material.
+
+*Amendment (2026-10-17, recipe store moved out of the state root).* The former
+`/var/lib/gsa/recipes/` row is gone: the canonical recipe store is build-user
+working data outside the state root (§J.2), and the root keeps only the
+`recipes.last-fetch` refresh stamp. `--state-dir`/`GSA_STATE_DIR` therefore
+relocate engine state only, never the store (§J.3). Pinned by
+`tests/gsa-store-v2.sh` sections a/d/e/f/g and `tests/gsa-sync-v2.sh`
+section 7.
 
 ### J.2 What stays with the build user (W4's relocation)
 
@@ -1002,6 +1035,28 @@ to the archives by hash wherever they live; archive discovery scans the shared
 another recipe's archive. Per-archive VCS revision baselines stay with their
 archives.
 
+**The canonical recipe store** (2026-10-17 relocation) is also build-user
+working data, never engine state. It resolves `GSA_RECIPES_DIR` env > config
+`recipe_dir` (`~` expands) > `<build-user-home>/.local/share/gsa/recipes`
+(`gsa_model::config::recipe_root`) and is deliberately NOT below the state
+root: build-domain tools (makepkg, `updpkgsums`, recipe-eval bash) run as the
+build user (§B.10) and must be able to write where they run. It is the build
+user's working copy of the recipe repository, fetched from `recipe_url`
+(default: the recipe repository's origin) and refreshed in place by `gsa -Sy`
+(`fetch origin HEAD` + hard reset — hand edits are not preserved); the dev
+checkout is edit-only, `project` its override (§B.11). The engine chowns what
+it lands — after every root-side clone/fetch/reset, after migration — and only
+engine-created directory levels are ever handed over (class-b hardening: a
+user-configured store root or `build_dir` root is never recursively chowned).
+One-shot migration (`gsa_state::recipes::ensure_store`, fired on read paths
+too, so there is never two-store ambiguity): a legacy `<state-dir>/recipes`
+with the resolved store absent is MOVED into place — `rename(2)`, falling back
+to `mv` across devices — preserving `.git` and any dirty worktree byte-for-
+byte, then chowned, with one loud note; when BOTH trees exist the resolved
+store wins, the legacy tree is left in place with a note and never deleted; a
+move failure is a hard error naming the manual remedy (`move it manually or
+run sudo gsa -Sy once`).
+
 ### J.3 State-dir override (first-class)
 
 `--state-dir PATH` beats `GSA_STATE_DIR` beats the `gsa.conf` layers'
@@ -1012,7 +1067,10 @@ naming `--state-dir` as the remedy. There is never a silent fallback to a home
 or workspace-local directory: a split state root is the failure mode §J.5
 exists to prevent. `GSA_BUILD_DIR` (or config `build_dir`, §J.2) is the
 matching override for the build cache — the two roots are relocated
-separately and never silently merged.
+separately and never silently merged. The canonical recipe store is
+deliberately outside this override: `--state-dir`/`GSA_STATE_DIR` never
+influence it (§J.2) — its twins are `GSA_RECIPES_DIR` and config
+`recipe_dir`.
 
 ### J.4 The binpkg index (hash-bound, manifest-v2 style)
 
@@ -1041,7 +1099,10 @@ content hashes.
 Every state file is owned by the **privileged runner** from the moment it is
 created: mutating runs are root (§B.10), so engine state (`index/`, `runs/`,
 `logs/`, `locks/`, `kv/`) is root-owned and `run.lock` root-owned is correct
-state, not corruption (plan-gsa-isolation.md). The write-time gate quarantines
+state, not corruption (plan-gsa-isolation.md). The gate covers the state root
+ONLY: the canonical recipe store (§J.2) is build-user working data outside it —
+build-user ownership there is correct state, and a root-owned store is the bug
+class the 2026-10-17 relocation removed. The write-time gate quarantines
 any file owned by someone the running engine is not as
 `<path>.stale.<epoch>.<pid>` (preserved, announced — never a silent adoption)
 before the write opens it, or fails naming the remedy (`--state-dir`). The

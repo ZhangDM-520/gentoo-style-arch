@@ -177,11 +177,8 @@ pub fn makepkg_command_in(
     }
     // W4 build cache: makepkg's build trees, staging and archives land in
     // the build user's cache (plan-gsa-isolation.md), never beside the
-    // recipe. The dirs are created (and chowned back) here — build-side
-    // writes into build-user paths are owned by the build user (W1). Both
-    // steps are fatal on failure with the remedy named: a root-owned cache
-    // dir is exactly the workspace poisoning privilege.rs exists to make
-    // impossible, and a half-created layout writes beside the recipe.
+    // recipe. The dirs are created here — fatal on failure with the remedy
+    // named: a half-created layout writes beside the recipe.
     for dir in [&layout.builddir, &layout.pkgdir, &layout.pkgdest] {
         create_owned_dir(dir).map_err(|error| {
             format!(
@@ -189,22 +186,14 @@ pub fn makepkg_command_in(
                 dir.display()
             )
         })?;
-        gsa_model::privilege::own_to_build_user(dir).map_err(|error| {
-            format!(
-                "{error} — the build cache must belong to the build user; fix its ownership or point build_dir (gsa.conf) / GSA_BUILD_DIR at their cache"
-            )
-        })?;
     }
-    // The cache ROOT is build-user domain too: `create_dir_all` above may
-    // have created it as root, and a root-owned root leaves every later
-    // `rmdir`/fresh subdir to the build user impossible (2026-10-17 sweep:
-    // the battery's per-fixture caches ended up unremovable). Recursive —
-    // it covers the three subdirs above and anything makepkg parked there.
-    gsa_model::privilege::own_to_build_user(&layout.root).map_err(|error| {
-        format!(
-            "{error} — the build cache must belong to the build user; fix its ownership or point build_dir (gsa.conf) / GSA_BUILD_DIR at their cache"
-        )
-    })?;
+    // Ownership scope: only the levels [`create_owned_dir`] brings into
+    // existence are handed to the build user. The cache root is
+    // user-configured (`build_dir`/`GSA_BUILD_DIR` can name any tree), so
+    // the pre-2026-10-18 recursive handoff of `layout.root` swept unrelated
+    // user content to the build user wholesale. A pre-existing cache
+    // directory is the operator's own: fix its ownership or point
+    // build_dir (gsa.conf) / GSA_BUILD_DIR at the build user's cache.
     cmd.env("BUILDDIR", absolute_for_child(&layout.builddir));
     cmd.env("PKGDIR", absolute_for_child(&layout.pkgdir));
     cmd.env("PKGDEST", absolute_for_child(&layout.pkgdest));

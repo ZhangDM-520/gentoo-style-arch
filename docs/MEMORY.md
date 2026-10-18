@@ -442,7 +442,10 @@
     `updpkgsums` runs against a staged copy and the result republishes
     atomically — the committed PKGBUILD is never an external tool's in-place
     target — `.SRCINFO` publishes fsync-before-rename, and a transaction begin
-    sweeps its own stale `PKGBUILD.tmp.*`/`.SRCINFO.tmp.*` litter.
+    sweeps its own stale `PKGBUILD.tmp.*`/`.SRCINFO.tmp.*` litter. Every sum
+    algorithm the arrays accept (sha256/sha512/md5/b2) has a VCS-recompute
+    arm (KAT-pinned in `sync.rs`) — a missing arm defers whole recipes as
+    `anchoring-refused` (2026-10-17: `cannot hash a git archive with b2`).
 19. **Runtime state is owned at WRITE time** (09-23 log-ownership incident):
     root mode's logs/locks/dirs are opened by the SUPERVISOR's shell, so
     repair-at-package-exit had a crash window: a killed root run left its
@@ -476,6 +479,13 @@
     the gate, while build-side commands and recipe-tree writes are
     dropped/chowned to the build user (`gsa-model::priv`) — the workspace is
     never left root-owned. Pinned by `tests/gsa-privilege.sh`.
+    **Scope (last reviewed 2026-10-17):** the gate covers the STATE ROOT only
+    (contract §J.5) — engine state is root-owned and root-owned is correct
+    state. The canonical recipe store is NOT engine state (rule 60): it is
+    build-user working data at `GSA_RECIPES_DIR` > config `recipe_dir` >
+    `<build-user-home>/.local/share/gsa/recipes`, where build-user ownership
+    is correct state and a ROOT-owned store is the poisoning bug class the
+    2026-10-17 relocation removed.
 20. **One install decision, one seam**: `gsa-install::decide` computes the
     transaction plan once as typed rows (`install`/`skip`/`refuse`/`noop`/
     `parked`, contract §E.3)
@@ -1275,6 +1285,27 @@
     TERMed, which would reclassify the row: a failed stand-down must not
     still build. Pinned by `crates/gsa-cli/tests/prefetch.rs`,
     `crates/gsa-build/tests/lane-interrupt.rs`, `tests/gsa-sched-v2.sh`.
+60. **Build-domain tools must never write engine-owned state** (2026-10-17
+    recipe-store relocation, production class: `sudo gsa -Sy` → `updpkgsums
+    could not refresh the checksums … No write permission in
+    <state>/recipes/…` → `anchoring-refused`; NOTE.md master-journaled): the
+    makepkg family runs AS THE BUILD USER (setpriv drop; makepkg refuses
+    root), so whatever it must write is build-user working data — the
+    canonical recipe store left the state root for `GSA_RECIPES_DIR` env >
+    config `recipe_dir` > `<build-user-home>/.local/share/gsa/recipes`
+    (contract §B.11/§J.2; `--state-dir`/`GSA_STATE_DIR` never influence it),
+    and the engine chowns what it lands (after fetch, after migration, after
+    a root-side git reset; only engine-created directory levels are handed
+    over — never a recursive chown of a user-configured root). Engine state
+    under the state root stays root-owned (rule 19); the two domains never
+    share one tree. The named upgrade path is the one-shot `ensure_store`
+    migration (fired on read paths too): a legacy `<state>/recipes` moves to
+    the resolved store preserving `.git` and any dirty worktree, then is
+    chowned, with one loud note; when BOTH trees exist the resolved store
+    wins and the legacy tree is left in place with a note, never deleted; a
+    move failure is a hard error. (last reviewed 2026-10-17) Pinned by
+    `tests/gsa-store-v2.sh` sections a/d/e/f/g and `tests/gsa-sync-v2.sh`
+    section 7.
 
 ## 2. Workspace overview
 
@@ -1307,7 +1338,10 @@
   contract §J) — per-package logs, the pacman mutex, lane result files, the
   binpkg index and run history — resolved `--state-dir PATH` >
   `GSA_STATE_DIR` > `gsa.conf` `state_dir`, with no silent fallback to a
-  workspace-local directory and a write-time ownership gate (rule 19).
+  workspace-local directory and a write-time ownership gate (rule 19). The
+  canonical recipe store is NOT under the state root (rule 60): it is
+  build-user working data at `<build-user-home>/.local/share/gsa/recipes`
+  (`GSA_RECIPES_DIR` / config `recipe_dir` override).
   makepkg's own state is the BUILD USER's cache since the W4a move
   (2026-10-16): the engine passes `BUILDDIR`/`PKGDIR`/`PKGDEST` as
   `<build_dir>/build|pkg|pkgs` (`GSA_BUILD_DIR` > config `build_dir` >
@@ -1398,18 +1432,30 @@ makepkg.conf / SRCDEST" resolution goes through `gsa_model::config`
 and the `SRCDEST` env var is empty; trusting either hid the user's cache
 (cargo → `/root/.cargo`; anchor deferrals) until the smoke exposed it.
 
-Config + store (W2/W3, plan-gsa-isolation.md; 2026-10-16): `gsa.conf` layers
+Config + store (W2/W3, plan-gsa-isolation.md; 2026-10-16, store relocated
+2026-10-17 — rule 60): `gsa.conf` layers
 auto-read `/etc/gsa.conf` then `~/.config/gsa/gsa.conf` (user > system >
 built-in; `GSA_CONF` replaces both with one file for fixtures/hermetic runs;
-an unknown key is a named error, never a silent default). The state root
-resolves `--state-dir` > `GSA_STATE_DIR` > config > `/var/lib/gsa`. The
-canonical recipe store is `<state-dir>/recipes`, root-fetched from `recipe_url`
-(default: the recipe repository's origin) and never hand-edited; `gsa -Sy`
-refreshes it (fetch/reset), mutating runs fetch it on demand, and the `project`
+an unknown key is a named error, never a silent default; keys `project`,
+`recipe_url`, `build_dir`, `state_dir`, `recipe_dir`). The state root
+resolves `--state-dir` > `GSA_STATE_DIR` > config > `/var/lib/gsa` and holds
+engine state only. The
+canonical recipe store is BUILD-USER working data (rule 60) at
+`GSA_RECIPES_DIR` env > config `recipe_dir` >
+`<build-user-home>/.local/share/gsa/recipes`, fetched from `recipe_url`
+(default: the recipe repository's origin) — `gsa -Sy`
+refreshes it (fetch/reset — hand edits to the store are not preserved),
+mutating runs fetch it on demand, and the `project`
 config key supersedes it for dev checkouts. Workspace resolution is
 `project` config > cwd walk (deprecated, TTY-only note) > store; removing cwd
 discovery needs a fixture replacement first (the battery runs synthetic
-workspaces from cwd).
+workspaces from cwd). Every workspace-not-found path renders the shared
+hint `gsa_model::config::WORKSPACE_HINT` ("set `project` in gsa.conf, run
+inside the recipe repository, or fetch the store with `sudo gsa -Sy`" — the
+old cwd-only advice is retired). Pinned by `tests/gsa-store-v2.sh` a/d/e/f/g
+(the one-shot legacy `<state>/recipes` migration — preserve `.git` + dirty
+worktree, chown, one loud note; both trees → resolved store wins, legacy
+left in place — is the named upgrade path).
 
 Build cache (W4a; 2026-10-16): makepkg's `BUILDDIR`/`PKGDIR`/`PKGDEST` are
 passed by the engine and land in the build user's cache — `GSA_BUILD_DIR` env
@@ -1843,6 +1889,21 @@ going stale.
 
 ### Queued (claim by editing this section)
 
+- **Resolve the sqlite doc-zip checksum mismatch before trusting its sums**
+  (2026-10-18 smoke 2): `sqlite-doc-3540000.zip` fetches `a1795ac5…` but the
+  official publishes `76742cbf…` — upstream regenerated the artifact, so the
+  committed sum and the fetched bytes describe different files. Verify
+  against sqlite.org/Arch packaging before any re-anchor; until then every
+  whole-run `-S` without `--no-sync` aborts at the §G.1 integrity gate.
+- **"One-time clean" prints per recipe per invocation** (2026-10-18 smoke
+  2): "GCC build identity missing; cleaning cached build artifacts (one-time
+  clean)" fired dozens of times in one run's prep — a one-time clean that
+  re-fires per recipe/invocation is noise; find the trigger and make it fire
+  once (or say per-what it is).
+- **Freshness-gate `-S`'s sync prep** (2026-10-18 smoke 2): `-S` re-runs the
+  full provider sync pass unless `--no-sync`, duplicating `-Su`'s work; skip
+  already-anchored recipes via the `recipes.last-fetch` freshness stamp
+  (or equivalent) instead of the blunt `--no-sync` escape.
 - **Prune the startup stale-manifest sweep** (2026-10-09, campaign latency):
   the builder's `*.gsa-vcs-revisions.tmp.*` sweep uses `-not -path '*/src/*'`
   style filters, which *descend* every `src/`/`pkg/`/`build/` tree first — on
@@ -2094,6 +2155,16 @@ zero baked `.gcda` destinations — `ctest`'s single hit is the `/*.gcda` glob
 constant, not a baked path).
 
 ## 6. Pitfall digest (full details: NOTE.md sections of same dates)
+
+- **Never ship a git-format patch with an all-zero `index` old SHA — GNU
+  patch(1) reads it as git's new-file convention and refuses the diff with
+  "would create the file … which already exists"** (2026-10-18 nss-git): a
+  placeholder `index 000000000000..000000000001 100644` line makes `patch
+  -Np1` treat an ordinary modification as a file creation and skip it ("1
+  out of 1 hunk ignored"). Bisected: bare unified diff ✓, `diff --git`
+  without an `index` line ✓, zero-SHA `index` ✗, real-looking `index` ✓.
+  Remediation: drop the `index` line or use real hashes. Details: NOTE.md
+  2026-10-18.
 
 - **A `clone -s` worktree dies when its shared SRCDEST mirror is rebuilt
   under it — drop the worktree, never chase the PKGBUILD** (2026-10-15

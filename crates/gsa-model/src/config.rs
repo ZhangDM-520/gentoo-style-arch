@@ -8,8 +8,8 @@
 //!
 //! Per key the USER layer wins over the system layer, which wins over the
 //! built-ins (locked decision 5). The keys are `project`, `recipe_url`,
-//! `build_dir`, `state_dir`; an unknown key is an ERROR naming file:line — a
-//! typo'd key must never silently mean "built-in default". The plan's fifth
+//! `build_dir`, `state_dir`, `recipe_dir`; an unknown key is an ERROR naming
+//! file:line — a typo'd key must never silently mean "built-in default". The plan's fifth
 //! key group ("defaults") is deliberately not implemented: the project's
 //! `build-defaults.conf` already owns per-project defaults and a second
 //! surface for the same knobs is a trap (2026-10-16, noted in NOTE).
@@ -31,6 +31,13 @@ pub const USER_CONFIG: &str = ".config/gsa/gsa.conf";
 
 /// The built-in recipe-store upstream (the recipe repository's origin).
 pub const DEFAULT_RECIPE_URL: &str = "https://github.com/ZhangDM-520/gentoo-style-arch.git";
+
+/// The shared "no recipe workspace found" remedy. One string, one home:
+/// every user-visible not-found path renders this same clause (the CLI's
+/// discovery errors and the topology loader's not-found error alike) — the
+/// retired cwd-only advice taught a workflow the store replaced.
+pub const WORKSPACE_HINT: &str =
+    "set `project` in gsa.conf, run inside the recipe repository, or fetch the store with `sudo gsa -Sy`";
 
 /// The build-cache layout (plan-gsa-isolation.md W4): the build user's
 /// `~/.cache/gsa` (config `build_dir`; `GSA_BUILD_DIR` env = fixture control
@@ -163,7 +170,13 @@ pub fn checkout_roots(recipe_dir: &Path, pkgbase: Option<&str>, include_mirror: 
 }
 
 /// The known key roster — one place, reused by the parse error message.
-const KEYS: [&str; 4] = ["project", "recipe_url", "build_dir", "state_dir"];
+const KEYS: [&str; 5] = [
+    "project",
+    "recipe_url",
+    "build_dir",
+    "state_dir",
+    "recipe_dir",
+];
 
 /// One config layer's values. `None` = the key was not set in this layer
 /// (it falls through to the next layer or a built-in), never "empty".
@@ -173,6 +186,7 @@ pub struct GsaConfig {
     pub recipe_url: Option<String>,
     pub build_dir: Option<PathBuf>,
     pub state_dir: Option<PathBuf>,
+    pub recipe_dir: Option<PathBuf>,
 }
 
 impl GsaConfig {
@@ -183,6 +197,7 @@ impl GsaConfig {
             recipe_url: over.recipe_url.or(self.recipe_url),
             build_dir: over.build_dir.or(self.build_dir),
             state_dir: over.state_dir.or(self.state_dir),
+            recipe_dir: over.recipe_dir.or(self.recipe_dir),
         }
     }
 }
@@ -218,6 +233,7 @@ pub fn parse_layer(text: &str, origin: &str, home: &Path) -> Result<GsaConfig, S
             "project" => cfg.project = Some(expand_home(value, home)),
             "build_dir" => cfg.build_dir = Some(expand_home(value, home)),
             "state_dir" => cfg.state_dir = Some(expand_home(value, home)),
+            "recipe_dir" => cfg.recipe_dir = Some(expand_home(value, home)),
             "recipe_url" => cfg.recipe_url = Some(value.to_string()),
             _ => unreachable!("KEYS is the roster"),
         }
@@ -410,6 +426,47 @@ pub fn resolve_state_dir_from(
     Ok(PathBuf::from(DEFAULT_STATE_DIR))
 }
 
+/// The canonical recipe store root (2026-10-17 relocation): the build
+/// user's working copy of the recipe repository — `GSA_RECIPES_DIR` env >
+/// config `recipe_dir` > the build user's `~/.local/share/gsa/recipes`.
+/// It is deliberately NOT below the state root: build-domain tools run as
+/// the build user and must be able to write where the store lives, and
+/// `--state-dir`/`GSA_STATE_DIR` must not drag the store around (the state
+/// root keeps index/, abi/, world+sets/, runs/, logs/, locks/,
+/// toolchains/, abi-repair/ only).
+pub fn recipe_root(cfg: &GsaConfig) -> Result<PathBuf, String> {
+    let env = std::env::var("GSA_RECIPES_DIR").ok();
+    if let Some(v) = env.as_deref().filter(|v| !v.trim().is_empty()) {
+        return Ok(PathBuf::from(v));
+    }
+    if let Some(v) = &cfg.recipe_dir {
+        return Ok(v.clone());
+    }
+    // The home is only needed for the built-in default, so an explicit
+    // override never fails on an unresolvable identity home.
+    Ok(build_user_home()?
+        .join(".local")
+        .join("share")
+        .join("gsa")
+        .join("recipes"))
+}
+
+/// The pure precedence seam for [`recipe_root`] (testable without touching
+/// process env); `home` substitutes for the identity-home resolution.
+pub fn recipe_root_from(
+    env: Option<&str>,
+    cfg: &GsaConfig,
+    home: &Path,
+) -> Result<PathBuf, String> {
+    if let Some(v) = env.filter(|v| !v.trim().is_empty()) {
+        return Ok(PathBuf::from(v));
+    }
+    if let Some(v) = &cfg.recipe_dir {
+        return Ok(v.clone());
+    }
+    Ok(home.join(".local").join("share").join("gsa").join("recipes"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -514,7 +571,7 @@ mod tests {
     fn a_layer_parses_keys_comments_and_tilde() {
         let cfg = parse_layer(
             "# comment\n\nproject = ~/Projects/gsa\nrecipe_url = https://example.invalid/r.git\n\
-             build_dir = /var/tmp/bd\nstate_dir = ~\n",
+             build_dir = /var/tmp/bd\nstate_dir = ~\nrecipe_dir = ~/store\n",
             "test.conf",
             &home(),
         )
@@ -526,6 +583,7 @@ mod tests {
         );
         assert_eq!(cfg.build_dir, Some(PathBuf::from("/var/tmp/bd")));
         assert_eq!(cfg.state_dir, Some(PathBuf::from("/home/u")));
+        assert_eq!(cfg.recipe_dir, Some(PathBuf::from("/home/u/store")));
     }
 
     #[test]
@@ -582,5 +640,47 @@ mod tests {
             resolve_state_dir_from(None, Some("  "), &GsaConfig::default()).unwrap(),
             PathBuf::from(DEFAULT_STATE_DIR)
         );
+    }
+
+    #[test]
+    fn recipe_root_precedence_is_env_then_config_then_the_build_user_data_home() {
+        let cfg = GsaConfig {
+            recipe_dir: Some(PathBuf::from("/cfg/recipes")),
+            ..GsaConfig::default()
+        };
+        assert_eq!(
+            recipe_root_from(Some("/env/recipes"), &cfg, &home()).unwrap(),
+            PathBuf::from("/env/recipes")
+        );
+        assert_eq!(
+            recipe_root_from(None, &cfg, &home()).unwrap(),
+            PathBuf::from("/cfg/recipes")
+        );
+        // A blank env value is unset (the build_root convention), and the
+        // default is the build user's XDG data home — never the state root.
+        assert_eq!(
+            recipe_root_from(Some("  "), &GsaConfig::default(), &home()).unwrap(),
+            home()
+                .join(".local")
+                .join("share")
+                .join("gsa")
+                .join("recipes")
+        );
+    }
+
+    #[test]
+    fn recipe_dir_merges_per_key_like_every_other_key() {
+        let system = parse_layer("recipe_dir = /sys/store\nstate_dir = /sys\n", "s", &home())
+            .unwrap();
+        let user = parse_layer("recipe_dir = /usr/store\n", "u", &home()).unwrap();
+        let merged = system.merged_with(user);
+        assert_eq!(merged.recipe_dir, Some(PathBuf::from("/usr/store")));
+        assert_eq!(merged.state_dir, Some(PathBuf::from("/sys")));
+    }
+
+    #[test]
+    fn the_workspace_hint_teaches_the_store_era_remedy() {
+        assert!(WORKSPACE_HINT.contains("set `project` in gsa.conf"), "{WORKSPACE_HINT}");
+        assert!(WORKSPACE_HINT.contains("sudo gsa -Sy"), "{WORKSPACE_HINT}");
     }
 }

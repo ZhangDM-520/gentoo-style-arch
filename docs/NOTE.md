@@ -1,3 +1,187 @@
+## 2026-10-18 — nss-git: stale local patch (upstream absorbed it) killed `prepare()` — the patch dies, never re-diffed around
+
+**Symptom.** Smoke 2 build run: `lane done nss-git failed 1 27 build-failed`
+— `prepare()`: "Reversed (or previously applied) patch detected! Skipping
+patch. 1 out of 1 hunk ignored" on `build.sh`.
+
+**Root cause.** `0001-Fix-generating-nss.pc-with-system-nspr.patch` (heftig,
+carried from stock nss) guards `generate_pkg_config()`'s nspr lookup with
+`no_local_nspr`. Mozilla's hg tip now carries that change verbatim — verified
+against the fresh working copy (`build/nss-git/src/nss/build.sh` shows the
+`if [ "$no_local_nspr" = 0 ]` guard exactly as the patch writes it). A local
+patch against a moving tip is drift waiting to happen.
+
+**Fix (wave 1).** Dropped the patch wholesale: `source` entry, `b2sums`
+entry, `prepare()`'s `patch -Np1` step plus its now-dead `cd nss`
+(`build()` does its own), and the file itself.
+
+**Wave 2 — the drop exposed a second, independent break.** With `prepare()`
+clean, `build()` compiled to 996/1033 and then died in the new `nss-tool`
+code: `nss-tool/common/util.h:30:64: error: 'std::ifstream' has not been
+declared`. Upstream tip declares `GetStreamFromFileOrStdin(std::string&,
+std::ifstream&)` without `#include <fstream>` — it only ever compiled
+through transitive includes current libstdc++ (this host's GCC snapshot)
+no longer provides. Fix: minimal house patch
+`0001-nss-tool-util.h-add-missing-fstream-include.patch` adding the include.
+
+**Patch-format pitfall (bit once, recorded):** the first cut of that patch
+carried `index 000000000000..000000000001 100644` (placeholder hashes) and
+`patch -Np1` refused it with "The next patch would create the file …, which
+already exists! Skipping patch" — GNU patch reads an **all-zero old SHA as
+git's new-file convention** and treats the diff as a file creation.
+Real-looking hashes or no `index` line both apply (bisected: bare diff ✓,
+`diff --git` without index ✓, fake zero index ✗, real-looking index ✓).
+
+**Validation.** `bash -n` OK; `.SRCINFO` regenerated (4 sources);
+`bash tests/run-all.sh recipe` 8/8 including `recipe-sources.sh`;
+`gsa -Ma` carries no nss-git row. Green proof is the failing behaviour
+itself: `sudo ./target/release/gsa -B --leaf --lanes 1 nss-git` — the exact
+smoke-2 lane — now ends `lane done nss-git succeeded 0 37 ok` (rc 0); the
+same leaf run also re-built `acl-git` clean (its savannah HTTP 500 was
+transient — `lane done acl-git succeeded 0 20 ok`).
+
+**Durable rules.** (1) At the first "Reversed (or previously applied) patch
+detected" on a moving-tip recipe, compare the hunk with the tip's file: when
+upstream carries the change verbatim, DELETE the patch (sources, sums,
+prepare, file) — never re-diff around an absorbed patch. (2) Never ship a
+git-format patch with an all-zero `index` old SHA — GNU patch(1) parses it
+as a file creation; drop the line or use real hashes.
+
+## 2026-10-18 — SMOKE 2 (real system, f2fs build drive, workspace release engine): `gsa -Su` sync + `gsa -S @core` builds kicked off — sync passes at scale, the integrity stop works, and `-Su`'s stale set is empty by design
+
+**Scope.** Owner: "second SMOKE TEST: run gsa -Su on the /dev/sda. let's
+actually kick off sync and builds". `/dev/sda` = the 465.8G f2fs external
+build drive (UUID `5cbd0046-…` = `build_dir` in `~/.config/gsa/gsa.conf`;
+was unmounted — mounted at its `/run/media/...` path, 225G free). Engine =
+the workspace **release** binary built from the fixed tree (`/usr/bin/gsa`
+stays old until the pin-bump commit; running it would re-create the
+root-owned store bug).
+
+**Phase 1 — `gsa -Su` (sync pass):** 80 recipes synced/re-anchored against
+the official packaging providers; **zero** privilege errors (the design-B
+store keeps proving itself). Five honest refusals, every one a data/domain
+event, none an engine defect:
+- `sqlite` — **integrity stop**: `sqlite-doc-3540000.zip` fetched hashes
+  `a1795ac5…` but the official publishes `76742cbf…` ("a source that
+  disagrees with a published checksum is a different source, not a stale
+  sum"). Correct fail-closed; upstream regenerated the artifact — operator
+  follow-up (verify with sqlite.org/Arch before any re-anchor).
+- `gcc-snapshot` — transient SSL eof fetching mpfr (retryable).
+- `nodejs`, `glycin` — provider packaging repo carries a different pkgver
+  than the synced one (anchoring to another version's sums would describe
+  different files — correctly refused).
+- `libreoffice-fresh` — upstream 404 on the synced tarball.
+
+**`-Su`'s build phase is EMPTY by contract** (found by this smoke):
+`stale_set`'s doc: "A recipe with no built instance is NOT stale — fresh
+builds use an explicit selection." Only 6 instances were ever built; the 180
+sync-moved recipes are fresh builds, so `-Su` legitimately builds nothing.
+(`gsa -Qu`, the stale query spelling, is deferred — rc 2.)
+
+**Phase 2 — builds:** `gsa -S @core` **aborted pre-dispatch (rc 3, whole
+selection `remaining`)** — sqlite's integrity stop is a whole-run fail-closed
+gate per §G.1 (rc 3 "integrity stop"). By design; the run record's
+continuation naming the entire selection is honest. The documented escape
+then kicked the real run: `gsa -S @core --no-sync` (builds the committed,
+already-synced sums; makepkg still verifies every source at build time;
+cone-stop parks anything that fails). Confirmed live: lanes building
+acl-git → brotli-git → expat-git → freetype2-git → gdbm-git … on the f2fs
+cache, run continuing detached (outcome below).
+
+**Run outcome (2026-10-18 ~03:30):** the run **ended rc 4** (cone-stop) —
+**46 succeeded** (core band: ninja-git … zip), **2 failed**, the rest parked
+(`waits-on-failed`; the `--- continuation ---` block's `remaining:` is the
+resume set). Failures: `acl-git` — transient upstream: `git clone
+https://git.savannah.gnu.org/git/acl.git/` returned HTTP 500 (retryable);
+`nss-git` — recipe drift, fixed in the entry below. The cone-stop policy
+behaved exactly as designed: dispatch continued outside the failed cones
+(e.g. libqxp/libvisio ran on) until the outside set drained.
+
+**Observations for the queue:**
+- "GCC build identity missing; cleaning cached build artifacts (one-time
+  clean)" printed once per core-ish recipe during prep — a "one-time" clean
+  that re-fires per invocation/recipe is noisy; investigate the trigger.
+- The sync-phase anchoring of `-S` runs duplicates `-Su`'s pass: with a
+  moved store, `-S` re-queries every provider unless `--no-sync`. Possible
+  future: freshness-gate the prep sync (skip already-anchored recipes).
+
+**Validation/evidence:** `/tmp/gsa-smoke2-su.log` (sync), `/tmp/gsa-smoke2-core.log`
+(the rc-3 gate + full run record), `/tmp/gsa-smoke2-build.log` (live build
+run), lane logs `/var/lib/gsa/logs/`, run history `gsa -Mh`.
+
+## 2026-10-17 — canonical recipe store privilege class: `sudo gsa -Sy` deferred every re-anchor (build-user tools writing root-owned engine state); the store moves to build-user territory (design B), plus two classes the fix uncovered
+
+**Symptom.** `sudo gsa -Sy` deferred recipes with `✗ … refusing to build —
+'updpkgsums' could not refresh the checksums (exit 1); ==> ERROR: No write
+permission in /var/lib/gsa/recipes/packages/stable/curl` →
+`anchoring-refused`. Owner note: "the privilege handle is still faulty …
+makepkg generally refuses to run in non-standard user privilege (no root)";
+plus a second report — with no store fetched, `gsa -Q` still taught the
+retired "run in the project directory" behaviour.
+
+**Root cause (whole-class scan, not one seam).** Build-domain tools (makepkg
+family: `updpkgsums`, `makepkg --printsrcinfo`/`--verifysource`, lane
+`makepkg`, recipe-eval bash) run AS THE BUILD USER via `setpriv` (makepkg
+refuses root — the 2026-10-16 smoke fix), but their cwd/write surface was the
+ROOT-OWNED canonical store: the store dir, the engine-created staged
+`PKGBUILD.tmp.<pid>`, and (SRCDEST-unset hosts) `$startdir/src`. The audit's
+seam table found the inverse class too: the sync transaction's chown-back was
+UNCONDITIONAL, so store PKGBUILDs had already become build-user-owned
+(rule-19 violation — root engine state the build user can rewrite). Fixtures
+never caught any of it: they run unprivileged against user-writable scratch,
+where `own_to_build_user` is a no-op. A second-layer instance only surfaced
+IN PRODUCTION: the engine's own staged file was root-owned ("PKGBUILD.tmp.
+<pid>: Permission denied") even after the dir problem was solved.
+
+**Fix (owner chose design B over staging-into-scratch).** The store is build-
+user WORKING DATA now: `GSA_RECIPES_DIR` env > gsa.conf `recipe_dir` key >
+`<build-user-home>/.local/share/gsa/recipes`; `--state-dir` never moves it;
+the state root keeps index/abi/world+sets/runs/logs/locks/toolchains/
+abi-repair + `recipes.last-fetch` only. `ensure_store` migrates the legacy
+`<state>/recipes` ONCE (rename preserving `.git` AND the dirty worktree —
+360 uncommitted sync rewrites survived, verified — then chown, one loud
+note; both trees → new wins, legacy kept; move failure = hard error). Engine
+chowns what it lands; `stage()` hands the staged rewrite to the build user
+(fail-closed) and `write_atomic` preserves the build-user owner across its
+rename; the cache handoff chowns only engine-created levels (never a
+user-configured `build_dir` root). Workspace-not-found teaching consolidated
+on one hint (`WORKSPACE_HINT`) at every site (resolve_root, execute, qa,
+gsa-topo, lane, fetch-job) with the missing `config/topology.conf` named
+(app-group's pin) — the store-v2 hint pin and app-group pin both hold.
+
+**Two classes the fix uncovered (both fixed here):**
+- `hash_bytes` had no `md5`/`b2` arms, so the VCS recompute refused
+  `cannot hash a git archive with b2` — gjs/pygobject deferred AFTER the
+  privilege fix unblocked the path. The matrix now matches every algorithm
+  the sum arrays accept (sha256/sha512 in-process; md5/b2 via coreutils on
+  PATH like `hash_file`), KAT-pinned (`hash_bytes_covers_the_coreutils_matrix`).
+- Fixture isolation gap: with the store in the real home, any runner not
+  pinning `GSA_RECIPES_DIR` fell through to the LIVE store (app-group's
+  missing-topology.conf case resolved the real migrated store and passed
+  against it — read-only `-Sl`, no damage). `tests/lib/rr-v2.bash` now pins
+  `GSA_RECIPES_DIR` beside `GSA_STATE_DIR`/`GSA_BUILD_DIR` (`.rr2-recipes`).
+
+**Validation.** Production acceptance (the literal symptom): `cd /tmp && sudo
+<workspace>/gsa -Sy curl` — migration note fired once, then 50 recipes
+re-anchored/refreshed, **zero** `Permission denied`/`No write permission`
+lines. Remaining deferrals are domain-honest, not privilege: curl ("the
+official publishes no checksum … refreshed from the fetch, NOT anchored" =
+rule-18 fetch-only honesty), glycin (provider version mismatch — fail-closed
+refusal to anchor another version's sums), libreoffice-fresh (upstream 404).
+`cargo test --workspace` green; `bash tests/run-all.sh` **68/68**. One
+annotated flake: `gsa-fetch-v2`'s window-bound pin (`--prefetch-ahead 2` but
+3 fetched-but-unstarted logged) failed once under battery load and passed
+standalone + on re-run — the engine frees the window slot at lane DISPATCH
+while the pin counts until the build stub logs `BUILD_START`; under load that
+gap fits an extra single-flight fetch. Boundary-semantics question for the
+prefetcher (queued, NOT fixed here — the privilege diff does not touch the
+window).
+
+**Durable rules.** MEMORY rule 60 (build-domain tools must never write
+engine-owned state — the store is build-user working data; migration = the
+named upgrade path) + rule 19 scoped to the state root; contract §B.8/§B.11/
+§J.1/§J.2/§J.3/§J.5 amendments (dated). Rule 18 gains the hash-matrix clause.
+
 ## 2026-10-17 — follow-up implementation: decision-map items 1–7 land; the integration battery catches three cross-cutting regressions, all fixed red-first
 
 **Scope.** Owner: "implement all 1-7 fixes" (the map is the entry below).
