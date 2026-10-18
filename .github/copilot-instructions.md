@@ -462,7 +462,9 @@ the global instruction specifies verbatim.
 
 **ABI-coupled batches.** LLVM snapshots have no stable C++ ABI: after an
 `llvm-git` bump, rebuild Rust, Mesa, SPIR-V, libclc, OpenShadingLanguage and
-the other consumers in the same pass (`rust-git` cannot rebuild itself — the
-bootstrap *is* the broken rustc). Qt private-API-coupled modules must move
+the other consumers in the same pass (`rust-git` rebuilds itself fine — its
+bootstrap uses the DOWNLOADED official stage0, so no working system rustc is
+needed; `--allow-broken-rustc` is the preflight hatch). Qt
+private-API-coupled modules must move
 together too. `git verify`/version strings are not evidence — verify the
 installed ABI, provides, and dependency closure.

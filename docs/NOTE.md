@@ -1,3 +1,69 @@
+## 2026-10-18 — resume5/6 rc 3: the remediation's "force-build" never forced (B1), and `--skip` rebuilds llvm every run (B2)
+
+**Symptom.** Both reconciliation runs ended `outcome: refused (rc 3)` at
+`toolchain remediation stalled — rust-git cannot be dispatched; refusing to
+continue` — despite `rust-git` being named in the selection and
+`--allow-broken-rustc` passed (resume5: `rust-git @core`; resume6: the run
+record's own continuation). The documented 2026-09-08 recovery ("add
+rust-git to the selection and resume with `--skip`") is unreachable on a
+large run.
+
+**Cause 1 (B1 — the stall).** The force-build path
+(`crates/gsa-sched/src/supervisor.rs`, `remediation_begin`) clears the
+chain members' `SupNode.pre` (PreSettle) but NOT their `prereqs`
+(build-order edges), and `Machine::prereq_clear` under the restrict set
+relaxed only *in-chain* prereqs — out-of-chain ones "must stand succeeded
+as usual". rust-git's 14 edges had 9 still queued (`cmake-git`, `curl`,
+`git-git`, `libffi-git`, `libgit2-git`, `libssh2-git`, `openssl`, `perl`,
+`python`) → rust-git never entered `ready()` → `pick()` empty → the
+no-progress guard fired on the first loop → refusal. Force semantics were
+never actually forcing past build-order gating.
+
+**Cause 2 (B2 — the llvm churn that re-triggers the probe).** `--skip`'s
+local claim is **version-keyed** (`gsa-recipe/src/freshness.rs`: archives
+must "map to an expected output at the claim's version key"), and a fast
+VCS recipe's recorded `pkgver` races its builds (fetch-side `pkgver()`
+rewrote the store PKGBUILD to `24.0.0_r603163` while the newest built set
+was `r603162`) → `nothing-built` → llvm-git (~89 min) rebuilt on EVERY
+resume, and each install re-ran the rustc probe that engages the
+remediation in the first place. The fish-era rule (NOTE 2026-10-07: "a
+skip claim is about the BUILD, never about the recipe's recorded pkgver")
+was only ported to `--skip-built`; the `--skip` gate kept the version key.
+Semantics are contract-adjacent (§B.8) — queued in MEMORY §5 for a
+decision, not silently reinterpreted.
+
+**Fix (B1).** `Machine::prereq_clear` is now consumer-aware: under the
+restrict set an out-of-chain prereq never gates a chain member (the §C
+contract assumes prerequisites installed and current — a force rebuild
+jumps the queue), while an in-chain prereq must still settle first (the
+chain builds in its own order). Unit tests pin both halves; fixture
+scenario F (`tests/toolchain-remediation.sh`, "queue-jump") pins the real
+wall end-to-end: rust-git with a queued out-of-chain prereq force-dispatches
+second (after the trigger build) and the run succeeds. B2 stays queued —
+without it each resume still pays one llvm rebuild before the (now
+working) force path heals the toolchain.
+
+**Environment lesson (same day).** The broken system rustc blocks even
+compiling the fix; the heal is the recipe's own stage0 bootstrap — direct
+`makepkg` in `packages/core/rust-git` (user call 2026-10-18) with
+`GIT_CONFIG_COUNT=0 GSA_BUILD_JOBS=8`, never `-s`. And a recipe tree under
+`~/Projects/<Repo>` sits INSIDE the engine's own Rust workspace: rust's
+bootstrap cargo walks up and errors ("current package believes it's in a
+workspace when it's not") — the engine never sees this because its build
+dirs are external. Direct makepkg therefore runs from a scratch copy
+outside the repo (the workspace-isolation rule), with the prepared `src/`
+moved across (same filesystem, instant).
+
+**Validation.** Red-first mutation probe (the `prereq_clear` clause flipped
+back must fail the unit tests and fixture F), `cargo test --workspace` and
+the full battery land with the fix commit below.
+
+**Durable rule.** A remediation force-build must clear ALL dispatch gating
+for its chain members — build-order edges included — or the stall guard
+turns the documented recovery into a refusal. Never key a skip claim to a
+VCS recipe's recorded `pkgver` (pointer: MEMORY §5 B2). Never build a
+recipe in-tree under this repo; use a scratch copy outside it.
+
 ## 2026-10-18 — the llvm-git VRP fix landed a new libLLVM.so and broke rustc (rule-13 recurrence): healing recipe = same-pass rust-git rebuild under `--allow-broken-rustc`
 
 **Symptom.** The resumed run installed the rebuilt llvm-git (`lane done
@@ -1168,7 +1234,9 @@ open holder)` and is never deleted by gsa; a bare root build run refuses rc 3
 tests/gsa-qa-v2.sh` green. Release binary rebuilt and installed to
 `/usr/bin/gsa` (pre-image backed up at `/var/tmp/gsa.pre-w1w5-20261015`).
 
-**Durable rules.** (1) Engine-side state is ROOT-owned under the W5 model — a fixture that seeds, truncates or appends into `<state>` must escalate through the ABSOLUTE `/usr/bin/sudo` (the PATH stub is the engine's observation point only), and its EXIT trap must be root-safe. (2) Fixture assertions never pipe a producer into an early-exit `grep`: `vgrep` or `grep … < <(producer)` — pipefail turns a SIGPIPE-on-match into a red on a matching capture. (3) A privilege/drop assertion belongs only where euid is actually 0 (`gsa-privilege.sh`, real `sudo -n`); a fixture that stubs `sudo` cannot observe the drop, and a passing assertion there is vacuous. (4) Engine build-side children — including the fetch half's `makepkg --verifysource` — always go through `gsa_model::privilege::build_command`.
+**Durable rules.** (1) Engine-side state is ROOT-owned under the W5 model — a fixture that seeds, truncates or appends into `<state>` must escalate through the ABSOLUTE `/usr/bin/sudo` (the PATH stub is the engine's observation point only), and its EXIT trap must be root-safe. (scoped
+2026-10-17: the `<state>` root only — the canonical recipe store is
+build-user working data, MEMORY rule 60) (2) Fixture assertions never pipe a producer into an early-exit `grep`: `vgrep` or `grep … < <(producer)` — pipefail turns a SIGPIPE-on-match into a red on a matching capture. (3) A privilege/drop assertion belongs only where euid is actually 0 (`gsa-privilege.sh`, real `sudo -n`); a fixture that stubs `sudo` cannot observe the drop, and a passing assertion there is vacuous. (4) Engine build-side children — including the fetch half's `makepkg --verifysource` — always go through `gsa_model::privilege::build_command`.
 
 ## 2026-10-15 — wave-10C burn-down: thirteen rows, twelve pairings and one plain name; the stem-spelling wall (`X.so` provide name, never the `X.so.N` soname)
 
@@ -7323,7 +7391,7 @@ window: 4 providers still drift (`gcc-snapshot`, `boost-libs`, `harfbuzz-git`,
 `gnome-desktop`), **0 open consumers**; full battery `bash tests/run-all.sh`
 **55/55**.
 
-**Durable rule** (MEMORY §3 (c)/(d) rewritten): an ABI gate tracks the
+**Durable rule** (MEMORY rule 25(c)/(d) rewritten): an ABI gate tracks the
 installed consumers that LINK a disappearing soname (ELF truth), never
 name/graph reachability. Known blind spot, documented and accepted: a stock
 package that declares NO soname provides (python) renaming a shipped soname
@@ -7371,10 +7439,13 @@ failed on the old gate exactly as predicted (`missing: leaf-git` leaked into
 the refusal; G6 refused a covered set), green after; `fish -n` clean; full
 battery `bash tests/run-all.sh` **55/55**.
 
-**Durable rule** (MEMORY §3 (c)/(d) reworded): an ABI gate tracks the DIRECT
+**Durable rule** (MEMORY rule 25(c)/(d) reworded): an ABI gate tracks the DIRECT
 surface consumers — the packages that LINK the changed sonames — never a
 transitive closure, and name edges come from `depends`/`makedepends` only.
-Transitive risk is expressed by the `abi=` coupled-batch tags.
+Transitive risk is expressed by the `abi=` coupled-batch tags. (superseded
+later the same week by gate v2 — ELF-linked consumers, never name
+reachability — and v3 — local-DB stock pinners join the surface; home:
+MEMORY rule 25(c)/(d))
 
 **Follow-up.** Run #43 window = `liborcus`'s own index + `139..653` (two
 ranges union), `-s` deliberately OFF: the built 1..138 set is left alone
@@ -7456,6 +7527,8 @@ upstream. "Recipe changed" evidence in a git tree is the file's COMMIT time
 (checkout/pull/makepkg's in-tree `pkgver()` rewrite all churn mtime without a
 commit); without git metadata, mtime is the only evidence left and doubt
 rebuilds. Never install a skipped set through version-keyed discovery.
+  (as of 2026-10-18 this holds for `--skip-built`; `--skip` is still
+  version-keyed — see the 2026-10-18 B2 entry and MEMORY §5)
 
 ## 2026-10-07 — Hard freeze + black desktop: `-i` swapped `libLLVM` under the live GL stack
 
@@ -7499,6 +7572,9 @@ installs at its lane position while members land later). Until an
 install-deferral seam exists: run `-i` runs with the GUI stopped, or accept
 one session restart around the batch, and never treat a mid-run black
 screen as a display bug without checking `libLLVM*` presence first.
+(2026-10-18: plain install deferral is UNSOUND — `-S` builds consumers
+against the installed system; corrected designs in MEMORY §5 'ABI-batch
+install deferral'; `-i` is a retired spelling, docs/gsa-contract.md §B.9)
 
 
 
@@ -7710,7 +7786,8 @@ The waive threshold itself had only an env knob.
 both):
 
 - `--skip-built` — skip mode 2: the complete, payload-valid current-version
-  archive set IS the claim. No mtime compare, no VCS probes (zero network),
+  archive set IS the claim. (semantics changed 2026-10-07: newest complete
+  set at ANY version; 2026-10-18: an empty set is never a claim) No mtime compare, no VCS probes (zero network),
   no waivers; the run-record row reason is `skip-built`, wired through the
   lane result's existing reason field (`lane_job` now keys on the claim
   reason, not the waiver-line count — a skip-built claim waives nothing). It
@@ -10327,7 +10404,9 @@ and never document behaviour the tree does not have.
   build/install path. At initial rollout, a missing baseline and an unavailable
   remote both aborted; the legacy-archive follow-up above replaces only the
   missing/unusable-baseline path with a one-time rebuild after ref resolution.
-  Remote-resolution failures still abort. `-c` and `-cc` remove revision
+  Remote-resolution failures still abort. (superseded 2026-10-02: an
+  unestablishable remote DEFERS — rc 99 `upstream-unverified` — it never
+  fails and never skips) `-c` and `-cc` remove revision
   records with their archives.
 - **Validation**: `fish -n build-all.fish`, `bash -n tests/skip-upstream.sh`,
   and `bash tests/skip-upstream.sh` passed. The focused fixture covers an
@@ -11616,7 +11695,8 @@ entries append here as they land.
 - **Rule**: `-i` installs only on positive evidence — exact version match
   AND install date ≥ archive mtime; every doubt installs. `-fi` forces and
   implies `-i`; `-ia` is unaffected. Pinned by
-  `tests/install-archive-guard.sh`.
+  `tests/install-archive-guard.sh`. (fish-era spellings; current grammar:
+  docs/gsa-contract.md §B.9)
 
 ## 2026-09-24 (battery restructure) — 45 scruffy fixtures and a 4-minute serial battery → 33 files, one file per subject, 29 s in parallel
 
@@ -12779,7 +12859,9 @@ Findings, in the order they were fixed:
   miss it. A check that cannot fail its caller is worse than no check, because
   it reports success: a `verify_*` call inside `package()` needs `|| return 1`
   (or must be the function's last command), since bash discards the status of
-  every earlier command. Verify PGO payloads with `strings`; add `readelf` only
+  every earlier command. (superseded 2026-09-26: lib/pgo.sh's fatal gate is
+  the rule; `|| return 1` is retired — a mid-body call is silently
+  overwritten) Verify PGO payloads with `strings`; add `readelf` only
   where the files are still unstripped. And a check that guards a write into
   `/usr` must never report clean because it in fact scanned nothing.
 
@@ -13871,7 +13953,10 @@ One audit in three passes, folded here; each phase kept its rule.
 - **Rule**: after a package migration, run `build-all.fish --audit` and
   `build-all.fish --list`; every map entry must have a tracked `PKGBUILD`.
   Do not publish package-local wildcard ignore files that can hide recipe
-  changes.
+  changes. (superseded: the two-layer ignore discipline is now the rule —
+  recipe default-deny `*` + `!` negations AND the root .gitignore
+  negations, verified with `git check-ignore -v <asset>` and enforced by
+  tests/recipe-sources.sh; see the repo Conventions section)
 
 ## 2026-09-17 — GTK4 local packaging assets omitted
 
@@ -13886,7 +13971,10 @@ One audit in three passes, folded here; each phase kept its rule.
   tracked.
 - **Rule**: every non-URL `source=()` asset is essential recipe input and must
   be tracked; package-local wildcard ignore files are not an acceptable way to
-  hide generated build state.
+  hide generated build state. (superseded: the two-layer ignore discipline is
+  now the rule — recipe default-deny `*` + `!` negations AND the root
+  .gitignore negations, verified with `git check-ignore -v <asset>` and
+  enforced by tests/recipe-sources.sh; see the repo Conventions section)
 
 ## 2026-09-16 — GLib/Cairo/GTK/Xwayland PGO: Meson's cached args kept the instrumentation (condensed: 4 incidents)
 
@@ -14480,7 +14568,9 @@ and §6, and the commit/version identifiers of each fix are kept inline.
   rust-compatible snapshot `r595808.29fda2c4ecca` (pin `#commit=` in the
   PKGBUILD source, rebuild + install as a downgrade, unpin after — the BPF
   target is build config and survives), then rebuild linux-tools and
-  scx-scheds-git. Incident-response hardening landed with it:
+  scx-scheds-git. (superseded 2026-09-08 and 2026-10-18: the fix is a plain
+  rust-git rebuild — the downloaded stage0 self-heals; downgrade-rebuild is
+  LAST resort — MEMORY rule 13) Incident-response hardening landed with it:
   `check_rustc_sanity` preflight (trivial `fn main(){}` compile;
   `--allow-broken-rustc` escape hatch), `sudo -n` installs with a 150 s
   keepalive (a `sudo -v` probe alone must never decide "installs are

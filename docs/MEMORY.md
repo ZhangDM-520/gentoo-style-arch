@@ -20,15 +20,15 @@
 1. **fish shell**: wrap EVERY terminal command in `bash -c '...'`. No `export`,
    no `[[ ]]`; arrays are 1-indexed; an UNMATCHED glob is a fatal fish error
    that `2>/dev/null` does NOT suppress — use `find -name`. The host's login
-   shell is fish 4.9.3, so this applies to anything routed through `$SHELL`
+   shell is fish (check `fish --version`), so this applies to anything routed through `$SHELL`
    (commands handed to the user, `!cmd`, pasted snippets), not just to scripts.
    Tool-call shells here are bash (`$0` = `/bin/bash`), so bash syntax is fine
    *inside* a tool call — the hazard is crossing a shell boundary.
    CachyOS additionally ships aliases that change what a name does
    (`/usr/share/cachyos-fish-config/cachyos-config.fish`): `ls` → `eza -al`,
    `grep` → `grep --color=auto`, plus `la/ll/lt/l.`, `update`, `big`, `rip`.
-   GNU coreutils *is* installed — `ls` 9.11 — so the flag hazard comes from the
-   `eza` alias (and from `eza`'s different flag set), never from a non-GNU
+   GNU coreutils *is* installed (check `ls --version`) — so the flag hazard comes from the
+   `eza` alias (check `eza --version`; and from `eza`'s different flag set), never from a non-GNU
    `ls`. Never assume a bare `ls`/`grep` flag works in a fish context.
 2. **Agent-shell git hardening**: agent shells inject GIT_CONFIG_PARAMETERS
    (`safe.bareRepository=explicit`) → EVERY makepkg/git-bare-repo op from an
@@ -92,9 +92,10 @@
      stays unversioned; a package providing its own output name maps nothing
      either. Check: `gsa -Ma` (the `provides-versioning` lint; per-check seam
      `gsa --qa-check provides-versioning`, contract §D.1) +
-     `tests/provides-audit.sh`. 59 recipes (113 name pairs) predate this rule
-     and are debt-ratcheted in `tests/recipe-contract.sh` section E — new
-     recipes must comply; the debt shrinks one recipe at a time, never grows.
+     `tests/provides-audit.sh`. The pre-rule debt is registered in
+     `tests/recipe-contract.sh` §E (`mapping.expected`) — new recipes must
+     comply; the debt shrinks one recipe at a time, never grows, and its
+     counts come from running the register, never from this file.
      (last reviewed 2026-10-04)
 5. **Qt private-API coupling**: qt6/qt5-base-git update ⇒ rebuild ALL coupled
    all coupled Qt modules in the SAME pass; verify private tags
@@ -164,7 +165,9 @@
    (2026-10-06 lilv-git: output+tool trimmed, `doc/meson.build` stage left
    live). Check:
    `gsa -Ma` (the `purged-tools` lint) + the `# trim:` annotations at
-   every removal site. (last reviewed 2026-10-04)
+   every removal site. When `package()` trims generated output, neutralize
+   the generation in `build()` — never reintroduce the generator (debugedit
+   lesson, docs/NOTE.md 2026-10-18). (last reviewed 2026-10-04)
 9. **IgnorePkg registration is dynamic** — the static closure contract
    ("every workspace pkgname must appear in the host conf") is retired
    2026-10-05. Registration runs at ARCHIVE-ACCEPTANCE time — build
@@ -208,8 +211,8 @@
    write seam `gsa --install-register`, contract §D.1). The static lint is
    GONE: `gsa -Ma` no longer
    prints an "IgnorePkg closure:" section, and the per-check seam is
-   `gsa --qa-check <name>` (`provides-versioning|purged-tools|swap-drift|
-   abi-closure|abi-exposure`; contract §D.1).
+   `gsa --qa-check <name>` (the check names live in the registry at
+   `crates/gsa-qa/src/lib.rs`; contract §D.1).
    Check the closure the way pacman READS it: repeated `IgnorePkg =` lines
    inside `[options]` are cumulative, a line inside a repo section is
    silently dropped — diff the pkgbase+pkgname universe against
@@ -281,23 +284,32 @@
 13. **llvm-libs-git never moves alone** (2026-09-07 incident): LLVM snapshots
     have no stable C++ ABI — after any llvm-git/llvm-libs-git bump, rebuild
     rust-git + mesa-git + spirv-llvm-translator-git + openshadinglanguage IN
-    THE SAME PASS (scan victims: /tmp/llvmvictims.sh pattern — grep /usr/lib
+    THE SAME PASS (scan victims: grep /usr/lib
     for libLLVM links → pacman -Qo). rustc hits heap corruption/segfault on
     ANY compile otherwise. (rust-git's stage0 is the DOWNLOADED official
     one — 2026-09-08 recovery stripped bootstrap.toml's `/usr/bin` pins —
     so a rebuild works even with a broken or absent system rustc; the old
-    "bootstrap IS the broken rustc" wording no longer holds.) Recovery
-    when it happens: downgrade-rebuild llvm-libs
-    at the rust-compatible snapshot (old version from /var/log/pacman.log,
-    pin `#commit=` in PKGBUILD source, unpin after install — BPF target is
+    "bootstrap IS the broken rustc" wording no longer holds.) Recovery when
+    it happens: **rebuild rust-git in place** — the downloaded stage0
+    bootstrap self-heals with no working system rustc (`gsa -S --leaf
+    rust-git`; a direct `makepkg` runs from a scratch copy of the recipe
+    OUTSIDE the repo — an in-tree build collides with the engine's own Rust
+    workspace). Downgrade-rebuild llvm-libs at the rust-compatible snapshot
+    is the LAST resort (old version from /var/log/pacman.log, pin
+    `#commit=` in PKGBUILD source, unpin after install — BPF target is
     build config, survives the snapshot change). Enforced by the builder since
     2026-09-25: `gsa -Ma` lints every cargo/rustc recipe for a `rust-git` edge
     in its topology record; the generic abi-batch gate refuses a real build
     whose selection omits an installed `abi=must` batch member (llvm-git
     without rust-git is the canonical case; the tag data drives it); and an
     `-S` run re-runs the rustc sanity probe right after its own
-    llvm-git/llvm-libs-git install and stops dispatch on failure (the
-    `--allow-broken-rustc` escape hatch does not cover that mid-run probe).
+    llvm-git/llvm-libs-git install; a probe failure engages toolchain
+    REMEDIATION — the engine force-builds rust-git (narrow phase, escalating
+    to the core group), and that force-build must clear ALL dispatch gating
+    for its chain members, build-order edges included (queue-jump); the
+    remediation refuses only if the forced build fails too. After an
+    ABI/toolchain move, resume with `--skip`, never `--skip-built` (the
+    latter blesses stale built sets) — docs/NOTE.md 2026-10-18 B1.
 14. **Qt -git private-API coupling** (2026-09-08 incident): a Qt module that
     regenerates generated headers breaks consumers built against the OLD
     headers. qtlanguageserver r650 renamed `TextDocumentContentChangeEvent
@@ -559,8 +571,9 @@
     counterpart when the pkgname is not installed (a Stock→house swap MOVES
     the surface to a new pkgname instead of vanishing it; run #31, bzip2-git).
     Tier-2 ABI
-    exclusions live in `config/abi-exclusions.conf` (35, user-approved;
-    Tier-1 exposure is never excludable). Breakage: the swap path silently
+    exclusions live in `config/abi-exclusions.conf` (user-approved; row
+    count: `grep -vc '^\s*#\|^\s*$' config/abi-exclusions.conf`; Tier-1
+    exposure is never excludable). Breakage: the swap path silently
     confirmed removals and could ship provides drifting from the stock
     packages they replace. Check: `gsa -Ma` (the `swap-drift` lint),
     `bash tests/swap-completeness.sh`, `bash tests/abi-drift-install.sh`,
@@ -636,7 +649,9 @@
     vanished soname still aborts while a stock provider without provides
     does not (2026-10-06);
     (f) the exclusions registry is strict-loader `id|reason|review-by`
-    (`config/abi-exclusions.conf`, 35 entries, loaded on every invocation)
+    (`config/abi-exclusions.conf`, row count:
+    `grep -vc '^\s*#\|^\s*$' config/abi-exclusions.conf`, loaded on every
+    invocation)
     and entries are reviewed before their review-by (breakage: silent gaps
     are exactly what the guard exists to prevent);
     (g) the exposure audit maps provider → exposed installed consumers
@@ -1570,10 +1585,11 @@ claim. Lane results carry the named outcome vocabulary (contract §F.1) and
 cross the process boundary only
 through `gsa-sched`'s typed lane-result codec (contract §F.2); the hidden
 `--lane-job` seam keeps its positional payload (contract §D.1). The dispatch
-invariant is
-failure-shaped with one amendment
-(2026-09-24): a failure stops new dispatches and drains in-flight lanes,
-while a *deferral* (lane exit 99) is not a failure — the
+invariant is cone-stop by default (home: `docs/gsa-contract.md` §I): a
+failed package parks its transitive consumer cone (`parked waits-on-failed`)
+while dispatch continues outside it, and the run exits rc 4; `--fail-fast`
+restores stop-dispatch-and-drain (exit 1). The 2026-09-24 deferral clause
+still holds: a *deferral* (lane exit 99) is not a failure — the
 package parks (`parked waits-on-deferred`, contract §H.3), its dependents
 wait, dispatch continues, and the run still
 exits non-zero.
@@ -1759,8 +1775,10 @@ install history lives in `NOTE.md`.
   `-Db_lto=false` → flip true in phase 2 (glib2, gtk3, gtk4, wayland, cairo,
   xwayland, libinput, pixman, noctalia); manual via make/CMake (jemalloc,
   zlib-ng-compat); zstd phase-2 only; `options=(!lto)` where LTO breaks
-  (llvm-git, rocm-llvm, hip-runtime, gcc-snapshot, niri-spicy-git,
-  blender-git); Zen uses mozconfig thin LTO instead.
+  (rocm-llvm, hip-runtime, gcc-snapshot, niri-spicy-git, blender-git);
+  llvm-git's (and rust-git's) `!lto` is NOT a "LTO breaks" case — it only
+  neutralizes makepkg's LTOFLAGS while upstream LTO stays intentional
+  (docs/NOTE.md 2026-10-18); Zen uses mozconfig thin LTO instead.
 - **PGO phase-2 reconfigure**: a phase-2 pass must re-run the *configure* step,
   not only the build — the argument cache survives `make clean`. Meson:
   `meson setup --reconfigure` with both compiler and linker caches replaced
@@ -1794,7 +1812,8 @@ install history lives in `NOTE.md`.
   contract is "≈ the minimum distinct translation units the training must
   touch before a profile is worth trusting": at or below it the profile is too
   thin and the recipe falls back to a plain (non-PGO) build rather than
-  shipping one. Values today — `pgo_min_gcda`: 0 (`cmake-git`, `mold-git` —
+  shipping one. Values (as of 2026-09-26; the per-recipe `local` is the
+  check, never this list) — `pgo_min_gcda`: 0 (`cmake-git`, `mold-git` —
   any profile data at
   all suffices; zero files means training never ran and phase 2 is skipped),
   50 (`glib2-git`, `cairo-git`, `xorg-xwayland-git`), 100 (`gtk3-git`,
@@ -1883,11 +1902,29 @@ install history lives in `NOTE.md`.
 
 ## 5. Pending tasks
 
-Re-verified against the host on 2026-09-26. Completed items were deleted
+Each entry carries its own date; re-verify per entry, never a section-wide
+stamp. Completed items are deleted
 rather than left in place — an unchecked task list reads as authority while
 going stale.
 
 ### Queued (claim by editing this section)
+
+- **`--skip`'s version-keyed local claim churns fast-VCS recipes every run**
+  (2026-10-18, the llvm-git perpetual-rebuild wall): `gsa-recipe::freshness`
+  maps archives "to an expected output at the claim's version key", but a
+  VCS recipe's recorded `pkgver` moves with every fetch-side `pkgver()`
+  rewrite (observed: store PKGBUILD `24.0.0_r603163` while the newest built
+  set was `r603162` — a one-commit fetch/build race) → `nothing-built` → the
+  recipe rebuilds on EVERY resume (~89 min for llvm-git) and each install
+  re-triggers the rustc probe. The fish-era rule ("a skip claim is about the
+  BUILD, never about the recipe's recorded `pkgver`", NOTE 2026-10-07) was
+  only ported to `--skip-built` (version-agnostic `newest_complete_archives`);
+  `--skip`'s local gate kept the version key. Fix is contract-adjacent
+  (§B.8 pins `--skip` as "fresh against its recorded VCS baselines"): accept
+  the newest complete payload-valid set and let the VCS probes + tolerance /
+  `abi-provider-waived` waivers judge movement — decide semantics before
+  coding, then a `skip-upstream.sh` fixture scenario pinning the
+  fetch/build-version race.
 
 - **gsa-fetch-v2's window-bound timing pins race under battery load**
   (2026-10-17, hit again 2026-10-18): the prefetch window slot frees at
@@ -1918,14 +1955,6 @@ going stale.
   full provider sync pass unless `--no-sync`, duplicating `-Su`'s work; skip
   already-anchored recipes via the `recipes.last-fetch` freshness stamp
   (or equivalent) instead of the blunt `--no-sync` escape.
-- **Prune the startup stale-manifest sweep** (2026-10-09, campaign latency):
-  the builder's `*.gsa-vcs-revisions.tmp.*` sweep uses `-not -path '*/src/*'`
-  style filters, which *descend* every `src/`/`pkg/`/`build/` tree first — on
-  the USB workspace that is 6–8 D-state minutes per builder invocation
-  (probe, rehearsal, and run alike), and it grows as the heavy trees
-  accumulate. Same result set at near-zero cost: `find packages \( -name src
-  -o -name pkg -o -name build \) -prune -o -type f -name '*.gsa-vcs-revisions.tmp.*' -print`.
-  Needs a fixture pinning the pruned and unpruned result sets as equal.
 - **Pre-install package-internal NEEDED probe** (2026-10-07, from the run #53
   wall): the post-install NEEDED probe stops a run but cannot prevent the
   `pacman -U` landing — run #53 left `png2pnm`/`pnm2png` installed with a
@@ -1962,10 +1991,17 @@ going stale.
   preflight's `db.lck` check reads a stub lock and batteries can run beside a
   live install run (see Pitfall digest). Owner-blessed idiom: a stub, not a
   builder test knob.
-- **Swap-drift owner calls** (2026-10-06, from the swap-gate work): (1) keep
-  the audit's soname-drift finding symmetric or narrow it to drop-only
-  (≈8 findings vs 18); (2) disposition the 18 real host drift rows the lint
-  now reports — fix recipes or consciously retire the debt entries.
+- **Swap-drift owner calls** (2026-10-06, from the swap-gate work and the
+  blind-spot fix's new lint half): (1) keep the audit's soname-drift finding
+  symmetric or narrow it to drop-only (≈8 findings vs 18); (2) disposition
+  the 18 real host drift rows `gsa -Ma`'s `swap-drift` lint now reports
+  against this host's installed stock — mostly house-only adds where stock
+  ships no soname provides (Arch policy), plus genuine drops
+  (`flatpak-git`/`libinput-git` declare no soname provides at all where
+  stock carries `libflatpak.so`/`libinput.so`; `harfbuzz-git` /
+  `lib32-gcc-libs-snapshot` drop families stock carries). Report-only.
+  Decide: fix the recipes (declare the dropped families) or consciously
+  retire the debt entries / narrow the lint to the drop direction.
 - **ROCm is half-removed**: `hsa-rocr` 7.2.4-1.1, `rocm-llvm` 2:7.2.4-2.1 and
   `comgr` 2:7.2.4-2.1 are installed again (the 2026-09-06 collective removal was
   reversed), while `hip-runtime` is absent — so HIP compute/Blender-HIP is still
@@ -1993,14 +2029,11 @@ going stale.
   Affected 7.1 ≤ v < 7.2.6; fixed in 7.2.6+ and 7.3-rc1+. The trigger is a
   fork/exec + I/O storm (i.e. any build), which is why build weight never
   mattered (upstream `sched-ext/scx#3687`). The recipe moved to the CachyOS
-  RC channel (`cachyos-7.3-rc3-4`) and the running kernel is
-  `linux-cachyos-cachyos-lto` **7.3.0-rc4-1** (`uname -r` =
-  `7.3.0-rc4-1-cachyos-cachyos-lto`), built with `_cpusched=cachyos`:
-  `PREEMPT_DYNAMIC`, `CONFIG_HZ=600`, ThinLTO Clang, **no PREEMPT_RT and no
-  `SCHED_BORE`** — the recipe default is still `rt-bore`, so a default
-  rebuild deliberately swaps the machine back to rt-bore; re-read before
-  doing that. `linux-cachyos-rt-bore-lto` 7.2.5-1 and `linux-cachyos-lts`
-  6.18.52-1 remain installed as fallbacks. Evidence is upstream-documented
+  RC channel; the running kernel and the installed kernel/fallback inventory
+  are live state — check `uname -r` and `ls /usr/lib/modules`, never this
+  file — and a default rebuild follows the recipe's own scheduler default,
+  which may not match what is running; re-read before doing that. Evidence
+  is upstream-documented
   plus circumstantial (the confirming A/B was skipped by decision): read
   "identified" as strong, not proven. The freeze-forensics rules that outlive
   the incident (pstore, config-only knobs, the stood-down capture chain and
@@ -2053,13 +2086,13 @@ going stale.
 - **spandsp sign-off** (2026-10-03→04 ingestion): it resolves to the
   FreeSWITCH fork rather than the classic library; explicit sign-off wanted
   before it becomes the house provider.
-- **Versioned name-provides debt** (2026-10-04 Q8 follow-up): 59 recipes /
-  113 mapped-name pairs predate the soname+name rule (see §4 provides
-  discipline) — each needs `provides=(<name>=$pkgver)` for its swapped,
-  VCS-counterpart or compat-mapped stock names. The list is pinned as the
-  ratchet in `tests/recipe-contract.sh` section E; shrink it recipe by
-  recipe (a provides change needs a real rebuild — the archive's `.PKGINFO`
-  is the deliverable), never grow it.
+- **Versioned name-provides debt** (2026-10-04 Q8 follow-up): recipes
+  predate the soname+name rule (see §4 provides discipline) — each needs
+  `provides=(<name>=$pkgver)` for its swapped, VCS-counterpart or
+  compat-mapped stock names. The register is `tests/recipe-contract.sh` §E
+  (`mapping.expected`); counts come from running it, never from this file.
+  Shrink it recipe by recipe (a provides change needs a real rebuild — the
+  archive's `.PKGINFO` is the deliverable), never grow it.
 - **version-sync vs pkgrel rebuild triggers** (2026-10-04 merge): a
   version-sync wave resets `pkgrel=1` on a new pkgver while fixture pins like
   `tests/noctalia-pgo.sh`'s `pkgrel >= 2` (the 2026-09-23 PGO fix's rebuild
@@ -2095,15 +2128,6 @@ going stale.
   wall at `pacman -U` in raw noise. Decide whether the stock-pinner check
   should also name workspace exact pinners (transaction coverage only) or
   whether in-run repair should require the consumer's pin to be bare.
-- **Swap-lint soname-drift findings need disposition** (2026-10-06, from the
-  blind-spot fix's new lint half): `gsa -Ma`'s `swap-drift` lint
-  reports 18 real drift rows against this host's installed stock — mostly
-  house-only adds where stock ships no soname provides (Arch policy), plus
-  genuine drops: `flatpak-git`/`libinput-git` declare no soname provides at
-  all where stock carries `libflatpak.so`/`libinput.so`, and `harfbuzz-git` /
-  `lib32-gcc-libs-snapshot` drop families stock carries. Report-only. Decide:
-  fix the recipes (declare the dropped families) or narrow the lint to the
-  drop direction.
 - **rustc sanity probe misses non-Rust recipes that compile Rust**
   (2026-10-06 js140 diagnosis): the `--allow-broken-rustc` probe fires only
   for Rust-family recipes, so `js140` (a C++ recipe whose build invokes
@@ -3328,15 +3352,14 @@ constant, not a baked path).
   deleted): never reintroduce it for a check that must stop a build. Recipes
   call the gate and never copy its implementation (the per-recipe copies had
   drifted — mold-git's predicates were stricter than the rest);
-  counts (2026-09-26, two different predicates on purpose — do not conflate
-  them): **23** recipes are PGO-instrumenting (predicate: a
-  `packages/*/*/PKGBUILD` containing `profile-generate` in any spelling —
-  `-fprofile-generate`, `-Cprofile-generate`, `--enable-profile-generate` —
-  or `profiler=true`; the last matches zero recipes today) versus **7**
-  recipes calling the shared gate (`grep -l 'lib/pgo\.sh'
-  packages/*/*/PKGBUILD`). The builder's own gate predicate covers 22 of the
-  23; the earlier "21 instrument / 6 guard" figures are superseded by the two
-  predicates above (re-measured 2026-09-26);
+  counts (two different predicates on purpose — do not conflate them): the
+  instrumenting predicate is a `packages/*/*/PKGBUILD` containing
+  `profile-generate` in any spelling (`-fprofile-generate`,
+  `-Cprofile-generate`, `--enable-profile-generate`) or `profiler=true`,
+  versus recipes calling the shared gate — the check is
+  `grep -rl 'profile-generate' packages/*/*/PKGBUILD` and
+  `grep -rl 'lib/pgo\.sh' packages/*/*/PKGBUILD`; counts come from running
+  those greps, never from this file;
   that scan is **whole-archive** (subtree scoping embeds an install-location
   assumption and misses a `usr/libexec` leak, while `.PKGINFO`/`.BUILDINFO`/
   prose each pass the standalone-path predicate) and
