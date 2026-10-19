@@ -71,6 +71,17 @@ prepare() {
   # dynamic linking + PIE by default).
   ZIG_GLOBAL_CACHE_DIR="$srcdir/zig-global-cache/" \
     ./nix/build-support/fetch-zig-cache.sh
+
+  # zig 0.16's `zig fetch` stores packages as <hash>.tar.gz in the cache's
+  # p/ store, but `--system <pkgdir>` resolves <pkgdir>/<hash>/ as UNPACKED
+  # directories — PACKAGING.md's fetch+--system flow predates the packed
+  # store (measured 2026-10-19: "package not found at …/p/<hash>" while the
+  # matching .tar.gz sat right beside it). Each tarball's top-level dir is
+  # exactly <hash>/, so an in-place extract materializes what --system wants.
+  local _p="$srcdir/zig-global-cache/p" _f
+  for _f in "$_p"/*.tar.gz; do
+    tar -xzf "$_f" -C "$_p"
+  done
 }
 
 build() {

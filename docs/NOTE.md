@@ -1,3 +1,32 @@
+## 2026-10-19 — ghostty-git's first build wall: zig 0.16 packs its fetch store, `--system` wants it unpacked
+
+**Symptom.** `makepkg` on the new recipe reached build() and died in the
+dependency graph: `package not found at …/zig-global-cache/p/<hash>` — for
+two packages whose matching files sat right beside that path.
+
+**Root cause.** zig 0.16's `zig fetch` stores packages **packed** as
+`<hash>.tar.gz` in the cache's `p/` store (measured: all 39 entries), but
+`zig build --system <pkgdir>` resolves `<pkgdir>/<hash>/` as **unpacked**
+directories. Ghostty's `PACKAGING.md` (`fetch-zig-cache.sh` → `--system
+$CACHE/p`) predates the packed store — the script itself just loops
+`zig fetch` over `build.zig.zon.txt`, so it faithfully reproduces the new
+layout that `--system` cannot read. (Probing `--system` against the cache
+root fails identically: the lookup appends the name to whatever path it is
+given.)
+
+**Fix.** prepare() now unpacks every `p/*.tar.gz` in place after the fetch
+script — each tarball's top-level dir is exactly `<hash>/`, so the extract
+materializes precisely what `--system` wants. Measured green: with the
+unpacked store, `zig build --help --system …/p` constructs the full build
+graph (it errored before).
+
+**Durable rule.** When a `--system`/vendor-store build reports "package
+not found", diff the store's actual layout against what the resolver
+constructs before blaming the fetch step — a fetch that "succeeded" can
+still have written a format the consumer predates. Toolchain majors (zig
+especially, pre-1.0) invalidate upstream packaging docs in this exact way;
+the recipe's comments, not upstream's doc, must carry the measured truth.
+
 ## 2026-10-19 — add ghostty-git: zig-native terminal, the optimization layer without GCC PGO
 
 **Recipe.** `packages/git/ghostty-git` follows Arch's official ghostty
