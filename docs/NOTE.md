@@ -1,3 +1,29 @@
+## 2026-10-19 — volume_key's source host rotted: releases.pagure.org serves the pagure app now, not its release archive
+
+**Symptom.** resume10: `volume_key` build-failed in 3 s —
+`curl: (22) … 404` on
+`https://releases.pagure.org/volume_key/volume_key-0.3.12.tar.xz`.
+
+**Cause.** Archive-path rot, not an outage: the host answers and its
+`/volume_key/` now renders the pagure project application (issues, PRs,
+releases tabs) instead of the release files. Arch's PKGBUILD still carries
+the same dead URL — a clean Arch rebuild would fail identically.
+
+**Fix.** Mirror swap to Fedora's lookaside, the canonical archive for this
+exact tarball:
+`https://src.fedoraproject.org/repo/pkgs/volume_key/volume_key-$pkgver.tar.xz/sha512/<the anchored sha512>/volume_key-$pkgver.tar.xz`.
+The content was re-verified byte-exact against the recipe's EXISTING
+sha512sums/b2sums (both untouched). The URL embeds that sha512 as cache
+key, so a version bump must move the segment together with the sums.
+
+**Validation.** `makepkg --verifysource`: `sha512sums` and `b2sums` both
+`Passed` through the new URL.
+
+**Durable rule.** A 404 from a release host is a mirror swap, never a
+checksum re-anchor: prove the replacement URL serves the SAME bytes by
+hashing it against the existing anchor before editing; if the bytes cannot
+be proven identical, fail closed (the sqlite doc-zip stance).
+
 ## 2026-10-19 — umbriel-git joins the set — and a GCC probe convicts xorg-xwayland-git's PGO spelling
 
 **Addition.** `packages/git/umbriel-git` (noctalia-dev's wlroots compositor,
