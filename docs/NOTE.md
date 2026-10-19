@@ -1,3 +1,190 @@
+## 2026-10-19 — umbriel-git joins the set — and a GCC probe convicts xorg-xwayland-git's PGO spelling
+
+**Addition.** `packages/git/umbriel-git` (noctalia-dev's wlroots compositor,
+C++23/meson, MIT): the AUR recipe re-shaped to house optimization. Wired as
+`app` (parity with niri-spicy-git/noctalia-git) with 22 build-order edges
+verified against the upstream `meson.build`/PACKAGING.md dependency list;
+`wlroots0.20`, `xdg-desktop-portal-umbriel` and `nlohmann-json` stay
+external pacman deps (no recipe records). `pkgdesc` is PACKAGING.md's
+mandated short form. Depends carries `xdg-desktop-portal-umbriel` (CachyOS
+name) rather than the AUR's `-git` spelling.
+
+**Optimization applied** (noctalia/xorg-xwayland/jq idioms): mold guard,
+`options=('!debug' 'lto')` + `-Db_lto=true` on the final phase, jemalloc
+enabled, `-Db_ndebug=true`, and the full meson-tier PGO: phase 1 strips
+`-flto*` and instruments with SYMMETRIC `-fprofile-generate=<dir>` (outside
+the build dir — mesa precedent), trains via `pgo_train_meson` (upstream's
+unit battery + umbrielfx checks, `-Dtests`/`-Dtest_ipc` enabled for training
+ONLY) plus the CLI paths that exit through `main()`, then phase 2
+`meson setup --reconfigure` with `-fprofile-use=<dir> -Wno-error=missing-profile
+-Wno-error=coverage-mismatch` and the suite switched off. Floor
+`pgo_min_gcda=50` → plain-LTO fallback. The shared `lib/pgo.sh` gate runs
+last in `package()` with the PGO work dir as the extra literal.
+
+**Probe finding (durable, measured on this host 2026-10-19).** A bare
+`-fprofile-generate` writes `obj/t.gcda` (beside the object) while ANY
+`-fprofile-use=<dir>` looks for `<dir>/<mangled-source-path>.gcda` —
+`-Werror=missing-profile` fires in both tested `<dir>` shapes. The pair
+therefore **silently compiles a profile-less build**, exactly as MEMORY §4
+warned. `xorg-xwayland-git`'s `build()` uses that spelling (bare generate +
+`-fprofile-use=$(pwd)/build` with `-Wno-error=missing-profile`), so its
+"profile-used" builds are cold. NOT fixed here (owner call): queued in
+MEMORY §5 with the one-line symmetric fix.
+
+**Validation.** `bash -n`; `.SRCINFO` generated; engine loads the record
+(`gsa -Sl @app` → `31. umbriel-git`); `gsa -B --dry-run --leaf umbriel-git`
+plans `umbriel-git build ok`; `gsa --qa-check provides-versioning` clean
+after the provide became versioned (`umbriel=${pkgver}` — the lint flagged
+the unversioned spelling first). Battery: recipe fixtures green; the
+`recipe-sources` "PKGBUILD not committed" failure and `srcinfo-freshness`
+rows are commit-time/environmental artifacts (see below), and the five
+`/var/lib/gsa`-snapshotting engine fixtures fail only because resume10 is
+live (§J.3 guard measures the real state root mid-run).
+
+**Environment lesson (durable).** Running a long build run FROM THE REPO
+workspace makes the engine's fetch-side `pkgver()` rewrite the git tree —
+resume10 produced 544 dirty files (`M …/PKGBUILD`, `.SRCINFO` left behind
+stale) exactly as `gsa -Sy` churns the canonical store. The store workspace
+exists precisely to absorb that churn; a repo-workspace run must expect it
+and clean up (`git checkout -- <the pkgver-only rewrites>`) after the run —
+never mix such churn into a curated commit.
+
+## 2026-10-19 — resume9's six walls: two retired patches, the third pod2man/PATH strike, and two loader/network transients
+
+**Symptom.** resume9 (`/tmp/gsa-smoke2-resume9.log`) cleared the python wall
+and built for hours, then ended `outcome: failed (rc 4)` with exactly six
+`build-failed` lanes — curl, libpwquality, hermes-agent-git, pacutils, bind,
+gdb — and 738 `waits-on-failed` parks.
+
+**Fix 1 — curl: the backport outlived its need.**
+`test1399-backport.patch` (upstream fe67952d, "test1399: improve
+reliability") no longer applied: the 8.23.0 tarball's own rewritten test is
+already clock-decoupled (fixed timestamps via `Curl_pgrsTimeWas`, no
+`curlx_now()`/`fake_t_startsingle_time` left) — the backport's goal met by
+upstream's successor rewrite, nothing left to carry. Patch dropped (nss-git
+precedent: verify the tarball's own file before carrying a backport across a
+version move).
+
+**Fix 2 — libpwquality + pacutils: the third pod2man/PATH strike.**
+Both died `pod2man: command not found` from upstream man-page rules. Perl
+5.42 relocated `pod2man` to `/usr/bin/core_perl`, which `/etc/profile.d/perlbin.sh`
+gives login shells but the makepkg context (sudo `secure_path` =
+`/usr/local/sbin:/usr/local/bin:/usr/bin`) never has. House idiom applied
+(`export PATH="/usr/bin/core_perl:$PATH"` at the phase that runs the rule),
+same as git-git and the openssl no-docs decision (2026-09-07). Third
+occurrence ⇒ pitfall digest entry.
+
+**Fix 3 — hermes-agent-git 0001: superseded, dropped (owner decision).**
+`0001-unattended-memory-audit.patch` (house apply-and-audit model) hit
+semantic drift on 4 files: upstream main (`3752497cc4d`) shipped
+`_background_delete_gate` (#105921) — unattended `patch`/`remove` are now
+STAGED for user approval (fail-closed) instead of applied. Two opposite
+contracts cannot be textually rebased; owner decision 2026-10-19: **drop
+0001**, upstream's staging supersedes it. Series 0002–0005 touches disjoint
+files with zero references to 0001's helpers (verified) and stands
+unchanged.
+
+**Transients (retry, no action).** bind: `gitlab.isc.org` TLS `unexpected
+eof` on clone — network, same class as acl-git's savannah 500. gdb: `mv:
+error while loading shared libraries: libselinux.so.1` mid-build — a child
+spawned inside the `pacman -U` libselinux replacement window died in the
+dynamic loader (same mechanism as the snapper noise); the victim recipe is
+never the culprit.
+
+**Validation.** `bash -n` + `.SRCINFO` regeneration for all three recipes;
+recipe battery 8/8; resume10 (kicked from the repo workspace so the
+uncommitted fixes are visible) reports `lane done curl succeeded … ok`.
+Durable rule: a patch that exists to fix a test is retired the moment the
+release rolls its own fix in — re-verify the tarball at every version move.
+
+## 2026-10-19 — resume7/8 died at python on `python-posix-2024.patch`'s SECOND checksum wall — and the vendored fix was invisible to the build until the store synced
+
+**Symptom.** resume7 (`/tmp/gsa-smoke2-resume7.log`, 01:01) and resume8
+(`/tmp/gsa-smoke2-resume8.log`, 03:03) both ended `outcome: failed (rc 4)`
+with `python failed build-failed` at the root of the order, parking the
+entire remaining cone (`waits-on-failed`). The lane log
+(`/var/lib/gsa/logs/python.log`) shows the same wall twice:
+`python-posix-2024.patch ... FAILED` in makepkg's validity check.
+
+**Cause (two layers).** (1) The wall itself is checksum wall #2 for the
+same source: `python-posix-2024.patch::https://github.com/python/cpython/commit/927eb448….patch`
+is GitHub's mail rendering of a pinned commit, and GitHub re-renders the
+mail preamble at will (first drift 2026-10-15, again 2026-10-19 — the
+re-rendered blob hashes `4068d770…`, neither the old nor any anchored sum).
+(2) The fix — commit `50e573d` vendors the patch body
+(`packages/stable/python/python-posix-2024.patch`, sha512 `3bcbc57e…`,
+body verified byte-identical to GitHub's API diff of the pinned commit,
+source line now a local file) — had already been committed AND pushed, but
+the smoke runs build from the **canonical store**
+(`~/.local/share/gsa/recipes`), which still carried the old URL recipe and
+no patch file. A repo fix reaches builds only via commit + push +
+`sudo gsa -Sy`; the store is never hand-edited.
+
+**Fix.** The vendoring commit (`50e573d`) retires the moving URL; the
+delivery step is the store refresh (`sudo gsa -Sy`) before the next resume.
+
+**Validation.** Hash triangulation before the refresh: repo patch
+`3bcbc57e…` = the new PKGBUILD `sha512sums` entry; store PKGBUILD = old
+URL form with no patch file present; SRCDEST cache copy
+(`~/.cache/gsa-src/python-posix-2024.patch`) = `4068d770…`, the re-rendered
+remote blob behind both walls. The `nothing-built` skip claims in resume8
+were honest (the f2fs build cache holds 161 archives, none for python or
+git-git — no cache-wipe bug).
+
+**Durable rule.** Mid-marathon, a recipe fix is not "landed" until the
+canonical store has synced — a resume against a stale store re-hits the
+retired wall and makes the fix look like it did nothing. After any
+recipe-source/checksum fix: commit, push, `sudo gsa -Sy`, THEN resume. And
+a moving third-party rendering of pinned content (GitHub `.patch` mail
+renderings included) is never a stable source: vendor the verified body and
+anchor its hash.
+
+## 2026-10-19 — critical `snapper --jsonout list-configs` notifications during builds are transient loader-window failures; the fix is a notify-side filter, never snapper-side
+
+**Symptom.** During smoke-2 build runs, the desktop received critical
+notifications `Command failed: snapper --jsonout list-configs`, suggesting
+snapper or snapshot locking was breaking under the build load.
+
+**Cause.** Journal-proven, NOT locking: each gsa `pacman -U` is one
+transaction, and snap-pac's pre-hook snapshot (`limine-snapper-sync for add
+NNN`) fires WHILE pacman unpacks. In the loader-replacement window of a
+library swap (observed: `icu-git` moving `libicuuc.so.79`), the pre-hook's
+`snapper` dies in the dynamic loader (`error while loading shared libraries:
+libicuuc.so.79`, exit 127) → `Command failed` in the journal → the packaged
+`limine-snapper-notify` (XDG autostart, `1.32.1-1` CachyOS
+`limine-snapper-sync`) forwards each journal line as a critical
+`notify-send`. Transient and self-healing: the post-hook sync succeeds
+seconds later. The external package's alpm hook
+(`10-limine-snapper-lock.hook`) only serializes transaction START and is
+irrelevant here.
+
+**Fix (host-side, user-level override of the XDG autostart entry).** Three
+files, no packaging and no host-file deletion:
+`~/.local/libexec/limine-snapper-notify-filter/notify-send` (filter shim on
+PATH: drops `Command failed: snapper*` ONLY while `/var/lib/pacman/db.lck`
+exists, unconditionally drops the matching transient `Output:`/`Exit code:`
+lines, otherwise execs the real `/usr/bin/notify-send`),
+`~/.local/libexec/limine-snapper-notify-wrapper` (puts the shim dir first on
+PATH, execs `/usr/bin/limine-snapper-notify`), and
+`~/.config/autostart/limine-snapper-notify.desktop` (XDG override pointing
+Exec at the wrapper). Activation requires the escaped unit name —
+`systemctl --user restart 'app-limine\x2dsnapper\x2dnotify@autostart.service'`
+— the unescaped form reports "not found"; the generator unit lives in
+`/run/user/1000/systemd/generator.late/`.
+
+**Validation.** Shim syntax OK; drop paths silent rc 0; pass path reaches the
+real `notify-send` 0.8.8; `db.lck` stat-able as user; after the escaped-name
+restart the unit's live process carries
+`PATH=~/.local/libexec/limine-snapper-notify-filter:…` (verified via
+`/proc/<pid>/environ`) — the filter is provably on the notification path.
+
+**Durable rule.** A `Command failed: snapper …` critical during a build run
+is a transient loader-window artifact of the transaction's own library swap
+and must never gate or steer a build decision. Silence it at the notifier
+(class-filter while `db.lck` exists), never by weakening snap-pac, snapper,
+or the build pipeline. If a future notification class needs filtering,
+extend the shim — the wrapper/override skeleton is the pattern.
+
 ## 2026-10-18 — resume5/6 rc 3: the remediation's "force-build" never forced (B1), and `--skip` rebuilds llvm every run (B2)
 
 **Symptom.** Both reconciliation runs ended `outcome: refused (rc 3)` at

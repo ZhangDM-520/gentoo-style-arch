@@ -1909,6 +1909,19 @@ going stale.
 
 ### Queued (claim by editing this section)
 
+- **xorg-xwayland-git's PGO phase silently ships a profile-less build**
+  (2026-10-19, GCC probe): `build()` instruments with a bare
+  `-fprofile-generate` (counters land beside the objects) but recompiles with
+  `-fprofile-use=$(pwd)/build`, which looks up
+  `<dir>/<mangled-source-path>.gcda` and never finds them —
+  `-Wno-error=missing-profile` downgrades the miss, so the "profile-used"
+  build is cold and the gcda floor only ever measures generation. One-line
+  fix (MEMORY §4's symmetry rule): make both sides
+  `-fprofile-generate=<dir>` / `-fprofile-use=<dir>` naming the SAME
+  directory (jq's spelling), or use bare spelling on both sides. Change is
+  behavioural (the recipe would start shipping a genuinely profile-used
+  build) — needs an owner go-ahead + a rebuild. Details: NOTE.md 2026-10-19.
+
 - **`--skip`'s version-keyed local claim churns fast-VCS recipes every run**
   (2026-10-18, the llvm-git perpetual-rebuild wall): `gsa-recipe::freshness`
   maps archives "to an expected output at the claim's version key", but a
@@ -2200,6 +2213,59 @@ zero baked `.gcda` destinations — `ctest`'s single hit is the `/*.gcda` glob
 constant, not a baked path).
 
 ## 6. Pitfall digest (full details: NOTE.md sections of same dates)
+
+- **A build run whose workspace is the git tree rewrites the git tree**
+  (2026-10-19, resume10): the engine's fetch-side `pkgver()` rewrite is
+  workspace-local by design — against the canonical store it is absorbed
+  churn, against the repo it dirties every fetched recipe's PKGBUILD (544
+  files observed) and leaves `.SRCINFO` stale behind it (the
+  `srcinfo-freshness` fixture then fails for reasons unrelated to any
+  edit). Repo-workspace runs are the documented quickstart and fine for
+  validating uncommitted fixes, but plan for the churn: never mix the
+  pkgver-only rewrites into a curated commit, and clean them up after the
+  run (`git checkout -- <rewritten PKGBUILDs>`), or run from the store.
+
+- **`pod2man` is a PATH trap in the makepkg context — third strike
+  (2026-10-19, libpwquality/pacutils):** Perl 5.42 relocated it to
+  `/usr/bin/core_perl`, which login shells get via
+  `/etc/profile.d/perlbin.sh` but the makepkg context (sudo `secure_path`)
+  never does — upstream man-page rules die `command not found`. House idiom:
+  `export PATH="/usr/bin/core_perl:$PATH"` in the phase that runs the rule
+  (git-git's build() is the template; openssl chose trimming instead). When
+  a recipe dies on a Perl tool, check `command -v` under the lane's PATH,
+  not the login shell's. Details: NOTE.md 2026-10-19.
+
+- **A child spawned inside a `pacman -U` library-replacement window can die
+  in the dynamic loader — the victim recipe is never the culprit**
+  (2026-10-19, gdb during the libselinux swap): `mv: error while loading
+  shared libraries: libselinux.so.1` killed a build mid-make; same loader
+  mechanism as the transient `snapper` failures the notifier filters.
+  Transient and self-healing: retry the recipe; never "fix" it. Same family
+  as the 2026-09-09 makepkg/util.sh self-hosting race. Details: NOTE.md
+  2026-10-19.
+
+- **A pushed recipe fix is invisible to builds until the canonical store
+  syncs** (2026-10-19 python patch wall #2): the smoke runs build from
+  `~/.local/share/gsa/recipes`, not the repo tree — a fix can be committed
+  AND pushed and still re-hit its retired wall, looking like the fix "did
+  nothing". Land a recipe-source/checksum fix as commit → push → `sudo gsa
+  -Sy` → resume, in that order; and never pin a moving third-party
+  rendering of pinned content (GitHub's `.patch` mail rendering re-renders
+  its preamble at will) — vendor the verified body and anchor its hash.
+  Details: NOTE.md 2026-10-19.
+
+- **A critical `Command failed: snapper …` notification during a build run
+  is a transient loader-window artifact, never a build signal** (2026-10-19
+  limine-snapper-notify): snap-pac's pre-hook snapshot runs inside the
+  `pacman -U` transaction, so a library swap (observed: `icu-git`) can kill
+  the hook's `snapper` in the dynamic loader (exit 127) for the seconds
+  until the post-hook succeeds; the XDG autostart notifier forwards each
+  journal line as critical. Filter at the notifier (user-level wrapper +
+  `notify-send` shim dropping the class while `/var/lib/pacman/db.lck`
+  exists), never by weakening snap-pac/snapper or steering builds. Note the
+  systemd unit-name trap: the generated unit needs its escaped name
+  (`app-limine\x2dsnapper\x2dnotify@autostart.service`) to restart. Details:
+  NOTE.md 2026-10-19.
 
 - **A completeness check must not bless the empty set — test emptiness
   before coverage** (2026-10-18 `--skip-built` phantom): `missing.is_empty()`
