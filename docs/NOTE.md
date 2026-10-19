@@ -1,3 +1,37 @@
+## 2026-10-19 — ghostty-git's third build wall: `--system` defaults docs ON, and who owns the pandoc/icu skew
+
+**Symptom.** Next build reached `install generated to
+share/ghostty/doc/ghostty.1.html` → `run pandoc` → `libicuuc.so.78: cannot
+open shared object file`. Docs were supposed to be off.
+
+**Root cause.** ghostty's Config.zig: "We always emit docs in system
+package mode" — with `--system`, `emit_docs` defaults **true** unless
+`-Demit-docs=false` is passed explicitly. Merely omitting the flag (the
+recipe's previous spelling) does not disable anything.
+
+**Attribution of the icu skew (measured, not guessed).** `ldd`/`readelf -d`
+show `/usr/bin/pandoc` (package `pandoc-cli` 3.11-42) carries **its own**
+`DT_NEEDED libicuuc.so.78 / libicui18n.so.78 / libicudata.so.78`, and
+`/usr/lib/libHStext-icu-…so` (package `haskell-text-icu` 0.8.0.5-169)
+repeats the same triad — that is why ldd lists it once per consumer. The
+missing files were provided by `icu` 78, superseded by our `icu-git` (79,
+ships `.so.79` only). So the fault sits with the **stale consumers**
+(pandoc-cli + haskell-text-icu, built against ICU 78 and pinned to its
+soname in their ELFs — ICU's C++ ABI has no stability, hence the soname
+bump), not with icu 79 itself. Rebuilding them means the external Haskell
+toolchain stack (ghc-libs chain) — out of scope, same disposition as the
+ccache/rdma-core walls.
+
+**Fix.** `-Demit-docs=false` now rides the build invocation explicitly;
+the recipe comment records the system-mode default trap.
+
+**Durable rule.** "System/dist package mode" in a build system is a
+*bundle* of defaults, not one flag — an opt-out must be written even for
+features you never opted into. And for an ABI-skew "file not found", always
+attribute via `readelf -d`/`ldd` on the failing consumer: the package that
+*needs* the missing soname owns the rebuild, not the package that used to
+ship it.
+
 ## 2026-10-19 — ghostty-git's second build wall: `-Dversion-string` must be SemVer
 
 **Symptom.** With the store fixed, build() died inside `Config.init`:

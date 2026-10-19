@@ -99,10 +99,13 @@ build() {
   #     -fprofile-generate pipeline and links with its own toolchain), so
   #     lib/pgo.sh's instrumented families do not apply and there is no
   #     profile payload for the shared gate to police.
-  #   * Docs stay OFF (-Demit-docs dropped, pandoc-cli never declared):
-  #     house recipes trim docs, and the host's pandoc-cli is dead anyway
-  #     (icu 78→79 soname swap, 2026-10-19 — same wall class as
-  #     ccache/rdma-core).
+  #   * Docs stay OFF — explicitly: system-package mode (--system) DEFAULTS
+  #     emit_docs to TRUE ("We always emit docs in system package mode",
+  #     Config.zig), so merely dropping -Demit-docs is not enough and the
+  #     build reaches for pandoc. The host's pandoc-cli is dead anyway (icu
+  #     78→79 soname swap — pandoc-cli's own ELF carries DT_NEEDED
+  #     libicuuc.so.78, and haskell-text-icu repeats it; both are external
+  #     Haskell-stack rebuilds, out of scope). House recipes trim docs.
   # -Dversion-string must be a SEMVER: Config.zig runs it through
   # std.SemanticVersion.parse ("This must be a semantic version" — measured
   # error.InvalidVersion on pkgver's dots, 2026-10-19). pkgver stays
@@ -117,6 +120,7 @@ build() {
     -Dcpu=native \
     -Dgtk-x11=true \
     -Dpie=true \
+    -Demit-docs=false \
     -Dversion-string="${_version_string}" \
     --build-id=sha1
 }
