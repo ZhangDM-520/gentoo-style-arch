@@ -1,3 +1,43 @@
+## 2026-10-19 — add ghostty-git: zig-native terminal, the optimization layer without GCC PGO
+
+**Recipe.** `packages/git/ghostty-git` follows Arch's official ghostty
+PKGBUILD phase split (prepare() runs upstream's `fetch-zig-cache.sh` — the
+one networked step, every zig package content-hash-pinned in
+`build.zig.zon`; build() compiles into a `DESTDIR=build` staging tree;
+package() copies it) minus docs. Trimmed: `-Demit-docs`/pandoc-cli (house
+docs trim; the host's pandoc-cli is dead anyway). Kept in the single
+package: terminfo, shell integration, themes, and the nautilus extension
+(`optdepends=nautilus-python`) — split packages are a trim target here.
+
+**Optimization layer.** `-Doptimize=ReleaseFast` (upstream's own
+distribution mode for terminals) + `-Dcpu=native` — the Zig twin of
+makepkg.conf's host-derived `-march=native`, deliberate and documented
+(Arch ships `-Dcpu=baseline` for portability; this set is single-machine).
+No GCC-style PGO and no mold: the payload is Zig — no
+`-fprofile-generate` pipeline exists for zig code, so `lib/pgo.sh`'s
+instrumented families don't apply and the shared payload gate has nothing
+to police. `-Dgtk-x11=true -Dpie=true --build-id=sha1` parity with Arch.
+
+**Toolchain coupling.** Ghostty enforces `minimum_zig_version` from
+`build.zig.zon` — currently **0.16.0**, which is exactly Arch's `zig`.
+Zig is pre-1.0 and breaks between minors; if the build ever dies in
+`requireZig()` or language drift, the remedy is a pinned zig toolchain,
+not flags. `pkgver()` matches **release tags only** (`--match 'v[0-9]*'`):
+upstream keeps a rolling `tip` tag that moves per commit, and a bare
+`git describe` picks it (measured: `tip.r14…` vs the real
+`1.3.1.r3071.gc7cbc9bfd` — main runs far ahead of the release branch).
+
+**Edges and their reasons.** `bzip2-git, libpng-git, zlib-ng-compat-git` —
+the compressed-data/sprite libs upstream's `--system` mode links
+dynamically (`pkg/*` wrappers); `fontconfig-git, freetype2-git,
+harfbuzz-git` — the font stack ghostty's renderer links; `gtk4-git,
+libadwaita-git, glib2-git` — the GTK4 UI; `libx11-git` — the X11 backend
+(`-Dgtk-x11=true`); `wayland-git` — the Wayland client; `pixman-git` —
+compositing primitives; `gettext` — msgfmt for the translations;
+`git-git` — VCS source; `glibc-git` — libc. Not edgeable (no topology
+record): `oniguruma`, `gtk4-layer-shell`, `blueprint-compiler`, `pkgconf`,
+`zig` — stock repo packages outside the curated set.
+
 ## 2026-10-19 — PGO end-to-end: umbriel-git proves profile consumption, xorg-xwayland-git trains on nothing
 
 **umbriel-git (proof).** `PGO profile: 153 gcda files — rebuilding with

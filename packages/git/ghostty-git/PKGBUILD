@@ -1,0 +1,114 @@
+# Maintainer: Gentoo_Style_Arch contributors
+# Upstream packaging contract: PACKAGING.md in the source tree (the phase
+# split below follows Arch's official ghostty PKGBUILD, minus docs).
+
+pkgname=ghostty-git
+_pkgname=ghostty
+pkgver=1.3.1.r3071.gc7cbc9bfd
+pkgrel=1
+pkgdesc='Fast, native, feature-rich terminal emulator (git version)'
+arch=('x86_64')
+url='https://github.com/ghostty-org/ghostty'
+license=('MIT')
+# !debug: zig owns its own debug-info handling; no separate debug package
+#         (parity with umbriel-git / noctalia-git).
+options=('!debug')
+depends=(
+  'bzip2'
+  'fontconfig'      # libfontconfig.so
+  'freetype2'       # libfreetype.so
+  'glib2'           # libglib/libgio/libgobject
+  'glibc'
+  'gtk4'            # libgtk-4.so
+  'gtk4-layer-shell'
+  'harfbuzz'        # libharfbuzz.so
+  'libadwaita'      # libadwaita-1.so
+  'libpng'
+  'libx11'
+  'oniguruma'       # libonig.so
+  'pixman'
+  'wayland'         # libwayland-client.so
+  'zlib'
+)
+makedepends=(
+  'blueprint-compiler'  # git checkouts compile the .blp UI sources
+  'gettext'
+  'git'                 # VCS source (pkgver)
+  'pkgconf'
+  # Ghostty enforces build.zig.zon's minimum_zig_version (currently 0.16.0,
+  # which is exactly what Arch's zig ships). Zig is pre-1.0 and breaks
+  # between minors: if the build ever dies in requireZig() or in
+  # language/library drift, the fix is a pinned zig toolchain, not flags.
+  'zig'
+)
+optdepends=('nautilus-python: Open-in-Ghostty context menu in GNOME Files')
+# Versioned per the provides discipline: a bare provide would let the
+# mapped name drift unmetered (recipe-contract's ratchet) — and a versioned
+# provide still satisfies exact-name resolution for 'ghostty' consumers.
+provides=("ghostty=${pkgver}")
+conflicts=('ghostty')
+source=("${_pkgname}::git+${url}.git#branch=main")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "${_pkgname}"
+
+  # Tag-driven against RELEASE tags only — upstream also keeps a rolling
+  # `tip` tag that moves with every commit, so --match 'v[0-9]*' is
+  # load-bearing (a bare describe picks `tip` and the count means nothing).
+  local tag revs
+  tag="$(git describe --tags --abbrev=0 --match 'v[0-9]*')"
+  revs="$(git rev-list "${tag}..HEAD" --count)"
+  printf '%s.r%s.g%s' "${tag#v}" "$revs" "$(git rev-parse --short=9 HEAD)"
+}
+
+prepare() {
+  cd "${_pkgname}"
+
+  # Zig package dependencies — PACKAGING.md's one networked step. Upstream
+  # pins every package by content hash in build.zig.zon; the cache lands in
+  # $srcdir and build() consumes it via --system (no fetch during compile,
+  # dynamic linking + PIE by default).
+  ZIG_GLOBAL_CACHE_DIR="$srcdir/zig-global-cache/" \
+    ./nix/build-support/fetch-zig-cache.sh
+}
+
+build() {
+  cd "${_pkgname}"
+
+  # Optimization layer:
+  #   * -Doptimize=ReleaseFast — upstream's own distribution mode
+  #     (PACKAGING.md: terminals are performance-sensitive; ReleaseSafe is
+  #     "currently too slow").
+  #   * -Dcpu=native — the Zig twin of makepkg.conf's host-derived
+  #     -march=native. Deliberate and documented per the optimization
+  #     policy: this set is built for one machine. Arch's package uses
+  #     -Dcpu=baseline for distro portability; we do not need that.
+  #   * No GCC-style PGO and no mold: the payload is Zig (zig has no
+  #     -fprofile-generate pipeline and links with its own toolchain), so
+  #     lib/pgo.sh's instrumented families do not apply and there is no
+  #     profile payload for the shared gate to police.
+  #   * Docs stay OFF (-Demit-docs dropped, pandoc-cli never declared):
+  #     house recipes trim docs, and the host's pandoc-cli is dead anyway
+  #     (icu 78→79 soname swap, 2026-10-19 — same wall class as
+  #     ccache/rdma-core).
+  DESTDIR=build zig build --summary all \
+    --prefix /usr \
+    --system "$srcdir/zig-global-cache/p" \
+    -Doptimize=ReleaseFast \
+    -Dcpu=native \
+    -Dgtk-x11=true \
+    -Dpie=true \
+    -Dversion-string="${pkgver}-${pkgrel}" \
+    --build-id=sha1
+}
+
+package() {
+  cd "${_pkgname}"
+
+  # Upstream's install tree: binary, terminfo, shell integration, themes,
+  # and the (optional-use) nautilus extension — kept in the one package;
+  # split packages are a trim target in this set.
+  cp -a build/* "${pkgdir}/"
+  install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+}
