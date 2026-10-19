@@ -1909,18 +1909,15 @@ going stale.
 
 ### Queued (claim by editing this section)
 
-- **xorg-xwayland-git's PGO phase silently ships a profile-less build**
-  (2026-10-19, GCC probe): `build()` instruments with a bare
-  `-fprofile-generate` (counters land beside the objects) but recompiles with
-  `-fprofile-use=$(pwd)/build`, which looks up
-  `<dir>/<mangled-source-path>.gcda` and never finds them —
-  `-Wno-error=missing-profile` downgrades the miss, so the "profile-used"
-  build is cold and the gcda floor only ever measures generation. One-line
-  fix (MEMORY §4's symmetry rule): make both sides
-  `-fprofile-generate=<dir>` / `-fprofile-use=<dir>` naming the SAME
-  directory (jq's spelling), or use bare spelling on both sides. Change is
-  behavioural (the recipe would start shipping a genuinely profile-used
-  build) — needs an owner go-ahead + a rebuild. Details: NOTE.md 2026-10-19.
+- **xorg-xwayland-git's PGO fix landed 2026-10-19; the end-to-end proof is
+  still owed** — the bare-generate/use-dir spelling (which silently built
+  profile-less binaries) is replaced by jq's symmetric
+  `-fprofile-generate=<dir>`/`-fprofile-use=<dir>` over
+  `$srcdir/pgo-profiles`, with `-flto*` stripped from the instrument phase.
+  Mechanism red/green-proven by the GCC probe (NOTE.md 2026-10-19); what
+  remains is one real rebuild confirming phase 3 consumes the profiles
+  (the `pgo_min_gcda` floor already reports the count) — queued behind the
+  running marathon (no-two-heavy-builds rule).
 
 - **`--skip`'s version-keyed local claim churns fast-VCS recipes every run**
   (2026-10-18, the llvm-git perpetual-rebuild wall): `gsa-recipe::freshness`

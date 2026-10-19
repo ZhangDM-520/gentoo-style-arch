@@ -79,12 +79,45 @@ build() {
   local _final_cxxflags="$CXXFLAGS"
   local _final_ldflags="$LDFLAGS"
 
-  # Phase 1: PGO instrumented build
+  # Phase 1: PGO instrumented build.
   # pgo_min_gcda: ≈ minimum distinct TUs the training suite touches before a
   # profile is worth trusting; below it the profile is too thin and we fall
   # back to an LTO-only build.
   local pgo_min_gcda=50
-  CFLAGS+=" -fprofile-generate" CXXFLAGS+=" -fprofile-generate"
+  # The profile work dir lives outside the build dir (mesa precedent), and
+  # -fprofile-generate=<dir> must stay SYMMETRIC with phase 3's
+  # -fprofile-use=<dir>: profiles are looked up as
+  # <dir>/<mangled-object-path>.gcda, so the pre-2026-10-19 spelling (bare
+  # generate + use=<dir>) missed every profile and silently compiled a
+  # profile-less build — -Wno-error=missing-profile downgraded the miss to
+  # nothing visible (GCC probe + recipe fix: docs/NOTE.md 2026-10-19; jq's
+  # C-autotools block is the template). Phase 1 also strips -flto:
+  # generate-mode bookkeeping and LTO whole-program codegen interact badly
+  # and meson's -Db_lto=false cannot remove what the env flags still carry.
+  local _pgo_dir="$PWD/pgo-profiles"
+  mkdir -p "$_pgo_dir"
+  local _gen_cflags="" _gen_cxxflags="" _gen_ldflags="" _flag
+  for _flag in $_final_cflags; do
+    case "$_flag" in
+      -flto*) ;;
+      *) _gen_cflags+=" $_flag" ;;
+    esac
+  done
+  for _flag in $_final_cxxflags; do
+    case "$_flag" in
+      -flto*) ;;
+      *) _gen_cxxflags+=" $_flag" ;;
+    esac
+  done
+  for _flag in $_final_ldflags; do
+    case "$_flag" in
+      -flto*) ;;
+      *) _gen_ldflags+=" $_flag" ;;
+    esac
+  done
+  export CFLAGS="${_gen_cflags# } -fprofile-generate=$_pgo_dir"
+  export CXXFLAGS="${_gen_cxxflags# } -fprofile-generate=$_pgo_dir"
+  export LDFLAGS="${_gen_ldflags# } -fprofile-generate=$_pgo_dir"
   arch-meson xserver build "${meson_options[@]}" -Db_lto=false
   meson compile -C build
 
@@ -93,7 +126,7 @@ build() {
 
   # Phase 3: verify profile quality
   local _gcda_count
-  _gcda_count="$(find build -name '*.gcda' 2>/dev/null | wc -l)"
+  _gcda_count="$(find "$_pgo_dir" -name '*.gcda' 2>/dev/null | wc -l)"
   if ((_gcda_count < pgo_min_gcda)); then
     warning "PGO produced only %d gcda files — rebuilding with LTO only" "$_gcda_count"
     CFLAGS="$_final_cflags"
@@ -108,8 +141,8 @@ build() {
     meson compile -C build
   else
     msg "PGO profile: %d gcda files — rebuilding with profile" "$_gcda_count"
-    export CFLAGS="$_final_cflags -fprofile-use=$(pwd)/build -Wno-error=missing-profile"
-    export CXXFLAGS="$_final_cxxflags -fprofile-use=$(pwd)/build -Wno-error=missing-profile"
+    export CFLAGS="$_final_cflags -fprofile-use=$_pgo_dir -Wno-error=missing-profile"
+    export CXXFLAGS="$_final_cxxflags -fprofile-use=$_pgo_dir -Wno-error=missing-profile"
     export LDFLAGS="$_final_ldflags"
     meson setup --reconfigure xserver build \
       -Dc_args="$CFLAGS" \

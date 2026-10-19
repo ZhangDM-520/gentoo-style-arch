@@ -1,3 +1,34 @@
+## 2026-10-19 — xorg-xwayland-git's PGO spelling fix: symmetric `<dir>` on both phases, and LTO out of the instrument phase
+
+**Symptom (pre-fix, probe-measured).** The recipe's phase 1 instrumented with
+a bare `-fprofile-generate` (counters land beside the objects as
+`obj/t.gcda`) while phase 3 recompiled with `-fprofile-use=$(pwd)/build`
+(which looks up `<dir>/<mangled-source-path>.gcda`). The pair never met:
+`-Werror=missing-profile` fired in both tested `<dir>` shapes, so the
+recipe's `-Wno-error=missing-profile` silently downgraded the miss and every
+"profile-used" build was cold — the gcda floor only ever measured
+generation, never consumption.
+
+**Fix (owner go-ahead 2026-10-19).** jq's C-autotools idiom transplanted:
+the profile work dir is now `$srcdir/pgo-profiles` (outside the build dir —
+mesa precedent), phase 1 strips `-flto*` from CFLAGS/CXXFLAGS/LDFLAGS
+(generate-mode bookkeeping vs LTO whole-program codegen; `-Db_lto=false`
+alone cannot remove what the env flags still carry) and instruments with
+`-fprofile-generate=$_pgo_dir`, phase 3 uses `-fprofile-use=$_pgo_dir` —
+symmetric by construction — and the floor now counts `$_pgo_dir`. Everything
+else (reconfigure mechanics, `b_lto` flips, tolerance flags, fallback shape)
+is untouched.
+
+**Validation.** Red-first GCC probe on this host (2026-10-19): bare
+generate + use=`<dir>` → `profile count data file not found` in both dir
+shapes (the old behavior reproduced); symmetric generate/use with matching
+object names compiles clean under `-Werror=missing-profile` (the fix's
+mechanism). Recipe-level: `bash -n`, `.SRCINFO` byte-unchanged (build() is
+not captured there — proven by diff), `pgo-lib.sh` and the recipe battery
+green. The end-to-end proof — a real rebuild whose phase 3 consumes the
+profiles — is queued behind the running marathon (no-two-heavy-builds rule)
+and recorded in MEMORY §5.
+
 ## 2026-10-19 — volume_key's source host rotted: releases.pagure.org serves the pagure app now, not its release archive
 
 **Symptom.** resume10: `volume_key` build-failed in 3 s —
