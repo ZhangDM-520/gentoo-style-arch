@@ -1,6 +1,6 @@
 pkgbase = curl
 	pkgdesc = command line tool and library for transferring data with URLs
-	pkgver = 8.22.0
+	pkgver = 8.23.0
 	pkgrel = 1
 	url = https://curl.se/
 	arch = x86_64
@@ -20,13 +20,11 @@ pkgbase = curl
 	makedepends = nettle
 	makedepends = zlib
 	makedepends = zstd
-	source = https://curl.se/download/curl-8.22.0.tar.xz
-	source = https://curl.se/download/curl-8.22.0.tar.xz.asc
-	source = test1399-backport.patch
+	source = https://curl.se/download/curl-8.23.0.tar.xz
+	source = https://curl.se/download/curl-8.23.0.tar.xz.asc
 	validpgpkeys = 27EDEAF22F3ABCEB50DB9A125CC908FDB71E12C2
-	sha256sums = f7ef3ae8a22e521f289803fe93543eb64c329b58aa73a9e224dfd915a2a5f4f7
+	sha256sums = 8dadd7d2536a314f982ad05a651b713f426bf7d02cc2c76cffb9796f2218e6c5
 	sha256sums = SKIP
-	sha256sums = 86c292b0d67851343e1bb540e9d388f7bb2e0ebd7745029d41e89a0f3dfd7a7c
 
 pkgname = curl
 	depends = ca-certificates

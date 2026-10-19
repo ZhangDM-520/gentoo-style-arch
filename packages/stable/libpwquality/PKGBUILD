@@ -3,7 +3,7 @@
 
 pkgname=libpwquality
 pkgver=1.4.5
-pkgrel=7
+pkgrel=7.3
 pkgdesc='Library for password quality checking and generating random passwords'
 arch=(x86_64)
 url='https://github.com/libpwquality/libpwquality'
@@ -35,6 +35,11 @@ prepare() {
 
 build() {
   cd $pkgname
+  # Perl 5.42 relocated pod2man to /usr/bin/core_perl, which interactive
+  # shells get via /etc/profile.d/perlbin.sh but the makepkg context (sudo
+  # secure_path) does not — the man-page rule dies "command not found"
+  # (same root cause as the git-git/openssl incidents, 2026-09-07).
+  export PATH="/usr/bin/core_perl:$PATH"
   ./configure \
     --prefix=/usr \
     --sysconfdir=/etc \

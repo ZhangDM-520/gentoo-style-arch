@@ -2,7 +2,7 @@
 
 pkgname=pacutils
 pkgver=0.15.0
-pkgrel=2
+pkgrel=3
 pkgdesc='Helper tools for libalpm'
 url='https://github.com/andrewgregory/pacutils'
 arch=('x86_64')
@@ -46,6 +46,11 @@ build() {
 
 package() {
   cd pacutils
+  # pod2man is what `make install` runs to generate the man pages, and
+  # since Perl 5.42 it lives in /usr/bin/core_perl — on PATH for login
+  # shells only, not the makepkg context (sudo secure_path); same root
+  # cause as the git-git/openssl incidents, 2026-09-07.
+  export PATH="/usr/bin/core_perl:$PATH"
   make DESTDIR="$pkgdir" PREFIX=/usr install
   install -Dm644 COPYING "$pkgdir"/usr/share/licenses/"$pkgname"/COPYING
 }

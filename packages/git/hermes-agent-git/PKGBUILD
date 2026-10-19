@@ -11,7 +11,10 @@ provides=("hermes-agent=$pkgver")
 conflicts=('hermes-agent')
 source=(
   'hermes-agent::git+https://github.com/NousResearch/hermes-agent.git#branch=main'
-  '0001-unattended-memory-audit.patch'
+  # 0001-unattended-memory-audit.patch RETIRED (2026-10-19): upstream main
+  # (3752497cc4d) shipped _background_delete_gate (#105921) — unattended
+  # patch/remove are staged for user approval instead of applied, which
+  # supersedes the house apply-and-audit model (owner decision: drop).
   '0002-pacman-update-policy.patch'
   '0003-cron-show.patch'
   '0004-interrupted-turn-recovery-marker.patch'
@@ -19,7 +22,6 @@ source=(
 )
 sha256sums=(
   'SKIP'
-  '3743f82ca1e3632fc7325bf7fc145629f042ae8a469af5571545d3d2b9aa9181'
   'e7016989aa7cffb134cabb8621dc487c0fcd7b918678e1490cde71da7263df7c'
   'af96bd05e2236e95a2a70cdf6a225abd60a83cd8547c1aa45769b9f0da3fa10a'
   '9bddb73ed18c709fd49dd93632dd9f43477a3136954e934c0f04b1ac0f206015'
@@ -41,7 +43,6 @@ prepare() {
   # "already exists in working directory" on every rebuild. Clean them first.
   GIT_CONFIG_COUNT=0 git clean -fdq
   for patch in \
-    "$srcdir/0001-unattended-memory-audit.patch" \
     "$srcdir/0002-pacman-update-policy.patch" \
     "$srcdir/0003-cron-show.patch" \
     "$srcdir/0004-interrupted-turn-recovery-marker.patch" \

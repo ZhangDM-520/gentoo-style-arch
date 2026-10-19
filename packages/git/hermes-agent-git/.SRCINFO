@@ -13,13 +13,11 @@ pkgbase = hermes-agent-git
 	provides = hermes-agent=2026.10.02.183545.gc9ea214
 	conflicts = hermes-agent
 	source = hermes-agent::git+https://github.com/NousResearch/hermes-agent.git#branch=main
-	source = 0001-unattended-memory-audit.patch
 	source = 0002-pacman-update-policy.patch
 	source = 0003-cron-show.patch
 	source = 0004-interrupted-turn-recovery-marker.patch
 	source = 0005-notify-union-coercion.patch
 	sha256sums = SKIP
-	sha256sums = 3743f82ca1e3632fc7325bf7fc145629f042ae8a469af5571545d3d2b9aa9181
 	sha256sums = e7016989aa7cffb134cabb8621dc487c0fcd7b918678e1490cde71da7263df7c
 	sha256sums = af96bd05e2236e95a2a70cdf6a225abd60a83cd8547c1aa45769b9f0da3fa10a
 	sha256sums = 9bddb73ed18c709fd49dd93632dd9f43477a3136954e934c0f04b1ac0f206015

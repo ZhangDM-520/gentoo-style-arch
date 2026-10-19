@@ -6,7 +6,7 @@
 
 pkgbase=curl
 pkgname=(curl libcurl-compat libcurl-gnutls)
-pkgver=8.22.0
+pkgver=8.23.0
 pkgrel=1
 pkgdesc='command line tool and library for transferring data with URLs'
 arch=('x86_64')
@@ -32,19 +32,13 @@ makedepends=(
 checkdepends=('valgrind')
 validpgpkeys=('27EDEAF22F3ABCEB50DB9A125CC908FDB71E12C2') # Daniel Stenberg
 # Release tarball (Arch pins the git tag instead), detached-signed upstream.
-source=("https://curl.se/download/curl-${pkgver}.tar.xz"{,.asc}
-        'test1399-backport.patch')
-sha256sums=('f7ef3ae8a22e521f289803fe93543eb64c329b58aa73a9e224dfd915a2a5f4f7'
-            'SKIP'
-            '86c292b0d67851343e1bb540e9d388f7bb2e0ebd7745029d41e89a0f3dfd7a7c')
-
-prepare() {
-  cd "$pkgbase-$pkgver"
-
-  # test1399: improve reliability — upstream commit fe67952d backported by
-  # Arch as a cherry-pick on the git tag; the release tarball predates it.
-  patch -Np1 -i "$srcdir/test1399-backport.patch"
-}
+# test1399-backport.patch RETIRED (2026-10-19): the 8.23.0 tarball's own
+# rewritten test is already clock-decoupled (fixed timestamps via
+# Curl_pgrsTimeWas — the backport's goal), so the cherry-pick stopped
+# applying and there is nothing left to carry.
+source=("https://curl.se/download/curl-${pkgver}.tar.xz"{,.asc})
+sha256sums=('8dadd7d2536a314f982ad05a651b713f426bf7d02cc2c76cffb9796f2218e6c5'
+            'SKIP')
 
 build() {
   # House style: mold linker when available
