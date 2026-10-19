@@ -1,3 +1,42 @@
+## 2026-10-19 — own the pandoc/icu class: pandoc-cli joins the set with a static Haskell closure
+
+**The class, not the instance.** The ghostty wall (pandoc wanting
+`libicuuc.so.78`) is one symptom of a standing hazard: our `icu-git`
+moves fast and every stock consumer pinning the old soname breaks until
+Arch rebuilds it. Measured scan of every ELF on the system carrying
+`DT_NEEDED libicuuc.so.78`: `/usr/bin/pandoc` (pandoc-cli 3.11-42) plus
+**five** Haskell shared libs — `libHSpandoc`, `libHSpandoc-lua-engine`,
+`libHSpandoc-server`, `libHSciteproc`, `libHStext-icu`. Arch's
+`--enable-shared --enable-executable-dynamic` model bakes the C closure
+into *every* Haskell unit, so "just rebuild the one lib" is not a fix —
+the closure as a whole owns the rebuild.
+
+**Why one recipe, not six.** The alternative — Arch-style `haskell-*`
+recipes for text-icu/citeproc/pandoc/… — means six packages of uusi/Setup
+ceremony whose hashed unit-id filenames silently overwrite each other and
+which re-break as one on the next icu bump. Instead `packages/core/pandoc-cli`
+builds the CLI from Hackage with cabal's **static Haskell closure** (the
+cargo/go/zig/npm precedent: toolchain-managed dependency tree, one
+recipe): the shipped binary links only C libs — `icu`, `zlib`, `gmp`,
+`libffi`, `gcc-libs`, `glibc` — and the next icu bump is repaired by
+rebuilding exactly this one recipe.
+
+**Wiring.** `pandoc-cli|packages/core/pandoc-cli|core|glibc-git,icu-git,zlib-ng-compat-git`
+— the `icu-git` edge is the whole point: the engine orders a pandoc-cli
+rebuild after every icu-git build. `provides=("pandoc=${pkgver}")`
+(versioned mapped name, the provides ratchet) so `makedepends=('pandoc')`
+resolves to ours. Build is hermetic (`CABAL_DIR` in `$srcdir`, one
+`cabal update`, `--index-state` pins the solve), parity features with Arch
+(`+lua +server -nightly`), docs/man trimmed per house policy. Edges
+rationale: `icu-git` — text-icu FFI; `zlib-ng-compat-git` — zlib-hs/digest
+FFI; `glibc-git` — libc.
+
+**Durable rule.** When our fast-moving library set breaks a stock tool,
+decide ownership at the *class* level: scan the stale surface
+(`readelf -d` over the candidate ELFs), and if the closure re-breaks as a
+unit, own it as ONE recipe with a static-closure build and an edge to the
+library that moves — never N recipes of shared-lib archaeology.
+
 ## 2026-10-19 — ghostty-git's third build wall: `--system` defaults docs ON, and who owns the pandoc/icu skew
 
 **Symptom.** Next build reached `install generated to

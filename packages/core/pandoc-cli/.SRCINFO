@@ -1,0 +1,21 @@
+pkgbase = pandoc-cli
+	pkgdesc = Conversion between documentation formats
+	pkgver = 3.11
+	pkgrel = 1
+	url = https://pandoc.org
+	arch = x86_64
+	license = GPL-2.0-or-later
+	makedepends = cabal-install
+	makedepends = ghc
+	makedepends = pkgconf
+	depends = gcc-libs
+	depends = glibc
+	depends = gmp
+	depends = icu
+	depends = libffi
+	depends = zlib
+	provides = pandoc=3.11
+	source = https://hackage.haskell.org/packages/archive/pandoc-cli/3.11/pandoc-cli-3.11.tar.gz
+	sha256sums = a9f3fc8c64962c8778b379cc2238c7c554541e1e94fd36a210c3f92e1729e929
+
+pkgname = pandoc-cli

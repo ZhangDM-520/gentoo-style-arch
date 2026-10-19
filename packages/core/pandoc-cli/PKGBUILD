@@ -1,0 +1,80 @@
+# Maintainer: Gentoo_Style_Arch contributors
+#
+# Owned in-house because pandoc FFI-links ICU (text-icu → citeproc →
+# pandoc): every icu soname bump breaks a stock pandoc until the whole
+# Haskell closure is rebuilt. Measured 2026-10-19 after the icu 78→79
+# move: /usr/bin/pandoc AND five shared libs (libHSpandoc, -lua-engine,
+# -server, libHSciteproc, libHStext-icu) all carried their own
+# DT_NEEDED libicuuc.so.78 — Arch's --enable-shared model bakes the C
+# closure into every unit, so patching one .so fixes nothing. This recipe
+# instead builds the CLI with cabal's STATIC Haskell closure: the shipped
+# binary links only C libs (our icu among them), and the next icu bump is
+# repaired by rebuilding exactly this recipe — the topology edge to
+# icu-git makes the engine order that for us.
+
+pkgname=pandoc-cli
+pkgver=3.11
+pkgrel=1
+pkgdesc='Conversion between documentation formats'
+arch=('x86_64')
+url='https://pandoc.org'
+license=('GPL-2.0-or-later')
+depends=(
+  'gcc-libs'   # libgcc_s for the GHC RTS's unwinder
+  'glibc'
+  'gmp'        # GHC's integer-gmp links libgmp dynamically
+  'icu'        # text-icu FFI — the reason this recipe exists (icu-git provides)
+  'libffi'     # GHC RTS (Arch's ghc is built against libffi)
+  'zlib'       # zlib-hs / digest FFI
+)
+makedepends=(
+  'cabal-install'
+  'ghc'
+  'pkgconf'    # text-icu's Setup locates ICU via pkg-config
+)
+# Versioned mapped-name provide (the provides ratchet): consumers ask for
+# the 'pandoc' virtual, never the concrete CLI name.
+provides=("pandoc=${pkgver}")
+source=("https://hackage.haskell.org/packages/archive/${pkgname}/${pkgver}/${pkgname}-${pkgver}.tar.gz")
+sha256sums=('a9f3fc8c64962c8778b379cc2238c7c554541e1e94fd36a210c3f92e1729e929')
+
+prepare() {
+  cd "${pkgname}-${pkgver}"
+
+  # Hermetic Hackage store inside $srcdir (the zig/go precedent): cabal
+  # update is the one networked step; the build itself is offline.
+  export CABAL_DIR="$srcdir/cabal"
+  cabal update
+}
+
+build() {
+  cd "${pkgname}-${pkgver}"
+  export CABAL_DIR="$srcdir/cabal"
+
+  # Optimization layer: cabal's default -O build (parity with Arch's
+  # Setup -O). No GCC-style PGO and no hand-tuned -march: the payload is
+  # GHC codegen, outside lib/pgo.sh's instrumented families and outside
+  # CFLAGS' reach — same rationale as ghostty-git. mold reaches the final
+  # link through GHC's -optl passthrough (house command -v guard).
+  local _ghc_opts=(-pie '-optl-Wl,-z,relro,-z,now')
+  command -v mold >/dev/null 2>&1 && _ghc_opts+=(-optl-fuse-ld=mold)
+
+  # Feature parity with Arch's pandoc-cli: lua + server on, nightly off.
+  # --index-state pins the Hackage solve so the dependency closure cannot
+  # drift under a rebuild (the sha256 anchor covers the CLI tarball only).
+  cabal build exe:pandoc \
+    --index-state='2026-10-19T00:00:00Z' \
+    --flags='+lua +server -nightly' \
+    --jobs="${GSA_BUILD_JOBS:-$(nproc)}" \
+    --ghc-options="${_ghc_opts[*]}"
+}
+
+package() {
+  cd "${pkgname}-${pkgver}"
+
+  # Docs/man/bash-completion are trimmed per house policy (the upstream
+  # tarball ships man/pandoc.1; the CLI's own --help is the interface).
+  install -Dm755 "$(CABAL_DIR="$srcdir/cabal" cabal list-bin exe:pandoc)" \
+    "${pkgdir}/usr/bin/pandoc"
+  install -Dm644 COPYING.md "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+}
