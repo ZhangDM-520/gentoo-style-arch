@@ -1,3 +1,26 @@
+## 2026-10-19 — ghostty-git's second build wall: `-Dversion-string` must be SemVer
+
+**Symptom.** With the store fixed, build() died inside `Config.init`:
+`error: InvalidVersion` from `std.SemanticVersion.parse`.
+
+**Root cause.** ghostty's `-Dversion-string` is documented as "This must be
+a semantic version" and Config.zig enforces it. The recipe passed
+`${pkgver}-${pkgrel}` verbatim — makepkg's `1.3.1.r3071.gHASH` has a fourth
+dot-component, which SemVer rejects (the parse splits major.minor.patch and
+errors on any further `it.next()`).
+
+**Fix.** build() hyphenates after the patch level before passing the
+string: `1.3.1.r3071.gHASH-1` → `1.3.1-r3071.gHASH-1` — one valid
+pre-release identifier sequence. pkgver itself stays makepkg-conventional.
+Red/green measured against the real build graph (`zig build --help` runs
+Config.init): the old spelling reproduces `InvalidVersion`, the new one
+prints the step list.
+
+**Durable rule.** A recipe's version string and a tool's version *grammar*
+are different vocabularies — makepkg pkgver rules (dots, `rN`, `gHASH`) do
+not survive a SemVer gate. Translate at the boundary and pin the measured
+form in a comment; never "fix" pkgver to appease a consumer.
+
 ## 2026-10-19 — ghostty-git's first build wall: zig 0.16 packs its fetch store, `--system` wants it unpacked
 
 **Symptom.** `makepkg` on the new recipe reached build() and died in the

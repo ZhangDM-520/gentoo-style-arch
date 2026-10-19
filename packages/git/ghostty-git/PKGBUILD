@@ -103,6 +103,13 @@ build() {
   #     house recipes trim docs, and the host's pandoc-cli is dead anyway
   #     (icu 78→79 soname swap, 2026-10-19 — same wall class as
   #     ccache/rdma-core).
+  # -Dversion-string must be a SEMVER: Config.zig runs it through
+  # std.SemanticVersion.parse ("This must be a semantic version" — measured
+  # error.InvalidVersion on pkgver's dots, 2026-10-19). pkgver stays
+  # makepkg-conventional; the string hyphenates after the patch level:
+  # 1.3.1.r3071.gHASH-1 → 1.3.1-r3071.gHASH-1 (one valid pre-release).
+  local _version_string
+  _version_string="$(sed -E 's/^([0-9]+\.[0-9]+\.[0-9]+)\./\1-/' <<<"${pkgver}-${pkgrel}")"
   DESTDIR=build zig build --summary all \
     --prefix /usr \
     --system "$srcdir/zig-global-cache/p" \
@@ -110,7 +117,7 @@ build() {
     -Dcpu=native \
     -Dgtk-x11=true \
     -Dpie=true \
-    -Dversion-string="${pkgver}-${pkgrel}" \
+    -Dversion-string="${_version_string}" \
     --build-id=sha1
 }
 
