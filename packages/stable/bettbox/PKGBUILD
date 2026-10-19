@@ -29,7 +29,11 @@ sha256sums=('cbe3a49533ab4efbe7f5bfa18fc8b35306c1d62e0c219cc10120a01acbbe4578'
             '76927a42925c94ce708e027b2e0eca2efe592f27f46b8d0aabbc885d451b61cb')
 prepare() {
 	cd "${_pkgname}-${_pkgver}"
-	fvm use 3.44.8
+	# Flutter 3.47.7 (2026-10-19): upstream's own CI (build.yaml) pins this
+	# exact release — the old 3.44.8 pin bundles Dart 3.12.2, which cannot
+	# satisfy the tag's freezed ^4.0.2 (needs Dart >=3.13) and pub get died
+	# in version solving. Bump together with upstream's pin.
+	fvm use 3.47.7
 	fvm flutter --disable-analytics
 	fvm flutter --no-version-check pub get
 }

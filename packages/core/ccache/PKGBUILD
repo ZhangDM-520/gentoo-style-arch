@@ -21,7 +21,10 @@ depends=(
   'zstd' 'libzstd.so'
 )
 makedepends=(
-  'asciidoctor'
+  # trim 2026-10-19: the whole doc/ directory (pandoc markdown/html +
+  # asciidoctor man page) is disabled via -DENABLE_DOCUMENTATION=OFF —
+  # house docs trim, and it also decouples the build from the host's
+  # Haskell pandoc (broken by the icu 78→79 soname swap).
   'cmake'
   'git'
   'perl'
@@ -37,6 +40,7 @@ build() {
   cmake -B build -S $pkgname \
     -DCMAKE_INSTALL_PREFIX=/usr \
     -DCMAKE_BUILD_TYPE=None \
+    -DENABLE_DOCUMENTATION=OFF \
     -Wno-dev
   cmake --build build
 }

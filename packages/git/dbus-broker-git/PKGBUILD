@@ -69,6 +69,15 @@ pkgver() {
 prepare() {
   cd "$pkgbase"
 
+  # bindgen compat (2026-10-19): bindgen 0.73.2's translation of C's
+  # `const acct_value_t (*maxima)[N]` params drops the const (emits
+  # `*mut [..]`), so the type_eq! ABI assertions in src/lib-static.rs fail
+  # against the generated bindings (acct_new / acct_user_charge /
+  # acct_actor_charge). Match the generated spelling so the assertions
+  # guard the real ABI surface again — they will fail loudly and visibly
+  # if bindgen's translation ever flips back.
+  sed -i 's/: \*const \[util_acct::acct_value_t/: *mut [util_acct::acct_value_t/' src/lib-static.rs
+
   local sp
   for sp in {dvar-1,ini-1,list-3,rbtree-3,shquote-1,stdaux-1,utf8-1}; do
     ln -fs "$(realpath --relative-to "subprojects" "$srcdir/c-$sp")" "subprojects/libc$sp"

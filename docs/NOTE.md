@@ -1,3 +1,53 @@
+## 2026-10-19 — resume10's nine walls: pod2man grows two, host pandoc dies on the icu swap, a stale Flutter pin, bindgen's dropped const, and two patch rebases
+
+**Tally.** resume10: 239 lanes succeeded, `build-failed` ×9 (bettbox,
+ccache, dbus-broker-git, hermes-agent-git, libosinfo, pkgfile, rdma-core,
+texlive-texmf, volume_key), rc 4 cone-stop; continuation 136 targets.
+
+**libosinfo + pkgfile (pod2man, 4th strike).** This time the miss surfaces
+through meson's `find_program('pod2man')` at configure time. Same
+`/usr/bin/core_perl` PATH idiom added at `build()` entry.
+
+**ccache + rdma-core (the host's pandoc is dead).** `pandoc-cli` (Arch
+extra, Haskell) links `libicuuc.so.78`; our `icu-git` moved the soname to
+.79 mid-marathon, so the external Haskell stack cannot load — a rebuild is
+out of scope (ghc-libs chain) and reinstalling repo icu 78 would break our
+own icu-79 consumers. Both recipes now declare the feature OFF at the
+build system (`-DENABLE_DOCUMENTATION=OFF`, `-DNO_MAN_PAGES=1`); rdma-core
+had already trimmed the man pages in `package()` but still let CMake
+GENERATE them whenever a pandoc is merely present — the explicit switch
+also covers the run #86 prebuilt-man-path wall. ccache's asciidoctor
+makedepend dropped with its doc directory.
+
+**bettbox (stale toolchain pin).** `fvm use 3.44.8` bundles Dart 3.12.2;
+the tag's `freezed: ^4.0.2` needs Dart ≥3.13 → `pub get` died in version
+solving. Upstream's own CI (`.github/workflows/build.yaml`) pins Flutter
+**3.47.7** (Dart 3.13.5) — the recipe now copies that exact pin.
+
+**dbus-broker-git (bindgen's const drop).** bindgen 0.73.2 (our
+rust-bindgen-git) translates C's `const acct_value_t (*p)[N]` to
+`*mut [..]` — probe-measured, flag-independent — so the `type_eq!` ABI
+assertions in `src/lib-static.rs` fail (acct_new / acct_user_charge /
+acct_actor_charge). The recipe's prepare() now matches the generated
+spelling (`*const`→`*mut` on the three params): the assertions keep
+guarding the real ABI surface and fail loudly if bindgen's translation
+flips back.
+
+**hermes-agent-git (patch series drift).** 0002 and 0005 drifted against
+tip `20acba03769`; both re-based via `git apply --3way` (0002's
+test_web_server.py merged cleanly; 0005's arg_coercion.py likewise),
+0003/0004 untouched, sums re-anchored. Round-trip proven: the refreshed
+series applies to a clean tip in order.
+
+**texlive-texmf (SVN husk).** `tlpkg`'s checkout was a husk (fetch
+interrupted; `texlive.tlpdb` absent) — removed per the recipe's own
+remediation so the next run re-fetches; retry-class.
+
+**Validation.** `bash -n` + `.SRCINFO` for all touched recipes; recipe
+battery 8/8. Durable rule: a host tool that is merely PRESENT but
+ABI-broken must not gate a build — declare the feature off at the build
+system rather than relying on the tool's absence.
+
 ## 2026-10-19 — xorg-xwayland-git's PGO spelling fix: symmetric `<dir>` on both phases, and LTO out of the instrument phase
 
 **Symptom (pre-fix, probe-measured).** The recipe's phase 1 instrumented with

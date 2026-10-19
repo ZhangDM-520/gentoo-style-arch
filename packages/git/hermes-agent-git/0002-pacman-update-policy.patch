@@ -1,10 +1,10 @@
 # Rationale: Mark pacman-owned trees so every update surface refuses in-place mutation, reports pacman remediation, and exposes the packaged version without inventing a source SHA.
 
 diff --git a/hermes_cli/config.py b/hermes_cli/config.py
-index 4b839755a9c..1e650c498eb 100644
+index 9a13eb83322..ad8a3c6a34e 100644
 --- a/hermes_cli/config.py
 +++ b/hermes_cli/config.py
-@@ -253,7 +253,9 @@ def get_managed_update_command() -> Optional[str]:
+@@ -248,7 +248,9 @@ def get_managed_update_command() -> Optional[str]:
  # "apt" is the Termux APT distribution identifier, not a generic Debian/Ubuntu signal; another
  # APT distribution needs its own method. "home-manager" is listed because the managed marker can
  # return it and a stamp must name every method this function returns.
@@ -15,7 +15,7 @@ index 4b839755a9c..1e650c498eb 100644
  
  
  def _install_method_stamp(path: Path) -> Optional[str]:
-@@ -265,7 +267,7 @@ def _install_method_stamp(path: Path) -> Optional[str]:
+@@ -260,7 +262,7 @@ def _install_method_stamp(path: Path) -> Optional[str]:
  
  
  def detect_install_method(project_root: Optional[Path] = None) -> str:
@@ -24,7 +24,7 @@ index 4b839755a9c..1e650c498eb 100644
      Order: code-scoped ``<install tree>/.install_method`` stamp (authoritative) -> legacy
      ``$HERMES_HOME/.install_method`` -> managed marker -> /nix/store path -> .git dir -> unknown.
      The stamp lives next to the code because HERMES_HOME is shared data: a container and a host
-@@ -331,6 +333,7 @@ def is_nix_install_method(method: str) -> bool:
+@@ -326,6 +328,7 @@ def is_nix_install_method(method: str) -> bool:
  _UPDATE_COMMAND_BY_METHOD = {
      "docker": "docker pull nousresearch/hermes-agent:latest",
      "apt": "pkg upgrade hermes-agent",  # "apt" == Termux APT by contract; uses Termux's `pkg`.
@@ -33,7 +33,7 @@ index 4b839755a9c..1e650c498eb 100644
  
  
 diff --git a/hermes_cli/steward.py b/hermes_cli/steward.py
-index 5db757f0e23..6724f32885b 100644
+index 135091e1770..502d544b832 100644
 --- a/hermes_cli/steward.py
 +++ b/hermes_cli/steward.py
 @@ -30,6 +30,7 @@ STEWARD_DESKTOP = "desktop-app"
@@ -121,7 +121,7 @@ index 18c64ade20f..a7fc7b0bebe 100644
          logger.debug("Install-method admission check failed: %s", exc)
      return None
 diff --git a/hermes_cli/update_inventory.py b/hermes_cli/update_inventory.py
-index fac8b12a26c..af297cc2b36 100644
+index 9046209cd2a..0820139c1f8 100644
 --- a/hermes_cli/update_inventory.py
 +++ b/hermes_cli/update_inventory.py
 @@ -36,7 +36,7 @@ class RuntimeRecord:
@@ -134,7 +134,7 @@ index fac8b12a26c..af297cc2b36 100644
      update_mechanism: str = "hermes update"
      expected_sha: Optional[str] = None    # current checkout HEAD (pre-pull)
 diff --git a/hermes_cli/version_info.py b/hermes_cli/version_info.py
-index fd0c38ffe8a..15c36531139 100644
+index a4b3b33b9fe..0f0e39182b3 100644
 --- a/hermes_cli/version_info.py
 +++ b/hermes_cli/version_info.py
 @@ -32,7 +32,7 @@ class VersionInfo:
@@ -146,7 +146,7 @@ index fd0c38ffe8a..15c36531139 100644
  
      @property
      def display_version(self) -> str:
-@@ -136,7 +136,7 @@ def _stamp_version_info() -> VersionInfo | None:
+@@ -137,7 +137,7 @@ def _stamp_version_info() -> VersionInfo | None:
      except (OSError, json.JSONDecodeError):
          return None
  
@@ -155,7 +155,7 @@ index fd0c38ffe8a..15c36531139 100644
          return None
  
      # updateMechanism is required in every stamp. A stamp without it means
-@@ -159,6 +159,17 @@ def _stamp_version_info() -> VersionInfo | None:
+@@ -160,6 +160,17 @@ def _stamp_version_info() -> VersionInfo | None:
  
      commit = data.get("commit") or None
      if not commit or set(commit) == {"0"}:
@@ -173,7 +173,7 @@ index fd0c38ffe8a..15c36531139 100644
          # All-zero placeholder = fallback stamp, not real provenance.
          return None
      stamp_source = str(data.get("source") or "")
-@@ -181,7 +192,7 @@ def _stamp_version_info() -> VersionInfo | None:
+@@ -182,7 +193,7 @@ def _stamp_version_info() -> VersionInfo | None:
          else "build"
      )
      distribution = data.get("distribution")
@@ -183,7 +183,7 @@ index fd0c38ffe8a..15c36531139 100644
  
      commit_date = data.get("commitDate")
 diff --git a/hermes_cli/web_routers/actions.py b/hermes_cli/web_routers/actions.py
-index 661379ac1cd..88142bf4c1a 100644
+index dcf345602f9..b8f26ebb328 100644
 --- a/hermes_cli/web_routers/actions.py
 +++ b/hermes_cli/web_routers/actions.py
 @@ -61,6 +61,7 @@ _MANAGED_EXTERNALLY_MESSAGE = "Hermes updates are managed outside this dashboard
@@ -244,7 +244,7 @@ index a136a7595b7..ef3ba652d92 100644
  
  # ---------- Non-Docker installs unaffected ----------
 diff --git a/tests/hermes_cli/test_dashboard_admin_endpoints.py b/tests/hermes_cli/test_dashboard_admin_endpoints.py
-index a201380ffac..61eef847d0c 100644
+index f239b985706..b256121dc86 100644
 --- a/tests/hermes_cli/test_dashboard_admin_endpoints.py
 +++ b/tests/hermes_cli/test_dashboard_admin_endpoints.py
 @@ -826,6 +826,20 @@ class TestUpdateCheckEndpoint:
@@ -402,10 +402,10 @@ index d798e40f759..a5e25e5b3ba 100644
          monkeypatch.setattr("gateway.status._pid_exists", lambda pid: False)
          plan = ui.collect_runtime_inventory()
 diff --git a/tests/hermes_cli/test_version_info.py b/tests/hermes_cli/test_version_info.py
-index c0dddeda20f..1258e210577 100644
+index da3f269a4d6..f70538dda4e 100644
 --- a/tests/hermes_cli/test_version_info.py
 +++ b/tests/hermes_cli/test_version_info.py
-@@ -78,6 +78,28 @@ def test_stamp_version_info_reads_nix_stamp(tmp_path, monkeypatch):
+@@ -82,6 +82,28 @@ def test_stamp_version_info_reads_nix_stamp(tmp_path, monkeypatch):
      assert info == VersionInfo("0.19.0", "0.19.0+3", 3, "a" * 40, "feature/version", "nix", distribution="nix")
  
  
@@ -435,10 +435,10 @@ index c0dddeda20f..1258e210577 100644
      stamp = {"commit": "d" * 40, "source": "ci", "distribution": "docker", "updateMechanism": "external"}
      stamp_file = tmp_path / "install-stamp.json"
 diff --git a/tests/hermes_cli/test_web_server.py b/tests/hermes_cli/test_web_server.py
-index 18523ab289a..73a1dc68abf 100644
+index ed942172b6e..a50b6d3b154 100644
 --- a/tests/hermes_cli/test_web_server.py
 +++ b/tests/hermes_cli/test_web_server.py
-@@ -1454,6 +1454,35 @@ CONFIG_SCHEMA = ProviderConfigSchema(
+@@ -1240,6 +1240,35 @@ CONFIG_SCHEMA = ProviderConfigSchema(
          assert check_data["can_apply"] is False
          assert check_data["update_command"] == data["update_command"]
  
@@ -472,5 +472,5 @@ index 18523ab289a..73a1dc68abf 100644
 +        assert check_data["update_command"] == data["update_command"]
 +
      def test_update_hermes_spawns_with_action_id(self, monkeypatch):
-         import hermes_cli.web_server as web_server
+         from hermes_cli import web_server
  

@@ -1,7 +1,7 @@
 pkgbase = pkgfile
 	pkgdesc = A tool to search for files in official repository packages
 	pkgver = 26
-	pkgrel = 1
+	pkgrel = 1.1
 	url = https://github.com/falconindy/pkgfile/
 	install = pkgfile.install
 	arch = x86_64

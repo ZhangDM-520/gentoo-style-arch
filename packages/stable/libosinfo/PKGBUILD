@@ -3,7 +3,7 @@
 
 pkgname=libosinfo
 pkgver=1.12.0
-pkgrel=3
+pkgrel=3.1
 pkgdesc='GObject based library API for managing information about operating systems, hypervisors and the (virtual) hardware devices they can support'
 arch=(x86_64)
 url='https://libosinfo.org/'
@@ -43,6 +43,11 @@ prepare() {
 }
 
 build() {
+  # pod2man lives in /usr/bin/core_perl since Perl 5.42 — on PATH for login
+  # shells only, not the makepkg context (sudo secure_path); meson's
+  # find_program in tools/meson.build dies without it (same root cause as
+  # the git-git/openssl/libpwquality incidents, 2026-09-07/2026-10-19).
+  export PATH="/usr/bin/core_perl:$PATH"
   # House style: mold linker when available
   local _mold=""
   command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"

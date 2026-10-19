@@ -3,7 +3,7 @@
 
 pkgname=pkgfile
 pkgver=26
-pkgrel=1
+pkgrel=1.1
 pkgdesc='A tool to search for files in official repository packages'
 arch=('x86_64')
 url='https://github.com/falconindy/pkgfile/'
@@ -29,6 +29,11 @@ sha256sums=('e09965c7a6abef75d7fb4e572eedae31aa87b171dbc7f47f7c162d796f17f879')
 validpgpkeys=('487EACC08557AD082088DABA1EB2638FF56C0C53') # Dave Reisner <d@falconindy.com>
 
 build() {
+    # pod2man lives in /usr/bin/core_perl since Perl 5.42 — on PATH for login
+    # shells only, not the makepkg context (sudo secure_path); meson's
+    # find_program in pkgfile/meson.build dies without it (same root cause
+    # as the git-git/openssl/libpwquality incidents, 2026-09-07/2026-10-19).
+    export PATH="/usr/bin/core_perl:$PATH"
     # House style: mold linker when available (runtime-guarded, no output effect).
     local _mold=""
     command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"

@@ -3,7 +3,7 @@
 
 pkgname=rdma-core
 pkgver=65.0
-pkgrel=1
+pkgrel=1.1
 pkgdesc="RDMA core userspace libraries and daemons"
 arch=(x86_64)
 url="https://github.com/linux-rdma/rdma-core"
@@ -113,6 +113,13 @@ build() {
         -DCMAKE_INSTALL_SYSCONFDIR=/etc
         -DCMAKE_INSTALL_MODPROBEDIR=/usr/lib/modprobe.d
         -DCMAKE_INSTALL_PERLDIR=/usr/share/perl5/vendor_perl
+        # Explicit switch, 2026-10-19: the man pages were already trimmed in
+        # package(), but CMake still tried to GENERATE them whenever a pandoc
+        # is merely present on the host — and the host's pandoc-cli is broken
+        # by the icu 78→79 soname swap (libicuuc.so.78 gone). NO_MAN_PAGES is
+        # upstream's sanctioned skip (it also keeps the install from
+        # recording prebuilt-man paths that never exist — the run #86 wall).
+        -DNO_MAN_PAGES=1
     )
     cmake "${cmake_options[@]}"
     cmake --build build
