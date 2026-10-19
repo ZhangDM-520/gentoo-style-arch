@@ -1,3 +1,80 @@
+## 2026-10-19 — PGO end-to-end: umbriel-git proves profile consumption, xorg-xwayland-git trains on nothing
+
+**umbriel-git (proof).** `PGO profile: 153 gcda files — rebuilding with
+profile`, with `-fprofile-use=<dir>` visible in meson's `c_args`/`cpp_args` —
+the symmetric generate/use-dir fix consumes profiles end to end (the
+coverage-mismatch warnings are a code-vs-profile drift cosmetic; GCC
+consumes the profile regardless).
+
+**xorg-xwayland-git (training was a no-op).** The same leaf run landed on
+the fail-safe: `PGO produced only 3 gcda files — rebuilding with LTO only`.
+The symmetric-dir fix works mechanically — profiles are found — but the
+`xserver:XTS` meson test SKIPS (`exit 77`, `XTEST_DIR must be set…`) and
+only the trivial `ensure-meson-tests` ran. Root cause chain: xserver's
+`test/scripts/xwayland-piglit.sh` gates on `XTEST_DIR`/`PIGLIT_DIR` and a
+headless weston; piglit's `xts-render` profile resolves the built XTS tree
+via `piglit.conf` `[xts] path=` in its **cwd** (measured in the installed
+piglit-git's `framework/core.py`), not via the env var the harness checks.
+
+**Fix.** The recipe now trains for real: `xts` (revamped X Test Suite,
+meson) added as a **pinned** git source (`#commit=6cf94400…` — it shapes
+codegen through the profile, so it moves deliberately), built into `$srcdir`
+during phase 2, and the installed `piglit-git` is shimmed (`./piglit`
+symlink + `piglit.conf`; the wrapper resolves its data dir via `realpath`).
+Makedepends grow the suite's real requirements: `piglit-git`, `weston`
+(headless compositor the harness hard-codes), the X client libs xts's meson
+probes (`libx11`…`libxaw`), `xorg-bdftopcf`/`xorg-mkfontdir` (hard
+`find_program` in xts's meson), `xorg-xdpyinfo`/`xorg-xset`
+(`xts5/bin/xts-config`). Training budget 120s→300s — the suite runs now.
+Measured in scratch first: xts builds clean (3694 ninja targets), and
+`piglit run -d xts-render` discovers the 23 xlib9 test groups through the
+shim. End-to-end proof lands with the next leaf rebuild.
+
+## 2026-10-19 — resume11's three new failure classes: the build drive ran out, pnpm 12 ignores the tree's pin, and a network blip
+
+**Tally.** resume11 (136 targets): 37 lanes ok, `build-failed` ×13,
+`build-killed-by-signal-10` ×12, rc 4 cone-stop. The nine resume10 walls all
+cleared (ccache, dbus-broker-git, bettbox, libosinfo, hermes-agent-git built;
+texlive-texmf re-walled below). xorg-xwayland-git and umbriel-git both built
+here — the PGO proof run.
+
+**The SIGBUS class was a full disk.** Twelve lanes died in 0–13s with
+`build-killed-by-signal-10`, plus `build-failed` lanes whose logs only say
+`No space left on device` (`mkdir` in `prepare()`, `bsdtar` extraction):
+`/dev/sda` — the 466G f2fs build drive holding makepkg's `BUILDDIR`/`PKGDIR`/
+`PKGDEST` — hit 100% mid-run. SIGBUS is the mmap-on-full-filesystem symptom,
+not memory. Fix: reclaim the makepkg build cache (`gsa-build/build/*`,
+`gsa-build/pkg/*`; `pkgs/` archives preserved — the hash-bound binpkg index
+needs them). Durable rule: **when a new failure class appears with 0–13s
+lane durations, run `df` on the build drive before anything else**; a full
+filesystem impersonates SIGBUS kills, random `build-failed`s and extractor
+errors.
+
+**logseq-desktop-git (pnpm 12 vs the tree's pin).** The tree pins
+`packageManager: pnpm@10.33.0`; Arch's pnpm moved to 12.14.0, which no
+longer reads the `"pnpm"` config block in `package.json`
+(`onlyBuiltDependencies`, `overrides`, … — a WARN appears in the log), so
+its frozen installs compute a different overrides set than `pnpm-lock.yaml`
+records and die with `ERR_PNPM_LOCKFILE_CONFIG_MISMATCH`. The recipe's old
+`manage_package_manager_versions=false` guard prevented self-*replacement*,
+not self-*selection* — it pinned nothing. Now `build()` unpacks the pin as a
+checksum-anchored registry tarball (`pnpm-10.33.0.tgz`, sha256
+`bfcc1bcb…`) into `$srcdir/.pnpm-pin` and front-loads it on `PATH`, so every
+`pnpm` invocation in the build is the tree's own version (node 26 ships no
+corepack). Durable rule: **a tool the tree pins via `packageManager` must be
+run at that pinned version from an anchored source — "don't self-replace" is
+not "honor the pin".**
+
+**texlive-texmf (husk, again).** The network blip also killed the tlpkg SVN
+checkout mid-way, recreating the incomplete working copy the recipe's own
+remediation describes; cleared from the src cache again. Retry class.
+
+**Network-transient ×7.** ftgl, hip-runtime, niri-spicy-git,
+vscodium-insiders-git (electron packaging `TypeError: fetch failed`),
+noctalia-git, libva-git, sdl2-git — github fetch/RPC timeouts across the
+same window (openxr's prefetch warned `retry-ok` too). No recipe changes;
+they retry in the continuation.
+
 ## 2026-10-19 — resume10's nine walls: pod2man grows two, host pandoc dies on the icu swap, a stale Flutter pin, bindgen's dropped const, and two patch rebases
 
 **Tally.** resume10: 239 lanes succeeded, `build-failed` ×9 (bettbox,

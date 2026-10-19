@@ -25,7 +25,7 @@
 
 pkgname=logseq-desktop-git
 _pkgname=logseq
-pkgver=2.0.2.r25883.g059ab7fce
+pkgver=2.0.2.r25912.g539fcaa24
 pkgrel=1
 pkgdesc="Privacy-first, open-source platform for knowledge management and collaboration (desktop, git build)"
 arch=('x86_64')
@@ -96,9 +96,13 @@ conflicts=(
 source=(
   "${_pkgname}::git+${url}.git#branch=master"
   "${pkgname}.desktop"
+  # The tree's packageManager pin (pnpm@10.33.0), as a checksum-anchored
+  # registry tarball — build() runs THIS pnpm, not the host's.
+  "pnpm-10.33.0.tgz::https://registry.npmjs.org/pnpm/-/pnpm-10.33.0.tgz"
 )
 sha256sums=('SKIP'
-            'acbe2e277b58a0db4c17efe8f048c5d88353e0363e44559cb066eb902e98fbdd')
+            'acbe2e277b58a0db4c17efe8f048c5d88353e0363e44559cb066eb902e98fbdd'
+            'bfcc1bcbad279b13a516c446a75b3c58b6904b45d57a1951411015e50b751a80')
 
 pkgver() {
   cd "${_pkgname}"
@@ -147,9 +151,19 @@ build() {
   export JAVA_HOME="$_java_home"
   export PATH="$_java_home/bin:$PATH"
 
-  # The tree pins packageManager=pnpm@10; do not let a newer pnpm replace
-  # itself from the network in the middle of a build.
+  # The tree pins packageManager=pnpm@10.33.0; the host's pnpm 12 no longer
+  # reads the "pnpm" config block in package.json (onlyBuiltDependencies,
+  # overrides, … — see the WARN in the build log), so its frozen installs
+  # compute a different overrides set than pnpm-lock.yaml records and die
+  # with ERR_PNPM_LOCKFILE_CONFIG_MISMATCH (2026-10-19). Honor the pin with
+  # a PATH shim unpacked from the checksum-anchored registry tarball (node 26
+  # ships no corepack), and keep self-replacement off so the pinned copy
+  # cannot swap itself out mid-build.
   export npm_config_manage_package_manager_versions=false
+  mkdir -p "$srcdir/.pnpm-pin"
+  tar -xzf "$srcdir/pnpm-10.33.0.tgz" -C "$srcdir/.pnpm-pin" --strip-components=1
+  ln -sf pnpm.cjs "$srcdir/.pnpm-pin/bin/pnpm"
+  export PATH="$srcdir/.pnpm-pin/bin:$PATH"
 
   ## JavaScript / ClojureScript dependency graph
   pnpm install --frozen-lockfile

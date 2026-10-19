@@ -7,7 +7,7 @@
 source "$startdir/../../../lib/pgo.sh"
 
 pkgname=xorg-xwayland-git
-pkgver=24.1.13.r1187.gb125b19fc
+pkgver=24.1.14.r1232.g0780950be
 pkgrel=1
 arch=('x86_64')
 license=(
@@ -35,9 +35,23 @@ depends=('nettle' 'libepoxy' 'systemd-libs' 'libxfont2'
          'libei' 'libxshmfence' 'glibc')
 makedepends=('meson' 'xorgproto' 'xtrans' 'libxkbfile' 'dbus'
              'xorg-font-util' 'wayland-protocols' 'mesa-libgl'
-             'systemd' 'git')
-source=("xserver::git+https://gitlab.freedesktop.org/xorg/xserver.git")
-sha256sums=('SKIP')
+             'systemd' 'git'
+             # PGO training (phase 2): the piglit xts-render suite drives the
+             # pinned XTS against the phase-1 Xwayland under a headless weston.
+             # xts's own build needs the X client libs and both font tools
+             # (meson find_program, hard); xts5/bin/xts-config calls
+             # xdpyinfo/xset while the tests run.
+             'piglit-git' 'weston'
+             'libx11' 'libxext' 'libxi' 'libxt' 'libxtst' 'libxmu' 'libxaw'
+             'xorg-bdftopcf' 'xorg-mkfontdir' 'xorg-xdpyinfo' 'xorg-xset')
+source=("xserver::git+https://gitlab.freedesktop.org/xorg/xserver.git"
+        # Training input for the PGO phase (phase 2): the X Test Suite the
+        # piglit xts-render profile runs. Pinned deliberately — it shapes
+        # codegen through the profile, so it moves on purpose, never with
+        # remote HEAD.
+        "xts::git+https://gitlab.freedesktop.org/xorg/test/xts#commit=6cf94400a09abecd6b86e4eb6441741acecd51f6")
+sha256sums=('SKIP'
+            'SKIP')
 
 provides=('xorg-xwayland' 'xorg-server-xwayland' 'xorg-server-xwayland-git')
 conflicts=('xorg-xwayland' 'xorg-server-xwayland' 'xorg-server-xwayland-git')
@@ -121,8 +135,26 @@ build() {
   arch-meson xserver build "${meson_options[@]}" -Db_lto=false
   meson compile -C build
 
-  # Phase 2: training — bounded run (lib/pgo.sh)
-  pgo_train_meson build 120
+  # Phase 2: training — bounded run (lib/pgo.sh).
+  # The training suite is xserver:XTS: the piglit `xts-render` profile (all
+  # of xts5/xlib9) run against the phase-1 Xwayland under a headless weston.
+  # It SKIPS (exit 77) unless a BUILT XTS tree is provided and the piglit
+  # working directory carries a piglit.conf [xts] path= entry — the
+  # 2026-10-19 leaf build therefore trained on nothing (3 gcda) and the
+  # floor guard below fell back to LTO-only. Build the pinned XTS into
+  # $srcdir and shim the installed piglit-git: its wrapper resolves its data
+  # dir via realpath, so the shim is just ./piglit + piglit.conf. Budget
+  # 300s — the suite actually runs now.
+  local _xts_build="$srcdir/xts-build"
+  meson setup "$srcdir/xts" "$_xts_build"
+  meson compile -C "$_xts_build" -j "${GSA_BUILD_JOBS:-$(nproc)}"
+  local _piglit_dir="$srcdir/piglit-shim"
+  mkdir -p "$_piglit_dir"
+  ln -sf /usr/bin/piglit "$_piglit_dir/piglit"
+  printf '[xts]\npath = %s\n' "$_xts_build" > "$_piglit_dir/piglit.conf"
+  export XTEST_DIR="$_xts_build"
+  export PIGLIT_DIR="$_piglit_dir"
+  pgo_train_meson build 300
 
   # Phase 3: verify profile quality
   local _gcda_count

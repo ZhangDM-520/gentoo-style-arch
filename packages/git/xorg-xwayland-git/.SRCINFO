@@ -1,6 +1,6 @@
 pkgbase = xorg-xwayland-git
 	pkgdesc = Run X clients under Wayland (git version)
-	pkgver = 24.1.13.r1187.gb125b19fc
+	pkgver = 24.1.14.r1232.g0780950be
 	pkgrel = 1
 	url = https://xorg.freedesktop.org
 	arch = x86_64
@@ -30,6 +30,19 @@ pkgbase = xorg-xwayland-git
 	makedepends = mesa-libgl
 	makedepends = systemd
 	makedepends = git
+	makedepends = piglit-git
+	makedepends = weston
+	makedepends = libx11
+	makedepends = libxext
+	makedepends = libxi
+	makedepends = libxt
+	makedepends = libxtst
+	makedepends = libxmu
+	makedepends = libxaw
+	makedepends = xorg-bdftopcf
+	makedepends = xorg-mkfontdir
+	makedepends = xorg-xdpyinfo
+	makedepends = xorg-xset
 	depends = nettle
 	depends = libepoxy
 	depends = systemd-libs
@@ -54,6 +67,8 @@ pkgbase = xorg-xwayland-git
 	conflicts = xorg-server-xwayland-git
 	replaces = xorg-server-xwayland-git
 	source = xserver::git+https://gitlab.freedesktop.org/xorg/xserver.git
+	source = xts::git+https://gitlab.freedesktop.org/xorg/test/xts#commit=6cf94400a09abecd6b86e4eb6441741acecd51f6
+	sha256sums = SKIP
 	sha256sums = SKIP
 
 pkgname = xorg-xwayland-git

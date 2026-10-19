@@ -1,6 +1,6 @@
 pkgbase = logseq-desktop-git
 	pkgdesc = Privacy-first, open-source platform for knowledge management and collaboration (desktop, git build)
-	pkgver = 2.0.2.r25883.g059ab7fce
+	pkgver = 2.0.2.r25907.gbcc4eb3ce
 	pkgrel = 1
 	url = https://github.com/logseq/logseq
 	arch = x86_64
@@ -45,7 +45,9 @@ pkgbase = logseq-desktop-git
 	options = !lto
 	source = logseq::git+https://github.com/logseq/logseq.git#branch=master
 	source = logseq-desktop-git.desktop
+	source = pnpm-10.33.0.tgz::https://registry.npmjs.org/pnpm/-/pnpm-10.33.0.tgz
 	sha256sums = SKIP
 	sha256sums = acbe2e277b58a0db4c17efe8f048c5d88353e0363e44559cb066eb902e98fbdd
+	sha256sums = bfcc1bcbad279b13a516c446a75b3c58b6904b45d57a1951411015e50b751a80
 
 pkgname = logseq-desktop-git
