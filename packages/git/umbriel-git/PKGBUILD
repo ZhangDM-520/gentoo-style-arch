@@ -1,0 +1,200 @@
+# Maintainer: Noctalia Team <team@noctalia.dev>
+# Packaging notes (installed layout, dependency roles, config fallback):
+# https://github.com/noctalia-dev/umbriel/blob/main/PACKAGING.md
+
+# Shared PGO payload gate — one implementation in lib/pgo.sh, called at the
+# end of package(). A missing module fails at parse time on purpose.
+source "$startdir/../../../lib/pgo.sh"
+
+pkgname=umbriel-git
+_pkgname=umbriel
+pkgver=0.1.0.r1225.2339fc3
+pkgrel=1
+epoch=1
+pkgdesc='A Wayland compositor built on wlroots'
+arch=('x86_64' 'aarch64')
+url='https://github.com/noctalia-dev/umbriel'
+license=('MIT')
+# !debug: no separate debug package (parity with noctalia-git)
+# lto:    makepkg appends -flto=auto to CFLAGS/CXXFLAGS/LDFLAGS (belt & braces
+#         with the explicit -Db_lto=true in the final phase)
+options=('!debug' 'lto')
+depends=(
+  'cairo'
+  'gcc-libs'
+  'glibc'
+  'jemalloc'
+  'lcms2'
+  'libdrm'
+  'libdisplay-info'
+  'libglvnd'
+  'libinput'
+  'libxcb'
+  'libxkbcommon'
+  'mesa'
+  'pango'
+  'pixman'
+  'systemd-libs'
+  'tomlplusplus'
+  'wayland'
+  'xcb-util-wm'
+  'xorg-xwayland'   # the Xwayland binary, launched on demand (PACKAGING.md)
+  # Screencast/Screenshot portal backend (PACKAGING.md runtime table). The
+  # CachyOS name; the AUR's xdg-desktop-portal-umbriel-git provides it.
+  'xdg-desktop-portal-umbriel'
+  # umbrielfx compiles against wlroots' private struct layouts — upstream
+  # pins one minor series (>=0.20.1, <0.21.0).
+  'wlroots0.20'
+)
+makedepends=(
+  'git'             # VCS source (pkgver, vcs_tag)
+  'meson'
+  'ninja'
+  'nlohmann-json'
+  'pkgconf'
+  'wayland-protocols'
+)
+provides=("umbriel=${pkgver}")
+conflicts=('umbriel')
+source=("${_pkgname}::git+${url}.git#branch=main")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "${_pkgname}"
+
+  # Upstream tracks the version in a VERSION file (meson reads it through
+  # `version: files('VERSION')`).
+  local version
+  version="$(tr -d '[:space:]' < VERSION)"
+  printf '%s.r%s.%s' \
+    "$version" \
+    "$(git rev-list --count HEAD)" \
+    "$(git rev-parse --short=7 HEAD)"
+}
+
+build() {
+  # House style: mold linker when available (mold-git does not provide 'mold').
+  command -v mold >/dev/null 2>&1 && export LDFLAGS+=" -fuse-ld=mold"
+
+  local meson_flags=(
+    -Db_ndebug=true
+    -Djemalloc=enabled
+  )
+
+  # PGO (meson tier): instrument -> train -> use. The profile work dir sits
+  # OUTSIDE the build dir (mesa precedent): DW_AT_comp_dir equals the build
+  # dir, and the payload gate's literal predicate would otherwise risk
+  # false-matching debug info.
+  local _pgo_dir="$srcdir/pgo-profiles"
+  mkdir -p "$_pgo_dir"
+  local _final_cflags="$CFLAGS"
+  local _final_cxxflags="$CXXFLAGS"
+  local _final_ldflags="$LDFLAGS"
+
+  # Phase 1 strips -flto: generate-mode bookkeeping and LTO whole-program
+  # codegen interact badly (same as the C-autotools tier). And
+  # -fprofile-generate=<dir> must stay SYMMETRIC with phase 2's
+  # -fprofile-use=<dir>: profiles are looked up as
+  # <dir>/<mangled-object-path>.gcda, so a bare generate paired with
+  # use=<dir> misses every profile and silently compiles a profile-less
+  # build (2026-10-19 GCC probe; the xorg-xwayland-git spelling is such a
+  # miss — see docs/NOTE.md 2026-10-19).
+  local _gen_cflags="" _gen_cxxflags="" _gen_ldflags="" _flag
+  for _flag in $_final_cflags; do
+    case "$_flag" in
+      -flto*) ;;
+      *) _gen_cflags+=" $_flag" ;;
+    esac
+  done
+  for _flag in $_final_cxxflags; do
+    case "$_flag" in
+      -flto*) ;;
+      *) _gen_cxxflags+=" $_flag" ;;
+    esac
+  done
+  for _flag in $_final_ldflags; do
+    case "$_flag" in
+      -flto*) ;;
+      *) _gen_ldflags+=" $_flag" ;;
+    esac
+  done
+
+  CFLAGS="${_gen_cflags# } -fprofile-generate=$_pgo_dir"
+  CXXFLAGS="${_gen_cxxflags# } -fprofile-generate=$_pgo_dir"
+  LDFLAGS="${_gen_ldflags# } -fprofile-generate=$_pgo_dir"
+
+  # -Dtests/-Dtest_ipc are enabled ONLY for the training phase: a release
+  # build compiles nothing but the compositor and its data otherwise
+  # (PACKAGING.md). Phase 2 switches them back off so no test or harness-IPC
+  # target is even compiled into the final build.
+  arch-meson "${_pkgname}" build-release "${meson_flags[@]}" \
+    -Db_lto=false -Dtests=enabled -Dtest_ipc=enabled
+  meson compile -C build-release
+
+  # Training run: the upstream suite is the broadest coverage upstream ships
+  # (the unit battery plus the umbrielfx checks). A failing trainer is
+  # tolerated — the floor guard below turns a thin profile into a plain
+  # build. The CLI paths always exit through main(), so they flush profile
+  # data even when no test ran.
+  pgo_train_meson build-release 120
+  local _bin="build-release/${_pkgname}"
+  "$_bin" config schema --json >/dev/null 2>&1 || true
+  "$_bin" config validate -c "${_pkgname}/examples/config.toml" >/dev/null 2>&1 || true
+  "$_bin" --version >/dev/null 2>&1 || true
+  "$_bin" --help >/dev/null 2>&1 || true
+
+  # Floor guard: pgo_min_gcda ≈ the minimum distinct translation units the
+  # training must touch before a profile is worth trusting; at or below it
+  # the profile is too thin and the recipe falls back to a plain (LTO-only)
+  # build rather than shipping a half-trained one.
+  local pgo_min_gcda=50
+  local _gcda_count
+  _gcda_count="$(find "$_pgo_dir" -name '*.gcda' 2>/dev/null | wc -l)"
+  if (( _gcda_count < pgo_min_gcda )); then
+    warning "PGO produced only %d gcda files — rebuilding plain (LTO only)" "$_gcda_count"
+    CFLAGS="$_final_cflags"
+    CXXFLAGS="$_final_cxxflags"
+    LDFLAGS="$_final_ldflags"
+    meson setup --reconfigure "${_pkgname}" build-release \
+      -Dc_args="$CFLAGS" \
+      -Dcpp_args="$CXXFLAGS" \
+      -Dc_link_args="$LDFLAGS" \
+      -Dcpp_link_args="$LDFLAGS"
+    meson configure build-release -Db_lto=true -Dtests=disabled -Dtest_ipc=disabled
+  else
+    msg "PGO profile: %d gcda files — rebuilding with profile" "$_gcda_count"
+    # Phase 2: profile-used build. Tolerance flags are load-bearing
+    # (docs/MEMORY.md §4): -Wno-error=missing-profile keeps a TU the training
+    # never ran a warning instead of a hard error; -Wno-error=coverage-mismatch
+    # downgrades GCC's arc-count mismatch the same way — those functions
+    # compile without profile data, everything else keeps the real profile,
+    # and the payload stays uninstrumented either way. No
+    # -fprofile-correction: the house pattern (cmake-git, glib2-git) does not
+    # use it.
+    CFLAGS="$_final_cflags -fprofile-use=$_pgo_dir -Wno-error=missing-profile -Wno-error=coverage-mismatch"
+    CXXFLAGS="$_final_cxxflags -fprofile-use=$_pgo_dir -Wno-error=missing-profile -Wno-error=coverage-mismatch"
+    LDFLAGS="$_final_ldflags"
+    meson setup --reconfigure "${_pkgname}" build-release \
+      -Dc_args="$CFLAGS" \
+      -Dcpp_args="$CXXFLAGS" \
+      -Dc_link_args="$LDFLAGS" \
+      -Dcpp_link_args="$LDFLAGS"
+    meson configure build-release -Db_lto=true -Dtests=disabled -Dtest_ipc=disabled
+  fi
+
+  meson compile -C build-release
+}
+
+package() {
+  meson install -C build-release --destdir "${pkgdir}"
+
+  # PACKAGING.md's installed layout: the MIT license travels in the upstream
+  # tree and lands beside the payload.
+  install -Dm644 "${_pkgname}/LICENSE" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+
+  # Fatal shared gate (lib/pgo.sh) — last statement on purpose: nothing may
+  # be added to $pkgdir after the payload is verified. The extra literal is
+  # this recipe's PGO work dir: a generate-flag leak would bake it into a
+  # shipped binary.
+  verify_no_profile_instrumentation "$pkgdir" "$srcdir/pgo-profiles"
+}

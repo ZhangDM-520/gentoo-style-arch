@@ -1,0 +1,44 @@
+pkgbase = umbriel-git
+	pkgdesc = A Wayland compositor built on wlroots
+	pkgver = 0.1.0.r1225.2339fc3
+	pkgrel = 1
+	epoch = 1
+	url = https://github.com/noctalia-dev/umbriel
+	arch = x86_64
+	arch = aarch64
+	license = MIT
+	makedepends = git
+	makedepends = meson
+	makedepends = ninja
+	makedepends = nlohmann-json
+	makedepends = pkgconf
+	makedepends = wayland-protocols
+	depends = cairo
+	depends = gcc-libs
+	depends = glibc
+	depends = jemalloc
+	depends = lcms2
+	depends = libdrm
+	depends = libdisplay-info
+	depends = libglvnd
+	depends = libinput
+	depends = libxcb
+	depends = libxkbcommon
+	depends = mesa
+	depends = pango
+	depends = pixman
+	depends = systemd-libs
+	depends = tomlplusplus
+	depends = wayland
+	depends = xcb-util-wm
+	depends = xorg-xwayland
+	depends = xdg-desktop-portal-umbriel
+	depends = wlroots0.20
+	provides = umbriel=0.1.0.r1225.2339fc3
+	conflicts = umbriel
+	options = !debug
+	options = lto
+	source = umbriel::git+https://github.com/noctalia-dev/umbriel.git#branch=main
+	sha256sums = SKIP
+
+pkgname = umbriel-git
