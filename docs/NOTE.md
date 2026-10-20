@@ -1,3 +1,52 @@
+## 2026-10-21 — svn checkouts SEGV: the snapshot GCC's vectorizer emits aligned loads for subversion's unaligned word scan
+
+**Symptom.** resume13's `texlive-texmf` lane died in 16 s at the SOURCE
+FETCH: `svn checkout` of `texmf-dist` segfaulted (core dumped) inside
+makepkg's `download_svn` — `prepare()` (and its new husk self-heal) never
+ran. resume12 died the same way on `tlpkg` (2026-10-20). Durable repro in
+scratch: `svn checkout -r 78408 svn://tug.org/…/Master/texmf-dist` →
+SIGSEGV every time; the small `bin/x86_64-linux` tree succeeds.
+
+**Root cause.** The lane's `ulimit -c 0` swallowed the first core
+(`coredumpctl`: "terminated abnormally without generating a coredump"); the
+scratch repro ran with normal limits and yielded the stack: `#0
+svn_eol__find_eol_start (libsvn_subr)` ← `svn_stream_copy3` ←
+`svn_wc__wq_run`. The faulting instruction is
+`vmovdqa64 (%rdi,%rcx,8),%zmm0` — a **64-byte ALIGNED** AVX-512 load over
+an 8-byte-stride pointer. Upstream 1.14.5's `eol.c` word scan is explicitly
+unaligned-tolerant (`SVN_UNALIGNED_ACCESS_IS_OK`) and bounds-correct; the
+compiler legalized it into aligned vector loads its pointer alignment
+cannot justify → #GP (SIGSEGV, `si_code: SI_KERNEL`) whenever a stream
+chunk is not 64-byte aligned — which large working-copy installs reliably
+hit and small checkouts don't. Built into the installed stack by this
+host's GCC 17.0.0 20261011 (experimental) at `-march=native -O3`; LTO is
+not involved (the recipe carries no `lto` option).
+
+**Fix.** `packages/stable/subversion/PKGBUILD` appends
+`-fno-tree-vectorize` to CFLAGS/CXXFLAGS (the host's `-O3` stays; only the
+convicted pass is skipped), `pkgrel=5.1` as the rebuild trigger.
+Red-first probe (`~/Workspace/svn-repro/eol-probe.c` — the verbatim
+function over buffers whose end sits at a `PROT_NONE` page, starts
+sweeping 0..63): host flags crash at offset 1 (rc 139); `-fno-tree-vectorize`
+clean at all 64 offsets; `-O2` clean; `-mno-avx512f` **not** enough (the
+AVX2 path miscompiles too — the bug is in the vectorizer, not one ISA).
+
+**Validation owed (queued behind the live resume13 — no system mutation
+while a gsa run is live).** rebuild + install (`gsa -S --leaf subversion`),
+then the end-to-end proof is the real `texmf-dist` repro completing, then
+the `texlive-texmf` continuation. `bash -n` + `.SRCINFO` (one pkgrel line)
+green now.
+
+**Durable rule.** An experimental snapshot toolchain can miscompile a
+scalar scanning loop into *aligned* vector loads: when a crash stack lands
+in a byte/word scan, disassemble the frame and look for `vmovdqa*` before
+blaming the source — a standalone page-boundary probe (verbatim function,
+`PROT_NONE` guard page, offset sweep) convicts or clears the compiler in
+seconds. Disable the vectorizer for the convicted recipe; `-mno-avx512*`
+is not a fix when the AVX2 path shares the bug. Other packages rebuilt in
+the same window (serf, apr-util, sqlite — 2026-10-18/19) carry the same
+exposure: check the next crash of this shape with the same probe.
+
 ## 2026-10-20 — the battery's four pre-existing reds: stale .SRCINFOs, pgo-transition's srcdir/profile-dir contract, pgo-lib's prose-only mention, and the libdisplay-info-git hub membership
 
 **Symptom.** The pre-commit full battery (2026-10-20) came back 65 pass /

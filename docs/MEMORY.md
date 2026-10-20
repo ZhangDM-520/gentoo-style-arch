@@ -1909,6 +1909,17 @@ going stale.
 
 ### Queued (claim by editing this section)
 
+- **subversion's `-fno-tree-vectorize` fix owes install + end-to-end proof**
+  (2026-10-21, the svn-checkout SEGV wall): recipe fixed (`pkgrel=5.1`
+  rebuild trigger) and probe-validated (red: host flags SEGV at start
+  offset 1; green: clean at all 64 offsets), but the rebuild/install is
+  queued behind the live resume13 — no system mutation while a gsa run is
+  live. Proof = the real `texmf-dist` `svn checkout` repro completes
+  (NOTE.md 2026-10-21), then `texlive-texmf` + its parked consumers move
+  to a continuation. Same-window rebuilds (serf, apr-util, sqlite —
+  2026-10-18/19) share the miscompile exposure; re-use the page-boundary
+  probe if another scan-loop crash appears.
+
 - **xorg-xwayland-git's PGO fix landed 2026-10-19; the end-to-end proof is
   still owed** — the bare-generate/use-dir spelling (which silently built
   profile-less binaries) is replaced by jq's symmetric
@@ -2210,6 +2221,21 @@ zero baked `.gcda` destinations — `ctest`'s single hit is the `/*.gcda` glob
 constant, not a baked path).
 
 ## 6. Pitfall digest (full details: NOTE.md sections of same dates)
+
+- **A snapshot toolchain can miscompile a scanning loop into *aligned*
+  vector loads — probe the compiler before blaming the source** (2026-10-21,
+  svn checkout SIGSEGV): GCC 17.0.0 20261011 (experimental) legalized
+  subversion's explicitly unaligned-tolerant word scan
+  (`SVN_UNALIGNED_ACCESS_IS_OK`) into `vmovdqa64` (64-byte ALIGNED loads
+  over an 8-byte stride) → #GP on every stream chunk that is not 64-byte
+  aligned, reproducible on large `svn checkout`s and invisible on small
+  ones. When a crash stack lands in a byte/word scan, disassemble the frame
+  and look for `vmovdqa*`; a standalone page-boundary probe (verbatim
+  function, `PROT_NONE` guard page, start-offset sweep 0..63) convicts or
+  clears the compiler in seconds. Fix = `-fno-tree-vectorize` for the
+  convicted recipe (keeps `-O3`); `-mno-avx512*` is NOT a fix when the
+  AVX2 path shares the bug. Packages rebuilt in the same compiler window
+  carry the same exposure. Details: NOTE.md 2026-10-21.
 
 - **A VCS-source husk left by a failed makepkg fetch is self-perpetuating —
   the consuming recipe must self-heal** (2026-10-20, texlive-texmf's tlpkg,
