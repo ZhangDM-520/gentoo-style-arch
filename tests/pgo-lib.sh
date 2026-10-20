@@ -134,6 +134,16 @@ test "${#consumers[@]}" -gt 0 || fail "no recipe consumes lib/pgo.sh"
 for pkgbuild in "${consumers[@]}"; do
     rel=${pkgbuild#"$root"/}
 
+    # A prose-only mention (every hit on a full-line comment) is not a
+    # consumer: a non-consumer may name the module in documentation without
+    # sourcing it (pandoc-cli's "outside lib/pgo.sh's instrumented families"
+    # comment tripped the mention-based discovery on 2026-10-20). Real
+    # consumers keep every check below — the source line, the resolution,
+    # the interface and the gate call.
+    if ! grep -v '^[[:space:]]*#' "$pkgbuild" | grep -q 'lib/pgo\.sh'; then
+        continue
+    fi
+
     mapfile -t src_lines < <(grep -E '^[[:space:]]*source "\$startdir/' "$pkgbuild")
     test "${#src_lines[@]}" -eq 1 ||
         fail "$rel: expected exactly one source \"\$startdir/...\" line, got ${#src_lines[@]}"

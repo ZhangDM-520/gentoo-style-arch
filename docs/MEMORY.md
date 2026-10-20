@@ -1068,7 +1068,7 @@
     nothing" — so libppd's ``CUPS_LIBS=`cups-config --image --libs` ``
     captured `1\n-lcups`, planting an orphan make-syntax line that died
     much later as `missing separator` in the depfiles bootstrap. Read the
-    real script when writing a shim (`git -C ~/.cache/gsa-src/cups show
+    real script when writing a shim (`git -C ~/.gsa-src/cups show
     v2.4.11:cups-config.in`) and pin the shape with a fixture
     (`tests/cups-config-shim.sh`, mutation-probed). Symptom heuristic: a
     "missing separator" in a generated Makefile means look for a
@@ -2210,6 +2210,41 @@ zero baked `.gcda` destinations — `ctest`'s single hit is the `/*.gcda` glob
 constant, not a baked path).
 
 ## 6. Pitfall digest (full details: NOTE.md sections of same dates)
+
+- **A VCS-source husk left by a failed makepkg fetch is self-perpetuating —
+  the consuming recipe must self-heal** (2026-10-20, texlive-texmf's tlpkg,
+  third strike): `download_svn` pre-creates `$dir/.makepkg` before the
+  checkout, so a checkout that dies leaves a non-empty directory that is
+  never retried as a fresh checkout again (the update path is warn-only) and
+  whose husk `extract_svn` then copies into `$srcdir`. Dying with manual
+  `rm -rf` remediation text hands the operator work the recipe can do:
+  detect the incomplete working copy, wipe it (in `$srcdir`, `$SRCDEST` and
+  any legacy location) and re-fetch the pinned revision — anchored to the
+  recipe's own `source` entry, never a re-typed URL/rev (rule 18). Pinned by
+  `tests/texlive-selfheal.sh` (runs the real `prepare()` with a stubbed
+  `svn`). Details: NOTE.md 2026-10-20.
+
+- **A mandatory validation fetch inside an otherwise cached build gets a
+  classifying bounded retry at the *step*, not a re-run of the build**
+  (2026-10-20, vscodium-insiders-git packaging wall, second strike):
+  `@electron/get` re-fetches `SHASUMS256.txt` on every packaging run
+  (checksum fetches deliberately bypass its cache) through undici `fetch()`,
+  and `gulp-electron`'s `withRetry` does not cover the timeout/terminated
+  class — one shot, then the lane dies. House fix: an npm retry shim
+  generated in `build()` that retries up to 3 times ONLY on the
+  transient-network signature (any other failure passes the real rc
+  straight through), pinned by `tests/vscodium-npm-retry.sh` (extracts the
+  shim generator from the real PKGBUILD). A third strike means the class is
+  not transient after all: instrument the fetch target itself. Details:
+  NOTE.md 2026-10-20.
+
+- **The fixture battery's offline engine prebuild fails when the cargo
+  registry cache is gone** (2026-10-20, after a cache sweep):
+  `tests/run-all.sh` builds the engine once with `cargo build --offline`,
+  which cannot resolve anything if `~/.cargo/registry` is empty. Restore
+  with `cargo fetch --locked` (network), or point `GSA_TEST_GSA_BIN` at an
+  existing `target/debug/gsa` for fixture-only runs — never at a tree built
+  elsewhere.
 
 - **A build run whose workspace is the git tree rewrites the git tree**
   (2026-10-19, resume10): the engine's fetch-side `pkgver()` rewrite is

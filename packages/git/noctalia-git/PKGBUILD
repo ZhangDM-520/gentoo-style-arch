@@ -64,7 +64,7 @@ conflicts=('noctalia' 'noctalia-bin')
 source=("${_pkgname}::git+${url}.git#branch=main"
         0001-idle-lock-resume-and-inhibit-tracking.patch)
 sha256sums=('SKIP'
-            'b4ecd6ad23284498079095d815889c02ebf52fa81c3c685c7d32700744793bfa')
+            '0a952b005b7ede29177f0205b52e7c3333d84d1200d3c9ffb6824c8a5b43197e')
 
 pkgver() {
   cd "${_pkgname}"
@@ -87,10 +87,13 @@ prepare() {
   # already-idled behaviour, and screen_off's resume action is PowerOnMonitors - so the panel lit
   # back up the moment the session locked, then had to wait out the blanking timeout again.
   # Candidate upstream fix, PR #4002 (fixes #4190), snapshotted from its head 9d530d40 as a
-  # code-only diff — the PR's docs/user/services/idle.mdx hunks are excluded. Refresh the
-  # snapshot whenever #4002 gains commits (pre-flight `git apply -3` against current main first:
-  # this source floats on #branch=main); drop the patch, its source/sha256sums entry and this
-  # prepare() once #4002 merges. The -dirty version suffix is the reminder that the patch is in.
+  # code-only diff — the PR's docs/user/services/idle.mdx hunks are excluded. REBASED 2026-10-20
+  # onto upstream main ee75f7adcc (3-way): idle_manager.{cpp,h} were resolved over upstream
+  # b0af9ffde's lock fixes, which cover #4002's lock-side intent independently (#4843); the
+  # inhibit-debounce chain is still patch-only. Refresh the snapshot whenever #4002 gains commits
+  # (pre-flight `git apply -3` against current main first: this source floats on #branch=main);
+  # drop the patch, its source/sha256sums entry and this prepare() once #4002 merges. The -dirty
+  # version suffix is the reminder that the patch is in.
   # Verified on niri 26.04: /sys/class/drm/<connector>/dpms goes On at the lock without it.
   git apply -3 ../0001-idle-lock-resume-and-inhibit-tracking.patch
 }

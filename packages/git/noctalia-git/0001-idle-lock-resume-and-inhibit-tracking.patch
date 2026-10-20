@@ -30,7 +30,7 @@ index 57e97e61fc..77ba203f3a 100644
  
  void ScreenSaverService::onInhibitDelta(std::int64_t delta) {
 diff --git a/src/idle/idle_manager.cpp b/src/idle/idle_manager.cpp
-index 1dd4e513b6..6a1d3f9820 100644
+index a63fb22bba..60f32e77d3 100644
 --- a/src/idle/idle_manager.cpp
 +++ b/src/idle/idle_manager.cpp
 @@ -19,6 +19,13 @@ namespace {
@@ -127,32 +127,33 @@ index 1dd4e513b6..6a1d3f9820 100644
    }
  }
  
-@@ -88,7 +145,23 @@ void IdleManager::setSessionLocked(bool locked) {
-     return;
+@@ -89,14 +146,23 @@ void IdleManager::setSessionLocked(bool locked) {
    }
    m_sessionLocked = locked;
--  recreateBehaviorNotifications();
-+  if (!locked) {
+   if (!locked) {
+-    recreateBehaviorNotifications();
 +    // Unlock: re-arm all behaviors, resuming any that idled (a stuck display-off would otherwise never
 +    // be undone since no real input event arrives to drive the resume action).
 +    recreateBehaviorNotifications(true);
-+  } else {
-+    // Lock: re-arm only behaviors that carry a locked_timeout — they need to switch from their normal
-+    // countdown to the shorter one. Behaviors in Waiting phase without locked_timeout are already
-+    // counting toward their original timeout and must not be reset; resetting them forces a full extra
-+    // wait after lock before e.g. suspend fires.
-+    cancelActiveGrace(false);
-+    for (auto& behavior : m_behaviors) {
-+      if (std::isfinite(behavior->config.lockedTimeoutSeconds) && behavior->config.lockedTimeoutSeconds > 0.0) {
-+        recreateBehaviorNotification(*behavior, false);
-+      }
-+    }
-+    kLog.debug("idle behavior notifications re-armed");
-+  }
+     return;
+   }
+ 
+-  // Completed actions retain their effects and resume listeners; fades finish on their current schedule.
++  // Lock: behaviors that carry a locked_timeout switch from their normal countdown to the shorter
++  // one; syncBehaviorNotification only re-arms Waiting behaviors whose effective timeout changed, so
++  // Waiting behaviors without locked_timeout keep counting toward their original timeout (resetting
++  // them would force a full extra wait after lock before e.g. suspend fires), and already-idled
++  // behaviors keep their state and still owe their resume action to real input — re-arming or
++  // resuming them here is what used to power the monitors back up at lock. Completed actions retain
++  // their effects and resume listeners; fades finish on their current schedule.
+   for (auto& behavior : m_behaviors) {
+     syncBehaviorNotification(*behavior);
+   }
++  kLog.debug("idle behavior notifications re-armed");
  }
  
  double IdleManager::effectiveTimeoutSeconds(const IdleBehaviorConfig& config) const {
-@@ -124,7 +197,7 @@ void IdleManager::reload(const IdleConfig& config) {
+@@ -140,7 +206,7 @@ void IdleManager::reload(const IdleConfig& config) {
  }
  
  void IdleManager::onSecondTick() {
@@ -161,7 +162,7 @@ index 1dd4e513b6..6a1d3f9820 100644
      ++m_liveIdleSeconds;
    }
  }
-@@ -167,14 +240,18 @@ void IdleManager::clearBehaviors() {
+@@ -183,14 +249,18 @@ void IdleManager::clearBehaviors() {
    m_behaviors.clear();
  }
  
@@ -183,8 +184,13 @@ index 1dd4e513b6..6a1d3f9820 100644
      runResumeBehavior(behavior);
    }
  
-@@ -198,14 +275,14 @@ void IdleManager::recreateBehaviorNotification(BehaviorState& behavior) {
-   ext_idle_notification_v1_add_listener(behavior.notification, &kIdleNotificationListener, &behavior);
+@@ -218,18 +288,18 @@ void IdleManager::recreateBehaviorNotification(BehaviorState& behavior) {
+ void IdleManager::syncBehaviorNotification(BehaviorState& behavior) {
+   if (behavior.phase == BehaviorPhase::Waiting
+       && behavior.notificationTimeoutMs != effectiveTimeoutMilliseconds(behavior.config)) {
+-    recreateBehaviorNotification(behavior);
++    recreateBehaviorNotification(behavior, false);
+   }
  }
  
 -void IdleManager::recreateBehaviorNotifications() {
@@ -200,7 +206,7 @@ index 1dd4e513b6..6a1d3f9820 100644
    }
    kLog.debug("idle behavior notifications re-armed");
  }
-@@ -235,7 +312,7 @@ void IdleManager::createBehavior(const IdleBehaviorConfig& config) {
+@@ -259,7 +329,7 @@ void IdleManager::createBehavior(const IdleBehaviorConfig& config) {
    auto behavior = std::make_unique<BehaviorState>();
    behavior->owner = this;
    behavior->config = config;
@@ -209,7 +215,7 @@ index 1dd4e513b6..6a1d3f9820 100644
    kLog.info(
        "registered idle behavior '{}' timeout={}s locked_timeout={}s", config.name, config.timeoutSeconds,
        config.lockedTimeoutSeconds
-@@ -351,13 +428,14 @@ void IdleManager::handleIdled(void* data, ext_idle_notification_v1* /*notificati
+@@ -375,13 +445,14 @@ void IdleManager::handleIdled(void* data, ext_idle_notification_v1* /*notificati
    }
  
    IdleManager& self = *behavior->owner;
@@ -229,7 +235,7 @@ index 1dd4e513b6..6a1d3f9820 100644
      return;
    }
  
-@@ -427,10 +505,12 @@ void IdleManager::handleHeartbeatIdled(void* data, ext_idle_notification_v1* /*n
+@@ -455,10 +526,12 @@ void IdleManager::handleHeartbeatIdled(void* data, ext_idle_notification_v1* /*n
    if (self == nullptr) {
      return;
    }
@@ -245,13 +251,13 @@ index 1dd4e513b6..6a1d3f9820 100644
    self->notifyLiveIdleChanged();
  }
 diff --git a/src/idle/idle_manager.h b/src/idle/idle_manager.h
-index 579c61b3ed..9846169e41 100644
+index 0077deabaa..f38e7f835a 100644
 --- a/src/idle/idle_manager.h
 +++ b/src/idle/idle_manager.h
-@@ -67,13 +67,21 @@ class IdleManager {
-   };
+@@ -69,14 +69,22 @@ private:
  
    [[nodiscard]] double effectiveTimeoutSeconds(const IdleBehaviorConfig& config) const;
+   [[nodiscard]] std::uint32_t effectiveTimeoutMilliseconds(const IdleBehaviorConfig& config) const;
 +  /// True while media holds an inhibit, including the short debounce that swallows renewals.
 +  [[nodiscard]] bool screenSaverInhibited() const noexcept {
 +    return m_screenSaverInhibitLocks > 0 || m_inhibitReleasePending;
@@ -264,15 +270,16 @@ index 579c61b3ed..9846169e41 100644
    void notifyLiveIdleChanged();
    void createBehavior(const IdleBehaviorConfig& config);
 -  void recreateBehaviorNotification(BehaviorState& behavior);
--  void recreateBehaviorNotifications();
 +  /// `resumeIfIdled` decides what happens to a behavior whose idle action already ran: run its resume
 +  /// action and re-arm, or leave it idled so the input that wakes the seat still triggers the resume.
 +  void recreateBehaviorNotification(BehaviorState& behavior, bool resumeIfIdled);
+   void syncBehaviorNotification(BehaviorState& behavior);
+-  void recreateBehaviorNotifications();
 +  void recreateBehaviorNotifications(bool resumeIdledBehaviors);
    bool runBehavior(BehaviorState& behavior);
    void runResumeBehavior(BehaviorState& behavior);
    bool runAction(const IdleBehaviorConfig& behavior, const IdleActionRequest& action) const;
-@@ -89,6 +97,7 @@ class IdleManager {
+@@ -92,6 +100,7 @@ private:
    std::function<void()> m_onLiveIdleChange;
    IdleConfig m_idleConfig;
    Timer m_graceFallbackTimer;
@@ -280,7 +287,7 @@ index 579c61b3ed..9846169e41 100644
    std::vector<BehaviorState*> m_graceBehaviors;
    bool m_activeGraceWillLock = false;
    std::uint64_t m_graceGeneration = 0;
-@@ -97,6 +106,6 @@ class IdleManager {
+@@ -100,6 +109,6 @@ private:
    bool m_heartbeatCompositorIdle = false;
    std::int64_t m_liveIdleSeconds = 0;
    std::int64_t m_screenSaverInhibitLocks = 0;

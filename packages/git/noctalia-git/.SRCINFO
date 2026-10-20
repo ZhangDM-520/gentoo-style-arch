@@ -52,6 +52,6 @@ pkgbase = noctalia-git
 	source = noctalia::git+https://github.com/noctalia-dev/noctalia.git#branch=main
 	source = 0001-idle-lock-resume-and-inhibit-tracking.patch
 	sha256sums = SKIP
-	sha256sums = b4ecd6ad23284498079095d815889c02ebf52fa81c3c685c7d32700744793bfa
+	sha256sums = 0a952b005b7ede29177f0205b52e7c3333d84d1200d3c9ffb6824c8a5b43197e
 
 pkgname = noctalia-git

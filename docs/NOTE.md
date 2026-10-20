@@ -1,3 +1,205 @@
+## 2026-10-20 — the battery's four pre-existing reds: stale .SRCINFOs, pgo-transition's srcdir/profile-dir contract, pgo-lib's prose-only mention, and the libdisplay-info-git hub membership
+
+**Symptom.** The pre-commit full battery (2026-10-20) came back 65 pass /
+5 fail — and every failure pre-existed at HEAD (proven against `git show
+HEAD:…`: the stale `.SRCINFO`s were committed stale), unrelated to the
+three wall fixes landing in the same batch. Owner call: fix all four here.
+
+1. **Stale `.SRCINFO`s (`umbriel-git`, `logseq-desktop-git`).** Both
+   PKGBUILDs carried fetch-side `pkgver` churn inside their fix commits
+   (allowed — churn inside fix files) but the committed `.SRCINFO` was not
+   regenerated with it, so `srcinfo-freshness` failed on every run.
+   Remedy is the fixture's own: regenerate with `makepkg --printsrcinfo`;
+   `umbriel-git`'s diff is exactly `pkgver` plus its versioned `provides`
+   line, `logseq-desktop-git`'s exactly `pkgver`.
+2. **`pgo-transition.sh` vs `xorg-xwayland-git`'s 2026-10-19 PGO spelling.**
+   The fixture harness never set `srcdir` (makepkg runs `build()` with
+   cwd=`$srcdir` and `$srcdir` set) and its meson stub wrote fake training
+   gcda into `build/` only, while the recipe's `-fprofile-generate` target
+   is `$PWD/pgo-profiles` (the mesa precedent) — and the pre-build cleanup
+   missed the srcdir-root `pgo-profiles`, so the profile run's 120 gcda
+   leaked into the fallback run and flipped its floor. Three contract
+   repairs, recipe untouched: the wrapper sets `srcdir` to the synthetic
+   srcdir; the stub now lands fake gcda in whatever directory the
+   instrument phase declared (falling back to `build/`); the cleanup covers
+   both `pgo-profiles` spellings. All 8 rows × 2 branches green.
+3. **`pgo-lib.sh`'s mention-based discovery vs prose.** Discovery greps for
+   `lib/pgo.sh` in every PKGBUILD, so `pandoc-cli`'s *comment* ("outside
+   lib/pgo.sh's instrumented families") counted as intent to consume and
+   demanded a `source "$startdir/…"` line. A prose-only mention (every hit
+   on a full-line comment) is now skipped; real consumers keep every check
+   (source line, tracked-path resolution, interface definition, gate call).
+4. **`abi-batch-policy.sh` F(b) hub rule vs three hub records.** Rule
+   21(b): a record with ≥2 edge-consumers carries `core` (the 2026-10-04 Q2
+   decision made the bare pin bind over the whole graph). Three records
+   landed after that sweep without dual membership and failed one at a time
+   (the fixture stops at the first): `libdisplay-info-git` (consumers
+   `niri-spicy-git`, `umbriel-git`), `tomlplusplus` (consumers
+   `noctalia-git`, `umbriel-git`) and `xorg-xwayland-git` (consumers
+   `umbriel-git`, `xwayland-satellite-git`) → groups now `git,core`,
+   `stable,core`, `git,core` — the file's existing dual spelling
+   (`libinput-git`, `mesa-git`). A full-graph sweep (not iteration by
+   failure) found exactly these three.
+
+**Validation.** `srcinfo-freshness`, `pgo-transition` (all rows),
+`pgo-lib`, `abi-batch-policy` each green after their fix; the topology
+change additionally clears `gsa -Ma` and the `@git`/`@core`/`@stable`
+dry-runs. The fifth failure, `gsa-fetch-v2.sh`, is the known parallel-load
+timing pin (MEMORY §5) — passes standalone, unchanged.
+
+**Durable rule.** A fixture that runs recipe code must model makepkg's
+function contract (`srcdir`, cwd) and must place its stubs' output where
+the *recipe's declared flags* point, not where the stub's convenience
+dictates — a recipe fix that moves a work directory will otherwise fail a
+green fixture for unrelated-looking reasons. And a mention-based discovery
+over PKGBUILDs must not treat prose as intent.
+
+## 2026-10-20 — noctalia-git's idle patch drifted onto upstream's own lock fix: rebase the snapshot 3-way, drop the fade-cancel hunk
+
+**Symptom.** resume12: `noctalia-git` died in `prepare()` in 63 s —
+`git apply -3` reported `src/dbus/idle/screensaver_service.cpp` clean but
+`src/idle/idle_manager.cpp` and `src/idle/idle_manager.h` "with conflicts".
+The recipe's source floats on `#branch=main`, so the carried snapshot (upstream
+PR #4002 head `9d530d40`, code-only) drifted when main moved.
+
+**Root cause.** Upstream `b0af9ffde "fix(idle): preserve idle actions and
+timers when locking"` (#4843) landed on main and *independently fixed the
+same lock-side bug* #4002 targets: it added `notificationTimeoutMs`,
+`effectiveTimeoutMilliseconds()` and `syncBehaviorNotification()` (re-arm
+only Waiting behaviors whose effective timeout changed) and reworked
+`setSessionLocked` — exactly the hunks the snapshot rewrites.
+
+**Fix (3-way rebase onto main `ee75f7adcc`, hermes-agent-git precedent).**
+Lock branch: main's `syncBehaviorNotification` loop kept — it achieves the
+snapshot's lock-side intent (Waiting behaviors without `locked_timeout`
+keep their countdown; already-idled behaviors keep state and still owe
+their resume to real input — the monitor-wake-at-lock bug) plus the
+snapshot's debug line. Unlock branch: the snapshot's
+`recreateBehaviorNotifications(true)` (resume idled on unlock) kept. The
+snapshot's `recreateBehaviorNotification(BehaviorState&, bool)` adapts
+main's `syncBehaviorNotification` call; the inhibit-debounce chain
+(`kInhibitReleaseDebounce`, `setScreenSaverInhibitLocks`,
+`applyScreenSaverInhibitRelease`, `rearmWaitingBehaviors`) survives
+unchanged. **One deliberate semantic drop (accepted):** the snapshot's
+`cancelActiveGrace(false)` at lock — upstream's `checkLockDuringCancelledFade`
+(`tests/idle_manager_test.cpp`, added by `b0af9ffde`) asserts fades finish
+on their current schedule, so keeping the cancel would fight upstream's own
+suite and make the patch un-landable; the patch's documented intent is
+untouched by the drop.
+
+**Validation.** Round-trip proven twice (agent + independent re-check): the
+refreshed patch applies to a clean `ee75f7adcc` both plain and `git apply -3`
+(three `cleanly` lines) and reproduces exactly the resolved tree —
+`git write-tree` = `39891759887059772141adbf6b2ceb470a005722` in both, and
+the applied diff is byte-identical to the patch file modulo `core.abbrev`
+index lines. `sha256sums` re-anchored (`0a952b00…`) with the `.SRCINFO` diff
+exactly one sha256 line; `bash -n`; `tests/noctalia-pgo.sh` green.
+
+**Durable rule.** When a carried patch's target upstream independently lands
+the same fix, rebase the snapshot onto the new base and let upstream's tests
+arbitrate the overlap: drop hunks that would fight the suite, and record the
+drop as a decision rather than a resolution detail. The acceptance criterion
+is the patch's own documented intent (here: locking must not run resume
+actions of already-idled behaviors), not hunk fidelity. Upstream conversation
+duty stands: PR #4002 now overlaps #4843 and should say so.
+
+## 2026-10-20 — vscodium-insiders-git's packaging fetch wall: a bounded npm retry shim for the transient-network class
+
+**Symptom.** resume12: the `vscode-linux-x64-min-packing` gulp task errored
+after 17 min with `TypeError: terminated` (undici fetch), taking the lane
+down 34 min in. Second strike of the class established on 2026-10-11
+(`TypeError: fetch failed` on the same task).
+
+**Root cause (carried from 2026-10-11, unchanged).** A fully cached
+Electron build is not offline-safe: `@electron/get` bypasses its cache for
+checksum files, so every packaging run re-fetches `SHASUMS256.txt` via raw
+`fetch()`. A dying link throws there, and `gulp-electron`'s `withRetry`
+never fires because the undici timeout/terminated class is not in its
+`TRANSIENT_NETWORK_ERROR_CODES` — one shot, then the build dies.
+
+**Fix (owner call 2026-10-20: bounded retry around the packaging step,
+instrumentation deferred).** `build()` now generates an npm retry shim and
+front-loads it on `PATH` after `nvm use`: every npm-driven step gets up to
+3 attempts **only** when the failing output matches the transient-network
+class (`TypeError: fetch failed|terminated`, `UND_ERR`, `ECONNRESET`,
+`ETIMEDOUT`, `EAI_AGAIN`, `socket hang up`, `network timeout`); any other
+failure passes the real exit status straight through with no retry. A
+retried gulp task re-attempts the fetch from scratch — the known-safe
+"rerun the selection" recovery from 2026-10-11, now bounded and local to
+the failing step. The shim is generated inside the recipe (no carried
+patch against vscodium's fast-moving tree — nothing to drift), with the
+`sleep` backoff kept out of the wall-clock critical path.
+
+**Validation.** `bash -n`; `makepkg --printsrcinfo` byte-identical
+(`build()` is not captured there). New fixture
+`tests/vscodium-npm-retry.sh` extracts the shim's *generation* block from
+the real PKGBUILD, generates the shim, and pins four rows against a stub
+npm: transient-then-success → 3 attempts + 2 retry notes + success;
+persistent transient → exactly 3 attempts then the failure; non-transient
+failure → exactly 1 attempt with the original rc 42 and no retry note;
+clean run → 1 attempt. Mutation-probed twice: neutralising the class
+regex fails the retry row, breaking rc propagation fails the failure row;
+restored fix is green.
+
+**Durable rule.** A mandatory validation fetch inside an otherwise cached
+build is a per-run network dependency; when its failure class is transient
+and the fetching library's own retry set does not cover it, wrap the
+*step* in a classifying bounded retry — retrying only the transient class,
+never masking real errors — instead of re-running whole builds. If this
+wall strikes a third time, instrument the fetch target itself
+(`gulp-electron`'s `TRANSIENT_NETWORK_ERROR_CODES` / `@electron/get`),
+which is the finer-grained seam and needs a recipe patch.
+
+## 2026-10-20 — texlive-texmf's tlpkg husk, third strike: `prepare()` now heals instead of prescribing a manual `rm -rf`
+
+**Symptom.** resume12 (2026-10-20): `texlive-texmf` lane died in 14 s —
+this time even before `prepare()`, with `svn checkout` **segfaulting**
+mid-fetch (`/usr/share/makepkg/source/svn.sh: line 31: … Segmentation
+fault`) and makepkg's `Failure while downloading tlpkg svn repo`. The
+leftover is the husk the recipe's own remediation text described; every
+previous strike surfaced 23 minutes later as
+`awk: fatal: cannot open file 'tlpkg/texlive.tlpdb'` (2026-09-24) or as
+that remediation message (2026-10-19, twice).
+
+**Root cause.** makepkg's `download_svn` treats `$SRCDEST/tlpkg` as a
+checkout target and only WARNS when the directory is not a working copy
+(`svn update` fails → `warning`, build continues) and then `extract_svn`
+copies the husk into `$srcdir`. Worse, `download_svn` does
+`mkdir -p "$dir/.makepkg"` *before* the checkout, so a checkout that dies
+instantly leaves a non-empty directory that is never retried as a fresh
+checkout again — the husk is self-perpetuating. `prepare()` then failed
+closed with manual repair text, which is the wrong owner: the recipe can
+fetch.
+
+**Fix (recipe, `packages/git/texlive-texmf/PKGBUILD`).** `prepare()`
+self-heals when `tlpkg/texlive.tlpdb` is missing: wipe the husk in
+`$srcdir`, `$SRCDEST` and (when it is a distinct path) beside the
+PKGBUILD, then `svn checkout` the pinned revision again, at most three
+attempts, and copy the working copy back into `$srcdir`. The URL and
+revision are read from the recipe's own `source` entry
+(`*/tlpkg#revision=*`), never re-typed — rule 18: a value is anchored to
+the authority it came from. The three svn sources' `SKIP` sums and
+`pkgver`/`pkgrel` are untouched (no packaged-content change; a `pkgrel`
+bump would re-trigger the whole 23-package split).
+
+**Validation.** `bash -n`, `makepkg --printsrcinfo` byte-identical
+(`prepare()` is not captured there). New fixture
+`tests/texlive-selfheal.sh` runs the REAL `prepare()` over synthetic trees
+with a PATH-stubbed `svn` and pins four rows: husk → wiped + re-anchored
+fetch + copy back + legacy husk cleared; transient failure → retried;
+persistent failure → 3 attempts then a loud failure; complete working
+copy → untouched. Mutation-probed twice: reverting to the old
+remediation block fails the fixture ("husk was not healed in $srcdir"),
+and a hard-coded wrong revision fails the anchoring row; restored fix is
+green (`texlive-recipe.sh`, `texlive-split.sh` still pass).
+
+**Durable rule.** A VCS-source husk left by a failed makepkg fetch is
+self-perpetuating (`download_svn`'s pre-created `.makepkg` dir rules out
+a fresh checkout), so a recipe that consumes such a source must detect
+the incomplete working copy and re-fetch it itself — dying with
+remediation text hands the operator work the recipe can do. And the
+re-fetch must be anchored to the `source` entry, not a duplicated URL.
+
 ## 2026-10-20 — umbriel-git: windows_drag physics tuning keys (patch 0002)
 
 **Symptom.** The drag-physics feel was compile-time: `[animation.windows_drag]`

@@ -77,13 +77,51 @@ prepare() {
   # checkout leaves a config-only husk) and then extracts that husk, so the
   # failure used to surface 23 minutes later as a bare
   # `awk: fatal: cannot open file 'tlpkg/texlive.tlpdb'` (2026-09-24).
-  # Fail first, from the recipe directory, with the repair.
+  # Third strike (2026-10-19: `svn checkout` itself died mid-fetch and left
+  # exactly that husk): the recipe heals instead of dying with repair text —
+  # wipe the husk wherever it lives, then re-fetch the pinned revision from
+  # the declared source, retried three times before giving up.
   if [[ ! -r tlpkg/texlive.tlpdb ]]; then
-    echo "==> ERROR: tlpkg/texlive.tlpdb is missing — the tlpkg SVN source did not fetch." >&2
-    echo "    tlpkg/ beside the PKGBUILD is not a complete SVN working copy." >&2
-    echo "    From the recipe directory, remove the husk and re-fetch:" >&2
-    echo "        rm -rf tlpkg src/tlpkg && makepkg -f" >&2
-    return 1
+    local _tl_url="" _tl_rev="" _tl_src _tl_dir _tl_try
+    for _tl_src in "${source[@]}"; do
+      case $_tl_src in
+        */tlpkg#revision=*)
+          _tl_url=${_tl_src%%#*}
+          _tl_rev=${_tl_src##*#revision=}
+          ;;
+      esac
+    done
+    if [[ -z $_tl_url || -z $_tl_rev ]]; then
+      echo "==> ERROR: no tlpkg svn source in source=() to self-heal from" >&2
+      return 1
+    fi
+    # makepkg canonicalises SRCDEST to $startdir when unset, so the husk
+    # lives at $SRCDEST/tlpkg; a pre-SRCDEST husk may sit beside the PKGBUILD.
+    _tl_dir="${SRCDEST:-$startdir}/tlpkg"
+    echo "==> NOTE: tlpkg/texlive.tlpdb is missing — the tlpkg working copy is a husk" >&2
+    echo "    (makepkg extracts a failed checkout instead of failing on it);" >&2
+    echo "    wiping and re-fetching r${_tl_rev} from ${_tl_url}" >&2
+    rm -rf "$srcdir/tlpkg"
+    if [[ "$startdir/tlpkg" != "$_tl_dir" && -e "$startdir/tlpkg" ]]; then
+      rm -rf "$startdir/tlpkg"
+    fi
+    for _tl_try in 1 2 3; do
+      rm -rf "$_tl_dir"
+      mkdir -p "$_tl_dir/.makepkg"
+      if svn checkout -r "$_tl_rev" --config-dir "$_tl_dir/.makepkg" "$_tl_url" "$_tl_dir"; then
+        break
+      fi
+      echo "==> WARNING: tlpkg svn checkout failed (attempt ${_tl_try}/3)" >&2
+      if (( _tl_try == 3 )); then
+        echo "==> ERROR: tlpkg self-heal failed after 3 attempts" >&2
+        return 1
+      fi
+    done
+    cp -a "$_tl_dir" "$srcdir/tlpkg"
+    if [[ ! -r tlpkg/texlive.tlpdb ]]; then
+      echo "==> ERROR: tlpkg self-heal did not produce a complete working copy" >&2
+      return 1
+    fi
   fi
 
 # Update minted for Python 3.14 compatibility

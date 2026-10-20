@@ -86,9 +86,22 @@ case "${1:-}" in
         exit 0
         ;;
     test)
-        mkdir -p build
+        # Fake training output lands where the instrument phase declared
+        # -fprofile-generate=<dir>: recipes spell the work dir differently
+        # (the build dir, or a pgo-profiles dir outside it — the mesa
+        # precedent xorg-xwayland-git and jq use), and the floor guard
+        # counts exactly that directory. Falls back to build/ when the
+        # flags carry no explicit directory.
+        dir=build
+        case "${CFLAGS:-}" in
+            *-fprofile-generate=*)
+                dir=${CFLAGS##*-fprofile-generate=}
+                dir=${dir%% *}
+                ;;
+        esac
+        mkdir -p "$dir"
         for profile in $(seq 1 "${PGO_FIXTURE_GCDA_COUNT:-120}"); do
-            : >"build/profile-$profile.gcda"
+            : >"$dir/profile-$profile.gcda"
         done
         exit 0
         ;;
@@ -237,6 +250,10 @@ error() {
 # makepkg shim: $startdir is the recipe directory before the PKGBUILD is
 # sourced — this is how the real builder resolves `source "$startdir/…"`.
 startdir="$root/$recipe_path"
+# makepkg runs build() with cwd=$srcdir and $srcdir set; this fixture's cwd
+# IS the synthetic srcdir, so both spellings resolve here.
+srcdir="$fixture"
+export srcdir
 source "$root/$recipe_path/PKGBUILD"
 
 # Contract pins for the C-autotools tier (static).
@@ -303,7 +320,7 @@ if test "$style" = autotools; then
     }
 fi
 
-rm -rf "$fixture/build" "$fixture/pkg" "$fixture/$project_dir/build" "$fixture/$project_dir/pgo-profiles"
+rm -rf "$fixture/build" "$fixture/pkg" "$fixture/$project_dir/build" "$fixture/$project_dir/pgo-profiles" "$fixture/pgo-profiles"
 build
 
 # build() ends in the recipe's source directory, so anchor below on $fixture.
