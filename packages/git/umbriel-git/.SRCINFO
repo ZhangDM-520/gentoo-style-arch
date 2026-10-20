@@ -1,6 +1,6 @@
 pkgbase = umbriel-git
 	pkgdesc = A Wayland compositor built on wlroots
-	pkgver = 0.1.0.r1225.2339fc3
+	pkgver = 0.1.0.r1310.a758290
 	pkgrel = 1
 	epoch = 1
 	url = https://github.com/noctalia-dev/umbriel
@@ -34,11 +34,13 @@ pkgbase = umbriel-git
 	depends = xorg-xwayland
 	depends = xdg-desktop-portal-umbriel
 	depends = wlroots0.20
-	provides = umbriel=0.1.0.r1225.2339fc3
+	provides = umbriel=0.1.0.r1310.a758290
 	conflicts = umbriel
 	options = !debug
 	options = lto
 	source = umbriel::git+https://github.com/noctalia-dev/umbriel.git#branch=main
+	source = 0001-input-mod-right-double-click-maximize.patch
 	sha256sums = SKIP
+	sha256sums = 13cf79919c8f1fdd6c4a2ca8ab4348a98effb42a5cbfa3bd08b37f6256e793d7
 
 pkgname = umbriel-git

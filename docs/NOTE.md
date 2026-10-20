@@ -1,3 +1,48 @@
+## 2026-10-20 — umbriel-git: Mod+double-right-click maximize via a carried patch against upstream main
+
+**Symptom.** Wanted Mod+double-right-click on a window to toggle maximize in
+Umbriel. Research verdict (noctalia-dev/umbriel @ `c554db5`): the gesture does
+not exist — there is no double-click concept anywhere in `src/`; Mod+right-click
+starts the resize grab (`src/input/cursor.cpp`, the Mod+left-click move's
+sibling), mouse chords (`Mod+MouseRight`) fire once per press
+(`Server::handleMouseBind`), and the docs' "titlebar double-click" is
+client-side CSD, i.e. an `xdg_toplevel` maximize request.
+
+**Fix.** One patch carried by the recipe,
+`0001-input-mod-right-double-click-maximize.patch` (same commit as upstream PR
+noctalia-dev/umbriel#504): `View::toggleMaximizedLikeClientRequest()` mirrors
+`handleRequestMaximize`'s target selection for the request a client would send
+from the opposite state (`maximizeRequestTargetsEdges` + `client_maximize` for
+tiled columns, floats fill the usable area whatever `client_maximize` says, an
+unmaximize exits the active mode first), and `Cursor::modRightDoubleClick()`
+(same view, 300 ms, 8 px slop, paired up so a third rapid click resizes again)
+turns the second Mod+right-click into that toggle. The first click still
+resizes; the completing press+release are swallowed via `m_swallowedButtons`
+(the tab-bar precedent) because no grab owns them and the client must not see
+an unmatched release. Recipe: patch in `source=()` + `sha256sums`, `prepare()`
+runs `git apply -3` (glib2-git house style). Upstream `just format` was run on
+the final commit (clang-format rewraps only the new lines).
+
+**Validation.** `bash -n` + `makepkg --printsrcinfo` parity for the recipe;
+`gsa -Ma` reports nothing new for umbriel-git; `gsa -B --leaf umbriel-git`
+succeeds (PGO gate included); plain `makepkg -f` (BUILDDIR/PKGDEST redirected to
+`~/Workspace/` scratch, `GIT_CONFIG_COUNT=0`) finishes `umbriel-git
+1:0.1.0.r1310.a758290-1`. Behavior: new harness check
+`tests/harness/checks/input/mod_right_double_click_maximize.sh` proven red first
+(disabling the seam fails `timed out waiting for maximized=true`) then green;
+full `input/` + `drag/` subsets 41 passed / 0 failed against the patched build.
+Upstream PR carries the check and the `docs/user/input.md` note.
+
+**Durable rule.** A local patch against upstream `main` in a `-git` recipe is
+fail-closed: drift breaks `git apply -3` loudly at the next build — refresh the
+patch with `git format-patch` from the scratch branch and update `sha256sums`
+and `.SRCINFO` in the same change. Patch files are fine in `source=()` for
+unanchored recipes; only `version-sync=nvchecker`-anchored recipes must keep
+local fixes out of `source=()` (MEMORY.md rule 18, gcc-snapshot). And note who
+rewrote what: `makepkg` itself rewrites `pkgver=` and resets `pkgrel=1` in the
+PKGBUILD when `pkgver()` moves (`update_pkgver`) — that is not the engine's
+version-sync rewrite pass.
+
 ## 2026-10-19 — own the pandoc/icu class: pandoc-cli joins the set with a static Haskell closure
 
 **The class, not the instance.** The ghostty wall (pandoc wanting

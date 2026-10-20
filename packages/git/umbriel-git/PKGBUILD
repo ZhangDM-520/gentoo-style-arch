@@ -8,7 +8,7 @@ source "$startdir/../../../lib/pgo.sh"
 
 pkgname=umbriel-git
 _pkgname=umbriel
-pkgver=0.1.0.r1225.2339fc3
+pkgver=0.1.0.r1310.a758290
 pkgrel=1
 epoch=1
 pkgdesc='A Wayland compositor built on wlroots'
@@ -56,8 +56,10 @@ makedepends=(
 )
 provides=("umbriel=${pkgver}")
 conflicts=('umbriel')
-source=("${_pkgname}::git+${url}.git#branch=main")
-sha256sums=('SKIP')
+source=("${_pkgname}::git+${url}.git#branch=main"
+        '0001-input-mod-right-double-click-maximize.patch')
+sha256sums=('SKIP'
+            '13cf79919c8f1fdd6c4a2ca8ab4348a98effb42a5cbfa3bd08b37f6256e793d7')
 
 pkgver() {
   cd "${_pkgname}"
@@ -70,6 +72,16 @@ pkgver() {
     "$version" \
     "$(git rev-list --count HEAD)" \
     "$(git rev-parse --short=7 HEAD)"
+}
+
+prepare() {
+  cd "${_pkgname}"
+
+  # Mod+double-right-click on a window toggles maximize, with the same target
+  # a client's titlebar double-click picks (client_maximize applies to tiled
+  # windows). Upstream PR pending; while the recipe tracks upstream main,
+  # rebase the patch with `git format-patch` when a drift breaks the apply.
+  git apply -3 ../0001-input-mod-right-double-click-maximize.patch
 }
 
 build() {

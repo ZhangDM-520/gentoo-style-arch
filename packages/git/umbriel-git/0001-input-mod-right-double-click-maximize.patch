@@ -1,0 +1,241 @@
+From 6486ed06dd67951eaae27b7022c9e5047a14c923 Mon Sep 17 00:00:00 2001
+From: ZhangDM-520 <jixianqiang1540@gmail.com>
+Date: Tue, 20 Oct 2026 11:14:26 +0800
+Subject: [PATCH] feat(input): Mod double-right-click toggles maximize
+
+A second Mod+right-click on the same window within the double-click
+window (300ms, 8px pointer slop) now toggles maximize instead of
+starting another resize. The toggle carries a client maximize request's
+target selection, so client_maximize picks the column or the edges for a
+tiled window exactly like a titlebar double-click, and a floating window
+fills the usable area. The first click resizes as always; clicks past
+the window stay single resize attempts.
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+---
+ docs/user/input.md                            |  7 ++
+ src/input/cursor.cpp                          | 21 ++++++
+ src/input/cursor.h                            | 13 ++++
+ src/view/view.h                               |  5 ++
+ src/view/view_state.cpp                       | 24 +++++++
+ .../input/mod_right_double_click_maximize.sh  | 69 +++++++++++++++++++
+ 6 files changed, 139 insertions(+)
+ create mode 100755 tests/harness/checks/input/mod_right_double_click_maximize.sh
+
+diff --git a/docs/user/input.md b/docs/user/input.md
+index 2fa0852..8f83657 100644
+--- a/docs/user/input.md
++++ b/docs/user/input.md
+@@ -22,6 +22,13 @@ dragging a client-side title bar or the empty tab strip of Chromium, Firefox,
+ or Electron apps. Windows then move only with Mod+drag or keybinds.
+ Resizing from client-side borders is unaffected.
+ 
++Mod+right-click drags a window's resize edge; a second Mod+right-click on the
++same window within the double-click window toggles maximize instead, with the
++same target a client's titlebar double-click picks: `client_maximize` decides
++between the column and the edges for a tiled window, and a floating window
++fills the usable area. A `Mod+MouseRight` keybind overrides the built-in
++button entirely.
++
+ `window_drag_toggle` controls what pressing the other main mouse button does
+ during a window drag:
+ 
+diff --git a/src/input/cursor.cpp b/src/input/cursor.cpp
+index e963473..8bfa213 100644
+--- a/src/input/cursor.cpp
++++ b/src/input/cursor.cpp
+@@ -1345,6 +1345,17 @@ namespace umbriel {
+     processButton(event->time_msec, event->button, event->state);
+   }
+ 
++  bool Cursor::modRightDoubleClick(uint32_t timeMsec, View* view) {
++    constexpr uint32_t kModRightDoubleClickMsec = 300;
++    constexpr double kModRightDoubleClickSlop = 8.0;
++    const bool doubleClick = m_lastModRightClick.view == view
++        && timeMsec - m_lastModRightClick.timeMsec <= kModRightDoubleClickMsec
++        && std::abs(m_cursor->x - m_lastModRightClick.x) <= kModRightDoubleClickSlop
++        && std::abs(m_cursor->y - m_lastModRightClick.y) <= kModRightDoubleClickSlop;
++    m_lastModRightClick = doubleClick ? ModRightClick{} : ModRightClick{timeMsec, m_cursor->x, m_cursor->y, view};
++    return doubleClick;
++  }
++
+   void Cursor::processButton(uint32_t timeMsec, uint32_t button, wl_pointer_button_state state) {
+     noteActivity();
+     if (state == WL_POINTER_BUTTON_STATE_PRESSED) {
+@@ -1570,6 +1581,16 @@ namespace umbriel {
+     }
+     if (button == BTN_RIGHT && modHeld && view != nullptr) {
+       m_server->focusView(view, FocusReason::Grab);
++      // A second Mod+right-click on the same window within the double-click
++      // window toggles maximize with a titlebar double-click's semantics. The
++      // first click resized as always and its grab is already over.
++      if (modRightDoubleClick(timeMsec, view)) {
++        // No grab owns this press, so its release would reach the client
++        // unmatched; swallow both like the tab-bar path does.
++        m_swallowedButtons.push_back(button);
++        view->toggleMaximizedLikeClientRequest();
++        return;
++      }
+       beginResize(view, view->tiled() ? 0 : floatResizeEdges(view), button);
+       return;
+     }
+diff --git a/src/input/cursor.h b/src/input/cursor.h
+index 4d6d25a..957bed3 100644
+--- a/src/input/cursor.h
++++ b/src/input/cursor.h
+@@ -298,6 +298,11 @@ namespace umbriel {
+     clientPointerGrabButton(const View* view, wlr_seat_client* seatClient, uint32_t serial) const;
+     [[nodiscard]] uint32_t floatResizeEdges(View* view) const;
+     [[nodiscard]] uint32_t hoverResizeEdges(View* view) const;
++    // True when this Mod+right-click completes a double-click on the same view:
++    // same window, within the time window and pointer slop of the previous one.
++    // Records the press either way, pairing clicks up so a third rapid click
++    // starts a fresh window instead of toggling back.
++    bool modRightDoubleClick(uint32_t timeMsec, View* view);
+     void updateInteractiveCursor(View* under);
+     void setCompositorCursor(const char* name);
+     void restoreClientCursor();
+@@ -369,6 +374,14 @@ namespace umbriel {
+     // Presses consumed by config binds or ignored during an interactive move;
+     // their release is swallowed too, even if the grab ended first.
+     std::vector<uint32_t> m_swallowedButtons;
++    // Previous Mod+right-click, for the double-click that toggles maximize.
++    struct ModRightClick {
++      uint32_t timeMsec = 0;
++      double x = 0;
++      double y = 0;
++      View* view = nullptr;
++    };
++    ModRightClick m_lastModRightClick;
+     std::vector<std::unique_ptr<TabletToolState>> m_tools;
+     bool m_hoverFocusInvalidated = false;
+     bool m_compositorOwnsCursor = false;
+diff --git a/src/view/view.h b/src/view/view.h
+index 6ad733d..e52a669 100644
+--- a/src/view/view.h
++++ b/src/view/view.h
+@@ -393,6 +393,11 @@ namespace umbriel {
+     // output's usable area and restores to the box it had before; tiled windows
+     // toggle their column's full-width state.
+     void toggleMaximized();
++    // Compositor-driven toggle with a client maximize request's target
++    // selection (what a titlebar double-click produces): a tiled window honors
++    // the workspace's client_maximize, an unmaximize exits the active mode, and
++    // a floating window keeps the default behavior whatever client_maximize says.
++    void toggleMaximizedLikeClientRequest();
+     // Restore a floating maximized window to its saved box before a pointer
+     // move takes ownership of its position.
+     void restoreMaximizedForMove();
+diff --git a/src/view/view_state.cpp b/src/view/view_state.cpp
+index 9b1034f..77779cd 100644
+--- a/src/view/view_state.cpp
++++ b/src/view/view_state.cpp
+@@ -295,6 +295,30 @@ namespace umbriel {
+ 
+   void View::toggleMaximized() { setMaximized(m_tiled ? !scheduledMaximized() : !m_floatingMaximized); }
+ 
++  void View::toggleMaximizedLikeClientRequest() {
++    // The state a client would request from the opposite of the one it was
++    // given: the compositor-side toggle mirrors handleRequestMaximize's target
++    // selection without the client-request bookkeeping.
++    const bool requested = !(m_maximizedToEdges || scheduledMaximized() || m_floatingMaximized);
++    if (m_tiled && m_workspace != nullptr) {
++      if (maximizeRequestTargetsEdges(
++              requested, m_maximizedToEdges, m_workspace->layoutConfig().clientMaximize == ClientMaximize::Edges
++          )) {
++        setMaximizedToEdges(requested);
++        return;
++      }
++      setMaximized(requested);
++      return;
++    }
++    // A floating window keeps the default behavior whatever client_maximize
++    // says, but an active edges maximize still leaves first.
++    if (!requested && m_maximizedToEdges) {
++      setMaximizedToEdges(false);
++      return;
++    }
++    setMaximized(requested);
++  }
++
+   void View::restoreMaximizedForMove() {
+     // Fullscreen temporarily covers an underlying floating-maximized state.
+     // Moving the fullscreen surface must not consume the state that should be
+diff --git a/tests/harness/checks/input/mod_right_double_click_maximize.sh b/tests/harness/checks/input/mod_right_double_click_maximize.sh
+new file mode 100755
+index 0000000..f62cc8e
+--- /dev/null
++++ b/tests/harness/checks/input/mod_right_double_click_maximize.sh
+@@ -0,0 +1,69 @@
++#!/usr/bin/env bash
++# A second Mod+right-click on the same window within the double-click window
++# toggles maximize with a titlebar double-click's semantics. Single clicks stay
++# resize attempts and never toggle the state on their own.
++set -euo pipefail
++
++readonly BTN_RIGHT=273 # evdev BTN_RIGHT
++readonly OUTPUT_W=1280
++readonly OUTPUT_H=720
++readonly POINTER="${UMBRIEL_POINTER_CLIENT:-./build-debug/tests/pointer-client}"
++
++if [[ ! -x $POINTER ]]; then
++  echo "input helpers are not available"
++  exit 1
++fi
++
++pointer() {
++  "$POINTER" "$OUTPUT_W" "$OUTPUT_H" "$@"
++}
++
++window_center() {
++  local windows
++  windows=$("$UMBRIEL" windows --json)
++  jq -r '.[0] | "\(.x + (.w / 2 | floor)) \(.y + (.h / 2 | floor))"' <<< "$windows"
++}
++
++wait_for_maximized() {
++  local want=$1
++  for _ in $(seq 40); do
++    [[ $("$UMBRIEL" windows --json | jq -r '.[0].maximized') == "$want" ]] && return 0
++    sleep 0.1
++  done
++  echo "timed out waiting for maximized=$want: $("$UMBRIEL" windows --json)"
++  return 1
++}
++
++double_click() {
++  local x y
++  read -r x y < <(window_center)
++  pointer move "$x" "$y" mod logo click "$BTN_RIGHT" click "$BTN_RIGHT" mod none
++  "$UMBRIEL" settle
++}
++
++foot sh -c 'sleep 120' > /dev/null 2>&1 &
++for _ in $(seq 60); do
++  [[ $("$UMBRIEL" windows --json | jq 'length') -eq 1 ]] && break
++  sleep 0.25
++done
++"$UMBRIEL" settle
++
++double_click
++wait_for_maximized true
++
++double_click
++wait_for_maximized false
++
++# Two clicks past the double-click window are two single clicks: resize
++# attempts that must not toggle maximize.
++read -r x y < <(window_center)
++pointer move "$x" "$y" mod logo click "$BTN_RIGHT" mod none
++sleep 0.5 # real time: must exceed the double-click window so the next click pairs with nothing
++pointer mod logo click "$BTN_RIGHT" mod none
++"$UMBRIEL" settle
++if [[ $("$UMBRIEL" windows --json | jq -r '.[0].maximized') != false ]]; then
++  echo "slow Mod+right clicks toggled maximize: $("$UMBRIEL" windows --json)"
++  exit 1
++fi
++
++echo "Mod+double-right-click toggles maximize"
+-- 
+2.56.0.186.gc51408889c
+
