@@ -1,3 +1,41 @@
+## 2026-10-20 — umbriel-git: windows_drag physics tuning keys (patch 0002)
+
+**Symptom.** The drag-physics feel was compile-time: `[animation.windows_drag]`
+exposed only `physics`, and the elastic sheet always ran with the constants in
+`src/view/drag_physics.cpp` (stiffness 36, coupling 100, damping 6.5,
+pointer_response 2.0, max_displacement 200 px, settle-after-pause 0.25 s).
+Tuning the wobble meant rebuilding from source.
+
+**Fix.** Six keys under `[animation.windows_drag]` — `stiffness`, `damping`,
+`coupling`, `pointer_response`, `max_displacement_px`, `settle_after_pause_s` —
+carried in `Animation::WindowsDrag` with the shipped constants as defaults (no
+behavior change out of the box) and parsed through bounded `registry::real`
+entries (out-of-range clamps with the usual named diagnostic). `DragPhysics`
+consumes a `Tuning` struct at drag start (`View::beginDragPhysics` maps the
+config; a drag already in flight keeps its tuning), while the lattice size,
+contraction factor, 240 Hz step and settle thresholds stay fixed — the shader
+and the frame pacing own them. Delivered as recipe patch
+`0002-animation-windows-drag-physics-tuning.patch` beside `0001`, upstream PR
+noctalia-dev/umbriel#508.
+
+**Validation.** Red-first: with the config plumbing mutation-disabled
+(`beginDragPhysics` passing default `Tuning{}`), the new
+`drag/physics_tuning.sh` fails with `pointer_response = 0 still deformed the
+sheet past the window's box`; restored, both its cases pass (the default
+response trailing past the box is the control that proves the setup).
+`tests/unit/config_load.cpp` gains `windowsDragTuningDefaultsAndBounds`
+(shipped defaults + clamp diagnostics) and the config/schema/change/resolve
+plus `drag-physics` unit batteries are green (160 load cases); the full
+`drag/` + `input/` harness subsets 41 passed / 0 failed; `gsa -B --leaf
+umbriel-git` ok.
+
+**Durable rule.** A new tuning surface must ship with the shipped constants as
+defaults and prove the plumbing, not just the parse: the falsifying case is a
+config value with a visibly opposite effect (`pointer_response = 0`), and it
+needs a control case at the default or the assertion proves nothing. Registry
+numeric fields clamp with a named diagnostic — tests assert the clamped value,
+not an error.
+
 ## 2026-10-20 — umbriel-git, review round: deferred-press UAF and the moved-cursor edge leak
 
 **Symptom (Talia auto-review on PR noctalia-dev/umbriel#504).** Two findings in
