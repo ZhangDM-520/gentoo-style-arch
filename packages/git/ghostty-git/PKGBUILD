@@ -4,7 +4,7 @@
 
 pkgname=ghostty-git
 _pkgname=ghostty
-pkgver=1.3.1.r3071.gc7cbc9bfd
+pkgver=1.3.1.r3131.ga84a07030
 pkgrel=1
 pkgdesc='Fast, native, feature-rich terminal emulator (git version)'
 arch=('x86_64')
@@ -35,11 +35,13 @@ makedepends=(
   'gettext'
   'git'                 # VCS source (pkgver)
   'pkgconf'
-  # Ghostty enforces build.zig.zon's minimum_zig_version (currently 0.16.0,
-  # which is exactly what Arch's zig ships). Zig is pre-1.0 and breaks
-  # between minors: if the build ever dies in requireZig() or in
-  # language/library drift, the fix is a pinned zig toolchain, not flags.
-  'zig'
+  # Ghostty enforces build.zig.zon's minimum_zig_version (0.17.0 on master as
+  # of 2026-10-21; the recipe's old "0.16.0" note had gone stale). Zig is
+  # pre-1.0 and breaks between minors: if the build ever dies in requireZig()
+  # or in language/library drift, the fix is a pinned zig toolchain, not
+  # flags. The versioned floor turns an out-of-date zig into a
+  # dependency-resolution failure up front instead of a mid-build one.
+  'zig>=0.17'
 )
 optdepends=('nautilus-python: Open-in-Ghostty context menu in GNOME Files')
 # Versioned per the provides discipline: a bare provide would let the
@@ -78,8 +80,11 @@ prepare() {
   # store (measured 2026-10-19: "package not found at …/p/<hash>" while the
   # matching .tar.gz sat right beside it). Each tarball's top-level dir is
   # exactly <hash>/, so an in-place extract materializes what --system wants.
+  # [[ -f ]] guard: an unmatched glob under set -e would hand tar a literal
+  # *.tar.gz and abort prepare() if a future zig fetch ships unpacked dirs.
   local _p="$srcdir/zig-global-cache/p" _f
   for _f in "$_p"/*.tar.gz; do
+    [[ -f "$_f" ]] || continue
     tar -xzf "$_f" -C "$_p"
   done
 }

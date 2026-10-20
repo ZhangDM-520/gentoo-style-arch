@@ -1,6 +1,6 @@
 pkgbase = ghostty-git
 	pkgdesc = Fast, native, feature-rich terminal emulator (git version)
-	pkgver = 1.3.1.r3071.gc7cbc9bfd
+	pkgver = 1.3.1.r3131.ga84a07030
 	pkgrel = 1
 	url = https://github.com/ghostty-org/ghostty
 	arch = x86_64
@@ -9,7 +9,7 @@ pkgbase = ghostty-git
 	makedepends = gettext
 	makedepends = git
 	makedepends = pkgconf
-	makedepends = zig
+	makedepends = zig>=0.17
 	depends = bzip2
 	depends = fontconfig
 	depends = freetype2
@@ -26,7 +26,7 @@ pkgbase = ghostty-git
 	depends = wayland
 	depends = zlib
 	optdepends = nautilus-python: Open-in-Ghostty context menu in GNOME Files
-	provides = ghostty=1.3.1.r3071.gc7cbc9bfd
+	provides = ghostty=1.3.1.r3131.ga84a07030
 	conflicts = ghostty
 	options = !debug
 	source = ghostty::git+https://github.com/ghostty-org/ghostty.git#branch=main

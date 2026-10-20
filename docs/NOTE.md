@@ -1,3 +1,38 @@
+## 2026-10-21 — resume13's upstream-skew walls: blender-git vs OTIO 0.19's renamed namespace macro, ghostty-git vs zig 0.17's floor
+
+**Symptom.** Two deterministic resume13 build walls, both upstream-master
+ahead of the installed CachyOS libs: `blender-git` died in `io/otio/*` on
+undeclared `OPENTIMELINEIO_VERSION_NS`; `ghostty-git`'s `build.zig.zon`
+enforces `minimum_zig_version = 0.17.0` while the host carried zig 0.16.
+
+**Root cause.** (1) OTIO master (0.19.0-dev) renamed the namespace macro:
+its `version.h` now defines `OPENTIMELINEIO_VERSION_NS` *unconditionally*
+alongside `OPENTIMELINEIO_VERSION` (measured 2026-10-21 from master's
+`src/opentimelineio/version.h`), and blender master's `io/otio/*.{hh,cc}`
+use the new name — system opentimelineio 0.18.1 defines only the old one.
+(2) ghostty master raised the zig floor to 0.17.0 and CachyOS already ships
+zig 0.17.0-1.1, but the recipe's `makedepends=('zig')` was unversioned (and
+its comment stale at "0.16.0"), so nothing triggered the upgrade.
+
+**Fix.** `blender-git` `build()`: when the *installed* header lacks the new
+macro, append `-DOPENTIMELINEIO_VERSION_NS=OPENTIMELINEIO_VERSION` to
+`CXXFLAGS` (CMake ignores `CPPFLAGS` — the define must ride CXXFLAGS to
+seed `CMAKE_CXX_FLAGS`). Conditional is load-bearing: OTIO 0.19's header
+defines the real macro unconditionally, so an unconditional `-D` becomes a
+redefinition warning the moment the lib upgrades — forward-compatible as a
+no-op instead. `ghostty-git`: `makedepends=('zig>=0.17')` (a versioned
+floor turns an out-of-date zig into a dependency-resolution failure up
+front) + comment refresh, and a `[[ -f ]]` guard in `prepare()`'s tarball
+loop — an unmatched `*.tar.gz` glob under `set -e` would hand `tar` a
+literal name and abort `prepare()` if a future `zig fetch` ships unpacked
+dirs.
+
+**Validation.** `bash -n` + `makepkg --printsrcinfo` green on both;
+`.SRCINFO` deltas exactly `pkgver` churn (both) + `makedepends = zig>=0.17`
++ its versioned `provides` (ghostty) — regen included in the fix commits
+per srcinfo-freshness. No fixtures cover either recipe; the end-to-end
+proof is the resume14 builds.
+
 ## 2026-10-21 — svn checkouts SEGV: the snapshot GCC's vectorizer emits aligned loads for subversion's unaligned word scan
 
 **Symptom.** resume13's `texlive-texmf` lane died in 16 s at the SOURCE
@@ -31,11 +66,13 @@ sweeping 0..63): host flags crash at offset 1 (rc 139); `-fno-tree-vectorize`
 clean at all 64 offsets; `-O2` clean; `-mno-avx512f` **not** enough (the
 AVX2 path miscompiles too — the bug is in the vectorizer, not one ISA).
 
-**Validation owed (queued behind the live resume13 — no system mutation
-while a gsa run is live).** rebuild + install (`gsa -S --leaf subversion`),
-then the end-to-end proof is the real `texmf-dist` repro completing, then
-the `texlive-texmf` continuation. `bash -n` + `.SRCINFO` (one pkgrel line)
-green now.
+**Validated 2026-10-21.** rebuilt + installed post-resume13 (`gsa -S --leaf
+subversion`, 1.14.5-5.1; no system mutation while a gsa run is live), then
+the end-to-end proof passed: the real `texmf-dist` repro `svn checkout -r
+78408 …/Master/texmf-dist` completed `rc=0, Checked out revision 78408` —
+the exact command that SIGSEGV'd every time pre-fix. `bash -n` +
+`.SRCINFO` (one pkgrel line) were green pre-install. The `texlive-texmf`
+continuation rides the resume14 target list.
 
 **Durable rule.** An experimental snapshot toolchain can miscompile a
 scalar scanning loop into *aligned* vector loads: when a crash stack lands

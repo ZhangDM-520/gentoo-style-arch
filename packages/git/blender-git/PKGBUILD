@@ -21,7 +21,7 @@ _git_revert=(49414a72f607ccd15f8b71b81edc9aff040d581e) # v3.1 arch
 [[ -v HIP_ARCH  ]] && _CMAKE_FLAGS+=(-DCYCLES_HIP_BINARIES_ARCH="${HIP_ARCH}")
 
 pkgname=blender-git
-pkgver=5.3.r165382.g73cfbda0a06d
+pkgver=5.4.r166485.g8af6c380a19a
 pkgrel=1
 pkgdesc="A fully integrated 3D graphics creation suite (development)"
 arch=('i686' 'x86_64')
@@ -170,6 +170,18 @@ build() {
                       -DWITH_CYCLES_DEVICE_HIP=OFF
                       -DWITH_CYCLES_DEVICE_HIPRT=OFF
                     )
+  fi
+
+  # OTIO 0.19 (master, unreleased) renamed the namespace macro to
+  # OPENTIMELINEIO_VERSION_NS (measured 2026-10-21: master version.h defines it
+  # unconditionally) and blender master's io/otio/*.{hh,cc} use the new name,
+  # while system opentimelineio 0.18.1 only defines OPENTIMELINEIO_VERSION.
+  # Map the new name onto the old one ONLY when the installed header lacks it —
+  # once OTIO 0.19 lands the header defines the real macro and this is a no-op
+  # (an unconditional -D would then be a macro redefinition). CMake ignores
+  # CPPFLAGS, so the define rides CXXFLAGS, which seeds CMAKE_CXX_FLAGS.
+  if ! grep -q '#define OPENTIMELINEIO_VERSION_NS' /usr/include/opentimelineio/version.h 2>/dev/null; then
+    CXXFLAGS+=' -DOPENTIMELINEIO_VERSION_NS=OPENTIMELINEIO_VERSION'
   fi
 
   #default cmake flags
