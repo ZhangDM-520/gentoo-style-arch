@@ -1,25 +1,32 @@
-From 6486ed06dd67951eaae27b7022c9e5047a14c923 Mon Sep 17 00:00:00 2001
+From 907dd8589cf7bcb9c3a1fe42d5fa8a5624c22cc6 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Tue, 20 Oct 2026 11:14:26 +0800
 Subject: [PATCH] feat(input): Mod double-right-click toggles maximize
 
 A second Mod+right-click on the same window within the double-click
-window (300ms, 8px pointer slop) now toggles maximize instead of
-starting another resize. The toggle carries a client maximize request's
-target selection, so client_maximize picks the column or the edges for a
-tiled window exactly like a titlebar double-click, and a floating window
-fills the usable area. The first click resizes as always; clicks past
-the window stay single resize attempts.
+window (300 ms, 8 px slop) applies the opposite maximize state with a
+titlebar double-click's target selection: client_maximize picks the
+column or the edges for a tiled window, an unmaximize exits the active
+mode first, and a floating window fills the usable area. Clicks past the
+window stay single clicks and never toggle.
+
+The pair's first press records the maximize state and defers its resize
+grab until the pointer leaves the click's slop: beginResize drops the
+layout's maximize bookkeeping (the scrolling layout clears the saved
+width fraction at grab start), so a grab on the first press would turn
+the second press's restore into a re-maximize. A real drag promotes the
+deferred press to a grab before the cursor moves, so the grab starts at
+the press-side position and derives its resize edges from it.
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 ---
- docs/user/input.md                            |  7 ++
- src/input/cursor.cpp                          | 21 ++++++
- src/input/cursor.h                            | 13 ++++
- src/view/view.h                               |  5 ++
- src/view/view_state.cpp                       | 24 +++++++
- .../input/mod_right_double_click_maximize.sh  | 69 +++++++++++++++++++
- 6 files changed, 139 insertions(+)
+ docs/user/input.md                            |   7 ++
+ src/input/cursor.cpp                          |  67 ++++++++++-
+ src/input/cursor.h                            |  34 ++++++
+ src/view/view.h                               |   8 ++
+ src/view/view_state.cpp                       |  24 ++++
+ .../input/mod_right_double_click_maximize.sh  | 110 ++++++++++++++++++
+ 6 files changed, 249 insertions(+), 1 deletion(-)
  create mode 100755 tests/harness/checks/input/mod_right_double_click_maximize.sh
 
 diff --git a/docs/user/input.md b/docs/user/input.md
@@ -41,61 +48,150 @@ index 2fa0852..8f83657 100644
  during a window drag:
  
 diff --git a/src/input/cursor.cpp b/src/input/cursor.cpp
-index e963473..8bfa213 100644
+index e963473..f028798 100644
 --- a/src/input/cursor.cpp
 +++ b/src/input/cursor.cpp
-@@ -1345,6 +1345,17 @@ namespace umbriel {
+@@ -41,6 +41,11 @@ namespace umbriel {
+     constexpr double kHotCornerExtent = 8.0;
+     constexpr int kDataDragEdgeScrollTickMs = 16;
+     constexpr uint32_t kDataDragEdgeScrollMaxElapsedMs = 50;
++    // Mod+right-click pairing and the motion threshold that promotes its
++    // deferred resize grab share one boundary: inside it a press may still
++    // pair up, so no grab may run and drop the layout's maximize bookkeeping.
++    constexpr uint32_t kModRightDoubleClickMsec = 300;
++    constexpr double kModRightDoubleClickSlop = 8.0;
+ 
+     // Panels (top/overlay) keep working inside the overview. Background- and bottom-layer surfaces are part of the
+     // inert backdrop behind the filmstrip, so their clicks belong to the overview instead.
+@@ -1194,6 +1199,7 @@ namespace umbriel {
+   }
+ 
+   void Cursor::resetMode() {
++    m_pendingModRightResize.reset();
+     m_server->hideInsertHint();
+     cancelDataDragEdgeScroll();
+     View* view = grabbedView();
+@@ -1305,6 +1311,7 @@ namespace umbriel {
+     }
+ 
+     confineRuleDelta(&dx, &dy);
++    promotePendingModRightResize(m_cursor->x + dx, m_cursor->y + dy);
+     const double oldX = m_cursor->x;
+     const double oldY = m_cursor->y;
+     wlr_cursor_move(m_cursor, &event->pointer->base, dx, dy);
+@@ -1336,6 +1343,7 @@ namespace umbriel {
+       return;
+     }
+     confineRuleDelta(&dx, &dy);
++    promotePendingModRightResize(m_cursor->x + dx, m_cursor->y + dy);
+     wlr_cursor_move(m_cursor, &event->pointer->base, dx, dy);
+     processMotion(event->time_msec, oldX, oldY);
+   }
+@@ -1345,6 +1353,35 @@ namespace umbriel {
      processButton(event->time_msec, event->button, event->state);
    }
  
-+  bool Cursor::modRightDoubleClick(uint32_t timeMsec, View* view) {
-+    constexpr uint32_t kModRightDoubleClickMsec = 300;
-+    constexpr double kModRightDoubleClickSlop = 8.0;
++  std::optional<bool> Cursor::modRightDoubleClick(uint32_t timeMsec, View* view, bool wasMaximized) {
 +    const bool doubleClick = m_lastModRightClick.view == view
 +        && timeMsec - m_lastModRightClick.timeMsec <= kModRightDoubleClickMsec
 +        && std::abs(m_cursor->x - m_lastModRightClick.x) <= kModRightDoubleClickSlop
 +        && std::abs(m_cursor->y - m_lastModRightClick.y) <= kModRightDoubleClickSlop;
-+    m_lastModRightClick = doubleClick ? ModRightClick{} : ModRightClick{timeMsec, m_cursor->x, m_cursor->y, view};
-+    return doubleClick;
++    if (doubleClick) {
++      const bool firstPressWasMaximized = m_lastModRightClick.wasMaximized;
++      m_lastModRightClick = ModRightClick{};
++      return firstPressWasMaximized;
++    }
++    m_lastModRightClick = ModRightClick{timeMsec, m_cursor->x, m_cursor->y, view, wasMaximized};
++    return std::nullopt;
++  }
++
++  void Cursor::promotePendingModRightResize(double nextX, double nextY) {
++    if (!m_pendingModRightResize.has_value()) {
++      return;
++    }
++    const PendingModRightResize pending = *m_pendingModRightResize;
++    if (std::abs(nextX - pending.startX) <= kModRightDoubleClickSlop
++        && std::abs(nextY - pending.startY) <= kModRightDoubleClickSlop) {
++      return;
++    }
++    m_pendingModRightResize.reset();
++    // A drag is not a double-click's first press.
++    m_lastModRightClick = ModRightClick{};
++    beginResize(pending.view, pending.view->tiled() ? 0 : floatResizeEdges(pending.view), pending.button);
 +  }
 +
    void Cursor::processButton(uint32_t timeMsec, uint32_t button, wl_pointer_button_state state) {
      noteActivity();
      if (state == WL_POINTER_BUTTON_STATE_PRESSED) {
-@@ -1570,6 +1581,16 @@ namespace umbriel {
+@@ -1425,6 +1462,16 @@ namespace umbriel {
+       return;
+     }
+ 
++    // A deferred Mod+right resize that never left the click's slop ends as a
++    // plain click. Its press reached no client, so swallow the release too
++    // rather than deliver an unmatched one.
++    if (state == WL_POINTER_BUTTON_STATE_RELEASED
++        && m_pendingModRightResize.has_value()
++        && button == m_pendingModRightResize->button) {
++      m_pendingModRightResize.reset();
++      return;
++    }
++
+     if (state == WL_POINTER_BUTTON_STATE_RELEASED) {
+       if (auto* grab = std::get_if<ScrollDragGrab>(&m_grab)) {
+         if (button == grab->button) {
+@@ -1570,7 +1617,25 @@ namespace umbriel {
      }
      if (button == BTN_RIGHT && modHeld && view != nullptr) {
        m_server->focusView(view, FocusReason::Grab);
+-      beginResize(view, view->tiled() ? 0 : floatResizeEdges(view), button);
 +      // A second Mod+right-click on the same window within the double-click
-+      // window toggles maximize with a titlebar double-click's semantics. The
-+      // first click resized as always and its grab is already over.
-+      if (modRightDoubleClick(timeMsec, view)) {
++      // window applies the opposite maximize state with a titlebar
++      // double-click's semantics. The direction comes from the pair's first
++      // press: the resize grab that press starts can unmaximize on begin (the
++      // thirds edge zones resolve an edge for most clicks on a tiled window),
++      // so recomputing it here would turn a restore into a re-maximize.
++      const bool wasMaximized = view->maximizedToEdges() || view->scheduledMaximized() || view->floatingMaximized();
++      if (const std::optional<bool> firstPressWasMaximized = modRightDoubleClick(timeMsec, view, wasMaximized)) {
 +        // No grab owns this press, so its release would reach the client
 +        // unmatched; swallow both like the tab-bar path does.
 +        m_swallowedButtons.push_back(button);
-+        view->toggleMaximizedLikeClientRequest();
++        view->setMaximizedLikeClientRequest(!*firstPressWasMaximized);
 +        return;
 +      }
-       beginResize(view, view->tiled() ? 0 : floatResizeEdges(view), button);
++      // Defer the resize grab until the pointer commits to a drag: the click
++      // may still be the first half of a double-click, and beginResize would
++      // drop the maximize bookkeeping the toggle needs (see the pending struct
++      // in cursor.h). Motion promotes this to a real grab.
++      m_pendingModRightResize = PendingModRightResize{view, button, m_cursor->x, m_cursor->y};
        return;
      }
+ 
 diff --git a/src/input/cursor.h b/src/input/cursor.h
-index 4d6d25a..957bed3 100644
+index 4d6d25a..8bb4ef7 100644
 --- a/src/input/cursor.h
 +++ b/src/input/cursor.h
-@@ -298,6 +298,11 @@ namespace umbriel {
+@@ -298,6 +298,19 @@ namespace umbriel {
      clientPointerGrabButton(const View* view, wlr_seat_client* seatClient, uint32_t serial) const;
      [[nodiscard]] uint32_t floatResizeEdges(View* view) const;
      [[nodiscard]] uint32_t hoverResizeEdges(View* view) const;
-+    // True when this Mod+right-click completes a double-click on the same view:
-+    // same window, within the time window and pointer slop of the previous one.
-+    // Records the press either way, pairing clicks up so a third rapid click
-+    // starts a fresh window instead of toggling back.
-+    bool modRightDoubleClick(uint32_t timeMsec, View* view);
++    // Records this Mod+right-click and returns the maximize state captured at
++    // the pair's first press when this press completes a double-click on the
++    // same view (same window, within the time window and pointer slop). The
++    // first press's state decides the toggle direction because the resize grab
++    // it starts can unmaximize on begin; completing a pair clears the record so
++    // a third rapid click starts a fresh window.
++    std::optional<bool> modRightDoubleClick(uint32_t timeMsec, View* view, bool wasMaximized);
++    // Promote a deferred Mod+right resize to a real grab once the pointer is
++    // about to leave the click's slop. Runs before the cursor moves so the grab
++    // starts at the press-side position: beginResize derives its resize edges
++    // and grab offsets from the pointer, and a jump-then-grab would propose the
++    // wrong edges.
++    void promotePendingModRightResize(double nextX, double nextY);
      void updateInteractiveCursor(View* under);
      void setCompositorCursor(const char* name);
      void restoreClientCursor();
-@@ -369,6 +374,14 @@ namespace umbriel {
+@@ -369,6 +382,27 @@ namespace umbriel {
      // Presses consumed by config binds or ignored during an interactive move;
      // their release is swallowed too, even if the grab ended first.
      std::vector<uint32_t> m_swallowedButtons;
@@ -105,57 +201,80 @@ index 4d6d25a..957bed3 100644
 +      double x = 0;
 +      double y = 0;
 +      View* view = nullptr;
++      bool wasMaximized = false;
 +    };
 +    ModRightClick m_lastModRightClick;
++    // A Mod+right-click awaiting enough pointer motion to become a resize. The
++    // grab must not run for a click that may still be the first half of a
++    // double-click: beginResize drops the layout's maximize bookkeeping
++    // (scrolling clears the saved width fraction at grab start), which the
++    // toggle needs to restore the window afterwards.
++    struct PendingModRightResize {
++      View* view = nullptr;
++      uint32_t button = 0;
++      double startX = 0;
++      double startY = 0;
++    };
++    std::optional<PendingModRightResize> m_pendingModRightResize;
      std::vector<std::unique_ptr<TabletToolState>> m_tools;
      bool m_hoverFocusInvalidated = false;
      bool m_compositorOwnsCursor = false;
 diff --git a/src/view/view.h b/src/view/view.h
-index 6ad733d..e52a669 100644
+index 6ad733d..eda7a01 100644
 --- a/src/view/view.h
 +++ b/src/view/view.h
-@@ -393,6 +393,11 @@ namespace umbriel {
+@@ -158,6 +158,7 @@ namespace umbriel {
+     // that is where it was pinned from.
+     [[nodiscard]] bool restoresTiledOnUnpin() const { return m_restoreTiledAfterUnpin; }
+     [[nodiscard]] bool maximizedToEdges() const { return m_maximizedToEdges; }
++    [[nodiscard]] bool floatingMaximized() const { return m_floatingMaximized; }
+     // Fullscreen for layout purposes follows the state already scheduled for the next configure.
+     [[nodiscard]] bool layoutFullscreen() const;
+     [[nodiscard]] bool urgent() const { return m_urgent; }
+@@ -393,6 +394,13 @@ namespace umbriel {
      // output's usable area and restores to the box it had before; tiled windows
      // toggle their column's full-width state.
      void toggleMaximized();
-+    // Compositor-driven toggle with a client maximize request's target
-+    // selection (what a titlebar double-click produces): a tiled window honors
-+    // the workspace's client_maximize, an unmaximize exits the active mode, and
-+    // a floating window keeps the default behavior whatever client_maximize says.
-+    void toggleMaximizedLikeClientRequest();
++    // Apply the maximize state a client request would carry (what a titlebar
++    // double-click produces): a tiled window honors the workspace's
++    // client_maximize, an unmaximize exits the active mode, and a floating
++    // window keeps the default behavior whatever client_maximize says. The
++    // direction is explicit because a pointer gesture's first press can start a
++    // resize grab that changes maximize state before the gesture completes.
++    void setMaximizedLikeClientRequest(bool maximized);
      // Restore a floating maximized window to its saved box before a pointer
      // move takes ownership of its position.
      void restoreMaximizedForMove();
 diff --git a/src/view/view_state.cpp b/src/view/view_state.cpp
-index 9b1034f..77779cd 100644
+index 9b1034f..c74a041 100644
 --- a/src/view/view_state.cpp
 +++ b/src/view/view_state.cpp
 @@ -295,6 +295,30 @@ namespace umbriel {
  
    void View::toggleMaximized() { setMaximized(m_tiled ? !scheduledMaximized() : !m_floatingMaximized); }
  
-+  void View::toggleMaximizedLikeClientRequest() {
-+    // The state a client would request from the opposite of the one it was
-+    // given: the compositor-side toggle mirrors handleRequestMaximize's target
-+    // selection without the client-request bookkeeping.
-+    const bool requested = !(m_maximizedToEdges || scheduledMaximized() || m_floatingMaximized);
++  void View::setMaximizedLikeClientRequest(bool maximized) {
++    // The state a client would request carries the target selection of
++    // handleRequestMaximize; the compositor-side direction is passed in so a
++    // gesture whose first press already perturbed the state still toggles the
++    // way that press meant to.
 +    if (m_tiled && m_workspace != nullptr) {
 +      if (maximizeRequestTargetsEdges(
-+              requested, m_maximizedToEdges, m_workspace->layoutConfig().clientMaximize == ClientMaximize::Edges
++              maximized, m_maximizedToEdges, m_workspace->layoutConfig().clientMaximize == ClientMaximize::Edges
 +          )) {
-+        setMaximizedToEdges(requested);
++        setMaximizedToEdges(maximized);
 +        return;
 +      }
-+      setMaximized(requested);
++      setMaximized(maximized);
 +      return;
 +    }
 +    // A floating window keeps the default behavior whatever client_maximize
 +    // says, but an active edges maximize still leaves first.
-+    if (!requested && m_maximizedToEdges) {
++    if (!maximized && m_maximizedToEdges) {
 +      setMaximizedToEdges(false);
 +      return;
 +    }
-+    setMaximized(requested);
++    setMaximized(maximized);
 +  }
 +
    void View::restoreMaximizedForMove() {
@@ -163,13 +282,16 @@ index 9b1034f..77779cd 100644
      // Moving the fullscreen surface must not consume the state that should be
 diff --git a/tests/harness/checks/input/mod_right_double_click_maximize.sh b/tests/harness/checks/input/mod_right_double_click_maximize.sh
 new file mode 100755
-index 0000000..f62cc8e
+index 0000000..2deaf25
 --- /dev/null
 +++ b/tests/harness/checks/input/mod_right_double_click_maximize.sh
-@@ -0,0 +1,69 @@
+@@ -0,0 +1,110 @@
 +#!/usr/bin/env bash
 +# A second Mod+right-click on the same window within the double-click window
-+# toggles maximize with a titlebar double-click's semantics. Single clicks stay
++# applies the opposite maximize state and restores the window's geometry, for
++# tiled and floating windows alike and wherever the pair lands in the window:
++# the resize grab the first press starts (the thirds edge zones resolve an edge
++# for most points) must not flip the toggle's direction. Single clicks stay
 +# resize attempts and never toggle the state on their own.
 +set -euo pipefail
 +
@@ -187,10 +309,18 @@ index 0000000..f62cc8e
 +  "$POINTER" "$OUTPUT_W" "$OUTPUT_H" "$@"
 +}
 +
-+window_center() {
-+  local windows
-+  windows=$("$UMBRIEL" windows --json)
-+  jq -r '.[0] | "\(.x + (.w / 2 | floor)) \(.y + (.h / 2 | floor))"' <<< "$windows"
++window_box() {
++  "$UMBRIEL" windows --json | jq -r '.[0] | "\(.x) \(.y) \(.w) \(.h)"'
++}
++
++wait_for_box() {
++  local want=$1
++  for _ in $(seq 40); do
++    [[ $(window_box) == "$want" ]] && return 0
++    sleep 0.1
++  done
++  echo "timed out waiting for box $want, got $(window_box)"
++  return 1
 +}
 +
 +wait_for_maximized() {
@@ -203,11 +333,33 @@ index 0000000..f62cc8e
 +  return 1
 +}
 +
-+double_click() {
-+  local x y
-+  read -r x y < <(window_center)
++# A double-click pair at a fractional position of the window box: 0.5 is the
++# edge-free center third, 0.25/0.85 land in the resize edge zones.
++double_click_at() {
++  local fx=$1 fy=$2 windows x y
++  windows=$("$UMBRIEL" windows --json)
++  x=$(jq -r --argjson f "$fx" '.[0].x + (.[0].w * $f | floor)' <<< "$windows")
++  y=$(jq -r --argjson f "$fy" '.[0].y + (.[0].h * $f | floor)' <<< "$windows")
 +  pointer move "$x" "$y" mod logo click "$BTN_RIGHT" click "$BTN_RIGHT" mod none
 +  "$UMBRIEL" settle
++}
++
++check_round_trip() {
++  local kind=$1 fx=$2 fy=$3 before after
++  before=$(window_box)
++  double_click_at "$fx" "$fy"
++  wait_for_maximized true || return 1
++  if [[ $(window_box) == "$before" ]]; then
++    echo "$kind pair at ($fx,$fy) did not change geometry: $(window_box)"
++    return 1
++  fi
++  double_click_at "$fx" "$fy"
++  wait_for_maximized false || return 1
++  after=$(window_box)
++  if [[ $after != "$before" ]]; then
++    echo "$kind pair at ($fx,$fy) did not restore $before, got $after"
++    return 1
++  fi
 +}
 +
 +foot sh -c 'sleep 120' > /dev/null 2>&1 &
@@ -217,25 +369,33 @@ index 0000000..f62cc8e
 +done
 +"$UMBRIEL" settle
 +
-+double_click
-+wait_for_maximized true
++failed=0
++check_round_trip tiled 0.5 0.5 || failed=1
++check_round_trip tiled 0.25 0.25 || failed=1
++check_round_trip tiled 0.85 0.25 || failed=1
 +
-+double_click
-+wait_for_maximized false
++"$UMBRIEL" msg window-toggle-floating > /dev/null
++"$UMBRIEL" settle
++check_round_trip floating 0.25 0.5 || failed=1
++check_round_trip floating 0.5 0.5 || failed=1
 +
 +# Two clicks past the double-click window are two single clicks: resize
 +# attempts that must not toggle maximize.
-+read -r x y < <(window_center)
++read -r x y < <(jq -r '.[0] | "\(.x + (.w / 2 | floor)) \(.y + (.h / 2 | floor))"' <<< "$("$UMBRIEL" windows --json)")
 +pointer move "$x" "$y" mod logo click "$BTN_RIGHT" mod none
 +sleep 0.5 # real time: must exceed the double-click window so the next click pairs with nothing
 +pointer mod logo click "$BTN_RIGHT" mod none
 +"$UMBRIEL" settle
 +if [[ $("$UMBRIEL" windows --json | jq -r '.[0].maximized') != false ]]; then
 +  echo "slow Mod+right clicks toggled maximize: $("$UMBRIEL" windows --json)"
++  failed=1
++fi
++
++if (( failed != 0 )); then
 +  exit 1
 +fi
 +
-+echo "Mod+double-right-click toggles maximize"
++echo "Mod+double-right-click toggles maximize and restores geometry on tiled and floating windows"
 -- 
 2.56.0.186.gc51408889c
 

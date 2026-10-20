@@ -1,3 +1,49 @@
+## 2026-10-20 — umbriel-git follow-up: the gesture's tiled restore was a re-maximize
+
+**Symptom (user test of the first round).** Floating windows restored to their
+former size; tiled windows did not — the second Mod+double-right-click on a
+maximized tiled window left it maximized.
+
+**Root cause.** `resizeEdgesForPoint` (`src/layout/layout.cpp`) resolves resize
+edges in **thirds zones**, so only the middle ninth of a tiled window is
+edge-free: for most click positions the pair's first press began a
+`TiledResizeGrab`, and `ScrollingLayout::beginResize` runs `clearFullWidthState`
+at grab start — it zeroes `savedWidthFrac`, the pre-maximize extent, with no
+way back — while `unmaximizeOnBegin` clears `setMaximizedState`. The second
+press then computed its toggle direction from that gutted state and
+re-maximized (a no-op); even with the direction corrected, `toggleFullWidth`
+found `savedWidthFrac == 0` and re-entered full width. Floating windows
+survived because `beginFloatingResize` touches no maximize state. The first
+round's check clicked the exact center (the only edge-free ninth) and asserted
+only the `maximized` flag, never geometry.
+
+**Fix.** Two changes (superseding the helper description above — it is now
+`View::setMaximizedLikeClientRequest(bool)`, with the direction supplied by the
+caller): (1) the pair's **first press** records the maximize state and the
+second press applies its opposite, so grab side effects cannot flip the
+direction; (2) the Mod+right resize grab is **deferred until the pointer leaves
+the click's slop** (8 px, the same boundary the double-click pairing uses) — a
+press that may still pair runs no destructive grab, and a real drag promotes to
+a grab *before* the cursor moves, so `beginResize` derives its edges from the
+press-side position. The completing press+release stay swallowed.
+
+**Validation.** Red first: the extended check
+(`tests/harness/checks/input/mod_right_double_click_maximize.sh`, now asserting
+geometry round-trips at (0.5,0.5), (0.25,0.25) and (0.85,0.25) for tiled and
+floating) failed on the pre-fix build at the edge-zone pairs exactly as
+diagnosed; green after. The intermediate promote-at-motion-time variant passed
+the gesture check but failed `input/resize_past_neighbor_minimum` (a jump-motion
+recomputed the resize edges at the destination) — the pre-cursor-move promotion
+fixes both. Full `input/` + `drag/` subsets 41 passed / 0 failed;
+`gsa -B --leaf umbriel-git` ok on the refreshed patch.
+
+**Durable rule.** A click pair must not run a state-destructive grab: when a
+gesture's second event has to reason about pre-gesture state, record that state
+at the first event *and* defer anything destructive until the pointer commits
+to a drag. And a gesture test must assert the user-visible artifact (geometry
+round-trip) at the input positions the thirds zones actually distinguish —
+center-only coverage proved nothing here.
+
 ## 2026-10-20 — umbriel-git: Mod+double-right-click maximize via a carried patch against upstream main
 
 **Symptom.** Wanted Mod+double-right-click on a window to toggle maximize in

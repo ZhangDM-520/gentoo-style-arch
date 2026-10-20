@@ -41,6 +41,6 @@ pkgbase = umbriel-git
 	source = umbriel::git+https://github.com/noctalia-dev/umbriel.git#branch=main
 	source = 0001-input-mod-right-double-click-maximize.patch
 	sha256sums = SKIP
-	sha256sums = 13cf79919c8f1fdd6c4a2ca8ab4348a98effb42a5cbfa3bd08b37f6256e793d7
+	sha256sums = 6a283dece3e8fef51a802c881ee06d883f87a4bf7848b7fbb9c7b8341a2e4512
 
 pkgname = umbriel-git
