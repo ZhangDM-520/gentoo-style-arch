@@ -1,3 +1,45 @@
+## 2026-10-20 — umbriel-git, review round: deferred-press UAF and the moved-cursor edge leak
+
+**Symptom (Talia auto-review on PR noctalia-dev/umbriel#504).** Two findings in
+the deferred Mod+right press: (P1) the pending record and the click-pair record
+hold a raw `View*` across unmap/destroy — a deferred press holds no grab, so
+`isPassthrough()` stays true and `View::handleUnmap`'s conditional `resetMode()`
+never clears them before `Server::removeView` frees the view; the next motion
+then promotes the grab on freed storage. (P2) promotion re-derived the resize
+edges at the moved cursor, and the thirds zones make the proposal
+position-sensitive: a drag crossing the 1/3 boundary within the 8 px slop
+either died (`resolvedEdges == 0`) or grabbed an edge the press never
+proposed.
+
+**Fix.** `Cursor::forgetView(const View*)` (public) drops both records when
+they reference a dying view, called unconditionally from `View::handleUnmap`
+and `Server::removeView`; and the press now snapshots its resolved edges
+(`tiledResizeEdges`, one derivation shared with `beginResize`) into the pending
+record — `beginResize` sanitizes an explicit edge set without falling back to
+the pointer — while a press that proposes no edges records nothing and is a
+plain click.
+
+**Validation.** Red-first for both. P2 is deterministic on a plain build:
+`input/mod_right_boundary_drag.sh` showed the dead drag and the wrong-edge
+resize both ways before the fix and neither after. P1 needed ASAN to be
+observable (the freed object read as plausible memory otherwise): with the fix
+mutation-disabled and an ASAN build (`-Djemalloc=disabled` — see the pitfall
+below), `input/mod_right_pending_teardown.sh` fails with
+`heap-use-after-free in View::mapped() <- beginResize <-
+promotePendingModRightResize`, the reviewer's exact trace; the restored fix
+passes. Full `input/` + `drag/` subsets 43 passed / 0 failed;
+`gsa -B --leaf umbriel-git` ok on the refreshed patch.
+
+**Durable rule.** Deferred pointer state must follow the same lifetime rules
+as grabs: invalidate it on view teardown unconditionally (a deferred press is
+invisible to `isPassthrough()`-guarded resets), and never re-derive
+geometry-sensitive decisions from a moved cursor — snapshot them at the press.
+Two harness lessons from the red chase: **ASAN cannot coexist with jemalloc**
+(the binary SEGVs inside `libjemalloc` at startup — build the ASAN variant with
+`-Djemalloc=disabled`), and **`umbriel settle` waits for a drawn frame and
+wedges while a button is held**, so checks that hold input must stabilise
+geometry with `[animation] enabled = false` and polling instead.
+
 ## 2026-10-20 — umbriel-git follow-up: the gesture's tiled restore was a re-maximize
 
 **Symptom (user test of the first round).** Floating windows restored to their
