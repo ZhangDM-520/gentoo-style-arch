@@ -56,6 +56,29 @@ tiled window snapping back to its column hides the change. Harness foot-gun:
 `windows=$("$UMBRIEL" windows --json")` (stray `"` before `)`) makes bash report
 an unmatched-quote error many lines away; `bash -n` the check first.
 
+## 2026-10-21 — vscodium-insiders-git's install-refused: foreign prebuilds' ELF closure vs the engine gate
+
+**Symptom.** vscodium BUILT (2901s — the rustup guard worked) but the
+engine refused to install: `install-refused needed …tree-sitter/
+prebuilds/linux-arm64/tree-sitter.node ld-linux-aarch64.so.1` — the
+bundled node modules ship per-platform prebuilds and the linux-arm64 one
+is a real AArch64 ELF whose interpreter cannot exist on this host.
+
+**Root cause/measurement.** ELF machine inventory of the built package:
+58 native modules — 57 x86-64 + exactly 1 AArch64 (the gate offender).
+Dir names are unreliable (arm64-named prebuilds holding x86-64 payloads),
+but no prebuild outside linux-x64/ is runtime-selectable regardless.
+
+**Fix.** `_strip_foreign_prebuilds` (called from package()) drops every
+`prebuilds/<platform>/` dir except linux-x64 — the conventional
+Electron-on-Linux trim and a truthful closure (the foreign payloads can
+never load). Real-artifact proof: applied to the built package extract,
+the ELF census goes 55 x86-64 / 0 foreign (the 2 dropped x86 files sat in
+unloadable arm64 dirs). Fixture `tests/vscodium-foreign-prebuilds.sh`
+runs the REAL helper over a synthetic pkgdir (keep linux-x64 + non-prebuild
+modules; drop the offender + darwin/win32); mutation-probed (keep-rule
+inverted → fixture fails). E2E proof = the next run's install gate.
+
 ## 2026-10-21 — onlyoffice-git's gclient sync: the transient-network class gets a step-level retry
 
 **Symptom.** onlyoffice-git's first real build attempt (unblocked from its

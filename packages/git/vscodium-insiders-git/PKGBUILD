@@ -93,6 +93,18 @@ case "$CARCH" in
     ;;
 esac
 
+# The bundled node native modules ship per-platform prebuilds; only
+# linux-x64 can ever load here. The foreign dirs are dead weight — and
+# their ELF closure trips the engine's install gate (2026-10-21:
+# install-refused on tree-sitter/prebuilds/linux-arm64/tree-sitter.node →
+# ld-linux-aarch64.so.1). Strip by directory name: some arm64-named
+# prebuilds are even mislabeled x86-64 payloads, but no prebuild outside
+# linux-x64/ is selectable at runtime regardless.
+# tests/vscodium-foreign-prebuilds.sh pins the contract.
+_strip_foreign_prebuilds() {
+    find "$1" -type d -path '*/prebuilds/*' ! -name 'linux-x64' -prune -exec rm -rf {} +
+}
+
 prepare() {
     cd $srcdir/vscodium
 
@@ -229,6 +241,7 @@ package() {
     install -d -m755 ${pkgdir}/usr/share/licenses/${pkgname}
 
     cp -r ${srcdir}/vscodium/VSCode-linux-${_vscode_arch}/* ${pkgdir}/usr/share/${pkgname}
+    _strip_foreign_prebuilds ${pkgdir}
     cp -r ${srcdir}/vscodium/VSCode-linux-${_vscode_arch}/resources/app/LICENSE.txt ${pkgdir}/usr/share/licenses/${pkgname}
 
     ln -s /usr/share/${pkgname}/bin/codium-insiders ${pkgdir}/usr/bin/codium
