@@ -1,3 +1,42 @@
+## 2026-10-21 — xorg-xwayland-git's PGO proof: 367 gcda, and the weston/colord borrow that unblocked the harness
+
+**Proof result (the owed end-to-end proof of the 2026-10-19 spelling fix).**
+`PGO profile: 367 gcda files — rebuilding with profile` — lane log line
+6635, inside the 20:34 build section (the `3 gcda` fail-safe at line 768
+belongs to the 2026-10-19 section; three `Making package:` markers bound the
+sections, so the attribution is measured, not assumed). N=367 is far above
+the `pgo_min_gcda` 50 floor, and phase 3 compiled under `-fprofile-use`
+(the `-Wmissing-profile` lines are the known code-vs-profile drift cosmetic).
+The xts/piglit-shim training fix runs end to end: the `piglit-profile`
+custom command drove `xwayland-piglit.sh` against the built tree. Built +
+installed via `gsa -S --leaf` (`succeeded 0 147 ok`, run
+1792586096-1416592).
+
+**Wall on the way (resolved by a borrow, not a recipe change).** The
+training makedepend `weston` (community) hard-depends stock `colord`, which
+exact-locks `libcolord=1.4.8-2` — unresolvable against the installed stack
+`libcolord-git` (its provides are correct — `libcolord=1.4.8.r16.g56ccc23`,
+`libcolord.so=2-64` — and it ships exactly the 62-file client-library set,
+so a `colord` provide would claim a daemon it does not ship). Stock colord's
+files additionally collide with libcolord-git: the recipe's broad `cp -a`
+harvest keeps the colorhug headers + `libcolordprivate.so` that stock puts
+in colord. The first proof run died at 0s in makepkg's dep step.
+
+**Borrow (bounded, rollback-tested).** `pacman -S --asdeps --assume-installed
+colord=1.4.8-2 weston` (dry-run first) installs real weston while faking the
+colord dep — no stock colord enters, no file collision, libcolord-git stays
+installed (weston links no missing libs; its CMS is dlopen'd). After the
+proof: `pacman -R --noconfirm weston` → pre-image restored exactly (weston
+absent, colord absent, libcolord-git 1.4.8.r16.g56ccc23-1). Snapper
+snapshots 5377 (install) / 5381 (rollback).
+
+**Owner follow-up (unresolved, deliberately not auto-fixed).** Any stock
+package that pulls `colord` collides with the stack's library. The
+stack-consistent fix is a `colord-git` sibling — or a
+`pkgname=(libcolord-git colord-git)` split reusing the same meson build —
+declaring `colord=${pkgver}`; until then the QA provides-versioning class
+remains the standing reminder.
+
 ## 2026-10-21 — vscodium's foreign-payload strip, round 2: the npm `-musl` module dirs are the same class outside `prebuilds/`
 
 **Symptom.** After e1521d9's prebuilds strip vscodium BUILT again (2821s — the

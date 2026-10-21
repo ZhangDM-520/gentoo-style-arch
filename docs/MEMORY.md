@@ -1910,16 +1910,6 @@ going stale.
 ### Queued (claim by editing this section)
 
 
-- **xorg-xwayland-git's PGO fix landed 2026-10-19; the end-to-end proof is
-  still owed** — the bare-generate/use-dir spelling (which silently built
-  profile-less binaries) is replaced by jq's symmetric
-  `-fprofile-generate=<dir>`/`-fprofile-use=<dir>` over
-  `$srcdir/pgo-profiles`, with `-flto*` stripped from the instrument phase.
-  Mechanism red/green-proven by the GCC probe (NOTE.md 2026-10-19); what
-  remains is one real rebuild confirming phase 3 consumes the profiles
-  (the `pgo_min_gcda` floor already reports the count) — queued behind the
-  running marathon (no-two-heavy-builds rule).
-
 - **`--skip`'s version-keyed local claim churns fast-VCS recipes every run**
   (2026-10-18, the llvm-git perpetual-rebuild wall): `gsa-recipe::freshness`
   maps archives "to an expected output at the claim's version key", but a
@@ -2204,11 +2194,13 @@ the `-Rns hyperv intel-speed-select x86_energy_perf_policy` batch and
 `llvm-ocaml-git` (none remain installed); seatd-git's `libseat.so=1-64`
 provide (the installed `.PKGINFO` carries it); llvm-git's
 `X86;AMDGPU;BPF` rebuild and the dependent scx-scheds-git rebuild; the stale
-`gcc-*-snapshot` language splits; mesa-git's PGO zero-gcda abort; and the
+`gcc-*-snapshot` language splits; mesa-git's PGO zero-gcda abort; the
 cmake-git / xorg-xwayland-git PGO-payload rebuilds (checked 2026-09-26:
 `strings -a` over the installed `cmake`/`ccmake`/`cpack`/`Xwayland` reports
 zero baked `.gcda` destinations — `ctest`'s single hit is the `/*.gcda` glob
-constant, not a baked path).
+constant, not a baked path); and the xorg-xwayland-git PGO end-to-end proof
+(2026-10-21: `PGO profile: 367 gcda files — rebuilding with profile` vs the
+50 floor, run 1792586096-1416592; wall + borrow in NOTE.md 2026-10-21).
 
 ## 6. Pitfall digest (full details: NOTE.md sections of same dates)
 
