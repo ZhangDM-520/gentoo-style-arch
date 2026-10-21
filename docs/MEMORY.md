@@ -2212,6 +2212,21 @@ constant, not a baked path).
 
 ## 6. Pitfall digest (full details: NOTE.md sections of same dates)
 
+- **A build path can silently be a tmpfs shadow: unmounted media leave the
+  empty mountpoint directory, and writes land in `/run` or `/tmp` until
+  ENOSPC** (2026-10-21, two walls in one day): the engine's `build_dir`
+  pointed at `/run/media/<user>/<uuid>/gsa-build` but the drive was
+  unmounted — the bare directory still existed and accepted writes into
+  the 6.1G `/run` tmpfs; separately, parallel blender+krita LTO spill
+  filled the 16G `/tmp` tmpfs mid-build (`lto1: write: No space left`).
+  Both present as "No space left" from gcc/ld with NO disk error. Verify
+  the *filesystem behind the path* (`df -h <path>` must show the real
+  device, `mountpoint -q <mount-root>` — a subdir check falsely fails),
+  not the path's existence. Fixes: mount the drive; ride TMPDIR on the
+  scratch disk via `~/.makepkg.conf` (makepkg sources it, the engine sets
+  no TMPDIR/MAKECONF), guarded by the mountpoint so an unmounted drive
+  cannot redirect temp into the tmpfs shadow. Details: NOTE.md 2026-10-21.
+
 - **`gsa -Sy` refreshes the recipe store only when the resolved workspace
   IS the store — a repo cwd silently refreshes nothing** (2026-10-21,
   pushed fix invisible to the build): workspace resolution is `project`
