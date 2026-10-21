@@ -57,10 +57,8 @@ makedepends=(
 provides=("umbriel=${pkgver}")
 conflicts=('umbriel')
 source=("${_pkgname}::git+${url}.git#branch=main"
-        '0001-input-mod-right-double-click-maximize.patch'
         '0002-animation-windows-drag-physics-tuning.patch')
 sha256sums=('SKIP'
-            'ec076dc7fae87e359bdd33d8dcc866b28ce676dfa0bd72962f7bfc3123c62656'
             '8bf33df1e0208ef00d0742a0855170c6c757be76414d1f5f3159341319d9fd6c')
 
 pkgver() {
@@ -79,16 +77,11 @@ pkgver() {
 prepare() {
   cd "${_pkgname}"
 
-  # Mod+double-right-click on a window toggles maximize, with the same target
-  # a client's titlebar double-click picks (client_maximize applies to tiled
-  # windows). Upstream PR noctalia-dev/umbriel#504; while the recipe tracks
-  # upstream main, rebase the patch with `git format-patch` when a drift
-  # breaks the apply.
-  git apply -3 ../0001-input-mod-right-double-click-maximize.patch
-
   # [animation.windows_drag] physics tuning keys (stiffness, damping,
   # coupling, pointer_response, max_displacement_px, settle_after_pause_s).
-  # Upstream PR noctalia-dev/umbriel#508; same refresh procedure as 0001.
+  # Upstream PR noctalia-dev/umbriel#508; while the recipe tracks upstream
+  # main, rebase the patch with `git format-patch` from its scratch branch
+  # when a drift breaks the apply.
   git apply -3 ../0002-animation-windows-drag-physics-tuning.patch
 }
 

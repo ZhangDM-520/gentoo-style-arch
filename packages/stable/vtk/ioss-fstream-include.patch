@@ -1,0 +1,10 @@
+--- a/ThirdParty/ioss/vtkioss/catalyst/Iocatalyst_CatalystLogging.h
++++ b/ThirdParty/ioss/vtkioss/catalyst/Iocatalyst_CatalystLogging.h
+@@ -12,6 +12,7 @@
+ 
+ #include <Ioss_CodeTypes.h>
+ #include <Ioss_PropertyManager.h>
++#include <fstream>
+ #include <string>
+ #include <vector>
+ 

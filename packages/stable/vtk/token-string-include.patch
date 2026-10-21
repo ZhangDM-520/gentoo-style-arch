@@ -1,0 +1,10 @@
+--- a/ThirdParty/token/vtktoken/token/Manager.h
++++ b/ThirdParty/token/vtktoken/token/Manager.h
+@@ -8,6 +8,7 @@
+ #include <functional>
+ #include <memory>
+ #include <mutex>
++#include <string>
+ #include <unordered_map>
+ #include <unordered_set>
+ 

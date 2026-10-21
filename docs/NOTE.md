@@ -1,3 +1,100 @@
+## 2026-10-22 — vtk + python-opencv join the set: the jsoncpp .27 skew answered with tree builds, six walls deep
+
+**Owner ask.** Stock vtk/python-opencv break on this host: stock links
+`libjsoncpp.so.27` while the tree's jsoncpp-git ships only `.28` (measured: 76
+vtk libs `libjsoncpp.so.27 => not found`; python-opencv 5.0.0-13.1 was a
+CachyOS build riding that vtk). Include both in the tree, apply optimisation
+layers, wire them, then a no-deps `-S` of the two to validate ABI status.
+Decisions (ask_user): **full PGO for vtk only** (the opencv build keeps its
+mold + host-defaults treatment) and **python-opencv as a split output of
+`packages/stable/opencv`** (rule 24 one-recipe-per-upstream, sibling pins).
+
+**Recipes.** `packages/stable/vtk` (vtk 9.7.1, `pkgrel=1.2` — 1.1 is the
+broken CachyOS string, and the same-version skip would leave it in place;
+pandoc-cli precedent). Full stack: mold guard + host `makepkg.conf` LTO +
+the cmake-tier two-phase PGO (CMakeCache.txt rewrite per build-guide.md,
+`pgo_min_gcda=100` floor → plain-LTO fallback that REBUILDS, `lib/pgo.sh`
+gate last in `package()`). Training: a synthetic python driver over
+filter/IO/rendering pipelines — ctest is not self-contained (ExternalData
+downloads are forbidden); measured **4996 gcda** (floor 100) in both trained
+runs. 413 bare-soname provides, static list (a computed `provides+=` in
+`package()` is invisible to — and breaks — `makepkg --printsrcinfo`; see
+MEMORY). `python-opencv` un-trim: `package_python-opencv()` stages stock's
+`cmake --install build/modules/python3`, pins `opencv=$pkgver-$pkgrel`, and
+stock's split deps are trimmed to the measured cv2 `DT_NEEDED` set
+(annotated). `pkgrel` 13.1→13.2.
+
+**Six walls, each red-first measured.**
+1. `FindFFMPEG` aggregates `FFMPEG_VERSION` from `ffversion.h`, where a git
+   build stamps `N-127696-g8b3525e718` — IO/FFMPEG's 2.3.3 floor then
+   rejects our far-newer ffmpeg-git (`ffmpeg-git-version.patch`).
+2. The patch's first fallback exposed upstream's broken component
+   extraction: multi-line `file(STRINGS)` joins defeat its regexes AND modern
+   ffmpeg moved `LIBAVFORMAT_VERSION_MAJOR` into `version_major.h`. Final
+   fallback parses `version*.h` per line → `63.11.0` (verified with `cmake -P`).
+3. `token/Manager.h` uses `std::string` without `<string>` (56-error cascade;
+   upstream master's include set is identical) → `token-string-include.patch`.
+4. `ioss/catalyst/Iocatalyst_CatalystLogging.h` uses `std::fstream` without
+   `<fstream>` (the compiler names the fix) → `ioss-fstream-include.patch`.
+   Bounded watchlist scan for the class on rare std types: 20 candidates, NOT
+   patched speculatively (the tree compiled 8k targets before each measured
+   hit) — cross-reference list is the scan output of 2026-10-22.
+5. **INFRA**: the automount-managed build drive (`/dev/sda`) was cleanly
+   unmounted mid-build (no kernel events). Writes spilled through the path
+   into tmpfs `/run` (6.1G, 100% full) and `ld` SIGBUS'd on mmap writes.
+   Recovery: spill deleted (only that run's outputs), drive **kernel-mounted**
+   — the recurrence guard the automount cannot touch.
+6. Phase 2's `cmake --build build --target clean` wipes the generated Java
+   wrapper sources too, and the `vtkjava` sample javac races their
+   regeneration (`cannot find symbol: vtkNativeLibrary`). The clean exists
+   only to discard phase-1 objects — replaced in BOTH branches by
+   `find build -name '*.o' -delete` (every link still reruns; Java artifacts
+   are uninstrumented and survive).
+
+**Green.** `lane done vtk succeeded 0 6800 ok` (`PGO profile: 4996 gcda
+files — rebuilding with profile`), `lane done opencv succeeded 0 221 ok`
+(ccache-warm incremental). Installed: vtk 9.7.1-1.2, python-opencv
+5.0.0-13.2, opencv 5.0.0-13.2 (the CachyOS installs replaced). IgnorePkg now
+registers opencv/vtk/python-opencv — stock cannot sneak back (the owner's
+"never installed from stock" requirement, enforced dynamically).
+
+**ABI status validated.** `gsa -Qa`: vtk token `f2f111c1…` self-consistent
+(source=archive, derived match), subscription-in vtk + opencv, subscription-
+out to every provider (jsoncpp-git, ffmpeg-git, …). The opencv/python-opencv
+subscription set holds `d4e316cc…` — independently recomputed from the built
+archive (58 provide stems ∪ 59 DT_SONAMEs, sha256 over sorted lines): **exact
+match**. `tools/provides-audit.sh` rc=0 on the vtk archive (413/413 soname
+stems declared). `libvtkChartsCore.so.1` resolves `libjsoncpp.so.28`; cv2
+imports clean. The original reported breakage is gone.
+
+**Findings (report-only follow-ups, owner calls).**
+- `gsa -Qa` displays the LAST output's derived token under a split recipe's
+  row set (python-opencv's legitimately-empty `e3b0…` shown for the opencv
+  recipe) while subscriptions carry the true token — engine-side candidate.
+- The 5 residual `not found` libs (`libvtk{GeovisGDAL,IOGDAL,IOLAS,IOPDAL}`,
+  `libvtkRenderingOpenVR`) enter via STOCK optdepend providers: gdal/liblas/
+  pdal link **icu .78** (our icu-git is .79 — the pandoc class), openvr links
+  **jsoncpp .27** (the very class this task addressed). Tree recipes for
+  those four are the stack-consistent remedy.
+- Hand-counted unified diffs can demand fuzz=1 against an exact context
+  match; machine `diff -u` output is canonical — generate patches, don't
+  write hunk headers by hand.
+
+## 2026-10-21 — closing battery: 74/74 green at `8e9a622`, tree clean, marathon closed
+- Final validation gate for the gsa-smoke2 marathon continuation: full fixture battery
+  `bash tests/run-all.sh` **PASS (74 fixtures)**, 22:07–22:11. No re-runs needed — the known
+  `gsa-fetch-v2` parallel-load flake did not fire this round.
+- The `du` sweeping the external USB build drive during the run is the `abi-batch-policy.sh`
+  fixture: it fabricates a 240-member synthetic ABI topology (`h-mem001..240` + 4 `h-anchor`
+  metas) and drives a real 8-lane `build-all.fish` batch under `/tmp` — expected transient load,
+  not a stuck scan.
+- Fetch-churn `pkgver` sweep fully absorbed in `724caf6` (version sync sweep); tree clean and
+  pushed (`HEAD == origin/main == 8e9a622`).
+- Pointers, not restatements: proof numbers and run ids live in their own 2026-10-21 entries
+  below (pandoc icu closure, xorg PGO 367 gcda, vscodium musl-strip, resume17 totals); live
+  state snapshot in `CURRENT.md`; owner follow-ups (colord-git split, QA provides-versioning
+  class) tracked there.
+
 ## 2026-10-21 — pandoc-cli's icu .79 proof: the dyn-only GHC wave, mold's version-index wall, and a solver that dodged the constraint
 
 **Proof result (the owed end-to-end proof).** Installed `pandoc-cli 3.11-2`

@@ -3,43 +3,45 @@
 Dated snapshots of live state. Rules and lessons live in `MEMORY.md`;
 history lives in `NOTE.md`. This file is overwritten, not accumulated.
 
-## 2026-10-21 08:45 CST — umbriel #504 review round 2 landed (workstream A)
+## 2026-10-22 02:30 CST — vtk + python-opencv included and installed; ABI status validated
 
-**Machine state.** HEAD `278eb59` (= `origin/main`). This session ran exactly
-one build (`gsa -B --leaf umbriel-git`, recipe validation); no marathon
-activity. The working tree carries the owner-side fetch-churn `pkgver` sweep
-(~527 files, makepkg `update_pkgver` byproduct of the resume13/14 builds) —
-deliberately left uncommitted here; the `git checkout -- .` cleanup from the
-previous snapshot's plan still applies once everything else is committed.
+**Machine state (probed 02:25).** HEAD `8e9a622` == `origin/main` + one
+UNCOMMITTED worktree carrying this task (see below). Build drive `/dev/sda`
+(f2fs, kernel-mounted at the gsa-build path — the automount that dropped it
+mid-build on 2026-10-22 is superseded; MEMORY §6 carries the lesson):
+~60G free after the vtk build. `/run` tmpfs healthy (1%). Installed and
+verified: **vtk 9.7.1-1.2**, **python-opencv 5.0.0-13.2**, **opencv
+5.0.0-13.2** (all tree-built; the broken CachyOS installs are replaced),
+jsoncpp-git 1.9.8.r14 unchanged. IgnorePkg registers opencv/vtk/python-opencv
+so stock cannot reinstall over them.
 
-### Workstream A — umbriel patch series
+**The task (owner ask).** Stock vtk/python-opencv broke on this host
+(stock links `libjsoncpp.so.27`; the tree's jsoncpp-git ships `.28` — 76 vtk
+libs had `libjsoncpp.so.27 => not found`). Both are now tree recipes:
+`packages/stable/vtk` (full optimisation stack: mold + LTO + cmake-tier
+two-phase PGO, trained 4996 gcda vs floor 100, `lib/pgo.sh` gate; 413 bare-
+soname provides) and `python-opencv` restored as a split output of
+`packages/stable/opencv` (rule 24 sibling pins). Wired in `config/topology.conf`
+(vtk record with 34 edges; opencv record +python,+vtk). Validated by
+`sudo gsa -S --leaf --no-sync` of exactly the two + `gsa -Qa`: vtk token
+`f2f111c1…` self-consistent; the opencv set's subscribers hold `d4e316cc…`
+which matches an independent recomputation of the built payload exactly;
+`tools/provides-audit.sh` rc=0 (413/413). Six walls (3 code patches, 1 infra,
+1 build-system) are narrated in NOTE.md 2026-10-22.
 
-PR **noctalia-dev/umbriel#504**, review round 2 (ItsLemmy, blocking finding
-hand-verified by the owner) is fixed in one amended commit
-(`6f56d54`) on `fork/mod-right-double-click-maximize`, **rebased onto current
-upstream main `b93ed3d`** — upstream drifted through the input layer
-(`tap_and_drag`/`drag_lock`, #500), so the round was revalidated against it:
-the deferred Mod+right press is now a grab state (`PendingResizeGrab` in
-`GrabState`), the gesture is opt-in (`[input] mod_right_double_click =
-"none"` default / `"maximize"`), plus the review's maximize-capture removal,
-client-maximize policy dedup, IPC-close teardown check and docs thresholds.
-Red-first + two mutation proofs; `input/`+`drag/` harness 45/45 and meson
-units 129/129 on the rebased tree. Six full-suite harness failures
-(`animation/drag_toggle`, `effect/registry`, `effect/selection`,
-`output/two_output_containment`, `render/renderer_recovery`,
-`rule/only_window`) reproduce on a stashed base build — pre-existing, owned by
-nobody here. Recipe patch `0001` refreshed from the rebased commit with
-`sha256sums` + `.SRCINFO` in the same change (pkgver bump rides along per
-convention); `gsa -B --leaf umbriel-git` ok. PR **#508** unchanged (open, no
-review yet); its patch `0002` still applies on current main (same build).
-Details: `NOTE.md` 2026-10-21, "umbriel-git review round 2".
+**Uncommitted worktree (commit disposition ASKED, awaiting owner).**
+`packages/stable/vtk/**` (new recipe + 3 patches), `packages/stable/opencv/*`
+(python-opencv output, pkgrel 13.2), `config/topology.conf`, `docs/{NOTE,
+MEMORY,CURRENT}.md` (including the 2026-10-21 marathon-close snapshot).
 
-### Workstream B — gsa-smoke2 marathon (parallel session's)
-
-Resume13 wall fixes `7d8a4cc`, subversion `-fno-tree-vectorize` `bcfd364`,
-resume14 wall fixes `278eb59` — all pushed. Pending build proofs and churn
-cleanup per the 2026-10-20 23:55 snapshot and the NOTE.md 2026-10-21/2026-10-20
-sections; this session did not touch the marathon.
-
-**Unpushed intent.** The umbriel-git recipe refresh + this docs snapshot (one
-commit, scoped to workstream A files; the fetch-churn sweep stays uncommitted).
+**Remaining owner follow-ups.**
+- colord-git split decision (stock `colord` exact-locks `libcolord=1.4.8-2`
+  vs stack `libcolord-git` 1.4.8.r16.g56ccc23-1) — untouched since 10-21.
+- QA provides-versioning class (6-8 findings/run) — report-only.
+- NEW: stock optdepend providers `gdal`, `liblas`, `pdal` link icu .78 and
+  `openvr` links jsoncpp .27 — the same skew class one level down; 5 vtk
+  optional-module libs carry their unresolved sonames. Tree recipes for the
+  four (or trimming those modules) is the stack-consistent remedy.
+- NEW (engine): `gsa -Qa` shows the last output's derived token under a
+  split recipe's row set (subscriptions carry the true token) — cosmetic/
+  report-only candidate.

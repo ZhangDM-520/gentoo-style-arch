@@ -2,9 +2,12 @@
 # Contributor: Ray Rashif <schiv@archlinux.org>
 # Contributor: Tobias Powalowski <tpowa@archlinux.org>
 
-pkgname=opencv
-# trim: opencv-samples, python-opencv, opencv-cuda and python-opencv-cuda
-# split outputs dropped (this single-output recipe packages only opencv)
+pkgname=(opencv python-opencv)
+# trim: opencv-samples, opencv-cuda and python-opencv-cuda split outputs
+# stay dropped (the build-cuda tree is not built; samples are not part of
+# the maintained payload). python-opencv is a split output again (owner
+# decision: split-in-opencv): the tree must own its bindings because the
+# stock python-opencv rides a host vtk/jsoncpp mismatch
 provides=(libopencv_alphamat.so libopencv_bgsegm.so libopencv_bioinspired.so
           libopencv_calib.so libopencv_ccalib.so libopencv_core.so
           libopencv_cvv.so libopencv_datasets.so libopencv_dnn_objdetect.so
@@ -27,7 +30,10 @@ provides=(libopencv_alphamat.so libopencv_bgsegm.so libopencv_bioinspired.so
           libopencv_xfeatures2d.so libopencv_ximgproc.so libopencv_xobjdetect.so
           libopencv_xphoto.so libopencv_xstereo.so)
 pkgver=5.0.0
-pkgrel=13.1
+# 13.2: the python-opencv split output returns — 13.1 is the broken
+# CachyOS string already installed on the host, and the same-version skip
+# would silently leave it in place (pandoc-cli precedent)
+pkgrel=13.2
 pkgdesc='Open Source Computer Vision Library'
 arch=(x86_64)
 license=(Apache-2.0)
@@ -202,8 +208,9 @@ package_opencv() {
   ln -sr "$pkgdir"/usr/lib/{libopencv_java${pkgver//./},libopencv_java}.so
 
   # Split Python bindings
-  # trim: python bindings payload dropped together with the python-opencv
-  # and python-opencv-cuda split outputs
+  # the bindings have a home now: package_python-opencv() stages the same
+  # payload from build/modules/python3, so shipping a copy here would
+  # duplicate files between outputs; the cuda counterpart stays trimmed
   rm -r "$pkgdir"/usr/lib/python3*
 
   # trim: docs/man/locales — lean consumer-rebuild recipe, docs not shipped
@@ -212,7 +219,28 @@ package_opencv() {
   install -Dm644 opencv/LICENSE -t "$pkgdir"/usr/share/licenses/$pkgname/
 }
 
-# trim: dropped the opencv-samples, python-opencv, opencv-cuda and
-# python-opencv-cuda split outputs with their depends/provides/conflicts/
-# options and install paths TOGETHER (this single-output recipe packages
-# only opencv)
+package_python-opencv() {
+  pkgdesc='Python bindings for OpenCV'
+  # the global soname provides belong to the opencv payload only
+  unset provides
+  # stock's split shape: none of the master optdepends apply to the bindings
+  unset optdepends
+  # trim: stock's fmt/glew/hdf5/jsoncpp/openmpi/pugixml/qt6-base/vtk
+  # entries dropped — cv2 links only the opencv sonames plus the C++
+  # runtime (DT_NEEDED measured on the stock payload: libopencv_*.so.500,
+  # libstdc++.so.6, libgcc_s.so.1, libc/libm), and the pinned opencv
+  # sibling carries the rest transitively
+  depends=(glibc
+           libgcc
+           libstdc++
+           opencv=$pkgver-$pkgrel
+           python
+           python-numpy)
+
+  DESTDIR="$pkgdir" cmake --install build/modules/python3
+}
+
+# trim: the opencv-samples, opencv-cuda and python-opencv-cuda split
+# outputs stay dropped with their depends/provides/conflicts/options and
+# install paths TOGETHER (the build-cuda tree is not built; samples are
+# not part of the maintained payload)

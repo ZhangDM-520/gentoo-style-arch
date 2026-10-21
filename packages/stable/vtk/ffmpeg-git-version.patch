@@ -1,0 +1,34 @@
+--- a/CMake/FindFFMPEG.cmake
++++ b/CMake/FindFFMPEG.cmake
+@@ -154,6 +154,31 @@
+     file(STRINGS "${_ffmpeg_version_header_path}" _ffmpeg_version
+       REGEX "FFMPEG_VERSION")
+     string(REGEX REPLACE ".*\"n?\(.*\)\"" "\\1" FFMPEG_VERSION "${_ffmpeg_version}")
++    # git-snapshot builds (this tree's ffmpeg-git) stamp ffversion.h with an
++    # 'N-<rev>-g<sha>' string, which no version floor can compare against —
++    # IO/FFMPEG's 2.3.3 check then rejects a far-newer ffmpeg. The component
++    # extraction above is no fallback either: modern ffmpeg moved
++    # LIBAVFORMAT_VERSION_MAJOR into version_major.h, so the multi-line
++    # file(STRINGS) join yields non-numeric junk (measured 2026-10-21).
++    # Parse the version lines across version*.h one glob at a time.
++    if (NOT FFMPEG_VERSION MATCHES "^[0-9]")
++      file(GLOB _ffmpeg_version_headers "${FFMPEG_avformat_INCLUDE_DIR}/libavformat/version*.h")
++      set(_ffmpeg_version_lines "")
++      foreach(_ffmpeg_version_header IN LISTS _ffmpeg_version_headers)
++        file(STRINGS "${_ffmpeg_version_header}" _ffmpeg_version_matches
++          REGEX "#define +LIBAVFORMAT_VERSION_(MAJOR|MINOR) +[0-9]+")
++        list(APPEND _ffmpeg_version_lines ${_ffmpeg_version_matches})
++      endforeach()
++      string(REGEX REPLACE ".*VERSION_MAJOR +([0-9]+).*" "\\1" _ffmpeg_version_major "${_ffmpeg_version_lines}")
++      string(REGEX REPLACE ".*VERSION_MINOR +([0-9]+).*" "\\1" _ffmpeg_version_minor "${_ffmpeg_version_lines}")
++      set(FFMPEG_VERSION "${_ffmpeg_version_major}.${_ffmpeg_version_minor}.0")
++      unset(_ffmpeg_version_headers)
++      unset(_ffmpeg_version_header)
++      unset(_ffmpeg_version_matches)
++      unset(_ffmpeg_version_lines)
++      unset(_ffmpeg_version_major)
++      unset(_ffmpeg_version_minor)
++    endif ()
+     unset(_ffmpeg_version)
+   else ()
+     set(FFMPEG_VERSION FFMPEG_VERSION-NOTFOUND)

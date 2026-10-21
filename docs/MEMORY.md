@@ -3693,3 +3693,28 @@ constant, not a baked path); and the xorg-xwayland-git PGO end-to-end proof
   (`--constraint='citeproc +icu'`) and keep a fail-closed harvest check in
   `package()` (it is what caught `n=13 text-icu=0`). Details: NOTE.md
   2026-10-21.
+- **`makepkg --printsrcinfo` evaluates function-local assignments with only
+  top-level vars in scope, so computed `provides+=` arrays poison the
+  metadata** (2026-10-22, vtk): `provides+=("${_b%%.so.*}.so")` inside
+  `package()` extracted as empty and `.so` entries ("provides is not allowed
+  to be empty / start with a dot"). Only `$pkgver`-style top-level vars
+  survive function-local metadata (llvm-git's sibling pins); a payload-scale
+  soname list must be STATIC (opencv precedent), generated from the measured
+  payload and checked post-build with `tools/provides-audit.sh`. Details:
+  NOTE.md 2026-10-22.
+- **An automount-managed build drive can vanish mid-build with no kernel
+  events; the writes spill into the mountpoint's parent tmpfs and the linker
+  dies SIGBUS** (2026-10-22, vtk infra): `/dev/sda` was cleanly unmounted
+  during a 2h build; `/run/media/...` kept accepting writes into tmpfs `/run`
+  until 100% full. Diagnose with `findmnt`/`df` on the PATH (df shows the
+  PARENT fs when unmounted) and `lsblk`; recover by deleting the spill and
+  **kernel-mounting** the drive (`sudo mount /dev/sda …`) so udisks cannot
+  pull it again. Long builds on removable media should start from a kernel
+  mount. Details: NOTE.md 2026-10-22.
+- **A downstream version floor rejects git-snapshot version strings, and the
+  fallback can be a second probe bug** (2026-10-22, vtk): VTK's FindFFMPEG
+  compares `ffversion.h`'s `N-<rev>-g<sha>` against `2.3.3`; its per-component
+  fallback was equally broken (multi-line `file(STRINGS)` joins defeat the
+  regexes, and ffmpeg moved `LIBAVFORMAT_VERSION_MAJOR` into `version_major.h`).
+  Patch the probe to a measured-correct parse and verify the arithmetic with
+  `cmake -P` before the next 2h build cycle. Details: NOTE.md 2026-10-22.

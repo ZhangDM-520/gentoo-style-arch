@@ -1,0 +1,757 @@
+# Maintainer: Bruno Pagani <archange at archlinux dot org>
+# Maintainer: Caleb Maclennan <caleb@alerque.com>
+# Maintainer: Jakub Klinkovský <lahwaacz at archlinux dot org>
+# Contributor: Evgeniy Alekseev <arcanis at archlinux dot org>
+# Contributor: Michael Migliore <mcmigliore+aur@gmail.com>
+# Contributor: Ray Rashif <schiv at archlinux dot org>
+# Contributor: Andrzej Giniewicz <gginiu at gmail dot com>
+# Contributor: Thomas Dziedzic <gostrc at gmail>
+
+# Reshape of the official Arch VTK recipe for this tree. The core libs here
+# come from -git recipes: this build must link the tree's jsoncpp-git
+# (provides jsoncpp + libjsoncpp.so → libjsoncpp.so.28). Stock/CachyOS vtk
+# links libjsoncpp.so.27 and is broken on this host, so a stock jsoncpp must
+# never be able to satisfy the jsoncpp dependency below.
+
+# Shared PGO payload gate — one implementation in lib/pgo.sh, called at the
+# end of package(). A missing module fails at parse time on purpose.
+source "$startdir/../../../lib/pgo.sh"
+
+pkgname=vtk
+# May need bootstrapping on upgrades due to circular vtk <-> opencascade dependency
+pkgver=9.7.1
+# 1.2: the broken CachyOS build on this host is already stamped 9.7.1-1.1 —
+# the same-version skip would silently leave it in place (pandoc-cli
+# precedent); 1.2 also marks this as the second local delta over stock
+pkgrel=1.2
+# Remote modules pinned by VTK's Remote/*.remote.cmake files
+# See https://gitlab.kitware.com/vtk/vtk/-/tree/master/Remote
+_vtk_module_MomentInvariants_commit=ccb44911b7e1ccf99a36fe4ca6b7755ac4c87743
+_vtk_module_RenderingLookingGlass_commit=56105797c066dfd54a5bad08e1aee223297470d9
+_vtk_module_DICOM_commit=2160aadbd7bd89430370848dca42142769aeb04c
+pkgdesc="Software system for 3D computer graphics, image processing, and visualization"
+arch=(x86_64)
+url="https://www.vtk.org"
+license=(BSD-3-Clause)
+# Rule 25(a) bare-soname provides — one per DT_SONAME the payload ships
+# (measured from the 9.7.1 payload; makepkg auto-versions the stems from
+# the built ELF). tools/provides-audit.sh checks PRESENCE against the
+# built archive after any module-set change.
+provides=(
+  libvtkAcceleratorsVTKmCoreJava.so libvtkAcceleratorsVTKmCore.so libvtkAcceleratorsVTKmDataModelJava.so
+  libvtkAcceleratorsVTKmDataModel.so libvtkAcceleratorsVTKmFiltersJava.so libvtkAcceleratorsVTKmFilters.so
+  libvtkChartsCoreJava.so libvtkChartsCore.so libvtkCommonArchiveJava.so
+  libvtkCommonArchive.so libvtkCommonCacheJava.so libvtkCommonCache.so
+  libvtkCommonColorJava.so libvtkCommonColor.so libvtkCommonComputationalGeometryJava.so
+  libvtkCommonComputationalGeometry.so libvtkCommonCoreJava.so libvtkCommonCore.so
+  libvtkCommonDataModelJava.so libvtkCommonDataModel.so libvtkCommonExecutionModelJava.so
+  libvtkCommonExecutionModel.so libvtkCommonMathJava.so libvtkCommonMath.so
+  libvtkCommonMiscJava.so libvtkCommonMisc.so libvtkCommonPythonJava.so
+  libvtkCommonPython.so libvtkCommonSystemJava.so libvtkCommonSystem.so
+  libvtkCommonTransformsJava.so libvtkCommonTransforms.so libvtkDICOMParser.so
+  libvtkDomainsChemistryJava.so libvtkDomainsChemistryOpenGL2Java.so libvtkDomainsChemistryOpenGL2.so
+  libvtkDomainsChemistry.so libvtkDomainsParallelChemistryJava.so libvtkDomainsParallelChemistry.so
+  libvtkexodusII.so libvtkfides.so libvtkFiltersAMRJava.so
+  libvtkFiltersAMR.so libvtkFiltersCellGridJava.so libvtkFiltersCellGrid.so
+  libvtkFiltersCoreJava.so libvtkFiltersCore.so libvtkFiltersExtractionJava.so
+  libvtkFiltersExtraction.so libvtkFiltersFlowPathsJava.so libvtkFiltersFlowPaths.so
+  libvtkFiltersGeneralJava.so libvtkFiltersGeneral.so libvtkFiltersGenericJava.so
+  libvtkFiltersGeneric.so libvtkFiltersGeometryJava.so libvtkFiltersGeometryPreviewJava.so
+  libvtkFiltersGeometryPreview.so libvtkFiltersGeometry.so libvtkFiltersHybridJava.so
+  libvtkFiltersHybrid.so libvtkFiltersHyperTreeJava.so libvtkFiltersHyperTree.so
+  libvtkFiltersImagingJava.so libvtkFiltersImaging.so libvtkFiltersMeshingJava.so
+  libvtkFiltersMeshing.so libvtkFiltersModelingJava.so libvtkFiltersModeling.so
+  libvtkFiltersONNXJava.so libvtkFiltersONNX.so libvtkFiltersParallelDIY2Java.so
+  libvtkFiltersParallelDIY2.so libvtkFiltersParallelFlowPathsJava.so libvtkFiltersParallelFlowPaths.so
+  libvtkFiltersParallelGeometryJava.so libvtkFiltersParallelGeometry.so libvtkFiltersParallelImagingJava.so
+  libvtkFiltersParallelImaging.so libvtkFiltersParallelJava.so libvtkFiltersParallelMPIJava.so
+  libvtkFiltersParallelMPI.so libvtkFiltersParallel.so libvtkFiltersParallelStatisticsJava.so
+  libvtkFiltersParallelStatistics.so libvtkFiltersParallelVerdictJava.so libvtkFiltersParallelVerdict.so
+  libvtkFiltersPointsJava.so libvtkFiltersPoints.so libvtkFiltersProgrammableJava.so
+  libvtkFiltersProgrammable.so libvtkFiltersPythonJava.so libvtkFiltersPython.so
+  libvtkFiltersReductionJava.so libvtkFiltersReduction.so libvtkFiltersReebGraphJava.so
+  libvtkFiltersReebGraph.so libvtkFiltersSelectionJava.so libvtkFiltersSelection.so
+  libvtkFiltersSMPJava.so libvtkFiltersSMP.so libvtkFiltersSourcesJava.so
+  libvtkFiltersSources.so libvtkFiltersStatisticsJava.so libvtkFiltersStatistics.so
+  libvtkFiltersTemporalJava.so libvtkFiltersTemporal.so libvtkFiltersTensorJava.so
+  libvtkFiltersTensor.so libvtkFiltersTextureJava.so libvtkFiltersTexture.so
+  libvtkFiltersTopologyJava.so libvtkFiltersTopology.so libvtkFiltersVerdictJava.so
+  libvtkFiltersVerdict.so libvtkGeovisCoreJava.so libvtkGeovisCore.so
+  libvtkGeovisGDALJava.so libvtkGeovisGDAL.so libvtkglad.so
+  libvtkGUISupportQtQuick.so libvtkGUISupportQt.so libvtkGUISupportQtSQL.so
+  libvtkh5hut.so libvtkImagingColorJava.so libvtkImagingColor.so
+  libvtkImagingCoreJava.so libvtkImagingCore.so libvtkImagingFourierJava.so
+  libvtkImagingFourier.so libvtkImagingGeneralJava.so libvtkImagingGeneral.so
+  libvtkImagingHybridJava.so libvtkImagingHybrid.so libvtkImagingMathJava.so
+  libvtkImagingMath.so libvtkImagingMorphologicalJava.so libvtkImagingMorphological.so
+  libvtkImagingOpenGL2Java.so libvtkImagingOpenGL2.so libvtkImagingSourcesJava.so
+  libvtkImagingSources.so libvtkImagingStatisticsJava.so libvtkImagingStatistics.so
+  libvtkImagingStencilJava.so libvtkImagingStencil.so libvtkInfovisBoostGraphAlgorithmsJava.so
+  libvtkInfovisBoostGraphAlgorithms.so libvtkInfovisCoreJava.so libvtkInfovisCore.so
+  libvtkInfovisLayoutJava.so libvtkInfovisLayout.so libvtkInteractionImageJava.so
+  libvtkInteractionImage.so libvtkInteractionStyleJava.so libvtkInteractionStyle.so
+  libvtkInteractionWidgetsJava.so libvtkInteractionWidgets.so libvtkIOADIOS2Java.so
+  libvtkIOADIOS2.so libvtkIOAlembicJava.so libvtkIOAlembic.so
+  libvtkIOAMRJava.so libvtkIOAMR.so libvtkIOAsynchronousJava.so
+  libvtkIOAsynchronous.so libvtkIOAvmeshJava.so libvtkIOAvmesh.so
+  libvtkIOCatalystConduitJava.so libvtkIOCatalystConduit.so libvtkIOCellGridJava.so
+  libvtkIOCellGrid.so libvtkIOCesium3DTilesJava.so libvtkIOCesium3DTiles.so
+  libvtkIOCGNSReaderJava.so libvtkIOCGNSReader.so libvtkIOChemistryJava.so
+  libvtkIOChemistry.so libvtkIOCityGMLJava.so libvtkIOCityGML.so
+  libvtkIOCONVERGECFDJava.so libvtkIOCONVERGECFD.so libvtkIOCoreJava.so
+  libvtkIOCore.so libvtkIOEngysJava.so libvtkIOEngys.so
+  libvtkIOEnSightJava.so libvtkIOEnSight.so libvtkIOERFJava.so
+  libvtkIOERF.so libvtkIOExodusJava.so libvtkIOExodus.so
+  libvtkIOExportGL2PSJava.so libvtkIOExportGL2PS.so libvtkIOExportJava.so
+  libvtkIOExportPDFJava.so libvtkIOExportPDF.so libvtkIOExport.so
+  libvtkIOFDSJava.so libvtkIOFDS.so libvtkIOFFMPEGJava.so
+  libvtkIOFFMPEG.so libvtkIOFidesJava.so libvtkIOFides.so
+  libvtkIOFLUENTCFFJava.so libvtkIOFLUENTCFF.so libvtkIOGDALJava.so
+  libvtkIOGDAL.so libvtkIOGeoJSONJava.so libvtkIOGeoJSON.so
+  libvtkIOGeometryJava.so libvtkIOGeometry.so libvtkIOH5partJava.so
+  libvtkIOH5part.so libvtkIOH5RageJava.so libvtkIOH5Rage.so
+  libvtkIOHDFJava.so libvtkIOHDF.so libvtkIOImageJava.so
+  libvtkIOImage.so libvtkIOImportJava.so libvtkIOImport.so
+  libvtkIOInfovisJava.so libvtkIOInfovis.so libvtkIOIOSSJava.so
+  libvtkIOIOSS.so libvtkIOLANLX3DJava.so libvtkIOLANLX3D.so
+  libvtkIOLASJava.so libvtkIOLAS.so libvtkIOLegacyJava.so
+  libvtkIOLegacy.so libvtkIOLSDynaJava.so libvtkIOLSDyna.so
+  libvtkIOMINCJava.so libvtkIOMINC.so libvtkIOMotionFXJava.so
+  libvtkIOMotionFX.so libvtkIOMovieJava.so libvtkIOMovie.so
+  libvtkIOMPIImageJava.so libvtkIOMPIImage.so libvtkIOMPIParallelJava.so
+  libvtkIOMPIParallel.so libvtkIOMySQLJava.so libvtkIOMySQL.so
+  libvtkIONanoVDBJava.so libvtkIONanoVDB.so libvtkIONetCDFJava.so
+  libvtkIONetCDF.so libvtkIOOCCTJava.so libvtkIOOCCT.so
+  libvtkIOODBCJava.so libvtkIOODBC.so libvtkIOOggTheoraJava.so
+  libvtkIOOggTheora.so libvtkIOOMFJava.so libvtkIOOMF.so
+  libvtkIOOpenVDBJava.so libvtkIOOpenVDB.so libvtkIOParallelExodusJava.so
+  libvtkIOParallelExodus.so libvtkIOParallelJava.so libvtkIOParallelLSDynaJava.so
+  libvtkIOParallelLSDyna.so libvtkIOParallelNetCDFJava.so libvtkIOParallelNetCDF.so
+  libvtkIOParallel.so libvtkIOParallelXdmf3Java.so libvtkIOParallelXdmf3.so
+  libvtkIOParallelXMLJava.so libvtkIOParallelXML.so libvtkIOPDALJava.so
+  libvtkIOPDAL.so libvtkIOPIOJava.so libvtkIOPIO.so
+  libvtkIOPLYJava.so libvtkIOPLY.so libvtkIOPostgreSQLJava.so
+  libvtkIOPostgreSQL.so libvtkIOSegYJava.so libvtkIOSegY.so
+  libvtkIOSQLJava.so libvtkIOSQL.so libvtkioss.so
+  libvtkIOTecplotTableJava.so libvtkIOTecplotTable.so libvtkIOTRUCHASJava.so
+  libvtkIOTRUCHAS.so libvtkIOVeraOutJava.so libvtkIOVeraOut.so
+  libvtkIOVideoJava.so libvtkIOVideo.so libvtkIOVPICJava.so
+  libvtkIOVPIC.so libvtkIOXdmf2Java.so libvtkIOXdmf2.so
+  libvtkIOXdmf3Java.so libvtkIOXdmf3.so libvtkIOXMLJava.so
+  libvtkIOXMLParserJava.so libvtkIOXMLParser.so libvtkIOXML.so
+  libvtkJava.so libvtkkissfft.so libvtkloguru.so
+  libvtkmetaio.so libvtkParallelCoreJava.so libvtkParallelCore.so
+  libvtkParallelDIY.so libvtkParallelMPI4PyJava.so libvtkParallelMPI4Py.so
+  libvtkParallelMPIJava.so libvtkParallelMPI.so libvtkPythonContext2DJava.so
+  libvtkPythonContext2D.so libvtkPythonInterpreter.so libvtkRenderingAnariJava.so
+  libvtkRenderingAnari.so libvtkRenderingAnnotationJava.so libvtkRenderingAnnotation.so
+  libvtkRenderingCellGridJava.so libvtkRenderingCellGrid.so libvtkRenderingContext2DJava.so
+  libvtkRenderingContext2D.so libvtkRenderingContextOpenGL2Java.so libvtkRenderingContextOpenGL2.so
+  libvtkRenderingCoreJava.so libvtkRenderingCore.so libvtkRenderingExternalJava.so
+  libvtkRenderingExternal.so libvtkRenderingFFMPEGOpenGL2Java.so libvtkRenderingFFMPEGOpenGL2.so
+  libvtkRenderingFreeTypeFontConfig.so libvtkRenderingFreeTypeJava.so libvtkRenderingFreeType.so
+  libvtkRenderingGL2PSOpenGL2Java.so libvtkRenderingGL2PSOpenGL2.so libvtkRenderingGridAxesJava.so
+  libvtkRenderingGridAxes.so libvtkRenderingHyperTreeGridJava.so libvtkRenderingHyperTreeGrid.so
+  libvtkRenderingImageJava.so libvtkRenderingImage.so libvtkRenderingLabelJava.so
+  libvtkRenderingLabel.so libvtkRenderingLICOpenGL2Java.so libvtkRenderingLICOpenGL2.so
+  libvtkRenderingLODJava.so libvtkRenderingLOD.so libvtkRenderingMatplotlibJava.so
+  libvtkRenderingMatplotlib.so libvtkRenderingOpenGL2Java.so libvtkRenderingOpenGL2.so
+  libvtkRenderingOpenVRJava.so libvtkRenderingOpenVR.so libvtkRenderingOpenXRJava.so
+  libvtkRenderingOpenXR.so libvtkRenderingParallelJava.so libvtkRenderingParallelLICJava.so
+  libvtkRenderingParallelLIC.so libvtkRenderingParallel.so libvtkRenderingQtJava.so
+  libvtkRenderingQt.so libvtkRenderingRayTracingJava.so libvtkRenderingRayTracing.so
+  libvtkRenderingSceneGraphJava.so libvtkRenderingSceneGraph.so libvtkRenderingTk.so
+  libvtkRenderingUIJava.so libvtkRenderingUI.so libvtkRenderingVolumeAMRJava.so
+  libvtkRenderingVolumeAMR.so libvtkRenderingVolumeJava.so libvtkRenderingVolumeOpenGL2Java.so
+  libvtkRenderingVolumeOpenGL2.so libvtkRenderingVolume.so libvtkRenderingVRJava.so
+  libvtkRenderingVRModelsJava.so libvtkRenderingVRModels.so libvtkRenderingVR.so
+  libvtkRenderingVtkJSJava.so libvtkRenderingVtkJS.so libvtkRenderingWebXRJava.so
+  libvtkRenderingWebXR.so libvtkscn.so libvtksys.so
+  libvtkTestingCore.so libvtkTestingDataModel.so libvtkTestingGenericBridge.so
+  libvtkTestingIOSQL.so libvtkTestingRenderingJava.so libvtkTestingRendering.so
+  libvtktoken.so libvtkUtilitiesBenchmarks.so libvtkViewsContext2DJava.so
+  libvtkViewsContext2D.so libvtkViewsCoreJava.so libvtkViewsCore.so
+  libvtkViewsInfovisJava.so libvtkViewsInfovis.so libvtkViewsQt.so
+  libvtkvpic.so libvtkWebCoreJava.so libvtkWebCore.so
+  libvtkWebGLExporterJava.so libvtkWebGLExporter.so libvtkWrappingPythonCore3.14.so
+  libvtkWrappingTools.so libvtkx11.so libvtkxdmf2.so
+  libvtkxdmf3.so libvtkxdmfcore.so
+)
+
+depends=(
+  glibc                   # used by >400 libs
+  libstdc++               # used by >300 libs
+  libgcc                  # used by >250 libs
+  fmt                     # 46 direct libs, 385 total libs
+  libgomp                 # 6 direct libs, 385 total libs
+  onetbb                  # 45 direct libs, 385 total libs
+  verdict                 # libvtkFiltersVerdict.so (1 direct lib, 194 total libs)
+  libarchive              # libvtkCommonArchive.so (1 direct lib, 2 total libs)
+  # dependencies of libvtkCommonDataModel.so and libvtkIOCore.so
+  lz4                     # 1 direct lib, 207 total libs
+  pugixml                 # 4 direct libs, 361 total libs
+  xz                      # 1 direct lib, 207 total libs
+  zlib                    # 5 direct libs, 208 total libs
+  # dependencies of libvtkIOImage.so
+  libjpeg-turbo           # 1 direct lib, 95 total libs
+  libpng                  # 1 direct lib, 95 total libs
+  libtiff                 # 1 direct lib, 95 total libs
+  # common data libraries
+  expat                   # 1 direct lib, 103 total libs
+  jsoncpp                 # 7 direct libs, 26 total libs
+  libjsoncpp.so           # soname pin: resolves to the tree's jsoncpp-git
+                          # (libjsoncpp.so.28); stock jsoncpp (libjsoncpp.so.27)
+                          # must never satisfy this recipe
+  libxml2                 # 3 direct libs, 13 total libs
+)
+makedepends=(
+  # build system
+  cmake
+  ninja
+  git                     # for fetching remote module sources
+  # bindings
+  java-environment=11
+  python
+  python-matplotlib
+  python-mpi4py
+  # graphical toolkits
+  qt6-base                # libvtkGUISupportQt.so etc. (5 direct libs, 6 total libs)
+  qt6-declarative         # libvtkGUISupportQtQuick.so (1 direct lib, 1 total lib)
+  qt6-tools
+  tk                      # libvtkRenderingTk.so (1 direct lib, 1 total lib)
+  # direct dependencies of "some" VTK libs/modules
+  freetype2               # libvtkRenderingFreeType.so, libvtkRenderingFreeTypeFontConfig.so (2 direct libs, 87 total libs)
+  openmpi                 # 11 direct libs, 67 total libs
+  libx11                  # libvtkRenderingTk.so, libvtkRenderingOpenGL2.so, libvtkglad.so, libvtkRenderingUI.so (4 direct libs, 54 total libs)
+  libxcursor              # libvtkRenderingOpenGL2.so (1 direct lib, 45 total libs)
+  hdf5                    # 14 direct libs, 33 total libs
+  netcdf                  # libvtkIOParallelNetCDF.so, libvtkIONetCDF.so, libvtkexodusII.so, libvtkIOMINC.so, libvtkioss.so (5 direct libs, 14 total libs)
+  sqlite                  # libvtkIOSQL.so (1 direct lib, 10 total libs)
+  viskores                # 6 direct libs, 10 total libs
+  adios2                  # libvtkfides.so, libvtkIOADIOS2.so (2 direct libs, 5 total libs)
+  cgns                    # libvtkIOCGNSReader.so, libvtkioss.so (2 direct libs, 5 total libs)
+  paraview-catalyst       # libvtkioss.so, libvtkIOCatalystConduit.so (2 direct libs, 5 total libs)
+  gdal                    # libvtkGeovisGDAL.so, libvtkIOGDAL.so (2 direct libs, 4 total libs)
+  gl2ps                   # libvtkRenderingGL2PSOpenGL2.so, libvtkIOExportGL2PS.so (2 direct libs, 4 total libs)
+  proj                    # libvtkGeovisCore.so, libvtkIOCesium3DTiles.so (2 direct libs, 4 total libs)
+  alembic                 # libvtkIOAlembic.so (1 direct lib, 2 total libs)
+  anari-sdk               # libvtkRenderingAnari.so (1 direct lib, 2 total libs)
+  ffmpeg                  # libvtkIOFFMPEG.so (1 direct lib, 2 total libs)
+  imath                   # libvtkIOOpenVDB.so (1 direct lib, 2 total libs)
+  libharu                 # libvtkIOExportPDF.so (1 direct lib, 2 total libs)
+  liblas                  # libvtkIOLAS.so (1 direct lib, 2 total libs)
+  libogg                  # libvtkIOOggTheora.so (1 direct lib, 2 total libs)
+  libtheora               # libvtkIOOggTheora.so (1 direct lib, 2 total libs)
+  mariadb-libs            # libvtkIOMySQL.so (1 direct lib, 2 total libs)
+  onnxruntime             # libvtkFiltersONNX.so.1 (1 direct lib, 2 total libs)
+  opencascade             # libvtkIOOCCT.so (1 direct lib, 2 total libs)
+  openimagedenoise        # libvtkRenderingRayTracing.so (1 direct lib, 2 total libs)
+  openvdb                 # libvtkIOOpenVDB.so (1 direct lib, 2 total libs)
+  openvr                  # libvtkRenderingOpenVR.so (1 direct lib, 2 total libs)
+  openxr                  # libvtkRenderingOpenXR.so (1 direct lib, 2 total libs)
+  ospray                  # libvtkRenderingRayTracing.so (1 direct lib, 2 total libs)
+  pdal                    # libvtkIOPDAL.so (1 direct lib, 2 total libs)
+  postgresql-libs         # libvtkIOPostgreSQL.so (1 direct lib, 2 total libs)
+  unixodbc                # libvtkIOODBC.so (1 direct lib, 2 total libs)
+  fontconfig              # libvtkRenderingFreeTypeFontConfig.so (1 direct lib, 1 total lib)
+  # header-only libraries (all except two are only private or test dependencies
+  # in all modules that use them)
+  boost
+  cli11
+  eigen
+  fast_float      # interface dependency of the VTK::CommonCore module
+  nlohmann-json   # interface dependency of the VTK::CommonCore module
+  utf8cpp
+)
+# pegtl: https://gitlab.kitware.com/vtk/vtk/-/issues/18151
+# exprtk, ioss: not packaged
+optdepends=(
+  # additional tools not listed in makedepends
+  'graphviz: drawing tools'
+  'libglvnd: OpenGL rendering'  # checked at runtime rather than compile-time
+  # bindings
+  'java-runtime=11: java bindings'
+  'python: python bindings'
+  'python-matplotlib: for Matplotlib rendering'
+  'python-mpi4py: OpenMPI python support'
+  # graphical toolkits
+  'qt6-declarative: QML plugin'
+  'tk: tcl bindings'
+  # direct dependencies of "some" VTK libs/modules
+  'libx11: rendering'
+  'libxcursor: rendering'
+  'fontconfig: rendering fonts with fontconfig support'
+  'freetype2: rendering fonts'
+  'gl2ps: rendering to PostScript, PDF, and SVG'
+  'anari-sdk: ANARI rendering module'
+  'onnxruntime: ONNX filter for AI-related computation'
+  'openvr: rendering for virtual reality'
+  'openxr: rendering for virtual and augmented reality'
+  'openimagedenoise: rendering with raytracing support'
+  'ospray: rendering with raytracing support'
+  'openmpi: OpenMPI support'
+  'viskores: accelerators support'
+  'adios2: IO module'
+  'alembic: IO module'
+  'cgns: IO module'
+  'ffmpeg: IO module'
+  'gdal: IO module'
+  'hdf5: IO module'
+  'imath: IO module'
+  'libharu: IO module'
+  'liblas: IO module'
+  'libogg: IO module'
+  'libtheora: IO module'
+  'mariadb-libs: IO module'
+  'netcdf: IO module'
+  'opencascade: IO module'
+  'openvdb: IO module'
+  'paraview-catalyst: IO module'
+  'pdal: IO module'
+  'postgresql-libs: IO module'
+  'proj: IO module'
+  'sqlite: IO module'
+  'unixodbc: IO module'
+  # building downstream projects
+  'fast_float: for building downstream projects'
+  'nlohmann-json: for building downstream projects'
+  'openmp: OpenMP support for downstream projects built with Clang'
+)
+options=(staticlibs)
+source=(
+  $url/files/release/${pkgver%.*}/VTK-$pkgver.tar.gz
+  # Remote modules pinned in Remote/*.remote.cmake (full clones so that vtk_fetch_module can verify the commit without network access)
+  vtkMomentInvariants::git+https://gitlab.kitware.com/vtk/MomentInvariants.git#commit=$_vtk_module_MomentInvariants_commit
+  vtkRenderingLookingGlass::git+https://github.com/Kitware/LookingGlassVTKModule.git#commit=$_vtk_module_RenderingLookingGlass_commit
+  vtkDICOM::git+https://github.com/dgobbi/vtk-dicom.git#commit=$_vtk_module_DICOM_commit
+  fmt-12.2.patch
+  anari-1.1-light-extensions.patch
+  anari-pre-1.1-sdk-detection.patch
+  openvdb-13.patch
+  ffmpeg-git-version.patch
+  token-string-include.patch
+  ioss-fstream-include.patch
+)
+sha256sums=('cae04fd355004cb916a409db79d53a208f1221e975aeacc7540ee67b148ee91a'
+            'c8d1d88b802db3d4b9cea9e0f1601448b1a7572cf3514c5d25a235cb1de4903a'
+            '2ae8f72be112973460b402e75b2e05c01a5b950c7303431bcd02ab8c7a93f99a'
+            'd0812d560e44cd73ad742fddce5589a340f83eecabc09ccdd284cd516114a3ec'
+            'b784782cac02e11a129da68cc9feef2175b1cabb9dcc7b6c036f60becf77d8f6'
+            '7504559c00ae9d5cd2cc5cefde8960eb4cd9b307617b072758f68767f6842c55'
+            '73997f77f94fb0c76094aeffaff4d3fa61105a7c08c80cdf5cc16584e53db329'
+            'ad13bcfc0f104ef27c8bb6e59939353d1efc4c06ad675243c9cf136f8bdd9259'
+            'fcb67e4f7e4defda0e76b47213036cc248c9d7d4e5566d11d06ea3a8c4a6c193'
+            '2acbc19a02e3fcbb5187afa82d578407823ccaab13edd743a96c17dfec79d61d'
+            '15199b063ec5d79546fde8d952b6d3e75a555b676fc406b1d9206104661e14ee')
+b2sums=('f9885d14329b7d64c0d95179338609d701e205b209b89b344df9342101a005ed09b2ae23ee6efba1d454606fc1e401885e2a67ea43472e680f437616d83bbdbf'
+        '58abd3c54c8313f7e25da5a6064ea0f61c44e788d0c251958a7c1d3a89e8d5e429e2fb5c795d6b6377df55c1824d0910065ed6733b52717477b58c9227e91223'
+        '33de2b697708b87f7a4adbe4d7370cdd3eb990fe80b874fb86d1d37546323d76c19ad9c1ff2cd9169f5093f390732457988dc83f916f9bdc2fefafb93353ff0d'
+        '1e93c576f1d0d72497b18a62a4676c83cb28dd70299c8ad3a02653f95b87c23270056e6826c2f2a5fe9a1edbda920431d4cadb1feb41c33e3490a94d27046372'
+        'db47a96696f124de4588b289d01f01d1fb28c6b2408d68b505cb59f38244ae2c2e75787a9f43d4820441bf074e3f47246d7a5de9248cb8d3ff2dcaaa0b545640'
+        'f98b67541284ec7bc453b3f775f45adda51517e9c2bba4f611f092489ca5f8e361ec26dfc7c8f551aa46574293b7b9b80877912db8467e3c3751837071dcbaf2'
+        'e8f92dba20383f513e80db51b197ccb5d2535883ca26222685e88ed623308cf019fa551dd3bc354032c5fedea3c1d972e3867eddb34fd9bc26bb17b89086ee03'
+        'e78ec1168eaf6205365e6ad891d80f118b344cff518dac007f404a1d1bf74608d6c1de0795117ddc9449c84c23635e22d2bb3538f32b91af9ae0d22578b2a059'
+        '9dc3f5bc379715d9b6e873e49bff2e6f4f8bdebaafedca972e2076d4342b4ce6e19c285a757383b52059af6c7b75fb80676c92003b006ee454bb686c4f69eb13'
+        '2b2ba974257a58c4d9c27ec0937ec135f022f5d205ada2d5466278e661ff04ae1f5a498eb00c88352c348c9f8b1c9441fc38bc00cd4991b89f8a928f33e751a6'
+        'd5bca943fd2e5cfb66c0e00fd90f00efe42f2b4d0474d0eb8c8edf741ba83f7af57a1c94eca5ab3615816d5bb7f039a40acdaac2e920d8a5265cfc3f47142617')
+
+prepare() {
+  cd ${pkgname^^}-${pkgver}
+  # Point VTK's remote modules at the prefetched clones.
+  # NOTE: the directory names must match the first argument of each
+  # vtk_fetch_module() call in Remote/*.remote.cmake
+  ln -snfv "$srcdir"/vtkMomentInvariants Remote/MomentInvariants
+  ln -snfv "$srcdir"/vtkRenderingLookingGlass Remote/RenderingLookingGlass
+  ln -snfv "$srcdir"/vtkDICOM Remote/DICOM
+
+  _fast_float_version=$(pacman -Q fast_float | sed -e 's/.* //; s/-.*//g')
+  sed -i "s|7.0.0|${_fast_float_version}|" ThirdParty/fast_float/CMakeLists.txt
+  # Use cmake's FindHDF5
+  rm CMake/patches/99/FindHDF5.cmake
+  sed -e '/FindHDF5/d' -i CMake/vtkInstallCMakePackage.cmake
+
+  # Fix build with fmt 12.2.0 https://gitlab.kitware.com/vtk/vtk/-/work_items/20092
+  patch -p1 -i ../fmt-12.2.patch
+
+  # Backport ANARI 1.1 (SDK 0.16) support: KHR_AREA_LIGHTS was removed from the
+  # specification https://gitlab.kitware.com/vtk/vtk/-/commit/c02fc7daf3790e48c07628c5096867b1eb272d77
+  patch -p1 -i ../anari-1.1-light-extensions.patch
+  # Support ANARI SDKs that predate KHR_LIGHT_PRIMARY_VISIBILITY as well
+  # https://gitlab.kitware.com/vtk/vtk/-/commit/7b88eefcbfa22442052d2c8a1790b5000cbce975
+  patch -p1 -i ../anari-pre-1.1-sdk-detection.patch
+
+  # Fix vtkNanoVDBWriter with OpenVDB 12+: nanovdb::tools::build namespace
+  # https://gitlab.kitware.com/vtk/vtk/-/issues/20171
+  patch -p1 -i ../openvdb-13.patch
+
+  # FindFFMPEG aggregates its version from ffversion.h, where a git build
+  # stamps 'N-<rev>-g<sha>' — IO/FFMPEG's 2.3.3 floor then rejects our
+  # far-newer ffmpeg-git (measured 2026-10-21, configure wall). The probe
+  # falls back to a fresh numeric parse of libavformat's version headers.
+  patch -p1 -i ../ffmpeg-git-version.patch
+
+  # token/Manager.h uses std::string without including <string> (upstream
+  # master still relies on transitive includes); gcc-snapshot's libstdc++
+  # no longer pulls it in — 56-error cascade, measured 2026-10-21.
+  patch -p1 -i ../token-string-include.patch
+
+  # same class one subsystem over: vtkioss catalyst's logging header uses
+  # std::fstream without <fstream> (the compiler names the missing include)
+  patch -p1 -i ../ioss-fstream-include.patch
+}
+
+# Synthetic PGO training workload. Stock's ctest suite is not self-contained:
+# nearly every VTK test resolves its fixtures through ExternalData
+# (VTK_DATA_ROOT) downloads, and enabling VTK_BUILD_TESTING would pull them —
+# forbidden for training here. VTK_BUILD_TESTING therefore stays at its OFF
+# default and this driver carries the workload: a spread of surface/volume
+# filters, geometry, IO round-trips and a best-effort offscreen render, each
+# step isolated so one failing filter does not starve the rest of the profile.
+_train_pgo() {
+  cat > "${srcdir}"/pgo_train.py <<'EOF'
+import os
+import random
+import sys
+
+try:
+    import vtk
+except ImportError:
+    import vtkmodules.all as vtk
+
+SCRATCH = 'pgo-train-scratch'
+
+
+def step(name, fn):
+    try:
+        fn()
+    except Exception as exc:
+        print('train: %s skipped: %s' % (name, exc), file=sys.stderr)
+
+
+def surfacing():
+    src = vtk.vtkSphereSource()
+    src.SetRadius(1.0)
+    src.SetThetaResolution(48)
+    src.SetPhiResolution(48)
+    elev = vtk.vtkElevationFilter()
+    elev.SetInputConnection(src.GetOutputPort())
+    contour = vtk.vtkContourFilter()
+    contour.SetInputConnection(elev.GetOutputPort())
+    contour.GenerateValues(12, 0.0, 1.0)
+    normals = vtk.vtkPolyDataNormals()
+    normals.SetInputConnection(contour.GetOutputPort())
+    glyphs = vtk.vtkGlyph3D()
+    glyphs.SetInputConnection(normals.GetOutputPort())
+    cone = vtk.vtkConeSource()
+    glyphs.SetSourceConnection(cone.GetOutputPort())
+    tri = vtk.vtkTriangleFilter()
+    tri.SetInputConnection(glyphs.GetOutputPort())
+    clean = vtk.vtkCleanPolyData()
+    clean.SetInputConnection(tri.GetOutputPort())
+    clean.Update()
+    print('surfacing cells:', clean.GetOutput().GetNumberOfCells())
+
+
+def volume():
+    src = vtk.vtkRTAnalyticSource()
+    src.SetWholeExtent(0, 63, 0, 63, 0, 63)
+    smooth = vtk.vtkImageGaussianSmooth()
+    smooth.SetInputConnection(src.GetOutputPort())
+    iso = vtk.vtkFlyingEdges3D()
+    iso.SetInputConnection(smooth.GetOutputPort())
+    iso.SetValue(0, 200.0)
+    sinc = vtk.vtkWindowedSincPolyDataFilter()
+    sinc.SetInputConnection(iso.GetOutputPort())
+    sinc.SetNumberOfIterations(8)
+    mass = vtk.vtkMassProperties()
+    mass.SetInputConnection(sinc.GetOutputPort())
+    mass.Update()
+    print('volume area:', mass.GetSurfaceArea())
+
+
+def geometry():
+    rnd = random.Random(42)
+    pts = vtk.vtkPoints()
+    for _ in range(200):
+        pts.InsertNextPoint(rnd.uniform(0, 1), rnd.uniform(0, 1), rnd.uniform(0, 1))
+    cloud = vtk.vtkPolyData()
+    cloud.SetPoints(pts)
+    delau = vtk.vtkDelaunay3D()
+    delau.SetInputData(cloud)
+    edges = vtk.vtkExtractEdges()
+    edges.SetInputConnection(delau.GetOutputPort())
+    tube = vtk.vtkTubeFilter()
+    tube.SetInputConnection(edges.GetOutputPort())
+    tube.Update()
+    print('geometry cells:', tube.GetOutput().GetNumberOfCells())
+
+
+def io_roundtrip():
+    src = vtk.vtkConeSource()
+    src.Update()
+    path = os.path.join(SCRATCH, 'train.vtp')
+    writer = vtk.vtkXMLPolyDataWriter()
+    writer.SetFileName(path)
+    writer.SetInputData(src.GetOutput())
+    writer.Write()
+    reader = vtk.vtkXMLPolyDataReader()
+    reader.SetFileName(path)
+    reader.Update()
+    print('io cells:', reader.GetOutput().GetNumberOfCells())
+
+
+def tabular():
+    path = os.path.join(SCRATCH, 'train.csv')
+    with open(path, 'w') as fh:
+        fh.write('x,y,z,value\n')
+        for i in range(64):
+            fh.write('%f,%f,%f,%f\n' % (i * 0.1, (i * 0.2) % 3.0, i * 0.05, i * i * 0.01))
+    reader = vtk.vtkDelimitedTextReader()
+    reader.SetFileName(path)
+    reader.DetectNumericColumnsOn()
+    reader.Update()
+    table = vtk.vtkTableToPolyData()
+    table.SetInputConnection(reader.GetOutputPort())
+    table.SetXColumn('x')
+    table.SetYColumn('y')
+    table.SetZColumn('z')
+    table.Update()
+    print('table points:', table.GetOutput().GetNumberOfPoints())
+
+
+def render():
+    # Best-effort offscreen render: the stock GLX build may lack OSMesa/EGL
+    # offscreen support, so failure here is tolerated — the filter pipelines
+    # above already carry the training weight.
+    cone = vtk.vtkConeSource()
+    mapper = vtk.vtkPolyDataMapper()
+    mapper.SetInputConnection(cone.GetOutputPort())
+    actor = vtk.vtkActor()
+    actor.SetMapper(mapper)
+    ren = vtk.vtkRenderer()
+    ren.AddActor(actor)
+    ren_win = vtk.vtkRenderWindow()
+    ren_win.SetOffScreenRendering(1)
+    ren_win.SetSize(128, 128)
+    ren_win.AddRenderer(ren)
+    ren_win.Render()
+    ren_win.Finalize()
+
+
+os.makedirs(SCRATCH, exist_ok=True)
+step('surfacing', surfacing)
+step('volume', volume)
+step('geometry', geometry)
+step('io_roundtrip', io_roundtrip)
+step('tabular', tabular)
+step('render', render)
+sys.stdout.flush()
+EOF
+
+  # The trainer must import the instrumented build tree, never an installed
+  # stock vtk (qt6-multimedia 2026-10-11: a trainer linking the stale stock
+  # lib trains the wrong binary); the gcda floor below catches an import
+  # that still went wrong.
+  local _py_path="${srcdir}/build/lib"
+  local _vtkmods
+  _vtkmods="$(find "${srcdir}/build" -maxdepth 6 -type d -name vtkmodules 2>/dev/null | head -n1)"
+  [ -n "${_vtkmods}" ] && _py_path="${_vtkmods%/vtkmodules}:${_py_path}"
+
+  # SIGINT (not TERM!) so python unwinds and the gcov destructors flush the
+  # .gcda files (qt6-declarative's measured lesson); a failing trainer is
+  # tolerated — the floor guard turns a thin profile into a plain build.
+  env PYTHONPATH="${_py_path}" LD_LIBRARY_PATH="${srcdir}/build/lib" \
+    timeout -s INT -k 5 120 python "${srcdir}"/pgo_train.py >/dev/null 2>&1 || true
+
+  rm -rf "${srcdir}"/pgo-train-scratch "${srcdir}"/pgo_train.py
+}
+
+build() {
+  # To help cmake find java
+  export JAVA_HOME=/usr/lib/jvm/default
+  # To set tcl lib path
+  local _tkver=$(echo 'puts $tcl_version' | tclsh)
+
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  # Phase 1: instrumented build. LTO is stripped for the generate phase
+  # (instrumented LTO is fragile — qt6-declarative's measured choice) and
+  # comes back for phase 2 / the fallback as the first -flto* token makepkg's
+  # LTOFLAGS left in the environment; the recipe never spells LTO flags
+  # itself — host makepkg.conf owns the policy. The profile dir lives OUTSIDE
+  # the build dir so a build-dir clean can never eat the profile (mesa
+  # precedent).
+  local _pgo_dir="${srcdir}/vtk-pgo-profile"
+  mkdir -p "${_pgo_dir}"
+  local _lto_flag="" _gen_cflags="" _gen_cxxflags="" _gen_ldflags="" _f
+  for _f in ${CFLAGS}; do
+    case $_f in
+      -flto*) [ -n "${_lto_flag}" ] || _lto_flag="${_f}" ;;
+      *) _gen_cflags+=" ${_f}" ;;
+    esac
+  done
+  for _f in ${CXXFLAGS}; do
+    case $_f in
+      -flto*) [ -n "${_lto_flag}" ] || _lto_flag="${_f}" ;;
+      *) _gen_cxxflags+=" ${_f}" ;;
+    esac
+  done
+  for _f in ${LDFLAGS}; do
+    case $_f in
+      -flto*) [ -n "${_lto_flag}" ] || _lto_flag="${_f}" ;;
+      *) _gen_ldflags+=" ${_f}" ;;
+    esac
+  done
+  CFLAGS="${_gen_cflags# } -fprofile-generate=${_pgo_dir} -fprofile-update=atomic"
+  CXXFLAGS="${_gen_cxxflags# } -fprofile-generate=${_pgo_dir} -fprofile-update=atomic"
+  LDFLAGS="${_gen_ldflags# } -fprofile-generate=${_pgo_dir}"
+  export CFLAGS CXXFLAGS LDFLAGS
+
+  local cmake_options=(
+    -B build
+    -S ${pkgname^^}-${pkgver}
+    -G Ninja
+    -Wno-dev
+    -DCMAKE_BUILD_TYPE=Release
+    -DCMAKE_CXX_FLAGS="$CXXFLAGS -ffat-lto-objects"
+    -DCMAKE_INSTALL_PREFIX=/usr
+    -DCMAKE_INSTALL_LICENSEDIR=share/licenses/vtk
+    -DCMAKE_SKIP_RPATH=OFF
+    -DCMAKE_SKIP_INSTALL_RPATH=ON
+    -DBUILD_SHARED_LIBS=ON
+    -DVTK_BUILD_ALL_MODULES=ON
+    -DVTK_ENABLE_CATALYST=ON
+    -DVTK_INSTALL_TCL_DIR=/usr/lib/tcl${_tkver}/vtk/
+    -DVTK_LEGACY_REMOVE=ON
+    -DVTK_SMP_ENABLE_OPENMP=ON
+    -DVTK_SMP_IMPLEMENTATION_TYPE=TBB
+    -DVTK_PYTHON_VERSION=3
+    -DVTK_QT_VERSION=6
+    -DVTK_USE_MPI=ON
+    -DVTK_USE_TK=ON
+    -DVTK_VERSIONED_INSTALL=OFF
+    -DVTK_WRAP_JAVA=ON
+    -DVTK_WRAP_PYTHON=ON
+    -DVTK_ENABLE_OSPRAY=ON
+    -DVTKOSPRAY_ENABLE_DENOISER=ON
+    -DVTK_USE_EXTERNAL=ON
+    #-DFIDES_USE_EXTERNAL_RAPIDJSON=ON
+    -DVTK_MODULE_USE_EXTERNAL_VTK_exprtk=OFF
+    -DVTK_MODULE_USE_EXTERNAL_VTK_fides=OFF
+    -DVTK_MODULE_USE_EXTERNAL_VTK_ioss=OFF
+    -DVTK_MODULE_USE_EXTERNAL_VTK_pegtl=OFF
+    -DVTK_MODULE_USE_EXTERNAL_VTK_scn=OFF
+    -DVTK_MODULE_USE_EXTERNAL_VTK_token=OFF
+    -DVTK_MODULE_ENABLE_VTK_DomainsMicroscopy=NO
+    -DVTK_MODULE_ENABLE_VTK_FiltersOpenTURNS=NO
+    -DVTK_MODULE_ENABLE_VTK_IOCatalystConduit=YES
+    # requires IfcOpenShell which is not packaged
+    -DVTK_MODULE_ENABLE_VTK_IOIFC=NO
+    # remote modules prefetched in prepare()
+    -DVTK_MODULE_ENABLE_VTK_MomentInvariants=YES
+    -DVTK_MODULE_ENABLE_VTK_DICOM=YES
+    # requires the HoloPlay SDK which is not packaged
+    -DVTK_MODULE_ENABLE_VTK_RenderingLookingGlass=NO
+    # building with the usd package does not work: https://gitlab.archlinux.org/archlinux/packaging/packages/usd/-/issues/7
+    -DVTK_MODULE_ENABLE_VTK_IOUSD=NO
+    -DHDF5_NO_FIND_PACKAGE_CONFIG_FILE=ON
+    -DHDF5_C_COMPILER_EXECUTABLE=h5hlcc
+    -DHDF5_CXX_COMPILER_EXECUTABLE=h5hlc++
+  )
+  cmake "${cmake_options[@]}"
+  cmake --build build
+
+  # Training workload
+  _train_pgo
+
+  # Floor guard: pgo_min_gcda ≈ the minimum distinct translation units the
+  # training must touch before a profile is worth trusting; below it the
+  # profile is too thin and the recipe falls back to a plain (LTO-only)
+  # build rather than shipping a thin-profile binary. 100 here: a healthy
+  # run loads the whole wrapped module set (its gcda count lands in the
+  # thousands), so anything under 100 means the import or the workload
+  # collapsed, not merely a thin profile.
+  local pgo_min_gcda=100
+  local _gcda_count
+  _gcda_count="$(find "${_pgo_dir}" -name '*.gcda' 2>/dev/null | wc -l)"
+  if (( _gcda_count < pgo_min_gcda )); then
+    warning "PGO produced only %d gcda files — rebuilding plain (LTO only)" "$_gcda_count"
+    # The fallback must REBUILD: the phase-1 build dir still carries
+    # -fprofile-generate objects and a warn-only fallback shipped them
+    # (2026-10-11 qt6-multimedia). Same cache rewrite as phase 2, minus the
+    # profile: instrumentation out, the host's LTO token back in.
+    sed -i "s|-fprofile-generate=${_pgo_dir}|${_lto_flag}|g" build/CMakeCache.txt
+    sed -i 's| -fprofile-update=atomic||g' build/CMakeCache.txt
+    if grep -q -- '-fprofile-generate' build/CMakeCache.txt; then
+      error "fallback rewrite left -fprofile-generate in CMakeCache.txt"
+      return 1
+    fi
+    touch ${pkgname^^}-${pkgver}/CMakeLists.txt
+    # Discard the phase-1 objects only: a full `--target clean` also wipes the
+    # generated Java wrapper sources and the vtkjava sample javac then races
+    # their regeneration ('cannot find symbol: vtkNativeLibrary', measured
+    # 2026-10-22 in phase 2). Every link still reruns from the fresh objects —
+    # the requirement the clean exists for (docs/build-guide.md).
+    find build -name '*.o' -delete
+    cmake --build build
+  else
+    msg "PGO profile: %d gcda files — rebuilding with profile" "$_gcda_count"
+    # Phase 2: profile-use. The generate->use rewrite has to reach *inside
+    # CMakeCache.txt*: CMake only reads CFLAGS/CXXFLAGS/LDFLAGS while it
+    # *initialises* the cache, so an env change here — even followed by a
+    # re-run of the configure step — is ignored and the payload would stay a
+    # generate-phase build (the 2026-09-20 cmake-git failure). Deleting the
+    # cache is the trap that looks like the local fix: it drops every other
+    # decision phase 1 made (install prefix, dependency selection, the mold
+    # link flags). -Wno-error=missing-profile keeps a TU the training never
+    # ran a warning instead of a hard error; -Wno-error=coverage-mismatch
+    # downgrades the arc-count mismatch -fprofile-use otherwise errors on —
+    # those functions compile without profile data, the rest keep it (jq's
+    # load-bearing pair).
+    sed -i "s|-fprofile-generate=${_pgo_dir}|-fprofile-use=${_pgo_dir} ${_lto_flag} -Wno-error=missing-profile -Wno-error=coverage-mismatch|g" build/CMakeCache.txt
+    sed -i 's| -fprofile-update=atomic||g' build/CMakeCache.txt
+    if grep -q -- '-fprofile-generate' build/CMakeCache.txt; then
+      error "phase-2 rewrite left -fprofile-generate in CMakeCache.txt"
+      return 1
+    fi
+    # The generated build files only reconfigure when a tracked input is
+    # newer, so force that check; the clean is still required because
+    # regenerated rules do not invalidate the phase-1 objects.
+    touch ${pkgname^^}-${pkgver}/CMakeLists.txt
+    # object-wipe instead of a full clean — see the fallback branch above
+    find build -name '*.o' -delete
+    cmake --build build
+  fi
+
+  rm -rf "${_pgo_dir}"
+}
+
+package() {
+  DESTDIR="${pkgdir}" cmake --install build
+
+  # Move the vtk.jar to the arch-specific location…
+  install -dv "${pkgdir}"/usr/share/java/vtk
+  mv -v "${pkgdir}"/usr/lib/java/vtk.jar "${pkgdir}"/usr/share/java/vtk
+  # …and the libs to the proper place
+  mv "${pkgdir}"/usr/lib/java/vtk-Linux-${CARCH}/*.so "${pkgdir}"/usr/lib/
+  rmdir "${pkgdir}"/usr/lib/java/{vtk-Linux-${CARCH}/,}
+
+  # byte-compile python modules since the CMake build does not do it
+  local site_packages=$(python -c "import site; print(site.getsitepackages()[0])")
+  python -m compileall -o 0 -o 1 -o 2 --hardlink-dupes -s "${pkgdir}" "${pkgdir}"${site_packages}
+
+  # trim: third party CMake patching for older versions than ours — dead
+  # packaging input (stock's removal, kept)
+  rm -rv "${pkgdir}"/usr/lib/cmake/vtk/patches/3.*
+
+  # trim: docs/man/locales — mirror opencv's lean-recipe choice; nothing in
+  # the maintained payload reads them and no makedepend feeds them
+  rm -rf "${pkgdir}"/usr/share/doc "${pkgdir}"/usr/share/man "${pkgdir}"/usr/share/locale
+
+  # Fatal shared gate (lib/pgo.sh) — last statement on purpose: nothing may
+  # be added to $pkgdir after the payload is verified.
+  verify_no_profile_instrumentation "${pkgdir}"
+}
