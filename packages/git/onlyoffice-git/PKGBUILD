@@ -199,6 +199,34 @@ _set_flags() {
     export CMAKE_POLICY_VERSION_MINIMUM=3.5
 }
 
+# gclient's dependency fetches cross flaky mirrors (2026-10-21: a TLS EOF
+# from android.googlesource.com/perfetto aborted prepare() and left gclient's
+# `_bad_scm` wreckage behind). The sync is idempotent — a re-run re-fetches
+# exactly what is missing — so classify the TRANSIENT network class and
+# retry the step up to 3 times before failing; any other failure still fails
+# immediately with the real status (the vscodium npm-shim precedent,
+# NOTE.md 2026-10-20). tests/onlyoffice-gclient-retry.sh pins the contract.
+_gclient_sync() {
+    local _gs_try _gs_out _gs_rc
+    for _gs_try in 1 2 3; do
+        _gs_out=$(mktemp)
+        gclient sync --force 2>&1 | tee "$_gs_out"
+        _gs_rc=${PIPESTATUS[0]}
+        if (( _gs_rc == 0 )); then
+            rm -f "$_gs_out"
+            return 0
+        fi
+        if (( _gs_try < 3 )) &&
+            grep -qE 'TLS connect error|unexpected eof|Could not resolve host|ETIMEDOUT|ECONNRESET|unable to access' "$_gs_out"; then
+            echo "==> NOTE: transient network failure in gclient sync — retrying (${_gs_try}/3)" >&2
+            rm -f "$_gs_out"
+            continue
+        fi
+        rm -f "$_gs_out"
+        error "gclient sync failed (rc ${_gs_rc})"; exit 1
+    done
+}
+
 # makepkg does not abort on a failed command *inside* prepare() either: the
 # function's status is its last command's, so a rejected hunk would go unnoticed
 # and surface later as an unexplainable compile error — or, worse, as a build of
@@ -322,7 +350,7 @@ EOF
     export PATH="$(pwd)/depot_tools:$PATH" DEPOT_TOOLS_UPDATE=0
     # depot_tools bootstraps itself on first use
     ensure_bootstrap
-    gclient sync --force
+    _gclient_sync
     # V8 must use the system libstdc++, not the one it builds for itself
     ln -sf /usr/lib/libstdc++.so.6 \
         v8/third_party/llvm-build/Release+Asserts/lib/libstdc++.so.6

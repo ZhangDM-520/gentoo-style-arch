@@ -56,6 +56,35 @@ tiled window snapping back to its column hides the change. Harness foot-gun:
 `windows=$("$UMBRIEL" windows --json")` (stray `"` before `)`) makes bash report
 an unmatched-quote error many lines away; `bash -n` the check first.
 
+## 2026-10-21 — onlyoffice-git's gclient sync: the transient-network class gets a step-level retry
+
+**Symptom.** onlyoffice-git's first real build attempt (unblocked from its
+blender-coupled parking) died 11 minutes in at `prepare()`: gclient's
+fetch of V8's `perfetto` dep from android.googlesource.com hit
+`TLS connect error: unexpected eof`, the clone failed (exit 128), gclient
+quarantined the tree into `_bad_scm/` and then died on the missing dir.
+
+**Root cause.** A flaky mirror on the transient network class — the same
+family as the gulp-electron ECONNRESET wall (NOTE.md 2026-10-20): a
+mandatory fetch inside an otherwise cached build. No retry existed at the
+gclient step.
+
+**Fix.** `_gclient_sync()` wraps `gclient sync --force` in the house
+classifying bounded retry (3 attempts on exactly the transient class —
+TLS/EOF/DNS/timeout/reset — any other failure fails immediately with the
+real status), per the vscodium npm-shim precedent. The sync is
+idempotent: a re-run re-fetches exactly what is missing. Fixture
+`tests/onlyoffice-gclient-retry.sh` runs the REAL helper over a stubbed
+gclient (clean / transient-once / transient-always / hard) and pins the
+contract; mutation-probed twice (whole transient class removed → the
+retry case fails; attempt count cut → the giveup case fails). NOTE: the
+first M1 was a weak mutation — the class is an alternation, so breaking
+one branch left the others matching; the corrected probe kills the whole
+pattern.
+
+**Validation.** `bash -n` green; fixture PASS + 2 mutation probes;
+`.SRCINFO` byte-identical (helper/prepare not captured).
+
 ## 2026-10-21 — round-3 walls: blender's Marker color API (0.19 Color class vs 0.18 string) and vscodium's rustup assumption
 
 **Round-3 run (1792569016-863826) results:** texlive-texmf ✅ 3658s (husk
