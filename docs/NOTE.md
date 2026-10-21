@@ -56,6 +56,60 @@ tiled window snapping back to its column hides the change. Harness foot-gun:
 `windows=$("$UMBRIEL" windows --json")` (stray `"` before `)`) makes bash report
 an unmatched-quote error many lines away; `bash -n` the check first.
 
+## 2026-10-21 — ghostty-git's zig cache unpack: `--system` needs `<pkg-id>/` to BE the package root
+
+**Symptom.** With zig 0.17.0 installed (the versioned floor did its job),
+ghostty-git's `build()` died at build-graph evaluation:
+`pkg/translate-c/build.zig:8:32: error: no module named 'translate_c'
+available within module 'pkg/translate-c'` — deterministic, seconds into
+the build.
+
+**Root cause.** The pinned mirror tarballs pack the source archive
+VERBATIM under the package id (`<id>/<src-top-dir>/…`; `translate_c`'s is
+`<id>/translate-c/build.zig`), but `zig build --system <pkgdir>` resolves
+`<pkgdir>/<id>/` as the package ROOT. Extraction therefore produced 32
+rootless package dirs of 37 (the flat data-only ones were fine), and zig
+silently saw packages with no build system — the `@import` wiring died
+downstream. Evidence: `tar -tzf` shows the nesting; `--system` on a
+tarballs-only dir makes zig 0.17 **panic** ("reached unreachable code" —
+it wants unpacked dirs, not the packed store); hoisting the single top
+dir made `zig build --system … --help` go green instantly.
+
+**Fix.** `prepare()`'s extraction loop now normalizes: a `<id>/` dir with
+no `build.zig`/`build.zig.zon` at its root and exactly one directory
+entry has that dir's contents hoisted up (dotglob for hidden files). The
+`[[ -f ]]` glob guard from the earlier skew fix stays. Fixture
+`tests/ghostty-zigcache.sh` runs the REAL `prepare()` over synthetic
+tarballs (nested / flat / lone-file) and pins the hoist; mutation-probed
+twice (never-hoist and no-dotglob both fail the fixture).
+
+## 2026-10-21 — vscodium-insiders-git's node_modules.asar: stream the archive, don't buffer it (vinyl-fs's 2GiB write cliff)
+
+**Symptom.** `vscode-linux-x64-min-packing` died after ~27 min with
+`RangeError [ERR_OUT_OF_RANGE]: The value of "length" is out of range. It
+must be >= 0 && <= 2147483647. Received 2834841512` at
+`vinyl-fs/lib/file-operations.js:338` — twice, deterministic. Diagnosis
+(agent, read-only): the failing write is `node_modules.asar`, built as ONE
+in-memory `Buffer.concat` in `build/lib/asar.ts::createAsar` and written
+by vinyl-fs with a single `fs.write(fd, data, 0, data.length, …)` — Node
+caps `length` at INT32_MAX, so any ≥2GiB vinyl file can never be written.
+(Aggregate size also suggested ~2× duplication in the deps stream, but
+the decisive measurement was cancelled; streaming makes the cliff moot.)
+
+**Fix (owner's choice: stream-asar).** Recipe patch
+`node-modules-asar-stream.diff` (applied to the vscode clone in `build()`
+after `. get_repo.sh` — hence the `.diff` name, which `prepare()`'s
+`*.patch` loop deliberately skips) rewrites the flush to emit the archive
+as a `Readable` chunk stream (`out.splice(0)` ownership; size, header,
+then file data in stream order). vinyl-fs pipes streams with chunked
+writes; the archive bytes are identical. Fixture
+`tests/vscodium-asar-stream.sh` pins the patch against the vendored
+upstream shape (`tests/assets/vscodium-asar.ts.orig`), asserts the
+streaming emit / absence of `Buffer.concat`, and anchors the diff's
+sha256 to the recipe's `sha256sums`; mutation-probed twice (patch body,
+declared checksum). The end-to-end proof is the next real build writing
+`node_modules.asar` past the 2GiB line.
+
 ## 2026-10-21 — texlive-texmf's texmf-dist husk: the tlpkg self-heal class hits the second SVN source
 
 **Symptom.** resume14's `texlive-texmf` lane died in `prepare()` at the

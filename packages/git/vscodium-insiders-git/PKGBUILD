@@ -2,8 +2,8 @@
 # Inspired by vscodium-git
 
 pkgname=vscodium-insiders-git
-pkgver=1.135.06055.r0.g5a73682c
-pkgrel=2
+pkgver=1.140.06880.r1.gbe70704a
+pkgrel=1
 pkgdesc="Free/Libre Open Source Software Binaries of VSCode Insiders (git build from latest commit)."
 arch=('x86_64' 'aarch64' 'armv7h')
 url='https://github.com/VSCodium/vscodium.git'
@@ -45,12 +45,16 @@ source=(
     "${pkgname}-wayland.desktop"
     "${pkgname}-uri-handler.desktop"
     "fix-dangling-tsc-shims.patch"
+    # Applied to the vscode clone in build() (NOT prepare()'s *.patch loop,
+    # which targets the vscodium wrapper repo) — hence the .diff name.
+    "node-modules-asar-stream.diff"
 )
 sha256sums=('SKIP'
             'd5ce6e1efb74cadd1ff006859e11e7c9fa05447a7002ad04f650c4b0f1ed0d70'
             '910e86ff7a8be9ef295c5f6a74f1ddf1610c6f83cbc61aa829eec4ecab9d20cd'
             '4f0b1c04b0a246dea0edd07dd8dcbc706b037324560d25a766328ab295266674'
-            'fee51d54becd6dda555af8bf1151f32924e46b5dffca4ed0baf9ca72fa911b6a')
+            'fee51d54becd6dda555af8bf1151f32924e46b5dffca4ed0baf9ca72fa911b6a'
+            'b8ca321ba698d182435d81b47265670bd8001a03b31f8dcca90741fa21fb2d55')
 provides=(
     'codium'
     'vscodium'
@@ -208,6 +212,12 @@ EOF
     # Same for ppc64le-support.patch since that is not a supported architecture
     rm -rf patches/ppc64le-support.patch
     . get_repo.sh
+    # node_modules.asar is built as ONE in-memory buffer and vinyl-fs writes
+    # it with a single fs.write(), whose length caps at INT32_MAX — the
+    # 2.83GB archive died with ERR_OUT_OF_RANGE at the min-packing step
+    # (2026-10-21, two strikes). The patch streams the archive to disk in
+    # chunks instead; output is byte-identical (size, header, file data).
+    patch -d vscode -p1 < "$srcdir/node-modules-asar-stream.diff" || return 1
     . build.sh
 }
 

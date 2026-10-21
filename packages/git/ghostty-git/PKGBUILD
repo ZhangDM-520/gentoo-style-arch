@@ -74,18 +74,32 @@ prepare() {
   ZIG_GLOBAL_CACHE_DIR="$srcdir/zig-global-cache/" \
     ./nix/build-support/fetch-zig-cache.sh
 
-  # zig 0.16's `zig fetch` stores packages as <hash>.tar.gz in the cache's
-  # p/ store, but `--system <pkgdir>` resolves <pkgdir>/<hash>/ as UNPACKED
-  # directories — PACKAGING.md's fetch+--system flow predates the packed
+  # zig fetch stores packages as <pkg-id>.tar.gz in the cache's p/
+  # store, but `--system <pkgdir>` resolves <pkgdir>/<pkg-id>/ as UNPACKED
+  # package roots — PACKAGING.md's fetch+--system flow predates the packed
   # store (measured 2026-10-19: "package not found at …/p/<hash>" while the
-  # matching .tar.gz sat right beside it). Each tarball's top-level dir is
-  # exactly <hash>/, so an in-place extract materializes what --system wants.
-  # [[ -f ]] guard: an unmatched glob under set -e would hand tar a literal
-  # *.tar.gz and abort prepare() if a future zig fetch ships unpacked dirs.
-  local _p="$srcdir/zig-global-cache/p" _f
+  # matching .tar.gz sat right beside it). The pinned mirror tarballs pack
+  # the source archive VERBATIM under the id, so extraction yields
+  # <pkg-id>/<src-top-dir>/… (measured 2026-10-21 with zig 0.17.0: 32 of 37
+  # nested; zig then reads a rootless dir and the build graph dies with
+  # `no module named '<dep>'`) — hoist the single top-level dir so each
+  # <pkg-id>/ IS the package root. [[ -f ]] guard: an unmatched glob under
+  # set -e would hand tar a literal *.tar.gz and abort prepare().
+  local _p="$srcdir/zig-global-cache/p" _f _d _inner
+  local -a _entries
   for _f in "$_p"/*.tar.gz; do
     [[ -f "$_f" ]] || continue
     tar -xzf "$_f" -C "$_p"
+  done
+  for _d in "$_p"/*/; do
+    [[ -e "$_d/build.zig" || -e "$_d/build.zig.zon" ]] && continue
+    _entries=("$_d"*)
+    (( ${#_entries[@]} == 1 )) && [[ -d "${_entries[0]}" ]] || continue
+    _inner=${_entries[0]}
+    shopt -s dotglob nullglob
+    mv "$_inner"/* "$_d"
+    shopt -u dotglob nullglob
+    rmdir "$_inner"
   done
 }
 
