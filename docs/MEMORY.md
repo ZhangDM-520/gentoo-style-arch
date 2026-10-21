@@ -3677,3 +3677,19 @@ constant, not a baked path); and the xorg-xwayland-git PGO end-to-end proof
   fcitx5-configtool behind vscodium for a whole run. Read the group column
   and `gsa-sched/src/machine.rs::can_dispatch` before diagnosing a "hung"
   dispatch — true progress is `/var/lib/gsa/runs/<id>/*.result`.
+- **A GHC package-set way flip fails vanilla compiles with a misleading
+  "files missing in ‘base’"** (2026-10-21, pandoc-cli): the 2026-10-20
+  haskell wave left the set dynamic-only (274 `.dyn_hi`, zero `.hi`) while
+  `ghc-pkg check` reports clean; even bare `ghc -c` dies. Compile the
+  toolchain's way (probe base's `Prelude.hi`) and pass the way to cabal's
+  whole plan via a `cabal.project` `package *` stanza — `cabal build` has
+  no `--enable-library-dynamic`. mold also refuses the distro's prebuilt
+  haskell `.so` files ("invalid version index 0 for defined symbol") —
+  drop `-fuse-ld=mold` for those links. Details: NOTE.md 2026-10-21.
+- **A cabal from-source constraint can be satisfied vacuously** (2026-10-21,
+  pandoc-cli): `--constraint='any.text-icu source'` matched nothing because
+  citeproc's `icu` flag defaults FALSE — the solver dropped the dep and the
+  closure quietly lost ICU. Force the feature flag too
+  (`--constraint='citeproc +icu'`) and keep a fail-closed harvest check in
+  `package()` (it is what caught `n=13 text-icu=0`). Details: NOTE.md
+  2026-10-21.

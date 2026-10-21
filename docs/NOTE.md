@@ -1,3 +1,43 @@
+## 2026-10-21 — pandoc-cli's icu .79 proof: the dyn-only GHC wave, mold's version-index wall, and a solver that dodged the constraint
+
+**Proof result (the owed end-to-end proof).** Installed `pandoc-cli 3.11-2`
+(`succeeded 0 485 ok`, run 1792591076-1547024): `ldd /usr/bin/pandoc` shows
+`libicuuc.so.79 => /usr/lib/libicuuc.so.79` RESOLVED (libi18n/libicudata
+.79 too), zero `not found`. The store-built text-icu rides inside the
+package (14 `libHS*.so` under `usr/lib`) and the chain holds with the build
+tree GONE — proven by hiding the store and re-running ldd: the loader falls
+to the shipped `/usr/lib` copy. The old binary's `libicuuc.so.78 => not
+found` chain (stock haskell-text-icu vs our icu-git's SONAME .79) is
+replaced, not patched.
+
+**Three walls on the way (each measured; red-first across 7 engine runs).**
+1. **The 2026-10-20 haskell wave left GHC dynamic-way-only.** base ships
+   274 `.dyn_hi` and zero `.hi` (`ghc-pkg check` looks clean) — any vanilla
+   compile dies "files missing in the ‘base’ package", even bare `ghc -c`.
+   Fix: a load-bearing way probe (base's `Prelude.hi` absent → `-dynamic` +
+   `--enable-executable-dynamic`), and the dep compiles take their way from
+   a generated `cabal.project` `package *` stanza (`shared: True,
+   library-vanilla: False, ghc-options: -dynamic`) — `cabal build` has no
+   `--enable-library-dynamic` (that is Setup-level).
+2. **mold rejects the distro's prebuilt haskell `.so` set** at the final
+   link (`mold: fatal: … invalid version index 0 for defined symbol`) —
+   the dynamic branch drops `-fuse-ld=mold`; the default linker handles
+   them.
+3. **The solver dodged `any.text-icu source` vacuously.** citeproc's `icu`
+   flag defaults FALSE, so the solver simply dropped the dep — the
+   from-source constraint matched nothing and the fail-closed harvest
+   guard caught it (`n=13 text-icu=0`). Fix: force the feature too
+   (`--constraint='citeproc +icu'` — stock Arch builds citeproc +icu, and
+   feature parity is the recipe's stated goal) next to the text-icu source
+   constraint; then citeproc → text-icu (from source; its Setup finds ICU
+   via pkg-config → the current icu-git) and `package()` ships the whole
+   store closure.
+
+**Validation.** `bash -n`; `.SRCINFO` delta exactly `pkgrel 1→2` (the
+same-version-skip guard). Red-first is the run history itself (way wall →
+mold wall → guard-fail on the vacuous solve); green = `succeeded 0 485 ok`
++ the ldd chain above + the build-tree-hidden fallback check.
+
 ## 2026-10-21 — xorg-xwayland-git's PGO proof: 367 gcda, and the weston/colord borrow that unblocked the harness
 
 **Proof result (the owed end-to-end proof of the 2026-10-19 spelling fix).**

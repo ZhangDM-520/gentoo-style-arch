@@ -14,7 +14,7 @@
 
 pkgname=pandoc-cli
 pkgver=3.11
-pkgrel=1
+pkgrel=2
 pkgdesc='Conversion between documentation formats'
 arch=('x86_64')
 url='https://pandoc.org'
@@ -42,9 +42,23 @@ prepare() {
   cd "${pkgname}-${pkgver}"
 
   # Hermetic Hackage store inside $srcdir (the zig/go precedent): cabal
-  # update is the one networked step; the build itself is offline.
+  # update pins the index-state; build() then pulls the solve's tarballs
+  # into the store (the from-source closure) — no other network steps.
   export CABAL_DIR="$srcdir/cabal"
   cabal update
+
+  # Way config for the WHOLE plan. The 2026-10-20 haskell wave left GHC's
+  # package set dynamic-way-only, and `cabal build` has no
+  # --enable-library-dynamic (a Setup-level flag) — without this stanza
+  # every from-source dep compile dies "files missing in ‘base’".
+  # `packages: .` keeps the pinned solve local to this source tree.
+  cat > cabal.project <<'EOF'
+packages: .
+package *
+  shared: True
+  library-vanilla: False
+  ghc-options: -dynamic
+EOF
 }
 
 build() {
@@ -57,14 +71,42 @@ build() {
   # CFLAGS' reach — same rationale as ghostty-git. mold reaches the final
   # link through GHC's -optl passthrough (house command -v guard).
   local _ghc_opts=(-pie '-optl-Wl,-z,relro,-z,now')
-  command -v mold >/dev/null 2>&1 && _ghc_opts+=(-optl-fuse-ld=mold)
+
+  # Way probe (load-bearing): the 2026-10-20 haskell wave left GHC's
+  # package set dynamic-way-only (base ships .dyn_hi and zero .hi), and a
+  # vanilla compile dies "files missing in the ‘base’ package". Compile the
+  # toolchain's way; on a vanilla-capable GHC this probe is a no-op.
+  local _base_imports
+  _base_imports=$(ghc-pkg field base import-dirs 2>/dev/null | sed 's/^import-dirs: *//')
+  local _cabal_way=()
+  if [[ ! -e "$_base_imports/Prelude.hi" ]]; then
+    _ghc_opts+=(-dynamic)
+    _cabal_way=(--enable-executable-dynamic)
+    # The dep compiles take their way from prepare()'s cabal.project
+    # stanza (see there). No mold in this branch: it rejects the distro's
+    # prebuilt haskell .so set at the final link ("mold: fatal: … invalid
+    # version index 0 for defined symbol"). The default linker handles
+    # them.
+  else
+    command -v mold >/dev/null 2>&1 && _ghc_opts+=(-optl-fuse-ld=mold)
+  fi
 
   # Feature parity with Arch's pandoc-cli: lua + server on, nightly off.
   # --index-state pins the Hackage solve so the dependency closure cannot
   # drift under a rebuild (the sha256 anchor covers the CLI tarball only).
+  # citeproc's `icu` flag defaults FALSE and the solver will happily drop
+  # it to dodge the text-icu constraint (stock Arch builds citeproc +icu)
+  # — force it, and force text-icu FROM SOURCE: the stock haskell-text-icu
+  # chains Arch's icu .78, which our icu-git (SONAME .79) orphaned. Its
+  # Setup locates ICU via pkg-config, so the store build links the current
+  # icu; the cascade (citeproc, pandoc lib, pandoc-server, …) rebuilds the
+  # same way and package() ships the whole store closure.
   cabal build exe:pandoc \
     --index-state='2026-10-19T00:00:00Z' \
     --flags='+lua +server -nightly' \
+    --constraint='citeproc +icu' \
+    --constraint='any.text-icu source' \
+    "${_cabal_way[@]}" \
     --jobs="${GSA_BUILD_JOBS:-$(nproc)}" \
     --ghc-options="${_ghc_opts[*]}"
 }
@@ -77,4 +119,20 @@ package() {
   install -Dm755 "$(CABAL_DIR="$srcdir/cabal" cabal list-bin exe:pandoc)" \
     "${pkgdir}/usr/bin/pandoc"
   install -Dm644 COPYING.md "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+
+  # Ship the store-built closure's shared libs (hashed SONAMEs under
+  # usr/lib, mirroring Arch's haskell-* layout; the hashes keep them from
+  # colliding with the distro's libHS* files): the exe links them by name
+  # and text-icu's NEEDED chain carries libicuuc.so.79 — the stock
+  # haskell-text-icu's .78 chain is the orphaned one. Fail closed unless
+  # the closure is there and text-icu rode along: a pandoc with an
+  # unresolvable NEEDED would trip the engine's install gate anyway.
+  local _so _n=0 _saw_icu=0
+  while IFS= read -r -d '' _so; do
+    install -Dm755 "$_so" "${pkgdir}/usr/lib/$(basename "$_so")"
+    _n=$((_n + 1))
+    [[ $(basename "$_so") == libHStext-icu* ]] && _saw_icu=1
+  done < <(find "$srcdir/cabal/store" -name 'libHS*.so' -print0 2>/dev/null)
+  ((_n > 0 && _saw_icu == 1)) ||
+    { echo "pandoc-cli: store closure libs missing (n=$_n text-icu=$_saw_icu)" >&2; return 1; }
 }
