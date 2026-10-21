@@ -182,6 +182,13 @@ build() {
   # CPPFLAGS, so the define rides CXXFLAGS, which seeds CMAKE_CXX_FLAGS.
   if ! grep -q '#define OPENTIMELINEIO_VERSION_NS' /usr/include/opentimelineio/version.h 2>/dev/null; then
     CXXFLAGS+=' -DOPENTIMELINEIO_VERSION_NS=OPENTIMELINEIO_VERSION'
+    # pre-0.19 Marker() also differs in kind, not just name: its color
+    # parameter is a std::string while blender master passes the 0.19 Color
+    # class (otio_export.cc export_markers). Exactly one production call
+    # site (measured 2026-10-21); map it to the color string 0.18 expects —
+    # same no-op when OTIO 0.19 lands.
+    sed -i 's/, Color::white));/, "WHITE"));/' \
+      "$srcdir/blender/source/blender/io/otio/exporter/otio_export.cc"
   fi
 
   #default cmake flags

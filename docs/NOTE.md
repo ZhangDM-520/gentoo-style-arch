@@ -56,6 +56,39 @@ tiled window snapping back to its column hides the change. Harness foot-gun:
 `windows=$("$UMBRIEL" windows --json")` (stray `"` before `)`) makes bash report
 an unmatched-quote error many lines away; `bash -n` the check first.
 
+## 2026-10-21 — round-3 walls: blender's Marker color API (0.19 Color class vs 0.18 string) and vscodium's rustup assumption
+
+**Round-3 run (1792569016-863826) results:** texlive-texmf ✅ 3658s (husk
+self-heal + patch, E2E), krita-git ✅ 2273s (TMPDIR fix), **ghostty-git ✅
+933s (zig-cache hoist, E2E — closes one owed build proof)**, and
+vscodium's min-packing **Finished after 51 min** — the stream-asar fix
+cleared the 2GiB cliff that killed every previous run (the write that
+always died at 14-21 min now completes). Two new walls behind them:
+
+1. **blender-git** — the OTIO macro mapping worked (compiles into
+   `opentimelineio::v0_18_1` now) but the API skew goes one level deeper:
+   blender master's `export_markers` passes the 0.19 `Color` class to
+   `Marker()`, while 0.18.1's ctor wants `std::string`. Exactly one
+   production call site (`otio_export.cc:557`; measured by grep across
+   `io/otio`). Fix: the same pre-0.19 condition that adds the macro now
+   also maps `Color::white` → `"WHITE"` at that site — still a no-op when
+   OTIO 0.19 lands. Trap caught in validation: this sed requires the
+   trailing `s///` delimiter (`s///` unterminated without it).
+2. **vscodium-insiders-git** — past packing, `build_cli.sh` died on
+   `rustup: command not found`: the CLI's Rust build assumes rustup
+   manages the toolchain, but the stack's toolchain is the self-built
+   rust-git nightly (rustc 1.101.0) with no rustup anywhere, and the
+   `rustup target add` is a no-op need for the HOST triple. Fix:
+   `rustup-target-guard.patch` (prepare()'s `*.patch` loop applies it to
+   the vscodium repo) guards the line with `command -v rustup` — behavior
+   preserved on rustup-managed hosts, system cargo builds the host target.
+
+**Validation.** `bash -n` green; the sed transform replayed against the
+verbatim call-site line; `rustup-target-guard.patch` passes `git apply
+--check` against the captured `build_cli.sh`; fixtures re-run green
+(vscodium 2, texlive 3, ghostty 1); `.SRCINFO` regen = exactly the new
+source + checksum lines.
+
 ## 2026-10-21 — ghostty-git's zig cache unpack: `--system` needs `<pkg-id>/` to BE the package root
 
 **Symptom.** With zig 0.17.0 installed (the versioned floor did its job),

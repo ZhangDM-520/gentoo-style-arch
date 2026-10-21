@@ -45,6 +45,7 @@ source=(
     "${pkgname}-wayland.desktop"
     "${pkgname}-uri-handler.desktop"
     "fix-dangling-tsc-shims.patch"
+    "rustup-target-guard.patch"
     # Applied to the vscode clone in build() (NOT prepare()'s *.patch loop,
     # which targets the vscodium wrapper repo) — hence the .diff name.
     "node-modules-asar-stream.diff"
@@ -54,6 +55,7 @@ sha256sums=('SKIP'
             '910e86ff7a8be9ef295c5f6a74f1ddf1610c6f83cbc61aa829eec4ecab9d20cd'
             '4f0b1c04b0a246dea0edd07dd8dcbc706b037324560d25a766328ab295266674'
             'fee51d54becd6dda555af8bf1151f32924e46b5dffca4ed0baf9ca72fa911b6a'
+            '51e3b6ff3af2cf68e70f5b990b083528a787891223895bb3e34d1a6abca87a7f'
             'b8ca321ba698d182435d81b47265670bd8001a03b31f8dcca90741fa21fb2d55')
 provides=(
     'codium'
