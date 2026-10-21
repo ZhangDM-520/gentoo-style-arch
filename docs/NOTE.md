@@ -1,3 +1,84 @@
+## 2026-10-21 — umbriel-git review round 2: the deferred press becomes a grab state, and the gesture goes opt-in
+
+**Symptom (ItsLemmy review on PR noctalia-dev/umbriel#504; owner hand-tested).**
+The deferred Mod+right press sat outside the grab machinery (`m_grab` /
+`m_grabButton`), so every path keyed on those missed it. Repro: Mod+right press
+on an edge zone, Mod+left press, release right, drag with left past the slop,
+release left — then bare motion still resized the window: the right release
+early-returned at the initiating-button check (the Mod+left press had started a
+move grab), and the stale record then promoted into a `TiledResizeGrab` waiting
+for a release that had already happened. Same root cause, other effects: other
+buttons ran config mouse binds and started Mod+left moves while the press was
+deferred, and the layout cancel hooks could not drop the press, so press-time
+edges could survive a layout or axis change.
+
+**Fix (all five review findings plus the opt-in request; one amended commit on
+the PR branch).** The deferral is a grab state now — `PendingResizeGrab` in
+`GrabState`, `m_grabButton` set at press, `MoveGrab::pending`'s shape — so the
+initiating-button check swallows competing presses, the release ends it as a
+plain click (the click pair stays recorded), `isPassthrough()` gates binds and
+moves, the layout cancel hooks drop it on layout/axis change, and `handleUnmap`'s
+`resetMode()` covers teardown (`Cursor::forgetView` now only clears the click
+pair). The redundant first-press maximize capture is gone (the direction is read
+at the second press; the pair seam splits into a pure `isModRightDoubleClick`
+and a `recordModRightClick` so no query mutates), the client-maximize policy is
+one implementation (`handleRequestMaximize` ends in
+`setMaximizedLikeClientRequest(requestedMaximized())`; the floating edges-exit
+divergence is dropped per review — it changes the client path and belongs in its
+own PR), `mod_right_pending_teardown.sh` closes its window through
+`window-close:<id>` + `await_count 0` instead of a wall-clock lifetime, and
+`docs/user/input.md` states the 300 ms / 8 px thresholds. The gesture is
+opt-in: `[input] mod_right_double_click = "none"` (default, the button is then
+exactly main's resize drag) or `"maximize"`.
+
+**Validation.** Red-first on the review's own repro
+(`input/mod_right_grab_lifetime.sh`, geometry sampled before, through and after
+the sequence): the old build resized on bare motion (`290 10 700 700` →
+`490 10 300 700`); the fix holds the box through a tiled AND a floating round —
+the floating round is what catches a competing move-grab, because a tiled window
+snaps back to its column on drop and hides the move. Mutation-proven twice:
+swallowing the release without ending the grab → red; not claiming `m_grabButton`
+at press → red. New `input/mod_right_double_click_disabled.sh` pins the
+default-off vocabulary and that the button still resizes under the default;
+`tests/unit/config_load.cpp` covers the key's vocabulary, defaults and clamped
+diagnostic. Full `input/` + `drag/` subsets 45/45, meson unit suite 129/129.
+Six full-suite failures (`animation/drag_toggle`, `effect/registry`,
+`effect/selection`, `output/two_output_containment`, `render/renderer_recovery`,
+`rule/only_window`) reproduce identically on a stashed base build — pre-existing
+at `11edc01`, out of scope here.
+
+**Durable rule.** A deferred input press that may become a grab must BE a grab
+state from the press: anything kept outside `m_grab`/`m_grabButton` is invisible
+to the release, swallow, `isPassthrough()`, cancel and teardown paths, and one
+early-returning release turns it into a stale promotion later. And when a
+check's red must survive a drop, run the round on a floating window too — a
+tiled window snapping back to its column hides the change. Harness foot-gun:
+`windows=$("$UMBRIEL" windows --json")` (stray `"` before `)`) makes bash report
+an unmatched-quote error many lines away; `bash -n` the check first.
+
+## 2026-10-21 — `gsa -Sy` from a repo cwd silently refreshed nothing: the store-refresh gate compares `root == store`
+
+**Symptom.** After pushing the resume14 fixes (`278eb59`), the mandated
+`sudo gsa -Sy` completed "successfully" but the store stayed at `7d8a4cc`
+— the run would have built the pre-fix recipes.
+
+**Root cause.** Workspace resolution (`crates/gsa-cli/src/lib.rs::
+resolve_root`): `project` override → deprecated **cwd discovery**
+(`config/topology.conf` found walking up from cwd) → the store. The
+`-Sy` store refresh (`prepare.rs::sync_phase`) only runs `refresh()` when
+`root == store`, else prints "workspace is not the recipe store — nothing
+to refresh" (this run's copy was hidden under `tail`). My command chained
+`cd ~/Projects/gentoo-style-arch && … && sudo gsa -Sy`, so cwd discovery
+shadowed the store and the fetch+`reset --hard FETCH_HEAD` never ran.
+Same shadow is the mechanism behind the known "resume13 ran from repo
+cwd" fetch-side `pkgver` churn: the sync pass rewrote the repo tree.
+
+**Fix/verification.** Re-ran `sudo gsa -Sy` from `~` → store refreshed to
+`278eb59` (verify handle: `git -C ~/.local/share/gsa/recipes log
+--oneline -1` before any `--no-sync` run). resume14's launcher now runs
+the engine by absolute path from `~/Workspace/gsa-smoke2` — never the
+repo cwd. Durable rule in MEMORY §6.
+
 ## 2026-10-21 — resume13's upstream-skew walls: blender-git vs OTIO 0.19's renamed namespace macro, ghostty-git vs zig 0.17's floor
 
 **Symptom.** Two deterministic resume13 build walls, both upstream-master
