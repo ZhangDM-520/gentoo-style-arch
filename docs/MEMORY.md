@@ -3662,3 +3662,26 @@ constant, not a baked path).
   (0001 covers NvPCR). Scan the whole hook input list against the installed
   provider in one pass; bump `pkgrel` so a checked install cannot
   same-version-skip. Details: NOTE.md 2026-10-09.
+- **The install gate halts at the first miss, so a run record sizes one
+  offender, never the class** (2026-10-21, vscodium-insiders-git):
+  `install.rs:97` refuses on the first `refuse` row, so two consecutive
+  runs named tree-sitter/arm64 then lightningcss/musl — same wall, one
+  offender each, ~45 min per peel. Census the BUILT artifact instead
+  (`tar -tf | grep -i musl` + readelf NEEDED of every `*.node`/`*.so`) and
+  strip the class in one pass. Details: NOTE.md 2026-10-21.
+- **A host-only lib census false-alarms on private libs the package itself
+  ships** (2026-10-21, vscodium-insiders-git): msal's natives need
+  `libmsalruntime.so`, which sits beside them under `RUNPATH $ORIGIN` —
+  the gate resolves it via the transaction's shipped basenames
+  (`ShippedBytes::ships`, rule 25(e)). Check closure against
+  host∪shipped-basenames before declaring an offender. Details: NOTE.md
+  2026-10-21.
+- **Queued lanes that never start are usually the core-run-alone invariant,
+  not a stall** (2026-10-21, scheduler): `topology.conf`'s group column puts
+  some packages in `core` (`can_dispatch`: a core member starts only on an
+  idle machine and blocks every other dispatch while it runs), and selection
+  consumers chain behind their prerequisites (`prereq_clear` = done-ok).
+  fcitx5-qt-git (`app,core`) starved fcitx5-chinese-addons-git +
+  fcitx5-configtool behind vscodium for a whole run. Read the group column
+  and `gsa-sched/src/machine.rs::can_dispatch` before diagnosing a "hung"
+  dispatch — true progress is `/var/lib/gsa/runs/<id>/*.result`.

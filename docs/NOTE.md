@@ -1,3 +1,45 @@
+## 2026-10-21 — vscodium's foreign-payload strip, round 2: the npm `-musl` module dirs are the same class outside `prebuilds/`
+
+**Symptom.** After e1521d9's prebuilds strip vscodium BUILT again (2821s — the
+rustup guard and asar streaming held) but the engine still refused to install:
+`install-refused needed …/build/vite/node_modules/lightningcss-linux-x64-musl/lightningcss.linux-x64-musl.node libc.musl-x86_64.so.1`.
+`install halted dispatch` then left fcitx5-qt-git, fcitx5-chinese-addons-git
+and fcitx5-configtool never started.
+
+**Root cause/measurement.** The bundled toolchain ships npm platform-variant
+module dirs — the `-linux-x64-musl` siblings of the `-gnu` ones — the same
+unloadable-here class as the foreign prebuilds, just outside `prebuilds/`.
+Two measurements size it: the gate model (`gsa-install/src/gates.rs::
+needed_misses`, rule 25(e)) and a census of every `*.node`/`*.so` member of
+the BUILT package (54 x86-64 ELF + 7 PE/Mach-O). After the prebuilds strip
+exactly one member fails the closure: the lightningcss musl native
+(`libc.musl-x86_64.so.1` — unmet on host, not shipped, not owned). The three
+msal `libmsalruntime.so` misses a host-only census reports are false alarms:
+the transaction ships that basename beside the natives, and
+`ShippedBytes::ships` resolves it. The class itself is 5 dirs (rspack,
+rolldown, rollup, lightningcss, @napi-rs/canvas × `-linux-x64-musl`): the
+other four carry musl-ABI `DT_NEEDED libc.so`, which glibc's ld.so cannot
+load either way. **The gate halts at the first miss** (`gsa-cli/src/
+install.rs:97`), so a run record names one offender per run — census the
+artifact (`tar -tf | grep -i musl` + readelf NEEDED vs host∪shipped basenames)
+to size the class instead of peeling one offender per 45-minute run.
+
+**Fix.** `_strip_foreign_prebuilds` gains rule (2): drop every `*-musl` module
+dir whole (scoped dirs like `@rollup/rollup-linux-x64-musl` included); the
+`-gnu` siblings stay — they are what the runtime selector loads on glibc.
+One strip pass now covers both classes; after it the gate-model miss set is
+empty.
+
+**Validation.** Fixture extended FIRST and run red ("the lightningcss musl
+variant (the round-2 gate offender) survived"), green after the helper change.
+Mutation probes: M1 (drop the musl rule) → the drop-checks fail; M3b (also
+strip `*-gnu`) → fails exactly at the gnu keep-checks. Two early probes were
+weak and are recorded as such: M2 `*-x64*` tripped the older prebuilds assert
+first, and a first M3 sed lost its `\(` escaping and failed at stage 0
+("the helper itself failed") — a stage-0 fail falsifies nothing new. `bash -n`
+both files; `.SRCINFO` byte-identical (helper bodies not captured). E2E proof
+= resume17's install gate.
+
 ## 2026-10-21 — umbriel-git review round 2: the deferred press becomes a grab state, and the gesture goes opt-in
 
 **Symptom (ItsLemmy review on PR noctalia-dev/umbriel#504; owner hand-tested).**

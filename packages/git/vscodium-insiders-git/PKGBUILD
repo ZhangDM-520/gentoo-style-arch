@@ -93,16 +93,24 @@ case "$CARCH" in
     ;;
 esac
 
-# The bundled node native modules ship per-platform prebuilds; only
-# linux-x64 can ever load here. The foreign dirs are dead weight — and
+# The bundled node native modules ship per-platform payloads; only
+# linux-x64/glibc can ever load here. The foreign dirs are dead weight — and
 # their ELF closure trips the engine's install gate (2026-10-21:
 # install-refused on tree-sitter/prebuilds/linux-arm64/tree-sitter.node →
-# ld-linux-aarch64.so.1). Strip by directory name: some arm64-named
-# prebuilds are even mislabeled x86-64 payloads, but no prebuild outside
-# linux-x64/ is selectable at runtime regardless.
+# ld-linux-aarch64.so.1; same day round 2: vite/node_modules/
+# lightningcss-linux-x64-musl/lightningcss.linux-x64-musl.node →
+# libc.musl-x86_64.so.1). Strip by directory name — the gate halts at the
+# first miss, so the class goes whole, not offender-by-offender:
+#   (1) prebuilds/<platform>/: some arm64-named prebuilds are even
+#       mislabeled x86-64 payloads, but no prebuild outside linux-x64/ is
+#       selectable at runtime regardless;
+#   (2) *-musl module dirs: musl-ABI natives (the built package carried 5 —
+#       rspack, rolldown, rollup, lightningcss, @napi-rs/canvas) can never
+#       load under glibc; each has a -gnu sibling that the runtime selects.
 # tests/vscodium-foreign-prebuilds.sh pins the contract.
 _strip_foreign_prebuilds() {
     find "$1" -type d -path '*/prebuilds/*' ! -name 'linux-x64' -prune -exec rm -rf {} +
+    find "$1" -type d -name '*-musl' -prune -exec rm -rf {} +
 }
 
 prepare() {
