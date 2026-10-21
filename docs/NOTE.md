@@ -38,7 +38,14 @@ weak and are recorded as such: M2 `*-x64*` tripped the older prebuilds assert
 first, and a first M3 sed lost its `\(` escaping and failed at stage 0
 ("the helper itself failed") — a stage-0 fail falsifies nothing new. `bash -n`
 both files; `.SRCINFO` byte-identical (helper bodies not captured). E2E proof
-= resume17's install gate.
+= resume17's install gate — **GREEN** (2026-10-21 20:09, `v2
+vscodium-insiders-git 0 2082 ok` — the first `ok` outcome for this package in
+the marathon; before the strip the same gate returned `install-refused` twice).
+Full resume17 totals (run 1792582481-1345691, outcome success rc 0):
+vscodium-insiders-git 2082s / fcitx5-qt-git 57s (core lane, -j7 alone) /
+fcitx5-chinese-addons-git 31s / fcitx5-configtool 96s — the fcitx5×3's first
+real builds. The dispatch order confirmed the core-run-alone invariant:
+fcitx5-qt ran solo after vscodium, then its two consumers ran in parallel.
 
 ## 2026-10-21 — umbriel-git review round 2: the deferred press becomes a grab state, and the gesture goes opt-in
 
