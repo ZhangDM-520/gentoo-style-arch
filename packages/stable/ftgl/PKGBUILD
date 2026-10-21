@@ -4,7 +4,7 @@
 
 pkgname=ftgl
 pkgver=2.4.0
-pkgrel=4
+pkgrel=4.1
 pkgdesc="OpenGL library to use arbitrary fonts"
 url="https://github.com/frankheckenbach/ftgl"
 arch=(x86_64)

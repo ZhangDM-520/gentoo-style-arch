@@ -1,7 +1,7 @@
 pkgbase = libmtp
 	pkgdesc = Library implementation of the Media Transfer Protocol
 	pkgver = 1.1.23
-	pkgrel = 1
+	pkgrel = 1.1
 	url = http://libmtp.sourceforge.net
 	arch = x86_64
 	license = LGPL-2.1-or-later

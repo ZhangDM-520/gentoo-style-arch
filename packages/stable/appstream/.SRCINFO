@@ -1,7 +1,7 @@
 pkgbase = appstream
 	pkgdesc = Provides a standard for creating app stores across distributions
 	pkgver = 1.2.1
-	pkgrel = 1
+	pkgrel = 1.1
 	url = https://distributions.freedesktop.org/wiki/AppStream
 	arch = x86_64
 	license = LGPL-2.1-or-later

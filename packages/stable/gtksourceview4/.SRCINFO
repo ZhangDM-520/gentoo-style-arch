@@ -1,7 +1,7 @@
 pkgbase = gtksourceview4
 	pkgdesc = A text widget adding syntax highlighting and more to GNOME
 	pkgver = 4.8.4
-	pkgrel = 2
+	pkgrel = 2.1
 	url = https://wiki.gnome.org/Projects/GtkSourceView
 	arch = x86_64
 	license = GPL

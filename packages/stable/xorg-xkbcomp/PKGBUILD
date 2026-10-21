@@ -3,7 +3,7 @@
 
 pkgname=xorg-xkbcomp
 pkgver=1.5.0
-pkgrel=1
+pkgrel=1.2
 pkgdesc="X Keyboard description compiler"
 arch=(x86_64)
 url="https://gitlab.freedesktop.org/xorg/app/xkbcomp"

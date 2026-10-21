@@ -2,7 +2,7 @@
 
 pkgname=zam-plugins-lv2
 pkgver=4.5
-pkgrel=1
+pkgrel=1.1
 _dir=zam-plugins
 pkgdesc="Collection of audio plugins for high-quality processing - LV2 plugins"
 arch=(x86_64)

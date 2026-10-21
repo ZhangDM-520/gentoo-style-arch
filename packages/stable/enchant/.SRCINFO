@@ -1,7 +1,7 @@
 pkgbase = enchant
 	pkgdesc = A wrapper library for generic spell checking
 	pkgver = 2.8.21
-	pkgrel = 1
+	pkgrel = 1.1
 	url = https://rrthomas.github.io/enchant/
 	arch = x86_64
 	license = LGPL-2.1-or-later

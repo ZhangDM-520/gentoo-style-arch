@@ -4,8 +4,8 @@
 # Contributor: Xilon <xilonmu@gmail.com>
 
 pkgname=powertop
-pkgver=2.16
-pkgrel=1
+pkgver=2.16.1
+pkgrel=1.1
 pkgdesc='A tool to diagnose issues with power consumption and power management'
 arch=('x86_64')
 url='https://github.com/fenrus75/powertop/'
@@ -28,7 +28,7 @@ optdepends=(
 )
 changelog="${pkgname}.changelog"
 source=("${pkgname}-${pkgver}.tar.gz::https://github.com/fenrus75/powertop/archive/v${pkgver}.tar.gz")
-sha256sums=('cf37e565b958a64f1e3086daeab82d7959566a372d01d40d3904cbca95cdf3d2')
+sha256sums=('73d5e96d992ed7f040e17c6c9130deebcf42c38990711840981c7afac6f7832f')
 
 check() {
   cd "${srcdir}/${pkgname}-${pkgver}"

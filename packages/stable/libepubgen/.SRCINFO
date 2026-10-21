@@ -1,7 +1,7 @@
 pkgbase = libepubgen
 	pkgdesc = an EPUB generator for librevenge
 	pkgver = 0.1.1
-	pkgrel = 6
+	pkgrel = 6.1
 	url = https://sourceforge.net/projects/libepubgen/
 	arch = x86_64
 	license = MPL-2.0

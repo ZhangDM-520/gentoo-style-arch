@@ -1,7 +1,7 @@
 pkgbase = loupe
 	pkgdesc = A simple image viewer for GNOME
 	pkgver = 51.0
-	pkgrel = 1
+	pkgrel = 1.1
 	url = https://apps.gnome.org/Loupe/
 	arch = x86_64
 	groups = gnome

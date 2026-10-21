@@ -8,7 +8,7 @@ pkgname=(
 # trim: the libgweather-4-docs split is dropped — the gi-docgen API docs are
 # not shipped (gtk_doc=false in build()); only the library output stays
 pkgver=4.6.0
-pkgrel=1
+pkgrel=1.3
 pkgdesc="Location and timezone database and weather-lookup library"
 url="https://gitlab.gnome.org/GNOME/libgweather"
 arch=(x86_64)

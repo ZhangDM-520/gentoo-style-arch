@@ -1,7 +1,7 @@
 pkgbase = kcrash
 	pkgdesc = Support for application crash analysis and bug report from apps
-	pkgver = 6.30.0
-	pkgrel = 1.2
+	pkgver = 6.31.0
+	pkgrel = 1.1
 	url = https://develop.kde.org/products/frameworks/
 	arch = x86_64
 	groups = kf6
@@ -18,11 +18,11 @@ pkgbase = kcrash
 	depends = qt6-base
 	optdepends = drkonqi: KDE crash handler application
 	provides = libKF6Crash.so
-	source = https://download.kde.org/stable/frameworks/6.30/kcrash-6.30.0.tar.xz
-	source = https://download.kde.org/stable/frameworks/6.30/kcrash-6.30.0.tar.xz.sig
+	source = https://download.kde.org/stable/frameworks/6.31/kcrash-6.31.0.tar.xz
+	source = https://download.kde.org/stable/frameworks/6.31/kcrash-6.31.0.tar.xz.sig
 	validpgpkeys = 53E6B47B45CEA3E0D5B7457758D0EE648A48B3BB
 	validpgpkeys = 90A968ACA84537CC27B99EAF2C8DF587A6D4AAC1
-	sha256sums = b17f8242309e1502119c48b1ef5059a396a3068596a84fb79fdef6d9e2cd4f49
+	sha256sums = 8883c740d5de9aea232060f10c7f3bfdc3f83914b2d91d757ce2c8ed535621a6
 	sha256sums = SKIP
 
 pkgname = kcrash

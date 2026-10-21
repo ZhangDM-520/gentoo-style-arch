@@ -1,7 +1,7 @@
 pkgbase = sword
 	pkgdesc = Library for Bible study programs
 	pkgver = 1.9.0
-	pkgrel = 18
+	pkgrel = 18.1
 	url = https://www.crosswire.org/sword/
 	arch = x86_64
 	license = GPL-2.0-only

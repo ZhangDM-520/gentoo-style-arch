@@ -4,7 +4,7 @@
 pkgname=qt5-wayland
 _basever=5.15.19
 pkgver=5.15.19+kde+r55
-pkgrel=1
+pkgrel=1.1
 _commit=605b8bc942ab263b9d1892af33a81b408f522ccc
 arch=('x86_64')
 url='https://www.qt.io'

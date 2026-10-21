@@ -10,7 +10,7 @@ pkgname=(
   libblockdev-{btrfs,crypto,fs,loop,mdraid,nvme,part,smart,swap}
 )
 pkgver=3.5.0
-pkgrel=2
+pkgrel=2.1
 pkgdesc="A library for manipulating block devices"
 arch=('x86_64')
 url="https://github.com/storaged-project/libblockdev"

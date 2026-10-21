@@ -1,7 +1,7 @@
 pkgbase = appstream-glib
 	pkgdesc = Objects and methods for reading and writing AppStream metadata
 	pkgver = 0.8.4
-	pkgrel = 1
+	pkgrel = 1.1
 	url = https://people.freedesktop.org/~hughsient/appstream-glib/
 	arch = x86_64
 	license = LGPL-2.1-or-later

@@ -1,7 +1,7 @@
 pkgbase = libopenmpt
 	pkgdesc = A library to render tracker music to a PCM audio stream
 	pkgver = 0.8.9
-	pkgrel = 1
+	pkgrel = 1.1
 	url = https://lib.openmpt.org/libopenmpt/
 	arch = x86_64
 	license = BSD-3-Clause

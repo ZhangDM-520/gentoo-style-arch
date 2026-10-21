@@ -3,7 +3,7 @@
 pkgname=lsp-plugins-lv2
 _dir=lsp-plugins
 pkgver=1.2.35
-pkgrel=1
+pkgrel=1.1
 pkgdesc="Collection of open-source plugins - LV2"
 arch=(x86_64)
 url="https://lsp-plug.in"

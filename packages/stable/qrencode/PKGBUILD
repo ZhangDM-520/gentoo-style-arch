@@ -3,7 +3,7 @@
 
 pkgname=qrencode
 pkgver=4.1.1
-pkgrel=4
+pkgrel=4.4
 pkgdesc='C library for encoding data in a QR Code symbol.'
 arch=('x86_64')
 depends=('libpng')

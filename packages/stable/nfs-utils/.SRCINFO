@@ -1,6 +1,6 @@
 pkgbase = nfs-utils
 	pkgver = 3.1.1
-	pkgrel = 1
+	pkgrel = 1.1
 	url = http://nfs.sourceforge.net
 	arch = x86_64
 	license = GPL-2.0-or-later
@@ -22,7 +22,7 @@ pkgbase = nfs-utils
 pkgname = nfs-utils
 	pkgdesc = Support programs for Network File Systems
 	depends = rpcbind
-	depends = nfsidmap=3.1.1-1
+	depends = nfsidmap=3.1.1-1.1
 	depends = gssproxy
 	depends = libevent
 	depends = device-mapper

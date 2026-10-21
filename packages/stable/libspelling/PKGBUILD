@@ -8,7 +8,7 @@ pkgname=(
 # trim: the libspelling-docs split is dropped — the gi-docgen API docs are not
 # shipped (docs=false in build()); only the library output stays
 pkgver=0.4.10
-pkgrel=1
+pkgrel=2.1
 pkgdesc="Spellcheck library for GTK 4"
 url="https://gitlab.gnome.org/GNOME/libspelling"
 arch=(x86_64)

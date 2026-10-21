@@ -4,7 +4,7 @@
 
 pkgname=libharu
 pkgver=2.4.6
-pkgrel=1
+pkgrel=1.1
 pkgdesc="C library for generating PDF documents"
 arch=('x86_64')
 url="https://github.com/libharu/libharu"

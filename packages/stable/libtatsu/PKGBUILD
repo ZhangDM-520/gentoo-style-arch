@@ -2,7 +2,7 @@
 
 pkgname=libtatsu
 pkgver=1.0.5
-pkgrel=1
+pkgrel=1.1
 pkgdesc="Library handling the communication with Apple's Tatsu Signing Server (TSS)"
 arch=(x86_64)
 url='https://libimobiledevice.org/'

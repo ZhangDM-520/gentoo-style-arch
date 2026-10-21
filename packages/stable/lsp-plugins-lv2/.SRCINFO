@@ -1,7 +1,7 @@
 pkgbase = lsp-plugins-lv2
 	pkgdesc = Collection of open-source plugins - LV2
 	pkgver = 1.2.35
-	pkgrel = 1
+	pkgrel = 1.1
 	url = https://lsp-plug.in
 	arch = x86_64
 	groups = lv2-plugins

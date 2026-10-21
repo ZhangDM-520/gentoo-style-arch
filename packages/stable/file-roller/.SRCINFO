@@ -1,7 +1,7 @@
 pkgbase = file-roller
 	pkgdesc = Create and modify archives
 	pkgver = 44.7
-	pkgrel = 1
+	pkgrel = 1.1
 	url = https://wiki.gnome.org/Apps/FileRoller
 	arch = x86_64
 	groups = gnome-extra

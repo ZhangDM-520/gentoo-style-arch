@@ -1,7 +1,7 @@
 pkgbase = zam-plugins-lv2
 	pkgdesc = Collection of audio plugins for high-quality processing - LV2 plugins
 	pkgver = 4.5
-	pkgrel = 1
+	pkgrel = 1.1
 	url = https://github.com/zamaudio/zam-plugins
 	arch = x86_64
 	groups = lv2-plugins

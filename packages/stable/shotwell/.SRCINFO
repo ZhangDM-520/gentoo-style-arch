@@ -1,7 +1,7 @@
 pkgbase = shotwell
 	pkgdesc = A digital photo organizer designed for the GNOME desktop environment
 	pkgver = 33.0
-	pkgrel = 2
+	pkgrel = 2.1
 	epoch = 2
 	url = https://gitlab.gnome.org/GNOME/shotwell
 	arch = x86_64

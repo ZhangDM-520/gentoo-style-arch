@@ -1,7 +1,7 @@
 pkgbase = glib-networking
 	pkgdesc = Network extensions for GLib
 	pkgver = 2.90.0
-	pkgrel = 1
+	pkgrel = 1.1
 	epoch = 1
 	url = https://gitlab.gnome.org/GNOME/glib-networking
 	arch = x86_64

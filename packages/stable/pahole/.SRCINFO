@@ -1,7 +1,7 @@
 pkgbase = pahole
 	pkgdesc = Type info tools
 	pkgver = 1.32
-	pkgrel = 1
+	pkgrel = 1.1
 	epoch = 1
 	url = https://git.kernel.org/pub/scm/devel/pahole/pahole.git
 	arch = x86_64

@@ -6,7 +6,7 @@ pkgname=iputils
 # Commit date + git rev-parse --short origin/master
 _rev=6e1cb14
 pkgver=20250605
-pkgrel=1
+pkgrel=1.1
 pkgdesc="Network monitoring tools, including ping"
 arch=('x86_64')
 license=('BSD-3-Clause' 'GPL-2.0-or-later')

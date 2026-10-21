@@ -1,7 +1,7 @@
 pkgbase = coin-or-coinutils
 	pkgdesc = COIN-OR collection of utility classes
 	pkgver = 2.11.13
-	pkgrel = 2
+	pkgrel = 2.1
 	url = https://github.com/coin-or/CoinUtils
 	arch = x86_64
 	groups = coin-or

@@ -6,7 +6,7 @@
 
 pkgname=libxml2-legacy
 pkgver=2.13.9
-pkgrel=2
+pkgrel=2.3
 pkgdesc="XML C parser and toolkit (legacy version)"
 url="https://gitlab.gnome.org/GNOME/libxml2/-/wikis/home"
 arch=(x86_64)

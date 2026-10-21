@@ -4,7 +4,7 @@
 
 pkgname=stress-ng
 pkgver=0.22.01
-pkgrel=1
+pkgrel=1.1
 pkgdesc="Software to stress test a computer system in various selectable ways"
 url="https://github.com/ColinIanKing/stress-ng"
 arch=('x86_64')

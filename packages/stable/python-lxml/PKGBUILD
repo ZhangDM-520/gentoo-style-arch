@@ -6,7 +6,7 @@
 pkgbase=python-lxml
 pkgname=('python-lxml')
 pkgver=6.1.3_1
-pkgrel=1
+pkgrel=1.1
 pkgdesc="Python binding for the libxml2 and libxslt libraries"
 arch=('x86_64')
 license=(

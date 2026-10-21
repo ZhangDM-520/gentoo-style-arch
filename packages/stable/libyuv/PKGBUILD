@@ -2,7 +2,7 @@
 
 pkgname=libyuv
 pkgver=r2921+644251f25
-pkgrel=1
+pkgrel=1.1
 pkgdesc="Library for YUV scaling"
 arch=(x86_64)
 url="https://chromium.googlesource.com/libyuv/libyuv/"

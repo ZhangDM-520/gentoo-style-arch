@@ -4,7 +4,7 @@
 
 pkgname=calf
 pkgver=0.90.9
-pkgrel=2
+pkgrel=2.1
 pkgdesc='LV2 plug-in suite'
 arch=(x86_64)
 url='http://calf-studio-gear.org' # http only

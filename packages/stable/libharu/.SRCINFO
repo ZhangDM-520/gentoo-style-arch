@@ -1,7 +1,7 @@
 pkgbase = libharu
 	pkgdesc = C library for generating PDF documents
 	pkgver = 2.4.6
-	pkgrel = 1
+	pkgrel = 1.1
 	url = https://github.com/libharu/libharu
 	arch = x86_64
 	license = custom:ZLIB

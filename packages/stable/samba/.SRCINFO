@@ -1,6 +1,6 @@
 pkgbase = samba
 	pkgver = 4.25.0
-	pkgrel = 1
+	pkgrel = 1.1
 	epoch = 2
 	url = https://www.samba.org
 	arch = x86_64
@@ -66,7 +66,7 @@ pkgname = ldb
 	depends = talloc
 	depends = tdb
 	depends = libtdb.so
-	depends = smbclient=2:4.25.0-1
+	depends = smbclient=2:4.25.0-1.1
 	provides = libldb.so
 
 pkgname = smbclient
@@ -75,7 +75,7 @@ pkgname = smbclient
 	depends = gnutls
 	depends = icu
 	depends = jansson
-	depends = ldb=2:4.25.0-1
+	depends = ldb=2:4.25.0-1.1
 	depends = libarchive
 	depends = libbsd
 	depends = libcups
@@ -86,7 +86,7 @@ pkgname = smbclient
 	depends = libreadline.so
 	depends = libtdb.so
 	depends = libtevent.so
-	depends = libwbclient=2:4.25.0-1
+	depends = libwbclient=2:4.25.0-1.1
 	depends = popt
 	depends = python
 	depends = readline

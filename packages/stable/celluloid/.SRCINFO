@@ -1,7 +1,7 @@
 pkgbase = celluloid
 	pkgdesc = Simple media player, a GTK frontend for mpv
 	pkgver = 0.30
-	pkgrel = 2
+	pkgrel = 2.1
 	url = https://celluloid-player.github.io/
 	arch = x86_64
 	license = GPL-3.0-or-later

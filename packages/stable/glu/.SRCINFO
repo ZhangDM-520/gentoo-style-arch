@@ -1,7 +1,7 @@
 pkgbase = glu
 	pkgdesc = Mesa OpenGL utility library
 	pkgver = 9.0.3
-	pkgrel = 3
+	pkgrel = 3.1
 	url = https://gitlab.freedesktop.org/mesa/glu
 	arch = x86_64
 	license = SGI-B-2.0

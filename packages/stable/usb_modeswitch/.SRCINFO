@@ -1,7 +1,7 @@
 pkgbase = usb_modeswitch
 	pkgdesc = Activating switchable USB devices on Linux.
 	pkgver = 2.6.2.20251207
-	pkgrel = 1
+	pkgrel = 1.1
 	url = http://www.draisberghof.de/usb_modeswitch/
 	arch = x86_64
 	license = GPL

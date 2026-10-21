@@ -8,7 +8,7 @@
 pkgbase=sdbus-cpp
 pkgname=($pkgbase)
 pkgver=2.3.1
-pkgrel=1
+pkgrel=1.1
 pkgdesc='a high-level C++ D-Bus library designed to provide expressive, easy-to-use API'
 url="https://github.com/Kistler-Group/$pkgbase"
 arch=(x86_64)

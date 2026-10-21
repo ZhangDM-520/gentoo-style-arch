@@ -1,7 +1,7 @@
 pkgbase = system-config-printer
 	pkgdesc = A CUPS printer configuration tool and status applet
 	pkgver = 1.5.18
-	pkgrel = 7
+	pkgrel = 7.1
 	url = https://github.com/OpenPrinting/system-config-printer
 	arch = x86_64
 	license = GPL-2.0-or-later

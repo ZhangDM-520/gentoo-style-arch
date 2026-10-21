@@ -3,7 +3,7 @@
 
 pkgname=loupe
 pkgver=51.0
-pkgrel=1
+pkgrel=1.1
 pkgdesc="A simple image viewer for GNOME"
 url="https://apps.gnome.org/Loupe/"
 arch=(x86_64)

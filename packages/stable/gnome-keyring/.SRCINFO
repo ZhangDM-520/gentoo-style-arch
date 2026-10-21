@@ -1,7 +1,7 @@
 pkgbase = gnome-keyring
 	pkgdesc = Stores passwords and encryption keys
 	pkgver = 51.1
-	pkgrel = 1
+	pkgrel = 1.1
 	epoch = 1
 	url = https://gitlab.gnome.org/GNOME/gnome-keyring
 	install = gnome-keyring.install

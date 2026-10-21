@@ -1,7 +1,7 @@
 pkgbase = xorg-xkbcomp
 	pkgdesc = X Keyboard description compiler
 	pkgver = 1.5.0
-	pkgrel = 1
+	pkgrel = 1.2
 	url = https://gitlab.freedesktop.org/xorg/app/xkbcomp
 	arch = x86_64
 	groups = xorg-apps

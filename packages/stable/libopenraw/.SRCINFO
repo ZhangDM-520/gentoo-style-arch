@@ -1,7 +1,7 @@
 pkgbase = libopenraw
 	pkgdesc = Library for decoding RAW files
 	pkgver = 0.3.7
-	pkgrel = 2
+	pkgrel = 2.1
 	url = https://libopenraw.freedesktop.org/
 	arch = x86_64
 	license = LGPL

@@ -3,7 +3,7 @@
 
 pkgname=accountsservice
 pkgver=26.27.3
-pkgrel=1
+pkgrel=1.1
 pkgdesc="D-Bus interface for user account query and manipulation"
 url="https://gitlab.freedesktop.org/accountsservice/accountsservice"
 arch=(x86_64)

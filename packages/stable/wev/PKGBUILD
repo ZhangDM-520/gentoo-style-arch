@@ -3,7 +3,7 @@
 
 pkgname=wev
 pkgver=1.1.0
-pkgrel=1
+pkgrel=1.1
 pkgdesc="A tool for debugging wayland events on a Wayland window, analagous to the X11 tool xev"
 url='https://git.sr.ht/~sircmpwn/wev'
 license=('MIT')

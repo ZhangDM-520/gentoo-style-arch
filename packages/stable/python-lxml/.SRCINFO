@@ -1,7 +1,7 @@
 pkgbase = python-lxml
 	pkgdesc = Python binding for the libxml2 and libxslt libraries
 	pkgver = 6.1.3_1
-	pkgrel = 1
+	pkgrel = 1.1
 	url = https://lxml.de/
 	arch = x86_64
 	license = BSD-3-Clause

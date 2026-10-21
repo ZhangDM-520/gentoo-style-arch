@@ -3,7 +3,7 @@
 
 pkgname=x42-plugins-lv2
 pkgver=20260908
-pkgrel=1
+pkgrel=1.1
 _dir=x42-plugins-$pkgver
 pkgdesc="Professional audio processing units available as LV2-plugin and JACK-application - LV2 plugins"
 arch=(x86_64)

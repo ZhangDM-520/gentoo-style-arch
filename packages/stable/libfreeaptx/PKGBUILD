@@ -2,7 +2,7 @@
 
 pkgname=libfreeaptx
 pkgver=0.2.2
-pkgrel=1
+pkgrel=1.1
 pkgdesc="Open Source aptX codec library"
 url="https://github.com/regularhunter/libfreeaptx"
 arch=(x86_64)

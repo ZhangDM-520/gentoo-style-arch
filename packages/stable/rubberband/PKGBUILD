@@ -5,7 +5,7 @@
 pkgbase=rubberband
 pkgname=(rubberband rubberband-{ladspa,lv2,vamp})
 pkgver=4.0.0
-pkgrel=2
+pkgrel=2.1
 pkgdesc="Time-stretching and pitch-shifting audio library and utility"
 arch=(x86_64)
 url="https://www.breakfastquay.com/rubberband/"

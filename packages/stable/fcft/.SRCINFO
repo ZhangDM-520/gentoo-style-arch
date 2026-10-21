@@ -1,7 +1,7 @@
 pkgbase = fcft
 	pkgdesc = Simple library for font loading and glyph rasterization
 	pkgver = 3.3.3
-	pkgrel = 1
+	pkgrel = 1.2
 	url = https://codeberg.org/dnkl/fcft
 	arch = x86_64
 	license = MIT

@@ -3,7 +3,7 @@
 
 pkgname=gnome-autoar
 pkgver=0.5.2
-pkgrel=1
+pkgrel=1.1
 pkgdesc="Automatic archives creating and extracting library"
 url="https://gnome.pages.gitlab.gnome.org/gnome-autoar/"
 arch=(x86_64)

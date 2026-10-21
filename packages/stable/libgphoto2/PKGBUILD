@@ -14,7 +14,7 @@ pkgname=(
   libgphoto2
 )
 pkgver=2.5.34
-pkgrel=1
+pkgrel=1.1
 pkgdesc="Digital camera access library"
 url="http://www.gphoto.org/"
 arch=(x86_64)

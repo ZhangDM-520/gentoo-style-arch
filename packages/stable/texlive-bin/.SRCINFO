@@ -1,6 +1,6 @@
 pkgbase = texlive-bin
 	pkgver = 2026.0
-	pkgrel = 2
+	pkgrel = 4.1
 	url = https://tug.org/texlive/
 	arch = x86_64
 	license = GPL-2.0-or-later

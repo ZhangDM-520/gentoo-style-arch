@@ -3,7 +3,7 @@
 
 pkgname=celluloid
 pkgver=0.30
-pkgrel=2
+pkgrel=2.1
 pkgdesc='Simple media player, a GTK frontend for mpv'
 arch=(x86_64)
 url='https://celluloid-player.github.io/'

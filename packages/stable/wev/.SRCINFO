@@ -1,7 +1,7 @@
 pkgbase = wev
 	pkgdesc = A tool for debugging wayland events on a Wayland window, analagous to the X11 tool xev
 	pkgver = 1.1.0
-	pkgrel = 1
+	pkgrel = 1.1
 	url = https://git.sr.ht/~sircmpwn/wev
 	arch = x86_64
 	license = MIT

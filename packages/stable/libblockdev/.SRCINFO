@@ -1,7 +1,7 @@
 pkgbase = libblockdev
 	pkgdesc = A library for manipulating block devices
 	pkgver = 3.5.0
-	pkgrel = 2
+	pkgrel = 2.1
 	url = https://github.com/storaged-project/libblockdev
 	arch = x86_64
 	license = LGPL-2.1-or-later

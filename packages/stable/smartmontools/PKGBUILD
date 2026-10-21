@@ -5,7 +5,7 @@
 
 pkgname=smartmontools
 pkgver=7.5
-pkgrel=1
+pkgrel=2.1
 pkgdesc='Control and monitor S.M.A.R.T. enabled ATA and SCSI Hard Drives'
 url='https://www.smartmontools.org/'
 license=('GPL-2.0-or-later')

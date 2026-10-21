@@ -5,7 +5,7 @@
 
 pkgname=neon
 pkgver=0.37.1
-pkgrel=1
+pkgrel=1.1
 pkgdesc='HTTP/1.1 and WebDAV client library'
 arch=(x86_64)
 url='https://notroj.github.io/neon/'

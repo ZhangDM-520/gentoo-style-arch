@@ -6,7 +6,7 @@
 
 pkgname=libusbmuxd
 pkgver=2.1.1
-pkgrel=2
+pkgrel=2.1
 pkgdesc='Client library to multiplex connections from and to iOS devices'
 arch=(x86_64)
 url='https://libimobiledevice.org/'

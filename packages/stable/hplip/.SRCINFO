@@ -1,8 +1,8 @@
 pkgbase = hplip
 	pkgdesc = Drivers for HP DeskJet, OfficeJet, Photosmart, Business Inkjet and some LaserJet
 	pkgver = 3.26.6
-	pkgrel = 1
-	epoch = 1
+	pkgrel = 2.1
+	epoch = 2
 	url = https://hplipopensource.com
 	arch = x86_64
 	license = GPL-2.0-or-later

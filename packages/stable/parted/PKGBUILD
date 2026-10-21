@@ -3,7 +3,7 @@
 
 pkgname=parted
 pkgver=3.8
-pkgrel=1
+pkgrel=1.3
 pkgdesc='A program for creating, destroying, resizing, checking and copying partitions'
 arch=('x86_64')
 license=('GPL-3.0-or-later')

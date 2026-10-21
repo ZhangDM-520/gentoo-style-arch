@@ -6,7 +6,7 @@ pkgname=(
   ostra-cg
 )
 pkgver=1.32
-pkgrel=1
+pkgrel=1.1
 epoch=1
 pkgdesc="Type info tools"
 url="https://git.kernel.org/pub/scm/devel/pahole/pahole.git"

@@ -1,7 +1,7 @@
 pkgbase = twolame
 	pkgdesc = An optimized MPEG Audio Layer 2 (MP2) encoder
 	pkgver = 0.4.0
-	pkgrel = 4
+	pkgrel = 4.1
 	url = http://www.twolame.org/
 	arch = x86_64
 	license = LGPL2.1

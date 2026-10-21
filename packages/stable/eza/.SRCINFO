@@ -1,7 +1,7 @@
 pkgbase = eza
 	pkgdesc = A modern replacement for ls (community fork of exa)
 	pkgver = 0.23.5
-	pkgrel = 2
+	pkgrel = 2.1
 	url = https://github.com/eza-community/eza
 	arch = x86_64
 	license = EUPL-1.2

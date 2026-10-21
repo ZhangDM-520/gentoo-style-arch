@@ -1,7 +1,7 @@
 pkgbase = bat
 	pkgdesc = Cat clone with syntax highlighting and git integration
 	pkgver = 0.26.1
-	pkgrel = 3
+	pkgrel = 3.2
 	url = https://github.com/sharkdp/bat
 	arch = x86_64
 	license = Apache-2.0 OR MIT

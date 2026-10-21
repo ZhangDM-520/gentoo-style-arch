@@ -1,7 +1,7 @@
 pkgbase = iproute2
 	pkgdesc = IP Routing Utilities
 	pkgver = 7.2.0
-	pkgrel = 1
+	pkgrel = 1.1
 	url = https://git.kernel.org/pub/scm/network/iproute2/iproute2.git
 	arch = x86_64
 	license = GPL-2.0-or-later

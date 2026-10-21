@@ -1,7 +1,7 @@
 pkgbase = pdfio
 	pkgdesc = Simple C library for reading and writing PDF files
 	pkgver = 1.6.5
-	pkgrel = 1
+	pkgrel = 1.1
 	url = https://github.com/michaelrsweet/pdfio
 	arch = x86_64
 	license = Apache-2.0 WITH LLVM-exception

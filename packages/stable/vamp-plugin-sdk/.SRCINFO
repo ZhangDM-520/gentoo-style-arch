@@ -1,7 +1,7 @@
 pkgbase = vamp-plugin-sdk
 	pkgdesc = The Vamp audio analysis plug-in system
 	pkgver = 2.10
-	pkgrel = 1
+	pkgrel = 2
 	epoch = 1
 	url = https://github.com/vamp-plugins/vamp-plugin-sdk
 	arch = x86_64

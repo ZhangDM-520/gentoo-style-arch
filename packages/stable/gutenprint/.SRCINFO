@@ -1,7 +1,7 @@
 pkgbase = gutenprint
 	pkgdesc = Top quality printer drivers for POSIX systems
 	pkgver = 5.3.5
-	pkgrel = 1
+	pkgrel = 1.1
 	url = https://gimp-print.sourceforge.io/
 	arch = x86_64
 	license = GPL-2.0-or-later

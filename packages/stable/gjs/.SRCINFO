@@ -1,7 +1,7 @@
 pkgbase = gjs
 	pkgdesc = Javascript Bindings for GNOME
-	pkgver = 1.90.0
-	pkgrel = 1
+	pkgver = 1.90.1
+	pkgrel = 1.1
 	epoch = 2
 	url = https://gitlab.gnome.org/GNOME/gjs
 	arch = x86_64
@@ -27,10 +27,10 @@ pkgbase = gjs
 	depends = libx11
 	depends = readline
 	provides = libgjs.so
-	source = git+https://gitlab.gnome.org/GNOME/gjs.git#tag=1.90.0
+	source = git+https://gitlab.gnome.org/GNOME/gjs.git#tag=1.90.1
 	source = git+https://gitlab.gnome.org/GNOME/gobject-introspection-tests.git
 	validpgpkeys = 53C0524AD3AE115F69C47D2D0E9D857756977391
-	b2sums = b4bb927d222eea006ab9c5c92e0617083e58d171fb73c226ef18b29871e8a87b092d08fbfb52ca14ecc7717667cd99fac885b0731c865765c1b9b2b43d5449d6
+	b2sums = 6a2c3739c1cc23069f7c79a79fde0e1c10795f497018bb47908892936b45ba617421163f3e1f9df5e3415fe3444ee658099ca810e5eedf73118ea766864fb079
 	b2sums = SKIP
 
 pkgname = gjs

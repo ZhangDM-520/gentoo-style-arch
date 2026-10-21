@@ -1,7 +1,7 @@
 pkgbase = libnfs
 	pkgdesc = client library for accessing NFS shares
 	pkgver = 7.0.2
-	pkgrel = 2
+	pkgrel = 2.1
 	url = https://github.com/sahlberg/libnfs
 	arch = x86_64
 	license = GPL

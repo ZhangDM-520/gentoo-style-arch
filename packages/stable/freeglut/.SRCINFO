@@ -1,7 +1,7 @@
 pkgbase = freeglut
 	pkgdesc = Free OpenGL Utility Toolkit
 	pkgver = 3.8.0
-	pkgrel = 1
+	pkgrel = 1.1
 	url = https://freeglut.sourceforge.net/
 	arch = x86_64
 	license = X11

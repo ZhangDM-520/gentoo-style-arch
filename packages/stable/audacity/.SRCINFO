@@ -1,7 +1,7 @@
 pkgbase = audacity
 	pkgdesc = A program that lets you manipulate digital audio waveforms
 	pkgver = 3.7.9
-	pkgrel = 1
+	pkgrel = 1.1
 	epoch = 1
 	url = https://audacityteam.org
 	arch = x86_64

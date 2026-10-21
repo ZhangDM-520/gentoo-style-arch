@@ -1,7 +1,7 @@
 pkgbase = raptor
 	pkgdesc = A C library that parses RDF/XML/N-Triples into RDF triples
 	pkgver = 2.0.16
-	pkgrel = 9
+	pkgrel = 9.1
 	url = https://librdf.org/raptor
 	arch = x86_64
 	license = Apache-2.0 OR GPL-2.0-or-later OR LGPL-2.1-or-later

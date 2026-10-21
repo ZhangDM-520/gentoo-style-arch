@@ -20,7 +20,7 @@
 pkgbase=samba
 pkgname=('libwbclient' 'ldb' 'smbclient')
 pkgver=4.25.0
-pkgrel=1
+pkgrel=1.1
 arch=(x86_64)
 url="https://www.samba.org"
 license=('GPL-3.0-or-later')

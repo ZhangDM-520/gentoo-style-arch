@@ -1,7 +1,7 @@
 pkgbase = sord
 	pkgdesc = A lightweight C library for storing RDF data in memory
 	pkgver = 0.16.22
-	pkgrel = 1
+	pkgrel = 1.1
 	url = https://drobilla.net/software/sord.html
 	arch = x86_64
 	license = ISC

@@ -1,7 +1,7 @@
 pkgbase = libgudev
 	pkgdesc = GObject bindings for libudev
 	pkgver = 238
-	pkgrel = 3
+	pkgrel = 4.1
 	url = https://gitlab.gnome.org/GNOME/libgudev
 	arch = x86_64
 	license = LGPL-2.1-or-later

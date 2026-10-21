@@ -4,7 +4,7 @@
 
 pkgname=libgxps
 pkgver=0.3.2
-pkgrel=5
+pkgrel=5.1
 pkgdesc="XPS Documents library"
 url="https://wiki.gnome.org/Projects/libgxps"
 arch=(x86_64)

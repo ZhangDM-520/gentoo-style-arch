@@ -3,8 +3,8 @@
 # Contributor: Ionut Biru <ibiru@archlinux.org>
 
 pkgname=gnome-calculator
-pkgver=51.0
-pkgrel=1
+pkgver=51.1
+pkgrel=1.1
 pkgdesc="GNOME Scientific calculator"
 url="https://apps.gnome.org/Calculator"
 arch=(x86_64)
@@ -39,7 +39,7 @@ provides=(
 )
 groups=(gnome)
 source=("git+https://gitlab.gnome.org/GNOME/gnome-calculator.git#tag=${pkgver/[a-z]/.&}")
-b2sums=('b456e4da55214c81adee7b992cabc49e51066ca965e97661c5c6e3999862010aec97fe0d3c755248d0bd75efd5124e156e344805043da01bab2d14f7cdaad199')
+b2sums=('6ee593a53f77e9952cecebc6b5ef4c840c563d62a8f85c0599f67f335b29ce54bf48a883459346586b706cfb9bbd73e0e54a596814e51e2de2ad123068370f92')
 
 build() {
   # House style: mold linker when available

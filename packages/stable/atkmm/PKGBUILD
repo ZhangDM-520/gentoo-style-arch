@@ -3,7 +3,7 @@
 
 pkgname=atkmm
 pkgver=2.28.5
-pkgrel=2
+pkgrel=2.1
 pkgdesc="C++ bindings for ATK"
 url="https://www.gtkmm.org/"
 arch=(x86_64)

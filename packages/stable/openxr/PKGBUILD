@@ -1,7 +1,7 @@
 # Maintainer: Sven-Hendrik Haase <svenstaro@archlinux.org>
 pkgname=openxr
 pkgver=1.1.60
-pkgrel=2
+pkgrel=2.1
 pkgdesc='An open standard for virtual reality and augmented reality platforms and devices'
 arch=('x86_64')
 url='https://www.khronos.org/openxr/'

@@ -1,6 +1,6 @@
 pkgbase = java-openjdk
 	pkgver = 27.u35
-	pkgrel = 1
+	pkgrel = 2
 	url = https://openjdk.java.net/
 	arch = x86_64
 	license = LicenseRef-Java
@@ -79,13 +79,13 @@ pkgname = jdk-openjdk
 	optdepends = gtk3: for the Gtk+ 3 look and feel - desktop usage
 	provides = java-environment=27
 	provides = java-environment-openjdk=27
-	provides = jdk27-openjdk=27.u35-1
+	provides = jdk27-openjdk=27.u35-2
 	provides = java-runtime=27
 	provides = java-runtime-openjdk=27
-	provides = jre27-openjdk=27.u35-1
+	provides = jre27-openjdk=27.u35-2
 	provides = java-runtime-headless=27
 	provides = java-runtime-headless-openjdk=27
-	provides = jre27-openjdk-headless=27.u35-1
+	provides = jre27-openjdk-headless=27.u35-2
 	provides = libattach.so
 	provides = libsaproc.so
 	provides = libawt_headless.so
@@ -140,5 +140,5 @@ pkgname = jdk-openjdk
 
 pkgname = openjdk-src
 	pkgdesc = OpenJDK Java 27 sources
-	depends = jdk27-openjdk=27.u35-1
-	provides = openjdk27-src=27.u35-1
+	depends = jdk27-openjdk=27.u35-2
+	provides = openjdk27-src=27.u35-2

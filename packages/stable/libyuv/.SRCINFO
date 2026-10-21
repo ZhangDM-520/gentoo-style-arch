@@ -1,7 +1,7 @@
 pkgbase = libyuv
 	pkgdesc = Library for YUV scaling
 	pkgver = r2921+644251f25
-	pkgrel = 1
+	pkgrel = 1.1
 	url = https://chromium.googlesource.com/libyuv/libyuv/
 	arch = x86_64
 	license = custom

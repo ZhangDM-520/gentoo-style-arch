@@ -1,7 +1,7 @@
 pkgbase = iwd
 	pkgdesc = Internet Wireless Daemon
 	pkgver = 3.12
-	pkgrel = 2
+	pkgrel = 2.1
 	url = https://git.kernel.org/cgit/network/wireless/iwd.git/
 	arch = x86_64
 	license = LGPL-2.1-or-later

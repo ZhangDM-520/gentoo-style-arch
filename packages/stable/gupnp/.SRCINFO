@@ -1,7 +1,7 @@
 pkgbase = gupnp
 	pkgdesc = GObject-based UPNP framework
 	pkgver = 1.6.10
-	pkgrel = 1
+	pkgrel = 1.1
 	epoch = 1
 	url = https://wiki.gnome.org/Projects/GUPnP
 	arch = x86_64

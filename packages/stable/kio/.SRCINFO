@@ -1,7 +1,7 @@
 pkgbase = kio
 	pkgdesc = Resource and network access abstraction
-	pkgver = 6.30.0
-	pkgrel = 1
+	pkgver = 6.31.0
+	pkgrel = 1.1
 	url = https://develop.kde.org/products/frameworks/
 	arch = x86_64
 	groups = kf6
@@ -45,11 +45,11 @@ pkgbase = kio
 	provides = libKF6KIOFileWidgets.so
 	provides = libKF6KIOGui.so
 	provides = libKF6KIOWidgets.so
-	source = https://download.kde.org/stable/frameworks/6.30/kio-6.30.0.tar.xz
-	source = https://download.kde.org/stable/frameworks/6.30/kio-6.30.0.tar.xz.sig
+	source = https://download.kde.org/stable/frameworks/6.31/kio-6.31.0.tar.xz
+	source = https://download.kde.org/stable/frameworks/6.31/kio-6.31.0.tar.xz.sig
 	validpgpkeys = 53E6B47B45CEA3E0D5B7457758D0EE648A48B3BB
 	validpgpkeys = 90A968ACA84537CC27B99EAF2C8DF587A6D4AAC1
-	sha256sums = c19cbd4878347b67a9e05ee6541083f51dd90f9e58ee245b4d7634e09f9c04b2
+	sha256sums = cdc8e3787be1f4a5c8f8a45fabab5cf540ef6380c549c6fd984f15f093b5eac0
 	sha256sums = SKIP
 
 pkgname = kio

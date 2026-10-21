@@ -27,7 +27,7 @@ provides=(libopencv_alphamat.so libopencv_bgsegm.so libopencv_bioinspired.so
           libopencv_xfeatures2d.so libopencv_ximgproc.so libopencv_xobjdetect.so
           libopencv_xphoto.so libopencv_xstereo.so)
 pkgver=5.0.0
-pkgrel=12
+pkgrel=13.1
 pkgdesc='Open Source Computer Vision Library'
 arch=(x86_64)
 license=(Apache-2.0)

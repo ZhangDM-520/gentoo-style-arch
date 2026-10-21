@@ -1,7 +1,7 @@
 pkgbase = procps-ng
 	pkgdesc = Utilities for monitoring your system and its processes
 	pkgver = 4.0.7
-	pkgrel = 1
+	pkgrel = 1.1
 	url = https://gitlab.com/procps-ng/procps
 	arch = x86_64
 	license = GPL

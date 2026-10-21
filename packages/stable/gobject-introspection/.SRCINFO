@@ -1,7 +1,7 @@
 pkgbase = gobject-introspection
 	pkgdesc = Introspection system for GObject-based libraries
 	pkgver = 1.86.0
-	pkgrel = 2
+	pkgrel = 2.1
 	url = https://gi.readthedocs.io/en/latest/
 	arch = x86_64
 	license = GPL-2.0-or-later
@@ -27,8 +27,8 @@ pkgbase = gobject-introspection
 	b2sums = SKIP
 
 pkgname = gobject-introspection
-	depends = gobject-introspection-runtime=1.86.0-2
-	depends = libgirepository=1.86.0-2
+	depends = gobject-introspection-runtime=1.86.0-2.1
+	depends = libgirepository=1.86.0-2.1
 	depends = glib2
 	depends = glibc
 	depends = libffi
@@ -39,7 +39,7 @@ pkgname = gobject-introspection
 
 pkgname = gobject-introspection-runtime
 	pkgdesc = Introspection system for GObject-based libraries - runtime
-	depends = libgirepository=1.86.0-2
+	depends = libgirepository=1.86.0-2.1
 
 pkgname = libgirepository
 	pkgdesc = Introspection system for GObject-based libraries - runtime library

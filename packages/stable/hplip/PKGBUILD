@@ -5,8 +5,8 @@
 
 pkgname=hplip
 pkgver=3.26.6
-pkgrel=1
-epoch=1
+pkgrel=2.1
+epoch=2
 pkgdesc="Drivers for HP DeskJet, OfficeJet, Photosmart, Business Inkjet and some LaserJet"
 arch=('x86_64')
 url="https://hplipopensource.com"

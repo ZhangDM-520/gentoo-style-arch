@@ -3,7 +3,7 @@
 pkgbase=gutenprint
 pkgname=('gutenprint' 'foomatic-db-gutenprint-ppds')
 pkgver=5.3.5
-pkgrel=1
+pkgrel=1.1
 pkgdesc="Top quality printer drivers for POSIX systems"
 arch=('x86_64')
 license=('GPL-2.0-or-later'

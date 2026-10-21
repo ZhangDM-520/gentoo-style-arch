@@ -2,7 +2,7 @@
 
 pkgname=psmisc
 pkgver=23.7
-pkgrel=2
+pkgrel=2.1
 pkgdesc='Miscellaneous procfs tools'
 arch=('x86_64')
 url='https://gitlab.com/psmisc/psmisc'

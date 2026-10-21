@@ -2,7 +2,7 @@
 
 pkgname=heaptrack
 pkgver=1.5.0
-pkgrel=11
+pkgrel=11.1
 arch=(x86_64)
 pkgdesc='A heap memory profiler for Linux'
 url='https://apps.kde.org/heaptrack/'

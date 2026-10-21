@@ -3,8 +3,8 @@
 # Contributor: Andrea Scarpino <andrea@archlinux.org>
 
 pkgname=kdoctools
-pkgver=6.30.0
-pkgrel=1
+pkgver=6.31.0
+pkgrel=1.1
 pkgdesc='Documentation generation from docbook'
 arch=(x86_64)
 url='https://develop.kde.org/products/frameworks/'
@@ -24,7 +24,7 @@ makedepends=(doxygen
 groups=(kf6)
 provides=(libKF6DocTools.so)
 source=(https://download.kde.org/stable/frameworks/${pkgver%.*}/$pkgname-$pkgver.tar.xz{,.sig})
-sha256sums=('b90b42ab222a3034729e517d0c06258abf6bdc28591ec78ad56f24aebbaaed94'
+sha256sums=('6a54b0319d775b8d0d5ebaffd1149b7862621e997fec564da0fb2fcbd694a060'
             'SKIP')
 validpgpkeys=(53E6B47B45CEA3E0D5B7457758D0EE648A48B3BB # David Faure <faure@kde.org>
               90A968ACA84537CC27B99EAF2C8DF587A6D4AAC1 # Nicolas Fella <nicolas.fella@kde.org>

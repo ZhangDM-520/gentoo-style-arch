@@ -3,8 +3,8 @@
 # Contributor: Andrea Scarpino <andrea@archlinux.org>
 
 pkgname=kio
-pkgver=6.30.0
-pkgrel=1
+pkgver=6.31.0
+pkgrel=1.1
 pkgdesc='Resource and network access abstraction'
 arch=(x86_64)
 url='https://develop.kde.org/products/frameworks/'
@@ -50,7 +50,7 @@ optdepends=('audiocd-kio: for accessing audio CDs'
 groups=(kf6)
 provides=(libKF6KIOCore.so libKF6KIOFileWidgets.so libKF6KIOGui.so libKF6KIOWidgets.so)
 source=(https://download.kde.org/stable/frameworks/${pkgver%.*}/$pkgname-$pkgver.tar.xz{,.sig})
-sha256sums=('c19cbd4878347b67a9e05ee6541083f51dd90f9e58ee245b4d7634e09f9c04b2'
+sha256sums=('cdc8e3787be1f4a5c8f8a45fabab5cf540ef6380c549c6fd984f15f093b5eac0'
             'SKIP')
 validpgpkeys=(53E6B47B45CEA3E0D5B7457758D0EE648A48B3BB # David Faure <faure@kde.org>
               90A968ACA84537CC27B99EAF2C8DF587A6D4AAC1 # Nicolas Fella <nicolas.fella@kde.org>

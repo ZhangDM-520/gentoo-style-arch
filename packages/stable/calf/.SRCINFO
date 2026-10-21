@@ -1,7 +1,7 @@
 pkgbase = calf
 	pkgdesc = LV2 plug-in suite
 	pkgver = 0.90.9
-	pkgrel = 2
+	pkgrel = 2.1
 	url = http://calf-studio-gear.org
 	arch = x86_64
 	groups = lv2-plugins

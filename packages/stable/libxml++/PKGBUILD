@@ -7,7 +7,7 @@ pkgname=(
   libxml++
 )
 pkgver=3.2.6
-pkgrel=1
+pkgrel=1.1
 pkgdesc="C++ bindings to libxml2"
 url="https://libxmlplusplus.github.io/libxmlplusplus/"
 arch=(x86_64)

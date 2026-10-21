@@ -1,7 +1,7 @@
 pkgbase = rasqal
 	pkgdesc = A library handling RDF query syntaxes, construction and execution
 	pkgver = 0.9.33
-	pkgrel = 9
+	pkgrel = 9.1
 	epoch = 1
 	url = https://librdf.org/rasqal
 	arch = x86_64

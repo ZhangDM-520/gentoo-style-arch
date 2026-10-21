@@ -1,7 +1,7 @@
 pkgbase = dnsmasq
 	pkgdesc = Lightweight, easy to configure DNS forwarder and DHCP server
 	pkgver = 2.93
-	pkgrel = 1
+	pkgrel = 1.1
 	url = http://www.thekelleys.org.uk/dnsmasq/doc.html
 	arch = x86_64
 	license = GPL-2.0-or-later

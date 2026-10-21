@@ -13,7 +13,7 @@ pkgname=(
   gnome-desktop-4
 )
 pkgver=51.0
-pkgrel=1
+pkgrel=1.1
 epoch=1
 pkgdesc="Provides API shared by several apps on the GNOME desktop"
 url="https://gitlab.gnome.org/GNOME/gnome-desktop"

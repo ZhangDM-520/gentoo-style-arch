@@ -7,7 +7,7 @@ pkgname=(
 # trim: the libmanette-docs split is dropped — the gi-docgen API docs are not
 # shipped (doc=false in build()); only the library output stays
 pkgver=0.2.13
-pkgrel=2
+pkgrel=2.1
 pkgdesc="Simple GObject game controller library"
 url="https://gnome.pages.gitlab.gnome.org/libmanette/"
 arch=(x86_64)

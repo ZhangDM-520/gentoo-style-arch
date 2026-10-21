@@ -4,7 +4,7 @@
 
 pkgname=libsixel
 pkgver=1.10.5
-pkgrel=1
+pkgrel=1.1
 pkgdesc="Provides a codec for DEC SIXEL graphics and some converter programs"
 arch=('x86_64')
 url="https://github.com/libsixel/libsixel"

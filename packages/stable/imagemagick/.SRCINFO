@@ -1,7 +1,7 @@
 pkgbase = imagemagick
 	pkgdesc = An image viewing/manipulation program
-	pkgver = 7.1.2.32
-	pkgrel = 1.1
+	pkgver = 7.1.2.34
+	pkgrel = 2.1
 	url = https://www.imagemagick.org/
 	arch = x86_64
 	license = ImageMagick
@@ -76,8 +76,8 @@ pkgbase = imagemagick
 	backup = etc/ImageMagick-7/type.xml
 	backup = etc/ImageMagick-7/type-dejavu.xml
 	backup = etc/ImageMagick-7/type-ghostscript.xml
-	source = git+https://github.com/ImageMagick/ImageMagick#tag=7.1.2-32
+	source = git+https://github.com/ImageMagick/ImageMagick#tag=7.1.2-34
 	validpgpkeys = C305FEBD4C4081119CB3C12CE640E67B2C7F96AA
-	sha256sums = d6f794e14cb0dd7de9935b36fa94c8258d6c77130200d4976a688c23a5701f9b
+	sha256sums = 2decd930d110206c70b1cd5f591c03974d7a2253c1f3d6da1fd90a2f3da38c3f
 
 pkgname = imagemagick

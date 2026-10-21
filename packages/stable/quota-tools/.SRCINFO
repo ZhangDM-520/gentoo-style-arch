@@ -1,7 +1,7 @@
 pkgbase = quota-tools
 	pkgdesc = Tools to manage kernel-level quotas in Linux
 	pkgver = 4.11
-	pkgrel = 1
+	pkgrel = 1.1
 	epoch = 1
 	url = https://sourceforge.net/projects/linuxquota/
 	arch = x86_64

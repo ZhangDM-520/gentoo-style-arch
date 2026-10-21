@@ -1,7 +1,7 @@
 pkgbase = fcitx5-configtool
 	pkgdesc = Configuration Tool for Fcitx5
 	pkgver = 5.1.16
-	pkgrel = 2
+	pkgrel = 3.1
 	url = https://github.com/fcitx/fcitx5-configtool
 	arch = x86_64
 	groups = fcitx5-im

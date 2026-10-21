@@ -9,7 +9,7 @@ pkgname=(
 # trim: the p11-kit-docs split is dropped — the gtk-doc API docs are not
 # shipped (gtk_doc=false in build()); outputs p11-kit + libp11-kit stay
 pkgver=0.26.5
-pkgrel=1
+pkgrel=1.1
 pkgdesc="Loads and enumerates PKCS#11 modules"
 url="https://p11-glue.freedesktop.org"
 arch=(x86_64)

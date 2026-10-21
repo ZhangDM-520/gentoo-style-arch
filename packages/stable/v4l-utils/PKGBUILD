@@ -1,7 +1,7 @@
 # Maintainer: Thomas Bächler <thomas@archlinux.org>
 pkgname=v4l-utils
 pkgver=1.32.0
-pkgrel=2
+pkgrel=2.1
 pkgdesc="Userspace tools and conversion library for Video 4 Linux"
 arch=('x86_64')
 url="https://linuxtv.org/"

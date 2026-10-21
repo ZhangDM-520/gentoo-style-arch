@@ -7,7 +7,7 @@
 # target row; the libsynctex split is not a separate row) — qca-qt6 precedent
 pkgname=(texlive-bin libsynctex)
 pkgver=2026.0
-pkgrel=2
+pkgrel=4.1
 license=(GPL-2.0-or-later)
 arch=(x86_64)
 makedepends=(bash

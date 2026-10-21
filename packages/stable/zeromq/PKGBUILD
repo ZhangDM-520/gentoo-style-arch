@@ -3,7 +3,7 @@
 
 pkgname=zeromq
 pkgver=4.3.5
-pkgrel=3
+pkgrel=3.1
 pkgdesc='Fast messaging system built on sockets. C and C++ bindings. aka 0MQ, ZMQ.'
 arch=(x86_64)
 url='http://www.zeromq.org'

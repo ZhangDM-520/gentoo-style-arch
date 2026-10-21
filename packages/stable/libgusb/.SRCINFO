@@ -1,7 +1,7 @@
 pkgbase = libgusb
 	pkgdesc = GObject wrapper for libusb1
 	pkgver = 0.4.9
-	pkgrel = 2
+	pkgrel = 2.1
 	url = https://github.com/hughsie/libgusb
 	arch = x86_64
 	license = LGPL-2.1-or-later

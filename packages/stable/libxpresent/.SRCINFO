@@ -1,7 +1,7 @@
 pkgbase = libxpresent
 	pkgdesc = X Present Extension library
 	pkgver = 1.0.2
-	pkgrel = 1
+	pkgrel = 1.1
 	url = https://gitlab.freedesktop.org/xorg/lib/libxpresent
 	arch = x86_64
 	license = MIT

@@ -1,7 +1,7 @@
 pkgbase = libmanette
 	pkgdesc = Simple GObject game controller library
 	pkgver = 0.2.13
-	pkgrel = 2
+	pkgrel = 2.1
 	url = https://gnome.pages.gitlab.gnome.org/libmanette/
 	arch = x86_64
 	license = LGPL-2.1-or-later

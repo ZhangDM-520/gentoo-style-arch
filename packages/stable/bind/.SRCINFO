@@ -1,7 +1,7 @@
 pkgbase = bind
 	pkgdesc = A complete, highly portable implementation of the DNS protocol
 	pkgver = 9.20.29
-	pkgrel = 1
+	pkgrel = 1.1
 	url = https://www.isc.org/software/bind/
 	install = bind.install
 	arch = x86_64

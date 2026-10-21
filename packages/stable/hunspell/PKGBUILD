@@ -3,7 +3,7 @@
 
 pkgname=hunspell
 pkgver=1.7.5
-pkgrel=1
+pkgrel=1.1
 pkgdesc="Spell checker and morphological analyzer library and program"
 arch=('x86_64')
 url="https://github.com/hunspell/hunspell"

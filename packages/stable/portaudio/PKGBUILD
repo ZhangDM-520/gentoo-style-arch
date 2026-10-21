@@ -6,7 +6,7 @@
 
 pkgname=portaudio
 pkgver=19.7.0
-pkgrel=4
+pkgrel=4.1
 epoch=1
 pkgdesc='A free, cross-platform, open source, audio I/O library.'
 arch=(x86_64)

@@ -1,7 +1,7 @@
 pkgbase = 0ad
 	pkgdesc = Cross-platform, 3D and historically-based real-time strategy game
 	pkgver = 0.28.0
-	pkgrel = 3
+	pkgrel = 3.1
 	url = http://play0ad.com/
 	arch = x86_64
 	license = GPL-2.0-or-later

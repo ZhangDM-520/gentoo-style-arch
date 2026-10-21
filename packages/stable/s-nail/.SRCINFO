@@ -1,7 +1,7 @@
 pkgbase = s-nail
 	pkgdesc = Environment for sending and receiving mail
 	pkgver = 14.9.25
-	pkgrel = 1
+	pkgrel = 1.1
 	url = https://www.sdaoden.eu/code.html#s-nail
 	arch = x86_64
 	license = custom:BSD

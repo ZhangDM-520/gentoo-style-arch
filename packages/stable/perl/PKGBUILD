@@ -5,9 +5,9 @@
 # Contributor: francois <francois.archlinux.org>
 
 pkgname=perl
-pkgver=5.42.3
+pkgver=5.44.0
 _baseversion="${pkgver%.*}"
-pkgrel=1
+pkgrel=1.1
 pkgdesc="A highly capable, feature-rich programming language"
 arch=(x86_64)
 license=('Artistic-1.0-Perl' 'GPL-1.0-or-later')
@@ -142,7 +142,7 @@ source=(${pkgname}::git+https://github.com/Perl/perl5.git#tag=v${pkgver}
         detect-old-perl-modules.sh
         detect-old-perl-modules.hook)
 options=('makeflags' '!purge' 'emptydirs')
-sha512sums=('8b30e74d7654b8017de73fdbada0081bd395d26510926f84ac2d067e9bb2a77cd60ced02d32ef0327dc8830d32c5456d342b1a69befa0f53f07bf2a46c53156b'
+sha512sums=('89de0f4ab83d8d96136747d2414951a028b4b81641690c4447a662aa302f92a546a40f05bc0db1be745da93884af5ec7b86cf58fedee3e62513462123246c8c1'
             'b96e3c2c44e7453ac4c1c77aef8b3370651c9cb9f59bb82de11218564fabe1b8d285a9c892ea87cb7d6acb6913bbd1af242d3ab20dcab8149270c2269cae9f7c'
             '6ed5bc6dbdc47bc7f4c0fedbe18deaf35ab02a2e6700988beb545954bb1d0fe20ff1a4de39d6d9fc882ef1741f7bf6d85ba165d0cd8dc0d9939b789c894f48a1'
             '53eb0cddfd637014f3d3a101665db8dcafe5ac5bf3d319a259974334eb89c1c405097518ae96b6d18e520194633c7be57c9b2cd9ae6398443eb08f1a2008d112'

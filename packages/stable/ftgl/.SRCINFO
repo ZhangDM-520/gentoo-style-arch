@@ -1,7 +1,7 @@
 pkgbase = ftgl
 	pkgdesc = OpenGL library to use arbitrary fonts
 	pkgver = 2.4.0
-	pkgrel = 4
+	pkgrel = 4.1
 	url = https://github.com/frankheckenbach/ftgl
 	arch = x86_64
 	license = MIT

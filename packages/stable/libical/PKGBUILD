@@ -7,8 +7,8 @@
 # move — single output only
 pkgbase=libical
 pkgname=(libical)
-pkgver=4.0.6
-pkgrel=1
+pkgver=4.0.7
+pkgrel=1.1
 pkgdesc="An open source reference implementation of the icalendar data type and serialization format"
 arch=(x86_64)
 url='https://github.com/libical/libical'
@@ -33,7 +33,7 @@ provides=(libical.so
           libicalvcal.so
           libicalvcard.so)
 source=(git+https://github.com/libical/libical#tag=v$pkgver)
-sha512sums=('5ec769962229ce3c39812b293d85cd37c77e512a2dbb5f651773da5323263b1a730c8d9e399b24c7660e483dfa33448c8ee55440769eee1da3441a2bbda562ae')
+sha512sums=('cc7a4bbec8edaae01cabc3aef5573ff5ca0b71d89b85d7d87facdb66f6f801d32998f9b12697867e4862aeebd1dbe46000644639ef52083b7e53a4e1794e264f')
 
 build() {
   # House style: mold linker when available (CMake reads LDFLAGS at cache init)

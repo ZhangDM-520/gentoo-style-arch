@@ -1,7 +1,7 @@
 pkgbase = libhandy
 	pkgdesc = GTK 3 UI elements for mobile devices
 	pkgver = 1.8.3
-	pkgrel = 2
+	pkgrel = 3.1
 	url = https://gitlab.gnome.org/GNOME/libhandy
 	arch = x86_64
 	license = LGPL-2.1-or-later

@@ -4,7 +4,7 @@
 
 pkgname=bat
 pkgver=0.26.1
-pkgrel=3
+pkgrel=3.2
 pkgdesc='Cat clone with syntax highlighting and git integration'
 arch=(x86_64)
 url='https://github.com/sharkdp/bat'
