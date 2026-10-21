@@ -56,6 +56,38 @@ tiled window snapping back to its column hides the change. Harness foot-gun:
 `windows=$("$UMBRIEL" windows --json")` (stray `"` before `)`) makes bash report
 an unmatched-quote error many lines away; `bash -n` the check first.
 
+## 2026-10-21 — texlive-texmf's texmf-dist husk: the tlpkg self-heal class hits the second SVN source
+
+**Symptom.** resume14's `texlive-texmf` lane died in `prepare()` at the
+minted patch: `can't find file to patch … Master/texmf-dist/…` for every
+hunk, `22 out of 22 hunks ignored`, then `ERROR: A failure occurred in
+prepare()`. The patch itself is healthy — `patch -p1 --dry-run` applies
+cleanly to an intact r78408 tree.
+
+**Root cause.** `$SRCDEST/texmf-dist` is the SEGV-era twin of the tlpkg
+husk: the interrupted `svn checkout` (resume13's 16-second SIGSEGV) left a
+working copy whose `svn info` claims r78408 while **27 of 459,681 files**
+exist. `extract_svn` copies that husk into `$srcdir` unchallenged (same
+warn-only/no-op update path as the tlpkg lesson), so the patch's targets
+simply are not there. The committed self-heal covered only `tlpkg`.
+
+**Fix.** The self-heal block is generalized into `_heal_svn_source <name>`
+(anchored to the recipe's own `source=()` entry — rule 18; 3 retries;
+husk wiped in `$srcdir`, `$startdir` and `$SRCDEST`) and both sources now
+carry sentinels: `tlpkg/texlive.tlpdb` and, for `texmf-dist`, exactly what
+`prepare()` consumes next (`texmf-dist/tex/latex/minted/minted.sty`,
+`texmf-dist/web2c/texmf.cnf`). A partial tree is therefore detected before
+the patch or the web2c copies can die mid-`prepare()`. The damaged SRCDEST
+husk was wiped manually so the next fetch re-checkouts with the fixed
+subversion (proof: the r78408 scratch checkout completes).
+
+**Validation.** `bash -n` green; `tests/texlive-selfheal.sh` extended (new
+texmf-husk + both-husk cases, anchored-fetch argv assertions for both
+entries) and PASS; mutation-probed twice — M1 (sentinel renamed → husk not
+detected) and M2 (rev anchoring broken) both fail the fixture; restored →
+PASS. `.SRCINFO` byte-identical (`prepare()`/functions not captured).
+`tests/run-all.sh texlive-selfheal` PASS.
+
 ## 2026-10-21 — `gsa -Sy` from a repo cwd silently refreshed nothing: the store-refresh gate compares `root == store`
 
 **Symptom.** After pushing the resume14 fixes (`278eb59`), the mandated

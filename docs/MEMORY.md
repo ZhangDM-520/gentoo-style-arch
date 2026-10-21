@@ -2212,6 +2212,25 @@ constant, not a baked path).
 
 ## 6. Pitfall digest (full details: NOTE.md sections of same dates)
 
+- **`gsa -Sy` refreshes the recipe store only when the resolved workspace
+  IS the store — a repo cwd silently refreshes nothing** (2026-10-21,
+  pushed fix invisible to the build): workspace resolution is `project`
+  override → deprecated **cwd discovery** (`config/topology.conf` found by
+  walking up) → the store. The store-refresh gate (`prepare.rs`
+  `sync_phase`) compares `root == store` and prints only "workspace is not
+  the recipe store — nothing to refresh" on a miss — easy to lose under
+  `tail`. So `cd repo && sudo gsa -Sy` after a push syncs *zero* store
+  state: the build still sees the pre-push tree (and the same shadow makes
+  `-Sy`/fetch rewrites land in the repo working tree — the fetch-side
+  `pkgver` churn pitfall). Rule: run `sudo gsa -Sy` from a neutral cwd
+  (`cd ~`), then verify the handle — `git -C ~/.local/share/gsa/recipes
+  log --oneline -1` must show the pushed commit — before any `--no-sync`
+  run. Mechanism: `crates/gsa-cli/src/lib.rs::resolve_root` +
+  `prepare.rs::sync_phase` (refresh = `fetch --depth 1 origin HEAD` +
+  `reset --hard FETCH_HEAD`; the store is engine-owned, never hand-edited,
+  so the hard reset is the sanctioned update and its uncommitted `-Sy`
+  version rewrites are re-derivable). Details: NOTE.md 2026-10-21.
+
 - **A snapshot toolchain can miscompile a scanning loop into *aligned*
   vector loads — probe the compiler before blaming the source** (2026-10-21,
   svn checkout SIGSEGV): GCC 17.0.0 20261011 (experimental) legalized

@@ -14,6 +14,9 @@ set -euo pipefail
 #   - a missing tlpkg/texlive.tlpdb wipes and re-fetches the pinned revision
 #     from the tlpkg entry of the recipe's own `source` array (never a
 #     duplicated URL/rev), into $SRCDEST/tlpkg, copied back to $srcdir;
+#   - a partial texmf-dist working copy (the 2026-10-21 SEGV-era husk: 27
+#     of 459k files) heals the same way, anchored to the texmf-dist entry,
+#     with the minted.sty / web2c/texmf.cnf sentinels restored;
 #   - a stale husk beside the PKGBUILD is cleared when it is not $SRCDEST;
 #   - a transient checkout failure retries (3 attempts) before giving up;
 #   - a complete working copy is left alone (no spurious re-fetch).
@@ -46,26 +49,37 @@ esac
 dest="${@: -1}"
 mkdir -p "$dest"
 printf 'stub texlive.tlpdb\n' >"$dest/texlive.tlpdb"
+mkdir -p "$dest/tex/latex/minted" "$dest/web2c"
+printf 'stub\n' >"$dest/tex/latex/minted/minted.sty"
+printf 'stub\n' >"$dest/web2c/texmf.cnf"
 EOF
 chmod +x "$shim/svn"
 
-# ─── The tlpkg source entry the recipe itself declares (the anchoring) ─────
+# ─── The svn source entries the recipe itself declares (the anchoring) ────
 tlpkg_entry=$(bash -c "source '$recipe/PKGBUILD'; printf '%s\n' \"\${source[@]}\"" | grep '/tlpkg#revision=') ||
     fail "the recipe declares no tlpkg svn source"
 expected_url=${tlpkg_entry%%#*}
 expected_rev=${tlpkg_entry##*#revision=}
+texmf_entry=$(bash -c "source '$recipe/PKGBUILD'; printf '%s\n' \"\${source[@]}\"" | grep '/texmf-dist#revision=') ||
+    fail "the recipe declares no texmf-dist svn source"
+texmf_url=${texmf_entry%%#*}
+texmf_rev=${texmf_entry##*#revision=}
 
 # ─── Run prepare() over one synthetic tree ────────────────────────────────
 # makepkg runs prepare() with cwd = $srcdir; SRCDEST is canonicalised to
 # $startdir when unset, so both are always defined there. prepare() cannot
 # run to completion on a synthetic tree (the real split needs texmf-dist),
 # so a run is judged on the heal's side effects and on WHERE it stopped.
-run_case() { # run_case <label> <svn-mode> <husk|healed>
+run_case() { # run_case <label> <svn-mode> <husk|healed|texmf-husk|both-husk>
     local label=$1 mode=$2 shape=$3
     local work="$tmp/$label"
     local srcdir="$work/src" startdir="$work/start" srcdest="$work/srcdest"
     mkdir -p "$srcdir/tlpkg" "$startdir" "$srcdest"
     : >"$tmp/log-$label"
+    # every shape carries a complete texmf-dist unless it is the tested husk
+    mkdir -p "$srcdir/texmf-dist/tex/latex/minted" "$srcdir/texmf-dist/web2c"
+    printf 'ok\n' >"$srcdir/texmf-dist/tex/latex/minted/minted.sty"
+    printf 'ok\n' >"$srcdir/texmf-dist/web2c/texmf.cnf"
     case $shape in
         husk)
             # the config-only husk makepkg extracts: no texlive.tlpdb
@@ -75,6 +89,17 @@ run_case() { # run_case <label> <svn-mode> <husk|healed>
             ;;
         healed)
             printf 'complete\n' >"$srcdir/tlpkg/texlive.tlpdb"
+            ;;
+        texmf-husk)
+            # a partial texmf-dist working copy (SEGV-era: 27 of 459k files)
+            printf 'complete\n' >"$srcdir/tlpkg/texlive.tlpdb"
+            rm -rf "$srcdir/texmf-dist"
+            mkdir -p "$srcdir/texmf-dist/.makepkg" "$srcdest/texmf-dist/.makepkg"
+            ;;
+        both-husk)
+            mkdir -p "$srcdir/tlpkg/.makepkg" "$srcdest/tlpkg/.makepkg"
+            rm -rf "$srcdir/texmf-dist"
+            mkdir -p "$srcdir/texmf-dist/.makepkg" "$srcdest/texmf-dist/.makepkg"
             ;;
         *) fail "unknown shape: $shape" ;;
     esac
@@ -119,7 +144,25 @@ grep -q 'self-heal failed after 3 attempts' "$tmp/out-giveup" || fail "the give-
 
 # ─── 4. complete working copy → left alone ────────────────────────────────
 run_case untouched ok healed
-[[ $(checkout_calls untouched) == 0 ]] || fail "a complete working copy must not be re-fetched"
+[[ $(checkout_calls untouched) == 0 ]] || fail "a complete working copy must not be re-fetch"
 [[ -r "$tmp/untouched/src/tlpkg/texlive.tlpdb" ]] || fail "the complete working copy was disturbed"
+[[ -r "$tmp/untouched/src/texmf-dist/tex/latex/minted/minted.sty" ]] || fail "the complete texmf-dist was disturbed"
+
+# ─── 5. texmf-dist husk → healed, anchored to the texmf-dist source ───────
+run_case texhusk ok texmf-husk
+[[ -r "$tmp/texhusk/src/texmf-dist/tex/latex/minted/minted.sty" ]] || fail "texmf-dist husk was not healed in \$srcdir"
+[[ -r "$tmp/texhusk/src/texmf-dist/web2c/texmf.cnf" ]] || fail "texmf-dist self-heal left the web2c sentinel missing"
+[[ -r "$tmp/texhusk/srcdest/texmf-dist/tex/latex/minted/minted.sty" ]] || fail "\$SRCDEST/texmf-dist was not re-fetched"
+[[ $(checkout_calls texhusk) == 1 ]] || fail "expected exactly one svn checkout, got $(checkout_calls texhusk)"
+read -r -a _svn_argv <"$tmp/log-texhusk"
+[[ ${_svn_argv[*]} == "checkout -r $texmf_rev --config-dir $tmp/texhusk/srcdest/texmf-dist/.makepkg $texmf_url $tmp/texhusk/srcdest/texmf-dist" ]] ||
+    fail "the texmf-dist re-fetch is not anchored to the declared source entry: ${_svn_argv[*]} (want $texmf_url @ r$texmf_rev)"
+grep -q 'wiping and re-fetching' "$tmp/out-texhusk" || fail "the texmf-dist heal did not announce itself"
+
+# ─── 6. both husks → both healed, two anchored fetches ────────────────────
+run_case both ok both-husk
+[[ -r "$tmp/both/src/tlpkg/texlive.tlpdb" ]] || fail "tlpkg was not healed in the both-husk case"
+[[ -r "$tmp/both/src/texmf-dist/tex/latex/minted/minted.sty" ]] || fail "texmf-dist was not healed in the both-husk case"
+[[ $(checkout_calls both) == 2 ]] || fail "expected 2 svn checkouts (tlpkg + texmf-dist), got $(checkout_calls both)"
 
 printf 'texlive selfheal fixture: PASS\n'
