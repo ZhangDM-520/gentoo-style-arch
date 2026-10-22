@@ -12,7 +12,10 @@
 # resolves the soname — symbol versions, versioned provides and pin drift
 # are not checked, they degrade features rather than kill the package.
 #
-# Install (until gsa-pm owns it):
+# Install: gsa-pm carries both files (packages/core/gsa-pm/PKGBUILD) to
+#   /usr/share/libalpm/hooks/10-gsa-abi-need-check.hook and
+#   /usr/bin/gsa-abi-need-check. Manual fallback only when gsa-pm is not
+#   installed — and never alongside it (one Action, one hook file):
 #   sudo install -Dm644 tools/abi-need-check.hook /etc/pacman.d/hooks/10-gsa-abi-need-check.hook
 #   sudo install -Dm755 tools/abi-need-check.sh /usr/bin/gsa-abi-need-check
 #
