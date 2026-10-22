@@ -1,0 +1,53 @@
+From: ZhangDM-520 <jixianqiang1540@gmail.com>
+Date: Thu, 22 Oct 2026 15:10:00 +0800
+Subject: [PATCH] libalpm: demote IgnorePkg / local-newer upgrade notices to debug
+
+This host deliberately keeps a large IgnorePkg set protecting the
+self-managed tree, and self-built packages routinely sit at higher
+versions than any repo (local (X) is newer than Y). Both conditions are
+the DESIGNED state here, so the per-package WARNING lines are pure noise
+on every sync (measured 2026-10-22: the two families dominate a paru
+run's output).
+
+Demote the three notices to ALPM_LOG_DEBUG (still retrievable via
+--debug):
+  * "%s: ignoring package upgrade (%s => %s)"
+  * "%s: ignoring package downgrade (%s => %s)"
+  * "%s: local (%s) is newer than %s (%s)"
+The REAL downgrade notice ("%s: downgrading from version %s to version
+%s") stays a warning: that one is rare and meaningful.
+
+Placed in libalpm so every consumer (pacman, paru) is muted alike.
+---
+ lib/libalpm/sync.c | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+--- a/lib/libalpm/sync.c
++++ b/lib/libalpm/sync.c
+@@ -93,7 +93,7 @@
+ 		/* check IgnorePkg/IgnoreGroup */
+ 		if(alpm_pkg_should_ignore(handle, spkg)
+ 				|| alpm_pkg_should_ignore(handle, lpkg)) {
+-			_alpm_log(handle, ALPM_LOG_WARNING, _("%s: ignoring package upgrade (%s => %s)\n"),
++			_alpm_log(handle, ALPM_LOG_DEBUG, _("%s: ignoring package upgrade (%s => %s)\n"),
+ 					lpkg->name, lpkg->version, spkg->version);
+ 		} else {
+ 			_alpm_log(handle, ALPM_LOG_DEBUG, "adding package %s-%s to the transaction targets\n",
+@@ -105,7 +105,7 @@
+ 			/* check IgnorePkg/IgnoreGroup */
+ 			if(alpm_pkg_should_ignore(handle, spkg)
+ 					|| alpm_pkg_should_ignore(handle, lpkg)) {
+-				_alpm_log(handle, ALPM_LOG_WARNING, _("%s: ignoring package downgrade (%s => %s)\n"),
++				_alpm_log(handle, ALPM_LOG_DEBUG, _("%s: ignoring package downgrade (%s => %s)\n"),
+ 						lpkg->name, lpkg->version, spkg->version);
+ 			} else {
+ 				_alpm_log(handle, ALPM_LOG_WARNING, _("%s: downgrading from version %s to version %s\n"),
+@@ -114,7 +114,7 @@
+ 			}
+ 		} else {
+ 			alpm_db_t *sdb = alpm_pkg_get_db(spkg);
+-			_alpm_log(handle, ALPM_LOG_WARNING, _("%s: local (%s) is newer than %s (%s)\n"),
++			_alpm_log(handle, ALPM_LOG_DEBUG, _("%s: local (%s) is newer than %s (%s)\n"),
+ 					lpkg->name, lpkg->version, sdb->treename, spkg->version);
+ 		}
+ 	}
