@@ -66,6 +66,19 @@
   env is unset). abi-postinstall-probe G/G2 pin both halves of rule 25(b).
 - Topology: core added to gdal, xerces-c, jsoncpp-git, libharu (hub rule).
 
+## ABI wave re-bless RUNNING (2026-10-23 00:30, run 1792687167-2428489)
+- The deferred 35-pkg queue is being rebuilt: `sudo gsa -S --leaf --no-sync
+  --skip-built vtk opencv` (tree workspace), DETACHED. First results:
+  frei0r-plugins 0 207 ok; vtk + mlt lanes in flight; GUI closure
+  prefetching (0ad, audacity, gstreamer, libreoffice-fresh, ...).
+- Build root REDIRECTED: the f2fs build drive is gone (reboot + unplug);
+  GSA_BUILD_DIR=/home/zhangdm/.cache/gsa + TMPDIR=/home/zhangdm/.gsa-tmp
+  (both verified in lane process envs). 769G free on home.
+- Monitor: `ls /var/lib/gsa/runs/1792687167-2428489/*.result` + `pgrep -a
+  gsa`; the run record (full order) is written at run end.
+- When the drive returns: remount + f2fs fsck + `sudo gsa -Md --fix`
+  (binpkg index rows still point at the old drive paths).
+
 ## Still deferred (owner)
 - 35-pkg ABI wave re-bless queue; poppler 26.10 landing path.
 

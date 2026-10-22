@@ -16405,3 +16405,34 @@ and §6, and the commit/version identifiers of each fix are kept inline.
   and build scratch goes OUTSIDE the repository and outside /tmp — the engine
   refuses repo-local TMPDIR for good reason, and a "non-mutating" fixture is
   only non-mutating relative to its own workspace assumptions.
+
+### 2026-10-23 00:30 — deferred ABI wave re-bless launched (run 1792687167-2428489)
+- OWNER ASK: run the deferred rebuild = the 35-pkg ABI wave re-bless queue
+  (vtk/opencv token move).
+- HOST SHIFT since yesterday: the machine rebooted and the build scratch
+  drive (/dev/sda, f2fs) is GONE — not even the mountpoint remains. The
+  engine's configured build_dir pointed at it, so the run redirects via
+  the §J.2 override chain: `GSA_BUILD_DIR=/home/zhangdm/.cache/gsa`
+  (env > config build_dir; 769G free) and `TMPDIR=/home/zhangdm/.gsa-tmp`
+  (home-backed compiler scratch — the 16G tmpfs LTO landmine would
+  resurface otherwise). Both verified in the engine AND lane process
+  environments (/proc/<pid>/environ).
+- COMMAND (the deferred wave shape): `sudo gsa -S --leaf --no-sync
+  --skip-built vtk opencv` from the tree workspace (cwd-upward universe,
+  §B.8 — a run from ~ resolves the STORE universe instead and cannot even
+  see vtk; measured earlier tonight). --skip-built claims what it can from
+  the binpkg index; the index's vtk/opencv archive rows point at the dead
+  drive so those claims fall back (vtk itself is in the lane set).
+- LAUNCHED DETACHED (the terminal-death pitfall, NOTE 2026-10-22 09:10).
+  Run id 1792687167-2428489; lanes dispatched from the first minute:
+  vtk, frei0r-plugins, mlt (the opencv subscription-in set) and a fetch
+  wave over the GUI closure (0ad, audacity, gstreamer, libreoffice-fresh
+  seen prefetching). Durable progress signal: /var/lib/gsa/runs/
+  1792687167-2428489/<name>.result (+ .fetch.result), and pgrep -a gsa.
+- Queue enumeration note: the authoritative order lives in the run record
+  (written at run end) — history.jsonl keeps only `{"op":"run"}` stubs and
+  the old wave run's record dir was retention-pruned, so the queue was
+  re-derived live by the engine rather than replayed from records.
+- A concurrent owner recipe-adding job (makepkg in the store universe)
+  was given right of way first (one writer per mutable state; the
+  no-two-heavy-builds rule).
