@@ -2224,6 +2224,25 @@ constant, not a baked path); and the xorg-xwayland-git PGO end-to-end proof
 
 ## 6. Pitfall digest (full details: NOTE.md sections of same dates):
 
+- **A cache glob `name-*.pkg.tar.*` matches detached `.sig` files AND
+  prefix-twin package names — both bit in one transaction** (2026-10-22,
+  the .sig false alarm + the linux-cachyos-headers cross-resolution): a
+  `.sig` won the newest-wins race and its extraction failure aborted a
+  50-package upgrade; and name `linux-cachyos` globbed
+  `linux-cachyos-headers-*`, leaving the kernel unscanned. Fix pattern:
+  whitelist real archive extensions (zst/xz/gz/bz2/lrz/lzo/Z) and
+  reconstruct the EXACT name from `<pkgname>-<pkgver>-<pkgrel>-<arch>`
+  (makepkg forbids hyphens in the last three fields, so the right-split is
+  deterministic). Also: never let a check-transport failure be fatal —
+  pacman's integrity checks already ran; blocking on an unextractable
+  file IS the false alarm. Details: NOTE.md 2026-10-22.
+- **`mountpoint -q` passes on a stale mount of an OFFLINE device — probe
+  writes instead** (2026-10-22, f2fs device-offline): the build scratch
+  drive died but its mount lingered; `mkdir` returned EIO while reads
+  served from page cache. A conf guarded by `mountpoint` exported a dead
+  TMPDIR and makepkg's `source_safe` aborted every build on the failed
+  `mkdir`. Guard with the actual operation (`mkdir -p … 2>/dev/null`) and
+  fall through. Details: NOTE.md 2026-10-22.
 - **Trimming one package's copy of a DUAL-OWNED file deletes the shared file
   for every owner — the remaining owner is left with a missing file**
   (2026-10-22, ghostty terminfo bite, predicted and then measured): ghostty

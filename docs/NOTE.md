@@ -16228,3 +16228,56 @@ and §6, and the commit/version identifiers of each fix are kept inline.
   qt6-webengine and qt6-quicktimeline KEPT (removal cost > harm — same
   principle applied to quicktimeline on my initiative, owner not objecting);
   haskell cluster + wpewebkit + python-pyqt6 + qcoro + throne-bin removed.
+
+### 2026-10-22 13:00–14:30 — the .sig false alarm, exact name resolution, and the gate optimisation wave
+- OWNER REPORT: the gate aborted `paru -Syu` (50 packages, 433.8 MiB) with
+  `cannot extract …linux-cachyos-…pkg.tar.zst.sig` — a detached signature
+  shared the `name-*.pkg.tar.*` glob, won newest-wins (a minute newer than
+  its archive), and its extraction failure was fatal. Ask: make it robust,
+  ship with gsa install; optimisation wanted before implementing.
+- REPLAY found a second bug in the same path: the `name-*` glob prefix-
+  collides — name `linux-cachyos` resolved `linux-cachyos-headers-*`
+  (newest-wins) and the kernel went unscanned.
+- FIXED (selection): real-archive extension whitelist (zst/xz/gz/bz2/lrz/
+  lzo/Z — `.sig` never a candidate) + EXACT name reconstruction
+  (<pkgname>-<pkgver>-<pkgrel>-<arch>, hyphens forbidden in the last three
+  fields per makepkg lint, right-split is deterministic).
+- FIXED (policy): unextractable input = warn + SKIP (pacman's keyring +
+  integrity checks already passed it; blocking on a check we could not
+  perform is the false alarm). Explicit mode with nothing scannable stays
+  exit 2.
+- OPTIMISATION (owner picked 4 of 7 brainstormed): kernel-class whitelist
+  (kernel flavours + firmware skipped; -headers/-src/-dkms carve-outs stay
+  scannable — 22 runtime links measured in linux-cachyos-headers), BATCHED
+  readelf (chunked multi-file `readelf -hW -dW`, `File:` markers; single-
+  file output has NO marker — measured), phase merge (one fact acquisition
+  + one resolution pass, pure-bash record parsing), fact cache keyed by
+  archive sha256 (FACTS only; verdicts depend on host state and are never
+  cached; archive still extracts every run — the oracle includes the
+  payload tree for $ORIGIN).
+- MEASURED (159 MB linux-cachyos archive): extract 0.07 s, per-file
+  readelf 21.9 s/pass vs batched 0.056 s; full scan 207 s -> 0.65 s
+  (0.39 s warm cache), whitelist path 0.003 s. Real 50-package
+  transaction: whole gate 10 s (14:28:14 -> 14:28:24, pacman.log).
+- FIXTURE grows cases 7–11 (.sig sibling, fail-open, newest-wins with
+  stale broken twin, cached fatal stays fatal, prefix-twin non-resolution,
+  kernel-class skip + carve-out, fact-cache poison proof, per-file
+  attribution). Mutation-probed red-first; the attribution case exists
+  because its first draft SURVIVED the marker mutation (verdicts melded
+  across files still looked plausible) — falsify new checks before
+  trusting them.
+- SHIPPED via gsa-pm as asked: fix commit 7f52bde, gsa-pm re-pin 56aa0b0
+  (_commit=7f52bde…, 0.1.0+r418), rebuilt with plain makepkg, installed
+  (the gate fired on its own transaction). E2E: `paru -Syu` repo phase
+  passed — linux-cachyos 7.3.0-2 installed, zero findings, zero false
+  alarms.
+- HOST FINDING (needs owner attention): the build scratch drive /dev/sda
+  (f2fs, /run/media/zhangdm/5cbd0046-…) went DEVICE-OFFLINE mid-session
+  (dmesg: "Stopped filesystem due to reason: 0", "device offline error",
+  Synchronize Cache failed). Stale mount: reads serve from page cache,
+  writes return EIO. Fallout measured: makepkg hard-fails ("Failed to
+  source ~/.makepkg.conf" — source_safe aborts on the failed mkdir),
+  which also killed the AUR phase of paru (piglit-git source fetch).
+  ~/.makepkg.conf guard fixed to a WRITE PROBE (backup
+  ~/.makepkg.conf.bak-20261022); TMPDIR now falls back to tmpfs instead of
+  exporting a dead path. The drive itself needs re-plug/remount + an fsck.
