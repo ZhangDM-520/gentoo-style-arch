@@ -1,5 +1,10 @@
 [workspace]
 resolver = "2"
+# Recipe build trees land under packages/<tier>/<name>/src/… when a recipe
+# is built in place (makepkg in the recipe dir); cargo's workspace walk-up
+# would otherwise claim them ("current package believes it's in a workspace
+# when it's not"). packages/ is never engine workspace material.
+exclude = ["packages"]
 members = [
     "crates/gsa-model",
     "crates/gsa-topo",

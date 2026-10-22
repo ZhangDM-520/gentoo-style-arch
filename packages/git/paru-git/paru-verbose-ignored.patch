@@ -1,0 +1,65 @@
+diff --git a/src/upgrade.rs b/src/upgrade.rs
+index fcd1719..98edd1c 100644
+--- a/src/upgrade.rs
++++ b/src/upgrade.rs
+@@ -187,30 +187,37 @@ pub async fn get_upgrades<'a, 'b>(
+     let (upgrades, devel_upgrades) = net_upgrades(config, resolver, true).await?;
+     let (syncdbs, aurdbs) = repo::repo_aur_dbs(config);
+ 
+-    for pkg in upgrades.aur_ignored {
+-        eprintln!(
+-            "{} {}",
+-            config.color.warning.paint(tr!("warning:")),
+-            tr!(
+-                "{pkg}: ignoring package upgrade ({old} => {new})",
+-                pkg = pkg.local.name(),
+-                old = pkg.local.version(),
+-                new = pkg.remote.version
+-            )
+-        );
+-    }
++    // Upstream prints these unconditionally, but IgnorePkg is a DELIBERATE
++    // state on this host (a large protective set over the self-managed
++    // tree), so per-package warnings are pure noise on every run. Show
++    // them only with -v/--verbose — same demote-not-delete call as the
++    // libalpm patch in our pacman (2026-10-22).
++    if config.verbose {
++        for pkg in upgrades.aur_ignored {
++            eprintln!(
++                "{} {}",
++                config.color.warning.paint(tr!("warning:")),
++                tr!(
++                    "{pkg}: ignoring package upgrade ({old} => {new})",
++                    pkg = pkg.local.name(),
++                    old = pkg.local.version(),
++                    new = pkg.remote.version
++                )
++            );
++        }
+ 
+-    for pkg in upgrades.pkgbuild_ignored {
+-        eprintln!(
+-            "{} {}",
+-            config.color.warning.paint(tr!("warning:")),
+-            tr!(
+-                "{pkg}: ignoring package upgrade ({old} => {new})",
+-                pkg = pkg.local.name(),
+-                old = pkg.local.version(),
+-                new = pkg.remote_srcinfo.version(),
+-            )
+-        );
++        for pkg in upgrades.pkgbuild_ignored {
++            eprintln!(
++                "{} {}",
++                config.color.warning.paint(tr!("warning:")),
++                tr!(
++                    "{pkg}: ignoring package upgrade ({old} => {new})",
++                    pkg = pkg.local.name(),
++                    old = pkg.local.version(),
++                    new = pkg.remote_srcinfo.version(),
++                )
++            );
++        }
+     }
+ 
+     let mut aur_upgrades = upgrades.aur_updates;

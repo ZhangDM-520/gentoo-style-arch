@@ -1,0 +1,88 @@
+# Maintainer: ZhangDM-520 <jixianqiang1540@gmail.com>
+# Contributor: Morgan <morganamilo@gmail.com> (upstream paru-git recipe)
+
+pkgname=paru-git
+_pkgname=paru
+pkgver=2.1.0.r68.g7830fac
+pkgrel=1
+pkgdesc='Feature packed AUR helper (git version; house-muted IgnorePkg notices)'
+arch=(x86_64)
+url='https://github.com/morganamilo/paru'
+license=(GPL-3.0-or-later)
+depends=(git pacman 'libalpm.so')
+# rust: rustc + cargo; git: the VCS source
+makedepends=(cargo git)
+optdepends=('bat: colored pkgbuild printing'
+            'devtools: build in chroot and downloading pkgbuilds')
+provides=("${_pkgname}=${pkgver}")
+conflicts=("${_pkgname}")
+backup=(etc/paru.conf)
+# !debug: the release profile carries no debug info (house style).
+options=(!debug)
+source=("${_pkgname}::git+https://github.com/morganamilo/paru"
+        'paru-verbose-ignored.patch')
+b2sums=('SKIP'
+        '1a16bef5f624b50723c465d24a495e57f3da89ed99108ab5812a6d031fc001879aa12959ddaecc413631c156b33f3017e7d2087b08930894e7591ced01a7519c')
+
+pkgver() {
+  cd "${_pkgname}"
+  git describe --long --tags | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g'
+}
+
+prepare() {
+  cd "${_pkgname}"
+
+  # Demote the per-package "ignoring package upgrade" notices to verbose
+  # only (house patch, 2026-10-22): this host's protective IgnorePkg set is
+  # a designed state, and the upstream flood hid real output on every run.
+  # Same demote-not-delete call as 0002-libalpm-quiet-… in packages/stable/
+  # pacman — retrievable with `paru -v`. Patch drift on upstream movement is
+  # a rebase wall, not a reason to pin (house VCS convention).
+  patch -Np1 -i ../paru-verbose-ignored.patch
+
+  # Upstream's lock refresh: alpm crate must track the system libalpm ABI
+  # (paru links libalpm directly).
+  cargo update alpm alpm-utils
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's|host: ||p')"
+}
+
+build() {
+  cd "${_pkgname}"
+
+  local _features=''
+  if pacman -T pacman-git > /dev/null; then
+    _features+="git,"
+  fi
+  if [[ $(rustc -V) == *"nightly"* ]]; then
+    _features+="backtrace,"
+  fi
+
+  # House style (mold-git): mold is probed, never a makedepend.
+  local _rustflags="${RUSTFLAGS:-}"
+  command -v mold >/dev/null 2>&1 && _rustflags+=" -C link-arg=-fuse-ld=mold"
+
+  if [[ $CARCH != x86_64 ]]; then
+    export CARGO_PROFILE_RELEASE_LTO=off
+  fi
+
+  RUSTFLAGS="${_rustflags}" PARU_VERSION=$pkgver \
+    cargo build --frozen --features "${_features:-}" --release --target-dir target
+  ./scripts/mkmo locale/
+}
+
+package() {
+  cd "${_pkgname}"
+
+  install -Dm755 target/release/paru "${pkgdir}/usr/bin/paru"
+  install -Dm644 paru.conf "${pkgdir}/etc/paru.conf"
+
+  install -Dm644 man/paru.8 "${pkgdir}/usr/share/man/man8/paru.8"
+  install -Dm644 man/paru.conf.5 "${pkgdir}/usr/share/man/man5/paru.conf.5"
+
+  install -Dm644 completions/bash "${pkgdir}/usr/share/bash-completion/completions/paru.bash"
+  install -Dm644 completions/fish "${pkgdir}/usr/share/fish/vendor_completions.d/paru.fish"
+  install -Dm644 completions/zsh "${pkgdir}/usr/share/zsh/site-functions/_paru"
+
+  install -d "${pkgdir}/usr/share/"
+  cp -r locale "${pkgdir}/usr/share/"
+}
