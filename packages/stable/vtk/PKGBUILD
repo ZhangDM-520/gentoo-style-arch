@@ -356,6 +356,14 @@ b2sums=('f9885d14329b7d64c0d95179338609d701e205b209b89b344df9342101a005ed09b2ae2
         'd5bca943fd2e5cfb66c0e00fd90f00efe42f2b4d0474d0eb8c8edf741ba83f7af57a1c94eca5ab3615816d5bb7f039a40acdaac2e920d8a5265cfc3f47142617')
 
 prepare() {
+  # Self-heal: makepkg's extraction restores the tarball's files but leaves
+  # behind files a previous build's patches CREATED (measured 2026-10-22:
+  # `Documentation/release/dev/anari-light-extensions.md` from the 03:14
+  # build walled the 07:48 rebuild with "would create … which already
+  # exists"). Patches must always meet a PRISTINE tree (--fuzz=0), so wipe
+  # the source root and re-extract before anything else runs.
+  rm -rf "${pkgname^^}-${pkgver}"
+  bsdtar -xf "$srcdir/VTK-${pkgver}.tar.gz" -C "$srcdir"
   cd ${pkgname^^}-${pkgver}
   # Point VTK's remote modules at the prefetched clones.
   # NOTE: the directory names must match the first argument of each

@@ -3,7 +3,7 @@
 
 pkgname=tk
 pkgver=9.0.1
-pkgrel=2
+pkgrel=2.1
 pkgdesc='A windowing toolkit for use with tcl'
 arch=(x86_64)
 url="http://tcl.sourceforge.net/"
@@ -16,8 +16,10 @@ depends=(tcl
          libcups.so)
 makedepends=(zip)
 options=(staticlibs)
-# house: bare soname provide for the shipped shared library (libtk9.0.so)
-provides=(libtk9.0.so)
+# house: bare soname provides for the shipped shared library and its link
+# aliases — upstream installs only `libtcl9tk9.0.so` (no DT_SONAME, measured)
+# and consumers reference the link names by filename
+provides=(libtk.so libtk9.0.so)
 _archive="$pkgname$pkgver"
 source=("https://downloads.sourceforge.net/sourceforge/tcl/$_archive-src.tar.gz"
         "tk-strchr-const.patch")
@@ -55,7 +57,10 @@ package() {
 	cd "$_archive/unix"
 	make INSTALL_ROOT="$pkgdir" install install-private-headers
 	ln -sf wish${pkgver%.*} "$pkgdir/usr/bin/wish"
-	ln -sf libtk${pkgver%.*}.so "$pkgdir/usr/lib/libtk.so"
+	# both link names resolve to the one shipped DSO (libtcl9tk9.0.so); a
+	# symlink to a name upstream never installs dangles (rule 25(b) file truth)
+	ln -sf libtcl9tk${pkgver%.*}.so "$pkgdir/usr/lib/libtk.so"
+	ln -sf libtcl9tk${pkgver%.*}.so "$pkgdir/usr/lib/libtk${pkgver%.*}.so"
 	install -Dm0644 -t "$pkgdir/usr/share/licenses/$pkgname/" license.terms
 
 	# trim: man pages (docs) and the tk demos (demos) — none are part of the

@@ -68,12 +68,14 @@ provides=(
     'libva-mesa-driver'
     'mesa-libgl'
     'mesa'
+    "opencl-mesa=${pkgver}"
     'vulkan-mesa-device-select'
     'vulkan-mesa-implicit-layers'
 )
 conflicts=(
     'vulkan-mesa-layers'
     'opencl-clover-mesa'
+    'opencl-mesa'
     'vulkan-intel'
     'vulkan-nouveau'
     'vulkan-radeon'

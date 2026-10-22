@@ -1,7 +1,7 @@
 pkgbase = opencv
 	pkgdesc = Open Source Computer Vision Library
 	pkgver = 5.0.0
-	pkgrel = 13.2
+	pkgrel = 13.3
 	url = https://opencv.org/
 	arch = x86_64
 	license = Apache-2.0
@@ -100,6 +100,7 @@ pkgbase = opencv
 	provides = libopencv_reg.so
 	provides = libopencv_rgbd.so
 	provides = libopencv_saliency.so
+	provides = libopencv_sfm.so
 	provides = libopencv_shape.so
 	provides = libopencv_signal.so
 	provides = libopencv_stereo.so
@@ -141,6 +142,6 @@ pkgname = python-opencv
 	depends = glibc
 	depends = libgcc
 	depends = libstdc++
-	depends = opencv=5.0.0-13.2
+	depends = opencv=5.0.0-13.3
 	depends = python
 	depends = python-numpy

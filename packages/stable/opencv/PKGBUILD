@@ -22,7 +22,8 @@ provides=(libopencv_alphamat.so libopencv_bgsegm.so libopencv_bioinspired.so
           libopencv_phase_unwrapping.so libopencv_photo.so libopencv_plot.so
           libopencv_ptcloud.so libopencv_quality.so libopencv_rapid.so
           libopencv_reg.so libopencv_rgbd.so libopencv_saliency.so
-          libopencv_shape.so libopencv_signal.so libopencv_stereo.so
+          libopencv_sfm.so libopencv_shape.so libopencv_signal.so
+          libopencv_stereo.so
           libopencv_stitching.so libopencv_structured_light.so
           libopencv_superres.so libopencv_surface_matching.so libopencv_text.so
           libopencv_tracking.so libopencv_videoio.so libopencv_video.so
@@ -30,10 +31,13 @@ provides=(libopencv_alphamat.so libopencv_bgsegm.so libopencv_bioinspired.so
           libopencv_xfeatures2d.so libopencv_ximgproc.so libopencv_xobjdetect.so
           libopencv_xphoto.so libopencv_xstereo.so)
 pkgver=5.0.0
+# 13.3: libopencv_sfm.so joins provides — the sfm module ships its soname
+# (measured 2026-10-22 by tools/provides-audit.sh: "soname 'libopencv_sfm.so.500'
+# is not declared in provides") and the bare stem is the house provides shape.
 # 13.2: the python-opencv split output returns — 13.1 is the broken
 # CachyOS string already installed on the host, and the same-version skip
 # would silently leave it in place (pandoc-cli precedent)
-pkgrel=13.2
+pkgrel=13.3
 pkgdesc='Open Source Computer Vision Library'
 arch=(x86_64)
 license=(Apache-2.0)

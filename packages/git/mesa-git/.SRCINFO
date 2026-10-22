@@ -60,10 +60,12 @@ pkgbase = mesa-git
 	provides = libva-mesa-driver
 	provides = mesa-libgl
 	provides = mesa
+	provides = opencl-mesa=26.3.0_devel.230728.8fc4981d2d2.2f181b7
 	provides = vulkan-mesa-device-select
 	provides = vulkan-mesa-implicit-layers
 	conflicts = vulkan-mesa-layers
 	conflicts = opencl-clover-mesa
+	conflicts = opencl-mesa
 	conflicts = vulkan-intel
 	conflicts = vulkan-nouveau
 	conflicts = vulkan-radeon

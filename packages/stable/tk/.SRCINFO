@@ -1,7 +1,7 @@
 pkgbase = tk
 	pkgdesc = A windowing toolkit for use with tcl
 	pkgver = 9.0.1
-	pkgrel = 2
+	pkgrel = 2.1
 	url = http://tcl.sourceforge.net/
 	arch = x86_64
 	license = TCL
@@ -11,6 +11,7 @@ pkgbase = tk
 	depends = libxft
 	depends = libcups
 	depends = libcups.so
+	provides = libtk.so
 	provides = libtk9.0.so
 	options = staticlibs
 	source = https://downloads.sourceforge.net/sourceforge/tcl/tk9.0.1-src.tar.gz
