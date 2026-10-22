@@ -1,0 +1,60 @@
+# Maintainer: ZhangDM-520 <jixianqiang1540@gmail.com>
+# Packager note: clean-room MIT rewrite of the ananicy auto-nice role (eBPF
+# exec events; ananicy-compatible JSONL rules), so the replaced daemon's
+# /etc/ananicy.d rule data keeps working unchanged. provides stays EMPTY on
+# purpose — the daemon name and unit are aranicy's own; conflicts=(ananicy-cpp)
+# because both own the auto-nice role and /etc/ananicy.d.
+
+pkgname=aranicy
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Auto-nice daemon in Rust (eBPF exec events, ananicy-compatible rules)"
+arch=('x86_64')
+url="https://github.com/ZhangDM-520/aranicy"
+license=('MIT')
+depends=('glibc' 'gcc-libs' 'libelf' 'zlib')
+# rust: rustc + cargo; clang/llvm: the eBPF/libbpf build
+makedepends=('cargo' 'clang' 'llvm')
+conflicts=('ananicy-cpp')
+backup=('etc/ananicy.d/ananicy.conf')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
+sha256sums=('89e9dfad141c9159a5493ddec5b1d217dba6cb2e4f351e76f2d4c1663b253ebc')
+
+prepare() {
+    cd "$pkgname-$pkgver"
+
+    # Upstream lock refresh path: cargo fetch --locked pins the committed
+    # Cargo.lock; --frozen on the build below then refuses any drift.
+    cargo fetch --locked --target "$(rustc -vV | sed -n 's|host: ||p')"
+}
+
+build() {
+    cd "$pkgname-$pkgver"
+
+    # optimize standards: LTO for the Rust build (target-cpu comes from
+    # makepkg.conf rust.conf RUSTFLAGS)
+    export CARGO_PROFILE_RELEASE_LTO=true
+    export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
+
+    # House style (mold-git): mold is probed, never a makedepend.
+    local _rustflags="${RUSTFLAGS:-}"
+    command -v mold >/dev/null 2>&1 && _rustflags+=" -C link-arg=-fuse-ld=mold"
+
+    RUSTFLAGS="${_rustflags}" cargo build --frozen --release \
+        -j "${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package() {
+    cd "$pkgname-$pkgver"
+
+    install -Dm755 target/release/aranicy "$pkgdir/usr/bin/aranicy"
+    install -Dm644 contrib/ananicy.service \
+        "$pkgdir/usr/lib/systemd/system/aranicy.service"
+    install -Dm644 contrib/ananicy.conf \
+        "$pkgdir/etc/ananicy.d/ananicy.conf"
+
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}
+
+# vim:set sw=2 sts=2 et:

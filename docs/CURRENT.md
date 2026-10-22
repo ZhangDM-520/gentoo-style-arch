@@ -1,4 +1,19 @@
-# Current state — 2026-10-22 15:00 (live snapshot; overwrite, do not append)
+# Current state — 2026-10-23 00:50 (live snapshot; overwrite, do not append)
+
+## aranicy: packaged in the tree; live cutover is OWNER work (2026-10-23)
+- `packages/stable/aranicy` v0.1.0 (clean-room MIT rewrite of ananicy-cpp;
+  eBPF exec events, ananicy-compatible JSONL rules) + its single topology
+  record (`stable` group; edges `gcc-snapshot,glibc-git,llvm-git,rust-git,
+  zlib-ng-compat-git`) committed and pushed. Gate (owner's): 2.28%/4.10% of
+  one core at 2000 execs/s vs ananicy-cpp 13.7%/16.2%; owner chose rewrite +
+  push-all.
+- Proven: leaf `makepkg -s --noconfirm` → aranicy 0.1.0-1 (payload = binary,
+  `aranicy.service`, `/etc/ananicy.d/ananicy.conf`, license, README; NEEDED =
+  libelf/libz/libgcc_s/libc). Recipe tarball sha256 pinned (no SKIP).
+- NOT done here (owner's cutover): install aranicy and drop extra/ananicy-cpp
+  1.2.0 — the package `conflicts=(ananicy-cpp)` with NO provide, the unit
+  carries `Conflicts=ananicy-cpp.service`, and `cachyos-ananicy-rules` +
+  `/etc/ananicy.d` stay installed (rules compatible; do not touch).
 
 ## ⚠ Host action needed: build scratch drive is DEVICE-OFFLINE
 - `/dev/sda` (f2fs, /run/media/zhangdm/5cbd0046-e1d6-4737-a58b-ab040735ad9a)
@@ -55,5 +70,7 @@
 - 35-pkg ABI wave re-bless queue; poppler 26.10 landing path.
 
 ## Next action
-Owner: recover the offline drive (re-plug/remount, f2fs fsck, SMART).
+Owner: (1) aranicy cutover — install the built 0.1.0-1, retire
+ananicy-cpp; (2) recover the offline drive (re-plug/remount, f2fs fsck,
+SMART).
 Nothing else pending.

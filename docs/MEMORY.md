@@ -1760,6 +1760,13 @@ install history lives in `NOTE.md`.
   version-sync-anchored (golden rule 18). Drop-condition is recorded in the
   patch comment: remove the block once the upstream fix lands in a snapshot
   we build.
+- **Auto-nice daemon**: `packages/stable/aranicy` (clean-room MIT rewrite of
+  `ananicy-cpp`; eBPF exec events, ananicy-compatible JSONL rules) holds the
+  role and `/etc/ananicy.d`. Owner fact: it provides NO name — the record
+  carries `conflicts=(ananicy-cpp)` only, because both daemons own the
+  auto-nice role and the rule dir; the installed `cachyos-ananicy-rules` data
+  stays and stays compatible. Live swap state and cutover: `docs/CURRENT.md`;
+  gate numbers and the owner's rewrite decision: `docs/NOTE.md` 2026-10-22.
 
 ## 4. Optimization playbook
 
@@ -2224,6 +2231,15 @@ constant, not a baked path); and the xorg-xwayland-git PGO end-to-end proof
 
 ## 6. Pitfall digest (full details: NOTE.md sections of same dates):
 
+- **Fixture/build scratch inside the repository is doubly corrupting: cwd
+  discovery finds the real topology, and a sync fixture then rewrites REAL
+  recipes** (2026-10-23, battery run with `TMPDIR=$PWD/.battery-tmp`): the
+  loader-negative tests broke (the repo's `config/topology.conf` answered
+  instead of "absent") and `gsa -Sy`-driving fixtures version-synced the
+  published tree (bind/iproute2/libreoffice-fresh/wine sums rewritten; the
+  engine's own "TMPDIR must be outside the repository" guard refused the
+  rest). Revert collateral with `git restore`; keep scratch outside both the
+  tree and /tmp. Details: NOTE.md 2026-10-23.
 - **A cache glob `name-*.pkg.tar.*` matches detached `.sig` files AND
   prefix-twin package names — both bit in one transaction** (2026-10-22,
   the .sig false alarm + the linux-cachyos-headers cross-resolution): a

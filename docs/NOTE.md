@@ -16348,3 +16348,60 @@ and §6, and the commit/version identifiers of each fix are kept inline.
   recipe-contract PASS, rust-recipe ok, ignorepkg-register PASS;
   recipe-sources needs the commit (its contract: local sources must be
   committed).
+
+## 2026-10-23 — aranicy: the auto-nice rewrite lands in the tree (recipe + topology + docs)
+
+- **OWNER ASK (gate + decision)**: the clean-room rewrite's gate pair at 2000
+  execs/s — aranicy 2.28%/4.10% of one core vs ananicy-cpp 13.7%/16.2%.
+  Owner chose the rewrite + push-all: aranicy replaces extra/ananicy-cpp as
+  the auto-nice daemon, and this tree change is committed and pushed.
+- **WHAT**: `packages/stable/aranicy` (v0.1.0, clean-room MIT; eBPF exec
+  events, ananicy-compatible JSONL rules), adapted from upstream
+  `contrib/PKGBUILD` to house Rust style (mold probe, GSA_BUILD_JOBS budget,
+  `cargo fetch --locked` → `cargo build --frozen --release`,
+  `CARGO_PROFILE_RELEASE_LTO=true` + codegen-units=1 per asusctl). Pinned
+  tarball sha256 (no SKIP): 89e9dfad141c9159a5493ddec5b1d217dba6cb2e4f351e76f2d4c1663b253ebc.
+  Committed `.SRCINFO` + the REUSE trio (LICENSE/LICENSES/REUSE.toml) like the
+  ananicy-cpp predecessor. Exactly ONE topology record:
+  `aranicy|packages/stable/aranicy|stable|gcc-snapshot,glibc-git,llvm-git,rust-git,zlib-ng-compat-git`.
+- **WHY**: same auto-nice role and `/etc/ananicy.d` as ananicy-cpp, so
+  `conflicts=(ananicy-cpp)` and NO name provide (owner fact: provides nothing
+  — the daemon name and unit are aranicy's own; the unit carries
+  `Conflicts=ananicy-cpp.service`). `cachyos-ananicy-rules` has no deps and its
+  rule data stays installed and compatible. Category/group: released-version
+  tracking → `packages/stable` + group `stable` (maintainer-guide "Adding a
+  recipe": physical category that best describes it; groups carry tracking
+  style), beside its predecessor. Edges map depends+makedepends onto tree
+  members; the `rust-git` edge is mandatory (rule 21(e), the `toolchain-edge`
+  lint). `libelf` stays un-edged like 18/22 libelf-consumer records incl.
+  ananicy-cpp and scx-scheds-git (`pacman -T` clean → rule 52's unmet-dep
+  inversion does not trigger).
+- **VALIDATED**: `bash -n` OK; `makepkg --printsrcinfo` → committed .SRCINFO;
+  `gsa -Ma` — zero aranicy rows (the 1 `toolchain-edge` finding is pre-existing
+  dbus-broker-git; the 682 `package-drift` rows are the vendored gsa-pm tree);
+  `gsa -Sl` lists `286. aranicy`; `gsa -S --dry-run aranicy` → `aranicy
+  build-install ok`, rc 0. `@git/@stable/@core` dry-runs refuse rc 3 on the
+  documented `libspeechd refuse abi-consumer-uncovered` rows — stash-causation
+  proven pre-existing (identical rc 3 + rows with the record removed; = the
+  deferred 35-pkg ABI wave re-bless queue). Leaf build `makepkg -s --noconfirm`
+  → aranicy 0.1.0-1 in 40.8 s; payload = the five declared files; direct NEEDED
+  = libelf/libz/libgcc_s/libc exactly matching depends (libbpf static as
+  advertised); one cosmetic `reference to $srcdir` warning (Rust panic-path
+  strings; gsa-pm/mold-git carry the `--remap-path-prefix` precedent if it is
+  ever wanted). Fixture battery: 69/75 green first pass.
+- **WALL — fixture scratch inside the repository corrupts both ways** (my
+  wall, same night): I ran the battery with `TMPDIR=$PWD/.battery-tmp` to keep
+  scratch out of /tmp — and cwd discovery then walked up to the REAL
+  `config/topology.conf`, so the "workspace without topology" loader test
+  failed AND the sync fixtures ran a REAL `gsa -Sy` version-sync against the
+  published tree: bind 9.20.29→9.20.30, iproute2, libreoffice-fresh and wine
+  checksums were rewritten before the engine's own
+  "TMPDIR must be outside the repository; the version sync cannot be made
+  rollback-safe" guard refused the rest. All four reverted with `git restore`
+  (uncommitted fixture collateral, re-derivable per the -Sy contract). Re-run
+  of the 5 engine fixtures with TMPDIR outside both the tree and /tmp: 5/5
+  green. `recipe-sources` stays red until the commit (its contract: every
+  PKGBUILD must be committed) and is re-verified after. Durable rule: fixture
+  and build scratch goes OUTSIDE the repository and outside /tmp — the engine
+  refuses repo-local TMPDIR for good reason, and a "non-mutating" fixture is
+  only non-mutating relative to its own workspace assumptions.
