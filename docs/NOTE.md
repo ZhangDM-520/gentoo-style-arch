@@ -16303,3 +16303,48 @@ and §6, and the commit/version identifiers of each fix are kept inline.
 - INSTALLED 7.1.0.r9.g54d9411-6 (gate fired, documented local -U skip).
   Raw rollback set: /root/pacman-rollback-20261022/ (pacman +
   libalpm.so*) — restore with `sudo cp -p … /usr/bin /usr/lib`.
+
+### 2026-10-22 15:20–16:10 — paru: devel-flood mute + gsa-tree import; probe-root seam; hub-rule backfill
+- OWNER ASK (2nd wave): paru's own devel-check flood (`{pkg}: ignoring
+  package upgrade` is paru's Rust format string in src/upgrade.rs, NOT
+  libalpm) still noisy, and paru should live IN THE GSA TREE.
+- PARU MUTE: `paru-verbose-ignored.patch` wraps both `aur_ignored`/
+  `pkgbuild_ignored` loops in `if config.verbose` — demote-not-delete,
+  same call as the libalpm patch; retrievable with `paru -v`. Measured on
+  the planning path: installed paru 34 warnings, patched 0, `paru -v` 34.
+- TREE IMPORT: `packages/git/paru-git` (house style: mold probe, b2sums,
+  pkgver from git describe; floating master per VCS convention — the patch
+  authored against 7830fac, drift is a rebase wall), topology row
+  `paru-git|…|app|git-git,pacman,rust-git`. Built 2.1.0.r68.g7830fac-1,
+  installed via `sudo gsa -U` (engine gates), IgnorePkg registered
+  (`IgnorePkg = paru-git`), live `paru -Syu` silent.
+- WALL 1 — cargo workspace embedding: building a recipe IN PLACE nests
+  its cargo tree under the engine workspace ("current package believes
+  it's in a workspace when it's not"). Root Cargo.toml now carries
+  `exclude = ["packages"]` (engine builds were immune only because they
+  build outside the repo).
+- WALL 2 — the abi-postinstall-probe regression (G) shipped in the
+  hidden-skew twins (63b2b60): `owns_file_as` gained liveness (rule 25(b))
+  but the fixture's db_install fabricated DB ownership with NO file at any
+  probe root, and `LocalDb::load` had no synthetic-root seam — the case
+  failed from the day the twins landed. Resolution: the ENGINE semantics
+  stand (a listed-but-dangling file is exactly the tk masking class); the
+  FIXTURE was under-specified. New: `LocalDb::load_at` + the
+  `GSA_TEST_PROBE_ROOT` env seam (read in `LocalDb::load`, so every
+  consumer — install/build/query/qa/maint — shares one probe root),
+  `root_materialize` helper, case G split into G (owned AND live ->
+  install) and G2 (owned but absent -> refuse). Both halves
+  mutation-probed red-first (seam dead -> G red; liveness dead -> G2 red).
+  Case I (absolute-path NEEDED, mujs/mpv class) needed the same
+  materialization — liveness at a synthetic root is chroot semantics.
+- WALL 3 — hub-rule backfill: the bare pin (>=2 edge-consumers => core)
+  caught up with recent waves. Fixed: gdal (2 consumers), xerces-c (3),
+  jsoncpp-git (3 — its count grew with the vtk/geo waves), libharu (2).
+  Whole-graph scan used to find all violators at once instead of the
+  fixture's fail-fast one-at-a-time. Also regen'd the ghostty-git
+  .SRCINFO left stale by the pkgver bump (srcinfo-freshness).
+- Battery: abi-postinstall-probe PASS (24 checks), abi-batch-policy PASS,
+  srcinfo-freshness PASS (661 recipes), config-diagnostics PASS,
+  recipe-contract PASS, rust-recipe ok, ignorepkg-register PASS;
+  recipe-sources needs the commit (its contract: local sources must be
+  committed).

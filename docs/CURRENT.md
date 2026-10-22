@@ -42,6 +42,15 @@
 - Rollback: /root/pacman-rollback-20261022/ (raw cp restore of pacman +
   libalpm.so*). Rebuild recipe pkgrel 6 to reproduce.
 
+## paru in the tree + both warning floods muted (2026-10-22 16:10)
+- packages/git/paru-git (2.1.0.r68.g7830fac-1) imported with
+  paru-verbose-ignored.patch (devel flood -> `paru -v` only); installed via
+  gsa -U, IgnorePkg registered. Both layers measured 34/248 -> 0.
+- Engine: GSA_TEST_PROBE_ROOT seam + LocalDb::load_at (fixture-only;
+  production /usr/bin/gsa r418 unaffected — behavior identical when the
+  env is unset). abi-postinstall-probe G/G2 pin both halves of rule 25(b).
+- Topology: core added to gdal, xerces-c, jsoncpp-git, libharu (hub rule).
+
 ## Still deferred (owner)
 - 35-pkg ABI wave re-bless queue; poppler 26.10 landing path.
 
