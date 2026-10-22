@@ -80,9 +80,27 @@ impl LocalDb {
     /// Read `<db-root>/local/*`. A missing/unreadable entry directory is
     /// skipped loudly (doubt installs — rule 11), never guessed. A db root
     /// without a `local/` directory is an empty DB (synthetic workspaces).
+    ///
+    /// Probe-root override for fixtures: `GSA_TEST_PROBE_ROOT` redirects
+    /// the liveness half of rule 25(b) to a synthetic root (the
+    /// `from_packages_at` twin) so fixtures can pin BOTH halves of file
+    /// truth. Unset (production) = `/`.
     pub fn load(db_root: &Path) -> Result<LocalDb, String> {
+        let probe_root = std::env::var_os("GSA_TEST_PROBE_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_default();
+        Self::load_at(probe_root, db_root)
+    }
+
+    /// `load` with an explicit owned-file probe root (empty = production
+    /// `/`): fixtures materialize owned files under a synthetic root to pin
+    /// BOTH halves of rule 25(b) file truth — the `from_packages_at` twin.
+    pub fn load_at(probe_root: PathBuf, db_root: &Path) -> Result<LocalDb, String> {
         let local = db_root.join("local");
-        let mut db = LocalDb::default();
+        let mut db = LocalDb {
+            root: probe_root,
+            ..LocalDb::default()
+        };
         let entries = match std::fs::read_dir(&local) {
             Ok(entries) => entries,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(db),

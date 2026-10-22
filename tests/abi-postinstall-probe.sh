@@ -116,6 +116,14 @@ set_topology_record "$ws" app-git git 'libs-git'
 set_topology_record "$ws" bareapp-git git ''
 mkdir -p "$ws/db/local"
 
+# Rule 25(b) liveness probes owned files at a synthetic probe root (the
+# `GSA_TEST_PROBE_ROOT` seam, the `from_packages_at` twin): db_install
+# fabricates DB truth only, `root_materialize` is the fixture's explicit
+# "the file is really there at the root". Unset, the engine probes
+# production `/`.
+export GSA_TEST_PROBE_ROOT="$ws/root"
+mkdir -p "$ws/root"
+
 # Payloads: the provider ships usr/lib/libgreet.so.1 (DT_SONAME); the
 # consumer's usr/lib/libapp.so.1 NEEDs it for real (linked against it).
 printf 'int gsa_probe_anchor;\n' |
@@ -181,6 +189,13 @@ db_install() {
             printf '%s\n' "${files[@]}"
         fi
     } >"$dir/files"
+}
+
+# root_materialize RELPATH — make an owned file REAL at the probe root
+# (the liveness half of rule 25(b): DB ownership alone is not file truth).
+root_materialize() {
+    mkdir -p "$ws/root/$(dirname "$1")"
+    printf 'fixture owned file\n' >"$ws/root/$1"
 }
 
 # The pacman stub that fabricates install results for the FISH-driven cases
@@ -297,8 +312,8 @@ run_case() { # LABEL — the FISH-driven -ia run (cases E/F only).
 
 reset_case() {
     rm -f "$ws/packages"/*/*.pkg.tar.zst "$ws/db/installed.list"
-    rm -rf "$ws/db/local"
-    mkdir -p "$ws/db/local"
+    rm -rf "$ws/db/local" "$ws/root"
+    mkdir -p "$ws/db/local" "$ws/root"
     : >"$ws/pacman.log"
     : >"$ws/ql.txt"
     : >"$ws/existing.txt"
@@ -383,15 +398,35 @@ checks=$((checks + 2))
 # 2026-10-06 full build: stock Arch ships libx11/libxt/libxext WITHOUT
 # `provides=(libX11.so)`, so a provide-set-only probe refuses every consumer
 # of a provider that never declared its soname. The runtime truth is the
-# FILE — the local DB's files list is what db_install fabricates here.
+# FILE: the local DB's files list AND the file really present at the probe
+# root (both halves of rule 25(b) — see G2).
 reset_case
 stage_archive app-git
 db_install libx11 1-1 -- usr/lib/libgreet.so.1
+root_materialize usr/lib/libgreet.so.1
 seam_rows G
 [[ $SEAM_RC == 0 ]] ||
     fail "G: an owned soname file must resolve without a provide (rc=$SEAM_RC): $SEAM_OUTPUT"
 [[ $(rr2_decision app-git decision <<<"$SEAM_OUTPUT") == install ]] ||
     fail "G: decision is not install when the file is owned: $SEAM_OUTPUT"
+checks=$((checks + 2))
+
+# ─── G2. a listed-but-absent owned file is NOT file truth (tk class) ──────
+# The liveness half of rule 25(b), pinned IN THE FIXTURE (the hidden-skew
+# twins' rule only had unit coverage before this): the same DB row as G with
+# no file at the probe root must refuse — the measured masking-bug class
+# (tk `libtk.so` dangling symlink, 2026-10-22).
+reset_case
+stage_archive app-git
+db_install libx11 1-1 -- usr/lib/libgreet.so.1
+seam_rows G2
+[[ $SEAM_RC == 1 ]] ||
+    fail "G2: a refuse row is seam rc 1 (§E.5), got $SEAM_RC: $SEAM_OUTPUT"
+grep < <(rr2_decision app-git decision <<<"$SEAM_OUTPUT") -qx refuse ||
+    fail "G2: a listed-but-absent owned file must refuse (liveness): $SEAM_OUTPUT"
+seam_detail=$(grep -E '^app-git refuse needed ' <<<"$SEAM_OUTPUT" || true)
+[[ "$seam_detail" == *"usr/lib/libapp.so.1 libgreet.so.1"* ]] ||
+    fail "G2: the refusal must name the member and the unresolved soname: $seam_detail"
 checks=$((checks + 2))
 
 # ─── H. bytes shipped by the same transaction resolve without a provide ────
@@ -486,6 +521,10 @@ EOF
 reset_case
 stage_archive bareapp-git
 db_install mujs 1-1 -- "$tmp/libbare.so"
+# Liveness at the probe root is chroot semantics for absolute paths: the
+# owned path is real at production `/`, so it must be real under the
+# synthetic root too (root = / makes probe_root join = the very $tmp path).
+root_materialize "${tmp#/}/libbare.so"
 seam_rows I
 [[ $SEAM_RC == 0 ]] ||
     fail "I: a path NEEDED whose exact path is owned must resolve (rc=$SEAM_RC): $SEAM_OUTPUT"
