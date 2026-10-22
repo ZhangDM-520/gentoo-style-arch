@@ -1,0 +1,75 @@
+# Maintainer: Bruno Pagani <archange@archlinux.org>
+# Contributor: Christoph Haag <christoph.haag@collabora.com>
+
+# Reshape of the official Arch openvr recipe for this tree. The core libs
+# here come from -git recipes: this build must link the tree's jsoncpp-git
+# (provides jsoncpp + libjsoncpp.so -> libjsoncpp.so.28). Stock/CachyOS
+# openvr links libjsoncpp.so.27 and is hard-broken on this host, so a stock
+# jsoncpp must never be able to satisfy the jsoncpp dependency below.
+
+pkgname=openvr
+pkgver=2.15.6
+# 2.1: local delta over stock 2.15.6-2 — tree-jsoncpp linkage + house treatment
+pkgrel=2.2
+pkgdesc="API and runtime that allows access to VR hardware from multiple vendors"
+arch=(x86_64)
+url="https://github.com/ValveSoftware/openvr"
+license=(BSD-3-Clause)
+# Rule 25(a) bare-soname provides — one per DT_SONAME the payload ships
+# (measured from the stock ELF: libopenvr_api.so, unversioned; makepkg
+# auto-versions stems from the built ELF).
+provides=(libopenvr_api.so)
+depends=(jsoncpp
+         # soname pin: resolves to the tree's jsoncpp-git (libjsoncpp.so.28);
+         # stock jsoncpp (libjsoncpp.so.27) must never satisfy this recipe
+         libjsoncpp.so
+         libgl)
+makedepends=(cmake)
+optdepends=()
+source=(${url}/archive/v${pkgver}/${pkgname}-${pkgver}.tar.gz
+        openvr-fix-vsprintf_s.patch::${url}/pull/594.patch
+        openvr-use-system-jsoncpp-1.23.7.patch::${url}/pull/1716.patch)
+sha256sums=('e184cb625010fab7043a9d5e1e000fdeb3067a152bb3169ef53f64dfac37164c'
+            '1d954060f27b16485e398654d6730105abc251d372da03fbba38496db17885ae'
+            'f79c6edf25efa1aac42b60db48d72f4e3c771039c9cd0fc0870fd51f17712229')
+b2sums=('d218f53a2fc0bbfc8cda032938d8686b1b021c8a0c0ec9b1e472fb57572579898377c504245980d495c1cc1f233a07cc022873e8903ccf9815808ddbdeae8197'
+        '212a7a48051ac913e7c9585a86b7513117314af6e405bd051766ec6f161c9c30daa38d3d09bd8a5ac0a1f87c4af38578d82edb67004a38f7cf3dfa7cedccb3c5'
+        '193d67d4831be5ae21ba202674554e93915cf9be958d1c65aa425a68b3e6b71abdf27ce167ce4e63ac7a7cc8d382a3e740f144db5a2633215afd44efb16b00e1')
+
+prepare() {
+  cd ${pkgname}-${pkgver}
+  # The use-system-jsoncpp patch renames the bundled copy into
+  # thirdparty/jsoncpp; drop any previous application so re-patching a
+  # reused srcdir stays idempotent (stock's ordering, kept).
+  rm -rf thirdparty/jsoncpp
+  patch -p1 < ../openvr-fix-vsprintf_s.patch
+  patch -p1 < ../openvr-use-system-jsoncpp-1.23.7.patch
+}
+
+build() {
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  # No PGO (sanctioned per-recipe exception, CONTRIBUTING "Optimization and
+  # trimming standard"): the SDK ships no test suite at all — samples/ is
+  # SteamVR-integration code that needs VR hardware and a runtime install —
+  # so there is no self-contained training workload to instrument against.
+  # Plain build; host makepkg.conf owns optimization and LTO.
+  cmake -B build -S ${pkgname}-${pkgver} \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DBUILD_SHARED=1 \
+    -DUSE_SYSTEM_JSONCPP=True
+  cmake --build build
+}
+
+package() {
+  DESTDIR="$pkgdir" cmake --install build
+
+  # trim: nothing to remove — the install surface is lib + headers + the
+  # openvr.pc file (verified against the stock payload file list); the
+  # tarball's docs/, samples/ and bin/ prebuilt runtimes have no install
+  # rules, so no dead docs/man/locales can reach the payload
+  install -Dm644 ${pkgname}-${pkgver}/LICENSE -t "$pkgdir"/usr/share/licenses/$pkgname/
+}

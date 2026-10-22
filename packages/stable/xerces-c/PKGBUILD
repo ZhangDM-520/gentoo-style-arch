@@ -1,0 +1,200 @@
+# Maintainer: Lukas Fleischer <lfleischer@archlinux.org>
+# Contributor: Sergej Pupykin <pupykin.s+arch@gmail.com>
+# Contributor: Geoffroy Carrier <geoffroy@archlinux.org>
+# Contributor: Roman Kyrylych <Roman.Kyrylych@gmail.com>
+
+# Reshape of the official Arch xerces-c recipe for this tree. The core libs
+# here come from -git recipes: this build must link the tree's icu-git
+# (provides icu + libicu*.so -> libicu*.so.79). Stock/CachyOS xerces-c links
+# libicu*.so.78 and is hard-broken on this host — the transitive root of the
+# gdal/liblas/pdal breakage — so a stock icu must never be able to satisfy
+# the icu dependencies below.
+#
+# Build system: upstream's CMake tree (first-class in 3.3.0: pkg-config
+# generation, the same component selection stock's ./configure build makes —
+# ICU transcoder, in-memory message loader, curl netaccessor; measured on the
+# stock payload's ICU symbol set: ucnv_/uset_/u_* only, no ures_). Stock uses
+# autotools; the CMake build is here so the recipe can run the house
+# cmake-tier two-phase PGO against the self-contained CTest suite below.
+
+# Shared PGO payload gate — one implementation in lib/pgo.sh, called at the
+# end of package(). A missing module fails at parse time on purpose.
+source "$startdir/../../../lib/pgo.sh"
+
+pkgname=xerces-c
+pkgver=3.3.0
+# 4.1: local delta over stock 3.3.0-4 — tree-icu linkage + house treatment
+pkgrel=4.2
+pkgdesc="A validating XML parser written in a portable subset of C++"
+arch=('x86_64')
+url="https://xerces.apache.org/xerces-c/"
+license=('Apache-2.0')
+# Rule 25(a) bare-soname provides — one per DT_SONAME the payload ships
+# (measured from the stock ELF: libxerces-c-3.3.so; makepkg auto-versions
+# stems from the built ELF).
+provides=('libxerces-c-3.3.so')
+depends=('libgcc'
+         'libstdc++'
+         'curl'
+         'libnsl'
+         'icu'
+         # soname pins: resolve to the tree's icu-git (libicu*.so.79);
+         # stock icu (libicu*.so.78) must never satisfy this recipe
+         'libicuuc.so'
+         'libicui18n.so'
+         'libicudata.so')
+makedepends=('cmake'
+             'ninja')
+optdepends=()
+source=("https://archive.apache.org/dist/xerces/c/3/sources/${pkgname}-${pkgver}.tar.gz")
+sha256sums=('9555f1d06f82987fbb4658862705515740414fd34b4db6ad2ed76a2dc08d3bde')
+b2sums=('aa44b1c5d0605d65806195d87a54a8627736fc498d39da39f74a307918ef14b58e49cfa9d1c013a978728943489db661cc3235ffe9acbad861cc590d6a1ba1a0')
+
+prepare() {
+  # icu-git's headers (char16ptr.h) use C++17 vocabulary (std::is_same_v,
+  # std::u16string_view) while upstream pins CMAKE_CXX_STANDARD 14 with a
+  # plain set() — a -D cache entry cannot override a non-cache set(), so the
+  # standard is raised where it is declared. Measured failure: RangeToken.cpp
+  # vs /usr/include/unicode/char16ptr.h on the icu .79 headers.
+  cd "${pkgname}-${pkgver}"
+  sed -i 's/set(CMAKE_CXX_STANDARD 14)/set(CMAKE_CXX_STANDARD 17)/' CMakeLists.txt
+}
+
+build() {
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  # PGO: instrument -> train -> use (cmake tier). The generate->use rewrite
+  # has to reach *inside CMakeCache.txt*: CMake only reads CFLAGS/CXXFLAGS/
+  # LDFLAGS while it *initialises* the cache, so an env change after the
+  # phase-1 configure is ignored — even by a re-run of the configure step
+  # (docs/build-guide.md; the 2026-09-20 cmake-git failure). Deleting the
+  # cache is the trap that looks like the local fix: it drops every other
+  # decision phase 1 made. The profile dir lives OUTSIDE the build dir so a
+  # build-dir clean can never eat the profile (mesa precedent).
+  local _pgo_dir="${srcdir}/xerces-pgo-profile"
+  mkdir -p "${_pgo_dir}"
+  # Phase 1 drops -flto: generate-mode bookkeeping and LTO whole-program
+  # codegen interact badly (instrumented LTO is fragile — qt6-declarative's
+  # measured choice). The first host -flto* token is saved and comes back in
+  # phase 2 / the fallback — the recipe never spells LTO flags itself, host
+  # makepkg.conf owns the policy.
+  local _lto_flag="" _gen_cflags="" _gen_cxxflags="" _gen_ldflags="" _f
+  for _f in ${CFLAGS}; do
+    case $_f in
+      -flto*) [ -n "${_lto_flag}" ] || _lto_flag="${_f}" ;;
+      *) _gen_cflags+=" ${_f}" ;;
+    esac
+  done
+  for _f in ${CXXFLAGS}; do
+    case $_f in
+      -flto*) [ -n "${_lto_flag}" ] || _lto_flag="${_f}" ;;
+      *) _gen_cxxflags+=" ${_f}" ;;
+    esac
+  done
+  for _f in ${LDFLAGS}; do
+    case $_f in
+      -flto*) [ -n "${_lto_flag}" ] || _lto_flag="${_f}" ;;
+      *) _gen_ldflags+=" ${_f}" ;;
+    esac
+  done
+  CFLAGS="${_gen_cflags# } -fprofile-generate=${_pgo_dir} -fprofile-update=atomic"
+  CXXFLAGS="${_gen_cxxflags# } -fprofile-generate=${_pgo_dir} -fprofile-update=atomic"
+  LDFLAGS="${_gen_ldflags# } -fprofile-generate=${_pgo_dir}"
+  export CFLAGS CXXFLAGS LDFLAGS
+
+  local cmake_options=(
+    -B build
+    -S ${pkgname}-${pkgver}
+    -G Ninja
+    -Wno-dev
+    -DCMAKE_BUILD_TYPE=Release
+    -DCMAKE_INSTALL_PREFIX=/usr
+    -DBUILD_SHARED_LIBS=ON
+  )
+  cmake "${cmake_options[@]}"
+  cmake --build build
+
+  # Training workload: the upstream CTest suite is self-contained — every
+  # registered test runs the in-tree fixtures (samples/data + tests/expected,
+  # wired by cmake/XercesTest.cmake). NetAccessorTest and XSTSHarness are
+  # built but never registered: the former needs network, the latter the
+  # downloaded W3C XSTS corpus — the "mostly" in the self-containment story.
+  # SIGINT (not TERM!) so test processes unwind and the gcov destructors
+  # flush the .gcda files (qt6-declarative's measured lesson); -j 4 caps
+  # CONCURRENT test processes (the gtk4-git training OOM lesson). A failing
+  # trainer is tolerated — the floor guard below turns a thin profile into a
+  # plain build.
+  timeout -s INT -k 5 600 ctest --test-dir build -j 4 >/dev/null 2>&1 || true
+
+  # Floor guard: pgo_min_gcda ≈ the minimum distinct translation units the
+  # training must touch before a profile is worth trusting; below it the
+  # profile is too thin and the recipe falls back to a plain (LTO-only)
+  # build rather than shipping a thin-profile binary. 50 here: a healthy
+  # run exercises the DOM/SAX/parser stacks plus the sample programs and
+  # lands in the hundreds of gcda files, so anything under 50 means the
+  # suite collapsed, not merely a thin profile.
+  local pgo_min_gcda=50
+  local _gcda_count
+  _gcda_count="$(find "${_pgo_dir}" -name '*.gcda' 2>/dev/null | wc -l)"
+  if (( _gcda_count < pgo_min_gcda )); then
+    warning "PGO produced only %d gcda files — rebuilding plain (LTO only)" "$_gcda_count"
+    # The fallback must REBUILD: the phase-1 build dir still carries
+    # -fprofile-generate objects and a warn-only fallback shipped them
+    # (2026-10-11 qt6-multimedia). Same cache rewrite as phase 2, minus the
+    # profile: instrumentation out, the host's LTO token back in.
+    sed -i "s|-fprofile-generate=${_pgo_dir}|${_lto_flag}|g" build/CMakeCache.txt
+    sed -i 's| -fprofile-update=atomic||g' build/CMakeCache.txt
+    if grep -q -- '-fprofile-generate' build/CMakeCache.txt; then
+      error "fallback rewrite left -fprofile-generate in CMakeCache.txt"
+      return 1
+    fi
+    # The generated build files only reconfigure when a tracked input is
+    # newer, so force that check; the object-wipe is still required because
+    # regenerated rules do not invalidate the phase-1 objects. Discard the
+    # phase-1 objects only — every link must rerun from fresh objects
+    # (docs/build-guide.md).
+    touch ${pkgname}-${pkgver}/CMakeLists.txt
+    find build -name '*.o' -delete
+    cmake --build build
+  else
+    msg "PGO profile: %d gcda files — rebuilding with profile" "$_gcda_count"
+    # Phase 2: profile-used build. Tolerance flags are load-bearing:
+    # -Wno-error=missing-profile keeps a TU the training never ran (or a
+    # configure probe) a warning instead of a hard error;
+    # -Wno-error=coverage-mismatch downgrades the arc-count mismatch
+    # -fprofile-use otherwise errors on — those functions compile without
+    # profile data, the rest keep the real profile (jq's load-bearing pair).
+    sed -i "s|-fprofile-generate=${_pgo_dir}|-fprofile-use=${_pgo_dir} ${_lto_flag} -Wno-error=missing-profile -Wno-error=coverage-mismatch|g" build/CMakeCache.txt
+    sed -i 's| -fprofile-update=atomic||g' build/CMakeCache.txt
+    if grep -q -- '-fprofile-generate' build/CMakeCache.txt; then
+      error "phase-2 rewrite left -fprofile-generate in CMakeCache.txt"
+      return 1
+    fi
+    touch ${pkgname}-${pkgver}/CMakeLists.txt
+    find build -name '*.o' -delete
+    cmake --build build
+  fi
+
+  rm -rf "${_pgo_dir}"
+}
+
+package() {
+  DESTDIR="$pkgdir" cmake --install build
+
+  install -Dm644 ${pkgname}-${pkgver}/LICENSE ${pkgname}-${pkgver}/NOTICE \
+    -t "$pkgdir"/usr/share/licenses/$pkgname/
+
+  # trim: docs — the CMake install ships the prebuilt HTML manual under
+  # share/doc/xerces-c (source-tree copy plus the empty generated copy);
+  # nothing in the maintained payload reads it and no makedepend feeds it
+  # (the vtk/opencv lean-recipe choice; stock's autotools install ships no
+  # docs at all, so this restores stock payload parity)
+  rm -rf "$pkgdir"/usr/share/doc
+
+  # Fatal shared gate (lib/pgo.sh) — last statement on purpose: nothing may
+  # be added to $pkgdir after the payload is verified.
+  verify_no_profile_instrumentation "$pkgdir"
+}

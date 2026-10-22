@@ -1,0 +1,121 @@
+# Maintainer: Bruno Pagani <archange@archlinux.org>
+
+# Reshape of the official Arch liblas recipe for this tree. The payload must
+# link the tree's gdal → xerces-c → icu chain: stock gdal/xerces-c is the
+# measured libicu*.so.78 break on this host (2026-10-22 ABI audit), and the
+# bare soname stems in depends below are satisfiable only by the tree's
+# providers (stock carries no soname provides). laszip2 has no tree record —
+# external, so it stays at the stock name.
+
+pkgname=liblas
+pkgver=1.8.1.r145+g33097f17
+# 3.2: the hard-broken CachyOS build already on the host is stamped
+# 1.8.1.r145+g33097f17-3.1 — a plain stock-pkgrel+.1 collides with it, and
+# the same-version skip would silently leave the broken package in place
+# (pandoc-cli precedent, opencv 13.2); 3.2 is the second local delta over
+# stock's 3
+pkgrel=3.2
+_commit=33097f17e27b853ac7b9651025a70354ffb10cfc
+pkgdesc='C/C++ library for reading and writing the very common LAS LiDAR format'
+arch=(x86_64)
+url='https://liblas.org/'
+license=(BSD-3-Clause)
+# Rule 25(a) bare-soname provides — one per DT_SONAME the payload ships
+# (measured 2026-10-22 from the stock payload of this same commit:
+# liblas.so.3, liblas_c.so.3)
+provides=(liblas.so liblas_c.so)
+depends=(boost-libs libboost_program_options.so libboost_thread.so
+         gdal libgdal.so
+         glibc # libc.so libm.so
+         icu libicuuc.so
+         laszip2
+         libgcc # libgcc_s.so
+         libgeotiff
+         libstdc++ # libstdc++.so
+         proj
+         xerces-c libxerces-c-3.3.so)
+# icu/xerces-c are ELF-transitive through gdal rather than direct DT_NEEDED
+# of this payload — declared anyway so the tree's providers pin the whole
+# chain the 2026-10-22 audit found broken in stock form. laszip2 stays the
+# stock name: external, and it publishes no soname provide to key on;
+# libgeotiff/proj are name-only for the same reason.
+makedepends=(boost
+             cmake
+             git
+             ninja)
+source=(git+https://github.com/libLAS/libLAS.git#commit=$_commit
+        liblas-gcc15.patch
+        gdal-3.13.patch
+        proj-private.patch)
+# Anchors: the pinned git source carries makepkg's own git-archive checksum
+# (git archive --format=tar <commit>, rule 28) — never SKIP; every value was
+# cross-checked against the official Arch packaging repo on 2026-10-22, and
+# the three patches are byte-identical to it
+sha256sums=('a61b2f53cf3cec4d20e4bf552fdaa431ed8a0eaacefd0f5e9e9a2c6f34aaa62e'
+            'b058d31eb27ad1fd454468337cb52c18e53761b6b64b4be86df9d5d21c76a03f'
+            '86ddca94cff63442ce2ffa119346d731a309a206ee3ce7373c6af6b212595981'
+            'f15f3811533afb8c61223c753c0b264001dd4028e00f72faf2159606047d2449')
+b2sums=('9a2bf98cffb965f384092845e254c4480117a40da617e1744db23dd7532885e13d3970ae090fc3dcf7576522d6f4f730748751859a5ca9abb07b53d8c7ad48f8'
+        'a7f9874cfd4fdc446961aadd071453cc91c26207ed53872073e44212877f4462a79c0249a526619a21e604afe602d90cc06d33118fc4009b56da7651ea0faca7'
+        '250de3de391631525b5dfc9a779b9c845fde1ad318093523f252a6e3fdc03c92d3ab8ca6b57f657f93e0e0098066b1f205a220a4e9222124bddf94bacbeed66f'
+        '87727f94a1a50d225056d2e848c67cf76883b6330f818cf283748cd332fa5db1cdd0858e7d9ff9ac28d50f880533f4d0ac5544ff6cdfec27f6736b2d2d48398a')
+
+pkgver() {
+  cd libLAS
+  git describe --tags | sed 's/\([^-]*-g\)/r\1/;s/-/./;s/-/+/'
+}
+
+prepare() {
+  cd libLAS
+  # Fix build with GCC 15+ (Fedora backport)
+  patch -p1 -i ../liblas-gcc15.patch
+  # Fix build with GDAL 3.13 — the version this tree's gdal recipe ships
+  patch -p1 -i ../gdal-3.13.patch
+  # https://github.com/libLAS/libLAS/issues/229 — PROJ 8+ moved the API
+  # libLAS uses into private headers
+  patch -p1 -i ../proj-private.patch
+}
+
+build() {
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  # No PGO phase (documented exception): libLAS has no self-contained
+  # training workload measured on this tree — its suite is Boost.Test
+  # binaries over test/data fixtures and has never run in a house build, so
+  # there is nothing proven to train with. Host makepkg.conf owns the
+  # optimization policy (its CFLAGS and OPTIONS=(lto) LTOFLAGS ride the
+  # CMake flags untouched); the recipe spells no ISA or LTO flags of its own.
+  local cmake_options=(
+    -DWITH_GDAL=ON
+    -DWITH_GEOTIFF=ON
+    -DWITH_LASZIP=ON
+    -DWITH_UTILITIES=ON
+    # trim: the unit-test tree and check() dropped together — the house
+    # build runs no checks, and the suite trains nothing (no PGO above)
+    -DWITH_TESTS=OFF
+    # laszip2 installs into its private /usr/lib/laszip2 libdir, so the
+    # payload needs that RUNPATH to find liblaszip.so.6 at load time
+    -DCMAKE_INSTALL_RPATH=/usr/lib/laszip2
+    -DLASZIP_LIBRARY=/usr/lib/laszip2/liblaszip.so
+    -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+  )
+  cmake -B build -S libLAS -G Ninja \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    "${cmake_options[@]}"
+  ninja -j"${GSA_BUILD_JOBS:-$(nproc)}" -C build
+}
+
+package() {
+  DESTDIR="$pkgdir" cmake --install build
+
+  install -Dm644 libLAS/LICENSE.txt -t "$pkgdir"/usr/share/licenses/$pkgname/
+
+  # trim: docs/man/locales — usr/share/liblas carries only the
+  # AUTHORS/INSTALL/README.txt/LICENSE.txt copies, and the license is kept
+  # under licenses/; nothing in the maintained payload reads the rest
+  rm -rf "$pkgdir"/usr/share/liblas \
+    "$pkgdir"/usr/share/doc "$pkgdir"/usr/share/man "$pkgdir"/usr/share/locale
+}

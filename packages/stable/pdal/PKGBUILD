@@ -1,0 +1,96 @@
+# Maintainer: Sven-Hendrik Haase <svenstaro@archlinux.org>
+# Contributor: SaultDon <sault.don gmail>
+
+# Reshape of the official Arch pdal recipe for this tree. The payload must
+# link the tree's gdal → xerces-c → icu chain: stock gdal/xerces-c is the
+# measured libicu*.so.78 break on this host (2026-10-22 ABI audit), and the
+# bare soname stems in depends below are satisfiable only by the tree's
+# providers (stock carries no soname provides).
+
+pkgname=pdal
+pkgver=2.10.1
+# 1.2: the hard-broken CachyOS build already on the host is stamped
+# 2.10.1-1.1 — a plain stock-pkgrel+.1 collides with it, and the
+# same-version skip would silently leave the broken package in place
+# (pandoc-cli precedent, vtk 1.2); 1.2 is the second local delta over
+# stock's 1
+pkgrel=1.2
+pkgdesc="A C++ library for translating and manipulating point cloud data"
+arch=('x86_64')
+url="http://www.pdal.io"
+license=(BSD-3-Clause)
+# Rule 25(a) bare-soname provides — one per DT_SONAME the payload ships
+# (measured 2026-10-22 from the stock payload of this same version:
+# libpdalcpp.so.20 plus the three shipped plugins, all .so.20)
+provides=(libpdalcpp.so
+          libpdal_plugin_kernel_fauxplugin.so
+          libpdal_plugin_reader_pgpointcloud.so
+          libpdal_plugin_writer_pgpointcloud.so)
+depends=(curl libcurl.so
+         gdal libgdal.so
+         glibc # libc.so libm.so
+         icu libicuuc.so
+         libgcc # libgcc_s.so
+         libgeotiff
+         libstdc++ # libstdc++.so
+         libxml2 libxml2.so
+         openssl libcrypto.so
+         postgresql-libs libpq.so
+         proj
+         xerces-c libxerces-c-3.3.so
+         zlib libz.so)
+# curl/libxml2/openssl/zlib/proj/libgeotiff are direct DT_NEEDED of the
+# shipped libpdalcpp.so (rule-54 class — stock let them ride transitively
+# through gdal); postgresql-libs is direct too — the shipped
+# pgpointcloud plugins link libpq.so, so it retires from optdepends to
+# depends. icu/xerces-c are ELF-transitive through gdal rather than direct
+# DT_NEEDED — declared anyway so the tree's providers pin the whole chain
+# the 2026-10-22 audit found broken in stock form. proj/libgeotiff stay
+# name-only: their providers publish no soname provide.
+makedepends=(cmake
+             ninja)
+source=("https://github.com/PDAL/PDAL/releases/download/${pkgver}/PDAL-${pkgver}-src.tar.bz2")
+# sha512 cross-checked against the official Arch packaging repo on
+# 2026-10-22 before computing the house pair
+sha256sums=('78765f1d06584c8e9b3b4a5b58c0ebea478d42ad21f1432717b31c20def05522')
+b2sums=('616c6bad77033ecb08fbd5b5cc1fede9f270d5122c45ac1319d1db78df9f2db05e406ab25541a42e1bd13eb081836c12df7ae3805dc6be4811dd15a4be5723dd')
+
+build() {
+  # House style: mold linker when available
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  # No PGO phase (documented exception): no self-contained training
+  # workload is authored and measured for this recipe yet (a readers.faux
+  # pipeline is the candidate, but it is unproven without a real build);
+  # upstream's suite is fixture-driven and trimmed below. Host makepkg.conf
+  # owns the optimization policy (its CFLAGS and OPTIONS=(lto) LTOFLAGS ride
+  # the CMake flags untouched); the recipe spells no ISA or LTO flags.
+  local cmake_options=(
+    -DBUILD_PLUGIN_PGPOINTCLOUD=ON
+    -DWITH_COMPLETION=ON
+    # trim: the unit-test tree and its test-only jsoncpp dependency dropped
+    # together (jsoncpp appears only in test/unit — the shipped payload
+    # vendors nlohmann and has no libjsoncpp DT_NEEDED). With it go stock's
+    # python/python-numpy makedepends and the python-numpy/sqlite
+    # optdepends: 2.10 has no Python or SQLite plugin at all (docs.cmake is
+    # behind BUILD_DOCS, which stays at its OFF default)
+    -DWITH_TESTS=OFF
+  )
+  cmake -B build -S PDAL-$pkgver-src -G Ninja \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    "${cmake_options[@]}"
+  ninja -j"${GSA_BUILD_JOBS:-$(nproc)}" -C build
+}
+
+package() {
+  DESTDIR="$pkgdir" ninja -C build install
+
+  install -Dm644 PDAL-$pkgver-src/LICENSE.txt "$pkgdir"/usr/share/licenses/$pkgname/LICENSE
+
+  # trim: docs/man/locales — upstream installs none today (bash-completion
+  # stays: WITH_COMPLETION is stock's maintained surface); the sweep is the
+  # house floor so a future doc install cannot slip in untrimmed
+  rm -rf "$pkgdir"/usr/share/doc "$pkgdir"/usr/share/man "$pkgdir"/usr/share/locale
+}

@@ -1,0 +1,260 @@
+# Maintainer: Jaroslav Lichtblau <svetlemodry@archlinux.org>
+# Maintainer: Bruno Pagani <archange@archlinux.org>
+# Contributor: dibblethewrecker dibblethewrecker.at.jiwe.dot.org
+# Contributor: William Rea <sillywilly@gmail.com>
+
+# Reshape of the official Arch gdal recipe for this tree. The stock payload on
+# this host is hard-broken (2026-10-22 ABI audit): 60 files fail `ldd -r` with
+# `libicu{data,i18n,uc}.so.78 => not found`, transitively through the stock
+# xerces-c build, while the tree's icu-git ships .79 (the pandoc-cli class).
+# This build must link the TREE's xerces-c (packages/stable/xerces-c, itself
+# linked against icu-git) — a stock xerces-c must never satisfy the dependency
+# below. gdal_PDF.so additionally needs libpoppler.so.165, which the tree's
+# poppler 26.10 provides once built; poppler stays in optdepends per stock's
+# shape (owner instruction, 2026-10-22).
+
+pkgbase=gdal
+pkgname=(gdal python-gdal)
+pkgver=3.13.3
+# 6.2: stock's recipe pkgrel is 6, but the broken CachyOS build already
+# installed on this host is stamped 3.13.3-6.1 — the first local delta (6.1)
+# is that broken string, and the same-version skip would silently leave it in
+# place (opencv 13.2 / vtk 1.2 precedent). 6.2 is the second local delta
+# over stock and strictly beats the installed stamp.
+pkgrel=6.2
+pkgdesc="A translator library for raster and vector geospatial data formats"
+arch=(x86_64)
+url="https://gdal.org/"
+license=(MIT)
+# Rule 25(a) bare-soname provides — one per DT_SONAME the payload ships
+# (measured from the 3.13.3 payload: a single libgdal soname; makepkg
+# auto-versions the stem from the built ELF). The gdal_*/ogr_* driver modules
+# are dlopen plugins carrying NO DT_SONAME (measured), so they earn no
+# provide. Keep this list STATIC at top level — a computed `provides+=` in
+# package() breaks `makepkg --printsrcinfo`.
+provides=(libgdal.so)
+# armadillo basisu brunsli lerc libkml qb3 rasterlite2 sfcgal tiledb
+# ogdi
+makedepends=(cmake
+             opencl-headers
+             python-setuptools
+             python-numpy
+             proj
+             arrow
+             blosc
+             cfitsio
+             curl
+             crypto++
+             libdeflate
+             expat
+             libfreexl
+             libgeotiff
+             geos
+             giflib
+             libheif
+             hdf5
+             libjpeg-turbo
+             json-c
+             libjxl
+             xz
+             libxml2
+             lz4
+             mariadb-libs
+             netcdf
+             unixodbc
+             ocl-icd
+             openexr
+             openjpeg2
+             openssl
+             pcre2
+             libpng
+             podofo
+             poppler
+             postgresql-libs
+             qhull
+             libspatialite
+             sqlite
+             swig
+             libtiff
+             libwebp
+             xerces-c
+             zlib
+             zstd
+             libaec
+             muparser)
+source=(https://download.osgeo.org/${pkgbase}/${pkgver}/${pkgbase}-${pkgver}.tar.xz)
+# Stock ships no patches (single-tarball source), so there is nothing else to
+# fetch or anchor. Both sums computed from the 3.13.3 tarball on 2026-10-22;
+# the b2sum reproduces stock's published anchor byte for byte.
+sha256sums=('a3348c2102dd91962290007d7c293b467bb1b0cd89f086f24bb97b9b653a9804')
+b2sums=('21e35a6318321155df27a2c55a4ca6b98f9a724ff7c5cb68866428ba6675aa017f21de1a3f1562cf506e288e23748520c87e0184a495147eb4d91ffc0e534c72')
+
+# PGO exception (optimisation standard): no self-contained training workload
+# exists. The maintained suite is upstream's autotest, whose fixtures are
+# external downloads — forbidden as training input here. A synthetic
+# round-trip trainer (the vtk precedent) is possible in principle but would
+# profile only a thin uniform slice of the 200+ driver modules and was
+# deferred as a documented follow-up. The optimisation stack is therefore the
+# host's makepkg.conf defaults (incl. its LTO flags) + the mold guard below +
+# stock's -DENABLE_IPO=ON; no -fprofile-generate phase runs, so lib/pgo.sh's
+# install gate does not apply to this recipe.
+
+build() {
+  # House style: mold linker when available (mold-git does not provide
+  # `mold` for depend resolution, so this is a runtime guard)
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  # Flag policy: host makepkg.conf owns optimisation (never hard-code ISA
+  # flags); -DENABLE_IPO=ON is stock's own IPO choice and is kept as-is.
+  cmake -B build -S $pkgbase-$pkgver \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DCMAKE_CXX_STANDARD=20 \
+    -DENABLE_IPO=ON \
+    -DBUILD_PYTHON_BINDINGS=ON \
+    -DGDAL_ENABLE_PLUGINS=ON \
+    -DGDAL_USE_ARROW=ON \
+    -DGDAL_USE_BLOSC=ON \
+    -DGDAL_USE_CFITSIO=ON \
+    -DGDAL_USE_CURL=ON \
+    -DGDAL_USE_CRYPTOPP=ON \
+    -DGDAL_USE_DEFLATE=ON \
+    -DGDAL_USE_EXPAT=ON \
+    -DGDAL_USE_FREEXL=ON \
+    -DGDAL_USE_GEOTIFF=ON \
+    -DGDAL_USE_GEOS=ON \
+    -DGDAL_USE_GIF=ON \
+    -DGDAL_USE_HEIF=ON \
+    -DGDAL_USE_HDF5=ON \
+    -DGDAL_USE_ICONV=ON \
+    -DGDAL_USE_JPEG=ON \
+    -DGDAL_USE_JSONC=ON \
+    -DGDAL_USE_JXL=ON \
+    -DGDAL_USE_LIBLZMA=ON \
+    -DGDAL_USE_LIBXML2=ON \
+    -DGDAL_USE_LZ4=ON \
+    -DGDAL_USE_MYSQL=ON \
+    -DGDAL_USE_NETCDF=ON \
+    -DGDAL_USE_ODBC=ON \
+    -DGDAL_USE_OPENCL=ON \
+    -DGDAL_USE_OPENEXR=ON \
+    -DGDAL_USE_OPENJPEG=ON \
+    -DGDAL_USE_OPENSSL=ON \
+    -DGDAL_USE_PARQUET=ON \
+    -DGDAL_USE_PCRE2=ON \
+    -DGDAL_USE_PNG=ON \
+    -DGDAL_USE_POPPLER=ON \
+    -DGDAL_USE_POSTGRESQL=ON \
+    -DGDAL_USE_QHULL=ON \
+    -DGDAL_USE_SPATIALITE=ON \
+    -DGDAL_USE_SQLITE3=ON \
+    -DGDAL_USE_TIFF=ON \
+    -DGDAL_USE_WEBP=ON \
+    -DGDAL_USE_XERCESC=ON \
+    -DGDAL_USE_ZLIB=ON \
+    -DGDAL_USE_ZSTD=ON
+  make -C build
+}
+
+package_gdal () {
+  depends=(
+    blosc
+    crypto++
+    curl
+    expat
+    geos
+    giflib
+    glibc
+    json-c
+    libaec
+    libarchive
+    libdeflate
+    libfreexl
+    libgcc
+    libgeotiff
+    libgomp
+    libjpeg-turbo
+    libpng
+    libspatialite
+    libstdc++
+    libtiff
+    libxml2
+    lz4
+    muparser
+    ocl-icd
+    openssl
+    pcre2
+    proj
+    qhull
+    sqlite
+    unixodbc
+    xerces-c
+    xz
+    zlib
+    zstd
+  )
+  # poppler/podofo/arrow and friends stay optdepends per stock's shape even
+  # though some driver plugins hard-link them (gdal_PDF.so → libpoppler.so.165
+  # + libpodofo.so.2, ogr_Arrow → libarrow.so.2600): owner instruction
+  # 2026-10-22 — the tree's poppler 26.10 provides .165 once built
+  optdepends=('arrow: Arrow/Parquet support'
+              'cfitsio: FITS support'
+              'hdf5: HDF5 support'
+              'libheif: HEIF support'
+              'libjxl: JPEG XL support'
+              'mariadb-libs: MySQL support'
+              'netcdf: netCDF support'
+              'openexr: EXR support'
+              'openjpeg2: JP2 support'
+              'podofo: PDF support'
+              'poppler: PDF support'
+              'postgresql-libs: PostgreSQL support'
+              'libwebp: WebP support')
+
+  make -C build DESTDIR="${pkgdir}" install
+  install -Dm644 ${pkgname}-${pkgver}/LICENSE.TXT -t "${pkgdir}"/usr/share/licenses/$pkgbase/
+  # Move python stuff
+  mkdir {bin,lib}
+  mv "${pkgdir}"/usr/bin/*py bin
+  mv "${pkgdir}"/usr/lib/python* lib
+
+  # trim: docs/man/locales — lean house payload (mirror opencv/vtk); nothing
+  # in the maintained payload reads them and no makedepend feeds them. The
+  # stock cmake shape installs no doc/locale trees and no samples at all
+  # (measured 2026-10-22 on the 3.13.3-6.1 payload: 573 files, of the trim
+  # set only 151 man1 pages), so man is the live target and the neighbours
+  # are removed defensively so a future install shape cannot smuggle them in.
+  # /usr/share/gdal is GDAL_DATA (driver runtime data) and stays whole.
+  rm -rf "${pkgdir}"/usr/share/doc "${pkgdir}"/usr/share/man "${pkgdir}"/usr/share/locale
+}
+
+package_python-gdal () {
+  pkgdesc="Python bindings for GDAL"
+  # the global soname provides belong to the gdal payload only — the bindings
+  # ship no DT_SONAME of their own (opencv precedent)
+  unset provides
+  depends=(
+    # pinned to the exact sibling build: the bindings bind the same ABI as
+    # libgdal.so.39 and must ride its rebuilds (opencv precedent; stock pins
+    # only $pkgver, which lets any pkgrel pair)
+    gdal=$pkgver-$pkgrel
+    glibc
+    libgcc
+    libstdc++
+    python
+    python-fsspec
+    python-numpy
+    python-pyarrow
+    python-simplejson
+  )
+
+  install -d "${pkgdir}"/usr/{bin,lib}
+  mv bin/* "${pkgdir}"/usr/bin
+  mv lib/* "${pkgdir}"/usr/lib
+  install -dm755 "${pkgdir}"/usr/share/licenses
+  ln -s $pkgbase "${pkgdir}"/usr/share/licenses/$pkgname
+  # byte-compile python modules since the CMake build does not do it.
+  local site_packages=$(python -c "import site; print(site.getsitepackages()[0])")
+  python -m compileall -o 0 -o 1 -o 2 --hardlink-dupes -s "${pkgdir}" "${pkgdir}"${site_packages}
+}

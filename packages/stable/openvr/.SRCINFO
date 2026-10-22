@@ -1,0 +1,23 @@
+pkgbase = openvr
+	pkgdesc = API and runtime that allows access to VR hardware from multiple vendors
+	pkgver = 2.15.6
+	pkgrel = 2.2
+	url = https://github.com/ValveSoftware/openvr
+	arch = x86_64
+	license = BSD-3-Clause
+	makedepends = cmake
+	depends = jsoncpp
+	depends = libjsoncpp.so
+	depends = libgl
+	provides = libopenvr_api.so
+	source = https://github.com/ValveSoftware/openvr/archive/v2.15.6/openvr-2.15.6.tar.gz
+	source = openvr-fix-vsprintf_s.patch::https://github.com/ValveSoftware/openvr/pull/594.patch
+	source = openvr-use-system-jsoncpp-1.23.7.patch::https://github.com/ValveSoftware/openvr/pull/1716.patch
+	sha256sums = e184cb625010fab7043a9d5e1e000fdeb3067a152bb3169ef53f64dfac37164c
+	sha256sums = 1d954060f27b16485e398654d6730105abc251d372da03fbba38496db17885ae
+	sha256sums = f79c6edf25efa1aac42b60db48d72f4e3c771039c9cd0fc0870fd51f17712229
+	b2sums = d218f53a2fc0bbfc8cda032938d8686b1b021c8a0c0ec9b1e472fb57572579898377c504245980d495c1cc1f233a07cc022873e8903ccf9815808ddbdeae8197
+	b2sums = 212a7a48051ac913e7c9585a86b7513117314af6e405bd051766ec6f161c9c30daa38d3d09bd8a5ac0a1f87c4af38578d82edb67004a38f7cf3dfa7cedccb3c5
+	b2sums = 193d67d4831be5ae21ba202674554e93915cf9be958d1c65aa425a68b3e6b71abdf27ce167ce4e63ac7a7cc8d382a3e740f144db5a2633215afd44efb16b00e1
+
+pkgname = openvr
