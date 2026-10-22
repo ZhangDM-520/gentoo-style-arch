@@ -34,6 +34,14 @@
   production, zero findings, zero false alarms.
 - AUR phase: piglit-git r12470 built + installed (makepkg healthy again).
 
+## pacman patch: warning flood muted (2026-10-22 15:20)
+- `0002-libalpm-quiet-ignorepkg-local-newer.patch` in packages/stable/pacman
+  demotes the IgnorePkg + local-newer notices to DEBUG (owner's style call);
+  the real downgrade notice stays a WARNING. Measured 248 -> 0 warning
+  lines on `pacman -Su`. Installed pacman 7.1.0.r9.g54d9411-6.
+- Rollback: /root/pacman-rollback-20261022/ (raw cp restore of pacman +
+  libalpm.so*). Rebuild recipe pkgrel 6 to reproduce.
+
 ## Still deferred (owner)
 - 35-pkg ABI wave re-bless queue; poppler 26.10 landing path.
 

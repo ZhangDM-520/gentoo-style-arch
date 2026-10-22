@@ -16281,3 +16281,25 @@ and §6, and the commit/version identifiers of each fix are kept inline.
   ~/.makepkg.conf guard fixed to a WRITE PROBE (backup
   ~/.makepkg.conf.bak-20261022); TMPDIR now falls back to tmpfs instead of
   exporting a dead path. The drive itself needs re-plug/remount + an fsck.
+
+### 2026-10-22 15:20 — mute the IgnorePkg / local-newer warning flood (pacman source patch)
+- OWNER ASK: the protective IgnorePkg set + self-built packages ahead of
+  repos make every sync print ~250 warning lines (`ignoring package
+  upgrade`, `local … is newer than …`); mute at source in our pacman
+  (alias approach rejected as unclean). Design chosen via ask_user:
+  demote-to-DEBUG, both families; the real downgrade notice
+  (`downgrading from version X to Y`) stays a WARNING (rare, meaningful).
+- WHERE: lib/libalpm/sync.c `check_literal()` — so EVERY libalpm consumer
+  (pacman AND paru, which shells out to /usr/bin/pacman for the repo
+  phase) is muted alike. New recipe patch
+  `0002-libalpm-quiet-ignorepkg-local-newer.patch` (3 hunks, ALPM_LOG_WARNING
+  -> ALPM_LOG_DEBUG), pkgrel 5 -> 6.
+- MEASURED red/green on the exact user path (`pacman -Su` with zero
+  non-ignored targets — plans, warns, changes nothing): stock 248 warning
+  lines, patched 0. `--debug` still shows the demoted notices; fixture
+  battery PASS (pacman-mutex-shim). Probe pitfall: `pacman -Sup` (--print)
+  produced empty output and misled the first comparison — the real
+  planning path (`-Su`, non-print) is the repro that matters.
+- INSTALLED 7.1.0.r9.g54d9411-6 (gate fired, documented local -U skip).
+  Raw rollback set: /root/pacman-rollback-20261022/ (pacman +
+  libalpm.so*) — restore with `sudo cp -p … /usr/bin /usr/lib`.
