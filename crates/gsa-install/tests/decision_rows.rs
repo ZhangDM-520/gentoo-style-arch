@@ -428,6 +428,115 @@ fn needed_probe_accepts_sonames_the_transaction_ships() {
 }
 
 #[test]
+fn needed_probe_refuses_cross_class_and_dangling_owned_files() {
+    let dir = scratch("needed-truth");
+    let probe = dir.join("root");
+    std::fs::create_dir_all(probe.join("usr/lib32")).unwrap();
+    std::fs::write(probe.join("usr/lib32/libgone.so.1"), b"\x7fELF").unwrap();
+
+    // A 64-bit member's need must not resolve through a lib32-owned file.
+    let archive = dir.join("app-1.0-1-x86_64.pkg.tar.zst");
+    write_archive(
+        &archive,
+        &[
+            (".PKGINFO", &pkginfo_body("app", "1.0-1", &[])),
+            ("usr/lib/libapp.so.1", &elf64_with_needed("libgone.so.1")),
+        ],
+    );
+    let db = LocalDb::from_packages_at(
+        probe.clone(),
+        vec![InstalledPackage {
+            name: "lib32-gone".to_string(),
+            version: "0:1-1".to_string(),
+            base: Some("lib32-gone".to_string()),
+            provides: vec![],
+            depends: vec![],
+            files: vec!["usr/lib32/libgone.so.1".to_string()],
+            install_date: None,
+        }],
+    );
+    let rows = decide(
+        std::slice::from_ref(&candidate(&archive, None)),
+        &force_ctx(),
+        &db,
+    )
+    .unwrap();
+    assert_eq!(
+        rendered(&rows),
+        vec![format!(
+            "app refuse needed {} usr/lib/libapp.so.1 libgone.so.1",
+            archive.display()
+        )]
+    );
+
+    // A listed-but-dangling owned path (the `tk` `libtk.so` class)
+    // resolves nothing.
+    let archive2 = dir.join("tool-1.0-1-x86_64.pkg.tar.zst");
+    write_archive(
+        &archive2,
+        &[
+            (".PKGINFO", &pkginfo_body("tool", "1.0-1", &[])),
+            ("usr/bin/tool", &elf64_with_needed("libtk.so")),
+        ],
+    );
+    let db2 = LocalDb::from_packages_at(
+        probe.clone(),
+        vec![InstalledPackage {
+            name: "tk".to_string(),
+            version: "0:9-1".to_string(),
+            base: Some("tk".to_string()),
+            provides: vec![],
+            depends: vec![],
+            files: vec!["usr/lib/libtk.so".to_string()],
+            install_date: None,
+        }],
+    );
+    let rows = decide(
+        std::slice::from_ref(&candidate(&archive2, None)),
+        &force_ctx(),
+        &db2,
+    )
+    .unwrap();
+    assert_eq!(
+        rendered(&rows),
+        vec![format!(
+            "tool refuse needed {} usr/bin/tool libtk.so",
+            archive2.display()
+        )]
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn needed_probe_refuses_shipped_bytes_from_the_other_class() {
+    let dir = scratch("needed-shipped32");
+    let archive = dir.join("app-1.0-1-x86_64.pkg.tar.zst");
+    write_archive(
+        &archive,
+        &[
+            (".PKGINFO", &pkginfo_body("app", "1.0-1", &[])),
+            ("usr/lib/libapp.so.1", &elf64_with_needed("libgone.so.1")),
+            ("usr/lib32/libgone.so.1", b"\x7fELF lib32 provider"),
+        ],
+    );
+    let rows = decide(
+        std::slice::from_ref(&candidate(&archive, None)),
+        &force_ctx(),
+        &LocalDb::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        rendered(&rows),
+        vec![format!(
+            "app refuse needed {} usr/lib/libapp.so.1 libgone.so.1",
+            archive.display()
+        )],
+        "lib32-shipped bytes must never resolve a 64-bit member's need"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn abi_soname_gate_refuses_a_disappearing_provide() {
     let dir = scratch("abi");
     let archive = dir.join("foo-2.0-1-x86_64.pkg.tar.zst");

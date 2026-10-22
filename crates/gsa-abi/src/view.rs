@@ -13,6 +13,27 @@ use std::path::PathBuf;
 
 use crate::provides::{provide_covers, provide_name};
 
+/// The ELF class a runtime file truth claim must match (Arch layout: the
+/// 32-bit ABI lives under `usr/lib32/` — the lib32-icu class that masked the
+/// icu .78 breakage from `gsa -Qr`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ElfClass {
+    X64,
+    X32,
+}
+
+/// The class of an owned path by its lib directory (the consumer/member
+/// path is the class hint — `usr/lib32/…` is 32-bit, everything else is
+/// the dominant 64-bit ABI).
+pub fn path_class(path: &str) -> ElfClass {
+    let p = path.strip_prefix('/').unwrap_or(path);
+    if p.starts_with("usr/lib32/") || p.starts_with("lib32/") {
+        ElfClass::X32
+    } else {
+        ElfClass::X64
+    }
+}
+
 /// One installed package as the ABI surfaces need it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InstalledPkg {
@@ -30,7 +51,9 @@ pub struct InstalledPkg {
 pub struct InstalledView {
     pkgs: BTreeMap<String, InstalledPkg>,
     paths: BTreeSet<String>,
-    basenames: BTreeSet<String>,
+    /// basename -> the owned paths carrying it (class + liveness filtering
+    /// needs the paths, not just the names).
+    basenames: BTreeMap<String, Vec<String>>,
     root: PathBuf,
 }
 
@@ -45,7 +68,7 @@ impl InstalledView {
         let mut view = InstalledView {
             pkgs: BTreeMap::new(),
             paths: BTreeSet::new(),
-            basenames: BTreeSet::new(),
+            basenames: BTreeMap::new(),
             root,
         };
         for pkg in pkgs {
@@ -53,7 +76,10 @@ impl InstalledView {
                 let normalized = file.strip_prefix('/').unwrap_or(file);
                 view.paths.insert(normalized.to_string());
                 if let Some(base) = normalized.rsplit('/').next() {
-                    view.basenames.insert(base.to_string());
+                    view.basenames
+                        .entry(base.to_string())
+                        .or_default()
+                        .push(normalized.to_string());
                 }
             }
             view.pkgs.insert(pkg.name.clone(), pkg);
@@ -109,13 +135,32 @@ impl InstalledView {
     }
 
     /// True when some installed package owns a file whose path or basename
-    /// matches (runtime file truth — rule 25(b)).
-    pub fn owns_file(&self, path: &str) -> bool {
+    /// matches AND that file is really present at the probe root in the
+    /// requested ELF class (rule 25(b) runtime file truth).
+    ///
+    /// Two measured masking bugs are closed here: a `lib32-*` basename must
+    /// not satisfy a 64-bit need (the lib32-icu class that hid the icu .78
+    /// breakage), and a listed-but-dangling symlink must not count as a
+    /// resolution (the `tk` `libtk.so -> libtk9.0.so` class).
+    pub fn owns_file_as(&self, path: &str, class: ElfClass) -> bool {
         let normalized = path.strip_prefix('/').unwrap_or(path);
-        self.paths.contains(normalized)
-            || self
-                .basenames
-                .contains(normalized.rsplit('/').next().unwrap_or(""))
+        let base = normalized.rsplit('/').next().unwrap_or("");
+        let mut candidates: Vec<&str> = Vec::new();
+        if self.paths.contains(normalized) {
+            candidates.push(normalized);
+        }
+        if let Some(paths) = self.basenames.get(base) {
+            candidates.extend(paths.iter().map(|s| s.as_str()));
+        }
+        candidates.into_iter().any(|candidate| {
+            path_class(candidate) == class && self.root.join(candidate).exists()
+        })
+    }
+
+    /// Strict file truth for the dominant class of the probe path itself
+    /// (bare sonames probe as 64-bit).
+    pub fn owns_file(&self, path: &str) -> bool {
+        self.owns_file_as(path, path_class(path))
     }
 
     /// Read-only probe of one owned file's bytes through the view root.
@@ -148,16 +193,55 @@ mod tests {
 
     #[test]
     fn provide_and_file_truth_resolve_like_the_local_db() {
-        let view = InstalledView::new([
-            pkg("libfoo-git", &["libfoo.so=1-64"], &["usr/lib/libfoo.so.1"]),
-            pkg("stock", &[], &["usr/lib/libstock.so.1"]),
-        ]);
+        let dir = std::env::temp_dir().join(format!("gsa-abi-truth-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("usr/lib")).unwrap();
+        std::fs::write(dir.join("usr/lib/libstock.so.1"), b"payload").unwrap();
+        let view = InstalledView::with_root(
+            dir.clone(),
+            [
+                pkg("libfoo-git", &["libfoo.so=1-64"], &["usr/lib/libfoo.so.1"]),
+                pkg("stock", &[], &["usr/lib/libstock.so.1"]),
+            ],
+        );
         assert!(view.provides_cover("libfoo.so.1"));
         assert!(!view.provides_cover("libfoo.so.2"));
         assert!(view.owns_file("libstock.so.1"));
         assert!(view.owns_file("/usr/lib/libstock.so.1"));
         assert!(!view.owns_file("libgone.so.1"));
         assert_eq!(view.providers_of("libfoo.so.1").len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn lib32_owners_do_not_satisfy_64bit_probes() {
+        let dir = std::env::temp_dir().join(format!("gsa-abi-class-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("usr/lib32")).unwrap();
+        std::fs::write(dir.join("usr/lib32/libicuuc.so.78"), b"32").unwrap();
+        let view = InstalledView::with_root(
+            dir.clone(),
+            [pkg("lib32-icu", &[], &["usr/lib32/libicuuc.so.78"])],
+        );
+        // the measured masking: the lib32 basename hid a 64-bit 'not found'
+        assert!(!view.owns_file_as("libicuuc.so.78", ElfClass::X64));
+        assert!(!view.owns_file("libicuuc.so.78"));
+        assert!(view.owns_file_as("libicuuc.so.78", ElfClass::X32));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn dangling_symlinks_are_not_file_truth() {
+        let dir = std::env::temp_dir().join(format!("gsa-abi-dangle-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("usr/lib")).unwrap();
+        std::os::unix::fs::symlink("libtk9.0.so", dir.join("usr/lib/libtk.so")).unwrap();
+        let view = InstalledView::with_root(dir.clone(), [pkg("tk", &[], &["usr/lib/libtk.so"])]);
+        // the measured tk class: listed, but dangling — not a resolution
+        assert!(!view.owns_file("libtk.so"));
+        std::fs::write(dir.join("usr/lib/libtk9.0.so"), b"tk").unwrap();
+        assert!(view.owns_file("libtk.so"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

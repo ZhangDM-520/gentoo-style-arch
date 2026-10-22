@@ -34,7 +34,11 @@ pub struct LocalDb {
     /// Every owned path (no leading slash) and every owned basename — the
     /// runtime file truth of rule 25(b), indexed once per load.
     paths: BTreeSet<String>,
-    basenames: BTreeSet<String>,
+    /// basename -> the owned paths carrying it (class + liveness filtering
+    /// needs the paths, not just the names).
+    basenames: BTreeMap<String, Vec<String>>,
+    /// Where owned files are probed for existence (production: `/`).
+    root: PathBuf,
 }
 
 /// Parse one pacman local-DB entry file (`desc`/`files`): `%KEY%` headers,
@@ -125,7 +129,10 @@ impl LocalDb {
             for path in &files {
                 db.paths.insert(path.to_string());
                 if let Some(base_name) = path.rsplit('/').next() {
-                    db.basenames.insert(base_name.to_string());
+                    db.basenames
+                        .entry(base_name.to_string())
+                        .or_default()
+                        .push(path.to_string());
                 }
             }
             let install_date = std::fs::metadata(&dir).ok().and_then(|m| m.modified().ok());
@@ -155,14 +162,26 @@ impl LocalDb {
 
     /// Build a DB directly from parsed entries (fixture seam: a synthetic
     /// installed state without a `<db>/local/` tree — additive to the fixed
-    /// surface).
+    /// surface). File truth probes at `/`.
     pub fn from_packages(pkgs: Vec<InstalledPackage>) -> LocalDb {
-        let mut db = LocalDb::default();
+        Self::from_packages_at(PathBuf::from("/"), pkgs)
+    }
+
+    /// The `from_packages` twin whose file truth probes under `root`
+    /// (synthetic probe roots in tests — `gsa-abi::view::with_root` twin).
+    pub fn from_packages_at(root: PathBuf, pkgs: Vec<InstalledPackage>) -> LocalDb {
+        let mut db = LocalDb {
+            root,
+            ..LocalDb::default()
+        };
         for pkg in pkgs {
             for path in &pkg.files {
                 let normalized = normalize_path(path).to_string();
                 if let Some(base_name) = normalized.rsplit('/').next() {
-                    db.basenames.insert(base_name.to_string());
+                    db.basenames
+                        .entry(base_name.to_string())
+                        .or_default()
+                        .push(normalized.clone());
                 }
                 db.paths.insert(normalized);
             }
@@ -183,20 +202,46 @@ impl LocalDb {
             .any(|pkg| pkg.name == name || pkg.provides.iter().any(|p| provide_covers(p, name)))
     }
 
+    /// Where owned files are probed (empty root = production `/`).
+    fn probe_root(&self) -> &Path {
+        if self.root.as_os_str().is_empty() {
+            Path::new("/")
+        } else {
+            &self.root
+        }
+    }
+
     /// True when some installed package owns a file whose basename or full
-    /// path matches (runtime file truth — rule 25(b)).
-    pub fn owns_file(&self, path: &str) -> bool {
+    /// path matches AND that file is really present at the probe root in the
+    /// requested ELF class (rule 25(b) runtime file truth — the
+    /// `gsa-abi::view::owns_file_as` twin: a lib32 basename must not resolve
+    /// a 64-bit need, and a listed-but-dangling symlink is not file truth).
+    pub fn owns_file_as(&self, path: &str, class: ElfClass) -> bool {
         let normalized = normalize_path(path);
-        self.paths.contains(normalized)
-            || self
-                .basenames
-                .contains(normalized.rsplit('/').next().unwrap_or(""))
+        let base = normalized.rsplit('/').next().unwrap_or("");
+        let mut candidates: Vec<&str> = Vec::new();
+        if self.paths.contains(normalized) {
+            candidates.push(normalized);
+        }
+        if let Some(paths) = self.basenames.get(base) {
+            candidates.extend(paths.iter().map(|s| s.as_str()));
+        }
+        candidates.into_iter().any(|candidate| {
+            path_class(candidate) == class && self.probe_root().join(candidate).exists()
+        })
+    }
+
+    /// Strict file truth for the dominant class of the probe path itself
+    /// (bare sonames probe as 64-bit).
+    pub fn owns_file(&self, path: &str) -> bool {
+        self.owns_file_as(path, path_class(path))
     }
 }
 
 // The provide/soname semantics are SHARED with the ABI subsystem — the
 // ONE matcher lives in `gsa-abi::provides` (rule 25(a)/(b)); these
 // re-exports keep the local-DB surface stable without forking the logic.
+pub use gsa_abi::view::{path_class, ElfClass};
 pub use gsa_abi::{provide_covers, provide_name, soname_stem};
 
 /// The pacman DB root (`pacman-conf DBPath`, falling back to
@@ -257,10 +302,6 @@ mod tests {
         assert_eq!(pkg.depends, vec!["glibc>=2.28"]);
         assert_eq!(pkg.files, vec!["usr/bin/foo", "usr/lib/libfoo.so.1"]);
         assert!(pkg.install_date.unwrap() > before);
-        assert!(db.owns_file("usr/bin/foo"));
-        assert!(db.owns_file("/usr/lib/libfoo.so.1"));
-        assert!(db.owns_file("libfoo.so.1"));
-        assert!(!db.owns_file("libfoo.so.2"));
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -276,6 +317,47 @@ mod tests {
         assert!(db.packages().is_empty());
         let _ = fs::remove_dir_all(&root);
         let _ = fs::remove_dir_all(&empty_root);
+    }
+
+    #[test]
+    fn file_truth_is_class_aware_and_existence_checked() {
+        let probe = scratch("truth");
+        fs::create_dir_all(probe.join("usr/lib32")).unwrap();
+        fs::create_dir_all(probe.join("usr/lib")).unwrap();
+        fs::write(probe.join("usr/lib32/libicuuc.so.78"), b"\x7fELF").unwrap();
+        let lib32_icu = InstalledPackage {
+            name: "lib32-icu".to_string(),
+            version: "0:78-1".to_string(),
+            base: Some("lib32-icu".to_string()),
+            provides: vec![],
+            depends: vec![],
+            files: vec!["usr/lib32/libicuuc.so.78".to_string()],
+            install_date: None,
+        };
+        let db = LocalDb::from_packages_at(probe.clone(), vec![lib32_icu]);
+        assert!(db.owns_file("usr/lib32/libicuuc.so.78"));
+        assert!(db.owns_file_as("libicuuc.so.78", ElfClass::X32));
+        assert!(
+            !db.owns_file("libicuuc.so.78"),
+            "a lib32 owner must not resolve a bare (64-bit) soname probe"
+        );
+
+        // A listed-but-dangling path (the `tk` `libtk.so` class) is not
+        // file truth: `usr/lib/libtk.so` is owned but absent at the root.
+        let tk = InstalledPackage {
+            name: "tk".to_string(),
+            version: "0:9-1".to_string(),
+            base: Some("tk".to_string()),
+            provides: vec![],
+            depends: vec![],
+            files: vec!["usr/lib/libtk.so".to_string()],
+            install_date: None,
+        };
+        let db = LocalDb::from_packages_at(probe.clone(), vec![tk]);
+        assert!(!db.owns_file("libtk.so"));
+        fs::write(probe.join("usr/lib/libtk.so"), b"\x7fELF").unwrap();
+        assert!(db.owns_file("libtk.so"));
+        let _ = fs::remove_dir_all(&probe);
     }
 
     #[test]

@@ -19,11 +19,12 @@
 //! decision function folds into `DecisionRow`s; gates never render and never
 //! execute anything.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use gsa_recipe::pkginfo::{member_names, members_with_needed};
 
+use gsa_abi::view::{path_class, ElfClass};
 use crate::localdb::{provide_covers, soname_stem, LocalDb};
 
 // The base-system soname roster and its predicate are SHARED with the ABI
@@ -166,7 +167,9 @@ fn pgo_flag_in(text: &str) -> bool {
 /// member of every candidate (rule 25(b)/(e) resolution source (b)).
 #[derive(Clone, Debug, Default)]
 pub struct ShippedBytes {
-    basenames: BTreeSet<String>,
+    /// basename -> the member paths carrying it (class filtering needs the
+    /// paths, not just the names).
+    basenames: BTreeMap<String, Vec<String>>,
     paths: BTreeSet<String>,
 }
 
@@ -181,9 +184,13 @@ impl ShippedBytes {
                 .map_err(|e| format!("cannot list {}: {e}", archive.display()))?
             {
                 let normalized = name.strip_prefix("./").unwrap_or(&name);
-                index
-                    .basenames
-                    .insert(normalized.rsplit('/').next().unwrap_or("").to_string());
+                if let Some(base) = normalized.rsplit('/').next() {
+                    index
+                        .basenames
+                        .entry(base.to_string())
+                        .or_default()
+                        .push(normalized.to_string());
+                }
                 index.paths.insert(normalized.to_string());
             }
         }
@@ -193,12 +200,24 @@ impl ShippedBytes {
     /// A NEEDED name resolves when its file is in the transaction: a bare
     /// name against basenames, a path-style name (SONAME-less DSO linked by
     /// absolute path — run #119's mujs/mpv class) against the exact path.
-    pub fn ships(&self, needed: &str) -> bool {
+    /// `class` is the CONSUMER member's ELF class: lib32-shipped bytes never
+    /// resolve a 64-bit member's need (and vice versa).
+    pub fn ships_as(&self, needed: &str, class: ElfClass) -> bool {
         let normalized = needed.strip_prefix('/').unwrap_or(needed);
-        self.paths.contains(normalized)
-            || self
-                .basenames
-                .contains(normalized.rsplit('/').next().unwrap_or(""))
+        let base = normalized.rsplit('/').next().unwrap_or("");
+        let mut candidates: Vec<&str> = Vec::new();
+        if self.paths.contains(normalized) {
+            candidates.push(normalized);
+        }
+        if let Some(paths) = self.basenames.get(base) {
+            candidates.extend(paths.iter().map(|s| s.as_str()));
+        }
+        candidates.into_iter().any(|candidate| path_class(candidate) == class)
+    }
+
+    /// The dominant class of the probe path itself (bare names: 64-bit).
+    pub fn ships(&self, needed: &str) -> bool {
+        self.ships_as(needed, path_class(needed))
     }
 }
 
@@ -234,10 +253,14 @@ pub fn needed_misses(
             if own_provides.iter().any(|p| provide_covers(p, &soname)) {
                 continue;
             }
-            if shipped.ships(&soname) {
+            // Every file-truth resolution runs in the CONSUMER member's ELF
+            // class: `usr/lib32/*` members resolve lib32-owned/shipped
+            // files, `usr/lib/*` members never resolve through lib32 bytes.
+            let class = path_class(&member);
+            if shipped.ships_as(&soname, class) {
                 continue;
             }
-            if db.provides_cover(&soname) || db.owns_file(&soname) {
+            if db.provides_cover(&soname) || db.owns_file_as(&soname, class) {
                 continue;
             }
             misses.push(NeededMiss {
@@ -274,6 +297,21 @@ mod tests {
         assert!(pgo_flag_in("RUSTFLAGS='-C profile-generate'"));
         assert!(!pgo_flag_in("CFLAGS+=' -O3'"));
         assert!(!pgo_flag_in("profile-generate"));
+    }
+
+    #[test]
+    fn shipped_bytes_resolve_only_in_the_consumer_class() {
+        let mut index = ShippedBytes::default();
+        index.basenames.insert(
+            "libgone.so.1".to_string(),
+            vec!["usr/lib32/libgone.so.1".to_string()],
+        );
+        index.paths.insert("usr/lib32/libgone.so.1".to_string());
+        assert!(index.ships_as("libgone.so.1", ElfClass::X32));
+        assert!(
+            !index.ships_as("libgone.so.1", ElfClass::X64),
+            "lib32-shipped bytes must never resolve a 64-bit member's need"
+        );
     }
 
     #[test]

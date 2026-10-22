@@ -16,8 +16,8 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::provides::base_lib_ok;
-use crate::view::InstalledView;
+use crate::provides::{base_lib_ok, provide_name};
+use crate::view::{path_class, InstalledPkg, InstalledView};
 
 /// One unresolved `DT_NEEDED` of one installed ELF member.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -122,6 +122,46 @@ fn exact_pin_of(dep: &str) -> Option<(&str, &str)> {
     Some((name.trim(), ver.trim()))
 }
 
+/// Version equality modulo the `0:` default epoch (`0:1.0-1` ≡ `1.0-1`);
+/// every other difference is real drift.
+fn versions_equivalent(a: &str, b: &str) -> bool {
+    fn strip(v: &str) -> &str {
+        v.strip_prefix("0:").unwrap_or(v)
+    }
+    strip(a) == strip(b)
+}
+
+/// The pin surfaces one provider offers for `name`, each as
+/// `(version to compare, display string)`. A matching provide entry is the
+/// pin surface (a soname provide moves with its ENTRY version, not the
+/// provider's pkgver); without one, the package version itself is the
+/// surface.
+fn pin_surfaces<'a>(pkg: &'a InstalledPkg, name: &str) -> Vec<(String, &'a str)> {
+    let entries: Vec<&str> = pkg
+        .provides
+        .iter()
+        .filter(|e| provide_name(e) == name)
+        .map(|s| s.as_str())
+        .collect();
+    if entries.is_empty() {
+        return vec![(pkg.version.clone(), pkg.version.as_str())];
+    }
+    entries
+        .into_iter()
+        .map(|e| match e.split_once('=') {
+            Some((_, v)) if !v.trim().is_empty() => (v.trim().to_string(), e),
+            _ => (pkg.version.clone(), e),
+        })
+        .collect()
+}
+
+/// Does this provider hold the exact pin `name=version`?
+fn pin_holds(pkg: &InstalledPkg, name: &str, ver: &str) -> bool {
+    pin_surfaces(pkg, name)
+        .into_iter()
+        .any(|(surface, _)| versions_equivalent(ver, &surface))
+}
+
 /// The revdep report: unresolved needs, preserved-lib survivors, exact-pin
 /// leftovers — all derived from the view and the registry (rule 25(j):
 /// expectations are computed, never pinned).
@@ -140,7 +180,9 @@ pub fn revdep_report(view: &InstalledView, preserved: &[PreservedEntry]) -> Revd
                     continue;
                 }
                 needed_by.push((pkg.name.clone(), file.clone(), soname.clone()));
-                if view.provides_cover(&soname) || view.owns_file(&soname) {
+                // File truth resolves in the CONSUMER member's ELF class:
+                // a lib32 member's need is satisfied by lib32-owned files.
+                if view.provides_cover(&soname) || view.owns_file_as(&soname, path_class(file)) {
                     continue;
                 }
                 report.unresolved.push(UnresolvedNeed {
@@ -185,10 +227,11 @@ pub fn revdep_report(view: &InstalledView, preserved: &[PreservedEntry]) -> Revd
                 });
                 continue;
             }
-            if !providers.iter().any(|p| p.version == ver) {
+            if !providers.iter().any(|p| pin_holds(p, name, ver)) {
                 let installed = providers
                     .iter()
-                    .map(|p| p.version.as_str())
+                    .flat_map(|p| pin_surfaces(p, name))
+                    .map(|(_, display)| display)
                     .collect::<Vec<_>>()
                     .join(",");
                 report.exact_pins.push(ExactPin {
@@ -339,6 +382,103 @@ mod tests {
             .unwrap();
         assert_eq!(stale.dep, "lib64-app=2.0-1");
         assert_eq!(stale.status, "stale 0:1.0.0-1");
+    }
+
+    fn pkgv(
+        name: &str,
+        version: &str,
+        provides: &[&str],
+        depends: &[&str],
+        files: &[&str],
+    ) -> InstalledPkg {
+        InstalledPkg {
+            name: name.to_string(),
+            version: version.to_string(),
+            provides: provides.iter().map(|s| s.to_string()).collect(),
+            depends: depends.iter().map(|s| s.to_string()).collect(),
+            files: files.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn an_epoch_only_difference_is_never_a_stale_pin() {
+        let view = InstalledView::new([
+            pkgv("consumer", "0:1-1", &[], &["app=1.0.0-1"], &[]),
+            pkgv("app", "0:1.0.0-1", &[], &[], &[]),
+        ]);
+        let report = revdep_report(&view, &[]);
+        assert!(
+            report.exact_pins.is_empty(),
+            "0:1.0.0-1 ≡ 1.0.0-1, got {:?}",
+            report.exact_pins
+        );
+    }
+
+    #[test]
+    fn a_soname_pin_matches_the_provide_entry_not_the_pkgver() {
+        let view = InstalledView::new([
+            pkgv("consumer", "0:1-1", &[], &["libfoo.so.1=1.2.3"], &[]),
+            pkgv("foo", "0:9.9-1", &["libfoo.so.1=1.2.3"], &[], &[]),
+        ]);
+        let report = revdep_report(&view, &[]);
+        assert!(
+            report.exact_pins.is_empty(),
+            "the provide entry is the pin surface, got {:?}",
+            report.exact_pins
+        );
+    }
+
+    #[test]
+    fn a_moved_soname_provide_is_stale_and_names_the_entry() {
+        let view = InstalledView::new([
+            pkgv("consumer", "0:1-1", &[], &["libfoo.so.1=1.2.3"], &[]),
+            pkgv("foo", "0:9.9-1", &["libfoo.so.1=2.0.0"], &[], &[]),
+        ]);
+        let report = revdep_report(&view, &[]);
+        assert_eq!(report.exact_pins.len(), 1);
+        assert_eq!(report.exact_pins[0].dep, "libfoo.so.1=1.2.3");
+        assert_eq!(
+            report.exact_pins[0].status, "stale libfoo.so.1=2.0.0",
+            "the stale display names the provide entries"
+        );
+    }
+
+    #[test]
+    fn real_version_drift_is_stale() {
+        let view = InstalledView::new([
+            pkgv("consumer", "0:1-1", &[], &["app=1.0.0-1"], &[]),
+            pkgv("app", "1.0.1-1", &[], &[], &[]),
+        ]);
+        let report = revdep_report(&view, &[]);
+        assert_eq!(report.exact_pins.len(), 1);
+        assert_eq!(report.exact_pins[0].status, "stale 1.0.1-1");
+    }
+
+    #[test]
+    fn a_lib32_consumer_resolves_against_lib32_owners() {
+        let dir = std::env::temp_dir().join(format!("gsa-abi-revdep32-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("usr/lib32")).unwrap();
+        std::fs::write(
+            dir.join("usr/lib32/libapp.so.1"),
+            test_support::elf64(Some("libapp.so.1"), &["libgone.so.1"]),
+        )
+        .unwrap();
+        std::fs::write(dir.join("usr/lib32/libgone.so.1"), b"\x7fELF").unwrap();
+        let view = InstalledView::with_root(
+            dir.clone(),
+            [
+                pkgv("lib32-app", "0:1-1", &[], &[], &["usr/lib32/libapp.so.1"]),
+                pkgv("lib32-gone", "0:1-1", &[], &[], &["usr/lib32/libgone.so.1"]),
+            ],
+        );
+        let report = revdep_report(&view, &[]);
+        assert!(
+            report.unresolved.is_empty(),
+            "the lib32 member's need resolves in its own class, got {:?}",
+            report.unresolved
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

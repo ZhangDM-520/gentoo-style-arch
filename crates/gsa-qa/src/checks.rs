@@ -1094,6 +1094,13 @@ fn workspace_providers<'a>(input: &QaInput<'a>, soname: &str) -> Vec<DepProvider
 /// `gsa-install::gates::needed_misses` consults as `db.provides_cover ||
 /// db.owns_file`; the vocabulary is mirrored, not imported, because
 /// `gsa-install` depends on `gsa-qa` and not the other way round).
+/// SCOPE CUT vs `gsa-abi::view::owns_file_as`/`gsa-install::LocalDb`:
+/// this probe is class-blind and existence-blind — `QaInput` carries no
+/// probe root and no consumer ELF class, so a lib32 owner or a dangling
+/// listed path can surface here as a provider. The strict file truth
+/// (class + liveness) is enforced at the install gate
+/// (`gsa-install::gates::needed_misses`); QA provider lists stay
+/// advisory candidates, never a resolution verdict.
 /// Ownership is what resolves stock providers carrying no soname provide
 /// (`libxres`, `libayatana-indicator`, `jbigkit`) — the class provide
 /// matching can never see.
