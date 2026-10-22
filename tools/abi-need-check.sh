@@ -31,9 +31,20 @@ set -uo pipefail
 #   never modified. `--from-names` is the pacman PreTransaction hook shape:
 #   alpm passes package NAMES on stdin (measured 2026-10-22 with a probe
 #   hook: NeedsTargets + Type=Package + When=PreTransaction), so each name
-#   resolves to its newest /var/cache/pacman/pkg/<name>-*.pkg.tar.* download.
-#   A name with no cached archive (a `pacman -U` of a file elsewhere) is
-#   SKIPPED loudly-but-quietly: the engine gates its own installs.
+#   resolves to its newest cached ARCHIVE — real package extensions only;
+#   the detached `…pkg.tar.zst.sig` siblings share the name glob but are
+#   never candidates (regression 2026-10-22). A name with no cached archive
+#   (a `pacman -U` of a file elsewhere) is SKIPPED loudly-but-quietly: the
+#   engine gates its own installs. An input that fails to extract is warned
+#   about and SKIPPED too — pacman's integrity checks already passed it, so
+#   failing the transaction on a check we could not perform is a false
+#   alarm; real findings stay fatal.
+#
+#   Kernel-class names (kernel flavours, firmware — see kernel_class()) are
+#   skipped outright: their payloads carry no userspace DT_NEEDED surface.
+#   ELF facts are parsed in BATCHED readelf passes (spawn count is the
+#   whole cost — profiled 2026-10-22) and cached per archive content hash
+#   (facts only, never verdicts; see $GSA_ABI_NEED_CHECK_FACTCACHE).
 #
 # Findings look like:
 #   abi-need-check: qt6-webengine: 'QtWebEngineProcess' needs 'libicuuc.so.78' — no file resolves it (fatal)
@@ -42,7 +53,7 @@ set -uo pipefail
 # --quiet suppresses the clean lines; findings are always printed.
 
 usage() {
-    sed -n '3,38p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '3,/^usage() {/p' "$0" | sed '$d; s/^# \{0,1\}//'
     exit 2
 }
 
@@ -79,12 +90,59 @@ fi
 # The cache a repo transaction downloads into; --from-names resolution only.
 cache_dir=${GSA_ABI_NEED_CHECK_CACHE:-/var/cache/pacman/pkg}
 
+# Kernel-class payloads carry no userspace dynamically-linked ELF — vmlinuz
+# and ET_REL modules only — so they cannot exhibit the userspace SONAME
+# skew this gate exists for (owner's optimisation call, 2026-10-22). The
+# invariant to keep honest: ONLY kernel/flavour and firmware payloads
+# qualify. `linux-cachyos-headers` carries 22 real runtime links (measured
+# 2026-10-22) and stays scannable; if a listed package ever grows a
+# userspace ELF, it leaves this list.
+kernel_class() {
+    case $1 in
+        *-headers | *-src | *-dkms) return 1 ;;
+        linux | linux-* | *-firmware) return 0 ;;
+    esac
+    return 1
+}
+
 if ((from_names)); then
     while IFS= read -r name; do
         [[ -n $name ]] || continue
+        if kernel_class "$name"; then
+            ((quiet)) ||
+                printf 'abi-need-check: %s: skipped (kernel-class payload — no userspace ABI surface)\n' "$name"
+            continue
+        fi
         newest=''
         for cand in "$cache_dir/$name"-*.pkg.tar.*; do
             [[ -f $cand ]] || continue
+            # Real package archives only. The detached PGP signature
+            # (…pkg.tar.zst.sig) and any other sibling share the name glob
+            # but are not archives — regression 2026-10-22: a .sig won the
+            # newest-wins race and its extraction aborted a 50-package
+            # upgrade. Known makepkg/pacman archive extensions:
+            case $cand in
+                *.pkg.tar.zst | *.pkg.tar.xz | *.pkg.tar.gz | *.pkg.tar.bz2 | *.pkg.tar.lrz | *.pkg.tar.lzo | *.pkg.tar.Z) ;;
+                *) continue ;;
+            esac
+            # EXACT name, never prefix: `linux-cachyos` must not resolve
+            # `linux-cachyos-headers-*` (regression 2026-10-22 replay: the
+            # prefix twin won newest-wins and the kernel went unscanned).
+            # Archive names are <pkgname>-<pkgver>-<pkgrel>-<arch> and
+            # makepkg forbids hyphens in the last three fields
+            # (lint_pkgbuild: pkgver/pkgrel rules), so splitting from the
+            # right is deterministic — reconstruct and compare.
+            stem=${cand##*/}
+            stem=${stem%.pkg.tar.*}
+            rest=${stem#"$name"-}
+            arch_part=${rest##*-}
+            rest=${rest%-*}
+            rel_part=${rest##*-}
+            ver_part=${rest%-*}
+            if [[ $ver_part == *-* || $rel_part == *-* || $arch_part == *-* ]] ||
+                [[ $name-$ver_part-$rel_part-$arch_part != "$stem" ]]; then
+                continue
+            fi
             if [[ -z $newest || $cand -nt $newest ]]; then
                 newest=$cand
             fi
@@ -104,49 +162,175 @@ fi
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/gsa-abi-need-check.XXXXXX") || exit 2
 trap 'rm -rf -- "$scratch"' EXIT
 
-# ── Phase 1: collect what the transaction itself ships ────────────────────
-# Resolvable-by-the-transaction means: a payload file carrying the soname,
-# or a declared provide naming it. Both are read per package root.
+# \u2500\u2500 Phase 1: acquire per-payload facts (one extract, one batched parse) \u2500\u2500
+# Facts are a payload's ELF surface \u2014 per file: relpath, class, runpath,
+# SONAME, DT_NEEDED list \u2014 plus the package's provide names. Facts depend
+# on the ARCHIVE only, never on host state, so they cache by content hash;
+# the resolve-or-report VERDICT is always computed fresh against the host.
+#
+# Cost anatomy (profiled 2026-10-22 on the 159 MB kernel archive): extract
+# 0.07 s, per-file readelf spawns 21.9 s, BATCHED readelf 0.056 s \u2014 the
+# spawn count is the entire cost. So: chunked multi-file readelf, never a
+# per-file spawn, and no per-file sed/subshell drains.
+US=$'\x1f'
+RS=$'\x1e'
+
+# readelf_facts ROOT SOLE RELPATH... \u2014 one batched `readelf -hW -dW` over
+# the chunk, run with cwd=ROOT so `File:` markers carry relpaths. Emits one
+# record per ELF file:
+#   file<US>relpath<US>class<US>runpath<US>soname<US>needed<RS>needed\u2026
+# Non-ELF payloads emit nothing (readelf prints no `File:` marker for
+# them); readelf's single-file output carries NO marker at all, so SOLE
+# names the file in that case (measured 2026-10-22).
+readelf_facts() {
+    local root=$1 sole=$2
+    shift 2
+    (cd "$root" && readelf -hW -dW "$@" 2>/dev/null) |
+        awk -v sole="$sole" -v sUS="$US" -v sRS="$RS" '
+            function emit() {
+                if (cur == "") return
+                printf "file%s%s%s%s%s%s%s%s%s%s\n", sUS, cur, sUS, cls, sUS, rp, sUS, son, sUS, nd
+            }
+            /^File: / {
+                emit()
+                cur = substr($0, 7)
+                cls = rp = son = nd = ""
+                marked = 1
+                next
+            }
+            /Class: *ELF/ { cls = $2; next }
+            /\(SONAME\)/ {
+                if (match($0, /\[[^]]*\]/)) son = substr($0, RSTART + 1, RLENGTH - 2)
+                next
+            }
+            /\((RUNPATH|RPATH)\)/ {
+                if (rp == "" && match($0, /\[[^]]*\]/)) rp = substr($0, RSTART + 1, RLENGTH - 2)
+                next
+            }
+            /\(NEEDED\)/ {
+                if (match($0, /\[[^]]*\]/)) {
+                    v = substr($0, RSTART + 1, RLENGTH - 2)
+                    nd = (nd == "" ? v : nd sRS v)
+                }
+            }
+            END {
+                if (!marked) cur = sole
+                emit()
+            }
+        '
+}
+
+# Fact cache: one file per archive content hash under
+# ${GSA_ABI_NEED_CHECK_FACTCACHE:-/var/cache/gsa-abi-need-check}. Only the
+# PARSE is cached \u2014 the archive is still extracted every run because the
+# resolution oracle is the file system and includes the payload tree itself
+# ($ORIGIN runpath lookups, rule 25(b)). Verdicts are never cached.
+factcache_dir=${GSA_ABI_NEED_CHECK_FACTCACHE:-/var/cache/gsa-abi-need-check}
+factcache_ok=0
+mkdir -p "$factcache_dir" 2>/dev/null &&
+    [[ -d $factcache_dir && -w $factcache_dir ]] && factcache_ok=1
+
 declare -a roots=()
 declare -a pkgnames=()
+declare -a factblobs=()
 tx_sonames=()
 tx_provides=()
 
 for target in "${targets[@]}"; do
     root=''
+    blob=''
+    sha=''
     if [[ -d $target ]]; then
         root=$target
     elif [[ -f $target ]]; then
-        dest="$scratch/$(basename "$target").d"
-        mkdir -p "$dest"
-        if ! tar -xf "$target" -C "$dest"; then
-            printf 'abi-need-check: cannot extract %s\n' "$target" >&2
-            exit 2
+        sha=$(sha256sum "$target")
+        sha=${sha%% *}
+        root="$scratch/$(basename "$target").d"
+        mkdir -p "$root"
+        if ! tar -xf "$target" -C "$root" 2>/dev/null; then
+            # FAIL OPEN on an unextractable input. pacman's keyring and
+            # integrity checks have already passed this archive before
+            # hooks run, so an extraction failure here is a pipeline
+            # problem (a signature or foreign file slipping past the name
+            # filter, a tar without the codec) \u2014 not evidence about the
+            # package. Blocking the transaction on a check we could not
+            # perform IS the false alarm (regression 2026-10-22). Real
+            # findings below stay fatal.
+            printf 'abi-need-check: %s: skipped (not extractable)\n' \
+                "$(basename "$target")" >&2
+            continue
         fi
-        root=$dest
+        if ((factcache_ok)) && [[ -s $factcache_dir/$sha.facts ]] &&
+            [[ $(head -1 "$factcache_dir/$sha.facts") == "# gsa-abi-need-check facts v1 $sha" ]]; then
+            blob=$(sed '1d' "$factcache_dir/$sha.facts")
+        fi
     else
         printf 'abi-need-check: no such input: %s\n' "$target" >&2
         exit 2
     fi
+
+    if [[ -z $blob ]]; then
+        name=$(sed -n 's/^pkgname = //p' "$root/.PKGINFO" 2>/dev/null | head -1)
+        [[ -n $name ]] || name=$(basename "$target")
+        blob="pkg${US}${name}"$'\n'
+        while IFS= read -r provide; do
+            [[ -n $provide ]] || continue
+            blob+="prov${US}${provide%%=*}"$'\n'
+        done < <(sed -n 's/^provides = //p' "$root/.PKGINFO" 2>/dev/null)
+
+        mapfile -d '' -t payload < <(find "$root" -type f \
+            ! -name '.PKGINFO' ! -name '.BUILDINFO' ! -name '.MTREE' ! -name '.CHANGELOG' -print0)
+        i=0
+        np=${#payload[@]}
+        while ((i < np)); do
+            chunk=()
+            while ((i < np)) && ((${#chunk[@]} < 1500)); do
+                chunk+=("${payload[$i]#"$root"/}")
+                i=$((i + 1))
+            done
+            blob+=$(readelf_facts "$root" "${chunk[0]}" "${chunk[@]}")$'\n'
+        done
+
+        if [[ -n $sha ]] && ((factcache_ok)); then
+            { printf '# gsa-abi-need-check facts v1 %s\n' "$sha"; printf '%s' "$blob"; } \
+                >"$factcache_dir/$sha.facts.tmp" 2>/dev/null &&
+                mv "$factcache_dir/$sha.facts.tmp" "$factcache_dir/$sha.facts" 2>/dev/null
+        fi
+    fi
+
+    # Transaction-internal surface: provide names and shipped sonames of
+    # EVERY package in the batch (coverage crosses package boundaries).
+    name=''
+    while IFS= read -r line; do
+        case $line in
+            "pkg"$'\x1f'*)
+                [[ -n $name ]] || name=${line#*"$US"}
+                ;;
+            "prov"$'\x1f'*)
+                tx_provides+=("${line#*"$US"}")
+                ;;
+            "file"$'\x1f'*)
+                rest=${line#*"$US"}
+                rest=${rest#*"$US"}
+                rest=${rest#*"$US"}
+                rest=${rest#*"$US"}
+                son=${rest%%"$US"*}
+                [[ -n $son ]] && tx_sonames+=("$son")
+                ;;
+        esac
+    done <<<"$blob"
+
     roots+=("$root")
-    name=$(sed -n 's/^pkgname = //p' "$root/.PKGINFO" 2>/dev/null | head -1)
-    [[ -n $name ]] || name=$(basename "$target")
-    pkgnames+=("$name")
-
-    while IFS= read -r provide; do
-        [[ -n $provide ]] || continue
-        tx_provides+=("${provide%%=*}")
-    done < <(sed -n 's/^provides = //p' "$root/.PKGINFO" 2>/dev/null)
-
-    mapfile -d '' -t payload < <(find "$root" -type f \
-        ! -name '.PKGINFO' ! -name '.BUILDINFO' ! -name '.MTREE' ! -name '.CHANGELOG' -print0)
-    for file in "${payload[@]+"${payload[@]}"}"; do
-        while IFS= read -r soname; do
-            [[ -n $soname ]] && tx_sonames+=("$soname")
-        done < <(readelf -dW "$file" 2>/dev/null |
-            sed -n 's/^.*SONAME.*\[\(.*\)\]$/\1/p')
-    done
+    pkgnames+=("${name:-$(basename "$target")}")
+    factblobs+=("$blob")
 done
+
+# Nothing scannable in explicit mode is a caller problem (every input was
+# foreign or corrupt); --from-names already exited 0 for an empty set.
+if ((!from_names)) && ((${#roots[@]} == 0)); then
+    printf 'abi-need-check: no input could be scanned\n' >&2
+    exit 2
+fi
 
 # ── Phase 2: resolve-or-report every DT_NEEDED ───────────────────────────
 # Class-aware and dangling-aware: a 64-bit consumer is never satisfied by a
@@ -172,31 +356,43 @@ findings=0
 idx=0
 for root in "${roots[@]}"; do
     pkg=${pkgnames[$idx]}
+    blob=${factblobs[$idx]}
     idx=$((idx + 1))
-
-    mapfile -d '' -t payload < <(find "$root" -type f \
-        ! -name '.PKGINFO' ! -name '.BUILDINFO' ! -name '.MTREE' ! -name '.CHANGELOG' -print0)
     pkg_findings=0
     pkg_needed=0
 
-    for file in "${payload[@]+"${payload[@]}"}"; do
-        dynamic=$(readelf -dW "$file" 2>/dev/null) || continue
-        [[ -n $dynamic ]] || continue
+    while IFS= read -r line; do
+        [[ $line == "file"$US* ]] || continue
+        rest=${line#*"$US"}
+        relpath=${rest%%"$US"*}
+        rest=${rest#*"$US"}
+        class=${rest%%"$US"*}
+        rest=${rest#*"$US"}
+        runpath=${rest%%"$US"*}
+        rest=${rest#*"$US"}
+        # field 4 is the soname (already in tx_sonames); the tail is the
+        # RS-joined DT_NEEDED list.
+        needed_blob=${rest#*"$US"}
 
-        class=$(readelf -hW "$file" 2>/dev/null | sed -n 's/^ *Class: *//p')
         case $class in
             ELF64) default_dirs='/usr/lib:/usr/lib64:/lib:/lib64' ;;
             ELF32) default_dirs='/usr/lib32:/lib32' ;;
             *) continue ;;
         esac
-        elf_dir=$(dirname "$file")
-
-        runpath=$(printf '%s\n' "$dynamic" |
-            sed -n 's/^.*R\(UN\)\?PATH.*\[\(.*\)\]$/\2/p' | head -1)
+        elf_dir=$root
+        [[ $relpath == */* ]] && elf_dir="$root/${relpath%/*}"
         libdirs=$default_dirs
         [[ -n $runpath ]] && libdirs=$runpath:$libdirs
 
-        while IFS= read -r needed; do
+        nb=$needed_blob
+        while [[ -n $nb ]]; do
+            if [[ $nb == *"$RS"* ]]; then
+                needed=${nb%%"$RS"*}
+                nb=${nb#*"$RS"}
+            else
+                needed=$nb
+                nb=''
+            fi
             [[ -n $needed ]] || continue
             # vDSO is never a file; the loader is, and lives in libdirs.
             [[ $needed == linux-vdso.so* ]] && continue
@@ -223,12 +419,11 @@ for root in "${roots[@]}"; do
 
             if ((covered == 0)); then
                 printf "abi-need-check: %s: '%s' needs '%s' — no file resolves it (fatal)\n" \
-                    "$pkg" "$(basename "$file")" "$needed"
+                    "$pkg" "${relpath##*/}" "$needed"
                 pkg_findings=$((pkg_findings + 1))
             fi
-        done < <(printf '%s\n' "$dynamic" |
-            sed -n 's/^.*NEEDED.*\[\(.*\)\]$/\1/p')
-    done
+        done
+    done <<<"$blob"
 
     findings=$((findings + pkg_findings))
     ((quiet)) || [[ $pkg_findings -gt 0 ]] ||

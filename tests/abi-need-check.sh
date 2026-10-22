@@ -155,4 +155,137 @@ status=0
 run out err -- --bogus || status=$?
 [[ $status == 2 ]] || fail "unknown flag exited $status (want 2)"
 
+# ── 7. regression 2026-10-22: .sig siblings and unextractable files ─────
+# The real transaction that walled: a detached signature next to the
+# archive won the newest-wins race and its extraction failure aborted the
+# whole upgrade. Contract now: real archives only, fail open on extraction.
+printf 'not-a-tar\n' >"$tmp/cache/pkg-clean-1.0.0-1-any.pkg.tar.zst.sig"
+touch -d '2030-01-01' "$tmp/cache/pkg-clean-1.0.0-1-any.pkg.tar.zst.sig"
+status=0
+out=$(printf 'pkg-clean\n' |
+    GSA_ABI_NEED_CHECK_CACHE="$tmp/cache" "$tool" --from-names 2>/dev/null) || status=$?
+[[ $status == 0 ]] || fail ".sig sibling poisoned the scan (want clean), got $status: $out"
+[[ $out == *'pkg-clean: clean'* ]] || fail "real archive skipped when .sig present: $out"
+
+printf 'also not a tar\n' >"$tmp/cache/pkg-broken-1.0.0-1-any.pkg.tar.zst"
+status=0
+err=$(printf 'pkg-broken\n' |
+    GSA_ABI_NEED_CHECK_CACHE="$tmp/cache" "$tool" --from-names 2>&1 >/dev/null) || status=$?
+[[ $status == 0 ]] || fail "unextractable cache file aborted (want fail-open), got $status: $err"
+[[ $err == *'pkg-broken-1.0.0-1-any.pkg.tar.zst: skipped (not extractable)'* ]] ||
+    fail "missing fail-open warning: $err"
+
+# newest-wins stays: a stale BROKEN archive must lose to a newer clean one
+mv "$tmp/cache/pkg-broken-1.0.0-1-any.pkg.tar.zst" "$tmp/cache/pkg-clean-0.0.1-1-any.pkg.tar.zst"
+touch -d '2000-01-01' "$tmp/cache/pkg-clean-0.0.1-1-any.pkg.tar.zst"
+status=0
+out=$(printf 'pkg-clean\n' |
+    GSA_ABI_NEED_CHECK_CACHE="$tmp/cache" "$tool" --from-names 2>/dev/null) || status=$?
+[[ $status == 0 ]] || fail "stale archive won newest-wins (want clean), got $status: $out"
+[[ $out == *'pkg-clean: clean'* ]] || fail "stale archive swallowed the scan: $out"
+
+# fail-open must NOT soften real findings: a cached FATAL archive aborts
+tar --zstd -cf "$tmp/cache/pkg-fatal-1.0.0-1-any.pkg.tar.zst" -C "$tmp/b" .
+status=0
+out=$(printf 'pkg-fatal\n' |
+    GSA_ABI_NEED_CHECK_CACHE="$tmp/cache" "$tool" --from-names 2>/dev/null) || status=$?
+[[ $status == 1 ]] || fail "cached fatal went soft (want 1), got $status: $out"
+[[ $out == *'libmissing-fixture.so.42'* ]] || fail "fatal finding lost: $out"
+
+# explicit mode with nothing scannable is still a caller error
+status=0
+run out err -- "$tmp/cache/pkg-clean-0.0.1-1-any.pkg.tar.zst" || status=$?
+[[ $status == 2 ]] || fail "all-garbage explicit input exited $status (want 2): $err"
+[[ $err == *'no input could be scanned'* ]] || fail "missing unscannable verdict: $err"
+
+# ── 8. regression 2026-10-22 replay: prefix twins do not cross-resolve ───
+# The real wall: name `linux-cachyos` glob-matched `linux-cachyos-headers-*`
+# and newest-wins scanned the twin, leaving the kernel unchecked.
+tar --zstd -cf "$tmp/cache/pkg-clean-headers-2.0.0-1-any.pkg.tar.zst" -C "$tmp/b" .
+touch -d '2030-01-01' "$tmp/cache/pkg-clean-headers-2.0.0-1-any.pkg.tar.zst"
+status=0
+out=$(printf 'pkg-clean\n' |
+    GSA_ABI_NEED_CHECK_CACHE="$tmp/cache" "$tool" --from-names 2>/dev/null) || status=$?
+[[ $status == 0 ]] || fail "prefix twin cross-resolved (want clean), got $status: $out"
+[[ $out == *'pkg-clean: clean'* ]] || fail "own archive not scanned: $out"
+[[ $out != *'libmissing-fixture'* ]] || fail "prefix twin was scanned: $out"
+
+# …and the twin resolves under its own name, finding still fatal
+status=0
+out=$(printf 'pkg-clean-headers\n' |
+    GSA_ABI_NEED_CHECK_CACHE="$tmp/cache" "$tool" --from-names 2>/dev/null) || status=$?
+[[ $status == 1 ]] || fail "twin name missed its own archive (want 1), got $status: $out"
+[[ $out == *'libmissing-fixture.so.42'* ]] || fail "twin finding lost: $out"
+
+# ── 9. kernel-class whitelist: skipped by name, carve-outs scanned ──────
+# The owner's optimisation: kernel/firmware payloads cannot carry userspace
+# SONAME skew and are skipped outright — even a FATAL payload inside one.
+tar --zstd -cf "$tmp/cache/linux-cachyos-1.0-1-any.pkg.tar.zst" -C "$tmp/b" .
+touch -d '2030-01-02' "$tmp/cache/linux-cachyos-1.0-1-any.pkg.tar.zst"
+status=0
+out=$(printf 'linux-cachyos\n' |
+    GSA_ABI_NEED_CHECK_CACHE="$tmp/cache" "$tool" --from-names 2>/dev/null) || status=$?
+[[ $status == 0 ]] || fail "kernel-class not skipped (want 0), got $status: $out"
+[[ $out == *'skipped (kernel-class'* ]] || fail "missing kernel-class skip note: $out"
+[[ $out != *'libmissing-fixture'* ]] || fail "kernel payload was scanned: $out"
+
+# …but the -headers carve-out is NOT kernel-class (22 runtime links
+# measured in linux-cachyos-headers, 2026-10-22): same fatal payload stays
+# fatal under the carve-out name.
+tar --zstd -cf "$tmp/cache/linux-cachyos-headers-1.0-1-any.pkg.tar.zst" -C "$tmp/b" .
+status=0
+out=$(printf 'linux-cachyos-headers\n' |
+    GSA_ABI_NEED_CHECK_CACHE="$tmp/cache" "$tool" --from-names 2>/dev/null) || status=$?
+[[ $status == 1 ]] || fail "headers carve-out skipped (want fatal 1), got $status: $out"
+
+# ── 10. fact cache: written on scan, READ on rescan (poison proof) ──────
+# Verdicts are never cached; the parse facts are. Poisoning the cached
+# facts must flip the verdict (proves the cache is READ), and deleting the
+# entry must restore the clean verdict (proves the flip came from cache).
+mkdir -p "$tmp/factcache"
+status=0
+out=$(printf 'pkg-clean\n' |
+    GSA_ABI_NEED_CHECK_CACHE="$tmp/cache" GSA_ABI_NEED_CHECK_FACTCACHE="$tmp/factcache" \
+    "$tool" --from-names 2>/dev/null) || status=$?
+[[ $status == 0 ]] || fail "cache-cold scan exited $status: $out"
+compgen -G "$tmp/factcache/*.facts" >/dev/null || fail "fact cache not written"
+
+sha=$(sha256sum "$tmp/cache/pkg-clean-1.0.0-1-any.pkg.tar.zst")
+sha=${sha%% *}
+{
+    printf '# gsa-abi-need-check facts v1 %s\n' "$sha"
+    printf 'pkg\x1fpkg-clean\n'
+    printf 'file\x1fusr/bin/consumer\x1fELF64\x1f\x1f\x1flibmissing-fixture.so.42\n'
+} >"$tmp/factcache/$sha.facts"
+status=0
+out=$(printf 'pkg-clean\n' |
+    GSA_ABI_NEED_CHECK_CACHE="$tmp/cache" GSA_ABI_NEED_CHECK_FACTCACHE="$tmp/factcache" \
+    "$tool" --from-names 2>/dev/null) || status=$?
+[[ $status == 1 ]] || fail "poisoned fact cache not used (want 1), got $status: $out"
+[[ $out == *'libmissing-fixture.so.42'* ]] || fail "poisoned facts ignored: $out"
+rm -f "$tmp/factcache/$sha.facts"
+status=0
+out=$(printf 'pkg-clean\n' |
+    GSA_ABI_NEED_CHECK_CACHE="$tmp/cache" GSA_ABI_NEED_CHECK_FACTCACHE="$tmp/factcache" \
+    "$tool" --from-names 2>/dev/null) || status=$?
+[[ $status == 0 ]] || fail "cache delete did not restore clean scan: $status: $out"
+
+# ── 11. per-file attribution: findings name the owning payload file ─────
+# Pins the batched-parse `File:` markers: in a multi-file chunk the facts
+# of two files must NOT meld into one record. Order-independent by
+# construction: each file has its own unresolvable need, so melding
+# misattributes one of them whichever file `find` yields first.
+# (Mutation-probed 2026-10-22: a dead marker regex passed every case above
+# — verdicts survive melding — and passed the first draft of this one.)
+make_bin "$tmp/m/usr/bin" first-broken libmissing-a.so.1
+make_bin "$tmp/m/usr/bin" second-broken libmissing-b.so.2
+make_pkgroot "$tmp/m" pkg-multi
+status=0
+run out err -- "$tmp/m" || status=$?
+[[ $status == 1 ]] || fail "multi-file fatal exited $status (want 1): $err"
+[[ $out == *"pkg-multi: 'first-broken' needs 'libmissing-a.so.1'"* ]] ||
+    fail "first file's finding lost/misattributed: $out"
+[[ $out == *"pkg-multi: 'second-broken' needs 'libmissing-b.so.2'"* ]] ||
+    fail "second file's finding lost/misattributed: $out"
+
 printf 'abi-need-check fixture: ok\n'
