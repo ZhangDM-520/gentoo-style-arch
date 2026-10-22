@@ -16094,3 +16094,137 @@ and §6, and the commit/version identifiers of each fix are kept inline.
   1.6.9-1.1, wireplumber 0.5.18-1.1). Sums refreshed with `updpkgsums` and verified byte-identical
   to the b2 Arch publishes for each VCS source (`git archive` of the tag): pipewire `85867001…`,
   wireplumber `eea6a3e0…`.
+
+## 2026-10-22 — geo ABI wave: engine hidden-skew fixes, five recipes, three build walls
+- **Engine hidden-skew (gsa-abi + gsa-install twins)**: file truth is now class-aware and
+  existence-checked (`owns_file_as` in `InstalledView`/`LocalDb`, `ShippedBytes::ships_as`;
+  consumer member's `path_class` threaded through `revdep`/`needed_misses`). Two measured
+  masking bugs closed: a lib32-owned basename must not resolve a 64-bit probe (the lib32-icu
+  class that hid the icu .78 breakage) and a listed-but-dangling symlink is not file truth (the
+  tk `libtk.so` class). Exact-pin comparison is now epoch-tolerant (`0:1.0-1` ≡ `1.0-1`) and
+  soname pins compare against the provider's provide ENTRY version, with the stale display
+  naming the entries. 11 new tests, every fix mutation-probed red-first; gsa-qa's mirror
+  carries a documented scope cut (QaInput has no probe root or consumer class).
+- **Geo wave (xerces-c, openvr, gdal, liblas, pdal)**: five tree recipes authored against the
+  icu-git .79 / jsoncpp-git .28 surfaces, topology records + edges wired (`.SRCINFO` depends
+  mapped to tree provider ids), `config-diagnostics` + `srcinfo-freshness` + `recipe-contract`
+  green. Installed: openvr 2.15.6-2.2, xerces-c 3.3.0-4.2, gdal 3.13.3-6.2, liblas 3.2,
+  pdal 1.2 (QA report clean on the last run).
+- **Wall 1 — icu-git headers vs C++14 (xerces-c)**: `unicode/char16ptr.h` (76+) uses C++17
+  vocabulary; upstream pins `CMAKE_CXX_STANDARD 14` with a plain `set()` that no `-D` cache
+  entry can override. Fix: `prepare()` raises the standard at the declaration site. Micro-repro
+  pinned red/green: the header fails with 18 errors at `-std=c++14`, clean at `-std=c++17`.
+- **Wall 2 — provide-name shape (liblas/pdal)**: soname pins must name the surface the provider
+  actually declares. `libxerces-c.so` exists nowhere (the measured soname is
+  `libxerces-c-3.3.so`, whose auto-version has no `stem.N` shape); makepkg failed with
+  `target not found: libxerces-c.so`. Fixed in both depend arrays; all names then verified
+  satisfiable with `pacman -T`.
+- **Wall 3 — patch residue in gsa-build trees (vtk)**: makepkg re-extracts the tarball's files
+  but files a previous build's patches CREATED persist; `anari-light-extensions.md` (mtime of
+  the 03:14 build) walled the 07:48 rebuild (`would create … which already exists`, hard
+  `prepare()` failure). Fix: `prepare()` self-heal — wipe the source root and re-extract before
+  any patch runs (texlive precedent; opencv audited clean, no file-creating patches).
+- **pkgrel collision traps**: xerces-c `4.1` and openvr `2.1` exactly matched the installed
+  broken CachyOS stamps (measured `pacman -Qi` Packager) — the same-version skip would have
+  kept them. Bumped to `4.2`/`2.2` (gdal 6.2 / liblas 3.2 / pdal 1.2 precedent: always
+  measure installed stamps before choosing stock+.1).
+- **Engine deviation confirmed (poppler 26.10 refused)**: `abi-soname` refuses any drifted
+  provide per se (`tests/abi-drift-install.sh` DEVIATION 2 pins this as emitted); in-run repair
+  coverage (rule 25(d)) is fish-era and the repair write half is contract-deferred (§M). A
+  soname-moving provider therefore cannot land via `gsa -S/-U/-Uf` today. Installed poppler
+  26.08 is runtime-healthy (`ldd` clean), so 26.10 is a version-sync — deferred to a user
+  decision (defer / one-transaction `-Ua` swap / implement §M).
+- **Wave mechanics (measured)**: `--leaf` suppresses selection expansion but NOT the record-
+  mismatch wave closure (providers drag their consumer surface into the plan); `--skip-built`
+  claims existing archives for closure members but forces real rebuilds for the wave providers
+  (token re-bless). xerces-c source fetch: `archive.apache.org` is proxy-broken on this host
+  (curl rc 35, fake-IP 198.18.0.86); `dlcdn.apache.org` serves the byte-identical tarball —
+  pre-fetched into `SRCDEST` against the pinned sha256.
+
+### 2026-10-22 09:10 — run-2 terminal death (not OOM) + detached relaunch
+- Run 2 (`gsa -S --leaf --no-sync --skip-built vtk opencv`) died 08:34:47 with
+  `v2 vtk 143 2145 interrupted-mid-build` (SIGTERM) when the ghostty terminal scope
+  (`app-ghostty-surface-transient-9923.scope`, 21G memory peak) was torn down.
+- Cause chain: session unlock 08:34:42 -> compositor "Data too big for buffer
+  (1048572 + 12 > 1048576)" -> "error in client communication (pid 4221)" (ghostty is a
+  GTK4 client) -> Gdk broken pipe -> scope stop -> SIGTERM to the whole descendant tree.
+  No kernel OOM-kill and no systemd-oomd kill records — memory pressure was a real but
+  separate episode (kernel `warn_alloc` / `cc1plus: page allocation failure` at 08:01:02,
+  free RAM ~155MB in cpuset user@1000.service).
+- Enabler found: vtk build() uses bare `cmake --build build` (x3) -> ninja runs at its
+  default ncpu+2=26 jobs and ignores the engine's GSA_BUILD_JOBS budget; observed 21G
+  build peak. 35 house recipes pass `--parallel "${GSA_BUILD_JOBS:-$(nproc)}"`.
+  Left as-is for this validation run; relaunched with `CMAKE_BUILD_PARALLEL_LEVEL=12`.
+- Relaunched DETACHED (survives terminal death): run 1792631053-21232, 09:05 prepare().
+- Pitfall: a build attached to a terminal scope dies with the terminal. Long builds must
+  be launched detached; the engine result files under /var/lib/gsa/runs/<id>/ are the
+  durable progress signal, never the terminal stream.
+
+### 2026-10-22 12:25 — PreTransaction ABI gate (owner idea), approved removals, stale sweep
+- OWNER ASK: stock Arch/CachyOS packages silently carry fatal ABI breakage
+  (icu .78/.79, jsoncpp .27/.28 class) until first use — add a PreTransaction
+  pacman hook that checks the DOWNLOADED binary, deliberately loose (no
+  version pins / symbol versions: those degrade, they don't kill).
+- SHIPPED: `tools/abi-need-check.sh` + `tools/abi-need-check.hook` +
+  `tests/abi-need-check.sh` (fixture: clean/fatal/dangling-symlink/provides/
+  quiet/from-names/usage; mutation-probed — dangling-symlink oracle red/green).
+  Live at `/etc/pacman.d/hooks/10-gsa-abi-need-check.hook` + `/usr/local/bin/
+  gsa-abi-need-check` (admin-owned until gsa-pm can carry them — needs commit).
+- MEASURED hook semantics (probe hook + throwaway packages, since no alpm
+  docs on host and the web is blocked): `Operation =` is one line per value
+  (`Install | Upgrade` is a parse error); `Type=Package` + `NeedsTargets` +
+  `When=PreTransaction` passes package NAMES on stdin (no argv); names with
+  no `/var/cache/pacman/pkg/<name>-*.pkg.tar.*` download are skipped (a
+  `pacman -U` of a local file never reaches the scan — engine installs keep
+  their own gates).
+- PITFALL MEASURED: a failing PreTransaction hook does NOT stop the
+  transaction unless the Action carries `AbortOnFail` — without it pacman
+  prints "error: command failed to execute correctly" and COMMITS anyway
+  (first red probe installed the broken package despite the finding).
+  With `AbortOnFail`: `error: failed to run transaction hooks`, rc=1, version
+  unchanged. Live red/green both directions, probes removed afterwards.
+- OWNER APPROVAL (2026-10-22): pacman -R actions + the audit report's stale
+  sweep. DONE: `opencl-mesa` + `lib32-opencl-mesa` removed (the deferred
+  lib32-OpenCL scope call), `cachyos-kernel-manager` removed (scx-manager was
+  deliberately retired 2026-10-10, the manager was hard-broken), `gsa -Md
+  --fix` reconciled the orphan/owner drift. `pacman -Dk` now shows only the
+  ghostty-git/ncurses-git terminfo dual-ownership (recipe trim already in
+  place; needs a ghostty-git rebuild + reinstall).
+- REMOVALS LEFT AS DECISIONS (report marks them "if unused", they have
+  consumers): haskell-pandoc cluster (ghc toolchain present), wpewebkit +
+  gst-plugin-wpe2, python-pyqt6, qcoro, throne-bin, qt6-webengine (fcitx5-
+  chinese-addons-git needs it), qt6-quicktimeline (easyeffects-git, qt6-quick3d,
+  qt6-graphs need it).
+
+### 2026-10-22 12:50 — commit split, gsa-pm folding, the terminfo bite (predicted, then measured)
+- Owner disposition (ask_user): **commit + push all session work**. Split as
+  five logical commits: engine hidden-skew twins (63b2b60), geo wave recipes +
+  topology (a3a4826), recipe fixes (0764880), ABI gate trio (33cac04), docs
+  (this entry's commit). gsa-pm folding then took two more: install lines
+  (e5322fb) and the _commit re-pin (91f6609). Pushed 65d70ed..91f6609.
+- **The ghostty terminfo bite materialized exactly as flagged**: the
+  ghostty-git 1.3.1.r3172 rebuild (entry trimmed from the package) deleted
+  `/usr/share/terminfo/g/ghostty` during the upgrade even though ncurses-git
+  still owns it (`pacman -Qk` "1 missing file"). Recovery: `pacman -U` of the
+  indexed ncurses-git archive (sha256-verified against
+  /var/lib/gsa/index/binpkg.jsonl; `pacman -S` cannot see gsa-store
+  packages). Both packages 0 missing files, `pacman -Dk` clean afterwards.
+  Pitfall promoted to MEMORY §6.
+- **gsa-pm now owns the ABI gate**: package() installs the checker to
+  `/usr/bin/gsa-abi-need-check` and the hook to
+  `/usr/share/libalpm/hooks/10-gsa-abi-need-check.hook`; admin fallback copies
+  (/etc/pacman.d/hooks + /usr/local/bin) removed — one Action, one hook file.
+  Built with plain makepkg (bootstrap rule: the PM never builds itself),
+  `GIT_CONFIG_COUNT=0` for the VCS fetch. Install wrinkle: the admin checker
+  copy blocked the file claim (`conflicting files`) — `pacman -U --overwrite`
+  let gsa-pm claim it.
+- Verification chain (all green): fixture battery vs the SHIPPED checker
+  (`tests/abi-need-check.sh` ok), `pacman -Qo` = gsa-pm owns both files, live
+  hook fire proven on a transaction ("Checking runtime library links (gsa ABI
+  gate)…" with the documented local-`-U` skip), `pacman -Dk` clean,
+  `gsa --help` ok on the r415 binary.
+- Owner decisions recorded (MEMORY "Decisions taken"): poppler 26.10 =
+  defer; 35-pkg wave re-bless queue = defer, recorded as follow-up;
+  qt6-webengine and qt6-quicktimeline KEPT (removal cost > harm — same
+  principle applied to quicktimeline on my initiative, owner not objecting);
+  haskell cluster + wpewebkit + python-pyqt6 + qcoro + throne-bin removed.

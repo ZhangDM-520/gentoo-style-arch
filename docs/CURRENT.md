@@ -1,47 +1,41 @@
-# Current maintainer state
+# Current state — 2026-10-22 12:50 (live snapshot; overwrite, do not append)
 
-Dated snapshots of live state. Rules and lessons live in `MEMORY.md`;
-history lives in `NOTE.md`. This file is overwritten, not accumulated.
+## Session closed out (2026-10-22)
+- ALL session work committed and pushed (65d70ed..91f6609, five logical
+  commits + the two gsa-pm folding commits). Working tree clean except this
+  docs commit.
+- gsa-pm 0.1.0+r415+ge5322fb516ed-1 BUILT (plain makepkg, bootstrap rule) and
+  INSTALLED. It owns the PreTransaction ABI gate end-to-end:
+  `/usr/bin/gsa-abi-need-check` + `/usr/share/libalpm/hooks/10-gsa-abi-need-check.hook`
+  (both `pacman -Qo` = gsa-pm). Admin fallback copies removed — one Action,
+  one hook file. Live hook fire proven; fixture battery green vs the shipped
+  checker.
+- ghostty-git 1.3.1.r3172 built + installed. The predicted terminfo bite
+  happened (upgrade deleted the ncurses-git-owned shared file) and was
+  recovered via `pacman -U` of the indexed ncurses-git archive (sha256
+  verified). `pacman -Qk` 0 missing files both packages; `pacman -Dk` clean.
+- Deliverable status unchanged: vtk 9.7.1-1.2 + opencv/python-opencv
+  5.0.0-13.3 installed and ABI-validated; provides-audit rc=0 (413/59/0).
 
-## 2026-10-22 02:30 CST — vtk + python-opencv included and installed; ABI status validated
+## Owner decisions taken (2026-10-22)
+1. Commit disposition = commit and push (done).
+2. Removals: haskell cluster (214 pkgs, ghc kept), wpewebkit +
+   gst-plugin-wpe2, python-pyqt6, qcoro, throne-bin, opencl-mesa +
+   lib32-opencl-mesa, cachyos-kernel-manager — DONE. qt6-webengine KEPT
+   (removal cost > harm). qt6-quicktimeline KEPT on the same principle
+   (would cost easyeffects-git, qt6-quick3d, qt6-graphs).
+3. ghostty_rebuild = true (done; terminfo recovered; -Dk clean).
+4. ABI wave re-bless queue (35 GUI packages) = DEFER, recorded as follow-up.
+5. poppler 26.10 = DEFER (installed 26.08 runtime-healthy; the soname move
+   needs §M repair-write or a one-transaction -Ua per rule 25(d)).
 
-**Machine state (probed 02:25).** HEAD `8e9a622` == `origin/main` + one
-UNCOMMITTED worktree carrying this task (see below). Build drive `/dev/sda`
-(f2fs, kernel-mounted at the gsa-build path — the automount that dropped it
-mid-build on 2026-10-22 is superseded; MEMORY §6 carries the lesson):
-~60G free after the vtk build. `/run` tmpfs healthy (1%). Installed and
-verified: **vtk 9.7.1-1.2**, **python-opencv 5.0.0-13.2**, **opencv
-5.0.0-13.2** (all tree-built; the broken CachyOS installs are replaced),
-jsoncpp-git 1.9.8.r14 unchanged. IgnorePkg registers opencv/vtk/python-opencv
-so stock cannot reinstall over them.
+## Follow-ups (deferred by owner)
+- The 35-package wave re-bless queue (vtk/opencv token move). Wave mechanics
+  measured: --leaf suppresses selection expansion but NOT record-mismatch
+  wave closure; --skip-built claims archives but forces provider rebuilds.
+- poppler 26.10 landing path (see §M / rule 25(d)).
+- gsa-pm engine redeploy is DONE for this session's changes; /usr/bin/gsa is
+  now the r415 binary carrying the hidden-skew fixes.
 
-**The task (owner ask).** Stock vtk/python-opencv broke on this host
-(stock links `libjsoncpp.so.27`; the tree's jsoncpp-git ships `.28` — 76 vtk
-libs had `libjsoncpp.so.27 => not found`). Both are now tree recipes:
-`packages/stable/vtk` (full optimisation stack: mold + LTO + cmake-tier
-two-phase PGO, trained 4996 gcda vs floor 100, `lib/pgo.sh` gate; 413 bare-
-soname provides) and `python-opencv` restored as a split output of
-`packages/stable/opencv` (rule 24 sibling pins). Wired in `config/topology.conf`
-(vtk record with 34 edges; opencv record +python,+vtk). Validated by
-`sudo gsa -S --leaf --no-sync` of exactly the two + `gsa -Qa`: vtk token
-`f2f111c1…` self-consistent; the opencv set's subscribers hold `d4e316cc…`
-which matches an independent recomputation of the built payload exactly;
-`tools/provides-audit.sh` rc=0 (413/413). Six walls (3 code patches, 1 infra,
-1 build-system) are narrated in NOTE.md 2026-10-22.
-
-**Uncommitted worktree (commit disposition ASKED, awaiting owner).**
-`packages/stable/vtk/**` (new recipe + 3 patches), `packages/stable/opencv/*`
-(python-opencv output, pkgrel 13.2), `config/topology.conf`, `docs/{NOTE,
-MEMORY,CURRENT}.md` (including the 2026-10-21 marathon-close snapshot).
-
-**Remaining owner follow-ups.**
-- colord-git split decision (stock `colord` exact-locks `libcolord=1.4.8-2`
-  vs stack `libcolord-git` 1.4.8.r16.g56ccc23-1) — untouched since 10-21.
-- QA provides-versioning class (6-8 findings/run) — report-only.
-- NEW: stock optdepend providers `gdal`, `liblas`, `pdal` link icu .78 and
-  `openvr` links jsoncpp .27 — the same skew class one level down; 5 vtk
-  optional-module libs carry their unresolved sonames. Tree recipes for the
-  four (or trimming those modules) is the stack-consistent remedy.
-- NEW (engine): `gsa -Qa` shows the last output's derived token under a
-  split recipe's row set (subscriptions carry the true token) — cosmetic/
-  report-only candidate.
+## Next action
+None pending — session work complete. New work starts from the follow-ups.

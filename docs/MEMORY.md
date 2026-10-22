@@ -2202,7 +2202,39 @@ constant, not a baked path); and the xorg-xwayland-git PGO end-to-end proof
 (2026-10-21: `PGO profile: 367 gcda files — rebuilding with profile` vs the
 50 floor, run 1792586096-1416592; wall + borrow in NOTE.md 2026-10-21).
 
-## 6. Pitfall digest (full details: NOTE.md sections of same dates)
+### Decisions taken (2026-10-22, owner) — outcomes recorded here only
+- **poppler 26.10 soname move (163→165)**: DEFERRED (owner). The install
+  gate refuses drifted provides per se (§6); the alternatives (one `-Ua`
+  transaction per rule 25(d)'s same-transaction coverage, or implementing
+  the contract §M repair write half) stay available if the bump is wanted
+  later. Installed 26.08 is runtime-healthy (`ldd` clean). Consumers to
+  ride any landing: gimp-git, krita-git, libreoffice-fresh, inkscape + the
+  sibling outputs.
+- **host opencl-mesa removal**: DONE — `opencl-mesa` + `lib32-opencl-mesa`
+  both removed (2026-10-22); mesa-git owns the surface via
+  conflicts/provides `opencl-mesa=${pkgver}`.
+- **gsa-pm engine redeploy**: DONE — the session work (hidden-skew engine
+  fixes + ABI gate trio) is committed and pushed; gsa-pm re-pinned to the
+  gate-carrying tree and rebuilt with plain makepkg (bootstrap rule: the PM
+  never builds itself).
+- **ABI wave re-bless queue (35 GUI packages) and poppler**: deferred as
+  follow-ups per owner; wave mechanics for the eventual run are recorded in
+  NOTE.md 2026-10-22 ("--leaf suppresses selection expansion but NOT the
+  record-mismatch wave closure").
+
+## 6. Pitfall digest (full details: NOTE.md sections of same dates):
+
+- **Trimming one package's copy of a DUAL-OWNED file deletes the shared file
+  for every owner — the remaining owner is left with a missing file**
+  (2026-10-22, ghostty terminfo bite, predicted and then measured): ghostty
+  and ncurses-git both shipped `/usr/share/terminfo/g/ghostty`; the
+  ghostty-git rebuild that trims the entry removed the file during upgrade
+  even though ncurses-git still lists it (`pacman -Qk`: "1 missing file").
+  Recovery is the surviving owner's reinstall (here `pacman -U` of the
+  indexed ncurses-git archive — `pacman -S` cannot see gsa-store packages).
+  Rule: whenever a recipe trims a file another package also ships, expect
+  the upgrade to eat it and schedule the surviving owner's reinstall in the
+  same breath.
 
 - **A build path can silently be a tmpfs shadow: unmounted media leave the
   empty mountpoint directory, and writes land in `/run` or `/tmp` until
@@ -3718,3 +3750,88 @@ constant, not a baked path); and the xorg-xwayland-git PGO end-to-end proof
   regexes, and ffmpeg moved `LIBAVFORMAT_VERSION_MAJOR` into `version_major.h`).
   Patch the probe to a measured-correct parse and verify the arithmetic with
   `cmake -P` before the next 2h build cycle. Details: NOTE.md 2026-10-22.
+- **A soname pin must name the provide surface the provider actually
+  declares — a plausible-looking bare stem can exist nowhere** (2026-10-22,
+  liblas/pdal wall): `libxerces-c.so` matches no provide (the measured
+  soname is the dash-versioned `libxerces-c-3.3.so`, whose auto-version has
+  no `stem.N` shape), and makepkg wall-fails with `target not found` at the
+  dependency check. Verify every depend name with `pacman -T` (the exact
+  satisfiability oracle the shim uses) before a wave launch. Details: NOTE.md
+  2026-10-22.
+- **makepkg re-extracts tarball files but patch-CREATED files persist in the
+  build tree — a later build's patch application hard-fails on them**
+  (2026-10-22, vtk wall): `anari-light-extensions.md` from the 03:14 build
+  walled the 07:48 rebuild ("would create … which already exists", non-
+  interactive `patch` exits 1). `prepare()` must self-heal (wipe the source
+  root, re-extract, then patch — texlive precedent) whenever patches create
+  files; patches that only modify files are healed by re-extraction alone.
+  Details: NOTE.md 2026-10-22.
+- **ICU 76+ headers require C++17 and a project's plain
+  `set(CMAKE_CXX_STANDARD 14)` cannot be overridden by a `-D` cache entry**
+  (2026-10-22, xerces-c wall): `unicode/char16ptr.h` uses `std::is_same_v` /
+  `u16string_view`; raise the standard at the declaration site in
+  `prepare()`. Cheap red/green probe: `g++ -std=c++14` on a TU including the
+  header (18 errors) vs `-std=c++17` (clean). Details: NOTE.md 2026-10-22.
+- **`stock+.1` pkgrel deltas collide with broken vendor stamps — measure the
+  installed stamp first** (2026-10-22): xerces-c `4.1` and openvr `2.1`
+  exactly matched the installed CachyOS builds (same-version skip would keep
+  the broken binaries); the delta must strictly beat `pacman -Qi`'s version.
+  Details: NOTE.md 2026-10-22.
+- **A drifted soname provide refuses at install PER SE — soname bumps cannot
+  land through the engine** (2026-10-22, poppler 26.10): `abi-soname` is
+  unconditional (`tests/abi-drift-install.sh` DEVIATION 2 pins it as
+  emitted); in-run repair coverage (rule 25(d)) is fish-era and the repair
+  write half is contract-deferred (§M). Plan soname moves as a decision, not
+  a build. Wave mechanics (measured): `--leaf` suppresses selection
+  expansion, not the record-mismatch wave closure; `--skip-built` claims
+  closure members but forces real rebuilds of wave providers (token re-bless).
+  `--no-deps` is the RETIRED spelling of `--leaf` (contract §B.8 rename table)
+  — owner language "a no-deps -S of the two" means leaf-only selection of the
+  two; the wave closure is engine policy (§E.3 "never under-expand"), so a
+  scoped run needs a stop after the named results land. Details: NOTE.md
+  2026-10-22.
+- **Moving SRCDEST strands `objects/info/alternates` in old VCS working
+  copies on the build drive** (2026-10-22, mlt wall): the pre-move path
+  (`~/.cache/gsa-src/<name>/objects`) is gone and every VCS recipe whose
+  working copy predates the move hard-fails at "Creating working copy"
+  ("unable to normalize alternate object path … does not appear to be a git
+  repository"). 41 such trees measured on the build drive. Sweep + heal:
+  `grep -rl "\.cache/gsa-src" $BUILD --include=alternates` then redirect each
+  to `~/.gsa-src/<name>/objects`. Same residue class as patch-created files
+  and the tlpkg husk: the tree outlives the config it was made under.
+  Details: NOTE.md 2026-10-22.
+- **A bare `cmake --build build` ignores `GSA_BUILD_JOBS` — ninja runs its
+  own default `ncpu+2`** (2026-10-22, vtk memory wall): 26 parallel VTK
+  compiles at ~1.6-2.5 GiB RSS each hit 21-29 GiB peaks, kernel
+  `cc1plus: page allocation failure`, and ~700 MB/s zram churn. The house
+  shape is `cmake --build build --parallel "${GSA_BUILD_JOBS:-$(nproc)}"`
+  (35 recipes); env `CMAKE_BUILD_PARALLEL_LEVEL=N` is the no-code cap.
+  Measure with `ps -C cc1plus -o rss=` before trusting a parallelism choice.
+  Details: NOTE.md 2026-10-22.
+- **A build attached to a terminal scope dies with that terminal** (2026-10-22):
+  a Wayland protocol error killed the Ghostty surface; its
+  `app-ghostty-*.scope` stopped and every descendant got SIGTERM (engine row
+  `interrupted-mid-build`, rc 143) — no OOM involved. Long runs must launch
+  detached (survives terminal teardown); progress truth stays in
+  `/var/lib/gsa/runs/<id>/*.result`, never the terminal stream. Details:
+  NOTE.md 2026-10-22.
+- **`provides` is hand-maintained and drifts when a dependency newly enables
+  a module** (2026-10-22, opencv): the sfm module started shipping
+  `libopencv_sfm.so.500` (ceres present) while the static `provides` array
+  lacked the bare stem — `tools/provides-audit.sh` on the built archives is
+  the check (exit 1 = presence findings); the fix is a `provides` entry plus
+  a pkgrel bump (same-version skip would leave the old metadata installed).
+  Details: NOTE.md 2026-10-22.
+- **A pacman hook's failing command does NOT stop the transaction unless the
+  Action carries `AbortOnFail`** (2026-10-22, measured): without it pacman
+  logs `error: command failed to execute correctly` and commits the install
+  anyway — the first red probe of the ABI gate installed the broken package
+  despite the printed finding. Any blocking gate must be red/green-probed at
+  transaction level, not just at script level. Details: NOTE.md 2026-10-22.
+- **alpm hook input is package NAMES on stdin, and only for names with a
+  cached download** (2026-10-22, measured — no alpm-hooks docs on host):
+  `Type=Package` + `NeedsTargets` + `When=PreTransaction` passes names one
+  per line, no argv; `Operation =` takes one line per value (`Install |
+  Upgrade` is a parse error); a `pacman -U` of a local file resolves to no
+  `/var/cache/pacman/pkg/<name>-*` archive and is therefore skipped. Details:
+  NOTE.md 2026-10-22.
