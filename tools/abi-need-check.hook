@@ -1,0 +1,34 @@
+# 10-gsa-abi-need-check — refuse fatal runtime dependency breakage before it
+# installs.
+#
+# A stock Arch/CachyOS package built against a SONAME set this host has
+# already moved past (icu .78 -> .79, jsoncpp .27 -> .28, …) installs fine
+# and then fails silently on first use — measured 2026-10-22 across 45
+# installed packages. This PreTransaction hook scans the DOWNLOADED payload
+# of every pending install/upgrade and aborts the transaction when a
+# DT_NEEDED soname has no file behind it.
+#
+# Deliberately loose (owner's scope call, 2026-10-22): fatal means no FILE
+# resolves the soname — symbol versions, versioned provides and pin drift
+# are not checked, they degrade features rather than kill the package.
+#
+# Install (until gsa-pm owns it):
+#   sudo install -Dm644 tools/abi-need-check.hook /etc/pacman.d/hooks/10-gsa-abi-need-check.hook
+#   sudo install -Dm755 tools/abi-need-check.sh /usr/bin/gsa-abi-need-check
+#
+# Hook semantics are measured, not assumed (2026-10-22 probe hook):
+# `Type = Package` + `NeedsTargets` + `When = PreTransaction` passes the
+# package NAMES of the transaction on stdin, one per line.
+
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Package
+Target = *
+
+[Action]
+Description = Checking runtime library links (gsa ABI gate)...
+When = PreTransaction
+NeedsTargets
+AbortOnFail
+Exec = /usr/bin/gsa-abi-need-check --from-names
