@@ -102,14 +102,14 @@ fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-sudo-fixture.XXXXXX")
 # the ABSOLUTE /usr/bin/sudo (never the PATH stub).
 trap '/usr/bin/sudo -n rm -rf -- "$fixture" 2>/dev/null || rm -rf -- "$fixture" 2>/dev/null || true' EXIT
 
-# ─── The engine under test: built into the fixture tree (scratch only).
-# GSA_TEST_GSA_BIN, when already set to an executable, is that engine (the
-# rr-v2.bash run_engine convention) and the scratch build is skipped. ──────
+# ─── The engine under test: the INSTALLED binary (contract §L.10 — smoke
+# test what the user runs — never a nested target/ build). GSA_TEST_GSA_BIN
+# is the explicit pre-install override (rr-v2.bash run_engine convention). ──────
 if [ -z "${GSA_TEST_GSA_BIN:-}" ]; then
-    cargo build --offline --quiet --target-dir "$fixture/cargo" -p gsa-cli \
-        --manifest-path "$gsa_repo_root/Cargo.toml" ||
-        { printf 'sudo keepalive fixture: cannot build the gsa binary\n' >&2; exit 1; }
-    GSA_TEST_GSA_BIN="$fixture/cargo/debug/gsa"
+    GSA_TEST_GSA_BIN=$(command -v gsa) || {
+        printf 'contract §L.10: no installed gsa on PATH — install gsa-pm, or set GSA_TEST_GSA_BIN explicitly\n' >&2
+        exit 1
+    }
 fi
 [ -x "$GSA_TEST_GSA_BIN" ] || { printf 'sudo keepalive fixture: engine not executable: %s\n' "$GSA_TEST_GSA_BIN" >&2; exit 1; }
 export GSA_TEST_ENGINE=gsa

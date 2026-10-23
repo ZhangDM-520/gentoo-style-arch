@@ -16519,3 +16519,41 @@ contaminated repetition is on record: a `cargo test -p gsa-cli -p gsa-sched`
 run started while the machine still drained the parallel battery and showed
 2 gsa-sched failures whose names were not captured; three clean re-runs since
 (solo + combined) — treated as load flakes, not evidence of a defect.
+
+## 2026-10-23 (night) — gsa-pm: git self-tracking recipe, and the "test what is installed" contract
+
+**Symptom (owner).** `gsa -S gsa-pm` installed `0.1.0+r418+g7f52bded1403-1`
+and the output messages were unchanged — the UX wave was "not implemented on
+my side".
+
+**Root cause.** The recipe PINNED the engine source: `_commit=7f52bded…`
+(`source=…#commit=$_commit`), so every `gsa -S gsa-pm` rebuilt the same old
+tree no matter what landed on `main` (origin/main was 13 commits ahead,
+including the UX wave). Compounding it: my acceptance runs exercised
+`target/debug/gsa` (the nested crate build) — green there, old behaviour in
+the packaged `/usr/bin/gsa`. Two gaps, one confusion.
+
+**Fix 1 — gsa-pm git self-tracking (owner: "make it git self-track").**
+The source floats on the default branch (house `packages/git/*` idiom —
+makepkg resolves `origin/HEAD` when no fragment is given, verified in
+/usr/share/makepkg/source/git.sh:116), `pkgver()` keeps deriving
+`0.1.0+r<count>+g<short12>` from the FETCHED checkout, and makepkg's
+`update_pkgver` rewrites the `pkgver=` field (and resets `pkgrel`) at build
+time — the field self-reports the last built version. `_commit` is gone;
+there is no pin to re-bump. Provenance is not lost: the fetched commit is
+recorded in the archive's VCS baseline (§J.4) like every other VCS recipe.
+Validated with `makepkg --nobuild`: the fetch moved `56aa0b0..0308687
+main -> origin/main` with no pin, `prepare()` passed, `pkgver()` returned
+`0.1.0+r429+g03086875e4d0` matching the committed field (`.SRCINFO`
+regenerated).
+
+**Fix 2 — contract §L.10 (owner: "always smoke test from my installed
+binary, no crate build nested binary file").** "Works" = the packaged
+`gsa` behaves. `tests/run-all.sh` and all 63 fixture engine-resolution
+blocks now default to `command -v gsa` (the installed engine) and the
+battery banner names the binary + owning package; every nested engine build
+(run-all prebuild, the per-fixture `cargo build --target-dir` scratch trees)
+is deleted. `GSA_TEST_GSA_BIN` stays as the explicit pre-install override,
+reported as a deviation. Deploy loop: ship → `sudo gsa -Sy` →
+`sudo gsa -S gsa-pm` → validate the INSTALLED engine. MEMORY golden rule
+61 records the same (the r418 gap lesson).

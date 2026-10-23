@@ -82,16 +82,16 @@ fail() {
     exit 1
 }
 
-# The engine under test: scratch build only when GSA_TEST_GSA_BIN is not
-# already set (the rr-v2.bash run_engine convention).
+# The engine under test: the INSTALLED binary (contract §L.10);
+# GSA_TEST_GSA_BIN is the explicit pre-install override (rr-v2.bash).
 if [ -z "${GSA_TEST_GSA_BIN:-}" ]; then
-    cargo build --offline --quiet --target-dir "$fixture/cargo" -p gsa-cli \
-        --manifest-path "$gsa_repo_root/Cargo.toml" \
-        || fail "cannot build the gsa binary for the fixture"
-    GSA_TEST_GSA_BIN="$fixture/cargo/debug/gsa"
+    GSA_TEST_GSA_BIN=$(command -v gsa) || {
+        printf 'contract §L.10: no installed gsa on PATH — install gsa-pm, or set GSA_TEST_GSA_BIN explicitly\n' >&2
+        exit 1
+    }
 fi
 gsa_bin="$GSA_TEST_GSA_BIN"
-[ -x "$gsa_bin" ] || fail "cargo did not produce $gsa_bin"
+[ -x "$gsa_bin" ] || fail "the engine under test is not executable: $gsa_bin"
 export GSA_TEST_ENGINE=gsa
 export GSA_TEST_GSA_BIN="$gsa_bin"
 

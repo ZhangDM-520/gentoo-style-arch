@@ -80,26 +80,26 @@ fi
 work=$(mktemp -d "${TMPDIR:-/tmp}/gsa-battery.XXXXXX") || exit 1
 trap 'rm -rf -- "$work"' EXIT
 
-# One engine, built once. Fixtures honour the rr-v2.bash GSA_TEST_GSA_BIN
-# convention (an already-set executable is used as-is); when it is unset every
-# engine fixture builds its own ~5 GiB debug tree under $TMPDIR, and a battery
-# run exhausting the 16 GiB /tmp tmpfs (99 MiB free observed, 2026-10-15)
-# fails at random: bash here-string temp files and child spawns die with
-# ENOSPC/EAGAIN and fixtures fail in unrelated-looking ways. The prebuild
-# lands in the repository's target/ (disk, git-ignored), never in $TMPDIR
-# scratch; a standalone fixture still builds its own engine as before.
-if [[ -z ${GSA_TEST_GSA_BIN:-} || ! -x ${GSA_TEST_GSA_BIN} ]]; then
-    cargo build --offline --quiet -p gsa-cli --manifest-path "$root/Cargo.toml" || {
-        printf 'run-all.sh: cannot build the gsa binary the fixtures test\n' >&2
-        exit 1
-    }
-    GSA_TEST_GSA_BIN="$root/target/debug/gsa"
+# The engine under test is the INSTALLED binary (contract §L.10: smoke test
+# what the user runs — never a nested crate build). A fixture run validates
+# the packaged engine; GSA_TEST_GSA_BIN is the explicit pre-install override
+# and is reported as a deviation. The battery NAMES the binary and its
+# package so the "tested X, shipped Y" gap (the r418 lesson) can never pass
+# silently again.
+if [[ -z ${GSA_TEST_GSA_BIN:-} ]]; then
+    GSA_TEST_GSA_BIN=$(command -v gsa || true)
+    how='contract §L.10 default (installed engine)'
+else
+    how='GSA_TEST_GSA_BIN override — pre-install deviation from §L.10'
 fi
-[[ -x $GSA_TEST_GSA_BIN ]] || {
-    printf 'run-all.sh: engine under test is not executable: %s\n' "$GSA_TEST_GSA_BIN" >&2
+[[ -x ${GSA_TEST_GSA_BIN:-} ]] || {
+    printf 'run-all.sh: no installed gsa on PATH (contract §L.10 tests the installed engine)\n' >&2
+    printf 'run-all.sh: install gsa-pm first, or set GSA_TEST_GSA_BIN explicitly\n' >&2
     exit 1
 }
 export GSA_TEST_GSA_BIN
+printf 'engine under test: %s (%s)\n' "$GSA_TEST_GSA_BIN" "$how"
+pacman -Qo "$GSA_TEST_GSA_BIN" 2>/dev/null | sed 's/^/  owned by: /' || true
 
 # W4 build-cache isolation: engine runs create their build cache at the
 # resolved root (default: the build user's ~/.cache/gsa). The battery keeps

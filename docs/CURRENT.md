@@ -79,21 +79,25 @@
 - When the drive returns: remount + f2fs fsck + `sudo gsa -Md --fix`
   (binpkg index rows still point at the old drive paths).
 
-## UX wave READY, uncommitted — awaiting owner commit disposition (2026-10-23)
+## UX wave SHIPPED (2026-10-23, commit 0308687 on origin/main)
 - Human-default readability + machine vocabulary (owner ask): `help.rs`,
   `output.rs`/`render.rs` catalog (unit-pinned both vocabularies), `write_notes`
   mode-split, lane state (`runs/current`, `<run>/<pkg>.started`
   pid/epoch/log-offset, `SupEvent::Tick`), live TTY dashboard (`dashboard.rs`:
   progress box, run-scoped tails, spinner + event footer, 10 s `STATUS:` pipe
-  hint under `--human`).
-- Validation: the fixture batch + NEW `tests/dashboard-pty.sh` green (PTY box,
-  pipe STATUS, machine purity), `cargo test --workspace` green, every new
-  mechanism mutation-probed RED first. Full-battery result: see NOTE.md
-  2026-10-23.
-- Contract §J.1/§L amended (lane-state rows + rule 9 two-vocabulary + the two
-  recorded deviations: width probed per run; install.rs txn interrupt lines
-  stay prose).
-- Nothing to push until the owner says commit/push/leave — house rule.
+  hint under `--human`). Battery 76/76 + `cargo test --workspace` green.
+
+## gsa-pm git self-tracking + contract §L.10 (2026-10-23 night, uncommitted → asked)
+- The r418 gap: the recipe's `#commit=` pin rebuilt the old engine forever
+  while acceptance ran on `target/debug/gsa`. Both gaps closed:
+  (1) gsa-pm source floats on the default branch (house -git idiom,
+  `pkgver()` self-derives `0.1.0+rN+g<hash>`, makepkg rewrites the field);
+  (2) contract §L.10 + MEMORY rule 61: smoke tests run the INSTALLED binary
+  (`tests/run-all.sh` banner names it + its package), nested crate builds
+  deleted from run-all and all 63 fixtures; `GSA_TEST_GSA_BIN` = explicit
+  pre-install override only.
+- Deploy loop (after commit lands): `sudo gsa -Sy` → `sudo gsa -S gsa-pm` →
+  battery + smoke against `command -v gsa`.
 
 ## Still deferred (owner)
 - 35-pkg ABI wave re-bless queue; poppler 26.10 landing path.
@@ -101,4 +105,4 @@
 ## Next action
 Owner: (1) aranicy cutover — install the built 0.1.0-1, retire
 ananicy-cpp; (2) recover the offline drive (re-plug/remount, f2fs fsck,
-SMART); (3) UX wave — commit disposition (commit / push / leave-as-is).
+SMART); (3) commit disposition for the self-tracking recipe + §L.10 sweep.

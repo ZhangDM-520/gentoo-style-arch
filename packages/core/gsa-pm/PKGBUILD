@@ -3,8 +3,18 @@
 # Bootstrap recipe for the native gsa engine (plan-native-pm.md §7): the PM
 # ships as a recipe in the repo it manages and must build with plain makepkg,
 # never with itself — a broken gsa is always recoverable with makepkg alone.
-# The VCS source is this very repository, so each engine change bumps _commit
-# together with pkgver and the committed .SRCINFO.
+#
+# GIT SELF-TRACKING (owner decision 2026-10-23): the source floats on this
+# repository's default branch and `pkgver()` derives the version from the
+# fetched checkout — the same idiom as every `packages/git/*` recipe. There
+# is NO commit pin to re-bump: land an engine change, and the next build
+# fetches, versions and ships it. (The former `#commit=` pin demanded a
+# manual `_commit`+`pkgver`+.SRCINFO bump per change and silently kept
+# shipping old code — the r418 gap.) Build provenance is not lost with the
+# pin: the fetched commit is recorded in the archive's VCS baseline
+# (contract §J.4), which is what every other VCS recipe in the tree ships
+# on. makepkg rewrites the `pkgver=` below at build time (and resets
+# `pkgrel`), so the field self-reports the last built version.
 #
 # Checksum pinning (plan §7 vs docs/package-policy.md): plan §7 asked for
 # `cargo vendor`-ed, checksum-pinned crates; package-policy forbids
@@ -15,7 +25,7 @@
 # vendored and nothing is fetched without a hash check.
 
 pkgname=gsa-pm
-pkgver=0.1.0+r418+g7f52bded1403
+pkgver=0.1.0+r429+g03086875e4d0
 pkgrel=1
 pkgdesc='Native package manager engine for the Gentoo-style Arch package set'
 arch=('x86_64')
@@ -27,20 +37,18 @@ depends=('gcc-libs' 'glibc')
 makedepends=('git' 'rust')
 # !debug: the release profile carries no debug info (house style: mold-git).
 options=('!debug')
-_commit=7f52bded1403ac861ee22c42593c802c0a525cba
-# Pinned VCS source: the #commit= revision is the integrity anchor (house
-# idiom, cf. glibc-git). A commit pin is not a signed ref, so the plain
-# family form applies (CONTRIBUTING source-verification scope); never widen
-# this to a floating branch. The explicit alias pins the checkout directory
-# name to the repo name, so every cd below is independent of the URL shape.
-source=("gentoo-style-arch::git+https://github.com/ZhangDM-520/gentoo-style-arch#commit=$_commit")
+# The VCS source is this very repository (self-tracking, see the header):
+# plain house -git form, floating on the default branch. The explicit alias
+# pins the checkout directory name to the repo name, so every cd below is
+# independent of the URL shape.
+source=("gentoo-style-arch::git+https://github.com/ZhangDM-520/gentoo-style-arch")
 sha256sums=('SKIP')
 
 pkgver() {
   cd gentoo-style-arch
 
   # Base version from the workspace manifest so a version bump is picked up
-  # without editing this function.
+  # without editing this function; the commit identity is the fetched tip.
   local _basever
   _basever=$(sed -n '/^\[workspace\.package\]/,/^\[/{s/^version = "\(.*\)"$/\1/p}' Cargo.toml)
   test -n "$_basever" || return 1
@@ -50,13 +58,12 @@ pkgver() {
 }
 
 prepare() {
-  # Fail closed when the pin predates the Rust workspace: a stale _commit
-  # must be refreshed to a commit whose tree contains crates/, and this
-  # message says so instead of surfacing later as cargo's "could not find
-  # Cargo.toml".
+  # Fail closed when the fetch carries no Rust workspace: a wrong URL or a
+  # repo-layout surprise must say so here instead of surfacing later as
+  # cargo's "could not find Cargo.toml".
   if [[ ! -f gentoo-style-arch/Cargo.toml || ! -d gentoo-style-arch/crates ]]; then
-    error "pinned tree _commit=%s carries no Rust workspace" "$_commit"
-    error "refresh _commit (plus pkgver and .SRCINFO) to a commit containing crates/"
+    error "fetched tree carries no Rust workspace"
+    error "source URL is wrong or the repository lost crates/ — refusing to build"
     return 1
   fi
 }

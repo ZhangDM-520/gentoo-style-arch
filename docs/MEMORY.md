@@ -1321,6 +1321,16 @@
     move failure is a hard error. (last reviewed 2026-10-17) Pinned by
     `tests/gsa-store-v2.sh` sections a/d/e/f/g and `tests/gsa-sync-v2.sh`
     section 7.
+61. **Smoke tests run the INSTALLED engine — never a nested crate build**
+    (2026-10-23, the r418 gap): the battery and every smoke check ran green
+    against `target/debug/gsa` while the user's `gsa -S gsa-pm` shipped the
+    pinned old engine — same symptom, opposite sides of the gap. "Works"
+    means the packaged `/usr/bin/gsa` behaves (contract §L.10): the deploy
+    loop ends `sudo gsa -Sy` → `sudo gsa -S gsa-pm` → validate what was
+    installed (`tests/run-all.sh` names the binary and its owning package in
+    its banner). `GSA_TEST_GSA_BIN` remains a pre-install override and is
+    reported as a deviation. The companion fix is gsa-pm's git self-tracking
+    recipe (no `_commit` pin to forget). (last reviewed 2026-10-23)
 
 ## 2. Workspace overview
 

@@ -93,17 +93,13 @@ command -v script >/dev/null || {
 rr2_stub_knob GSA_FAKE_ENGINE_PID "dashboard engine wrapper: pidfile of the engine process to signal"
 rr2_stub_knob GSA_FAKE_DEFER_PACKAGE "dashboard makepkg stub: package id whose build exits 99 (deferral)"
 
-# The engine under test for the flipped sections: scratch build only when
-# GSA_TEST_GSA_BIN is not already set (the rr-v2.bash run_engine convention).
-# The fish-driven sections never see it.
+# The engine under test for the flipped sections: the installed binary
+# (contract §L.10). The fish-driven sections never see it.
 if [ -z "${GSA_TEST_GSA_BIN:-}" ]; then
-    cargo build --offline --quiet --target-dir "$fixture/cargo" -p gsa-cli \
-        --manifest-path "$gsa_repo_root/Cargo.toml" \
-        || {
-        printf 'cannot build the gsa binary for the fixture\n' >&2
+    GSA_TEST_GSA_BIN=$(command -v gsa) || {
+        printf 'contract §L.10: no installed gsa on PATH — install gsa-pm, or set GSA_TEST_GSA_BIN explicitly\n' >&2
         exit 1
     }
-    GSA_TEST_GSA_BIN="$fixture/cargo/debug/gsa"
 fi
 gsa_bin="$GSA_TEST_GSA_BIN"
 if [ ! -x "$gsa_bin" ]; then

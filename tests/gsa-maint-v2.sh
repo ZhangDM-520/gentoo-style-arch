@@ -127,14 +127,14 @@ assert_varlib_unchanged() {
         fail "the real /var/lib/gsa moved under tests/gsa-maint-v2.sh — every state root must be a --state-dir/GSA_STATE_DIR override (§J.3)"
 }
 
-# ─── The engine under test: built into the fixture tree (scratch only).
-# GSA_TEST_GSA_BIN, when already set to an executable, is that engine (the
-# rr-v2.bash run_engine convention) and the scratch build is skipped. ──────
+# ─── The engine under test: the INSTALLED binary (contract §L.10 — smoke
+# test what the user runs — never a nested target/ build). GSA_TEST_GSA_BIN
+# is the explicit pre-install override (rr-v2.bash run_engine convention). ──────
 if [ -z "${GSA_TEST_GSA_BIN:-}" ]; then
-    cargo build --offline --quiet --target-dir "$fixture/cargo" -p gsa-cli \
-        --manifest-path "$gsa_repo_root/Cargo.toml" \
-        || fail "cannot build the gsa binary for the fixture"
-    GSA_TEST_GSA_BIN="$fixture/cargo/debug/gsa"
+    GSA_TEST_GSA_BIN=$(command -v gsa) || {
+        printf 'contract §L.10: no installed gsa on PATH — install gsa-pm, or set GSA_TEST_GSA_BIN explicitly\n' >&2
+        exit 1
+    }
 fi
 [ -x "$GSA_TEST_GSA_BIN" ] || fail "the engine under test is not executable: $GSA_TEST_GSA_BIN"
 export GSA_TEST_ENGINE=gsa

@@ -1228,6 +1228,16 @@ dispatch; a failure parks a cone (§I).
    (`render::tests`), the box is fixture-pinned (`tests/dashboard-pty.sh`).
    A wording change breaks exactly those pins, never the record grammar
    (§H/§L.2).
+10. **Smoke tests run the INSTALLED engine** (owner decision 2026-10-23):
+   "it works" means the packaged `gsa` binary behaves. Every smoke check and
+   the fixture battery (`tests/run-all.sh`) default to `command -v gsa` and
+   name the binary they exercised; a nested crate build (`target/*/gsa`, a
+   per-fixture `--target-dir` tree) is NEVER the smoke subject.
+   `GSA_TEST_GSA_BIN` is the explicit pre-install override and a recorded
+   deviation. The deploy loop therefore ends: ship → install (`sudo gsa -Sy`
+   + `sudo gsa -S gsa-pm`) → validate what was installed. (Violated once:
+   green battery against `target/debug/gsa` while the installed r418 engine
+   shipped old behaviour — the gap that produced this rule.)
 
 *Recorded deviations (2026-10-23, UX wave).* (a) the dashboard width is
 probed once per run (`tput cols` → `COLUMNS` → 80, floored at 20) — a mid-run

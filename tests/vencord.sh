@@ -14,15 +14,15 @@ fail() {
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/gsa-vencord.XXXXXX")
 trap 'rm -rf -- "$tmp"' EXIT
 
-# ─── The engine under test: built into the fixture tree (scratch only).
-# GSA_TEST_GSA_BIN, when already set to an executable, is that engine and the
-# scratch build is skipped. GSA_STATE_DIR stays in scratch too — this is a
+# ─── The engine under test: the INSTALLED binary (contract §L.10 — smoke
+# test what the user runs — never a nested target/ build).
+# GSA_STATE_DIR stays in scratch too — this is a
 # read-only real-tree fixture (migration §4 row, 2026-10-14). ────────────────
 if [ -z "${GSA_TEST_GSA_BIN:-}" ]; then
-    cargo build --offline --quiet --target-dir "$tmp/cargo" -p gsa-cli \
-        --manifest-path "$root/Cargo.toml" ||
-        fail "cannot build the gsa binary for the fixture"
-    GSA_TEST_GSA_BIN="$tmp/cargo/debug/gsa"
+    GSA_TEST_GSA_BIN=$(command -v gsa) || {
+        printf 'contract §L.10: no installed gsa on PATH — install gsa-pm, or set GSA_TEST_GSA_BIN explicitly\n' >&2
+        exit 1
+    }
 fi
 [ -x "$GSA_TEST_GSA_BIN" ] || fail "the engine under test is not executable: $GSA_TEST_GSA_BIN"
 export GSA_TEST_GSA_BIN

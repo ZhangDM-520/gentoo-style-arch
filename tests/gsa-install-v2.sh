@@ -89,16 +89,15 @@ rr2_stub_knob GSA_FAKE_ELF_SRC "gsa-install-v2 makepkg stub: path of the probe E
 rr2_stub_knob GSA_FAKE_PGO_PACKAGE "gsa-install-v2 makepkg stub: package id whose archive ships a baked .gcda destination"
 rr2_stub_knob GSA_FAKE_ENGINE_PID "gsa-install-v2 engine wrapper: pidfile of the engine process to signal"
 
-# ─── The engine under test: built into the fixture tree (scratch only).
+# ─── The engine under test: the INSTALLED binary (contract §L.10 — smoke
 # GSA_TEST_GSA_BIN, when already set to an executable, is that engine (the
-# rr-v2.bash run_engine convention) and the scratch build is skipped — used
-# only by development/sweep runs against a prebuilt binary; the battery path
-# builds the tree it tests. ─────────────────────────────────────────────────
+# rr-v2.bash run_engine convention) and the installed default is skipped.
+# The battery path tests the INSTALLED engine (contract §L.10). ─────────────────────────────────────────────────
 if [ -z "${GSA_TEST_GSA_BIN:-}" ]; then
-    cargo build --offline --quiet --target-dir "$fixture/cargo" -p gsa-cli \
-        --manifest-path "$gsa_repo_root/Cargo.toml" \
-        || fail "cannot build the gsa binary for the fixture"
-    GSA_TEST_GSA_BIN="$fixture/cargo/debug/gsa"
+    GSA_TEST_GSA_BIN=$(command -v gsa) || {
+        printf 'contract §L.10: no installed gsa on PATH — install gsa-pm, or set GSA_TEST_GSA_BIN explicitly\n' >&2
+        exit 1
+    }
 fi
 [ -x "$GSA_TEST_GSA_BIN" ] || fail "the engine under test is not executable: $GSA_TEST_GSA_BIN"
 export GSA_TEST_ENGINE=gsa
