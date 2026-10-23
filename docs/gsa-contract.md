@@ -265,7 +265,8 @@ is a pure read with no confirmation at all. Wording-only (§L.2); pinned by
 | `--config PATH`, `--noconfirm` | pacman-familiar globals; `--noconfirm` applies to the engine's own confirmations (`-Mm`, `-Mccc`) and never to a pacman question flag |
 | `--quiet`, `--verbose` | **deferred**: recognised and refused (rc 2, naming the flag) by every command; never mirrored (§H.2) |
 
-Engine environment inputs (the roster `gsa --help` must print): `GSA_CONF`,
+Engine environment inputs (the roster `gsa --help` must print; rendered from
+`crates/gsa-cli/src/help.rs`, the single layout source): `GSA_CONF`,
 `GSA_STATE_DIR`, `GSA_BUILD_DIR`, `GSA_RECIPES_DIR`, `GSA_LANES`, `GSA_JOBS`,
 `GSA_INTENSITY`, `GSA_CPU_THREADS`, `GSA_MEMORY_GIB`, `GSA_TARGET_CPU`,
 `GSA_VCS_SKIP_TOLERANCE`. `GSA_BUILD_JOBS` is engine OUTPUT
@@ -1021,6 +1022,22 @@ relocate engine state only, never the store (§J.3). Pinned by
 `tests/gsa-store-v2.sh` sections a/d/e/f/g and `tests/gsa-sync-v2.sh`
 section 7.
 
+*Amendment (2026-10-23, lane-state markers).* Two run-scoped observability
+files join the state layout — they make "is it stuck?" answerable without the
+event stream:
+
+| Path | Content |
+| --- | --- |
+| `/var/lib/gsa/runs/current` | a pointer file naming the live run id (atomically replaced at run start; keeps naming the last run after it ends) |
+| `/var/lib/gsa/runs/<run-id>/<pkg>.started` | one line `pid=<pid> epoch=<secs> log-offset=<bytes>` per spawned lane — the log offset is sampled BEFORE the spawn, because `logs/<pkg>.log` is appended across runs and the offset is what makes a tail run-scoped |
+
+Observability, never behaviour: a marker/pointer write failure is a loud
+`note` event and never stops a run (unlike §F.1's fail-closed park markers).
+The startup orphan sweep reaps a dead run's `.started` files with its `.result`
+/`.park` files. Pinned by `supervisor::tests::
+lane_state_markers_and_the_view_tick_land_during_a_run` and consumed by the
+dashboard tails (`tests/dashboard-pty.sh` section A).
+
 ### J.2 What stays with the build user (W4's relocation)
 
 makepkg's working state lands in the **build user's cache**, never beside the
@@ -1200,6 +1217,24 @@ dispatch; a failure parks a cone (§I).
 8. **Verification is never weakened to get green** (`docs/MEMORY.md` rule 15;
    §A.3.4): no `--skipchecksums`, no `--skippgpcheck`, no dropped `#signed`, in
    any code path including hidden seams and future phases.
+9. **Two vocabularies, one meaning** (owner decision 2026-10-23): the human
+   default is readable prose — a TTY run renders the live progress box
+   (progress header, per-lane rows with run-scoped log tails, spinner +
+   last-event footer), a pipe renders append-only event lines plus the 10 s
+   `STATUS:` hint under `--human`; the machine vocabulary is the leveled
+   `LEVEL event k=v` grammar (`output::kv_line`: one line per event,
+   space-free values, `action=` names the next move). Every event renders in
+   BOTH vocabularies and the machine grammar is unit-pinned
+   (`render::tests`), the box is fixture-pinned (`tests/dashboard-pty.sh`).
+   A wording change breaks exactly those pins, never the record grammar
+   (§H/§L.2).
+
+*Recorded deviations (2026-10-23, UX wave).* (a) the dashboard width is
+probed once per run (`tput cols` → `COLUMNS` → 80, floored at 20) — a mid-run
+terminal resize refits on the next run; (b) the install transaction's
+interrupt lines (`install.rs`: `signal <sig>` / `teardown …`) deliberately
+stay prose in BOTH vocabularies — they ride the transaction surface, not the
+event catalog, until that surface splits.
 
 ---
 

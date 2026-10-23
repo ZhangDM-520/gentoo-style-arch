@@ -608,9 +608,22 @@ EOF
     # anchors ranges address, §C.3).
     plan_rows() { sed -n 's/^ *[0-9][0-9]*\. //p' <<<"$out" | tr '\n' ' ' | sed 's/ $//'; }
     # summary / row_line — the run summary's per-row lines (render.rs's
-    # `· <label>: <pkg> (…` frame; the structural anchor of the §I.4 checks).
-    summary() { grep '^· ' <<<"$out" || true; }
-    row_line() { summary | grep -E "^· [a-z ]+: $1 \(" || true; }
+    # `LEVEL lane-outcome pkg=… status=… reason=…` kv frame; the structural
+    # anchor of the §I.4 checks). Values are space-free (kv_line contract),
+    # so a field-equality scan beats a regex over the line.
+    summary() { grep -E '^(INFO|WARNING|ERROR) lane-outcome ' <<<"$out" || true; }
+    row_line() {
+        local want=$1 line field
+        while IFS= read -r line; do
+            for field in $line; do
+                if [ "$field" = "pkg=$want" ]; then
+                    printf '%s\n' "$line"
+                    return 0
+                fi
+            done
+        done < <(summary)
+        return 0
+    }
 
     # assert_summary_agrees — §H.1/§I.4: the prose summary and the machine
     # block are views of the same rows. The summary names exactly one line
@@ -618,25 +631,25 @@ EOF
     # (the `format: 2` vocabularies, §H.3), and its outcome line is the
     # record's own outcome/rc scalars.
     assert_summary_agrees() {
-        local rows n_rows n_summary pkg status rc dur reason label line
+        local rows n_rows n_summary pkg status rc dur reason line
         rows=$(rr2_outcome_rows <<<"$out")
         n_rows=$(wc -l <<<"$rows")
         n_summary=$(summary | wc -l)
         [ "$n_summary" -eq "$n_rows" ] \
             || fail "the summary names $n_summary rows but the record has $n_rows (§H.1: same rows): $out"
         while read -r pkg status rc dur reason; do
-            case $status in
-            never-started) label='never started' ;;
-            *) label=$status ;;
-            esac
             line=$(row_line "$pkg")
             [ -n "$line" ] || fail "the summary does not name $pkg: $out"
-            [[ $line == *"$label"* ]] \
-                || fail "the summary's $pkg line lacks its status meaning '$label': $out"
-            [[ $line == *"$reason"* ]] \
+            [[ " $line " == *" status=$status "* ]] \
+                || fail "the summary's $pkg line lacks its status meaning '$status': $out"
+            [[ " $line " == *" reason=$reason "* ]] \
                 || fail "the summary's $pkg line lacks its reason key '$reason' (§H.3): $out"
         done <<<"$rows"
-        has "outcome: $(rr2_scalar outcome <<<"$out") (rc $(rr2_scalar rc <<<"$out"))"
+        # the summary's outcome line is the record's outcome/rc scalars — the
+        # level tag is the severity (render.rs picks it per outcome), so the
+        # needle spans the class and pins the fields.
+        grep -Eq "^(INFO|WARNING|ERROR) outcome status=$(rr2_scalar outcome <<<"$out") rc=$(rr2_scalar rc <<<"$out")( |\$)" <<<"$out" \
+            || fail "the summary's outcome line does not carry the record's outcome/rc scalars: $out"
     }
 
     # P1 — a success run's rendering: the plan sentence (the wording pin
@@ -645,9 +658,9 @@ EOF
     prose -B --leaf --intensity low --state-dir "$ws/state-ok" okp
     [ "$rc" = 0 ] || fail "the success run exited $rc: $out"
     rr2_body <<<"$out" >/dev/null || fail "the success run emitted no run record: $out"
-    grep -qE 'parallelism: [0-9]+ CPU threads, [0-9]+ GiB available, intensity low, [0-9]+ lane\(s\), normal -j[0-9]+, core -j[0-9]+' <<<"$out" \
+    grep -qE 'INFO parallelism cpus=[0-9]+ mem-gib=[0-9]+ intensity=low lanes=[0-9]+ normal-jobs=[0-9]+ core-jobs=[0-9]+' <<<"$out" \
         || fail "the parallelism sentence lost its shape: $out"
-    has "intensity $(rr2_scalar intensity <<<"$out"), $(rr2_scalar lanes <<<"$out") lane(s), normal -j$(rr2_scalar normal-jobs <<<"$out"), core -j$(rr2_scalar core-jobs <<<"$out")"
+    has "intensity=$(rr2_scalar intensity <<<"$out") lanes=$(rr2_scalar lanes <<<"$out") normal-jobs=$(rr2_scalar normal-jobs <<<"$out") core-jobs=$(rr2_scalar core-jobs <<<"$out")"
     assert_summary_agrees
 
     # P2 — the §I.4 loud report: one run, every class NAMED (presence and
@@ -722,7 +735,7 @@ EOF
     # rendering rows only and never reach rr2_*.
     prose -B --dry-run --leaf failp parkA parkB deferp parkC okp
     [ "$rc" = 0 ] || fail "the dry run exited $rc: $out"
-    has "Build order (dry run): $n_pkgs packages"
+    has "INFO build-order verb=dry_run packages=$n_pkgs"
     [ "$(plan_rows)" = "$order" ] \
         || fail "the dry-run rows [$(plan_rows)] are not the record's order [$order] (§C.5: one order everywhere): $out"
 
@@ -753,7 +766,7 @@ EOF
     # this section's rendering).
     prose -B --dry-run --leaf OKP
     [ "$rc" = 0 ] || fail "the case-variant reference OKP was refused: $out"
-    has "case-variant match: 'OKP' -> 'okp'"
+    has "INFO note msg=case-variant_match:_'OKP'_->_'okp'"
     [ "$(plan_rows)" = okp ] || fail "OKP resolved to [$(plan_rows)], not okp: $out"
 
     # P7 — a bare name grows into its CONSUMERS and says so (the counts are
@@ -761,12 +774,12 @@ EOF
     # with 1 added); --leaf stays silent and single.
     prose -B --dry-run parkA
     [ "$rc" = 0 ] || fail "the expansion run exited $rc: $out"
-    has 'consumer expansion added 1 of the 2 selected packages'
+    has 'INFO selection expansion=consumers added=1 of=2'
     [ "$(plan_rows)" = "parkA parkB" ] \
         || fail "bare parkA listed [$(plan_rows)], want [parkA parkB] (its consumers in build order): $out"
     prose -B --dry-run --leaf parkA
     [ "$rc" = 0 ] || fail "the leaf run exited $rc: $out"
-    hasnt 'consumer expansion added'
+    hasnt 'expansion=consumers'
     [ "$(plan_rows)" = parkA ] || fail "--leaf parkA listed [$(plan_rows)], want [parkA]: $out"
 
     printf 'prose rendering fixture: PASS (§I.4 naming, record agreement, rendering surfaces)\n'

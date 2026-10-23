@@ -226,7 +226,7 @@ run_inst() {
 # sections share the framing and are excluded with it). Engine diagnostics
 # dropped.
 rows_only() {
-    awk '/^--- run record begin ---/ || /^Build run: / { exit } !/^gsa: / && NF { print }'
+    awk '/^--- run record begin ---/ || /^Build run: / || /^INFO build-run / { exit } !/^gsa: / && NF { print }'
 }
 
 # record_scalar KEY / record_section plan|outcome — the machine block of a

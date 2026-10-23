@@ -505,13 +505,14 @@ EOF
 
     # Exactly ONE TERM per lane pgrp (the removed blitz logged 20), verified
     # on BOTH sides. Sender: the teardown stream names its single TERM sweep
-    # once (`teardown one SIGTERM per lane, shared grace window` —
-    # supervisor.rs emits it per teardown). Receiver: the stub's receipt log
+    # once (`teardown reason=one_SIGTERM_per_lane,_shared_grace_window`, the
+    # machine kv of supervisor.rs's sweep reason — supervisor.rs emits it per
+    # teardown). Receiver: the stub's receipt log
     # is best-effort — the sweep's SIGKILL can preempt the trap's write when
     # the second signal skips the grace (§K.3 "kill children now"), so one
     # lost receipt is an observation skew, never a behaviour; two receipts
     # can never hide and still catch the blitz regression.
-    term_sends=$(grep -c 'one SIGTERM per lane, shared grace window' "$state/run.out" 2>/dev/null)
+    term_sends=$(grep -c 'teardown reason=one_SIGTERM_per_lane,_shared_grace_window' "$state/run.out" 2>/dev/null)
     [[ ${term_sends:-0} -eq 1 ]] ||
         fail "$sig: the teardown sent ${term_sends:-0} TERM sweeps, want exactly one (§K.3)" "$state/run.out"
     term_count=$(grep -c '^TERM$' "$state/signals.log" 2>/dev/null)
@@ -593,7 +594,7 @@ done
 # ONE TERM before the kill: sender-side exactly-one (the teardown sweep line)
 # + receiver-side blitz guard — see the phase 4 comment for why one lost
 # receipt is an observation skew and two receipts are the blitz regression.
-term_sends=$(grep -c 'one SIGTERM per lane, shared grace window' "$state/run.out" 2>/dev/null)
+term_sends=$(grep -c 'teardown reason=one_SIGTERM_per_lane,_shared_grace_window' "$state/run.out" 2>/dev/null)
 [[ ${term_sends:-0} -eq 1 ]] ||
     fail "the teardown sent ${term_sends:-0} TERM sweeps, want exactly one before the kill (§K.3)" "$state/run.out"
 term_count=$(grep -c '^TERM$' "$state/signals.log" 2>/dev/null)
@@ -782,7 +783,9 @@ for ((i = 0; i < 150; i++)); do
     [ -z "$(find_lane_pid)" ] && break
     sleep 0.1
 done
-dead_runs=$(ls "$state/runs" 2>/dev/null | wc -l)
+# Exactly the dead run's DIRECTORY before the sweep — `runs/current` (the
+# §J.1 lane-state pointer) is a file and never counts.
+dead_runs=$(find "$state/runs" -mindepth 1 -maxdepth 1 -type d | wc -l)
 [[ $dead_runs -eq 1 ]] ||
     fail "expected exactly the dead run's directory before the sweep, saw: $(ls "$state/runs" 2>/dev/null)"
 mk_env "$state" 0.5
@@ -842,13 +845,13 @@ elapsed=$(($(date +%s) - t0))
 # ONE TERM before the kill on the escalation path: the second signal skips
 # the grace (§K.3 "kill children now"), so the receipt write races the
 # SIGKILL — sender-side exactly-one + receiver-side blitz guard (phase 4).
-term_sends=$(grep -c 'one SIGTERM per lane, shared grace window' "$state/run.out" 2>/dev/null)
+term_sends=$(grep -c 'teardown reason=one_SIGTERM_per_lane,_shared_grace_window' "$state/run.out" 2>/dev/null)
 [[ ${term_sends:-0} -eq 1 ]] ||
     fail "the teardown sent ${term_sends:-0} TERM sweeps, want exactly one before the kill (§K.3)" "$state/run.out"
 term_count=$(grep -c '^TERM$' "$state/signals.log" 2>/dev/null)
 [[ ${term_count:-0} -le 1 ]] ||
     fail "the lane pgrp received $term_count TERMs, want at most one before the kill" "$state/signals.log"
-grep -F 'second signal' "$state/run.out" >/dev/null ||
+grep -F 'teardown reason=second_signal' "$state/run.out" >/dev/null ||
     fail "the escalation is not reported in the teardown stream:" "$state/run.out"
 # the engine is root (W5 §B.10) — signal it through real sudo
 /usr/bin/sudo -n kill -KILL "$eng" 2>/dev/null

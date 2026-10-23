@@ -79,11 +79,26 @@
 - When the drive returns: remount + f2fs fsck + `sudo gsa -Md --fix`
   (binpkg index rows still point at the old drive paths).
 
+## UX wave READY, uncommitted — awaiting owner commit disposition (2026-10-23)
+- Human-default readability + machine vocabulary (owner ask): `help.rs`,
+  `output.rs`/`render.rs` catalog (unit-pinned both vocabularies), `write_notes`
+  mode-split, lane state (`runs/current`, `<run>/<pkg>.started`
+  pid/epoch/log-offset, `SupEvent::Tick`), live TTY dashboard (`dashboard.rs`:
+  progress box, run-scoped tails, spinner + event footer, 10 s `STATUS:` pipe
+  hint under `--human`).
+- Validation: the fixture batch + NEW `tests/dashboard-pty.sh` green (PTY box,
+  pipe STATUS, machine purity), `cargo test --workspace` green, every new
+  mechanism mutation-probed RED first. Full-battery result: see NOTE.md
+  2026-10-23.
+- Contract §J.1/§L amended (lane-state rows + rule 9 two-vocabulary + the two
+  recorded deviations: width probed per run; install.rs txn interrupt lines
+  stay prose).
+- Nothing to push until the owner says commit/push/leave — house rule.
+
 ## Still deferred (owner)
 - 35-pkg ABI wave re-bless queue; poppler 26.10 landing path.
 
 ## Next action
 Owner: (1) aranicy cutover — install the built 0.1.0-1, retire
 ananicy-cpp; (2) recover the offline drive (re-plug/remount, f2fs fsck,
-SMART).
-Nothing else pending.
+SMART); (3) UX wave — commit disposition (commit / push / leave-as-is).

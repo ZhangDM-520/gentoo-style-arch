@@ -11,6 +11,7 @@ use gsa_model::{Group, RecipeId, RowStatus, RunRecord};
 use gsa_recipe::{MetaSource, RecipeMeta, SourceKind};
 use gsa_sched::supervisor::SupEvent;
 
+use crate::output::{self, kv_line, squash, Level};
 use crate::select::{Ctx, SelectError};
 
 fn join_list(values: &[String]) -> String {
@@ -384,16 +385,51 @@ pub fn render_plan_prose(
 ) -> String {
     let mut out = String::new();
     let verb = if dry_run { "dry run" } else { "run" };
-    out.push_str(&format!(
-        "Build order ({verb}): {} packages\n",
-        listed.len()
-    ));
-    if leaf {
-        out.push_str("· leaf selection: no consumer expansion (--leaf)\n");
-    } else if expansion_added > 0 {
+    let human = output::is_human();
+    if human {
         out.push_str(&format!(
-            "· consumer expansion added {expansion_added} of the {closure_size} selected packages (--leaf builds only what you named)\n",
+            "Build order ({verb}): {} packages\n",
+            listed.len()
         ));
+        if leaf {
+            out.push_str("· leaf selection: no consumer expansion (--leaf)\n");
+        } else if expansion_added > 0 {
+            out.push_str(&format!(
+                "· consumer expansion added {expansion_added} of the {closure_size} selected packages (--leaf builds only what you named)\n",
+            ));
+        }
+    } else {
+        out.push_str(&kv_line(
+            Level::Info,
+            "build-order",
+            &[
+                ("verb", squash(verb)),
+                ("packages", listed.len().to_string()),
+            ],
+        ));
+        out.push('\n');
+        if leaf {
+            out.push_str(&kv_line(
+                Level::Info,
+                "selection",
+                &[
+                    ("expansion", "leaf".to_string()),
+                    ("note", "no_consumer_expansion".to_string()),
+                ],
+            ));
+            out.push('\n');
+        } else if expansion_added > 0 {
+            out.push_str(&kv_line(
+                Level::Info,
+                "selection",
+                &[
+                    ("expansion", "consumers".to_string()),
+                    ("added", expansion_added.to_string()),
+                    ("of", closure_size.to_string()),
+                ],
+            ));
+            out.push('\n');
+        }
     }
     out.push('\n');
     for (anchor, id) in listed {
@@ -402,40 +438,164 @@ pub fn render_plan_prose(
     out
 }
 
+/// The parallelism truth line (budget.rs renders the human prose; the
+/// machine mode restates it as leveled kv — same numbers, both worlds).
+pub fn parallelism_line(budget: &gsa_sched::budget::Budget) -> String {
+    if output::is_human() {
+        return format!("{}\n", budget.parallelism_line());
+    }
+    format!(
+        "{}\n",
+        kv_line(
+            Level::Info,
+            "parallelism",
+            &[
+                ("cpus", budget.threads.to_string()),
+                ("mem-gib", budget.memory_gib.to_string()),
+                ("intensity", budget.intensity.to_string()),
+                ("lanes", budget.lanes.to_string()),
+                ("normal-jobs", budget.normal_jobs.to_string()),
+                ("core-jobs", budget.core_jobs.to_string()),
+            ],
+        )
+    )
+}
+
 /// One streaming dashboard line (contract §H.1: the run record rows in
-/// motion). Plain output — a TTY dashboard renders the same events.
+/// motion). Two vocabularies (owner decision 2026-10-23): the human default
+/// is the fish-era readable form (`✓ vtk (3m57s)`); the machine mode is the
+/// leveled `LEVEL event k=v` grammar (output::kv_line).
 pub fn render_event(event: &SupEvent, ids: &[RecipeId]) -> String {
     let pkg = |index: usize| {
         ids.get(index)
             .map(|id| id.as_str().to_string())
             .unwrap_or_else(|| format!("<{index}>"))
     };
+    if output::is_human() {
+        return render_event_human(event, &pkg);
+    }
+    render_event_machine(event, &pkg)
+}
+
+/// `3m07s` / `42s` — the fish-era duration shape (`fmt_dur` there).
+pub(crate) fn fmt_dur(dur: i64) -> String {
+    if dur >= 60 {
+        format!("{}m{:02}s", dur / 60, dur % 60)
+    } else {
+        format!("{dur}s")
+    }
+}
+
+fn render_event_human(event: &SupEvent, pkg: &dyn Fn(usize) -> String) -> String {
     match event {
         SupEvent::Started { index, jobs, core } => {
             let core = if *core { " (core)" } else { "" };
-            format!("lane start {}{core} -j{jobs}\n", pkg(*index))
+            format!("→ started {}{core} -j{jobs}\n", pkg(*index))
         }
         SupEvent::Finished { index, row } => {
+            let _ = index;
+            let rc = row
+                .rc
+                .map(|rc| rc.to_string())
+                .unwrap_or_else(|| "-".to_string());
+            let dur = row.dur.map(fmt_dur).unwrap_or_else(|| "-".to_string());
+            match row.status {
+                RowStatus::Succeeded => format!("✓ {} ({dur})\n", row.pkg),
+                RowStatus::Failed => format!(
+                    "✗ {}: BUILD FAILED (rc {rc}, {dur}, {}) — see the run's failed rows for the log\n",
+                    row.pkg, row.reason
+                ),
+                RowStatus::Parked => format!("⚠ {}: parked ({})\n", row.pkg, row.reason),
+                RowStatus::Deferred => format!("⚠ {}: DEFERRED ({})\n", row.pkg, row.reason),
+                RowStatus::NeverStarted => {
+                    format!("· {}: never started ({})\n", row.pkg, row.reason)
+                }
+                RowStatus::Interrupted => {
+                    format!("⚠ {}: interrupted (rc {rc}, {dur}, {})\n", row.pkg, row.reason)
+                }
+            }
+        }
+        SupEvent::Parked { index, reason } => format!("⚠ {}: parked ({reason})\n", pkg(*index)),
+        SupEvent::Signal(sig) => format!("⚠ signal received ({sig}) — the run is winding down\n"),
+        SupEvent::Teardown(reason) => format!("⚠ teardown: {reason}\n"),
+        SupEvent::Diagnostic(message) => format!("· {message}\n"),
+        SupEvent::PrefetchWarning(message) => format!("⚠ {message}\n"),
+        // A view heartbeat, never a message (the TTY dashboard redraws on
+        // it) — it renders empty in BOTH vocabularies.
+        SupEvent::Tick => String::new(),
+    }
+}
+
+fn render_event_machine(event: &SupEvent, pkg: &dyn Fn(usize) -> String) -> String {
+    use Level::{Info, Warning};
+    let line = match event {
+        SupEvent::Started { index, jobs, core } => kv_line(
+            Info,
+            "lane-start",
+            &[
+                ("pkg", pkg(*index)),
+                ("core", if *core { "1" } else { "0" }.to_string()),
+                ("jobs", jobs.to_string()),
+            ],
+        ),
+        SupEvent::Finished { index, row } => {
+            let _ = index;
             let rc = row
                 .rc
                 .map(|rc| rc.to_string())
                 .unwrap_or_else(|| "-".to_string());
             let dur = row
                 .dur
-                .map(|dur| dur.to_string())
+                .map(|d| d.to_string())
                 .unwrap_or_else(|| "-".to_string());
-            let _ = index;
-            format!(
-                "lane done {} {} {} {} {}\n",
-                row.pkg, row.status, rc, dur, row.reason
-            )
+            let (level, name, action) = match row.status {
+                RowStatus::Succeeded => (Info, "lane-done", None),
+                RowStatus::Failed => (Warning, "lane-failed", Some("inspect-log")),
+                RowStatus::Parked => (Warning, "lane-parked", Some("waits-on-failed")),
+                RowStatus::Deferred => (Warning, "lane-deferred", Some("revisit-deferral")),
+                RowStatus::NeverStarted => (Warning, "lane-never-started", Some("rerun")),
+                RowStatus::Interrupted => (Warning, "lane-interrupted", Some("rerun")),
+            };
+            let mut pairs = vec![
+                ("pkg", row.pkg.to_string()),
+                ("status", squash(&row.status.to_string())),
+                ("rc", rc),
+                ("dur", dur),
+                ("reason", squash(&row.reason)),
+            ];
+            if let Some(action) = action {
+                pairs.push(("action", action.to_string()));
+            }
+            kv_line(level, name, &pairs)
         }
-        SupEvent::Parked { index, reason } => format!("park {} {}\n", pkg(*index), reason),
-        SupEvent::Signal(sig) => format!("signal {sig}\n"),
-        SupEvent::Teardown(reason) => format!("teardown {reason}\n"),
-        SupEvent::Diagnostic(message) => format!("note: {message}\n"),
-        SupEvent::PrefetchWarning(message) => format!("warning: {message}\n"),
-    }
+        SupEvent::Parked { index, reason } => kv_line(
+            Warning,
+            "lane-parked",
+            &[
+                ("pkg", pkg(*index)),
+                ("reason", squash(reason)),
+                ("action", "waits-on-failed".to_string()),
+            ],
+        ),
+        SupEvent::Signal(sig) => kv_line(Warning, "signal", &[("sig", sig.to_string())]),
+        SupEvent::Teardown(reason) => kv_line(
+            Warning,
+            "teardown",
+            &[
+                ("reason", squash(reason)),
+                ("action", "wait-for-drain".to_string()),
+            ],
+        ),
+        SupEvent::Diagnostic(message) => kv_line(Info, "note", &[("msg", squash(message))]),
+        SupEvent::PrefetchWarning(message) => {
+            kv_line(Warning, "prefetch-warning", &[("msg", squash(message))])
+        }
+        // A view heartbeat, never a message: empty in BOTH vocabularies, so
+        // a machine stream gains nothing per tick (early return — the frame
+        // below terminates real lines only).
+        SupEvent::Tick => return String::new(),
+    };
+    format!("{line}\n")
 }
 
 /// The prose prefetch-warning section (owner decision 5 / docs/adr/
@@ -446,12 +606,38 @@ pub fn render_prefetch_notes(warnings: &[gsa_fetch::verdict::FetchResult]) -> St
     if warnings.is_empty() {
         return String::new();
     }
-    let mut out = String::from("Prefetch warnings (advisory — lanes retry at build time):\n");
+    let mut out = String::new();
+    if output::is_human() {
+        out.push_str("Prefetch warnings (advisory — lanes retry at build time):\n");
+        for warning in warnings {
+            out.push_str(&format!(
+                "⚠ {} {} {}\n",
+                warning.pkg, warning.verdict, warning.reason
+            ));
+        }
+        return out;
+    }
+    out.push_str(&kv_line(
+        Level::Warning,
+        "prefetch-summary",
+        &[
+            ("advisory", "1".to_string()),
+            ("note", "lanes_retry_at_build_time".to_string()),
+        ],
+    ));
+    out.push('\n');
     for warning in warnings {
-        out.push_str(&format!(
-            "· {} {} {}\n",
-            warning.pkg, warning.verdict, warning.reason
+        out.push_str(&kv_line(
+            Level::Warning,
+            "prefetch",
+            &[
+                ("pkg", warning.pkg.clone()),
+                ("verdict", squash(&warning.verdict.to_string())),
+                ("reason", squash(&warning.reason)),
+                ("action", "none-lanes-retry".to_string()),
+            ],
         ));
+        out.push('\n');
     }
     out
 }
@@ -473,9 +659,25 @@ pub fn render_fetch_prose(results: &[gsa_fetch::verdict::FetchResult]) -> String
         .iter()
         .filter(|r| r.verdict == FetchVerdict::Skipped)
         .count();
+    if output::is_human() {
+        return format!(
+            "Fetch run: {} package(s), {fetched} fetched, {failed} failed, {skipped} skipped\n",
+            results.len()
+        );
+    }
+    let level = if failed > 0 { Level::Warning } else { Level::Info };
     format!(
-        "Fetch run: {} package(s), {fetched} fetched, {failed} failed, {skipped} skipped\n",
-        results.len()
+        "{}\n",
+        kv_line(
+            level,
+            "fetch-run",
+            &[
+                ("packages", results.len().to_string()),
+                ("fetched", fetched.to_string()),
+                ("failed", failed.to_string()),
+                ("skipped", skipped.to_string()),
+            ],
+        )
     )
 }
 
@@ -495,28 +697,62 @@ pub fn render_run_prose(
     qa: Option<&[String]>,
 ) -> String {
     let mut out = String::new();
+    let human = output::is_human();
     let (lanes, normal, core) = match (record.lanes, record.normal_jobs, record.core_jobs) {
         (Some(l), Some(n), Some(c)) => (l.to_string(), n.to_string(), c.to_string()),
         _ => ("-".to_string(), "-".to_string(), "-".to_string()),
     };
-    out.push_str(&format!(
-        "Build run: {} package(s), lanes {lanes} (normal -j{normal}, core -j{core}), intensity {}\n",
-        record.order.len(),
-        record.intensity
-    ));
+    if human {
+        out.push_str(&format!(
+            "Build run: {} package(s), lanes {lanes} (normal -j{normal}, core -j{core}), intensity {}\n",
+            record.order.len(),
+            record.intensity
+        ));
+    } else {
+        out.push_str(&kv_line(
+            Level::Info,
+            "build-run",
+            &[
+                ("packages", record.order.len().to_string()),
+                ("lanes", lanes.clone()),
+                ("normal-jobs", normal.clone()),
+                ("core-jobs", core.clone()),
+                ("intensity", squash(&record.intensity)),
+            ],
+        ));
+        out.push('\n');
+    }
     for row in &record.outcomes {
         let rc = row
             .rc
             .map(|rc| rc.to_string())
             .unwrap_or_else(|| "-".to_string());
+        let log = log_dir
+            .join(format!("{}.log", row.pkg))
+            .display()
+            .to_string();
         match row.status {
             RowStatus::Failed => {
-                out.push_str(&format!(
-                    "· failed: {} (rc {rc}, {}) — log: {}\n",
-                    row.pkg,
-                    row.reason,
-                    log_dir.join(format!("{}.log", row.pkg)).display()
-                ));
+                if human {
+                    out.push_str(&format!(
+                        "✗ failed: {} (rc {rc}, {}) — log: {log}\n",
+                        row.pkg, row.reason
+                    ));
+                } else {
+                    out.push_str(&kv_line(
+                        Level::Warning,
+                        "lane-outcome",
+                        &[
+                            ("pkg", row.pkg.to_string()),
+                            ("status", "failed".to_string()),
+                            ("rc", rc.clone()),
+                            ("reason", squash(&row.reason)),
+                            ("action", "inspect-log".to_string()),
+                            ("log", log.clone()),
+                        ],
+                    ));
+                    out.push('\n');
+                }
             }
             RowStatus::Parked => {
                 let by = parked_by
@@ -529,45 +765,380 @@ pub fn render_run_prose(
                 } else {
                     by.join(", ")
                 };
-                out.push_str(&format!(
-                    "· parked: {} ({}) — parked by {}\n",
-                    row.pkg, row.reason, by
-                ));
+                if human {
+                    out.push_str(&format!(
+                        "⚠ parked: {} ({}) — parked by {by}\n",
+                        row.pkg, row.reason
+                    ));
+                } else {
+                    out.push_str(&kv_line(
+                        Level::Warning,
+                        "lane-outcome",
+                        &[
+                            ("pkg", row.pkg.to_string()),
+                            ("status", "parked".to_string()),
+                            ("reason", squash(&row.reason)),
+                            ("parked-by", squash(&by)),
+                            ("action", "waits-on-failed".to_string()),
+                        ],
+                    ));
+                    out.push('\n');
+                }
             }
             RowStatus::Deferred => {
-                out.push_str(&format!("· deferred: {} ({})\n", row.pkg, row.reason));
+                if human {
+                    out.push_str(&format!("⚠ deferred: {} ({})\n", row.pkg, row.reason));
+                } else {
+                    out.push_str(&kv_line(
+                        Level::Warning,
+                        "lane-outcome",
+                        &[
+                            ("pkg", row.pkg.to_string()),
+                            ("status", "deferred".to_string()),
+                            ("reason", squash(&row.reason)),
+                            ("action", "revisit-deferral".to_string()),
+                        ],
+                    ));
+                    out.push('\n');
+                }
             }
             RowStatus::NeverStarted => {
-                out.push_str(&format!("· never started: {} ({})\n", row.pkg, row.reason));
+                if human {
+                    out.push_str(&format!("· never started: {} ({})\n", row.pkg, row.reason));
+                } else {
+                    out.push_str(&kv_line(
+                        Level::Warning,
+                        "lane-outcome",
+                        &[
+                            ("pkg", row.pkg.to_string()),
+                            ("status", "never-started".to_string()),
+                            ("reason", squash(&row.reason)),
+                            ("action", "rerun".to_string()),
+                        ],
+                    ));
+                    out.push('\n');
+                }
             }
             RowStatus::Interrupted => {
-                out.push_str(&format!(
-                    "· interrupted: {} (rc {rc}, {})\n",
-                    row.pkg, row.reason
-                ));
+                if human {
+                    out.push_str(&format!(
+                        "⚠ interrupted: {} (rc {rc}, {})\n",
+                        row.pkg, row.reason
+                    ));
+                } else {
+                    out.push_str(&kv_line(
+                        Level::Warning,
+                        "lane-outcome",
+                        &[
+                            ("pkg", row.pkg.to_string()),
+                            ("status", "interrupted".to_string()),
+                            ("rc", rc.clone()),
+                            ("reason", squash(&row.reason)),
+                            ("action", "rerun".to_string()),
+                        ],
+                    ));
+                    out.push('\n');
+                }
             }
             RowStatus::Succeeded => {
-                out.push_str(&format!("· succeeded: {} ({})\n", row.pkg, row.reason));
+                if human {
+                    out.push_str(&format!("✓ succeeded: {} ({})\n", row.pkg, row.reason));
+                } else {
+                    out.push_str(&kv_line(
+                        Level::Info,
+                        "lane-outcome",
+                        &[
+                            ("pkg", row.pkg.to_string()),
+                            ("status", "succeeded".to_string()),
+                            ("reason", squash(&row.reason)),
+                        ],
+                    ));
+                    out.push('\n');
+                }
             }
         }
     }
-    out.push_str(&format!("outcome: {} (rc {})\n", record.outcome, record.rc));
+    if human {
+        out.push_str(&format!("outcome: {} (rc {})\n", record.outcome, record.rc));
+    } else {
+        let (level, action) = match record.outcome.to_string().as_str() {
+            "success" | "planned" => (Level::Info, None),
+            "deferral" => (Level::Warning, Some("revisit-deferrals")),
+            "interrupted" => (Level::Warning, Some("rerun")),
+            _ => (Level::Error, Some("inspect-logs")),
+        };
+        let mut pairs = vec![
+            ("status", squash(&record.outcome.to_string())),
+            ("rc", record.rc.to_string()),
+        ];
+        if let Some(action) = action {
+            pairs.push(("action", action.to_string()));
+        }
+        out.push_str(&kv_line(level, "outcome", &pairs));
+        out.push('\n');
+    }
     // The QA report surface (contract §E.4): report-severity findings
     // appended to the prose summary — additive, prose-only (the §H.2
     // choice recorded in `gsa-qa::report`), never a decision and never a
     // machine row.
     if let Some(findings) = qa {
-        if findings.is_empty() {
-            out.push_str("QA report (report-only): clean\n");
+        if human {
+            if findings.is_empty() {
+                out.push_str("QA report (report-only): clean\n");
+            } else {
+                out.push_str(&format!(
+                    "QA report (report-only): {} finding(s)\n",
+                    findings.len()
+                ));
+                for line in findings {
+                    out.push_str(&format!("· {line}\n"));
+                }
+            }
         } else {
-            out.push_str(&format!(
-                "QA report (report-only): {} finding(s)\n",
-                findings.len()
+            out.push_str(&kv_line(
+                Level::Info,
+                "qa-report",
+                &[
+                    ("mode", "report-only".to_string()),
+                    ("findings", findings.len().to_string()),
+                ],
             ));
+            out.push('\n');
             for line in findings {
-                out.push_str(&format!("· {line}\n"));
+                out.push_str(&kv_line(
+                    Level::Info,
+                    "qa-finding",
+                    &[("detail", squash(line))],
+                ));
+                out.push('\n');
             }
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use gsa_model::OutcomeRow;
+
+    use super::*;
+
+    fn row(pkg: &str, status: RowStatus, rc: Option<i32>, dur: Option<i64>, reason: &str) -> OutcomeRow {
+        OutcomeRow {
+            pkg: RecipeId::new(pkg).unwrap(),
+            status,
+            rc,
+            dur,
+            reason: reason.to_string(),
+        }
+    }
+
+    fn pkg(index: usize) -> String {
+        format!("p{index}")
+    }
+
+    /// The machine grammar (§L.6 `LEVEL event k=v`) pins EVERY streaming
+    /// event exactly — this is the catalog's machine half, byte-stable so a
+    /// consumer can parse it. Each line is newline-terminated ONCE.
+    #[test]
+    fn every_event_has_a_pinned_machine_line() {
+        let cases: Vec<(SupEvent, &str)> = vec![
+            (
+                SupEvent::Started {
+                    index: 0,
+                    jobs: 2,
+                    core: false,
+                },
+                "INFO lane-start pkg=p0 core=0 jobs=2\n",
+            ),
+            (
+                SupEvent::Started {
+                    index: 1,
+                    jobs: 4,
+                    core: true,
+                },
+                "INFO lane-start pkg=p1 core=1 jobs=4\n",
+            ),
+            (
+                SupEvent::Finished {
+                    index: 0,
+                    row: row("vtk", RowStatus::Succeeded, Some(0), Some(12), "ok"),
+                },
+                "INFO lane-done pkg=vtk status=succeeded rc=0 dur=12 reason=ok\n",
+            ),
+            (
+                SupEvent::Finished {
+                    index: 0,
+                    row: row("vtk", RowStatus::Failed, Some(1), Some(3), "build-failed"),
+                },
+                "WARNING lane-failed pkg=vtk status=failed rc=1 dur=3 reason=build-failed action=inspect-log\n",
+            ),
+            (
+                SupEvent::Finished {
+                    index: 0,
+                    row: row("vtk", RowStatus::Parked, None, None, "waits-on-failed"),
+                },
+                "WARNING lane-parked pkg=vtk status=parked rc=- dur=- reason=waits-on-failed action=waits-on-failed\n",
+            ),
+            (
+                SupEvent::Finished {
+                    index: 0,
+                    row: row("vtk", RowStatus::Deferred, None, None, "source-unfetchable"),
+                },
+                "WARNING lane-deferred pkg=vtk status=deferred rc=- dur=- reason=source-unfetchable action=revisit-deferral\n",
+            ),
+            (
+                SupEvent::Finished {
+                    index: 0,
+                    row: row("vtk", RowStatus::NeverStarted, None, None, "interrupted-before-start"),
+                },
+                "WARNING lane-never-started pkg=vtk status=never-started rc=- dur=- reason=interrupted-before-start action=rerun\n",
+            ),
+            (
+                SupEvent::Finished {
+                    index: 0,
+                    row: row("vtk", RowStatus::Interrupted, Some(130), Some(7), "interrupted-mid-build"),
+                },
+                "WARNING lane-interrupted pkg=vtk status=interrupted rc=130 dur=7 reason=interrupted-mid-build action=rerun\n",
+            ),
+            (
+                SupEvent::Parked {
+                    index: 0,
+                    reason: "waits-on-failed".to_string(),
+                },
+                "WARNING lane-parked pkg=p0 reason=waits-on-failed action=waits-on-failed\n",
+            ),
+            (SupEvent::Signal(2), "WARNING signal sig=2\n"),
+            (
+                SupEvent::Teardown("one SIGTERM per lane, shared grace window"),
+                "WARNING teardown reason=one_SIGTERM_per_lane,_shared_grace_window action=wait-for-drain\n",
+            ),
+            (
+                SupEvent::Diagnostic("case-variant match: 'OKP' -> 'okp'".to_string()),
+                "INFO note msg=case-variant_match:_'OKP'_->_'okp'\n",
+            ),
+            (
+                SupEvent::PrefetchWarning("prefetch p2: fetch-failed".to_string()),
+                "WARNING prefetch-warning msg=prefetch_p2:_fetch-failed\n",
+            ),
+        ];
+        for (event, want) in cases {
+            let got = render_event_machine(&event, &pkg);
+            assert_eq!(got, want, "machine rendering of {event:?}");
+            assert!(
+                got.ends_with('\n') && !got.ends_with("\n\n"),
+                "one trailing newline, got {got:?}"
+            );
+        }
+        // The view heartbeat is not a message: it renders EMPTY (no line to
+        // terminate) so a machine stream gains nothing per tick.
+        assert_eq!(render_event_machine(&SupEvent::Tick, &pkg), "");
+    }
+
+    /// The human half of the catalog: every event renders in the readable
+    /// default vocabulary (the TTY surface the dashboard draws from).
+    #[test]
+    fn every_event_has_a_pinned_human_line() {
+        let cases: Vec<(SupEvent, &str)> = vec![
+            (
+                SupEvent::Started {
+                    index: 0,
+                    jobs: 2,
+                    core: false,
+                },
+                "→ started p0 -j2\n",
+            ),
+            (
+                SupEvent::Started {
+                    index: 1,
+                    jobs: 4,
+                    core: true,
+                },
+                "→ started p1 (core) -j4\n",
+            ),
+            (
+                SupEvent::Finished {
+                    index: 0,
+                    row: row("vtk", RowStatus::Succeeded, Some(0), Some(12), "ok"),
+                },
+                "✓ vtk (12s)\n",
+            ),
+            (
+                SupEvent::Finished {
+                    index: 0,
+                    row: row("vtk", RowStatus::Succeeded, None, Some(125), "ok"),
+                },
+                "✓ vtk (2m05s)\n",
+            ),
+            (
+                SupEvent::Finished {
+                    index: 0,
+                    row: row("vtk", RowStatus::Failed, Some(1), Some(3), "build-failed"),
+                },
+                "✗ vtk: BUILD FAILED (rc 1, 3s, build-failed) — see the run's failed rows for the log\n",
+            ),
+            (
+                SupEvent::Finished {
+                    index: 0,
+                    row: row("vtk", RowStatus::Parked, None, None, "waits-on-failed"),
+                },
+                "⚠ vtk: parked (waits-on-failed)\n",
+            ),
+            (
+                SupEvent::Finished {
+                    index: 0,
+                    row: row("vtk", RowStatus::Deferred, None, None, "source-unfetchable"),
+                },
+                "⚠ vtk: DEFERRED (source-unfetchable)\n",
+            ),
+            (
+                SupEvent::Finished {
+                    index: 0,
+                    row: row("vtk", RowStatus::NeverStarted, None, None, "interrupted-before-start"),
+                },
+                "· vtk: never started (interrupted-before-start)\n",
+            ),
+            (
+                SupEvent::Finished {
+                    index: 0,
+                    row: row("vtk", RowStatus::Interrupted, Some(130), Some(7), "interrupted-mid-build"),
+                },
+                "⚠ vtk: interrupted (rc 130, 7s, interrupted-mid-build)\n",
+            ),
+            (
+                SupEvent::Parked {
+                    index: 0,
+                    reason: "waits-on-failed".to_string(),
+                },
+                "⚠ p0: parked (waits-on-failed)\n",
+            ),
+            (
+                SupEvent::Signal(2),
+                "⚠ signal received (2) — the run is winding down\n",
+            ),
+            (
+                SupEvent::Teardown("one SIGTERM per lane, shared grace window"),
+                "⚠ teardown: one SIGTERM per lane, shared grace window\n",
+            ),
+            (
+                SupEvent::Diagnostic("case-variant match: 'OKP' -> 'okp'".to_string()),
+                "· case-variant match: 'OKP' -> 'okp'\n",
+            ),
+            (
+                SupEvent::PrefetchWarning("prefetch p2: fetch-failed".to_string()),
+                "⚠ prefetch p2: fetch-failed\n",
+            ),
+        ];
+        for (event, want) in cases {
+            let got = render_event_human(&event, &pkg);
+            assert_eq!(got, want, "human rendering of {event:?}");
+            assert!(
+                got.ends_with('\n') && !got.ends_with("\n\n"),
+                "one trailing newline, got {got:?}"
+            );
+        }
+        // The view heartbeat is not a message here either (the TTY
+        // dashboard consumes it directly).
+        assert_eq!(render_event_human(&SupEvent::Tick, &pkg), "");
+    }
 }

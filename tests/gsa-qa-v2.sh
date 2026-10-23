@@ -211,14 +211,14 @@ record_section() {
 # prose/record span).
 decision_rows() {
     awk '
-        /^--- run record begin ---/ || /^Build run: / { exit }
+        /^--- run record begin ---/ || /^Build run: / || /^INFO build-run / { exit }
         /^[A-Za-z0-9@._+-]+ (install|skip|refuse|noop|parked) / { print }
     ' <<<"$FIXTURE_OUTPUT"
 }
 
 # qa_lines — the prose QA block's finding lines of a capture.
 qa_lines() {
-    awk '/^· / && seen { print } /^QA report \(report-only\)/ { seen = 1 }' <<<"$FIXTURE_OUTPUT"
+    awk '/^INFO qa-finding / && seen { sub(/^INFO qa-finding detail=/, ""); print } /^INFO qa-report / { seen = 1 }' <<<"$FIXTURE_OUTPUT"
 }
 
 if want a; then
@@ -342,11 +342,11 @@ pkgname = viol"
             || fail "the transaction must run exactly once:" "$GSA_FAKE_PACMAN_LOG"
         [ "$(record_scalar outcome)" = success ] || fail "record outcome must be success:" "$FIXTURE_OUTPUT"
         [ "$(record_scalar rc)" = 0 ] || fail "record rc must be 0:" "$FIXTURE_OUTPUT"
-        vgrep "$FIXTURE_OUTPUT" -Fq "QA report (report-only): 2 finding(s)" \
+        vgrep "$FIXTURE_OUTPUT" -Fq "INFO qa-report mode=report-only findings=2" \
             || fail "the QA block must count the two staged violations:" "$fixture/b/out"
-        grep < <(qa_lines) -Fq "purged-tools: viol: makedepends reintroduces purged tool 'cuda'" \
+        grep < <(qa_lines) -Fq "purged-tools:_viol:_makedepends_reintroduces_purged_tool_'cuda'" \
             || fail "the purged finding must be in the QA block:" "$FIXTURE_OUTPUT"
-        grep < <(qa_lines) -Fq "provides-versioning: viol: soname provide 'libx.so.1'" \
+        grep < <(qa_lines) -Fq "provides-versioning:_viol:_soname_provide_'libx.so.1'" \
             || fail "the provides finding must be in the QA block:" "$FIXTURE_OUTPUT"
         if grep < <(record_section plan) -q refused; then
             fail "the machine plan rows must not carry a refusal:" "$FIXTURE_OUTPUT"

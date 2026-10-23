@@ -98,6 +98,9 @@ pub struct Invocation {
     pub modifiers: Vec<char>,
     pub dry_run: bool,
     pub leaf: bool,
+    /// Output mode override (`--machine` / `--human`, mutually exclusive).
+    /// Unset: stdout's tty-ness picks human vs machine (output::mode()).
+    pub output_mode: Option<crate::output::Mode>,
     pub targets: Vec<String>,
     pub ranges: Vec<String>,
     /// Recognised long modifiers from the contract's roster (§B.8) that a
@@ -299,6 +302,7 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
         modifiers,
         dry_run: false,
         leaf: false,
+        output_mode: None,
         targets: Vec::new(),
         ranges: Vec::new(),
         deferred_flags: Vec::new(),
@@ -338,6 +342,24 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
                 "dry-run" => inv.dry_run = true,
                 "leaf" => inv.leaf = true,
                 "help" => return Ok(Parsed::Help),
+                "machine" | "human" => {
+                    if value.is_some() {
+                        return Err(format!("flag '--{name}' takes no value"));
+                    }
+                    let m = if name == "machine" {
+                        crate::output::Mode::Machine
+                    } else {
+                        crate::output::Mode::Human
+                    };
+                    if let Some(prev) = inv.output_mode {
+                        if prev != m {
+                            return Err(format!(
+                                "flag '--{name}' contradicts the earlier output-mode flag (pick one of --machine / --human)"
+                            ));
+                        }
+                    }
+                    inv.output_mode = Some(m);
+                }
                 // The rest of the contract's roster (§B.8) and the maintain
                 // verbs' own modifiers parse so the refusal names them.
                 // The five §B.8 sync/freshness/toolchain modifiers are

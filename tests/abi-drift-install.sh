@@ -322,7 +322,7 @@ gsa_install() {
 # decision_rows — the §E.2 decision rows of one engine capture (the seam
 # prints rows alone), engine diagnostics dropped.
 decision_rows() {
-    awk '/^--- run record begin ---/ || /^Build run: / { exit } !/^gsa: / && NF { print }'
+    awk '/^--- run record begin ---/ || /^Build run: / || /^INFO build-run / { exit } !/^gsa: / && NF { print }'
 }
 
 # assert_decisions LABEL RC — the §E.2 re-pin (R-5): $FIXTURE_OUTPUT's

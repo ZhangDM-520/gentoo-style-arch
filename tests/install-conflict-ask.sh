@@ -275,7 +275,7 @@ log: $(cat "$log")"
 # rows only (the seam prints rows alone; a plan entry prints its rows before
 # the prose and run-record spans), engine diagnostics dropped.
 decision_rows() {
-    awk '/^--- run record begin ---/ || /^Build run: / { exit } !/^gsa: / && NF { print }'
+    awk '/^--- run record begin ---/ || /^Build run: / || /^INFO build-run / { exit } !/^gsa: / && NF { print }'
 }
 
 # assert_decisions LABEL RC — the §E.2 re-pin: $FIXTURE_OUTPUT's normalized

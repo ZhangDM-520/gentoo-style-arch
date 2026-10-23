@@ -250,7 +250,12 @@ pub fn sweep_orphans(state_dir: &Path, current_run: &str, err: &mut dyn Write) {
         for file in files.flatten() {
             let fname = file.file_name().to_string_lossy().into_owned();
             let stale = fname.contains(".tmp.")
-                || (!own_run && (fname.ends_with(".result") || fname.ends_with(".park")));
+                || (!own_run
+                    && (fname.ends_with(".result")
+                        || fname.ends_with(".park")
+                        // lane-state markers (ux) are run-scoped exactly like
+                        // results: a dead run's `.started` proves nothing.
+                        || fname.ends_with(".started")));
             if stale {
                 let _ = std::fs::remove_file(file.path());
             }

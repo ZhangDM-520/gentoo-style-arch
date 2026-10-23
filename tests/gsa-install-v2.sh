@@ -311,7 +311,7 @@ install_ws() {
 # plan rows share the framing and are excluded with it).
 rows_only() {
     awk '
-        /^--- run record begin ---/ || /^Build run: / { exit }
+        /^--- run record begin ---/ || /^Build run: / || /^INFO build-run / { exit }
         /^[A-Za-z0-9@._+-]+ (install|skip|refuse|noop|parked) / { print }
     '
 }

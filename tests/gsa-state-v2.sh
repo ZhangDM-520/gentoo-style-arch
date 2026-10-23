@@ -331,9 +331,9 @@ $leaf_rows"
         leaf_archives=$(find "$ws/packages/leaf" -name 'leaf-*.pkg.tar.zst' | wc -l)
         [ "$hub_archives" = 2 ] || fail "the pruned hub archive is deleted, $hub_archives left"
         [ "$leaf_archives" = 1 ] || fail "the pruned leaf archives are deleted, $leaf_archives left"
-        printf '%s\n' "$hub_out" | grep -F "retention pruned hub instance 1" >/dev/null \
+        printf '%s\n' "$hub_out" | grep -F "msg=binpkg_index:_retention_pruned_hub_instance_1" >/dev/null \
             || fail "the hub pruning is announced by name in its own run: $hub_out"
-        printf '%s\n' "$leaf_out" | grep -F "retention pruned leaf instance" >/dev/null \
+        printf '%s\n' "$leaf_out" | grep -F "msg=binpkg_index:_retention_pruned_leaf_instance" >/dev/null \
             || fail "the leaf pruning is announced by name in its own run: $leaf_out"
     )
 fi
@@ -410,7 +410,7 @@ if want c; then
         [ "$rc" = 0 ] || fail "the guarded run is rc 0, got $rc" "$runlog"
 
         # The deferral was loud and named the recipe.
-        grep -F "retention deferred slow (lane in flight)" "$runlog" >/dev/null \
+        grep -F "msg=binpkg_index:_retention_deferred_slow_(lane_in_flight)" "$runlog" >/dev/null \
             || fail "the deferred sweep must announce the in-flight recipe (§I.4)" "$runlog"
         end=$(index_rows "$state" slow | grep -c '"op":"row"')
         [ "$end" = 1 ] \

@@ -100,6 +100,10 @@ pub const NOT_MIRRORED: &[&str] = &[
     // continuation must never carry them either.
     "--quiet",
     "--verbose",
+    // Output-mode globals (presentation only — a resume picks its own):
+    // never replayed.
+    "--machine",
+    "--human",
     "--install-decide",
     "--lane-job",
     "--fetch-job",
@@ -682,6 +686,7 @@ mod tests {
     #[test]
     fn dry_run_record_carries_plan_and_continuation() {
         let inv = Invocation {
+            output_mode: None,
             family: Family::S,
             action: None,
             modifiers: vec!['c'],
@@ -727,6 +732,7 @@ mod tests {
     #[test]
     fn build_family_plans_build_rows() {
         let inv = Invocation {
+            output_mode: None,
             family: Family::B,
             action: None,
             modifiers: Vec::new(),
@@ -769,6 +775,7 @@ mod tests {
     #[test]
     fn run_record_mirrors_the_resolved_budget_and_restates_remaining() {
         let inv = Invocation {
+            output_mode: None,
             family: Family::B,
             action: None,
             modifiers: Vec::new(),
@@ -887,6 +894,7 @@ mod tests {
 
     fn inv_for(family: Family) -> Invocation {
         Invocation {
+            output_mode: None,
             family,
             action: None,
             modifiers: Vec::new(),

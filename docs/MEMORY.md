@@ -2231,6 +2231,30 @@ constant, not a baked path); and the xorg-xwayland-git PGO end-to-end proof
 
 ## 6. Pitfall digest (full details: NOTE.md sections of same dates):
 
+- **A hand-written expected literal can hallucinate characters — re-contract
+  needles from a captured engine sample, never from memory of the message**
+  (2026-10-23, UX wave's P6 note needle): the guessed literal
+  `msg=case-variant_match:_('OKP')_->_('okp')` carried parens the real
+  squashed message has none of, so the fixture failed on a green engine. The
+  `output::squash` rule is exactly "whitespace runs → `_`" — punctuation
+  (`:`, `,`, quotes, parens) survives verbatim; derive every needle by
+  capturing output first and pasting it. Details: NOTE.md 2026-10-23.
+- **A `{line}\n` frame wrapper turns "this event renders nothing" into a
+  stray blank line** (2026-10-23, the view heartbeat `SupEvent::Tick`): the
+  kv renderer terminated every matched arm with a newline, so an empty
+  sentinel would have printed one bare `\n` per second into machine streams.
+  A no-message event needs an early `return String::new()` before the frame,
+  and a pin that asserts the EMPTY string (the newline-termination pin
+  deliberately excludes it). Details: NOTE.md 2026-10-23.
+- **Re-contract a needle only after checking which vocabulary its input
+  actually carries — two-engine fixtures mix vocabularies in one file**
+  (2026-10-23, app-group.sh went silently red): `order_seq`/`order_pairs`
+  parse the FISH PTY sections (byte-unchanged oracle output), and a wave
+  flipped their anchors to gsa kv (`INFO build-order verb=dry_run`) — the
+  sed matched nothing, `set -e` exited 0 lines, and the "fix" was a revert
+  to the fish anchor `Build order (dry run):`. Sweep a fixture for WHO
+  produces each captured file before touching its needles. Details:
+  NOTE.md 2026-10-23.
 - **Fixture/build scratch inside the repository is doubly corrupting: cwd
   discovery finds the real topology, and a sync fixture then rewrites REAL
   recipes** (2026-10-23, battery run with `TMPDIR=$PWD/.battery-tmp`): the

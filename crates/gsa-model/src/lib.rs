@@ -17,6 +17,20 @@ pub mod config;
 pub mod privilege;
 
 use std::fmt;
+use std::path::{Path, PathBuf};
+
+// ---------------------------------------------------------------------------
+// State-root layout
+// ---------------------------------------------------------------------------
+
+/// Per-package build log location under the state root (contract §J.1:
+/// `logs/<pkg>.log`). The layout lives here, one home: the lane child appends
+/// its makepkg output to this file across runs, and the supervisor's
+/// `<run>/<pkg>.started` marker carries the byte offset where THIS run's
+/// output starts (the offset is what makes a tail run-scoped).
+pub fn log_path(state_dir: &Path, pkg: &str) -> PathBuf {
+    state_dir.join("logs").join(format!("{pkg}.log"))
+}
 
 use serde::{Deserialize, Serialize};
 

@@ -16436,3 +16436,86 @@ and §6, and the commit/version identifiers of each fix are kept inline.
 - A concurrent owner recipe-adding job (makepkg in the store universe)
   was given right of way first (one writer per mutable state; the
   no-two-heavy-builds rule).
+
+## 2026-10-23 — UX wave: help readability, two-vocabulary messages, lane state, the live TTY dashboard
+
+**Ask (owner).** `--help` was packed and unreadable; the running-status output
+was untransparent (only finished items printed) — restore the fish script's
+status hints: interval status updates, graphic symbols, several lines of the
+running job's last messages, so a human never wonders whether it is stuck. And
+the prior concise/determinate messages move OFF the default (the default is
+human-easy-to-read) into a machine-optimised vocabulary (clear INFO/WARNING,
+direct `action=`).
+
+**Shipped (all on top of 6e42f9a, uncommitted at entry time).**
+- `help.rs`: the help text restructured for 80/160-column readability (the
+  `Prose` variant warning is known pre-existing).
+- The message catalog (`output.rs`: `kv_line`/`squash`/`Level`, `render.rs`):
+  every supervisor event renders in BOTH vocabularies — human readable
+  (`✓ vtk (12s)`, `⚠ teardown: …`), machine leveled `LEVEL event k=v` with
+  `action=`. Machine grammar + human forms unit-pinned in `render::tests`
+  (newline-terminated once each); mutation-probed (a flipped `signal` level
+  went red).
+- `crate::write_notes` now mode-splits (human `gsa: note: …`, machine
+  `INFO note msg=<squash>`) — this was the P6 case-variant note gap the
+  fixtures caught.
+- Lane state (`supervisor.rs`): `runs/current` pointer (atomic replace),
+  `<run>/<pkg>.started` = `pid= epoch= log-offset=` (offset sampled BEFORE
+  spawn — the child appends from its first instruction; `log_path` moved to
+  `gsa-model` as the one home, `gsa-build` re-exports it — gsa-sched→gsa-build
+  is a dependency cycle), and `SupEvent::Tick` from the loop's
+  `recv_timeout(3600s→1s)`. Observability, never behaviour: write failures
+  are loud `note` events. `sweep_orphans` reaps `.started` with `.result`/
+  `.park`, else old run dirs never empty. Unit test + 3 mutation probes
+  (marker/pointer/tick each killed → red).
+- The live dashboard (`dashboard.rs` `View`), fish parity
+  (`tests/assets/build-all.fish` render_dashboard/dashboard_tail_rows/
+  sanitize_log_stream/fit_dashboard_line): TTY box (progress header
+  `d/t started | S done | F failed | icon state`, per-lane
+  `Lane i: → RUNNING pkg <mSSs>` + 3 run-scoped `> tail` rows, spinner
+  `-\| /` + `Event:` footer, `\033[?25l`/`\033[<N>A`/`\r\033[2K`/`\033[?25h`),
+  human pipe gets the 10 s `STATUS: lane i: pkg (dur)` hint (clock starts at
+  view construction, fish `last_status` init), machine stream stays pure.
+  Unit pins ×4 (sanitize, fit 80/160, box rows incl. tail padding order,
+  header state precedence) — all mutation-probed RED. Live PTY smoke verified
+  the whole box (tails filling per step, spinner advance, DONE header, cursor
+  restored before the record).
+- Fixtures: NEW `tests/dashboard-pty.sh` (A: PTY box + spinner + cursor
+  balance; B: `--human` pipe STATUS; C: machine purity), mutation-probed
+  (gate disabled → section A red). The full battery + `cargo test
+  --workspace` follow this entry.
+
+**Needle lessons (→ MEMORY §6, three new entries).** (1) re-contract needles
+from a captured sample — the P6 literal hallucinated parens (`_('OKP')`) the
+squashed message has none of (`squash` = whitespace runs → `_`, punctuation
+survives); (2) a `{line}\n` frame turns an empty sentinel into a stray blank
+line per tick — no-message events early-return and are pinned EMPTY;
+(3) check WHO produces a captured file before re-contracting its needles —
+app-group's `order_seq`/`order_pairs` parse FISH PTY output, an earlier flip
+to kv anchors made the sed match nothing under `set -e`, and the right move
+was the revert.
+
+**Fixtures re-contracted in this wave (old fragment → machine kv, red-first).**
+dashboard.sh (summary/row_line/assert_summary_agrees on the `lane-outcome` kv
+frame; outcome line spans the level class — failure runs render `ERROR
+outcome`), signal-abort-lock.sh (×3 `teardown reason=one_SIGTERM_per_lane,
+_shared_grace_window`, `teardown reason=second_signal`), abi-batch-policy.sh
+(`INFO build-order verb=dry_run`), prefetch.rs (advisory summary kv —
+pre-existing wave debt), app-group.sh (revert).
+
+**Deviations recorded (contract §L).** (a) dashboard width probed once per
+run (tput → COLUMNS → 80, floor 20) — resize refits next run; (b) install.rs
+txn interrupt lines (`signal`/`teardown`) stay mode-UNsplit deliberately —
+transaction surface, not the event catalog.
+
+**Validation (same date, final).** `bash tests/run-all.sh` = **76/76 PASS**
+(incl. the new dashboard-pty.sh); `cargo test --workspace` all green
+(gsa-cli 62 incl. the render/dashboard/help pins, gsa-sched 39 incl. the
+lane-state pin). Help width pinners added (`help::tests`, render_at(80/160),
+mutation-probed) and the dead `Block::Prose` variant deleted — the refactored
+`render()` = `render_at(width())` seam; off-TTY help stays CAPTURE_WIDTH=160
+by design (width-stable captures), TTY help fits the terminal. One
+contaminated repetition is on record: a `cargo test -p gsa-cli -p gsa-sched`
+run started while the machine still drained the parallel battery and showed
+2 gsa-sched failures whose names were not captured; three clean re-runs since
+(solo + combined) — treated as load flakes, not evidence of a defect.

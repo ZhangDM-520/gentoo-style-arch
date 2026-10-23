@@ -273,10 +273,10 @@ if want b; then
         [ "$(rr2_outcome p2 status <<<"$FIXTURE_OUTPUT")" = succeeded ] || fail_out "b: p2's build row must succeed:"
         [ "$(rr2_outcome p2 reason <<<"$FIXTURE_OUTPUT")" = ok ] || fail_out "b: p2's build row keeps the build's reason, not the flake:"
         # The advisory: prose section + one warning + the scalar (never rows).
-        vgrep "$FIXTURE_OUTPUT" -q 'Prefetch warnings (advisory — lanes retry at build time):' \
+        vgrep "$FIXTURE_OUTPUT" -q 'WARNING prefetch-summary advisory=1 note=lanes_retry_at_build_time' \
             || fail_out "b: the prose prefetch-warning section is missing:"
-        vgrep "$FIXTURE_OUTPUT" -q '· p2 ok retry-ok' \
-            || fail_out "b: want warning '· p2 ok retry-ok':"
+        vgrep "$FIXTURE_OUTPUT" -q 'WARNING prefetch pkg=p2 verdict=ok reason=retry-ok' \
+            || fail_out "b: want the per-warning line for p2:" 
         [ "$(rr2_scalar prefetch-warnings <<<"$FIXTURE_OUTPUT")" = 1 ] \
             || fail_out "b: want prefetch-warnings: 1 (owner decision 5):"
         grep -q 'gsa-fetch: p2: attempt 1 failed' "$ws/state/prefetch.log" \

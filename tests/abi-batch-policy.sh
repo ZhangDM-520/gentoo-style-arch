@@ -348,7 +348,7 @@ gsa_archive() {
 # alone; a run record or prose span would poison the stream and is excluded).
 rows_only() {
     awk '
-        /^--- run record begin ---/ || /^Build run: / || /^Build order / { exit }
+        /^--- run record begin ---/ || /^Build run: / || /^Build order / || /^INFO build-run / || /^INFO build-order / { exit }
         /^[A-Za-z0-9@._+-]+ (install|skip|refuse|noop|parked) / { print }
     '
 }
@@ -572,7 +572,7 @@ $FIXTURE_OUTPUT"
     [ "$FIXTURE_RC" -eq 3 ] ||
         fail "B3: the dry-run shares the selection-level refusal class (§G.1), got $FIXTURE_RC:
 $FIXTURE_OUTPUT"
-    grep -Fq 'Build order (dry run)' <<<"$FIXTURE_OUTPUT" ||
+    grep -Fq 'INFO build-order verb=dry_run' <<<"$FIXTURE_OUTPUT" ||
         fail "B3: the dry-run did not render its plan:
 $FIXTURE_OUTPUT"
     grep -Fq -- '--- run record begin ---' <<<"$FIXTURE_OUTPUT" ||

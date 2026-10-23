@@ -204,6 +204,11 @@ pub enum SupEvent {
     /// One prefetch advisory (owner decision 5): loud at failure time,
     /// advisory — the lane will retry at build time. Never a run-record row.
     PrefetchWarning(String),
+    /// A view heartbeat (ux lane state): the event loop's ~1s idle tick, so a
+    /// live dashboard redraws (spinner, elapsed) even while no lane moves.
+    /// Never a message — both vocabularies render it empty (render.rs), and
+    /// it never reaches the run record.
+    Tick,
 }
 
 pub struct SupOutcome {
@@ -548,6 +553,52 @@ fn result_path(setup: &RunSetup, index: usize) -> PathBuf {
 
 fn park_marker_path(setup: &RunSetup, index: usize) -> PathBuf {
     PathBuf::from(format!("{}.park", result_path(setup, index).display()))
+}
+
+/// `<run>/<pkg>.started` (ux lane state): one kv line naming the lane
+/// child's pid, its start epoch and the byte offset where this run's log
+/// output starts — `logs/<pkg>.log` is appended across runs
+/// (`gsa_model::log_path`), so the offset is what makes a tail run-scoped.
+/// Written at spawn, before the `Started` event renders. The caller samples
+/// [`log_start_offset`] BEFORE spawning: once the child exists it appends.
+fn write_started(
+    setup: &RunSetup,
+    index: usize,
+    pid: u32,
+    log_offset: u64,
+) -> Result<(), String> {
+    let pkg = setup.nodes[index].id.as_str();
+    let epoch = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let path = run_dir(setup).join(format!("{pkg}.started"));
+    std::fs::write(
+        &path,
+        format!("pid={pid} epoch={epoch} log-offset={log_offset}\n"),
+    )
+    .map_err(|e| format!("cannot write {}: {e}", path.display()))
+}
+
+/// The log's size before a lane spawns — the byte where its output starts.
+fn log_start_offset(setup: &RunSetup, index: usize) -> u64 {
+    let pkg = setup.nodes[index].id.as_str();
+    std::fs::metadata(gsa_model::log_path(&setup.state_dir, pkg))
+        .map(|m| m.len())
+        .unwrap_or(0)
+}
+
+/// `runs/current` (ux lane state): a pointer file naming the live run id, so
+/// a detached reader (the dashboard's tails) reaches this run's
+/// `<pkg>.started` markers without knowing the id. Replaced atomically at
+/// run start; it keeps naming the LAST run afterwards (the post-run view).
+fn write_current_pointer(setup: &RunSetup) -> Result<(), String> {
+    let runs = setup.state_dir.join("runs");
+    let tmp = runs.join(format!(".current-{}", setup.run_id));
+    std::fs::write(&tmp, format!("{}\n", setup.run_id))
+        .map_err(|e| format!("cannot write {}: {e}", tmp.display()))?;
+    std::fs::rename(&tmp, runs.join("current"))
+        .map_err(|e| format!("cannot point current at {}: {e}", setup.run_id))
 }
 
 /// Spawn one lane child: `exec`-style `<exe> --lane-job <pkg> <result>
@@ -1071,6 +1122,12 @@ pub fn run(
 ) -> Result<SupOutcome, String> {
     std::fs::create_dir_all(run_dir(&setup))
         .map_err(|e| format!("cannot create run directory: {e}"))?;
+    // The lane-state pointer first (ux): `runs/current` must name THIS run
+    // before the first lane spawns. Observability, never behaviour — a
+    // failure is loud (`note`) and does not stop the run.
+    if let Err(error) = write_current_pointer(&setup) {
+        events(&SupEvent::Diagnostic(format!("lane-state: {error}")));
+    }
 
     let nodes: Vec<Node> = setup
         .nodes
@@ -1217,9 +1274,19 @@ pub fn run(
             } else {
                 setup.budget.normal_jobs
             };
+            // The log offset is sampled BEFORE the spawn: the child appends
+            // from its first instruction (ux lane state).
+            let log_offset = log_start_offset(&setup, index);
             match spawn_lane(&setup, index, jobs) {
                 Ok(mut child) => {
                     let pid = child.id();
+                    // The lane-state marker (ux) before the Started event: a
+                    // detached reader sees the pid and log offset the moment
+                    // the lane exists. Same observability class as the
+                    // pointer — loud, never a behaviour.
+                    if let Err(error) = write_started(&setup, index, pid, log_offset) {
+                        events(&SupEvent::Diagnostic(format!("lane-state: {error}")));
+                    }
                     machine.dispatch(index);
                     if let Some(rem) = remediation.as_mut() {
                         rem.dispatched(index);
@@ -1367,9 +1434,17 @@ pub fn run(
             // Teardown drained every lane.
             break 'outer;
         } else {
-            match rx.recv_timeout(Duration::from_secs(3600)) {
+            match rx.recv_timeout(Duration::from_secs(1)) {
                 Ok(event) => event,
-                Err(RecvTimeoutError::Timeout) => continue,
+                Err(RecvTimeoutError::Timeout) => {
+                    // The view heartbeat (ux lane state): ~1s ticks so a live
+                    // dashboard redraws (spinner, elapsed) while nothing
+                    // moves. The events callback is the loop's sole out
+                    // writer, so the tick needs no locking — and render.rs
+                    // renders it empty, so a machine stream never sees it.
+                    events(&SupEvent::Tick);
+                    continue;
+                }
                 Err(RecvTimeoutError::Disconnected) => break 'outer,
             }
         };
@@ -1742,6 +1817,68 @@ mod tests {
         let (epoch, pid) = id.split_once('-').unwrap();
         assert!(epoch.parse::<u64>().is_ok());
         assert_eq!(pid, std::process::id().to_string());
+    }
+
+    /// ux lane state: the run publishes its own coordinates — `runs/current`
+    /// names the run, `<run>/<pkg>.started` names the lane's pid, start epoch
+    /// and log start offset — and the view heartbeat ticks while the lane
+    /// runs. Observability only: the run settles normally either way.
+    #[test]
+    fn lane_state_markers_and_the_view_tick_land_during_a_run() {
+        let dir = scratch("lane-state");
+        // A lane that outlives the ~1s tick, then exits without publishing —
+        // the lost settlement is beside the point, the run only must settle.
+        let stub = write_stub(&dir, "slow-lane", "#!/usr/bin/env bash\nsleep 2\nexit 0\n");
+        let setup = one_node_setup(&dir, &stub, "lane-state");
+        let run_id = setup.run_id.clone();
+        let state_dir = setup.state_dir.clone();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut sink = |event: &SupEvent| {
+                let _ = tx.send(event.clone());
+            };
+            let mut err: Vec<u8> = Vec::new();
+            let _ = run(setup, &mut sink, &mut err);
+        });
+        let mut events: Vec<SupEvent> = Vec::new();
+        loop {
+            match rx.recv_timeout(Duration::from_secs(20)) {
+                Ok(event) => events.push(event),
+                // The sink drops when the run returns — the disconnect IS
+                // the termination signal; a timeout before it is a hang.
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(mpsc::RecvTimeoutError::Timeout) => panic!(
+                    "the supervisor must terminate once its lane is gone (contract §K)"
+                ),
+            }
+        }
+
+        let current = std::fs::read_to_string(state_dir.join("runs").join("current"))
+            .expect("runs/current is written at run start");
+        assert_eq!(current.trim(), run_id, "runs/current names THIS run");
+
+        let started = std::fs::read_to_string(
+            state_dir.join("runs").join(&run_id).join("p1.started"),
+        )
+        .expect("the lane's .started marker is written at spawn");
+        let pid = started
+            .split_whitespace()
+            .find_map(|f| f.strip_prefix("pid=")?.parse::<u32>().ok())
+            .unwrap_or(0);
+        assert!(
+            pid > 1 && pid != std::process::id(),
+            "the marker names the spawned lane child's real pid: {started:?}"
+        );
+        assert!(
+            started.contains(" epoch=") && started.contains(" log-offset=0\n"),
+            "the marker names a start epoch and the pre-spawn log offset (0 here): {started:?}"
+        );
+        assert!(
+            events.iter().any(|e| matches!(e, SupEvent::Tick)),
+            "the view heartbeat ticks while the lane runs: {:?}",
+            events.len()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Scratch tree under the harness `$TMPDIR` (fixture convention).

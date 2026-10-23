@@ -18,9 +18,9 @@ use std::path::{Path, PathBuf};
 
 /// Per-package build log location under the state root (contract §J.1: logs
 /// live under the state root; §K.1 writes them through the ownership gate).
-pub fn log_path(state_dir: &Path, pkg: &str) -> PathBuf {
-    state_dir.join("logs").join(format!("{pkg}.log"))
-}
+/// The path layout itself lives in `gsa-model` (one home — the supervisor's
+/// `<run>/<pkg>.started` lane-state markers resolve the same path).
+pub use gsa_model::log_path;
 
 /// Find the recipe repository: walk up from `start` until `config/topology.conf`
 /// exists (the strict loader's home).

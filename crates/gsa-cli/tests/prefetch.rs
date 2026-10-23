@@ -169,12 +169,18 @@ fn a_prefetch_failure_is_advisory_and_never_gates_the_run() {
     // Both builds succeeded — the lane is authoritative (§H.3 `ok`).
     assert!(stdout.contains("p1 succeeded"), "{stdout}");
     assert!(stdout.contains("p2 succeeded"), "{stdout}");
-    // Owner decision 5: prose section + scalar, never rows.
+    // Owner decision 5: the advisory summary surface + scalar, never rows.
+    // The captured run is machine mode, so the surface is the leveled kv
+    // summary (render_prefetch_notes), not the human `Prefetch warnings …`
+    // frame — the human frame is a TTY surface.
     assert!(
-        stdout.contains("Prefetch warnings (advisory — lanes retry at build time):"),
+        stdout.contains("WARNING prefetch-summary advisory=1 note=lanes_retry_at_build_time"),
         "{stdout}"
     );
-    assert!(stdout.contains("· p2 failed fetch-failed"), "{stdout}");
+    assert!(
+        stdout.contains("WARNING prefetch pkg=p2 verdict=failed reason=fetch-failed"),
+        "{stdout}"
+    );
     assert!(stdout.contains("prefetch-warnings: 1"), "{stdout}");
     assert!(
         !stdout.contains("p2 failed 1"),

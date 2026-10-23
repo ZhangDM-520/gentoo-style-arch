@@ -420,7 +420,7 @@ fn run_build_with(
     let nodes = build_nodes(&root, &graph, &selection, &pre, &latents);
     let batches = build_batches(&graph, &selection);
 
-    let _ = writeln!(out, "{}", budget.parallelism_line());
+    let _ = writeln!(out, "{}", render::parallelism_line(&budget));
     let exe = match std::env::current_exe() {
         Ok(exe) => exe,
         Err(error) => {
@@ -673,13 +673,27 @@ fn run_build_with(
     // The event view covers every node the machine carries (the selection
     // plus any activated remediation latent).
     let event_ids: Vec<RecipeId> = setup.nodes.iter().map(|node| node.id.clone()).collect();
-    let outcome = match supervisor::run(
+    // The live run view (ux): a TTY human run gets the progress box, a human
+    // pipe gets the 10 s STATUS hint, the machine stream passes through.
+    let mut view = crate::dashboard::View::new(
+        crate::output::is_human(),
+        state_dir.clone(),
+        event_ids.iter().map(|id| id.as_str().to_string()).collect(),
+        setup.nodes.len(),
+        setup.budget.lanes as usize,
+    );
+    let run_result = supervisor::run(
         setup,
         &mut |event| {
-            let _ = write!(out, "{}", render::render_event(event, &event_ids));
+            let line = render::render_event(event, &event_ids);
+            view.handle(event, &line, out);
         },
         err,
-    ) {
+    );
+    // The box restores the cursor before any other surface (the run record)
+    // prints — on every exit path out of the run.
+    view.finish(out);
+    let outcome = match run_result {
         Ok(outcome) => outcome,
         Err(message) => {
             let _ = writeln!(err, "gsa: {message}");

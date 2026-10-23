@@ -425,7 +425,7 @@ if [ "$FIXTURE_RC" != 0 ]; then
         "$fixture/out-baseline-fail.txt"
 fi
 assert_msg baseline-fail 'GCC build identity missing or changed; cleaning cached build artifacts (previous: gcc (fixture) 17.0.0 20260906; current: gcc (fixture) 17.0.0 20260920)'
-assert_msg baseline-fail 'vcs baseline: p2:'
+assert_msg baseline-fail 'msg=vcs_baseline:_p2:'
 assert_record baseline-fail p2
 assert_plan baseline-fail p2 build
 assert_row baseline-fail p2 succeeded 0
