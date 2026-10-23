@@ -21,8 +21,8 @@ pkgname=(
 # Trimmed 2026-09-04 (AMD laptop, no FireWire/no network-audio/no gstreamer
 # consumers): pipewire-ffado, -onnx, -roc, gst-plugin-pipewire, -zeroconf,
 # -v4l2, -x11-bell all removed — see meson feature disables in build().
-pkgver=1.6.9
-pkgrel=1.1
+pkgver=1.6.10
+pkgrel=1
 epoch=1
 pkgdesc="Low-latency audio/video router and processor"
 url="https://pipewire.org"
@@ -70,7 +70,7 @@ checkdepends=(
 source=(
   "git+https://gitlab.freedesktop.org/pipewire/pipewire.git#tag=$pkgver"
 )
-b2sums=('85867001aac9e81a015eb042bc4766cbb6c1755a809d4fdbd838bf5433596648d222f5afb88c9a06786c76901f32a270c6cf5499fa7e2f29890357293fd5d6f7')
+b2sums=('3c4645252b9affb46852be4d3103fc94664f76df1a1b64b7a8aee011f26b38f10d5bd189fdef65b239c9e13e016dbd25070b791c7ec4e2870777231aac3a8bbd')
 
 prepare() {
   cd pipewire

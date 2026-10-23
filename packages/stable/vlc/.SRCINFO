@@ -1,7 +1,7 @@
 pkgbase = vlc
 	pkgdesc = Free and open source cross-platform multimedia player and framework
-	pkgver = 3.0.23_2
-	pkgrel = 16
+	pkgver = 3.0.24
+	pkgrel = 1.1
 	url = https://www.videolan.org/vlc/
 	arch = x86_64
 	license = GPL-2.0-or-later
@@ -113,17 +113,17 @@ pkgbase = vlc
 	makedepends = xosd
 	makedepends = zlib
 	makedepends = zvbi
-	source = git+https://code.videolan.org/videolan/vlc.git#tag=3.0.23-2
+	source = git+https://code.videolan.org/videolan/vlc.git#tag=3.0.24
 	source = update-vlc-plugin-cache.hook
 	source = 0001-Use-reproducible-data-for-build-user-and-host.patch
 	source = 0002-Adjust-hardcoded-font-paths-for-ttf-dejavu.patch
 	source = 0003-Adjust-includes-for-build-with-gstreamer-1.28.patch
-	sha512sums = 7a8700de9b8c458474c6d43df5306f2d59ead93a665d64ebf7d4d0b38b378abc18e065c47fa04f85ff1ea51b3aff59bf6a6d6ac346991c4cf0ad78a3d9169150
+	sha512sums = 1979f6d3a42ff2b7db588a74bcc443a99dafa358421df7636a668bce295d97ce6ec50dcb3c2ed5a6e93b2d31820806be002a549d41c1a3c23d541b57c667d4ad
 	sha512sums = b247510ffeadfd439a5dadd170c91900b6cdb05b5ca00d38b1a17c720ffe5a9f75a32e0cb1af5ebefdf1c23c5acc53513ed983a736e8fa30dd8fad237ef49dd3
 	sha512sums = 9d72267ac97c998a12435041ed9ff6010f422d21505b8074ebb54bc6c8ee56532e0706489415fa725c541a5271f36db1614c11ec3c82dd354c36af97c82972ad
 	sha512sums = f5452e7fdbaa273f088e3accaea46687ff7dd8479a89e266987208aff8ddae2a0bb87bd0a602508d1a7f7d7fc9447e9c69eb0e3f84de9643d6213757e9a7cfb5
 	sha512sums = 232f5595356a9864f89caf36f7ff3d81ba58b9f76b2a39c5540837b705e21a7a8c6ae2980303d6ba8bc589f4664db2fe25956b1d7f8f420c4b216f354866715c
-	b2sums = 7408f02525e27a9078cae120156ca0821cc898aa8e655e04af2d085fe1d59ef33b549a3bc628ceb208e14cc2dd5c1a1b21ec8f68c7379b065bca89c9fb882c83
+	b2sums = 69dd693fa43732251821ec374306caa2ff02ec001cdbaa925e2331610bb99e569467af553b3332efa4c06fc2504fe86af7374b460a88ee1ed5cc62162f92fabf
 	b2sums = fece25c3d56af403962b82e1ac91d1b06791ec2cc282d23c91d2608c8614145596f02e00457047ea688c30bf11f422bcc4748f08ec10a70cd5e79c417bf1eda1
 	b2sums = 8f5568fe8c378b266c4de91070aa262f632d074801bae61cdc160873b4a22f12805a5469905b92c27af0861c80e81a541d0fdf72c5f10d1436cc25086327faea
 	b2sums = 59f6ac6b3890667c08a6d4772ffc9d9be70443588e3407ef0f8f89f5b9e2f55d14915c0a136b47c27236a18f1679c8aef12c61cf5ef52345818a31d94a50f7d2
@@ -140,22 +140,22 @@ pkgname = libvlc
 
 pkgname = vlc-cli
 	pkgdesc = Free and open source cross-platform multimedia player and framework - command line interface
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlc.so
-	depends = vlc-plugins-base=3.0.23_2-16
+	depends = vlc-plugins-base=3.0.24-1.1
 	depends = bash
 	depends = glibc
 	optdepends = vlc-plugin-lua: for Lua scripting plugins
 
 pkgname = vlc-gui-qt
 	pkgdesc = Free and open source cross-platform multimedia player and framework - Qt GUI
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
-	depends = vlc-cli=3.0.23_2-16
-	depends = vlc-plugin-lua=3.0.23_2-16
-	depends = vlc-plugin-pulse=3.0.23_2-16
-	depends = vlc-plugins-base=3.0.23_2-16
-	depends = vlc-plugins-video-output=3.0.23_2-16
+	depends = vlc-cli=3.0.24-1.1
+	depends = vlc-plugin-lua=3.0.24-1.1
+	depends = vlc-plugin-pulse=3.0.24-1.1
+	depends = vlc-plugins-base=3.0.24-1.1
+	depends = vlc-plugins-video-output=3.0.24-1.1
 	depends = bash
 	depends = glibc
 	depends = libgcc
@@ -174,9 +174,9 @@ pkgname = vlc-gui-qt
 
 pkgname = vlc-plugin-aalib
 	pkgdesc = Free and open source cross-platform multimedia player and framework - ASCII art video output plugin
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
-	depends = vlc-plugins-base=3.0.23_2-16
+	depends = vlc-plugins-base=3.0.24-1.1
 	depends = aalib
 	depends = glibc
 	depends = libx11
@@ -184,16 +184,16 @@ pkgname = vlc-plugin-aalib
 
 pkgname = vlc-plugin-aom
 	pkgdesc = Free and open source cross-platform multimedia player and framework - AOM AV1 plugin
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
-	depends = vlc-plugins-base=3.0.23_2-16
+	depends = vlc-plugins-base=3.0.24-1.1
 	depends = aom
 	depends = glibc
 	provides = libaom_plugin.so
 
 pkgname = vlc-plugin-archive
 	pkgdesc = Free and open source cross-platform multimedia player and framework - stream extractor plugin
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
 	depends = glibc
 	depends = libarchive
@@ -201,18 +201,18 @@ pkgname = vlc-plugin-archive
 
 pkgname = vlc-plugin-aribb24
 	pkgdesc = Free and open source cross-platform multimedia player and framework - ARIB STD-B24 plugins
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
-	depends = vlc-plugins-base=3.0.23_2-16
+	depends = vlc-plugins-base=3.0.24-1.1
 	depends = aribb24
 	depends = glibc
 	provides = libaribsub_plugin.so
 
 pkgname = vlc-plugin-aribb25
 	pkgdesc = Free and open source cross-platform multimedia player and framework - ARIB STD-B25 plugin
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
-	depends = vlc-plugins-base=3.0.23_2-16
+	depends = vlc-plugins-base=3.0.24-1.1
 	depends = aribb25
 	depends = glibc
 	depends = pcsclite
@@ -220,36 +220,36 @@ pkgname = vlc-plugin-aribb25
 
 pkgname = vlc-plugin-ass
 	pkgdesc = Free and open source cross-platform multimedia player and framework - SSA/ASS subtitle plugin
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
-	depends = vlc-plugins-base=3.0.23_2-16
+	depends = vlc-plugins-base=3.0.24-1.1
 	depends = glibc
 	depends = libass
 	provides = liblibass_plugin.so
 
 pkgname = vlc-plugin-avahi
 	pkgdesc = Free and open source cross-platform multimedia player and framework - mDNS/DNS-SD plugin
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
-	depends = vlc-plugins-base=3.0.23_2-16
+	depends = vlc-plugins-base=3.0.24-1.1
 	depends = avahi
 	depends = glibc
 	provides = libavahi_plugin.so
 
 pkgname = vlc-plugin-bluray
 	pkgdesc = Free and open source cross-platform multimedia player and framework - Blu-ray plugin
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
-	depends = vlc-plugins-base=3.0.23_2-16
+	depends = vlc-plugins-base=3.0.24-1.1
 	depends = glibc
 	depends = libbluray
 	provides = liblibbluray_plugin.so
 
 pkgname = vlc-plugin-caca
 	pkgdesc = Free and open source cross-platform multimedia player and framework - Color ASCII art video output plugin
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
-	depends = vlc-plugins-base=3.0.23_2-16
+	depends = vlc-plugins-base=3.0.24-1.1
 	depends = glibc
 	depends = libcaca
 	depends = libx11
@@ -257,18 +257,18 @@ pkgname = vlc-plugin-caca
 
 pkgname = vlc-plugin-cddb
 	pkgdesc = Free and open source cross-platform multimedia player and framework - CDDB plugin
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
-	depends = vlc-plugins-base=3.0.23_2-16
+	depends = vlc-plugins-base=3.0.24-1.1
 	depends = glibc
 	depends = libcddb
 	provides = libcdda_plugin.so
 
 pkgname = vlc-plugin-chromecast
 	pkgdesc = Free and open source cross-platform multimedia player and framework - Chromecast plugin
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
-	depends = vlc-plugins-base=3.0.23_2-16
+	depends = vlc-plugins-base=3.0.24-1.1
 	depends = abseil-cpp
 	depends = glibc
 	depends = libgcc
@@ -278,18 +278,18 @@ pkgname = vlc-plugin-chromecast
 
 pkgname = vlc-plugin-dca
 	pkgdesc = Free and open source cross-platform multimedia player and framework - DTS Coherent Acoustics plugin
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
-	depends = vlc-plugins-base=3.0.23_2-16
+	depends = vlc-plugins-base=3.0.24-1.1
 	depends = glibc
 	depends = libdca
 	provides = libdca_plugin.so
 
 pkgname = vlc-plugin-dvb
 	pkgdesc = Free and open source cross-platform multimedia player and framework - DVB plugins
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
-	depends = vlc-plugins-base=3.0.23_2-16
+	depends = vlc-plugins-base=3.0.24-1.1
 	depends = aribb24
 	depends = glibc
 	depends = libdvbpsi
@@ -299,9 +299,9 @@ pkgname = vlc-plugin-dvb
 
 pkgname = vlc-plugin-dvd
 	pkgdesc = Free and open source cross-platform multimedia player and framework - DVD plugins
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
-	depends = vlc-plugins-base=3.0.23_2-16
+	depends = vlc-plugins-base=3.0.24-1.1
 	depends = glibc
 	depends = libdvdnav
 	depends = libdvdread
@@ -311,10 +311,10 @@ pkgname = vlc-plugin-dvd
 
 pkgname = vlc-plugin-ffmpeg
 	pkgdesc = Free and open source cross-platform multimedia player and framework - FFMPEG plugins
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
-	depends = vlc-plugins-base=3.0.23_2-16
-	depends = vlc-plugins-video-output=3.0.23_2-16
+	depends = vlc-plugins-base=3.0.24-1.1
+	depends = vlc-plugins-video-output=3.0.24-1.1
 	depends = libvlc_vdpau.so
 	depends = ffmpeg
 	depends = libavcodec.so
@@ -335,9 +335,9 @@ pkgname = vlc-plugin-ffmpeg
 
 pkgname = vlc-plugin-freetype
 	pkgdesc = Free and open source cross-platform multimedia player and framework - subtitle and on screen display text rendering support
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
-	depends = vlc-plugins-base=3.0.23_2-16
+	depends = vlc-plugins-base=3.0.24-1.1
 	depends = fontconfig
 	depends = freetype2
 	depends = fribidi
@@ -347,16 +347,16 @@ pkgname = vlc-plugin-freetype
 
 pkgname = vlc-plugin-gme
 	pkgdesc = Free and open source cross-platform multimedia player and framework - Game music emulation plugin
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
-	depends = vlc-plugins-base=3.0.23_2-16
+	depends = vlc-plugins-base=3.0.24-1.1
 	depends = glibc
 	depends = libgme
 	provides = libgme_plugin.so
 
 pkgname = vlc-plugin-gnutls
 	pkgdesc = Free and open source cross-platform multimedia player and framework - GnuTLS plugin
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
 	depends = glibc
 	depends = gnutls
@@ -364,9 +364,9 @@ pkgname = vlc-plugin-gnutls
 
 pkgname = vlc-plugin-jack
 	pkgdesc = Free and open source cross-platform multimedia player and framework - JACK plugin
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
-	depends = vlc-plugins-base=3.0.23_2-16
+	depends = vlc-plugins-base=3.0.24-1.1
 	depends = glibc
 	depends = jack
 	depends = libjack.so
@@ -375,7 +375,7 @@ pkgname = vlc-plugin-jack
 
 pkgname = vlc-plugin-jpeg
 	pkgdesc = Free and open source cross-platform multimedia player and framework - JPEG plugin
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
 	depends = glibc
 	depends = libjpeg-turbo
@@ -383,9 +383,9 @@ pkgname = vlc-plugin-jpeg
 
 pkgname = vlc-plugin-kate
 	pkgdesc = Free and open source cross-platform multimedia player and framework - kate plugin
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
-	depends = vlc-plugins-base=3.0.23_2-16
+	depends = vlc-plugins-base=3.0.24-1.1
 	depends = glibc
 	depends = libkate
 	depends = libtiger
@@ -393,9 +393,9 @@ pkgname = vlc-plugin-kate
 
 pkgname = vlc-plugin-libsecret
 	pkgdesc = Free and open source cross-platform multimedia player and framework - libsecret/gnome-keyring/kwallet plugin
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
-	depends = vlc-plugins-base=3.0.23_2-16
+	depends = vlc-plugins-base=3.0.24-1.1
 	depends = glib2
 	depends = glibc
 	depends = libsecret
@@ -403,18 +403,18 @@ pkgname = vlc-plugin-libsecret
 
 pkgname = vlc-plugin-lirc
 	pkgdesc = Free and open source cross-platform multimedia player and framework - Infrared remote control plugin
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
-	depends = vlc-plugins-base=3.0.23_2-16
+	depends = vlc-plugins-base=3.0.24-1.1
 	depends = glibc
 	depends = lirc
 	provides = liblirc_plugin.so
 
 pkgname = vlc-plugin-live555
 	pkgdesc = Free and open source cross-platform multimedia player and framework - live555 RTP/RSTP client plugin
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
-	depends = vlc-plugins-base=3.0.23_2-16
+	depends = vlc-plugins-base=3.0.24-1.1
 	depends = glibc
 	depends = libgcc
 	depends = libstdc++
@@ -423,9 +423,9 @@ pkgname = vlc-plugin-live555
 
 pkgname = vlc-plugin-lua
 	pkgdesc = Free and open source cross-platform multimedia player and framework - Lua scripting plugins
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
-	depends = vlc-plugins-base=3.0.23_2-16
+	depends = vlc-plugins-base=3.0.24-1.1
 	depends = glibc
 	depends = libgcc
 	depends = lua51
@@ -434,45 +434,45 @@ pkgname = vlc-plugin-lua
 
 pkgname = vlc-plugin-mad
 	pkgdesc = Free and open source cross-platform multimedia player and framework - MPEG Audio Decoder plugin
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
-	depends = vlc-plugins-base=3.0.23_2-16
+	depends = vlc-plugins-base=3.0.24-1.1
 	depends = glibc
 	depends = libmad
 	provides = libmad_plugin.so
 
 pkgname = vlc-plugin-mdns
 	pkgdesc = Free and open source cross-platform multimedia player and framework - mDNS plugin
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
-	depends = vlc-plugins-base=3.0.23_2-16
+	depends = vlc-plugins-base=3.0.24-1.1
 	depends = glibc
 	depends = libmicrodns
 	provides = libmicrodns_plugin.so
 
 pkgname = vlc-plugin-modplug
 	pkgdesc = Free and open source cross-platform multimedia player and framework - MOD plugin
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
-	depends = vlc-plugins-base=3.0.23_2-16
+	depends = vlc-plugins-base=3.0.24-1.1
 	depends = glibc
 	depends = libmodplug
 	provides = libmod_plugin.so
 
 pkgname = vlc-plugin-mpeg2
 	pkgdesc = Free and open source cross-platform multimedia player and framework - MPEG2 plugin
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
-	depends = vlc-plugins-base=3.0.23_2-16
+	depends = vlc-plugins-base=3.0.24-1.1
 	depends = glibc
 	depends = libmpeg2
 	provides = liblibmpeg2_plugin.so
 
 pkgname = vlc-plugin-mtp
 	pkgdesc = Free and open source cross-platform multimedia player and framework - MTP plugins
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
-	depends = vlc-plugins-base=3.0.23_2-16
+	depends = vlc-plugins-base=3.0.24-1.1
 	depends = glibc
 	depends = libmtp
 	provides = libaccess_mtp_plugin.so
@@ -480,27 +480,27 @@ pkgname = vlc-plugin-mtp
 
 pkgname = vlc-plugin-musepack
 	pkgdesc = Free and open source cross-platform multimedia player and framework - MusePack plugin
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
-	depends = vlc-plugins-base=3.0.23_2-16
+	depends = vlc-plugins-base=3.0.24-1.1
 	depends = glibc
 	depends = libmpcdec
 	provides = libmpc_plugin.so
 
 pkgname = vlc-plugin-nfs
 	pkgdesc = Free and open source cross-platform multimedia player and framework - NFS plugin
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
-	depends = vlc-plugins-base=3.0.23_2-16
+	depends = vlc-plugins-base=3.0.24-1.1
 	depends = glibc
 	depends = libnfs
 	provides = libnfs_plugin.so
 
 pkgname = vlc-plugin-notify
 	pkgdesc = Free and open source cross-platform multimedia player and framework - notification plugin
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
-	depends = vlc-plugins-base=3.0.23_2-16
+	depends = vlc-plugins-base=3.0.24-1.1
 	depends = gdk-pixbuf2
 	depends = glib2
 	depends = glibc
@@ -510,7 +510,7 @@ pkgname = vlc-plugin-notify
 
 pkgname = vlc-plugin-opus
 	pkgdesc = Free and open source cross-platform multimedia player and framework - Opus plugin
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
 	depends = glibc
 	depends = opus
@@ -518,7 +518,7 @@ pkgname = vlc-plugin-opus
 
 pkgname = vlc-plugin-png
 	pkgdesc = Free and open source cross-platform multimedia player and framework - PNG plugin
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
 	depends = glibc
 	depends = libpng
@@ -526,9 +526,9 @@ pkgname = vlc-plugin-png
 
 pkgname = vlc-plugin-pulse
 	pkgdesc = Free and open source cross-platform multimedia player and framework - PulseAudio plugins
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
-	depends = vlc-plugins-base=3.0.23_2-16
+	depends = vlc-plugins-base=3.0.24-1.1
 	depends = glibc
 	depends = libpulse
 	provides = libvlc_pulse.so
@@ -538,18 +538,18 @@ pkgname = vlc-plugin-pulse
 
 pkgname = vlc-plugin-samplerate
 	pkgdesc = Free and open source cross-platform multimedia player and framework - samplerate plugin
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
-	depends = vlc-plugins-base=3.0.23_2-16
+	depends = vlc-plugins-base=3.0.24-1.1
 	depends = glibc
 	depends = libsamplerate
 	provides = libsamplerate_plugin.so
 
 pkgname = vlc-plugin-sdl
 	pkgdesc = Free and open source cross-platform multimedia player and framework - SDL plugin
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
-	depends = vlc-plugins-base=3.0.23_2-16
+	depends = vlc-plugins-base=3.0.24-1.1
 	depends = glibc
 	depends = sdl12-compat
 	depends = sdl_image
@@ -557,27 +557,27 @@ pkgname = vlc-plugin-sdl
 
 pkgname = vlc-plugin-sftp
 	pkgdesc = Free and open source cross-platform multimedia player and framework - SFTP plugin
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
-	depends = vlc-plugins-base=3.0.23_2-16
+	depends = vlc-plugins-base=3.0.24-1.1
 	depends = glibc
 	depends = libssh2
 	provides = libsftp_plugin.so
 
 pkgname = vlc-plugin-soxr
 	pkgdesc = Free and open source cross-platform multimedia player and framework - SoX Resampler plugin
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
-	depends = vlc-plugins-base=3.0.23_2-16
+	depends = vlc-plugins-base=3.0.24-1.1
 	depends = glibc
 	depends = libsoxr
 	provides = libsoxr_plugin.so
 
 pkgname = vlc-plugin-srt
 	pkgdesc = Free and open source cross-platform multimedia player and framework - SRT subtitle file support
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
-	depends = vlc-plugins-base=3.0.23_2-16
+	depends = vlc-plugins-base=3.0.24-1.1
 	depends = glibc
 	depends = srt
 	provides = libaccess_srt_plugin.so
@@ -585,9 +585,9 @@ pkgname = vlc-plugin-srt
 
 pkgname = vlc-plugin-svg
 	pkgdesc = Free and open source cross-platform multimedia player and framework - SVG plugins
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
-	depends = vlc-plugins-base=3.0.23_2-16
+	depends = vlc-plugins-base=3.0.24-1.1
 	depends = cairo
 	depends = glib2
 	depends = glibc
@@ -597,9 +597,9 @@ pkgname = vlc-plugin-svg
 
 pkgname = vlc-plugin-udev
 	pkgdesc = Free and open source cross-platform multimedia player and framework - udev plugin
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
-	depends = vlc-plugins-base=3.0.23_2-16
+	depends = vlc-plugins-base=3.0.24-1.1
 	depends = alsa-lib
 	depends = glibc
 	depends = systemd-libs
@@ -607,9 +607,9 @@ pkgname = vlc-plugin-udev
 
 pkgname = vlc-plugin-upnp
 	pkgdesc = Free and open source cross-platform multimedia player and framework - UPnP plugin
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
-	depends = vlc-plugins-base=3.0.23_2-16
+	depends = vlc-plugins-base=3.0.24-1.1
 	depends = glibc
 	depends = libgcc
 	depends = libstdc++
@@ -618,7 +618,7 @@ pkgname = vlc-plugin-upnp
 
 pkgname = vlc-plugin-xml
 	pkgdesc = Free and open source cross-platform multimedia player and framework - XML plugin
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
 	depends = glibc
 	depends = libxml2
@@ -626,9 +626,9 @@ pkgname = vlc-plugin-xml
 
 pkgname = vlc-plugin-zvbi
 	pkgdesc = Free and open source cross-platform multimedia player and framework - VBI plugins
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
-	depends = vlc-plugins-base=3.0.23_2-16
+	depends = vlc-plugins-base=3.0.24-1.1
 	depends = glibc
 	depends = zvbi
 	provides = liblinsys_sdi_plugin.so
@@ -637,14 +637,14 @@ pkgname = vlc-plugin-zvbi
 
 pkgname = vlc-plugins-base
 	pkgdesc = Free and open source cross-platform multimedia player and framework - base plugins
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
-	depends = vlc-plugin-archive=3.0.23_2-16
-	depends = vlc-plugin-gnutls=3.0.23_2-16
-	depends = vlc-plugin-jpeg=3.0.23_2-16
-	depends = vlc-plugin-opus=3.0.23_2-16
-	depends = vlc-plugin-png=3.0.23_2-16
-	depends = vlc-plugin-xml=3.0.23_2-16
+	depends = vlc-plugin-archive=3.0.24-1.1
+	depends = vlc-plugin-gnutls=3.0.24-1.1
+	depends = vlc-plugin-jpeg=3.0.24-1.1
+	depends = vlc-plugin-opus=3.0.24-1.1
+	depends = vlc-plugin-png=3.0.24-1.1
+	depends = vlc-plugin-xml=3.0.24-1.1
 	depends = glibc
 	depends = libgcc
 	depends = libstdc++
@@ -916,43 +916,43 @@ pkgname = vlc-plugins-base
 
 pkgname = vlc-plugins-extra
 	pkgdesc = Free and open source cross-platform multimedia player and framework - extra plugins
-	depends = vlc-plugin-aalib=3.0.23_2-16
-	depends = vlc-plugin-aom=3.0.23_2-16
-	depends = vlc-plugin-aribb24=3.0.23_2-16
-	depends = vlc-plugin-aribb25=3.0.23_2-16
-	depends = vlc-plugin-ass=3.0.23_2-16
-	depends = vlc-plugin-avahi=3.0.23_2-16
-	depends = vlc-plugin-bluray=3.0.23_2-16
-	depends = vlc-plugin-caca=3.0.23_2-16
-	depends = vlc-plugin-cddb=3.0.23_2-16
-	depends = vlc-plugin-chromecast=3.0.23_2-16
-	depends = vlc-plugin-dca=3.0.23_2-16
-	depends = vlc-plugin-dvb=3.0.23_2-16
-	depends = vlc-plugin-dvd=3.0.23_2-16
-	depends = vlc-plugin-ffmpeg=3.0.23_2-16
-	depends = vlc-plugin-freetype=3.0.23_2-16
-	depends = vlc-plugin-gme=3.0.23_2-16
-	depends = vlc-plugin-kate=3.0.23_2-16
-	depends = vlc-plugin-lirc=3.0.23_2-16
-	depends = vlc-plugin-live555=3.0.23_2-16
-	depends = vlc-plugin-mad=3.0.23_2-16
-	depends = vlc-plugin-mdns=3.0.23_2-16
-	depends = vlc-plugin-modplug=3.0.23_2-16
-	depends = vlc-plugin-mpeg2=3.0.23_2-16
-	depends = vlc-plugin-mtp=3.0.23_2-16
-	depends = vlc-plugin-musepack=3.0.23_2-16
-	depends = vlc-plugin-nfs=3.0.23_2-16
-	depends = vlc-plugin-samplerate=3.0.23_2-16
-	depends = vlc-plugin-sdl=3.0.23_2-16
-	depends = vlc-plugin-sftp=3.0.23_2-16
-	depends = vlc-plugin-soxr=3.0.23_2-16
-	depends = vlc-plugin-srt=3.0.23_2-16
-	depends = vlc-plugin-udev=3.0.23_2-16
-	depends = vlc-plugin-upnp=3.0.23_2-16
-	depends = vlc-plugin-zvbi=3.0.23_2-16
-	depends = libvlc=3.0.23_2-16
+	depends = vlc-plugin-aalib=3.0.24-1.1
+	depends = vlc-plugin-aom=3.0.24-1.1
+	depends = vlc-plugin-aribb24=3.0.24-1.1
+	depends = vlc-plugin-aribb25=3.0.24-1.1
+	depends = vlc-plugin-ass=3.0.24-1.1
+	depends = vlc-plugin-avahi=3.0.24-1.1
+	depends = vlc-plugin-bluray=3.0.24-1.1
+	depends = vlc-plugin-caca=3.0.24-1.1
+	depends = vlc-plugin-cddb=3.0.24-1.1
+	depends = vlc-plugin-chromecast=3.0.24-1.1
+	depends = vlc-plugin-dca=3.0.24-1.1
+	depends = vlc-plugin-dvb=3.0.24-1.1
+	depends = vlc-plugin-dvd=3.0.24-1.1
+	depends = vlc-plugin-ffmpeg=3.0.24-1.1
+	depends = vlc-plugin-freetype=3.0.24-1.1
+	depends = vlc-plugin-gme=3.0.24-1.1
+	depends = vlc-plugin-kate=3.0.24-1.1
+	depends = vlc-plugin-lirc=3.0.24-1.1
+	depends = vlc-plugin-live555=3.0.24-1.1
+	depends = vlc-plugin-mad=3.0.24-1.1
+	depends = vlc-plugin-mdns=3.0.24-1.1
+	depends = vlc-plugin-modplug=3.0.24-1.1
+	depends = vlc-plugin-mpeg2=3.0.24-1.1
+	depends = vlc-plugin-mtp=3.0.24-1.1
+	depends = vlc-plugin-musepack=3.0.24-1.1
+	depends = vlc-plugin-nfs=3.0.24-1.1
+	depends = vlc-plugin-samplerate=3.0.24-1.1
+	depends = vlc-plugin-sdl=3.0.24-1.1
+	depends = vlc-plugin-sftp=3.0.24-1.1
+	depends = vlc-plugin-soxr=3.0.24-1.1
+	depends = vlc-plugin-srt=3.0.24-1.1
+	depends = vlc-plugin-udev=3.0.24-1.1
+	depends = vlc-plugin-upnp=3.0.24-1.1
+	depends = vlc-plugin-zvbi=3.0.24-1.1
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
-	depends = vlc-plugins-base=3.0.23_2-16
+	depends = vlc-plugins-base=3.0.24-1.1
 	depends = glibc
 	depends = libxcb
 	provides = liblinsys_hdsdi_plugin.so
@@ -960,7 +960,7 @@ pkgname = vlc-plugins-extra
 
 pkgname = vlc-plugins-video-output
 	pkgdesc = Free and open source cross-platform multimedia player and framework - video output plugins
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
 	depends = glibc
 	depends = libgcc
@@ -1003,7 +1003,7 @@ pkgname = vlc-plugins-video-output
 
 pkgname = vlc-plugins-visualization
 	pkgdesc = Free and open source cross-platform multimedia player and framework - visualization plugins
-	depends = libvlc=3.0.23_2-16
+	depends = libvlc=3.0.24-1.1
 	depends = libvlccore.so
 	depends = glibc
 	depends = libgcc
