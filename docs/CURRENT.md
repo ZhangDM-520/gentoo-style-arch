@@ -99,10 +99,36 @@
 - Deploy loop (after commit lands): `sudo gsa -Sy` → `sudo gsa -S gsa-pm` →
   battery + smoke against `command -v gsa`.
 
+## Overnight git+stable update RUNNING (2026-10-24 00:04, run 1792771499-1387266, DETACHED)
+- `sudo /usr/bin/gsa -S --leaf --no-sync --lanes 4 --jobs 3 --intensity xhigh <497>`
+  from /tmp (canonical store root). 497 = @git @stable (551) − 53 ABI-wave
+  triggers (/tmp/moved-53.txt) − binutils. Zero `abi-wave` rows, zero
+  heavy toolchain (verified in /proc argv). Progress: `ls
+  /var/lib/gsa/runs/1792771499-1387266/*.result | wc -l`; log
+  /tmp/gsa-overnight-20261023.log. `--no-sync` = committed versions as-is
+  (22:49 version-sync already refreshed tracked versions).
+- The `-Su` ANSWER (owner ask): YES, `gsa -Su @git @stable` takes group
+  selection (help.rs:86, 551 resolves); `--leaf` bounds the consumer
+  growth. Its stale set is `noop empty-list` today and VCS drift is not its
+  trigger — full analysis + wave scoping: NOTE.md 2026-10-23 late.
+- Build drive WAS UNMOUNTED (path degraded to /run tmpfs — the "3 archives"
+  blindness root cause). fsck.f2fs clean, mounted, 222G free, 7 tmpfs
+  archives rescued into pkgs/, 105 stale build/ trees of the interrupted
+  re-bless queue deleted. MEMORY rule 62 = the probe lesson.
+
 ## Still deferred (owner)
-- 35-pkg ABI wave re-bless queue; poppler 26.10 landing path.
+- **ABI wave re-bless queue (the 53 moved providers + their wave closure:
+  curl, sqlite, util-linux, gstreamer, poppler, vtk, opencv, glycin, …).**
+  Installing any of them lands the wave = llvm-git/rust-git/coupled-must +
+  gcc-snapshot/rust-bindgen-git in ONE transaction — the banned heavy core,
+  so it is an owner-approved run on its own. Facts to re-check first: run
+  `gsa -Su --leaf --dry-run @git @stable` with the drive mounted (the
+  stale-set measurement was taken blind), and note that removing wave
+  members alone is useless (uncovered members refuse the run).
+- poppler 26.10 landing path.
 
 ## Next action
-Owner: (1) aranicy cutover — install the built 0.1.0-1, retire
-ananicy-cpp; (2) recover the offline drive (re-plug/remount, f2fs fsck,
-SMART); (3) commit disposition for the self-tracking recipe + §L.10 sweep.
+Morning: (1) check run 1792771499-1387266 tally (`*.result` count vs 497,
+`history.jsonl` outcome) and report pass/fail rows; (2) `sudo gsa -Md --fix`
+(binpkg index reconciliation after the drive recovery) when no run is live;
+(3) owner: aranicy cutover + the heavy-core ABI re-bless decision.

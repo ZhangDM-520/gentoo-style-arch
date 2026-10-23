@@ -16557,3 +16557,73 @@ is deleted. `GSA_TEST_GSA_BIN` stays as the explicit pre-install override,
 reported as a deviation. Deploy loop: ship → `sudo gsa -Sy` →
 `sudo gsa -S gsa-pm` → validate the INSTALLED engine. MEMORY golden rule
 61 records the same (the r418 gap lesson).
+
+## 2026-10-23 late — overnight git+stable update: wave scoping + the unmounted-drive trap
+
+**The `-Su` question (owner ask) — ANSWERED: yes, group selection works.**
+`gsa -Su [targets…] [ranges…]` (help.rs:86) uses the standard selection
+grammar; `@git @stable` resolves 551 recipes (`gsa -Sl --leaf @git @stable`).
+`run_update` = the `-Sy` pass over the selection, then `stale_set` (tracked
+`.SRCINFO` > newest complete built archive set) built+installed. The owner's
+cascade memory is confirmed for the *bare-name* path: the stale set is
+passed as bare targets and bare names grow into their consumers (§C.3)
+unless `--leaf`. Measured caveats: (a) the stale set is currently
+`noop empty-list` (VCS drift is not its trigger), (b) that measurement was
+taken while the build drive was UNMOUNTED — see the trap below.
+
+**The trap that made every freshness number a lie: the build drive was not
+mounted.** `gsa.conf build_dir = /run/media/zhangdm/5cbd0046-…/gsa-build`,
+but `/dev/sda` (f2fs, SDD-Dock) was unplugged since the last reboot — the
+path resolved under the `/run` tmpfs (6.1 GiB): 23:12's gsa-pm r430 and
+umbriel-git r1347 were built to TMPFS, and the "only 3 archives / old drive
+evidence lost" blindness was measuring that shadow. Fix, in order:
+rescued the 7 tmpfs-written archives to /tmp/gsa-pm-tmpfs-rescue-20261023,
+`fsck.f2fs -a /dev/sda` ("No error was reported"), mounted, copied the
+rescues into `pkgs/` (1245 entries restored). The 105 leftover `build/`
+trees (~170 GB) were the interrupted re-bless queue's transient BUILDDIRs
+(0ad, blender-git, libreoffice-fresh, vtk, opencv, …) and were deleted
+scoped to `build/*`; `pkgs/` untouched (archives total only 13.9 GiB per
+the binpkg index). 222 GB free afterwards. MEMORY rule 62 records the probe
+(`findmnt -T <build_dir>` must say f2fs, never tmpfs).
+
+**Why the naive `-S --leaf @git @stable` violates "no heavy core".** The
+plan is 551 + **107 ABI-wave additions** — one merged wave (all 533
+`abi-wave` rows share a provider name; `merge_overlapping` in wave.rs unions
+overlapping waves) whose members include `llvm-git`/`rust-git`
+(`coupled-must`, `abi=must` batch) and `gcc-snapshot`/`rust-bindgen-git`
+(closure). Trigger analysis (wave_check, build.rs:1170): the wave fires per
+SELECTED provider whose newest registered binpkg token ≠ what consumers
+recorded in `abi/subscriptions` (`:=` model), and ANY direct consumer with
+no record engages the fail-toward whole-closure fallback (rule 25(c) —
+never under-expand). Computed the moved-provider set straight from state
+(`index/binpkg.jsonl` newest-row token vs `abi/subscriptions`): **53 of the
+551** (list: /tmp/moved-53.txt — appstream, audit, curl, gstreamer,
+lilv-git, nss-git, sqlite, util-linux, poppler, vtk, opencv, …). Removing
+one (lilv-git) just re-anchors the same wave to nss-git (measured 533→533
+rows); removing ALL 53 kills the wave entirely: dry-run of the remaining
+**498 = 498 rows, 0 `abi-wave` lines, rc=0**. Suppressing the members
+instead is not an option — the wave is one transaction and uncovered
+members refuse the run.
+
+**The overnight run (launched DETACHED 2026-10-24 00:04, run
+1792771499-1387266).** Selection /tmp/sel-final.txt = **497** = @git @stable
+(551) − 53 wave triggers − binutils (build-toolchain class = the owner's
+hard line; llvm-git/rust-git/gcc-snapshot/rust-bindgen-git/rocm-*/cmake-git/
+meson-git/mold-git/autofdo-git were never in the selection — they are
+@core-path recipes that only arrive as wave additions). Command:
+`sudo /usr/bin/gsa -S --leaf --no-sync --lanes 4 --jobs 3 --intensity
+xhigh <497>` from /tmp (canonical store root — cwd in the dev tree would
+resolve the DEV tree). `--no-sync` = build committed versions as-is (the
+22:49 version-sync pass already refreshed tracked versions; resume13
+pattern). Verified against /proc/<pid>/cmdline: 507 argv rows, zero banned
+names (hip-runtime + hsa-rocr are stable-set runtime libs, leaf-bounded,
+no wave — in scope). Progress truth: `ls /var/lib/gsa/runs/1792771499-1387266/
+*.result | wc -l`, log /tmp/gsa-overnight-20261023.log.
+
+**The trade-off (owner call, deferred):** the 53 excluded providers ARE
+update candidates (curl, sqlite, util-linux, gstreamer, poppler, …), but
+installing any of them lands its consumer wave = the heavy toolchain
+rebuild the owner banned. They wait for the ABI wave re-bless run (the
+deferred queue) which by construction needs llvm-git/rust-git/gcc-snapshot/
+rust-bindgen-git rebuilt in one transaction — an owner-approved heavy-core
+run, not tonight's.

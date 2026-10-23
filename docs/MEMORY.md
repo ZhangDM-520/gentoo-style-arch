@@ -1332,6 +1332,20 @@
     reported as a deviation. The companion fix is gsa-pm's git self-tracking
     recipe (no `_commit` pin to forget). (last reviewed 2026-10-23)
 
+62. **An unmounted build drive silently degrades to tmpfs — freshness
+    evidence vanishes with it** (2026-10-23, measured): `build_dir` lives
+    under `/run/media/<uuid>/…`; when the drive is absent that path is just
+    a directory under the `/run` tmpfs (6 GiB), so archives land on tmpfs,
+    index rows point at paths nobody can see, and every freshness/stale
+    measurement ("build cache has only 3 archives", `-Su` `noop empty-list`)
+    measures the tmpfs shadow instead of the real pkgs/ tree. Probe FIRST,
+    always: `findmnt -T <build_dir>` must name the drive's fstype (f2fs),
+    never `tmpfs`; `df -h <build_dir>` second. Recovery order (same night,
+    measured): rescue any tmpfs-written archives (`cp -p` out — they hide
+    under the mount shadow but survive), `fsck.f2fs -a <dev>`, mount,
+    copy the rescues into `pkgs/`, `sudo gsa -Md --fix`, then re-measure
+    anything previously called blind. (last reviewed 2026-10-23)
+
 ## 2. Workspace overview
 
 - Workspace layout, top level: `packages/{git,stable,core,misc}/` is the
@@ -3904,3 +3918,16 @@ constant, not a baked path); and the xorg-xwayland-git PGO end-to-end proof
   Upgrade` is a parse error); a `pacman -U` of a local file resolves to no
   `/var/cache/pacman/pkg/<name>-*` archive and is therefore skipped. Details:
   NOTE.md 2026-10-22.
+- **An `-S` plan drags the whole consumer wave of every SELECTED provider
+  whose newest registered abi-token ≠ consumer `:=` records** (2026-10-23,
+  code + measured): `wave_check` (build.rs) fires per selected provider;
+  missing subscription records engage the fail-toward whole-closure
+  fallback (wave.rs rule 25(c)) and overlapping waves merge into ONE, so a
+  single unrecorded consumer sweeps transitive consumers up to and
+  including `abi=must` coupled toolchains (llvm-git/rust-git land as
+  `coupled-must`). Operationally: to keep heavy toolchain out of an update
+  run, exclude the wave TRIGGERS (providers with record mismatches —
+  computable from `index/binpkg.jsonl` newest-row token vs
+  `abi/subscriptions` rows), not the wave members; a selection with zero
+  moved providers plans clean. Suppressing members alone parks installs at
+  the ABI gate. Details: NOTE.md 2026-10-23.
