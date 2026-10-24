@@ -156,13 +156,17 @@
 - Deploy loop (after commit lands): `sudo gsa -Sy` → `sudo gsa -S gsa-pm` →
   battery + smoke against `command -v gsa`.
 
-## Overnight git+stable update — RESUME2 RUNNING (run 1792815755-3972240, 313 names)
-- Wave 2 (1792805642-2753077) ended failed rc4: 89 ok / 3 failed / 312 parked — GPG key rotation
-  (X11 re-signed with Alan Coopersmith's 2024 key; 15 recipes now accept both keys, e0aa623+
-  7c325a7) + a transient savannah 408. Red→green proven on libxrender/libxtst/ncurses-git.
-- resume2 (12:29, DETACHED): 313 = wave-2 remaining − 3 staged + linux-firmware/xfsprogs bumps.
-  Monitor: `ls /var/lib/gsa/runs/1792815755-3972240/*.result | wc -l` vs 313;
-  /tmp/gsa-resume2-20261024.log. Store deploy loop verified end-to-end (see NOTE.md).
+## @git @stable update — waves 5..9 done, WAVE-9 IN FLIGHT (run 1792851662-883478)
+- Marathon state: waves 1-8 landed ~250+ packages; wave 9 (38 rows) in flight with the fetch
+  fixes proving out (qt6-5compat re-registered on its canonical-origin mirror).
+- Fetch mechanics hardened (MEMORY trailing bullets): canonical mirror origins, .part hygiene,
+  clean-room retries (makepkg keeps $srcdir), name::git+/git:// scanner forms.
+- Owner threads CLOSED: scx merged (scx-scheds-git owns scxtui+scx_loader), shelly DEPRECATED
+  (packages/deprecated/shelly, record commented), gdb 18.1-1.1 installed (layout bridge + bfd),
+  ananicy-cpp retired (aranicy 0.1.0-1).
+- Known stragglers (retry-class): libisl + mariadb mirrors (hosts unreachable at length), fish +
+  python-matplotlib (cargo/pip at build), openjph + flatpak-git (configure-time downloads; trees
+  cleaned).
 
 ## Wave 1 record (2026-10-24 00:04, run 1792771499-1387266)
 - Wave 1 (1792771499-1387266) ended refused rc3 after ~9h: 92 ok / 9 failed / 67 parked / 329
