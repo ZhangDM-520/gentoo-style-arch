@@ -13,7 +13,7 @@ license=('LGPL-2.1-or-later')
 depends=('dbus' 'gtk3' 'imagemagick' 'libxv' 'qt5-base' 'qt5-x11extras' 'v4l-utils')
 # trim: xmlto + docbook-xsl (man pages — configure auto-disables docs when
 #       xmlto is absent, installed doc/man trimmed in package())
-makedepends=('gtk3' 'qt5-x11extras' 'python' 'gobject-introspection' 'glib2-devel')
+makedepends=('gtk3' 'qt5-x11extras' 'python' 'gobject-introspection' 'glib2-devel' 'meson' 'ninja')
 optdepends=('python: for zbar python bindings')
 # bare soname provides per ELF output: libzbar/libzbargtk/libzbarqt
 # (sonames .so.0 each) + the python zbar module (filename SONAME);
@@ -22,22 +22,12 @@ provides=('zbar-gtk' 'zbar-qt' 'python-zbar'
           'libzbar.so' 'libzbargtk.so' 'libzbarqt.so' 'zbar.so')
 source=(
   "$pkgname-$pkgver.tar.gz::https://github.com/mchehab/zbar/archive/refs/tags/$pkgver.tar.gz"
-   https://github.com/mchehab/zbar/commit/368571ff.patch
-   https://github.com/mchehab/zbar/commit/a549566e.patch
 )
-sha512sums=('cc6e1f39f0f709743e4fe4a375fa3295ad90941f59f37e75d4f862a9826a547645d7a856a159911ed44324e747d6e33dcd793d63dcdef51ec6847da4b98b0049'
-            'ae3b1123d558d12690651da4ff7e77d5e805f3b2fb5372756cbb50ef18f73c87feee71aada35a2ca889e8f893d60969ed2d7a86c5e54c230902645d458e767e6'
-            '8a69dd84731b95ab4d5d0dc37bd83ecf7fa368e197226f0fb63dcce6dce01ef96682b0e12d06489c602d964eedc2ea69ada04b83fba2ef6c4452ca466a25b037')
-b2sums=('f4d7ecd1f497a8baaef6537d13dbf8257a711d997710ea9e975dda44a835b94e0cd5239042049014dba985663e39e81a762027c7790c9fae498df78ae70d658e'
-        '618def2024b4b6b3dbfdf298b0c30556a456bfc9e8f0e5bb6515a863e2b33c7603d861602be324b02af68df962f67370ecee7dd76f9a92bb129e1735e0f5b0b1'
-        '7283d87ad174c746f79a9d0531e10d5285d25d3e22c6dcc375a62377a12a22656483a69e19288e90367eeb7d31e31397c75fc7f75f3a0aede0cdec2e3bc3d317')
+sha512sums=('cc6e1f39f0f709743e4fe4a375fa3295ad90941f59f37e75d4f862a9826a547645d7a856a159911ed44324e747d6e33dcd793d63dcdef51ec6847da4b98b0049')
+b2sums=('f4d7ecd1f497a8baaef6537d13dbf8257a711d997710ea9e975dda44a835b94e0cd5239042049014dba985663e39e81a762027c7790c9fae498df78ae70d658e')
 
-prepare() {
-  patch -Np1 -d $pkgname-$pkgver -i ../368571ff.patch # Fix build
-  patch -Np1 -d $pkgname-$pkgver -i ../a549566e.patch # Fix build
-  cd zbar-$pkgver
-  autoreconf -vfi
-}
+# upstream 0.23.95 moved to Meson (configure.ac is gone — the old configure.ac
+# patches and autoreconf are obsolete and were dropped with the port)
 
 build() {
   cd zbar-$pkgver
@@ -47,14 +37,20 @@ build() {
   command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
   export LDFLAGS+=" ${_mold}"
 
-  ./configure --prefix=/usr --with-qt --with-gtk=gtk3 --with-dbusconfdir=/usr/share CFLAGS="$CFLAGS -DNDEBUG"
-  sed -i -e 's/ -shared / -Wl,-O1,--as-needed\0/g' libtool
-  make -j"${GSA_BUILD_JOBS:-$(nproc)}"
+  meson setup build \
+    --prefix=/usr \
+    --wrap-mode=nofallback \
+    -Dgtk=gtk3 \
+    -Dqt=true \
+    -Dqt6=false \
+    -Ddbusconfdir=/usr/share \
+    -Ddoc=false
+  meson compile -C build
 }
 
 package() {
   cd zbar-$pkgver
-  make DESTDIR="$pkgdir" install
+  meson install -C build --destdir "$pkgdir"
 
   # trim: man pages + docs (xmlto/docbook-xsl removed from makedepends)
   rm -rf "$pkgdir/usr/share/man" "$pkgdir/usr/share/doc"
