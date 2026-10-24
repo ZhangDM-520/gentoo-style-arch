@@ -1,6 +1,6 @@
 pkgbase = umbriel-git
 	pkgdesc = A Wayland compositor built on wlroots
-	pkgver = 0.1.0.r1364.2c41d38
+	pkgver = 0.1.0.r1368.679f4fb
 	pkgrel = 1
 	epoch = 1
 	url = https://github.com/noctalia-dev/umbriel
@@ -34,15 +34,17 @@ pkgbase = umbriel-git
 	depends = xorg-xwayland
 	depends = xdg-desktop-portal-umbriel
 	depends = wlroots0.20
-	provides = umbriel=0.1.0.r1364.2c41d38
+	provides = umbriel=0.1.0.r1368.679f4fb
 	conflicts = umbriel
 	options = !debug
 	options = lto
 	source = umbriel::git+https://github.com/noctalia-dev/umbriel.git#branch=main
 	source = 0002-animation-windows-drag-physics-tuning.patch
 	source = 0003-view-floating-release-settle.patch
+	source = 0004-hover-raise-on-click.patch
 	sha256sums = SKIP
 	sha256sums = 3110b6e497c7f979388a4c78e8d1d9154a7747321831fcb4e01ba6c948abd8b1
 	sha256sums = a70a3b648953c15863cf691cba1b658827a56553fd4ddac4f9654737c7dbcc35
+	sha256sums = c6113bce0c8a391b2244243e72641259fd3ad4bf719e4e7b6f382d7de297f01d
 
 pkgname = umbriel-git

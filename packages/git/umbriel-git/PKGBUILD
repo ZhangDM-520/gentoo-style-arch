@@ -8,7 +8,7 @@ source "$startdir/../../../lib/pgo.sh"
 
 pkgname=umbriel-git
 _pkgname=umbriel
-pkgver=0.1.0.r1364.2c41d38
+pkgver=0.1.0.r1368.679f4fb
 pkgrel=1
 epoch=1
 pkgdesc='A Wayland compositor built on wlroots'
@@ -58,10 +58,12 @@ provides=("umbriel=${pkgver}")
 conflicts=('umbriel')
 source=("${_pkgname}::git+${url}.git#branch=main"
         '0002-animation-windows-drag-physics-tuning.patch'
-        '0003-view-floating-release-settle.patch')
+        '0003-view-floating-release-settle.patch'
+        '0004-hover-raise-on-click.patch')
 sha256sums=('SKIP'
             '3110b6e497c7f979388a4c78e8d1d9154a7747321831fcb4e01ba6c948abd8b1'
-            'a70a3b648953c15863cf691cba1b658827a56553fd4ddac4f9654737c7dbcc35')
+            'a70a3b648953c15863cf691cba1b658827a56553fd4ddac4f9654737c7dbcc35'
+            'c6113bce0c8a391b2244243e72641259fd3ad4bf719e4e7b6f382d7de297f01d')
 
 pkgver() {
   cd "${_pkgname}"
@@ -92,6 +94,12 @@ prepare() {
   # and mid-tween usable changes clamp the same margin.
   # Upstream PR noctalia-dev/umbriel#548; same refresh procedure as 0002.
   git apply -3 ../0003-view-floating-release-settle.patch
+
+  # [input.focus] hover_raises: hover can focus without raising, so sweeping
+  # the pointer across a larger window underneath no longer buries the window
+  # above it (default true keeps hover-raises). Upstream PR
+  # noctalia-dev/umbriel#556; same refresh procedure as 0002.
+  git apply -3 ../0004-hover-raise-on-click.patch
 }
 
 build() {

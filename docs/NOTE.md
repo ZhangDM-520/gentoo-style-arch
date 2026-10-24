@@ -16962,3 +16962,40 @@ the pre-port recipe (meson port b507484 landed 01:35:32, store fetch was
 not a stale sync DB but `libcolord-git` ↔ `libcolord` conflict — weston (repo,
 makedepends for XTS) pulls repo libcolord, the pacman shim cannot answer the
 "Remove libcolord-git?" prompt (sudo -n never prompts).
+
+### 2026-10-25 02:17 — umbriel patch 0004: hover raises on click (PR #556)
+The held hover-raise plan reconciled against main@`679f4fb` (all seams held:
+`Workspace::setFocusedView` workspace.cpp:249, `View::applySeatFocus`
+view.cpp:825, `FocusManager::focusView`). New `[input.focus] hover_raises`
+(default `true`, inert without `follows_mouse`): `false` narrows hovering to
+focus alone so sweeping the cursor across a larger window underneath cannot
+bury the window above it; clicks, keybinds, and activation keep raising. Raise
+is computed ONCE in focusView (`!(PointerHover && !hoverRaises)`) and threaded
+through `applySeatFocus(withKeyboard, raise)` (gates `raiseToTop`) and
+`setFocusedView(view, raise, settleLayers)` — raise gates the `m_floatingStack`
+erase/push_back + `restackFloatingViews`, the no-raise path keeps
+`syncFloatingLayer()`+`raiseFloatingLayer()` (floating-above-fullscreen hover
+reveal intact), settleLayers carries the old raise meaning. `m_lastRaise`
+replayed by `retainCurrentKeyboardFocus`. Only `FocusReason::PointerHover` is
+special — honors ItsLemmy's #436 points (scene/stack desync; startup
+over-reach).
+Red-first `focus/floating_hover_no_raise.sh` (hover no-raise pixel pin, click
+raises, addView restack-replay probe, key-omitted default, focus-last/next
+survive) — RED pre-change at the overlap pixel, GREEN after; mutation proofs
+`raise=true`/`raise=false` each fail at their expected assertion. Meson 140/140
+(new config_load pin); harness focus/ 34/34; full 373/378 — 5 failures
+reproduce on the stashed base build (`tiled_close_configure_barrier` passes
+alone = load flake; `drag_toggle` dies on "configuration invalid" — the live
+`~/.config/umbriel/cfg/animation.toml` carries 0002's `windows_drag` keys the
+stock parser rejects; environmental, not code).
+Landed `eb8fb65` (branch `hover-raise-on-click`) → PR
+noctalia-dev/umbriel#556 (template body after enforce; `just format`
+equivalent clean). CI: enforce/intake/Format/Build×2 green, Lint pending at
+write time. Recipe: patch 0004 (sha256 `c6113bce…`) + pins (pkgver
+`0.1.0.r1368.679f4fb` — main moved 2c41d38→679f4fb; the scratch clone was
+shallow, `git fetch --unshallow` needed for the rev-list count) + .SRCINFO
+(printsrcinfo diff = pins only) + prepare() rehearsal on main@`679f4fb`
+(0002+0003+0004 clean). `gsa -S --leaf` build-install ok (244s, qa findings=0):
+installed `1:0.1.0.r1368.679f4fb-1` (02:16); `strings /usr/bin/umbriel` carries
+`hover_raises` (release build lacks `-Dtest_ipc`, so harness runs stayed on
+build-debug).

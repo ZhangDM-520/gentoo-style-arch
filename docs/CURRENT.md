@@ -1,4 +1,21 @@
-# Current state — 2026-10-24 19:45 (live snapshot; overwrite, do not append)
+# Current state — 2026-10-25 02:17 (live snapshot; overwrite, do not append)
+
+## umbriel patch 0004 (PR #556): hover raises on click (2026-10-25)
+- `[input.focus] hover_raises` (default true, inert without `follows_mouse`):
+  false = hover focuses only, clicks/keybinds/activation raise; sweeping across
+  a larger window underneath no longer buries the window above. Raise computed
+  once in `FocusManager::focusView` → `applySeatFocus(.., raise)` +
+  `setFocusedView(view, raise, settleLayers)`; `m_lastRaise` replayed by
+  `retainCurrentKeyboardFocus`. Only `FocusReason::PointerHover` is special.
+- Red-first `focus/floating_hover_no_raise.sh` (5 pins) + 2 mutation proofs;
+  meson 140/140 (config_load pin), harness focus/ 34/34, full 373/378 (same
+  pre-existing set on base; `drag_toggle` = environmental config leak).
+- PR noctalia-dev/umbriel#556 (`eb8fb65`, base main@`679f4fb`): CI enforce /
+  intake / Format / Build×2 green, Lint pending at snapshot.
+- Recipe patch 0004 (sha256 `c6113bce…`) + pins (pkgver `0.1.0.r1368.679f4fb`)
+  + .SRCINFO; prepare() rehearsal on main@`679f4fb` clean (0002+0003+0004).
+  Installed `1:0.1.0.r1368.679f4fb-1` (02:16, gsa build 244s, qa findings=0).
+  Drop patch 0004 from the recipe when #556 merges (as 0001/#504).
 
 ## umbriel patch 0003 (PR #548): abandoned drags settle like drops (2026-10-24)
 - Talia review 5637877117 (P2) — the release settle was the only correction
