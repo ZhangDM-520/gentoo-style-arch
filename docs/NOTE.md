@@ -1,3 +1,36 @@
+## 2026-10-24 — CI caught what the snapshot toolchains could not: `Tuning tuning = {}` is ill-formed on stock GCC
+
+**Symptom.** Both `build-with-musl` and `build-with-glibc` jobs on PR
+noctalia-dev/umbriel#508 died at `drag_physics.h:42` — `could not convert
+'<brace-enclosed initializer list>' to 'DragPhysics::Tuning'` on
+`begin(..., Tuning tuning = {})`. The declaration predates the review round
+and compiles clean on the host.
+
+**Root cause.** The honest diagnostic shows up once the `{}` is spelled
+differently: *default member initializer for `Tuning::a` required before the
+end of its enclosing class*. `Tuning` is a nested aggregate with NSDMIs, and a
+default ARGUMENT inside `DragPhysics`'s declaration is not a complete-class
+context — constructing `Tuning` there is ill-formed. Stock GCC ≤16 enforces
+it; the host's gcc-snapshot 17 has the rule relaxed; clang accepts. The
+experimental toolchains (gcc-snapshot, llvm-git) validated nothing here.
+
+**Fix.** The default argument becomes a shipping overload:
+`begin(..., transitionId, Tuning tuning)` plus inline
+`begin(..., transitionId) { begin(..., Tuning{}); }` — function bodies are
+complete-class contexts, and both compilers accept the shape. Reproduced and
+verified with the mingw GCC 16.2 driver
+(`x86_64-w64-mingw32-g++ -std=c++23 -fsyntax-only` over the header and the
+self-contained `tests/unit/drag_physics.cpp` TU). Host meson 129/129 and
+harness `drag/` 21/21 unchanged; recipe patch 0002 refreshed and
+`gsa -S --leaf` build-install ok; CI green on `fe0a879` (Build and test ×2,
+Format, Lint) before the PR was touched again.
+
+**Durable rule.** MEMORY.md §6: snapshot toolchains sit AHEAD of every stock
+compiler this stack is judged by, so any construct that merely parses locally
+is unproven — check self-contained headers against a stock driver. And the PR
+workflow: comments through `gh` only, and never before CI is green (the
+checks table can be flipped or stale).
+
 ## 2026-10-24 — umbriel-git, patch 0002 review round: degenerate tuning must terminate, and the stall guard learns the frame cadence
 
 **Symptom (Talia review on PR noctalia-dev/umbriel#508, two P2s; user read: issue

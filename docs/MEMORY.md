@@ -3931,3 +3931,18 @@ constant, not a baked path); and the xorg-xwayland-git PGO end-to-end proof
   `abi/subscriptions` rows), not the wave members; a selection with zero
   moved providers plans clean. Suppressing members alone parks installs at
   the ABI gate. Details: NOTE.md 2026-10-23.
+- **A nested aggregate's NSDMIs are unavailable in a default argument inside
+  the enclosing class — stock GCC rejects `Tuning x = {}` where snapshot GCC
+  accepts it** (2026-10-24, CI + reproduced on mingw GCC 16.2): the rule
+  (an NSDMI used "before the end of its enclosing class") is enforced by
+  stock GCC ≤16 and relaxed in the host's 17-snapshot, so the experimental
+  toolchains prove nothing for this construct. Fix shape: drop the default
+  argument for an inline overload whose BODY constructs the default —
+  function bodies are complete-class contexts. Self-contained headers can be
+  validated against a stock compiler with
+  `x86_64-w64-mingw32-g++ -std=c++23 -fsyntax-only`. Details: NOTE.md 2026-10-24.
+- **PR comments go through `gh` only, and never before CI is green**
+  (2026-10-24, owner): do not use the GitHub MCP service to post comments;
+  and a confirmation or reply on a PR waits for the checks to pass — the
+  checks table can be flipped or stale, so a "validated" comment under a red
+  or unverified CI is wrong. Details: NOTE.md 2026-10-24.

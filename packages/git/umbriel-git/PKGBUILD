@@ -8,7 +8,7 @@ source "$startdir/../../../lib/pgo.sh"
 
 pkgname=umbriel-git
 _pkgname=umbriel
-pkgver=0.1.0.r1320.b93ed3d
+pkgver=0.1.0.r1363.54abe52
 pkgrel=1
 epoch=1
 pkgdesc='A Wayland compositor built on wlroots'
@@ -59,7 +59,7 @@ conflicts=('umbriel')
 source=("${_pkgname}::git+${url}.git#branch=main"
         '0002-animation-windows-drag-physics-tuning.patch')
 sha256sums=('SKIP'
-            'f44b37da01a93dfa21dd2d09a7c05eff7499bbda711a6ab7f1f127c1440d9427')
+            '3e3edebf753dcb90995749e88bd4db8ecef095557239cde5ad2b866d69eac974')
 
 pkgver() {
   cd "${_pkgname}"
