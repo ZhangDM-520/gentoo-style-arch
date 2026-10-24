@@ -14,6 +14,7 @@ pkgbase = libxv
 	source = https://xorg.freedesktop.org//releases/individual/lib/libXv-1.0.13.tar.xz
 	source = https://xorg.freedesktop.org//releases/individual/lib/libXv-1.0.13.tar.xz.sig
 	validpgpkeys = 4A193C06D35E7C670FA4EF0BA2FB9E081F2D130E
+	validpgpkeys = 3AB285232C46AE43D8E192F4DAB0F78EA6E7E2D2
 	sha512sums = 80d7a11e6415fbe0fc50c3c2a1abf8f0f2ec38446c9c8d88ff48875cd94b8949cb1028f2ab37476c4b25cbd7eac34dde9132dd998c4e04ea576b95ae411ba946
 	sha512sums = SKIP
 
