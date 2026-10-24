@@ -12,8 +12,8 @@ license=('GPL-2.0-only')
 depends=(
   libelf
   libseccomp
+  polkit
   protobuf
-  scx-tools
   zlib
 )
 makedepends=(
@@ -23,12 +23,14 @@ makedepends=(
   llvm
   llvm-libs
 )
-source=("git+https://github.com/sched-ext/scx")
-sha256sums=('SKIP')
+source=("git+https://github.com/sched-ext/scx"
+        "git+https://github.com/sched-ext/scx-loader")
+sha256sums=('SKIP'
+           'SKIP')
 options=(!lto)
-provides=("scx-scheds=$pkgver")
-conflicts=("scx-scheds")
-replaces=('scx-cake')
+provides=("scx-scheds=$pkgver" "scx-tools=$pkgver")
+conflicts=("scx-scheds" "scx-tools" "scx-tools-git")
+replaces=('scx-cake' 'scx-tools-git')
 
 _backports=(
 )
@@ -67,6 +69,8 @@ prepare() {
 
   export RUSTUP_TOOLCHAIN=stable
   cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+  cd "$srcdir/scx-loader"
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
 }
 
 build() {
@@ -91,6 +95,12 @@ build() {
      --exclude scx_rusty \
      --exclude scx_flatcg \
      --exclude scx_chaos
+
+  cd "$srcdir/scx-loader"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  export CARGO_PROFILE_RELEASE_LTO=thin
+  cargo build --release --frozen --workspace
 }
 
 package() {
@@ -100,4 +110,10 @@ package() {
   find target/release \
     -maxdepth 1 -type f -executable ! -name '*.so' \
     -exec install -Dm755 -t "$pkgdir/usr/bin/" {} +
+
+  cd "$srcdir/scx-loader"
+  find target/release \
+    -maxdepth 1 -type f -executable ! -name '*.so' ! -name 'xtask' \
+    -exec install -Dm755 -t "$pkgdir/usr/bin/" {} +
+  ./target/release/xtask install --destdir "$pkgdir"
 }

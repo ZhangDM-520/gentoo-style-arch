@@ -13,14 +13,20 @@ pkgbase = scx-scheds-git
 	makedepends = llvm-libs
 	depends = libelf
 	depends = libseccomp
+	depends = polkit
 	depends = protobuf
-	depends = scx-tools
 	depends = zlib
 	provides = scx-scheds=1.1.3.r522.gb5762c5ee
+	provides = scx-tools=1.1.3.r522.gb5762c5ee
 	conflicts = scx-scheds
+	conflicts = scx-tools
+	conflicts = scx-tools-git
 	replaces = scx-cake
+	replaces = scx-tools-git
 	options = !lto
 	source = git+https://github.com/sched-ext/scx
+	source = git+https://github.com/sched-ext/scx-loader
+	sha256sums = SKIP
 	sha256sums = SKIP
 
 pkgname = scx-scheds-git
