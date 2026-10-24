@@ -1,3 +1,51 @@
+## 2026-10-24 — umbriel-git, patch 0002 review round: degenerate tuning must terminate, and the stall guard learns the frame cadence
+
+**Symptom (Talia review on PR noctalia-dev/umbriel#508, two P2s; user read: issue
+1 is range work, issue 2 needs refresh-rate awareness).** (1) The new ranges
+admit `stiffness = 0.0` / `damping = 0.0`: with zero stiffness the only force
+is `-damping × velocity`, so a released sheet converges to a non-zero static
+offset that stays above the settle thresholds — `m_active` holds, the drag slot
+stays bound, and frames schedule forever; zero damping rings forever the same
+way. (2) `settle_after_pause_s` is compared against the tick's frame delta
+(time since the previous animation tick), not pointer stillness: the documented
+range minimum (0.01 s) is below one frame at 60 Hz, so the sheet snaps to rest
+on every frame and the physics silently disables; and the documented "stillness
+gap" sense never fires while the pointer is held, because vblank ticks keep
+deltas small.
+
+**Fix.** Ranges bound the ringing tail and forbid zero: `stiffness` and
+`damping` floor at **1.0** (a released wobble then rings out in seconds),
+`settle_after_pause_s` floors at **0.1** (above any plausible frame interval).
+Range floors cannot bound every tail though — creep (tiny stiffness + huge
+damping) runs against ringing (huge stiffness + tiny damping) — so `tick` gains
+two guards of its own: a released sheet whose motion stays drained below
+`kSettledVelocity` for a 0.25 s quiet window snaps to rest (termination
+backstop for any tuning; the quiet window keeps a ringing wobble's turning
+points, where velocity dips briefly, from being cut short), and the stall guard
+becomes cadence-aware — a gap must exceed the tuned pause AND `2×` the previous
+tick's interval, so no in-range value can fire on ordinary frames at any
+refresh rate (the first tick of an episode records the cadence). The docs now
+describe `settle_after_pause_s` as the frame-stall guard it is.
+
+**Validation.** Red-first both: `aReleasedSheetWithDegenerateTuningAlwaysTerminates`
+(static offset, never settles pre-fix) and
+`theStallGuardIgnoresOrdinaryFramesAtAnyRefreshRate` (5 Hz ticks at 200 ms
+against a 0.1 s pause — pre-fix the physics disables on frame one) fail on the
+unfixed build; mutation-proven twice (quiet window never accumulates → red;
+stall guard without the cadence clause → red). `windowsDragTuningDefaultsAndBounds`
+pins the new floors and their clamped diagnostics. Full meson suite 129/129;
+harness `drag/` subset 21/21. Recipe patch 0002 refreshed from the amended
+branch (`a12511c`) with `sha256sums` + `.SRCINFO` in the same change;
+`gsa -S --leaf umbriel-git` builds and installs `1:0.1.0.r1363.54abe52-1`.
+
+**Durable rule.** A tuning surface that feeds a simulation must bound the
+simulation's worst case in the key ranges where it can — and where the tails
+pull in opposite directions (creep vs ring), the engine needs its own
+termination guarantee regardless of tuning (here: the drained-quiet snap after
+release). And never compare a wall-clock threshold to a frame delta without a
+cadence margin: the frame interval is a property of the output, so any
+threshold below it silently disables the feature at that refresh rate.
+
 ## 2026-10-22 — vtk + python-opencv join the set: the jsoncpp .27 skew answered with tree builds, six walls deep
 
 **Owner ask.** Stock vtk/python-opencv break on this host: stock links

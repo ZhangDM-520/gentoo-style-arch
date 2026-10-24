@@ -1,4 +1,21 @@
-# Current state — 2026-10-23 00:50 (live snapshot; overwrite, do not append)
+# Current state — 2026-10-24 12:30 (live snapshot; overwrite, do not append)
+
+## umbriel patch 0002 review round landed (2026-10-24)
+- PR noctalia-dev/umbriel#508 Talia P2s fixed in `a12511c` (branch
+  `windows-drag-physics-tuning`, amended): issue 1 = `stiffness`/`damping`
+  floors 1.0 + released-sheet drained-quiet termination snap (no tuning can
+  schedule frames forever); issue 2 = `settle_after_pause_s` floor 0.1 +
+  cadence-aware stall guard (the gap must dwarf the tick cadence, so no
+  in-range value disables physics at any refresh rate). Docs now describe the
+  frame-stall semantics. Validated red-first + two mutation proofs; meson
+  129/129, harness `drag/` 21/21.
+- Recipe patch 0002 refreshed (`sha256sums` + `.SRCINFO` in the same change);
+  `gsa -S --leaf umbriel-git` build-install ok → installed
+  `umbriel-git 1:0.1.0.r1363.54abe52-1` (patch applies on current main).
+- PR #504's patch 0001 is gone from the recipe (merged upstream `3e95f6d`;
+  cleanup landed in `65d70ed`). #508 awaits Talia's re-review — reply queued.
+- Unpushed intent: the recipe + docs commit and the #508 branch push, pending
+  the owner's disposition.
 
 ## aranicy: packaged in the tree; live cutover is OWNER work (2026-10-23)
 - `packages/stable/aranicy` v0.1.0 (clean-room MIT rewrite of ananicy-cpp;

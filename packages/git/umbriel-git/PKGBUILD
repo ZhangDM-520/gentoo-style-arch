@@ -59,7 +59,7 @@ conflicts=('umbriel')
 source=("${_pkgname}::git+${url}.git#branch=main"
         '0002-animation-windows-drag-physics-tuning.patch')
 sha256sums=('SKIP'
-            '8bf33df1e0208ef00d0742a0855170c6c757be76414d1f5f3159341319d9fd6c')
+            'f44b37da01a93dfa21dd2d09a7c05eff7499bbda711a6ab7f1f127c1440d9427')
 
 pkgver() {
   cd "${_pkgname}"
