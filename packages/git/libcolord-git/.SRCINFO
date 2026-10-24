@@ -1,7 +1,7 @@
 pkgbase = libcolord-git
 	pkgdesc = System daemon for managing color devices (client library, git build)
 	pkgver = 1.4.8.r16.g56ccc23
-	pkgrel = 1
+	pkgrel = 2
 	url = https://www.freedesktop.org/software/colord/
 	arch = x86_64
 	license = GPL-2.0-or-later

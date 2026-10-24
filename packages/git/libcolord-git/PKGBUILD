@@ -5,7 +5,8 @@
 pkgname=libcolord-git
 _pkgname=colord
 pkgver=1.4.8.r16.g56ccc23
-pkgrel=1
+# pkgrel 2: trimmed to stock libcolord's file set (repo-colord overlap)
+pkgrel=2
 pkgdesc="System daemon for managing color devices (client library, git build)"
 arch=('x86_64')
 url="https://www.freedesktop.org/software/colord/"
