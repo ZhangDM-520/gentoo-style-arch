@@ -1,3 +1,8 @@
+# DEPRECATED 2026-10-24 (owner: stop maintaining in-tree). Reserved recipe,
+# not in the build list (topology record commented). Reason: zig 0.17 broke
+# the source (17 allocator-API errors, unfixed upstream through 3.1.9);
+# the installed shelly 3.1.6 keeps working. Do not build without a zig<=0.16
+# pin or a 0.17 port.
 # Maintainer: Zoey Bauer <zoey.erin.bauer@gmail.com>
 # Maintainer: Caroline Snyder <hirpeng@gmail.com>
 pkgbase=shelly

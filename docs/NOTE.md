@@ -16922,3 +16922,10 @@ Recipe patch 0003 refreshed from `1c151cf` (sha256 `a70a3b64…`) + pins +
 .SRCINFO; prepare() rehearsal on main@`2c41d38` (0002+0003 clean). The
 post-wave build (waiter3) had already installed `1:0.1.0.r1364.2c41d38-1` —
 built WITHOUT this fix; a rebuild follows this commit while the lane is free.
+
+### 2026-10-24 23:30 — shelly DEPRECATED (owner: "stop maintaining this pack in our tree")
+zig 0.17 broke shelly's source (17 allocator-API errors) through upstream 3.1.9 — no fix in
+sight, and the owner chose to retire the package rather than pin a zig or port it. Moved to
+`packages/deprecated/shelly/` (reserved, out of the namespaces the loader scans), topology record
+commented with the rationale, DEPRECATED banner in the PKGBUILD. The installed shelly 3.1.6 keeps
+working; the package leaves the update waves.
