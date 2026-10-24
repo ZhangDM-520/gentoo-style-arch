@@ -99,7 +99,15 @@
 - Deploy loop (after commit lands): `sudo gsa -Sy` → `sudo gsa -S gsa-pm` →
   battery + smoke against `command -v gsa`.
 
-## Overnight git+stable update — wave 1 done (refused), RESUME WAVE RUNNING (run 1792805642-2753077)
+## Overnight git+stable update — RESUME2 RUNNING (run 1792815755-3972240, 313 names)
+- Wave 2 (1792805642-2753077) ended failed rc4: 89 ok / 3 failed / 312 parked — GPG key rotation
+  (X11 re-signed with Alan Coopersmith's 2024 key; 15 recipes now accept both keys, e0aa623+
+  7c325a7) + a transient savannah 408. Red→green proven on libxrender/libxtst/ncurses-git.
+- resume2 (12:29, DETACHED): 313 = wave-2 remaining − 3 staged + linux-firmware/xfsprogs bumps.
+  Monitor: `ls /var/lib/gsa/runs/1792815755-3972240/*.result | wc -l` vs 313;
+  /tmp/gsa-resume2-20261024.log. Store deploy loop verified end-to-end (see NOTE.md).
+
+## Wave 1 record (2026-10-24 00:04, run 1792771499-1387266)
 - Wave 1 (1792771499-1387266) ended refused rc3 after ~9h: 92 ok / 9 failed / 67 parked / 329
   never-started. Stopper: icu-git soname 79->80 (install gate). Failures triaged + fixed:
   3 transient network, 2 KF 6.31 topology-edge races, 1 perl 5.42-vs-5.44 world skew (also broke
@@ -137,9 +145,9 @@
 - poppler 26.10 landing path.
 
 ## Next action
-- Monitor the resume wave (1792805642-2753077): result count vs 404; on any further
-  install-refused soname stop, triage the mover out and resume the remainder.
-- When NO run is live: `sudo gsa -Md --fix` (binpkg index reconciliation) and the store
-  sync for the topology edges (`sudo gsa -Sy` deploy step after the commit lands).
+- Monitor resume2 (1792815755-3972240): result count vs 313; on any further install-refused
+  soname stop or failure park-cascade, triage the mover/failed rows and resume the remainder.
+- When NO run is live: `sudo gsa -Md --fix` (binpkg index reconciliation).
+  Store sync of the topology edges: done via `sudo gsa -Sy` (12:15, store at 7c325a7+0989f2f).
 - Owner: aranicy cutover (ananicy-cpp retirement); the heavy-core ABI re-bless decision
   (53 moved providers + icu-git's consumer wave); poppler 26.10 landing path.

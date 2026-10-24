@@ -16690,3 +16690,29 @@ kio-extras→{karchive,kdoctools,kio}, heaptrack→kio, perl-xml-libxml→perl.
 Monitor: `ls /var/lib/gsa/runs/1792805642-2753077/*.result | wc -l` vs 404;
 log /tmp/gsa-resume-20261024.log. Any further build-time soname move will
 refuse its install and stop the wave (fail-closed) — same triage loop.
+
+### 2026-10-24 12:30 — wave 2 triage (GPG key rotation) + resume2
+Wave 2 (1792805642-2753077) ended `failed` rc4 at ~12:00: 89 ok / 3 failed / **312 parked**.
+The park cascade (3 failures → 312 waits-on-failed) is why small rows matter: ncurses-git,
+libxrender and libxtst sat under half the graph. Causes: ncurses-git = savannah HTTP 408
+(transient); libxrender+libxtst = `FAILED (invalid public key 3AB285232C46AE43D8E192F4DAB0F78EA6E7E2D2)`
+— upstream re-signed the X11 releases with Alan Coopersmith's 2024 key while 15 recipes pinned
+only the old `4A193C06D35E7C670FA4EF0BA2FB9E081F2D130E` (makepkg isolates `validpgpkeys` into a
+temp keyring, so an unlisted signer is "invalid"). Fix: both keys accepted (e0aa623) + .SRCINFO
+regens (7c325a7) — the key was already in the build user's keyring, so listing it was the whole
+fix. Red→green proven: `gsa -S --leaf --no-sync libxrender libxtst ncurses-git` → all three
+succeeded (7s/7s/ok) before resuming.
+
+**Store location resolved (add to the store mental model):** `store_dir()` =
+`gsa_model::config::recipe_root` → **`~/.local/share/gsa/recipes`** (XDG data home; root's would
+be /root/… but the engine resolves the invoking user's). The legacy `<state>/recipes`
+(/var/lib/gsa/recipes) is migration-only. Deploy step confirmed end-to-end: commit+push →
+`cd /tmp && sudo gsa -Sy` (STORE root — NOT the dev tree, see the -Sy trap) → store HEAD follows
+the push (verified 7c325a7 in-store with the key present). The pass also version-synced
+linux-firmware 20261019 + xfsprogs 7.2.1 (uncommitted in the store per rule 18) → committed
+there as 0989f2f + pushed, dev tree ff-pulled.
+
+**resume2 LAUNCHED 12:29 (run 1792815755-3972240, DETACHED)**: 313 names = wave-2 remaining
+minus the 3 staged, plus linux-firmware+xfsprogs (post-sync bumps), still minus icu-git.
+Monitor: `ls /var/lib/gsa/runs/1792815755-3972240/*.result | wc -l` vs 313;
+/tmp/gsa-resume2-20261024.log.
