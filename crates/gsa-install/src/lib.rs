@@ -389,6 +389,23 @@ pub fn abi_view(db: &LocalDb) -> gsa_abi::InstalledView {
     }))
 }
 
+/// The workspace's Tier-2 ABI exclusions registry, when present. Wired into
+/// the decision context so STOCK archives (named paths with no recipe_dir
+/// to anchor `gates::find_repo_exclusions`) still see the documented-gap
+/// list — weston's lazy-loaded rdp/vnc backend plugins (2026-10-25) are the
+/// first such case. Pure path arithmetic: a missing registry stays `None`
+/// and the seam keeps its empty-registry verdicts.
+/// The workspace's Tier-2 ABI exclusions registry, when present. Wired into
+/// the decision context so STOCK archives (named paths with no recipe_dir
+/// to anchor `gates::find_repo_exclusions`) still see the documented-gap
+/// list — weston's lazy-loaded rdp/vnc backend plugins (2026-10-25) are the
+/// first such case. Pure path arithmetic: a missing registry stays `None`
+/// and the seam keeps its empty-registry verdicts.
+pub fn workspace_exclusions(root: &Path) -> Option<PathBuf> {
+    let path = root.join("config").join("abi-exclusions.conf");
+    path.is_file().then_some(path)
+}
+
 fn resolve_exclusions(
     ctx: &DecisionContext,
     candidates: &[Candidate],

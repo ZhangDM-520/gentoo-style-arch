@@ -17072,3 +17072,42 @@ coupled-must; includes rust-git, gcc-snapshot, rust-bindgen-git,
 libreoffice-fresh, onlyoffice-git, blender-git, vtk, opencv, jdk-openjdk) —
 that is the deferred owner-approved heavy-core re-bless run and stays
 owner-gated.
+
+## 2026-10-25 — weston's plugin gate: registry staging + seam wiring
+
+The gsa decision seam could not see the Tier-2 registry for STOCK archives:
+`resolve_exclusions` anchors `find_repo_exclusions` at the first candidate's
+`recipe_dir`, and named-path candidates carry their parent dir (arbitrary
+paths walk up to `/` and find nothing) — so the documented-gap list was
+invisible exactly for the packages it exists for. Two fixes:
+
+1. **Operational (works on the installed engine):** stage the stock archives
+   under the store tree (`$recipe_root/staging/`) and `gsa -U` them — the
+   recipe_dir walk then anchors at the store and resolves
+   `config/abi-exclusions.conf`. weston + colord installed this way (the
+   pacman PreTransaction hook stands down for engine installs per its own
+   contract: names with no cached archive are skipped because "the engine
+   gates its own installs" — weston/colord's archives were moved out of
+   /var/cache/pacman/pkg first).
+2. **Code:** `gsa_install::workspace_exclusions(root)` now feeds
+   `DecisionContext.abi_exclusions` from the resolved workspace at both CLI
+   seams (`run_upgrade` uses its resolved root; `--install-decide` resolves
+   via `resolve_root(false)`) — stock archives from ANY path see the
+   registry. Pure path arithmetic; missing registry keeps empty-registry
+   verdicts. Red/green proof: the /tmp-staged weston refused with five
+   `needed` names before the registry entries; after the libneatvnc.so entry
+   the same command installed (green on the operational path).
+
+Registered gaps (review-by 2027-04-01): libaml.so, libfreerdp3.so,
+libfreerdp-server3.so, libwinpr3.so (rdp-backend.so), libneatvnc.so
+(vnc-backend.so) — weston's lazy-loaded backend plugins; the XTS PGO
+training runs `--backend=headless-backend.so` and never loads them. repo
+freerdp could not be the honest fix: it pins `libicuuc.so=78-64` against
+installed icu-git's `.79` — the deferred icu migration.
+
+**xorg-xwayland-git row: GREEN with real PGO** — `==> PGO profile: 367 gcda
+files — rebuilding with profile` (XTS/piglit training under headless
+weston, above the floor guard). xwayland-satellite-git building after it.
+The engine gap left for the owner: the pacman hook (tools/abi-need-check.sh)
+is exclusion-blind by design (strict for MANUAL pacman); whether it should
+honor the registry is a trust-model call, flagged in CURRENT.md.

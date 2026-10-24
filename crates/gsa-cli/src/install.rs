@@ -27,8 +27,8 @@ use gsa_graph::Graph;
 use gsa_install::localdb::pacman_db_root;
 use gsa_install::{
     decide, decide_mode, discover_recipe, execute_txn, names_for_archive, preflight_installs,
-    register_ignorepkg, render_rows, rows_rc, Candidate, DecideMode, DecisionContext,
-    EmptyListPolicy, LocalDb, RegisterReport, TxnOutcome, TxnRequest,
+    register_ignorepkg, render_rows, rows_rc, workspace_exclusions, Candidate, DecideMode,
+    DecisionContext, EmptyListPolicy, LocalDb, RegisterReport, TxnOutcome, TxnRequest,
 };
 use gsa_model::{Decision, DecisionRow, OutcomeRow, PlanRow, RecipeId, RowStatus, RunOutcome};
 use gsa_recipe::pkginfo::read_pkginfo;
@@ -790,7 +790,7 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
         },
         later_installs: Vec::new(),
         parks: Vec::new(),
-        abi_exclusions: None,
+        abi_exclusions: workspace_exclusions(&root),
         wave_heal,
     };
     // A plan whose rows already explain themselves — every item rejected
@@ -1627,7 +1627,10 @@ pub fn run_install_decide(args: &[String], out: &mut dyn Write, err: &mut dyn Wr
         },
         later_installs: Vec::new(),
         parks: Vec::new(),
-        abi_exclusions: None,
+        abi_exclusions: crate::resolve_root(false)
+            .ok()
+            .as_deref()
+            .and_then(workspace_exclusions),
         wave_heal: Vec::new(),
     };
     let rows = match LocalDb::load(&pacman_db_root()) {
