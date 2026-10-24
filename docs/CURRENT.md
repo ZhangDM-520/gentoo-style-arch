@@ -99,7 +99,16 @@
 - Deploy loop (after commit lands): `sudo gsa -Sy` → `sudo gsa -S gsa-pm` →
   battery + smoke against `command -v gsa`.
 
-## Overnight git+stable update RUNNING (2026-10-24 00:04, run 1792771499-1387266, DETACHED)
+## Overnight git+stable update — wave 1 done (refused), RESUME WAVE RUNNING (run 1792805642-2753077)
+- Wave 1 (1792771499-1387266) ended refused rc3 after ~9h: 92 ok / 9 failed / 67 parked / 329
+  never-started. Stopper: icu-git soname 79->80 (install gate). Failures triaged + fixed:
+  3 transient network, 2 KF 6.31 topology-edge races, 1 perl 5.42-vs-5.44 world skew (also broke
+  libcdio via help2man/Locale::gettext), 1 transient pacman race, 1 = libcdio (same perl class).
+- Resume wave (09:34, DETACHED): 404 = remaining - icu-git; staging chain green (perl 5.44,
+  karchive, kdoctools, kwindowsystem, solid, kio, kio-extras, heaptrack). Monitor: `ls
+  /var/lib/gsa/runs/1792805642-2753077/*.result | wc -l` vs 404; /tmp/gsa-resume-20261024.log.
+
+## Wave 1 record (2026-10-24 00:04, run 1792771499-1387266)
 - `sudo /usr/bin/gsa -S --leaf --no-sync --lanes 4 --jobs 3 --intensity xhigh <497>`
   from /tmp (canonical store root). 497 = @git @stable (551) − 53 ABI-wave
   triggers (/tmp/moved-53.txt) − binutils. Zero `abi-wave` rows, zero
@@ -128,7 +137,9 @@
 - poppler 26.10 landing path.
 
 ## Next action
-Morning: (1) check run 1792771499-1387266 tally (`*.result` count vs 497,
-`history.jsonl` outcome) and report pass/fail rows; (2) `sudo gsa -Md --fix`
-(binpkg index reconciliation after the drive recovery) when no run is live;
-(3) owner: aranicy cutover + the heavy-core ABI re-bless decision.
+- Monitor the resume wave (1792805642-2753077): result count vs 404; on any further
+  install-refused soname stop, triage the mover out and resume the remainder.
+- When NO run is live: `sudo gsa -Md --fix` (binpkg index reconciliation) and the store
+  sync for the topology edges (`sudo gsa -Sy` deploy step after the commit lands).
+- Owner: aranicy cutover (ananicy-cpp retirement); the heavy-core ABI re-bless decision
+  (53 moved providers + icu-git's consumer wave); poppler 26.10 landing path.

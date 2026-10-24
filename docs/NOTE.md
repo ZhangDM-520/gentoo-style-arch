@@ -16670,3 +16670,23 @@ resume wave = remaining − icu-git (`--lanes 4 --jobs 3 --intensity xhigh`).
 Logs: /tmp/gsa-staging-20261024.log, /tmp/gsa-resume-20261024.log. Note:
 any further soname move discovered at build time will refuse its install and
 stop the run again (fail-closed) — each stop is a report + exclude + resume.
+
+### 2026-10-24 09:35 staging v2 outcome — resume wave LAUNCHED
+The first staging chain proved the class and exposed the last provider:
+perl 5.44 ✓ (unblocks perl-xml-libxml AND libcdio — help2man is a perl script
+needing Locale::gettext, also shipped in 5.44 paths: `Can't locate
+Locale/gettext.pm`, which is why `%.1` rules failed and `install-man1` died),
+karchive ✓ → kdoctools ✓, kio-extras ✓, heaptrack ✓, but kio failed on
+**KF6Solid 6.31** (installed 6.30). kio's recipe depends name the tree KF
+set karchive, kcrash, kdoctools, kguiaddons, kwindowsystem, solid — the two
+unbuilt 6.31 providers were kwindowsystem + solid (both standalone: makedeps
+are ecm/qt6 only). Staging v2 `kwindowsystem → solid → kio` all green, and
+the chain then launched the **404-name resume wave at 09:34 (run
+1792805642-2753077, `--lanes 4 --jobs 3 --intensity xhigh`)**. Lesson for
+the topology fix: a synchronized ABI-family bump (KF 6.31) must carry the
+FAMILY's build edges, not just the pair that failed first — derived edges
+now cover kio→{karchive,kdoctools,kwindowsystem,solid} and
+kio-extras→{karchive,kdoctools,kio}, heaptrack→kio, perl-xml-libxml→perl.
+Monitor: `ls /var/lib/gsa/runs/1792805642-2753077/*.result | wc -l` vs 404;
+log /tmp/gsa-resume-20261024.log. Any further build-time soname move will
+refuse its install and stop the wave (fail-closed) — same triage loop.
