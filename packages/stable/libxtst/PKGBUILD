@@ -19,7 +19,7 @@ source=(https://xorg.freedesktop.org/releases/individual/lib/libXtst-${pkgver}.t
 sha512sums=('c1ce90e1274d91c0c7e18b9f004a583bc4104d461cb85642cc01a104cab854f14fc2960a578af56c9ae8d307a20d5efe2a40062cc0c4352765ea8db540d5f34e'
             'SKIP')
 #validpgpkeys=('C41C985FDCF1E5364576638B687393EE37D128F8') # Matthieu Herrb <matthieu.herrb@laas.fr>
-validpgpkeys=('4A193C06D35E7C670FA4EF0BA2FB9E081F2D130E') # Alan Coopersmith <alan.coopersmith@oracle.com>
+validpgpkeys=('4A193C06D35E7C670FA4EF0BA2FB9E081F2D130E' '3AB285232C46AE43D8E192F4DAB0F78EA6E7E2D2') # Alan Coopersmith <alan.coopersmith@oracle.com>
 
 build() {
   cd "${srcdir}/libXtst-${pkgver}"

@@ -15,7 +15,7 @@ sha512sums=('2261b840ea621cf4ce31961ec9df17aa2e253b268afe289dfb97c240aee27b9f443
             'SKIP')
 #validpgpkeys=('C383B778255613DFDB409D91DB221A6900000011') # Keith Packard <keithp@keithp.com>
 # validpgpkeys=('3BB639E56F861FA2E86505690FDD682D974CA72A') # "Matt Turner <mattst88@gmail.com>"
-validpgpkeys=('4A193C06D35E7C670FA4EF0BA2FB9E081F2D130E') # Alan Coopersmith <alan.coopersmith@oracle.com>
+validpgpkeys=('4A193C06D35E7C670FA4EF0BA2FB9E081F2D130E' '3AB285232C46AE43D8E192F4DAB0F78EA6E7E2D2') # Alan Coopersmith <alan.coopersmith@oracle.com>
 
 build() {
   cd $pkgname-$pkgver

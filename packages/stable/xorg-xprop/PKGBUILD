@@ -14,7 +14,7 @@ groups=('xorg-apps' 'xorg')
 source=(https://xorg.freedesktop.org/archive/individual/app/xprop-${pkgver}.tar.xz{,.sig})
 sha512sums=('bdd9b02c4ee738bb4661c3acc901330e635b9967de5efb1615297f6b0ff3cdbd0eab6f63f80a605539090e8d62c611bb603da17477e16e3c0b26ff4314d0b664'
             'SKIP')
-validpgpkeys=('4A193C06D35E7C670FA4EF0BA2FB9E081F2D130E') # "Alan Coopersmith <alan.coopersmith@oracle.com>"
+validpgpkeys=('4A193C06D35E7C670FA4EF0BA2FB9E081F2D130E' '3AB285232C46AE43D8E192F4DAB0F78EA6E7E2D2') # "Alan Coopersmith <alan.coopersmith@oracle.com>"
 #validpgpkeys+=('C383B778255613DFDB409D91DB221A6900000011') # "Keith Packard <keithp@keithp.com>"
 
 build() {
