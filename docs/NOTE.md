@@ -16797,3 +16797,13 @@ there as 0989f2f + pushed, dev tree ff-pulled.
 minus the 3 staged, plus linux-firmware+xfsprogs (post-sync bumps), still minus icu-git.
 Monitor: `ls /var/lib/gsa/runs/1792815755-3972240/*.result | wc -l` vs 313;
 /tmp/gsa-resume2-20261024.log.
+
+### 2026-10-24 16:40 — ananicy-cpp retired from the tree (owner: "remove it, we have aranicy")
+`packages/stable/ananicy-cpp/` deleted and its `config/topology.conf` record dropped (the only
+reference in config/; no test/tool/fixture consumers — grep-verified). `packages/stable/aranicy`
+stays and keeps `conflicts=('ananicy-cpp')` — that is the cutover wiring (both own the auto-nice
+role and /etc/ananicy.d; aranicy keeps ananicy-compatible JSONL rules so rule data survives).
+System-side retirement (pacman -R ananicy-cpp → install aranicy 0.1.0-1) is deliberately NOT run
+while wave 5 holds the pacman mutex ("never manual pacman while gsa live"); it is the first
+post-wave step. The wave's own ananicy-cpp row may still build against the store copy (store sync
+deferred until the wave ends — one-writer rule).

@@ -171,5 +171,7 @@
   soname stop or failure park-cascade, triage the mover/failed rows and resume the remainder.
 - When NO run is live: `sudo gsa -Md --fix` (binpkg index reconciliation).
   Store sync of the topology edges: done via `sudo gsa -Sy` (12:15, store at 7c325a7+0989f2f).
-- Owner: aranicy cutover (ananicy-cpp retirement); the heavy-core ABI re-bless decision
+- aranicy cutover: TREE SIDE DONE (ananicy-cpp recipe + topology record removed, 2026-10-24).
+  POST-WAVE steps: `sudo gsa -Sy` (store sync) then `sudo pacman -R ananicy-cpp` + install aranicy.
+- Owner: the heavy-core ABI re-bless decision
   (53 moved providers + icu-git's consumer wave); poppler 26.10 landing path.
