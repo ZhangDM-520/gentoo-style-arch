@@ -13,11 +13,14 @@ license=('LGPL-2.1-or-later')
 depends=('dbus' 'gtk3' 'imagemagick' 'libxv' 'qt5-base' 'qt5-x11extras' 'v4l-utils')
 # trim: xmlto + docbook-xsl (man pages — configure auto-disables docs when
 #       xmlto is absent, installed doc/man trimmed in package())
-makedepends=('gtk3' 'qt5-x11extras' 'python' 'gobject-introspection' 'glib2-devel' 'meson' 'ninja')
+makedepends=('gtk3' 'qt5-x11extras' 'python' 'gobject-introspection' 'glib2-devel' 'meson' 'ninja' 'patchelf')
 optdepends=('python: for zbar python bindings')
 # bare soname provides per ELF output: libzbar/libzbargtk/libzbarqt
-# (sonames .so.0 each) + the python zbar module (filename SONAME);
-# conflicts/replaces dropped (house rule)
+# (sonames .so.0 each) + the python zbar module;
+# conflicts/replaces dropped (house rule). Keep these BARE (rule: stems
+# only) — makepkg's find_libprovides auto-versions them from the built ELF,
+# and package() restores the legacy python-module shape so that auto-version
+# matches the registered surface (see the fixup below).
 provides=('zbar-gtk' 'zbar-qt' 'python-zbar'
           'libzbar.so' 'libzbargtk.so' 'libzbarqt.so' 'zbar.so')
 source=(
@@ -54,6 +57,27 @@ package() {
 
   # trim: man pages + docs (xmlto/docbook-xsl removed from makedepends)
   rm -rf "$pkgdir/usr/share/man" "$pkgdir/usr/share/doc"
+
+  # Restore the legacy python-module artifact shape (autotools shipped
+  # site-packages/zbar.so with SONAME zbar.so; meson ships the cpython-tagged
+  # name with no SONAME). makepkg's find_libprovides only auto-versions a
+  # bare '*.so' provide when a pkgdir file named '<provide>*' carries a
+  # SONAME — the tagged name matched neither the glob nor a SONAME, the
+  # provide registered bare, and the abi-soname install gate saw the
+  # registered 'zbar.so=zbar.so-64' surface move (unconditional refuse;
+  # no wave can land it). Name + SONAME restore the exact auto-version
+  # ('zbar.so' has no '.N' generation, so makepkg versions it with the
+  # whole SONAME: zbar.so=zbar.so-64) — the registered surface stays
+  # byte-stable and the import name is unchanged.
+  local _mod
+  _mod=$(echo "$pkgdir"/usr/lib/python*/site-packages/zbar.cpython-*.so)
+  if [[ -f $_mod ]]; then
+    mv "$_mod" "${_mod%/*}/zbar.so"
+    patchelf --set-soname zbar.so "${_mod%/*}/zbar.so"
+  else
+    error "python module zbar.cpython-*.so not found — the zbar.so surface would drift"
+    return 1
+  fi
 
   # license: ship upstream licence text(s) (LGPL-2.1-or-later)
   local _l

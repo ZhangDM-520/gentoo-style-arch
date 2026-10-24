@@ -12,6 +12,7 @@ pkgbase = zbar
 	makedepends = glib2-devel
 	makedepends = meson
 	makedepends = ninja
+	makedepends = patchelf
 	depends = dbus
 	depends = gtk3
 	depends = imagemagick
