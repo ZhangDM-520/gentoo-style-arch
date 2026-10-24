@@ -221,7 +221,6 @@ build() {
       --enable-nvdec \
       --enable-nvenc \
       --enable-opencl \
-      --enable-opengl \
       --enable-shared \
       --enable-vapoursynth \
       --enable-version3 \
