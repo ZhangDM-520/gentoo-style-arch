@@ -504,7 +504,7 @@ rr_dry_cont() {
     # exactly one direction (re-enable -> "both excluded and in the
     # topology"; drop the entry -> "neither in the topology nor excluded";
     # add a new excluded recipe without an entry -> same).
-    excluded_paths=$'packages/misc/linux-cachyos'
+    excluded_paths=$'packages/misc/linux-cachyos\npackages/deprecated/shelly'
 
     declare -A topo_set=() recipe_set=() excluded_set=()
     for p in "${topo_paths[@]}"; do topo_set["$p"]=1; done

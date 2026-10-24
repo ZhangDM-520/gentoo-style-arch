@@ -16999,3 +16999,45 @@ shallow, `git fetch --unshallow` needed for the rev-list count) + .SRCINFO
 installed `1:0.1.0.r1368.679f4fb-1` (02:16); `strings /usr/bin/umbriel` carries
 `hover_raises` (release build lacks `-Dtest_ipc`, so harness runs stayed on
 build-debug).
+
+## 2026-10-25 — zbar/xorg wall root causes + rule 21(a) hub promotion
+
+**zbar (3rd strike decoded).** The meson port built fine; the INSTALL gate
+refused `abi-soname zbar zbar.so zbar.so-64 -`. Mechanism (stock makepkg
+`find_libprovides`, /usr/bin/makepkg:537): a bare `*.so` provide is
+auto-versioned only when a `pkgdir` file named `<provide>*` carries a SONAME;
+the version is `<everything after the last .so.>-<elfclass>`. The autotools
+build shipped `site-packages/zbar.so` (SONAME `zbar.so`, no `.N` → soversion
+stayed the whole SONAME) → `zbar.so=zbar.so-64`; the meson build ships
+`zbar.cpython-314-x86_64-linux-gnu.so` (matches neither the glob nor a
+SONAME) → bare `zbar.so` → the gate sees a moving bare soname provide.
+`gsa_abi::abi_refusal_rows` emits `abi-soname` per drifted provide
+UNCONDITIONALLY (tx coverage only exempts `abi-consumer`/`abi-stock-pinner`)
+— a consumer wave can never land this class. Fix is the artifact shape, not
+the declaration (hand-versioning the token violates the recipe-contract QA
+rule "bare stems only" — the first attempt did and was rejected by the
+fixture): package() renames the module to `zbar.so` and sets its SONAME to
+`zbar.so` (patchelf), so makepkg's auto-versioning reproduces the registered
+`zbar.so=zbar.so-64` surface byte-stably through the sanctioned path.
+
+**xorg-xwayland-git (4th wall, class changed).** weston (makedepends, hosts
+the XTS PGO training under headless weston) → `colord` → `libcolord=1.4.8-2`
+(EXACT split-rel pin). libcolord-git provides `libcolord=1.4.8.r17.g53c8bc4`,
+which cannot satisfy the pin, so pacman pulls repo libcolord — which
+CONFLICTS with installed libcolord-git and the shim cannot answer the
+"Remove libcolord-git?" prompt (`sudo -n` never prompts). Not a stale sync
+DB (the earlier hypothesis). Fix: libcolord-git carries a COMPAT PIN provide
+`libcolord=1.4.8-2` (documented; bump when repo colord's rel moves). The
+rebuild is gate-clean (bare `.so` provides unchanged) and afterwards the
+engine's own shim installs weston+colord with no prompt and no provider
+swap — the repo colord daemon runs against the git lib (same `libcolord.so=2-64`).
+
+**Rule 21(a) catch from the battery.** `abi-batch-policy.sh` failed on
+karchive (3 edge-consumers, no core): the 2026-10-24 KF edge fix created
+three NEW ≥2-edge-consumer records (karchive, kdoctools, kio) that were
+never promoted per the hub rule. Promoted all three (stable → stable,core);
+fixture pin `hub_rule_exempt` still holds only fcitx5-git. Two more battery
+debts closed in the same pass: `srcinfo-freshness` (scx-scheds-git stale
+`.SRCINFO` — regenerated with `GIT_CONFIG_COUNT=0 makepkg --printsrcinfo`)
+and `project.sh` (packages/deprecated/shelly added to the fixture's
+deliberate `excluded_paths` list after its deprecation move).
