@@ -59,13 +59,13 @@ build() {
     --with-system-readline \
     --with-python=/usr/bin/python \
     --with-system-gdbinit=/etc/gdb/gdbinit
-  # the gdb link expects libtool's uninstalled-convenience archives at
+  # the link expects libtool's uninstalled-convenience archives at
   # ../<lib>/_libs/*.a while this tree produces them in ../<lib>/.libs —
-  # bridge the two layouts before recursing (otherwise the link dies
-  # deterministically on ../bfd/_libs/libbfd.a)
-  local _d
-  for _d in bfd opcodes libiberty intl libctf zlib; do
-    mkdir -p "$_d" && ln -sfn .libs "$_d/_libs"
+  # bridge the layout for every bundled subdir (bfd, libctf, libsframe, …)
+  local _d _n
+  for _d in ../*/; do
+    _n=$(basename "$_d")
+    mkdir -p "$_n" && ln -sfn .libs "$_n/_libs"
   done
   make
 }
