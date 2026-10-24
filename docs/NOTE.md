@@ -16627,3 +16627,46 @@ rebuild the owner banned. They wait for the ABI wave re-bless run (the
 deferred queue) which by construction needs llvm-git/rust-git/gcc-snapshot/
 rust-bindgen-git rebuilt in one transaction — an owner-approved heavy-core
 run, not tonight's.
+
+## 2026-10-24 morning — overnight run triage: 1 refused, 9 failed, resume staged
+
+Run 1792771499-1387266 ended `refused` (rc 3) after ~9h: **92 succeeded,
+9 failed, 67 parked (waits-on-failed), 329 never started** (497 planned).
+The stopper was `icu-git`: its rebuild moves `libicudata.so 79-64 → 80-64`
+and the install gate refused (rule 25(b) content truth — half-moved wave =
+bricking class). Landing it needs its consumer wave (nodejs, texlive-bin,
+webkit2gtk-4.1, harfbuzz-git, …) in ONE transaction → deferred with the 53
+moved providers (owner's heavy-core call).
+
+The 9 failures, by class:
+- **transient network/TLS (3)**: acl-git (savannah clone TLS EOF), gawk
+  (ftp.gnu.org SSL EOF), libftdi (intra2net empty reply) — network probed
+  back (200); retrying in the resume.
+- **KF 6.31 version races (2)**: kdoctools wants KF6Archive 6.31.0 (found
+  6.30), kio the same class. Root cause is a TOPOLOGY gap, not the recipes:
+  the recipes' makedepends list karchive/kdoctools/kio but the topology
+  records carried no intra-KF edges (kdoctools edges: doxygen-git,
+  gcc-snapshot, glibc-git, qt6-base-git, qt6-tools — no karchive), so lanes
+  dispatched the consumers before the providers rebuilt. Fixed in
+  `config/topology.conf` (edges derived from the recipes: kdoctools→karchive;
+  kio→karchive,kdoctools; kio-extras→karchive,kdoctools,kio; heaptrack→kio;
+  perl-xml-libxml→perl) — **uncommitted, disposition asked**.
+- **perl world skew (1)**: perl-xml-libxml build failed `Can't locate
+  Alien/Libxml2.pm` — installed perl is 5.42.3-1.1 while repo
+  perl-alien-libxml2 ships 5.44/vendor_perl paths; the tree's perl recipe is
+  already 5.44.0 (pkgrel 1.1) and was still NeverStarted. Staging builds the
+  tree perl 5.44 first (and the perl-xml-libxml→perl edge orders it).
+- **transient pacman dep race (1)**: aranicy built fine (0.1.0-1) but its
+  install ran `failed to prepare transaction (could not satisfy
+  dependencies)`; `pacman -U --print` of the same archive resolves cleanly
+  now → retry.
+- **real build failure (1)**: libcdio `package()` — `make[1]: install-am
+  Error 2` (mmc-tool install); retrying in the resume, will dig if red again.
+
+Resume staged (detached, /tmp/resume-staging-20261024.sh): serial pre-wave
+`perl → karchive → kdoctools → kio → kio-extras → heaptrack` (each `gsa -S
+--leaf --no-sync --lanes 1 --jobs 14`, guaranteed order), then the 404-name
+resume wave = remaining − icu-git (`--lanes 4 --jobs 3 --intensity xhigh`).
+Logs: /tmp/gsa-staging-20261024.log, /tmp/gsa-resume-20261024.log. Note:
+any further soname move discovered at build time will refuse its install and
+stop the run again (fail-closed) — each stop is a report + exclude + resume.
