@@ -3946,3 +3946,21 @@ constant, not a baked path); and the xorg-xwayland-git PGO end-to-end proof
   and a confirmation or reply on a PR waits for the checks to pass — the
   checks table can be flipped or stale, so a "validated" comment under a red
   or unverified CI is wrong. Details: NOTE.md 2026-10-24.
+- **makepkg source-cache mechanics (2026-10-24, measured — the night of fetch walls):**
+  (1) makepkg REJECTS a mirror whose origin URL differs from the recipe source ("ERROR: <dir> is
+  not a clone of <url>") — a fallback-host mirror must `git remote set-url origin <canonical>`
+  after cloning, and the build's `git fetch` then goes to the canonical host (incremental);
+  (2) every build `git fetch`es the mirror — a mirror is not fetch-proof on a flaky link;
+  (3) partial downloads leave `<file>.part` and makepkg's curl retry then dies on servers without
+  byte-range resume ("HTTP server does not seem to support byte ranges") — delete the .part and
+  fetch with `curl --retry` yourself; (4) `$srcdir` is NOT wiped between makepkg runs — a
+  config-changing retry must wipe the build workspace first or the leftover .la/objects produce
+  fake symptoms (gdb's "undefined gcore_elf_*" was stale-object mixing); (5) source entries come
+  as `url`, `git+url`, `name::git+url`, `git://…` — a scanner must handle all four forms and strip
+  `#fragment` + `?signed`, or it silently misses mirrors (the `name::` and `git://` blind spots
+  cost hours).
+- **Toolchain drift moves libtool's uninstalled-convenience layout (2026-10-24):** after the
+  20261011 gcc snapshot, bundled libs land in `<lib>/.libs/*.a` while the sibling link line wants
+  `<lib>/_libs/*.a` (gdb's binutils-gdb bundle died on `../bfd/_libs/libbfd.a`). A `ln -s .libs
+  <lib>/_libs` bridge per bundled subdir fixes it; and a link error that survives a layout fix may
+  be stale-tree residue — clean-room before blaming the linker.
