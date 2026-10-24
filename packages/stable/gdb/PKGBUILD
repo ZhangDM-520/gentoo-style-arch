@@ -59,6 +59,14 @@ build() {
     --with-system-readline \
     --with-python=/usr/bin/python \
     --with-system-gdbinit=/etc/gdb/gdbinit
+  # the gdb link expects libtool's uninstalled-convenience archives at
+  # ../<lib>/_libs/*.a while this tree produces them in ../<lib>/.libs —
+  # bridge the two layouts before recursing (otherwise the link dies
+  # deterministically on ../bfd/_libs/libbfd.a)
+  local _d
+  for _d in bfd opcodes libiberty intl; do
+    if [ ! -e "$_d/_libs" ]; then mkdir -p "$_d" && ln -s .libs "$_d/_libs"; fi
+  done
   make
 }
 
