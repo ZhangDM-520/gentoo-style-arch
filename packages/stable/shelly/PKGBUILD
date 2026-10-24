@@ -28,18 +28,17 @@ _source_dir="Shelly-ALPM-${pkgver//+/-}"
 
 build() {
   cd "$srcdir/${_source_dir}"
+  export ZIG_GLOBAL_CACHE_DIR="${srcdir}/zig-global-cache"
 
   (cd Shelly.Flatpak.Backend && zig build --verbose \
     --prefix "${srcdir}/${_source_dir}/out-flatpak-backend" \
     --cache-dir "${srcdir}/zig-cache" \
-    --global-cache-dir "${srcdir}/zig-global-cache" \
     -Dcpu=baseline \
     -Doptimize=ReleaseSafe)
 
   (cd Shelly.Ui.Gtk && zig build --verbose \
     --prefix "${srcdir}/${_source_dir}/out" \
     --cache-dir "${srcdir}/zig-cache" \
-    --global-cache-dir "${srcdir}/zig-global-cache" \
     -Dflatpak-backend-package=shelly-flatpak-backend \
     -Dcpu=baseline \
     -Doptimize=ReleaseSafe)
@@ -47,21 +46,18 @@ build() {
   (cd Shelly.Cli.Zig && zig build --verbose \
     --prefix "${srcdir}/${_source_dir}/out-cli" \
     --cache-dir "${srcdir}/zig-cache" \
-    --global-cache-dir "${srcdir}/zig-global-cache" \
     -Dcpu=baseline \
     -Doptimize=ReleaseSmall)
 
   (cd Shelly.Key && zig build --verbose \
     --prefix "${srcdir}/${_source_dir}/out-key" \
     --cache-dir "${srcdir}/zig-cache" \
-    --global-cache-dir "${srcdir}/zig-global-cache" \
     -Dcpu=baseline \
     -Doptimize=ReleaseSmall)
 
    (cd Shelly.Notifications.Zig && zig build --verbose \
      --prefix "${srcdir}/${_source_dir}/out-notifications" \
      --cache-dir "${srcdir}/zig-cache" \
-     --global-cache-dir "${srcdir}/zig-global-cache" \
      -Dcpu=baseline \
      -Doptimize=ReleaseSmall)
 
@@ -76,16 +72,14 @@ build() {
 
 check() {
   cd "$srcdir/${_source_dir}"
+  export ZIG_GLOBAL_CACHE_DIR="${srcdir}/zig-global-cache"
 
   (cd Shelly.Flatpak.Backend && zig build test abi-test integration-test \
-    --cache-dir "${srcdir}/zig-cache" \
-    --global-cache-dir "${srcdir}/zig-global-cache")
+    --cache-dir "${srcdir}/zig-cache")
   (cd Shelly.PackageManager && zig build flatpak-test \
-    --cache-dir "${srcdir}/zig-cache" \
-    --global-cache-dir "${srcdir}/zig-global-cache")
+    --cache-dir "${srcdir}/zig-cache")
   (cd Shelly.Cli.Zig && zig build test \
-    --cache-dir "${srcdir}/zig-cache" \
-    --global-cache-dir "${srcdir}/zig-global-cache")
+    --cache-dir "${srcdir}/zig-cache")
 }
 
 package_shelly() {
