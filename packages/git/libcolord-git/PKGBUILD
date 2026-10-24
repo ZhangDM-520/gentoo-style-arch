@@ -71,5 +71,14 @@ package() {
   cp -a "$_dest/usr/lib/pkgconfig/colord.pc" "$pkgdir/usr/lib/pkgconfig/"
   cp -a "$_dest/usr/lib/girepository-1.0/Colord-1.0.typelib" "$pkgdir/usr/lib/girepository-1.0/"
   cp -a "$_dest/usr/share/gir-1.0/Colord-1.0.gir" "$pkgdir/usr/share/gir-1.0/"
+  # The globs above over-capture the private-lib/colorhug/session surface,
+  # which Arch's split assigns to the colord package: repo colord owns those
+  # files, so shipping them here blocks repo colord's install with
+  # exists-in-filesystem conflicts (weston -> colord -> the xorg-xwayland
+  # XTS wall). Trim to stock libcolord's file set.
+  rm -rf "$pkgdir/usr/include/colord-1/colorhug" \
+         "$pkgdir/usr/include/colord-1/colord-session" \
+         "$pkgdir/usr/include/colord-1/colord-private.h"
+  rm -f "$pkgdir/usr/lib/"libcolordprivate.so*
   install -Dm644 "$_pkgname/COPYING" "$pkgdir/usr/share/licenses/$pkgname/COPYING"
 }

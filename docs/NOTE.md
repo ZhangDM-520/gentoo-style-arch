@@ -17041,3 +17041,34 @@ debts closed in the same pass: `srcinfo-freshness` (scx-scheds-git stale
 `.SRCINFO` — regenerated with `GIT_CONFIG_COUNT=0 makepkg --printsrcinfo`)
 and `project.sh` (packages/deprecated/shelly added to the fixture's
 deliberate `excluded_paths` list after its deprecation move).
+
+## 2026-10-25 — shelly's dead ABI rows blocked every wave; cleared
+
+The zbar/libcolord consumer wave ran (both repairs landed; gstreamer died on
+a wpewebkit mirror 404 — `pacman -Sy` rotated it to 2.54.2-1.1), but the
+follow-up wave refused plan-side: `shelly refuse abi-consumer-uncovered
+gtk4-git`. Mechanism (gsa-abi/src/wave.rs plan_waves): a recorded subscriber
+UNKNOWN TO THE TOPOLOGY is "external" and surfaces as `uncovered` — and an
+uncovered same-pass member refuses the run before dispatch. shelly was
+deprecated (moved to packages/deprecated/, removed from topology.conf) but
+(a) still installed and (b) its 12 `abi/subscriptions` rows (providers:
+flatpak-git, glib2-git, gtk4-git, libarchive-git, pacman) persist forever —
+the Subscriptions store has upsert/append and NO remove/prune API. Any
+rebuild of those five providers refused every run.
+
+Cleared per the owner's recorded deprecation: `pacman -R shelly-flatpak-backend
+shelly` (nothing depended on them), and the 12 dead rows deleted from
+`/var/lib/gsa/abi/subscriptions` with pre-image backup
+`subscriptions.bak-20261025-shelly` (8572 -> 8560 rows). ENGINE GAP left
+open: no maintenance verb prunes subscription rows for consumers that are
+neither installed nor in the topology — `gsa -Md --fix` only reconciles the
+binpkg index. A future `-M` prune (or a wave-side dead-row skip) would make
+this class self-healing.
+
+Verified after: `gsa -S --leaf --dry-run xorg-xwayland-git xwayland-satellite-git`
+= 2 packages, 0 abi-wave rows, rc 0 (launchable). The parked zbar/libcolord
+wave still plans **524 abi-wave rows** (fail-toward whole-closure + llvm-git
+coupled-must; includes rust-git, gcc-snapshot, rust-bindgen-git,
+libreoffice-fresh, onlyoffice-git, blender-git, vtk, opencv, jdk-openjdk) —
+that is the deferred owner-approved heavy-core re-bless run and stays
+owner-gated.
