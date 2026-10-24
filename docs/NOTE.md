@@ -16868,3 +16868,31 @@ byte-for-byte), and the build itself was refused fail-closed by gsa's
 `/tmp/umbriel-git-postwave2.sh` gates on process NAMES (`pgrep -x gsa /
 makepkg / pacman`) with a stability double-check; build+install still pending
 behind the wave. Pitfall recorded in ~/docs/MEMORY.md.
+
+### 2026-10-24 18:40 — umbriel patch 0002 round 3: the stall guard's pace was measured wrong (PR #508)
+Review comment 6382613366 (barrulus) caught two initiation-time edge cases in
+the cadence-aware stall guard, both real and both closed in `0b2212a` (amend +
+force-push of `fe0a879`, branch `windows-drag-physics-tuning`):
+1. **A stall before the first tick bypassed the guard** — `m_tickGapS` started
+   at 0, so the first tick integrated the whole gap at 240 Hz on the compositor
+   thread and left the sheet parked mid-deformation (reviewer's repro:
+   begin → move(60,20) → tick(0.3) stayed active at ~19.8px).
+2. **The pace estimate was the previous tick's interval** — and the interval
+   that wakes a sheet is a partial frame (initiation sits outside the output
+   pacing), so a 1 ms wake on a 5 Hz output made the ordinary 200 ms frame
+   read as a stall and cleared the deformation early ("premature deformation
+   clearance").
+Fix: the guard measures against the **output's refresh period** (passed per
+tick from the compositor; unknown cadence → the tuned pause alone, from the
+first tick), `m_tickGapS` is gone, and catch-up is bounded to 1 s per tick.
+Audit of the same family found a third: the released-sheet quiet window
+credited whole tick gaps as quiet from one end-of-tick velocity sample — a
+long frame ending slow mid-ring snapped the deformation early. Quiet time now
+accumulates per integration step from the velocity actually carried.
+Validation: 4 new unit cases pinned to the reproducers + the quiet ring;
+mutation-attributed (old guard → 3 red, unbounded catch-up → 2 red, old quiet
+accounting → 1 red; a `cp -p` restore poisoned one probe round via stale
+ninja mtimes — ODR-skewed garbage, lesson in ~/docs/MEMORY.md). Meson 129/129;
+harness `drag/` 21/21. CI on `0b2212a`: Format green; Build ×2 + Lint pending
+at write time. Recipe patch 0002 refreshed from `0b2212a` (sha256 `3110b6e4…`)
++ pins + .SRCINFO; prepare() rehearsal on main@`54abe52` (0002+0003 clean).

@@ -42,7 +42,7 @@ pkgbase = umbriel-git
 	source = 0002-animation-windows-drag-physics-tuning.patch
 	source = 0003-view-floating-release-settle.patch
 	sha256sums = SKIP
-	sha256sums = 3e3edebf753dcb90995749e88bd4db8ecef095557239cde5ad2b866d69eac974
+	sha256sums = 3110b6e497c7f979388a4c78e8d1d9154a7747321831fcb4e01ba6c948abd8b1
 	sha256sums = 1a5b1ce8349f802f007a35cc2c4e4379aba0be578b662e8c03baebed53a20e39
 
 pkgname = umbriel-git

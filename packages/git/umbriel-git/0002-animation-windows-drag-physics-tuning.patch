@@ -1,4 +1,4 @@
-From fe0a87924aa18de549c7ef7b32e0ca3ff7e2f007 Mon Sep 17 00:00:00 2001
+From 0b2212a906dfa31682a592f99d66abd48fbf14e1 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Tue, 20 Oct 2026 20:01:28 +0800
 Subject: [PATCH] feat(animation): windows_drag physics tuning keys
@@ -38,22 +38,49 @@ GCC rejects `Tuning tuning = {}` there, because a nested aggregate's
 default member initializers are not available in a default argument
 inside the enclosing class (only in function bodies).
 
+Review round 3: the stall guard measured its pace wrong. m_tickGapS
+(the previous tick's interval) both exempted the first tick — a stall
+before any cadence was known integrated the whole gap at 240 Hz and left
+the sheet parked mid-deformation — and could be corrupted by the wake
+interval itself: the motion that initiates a sheet lands mid-frame, so
+its first gap is a partial frame, and treating that as the cadence made
+the ordinary next frame read as a stall and cleared the deformation
+early. The guard now measures against the output's refresh period,
+passed per tick (the compositor reads it from the output; unknown
+cadence falls back to the tuned pause alone, from the very first tick),
+and the catch-up is bounded to 1 s per tick so a tolerated pause cannot
+burn the compositor thread. An audit of the same family found the
+released-sheet quiet window crediting whole tick gaps as quiet from a
+single end-of-tick velocity sample — a long frame ending slow mid-ring
+snapped the deformation away; quiet time now accumulates per integration
+step from the velocity actually carried through the motion.
+
+Validated with four new cases pinned to the review reproducers
+(a stall before the first tick settles; the 1 ms wake interval on a 5 Hz
+output no longer clears the deformation on the ordinary 200 ms frame; a
+4.5 s tolerated pause integrates a bounded prefix and stays active; a
+ring's turning point no longer counts its whole gap as quiet), and each
+fix is mutation-attributed: restoring the old guard reddens the three
+guard cases, unbounded catch-up reddens the pause case, the old quiet
+accounting reddens the ring case. Meson units 129/129; harness drag/
+21/21 (drag/physics and drag/physics_edges included).
+
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 ---
- docs/user/animation.md                      | 20 ++++-
- src/config/config.h                         |  8 ++
- src/config/fields_animation.cpp             |  9 ++
- src/view/drag_physics.cpp                   | 69 +++++++++++----
- src/view/drag_physics.h                     | 37 +++++++-
- src/view/view_animation.cpp                 | 11 ++-
- tests/harness/checks/drag/physics_tuning.sh | 98 +++++++++++++++++++++
- tests/unit/config_load.cpp                  | 62 ++++++++++++-
- tests/unit/drag_physics.cpp                 | 39 ++++++++
- 9 files changed, 330 insertions(+), 23 deletions(-)
+ docs/user/animation.md                      |  20 +++-
+ src/config/config.h                         |   8 ++
+ src/config/fields_animation.cpp             |   9 ++
+ src/view/drag_physics.cpp                   |  88 +++++++++++---
+ src/view/drag_physics.h                     |  40 ++++++-
+ src/view/view_animation.cpp                 |  19 ++-
+ tests/harness/checks/drag/physics_tuning.sh |  98 ++++++++++++++++
+ tests/unit/config_load.cpp                  |  62 +++++++++-
+ tests/unit/drag_physics.cpp                 | 122 ++++++++++++++++++++
+ 9 files changed, 439 insertions(+), 27 deletions(-)
  create mode 100755 tests/harness/checks/drag/physics_tuning.sh
 
 diff --git a/docs/user/animation.md b/docs/user/animation.md
-index f989c35..8518c4d 100644
+index f989c35..5a3c91b 100644
 --- a/docs/user/animation.md
 +++ b/docs/user/animation.md
 @@ -86,7 +86,7 @@ effect on that event.
@@ -92,7 +119,7 @@ index f989c35..8518c4d 100644
 +| `coupling` | 100.0 | 0.0 to 10000.0 | Rigidity between neighbouring points; low values make the sheet jelly-like. |
 +| `pointer_response` | 2.0 | 0.0 to 10.0 | How far a pointer motion loads the sheet; 0 keeps the window rigid. |
 +| `max_displacement_px` | 200.0 | 1.0 to 4000.0 | Excursion cap in logical pixels. |
-+| `settle_after_pause_s` | 0.25 | 0.1 to 5.0 | Rendering pause after which the sheet snaps back to rest. It is a frame-stall guard: ordinary frames never trigger it, at any refresh rate. |
++| `settle_after_pause_s` | 0.25 | 0.1 to 5.0 | Rendering pause after which the sheet snaps back to rest. It is a frame-stall guard: a pause must also dwarf the output's own refresh interval, so ordinary frames never trigger it, at any refresh rate. The interval that wakes a sheet is a partial frame and never stands in for that cadence. |
 +
  Only the window's own content deforms; its drop shadow follows that
  deformation within the window's shadow bounds. Re-grabbing a window while it
@@ -137,10 +164,10 @@ index 3c9b8d6..4db29bb 100644
        static const registry::Fields<A> fields{
            boolean("enabled", &A::enabled),
 diff --git a/src/view/drag_physics.cpp b/src/view/drag_physics.cpp
-index 1cbba92..1a2fecb 100644
+index 1cbba92..ffeb9d3 100644
 --- a/src/view/drag_physics.cpp
 +++ b/src/view/drag_physics.cpp
-@@ -5,18 +5,20 @@
+@@ -5,18 +5,27 @@
  
  namespace umbriel {
    namespace {
@@ -159,17 +186,24 @@ index 1cbba92..1a2fecb 100644
      // Below these the sheet reads as at rest, and settling ends the frame stream.
      constexpr float kSettledDisplacement = 0.25F;
      constexpr float kSettledVelocity = 2.5F;
-+    // The stall guard is refresh-rate aware: a gap must dwarf the tick cadence
-+    // as well as the tuned pause, so ordinary frames never settle at any rate.
++    // The stall guard is cadence-aware: a gap must dwarf the output's own
++    // frame cadence as well as the tuned pause, so ordinary frames never
++    // settle at any refresh rate.
 +    constexpr double kStallCadenceMargin = 2.0;
 +    // A released sheet whose motion stays drained below the settle velocity is
 +    // snapped to rest after this quiet window, so degenerate tuning cannot
 +    // schedule frames forever on a static offset or a slow creep.
 +    constexpr double kReleasedQuietS = 0.25;
++    // The most one tick may integrate, in seconds. A tolerated pause (the
++    // tuned threshold can reach 5 s) must not integrate its whole gap at
++    // 240 Hz on the compositor thread; the sheet continues from this bounded
++    // prefix and anything longer is a pause, not simulated motion. It still
++    // covers an ordinary frame at any real output cadence down to 1 Hz.
++    constexpr double kMaxCatchUpS = 1.0;
      // A pointer delta beyond this cannot come from real input; `move()` clamps to it so a single huge,
      // finite delta cannot overflow to inf before `constrain()` gets a chance to bound the result.
      constexpr float kMaxDelta = 1.0e6F;
-@@ -36,17 +38,19 @@ namespace umbriel {
+@@ -36,17 +45,19 @@ namespace umbriel {
      }
    } // namespace
  
@@ -190,7 +224,7 @@ index 1cbba92..1a2fecb 100644
      m_width = std::max(width, 1.0F);
      m_height = std::max(height, 1.0F);
      m_transitionId = transitionId;
-@@ -139,7 +143,7 @@ namespace umbriel {
+@@ -139,7 +150,7 @@ namespace umbriel {
          }
        }
        ratio[axis] = std::max(ratio[axis], 3 * (horizontal + vertical) / (extent * kContraction));
@@ -199,7 +233,7 @@ index 1cbba92..1a2fecb 100644
        for (int i = 0; i < kPoints; ++i) {
          ratio[axis] = std::max(ratio[axis], std::abs(m_displacement[i][axis]) / maxDisplacement);
          ratio[axis] = std::max(ratio[axis], std::abs(m_velocity[i][axis]) / kMaxVelocity);
-@@ -164,24 +168,35 @@ namespace umbriel {
+@@ -164,27 +175,41 @@ namespace umbriel {
      dx = std::clamp(dx, -kMaxDelta, kMaxDelta);
      dy = std::clamp(dy, -kMaxDelta, kMaxDelta);
      for (int i = 0; i < kPoints; ++i) {
@@ -218,18 +252,22 @@ index 1cbba92..1a2fecb 100644
 +    m_slowS = 0;
 +  }
  
-   bool DragPhysics::tick(double seconds) {
+-  bool DragPhysics::tick(double seconds) {
++  bool DragPhysics::tick(double seconds, double cadenceS) {
      if (!m_active || !std::isfinite(seconds) || seconds <= 0) {
        return m_active;
      }
 -    if (seconds > kSettleAfterPause) {
-+    // A frame-stall guard, refresh-rate aware: the gap must dwarf this output's
-+    // own tick cadence as well as the tuned pause, so no in-range value can
-+    // settle on ordinary frames at any refresh rate. The first tick of an
-+    // episode only records the cadence.
++    // A frame-stall guard: the gap must dwarf the output's frame cadence as
++    // well as the tuned pause, so no in-range pause value can settle on
++    // ordinary frames at any refresh rate. The cadence is the output's refresh
++    // period, never the previous tick's interval: the interval that wakes the
++    // sheet is a partial frame (the motion that initiates a sheet sits outside
++    // the frame pacing), so treating it as the pace would make the ordinary
++    // next frame read as a stall and clear the deformation. Without a cadence
++    // the tuned pause alone decides, and it applies from the very first tick.
 +    const bool stalled =
-+        m_tickGapS > 0 && seconds > m_tuning.settleAfterPauseS && seconds > kStallCadenceMargin * m_tickGapS;
-+    m_tickGapS = seconds;
++        seconds > m_tuning.settleAfterPauseS && (cadenceS <= 0 || seconds > kStallCadenceMargin * cadenceS);
 +    if (stalled) {
        m_displacement = {};
        m_velocity = {};
@@ -238,8 +276,12 @@ index 1cbba92..1a2fecb 100644
 +      m_slowS = 0;
        return false;
      }
-     m_remainder += seconds;
-@@ -193,10 +208,11 @@ namespace umbriel {
+-    m_remainder += seconds;
++    m_remainder += std::min(seconds, kMaxCatchUpS);
+     while (m_remainder + 1e-12 >= kStep) {
+       m_remainder -= kStep;
+       Sheet acceleration{};
+@@ -193,10 +218,11 @@ namespace umbriel {
              i % 4 > 0 ? i - 1 : -1, i % 4 < 3 ? i + 1 : -1, i >= 4 ? i - 4 : -1, i < 12 ? i + 4 : -1
          };
          for (int axis = 0; axis < 2; ++axis) {
@@ -253,31 +295,43 @@ index 1cbba92..1a2fecb 100644
              }
            }
          }
-@@ -220,6 +236,23 @@ namespace umbriel {
+@@ -208,6 +234,13 @@ namespace umbriel {
+         }
+       }
+       constrain();
++      // Released-sheet quiet time counts per step, from the velocity actually
++      // carried through the motion. Sampling only the end of a tick would let
++      // a long frame that ends slow mid-ring credit its whole gap as quiet and
++      // clear the deformation early.
++      if (!m_grabbed) {
++        m_slowS = maxVelocity() < kSettledVelocity ? m_slowS + kStep : 0.0;
++      }
+     }
+     m_active = false;
+     for (int i = 0; i < kPoints; ++i) {
+@@ -220,6 +253,21 @@ namespace umbriel {
        m_displacement = {};
        m_velocity = {};
        m_remainder = 0;
-+    } else if (!m_grabbed) {
-+      // A released sheet must end: once its motion stays drained below the
-+      // settle velocity, snap the rest of the deformation away, so degenerate
-+      // tuning cannot schedule frames forever on a static offset or a creep.
-+      // The quiet window keeps a ringing wobble's turning points — where the
-+      // velocity dips briefly — from being cut short.
-+      const bool quiet = maxVelocity() < kSettledVelocity;
-+      m_slowS = quiet ? m_slowS + seconds : 0.0;
-+      if (m_slowS > kReleasedQuietS) {
-+        m_displacement = {};
-+        m_velocity = {};
-+        m_remainder = 0;
-+        m_active = false;
-+        m_slowS = 0;
-+      }
-+    } else {
++      m_slowS = 0;
++    } else if (m_grabbed) {
++      m_slowS = 0;
++    } else if (m_slowS > kReleasedQuietS) {
++      // A released sheet must end: once its motion has stayed drained below
++      // the settle velocity for a whole quiet window, snap the rest of the
++      // deformation away, so degenerate tuning cannot schedule frames forever
++      // on a static offset or a creep. The window keeps a ringing wobble's
++      // turning points — where the velocity dips briefly — from being cut
++      // short, because only genuinely quiet steps accumulate.
++      m_displacement = {};
++      m_velocity = {};
++      m_remainder = 0;
++      m_active = false;
 +      m_slowS = 0;
      }
      return m_active;
    }
-@@ -245,7 +278,9 @@ namespace umbriel {
+@@ -245,7 +293,9 @@ namespace umbriel {
      return displacement;
    }
  
@@ -289,7 +343,7 @@ index 1cbba92..1a2fecb 100644
    float DragPhysics::maxDisplacement() const { return largestComponent(m_displacement); }
  
 diff --git a/src/view/drag_physics.h b/src/view/drag_physics.h
-index 89a6219..789a26d 100644
+index 89a6219..8ebc3e9 100644
 --- a/src/view/drag_physics.h
 +++ b/src/view/drag_physics.h
 @@ -18,10 +18,34 @@ namespace umbriel {
@@ -329,18 +383,22 @@ index 89a6219..789a26d 100644
      // Carries the sheet onto a resized window or a moved grab point: displacements keep their size relative to the
      // window, and the new grab point is pinned.
      void resize(float width, float height, float grabX, float grabY);
-@@ -32,7 +56,9 @@ namespace umbriel {
+@@ -32,8 +56,12 @@ namespace umbriel {
      // Pointer delta in logical pixels since the previous call.
      void move(float dx, float dy);
      void release();
 -    // Advances by `seconds` at a fixed 240 Hz step. A pause over 250 ms settles immediately. Returns active().
+-    bool tick(double seconds);
 +    // Advances by `seconds` at a fixed 240 Hz step. A rendering pause over the
-+    // tuned settle threshold (and well beyond the tick cadence) settles
-+    // immediately. Returns active().
-     bool tick(double seconds);
++    // tuned settle threshold (and well beyond the output's frame cadence)
++    // settles immediately. Returns active().
++    bool tick(double seconds, double cadenceS);
++    // Cadence unknown (no output to read): the tuned pause alone decides.
++    bool tick(double seconds) { return tick(seconds, 0.0); }
      [[nodiscard]] bool active() const { return m_active; }
      [[nodiscard]] bool grabbed() const { return m_grabbed; }
-@@ -51,6 +77,7 @@ namespace umbriel {
+     [[nodiscard]] uint64_t transitionId() const { return m_transitionId; }
+@@ -51,6 +79,7 @@ namespace umbriel {
    private:
      void setGrab(float grabX, float grabY);
      void constrain();
@@ -348,19 +406,18 @@ index 89a6219..789a26d 100644
      Sheet m_displacement{};
      Sheet m_velocity{};
      std::array<float, kPoints> m_weights{};
-@@ -58,6 +85,10 @@ namespace umbriel {
+@@ -58,6 +87,9 @@ namespace umbriel {
      float m_width = 1.0F;
      float m_height = 1.0F;
      double m_remainder = 0.0;
-+    // The previous tick's interval (the output's cadence) and the time the
-+    // released sheet has stayed below the settle velocity.
-+    double m_tickGapS = 0.0;
++    // The time the released sheet has actually spent below the settle velocity,
++    // sampled per integration step inside tick().
 +    double m_slowS = 0.0;
      uint64_t m_transitionId = 0;
      bool m_grabbed = false;
      bool m_active = false;
 diff --git a/src/view/view_animation.cpp b/src/view/view_animation.cpp
-index 8e3ca52..891dd1f 100644
+index 8e3ca52..fb2e7e1 100644
 --- a/src/view/view_animation.cpp
 +++ b/src/view/view_animation.cpp
 @@ -352,9 +352,18 @@ namespace umbriel {
@@ -383,6 +440,21 @@ index 8e3ca52..891dd1f 100644
      );
      return true;
    }
+@@ -913,7 +922,13 @@ namespace umbriel {
+         // The vblank a frame ticks from can precede the instant the sheet woke, so a step never runs backwards.
+         const double elapsed = std::max(0.0, nowMsec - m_dragPhysicsMsec);
+         m_dragPhysicsMsec = std::max(m_dragPhysicsMsec, nowMsec);
+-        active = m_dragPhysics.tick(elapsed / 1000.0) || active;
++        // The stall guard measures against the output's refresh period, never
++        // against the wake-to-first-frame interval: that partial frame sits
++        // outside the output's pacing and must not stand in for it.
++        const Output* output = currentOutput();
++        const int refreshMhz = output != nullptr ? output->wlr()->refresh : 0;
++        const double cadenceS = refreshMhz > 0 ? 1000.0 / refreshMhz : 1.0 / 60.0;
++        active = m_dragPhysics.tick(elapsed / 1000.0, cadenceS) || active;
+       }
+     }
+     syncAnimationEffects();
 diff --git a/tests/harness/checks/drag/physics_tuning.sh b/tests/harness/checks/drag/physics_tuning.sh
 new file mode 100755
 index 0000000..be8d99d
@@ -573,10 +645,10 @@ index 5ef0fa3..3ab7ab5 100644
    const TempConfigTree tree;
    tree.write("a.glsl", "vec4 border(vec2 uv) { return umbriel_sample(uv); }");
 diff --git a/tests/unit/drag_physics.cpp b/tests/unit/drag_physics.cpp
-index 7f68f3e..1ab8509 100644
+index 7f68f3e..7221a2e 100644
 --- a/tests/unit/drag_physics.cpp
 +++ b/tests/unit/drag_physics.cpp
-@@ -277,4 +277,43 @@ UMBRIEL_TEST(aBorderedWindowKeepsTheGrabbedCornerUnderThePointer) {
+@@ -277,4 +277,126 @@ UMBRIEL_TEST(aBorderedWindowKeepsTheGrabbedCornerUnderThePointer) {
    CHECK(contracts(physics, 648, 448));
  }
  
@@ -609,17 +681,100 @@ index 7f68f3e..1ab8509 100644
 +  physics.begin(400, 300, 0.5F, 0.5F, 1, tuning);
 +  for (int i = 0; i < 5; ++i) {
 +    physics.move(4, 0);
-+    physics.tick(0.2);
++    physics.tick(0.2, 0.2);
 +  }
 +  CHECK(physics.active());
 +  CHECK(physics.maxDisplacement() > 0.5F);
 +  // A real stall at that cadence (three frames) snaps the sheet to rest.
-+  physics.tick(0.6);
++  CHECK(!physics.tick(0.6, 0.2));
++  CHECK(!physics.active());
++  CHECK(physics.maxDisplacement() == 0.0F);
++}
++
++UMBRIEL_TEST(aStallBeforeTheFirstTickSettles) {
++  // The gap that opens an episode is a stall candidate too: the guard applies
++  // from the very first tick, measured against the output's cadence. Before
++  // this, m_tickGapS starting at zero exempted the first tick and a 300 ms
++  // stall integrated at 240 Hz, leaving the sheet parked mid-deformation.
++  DragPhysics physics;
++  physics.begin(400, 300, 0.5F, 0.5F, 1);
++  physics.move(60, 20);
++  CHECK(physics.active());
++  CHECK(!physics.tick(0.3, 1.0 / 60));
++  CHECK(!physics.active());
++  CHECK(physics.maxDisplacement() == 0.0F);
++
++  // No output to read a cadence from: the tuned pause alone decides, on the
++  // first tick just the same.
++  DragPhysics blind;
++  blind.begin(400, 300, 0.5F, 0.5F, 2);
++  blind.move(60, 20);
++  CHECK(!blind.tick(0.3, 0.0));
++  CHECK(!blind.active());
++}
++
++UMBRIEL_TEST(aWakeIntervalNeverStandsInForTheCadence) {
++  // The interval that wakes the sheet is a partial frame: the motion that
++  // initiates it can land 1 ms before a vblank even on a 5 Hz output. Using
++  // that interval as the pace made the ordinary 200 ms frame that follows
++  // dwarf it — a false stall that cleared the deformation.
++  DragPhysics::Tuning tuning{};
++  tuning.settleAfterPauseS = 0.1;
++  DragPhysics physics;
++  physics.begin(400, 300, 0.5F, 0.5F, 1, tuning);
++  physics.move(4, 0);
++  CHECK(physics.tick(0.001, 0.2));
++  physics.move(4, 0);
++  CHECK(physics.tick(0.2, 0.2));
++  CHECK(physics.active());
++  CHECK(physics.maxDisplacement() > 0.5F);
++  // A real stall at that cadence (three frames) still snaps to rest.
++  CHECK(!physics.tick(0.6, 0.2));
++  CHECK(physics.maxDisplacement() == 0.0F);
++}
++
++UMBRIEL_TEST(aLongCatchUpWhileTheCadenceIsUnknownStaysBounded) {
++  // A tolerated pause (the tuned threshold reaches 5 s) must not integrate
++  // its whole gap at 240 Hz on one frame: the catch-up is bounded, and the
++  // sheet keeps what the bounded prefix of that pause leaves it with.
++  DragPhysics::Tuning tuning{};
++  tuning.settleAfterPauseS = 5.0;
++  DragPhysics physics;
++  physics.begin(400, 300, 0.5F, 0.5F, 1, tuning);
++  physics.move(60, 20);
++  CHECK(physics.tick(4.5, 0.0));
++  CHECK(physics.active());
++  CHECK(physics.maxDisplacement() > 0.25F);
++}
++
++UMBRIEL_TEST(theQuietWindowDoesNotCreditMovingTimeAsQuiet) {
++  // A released sheet rings slowly (light damping) from a ~0.6 px deformation.
++  // At a turning point an end-of-tick sample reads slow (v ≈ 2 px/s), but the
++  // gap was spent at up to 7 px/s — well over the settle velocity. Quiet time
++  // is what the motion actually spent slow, so the deformation must survive;
++  // crediting the whole gap because its end sample was slow snapped it away
++  // mid-ring (premature clearance).
++  DragPhysics::Tuning tuning{};
++  tuning.damping = 0.8F;
++  tuning.pointerResponse = 0.005F;
++  tuning.settleAfterPauseS = 5.0;
++  DragPhysics physics;
++  physics.begin(400, 300, 0.5F, 0.5F, 1, tuning);
++  physics.move(200, 0);
++  physics.release();
++  CHECK(physics.active());
++  CHECK(physics.tick(0.4, 0.0));
++  CHECK(physics.active());
++  CHECK(physics.maxDisplacement() > 0.25F);
++  // Once the ring really decays, the quiet window still ends the sheet.
++  for (int i = 0; i < 400 && physics.active(); ++i) {
++    physics.tick(0.05, 0.05);
++  }
 +  CHECK(!physics.active());
 +  CHECK(physics.maxDisplacement() == 0.0F);
 +}
 +
  int main() { return RUN_TESTS(); }
 -- 
-2.56.0.186.gc51408889c
+2.56.0.236.g7e34d8174d
 
