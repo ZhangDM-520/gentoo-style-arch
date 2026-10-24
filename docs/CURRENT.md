@@ -231,3 +231,38 @@
   POST-WAVE steps: `sudo gsa -Sy` (store sync) then `sudo pacman -R ananicy-cpp` + install aranicy.
 - Owner: the heavy-core ABI re-bless decision
   (53 moved providers + icu-git's consumer wave); poppler 26.10 landing path.
+
+## 2026-10-25 live state (window v2:9 close)
+- **Core regrouping DEPLOYED** (owner cutoff: 55 named + top-24 by consumer
+  closure; 52 records gained `core`, commit ed1a137 + rule-21(a) hub
+  promotion 2b9cc87). 320 core records; loader clean.
+- **Retry rows GREEN:** zbar (0.23.95-1.1, meson port + legacy python-module
+  artifact shape restored), xorg-xwayland-git (24.1.14.r1234, **real PGO:
+  367 gcda from XTS under headless weston**), xwayland-satellite-git
+  (132s). libcolord-git 1.4.8.r17-2 trimmed to stock libcolord's file set.
+- Walls cleared this stretch (details in NOTE.md 2026-10-25 entries):
+  makepkg find_libprovides artifact-shape (zbar), stock split-rel compat pin
+  (libcolord-git), weston lazy-plugin Tier-2 gaps (5 sonames) + install-seam
+  registry wiring (35bafcc), shelly dead-ABI-rows blocking every wave
+  (removed shelly + 12 rows; backup subscriptions.bak-20261025-shelly),
+  wpewebkit mirror 404 (pacman -Sy).
+- **Deferred (OWNER-GATED): the 524-package heavy-core re-bless wave** —
+  zbar's consumer wave (gstreamer + the 35 parked) plans 524 abi-wave rows
+  incl. llvm-git/rust-git/gcc-snapshot/rust-bindgen-git (coupled-must) +
+  libreoffice-fresh/onlyoffice-git/blender-git/vtk/opencv/jdk-openjdk. Its
+  dry-run is refusal-free now (`gsa -S --leaf --dry-run <parked set>`).
+  gstreamer's mirror issue is fixed; its build rides this wave.
+- Owner questions open: (1) launch/defer the 524 wave; (2) should the
+  pacman PreTransaction hook (tools/abi-need-check.sh) honor the Tier-2
+  registry (it is exclusion-blind by design; weston UPGRADES via manual
+  pacman -Syu will keep hitting it); (3) engine gap: no maintenance verb
+  prunes abi/subscriptions rows for consumers neither installed nor in the
+  topology (the shelly class).
+- Deployed this turn: gsa-pm rebuild carrying 35bafcc (validate the
+  INSTALLED engine after: `gsa --qa-check provides-versioning` + the abi
+  fixture slice).
+## Next action
+- Confirm gsa-pm deploy landed (run `command -v gsa` battery banner + the
+  abi fixture slice green against the INSTALLED engine).
+- When no run is live: `sudo gsa -Md --fix` (binpkg index reconciliation).
+- Owner: the three questions above; poppler 26.10 landing path.
