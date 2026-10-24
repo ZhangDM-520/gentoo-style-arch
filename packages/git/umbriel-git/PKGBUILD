@@ -57,9 +57,11 @@ makedepends=(
 provides=("umbriel=${pkgver}")
 conflicts=('umbriel')
 source=("${_pkgname}::git+${url}.git#branch=main"
-        '0002-animation-windows-drag-physics-tuning.patch')
+        '0002-animation-windows-drag-physics-tuning.patch'
+        '0003-view-floating-release-settle.patch')
 sha256sums=('SKIP'
-            '3e3edebf753dcb90995749e88bd4db8ecef095557239cde5ad2b866d69eac974')
+            '3e3edebf753dcb90995749e88bd4db8ecef095557239cde5ad2b866d69eac974'
+            '1a5b1ce8349f802f007a35cc2c4e4379aba0be578b662e8c03baebed53a20e39')
 
 pkgver() {
   cd "${_pkgname}"
@@ -83,6 +85,12 @@ prepare() {
   # main, rebase the patch with `git format-patch` from its scratch branch
   # when a drift breaks the apply.
   git apply -3 ../0002-animation-windows-drag-physics-tuning.patch
+
+  # Floating drops settle into the grabbable margin at release (animated),
+  # focus changes never reposition floating windows, cross-output restores
+  # and mid-tween usable changes clamp the same margin.
+  # Upstream PR noctalia-dev/umbriel#548; same refresh procedure as 0002.
+  git apply -3 ../0003-view-floating-release-settle.patch
 }
 
 build() {

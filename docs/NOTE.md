@@ -16807,3 +16807,52 @@ System-side retirement (pacman -R ananicy-cpp → install aranicy 0.1.0-1) is de
 while wave 5 holds the pacman mutex ("never manual pacman while gsa live"); it is the first
 post-wave step. The wave's own ananicy-cpp row may still build against the store copy (store sync
 deferred until the wave ends — one-writer rule).
+
+### 2026-10-24 16:55 — umbriel patch 0003: audit holes in the settle invariant (PR #548 round 2)
+The drop-settle workstream (PR noctalia-dev/umbriel#548, draft, branch
+`floating-release-settle`) got its promised audit: the "margin holds by
+construction" claim had two holes, both real and both closed in the same
+branch commit (`71dc363`, amend + force-push of `38d1151`).
+1. **Fractional restores were unclamped.** `restoreFloatingPosition`, the
+   displaced-output restore (server_events.cpp) and the snap restore in
+   `Cursor::finishFloatMove` place proportionally from remembered fractions;
+   on a smaller output the origin resolves outside the grabbable margin and
+   a scale jump can leave the window fully off. Fix: `View::grabbableOrigin`
+   (keepTitleBarReachable ∘ clampFloatingOrigin over the frame) now gates all
+   three placements, and the clamped origin — where the window actually is —
+   is what gets re-anchored.
+2. **The usable-change clamp was spent on in-flight tweens.**
+   `clampFloatingPosition` returned early while `m_posX/m_posY` were
+   animating, so a panel mapping mid-tween consumed the arrange gate's
+   `usableChanged` check and the stale target settled out of frame. Fix: the
+   clamp applies to the tween target and retargets with `animateTo`.
+Validated red-first with two new harness checks (the strut-reload trick does
+NOT work here — `[layout.struts]` shapes floatingMarginArea, not
+`output->usableArea()`, so the gate never fires; only layer-shell exclusive
+zones or output geometry move `usable`):
+- `layout/floating_cross_output_clamp.sh` (outputs=2): a 400x300 float
+  parked at the source margin (x=1205/1280) restores at **1883,323** onto
+  the scale-2 output where the margin asks x ≤ 1845, y ≤ 285 → green after
+  the fix.
+- `layout/floating_clamp_retarget.sh` (outputs=1): a 40px exclusive panel
+  mapping mid-tween settles at **y=-225** where the new margin asks
+  y ≥ -185 → green after the fix.
+Mutation attribution: dropping the restore clamp reddens only the first
+(1883,323); skipping the tween retarget reddens only the second (-325,-225).
+Note: unmaximize restores `m_maximizeRestoreBox` (absolute), not
+`restoredOrigin` — maximize/restore cannot pin hole 1; `window-move-to-output-*`
+(→ `moveViewToWorkspace` = remember + moveToWorkspace + restore) is the
+harness-reachable path.
+Suite: meson units 139/139; full harness 374/379 — the 5 failures
+(animation/drag_toggle, animation/tiled_close_configure_barrier,
+effect/selection, output/two_output_containment, render/title_bar_blur_refocus)
+are the documented pre-existing set. CI: Format red on the first push
+(cursor.cpp line wrap), fixed with clang-format v24 and re-pushed as
+`71dc363`; Format green, Build ×2 pending at write time.
+Recipe: patch 0003 regenerated from `71dc363` (sha256 `1a5b1ce8…`), PKGBUILD
+sha256sums + prepare() comment + .SRCINFO refreshed; prepare() rehearsed on
+main@`54abe52` — 0002 + 0003 both apply cleanly (`git apply -3`). pkgver
+`0.1.0.r1363.54abe52` unchanged (main unmoved). Build+install stays queued
+behind the owner's wave (waiter re-runs `gsa -S --leaf --no-sync --lanes 1
+--jobs 8 --intensity xhigh umbriel-git` when the lane frees); the installed
+`1:0.1.0.r1363.54abe52-1` is the 13:47 build and does NOT contain these fixes.

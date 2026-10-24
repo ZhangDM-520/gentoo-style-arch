@@ -1,4 +1,24 @@
-# Current state — 2026-10-24 12:30 (live snapshot; overwrite, do not append)
+# Current state — 2026-10-24 17:00 (live snapshot; overwrite, do not append)
+
+## umbriel patch 0003 (PR #548): settle invariant audited and closed (2026-10-24)
+- PR noctalia-dev/umbriel#548 (draft, branch `floating-release-settle`, head
+  `71dc363`): drop-settle + arrange gate PLUS the audit round — fractional
+  restores (restoreFloatingPosition, displaced restore, snap restore) now
+  place through `View::grabbableOrigin` (clamped, re-remembered clamped), and
+  `clampFloatingPosition` retargets an in-flight tween instead of spending
+  the usable-change check.
+- Red-first pinned by `layout/floating_cross_output_clamp.sh` (cross-output
+  restore lands 1883,323 vs margin 1845/285 before the fix) and
+  `layout/floating_clamp_retarget.sh` (panel mid-tween settles y=-225 vs
+  -185); each fix mutation-attributed to its check. Meson 139/139; harness
+  374/379 (same 5 pre-existing failures). CI: Format green on `71dc363`,
+  Build ×2 pending at snapshot time.
+- Recipe patch 0003 regenerated from `71dc363` (sha256 `1a5b1ce8…`) with
+  PKGBUILD pins + .SRCINFO; prepare() rehearsal on main@`54abe52` applies
+  0002+0003 cleanly. pkgver `0.1.0.r1363.54abe52` unchanged (main unmoved).
+- Build+install queued behind the owner's wave (existing waiter: `gsa -S
+  --leaf --no-sync --lanes 1 --jobs 8 --intensity xhigh umbriel-git`);
+  installed `1:0.1.0.r1363.54abe52-1` (13:47) predates these fixes.
 
 ## umbriel patch 0002 review round landed, CI green (2026-10-24)
 - PR noctalia-dev/umbriel#508 Talia P2s fixed in `a12511c`: issue 1 =
