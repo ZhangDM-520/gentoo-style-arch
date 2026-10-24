@@ -16929,3 +16929,36 @@ sight, and the owner chose to retire the package rather than pin a zig or port i
 `packages/deprecated/shelly/` (reserved, out of the namespaces the loader scans), topology record
 commented with the rationale, DEPRECATED banner in the PKGBUILD. The installed shelly 3.1.6 keeps
 working; the package leaves the update waves.
+
+## 2026-10-25 — core regrouping (owner cutoff: 55 named + top-24 closure)
+
+**Owner call (2026-10-25):** the deliberate heavy-core exclusion is an error —
+move the 53 moved providers + icu-git + bind into `core`; expand core with the
+large ABI providers ranked by consumer closure. Cutoff = **top 24 by closure**
+(owner-picked), metric = consumer closure. Regroup set = 55 named ∪ top-24 =
+79 names (zero overlap); 27 were already `core` (icu-git, curl, sqlite,
+util-linux, poppler, …), **52 records edited** in `config/topology.conf`
+(groups field only — `core` appended in canonical position, other groups and
+edges untouched).
+
+- Named-53 source of truth: the 2026-10-23 probe (binpkg.jsonl newest-row
+  abi_token vs `abi/subscriptions` `:=` records) — /tmp/moved-53.txt is gone,
+  the list was recovered from the window-v2:8 checkpoint (count-verified 53).
+  A same-rule re-probe today yields only 19 (state drifted: post-wave
+  registrations/prunes) — historical membership is the owner's scope, not a
+  fresh probe.
+- Top-24 by closure: tar(396) libngtcp2-git(377) libuv-git(369) libpwquality
+  libmicrohttpd-git(226) libgit2-git(155) libxft-git(149) libthai(149)
+  libcloudproviders(135) libxxf86vm(129) lynx(108) libwacom(104) libice(88)
+  libb2-git(88) libldacdec(46) libcamera-git(46) jbig2dec(43) freeglut(43)
+  libzip-git(41) libultrahdr-git(41) libraqm-git(41) liblqr(41) djvulibre(41)
+  graphviz(38).
+- Validation: installed `gsa -Sl @core` from the dev tree — loader clean,
+  rc=0, selection 635 in build order (320 core records: 268 pre + 52).
+
+**Wave-11 follow-up (run 1792862619, closed 6 ok / 2 failed):** zbar failed on
+the pre-port recipe (meson port b507484 landed 01:35:32, store fetch was
+01:20:58 — retry needs a store refresh). xorg-xwayland-git wall changed class:
+not a stale sync DB but `libcolord-git` ↔ `libcolord` conflict — weston (repo,
+makedepends for XTS) pulls repo libcolord, the pacman shim cannot answer the
+"Remove libcolord-git?" prompt (sudo -n never prompts).
