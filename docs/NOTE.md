@@ -16856,3 +16856,15 @@ main@`54abe52` — 0002 + 0003 both apply cleanly (`git apply -3`). pkgver
 behind the owner's wave (waiter re-runs `gsa -S --leaf --no-sync --lanes 1
 --jobs 8 --intensity xhigh umbriel-git` when the lane frees); the installed
 `1:0.1.0.r1363.54abe52-1` is the 13:47 build and does NOT contain these fixes.
+
+**17:05 addendum — the post-wave waiter fired early (gate flaw).** The queued
+build waiter gated on `pgrep -f "release/gs[a]"` — which matches only the
+dev-tree binary path, not the wave's `/usr/bin/gsa`, and makepkg rows have
+gaps — so it treated the live wave as free. `gsa -Sy` synced the store to
+`c171c82` mid-wave (the one-writer sync deferral, broken; store tree verified
+clean afterwards, and the version-sync refusals restored their recipes
+byte-for-byte), and the build itself was refused fail-closed by gsa's
+`run.lock` (`startup-refused`, nothing built). Replacement waiter
+`/tmp/umbriel-git-postwave2.sh` gates on process NAMES (`pgrep -x gsa /
+makepkg / pacman`) with a stability double-check; build+install still pending
+behind the wave. Pitfall recorded in ~/docs/MEMORY.md.
