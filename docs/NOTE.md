@@ -16896,3 +16896,29 @@ ninja mtimes — ODR-skewed garbage, lesson in ~/docs/MEMORY.md). Meson 129/129;
 harness `drag/` 21/21. CI on `0b2212a`: Format green; Build ×2 + Lint pending
 at write time. Recipe patch 0002 refreshed from `0b2212a` (sha256 `3110b6e4…`)
 + pins + .SRCINFO; prepare() rehearsal on main@`54abe52` (0002+0003 clean).
+
+### 2026-10-24 19:40 — umbriel patch 0003 round 3: abandoned drags lost their margin settle (PR #548)
+Talia review 5637877117 (P2) caught a real leakage in the settle invariant: the
+release settle in `Cursor::finishFloatMove` was the ONLY correction for where a
+drag parks a window, but float drags can end outside the drop path —
+`resetMode()` (session lock mid-drag resets the grab on the next motion;
+`finishToplevelDrag(false)` and `ToplevelDragManager::detach` funnel through
+it) restores presentation but not position. With `[animation.windows_drag]
+physics = false`, `setDragPosition(updateTarget=true)` had already moved the
+layout target, so a float shoved mostly out of frame stayed there: the arrange
+gate (this PR's) no longer re-clamps on unrelated arranges, so nothing repaired
+it until the next usable-area change. Fix (`1c151cf`, amend of `71dc363`,
+rebased onto main@`2c41d38`): every drag ending settles like a drop —
+`View::settleFloatingDrop` (shared with finishFloatMove) runs from resetMode
+for the floating view it abandons.
+Pinned red-first by `drag/abandoned_float_settle.sh`: a 400x300 float shoved
+to x=-393 (7px visible of 400) and abandoned by a session lock mid-drag stays
+there through release (margin asks x >= -325) → green after the fix. Meson
+units green; full harness 375/380 (same 5 pre-existing). Audit note for the
+reply: an abandoned TILED drag leaves the view `layoutDetach`ed with no re-drop
+— pre-existing (the pre-gate arrange treated it as an unclamped phantom), out
+of this PR's margin scope, worth its own fix.
+Recipe patch 0003 refreshed from `1c151cf` (sha256 `a70a3b64…`) + pins +
+.SRCINFO; prepare() rehearsal on main@`2c41d38` (0002+0003 clean). The
+post-wave build (waiter3) had already installed `1:0.1.0.r1364.2c41d38-1` —
+built WITHOUT this fix; a rebuild follows this commit while the lane is free.

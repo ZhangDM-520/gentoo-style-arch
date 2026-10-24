@@ -1,4 +1,19 @@
-# Current state — 2026-10-24 17:00 (live snapshot; overwrite, do not append)
+# Current state — 2026-10-24 19:45 (live snapshot; overwrite, do not append)
+
+## umbriel patch 0003 (PR #548): abandoned drags settle like drops (2026-10-24)
+- Talia review 5637877117 (P2) — the release settle was the only correction
+  for where a drag parks a window; `resetMode()` endings (session lock
+  mid-drag, toplevel-drag detach, `finishToplevelDrag(false)`) restored
+  presentation but not position, so a float shoved out of frame stayed there
+  with the arrange gate no longer re-clamping. Fixed in `1c151cf` (amend of
+  `71dc363`, rebased onto main@`2c41d38`): `View::settleFloatingDrop` (shared
+  with finishFloatMove) runs from resetMode for the abandoned float.
+- Red-first: `drag/abandoned_float_settle.sh` (float at x=-393, 7px visible,
+  abandoned by session lock; margin x >= -325) red on the old head, green
+  after. Meson green; harness 375/380 (same 5 pre-existing).
+- Recipe patch 0003 refreshed from `1c151cf` (sha256 `a70a3b64…`) + pins
+  (pkgver `0.1.0.r1364.2c41d38` — main moved) + .SRCINFO; prepare() rehearsal
+  on main@`2c41d38` (0002+0003 clean). CI on `1c151cf` pending at snapshot.
 
 ## umbriel patch 0003 (PR #548): settle invariant audited and closed (2026-10-24)
 - PR noctalia-dev/umbriel#548 (draft, branch `floating-release-settle`, head

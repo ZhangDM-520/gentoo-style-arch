@@ -8,7 +8,7 @@ source "$startdir/../../../lib/pgo.sh"
 
 pkgname=umbriel-git
 _pkgname=umbriel
-pkgver=0.1.0.r1363.54abe52
+pkgver=0.1.0.r1364.2c41d38
 pkgrel=1
 epoch=1
 pkgdesc='A Wayland compositor built on wlroots'
@@ -61,7 +61,7 @@ source=("${_pkgname}::git+${url}.git#branch=main"
         '0003-view-floating-release-settle.patch')
 sha256sums=('SKIP'
             '3110b6e497c7f979388a4c78e8d1d9154a7747321831fcb4e01ba6c948abd8b1'
-            '1a5b1ce8349f802f007a35cc2c4e4379aba0be578b662e8c03baebed53a20e39')
+            'a70a3b648953c15863cf691cba1b658827a56553fd4ddac4f9654737c7dbcc35')
 
 pkgver() {
   cd "${_pkgname}"
