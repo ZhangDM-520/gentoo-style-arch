@@ -12,7 +12,13 @@ url="https://www.freedesktop.org/software/colord/"
 license=('GPL-2.0-or-later')
 depends=('glib2' 'glibc' 'lcms2' 'libgcc' 'systemd-libs')
 makedepends=('git' 'gobject-introspection' 'libgusb' 'libgudev' 'meson' 'ninja' 'sqlite')
-provides=("libcolord=$pkgver" 'libcolord.so' 'libcolordcompat.so')
+# 'libcolord=1.4.8-2' is a COMPAT PIN for the stock split-package pin:
+# repo colord depends on `libcolord=1.4.8-2` (exact rel) and pacman matches
+# versioned deps against provide versions exactly, so without this token a
+# plain `colord` install (weston's runtime dep) drags repo libcolord, which
+# conflicts with this package and the non-interactive pacman shim cannot
+# answer the removal prompt. Bump the pin when repo colord's rel moves.
+provides=("libcolord=$pkgver" "libcolord=1.4.8-2" 'libcolord.so' 'libcolordcompat.so')
 conflicts=('libcolord')
 source=("git+https://github.com/hughsie/${_pkgname}")
 b2sums=('SKIP')
