@@ -1,6 +1,6 @@
 pkgbase = loupe
 	pkgdesc = A simple image viewer for GNOME
-	pkgver = 51.0
+	pkgver = 51.1
 	pkgrel = 1.1
 	url = https://apps.gnome.org/Loupe/
 	arch = x86_64
@@ -25,8 +25,8 @@ pkgbase = loupe
 	depends = libgcc
 	depends = libgweather-4
 	depends = libseccomp
-	source = git+https://gitlab.gnome.org/GNOME/loupe.git?signed#tag=51.0
+	source = git+https://gitlab.gnome.org/GNOME/loupe.git?signed#tag=51.1
 	validpgpkeys = 4587A0EE1EE5478AAB82C0A93BA28A5559F08EBD
-	b2sums = d7c3d96b5f9290dbe862cf65277f41eb66f410156003acf55f2c4ddead997b67cc3de359dbfe0d80f6e4b5cc77028a643e70ccd76271f960bb4b9c217f583d07
+	b2sums = 22ac1b3668985c94799884b80af185046ae50fc0ae4b9179204fb4d6a2a007508d18c4c97fc9b965d18d578876cf29d35893b5a65711c589d40ebda4f2fcf65e
 
 pkgname = loupe
