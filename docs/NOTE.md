@@ -17138,3 +17138,28 @@ in order; the 0003 refresh was fully validated before push (meson units,
 harness 386/389 — the 3 failures are the documented pre-existing set).
 Rebuild: `gsa -Sy` + `gsa -S --leaf --no-sync --lanes 1 --jobs 8 --intensity
 xhigh umbriel-git` queued right after this commit.
+
+## 2026-10-25 — bettbox's eternal sync-refused decoded: TOML literal strings
+
+Owner report: `sudo gsa -S @app` refused the WHOLE run (59 pkgs) on
+bettbox's `sync-refused`, and `-Sy` restored bettbox "byte-for-byte" every
+time — the manual workaround was editing pkgver in the dev checkout and
+running makepkg by hand. Root cause: `toml_str_value` (crates/gsa-recipe/
+src/sync.rs) stripped only `"…"` pairs; `.nvchecker.toml` files may legally
+spell values as TOML literal strings `'…'` — bettbox's `source = 'git'`
+reached `provider_identity` as `'git'`, matched no provider family, and
+flew off the "unsupported version provider source ''git''" branch (the
+doubled quotes in the message were the tell). zen-browser-pgo
+(`source = 'github'`) had the identical defect; 8 more recipes use literal
+strings but are not tagged version-sync=nvchecker. Fix: strip a MATCHING
+pair of either quote style (mixed/unbalanced stays literal). Mutation-
+probed: the new sync::tests reproduce bettbox's production error verbatim
+against the old parser and classify both real configs after.
+
+Adjacent findings NOT fixed here (owner's call):
+- sqlite has no version-sync tag (ArchOfficial anchor) and stops with an
+  `integrity-stop` disagreement (file/want/got in the report rows) — a
+  recipe-vs-Arch reconciliation, not the quote bug.
+- Run policy: one sync-refused recipe refuses the ENTIRE -S run at startup
+  (fail-closed §G.1). With the parser fixed the two known refusals clear,
+  but the next genuine sync refusal will again block every sibling row.

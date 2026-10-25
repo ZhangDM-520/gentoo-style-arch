@@ -1345,6 +1345,16 @@
     under the mount shadow but survive), `fsck.f2fs -a <dev>`, mount,
     copy the rescues into `pkgs/`, `sudo gsa -Md --fix`, then re-measure
     anything previously called blind. (last reviewed 2026-10-23)
+63. **A version-sync rewrite is volatile store state — rescue it before the
+    next `-Sy`** (2026-10-25, measured): the sync pass leaves its recipe
+    rewrites UNCOMMITTED in the canonical store (rule 18), and the store is
+    `git fetch origin HEAD` + `reset --hard` on every `-Sy` — so a second
+    sync (or the next store refresh) DESTROYS pending output byte-for-byte
+    (observed: bettbox 1.19.7 rewrite wiped by a concurrent `gsa -Sy
+    zen-browser-pgo`). Workflow: one sync at a time; copy the rewritten
+    PKGBUILD/.SRCINFO into the dev tree and commit IMMEDIATELY; verify a
+    fetch-only sum with an independent download before the commit review.
+    (last reviewed 2026-10-25)
 
 ## 2. Workspace overview
 
