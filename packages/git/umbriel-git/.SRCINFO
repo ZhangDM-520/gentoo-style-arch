@@ -40,7 +40,9 @@ pkgbase = umbriel-git
 	options = lto
 	source = umbriel::git+https://github.com/noctalia-dev/umbriel.git#branch=main
 	source = 0008-strip-travel-scale.patch
+	source = 0009-hot-corner-overview.patch
 	sha256sums = SKIP
 	sha256sums = 03258711f3a2afdcd53dc3cff3a90180e97b4297e59245604d087826ee37581c
+	sha256sums = 2600cb2ce8eee8f06f6d7cf557d862d139751091210e002ee7d818c6ec911fff
 
 pkgname = umbriel-git

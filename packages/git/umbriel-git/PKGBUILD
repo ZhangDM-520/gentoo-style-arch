@@ -57,9 +57,11 @@ makedepends=(
 provides=("umbriel=${pkgver}")
 conflicts=('umbriel')
 source=("${_pkgname}::git+${url}.git#branch=main"
-        '0008-strip-travel-scale.patch')
+        '0008-strip-travel-scale.patch'
+        '0009-hot-corner-overview.patch')
 sha256sums=('SKIP'
-            '03258711f3a2afdcd53dc3cff3a90180e97b4297e59245604d087826ee37581c')
+            '03258711f3a2afdcd53dc3cff3a90180e97b4297e59245604d087826ee37581c'
+            '2600cb2ce8eee8f06f6d7cf557d862d139751091210e002ee7d818c6ec911fff')
 
 pkgver() {
   cd "${_pkgname}"
@@ -92,6 +94,14 @@ prepare() {
   # stack, and the main-based variant returns rebased when that thread
   # restarts.)
   git apply -3 ../0008-strip-travel-scale.patch
+
+  # Hot corners fire while the overview is open: the modal gate no longer
+  # swallows corners behind the shell's exclusive-keyboard overview chrome
+  # (Noctalia's type-to-launch capture), while a real modal on the desktop, a
+  # closing overview, and fullscreen suppression stay suppressed. Upstream PR
+  # noctalia-dev/umbriel#568; same refresh procedure. (Retire on merge: 0008 →
+  # PR #566, 0009 → PR #568.)
+  git apply -3 ../0009-hot-corner-overview.patch
 }
 
 build() {
