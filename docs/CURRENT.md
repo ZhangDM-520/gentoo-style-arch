@@ -1,4 +1,23 @@
-# Current state — 2026-10-26 00:25 (live snapshot; overwrite, do not append)
+# Current state — 2026-10-26 01:35 (live snapshot; overwrite, do not append)
+
+## umbriel: per-axis travel scales (PR #566) + hot-corner PR #568 (2026-10-26)
+- PR #566 (`[input.gesture] travel_scale_horizontal/_vertical`, closes #552):
+  per-axis redesign after live testing (single strip scale only fixed one
+  axis); each axis's scale governs strip pans AND workspace switches on the
+  desktop and in the overview alike. Internal review APPROVE + 1 LOW
+  (axis→role mapping glue) fixed via shared `axisTravelScale` helper +
+  four-config unit pins. Head `7bde8081`, CI fully green (Lint 7m11s),
+  MERGEABLE. External review brief dispatched
+  (`/tmp/review-552-strip-travel-scale.md` → report in the journal tree).
+- Recipe 0008 refreshed from `7bde8081` (sha256 `03258711…`, 11 files
+  +146/-7), pkgver `0.1.0.r1394.fd0a6e9` pkgrel 1; real-apply rehearsal on
+  main@`fd0a6e9` clean. Rebuild/install pending at snapshot.
+- Issue #558 (hot corners dead in the overview) FIXED and approved →
+  PR noctalia-dev/umbriel#568 (`be07fc3f`, closes #558): modal gate exempts
+  `overview()->interactive()`; red-first `overview/hot_corner.sh` incl. the
+  closing-phase pin (2s close, mid-close suppression, recovery) and both
+  mutation probes. Design-B residual (any exclusive layer during an
+  interactive overview no longer blocks corners) documented in keybinds.md.
 
 ## umbriel: PR #566 recipe sync, #556 merged, #558 hot-corner fix pushed (2026-10-26)
 - PR #556 (`hover_raises`) MERGED upstream as `e57420b0` — patch 0004 retired

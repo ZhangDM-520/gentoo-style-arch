@@ -8,7 +8,7 @@ source "$startdir/../../../lib/pgo.sh"
 
 pkgname=umbriel-git
 _pkgname=umbriel
-pkgver=0.1.0.r1393.77ec5ae
+pkgver=0.1.0.r1394.fd0a6e9
 pkgrel=1
 epoch=1
 pkgdesc='A Wayland compositor built on wlroots'
@@ -59,7 +59,7 @@ conflicts=('umbriel')
 source=("${_pkgname}::git+${url}.git#branch=main"
         '0008-strip-travel-scale.patch')
 sha256sums=('SKIP'
-            'e69da4ea760264bae6280b0d69fbf1ca0c43452a35e0ae21be0c3912c88798b9')
+            '03258711f3a2afdcd53dc3cff3a90180e97b4297e59245604d087826ee37581c')
 
 pkgver() {
   cd "${_pkgname}"
@@ -77,10 +77,11 @@ pkgver() {
 prepare() {
   cd "${_pkgname}"
 
-  # [input.gesture] strip_travel_scale: three-finger swipes pan the scrolling
-  # strip and overview previews at a configured travel (below 1.0 covers less
-  # ground per swipe) without touching pointer speed; workspace travel stays
-  # fixed. Upstream PR noctalia-dev/umbriel#566; while the recipe tracks
+  # [input.gesture] travel_scale_horizontal/_vertical: three-finger swipes
+  # move content along each axis at a configured travel (strip pans and
+  # workspace switches, desktop and overview alike; below 1.0 covers less
+  # ground per swipe) without touching pointer speed. Upstream PR
+  # noctalia-dev/umbriel#566; while the recipe tracks
   # upstream main, rebase the patch with `git format-patch` from its scratch
   # branch when a drift breaks the apply. (0002, PR #508's windows_drag physics
   # tuning, merged upstream e045d637 and retired; 0003, PR #548's floating

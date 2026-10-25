@@ -17328,3 +17328,21 @@ Mechanics notes (two lessons reinforced):
   units clean. Pushed `fork/hot-corner-overview` @ `a6722475`; finding
   commented on #558 (issuecomment-6399979288). Held for the maintainer's go
   on the code-review agent before the PR.
+
+
+### 2026-10-26 01:35 — umbriel: per-axis travel scales settled + recipe 0008 refresh; hot-corner PR #568
+- PR #566 head `7bde8081` (per-axis `travel_scale_horizontal/_vertical` +
+  shared `axisTravelScale` mapping helper with four-config pins) — CI fully
+  green (Build ×2, Docs format, Format, Lint 7m11s), MERGEABLE vs
+  main@`fd0a6e9`. Review-workflow CONVENTION set by the maintainer: ONE depth
+  per code-ready cycle (code ready → review → fix all findings → pass; fixes
+  never re-reviewed) — recorded in ~/docs/umbriel/MEMORY.md.
+- Recipe 0008 refreshed from `7bde8081` (sha256 `03258711…`; the old
+  single-key `e69da4ea…` content is superseded), pkgver
+  `0.1.0.r1394.fd0a6e9` pkgrel 1 + .SRCINFO; real-apply rehearsal on
+  main@`fd0a6e9` clean (11 files, +146/-7).
+- #558 hot-corner fix approved and opened as PR noctalia-dev/umbriel#568
+  (`be07fc3f`, closes #558) — template body with the full red/mutation
+  evidence; design-B residual documented. External review brief for the
+  travel-scale work dispatched to `/tmp/review-552-strip-travel-scale.md`
+  (report lands in the journal tree).
