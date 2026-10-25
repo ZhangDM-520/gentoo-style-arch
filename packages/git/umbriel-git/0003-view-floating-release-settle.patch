@@ -1,4 +1,4 @@
-From 1c151cf90110b6a463d384cf9429603e4b24eecf Mon Sep 17 00:00:00 2001
+From 78303581deaa3d4afb640145a41391760d623bdc Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Sat, 24 Oct 2026 15:55:44 +0800
 Subject: [PATCH] fix(view): settle floating drops into frame at release, never
@@ -79,7 +79,7 @@ after the settle. Meson units and the full harness 375/380 unchanged
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 ---
- docs/user/input.md                            |   6 +
+ docs/user/input.md                            |   2 +
  src/input/cursor.cpp                          |  23 ++-
  src/server/server_events.cpp                  |  12 +-
  src/view/view.h                               |   7 +
@@ -90,31 +90,27 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
  .../checks/drag/floating_release_settle.sh    | 142 ++++++++++++++++++
  .../checks/layout/floating_clamp_retarget.sh  |  86 +++++++++++
  .../layout/floating_cross_output_clamp.sh     | 101 +++++++++++++
- 11 files changed, 524 insertions(+), 20 deletions(-)
+ 11 files changed, 520 insertions(+), 20 deletions(-)
  create mode 100755 tests/harness/checks/drag/abandoned_float_settle.sh
  create mode 100755 tests/harness/checks/drag/floating_release_settle.sh
  create mode 100755 tests/harness/checks/layout/floating_clamp_retarget.sh
  create mode 100755 tests/harness/checks/layout/floating_cross_output_clamp.sh
 
 diff --git a/docs/user/input.md b/docs/user/input.md
-index f6b36fe..f6418cd 100644
+index 8cf4428a..f42b77df 100644
 --- a/docs/user/input.md
 +++ b/docs/user/input.md
-@@ -61,6 +61,12 @@ the window while keeping it in the layout. It detaches only after the pointer
- crosses the drag threshold. Holding or releasing a stationary press preserves
- the spacing between windows, including while applications repaint.
+@@ -27,6 +27,8 @@ Title bar presses keep the normal cursor until the pointer crosses a threshold o
  
-+Dropping a floating window settles it into the usable area with the move
-+animation: however far out of frame it was dragged, at release it glides back
-+until at least a quarter of the window (10 to 75 logical pixels) is visible.
-+Nothing else moves a floating window that is already inside that margin —
-+focus changes included.
+ In tiled layouts, pressing a client-side or Umbriel title bar focuses and reveals the window while keeping it in the layout. It detaches only after the pointer crosses the drag threshold. Holding or releasing a stationary press preserves the spacing between windows, including while applications repaint.
+ 
++Dropping a floating window settles it into the usable area with the move animation: however far out of frame it was dragged, at release it glides back until at least a quarter of the window (10 to 75 logical pixels) is visible. Nothing else moves a floating window that is already inside that margin — focus changes included.
 +
- Mod+right-click drags a window's resize edge. `mod_right_double_click` gives a
- second Mod+right-click on the same window a job beyond resizing:
+ Mod+right-click drags a window's resize edge. `mod_right_double_click` gives a second Mod+right-click on the same window a job beyond resizing:
  
+ | Value        | Behavior                                                                                                                                                                                                                                                                                   |
 diff --git a/src/input/cursor.cpp b/src/input/cursor.cpp
-index 7b5986c..e508d53 100644
+index 85b4c292..a1e1f35a 100644
 --- a/src/input/cursor.cpp
 +++ b/src/input/cursor.cpp
 @@ -1292,6 +1292,13 @@ namespace umbriel {
@@ -131,7 +127,7 @@ index 7b5986c..e508d53 100644
      }
      // Resize scaling belongs to the grab, including every sibling tile it resizes. Clear it before restoring clips:
      // an unchanged clip otherwise keeps the scaled source/destination until the client commits again.
-@@ -2976,23 +2983,25 @@ namespace umbriel {
+@@ -2984,23 +2991,25 @@ namespace umbriel {
        }
      }
      // Commit the final position after any workspace transfer, including drags whose target was deferred until
@@ -165,10 +161,10 @@ index 7b5986c..e508d53 100644
      }
      m_server->focusView(view, FocusReason::DragDrop);
 diff --git a/src/server/server_events.cpp b/src/server/server_events.cpp
-index 148097d..32936c5 100644
+index b24fabfd..0a9dfe3a 100644
 --- a/src/server/server_events.cpp
 +++ b/src/server/server_events.cpp
-@@ -3375,10 +3375,14 @@ namespace umbriel {
+@@ -3386,10 +3386,14 @@ namespace umbriel {
            const wlr_box outputBox = target->layoutBox();
            if (outputBox.width > 0 && outputBox.height > 0) {
              view->cancelPositionAnimation();
@@ -188,10 +184,10 @@ index 148097d..32936c5 100644
          } else if (floating && moved) {
            view->restoreFloatingPosition(true);
 diff --git a/src/view/view.h b/src/view/view.h
-index 0c00f81..81553d2 100644
+index 1f844b6b..7fa5b736 100644
 --- a/src/view/view.h
 +++ b/src/view/view.h
-@@ -357,6 +357,13 @@ namespace umbriel {
+@@ -358,6 +358,13 @@ namespace umbriel {
      void setDragPosition(int x, int y, bool updateTarget);
      // Keep at least clamp(size / 4, 10, 75) pixels per axis on-screen.
      void clampFloatingPosition();
@@ -206,7 +202,7 @@ index 0c00f81..81553d2 100644
      // Animates, settling with the presented size.
      void clampFloatingPositionForSize(int width, int height);
 diff --git a/src/view/view_floating.cpp b/src/view/view_floating.cpp
-index bd6fd03..531950e 100644
+index bd6fd033..531950e8 100644
 --- a/src/view/view_floating.cpp
 +++ b/src/view/view_floating.cpp
 @@ -86,6 +86,22 @@ namespace umbriel {
@@ -278,7 +274,7 @@ index bd6fd03..531950e 100644
        return;
      }
 diff --git a/src/workspace/workspace.cpp b/src/workspace/workspace.cpp
-index 5786b18..0382863 100644
+index 41174fdc..9c5ccf4c 100644
 --- a/src/workspace/workspace.cpp
 +++ b/src/workspace/workspace.cpp
 @@ -990,6 +990,15 @@ namespace umbriel {
@@ -297,7 +293,7 @@ index 5786b18..0382863 100644
  
      // Fullscreen and floating views position themselves. Established tiled members share windows_move below, while an
      // opening tiled lifecycle view is presented directly at its final slot.
-@@ -1016,7 +1025,9 @@ namespace umbriel {
+@@ -1018,7 +1027,9 @@ namespace umbriel {
  
        if (m_layout->columnOf(view) < 0) {
          // Floating (non-fullscreen): clip + enable against the home output.
@@ -309,7 +305,7 @@ index 5786b18..0382863 100644
        }
      }
 diff --git a/src/workspace/workspace.h b/src/workspace/workspace.h
-index bf94817..a24f802 100644
+index bf948170..a24f802a 100644
 --- a/src/workspace/workspace.h
 +++ b/src/workspace/workspace.h
 @@ -328,6 +328,10 @@ namespace umbriel {
@@ -325,7 +321,7 @@ index bf94817..a24f802 100644
      // changed.
 diff --git a/tests/harness/checks/drag/abandoned_float_settle.sh b/tests/harness/checks/drag/abandoned_float_settle.sh
 new file mode 100755
-index 0000000..937f926
+index 00000000..937f926c
 --- /dev/null
 +++ b/tests/harness/checks/drag/abandoned_float_settle.sh
 @@ -0,0 +1,107 @@
@@ -438,7 +434,7 @@ index 0000000..937f926
 +echo "the abandoned drag settled into the grabbable margin"
 diff --git a/tests/harness/checks/drag/floating_release_settle.sh b/tests/harness/checks/drag/floating_release_settle.sh
 new file mode 100755
-index 0000000..4acaf6a
+index 00000000..4acaf6a1
 --- /dev/null
 +++ b/tests/harness/checks/drag/floating_release_settle.sh
 @@ -0,0 +1,142 @@
@@ -586,7 +582,7 @@ index 0000000..4acaf6a
 +echo "a floating window settles into the margin at release, animated, and focus never moves it"
 diff --git a/tests/harness/checks/layout/floating_clamp_retarget.sh b/tests/harness/checks/layout/floating_clamp_retarget.sh
 new file mode 100755
-index 0000000..7a7b01f
+index 00000000..7a7b01fb
 --- /dev/null
 +++ b/tests/harness/checks/layout/floating_clamp_retarget.sh
 @@ -0,0 +1,86 @@
@@ -678,7 +674,7 @@ index 0000000..7a7b01f
 +echo "the usable change retargeted the tween into the new grabbable margin"
 diff --git a/tests/harness/checks/layout/floating_cross_output_clamp.sh b/tests/harness/checks/layout/floating_cross_output_clamp.sh
 new file mode 100755
-index 0000000..8d0b559
+index 00000000..8d0b5596
 --- /dev/null
 +++ b/tests/harness/checks/layout/floating_cross_output_clamp.sh
 @@ -0,0 +1,101 @@

@@ -8,7 +8,7 @@ source "$startdir/../../../lib/pgo.sh"
 
 pkgname=umbriel-git
 _pkgname=umbriel
-pkgver=0.1.0.r1368.679f4fb
+pkgver=0.1.0.r1385.65bd2f1
 pkgrel=1
 epoch=1
 pkgdesc='A Wayland compositor built on wlroots'
@@ -57,13 +57,11 @@ makedepends=(
 provides=("umbriel=${pkgver}")
 conflicts=('umbriel')
 source=("${_pkgname}::git+${url}.git#branch=main"
-        '0002-animation-windows-drag-physics-tuning.patch'
         '0003-view-floating-release-settle.patch'
         '0004-hover-raise-on-click.patch')
 sha256sums=('SKIP'
-            '3110b6e497c7f979388a4c78e8d1d9154a7747321831fcb4e01ba6c948abd8b1'
-            'a70a3b648953c15863cf691cba1b658827a56553fd4ddac4f9654737c7dbcc35'
-            'c6113bce0c8a391b2244243e72641259fd3ad4bf719e4e7b6f382d7de297f01d')
+            '571594a1f7b8965d57deb337513bf315668a64bd1eb702a576d35a37c01f8ada'
+            'e0b8d5f5e175bac6c0d4a7cc26bd5a577f20f15630efbf0874277a925a113b22')
 
 pkgver() {
   cd "${_pkgname}"
@@ -81,18 +79,13 @@ pkgver() {
 prepare() {
   cd "${_pkgname}"
 
-  # [animation.windows_drag] physics tuning keys (stiffness, damping,
-  # coupling, pointer_response, max_displacement_px, settle_after_pause_s)
-  # plus the cadence-aware stall guard (measured against the output refresh
-  # period, bounded catch-up). Upstream PR noctalia-dev/umbriel#508; while the
-  # recipe tracks upstream main, rebase the patch with `git format-patch` from
-  # its scratch branch when a drift breaks the apply.
-  git apply -3 ../0002-animation-windows-drag-physics-tuning.patch
-
   # Floating drops settle into the grabbable margin at release (animated),
   # focus changes never reposition floating windows, cross-output restores
-  # and mid-tween usable changes clamp the same margin.
-  # Upstream PR noctalia-dev/umbriel#548; same refresh procedure as 0002.
+  # and mid-tween usable changes clamp the same margin, and abandoned drags
+  # settle like drops. Upstream PR noctalia-dev/umbriel#548; while the recipe
+  # tracks upstream main, rebase the patch with `git format-patch` from its
+  # scratch branch when a drift breaks the apply. (0002, PR #508's windows_drag
+  # physics tuning, merged upstream e045d637 and retired from the recipe.)
   git apply -3 ../0003-view-floating-release-settle.patch
 
   # [input.focus] hover_raises: hover can focus without raising, so sweeping

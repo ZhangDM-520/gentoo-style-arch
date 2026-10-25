@@ -1,4 +1,4 @@
-From eb8fb65bf29cae69f62a4e81142065a375ab4ba3 Mon Sep 17 00:00:00 2001
+From d2abd64335520ef7ba517ff1354d1f886defd8d4 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Sun, 25 Oct 2026 02:05:36 +0800
 Subject: [PATCH] feat(input): opt-in hover raises via [input.focus]
@@ -20,7 +20,7 @@ the way the transition that selected it did.
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 ---
- docs/user/input.md                            |   7 +
+ docs/user/input.md                            |   3 +
  examples/config.toml                          |   1 +
  src/config/config.h                           |   3 +
  src/config/fields_input.cpp                   |   1 +
@@ -32,36 +32,32 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
  src/workspace/workspace.h                     |   5 +-
  .../checks/focus/floating_hover_no_raise.sh   | 153 ++++++++++++++++++
  tests/unit/config_load.cpp                    |  19 +++
- 12 files changed, 217 insertions(+), 12 deletions(-)
+ 12 files changed, 213 insertions(+), 12 deletions(-)
  create mode 100755 tests/harness/checks/focus/floating_hover_no_raise.sh
 
 diff --git a/docs/user/input.md b/docs/user/input.md
-index 0cbfe75..374ae25 100644
+index f42b77df..29ae2d8c 100644
 --- a/docs/user/input.md
 +++ b/docs/user/input.md
-@@ -409,6 +409,7 @@ zone. `enabled = false` turns the behavior off entirely.
+@@ -310,6 +310,7 @@ Speed rises from zero at the inner edge of the trigger zone to `max_speed` at th
  [input.focus]
  follows_mouse = false
  follows_mouse_max_scroll = 0.5
 +hover_raises = true
  ```
  
- `follows_mouse = true` focuses the window that the pointer enters through real
-@@ -420,6 +421,12 @@ commands also let the next pointer motion refresh focus after rearranging window
- This follows the actual seat focus across tiled, floating, and pinned windows,
- including pinned windows whose owning workspace is inactive.
+ `follows_mouse = true` focuses the window that the pointer enters through real pointer motion. Scrolling or dragging a layout beneath a stationary pointer does not change focus. After explicit layout scrolling settles, the next real pointer motion can focus the window beneath it without a border crossing. Pointer motion during scrolling does not change focus. Consume and expel commands also let the next pointer motion refresh focus after rearranging windows. This follows the actual seat focus across tiled, floating, and pinned windows, including pinned windows whose owning workspace is inactive.
+@@ -318,6 +319,8 @@ While a client holds a pointer or keyboard grab, such as an open tray menu, hove
  
-+`hover_raises = false` narrows hovering to focus alone: the entered window does
-+not move above its neighbors, so sweeping the pointer across a larger window
-+underneath cannot bury the window above it. Clicks, keybinds, and activation
-+still raise. The key only matters with `follows_mouse = true`, and defaults to
-+`true`.
+ X11 windows that declare `Input=False` without `WM_TAKE_FOCUS`, including Steam's on-screen keyboard, receive pointer input without taking keyboard focus. Hovering or clicking the keyboard leaves typing directed at the previously focused window. These windows are also skipped when Umbriel chooses replacement focus after a window closes.
+ 
++`hover_raises = false` narrows hovering to focus alone: the entered window does not move above its neighbors, so sweeping the pointer across a larger window underneath cannot bury the window above it. Clicks, keybinds, and activation still raise. The key only matters with `follows_mouse = true`, and defaults to `true`.
 +
- `follows_mouse_max_scroll` limits how far Umbriel may scroll a layout to reveal
- that window, measured in viewport widths. `0.0` allows only fully visible
- windows. Omit the key for no limit.
+ `follows_mouse_max_scroll` limits how far Umbriel may scroll a layout to reveal that window, measured in viewport widths. `0.0` allows only fully visible windows. Omit the key for no limit.
+ 
+ ### Controller desktop input
 diff --git a/examples/config.toml b/examples/config.toml
-index 8b90f82..14d52b2 100644
+index 8b90f82c..14d52b2e 100644
 --- a/examples/config.toml
 +++ b/examples/config.toml
 @@ -137,6 +137,7 @@ numlock_toggle = true
@@ -73,10 +69,10 @@ index 8b90f82..14d52b2 100644
  # Confine touch input to one display.
  #
 diff --git a/src/config/config.h b/src/config/config.h
-index f29c0e0..0e7a142 100644
+index 100e45fe..0dffb018 100644
 --- a/src/config/config.h
 +++ b/src/config/config.h
-@@ -1165,6 +1165,9 @@ namespace umbriel {
+@@ -1173,6 +1173,9 @@ namespace umbriel {
        struct Focus {
          bool followsMouse = false;
          std::optional<double> followsMouseMaxScroll;
@@ -87,7 +83,7 @@ index f29c0e0..0e7a142 100644
        } focus;
  
 diff --git a/src/config/fields_input.cpp b/src/config/fields_input.cpp
-index 4ed7c6f..2bcf7be 100644
+index 4ed7c6ff..2bcf7bed 100644
 --- a/src/config/fields_input.cpp
 +++ b/src/config/fields_input.cpp
 @@ -355,6 +355,7 @@ namespace umbriel {
@@ -99,10 +95,10 @@ index 4ed7c6f..2bcf7be 100644
        static const Fields<In::Device> device{
            custom<In::Device>(
 diff --git a/src/server/focus.cpp b/src/server/focus.cpp
-index 989c401..d9f0e79 100644
+index 5944d662..78f13d27 100644
 --- a/src/server/focus.cpp
 +++ b/src/server/focus.cpp
-@@ -105,15 +105,19 @@ namespace umbriel {
+@@ -111,15 +111,19 @@ namespace umbriel {
      // the seat to a layer that was uncovered by a fullscreen window leaving, and clears the previous window's
      // activation chrome. Overview owns the seat the same way, but keeps the chrome so card borders track the focused
      // window; the keyboard enter replays when it closes.
@@ -124,7 +120,7 @@ index 989c401..d9f0e79 100644
      }
      m_server.refreshOutputPolicies();
      if (overviewActive) {
-@@ -228,9 +232,9 @@ namespace umbriel {
+@@ -245,9 +249,9 @@ namespace umbriel {
  
        // The seat surface is already correct. Refresh only the owner's chrome
        // and stacking so a popup or input grab keeps the exact focused surface.
@@ -137,10 +133,10 @@ index 989c401..d9f0e79 100644
        m_server.refreshOutputPolicies();
        return true;
 diff --git a/src/server/focus.h b/src/server/focus.h
-index 0c7d040..627a6a5 100644
+index 3185492b..e201b713 100644
 --- a/src/server/focus.h
 +++ b/src/server/focus.h
-@@ -89,6 +89,9 @@ namespace umbriel {
+@@ -90,6 +90,9 @@ namespace umbriel {
      void refocusFallback(Output* preferred);
  
      Server& m_server;
@@ -151,7 +147,7 @@ index 0c7d040..627a6a5 100644
  
  } // namespace umbriel
 diff --git a/src/view/view.cpp b/src/view/view.cpp
-index 2c6d30a..c088be3 100644
+index c982c3eb..6e47c4ba 100644
 --- a/src/view/view.cpp
 +++ b/src/view/view.cpp
 @@ -822,7 +822,7 @@ namespace umbriel {
@@ -162,7 +158,7 @@ index 2c6d30a..c088be3 100644
 +  void View::applySeatFocus(bool withKeyboard, bool raise) {
      // Mechanism only. Policy lives in Server::focusView; do not call directly
      // from input/event code.
-     if (!m_onActiveWorkspace && !m_pinned) {
+     if ((!m_onActiveWorkspace && !m_pinned) || !acceptsKeyboardFocus()) {
 @@ -835,7 +835,9 @@ namespace umbriel {
      // deactivating only that surface can leave another window's focus border on.
      m_server->deactivateViews(this);
@@ -175,10 +171,10 @@ index 2c6d30a..c088be3 100644
        setActivatedState(true);
      } else {
 diff --git a/src/view/view.h b/src/view/view.h
-index 0c00f81..fcd4acd 100644
+index 7fa5b736..47ec5913 100644
 --- a/src/view/view.h
 +++ b/src/view/view.h
-@@ -234,7 +234,9 @@ namespace umbriel {
+@@ -235,7 +235,9 @@ namespace umbriel {
      // Mechanism only: applies seat keyboard, activation chrome, and raise. Policy lives in Server::focusView; do not
      // call from input/event code. `withKeyboard` is false while overview owns the seat: chrome and activation still
      // update, the keyboard enter is deferred to the close.
@@ -190,7 +186,7 @@ index 0c00f81..fcd4acd 100644
      // The X screen moved relative to the layout: send an X11 window its geometry again.
      void resyncXwaylandGeometry();
 diff --git a/src/workspace/workspace.cpp b/src/workspace/workspace.cpp
-index 5786b18..54a4d54 100644
+index 9c5ccf4c..1c59da34 100644
 --- a/src/workspace/workspace.cpp
 +++ b/src/workspace/workspace.cpp
 @@ -246,7 +246,7 @@ namespace umbriel {
@@ -229,7 +225,7 @@ index 5786b18..54a4d54 100644
        m_tabs.focusChanged(view);
      }
 diff --git a/src/workspace/workspace.h b/src/workspace/workspace.h
-index bf94817..f2b33a5 100644
+index a24f802a..966d8abd 100644
 --- a/src/workspace/workspace.h
 +++ b/src/workspace/workspace.h
 @@ -124,7 +124,10 @@ namespace umbriel {
@@ -246,7 +242,7 @@ index bf94817..f2b33a5 100644
      void raiseFloatingLayer();
 diff --git a/tests/harness/checks/focus/floating_hover_no_raise.sh b/tests/harness/checks/focus/floating_hover_no_raise.sh
 new file mode 100755
-index 0000000..ebdc506
+index 00000000..ebdc5067
 --- /dev/null
 +++ b/tests/harness/checks/focus/floating_hover_no_raise.sh
 @@ -0,0 +1,153 @@
@@ -404,7 +400,7 @@ index 0000000..ebdc506
 +
 +echo "hover_raises = false keeps hover on focus alone while clicks, navigation, and the default hover-raises keep raising"
 diff --git a/tests/unit/config_load.cpp b/tests/unit/config_load.cpp
-index be469d8..e7de101 100644
+index 96913321..3f956700 100644
 --- a/tests/unit/config_load.cpp
 +++ b/tests/unit/config_load.cpp
 @@ -1467,6 +1467,25 @@ UMBRIEL_TEST(modRightDoubleClickReadsItsVocabularyAndDefaultsOff) {

@@ -17111,3 +17111,30 @@ weston, above the floor guard). xwayland-satellite-git building after it.
 The engine gap left for the owner: the pacman hook (tools/abi-need-check.sh)
 is exclusion-blind by design (strict for MANUAL pacman); whether it should
 honor the registry is a trust-model call, flagged in CURRENT.md.
+
+### 2026-10-25 10:20 — umbriel-git: patch 0002 retired (PR #508 merged), rebuild triggered
+PR noctalia-dev/umbriel#508 merged upstream as `e045d637` — the windows_drag
+physics tuning now lives in main, so patch 0002 is gone from the recipe (file
+deleted; source/sha256sums/prepare entries dropped; comment keeps the pointer).
+Main also moved to `65bd2f13` (docs reflow + fullscreen/input/scratchpad
+fixes), which DRIFTED the remaining patches; both were refreshed so the build
+applies cleanly on main@`65bd2f13`:
+- **0003** (PR #548, floating settle work): rebased `1c151cf` → `78303581`
+  (new sha `571594a1…`). Note: a 09:59 "Merge branch 'main'" push to the PR
+  branch had resolved the docs/user/input.md conflict "ours"-style, reverting
+  main's remark reflow of that file; fixed additively on top as `405afe9b`
+  (restore main's formatting + re-apply the settle note — no force-push, the
+  merge commit stays). The tip tree now equals the validated rebase tree.
+- **0004** (hover-raise, parallel workstream): its input.md hunk conflicted
+  after 0003's reflow; regenerated against main+0003 via cherry-pick in a temp
+  worktree (new sha `e0b8d5f5…`, tip `d2abd643`) — the hover-raise branch
+  itself was NOT touched. Its doc note was reflowed to main's paragraph style
+  for the remark format check.
+- pkgver pin set to MAIN's `0.1.0.r1385.65bd2f1` (it was `r1368.679f4fb`, a
+  branch value from a stale clone; the pin convention is the tracked main rev,
+  matching what pkgver() computes at build).
+Validation: prepare() rehearsal on main@`65bd2f13` — 0003 + 0004 apply cleanly
+in order; the 0003 refresh was fully validated before push (meson units,
+harness 386/389 — the 3 failures are the documented pre-existing set).
+Rebuild: `gsa -Sy` + `gsa -S --leaf --no-sync --lanes 1 --jobs 8 --intensity
+xhigh umbriel-git` queued right after this commit.
