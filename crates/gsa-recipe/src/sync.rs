@@ -1545,7 +1545,7 @@ pub fn hash_bytes(alg: &str, data: &[u8]) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::hash_bytes;
+    use super::{hash_bytes, toml_section, toml_str_value, NvcheckerRunner, ProviderFamily};
 
     #[test]
     fn hash_bytes_covers_the_coreutils_matrix() {
@@ -1567,6 +1567,62 @@ mod tests {
             Some("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
         );
         assert_eq!(hash_bytes("nope", b"abc"), None);
+    }
+
+    #[test]
+    fn toml_literal_strings_parse_like_basic_strings() {
+        // TOML '…' literal strings are valid values; the historical strip
+        // handled only "…" and fed `'git'` (quotes included) to the
+        // provider classifier — bettbox/zen-browser-pgo sync-refused on it.
+        let section = "source = 'git'\ngit = \"https://github.com/a/b.git\"\n";
+        assert_eq!(toml_str_value(section, "source").as_deref(), Some("git"));
+        assert_eq!(
+            toml_str_value(section, "git").as_deref(),
+            Some("https://github.com/a/b.git")
+        );
+    }
+
+    #[test]
+    fn toml_str_value_strips_only_matching_quote_pairs() {
+        assert_eq!(toml_str_value("k = 'a\"'", "k").as_deref(), Some("a\""));
+        assert_eq!(toml_str_value("k = \"a'\"", "k").as_deref(), Some("a'"));
+        assert_eq!(toml_str_value("k = \"a'", "k").as_deref(), Some("\"a'"));
+        assert_eq!(toml_str_value("k = unquoted", "k").as_deref(), Some("unquoted"));
+    }
+
+    #[test]
+    fn literal_string_nvchecker_configs_classify() {
+        let dir = std::env::temp_dir().join(format!("gsa-sync-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = dir.join(".nvchecker.toml");
+        // bettbox's exact shape (packages/stable/bettbox/.nvchecker.toml).
+        std::fs::write(
+            &cfg,
+            "[bettbox]\nsource = 'git'\ngit = 'https://github.com/appshubcc/Bettbox.git'\n",
+        )
+        .unwrap();
+        let runner = NvcheckerRunner {
+            config: cfg.clone(),
+            repo_root: dir.clone(),
+        };
+        let (family, id) = runner.provider_identity("bettbox").unwrap();
+        assert!(matches!(family, ProviderFamily::Github));
+        assert_eq!(id, "appshubcc/Bettbox");
+        // zen-browser-pgo's shape.
+        std::fs::write(&cfg, "[zen]\nsource = 'github'\ngithub = 'zen-browser/desktop'\n").unwrap();
+        let (family, id) = runner.provider_identity("zen").unwrap();
+        assert!(matches!(family, ProviderFamily::Github));
+        assert_eq!(id, "zen-browser/desktop");
+        // an unquoted unknown source still refuses — never guessed.
+        std::fs::write(&cfg, "[x]\nsource = 'codeberg'\n").unwrap();
+        assert!(runner.provider_identity("x").is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn toml_section_finds_the_named_table_only() {
+        let text = "[a]\nsource = 'x'\n[b]\nsource = 'y'\n";
+        assert_eq!(toml_section(text, "b").as_deref(), Some("source = 'y'"));
     }
 }
 
@@ -2095,10 +2151,16 @@ fn toml_str_value(section: &str, key: &str) -> Option<String> {
             let rest = rest.trim_start();
             if let Some(v) = rest.strip_prefix('=') {
                 let v = v.trim();
-                let v = v
-                    .strip_prefix('"')
-                    .and_then(|s| s.strip_suffix('"'))
-                    .unwrap_or(v);
+                // TOML basic strings ("…") and literal strings ('…') are both
+                // valid value spellings — strip a MATCHING pair only (the
+                // historical double-quote-only strip fed `'git'` verbatim to
+                // the provider classifier, which matched no source and
+                // refused the sync — the bettbox/zen-browser-pgo class,
+                // 2026-10-25).
+                let quoted = v.len() >= 2
+                    && ((v.starts_with('"') && v.ends_with('"'))
+                        || (v.starts_with('\'') && v.ends_with('\'')));
+                let v = if quoted { &v[1..v.len() - 1] } else { v };
                 return Some(v.to_string());
             }
         }
