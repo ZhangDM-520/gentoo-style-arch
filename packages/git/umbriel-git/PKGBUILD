@@ -8,8 +8,8 @@ source "$startdir/../../../lib/pgo.sh"
 
 pkgname=umbriel-git
 _pkgname=umbriel
-pkgver=0.1.0.r1390.d88d0bc
-pkgrel=2
+pkgver=0.1.0.r1393.77ec5ae
+pkgrel=1
 epoch=1
 pkgdesc='A Wayland compositor built on wlroots'
 arch=('x86_64' 'aarch64')
@@ -57,9 +57,9 @@ makedepends=(
 provides=("umbriel=${pkgver}")
 conflicts=('umbriel')
 source=("${_pkgname}::git+${url}.git#branch=main"
-        '0004-hover-raise-on-click.patch')
+        '0008-strip-travel-scale.patch')
 sha256sums=('SKIP'
-            'eea5ac939d8f8f8b29faeefb1610dff97435544a9d2f25ebf70e9214007571b0')
+            'e69da4ea760264bae6280b0d69fbf1ca0c43452a35e0ae21be0c3912c88798b9')
 
 pkgver() {
   cd "${_pkgname}"
@@ -77,18 +77,20 @@ pkgver() {
 prepare() {
   cd "${_pkgname}"
 
-  # [input.focus] hover_raises: hover can focus without raising, so sweeping
-  # the pointer across a larger window underneath no longer buries the window
-  # above it (default true keeps hover-raises). Upstream PR
-  # noctalia-dev/umbriel#556; while the recipe tracks upstream main, rebase
-  # the patch with `git format-patch` from its scratch branch when a drift
-  # breaks the apply. (0002, PR #508's windows_drag physics tuning, merged
-  # upstream e045d637 and retired; 0003, PR #548's floating release settle,
-  # merged upstream 0bb8befd and retired; 0005/0006, perf PRs #559/#560,
-  # rebuffed upstream and retired 2026-10-25; 0007, the deform-settle-crop
-  # fix, retired the same day — it was cut on the 0005/0006 stack, and the
-  # main-based variant returns rebased when that thread restarts.)
-  git apply -3 ../0004-hover-raise-on-click.patch
+  # [input.gesture] strip_travel_scale: three-finger swipes pan the scrolling
+  # strip and overview previews at a configured travel (below 1.0 covers less
+  # ground per swipe) without touching pointer speed; workspace travel stays
+  # fixed. Upstream PR noctalia-dev/umbriel#566; while the recipe tracks
+  # upstream main, rebase the patch with `git format-patch` from its scratch
+  # branch when a drift breaks the apply. (0002, PR #508's windows_drag physics
+  # tuning, merged upstream e045d637 and retired; 0003, PR #548's floating
+  # release settle, merged upstream 0bb8befd and retired; 0004, PR #556's
+  # hover_raises, merged upstream e57420b0 and retired; 0005/0006, perf PRs
+  # #559/#560, rebuffed upstream and retired 2026-10-25; 0007, the
+  # deform-settle-crop fix, retired the same day — it was cut on the 0005/0006
+  # stack, and the main-based variant returns rebased when that thread
+  # restarts.)
+  git apply -3 ../0008-strip-travel-scale.patch
 }
 
 build() {

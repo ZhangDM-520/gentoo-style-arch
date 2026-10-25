@@ -1,4 +1,28 @@
-# Current state — 2026-10-25 15:00 (live snapshot; overwrite, do not append)
+# Current state — 2026-10-26 00:25 (live snapshot; overwrite, do not append)
+
+## umbriel: PR #566 recipe sync, #556 merged, #558 hot-corner fix pushed (2026-10-26)
+- PR #556 (`hover_raises`) MERGED upstream as `e57420b0` — patch 0004 retired
+  from the recipe (history note kept in prepare()).
+- PR #566 (`[input.gesture] strip_travel_scale`, closes #552): Talia review
+  5643874291 (P2: overview workspace-row travel was scaled, diverging from the
+  fixed desktop workspace-switch distance) FIXED per her first option —
+  `travelFor` scales only `.viewport`; `.workspace` stays fixed at any scale
+  (regression-pinned). Amended head `6b6eb735`, CI fully green (Build ×2,
+  Docs format, Format, Lint 11m55s, enforce); reply issuecomment-6399799348.
+  MERGEABLE/CLEAN against main@`77ec5ae`.
+- Recipe: patch 0008-strip-travel-scale (sha256 `e69da4ea…`, = `6b6eb735`;
+  numbered 0008 — the parallel session's 0005/0006/0007 are retired history),
+  pkgver `0.1.0.r1393.77ec5ae` pkgrel 1, .SRCINFO; real-apply rehearsal on
+  main@`77ec5ae` clean. Build/install pending at snapshot.
+- Issue #558 (hot corners dead in the overview): root cause confirmed live —
+  Noctalia's type-to-launch `noctalia-overview-launcher` (exclusive-keyboard
+  layer mapped over the overview) trips `Cursor::hotCornerAction`'s modal gate.
+  Fix = gate exempts `overview()->interactive()` (design B, plan
+  `~/docs/umbriel/plans/558-hot-corner-overview.md`); red-first
+  `overview/hot_corner.sh` + mutation proof; isolation 5/5 incl. the unchanged
+  fullscreen suppression; pushed `fork/hot-corner-overview` @ `a6722475`
+  (issue comment posted). Held for the maintainer's go on the code-review
+  agent; PR after review.
 
 ## umbriel patch 0004 (PR #556): rebased onto moved main; 0002/0003 retired (2026-10-25)
 - PR #556 conflict (docs/user/input.md — upstream's remark reformat + keybinds

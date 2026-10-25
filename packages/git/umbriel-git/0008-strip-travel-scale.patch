@@ -1,0 +1,280 @@
+From 6b6eb735d16b47d17fe6ed2edb95a4c146081f88 Mon Sep 17 00:00:00 2001
+From: ZhangDM-520 <jixianqiang1540@gmail.com>
+Date: Sun, 25 Oct 2026 22:44:07 +0800
+Subject: [PATCH] feat(input): scale three-finger swipe travel via
+ [input.gesture] strip_travel_scale
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Three-finger travel arrives pointer-accelerated, so the same physical swipe
+covers more distance when the fingers move fast; the only workaround was
+touchpad sensitivity, which moves the pointer speed too. strip_travel_scale
+scales how far a swipe pans the scrolling strip, including strip pans inside
+overview previews (1.0 keeps the upstream distances; below 1.0 a swipe covers
+less ground) without touching pointer speed, window drag, or window resize.
+
+Only viewport-pan travel scales. Workspace movement keeps fixed travel at any
+scale — the desktop workspace-switch swipe and the overview's along-axis
+navigation between workspaces share kSwipeWorkspacePx, so one swipe step reads
+the same distance on either side of the overview. The scroll stream arrives
+unaccelerated, and the four-finger overview gesture and gestures forwarded to
+applications keep their fixed distances. The headless backend cannot inject
+three-finger swipes, so the scale is pinned by config_load and gesture-physics
+unit tests instead of a harness check.
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+---
+ docs/user/input.md             |  9 +++++++++
+ examples/config.toml           |  5 +++++
+ src/config/config.h            |  8 ++++++++
+ src/config/fields_input.cpp    |  6 ++++++
+ src/input/gestures.cpp         |  6 ++++--
+ src/input/swipe_tracker.h      |  5 +++++
+ src/overview/navigation.h      | 13 +++++++++++--
+ src/overview/overview.cpp      |  2 +-
+ tests/unit/config_load.cpp     | 24 ++++++++++++++++++++++++
+ tests/unit/gesture_physics.cpp | 29 +++++++++++++++++++++++++++++
+ 10 files changed, 102 insertions(+), 5 deletions(-)
+
+diff --git a/docs/user/input.md b/docs/user/input.md
+index c1e43c5f..a0959c51 100644
+--- a/docs/user/input.md
++++ b/docs/user/input.md
+@@ -323,6 +323,15 @@ X11 windows that declare `Input=False` without `WM_TAKE_FOCUS`, including Steam'
+ 
+ `follows_mouse_max_scroll` limits how far Umbriel may scroll a layout to reveal that window, measured in viewport widths. `0.0` allows only fully visible windows. Omit the key for no limit.
+ 
++### Gestures
++
++```toml
++[input.gesture]
++strip_travel_scale = 1.0
++```
++
++`strip_travel_scale` scales how far a three-finger swipe pans the scrolling strip, including the strip pan inside overview previews. Three-finger travel arrives pointer-accelerated, so the same physical swipe covers more distance when the fingers move fast; a value below `1.0` makes a swipe cover less ground without changing pointer speed, window drag, or window resize. The value scales the finger travel one pan needs: `0.7` takes about 1.4 times the travel per viewport pan, `2.0` half. Accepted values are `0.1` to `10.0`; `1.0` keeps the built-in distances. Workspace movement keeps its existing travel at any scale — both the workspace-switch swipe and the overview's along-axis navigation between workspaces — so one swipe step reads the same distance there; the four-finger overview gesture and gestures forwarded to applications also keep their existing travel.
++
+ ### Controller desktop input
+ 
+ Steam's desktop controller mappings can control native Wayland windows through Umbriel's X11 input emulation. Umbriel asks for permission on the first request and remembers the decision for the current session. See [X11 desktop input](security.md#x11-desktop-input) for consent and lock-screen behavior.
+diff --git a/examples/config.toml b/examples/config.toml
+index ae3e7ec8..5cdf07c8 100644
+--- a/examples/config.toml
++++ b/examples/config.toml
+@@ -139,6 +139,11 @@ numlock_toggle = true
+ # follows_mouse = true
+ # hover_raises = false # Hover focuses only; clicks and keybinds raise.
+ 
++# Three-finger swipe travel for the scrolling strip, including strip pans in overview previews.
++#
++# [input.gesture]
++# strip_travel_scale = 0.7 # Below 1.0 a swipe covers less ground; 1.0 keeps the built-in distance.
++
+ # Confine touch input to one display.
+ #
+ # [input.touch]
+diff --git a/src/config/config.h b/src/config/config.h
+index bb850428..d9e8063a 100644
+--- a/src/config/config.h
++++ b/src/config/config.h
+@@ -1179,6 +1179,14 @@ namespace umbriel {
+         bool operator==(const Focus&) const = default;
+       } focus;
+ 
++      // Three-finger travel arrives pointer-accelerated, so the same physical swipe covers more distance when the
++      // fingers move fast. This scales how far a swipe pans the scrolling strip (also inside overview previews)
++      // without touching pointer speed, window drag, or window resize. Workspace travel stays fixed.
++      struct Gesture {
++        double stripTravelScale = 1.0;
++        bool operator==(const Gesture&) const = default;
++      } gesture;
++
+       struct Tablet {
+         // false silences the tablet and its pads via libinput
+         bool enabled = true;
+diff --git a/src/config/fields_input.cpp b/src/config/fields_input.cpp
+index 2bcf7bed..f870e7d7 100644
+--- a/src/config/fields_input.cpp
++++ b/src/config/fields_input.cpp
+@@ -357,6 +357,11 @@ namespace umbriel {
+           real("follows_mouse_max_scroll", 0.0, kMaxFollowsMouseScroll, &In::Focus::followsMouseMaxScroll),
+           boolean("hover_raises", &In::Focus::hoverRaises),
+       };
++      // Bounds are a sanity frame around upstream's travel, not a tuning range: the value scales the pan a swipe
++      // produces, so it stays positive and finite.
++      static const Fields<In::Gesture> gesture{
++          real("strip_travel_scale", 0.1, 10.0, &In::Gesture::stripTravelScale),
++      };
+       static const Fields<In::Device> device{
+           custom<In::Device>(
+               "name", registry::KeyDescription("string"),
+@@ -423,6 +428,7 @@ namespace umbriel {
+           table("cursor", &In::cursor, cursor),
+           table("drag_edge_scroll", &In::dragEdgeScroll, dragEdgeScroll),
+           table("focus", &In::focus, focus),
++          table("gesture", &In::gesture, gesture),
+           registry::rules("device", &In::devices, device, registry::Shape::Error, acceptDevice),
+       };
+       return fields;
+diff --git a/src/input/gestures.cpp b/src/input/gestures.cpp
+index d41a88d8..de13eaaa 100644
+--- a/src/input/gestures.cpp
++++ b/src/input/gestures.cpp
+@@ -1,5 +1,6 @@
+ #include "input/gestures.h"
+ 
++#include "config/config.h"
+ #include "input/cursor.h"
+ #include "input/event_time.h"
+ #include "input/gesture_physics.h"
+@@ -437,8 +438,9 @@ namespace umbriel {
+           m_state = State::Idle;
+           return;
+         }
+-        const double scale =
+-            static_cast<double>(ws->scrollViewportExtent()) / kSwipeViewportPx * m_naturalScrollDirection;
++        const double scale = static_cast<double>(ws->scrollViewportExtent())
++            / swipeTravelPx(kSwipeViewportPx, config().input.gesture.stripTravelScale)
++            * m_naturalScrollDirection;
+         if (!beginScroll(ws, scale, ScrollSource::Swipe)) {
+           m_state = State::Idle;
+         }
+diff --git a/src/input/swipe_tracker.h b/src/input/swipe_tracker.h
+index 2cc47cbc..996d81bd 100644
+--- a/src/input/swipe_tracker.h
++++ b/src/input/swipe_tracker.h
+@@ -11,6 +11,11 @@ namespace umbriel {
+   inline constexpr double kSwipeWorkspacePx = 300.0;
+   inline constexpr double kSwipeViewportPx = 1200.0;
+ 
++  // The finger travel one viewport pan needs, after input.gesture.strip_travel_scale. Below 1.0 the same pan takes
++  // more finger travel, so a swipe covers less ground; 1.0 keeps the upstream distances. Travel is divided rather
++  // than the deltas multiplied so every conversion sees one convention.
++  [[nodiscard]] constexpr double swipeTravelPx(double travelPx, double travelScale) { return travelPx / travelScale; }
++
+   // Sliding-window swipe tracker. Accumulates deltas since the gesture start, estimates velocity over recent history
+   // only, and projects where the movement would coast to a stop under exponential deceleration.
+   class SwipeTracker {
+diff --git a/src/overview/navigation.h b/src/overview/navigation.h
+index 30d09078..993f9f9a 100644
+--- a/src/overview/navigation.h
++++ b/src/overview/navigation.h
+@@ -30,8 +30,17 @@ namespace umbriel {
+     static constexpr Travel kScrollTravel{.workspace = 500.0, .viewport = 500.0};
+     static constexpr Travel kSwipeTravel{.workspace = kSwipeWorkspacePx, .viewport = kSwipeViewportPx};
+ 
+-    [[nodiscard]] static constexpr Travel travelFor(NavigationSource source) {
+-      return source == NavigationSource::Scroll ? kScrollTravel : kSwipeTravel;
++    [[nodiscard]] static constexpr Travel travelFor(NavigationSource source, double travelScale = 1.0) {
++      if (source == NavigationSource::Scroll) {
++        // The scroll stream arrives unaccelerated; only swipe travel is scaled.
++        return kScrollTravel;
++      }
++      // Only the viewport pan scales. Workspace travel is the same distance here and in the desktop workspace
++      // switch, so the hand reads one workspace step on either side of the overview at any scale.
++      return Travel{
++          .workspace = kSwipeTravel.workspace,
++          .viewport = swipeTravelPx(kSwipeTravel.viewport, travelScale),
++      };
+     }
+ 
+     void reset() {
+diff --git a/src/overview/overview.cpp b/src/overview/overview.cpp
+index 454196c7..4f48a10c 100644
+--- a/src/overview/overview.cpp
++++ b/src/overview/overview.cpp
+@@ -2915,7 +2915,7 @@ namespace umbriel {
+     const auto& overview = config().overview;
+     const double factor =
+         axis == OverviewNavigation::Axis::Horizontal ? overview.scrollFactorHorizontal : overview.scrollFactorVertical;
+-    const auto travel = OverviewNavigation::travelFor(m_navigationSource);
++    const auto travel = OverviewNavigation::travelFor(m_navigationSource, config().input.gesture.stripTravelScale);
+     if ((axis == OverviewNavigation::Axis::Horizontal) == m_navigationHorizontalWorkspaces) {
+       if (!m_navigationStarted) {
+         m_navigationStart = state->rowScroll.current();
+diff --git a/tests/unit/config_load.cpp b/tests/unit/config_load.cpp
+index 8a4e210c..06f9d515 100644
+--- a/tests/unit/config_load.cpp
++++ b/tests/unit/config_load.cpp
+@@ -1486,6 +1486,30 @@ UMBRIEL_TEST(hoverRaisesLoadsAndDefaultsEnabled) {
+   CHECK(store.config().input.focus.hoverRaises);
+ }
+ 
++UMBRIEL_TEST(stripTravelScaleLoadsAndDefaultsToUpstreamTravel) {
++  const TempConfig file;
++  ConfigStore& store = umbriel::configStore();
++  store.setRootPath(file.path(), true);
++
++  file.write("[input.gesture]\nstrip_travel_scale = 0.7\n");
++  CHECK(store.reload().success);
++  CHECK(store.config().input.gesture.stripTravelScale == 0.7);
++  CHECK(!containsDiagnostic(store, "unknown key input.gesture.strip_travel_scale"));
++
++  file.write("[input.gesture]\nstrip_travel_scale = 2.0\n");
++  CHECK(store.reload().success);
++  CHECK(store.config().input.gesture.stripTravelScale == 2.0);
++
++  file.write("[input.gesture]\n");
++  CHECK(store.reload().success);
++  CHECK(store.config().input.gesture.stripTravelScale == 1.0);
++
++  file.write("[input.gesture]\nstrip_travel_scale = 0.0\n");
++  CHECK(store.reload().success);
++  CHECK(store.config().input.gesture.stripTravelScale == 0.1);
++  CHECK(containsDiagnostic(store, "input.gesture.strip_travel_scale"));
++}
++
+ UMBRIEL_TEST(outputNamesDifferingOnlyByCaseAreRejectedAsDuplicates) {
+   const TempConfig file;
+   file.write(R"(
+diff --git a/tests/unit/gesture_physics.cpp b/tests/unit/gesture_physics.cpp
+index 353fc93a..6ca65b4a 100644
+--- a/tests/unit/gesture_physics.cpp
++++ b/tests/unit/gesture_physics.cpp
+@@ -2,9 +2,13 @@
+ 
+ #include "check.h"
+ #include "input/swipe_tracker.h"
++#include "overview/navigation.h"
+ 
+ using umbriel::GesturePhysics;
++using umbriel::NavigationSource;
++using umbriel::OverviewNavigation;
+ using umbriel::SwipeTracker;
++using umbriel::swipeTravelPx;
+ 
+ namespace {
+ 
+@@ -130,4 +134,29 @@ UMBRIEL_TEST(theOverviewSettlesOnTheSideTheProjectionPointsTo) {
+   CHECK_EQ(pastEnd.target, 1);
+ }
+ 
++UMBRIEL_TEST(stripTravelScaleScalesSwipeTravelOnly) {
++  // 1.0 keeps the upstream distances: one viewport pan per kSwipeViewportPx, one step per kSwipeWorkspacePx.
++  CHECK(swipeTravelPx(1200.0, 1.0) == 1200.0);
++  const auto upstream = OverviewNavigation::travelFor(NavigationSource::Swipe, 1.0);
++  CHECK(upstream.viewport == 1200.0);
++  CHECK(upstream.workspace == 300.0);
++
++  // Below 1.0 a swipe covers less ground: the same pan needs proportionally more finger travel.
++  CHECK(swipeTravelPx(1200.0, 0.7) == 1200.0 / 0.7);
++  const auto scaled = OverviewNavigation::travelFor(NavigationSource::Swipe, 0.7);
++  CHECK(scaled.viewport == 1200.0 / 0.7);
++  const auto widened = OverviewNavigation::travelFor(NavigationSource::Swipe, 2.0);
++  CHECK(widened.viewport == 600.0);
++
++  // Workspace travel is NOT scaled: overview row swipes cover the same distance as the desktop workspace switch
++  // at any scale, so the hand reads one workspace step on either side of the overview.
++  CHECK(scaled.workspace == 300.0);
++  CHECK(widened.workspace == 300.0);
++
++  // The scroll stream arrives unaccelerated and keeps its own distances at any scale.
++  const auto scroll = OverviewNavigation::travelFor(NavigationSource::Scroll, 0.7);
++  CHECK(scroll.viewport == 500.0);
++  CHECK(scroll.workspace == 500.0);
++}
++
+ int main() { return RUN_TESTS(); }
+-- 
+2.56.0.236.g7e34d8174d
+

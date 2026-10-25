@@ -17304,3 +17304,27 @@ Mechanics notes (two lessons reinforced):
   lesson applies only when the version does NOT move).
 - capability virtuals (opengl-driver, vulkan-driver, libva-driver) stay
   unversioned — only mapped swap/compat names take `=${pkgver}`.
+
+### 2026-10-26 00:25 — umbriel: PR #566 (strip_travel_scale) recipe sync; #558 fix pushed
+- PR #556 merged upstream `e57420b0` → patch 0004 retired. PR #566
+  (`[input.gesture] strip_travel_scale`, closes #552) took Talia review
+  5643874291 P2 (overview workspace-row travel scaled, diverging from the
+  fixed desktop switch distance): `travelFor` now scales only `.viewport`,
+  workspace travel pinned fixed at any scale (unit regression pin), docs +
+  commit message corrected. Amended head `6b6eb735`; CI fully green (Lint
+  11m55s); reply issuecomment-6399799348; MERGEABLE vs main@`77ec5ae`.
+- Recipe: patch `0008-strip-travel-scale` (sha256 `e69da4ea…`) — numbered 0008
+  because the parallel session's 0005/0006/0007 are retired history
+  (`4fad8db`); pkgver `0.1.0.r1393.77ec5ae` pkgrel 1 + .SRCINFO; real-apply
+  rehearsal on main@`77ec5ae` clean (the `git apply -3 --check` lesson still
+  stands: judge the post-apply diff).
+- Issue #558 (hot corners dead in overview): root cause = Noctalia's
+  type-to-launch exclusive-keyboard layer trips `Cursor::hotCornerAction`'s
+  modal gate (cursor.cpp:371). Design B implemented (gate exempts
+  `overview()->interactive()`; Q3 resolved via Overview::interactive =
+  active && !m_closing); red-first `overview/hot_corner.sh` (exclusive layer
+  mapped before overview-open must fire + desktop modal pin must block) with
+  mutation proof; isolation 5/5 (fullscreen suppression unchanged) + meson
+  units clean. Pushed `fork/hot-corner-overview` @ `a6722475`; finding
+  commented on #558 (issuecomment-6399979288). Held for the maintainer's go
+  on the code-review agent before the PR.
