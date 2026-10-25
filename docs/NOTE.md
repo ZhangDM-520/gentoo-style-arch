@@ -1,3 +1,32 @@
+## 2026-10-25 — umbriel-git: perf patches 0005/0006/0007 retired after upstream rebuff of PRs #559/#560
+
+**Symptom (decision, not a defect).** The maintainer rebuffed the two perf
+draft PRs (noctalia-dev/umbriel#559 = settled views skip the animation tick's
+effect sync, #560 = skip unchanged geometry work in the surface reconfigure);
+the owner dropped them. That strands the live-test staging: 0005/0006 *are*
+the rebuffed PRs, and 0007 (the drag-deform settle crop fix) was cut on TOP of
+their stack — its context carries their `tickAnimations` changes, so it is
+dirty after the decision too.
+
+**Fix.** All three patches retired together: removed from `source=()`,
+`sha256sums` and `prepare()`, files deleted, `pkgrel` 1→2, `.SRCINFO`
+regenerated. `0004` (PR #556, hover_raises — still alive upstream) is
+untouched. Patch pre-images archived under the host's dated backup convention.
+
+**Validation.** `bash -n PKGBUILD` clean; `makepkg --printsrcinfo` regenerated
+in the same change; `tests/run-all.sh recipe-sources` PASS (1 fixture);
+`gsa -Ma` report-only — the only umbriel row is the expected
+version-sync-skew (`built …-1` vs `committed …-2`), which the next build
+anchors.
+
+**Durable rule.** A patch stack dies with its base: when the PRs a stack is
+cut on are dropped, retire the whole stack in one change (a "rebase it later"
+patch silently carries the dead PR's semantics). What survives the rebuff is
+the upstream-able main-based variant — the drag-deform settle crop fix
+(branch `fix/deform-settle-crop` in the umbriel clone) predates the perf work
+and returns rebased onto plain main when that thread restarts; the bug record
+lives in the umbriel effort journal.
+
 ## 2026-10-24 — CI caught what the snapshot toolchains could not: `Tuning tuning = {}` is ill-formed on stock GCC
 
 **Symptom.** Both `build-with-musl` and `build-with-glibc` jobs on PR
