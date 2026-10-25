@@ -1,4 +1,4 @@
-From d2abd64335520ef7ba517ff1354d1f886defd8d4 Mon Sep 17 00:00:00 2001
+From 687a15a1808db2f1df57e723916edc341b5de85f Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Sun, 25 Oct 2026 02:05:36 +0800
 Subject: [PATCH] feat(input): opt-in hover raises via [input.focus]
@@ -36,10 +36,10 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
  create mode 100755 tests/harness/checks/focus/floating_hover_no_raise.sh
 
 diff --git a/docs/user/input.md b/docs/user/input.md
-index f42b77df..29ae2d8c 100644
+index fa94348f..beec04ab 100644
 --- a/docs/user/input.md
 +++ b/docs/user/input.md
-@@ -310,6 +310,7 @@ Speed rises from zero at the inner edge of the trigger zone to `max_speed` at th
+@@ -310,10 +310,13 @@ Speed rises from zero at the inner edge of the trigger zone to `max_speed` at th
  [input.focus]
  follows_mouse = false
  follows_mouse_max_scroll = 0.5
@@ -47,15 +47,12 @@ index f42b77df..29ae2d8c 100644
  ```
  
  `follows_mouse = true` focuses the window that the pointer enters through real pointer motion. Scrolling or dragging a layout beneath a stationary pointer does not change focus. After explicit layout scrolling settles, the next real pointer motion can focus the window beneath it without a border crossing. Pointer motion during scrolling does not change focus. Consume and expel commands also let the next pointer motion refresh focus after rearranging windows. This follows the actual seat focus across tiled, floating, and pinned windows, including pinned windows whose owning workspace is inactive.
-@@ -318,6 +319,8 @@ While a client holds a pointer or keyboard grab, such as an open tray menu, hove
- 
- X11 windows that declare `Input=False` without `WM_TAKE_FOCUS`, including Steam's on-screen keyboard, receive pointer input without taking keyboard focus. Hovering or clicking the keyboard leaves typing directed at the previously focused window. These windows are also skipped when Umbriel chooses replacement focus after a window closes.
  
 +`hover_raises = false` narrows hovering to focus alone: the entered window does not move above its neighbors, so sweeping the pointer across a larger window underneath cannot bury the window above it. Clicks, keybinds, and activation still raise. The key only matters with `follows_mouse = true`, and defaults to `true`.
 +
- `follows_mouse_max_scroll` limits how far Umbriel may scroll a layout to reveal that window, measured in viewport widths. `0.0` allows only fully visible windows. Omit the key for no limit.
+ While a client holds a pointer or keyboard grab, such as an open tray menu, hovering a window or crossing outputs preserves that grab and its keyboard focus. An outside click or explicit focus action can still dismiss the menu.
  
- ### Controller desktop input
+ X11 windows that declare `Input=False` without `WM_TAKE_FOCUS`, including Steam's on-screen keyboard, receive pointer input without taking keyboard focus. Hovering or clicking the keyboard leaves typing directed at the previously focused window. These windows are also skipped when Umbriel chooses replacement focus after a window closes.
 diff --git a/examples/config.toml b/examples/config.toml
 index 8b90f82c..14d52b2e 100644
 --- a/examples/config.toml
@@ -225,7 +222,7 @@ index 9c5ccf4c..1c59da34 100644
        m_tabs.focusChanged(view);
      }
 diff --git a/src/workspace/workspace.h b/src/workspace/workspace.h
-index a24f802a..966d8abd 100644
+index 782558e3..f1726741 100644
 --- a/src/workspace/workspace.h
 +++ b/src/workspace/workspace.h
 @@ -124,7 +124,10 @@ namespace umbriel {

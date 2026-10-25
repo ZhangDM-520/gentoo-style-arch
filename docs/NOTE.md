@@ -17163,3 +17163,29 @@ Adjacent findings NOT fixed here (owner's call):
 - Run policy: one sync-refused recipe refuses the ENTIRE -S run at startup
   (fail-closed §G.1). With the parser fixed the two known refusals clear,
   but the next genuine sync refusal will again block every sibling row.
+
+### 2026-10-25 15:00 — umbriel PR #556 conflict resolved (input.md), recipe patches 0002/0003 retired
+Upstream main moved 21+ commits (679f4fb → `5527c8ff`) and PR #556 went
+CONFLICTING on `docs/user/input.md` (upstream's remark Markdown formatter +
+keybinds-docs move rewrote the Focus section). Rebased `eb8fb65` onto
+`5527c8ff` in an isolated worktree (`~/Workspace/umbriel-hover-rebase` — the
+shared scratch clone had a live PR-E probe in `fx_pass.c`, one-writer rule) →
+`687a15a1`. Sole conflict = input.md: kept upstream's new popup-grab
+preservation / X11 `Input=False` / Controller prose, slotted the `hover_raises`
+paragraph into the hover topic, ran `node tools/remark/format.mjs` on the file.
+All C++ seams auto-merged; re-reviewed `focusView` raise plumbing and
+`setFocusedView` against upstream's `0518370a` (popup grabs during hover).
+Rebased-tree validation: meson 142/142; harness focus/ 36/36 (new upstream
+checks included); full 388/391 — `animation/drag_toggle`, `effect/selection`,
+`output/two_output_containment` re-attributed as pre-existing (identical on
+base@`5527c8ff` without the commit). Fork branch tip was already `687a15a1`
+(parallel session pushed it); PR #556 MERGEABLE again.
+Merges consumed the carried patches: #508 → `e045d637` (0002 retired by the
+morning session) and #548 → `0bb8befd` (0003 retired now — settle behavior,
+`settleFloatingDrop`/`grabbableOrigin` and the mid-tween clamp retarget are all
+upstream; only `layout/floating_clamp_retarget.sh` missed the squash,
+test-only). Recipe now carries patch 0004 alone (sha256 `eea5ac93…`, regenerated
+from `687a15a1`), pkgver `0.1.0.r1389.5527c8f`, .SRCINFO pins, real-apply
+rehearsal on main@`5527c8f` clean. Rehearsal lesson: `git apply -3 --check`
+passes even for already-applied patches (trivial 3-way no-op) — judge the apply
+by the post-apply diff, not the exit code.

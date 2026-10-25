@@ -1,21 +1,26 @@
-# Current state — 2026-10-25 02:17 (live snapshot; overwrite, do not append)
+# Current state — 2026-10-25 15:00 (live snapshot; overwrite, do not append)
 
-## umbriel patch 0004 (PR #556): hover raises on click (2026-10-25)
-- `[input.focus] hover_raises` (default true, inert without `follows_mouse`):
-  false = hover focuses only, clicks/keybinds/activation raise; sweeping across
-  a larger window underneath no longer buries the window above. Raise computed
-  once in `FocusManager::focusView` → `applySeatFocus(.., raise)` +
-  `setFocusedView(view, raise, settleLayers)`; `m_lastRaise` replayed by
-  `retainCurrentKeyboardFocus`. Only `FocusReason::PointerHover` is special.
-- Red-first `focus/floating_hover_no_raise.sh` (5 pins) + 2 mutation proofs;
-  meson 140/140 (config_load pin), harness focus/ 34/34, full 373/378 (same
-  pre-existing set on base; `drag_toggle` = environmental config leak).
-- PR noctalia-dev/umbriel#556 (`eb8fb65`, base main@`679f4fb`): CI enforce /
-  intake / Format / Build×2 green, Lint pending at snapshot.
-- Recipe patch 0004 (sha256 `c6113bce…`) + pins (pkgver `0.1.0.r1368.679f4fb`)
-  + .SRCINFO; prepare() rehearsal on main@`679f4fb` clean (0002+0003+0004).
-  Installed `1:0.1.0.r1368.679f4fb-1` (02:16, gsa build 244s, qa findings=0).
-  Drop patch 0004 from the recipe when #556 merges (as 0001/#504).
+## umbriel patch 0004 (PR #556): rebased onto moved main; 0002/0003 retired (2026-10-25)
+- PR #556 conflict (docs/user/input.md — upstream's remark reformat + keybinds
+  doc move) resolved by rebasing `eb8fb65` onto main@`5527c8ff` → `687a15a1`
+  (fork branch already carried the same commit — parallel push). Resolution =
+  upstream's new grab-preservation / X11 `Input=False` / Controller prose kept,
+  `hover_raises` paragraph slotted into the hover topic; remark `format-docs`
+  run on the file. PR MERGEABLE again; CI green expected on the new head.
+- Rebase validation on the rebased tree: meson 142/142, harness focus/ 36/36
+  (incl. `floating_hover_no_raise`, `floating_above_fullscreen`), full 388/391
+  — 3 failures (`animation/drag_toggle`, `effect/selection`,
+  `output/two_output_containment`) reproduce on base@`5527c8ff` without the
+  commit (attribution rerun; drag_toggle still the live-config leak).
+- Upstream merges consumed recipe patches: #508 → `e045d637` (0002, retired
+  10:16 by the parallel session) and #548 → `0bb8befd` (0003: behavior +
+  settleFloatingDrop/grabbableOrigin + mid-tween retarget all upstream; only
+  `layout/floating_clamp_retarget.sh` was left out of the squash — test-only,
+  upstream's merge choice). 0003 retired now.
+- Recipe: single patch 0004 (sha256 `eea5ac93…`, regenerated from `687a15a1`),
+  pkgver `0.1.0.r1389.5527c8f`, .SRCINFO; real-apply rehearsal on main@`5527c8f`
+  clean (note: `git apply -3 --check` passes even for already-applied patches —
+  measure the post-apply diff). Build/install of the rebased patch pending.
 
 ## umbriel patch 0003 (PR #548): abandoned drags settle like drops (2026-10-24)
 - Talia review 5637877117 (P2) — the release settle was the only correction
