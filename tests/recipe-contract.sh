@@ -375,17 +375,6 @@ llvm-git: llvm
 llvm-git: llvm-libs
 logseq-desktop-git: logseq
 logseq-desktop-git: logseq-desktop
-mesa-git: libva-mesa-driver
-mesa-git: mesa
-mesa-git: mesa-libgl
-mesa-git: vulkan-intel
-mesa-git: vulkan-mesa-device-select
-mesa-git: vulkan-mesa-implicit-layers
-mesa-git: vulkan-mesa-layers
-mesa-git: vulkan-nouveau
-mesa-git: vulkan-radeon
-mesa-git: vulkan-swrast
-mesa-git: vulkan-virtio
 mimalloc-git: mimalloc
 nghttp3-git: nghttp3
 noctalia-git: noctalia

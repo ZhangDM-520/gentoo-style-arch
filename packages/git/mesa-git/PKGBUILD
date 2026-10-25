@@ -12,7 +12,7 @@
 
 pkgname=mesa-git
 pkgdesc="an open-source implementation of the OpenGL specification, git version"
-pkgver=26.3.0_devel.230728.8fc4981d2d2.2f181b7
+pkgver=27.0.0_devel.232390.18879c94176.2f181b7
 pkgrel=1
 arch=('x86_64')
 makedepends=(
@@ -57,20 +57,25 @@ depends=(
 )
 optdepends=('opengl-man-pages: for the OpenGL API man pages')
 provides=(
-    'vulkan-mesa-layers'
+    "vulkan-mesa-layers=${pkgver}"
     'opengl-driver'
     'vulkan-driver'
-    'vulkan-intel'
-    'vulkan-nouveau'
-    'vulkan-radeon'
-    'vulkan-swrast'
-    'vulkan-virtio'
-    'libva-mesa-driver'
-    'mesa-libgl'
-    'mesa'
+    "vulkan-intel=${pkgver}"
+    "vulkan-nouveau=${pkgver}"
+    "vulkan-radeon=${pkgver}"
+    "vulkan-swrast=${pkgver}"
+    "vulkan-virtio=${pkgver}"
+    "libva-mesa-driver=${pkgver}"
+    "mesa-libgl=${pkgver}"
+    "mesa=${pkgver}"
     "opencl-mesa=${pkgver}"
-    'vulkan-mesa-device-select'
-    'vulkan-mesa-implicit-layers'
+    "vulkan-mesa-device-select=${pkgver}"
+    "vulkan-mesa-implicit-layers=${pkgver}"
+    # capability virtuals the repo split carries (repo mesa provides
+    # libva-driver + opengl-driver; without the libva-driver virtual a
+    # dependent's provider prompt cannot be answered non-interactively
+    # against this package — the wl-screenrec wall, 2026-10-25)
+    'libva-driver'
 )
 conflicts=(
     'vulkan-mesa-layers'

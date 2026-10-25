@@ -17254,3 +17254,24 @@ recipe compiles against stock Arch ffmpeg and hits none of these):
 Declared-deps note: the binary's DT_NEEDED is libdrm + libav* + libgcc_s
 + libc exactly (wayland-rs is a pure-rust wire — no libwayland link; the
 AUR's `wayland`-free depends were right).
+
+## 2026-10-25 — mesa-git provides now mirror the repo split (owner: "let it mirror the repo")
+
+The wl-screenrec wall's root half closed: repo `mesa` provides the
+`libva-driver` capability virtual (and versioned `libva-mesa-driver=`/
+`mesa-libgl=` pins) that mesa-git's provides lacked, so any `libva-driver`
+dependent hit an unanswerable provider prompt against the installed git
+provider. mesa-git's provides now carry `libva-driver` (capability virtual,
+unversioned — the libjawt convention) and all eleven mapped swap names are
+versioned `=${pkgver}` (the recipe-contract QA's declared form), retiring
+all eleven `mesa-git: …` debt lines from the fixture's Q8 ratchet in the
+same change. Rebuilt + installed through the engine (413s); `pacman -T
+libva-driver` now reports SATISFIED.
+
+Mechanics notes (two lessons reinforced):
+- The engine's VCS refresh rewrote pkgver (26.3.0_devel… -> 27.0.0_devel…)
+  and RESET pkgrel to 1 on the version move — so the move itself defeats
+  the install seam's already-current skip (the libcolord pkgrel-bump
+  lesson applies only when the version does NOT move).
+- capability virtuals (opengl-driver, vulkan-driver, libva-driver) stay
+  unversioned — only mapped swap/compat names take `=${pkgver}`.
