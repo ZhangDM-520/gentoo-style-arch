@@ -1,7 +1,7 @@
 pkgbase = umbriel-git
 	pkgdesc = A Wayland compositor built on wlroots
 	pkgver = 0.1.0.r1389.5527c8f
-	pkgrel = 1
+	pkgrel = 2
 	epoch = 1
 	url = https://github.com/noctalia-dev/umbriel
 	arch = x86_64
@@ -40,7 +40,11 @@ pkgbase = umbriel-git
 	options = lto
 	source = umbriel::git+https://github.com/noctalia-dev/umbriel.git#branch=main
 	source = 0004-hover-raise-on-click.patch
+	source = 0005-perf-view-settled-views-effect-sync.patch
+	source = 0006-perf-scene-unchanged-geometry-work.patch
 	sha256sums = SKIP
 	sha256sums = eea5ac939d8f8f8b29faeefb1610dff97435544a9d2f25ebf70e9214007571b0
+	sha256sums = 76d83e107d6fe64dd40419ed658ef05b892339dc2ba57c0ca7b7191b06fd5615
+	sha256sums = 83e8905f85e2fe59902856471c0e54f38d84af16caf6859c4b01c0e5734ea4ac
 
 pkgname = umbriel-git

@@ -17189,3 +17189,26 @@ from `687a15a1`), pkgver `0.1.0.r1389.5527c8f`, .SRCINFO pins, real-apply
 rehearsal on main@`5527c8f` clean. Rehearsal lesson: `git apply -3 --check`
 passes even for already-applied patches (trivial 3-way no-op) — judge the apply
 by the post-apply diff, not the exit code.
+
+### 2026-10-25 19:32 — umbriel-git: perf patches A/B staged (0005/0006), live-test build installed
+Owner ask: stage the optimization walk's draft PRs as recipe patches and
+`gsa -S` install for a live test. **0005-perf-view-settled-views-effect-sync.patch**
+(noctalia-dev/umbriel#559, `git format-patch` of squashed `dda3114d`) and
+**0006-perf-scene-unchanged-geometry-work.patch** (#560, `037e98c9`); the
+sequence 0004→0005→0006 rehearsed `git apply -3` clean on main@`5527c8f` in an
+isolated worktree before wiring (0004 and 0005 both touch `src/view/view.h` —
+they stack cleanly). `pkgrel` 1→2: content changes at the same upstream
+version, and the bump marks the live-test build. `.SRCINFO` regenerated.
+Drops when the PRs land.
+
+Validation: `bash -n`; `makepkg --printsrcinfo`; `gsa -S --dry-run` (selection
+= exactly `umbriel-git`); `sudo gsa -Sf umbriel-git` rc=0 (228s, qa findings
+0): lane log shows 11+6+3 files applied cleanly, PGO gate green,
+`pacman -Q` = `1:0.1.0.r1389.5527c8f-2` installed 19:32:29.
+
+Force install (`-Sf`) on purpose: the same version string was already
+installed at 19:05 by a build run from the STALE `~/Workspace/gentoo-style-arch`
+copy (40+ commits behind origin; contained A+B only) — a same-version skip
+would have left the mislabeled `-2` in place. `~/Workspace` is scratch per the
+host rule; this tree is the only edit target. The stale copy's stray local
+commit was reset away.

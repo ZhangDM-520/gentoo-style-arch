@@ -9,7 +9,7 @@ source "$startdir/../../../lib/pgo.sh"
 pkgname=umbriel-git
 _pkgname=umbriel
 pkgver=0.1.0.r1389.5527c8f
-pkgrel=1
+pkgrel=2
 epoch=1
 pkgdesc='A Wayland compositor built on wlroots'
 arch=('x86_64' 'aarch64')
@@ -57,9 +57,13 @@ makedepends=(
 provides=("umbriel=${pkgver}")
 conflicts=('umbriel')
 source=("${_pkgname}::git+${url}.git#branch=main"
-        '0004-hover-raise-on-click.patch')
+        '0004-hover-raise-on-click.patch'
+        '0005-perf-view-settled-views-effect-sync.patch'
+        '0006-perf-scene-unchanged-geometry-work.patch')
 sha256sums=('SKIP'
-            'eea5ac939d8f8f8b29faeefb1610dff97435544a9d2f25ebf70e9214007571b0')
+            'eea5ac939d8f8f8b29faeefb1610dff97435544a9d2f25ebf70e9214007571b0'
+            '76d83e107d6fe64dd40419ed658ef05b892339dc2ba57c0ca7b7191b06fd5615'
+            '83e8905f85e2fe59902856471c0e54f38d84af16caf6859c4b01c0e5734ea4ac')
 
 pkgver() {
   cd "${_pkgname}"
@@ -86,6 +90,15 @@ prepare() {
   # upstream e045d637 and retired; 0003, PR #548's floating release settle,
   # merged upstream 0bb8befd and retired.)
   git apply -3 ../0004-hover-raise-on-click.patch
+
+  # Perf candidates A/B from the 2026-10 optimization walk (draft PRs
+  # noctalia-dev/umbriel#559 = settled views skip the animation tick's
+  # effect sync, #560 = skip unchanged geometry work in the surface
+  # reconfigure). Live-test staging — drop these two lines when the PRs
+  # land, or regenerate with `git format-patch` from the PR branches when a
+  # drift breaks the apply.
+  git apply -3 ../0005-perf-view-settled-views-effect-sync.patch
+  git apply -3 ../0006-perf-scene-unchanged-geometry-work.patch
 }
 
 build() {
