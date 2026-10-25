@@ -1,0 +1,106 @@
+# Maintainer: ZhangDM-520 <jixianqiang1540@gmail.com>
+# The AUR package of the same name was used as a reference only.
+
+_pkgname=wl-screenrec
+pkgname="$_pkgname-git"
+pkgver=0.3.2.r2.g32f7810
+pkgrel=1
+pkgdesc="High performance hardware accelerated wlroots screen recorder - git version"
+arch=('x86_64')
+url="https://github.com/russelltg/$_pkgname"
+license=('Apache-2.0')
+depends=(
+  'ffmpeg'
+  'gcc-libs'
+  'glibc'
+  'libdrm'
+)
+optdepends=(
+  'libva-driver: VA-API hardware-accelerated encoding'
+)
+makedepends=(
+  'clang'
+  'git'
+  'rust'
+  'vulkan-headers'
+)
+provides=("$_pkgname=${pkgver}")
+conflicts=("$_pkgname")
+source=("$_pkgname::git+https://github.com/russelltg/$_pkgname.git"
+        'cuda-types-stub.h'
+        'fix-ffmpeg-next-enum-drift.py')
+b2sums=('SKIP'
+        '196cb4e82db07174b2945441c3a5c302243d694a93798383c68b567e77e9fcb5c27458dd56ee44f71bc236afa5851596160535403cbcd718b299572455d0dfeb'
+        'fe9bfbe1e8d386f1642130c93301b526be6e81993435d5a3cfc6e82c5d10eadaff083dbcb98099dae216202db95bae4a08d86c9afe22287913821368d5ae1c69')
+
+pkgver() {
+  cd "$_pkgname"
+  # --tags: upstream's releases are lightweight tags, which bare
+  # `git describe --long` refuses to describe from.
+  git describe --long --abbrev=7 --tags | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g'
+}
+
+prepare() {
+  cd "$_pkgname"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_HOME="$srcdir"/.cargo
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+
+  # ffmpeg-next 9.0.0's sys-enum matches predate ffmpeg-git's new variants
+  # (E0004 drift) — compile-only catch-alls, see the script header
+  python3 "$srcdir/fix-ffmpeg-next-enum-drift.py" \
+    "$CARGO_HOME"/registry/src/*/ffmpeg-next-9.0.0
+}
+
+build() {
+  cd "$_pkgname"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_HOME="$srcdir"/.cargo
+  export CARGO_TARGET_DIR=target
+  # ffmpeg-sys-next's bindgen wrapper predates our ffmpeg-git's
+  # hwcontext_cuda.h (see cuda-types-stub.h for the full story)
+  export BINDGEN_EXTRA_CLANG_ARGS="-include $srcdir/cuda-types-stub.h"
+
+  # Disable sccache
+  unset RUSTC_WRAPPER
+
+  # Append to RUSTFLAGS, don't clobber makepkg.conf's CachyOS defaults
+  local _extra_rustflags="--remap-path-prefix=$srcdir=/"
+  if ! echo "${RUSTFLAGS:-}" | grep -q 'target-cpu'; then
+    _extra_rustflags+=" -C target-cpu=native"
+  fi
+  export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }$_extra_rustflags"
+
+  # Use mold linker if available
+  if command -v mold >/dev/null 2>&1; then
+    export RUSTFLAGS+=" -C link-arg=-fuse-ld=mold"
+  fi
+
+  # Upstream pins thin LTO in its release profile (Cargo.toml)
+  export CARGO_PROFILE_RELEASE_STRIP=symbols
+
+  cargo build --frozen --release --all-features
+
+  ./target/release/$_pkgname --generate-completions bash > $_pkgname.bash
+  ./target/release/$_pkgname --generate-completions zsh > $_pkgname.zsh
+  ./target/release/$_pkgname --generate-completions fish > $_pkgname.fish
+}
+
+check() {
+  cd "$_pkgname"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_HOME="$srcdir"/.cargo
+  cargo test --frozen
+}
+
+package() {
+  cd "$_pkgname"
+  install -Dm755 "target/release/$_pkgname" -t "$pkgdir/usr/bin/"
+  install -Dm644 README.md -t "$pkgdir/usr/share/doc/$pkgname/"
+  install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname/"
+  install -Dm644 "$_pkgname.bash" "$pkgdir/usr/share/bash-completion/completions/$_pkgname"
+  install -Dm644 "$_pkgname.zsh" "$pkgdir/usr/share/zsh/site-functions/_$_pkgname"
+  install -Dm644 "$_pkgname.fish" "$pkgdir/usr/share/fish/vendor_completions.d/$_pkgname.fish"
+}
+
+# vim: ts=2 sw=2 et:

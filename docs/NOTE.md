@@ -17212,3 +17212,45 @@ copy (40+ commits behind origin; contained A+B only) — a same-version skip
 would have left the mislabeled `-2` in place. `~/Workspace` is scratch per the
 host rule; this tree is the only edit target. The stale copy's stray local
 commit was reset away.
+
+## 2026-10-25 — new recipe: wl-screenrec-git (three ffmpeg-git skew walls)
+
+New `packages/git/wl-screenrec-git` (russelltg/wl-screenrec, Apache-2.0,
+cargo; pkgver `git describe --tags` — upstream's releases are LIGHTWEIGHT
+tags which bare `git describe --long` refuses). Topology record: group
+`git`, `abi=should`, edges `rust-git,llvm-git,git-git,glibc-git,ffmpeg-git,
+libdrm-git,libva-git,wayland-git,vulkan-headers-git` (rule 21(e) rust edge
++ the link surface, house edge convention). Built and installed through
+the engine; `wl-screenrec --version` = 0.3.2.
+
+Three walls crossed while packaging against the house ffmpeg-git (the AUR
+recipe compiles against stock Arch ffmpeg and hits none of these):
+
+1. **`libva-driver` provider prompt** (the weston/libcolord class): the
+   virtual is provided by repo `mesa` but NOT by installed `mesa-git` (its
+   provides mirror `libva-mesa-driver` but omit the `libva-driver` virtual
+   the repo split carries) — the shim cannot answer "Enter a number" and
+   repo mesa conflicts with mesa-git. Resolution: the VA DRIVER is a
+   runtime-choice capability (libjawt class — never one concrete provider),
+   declared as `optdepends=('libva-driver: …')`; ffmpeg already depends on
+   `libva` transitively. LEFT FOR THE OWNER: mesa-git's provides gap
+   (`libva-driver`, and the versioned `libva-mesa-driver=` pin) — any
+   future `libva-driver` dependents will trip the same prompt until
+   mesa-git's provides mirror the repo split.
+2. **ffmpeg-sys-next bindgen vs newer hwcontext_cuda.h**: the crate's
+   wrapper suppresses <cuda.h> and typedefs only CUcontext/CUstream; our
+   ffmpeg-git grew AVCUDAArrayFrameDescriptor (CUarray, CUdeviceptr,
+   CUDA_ARRAY3D_DESCRIPTOR). Fixed with `cuda-types-stub.h` (opaque
+   stand-ins, injected via BINDGEN_EXTRA_CLANG_ARGS=-include) — compile-only,
+   wl-screenrec never touches the CUDA hwcontext.
+3. **ffmpeg-next 9.0.0 E0004 drift** (latest release; no 9.1 exists): its
+   five sys-enum `From` impls match exhaustively and ffmpeg-git keeps
+   adding enum variants (AV_SAMPLE_FMT_DSD, AV_PIX_FMT_CUARRAY/XYZP12*,
+   AV_CODEC_ID_ASTC/…, *_GAIN_MAP_PARAMS). `fix-ffmpeg-next-enum-drift.py`
+   (self-verifying, anchor-asserting) adds one catch-all arm per match:
+   `None` sentinels for Sample/Pixel/Id, `unreachable!()` for the two
+   closed side-data Type enums.
+
+Declared-deps note: the binary's DT_NEEDED is libdrm + libav* + libgcc_s
++ libc exactly (wayland-rs is a pure-rust wire — no libwayland link; the
+AUR's `wayland`-free depends were right).

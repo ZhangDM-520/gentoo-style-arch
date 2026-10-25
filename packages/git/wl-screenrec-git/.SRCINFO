@@ -1,0 +1,26 @@
+pkgbase = wl-screenrec-git
+	pkgdesc = High performance hardware accelerated wlroots screen recorder - git version
+	pkgver = 0.3.2.r2.g32f7810
+	pkgrel = 1
+	url = https://github.com/russelltg/wl-screenrec
+	arch = x86_64
+	license = Apache-2.0
+	makedepends = clang
+	makedepends = git
+	makedepends = rust
+	makedepends = vulkan-headers
+	depends = ffmpeg
+	depends = gcc-libs
+	depends = glibc
+	depends = libdrm
+	optdepends = libva-driver: VA-API hardware-accelerated encoding
+	provides = wl-screenrec=0.3.2.r2.g32f7810
+	conflicts = wl-screenrec
+	source = wl-screenrec::git+https://github.com/russelltg/wl-screenrec.git
+	source = cuda-types-stub.h
+	source = fix-ffmpeg-next-enum-drift.py
+	b2sums = SKIP
+	b2sums = 196cb4e82db07174b2945441c3a5c302243d694a93798383c68b567e77e9fcb5c27458dd56ee44f71bc236afa5851596160535403cbcd718b299572455d0dfeb
+	b2sums = fe9bfbe1e8d386f1642130c93301b526be6e81993435d5a3cfc6e82c5d10eadaff083dbcb98099dae216202db95bae4a08d86c9afe22287913821368d5ae1c69
+
+pkgname = wl-screenrec-git
