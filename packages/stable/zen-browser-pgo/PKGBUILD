@@ -3,8 +3,8 @@
 # Contributor: StaticNullException <aurcontact@teto.party>
 
 pkgname=zen-browser
-pkgver=1.22.3b
-pkgrel=2
+pkgver=1.23.4b
+pkgrel=1
 pkgdesc='Firefox-based web browser built from upstream release source snapshot'
 url='https://zen-browser.app'
 arch=('x86_64')
@@ -87,7 +87,7 @@ source=(
   '0005-Fix-cbindgen-BudgetType_VALUES-COUNT-issue.patch'
   '0007-pgo-speedometer3.patch'
 )
-sha256sums=('5dafd8ae04726cb70b381723aa448f40507edab9232a20296e7d046037bd0b45'
+sha256sums=('a14da36b6aa101a59794c7f7e29e3a00c1be0c5e0e53d9f6c05a06e1cb631064'
             'af16fec9a88cbfffee34a6a4eb5b3074931477fcefee252840d77cf146568851'
             '28b086f5492d8e6731fe0dfe34a2e4c6d4d502a9eefa15a31e44b5788cf4df89'
             '0d24f2a45fa0f7fe108a91a50ae55708f66899b0229df7722fb87962f7a2a243'
