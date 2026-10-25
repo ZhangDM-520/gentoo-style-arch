@@ -1,0 +1,671 @@
+From b6d7542a1cf6fbbafea595a07e59bdfcc7bf7598 Mon Sep 17 00:00:00 2001
+From: ZhangDM-520 <jixianqiang1540@gmail.com>
+Date: Mon, 26 Oct 2026 01:52:25 +0800
+Subject: [PATCH 1/2] fix(view): defer the release re-home until the deform
+ settles
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A drag reparents the view under the unclipped drag tree so the sheet spans
+outputs; the release re-homed it under the home output's clipped root
+immediately, while the physics spring still displaced the sheet past that
+clip — the window's own border ring was cut off at the edge the moment the
+move ended, and only fitted the edge again once the deform settled.
+
+The resting re-home now waits in View::setSceneParent while the sheet is
+displaced. The deferral window spans the whole release flow — endDragPhysics
+arms it, the first animation tick closes it — so a drop that chains reparents
+(a cross-workspace transfer parks under the server tree, then re-homes onto
+the destination layer) still lands in the wait, while a later state change
+(fullscreen, pin, scratchpad) applies immediately and drops it. The wait is
+applied in the same tick the spring settles, or earlier while an overview is
+open and its cards need the home tree; the unmap path lands it too so a
+remap cannot reappear unclipped under the drag tree.
+
+Pinned by drag/physics_release_settle (outputs=2): a same-workspace drop and
+a cross-workspace transfer drop — the sheet's far half keeps drawing on the
+neighbour output through the displaced samples (16/64 ms), then the home clip
+applies again after the settle. Both failure branches are falsified: red on
+this base before the fix, red on a consume-once-arm mutation (the transfer
+cut), red on an apply-neutered mutation (the clip never applied).
+
+Validated: meson units 142/142; harness drag/ 29/30 — the one failure,
+drag/floating_release_settle ('did not animate through the margin'),
+reproduces identically on a pristine base build and predates this change;
+clang-format --dry-run -Werror clean.
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+---
+ src/view/view.cpp                             |  23 +++
+ src/view/view.h                               |   9 +
+ src/view/view_animation.cpp                   |  23 ++-
+ src/view/view_lifecycle.cpp                   |  10 +
+ .../checks/drag/physics_release_settle.sh     | 188 ++++++++++++++++++
+ 5 files changed, 251 insertions(+), 2 deletions(-)
+ create mode 100644 tests/harness/checks/drag/physics_release_settle.sh
+
+diff --git a/src/view/view.cpp b/src/view/view.cpp
+index 6e47c4ba..0606f9af 100644
+--- a/src/view/view.cpp
++++ b/src/view/view.cpp
+@@ -776,7 +776,30 @@ namespace umbriel {
+     refreshStateRuleEffects();
+   }
+ 
++  bool View::dragSheetDisplaced() const { return m_dragPhysics.active() || m_dragPhysics.grabbed(); }
++
+   void View::setSceneParent(wlr_scene_tree* parent) {
++    // A released sheet can still be displaced outside a home tree's output clip
++    // (the release spring runs on). Re-homing there cuts the displaced pixels
++    // off at the edge; the invisible part is only correct once the deform
++    // settles, so the release's resting re-homes wait for it. The window spans
++    // the whole release flow — endDragPhysics arms it and the first animation
++    // tick closes it — so a drop that chains reparents (a cross-workspace
++    // transfer parks, then re-homes) still lands in the wait, while a later
++    // state change (fullscreen, pin, scratchpad) applies immediately and drops
++    // the wait. A repeated request for the tree already waiting is absorbed.
++    const bool waitingForThisTree = m_pendingHomeParent != nullptr && m_pendingHomeParent == parent;
++    const bool displacedInDragTree =
++        parent != m_server->dragTree() && m_sceneTree->node.parent == m_server->dragTree() && dragSheetDisplaced();
++    if (displacedInDragTree && (m_releaseRehomeArmed || waitingForThisTree)) {
++      if (m_releaseRehomeArmed) {
++        m_pendingHomeParent = parent;
++      }
++      return;
++    }
++    m_pendingHomeParent = nullptr;
++    m_releaseRehomeArmed = false;
++
+     wlr_scene_node_reparent(&m_sceneTree->node, parent);
+     syncShadowPool();
+     // Another parent can put the window elsewhere in layout coordinates.
+diff --git a/src/view/view.h b/src/view/view.h
+index 47ec5913..ded0eb77 100644
+--- a/src/view/view.h
++++ b/src/view/view.h
+@@ -734,6 +734,9 @@ namespace umbriel {
+     void setDragPhysicsGrab(double localX, double localY);
+     void moveDragPhysics(double dx, double dy);
+     void endDragPhysics();
++    // True while the physics sheet is displaced from its resting box: grabbed,
++    // or still settling after the release.
++    [[nodiscard]] bool dragSheetDisplaced() const;
+     // Refits the sheet to the content tree's drawn bounds when they changed, or when the grab moved.
+     void fitDragPhysics(bool grabMoved);
+     struct DragFit {
+@@ -951,6 +954,12 @@ namespace umbriel {
+     ViewPresentation m_presentation;
+     DragPhysics m_dragPhysics;
+     double m_dragPhysicsMsec = 0; // animation clock at the sheet's last tick
++    // The resting re-home requested while the released sheet was still
++    // displaced (setSceneParent defers it); applied when the spring settles.
++    wlr_scene_tree* m_pendingHomeParent = nullptr;
++    // One release, one deferral: armed by endDragPhysics and consumed by the
++    // first resting re-home, so mid-settle state changes reparent immediately.
++    bool m_releaseRehomeArmed = false;
+     // The frame-local grab and the content tree's drawn bounds the sheet was last fitted to.
+     double m_dragGrabX = 0;
+     double m_dragGrabY = 0;
+diff --git a/src/view/view_animation.cpp b/src/view/view_animation.cpp
+index 3f600980..966bac5f 100644
+--- a/src/view/view_animation.cpp
++++ b/src/view/view_animation.cpp
+@@ -452,7 +452,12 @@ namespace umbriel {
+     }
+   }
+ 
+-  void View::endDragPhysics() { m_dragPhysics.release(); }
++  void View::endDragPhysics() {
++    m_dragPhysics.release();
++    // The spring keeps displacing the sheet past the release; arm the resting
++    // re-home's deferral (consumed in setSceneParent).
++    m_releaseRehomeArmed = true;
++  }
+ 
+   void View::restoreHomePresentation() {
+     // The drag derived its own presented size and crop; drop them so the
+@@ -940,7 +945,7 @@ namespace umbriel {
+       m_decoration.setBorderRawColor(m_borderColorAnim.current(), effectiveOpacity());
+       active = active || m_borderColorAnim.animating();
+     }
+-    if (m_dragPhysics.active() || m_dragPhysics.grabbed()) {
++    if (dragSheetDisplaced()) {
+       if (effectRegistry().deformationShader() == nullptr) {
+         // Without the program (physics turned off), the window stays rigid for the rest of the drag.
+         m_dragPhysics = DragPhysics{};
+@@ -956,6 +961,20 @@ namespace umbriel {
+         active = m_dragPhysics.tick(elapsed / 1000.0, cadenceS) || active;
+       }
+     }
++    // The deferred resting re-home lands in the same tick the spring settles —
++    // a later tick may never come — or earlier while an overview is open and
++    // its cards need the home tree. The first tick also closes the release
++    // flow's deferral window: from here on, state changes reparent immediately.
++    // The wait is cleared BEFORE the call so the guard cannot absorb its own
++    // apply while the sheet is still displaced.
++    m_releaseRehomeArmed = false;
++    if (m_pendingHomeParent != nullptr
++        && (!dragSheetDisplaced() || (m_server->overview() != nullptr && m_server->overview()->active()))) {
++      wlr_scene_tree* target = m_pendingHomeParent;
++      m_pendingHomeParent = nullptr;
++      m_releaseRehomeArmed = false;
++      setSceneParent(target);
++    }
+     syncAnimationEffects();
+     if (!active && m_mapped && m_xsurface != nullptr) {
+       syncXwaylandConfigure();
+diff --git a/src/view/view_lifecycle.cpp b/src/view/view_lifecycle.cpp
+index 27c3434c..d11aa58a 100644
+--- a/src/view/view_lifecycle.cpp
++++ b/src/view/view_lifecycle.cpp
+@@ -645,6 +645,16 @@ namespace umbriel {
+     m_dragSlotBound = false;
+     // The snapshot holds the frozen deformation; the live sheet ends here.
+     m_dragPhysics = DragPhysics{};
++    // Nothing will keep the deferred wait honest after this: land the resting
++    // tree NOW so a later remap cannot reappear unclipped under the drag tree.
++    m_releaseRehomeArmed = false;
++    if (m_pendingHomeParent != nullptr) {
++      wlr_scene_tree* target = m_pendingHomeParent;
++      m_pendingHomeParent = nullptr;
++      setSceneParent(target);
++    } else if (m_sceneTree->node.parent == m_server->dragTree()) {
++      setSceneParent(homeTree());
++    }
+     // The window slots leave with the snapshot; a remap binds them again.
+     if (m_effects.needsSurface()) {
+       wlr_surface* surface = rootSurface();
+diff --git a/tests/harness/checks/drag/physics_release_settle.sh b/tests/harness/checks/drag/physics_release_settle.sh
+new file mode 100644
+index 00000000..0d27b248
+--- /dev/null
++++ b/tests/harness/checks/drag/physics_release_settle.sh
+@@ -0,0 +1,188 @@
++#!/usr/bin/env bash
++# harness: outputs=2
++# Window physics displaces a dragged sheet across the shared output edge (each
++# output draws its half). The deform keeps running after release, so the sheet
++# still hangs over the boundary — its far half must keep drawing on the
++# neighbour until the deform settles, or the window's own ring is cut off at
++# the boundary the moment the move ends. Pinned twice: a drop on the home
++# output, and a drop on the neighbour output whose release TRANSFERS workspace
++# (the transfer's park + re-home are the release's resting re-homes too).
++set -euo pipefail
++source "$UMBRIEL_HARNESS_LIB"
++
++readonly BTN_LEFT=272
++hnheld=0; hn16=0; hn64=0; gr16=0; gr64=0; hn320=0; hnsettled=0
++bheld=0; b16=0; b64=0; bg16=0; bg64=0; bsettled=0
++
++cat >> "$UMBRIEL_CONFIG" <<'EOF'
++
++[layout]
++mode = "floating"
++
++[colors]
++backdrop = "#000000FF"
++[colors.border]
++focused = "#FF0000FF"
++[appearance]
++border_width = 8
++outer_border_width = 0
++corner_radius = 0
++drag_opacity = 1.0
++[appearance.shadow]
++enabled = false
++[animation]
++duration_ms = 1
++[animation.windows_in]
++enabled = false
++[animation.windows_out]
++enabled = false
++[animation.windows_drag]
++physics = true
++[[window_rule]]
++match.title = "^ring-cut$"
++default_floating = true
++default_floating_size_px = { width = 400, height = 300 }
++[effects]
++border = "ring"
++window = "window"
++[effects.preset.ring]
++kind = "border"
++shader = "ring.glsl"
++padding = 4
++[effects.preset.window]
++kind = "window"
++shader = "window.glsl"
++EOF
++cat > "$UMBRIEL_RUNTIME_DIR/ring.glsl" <<'GLSL'
++vec4 border(vec2 uv) { return vec4(1.0, 0.0, 0.0, 1.0); }
++GLSL
++cat > "$UMBRIEL_RUNTIME_DIR/window.glsl" <<'GLSL'
++vec4 window(vec2 uv) { return umbriel_sample(uv); }
++GLSL
++"$UMBRIEL" msg config-reload > /dev/null
++
++FILL_COLOR=0xFF00FF00 "$UMBRIEL_UNMAP_CLIENT" ring-cut 400 300 > "$UMBRIEL_RUNTIME_DIR/ring-cut.log" 2>&1 &
++for _ in $(seq 80); do
++  [[ -n $("$UMBRIEL" windows --json | jq -c '.[] | select(.title == "ring-cut")') ]] && break
++  sleep 0.025
++done
++"$UMBRIEL" settle > /dev/null
++
++home=$("$UMBRIEL" windows --json | jq -r '.[0].workspace' | cut -d: -f1)
++if [[ $home == HEADLESS-1 ]]; then neighbour=HEADLESS-2; else neighbour=HEADLESS-1; fi
++read -r wx wy ww wh < <(
++  "$UMBRIEL" windows --json | jq -r '.[0] | "\(.x) \(.y) \(.w) \(.h)"'
++)
++# Park the window straddling the shared edge: 200px on each side of x=1280.
++gx=$((wx + 40))
++gy=$((wy + 40))
++dx=$((1080 - wx))
++pointer_hold 2560 720 move "$gx" "$gy" mod super press "$BTN_LEFT" \
++  move $((gx + dx / 3)) "$gy" \
++  move $((gx + 2 * dx / 3)) "$gy" \
++  move $((gx + dx)) "$gy" -- release "$BTN_LEFT" mod none
++
++stats() { # $1 = label: red/green counts near the shared edge on both outputs
++  grim -o "$home" "$UMBRIEL_RUNTIME_DIR/$1-home.png"
++  grim -o "$neighbour" "$UMBRIEL_RUNTIME_DIR/$1-neighbour.png"
++  local hr hn gr gn
++  hr=$("$UMBRIEL_PIXEL_PROBE" "$UMBRIEL_RUNTIME_DIR/$1-home.png" count 'r > 0.8 && g < 0.2 && b < 0.2' "120x720+1160+0")
++  hn=$("$UMBRIEL_PIXEL_PROBE" "$UMBRIEL_RUNTIME_DIR/$1-neighbour.png" count 'r > 0.8 && g < 0.2 && b < 0.2' "120x720+0+0")
++  gr=$("$UMBRIEL_PIXEL_PROBE" "$UMBRIEL_RUNTIME_DIR/$1-home.png" count 'g > 0.8 && r < 0.2 && b < 0.2' "120x720+1160+0")
++  gn=$("$UMBRIEL_PIXEL_PROBE" "$UMBRIEL_RUNTIME_DIR/$1-neighbour.png" count 'g > 0.8 && r < 0.2 && b < 0.2' "120x720+0+0")
++  echo "$1 home-edge red=$hr green=$gr | neighbour-edge red=$hn green=$gn"
++  case $1 in
++    held) hnheld=$hn ;;
++    r16) hn16=$hn; gr16=$gr ;;
++    r64) hn64=$hn; gr64=$gr ;;
++    r320) hn320=$hn ;;
++    settled) hnsettled=$hn ;;
++    bheld) bheld=$hr ;;
++    b16) b16=$hr; bg16=$gn ;;
++    b64) b64=$hr; bg64=$gn ;;
++    bsettled) bsettled=$hr ;;
++  esac
++}
++
++"$UMBRIEL" clock-freeze
++"$UMBRIEL" clock-advance 16 > /dev/null
++stats held
++pointer_release
++"$UMBRIEL" clock-advance 16 > /dev/null
++stats r16
++"$UMBRIEL" clock-advance 48 > /dev/null
++stats r64
++"$UMBRIEL" clock-advance 256 > /dev/null
++stats r320
++"$UMBRIEL" clock-advance 768 > /dev/null
++stats settled
++"$UMBRIEL" clock-resume
++
++# The scenario must have engaged: while held, the ring's far half draws on the
++# neighbour, and the sheet is still measurable at r16. Without these floors the
++# assertions below pass vacuously.
++if ((hnheld < 100)); then
++  echo "scenario never engaged: no ring on the neighbour while held ($hnheld)"
++  exit 1
++fi
++if ((gr16 < 1000)); then
++  echo "unmeasurable: the home sample is empty at r16 (green=$gr16), a cut would pass silently"
++  exit 1
++fi
++
++# While the released sheet is still displaced across the shared edge (its home
++# half still drawn), the neighbour must keep drawing the far half. Re-homing the
++# view under the home output's clipped root the moment the move ends cuts the
++# deformed sheet's ring off at the boundary. Pinned at both displaced samples:
++# a re-home anywhere before the settle must fail here.
++if ((gr16 > 10000)) && ((hn16 < 100)); then
++  echo "the release cut the deformed sheet at the shared edge (neighbour red: held=$hnheld r16=$hn16 r64=$hn64)"
++  exit 1
++fi
++if ((gr64 > 10000)) && ((hn64 < 100)); then
++  echo "the release cut the deformed sheet mid-settle (neighbour red: r64=$hn64)"
++  exit 1
++fi
++
++# And the home clip must come back once the deform settled: a view left under
++# the unclipped drag tree forever would keep drawing past the edge.
++if ((hnsettled >= 100)); then
++  echo "the home clip never applied after settle (neighbour red: r320=$hn320 settled=$hnsettled)"
++  exit 1
++fi
++echo "a released sheet keeps drawing across the shared edge until the deform settles"
++
++# Second release — the drop lands on the NEIGHBOUR output, so it TRANSFERS
++# workspace: removeView parks the view under the server tree and addView
++# re-homes it onto the destination layer. Both are the release's resting
++# re-home and must wait for the settle just the same; a transfer that lands
++# immediately cuts the trailing sheet on the home side of the edge.
++pointer_hold 2560 720 move 1120 "$gy" mod super press "$BTN_LEFT" \
++  move 1180 "$gy" \
++  move 1250 "$gy" \
++  move 1320 "$gy" -- release "$BTN_LEFT" mod none
++"$UMBRIEL" clock-freeze
++"$UMBRIEL" clock-advance 16 > /dev/null
++stats bheld
++pointer_release
++"$UMBRIEL" clock-advance 16 > /dev/null
++stats b16
++"$UMBRIEL" clock-advance 48 > /dev/null
++stats b64
++"$UMBRIEL" clock-advance 1024 > /dev/null
++stats bsettled
++"$UMBRIEL" clock-resume
++
++if ((bheld < 100)); then
++  echo "transfer scenario never engaged: no ring on the home side while held ($bheld)"
++  exit 1
++fi
++if ((bg16 > 10000)) && ((b16 < 100)); then
++  echo "the transfer cut the deformed sheet at the shared edge (home red: held=$bheld r16=$b16 r64=$b64)"
++  exit 1
++fi
++if ((bg64 > 10000)) && ((b64 < 100)); then
++  echo "the transfer cut the deformed sheet mid-settle (home red: r64=$b64)"
++  exit 1
++fi
++echo "a transferred sheet keeps drawing across the shared edge until the deform settles"
+-- 
+2.56.0.236.g7e34d8174d
+
+
+From 7ac93ec1e223dd44a9e9476340ea0c0584f0c214 Mon Sep 17 00:00:00 2001
+From: ZhangDM-520 <jixianqiang1540@gmail.com>
+Date: Mon, 26 Oct 2026 02:31:48 +0800
+Subject: [PATCH 2/2] fix(view): land deferred release re-homes safely (review
+ round)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+External-review findings F1-F8 on the deferral: transient children follow the
+view home when it leaves the drag tree; the drag tree's stacking is restored
+only when the view actually leaves it (pinned/floating-over-fullscreen stay
+visible through the settle); the settle apply restacks floating views and syncs
+presentation; the release's say over the resting tree ends with the release
+handler; the unmap landing uses a fresh homeTree(); the overview flushes
+deferred re-homes synchronously; attach() supersedes the wait. The check gains
+displacement floors on every sample and asserts the transfer settle clip.
+
+Validated: units 142/142; full harness 386 pass — the 7 failures reproduce on
+pristine 77ec5ae6 (5) or pass in isolation (2 load flakes); clang-format clean.
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+---
+ src/input/cursor.cpp                          |  3 ++
+ src/overview/overview.cpp                     |  8 ++++
+ src/view/view.cpp                             | 46 +++++++++++++++----
+ src/view/view.h                               | 10 +++-
+ src/view/view_animation.cpp                   | 21 ++++-----
+ src/view/view_attachment.cpp                  |  3 ++
+ src/view/view_lifecycle.cpp                   | 13 +++---
+ .../checks/drag/physics_release_settle.sh     | 12 ++++-
+ 8 files changed, 85 insertions(+), 31 deletions(-)
+
+diff --git a/src/input/cursor.cpp b/src/input/cursor.cpp
+index 0d824e3a..baa6c7f4 100644
+--- a/src/input/cursor.cpp
++++ b/src/input/cursor.cpp
+@@ -1301,6 +1301,9 @@ namespace umbriel {
+         view->settleFloatingDrop(view->layoutX(), view->layoutY());
+       }
+     }
++    if (view != nullptr) {
++      view->closeReleaseRehomeWindow();
++    }
+     // Resize scaling belongs to the grab, including every sibling tile it resizes. Clear it before restoring clips:
+     // an unchanged clip otherwise keeps the scaled source/destination until the client commits again.
+     if (resizedWorkspace != nullptr) {
+diff --git a/src/overview/overview.cpp b/src/overview/overview.cpp
+index cdc9144c..c76fd3a6 100644
+--- a/src/overview/overview.cpp
++++ b/src/overview/overview.cpp
+@@ -1737,6 +1737,14 @@ namespace umbriel {
+     }
+ 
+     m_active = true;
++    // Cards need their home trees now; land deferred release re-homes without
++    // waiting for the next tick.
++    const auto overviewViews = m_server->registry().all();
++    for (const auto& entry : overviewViews) {
++      if (View* v = entry.get(); v != nullptr) {
++        v->flushReleaseRehome();
++      }
++    }
+     m_closing = false;
+     m_progress = 0.0;
+     m_targetProgress = 0.0;
+diff --git a/src/view/view.cpp b/src/view/view.cpp
+index 0606f9af..79ca2427 100644
+--- a/src/view/view.cpp
++++ b/src/view/view.cpp
+@@ -779,15 +779,13 @@ namespace umbriel {
+   bool View::dragSheetDisplaced() const { return m_dragPhysics.active() || m_dragPhysics.grabbed(); }
+ 
+   void View::setSceneParent(wlr_scene_tree* parent) {
+-    // A released sheet can still be displaced outside a home tree's output clip
+-    // (the release spring runs on). Re-homing there cuts the displaced pixels
+-    // off at the edge; the invisible part is only correct once the deform
+-    // settles, so the release's resting re-homes wait for it. The window spans
+-    // the whole release flow — endDragPhysics arms it and the first animation
+-    // tick closes it — so a drop that chains reparents (a cross-workspace
+-    // transfer parks, then re-homes) still lands in the wait, while a later
+-    // state change (fullscreen, pin, scratchpad) applies immediately and drops
+-    // the wait. A repeated request for the tree already waiting is absorbed.
++    // A released sheet stays displaced past a home tree's output clip while the
++    // spring settles; the release's resting re-homes wait for it (the invisible
++    // part is only correct when the window is settled). The wait covers every
++    // reparent the release issues, including a transfer's park + re-home; a
++    // later state change (fullscreen, pin, scratchpad) applies immediately and
++    // drops it, and a repeated request for the tree already waiting is
++    // absorbed. closeReleaseRehomeWindow() ends the release's say.
+     const bool waitingForThisTree = m_pendingHomeParent != nullptr && m_pendingHomeParent == parent;
+     const bool displacedInDragTree =
+         parent != m_server->dragTree() && m_sceneTree->node.parent == m_server->dragTree() && dragSheetDisplaced();
+@@ -797,17 +795,47 @@ namespace umbriel {
+       }
+       return;
+     }
++    const bool leavingDragTree = m_sceneTree->node.parent == m_server->dragTree() && parent != m_server->dragTree();
+     m_pendingHomeParent = nullptr;
+     m_releaseRehomeArmed = false;
+ 
+     wlr_scene_node_reparent(&m_sceneTree->node, parent);
+     syncShadowPool();
++    if (leavingDragTree) {
++      // The drag tree's elevation over pinned/fullscreen served this view; and
++      // transient children elevated with it follow it home.
++      wlr_scene_node_place_below(&m_server->dragTree()->node, &m_server->dragIconTree()->node);
++      syncTransientChildren();
++    }
+     // Another parent can put the window elsewhere in layout coordinates.
+     if (m_xsurface != nullptr && m_mapped) {
+       syncXwaylandConfigure();
+     }
+   }
+ 
++  void View::closeReleaseRehomeWindow() { m_releaseRehomeArmed = false; }
++
++  void View::flushReleaseRehome() {
++    if (m_pendingHomeParent == nullptr) {
++      return;
++    }
++    wlr_scene_tree* target = m_pendingHomeParent;
++    m_pendingHomeParent = nullptr;
++    m_releaseRehomeArmed = false;
++    setSceneParent(target);
++  }
++
++  void View::syncTransientChildren() {
++    const auto views = m_server->registry().all();
++    for (const auto& view : std::views::reverse(views)) {
++      View* child = view.get();
++      if (child != nullptr && child != this && child->transientParent() == this) {
++        child->syncTransientSceneParent();
++        child->syncTransientChildren();
++      }
++    }
++  }
++
+   void View::syncShadowPool() {
+     wlr_scene_tree* pool = m_workspace != nullptr && m_sceneTree->node.parent == m_workspace->viewLayer(true)
+         ? m_workspace->tileShadowLayer()
+diff --git a/src/view/view.h b/src/view/view.h
+index ded0eb77..77925a32 100644
+--- a/src/view/view.h
++++ b/src/view/view.h
+@@ -737,6 +737,12 @@ namespace umbriel {
+     // True while the physics sheet is displaced from its resting box: grabbed,
+     // or still settling after the release.
+     [[nodiscard]] bool dragSheetDisplaced() const;
++    // The release's say over where the view rests: the window closes when the
++    // release handler ends, flush lands the wait immediately.
++    void closeReleaseRehomeWindow();
++    void flushReleaseRehome();
++    // Re-points transient children at the trees this view now lives under.
++    void syncTransientChildren();
+     // Refits the sheet to the content tree's drawn bounds when they changed, or when the grab moved.
+     void fitDragPhysics(bool grabMoved);
+     struct DragFit {
+@@ -957,8 +963,8 @@ namespace umbriel {
+     // The resting re-home requested while the released sheet was still
+     // displaced (setSceneParent defers it); applied when the spring settles.
+     wlr_scene_tree* m_pendingHomeParent = nullptr;
+-    // One release, one deferral: armed by endDragPhysics and consumed by the
+-    // first resting re-home, so mid-settle state changes reparent immediately.
++    // Armed for one release flow: setSceneParent absorbs the reparents the
++    // release issues until closeReleaseRehomeWindow() ends the flow.
+     bool m_releaseRehomeArmed = false;
+     // The frame-local grab and the content tree's drawn bounds the sheet was last fitted to.
+     double m_dragGrabX = 0;
+diff --git a/src/view/view_animation.cpp b/src/view/view_animation.cpp
+index 966bac5f..c090d527 100644
+--- a/src/view/view_animation.cpp
++++ b/src/view/view_animation.cpp
+@@ -454,8 +454,7 @@ namespace umbriel {
+ 
+   void View::endDragPhysics() {
+     m_dragPhysics.release();
+-    // The spring keeps displacing the sheet past the release; arm the resting
+-    // re-home's deferral (consumed in setSceneParent).
++    // The resting re-home's wait covers the reparents the release issues.
+     m_releaseRehomeArmed = true;
+   }
+ 
+@@ -468,7 +467,6 @@ namespace umbriel {
+     if (m_ssdFrame != nullptr)
+       m_ssdFrame->setBlurLive(false);
+     setFadeAlpha(m_fadeAlpha);
+-    wlr_scene_node_place_below(&m_server->dragTree()->node, &m_server->dragIconTree()->node);
+     if (ScratchpadManager* scratchpad = m_server->scratchpadManager();
+         scratchpad != nullptr && scratchpad->contains(this)) {
+       scratchpad->restorePresentation(this);
+@@ -963,17 +961,18 @@ namespace umbriel {
+     }
+     // The deferred resting re-home lands in the same tick the spring settles —
+     // a later tick may never come — or earlier while an overview is open and
+-    // its cards need the home tree. The first tick also closes the release
+-    // flow's deferral window: from here on, state changes reparent immediately.
+-    // The wait is cleared BEFORE the call so the guard cannot absorb its own
+-    // apply while the sheet is still displaced.
++    // its cards need the home tree. This tick is also the backstop that closes
++    // the release's say over where the view rests.
+     m_releaseRehomeArmed = false;
+     if (m_pendingHomeParent != nullptr
+         && (!dragSheetDisplaced() || (m_server->overview() != nullptr && m_server->overview()->active()))) {
+-      wlr_scene_tree* target = m_pendingHomeParent;
+-      m_pendingHomeParent = nullptr;
+-      m_releaseRehomeArmed = false;
+-      setSceneParent(target);
++      flushReleaseRehome();
++      if (m_workspace != nullptr && !m_pinned) {
++        m_workspace->restackFloatingViews();
++        if (m_mapped) {
++          m_workspace->syncViewPresentation(this);
++        }
++      }
+     }
+     syncAnimationEffects();
+     if (!active && m_mapped && m_xsurface != nullptr) {
+diff --git a/src/view/view_attachment.cpp b/src/view/view_attachment.cpp
+index 533c7d64..e787624e 100644
+--- a/src/view/view_attachment.cpp
++++ b/src/view/view_attachment.cpp
+@@ -161,6 +161,9 @@ namespace umbriel {
+ 
+     m_attachedTo = parent;
+     parent->m_attachments.push_back(this);
++    // The raw reparent below supersedes any deferred resting re-home.
++    m_pendingHomeParent = nullptr;
++    m_releaseRehomeArmed = false;
+     wlr_scene_node_reparent(&m_sceneTree->node, parent->m_attachmentTree);
+     syncShadowPool();
+     setOnActiveWorkspace(true);
+diff --git a/src/view/view_lifecycle.cpp b/src/view/view_lifecycle.cpp
+index d11aa58a..46aaac8e 100644
+--- a/src/view/view_lifecycle.cpp
++++ b/src/view/view_lifecycle.cpp
+@@ -645,14 +645,13 @@ namespace umbriel {
+     m_dragSlotBound = false;
+     // The snapshot holds the frozen deformation; the live sheet ends here.
+     m_dragPhysics = DragPhysics{};
+-    // Nothing will keep the deferred wait honest after this: land the resting
+-    // tree NOW so a later remap cannot reappear unclipped under the drag tree.
++    // Land the resting tree now so a later remap cannot reappear unclipped
++    // under the drag tree. homeTree() is authoritative here: pinned, scratchpad
++    // and attachment state are already stripped above.
++    const bool needsRehome = m_pendingHomeParent != nullptr || m_sceneTree->node.parent == m_server->dragTree();
+     m_releaseRehomeArmed = false;
+-    if (m_pendingHomeParent != nullptr) {
+-      wlr_scene_tree* target = m_pendingHomeParent;
+-      m_pendingHomeParent = nullptr;
+-      setSceneParent(target);
+-    } else if (m_sceneTree->node.parent == m_server->dragTree()) {
++    m_pendingHomeParent = nullptr;
++    if (needsRehome) {
+       setSceneParent(homeTree());
+     }
+     // The window slots leave with the snapshot; a remap binds them again.
+diff --git a/tests/harness/checks/drag/physics_release_settle.sh b/tests/harness/checks/drag/physics_release_settle.sh
+index 0d27b248..cbc9ee13 100644
+--- a/tests/harness/checks/drag/physics_release_settle.sh
++++ b/tests/harness/checks/drag/physics_release_settle.sh
+@@ -125,8 +125,8 @@ if ((hnheld < 100)); then
+   echo "scenario never engaged: no ring on the neighbour while held ($hnheld)"
+   exit 1
+ fi
+-if ((gr16 < 1000)); then
+-  echo "unmeasurable: the home sample is empty at r16 (green=$gr16), a cut would pass silently"
++if ((gr16 < 10000)) || ((gr64 < 10000)); then
++  echo "unmeasurable: home samples too small (gr16=$gr16 gr64=$gr64), a cut would pass silently"
+   exit 1
+ fi
+ 
+@@ -177,6 +177,10 @@ if ((bheld < 100)); then
+   echo "transfer scenario never engaged: no ring on the home side while held ($bheld)"
+   exit 1
+ fi
++if ((bg16 < 10000)) || ((bg64 < 10000)); then
++  echo "unmeasurable: transfer displacement samples too small (bg16=$bg16 bg64=$bg64)"
++  exit 1
++fi
+ if ((bg16 > 10000)) && ((b16 < 100)); then
+   echo "the transfer cut the deformed sheet at the shared edge (home red: held=$bheld r16=$b16 r64=$b64)"
+   exit 1
+@@ -185,4 +189,8 @@ if ((bg64 > 10000)) && ((b64 < 100)); then
+   echo "the transfer cut the deformed sheet mid-settle (home red: r64=$b64)"
+   exit 1
+ fi
++if ((bsettled >= 100)); then
++  echo "the destination clip never applied after the transfer settle (home red: $bsettled)"
++  exit 1
++fi
+ echo "a transferred sheet keeps drawing across the shared edge until the deform settles"
+-- 
+2.56.0.236.g7e34d8174d
+

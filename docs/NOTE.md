@@ -17346,3 +17346,20 @@ Mechanics notes (two lessons reinforced):
   evidence; design-B residual documented. External review brief for the
   travel-scale work dispatched to `/tmp/review-552-strip-travel-scale.md`
   (report lands in the journal tree).
+
+
+### 2026-10-26 02:55 — umbriel patches 0010/0011 staged (build deferred; 0011 held unwired)
+- Convention applied to the two parallel-session PRs: #569 (wide columns,
+  head `87f469c5`, single commit on `fd0a6e9a`) → 0010-wide-columns.patch
+  (sha256 `d5698040…`) wired; #570 (drag-deform settle, head `7ac93ec1`) →
+  0011 generated but DEFERRED per the user (thread being settled) — file kept
+  in the tree, NOT in source/prepare.
+- Pitfall (patch pipeline): a PR head that is a review-round commit on top of
+  another PR commit does NOT survive `format-patch -1` (the round's hunks
+  reference the base commit's files — `physics_release_settle.sh: No such file
+  or directory`). Generate the FULL range (`77ec5ae6..7ac93ec1`, sha256
+  `fdd41ca1…`); also rehearse with `git apply -3` exactly as prepare() runs it,
+  on a `git clean -fdx`'d tree (stale untracked files from a partial apply make
+  later patches "fail" spuriously).
+- Combined rehearsal 0008+0009+0010+0011 clean on main@`fd0a6e9`; wired subset
+  is 0008-0010. Build deferred (user). .SRCINFO refreshed.

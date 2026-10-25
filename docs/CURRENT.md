@@ -1,4 +1,17 @@
-# Current state — 2026-10-26 01:35 (live snapshot; overwrite, do not append)
+# Current state — 2026-10-26 02:55 (live snapshot; overwrite, do not append)
+
+## umbriel: patch 0010 (PR #569 wide columns) wired; 0011 (PR #570) deferred (2026-10-26)
+- Patch pipeline convention (user): every patch ships live-install-ready and
+  verified; retire on merge. Retire watches: 0008 → PR #566 (READY, external
+  review APPROVE/0 findings), 0009 → PR #568, 0010 → PR #569.
+- 0010-wide-columns.patch (sha256 `d5698040…`, PR #569 head `87f469c5`,
+  single commit on main@`fd0a6e9a`) wired into source/sha/prepare; combined
+  rehearsal 0008+0009+0010+0011 clean on main@`fd0a6e9`. BUILD DEFERRED (user).
+- 0011-drag-deform-settle-crop.patch (PR #570, DEFERRED — user settling the
+  thread): file kept ready in the tree but NOT wired. Generation note: full
+  range `77ec5ae6..7ac93ec1` (two commits — the head is a review round on top
+  of `b6d7542a`; `format-patch -1` of the head alone does NOT apply), sha256
+  `fdd41ca1…`, cut against the wide-columns base → apply after 0010.
 
 ## umbriel: per-axis travel scales (PR #566) + hot-corner PR #568 (2026-10-26)
 - PR #566 (`[input.gesture] travel_scale_horizontal/_vertical`, closes #552):
