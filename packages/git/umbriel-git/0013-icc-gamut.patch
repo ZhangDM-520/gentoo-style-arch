@@ -1,7 +1,7 @@
-From d62cb99b3a50c793d90473b4df04ea403a31fd73 Mon Sep 17 00:00:00 2001
+From acf2106e758860d3313cfebd1b75df3bdabedafa Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 18:19:43 +0800
-Subject: [PATCH 1/7] feat(color): characterize outputs from ICC/EDID and map
+Subject: [PATCH 1/8] feat(color): characterize outputs from ICC/EDID and map
  the SDR gamut
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -2352,10 +2352,10 @@ index 4800e27c..38bc70ac 100644
 2.56.0.236.g7e34d8174d
 
 
-From a66c82c8deb3cf8d724bd9da0f9c1fbabe0e74cc Mon Sep 17 00:00:00 2001
+From 4d35ce4ca6fbc2b0c97fcce0c56d61b98df8036f Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 18:19:43 +0800
-Subject: [PATCH 2/7] feat(color): ICC image descriptions and icc_file
+Subject: [PATCH 2/8] feat(color): ICC image descriptions and icc_file
  advertising
 
 Characterized output and preferred descriptions report the panel's custom
@@ -4049,10 +4049,10 @@ index 06024dbe..d7a07a23 100644
 2.56.0.236.g7e34d8174d
 
 
-From 4c020d39c4839731ca8339e3fa9f94629820f4de Mon Sep 17 00:00:00 2001
+From 6cffeb88c698d0aa44deda9ec924ddc2136c7ec8 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 18:19:52 +0800
-Subject: [PATCH 3/7] test(color): live color-profile coverage
+Subject: [PATCH 3/8] test(color): live color-profile coverage
 
 The check drives the creator over the wire (ready, failed, get_information
 denial, bad_size), pins the icc_file bytes against the configured profile,
@@ -4376,10 +4376,10 @@ index 00000000..e1530639
 2.56.0.236.g7e34d8174d
 
 
-From 2be192290593b8e257c202295c55592b0e2999e8 Mon Sep 17 00:00:00 2001
+From ad32d8ede0e1f20ddc50b89cfe150ca866ea43d6 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 18:19:52 +0800
-Subject: [PATCH 4/7] docs(color): document color profiles and client ICC
+Subject: [PATCH 4/8] docs(color): document color profiles and client ICC
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 ---
@@ -4473,10 +4473,10 @@ index 01bff86c..58100200 100644
 2.56.0.236.g7e34d8174d
 
 
-From d3382d6bdcc476f1e677150be8d6a3280ff82bda Mon Sep 17 00:00:00 2001
+From 51c78d35851ae8cadd9ffaafb8c331a5bb521a30 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 18:53:26 +0800
-Subject: [PATCH 5/7] fix(color): fold composed LUT stages and fix the wideness
+Subject: [PATCH 5/8] fix(color): fold composed LUT stages and fix the wideness
  white point
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -4870,10 +4870,10 @@ index 04317a4c..fb0d5b5c 100644
 2.56.0.236.g7e34d8174d
 
 
-From d5df4e95949254457daab3650f03e782590d2713 Mon Sep 17 00:00:00 2001
+From 1ea23a6af245c3ec56b5735c6f99f68f76de2bff Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Tue, 27 Oct 2026 00:36:57 +0800
-Subject: [PATCH 6/7] fix(color): address the external review round
+Subject: [PATCH 6/8] fix(color): address the external review round
 
 Memory safety: close the icc_file memfd after marshalling (libwayland dups;
 64-request storm leaked 64 fds before), release the LUT fold inputs exactly
@@ -9087,10 +9087,10 @@ index fb0d5b5c..b73aaec5 100644
 2.56.0.236.g7e34d8174d
 
 
-From 4f3312db3b129ec0e28681b86a6746f527da278a Mon Sep 17 00:00:00 2001
+From becc40ca809b77a4edc43561f1fdba3e0237fa3f Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Tue, 27 Oct 2026 06:15:27 +0800
-Subject: [PATCH 7/7] fix(color): polish items from external review round 2
+Subject: [PATCH 7/8] fix(color): polish items from external review round 2
 
 - Clamp lut_row_eval input to [0, 1] so negative lerp rounding cannot
   underflow the size_t table index.
@@ -9214,6 +9214,70 @@ index c68d62c0..83de1d5c 100644
    const double position = x * (double)(dim - 1);
    const size_t lower = (size_t)position;
    const size_t upper = lower + 1 < dim ? lower + 1 : dim - 1;
+-- 
+2.56.0.236.g7e34d8174d
+
+
+From 40b1e93494d7ba0867e2f790245dd7489c296105 Mon Sep 17 00:00:00 2001
+From: ZhangDM-520 <jixianqiang1540@gmail.com>
+Date: Tue, 27 Oct 2026 07:02:31 +0800
+Subject: [PATCH 8/8] style(color): normalize formatting in the lut-fold test
+ hook and pins
+
+clang-format (repo .clang-format, CI's dry-run command) rewraps the
+alloc-failure test hook and two test call sites left unformatted by the
+fix round; tree-wide check is now clean.
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+---
+ umbrielfx/render/color.c |  4 +---
+ umbrielfx/tests/color.c  | 11 ++++++-----
+ 2 files changed, 7 insertions(+), 8 deletions(-)
+
+diff --git a/umbrielfx/render/color.c b/umbrielfx/render/color.c
+index 83de1d5c..a3da1238 100644
+--- a/umbrielfx/render/color.c
++++ b/umbrielfx/render/color.c
+@@ -297,9 +297,7 @@ static bool fail_lut_fold_alloc_for_test = false;
+ // and the production header stays free of it.
+ void color_transform_fail_lut_fold_alloc_for_test(bool fail);
+ 
+-void color_transform_fail_lut_fold_alloc_for_test(bool fail) {
+-  fail_lut_fold_alloc_for_test = fail;
+-}
++void color_transform_fail_lut_fold_alloc_for_test(bool fail) { fail_lut_fold_alloc_for_test = fail; }
+ 
+ // Sample one table row at a normalized position, linearly the way the shaders
+ // sample a LUT.
+diff --git a/umbrielfx/tests/color.c b/umbrielfx/tests/color.c
+index b73aaec5..ae56cff9 100644
+--- a/umbrielfx/tests/color.c
++++ b/umbrielfx/tests/color.c
+@@ -404,8 +404,8 @@ static bool run_lut_fold_case(const struct lut_fold_case* fold_case) {
+       // Even samples are grid nodes, odd samples sit between them.
+       for (size_t sample = 0; sample <= 2 * (grid - 1); sample++) {
+         const double x = (double)sample / (double)(2 * (grid - 1));
+-        const double reference = lut_table_eval(second_rows[channel], second_dim,
+-            lut_table_eval(first_rows[channel], first_dim, x));
++        const double reference =
++            lut_table_eval(second_rows[channel], second_dim, lut_table_eval(first_rows[channel], first_dim, x));
+         const float in[3] = {(float)x, (float)x, (float)x};
+         float out[3] = {0.0f, 0.0f, 0.0f};
+         wlr_color_transform_eval(folded, out, in);
+@@ -518,9 +518,10 @@ static bool test_compose_lut_fold_alloc_failure(void) {
+   const bool refs_held = first->ref_count == first_refs && second->ref_count == second_refs;
+   ok = check(refs_held, "fold failure releases each stage exactly once") && ok;
+   if (!refs_held) {
+-    fprintf(stderr,
+-        "FAIL: stage ref_count after fold failure: first %d (expected %d), second %d (expected %d)\n",
+-        first->ref_count, first_refs, second->ref_count, second_refs);
++    fprintf(
++        stderr, "FAIL: stage ref_count after fold failure: first %d (expected %d), second %d (expected %d)\n",
++        first->ref_count, first_refs, second->ref_count, second_refs
++    );
+     return false;
+   }
+   wlr_color_transform_unref(held);
 -- 
 2.56.0.236.g7e34d8174d
 
