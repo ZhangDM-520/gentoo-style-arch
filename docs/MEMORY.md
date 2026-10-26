@@ -3974,3 +3974,18 @@ constant, not a baked path); and the xorg-xwayland-git PGO end-to-end proof
   `<lib>/_libs/*.a` (gdb's binutils-gdb bundle died on `../bfd/_libs/libbfd.a`). A `ln -s .libs
   <lib>/_libs` bridge per bundled subdir fixes it; and a link error that survives a layout fix may
   be stale-tree residue — clean-room before blaming the linker.
+64. **SRCDEST has exactly one authority — never export it in a shell**
+    (2026-10-26, measured): gsa's `resolve_srcdest()` is env-first
+    (SRCDEST env > build user's ~/.makepkg.conf > /etc/makepkg.conf) and
+    `sudo` carries the invoking shell's environment, so a `set -gx SRCDEST`
+    in fish config silently overrode ~/.makepkg.conf and the source cache
+    BOUNCED between two locations across config eras (seen: builds cloned
+    into ~/.cache/gsa-src while makepkg.conf said ~/.gsa-src; stale VCS
+    mirrors in the losing location then produced ancient checkouts and
+    patch conflicts against them). Rule: SRCDEST lives ONLY in
+    ~/.makepkg.conf (contract §J.2); the shell export is deleted with a
+    why-comment. Probe before trusting any VCS-freshness number:
+    `env | grep SRCDEST` must be EMPTY and `grep SRCDEST ~/.makepkg.conf`
+    names the single cache; `ls <cache>` shows the mirrors. Sessions whose
+    shell env predates the fix need `env -u SRCDEST` on every gsa/makepkg
+    invocation. (last reviewed 2026-10-26)

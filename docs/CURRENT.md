@@ -335,3 +335,23 @@
   abi fixture slice green against the INSTALLED engine).
 - When no run is live: `sudo gsa -Md --fix` (binpkg index reconciliation).
 - Owner: the three questions above; poppler 26.10 landing path.
+
+## 2026-10-26 path map (the scattered-config cleanup)
+One authority per path — probe, don't remember:
+- **Source cache (SRCDEST)**: `~/.makepkg.conf` ONLY (currently
+  ~/.gsa-src). The fish-shell export that pointed at ~/.cache/gsa-src is
+  DELETED (MEMORY rule 64); the stale dir's one live mirror (noctalia,
+  141M) was migrated into ~/.gsa-src and the dir trashed. Session shells
+  started before the fix carry the old env: `env -u SRCDEST <cmd>`.
+- **Build cache (BUILDDIR/PKGDIR/PKGDEST)**: `gsa.conf build_dir` = the
+  external f2fs drive (`gsa-build/{build,pkg,pkgs}`). Archives land in
+  `pkgs/` and the binpkg index tracks them there; churn cleanup deletes
+  them while index rows may linger (the noctalia 5.3.0 archive lesson).
+  Drive drops with the laptop — `findmnt -T <build_dir>` must say f2fs
+  (MEMORY rule 62) before trusting any build output.
+- **Recipe store**: build user's ~/.local/share/gsa/recipes, refreshed
+  ONLY by `gsa -Sy` (fetch+reset — uncommitted sync output is volatile,
+  MEMORY rule 63). Dev checkout ~/Projects/gentoo-style-arch is edit-only.
+- **Engine state**: /var/lib/gsa (runs, index, abi, logs — logs APPEND
+  across runs, so "Finished making (old date)" blocks are history, not a
+  second build).

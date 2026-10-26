@@ -2,7 +2,7 @@
 
 pkgname=noctalia-git
 _pkgname=noctalia
-pkgver=5.2.1.r5699.g4237bc286
+pkgver=5.3.0.r5873.gee75f7adc
 pkgrel=1
 pkgdesc='A sleek, customizable desktop shell crafted for Wayland'
 arch=('x86_64' 'aarch64')
@@ -61,7 +61,12 @@ makedepends=(
 options=('!debug' 'lto')
 provides=('noctalia')
 conflicts=('noctalia' 'noctalia-bin')
-source=("${_pkgname}::git+${url}.git#branch=main"
+source=("${_pkgname}::git+${url}.git#commit=ee75f7adcc012f2b02852b655769758cce7eb721"
+        # TEMPORARY pin: the idle patch below is rebased onto ee75f7adc and
+        # 3-way conflicts against current main (1af14b8c) — #branch=main
+        # builds fail in prepare() until the patch is rebased and this goes
+        # back to #branch=main. The pin reproduces the last green build
+        # (5.3.0.r5873.gee75f7adc-1) exactly. PR #4002 still OPEN.
         0001-idle-lock-resume-and-inhibit-tracking.patch)
 sha256sums=('SKIP'
             '0a952b005b7ede29177f0205b52e7c3333d84d1200d3c9ffb6824c8a5b43197e')
