@@ -17459,3 +17459,31 @@ committed. BUILD HELD per owner.
 collide across stack patches — re-cut the incoming slice on the stacked base
 and union the blocks; never touch the upstream branch. When identical tool
 runs disagree, hash the inputs before suspecting the tool (MEMORY rule 65).
+
+## 2026-10-27 01:5x — umbriel-git: 0017 (PR #584) wired on main@155665c8; BUILD HELD
+
+**0017-overview-card-drag-input.** Overview card drag input (user feedback
+2026-10-26): held card drags edge-scroll the strip (`input.drag_edge_scroll`
+scope widened to card drags; data drags and tiled moves keep the overview
+exclusion), two-finger scrolling keeps panning the strip pan-only under the
+hold (drop settles at the panned position; wheel notches inert). Upstream
+PR noctalia-dev/umbriel#584; sha256 acc85b02…, full range
+`d9497f36..c2f3ebc6` — three commits (edge auto-scroll, held-drag
+finger-scroll with both review rounds, docs). Cut with
+`git format-patch --stdout` from the fork branch; regenerate as
+`<merge-base>..pr-584` on drift. (Retire on merge: 0017 → PR #584.)
+
+**Pin.** Upstream main moved to `155665c8` ("feat(rules): control client
+shortcut inhibition per window"); rev-list count 1399 →
+`pkgver=0.1.0.r1399.155665c`, pkgrel 1.
+
+**Validation.** Stack rehearsal on main@`155665c8` (prepare() order,
+`git apply -3`): 0008..0017 9/9 apply rc=0, `git diff --cached
+--shortstat` = 98 files, 8332 insertions, 214 deletions. `bash -n PKGBUILD`
+clean. `.SRCINFO` regenerated — it also refreshes 0013's sha
+(08447292… → e51cef88…), stale since the cff23f4 re-cut, disclosed here
+rather than slipped in. Branch itself validated at head `c2f3ebc6`:
+harness 9/9 green (3 new `drag/overview_card_*` + 6 controls), `just
+format` no-op, lint 234/234. `tests/run-all.sh recipe-sources` expected to
+flag the untracked 0017 until this lands as a commit — re-run green after
+the disposition call. BUILD HELD per owner.

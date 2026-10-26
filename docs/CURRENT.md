@@ -1,20 +1,25 @@
-# Current state — 2026-10-26 22:1x (live snapshot; overwrite, do not append)
+# Current state — 2026-10-27 01:5x (live snapshot; overwrite, do not append)
 
-## umbriel: 0014/0015/0016 wired (PRs #575/#577/#580) — BUILD HELD (2026-10-26)
-- Wired stack 0008+0009+0011+0012+0013+0014+0015+0016; pkgver pin
-  `0.1.0.r1398.d9497f3` pkgrel 1. Rehearsal clean on main@`d9497f36`
-  (8/8 apply rc=0; 89 files, +5565/-195).
+## umbriel: 0017 (PR #584) wired on main@155665c8 — BUILD HELD (2026-10-27)
+- Wired stack 0008+0009+0011+0012+0013+0014+0015+0016+0017; pkgver pin
+  `0.1.0.r1399.155665c` pkgrel 1 (upstream main moved to `155665c8`).
+  Rehearsal clean on main@`155665c8` (9/9 apply rc=0; 98 files, +8332/-214).
+- 0017-overview-card-drag-input = range `d9497f36..c2f3ebc6` (three
+  commits, sha256 acc85b02…), upstream PR noctalia-dev/umbriel#584 (open
+  2026-10-27). `.SRCINFO` regenerated; it also refreshed 0013's stale sha
+  (08447292… → e51cef88…) from the cff23f4 re-cut.
 - Retire watches: 0008→PR #566, 0009→#568, 0011→#570, 0012→#573,
-  0014→#575, 0015→#577, 0016→#580 — all OPEN/MERGEABLE as of 22:0x
-  (#573=`0e484016`, #575=`f75b2161`, #577=`971a1ead`, #580=`ca657214`).
-  0013 has no PR (issue #574) — retire on upstream merge.
-- 0014 = slice `0e484016..f75b2161` (sha256 6bfc6151…); 0015 re-cut on the
-  stacked base (0008 test-anchor union; sha256 5fc4cb98…); 0016 = range
+  0014→#575, 0015→#577, 0016→#580, 0017→#584. 0013 has no PR (issue
+  #574) — retire on upstream merge. Slice provenance: 0014 =
+  `0e484016..f75b2161` (sha256 6bfc6151…); 0015 re-cut on the stacked base
+  (0008 test-anchor union; sha256 5fc4cb98…); 0016 = range
   `76477c29..ca657214` (sha256 cbccab7c…).
 - BUILD HELD (owner's call pending). On the call: `sudo gsa -S --leaf
   --no-sync --lanes 1 --jobs 8 --intensity xhigh umbriel-git`, then
   `pacman -Q` + key-string greps (travel_scale_*, render_scale, downsample,
   #580 border-effect keys).
+- Open: recipe-repo commit disposition (owner ask-first); GSA commit would
+  carry PKGBUILD + .SRCINFO + 0017 patch file.
 
 ## umbriel: 0011 + 0012 wired, build + install VERIFIED (2026-10-26)
 - Patch pipeline convention (user): every patch ships live-install-ready and

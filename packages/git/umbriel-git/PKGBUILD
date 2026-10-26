@@ -8,7 +8,7 @@ source "$startdir/../../../lib/pgo.sh"
 
 pkgname=umbriel-git
 _pkgname=umbriel
-pkgver=0.1.0.r1398.d9497f3
+pkgver=0.1.0.r1399.155665c
 pkgrel=1
 epoch=1
 pkgdesc='A Wayland compositor built on wlroots'
@@ -64,7 +64,8 @@ source=("${_pkgname}::git+${url}.git#branch=main"
         '0013-icc-gamut.patch'
         '0014-downsample-box.patch'
         '0015-unaccel-gesture-deltas.patch'
-        '0016-border-unfocused.patch')
+        '0016-border-unfocused.patch'
+        '0017-overview-card-drag-input.patch')
 sha256sums=('SKIP'
             '03258711f3a2afdcd53dc3cff3a90180e97b4297e59245604d087826ee37581c'
             '2600cb2ce8eee8f06f6d7cf557d862d139751091210e002ee7d818c6ec911fff'
@@ -73,7 +74,8 @@ sha256sums=('SKIP'
             'e51cef88b089757aaab34946574af7562084337effe0ba40dd6c3e6e7d98b94d'
             '6bfc61519439d329344b7ab3dbebcd20dc810fa988af68e7a3cd61615c9fb140'
             '5fc4cb98a3d4d24e596c6f912d4d81fb68317535523d9647d68873538d120879'
-            'cbccab7c6601b6adbe48fd4dfbf0de258c46d5ba4b91dedf3f7fd2e00257b169')
+            'cbccab7c6601b6adbe48fd4dfbf0de258c46d5ba4b91dedf3f7fd2e00257b169'
+            'acc85b027738b552e4f5184cd8aca1c389b6e2a87ee3b6cdac4073ef0e3763cb')
 
 pkgver() {
   cd "${_pkgname}"
@@ -180,6 +182,19 @@ prepare() {
   # `git format-patch --stdout <merge-base>..pr-580`.
   # (Retire on merge: 0016 → PR #580.)
   git apply -3 ../0016-border-unfocused.patch
+
+  # Overview card drag input (user feedback 2026-10-26): a held overview card
+  # drag is fully navigable — the strip edge-scrolls under it
+  # (`input.drag_edge_scroll` now covers card drags; data drags and tiled moves
+  # keep the overview exclusion), two-finger scrolling keeps panning the strip
+  # pan-only under the hold (no filmstrip step or focus move; the drop settles
+  # at the panned position), and wheel notches are inert while the hold is
+  # live. Upstream PR noctalia-dev/umbriel#584; sha256 acc85b02…, full range
+  # d9497f36..c2f3ebc6 (three commits: edge auto-scroll, held-drag
+  # finger-scroll with the review rounds, docs); regenerate with
+  # `git format-patch --stdout <merge-base>..pr-584` when a drift breaks the
+  # apply. (Retire on merge: 0017 → PR #584.)
+  git apply -3 ../0017-overview-card-drag-input.patch
 }
 
 build() {
