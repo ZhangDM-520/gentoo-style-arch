@@ -1,4 +1,4 @@
-From 3d404b5279d40350813774f0d67ba8f377c73205 Mon Sep 17 00:00:00 2001
+From 85cea5e0928ffcc71789cfdc36f209e9a74d0b56 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 18:19:43 +0800
 Subject: [PATCH 1/6] feat(color): characterize outputs from ICC/EDID and map
@@ -2352,7 +2352,7 @@ index 4800e27c..38bc70ac 100644
 2.56.0.236.g7e34d8174d
 
 
-From 6c10feb05f1c1007dee6478d50954df65e7cd6ea Mon Sep 17 00:00:00 2001
+From 3a4ba0b0c8cb91c0630eb238195b4bd09876c793 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 18:19:43 +0800
 Subject: [PATCH 2/6] feat(color): ICC image descriptions and icc_file
@@ -4049,7 +4049,7 @@ index 06024dbe..d7a07a23 100644
 2.56.0.236.g7e34d8174d
 
 
-From cb36e8fdccaa322e3edae08da0fbf6a5652aef1a Mon Sep 17 00:00:00 2001
+From 6de9e4317114368463337d32bf65daae47f17009 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 18:19:52 +0800
 Subject: [PATCH 3/6] test(color): live color-profile coverage
@@ -4376,7 +4376,7 @@ index 00000000..e1530639
 2.56.0.236.g7e34d8174d
 
 
-From 02aae9888ba17f7a6f72ce34827c9d86b85aa4d5 Mon Sep 17 00:00:00 2001
+From dbc7d0dbd41a1f4c9cad1d9bf1295aaa153cf518 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 18:19:52 +0800
 Subject: [PATCH 4/6] docs(color): document color profiles and client ICC
@@ -4465,7 +4465,7 @@ index 01bff86c..58100200 100644
 2.56.0.236.g7e34d8174d
 
 
-From 74fbac1212cb3e17ab74fa16562fbfa1cdab8706 Mon Sep 17 00:00:00 2001
+From d105b79a34bfab40177b7e5f2c5a560a23ddba30 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 18:53:26 +0800
 Subject: [PATCH 5/6] fix(color): fold composed LUT stages and fix the wideness
@@ -4862,7 +4862,7 @@ index 04317a4c..fb0d5b5c 100644
 2.56.0.236.g7e34d8174d
 
 
-From 6a73fe2c72dcebf76b359b2cc99765ee4c4cd71e Mon Sep 17 00:00:00 2001
+From e4300da82f3c7a581698e9bf704422d08ce1a00d Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Tue, 27 Oct 2026 00:36:57 +0800
 Subject: [PATCH 6/6] fix(color): address the external review round
@@ -4888,12 +4888,17 @@ non-regular profile files without blocking, reserve the edid keyword,
 document and test path rules, and gate both lcms2 lookups behind one -Dlcms2
 (the no-lcms2 build compiles clean and skips the ICC cases).
 
+Protocol: set_icc_file now refuses non-regular fds with bad_fd (a directory fd
+lseeks fine but cannot be read; the request contract demands a seekable,
+readable regular file).
+
 Tests/harness: bound the mapped-pixel band to the measured result (a blank
 frame no longer passes), derive the sample point from the output size, trap
 teardown for the FIFO client, round-trip the fixture primaries from the
 generator (spec-correct colorants summing to the declared white) instead of
-re-asserting unit constants, direct pins for surfaceTransferLabel, and fd +
-budget live pins (protocol/color_profile_limits).
+re-asserting unit constants, direct pins for surfaceTransferLabel, live pins
+for the fd + budget caps and the bad_fd gate (protocol/color_profile_limits,
+protocol/color_profile).
 
 Comment hygiene per CONTRIBUTING: no history narration.
 
@@ -4918,15 +4923,15 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
  src/output/colorimetry_icc_lcms2.cpp          |  163 ++-
  src/output/colorimetry_internal.h             |   52 +
  src/output/hdr_metadata.cpp                   |    7 +-
- src/output/output.cpp                         |   77 +-
+ src/output/output.cpp                         |   80 +-
  src/server/color_description.cpp              |    7 +
  src/server/color_description.h                |    2 +-
- src/server/color_manager.cpp                  |  117 +-
+ src/server/color_manager.cpp                  |  128 ++-
  src/server/ipc_commands.cpp                   |   54 +-
  src/server/ipc_commands.h                     |    6 +
- .../harness/checks/protocol/color_profile.sh  |  138 +--
+ .../harness/checks/protocol/color_profile.sh  |  153 ++-
  .../checks/protocol/color_profile_limits.sh   |   96 ++
- .../harness/clients/color_feedback_client.cpp |  154 ++-
+ .../harness/clients/color_feedback_client.cpp |  178 ++-
  tests/harness/lib.sh                          |  118 ++
  tests/meson.build                             |    4 +-
  tests/unit/color_description.cpp              |   85 +-
@@ -4937,7 +4942,7 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
  umbrielfx/meson.build                         |   11 +-
  umbrielfx/render/color.c                      |   49 +-
  umbrielfx/tests/color.c                       |  167 ++-
- 33 files changed, 2658 insertions(+), 334 deletions(-)
+ 33 files changed, 2708 insertions(+), 337 deletions(-)
  create mode 100644 src/output/colorimetry_internal.h
  create mode 100644 tests/harness/checks/protocol/color_profile_limits.sh
 
@@ -6112,7 +6117,7 @@ index 8078d59c..532857a0 100644
  
  #if UMBRIEL_HAS_DRM_BACKEND
 diff --git a/src/output/output.cpp b/src/output/output.cpp
-index 85ec0473..59be69be 100644
+index 85ec0473..39d7bf9d 100644
 --- a/src/output/output.cpp
 +++ b/src/output/output.cpp
 @@ -39,12 +39,17 @@ extern "C" {
@@ -6138,8 +6143,8 @@ index 85ec0473..59be69be 100644
        return mode;
      }
  
-+    // Content stamp mixed into the cache key: an EDID change must bust the
-+    // characterization cache even when the config text is unchanged.
++    // Content stamp mixed into the characterization key: an EDID change must
++    // re-resolve even when the config text is unchanged.
 +    std::string edidFingerprint(const std::vector<uint8_t>& blob) {
 +      uint64_t hash = 1469598103934665603ULL;
 +      for (const uint8_t byte : blob) {
@@ -6151,7 +6156,13 @@ index 85ec0473..59be69be 100644
  #ifdef TRACY_ENABLE
      // Tracy keeps a plot's name pointer and reads it while a capture runs, so
      // the per-output names live for the rest of the process.
-@@ -480,7 +495,17 @@ namespace umbriel {
+@@ -477,10 +492,23 @@ namespace umbriel {
+                                                                                              : nullptr;
+   }
+ 
++  // Resolves the panel characterization (ICC file, EDID, or none) and builds
++  // the SDR gamut transform from it; the description refresh fires on every
++  // path that leaves the resolved state changed.
    void Output::updateSdrGamutTransform(const OutputRule* rule, bool force) {
      const std::string source = rule != nullptr ? rule->colorProfile : "none";
      const SdrGamut gamut = rule != nullptr ? rule->sdrGamut : SdrGamut::Native;
@@ -6170,7 +6181,7 @@ index 85ec0473..59be69be 100644
      if (!force && m_sdrGamutResolved && m_sdrGamutSource == key) {
        return;
      }
-@@ -501,32 +526,54 @@ namespace umbriel {
+@@ -501,32 +529,54 @@ namespace umbriel {
      // down that chain instead of failing the config (never fail the output).
      std::optional<PanelColorimetry> panel;
      if (source != "edid") {
@@ -6276,10 +6287,18 @@ index f21d6131..eeef2a8d 100644
    // panel's real colorimetry (custom primaries) so tagged clients convert
    // accurately — their pixels can change even under sdr_gamut = "native" —
 diff --git a/src/server/color_manager.cpp b/src/server/color_manager.cpp
-index 4441cd23..c48976ca 100644
+index 4441cd23..f986e553 100644
 --- a/src/server/color_manager.cpp
 +++ b/src/server/color_manager.cpp
-@@ -32,6 +32,15 @@ namespace umbriel {
+@@ -16,6 +16,7 @@
+ #include <fcntl.h>
+ #include <string>
+ #include <sys/mman.h>
++#include <sys/stat.h>
+ #include <unistd.h>
+ #include <unordered_map>
+ #include <unordered_set>
+@@ -32,6 +33,15 @@ namespace umbriel {
      constexpr uint32_t kProtocolVersion = 2;
  #endif
      constexpr uint32_t kDefaultSdrWhite = 203;
@@ -6295,7 +6314,7 @@ index 4441cd23..c48976ca 100644
      constexpr Logger kLog("color");
  
      float decodeCoordinate(int32_t value) { return static_cast<float>(value) / 1'000'000.0F; }
-@@ -77,9 +86,14 @@ namespace umbriel {
+@@ -77,9 +87,14 @@ namespace umbriel {
  
    struct ColorManager::Impl {
      struct ImageDescription {
@@ -6310,7 +6329,7 @@ index 4441cd23..c48976ca 100644
      };
  
      struct ParametricCreator {
-@@ -92,8 +106,10 @@ namespace umbriel {
+@@ -92,8 +107,10 @@ namespace umbriel {
  
      struct IccCreator {
        Impl* manager = nullptr;
@@ -6321,7 +6340,7 @@ index 4441cd23..c48976ca 100644
        bool iccSet = false;
        // An OS-level read failure rides to create() as
        // wp_image_description_v1.failed('operating_system') (set_icc_file's
-@@ -101,6 +117,13 @@ namespace umbriel {
+@@ -101,6 +118,13 @@ namespace umbriel {
        bool readFailed = false;
      };
  
@@ -6335,7 +6354,7 @@ index 4441cd23..c48976ca 100644
      struct SurfaceState {
        ColorDescription description;
        bool set = false;
-@@ -631,8 +654,20 @@ namespace umbriel {
+@@ -631,8 +655,20 @@ namespace umbriel {
  
      static void handleCreateIccCreator(wl_client* client, wl_resource* managerResource, uint32_t id) {
        auto* manager = static_cast<Impl*>(wl_resource_get_user_data(managerResource));
@@ -6356,7 +6375,7 @@ index 4441cd23..c48976ca 100644
        creator->resource = wl_resource_create(
            client, &wp_image_description_creator_icc_v1_interface, wl_resource_get_version(managerResource), id
        );
-@@ -641,13 +676,18 @@ namespace umbriel {
+@@ -641,13 +677,18 @@ namespace umbriel {
          wl_client_post_no_memory(client);
          return;
        }
@@ -6376,7 +6395,7 @@ index 4441cd23..c48976ca 100644
      }
  
      static void handleIccSetFile(wl_client*, wl_resource* resource, int32_t fd, uint32_t offset, uint32_t length) {
-@@ -661,7 +701,6 @@ namespace umbriel {
+@@ -661,16 +702,21 @@ namespace umbriel {
          close(fd);
          return;
        }
@@ -6384,7 +6403,24 @@ index 4441cd23..c48976ca 100644
        // Request-contract errors are protocol errors by XML definition
        // (set_icc_file: bad_fd / bad_size / out_of_file / already_set). Profile
        // *content* problems deliberately are not: they ride create() to
-@@ -689,6 +728,24 @@ namespace umbriel {
+       // wp_image_description_v1.failed with cause 'unsupported'.
++      // The fd must be seekable, readable and a regular file: a directory fd
++      // lseeks fine but cannot be read, and a special device is not a file
++      // image, so both are request-contract violations (bad_fd).
+       const int flags = fcntl(fd, F_GETFL);
++      struct stat fdStat{};
++      const bool regular = fstat(fd, &fdStat) == 0 && S_ISREG(fdStat.st_mode);
+       const off_t fileSize = lseek(fd, 0, SEEK_END);
+-      if (flags < 0 || (flags & O_ACCMODE) == O_WRONLY || fileSize < 0) {
++      if (flags < 0 || (flags & O_ACCMODE) == O_WRONLY || fileSize < 0 || !regular) {
+         wl_resource_post_error(
+-            resource, WP_IMAGE_DESCRIPTION_CREATOR_ICC_V1_ERROR_BAD_FD, "ICC profile fd is not seekable and readable"
++            resource, WP_IMAGE_DESCRIPTION_CREATOR_ICC_V1_ERROR_BAD_FD,
++            "ICC profile fd is not a seekable, readable regular file"
+         );
+         close(fd);
+         return;
+@@ -689,6 +735,24 @@ namespace umbriel {
          close(fd);
          return;
        }
@@ -6409,7 +6445,7 @@ index 4441cd23..c48976ca 100644
        std::vector<uint8_t> bytes(length);
        size_t read = 0;
        if (lseek(fd, offset, SEEK_SET) < 0) {
-@@ -708,6 +765,8 @@ namespace umbriel {
+@@ -708,6 +772,8 @@ namespace umbriel {
        close(fd);
        if (!creator->readFailed) {
          creator->iccBytes = std::move(bytes);
@@ -6418,7 +6454,7 @@ index 4441cd23..c48976ca 100644
        }
      }
  
-@@ -752,7 +811,16 @@ namespace umbriel {
+@@ -752,7 +818,16 @@ namespace umbriel {
        // creators; the client's bytes stay on the description for identity and
        // change detection only. The info-side icc_file mandate applies to
        // descriptions that do allow get_information (output/preferred).
@@ -6436,7 +6472,7 @@ index 4441cd23..c48976ca 100644
        wl_resource_destroy(resource);
      }
  
-@@ -1009,7 +1077,7 @@ namespace umbriel {
+@@ -1009,7 +1084,7 @@ namespace umbriel {
        );
      }
  
@@ -6445,7 +6481,7 @@ index 4441cd23..c48976ca 100644
          wl_resource* parent, uint32_t id, const ColorDescription& description, bool informationAllowed,
          uint64_t identity = 0
      ) {
-@@ -1022,7 +1090,7 @@ namespace umbriel {
+@@ -1022,7 +1097,7 @@ namespace umbriel {
          createFailedImageDescription(
              parent, id, WP_IMAGE_DESCRIPTION_V1_CAUSE_LOW_VERSION, "transfer function requires a newer protocol version"
          );
@@ -6454,7 +6490,7 @@ index 4441cd23..c48976ca 100644
        }
        auto* imageDescription = new ImageDescription{
            .description = description,
-@@ -1034,13 +1102,14 @@ namespace umbriel {
+@@ -1034,13 +1109,14 @@ namespace umbriel {
        if (imageDescription->resource == nullptr) {
          delete imageDescription;
          wl_resource_post_no_memory(parent);
@@ -6470,7 +6506,7 @@ index 4441cd23..c48976ca 100644
      }
  
      static void createFailedImageDescription(wl_resource* parent, uint32_t id, uint32_t cause, const char* message) {
-@@ -1146,11 +1215,19 @@ namespace umbriel {
+@@ -1146,11 +1222,19 @@ namespace umbriel {
      // wp_image_description_info_v1.icc_file): a read-only fd that exposes
      // exactly the profile bytes from offset 0 plus the size in bytes ("Offset
      // always 0, compositor must not expose unnecessary data"). A sealed memfd
@@ -6493,7 +6529,7 @@ index 4441cd23..c48976ca 100644
          return;
        }
        int fd = memfd_create("umbriel-icc-profile", MFD_CLOEXEC | MFD_ALLOW_SEALING);
-@@ -1183,6 +1260,7 @@ namespace umbriel {
+@@ -1183,6 +1267,7 @@ namespace umbriel {
          kLog.warn("the advertised ICC memfd could not be sealed read-only");
        }
        wp_image_description_info_v1_send_icc_file(information, fd, static_cast<uint32_t>(profile.size()));
@@ -6501,7 +6537,7 @@ index 4441cd23..c48976ca 100644
      }
  
      static void sendPrimaries(wl_resource* information, const wlr_color_primaries& primaries) {
-@@ -1202,14 +1280,18 @@ namespace umbriel {
+@@ -1202,14 +1287,18 @@ namespace umbriel {
      }
  
      static void handleImageDescriptionResourceDestroy(wl_resource* resource) {
@@ -6522,7 +6558,7 @@ index 4441cd23..c48976ca 100644
        // description reflects the panel's real colorimetry (custom primaries),
        // independently of the sdr_gamut policy — so tagged clients convert
        // accurately and their pixels can change even under sdr_gamut = "native"
-@@ -1364,6 +1446,18 @@ namespace umbriel {
+@@ -1364,6 +1453,18 @@ namespace umbriel {
        wlr_scene_buffer_set_luminance_multiplier(buffer, state.luminance_multiplier);
      }
  
@@ -6541,7 +6577,7 @@ index 4441cd23..c48976ca 100644
      Server& server;
      wl_global* global = nullptr;
      uint64_t lastIdentity = 0;
-@@ -1373,6 +1467,7 @@ namespace umbriel {
+@@ -1373,6 +1474,7 @@ namespace umbriel {
      std::unordered_set<SurfaceFeedback*> feedbacks;
      std::unordered_set<ManagedOutput*> outputs;
      std::unordered_map<wlr_scene*, std::unique_ptr<ManagedScene>> scenes;
@@ -6653,9 +6689,18 @@ index 638e08d2..5e764d6f 100644
    struct IpcCommands {
      static nlohmann::json keyboardLayouts(Server& server, std::string_view arg);
 diff --git a/tests/harness/checks/protocol/color_profile.sh b/tests/harness/checks/protocol/color_profile.sh
-index 20b41b60..89f4226e 100644
+index 20b41b60..887d33d0 100644
 --- a/tests/harness/checks/protocol/color_profile.sh
 +++ b/tests/harness/checks/protocol/color_profile.sh
+@@ -2,7 +2,7 @@
+ # A real ICC characterization drives the SDR gamut policy end to end: panel
+ # fields and custom-preferred descriptions on the wire, the exact profile bytes
+ # through get_information's icc_file, edid inert on headless, and the create_icc
+-# contract (ready, graceful failure, information denial, bad_size). The pixel
++# contract (ready, graceful failure, information denial, bad_size, bad_fd). The pixel
+ # pin is the feature's point: "native" stays bit-identical while "srgb" maps
+ # untagged red into the profiled wide gamut.
+ set -euo pipefail
 @@ -18,85 +18,43 @@ readonly DUMP="$RUNTIME/icc-dump"
  readonly SHOT="$RUNTIME/color-profile.png"
  
@@ -6847,6 +6892,24 @@ index 20b41b60..89f4226e 100644
  "$UMBRIEL" settle > /dev/null
  
  # --- create_icc wire contract ----------------------------------------------
+@@ -285,4 +257,17 @@ if ! "$UMBRIEL" color --json | jq -e '.color_manager == true' > /dev/null; then
+   exit 1
+ fi
+ 
++# bad_fd is the request-contract error for an fd that is not a seekable,
++# readable regular file: a directory fd must be refused at set_icc_file
++# instead of surfacing later as a read failure.
++rc=$(run_icc_mode nonregular "$PROFILE" nonreg)
++if [[ $rc != 2 ]] || ! grep -Fq '{"event":"icc_bad_fd"' "$RUNTIME/icc-nonregular-nonreg.log"; then
++  echo "directory fd did not raise bad_fd for the client: rc=$rc $(cat "$RUNTIME/icc-nonregular-nonreg.log")"
++  exit 1
++fi
++if ! "$UMBRIEL" color --json | jq -e '.color_manager == true' > /dev/null; then
++  echo "the compositor did not survive the bad_fd client: $( "$UMBRIEL" color --json)"
++  exit 1
++fi
++
+ echo "ICC characterization, native pass-through, srgb gamut mapping, icc_file bytes and the create_icc contract verified live"
 diff --git a/tests/harness/checks/protocol/color_profile_limits.sh b/tests/harness/checks/protocol/color_profile_limits.sh
 new file mode 100644
 index 00000000..f6b28f02
@@ -6950,7 +7013,7 @@ index 00000000..f6b28f02
 +
 +echo "icc_file fd stability, the creator budget and the staged/retained byte budgets verified live"
 diff --git a/tests/harness/clients/color_feedback_client.cpp b/tests/harness/clients/color_feedback_client.cpp
-index 056fc149..d438a1ea 100644
+index 056fc149..623f7e7b 100644
 --- a/tests/harness/clients/color_feedback_client.cpp
 +++ b/tests/harness/clients/color_feedback_client.cpp
 @@ -112,7 +112,7 @@ namespace {
@@ -6991,7 +7054,7 @@ index 056fc149..d438a1ea 100644
  
    void descriptionFailed(void* data, wp_image_description_v1* proxy, uint32_t cause, const char* message) {
      const auto& description = *static_cast<Description*>(data);
-@@ -512,11 +534,137 @@ int main(int argc, char** argv) {
+@@ -512,11 +534,161 @@ int main(int argc, char** argv) {
      wl_display_disconnect(state.display);
      return 0;
    }
@@ -7002,6 +7065,30 @@ index 056fc149..d438a1ea 100644
      // wp_image_description_creator_icc_v1 from a profile file and report the
      // wire outcome as one JSON line.
      const char* mode = argv[1] + 4;
++    if (std::strcmp(mode, "nonregular") == 0) {
++      // The fd must be a seekable, readable regular file: a directory fd
++      // lseeks fine but cannot be read, so it must be refused at set_icc_file.
++      const int fd = open(".", O_RDONLY | O_DIRECTORY);
++      if (fd < 0) {
++        std::println(stderr, "color-feedback-client: cannot open a directory fd");
++        return 1;
++      }
++      auto* creator = wp_color_manager_v1_create_icc_creator(state.manager);
++      wp_image_description_creator_icc_v1_set_icc_file(creator, fd, 0, 1);
++      close(fd);
++      if (!expectProtocolError(
++              state, &wp_image_description_creator_icc_v1_interface, WP_IMAGE_DESCRIPTION_CREATOR_ICC_V1_ERROR_BAD_FD
++          )) {
++        std::println(stderr, "color-feedback-client: the directory fd was not refused with bad_fd");
++        return 1;
++      }
++      std::println(
++          R"({{"event":"icc_bad_fd","code":{}}})",
++          static_cast<uint32_t>(WP_IMAGE_DESCRIPTION_CREATOR_ICC_V1_ERROR_BAD_FD)
++      );
++      wl_display_disconnect(state.display);
++      return 2;
++    }
 +    if (std::strcmp(mode, "storm") == 0) {
 +      // Repeated get_information on one output description: each answer
 +      // advertises the profile through icc_file, so the compositor must not

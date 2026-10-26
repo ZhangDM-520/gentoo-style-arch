@@ -70,7 +70,7 @@ sha256sums=('SKIP'
             '2600cb2ce8eee8f06f6d7cf557d862d139751091210e002ee7d818c6ec911fff'
             '1d92976c7370860d8846773c1bc7aa7a5815ef785f324dcd3bdd80d0aec9f4b5'
             '98b2ba7224d23f00031b235006e03fb0edef44be5d484dc0e3c248f41938b583'
-            '8c557e063cd3baa161f86f5e3a6748d9285528654acb1cc2034fde1465ab154d'
+            'e51cef88b089757aaab34946574af7562084337effe0ba40dd6c3e6e7d98b94d'
             '6bfc61519439d329344b7ab3dbebcd20dc810fa988af68e7a3cd61615c9fb140'
             '5fc4cb98a3d4d24e596c6f912d4d81fb68317535523d9647d68873538d120879'
             'cbccab7c6601b6adbe48fd4dfbf0de258c46d5ba4b91dedf3f7fd2e00257b169')
@@ -140,9 +140,9 @@ prepare() {
   # opt-in SDR gamut mapping (`"srgb"` confines untagged SDR to the sRGB gamut
   # in the panel's colorimetry; the default `"native"` stages no transform),
   # plus client ICC image descriptions (`create_icc`) and `icc_file`
-  # advertising. Upstream issue noctalia-dev/umbriel#574; sha256 8c557e06….
+  # advertising. Upstream issue noctalia-dev/umbriel#574; sha256 e51cef88….
   # Cut on top of 0008+0009+0011+0012 (cherry-pick of the main-based range
-  # 76477c29..5b7f9fea — six commits; 0012 collisions in docs/user/outputs.md
+  # 76477c29..c1fdc062 — six commits; 0012 collisions in docs/user/outputs.md
   # and tests/unit/config_schema.cpp hand-merged, both sides kept). The
   # upstream-able branch stays main-based for the PR; regenerate from plain
   # main once 0008/0009/0011/0012 retire. (Retire on merge.)
