@@ -3989,3 +3989,15 @@ constant, not a baked path); and the xorg-xwayland-git PGO end-to-end proof
     names the single cache; `ls <cache>` shows the mirrors. Sessions whose
     shell env predates the fix need `env -u SRCDEST` on every gsa/makepkg
     invocation. (last reviewed 2026-10-26)
+
+65. **A parallel writer turns measurement into noise — hash the inputs
+    before attributing a discrepancy** (2026-10-26, measured): while one
+    agent investigated a patch-apply conflict, a concurrent job rewrote the
+    same recipe files (0012 at 21:45, 0014 at 21:49) and identical-looking
+    `git apply -3` runs flipped from "conflicts" to "clean" between runs.
+    The tool was deterministic — the inputs moved. Rule: when two identical
+    runs disagree, suspect the inputs first (`sha256sum` +
+    `ls --time-style=full-iso` before theorizing); record content hashes in
+    every tree reconciliation; exactly one writer per mutable tree (a pause
+    means zero writes); and a concurrent job's own notes are self-reports —
+    verify them by hash.

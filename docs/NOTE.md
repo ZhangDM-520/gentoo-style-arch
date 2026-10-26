@@ -17419,3 +17419,43 @@ diff`, or the patch silently drops those files.
 - 0012-per-output-render-scale.patch regenerated over `d9497f36..0e484016` (4 commits, sha256 98b2ba72…) after #573 was rebased onto main `d9497f36`; PKGBUILD sha/comment re-wired.
 - 0014-downsample-box.patch re-cut on the new #573 head (`0e484016..e55760a5`, 3 commits, sha256 966fe79f…; one appearance.md union with main's bounding-shape sentence). PKGBUILD comment updated.
 - Stack rehearsal on main@d9497f36: 0008/0009/0011/0012/0013/0014/0016 OK; 0015 (untracked in-flight wiring) FAILS in tests/unit/gesture_physics.cpp — pre-existing collision with 0011 (both append test blocks at the same anchor), fails on a stack without 0012 too. Left for the wiring owner; remedy = re-cut 0015's slice on the stacked base or union the two test blocks.
+
+## 2026-10-26 22:1x — umbriel-git: 0015 (PR #577) + 0016 (PR #580) wired; 0015 re-cut on the stacked base; BUILD HELD
+
+**Symptom.** Owner round: wire PRs #575/#577/#580 as 0014/0015/0016, hold
+the build, leave PR-side conflicts to the PR holders. 0014 was produced by
+the concurrent refresh job (final slice `0e484016..f75b2161`, 3 commits,
+sha256 6bfc6151… — verified byte-identical to `git format-patch --stdout
+0e484016..pr-575`); 0015/0016 are this round's wiring. First full-stack
+rehearsal failed at 0015: tests/unit/gesture_physics.cpp unmerged.
+
+**Root cause.** Stack-internal collision, not PR drift: 0008 (travel_scale)
+appends `travelScalesApplyPerAxisAcrossRoles` at the same anchor before
+`int main()` as #577's `swipeDeltasComeFromTheUnacceleratedSource…` +
+`aBackendWithoutAnUnacceleratedSource…` tests. #577 is MERGEABLE vs main and
+the conflict partner is 0008 (the 22:0x note names 0011, which does not
+touch the file).
+
+**Fix.** 0015 re-cut on the stacked base, the 0013 precedent: scratch base =
+0008..0014 applied on main@`d9497f36`, cherry-pick of the main-based range
+`76477c29..971a1ead` (three commits) with the gesture_physics.cpp union
+(both test blocks kept), regenerated via `git format-patch --stdout` over the
+scratch base — sha256 5fc4cb98…. PKGBUILD sha/comment re-wired; the
+upstream-able branch stays main-based (regenerate from plain main once 0008
+retires).
+
+**Validation.** Full-stack rehearsal on main@`d9497f36` (prepare() order,
+`git apply -3 --index` on `git checkout -f` + `git clean -fdx`): 8/8 apply
+rc=0, `git diff --cached --shortstat` = 89 files, 5565 insertions, 195
+deletions; zero conflict markers, zero `.rej`. `bash -n PKGBUILD` clean;
+`.SRCINFO` regenerated (`pkgver 0.1.0.r1398.d9497f3`, pkgrel 1); `gsa -Ma`
+report-only — umbriel rows are the expected version-sync-skew (built r1397
+vs committed r1398; the next build anchors it) and a pre-existing gsa-pm
+nested-dir drift row. `tests/run-all.sh recipe-sources` fails only on the two
+as-yet-untracked patch files (untracked local source) — re-run green once
+committed. BUILD HELD per owner.
+
+**Durable rule.** Tests that append at a shared anchor (before `int main()`)
+collide across stack patches — re-cut the incoming slice on the stacked base
+and union the blocks; never touch the upstream branch. When identical tool
+runs disagree, hash the inputs before suspecting the tool (MEMORY rule 65).

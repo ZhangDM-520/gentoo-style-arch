@@ -1,0 +1,356 @@
+From ca6572145f0263de495711d43901b49bc7c41120 Mon Sep 17 00:00:00 2001
+From: ZhangDM-520 <jixianqiang1540@gmail.com>
+Date: Mon, 26 Oct 2026 19:11:07 +0800
+Subject: [PATCH] feat(effects): opt-in border effects on unfocused windows
+ (#563)
+
+Add `[effects] border_unfocused = false`: when true, the border effect
+draws on every window passing the non-focus gates (decorated, calm,
+not fullscreen) and on their overview cards, not just the focused one.
+Default off keeps today's behavior bit-identical.
+
+Gate widened via `BorderEffectGate::allowUnfocused`, filled at the two
+producers (view ownGate, overview cardGate) so the predicate stays a
+pure, unit-testable function of its struct.
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+---
+ docs/design/effects.md                        |   4 +-
+ docs/user/effects.md                          |  23 ++--
+ examples/config.toml                          |   3 +
+ src/config/effects.h                          |   3 +
+ src/config/fields_effects.cpp                 |   1 +
+ src/overview/overview.cpp                     |   1 +
+ src/view/effects.h                            |   3 +
+ src/view/effects_rules.cpp                    |   5 +-
+ src/view/view_animation.cpp                   |   1 +
+ .../harness/checks/effect/border_unfocused.sh | 125 ++++++++++++++++++
+ tests/unit/effects.cpp                        |  16 +++
+ 11 files changed, 171 insertions(+), 14 deletions(-)
+ create mode 100755 tests/harness/checks/effect/border_unfocused.sh
+
+diff --git a/docs/design/effects.md b/docs/design/effects.md
+index f7a17ede..508f1bd4 100644
+--- a/docs/design/effects.md
++++ b/docs/design/effects.md
+@@ -22,7 +22,7 @@ Runtime actions validate typed payloads, targets, names/kinds, and non-empty cyc
+ 
+ The built-in fade and drag deformation retain their existing preparation and animation gates. `fillTimeUniforms` supplies time only when a linked program reads it and palette only for palette presets.
+ 
+-[`ViewEffects::apply`](../../src/view/effects.cpp) reads cached effective names. The border gate still requires focus, decoration, no urgency, and no fullscreen; overlay follows that gate and border clock. Window/overlay slots also bind to the isolated capture scene only with `in_capture`. Live views and overview cards share `View::syncAnimationEffects`.
++[`ViewEffects::apply`](../../src/view/effects.cpp) reads cached effective names. The border gate requires decoration, no urgency, no fullscreen, and focus unless the gate carries `allowUnfocused` (filled from `[effects].border_unfocused` at the view and overview-card producers); overlay follows that gate and border clock. Window/overlay slots also bind to the isolated capture scene only with `in_capture`. Live views and overview cards share `View::syncAnimationEffects`.
+ 
+ [`Output::applyOutputEffects`](../../src/output/output.cpp) reads its cached screen slot and the Server's single cursor slot, applies capture policy and lock suspension, and pushes pointer position after binding a cursor program. It performs no owner walk or pool pick. `Cursor::forwardEffectPointer` reads cached cursor activity, which includes suppression and registry suspension.
+ 
+@@ -136,7 +136,7 @@ With no effect roots and drag physics off (unused pool declarations are not root
+ 
+ With effects selected:
+ 
+-- **Border:** a capture and one program pass per frame on the focused window; effect-only frames for a time-reading program, capped by `max_fps`. Light adds a second program evaluation into a full-resolution emission texture, a half-resolution pyramid, and its blur on each display composite, and a blend on outputs showing the proxy.
++- **Border:** a capture and one program pass per frame on each window the gate draws — the focused window, or every gated window with `border_unfocused`; effect-only frames for a time-reading program, capped by `max_fps`. Light adds a second program evaluation into a full-resolution emission texture, a half-resolution pyramid, and its blur on each display composite, and a blend on outputs showing the proxy.
+ - **Window and overlay:** a copy of the target under the window and one program pass per window per frame.
+ - **Screen and cursor:** one in-place pass over the output or the cursor square; direct scanout off on that output only.
+ - **Drag physics:** only while a window is held or settling; the drag slot is transient, so the scene-wide policy applies on every output for that time. The deformation program runs up to 22 inverse-lookup iterations per pixel.
+diff --git a/docs/user/effects.md b/docs/user/effects.md
+index 568020df..55baf33a 100644
+--- a/docs/user/effects.md
++++ b/docs/user/effects.md
+@@ -1,6 +1,6 @@
+ # Effects
+ 
+-Effects are GLSL programs Umbriel runs on animation events, on the focused window's border, on windows, on whole outputs, and around the pointer. Every effect is off until you select one. Umbriel ships a small set; each is a preset you include and then name where it should apply.
++Effects are GLSL programs Umbriel runs on animation events, on window borders, on windows, on whole outputs, and around the pointer. Every effect is off until you select one. Umbriel ships a small set; each is a preset you include and then name where it should apply.
+ 
+ ## Use a bundled effect
+ 
+@@ -62,19 +62,20 @@ screen_effect = "off"
+ 
+ `[effects]`:
+ 
+-| Key          | Default | Description                                                                                                                                                                                                         |
+-| ------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+-| `border`     | `""`    | Border preset or pool for the focused window.                                                                                                                                                                       |
+-| `window`     | `""`    | Window preset or pool applied to every window.                                                                                                                                                                      |
+-| `screen`     | `""`    | Screen preset or pool applied to every output.                                                                                                                                                                      |
+-| `cursor`     | `""`    | Cursor preset or pool, shared across outputs.                                                                                                                                                                       |
+-| `max_fps`    | `0`     | Cap, 0 to 240, for frames drawn only because an effect animates. `0` follows each output's refresh rate.                                                                                                            |
+-| `in_capture` | `false` | Include window, screen, and cursor effects in screencopy and image-copy captures. Border effects always appear, and an export-dmabuf capture always sees the same frame as the display, regardless of this setting. |
++| Key                | Default | Description                                                                                                                                                                                                         |
++| ------------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
++| `border`           | `""`    | Border preset or pool for window borders. Draws on the focused window only, unless `border_unfocused` is set.                                                                                                       |
++| `window`           | `""`    | Window preset or pool applied to every window.                                                                                                                                                                      |
++| `screen`           | `""`    | Screen preset or pool applied to every output.                                                                                                                                                                      |
++| `cursor`           | `""`    | Cursor preset or pool, shared across outputs.                                                                                                                                                                       |
++| `max_fps`          | `0`     | Cap, 0 to 240, for frames drawn only because an effect animates. `0` follows each output's refresh rate.                                                                                                            |
++| `in_capture`       | `false` | Include window, screen, and cursor effects in screencopy and image-copy captures. Border effects always appear, and an export-dmabuf capture always sees the same frame as the display, regardless of this setting. |
++| `border_unfocused` | `false` | Draw the border effect on every window that passes the non-focus gates, not just the focused one. Each additional window costs one ring capture and one program pass per frame.                                     |
+ 
+ Where each kind draws:
+ 
+ - **animation** binds to an animation event through `[animation.<event>] effect = "<name>"`. The event's `enabled`, `duration_ms`, and `curve` still own its timeline; see [Animation](animation.md#custom-effects).
+-- **border** draws on the focused window's border ring while the window is decorated, not fullscreen, and not urgent. `padding` reserves transparent space around the ring for the effect to paint into.
++- **border** draws on the focused window's border ring while the window is decorated, not fullscreen, and not urgent — or on every such window, focused or not, with `border_unfocused = true`. `padding` reserves transparent space around the ring for the effect to paint into.
+ - **window** draws over each window in place, regardless of focus, including undecorated and fullscreen windows. It follows the window through opening, closing, moving, workspace switches, and the overview. A floating window with client-side decorations and `corner_radius = 0` has no rounding to mask against, so the effect also shades the transparent margin the client draws around such a window.
+ - **screen** draws over the whole output after everything else, except the cursor effect and the software cursor.
+ - **cursor** draws in a square of `radius` logical pixels around the pointer (`0` covers the whole output), after the screen effect, only on the output currently holding the pointer, clipped at that output's edges. It runs before the software cursor is drawn and never shades the cursor image, and never affects a hardware cursor. It hides when the compositor hides the pointer; a client that hides its own cursor image does not by itself turn the effect off. Motion-history shaders expand the rectangle to cover the retained path, with `radius` padding.
+@@ -227,4 +228,4 @@ Referenced presets compile at startup, on effects reload, and during runtime act
+ 
+ ## Cost
+ 
+-Unreferenced presets and pools add no rendering work. Named keybinds and enabled hot corners prepare programs before use; selections retain bookkeeping state. A border effect renders the ring through a capture and one program pass per frame on the focused window, and requests extra frames only while its program reads `umbriel_time` and its clock advances, capped by `max_fps`. Light adds a second program pass and a blurred pyramid where the ring draws, and a blend on every output its light reaches. A window effect copies the pixels under the window and runs one pass per window per frame. Screen and cursor effects each run one pass over the output or the radius square and disable direct scanout on that output. Drag physics costs only while a window is held or settling. With `in_capture = false`, a pending screencopy or image-copy capture of an output composes its frame twice whenever any window, screen, or cursor effect is visible on that output.
++Unreferenced presets and pools add no rendering work. Named keybinds and enabled hot corners prepare programs before use; selections retain bookkeeping state. A border effect renders the ring through a capture and one program pass per frame on each window it draws: the focused window, or every decorated, calm, non-fullscreen window with `border_unfocused = true`. It requests extra frames only while its program reads `umbriel_time` and its clock advances, capped by `max_fps`. Light adds a second program pass and a blurred pyramid where the ring draws, and a blend on every output its light reaches. A window effect copies the pixels under the window and runs one pass per window per frame. Screen and cursor effects each run one pass over the output or the radius square and disable direct scanout on that output. Drag physics costs only while a window is held or settling. With `in_capture = false`, a pending screencopy or image-copy capture of an output composes its frame twice whenever any window, screen, or cursor effect is visible on that output.
+diff --git a/examples/config.toml b/examples/config.toml
+index ae3e7ec8..df3f5a73 100644
+--- a/examples/config.toml
++++ b/examples/config.toml
+@@ -121,6 +121,9 @@ radius = 3
+ #
+ # [effects]
+ # border = "pulse"
++# Draw the border on every decorated, calm, non-fullscreen window, not just
++# the focused one (overview cards included).
++# border_unfocused = true
+ 
+ # ==============================================================================
+ # Input
+diff --git a/src/config/effects.h b/src/config/effects.h
+index 2633b836..53b9db28 100644
+--- a/src/config/effects.h
++++ b/src/config/effects.h
+@@ -106,6 +106,9 @@ namespace umbriel {
+     std::string cursor;
+     int maxFps = 0; // 0-240, 0 follows the refresh rate
+     bool inCapture = false;
++    // Draw border effects on unfocused windows too: one ring capture and one
++    // program pass per window per frame, so the widening is opt-in.
++    bool borderUnfocused = false;
+     bool operator==(const Effects&) const = default;
+   };
+ 
+diff --git a/src/config/fields_effects.cpp b/src/config/fields_effects.cpp
+index aecb9583..cf48917c 100644
+--- a/src/config/fields_effects.cpp
++++ b/src/config/fields_effects.cpp
+@@ -221,6 +221,7 @@ namespace umbriel {
+       static const registry::Fields<Effects> fields{
+           registry::integer("max_fps", 0, 240, &Effects::maxFps),
+           registry::boolean("in_capture", &Effects::inCapture),
++          registry::boolean("border_unfocused", &Effects::borderUnfocused),
+           effectField("border", &Effects::border, EffectKind::Border),
+           effectField("window", &Effects::window, EffectKind::Window),
+           effectField("screen", &Effects::screen, EffectKind::Screen),
+diff --git a/src/overview/overview.cpp b/src/overview/overview.cpp
+index cdc9144c..1049224b 100644
+--- a/src/overview/overview.cpp
++++ b/src/overview/overview.cpp
+@@ -668,6 +668,7 @@ namespace umbriel {
+     Workspace* workspace = view->workspace();
+     const BorderEffectGate cardGate{
+         .focused = workspace != nullptr && workspace->focusedView() == view && &card != m_dragCard,
++        .allowUnfocused = config().effects.borderUnfocused,
+         .decorated = card.border != nullptr && card.border->node.enabled && card.tree->node.enabled,
+         .urgent = view->urgent(),
+         .fullscreen = view->scheduledFullscreen(),
+diff --git a/src/view/effects.h b/src/view/effects.h
+index d987f463..98a728d5 100644
+--- a/src/view/effects.h
++++ b/src/view/effects.h
+@@ -16,6 +16,9 @@ namespace umbriel {
+ 
+   struct BorderEffectGate {
+     bool focused = false;
++    // Opt-in widening (appearance `[effects].border_unfocused`): the draw may
++    // follow the window's selected preset even when the window is unfocused.
++    bool allowUnfocused = false;
+     bool decorated = false;
+     bool urgent = false;
+     bool fullscreen = false;
+diff --git a/src/view/effects_rules.cpp b/src/view/effects_rules.cpp
+index 64219498..e7d8dd70 100644
+--- a/src/view/effects_rules.cpp
++++ b/src/view/effects_rules.cpp
+@@ -3,7 +3,10 @@
+ namespace umbriel {
+ 
+   bool borderEffectApplies(const BorderEffectGate& gate) {
+-    return gate.focused && gate.decorated && !gate.urgent && !gate.fullscreen;
++    // The widening to unfocused windows is opt-in (gate.allowUnfocused from
++    // [effects].border_unfocused): every drawn window costs a ring capture and
++    // one program pass per frame, so the default keeps the focused-only draw.
++    return (gate.focused || gate.allowUnfocused) && gate.decorated && !gate.urgent && !gate.fullscreen;
+   }
+ 
+   int borderPresetPadding(const EffectPreset* preset, bool compiled) {
+diff --git a/src/view/view_animation.cpp b/src/view/view_animation.cpp
+index 3f600980..91a7ac1d 100644
+--- a/src/view/view_animation.cpp
++++ b/src/view/view_animation.cpp
+@@ -818,6 +818,7 @@ namespace umbriel {
+       }
+       const BorderEffectGate ownGate{
+           .focused = m_borderFocusedState,
++          .allowUnfocused = config().effects.borderUnfocused,
+           .decorated = decorated(),
+           .urgent = m_urgent,
+           .fullscreen = scheduledFullscreen(),
+diff --git a/tests/harness/checks/effect/border_unfocused.sh b/tests/harness/checks/effect/border_unfocused.sh
+new file mode 100755
+index 00000000..cbe1493b
+--- /dev/null
++++ b/tests/harness/checks/effect/border_unfocused.sh
+@@ -0,0 +1,125 @@
++#!/usr/bin/env bash
++# border_unfocused = true widens the border-effect draw gate from the focused window to every decorated, calm,
++# non-fullscreen window: each unfocused window paints its own selected preset (the reporter's focused/unfocused
++# shader pair), and with the overview open every card paints its window's preset. With the flag off (the default)
++# the gate stays focused-only and bit-identical — effect/border.sh owns that path.
++set -euo pipefail
++
++readonly IMAGE="$UMBRIEL_RUNTIME_DIR/effect-border-unfocused.png"
++cat > "$UMBRIEL_RUNTIME_DIR/focused-ring.glsl" <<'GLSL'
++// Solid red ring. The green term is invisible at 8 bits but keeps umbriel_time an active uniform.
++vec4 border(vec2 uv) { return vec4(1.0, 0.001 * sin(umbriel_time), 0.0, 1.0); }
++GLSL
++cat > "$UMBRIEL_RUNTIME_DIR/unfocused-ring.glsl" <<'GLSL'
++// Solid green ring. The blue term keeps umbriel_time alive for the same reason.
++vec4 border(vec2 uv) { return vec4(0.0, 1.0, 0.001 * sin(umbriel_time), 1.0); }
++GLSL
++
++cat >> "$UMBRIEL_CONFIG" <<'EOF'
++
++[animation]
++enabled = false
++[appearance]
++border_width = 4
++outer_border_width = 0
++corner_radius = 0
++[appearance.shadow]
++enabled = false
++[appearance.blur]
++enabled = false
++[colors]
++backdrop = "#000000FF"
++[overview]
++zoom = 0.5
++[effects]
++border_unfocused = true
++[effects.preset.focused-ring]
++kind = "border"
++shader = "focused-ring.glsl"
++padding = 20
++[effects.preset.unfocused-ring]
++kind = "border"
++shader = "unfocused-ring.glsl"
++padding = 20
++[[window_rule]]
++match.title = "^border-unfocused-one$"
++default_floating = true
++default_position = { x = 100, y = 100, anchor = "top_left" }
++[[window_rule]]
++match.title = "^border-unfocused-two$"
++default_floating = true
++default_position = { x = 700, y = 100, anchor = "top_left" }
++[[window_rule]]
++match.is_focused = true
++border_effect = "focused-ring"
++[[window_rule]]
++match.is_focused = false
++border_effect = "unfocused-ring"
++EOF
++"$UMBRIEL" msg config-reload > /dev/null
++
++spawn() {
++  FILL_COLOR=0xFF0000FF "$UMBRIEL_UNMAP_CLIENT" "$1" 300 200 > "$UMBRIEL_RUNTIME_DIR/$1.log" 2>&1 &
++  for _ in $(seq 80); do
++    window=$("$UMBRIEL" windows --json | jq -c --arg title "$1" '.[] | select(.title == $title)')
++    [[ -n $window ]] && break
++    sleep 0.025
++  done
++  [[ -n $window ]]
++}
++red_at() { "$UMBRIEL_PIXEL_PROBE" "$IMAGE" count 'r > 0.9 && g < 0.1 && b < 0.1' "$1"; }
++green_at() { "$UMBRIEL_PIXEL_PROBE" "$IMAGE" count 'g > 0.9 && r < 0.1 && b < 0.2' "$1"; }
++
++spawn border-unfocused-one
++"$UMBRIEL" settle > /dev/null
++read -r x1 y1 w1 _ < <(jq -r '"\(.x) \(.y) \(.w) \(.h)"' <<< "$window")
++spawn border-unfocused-two
++"$UMBRIEL" settle > /dev/null
++read -r x2 y2 w2 _ < <(jq -r '"\(.x) \(.y) \(.w) \(.h)"' <<< "$window")
++grim "$IMAGE"
++# The last-spawned window is focused: its padding paints the focused preset.
++if (( $(red_at "2x2+$((x2 + w2 / 2))+$((y2 - 12))") < 4 )); then
++  echo "focused window did not paint its focused preset"
++  exit 1
++fi
++# The deliverable: the unfocused window paints its own unfocused preset in the
++# same 24 px band (4 px ring + 20 px padding). Without border_unfocused this
++# padding is empty.
++if (( $(green_at "2x2+$((x1 + w1 / 2))+$((y1 - 12))") < 4 )); then
++  echo "unfocused window did not paint its unfocused preset"
++  exit 1
++fi
++if (( $(green_at "2x2+$((x2 + w2 / 2))+$((y2 - 12))") > 0 )); then
++  echo "unfocused preset leaked onto the focused window"
++  exit 1
++fi
++
++# Overview cards follow the same gate. Opening the overview clears the seat, so
++# both windows re-resolve to the unfocused preset and both cards paint green.
++# The previously unfocused card is the deliverable probe: it draws only through
++# allowUnfocused. The previously focused card keeps the workspace's focused
++# gate, so its probe covers that pre-existing path, not the widening.
++# The workspace row is the output box scaled by zoom (0.5) and centered, so a
++# window at (x,y) lands at (row_x + x/2, row_y + y/2) and its padding band
++# scales to 12 px (4 px ring + 20 px padding at half zoom).
++out_size=$("$UMBRIEL" outputs | awk '/Usable area:/ {split($3, a, /[x+]/); print a[1], a[2]; exit}')
++read -r out_w out_h <<< "$out_size"
++if [[ -z $out_w || -z $out_h ]]; then
++  echo "could not read the output size from: $("$UMBRIEL" outputs)"
++  exit 1
++fi
++row_x=$(((out_w - out_w / 2) / 2))
++row_y=$(((out_h - out_h / 2) / 2))
++"$UMBRIEL" msg overview-open > /dev/null
++"$UMBRIEL" settle > /dev/null
++grim "$IMAGE"
++if (( $(green_at "2x2+$((row_x + x1 / 2 + w1 / 4))+$((row_y + y1 / 2 - 6))") < 4 )); then
++  echo "overview card of the previously unfocused window paints no preset"
++  exit 1
++fi
++if (( $(green_at "2x2+$((row_x + x2 / 2 + w2 / 4))+$((row_y + y2 / 2 - 6))") < 4 )); then
++  echo "overview card of the previously focused window paints no preset"
++  exit 1
++fi
++
++echo "border effects draw on unfocused windows and their overview cards when border_unfocused is on"
+diff --git a/tests/unit/effects.cpp b/tests/unit/effects.cpp
+index fa036abf..7326ca13 100644
+--- a/tests/unit/effects.cpp
++++ b/tests/unit/effects.cpp
+@@ -141,6 +141,22 @@ UMBRIEL_TEST(borderEffectsApplyOnlyToFocusedDecoratedCalmWindows) {
+   CHECK(!umbriel::borderEffectApplies({.focused = true, .decorated = false, .urgent = false, .fullscreen = false}));
+   CHECK(!umbriel::borderEffectApplies({.focused = true, .decorated = true, .urgent = true, .fullscreen = false}));
+   CHECK(!umbriel::borderEffectApplies({.focused = true, .decorated = true, .urgent = false, .fullscreen = true}));
++  // The opt-in widening (border_unfocused) opens only the focused gate; the
++  // decorated, urgent and fullscreen gates still hold without focus.
++  CHECK(
++      umbriel::borderEffectApplies(
++          {.focused = false, .allowUnfocused = true, .decorated = true, .urgent = false, .fullscreen = false}
++      )
++  );
++  CHECK(!umbriel::borderEffectApplies(
++      {.focused = false, .allowUnfocused = true, .decorated = false, .urgent = false, .fullscreen = false}
++  ));
++  CHECK(!umbriel::borderEffectApplies(
++      {.focused = false, .allowUnfocused = true, .decorated = true, .urgent = true, .fullscreen = false}
++  ));
++  CHECK(!umbriel::borderEffectApplies(
++      {.focused = false, .allowUnfocused = true, .decorated = true, .urgent = false, .fullscreen = true}
++  ));
+ }
+ 
+ UMBRIEL_TEST(borderPaddingNeedsACompiledBorderPreset) {
+-- 
+2.56.0.236.g7e34d8174d
+

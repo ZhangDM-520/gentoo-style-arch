@@ -72,7 +72,7 @@ sha256sums=('SKIP'
             '98b2ba7224d23f00031b235006e03fb0edef44be5d484dc0e3c248f41938b583'
             '08447292af31759b84e4e84edf558a1e3e3bbfbf35b7ebce73f2a82fa91de8d0'
             '6bfc61519439d329344b7ab3dbebcd20dc810fa988af68e7a3cd61615c9fb140'
-            '077a36883b55c8f2afdb67a56a03af37db989cc0ebf47e1db1f1ffa11ffe37f4'
+            '5fc4cb98a3d4d24e596c6f912d4d81fb68317535523d9647d68873538d120879'
             'cbccab7c6601b6adbe48fd4dfbf0de258c46d5ba4b91dedf3f7fd2e00257b169')
 
 pkgver() {
@@ -166,9 +166,11 @@ prepare() {
   # [input.gesture] unaccelerated gesture deltas: swipe tracking reads the
   # unaccelerated pointer deltas (selectSwipeDelta warning-clean fix, plus a
   # clang-format round). Upstream PR noctalia-dev/umbriel#577; sha256
-  # 077a3688…, full range 76477c29..971a1ead (three commits); regenerate
-  # with `git format-patch --stdout <merge-base>..pr-577`.
-  # (Retire on merge: 0015 → PR #577.)
+  # 5fc4cb98…. Cut on top of 0008..0014 (cherry-pick of the main-based range
+  # 76477c29..971a1ead — three commits; the 0008 collision in
+  # tests/unit/gesture_physics.cpp union-merged, both test blocks kept). The
+  # upstream-able branch stays main-based for the PR; regenerate from plain
+  # main once 0008 retires. (Retire on merge: 0015 → PR #577.)
   git apply -3 ../0015-unaccel-gesture-deltas.patch
 
   # [effects] border effects on unfocused windows: opt-in border styling for
