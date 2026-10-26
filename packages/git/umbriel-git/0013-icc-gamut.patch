@@ -1,7 +1,7 @@
-From c37d9e1333a7ca645e2a5b362a6350c3f3b2695d Mon Sep 17 00:00:00 2001
+From 3d404b5279d40350813774f0d67ba8f377c73205 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 18:19:43 +0800
-Subject: [PATCH 1/5] feat(color): characterize outputs from ICC/EDID and map
+Subject: [PATCH 1/6] feat(color): characterize outputs from ICC/EDID and map
  the SDR gamut
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -45,7 +45,7 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
  create mode 100644 tests/unit/colorimetry.cpp
 
 diff --git a/meson.build b/meson.build
-index 28b4950e..2286640e 100644
+index 0d2bb6de..66d1c42e 100644
 --- a/meson.build
 +++ b/meson.build
 @@ -127,6 +127,14 @@ pangocairo_dep = dependency('pangocairo')
@@ -63,7 +63,7 @@ index 28b4950e..2286640e 100644
  # sd-bus reads the systemd-localed keymap a keyboard without XKB config uses.
  libsystemd_dep = dependency('libsystemd', version: '>=243', required: get_option('localed'))
  xcb_dep = dependency('xcb')
-@@ -776,6 +784,7 @@ core_sources = files(
+@@ -777,6 +785,7 @@ core_sources = files(
    'src/server/effects.cpp',
    'src/output/output.cpp',
    'src/output/hdr_metadata.cpp',
@@ -71,7 +71,7 @@ index 28b4950e..2286640e 100644
    'src/input/seat.cpp',
    'src/input/toplevel_drag.cpp',
    'src/input/keyboard.cpp',
-@@ -832,6 +841,14 @@ core_sources = files(
+@@ -835,6 +844,14 @@ core_sources = files(
    'src/server/ipc_commands.cpp',
  )
  
@@ -86,9 +86,9 @@ index 28b4950e..2286640e 100644
  umbriel_core_deps = [
    libeis_dep,
    umbrielfx_dep,
-@@ -855,6 +872,9 @@ umbriel_core_deps = [
-   xcb_icccm_dep,
+@@ -859,6 +876,9 @@ umbriel_core_deps = [
    xcb_ewmh_dep,
+   xcb_shape_dep,
  ]
 +if lcms2_dep.found()
 +  umbriel_core_deps += lcms2_dep
@@ -124,7 +124,7 @@ index 193ddef7..55e1dddd 100644
      }
  
 diff --git a/src/config/config.h b/src/config/config.h
-index 781cf9e5..b5620dbb 100644
+index 8028c4dc..bb99c513 100644
 --- a/src/config/config.h
 +++ b/src/config/config.h
 @@ -274,6 +274,13 @@ namespace umbriel {
@@ -1465,7 +1465,7 @@ index 8832575d..382e4db1 100644
      wlr_scene_tree* m_layerTrees[kLayerCount]{};
      wlr_scene_tree* m_layerPopupTrees[kLayerCount]{};
 diff --git a/tests/meson.build b/tests/meson.build
-index bb149153..bed8481d 100644
+index 0bea048c..a92e7490 100644
 --- a/tests/meson.build
 +++ b/tests/meson.build
 @@ -38,7 +38,10 @@ unit_tests = [
@@ -2310,7 +2310,7 @@ index 9e5f888b..5c83f186 100644
    const TempConfig file;
    ConfigStore& store = umbriel::configStore();
 diff --git a/tests/unit/config_schema.cpp b/tests/unit/config_schema.cpp
-index 8d449c0e..debd49d1 100644
+index 4800e27c..38bc70ac 100644
 --- a/tests/unit/config_schema.cpp
 +++ b/tests/unit/config_schema.cpp
 @@ -269,6 +269,34 @@ UMBRIEL_TEST(outputRenderScaleSchemaDeclaresRangeAndUnsetDefault) {
@@ -2352,10 +2352,10 @@ index 8d449c0e..debd49d1 100644
 2.56.0.236.g7e34d8174d
 
 
-From 590d8d33c32e5dd28d921ce78e719ebc49e229a3 Mon Sep 17 00:00:00 2001
+From 6c10feb05f1c1007dee6478d50954df65e7cd6ea Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 18:19:43 +0800
-Subject: [PATCH 2/5] feat(color): ICC image descriptions and icc_file
+Subject: [PATCH 2/6] feat(color): ICC image descriptions and icc_file
  advertising
 
 Characterized output and preferred descriptions report the panel's custom
@@ -3257,7 +3257,7 @@ index f57c6d49..b0fde34e 100644
              return;
            }
 diff --git a/src/server/server.h b/src/server/server.h
-index 0177da6a..60fad5c3 100644
+index a4a72efb..ff93e019 100644
 --- a/src/server/server.h
 +++ b/src/server/server.h
 @@ -136,6 +136,7 @@ namespace umbriel {
@@ -3280,7 +3280,7 @@ index 0177da6a..60fad5c3 100644
      [[nodiscard]] wlr_scene_tree* xdgTree() const { return m_xdgTree; }
      [[nodiscard]] wlr_scene_tree* scratchpadTree() const { return m_scratchpadTree; }
 diff --git a/src/server/server_events.cpp b/src/server/server_events.cpp
-index 52b94813..adc9c9f2 100644
+index 3d00931f..0c584908 100644
 --- a/src/server/server_events.cpp
 +++ b/src/server/server_events.cpp
 @@ -3892,6 +3892,9 @@ namespace umbriel {
@@ -4049,10 +4049,10 @@ index 06024dbe..d7a07a23 100644
 2.56.0.236.g7e34d8174d
 
 
-From 967774cf01e8ba128dafac3d958b1df31f0f84f3 Mon Sep 17 00:00:00 2001
+From cb36e8fdccaa322e3edae08da0fbf6a5652aef1a Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 18:19:52 +0800
-Subject: [PATCH 3/5] test(color): live color-profile coverage
+Subject: [PATCH 3/6] test(color): live color-profile coverage
 
 The check drives the creator over the wire (ready, failed, get_information
 denial, bad_size), pins the icc_file bytes against the configured profile,
@@ -4376,10 +4376,10 @@ index 00000000..e1530639
 2.56.0.236.g7e34d8174d
 
 
-From aaf4c4e9c3a6f239e2a06ad6e6d6cb4b22ef767e Mon Sep 17 00:00:00 2001
+From 02aae9888ba17f7a6f72ce34827c9d86b85aa4d5 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 18:19:52 +0800
-Subject: [PATCH 4/5] docs(color): document color profiles and client ICC
+Subject: [PATCH 4/6] docs(color): document color profiles and client ICC
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 ---
@@ -4389,11 +4389,11 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
  3 files changed, 32 insertions(+), 1 deletion(-)
 
 diff --git a/PACKAGING.md b/PACKAGING.md
-index b7259fce..92aa58be 100644
+index af46ac69..2df86987 100644
 --- a/PACKAGING.md
 +++ b/PACKAGING.md
 @@ -80,7 +80,7 @@ The archive is linked as a whole so its internal utility symbols survive distrib
- - xcb, xcb-icccm, and xcb-ewmh
+ - xcb, xcb-icccm, xcb-ewmh, and xcb-shape
  - xcb-render, xcb-xfixes, xcb-xtest, and libei 1.3 or newer when the `tests` feature is enabled
  - EGL, GLES2, and GBM
 -- lcms2, optional; without it `umbrielfx` rejects client ICC profiles and keeps only its parametric color transforms
@@ -4449,7 +4449,7 @@ index 65da9d68..d5beeff1 100644
  
  Set `bit_depth = 10` to request a 10-bit SDR compositor render format:
 diff --git a/examples/config.toml b/examples/config.toml
-index 73ce2c91..6616317f 100644
+index 01bff86c..58100200 100644
 --- a/examples/config.toml
 +++ b/examples/config.toml
 @@ -68,6 +68,8 @@ files = []
@@ -4465,10 +4465,10 @@ index 73ce2c91..6616317f 100644
 2.56.0.236.g7e34d8174d
 
 
-From 3ab5856a2ebb1260b7b2d4e197b5d838f89e7791 Mon Sep 17 00:00:00 2001
+From 74fbac1212cb3e17ab74fa16562fbfa1cdab8706 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 18:53:26 +0800
-Subject: [PATCH 5/5] fix(color): fold composed LUT stages and fix the wideness
+Subject: [PATCH 5/6] fix(color): fold composed LUT stages and fix the wideness
  white point
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -4858,6 +4858,4136 @@ index 04317a4c..fb0d5b5c 100644
  
    struct fixture fixture;
    if (!fixture_init(&fixture)) {
+-- 
+2.56.0.236.g7e34d8174d
+
+
+From 6a73fe2c72dcebf76b359b2cc99765ee4c4cd71e Mon Sep 17 00:00:00 2001
+From: ZhangDM-520 <jixianqiang1540@gmail.com>
+Date: Tue, 27 Oct 2026 00:36:57 +0800
+Subject: [PATCH 6/6] fix(color): address the external review round
+
+Memory safety: close the icc_file memfd after marshalling (libwayland dups;
+64-request storm leaked 64 fds before), release the LUT fold inputs exactly
+once on allocation failure, and bound per-client ICC memory (32 MB outstanding
+bytes, 4 concurrent creators).
+
+Colorimetry: derive the panel white as the colorant sum in one frame (chad or
+explicit Bradford, no double adaptation), make sdr_gamut=srgb white-preserving
+(source white lands on panel white; native<->srgb never changes white), bake
+encode curves on a quadratic grid with a named gamma-2.2 stage and residual
+LUT (gamma 2.4 shadow error 7.9 -> 0.25 of an 8-bit code), enforce monotone
+TRC inversion, reject degenerate primaries, refit power curves minimax in
+linear light, and structurally validate untrusted ICC bytes (mutation-fuzzed
+20k).
+
+Config: re-read an edited profile on reload (mtime in the rule, profile files
+join the watcher, EDID fingerprint in the cache key), align load/apply
+fallback down the chain to EDID (apply read authoritative), reject
+non-regular profile files without blocking, reserve the edid keyword,
+document and test path rules, and gate both lcms2 lookups behind one -Dlcms2
+(the no-lcms2 build compiles clean and skips the ICC cases).
+
+Tests/harness: bound the mapped-pixel band to the measured result (a blank
+frame no longer passes), derive the sample point from the output size, trap
+teardown for the FIFO client, round-trip the fixture primaries from the
+generator (spec-correct colorants summing to the declared white) instead of
+re-asserting unit constants, direct pins for surfaceTransferLabel, and fd +
+budget live pins (protocol/color_profile_limits).
+
+Comment hygiene per CONTRIBUTING: no history narration.
+
+Validated: full meson 144 OK / 0 fail; harness color 9/9 and render 31/31
+apart from the known environmental title_bar_blur_refocus; clang-format,
+remark, diff-check clean; -Dlcms2=disabled builds. Red-first and mutation
+probes captured for every new check.
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+---
+ PACKAGING.md                                  |    2 +-
+ docs/user/outputs.md                          |   22 +-
+ examples/config.toml                          |    2 +-
+ meson.build                                   |    8 +-
+ meson_options.txt                             |    2 +-
+ src/config/change.cpp                         |    1 +
+ src/config/config.h                           |    8 +-
+ src/config/fields_output.cpp                  |   41 +-
+ src/output/colorimetry.cpp                    |  393 ++++++-
+ src/output/colorimetry.h                      |   35 +-
+ src/output/colorimetry_icc_fallback.cpp       |   11 +-
+ src/output/colorimetry_icc_lcms2.cpp          |  163 ++-
+ src/output/colorimetry_internal.h             |   52 +
+ src/output/hdr_metadata.cpp                   |    7 +-
+ src/output/output.cpp                         |   77 +-
+ src/server/color_description.cpp              |    7 +
+ src/server/color_description.h                |    2 +-
+ src/server/color_manager.cpp                  |  117 +-
+ src/server/ipc_commands.cpp                   |   54 +-
+ src/server/ipc_commands.h                     |    6 +
+ .../harness/checks/protocol/color_profile.sh  |  138 +--
+ .../checks/protocol/color_profile_limits.sh   |   96 ++
+ .../harness/clients/color_feedback_client.cpp |  154 ++-
+ tests/harness/lib.sh                          |  118 ++
+ tests/meson.build                             |    4 +-
+ tests/unit/color_description.cpp              |   85 +-
+ tests/unit/colorimetry.cpp                    | 1010 ++++++++++++++++-
+ tests/unit/config_change.cpp                  |   21 +
+ tests/unit/config_load.cpp                    |  115 +-
+ tests/unit/ipc_commands.cpp                   |   14 +
+ umbrielfx/meson.build                         |   11 +-
+ umbrielfx/render/color.c                      |   49 +-
+ umbrielfx/tests/color.c                       |  167 ++-
+ 33 files changed, 2658 insertions(+), 334 deletions(-)
+ create mode 100644 src/output/colorimetry_internal.h
+ create mode 100644 tests/harness/checks/protocol/color_profile_limits.sh
+
+diff --git a/PACKAGING.md b/PACKAGING.md
+index 2df86987..7e934ed3 100644
+--- a/PACKAGING.md
++++ b/PACKAGING.md
+@@ -80,7 +80,7 @@ The archive is linked as a whole so its internal utility symbols survive distrib
+ - xcb, xcb-icccm, xcb-ewmh, and xcb-shape
+ - xcb-render, xcb-xfixes, xcb-xtest, and libei 1.3 or newer when the `tests` feature is enabled
+ - EGL, GLES2, and GBM
+-- lcms2, optional (the `lcms2` meson feature option); without it `umbrielfx` rejects client ICC profiles and keeps only its parametric color transforms, and the compositor's ICC characterization for `color_profile` falls back to a warning plus the EDID chain
++- lcms2, optional (the single `lcms2` meson feature option gates both ICC paths); without it `umbrielfx` rejects client ICC profiles and keeps only its parametric color transforms, and the compositor's ICC characterization for `color_profile` falls back to a warning plus the EDID chain
+ - jemalloc on glibc, optional
+ 
+ The canonical dependency declarations are in [`meson.build`](meson.build). Distribution package names vary.
+diff --git a/docs/user/outputs.md b/docs/user/outputs.md
+index d5beeff1..4dd0ad46 100644
+--- a/docs/user/outputs.md
++++ b/docs/user/outputs.md
+@@ -268,12 +268,28 @@ Custom gamma-curve calibration applies only in SDR. Umbriel keeps the client's l
+ 
+ A wide-color-gamut panel reads every signal in its own primaries. Untagged SDR content carries sRGB-encoded values and no tag, so the panel saturates them into its native gamut: reds and greens more vivid than the content, which is why a window that looks right on an sRGB monitor looks wrong here. Compositors fix this by characterizing the display and converting during composition.
+ 
+-`color_profile` accepts `"none"`, `"edid"`, or a path to an ICC profile; characterization priority is the ICC file, then the EDID, then none. The ICC file is the factory measurement and is preferred. EDID colorimetry is derived from the display's own metadata and, in KWin's own caveat, is sometimes wrong. Nested and headless outputs have no EDID, so `color_profile = "edid"` logs a warning and stays inert there, while a file path still works. The characterization describes the panel in SDR mode; it interprets untagged SDR as sRGB and maps it into the panel's colorimetry when asked to.
++`color_profile` accepts `"none"`, `"edid"`, or a path to an ICC profile; characterization priority is the ICC file, then the EDID, then none. The ICC file is the factory measurement and is preferred. EDID colorimetry is derived from the display's own metadata. Nested and headless outputs have no EDID, so `color_profile = "edid"` logs a warning and stays inert there, while a file path still works. The characterization describes the panel in SDR mode; it interprets untagged SDR as sRGB and maps it into the panel's colorimetry when asked to.
++
++Profile paths follow these rules:
++
++- A relative path resolves against the directory of the config file that sets it, include files included.
++- `~` and `~/` expand to `$HOME`, like include paths. No other variable placeholders are expanded.
++- `"none"` and `"edid"` are reserved keywords. A file literally named `edid` (or `none`) must be spelled `./edid` (`./none`) or given as an absolute path.
++- The path must resolve to a readable regular file. Directories, FIFOs, and device files are rejected.
++
++Failures fall back down the characterization chain, never fail the output:
++
++- An invalid value (not `"none"`, `"edid"`, or a string) is ignored with a warning, and the output stays uncharacterized.
++- A path that cannot be resolved to a readable regular file at load time falls back to `"edid"` with a warning.
++- A profile the compositor cannot read at apply time (the file changed, disappeared, or is no longer regular), or an ICC profile it cannot parse, falls back to EDID with a warning. The apply-time read is authoritative: the load-time check is advisory and can be stale.
++- With no usable EDID either, the output stays uncharacterized and gamut mapping stays inactive.
++
++A profile file edit is picked up on the next config reload: the rule records the file's mtime, so the profile is re-read and re-applied. Configured profile files are watched along with the config, so saving one triggers the reload itself. EDID characterization is re-read whenever an output re-applies its state.
+ 
+ `sdr_gamut` decides what happens to untagged SDR while a characterization is active:
+ 
+ - `"native"` (the default) stages no transform at all. Pixels stay bit-identical to an uncharacterized output even with a profile set, so behavior only changes where the user opted in.
+-- `"srgb"` interprets untagged SDR as sRGB and maps it into the panel's colorimetry — the oversaturation fix. This is Mutter's `gdctl --color-mode sdr-native` behavior with a factory profile in place of the EDID, the Windows ACM behavior with ICC, and KWin's "sRGB color intensity" at 0%.
++- `"srgb"` interprets untagged SDR as sRGB and maps it into the panel's colorimetry — the oversaturation fix. The mapping is white-preserving (relative): the source white maps to the panel's native white, so switching between `"native"` and `"srgb"` does not change white.
+ 
+ Tagged clients are separate from this policy: whenever a characterization is active, output and preferred color descriptions advertise the panel's real custom primaries under both settings, so applications with explicit color management convert accurately. Their pixels can therefore change as soon as a profile is configured, even under `sdr_gamut = "native"`; untagged content is untouched unless `sdr_gamut = "srgb"` stages the mapping.
+ 
+@@ -281,7 +297,7 @@ ICC import accepts matrix-shaper profiles only. LUT-based profiles (`A2B0`/`B2A0
+ 
+ The characterization applies to SDR-mode composition only. Under HDR the PQ/BT.2020 pipeline, `sdr_white`, and `sdr_transfer` behave exactly as described above. Run `umbriel color` to inspect the resolved `panel_primaries` and `panel_transfer` alongside the configured `color_profile` and `sdr_gamut`.
+ 
+-Building the ICC path requires lcms2 (the `lcms2` meson feature option). Without it, a configured profile path warns and falls back like an unreadable file, and EDID characterization works but advertises no ICC bytes.
++Building ICC support requires lcms2 (the `lcms2` meson feature option, which gates both output profile parsing and client ICC evaluation). Without it a configured profile path warns and falls back like an unreadable file, EDID characterization works but advertises no ICC bytes, and clients cannot create ICC-based image descriptions.
+ 
+ #### Client ICC descriptions
+ 
+diff --git a/examples/config.toml b/examples/config.toml
+index 58100200..a95991c0 100644
+--- a/examples/config.toml
++++ b/examples/config.toml
+@@ -69,7 +69,7 @@ files = []
+ # hdr = "auto"
+ # sdr_transfer = "gamma22" # Or "srgb" for piecewise SDR decoding in HDR.
+ # color_profile = "edid" # Or a factory ICC path; characterized panels describe themselves to tagged clients.
+-# sdr_gamut = "srgb" # Map untagged SDR into the panel gamut; "native" keeps today's pass-through.
++# sdr_gamut = "srgb" # Map untagged SDR into the panel gamut; "native" stages no mapping.
+ 
+ # ==============================================================================
+ # Appearance
+diff --git a/meson.build b/meson.build
+index 66d1c42e..1cd713c9 100644
+--- a/meson.build
++++ b/meson.build
+@@ -127,13 +127,13 @@ pangocairo_dep = dependency('pangocairo')
+ libdrm_dep = dependency('libdrm', version: '>=2.4.129')
+ libdisplay_info_dep = dependency('libdisplay-info', version: '>=0.3.0')
+ libudev_dep = dependency('libudev', required: false)
+-# ICC profile characterization for output gamut limiting (umbriel#574). Mirrors
+-# umbrielfx's optional lcms2: without it the ICC path compiles its inert
+-# fallback and `color_profile = "<path>"` warns and stays unused.
++# Optional ICC support: this single lookup feeds both the output characterization
++# and umbrielfx's client-ICC evaluation, so -Dlcms2=disabled builds an lcms2-free
++# tree in which both compile their inert fallbacks.
+ lcms2_dep = dependency('lcms2', required: get_option('lcms2'))
+ add_project_arguments(
+   '-DUMBRIEL_HAS_LCMS2=' + lcms2_dep.found().to_int().to_string(),
+-  language: 'cpp',
++  language: ['c', 'cpp'],
+ )
+ # sd-bus reads the systemd-localed keymap a keyboard without XKB config uses.
+ libsystemd_dep = dependency('libsystemd', version: '>=243', required: get_option('localed'))
+diff --git a/meson_options.txt b/meson_options.txt
+index 5fd800b2..02d4e3a4 100644
+--- a/meson_options.txt
++++ b/meson_options.txt
+@@ -28,5 +28,5 @@ option(
+   'lcms2',
+   type: 'feature',
+   value: 'auto',
+-  description: 'ICC profile characterization for output color gamut mapping (auto: build the ICC path when lcms2 is present, else the inert fallback)',
++  description: 'ICC profile support: output characterization for SDR gamut mapping and client ICC image descriptions (auto: build the ICC path when lcms2 is present, else the inert fallback)',
+ )
+diff --git a/src/config/change.cpp b/src/config/change.cpp
+index 55e1dddd..c1679bd6 100644
+--- a/src/config/change.cpp
++++ b/src/config/change.cpp
+@@ -53,6 +53,7 @@ namespace umbriel {
+           && lhs.sdrWhite == rhs.sdrWhite
+           && lhs.sdrTransfer == rhs.sdrTransfer
+           && lhs.colorProfile == rhs.colorProfile
++          && lhs.colorProfileMtime == rhs.colorProfileMtime
+           && lhs.sdrGamut == rhs.sdrGamut
+           && lhs.bitDepth == rhs.bitDepth;
+     }
+diff --git a/src/config/config.h b/src/config/config.h
+index bb99c513..56d2583a 100644
+--- a/src/config/config.h
++++ b/src/config/config.h
+@@ -11,6 +11,7 @@
+ #include <algorithm>
+ #include <array>
+ #include <cstddef>
++#include <cstdint>
+ #include <filesystem>
+ #include <map>
+ #include <optional>
+@@ -334,9 +335,12 @@ namespace umbriel {
+     float sdrWhite = 203.0F;
+     SdrTransfer sdrTransfer = SdrTransfer::Gamma22;
+     // Panel characterization for SDR gamut limiting: "none", "edid", or a path
+-    // to an ICC matrix-shaper display profile. Parsed at apply time; the config
+-    // only checks that a path is readable.
++    // to an ICC matrix-shaper display profile. The bytes are parsed at apply
++    // time and an unreadable path falls back to "edid". The mtime stamps the
++    // rule so a reload of an edited profile re-reads it (change detection and
++    // the characterization cache both key on it).
+     std::string colorProfile = "none";
++    std::int64_t colorProfileMtime = 0;
+     SdrGamut sdrGamut = SdrGamut::Native;
+     std::optional<std::string> screenEffect; // "off" disables the default
+     // Render bit depth for SDR output: 8 (default) or 10 for 10-bit SDR.
+diff --git a/src/config/fields_output.cpp b/src/config/fields_output.cpp
+index fa1b52d2..4704dca0 100644
+--- a/src/config/fields_output.cpp
++++ b/src/config/fields_output.cpp
+@@ -2,6 +2,7 @@
+ 
+ #include "config/fields.h"
+ #include "config/keybind_parse.h"
++#include "config/store.h"
+ #include "config/value_parse.h"
+ #include "output/identity.h"
+ 
+@@ -9,6 +10,7 @@
+ #include <array>
+ #include <cerrno>
+ #include <cstdint>
++#include <cstdlib>
+ #include <cstring>
+ #include <fcntl.h>
+ #include <filesystem>
+@@ -74,8 +76,22 @@ namespace umbriel {
+       }
+     }
+ 
++    // Same "~" semantics as include paths; other placeholders are not
++    // expanded in profile paths.
++    std::string expandProfileHome(std::string_view raw) {
++      if (raw == "~" || raw.starts_with("~/")) {
++        if (const char* home = std::getenv("HOME"); home != nullptr && home[0] != '\0') {
++          return raw == "~" ? std::string(home) : std::string(home).append(raw.substr(1));
++        }
++      }
++      return std::string(raw);
++    }
++
+     // "none", "edid", or a path to an ICC profile. Config stays pure data: the
+-    // file is only checked for readability here and parsed at apply time.
++    // file is only checked for readability here and parsed at apply time. The
++    // rule records the file's mtime so a reload of an edited profile reads as
++    // a changed rule and re-opens the file; apply-time failures fall back to
++    // EDID, so a path that cannot resolve to a regular file does too.
+     void parseColorProfile(const toml::node& node, const std::string& path, OutputRule& target) {
+       const auto value = node.value<std::string>();
+       if (!value || value->empty() || value->contains('\0')) {
+@@ -86,30 +102,45 @@ namespace umbriel {
+         target.colorProfile = *value;
+         return;
+       }
+-      std::filesystem::path file(*value);
++      std::filesystem::path file(expandProfileHome(*value));
+       if (file.is_relative()) {
+         if (node.source().path == nullptr || node.source().path->empty()) {
+-          warnAt(node.source(), "ignoring {} (relative profile path requires a config source path)", path);
++          warnAt(
++              node.source(), R"({}: relative profile path requires a config source path; falling back to "edid")", path
++          );
++          target.colorProfile = "edid";
+           return;
+         }
+         file = std::filesystem::path(*node.source().path).parent_path() / file;
+       }
+       file = file.lexically_normal();
++      configStore().addWatchPath(file);
+       // O_NONBLOCK avoids hanging on a FIFO before fstat can reject it. The
+       // bytes are never read here: ICC parsing happens at apply time.
+       const int fd = open(file.c_str(), O_RDONLY | O_CLOEXEC | O_NONBLOCK);
+       if (fd < 0) {
+-        warnAt(node.source(), "ignoring {} (cannot read profile '{}': {})", path, file.string(), std::strerror(errno));
++        warnAt(
++            node.source(), R"({}: cannot read profile '{}' ({}); falling back to "edid")", path, file.string(),
++            std::strerror(errno)
++        );
++        target.colorProfile = "edid";
+         return;
+       }
+       struct stat metadata{};
+       const bool regular = fstat(fd, &metadata) == 0 && S_ISREG(metadata.st_mode);
++      const long long stamp =
++          regular ? static_cast<long long>(metadata.st_mtim.tv_sec) * 1000000000LL + metadata.st_mtim.tv_nsec : 0;
+       close(fd);
+       if (!regular) {
+-        warnAt(node.source(), "ignoring {} (profile '{}' must be a readable regular file)", path, file.string());
++        warnAt(
++            node.source(), R"({}: profile '{}' must be a readable regular file; falling back to "edid")", path,
++            file.string()
++        );
++        target.colorProfile = "edid";
+         return;
+       }
+       target.colorProfile = file.string();
++      target.colorProfileMtime = stamp;
+     }
+ 
+     const registry::Fields<OutputRule>& outputFields() {
+diff --git a/src/output/colorimetry.cpp b/src/output/colorimetry.cpp
+index a61ec135..c51bb59b 100644
+--- a/src/output/colorimetry.cpp
++++ b/src/output/colorimetry.cpp
+@@ -1,10 +1,12 @@
+ #include "output/colorimetry.h"
+ 
++#include "output/colorimetry_internal.h"
+ #include "output/hdr_metadata.h"
+ 
+ #include <algorithm>
+ #include <cmath>
+ #include <cstring>
++#include <limits>
+ #include <memory>
+ 
+ extern "C" {
+@@ -16,8 +18,6 @@ namespace umbriel {
+ 
+   namespace {
+ 
+-    // Encode-curve resolution for PanelTransfer::Kind::Curve and LUT baking.
+-    constexpr size_t kCurveSamples = 256;
+     constexpr size_t kEncodeLutDim = 1024;
+ 
+     float srgbEncode(float linear) {
+@@ -38,10 +38,9 @@ namespace umbriel {
+     }
+ 
+     std::vector<float> samplesFromEncode(float (*encode)(float, float), float shape) {
+-      std::vector<float> samples(kCurveSamples);
+-      for (size_t index = 0; index < kCurveSamples; ++index) {
+-        const float linear = static_cast<float>(index) / static_cast<float>(kCurveSamples - 1);
+-        samples[index] = encode(linear, shape);
++      std::vector<float> samples(color_detail::kCurveSamples);
++      for (size_t index = 0; index < color_detail::kCurveSamples; ++index) {
++        samples[index] = encode(color_detail::encodeGridLinear(index, color_detail::kCurveSamples), shape);
+       }
+       return samples;
+     }
+@@ -51,6 +50,66 @@ namespace umbriel {
+       std::copy(identity + 0, identity + 9, matrix);
+     }
+ 
++    void multiplyMatrix3(const double left[9], const double right[9], double out[9]) {
++      double product[9];
++      for (size_t row = 0; row < 3; ++row) {
++        for (size_t column = 0; column < 3; ++column) {
++          product[row * 3 + column] = left[row * 3] * right[column]
++              + left[row * 3 + 1] * right[3 + column]
++              + left[row * 3 + 2] * right[6 + column];
++        }
++      }
++      std::copy(product, product + 9, out);
++    }
++
++    void xyzFromXy(wlr_color_cie1931_xy xy, double out[3]) {
++      if (!std::isfinite(xy.x) || !std::isfinite(xy.y) || xy.y <= 0.0F) {
++        out[0] = out[1] = out[2] = 0.0;
++        return;
++      }
++      out[0] = static_cast<double>(xy.x) / xy.y;
++      out[1] = 1.0;
++      out[2] = (1.0 - static_cast<double>(xy.x) - xy.y) / xy.y;
++    }
++
++    // RGB -> XYZ as row-major 3x3, primaries in columns scaled so the white
++    // is the image of (1,1,1). False for degenerate chromaticities.
++    bool primariesToXyzMatrix(const wlr_color_primaries& primaries, double matrix[9]) {
++      // Row-major with each primary as a column: colorants[3 * row + column]
++      // is the `row`-th XYZ component of the `column`-th primary.
++      double colorants[9];
++      const wlr_color_cie1931_xy chromaticities[3] = {primaries.red, primaries.green, primaries.blue};
++      for (size_t column = 0; column < 3; ++column) {
++        double primary[3];
++        xyzFromXy(chromaticities[column], primary);
++        if (primary[0] == 0.0 && primary[1] == 0.0 && primary[2] == 0.0) {
++          return false;
++        }
++        for (size_t row = 0; row < 3; ++row) {
++          colorants[3 * row + column] = primary[row];
++        }
++      }
++      double white[3];
++      xyzFromXy(primaries.white, white);
++      if (white[1] == 0.0) {
++        return false;
++      }
++      double inverse[9];
++      if (!color_detail::invert3x3(colorants, inverse)) {
++        return false;
++      }
++      double scale[3];
++      for (size_t row = 0; row < 3; ++row) {
++        scale[row] = inverse[row * 3] * white[0] + inverse[row * 3 + 1] * white[1] + inverse[row * 3 + 2] * white[2];
++      }
++      for (size_t row = 0; row < 3; ++row) {
++        for (size_t column = 0; column < 3; ++column) {
++          matrix[row * 3 + column] = scale[column] * colorants[row * 3 + column];
++        }
++      }
++      return true;
++    }
++
+   } // namespace
+ 
+   void ColorTransformDeleter::operator()(wlr_color_transform* transform) const { wlr_color_transform_unref(transform); }
+@@ -68,22 +127,39 @@ namespace umbriel {
+     if (transfer.encode.empty()) {
+       return x;
+     }
+-    const float position = x * static_cast<float>(transfer.encode.size() - 1);
++    const float position = color_detail::encodeGridPosition(x, transfer.encode.size());
+     const size_t lower = static_cast<size_t>(position);
+     const size_t upper = std::min(lower + 1, transfer.encode.size() - 1);
+     const float fraction = position - static_cast<float>(lower);
+     return transfer.encode[lower] + (transfer.encode[upper] - transfer.encode[lower]) * fraction;
+   }
+ 
+-  std::vector<uint16_t> bakeEncodeLut(const PanelTransfer& transfer, size_t dim) {
+-    std::vector<uint16_t> lut(std::max<size_t>(dim, 2));
+-    for (size_t index = 0; index < lut.size(); ++index) {
+-      const float linear = static_cast<float>(index) / static_cast<float>(lut.size() - 1);
+-      const float encoded = std::clamp(panelEncodeSample(transfer, linear), 0.0F, 1.0F);
+-      lut[index] = static_cast<uint16_t>(std::lround(encoded * 65535.0F));
++  namespace {
++
++    // Probe set for the power fit: uniform light levels plus the geometric
++    // shadow floor, where transfer curves separate most.
++    std::vector<float> powerFitProbes() {
++      std::vector<float> probes;
++      for (int index = 1; index <= 512; ++index) {
++        probes.push_back(static_cast<float>(index) / 512.0F);
++      }
++      for (int index = 1; index <= 96; ++index) {
++        probes.push_back(std::pow(2.0F, -static_cast<float>(index) / 8.0F));
++      }
++      probes.push_back(1e-6F);
++      return probes;
+     }
+-    return lut;
+-  }
++
++    double powerFitWorst(const PanelTransfer& transfer, const std::vector<float>& probes, float exponent) {
++      double worst = 0.0;
++      for (const float linear : probes) {
++        const double approximated = std::pow(static_cast<double>(linear), 1.0 / static_cast<double>(exponent));
++        worst = std::max(worst, std::abs(approximated - static_cast<double>(panelEncodeSample(transfer, linear))));
++      }
++      return worst;
++    }
++
++  } // namespace
+ 
+   TransferFit fitTransfer(const PanelTransfer& transfer) {
+     switch (transfer.kind) {
+@@ -99,29 +175,21 @@ namespace umbriel {
+       return {.kind = TransferFit::Kind::Power, .exponent = 1.0F};
+     }
+     // Named fast paths first: an exact match is reported as the named curve,
+-    // never as an approximating power fit. The power fit is log-log
+-    // least squares through the origin for encode(x) = x^(1/e), i.e.
+-    // log(encode) = (1/e) * log(x); endpoints are skipped because log(0).
++    // never as an approximating power fit. Geometric probes reach the shadow
++    // toes a uniform probe grid cannot see, where named curves differ most.
+     constexpr float kMatchTolerance = 1e-3F;
+     bool matchesSrgb = true;
+     bool matchesGamma22 = true;
+-    double sumXX = 0.0;
+-    double sumXY = 0.0;
+-    for (size_t index = 1; index < transfer.encode.size(); ++index) {
+-      const float linear = static_cast<float>(index) / static_cast<float>(transfer.encode.size() - 1);
+-      const float encoded = transfer.encode[index];
++    for (int probe = 0; probe <= 384; ++probe) {
++      const float linear =
++          probe <= 256 ? static_cast<float>(probe) / 256.0F : std::pow(2.0F, -static_cast<float>(probe - 256) / 8.0F);
++      const float encoded = panelEncodeSample(transfer, linear);
+       if (std::abs(encoded - srgbEncode(linear)) > kMatchTolerance) {
+         matchesSrgb = false;
+       }
+       if (std::abs(encoded - std::pow(linear, 1.0F / 2.2F)) > kMatchTolerance) {
+         matchesGamma22 = false;
+       }
+-      if (encoded > 0.0F) {
+-        const double logLinear = std::log(static_cast<double>(linear));
+-        const double logEncoded = std::log(static_cast<double>(encoded));
+-        sumXX += logLinear * logLinear;
+-        sumXY += logLinear * logEncoded;
+-      }
+     }
+     if (matchesSrgb) {
+       return {.kind = TransferFit::Kind::Srgb};
+@@ -129,22 +197,40 @@ namespace umbriel {
+     if (matchesGamma22) {
+       return {.kind = TransferFit::Kind::Gamma22};
+     }
+-    // A degenerate table has no exponent to fit; linear is the least wrong
+-    // declared shape and keeps the reported tf_power value meaningful.
+-    const float slope = sumXX > 0.0 ? static_cast<float>(sumXY / sumXX) : 0.0F;
+-    const float exponent = slope > 0.0F && std::isfinite(slope) ? 1.0F / slope : 1.0F;
+-    return {.kind = TransferFit::Kind::Power, .exponent = exponent};
++    // The exponent is fitted to the worst-case linear-light error — the error
++    // the panel actually renders. A log-domain least squares is
++    // shadow-weighted: the deep samples of a linear toe drag the exponent away
++    // from the power region and cost whole 8-bit codes at the top of the
++    // range. Minimax over a coarse grid with a fine refinement is
++    // deterministic and reaches the protocol vocabulary's shape.
++    const std::vector<float> probes = powerFitProbes();
++    auto worstAt = [&](float exponent) { return powerFitWorst(transfer, probes, exponent); };
++    float bestExponent = 1.0F;
++    double bestWorst = std::numeric_limits<double>::infinity();
++    for (int step = 2; step <= 80; ++step) {
++      const float candidate = static_cast<float>(step) * 0.25F;
++      const double worst = worstAt(candidate);
++      if (worst < bestWorst) {
++        bestWorst = worst;
++        bestExponent = candidate;
++      }
++    }
++    const float coarse = bestExponent;
++    for (int step = -50; step <= 50; ++step) {
++      const float candidate = std::max(0.05F, coarse + static_cast<float>(step) * 0.005F);
++      const double worst = worstAt(candidate);
++      if (worst < bestWorst) {
++        bestWorst = worst;
++        bestExponent = candidate;
++      }
++    }
++    return {.kind = TransferFit::Kind::Power, .exponent = bestExponent};
+   }
+ 
+   void sdrGamutMatrix(const wlr_color_primaries& panel, float wideness, float matrix[9]) {
+     wlr_color_primaries srgb{};
+     wlr_color_primaries_from_named(&srgb, WLR_COLOR_NAMED_PRIMARIES_SRGB);
+     const float amount = std::clamp(wideness, 0.0F, 1.0F);
+-    if (amount <= 0.0F) {
+-      // Strict sRGB interpretation: the plain sRGB -> panel mapping.
+-      wlr_color_primaries_transform_absolute_colorimetric(&srgb, &panel, matrix);
+-      return;
+-    }
+     if (amount >= 1.0F) {
+       // Native: content is already in the panel's gamut, so the mapping is the
+       // identity and only the panel TRC would remain (the runtime stages
+@@ -152,15 +238,44 @@ namespace umbriel {
+       identityMatrix(matrix);
+       return;
+     }
+-    // Linear interpolation between the two gamuts (KWin's wideness semantics):
+-    // the primaries slide while the white stays fixed.
+-    const wlr_color_primaries interp{
+-        .red = lerpXy(srgb.red, panel.red, amount),
+-        .green = lerpXy(srgb.green, panel.green, amount),
+-        .blue = lerpXy(srgb.blue, panel.blue, amount),
+-        .white = srgb.white,
+-    };
+-    wlr_color_primaries_transform_absolute_colorimetric(&interp, &panel, matrix);
++    wlr_color_primaries source = srgb;
++    if (amount > 0.0F) {
++      // Linear interpolation between the two gamuts; the primaries slide while
++      // the white stays the source white.
++      source = {
++          .red = lerpXy(srgb.red, panel.red, amount),
++          .green = lerpXy(srgb.green, panel.green, amount),
++          .blue = lerpXy(srgb.blue, panel.blue, amount),
++          .white = srgb.white,
++      };
++    }
++    // White-preserving (relative colorimetric) mapping: source white lands on
++    // the panel white exactly, so switching native <-> srgb never changes how
++    // white renders and non-D65 panels neither tint nor clip it. Only chroma
++    // is confined: the source primaries are converted through the panel's
++    // colorimetry with one Bradford adaptation step between the two whites.
++    double sourceToXyz[9];
++    double panelToXyz[9];
++    double xyzToPanel[9];
++    double sourceWhite[3];
++    double panelWhite[3];
++    if (!primariesToXyzMatrix(source, sourceToXyz)
++        || !primariesToXyzMatrix(panel, panelToXyz)
++        || !color_detail::invert3x3(panelToXyz, xyzToPanel)) {
++      identityMatrix(matrix);
++      return;
++    }
++    xyzFromXy(source.white, sourceWhite);
++    xyzFromXy(panel.white, panelWhite);
++    double adapt[9];
++    color_detail::bradfordAdapt(sourceWhite, panelWhite, adapt);
++    double adaptedSource[9];
++    double composed[9];
++    multiplyMatrix3(adapt, sourceToXyz, adaptedSource);
++    multiplyMatrix3(xyzToPanel, adaptedSource, composed);
++    for (size_t index = 0; index < 9; ++index) {
++      matrix[index] = static_cast<float>(composed[index]);
++    }
+   }
+ 
+   wlr_color_transform* buildSdrGamutTransform(const PanelColorimetry& panel) {
+@@ -171,29 +286,49 @@ namespace umbriel {
+       return nullptr;
+     }
+ 
+-    wlr_color_transform* encodeStage = nullptr;
++    wlr_color_transform* stages[3] = {matrixStage, nullptr, nullptr};
++    size_t stageCount = 2;
+     switch (panel.transfer.kind) {
+     case PanelTransfer::Kind::Srgb:
+-      encodeStage = wlr_color_transform_init_linear_to_inverse_eotf(WLR_COLOR_TRANSFER_FUNCTION_SRGB);
++      stages[1] = wlr_color_transform_init_linear_to_inverse_eotf(WLR_COLOR_TRANSFER_FUNCTION_SRGB);
+       break;
+     case PanelTransfer::Kind::Gamma22:
+-      encodeStage = wlr_color_transform_init_linear_to_inverse_eotf(WLR_COLOR_TRANSFER_FUNCTION_GAMMA22);
++      stages[1] = wlr_color_transform_init_linear_to_inverse_eotf(WLR_COLOR_TRANSFER_FUNCTION_GAMMA22);
+       break;
+     case PanelTransfer::Kind::Curve: {
+-      const std::vector<uint16_t> lut = bakeEncodeLut(panel.transfer, kEncodeLutDim);
+-      encodeStage = wlr_color_transform_init_lut_3x1d(lut.size(), lut.data(), lut.data(), lut.data());
++      // The sampled curve is split around an analytic stage: the renderer's
++      // gamma 2.2 stage carries the near-vertical shadow slope exactly, and
++      // the LUT only corrects the residual, which is flat enough for the LUT's
++      // uniform linear sampling to follow without shadow error.
++      stages[1] = wlr_color_transform_init_linear_to_inverse_eotf(WLR_COLOR_TRANSFER_FUNCTION_GAMMA22);
++      std::vector<uint16_t> lut(kEncodeLutDim);
++      for (size_t index = 0; index < lut.size(); ++index) {
++        const float corrected = static_cast<float>(index) / static_cast<float>(lut.size() - 1);
++        const float encoded = panelEncodeSample(panel.transfer, std::pow(corrected, 2.2F));
++        lut[index] = static_cast<uint16_t>(std::lround(clampedUnit(encoded) * 65535.0F));
++      }
++      stages[2] = wlr_color_transform_init_lut_3x1d(lut.size(), lut.data(), lut.data(), lut.data());
++      stageCount = 3;
+       break;
+     }
+     }
+-    if (encodeStage == nullptr) {
+-      wlr_color_transform_unref(matrixStage);
++    bool failed = stages[1] == nullptr;
++    if (stageCount == 3) {
++      failed = failed || stages[2] == nullptr;
++    }
++    if (failed) {
++      for (size_t index = 0; index < stageCount; ++index) {
++        if (stages[index] != nullptr) {
++          wlr_color_transform_unref(stages[index]);
++        }
++      }
+       return nullptr;
+     }
+ 
+-    wlr_color_transform* stages[2] = {matrixStage, encodeStage};
+-    wlr_color_transform* pipeline = wlr_color_transform_init_pipeline(stages, 2);
+-    wlr_color_transform_unref(matrixStage);
+-    wlr_color_transform_unref(encodeStage);
++    wlr_color_transform* pipeline = wlr_color_transform_init_pipeline(stages, stageCount);
++    for (size_t index = 0; index < stageCount; ++index) {
++      wlr_color_transform_unref(stages[index]);
++    }
+     return pipeline;
+   }
+ 
+@@ -253,4 +388,144 @@ namespace umbriel {
+     return panel;
+   }
+ 
++  namespace color_detail {
++
++    namespace {
++
++      uint32_t readU32At(std::span<const uint8_t> data, size_t at) {
++        return (static_cast<uint32_t>(data[at]) << 24)
++            | (static_cast<uint32_t>(data[at + 1]) << 16)
++            | (static_cast<uint32_t>(data[at + 2]) << 8)
++            | static_cast<uint32_t>(data[at + 3]);
++      }
++
++      uint16_t readU16At(std::span<const uint8_t> data, size_t at) {
++        return static_cast<uint16_t>((static_cast<uint16_t>(data[at]) << 8) | data[at + 1]);
++      }
++
++      // A curv or para tag must declare counts that fit its own tag data.
++      std::string curveCountError(std::span<const uint8_t> data, size_t tagOffset, size_t tagSize) {
++        if (tagSize < 12) {
++          return {};
++        }
++        const uint32_t type = readU32At(data, tagOffset);
++        if (type == 0x63757276) { // 'curv'
++          const uint32_t count = readU32At(data, tagOffset + 8);
++          if (12ULL + 2ULL * count > tagSize) {
++            return "ICC curv tag count is not in bounds";
++          }
++        } else if (type == 0x70617261) { // 'para'
++          const uint16_t functionType = readU16At(data, tagOffset + 8);
++          constexpr uint32_t parameterCounts[5] = {1, 3, 4, 5, 7};
++          if (functionType > 4) {
++            return "ICC para tag function type is invalid";
++          }
++          if (12ULL + 4ULL * parameterCounts[functionType] > tagSize) {
++            return "ICC para tag parameters are not in bounds";
++          }
++        }
++        return {};
++      }
++
++    } // namespace
++
++    std::string iccStructureError(std::span<const uint8_t> data) {
++      if (data.size() < 128) {
++        return "truncated ICC profile (header incomplete)";
++      }
++      const uint32_t declaredSize = readU32At(data, 0);
++      if (declaredSize < 132) {
++        return "truncated ICC profile (size field under the tag table)";
++      }
++      if (declaredSize > data.size()) {
++        return "truncated ICC profile (size field exceeds the file)";
++      }
++      if (data[36] != 'a' || data[37] != 'c' || data[38] != 's' || data[39] != 'p') {
++        return "not an ICC profile (magic signature missing)";
++      }
++      const uint8_t versionMajor = data[8];
++      if (versionMajor != 2 && versionMajor != 4) {
++        return "unsupported ICC profile version (must be 2 or 4)";
++      }
++      const uint64_t usable = declaredSize;
++      const uint32_t tagCount = readU32At(data, 128);
++      if (tagCount > (usable - 132) / 12) {
++        return "ICC tag table is not in bounds";
++      }
++      for (uint32_t index = 0; index < tagCount; ++index) {
++        const size_t entry = 132 + 12 * index;
++        const uint32_t tagOffset = readU32At(data, entry + 4);
++        const uint32_t tagSize = readU32At(data, entry + 8);
++        if (tagOffset > usable || tagSize > usable - tagOffset) {
++          return "ICC tag entry leaves the profile";
++        }
++        if (const std::string curveError = curveCountError(data, tagOffset, tagSize); !curveError.empty()) {
++          return curveError;
++        }
++      }
++      return {};
++    }
++
++    bool invert3x3(const double in[9], double out[9]) {
++      const double determinant = in[0] * (in[4] * in[8] - in[5] * in[7])
++          - in[1] * (in[3] * in[8] - in[5] * in[6])
++          + in[2] * (in[3] * in[7] - in[4] * in[6]);
++      if (!std::isfinite(determinant) || std::abs(determinant) < 1e-12) {
++        return false;
++      }
++      out[0] = (in[4] * in[8] - in[5] * in[7]) / determinant;
++      out[1] = (in[2] * in[7] - in[1] * in[8]) / determinant;
++      out[2] = (in[1] * in[5] - in[2] * in[4]) / determinant;
++      out[3] = (in[5] * in[6] - in[3] * in[8]) / determinant;
++      out[4] = (in[0] * in[8] - in[2] * in[6]) / determinant;
++      out[5] = (in[2] * in[3] - in[0] * in[5]) / determinant;
++      out[6] = (in[3] * in[7] - in[4] * in[6]) / determinant;
++      out[7] = (in[1] * in[6] - in[0] * in[7]) / determinant;
++      out[8] = (in[0] * in[4] - in[1] * in[3]) / determinant;
++      return true;
++    }
++
++    void bradfordAdapt(const double fromXyz[3], const double toXyz[3], double out[9]) {
++      constexpr double bradford[9] = {
++          0.8951, 0.2664, -0.1614, -0.7502, 1.7135, 0.0367, 0.0389, -0.0685, 1.0296,
++      };
++      double bradfordInverse[9];
++      if (!invert3x3(bradford, bradfordInverse)) {
++        std::fill(out, out + 9, 0.0);
++        out[0] = out[4] = out[8] = 1.0;
++        return;
++      }
++      double fromCones[3];
++      double toCones[3];
++      for (size_t row = 0; row < 3; ++row) {
++        fromCones[row] =
++            bradford[row * 3] * fromXyz[0] + bradford[row * 3 + 1] * fromXyz[1] + bradford[row * 3 + 2] * fromXyz[2];
++        toCones[row] =
++            bradford[row * 3] * toXyz[0] + bradford[row * 3 + 1] * toXyz[1] + bradford[row * 3 + 2] * toXyz[2];
++      }
++      double scale[3] = {1.0, 1.0, 1.0};
++      for (size_t row = 0; row < 3; ++row) {
++        if (!std::isfinite(fromCones[row])
++            || !std::isfinite(toCones[row])
++            || fromCones[row] <= 0.0
++            || toCones[row] <= 0.0) {
++          std::fill(out, out + 9, 0.0);
++          out[0] = out[4] = out[8] = 1.0;
++          return;
++        }
++        scale[row] = toCones[row] / fromCones[row];
++      }
++      double scaled[9];
++      for (size_t row = 0; row < 3; ++row) {
++        for (size_t column = 0; column < 3; ++column) {
++          scaled[row * 3 + column] = bradford[row * 3 + column] * scale[row];
++        }
++      }
++      double composed[9];
++      multiplyMatrix3(bradfordInverse, scaled, composed);
++      std::copy(composed, composed + 9, out);
++    }
++
++  } // namespace color_detail
++
+ } // namespace umbriel
+diff --git a/src/output/colorimetry.h b/src/output/colorimetry.h
+index 445b9c0b..c687fe99 100644
+--- a/src/output/colorimetry.h
++++ b/src/output/colorimetry.h
+@@ -1,6 +1,6 @@
+ #pragma once
+ 
+-// Panel colorimetry characterization and SDR gamut mapping (umbriel#574).
++// Panel colorimetry characterization and SDR gamut mapping.
+ // A PanelColorimetry describes what untagged SDR signal values mean to the
+ // panel: its primaries, white point, and transfer curve. With that, "gamut
+ // limiting" is a plain output transform that interprets untagged SDR as sRGB
+@@ -29,7 +29,10 @@ namespace umbriel {
+       Curve,
+     };
+     Kind kind = Kind::Srgb;
+-    // Kind::Curve only: encode(i / (size - 1)) for linear inputs in [0, 1].
++    // Kind::Curve only: encode((i / (size - 1))²) for linear inputs in [0, 1].
++    // The input grid clusters at zero because encode curves rise steeply
++    // there; a uniform grid keeps several 8-bit codes of lerp error in the
++    // shadows no matter how densely it is sampled.
+     std::vector<float> encode;
+   };
+ 
+@@ -48,8 +51,9 @@ namespace umbriel {
+   // (wp_image_description_creator_icc_v1). Srgb and Gamma22 are exact named
+   // fast paths; Power is a parametric power fit in the protocol's
+   // set_tf_power/tf_power vocabulary: the EOTF exponent e with
+-  // optical = electrical^e (the request's valid range is 1.0..10.0; a fit
+-  // outside it is kept as fitted and only clamped by the buffer mapping).
++  // optical = electrical^e, fitted to minimize the worst-case linear-light
++  // error (the request's valid range is 1.0..10.0; a fit outside it is kept
++  // as fitted and only clamped by the buffer mapping).
+   struct TransferFit {
+     enum class Kind {
+       Srgb,
+@@ -66,20 +70,23 @@ namespace umbriel {
+   // per-buffer 3D LUTs (a new render transform type).
+   [[nodiscard]] TransferFit fitTransfer(const PanelTransfer& transfer);
+ 
+-  // The encode curve baked to uint16 LUT entries for
+-  // wlr_color_transform_init_lut_3x1d (channel-agnostic; all channels share it).
+-  [[nodiscard]] std::vector<uint16_t> bakeEncodeLut(const PanelTransfer& transfer, size_t dim);
+-
+   // Output-side SDR gamut mapping matrix, generic over `wideness` in [0, 1]
+-  // (KWin semantics: 0 = interpret untagged SDR strictly as sRGB, 1 = as the
+-  // panel's native gamut, linear primary interpolation with the white fixed).
+-  // Wave 1 maps SdrGamut to the endpoints only; intermediate values are the
+-  // future slider's math and are never selected at runtime yet.
++  // (0 = interpret untagged SDR strictly as sRGB, 1 = as the
++  // panel's native gamut, linear primary interpolation in between). The
++  // mapping is white-preserving (relative colorimetric): source white always
++  // lands on the panel white, so switching native <-> srgb never changes how
++  // white renders, and only chroma is confined to the sRGB gamut. Wideness 1
++  // is the identity matrix — it maps nothing and applies no panel TRC (the
++  // runtime stages no transform at all instead, see sdrGamutStaged).
++  // Intermediate values are the future slider's math and are never selected
++  // at runtime yet.
+   void sdrGamutMatrix(const wlr_color_primaries& panel, float wideness, float matrix[9]);
+ 
+   // The supplied scene transform for SDR gamut mapping: one matrix stage
+-  // (sRGB -> panel, wideness 0) followed by the panel's encode stage (named
+-  // inverse-EOTF or a baked 3x1D LUT). Returns NULL on allocation failure.
++  // (sRGB -> panel, wideness 0) followed by the panel's encode stage — the
++  // named inverse-EOTF for named curves, or an analytic gamma 2.2 stage with
++  // the residual baked to a 3x1D LUT for sampled curves. Returns NULL on
++  // allocation failure.
+   [[nodiscard]] wlr_color_transform* buildSdrGamutTransform(const PanelColorimetry& panel);
+ 
+   // The staging decision, factored out of Output: stage the SDR gamut
+diff --git a/src/output/colorimetry_icc_fallback.cpp b/src/output/colorimetry_icc_fallback.cpp
+index 7ca5b1c0..26942e76 100644
+--- a/src/output/colorimetry_icc_fallback.cpp
++++ b/src/output/colorimetry_icc_fallback.cpp
+@@ -1,14 +1,17 @@
+-// Inert ICC parsing for builds without lcms2 (umbriel#574). Same shape as
+-// umbrielfx/render/color_fallback.c: the ICC path reports itself unsupported
+-// and `color_profile = "<path>"` warns and falls back at apply time.
++// Inert ICC parsing for builds without lcms2. The ICC path reports itself
++// unsupported and `color_profile = "<path>"` warns and falls back at apply time.
+ 
+ #include "output/colorimetry.h"
++#include "output/colorimetry_internal.h"
+ 
+ #include <span>
+ 
+ namespace umbriel {
+ 
+-  IccParse parseIccProfile(std::span<const uint8_t>, IccClassScope) {
++  IccParse parseIccProfile(std::span<const uint8_t> data, IccClassScope) {
++    if (const std::string structureError = color_detail::iccStructureError(data); !structureError.empty()) {
++      return {.colorimetry = std::nullopt, .error = structureError, .warnings = {}};
++    }
+     return {.colorimetry = std::nullopt, .error = "ICC profiles are unsupported (built without lcms2)", .warnings = {}};
+   }
+ 
+diff --git a/src/output/colorimetry_icc_lcms2.cpp b/src/output/colorimetry_icc_lcms2.cpp
+index ecb69074..a0e18ddc 100644
+--- a/src/output/colorimetry_icc_lcms2.cpp
++++ b/src/output/colorimetry_icc_lcms2.cpp
+@@ -1,7 +1,9 @@
+-// ICC matrix-shaper parsing via lcms2 (umbriel#574). Compiled only when the
++// ICC matrix-shaper parsing via lcms2. Compiled only when the
+ // build finds lcms2; colorimetry_icc_fallback.cpp is its inert counterpart.
+ 
+ #include "output/colorimetry.h"
++#include "output/colorimetry_internal.h"
++#include "output/hdr_metadata.h"
+ 
+ #include <algorithm>
+ #include <cmath>
+@@ -17,8 +19,6 @@ namespace umbriel {
+ 
+   namespace {
+ 
+-    // Forward-curve resolution for named-curve detection and encode inversion.
+-    constexpr size_t kCurveSamples = 256;
+     // Named fast paths compare the evaluated curve; anything looser is baked.
+     constexpr float kCurveMatchTolerance = 1e-3F;
+ 
+@@ -35,12 +35,42 @@ namespace umbriel {
+       return encoded <= 0.04045F ? encoded / 12.92F : std::pow((encoded + 0.055F) / 1.055F, 2.4F);
+     }
+ 
+-    std::vector<float> evaluateCurve(const cmsToneCurve* curve) {
+-      std::vector<float> samples(kCurveSamples);
+-      for (size_t index = 0; index < kCurveSamples; ++index) {
+-        const float encoded = static_cast<float>(index) / static_cast<float>(kCurveSamples - 1);
++    // Untrusted curves can evaluate to non-finite values and need not
++    // increase; the inversion and the fit below require a finite monotone
++    // decode, so flatten the samples onto that envelope and say so.
++    void sanitizeDecodeCurve(std::vector<float>& samples, std::vector<std::string>& warnings) {
++      bool repaired = false;
++      float lastFinite = 0.0F;
++      for (float& sample : samples) {
++        if (!std::isfinite(sample)) {
++          sample = lastFinite;
++          repaired = true;
++          continue;
++        }
++        lastFinite = std::clamp(sample, 0.0F, 1.0F);
++        sample = lastFinite;
++      }
++      float runningMax = 0.0F;
++      for (float& sample : samples) {
++        if (sample < runningMax) {
++          sample = runningMax;
++          repaired = true;
++        } else {
++          runningMax = sample;
++        }
++      }
++      if (repaired) {
++        warnings.push_back("flattened a TRC that was non-finite or non-monotonic");
++      }
++    }
++
++    std::vector<float> evaluateCurve(const cmsToneCurve* curve, std::vector<std::string>& warnings) {
++      std::vector<float> samples(color_detail::kCurveSamples);
++      for (size_t index = 0; index < color_detail::kCurveSamples; ++index) {
++        const float encoded = static_cast<float>(index) / static_cast<float>(color_detail::kCurveSamples - 1);
+         samples[index] = cmsEvalToneCurveFloat(curve, encoded);
+       }
++      sanitizeDecodeCurve(samples, warnings);
+       return samples;
+     }
+ 
+@@ -64,13 +94,13 @@ namespace umbriel {
+     }
+ 
+     // Numeric inversion of the evaluated decode curve (encoded -> linear) into
+-    // the panel encode curve (linear -> encoded). The forward curve is sampled
+-    // monotonically and inverted by binary search + interpolation: an
+-    // estimation, accurate to the sampling resolution.
++    // the panel encode curve (linear -> encoded) on the sampled encode grid.
++    // The forward curve is monotone (sanitized) and inverted by binary search
++    // plus interpolation: an estimation, accurate to the sampling resolution.
+     std::vector<float> invertDecodeCurve(const std::vector<float>& decode) {
+-      std::vector<float> encode(kCurveSamples);
+-      for (size_t target = 0; target < kCurveSamples; ++target) {
+-        const float linear = static_cast<float>(target) / static_cast<float>(kCurveSamples - 1);
++      std::vector<float> encode(decode.size());
++      for (size_t target = 0; target < encode.size(); ++target) {
++        const float linear = color_detail::encodeGridLinear(target, encode.size());
+         const auto upper = std::ranges::lower_bound(decode, linear);
+         if (upper == decode.begin()) {
+           encode[target] = 0.0F;
+@@ -90,37 +120,16 @@ namespace umbriel {
+       return encode;
+     }
+ 
+-    bool invert3x3(const double in[9], double out[9]) {
+-      const double determinant = in[0] * (in[4] * in[8] - in[5] * in[7])
+-          - in[1] * (in[3] * in[8] - in[5] * in[6])
+-          + in[2] * (in[3] * in[7] - in[4] * in[6]);
+-      if (!std::isfinite(determinant) || std::abs(determinant) < 1e-12) {
+-        return false;
+-      }
+-      out[0] = (in[4] * in[8] - in[5] * in[7]) / determinant;
+-      out[1] = (in[2] * in[7] - in[1] * in[8]) / determinant;
+-      out[2] = (in[1] * in[5] - in[2] * in[4]) / determinant;
+-      out[3] = (in[5] * in[6] - in[3] * in[8]) / determinant;
+-      out[4] = (in[0] * in[8] - in[2] * in[6]) / determinant;
+-      out[5] = (in[2] * in[3] - in[0] * in[5]) / determinant;
+-      out[6] = (in[3] * in[7] - in[4] * in[6]) / determinant;
+-      out[7] = (in[1] * in[6] - in[0] * in[7]) / determinant;
+-      out[8] = (in[0] * in[4] - in[1] * in[3]) / determinant;
+-      return true;
+-    }
+-
+     void multiplyMatrixVector(const double matrix[9], const cmsCIEXYZ& in, double out[3]) {
+       out[0] = matrix[0] * in.X + matrix[1] * in.Y + matrix[2] * in.Z;
+       out[1] = matrix[3] * in.X + matrix[4] * in.Y + matrix[5] * in.Z;
+       out[2] = matrix[6] * in.X + matrix[7] * in.Y + matrix[8] * in.Z;
+     }
+ 
+-    // Recover the measured colorimetry: the ICC tags are relative to the D50
+-    // PCS, and chad records the adaptation that was applied on the way there.
+-    // Undoing it maps colorants and white point back to the real white.
+-    cmsCIEXYZ unAdapt(const double chadInverse[9], const cmsCIEXYZ& tagged) {
++    // Move a tagged PCS value into the frame the colorants end up in.
++    cmsCIEXYZ applyFrame(const double frame[9], const cmsCIEXYZ& tagged) {
+       double xyz[3];
+-      multiplyMatrixVector(chadInverse, tagged, xyz);
++      multiplyMatrixVector(frame, tagged, xyz);
+       return {.X = xyz[0], .Y = xyz[1], .Z = xyz[2]};
+     }
+ 
+@@ -139,9 +148,9 @@ namespace umbriel {
+     // PanelTransfer carries the encode curve, so sampled kinds are inverted
+     // numerically here and the parser inverts back on read.
+     std::vector<float> decodeFromEncode(const PanelTransfer& transfer) {
+-      std::vector<float> decode(kCurveSamples);
+-      for (size_t index = 0; index < kCurveSamples; ++index) {
+-        const float encoded = static_cast<float>(index) / static_cast<float>(kCurveSamples - 1);
++      std::vector<float> decode(color_detail::kCurveSamples);
++      for (size_t index = 0; index < color_detail::kCurveSamples; ++index) {
++        const float encoded = static_cast<float>(index) / static_cast<float>(color_detail::kCurveSamples - 1);
+         float low = 0.0F;
+         float high = 1.0F;
+         for (int step = 0; step < 24; ++step) {
+@@ -190,6 +199,10 @@ namespace umbriel {
+       result.error = "profile is too large";
+       return result;
+     }
++    if (const std::string structureError = color_detail::iccStructureError(data); !structureError.empty()) {
++      result.error = structureError;
++      return result;
++    }
+     ProfilePtr profile(cmsOpenProfileFromMem(data.data(), static_cast<cmsUInt32Number>(data.size())));
+     if (!profile) {
+       result.error = "not a readable ICC profile";
+@@ -233,23 +246,53 @@ namespace umbriel {
+       return result;
+     }
+ 
+-    // chad is an s15Fixed16 3x3 that lcms2 hands back as 9 doubles (validated
+-    // by the chad round-trip unit).
+-    double chadInverse[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
++    // Colorants and white must end up in one frame. The colorant tags are D50
++    // PCS-relative; chad records the adaptation applied on the way there, so
++    // chad^-1 recovers the measured colorimetry. The white is derived as the
++    // image of (1,1,1) under the colorant matrix in that same frame — the
++    // colorant sum — which stays correct whatever wtpt claims (a measured wtpt
++    // beside chad would otherwise be un-adapted twice).
++    double frame[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
++    bool frameFromChad = false;
+     if (const auto* chad = static_cast<const double*>(cmsReadTag(profile.get(), cmsSigChromaticAdaptationTag))) {
+       double chadMatrix[9];
+       std::copy_n(chad, 9, chadMatrix);
+-      if (!invert3x3(chadMatrix, chadInverse)) {
++      if (color_detail::invert3x3(chadMatrix, frame)) {
++        frameFromChad = true;
++      } else {
+         result.warnings.push_back("ignoring a singular chad tag");
+-        std::fill_n(chadInverse, 9, 0.0);
+-        chadInverse[0] = chadInverse[4] = chadInverse[8] = 1.0;
++      }
++    }
++    if (!frameFromChad) {
++      // Without a usable chad the colorants are D50-relative by specification.
++      // When wtpt declares a measured white that is not D50 (the layout v2
++      // measurement suites emit), adapt the colorants to it explicitly so the
++      // measured colorimetry is what gets reported.
++      const double d50[3] = {0.9642, 1.0, 0.8249};
++      const double wtptSum = whitePoint->X + whitePoint->Y + whitePoint->Z;
++      if (std::isfinite(wtptSum) && std::abs(wtptSum) > 1e-9 && whitePoint->Y > 0.0) {
++        const double wtptXyX = whitePoint->X / wtptSum;
++        const double wtptXyY = whitePoint->Y / wtptSum;
++        if (std::abs(wtptXyX - 0.3457) > 0.001 || std::abs(wtptXyY - 0.3585) > 0.001) {
++          const double measuredWhite[3] = {
++              whitePoint->X / whitePoint->Y,
++              1.0,
++              whitePoint->Z / whitePoint->Y,
++          };
++          color_detail::bradfordAdapt(d50, measuredWhite, frame);
++        }
+       }
+     }
+ 
+-    const cmsCIEXYZ realRed = unAdapt(chadInverse, *red);
+-    const cmsCIEXYZ realGreen = unAdapt(chadInverse, *green);
+-    const cmsCIEXYZ realBlue = unAdapt(chadInverse, *blue);
+-    const cmsCIEXYZ realWhite = unAdapt(chadInverse, *whitePoint);
++    const cmsCIEXYZ taggedSum{
++        .X = red->X + green->X + blue->X,
++        .Y = red->Y + green->Y + blue->Y,
++        .Z = red->Z + green->Z + blue->Z,
++    };
++    const cmsCIEXYZ realRed = applyFrame(frame, *red);
++    const cmsCIEXYZ realGreen = applyFrame(frame, *green);
++    const cmsCIEXYZ realBlue = applyFrame(frame, *blue);
++    const cmsCIEXYZ realWhite = applyFrame(frame, taggedSum);
+ 
+     PanelColorimetry panel{
+         .primaries =
+@@ -265,6 +308,20 @@ namespace umbriel {
+     panel.white[0] = panel.primaries.white.x;
+     panel.white[1] = panel.primaries.white.y;
+ 
++    // A collapsed colorant triangle cannot anchor a gamut mapping and would
++    // send singular matrices into the transform builder. Degeneracy lives in
++    // the XYZ colorants (a zero-sum colorant is a zero column), so span them
++    // as a matrix and require it to be invertible alongside the hull check.
++    // Singularity is transpose-invariant, so the storage order is irrelevant.
++    const double colorants[9] = {
++        realRed.X, realRed.Y, realRed.Z, realGreen.X, realGreen.Y, realGreen.Z, realBlue.X, realBlue.Y, realBlue.Z,
++    };
++    double colorantInverse[9];
++    if (!validDisplayPrimaries(panel.primaries) || !color_detail::invert3x3(colorants, colorantInverse)) {
++      result.error = "degenerate ICC primaries (the colorants do not span a gamut)";
++      return result;
++    }
++
+     const auto* redTrc = static_cast<const cmsToneCurve*>(cmsReadTag(profile.get(), cmsSigRedTRCTag));
+     const auto* greenTrc = static_cast<const cmsToneCurve*>(cmsReadTag(profile.get(), cmsSigGreenTRCTag));
+     const auto* blueTrc = static_cast<const cmsToneCurve*>(cmsReadTag(profile.get(), cmsSigBlueTRCTag));
+@@ -273,8 +330,10 @@ namespace umbriel {
+       return result;
+     }
+ 
+-    const std::vector<float> redDecode = evaluateCurve(redTrc);
+-    if (!sameCurve(redDecode, evaluateCurve(greenTrc)) || !sameCurve(redDecode, evaluateCurve(blueTrc))) {
++    const std::vector<float> redDecode = evaluateCurve(redTrc, result.warnings);
++    std::vector<std::string> channelNotes;
++    if (!sameCurve(redDecode, evaluateCurve(greenTrc, channelNotes))
++        || !sameCurve(redDecode, evaluateCurve(blueTrc, channelNotes))) {
+       result.warnings.push_back("per-channel TRCs differ; using the red channel curve");
+     }
+ 
+diff --git a/src/output/colorimetry_internal.h b/src/output/colorimetry_internal.h
+new file mode 100644
+index 00000000..c8de4a41
+--- /dev/null
++++ b/src/output/colorimetry_internal.h
+@@ -0,0 +1,52 @@
++#pragma once
++
++// Implementation details shared by the colorimetry translation units. This is
++// not part of the module's public surface (colorimetry.h): sampled-curve
++// resolution and the adaptation model are invariants the parser and the
++// transform builder must agree on, and a single definition keeps them from
++// drifting apart.
++
++#include <algorithm>
++#include <cmath>
++#include <cstddef>
++#include <cstdint>
++#include <span>
++#include <string>
++
++namespace umbriel::color_detail {
++
++  // Sampled-curve resolution for PanelTransfer::Kind::Curve tables and for the
++  // forward curves read from ICC profiles.
++  inline constexpr size_t kCurveSamples = 1024;
++
++  // Sampled encode tables sit on a quadratic input grid. Encode curves are
++  // near-vertical at zero (x^(1/g)); on a uniform grid the first lerp segment
++  // alone costs several 8-bit codes in the shadows no matter how many samples
++  // are taken, while the quadratic grid spends its resolution where the curve
++  // rises fastest and keeps the top end at the spacing a uniform 256-entry
++  // table had.
++  constexpr float encodeGridLinear(size_t index, size_t size) {
++    const float position = size > 1 ? static_cast<float>(index) / static_cast<float>(size - 1) : 0.0F;
++    return position * position;
++  }
++
++  inline float encodeGridPosition(float linear, size_t size) {
++    return std::sqrt(std::clamp(linear, 0.0F, 1.0F)) * static_cast<float>(size > 1 ? size - 1 : 0);
++  }
++
++  // Row-major 3x3 inversion shared by the chad handling and the gamut matrix.
++  [[nodiscard]] bool invert3x3(const double in[9], double out[9]);
++
++  // Bradford chromatic adaptation between two XYZ whites (Y = 1). The gamut
++  // mapping and the ICC white derivation must share one adaptation model or
++  // their whites drift apart; identity is returned for degenerate whites.
++  void bradfordAdapt(const double fromXyz[3], const double toXyz[3], double out[9]);
++
++  // Structural bounds validation for raw ICC bytes before any parser touches
++  // them: header size/magic/version, tag-table counts, offset+length overflow,
++  // curv/para counts. Empty result means the bytes are structurally sound.
++  // Client profiles are untrusted and can run to 32 MB, so this gate is what
++  // keeps malformed offsets and counts away from the parsers.
++  [[nodiscard]] std::string iccStructureError(std::span<const uint8_t> data);
++
++} // namespace umbriel::color_detail
+diff --git a/src/output/hdr_metadata.cpp b/src/output/hdr_metadata.cpp
+index 8078d59c..532857a0 100644
+--- a/src/output/hdr_metadata.cpp
++++ b/src/output/hdr_metadata.cpp
+@@ -22,12 +22,17 @@ namespace umbriel {
+       return std::isfinite(value) ? std::clamp(static_cast<double>(value), 0.0, maximum) : 0.0;
+     }
+ 
++    // The hull bound is Z >= 0 as x + y <= 1. Measured and s15Fixed16-quantized
++    // colorants land a few 1e-5 on the wrong side of that line for legitimate
++    // limb primaries (e.g. 0.68/0.32), so the bound admits that much noise.
++    constexpr double kHullSlack = 1e-4;
++
+     bool validCoordinate(const wlr_color_cie1931_xy& coordinate) {
+       return std::isfinite(coordinate.x)
+           && std::isfinite(coordinate.y)
+           && coordinate.x >= 0.0
+           && coordinate.y >= 0.0
+-          && coordinate.x + coordinate.y <= 1.0;
++          && coordinate.x + coordinate.y <= 1.0 + kHullSlack;
+     }
+ 
+ #if UMBRIEL_HAS_DRM_BACKEND
+diff --git a/src/output/output.cpp b/src/output/output.cpp
+index 85ec0473..59be69be 100644
+--- a/src/output/output.cpp
++++ b/src/output/output.cpp
+@@ -39,12 +39,17 @@ extern "C" {
+ 
+ #include <algorithm>
+ #include <cassert>
++#include <cerrno>
+ #include <cmath>
++#include <cstdint>
+ #include <cstdlib>
++#include <cstring>
+ #include <ctime>
+ #include <drm_fourcc.h>
++#include <fcntl.h>
+ #include <format>
+-#include <fstream>
++#include <sys/stat.h>
++#include <unistd.h>
+ #include <vector>
+ 
+ #ifdef TRACY_ENABLE
+@@ -132,6 +137,16 @@ namespace umbriel {
+       return mode;
+     }
+ 
++    // Content stamp mixed into the cache key: an EDID change must bust the
++    // characterization cache even when the config text is unchanged.
++    std::string edidFingerprint(const std::vector<uint8_t>& blob) {
++      uint64_t hash = 1469598103934665603ULL;
++      for (const uint8_t byte : blob) {
++        hash = (hash ^ byte) * 1099511628211ULL;
++      }
++      return std::to_string(blob.size()) + ":" + std::to_string(hash);
++    }
++
+ #ifdef TRACY_ENABLE
+     // Tracy keeps a plot's name pointer and reads it while a capture runs, so
+     // the per-output names live for the rest of the process.
+@@ -480,7 +495,17 @@ namespace umbriel {
+   void Output::updateSdrGamutTransform(const OutputRule* rule, bool force) {
+     const std::string source = rule != nullptr ? rule->colorProfile : "none";
+     const SdrGamut gamut = rule != nullptr ? rule->sdrGamut : SdrGamut::Native;
+-    const std::string key = source + "|" + (gamut == SdrGamut::Srgb ? "srgb" : "native");
++    // The key carries the profile file's mtime and the EDID fingerprint, so an
++    // edited profile or a changed EDID re-reads on re-apply without waiting for
++    // anything else to change.
++    std::string key = source
++        + "|"
++        + std::to_string(rule != nullptr ? rule->colorProfileMtime : 0LL)
++        + "|"
++        + (gamut == SdrGamut::Srgb ? "srgb" : "native");
++    if (source != "none") {
++      key += "|" + edidFingerprint(edidBlobForOutput(m_output));
++    }
+     if (!force && m_sdrGamutResolved && m_sdrGamutSource == key) {
+       return;
+     }
+@@ -501,32 +526,54 @@ namespace umbriel {
+     // down that chain instead of failing the config (never fail the output).
+     std::optional<PanelColorimetry> panel;
+     if (source != "edid") {
+-      constexpr std::streamoff kMaxProfileBytes = 32 * 1024 * 1024;
+-      std::ifstream file(source, std::ios::binary | std::ios::ate);
+-      const std::streamoff size = file ? static_cast<std::streamoff>(file.tellg()) : 0;
++      // The apply-time read is authoritative: the load-time check only rejects
++      // obviously unusable paths, and the file can have changed or disappeared
++      // since. O_NONBLOCK plus the regular-file check keeps a FIFO or device
++      // path from blocking the compositor thread.
++      constexpr size_t kMaxProfileBytes = 32 * 1024 * 1024;
++      const std::string profilePath = source;
+       std::vector<uint8_t> bytes;
+-      if (size <= 0 || size > kMaxProfileBytes) {
+-        kLog.warn("output '{}': cannot read color profile '{}'; falling back to EDID", m_output->name, source);
++      const int fd = open(profilePath.c_str(), O_RDONLY | O_CLOEXEC | O_NONBLOCK);
++      if (fd < 0) {
++        kLog.warn("output '{}': cannot read color profile '{}'; falling back to EDID", m_output->name, profilePath);
+       } else {
+-        bytes.resize(static_cast<size_t>(size));
+-        file.seekg(0);
+-        if (!file.read(reinterpret_cast<char*>(bytes.data()), size)) {
+-          kLog.warn("output '{}': cannot read color profile '{}'; falling back to EDID", m_output->name, source);
+-          bytes.clear();
++        struct stat metadata{};
++        if (fstat(fd, &metadata) != 0 || !S_ISREG(metadata.st_mode)) {
++          kLog.warn(
++              "output '{}': color profile '{}' must be a readable regular file; falling back to EDID", m_output->name,
++              profilePath
++          );
++        } else if (metadata.st_size <= 0 || static_cast<std::uint64_t>(metadata.st_size) > kMaxProfileBytes) {
++          kLog.warn("output '{}': cannot read color profile '{}'; falling back to EDID", m_output->name, profilePath);
++        } else {
++          bytes.resize(static_cast<size_t>(metadata.st_size));
++          size_t filled = 0;
++          while (filled < bytes.size()) {
++            const ssize_t count = read(fd, bytes.data() + filled, bytes.size() - filled);
++            if (count <= 0) {
++              bytes.clear();
++              break;
++            }
++            filled += static_cast<size_t>(count);
++          }
++          if (bytes.empty()) {
++            kLog.warn("output '{}': cannot read color profile '{}'; falling back to EDID", m_output->name, profilePath);
++          }
+         }
++        close(fd);
+       }
+       if (!bytes.empty()) {
+         IccParse parsed = parseIccProfile(bytes);
+         for (const std::string& warning : parsed.warnings) {
+-          kLog.warn("output '{}': color profile '{}': {}", m_output->name, source, warning);
++          kLog.warn("output '{}': color profile '{}': {}", m_output->name, profilePath, warning);
+         }
+         if (parsed.colorimetry) {
+           panel = std::move(parsed.colorimetry);
+-          // Wave 5: the advertised profile is the file exactly as configured.
++          // The advertised profile is the file exactly as configured.
+           m_iccProfile = iccStoreForFileProfile(bytes);
+         } else {
+           kLog.warn(
+-              "output '{}': color profile '{}' rejected ({}); falling back to EDID", m_output->name, source,
++              "output '{}': color profile '{}' rejected ({}); falling back to EDID", m_output->name, profilePath,
+               parsed.error
+           );
+         }
+diff --git a/src/server/color_description.cpp b/src/server/color_description.cpp
+index 05a4dbe5..6b94c449 100644
+--- a/src/server/color_description.cpp
++++ b/src/server/color_description.cpp
+@@ -1,5 +1,7 @@
+ #include "server/color_description.h"
+ 
++#include "output/colorimetry_internal.h"
++
+ #include <cmath>
+ #include <utility>
+ 
+@@ -172,6 +174,11 @@ namespace umbriel {
+     if (versionMajor != 2 && versionMajor != 4) {
+       return {.description = std::nullopt, .error = "unsupported ICC profile version (must be 2 or 4)"};
+     }
++    // The bytes are client-supplied up to 32 MB: structural bounds are
++    // re-checked at this untrusted boundary before any parser sees them.
++    if (const std::string structureError = color_detail::iccStructureError(iccBytes); !structureError.empty()) {
++      return {.description = std::nullopt, .error = structureError};
++    }
+     const IccParse parsed = parseIccProfile(iccBytes, IccClassScope::DisplayOrColorSpace);
+     if (!parsed.colorimetry) {
+       return {.description = std::nullopt, .error = parsed.error.empty() ? "unsupported ICC profile" : parsed.error};
+diff --git a/src/server/color_description.h b/src/server/color_description.h
+index f21d6131..eeef2a8d 100644
+--- a/src/server/color_description.h
++++ b/src/server/color_description.h
+@@ -59,7 +59,7 @@ namespace umbriel {
+       const wlr_output_image_description* outputDescription, float effectiveSdrWhite, bool automaticHdrAvailable = false
+   );
+ 
+-  // Characterized-panel override for output descriptions (umbriel#574). While
++  // Characterized-panel override for output descriptions. While
+   // an ICC/EDID characterization is active the description reflects the
+   // panel's real colorimetry (custom primaries) so tagged clients convert
+   // accurately — their pixels can change even under sdr_gamut = "native" —
+diff --git a/src/server/color_manager.cpp b/src/server/color_manager.cpp
+index 4441cd23..c48976ca 100644
+--- a/src/server/color_manager.cpp
++++ b/src/server/color_manager.cpp
+@@ -32,6 +32,15 @@ namespace umbriel {
+     constexpr uint32_t kProtocolVersion = 2;
+ #endif
+     constexpr uint32_t kDefaultSdrWhite = 203;
++    // A client's outstanding ICC payload — bytes staged for set_icc_file plus
++    // bytes retained on descriptions it created — is capped at one
++    // protocol-maximum profile, with four concurrent creators. Both are needed:
++    // neither bound alone stops create_icc_creator plus a sparse memfd from
++    // growing the compositor by gigabytes. One 32 MB profile is the most any
++    // client legitimately holds at once, and four creators bound object churn
++    // and staging buffers while leaving headroom for a burst of small profiles.
++    constexpr size_t kMaxIccBytesPerClient = kClientIccSizeLimit;
++    constexpr size_t kMaxIccCreatorsPerClient = 4;
+     constexpr Logger kLog("color");
+ 
+     float decodeCoordinate(int32_t value) { return static_cast<float>(value) / 1'000'000.0F; }
+@@ -77,9 +86,14 @@ namespace umbriel {
+ 
+   struct ColorManager::Impl {
+     struct ImageDescription {
++      Impl* manager = nullptr;
+       wl_resource* resource = nullptr;
+       ColorDescription description;
+       bool informationAllowed = false;
++      // ICC bytes this description retains for one client, against that
++      // client's budget, released when the resource goes away.
++      wl_client* iccClient = nullptr;
++      size_t iccBytes = 0;
+     };
+ 
+     struct ParametricCreator {
+@@ -92,8 +106,10 @@ namespace umbriel {
+ 
+     struct IccCreator {
+       Impl* manager = nullptr;
++      wl_client* client = nullptr;
+       wl_resource* resource = nullptr;
+       std::vector<uint8_t> iccBytes;
++      size_t stagedBytes = 0;
+       bool iccSet = false;
+       // An OS-level read failure rides to create() as
+       // wp_image_description_v1.failed('operating_system') (set_icc_file's
+@@ -101,6 +117,13 @@ namespace umbriel {
+       bool readFailed = false;
+     };
+ 
++    // Per-client ICC accounting behind the two caps above: entries appear with
++    // the first creator and disappear once nothing is staged or retained.
++    struct IccBudget {
++      size_t creators = 0;
++      size_t bytes = 0;
++    };
++
+     struct SurfaceState {
+       ColorDescription description;
+       bool set = false;
+@@ -631,8 +654,20 @@ namespace umbriel {
+ 
+     static void handleCreateIccCreator(wl_client* client, wl_resource* managerResource, uint32_t id) {
+       auto* manager = static_cast<Impl*>(wl_resource_get_user_data(managerResource));
++      const auto budgeted = manager->iccBudgets.find(client);
++      if (budgeted != manager->iccBudgets.end() && budgeted->second.creators >= kMaxIccCreatorsPerClient) {
++        // The error enum has no resource-limit entry, so the closest defined
++        // contract is this request's own "not supported" error; any protocol
++        // error disconnects the client, which is the sanction for trying to
++        // stage more concurrent profiles than the budget admits.
++        wl_resource_post_error(
++            managerResource, WP_COLOR_MANAGER_V1_ERROR_UNSUPPORTED_FEATURE, "too many concurrent ICC creators"
++        );
++        return;
++      }
+       auto* creator = new IccCreator{};
+       creator->manager = manager;
++      creator->client = client;
+       creator->resource = wl_resource_create(
+           client, &wp_image_description_creator_icc_v1_interface, wl_resource_get_version(managerResource), id
+       );
+@@ -641,13 +676,18 @@ namespace umbriel {
+         wl_client_post_no_memory(client);
+         return;
+       }
++      ++manager->iccBudgets[client].creators;
+       wl_resource_set_implementation(
+           creator->resource, &iccCreatorImplementation(), creator, handleIccCreatorResourceDestroy
+       );
+     }
+ 
+     static void handleIccCreatorResourceDestroy(wl_resource* resource) {
+-      delete static_cast<IccCreator*>(wl_resource_get_user_data(resource));
++      auto* creator = static_cast<IccCreator*>(wl_resource_get_user_data(resource));
++      if (creator != nullptr) {
++        creator->manager->releaseIccCharge(creator->client, creator->stagedBytes, 1);
++        delete creator;
++      }
+     }
+ 
+     static void handleIccSetFile(wl_client*, wl_resource* resource, int32_t fd, uint32_t offset, uint32_t length) {
+@@ -661,7 +701,6 @@ namespace umbriel {
+         close(fd);
+         return;
+       }
+-      creator->iccSet = true;
+       // Request-contract errors are protocol errors by XML definition
+       // (set_icc_file: bad_fd / bad_size / out_of_file / already_set). Profile
+       // *content* problems deliberately are not: they ride create() to
+@@ -689,6 +728,24 @@ namespace umbriel {
+         close(fd);
+         return;
+       }
++      // Every refusal above is a request-contract protocol error; past them the
++      // profile counts as set even if the read below fails, because create()
++      // must answer a read failure with 'operating_system', not incomplete_set.
++      const auto budgeted = creator->manager->iccBudgets.find(creator->client);
++      const size_t outstanding = budgeted != creator->manager->iccBudgets.end() ? budgeted->second.bytes : 0;
++      if (outstanding + length > kMaxIccBytesPerClient) {
++        // bad_size is the enum's "too much data" contract. The XML scopes it
++        // to the 32 MB per-file ceiling; the same refusal covers the per-client
++        // budget, before any allocation, because that budget is what bounds the
++        // compositor's memory against staged and retained profiles.
++        wl_resource_post_error(
++            resource, WP_IMAGE_DESCRIPTION_CREATOR_ICC_V1_ERROR_BAD_SIZE,
++            "the client's outstanding ICC profiles exceed the 32 MB budget"
++        );
++        close(fd);
++        return;
++      }
++      creator->iccSet = true;
+       std::vector<uint8_t> bytes(length);
+       size_t read = 0;
+       if (lseek(fd, offset, SEEK_SET) < 0) {
+@@ -708,6 +765,8 @@ namespace umbriel {
+       close(fd);
+       if (!creator->readFailed) {
+         creator->iccBytes = std::move(bytes);
++        creator->stagedBytes = creator->iccBytes.size();
++        creator->manager->iccBudgets[creator->client].bytes += creator->stagedBytes;
+       }
+     }
+ 
+@@ -752,7 +811,16 @@ namespace umbriel {
+       // creators; the client's bytes stay on the description for identity and
+       // change detection only. The info-side icc_file mandate applies to
+       // descriptions that do allow get_information (output/preferred).
+-      creator->manager->createReadyImageDescription(resource, id, *result.description, false);
++      auto* imageDescription = creator->manager->createReadyImageDescription(resource, id, *result.description, false);
++      if (imageDescription != nullptr && imageDescription->description.iccProfile != nullptr) {
++        // The description's copy of the profile replaces the staged bytes
++        // within the same budget, so create loops cannot multiply retained
++        // copies past the per-client cap.
++        imageDescription->manager = creator->manager;
++        imageDescription->iccClient = creator->client;
++        imageDescription->iccBytes = creator->stagedBytes;
++        creator->stagedBytes = 0;
++      }
+       wl_resource_destroy(resource);
+     }
+ 
+@@ -1009,7 +1077,7 @@ namespace umbriel {
+       );
+     }
+ 
+-    void createReadyImageDescription(
++    ImageDescription* createReadyImageDescription(
+         wl_resource* parent, uint32_t id, const ColorDescription& description, bool informationAllowed,
+         uint64_t identity = 0
+     ) {
+@@ -1022,7 +1090,7 @@ namespace umbriel {
+         createFailedImageDescription(
+             parent, id, WP_IMAGE_DESCRIPTION_V1_CAUSE_LOW_VERSION, "transfer function requires a newer protocol version"
+         );
+-        return;
++        return nullptr;
+       }
+       auto* imageDescription = new ImageDescription{
+           .description = description,
+@@ -1034,13 +1102,14 @@ namespace umbriel {
+       if (imageDescription->resource == nullptr) {
+         delete imageDescription;
+         wl_resource_post_no_memory(parent);
+-        return;
++        return nullptr;
+       }
+       wl_resource_set_implementation(
+           imageDescription->resource, &imageDescriptionImplementation(), imageDescription,
+           handleImageDescriptionResourceDestroy
+       );
+       sendReady(imageDescription->resource, identity != 0 ? identity : ++lastIdentity);
++      return imageDescription;
+     }
+ 
+     static void createFailedImageDescription(wl_resource* parent, uint32_t id, uint32_t cause, const char* message) {
+@@ -1146,11 +1215,19 @@ namespace umbriel {
+     // wp_image_description_info_v1.icc_file): a read-only fd that exposes
+     // exactly the profile bytes from offset 0 plus the size in bytes ("Offset
+     // always 0, compositor must not expose unnecessary data"). A sealed memfd
+-    // is that fd. libwayland takes ownership of the descriptor at marshalling
+-    // (wl_closure_queue's copy_fds_to_connection queues the fd as-is and
+-    // libwayland closes it after the send), so the fd must NOT be closed here.
++    // is that fd. libwayland dups descriptors while marshalling an fd argument
++    // and closes only that dup after the send, so the caller keeps ownership
++    // of `fd` and must close it — one memfd and one profile copy leak per
++    // get_information otherwise.
++    //
++    // The XML says an info object for a description with a profile "must send
++    // the icc_file event". When the memfd cannot be produced, the event is
++    // deliberately omitted rather than dropping the whole information batch or
++    // failing the client, and every such failure is logged here so the
++    // deviation is observable.
+     static void sendIccFile(wl_resource* information, const std::vector<uint8_t>& profile) {
+       if (profile.empty()) {
++        kLog.warn("cannot advertise the ICC profile (no profile bytes)");
+         return;
+       }
+       int fd = memfd_create("umbriel-icc-profile", MFD_CLOEXEC | MFD_ALLOW_SEALING);
+@@ -1183,6 +1260,7 @@ namespace umbriel {
+         kLog.warn("the advertised ICC memfd could not be sealed read-only");
+       }
+       wp_image_description_info_v1_send_icc_file(information, fd, static_cast<uint32_t>(profile.size()));
++      close(fd);
+     }
+ 
+     static void sendPrimaries(wl_resource* information, const wlr_color_primaries& primaries) {
+@@ -1202,14 +1280,18 @@ namespace umbriel {
+     }
+ 
+     static void handleImageDescriptionResourceDestroy(wl_resource* resource) {
+-      delete static_cast<ImageDescription*>(wl_resource_get_user_data(resource));
++      auto* imageDescription = static_cast<ImageDescription*>(wl_resource_get_user_data(resource));
++      if (imageDescription != nullptr && imageDescription->iccBytes != 0 && imageDescription->manager != nullptr) {
++        imageDescription->manager->releaseIccCharge(imageDescription->iccClient, imageDescription->iccBytes, 0);
++      }
++      delete imageDescription;
+     }
+ 
+     ColorDescription descriptionForOutput(wlr_output* output) const {
+       const Output* managedOutput = server.outputFromWlr(output);
+       const float sdrWhite = managedOutput != nullptr ? managedOutput->sdrWhite() : kDefaultSdrWhite;
+       const bool automaticHdr = managedOutput != nullptr && managedOutput->automaticHdrAvailable();
+-      // Umbriel#574: while an ICC/EDID characterization is active the
++      // While an ICC/EDID characterization is active the
+       // description reflects the panel's real colorimetry (custom primaries),
+       // independently of the sdr_gamut policy — so tagged clients convert
+       // accurately and their pixels can change even under sdr_gamut = "native"
+@@ -1364,6 +1446,18 @@ namespace umbriel {
+       wlr_scene_buffer_set_luminance_multiplier(buffer, state.luminance_multiplier);
+     }
+ 
++    void releaseIccCharge(wl_client* client, size_t bytes, size_t creators) {
++      const auto found = iccBudgets.find(client);
++      if (found == iccBudgets.end()) {
++        return;
++      }
++      found->second.bytes -= std::min(found->second.bytes, bytes);
++      found->second.creators -= std::min(found->second.creators, creators);
++      if (found->second.bytes == 0 && found->second.creators == 0) {
++        iccBudgets.erase(found);
++      }
++    }
++
+     Server& server;
+     wl_global* global = nullptr;
+     uint64_t lastIdentity = 0;
+@@ -1373,6 +1467,7 @@ namespace umbriel {
+     std::unordered_set<SurfaceFeedback*> feedbacks;
+     std::unordered_set<ManagedOutput*> outputs;
+     std::unordered_map<wlr_scene*, std::unique_ptr<ManagedScene>> scenes;
++    std::unordered_map<wl_client*, IccBudget> iccBudgets;
+   };
+ 
+   ColorManager::ColorManager(Server& server) : m_impl(std::make_unique<Impl>(server)) {}
+diff --git a/src/server/ipc_commands.cpp b/src/server/ipc_commands.cpp
+index 573fd132..337573cf 100644
+--- a/src/server/ipc_commands.cpp
++++ b/src/server/ipc_commands.cpp
+@@ -436,21 +436,6 @@ namespace umbriel {
+       }
+     }
+ 
+-    // Surface transfer label: a fitted power curve (tfPower) has no named
+-    // protocol value. Report the fitted exponent instead.
+-    std::string surfaceTransferLabel(const ColorDescription* description) {
+-      if (description == nullptr) {
+-        return "none";
+-      }
+-      if (description->data.tf_named != 0) {
+-        return protocolTransferFunctionName(description->data.tf_named);
+-      }
+-      if (description->tfPower > 0.0F) {
+-        return std::format("power {:.4g}", description->tfPower);
+-      }
+-      return "none";
+-    }
+-
+     const char* protocolPrimariesName(uint32_t value) {
+       switch (value) {
+       case 0:
+@@ -549,14 +534,18 @@ namespace umbriel {
+             "  color profile: {}, SDR gamut: {}", output.value("color_profile", "none"),
+             output.value("sdr_gamut", "native")
+         );
+-        const auto& panelPrimaries = output.at("panel_primaries");
+-        const std::string panelTransfer =
+-            output.at("panel_transfer").is_string() ? output.at("panel_transfer").get<std::string>() : "none";
+-        if (panelPrimaries.is_object()) {
+-          const auto& red = panelPrimaries.at("red");
+-          const auto& green = panelPrimaries.at("green");
+-          const auto& blue = panelPrimaries.at("blue");
+-          const auto& white = panelPrimaries.at("white");
++        // A daemon that predates the characterization fields omits these keys,
++        // so the printer degrades to the inert wording instead of throwing.
++        const auto panelPrimaries = output.find("panel_primaries");
++        const auto panelTransferValue = output.find("panel_transfer");
++        const std::string panelTransfer = panelTransferValue != output.end() && panelTransferValue->is_string()
++            ? panelTransferValue->get<std::string>()
++            : "none";
++        if (panelPrimaries != output.end() && panelPrimaries->is_object()) {
++          const auto& red = panelPrimaries->at("red");
++          const auto& green = panelPrimaries->at("green");
++          const auto& blue = panelPrimaries->at("blue");
++          const auto& white = panelPrimaries->at("white");
+           std::println(
+               "  panel primaries: r {:.4f},{:.4f} g {:.4f},{:.4f} b {:.4f},{:.4f} w {:.4f},{:.4f}; panel transfer: {}",
+               red.at("x").get<double>(), red.at("y").get<double>(), green.at("x").get<double>(),
+@@ -758,6 +747,23 @@ namespace umbriel {
+ 
+   } // namespace
+ 
++  // Surface transfer label: a fitted power curve (tfPower) has no named
++  // protocol value. Report the fitted exponent instead. "none" means no
++  // description at all; a description that carries no curve is "unspecified",
++  // which the renderer resolves through the output's SDR transfer policy.
++  std::string surfaceTransferLabel(const ColorDescription* description) {
++    if (description == nullptr) {
++      return "none";
++    }
++    if (description->data.tf_named != 0) {
++      return protocolTransferFunctionName(description->data.tf_named);
++    }
++    if (description->tfPower > 0.0F) {
++      return std::format("power {:.4g}", description->tfPower);
++    }
++    return "unspecified";
++  }
++
+   nlohmann::json IpcCommands::windows(Server& server, std::string_view /*arg*/) {
+     nlohmann::json windows = nlohmann::json::array();
+     PendingLayouts pendingLayouts;
+@@ -1044,7 +1050,7 @@ namespace umbriel {
+           {"max_cll", description != nullptr ? description->max_cll : 0.0},
+           {"max_fall", description != nullptr ? description->max_fall : 0.0},
+       };
+-      // Derived panel characterization (umbriel#574): null while inert.
++      // Derived panel characterization: null while inert.
+       entry["panel_primaries"] = nullptr;
+       entry["panel_transfer"] = nullptr;
+       if (panel != nullptr) {
+diff --git a/src/server/ipc_commands.h b/src/server/ipc_commands.h
+index 638e08d2..5e764d6f 100644
+--- a/src/server/ipc_commands.h
++++ b/src/server/ipc_commands.h
+@@ -12,6 +12,12 @@
+ namespace umbriel {
+ 
+   class Server;
++  struct ColorDescription;
++
++  // Surface transfer label for reports: named protocol values keep their name,
++  // fitted powers report the exponent ("power <x>"), a description without a
++  // curve reports "unspecified", and no description at all reports "none".
++  std::string surfaceTransferLabel(const ColorDescription* description);
+ 
+   struct IpcCommands {
+     static nlohmann::json keyboardLayouts(Server& server, std::string_view arg);
+diff --git a/tests/harness/checks/protocol/color_profile.sh b/tests/harness/checks/protocol/color_profile.sh
+index 20b41b60..89f4226e 100644
+--- a/tests/harness/checks/protocol/color_profile.sh
++++ b/tests/harness/checks/protocol/color_profile.sh
+@@ -18,85 +18,43 @@ readonly DUMP="$RUNTIME/icc-dump"
+ readonly SHOT="$RUNTIME/color-profile.png"
+ 
+ # A matrix-shaper ICC v2 display profile built byte for byte at check time (no
+-# fixture files): Display-P3-like colorants with a gamma 1.8 TRC — wide enough
+-# to desaturate pure red under "srgb", far enough from any named curve for the
+-# power-fit path. The truncated and wrong-version copies drive the graceful
+-# create_icc failure contract.
+-python3 - "$PROFILE" <<'PY'
+-import struct
++# fixture files), from the shared generator: Display-P3-like colorants with a
++# gamma 1.8 TRC — wide enough to desaturate pure red under "srgb", far enough
++# from any named curve for the power-fit path. The generator prints the
++# colorants it wrote so checks can assert a round-trip against its own values
++# instead of restating them. The truncated and wrong-version copies drive the
++# graceful create_icc failure contract.
++read -r -a FIXTURE_XY <<<"$(write_icc_matrix_profile "$PROFILE")"
++head -c 200 "$PROFILE" > "$TRUNCATED"
++python3 - "$PROFILE" "$WRONG_VERSION" <<'PY'
+ import sys
+ 
+-
+-def s15(value):
+-    return struct.pack('>i', round(value * 65536))
+-
+-
+-def xyz(x, y):
+-    return (x / y, 1.0, (1.0 - x - y) / y)
+-
+-
+-primaries = {
+-    'rXYZ': (0.680, 0.320),
+-    'gXYZ': (0.265, 0.690),
+-    'bXYZ': (0.150, 0.060),
+-    'wtpt': (0.3127, 0.3290),
+-}
+-blobs = {}
+-for name, (x, y) in primaries.items():
+-    X, Y, Z = xyz(x, y)
+-    blobs[name.encode()] = b'XYZ ' + b'\0' * 4 + s15(X) + s15(Y) + s15(Z)
+-curve = b'curv' + b'\0' * 4 + struct.pack('>I', 1) + struct.pack('>H', round(1.8 * 256))
+-for name in ('rTRC', 'gTRC', 'bTRC'):
+-    blobs[name.encode()] = curve
+-
+-order = sorted(blobs)
+-unique = []
+-offsets = {}
+-cursor = 128 + 4 + 12 * len(order)
+-for name in order:
+-    blob = blobs[name]
+-    if blob not in unique:
+-        unique.append(blob)
+-        offsets[blob] = cursor
+-        cursor += len(blob)
+-        cursor += (-cursor) % 4
+-
+-header = bytearray(128)
+-struct.pack_into('>I', header, 0, cursor)
+-header[4:8] = b'lcms'
+-struct.pack_into('>I', header, 8, 0x02400000)
+-header[12:16] = b'mntr'
+-header[16:20] = b'RGB '
+-header[20:24] = b'XYZ '
+-header[36:40] = b'acsp'
+-header[40:44] = b'APPL'
+-header[68:80] = s15(0.9642) + s15(1.0) + s15(0.8249)
+-header[80:84] = b'lcms'
+-
+-out = bytearray(header)
+-out += struct.pack('>I', len(order))
+-for name in order:
+-    blob = blobs[name]
+-    out += name + struct.pack('>II', offsets[blob], len(blob))
+-for blob in unique:
+-    out += blob
+-    out += b'\0' * ((-len(out)) % 4)
+-assert len(out) == cursor
+-
+-path = sys.argv[1]
+-with open(path, 'wb') as handle:
+-    handle.write(out)
+-with open(path + '.truncated', 'wb') as handle:
+-    handle.write(out[:200])
+-with open(path + '.wrongversion', 'wb') as handle:
+-    mutated = bytearray(out)
+-    mutated[8] = 3
+-    handle.write(mutated)
++mutated = bytearray(open(sys.argv[1], 'rb').read())
++mutated[8] = 3
++open(sys.argv[2], 'wb').write(mutated)
+ PY
+ 
+ readonly ICC_SIZE=$(wc -c < "$PROFILE")
+ readonly ICC_HEAD=$(od -An -tx1 -N8 "$PROFILE" | tr -d ' \n')
+ 
++# The untagged phase runs a backgrounded client fed through a FIFO. Any exit
++# between starting it and the phase's own teardown must still reap the client
++# and close the FIFO writer, so an induced failure leaves nothing behind.
++client_pid=
++CLIENT_FD=
++cleanup() {
++  if [[ -n ${CLIENT_FD:-} ]]; then
++    { exec {CLIENT_FD}>&-; } 2>/dev/null || true
++    CLIENT_FD=
++  fi
++  if [[ -n ${client_pid:-} ]] && kill -0 "$client_pid" 2>/dev/null; then
++    kill -TERM "$client_pid" 2>/dev/null || true
++    wait "$client_pid" 2>/dev/null || true
++  fi
++  client_pid=
++}
++trap cleanup EXIT
++
+ write_config() {
+   printf '%s\n\n[animation]\nenabled = false\n[output.HEADLESS-1]\n%s\n' "$BASELINE" "$1" > "$UMBRIEL_CONFIG"
+   "$UMBRIEL" msg config-reload > /dev/null
+@@ -115,19 +73,28 @@ fields_are() {
+     ' > /dev/null
+ }
+ 
+-# Fully saturated untagged red, sampled where a fullscreen surface is bare.
++# Fully saturated untagged red, sampled at the center the captured output
++# actually has, so the pin does not assume one headless mode size.
+ sample_red() {
+-  local red green blue
++  local red green blue size width height x y
+   for _ in $(seq 40); do
+     grim "$SHOT"
+-    read -r red green blue < <("$UMBRIEL_PIXEL_PROBE" "$SHOT" pixel 640 360)
++    size=$("$UMBRIEL_PIXEL_PROBE" "$SHOT" size)
++    width=${size%x*}
++    height=${size#*x}
++    x=$((width / 2))
++    y=$((height / 2))
++    read -r red green blue < <("$UMBRIEL_PIXEL_PROBE" "$SHOT" pixel "$x" "$y")
+     if [[ $1 == pass-through ]]; then
+       if ((red >= 253 && green <= 2 && blue <= 2)); then
+         echo "$red $green $blue"
+         return 0
+       fi
+     else
+-      if ((red <= 240 || green >= 12 || blue >= 12)); then
++      # The mapped band brackets the measured desaturated red (229 38 27): red
++      # stays dominant but below pass-through while green and blue rise above
++      # their pass-through floor. A blank or black frame matches none of it.
++      if ((red >= 200 && red <= 240 && green >= 12 && blue >= 12)); then
+         echo "$red $green $blue"
+         return 0
+       fi
+@@ -190,22 +157,25 @@ fi
+ assert_pass_through 'profile with native gamut'
+ 
+ # Output and preferred descriptions carry the panel's custom primaries and the
+-# exact profile bytes on icc_file.
++# exact profile bytes on icc_file. The primaries assertion is a round-trip
++# contract against the generator's own colorants (the daemon must report the
++# file as written); the parser math itself is pinned by tests/unit/colorimetry.cpp.
+ INFO_LOG="$RUNTIME/color-profile-info.log"
+ if ! UMBRIEL_ICC_DUMP="$DUMP" "$CLIENT" v1 > "$INFO_LOG" 2>&1; then
+   echo "the color feedback client did not collect output/preferred descriptions: $(cat "$INFO_LOG")"
+   exit 1
+ fi
+-if ! jq -se --argjson size "$ICC_SIZE" --arg head "$ICC_HEAD" '
++if ! jq -se --argjson size "$ICC_SIZE" --arg head "$ICC_HEAD" --arg ex "${FIXTURE_XY[*]}" '
+   def near($a; $b): (($a - $b) | if . < 0 then -. else . end) <= 30;
+-  . as $log
++  ($ex | split(" ") | map(tonumber * 1000000)) as $want
++  | . as $log
+   | ["output", "preferred"] | all(. as $source
+     | ([$log[] | select(.event == "description" and .source == $source)] | last) as $d
+     | $d.tf == 2 and $d.primaries == 0 and $d.icc_size == $size and $d.icc_head == $head
+-      and near($d.primaries_xy[0]; 680000) and near($d.primaries_xy[1]; 320000)
+-      and near($d.primaries_xy[2]; 265000) and near($d.primaries_xy[3]; 690000)
+-      and near($d.primaries_xy[4]; 150000) and near($d.primaries_xy[5]; 60000)
+-      and near($d.primaries_xy[6]; 312700) and near($d.primaries_xy[7]; 329000))
++      and near($d.primaries_xy[0]; $want[0]) and near($d.primaries_xy[1]; $want[1])
++      and near($d.primaries_xy[2]; $want[2]) and near($d.primaries_xy[3]; $want[3])
++      and near($d.primaries_xy[4]; $want[4]) and near($d.primaries_xy[5]; $want[5])
++      and near($d.primaries_xy[6]; $want[6]) and near($d.primaries_xy[7]; $want[7]))
+ ' "$INFO_LOG" > /dev/null; then
+   echo "characterized descriptions lacked custom primaries or icc_file bytes: $(cat "$INFO_LOG")"
+   exit 1
+@@ -238,6 +208,8 @@ assert_pass_through 'edid fallback'
+ kill -TERM "$client_pid"
+ wait "$client_pid" 2>/dev/null || true
+ exec {CLIENT_FD}>&-
++client_pid=
++CLIENT_FD=
+ "$UMBRIEL" settle > /dev/null
+ 
+ # --- create_icc wire contract ----------------------------------------------
+diff --git a/tests/harness/checks/protocol/color_profile_limits.sh b/tests/harness/checks/protocol/color_profile_limits.sh
+new file mode 100644
+index 00000000..f6b28f02
+--- /dev/null
++++ b/tests/harness/checks/protocol/color_profile_limits.sh
+@@ -0,0 +1,96 @@
++#!/usr/bin/env bash
++# Resource bounds on client-driven color work: get_information must not
++# accumulate the icc_file memfd, and one client must not stage or retain more
++# ICC bytes — or concurrent creators — than the per-client budget. Each phase
++# drives the amplification request pattern a hostile client would loop and
++# asserts the compositor stays bounded and alive.
++set -euo pipefail
++source "$UMBRIEL_HARNESS_LIB"
++
++readonly CLIENT="${UMBRIEL_COLOR_FEEDBACK_CLIENT:?color feedback client path is required}"
++readonly RUNTIME="$UMBRIEL_RUNTIME_DIR"
++readonly BASELINE=$(< "$UMBRIEL_CONFIG")
++readonly PROFILE="$RUNTIME/color-profile.icc"
++readonly PADDED="$RUNTIME/color-profile-padded.icc"
++readonly SPARSE="$RUNTIME/icc-sparse.bin"
++readonly STORM=64
++
++write_icc_matrix_profile "$PROFILE" > /dev/null
++write_icc_matrix_profile "$PADDED" 12 > /dev/null
++truncate -s $((32 * 1024 * 1024)) "$SPARSE"
++
++printf '%s\n\n[animation]\nenabled = false\n[output.HEADLESS-1]\ncolor_profile = "%s"\n' "$BASELINE" "$PROFILE" \
++  > "$UMBRIEL_CONFIG"
++"$UMBRIEL" msg config-reload > /dev/null
++"$UMBRIEL" settle > /dev/null
++
++compositor_pid() {
++  pgrep -f -- "-c $UMBRIEL_CONFIG" | head -1
++}
++
++compositor_fd_count() {
++  ls /proc/"$1"/fd 2>/dev/null | wc -l
++}
++
++compositor_icc_memfd_count() {
++  ls -l /proc/"$1"/fd 2>/dev/null | grep -c 'memfd:umbriel-icc-profile' || true
++}
++
++# --- get_information must not leak the advertised fd -------------------------
++server_pid=$(compositor_pid)
++if [[ -z $server_pid ]]; then
++  echo "the compositor process could not be found for fd accounting"
++  exit 1
++fi
++fd_before=$(compositor_fd_count "$server_pid")
++memfd_before=$(compositor_icc_memfd_count "$server_pid")
++if ! "$CLIENT" icc-storm "$STORM" > "$RUNTIME/icc-storm.log" 2>&1; then
++  echo "the get_information storm did not complete: $(cat "$RUNTIME/icc-storm.log")"
++  exit 1
++fi
++"$UMBRIEL" settle > /dev/null
++fd_after=$(compositor_fd_count "$server_pid")
++memfd_after=$(compositor_icc_memfd_count "$server_pid")
++if ((memfd_after > memfd_before || fd_after > fd_before + 2)); then
++  echo "$STORM get_information requests leaked compositor fds: icc memfds $memfd_before -> $memfd_after, all fds $fd_before -> $fd_after"
++  exit 1
++fi
++
++# --- per-client creator budget ----------------------------------------------
++run_icc_mode() {
++  local log="$RUNTIME/icc-$1.log"
++  shift
++  set +e
++  "$CLIENT" "$@" > "$log" 2>&1
++  local rc=$?
++  set -e
++  echo "$rc"
++}
++
++rc=$(run_icc_mode cap-creators icc-cap-creators)
++if [[ $rc != 2 ]] || ! grep -Fq '{"event":"icc_cap_creators"' "$RUNTIME/icc-cap-creators.log"; then
++  echo "the creator budget did not refuse the fifth concurrent creator: rc=$rc $(cat "$RUNTIME/icc-cap-creators.log")"
++  exit 1
++fi
++
++# --- per-client byte budget: staged bytes -----------------------------------
++rc=$(run_icc_mode cap-bytes icc-cap-bytes "$SPARSE")
++if [[ $rc != 2 ]] || ! grep -Fq '{"event":"icc_cap_bytes"' "$RUNTIME/icc-cap-bytes.log"; then
++  echo "the byte budget did not refuse the overflowing set_icc_file: rc=$rc $(cat "$RUNTIME/icc-cap-bytes.log")"
++  exit 1
++fi
++
++# --- per-client byte budget: bytes retained on created descriptions ---------
++rc=$(run_icc_mode cap-retained icc-cap-retained "$PADDED")
++if [[ $rc != 2 ]] \
++    || ! grep -Fq '{"event":"icc_cap_retained","code":3,"iteration":2}' "$RUNTIME/icc-cap-retained.log"; then
++  echo "the byte budget did not refuse the third retained description: rc=$rc $(cat "$RUNTIME/icc-cap-retained.log")"
++  exit 1
++fi
++
++if ! "$UMBRIEL" color --json | jq -e '.color_manager == true' > /dev/null; then
++  echo "the compositor did not survive the budget clients: $( "$UMBRIEL" color --json)"
++  exit 1
++fi
++
++echo "icc_file fd stability, the creator budget and the staged/retained byte budgets verified live"
+diff --git a/tests/harness/clients/color_feedback_client.cpp b/tests/harness/clients/color_feedback_client.cpp
+index 056fc149..d438a1ea 100644
+--- a/tests/harness/clients/color_feedback_client.cpp
++++ b/tests/harness/clients/color_feedback_client.cpp
+@@ -112,7 +112,7 @@ namespace {
+     wp_image_description_info_v1_destroy(information);
+     wp_image_description_v1_destroy(description.proxy);
+   }
+-  // Surfacing, not swallowing (umbriel#574 wave 3): the icc_file fd is read
++  // Surfacing, not swallowing: the icc_file fd is read
+   // whole, its size and first bytes ride the description JSON, and the exact
+   // bytes land at $UMBRIEL_ICC_DUMP.<source>.<generation> so a check can
+   // byte-compare them against the configured profile.
+@@ -196,6 +196,28 @@ namespace {
+       .target_max_cll = informationMaxCll,
+       .target_max_fall = informationMaxFall,
+   };
++  // Repeated get_information on one description answers with the same data
++  // every time, so the storm counter only needs the done events; the icc_file
++  // fds are the client's to close just like the single-shot paths do.
++  unsigned stormDone = 0;
++  void informationDoneCount(void*, wp_image_description_info_v1* information) {
++    ++stormDone;
++    wp_image_description_info_v1_destroy(information);
++  }
++  void informationDiscardIcc(void*, wp_image_description_info_v1*, int32_t fd, uint32_t) { close(fd); }
++  constexpr wp_image_description_info_v1_listener kCountingListener{
++      .done = informationDoneCount,
++      .icc_file = informationDiscardIcc,
++      .primaries = informationPrimaries,
++      .primaries_named = informationPrimariesNamed,
++      .tf_power = informationTransferPower,
++      .tf_named = informationTransferNamed,
++      .luminances = informationLuminances,
++      .target_primaries = informationTargetPrimaries,
++      .target_luminance = informationTargetLuminance,
++      .target_max_cll = informationMaxCll,
++      .target_max_fall = informationMaxFall,
++  };
+ 
+   void descriptionFailed(void* data, wp_image_description_v1* proxy, uint32_t cause, const char* message) {
+     const auto& description = *static_cast<Description*>(data);
+@@ -512,11 +534,137 @@ int main(int argc, char** argv) {
+     wl_display_disconnect(state.display);
+     return 0;
+   }
+-  if (argc == 3 && std::strncmp(argv[1], "icc-", 4) == 0) {
+-    // create_icc drive (umbriel#574 wave 3): one-shot modes that build a
++  if (argc >= 2 && std::strncmp(argv[1], "icc-", 4) == 0) {
++    // create_icc drive: one-shot modes that build a
+     // wp_image_description_creator_icc_v1 from a profile file and report the
+     // wire outcome as one JSON line.
+     const char* mode = argv[1] + 4;
++    if (std::strcmp(mode, "storm") == 0) {
++      // Repeated get_information on one output description: each answer
++      // advertises the profile through icc_file, so the compositor must not
++      // accumulate descriptors or profile copies across the loop.
++      const int count = argc == 3 ? std::atoi(argv[2]) : 0;
++      if (count <= 0) {
++        std::println(stderr, "color-feedback-client: icc-storm needs a positive request count");
++        return 1;
++      }
++      state.colorOutput = wp_color_manager_v1_get_output(state.manager, state.output);
++      wp_image_description_v1* description = wp_color_management_output_v1_get_image_description(state.colorOutput);
++      DescriptionResult result;
++      wp_image_description_v1_add_listener(description, &kResultListener, &result);
++      while (!result.ready && !result.failed && wl_display_dispatch(state.display) >= 0) {
++      }
++      if (!result.ready) {
++        std::println(stderr, "color-feedback-client: output description was not ready for the icc storm");
++        return 1;
++      }
++      Description sink;
++      for (int request = 0; request < count; ++request) {
++        wp_image_description_info_v1* information = wp_image_description_v1_get_information(description);
++        wp_image_description_info_v1_add_listener(information, &kCountingListener, &sink);
++        if (wl_display_roundtrip(state.display) < 0) {
++          std::println(stderr, "color-feedback-client: the icc storm died at request {}", request);
++          return 1;
++        }
++      }
++      std::println(R"({{"event":"icc_storm","requests":{},"answered":{}}})", count, stormDone);
++      wp_image_description_v1_destroy(description);
++      wl_display_disconnect(state.display);
++      return 0;
++    }
++    if (std::strcmp(mode, "cap-creators") == 0) {
++      // The per-client budget admits four concurrent creators; the fifth
++      // request must be refused instead of staging another profile.
++      std::array<wp_image_description_creator_icc_v1*, 5> creators{};
++      for (auto*& creator : creators) {
++        creator = wp_color_manager_v1_create_icc_creator(state.manager);
++      }
++      if (!expectProtocolError(state, &wp_color_manager_v1_interface, WP_COLOR_MANAGER_V1_ERROR_UNSUPPORTED_FEATURE)) {
++        std::println(stderr, "color-feedback-client: the fifth concurrent ICC creator was not refused");
++        return 1;
++      }
++      std::println(
++          R"({{"event":"icc_cap_creators","code":{}}})",
++          static_cast<uint32_t>(WP_COLOR_MANAGER_V1_ERROR_UNSUPPORTED_FEATURE)
++      );
++      wl_display_disconnect(state.display);
++      return 2;
++    }
++    if (std::strcmp(mode, "cap-bytes") == 0) {
++      // One maximum-size profile fills the per-client byte budget, so a
++      // second creator's set_icc_file must be refused before it allocates.
++      const int first = open(argv[2], O_RDONLY);
++      const int second = open(argv[2], O_RDONLY);
++      if (first < 0 || second < 0) {
++        std::println(stderr, "color-feedback-client: cannot open ICC budget fixture {}", argv[2]);
++        return 1;
++      }
++      auto* filled = wp_color_manager_v1_create_icc_creator(state.manager);
++      auto* overflow = wp_color_manager_v1_create_icc_creator(state.manager);
++      wp_image_description_creator_icc_v1_set_icc_file(filled, first, 0, 32U * 1024U * 1024U);
++      wp_image_description_creator_icc_v1_set_icc_file(overflow, second, 0, 1);
++      close(first);
++      close(second);
++      if (!expectProtocolError(
++              state, &wp_image_description_creator_icc_v1_interface, WP_IMAGE_DESCRIPTION_CREATOR_ICC_V1_ERROR_BAD_SIZE
++          )) {
++        std::println(stderr, "color-feedback-client: the ICC byte budget did not refuse the overflow set_icc_file");
++        return 1;
++      }
++      std::println(
++          R"({{"event":"icc_cap_bytes","code":{}}})",
++          static_cast<uint32_t>(WP_IMAGE_DESCRIPTION_CREATOR_ICC_V1_ERROR_BAD_SIZE)
++      );
++      wl_display_disconnect(state.display);
++      return 2;
++    }
++    if (std::strcmp(mode, "cap-retained") == 0) {
++      // Created descriptions keep their exact profile bytes, so the budget
++      // covers what the client already created: two maximum-padded
++      // descriptions leave no room for a third staging buffer.
++      std::array<wp_image_description_v1*, 2> kept{};
++      for (size_t index = 0; index < 3; ++index) {
++        const int fd = open(argv[2], O_RDONLY);
++        if (fd < 0) {
++          std::println(stderr, "color-feedback-client: cannot open ICC budget fixture {}", argv[2]);
++          return 1;
++        }
++        const off_t length = lseek(fd, 0, SEEK_END);
++        lseek(fd, 0, SEEK_SET);
++        auto* creator = wp_color_manager_v1_create_icc_creator(state.manager);
++        wp_image_description_creator_icc_v1_set_icc_file(creator, fd, 0, static_cast<uint32_t>(length));
++        close(fd);
++        if (expectProtocolError(
++                state, &wp_image_description_creator_icc_v1_interface,
++                WP_IMAGE_DESCRIPTION_CREATOR_ICC_V1_ERROR_BAD_SIZE
++            )) {
++          std::println(
++              R"({{"event":"icc_cap_retained","code":{},"iteration":{}}})",
++              static_cast<uint32_t>(WP_IMAGE_DESCRIPTION_CREATOR_ICC_V1_ERROR_BAD_SIZE), index
++          );
++          wl_display_disconnect(state.display);
++          return 2;
++        }
++        auto* description = wp_image_description_creator_icc_v1_create(creator);
++        DescriptionResult result;
++        wp_image_description_v1_add_listener(description, &kResultListener, &result);
++        while (!result.ready && !result.failed && wl_display_dispatch(state.display) >= 0) {
++        }
++        if (!result.ready) {
++          std::println(stderr, "color-feedback-client: budget fixture did not parse (cause {})", result.cause);
++          return 1;
++        }
++        if (index < kept.size()) {
++          kept[index] = description;
++        }
++      }
++      std::println(stderr, "color-feedback-client: the retained ICC budget did not refuse the third description");
++      return 1;
++    }
++    if (argc != 3) {
++      std::println(stderr, "color-feedback-client: icc mode {} needs a profile argument", mode);
++      return 1;
++    }
+     const int fd = open(argv[2], O_RDONLY);
+     if (fd < 0) {
+       std::println(stderr, "color-feedback-client: cannot open ICC profile {}", argv[2]);
+diff --git a/tests/harness/lib.sh b/tests/harness/lib.sh
+index 7fde45cb..45288fe8 100644
+--- a/tests/harness/lib.sh
++++ b/tests/harness/lib.sh
+@@ -103,3 +103,121 @@ corner_radius = 0
+ enabled = false
+ CONFIG
+ }
++
++# Builds the matrix-shaper ICC v2 display profile the color checks pin: Display-P3-like colorants with a gamma 1.8 TRC,
++# wide enough to desaturate pure red under "srgb" and far enough from any named curve for the power-fit path. An optional
++# second argument inflates the file with a 'pad ' tag of that many MiB, kept inside the profile so the header size and
++# the tag table still describe the whole file: clients must budget retained bytes for the file exactly as received.
++write_icc_matrix_profile() {
++  local path=$1 pad_mib=${2:-0}
++  python3 - "$path" "$pad_mib" <<'PY'
++import struct
++import sys
++
++
++def s15(value):
++    return struct.pack('>i', round(value * 65536))
++
++
++def xyz(x, y):
++    return (x / y, 1.0, (1.0 - x - y) / y)
++
++
++def inv3(m):
++    det = m[0] * (m[4] * m[8] - m[5] * m[7]) - m[1] * (m[3] * m[8] - m[5] * m[6]) + m[2] * (m[3] * m[7] - m[4] * m[6])
++    return [
++        (m[4] * m[8] - m[5] * m[7]) / det,
++        (m[2] * m[7] - m[1] * m[8]) / det,
++        (m[1] * m[5] - m[2] * m[4]) / det,
++        (m[5] * m[6] - m[3] * m[8]) / det,
++        (m[0] * m[8] - m[2] * m[6]) / det,
++        (m[2] * m[3] - m[0] * m[5]) / det,
++        (m[3] * m[7] - m[4] * m[6]) / det,
++        (m[1] * m[6] - m[0] * m[7]) / det,
++        (m[0] * m[4] - m[1] * m[3]) / det,
++    ]
++
++
++def mulv(a, v):
++    return [a[i * 3] * v[0] + a[i * 3 + 1] * v[1] + a[i * 3 + 2] * v[2] for i in range(3)]
++
++
++def mul(a, b):
++    return [sum(a[i * 3 + k] * b[k * 3 + j] for k in range(3)) for i in range(3) for j in range(3)]
++
++
++def bradford_adapt(frm, to):
++    brad = [0.8951, 0.2664, -0.1614, -0.7502, 1.7135, 0.0367, 0.0389, -0.0685, 1.0296]
++    scale = [t / f for t, f in zip(mulv(brad, to), mulv(brad, frm))]
++    return mul(
++        inv3(brad),
++        mul([scale[0], 0.0, 0.0, 0.0, scale[1], 0.0, 0.0, 0.0, scale[2]], brad),
++    )
++
++
++primaries = {
++    'rXYZ': (0.680, 0.320),
++    'gXYZ': (0.265, 0.690),
++    'bXYZ': (0.150, 0.060),
++    'wtpt': (0.3127, 0.3290),
++}
++# Spec-correct layout: unit-luminance columns scaled so the three colorants sum
++# exactly to the declared white, written PCS-relative (Bradford-adapted to D50)
++# beside a measured wtpt tag, the v2 display-profile shape. A parser that
++# recovers the measured colorimetry therefore reports the xy values above.
++columns = {name: xyz(*xy) for name, xy in primaries.items()}
++white = columns['wtpt']
++unit = [columns['rXYZ'], columns['gXYZ'], columns['bXYZ']]
++weights = mulv(inv3([unit[j][i] for i in range(3) for j in range(3)]), white)
++to_pcs = bradford_adapt(white, (0.9642, 1.0, 0.8249))
++blobs = {}
++for index, name in enumerate(('rXYZ', 'gXYZ', 'bXYZ')):
++    column = mulv(to_pcs, [weights[index] * value for value in unit[index]])
++    blobs[name.encode()] = b'XYZ ' + b'\0' * 4 + s15(column[0]) + s15(column[1]) + s15(column[2])
++blobs[b'wtpt'] = b'XYZ ' + b'\0' * 4 + s15(white[0]) + s15(white[1]) + s15(white[2])
++curve = b'curv' + b'\0' * 4 + struct.pack('>I', 1) + struct.pack('>H', round(1.8 * 256))
++for name in ('rTRC', 'gTRC', 'bTRC'):
++    blobs[name.encode()] = curve
++pad_mib = int(sys.argv[2])
++if pad_mib > 0:
++    blobs[b'pad '] = b'pad ' + b'\0' * (pad_mib * 1024 * 1024)
++
++order = sorted(blobs)
++unique = []
++offsets = {}
++cursor = 128 + 4 + 12 * len(order)
++for name in order:
++    blob = blobs[name]
++    if blob not in unique:
++        unique.append(blob)
++        offsets[blob] = cursor
++        cursor += len(blob)
++        cursor += (-cursor) % 4
++
++header = bytearray(128)
++struct.pack_into('>I', header, 0, cursor)
++header[4:8] = b'lcms'
++struct.pack_into('>I', header, 8, 0x02400000)
++header[12:16] = b'mntr'
++header[16:20] = b'RGB '
++header[20:24] = b'XYZ '
++header[36:40] = b'acsp'
++header[40:44] = b'APPL'
++header[68:80] = s15(0.9642) + s15(1.0) + s15(0.8249)
++header[80:84] = b'lcms'
++
++out = bytearray(header)
++out += struct.pack('>I', len(order))
++for name in order:
++    blob = blobs[name]
++    out += name + struct.pack('>II', offsets[blob], len(blob))
++for blob in unique:
++    out += blob
++    out += b'\0' * ((-len(out)) % 4)
++assert len(out) == cursor
++
++with open(sys.argv[1], 'wb') as handle:
++    handle.write(out)
++print(' '.join(f'{value:.6g}' for name in ('rXYZ', 'gXYZ', 'bXYZ', 'wtpt') for value in primaries[name]))
++PY
++}
+diff --git a/tests/meson.build b/tests/meson.build
+index a92e7490..ed765888 100644
+--- a/tests/meson.build
++++ b/tests/meson.build
+@@ -39,9 +39,9 @@ unit_tests = [
+   ['output-gamma-transition', ['unit/output_gamma_transition.cpp'], []],
+   ['hdr-metadata', ['unit/hdr_metadata.cpp'], [umbriel_core_dep]],
+   # Client-ICC cases skip at runtime when lcms2 is absent at build time.
+-  ['color-description', ['unit/color_description.cpp'], [umbriel_core_dep] + (lcms2_dep.found() ? [lcms2_dep] : [])],
++  ['color-description', ['unit/color_description.cpp'], [umbriel_core_dep]],
+   # ICC cases skip at runtime when lcms2 is absent at build time.
+-  ['colorimetry', ['unit/colorimetry.cpp'], [umbriel_core_dep] + (lcms2_dep.found() ? [lcms2_dep] : [])],
++  ['colorimetry', ['unit/colorimetry.cpp'], [umbriel_core_dep]],
+   ['hdr-format', ['unit/hdr_format.cpp'], []],
+   ['sdr-format', ['unit/sdr_format.cpp'], []],
+   ['layout-struts', ['unit/layout_struts.cpp'], []],
+diff --git a/tests/unit/color_description.cpp b/tests/unit/color_description.cpp
+index 9711f358..4255e576 100644
+--- a/tests/unit/color_description.cpp
++++ b/tests/unit/color_description.cpp
+@@ -2,9 +2,11 @@
+ 
+ #include "check.h"
+ 
++#include <algorithm>
+ #include <array>
+ #include <cmath>
+ #include <cstdint>
++#include <format>
+ #include <print>
+ #include <string>
+ #include <utility>
+@@ -471,7 +473,7 @@ UMBRIEL_TEST(clientIccDescriptionsFitColorimetryAndKeepExactBytes) {
+     CHECK(closeTo(description.customPrimaries.white.x, 0.3127, 0.005));
+     // The client's exact bytes stay on the description for identity and
+     // change detection; the create contract denies get_information, so no
+-    // icc_file is ever sent for this description (live-pinned in wave 3).
++    // icc_file is ever sent for this description.
+     CHECK(description.iccProfile != nullptr);
+     if (description.iccProfile != nullptr) {
+       CHECK(*description.iccProfile == bytes);
+@@ -637,4 +639,85 @@ UMBRIEL_TEST(bufferTransferFunctionsMapPowerFitsToNamedCurves) {
+   CHECK(umbriel::bufferTransferFunction(description) == static_cast<wlr_color_transfer_function>(0));
+ }
+ 
++UMBRIEL_TEST(clientIccDegeneratePrimariesFailGracefully) {
++#if !UMBRIEL_HAS_LCMS2
++  std::println("skip: built without lcms2");
++#else
++  // A collapsed colorant triangle must fail the description gracefully and
++  // never reach the matrix math downstream.
++  cmsToneCurve* curve = cmsBuildGamma(nullptr, 2.2);
++  CHECK(curve != nullptr);
++  if (curve == nullptr) {
++    return;
++  }
++  cmsToneCurve* curves[3]{curve, curve, curve};
++  const cmsCIExyY white = {.x = 0.3127, .y = 0.329, .Y = 1.0};
++  const cmsCIExyYTRIPLE primaries{
++      .Red = {.x = 0.64, .y = 0.33, .Y = 1.0},
++      .Green = {.x = 0.30, .y = 0.60, .Y = 1.0},
++      .Blue = {.x = 0.15, .y = 0.06, .Y = 1.0},
++  };
++  cmsHPROFILE profile = cmsCreateRGBProfileTHR(nullptr, &white, &primaries, curves);
++  cmsFreeToneCurve(curve);
++  CHECK(profile != nullptr);
++  if (profile == nullptr) {
++    return;
++  }
++  // cmsCreateRGBProfileTHR refuses singular colorants outright, so collapse
++  // an accepted profile's colorants at the byte level instead.
++  cmsUInt8Number redColorant[64];
++  const cmsUInt32Number colorantSize = cmsReadRawTag(profile, cmsSigRedColorantTag, redColorant, sizeof(redColorant));
++  CHECK(colorantSize >= 20);
++  CHECK(cmsWriteRawTag(profile, cmsSigGreenColorantTag, redColorant, colorantSize));
++  CHECK(cmsWriteRawTag(profile, cmsSigBlueColorantTag, redColorant, colorantSize));
++  const std::vector<uint8_t> bytes = saveProfile(profile);
++  cmsCloseProfile(profile);
++  CHECK(!bytes.empty());
++
++  const umbriel::ClientIccDescription result = umbriel::clientIccDescription(bytes);
++  CHECK(!result.description.has_value());
++  CHECK(!result.error.empty());
++#endif
++}
++
++UMBRIEL_TEST(clientIccMalformedBytesFailGracefully) {
++#if !UMBRIEL_HAS_LCMS2
++  std::println("skip: built without lcms2");
++#else
++  // Deterministic malformed inputs take the failed path with an error, never
++  // a crash or a half-formed description.
++  cmsToneCurve* curve = cmsBuildGamma(nullptr, 2.2);
++  CHECK(curve != nullptr);
++  const std::vector<uint8_t> base = matrixShaperProfile({curve, curve, curve});
++  cmsFreeToneCurve(curve);
++  CHECK(!base.empty());
++
++  const auto rejects = [&](const std::vector<uint8_t>& bytes, const char* what) {
++    const umbriel::ClientIccDescription result = umbriel::clientIccDescription(bytes);
++    if (result.description.has_value() || result.error.empty()) {
++      umbriel::test::reportFailure(__FILE__, __LINE__, std::format("client ICC accepted malformed input: {}", what));
++    }
++  };
++
++  for (const size_t cut : {size_t{0}, size_t{64}, size_t{127}, base.size() / 2, base.size() - 1}) {
++    rejects(std::vector<uint8_t>(base.begin(), base.begin() + static_cast<std::ptrdiff_t>(cut)), "truncated");
++  }
++  {
++    std::vector<uint8_t> bytes = base;
++    std::fill(bytes.begin() + 128, bytes.begin() + 132, 0xFF);
++    rejects(bytes, "oversized tag count");
++  }
++  {
++    std::vector<uint8_t> bytes = base;
++    std::fill(bytes.begin() + 132, bytes.begin() + 168, 0xFF);
++    rejects(bytes, "flipped tag offsets");
++  }
++  {
++    std::vector<uint8_t> bytes = base;
++    std::fill(bytes.begin() + 200, bytes.begin() + 232, 0);
++    rejects(bytes, "embedded NUL run");
++  }
++#endif
++}
++
+ int main() { return RUN_TESTS(); }
+diff --git a/tests/unit/colorimetry.cpp b/tests/unit/colorimetry.cpp
+index 08acb799..5cf77322 100644
+--- a/tests/unit/colorimetry.cpp
++++ b/tests/unit/colorimetry.cpp
+@@ -1,19 +1,23 @@
+-// Panel characterization and SDR gamut mapping (umbriel#574 wave 1).
++// Panel characterization and SDR gamut mapping.
+ // ICC cases skip when built without lcms2; the pure matrix/TRC/decision pins always run.
+ 
+ #include "output/colorimetry.h"
+ 
+ #include "check.h"
++#include "output/hdr_metadata.h"
++#include "server/color_description.h"
+ 
+ #include <algorithm>
+ #include <array>
+ #include <cmath>
+ #include <cstdint>
++#include <cstdlib>
+ #include <format>
+ #include <optional>
+ #include <print>
+ #include <span>
+ #include <string>
++#include <utility>
+ #include <vector>
+ 
+ #if UMBRIEL_HAS_LCMS2
+@@ -140,6 +144,186 @@ namespace {
+   cmsCIExyY xyY(double x, double y) { return {.x = x, .y = y, .Y = 1.0}; }
+ #endif
+ 
++  // --- ICC byte surgery: lcms-written profiles patched into the exact
++  // tag-table and curve layouts real-world profiles carry (v2 headers, shared
++  // TRC tags, measured wtpt with or without chad).
++
++  uint32_t readU32Be(const std::vector<uint8_t>& bytes, size_t at) {
++    return (uint32_t{bytes[at]} << 24)
++        | (uint32_t{bytes[at + 1]} << 16)
++        | (uint32_t{bytes[at + 2]} << 8)
++        | uint32_t{bytes[at + 3]};
++  }
++
++  void writeU32Be(std::vector<uint8_t>& bytes, size_t at, uint32_t value) {
++    bytes[at] = static_cast<uint8_t>(value >> 24);
++    bytes[at + 1] = static_cast<uint8_t>(value >> 16);
++    bytes[at + 2] = static_cast<uint8_t>(value >> 8);
++    bytes[at + 3] = static_cast<uint8_t>(value);
++  }
++
++  void writeU16Be(std::vector<uint8_t>& bytes, size_t at, uint16_t value) {
++    bytes[at] = static_cast<uint8_t>(value >> 8);
++    bytes[at + 1] = static_cast<uint8_t>(value);
++  }
++
++  void writeS15Fixed16Be(std::vector<uint8_t>& bytes, size_t at, double value) {
++    writeU32Be(bytes, at, static_cast<uint32_t>(static_cast<int32_t>(std::lround(value * 65536.0))));
++  }
++
++  struct TagSpan {
++    size_t entryOffset;
++    size_t dataOffset;
++    size_t dataSize;
++  };
++
++  std::optional<TagSpan> findTag(const std::vector<uint8_t>& bytes, const std::array<uint8_t, 4>& signature) {
++    if (bytes.size() < 132) {
++      return std::nullopt;
++    }
++    const uint32_t count = readU32Be(bytes, 128);
++    for (uint32_t index = 0; index < count; ++index) {
++      const size_t entry = 132 + 12 * index;
++      if (entry + 12 > bytes.size()) {
++        return std::nullopt;
++      }
++      if (std::equal(signature.begin(), signature.end(), bytes.begin() + static_cast<std::ptrdiff_t>(entry))) {
++        return TagSpan{entry, readU32Be(bytes, entry + 4), readU32Be(bytes, entry + 8)};
++      }
++    }
++    return std::nullopt;
++  }
++
++  // Swap-remove keeps every tag data offset valid; the dropped tag's bytes
++  // stay in the file but no table entry references them.
++  void stripTag(std::vector<uint8_t>& bytes, const std::array<uint8_t, 4>& signature) {
++    const TagSpan tag = *findTag(bytes, signature);
++    const uint32_t count = readU32Be(bytes, 128);
++    const size_t lastEntry = 132 + 12 * (count - 1);
++    std::copy(
++        bytes.begin() + static_cast<std::ptrdiff_t>(lastEntry),
++        bytes.begin() + static_cast<std::ptrdiff_t>(lastEntry + 12),
++        bytes.begin() + static_cast<std::ptrdiff_t>(tag.entryOffset)
++    );
++    writeU32Be(bytes, 128, count - 1);
++  }
++
++  void writeXyzTagBody(std::vector<uint8_t>& bytes, size_t dataOffset, double x, double y, double z) {
++    writeU32Be(bytes, dataOffset, 0x58595A20); // 'XYZ '
++    writeU32Be(bytes, dataOffset + 4, 0);
++    writeS15Fixed16Be(bytes, dataOffset + 8, x);
++    writeS15Fixed16Be(bytes, dataOffset + 12, y);
++    writeS15Fixed16Be(bytes, dataOffset + 16, z);
++  }
++
++  void patchWtptTo(std::vector<uint8_t>& bytes, double whiteX, double whiteY) {
++    const TagSpan tag = *findTag(bytes, {'w', 't', 'p', 't'});
++    writeXyzTagBody(bytes, tag.dataOffset, whiteX / whiteY, 1.0, (1.0 - whiteX - whiteY) / whiteY);
++  }
++
++  void patchColorantTo(std::vector<uint8_t>& bytes, const std::array<uint8_t, 4>& signature, double x, double y) {
++    const TagSpan tag = *findTag(bytes, signature);
++    writeXyzTagBody(bytes, tag.dataOffset, x / y, 1.0, (1.0 - x - y) / y);
++  }
++
++  void patchVersionMajor(std::vector<uint8_t>& bytes, uint8_t major) { bytes[8] = major; }
++
++  // The measured colorimetry fixtures are restored to: P3-style primaries on
++  // a D55 white, values independent of any parser math.
++  constexpr double kMeasuredRedX = 0.68;
++  constexpr double kMeasuredRedY = 0.32;
++  constexpr double kMeasuredGreenX = 0.265;
++  constexpr double kMeasuredGreenY = 0.69;
++  constexpr double kMeasuredBlueX = 0.15;
++  constexpr double kMeasuredBlueY = 0.06;
++  constexpr double kMeasuredWhiteX = 0.3324;
++  constexpr double kMeasuredWhiteY = 0.3474;
++
++  std::array<float, 3> applyMatrix(const float matrix[9], const std::array<float, 3>& in) {
++    return {
++        matrix[0] * in[0] + matrix[1] * in[1] + matrix[2] * in[2],
++        matrix[3] * in[0] + matrix[4] * in[1] + matrix[5] * in[2],
++        matrix[6] * in[0] + matrix[7] * in[1] + matrix[8] * in[2],
++    };
++  }
++
++  // Sampled encode tables follow the documented contract in colorimetry.h:
++  // value i sits at the linear input (i / (size - 1))².
++  template <typename Encode> std::vector<float> sampledCurve(size_t size, Encode encode) {
++    std::vector<float> values(size);
++    for (size_t index = 0; index < size; ++index) {
++      const float t = static_cast<float>(index) / static_cast<float>(size - 1);
++      values[index] = encode(t * t);
++    }
++    return values;
++  }
++
++  // The sampled encode contract pins the table to the generalized inverse of
++  // the monotone envelope of the TRC: the first encoded position whose
++  // envelope reaches the target. Where the probe's own input cell straddles a
++  // flat run of the envelope the inverse jumps inside the cell and the jump's
++  // position is not recoverable from the two table samples that bracket it, so
++  // a linear lookup can only blend across it. The pin therefore has three
++  // parts: no undershoot when decoded back, the answer stays inside the
++  // cell's image under the inverse (never leaves the two branch crossings),
++  // and the exact first crossing wherever that image is narrow enough for the
++  // exactness tolerance to mean anything.
++  void expectGeneralizedInverse(const umbriel::PanelTransfer& transfer, const std::vector<float>& envelope) {
++    const float envelopeScale = static_cast<float>(envelope.size() - 1);
++    const auto envelopeAt = [&](float encoded) {
++      const float position = std::clamp(encoded, 0.0F, 1.0F) * envelopeScale;
++      const size_t lower = static_cast<size_t>(position);
++      const size_t upper = std::min(lower + 1, envelope.size() - 1);
++      const float fraction = position - static_cast<float>(lower);
++      return envelope[lower] + (envelope[upper] - envelope[lower]) * fraction;
++    };
++    const auto crossingOf = [&](float target) {
++      return static_cast<float>(std::ranges::lower_bound(envelope, target) - envelope.begin()) / envelopeScale;
++    };
++    const float tableScale = static_cast<float>(transfer.encode.size() - 1);
++    // A curve whose decode does not reach zero makes targets below its floor
++    // unrenderable: the generalized inverse is the clamped position zero and
++    // decoding back lands on the floor, above the probe cell.
++    const float decodeFloor = envelope.front();
++    for (int probe = 1; probe < 256; ++probe) {
++      const float target = static_cast<float>(probe) / 256.0F;
++      if (target > envelope.back()) {
++        break;
++      }
++      const float encoded = umbriel::panelEncodeSample(transfer, target);
++      const float position = std::sqrt(target) * tableScale;
++      const float cellLow = std::pow(std::floor(position) / tableScale, 2.0F);
++      const float cellHigh = std::pow(std::ceil(position) / tableScale, 2.0F);
++      const float imageLow = crossingOf(cellLow);
++      const float imageHigh = crossingOf(cellHigh);
++      const float decoded = envelopeAt(encoded);
++      if (decoded + 1e-3F < target || decoded > std::max(cellHigh, decodeFloor) + 1e-3F) {
++        umbriel::test::reportFailure(
++            __FILE__, __LINE__,
++            std::format(
++                "encode({}) = {}, decoding back to {} leaves the probe cell [{}, {}]", target, encoded, decoded,
++                cellLow, cellHigh
++            )
++        );
++      }
++      if (encoded < std::min(imageLow, imageHigh) - 0.008F || encoded > std::max(imageLow, imageHigh) + 0.008F) {
++        umbriel::test::reportFailure(
++            __FILE__, __LINE__,
++            std::format(
++                "encode({}) = {}, the inverse image of [{}, {}] is [{}, {}]", target, encoded, cellLow, cellHigh,
++                imageLow, imageHigh
++            )
++        );
++      }
++      if (imageHigh - imageLow <= 0.016F && std::abs(encoded - crossingOf(target)) > 0.008F) {
++        umbriel::test::reportFailure(
++            __FILE__, __LINE__,
++            std::format("encode({}) = {}, envelope reaches the target at {}", target, encoded, crossingOf(target))
++        );
++      }
++    }
++  }
++
+ } // namespace
+ 
+ UMBRIEL_TEST(sdrGamutMatrixPinsSrgbToDisplayP3AndBt2020) {
+@@ -202,11 +386,29 @@ UMBRIEL_TEST(trcEncodeBakingSeparatesGamma22FromSrgb) {
+   // The two curves must differ where the sRGB toe lives.
+   CHECK(std::abs(umbriel::panelEncodeSample(gamma22, 0.02F) - umbriel::panelEncodeSample(srgb, 0.02F)) > 1e-3);
+ 
+-  const std::vector<uint16_t> lut = umbriel::bakeEncodeLut(gamma22, 3);
+-  CHECK_EQ(lut.size(), size_t{3});
+-  CHECK_EQ(lut[0], uint16_t{0});
+-  CHECK_EQ(lut[2], uint16_t{65535});
+-  CHECK(closeTo(lut[1], std::lround(std::pow(0.5, 1.0 / 2.2) * 65535.0), 1.0));
++  // Endpoints stay anchored through the transform pipeline so baked ramps
++  // begin at 0 and end at 1 for every encode kind.
++  for (const umbriel::PanelTransfer* transfer : {&gamma22, &srgb}) {
++    umbriel::PanelColorimetry panel{
++        .primaries = srgbPrimaries(),
++        .white = {0.3127F, 0.329F},
++        .transfer = *transfer,
++    };
++    wlr_color_transform* transform = umbriel::buildSdrGamutTransform(panel);
++    CHECK(transform != nullptr);
++    if (transform == nullptr) {
++      continue;
++    }
++    float black[3]{};
++    float white[3]{};
++    const float inBlack[3]{0.0F, 0.0F, 0.0F};
++    const float inWhite[3]{1.0F, 1.0F, 1.0F};
++    wlr_color_transform_eval(transform, black, inBlack);
++    wlr_color_transform_eval(transform, white, inWhite);
++    CHECK(closeTo(black[0], 0.0, 1e-4));
++    CHECK(closeTo(white[0], 1.0, 1e-4));
++    wlr_color_transform_unref(transform);
++  }
+ }
+ 
+ UMBRIEL_TEST(sdrGamutStagingDecisionPreservesNativePixels) {
+@@ -228,12 +430,9 @@ UMBRIEL_TEST(sdrGamutTransformBakesPanelEncodeCurve) {
+       .white = {0.3127F, 0.329F},
+       .transfer = {.kind = umbriel::PanelTransfer::Kind::Curve, .encode = {}},
+   };
+-  // A gamma 2.2 encode curve, sampled the way the ICC parser bakes one.
+-  panel.transfer.encode.resize(1024);
+-  for (size_t index = 0; index < panel.transfer.encode.size(); ++index) {
+-    const float linear = static_cast<float>(index) / static_cast<float>(panel.transfer.encode.size() - 1);
+-    panel.transfer.encode[index] = std::pow(linear, 1.0F / 2.2F);
+-  }
++  // A gamma 2.2 encode curve, sampled on the documented encode grid the way
++  // the ICC parser bakes one (colorimetry.h: value i sits at input (i/(n-1))²).
++  panel.transfer.encode = sampledCurve(1024, [](float linear) { return std::pow(linear, 1.0F / 2.2F); });
+   wlr_color_transform* transform = umbriel::buildSdrGamutTransform(panel);
+   CHECK(transform != nullptr);
+   if (transform == nullptr) {
+@@ -580,15 +779,9 @@ UMBRIEL_TEST(synthesizedCurveTrcRoundTripsThroughTheIccParser) {
+ UMBRIEL_TEST(fitTransferFitsNamedFastPathsAndPowerCurves) {
+   // Exact named shapes stay named; only genuinely non-representable TRCs fall
+   // back to the parametric power fit (fitTransfer's approximation contract).
+-  auto samples = [](auto encode) {
+-    constexpr size_t size = 256;
+-    std::vector<float> values(size);
+-    for (size_t index = 0; index < size; ++index) {
+-      values[index] = encode(static_cast<float>(index) / static_cast<float>(size - 1));
+-    }
+-    return values;
+-  };
+-  auto srgbEncode = [](float linear) {
++  // Sampled fixtures follow the documented encode-table contract: value i sits
++  // at the linear input (i / (size - 1))².
++  auto srgbEncode = [](float linear) -> float {
+     return linear >= 1.0F ? 1.0F
+                           : (linear <= 0.0031308F ? 12.92F * linear : 1.055F * std::pow(linear, 1.0F / 2.4F) - 0.055F);
+   };
+@@ -604,19 +797,21 @@ UMBRIEL_TEST(fitTransferFitsNamedFastPathsAndPowerCurves) {
+ 
+   // Sampled curves re-detect the named shapes before fitting anything.
+   const umbriel::TransferFit sampledSrgb =
+-      umbriel::fitTransfer({.kind = umbriel::PanelTransfer::Kind::Curve, .encode = samples(srgbEncode)});
++      umbriel::fitTransfer({.kind = umbriel::PanelTransfer::Kind::Curve, .encode = sampledCurve(1024, srgbEncode)});
+   CHECK(sampledSrgb.kind == umbriel::TransferFit::Kind::Srgb);
+   const umbriel::TransferFit sampledGamma22 = umbriel::fitTransfer(
+-      {.kind = umbriel::PanelTransfer::Kind::Curve, .encode = samples([](float x) { return std::pow(x, 1.0F / 2.2F); })}
++      {.kind = umbriel::PanelTransfer::Kind::Curve,
++       .encode = sampledCurve(1024, [](float x) -> float { return std::pow(x, 1.0F / 2.2F); })}
+   );
+   CHECK(sampledGamma22.kind == umbriel::TransferFit::Kind::Gamma22);
+ 
+   // Odd curves fit to their power exponent within tolerance.
+   for (const float exponent : {1.8F, 2.4F, 2.8F}) {
+-    const umbriel::TransferFit fit =
+-        umbriel::fitTransfer({.kind = umbriel::PanelTransfer::Kind::Curve, .encode = samples([exponent](float x) {
+-                                                                             return std::pow(x, 1.0F / exponent);
+-                                                                           })});
++    const float shape = exponent;
++    const umbriel::TransferFit fit = umbriel::fitTransfer(
++        {.kind = umbriel::PanelTransfer::Kind::Curve,
++         .encode = sampledCurve(1024, [shape](float x) -> float { return std::pow(x, 1.0F / shape); })}
++    );
+     CHECK(fit.kind == umbriel::TransferFit::Kind::Power);
+     CHECK(closeTo(fit.exponent, exponent, 0.01));
+   }
+@@ -661,4 +856,765 @@ UMBRIEL_TEST(iccClassScopeAdmitsColorSpaceProfilesForClientIcc) {
+ #endif
+ }
+ 
++UMBRIEL_TEST(wlrMatrixStageConsumesRowMajorCoefficients) {
++  // The matrix contract must match how the wlroots matrix stage evaluates:
++  // published sRGB->BT.2020 row-major coefficients map each basis vector to
++  // its published column through wlr_color_transform_init_matrix.
++  float matrix[9];
++  umbriel::sdrGamutMatrix(bt2020Primaries(), 0.0F, matrix);
++  wlr_color_transform* stage = wlr_color_transform_init_matrix(matrix);
++  CHECK(stage != nullptr);
++  if (stage == nullptr) {
++    return;
++  }
++  const std::array<std::pair<std::array<float, 3>, std::array<float, 3>>, 3> basis{{
++      {{1.0F, 0.0F, 0.0F}, {0.6274F, 0.0691F, 0.0164F}},
++      {{0.0F, 1.0F, 0.0F}, {0.3293F, 0.9195F, 0.0880F}},
++      {{0.0F, 0.0F, 1.0F}, {0.0433F, 0.0114F, 0.8956F}},
++  }};
++  for (const auto& [input, expected] : basis) {
++    float output[3]{};
++    wlr_color_transform_eval(stage, output, input.data());
++    for (size_t channel = 0; channel < 3; ++channel) {
++      if (!closeTo(output[channel], expected[channel])) {
++        umbriel::test::reportFailure(
++            __FILE__, __LINE__,
++            std::format("matrix stage channel {} = {}, expected {}", channel, output[channel], expected[channel])
++        );
++      }
++    }
++  }
++  wlr_color_transform_unref(stage);
++}
++
++UMBRIEL_TEST(sdrGamutMatrixPreservesSourceWhiteOnNonD65Panels) {
++  // White-preserving mapping: (1,1,1) is the source white and must land on the
++  // panel white exactly, whatever chromaticity the panel declares. Only chroma
++  // is confined to the sRGB gamut.
++  wlr_color_primaries panel = displayP3Primaries();
++  panel.white = {.x = 0.3457F, .y = 0.3585F}; // D50-declaring panel
++  const std::array<float, 3> white{1.0F, 1.0F, 1.0F};
++  float matrix[9];
++  for (const float amount : {0.25F, 0.5F, 0.75F}) {
++    umbriel::sdrGamutMatrix(panel, amount, matrix);
++    const std::array<float, 3> mapped = applyMatrix(matrix, white);
++    for (size_t channel = 0; channel < 3; ++channel) {
++      if (std::abs(mapped[channel] - 1.0F) > 1e-4F) {
++        umbriel::test::reportFailure(
++            __FILE__, __LINE__,
++            std::format("wideness {} maps source white channel {} to {}, expected 1", amount, channel, mapped[channel])
++        );
++      }
++    }
++  }
++  umbriel::sdrGamutMatrix(panel, 0.0F, matrix);
++  const std::array<float, 3> mapped = applyMatrix(matrix, white);
++  for (size_t channel = 0; channel < 3; ++channel) {
++    if (std::abs(mapped[channel] - 1.0F) > 1e-4F) {
++      umbriel::test::reportFailure(
++          __FILE__, __LINE__,
++          std::format("strict srgb maps source white channel {} to {}, expected 1", channel, mapped[channel])
++      );
++    }
++  }
++  // White must not be clipped either: no channel exceeds 1 on a non-D65 panel.
++  CHECK(mapped[0] <= 1.0001F && mapped[1] <= 1.0001F && mapped[2] <= 1.0001F);
++}
++
++UMBRIEL_TEST(sdrGamutTransformKeepsWhiteIdenticalToNativePixels) {
++  // Switching native <-> srgb must never change how white renders: the
++  // transform maps (1,1,1) to (1,1,1) for every panel and every encode kind.
++  const std::array<float, 3> white{1.0F, 1.0F, 1.0F};
++  wlr_color_primaries panel = displayP3Primaries();
++  panel.white = {.x = 0.3127F, .y = 0.329F};
++  const umbriel::PanelTransfer transfers[]{
++      {.kind = umbriel::PanelTransfer::Kind::Srgb, .encode = {}},
++      {.kind = umbriel::PanelTransfer::Kind::Gamma22, .encode = {}},
++      {.kind = umbriel::PanelTransfer::Kind::Curve, .encode = {0.0F, 1.0F}},
++  };
++  for (const auto whitePoint : {std::pair{0.3127F, 0.329F}, std::pair{0.3457F, 0.3585F}, std::pair{0.3324F, 0.3474F}}) {
++    panel.white = {.x = whitePoint.first, .y = whitePoint.second};
++    for (const umbriel::PanelTransfer& transfer : transfers) {
++      umbriel::PanelColorimetry colorimetry{
++          .primaries = panel, .white = {panel.white.x, panel.white.y}, .transfer = transfer
++      };
++      wlr_color_transform* transform = umbriel::buildSdrGamutTransform(colorimetry);
++      CHECK(transform != nullptr);
++      if (transform == nullptr) {
++        continue;
++      }
++      float output[3]{};
++      wlr_color_transform_eval(transform, output, white.data());
++      for (size_t channel = 0; channel < 3; ++channel) {
++        if (std::abs(output[channel] - 1.0F) > 1e-3F) {
++          umbriel::test::reportFailure(
++              __FILE__, __LINE__,
++              std::format(
++                  "white at ({},{}) kind {} maps channel {} to {}, native passes 1", whitePoint.first,
++                  whitePoint.second, static_cast<int>(transfer.kind), channel, output[channel]
++              )
++          );
++        }
++      }
++      wlr_color_transform_unref(transform);
++    }
++  }
++}
++
++#if UMBRIEL_HAS_LCMS2
++
++// A v2 profile with no chad tag and a measured (non-D50) white point, the
++// layout v2 measurement suites emit: colorants D50-relative, wtpt measured.
++std::vector<uint8_t> v2NoChadMeasuredWhiteProfile() {
++  std::array<cmsToneCurve*, 3> curves{
++      cmsBuildGamma(nullptr, 2.2), cmsBuildGamma(nullptr, 2.2), cmsBuildGamma(nullptr, 2.2)
++  };
++  std::vector<uint8_t> bytes = matrixShaperProfile(
++      xyY(kMeasuredWhiteX, kMeasuredWhiteY),
++      {
++          .Red = xyY(kMeasuredRedX, kMeasuredRedY),
++          .Green = xyY(kMeasuredGreenX, kMeasuredGreenY),
++          .Blue = xyY(kMeasuredBlueX, kMeasuredBlueY),
++      },
++      curves
++  );
++  for (cmsToneCurve* curve : curves) {
++    cmsFreeToneCurve(curve);
++  }
++  CHECK(!bytes.empty());
++  if (bytes.empty()) {
++    return bytes;
++  }
++  stripTag(bytes, {'c', 'h', 'a', 'd'});
++  patchVersionMajor(bytes, 2);
++  patchWtptTo(bytes, kMeasuredWhiteX, kMeasuredWhiteY);
++  return bytes;
++}
++
++std::vector<uint8_t> chadProfileWithWtpt(double wtptX, double wtptY) {
++  std::array<cmsToneCurve*, 3> curves{
++      cmsBuildGamma(nullptr, 2.2), cmsBuildGamma(nullptr, 2.2), cmsBuildGamma(nullptr, 2.2)
++  };
++  std::vector<uint8_t> bytes = matrixShaperProfile(
++      xyY(kMeasuredWhiteX, kMeasuredWhiteY),
++      {
++          .Red = xyY(kMeasuredRedX, kMeasuredRedY),
++          .Green = xyY(kMeasuredGreenX, kMeasuredGreenY),
++          .Blue = xyY(kMeasuredBlueX, kMeasuredBlueY),
++      },
++      curves
++  );
++  for (cmsToneCurve* curve : curves) {
++    cmsFreeToneCurve(curve);
++  }
++  CHECK(!bytes.empty());
++  if (!bytes.empty()) {
++    patchWtptTo(bytes, wtptX, wtptY);
++  }
++  return bytes;
++}
++
++void checkMeasuredColorimetry(const char* what, const umbriel::PanelColorimetry& panel) {
++  const auto expect = [&](double actual, double expected, const char* field) {
++    if (std::abs(actual - expected) > 0.005) {
++      umbriel::test::reportFailure(
++          __FILE__, __LINE__, std::format("{}: {} = {}, expected {}", what, field, actual, expected)
++      );
++    }
++  };
++  expect(panel.primaries.red.x, kMeasuredRedX, "red.x");
++  expect(panel.primaries.red.y, kMeasuredRedY, "red.y");
++  expect(panel.primaries.green.x, kMeasuredGreenX, "green.x");
++  expect(panel.primaries.green.y, kMeasuredGreenY, "green.y");
++  expect(panel.primaries.blue.x, kMeasuredBlueX, "blue.x");
++  expect(panel.primaries.blue.y, kMeasuredBlueY, "blue.y");
++  expect(panel.white[0], kMeasuredWhiteX, "white.x");
++  expect(panel.white[1], kMeasuredWhiteY, "white.y");
++}
++
++#endif
++
++UMBRIEL_TEST(iccV2NoChadMeasuredWhiteRecoversMeasuredColorimetry) {
++#if !UMBRIEL_HAS_LCMS2
++  std::println("skip: built without lcms2");
++#else
++  // Without a chad tag the colorants are D50-relative; the profile's measured
++  // white declares the real frame. White and colorants must end up in one
++  // frame so the recovered values are the measured ones.
++  const std::vector<uint8_t> bytes = v2NoChadMeasuredWhiteProfile();
++  const umbriel::IccParse parsed = umbriel::parseIccProfile(bytes);
++  CHECK(parsed.error.empty());
++  CHECK(parsed.colorimetry.has_value());
++  if (!parsed.colorimetry) {
++    return;
++  }
++  checkMeasuredColorimetry("v2 no-chad", *parsed.colorimetry);
++  CHECK(parsed.colorimetry->transfer.kind == umbriel::PanelTransfer::Kind::Gamma22);
++
++  // The measured white renders as source white: (1,1,1) maps to (1,1,1).
++  float matrix[9];
++  umbriel::sdrGamutMatrix(parsed.colorimetry->primaries, 0.0F, matrix);
++  const std::array<float, 3> mapped = applyMatrix(matrix, {1.0F, 1.0F, 1.0F});
++  for (size_t channel = 0; channel < 3; ++channel) {
++    if (std::abs(mapped[channel] - 1.0F) > 1e-3F) {
++      umbriel::test::reportFailure(
++          __FILE__, __LINE__, std::format("v2 no-chad: source white channel {} maps to {}", channel, mapped[channel])
++      );
++    }
++  }
++#endif
++}
++
++UMBRIEL_TEST(iccChadWithMeasuredWhiteIsNotAdaptedTwice) {
++#if !UMBRIEL_HAS_LCMS2
++  std::println("skip: built without lcms2");
++#else
++  // chad records the adaptation applied on the way to the D50 PCS; when wtpt
++  // already carries the measured white, un-adapting it again must not move it.
++  const std::vector<uint8_t> bytes = chadProfileWithWtpt(kMeasuredWhiteX, kMeasuredWhiteY);
++  const umbriel::IccParse parsed = umbriel::parseIccProfile(bytes);
++  CHECK(parsed.error.empty());
++  CHECK(parsed.colorimetry.has_value());
++  if (!parsed.colorimetry) {
++    return;
++  }
++  checkMeasuredColorimetry("chad + measured wtpt", *parsed.colorimetry);
++#endif
++}
++
++UMBRIEL_TEST(iccNoChadD50WhiteKeepsTheD50Frame) {
++#if !UMBRIEL_HAS_LCMS2
++  std::println("skip: built without lcms2");
++#else
++  // A D50 white with no chad is self-consistently D50: nothing to adapt, and
++  // the tagged colorants pass through unchanged.
++  std::array<cmsToneCurve*, 3> curves{
++      cmsBuildGamma(nullptr, 2.2), cmsBuildGamma(nullptr, 2.2), cmsBuildGamma(nullptr, 2.2)
++  };
++  std::vector<uint8_t> bytes = matrixShaperProfile(
++      xyY(0.3457, 0.3585), {.Red = xyY(0.64, 0.33), .Green = xyY(0.30, 0.60), .Blue = xyY(0.15, 0.06)}, curves
++  );
++  for (cmsToneCurve* curve : curves) {
++    cmsFreeToneCurve(curve);
++  }
++  CHECK(!bytes.empty());
++  stripTag(bytes, {'c', 'h', 'a', 'd'});
++  patchVersionMajor(bytes, 2);
++  patchWtptTo(bytes, 0.3457, 0.3585);
++  const umbriel::IccParse parsed = umbriel::parseIccProfile(bytes);
++  CHECK(parsed.colorimetry.has_value());
++  if (!parsed.colorimetry) {
++    return;
++  }
++  const umbriel::PanelColorimetry& panel = *parsed.colorimetry;
++  CHECK(closeTo(panel.primaries.red.x, 0.64, 0.005));
++  CHECK(closeTo(panel.primaries.green.y, 0.60, 0.005));
++  CHECK(closeTo(panel.primaries.blue.y, 0.06, 0.005));
++  CHECK(closeTo(panel.white[0], 0.3457, 0.005));
++  CHECK(closeTo(panel.white[1], 0.3585, 0.005));
++#endif
++}
++
++UMBRIEL_TEST(iccTabulatedCurveKeepsShadowAccuracyForGamma24) {
++#if !UMBRIEL_HAS_LCMS2
++  std::println("skip: built without lcms2");
++#else
++  // The sampled encode curve must track x^(1/2.4) to well under one 8-bit
++  // code everywhere, especially in the near-vertical shadow region.
++  std::array<cmsToneCurve*, 3> curves{tabulatedGamma24Curve(), tabulatedGamma24Curve(), tabulatedGamma24Curve()};
++  const std::vector<uint8_t> bytes = matrixShaperProfile(
++      xyY(0.3127, 0.329), {.Red = xyY(0.64, 0.33), .Green = xyY(0.30, 0.60), .Blue = xyY(0.15, 0.06)}, curves
++  );
++  for (cmsToneCurve* curve : curves) {
++    cmsFreeToneCurve(curve);
++  }
++  CHECK(!bytes.empty());
++  const umbriel::IccParse parsed = umbriel::parseIccProfile(bytes);
++  CHECK(parsed.colorimetry.has_value());
++  if (!parsed.colorimetry || parsed.colorimetry->transfer.kind != umbriel::PanelTransfer::Kind::Curve) {
++    return;
++  }
++  const umbriel::PanelTransfer& transfer = parsed.colorimetry->transfer;
++  double worst = 0.0;
++  for (int probe = 0; probe <= 40000; ++probe) {
++    // Geometric probes reach the shadow region; uniform probes cover the rest.
++    const double linear = probe <= 20000 ? std::pow(2.0, -probe / 2000.0) : (probe - 20000) / 20000.0;
++    const double error =
++        std::abs(umbriel::panelEncodeSample(transfer, static_cast<float>(linear)) - std::pow(linear, 1.0 / 2.4))
++        * 255.0;
++    worst = std::max(worst, error);
++  }
++  std::println("gamma2.4 sampled encode worst error: {:.3f} 8-bit codes", worst);
++  CHECK(worst < 0.6);
++
++  // End to end through the staged transform the renderer consumes.
++  umbriel::PanelColorimetry panel{
++      .primaries = srgbPrimaries(),
++      .white = {0.3127F, 0.329F},
++      .transfer = transfer,
++  };
++  wlr_color_transform* transform = umbriel::buildSdrGamutTransform(panel);
++  CHECK(transform != nullptr);
++  if (transform == nullptr) {
++    return;
++  }
++  double worstEndToEnd = 0.0;
++  for (int probe = 0; probe <= 40000; ++probe) {
++    const double linear = probe <= 20000 ? std::pow(2.0, -probe / 2000.0) : (probe - 20000) / 20000.0;
++    const float input[3]{static_cast<float>(linear), 0.0F, 0.0F};
++    float output[3]{};
++    wlr_color_transform_eval(transform, output, input);
++    const double error = std::abs(output[0] - std::pow(linear, 1.0 / 2.4)) * 255.0;
++    worstEndToEnd = std::max(worstEndToEnd, error);
++  }
++  wlr_color_transform_unref(transform);
++  std::println("gamma2.4 end-to-end worst error: {:.3f} 8-bit codes", worstEndToEnd);
++  CHECK(worstEndToEnd < 0.6);
++#endif
++}
++
++UMBRIEL_TEST(edidGamma26CurveKeepsShadowAccuracy) {
++  // EDID gamma != 2.2 rides the same sampled-curve path.
++  auto edid = edidWithD65AndGamma22();
++  edid[23] = 160; // gamma = (160 + 100) / 100 = 2.6
++  uint8_t checksum = 0;
++  for (size_t index = 0; index < 127; ++index) {
++    checksum = static_cast<uint8_t>(checksum + edid[index]);
++  }
++  edid[127] = static_cast<uint8_t>(0 - checksum);
++  const wlr_color_primaries defaults = displayP3Primaries();
++  const std::optional<umbriel::PanelColorimetry> parsed = umbriel::panelColorimetryFromEdid(edid, &defaults);
++  CHECK(parsed.has_value());
++  if (!parsed || parsed->transfer.kind != umbriel::PanelTransfer::Kind::Curve) {
++    return;
++  }
++  double worst = 0.0;
++  for (int probe = 0; probe <= 40000; ++probe) {
++    const double linear = probe <= 20000 ? std::pow(2.0, -probe / 2000.0) : (probe - 20000) / 20000.0;
++    const double error =
++        std::abs(umbriel::panelEncodeSample(parsed->transfer, static_cast<float>(linear)) - std::pow(linear, 1.0 / 2.6))
++        * 255.0;
++    worst = std::max(worst, error);
++  }
++  std::println("EDID gamma 2.6 sampled encode worst error: {:.3f} 8-bit codes", worst);
++  CHECK(worst < 0.6);
++}
++
++UMBRIEL_TEST(iccNonMonotonicTrcStaysInvertibleAndBounded) {
++#if !UMBRIEL_HAS_LCMS2
++  std::println("skip: built without lcms2");
++#else
++  // Untrusted TRCs need not increase at all; the inverted encode curve must
++  // still be a monotone, bounded, finite table.
++  std::vector<uint16_t> dip{0, 30000, 10000, 40000, 20000, 55000, 50000, 65535};
++  cmsToneCurve* curve = cmsBuildTabulatedToneCurve16(nullptr, static_cast<cmsUInt32Number>(dip.size()), dip.data());
++  CHECK(curve != nullptr);
++  if (curve == nullptr) {
++    return;
++  }
++  std::array<cmsToneCurve*, 3> curves{curve, curve, curve};
++  const std::vector<uint8_t> bytes = matrixShaperProfile(
++      xyY(0.3127, 0.329), {.Red = xyY(0.64, 0.33), .Green = xyY(0.30, 0.60), .Blue = xyY(0.15, 0.06)}, curves
++  );
++  // The monotone envelope of the raw TRC is what the encode curve must invert.
++  constexpr size_t kEnvelopeSamples = 1024;
++  std::vector<float> envelope(kEnvelopeSamples);
++  float runningMax = 0.0F;
++  for (size_t index = 0; index < kEnvelopeSamples; ++index) {
++    const float encoded = static_cast<float>(index) / static_cast<float>(kEnvelopeSamples - 1);
++    runningMax = std::max(runningMax, cmsEvalToneCurveFloat(curve, encoded));
++    envelope[index] = runningMax;
++  }
++  cmsFreeToneCurve(curve);
++  CHECK(!bytes.empty());
++  const umbriel::IccParse parsed = umbriel::parseIccProfile(bytes);
++  CHECK(parsed.colorimetry.has_value());
++  if (!parsed.colorimetry) {
++    return;
++  }
++  const umbriel::PanelTransfer& transfer = parsed.colorimetry->transfer;
++  CHECK(transfer.kind == umbriel::PanelTransfer::Kind::Curve);
++  if (transfer.kind != umbriel::PanelTransfer::Kind::Curve) {
++    return;
++  }
++  CHECK(transfer.encode.size() > 1);
++  float previous = 0.0F;
++  for (size_t index = 0; index < transfer.encode.size(); ++index) {
++    const float value = transfer.encode[index];
++    if (!std::isfinite(value) || value < 0.0F || value > 1.0F) {
++      umbriel::test::reportFailure(__FILE__, __LINE__, std::format("encode[{}] = {} leaves [0,1]", index, value));
++    }
++    if (value + 1e-6F < previous) {
++      umbriel::test::reportFailure(
++          __FILE__, __LINE__, std::format("encode[{}] = {} decreases from {}", index, value, previous)
++      );
++    }
++    previous = value;
++  }
++
++  // The encode must reproduce the generalized inverse of the monotone
++  // envelope of the TRC (see expectGeneralizedInverse). Inverting raw
++  // unordered samples drifts away from that crossing.
++  expectGeneralizedInverse(transfer, envelope);
++#endif
++}
++
++UMBRIEL_TEST(iccOddParametricCurvesStayFiniteMonotoneAndBounded) {
++#if !UMBRIEL_HAS_LCMS2
++  std::println("skip: built without lcms2");
++#else
++  // Parametric curves with awkward coefficients must not leak non-finite or
++  // decreasing samples into the inversion and the fit.
++  const std::array<std::array<cmsFloat64Number, 5>, 2> parametric{{
++      {1.5, -1.0, 0.5, 1.0, 0.0},
++      {2.4, 1.0 / 1.055, 0.055 / 1.055, 1.0 / 8.0, 0.005},
++  }};
++  for (const auto& params : parametric) {
++    cmsToneCurve* curve = cmsBuildParametricToneCurve(nullptr, 4, params.data());
++    CHECK(curve != nullptr);
++    if (curve == nullptr) {
++      continue;
++    }
++    std::array<cmsToneCurve*, 3> curves{curve, curve, curve};
++    const std::vector<uint8_t> bytes = matrixShaperProfile(
++        xyY(0.3127, 0.329), {.Red = xyY(0.64, 0.33), .Green = xyY(0.30, 0.60), .Blue = xyY(0.15, 0.06)}, curves
++    );
++    constexpr size_t kEnvelopeSamples = 1024;
++    std::vector<float> envelope(kEnvelopeSamples);
++    float runningMax = 0.0F;
++    for (size_t index = 0; index < kEnvelopeSamples; ++index) {
++      const float encoded = static_cast<float>(index) / static_cast<float>(kEnvelopeSamples - 1);
++      runningMax = std::max(runningMax, cmsEvalToneCurveFloat(curve, encoded));
++      envelope[index] = runningMax;
++    }
++    cmsFreeToneCurve(curve);
++    const umbriel::IccParse parsed = umbriel::parseIccProfile(bytes);
++    CHECK(parsed.colorimetry.has_value());
++    if (!parsed.colorimetry || parsed.colorimetry->transfer.kind != umbriel::PanelTransfer::Kind::Curve) {
++      continue;
++    }
++    float previous = 0.0F;
++    for (const float value : parsed.colorimetry->transfer.encode) {
++      if (!std::isfinite(value) || value < 0.0F || value > 1.0F || value + 1e-6F < previous) {
++        umbriel::test::reportFailure(
++            __FILE__, __LINE__, std::format("parametric sample {} invalid (previous {})", value, previous)
++        );
++      }
++      previous = value;
++    }
++    // Same inverse contract as for tabulated TRCs: the encode curve must land
++    // on the envelope's generalized-inverse crossing, including when the raw
++    // parametric curve decreases.
++    expectGeneralizedInverse(parsed.colorimetry->transfer, envelope);
++  }
++#endif
++}
++
++UMBRIEL_TEST(iccPerChannelTrcDifferencesWarnAndUseTheRedCurve) {
++#if !UMBRIEL_HAS_LCMS2
++  std::println("skip: built without lcms2");
++#else
++  std::array<cmsToneCurve*, 3> curves{cmsBuildGamma(nullptr, 2.2), tabulatedGamma24Curve(), srgbDecodeCurve()};
++  const std::vector<uint8_t> bytes = matrixShaperProfile(
++      xyY(0.3127, 0.329), {.Red = xyY(0.64, 0.33), .Green = xyY(0.30, 0.60), .Blue = xyY(0.15, 0.06)}, curves
++  );
++  for (cmsToneCurve* curve : curves) {
++    cmsFreeToneCurve(curve);
++  }
++  CHECK(!bytes.empty());
++  const umbriel::IccParse parsed = umbriel::parseIccProfile(bytes);
++  CHECK(parsed.colorimetry.has_value());
++  CHECK(std::ranges::any_of(parsed.warnings, [](const std::string& warning) { return warning.contains("differ"); }));
++  if (parsed.colorimetry) {
++    CHECK(parsed.colorimetry->transfer.kind == umbriel::PanelTransfer::Kind::Gamma22);
++  }
++#endif
++}
++
++UMBRIEL_TEST(iccDegeneratePrimariesAreRejected) {
++#if !UMBRIEL_HAS_LCMS2
++  std::println("skip: built without lcms2");
++#else
++  std::array<cmsToneCurve*, 3> curves{
++      cmsBuildGamma(nullptr, 2.2), cmsBuildGamma(nullptr, 2.2), cmsBuildGamma(nullptr, 2.2)
++  };
++  std::vector<uint8_t> bytes = matrixShaperProfile(
++      xyY(0.3127, 0.329), {.Red = xyY(0.64, 0.33), .Green = xyY(0.30, 0.60), .Blue = xyY(0.15, 0.06)}, curves
++  );
++  for (cmsToneCurve* curve : curves) {
++    cmsFreeToneCurve(curve);
++  }
++  CHECK(!bytes.empty());
++
++  // A collapsed colorant triangle has no gamut to map into.
++  std::vector<uint8_t> collapsed = bytes;
++  patchColorantTo(collapsed, {'g', 'X', 'Y', 'Z'}, 0.64, 0.33);
++  patchColorantTo(collapsed, {'b', 'X', 'Y', 'Z'}, 0.64, 0.33);
++  const umbriel::IccParse collapsedParse = umbriel::parseIccProfile(collapsed);
++  CHECK(!collapsedParse.colorimetry.has_value());
++  CHECK(!collapsedParse.error.empty());
++
++  // A zero-sum colorant yields a (0,0) chromaticity and a singular matrix.
++  std::vector<uint8_t> zeroed = bytes;
++  writeXyzTagBody(zeroed, findTag(zeroed, {'b', 'X', 'Y', 'Z'})->dataOffset, 0.0, 0.0, 0.0);
++  const umbriel::IccParse zeroedParse = umbriel::parseIccProfile(zeroed);
++  CHECK(!zeroedParse.colorimetry.has_value());
++  CHECK(!zeroedParse.error.empty());
++#endif
++}
++
++UMBRIEL_TEST(fitTransferFitsSrgbLikeCurveWithBoundedError) {
++#if !UMBRIEL_HAS_LCMS2
++  std::println("skip: built without lcms2");
++#else
++  // sRGB-like: the sRGB power part with a linear toe, deliberately far enough
++  // from every named decode (the toe differs from sRGB's by ~1.5x the named
++  // match tolerance) to fall through to the power fit. The fit must stay close
++  // to the curve in linear light despite the toe's shadow leverage, and the
++  // fitted exponent must stay near the power part.
++  const cmsFloat64Number params[5] = {2.4, 1.0 / 1.055, 0.055 / 1.055, 1.0 / 5.0, 0.012};
++  cmsToneCurve* curve = cmsBuildParametricToneCurve(nullptr, 4, params);
++  CHECK(curve != nullptr);
++  if (curve == nullptr) {
++    return;
++  }
++  std::array<cmsToneCurve*, 3> curves{curve, curve, curve};
++  const std::vector<uint8_t> bytes = matrixShaperProfile(
++      xyY(0.3127, 0.329), {.Red = xyY(0.64, 0.33), .Green = xyY(0.30, 0.60), .Blue = xyY(0.15, 0.06)}, curves
++  );
++  cmsFreeToneCurve(curve);
++  const umbriel::IccParse parsed = umbriel::parseIccProfile(bytes);
++  CHECK(parsed.colorimetry.has_value());
++  if (!parsed.colorimetry) {
++    return;
++  }
++  const umbriel::PanelTransfer& transfer = parsed.colorimetry->transfer;
++  CHECK(transfer.kind == umbriel::PanelTransfer::Kind::Curve);
++  const umbriel::TransferFit fit = umbriel::fitTransfer(transfer);
++  CHECK(fit.kind == umbriel::TransferFit::Kind::Power);
++  if (fit.kind != umbriel::TransferFit::Kind::Power) {
++    return;
++  }
++  double worst = 0.0;
++  for (int probe = 0; probe <= 20000; ++probe) {
++    const double linear = probe == 0 ? 1e-6 : probe / 20000.0;
++    const double approx = std::pow(linear, 1.0 / fit.exponent);
++    const double curveValue = umbriel::panelEncodeSample(transfer, static_cast<float>(linear));
++    worst = std::max(worst, std::abs(approx - curveValue) * 255.0);
++  }
++  std::println("sRGB-like power fit exponent {:.3f}, worst error {:.3f} 8-bit codes", fit.exponent, worst);
++  CHECK(fit.exponent > 1.9F && fit.exponent < 2.6F);
++  CHECK(worst < 10.5);
++#endif
++}
++
++UMBRIEL_TEST(iccMalformedStructuresAreRejectedDeterministically) {
++#if !UMBRIEL_HAS_LCMS2
++  std::println("skip: built without lcms2");
++#else
++  // Untrusted bytes never reach the curve math with a broken shape: every
++  // entry point rejects with an error rather than parsing garbage.
++  std::array<cmsToneCurve*, 3> curves{
++      cmsBuildGamma(nullptr, 2.2), cmsBuildGamma(nullptr, 2.2), cmsBuildGamma(nullptr, 2.2)
++  };
++  const std::vector<uint8_t> base = matrixShaperProfile(
++      xyY(0.3127, 0.329), {.Red = xyY(0.64, 0.33), .Green = xyY(0.30, 0.60), .Blue = xyY(0.15, 0.06)}, curves
++  );
++  for (cmsToneCurve* curve : curves) {
++    cmsFreeToneCurve(curve);
++  }
++  CHECK(!base.empty());
++
++  const auto rejectsWithError = [&](const std::vector<uint8_t>& bytes, const char* what) {
++    const umbriel::IccParse parsed = umbriel::parseIccProfile(bytes);
++    if (parsed.colorimetry.has_value() || parsed.error.empty()) {
++      umbriel::test::reportFailure(
++          __FILE__, __LINE__, std::format("parseIccProfile accepted malformed input: {}", what)
++      );
++    }
++    const umbriel::ClientIccDescription client = umbriel::clientIccDescription(bytes);
++    if (client.description.has_value() || client.error.empty()) {
++      umbriel::test::reportFailure(
++          __FILE__, __LINE__, std::format("clientIccDescription accepted malformed input: {}", what)
++      );
++    }
++  };
++
++  for (const size_t cut :
++       {size_t{0}, size_t{8}, size_t{64}, size_t{127}, size_t{131}, size_t{140}, base.size() / 2, base.size() - 1}) {
++    rejectsWithError(std::vector<uint8_t>(base.begin(), base.begin() + static_cast<std::ptrdiff_t>(cut)), "truncated");
++  }
++  {
++    std::vector<uint8_t> bytes = base;
++    writeU32Be(bytes, 0, static_cast<uint32_t>(bytes.size() + 4096));
++    rejectsWithError(bytes, "declared size beyond file");
++    writeU32Be(bytes, 0, 10);
++    rejectsWithError(bytes, "declared size under header");
++  }
++  {
++    std::vector<uint8_t> bytes = base;
++    std::fill(bytes.begin() + 36, bytes.begin() + 40, 0);
++    rejectsWithError(bytes, "zeroed magic");
++  }
++  for (const uint8_t version : {uint8_t{1}, uint8_t{3}, uint8_t{5}, uint8_t{0}}) {
++    std::vector<uint8_t> bytes = base;
++    patchVersionMajor(bytes, version);
++    rejectsWithError(bytes, "unsupported version");
++  }
++  {
++    std::vector<uint8_t> bytes = base;
++    writeU32Be(bytes, 128, 0xFFFFFFFF);
++    rejectsWithError(bytes, "tag count overflow");
++    writeU32Be(bytes, 128, 0x10000);
++    rejectsWithError(bytes, "oversized tag count");
++  }
++  {
++    std::vector<uint8_t> bytes = base;
++    const TagSpan wtpt = *findTag(bytes, {'w', 't', 'p', 't'});
++    writeU32Be(bytes, wtpt.entryOffset + 4, 0xFFFFFF00);
++    rejectsWithError(bytes, "tag offset beyond file");
++    std::vector<uint8_t> overflow = base;
++    const TagSpan overflowed = *findTag(overflow, {'w', 't', 'p', 't'});
++    writeU32Be(overflow, overflowed.entryOffset + 4, 0xFFFFFFF0);
++    writeU32Be(overflow, overflowed.entryOffset + 8, 0x200);
++    rejectsWithError(overflow, "tag offset+size overflow");
++  }
++  {
++    std::vector<uint8_t> bytes = base;
++    const TagSpan trc = *findTag(bytes, {'r', 'T', 'R', 'C'});
++    writeU32Be(bytes, trc.dataOffset + 8, 0x0FFFFFFF);
++    rejectsWithError(bytes, "oversized curv count");
++    std::vector<uint8_t> para = base;
++    const TagSpan paraSpan = *findTag(para, {'r', 'T', 'R', 'C'});
++    writeU16Be(para, paraSpan.dataOffset + 8, 9);
++    rejectsWithError(para, "invalid para function type");
++  }
++  {
++    std::vector<uint8_t> bytes = base;
++    std::fill(bytes.begin() + 132, bytes.begin() + 132 + 12 * 4, 0);
++    rejectsWithError(bytes, "NUL-filled tag table entries");
++    std::vector<uint8_t> run = base;
++    std::fill(run.begin() + 200, run.begin() + 240, 0);
++    rejectsWithError(run, "embedded NUL run");
++    rejectsWithError(std::vector<uint8_t>(256, 0), "all-zero profile");
++  }
++#endif
++}
++
++UMBRIEL_TEST(iccMutationFuzzRejectsOrParsesSanely) {
++#if !UMBRIEL_HAS_LCMS2
++  std::println("skip: built without lcms2");
++#else
++  // Bounded mutation fuzz: every mutant must either reject with an error or
++  // parse into a well-formed panel. The iteration count is env-tunable for
++  // one-off deep runs; the seeded sequence is a stable prefix either way.
++  size_t iterations = 2000;
++  if (const char* env = std::getenv("UMBRIEL_ICC_FUZZ_ITERATIONS")) {
++    iterations = std::strtoul(env, nullptr, 10);
++  }
++  std::array<cmsToneCurve*, 3> curves{
++      cmsBuildGamma(nullptr, 2.2), cmsBuildGamma(nullptr, 2.2), cmsBuildGamma(nullptr, 2.2)
++  };
++  const std::vector<uint8_t> base = matrixShaperProfile(
++      xyY(0.3127, 0.329), {.Red = xyY(0.64, 0.33), .Green = xyY(0.30, 0.60), .Blue = xyY(0.15, 0.06)}, curves
++  );
++  for (cmsToneCurve* curve : curves) {
++    cmsFreeToneCurve(curve);
++  }
++  CHECK(!base.empty());
++
++  uint64_t state = 0x9E3779B97F4A7C15ULL;
++  const auto next = [&state]() {
++    state ^= state << 13;
++    state ^= state >> 7;
++    state ^= state << 17;
++    return state;
++  };
++  size_t accepted = 0;
++  for (size_t iteration = 0; iteration < iterations; ++iteration) {
++    std::vector<uint8_t> bytes = base;
++    const size_t mutations = 1 + next() % 6;
++    for (size_t mutation = 0; mutation < mutations && !bytes.empty(); ++mutation) {
++      const size_t position = next() % bytes.size();
++      switch (next() % 5) {
++      case 0:
++        bytes[position] = static_cast<uint8_t>(next());
++        break;
++      case 1:
++        bytes[position] ^= static_cast<uint8_t>(1u << (next() % 8));
++        break;
++      case 2: {
++        const size_t run = std::min<size_t>(1 + next() % 64, bytes.size() - position);
++        std::fill(
++            bytes.begin() + static_cast<std::ptrdiff_t>(position),
++            bytes.begin() + static_cast<std::ptrdiff_t>(position + run), 0
++        );
++        break;
++      }
++      case 3:
++        if (position + 4 <= bytes.size()) {
++          writeU32Be(bytes, position, static_cast<uint32_t>(next()));
++        }
++        break;
++      default:
++        bytes.resize(position);
++        break;
++      }
++      if (bytes.empty()) {
++        break;
++      }
++    }
++    const umbriel::IccParse parsed = umbriel::parseIccProfile(bytes);
++    if (parsed.colorimetry.has_value()) {
++      ++accepted;
++      const umbriel::PanelColorimetry& panel = *parsed.colorimetry;
++      if (!umbriel::validDisplayPrimaries(panel.primaries)
++          || !std::isfinite(panel.white[0])
++          || !std::isfinite(panel.white[1])) {
++        umbriel::test::reportFailure(
++            __FILE__, __LINE__, std::format("fuzz iteration {} parsed invalid colorimetry", iteration)
++        );
++        continue;
++      }
++      if (panel.transfer.kind == umbriel::PanelTransfer::Kind::Curve) {
++        float previous = 0.0F;
++        for (const float value : panel.transfer.encode) {
++          if (!std::isfinite(value) || value < 0.0F || value > 1.0F || value + 1e-6F < previous) {
++            umbriel::test::reportFailure(
++                __FILE__, __LINE__, std::format("fuzz iteration {} leaked an invalid encode curve", iteration)
++            );
++            break;
++          }
++          previous = value;
++        }
++      }
++    } else if (parsed.error.empty()) {
++      umbriel::test::reportFailure(
++          __FILE__, __LINE__, std::format("fuzz iteration {} rejected without an error", iteration)
++      );
++    }
++    const umbriel::ClientIccDescription client = umbriel::clientIccDescription(bytes);
++    if (client.description.has_value()) {
++      const umbriel::ColorDescription& description = *client.description;
++      const bool finite = std::isfinite(description.customPrimaries.red.x)
++          && std::isfinite(description.customPrimaries.green.y)
++          && std::isfinite(description.customPrimaries.blue.x)
++          && std::isfinite(description.tfPower);
++      if (!finite) {
++        umbriel::test::reportFailure(
++            __FILE__, __LINE__, std::format("fuzz iteration {} client description has non-finite fields", iteration)
++        );
++      }
++    } else if (client.error.empty()) {
++      umbriel::test::reportFailure(
++          __FILE__, __LINE__, std::format("fuzz iteration {} client rejected without an error", iteration)
++      );
++    }
++  }
++  std::println(
++      "icc mutation fuzz: {} iterations, {} accepted, {} rejected", iterations, accepted, iterations - accepted
++  );
++#endif
++}
++
+ int main() { return RUN_TESTS(); }
+diff --git a/tests/unit/config_change.cpp b/tests/unit/config_change.cpp
+index 43097cd2..def5f972 100644
+--- a/tests/unit/config_change.cpp
++++ b/tests/unit/config_change.cpp
+@@ -672,6 +672,27 @@ UMBRIEL_TEST(outputColorProfileReloadOnlyRefreshesOutputState) {
+   CHECK(!ConfigEffects::between(after, after).any());
+ }
+ 
++UMBRIEL_TEST(aRereadProfileRuleWithUnchangedFileChangesNothing) {
++  // A file profile's rule records the file identity, so re-parsing the same
++  // file must not re-apply output state and risk a flicker.
++  Config before;
++  OutputRule original;
++  original.name = "HEADLESS-1";
++  original.colorProfile = "/profiles/panel.icc?mtime=1000000000";
++  before.outputs.push_back(original);
++
++  const Config after = before;
++  CHECK(!ConfigChange::between(before, after).any());
++  CHECK(!ConfigEffects::between(before, after).any());
++
++  Config edited = before;
++  edited.outputs[0].colorProfile = "/profiles/panel.icc?mtime=1000000060";
++  CHECK(ConfigChange::between(before, edited).outputs);
++  const ConfigEffects changed = ConfigEffects::between(before, edited);
++  CHECK(changed.outputState);
++  CHECK_EQ(changed.summary(), std::string{"output state"});
++}
++
+ UMBRIEL_TEST(outputSdrGamutReloadOnlyRefreshesOutputState) {
+   Config before;
+   OutputRule original;
+diff --git a/tests/unit/config_load.cpp b/tests/unit/config_load.cpp
+index 5c83f186..2a9f85d5 100644
+--- a/tests/unit/config_load.cpp
++++ b/tests/unit/config_load.cpp
+@@ -5,6 +5,7 @@
+ #include <algorithm>
+ #include <array>
+ #include <cstdlib>
++#include <fcntl.h>
+ #include <filesystem>
+ #include <fstream>
+ #include <linux/input-event-codes.h>
+@@ -12,6 +13,7 @@
+ #include <regex>
+ #include <string>
+ #include <string_view>
++#include <sys/stat.h>
+ #include <unistd.h>
+ #include <utility>
+ #include <variant>
+@@ -40,6 +42,11 @@ namespace {
+     return false;
+   }
+ 
++  void setFileMtime(const std::filesystem::path& path, long seconds) {
++    const timespec times[2] = {{.tv_sec = seconds, .tv_nsec = 0}, {.tv_sec = seconds, .tv_nsec = 0}};
++    utimensat(AT_FDCWD, path.c_str(), times, 0);
++  }
++
+   class TempConfig {
+   public:
+     TempConfig()
+@@ -1762,20 +1769,124 @@ UMBRIEL_TEST(outputColorProfileLoadsDefaultsEdidAndPaths) {
+   file.write("[output.DP-1]\ncolor_profile = \"" + profilePath.string() + "\"\n");
+   CHECK(store.reload().success);
+   CHECK_EQ(store.config().outputs[0].colorProfile, profilePath.string());
++  CHECK(store.config().outputs[0].colorProfileMtime != 0);
+   CHECK(!containsDiagnostic(store, "output.DP-1.color_profile"));
+   std::filesystem::remove(profilePath);
+ 
+-  file.write("[output.DP-1]\ncolor_profile = \"/nonexistent/umbriel-missing-profile.icc\"\n");
++  file.write("[output.DP-1]\ncolor_profile = 3\n");
+   CHECK(store.reload().success);
+   CHECK_EQ(store.config().outputs[0].colorProfile, std::string{"none"});
+   CHECK(containsDiagnostic(store, "ignoring output.DP-1.color_profile"));
++}
+ 
+-  file.write("[output.DP-1]\ncolor_profile = 3\n");
++UMBRIEL_TEST(outputColorProfileUnavailablePathsFallBackToEdid) {
++  const TempConfigTree tree;
++  ConfigStore& store = umbriel::configStore();
++  store.setRootPath(tree.path("config.toml"), true);
++
++  tree.write("config.toml", "[output.DP-1]\ncolor_profile = \"missing.icc\"\n");
++  CHECK(store.reload().success);
++  CHECK_EQ(store.config().outputs[0].colorProfile, std::string{"edid"});
++  CHECK(containsDiagnostic(store, "output.DP-1.color_profile"));
++
++  tree.write("config.toml", "[output.DP-1]\ncolor_profile = \".\"\n");
++  CHECK(store.reload().success);
++  CHECK_EQ(store.config().outputs[0].colorProfile, std::string{"edid"});
++  CHECK(containsDiagnostic(store, "output.DP-1.color_profile"));
++
++  // A FIFO is not a profile, and reading one may never complete.
++  const std::filesystem::path fifo = tree.path("pipe.icc");
++  mkfifo(fifo.c_str(), 0600);
++  tree.write("config.toml", "[output.DP-1]\ncolor_profile = \"pipe.icc\"\n");
++  CHECK(store.reload().success);
++  CHECK_EQ(store.config().outputs[0].colorProfile, std::string{"edid"});
++  CHECK(containsDiagnostic(store, "output.DP-1.color_profile"));
++  std::filesystem::remove(fifo);
++}
++
++UMBRIEL_TEST(outputColorProfileResolvesRelativeAndHomePaths) {
++  const TempConfigTree tree;
++  ConfigStore& store = umbriel::configStore();
++  store.setRootPath(tree.path("sub/config.toml"), true);
++
++  tree.write("sub/panel.icc", "not an ICC profile");
++  tree.write("sub/config.toml", "[output.DP-1]\ncolor_profile = \"panel.icc\"\n");
++  CHECK(store.reload().success);
++  CHECK_EQ(store.config().outputs[0].colorProfile, tree.path("sub/panel.icc").string());
++  CHECK(!containsDiagnostic(store, "output.DP-1.color_profile"));
++
++  // Tilde expansion mirrors include paths: "~" and "~/" resolve against $HOME.
++  const ScopedEnvironment home("HOME", tree.path("home").string());
++  tree.write("home/panel.icc", "not an ICC profile");
++  tree.write("sub/config.toml", "[output.DP-1]\ncolor_profile = \"~/panel.icc\"\n");
++  CHECK(store.reload().success);
++  CHECK_EQ(store.config().outputs[0].colorProfile, tree.path("home/panel.icc").string());
++  CHECK(!containsDiagnostic(store, "output.DP-1.color_profile"));
++}
++
++UMBRIEL_TEST(outputColorProfileRejectsEmptyAndNulValues) {
++  const TempConfig file;
++  ConfigStore& store = umbriel::configStore();
++  store.setRootPath(file.path(), true);
++
++  file.write("[output.DP-1]\ncolor_profile = \"\"\n");
++  CHECK(store.reload().success);
++  CHECK_EQ(store.config().outputs[0].colorProfile, std::string{"none"});
++  CHECK(containsDiagnostic(store, "ignoring output.DP-1.color_profile"));
++
++  file.write("[output.DP-1]\ncolor_profile = \"panel\\u0000.icc\"\n");
+   CHECK(store.reload().success);
+   CHECK_EQ(store.config().outputs[0].colorProfile, std::string{"none"});
+   CHECK(containsDiagnostic(store, "ignoring output.DP-1.color_profile"));
+ }
+ 
++UMBRIEL_TEST(outputColorProfileReservesTheEdidKeyword) {
++  const TempConfigTree tree;
++  ConfigStore& store = umbriel::configStore();
++  store.setRootPath(tree.path("config.toml"), true);
++
++  // A file literally named "edid" is shadowed by the keyword; "./edid" names the file.
++  tree.write("edid", "not an ICC profile");
++  tree.write("config.toml", "[output.DP-1]\ncolor_profile = \"edid\"\n");
++  CHECK(store.reload().success);
++  CHECK_EQ(store.config().outputs[0].colorProfile, std::string{"edid"});
++  CHECK(!containsDiagnostic(store, "output.DP-1.color_profile"));
++
++  tree.write("config.toml", "[output.DP-1]\ncolor_profile = \"./edid\"\n");
++  CHECK(store.reload().success);
++  CHECK_EQ(store.config().outputs[0].colorProfile, tree.path("edid").string());
++  CHECK(!containsDiagnostic(store, "output.DP-1.color_profile"));
++}
++
++UMBRIEL_TEST(outputColorProfileEditReloadRereadsProfile) {
++  const TempConfigTree tree;
++  ConfigStore& store = umbriel::configStore();
++  store.setRootPath(tree.path("config.toml"), true);
++
++  tree.write("panel.icc", "first");
++  setFileMtime(tree.path("panel.icc"), 1000000000);
++  tree.write("config.toml", "[output.DP-1]\ncolor_profile = \"panel.icc\"\n");
++  CHECK(store.reload().success);
++  const std::string first = store.config().outputs[0].colorProfile;
++  const auto firstStamp = store.config().outputs[0].colorProfileMtime;
++
++  // An edited profile must read as a changed rule, or the reload applies nothing.
++  tree.write("panel.icc", "second");
++  setFileMtime(tree.path("panel.icc"), 1000000060);
++  const umbriel::ConfigReloadResult edited = store.reload();
++  const std::string second = store.config().outputs[0].colorProfile;
++  CHECK(edited.success);
++  CHECK_EQ(first, second);
++  CHECK(firstStamp != store.config().outputs[0].colorProfileMtime);
++  CHECK(edited.change.outputs);
++  CHECK(edited.effects.outputState);
++
++  // An untouched profile keeps reporting nothing to re-apply.
++  const umbriel::ConfigReloadResult unchanged = store.reload();
++  CHECK(unchanged.success);
++  CHECK(!unchanged.change.any());
++}
++
+ UMBRIEL_TEST(outputSdrGamutLoadsAndDefaultsToNative) {
+   const TempConfig file;
+   ConfigStore& store = umbriel::configStore();
+diff --git a/tests/unit/ipc_commands.cpp b/tests/unit/ipc_commands.cpp
+index d7a07a23..f24cef19 100644
+--- a/tests/unit/ipc_commands.cpp
++++ b/tests/unit/ipc_commands.cpp
+@@ -1,6 +1,7 @@
+ #include "server/ipc_commands.h"
+ 
+ #include "check.h"
++#include "server/color_description.h"
+ 
+ #include <cstdio>
+ #include <limits>
+@@ -243,6 +244,19 @@ UMBRIEL_TEST(colorHumanLabelsFittedPowerTransferForSurfaces) {
+   });
+   const std::string out = captureHumanOutput(*spec, payload);
+   CHECK(out.contains("power 1.8"));
++  CHECK(!out.contains("unspecified"));
++}
++
++UMBRIEL_TEST(surfaceTransferLabelSeparatesNamedPowerAndBare) {
++  CHECK(umbriel::surfaceTransferLabel(nullptr) == "none");
++  umbriel::ColorDescription named{};
++  named.data.tf_named = WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_GAMMA22;
++  CHECK(umbriel::surfaceTransferLabel(&named) == "gamma 2.2");
++  umbriel::ColorDescription powered{};
++  powered.tfPower = 1.8F;
++  CHECK(umbriel::surfaceTransferLabel(&powered) == "power 1.8");
++  umbriel::ColorDescription bare{};
++  CHECK(umbriel::surfaceTransferLabel(&bare) == "unspecified");
+ }
+ 
+ UMBRIEL_TEST(parsesOutputCreateNameOnly) {
+diff --git a/umbrielfx/meson.build b/umbrielfx/meson.build
+index e7f82b00..e9fc3fb6 100644
+--- a/umbrielfx/meson.build
++++ b/umbrielfx/meson.build
+@@ -71,11 +71,12 @@ umbrielfx_deps = [
+   wlroots_dep,
+ ]
+ 
+-# ICC profile evaluation for client-supplied color management. Without lcms2
+-# the fallback rejects ICC profiles and leaves the parametric transforms.
+-umbrielfx_lcms2_dep = dependency('lcms2', required: false)
+-if umbrielfx_lcms2_dep.found()
+-  umbrielfx_deps += umbrielfx_lcms2_dep
++# ICC profile evaluation for client-supplied color management. The root
++# project's option-gated lcms2 lookup decides this with the compositor's ICC
++# path: without lcms2 the fallback rejects ICC profiles and leaves the
++# parametric transforms.
++if lcms2_dep.found()
++  umbrielfx_deps += lcms2_dep
+   umbrielfx_sources += files('render/color_lcms2.c')
+ else
+   umbrielfx_sources += files('render/color_fallback.c')
+diff --git a/umbrielfx/render/color.c b/umbrielfx/render/color.c
+index c80166e0..c68d62c0 100644
+--- a/umbrielfx/render/color.c
++++ b/umbrielfx/render/color.c
+@@ -290,29 +290,50 @@ static size_t color_transform_compose_collect(
+   return count;
+ }
+ 
++static bool fail_lut_fold_alloc_for_test = false;
++
++// Forced allocation failure lets the compose cleanup path run without a real
++// out-of-memory condition. Declared here because the hook exists only for tests
++// and the production header stays free of it.
++void color_transform_fail_lut_fold_alloc_for_test(bool fail);
++
++void color_transform_fail_lut_fold_alloc_for_test(bool fail) {
++  fail_lut_fold_alloc_for_test = fail;
++}
++
++// Sample one table row at a normalized position, linearly the way the shaders
++// sample a LUT.
++static double lut_row_eval(const uint16_t* row, size_t dim, double x) {
++  const double position = x * (double)(dim - 1);
++  const size_t lower = (size_t)position;
++  const size_t upper = lower + 1 < dim ? lower + 1 : dim - 1;
++  const double a = row[lower] / 65535.0;
++  const double b = row[upper] / 65535.0;
++  return a + (b - a) * (position - (double)lower);
++}
++
+ // Two 3x1D LUTs in series (a baked panel-TRC curve followed by a gamma-control
+ // ramp) fold into one table per channel: folded[i] = second(first[i]), sampled
+ // linearly the way the shaders sample a LUT. Consumers downstream accept a
+ // single LUT stage, so without the fold a gamma ramp would invalidate a
+-// composed transform instead of composing with it.
++// composed transform instead of composing with it. The folded table samples
++// both rows on the finer of the two grids, so a coarse curve never resamples
++// away the finer one's knots and every finer-grid node holds the exact chain.
+ static struct wlr_color_transform*
+ color_transform_fold_lut_pair(struct wlr_color_transform_lut_3x1d* first, struct wlr_color_transform_lut_3x1d* second) {
+-  const size_t dim = first->dim;
+-  uint16_t* folded = calloc(dim * 3, sizeof(uint16_t));
++  const size_t dim = first->dim > second->dim ? first->dim : second->dim;
++  uint16_t* folded = fail_lut_fold_alloc_for_test ? NULL : calloc(dim * 3, sizeof(uint16_t));
+   if (folded == NULL) {
+     return NULL;
+   }
+   for (size_t channel = 0; channel < 3; channel++) {
+-    const uint16_t* first_row = &first->lut_3x1d[channel * dim];
++    const uint16_t* first_row = &first->lut_3x1d[channel * first->dim];
+     const uint16_t* second_row = &second->lut_3x1d[channel * second->dim];
+     uint16_t* out_row = &folded[channel * dim];
+     for (size_t i = 0; i < dim; i++) {
+-      const double position = first_row[i] / 65535.0 * (double)(second->dim - 1);
+-      const size_t lower = (size_t)position;
+-      const size_t upper = lower + 1 < second->dim ? lower + 1 : second->dim - 1;
+-      const double a = second_row[lower] / 65535.0;
+-      const double b = second_row[upper] / 65535.0;
+-      out_row[i] = (uint16_t)lround((a + (b - a) * (position - (double)lower)) * 65535.0);
++      const double x = dim > 1 ? (double)i / (double)(dim - 1) : 0.0;
++      const double intermediate = lut_row_eval(first_row, first->dim, x);
++      out_row[i] = (uint16_t)lround(lut_row_eval(second_row, second->dim, intermediate) * 65535.0);
+     }
+   }
+   struct wlr_color_transform* result = wlr_color_transform_init_lut_3x1d(dim, folded, &folded[dim], &folded[dim * 2]);
+@@ -350,15 +371,19 @@ bool color_transform_compose(struct wlr_color_transform** result, struct wlr_col
+           color_transform_lut_3x1d_from_base(result_transforms[composed_len - 1]),
+           color_transform_lut_3x1d_from_base(current)
+       );
+-      wlr_color_transform_unref(result_transforms[composed_len - 1]);
+-      wlr_color_transform_unref(current);
+       if (folded == NULL) {
++        // The array keeps owning the fold's first input so cleanup releases it
++        // exactly once; `current` sits outside the kept prefix and is released
++        // here.
++        wlr_color_transform_unref(current);
+         for (size_t j = i + 1; j < result_len; j++) {
+           wlr_color_transform_unref(result_transforms[j]);
+         }
+         result_len = composed_len;
+         goto cleanup_transforms;
+       }
++      wlr_color_transform_unref(result_transforms[composed_len - 1]);
++      wlr_color_transform_unref(current);
+       result_transforms[composed_len - 1] = folded;
+       continue;
+     }
+diff --git a/umbrielfx/tests/color.c b/umbrielfx/tests/color.c
+index fb0d5b5c..b73aaec5 100644
+--- a/umbrielfx/tests/color.c
++++ b/umbrielfx/tests/color.c
+@@ -332,6 +332,102 @@ static bool check_matrix_near(const float actual[static 9], const float expected
+   return true;
+ }
+ 
++// Reference sampling for the fold pins: apply both tables in series the way the
++// stages evaluate, computed independently of the fold implementation.
++static double lut_table_eval(const uint16_t* lut, size_t dim, double x) {
++  const double position = x * (double)(dim - 1);
++  const size_t lower = (size_t)position;
++  const size_t upper = lower + 1 < dim ? lower + 1 : dim - 1;
++  const double a = lut[lower] / 65535.0;
++  const double b = lut[upper] / 65535.0;
++  return a + (b - a) * (position - (double)lower);
++}
++
++static double curve_encode_22(double x) { return pow(x, 1.0 / 2.2); }
++
++static double curve_smoothstep(double x) { return x * x * (3.0 - 2.0 * x); }
++
++static double curve_decode_20(double x) { return x * x; }
++
++static double curve_decode_24(double x) { return pow(x, 2.4); }
++
++static double curve_decode_30(double x) { return x * x * x; }
++
++struct lut_fold_case {
++  const char* name;
++  size_t first_dim;
++  size_t second_dim;
++  double (*first_curve[3])(double);
++  double (*second_curve[3])(double);
++};
++
++static void bake_curve_row(uint16_t* out, size_t dim, double (*curve)(double)) {
++  for (size_t i = 0; i < dim; i++) {
++    out[i] = (uint16_t)lround(curve((double)i / (double)(dim - 1)) * 65535.0);
++  }
++}
++
++// The folded table must land on the finer grid and equal the composed stages at
++// every node of that grid. Between nodes the bound is single-table sampling
++// error, so a fold that samples the coarser table only at its own knots cannot
++// meet it.
++static bool run_lut_fold_case(const struct lut_fold_case* fold_case) {
++  enum { kMaxDim = 129 };
++  const size_t first_dim = fold_case->first_dim;
++  const size_t second_dim = fold_case->second_dim;
++  const size_t grid = first_dim > second_dim ? first_dim : second_dim;
++  uint16_t first_rows[3][kMaxDim];
++  uint16_t second_rows[3][kMaxDim];
++  for (size_t channel = 0; channel < 3; channel++) {
++    bake_curve_row(first_rows[channel], first_dim, fold_case->first_curve[channel]);
++    bake_curve_row(second_rows[channel], second_dim, fold_case->second_curve[channel]);
++  }
++
++  struct wlr_color_transform* first =
++      wlr_color_transform_init_lut_3x1d(first_dim, first_rows[0], first_rows[1], first_rows[2]);
++  struct wlr_color_transform* second =
++      wlr_color_transform_init_lut_3x1d(second_dim, second_rows[0], second_rows[1], second_rows[2]);
++  if (!check(first != NULL && second != NULL, "build LUT stages")) {
++    return false;
++  }
++  struct wlr_color_transform* stages[] = {first, second};
++  struct wlr_color_transform* folded = NULL;
++  bool ok = check(color_transform_compose(&folded, stages, 2), "compose LUT pair");
++  const bool single_lut = folded != NULL && folded->type == COLOR_TRANSFORM_LUT_3X1D;
++  ok = check(single_lut, "folded into a single LUT stage") && ok;
++  if (single_lut) {
++    struct wlr_color_transform_lut_3x1d* lut = color_transform_lut_3x1d_from_base(folded);
++    ok = check(lut->dim == grid, "fold table keeps the finer dimension") && ok;
++    double node_max = 0.0;
++    double domain_max = 0.0;
++    for (size_t channel = 0; channel < 3; channel++) {
++      // Even samples are grid nodes, odd samples sit between them.
++      for (size_t sample = 0; sample <= 2 * (grid - 1); sample++) {
++        const double x = (double)sample / (double)(2 * (grid - 1));
++        const double reference = lut_table_eval(second_rows[channel], second_dim,
++            lut_table_eval(first_rows[channel], first_dim, x));
++        const float in[3] = {(float)x, (float)x, (float)x};
++        float out[3] = {0.0f, 0.0f, 0.0f};
++        wlr_color_transform_eval(folded, out, in);
++        const double error = fabs((double)out[channel] - reference);
++        if (sample % 2 == 0 && error > node_max) {
++          node_max = error;
++        }
++        if (error > domain_max) {
++          domain_max = error;
++        }
++      }
++    }
++    printf("fold %s: node max %.6f, domain max %.6f\n", fold_case->name, node_max, domain_max);
++    ok = check(node_max < 2e-4, "folded table matches the composed stages at every finer-grid node") && ok;
++    ok = check(domain_max < 5e-3, "folded table tracks the composed stages between nodes") && ok;
++  }
++  wlr_color_transform_unref(first);
++  wlr_color_transform_unref(second);
++  wlr_color_transform_unref(folded);
++  return ok;
++}
++
+ // Two 3x1D LUTs in series fold into one stage in the composed transform: a
+ // baked panel-TRC curve followed by a gamma-control ramp must stay a shape
+ // consumers accept instead of arriving as two LUT stages. No renderer needed.
+@@ -363,6 +459,73 @@ static bool test_compose_lut_fold(void) {
+   wlr_color_transform_unref(first);
+   wlr_color_transform_unref(second);
+   wlr_color_transform_unref(folded);
++
++  const struct lut_fold_case cases[] = {
++      {
++          .name = "coarse panel TRC then fine gamma ramp",
++          .first_dim = 5,
++          .second_dim = 129,
++          .first_curve = {curve_encode_22, curve_smoothstep, curve_decode_30},
++          .second_curve = {curve_decode_20, curve_smoothstep, curve_decode_24},
++      },
++      {
++          .name = "fine panel TRC then coarse gamma ramp",
++          .first_dim = 129,
++          .second_dim = 5,
++          .first_curve = {curve_encode_22, curve_smoothstep, curve_decode_30},
++          .second_curve = {curve_decode_20, curve_smoothstep, curve_decode_24},
++      },
++      {
++          .name = "equal fine dims, nonlinear",
++          .first_dim = 129,
++          .second_dim = 129,
++          .first_curve = {curve_encode_22, curve_smoothstep, curve_decode_30},
++          .second_curve = {curve_decode_20, curve_smoothstep, curve_decode_24},
++      },
++  };
++  for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
++    ok = run_lut_fold_case(&cases[i]) && ok;
++  }
++  return ok;
++}
++
++void color_transform_fail_lut_fold_alloc_for_test(bool fail);
++
++// A failed fold allocation must release every stage exactly once. A held ref
++// keeps each stage alive through cleanup, so a double release surfaces as a
++// wrong ref_count instead of a use-after-free.
++static bool test_compose_lut_fold_alloc_failure(void) {
++  enum { kDim = 5 };
++  uint16_t table[kDim];
++  for (size_t i = 0; i < kDim; i++) {
++    table[i] = (uint16_t)(i * 65535 / (kDim - 1));
++  }
++  struct wlr_color_transform* first = wlr_color_transform_init_lut_3x1d(kDim, table, table, table);
++  struct wlr_color_transform* second = wlr_color_transform_init_lut_3x1d(kDim, table, table, table);
++  if (!check(first != NULL && second != NULL, "build LUT stages for the failure path")) {
++    return false;
++  }
++  struct wlr_color_transform* held = wlr_color_transform_ref(first);
++  const int first_refs = first->ref_count;
++  const int second_refs = second->ref_count;
++  struct wlr_color_transform* stages[] = {first, second};
++  struct wlr_color_transform* folded = NULL;
++  color_transform_fail_lut_fold_alloc_for_test(true);
++  const bool composed = color_transform_compose(&folded, stages, 2);
++  color_transform_fail_lut_fold_alloc_for_test(false);
++
++  bool ok = check(!composed, "compose reports the fold allocation failure");
++  const bool refs_held = first->ref_count == first_refs && second->ref_count == second_refs;
++  ok = check(refs_held, "fold failure releases each stage exactly once") && ok;
++  if (!refs_held) {
++    fprintf(stderr,
++        "FAIL: stage ref_count after fold failure: first %d (expected %d), second %d (expected %d)\n",
++        first->ref_count, first_refs, second->ref_count, second_refs);
++    return false;
++  }
++  wlr_color_transform_unref(held);
++  wlr_color_transform_unref(first);
++  wlr_color_transform_unref(second);
+   return ok;
+ }
+ 
+@@ -3214,7 +3377,9 @@ int main(int argc, char* argv[]) {
+     return test_hdr_white_point_math() ? EXIT_SUCCESS : EXIT_FAILURE;
+   }
+   if (strcmp(argv[1], "compose-lut-fold") == 0) {
+-    return test_compose_lut_fold() ? EXIT_SUCCESS : EXIT_FAILURE;
++    bool folded_ok = test_compose_lut_fold();
++    folded_ok = test_compose_lut_fold_alloc_failure() && folded_ok;
++    return folded_ok ? EXIT_SUCCESS : EXIT_FAILURE;
+   }
+ 
+   struct fixture fixture;
 -- 
 2.56.0.236.g7e34d8174d
 
