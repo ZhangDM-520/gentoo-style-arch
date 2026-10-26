@@ -1,6 +1,6 @@
 pkgbase = pkgfile
 	pkgdesc = A tool to search for files in official repository packages
-	pkgver = 26
+	pkgver = 27
 	pkgrel = 1.1
 	url = https://github.com/falconindy/pkgfile/
 	install = pkgfile.install
@@ -18,8 +18,8 @@ pkgbase = pkgfile
 	depends = pacman
 	depends = pcre
 	depends = systemd-libs
-	source = git+https://github.com/falconindy/pkgfile.git#tag=v26?signed
+	source = git+https://github.com/falconindy/pkgfile.git#tag=v27?signed
 	validpgpkeys = 487EACC08557AD082088DABA1EB2638FF56C0C53
-	sha256sums = e09965c7a6abef75d7fb4e572eedae31aa87b171dbc7f47f7c162d796f17f879
+	sha256sums = 6cbabedf072ef730ceae544c2da1a6ef2306cb37713ad8993f64bbddd2322566
 
 pkgname = pkgfile

@@ -2,7 +2,7 @@
 # Contributor: Dave Reisner <d@falconindy.com>
 
 pkgname=pkgfile
-pkgver=26
+pkgver=27
 pkgrel=1.1
 pkgdesc='A tool to search for files in official repository packages'
 arch=('x86_64')
@@ -25,7 +25,7 @@ checkdepends=(
     'python')
 install=pkgfile.install
 source=("git+https://github.com/falconindy/pkgfile.git#tag=v${pkgver}?signed")
-sha256sums=('e09965c7a6abef75d7fb4e572eedae31aa87b171dbc7f47f7c162d796f17f879')
+sha256sums=('6cbabedf072ef730ceae544c2da1a6ef2306cb37713ad8993f64bbddd2322566')
 validpgpkeys=('487EACC08557AD082088DABA1EB2638FF56C0C53') # Dave Reisner <d@falconindy.com>
 
 build() {
