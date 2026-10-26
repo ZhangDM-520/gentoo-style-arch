@@ -1,7 +1,7 @@
-From 1a9f0860b49d5fda68770e3b4fdf4a268ffa7fc9 Mon Sep 17 00:00:00 2001
+From 05a09629ace754a07b9f904afc71aec17b2a8dde Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 18:19:43 +0800
-Subject: [PATCH 1/9] feat(color): characterize outputs from ICC/EDID and map
+Subject: [PATCH 01/10] feat(color): characterize outputs from ICC/EDID and map
  the SDR gamut
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -2352,10 +2352,10 @@ index 4800e27c..38bc70ac 100644
 2.56.0.236.g7e34d8174d
 
 
-From 1290696d0885f1b1ffc37771667e4108ff6337da Mon Sep 17 00:00:00 2001
+From 02dfcecb794e803f3deff6d5bb62a44b7383eafc Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 18:19:43 +0800
-Subject: [PATCH 2/9] feat(color): ICC image descriptions and icc_file
+Subject: [PATCH 02/10] feat(color): ICC image descriptions and icc_file
  advertising
 
 Characterized output and preferred descriptions report the panel's custom
@@ -4049,10 +4049,10 @@ index 06024dbe..d7a07a23 100644
 2.56.0.236.g7e34d8174d
 
 
-From 61c040ed5518efd8423c4e5ad444ec031ec0434d Mon Sep 17 00:00:00 2001
+From bf9524bd3345d44d80ae4c617a579820f0b71108 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 18:19:52 +0800
-Subject: [PATCH 3/9] test(color): live color-profile coverage
+Subject: [PATCH 03/10] test(color): live color-profile coverage
 
 The check drives the creator over the wire (ready, failed, get_information
 denial, bad_size), pins the icc_file bytes against the configured profile,
@@ -4376,10 +4376,10 @@ index 00000000..e1530639
 2.56.0.236.g7e34d8174d
 
 
-From 296b07f8d6ba3536f21ecc2a4219513fd4204056 Mon Sep 17 00:00:00 2001
+From 6ac759f61484f84cc9ded90e8cf7cf29af3a104d Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 18:19:52 +0800
-Subject: [PATCH 4/9] docs(color): document color profiles and client ICC
+Subject: [PATCH 04/10] docs(color): document color profiles and client ICC
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 ---
@@ -4473,11 +4473,11 @@ index 01bff86c..58100200 100644
 2.56.0.236.g7e34d8174d
 
 
-From 153c452cb3c8266074da2cdca9cfa5417e60e153 Mon Sep 17 00:00:00 2001
+From a2499f11af97ca95276fb868ffe3471215accdb3 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 18:53:26 +0800
-Subject: [PATCH 5/9] fix(color): fold composed LUT stages and fix the wideness
- white point
+Subject: [PATCH 05/10] fix(color): fold composed LUT stages and fix the
+ wideness white point
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
@@ -4870,10 +4870,10 @@ index 04317a4c..fb0d5b5c 100644
 2.56.0.236.g7e34d8174d
 
 
-From ec1347ec0db0e16fd0eb4f28cdd324bfd0d88437 Mon Sep 17 00:00:00 2001
+From 1299c942fb19498a58888b8c6be7ecf3f510bf6d Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Tue, 27 Oct 2026 00:36:57 +0800
-Subject: [PATCH 6/9] fix(color): address the external review round
+Subject: [PATCH 06/10] fix(color): address the external review round
 
 Memory safety: close the icc_file memfd after marshalling (libwayland dups;
 64-request storm leaked 64 fds before), release the LUT fold inputs exactly
@@ -9087,10 +9087,10 @@ index fb0d5b5c..b73aaec5 100644
 2.56.0.236.g7e34d8174d
 
 
-From e73880ea254f62074032231c0c4debada1a5766f Mon Sep 17 00:00:00 2001
+From 8ff074101f3d39641388c9065630d9f2278f310b Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Tue, 27 Oct 2026 06:15:27 +0800
-Subject: [PATCH 7/9] fix(color): polish items from external review round 2
+Subject: [PATCH 07/10] fix(color): polish items from external review round 2
 
 - Clamp lut_row_eval input to [0, 1] so negative lerp rounding cannot
   underflow the size_t table index.
@@ -9218,10 +9218,10 @@ index c68d62c0..83de1d5c 100644
 2.56.0.236.g7e34d8174d
 
 
-From 3e8518f60f4e3b7b034531896dc8b723345fb2b5 Mon Sep 17 00:00:00 2001
+From 2ccbedb3db07ba452c3e34b5807a801437978d11 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Tue, 27 Oct 2026 07:02:31 +0800
-Subject: [PATCH 8/9] style(color): normalize formatting in the lut-fold test
+Subject: [PATCH 08/10] style(color): normalize formatting in the lut-fold test
  hook and pins
 
 clang-format (repo .clang-format, CI's dry-run command) rewraps the
@@ -9282,11 +9282,11 @@ index b73aaec5..ae56cff9 100644
 2.56.0.236.g7e34d8174d
 
 
-From 86c96600d4f3e29215760887f7a8350a08ba7672 Mon Sep 17 00:00:00 2001
+From 0943f5c04509b8feaf1c55e54e503d9fc515e7f2 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Tue, 27 Oct 2026 07:21:00 +0800
-Subject: [PATCH 9/9] fix(color): bind range-for loop variables by reference in
- tests
+Subject: [PATCH 09/10] fix(color): bind range-for loop variables by reference
+ in tests
 
 GCC 16 warns -Wrange-loop-construct on loop variables copied from const
 std::pair elements; the local GCC 17 snapshot does not, so the tree
@@ -9323,6 +9323,39 @@ index 06a01539..fd3db1cc 100644
    };
 -  for (const auto whitePoint : {std::pair{0.3127F, 0.329F}, std::pair{0.3457F, 0.3585F}, std::pair{0.3324F, 0.3474F}}) {
 +  for (const auto& whitePoint : {std::pair{0.3127F, 0.329F}, std::pair{0.3457F, 0.3585F}, std::pair{0.3324F, 0.3474F}}) {
+     panel.white = {.x = whitePoint.first, .y = whitePoint.second};
+     for (const umbriel::PanelTransfer& transfer : transfers) {
+       umbriel::PanelColorimetry colorimetry{
+-- 
+2.56.0.236.g7e34d8174d
+
+
+From 27c65808dda9faec5e2dc4cb5f38e0cb5b80bb2c Mon Sep 17 00:00:00 2001
+From: ZhangDM-520 <jixianqiang1540@gmail.com>
+Date: Tue, 27 Oct 2026 07:25:17 +0800
+Subject: [PATCH 10/10] style(color): wrap the white-point range-for under the
+ column limit
+
+The reference-binding fix pushed the loop header past 120 columns;
+clang-format rewraps it. Tree-wide format check is clean again (ran it
+this time before pushing).
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+---
+ tests/unit/colorimetry.cpp | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/tests/unit/colorimetry.cpp b/tests/unit/colorimetry.cpp
+index fd3db1cc..eea74f17 100644
+--- a/tests/unit/colorimetry.cpp
++++ b/tests/unit/colorimetry.cpp
+@@ -932,7 +932,8 @@ UMBRIEL_TEST(sdrGamutTransformKeepsWhiteIdenticalToNativePixels) {
+       {.kind = umbriel::PanelTransfer::Kind::Gamma22, .encode = {}},
+       {.kind = umbriel::PanelTransfer::Kind::Curve, .encode = {0.0F, 1.0F}},
+   };
+-  for (const auto& whitePoint : {std::pair{0.3127F, 0.329F}, std::pair{0.3457F, 0.3585F}, std::pair{0.3324F, 0.3474F}}) {
++  for (const auto& whitePoint :
++       {std::pair{0.3127F, 0.329F}, std::pair{0.3457F, 0.3585F}, std::pair{0.3324F, 0.3474F}}) {
      panel.white = {.x = whitePoint.first, .y = whitePoint.second};
      for (const umbriel::PanelTransfer& transfer : transfers) {
        umbriel::PanelColorimetry colorimetry{
