@@ -8,8 +8,8 @@ source "$startdir/../../../lib/pgo.sh"
 
 pkgname=umbriel-git
 _pkgname=umbriel
-pkgver=0.1.0.r1397.76477c2
-pkgrel=2
+pkgver=0.1.0.r1398.d9497f3
+pkgrel=1
 epoch=1
 pkgdesc='A Wayland compositor built on wlroots'
 arch=('x86_64' 'aarch64')
@@ -61,13 +61,19 @@ source=("${_pkgname}::git+${url}.git#branch=main"
         '0009-hot-corner-overview.patch'
         '0011-drag-deform-settle-crop.patch'
         '0012-per-output-render-scale.patch'
-        '0013-icc-gamut.patch')
+        '0013-icc-gamut.patch'
+        '0014-downsample-box.patch'
+        '0015-unaccel-gesture-deltas.patch'
+        '0016-border-unfocused.patch')
 sha256sums=('SKIP'
             '03258711f3a2afdcd53dc3cff3a90180e97b4297e59245604d087826ee37581c'
             '2600cb2ce8eee8f06f6d7cf557d862d139751091210e002ee7d818c6ec911fff'
             '1d92976c7370860d8846773c1bc7aa7a5815ef785f324dcd3bdd80d0aec9f4b5'
-            '475b6445980a4bbd09e59a264fc40203609a23642bda321f039661c52d39011d'
-            '08447292af31759b84e4e84edf558a1e3e3bbfbf35b7ebce73f2a82fa91de8d0')
+            '98b2ba7224d23f00031b235006e03fb0edef44be5d484dc0e3c248f41938b583'
+            '08447292af31759b84e4e84edf558a1e3e3bbfbf35b7ebce73f2a82fa91de8d0'
+            '6bfc61519439d329344b7ab3dbebcd20dc810fa988af68e7a3cd61615c9fb140'
+            '077a36883b55c8f2afdb67a56a03af37db989cc0ebf47e1db1f1ffa11ffe37f4'
+            'cbccab7c6601b6adbe48fd4dfbf0de258c46d5ba4b91dedf3f7fd2e00257b169')
 
 pkgver() {
   cd "${_pkgname}"
@@ -124,8 +130,10 @@ prepare() {
   # follows the output scale bit-identically, direct scanout declines while
   # render_scale != scale, and mirror scenes are isolated from render_scale
   # hints. Upstream PR noctalia-dev/umbriel#573; same refresh procedure
-  # (0012-per-output-render-scale.patch, sha256 475b6445…, full range
-  # 76477c29..05ac404a — three commits). (Retire on merge: 0012 → PR #573.)
+  # (0012-per-output-render-scale.patch, sha256 98b2ba72…, full range
+  # d9497f36..0e484016 — four commits: feat + two review rounds + the X
+  # rectangle P1 fix; rebased onto main d9497f36 on 2026-10-26). (Retire on
+  # merge: 0012 → PR #573.)
   git apply -3 ../0012-per-output-render-scale.patch
 
   # [output] color_profile / sdr_gamut: ICC/EDID output characterization and
@@ -139,6 +147,37 @@ prepare() {
   # upstream-able branch stays main-based for the PR; regenerate from plain
   # main once 0008/0009/0011/0012 retire. (Retire on merge.)
   git apply -3 ../0013-icc-gamut.patch
+
+  # [output] downsample texel footprint: the capped-downsample pass averages
+  # the texel footprint in raster space (review fixes: capped-downsample
+  # raster-space pinning, and the downsample policy applied to window-capture
+  # mirrors). Upstream PR noctalia-dev/umbriel#575; sha256 6bfc6151….
+  # CUT AS A SLICE on top of 0012: PR #575 is stacked on #573's head, so the
+  # range is 0e484016..f75b2161 (three commits) — never 76477c29..pr-575,
+  # which would duplicate 0012. Regenerate with
+  # `git format-patch --stdout 0e484016..pr-575` when a drift breaks the
+  # apply. #573 rebased onto main d9497f36 (head 0e484016) on 2026-10-26 and
+  # the slice was re-cut on that base (sha256 6bfc6151…); if a later #573
+  # force-update breaks the slice again, refresh 0012 to
+  # <merge-base>..<#573-head> and re-cut the slice on the new head.
+  # (Retire on merge: 0014 → PR #575, with its 0012 base → PR #573.)
+  git apply -3 ../0014-downsample-box.patch
+
+  # [input.gesture] unaccelerated gesture deltas: swipe tracking reads the
+  # unaccelerated pointer deltas (selectSwipeDelta warning-clean fix, plus a
+  # clang-format round). Upstream PR noctalia-dev/umbriel#577; sha256
+  # 077a3688…, full range 76477c29..971a1ead (three commits); regenerate
+  # with `git format-patch --stdout <merge-base>..pr-577`.
+  # (Retire on merge: 0015 → PR #577.)
+  git apply -3 ../0015-unaccel-gesture-deltas.patch
+
+  # [effects] border effects on unfocused windows: opt-in border styling for
+  # unfocused views (config keys in [effects], rule evaluation in
+  # src/view/effects_rules.cpp). Upstream PR noctalia-dev/umbriel#580; sha256
+  # cbccab7c…, full range 76477c29..ca657214 (one commit); regenerate with
+  # `git format-patch --stdout <merge-base>..pr-580`.
+  # (Retire on merge: 0016 → PR #580.)
+  git apply -3 ../0016-border-unfocused.patch
 }
 
 build() {

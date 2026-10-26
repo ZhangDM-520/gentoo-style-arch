@@ -1,7 +1,7 @@
-From dab72e861ada0ea732bdf4b54e746eea9bd00483 Mon Sep 17 00:00:00 2001
+From 00dd360058598961f1313d110861f37bc7470196 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 03:59:43 +0800
-Subject: [PATCH 1/3] feat(output): add per-output render_scale for HiDPI
+Subject: [PATCH 1/4] feat(output): add per-output render_scale for HiDPI
  supersampling
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -60,12 +60,12 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
  create mode 100644 tests/harness/checks/protocol/render_scale.sh
 
 diff --git a/docs/user/configuration.md b/docs/user/configuration.md
-index 5fdbdfe5..4056bf7e 100644
+index fc1e2b6c..8ad749b6 100644
 --- a/docs/user/configuration.md
 +++ b/docs/user/configuration.md
-@@ -101,9 +101,9 @@ honor_restored_maximize = false
+@@ -103,9 +103,9 @@ honor_restored_maximize = false
  
- `Xwayland` must be installed and available on `PATH` when X11 support is enabled. It starts when the first X11 application connects.
+ X11 bounding shapes clip windows to their visible regions, including holes and separate rectangles. Shape changes apply while the window is open and are preserved in overview previews, window captures, and close animations. Input shapes remain independent, so a click-through overlay can keep drawing its visible widgets.
  
 -X11 applications have no per-output scale. By default they see every output at its logical size, and Umbriel upscales their windows on outputs with a scale above 1, which looks soft. With `xwayland_native_resolution = true` they see each output at its physical size instead: a `3840x2160` output at scale `1.25` appears to them as `3840x2160` rather than `3072x1728`. Their windows render at one pixel per screen pixel and stay sharp, but X11 applications that do not scale their own interface look smaller on scaled outputs. Games benefit most.
 +X11 applications have no per-output scale. By default they see every output at its logical size, and Umbriel upscales their windows on outputs with a scale above 1, which looks soft. With `xwayland_native_resolution = true` they see each output at its rendered size instead — its `render_scale`, or its scale when `render_scale` is unset: a `3840x2160` output at scale `1.25` appears to them as `3840x2160` rather than `3072x1728`. Their windows render at one pixel per screen pixel and stay sharp, but X11 applications that do not scale their own interface look smaller on scaled outputs. Games benefit most.
@@ -344,7 +344,7 @@ index e1368885..1fc73c1f 100644
      // Stands in when no output is in the layout: a plain translation to the X origin.
      XwaylandRegion m_fallback;
 diff --git a/src/xwayland/xwayland.cpp b/src/xwayland/xwayland.cpp
-index 20e66229..d908ff72 100644
+index 8ca191b3..41636e07 100644
 --- a/src/xwayland/xwayland.cpp
 +++ b/src/xwayland/xwayland.cpp
 @@ -4,6 +4,7 @@
@@ -354,8 +354,8 @@ index 20e66229..d908ff72 100644
 +#include "output/output.h"
  #include "server/server.h"
  #include "wlr.h"
- #include "xwayland/window.h"
-@@ -74,7 +75,12 @@ namespace umbriel {
+ #include "xwayland/shape.h"
+@@ -75,7 +76,12 @@ namespace umbriel {
        kLog.error("failed to create the Xwayland server");
        return;
      }
@@ -366,9 +366,9 @@ index 20e66229..d908ff72 100644
 +          return bound != nullptr ? bound->clientRenderScale() : static_cast<double>(output->scale);
 +        }
 +    );
-     // wlroots drops the seat whenever the window manager goes away, which happens each time the lazy Xwayland exits
-     // with its last client, so hand it over again before every start. wlroots passes the seat to the window manager
-     // when Xwayland is ready; setting it from the ready handler instead makes X requests there that can leave the
+     m_shapes = std::make_unique<XwaylandShapes>(server.display());
+     m_wlr->data = this;
+     m_wlr->user_event_handler = onXEvent;
 diff --git a/tests/harness/checks/protocol/render_scale.sh b/tests/harness/checks/protocol/render_scale.sh
 new file mode 100644
 index 00000000..cff4dbad
@@ -562,7 +562,7 @@ index 75815f42..133068d9 100644
 +
  int main() { return RUN_TESTS(); }
 diff --git a/umbrielfx/include/umbrielfx/types/wlr_scene.h b/umbrielfx/include/umbrielfx/types/wlr_scene.h
-index f142b845..daa65db3 100644
+index 35f7de93..a264149d 100644
 --- a/umbrielfx/include/umbrielfx/types/wlr_scene.h
 +++ b/umbrielfx/include/umbrielfx/types/wlr_scene.h
 @@ -168,6 +168,12 @@ struct wlr_scene {
@@ -628,10 +628,10 @@ index 5a05c869..6e1cce87 100644
    wlr_surface_set_preferred_buffer_scale(surface->surface, ceil(scale));
  
 diff --git a/umbrielfx/types/scene/wlr_scene.c b/umbrielfx/types/scene/wlr_scene.c
-index b84cda41..8613abbd 100644
+index 70e6ce36..fdb2213d 100644
 --- a/umbrielfx/types/scene/wlr_scene.c
 +++ b/umbrielfx/types/scene/wlr_scene.c
-@@ -4277,6 +4277,13 @@ void wlr_scene_set_color_manager_v1(struct wlr_scene* scene, struct wlr_color_ma
+@@ -4366,6 +4366,13 @@ void wlr_scene_set_color_manager_v1(struct wlr_scene* scene, struct wlr_color_ma
    wl_signal_add(&manager->events.destroy, &scene->color_manager_v1_destroy);
  }
  
@@ -649,10 +649,10 @@ index b84cda41..8613abbd 100644
 2.56.0.236.g7e34d8174d
 
 
-From 567d39d9971e3ea432724f302d48d3f91f5336d2 Mon Sep 17 00:00:00 2001
+From 5a5262952f0b7c542a41c3b1f8fd63fb8880e9bc Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 04:44:47 +0800
-Subject: [PATCH 2/3] fix(review): isolate mirror scenes from render_scale
+Subject: [PATCH 2/4] fix(review): isolate mirror scenes from render_scale
  hints
 
 Review findings on the render_scale feature commit:
@@ -690,12 +690,12 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
  9 files changed, 86 insertions(+), 35 deletions(-)
 
 diff --git a/docs/user/configuration.md b/docs/user/configuration.md
-index 4056bf7e..b0e471e5 100644
+index 8ad749b6..4910f644 100644
 --- a/docs/user/configuration.md
 +++ b/docs/user/configuration.md
-@@ -101,7 +101,7 @@ honor_restored_maximize = false
+@@ -103,7 +103,7 @@ honor_restored_maximize = false
  
- `Xwayland` must be installed and available on `PATH` when X11 support is enabled. It starts when the first X11 application connects.
+ X11 bounding shapes clip windows to their visible regions, including holes and separate rectangles. Shape changes apply while the window is open and are preserved in overview previews, window captures, and close animations. Input shapes remain independent, so a click-through overlay can keep drawing its visible widgets.
  
 -X11 applications have no per-output scale. By default they see every output at its logical size, and Umbriel upscales their windows on outputs with a scale above 1, which looks soft. With `xwayland_native_resolution = true` they see each output at its rendered size instead — its `render_scale`, or its scale when `render_scale` is unset: a `3840x2160` output at scale `1.25` appears to them as `3840x2160` rather than `3072x1728`. Their windows render at one pixel per screen pixel and stay sharp, but X11 applications that do not scale their own interface look smaller on scaled outputs. Games benefit most.
 +X11 applications have no per-output scale. By default they see every output at its logical size, and Umbriel upscales their windows on outputs with a scale above 1, which looks soft. With `xwayland_native_resolution = true` they see each output at its rendered size instead — its `render_scale`, or its scale when `render_scale` is unset: a `3840x2160` output at scale `1.25` appears to them as `3840x2160` rather than `3072x1728`. Their windows render at one pixel per rendered pixel and stay sharp, but X11 applications that do not scale their own interface look smaller on scaled outputs. Games benefit most.
@@ -880,7 +880,7 @@ index 496beffc..f2eac0ef 100644
  
  UMBRIEL_TEST(outputWorkspaceAxisAcceptsOnlyItsTwoNames) {
 diff --git a/umbrielfx/include/umbrielfx/types/wlr_scene.h b/umbrielfx/include/umbrielfx/types/wlr_scene.h
-index daa65db3..f222a9a4 100644
+index a264149d..dbf8dfae 100644
 --- a/umbrielfx/include/umbrielfx/types/wlr_scene.h
 +++ b/umbrielfx/include/umbrielfx/types/wlr_scene.h
 @@ -587,7 +587,9 @@ void wlr_scene_set_color_manager_v1(struct wlr_scene* scene, struct wlr_color_ma
@@ -946,10 +946,10 @@ index 6e1cce87..09534e35 100644
 2.56.0.236.g7e34d8174d
 
 
-From 05ac404a2e2e5ae98914104d4917949ca2b92e6e Mon Sep 17 00:00:00 2001
+From feae22dcd839e1827706d7e9f9154fefbfce5cfb Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 09:55:07 +0800
-Subject: [PATCH 3/3] fix(review): pin mirror isolation and harden the
+Subject: [PATCH 3/4] fix(review): pin mirror isolation and harden the
  render_scale checks
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -1232,6 +1232,89 @@ index 900d0534..cfb139ae 100644
  
    size_t output_num = ++last_output_num;
    char name[64];
+-- 
+2.56.0.236.g7e34d8174d
+
+
+From 0e4840168d9897fffcc5b74792dce7215e042409 Mon Sep 17 00:00:00 2001
+From: ZhangDM-520 <jixianqiang1540@gmail.com>
+Date: Mon, 26 Oct 2026 13:07:25 +0800
+Subject: [PATCH 4/4] fix(xwayland): keep the X output rectangle in
+ render-scale pixels
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+With xwayland_native_resolution, X coordinates scale by region.scale —
+now the render scale — but the X rectangle Xwayland receives stayed at
+the physical mode size. The two mappings disagree as soon as
+render_scale differs from scale: a fullscreen X11 window is configured
+to the physical width (the whole-output special case), then drawn
+through the render-scale factor — at scale 1.25 / render_scale 2.0 it
+filled 62.5% of the screen (and overshot with render_scale below
+scale). Multi-output positions spread by the largest render scale
+while the boxes stayed physical, leaving gaps and overlaps.
+
+Scale the transformed resolution by the same factor the coordinate
+mapping uses (render_scale / scale). A render scale that follows the
+logical one has factor 1 and keeps the physical size exactly.
+
+Pinned in nativeScreenPublishesTheRenderScale: the whole-output width
+and height, the toX/toLayout round-trips through the rectangle, and
+right-neighbour adjacency under a 2x render scale (mutation-proven:
+the physical rectangle fails the pin).
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+---
+ src/xwayland/outputs.cpp        |  6 ++++++
+ tests/unit/xwayland_outputs.cpp | 16 ++++++++++++++++
+ 2 files changed, 22 insertions(+)
+
+diff --git a/src/xwayland/outputs.cpp b/src/xwayland/outputs.cpp
+index 4d244390..16662d09 100644
+--- a/src/xwayland/outputs.cpp
++++ b/src/xwayland/outputs.cpp
+@@ -92,7 +92,13 @@ namespace umbriel {
+       if (m_nativeResolution) {
+         // X11 clients render at the output's render scale, like Wayland clients.
+         region.scale = m_renderScale != nullptr ? m_renderScale(output) : static_cast<double>(output->scale);
++        // X coordinates measure render-scale pixels, so the X rectangle must
++        // too: scale the physical resolution by the same factor the mapping
++        // uses. A render scale that follows the logical one has factor 1 and
++        // keeps the physical size exactly.
+         wlr_output_transformed_resolution(output, &region.x.width, &region.x.height);
++        region.x.width = scaled(region.x.width, region.scale / output->scale);
++        region.x.height = scaled(region.x.height, region.scale / output->scale);
+       }
+       positionScale = std::max(positionScale, region.scale);
+       regions.push_back({.output = output, .region = region});
+diff --git a/tests/unit/xwayland_outputs.cpp b/tests/unit/xwayland_outputs.cpp
+index 133068d9..63e04649 100644
+--- a/tests/unit/xwayland_outputs.cpp
++++ b/tests/unit/xwayland_outputs.cpp
+@@ -169,6 +169,22 @@ UMBRIEL_TEST(nativeScreenPublishesTheRenderScale) {
+   CHECK_EQ(main.scale, 2.5);
+   CHECK_EQ(main.toXWidth(1000), 2500);
+   CHECK_EQ(main.toLayoutWidth(2500), 1000);
++
++  // The whole-output mapping must agree with the coordinate mapping: a
++  // fullscreen X window is configured to the X rectangle and drawn through the
++  // same scale. The rectangle measures render-scale pixels (3072 logical x
++  // 2.5), not the physical mode.
++  CHECK_EQ(main.x.width, 7680);
++  CHECK_EQ(main.x.height, 4320);
++  CHECK_EQ(main.toXWidth(main.layout.width), main.x.width);
++  CHECK_EQ(main.toX(main.layout.x + main.layout.width), main.x.x + main.x.width);
++  CHECK_EQ(main.toLayoutWidth(main.x.width), main.layout.width);
++
++  // Multi-output positions spread by the same factor as the rectangles, so
++  // the right neighbour still starts where the scaled output ends.
++  const umbriel::XwaylandRegion right = outputs.region(fixture.outputs[2], 0, 0);
++  CHECK_EQ(right.x.x, main.x.x + main.x.width);
++  CHECK_EQ(right.x.y, main.x.y);
+ }
+ 
+ int main() { return RUN_TESTS(); }
 -- 
 2.56.0.236.g7e34d8174d
 

@@ -17414,3 +17414,8 @@ the timestamp (the inhibited window is user-present time). Source pin
 removed (#branch=main restored). Learned/reinforced: `git apply -3` stages
 the cleanly-applied files — regenerate with `git diff HEAD`, never `git
 diff`, or the patch silently drops those files.
+
+## 2026-10-26 22:0x — umbriel-git: 0012 refresh (PR #573 rebased) + 0014 re-cut
+- 0012-per-output-render-scale.patch regenerated over `d9497f36..0e484016` (4 commits, sha256 98b2ba72…) after #573 was rebased onto main `d9497f36`; PKGBUILD sha/comment re-wired.
+- 0014-downsample-box.patch re-cut on the new #573 head (`0e484016..e55760a5`, 3 commits, sha256 966fe79f…; one appearance.md union with main's bounding-shape sentence). PKGBUILD comment updated.
+- Stack rehearsal on main@d9497f36: 0008/0009/0011/0012/0013/0014/0016 OK; 0015 (untracked in-flight wiring) FAILS in tests/unit/gesture_physics.cpp — pre-existing collision with 0011 (both append test blocks at the same anchor), fails on a stack without 0012 too. Left for the wiring owner; remedy = re-cut 0015's slice on the stacked base or union the two test blocks.
