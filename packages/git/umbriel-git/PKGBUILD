@@ -9,7 +9,7 @@ source "$startdir/../../../lib/pgo.sh"
 pkgname=umbriel-git
 _pkgname=umbriel
 pkgver=0.1.0.r1394.fd0a6e9
-pkgrel=1
+pkgrel=2
 epoch=1
 pkgdesc='A Wayland compositor built on wlroots'
 arch=('x86_64' 'aarch64')
@@ -58,12 +58,10 @@ provides=("umbriel=${pkgver}")
 conflicts=('umbriel')
 source=("${_pkgname}::git+${url}.git#branch=main"
         '0008-strip-travel-scale.patch'
-        '0009-hot-corner-overview.patch'
-        '0010-wide-columns.patch')
+        '0009-hot-corner-overview.patch')
 sha256sums=('SKIP'
             '03258711f3a2afdcd53dc3cff3a90180e97b4297e59245604d087826ee37581c'
-            '2600cb2ce8eee8f06f6d7cf557d862d139751091210e002ee7d818c6ec911fff'
-            'd5698040b2ea523620a154410bb043d99e6191c8359dcb1caad187ac4d210393')
+            '2600cb2ce8eee8f06f6d7cf557d862d139751091210e002ee7d818c6ec911fff')
 
 pkgver() {
   cd "${_pkgname}"
@@ -94,7 +92,8 @@ prepare() {
   # #559/#560, rebuffed upstream and retired 2026-10-25; 0007, the
   # deform-settle-crop fix, retired the same day — it was cut on the 0005/0006
   # stack, and the main-based variant returns rebased when that thread
-  # restarts.)
+  # restarts; 0010, PR #569's wide columns, merged upstream 5e241f54 and
+  # retired.)
   git apply -3 ../0008-strip-travel-scale.patch
 
   # Hot corners fire while the overview is open: the modal gate no longer
@@ -105,16 +104,12 @@ prepare() {
   # PR #566, 0009 → PR #568.)
   git apply -3 ../0009-hot-corner-overview.patch
 
-  # Scrolling columns wider than the output: the strip pans across the full
-  # column width instead of clamping at the output edge. Upstream PR
-  # noctalia-dev/umbriel#569; same refresh procedure. (Retire on merge.)
-  git apply -3 ../0010-wide-columns.patch
-
   # DEFERRED (user settling the thread): PR #570 (drag-release re-home waits
   # for the deform settle) has a ready patch held in the tree but NOT wired:
   # 0011-drag-deform-settle-crop.patch (sha256 fdd41ca1…, full range
-  # 77ec5ae6..7ac93ec1 — two commits, cut against the wide-columns base; apply
-  # after 0010). Wire it into source/sha/prepare when the thread settles.
+  # 77ec5ae6..7ac93ec1 — two commits, cut against the wide-columns base). Its
+  # base PR #569 merged upstream (5e241f54), so wire it after the 0008/0009
+  # stack when the thread settles.
 }
 
 build() {
