@@ -1,5 +1,5 @@
 diff --git a/src/dbus/idle/screensaver_service.cpp b/src/dbus/idle/screensaver_service.cpp
-index 57e97e61fc..77ba203f3a 100644
+index 57e97e61f..77ba203f3 100644
 --- a/src/dbus/idle/screensaver_service.cpp
 +++ b/src/dbus/idle/screensaver_service.cpp
 @@ -210,8 +210,10 @@ void ScreenSaverService::applyLogindBlockInhibited(const std::string& inhibits)
@@ -30,7 +30,7 @@ index 57e97e61fc..77ba203f3a 100644
  
  void ScreenSaverService::onInhibitDelta(std::int64_t delta) {
 diff --git a/src/idle/idle_manager.cpp b/src/idle/idle_manager.cpp
-index a63fb22bba..60f32e77d3 100644
+index 804e5ddb2..3e7da86e7 100644
 --- a/src/idle/idle_manager.cpp
 +++ b/src/idle/idle_manager.cpp
 @@ -19,6 +19,13 @@ namespace {
@@ -47,7 +47,7 @@ index a63fb22bba..60f32e77d3 100644
    const ext_idle_notification_v1_listener kIdleNotificationListener = {
        .idled = &IdleManager::handleIdled,
        .resumed = &IdleManager::handleResumed,
-@@ -67,19 +74,69 @@ void IdleManager::notifyLiveIdleChanged() {
+@@ -67,19 +74,72 @@ void IdleManager::notifyLiveIdleChanged() {
  
  void IdleManager::setScreenSaverInhibitLocks(std::int64_t locks) {
    const std::int64_t next = std::max<std::int64_t>(0, locks);
@@ -59,9 +59,9 @@ index a63fb22bba..60f32e77d3 100644
    m_screenSaverInhibitLocks = next;
 -  const bool inhibited = m_screenSaverInhibitLocks > 0;
 -  if (!wasInhibited && inhibited) {
+-    const bool wasIdle = m_heartbeatCompositorIdle;
 -    m_heartbeatCompositorIdle = false;
--    if (m_liveIdleSeconds != 0) {
--      m_liveIdleSeconds = 0;
+-    if (wasIdle) {
 -      notifyLiveIdleChanged();
 +
 +  if (m_screenSaverInhibitLocks > 0) {
@@ -73,8 +73,10 @@ index a63fb22bba..60f32e77d3 100644
 +    if (!wasInhibited) {
 +      // Playback started mid-fade: abort it rather than blanking the screen over a fresh video.
 +      cancelActiveGrace(true);
-+      if (m_liveIdleSeconds != 0) {
-+        m_liveIdleSeconds = 0;
++      // The live idle readout is suppressed while inhibited (liveIdleSeconds() reports 0);
++      // the compositor's idle is still recorded, and release re-announces it. Tell listeners
++      // the readout visibly changed only if it had been showing idle.
++      if (m_heartbeatCompositorIdle) {
 +        notifyLiveIdleChanged();
 +      }
 +    }
@@ -105,9 +107,10 @@ index a63fb22bba..60f32e77d3 100644
 +
 +  // The heartbeat's `idled` was withheld while inhibited, and ext-idle-notify forbids resending it
 +  // without an intervening `resumed` — so without this the live status stays "active" until the user
-+  // touches an input device, no matter how long the seat has actually been idle.
-+  if (m_heartbeatCompositorIdle && m_liveIdleSeconds == 0) {
-+    m_liveIdleSeconds = 1;
++  // touches an input device, no matter how long the seat has actually been idle. The idle readout
++  // counts from the release: the inhibited window is user-present time, not idle time.
++  if (m_heartbeatCompositorIdle) {
++    m_heartbeatIdleSince = std::chrono::steady_clock::now();
 +    notifyLiveIdleChanged();
 +  }
 +}
@@ -127,7 +130,7 @@ index a63fb22bba..60f32e77d3 100644
    }
  }
  
-@@ -89,14 +146,23 @@ void IdleManager::setSessionLocked(bool locked) {
+@@ -89,14 +149,23 @@ void IdleManager::setSessionLocked(bool locked) {
    }
    m_sessionLocked = locked;
    if (!locked) {
@@ -153,16 +156,16 @@ index a63fb22bba..60f32e77d3 100644
  }
  
  double IdleManager::effectiveTimeoutSeconds(const IdleBehaviorConfig& config) const {
-@@ -140,7 +206,7 @@ void IdleManager::reload(const IdleConfig& config) {
+@@ -140,7 +209,7 @@ void IdleManager::reload(const IdleConfig& config) {
  }
  
- void IdleManager::onSecondTick() {
--  if (m_heartbeatCompositorIdle && m_screenSaverInhibitLocks == 0) {
-+  if (m_heartbeatCompositorIdle && !screenSaverInhibited()) {
-     ++m_liveIdleSeconds;
+ std::int64_t IdleManager::liveIdleSeconds() const noexcept {
+-  if (!m_heartbeatCompositorIdle) {
++  if (!m_heartbeatCompositorIdle || screenSaverInhibited()) {
+     return 0;
    }
- }
-@@ -183,14 +249,18 @@ void IdleManager::clearBehaviors() {
+   const auto elapsed = std::chrono::steady_clock::now() - m_heartbeatIdleSince;
+@@ -183,14 +252,18 @@ void IdleManager::clearBehaviors() {
    m_behaviors.clear();
  }
  
@@ -184,7 +187,7 @@ index a63fb22bba..60f32e77d3 100644
      runResumeBehavior(behavior);
    }
  
-@@ -218,18 +288,18 @@ void IdleManager::recreateBehaviorNotification(BehaviorState& behavior) {
+@@ -218,18 +291,18 @@ void IdleManager::recreateBehaviorNotification(BehaviorState& behavior) {
  void IdleManager::syncBehaviorNotification(BehaviorState& behavior) {
    if (behavior.phase == BehaviorPhase::Waiting
        && behavior.notificationTimeoutMs != effectiveTimeoutMilliseconds(behavior.config)) {
@@ -206,7 +209,7 @@ index a63fb22bba..60f32e77d3 100644
    }
    kLog.debug("idle behavior notifications re-armed");
  }
-@@ -259,7 +329,7 @@ void IdleManager::createBehavior(const IdleBehaviorConfig& config) {
+@@ -259,7 +332,7 @@ void IdleManager::createBehavior(const IdleBehaviorConfig& config) {
    auto behavior = std::make_unique<BehaviorState>();
    behavior->owner = this;
    behavior->config = config;
@@ -215,7 +218,7 @@ index a63fb22bba..60f32e77d3 100644
    kLog.info(
        "registered idle behavior '{}' timeout={}s locked_timeout={}s", config.name, config.timeoutSeconds,
        config.lockedTimeoutSeconds
-@@ -375,13 +445,14 @@ void IdleManager::handleIdled(void* data, ext_idle_notification_v1* /*notificati
+@@ -375,13 +448,14 @@ void IdleManager::handleIdled(void* data, ext_idle_notification_v1* /*notificati
    }
  
    IdleManager& self = *behavior->owner;
@@ -235,7 +238,7 @@ index a63fb22bba..60f32e77d3 100644
      return;
    }
  
-@@ -455,10 +526,12 @@ void IdleManager::handleHeartbeatIdled(void* data, ext_idle_notification_v1* /*n
+@@ -455,10 +529,12 @@ void IdleManager::handleHeartbeatIdled(void* data, ext_idle_notification_v1* /*n
    if (self == nullptr) {
      return;
    }
@@ -247,11 +250,11 @@ index a63fb22bba..60f32e77d3 100644
      return;
    }
 -  self->m_heartbeatCompositorIdle = true;
-   self->m_liveIdleSeconds = 1;
+   // The compositor reports idle only once the heartbeat timeout has already elapsed.
+   self->m_heartbeatIdleSince = std::chrono::steady_clock::now() - std::chrono::milliseconds(kHeartbeatTimeoutMs);
    self->notifyLiveIdleChanged();
- }
 diff --git a/src/idle/idle_manager.h b/src/idle/idle_manager.h
-index 0077deabaa..f38e7f835a 100644
+index 0137c44ff..e45d706df 100644
 --- a/src/idle/idle_manager.h
 +++ b/src/idle/idle_manager.h
 @@ -69,14 +69,22 @@ private:
@@ -289,7 +292,7 @@ index 0077deabaa..f38e7f835a 100644
    std::uint64_t m_graceGeneration = 0;
 @@ -100,6 +109,6 @@ private:
    bool m_heartbeatCompositorIdle = false;
-   std::int64_t m_liveIdleSeconds = 0;
+   std::chrono::steady_clock::time_point m_heartbeatIdleSince;
    std::int64_t m_screenSaverInhibitLocks = 0;
 -  bool m_idledWhileScreenSaverInhibited = false;
 +  bool m_inhibitReleasePending = false;

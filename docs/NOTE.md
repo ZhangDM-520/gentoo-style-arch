@@ -17393,3 +17393,24 @@ Mechanics notes (two lessons reinforced):
 - Journals updated: deform-settle-crop.md (0011 WIRED, watch → PR #570),
   478-render-scale.md (0012 WIRED, watch → PR #573). 0008/0009 watches
   unchanged and live (PRs #566/#568 still open).
+
+## 2026-10-26 — noctalia idle patch rebased onto main@1af14b8c (plugin API 43)
+
+Owner confusion: the settings plugin page offers plugins needing plugin_api
+43 while the installed build advertised 34 — the build was the PINNED
+ee75f7adc reproduction (last green), not current main. Confirmed from the
+source: ee75f7adc = API 34 (kWidgetHoverHighlightPluginApiVersion),
+main@1af14b8c = API 43 (kContainerColorRolesPluginApiVersion).
+
+Rebase of 0001-idle-lock-resume-and-inhibit-tracking.patch onto 1af14b8c:
+main replaced the m_liveIdleSeconds counter with a m_heartbeatIdleSince
+timestamp model (liveIdleSeconds()) while the PR's inhibit-debounce chain
+and withheld-idle recording live in the same slots. Merge semantics kept
+both: the compositor idle is recorded even while inhibited (ext-idle-notify
+cannot resend idled without resumed), the readout is suppressed through
+screenSaverInhibited() (covers the 1s debounce window like the old counter
+guard), inhibit acquire notifies on visible change, and release restarts
+the timestamp (the inhibited window is user-present time). Source pin
+removed (#branch=main restored). Learned/reinforced: `git apply -3` stages
+the cleanly-applied files — regenerate with `git diff HEAD`, never `git
+diff`, or the patch silently drops those files.

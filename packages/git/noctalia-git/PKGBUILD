@@ -2,7 +2,7 @@
 
 pkgname=noctalia-git
 _pkgname=noctalia
-pkgver=5.3.0.r5873.gee75f7adc
+pkgver=5.3.0.r5994.g1af14b8cd
 pkgrel=1
 pkgdesc='A sleek, customizable desktop shell crafted for Wayland'
 arch=('x86_64' 'aarch64')
@@ -61,15 +61,10 @@ makedepends=(
 options=('!debug' 'lto')
 provides=('noctalia')
 conflicts=('noctalia' 'noctalia-bin')
-source=("${_pkgname}::git+${url}.git#commit=ee75f7adcc012f2b02852b655769758cce7eb721"
-        # TEMPORARY pin: the idle patch below is rebased onto ee75f7adc and
-        # 3-way conflicts against current main (1af14b8c) — #branch=main
-        # builds fail in prepare() until the patch is rebased and this goes
-        # back to #branch=main. The pin reproduces the last green build
-        # (5.3.0.r5873.gee75f7adc-1) exactly. PR #4002 still OPEN.
+source=("${_pkgname}::git+${url}.git#branch=main"
         0001-idle-lock-resume-and-inhibit-tracking.patch)
 sha256sums=('SKIP'
-            '0a952b005b7ede29177f0205b52e7c3333d84d1200d3c9ffb6824c8a5b43197e')
+            '1a582aac227369cca7bd1eac072875e6c5a7998a63e8ed3e0c8338569d1903fe')
 
 pkgver() {
   cd "${_pkgname}"
@@ -95,10 +90,14 @@ prepare() {
   # code-only diff — the PR's docs/user/services/idle.mdx hunks are excluded. REBASED 2026-10-20
   # onto upstream main ee75f7adcc (3-way): idle_manager.{cpp,h} were resolved over upstream
   # b0af9ffde's lock fixes, which cover #4002's lock-side intent independently (#4843); the
-  # inhibit-debounce chain is still patch-only. Refresh the snapshot whenever #4002 gains commits
-  # (pre-flight `git apply -3` against current main first: this source floats on #branch=main);
-  # drop the patch, its source/sha256sums entry and this prepare() once #4002 merges. The -dirty
-  # version suffix is the reminder that the patch is in.
+  # inhibit-debounce chain is still patch-only. REBASED AGAIN 2026-10-26 onto main 1af14b8c:
+  # upstream replaced the m_liveIdleSeconds counter with a m_heartbeatIdleSince timestamp model
+  # (liveIdleSeconds()), so the patch's counter fixups were re-expressed against it (the withheld
+  # compositor idle is recorded while inhibited, the readout is suppressed via
+  # screenSaverInhibited(), and release restarts the timestamp). Refresh the snapshot whenever
+  # #4002 gains commits (pre-flight `git apply -3` against current main first: this source floats
+  # on #branch=main); drop the patch, its source/sha256sums entry and this prepare() once #4002
+  # merges. The -dirty version suffix is the reminder that the patch is in.
   # Verified on niri 26.04: /sys/class/drm/<connector>/dpms goes On at the lock without it.
   git apply -3 ../0001-idle-lock-resume-and-inhibit-tracking.patch
 }
