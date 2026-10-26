@@ -1,7 +1,7 @@
-From 05a09629ace754a07b9f904afc71aec17b2a8dde Mon Sep 17 00:00:00 2001
+From 5ddc8c6d3b5915ce55803b438d0d438fe9cba6bd Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 18:19:43 +0800
-Subject: [PATCH 01/10] feat(color): characterize outputs from ICC/EDID and map
+Subject: [PATCH 01/11] feat(color): characterize outputs from ICC/EDID and map
  the SDR gamut
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -2352,10 +2352,10 @@ index 4800e27c..38bc70ac 100644
 2.56.0.236.g7e34d8174d
 
 
-From 02dfcecb794e803f3deff6d5bb62a44b7383eafc Mon Sep 17 00:00:00 2001
+From 282274f843968aaab5def3a7a4d669a911e55f2a Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 18:19:43 +0800
-Subject: [PATCH 02/10] feat(color): ICC image descriptions and icc_file
+Subject: [PATCH 02/11] feat(color): ICC image descriptions and icc_file
  advertising
 
 Characterized output and preferred descriptions report the panel's custom
@@ -4049,10 +4049,10 @@ index 06024dbe..d7a07a23 100644
 2.56.0.236.g7e34d8174d
 
 
-From bf9524bd3345d44d80ae4c617a579820f0b71108 Mon Sep 17 00:00:00 2001
+From 396a93ad8a0fe22be04a92e0781851cd8776cee1 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 18:19:52 +0800
-Subject: [PATCH 03/10] test(color): live color-profile coverage
+Subject: [PATCH 03/11] test(color): live color-profile coverage
 
 The check drives the creator over the wire (ready, failed, get_information
 denial, bad_size), pins the icc_file bytes against the configured profile,
@@ -4376,10 +4376,10 @@ index 00000000..e1530639
 2.56.0.236.g7e34d8174d
 
 
-From 6ac759f61484f84cc9ded90e8cf7cf29af3a104d Mon Sep 17 00:00:00 2001
+From 8919941010ecf6daef4127426205a40cdefbe3d1 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 18:19:52 +0800
-Subject: [PATCH 04/10] docs(color): document color profiles and client ICC
+Subject: [PATCH 04/11] docs(color): document color profiles and client ICC
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 ---
@@ -4473,10 +4473,10 @@ index 01bff86c..58100200 100644
 2.56.0.236.g7e34d8174d
 
 
-From a2499f11af97ca95276fb868ffe3471215accdb3 Mon Sep 17 00:00:00 2001
+From 78fb27a30cc495ab26d1cf479e66c58947d5bb6c Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 18:53:26 +0800
-Subject: [PATCH 05/10] fix(color): fold composed LUT stages and fix the
+Subject: [PATCH 05/11] fix(color): fold composed LUT stages and fix the
  wideness white point
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -4870,10 +4870,10 @@ index 04317a4c..fb0d5b5c 100644
 2.56.0.236.g7e34d8174d
 
 
-From 1299c942fb19498a58888b8c6be7ecf3f510bf6d Mon Sep 17 00:00:00 2001
+From bad8c295b392642781741ec42d6b8970bd77f7b0 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Tue, 27 Oct 2026 00:36:57 +0800
-Subject: [PATCH 06/10] fix(color): address the external review round
+Subject: [PATCH 06/11] fix(color): address the external review round
 
 Memory safety: close the icc_file memfd after marshalling (libwayland dups;
 64-request storm leaked 64 fds before), release the LUT fold inputs exactly
@@ -9087,10 +9087,10 @@ index fb0d5b5c..b73aaec5 100644
 2.56.0.236.g7e34d8174d
 
 
-From 8ff074101f3d39641388c9065630d9f2278f310b Mon Sep 17 00:00:00 2001
+From 9bd815c92d772baa025bdb2af17881432e5d88a7 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Tue, 27 Oct 2026 06:15:27 +0800
-Subject: [PATCH 07/10] fix(color): polish items from external review round 2
+Subject: [PATCH 07/11] fix(color): polish items from external review round 2
 
 - Clamp lut_row_eval input to [0, 1] so negative lerp rounding cannot
   underflow the size_t table index.
@@ -9218,10 +9218,10 @@ index c68d62c0..83de1d5c 100644
 2.56.0.236.g7e34d8174d
 
 
-From 2ccbedb3db07ba452c3e34b5807a801437978d11 Mon Sep 17 00:00:00 2001
+From 995cb82891e79d05a7e4d20821b8ab2224ac5bd5 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Tue, 27 Oct 2026 07:02:31 +0800
-Subject: [PATCH 08/10] style(color): normalize formatting in the lut-fold test
+Subject: [PATCH 08/11] style(color): normalize formatting in the lut-fold test
  hook and pins
 
 clang-format (repo .clang-format, CI's dry-run command) rewraps the
@@ -9282,10 +9282,10 @@ index b73aaec5..ae56cff9 100644
 2.56.0.236.g7e34d8174d
 
 
-From 0943f5c04509b8feaf1c55e54e503d9fc515e7f2 Mon Sep 17 00:00:00 2001
+From edf8fc35fb6a7639aab74af608128611cede1db3 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Tue, 27 Oct 2026 07:21:00 +0800
-Subject: [PATCH 09/10] fix(color): bind range-for loop variables by reference
+Subject: [PATCH 09/11] fix(color): bind range-for loop variables by reference
  in tests
 
 GCC 16 warns -Wrange-loop-construct on loop variables copied from const
@@ -9330,10 +9330,10 @@ index 06a01539..fd3db1cc 100644
 2.56.0.236.g7e34d8174d
 
 
-From 27c65808dda9faec5e2dc4cb5f38e0cb5b80bb2c Mon Sep 17 00:00:00 2001
+From aebf5cfdc00fc247d5ed863565272c3544a37db8 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Tue, 27 Oct 2026 07:25:17 +0800
-Subject: [PATCH 10/10] style(color): wrap the white-point range-for under the
+Subject: [PATCH 10/11] style(color): wrap the white-point range-for under the
  column limit
 
 The reference-binding fix pushed the loop header past 120 columns;
@@ -9359,6 +9359,139 @@ index fd3db1cc..eea74f17 100644
      panel.white = {.x = whitePoint.first, .y = whitePoint.second};
      for (const umbriel::PanelTransfer& transfer : transfers) {
        umbriel::PanelColorimetry colorimetry{
+-- 
+2.56.0.236.g7e34d8174d
+
+
+From 9d68403ae62bf8a6b482c68848a613b07725f328 Mon Sep 17 00:00:00 2001
+From: ZhangDM-520 <jixianqiang1540@gmail.com>
+Date: Tue, 27 Oct 2026 07:56:53 +0800
+Subject: [PATCH 11/11] style(color): adopt clang-tidy suggestions in the color
+ code
+
+CI's lint job (clang-tidy -warnings-as-errors) flagged ten findings the
+local toolchain sweeps never ran (just lint was skipped on the belief
+just was unavailable). All four checks are now clean:
+
+- modernize-use-emplace: four literal push_back calls on warning lists.
+- performance-unnecessary-copy-initialization: profilePath alias binds
+  by reference.
+- modernize-use-auto: four static_cast initializations.
+- readability-uppercase-literal-suffix: mutation-fuzz literal 1u -> 1U.
+
+Verified red-then-green with `just lint` on the affected files; tree-wide
+format and diff-check clean; full suite 144/144 on both the snapshot
+toolchain and GCC 16.2.1 (the CI compiler).
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+---
+ src/output/colorimetry.cpp           | 2 +-
+ src/output/colorimetry_icc_lcms2.cpp | 8 ++++----
+ src/output/output.cpp                | 2 +-
+ tests/unit/colorimetry.cpp           | 8 ++++----
+ 4 files changed, 10 insertions(+), 10 deletions(-)
+
+diff --git a/src/output/colorimetry.cpp b/src/output/colorimetry.cpp
+index c51bb59b..af968fb2 100644
+--- a/src/output/colorimetry.cpp
++++ b/src/output/colorimetry.cpp
+@@ -128,7 +128,7 @@ namespace umbriel {
+       return x;
+     }
+     const float position = color_detail::encodeGridPosition(x, transfer.encode.size());
+-    const size_t lower = static_cast<size_t>(position);
++    const auto lower = static_cast<size_t>(position);
+     const size_t upper = std::min(lower + 1, transfer.encode.size() - 1);
+     const float fraction = position - static_cast<float>(lower);
+     return transfer.encode[lower] + (transfer.encode[upper] - transfer.encode[lower]) * fraction;
+diff --git a/src/output/colorimetry_icc_lcms2.cpp b/src/output/colorimetry_icc_lcms2.cpp
+index a0e18ddc..25a1a3fa 100644
+--- a/src/output/colorimetry_icc_lcms2.cpp
++++ b/src/output/colorimetry_icc_lcms2.cpp
+@@ -60,7 +60,7 @@ namespace umbriel {
+         }
+       }
+       if (repaired) {
+-        warnings.push_back("flattened a TRC that was non-finite or non-monotonic");
++        warnings.emplace_back("flattened a TRC that was non-finite or non-monotonic");
+       }
+     }
+ 
+@@ -230,7 +230,7 @@ namespace umbriel {
+       return result;
+     }
+     if (cmsIsTag(profile.get(), cmsSigVcgtTag)) {
+-      result.warnings.push_back("ignoring vcgt tag (a pre-dispatch gamma ramp, not content colorimetry)");
++      result.warnings.emplace_back("ignoring vcgt tag (a pre-dispatch gamma ramp, not content colorimetry)");
+     }
+ 
+     const auto* red = static_cast<const cmsCIEXYZ*>(cmsReadTag(profile.get(), cmsSigRedColorantTag));
+@@ -260,7 +260,7 @@ namespace umbriel {
+       if (color_detail::invert3x3(chadMatrix, frame)) {
+         frameFromChad = true;
+       } else {
+-        result.warnings.push_back("ignoring a singular chad tag");
++        result.warnings.emplace_back("ignoring a singular chad tag");
+       }
+     }
+     if (!frameFromChad) {
+@@ -334,7 +334,7 @@ namespace umbriel {
+     std::vector<std::string> channelNotes;
+     if (!sameCurve(redDecode, evaluateCurve(greenTrc, channelNotes))
+         || !sameCurve(redDecode, evaluateCurve(blueTrc, channelNotes))) {
+-      result.warnings.push_back("per-channel TRCs differ; using the red channel curve");
++      result.warnings.emplace_back("per-channel TRCs differ; using the red channel curve");
+     }
+ 
+     if (matchesDecode(redDecode, srgbDecodeSample)) {
+diff --git a/src/output/output.cpp b/src/output/output.cpp
+index 39d7bf9d..940da816 100644
+--- a/src/output/output.cpp
++++ b/src/output/output.cpp
+@@ -534,7 +534,7 @@ namespace umbriel {
+       // since. O_NONBLOCK plus the regular-file check keeps a FIFO or device
+       // path from blocking the compositor thread.
+       constexpr size_t kMaxProfileBytes = 32 * 1024 * 1024;
+-      const std::string profilePath = source;
++      const std::string& profilePath = source;
+       std::vector<uint8_t> bytes;
+       const int fd = open(profilePath.c_str(), O_RDONLY | O_CLOEXEC | O_NONBLOCK);
+       if (fd < 0) {
+diff --git a/tests/unit/colorimetry.cpp b/tests/unit/colorimetry.cpp
+index eea74f17..b7e91b70 100644
+--- a/tests/unit/colorimetry.cpp
++++ b/tests/unit/colorimetry.cpp
+@@ -269,10 +269,10 @@ namespace {
+   // and the exact first crossing wherever that image is narrow enough for the
+   // exactness tolerance to mean anything.
+   void expectGeneralizedInverse(const umbriel::PanelTransfer& transfer, const std::vector<float>& envelope) {
+-    const float envelopeScale = static_cast<float>(envelope.size() - 1);
++    const auto envelopeScale = static_cast<float>(envelope.size() - 1);
+     const auto envelopeAt = [&](float encoded) {
+       const float position = std::clamp(encoded, 0.0F, 1.0F) * envelopeScale;
+-      const size_t lower = static_cast<size_t>(position);
++      const auto lower = static_cast<size_t>(position);
+       const size_t upper = std::min(lower + 1, envelope.size() - 1);
+       const float fraction = position - static_cast<float>(lower);
+       return envelope[lower] + (envelope[upper] - envelope[lower]) * fraction;
+@@ -280,7 +280,7 @@ namespace {
+     const auto crossingOf = [&](float target) {
+       return static_cast<float>(std::ranges::lower_bound(envelope, target) - envelope.begin()) / envelopeScale;
+     };
+-    const float tableScale = static_cast<float>(transfer.encode.size() - 1);
++    const auto tableScale = static_cast<float>(transfer.encode.size() - 1);
+     // A curve whose decode does not reach zero makes targets below its floor
+     // unrenderable: the generalized inverse is the clamped position zero and
+     // decoding back lands on the floor, above the probe cell.
+@@ -1542,7 +1542,7 @@ UMBRIEL_TEST(iccMutationFuzzRejectsOrParsesSanely) {
+         bytes[position] = static_cast<uint8_t>(next());
+         break;
+       case 1:
+-        bytes[position] ^= static_cast<uint8_t>(1u << (next() % 8));
++        bytes[position] ^= static_cast<uint8_t>(1U << (next() % 8));
+         break;
+       case 2: {
+         const size_t run = std::min<size_t>(1 + next() % 64, bytes.size() - position);
 -- 
 2.56.0.236.g7e34d8174d
 
