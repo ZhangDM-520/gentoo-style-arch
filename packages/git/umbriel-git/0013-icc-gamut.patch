@@ -1,7 +1,7 @@
-From 85cea5e0928ffcc71789cfdc36f209e9a74d0b56 Mon Sep 17 00:00:00 2001
+From d62cb99b3a50c793d90473b4df04ea403a31fd73 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 18:19:43 +0800
-Subject: [PATCH 1/6] feat(color): characterize outputs from ICC/EDID and map
+Subject: [PATCH 1/7] feat(color): characterize outputs from ICC/EDID and map
  the SDR gamut
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -2352,10 +2352,10 @@ index 4800e27c..38bc70ac 100644
 2.56.0.236.g7e34d8174d
 
 
-From 3a4ba0b0c8cb91c0630eb238195b4bd09876c793 Mon Sep 17 00:00:00 2001
+From a66c82c8deb3cf8d724bd9da0f9c1fbabe0e74cc Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 18:19:43 +0800
-Subject: [PATCH 2/6] feat(color): ICC image descriptions and icc_file
+Subject: [PATCH 2/7] feat(color): ICC image descriptions and icc_file
  advertising
 
 Characterized output and preferred descriptions report the panel's custom
@@ -4049,10 +4049,10 @@ index 06024dbe..d7a07a23 100644
 2.56.0.236.g7e34d8174d
 
 
-From 6de9e4317114368463337d32bf65daae47f17009 Mon Sep 17 00:00:00 2001
+From 4c020d39c4839731ca8339e3fa9f94629820f4de Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 18:19:52 +0800
-Subject: [PATCH 3/6] test(color): live color-profile coverage
+Subject: [PATCH 3/7] test(color): live color-profile coverage
 
 The check drives the creator over the wire (ready, failed, get_information
 denial, bad_size), pins the icc_file bytes against the configured profile,
@@ -4376,17 +4376,17 @@ index 00000000..e1530639
 2.56.0.236.g7e34d8174d
 
 
-From dbc7d0dbd41a1f4c9cad1d9bf1295aaa153cf518 Mon Sep 17 00:00:00 2001
+From 2be192290593b8e257c202295c55592b0e2999e8 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 18:19:52 +0800
-Subject: [PATCH 4/6] docs(color): document color profiles and client ICC
+Subject: [PATCH 4/7] docs(color): document color profiles and client ICC
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 ---
  PACKAGING.md         |  2 +-
- docs/user/outputs.md | 29 +++++++++++++++++++++++++++++
+ docs/user/outputs.md | 30 +++++++++++++++++++++++++++++-
  examples/config.toml |  2 ++
- 3 files changed, 32 insertions(+), 1 deletion(-)
+ 3 files changed, 32 insertions(+), 2 deletions(-)
 
 diff --git a/PACKAGING.md b/PACKAGING.md
 index af46ac69..2df86987 100644
@@ -4402,7 +4402,7 @@ index af46ac69..2df86987 100644
  
  The canonical dependency declarations are in [`meson.build`](meson.build). Distribution package names vary.
 diff --git a/docs/user/outputs.md b/docs/user/outputs.md
-index 65da9d68..d5beeff1 100644
+index 65da9d68..1d418f72 100644
 --- a/docs/user/outputs.md
 +++ b/docs/user/outputs.md
 @@ -44,6 +44,8 @@ Umbriel first uses the first remaining enabled output in its internal output ord
@@ -4414,7 +4414,15 @@ index 65da9d68..d5beeff1 100644
  | `bit_depth`                                | int                               | `8`          | Render bit depth for SDR output: `8` or `10`.                                                         |
  | `workspaces`                               | int, string array, or `"dynamic"` | `"dynamic"`  | Workspace inventory for this output.                                                                  |
  | `min_workspaces`                           | int                               | `1`          | Minimum count for a dynamic output.                                                                   |
-@@ -262,6 +264,33 @@ Existing gamma-control clients, including Night Light tools, can adjust white po
+@@ -51,7 +53,6 @@ Umbriel first uses the first remaining enabled output in its internal output ord
+ | `workspace_axis`                           | string                            | `"vertical"` | Workspace arrangement axis.                                                                           |
+ | `layout.scrolling.default_extent_fraction` | float                             | inherited    | Initial scrolling-column extent on this output, 0.1 to 4.0.                                           |
+ | `screen_effect`                            | string                            | inherited    | Replace `effects.screen` with a screen preset or pool, or `"off"` to disable it on this output.       |
+-
+ Umbriel tries an unadvertised resolution as a custom mode. If it cannot apply the configured mode, it uses the preferred advertised mode and logs a warning. Backend tests include the 8-bit SDR fallback, so a rejected swapchain can reach the preferred mode. On that mode, Umbriel retries the configured HDR and bit-depth preferences. A temporary rendering failure after an accepted backend test retries the current candidate instead of changing modes.
+ 
+ ### Workspace count
+@@ -262,6 +263,33 @@ Existing gamma-control clients, including Night Light tools, can adjust white po
  
  Custom gamma-curve calibration applies only in SDR. Umbriel keeps the client's latest full gamma table and restores it when the output returns to SDR. An HDR white-point adjustment applies to the whole display, including the cursor, and requires composition while active. SDR screenshots and recordings exclude this adjustment.
  
@@ -4465,10 +4473,10 @@ index 01bff86c..58100200 100644
 2.56.0.236.g7e34d8174d
 
 
-From d105b79a34bfab40177b7e5f2c5a560a23ddba30 Mon Sep 17 00:00:00 2001
+From d3382d6bdcc476f1e677150be8d6a3280ff82bda Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 18:53:26 +0800
-Subject: [PATCH 5/6] fix(color): fold composed LUT stages and fix the wideness
+Subject: [PATCH 5/7] fix(color): fold composed LUT stages and fix the wideness
  white point
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -4862,10 +4870,10 @@ index 04317a4c..fb0d5b5c 100644
 2.56.0.236.g7e34d8174d
 
 
-From e4300da82f3c7a581698e9bf704422d08ce1a00d Mon Sep 17 00:00:00 2001
+From d5df4e95949254457daab3650f03e782590d2713 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Tue, 27 Oct 2026 00:36:57 +0800
-Subject: [PATCH 6/6] fix(color): address the external review round
+Subject: [PATCH 6/7] fix(color): address the external review round
 
 Memory safety: close the icc_file memfd after marshalling (libwayland dups;
 64-request storm leaked 64 fds before), release the LUT fold inputs exactly
@@ -4960,10 +4968,10 @@ index 2df86987..7e934ed3 100644
  
  The canonical dependency declarations are in [`meson.build`](meson.build). Distribution package names vary.
 diff --git a/docs/user/outputs.md b/docs/user/outputs.md
-index d5beeff1..4dd0ad46 100644
+index 1d418f72..86b5ba5c 100644
 --- a/docs/user/outputs.md
 +++ b/docs/user/outputs.md
-@@ -268,12 +268,28 @@ Custom gamma-curve calibration applies only in SDR. Umbriel keeps the client's l
+@@ -267,12 +267,28 @@ Custom gamma-curve calibration applies only in SDR. Umbriel keeps the client's l
  
  A wide-color-gamut panel reads every signal in its own primaries. Untagged SDR content carries sRGB-encoded values and no tag, so the panel saturates them into its native gamut: reds and greens more vivid than the content, which is why a window that looks right on an sRGB monitor looks wrong here. Compositors fix this by characterizing the display and converting during composition.
  
@@ -4994,7 +5002,7 @@ index d5beeff1..4dd0ad46 100644
  
  Tagged clients are separate from this policy: whenever a characterization is active, output and preferred color descriptions advertise the panel's real custom primaries under both settings, so applications with explicit color management convert accurately. Their pixels can therefore change as soon as a profile is configured, even under `sdr_gamut = "native"`; untagged content is untouched unless `sdr_gamut = "srgb"` stages the mapping.
  
-@@ -281,7 +297,7 @@ ICC import accepts matrix-shaper profiles only. LUT-based profiles (`A2B0`/`B2A0
+@@ -280,7 +296,7 @@ ICC import accepts matrix-shaper profiles only. LUT-based profiles (`A2B0`/`B2A0
  
  The characterization applies to SDR-mode composition only. Under HDR the PQ/BT.2020 pipeline, `sdr_white`, and `sdr_transfer` behave exactly as described above. Run `umbriel color` to inspect the resolved `panel_primaries` and `panel_transfer` alongside the configured `color_profile` and `sdr_gamut`.
  
@@ -9075,6 +9083,137 @@ index fb0d5b5c..b73aaec5 100644
    }
  
    struct fixture fixture;
+-- 
+2.56.0.236.g7e34d8174d
+
+
+From 4f3312db3b129ec0e28681b86a6746f527da278a Mon Sep 17 00:00:00 2001
+From: ZhangDM-520 <jixianqiang1540@gmail.com>
+Date: Tue, 27 Oct 2026 06:15:27 +0800
+Subject: [PATCH 7/7] fix(color): polish items from external review round 2
+
+- Clamp lut_row_eval input to [0, 1] so negative lerp rounding cannot
+  underflow the size_t table index.
+- Mutate OutputRule::colorProfileMtime directly in the config-change
+  reload mock instead of smuggling mtime through the path query string.
+- Drop history narration and external-codebase wording from test
+  comments.
+- Rename the handleIccSetFile read counter (read -> totalRead) so it no
+  longer shadows POSIX read(2).
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+---
+ src/server/color_manager.cpp     | 8 ++++----
+ tests/unit/color_description.cpp | 2 +-
+ tests/unit/colorimetry.cpp       | 4 ++--
+ tests/unit/config_change.cpp     | 5 +++--
+ umbrielfx/render/color.c         | 6 ++++++
+ 5 files changed, 16 insertions(+), 9 deletions(-)
+
+diff --git a/src/server/color_manager.cpp b/src/server/color_manager.cpp
+index f986e553..06d07289 100644
+--- a/src/server/color_manager.cpp
++++ b/src/server/color_manager.cpp
+@@ -754,12 +754,12 @@ namespace umbriel {
+       }
+       creator->iccSet = true;
+       std::vector<uint8_t> bytes(length);
+-      size_t read = 0;
++      size_t totalRead = 0;
+       if (lseek(fd, offset, SEEK_SET) < 0) {
+         creator->readFailed = true;
+       }
+-      while (!creator->readFailed && read < bytes.size()) {
+-        const ssize_t count = ::read(fd, bytes.data() + read, bytes.size() - read);
++      while (!creator->readFailed && totalRead < bytes.size()) {
++        const ssize_t count = ::read(fd, bytes.data() + totalRead, bytes.size() - totalRead);
+         if (count < 0 && errno == EINTR) {
+           continue;
+         }
+@@ -767,7 +767,7 @@ namespace umbriel {
+           creator->readFailed = true;
+           break;
+         }
+-        read += static_cast<size_t>(count);
++        totalRead += static_cast<size_t>(count);
+       }
+       close(fd);
+       if (!creator->readFailed) {
+diff --git a/tests/unit/color_description.cpp b/tests/unit/color_description.cpp
+index 4255e576..a6258f11 100644
+--- a/tests/unit/color_description.cpp
++++ b/tests/unit/color_description.cpp
+@@ -577,7 +577,7 @@ UMBRIEL_TEST(clientIccValidationRejectsWithoutProtocolErrors) {
+   CHECK(!wrongClass.description.has_value());
+   CHECK(!wrongClass.error.empty());
+ 
+-  // A client LUT profile fails per the wave-1 parser's matrix-shaper rules.
++  // A client LUT profile fails per the matrix-shaper parser rules.
+   std::vector<uint8_t> lutProfile = bytes;
+   {
+     cmsHPROFILE profile = cmsOpenProfileFromMem(lutProfile.data(), static_cast<cmsUInt32Number>(lutProfile.size()));
+diff --git a/tests/unit/colorimetry.cpp b/tests/unit/colorimetry.cpp
+index 5cf77322..06a01539 100644
+--- a/tests/unit/colorimetry.cpp
++++ b/tests/unit/colorimetry.cpp
+@@ -109,7 +109,7 @@ namespace {
+     return bytes;
+   }
+ 
+-  // Matrix-shaper RGB display profile, as Mutter's meta-color-device.c builds them in-test.
++  // Matrix-shaper RGB display profile fixture generator.
+   std::vector<uint8_t> matrixShaperProfile(
+       const cmsCIExyY& white, const cmsCIExyYTRIPLE& primaries, const std::array<cmsToneCurve*, 3>& curves
+   ) {
+@@ -702,7 +702,7 @@ UMBRIEL_TEST(synthesizedEdidProfileRoundTripsThroughTheIccParser) {
+   std::println("skip: built without lcms2");
+ #else
+   // The advertised bytes must describe the same panel the parser recovered
+-  // from the EDID: feed the synthesis back through the wave-1 parser.
++  // from the EDID: feed the synthesis back through the ICC parser.
+   const auto edid = edidWithD65AndGamma22();
+   const wlr_color_primaries defaults = displayP3Primaries();
+   const std::optional<umbriel::PanelColorimetry> source = umbriel::panelColorimetryFromEdid(edid, &defaults);
+diff --git a/tests/unit/config_change.cpp b/tests/unit/config_change.cpp
+index def5f972..2acce2d2 100644
+--- a/tests/unit/config_change.cpp
++++ b/tests/unit/config_change.cpp
+@@ -678,7 +678,8 @@ UMBRIEL_TEST(aRereadProfileRuleWithUnchangedFileChangesNothing) {
+   Config before;
+   OutputRule original;
+   original.name = "HEADLESS-1";
+-  original.colorProfile = "/profiles/panel.icc?mtime=1000000000";
++  original.colorProfile = "/profiles/panel.icc";
++  original.colorProfileMtime = 1000000000;
+   before.outputs.push_back(original);
+ 
+   const Config after = before;
+@@ -686,7 +687,7 @@ UMBRIEL_TEST(aRereadProfileRuleWithUnchangedFileChangesNothing) {
+   CHECK(!ConfigEffects::between(before, after).any());
+ 
+   Config edited = before;
+-  edited.outputs[0].colorProfile = "/profiles/panel.icc?mtime=1000000060";
++  edited.outputs[0].colorProfileMtime = 1000000060;
+   CHECK(ConfigChange::between(before, edited).outputs);
+   const ConfigEffects changed = ConfigEffects::between(before, edited);
+   CHECK(changed.outputState);
+diff --git a/umbrielfx/render/color.c b/umbrielfx/render/color.c
+index c68d62c0..83de1d5c 100644
+--- a/umbrielfx/render/color.c
++++ b/umbrielfx/render/color.c
+@@ -304,6 +304,12 @@ void color_transform_fail_lut_fold_alloc_for_test(bool fail) {
+ // Sample one table row at a normalized position, linearly the way the shaders
+ // sample a LUT.
+ static double lut_row_eval(const uint16_t* row, size_t dim, double x) {
++  if (x <= 0.0) {
++    return row[0] / 65535.0;
++  }
++  if (x >= 1.0) {
++    return row[dim - 1] / 65535.0;
++  }
+   const double position = x * (double)(dim - 1);
+   const size_t lower = (size_t)position;
+   const size_t upper = lower + 1 < dim ? lower + 1 : dim - 1;
 -- 
 2.56.0.236.g7e34d8174d
 
