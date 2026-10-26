@@ -9,7 +9,7 @@ source "$startdir/../../../lib/pgo.sh"
 pkgname=umbriel-git
 _pkgname=umbriel
 pkgver=0.1.0.r1397.76477c2
-pkgrel=1
+pkgrel=2
 epoch=1
 pkgdesc='A Wayland compositor built on wlroots'
 arch=('x86_64' 'aarch64')
@@ -60,12 +60,14 @@ source=("${_pkgname}::git+${url}.git#branch=main"
         '0008-strip-travel-scale.patch'
         '0009-hot-corner-overview.patch'
         '0011-drag-deform-settle-crop.patch'
-        '0012-per-output-render-scale.patch')
+        '0012-per-output-render-scale.patch'
+        '0013-icc-gamut.patch')
 sha256sums=('SKIP'
             '03258711f3a2afdcd53dc3cff3a90180e97b4297e59245604d087826ee37581c'
             '2600cb2ce8eee8f06f6d7cf557d862d139751091210e002ee7d818c6ec911fff'
             '1d92976c7370860d8846773c1bc7aa7a5815ef785f324dcd3bdd80d0aec9f4b5'
-            '475b6445980a4bbd09e59a264fc40203609a23642bda321f039661c52d39011d')
+            '475b6445980a4bbd09e59a264fc40203609a23642bda321f039661c52d39011d'
+            '46f4baea006e267ab9581d21f0b4d699bfc831ec5e394d75e135271c91dcd5ae')
 
 pkgver() {
   cd "${_pkgname}"
@@ -125,6 +127,15 @@ prepare() {
   # (0012-per-output-render-scale.patch, sha256 475b6445…, full range
   # 76477c29..05ac404a — three commits). (Retire on merge: 0012 → PR #573.)
   git apply -3 ../0012-per-output-render-scale.patch
+
+  # [output] color_profile / sdr_gamut: ICC/EDID output characterization and
+  # opt-in SDR gamut mapping (`"srgb"` confines untagged SDR to the sRGB gamut
+  # in the panel's colorimetry; the default `"native"` stages no transform),
+  # plus client ICC image descriptions (`create_icc`) and `icc_file`
+  # advertising. Upstream issue noctalia-dev/umbriel#574; same refresh
+  # procedure (0013-icc-gamut.patch, sha256 46f4baea…, full range
+  # 76477c29..7f380dc3 — four commits). (Retire on merge.)
+  git apply -3 ../0013-icc-gamut.patch
 }
 
 build() {
