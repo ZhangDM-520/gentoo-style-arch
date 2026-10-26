@@ -1,7 +1,7 @@
 From b6d7542a1cf6fbbafea595a07e59bdfcc7bf7598 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 01:52:25 +0800
-Subject: [PATCH 1/2] fix(view): defer the release re-home until the deform
+Subject: [PATCH 1/3] fix(view): defer the release re-home until the deform
  settles
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -377,7 +377,7 @@ index 00000000..0d27b248
 From 7ac93ec1e223dd44a9e9476340ea0c0584f0c214 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 02:31:48 +0800
-Subject: [PATCH 2/2] fix(view): land deferred release re-homes safely (review
+Subject: [PATCH 2/3] fix(view): land deferred release re-homes safely (review
  round)
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -666,6 +666,226 @@ index 0d27b248..cbc9ee13 100644
 +  exit 1
 +fi
  echo "a transferred sheet keeps drawing across the shared edge until the deform settles"
+-- 
+2.56.0.236.g7e34d8174d
+
+
+From 8a3c231da30bfd6a7aa24b3fe7aaae3acf7e8317 Mon Sep 17 00:00:00 2001
+From: ZhangDM-520 <jixianqiang1540@gmail.com>
+Date: Mon, 26 Oct 2026 03:16:29 +0800
+Subject: [PATCH 3/3] fix(view): demote the drag tree only when its last
+ drag-presented view leaves
+
+The F1-F8 round moved the drag-tree demotion into setSceneParent's
+leaving hook, where it fired whenever ANY view left the drag tree. A
+settling release or an elevated transient child unmapping then demoted
+the shared drag tree mid-drag of another window, dropping the held
+window behind fullscreen/pinned until its own release (Talia P2).
+
+The elevation now serves the whole drag presentation: transient
+children follow the departing view home first, and the demotion waits
+until no view remains under the drag tree. Pinned by the new
+drag/settle_overlap_drag check, which freezes the animation clock
+between the two grabs so the overlap cannot race away; red-first
+verified (held green 6400 -> overlap 0 without the gate).
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+---
+ src/view/view.cpp                             |  23 +++-
+ src/view/view.h                               |   2 +
+ .../checks/drag/settle_overlap_drag.sh        | 128 ++++++++++++++++++
+ 3 files changed, 150 insertions(+), 3 deletions(-)
+ create mode 100644 tests/harness/checks/drag/settle_overlap_drag.sh
+
+diff --git a/src/view/view.cpp b/src/view/view.cpp
+index 79ca2427..410588e0 100644
+--- a/src/view/view.cpp
++++ b/src/view/view.cpp
+@@ -802,10 +802,16 @@ namespace umbriel {
+     wlr_scene_node_reparent(&m_sceneTree->node, parent);
+     syncShadowPool();
+     if (leavingDragTree) {
+-      // The drag tree's elevation over pinned/fullscreen served this view; and
+-      // transient children elevated with it follow it home.
+-      wlr_scene_node_place_below(&m_server->dragTree()->node, &m_server->dragIconTree()->node);
++      // Transient children elevated with this view follow it home.
+       syncTransientChildren();
++      // The drag tree's elevation over pinned/fullscreen serves the whole drag
++      // presentation, not just the departing view: a settling release or an
++      // elevated transient child unmapping must not demote a drag that is still
++      // in progress. The elevation drops when the last drag-presented view
++      // leaves (the insert hint is not one).
++      if (!dragTreeOccupied()) {
++        wlr_scene_node_place_below(&m_server->dragTree()->node, &m_server->dragIconTree()->node);
++      }
+     }
+     // Another parent can put the window elsewhere in layout coordinates.
+     if (m_xsurface != nullptr && m_mapped) {
+@@ -836,6 +842,17 @@ namespace umbriel {
+     }
+   }
+ 
++  bool View::dragTreeOccupied() const {
++    const auto views = m_server->registry().all();
++    for (const auto& view : std::views::reverse(views)) {
++      View* other = view.get();
++      if (other != nullptr && other != this && other->m_sceneTree->node.parent == m_server->dragTree()) {
++        return true;
++      }
++    }
++    return false;
++  }
++
+   void View::syncShadowPool() {
+     wlr_scene_tree* pool = m_workspace != nullptr && m_sceneTree->node.parent == m_workspace->viewLayer(true)
+         ? m_workspace->tileShadowLayer()
+diff --git a/src/view/view.h b/src/view/view.h
+index 77925a32..babf2010 100644
+--- a/src/view/view.h
++++ b/src/view/view.h
+@@ -743,6 +743,8 @@ namespace umbriel {
+     void flushReleaseRehome();
+     // Re-points transient children at the trees this view now lives under.
+     void syncTransientChildren();
++    // True while another view still rests under the drag tree.
++    [[nodiscard]] bool dragTreeOccupied() const;
+     // Refits the sheet to the content tree's drawn bounds when they changed, or when the grab moved.
+     void fitDragPhysics(bool grabMoved);
+     struct DragFit {
+diff --git a/tests/harness/checks/drag/settle_overlap_drag.sh b/tests/harness/checks/drag/settle_overlap_drag.sh
+new file mode 100644
+index 00000000..94c043af
+--- /dev/null
++++ b/tests/harness/checks/drag/settle_overlap_drag.sh
+@@ -0,0 +1,128 @@
++#!/usr/bin/env bash
++# A released window's deferred re-home must not demote the drag tree while
++# another drag is in progress. The shared drag tree is elevated over
++# fullscreen once per drag; if the settling window's departure lowers it, the
++# still-held window drops behind the fullscreen window until its own release.
++# The animation clock freezes before the release, so the settling window cannot
++# fall out of the overlap window by wall-clock luck.
++set -euo pipefail
++source "$UMBRIEL_HARNESS_LIB"
++
++readonly BTN_LEFT=272
++readonly OUTPUT_W=1280
++readonly OUTPUT_H=720
++# dragme's grab point (its center) tracks the pointer; sample well inside it.
++readonly SAMPLE="80x80+600+320"
++readonly FLOOR=2000
++readonly IMAGE="$UMBRIEL_RUNTIME_DIR/settle-overlap.png"
++
++cat >> "$UMBRIEL_CONFIG" <<'EOF'
++
++[layout]
++mode = "floating"
++
++[input.focus]
++follows_mouse = false
++
++[colors]
++backdrop = "#000000FF"
++[appearance]
++border_width = 0
++outer_border_width = 0
++corner_radius = 0
++drag_opacity = 1.0
++[appearance.shadow]
++enabled = false
++[animation]
++duration_ms = 1
++[animation.windows_in]
++enabled = false
++[animation.windows_out]
++enabled = false
++[animation.windows_drag]
++physics = true
++[[window_rule]]
++match.title = "^fullscreen-main$"
++default_floating = false
++default_fullscreen = true
++[[window_rule]]
++match.title = "^settler$"
++default_floating = true
++default_position = { x = 100, y = 200, anchor = "top_left" }
++[[window_rule]]
++match.title = "^dragme$"
++default_floating = true
++default_focused = true
++default_position = { x = 800, y = 120, anchor = "top_left" }
++EOF
++"$UMBRIEL" msg config-reload > /dev/null
++
++wait_for_window() {
++  local title=$1
++  for _ in $(seq 80); do
++    "$UMBRIEL" windows --json | jq -e --arg title "$title" 'any(.[]; .title == $title)' > /dev/null && return 0
++    sleep 0.025
++  done
++  echo "window $title did not map: $("$UMBRIEL" windows --json)"
++  return 1
++}
++
++map_window() {
++  local title=$1 w=$2 h=$3 color=$4
++  FILL_COLOR=$color "$UMBRIEL_UNMAP_CLIENT" "$title" "$w" "$h" \
++    > "$UMBRIEL_RUNTIME_DIR/$title.log" 2>&1 &
++  wait_for_window "$title"
++  "$UMBRIEL" settle > /dev/null
++}
++
++map_window fullscreen-main 1280 720 0xFF0000FF
++map_window settler 300 220 0xFFFF0000
++map_window dragme 300 220 0xFF00FF00
++
++green_count() {
++  "$UMBRIEL_PIXEL_PROBE" "$IMAGE" count 'g > 0.9 && r < 0.1 && b < 0.1' "$SAMPLE"
++}
++
++# One pointer session: the first hold stops mid-drag of settler, the second
++# holds dragme over the fullscreen window. The releases run only when this
++# check kicks the client.
++pointer_hold "$OUTPUT_W" "$OUTPUT_H" \
++  move 250 310 mod super press "$BTN_LEFT" \
++  move 310 310 move 370 310 move 430 310 \
++  -- release "$BTN_LEFT" mod none \
++  move 950 230 mod super press "$BTN_LEFT" \
++  move 875 263 move 800 296 move 725 330 move 640 360 \
++  mark bgrab hold \
++  release "$BTN_LEFT" mod none
++
++# Freeze before the release: from here on the only ticks are the ones this
++# check orders, so settler is still settling when dragme's grab lands.
++"$UMBRIEL" clock-freeze
++pointer_step bgrab
++
++"$UMBRIEL" clock-advance 16 > /dev/null
++grim -o HEADLESS-1 "$IMAGE"
++held=$(green_count)
++echo "held drag over fullscreen: green=$held"
++
++# The settling sheet's spring has long settled on these ticks: its deferred
++# re-home lands while dragme is still held in the drag tree.
++"$UMBRIEL" clock-advance 64 > /dev/null
++"$UMBRIEL" clock-advance 256 > /dev/null
++"$UMBRIEL" clock-advance 512 > /dev/null
++"$UMBRIEL" clock-advance 1024 > /dev/null
++grim -o HEADLESS-1 "$IMAGE"
++overlap=$(green_count)
++echo "after the overlapping settle: green=$overlap"
++"$UMBRIEL" clock-resume
++pointer_release
++
++if ((held < FLOOR)); then
++  echo "scenario never engaged: the held window does not draw over fullscreen (green=$held)"
++  exit 1
++fi
++if ((overlap < FLOOR)); then
++  echo "the settling window's re-home demoted the drag tree mid-drag: the held window fell behind fullscreen (held=$held overlap=$overlap)"
++  exit 1
++fi
++echo "a settling re-home leaves an in-progress drag elevated"
 -- 
 2.56.0.236.g7e34d8174d
 

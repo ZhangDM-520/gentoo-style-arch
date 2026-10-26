@@ -1,17 +1,25 @@
-# Current state — 2026-10-26 02:55 (live snapshot; overwrite, do not append)
+# Current state — 2026-10-26 10:45 (live snapshot; overwrite, do not append)
 
-## umbriel: patch 0010 (PR #569 wide columns) wired; 0011 (PR #570) deferred (2026-10-26)
+## umbriel: 0011 + 0012 wired, build + install VERIFIED (2026-10-26)
 - Patch pipeline convention (user): every patch ships live-install-ready and
-  verified; retire on merge. Retire watches: 0008 → PR #566 (READY, external
-  review APPROVE/0 findings), 0009 → PR #568, 0010 → PR #569.
-- 0010-wide-columns.patch (sha256 `d5698040…`, PR #569 head `87f469c5`,
-  single commit on main@`fd0a6e9a`) wired into source/sha/prepare; combined
-  rehearsal 0008+0009+0010+0011 clean on main@`fd0a6e9`. BUILD DEFERRED (user).
-- 0011-drag-deform-settle-crop.patch (PR #570, DEFERRED — user settling the
-  thread): file kept ready in the tree but NOT wired. Generation note: full
-  range `77ec5ae6..7ac93ec1` (two commits — the head is a review round on top
-  of `b6d7542a`; `format-patch -1` of the head alone does NOT apply), sha256
-  `fdd41ca1…`, cut against the wide-columns base → apply after 0010.
+  verified; retire on merge. Retire watches: 0008 → PR #566, 0009 → PR #568,
+  0011 → PR #570, 0012 → PR #573 (all open/MERGEABLE; watches live in the
+  thread journals under `~/docs/umbriel/journals/`).
+- 0010 retired (PR #569 merged `5e241f54`; user drop `0019a3c`). Wired stack
+  now 0008+0009+0011+0012; pkgver pin `0.1.0.r1397.76477c2` pkgrel 1.
+- 0011-drag-deform-settle-crop.patch regenerated after the settle round moved
+  PR #570's head to `8a3c231d`: full range `77ec5ae6..8a3c231d` (3 commits),
+  sha256 `1d92976c…`. Wired in source/sha/prepare.
+- 0012-per-output-render-scale.patch (PR #573 = issue #478 thread): full
+  range `76477c29..05ac404a` (3 commits), sha256 `475b6445…`. Wired.
+- Rehearsal clean on main@`76477c29` (43 files, +1235/-51; measure with
+  `git diff --cached` — `git apply -3` stages its result, see MEMORY pitfall).
+- BUILD + INSTALL VERIFIED (2026-10-26 10:39): `gsa -S --leaf --no-sync
+  --lanes 1 --jobs 8 --intensity xhigh umbriel-git` rc=0, 266s, QA
+  findings=0; `pacman -Q` → `1:0.1.0.r1397.76477c2-1`; key strings in
+  /usr/bin/umbriel: `travel_scale_horizontal` 1, `travel_scale_vertical` 1,
+  `render_scale` 2 (0009/0011 are behavior-only — proven by the clean
+  prepare() apply inside this build).
 
 ## umbriel: per-axis travel scales (PR #566) + hot-corner PR #568 (2026-10-26)
 - PR #566 (`[input.gesture] travel_scale_horizontal/_vertical`, closes #552):

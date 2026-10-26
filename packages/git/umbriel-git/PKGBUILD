@@ -8,8 +8,8 @@ source "$startdir/../../../lib/pgo.sh"
 
 pkgname=umbriel-git
 _pkgname=umbriel
-pkgver=0.1.0.r1394.fd0a6e9
-pkgrel=2
+pkgver=0.1.0.r1397.76477c2
+pkgrel=1
 epoch=1
 pkgdesc='A Wayland compositor built on wlroots'
 arch=('x86_64' 'aarch64')
@@ -58,10 +58,14 @@ provides=("umbriel=${pkgver}")
 conflicts=('umbriel')
 source=("${_pkgname}::git+${url}.git#branch=main"
         '0008-strip-travel-scale.patch'
-        '0009-hot-corner-overview.patch')
+        '0009-hot-corner-overview.patch'
+        '0011-drag-deform-settle-crop.patch'
+        '0012-per-output-render-scale.patch')
 sha256sums=('SKIP'
             '03258711f3a2afdcd53dc3cff3a90180e97b4297e59245604d087826ee37581c'
-            '2600cb2ce8eee8f06f6d7cf557d862d139751091210e002ee7d818c6ec911fff')
+            '2600cb2ce8eee8f06f6d7cf557d862d139751091210e002ee7d818c6ec911fff'
+            '1d92976c7370860d8846773c1bc7aa7a5815ef785f324dcd3bdd80d0aec9f4b5'
+            '475b6445980a4bbd09e59a264fc40203609a23642bda321f039661c52d39011d')
 
 pkgver() {
   cd "${_pkgname}"
@@ -104,12 +108,23 @@ prepare() {
   # PR #566, 0009 → PR #568.)
   git apply -3 ../0009-hot-corner-overview.patch
 
-  # DEFERRED (user settling the thread): PR #570 (drag-release re-home waits
-  # for the deform settle) has a ready patch held in the tree but NOT wired:
-  # 0011-drag-deform-settle-crop.patch (sha256 fdd41ca1…, full range
-  # 77ec5ae6..7ac93ec1 — two commits, cut against the wide-columns base). Its
-  # base PR #569 merged upstream (5e241f54), so wire it after the 0008/0009
-  # stack when the thread settles.
+  # Drag-release re-home waits for the deform settle (and the drag tree
+  # demotes only when its last drag-presented view leaves). Upstream PR
+  # noctalia-dev/umbriel#570; 0011-drag-deform-settle-crop.patch (sha256
+  # 1d92976c…, full range 77ec5ae6..8a3c231d — three commits: the defer fix,
+  # the review round, and the settle round; regenerate with
+  # `git format-patch --stdout <merge-base>..pr-570` when a drift breaks the
+  # apply). (Retire on merge: 0011 → PR #570.)
+  git apply -3 ../0011-drag-deform-settle-crop.patch
+
+  # [output] render_scale: per-output HiDPI supersampling — clients render at
+  # the configured render_scale (fractional-scale protocol hint), unset
+  # follows the output scale bit-identically, direct scanout declines while
+  # render_scale != scale, and mirror scenes are isolated from render_scale
+  # hints. Upstream PR noctalia-dev/umbriel#573; same refresh procedure
+  # (0012-per-output-render-scale.patch, sha256 475b6445…, full range
+  # 76477c29..05ac404a — three commits). (Retire on merge: 0012 → PR #573.)
+  git apply -3 ../0012-per-output-render-scale.patch
 }
 
 build() {

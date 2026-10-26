@@ -17363,3 +17363,33 @@ Mechanics notes (two lessons reinforced):
   later patches "fail" spuriously).
 - Combined rehearsal 0008+0009+0010+0011 clean on main@`fd0a6e9`; wired subset
   is 0008-0010. Build deferred (user). .SRCINFO refreshed.
+
+### 2026-10-26 10:45 — umbriel 0011 + 0012 (PR #573) wired; build + install verified
+- User settled #570 and asked for the wiring + PR #573's patch + a real build
+  this time; also flagged dropped/merged patches overnight (one writer:
+  inspected the tree first — found drop commit `0019a3c` retiring 0010,
+  PR #569 merged upstream `5e241f54`).
+- PR #570's head MOVED during the settle (`7ac93ec1` → `8a3c231d`, a third
+  commit demoting the drag tree only when its last drag-presented view
+  leaves) — 0011 regenerated as full range `77ec5ae6..8a3c231d` (sha256
+  `1d92976c…`, supersedes `fdd41ca1…`) and wired after 0008/0009.
+- PR #573 (= issue #478 render_scale thread) is 3 commits on current main
+  (`76477c29..05ac404a`, feat + two fix rounds) → 0012-per-output-render-scale
+  (sha256 `475b6445…`), wired as the top of the stack. Wired order:
+  0008, 0009, 0011, 0012.
+- Rehearsal clean on main@`76477c29`: 43 files, +1235/-51, zero rejects,
+  zero conflict markers. Measurement pitfall (→ ~/docs/umbriel/MEMORY.md):
+  `git apply -3`'s 3-way fallback STAGES its result, so `git diff` reads
+  empty post-apply — judge by `git diff --cached --shortstat`.
+- pkgver pinned `0.1.0.r1397.76477c2`, pkgrel 1 (pkgver moved → reset);
+  .SRCINFO refreshed; `bash -n` clean.
+- BUILD + INSTALL VERIFIED (user's explicit ask, was deferred last round):
+  `sudo gsa -S --leaf --no-sync --lanes 1 --jobs 8 --intensity xhigh
+  umbriel-git` → rc=0, 266s, QA findings=0 (old binpkg instance pruned,
+  instance 25 registered). `pacman -Q umbriel-git` = `1:0.1.0.r1397.76477c2-1`
+  (matches the pin); key strings in /usr/bin/umbriel: travel_scale_horizontal
+  1, travel_scale_vertical 1, render_scale 2. 0009/0011 are behavior-only —
+  their evidence is the clean prepare() apply inside this build.
+- Journals updated: deform-settle-crop.md (0011 WIRED, watch → PR #570),
+  478-render-scale.md (0012 WIRED, watch → PR #573). 0008/0009 watches
+  unchanged and live (PRs #566/#568 still open).
