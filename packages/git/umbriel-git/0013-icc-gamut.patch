@@ -1,7 +1,7 @@
-From 18e50892675bfd15212a6aeb17b70e450e0e41fb Mon Sep 17 00:00:00 2001
+From c37d9e1333a7ca645e2a5b362a6350c3f3b2695d Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 18:19:43 +0800
-Subject: [PATCH 1/4] feat(color): characterize outputs from ICC/EDID and map
+Subject: [PATCH 1/5] feat(color): characterize outputs from ICC/EDID and map
  the SDR gamut
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -111,10 +111,10 @@ index daec8b55..5fd800b2 100644
 +  description: 'ICC profile characterization for output color gamut mapping (auto: build the ICC path when lcms2 is present, else the inert fallback)',
 +)
 diff --git a/src/config/change.cpp b/src/config/change.cpp
-index a29b6719..badf5eb4 100644
+index 193ddef7..55e1dddd 100644
 --- a/src/config/change.cpp
 +++ b/src/config/change.cpp
-@@ -51,6 +51,8 @@ namespace umbriel {
+@@ -52,6 +52,8 @@ namespace umbriel {
            && lhs.hdr == rhs.hdr
            && lhs.sdrWhite == rhs.sdrWhite
            && lhs.sdrTransfer == rhs.sdrTransfer
@@ -124,7 +124,7 @@ index a29b6719..badf5eb4 100644
      }
  
 diff --git a/src/config/config.h b/src/config/config.h
-index bb850428..932b6ea4 100644
+index 781cf9e5..b5620dbb 100644
 --- a/src/config/config.h
 +++ b/src/config/config.h
 @@ -274,6 +274,13 @@ namespace umbriel {
@@ -141,7 +141,7 @@ index bb850428..932b6ea4 100644
    [[nodiscard]] constexpr std::string_view hdrModeName(HdrMode mode) {
      switch (mode) {
      case HdrMode::Off:
-@@ -323,6 +330,11 @@ namespace umbriel {
+@@ -326,6 +333,11 @@ namespace umbriel {
      HdrMode hdr = HdrMode::Off;
      float sdrWhite = 203.0F;
      SdrTransfer sdrTransfer = SdrTransfer::Gamma22;
@@ -154,7 +154,7 @@ index bb850428..932b6ea4 100644
      // Render bit depth for SDR output: 8 (default) or 10 for 10-bit SDR.
      int bitDepth = 8;
 diff --git a/src/config/fields_output.cpp b/src/config/fields_output.cpp
-index 18860d2b..f4337c54 100644
+index 5ef27d15..fa1b52d2 100644
 --- a/src/config/fields_output.cpp
 +++ b/src/config/fields_output.cpp
 @@ -7,11 +7,17 @@
@@ -220,7 +220,7 @@ index 18860d2b..f4337c54 100644
      const registry::Fields<OutputRule>& outputFields() {
        using registry::boolean;
        using registry::custom;
-@@ -144,6 +188,17 @@ namespace umbriel {
+@@ -145,6 +189,17 @@ namespace umbriel {
                "sdr_transfer", &O::sdrTransfer,
                {{.name = "gamma22", .value = SdrTransfer::Gamma22}, {.name = "srgb", .value = SdrTransfer::Srgb}}
            ),
@@ -1204,7 +1204,7 @@ index d1c2f4bd..6bfbab46 100644
    // display's desired content luminances in cd/m², with unavailable fields left at zero.
    [[nodiscard]] std::optional<HdrStaticMetadata> hdrStaticMetadataFromEdid(std::span<const uint8_t> edid);
 diff --git a/src/output/output.cpp b/src/output/output.cpp
-index 8cbf5c76..b7c42166 100644
+index f4250b45..85ec0473 100644
 --- a/src/output/output.cpp
 +++ b/src/output/output.cpp
 @@ -8,6 +8,7 @@
@@ -1342,7 +1342,7 @@ index 8cbf5c76..b7c42166 100644
    void Output::setRuntimeSdrWhite(float nits) {
      if (m_runtimeSdrWhite && *m_runtimeSdrWhite == nits) {
        return;
-@@ -610,6 +724,7 @@ namespace umbriel {
+@@ -615,6 +729,7 @@ namespace umbriel {
        m_workspaceGroup->abandonReveal();
      }
      const OutputRule* rule = findOutputRule(config(), identity());
@@ -1350,7 +1350,7 @@ index 8cbf5c76..b7c42166 100644
      const auto sdrTransfer = configuredSdrTransfer() == SdrTransfer::Srgb ? WLR_COLOR_TRANSFER_FUNCTION_SRGB
                                                                            : WLR_COLOR_TRANSFER_FUNCTION_GAMMA22;
      if (!wlr_scene_output_set_sdr_transfer_function(m_sceneOutput, sdrTransfer)) {
-@@ -817,6 +932,12 @@ namespace umbriel {
+@@ -822,6 +937,12 @@ namespace umbriel {
          sceneOptions.capture_sdr = targetHdr && captureLocks > 0;
          sceneOptions.effect_capture_pending = effectCapturePending(captureLocks);
          m_effectCaptureBuilt = sceneOptions.effect_capture_pending;
@@ -1363,7 +1363,7 @@ index 8cbf5c76..b7c42166 100644
  
          const RenderedStateCommitResult commitResult = commitRenderedState(
              frameState,
-@@ -1711,6 +1832,9 @@ namespace umbriel {
+@@ -1721,6 +1842,9 @@ namespace umbriel {
      } else {
        // Mode changes can drop the DRM gamma LUT; re-apply on the next frame.
        m_gammaDirty = true;
@@ -1373,7 +1373,7 @@ index 8cbf5c76..b7c42166 100644
        updateHdrAvailability();
        m_server->updateColorPreferences();
      }
-@@ -1948,6 +2072,9 @@ namespace umbriel {
+@@ -1958,6 +2082,9 @@ namespace umbriel {
        sceneOptions.capture_sdr = hdrActive() && captureLocks > 0;
        sceneOptions.effect_capture_pending = effectCapturePending(captureLocks);
        m_effectCaptureBuilt = sceneOptions.effect_capture_pending;
@@ -1384,7 +1384,7 @@ index 8cbf5c76..b7c42166 100644
        if (sceneOptions.require_animation_success) {
          sceneOptions.workspace_from = m_workspaceGroup->revealRoot(false);
 diff --git a/src/output/output.h b/src/output/output.h
-index e82e6844..f58a3f5f 100644
+index 8832575d..382e4db1 100644
 --- a/src/output/output.h
 +++ b/src/output/output.h
 @@ -1,6 +1,7 @@
@@ -1435,7 +1435,7 @@ index e82e6844..f58a3f5f 100644
      void setRuntimeSdrWhite(float nits);
      [[nodiscard]] int configuredBitDepth() const;
      [[nodiscard]] const std::string& bitDepthFallbackReason() const { return m_bitDepthFallbackReason; }
-@@ -218,12 +240,28 @@ namespace umbriel {
+@@ -221,12 +243,28 @@ namespace umbriel {
      void arrangeLayer(wlr_scene_tree* tree, const wlr_box* fullArea, wlr_box* usableArea, bool exclusive);
      void updateOptimizedBlur(const wlr_box& fullArea);
      void updateHdrAvailability(bool activationRejected = false);
@@ -2151,10 +2151,10 @@ index 00000000..08acb799
 +
 +int main() { return RUN_TESTS(); }
 diff --git a/tests/unit/config_change.cpp b/tests/unit/config_change.cpp
-index 2db8fcbb..d6f1031f 100644
+index b05ce77d..43097cd2 100644
 --- a/tests/unit/config_change.cpp
 +++ b/tests/unit/config_change.cpp
-@@ -635,6 +635,48 @@ UMBRIEL_TEST(outputSdrTransferReloadOnlyRefreshesOutputState) {
+@@ -651,6 +651,48 @@ UMBRIEL_TEST(outputSdrTransferReloadOnlyRefreshesOutputState) {
    CHECK(!ConfigEffects::between(after, after).any());
  }
  
@@ -2204,7 +2204,7 @@ index 2db8fcbb..d6f1031f 100644
    Config before;
    OutputRule output;
 diff --git a/tests/unit/config_load.cpp b/tests/unit/config_load.cpp
-index 9e35010c..6d6b4369 100644
+index 9e5f888b..5c83f186 100644
 --- a/tests/unit/config_load.cpp
 +++ b/tests/unit/config_load.cpp
 @@ -24,6 +24,7 @@ using umbriel::HdrMode;
@@ -2215,7 +2215,7 @@ index 9e35010c..6d6b4369 100644
  using umbriel::SdrTransfer;
  using umbriel::TrackLayout;
  using umbriel::VrrMode;
-@@ -1671,6 +1672,93 @@ UMBRIEL_TEST(outputSdrTransferRejectsInvalidValuesWithoutUnknownKeyWarnings) {
+@@ -1737,6 +1738,93 @@ UMBRIEL_TEST(outputSdrTransferRejectsInvalidValuesWithoutUnknownKeyWarnings) {
    }
  }
  
@@ -2310,10 +2310,10 @@ index 9e35010c..6d6b4369 100644
    const TempConfig file;
    ConfigStore& store = umbriel::configStore();
 diff --git a/tests/unit/config_schema.cpp b/tests/unit/config_schema.cpp
-index 17246cf3..c1c4b0af 100644
+index 8d449c0e..debd49d1 100644
 --- a/tests/unit/config_schema.cpp
 +++ b/tests/unit/config_schema.cpp
-@@ -254,6 +254,34 @@ UMBRIEL_TEST(outputSdrTransferSchemaListsCanonicalValuesAndDefault) {
+@@ -269,6 +269,34 @@ UMBRIEL_TEST(outputRenderScaleSchemaDeclaresRangeAndUnsetDefault) {
    CHECK(found);
  }
  
@@ -2352,10 +2352,10 @@ index 17246cf3..c1c4b0af 100644
 2.56.0.236.g7e34d8174d
 
 
-From 484cc9dccf2e24f0b8f2bed662627d8b01595088 Mon Sep 17 00:00:00 2001
+From 590d8d33c32e5dd28d921ce78e719ebc49e229a3 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 18:19:43 +0800
-Subject: [PATCH 2/4] feat(color): ICC image descriptions and icc_file
+Subject: [PATCH 2/5] feat(color): ICC image descriptions and icc_file
  advertising
 
 Characterized output and preferred descriptions report the panel's custom
@@ -3040,7 +3040,7 @@ index f6f97c92..5d6e583a 100644
      // Register before adding surfaces. Scene destruction removes the registration.
      [[nodiscard]] bool registerScene(wlr_scene* scene);
 diff --git a/src/server/ipc_commands.cpp b/src/server/ipc_commands.cpp
-index 8664112f..a69645f5 100644
+index 77015edf..e09e3b24 100644
 --- a/src/server/ipc_commands.cpp
 +++ b/src/server/ipc_commands.cpp
 @@ -8,6 +8,7 @@
@@ -3059,7 +3059,7 @@ index 8664112f..a69645f5 100644
  #include <map>
  #include <nlohmann/json.hpp>
  #include <print>
-@@ -384,6 +386,18 @@ namespace umbriel {
+@@ -385,6 +387,18 @@ namespace umbriel {
        return "unknown";
      }
  
@@ -3078,7 +3078,7 @@ index 8664112f..a69645f5 100644
      const char* protocolTransferFunctionName(uint32_t value) {
        switch (value) {
        case 0:
-@@ -421,6 +435,22 @@ namespace umbriel {
+@@ -422,6 +436,22 @@ namespace umbriel {
        }
      }
  
@@ -3101,7 +3101,7 @@ index 8664112f..a69645f5 100644
      const char* protocolPrimariesName(uint32_t value) {
        switch (value) {
        case 0:
-@@ -515,6 +545,28 @@ namespace umbriel {
+@@ -516,6 +546,28 @@ namespace umbriel {
            std::println("  fallback: {}", fallback);
          }
  
@@ -3130,7 +3130,7 @@ index 8664112f..a69645f5 100644
          const int configuredDepth = output.value("bit_depth", 8);
          const std::string format = output.value("render_format", "invalid");
          const std::string_view activeDepth = !output.value("enabled", false) ? "none"
-@@ -965,6 +1017,7 @@ namespace umbriel {
+@@ -967,6 +1019,7 @@ namespace umbriel {
        const wlr_output* wlrOutput = output->wlr();
        const wlr_output_image_description* description = wlrOutput->image_description;
        const bool hdrRequested = output->hdrRequested();
@@ -3138,7 +3138,7 @@ index 8664112f..a69645f5 100644
        nlohmann::json entry = {
            {"name", wlrOutput->name},
            {"enabled", wlrOutput->enabled},
-@@ -977,6 +1030,11 @@ namespace umbriel {
+@@ -979,6 +1032,11 @@ namespace umbriel {
            {"primaries", description != nullptr ? primariesName(description->primaries) : "none"},
            {"sdr_white", output->sdrWhite()},
            {"sdr_transfer", output->configuredSdrTransfer() == SdrTransfer::Srgb ? "srgb" : "gamma22"},
@@ -3150,7 +3150,7 @@ index 8664112f..a69645f5 100644
            {"bit_depth", output->configuredBitDepth()},
            {"bit_depth_active", output->bitDepthActive()},
            {"bit_depth_fallback_reason", output->bitDepthFallbackReason()},
-@@ -985,6 +1043,18 @@ namespace umbriel {
+@@ -987,6 +1045,18 @@ namespace umbriel {
            {"max_cll", description != nullptr ? description->max_cll : 0.0},
            {"max_fall", description != nullptr ? description->max_fall : 0.0},
        };
@@ -3169,7 +3169,7 @@ index 8664112f..a69645f5 100644
        entry["mastering_display_primaries"] = nullptr;
        entry["mastering_luminance"] = nullptr;
        if (description != nullptr) {
-@@ -1013,26 +1083,27 @@ namespace umbriel {
+@@ -1015,26 +1085,27 @@ namespace umbriel {
          continue;
        }
        wlr_surface* surface = view->rootSurface();
@@ -3205,7 +3205,7 @@ index 8664112f..a69645f5 100644
          entry["mastering_display_primaries"] = {
              {"red", xy(primaries.red)},
              {"green", xy(primaries.green)},
-@@ -1040,10 +1111,10 @@ namespace umbriel {
+@@ -1042,10 +1113,10 @@ namespace umbriel {
              {"white", xy(primaries.white)},
          };
        }
@@ -3220,10 +3220,10 @@ index 8664112f..a69645f5 100644
        }
        surfaces.push_back(std::move(entry));
 diff --git a/src/server/server.cpp b/src/server/server.cpp
-index aa63892b..ca62913b 100644
+index f57c6d49..b0fde34e 100644
 --- a/src/server/server.cpp
 +++ b/src/server/server.cpp
-@@ -981,19 +981,19 @@ namespace umbriel {
+@@ -993,19 +993,19 @@ namespace umbriel {
      wl_display_destroy(m_display);
    }
  
@@ -3247,7 +3247,7 @@ index aa63892b..ca62913b 100644
      } context{.server = this};
  
      wlr_surface_for_each_surface(
-@@ -1003,7 +1003,7 @@ namespace umbriel {
+@@ -1015,7 +1015,7 @@ namespace umbriel {
            if (context->description != nullptr) {
              return;
            }
@@ -3280,10 +3280,10 @@ index 0177da6a..60fad5c3 100644
      [[nodiscard]] wlr_scene_tree* xdgTree() const { return m_xdgTree; }
      [[nodiscard]] wlr_scene_tree* scratchpadTree() const { return m_scratchpadTree; }
 diff --git a/src/server/server_events.cpp b/src/server/server_events.cpp
-index 0a9dfe3a..087a768c 100644
+index 52b94813..adc9c9f2 100644
 --- a/src/server/server_events.cpp
 +++ b/src/server/server_events.cpp
-@@ -3888,6 +3888,9 @@ namespace umbriel {
+@@ -3892,6 +3892,9 @@ namespace umbriel {
          output->markBlurBackgroundDirty();
          wlr_scene_output_state_options options{};
          options.swapchain = wlr_output_swapchain_manager_get_swapchain(&manager, pending[i].output);
@@ -4049,10 +4049,10 @@ index 06024dbe..d7a07a23 100644
 2.56.0.236.g7e34d8174d
 
 
-From 4d536f14f7453124f6db02cb2df861a5dbbf408e Mon Sep 17 00:00:00 2001
+From 967774cf01e8ba128dafac3d958b1df31f0f84f3 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 18:19:52 +0800
-Subject: [PATCH 3/4] test(color): live color-profile coverage
+Subject: [PATCH 3/5] test(color): live color-profile coverage
 
 The check drives the creator over the wire (ready, failed, get_information
 denial, bad_size), pins the icc_file bytes against the configured profile,
@@ -4376,10 +4376,10 @@ index 00000000..e1530639
 2.56.0.236.g7e34d8174d
 
 
-From 7f380dc3e2c10e619a76310880f2a365b684f171 Mon Sep 17 00:00:00 2001
+From aaf4c4e9c3a6f239e2a06ad6e6d6cb4b22ef767e Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 18:19:52 +0800
-Subject: [PATCH 4/4] docs(color): document color profiles and client ICC
+Subject: [PATCH 4/5] docs(color): document color profiles and client ICC
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 ---
@@ -4402,19 +4402,19 @@ index b7259fce..92aa58be 100644
  
  The canonical dependency declarations are in [`meson.build`](meson.build). Distribution package names vary.
 diff --git a/docs/user/outputs.md b/docs/user/outputs.md
-index fb8edba1..5bd5f407 100644
+index 65da9d68..d5beeff1 100644
 --- a/docs/user/outputs.md
 +++ b/docs/user/outputs.md
-@@ -43,6 +43,8 @@ Umbriel first uses the first remaining enabled output in its internal output ord
- | `hdr`                                      | string                            | `"off"`      | HDR activation policy.                                                                          |
- | `sdr_white`                                | float                             | `203`        | SDR reference white in cd/m² while HDR is active.                                               |
- | `sdr_transfer`                             | string                            | `"gamma22"`  | Transfer curve for untagged SDR on HDR outputs: `"gamma22"` or `"srgb"`.                        |
-+| `color_profile`                            | string                            | `"none"`     | SDR panel characterization: `"none"`, `"edid"`, or a path to an ICC profile.                    |
-+| `sdr_gamut`                                | string                            | `"native"`   | SDR gamut policy while a characterization is active: `"native"` or `"srgb"`.                    |
- | `bit_depth`                                | int                               | `8`          | Render bit depth for SDR output: `8` or `10`.                                                   |
- | `workspaces`                               | int, string array, or `"dynamic"` | `"dynamic"`  | Workspace inventory for this output.                                                            |
- | `min_workspaces`                           | int                               | `1`          | Minimum count for a dynamic output.                                                             |
-@@ -253,6 +255,33 @@ Existing gamma-control clients, including Night Light tools, can adjust white po
+@@ -44,6 +44,8 @@ Umbriel first uses the first remaining enabled output in its internal output ord
+ | `hdr`                                      | string                            | `"off"`      | HDR activation policy.                                                                                |
+ | `sdr_white`                                | float                             | `203`        | SDR reference white in cd/m² while HDR is active.                                                     |
+ | `sdr_transfer`                             | string                            | `"gamma22"`  | Transfer curve for untagged SDR on HDR outputs: `"gamma22"` or `"srgb"`.                              |
++| `color_profile`                            | string                            | `"none"`     | SDR panel characterization: `"none"`, `"edid"`, or a path to an ICC profile.                          |
++| `sdr_gamut`                                | string                            | `"native"`   | SDR gamut policy while a characterization is active: `"native"` or `"srgb"`.                          |
+ | `bit_depth`                                | int                               | `8`          | Render bit depth for SDR output: `8` or `10`.                                                         |
+ | `workspaces`                               | int, string array, or `"dynamic"` | `"dynamic"`  | Workspace inventory for this output.                                                                  |
+ | `min_workspaces`                           | int                               | `1`          | Minimum count for a dynamic output.                                                                   |
+@@ -262,6 +264,33 @@ Existing gamma-control clients, including Night Light tools, can adjust white po
  
  Custom gamma-curve calibration applies only in SDR. Umbriel keeps the client's latest full gamma table and restores it when the output returns to SDR. An HDR white-point adjustment applies to the whole display, including the cursor, and requires composition while active. SDR screenshots and recordings exclude this adjustment.
  
@@ -4449,10 +4449,10 @@ index fb8edba1..5bd5f407 100644
  
  Set `bit_depth = 10` to request a 10-bit SDR compositor render format:
 diff --git a/examples/config.toml b/examples/config.toml
-index ae3e7ec8..827ff131 100644
+index 73ce2c91..6616317f 100644
 --- a/examples/config.toml
 +++ b/examples/config.toml
-@@ -67,6 +67,8 @@ files = []
+@@ -68,6 +68,8 @@ files = []
  # vrr = "fullscreen"
  # hdr = "auto"
  # sdr_transfer = "gamma22" # Or "srgb" for piecewise SDR decoding in HDR.
@@ -4461,6 +4461,403 @@ index ae3e7ec8..827ff131 100644
  
  # ==============================================================================
  # Appearance
+-- 
+2.56.0.236.g7e34d8174d
+
+
+From 3ab5856a2ebb1260b7b2d4e197b5d838f89e7791 Mon Sep 17 00:00:00 2001
+From: ZhangDM-520 <jixianqiang1540@gmail.com>
+Date: Mon, 26 Oct 2026 18:53:26 +0800
+Subject: [PATCH 5/5] fix(color): fold composed LUT stages and fix the wideness
+ white point
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A gamma-control ramp composed after a baked panel-TRC curve produced two
+3x1D LUT stages, which the renderer's collector rejects — output frames
+failed for as long as Night Light ran with a panel TRC that matched no
+named curve. Consecutive LUTs now fold into one table at compose time.
+The wideness interpolation holds the white fixed as its contract states
+instead of lerping it. Review round cleanups: the harness check no longer
+pins a log line's wording or re-derives unit-pinned parse values, and
+comments stop narrating wave history.
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+---
+ src/output/colorimetry.cpp                    |  5 +-
+ src/output/colorimetry.h                      | 14 ++---
+ src/output/colorimetry_icc_lcms2.cpp          | 10 ++--
+ src/output/output.h                           |  7 +--
+ src/server/color_description.cpp              |  2 +-
+ src/server/color_description.h                | 16 +++---
+ src/server/ipc_commands.cpp                   |  5 +-
+ .../harness/checks/protocol/color_profile.sh  | 17 +-----
+ umbrielfx/meson.build                         |  1 +
+ umbrielfx/render/color.c                      | 57 +++++++++++++++++++
+ umbrielfx/tests/color.c                       | 37 ++++++++++++
+ 11 files changed, 125 insertions(+), 46 deletions(-)
+
+diff --git a/src/output/colorimetry.cpp b/src/output/colorimetry.cpp
+index 4d37932b..a61ec135 100644
+--- a/src/output/colorimetry.cpp
++++ b/src/output/colorimetry.cpp
+@@ -152,12 +152,13 @@ namespace umbriel {
+       identityMatrix(matrix);
+       return;
+     }
+-    // Linear interpolation between the two gamuts (KWin's wideness semantics).
++    // Linear interpolation between the two gamuts (KWin's wideness semantics):
++    // the primaries slide while the white stays fixed.
+     const wlr_color_primaries interp{
+         .red = lerpXy(srgb.red, panel.red, amount),
+         .green = lerpXy(srgb.green, panel.green, amount),
+         .blue = lerpXy(srgb.blue, panel.blue, amount),
+-        .white = lerpXy(srgb.white, panel.white, amount),
++        .white = srgb.white,
+     };
+     wlr_color_primaries_transform_absolute_colorimetric(&interp, &panel, matrix);
+   }
+diff --git a/src/output/colorimetry.h b/src/output/colorimetry.h
+index 4ac296c6..445b9c0b 100644
+--- a/src/output/colorimetry.h
++++ b/src/output/colorimetry.h
+@@ -44,8 +44,8 @@ namespace umbriel {
+   // encode table is linearly interpolated.
+   [[nodiscard]] float panelEncodeSample(const PanelTransfer& transfer, float linear);
+ 
+-  // Fitted transfer characteristic of a parsed profile (umbriel#574 wave 4,
+-  // wp_image_description_creator_icc_v1). Srgb and Gamma22 are exact named
++  // Fitted transfer characteristic of a parsed profile
++  // (wp_image_description_creator_icc_v1). Srgb and Gamma22 are exact named
+   // fast paths; Power is a parametric power fit in the protocol's
+   // set_tf_power/tf_power vocabulary: the EOTF exponent e with
+   // optical = electrical^e (the request's valid range is 1.0..10.0; a fit
+@@ -62,8 +62,8 @@ namespace umbriel {
+   };
+ 
+   // Fit a transfer curve to what the renderer can express. Non-representable
+-  // TRCs are approximated by a power fit — full fidelity needs per-buffer
+-  // 3D LUTs (a new render transform type), out of scope for umbriel#574.
++  // TRCs are approximated by a power fit — faithful rendering of those needs
++  // per-buffer 3D LUTs (a new render transform type).
+   [[nodiscard]] TransferFit fitTransfer(const PanelTransfer& transfer);
+ 
+   // The encode curve baked to uint16 LUT entries for
+@@ -128,9 +128,9 @@ namespace umbriel {
+   panelColorimetryFromEdid(std::span<const uint8_t> edid, const wlr_color_primaries* defaultPrimaries);
+ 
+   // Raw ICC bytes advertised by get_information's icc_file for a characterized
+-  // output (umbriel#574 wave 5). Shared because image descriptions snapshot
+-  // the store: every information request on the same description must return
+-  // the exact same data.
++  // output. Shared because image descriptions snapshot the store: every
++  // information request on the same description must return the exact same
++  // data.
+   using IccProfileStore = std::shared_ptr<const std::vector<uint8_t>>;
+ 
+   // File characterization: the store keeps the exact bytes the parser accepted
+diff --git a/src/output/colorimetry_icc_lcms2.cpp b/src/output/colorimetry_icc_lcms2.cpp
+index 4c445300..ecb69074 100644
+--- a/src/output/colorimetry_icc_lcms2.cpp
++++ b/src/output/colorimetry_icc_lcms2.cpp
+@@ -66,9 +66,7 @@ namespace umbriel {
+     // Numeric inversion of the evaluated decode curve (encoded -> linear) into
+     // the panel encode curve (linear -> encoded). The forward curve is sampled
+     // monotonically and inverted by binary search + interpolation: an
+-    // estimation, accurate to the sampling resolution, and deliberately not a
+-    // gamma fit of parametric curves (KWin's iccprofile.cpp documents the same
+-    // pitfall in reverse).
++    // estimation, accurate to the sampling resolution.
+     std::vector<float> invertDecodeCurve(const std::vector<float>& decode) {
+       std::vector<float> encode(kCurveSamples);
+       for (size_t target = 0; target < kCurveSamples; ++target) {
+@@ -137,9 +135,9 @@ namespace umbriel {
+       };
+     }
+ 
+-    // Synthesis (wave 5): the ICC TRC tags carry the decode curve (encoded ->
+-    // linear), while a PanelTransfer carries the encode curve, so sampled
+-    // kinds are inverted numerically here and the parser inverts back on read.
++    // The ICC TRC tags carry the decode curve (encoded -> linear), while a
++    // PanelTransfer carries the encode curve, so sampled kinds are inverted
++    // numerically here and the parser inverts back on read.
+     std::vector<float> decodeFromEncode(const PanelTransfer& transfer) {
+       std::vector<float> decode(kCurveSamples);
+       for (size_t index = 0; index < kCurveSamples; ++index) {
+diff --git a/src/output/output.h b/src/output/output.h
+index 382e4db1..1d6026c9 100644
+--- a/src/output/output.h
++++ b/src/output/output.h
+@@ -132,10 +132,9 @@ namespace umbriel {
+     [[nodiscard]] const PanelColorimetry* panelColorimetry() const {
+       return m_panelColorimetry ? &*m_panelColorimetry : nullptr;
+     }
+-    // Raw ICC bytes behind get_information's icc_file advertising (wave 5):
+-    // the exact file bytes for file characterizations, a synthesized
+-    // matrix-shaper profile for EDID ones, and nothing when inert or built
+-    // without lcms2.
++    // Raw ICC bytes behind get_information's icc_file advertising: the exact
++    // file bytes for file characterizations, a synthesized matrix-shaper
++    // profile for EDID ones, and nothing when inert or built without lcms2.
+     [[nodiscard]] const IccProfileStore& iccProfileStore() const { return m_iccProfile; }
+     // The supplied transform frames must carry while SDR gamut mapping is
+     // staged: the frame paths' sdrGamutStaged decision, exposed for frame
+diff --git a/src/server/color_description.cpp b/src/server/color_description.cpp
+index f5da6709..05a4dbe5 100644
+--- a/src/server/color_description.cpp
++++ b/src/server/color_description.cpp
+@@ -232,7 +232,7 @@ namespace umbriel {
+     // takes only the named wlr_color_transfer_function values — so it renders
+     // through the nearest named EOTF exponent (ext_linear 1.0, gamma22 2.2,
+     // bt1886 2.4), midpoint-bounded. This is an approximation: faithful
+-    // non-representable TRCs need per-buffer 3D LUTs (out of scope).
++    // non-representable TRCs need per-buffer 3D LUTs (see fitTransfer).
+     if (description.tfPower <= 1.6F) {
+       return WLR_COLOR_TRANSFER_FUNCTION_EXT_LINEAR;
+     }
+diff --git a/src/server/color_description.h b/src/server/color_description.h
+index b7ab1081..f21d6131 100644
+--- a/src/server/color_description.h
++++ b/src/server/color_description.h
+@@ -25,10 +25,10 @@ namespace umbriel {
+   struct ColorDescription {
+     wlr_image_description_v1_data data{};
+     wlr_color_primaries customPrimaries{};
+-    // Fitted power transfer characteristic (umbriel#574 wave 4): the EOTF
+-    // exponent of a power curve in the protocol's set_tf_power/tf_power
+-    // vocabulary, 0 when unset. Named transfer functions live in data.tf_named;
+-    // exactly one of the two is set for every client-visible description.
++    // Fitted power transfer characteristic: the EOTF exponent of a power curve
++    // in the protocol's set_tf_power/tf_power vocabulary, 0 when unset. Named
++    // transfer functions live in data.tf_named; exactly one of the two is set
++    // for every client-visible description.
+     float tfPower = 0.0F;
+     // Raw ICC bytes get_information advertises via its icc_file event ("ICC
+     // profile matching the image description"). Empty when the description has
+@@ -76,8 +76,8 @@ namespace umbriel {
+       IccProfileStore iccProfile
+   );
+ 
+-  // Client-provided ICC descriptions (umbriel#574 wave 4,
+-  // wp_image_description_creator_icc_v1.set_icc_file). The profile must be ICC
++  // Client-provided ICC descriptions
++  // (wp_image_description_creator_icc_v1.set_icc_file). The profile must be ICC
+   // v2/v4, 3-channel, of Display or ColorSpace class, matrix-shaper only, and
+   // at most 32 MB; anything else is rejected here and delivered as
+   // wp_image_description_v1.failed ('unsupported') by the caller — never a
+@@ -100,8 +100,8 @@ namespace umbriel {
+   // exponent because wlr_scene_buffer_set_transfer_function takes only
+   // wlr_color_transfer_function values (no arbitrary power curves). The
+   // mapping is an approximation — faithful rendering of non-representable
+-  // TRCs needs per-buffer 3D LUTs (out of scope, see fitTransfer). A
+-  // description with no transfer function at all stays unspecified (0).
++  // TRCs needs per-buffer 3D LUTs (see fitTransfer). A description with no
++  // transfer function at all stays unspecified (0).
+   [[nodiscard]] wlr_color_transfer_function bufferTransferFunction(const ColorDescription& description);
+ 
+ } // namespace umbriel
+diff --git a/src/server/ipc_commands.cpp b/src/server/ipc_commands.cpp
+index e09e3b24..573fd132 100644
+--- a/src/server/ipc_commands.cpp
++++ b/src/server/ipc_commands.cpp
+@@ -436,9 +436,8 @@ namespace umbriel {
+       }
+     }
+ 
+-    // Surface transfer label: a fitted power curve (umbriel#574, tfPower) has
+-    // no named protocol value and reported "none" before — misleading next to
+-    // the named curves. Report the fitted exponent instead.
++    // Surface transfer label: a fitted power curve (tfPower) has no named
++    // protocol value. Report the fitted exponent instead.
+     std::string surfaceTransferLabel(const ColorDescription* description) {
+       if (description == nullptr) {
+         return "none";
+diff --git a/tests/harness/checks/protocol/color_profile.sh b/tests/harness/checks/protocol/color_profile.sh
+index e1530639..20b41b60 100644
+--- a/tests/harness/checks/protocol/color_profile.sh
++++ b/tests/harness/checks/protocol/color_profile.sh
+@@ -180,19 +180,11 @@ if ! fields_are "$PROFILE" native false true; then
+ fi
+ color=$("$UMBRIEL" color --json)
+ if ! jq -e '
+-  def near($a; $b): (($a - $b) | if . < 0 then -. else . end) <= 30;
+   .outputs[0] as $o
+   | $o.panel_transfer == "curve"
+-    and near($o.panel_primaries.red.x * 1000000; 680000)
+-    and near($o.panel_primaries.red.y * 1000000; 320000)
+-    and near($o.panel_primaries.green.x * 1000000; 265000)
+-    and near($o.panel_primaries.green.y * 1000000; 690000)
+-    and near($o.panel_primaries.blue.x * 1000000; 150000)
+-    and near($o.panel_primaries.blue.y * 1000000; 60000)
+-    and near($o.panel_primaries.white.x * 1000000; 312700)
+-    and near($o.panel_primaries.white.y * 1000000; 329000)
++    and ($o.panel_primaries | [.red, .green, .blue, .white] | all(has("x") and has("y")))
+ ' <<< "$color" > /dev/null; then
+-  echo "panel characterization did not round-trip the fixture colorimetry: $color"
++  echo "panel characterization did not surface in color --json: $color"
+   exit 1
+ fi
+ assert_pass_through 'profile with native gamut'
+@@ -237,11 +229,6 @@ assert_mapped
+ # --- edid on a headless output: warned and inert ----------------------------
+ write_config 'color_profile = "edid"
+ sdr_gamut = "srgb"'
+-if ! grep -F "output 'HEADLESS-1': no usable color characterization (no EDID); SDR gamut mapping stays inactive" \
+-    "$UMBRIEL_LOG" > /dev/null; then
+-  echo "missing expected headless EDID fallback warning: $(tail -20 "$UMBRIEL_LOG")"
+-  exit 1
+-fi
+ if ! fields_are edid srgb false false; then
+   echo "EDID characterization was not inert on headless: $( "$UMBRIEL" color --json)"
+   exit 1
+diff --git a/umbrielfx/meson.build b/umbrielfx/meson.build
+index ad293d87..e7f82b00 100644
+--- a/umbrielfx/meson.build
++++ b/umbrielfx/meson.build
+@@ -210,6 +210,7 @@ if build_tests
+     'scene-scrgb-absolute-luminance',
+     'scene-hdr-sdr-fallback',
+     'hdr-white-point-math',
++    'compose-lut-fold',
+     'hdr-white-point',
+     'sdr-white-point-alpha',
+     'sdr-curve-consistency',
+diff --git a/umbrielfx/render/color.c b/umbrielfx/render/color.c
+index e173917e..c80166e0 100644
+--- a/umbrielfx/render/color.c
++++ b/umbrielfx/render/color.c
+@@ -290,11 +290,42 @@ static size_t color_transform_compose_collect(
+   return count;
+ }
+ 
++// Two 3x1D LUTs in series (a baked panel-TRC curve followed by a gamma-control
++// ramp) fold into one table per channel: folded[i] = second(first[i]), sampled
++// linearly the way the shaders sample a LUT. Consumers downstream accept a
++// single LUT stage, so without the fold a gamma ramp would invalidate a
++// composed transform instead of composing with it.
++static struct wlr_color_transform*
++color_transform_fold_lut_pair(struct wlr_color_transform_lut_3x1d* first, struct wlr_color_transform_lut_3x1d* second) {
++  const size_t dim = first->dim;
++  uint16_t* folded = calloc(dim * 3, sizeof(uint16_t));
++  if (folded == NULL) {
++    return NULL;
++  }
++  for (size_t channel = 0; channel < 3; channel++) {
++    const uint16_t* first_row = &first->lut_3x1d[channel * dim];
++    const uint16_t* second_row = &second->lut_3x1d[channel * second->dim];
++    uint16_t* out_row = &folded[channel * dim];
++    for (size_t i = 0; i < dim; i++) {
++      const double position = first_row[i] / 65535.0 * (double)(second->dim - 1);
++      const size_t lower = (size_t)position;
++      const size_t upper = lower + 1 < second->dim ? lower + 1 : second->dim - 1;
++      const double a = second_row[lower] / 65535.0;
++      const double b = second_row[upper] / 65535.0;
++      out_row[i] = (uint16_t)lround((a + (b - a) * (position - (double)lower)) * 65535.0);
++    }
++  }
++  struct wlr_color_transform* result = wlr_color_transform_init_lut_3x1d(dim, folded, &folded[dim], &folded[dim * 2]);
++  free(folded);
++  return result;
++}
++
+ bool color_transform_compose(struct wlr_color_transform** result, struct wlr_color_transform** transforms, size_t len) {
+   // The normalized form has the following properties :
+   // - No NULL transform in a pipeline
+   // - No pipeline of length 1
+   // - No nested pipelines
++  // - No two consecutive 3x1D LUTs (they fold into one)
+   bool status = false;
+ 
+   size_t result_len = color_transform_compose_collect(NULL, 0, transforms, len);
+@@ -309,6 +340,32 @@ bool color_transform_compose(struct wlr_color_transform** result, struct wlr_col
+   }
+   color_transform_compose_collect(result_transforms, result_len, transforms, len);
+ 
++  size_t composed_len = 0;
++  for (size_t i = 0; i < result_len; i++) {
++    struct wlr_color_transform* current = result_transforms[i];
++    if (composed_len > 0
++        && result_transforms[composed_len - 1]->type == COLOR_TRANSFORM_LUT_3X1D
++        && current->type == COLOR_TRANSFORM_LUT_3X1D) {
++      struct wlr_color_transform* folded = color_transform_fold_lut_pair(
++          color_transform_lut_3x1d_from_base(result_transforms[composed_len - 1]),
++          color_transform_lut_3x1d_from_base(current)
++      );
++      wlr_color_transform_unref(result_transforms[composed_len - 1]);
++      wlr_color_transform_unref(current);
++      if (folded == NULL) {
++        for (size_t j = i + 1; j < result_len; j++) {
++          wlr_color_transform_unref(result_transforms[j]);
++        }
++        result_len = composed_len;
++        goto cleanup_transforms;
++      }
++      result_transforms[composed_len - 1] = folded;
++      continue;
++    }
++    result_transforms[composed_len++] = current;
++  }
++  result_len = composed_len;
++
+   if (result_len == 1) {
+     *result = wlr_color_transform_ref(result_transforms[0]);
+   } else {
+diff --git a/umbrielfx/tests/color.c b/umbrielfx/tests/color.c
+index 04317a4c..fb0d5b5c 100644
+--- a/umbrielfx/tests/color.c
++++ b/umbrielfx/tests/color.c
+@@ -332,6 +332,40 @@ static bool check_matrix_near(const float actual[static 9], const float expected
+   return true;
+ }
+ 
++// Two 3x1D LUTs in series fold into one stage in the composed transform: a
++// baked panel-TRC curve followed by a gamma-control ramp must stay a shape
++// consumers accept instead of arriving as two LUT stages. No renderer needed.
++static bool test_compose_lut_fold(void) {
++  enum { kDim = 5 };
++  uint16_t halve[kDim];
++  uint16_t invert[kDim];
++  for (size_t i = 0; i < kDim; i++) {
++    const uint16_t v = (uint16_t)(i * 65535 / (kDim - 1));
++    halve[i] = (uint16_t)(v / 2);
++    invert[i] = (uint16_t)(65535 - v);
++  }
++  struct wlr_color_transform* first = wlr_color_transform_init_lut_3x1d(kDim, halve, halve, halve);
++  struct wlr_color_transform* second = wlr_color_transform_init_lut_3x1d(kDim, invert, invert, invert);
++  bool ok = check(first != NULL && second != NULL, "build LUT stages");
++  struct wlr_color_transform* stages[] = {first, second};
++  struct wlr_color_transform* folded = NULL;
++  ok = check(color_transform_compose(&folded, stages, 2), "compose LUT pair") && ok;
++  ok = check(folded != NULL && folded->type == COLOR_TRANSFORM_LUT_3X1D, "folded into a single LUT stage") && ok;
++  if (folded != NULL && folded->type == COLOR_TRANSFORM_LUT_3X1D) {
++    for (int step = 0; step <= 4; step++) {
++      const float x = (float)step / 4.0f;
++      float in[3] = {x, x, x};
++      float out[3] = {0.0f, 0.0f, 0.0f};
++      wlr_color_transform_eval(folded, out, in);
++      ok = check(fabsf(out[0] - (1.0f - x / 2.0f)) < 0.01f, "folded samples match applying both LUTs in series") && ok;
++    }
++  }
++  wlr_color_transform_unref(first);
++  wlr_color_transform_unref(second);
++  wlr_color_transform_unref(folded);
++  return ok;
++}
++
+ // These calculations need no renderer. In particular, a uniform dimming ramp
+ // must retain its brightness instead of normalizing the adapted white to Y=1.
+ static bool test_hdr_white_point_math(void) {
+@@ -3179,6 +3213,9 @@ int main(int argc, char* argv[]) {
+   if (strcmp(argv[1], "hdr-white-point-math") == 0) {
+     return test_hdr_white_point_math() ? EXIT_SUCCESS : EXIT_FAILURE;
+   }
++  if (strcmp(argv[1], "compose-lut-fold") == 0) {
++    return test_compose_lut_fold() ? EXIT_SUCCESS : EXIT_FAILURE;
++  }
+ 
+   struct fixture fixture;
+   if (!fixture_init(&fixture)) {
 -- 
 2.56.0.236.g7e34d8174d
 
