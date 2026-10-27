@@ -1,3 +1,5 @@
+<p align="center"><img src="./banner.svg" alt="gentoo-style-arch banner" width="100%"></p>
+
 # Gentoo_Style_Arch
 
 A curated Arch Linux package set — and `gsa`, the build engine that
