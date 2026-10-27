@@ -137,8 +137,9 @@ gsa <FAMILY>[cluster] [long-modifiers] [targets…] [ranges…] [-- <pacman args
 | Spelling | Action |
 | --- | --- |
 | `gsa -Q` | list installed packages, with side-car columns (abi-token, built version, binpkg instances) where a side-car row exists |
-| `gsa -Qi <ref…>` | info: pacman fields plus the side-car record (abi-token, subscriptions in/out, retained binpkg instances, VCS baseline) |
+| `gsa -Qi <ref…>` | info: pacman fields plus the side-car record (abi-token, subscriptions in/out, retained binpkg instances, VCS baseline), recipe metadata and the topology record — the merged home of the retired `-Si` (2026-10-28, H8) |
 | `gsa -Qs <pattern…>` | search installed names/descriptions (pacman `-Qs` semantics) |
+| `gsa -Qg [name…]` | groups/sets and their members (all with counts by default) — the home of the retired `-Sg` (2026-10-28, H5/H7) |
 | `gsa -Ql <ref…>` | list owned files (pacman `-Ql` semantics) |
 | `gsa -Qo <path…>` | file owner (pacman `-Qo` semantics) |
 | `gsa -Qp <archive…>` | archive probe: read `.PKGINFO`, match the binpkg index row, report hash/size agreement |
@@ -146,20 +147,18 @@ gsa <FAMILY>[cluster] [long-modifiers] [targets…] [ranges…] [-- <pacman args
 | `gsa -Qa <ref…>` | ABI report: derived token, `abi-rev=` override if any, subscriptions recorded against it |
 | `gsa -Qu` | stale set: recipes whose tracked upstream/provider version moved since their newest built instance (the `--stale` query, `plan-gentoo-qol.md` shortlist 6) |
 | `gsa -Qt` | print resolved topology records `id\|path\|groups\|edges\|tags`, one per line — the tooling data channel (today `--topology`; tooling must never parse `config/` directly) |
-| `gsa -Qr` | revdep report over the installed-ELF index: unresolved `DT_NEEDED`, preserved-lib survivors, exact-pin leftovers — **deferred to a later phase** (needs the installed-ELF index of `plan-native-pm.md` §4.4) |
+| `gsa -Qr` | revdep report over the installed-ELF view: unresolved `DT_NEEDED`, preserved-lib survivors, exact-pin leftovers — live (read-only, rc 0) over an on-demand view. *Correction (2026-10-28, F3):* the row previously read "deferred to a later phase" while the verb shipped; the preserved-lib registry is still Phase 4 (§J.1) and nothing writes it, so that report class is structurally empty until the preserve mode of `plan-native-pm.md` §4.4 lands |
 
 ### B.4 `-S` — build + install
 
 | Spelling | Action |
 | --- | --- |
 | `gsa -S <targets…> [ranges…]` | build the selection in build order; install each package's archives immediately after its build and **before any consumer builds** (install-before-dependents, `docs/MEMORY.md` rule 11). Install decision is *checked* (§E) |
-| `gsa -Ss <pattern…>` | search the buildable universe (topology + committed `.SRCINFO`) |
-| `gsa -Si <ref…>` | recipe info: metadata, topology record, groups, build-order edges, tags |
 | `gsa -Sl [targets…] [ranges…]` | list the ordered selection with the indices ranges address (today `-l`; with no selection, the whole set in build order) |
-| `gsa -Sg [name…]` | list groups/sets and their members (no name: all six group names with counts) |
 | `gsa -Sw <targets…>` | **fetch-only, Phase 4** (`plan.md` §2): fetch and verify sources ahead of builds; no build, no install. Verdict rows are advisory (§D) |
 | `gsa -Sy` | version-sync pass only: provider queries, recipe rewrites left uncommitted, disposition block printed (today's automatic pre-build sync made explicitly runnable) |
-| `gsa -Su` | update: `-Sy`, then build+install the stale set — **Phase 4** |
+| `gsa -Su [targets…] [ranges…]` | update: build+install the stale set (recipes whose tracked version moved past their newest built instance) with **no sync pass** — the committed versions build as-is (`pacman -Su` semantics) |
+| `gsa -Syu [targets…] [ranges…]` | sync first (`-Sy`), then build+install the stale set |
 
 Cluster letters: `f` = force install (today `-fi`: always run `pacman -U`, no
 same-version skip); `c` = prune strength 1 first (today `-c`: remove the
@@ -182,6 +181,15 @@ PKGBUILD's own `pkgver`/`pkgrel` against the provider and short-circuits
 `NoChangeReason::Current` (`gsa-recipe::sync`) before any `.SRCINFO` work.
 The named repair is `makepkg --printsrcinfo` + manual re-anchor (rule 18's
 checksum anchor). A skew lint is explicitly out of scope.
+
+*Amendment (2026-10-28, H7/H8/H9 — the `-S` family stops carrying queries).*
+The table's `gsa -Ss`/`gsa -Si`/`gsa -Sg` rows are retired: query actions do
+not belong to the build+install family (H7) — `-Ss` is gone (pattern search
+stays `-Qs`/pacman), `-Si` is merged into `gsa -Qi` (H8, §B.3), `-Sg` is
+renamed `gsa -Qg` (H5, §B.3). The `-Su` row was wrong vs `pacman -Su`
+semantics (H9): it is now the no-sync stale-set update and `-Syu` is the
+sync-first form; both are live (the old "Phase 4" note is retired). Pinned by
+the `gsa --help` roster tests (`gsa-cli::help`) and the fixture battery.
 
 ### B.5 `-B` — build-only
 
@@ -210,7 +218,9 @@ behaviour is pinned elsewhere, no fixture changes.
 
 `-Ua` runs in force mode inherently (no same-version skip), matching today's
 `-ia` pipeline. An empty eligible set is `noop empty-list` under `-Ua` and a
-refusal under `-S` (§E).
+refusal under `-S` (§E). *Open decision (2026-10-28, I2):* an archive with
+no index row (the unregistered named-path case) stands down at the §J.4 gate
+instead of refusing — see Open decisions, "index-complete vs the §J.4 gate".
 
 ### B.7 `-M` — maintain
 
@@ -220,11 +230,11 @@ refusal under `-S` (§E).
 | `gsa -Md [--fix]` | doctor: runtime-state reconciliation — log ownership, stale lane/run artifacts, pacman local-DB health report, binpkg index/`sha256+size` consistency, side-car rows with no pacman counterpart. Default reports; `--fix` applies the named repairs |
 | `gsa -Mi [--prune\|--backfill]` | IgnorePkg closure repair of the target `pacman.conf`: default reports drift; `--prune` removes stale entries; `--backfill` adds missing ones (today's hidden `--register-ignorepkg`) |
 | `gsa -Ml [--tail <ref>] [--keep N]` | per-package log browse/tail; `--keep N` is the log-retention prune |
-| `gsa -Mm` | mirrors: dedupe VCS source clones into canonical mirrors (today `--link-sources`). Confirmation-gated, never prompts (§K.3): without `--noconfirm` it prints its plan/targets and stops rc 3 `confirmation-required`; must run as the build user, never under a root supervisor |
+| `gsa -Mm` | mirrors: dedupe VCS source clones into canonical mirrors (today `--link-sources`). Confirmation-gated, never prompts (§K.3): without `--noconfirm` it prints its plan/targets and stops rc 3 `confirmation-required`; must run as the build user, never under a root supervisor (its run lock falls back to the build-user cache root when the state root's lock is unopenable to the build user — §K.3) |
 | `gsa -Mc <targets…>` | prune strength 1: `src/`/`pkg/`/`build/` trees and archives of the selection (today `-c` as a wipe) |
 | `gsa -Mcc` | prune strength 2: every built archive in the workspace plus its VCS-revision sidecar; symlinks are never deleted or followed (today `-cc`) |
 | `gsa -Mccc` | prune strength 3: additionally remove pulled sources — source clones, downloaded tarballs (extension-matched to the root `.gitignore` set), staging dirs. Prints its target list and stops rc 3 `confirmation-required` without `--noconfirm` (today `-ccc`) |
-| `gsa -Ms [name…] [--add\|--remove <ref…>]` | named sets: list sets and members; manage user sets under `config/sets/`. Computed sets (`@preserved-rebuild`, `@stale`, `@live-rebuild`) are listed but not editable — **`@preserved-rebuild` is Phase 4** |
+| `gsa -Ms [name…] [--add\|--remove <ref…>]` | named sets: list sets and members; user sets are the kv-store/`config/sets` union (§C.2) — `--add`/`--remove` edit the kv side. Computed sets (`@preserved-rebuild`, `@stale`, `@live-rebuild`) are listed but not editable — **`@preserved-rebuild` is Phase 4** |
 | `gsa -Mw [--add\|--remove <ref…>]` | world: the explicitly wanted set. Default lists it; `--add`/`--remove` edit it (remove = deselect) |
 | `gsa -Mh [--prune] [--show <run-id>]` | run history: list recorded run records and their continuations; `--show` renders one; `--prune` enforces the bounded retention |
 
@@ -264,6 +274,7 @@ is a pure read with no confirmation at all. Wording-only (§L.2); pinned by
 | `--no-prefetch`, `--prefetch-ahead N` | advisory fetch-ahead window (default-on): `--no-prefetch` opts out, `--prefetch-ahead N` sizes it; the two are mutually exclusive (added 2026-10-14, see amendment 4) |
 | `--config PATH`, `--noconfirm` | pacman-familiar globals; `--noconfirm` applies to the engine's own confirmations (`-Mm`, `-Mccc`) and never to a pacman question flag |
 | `--quiet`, `--verbose` | **deferred**: recognised and refused (rc 2, naming the flag) by every command; never mirrored (§H.2) |
+| `--machine` | select the machine vocabulary explicitly (the default when stdout is captured); presentation only, never mirrored (§H.2) |
 
 Engine environment inputs (the roster `gsa --help` must print; rendered from
 `crates/gsa-cli/src/help.rs`, the single layout source): `GSA_CONF`,
@@ -292,7 +303,8 @@ points this section was silent on, resolved as the code behaves:
 3. **`--leaf` (G4):** the bare boolean of this table is the only spelling.
    Continuations mirror it only in its true form (§H.2); `--leaf=no` and
    `--leaf=yes` are not accepted spellings and no engine output may contain
-   them.
+   them. *Enforcement landed (2026-10-28, T4):* any `--leaf=<value>` spelling
+   is a usage error (rc 2) naming the flag (`gsa-cli::args`), fixture-pinned.
 4. **Fetch-ahead modifiers (cutover re-point finding, 2026-10-14):** the
    table above had omitted `--no-prefetch`/`--prefetch-ahead N` although the
    code ships them (`gsa-cli::build::resolve_prefetch`; `--help` roster) and
@@ -325,6 +337,14 @@ version-keyed). Build **registration** (§J.4) is not selection: a finished
 build registers the outputs it just wrote (newest-mtime rank), never the
 version-ranked winner — a stale higher-version archive lying beside the
 recipe must not become that build's row.
+
+*Amendment (2026-10-28, H2 — output mode is presentation, not vocabulary).*
+The human prose surface is the default; the mode follows the terminal (a
+captured stdout is a machine) and `--machine` selects the machine vocabulary
+explicitly. `--human` is **retired** (2026-10-28): it is no longer a spelling
+(§L.1 — a flag absent from `--help` does not exist) and parses as any unknown
+flag. `--machine` never mirrors (§H.2): a resume picks its own presentation.
+The dumb-TTY rule is §L.9.
 
 ### B.9 Capability disposition — every current spelling
 
@@ -507,12 +527,17 @@ before the `PKGBUILD` leaf), sanitized to the topology id charset.
 ### C.2 Groups and sets
 
 Groups (`git`, `stable`, `core`, `misc`, `app`, `build-tools`) and user sets
-(`config/sets/`) share one `@name` namespace. A name resolving to both a group
-and a user set is a configuration error named by the strict loader. Group
-membership comes from the topology record only (`docs/architecture.md`); it is
-never inferred from directory names. The `build-tools` band (members dispatch
-before other ready packages, never over build-order edges) and
-core-runs-alone are scheduler invariants (§K.2), not selection semantics.
+share one `@name` namespace. A name resolving to both a group and a user set
+is a configuration error named by the strict loader. User sets live in two
+places and resolve as their **union** (2026-10-28, I5): the kv store's
+`set:*` keys (the runtime copy `gsa -Ms --add`/`--remove` edits) and the
+committed `config/sets/` files; members are deduped, existence is tracked per
+source so an empty committed set still resolves, and a kv read failure degrades
+to the committed half (never a selection failure). Group membership comes from
+the topology record only (`docs/architecture.md`); it is never inferred from
+directory names. The `build-tools` band (members dispatch before other ready
+packages, never over build-order edges) and core-runs-alone are scheduler
+invariants (§K.2), not selection semantics.
 
 ### C.3 Consumer expansion and ranges
 
@@ -645,7 +670,13 @@ provider's plan row carries `repair <consumer> <provider-id>` detail in its
 open REASON, and the provider's install stages the consumer's forced-rebuild
 marker (`<state>/abi-repair/<consumer-id>`) before the transaction. The seam
 itself stays order-blind (`--install-decide` takes no run order), so its rows
-for that state are the refusal rows. Write half deferred — see §M.
+for that state are the refusal rows. Write half landed 2026-10-28 — see §M
+(c). *Conformance note (2026-10-28, F1/F2/F4):* the coverage exception is
+real and conditional — refusal rows exist only while a linked consumer is
+stranded (consumer coverage = same transaction OR later in-run install;
+out-of-tree pinner coverage = the same transaction only); workspace pinners
+stay the `abi-consumer` class, never `abi-stock-pinner` (that class is
+out-of-tree by this table's definition).
 
 ### E.4 QA gate line
 
@@ -845,8 +876,9 @@ row: `empty-list` belongs to a genuinely empty candidate plan.
 Continuation lines: `command:` (the restated invocation), `remaining:` (space-
 separated package IDs — every row not `succeeded`, in row order: failed,
 parked, deferred, never-started, interrupted — a failed package must rebuild
-before its consumers), `not-mirrored:` (the flags deliberately not replayed),
-`env-required:` (ambient variables the resume must set). Continuation
+before its consumers), `not-mirrored:` (argv-scoped: the run's OWN argv
+spellings the restated command does not replay — a run that carried none
+renders `-`), `env-required:` (ambient variables the resume must set). Continuation
 arguments come from ONE flag-rule table with an explicit not-mirrored list;
 `--dry-run`, `--leaf`, `--skip`, `--skip-built`, `--vcs-skip-tolerance`,
 `--no-sync`, `--allow-broken-rustc`, `--fail-fast`, and the resolved
@@ -865,9 +897,9 @@ the resume fixtures pin that a dropped semantic flag is a bug. Mirrored:
 `--no-prefetch`, `--prefetch-ahead N` (non-default only), the `f` cluster
 letter, and the resolved `--lanes`/`--jobs`/`--intensity` values. Never
 mirrored: the prune-strength `c` and `-Mc`/`-Mcc`/`-Mccc`; one-shot actions
-(`-Q*`, `-Sy`, `-Su`, `-Ua`, `-M*`) and their sub-flags (`--fix`, `--prune`,
-`--backfill`, `--tail`, `--keep`, `--show`, `--add`, `--remove`);
-`--noconfirm`, `--quiet`, `--verbose`; and every hidden seam (`--install-decide`,
+(`-Q*`, `-Sy`, `-Su`, `-Syu`, `-Ua`, `-M*`) and their sub-flags (`--fix`,
+`--prune`, `--backfill`, `--tail`, `--keep`, `--show`, `--add`, `--remove`);
+`--noconfirm`, `--quiet`, `--verbose`, `--machine`; and every hidden seam (`--install-decide`,
 `--lane-job`, `--fetch-job`, `--stale-lock-check`, `--local-db-check`,
 `--install-register`, `--register-ignorepkg`, `--qa-check`). **`--leaf` is
 mirrored only as the bare flag when true (gap G4): `--leaf=no`/`--leaf=yes`
@@ -876,6 +908,17 @@ non-leaf continuation mirrors nothing and the absence IS the negation.**
 `--state-dir`/`--config` are mirrored because a resume that loses the state
 root or the IgnorePkg registration target changes behaviour — the previous
 list here was incomplete, not the code excessive.
+
+*Amendment (2026-10-28, H3 — argv-scoped `not-mirrored:`, vocabulary sync).*
+The `not-mirrored:` line lists **only the run's own argv spellings** the
+composed `command:` does not restate (`gsa-cli::record::not_mirrored_of`),
+never the full not-mirrored roster; a run that carried none renders
+`not-mirrored: -` (the empty marker). The roster above is updated to the
+current vocabulary: one-shot actions now include `-Syu`, the retired
+`-Ss`/`-Si`/`-Sg` spellings (2026-10-28, §B.4 amendment) are gone from every
+vocabulary, and `--machine` is presentation-only and never mirrored.
+`--dry-run` mirrors on the `-U` transaction record as well as plan records.
+Pinned by `tests/gsa-model` rendering tests and the resume fixtures.
 
 ### H.3 Status vocabulary and reason keys
 
@@ -896,13 +939,21 @@ not `ok`.
 *Amendment (2026-10-14, cutover gap G3 — additive keys named).* §L.2 makes
 reason keys open; this closes their opacity. Observed additions beyond the
 table above (fixtures pin them): `mutex-timeout` (failed),
-`result-clear-failed` (failed), `signal-term`/`signal-hup`/`signal-int`
-(interrupted — the signal that ended the lane; `interrupted-mid-build` stays
-the no-signal case), `install-refused <cause>` (never-started — the §E.3
-refusal seen through the outcome rendering), `dry-run` (never-started),
+`result-clear-failed` (failed), `install-refused <cause>` (never-started — the
+§E.3 refusal seen through the outcome rendering), `dry-run` (never-started),
 `held-after-install-failed` (never-started — a staged wave group after an
-earlier group failed), `log-unwritable` and `interrupted-mid-build` as
-listed. Any new key lands here in the same change.
+earlier group failed), `startup-refused` (never-started — the run was refused
+before any lane started), `park-marker-unwritable` (failed — the lane settled
+`lost 125` because its park marker could not be written), `log-unwritable`
+and `interrupted-mid-build` as listed. Any new key lands here in the same
+change. *Correction (2026-10-28, T6 — signal identity is not a reason key).*
+This amendment previously listed `signal-term`/`signal-hup`/`signal-int`;
+no engine surface emits them and the fixtures pin `interrupted-mid-build`
+for every signal-ended lane, exactly as §I.3 states ("what started is
+`interrupted interrupted-mid-build`"). The signal that ended the lane rides
+the lane code (129/130/143, §F.1), never the reason key. (T9: `startup-refused`
+and `park-marker-unwritable` added to this list in the same pass — they were
+fixture-pinned keys missing from the recorded vocabulary.)
 
 ### H.4 Annotated example
 
@@ -930,7 +981,7 @@ niri-spicy-git succeeded 0 1450 ok         <- unrelated work ran to completion
 --- continuation ---
 command: gsa -S glib2-git gtk4-git gimp-git
 remaining: glib2-git gtk4-git gimp-git
-not-mirrored: -Mcc -Mccc -Sy
+not-mirrored: -
 env-required: GSA_STATE_DIR
 --- run record end ---
 ```
@@ -1002,7 +1053,7 @@ escape flag**, and both are normative here:
 | `/var/lib/gsa/index/` | the binpkg index (J.4) |
 | `recipes.last-fetch` (in the state root) | the recipe store's fetch/refresh stamp — state, not store: the store itself lives outside the state root (§J.2) |
 | `/var/lib/gsa/standalone/` | standalone-target staging work areas (§B.11, §C.1): one staged one-node workspace per run, rewritten wholesale |
-| `/var/lib/gsa/abi/` | ABI token records and subscription records (`consumer\|version\|provider\|token`), installed-ELF index (Phase 4), preserved-lib registry (Phase 4) |
+| `/var/lib/gsa/abi/` | ABI token records and subscription records (`consumer\|version\|provider\|token`), the installed-ELF view `-Qr` reads (live, on demand — F3, 2026-10-28), preserved-lib registry (Phase 4 — nothing writes it yet) |
 | `/var/lib/gsa/world`, `/var/lib/gsa/sets/` | the world file and user sets (`config/sets/` remains the committed source; the state root holds the runtime copy) |
 | `/var/lib/gsa/runs/` | run history: one recorded run record per run (the `format: 2` struct), its continuation, and the bounded retention bookkeeping |
 | `/var/lib/gsa/logs/` | per-package build logs (today `.state/logs/`) |
@@ -1100,7 +1151,12 @@ pkgbase|pkgname,…|full-version(epoch:pkgver-pkgrel)|archive-filename|sha256|si
 `sha256` and `size` are computed from the archive bytes at index-write time;
 the row is written only after both are known (fail closed on divergence). An
 archive whose bytes disagree with its row is index-invalid: it never installs,
-and `-Md` reports/repairs it. `-s` currency, install discovery, and provenance
+and `-Md` reports/repairs it. When a same-path rebuild leaves several rows
+naming one archive file, the **newest registration (highest instance) binds
+the bytes** — a stale row never fails a rebuilt archive (2026-10-28, §J.4 gate
+conformance; `gsa-state::index::find_archive` exact-path branch). A filename
+fallback with several same-named candidates still refuses to guess. `-s`
+currency, install discovery, and provenance
 read the index instead of re-deriving filenames. The ABI token is **derived**:
 `hash(sorted bare-soname provide set actually shipped)` (bare stems only —
 `libfoo.so`, never the auto-versioned form; `docs/MEMORY.md` rules 25(a) and
@@ -1167,6 +1223,15 @@ dispatch; a failure parks a cone (§I).
   own dependency installs are routed through the same lock (the `PACMAN` shim).
   A system `db.lck` is NEVER deleted automatically; lock idleness is proven by
   an open-file-descriptor scan, not by filenames.
+  *Amendment (2026-10-28, H10):* the state-root mutex is
+  `<state>/locks/run.lock`. A build-user-only verb (§B.7 `-Mm`) cannot open a
+  root-owned state root's lock and must not run under a root supervisor; when
+  — and only when — the state lock fails with EACCES/EPERM (never on
+  contention, which stays a `run-in-flight` refusal) the run holds a fallback
+  lock at the build cache root (`build_root`/`run.lock`) instead. The fallback
+  serializes build-user maintain runs among themselves but does NOT mutually
+  exclude root engine runs over the same state root — a permission split
+  cannot provide one mutex.
 - **`sudo -n` only.** The engine never prompts (a TTY changes nothing). The
   preflight refuses to start an install run whose installs cannot succeed;
   a credential lost mid-run stops dispatch exactly once, drains in-flight
@@ -1221,13 +1286,15 @@ dispatch; a failure parks a cone (§I).
    default is readable prose — a TTY run renders the live progress box
    (progress header, per-lane rows with run-scoped log tails, spinner +
    last-event footer), a pipe renders append-only event lines plus the 10 s
-   `STATUS:` hint under `--human`; the machine vocabulary is the leveled
-   `LEVEL event k=v` grammar (`output::kv_line`: one line per event,
-   space-free values, `action=` names the next move). Every event renders in
-   BOTH vocabularies and the machine grammar is unit-pinned
-   (`render::tests`), the box is fixture-pinned (`tests/dashboard-pty.sh`).
-   A wording change breaks exactly those pins, never the record grammar
-   (§H/§L.2).
+   `STATUS:` hint; the machine vocabulary is the leveled `LEVEL event k=v`
+   grammar (`output::kv_line`: one line per event, space-free values,
+   `action=` names the next move) and is what a captured stdout gets by
+   default, or `--machine` selects explicitly (2026-10-28, H2: `--human` is
+   retired — presentation follows the terminal and never changes hands).
+   Every event renders in BOTH vocabularies and the machine grammar is
+   unit-pinned (`render::tests`), the box is fixture-pinned
+   (`tests/dashboard-pty.sh`). A wording change breaks exactly those pins,
+   never the record grammar (§H/§L.2).
 10. **Smoke tests run the INSTALLED engine** (owner decision 2026-10-23):
    "it works" means the packaged `gsa` binary behaves. Every smoke check and
    the fixture battery (`tests/run-all.sh`) default to `command -v gsa` and
@@ -1245,6 +1312,19 @@ terminal resize refits on the next run; (b) the install transaction's
 interrupt lines (`install.rs`: `signal <sig>` / `teardown …`) deliberately
 stay prose in BOTH vocabularies — they ride the transaction surface, not the
 event catalog, until that surface splits.
+
+*Recorded changes (2026-10-28, interface-consistency wave).* (a) H1: `gsa
+--help` regrouped — families and command surfaces in family order (`-Q`,
+`-S`, `-B`, `-U`, `-M`); (b) H4: `-Sy` prints per-recipe status lines (human
+`·`/`✓ id: …` prose; machine `INFO sync pkg=… status=… reason=… old=… new=…` —
+a new `sync` event in the catalog, both vocabularies per rule 9); (c) H3/H6:
+the human surface speaks per-action prose (fetch verdicts `gsa-fetch: …`, the
+exit summary de-duplicates scalars the record already answers) while the
+`format: 2` rows stay byte-stable; (d) H5: the group roster is discoverable
+(`gsa -Qg`, `gsa -Ms`); (e) I5: `@name` user-set resolution is the
+kv-store/`config/sets` union (§C.2). Fixture pins: `tests/gsa-sync-v2.sh`,
+`tests/gsa-fetch-v2.sh`, `tests/gsa-maint-v2.sh`, `tests/run-record.sh`, and
+`gsa-cli::help`/`gsa-cli::render` unit tests.
 
 ---
 
@@ -1273,6 +1353,15 @@ event catalog, until that surface splits.
    consumer of the `format: 1` block needs a compatibility window** (the
    55 fixtures and `rr_*` are re-contracted anyway per the clean-slate
    decision).
+5. **`index-complete` vs the §J.4 gate (2026-10-28, I2).** The gate refuses an
+   archive whose bytes disagree with its binpkg index row (`index-invalid`;
+   `-Md` reports/repairs), but an archive with **no** index row is the
+   unregistered named-path case and stands down (not refused) — §B.6 promises
+   "index-complete archives" without defining that case. Should a named-path
+   install of an unregistered archive refuse instead?
+   — **Recommendation: keep standing down** (a named path is a deliberate
+   user action and the index guards registered build outputs); if kept, §B.6
+   should say so explicitly in the change that resolves this.
 
 ---
 
@@ -1287,7 +1376,7 @@ rationale each.
 | --- | --- | --- |
 | (a) `-U`/plan record conformance | **fixed**: budget scalars always integers (`0` when nothing dispatches), per-subject row collapse (order/plan/outcome one-to-one), the phantom `refused empty-list` row of a self-explaining refusal plan retired | §H.2 amendments; `gsa-model::RunRecord::render_machine`, `gsa-cli::record::collapse_txn_rows`, `gsa-cli::install` (self-explaining plans) |
 | (b) `mirror_flags` vs the flag-rule table | **fixed by amendment**: the table now lists the full mirrored set (`--state-dir`/`--config`/`--no-register-ignorepkg`/`--no-prefetch`/`--prefetch-ahead`/`f` included — a resume that drops them changes behaviour) | §H.2 amendment |
-| (c) G1 — repair-marker write half | **write surface decided, implementation deferred**: the marker is staged by the provider's install step for every consumer its ABI refusal was suppressed for (`gsa-abi::rows` coverage via `later_installs`), written under `<state>/abi-repair/<consumer-id>` BEFORE the transaction and fail-closed on write error; the surface rides the existing plan-row **reason** (`repair <consumer> <provider-id>` detail on the provider's row), never a new `plan` value — so no format bump (§L.2). Deferred one line: the consume half (2026-10-14) and the fish oracle's K/L/M/N cases pin the semantics; the write half lands with the ABI-wave hardening pass rather than at cutover | §E.3 note; `tests/abi-drift-install.sh` K/L/M/N (fish oracle) |
+| (c) G1 — repair-marker write half | **fixed (2026-10-28)**: the marker is staged by the provider's install step for every consumer its ABI refusal was suppressed for (`gsa-abi::rows` coverage via `later_installs`), written under `<state>/abi-repair/<consumer-id>` BEFORE the transaction and fail-closed on write error (`gsa-cli::install::stage_repair_markers`); the surface rides the existing plan-row **reason** (`repair <consumer> <provider-id>` detail on the provider's row), never a new `plan` value — so no format bump (§L.2). The consume half landed 2026-10-14 and the fish oracle's K/L/M/N cases pin the semantics; the write half landed with the 2026-10-28 ABI-gate conformance pass (`AbiGate{rows,repairs}`, `decide_with_repairs`) | §E.3 note; `tests/abi-drift-install.sh` K/L/M/N (fish oracle) |
 | (d) G2 outcome vocabulary | **fixed by documentation**: `planned\|success\|refused\|failed\|deferral\|interrupted` | §H.2 amendment |
 | (d) G4 `--leaf=no` replay hazard | **fixed**: `--leaf` mirrors only in its true form; the negated spellings appear nowhere | §B.8/§H.2 amendments; `gsa-cli::record::build_plan_record` |
 | G3 reason-key opacity | **fixed by documentation**: additive keys named | §H.3 amendment |

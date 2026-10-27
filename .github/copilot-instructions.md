@@ -61,9 +61,10 @@ cargo test --workspace         # engine test suite
 gsa --help                     # the authoritative spelling roster
 ```
 
-`packages/core/gsa-pm` packages the engine as `/usr/bin/gsa` (recipe contract:
-an engine change bumps its `_commit` pin + `pkgver` + the committed `.SRCINFO`
-in the same change).
+`packages/core/gsa-pm` packages the engine as `/usr/bin/gsa` (recipe contract,
+owner decision 2026-10-23: the recipe is git self-tracking — an engine change
+needs NO `_commit` pin bump (there is none), and its committed `.SRCINFO`
+regenerates only when recipe metadata actually changes).
 
 ### Grammar and families
 
@@ -205,8 +206,10 @@ Two halves plus the runtime state they share (`docs/architecture.md`):
    committed `.SRCINFO`, local patches/hooks/install scripts/desktop assets,
    upstream license material (`LICENSE`, `LICENSES/`, `REUSE.toml`), and
    optional `.nvchecker.toml` / `BUILDING`. The physical categories are
-   `git`, `stable`, `core`, `misc` — logical groups deliberately overlap them,
-   so never infer build order or group membership from directory names.
+   `git`, `stable`, `core`, `misc`, plus the reserved `deprecated` tier
+   (parked recipes, not in the build list) — logical groups deliberately
+   overlap them, so never infer build order or group membership from directory
+   names.
 2. **Topology** — declarative, under `config/`. `topology.conf` holds one
    record per package, `id|path|groups|edges[|tags]`, and is *the only* place
    that binds a package ID to a recipe path. Group membership is a comma list
@@ -375,11 +378,14 @@ provides change requires a real rebuild (`makepkg -Rf` only repackages).
 Verify with `tar -xOf pkg.tar.zst .PKGINFO | grep provides`.
 
 **Optimization policy.** The host's `makepkg.conf` is the default. Do not
-append hard-coded `-O3`, `-march`, or `-mtune` to a recipe; host-derived
-native settings are fine, and an explicit `GSA_TARGET_CPU` must be intentional
-and documented. `mold-git` does not provide `mold` for depend resolution — the
-house idiom is a runtime `command -v mold` guard. Meson recipes use
-`arch-meson`. LTO/PGO phases, and the rules that must replace a
+append hard-coded `-O3`, `-march`, or `-mtune` to a recipe (documented
+per-package exceptions live in `docs/MEMORY.md` §4, e.g. `zen-browser-pgo`'s
+`--enable-optimize=-O3`); host-derived native settings are fine, and an
+explicit `GSA_TARGET_CPU` must be intentional and documented. `mold-git`
+carries the versioned provide `mold=${pkgver}`, so a `mold` makedepends
+resolves to it (the runtime `command -v mold` guard idiom is retired). Meson
+recipes use `arch-meson` (the known raw-`meson setup` deviations are tracked
+exceptions in `docs/MEMORY.md` §4). LTO/PGO phases, and the rules that must replace a
 *configure-time* argument cache rather than only recompiling — Meson's
 `meson setup --reconfigure`, and CMake's `CMakeCache.txt`, whose flags must be
 rewritten *inside* the file (`make clean` keeps the cache, and deleting it also

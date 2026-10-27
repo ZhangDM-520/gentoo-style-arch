@@ -17,7 +17,7 @@ readable.
 | `stable` | recipes tracking released upstream versions | by tracking style, not physical category |
 | `core` | ABI-coupled hubs and the coupled stacks; runs alone with a memory-aware job budget | any recipe with ≥2 build-order consumers (see the rule below); deliberately overlaps the physical categories |
 | `misc` | general one-off recipes | roster slot, currently without members (standalone-staged recipes use `packages/misc/` as their physical category — contract §B.11) |
-| `app` | optional applications; `@app` triggers the TTY multi-select prompt | exclusive — wiring a record into `app` replaces its previous group |
+| `app` | optional applications; `@app` triggers the TTY multi-select prompt | coexists with `core` dual membership (hub rule); wiring into `app` replaces the record's previous app-era grouping |
 | `build-tools` | compile toolchains; a dispatch-priority band, not a partition | always dual: `core,build-tools` |
 
 Member counts drift with every addition; run this against
@@ -32,7 +32,8 @@ Group membership rules (2026-10-04): a package consumed by multiple packages
 exception is `app-cluster` members like `fcitx5-git`, whose only consumers are
 their own cluster siblings; compile toolchains carry `core,build-tools`
 (dispatch-priority semantics in `docs/architecture.md`); `app` membership
-stays exclusive. Group moves never touch `abi=`/`app-cluster=` tags
+coexists with `core` dual membership per the hub rule. Group moves never
+touch `abi=`/`app-cluster=` tags
 (`qt5ct`/`qt6ct` keep `abi=must` after leaving `core`). A recipe invoking
 cargo/rustc must declare a `rust-git` build-order edge; `gsa -Ma` lints such
 gaps.
@@ -40,7 +41,9 @@ gaps.
 ## Adding a recipe
 
 Place a clean recipe directory under the physical category that best describes
-it, and add one record to `config/topology.conf`:
+it (`git`, `stable`, `core`, `misc`, or the reserved `deprecated` tier — a
+reserved recipe is not in the build list, gets no version sync, and is kept
+one cycle then deleted), and add one record to `config/topology.conf`:
 `id|path|groups|edges[|tags]`. The record is the only place that binds a
 recipe ID to a filesystem path. `groups` is a comma list over the six group
 names (see "Groups"), `edges` is the comma list of the packages this one
@@ -99,11 +102,13 @@ recovery contract.
 
 ## The app group
 
-`app` is a real group whose members are leaf packages — a selection of one
-expands to nothing beyond it, because app packages typically have no
-consumers. A record wired into it carries `app` **alone** — membership
-replaces the record's previous group. The 2026-09-27 wiring moved 22 records
-in; `qt5ct`/`qt6ct` thereby left `core`, and the `third-party` group retired
+`app` is a real group that coexists with `core` dual membership per the hub
+rule (`fcitx5-qt-git` is `app,core`); wiring a record into `app` replaces its
+previous app-era exclusive grouping, never `core` dual membership. App
+membership does not exempt a selection from consumer expansion (contract
+§C.3): `graphicsmagick` is `app`, yet selecting it expands to its consumer
+`inkscape` — a rebuild of exactly one recipe uses `--leaf`. The 2026-09-27
+wiring moved 22 records in; `qt5ct`/`qt6ct` thereby left `core`, and the `third-party` group retired
 at the same time (its two recipes relocated to `packages/stable/`). Leaving a
 group does not touch coupled-batch tags: `qt5ct`/`qt6ct` keep their `abi=must`
 tags, so a Qt ABI batch must still name them explicitly even though `@core` no
@@ -146,10 +151,14 @@ that are only noted, never gated. The batch itself is derived from the edge
 graph — every abi-tagged package that transitively depends on a selected
 anchor — so membership cannot drift away from the edges the way prose could.
 A real build whose selection includes an `abi=must` anchor while an installed
-`abi=must` batch member is omitted is refused before anything dispatches,
-with the missing members named; `--dry-run` and listings never gate.
-Uninstalled members are never gated: they rebuild against the new ABI on
-their next build anyway.
+`abi=must` batch member is omitted ADDS the member to the plan as a wave
+addition (basis `coupled-must`, even under `--leaf`) — the fish-era refusal
+trigger retired with `tests/abi-batch-policy.sh`'s register (DEVIATION 1).
+The gate refuses only what the topology cannot build at all (`refuse
+abi-consumer-uncovered`, rc 3, nothing dispatched), and `--dry-run` gates that
+same state (exit 3, full plan rendered, nothing built) while listings (`-Bl`)
+stay rc 0 (DEVIATION 7). Uninstalled members are never gated: they rebuild
+against the new ABI on their next build anyway.
 
 The same trap appears when a recipe *becomes* a Rust consumer. `mold-git` was
 reworked into a cargo-based 3-phase Rust PGO build, which silently made it a

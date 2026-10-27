@@ -76,6 +76,17 @@ belong in `docs/NOTE.md`; `docs/MEMORY.md` §5 holds a live decision.
 4. If a fingerprint cannot be confirmed against a published key, stop and
    report the mismatch instead of trusting it.
 
+### The `?signed` rule (2026-10-28)
+
+`?signed` is mandatory on every `#tag=` source whose upstream signs its tags
+with a GPG signature verifiable against the recipe's `validpgpkeys` (the pin
+names the actual signer, primary or signing subkey). Documented exceptions:
+unsigned-tag, lightweight-tag, and SSH-signed upstreams (fetch attestation =
+TLS). A signed tag whose signer is not yet pinned needs the pin fixed first
+(CONTRIBUTING #2–4 publisher-material confirmation) — adding `?signed`
+alone fails fetch (SIGNATURE NOT FOUND / FAILED invalid public key /
+unknown public key).
+
 ### Provides discipline
 
 Toolchain `-git` packages carry *versioned* provides
@@ -98,7 +109,9 @@ tar -xOf <archive>.pkg.tar.zst .PKGINFO | grep provides
 
 Use the host's `makepkg.conf` as the default optimization policy. Do not
 append hard-coded `-O3`, `-march`, `-mtune`, or other host-specific ISA flags
-to a recipe. Use host-derived native settings only when they are already
+to a recipe; documented per-package exceptions live in `docs/MEMORY.md` §4 —
+the current list: `zen-browser-pgo`'s `--enable-optimize=-O3` (PGO-trained
+Mozilla build). Use host-derived native settings only when they are already
 provided by the build environment; an explicit target such as
 `GSA_TARGET_CPU` must be intentional and documented.
 

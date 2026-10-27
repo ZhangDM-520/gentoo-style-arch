@@ -299,9 +299,11 @@
     `#commit=` in PKGBUILD source, unpin after install — BPF target is
     build config, survives the snapshot change). Enforced by the builder since
     2026-09-25: `gsa -Ma` lints every cargo/rustc recipe for a `rust-git` edge
-    in its topology record; the generic abi-batch gate refuses a real build
-    whose selection omits an installed `abi=must` batch member (llvm-git
-    without rust-git is the canonical case; the tag data drives it); and an
+    in its topology record; the generic abi-batch gate heals an omitted
+    installed `abi=must` batch member — it joins the plan as a wave addition,
+    basis `coupled-must`, even under `--leaf` (llvm-git without rust-git is
+    the canonical case; the tag data drives it; the fish-era refusal trigger
+    retired with `tests/abi-batch-policy.sh` DEVIATION 1); and an
     `-S` run re-runs the rustc sanity probe right after its own
     llvm-git/llvm-libs-git install; a probe failure engages toolchain
     REMEDIATION — the engine force-builds rust-git (narrow phase, escalating
@@ -345,6 +347,12 @@
     co-signing publisher pin the full current release-key set from its own
     key page, and resolve a sig's subkey fingerprint to its primary before
     calling a pin missing.
+- **makepkg `?signed` means verification is REQUIRED — it breaks unsigned
+  upstreams** (2026-10-28): the `?signed` fragment is never a "please
+  verify" hint — it makes the tag signature mandatory at fetch, so an
+  unsigned-, lightweight-, or SSH-tagged upstream fails (SIGNATURE NOT
+  FOUND) the moment the fragment is added. POINTERS: CONTRIBUTING.md "The
+  `?signed` rule (2026-10-28)"; recipe-corpus audit 2026-10-28.
 
 16. **Bulk `prepare()` loops: batch them, and refuse incomplete inputs**
     (09-18 texlive incident): a loop that shells out per file costs process
@@ -1450,8 +1458,9 @@ Engine shape (2026-10-14 Phase 5 cutover): the engine of record is the native
 `gsa` binary — the Rust workspace under `crates/`, built by
 `cargo build --release` (`./target/release/gsa`; tested with
 `cargo test --workspace`; the `packages/core/gsa-pm`
-recipe ships it as `/usr/bin/gsa`, and an engine change bumps that recipe's
-`_commit` pin + `pkgver` + the committed `.SRCINFO` in the same change). The crates: `gsa-model`, `gsa-topo`, `gsa-recipe`, `gsa-graph`, `gsa-sched`, `gsa-build`, `gsa-install`,
+recipe ships it as `/usr/bin/gsa` — git self-tracking (owner decision
+2026-10-23): an engine change needs NO pin bump (there is no `_commit` pin),
+and its `.SRCINFO` regenerates only when recipe metadata actually changes). The crates: `gsa-model`, `gsa-topo`, `gsa-recipe`, `gsa-graph`, `gsa-sched`, `gsa-build`, `gsa-install`,
 `gsa-fetch`, `gsa-state`, `gsa-qa`, `gsa-maint`, `gsa-abi`, `gsa-cli` —
 their roles are stated once in `docs/architecture.md` §3. The fish engine is
 retired: its implementation is frozen verbatim under `tests/assets/`
@@ -1628,10 +1637,15 @@ package parks (`parked waits-on-deferred`, contract §H.3), its dependents
 wait, dispatch continues, and the run still
 exits non-zero.
 
-`--leaf` is a deliberate leaf rebuild. `gsa -Ma` checks active topology and
+`--leaf` is a deliberate leaf rebuild (bare spelling only: `--leaf=<value>`
+is a usage error since 2026-10-28 — contract §B.8 G4). `gsa -Ma` checks active
+topology and
 runtime drift, including cargo/rustc recipes that declare no `rust-git` edge.
 `gsa -Mm` deduplicates compatible VCS mirrors without
-publishing them. `gsa -Mccc` removes fetched sources only after an explicit
+publishing them; as a build-user-only verb its run lock falls back to the
+build cache root when the state root's lock is unopenable to the build user
+(2026-10-28, contract §K.3 H10 — a permission split provides no single
+mutex). `gsa -Mccc` removes fetched sources only after an explicit
 confirmation and preserves recipe-local inputs.
 
 ### Key dependency edges
@@ -1805,12 +1819,18 @@ install history lives in `NOTE.md`.
 ## 4. Optimization playbook
 
 - **mold linker**: `-fuse-ld=mold` in LDFLAGS/QMAKE_LFLAGS/meson linker args;
-  mold-git does NOT provide `mold` for makedepends resolution — runtime
-  `command -v mold` check instead (house guarded idiom).
+  mold-git carries the versioned provide `mold=${pkgver}`
+  (`provides=("$_reponame=$pkgver")` in `packages/core/mold-git/PKGBUILD`), so
+  a `mold` makedepends resolves to it; the runtime `command -v mold` guard
+  idiom is retired (optional belt). (last reviewed 2026-10-28)
 - **CachyOS makepkg.conf** gives -O3/-march=native implicitly; meson packages
   use `arch-meson` (buildtype=release — upstream `if buildtype=='release'`
-  blocks DO apply). Rust: append `-C target-cpu=native` ONLY if RUSTFLAGS
-  lacks 'target-cpu'. ISA tuning is host-derived or explicitly configured.
+  blocks DO apply) — the rule stands; the known raw-`meson setup` deviations
+  (dbus-broker-git, flatpak-git, mesa-git, pixman-git with
+  `--buildtype=plain`, zbar) are tracked exceptions, converted to
+  `arch-meson` only with build evidence, dated. Rust: append
+  `-C target-cpu=native` ONLY if RUSTFLAGS lacks 'target-cpu'. ISA tuning is
+  host-derived or explicitly configured. (last reviewed 2026-10-28)
 - **LTO**: meson-controlled `-Db_lto=true` (mesa +allow-broken-lto,
   libadwaita, util-linux, systemd, dbus-broker, noctalia); PGO phase-1 always
   `-Db_lto=false` → flip true in phase 2 (glib2, gtk3, gtk4, wayland, cairo,
@@ -1897,7 +1917,8 @@ install history lives in `NOTE.md`.
   a failed run's half-mutated DESTDIR makes the next install.sh die on a
   dangling-symlink `cp`; see §6); Zen browser
   (fortify 3→2, HOST_CFLAGS unset — cc-rs re-export hazard, 3-tier mozconfig
-  PGO); gcc-snapshot (-O2 stage2–4, format-security stripped); qt5-base-git
+  PGO, explicit `--enable-optimize=-O3` (documented exception, 2026-10-28));
+  gcc-snapshot (-O2 stage2–4, format-security stripped); qt5-base-git
   (cflags + nostrip patches — qmake consumes system CFLAGS); libadwaita/
   xdg-portal-gnome `--wrap-mode=default`; dbus-broker units patch; glib2
   schema/terminals patches; `options=(staticlibs)` on lz4/pixman/mimalloc/
@@ -1950,6 +1971,11 @@ going stale.
 
 ### Queued (claim by editing this section)
 
+- queued pin-fix candidates (2026-10-28 recipe-corpus audit) — do NOT change trust pins without publisher-material confirmation per CONTRIBUTING #2–4:
+  - nautilus — pin fix: signer is standalone primary 54E5822A42B3D77FE9C669D863F446509A1D40AF (not a subkey of current pins)
+  - gobject-introspection — pin fix: signer is Emmanuele Bassi primary 53EF3DC3…BBB7 (current pins name Withnall/Trevisan)
+  - bind — pin fix: signer FFE973BF…7510 (andi@isc.org); pins currently commented out
+  - fish — pin fix: signer 7580377F…1A2ED (aclopte@gmail.com); pins currently commented out
 
 - **`--skip`'s version-keyed local claim churns fast-VCS recipes every run**
   (2026-10-18, the llvm-git perpetual-rebuild wall): `gsa-recipe::freshness`
@@ -2513,7 +2539,19 @@ constant, not a baked path); and the xorg-xwayland-git PGO end-to-end proof
   absence IS the negation and §B.8 defines only the bare flag. The mirrored
   set is code truth in `crates/gsa-cli/src/record.rs`
   (`mirror_flags`/`NOT_MIRRORED`); contract §B.8/§H.2 amendments name the
-  full set and the not-mirrored list.
+  full set and the not-mirrored list. The ban itself is enforced since
+  2026-10-28 (any `--leaf=<value>` is rc 2 naming the flag).
+
+- **An amendment that claims "fixtures pin them" must name one that does**
+  (2026-10-28 consistency audit, T6/T9): the §H.3 G3 reason-key amendment
+  listed `signal-term`/`signal-hup`/`signal-int` as fixture-pinned while every
+  signal fixture actually pinned `interrupted-mid-build` and no engine surface
+  emitted the `signal-*` keys (the signal rides the lane code, contract §F.1);
+  meanwhile two genuinely fixture-pinned keys (`startup-refused`,
+  `park-marker-unwritable`) were missing from the recorded vocabulary. Rule:
+  verify a doc coverage claim against the fixture before it lands; a reason
+  key is emitted-or-it-is-not — never "planned". Corrections recorded in
+  contract §H.3 (2026-10-28).
 
 - **The fish engine moved — muscle memory must move to `gsa`** (2026-10-14
   Phase 5 cutover): the engine of record is the native `gsa` (cargo workspace
@@ -3235,7 +3273,8 @@ constant, not a baked path); and the xorg-xwayland-git PGO end-to-end proof
   Bazaar refs individually; never compare a shared checkout or unrelated
   repository `HEAD`. A moved ref follows the normal build/install path. If
   the selected ref cannot be parsed, or upstream does not answer a Git ref
-  query even after the transport retries (0.5 s/1 s, 3 attempts; a completed
+  query even after the transport retries (6 attempts, 2/5/10/20/40 s
+  backoff; a completed
   `ls-remote` "no such ref" answer is not retried), PARK the recipe before
   `makepkg` — defer, lane rc 99, run-record reason `upstream-unverified` —
   never fail the run over an unverifiable upstream and never silently skip
@@ -3921,13 +3960,15 @@ constant, not a baked path); and the xorg-xwayland-git PGO end-to-end proof
   anyway — the first red probe of the ABI gate installed the broken package
   despite the printed finding. Any blocking gate must be red/green-probed at
   transaction level, not just at script level. Details: NOTE.md 2026-10-22.
-- **alpm hook input is package NAMES on stdin, and only for names with a
-  cached download** (2026-10-22, measured — no alpm-hooks docs on host):
-  `Type=Package` + `NeedsTargets` + `When=PreTransaction` passes names one
-  per line, no argv; `Operation =` takes one line per value (`Install |
-  Upgrade` is a parse error); a `pacman -U` of a local file resolves to no
-  `/var/cache/pacman/pkg/<name>-*` archive and is therefore skipped. Details:
-  NOTE.md 2026-10-22.
+- **alpm hook input is package NAMES on stdin; `-U` local-file installs are
+  skipped by argv, not by cache** (2026-10-22, measured — no alpm-hooks docs
+  on host): `Type=Package` + `NeedsTargets` + `When=PreTransaction` passes
+  names one per line, no argv; `Operation =` takes one line per value
+  (`Install | Upgrade` is a parse error); a `pacman -U` of a local file is
+  SKIPPED outright — the gate reads the transaction kind from the pacman argv
+  via process ancestry (`-U` ⇒ local file install) and never scans a cached
+  twin; only a sync transaction's cached download is scanned. Details:
+  NOTE.md 2026-10-22 (input shape) and NOTE.md 2026-10-28 (stand-down rule).
 - **An `-S` plan drags the whole consumer wave of every SELECTED provider
   whose newest registered abi-token ≠ consumer `:=` records** (2026-10-23,
   code + measured): `wave_check` (build.rs) fires per selected provider;

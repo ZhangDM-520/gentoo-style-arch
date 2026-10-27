@@ -9,6 +9,11 @@ module:
   snippets, and other assets the build needs are committed with the recipe.
 - Upstream licence material (`LICENSE`, `LICENSES/`, `REUSE.toml`) is
   preserved as shipped.
+- A recipe that generates its `PKGBUILD` commits the generator pair with it
+  (`PKGBUILD.in` template + `update.PKGBUILD` script) — maintenance metadata,
+  kept in lockstep with `PKGBUILD` (every manual edit is mirrored into the
+  template). Packaging-repository CI configs (e.g. `.travis.yml`) are not
+  content and are never committed.
 
 Fetched or generated at build time and never vendored: remote Git
 repositories, release archives, downloaded signatures, key caches, source

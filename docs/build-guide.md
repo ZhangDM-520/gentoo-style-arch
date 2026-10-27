@@ -235,7 +235,9 @@ skip it normally. If a ref cannot be resolved, the engine stops before
 `makepkg`; it does not skip the archive or begin an unverified migration.
 Git ref queries classify transport failures by `ls-remote` exit status: 0/2
 are completed answers (2 = clean "no such ref", never retried), anything
-else is retried 3 times (0.5 s/1 s backoff). If upstream still does not
+else is retried on the bounded schedule (`LS_REMOTE_BACKOFF` in
+`crates/gsa-recipe/src/freshness.rs`): 6 attempts, 2/5/10/20/40 s backoff
+(~93 s). If upstream still does not
 answer, the recipe is *deferred* (lane rc 99, run-record reason
 `upstream-unverified`): nothing is skipped, built, or installed, its
 consumers wait, the rest of the run continues, and the run exits non-zero — an
@@ -407,10 +409,17 @@ Refresh-only entries get the loud record instead of a refusal:
   the fetch, NOT anchored):
     <file>
   Attestation: a detached signature is PGP-verified against the anchored
-  payload at build time, a VCS source is pinned by its #tag/#commit, and a
+  payload at build time, a VCS source pinned by #tag/#commit is anchored to
+  that ref, a #branch= pin tracks a branch tip — attested by the fetch (TLS)
+  only, allowed only as a named maintenance branch (MEMORY rule 30) — and a
   plain download is attested by nothing but the fetch (TLS). Review these
   sums before committing; '--no-sync' builds the committed version as-is.
 ```
+
+The `#branch=` rule is a tracked deviation in the current tree: 56 pins point
+at trunk branches (`master`/`main`/`dev`/`develop`; counted 2026-10-28 —
+recount with `grep -rn '#branch=' packages --include=PKGBUILD`), tracked but
+never blessed by this note.
 
 **One unanchorable recipe no longer strangles the dispatch** (2026-09-24):
 the impossible-to-anchor paths *defer* the recipe instead of failing it. The
