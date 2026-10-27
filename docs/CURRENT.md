@@ -386,3 +386,11 @@ One authority per path — probe, don't remember:
 - **Engine state**: /var/lib/gsa (runs, index, abi, logs — logs APPEND
   across runs, so "Finished making (old date)" blocks are history, not a
   second build).
+
+## aranicy 0.2.0-1 bump (2026-10-28)
+- `packages/stable/aranicy` bumped to upstream v0.2.0 (dynamic nice bias
+  from scx_lavd; storm gates ≤5% one core both variants at 2000 execs/s).
+  Recipe sha-pinned to the `v0.2.0` GitHub archive; `.SRCINFO` regenerated;
+  `gsa -Sl`/`gsa -S --dry-run aranicy` clean.
+- Host install: built 0.2.0-1 via leaf makepkg, `pacman -U`, aranicy.service
+  restarted and verified (see the same-day entry below for the live check).

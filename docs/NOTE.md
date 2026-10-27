@@ -1,3 +1,88 @@
+## 2026-10-28 — Test-battery contract alignment (audit T1–T5/T7/T8): strict run records, `--leaf` ban, park reporting wired
+
+**Symptom (blind contract audit, test battery vs `docs/gsa-contract.md`).**
+Seven drifts: T1/T2 enshrined the retired `lanes: -` record shapes and read
+`-U`/dry-run records through lenient inline extractors; T3 retired the
+resume continuation's mirrored-flag pins on a stale claim about
+`mirror_flags`; T4 let `--leaf=no`/`--leaf=yes` through `args.rs` (value
+ignored) although §B.8 gap G4 bans the spellings; T5's `parked` decision row
+was unreachable (`DecisionContext.parks` never populated by production);
+T7's strict parser accepted plan/outcome row counts SHORT of `order`; T8's
+`--quiet`/`--verbose` refusal promise had no fixture.
+
+**Fix.** Engine: `args.rs` rejects any `--leaf=<value>` spelling (rc 2,
+naming `--leaf`, never echoing the banned spelling); `gsa-cli::install`
+wires the real park set — `parked_subjects()` derives it from the state
+root's run-record rows (latest settling row per subject: `deferred`/`parked`
+park, `succeeded`/`failed` supersede, `never-started`/`interrupted` settle
+nothing) — into both production `DecisionContext` sites; `run_upgrade`
+additionally short-circuits discovery for parked subjects (a stale twin
+never installs, discovery damage never preempts the park);
+`gsa-state::StateRoot::open_readonly` keeps the seam's read a pure read.
+Fixtures: `rr-v2.bash rr2_body` now demands one plan AND one outcome row
+per `order` entry (fewer is loud); `gsa-qa-v2.sh`/`project.sh`/`app-group.sh`
+read every record through the strict readers and pin `0` budget scalars;
+`resume-command.sh` pins all five §B.8 sync/freshness/toolchain modifiers
+surviving a resume (`--skip`/`--skip-built` in separate runs — one skip
+mode); `run-record.sh` pins the `--quiet`/`--verbose` refusal matrix and
+their never-mirrored surface; `gsa-install-v2.sh` pins the parked decision
+row (control: the stale twin's pgo refusal proves the probe the park
+pre-empts).
+
+**Validation.** `cargo test -p gsa-model -p gsa-cli -p gsa-install
+-p gsa-state` green (incl. `decision_rows::parked_subjects_are_never_probed`);
+all 32 `rr2_*`-consumer fixtures run against `target/debug/gsa` — 28 PASS;
+4 red are cross-wave and untouched by this diff: `abi-batch-policy.sh` /
+`abi-drift-install.sh` (abi=must wave refusal gate — deterministic, other
+wave's territory), `gsa-sched-v2.sh` §8 parkkill (abi=must batch-mate park
+no longer fires — deterministic, coupled-batch wave's fixture), and
+`toolchain-remediation.sh` (index-invalid race under 4-way parallel load —
+passes solo).
+
+**Durable rule.** A run-record shape the strict parser rejects is a bug in
+the record or the parser, never a reason for a fixture-local lenient
+extractor; and a §E.3 decision kind must be reachable from a production
+caller in the same change that names it.
+
+## 2026-10-28 — ABI gate hardening: provide coverage must stand on a file, kernel-class skip is a roster, `-U` stand-down is argv-based
+
+**Symptom (blind contract audit, tools/lib/config).** Three drifts in
+`tools/abi-need-check.sh` plus one in `tools/provides-audit.sh`: (S1) a
+`.PKGINFO` provide name silenced a DT_NEEDED finding with no file behind it —
+exactly the dangling-`libtk.so` class the header calls fatal; (S2) the
+kernel-class skip used a `linux-*` wildcard, silently exempting userspace
+payloads (this repo's own `linux-tools`: perf/turbostat carry real DT_NEEDED
+surface); (S3) the documented `pacman -U` stand-down was cache-conditioned —
+a same-name cached twin of an unrelated payload was scanned (the 2026-10-25
+weston/colord manual cache evacuation was the workaround); (S9) the
+provides-audit presence matcher let a bare `libfoo` cover `libfoo.so.1`, a
+shape pacman cannot match.
+
+**Fix.** S1: a provide-name match now resolves through the same file-system
+oracle (`host_resolves`) as the direct-hit path before counting as covered —
+provide + dangling symlink stays fatal, provide + real file stays clean. S2:
+skip roster is explicit (`linux`, `linux-cachyos`, `linux-cachyos-lts`,
+`linux-cachyos-bore-lto`, `linux-cachyos-bore-lto-dbg`, `*-firmware`);
+`linux-tools`, `*-headers`, `*-src`, `*-dkms` stay scannable. S3: the gate
+reads the transaction kind from the pacman argv via process ancestry (`-U`
+cluster ⇒ local file install) and skips every name outright — a cached twin
+is only ever scanned for a sync transaction. S9: presence accepts full soname
+equality or the bare `.so` stem covering `libfoo.so`/`libfoo.so.<numeric
+generation>`; bare `libfoo` covers nothing. `config/topology.conf` header
+vocabulary aligned to the loader's five tag forms (S8).
+
+**Validation.** `bash tests/abi-need-check.sh` ok, `bash tests/provides-audit.sh`
+PASS, `tests/run-all.sh` for both fixtures PASS; five mutation-probes (one per
+fix, S3 two-sided) each turned the new pins red against mutated tool copies,
+unmutated controls green.
+
+**Durable rule.** A gate's own header and its fixture must not pin both sides
+of a contradiction (the provide rule pinned "file system is the oracle" and
+"a declared provide covers its stems" — only the weaker was enforced); and a
+stand-down must key on the transaction kind (argv), never on incidental
+environment state like the package cache. Details: fix-shell-tools agent
+report 2026-10-28 (session 2c732e25).
+
 ## 2026-10-25 — umbriel-git: perf patches 0005/0006/0007 retired after upstream rebuff of PRs #559/#560
 
 **Symptom (decision, not a defect).** The maintainer rebuffed the two perf
@@ -17508,3 +17593,21 @@ the disposition call. BUILD HELD per owner.
   0013 re-cut to 76477c29..d3285ebb (nine commits, sha256 b8583d2d…), gsa 4a09b2a pushed.
   Verified under the exact CI compiler (stock gcc 16.2.1): full tree 144/144. Pitfall detail:
   ~/docs/NOTE.md.
+
+### 2026-10-28 — aranicy 0.2.0 (dynamic nice bias) recipe bump
+
+- **WHAT**: `packages/stable/aranicy` v0.1.0 → v0.2.0: new release tarball
+  sha256 pin (GitHub `v0.2.0` archive; annotated tag, no GitHub Release —
+  same shape as v0.1.0), `.SRCINFO` regenerated from repo root.
+- **WHY**: upstream v0.2.0 ships the dynamic nice bias feature (learned from
+  `scx_lavd` samples; closed loop; aging-capped history) + `dump bias`.
+  Shipping gates (upstream `docs/BENCHMARKS.md`): 2000 execs/s storms ≤5% of
+  one core in both variants (3.88%/4.93% bias-on), instr/event bias-on vs
+  off +1.3% (noise), lavd sampler thread 0.15% of one core.
+- **VERIFY**: `bash -n` clean; `makepkg --printsrcinfo --dir` regenerated;
+  `gsa -Sl` lists `285. aranicy`; `gsa -S --dry-run aranicy` resolves. The
+  one `package-drift` aranicy row from `gsa -Ma` names the gsa-pm vendored
+  snapshot copy (`packages/core/gsa-pm/src/gentoo-style-arch/...`) and
+  predates this bump (report-only lint; snapshot refresh is gsa-pm's beat).
+- Host upgrade to 0.2.0-1: makepkg build + `pacman -U` + service restart —
+  recorded in `docs/CURRENT.md`.
