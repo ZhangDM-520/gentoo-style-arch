@@ -2,8 +2,8 @@
 # Contributor: SpepS <dreamspepser at yahoo dot it>
 
 pkgname=openimageio
-pkgver=3.1.12.1
-pkgrel=7.1
+pkgver=3.2.1.2
+pkgrel=1.1
 pkgdesc="A library for reading and writing images, including classes, utilities, and applications"
 arch=('x86_64')
 url="http://www.openimageio.org/"
@@ -15,7 +15,7 @@ depends=('openexr' 'openjph' 'giflib' 'openjpeg2' 'libtiff' 'libjpeg-turbo'
 makedepends=('cmake' 'qt5-base' 'python' 'boost' 'mesa' 'fontconfig' 'libxrender' 'ninja' 'robin-map' 'fmt' 'pybind11')
 optdepends=('python: bindings support')
 source=("$pkgname-$pkgver.tar.gz::https://github.com/OpenImageIO/oiio/archive/refs/tags/v$pkgver.tar.gz")
-sha512sums=('f5234850aa086217be74947d3138186ecc69cc2a6cc7cda1a4c560a8584c90016bff453f17c061653c2c380d952f6938ffae12cd5c797466438a1411e865449c')
+sha512sums=('49dfbc38350403cec072a6c976544d10e4402c2c416677acb1048537f67288f4cf5f458f2c3adeea26eb8c92f59e039a62f6c23ef75f61fc62534fdb439b40f6')
 
 build() {
   cd OpenImageIO-$pkgver
