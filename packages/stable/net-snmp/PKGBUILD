@@ -22,7 +22,7 @@ provides=('libnetsnmpagent.so'
           'libnetsnmptrapd.so'
           'libsnmp.so')
 options=('!emptydirs' '!makeflags')
-source=("git+https://github.com/net-snmp/net-snmp.git#tag=v${pkgver}"
+source=("git+https://github.com/net-snmp/net-snmp.git#tag=v${pkgver}?signed"
         'net-snmp-5.9.5.2-under-linking.patch'
         'snmpd.service'
         'snmptrapd.service')

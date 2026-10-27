@@ -4,6 +4,10 @@
 # Contributor: Julius Michaelis <gitter@liftm.de.de>
 # Contributor: Nebulosa  <nebulosa2007-at-yandex-dot-ru>
 
+# Shared PGO payload gate — one implementation in lib/pgo.sh, called at the
+# end of package(). A missing module fails at parse time on purpose.
+source "$startdir/../../../lib/pgo.sh"
+
 ## The following variable can be customized at build time.
 ## Use env or export to change at your wish
 ##
@@ -136,4 +140,8 @@ package() {
   install -Dm644 "resources/${pkgname%-spicy-git}.desktop"                    -t "${pkgdir}/usr/share/wayland-sessions/"
   install -Dm644 "resources/${pkgname%-spicy-git}-portals.conf"               -t "${pkgdir}/usr/share/xdg-desktop-portal/"
   install -Dm644 "resources/${pkgname%-spicy-git}"{.service,-shutdown.target} -t "${pkgdir}/usr/lib/systemd/user/"
+
+  # Fatal shared gate (lib/pgo.sh) — last statement on purpose: nothing may be
+  # added to $pkgdir after the payload is verified.
+  verify_no_profile_instrumentation "$pkgdir"
 }

@@ -1,6 +1,11 @@
 # Maintainer: Antonio Rojas <arojas@archlinux.org>
 # Maintainer: Felix Yan <felixonmars@archlinux.org>
 
+# Shared PGO payload gate — one implementation in lib/pgo.sh, called at the
+# end of each package_* function. A missing module fails at parse time on
+# purpose.
+source "$startdir/../../../lib/pgo.sh"
+
 pkgbase=qt6-multimedia
 pkgname=(qt6-multimedia
          qt6-multimedia-ffmpeg
@@ -164,6 +169,10 @@ package_qt6-multimedia() {
 
   install -d "$pkgdir"/usr/share/licenses
   ln -s /usr/share/licenses/qt6-base "$pkgdir"/usr/share/licenses/$pkgname
+
+  # Fatal shared gate (lib/pgo.sh) — last statement on purpose: nothing may be
+  # added to $pkgdir after the payload is verified.
+  verify_no_profile_instrumentation "$pkgdir"
 }
 
 package_qt6-multimedia-gstreamer() {
@@ -186,6 +195,10 @@ package_qt6-multimedia-gstreamer() {
               'gst-plugins-ugly: additional plugins')
   
   DESTDIR="$pkgdir" cmake --install build/src/plugins/multimedia/gstreamer    
+
+  # Fatal shared gate (lib/pgo.sh) — last statement on purpose: nothing may be
+  # added to $pkgdir after the payload is verified.
+  verify_no_profile_instrumentation "$pkgdir"
 }
 
 package_qt6-multimedia-ffmpeg() {
@@ -206,6 +219,10 @@ package_qt6-multimedia-ffmpeg() {
   groups=()
 
   DESTDIR="$pkgdir" cmake --install build/src/plugins/multimedia/ffmpeg
+
+  # Fatal shared gate (lib/pgo.sh) — last statement on purpose: nothing may be
+  # added to $pkgdir after the payload is verified.
+  verify_no_profile_instrumentation "$pkgdir"
 }
 
 pkgver() {

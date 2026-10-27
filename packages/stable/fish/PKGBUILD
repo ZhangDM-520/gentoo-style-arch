@@ -5,6 +5,10 @@
 # Contributor: Eric Belanger <eric@archlinux.org>
 # Contributor: Jan Fader <jan.fader@web.de>
 
+# Shared PGO payload gate — one implementation in lib/pgo.sh, called at the
+# end of package(). A missing module fails at parse time on purpose.
+source "$startdir/../../../lib/pgo.sh"
+
 pkgname=fish
 pkgver=4.9.3
 pkgrel=2
@@ -163,6 +167,10 @@ package() {
   cd ${pkgname}
 
   DESTDIR="$pkgdir" cmake --install build
+
+  # Fatal shared gate (lib/pgo.sh) — last statement on purpose: nothing may be
+  # added to $pkgdir after the payload is verified.
+  verify_no_profile_instrumentation "$pkgdir"
 }
 
 # vim: ts=2 sw=2 et:

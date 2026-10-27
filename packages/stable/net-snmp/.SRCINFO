@@ -27,7 +27,7 @@ pkgbase = net-snmp
 	provides = libsnmp.so
 	options = !emptydirs
 	options = !makeflags
-	source = git+https://github.com/net-snmp/net-snmp.git#tag=v5.9.5.2
+	source = git+https://github.com/net-snmp/net-snmp.git#tag=v5.9.5.2?signed
 	source = net-snmp-5.9.5.2-under-linking.patch
 	source = snmpd.service
 	source = snmptrapd.service

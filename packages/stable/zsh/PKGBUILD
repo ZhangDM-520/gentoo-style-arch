@@ -1,5 +1,10 @@
 # Maintainer: Pierre Schmitz <pierre@archlinux.de>
 
+# Shared PGO payload gate — one implementation in lib/pgo.sh, called at the
+# end of each package_* function. A missing module fails at parse time on
+# purpose.
+source "$startdir/../../../lib/pgo.sh"
+
 pkgbase=zsh
 pkgname=('zsh' 'zsh-doc')
 pkgver=5.9.2
@@ -148,6 +153,10 @@ package_zsh() {
   make DESTDIR="${pkgdir}/" install
   install -D -m0644 "${srcdir}/zprofile" "${pkgdir}/etc/zsh/zprofile"
   install -D -m0644 LICENCE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+
+  # Fatal shared gate (lib/pgo.sh) — last statement on purpose: nothing may be
+  # added to $pkgdir after the payload is verified.
+  verify_no_profile_instrumentation "$pkgdir"
 }
 
 package_zsh-doc() {
@@ -159,4 +168,8 @@ package_zsh-doc() {
   # NOTE: no PDF here — TeX was removed from makedepends in the trim audit;
   # Doc/zsh.pdf is never generated, and a hard install of it aborts packaging.
   install -D -m0644 LICENCE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+
+  # Fatal shared gate (lib/pgo.sh) — last statement on purpose: nothing may be
+  # added to $pkgdir after the payload is verified.
+  verify_no_profile_instrumentation "$pkgdir"
 }

@@ -2,6 +2,11 @@
 # Maintainer: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
 # Contributor: Jan de Groot <jgc@archlinux.org>
 
+# Shared PGO payload gate — one implementation in lib/pgo.sh, called at the
+# end of each package_* function. A missing module fails at parse time on
+# purpose.
+source "$startdir/../../../lib/pgo.sh"
+
 pkgbase=pipewire
 pkgname=(
   pipewire
@@ -280,6 +285,10 @@ package_pipewire() {
   )
 
   install -Dt "$pkgdir/usr/share/licenses/$pkgname" -m644 pipewire/COPYING
+
+  # Fatal shared gate (lib/pgo.sh) — last statement on purpose: nothing may be
+  # added to $pkgdir after the payload is verified.
+  verify_no_profile_instrumentation "$pkgdir"
 }
 
 package_libpipewire() {
@@ -293,6 +302,10 @@ package_libpipewire() {
   mv lib/* "$pkgdir"
 
   install -Dt "$pkgdir/usr/share/licenses/$pkgname" -m644 pipewire/COPYING
+
+  # Fatal shared gate (lib/pgo.sh) — last statement on purpose: nothing may be
+  # added to $pkgdir after the payload is verified.
+  verify_no_profile_instrumentation "$pkgdir"
 }
 
 package_alsa-card-profiles() {
@@ -300,6 +313,10 @@ package_alsa-card-profiles() {
   license=(LGPL-2.1-or-later)
 
   mv acp/* "$pkgdir"
+
+  # Fatal shared gate (lib/pgo.sh) — last statement on purpose: nothing may be
+  # added to $pkgdir after the payload is verified.
+  verify_no_profile_instrumentation "$pkgdir"
 }
 
 package_pipewire-libcamera() {
@@ -315,6 +332,10 @@ package_pipewire-libcamera() {
   mv libcamera/* "$pkgdir"
 
   install -Dt "$pkgdir/usr/share/licenses/$pkgname" -m644 pipewire/COPYING
+
+  # Fatal shared gate (lib/pgo.sh) — last statement on purpose: nothing may be
+  # added to $pkgdir after the payload is verified.
+  verify_no_profile_instrumentation "$pkgdir"
 }
 
 package_pipewire-audio() {
@@ -359,6 +380,10 @@ package_pipewire-audio() {
     /usr/share/alsa/alsa.conf.d/50-pipewire.conf
 
   install -Dt "$pkgdir/usr/share/licenses/$pkgname" -m644 pipewire/COPYING
+
+  # Fatal shared gate (lib/pgo.sh) — last statement on purpose: nothing may be
+  # added to $pkgdir after the payload is verified.
+  verify_no_profile_instrumentation "$pkgdir"
 }
 
 package_pipewire-alsa() {
@@ -377,6 +402,10 @@ package_pipewire-alsa() {
     "$pkgdir/usr/share/pipewire/media-session.d/with-alsa"
 
   install -Dt "$pkgdir/usr/share/licenses/$pkgname" -m644 pipewire/COPYING
+
+  # Fatal shared gate (lib/pgo.sh) — last statement on purpose: nothing may be
+  # added to $pkgdir after the payload is verified.
+  verify_no_profile_instrumentation "$pkgdir"
 }
 
 package_pipewire-jack-client() {
@@ -395,6 +424,10 @@ package_pipewire-jack-client() {
   mv jack-client/* "$pkgdir"
 
   install -Dt "$pkgdir/usr/share/licenses/$pkgname" -m644 pipewire/COPYING
+
+  # Fatal shared gate (lib/pgo.sh) — last statement on purpose: nothing may be
+  # added to $pkgdir after the payload is verified.
+  verify_no_profile_instrumentation "$pkgdir"
 }
 
 package_pipewire-pulse() {
@@ -424,6 +457,10 @@ package_pipewire-pulse() {
     "$pkgdir/usr/share/pipewire/media-session.d/with-pulseaudio"
 
   install -Dt "$pkgdir/usr/share/licenses/$pkgname" -m644 pipewire/COPYING
+
+  # Fatal shared gate (lib/pgo.sh) — last statement on purpose: nothing may be
+  # added to $pkgdir after the payload is verified.
+  verify_no_profile_instrumentation "$pkgdir"
 }
 
 # pipewire-roc / gst-plugin-pipewire / pipewire-zeroconf / pipewire-v4l2 /
@@ -435,12 +472,20 @@ package_pipewire-session-manager() {
   pkgdesc="Session manager for PipeWire (default provider)"
   license=(CC0-1.0)
   depends=(wireplumber)
+
+  # Fatal shared gate (lib/pgo.sh) — last statement on purpose: nothing may be
+  # added to $pkgdir after the payload is verified.
+  verify_no_profile_instrumentation "$pkgdir"
 }
 
 package_pulse-native-provider() {
   pkgdesc="PulseAudio sound server (default provider)"
   license=(CC0-1.0)
   depends=(pipewire-pulse)
+
+  # Fatal shared gate (lib/pgo.sh) — last statement on purpose: nothing may be
+  # added to $pkgdir after the payload is verified.
+  verify_no_profile_instrumentation "$pkgdir"
 }
 
 # vim:set sw=2 sts=-1 et:

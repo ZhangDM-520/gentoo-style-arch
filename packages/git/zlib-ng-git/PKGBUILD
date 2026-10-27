@@ -3,6 +3,10 @@
 # Contributor: Diab Neiroukh <lazerl0rd at thezest dot dev>
 # Contributor: Jacek Szafarkiewicz <szafar at linux dot pl>
 
+# Shared PGO payload gate — one implementation in lib/pgo.sh, called at the
+# end of package(). A missing module fails at parse time on purpose.
+source "$startdir/../../../lib/pgo.sh"
+
 pkgname=zlib-ng-git
 pkgver=2.3.1.r596.gg8b61b4ef
 pkgrel=1
@@ -101,6 +105,10 @@ package() {
     DESTDIR="${pkgdir}" cmake --install build
     install -Dm644 zlib-ng/LICENSE.md -t "${pkgdir}/usr/share/licenses/${pkgname}"
     install -Dm644 zlib-ng/README.md -t "${pkgdir}/usr/share/doc/${pkgname}"
+
+  # Fatal shared gate (lib/pgo.sh) — last statement on purpose: nothing may be
+  # added to $pkgdir after the payload is verified.
+  verify_no_profile_instrumentation "$pkgdir"
 }
 
 # vim: set ts=4 sw=4 et:

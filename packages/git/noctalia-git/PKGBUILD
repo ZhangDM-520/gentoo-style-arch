@@ -1,5 +1,9 @@
 # Maintainer: Noctalia Team <team@noctalia.dev>
 
+# Shared PGO payload gate — one implementation in lib/pgo.sh, called at the
+# end of package(). A missing module fails at parse time on purpose.
+source "$startdir/../../../lib/pgo.sh"
+
 pkgname=noctalia-git
 _pkgname=noctalia
 pkgver=5.3.0.r5994.g1af14b8cd
@@ -294,4 +298,8 @@ package() {
     ./build-release/noctalia completions "$shell" \
       | install -Dm644 /dev/stdin "${pkgdir}/${completion_dir}/noctalia"
   done
+
+  # Fatal shared gate (lib/pgo.sh) — last statement on purpose: nothing may be
+  # added to $pkgdir after the payload is verified.
+  verify_no_profile_instrumentation "$pkgdir"
 }

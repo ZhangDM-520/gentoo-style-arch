@@ -1,5 +1,9 @@
 # Maintainer: Chocobo1 <chocobo1 AT archlinux DOT net>
 
+# Shared PGO payload gate — one implementation in lib/pgo.sh, called at the
+# end of package(). A missing module fails at parse time on purpose.
+source "$startdir/../../../lib/pgo.sh"
+
 pkgname=lz4-git
 pkgver=1.10.0.r321.g0774d055
 pkgrel=1
@@ -83,4 +87,8 @@ package() {
 
   make DESTDIR="$pkgdir" PREFIX="/usr" install
   install -Dm644 "lib/LICENSE" -t "$pkgdir/usr/share/licenses/lz4"
+
+  # Fatal shared gate (lib/pgo.sh) — last statement on purpose: nothing may be
+  # added to $pkgdir after the payload is verified.
+  verify_no_profile_instrumentation "$pkgdir"
 }

@@ -1,6 +1,10 @@
 # Maintainer: Devin Alexander Torres <d@devinus.io>
 # Contributor: Ranieri Althoff <ranisalt+aur at gmail dot com>
 
+# Shared PGO payload gate — one implementation in lib/pgo.sh, called at the
+# end of package(). A missing module fails at parse time on purpose.
+source "$startdir/../../../lib/pgo.sh"
+
 # shellcheck shell=bash
 # shellcheck disable=2034,2154,2312
 
@@ -112,4 +116,8 @@ package() {
 
   # Create a symlink for mimalloc 2.x compatibility (needed by e.g. mold)
   ln -sv libmimalloc.so "${pkgdir}/usr/lib/libmimalloc.so.2"
+
+  # Fatal shared gate (lib/pgo.sh) — last statement on purpose: nothing may be
+  # added to $pkgdir after the payload is verified.
+  verify_no_profile_instrumentation "$pkgdir"
 }

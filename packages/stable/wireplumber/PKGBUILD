@@ -1,6 +1,11 @@
 # Maintainer: David Runge <dvzrv@archlinux.org>
 # Maintainer: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
 
+# Shared PGO payload gate — one implementation in lib/pgo.sh, called at the
+# end of each package_* function. A missing module fails at parse time on
+# purpose.
+source "$startdir/../../../lib/pgo.sh"
+
 pkgbase=wireplumber
 pkgname=(
   wireplumber
@@ -123,6 +128,10 @@ package_wireplumber() {
   install -Dt "$pkgdir/etc/wireplumber/wireplumber.conf.d" -m644 20-bluez-codecs.conf
 
   install -Dt "$pkgdir/usr/share/licenses/$pkgname" -m644 $pkgbase/LICENSE
+
+  # Fatal shared gate (lib/pgo.sh) — last statement on purpose: nothing may be
+  # added to $pkgdir after the payload is verified.
+  verify_no_profile_instrumentation "$pkgdir"
 }
 
 package_libwireplumber() {
@@ -138,6 +147,10 @@ package_libwireplumber() {
   mv libw/* "$pkgdir"
 
   install -Dt "$pkgdir/usr/share/licenses/$pkgname" -m644 $pkgbase/LICENSE
+
+  # Fatal shared gate (lib/pgo.sh) — last statement on purpose: nothing may be
+  # added to $pkgdir after the payload is verified.
+  verify_no_profile_instrumentation "$pkgdir"
 }
 
 # vim:set sw=2 sts=-1 et:

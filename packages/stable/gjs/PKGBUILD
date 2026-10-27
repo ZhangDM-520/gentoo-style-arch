@@ -38,7 +38,7 @@ checkdepends=(
 )
 provides=(libgjs.so)
 source=(
-  "git+https://gitlab.gnome.org/GNOME/gjs.git#tag=$pkgver"
+  "git+https://gitlab.gnome.org/GNOME/gjs.git#tag=$pkgver?signed"
   "git+https://gitlab.gnome.org/GNOME/gobject-introspection-tests.git"
 )
 b2sums=('6a2c3739c1cc23069f7c79a79fde0e1c10795f497018bb47908892936b45ba617421163f3e1f9df5e3415fe3444ee658099ca810e5eedf73118ea766864fb079'

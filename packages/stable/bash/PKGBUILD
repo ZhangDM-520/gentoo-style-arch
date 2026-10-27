@@ -5,6 +5,10 @@
 # Contributor: Allan McRae <allan@archlinux.org>
 # Contributor: Aaron Griffin <aaron@archlinux.org>
 
+# Shared PGO payload gate — one implementation in lib/pgo.sh, called at the
+# end of package(). A missing module fails at parse time on purpose.
+source "$startdir/../../../lib/pgo.sh"
+
 pkgname=bash
 _basever=5.3
 _patchlevel=15
@@ -179,5 +183,9 @@ package() {
   install -m644 dot.bashrc "${pkgdir}/etc/skel/.bashrc"
   install -m644 dot.bash_profile "${pkgdir}/etc/skel/.bash_profile"
   install -m644 dot.bash_logout "${pkgdir}/etc/skel/.bash_logout"
+
+  # Fatal shared gate (lib/pgo.sh) — last statement on purpose: nothing may be
+  # added to $pkgdir after the payload is verified.
+  verify_no_profile_instrumentation "$pkgdir"
 }
 

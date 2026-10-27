@@ -2,8 +2,4 @@
 # of Git. One glob per line, matched against the source's basename; '#' lines
 # and blank lines are ignored.
 #
-# The POSIX-2024 patch below is fetched from its commit URL and lands beside
-# the recipe as build state only; root .gitignore does not cover '*.patch'
-# (recipes also carry committed local patches), so without this marker a
-# post-build sweep would see an untracked fetch artifact.
-python-posix-2024.patch
+# python-posix-2024.patch is committed with the recipe (VENDORED 2026-10-19); nothing is excused here.

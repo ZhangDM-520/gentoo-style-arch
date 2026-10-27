@@ -1,5 +1,10 @@
 # Maintainer: Christian Hesse <mail@eworm.de>
 
+# Shared PGO payload gate — one implementation in lib/pgo.sh, called at the
+# end of each package_* function. A missing module fails at parse time on
+# purpose.
+source "$startdir/../../../lib/pgo.sh"
+
 # ➡️ Pushing pre-releases to [core-testing] can cause havoc, especially
 #   as all [core] packages are built there, and may be moved before.
 #   Anyway, pre-release packages may be available in my personal testing
@@ -368,6 +373,10 @@ package_systemd() {
   # symlink kernel-install to installkernel
   ln -s kernel-install "$pkgdir"/usr/bin/installkernel
   ln -s kernel-install.8.gz "$pkgdir"/usr/share/man/man8/installkernel.8.gz
+
+  # Fatal shared gate (lib/pgo.sh) — last statement on purpose: nothing may be
+  # added to $pkgdir after the payload is verified.
+  verify_no_profile_instrumentation "$pkgdir"
 }
 
 package_systemd-libs() {
@@ -386,6 +395,10 @@ package_systemd-libs() {
   mv systemd-libs/include "$pkgdir"/usr/include
   mv systemd-libs/man3 "$pkgdir"/usr/share/man/man3
   mv systemd-libs/man8 "$pkgdir"/usr/share/man/man8
+
+  # Fatal shared gate (lib/pgo.sh) — last statement on purpose: nothing may be
+  # added to $pkgdir after the payload is verified.
+  verify_no_profile_instrumentation "$pkgdir"
 }
 
 package_systemd-resolvconf() {
@@ -399,6 +412,10 @@ package_systemd-resolvconf() {
 
   install -d -m0755 "$pkgdir"/usr/share/man/man1
   ln -s resolvectl.1.gz "$pkgdir"/usr/share/man/man1/resolvconf.1.gz
+
+  # Fatal shared gate (lib/pgo.sh) — last statement on purpose: nothing may be
+  # added to $pkgdir after the payload is verified.
+  verify_no_profile_instrumentation "$pkgdir"
 }
 
 package_systemd-sysvcompat() {
@@ -416,6 +433,10 @@ package_systemd-sysvcompat() {
   for tool in halt poweroff reboot shutdown; do
     ln -s systemctl "$pkgdir"/usr/bin/$tool
   done
+
+  # Fatal shared gate (lib/pgo.sh) — last statement on purpose: nothing may be
+  # added to $pkgdir after the payload is verified.
+  verify_no_profile_instrumentation "$pkgdir"
 }
 
 # package_systemd-tests removed 2026-09-04 (install-tests=false, no consumer)
@@ -432,6 +453,10 @@ package_systemd-ukify() {
   mv systemd-ukify/systemd "$pkgdir"/usr/lib/systemd
   mv systemd-ukify/man1 "$pkgdir"/usr/share/man/man1
   mv systemd-ukify/install.d "$pkgdir"/usr/lib/kernel/install.d
+
+  # Fatal shared gate (lib/pgo.sh) — last statement on purpose: nothing may be
+  # added to $pkgdir after the payload is verified.
+  verify_no_profile_instrumentation "$pkgdir"
 }
 
 # vim:ft=sh syn=sh et sw=2:

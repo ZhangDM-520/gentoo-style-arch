@@ -3,6 +3,11 @@
 # Contributor: Tom Gundersen <teg@jklm.no>
 # Contributor: Link Dupont <link@subpop.net>
 
+# Shared PGO payload gate — one implementation in lib/pgo.sh, called at the
+# end of each package_* function. A missing module fails at parse time on
+# purpose.
+source "$startdir/../../../lib/pgo.sh"
+
 pkgbase=dbus
 pkgname=(
   dbus
@@ -147,6 +152,10 @@ package_dbus() {
 
   install -Dt "$pkgdir/usr/share/licenses/$pkgname" -m644 \
     dbus/COPYING dbus/LICENSES/AFL-2.1.txt
+
+  # Fatal shared gate (lib/pgo.sh) — last statement on purpose: nothing may be
+  # added to $pkgdir after the payload is verified.
+  verify_no_profile_instrumentation "$pkgdir"
 }
 
 # vim:set sw=2 sts=-1 et:

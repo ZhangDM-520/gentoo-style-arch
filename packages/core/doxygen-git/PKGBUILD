@@ -1,4 +1,9 @@
 # Maintainer: Wouter Haffmans <wouter@simply-life.net>
+
+# Shared PGO payload gate — one implementation in lib/pgo.sh, called at the
+# end of package(). A missing module fails at parse time on purpose.
+source "$startdir/../../../lib/pgo.sh"
+
 pkgname=doxygen-git
 pkgver=1.18.0.r182.gd4fe2eb0
 pkgrel=1
@@ -88,4 +93,8 @@ EOF
 package() {
     cd "build"
     make DESTDIR="$pkgdir/" install
+
+  # Fatal shared gate (lib/pgo.sh) — last statement on purpose: nothing may be
+  # added to $pkgdir after the payload is verified.
+  verify_no_profile_instrumentation "$pkgdir"
 }

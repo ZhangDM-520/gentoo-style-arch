@@ -2,6 +2,10 @@
 # Contributor: Oskar Gerlciz Kowalczuk
 # Contributor: StaticNullException <aurcontact@teto.party>
 
+# Shared PGO payload gate — one implementation in lib/pgo.sh, called at the
+# end of package(). A missing module fails at parse time on purpose.
+source "$startdir/../../../lib/pgo.sh"
+
 pkgname=zen-browser
 pkgver=1.23.4b
 pkgrel=1
@@ -320,4 +324,8 @@ EOF
   if [[ -e "$_appdir/libnssckbi.so" ]]; then
     ln -sf ../libnssckbi.so "$_appdir/libnssckbi.so"
   fi
+
+  # Fatal shared gate (lib/pgo.sh) — last statement on purpose: nothing may be
+  # added to $pkgdir after the payload is verified.
+  verify_no_profile_instrumentation "$pkgdir"
 }
