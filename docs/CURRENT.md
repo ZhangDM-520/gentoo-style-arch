@@ -1,25 +1,35 @@
 # Current state — 2026-10-27 01:5x (live snapshot; overwrite, do not append)
 
-## umbriel: 0017 (PR #584) wired on main@155665c8 — BUILD HELD (2026-10-27)
+## umbriel: 0013 round-2 polish re-cut + 0017 stack — SHIPPED, PR OPEN (2026-10-27)
+- 0013 re-cut FINAL (gsa 478bbfd, pushed): range `76477c29..1ef95e0a` (eight commits —
+  includes a clang-format normalization commit), sha256 25506548…, cut on main@`36673995`
+  + 0008+0009+0011+0012 (0012 union-table collisions hand-merged). Full stack 0008..0017
+  verified clean on BOTH main@`155665c8` and main@`36673995`; applied tree tree-identical
+  to the cherry-picked result; stacked meson 145/145. `.SRCINFO` regenerated each re-cut.
+- Upstream: branch `icc-gamut` pushed to fork `ZhangDM-520/umbriel`;
+  **PR noctalia-dev/umbriel#585 OPEN, ready for review** (Closes #574).
 - Wired stack 0008+0009+0011+0012+0013+0014+0015+0016+0017; pkgver pin
   `0.1.0.r1399.155665c` pkgrel 1 (upstream main moved to `155665c8`).
   Rehearsal clean on main@`155665c8` (9/9 apply rc=0; 98 files, +8332/-214).
 - 0017-overview-card-drag-input = range `d9497f36..c2f3ebc6` (three
   commits, sha256 acc85b02…), upstream PR noctalia-dev/umbriel#584 (open
-  2026-10-27). `.SRCINFO` regenerated; it also refreshed 0013's stale sha
-  (08447292… → e51cef88…) from the cff23f4 re-cut.
+  2026-10-27). `.SRCINFO` regenerated in 0ad64b6 (0013 sha then
+  08447292… → e51cef88…; superseded by the c28eb14f… re-cut above).
 - Retire watches: 0008→PR #566, 0009→#568, 0011→#570, 0012→#573,
   0014→#575, 0015→#577, 0016→#580, 0017→#584. 0013 has no PR (issue
   #574) — retire on upstream merge. Slice provenance: 0014 =
   `0e484016..f75b2161` (sha256 6bfc6151…); 0015 re-cut on the stacked base
   (0008 test-anchor union; sha256 5fc4cb98…); 0016 = range
   `76477c29..ca657214` (sha256 cbccab7c…).
-- BUILD HELD (owner's call pending). On the call: `sudo gsa -S --leaf
-  --no-sync --lanes 1 --jobs 8 --intensity xhigh umbriel-git`, then
-  `pacman -Q` + key-string greps (travel_scale_*, render_scale, downsample,
-  #580 border-effect keys).
-- Open: recipe-repo commit disposition (owner ask-first); GSA commit would
-  carry PKGBUILD + .SRCINFO + 0017 patch file.
+- BUILD DONE + INSTALLED (owner's call 2026-10-27): `sudo gsa -S --leaf --no-sync --lanes 1
+  --jobs 8 --intensity xhigh umbriel-git` → success rc=0, 305 s, qa findings=0, binpkg
+  instance 26 registered. Installed `umbriel-git 1:0.1.0.r1400.3667399-1` (anchored at the
+  validated main@36673995). Key-string greps on /usr/bin/umbriel all present: travel_scale,
+  render_scale, downsample, color_profile, sdr_gamut, create_icc, icc_file, border_unfocused.
+  Harness color 9/9 re-run green on the same polish source (test_ipc build; production binary
+  lacks test_ipc by design — shipped pin = version anchor + key strings).
+- Recipe commits 0ad64b6 (0017), f211f2f (0013 polish), 478bbfd (0013 re-cut
+  on the formatted head) all PUSHED.
 
 ## umbriel: 0011 + 0012 wired, build + install VERIFIED (2026-10-26)
 - Patch pipeline convention (user): every patch ships live-install-ready and

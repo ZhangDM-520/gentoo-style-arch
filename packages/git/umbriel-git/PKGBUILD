@@ -75,7 +75,7 @@ sha256sums=('SKIP'
             '6bfc61519439d329344b7ab3dbebcd20dc810fa988af68e7a3cd61615c9fb140'
             '5fc4cb98a3d4d24e596c6f912d4d81fb68317535523d9647d68873538d120879'
             'cbccab7c6601b6adbe48fd4dfbf0de258c46d5ba4b91dedf3f7fd2e00257b169'
-            'acc85b027738b552e4f5184cd8aca1c389b6e2a87ee3b6cdac4073ef0e3763cb')
+            '166e566ebebd1cd59e3869f9e2129007bf9e139157985ce267d9af62afbdc6ca')
 
 pkgver() {
   cd "${_pkgname}"
@@ -184,17 +184,18 @@ prepare() {
   # (Retire on merge: 0016 → PR #580.)
   git apply -3 ../0016-border-unfocused.patch
 
-  # Overview card drag input (user feedback 2026-10-26): a held overview card
-  # drag is fully navigable — the strip edge-scrolls under it
-  # (`input.drag_edge_scroll` now covers card drags; data drags and tiled moves
-  # keep the overview exclusion), two-finger scrolling keeps panning the strip
+  # Overview card drag input (user feedback 2026-10-26/27): a held overview
+  # card drag is fully navigable on both scroll dimensions — the layout strip
+  # and the workspace filmstrip edge-scroll under it (`input.drag_edge_scroll`
+  # covers card drags with one mechanic on both axes; data drags and tiled
+  # moves keep the overview exclusion), two-finger scrolling pans both
   # pan-only under the hold (no filmstrip step or focus move; the drop settles
   # at the panned position), and wheel notches are inert while the hold is
-  # live. Upstream PR noctalia-dev/umbriel#584; sha256 acc85b02…, full range
-  # d9497f36..c2f3ebc6 (three commits: edge auto-scroll, held-drag
-  # finger-scroll with the review rounds, docs); regenerate with
-  # `git format-patch --stdout <merge-base>..pr-584` when a drift breaks the
-  # apply. (Retire on merge: 0017 → PR #584.)
+  # live. Upstream PR noctalia-dev/umbriel#584; sha256 166e566e…, full range
+  # d9497f36..1d4563ad (four commits: strip edge auto-scroll, held-drag
+  # finger-scroll with the review rounds, docs, workspace-axis input);
+  # regenerate with `git format-patch --stdout <merge-base>..pr-584` when a
+  # drift breaks the apply. (Retire on merge: 0017 → PR #584.)
   git apply -3 ../0017-overview-card-drag-input.patch
 }
 

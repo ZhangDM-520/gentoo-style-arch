@@ -17487,3 +17487,24 @@ harness 9/9 green (3 new `drag/overview_card_*` + 6 controls), `just
 format` no-op, lint 234/234. `tests/run-all.sh recipe-sources` expected to
 flag the untracked 0017 until this lands as a commit — re-run green after
 the disposition call. BUILD HELD per owner.
+
+## 2026-10-27 — 0013 re-cut (round-2 polish) + owner-triggered build (574 session)
+- 0013-icc-gamut.patch re-cut: round-2 review polish wave folded in; range
+  76477c29..0ad2cd20 (seven commits), sha256 c28eb14f…, cut on main@36673995 +
+  0008+0009+0011+0012 (same 0012 union-table collisions hand-merged). PKGBUILD sha + note
+  updated; .SRCINFO regenerated (first commit missed it; folded in by amend). gsa f211f2f,
+  UNPUSHED — owner disposition pending.
+- Rehearsals: full stack 0008..0017 clean on main@155665c8 AND main@36673995; applied tree
+  tree-identical to the cherry-picked result; stacked meson 145/145.
+- Owner pulled the BUILD HELD trigger: `sudo gsa -S --leaf --no-sync --lanes 1 --jobs 8
+  --intensity xhigh umbriel-git` — DONE success rc=0, 305 s, qa 0; installed
+  `1:0.1.0.r1400.3667399-1`, key-string greps all present in /usr/bin/umbriel. Post-checks
+  per CURRENT.md complete.
+- Follow-up same day: pre-PR CI simulation caught 7 clang-format violations in the round-1
+  fold code -> branch commit 1ef95e0a; 0013 re-cut AGAIN (range 76477c29..1ef95e0a, sha256
+  25506548…), gsa 478bbfd pushed. PR noctalia-dev/umbriel#585 OPEN+ready (bot demoted once on
+  its stale checklist wording — see ~/docs/NOTE.md for the pitfall).
+- CI red on PR #585 (GCC 16 vs our GCC 17 snapshot: range-loop-construct) -> branch d3285ebb;
+  0013 re-cut to 76477c29..d3285ebb (nine commits, sha256 b8583d2d…), gsa 4a09b2a pushed.
+  Verified under the exact CI compiler (stock gcc 16.2.1): full tree 144/144. Pitfall detail:
+  ~/docs/NOTE.md.
