@@ -394,3 +394,11 @@ One authority per path — probe, don't remember:
   `gsa -Sl`/`gsa -S --dry-run aranicy` clean.
 - Host install: built 0.2.0-1 via leaf makepkg, `pacman -U`, aranicy.service
   restarted and verified (see the same-day entry below for the live check).
+
+## aranicy 0.2.0-1 live on the host (2026-10-28)
+- Leaf makepkg build (rustc-side srcdir remap added; the embedded eBPF
+  object still trips makepkg's srcdir-reference lint — cosmetic, present
+  since v0.1.0, upstream build.rs fix noted in aranicy docs/CURRENT.md),
+  `pacman -U aranicy-0.2.0-1`, `aranicy.service` restarted. Verified live:
+  `aranicy --version` = 0.2.0, unit active, eBPF `handle_exec` loaded,
+  journal shows `lavd sampler live`, `aranicy dump bias` answers.
