@@ -19,6 +19,8 @@ pub struct InstalledPackage {
     /// `%VERSION%`, canonically `epoch:pkgver-pkgrel` (epoch 0 included).
     pub version: String,
     pub base: Option<String>,
+    /// `%DESC%` — the one-line description (`pacman -Qs` searches it).
+    pub desc: Option<String>,
     pub provides: Vec<String>,
     pub depends: Vec<String>,
     /// Absolute owned paths (from the `files` list).
@@ -134,6 +136,7 @@ impl LocalDb {
             let provides = sections.get("PROVIDES").cloned().unwrap_or_default();
             let depends = sections.get("DEPENDS").cloned().unwrap_or_default();
             let base = first(&sections, "BASE");
+            let package_desc = first(&sections, "DESC");
             let mut files: Vec<String> = Vec::new();
             if let Ok(files_text) = std::fs::read_to_string(dir.join("files")) {
                 for path in parse_sections(&files_text)
@@ -160,6 +163,7 @@ impl LocalDb {
                     name,
                     version: canonical_version(&version),
                     base,
+                    desc: package_desc,
                     provides,
                     depends,
                     files,
@@ -347,6 +351,7 @@ mod tests {
             name: "lib32-icu".to_string(),
             version: "0:78-1".to_string(),
             base: Some("lib32-icu".to_string()),
+            desc: None,
             provides: vec![],
             depends: vec![],
             files: vec!["usr/lib32/libicuuc.so.78".to_string()],
@@ -366,6 +371,7 @@ mod tests {
             name: "tk".to_string(),
             version: "0:9-1".to_string(),
             base: Some("tk".to_string()),
+            desc: None,
             provides: vec![],
             depends: vec![],
             files: vec!["usr/lib/libtk.so".to_string()],

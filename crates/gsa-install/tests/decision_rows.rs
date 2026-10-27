@@ -15,7 +15,7 @@ use gsa_install::{
     rows_rc, Candidate, DecideMode, DecisionContext, EmptyListPolicy, InstallRun, InstalledPackage,
     LocalDb,
 };
-use gsa_model::Decision;
+use gsa_model::{Decision, Group, RecipeId, TopologyRecord};
 
 static COUNTER: AtomicU32 = AtomicU32::new(0);
 
@@ -155,6 +155,7 @@ fn installed(
         name: name.to_string(),
         version: version.to_string(),
         base: Some(name.to_string()),
+        desc: None,
         provides: provides.iter().map(|s| s.to_string()).collect(),
         depends: depends.iter().map(|s| s.to_string()).collect(),
         files: Vec::new(),
@@ -449,6 +450,7 @@ fn needed_probe_refuses_cross_class_and_dangling_owned_files() {
             name: "lib32-gone".to_string(),
             version: "0:1-1".to_string(),
             base: Some("lib32-gone".to_string()),
+            desc: None,
             provides: vec![],
             depends: vec![],
             files: vec!["usr/lib32/libgone.so.1".to_string()],
@@ -485,6 +487,7 @@ fn needed_probe_refuses_cross_class_and_dangling_owned_files() {
             name: "tk".to_string(),
             version: "0:9-1".to_string(),
             base: Some("tk".to_string()),
+            desc: None,
             provides: vec![],
             depends: vec![],
             files: vec!["usr/lib/libtk.so".to_string()],
@@ -537,8 +540,11 @@ fn needed_probe_refuses_shipped_bytes_from_the_other_class() {
 }
 
 #[test]
-fn abi_soname_gate_refuses_a_disappearing_provide() {
+fn abi_soname_gate_is_conditional_on_exposure() {
     let dir = scratch("abi");
+    // Zero exposure: the provide disappears and nothing links or pins it —
+    // rule 25(d) plans the move clean (the abi-soname row is a refusal row
+    // and never rides a clean plan).
     let archive = dir.join("foo-2.0-1-x86_64.pkg.tar.zst");
     write_archive(
         &archive,
@@ -557,16 +563,12 @@ fn abi_soname_gate_refuses_a_disappearing_provide() {
         &db,
     )
     .unwrap();
-    assert_eq!(
-        rendered(&rows),
-        vec![format!(
-            "foo refuse abi-soname {} foo libfoo.so 1-64 -",
-            archive.display()
-        )]
-    );
-    assert_eq!(rows_rc(&rows), 1);
+    assert_eq!(rendered(&rows), vec!["foo install ok".to_string()]);
+    assert_eq!(rows_rc(&rows), 0);
 
-    // A version move names both sides (installed → built).
+    // An out-of-tree declared pinner strands the move: the abi-soname row
+    // rides the refusal plan alongside the pinner's exact depstring — and a
+    // version move names both sides (installed → built).
     let archive2 = dir.join("foo-2.1-1-x86_64.pkg.tar.zst");
     write_archive(
         &archive2,
@@ -575,6 +577,22 @@ fn abi_soname_gate_refuses_a_disappearing_provide() {
             &pkginfo_body("foo", "2.1-1", &["libfoo.so=2-64"]),
         )],
     );
+    let db = LocalDb::from_packages(vec![
+        installed(
+            "foo",
+            "0:1.0-1",
+            &["libfoo.so=1-64"],
+            &[],
+            Some(SystemTime::now()),
+        ),
+        installed(
+            "stock-pin",
+            "0:1.0-1",
+            &[],
+            &["libfoo.so=1-64"],
+            Some(SystemTime::now()),
+        ),
+    ]);
     let rows = decide(
         std::slice::from_ref(&candidate(&archive2, None)),
         &force_ctx(),
@@ -583,14 +601,158 @@ fn abi_soname_gate_refuses_a_disappearing_provide() {
     .unwrap();
     assert_eq!(
         rendered(&rows),
-        vec![format!(
-            "foo refuse abi-soname {} foo libfoo.so 1-64 2-64",
-            archive2.display()
-        )]
+        vec![
+            format!(
+                "foo refuse abi-soname {} foo libfoo.so 1-64 2-64",
+                archive2.display()
+            ),
+            format!(
+                "foo refuse abi-stock-pinner {} stock-pin libfoo.so=1-64",
+                archive2.display()
+            ),
+        ]
     );
+    assert_eq!(rows_rc(&rows), 1);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn index_invalid_archives_never_install() {
+    let dir = scratch("index-invalid");
+    let state_dir = dir.join("state");
+    let recipe = dir.join("recipe");
+    std::fs::create_dir_all(&recipe).unwrap();
+    std::fs::write(recipe.join(".SRCINFO"), "pkgbase = foo\npkgname = foo\n").unwrap();
+    let archive = recipe.join("foo-1.0-1-x86_64.pkg.tar.zst");
+    write_archive(&archive, &[(".PKGINFO", &pkginfo_body("foo", "1.0-1", &[]))]);
+
+    // Register the honest bytes, then re-write the archive with different
+    // (still parseable) content: the row no longer agrees with the bytes.
+    let root = gsa_state::StateRoot::open(&state_dir).unwrap();
+    let retention = gsa_state::Retention::from_records(&[]).unwrap();
+    let mut err = Vec::new();
+    gsa_state::register_instance(
+        &root,
+        "foo",
+        std::slice::from_ref(&archive),
+        &retention,
+        &std::collections::BTreeSet::new(),
+        None,
+        &mut err,
+    )
+    .unwrap();
+    write_archive(
+        &archive,
+        &[
+            (".PKGINFO", &pkginfo_body("foo", "1.0-1", &[])),
+            ("extra", b"x"),
+        ],
+    );
+
+    let mut ctx = force_ctx();
+    ctx.state_dir = Some(state_dir.clone());
+    let rows = decide(
+        std::slice::from_ref(&candidate(&archive, Some(&recipe))),
+        &ctx,
+        &LocalDb::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        rendered(&rows),
+        vec![format!("foo refuse index-invalid {}", archive.display())],
+        "bytes that disagree with the index row never install (§J.4)"
+    );
+    assert_eq!(rows_rc(&rows), 1);
+
+    // No row at all = the unregistered explicit-path case: it stands down.
+    let fresh = recipe.join("foo-1.1-1-x86_64.pkg.tar.zst");
+    write_archive(&fresh, &[(".PKGINFO", &pkginfo_body("foo", "1.1-1", &[]))]);
+    let rows = decide(
+        std::slice::from_ref(&candidate(&fresh, Some(&recipe))),
+        &ctx,
+        &LocalDb::default(),
+    )
+    .unwrap();
+    assert_eq!(rendered(&rows), vec!["foo install ok".to_string()]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_same_path_rebuild_installs_against_the_newest_index_row() {
+    // §J.4's gate meets the retention budget: a hub (core) keeps TWO
+    // instances, and a same-version rebuild writes a new row for the SAME
+    // archive path — both rows stay live over one file. The stale first row
+    // must never refuse the rebuilt bytes; only the newest registration
+    // binds them (the 2026-10-28 load-sensitive toolchain-remediation race).
+    let dir = scratch("index-rebind");
+    let state_dir = dir.join("state");
+    let recipe = dir.join("recipe");
+    std::fs::create_dir_all(&recipe).unwrap();
+    std::fs::write(recipe.join(".SRCINFO"), "pkgbase = foo\npkgname = foo\n").unwrap();
+    let archive = recipe.join("foo-1.0-1-x86_64.pkg.tar.zst");
+
+    let root = gsa_state::StateRoot::open(&state_dir).unwrap();
+    let retention = gsa_state::Retention::from_records(&[TopologyRecord {
+        id: RecipeId::new("foo").unwrap(),
+        path: "packages/foo".to_string(),
+        groups: vec![Group::Core],
+        edges: vec![],
+        tags: vec![],
+        source_line: 1,
+    }])
+    .unwrap();
+    let mut err = Vec::new();
+    write_archive(&archive, &[(".PKGINFO", &pkginfo_body("foo", "1.0-1", &[]))]);
+    gsa_state::register_instance(
+        &root,
+        "foo",
+        std::slice::from_ref(&archive),
+        &retention,
+        &std::collections::BTreeSet::new(),
+        None,
+        &mut err,
+    )
+    .unwrap();
+    write_archive(
+        &archive,
+        &[
+            (".PKGINFO", &pkginfo_body("foo", "1.0-1", &[])),
+            ("extra", b"x"),
+        ],
+    );
+    let outcome = gsa_state::register_instance(
+        &root,
+        "foo",
+        std::slice::from_ref(&archive),
+        &retention,
+        &std::collections::BTreeSet::new(),
+        None,
+        &mut err,
+    )
+    .unwrap();
+    assert_eq!(outcome.rows[0].instance, 2);
+    assert_eq!(
+        gsa_state::BinpkgIndex::load(&root).unwrap().rows.len(),
+        2,
+        "budget N=2 keeps both same-path rows live — the stale row is the real hazard"
+    );
+
+    let mut ctx = force_ctx();
+    ctx.state_dir = Some(state_dir.clone());
+    let rows = decide(
+        std::slice::from_ref(&candidate(&archive, Some(&recipe))),
+        &ctx,
+        &LocalDb::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        rendered(&rows),
+        vec!["foo install ok".to_string()],
+        "the newest registration binds a rebuilt same-path archive (§J.4): a stale row must never refuse it"
+    );
+    assert_eq!(rows_rc(&rows), 0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
 #[test]
 fn unreadable_pkginfo_is_skipped_when_names_establish_and_refuses_when_they_do_not() {
     let dir = scratch("unreadable");
@@ -734,6 +896,7 @@ fn install_built_package_refuses_an_incomplete_output_set_pacman_free() {
         pacman_args: Vec::new(),
         register_ignorepkg: false,
         later_installs: Vec::new(),
+        workspace_names: Vec::new(),
     };
     let (rows, outcome) = install_built_package(&recipe, &run).unwrap();
     assert!(
@@ -773,6 +936,7 @@ fn install_built_package_refuses_a_mixed_version_set() {
         pacman_args: Vec::new(),
         register_ignorepkg: false,
         later_installs: Vec::new(),
+        workspace_names: Vec::new(),
     };
     let (rows, outcome) = install_built_package(&recipe, &run).unwrap();
     assert!(outcome.is_none());

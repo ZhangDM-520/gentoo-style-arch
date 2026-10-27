@@ -341,7 +341,6 @@ pub struct BuildDefaults {
     pub memory_per_job_gib: String,
     pub core_memory_per_job_gib: String,
     pub reserved_memory_gib: String,
-    pub state_dir: String,
 }
 
 impl Default for BuildDefaults {
@@ -353,7 +352,6 @@ impl Default for BuildDefaults {
             memory_per_job_gib: "3".to_string(),
             core_memory_per_job_gib: "4".to_string(),
             reserved_memory_gib: "2".to_string(),
-            state_dir: "auto".to_string(),
         }
     }
 }
@@ -395,7 +393,17 @@ pub fn parse_build_defaults(content: &str, file: &str) -> Result<BuildDefaults, 
             "memory_per_job_gib" => &mut defaults.memory_per_job_gib,
             "core_memory_per_job_gib" => &mut defaults.core_memory_per_job_gib,
             "reserved_memory_gib" => &mut defaults.reserved_memory_gib,
-            "state_dir" => &mut defaults.state_dir,
+            // Never a silent no-op: the state root has exactly one ladder
+            // (contract §J.3) and build-defaults.conf is not on it.
+            "state_dir" => {
+                return Err(TopologyError::at(
+                    file,
+                    line_no,
+                    format!(
+                        "state_dir is not a build default — set it in gsa.conf (contract §J.3): {line}"
+                    ),
+                ))
+            }
             _ => {
                 return Err(TopologyError::at(
                     file,
@@ -795,12 +803,18 @@ delta|packages/app/delta|app|beta|app-cluster=qt5,version-sync=nvchecker
     #[test]
     fn build_defaults_parse_and_validate() {
         let ok = parse_build_defaults(
-            "lanes=auto\njobs=4\nintensity=xhigh\nmemory_per_job_gib=3\nstate_dir=auto\n",
+            "lanes=auto\njobs=4\nintensity=xhigh\nmemory_per_job_gib=3\n",
             "config/build-defaults.conf",
         )
         .unwrap();
         assert_eq!(ok.lanes, "auto");
         assert_eq!(ok.jobs, "4");
+        // `state_dir` retired (2026-10-28): it was a silent no-op — the §J.3
+        // ladder lives in gsa.conf, and the key names that home instead of
+        // hiding a dead knob.
+        let err = parse_build_defaults("state_dir=auto\n", "config/build-defaults.conf").unwrap_err();
+        assert!(err.to_string().contains("gsa.conf"));
+        assert!(err.to_string().contains("state_dir is not a build default"));
         let err = parse_build_defaults("bogus=1\n", "config/build-defaults.conf").unwrap_err();
         assert!(err.to_string().contains("config/build-defaults.conf:1"));
         assert!(err.to_string().contains("unknown key"));

@@ -39,36 +39,102 @@ impl RunLock {
     }
 }
 
-/// Acquire the run lock over the state root (contract §K). A busy lock is a
-/// refusal naming the holder's lock path — the engine never waits on it and
-/// never deletes a held lock file.
-pub fn acquire_run_lock(state_dir: &Path) -> Result<RunLock, String> {
-    let locks = state_dir.join("locks");
-    std::fs::create_dir_all(&locks)
-        .map_err(|e| format!("cannot create {}: {e}", locks.display()))?;
-    let path = locks.join("run.lock");
+/// Why a run-lock acquisition failed — the one distinction the fallback
+/// seam (`gsa_maint::hold_run_lock`) needs: `Permission` is EACCES/EPERM
+/// anywhere in the create/open/ownership path (a state root the running
+/// user may not write), `Busy` is flock contention (another engine run
+/// holds the lock — never a fallback trigger), `Other` is every remaining
+/// failure. `Display` renders the same message callers already surface.
+#[derive(Debug)]
+pub enum RunLockError {
+    Permission(String),
+    Busy(String),
+    Other(String),
+}
+
+impl std::fmt::Display for RunLockError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RunLockError::Permission(m) | RunLockError::Busy(m) | RunLockError::Other(m) => {
+                f.write_str(m)
+            }
+        }
+    }
+}
+
+/// Classify one OS error behind a pre-rendered message.
+fn classify_io(e: std::io::Error, message: String) -> RunLockError {
+    if e.kind() == std::io::ErrorKind::PermissionDenied {
+        RunLockError::Permission(message)
+    } else {
+        RunLockError::Other(message)
+    }
+}
+
+/// Acquire an explicit lock FILE — the one flock machinery behind
+/// [`acquire_run_lock`] and the build-user fallback: create the parent,
+/// take the non-blocking exclusive flock, keep the fd. `scope` fills the
+/// busy message ("a second run over the {scope} is refused"). A busy lock
+/// is a refusal naming the holder's lock path — the engine never waits on
+/// it and never deletes a held lock file.
+pub fn acquire_run_lock_file(path: &Path, scope: &str) -> Result<RunLock, RunLockError> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                let message = format!("cannot create {}: {e}", parent.display());
+                classify_io(e, message)
+            })?;
+        }
+    }
     // The gate's checked handle IS the lock file: the flock and the pid write
     // land on the inode the ownership check saw, never a second open. The
     // quarantine note goes to stderr because this entry predates an err sink
     // and its callers surface only the error string.
     let mut opts = OpenOptions::new();
     opts.create(true).truncate(false).write(true);
-    let file = open_state_file_with_uid(&path, &mut opts, current_uid(), &mut std::io::stderr())
-        .map_err(|e| e.to_string())?;
+    let file = gate_open(path, &mut opts, current_uid(), &mut std::io::stderr())
+        .map_err(|f| classify_failure(f))?;
     if !flock_exclusive_nonblocking(file.as_raw_fd()) {
-        return Err(format!(
-            "another gsa run holds {} (a second run over the same state root is refused)",
-            path.display()
-        ));
+        return Err(RunLockError::Busy(format!(
+            "another gsa run holds {} (a second run over the {} is refused)",
+            path.display(),
+            scope
+        )));
     }
     let _ = writeln!(&mut { &file }, "{}", std::process::id());
-    Ok(RunLock { file, path })
+    Ok(RunLock {
+        file,
+        path: path.to_path_buf(),
+    })
+}
+
+/// The §K.3 state-root run lock (`<state>/locks/run.lock`), classified for
+/// the fallback seam's permission-vs-contended distinction.
+pub fn try_acquire_run_lock(state_dir: &Path) -> Result<RunLock, RunLockError> {
+    acquire_run_lock_file(&state_dir.join("locks").join("run.lock"), "same state root")
+}
+
+/// Acquire the run lock over the state root (contract §K). A busy lock is a
+/// refusal naming the holder's lock path — the engine never waits on it and
+/// never deletes a held lock file.
+pub fn acquire_run_lock(state_dir: &Path) -> Result<RunLock, String> {
+    try_acquire_run_lock(state_dir).map_err(|e| e.to_string())
 }
 
 /// Quarantine a wrong-owner state file as `<path>.stale.<epoch>.<pid>`
 /// (preserved, announced) — rule 19's unprivileged remedy. Returns Ok(true)
 /// when a file was quarantined.
 pub fn quarantine_foreign(path: &Path, err: &mut dyn Write) -> Result<bool, String> {
+    quarantine_foreign_kind(path, err).map_err(|(message, _kind)| message)
+}
+
+/// [`quarantine_foreign`] with the OS error kind behind a rename failure
+/// riding along (the run-lock fallback must see EACCES/EPERM as a
+/// permission failure, never as a generic refusal).
+fn quarantine_foreign_kind(
+    path: &Path,
+    err: &mut dyn Write,
+) -> Result<bool, (String, Option<std::io::ErrorKind>)> {
     let epoch = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -80,9 +146,13 @@ pub fn quarantine_foreign(path: &Path, err: &mut dyn Write) -> Result<bool, Stri
         std::process::id()
     ));
     std::fs::rename(path, &stale).map_err(|e| {
-        format!(
-            "state file {} is not owned by the running engine user and cannot be quarantined ({e}) — move it aside as the state owner (sudo), then rerun",
-            path.display()
+        let kind = e.kind();
+        (
+            format!(
+                "state file {} is not owned by the running engine user and cannot be quarantined ({e}) — move it aside as the state owner (sudo), then rerun",
+                path.display()
+            ),
+            Some(kind),
         )
     })?;
     let _ = writeln!(
@@ -116,6 +186,25 @@ impl std::fmt::Display for GateError {
     }
 }
 
+/// A gate failure plus the OS error kind behind it where one exists. The
+/// run-lock fallback must tell EACCES/EPERM (a state root the runner may
+/// not write) apart from every other refusal; [`GateError`]'s strings carry
+/// only the rendered message, so the kind rides along here and the public
+/// gate entry drops it.
+struct GateFailure {
+    error: GateError,
+    kind: Option<std::io::ErrorKind>,
+}
+
+/// Classify one gate failure for [`RunLockError`].
+fn classify_failure(f: GateFailure) -> RunLockError {
+    let message = f.error.to_string();
+    match f.kind {
+        Some(std::io::ErrorKind::PermissionDenied) => RunLockError::Permission(message),
+        _ => RunLockError::Other(message),
+    }
+}
+
 fn open_nofollow(path: &Path, opts: &mut OpenOptions) -> std::io::Result<File> {
     opts.custom_flags(O_NOFOLLOW);
     opts.open(path)
@@ -125,29 +214,38 @@ fn open_nofollow(path: &Path, opts: &mut OpenOptions) -> std::io::Result<File> {
 /// is named as the redirection it is (its own remedy), everything else keeps
 /// the §J.3 state-root remedy. The re-stat is diagnostic only — the refusal
 /// itself already happened in `open(2)`, and `ErrorKind::FilesystemLoop` is
-/// still unstable.
-fn open_refusal(path: &Path, e: std::io::Error) -> GateError {
+/// still unstable. The OS error kind rides along for the run-lock fallback's
+/// permission/other distinction.
+fn open_refusal(path: &Path, e: std::io::Error) -> GateFailure {
+    let kind = e.kind();
     let redirected = path
         .symlink_metadata()
         .map(|m| m.file_type().is_symlink())
         .unwrap_or(false);
     if redirected {
-        GateError::Ownership(format!(
-            "state file {} is a symlink — the ownership gate refuses to write through it; replace it with a regular file as the state owner (sudo), then rerun",
-            path.display()
-        ))
+        GateFailure {
+            error: GateError::Ownership(format!(
+                "state file {} is a symlink — the ownership gate refuses to write through it; replace it with a regular file as the state owner (sudo), then rerun",
+                path.display()
+            )),
+            kind: Some(kind),
+        }
     } else {
-        GateError::Open(format!(
-            "cannot open state file {} ({e}) — pass --state-dir PATH or set GSA_STATE_DIR",
-            path.display()
-        ))
+        GateFailure {
+            error: GateError::Open(format!(
+                "cannot open state file {} ({e}) — pass --state-dir PATH or set GSA_STATE_DIR",
+                path.display()
+            )),
+            kind: Some(kind),
+        }
     }
 }
 
-fn fd_owned_by(file: &File, path: &Path, uid: u32) -> Result<bool, GateError> {
-    let meta = file
-        .metadata()
-        .map_err(|e| GateError::Open(format!("cannot stat {}: {e}", path.display())))?;
+fn fd_owned_by(file: &File, path: &Path, uid: u32) -> Result<bool, GateFailure> {
+    let meta = file.metadata().map_err(|e| GateFailure {
+        error: GateError::Open(format!("cannot stat {}: {e}", path.display())),
+        kind: Some(e.kind()),
+    })?;
     Ok(meta.uid() == uid)
 }
 
@@ -167,21 +265,38 @@ pub fn open_state_file_with_uid(
     uid: u32,
     err: &mut dyn Write,
 ) -> Result<File, GateError> {
+    gate_open(path, opts, uid, err).map_err(|f| f.error)
+}
+
+/// The gate's body with the OS error kind preserved (see [`GateFailure`]);
+/// the public entry above drops the kind, the run-lock seam classifies it.
+fn gate_open(
+    path: &Path,
+    opts: &mut OpenOptions,
+    uid: u32,
+    err: &mut dyn Write,
+) -> Result<File, GateFailure> {
     let file = open_nofollow(path, opts).map_err(|e| open_refusal(path, e))?;
     if fd_owned_by(&file, path, uid)? {
         return Ok(file);
     }
     drop(file);
-    quarantine_foreign(path, err).map_err(GateError::Ownership)?;
+    quarantine_foreign_kind(path, err).map_err(|(message, kind)| GateFailure {
+        error: GateError::Ownership(message),
+        kind,
+    })?;
     let file = open_nofollow(path, opts).map_err(|e| open_refusal(path, e))?;
     if fd_owned_by(&file, path, uid)? {
         return Ok(file);
     }
     drop(file);
-    Err(GateError::Ownership(format!(
-        "state file {} is still not owned by the running engine user after quarantine — move it aside as the state owner (sudo), then rerun",
-        path.display()
-    )))
+    Err(GateFailure {
+        error: GateError::Ownership(format!(
+            "state file {} is still not owned by the running engine user after quarantine — move it aside as the state owner (sudo), then rerun",
+            path.display()
+        )),
+        kind: None,
+    })
 }
 
 /// The append-shaped production entry (lane logs): the checked handle every

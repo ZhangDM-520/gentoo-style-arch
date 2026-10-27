@@ -739,10 +739,81 @@ pub fn pass_selection(ctx: &Ctx<'_>, inv: &Invocation) -> Result<Selection, Stri
     }
 }
 
-/// The `-Sy` phase shared by `gsa -Sy` and `gsa -Su`: sync every selected
+/// The `-Sy` phase shared by `gsa -Sy` and `gsa -Syu`: sync every selected
 /// recipe in canonical build order, print each note and the run-level
 /// disposition block (recipe rewrites left UNCOMMITTED, rule 18). Returns
 /// whether a refusal class fired and whether a deferral class fired.
+/// H4 (2026-10-28): the per-recipe status line of the sync pass — every
+/// recipe answers with exactly one visible line. This renders the outcomes
+/// that were SILENT before (a long `-Sy` pass showed nothing until a rewrite
+/// or a failure fired); the refusal/deferral classes keep their own loud
+/// per-recipe notes (`None` here, never a second line for them). Human
+/// vocabulary is the fish-era prose; the machine mode is one `LEVEL event
+/// k=v` line (§L.6).
+fn sync_status_line(id: &str, outcome: &SyncOutcome, human: bool) -> Option<String> {
+    use crate::output::{kv_line, Level};
+    let line = match outcome {
+        SyncOutcome::NoChange { reason } => {
+            if human {
+                format!("· {id}: no change ({})\n", reason.as_str())
+            } else {
+                format!(
+                    "{}\n",
+                    kv_line(
+                        Level::Info,
+                        "sync",
+                        &[
+                            ("pkg", id.to_string()),
+                            ("status", "no-change".to_string()),
+                            ("reason", reason.as_str().to_string()),
+                        ],
+                    )
+                )
+            }
+        }
+        SyncOutcome::VersionMoved { old, new, .. } => {
+            if human {
+                format!("✓ {id}: version moved {old} → {new}\n")
+            } else {
+                format!(
+                    "{}\n",
+                    kv_line(
+                        Level::Info,
+                        "sync",
+                        &[
+                            ("pkg", id.to_string()),
+                            ("status", "version-moved".to_string()),
+                            ("old", old.clone()),
+                            ("new", new.clone()),
+                        ],
+                    )
+                )
+            }
+        }
+        SyncOutcome::ReleaseMoved { old, new } => {
+            if human {
+                format!("✓ {id}: release moved {old} → {new}\n")
+            } else {
+                format!(
+                    "{}\n",
+                    kv_line(
+                        Level::Info,
+                        "sync",
+                        &[
+                            ("pkg", id.to_string()),
+                            ("status", "release-moved".to_string()),
+                            ("old", old.clone()),
+                            ("new", new.clone()),
+                        ],
+                    )
+                )
+            }
+        }
+        _ => return None,
+    };
+    Some(line)
+}
+
 pub fn sync_phase(
     root: &Path,
     graph: &Graph<'_>,
@@ -758,6 +829,11 @@ pub fn sync_phase(
         let recipe_dir = root.join(&graph.record(idx).path);
         let report = sync_one(&recipe_dir, root, idx, graph);
         let (class, notes) = classify_sync(&report, absorb_wait(graph, idx));
+        // H4: the per-recipe status line first (the verdict headline), then
+        // the loud notes below as its detail.
+        if let Some(line) = sync_status_line(id.as_str(), &report.outcome, crate::output::is_human()) {
+            let _ = write!(out, "{line}");
+        }
         for line in &notes {
             let _ = writeln!(err, "gsa: note: {line}");
         }
@@ -815,7 +891,7 @@ pub fn run_sync_pass(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write)
             );
         }
         Ok(cfg) => {
-            let state = match gsa_model::config::resolve_state_dir(None) {
+            let state = match gsa_model::config::resolve_state_dir(inv.state_dir.as_deref()) {
                 Ok(state) => state,
                 Err(message) => {
                     let _ = writeln!(err, "gsa: {message}");
@@ -882,6 +958,7 @@ pub fn run_sync_pass(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write)
         project: &project,
         graph: &graph,
         db: &db,
+        user_sets: select::load_user_sets(inv),
     };
     // A selection is optional here (§B.4 spells `gsa -Sy` with no targets):
     // no selection = every recipe, in canonical build order.
@@ -970,5 +1047,53 @@ mod tests {
             err,
             "cannot combine --skip with --skip-built (pick one skip claim: --skip is freshness-gated, --skip-built is the built-set claim)"
         );
+    }
+
+    /// H4 (2026-10-28): every recipe answers with one status line — the
+    /// silent outcomes now have one, in both vocabularies — and the loud
+    /// classes (which already carry their own per-recipe note) never get a
+    /// second line.
+    #[test]
+    fn sync_status_lines_cover_the_silent_outcomes_once() {
+        use gsa_recipe::sync::NoChangeReason;
+        let id = "mesa-git";
+        let nochange = SyncOutcome::NoChange {
+            reason: NoChangeReason::Current,
+        };
+        assert_eq!(
+            sync_status_line(id, &nochange, true).as_deref(),
+            Some("· mesa-git: no change (current)\n")
+        );
+        assert_eq!(
+            sync_status_line(id, &nochange, false).as_deref(),
+            Some("INFO sync pkg=mesa-git status=no-change reason=current\n")
+        );
+        let moved = SyncOutcome::VersionMoved {
+            old: "1.0-1".to_string(),
+            new: "2.0-1".to_string(),
+            moved_sources: Vec::new(),
+        };
+        assert_eq!(
+            sync_status_line(id, &moved, true).as_deref(),
+            Some("✓ mesa-git: version moved 1.0-1 → 2.0-1\n")
+        );
+        assert_eq!(
+            sync_status_line(id, &moved, false).as_deref(),
+            Some("INFO sync pkg=mesa-git status=version-moved old=1.0-1 new=2.0-1\n")
+        );
+        let release = SyncOutcome::ReleaseMoved {
+            old: "1.0-1".to_string(),
+            new: "1.0-2".to_string(),
+        };
+        assert_eq!(
+            sync_status_line(id, &release, true).as_deref(),
+            Some("✓ mesa-git: release moved 1.0-1 → 1.0-2\n")
+        );
+        // The loud classes keep their own note — no duplicate line.
+        let loud = SyncOutcome::QueryFailed {
+            message: "provider outage".to_string(),
+        };
+        assert!(sync_status_line(id, &loud, true).is_none());
+        assert!(sync_status_line(id, &loud, false).is_none());
     }
 }

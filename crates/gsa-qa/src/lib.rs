@@ -47,10 +47,10 @@ use std::marker::PhantomData;
 pub use input::{QaArchive, QaInput, QaInstalled, QaRecipe, Workspace};
 
 /// What a check reads (the task's scope vocabulary: recipe / archive /
-/// installed-DB / topology). Contract §E.4 names a coarser
-/// `recipe|topology|host|install` set; the mapping is 1:1 in spirit
-/// (recipe→recipe, archive→install, installed-DB→host, topology→topology)
-/// and the finer split is what the checks actually consume.
+/// installed-DB / topology). The declared vocabulary is the contract §E.4
+/// set (`recipe|topology|host|install`) — the enum keeps the finer
+/// implementation split (archive vs installed-DB) and `as_str` publishes
+/// the contract's words.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Scope {
     /// Committed `.SRCINFO` of the workspace recipes.
@@ -67,8 +67,8 @@ impl Scope {
     pub fn as_str(self) -> &'static str {
         match self {
             Scope::Recipe => "recipe",
-            Scope::Archive => "archive",
-            Scope::InstalledDb => "installed-db",
+            Scope::Archive => "install",
+            Scope::InstalledDb => "host",
             Scope::Topology => "topology",
         }
     }
@@ -81,8 +81,7 @@ impl fmt::Display for Scope {
 }
 
 /// The severity attribute of a check (contract §E.4 `report|refuse`; the
-/// refusing class is named `install-refusing` here because that is exactly
-/// what it can do).
+/// refusing class can block an install — the enum name says exactly that).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Severity {
     Report,
@@ -93,7 +92,7 @@ impl Severity {
     pub fn as_str(self) -> &'static str {
         match self {
             Severity::Report => "report",
-            Severity::InstallRefusing => "install-refusing",
+            Severity::InstallRefusing => "refuse",
         }
     }
 }

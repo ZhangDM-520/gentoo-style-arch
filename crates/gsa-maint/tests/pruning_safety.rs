@@ -8,8 +8,8 @@ mod common;
 
 use common::{append_run, find_row, srcinfo, Fixture};
 use gsa_maint::{
-    hold_run_lock, ignorepkg, protect, render_rows, Row, CONFIRMATION_REQUIRED, RC_OK, RC_REFUSAL,
-    RC_USAGE,
+    hold_run_lock, hold_run_lock_with_fallback, ignorepkg, protect, render_rows, Row,
+    CONFIRMATION_REQUIRED, RC_OK, RC_REFUSAL, RC_USAGE,
 };
 
 /// A fixture with two declared recipes and one archive whose `.PKGINFO`
@@ -83,6 +83,96 @@ fn a_busy_run_lock_is_a_run_in_flight_refusal() {
     drop(held);
     let again = hold_run_lock(&fx.state_dir).expect("dropping the lock releases the flock");
     drop(again);
+}
+
+/// Model the H10 permission split without root: the state root and its
+/// `locks/` become mode 555, so the run.lock create/open fails EACCES
+/// while every read the engine needs still works. Root ignores mode bits
+/// and cannot model the split — callers skip there.
+fn deny_run_lock_writes(state: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let locks = state.join("locks");
+    std::fs::create_dir_all(&locks).unwrap();
+    for dir in [state, locks.as_path()] {
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+    }
+}
+
+fn restore_run_lock_writes(state: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let locks = state.join("locks");
+    for dir in [state, locks.as_path()] {
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+}
+
+#[test]
+fn a_permission_denied_state_lock_falls_back_to_the_build_user_lock() {
+    if gsa_model::privilege::effective_uid() == 0 {
+        return; // root ignores mode bits and cannot model the split
+    }
+    let fx = Fixture::new("runlock-fallback");
+    deny_run_lock_writes(&fx.state_dir);
+    let fallback = fx.root.join("build-cache").join("run.lock");
+    let held = hold_run_lock_with_fallback(&fx.state_dir, &fallback)
+        .expect("the build-user fallback lock is taken past an unopenable state lock");
+    assert_eq!(
+        held.path(),
+        fallback.as_path(),
+        "the held lock IS the fallback lock file"
+    );
+    restore_run_lock_writes(&fx.state_dir);
+    drop(held);
+}
+
+#[test]
+fn a_held_fallback_lock_answers_run_in_flight() {
+    if gsa_model::privilege::effective_uid() == 0 {
+        return;
+    }
+    let fx = Fixture::new("runlock-fallback-busy");
+    deny_run_lock_writes(&fx.state_dir);
+    let fallback = fx.root.join("build-cache").join("run.lock");
+    let held =
+        hold_run_lock_with_fallback(&fx.state_dir, &fallback).expect("first fallback holder");
+    let busy = hold_run_lock_with_fallback(&fx.state_dir, &fallback)
+        .err()
+        .expect("a second fallback holder is refused");
+    assert!(
+        busy.contains("run-in-flight"),
+        "refusal names run-in-flight: {busy}"
+    );
+    let named = fallback.display().to_string();
+    assert!(
+        busy.contains(named.as_str()),
+        "the refusal names the held fallback lock: {busy}"
+    );
+    restore_run_lock_writes(&fx.state_dir);
+    drop(held);
+}
+
+#[test]
+fn a_busy_state_lock_never_falls_back() {
+    let fx = Fixture::new("runlock-busy");
+    let fallback = fx.root.join("build-cache").join("run.lock");
+    let held = hold_run_lock_with_fallback(&fx.state_dir, &fallback).expect("the state lock is taken");
+    let busy = hold_run_lock_with_fallback(&fx.state_dir, &fallback)
+        .err()
+        .expect("a second holder is refused");
+    assert!(
+        busy.contains("run-in-flight"),
+        "refusal names run-in-flight: {busy}"
+    );
+    assert!(
+        busy.contains("same state root"),
+        "a contended state lock never falls back: {busy}"
+    );
+    let named = fallback.display().to_string();
+    assert!(
+        !busy.contains(named.as_str()),
+        "the refusal names the state lock, not the fallback: {busy}"
+    );
+    drop(held);
 }
 
 #[test]

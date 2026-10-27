@@ -5,8 +5,9 @@
 //! `fit_dashboard_line` — tests/assets/build-all.fish):
 //! * a TTY gets the redrawn progress box — progress header, one row per lane
 //!   with three run-scoped log-tail rows, spinner + last-event footer;
-//! * a pipe under `--human` gets append-only event lines plus the 10 s
-//!   `STATUS:` hint (the "is it stuck?" surface);
+//! * a human-mode stream that is not an interactive terminal (TERM=dumb or
+//!   unset) gets append-only event lines plus the 10 s `STATUS:` hint (the
+//!   "is it stuck?" surface);
 //! * the machine vocabulary passes through untouched — a machine stream is
 //!   the leveled kv lines and gains nothing from the view.
 //!

@@ -44,17 +44,13 @@ use std::path::{Path, PathBuf};
 pub const DEFAULT_STATE_ROOT: &str = "/var/lib/gsa";
 
 /// Resolve the state root the contract's precedence demands (§J.3):
-/// `--state-dir` beats `GSA_STATE_DIR` beats [`DEFAULT_STATE_ROOT`].
-pub fn resolve_state_root(flag: Option<&str>) -> PathBuf {
-    if let Some(value) = flag.filter(|v| !v.is_empty()) {
-        return PathBuf::from(value);
-    }
-    if let Ok(value) = std::env::var("GSA_STATE_DIR") {
-        if !value.is_empty() {
-            return PathBuf::from(value);
-        }
-    }
-    PathBuf::from(DEFAULT_STATE_ROOT)
+/// `--state-dir` beats `GSA_STATE_DIR` beats the `gsa.conf` layers'
+/// `state_dir` beats [`DEFAULT_STATE_ROOT`]. One ladder, one home: this
+/// delegates to `gsa_model::config::resolve_state_dir`, the resolver the
+/// build pipeline already uses — a config error is a named error, never a
+/// silent fall-through to the default.
+pub fn resolve_state_root(flag: Option<&str>) -> Result<PathBuf, String> {
+    gsa_model::config::resolve_state_dir(flag)
 }
 
 /// An opened state root: the one directory tree every store lives under,
@@ -82,6 +78,16 @@ impl StateRoot {
         Ok(StateRoot {
             path: path.to_path_buf(),
         })
+    }
+
+    /// A read-only handle for the pure-read surfaces (`--install-decide`'s
+    /// §E.5 park report): nothing is created — the store readers treat a
+    /// missing file as the empty store — so a read can never mutate state
+    /// (§D.1 "touches nothing else").
+    pub fn open_readonly(path: &Path) -> StateRoot {
+        StateRoot {
+            path: path.to_path_buf(),
+        }
     }
 
     pub fn path(&self) -> &Path {

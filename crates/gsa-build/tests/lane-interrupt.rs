@@ -41,7 +41,7 @@ fn workspace() -> (PathBuf, PathBuf) {
     let ws = scratch();
     std::fs::write(
         ws.join("config/build-defaults.conf"),
-        "lanes=1\njobs=1\nintensity=low\nmemory_per_job_gib=3\ncore_memory_per_job_gib=4\nreserved_memory_gib=2\nstate_dir=auto\n",
+        "lanes=1\njobs=1\nintensity=low\nmemory_per_job_gib=3\ncore_memory_per_job_gib=4\nreserved_memory_gib=2\n",
     )
     .unwrap();
     std::fs::write(

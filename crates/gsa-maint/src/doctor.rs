@@ -288,7 +288,13 @@ pub fn fix(ctx: &MaintCtx<'_>, apply: bool) -> Result<FixOutcome, String> {
             continue;
         }
         let mut err = Vec::new();
-        match reindex_archives(ctx.state, &id, &archives, &mut err) {
+        // The declared `abi-rev=` override for this recipe (§J.4): the
+        // reindex derives the same token registration would have written.
+        let abi_rev = ctx
+            .graph
+            .index_of(&id)
+            .and_then(|idx| gsa_abi::abi_rev_of(&ctx.graph.record(idx).tags));
+        match reindex_archives(ctx.state, &id, &archives, abi_rev, &mut err) {
             Ok(added) => {
                 for row in &added {
                     rows.push(Row::new(

@@ -43,14 +43,13 @@ and a root shell without a build user is refused with guidance.",
     Section {
         head: "Output modes (all families; the default follows the terminal — a capture is a machine):",
         blocks: &[
-            ("--human", "human-readable output: icons, the fish-era vocabulary, and a live status dashboard on a TTY (the default when stdout is a terminal)"),
             ("--machine", "leveled machine lines — `INFO|WARNING|ERROR event k=v …`, direct-action fields (the default when stdout is captured); row vocabularies and the `format: 2` run record are identical in both modes"),
         ],
     },
     Section {
         head: "Families (exactly one per invocation; lowercase letters form the cluster):",
         blocks: &[
-            ("-Q", "query the buildable universe (and, later, pacman's installed database)"),
+            ("-Q", "query the installed database and the side-car (read-only; pacman queries stay pacman)"),
             ("-S", "build + install the selection (each package installed before its consumers compile)"),
             ("-B", "build-only: archives to the build cache (PKGDEST), nothing installed"),
             ("-U", "install from archives: nothing is built"),
@@ -59,31 +58,50 @@ and a root shell without a build user is refused with guidance.",
         ],
     },
     Section {
-        head: "Command surface:",
+        head: "Command surface — query (-Q …; read-only, unprivileged):",
         blocks: &[
-            ("gsa -Qt", "resolved topology records, one per line: id|path|groups|edges|tags (the tooling channel)"),
-            ("gsa -Sl [targets…] [ranges…]", "ordered selection listing with range indices (-Bl same)"),
-            ("gsa -Si <ref…>", "recipe info: metadata, topology record, groups, build-order edges, tags"),
-            ("gsa -Ss <pattern…>", "search the buildable universe (topology + .SRCINFO)"),
-            ("gsa -Sg [name…]", "groups/sets and their members (all with counts by default)"),
-            ("gsa -Q [ref…]", "package names with versions over the buildable universe"),
-            ("gsa -Qi <ref…>", "package info: pacman fields plus the recipe record"),
-            ("gsa -Qs <pattern…>", "search package names/descriptions"),
+            ("gsa -Q", "list installed packages, with side-car columns (abi-token, built version, binpkg instances) where a side-car row exists"),
+            ("gsa -Qi <ref…>", "merged info: pacman fields, the side-car record (abi-token, subscriptions in/out, binpkg instances, VCS baseline), recipe metadata and the topology record"),
+            ("gsa -Qs <pattern…>", "search installed names/descriptions (pacman -Qs semantics)"),
+            ("gsa -Qg [name…]", "groups/sets and their members (all with counts by default)"),
+            ("gsa -Ql <ref…>", "list owned files (pacman -Ql — delegated verbatim)"),
+            ("gsa -Qo <path…>", "file owner (pacman -Qo — delegated verbatim)"),
+            ("gsa -Qu", "stale set: recipes whose tracked version moved past their newest built instance"),
             ("gsa -Qb [ref…]", "binpkg index rows: the retained built instances the side-car DB records (hash-bound, §J.4)"),
             ("gsa -Qp <archive…>", "archive probe: the archive's .PKGINFO matched against its index row, hash/size agreement reported"),
+            ("gsa -Qa <ref…>", "ABI report: derived token, abi-rev= override if any, subscriptions recorded against it"),
+            ("gsa -Qr", "revdep report over the installed-ELF index: unresolved DT_NEEDED, preserved-lib survivors, exact-pin leftovers"),
+            ("gsa -Qt", "resolved topology records, one per line: id|path|groups|edges|tags (the tooling channel)"),
+        ],
+    },
+    Section {
+        head: "Command surface — build + install (-S …):",
+        blocks: &[
             ("gsa -S <targets…> [ranges…]", "build the selection and install each package's archives before its consumers compile (install-before-dependents; checked install)"),
             ("gsa -Sf …", "force install: always run pacman -U, no same-version skip"),
             ("gsa -Sc …", "prune strength 1 first (src/pkg/build trees and archives), then build + install"),
+            ("gsa -S --dry-run <targets…> [ranges…]", "build-order plan without building"),
+            ("gsa -Sl [targets…] [ranges…]", "ordered selection listing with range indices (-Bl same; nothing is built or installed)"),
+            ("gsa -Sw <targets…> [ranges…]", "fetch and verify the selection's sources through makepkg --verifysource — no build, no install; verdict rows are advisory (§D)"),
+            ("gsa -Sy [targets…] [ranges…]", "version-sync pass only: provider queries, transactional recipe rewrites left UNCOMMITTED (review with 'git diff', then commit), and the run-level disposition block (rule 18 anchoring)"),
+            ("gsa -Su [targets…] [ranges…]", "update the stale set (recipes whose tracked version moved past their newest built instance) with NO sync pass — the committed versions build as-is (pacman -Su semantics)"),
+            ("gsa -Syu [targets…] [ranges…]", "sync first (-Sy), then build+install the stale set"),
+        ],
+    },
+    Section {
+        head: "Command surface — build-only (-B …):",
+        blocks: &[
             ("gsa -B <targets…> [ranges…]", "build the selection to archives in the build cache (PKGDEST; nothing is installed, no pacman call)"),
-            ("gsa -U <ref…|archive-path…>", "install the named packages' newest complete archive sets (or the named paths) in ONE pacman -U transaction; nothing is built"),
+            ("gsa -B --dry-run <targets…> [ranges…]", "the same plan shape for build-only"),
+        ],
+    },
+    Section {
+        head: "Command surface — install from archives (-U …; nothing is built):",
+        blocks: &[
+            ("gsa -U <ref…|archive-path…>", "install the named packages' newest complete archive sets (or the named paths) in ONE pacman -U transaction"),
             ("gsa -Ua", "install every index-complete archive set in the workspace in one transaction (force mode)"),
             ("gsa -Uf", "force: bypass the same-version already-installed skip"),
             ("-- <pacman args…>", "forwarded verbatim to every pacman -U of an install run (-S/-U), e.g. -Ua -- --overwrite '*'"),
-            ("gsa -S --dry-run <targets…> [ranges…]", "build-order plan without building"),
-            ("gsa -B --dry-run <targets…> [ranges…]", "the same plan shape for build-only"),
-            ("gsa -Sw <targets…> [ranges…]", "fetch and verify the selection's sources through makepkg --verifysource — no build, no install; verdict rows are advisory (§D)"),
-            ("gsa -Sy [targets…] [ranges…]", "version-sync pass only: provider queries, transactional recipe rewrites left UNCOMMITTED (review with 'git diff', then commit), and the run-level disposition block (rule 18 anchoring)"),
-            ("gsa -Su [targets…] [ranges…]", "update: the -Sy pass, then build+install the stale set (recipes whose tracked version moved past their newest built instance)"),
         ],
     },
     Section {
@@ -111,7 +129,7 @@ Selection targets (contract §C; exact lookup only — a typo is never auto-corr
             ("recipe path", "packages/git/mesa-git"),
             ("case-variant id", "Mesa-Git (matched and announced)"),
             ("pacman pkgname", "zen-browser (split outputs included; announced)"),
-            ("group / user set", "@git, @core, @<set>"),
+            ("group / user set", "@<group> over the computed groups ({groups}), or a named user set @<set> ('gsa -Ms' manages user sets)"),
             ("index ranges", "22..38, 22.., ..15 — 1-based over the -Sl listing of the same selection; a bare range is a usage error"),
             ("standalone PKGBUILD", "a PKGBUILD file path, a directory holding one, or a URL of one: staged into its own one-node workspace and built there — gsa + the recipe, no project clone required (build/install/fetch/maintain runs and their --dry-run plan; never mixed with workspace references, and query/report verbs do not take them yet)"),
         ],
@@ -250,6 +268,17 @@ pub fn render() -> String {
     render_at(width())
 }
 
+/// The computed group roster (H5: the help names every group that exists —
+/// spelled from `gsa_model::Group`'s closed table, the one source, so a
+/// roster change can never leave the help stale).
+fn group_roster() -> String {
+    gsa_model::Group::ROSTER
+        .iter()
+        .map(|group| format!("@{}", group.as_str()))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// Render the full help fitted to `w` — the seam the width pinners use.
 pub(crate) fn render_at(w: usize) -> String {
     let mut out: Vec<String> = Vec::new();
@@ -271,6 +300,13 @@ pub(crate) fn render_at(w: usize) -> String {
             .unwrap_or(0)
             .min(w / 3);
         for (left, right) in section.blocks {
+            let rendered_right;
+            let right: &str = if right.contains("{groups}") {
+                rendered_right = right.replace("{groups}", &group_roster());
+                &rendered_right
+            } else {
+                right
+            };
             render_entry(left, right, leftw, w, &mut out);
         }
     }
@@ -315,9 +351,51 @@ mod tests {
                 }
             }
             assert!(
-                rendered.contains("--human") && rendered.contains("--machine"),
-                "{w} cols: the output-mode flags are undocumented"
+                rendered.contains("--machine") && !rendered.contains("--human"),
+                "{w} cols: --machine must be documented and --human retired (H2)"
             );
         }
+    }
+
+    /// H5: the help names every computed group. The roster is spelled from
+    /// `gsa_model::Group::ROSTER` at render (the one source), so this pin
+    /// fails if the `{groups}` placeholder ever leaks into the output.
+    #[test]
+    fn every_computed_group_is_named_and_the_placeholder_never_leaks() {
+        let rendered = render_at(CAPTURE_WIDTH);
+        assert!(
+            !rendered.contains("{groups}"),
+            "the {{groups}} placeholder leaked into the help"
+        );
+        for group in gsa_model::Group::ROSTER {
+            assert!(
+                rendered.contains(&format!("@{}", group.as_str())),
+                "group '{}' is missing from the help roster",
+                group.as_str()
+            );
+        }
+    }
+
+    /// H1: the command surface is grouped by family, in family order, and
+    /// each family's entries sit under their own heading (never interleaved).
+    #[test]
+    fn command_surface_is_grouped_by_family_in_order() {
+        let rendered = render_at(CAPTURE_WIDTH);
+        let pos = |needle: &str| {
+            rendered
+                .find(needle)
+                .unwrap_or_else(|| panic!("missing from the help: {needle:?}"))
+        };
+        let query = pos("Command surface — query");
+        let build_install = pos("Command surface — build + install");
+        let build_only = pos("Command surface — build-only");
+        let archives = pos("Command surface — install from archives");
+        let maintain = pos("Maintain verbs");
+        assert!(query < build_install && build_install < build_only);
+        assert!(build_only < archives && archives < maintain);
+        assert!(pos("gsa -Qi") > query && pos("gsa -Qi") < build_install);
+        assert!(pos("gsa -Syu") > build_install && pos("gsa -Syu") < build_only);
+        assert!(pos("gsa -B --dry-run") > build_only && pos("gsa -B --dry-run") < archives);
+        assert!(pos("gsa -Ua") > archives && pos("gsa -Ua") < maintain);
     }
 }

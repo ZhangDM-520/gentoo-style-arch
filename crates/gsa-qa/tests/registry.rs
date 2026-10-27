@@ -26,7 +26,7 @@ impl Scratch {
         std::fs::write(
             root.join("config/build-defaults.conf"),
             "lanes=1\njobs=1\nintensity=low\nmemory_per_job_gib=3\n\
-             core_memory_per_job_gib=4\nreserved_memory_gib=2\nstate_dir=auto\n",
+             core_memory_per_job_gib=4\nreserved_memory_gib=2\n",
         )
         .unwrap();
         Scratch { root }
@@ -211,11 +211,11 @@ fn registry_resolves_every_keyword_with_its_scope_and_severity() {
     for (name, scope, severity) in [
         ("provides-versioning", "recipe", Severity::Report),
         ("purged-tools", "recipe", Severity::Report),
-        ("swap-drift", "installed-db", Severity::Report),
-        ("abi-closure", "archive", Severity::Report),
-        ("abi-exposure", "installed-db", Severity::Report),
-        ("declared-deps", "archive", Severity::Report),
-        ("stale-ignorepkg", "archive", Severity::InstallRefusing),
+        ("swap-drift", "host", Severity::Report),
+        ("abi-closure", "install", Severity::Report),
+        ("abi-exposure", "host", Severity::Report),
+        ("declared-deps", "install", Severity::Report),
+        ("stale-ignorepkg", "install", Severity::InstallRefusing),
     ] {
         let handle = registry
             .lookup(name)

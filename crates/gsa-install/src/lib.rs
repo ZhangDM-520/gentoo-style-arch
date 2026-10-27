@@ -77,6 +77,11 @@ pub struct DecisionContext {
     /// coverage for the ABI gate (rule 25(d)) — never a license to skip a
     /// gate for the archive itself.
     pub later_installs: Vec<String>,
+    /// Workspace recipe OUTPUT names (`pkgbase` + `pkgname`s of every
+    /// committed recipe). The ABI gate's class split (§E.3): a pinner whose
+    /// name is a workspace output stays with the consumer logic — only
+    /// out-of-tree pinners are `abi-stock-pinner`.
+    pub workspace_names: std::collections::BTreeSet<String>,
     /// Subjects parked before install (cone-stop `waits-on-failed`,
     /// `waits-on-deferred`, or a deferral key). A parked subject's row is
     /// `parked <reason>` and is never installed or probed (§E.3).
@@ -92,6 +97,11 @@ pub struct DecisionContext {
     /// wholly, so its archive installs even when the exact version is
     /// already present. Gates are untouched (force never bypasses them).
     pub wave_heal: Vec<String>,
+    /// The state root whose hash-bound binpkg index the §J.4 gate consults
+    /// (`index-invalid`: an archive whose bytes disagree with its row never
+    /// installs). `None` = no consultation (the order-blind
+    /// `--install-decide` seam and standalone plans).
+    pub state_dir: Option<PathBuf>,
 }
 
 /// The discovery result for one recipe directory (house layout: archives
@@ -308,6 +318,48 @@ pub fn decide(
     Ok(plan(candidates, ctx, db)?.rows())
 }
 
+/// [`decide`] plus the plan's in-run repair targets (rule 25(d)) — the
+/// `-U` executor needs them to stage the forced-rebuild markers before its
+/// transaction (§E.3 gap-G1).
+pub fn decide_with_repairs(
+    candidates: &[Candidate],
+    ctx: &DecisionContext,
+    db: &LocalDb,
+) -> Result<(Vec<DecisionRow>, Vec<(String, String)>), String> {
+    let plan = plan(candidates, ctx, db)?;
+    let rows = plan.rows();
+    Ok((rows, plan.repairs))
+}
+
+/// Stage the in-run repair forced-rebuild markers (rule 25(d); fish
+/// `repair_marker_write`): one file per consumer under
+/// `<state root>/abi-repair/<consumer-id>`, written by the provider's
+/// install BEFORE the transaction lands and fail-closed — a marker that
+/// cannot be recorded aborts the install with nothing mutated. The read
+/// side is the freshness gate (`abi-repair-pending`); the consumer's own
+/// install consumes the marker.
+pub fn stage_repair_markers(
+    state_dir: &Path,
+    repairs: &[(String, String)],
+) -> Result<(), String> {
+    if repairs.is_empty() {
+        return Ok(());
+    }
+    let dir = state_dir.join("abi-repair");
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("abi-repair markers: cannot create {}: {e}", dir.display()))?;
+    for (consumer, provider) in repairs {
+        let path = dir.join(consumer);
+        let recorded = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        std::fs::write(&path, format!("provider={provider}\nrecorded={recorded}\n"))
+            .map_err(|e| format!("abi-repair marker {}: {e}", path.display()))?;
+    }
+    Ok(())
+}
+
 /// One candidate's parsed identity plus its row block: the decision is
 /// computed ONCE (rule 20) and this is the single intermediate the
 /// renderer and the executor both consume — never a re-decision.
@@ -323,6 +375,10 @@ struct Plan {
     /// Plan-level rows (the empty-list row — no candidate to attach to).
     plan_rows: Vec<DecisionRow>,
     candidates: Vec<CandidatePlan>,
+    /// In-run repair targets (rule 25(d)): `(consumer, provider)` pairs
+    /// whose forced-rebuild markers the provider's install stages before
+    /// the transaction (§E.3 gap-G1).
+    repairs: Vec<(String, String)>,
 }
 
 impl Plan {
@@ -492,6 +548,19 @@ fn plan(candidates: &[Candidate], ctx: &DecisionContext, db: &LocalDb) -> Result
     // The ABI subsystem's installed-ELF view over the same parsed DB (one
     // conversion per plan — the drift/link/pinner terms all read it).
     let view = abi_view(db);
+    // In-run repair targets collected across candidates (rule 25(d)).
+    let mut plan_repairs: Vec<(String, String)> = Vec::new();
+    // §J.4's install-time gate source: the hash-bound binpkg index (one
+    // load per plan; a real run always names its state root). No root → no
+    // rows to consult → the gate stands down (never a silent pass of a row
+    // it could read).
+    let index = match &ctx.state_dir {
+        Some(state_dir) => {
+            let root = gsa_state::StateRoot::open(state_dir).map_err(|e| e.to_string())?;
+            Some(gsa_state::BinpkgIndex::load(&root).map_err(|e| e.to_string())?)
+        }
+        None => None,
+    };
 
     // Empty candidate list (§B.6, §E.3): a refusal under `-S` (checked), a
     // `noop empty-list` under `-Ua` (force). Subject `-` because there is no
@@ -504,6 +573,7 @@ fn plan(candidates: &[Candidate], ctx: &DecisionContext, db: &LocalDb) -> Result
         return Ok(Plan {
             plan_rows: vec![row("-", decision, "empty-list")],
             candidates: Vec::new(),
+            repairs: Vec::new(),
         });
     }
 
@@ -578,6 +648,29 @@ fn plan(candidates: &[Candidate], ctx: &DecisionContext, db: &LocalDb) -> Result
             continue;
         }
 
+        // §J.4: an archive whose bytes disagree with its binpkg index row is
+        // index-invalid — it never installs (`-Md` reports/repairs it). A
+        // row that exists binds its bytes (hash+size from one read at
+        // index-write time); an archive with no row is the unregistered
+        // explicit-path case and stands down.
+        if let Some(index) = &index {
+            if let Some(index_row) = index.find_archive(&candidate.archive) {
+                let verification = gsa_state::verify_row(index_row);
+                if !verification.agrees() {
+                    plans.push(CandidatePlan {
+                        candidate: candidate.clone(),
+                        pkginfo,
+                        rows: vec![row(
+                            &subject,
+                            Decision::Refuse,
+                            format!("index-invalid {}", candidate.archive.display()),
+                        )],
+                    });
+                    continue;
+                }
+            }
+        }
+
         // Rule 25(h): an unreadable `.PKGINFO` is never probed. Names come
         // from the second authority (the recipe dir's committed `.SRCINFO`);
         // established → `skip unreadable-pkginfo`; unestablishable →
@@ -647,23 +740,33 @@ fn plan(candidates: &[Candidate], ctx: &DecisionContext, db: &LocalDb) -> Result
         // its stock→house counterpart). Runs BEFORE the force branch: force
         // bypasses the same-version skip, never this gate.
         let drift = gsa_abi::provide_drift(&info.pkgname, &info.provides, &view);
+        // Rule 25(d) in-run repair targets for THIS provider (consumers the
+        // run rebuilds later) — folded into the install row's open REASON
+        // (§E.3 gap-G1) only when the move lands (the row is `install`).
+        let mut repairs: Vec<String> = Vec::new();
         if !drift.is_empty() {
-            // The ABI subsystem computes the refusal rows (contract §E.3's
-            // frozen shapes); this seam only folds them into its one plan.
-            rows.extend(gsa_abi::abi_refusal_rows(
+            // The ABI subsystem computes the gate outcome (contract §E.3's
+            // frozen shapes — conditional on coverage); this seam only folds
+            // it into its one plan.
+            let gate = gsa_abi::abi_refusal_rows(
                 &info.pkgbase,
                 &archive,
                 &drift,
                 &view,
                 &tx_names,
                 &ctx.later_installs,
-            ));
-            plans.push(CandidatePlan {
-                candidate: candidate.clone(),
-                pkginfo: Some(info),
-                rows,
-            });
-            continue;
+                &ctx.workspace_names,
+            );
+            if !gate.rows.is_empty() {
+                rows.extend(gate.rows);
+                plans.push(CandidatePlan {
+                    candidate: candidate.clone(),
+                    pkginfo: Some(info),
+                    rows,
+                });
+                continue;
+            }
+            repairs = gate.repairs;
         }
 
         // Package-internal NEEDED probe (run #53 wall): the archive's own
@@ -715,8 +818,23 @@ fn plan(candidates: &[Candidate], ctx: &DecisionContext, db: &LocalDb) -> Result
             .wave_heal
             .iter()
             .any(|n| name_chain.iter().any(|c| c == n));
+        // The provider's identity for `repair <consumer> <provider-id>`
+        // detail (§E.3 gap-G1): the recipe id beside the archive, else the
+        // pkgbase.
+        let provider_id = candidate
+            .recipe_dir
+            .as_deref()
+            .and_then(|dir| dir.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .unwrap_or_else(|| info.pkgbase.clone());
+        let repair_detail = |reason: &str| -> String {
+            let mut out = reason.to_string();
+            for consumer in &repairs {
+                out.push_str(&format!(" repair {consumer} {provider_id}"));
+            }
+            out
+        };
         let rows = if ctx.mode == DecideMode::Force || wave_heal {
-            vec![row(&info.pkgbase, Decision::Install, "ok")]
+            vec![row(&info.pkgbase, Decision::Install, repair_detail("ok"))]
         } else {
             match already_current(&info, &candidate.archive, db) {
                 Some(version) => vec![row(
@@ -724,9 +842,15 @@ fn plan(candidates: &[Candidate], ctx: &DecisionContext, db: &LocalDb) -> Result
                     Decision::Skip,
                     format!("already-current {version}"),
                 )],
-                None => vec![row(&info.pkgbase, Decision::Install, "ok")],
+                None => vec![row(&info.pkgbase, Decision::Install, repair_detail("ok"))],
             }
         };
+        // Markers stage only for providers this plan actually installs.
+        if rows.iter().any(|r| r.decision == Decision::Install) {
+            for consumer in &repairs {
+                plan_repairs.push((consumer.clone(), provider_id.clone()));
+            }
+        }
         plans.push(CandidatePlan {
             candidate: candidate.clone(),
             pkginfo: Some(info),
@@ -737,6 +861,7 @@ fn plan(candidates: &[Candidate], ctx: &DecisionContext, db: &LocalDb) -> Result
     Ok(Plan {
         plan_rows: Vec::new(),
         candidates: plans,
+        repairs: plan_repairs,
     })
 }
 
@@ -812,9 +937,11 @@ pub fn install_built_package(
             DecideMode::Force => EmptyListPolicy::Noop,
         },
         later_installs: run.later_installs.clone(),
+        workspace_names: run.workspace_names.iter().cloned().collect(),
         parks: Vec::new(),
         abi_exclusions: None,
         wave_heal: Vec::new(),
+        state_dir: Some(run.state_dir.clone()),
     };
     let db_root = localdb::pacman_db_root();
     let db = LocalDb::load(&db_root)?;
@@ -897,11 +1024,14 @@ pub fn install_built_package(
     if install_archives.is_empty() {
         return Ok((rows, None));
     }
+    // Rule 25(d): the provider's install stages the consumers'
+    // forced-rebuild markers via the transaction itself (§E.3 gap-G1).
     let outcome = execute_txn(&TxnRequest {
         state_dir: run.state_dir.clone(),
         conf: run.conf.clone(),
         archives: install_archives,
         pacman_args: run.pacman_args.clone(),
+        repairs: plan.repairs.clone(),
     });
     // Rule 9's complement: the before-ordering stands, but a transaction that
     // did not succeed must never leave names registered that it never
@@ -1048,6 +1178,9 @@ pub struct InstallRun {
     pub register_ignorepkg: bool,
     /// In-run repair coverage (rule 25(d)).
     pub later_installs: Vec<String>,
+    /// Workspace recipe OUTPUT names (`pkgbase` + `pkgname`s of every
+    /// committed recipe) — the ABI gate's workspace/out-of-tree class split.
+    pub workspace_names: Vec<String>,
 }
 
 /// Render the seam's stdout rows (§E.2) — one row per line.

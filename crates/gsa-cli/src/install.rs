@@ -26,7 +26,8 @@ use gsa_abi::{plan_waves, stage_swap, Subscriptions, TokenMove, WaveInputs, Wave
 use gsa_graph::Graph;
 use gsa_install::localdb::pacman_db_root;
 use gsa_install::{
-    decide, decide_mode, discover_recipe, execute_txn, names_for_archive, preflight_installs,
+    decide, decide_mode, decide_with_repairs, discover_recipe, execute_txn, names_for_archive,
+    preflight_installs,
     register_ignorepkg, render_rows, rows_rc, workspace_exclusions, Candidate, DecideMode,
     DecisionContext, EmptyListPolicy, LocalDb, RegisterReport, TxnOutcome, TxnRequest,
 };
@@ -571,6 +572,7 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
         project: &project,
         graph: &graph,
         db: &db,
+        user_sets: select::load_user_sets(inv),
     };
 
     // ── privilege gate (contract §B.10; after every usage preflight) ─────
@@ -583,10 +585,26 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
         return code;
     }
 
+    // §E.5: the build-side park state of this run's state root. A subject
+    // the build path parked (`waits-on-failed`/`waits-on-deferred` or a
+    // deferral reason) has no trustworthy archive — its stale twin must
+    // never install and discovery must never preempt the park with a
+    // damage row — so it reports `parked <reason>` instead of discovering
+    // normally. Best-effort read (no state, no history → no parks); a
+    // `--state-dir` resolution error stays the named later error it is.
+    let parks = match state_dir_of(inv) {
+        Ok(dir) => parked_subjects(&dir),
+        Err(_) => BTreeMap::new(),
+    };
+
     // ── items in plan order: archives, discovered sets, refusals ─────────
     let mut items: Vec<Item> = Vec::new();
     if all {
         for record in graph.records() {
+            if let Some(reason) = parks.get(record.id.as_str()) {
+                items.push(Item::Rejected(vec![parked_row(record.id.as_str(), reason)]));
+                continue;
+            }
             let recipe_dir = root.join(&record.path);
             match discover_recipe(&recipe_dir) {
                 Ok(found) => {
@@ -637,6 +655,10 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
             crate::write_notes(err, &notes);
             for idx in found {
                 let record = graph.record(idx);
+                if let Some(reason) = parks.get(record.id.as_str()) {
+                    items.push(Item::Rejected(vec![parked_row(record.id.as_str(), reason)]));
+                    continue;
+                }
                 let recipe_dir = root.join(&record.path);
                 match discover_recipe(&recipe_dir) {
                     Ok(found) => {
@@ -789,9 +811,11 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
             EmptyListPolicy::Refuse
         },
         later_installs: Vec::new(),
-        parks: Vec::new(),
+        parks: parks.iter().map(|(s, r)| (s.clone(), r.clone())).collect(),
+        workspace_names: workspace_output_names_of_root(&root),
         abi_exclusions: workspace_exclusions(&root),
         wave_heal,
+        state_dir: Some(state_dir.clone()),
     };
     // A plan whose rows already explain themselves — every item rejected
     // before the seam (a shrunken split set, a failed discovery) — never
@@ -802,11 +826,15 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
     let self_explaining = candidates.is_empty()
         && !items.is_empty()
         && items.iter().all(|item| matches!(item, Item::Rejected(_)));
+    let mut repairs: Vec<(String, String)> = Vec::new();
     let decided = if self_explaining {
         Vec::new()
     } else {
-        match decide(&candidates, &decision_ctx, &localdb) {
-            Ok(rows) => rows,
+        match decide_with_repairs(&candidates, &decision_ctx, &localdb) {
+            Ok((rows, plan_repairs)) => {
+                repairs = plan_repairs;
+                rows
+            }
             Err(message) => {
                 return finish_refused(
                     inv,
@@ -1110,6 +1138,7 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
                 conf: Some(conf.clone()),
                 archives: archives.clone(),
                 pacman_args: inv.pacman_args.clone().unwrap_or_default(),
+                repairs: repairs.clone(),
             };
             let (txn, was_interrupted, sig) =
                 execute_supervised(&request, &state_dir, &run_id, out, err);
@@ -1213,6 +1242,50 @@ fn plan_failed_row(message: &str) -> DecisionRow {
     }
 }
 
+/// The build-side park state of one state root (contract §E.5: deferral
+/// originates in the build path — rc 99 — and is *reported* to the install
+/// seam as `parked`): every subject whose LATEST settling run-record row is
+/// a park (`deferred`/`parked`, §H.3) mapped to that row's reason.
+/// `never-started`/`interrupted` rows settle nothing (a run that never
+/// reached the subject says nothing about its park); a later `succeeded` or
+/// `failed` attempt supersedes it. Read-only and best-effort: no state root
+/// or no history means no parks, never an error — these rows are a REPORT
+/// surface, and a state-less call stays exactly what it was.
+fn parked_subjects(state_dir: &Path) -> BTreeMap<String, String> {
+    let root = gsa_state::StateRoot::open_readonly(state_dir);
+    let Ok((records, _corrupt)) = gsa_state::RunHistory::read(&root) else {
+        return BTreeMap::new();
+    };
+    let mut parks: BTreeMap<String, String> = BTreeMap::new();
+    for record in &records {
+        for row in &record.outcomes {
+            match row.status {
+                RowStatus::Deferred | RowStatus::Parked => {
+                    parks.insert(row.pkg.as_str().to_string(), row.reason.clone());
+                }
+                RowStatus::Succeeded | RowStatus::Failed => {
+                    parks.remove(row.pkg.as_str());
+                }
+                RowStatus::NeverStarted | RowStatus::Interrupted => {}
+            }
+        }
+    }
+    parks
+}
+
+/// §E.5's park report row: a subject the build path parked stands down
+/// before discovery — "reports `parked` when no trustworthy archive or no
+/// valid install position exists at all" — so a stale twin never installs
+/// and discovery damage (a shrunken set) never preempts the park with a
+/// `refuse` row.
+fn parked_row(subject: &str, reason: &str) -> DecisionRow {
+    DecisionRow {
+        subject: subject.to_string(),
+        decision: Decision::Parked,
+        reason: reason.to_string(),
+    }
+}
+
 /// The fail-closed `partial-set` refusal of one discovered recipe (rule
 /// 25(h): a shrunken set is never installed).
 fn partial_set_row(
@@ -1261,6 +1334,33 @@ fn note_subject_substitutions(rows: &[DecisionRow], err: &mut dyn Write) {
 /// `GSA_STATE_DIR` beats the gsa.conf layers beats `/var/lib/gsa`; never a
 /// silent workspace fallback. Run entries resolve this fail-fast (rc 2 on a
 /// malformed config); record emission uses `record_state_dir`.
+/// The workspace recipe OUTPUT universe (`pkgbase` + `pkgname`s of every
+/// committed recipe) — the ABI gate's workspace/out-of-tree class split
+/// (§E.3): a pinner whose name is here stays with the consumer logic.
+pub(crate) fn workspace_output_names(db: &RecipeDb) -> std::collections::BTreeSet<String> {
+    let mut names = std::collections::BTreeSet::new();
+    for (name, meta) in db.pkgnames_sorted() {
+        names.insert(name);
+        if let Some(info) = &meta.srcinfo {
+            if let Some(base) = &info.pkgbase {
+                names.insert(base.clone());
+            }
+        }
+    }
+    names
+}
+
+/// [`workspace_output_names`] from a workspace root — an unresolvable
+/// workspace stands down to the empty universe (standalone `-U`).
+pub(crate) fn workspace_output_names_of_root(
+    root: &Path,
+) -> std::collections::BTreeSet<String> {
+    match RecipeDb::load(root, &[]) {
+        Ok(db) => workspace_output_names(&db),
+        Err(_) => std::collections::BTreeSet::new(),
+    }
+}
+
 pub(crate) fn state_dir_of(inv: &Invocation) -> Result<PathBuf, String> {
     gsa_model::config::resolve_state_dir(inv.state_dir.as_deref())
 }
@@ -1626,12 +1726,29 @@ pub fn run_install_decide(args: &[String], out: &mut dyn Write, err: &mut dyn Wr
             DecideMode::Force => EmptyListPolicy::Noop,
         },
         later_installs: Vec::new(),
-        parks: Vec::new(),
-        abi_exclusions: crate::resolve_root(false)
+        // §E.3/§E.5: the build-side park state of the resolved state root —
+        // a parked subject reports `parked <reason>` here too (the seam
+        // never defers by itself; deferral originates in the build path).
+        // The read is read-only (open_readonly) and never the §J.4 index:
+        // the seam stays order-blind and index-blind (§D.1).
+        parks: match gsa_state::resolve_state_root(None) {
+            Ok(dir) => parked_subjects(&dir).into_iter().collect(),
+            Err(_) => Vec::new(),
+        },
+        workspace_names: crate::resolve_root(false, None)
+            .ok()
+            .as_deref()
+            .map(workspace_output_names_of_root)
+            .unwrap_or_default(),
+        abi_exclusions: crate::resolve_root(false, None)
             .ok()
             .as_deref()
             .and_then(workspace_exclusions),
         wave_heal: Vec::new(),
+        // The seam is order-blind AND index-blind by design (§D.1): the
+        // §J.4 index gate stands down (`state_dir: None`) and nothing here
+        // writes — the one state read is §E.5's park report above.
+        state_dir: None,
     };
     let rows = match LocalDb::load(&pacman_db_root()) {
         Ok(localdb) => match decide(&candidates, &ctx, &localdb) {
@@ -1701,7 +1818,7 @@ pub fn run_register_ignorepkg(args: &[String], out: &mut dyn Write, err: &mut dy
             .cloned()
             .unwrap_or_else(|| DEFAULT_CONF.to_string()),
     );
-    let root = match crate::resolve_root(true) {
+    let root = match crate::resolve_root(true, None) {
         Ok(root) => root,
         Err(message) => {
             let _ = writeln!(err, "gsa: {message}");

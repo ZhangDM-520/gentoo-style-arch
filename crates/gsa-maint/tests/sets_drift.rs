@@ -201,7 +201,7 @@ fn stale_set_membership_comes_from_the_side_car_records() {
     // says 1.0-1 — the one skew the side-car can see.
     make_archive(&archive, "alpha", "alpha", "2.0-1");
     let mut err = Vec::new();
-    let added = gsa_state::reindex_archives(&state, "alpha", &[archive], &mut err).unwrap();
+    let added = gsa_state::reindex_archives(&state, "alpha", &[archive], None, &mut err).unwrap();
     assert_eq!(added.len(), 1);
 
     fx.with_ctx(|ctx| {

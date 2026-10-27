@@ -237,30 +237,35 @@ pub fn plan_waves(input: &WaveInputs<'_>) -> WavePlan {
         }
 
         // Term 3: coupled batches (abi=must same-pass; abi=should noted).
+        // The batches are anchor-derived (docs/maintainer-guide.md
+        // "Updating coupled stacks"), so a touch pulls the Touched
+        // anchor's batch only — never another anchor's subtree — and each
+        // member's own tag decides its treatment (E2).
         let batches = graph.coupled_batches();
         let mut noted: Vec<String> = Vec::new();
         let mut must_members: Vec<String> = Vec::new();
         for batch in &batches {
-            let touches = batch
-                .members
-                .iter()
-                .any(|m| m.as_str() == provider || seeds.iter().any(|s| s.id == m.as_str()));
-            match batch.severity {
-                gsa_graph::BatchSeverity::Must if touches => {
-                    for m in &batch.members {
-                        if m.as_str() != provider {
-                            must_members.push(m.as_str().to_string());
+            let touches = batch.members.iter().any(|m| {
+                m.id.as_str() == provider || seeds.iter().any(|s| s.id == m.id.as_str())
+            });
+            if !touches {
+                continue;
+            }
+            for m in &batch.members {
+                if m.id.as_str() == provider {
+                    continue;
+                }
+                match m.severity {
+                    gsa_graph::BatchSeverity::Must => {
+                        must_members.push(m.id.as_str().to_string());
+                    }
+                    gsa_graph::BatchSeverity::Should => {
+                        let id = m.id.as_str().to_string();
+                        if !noted.contains(&id) {
+                            noted.push(id);
                         }
                     }
                 }
-                gsa_graph::BatchSeverity::Should if touches => {
-                    for m in &batch.members {
-                        if m.as_str() != provider {
-                            noted.push(m.as_str().to_string());
-                        }
-                    }
-                }
-                _ => {}
             }
         }
         for id in must_members {
@@ -541,15 +546,24 @@ mod tests {
 
     #[test]
     fn coupled_must_batches_move_in_the_same_pass() {
+        // Anchor-derived batches (E2): m1's batch is m1 plus its abi-tagged
+        // dependents; the unrelated anchor a2's batch must never ride along
+        // with it (the old severity bucket dragged every abi=must record in).
         let records = vec![
             record("p", &[], &[]),
             record("c1", &["p"], &[]),
             record("m1", &[], &[Tag::AbiMust]),
-            record("m2", &[], &[Tag::AbiMust]),
-            record("s1", &[], &[Tag::AbiShould]),
+            record("m2", &["m1"], &[Tag::AbiMust]),
+            record("s1", &["m1"], &[Tag::AbiShould]),
+            record("a2", &[], &[Tag::AbiMust]),
+            record("m3", &["a2"], &[Tag::AbiMust]),
         ];
         let graph = Graph::build(&records).unwrap();
         let mut subs = Subscriptions::empty();
+        // Complete MATCHING records (:= satisfied) so only batch membership
+        // can move m2 — the same isolation B1's fixture pin makes.
+        subs.upsert(sub("m2", "m1", "T9"));
+        subs.upsert(sub("s1", "m1", "T9"));
         subs.upsert(sub("c1", "p", "T2"));
         let planned = BTreeSet::new();
         let plan = plan_waves(&WaveInputs {
@@ -560,8 +574,13 @@ mod tests {
             planned: &planned,
         });
         let wave = &plan.waves[0];
-        assert_eq!(ids(wave), vec!["m2"], "the must batch moves as one pass");
+        assert_eq!(ids(wave), vec!["m2"], "the touched anchor's must batch moves as one pass");
         assert_eq!(wave.members[0].basis, MemberBasis::CoupledMust);
+        assert_eq!(
+            wave.coupled_noted,
+            vec!["s1".to_string()],
+            "the batch's abi=should member is noted, never forced"
+        );
     }
 
     #[test]

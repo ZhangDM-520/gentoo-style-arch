@@ -187,6 +187,7 @@ dependencies = [
 name = "gsa-maint"
 version = "0.1.0"
 dependencies = [
+ "gsa-abi",
  "gsa-build",
  "gsa-fetch",
  "gsa-graph",

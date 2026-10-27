@@ -43,7 +43,7 @@ impl Family {
     /// Lowercase action letters of the family (none = the default action).
     fn actions(self) -> &'static str {
         match self {
-            Family::Q => "islopbautr",
+            Family::Q => "islopbautrg",
             Family::S => "silgwyu",
             Family::B => "l",
             Family::U => "",
@@ -66,7 +66,7 @@ impl Family {
     /// one with a build modifier is a usage error (contract §B.1).
     fn terminal(self) -> &'static str {
         match self {
-            Family::Q => "islopbautr",
+            Family::Q => "islopbautrg",
             Family::S => "silgwyu",
             Family::B => "l",
             Family::U => "",
@@ -96,9 +96,13 @@ pub struct Invocation {
     /// The one action letter, or None for the family's default action.
     pub action: Option<char>,
     pub modifiers: Vec<char>,
+    /// `-Syu` (H9): the update run syncs first (`-Sy`, then the stale-set
+    /// update). Plain `-Su` updates the stale set with NO sync pass — the
+    /// committed versions and sums build as-is.
+    pub sync_first: bool,
     pub dry_run: bool,
     pub leaf: bool,
-    /// Output mode override (`--machine` / `--human`, mutually exclusive).
+    /// Output mode override (`--machine`).
     /// Unset: stdout's tty-ness picks human vs machine (output::mode()).
     pub output_mode: Option<crate::output::Mode>,
     pub targets: Vec<String>,
@@ -158,6 +162,9 @@ impl Invocation {
     /// The restated spelling used by the continuation's `command:` line.
     pub fn spelling(&self) -> String {
         let mut spelling = self.family.as_str().to_string();
+        if self.sync_first {
+            spelling.push('y');
+        }
         if let Some(action) = self.action {
             spelling.push(action);
         }
@@ -234,6 +241,14 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
             };
             return Ok(Parsed::Hidden(hidden));
         }
+        // §B.8 gap G4: the `--leaf=<value>` spellings are refused wherever
+        // they appear and the refusal names `--leaf` WITHOUT echoing the
+        // banned spelling (no engine output may contain it).
+        if let Some((name, _)) = first.strip_prefix("--").unwrap_or("").split_once('=') {
+            if name == "leaf" {
+                return Err("flag '--leaf' takes no value".to_string());
+            }
+        }
         return Err(format!(
             "unknown flag '{first}' (a bare invocation needs a family: -Q, -S, -B, -U, -M)"
         ));
@@ -259,12 +274,20 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
     };
     let mut action: Option<char> = None;
     let mut modifiers: Vec<char> = Vec::new();
+    let mut sync_first = false;
     for letter in chars {
         if family.actions().contains(letter) {
             // `-Mcc`/`-Mccc` repeat the prune-strength letter; every other
             // family takes exactly one action letter.
             if family == Family::M && letter == 'c' && modifiers.len() < 2 && action == Some('c') {
                 modifiers.push('c');
+                continue;
+            }
+            // `-Syu` is the one two-letter action (H9): the `y` is the
+            // sync-first marker of the `u` update, spelled exactly `-Syu`.
+            if family == Family::S && letter == 'u' && action == Some('y') {
+                action = Some('u');
+                sync_first = true;
                 continue;
             }
             if action.is_some() {
@@ -300,6 +323,7 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
         family,
         action,
         modifiers,
+        sync_first,
         dry_run: false,
         leaf: false,
         output_mode: None,
@@ -340,25 +364,21 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
             };
             match name {
                 "dry-run" => inv.dry_run = true,
-                "leaf" => inv.leaf = true,
-                "help" => return Ok(Parsed::Help),
-                "machine" | "human" => {
+                "leaf" => {
+                    // §B.8 gap G4: `--leaf` is the bare boolean — the only
+                    // spelling. `--leaf=no`/`--leaf=yes` are not accepted
+                    // and no engine output may contain them.
                     if value.is_some() {
-                        return Err(format!("flag '--{name}' takes no value"));
+                        return Err("flag '--leaf' takes no value".to_string());
                     }
-                    let m = if name == "machine" {
-                        crate::output::Mode::Machine
-                    } else {
-                        crate::output::Mode::Human
-                    };
-                    if let Some(prev) = inv.output_mode {
-                        if prev != m {
-                            return Err(format!(
-                                "flag '--{name}' contradicts the earlier output-mode flag (pick one of --machine / --human)"
-                            ));
-                        }
+                    inv.leaf = true;
+                }
+                "help" => return Ok(Parsed::Help),
+                "machine" => {
+                    if value.is_some() {
+                        return Err("flag '--machine' takes no value".to_string());
                     }
-                    inv.output_mode = Some(m);
+                    inv.output_mode = Some(crate::output::Mode::Machine);
                 }
                 // The rest of the contract's roster (§B.8) and the maintain
                 // verbs' own modifiers parse so the refusal names them.
@@ -544,6 +564,26 @@ mod tests {
         assert!(parse_err(&["-Qx"]).contains("unknown option letter 'x'"));
         assert!(parse_err(&["-Sl", "--frobnicate"]).contains("unknown flag '--frobnicate'"));
         assert!(parse_err(&["-Sl", "-x"]).contains("unknown short option '-x'"));
+    }
+
+    #[test]
+    fn leaf_takes_no_value() {
+        // §B.8 gap G4: bare `--leaf` is the only spelling; the `=value`
+        // spellings are refused naming `--leaf`, and the refusal itself must
+        // never echo a banned spelling (no engine output may contain one).
+        let inv = parse_ok(&["-B", "--leaf", "mesa-git"]);
+        assert!(inv.leaf);
+        for spelling in ["--leaf=no", "--leaf=yes"] {
+            let mut args = vec!["-B".to_string(), spelling.to_string()];
+            args.push("mesa-git".to_string());
+            let message = parse(&args).unwrap_err();
+            assert!(message.contains("flag '--leaf' takes no value"), "{message}");
+            assert!(!message.contains(spelling), "{message}");
+            // The pre-family position refuses the same way (never echoes).
+            let message = parse(&[spelling.to_string(), "-B".to_string()]).unwrap_err();
+            assert!(message.contains("flag '--leaf' takes no value"), "{message}");
+            assert!(!message.contains(spelling), "{message}");
+        }
     }
 
     #[test]

@@ -66,6 +66,7 @@ pub fn run_fetch_only(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write
         project: &project,
         graph: &graph,
         db: &db,
+        user_sets: select::load_user_sets(inv),
     };
     let selection = match select::build_selection(&ctx, &inv.targets, &inv.ranges, inv.leaf) {
         Ok(selection) => selection,
@@ -151,10 +152,12 @@ pub fn run_fetch_only(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write
     let mut results: Vec<FetchResult> = Vec::new();
     for (_, id) in &selection.listed {
         let result = gsa_fetch::engine::fetch_recipe(id.as_str(), &root, err);
-        let _ = writeln!(
+        // H6: the per-package message — the fetch voice on the human
+        // surface, the §D.1 verdict row (byte-stable) in machine mode.
+        let _ = write!(
             out,
-            "{} {} {} {}",
-            result.pkg, result.verdict, result.dur, result.reason
+            "{}",
+            render::fetch_verdict_line(&result, crate::output::is_human())
         );
         if verdict::is_warning(result.verdict, &result.reason) {
             let _ = writeln!(

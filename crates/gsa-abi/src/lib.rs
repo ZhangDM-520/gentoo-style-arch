@@ -56,7 +56,8 @@ pub use revdep::{
     UnresolvedNeed,
 };
 pub use rows::{
-    abi_refusal_rows, abi_uncovered_row, linked_consumers, provide_drift, stock_pinners, Drift,
+    abi_refusal_rows, abi_uncovered_row, linked_consumers, provide_drift, stock_pinners, AbiGate,
+    Drift,
 };
 pub use token::{
     abi_rev_of, derive_stems, merge, stem_set, token_declared, token_for_archive,

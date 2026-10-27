@@ -622,10 +622,15 @@ impl RunRecord {
             .collect::<Vec<_>>()
             .join(" ");
         out.push_str(&format!("remaining: {}\n", scalar(&remaining)));
-        out.push_str(&format!(
-            "not-mirrored: {}\n",
-            scalar(&self.continuation.not_mirrored.join(" "))
-        ));
+        // `not-mirrored:` is argv-scoped (H3): a run that mirrors everything
+        // it carried lists nothing, and the empty set renders the same `-`
+        // marker `env-required:` uses (never a bare trailing space).
+        let not_mirrored = if self.continuation.not_mirrored.is_empty() {
+            "-".to_string()
+        } else {
+            self.continuation.not_mirrored.join(" ")
+        };
+        out.push_str(&format!("not-mirrored: {}\n", scalar(&not_mirrored)));
         let env = if self.continuation.env_required.is_empty() {
             "-".to_string()
         } else {
@@ -806,6 +811,16 @@ mod tests {
             "command: gsa -S --dry-run glib2-git gtk4-git"
         );
         assert_eq!(lines[cont_at + 2], "remaining: glib2-git gtk4-git");
+    }
+
+    /// The empty argv-scoped `not-mirrored:` set (H3) renders the same `-`
+    /// empty marker `env-required:` uses — never a bare trailing space.
+    #[test]
+    fn empty_not_mirrored_renders_the_dash_marker() {
+        let mut rec = sample_record(true);
+        rec.continuation.not_mirrored = Vec::new();
+        let block = rec.render_machine();
+        assert!(block.contains("not-mirrored: -\n"), "{block}");
     }
 
     #[test]

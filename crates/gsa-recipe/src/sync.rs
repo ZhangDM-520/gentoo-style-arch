@@ -2700,7 +2700,7 @@ impl AnchorOutcome {
 }
 
 fn refresh_only_attestation() -> String {
-    "  Attestation: a detached signature is PGP-verified against the anchored payload at build time, a VCS source is pinned by its #tag/#commit, and a plain download is attested by nothing but the fetch (TLS). Review these sums before committing; '--no-sync' builds the committed version as-is.".to_string()
+    "  Attestation: a detached signature is PGP-verified against the anchored payload at build time, a VCS source pinned by #tag/#commit is anchored to that ref, a #branch= pin tracks a branch tip — attested by the fetch (TLS) only, allowed only as a named maintenance branch (MEMORY rule 30) — and a plain download is attested by nothing but the fetch (TLS). Review these sums before committing; '--no-sync' builds the committed version as-is.".to_string()
 }
 
 /// The RULE-18 anchoring procedure end to end, over the *moved* entries only
@@ -3043,6 +3043,22 @@ pub enum NoChangeReason {
     LocalPkgrelAhead,
     /// Nothing changed (nvchecker parity).
     MetadataCurrent,
+}
+
+impl NoChangeReason {
+    /// The wire/kebab name of the reason (H4's per-recipe status line and
+    /// the machine `reason=` field share it).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            NoChangeReason::NotStableStaged => "not-stable-staged",
+            NoChangeReason::PkgverFunction => "pkgver-function",
+            NoChangeReason::UnknownInRepos => "unknown-in-repos",
+            NoChangeReason::NeverDowngrade => "never-downgrade",
+            NoChangeReason::Current => "current",
+            NoChangeReason::LocalPkgrelAhead => "local-pkgrel-ahead",
+            NoChangeReason::MetadataCurrent => "metadata-current",
+        }
+    }
 }
 
 /// Named refusal classes of the rewrite path.

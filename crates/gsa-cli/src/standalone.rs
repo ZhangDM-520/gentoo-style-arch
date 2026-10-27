@@ -121,7 +121,13 @@ pub(crate) fn apply(
         .filter(|(_, kind)| kind.is_some())
         .map(|(token, _)| token.clone())
         .collect();
-    let answered = workspace_answers(&candidates);
+    // The discoverable workspace root, resolved once: the disambiguation
+    // probe reads it and staging takes the shared `lib/` from it (S5).
+    let ws_root = crate::resolve_root(false, None).ok();
+    // I5: a kv user set is a workspace answer too (@name resolves over
+    // kv user-sets ∪ config/sets/).
+    let user_sets = crate::select::load_user_sets(inv);
+    let answered = workspace_answers(&candidates, ws_root.as_deref(), &user_sets);
     for (token, kind) in inv.targets.iter().zip(&kinds) {
         match kind {
             None => workspace.push(token.clone()),
@@ -177,7 +183,7 @@ pub(crate) fn apply(
         std::fs::remove_dir_all(&root)
             .map_err(|e| format!("cannot clear the staging area {}: {e}", root.display()))?;
     }
-    let ids = stage(&standalone, &root)?;
+    let ids = stage(&standalone, &root, ws_root.as_deref())?;
     for ((token, _), id) in standalone.iter().zip(&ids) {
         eprintln!("gsa: staged standalone target '{token}' as '{id}'");
     }
@@ -190,13 +196,18 @@ pub(crate) fn apply(
 /// (`select::resolve_ref`'s exact vocabulary). A token no workspace answers
 /// (including when there is no workspace at all) maps to `false`. Failures
 /// to load a workspace count as "no workspace": the standalone path then
-/// carries the run and its staged workspace is all it needs.
-fn workspace_answers(tokens: &[String]) -> std::collections::HashMap<String, bool> {
+/// carries the run and its staged workspace is all it needs. The workspace
+/// root is resolved once by the caller ([`apply`]) and passed in.
+fn workspace_answers(
+    tokens: &[String],
+    ws_root: Option<&Path>,
+    user_sets: &[(String, Vec<String>)],
+) -> std::collections::HashMap<String, bool> {
     let mut out = std::collections::HashMap::new();
     if tokens.is_empty() {
         return out;
     }
-    let Ok(root) = crate::resolve_root(false) else {
+    let Some(root) = ws_root else {
         for token in tokens {
             out.insert(token.clone(), false);
         }
@@ -224,6 +235,7 @@ fn workspace_answers(tokens: &[String]) -> std::collections::HashMap<String, boo
         project: &project,
         graph: &graph,
         db: &db,
+        user_sets: user_sets.to_vec(),
     };
     for token in tokens {
         out.insert(token.clone(), crate::select::resolve_ref(&ctx, token, 0).is_ok());
@@ -232,8 +244,17 @@ fn workspace_answers(tokens: &[String]) -> std::collections::HashMap<String, boo
 }
 
 /// The staged workspace skeleton (the fixture-proven `make_workspace` shape,
-/// one record per staged target: `name|packages/misc/name|misc|`).
-fn stage(entries: &[(String, Kind)], root: &Path) -> Result<Vec<String>, String> {
+/// one record per staged target: `name|packages/misc/name|misc|`). When a
+/// source workspace root is discoverable, its `lib/` (the shared-gate
+/// library: `pgo.sh`, `cups-config`) is staged alongside — every documented
+/// PGO family sources the shared gate by a repo-relative path
+/// (`$startdir/../../../lib/pgo.sh`), and without it a shared-gate recipe
+/// hard-fails at PKGBUILD parse in a standalone run (S5).
+fn stage(
+    entries: &[(String, Kind)],
+    root: &Path,
+    shared_root: Option<&Path>,
+) -> Result<Vec<String>, String> {
     let config = root.join("config");
     let packages = root.join("packages").join("misc");
     std::fs::create_dir_all(&config)
@@ -285,7 +306,7 @@ fn stage(entries: &[(String, Kind)], root: &Path) -> Result<Vec<String>, String>
             std::fs::write(
                 config.join("build-defaults.conf"),
                 "lanes=auto\njobs=2\nintensity=low\nmemory_per_job_gib=1\n\
-                 core_memory_per_job_gib=1\nreserved_memory_gib=1\nstate_dir=auto\n",
+                 core_memory_per_job_gib=1\nreserved_memory_gib=1\n",
             )
         })
         .and_then(|_| {
@@ -295,6 +316,15 @@ fn stage(entries: &[(String, Kind)], root: &Path) -> Result<Vec<String>, String>
             )
         })
         .map_err(|e| format!("cannot write the staged workspace config: {e}"))?;
+    if let Some(src) = shared_root.map(|r| r.join("lib")).filter(|p| p.is_dir()) {
+        let dst = root.join("lib");
+        copy_entry(&src, &dst).map_err(|e| {
+            format!("cannot stage the shared gate library {}: {e}", src.display())
+        })?;
+        // Read (and exec) during the build as the build user: hand it over
+        // like the recipe tree.
+        gsa_model::privilege::own_to_build_user(&dst)?;
+    }
     Ok(ids)
 }
 
@@ -495,7 +525,7 @@ mod tests {
 
         let root = dir.join("staged");
         let entries = vec![(src.to_str().unwrap().to_string(), Kind::Dir)];
-        let ids = stage(&entries, &root).unwrap();
+        let ids = stage(&entries, &root, None).unwrap();
         assert_eq!(ids, vec!["neat-pkg".to_string()]);
 
         let recipe = root.join("packages").join("misc").join("neat-pkg");
@@ -530,8 +560,40 @@ mod tests {
             (a.to_str().unwrap().to_string(), Kind::Dir),
             (b.to_str().unwrap().to_string(), Kind::Dir),
         ];
-        let ids = stage(&entries, &dir.join("staged")).unwrap();
+        let ids = stage(&entries, &dir.join("staged"), None).unwrap();
         assert_eq!(ids, vec!["same".to_string(), "same-2".to_string()]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn stage_carries_the_shared_gate_library() {
+        let dir = temp_dir("shared-lib");
+        let src = dir.join("shared").join("neat-pkg");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("PKGBUILD"), "pkgname=neat-pkg\n").unwrap();
+        let workspace = dir.join("workspace");
+        std::fs::create_dir_all(workspace.join("lib")).unwrap();
+        std::fs::write(workspace.join("lib").join("pgo.sh"), "# shared gate\n").unwrap();
+        std::fs::write(workspace.join("lib").join("cups-config"), "#!/bin/sh\n").unwrap();
+        let entries = vec![(src.to_str().unwrap().to_string(), Kind::Dir)];
+
+        // With a discoverable workspace root: its lib/ lands in the staged
+        // workspace (a shared-gate recipe sources $startdir/../../../lib/…).
+        let root = dir.join("staged");
+        stage(&entries, &root, Some(&workspace)).unwrap();
+        assert!(root.join("lib").join("pgo.sh").is_file());
+        assert!(root.join("lib").join("cups-config").is_file());
+
+        // A workspace root with no lib/ (or none at all) stages nothing —
+        // never a fabricated library.
+        let bare = dir.join("bare");
+        std::fs::create_dir_all(&bare).unwrap();
+        let root = dir.join("staged-2");
+        stage(&entries, &root, Some(&bare)).unwrap();
+        assert!(!root.join("lib").exists());
+        let root = dir.join("staged-3");
+        stage(&entries, &root, None).unwrap();
+        assert!(!root.join("lib").exists());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

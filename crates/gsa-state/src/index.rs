@@ -175,8 +175,21 @@ impl BinpkgIndex {
 
     /// Match one index row for an archive probe (§B.3 `-Qp`): the exact
     /// path first, then the file name when it is unambiguous.
+    ///
+    /// The exact-path branch binds the NEWEST registration (highest
+    /// `instance`): a same-version rebuild writes a new row for the same
+    /// PKGDEST path while retention keeps the older row live beside it
+    /// (N≥2 for a hub — the shared-path delete guard is what keeps the one
+    /// file both rows name). §J.4's gate verifies the bytes NOW on disk,
+    /// and those are the bytes the newest row recorded — a stale row must
+    /// never fail a rebuilt archive as index-invalid.
     pub fn find_archive(&self, archive: &Path) -> Option<&IndexRow> {
-        if let Some(row) = self.rows.iter().find(|r| r.archive == archive) {
+        if let Some(row) = self
+            .rows
+            .iter()
+            .filter(|r| r.archive == archive)
+            .max_by_key(|r| r.instance)
+        {
             return Some(row);
         }
         let name = archive.file_name()?;
@@ -392,11 +405,14 @@ pub fn prune_instance(
 /// ones included — an id is never reused) — the doctor cannot recover which
 /// build produced which file, and inventing a shared instance would fake a
 /// split set. No retention is enforced here: a repair never deletes
-/// anything.
+/// anything. Each row's `abi_token` derives exactly like
+/// [`register_instance`] (gsa-abi's ONE derivation, the `abi-rev=` override
+/// merged) — never a `-` placeholder a later wave would misread as a move.
 pub fn reindex_archives(
     root: &StateRoot,
     recipe_id: &str,
     archives: &[PathBuf],
+    abi_rev: Option<u64>,
     err: &mut dyn Write,
 ) -> Result<Vec<IndexRow>, StateError> {
     let index = BinpkgIndex::load(root)?;
@@ -413,6 +429,14 @@ pub fn reindex_archives(
             ))
         })?;
         let (sha256, size) = hash_archive(archive)?;
+        // The one shared abi-token derivation (gsa-abi, §J.4): fail closed —
+        // no row without token truth, so a later wave can trust every row.
+        let token = gsa_abi::token_for_archive(archive, abi_rev).map_err(|e| {
+            StateError::Diverge(format!(
+                "{}: {e} — no index row without derived abi-token truth",
+                archive.display()
+            ))
+        })?;
         let mine = instance;
         instance += 1;
         let row = IndexRow {
@@ -427,7 +451,7 @@ pub fn reindex_archives(
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0),
-            abi_token: "-".to_string(),
+            abi_token: token.effective,
             provides: info.provides,
             vcs_baseline: "-".to_string(),
             instance: mine,
@@ -694,6 +718,35 @@ mod tests {
         out
     }
 
+    /// A byte-deterministic archive whose bytes change only through `stamp`
+    /// (`make_archive`'s tar carries the staged file's mtime, so its bytes
+    /// drift with the clock — an accidental same-second rebuild would fake a
+    /// stale-row pass). The stamp member stands in for the fresh timestamps a
+    /// real rebuild always writes.
+    fn make_archive_stamped(dir: &Path, name: &str, version: &str, stamp: &str) -> PathBuf {
+        use std::io::Write as _;
+        let mut body = Vec::new();
+        writeln!(body, "pkgbase = {name}").unwrap();
+        writeln!(body, "pkgname = {name}").unwrap();
+        writeln!(body, "pkgver = {version}").unwrap();
+        writeln!(body, "arch = any").unwrap();
+        writeln!(body, "provides = lib{name}.so").unwrap();
+        let out = dir.join(format!("{name}-{version}-any.pkg.tar.zst"));
+        let file = std::fs::File::create(&out).unwrap();
+        let enc = zstd::stream::Encoder::new(file, 0).unwrap();
+        let mut tar = tar::Builder::new(enc);
+        for (member, data) in [(".PKGINFO", body.as_slice()), (".build-stamp", stamp.as_bytes())] {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(data.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            tar.append_data(&mut header, member, data).unwrap();
+        }
+        let enc = tar.into_inner().unwrap();
+        enc.finish().unwrap();
+        out
+    }
+
     /// Three recipes: `hub` is a `core` member, `fanin` has two direct
     /// consumers, `leaf` has none and is not core.
     fn synthetic_topology() -> Vec<TopologyRecord> {
@@ -876,6 +929,55 @@ mod tests {
     }
 
     #[test]
+    fn find_archive_binds_the_newest_registration_at_one_path() {
+        // §J.4's gate against the retention budget: a hub keeps TWO
+        // instances, and a same-version rebuild writes a new row for the
+        // SAME PKGDEST path — so both rows stay live over one file. The
+        // newest registration recorded the bytes now on disk; finding the
+        // stale first row verifies the fresh archive against the OLD hash
+        // and refuses a rebuild as index-invalid (the 2026-10-28
+        // load-sensitive toolchain-remediation race). The stale row must
+        // never fail a rebuilt archive.
+        let dir = scratch("same-path-newest");
+        let root = StateRoot::open(&dir).unwrap();
+        let retention = Retention::from_records(&synthetic_topology()).unwrap();
+        let mut err = Vec::new();
+        let path = dir.join("hub-1.0.0-1-any.pkg.tar.zst");
+        for (n, stamp) in ["first build", "second build"].into_iter().enumerate() {
+            let archive = make_archive_stamped(&dir, "hub", "1.0.0-1", stamp);
+            let outcome = register_instance(
+                &root,
+                "hub",
+                &[archive],
+                &retention,
+                &BTreeSet::new(),
+                None,
+                &mut err,
+            )
+            .unwrap();
+            assert_eq!(outcome.rows[0].instance, (n + 1) as u64);
+        }
+
+        let index = BinpkgIndex::load(&root).unwrap();
+        assert_eq!(
+            index.rows.len(),
+            2,
+            "budget N=2 keeps both same-path rows live — the stale row is the real hazard"
+        );
+        let found = index
+            .find_archive(&path)
+            .expect("the exact archive path resolves to a row");
+        assert_eq!(
+            found.instance, 2,
+            "the newest registration binds an exact path"
+        );
+        assert!(
+            verify_row(found).agrees(),
+            "the rebuilt bytes must verify against the row that recorded them (§J.4)"
+        );
+    }
+
+    #[test]
     fn pruning_never_touches_an_in_flight_recipe() {
         let dir = scratch("inflight");
         let root = StateRoot::open(&dir).unwrap();
@@ -991,17 +1093,21 @@ mod tests {
         // Reindex: the orphan archive's bytes become a fresh, hash-bound
         // row — fail closed on a missing .PKGINFO, and never a duplicate
         // row for an already-indexed archive.
-        let rows = reindex_archives(&root, "leaf", &[archive.clone()], &mut err).unwrap();
+        let rows = reindex_archives(&root, "leaf", &[archive.clone()], None, &mut err).unwrap();
         assert_eq!(rows.len(), 1);
         let row = &rows[0];
         assert_eq!(row.instance, 2, "the reindexed archive is its own instance");
+        // §J.4: the reindex derives the abi-token exactly like registration —
+        // never the `-` placeholder a wave would misread as a move.
+        let expected = gsa_abi::token_declared(&["libleaf.so".to_string()], None).effective;
+        assert_eq!(row.abi_token, expected, "derived abi-token lands at reindex");
         assert!(verify_row(row).agrees(), "the row binds the bytes");
-        let again = reindex_archives(&root, "leaf", &[archive.clone()], &mut err).unwrap();
+        let again = reindex_archives(&root, "leaf", &[archive.clone()], None, &mut err).unwrap();
         assert!(again.is_empty(), "an indexed archive is never re-indexed");
         let not_an_archive = dir.join("stray.pkg.tar.zst");
         std::fs::write(&not_an_archive, b"no pkginfo truth").unwrap();
         assert!(
-            reindex_archives(&root, "leaf", &[not_an_archive], &mut err).is_err(),
+            reindex_archives(&root, "leaf", &[not_an_archive], None, &mut err).is_err(),
             "no .PKGINFO truth, no row (fail closed)"
         );
         let index = BinpkgIndex::load(&root).unwrap();

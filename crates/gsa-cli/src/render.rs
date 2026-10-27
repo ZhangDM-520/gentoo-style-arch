@@ -129,96 +129,17 @@ fn record_fields(record: &gsa_model::TopologyRecord) -> Vec<(String, String)> {
     ]
 }
 
-/// `-Si`: recipe info — metadata, topology record, groups, build-order
-/// edges, tags (contract §B.4).
-pub fn render_recipe_info(ctx: &Ctx<'_>, record: &gsa_model::TopologyRecord) -> String {
-    let meta = ctx.db.get(record.id.as_str());
-    let mut out = String::new();
-    for (label, value) in record_fields(record) {
-        out.push_str(&format!("{label:<18}: {value}\n"));
-    }
-    match meta {
-        Some(meta) => {
-            out.push_str(&field("Metadata-Source", meta.source.as_str()));
-            out.push('\n');
-            out.push_str(&field("Name(s)", &join_list(&meta.pkgnames())));
-            out.push('\n');
-            out.push_str(&field(
-                "Version",
-                &meta.full_version().unwrap_or_else(|e| format!("<{e}>")),
-            ));
-            out.push('\n');
-            out.push_str(&field(
-                "pkgver() Function",
-                // The function table comes from the read-only scan — a fact
-                // committed .SRCINFO cannot carry (contract §A.2.3).
-                if ctx
-                    .db
-                    .scan_for(&record.id)
-                    .map(|scan| scan.functions.contains("pkgver"))
-                    .unwrap_or(false)
-                {
-                    "present (version derives at build time)"
-                } else {
-                    "absent"
-                },
-            ));
-            out.push('\n');
-            out.push_str(&field(
-                "Description",
-                meta.pkgdesc().ok().flatten().unwrap_or("(none)"),
-            ));
-            out.push('\n');
-            let info = meta.srcinfo.as_ref();
-            let multi = |get: fn(&gsa_recipe::Srcinfo) -> Vec<String>| {
-                info.map(|i| join_list(&get(i)))
-                    .unwrap_or_else(|| "(scan)".to_string())
-            };
-            out.push_str(&field(
-                "URL",
-                info.and_then(|i| i.url.as_deref()).unwrap_or("(none)"),
-            ));
-            out.push('\n');
-            out.push_str(&field("Architecture", &multi(|i| i.arch.clone())));
-            out.push('\n');
-            out.push_str(&field("Licenses", &multi(|i| i.license.clone())));
-            out.push('\n');
-            out.push_str(&field("Depends On", &multi(|i| i.depends.clone())));
-            out.push('\n');
-            out.push_str(&field("Make Depends On", &multi(|i| i.makedepends.clone())));
-            out.push('\n');
-            out.push_str(&field(
-                "Check Depends On",
-                &multi(|i| i.checkdepends.clone()),
-            ));
-            out.push('\n');
-            out.push_str(&field("Opt Depends On", &multi(|i| i.optdepends.clone())));
-            out.push('\n');
-            out.push_str(&field("Provides", &multi(|i| i.provides.clone())));
-            out.push('\n');
-            out.push_str(&field("Conflicts With", &multi(|i| i.conflicts.clone())));
-            out.push('\n');
-            out.push_str(&field("Replaces", &multi(|i| i.replaces.clone())));
-            out.push('\n');
-            out.push_str(&sources_block(&meta));
-        }
-        None => {
-            out.push_str(&field("Metadata-Source", MetaSource::Scan.as_str()));
-            out.push('\n');
-        }
-    }
-    out
-}
-
-/// `-Qi`: one block per output name — pacman fields plus the recipe record
-/// the package comes from. Side-car columns (abi-token, binpkg instances,
-/// subscriptions) belong to the side-car database of a later phase and are
-/// deliberately absent, not faked.
+/// `-Qi` (§B.3 + H7/H8, merged): one block per output name — the recipe
+/// record the package comes from, the installed record (where one exists),
+/// the side-car record (abi-token, subscriptions in/out, retained binpkg
+/// instances, VCS baseline), and the topology record. `extra` carries the
+/// installed + side-car fields (the query owns their derivation).
 pub fn render_package_info(
     ctx: &Ctx<'_>,
     record: &gsa_model::TopologyRecord,
     pkgname: &str,
     version: &str,
+    extra: &[(String, String)],
 ) -> String {
     let meta = ctx.db.get(record.id.as_str());
     let mut out = String::new();
@@ -233,18 +154,55 @@ pub fn render_package_info(
             .unwrap_or("(none)"),
     ));
     out.push('\n');
-    if let Some(info) = meta.as_ref().and_then(|m| m.srcinfo.as_ref()) {
-        out.push_str(&field("URL", info.url.as_deref().unwrap_or("(none)")));
+    if let Some(meta) = meta.as_ref() {
+        // The recipe record (the `-Si` content merged in — H7/H8): the
+        // committed `.SRCINFO` fields, the pkgver() scan fact and the
+        // sources block.
+        let info = meta.srcinfo.as_ref();
+        let multi = |get: fn(&gsa_recipe::Srcinfo) -> Vec<String>| {
+            info.map(|i| join_list(&get(i)))
+                .unwrap_or_else(|| "(scan)".to_string())
+        };
+        out.push_str(&field("URL", info.and_then(|i| i.url.as_deref()).unwrap_or("(none)")));
         out.push('\n');
-        out.push_str(&field("Architecture", &join_list(&info.arch)));
+        out.push_str(&field("Architecture", &multi(|i| i.arch.clone())));
         out.push('\n');
-        out.push_str(&field("Licenses", &join_list(&info.license)));
+        out.push_str(&field("Licenses", &multi(|i| i.license.clone())));
         out.push('\n');
-        out.push_str(&field("Depends On", &join_list(&info.depends)));
+        out.push_str(&field("Depends On", &multi(|i| i.depends.clone())));
         out.push('\n');
-        out.push_str(&field("Provides", &join_list(&info.provides)));
+        out.push_str(&field("Make Depends On", &multi(|i| i.makedepends.clone())));
         out.push('\n');
-        out.push_str(&field("Conflicts With", &join_list(&info.conflicts)));
+        out.push_str(&field("Check Depends On", &multi(|i| i.checkdepends.clone())));
+        out.push('\n');
+        out.push_str(&field("Opt Depends On", &multi(|i| i.optdepends.clone())));
+        out.push('\n');
+        out.push_str(&field("Provides", &multi(|i| i.provides.clone())));
+        out.push('\n');
+        out.push_str(&field("Conflicts With", &multi(|i| i.conflicts.clone())));
+        out.push('\n');
+        out.push_str(&field("Replaces", &multi(|i| i.replaces.clone())));
+        out.push('\n');
+        out.push_str(&field(
+            "pkgver() Function",
+            // The function table comes from the read-only scan — a fact
+            // committed .SRCINFO cannot carry (contract §A.2.3).
+            if ctx
+                .db
+                .scan_for(&record.id)
+                .map(|scan| scan.functions.contains("pkgver"))
+                .unwrap_or(false)
+            {
+                "present (version derives at build time)"
+            } else {
+                "absent"
+            },
+        ));
+        out.push('\n');
+        out.push_str(&sources_block(meta));
+    }
+    for (label, value) in extra {
+        out.push_str(&field(label, value));
         out.push('\n');
     }
     for (label, value) in record_fields(record) {
@@ -260,63 +218,9 @@ pub fn render_package_info(
     out
 }
 
-fn matches(patterns: &[String], haystacks: &[String]) -> bool {
-    let lowered: Vec<String> = haystacks.iter().map(|h| h.to_ascii_lowercase()).collect();
-    patterns.iter().any(|p| {
-        let p = p.to_ascii_lowercase();
-        lowered.iter().any(|h| h.contains(&p))
-    })
-}
-
-/// `-Ss`: search the buildable universe (topology + committed `.SRCINFO`).
-/// Patterns are case-insensitive literal substrings; multiple patterns OR.
-pub fn render_universe_search(ctx: &Ctx<'_>, patterns: &[String]) -> String {
-    let mut out = String::new();
-    for record in ctx.graph.records() {
-        let meta = ctx.db.get(record.id.as_str());
-        let mut haystacks = vec![record.id.as_str().to_string()];
-        let pkgnames = meta.as_ref().map(|m| m.pkgnames()).unwrap_or_default();
-        haystacks.extend(pkgnames.iter().cloned());
-        let desc = meta
-            .as_ref()
-            .and_then(|m| m.pkgdesc().ok().flatten())
-            .unwrap_or("")
-            .to_string();
-        haystacks.push(desc.clone());
-        if matches(patterns, &haystacks) {
-            let groups = record
-                .groups
-                .iter()
-                .map(|g| g.as_str())
-                .collect::<Vec<_>>()
-                .join(",");
-            let version = meta
-                .as_ref()
-                .and_then(|m| m.full_version().ok())
-                .unwrap_or_else(|| "?".to_string());
-            out.push_str(&format!("{groups}/{} {version}\n", record.id));
-            out.push_str(&format!("    {desc}\n"));
-        }
-    }
-    out
-}
-
-/// `-Qs`: search package names/descriptions over the buildable universe.
-pub fn render_query_search(ctx: &Ctx<'_>, patterns: &[String]) -> String {
-    let mut out = String::new();
-    for (pkgname, meta) in ctx.db.pkgnames_sorted() {
-        let desc = meta.pkgdesc().ok().flatten().unwrap_or("").to_string();
-        if matches(patterns, &[pkgname.clone(), desc.clone()]) {
-            let version = meta.full_version().unwrap_or_else(|_| "?".to_string());
-            out.push_str(&format!("{pkgname} {version}\n"));
-            out.push_str(&format!("    {desc}\n"));
-        }
-    }
-    out
-}
-
-/// `-Sg`: groups/sets and their members. No name: the full group roster
-/// with counts (contract §B.4) plus any user sets.
+/// `-Qg` (H7/H8: the groups query lives in the `-Q` family): groups/sets
+/// and their members. No name: the full group roster with counts (contract
+/// §B.3) plus any user sets.
 pub fn render_groups(ctx: &Ctx<'_>, names: &[String]) -> Result<String, SelectError> {
     let mut out = String::new();
     if names.is_empty() {
@@ -364,15 +268,6 @@ pub fn render_groups(ctx: &Ctx<'_>, names: &[String]) -> Result<String, SelectEr
         });
     }
     Ok(out)
-}
-
-/// `-Q`: package names with versions, sorted by name.
-pub fn render_query_list(entries: &[(String, String)]) -> String {
-    let mut out = String::new();
-    for (pkgname, version) in entries {
-        out.push_str(&format!("{pkgname} {version}\n"));
-    }
-    out
 }
 
 /// Prose summary of the plan (one of the record's three renderings).
@@ -642,6 +537,38 @@ pub fn render_prefetch_notes(warnings: &[gsa_fetch::verdict::FetchResult]) -> St
     out
 }
 
+/// H6 (2026-10-28): the per-package fetch message. The human surface gets
+/// the fetch voice — never the shared `<pkg> <verdict> <dur> <reason>` row
+/// template the other actions use. A `skipped` verdict already answers
+/// through the engine's own `gsa-fetch:` note (its reason prose is
+/// engine-owned), so the human line covers the verdicts that were silent or
+/// unclear: `ok` (nothing at all was printed for a clean fetch) and `failed`
+/// (whose engine notes are attempt detail, never the verdict itself).
+/// Machine mode keeps the §D.1 row vocabulary byte-stable.
+pub fn fetch_verdict_line(result: &gsa_fetch::verdict::FetchResult, human: bool) -> String {
+    use gsa_fetch::verdict::{FetchVerdict, REASON_OK};
+    if !human {
+        return format!(
+            "{} {} {} {}\n",
+            result.pkg, result.verdict, result.dur, result.reason
+        );
+    }
+    let what = match result.verdict {
+        FetchVerdict::Ok => "fetched and verified",
+        FetchVerdict::Failed => "failed",
+        // The engine's skip note IS the message (one line per package).
+        FetchVerdict::Skipped => return String::new(),
+    };
+    if result.reason == REASON_OK {
+        format!("gsa-fetch: {}: {what} ({}s)\n", result.pkg, result.dur)
+    } else {
+        format!(
+            "gsa-fetch: {}: {what} ({}, {}s)\n",
+            result.pkg, result.reason, result.dur
+        )
+    }
+}
+
 /// The prose summary of a `-Sw` fetch-only run (§I.4): the verdict tally.
 /// The verdict rows above it are the per-package surface; the run record
 /// below is the machine rendering of the same outcomes.
@@ -696,18 +623,35 @@ pub fn render_run_prose(
     parked_by: &[(String, Vec<String>)],
     qa: Option<&[String]>,
 ) -> String {
+    run_prose(record, log_dir, parked_by, qa, output::is_human())
+}
+
+/// The one prose summary in both vocabularies (`human` selects; the mode
+/// itself is picked once by [`output::mode`]). Split from
+/// [`render_run_prose`] so the human shape is testable without a TTY.
+fn run_prose(
+    record: &RunRecord,
+    log_dir: &Path,
+    parked_by: &[(String, Vec<String>)],
+    qa: Option<&[String]>,
+    human: bool,
+) -> String {
     let mut out = String::new();
-    let human = output::is_human();
     let (lanes, normal, core) = match (record.lanes, record.normal_jobs, record.core_jobs) {
         (Some(l), Some(n), Some(c)) => (l.to_string(), n.to_string(), c.to_string()),
         _ => ("-".to_string(), "-".to_string(), "-".to_string()),
     };
     if human {
-        out.push_str(&format!(
-            "Build run: {} package(s), lanes {lanes} (normal -j{normal}, core -j{core}), intensity {}\n",
-            record.order.len(),
-            record.intensity
-        ));
+        // H3 (2026-10-28): the prose summary is the §I.4 loud reporting
+        // alone. The lanes/jobs/intensity numbers are answered by the one
+        // parallelism line at dispatch and the run record's scalars, the
+        // outcome/rc by the record's scalars — restating them here was the
+        // duplicated messaging the human report named. Sections are
+        // separated by a blank line so a summary never packs against the
+        // events above it or the machine record below it.
+        out.push('\n');
+        out.push_str(&format!("Build run: {} package(s)\n", record.order.len()));
+        out.push('\n');
     } else {
         out.push_str(&kv_line(
             Level::Info,
@@ -858,9 +802,11 @@ pub fn render_run_prose(
             }
         }
     }
-    if human {
-        out.push_str(&format!("outcome: {} (rc {})\n", record.outcome, record.rc));
-    } else {
+    // H3: the human summary stops here — the run record block below carries
+    // the `outcome:`/`rc:` scalars (restating them in prose was the
+    // duplicated messaging the human report named). The machine stream
+    // keeps its `outcome` event: its grammar is pinned (§L.6).
+    if !human {
         let (level, action) = match record.outcome.to_string().as_str() {
             "success" | "planned" => (Level::Info, None),
             "deferral" => (Level::Warning, Some("revisit-deferrals")),
@@ -883,6 +829,8 @@ pub fn render_run_prose(
     // machine row.
     if let Some(findings) = qa {
         if human {
+            // Blank-line separation (H3): the QA span is its own section.
+            out.push('\n');
             if findings.is_empty() {
                 out.push_str("QA report (report-only): clean\n");
             } else {
@@ -913,6 +861,11 @@ pub fn render_run_prose(
                 out.push('\n');
             }
         }
+    }
+    if human {
+        // Trailing blank line (H3): the run record block (or the next run's
+        // output) never packs against this summary.
+        out.push('\n');
     }
     out
 }
@@ -1140,5 +1093,108 @@ mod tests {
         // The view heartbeat is not a message here either (the TTY
         // dashboard consumes it directly).
         assert_eq!(render_event_human(&SupEvent::Tick, &pkg), "");
+    }
+
+    fn prose_record() -> RunRecord {
+        RunRecord {
+            selection_source: "sets=umbriel-git leaf=no range=-".to_string(),
+            order: vec![RecipeId::new("umbriel-git").unwrap()],
+            lanes: Some(1),
+            normal_jobs: Some(7),
+            core_jobs: Some(4),
+            intensity: "xhigh".to_string(),
+            outcome: "interrupted".to_string(),
+            rc: 130,
+            dry_run: false,
+            prefetch_warnings: None,
+            plan: Vec::new(),
+            outcomes: vec![row(
+                "umbriel-git",
+                RowStatus::Interrupted,
+                Some(143),
+                Some(2),
+                "interrupted-mid-build",
+            )],
+            continuation: gsa_model::Continuation {
+                command: "gsa -S umbriel-git".to_string(),
+                remaining: vec![RecipeId::new("umbriel-git").unwrap()],
+                not_mirrored: Vec::new(),
+                env_required: Vec::new(),
+            },
+        }
+    }
+
+    /// H3 (2026-10-28) — the human summary carries the §I.4 loud reporting
+    /// alone: the lanes/jobs/intensity/outcome scalars the parallelism line
+    /// and the run record already answer are gone, and sections are
+    /// separated by blank lines so nothing packs together. Byte-pinned: the
+    /// human surface is a shape fixtures cannot see (a capture is machine
+    /// mode), so this test is its pin.
+    #[test]
+    fn human_prose_dedupes_and_separates_sections() {
+        let log_dir = std::path::Path::new("/var/lib/gsa/logs");
+        let out = run_prose(&prose_record(), log_dir, &[], None, true);
+        assert_eq!(
+            out,
+            "\nBuild run: 1 package(s)\n\n\
+             ⚠ interrupted: umbriel-git (rc 143, interrupted-mid-build)\n\n"
+        );
+        // The QA report surface is its own section (§E.4).
+        let out = run_prose(&prose_record(), log_dir, &[], Some(&[]), true);
+        assert_eq!(
+            out,
+            "\nBuild run: 1 package(s)\n\n\
+             ⚠ interrupted: umbriel-git (rc 143, interrupted-mid-build)\n\n\
+             QA report (report-only): clean\n\n"
+        );
+    }
+
+    /// The machine stream is NOT deduped (its grammar is pinned, §L.6) —
+    /// guard the exact `build-run`/`outcome` events through the split.
+    #[test]
+    fn machine_prose_keeps_its_pinned_events() {
+        let out = run_prose(
+            &prose_record(),
+            std::path::Path::new("/var/lib/gsa/logs"),
+            &[],
+            None,
+            false,
+        );
+        assert!(out.contains(
+            "INFO build-run packages=1 lanes=1 normal-jobs=7 core-jobs=4 intensity=xhigh\n"
+        ));
+        assert!(out.contains("WARNING outcome status=interrupted rc=130 action=rerun\n"));
+    }
+
+    /// H6 (2026-10-28): the per-package fetch message — the human surface
+    /// speaks the fetch voice (a skip stays the engine note's single line,
+    /// never doubled here), the machine surface keeps the §D.1 verdict row
+    /// byte-stable.
+    #[test]
+    fn fetch_verdict_lines_are_per_action_prose_and_stable_rows() {
+        use gsa_fetch::verdict::{FetchResult, FetchVerdict, REASON_OK, REASON_VCS_ONLY};
+        let ok = FetchResult::new("mesa-git", FetchVerdict::Ok, 3, REASON_OK).unwrap();
+        assert_eq!(
+            fetch_verdict_line(&ok, true),
+            "gsa-fetch: mesa-git: fetched and verified (3s)\n"
+        );
+        assert_eq!(fetch_verdict_line(&ok, false), "mesa-git ok 3 ok\n");
+        let retry = FetchResult::new("mesa-git", FetchVerdict::Ok, 5, "retry-ok").unwrap();
+        assert_eq!(
+            fetch_verdict_line(&retry, true),
+            "gsa-fetch: mesa-git: fetched and verified (retry-ok, 5s)\n"
+        );
+        let failed = FetchResult::new("mesa-git", FetchVerdict::Failed, 7, "fetch-failed").unwrap();
+        assert_eq!(
+            fetch_verdict_line(&failed, true),
+            "gsa-fetch: mesa-git: failed (fetch-failed, 7s)\n"
+        );
+        assert_eq!(
+            fetch_verdict_line(&failed, false),
+            "mesa-git failed 7 fetch-failed\n"
+        );
+        let skip = FetchResult::new("mesa-git", FetchVerdict::Skipped, 0, REASON_VCS_ONLY).unwrap();
+        assert_eq!(fetch_verdict_line(&skip, true), "");
+        assert_eq!(fetch_verdict_line(&skip, false), "mesa-git skipped 0 vcs-only\n");
     }
 }

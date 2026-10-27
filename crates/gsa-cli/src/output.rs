@@ -12,9 +12,10 @@
 //!
 //! Row vocabularies (decision rows, plan/outcome rows, `format: 2` run
 //! records) are the machine channel already and stay byte-stable in both
-//! modes. Mode selection: `--machine` / `--human` force; otherwise stdout
-//! being a TTY picks human (a capture is a machine — this also keeps
-//! fixtures on stable output).
+//! modes. Mode selection: `--machine` forces; otherwise stdout being a TTY
+//! picks human (a capture is a machine — this also keeps fixtures on stable
+//! output). There is no `--human` flag (H2, 2026-10-28): human is the
+//! default surface, never an opt-in.
 
 use std::io::IsTerminal;
 use std::sync::OnceLock;
@@ -44,7 +45,7 @@ impl Level {
 
 static MODE: OnceLock<Mode> = OnceLock::new();
 
-/// Pin the mode once, at dispatch (an explicit `--machine`/`--human`).
+/// Pin the mode once, at dispatch (an explicit `--machine`).
 pub fn set_mode(mode: Mode) {
     let _ = MODE.set(mode);
 }

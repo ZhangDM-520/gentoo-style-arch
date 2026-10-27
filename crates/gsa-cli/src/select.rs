@@ -13,12 +13,43 @@ use gsa_model::RecipeId;
 use gsa_recipe::RecipeDb;
 use gsa_topo::ProjectConfig;
 
-/// Everything selection needs: the loaded config, the validated graph, and
-/// the recipe cache.
+/// Everything selection needs: the loaded config, the validated graph, the
+/// recipe cache, and the kv user sets (I5 — `@name` resolves over the kv
+/// `-Ms` write side ∪ the committed `config/sets/`).
 pub struct Ctx<'a> {
     pub project: &'a ProjectConfig,
     pub graph: &'a Graph<'a>,
     pub db: &'a RecipeDb,
+    pub user_sets: Vec<(String, Vec<String>)>,
+}
+
+/// The kv user sets of the run's state root (the `-Ms` write side): one
+/// `(name, members)` per `set:<name>` key. I5's second half of `@name`
+/// resolution — a set named only in kv was invisible to selections before.
+/// A kv read that fails resolves to the empty half (config sets still
+/// resolve) and never fails a selection.
+pub fn load_user_sets(inv: &crate::args::Invocation) -> Vec<(String, Vec<String>)> {
+    let Ok(state) = gsa_model::config::resolve_state_dir(inv.state_dir.as_deref()) else {
+        return Vec::new();
+    };
+    // Read-only handle: loading user sets is a pure read (§D.1 "touches
+    // nothing else") — a dry or refused run must never create `index/`,
+    // `runs/`, `kv/` just to learn a set is empty.
+    let root = gsa_state::StateRoot::open_readonly(&state);
+    let Ok((pairs, _corrupt)) = gsa_state::Kv::list(&root) else {
+        return Vec::new();
+    };
+    pairs
+        .into_iter()
+        .filter_map(|(key, value)| {
+            let name = key.strip_prefix("set:")?.to_string();
+            let members = value
+                .split_whitespace()
+                .map(|token| token.to_string())
+                .collect();
+            Some((name, members))
+        })
+        .collect()
 }
 
 /// A selection refusal (usage class, contract §G.1).
@@ -125,6 +156,9 @@ pub fn nearest_candidates(ctx: &Ctx<'_>, query: &str, namespace: bool) -> Vec<St
         for set in &ctx.project.sets {
             pool.push(format!("@{}", set.name));
         }
+        for (name, _) in &ctx.user_sets {
+            pool.push(format!("@{name}"));
+        }
     } else {
         for record in ctx.graph.records() {
             pool.push(record.id.as_str().to_string());
@@ -187,14 +221,30 @@ pub fn resolve_ref(
                 .collect();
             return Ok((members, notes));
         }
-        if let Some(set) = ctx.project.set(name) {
+        // I5: `@name` resolves over the kv user-sets ∪ the committed
+        // `config/sets/` — a name in either half resolves, and the members
+        // are the union (the two sides drift and the drift is REPORTED by
+        // `-Ms`; a selection sees both halves).
+        let config_set = ctx.project.set(name);
+        let kv_set = ctx
+            .user_sets
+            .iter()
+            .find(|(set_name, _)| set_name == name);
+        if config_set.is_some() || kv_set.is_some() {
             if depth >= MAX_SET_DEPTH {
                 return Err(SelectError::new(format!(
                     "set '@{name}' nests too deeply (possible recursion between sets)"
                 )));
             }
             let mut indices = Vec::new();
-            for member in &set.members {
+            let mut seen: Vec<String> = Vec::new();
+            let config_members = config_set.map(|set| set.members.clone()).unwrap_or_default();
+            let kv_members = kv_set.map(|(_, members)| members.clone()).unwrap_or_default();
+            for member in config_members.iter().chain(kv_members.iter()) {
+                if seen.iter().any(|m| m == member) {
+                    continue;
+                }
+                seen.push(member.clone());
                 let (found, member_notes) = resolve_ref(ctx, member, depth + 1)
                     .map_err(|e| SelectError::new(format!("set '@{name}': {e}")))?;
                 indices.extend(found);

@@ -37,19 +37,30 @@ impl std::fmt::Display for CycleError {
 
 impl std::error::Error for CycleError {}
 
-/// Severity of a coupled batch (topology tags `abi=must` / `abi=should`).
+/// Severity of a coupled-batch member (topology tags `abi=must` / `abi=should`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum BatchSeverity {
     Must,
     Should,
 }
 
-/// A coupled batch: the recipes whose ABIs must move in the same rebuild
-/// pass. Members stay separate recipes; the batch is a rebuild-set fact.
+/// One abi-tagged member of an anchor's coupled batch. The member's own tag
+/// decides its treatment — `abi=must` moves in the same pass, `abi=should`
+/// is only ever noted (docs/maintainer-guide.md "Updating coupled stacks").
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CoupledMember {
+    pub id: RecipeId,
+    pub severity: BatchSeverity,
+}
+
+/// A coupled batch: one ABI anchor plus every abi-tagged package that
+/// transitively depends on it — the reverse closure the edge file cannot
+/// express (the frozen oracle's `abi_batch_dependents`). Members stay
+/// separate recipes; the batch is a rebuild-set fact.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CoupledBatch {
-    pub severity: BatchSeverity,
-    pub members: Vec<RecipeId>,
+    pub anchor: RecipeId,
+    pub members: Vec<CoupledMember>,
 }
 
 /// Records presenting as ONE row in the app prompt (`app-cluster=<name>`).
@@ -212,29 +223,96 @@ impl<'a> Graph<'a> {
         out
     }
 
-    /// Coupled batches from the `abi=must`/`abi=should` tags, members in
-    /// canonical build order.
+    /// Anchor-derived coupled batches, members in canonical build order
+    /// (docs/maintainer-guide.md "Updating coupled stacks"; the frozen
+    /// oracle's `abi_batch_dependents` in tests/assets/build-all.fish).
+    ///
+    /// One batch per anchor — `config/topology.conf`: "a batch anchor is an
+    /// abi=must package with no abi-tagged dependency" — carrying the
+    /// anchor plus every abi-tagged package that transitively depends on
+    /// it. The oracle's semantics, verbatim: the reverse closure traverses
+    /// ALL records (untagged intermediates included), every reached record
+    /// with an abi tag is a member (`abi=should` members are noted, never
+    /// gated), the anchor itself is in the batch (its own output excludes
+    /// it, the batch promise does not), and a dependent another anchor also
+    /// reaches joins both batches — there is no cross-anchor pruning.
+    /// Batches come out in canonical build order (first-built anchor
+    /// first), so the whole vector is deterministic.
     pub fn coupled_batches(&self) -> Vec<CoupledBatch> {
-        let mut batches = BTreeMap::new();
-        for &idx in &self.order {
-            let record = &self.records[idx];
-            let severity = if record.tags.contains(&Tag::AbiMust) {
-                Some(BatchSeverity::Must)
-            } else if record.tags.contains(&Tag::AbiShould) {
-                Some(BatchSeverity::Should)
-            } else {
-                None
-            };
-            if let Some(severity) = severity {
-                batches
-                    .entry(severity)
-                    .or_insert_with(Vec::new)
-                    .push(record.id.clone());
+        let mut batches = Vec::new();
+        for &anchor in &self.order {
+            if self.abi_severity(anchor) != Some(BatchSeverity::Must) {
+                continue;
             }
+            if self.has_abi_tagged_dependency(anchor) {
+                continue;
+            }
+            batches.push(CoupledBatch {
+                anchor: self.records[anchor].id.clone(),
+                members: self.abi_batch_members(anchor),
+            });
         }
         batches
-            .into_iter()
-            .map(|(severity, members)| CoupledBatch { severity, members })
+    }
+
+    /// The record's coupled-batch severity from its tags.
+    fn abi_severity(&self, idx: usize) -> Option<BatchSeverity> {
+        let tags = &self.records[idx].tags;
+        if tags.contains(&Tag::AbiMust) {
+            Some(BatchSeverity::Must)
+        } else if tags.contains(&Tag::AbiShould) {
+            Some(BatchSeverity::Should)
+        } else {
+            None
+        }
+    }
+
+    /// Whether any TRANSITIVE dependency carries an abi tag (the oracle's
+    /// `has_abi_tagged_dependency`: forward BFS over prerequisites, tag
+    /// read per reached node, never the record itself). Such a record is a
+    /// batch MEMBER, never an anchor; `abi=should` counts — it is an
+    /// abi-tagged dependency too. The graph is acyclic (build refused the
+    /// cycles), so the walk terminates.
+    fn has_abi_tagged_dependency(&self, idx: usize) -> bool {
+        let mut seen = vec![false; self.records.len()];
+        let mut queue: VecDeque<usize> = self.forward[idx].iter().copied().collect();
+        while let Some(node) = queue.pop_front() {
+            if seen[node] {
+                continue;
+            }
+            seen[node] = true;
+            if self.abi_severity(node).is_some() {
+                return true;
+            }
+            queue.extend(self.forward[node].iter().copied());
+        }
+        false
+    }
+
+    /// The anchor's batch members in canonical build order: the anchor
+    /// plus every abi-tagged record the reverse closure (consumers* over
+    /// ALL records) reaches.
+    fn abi_batch_members(&self, anchor: usize) -> Vec<CoupledMember> {
+        let mut seen = vec![false; self.records.len()];
+        seen[anchor] = true;
+        let mut queue: VecDeque<usize> = VecDeque::from([anchor]);
+        while let Some(node) = queue.pop_front() {
+            for &consumer in &self.reverse[node] {
+                if !seen[consumer] {
+                    seen[consumer] = true;
+                    queue.push_back(consumer);
+                }
+            }
+        }
+        self.order
+            .iter()
+            .filter_map(|&i| {
+                let severity = if seen[i] { self.abi_severity(i)? } else { return None };
+                Some(CoupledMember {
+                    id: self.records[i].id.clone(),
+                    severity,
+                })
+            })
             .collect()
     }
 
@@ -368,23 +446,86 @@ mod tests {
     }
 
     #[test]
-    fn coupled_batches_group_by_tag_severity() {
+    fn coupled_batches_are_derived_per_anchor() {
+        // The promised shape (docs/maintainer-guide.md "Updating coupled
+        // stacks"): one batch per anchor — an abi=must record with no
+        // abi-tagged dependency — carrying the anchor plus every abi-tagged
+        // package that transitively depends on it. Three independent
+        // anchors must yield THREE batches (the real topology's
+        // llvm-git/qt5-base-git/qt6-base-git shape in miniature), never one
+        // bucket per severity (E2).
         let records = vec![
-            record("a", 1, &[], vec![Tag::AbiMust]),
-            record("b", 2, &[], vec![Tag::AbiShould]),
-            record("c", 3, &["a"], vec![Tag::AbiMust]),
-            record("d", 4, &[], vec![]),
+            record("llvm-git", 1, &[], vec![Tag::AbiMust]),
+            record("rust-git", 2, &["llvm-git"], vec![Tag::AbiMust]),
+            record("qt5-base-git", 3, &[], vec![Tag::AbiMust]),
+            record("qt5-mem", 4, &["qt5-base-git"], vec![Tag::AbiMust]),
+            record("qt6-base-git", 5, &[], vec![Tag::AbiMust]),
+            record(
+                "shared",
+                6,
+                &["llvm-git", "qt6-base-git"],
+                vec![Tag::AbiMust],
+            ),
+            record("qt6-should", 7, &["qt6-base-git"], vec![Tag::AbiShould]),
+            record("untagged", 8, &["llvm-git"], vec![]),
         ];
         let graph = Graph::build(&records).unwrap();
         let batches = graph.coupled_batches();
-        assert_eq!(batches.len(), 2);
-        assert_eq!(batches[0].severity, BatchSeverity::Must);
+        assert_eq!(batches.len(), 3, "three anchors, three batches");
+        fn ids(batch: &CoupledBatch) -> Vec<&str> {
+            batch.members.iter().map(|m| m.id.as_str()).collect()
+        }
+        assert_eq!(batches[0].anchor, RecipeId::new("llvm-git").unwrap());
+        assert_eq!(ids(&batches[0]), vec!["llvm-git", "rust-git", "shared"]);
+        // The qt5 batch excludes every other anchor's subtree: a qt5 move
+        // must never plan or park llvm-git (the E2 pin).
+        assert_eq!(batches[1].anchor, RecipeId::new("qt5-base-git").unwrap());
+        assert_eq!(ids(&batches[1]), vec!["qt5-base-git", "qt5-mem"]);
+        // A dependent two anchors reach joins BOTH batches (the oracle has
+        // no cross-anchor pruning); abi=should members ride the batch of
+        // the anchor they depend on; untagged records never do.
+        assert_eq!(batches[2].anchor, RecipeId::new("qt6-base-git").unwrap());
+        assert_eq!(ids(&batches[2]), vec!["qt6-base-git", "shared", "qt6-should"]);
+        // The member's OWN tag decides its treatment, never the batch's.
+        let sev = |batch: &CoupledBatch, id: &str| {
+            batch
+                .members
+                .iter()
+                .find(|m| m.id.as_str() == id)
+                .map(|m| m.severity)
+        };
+        assert_eq!(sev(&batches[0], "rust-git"), Some(BatchSeverity::Must));
+        assert_eq!(sev(&batches[2], "qt6-should"), Some(BatchSeverity::Should));
+    }
+
+    #[test]
+    fn an_abi_tagged_dependency_makes_a_record_a_member_never_an_anchor() {
+        // topology.conf's anchor rule reads "no abi-tagged dependency" as
+        // TRANSITIVE and over both severities (the oracle's
+        // `has_abi_tagged_dependency`): m's abi tag comes through the
+        // untagged mid, so m is a member of a's batch (the reverse closure
+        // traverses untagged records too), and n — whose only abi-tagged
+        // dependency is should-tagged s — is a member without any anchor
+        // and forms no batch at all.
+        let records = vec![
+            record("a", 1, &[], vec![Tag::AbiMust]),
+            record("mid", 2, &["a"], vec![]),
+            record("m", 3, &["mid"], vec![Tag::AbiMust]),
+            record("s", 4, &[], vec![Tag::AbiShould]),
+            record("n", 5, &["s"], vec![Tag::AbiMust]),
+        ];
+        let graph = Graph::build(&records).unwrap();
+        let batches = graph.coupled_batches();
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].anchor, RecipeId::new("a").unwrap());
         assert_eq!(
-            batches[0].members,
-            vec![RecipeId::new("a").unwrap(), RecipeId::new("c").unwrap()]
+            batches[0]
+                .members
+                .iter()
+                .map(|m| m.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a", "m"]
         );
-        assert_eq!(batches[1].severity, BatchSeverity::Should);
-        assert_eq!(batches[1].members, vec![RecipeId::new("b").unwrap()]);
     }
 
     #[test]

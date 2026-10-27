@@ -132,6 +132,7 @@ fn run_build_with(
         project: &project,
         graph: &graph,
         db: &db,
+        user_sets: select::load_user_sets(inv),
     };
     let mut selection = match select::build_selection(&ctx, &inv.targets, &inv.ranges, inv.leaf) {
         Ok(selection) => selection,
@@ -457,6 +458,8 @@ fn run_build_with(
                 .iter()
                 .any(|f| f == "--no-register-ignorepkg");
             let mut later: Vec<String> = ids.iter().map(|id| id.as_str().to_string()).collect();
+            let workspace_names: Vec<String> =
+                crate::install::workspace_output_names(&db).into_iter().collect();
             Box::new(
                 move |pkg: &str, recipe_dir: &std::path::Path, forced: bool| {
                     later.retain(|subject| subject != pkg);
@@ -470,6 +473,7 @@ fn run_build_with(
                         pacman_args: pacman_args.clone(),
                         register_ignorepkg,
                         later_installs: later.clone(),
+                        workspace_names: workspace_names.clone(),
                     };
                     crate::install::install_step_from_result(gsa_install::install_built_package(
                         recipe_dir, &run,
@@ -808,7 +812,7 @@ pub(crate) fn plan_only(
     // The same pre-dispatch ABI wave check the build pipeline runs (§E.3):
     // the dry-run shows the wave it would build — additions join the plan,
     // and an under-covered member refuses (rc 3).
-    let state_dir = gsa_state::resolve_state_root(inv.state_dir.as_deref());
+    let state_dir = gsa_state::resolve_state_root(inv.state_dir.as_deref())?;
     let wave = wave_check(out, err, ctx.graph, &selection, &state_dir)?;
     extend_selection(&mut selection, &wave.additions);
     let intensity = crate::resolve_intensity(project)?;
@@ -824,26 +828,33 @@ pub(crate) fn plan_only(
             true
         )
     );
-    let rec = record::build_plan_record(inv, &selection, &inv.targets, &inv.ranges, &intensity);
+    // §H.2: the record's `rc` scalar is the run's exit code — a refusing
+    // plan reports its refusal, never a success.
+    let rc = if wave.uncovered {
+        crate::RC_REFUSED
+    } else {
+        crate::RC_OK
+    };
+    let rec = record::build_plan_record(inv, &selection, &inv.targets, &inv.ranges, &intensity, rc);
     let _ = write!(out, "{}", rec.render_machine());
-    if wave.uncovered {
-        return Ok(crate::RC_REFUSED);
-    }
-    Ok(crate::RC_OK)
+    Ok(rc)
 }
 
-/// `gsa -Su` (contract §B.4): `-Sy`, then build+install the stale set.
+/// `gsa -Su` / `gsa -Syu` (contract §B.4): build+install the stale set.
 ///
-/// The sync phase runs first over the selection (default: every recipe) —
-/// its disposition block prints and a sync refusal aborts (§G.1 rc 3)
-/// before anything builds. The stale set is then computed from the
+/// `-Syu` runs the sync phase first over the selection (default: every
+/// recipe) — its disposition block prints and a sync refusal aborts (§G.1
+/// rc 3) before anything builds; the stale set is then computed from the
 /// REWRITTEN (tracked) versions against the newest complete built set and
-/// handed to the normal build+install pipeline; that pipeline's own
-/// pre-dispatch pass re-runs the sync for the stale subset (idempotent —
-/// `NoChange`), which is what keeps the deferral row shapes (`deferred 99 -
-/// <reason>`) intact instead of losing them across a phase boundary. A
-/// `--dry-run` never rewrites recipes and renders the plan record only. An
-/// empty stale set is the §E.3 `noop empty-list` row, rc 0.
+/// handed to the normal build+install pipeline, whose own pre-dispatch pass
+/// re-runs the sync for the stale subset (idempotent — `NoChange`), which is
+/// what keeps the deferral row shapes (`deferred 99 - <reason>`) intact
+/// instead of losing them across a phase boundary. `-Su` is pacman's `-Su`
+/// (H9): the same stale-set update with NO sync pass at all — the committed
+/// versions and sums build as-is (the pipeline runs `--no-sync`), and the
+/// provider is never queried. A `--dry-run` never rewrites recipes and
+/// renders the plan record only. An empty stale set is the §E.3 `noop
+/// empty-list` row, rc 0.
 pub fn run_update(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
     let root = match crate::resolve_workspace(inv) {
         Ok(root) => root,
@@ -877,6 +888,7 @@ pub fn run_update(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) ->
         project: &project,
         graph: &graph,
         db: &db,
+        user_sets: select::load_user_sets(inv),
     };
     let selection = match prepare::pass_selection(&ctx, inv) {
         Ok(selection) => selection,
@@ -898,12 +910,19 @@ pub fn run_update(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) ->
     }
 
     let ids: Vec<RecipeId> = selection.listed.iter().map(|(_, id)| id.clone()).collect();
-    let state_dir = gsa_state::resolve_state_root(inv.state_dir.as_deref());
+    let state_dir = match gsa_state::resolve_state_root(inv.state_dir.as_deref()) {
+        Ok(dir) => dir,
+        Err(message) => {
+            let _ = writeln!(err, "gsa: {message}");
+            return 2;
+        }
+    };
 
-    // ── 1. the `-Sy` phase. A dry run never rewrites recipes, so it runs
-    //    no sync at all; a sync refusal aborts before anything builds, and
-    //    a deferral is reported and carried into the build rows below.
-    if !inv.dry_run {
+    // ── 1. the `-Sy` phase (`gsa -Syu` only — H9: `gsa -Su` updates with no
+    //    sync pass). A dry run never rewrites recipes, so it runs no sync at
+    //    all; a sync refusal aborts before anything builds, and a deferral
+    //    is reported and carried into the build rows below.
+    if inv.sync_first && !inv.no_sync && !inv.dry_run {
         let (refused, _deferred) = prepare::sync_phase(&root, &graph, &selection, out, err);
         if refused {
             return crate::RC_REFUSED;
@@ -953,6 +972,11 @@ pub fn run_update(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) ->
     let mut update_inv = inv.clone();
     update_inv.targets = stale.iter().map(|id| id.as_str().to_string()).collect();
     update_inv.ranges = Vec::new();
+    if !inv.sync_first {
+        // `-Su` (H9): the pipeline must not sneak a sync in through its
+        // pre-dispatch pass — the committed versions build as-is.
+        update_inv.no_sync = true;
+    }
     if inv.dry_run {
         return plan_only(&ctx, &update_inv, &project, out, err).unwrap_or_else(|message| {
             let _ = writeln!(err, "gsa: {message}");
@@ -1138,9 +1162,11 @@ fn pre_settle(plan: &crate::prepare::NodePlan) -> Option<PreSettle> {
     }
 }
 
-/// Coupled batches (`abi=must`/`abi=should`) with at least two selected
-/// members (contract §I.1 open decision 1: a failed member parks its batch
-/// mates with reason `coupled-batch`).
+/// Anchor-derived coupled batches with at least two selected members
+/// (contract §I.1 open decision 1: a failed member parks its batch mates
+/// with reason `coupled-batch`). Each batch is ONE anchor's rebuild set
+/// (docs/maintainer-guide.md "Updating coupled stacks"), so a failure parks
+/// only its own batch's mates — never mates of an unrelated stack (E2).
 fn build_batches(graph: &Graph<'_>, selection: &Selection) -> Vec<Vec<usize>> {
     let mut node_of: HashMap<&str, usize> = HashMap::new();
     for (node_idx, (_, id)) in selection.listed.iter().enumerate() {
@@ -1151,7 +1177,7 @@ fn build_batches(graph: &Graph<'_>, selection: &Selection) -> Vec<Vec<usize>> {
         let members: Vec<usize> = batch
             .members
             .iter()
-            .filter_map(|id| node_of.get(id.as_str()).copied())
+            .filter_map(|m| node_of.get(m.id.as_str()).copied())
             .collect();
         if members.len() >= 2 {
             batches.push(members);
@@ -1359,8 +1385,8 @@ fn parked_by(graph: &Graph<'_>, rows: &[OutcomeRow]) -> Vec<(String, Vec<String>
                     && idx.is_some()
                     && root_idx.is_some()
                     && graph.coupled_batches().iter().any(|batch| {
-                        batch.members.iter().any(|m| m == &row.pkg)
-                            && batch.members.iter().any(|m| m == &root.pkg)
+                        batch.members.iter().any(|m| m.id == row.pkg)
+                            && batch.members.iter().any(|m| m.id == root.pkg)
                     });
                 if consumes || batch_mates {
                     responsible.push(root.pkg.as_str().to_string());

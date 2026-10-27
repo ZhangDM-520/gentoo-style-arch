@@ -68,7 +68,7 @@ fn doctor_names_an_orphan_row_and_fix_tombstones_it() {
         .join("packages/git/alpha/alpha-1.0-1-any.pkg.tar.zst");
     make_archive(&archive, "alpha", "alpha", "1.0-1");
     let mut err = Vec::new();
-    reindex_archives(&state, "alpha", &[archive.clone()], &mut err).unwrap();
+    reindex_archives(&state, "alpha", &[archive.clone()], None, &mut err).unwrap();
     std::fs::remove_file(&archive).unwrap();
 
     fx.with_ctx(|ctx| {
@@ -102,7 +102,7 @@ fn fix_dry_run_plans_the_named_repairs_and_mutates_nothing() {
         .join("packages/git/alpha/alpha-0.9-1-any.pkg.tar.zst");
     make_archive(&gone, "alpha", "alpha", "0.9-1");
     let mut err = Vec::new();
-    reindex_archives(&state, "alpha", &[gone.clone()], &mut err).unwrap();
+    reindex_archives(&state, "alpha", &[gone.clone()], None, &mut err).unwrap();
     std::fs::remove_file(&gone).unwrap();
     // A stale run artifact inside the state root.
     let stale = fx.state_dir.join(".lane1.result");

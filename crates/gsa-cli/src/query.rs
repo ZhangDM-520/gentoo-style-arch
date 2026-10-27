@@ -1,8 +1,10 @@
-//! The side-car query surface (contract §B.3 `-Qb`/`-Qp`, §D.1
-//! `--local-db-check`): everything here reads the side-car DB and the
-//! archives' own `.PKGINFO` — never pacman's installed database (the hybrid
-//! model's rule: pacman is the only installed-DB authority) and never a
-//! re-derived filename guess (§J.4: the index row is authoritative).
+//! The side-car and installed-DB query surface (contract §B.3, §D.1
+//! `--local-db-check`): everything here reads the side-car DB, pacman's
+//! installed database through the native read-only `LocalDb` reader (the
+//! hybrid model's rule: pacman is the only installed-DB AUTHORITY; its
+//! local DB is read, never written, and never via a pacman subprocess in a
+//! decision seam), and the archives' own `.PKGINFO` — never a re-derived
+//! filename guess (§J.4: the index row is authoritative).
 //!
 //! Row shapes are derived from the stored records (rule 25(j) / §L.3):
 //! `-Qb` prints the §J.4 wire row verbatim, `-Qp` prints one probe row per
@@ -17,6 +19,7 @@ use gsa_install::localdb::{pacman_db_root, LocalDb};
 use gsa_recipe::pkginfo::read_pkginfo;
 
 use crate::args::Invocation;
+use crate::render;
 use crate::select::Ctx;
 use gsa_state::{verify_row, wire_row, BinpkgIndex, Match, StateRoot};
 
@@ -44,8 +47,8 @@ pub fn query_binpkg(
                 .collect(),
         )
     };
-    let root = StateRoot::open(&gsa_state::resolve_state_root(inv.state_dir.as_deref()))
-        .map_err(|e| e.to_string())?;
+    let state_dir = gsa_state::resolve_state_root(inv.state_dir.as_deref())?;
+    let root = StateRoot::open(&state_dir).map_err(|e| e.to_string())?;
     let index = BinpkgIndex::load(&root).map_err(|e| e.to_string())?;
     for row in &index.rows {
         if let Some(wanted) = &wanted {
@@ -87,8 +90,8 @@ pub fn query_probe(
             return Err(format!("malformed archive argument {arg}"));
         }
     }
-    let root = StateRoot::open(&gsa_state::resolve_state_root(inv.state_dir.as_deref()))
-        .map_err(|e| e.to_string())?;
+    let state_dir = gsa_state::resolve_state_root(inv.state_dir.as_deref())?;
+    let root = StateRoot::open(&state_dir).map_err(|e| e.to_string())?;
     let index = BinpkgIndex::load(&root).map_err(|e| e.to_string())?;
     for arg in &inv.targets {
         let path = Path::new(arg);
@@ -150,6 +153,19 @@ pub fn query_probe(
 /// (findings present, full report still printed).
 pub fn run_local_db_check(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
     const USAGE: &str = "gsa --local-db-check [health|runs]: unknown argument";
+    // `--state-dir PATH` is the §J.3 modifier this seam accepts (stripped
+    // before verb matching so the flag tier behaves like on public verbs).
+    let mut positional: Vec<String> = Vec::with_capacity(args.len());
+    let mut state_flag: Option<&str> = None;
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--state-dir" {
+            state_flag = iter.next().map(String::as_str);
+            continue;
+        }
+        positional.push(arg.clone());
+    }
+    let args: &[String] = &positional;
     let verb = match args {
         [] => "health",
         [one] if one == "health" || one == "runs" => one.as_str(),
@@ -166,7 +182,13 @@ pub fn run_local_db_check(args: &[String], out: &mut dyn Write, err: &mut dyn Wr
             return 2;
         }
     };
-    let root_path = gsa_state::resolve_state_root(None);
+    let root_path = match gsa_state::resolve_state_root(state_flag) {
+        Ok(path) => path,
+        Err(message) => {
+            let _ = writeln!(err, "gsa: {message}");
+            return 2;
+        }
+    };
     let root = match StateRoot::open(&root_path) {
         Ok(root) => root,
         Err(error) => {
@@ -269,8 +291,8 @@ pub fn query_abi(
         return Err("requires at least one reference".to_string());
     }
     let indices = crate::resolve_records(&ctx, &inv.targets, err)?;
-    let root = StateRoot::open(&gsa_state::resolve_state_root(inv.state_dir.as_deref()))
-        .map_err(|e| e.to_string())?;
+    let state_dir = gsa_state::resolve_state_root(inv.state_dir.as_deref())?;
+    let root = StateRoot::open(&state_dir).map_err(|e| e.to_string())?;
     let index = BinpkgIndex::load(&root).map_err(|e| e.to_string())?;
     let subs = gsa_abi::Subscriptions::load(&gsa_abi::subscriptions_path(root.path()))
         .map_err(|e| e.to_string())?;
@@ -369,8 +391,8 @@ pub fn query_revdep(
             depends: pkg.depends.clone(),
             files: pkg.files.clone(),
         }));
-    let root = StateRoot::open(&gsa_state::resolve_state_root(inv.state_dir.as_deref()))
-        .map_err(|e| e.to_string())?;
+    let state_dir = gsa_state::resolve_state_root(inv.state_dir.as_deref())?;
+    let root = StateRoot::open(&state_dir).map_err(|e| e.to_string())?;
     let (report, corrupt) =
         gsa_abi::revdep_report_with_state(&view, root.path()).map_err(|e| e.to_string())?;
     for line in corrupt {
@@ -380,6 +402,281 @@ pub fn query_revdep(
         let _ = writeln!(out, "{row}");
     }
     Ok(())
+}
+
+/// The side-car read of the `-Q` family (I1): the binpkg index of the state
+/// root. A state root that does not exist carries no rows — the surface
+/// simply shows no side-car columns ("where a side-car row exists", §B.3);
+/// a corrupt index is an error, never a silent skip.
+fn side_car_index(inv: &Invocation) -> Result<Option<BinpkgIndex>, String> {
+    let state_dir = gsa_state::resolve_state_root(inv.state_dir.as_deref())?;
+    if !state_dir.exists() {
+        return Ok(None);
+    }
+    let root = StateRoot::open(&state_dir).map_err(|e| e.to_string())?;
+    Ok(Some(BinpkgIndex::load(&root).map_err(|e| e.to_string())?))
+}
+
+/// The newest index row for one recipe (rows are registration order = the
+/// build-instance order, so the last row is the newest instance).
+fn newest_row<'i>(index: &'i Option<BinpkgIndex>, id: &str) -> Option<&'i gsa_state::IndexRow> {
+    index
+        .as_ref()
+        .and_then(|i| i.rows_for(id).into_iter().next_back())
+}
+
+/// `gsa -Q` (§B.3, I1): list the INSTALLED packages — pacman's local DB,
+/// read natively (`LocalDb`; pacman stays the only installed-DB authority)
+/// — with the side-car columns (abi-token, built version, binpkg instances)
+/// where a side-car row exists. No references: the whole installed view.
+/// Rows: `name version [abi=… built=… instances=…]`, sorted by name.
+pub fn query_list(inv: &Invocation, out: &mut dyn Write) -> Result<(), String> {
+    if !inv.ranges.is_empty() {
+        return Err("index ranges address an -S/-B selection (see 'gsa -Sl')".to_string());
+    }
+    if !inv.targets.is_empty() {
+        return Err("gsa -Q takes no references (it reports the whole installed view)".to_string());
+    }
+    let db = LocalDb::load(&pacman_db_root()).map_err(|e| e.to_string())?;
+    let index = side_car_index(inv)?;
+    let mut side: std::collections::BTreeMap<String, &gsa_state::IndexRow> =
+        std::collections::BTreeMap::new();
+    if let Some(index) = &index {
+        for row in &index.rows {
+            for name in &row.pkgnames {
+                side.insert(name.clone(), row);
+            }
+        }
+    }
+    for pkg in db.packages() {
+        let mut line = format!("{} {}", pkg.name, pkg.version);
+        if let Some(row) = side.get(pkg.name.as_str()) {
+            let instances = index
+                .as_ref()
+                .map(|i| i.instances_for(&row.recipe_id).len())
+                .unwrap_or(0);
+            line.push_str(&format!(
+                " abi={} built={} instances={}",
+                row.abi_token, row.version, instances
+            ));
+        }
+        writeln!(out, "{line}").map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// `gsa -Qs <pattern…>` (§B.3, I1): search installed names/descriptions
+/// (pacman `-Qs` semantics — the installed database, not the buildable
+/// universe). Patterns are case-insensitive literal substrings; multiple
+/// patterns OR. Rows: `name version` + indented description.
+pub fn query_search(inv: &Invocation, out: &mut dyn Write) -> Result<(), String> {
+    if !inv.ranges.is_empty() {
+        return Err("index ranges address an -S/-B selection (see 'gsa -Sl')".to_string());
+    }
+    if inv.targets.is_empty() {
+        return Err("requires at least one search pattern".to_string());
+    }
+    let db = LocalDb::load(&pacman_db_root()).map_err(|e| e.to_string())?;
+    for pkg in db.packages() {
+        let desc = pkg.desc.clone().unwrap_or_default();
+        if matches(&inv.targets, &[pkg.name.clone(), desc.clone()]) {
+            writeln!(out, "{} {}", pkg.name, pkg.version).map_err(|e| e.to_string())?;
+            writeln!(out, "    {desc}").map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+fn matches(patterns: &[String], haystacks: &[String]) -> bool {
+    let lowered: Vec<String> = haystacks.iter().map(|h| h.to_ascii_lowercase()).collect();
+    patterns.iter().any(|p| {
+        let p = p.to_ascii_lowercase();
+        lowered.iter().any(|h| h.contains(&p))
+    })
+}
+
+fn join_or_none(values: &[String]) -> String {
+    if values.is_empty() {
+        "(none)".to_string()
+    } else {
+        values.join(", ")
+    }
+}
+
+/// `gsa -Qi <ref…>` (§B.3 + H7/H8, merged): one block per output name —
+/// the recipe record the package comes from, the installed record (where
+/// one exists), the side-car record (abi-token, subscriptions in/out,
+/// retained binpkg instances, VCS baseline) and the topology record.
+pub fn query_info(
+    ctx: &Ctx<'_>,
+    inv: &Invocation,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<(), String> {
+    if !inv.ranges.is_empty() {
+        return Err("index ranges address an -S/-B selection (see 'gsa -Sl')".to_string());
+    }
+    if inv.targets.is_empty() {
+        return Err("requires at least one reference".to_string());
+    }
+    let indices = crate::resolve_records(ctx, &inv.targets, err)?;
+    if indices.is_empty() {
+        return Err("no recipes resolved".to_string());
+    }
+    let db = LocalDb::load(&pacman_db_root()).map_err(|e| e.to_string())?;
+    let index = side_car_index(inv)?;
+    let state_dir = gsa_state::resolve_state_root(inv.state_dir.as_deref())?;
+    let subs = gsa_abi::Subscriptions::load(&gsa_abi::subscriptions_path(&state_dir))
+        .map_err(|e| e.to_string())?;
+    let mut first = true;
+    for &idx in &indices {
+        let record = ctx.graph.record(idx);
+        let id = record.id.as_str();
+        let row = newest_row(&index, id);
+        let instances = index
+            .as_ref()
+            .map(|i| i.instances_for(id).len())
+            .unwrap_or(0);
+        let meta = ctx
+            .db
+            .get(id)
+            .ok_or_else(|| "recipe metadata missing".to_string())?;
+        let version = meta.full_version().map_err(|e| e.to_string())?;
+        for pkgname in meta.pkgnames() {
+            if !first {
+                let _ = writeln!(out);
+            }
+            first = false;
+            let mut extra: Vec<(String, String)> = Vec::new();
+            match db.get(&pkgname) {
+                Some(pkg) => {
+                    extra.push(("Installed-Version".to_string(), pkg.version.clone()));
+                    extra.push((
+                        "Installed-Provides".to_string(),
+                        join_or_none(&pkg.provides),
+                    ));
+                    extra.push((
+                        "Installed-Depends-On".to_string(),
+                        join_or_none(&pkg.depends),
+                    ));
+                }
+                None => {
+                    extra.push(("Installed-Version".to_string(), "(not installed)".to_string()));
+                }
+            }
+            match row {
+                Some(row) => {
+                    extra.push(("ABI-Token".to_string(), row.abi_token.clone()));
+                    extra.push(("Built-Version".to_string(), row.version.clone()));
+                    extra.push(("Binpkg-Instances".to_string(), instances.to_string()));
+                    extra.push(("VCS-Baseline".to_string(), row.vcs_baseline.clone()));
+                }
+                None => {
+                    extra.push(("ABI-Token".to_string(), "(no side-car row)".to_string()));
+                    extra.push(("Binpkg-Instances".to_string(), "0".to_string()));
+                }
+            }
+            let subs_in: Vec<String> = subs
+                .for_provider(id)
+                .into_iter()
+                .map(|s| format!("{} {} {}", s.consumer, s.version, s.token))
+                .collect();
+            let subs_out: Vec<String> = subs
+                .for_consumer(id)
+                .into_iter()
+                .map(|s| format!("{} {}", s.provider, s.token))
+                .collect();
+            extra.push((
+                "Subscriptions-In".to_string(),
+                if subs_in.is_empty() {
+                    "(none)".to_string()
+                } else {
+                    subs_in.join("; ")
+                },
+            ));
+            extra.push((
+                "Subscriptions-Out".to_string(),
+                if subs_out.is_empty() {
+                    "(none)".to_string()
+                } else {
+                    subs_out.join("; ")
+                },
+            ));
+            let _ = write!(
+                out,
+                "{}",
+                render::render_package_info(ctx, record, &pkgname, &version, &extra)
+            );
+        }
+    }
+    Ok(())
+}
+
+/// `gsa -Qu` (§B.3, I3): the stale set — recipes whose tracked (committed)
+/// version moved past their newest complete built instance
+/// (`prepare::stale_set`'s definition). Rows:
+/// `id tracked=<pv-pr> built=<pv-pr>`.
+pub fn query_updates(
+    ctx: &Ctx<'_>,
+    root: &Path,
+    inv: &Invocation,
+    out: &mut dyn Write,
+) -> Result<(), String> {
+    if !inv.ranges.is_empty() {
+        return Err("index ranges address an -S/-B selection (see 'gsa -Sl')".to_string());
+    }
+    if !inv.targets.is_empty() {
+        return Err("gsa -Qu takes no references (it reports the whole stale set)".to_string());
+    }
+    let ids: Vec<gsa_model::RecipeId> = ctx.graph.records().iter().map(|r| r.id.clone()).collect();
+    for id in crate::prepare::stale_set(root, ctx.graph, &ids) {
+        let idx = ctx
+            .graph
+            .index_of(id.as_str())
+            .expect("stale ids resolve to records");
+        let recipe_dir = root.join(&ctx.graph.record(idx).path);
+        let tracked = gsa_recipe::freshness::current_version_key(&recipe_dir)
+            .map(|(pv, pr)| format!("{pv}-{pr}"))
+            .unwrap_or_else(|_| "?".to_string());
+        let built = gsa_recipe::freshness::discover_newest_complete_set(&recipe_dir)
+            .version_key
+            .unwrap_or_else(|| "-".to_string());
+        writeln!(out, "{} tracked={tracked} built={built}", id.as_str())
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// `-Ql`/`-Qo` (§B.3, I3 + H8: "pacman queries stay pacman"): pacman
+/// delegates — the query IS pacman's own, so the engine runs the pacman
+/// argv verbatim and passes its stdout, stderr and exit code through.
+pub fn pacman_delegate(
+    pacman_action: &str,
+    inv: &Invocation,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<i32, String> {
+    if !inv.ranges.is_empty() {
+        return Err("index ranges address an -S/-B selection (see 'gsa -Sl')".to_string());
+    }
+    if inv.targets.is_empty() {
+        return Err(format!(
+            "requires at least one {}",
+            if pacman_action == "-Ql" {
+                "reference"
+            } else {
+                "path"
+            }
+        ));
+    }
+    let output = std::process::Command::new("pacman")
+        .arg(pacman_action)
+        .args(&inv.targets)
+        .output()
+        .map_err(|e| format!("cannot run pacman {pacman_action}: {e}"))?;
+    out.write_all(&output.stdout).map_err(|e| e.to_string())?;
+    err.write_all(&output.stderr).map_err(|e| e.to_string())?;
+    Ok(output.status.code().unwrap_or(1))
 }
 
 #[cfg(test)]

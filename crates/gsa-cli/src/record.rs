@@ -42,9 +42,10 @@ pub fn emit_machine_record(
 
 /// The engine environment input roster (`gsa --help` must print it).
 /// `GSA_BUILD_JOBS` is engine output and deliberately absent.
-pub const ENV_ROSTER: [&str; 10] = [
+pub const ENV_ROSTER: [&str; 11] = [
     "GSA_BUILD_DIR",
     "GSA_CONF",
+    "GSA_RECIPES_DIR",
     "GSA_STATE_DIR",
     "GSA_LANES",
     "GSA_JOBS",
@@ -55,25 +56,30 @@ pub const ENV_ROSTER: [&str; 10] = [
     "GSA_VCS_SKIP_TOLERANCE",
 ];
 
-/// The continuation flag-rule table's explicit not-mirrored list (§H.2):
-/// prune strengths, one-shot actions, query/maintain verbs and hidden seams
-/// are never replayed. Everything else a continuation may carry is mirrored
-/// as an explicit flag (`--dry-run`, `--leaf`, `--skip`, `--skip-built`,
-/// `--vcs-skip-tolerance`, `--no-sync`, `--allow-broken-rustc`, `--fail-fast`,
-/// `--state-dir`, `--config`, `--no-register-ignorepkg`, `--no-prefetch`,
-/// `--prefetch-ahead N`, and the resolved `--lanes`/`--jobs`/`--intensity`
-/// values; the cluster letter `c` is a prune strength and never mirrors, `f`
-/// mirrors). `-Sw` is mirrorable on purpose: a fetch run's continuation
-/// reissues the fetch action for its remaining packages (docs/adr/
-/// 0004-prefetch-advisory.md).
+/// The continuation flag-rule table's explicit not-mirrored vocabulary
+/// (§H.2): prune strengths, one-shot actions, query/maintain verbs and
+/// hidden seams are never replayed. Everything else a continuation may
+/// carry is mirrored as an explicit flag (`--dry-run`, `--leaf`, `--skip`,
+/// `--skip-built`, `--vcs-skip-tolerance`, `--no-sync`,
+/// `--allow-broken-rustc`, `--fail-fast`, `--state-dir`, `--config`,
+/// `--no-register-ignorepkg`, `--no-prefetch`, `--prefetch-ahead N`, and
+/// the resolved `--lanes`/`--jobs`/`--intensity` values; the cluster letter
+/// `c` is a prune strength and never mirrors, `f` mirrors). `-Sw` is
+/// mirrorable on purpose: a fetch run's continuation reissues the fetch
+/// action for its remaining packages (docs/adr/0004-prefetch-advisory.md).
+///
+/// This is a VOCABULARY, not a per-run roster (H3, 2026-10-28): a record's
+/// `not-mirrored:` line lists only the run's OWN argv spellings the composed
+/// `command:` does not restate — see [`not_mirrored_of`], which also fixes
+/// the output order to this table's. `-Ss`/`-Si`/`-Sg` are retired (H7) and
+/// gone from the table; `-Syu` names the sync-first update spelling whose
+/// `y` the command mirrors (H9).
 pub const NOT_MIRRORED: &[&str] = &[
     "-Q",
-    "-Ss",
-    "-Si",
     "-Sl",
-    "-Sg",
     "-Sy",
     "-Su",
+    "-Syu",
     "-Ua",
     "-Mc",
     "-Mcc",
@@ -103,7 +109,6 @@ pub const NOT_MIRRORED: &[&str] = &[
     // Output-mode globals (presentation only — a resume picks its own):
     // never replayed.
     "--machine",
-    "--human",
     "--install-decide",
     "--lane-job",
     "--fetch-job",
@@ -113,6 +118,76 @@ pub const NOT_MIRRORED: &[&str] = &[
     "--register-ignorepkg",
     "--qa-check",
 ];
+
+/// The cluster spelling the continuation `command:` mirrors (§H.2): the
+/// family, the `-Syu` sync-first `y` (H9 — a `-Syu` run's record must
+/// restate the sync, never silently downgrade the spelling to `-Su`), the
+/// one action letter, and the `f` cluster letter — the only modifier that
+/// mirrors.
+pub fn mirror_verb(inv: &Invocation) -> String {
+    let mut verb = String::from(inv.family.as_str());
+    if inv.sync_first {
+        verb.push('y');
+    }
+    if let Some(action) = inv.action {
+        verb.push(action);
+    }
+    if inv.modifiers.contains(&'f') {
+        verb.push('f');
+    }
+    verb
+}
+
+/// (§H.2, argv-scoped — H3) the tokens of THIS run's own argv that the
+/// composed `command:` does not restate. Never a roster: a run that mirrors
+/// everything it carried lists nothing.
+///
+/// 1. The run's cluster spelling minus the mirrored `f` letters (so `-Uaf`
+///    lists `-Ua`, `-Scf` lists `-Sc`, `-Syuc` lists `-Syuc`): the prune
+///    strength `c` and `-U`'s `a` never mirror.
+/// 2. `--machine` when the run overrode the output mode (a resume picks its
+///    own).
+/// 3. Any parse-deferred global the run carried that is in [`NOT_MIRRORED`]
+///    (`--quiet`, `--verbose`, a `-M` sub-flag, …).
+///
+/// The run's own cluster spelling comes first; every other item follows in
+/// [`NOT_MIRRORED`] table order.
+pub fn not_mirrored_of(inv: &Invocation) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let dropped: String = inv
+        .modifiers
+        .iter()
+        .copied()
+        .filter(|letter| *letter != 'f')
+        .collect();
+    if !dropped.is_empty() {
+        let mut spelling = String::from(inv.family.as_str());
+        if inv.sync_first {
+            spelling.push('y');
+        }
+        if let Some(action) = inv.action {
+            spelling.push(action);
+        }
+        spelling.push_str(&dropped);
+        out.push(spelling);
+    }
+    for token in NOT_MIRRORED {
+        if !token.starts_with("--") {
+            // Cluster spellings are covered by the argv spelling above.
+            continue;
+        }
+        let carried = if *token == "--machine" {
+            inv.output_mode.is_some()
+                || inv.deferred_flags.iter().any(|flag| flag == "--machine")
+        } else {
+            inv.deferred_flags.iter().any(|flag| flag == *token)
+        };
+        if carried && !out.iter().any(|item| item == *token) {
+            out.push((*token).to_string());
+        }
+    }
+    out
+}
 
 /// The run-record package id for a decision-row subject (contract §E.2 —
 /// subjects are pkgbase strings, `-` for rows with no subject). A subject
@@ -224,13 +299,16 @@ fn mirror_pacman_args(inv: &Invocation) -> String {
     }
 }
 
-/// Build the one run record for a `--dry-run` plan (contract §H).
+/// Build the one run record for a `--dry-run` plan (contract §H). `rc` is
+/// the run's exit code (§H.2): a refusing plan reports its refusal in the
+/// record, never a success.
 pub fn build_plan_record(
     inv: &Invocation,
     selection: &Selection,
     targets: &[String],
     ranges: &[String],
     intensity: &str,
+    rc: i32,
 ) -> RunRecord {
     let selection_source = selection_source(targets, inv.leaf, ranges);
 
@@ -259,17 +337,12 @@ pub fn build_plan_record(
         })
         .collect();
 
-    // Restated invocation: family + action + mirrored modifiers (a prune
-    // strength is never mirrored), the §H.2 flag values spelled explicitly,
+    // Restated invocation: family + action + the mirrored cluster letters
+    // (`f` mirrors; a prune strength never does — and the sync-first `y` of
+    // `-Syu` mirrors too, H9), the §H.2 flag values spelled explicitly,
     // then the remaining package ids (a dry run leaves everything remaining).
     let mut command = String::from("gsa ");
-    command.push_str(inv.family.as_str());
-    if let Some(action) = inv.action {
-        command.push(action);
-    }
-    if inv.modifiers.contains(&'f') {
-        command.push('f');
-    }
+    command.push_str(&mirror_verb(inv));
     command.push_str(" --dry-run");
     // `--leaf` is mirrored ONLY in its true form (contract §H.2's flag-rule
     // table): a leaf=no run mirrors nothing — the absence of the flag IS the
@@ -296,7 +369,7 @@ pub fn build_plan_record(
         core_jobs: None,
         intensity: intensity.to_string(),
         outcome: "planned".to_string(),
-        rc: 0,
+        rc,
         dry_run: true,
         prefetch_warnings: None,
         plan,
@@ -304,7 +377,7 @@ pub fn build_plan_record(
         continuation: Continuation {
             command,
             remaining: selection.listed.iter().map(|(_, id)| id.clone()).collect(),
-            not_mirrored: NOT_MIRRORED.iter().map(|s| s.to_string()).collect(),
+            not_mirrored: not_mirrored_of(inv),
             env_required: env_required(inv),
         },
     }
@@ -330,20 +403,15 @@ pub fn build_run_record(
 ) -> RunRecord {
     let selection_source = selection_source(targets, inv.leaf, ranges);
 
-    // Restated invocation (contract §H.2): family + action + mirrored
-    // cluster letters (`f` mirrors, the prune strength `c` never does), the
-    // mirrored flags (`--leaf`, `--fail-fast`, `--state-dir`, `--config`,
-    // `--no-register-ignorepkg`, the resolved `--lanes`/`--jobs`/
-    // `--intensity` values), then the remaining package ids and the
-    // `-- <pacman args…>` an install run forwards to its transactions.
+    // Restated invocation (contract §H.2): the mirrored cluster spelling
+    // (`f` mirrors, the prune strength `c` never does, and the sync-first
+    // `y` of `-Syu` mirrors — H9), the mirrored flags (`--leaf`,
+    // `--fail-fast`, `--state-dir`, `--config`, `--no-register-ignorepkg`,
+    // the resolved `--lanes`/`--jobs`/`--intensity` values), then the
+    // remaining package ids and the `-- <pacman args…>` an install run
+    // forwards to its transactions.
     let mut command = String::from("gsa ");
-    command.push_str(inv.family.as_str());
-    if let Some(action) = inv.action {
-        command.push(action);
-    }
-    if inv.modifiers.contains(&'f') {
-        command.push('f');
-    }
+    command.push_str(&mirror_verb(inv));
     if inv.leaf {
         command.push_str(" --leaf");
     }
@@ -379,7 +447,7 @@ pub fn build_run_record(
         continuation: Continuation {
             command,
             remaining,
-            not_mirrored: NOT_MIRRORED.iter().map(|s| s.to_string()).collect(),
+            not_mirrored: not_mirrored_of(inv),
             env_required: env_required(inv),
         },
     }
@@ -404,7 +472,7 @@ pub fn build_fetch_record(
 ) -> RunRecord {
     let selection_source = selection_source(targets, inv.leaf, ranges);
 
-    let mut command = String::from("gsa -Sw");
+    let mut command = format!("gsa {}", mirror_verb(inv));
     if inv.dry_run {
         // §H.2: `--dry-run` is mirrored — a fetch run's continuation for a
         // dry run reissues the fetch plan, never a surprise real fetch.
@@ -447,7 +515,7 @@ pub fn build_fetch_record(
         continuation: Continuation {
             command,
             remaining,
-            not_mirrored: NOT_MIRRORED.iter().map(|s| s.to_string()).collect(),
+            not_mirrored: not_mirrored_of(inv),
             env_required: env_required(inv),
         },
     }
@@ -587,9 +655,11 @@ pub fn build_txn_record(
     let selection_source = selection_source(&source_targets, true, &[]);
 
     let mut command = String::from("gsa ");
-    command.push_str(inv.family.as_str());
-    if inv.modifiers.contains(&'f') {
-        command.push('f');
+    command.push_str(&mirror_verb(inv));
+    // `--dry-run` mirrors (§H.2) — a dry txn run's continuation reissues
+    // the decision plan, never a surprise real transaction.
+    if inv.dry_run {
+        command.push_str(" --dry-run");
     }
     command.push_str(&mirror_flags(inv, None));
 
@@ -622,7 +692,7 @@ pub fn build_txn_record(
         continuation: Continuation {
             command,
             remaining,
-            not_mirrored: NOT_MIRRORED.iter().map(|s| s.to_string()).collect(),
+            not_mirrored: not_mirrored_of(inv),
             env_required: env_required(inv),
         },
     }
@@ -690,6 +760,7 @@ mod tests {
             family: Family::S,
             action: None,
             modifiers: vec!['c'],
+            sync_first: false,
             dry_run: true,
             leaf: false,
             targets: vec!["@git".to_string()],
@@ -714,15 +785,17 @@ mod tests {
             allow_broken_rustc: false,
             standalone_root: None,
         };
-        let record = build_plan_record(&inv, &selection(2), &["@git".to_string()], &[], "xhigh");
+        let record = build_plan_record(&inv, &selection(2), &["@git".to_string()], &[], "xhigh", 3);
         assert_eq!(record.outcome, "planned");
-        assert_eq!(record.rc, 0);
+        assert_eq!(record.rc, 3, "the record's rc is the run's exit code (§H.2)");
         assert_eq!(record.plan.len(), 2);
         assert_eq!(record.plan[0].action, PlanAction::BuildInstall);
         // The prune strength 'c' is never mirrored; --dry-run is; --leaf only
         // in its true form (G4 — absence IS the negation).
         assert_eq!(record.continuation.command, "gsa -S --dry-run pkg1 pkg2");
-        assert!(record.continuation.not_mirrored.iter().any(|f| f == "-Mcc"));
+        // H3: the line is argv-scoped — this run's own `c` prune strength is
+        // the only spelling the composed command drops.
+        assert_eq!(record.continuation.not_mirrored, vec!["-Sc".to_string()]);
         let block = record.render_machine();
         assert!(block.contains("selection-source: sets=@git leaf=no range=-"));
         assert!(block.contains("pkg1 never-started - - dry-run"));
@@ -736,6 +809,7 @@ mod tests {
             family: Family::B,
             action: None,
             modifiers: Vec::new(),
+            sync_first: false,
             dry_run: true,
             leaf: true,
             targets: vec!["mesa-git".to_string()],
@@ -766,6 +840,7 @@ mod tests {
             &["mesa-git".to_string()],
             &["1..1".to_string()],
             "high",
+            0,
         );
         assert_eq!(record.plan[0].action, PlanAction::Build);
         assert_eq!(record.continuation.command, "gsa -B --dry-run --leaf pkg1");
@@ -779,6 +854,7 @@ mod tests {
             family: Family::B,
             action: None,
             modifiers: Vec::new(),
+            sync_first: false,
             dry_run: false,
             leaf: false,
             targets: vec!["@git".to_string()],
@@ -856,10 +932,17 @@ mod tests {
             record.continuation.command,
             "gsa -B --fail-fast --state-dir /scratch/state pkg1 pkg2"
         );
-        // Hidden seams and one-shot actions are never mirrored (§H.2).
+        // H3 (argv-scoped): a run whose argv carried no hidden seam lists
+        // none — a seam appears in NEITHER the command NOR the line.
         for seam in ["--lane-job", "--stale-lock-check", "--install-decide"] {
-            assert!(record.continuation.not_mirrored.iter().any(|f| f == seam));
+            assert!(!record.continuation.not_mirrored.iter().any(|f| f == seam));
+            assert!(!record.continuation.command.split_whitespace().any(|t| t == seam));
         }
+        assert!(
+            record.continuation.not_mirrored.is_empty(),
+            "{:?}",
+            record.continuation.not_mirrored
+        );
         // --state-dir is mirrored as an explicit flag and the ambient env
         // is warned about too (§H.2).
         assert!(record
@@ -898,6 +981,7 @@ mod tests {
             family,
             action: None,
             modifiers: Vec::new(),
+            sync_first: false,
             dry_run: false,
             leaf: false,
             targets: Vec::new(),
@@ -998,12 +1082,14 @@ mod tests {
         assert!(command.contains("--config /etc/pacman.conf"), "{command}");
         assert!(command.contains("--no-register-ignorepkg"), "{command}");
         assert!(command.contains(" -- --overwrite *"), "{command}");
-        // Hidden seams are classified not-mirrored (§H.2).
-        assert!(record
-            .continuation
-            .not_mirrored
-            .iter()
-            .any(|f| f == "--register-ignorepkg"));
+        // The hidden seam this run actually carried is listed (H3 is
+        // argv-scoped), and its exact token never lands in the command —
+        // the mirrored `--no-register-ignorepkg` is a different token.
+        assert_eq!(
+            record.continuation.not_mirrored,
+            vec!["--register-ignorepkg".to_string()]
+        );
+        assert!(!command.split_whitespace().any(|t| t == "--register-ignorepkg"));
     }
 
     #[test]
@@ -1079,7 +1165,7 @@ mod tests {
         // continuation mirrors `--leaf` or nothing (absence IS the negation).
         let mut inv = inv_for(Family::S);
         inv.leaf = true;
-        let record = build_plan_record(&inv, &selection(1), &["pkg1".to_string()], &[], "xhigh");
+        let record = build_plan_record(&inv, &selection(1), &["pkg1".to_string()], &[], "xhigh", 0);
         assert!(
             record
                 .continuation
@@ -1091,7 +1177,7 @@ mod tests {
         );
 
         inv.leaf = false;
-        let record = build_plan_record(&inv, &selection(1), &["pkg1".to_string()], &[], "xhigh");
+        let record = build_plan_record(&inv, &selection(1), &["pkg1".to_string()], &[], "xhigh", 0);
         assert!(
             !record.continuation.command.contains("--leaf"),
             "{}",
@@ -1123,7 +1209,7 @@ mod tests {
         assert_eq!(record.selection_source, "sets=all leaf=yes range=-");
         assert_eq!(record.rc, 0);
         // `-Ua` is one-shot (never mirrored); `f` mirrors.
-        assert!(record.continuation.not_mirrored.iter().any(|f| f == "-Ua"));
+        assert_eq!(record.continuation.not_mirrored, vec!["-Ua".to_string()]);
         assert!(
             record.continuation.command.starts_with("gsa -Uf"),
             "{}",
@@ -1168,11 +1254,80 @@ mod tests {
         // A build continuation's `command:` carries no -M token at all.
         let mut inv = inv_for(Family::B);
         inv.targets = vec!["pkg1".to_string()];
-        let record = build_plan_record(&inv, &selection(1), &["pkg1".to_string()], &[], "xhigh");
+        let record = build_plan_record(&inv, &selection(1), &["pkg1".to_string()], &[], "xhigh", 0);
         let command = record.continuation.command.clone();
         assert!(
             !command.split_whitespace().any(|tok| tok.starts_with("-M")),
             "{command}"
         );
+    }
+
+    #[test]
+    fn not_mirrored_is_argv_scoped_never_a_roster() {
+        // H3 (2026-10-28): the line lists ONLY the run's own argv spellings
+        // the composed command does not restate — a run that mirrors
+        // everything it carried lists nothing at all.
+        let mut inv = inv_for(Family::B);
+        assert!(not_mirrored_of(&inv).is_empty());
+        // The un-mirrored cluster spelling: `c` never mirrors, `f` does.
+        inv.modifiers = vec!['c', 'f'];
+        assert_eq!(not_mirrored_of(&inv), vec!["-Bc".to_string()]);
+        // A one-shot action spelling the command drops whole (`-Ua`).
+        let mut txn = inv_for(Family::U);
+        txn.modifiers = vec!['a'];
+        assert_eq!(not_mirrored_of(&txn), vec!["-Ua".to_string()]);
+        // Parse-deferred globals the run carried (mirrored flags never list).
+        let mut deferred = inv_for(Family::B);
+        deferred.deferred_flags = vec!["--quiet".to_string(), "--skip".to_string()];
+        assert_eq!(not_mirrored_of(&deferred), vec!["--quiet".to_string()]);
+        // The output-mode override (a resume picks its own).
+        let mut machine = inv_for(Family::B);
+        machine.output_mode = Some(crate::output::Mode::Machine);
+        assert_eq!(not_mirrored_of(&machine), vec!["--machine".to_string()]);
+        // Order: the run's own spelling first, then flag-rule-table order.
+        let mut mixed = inv_for(Family::B);
+        mixed.modifiers = vec!['c'];
+        mixed.deferred_flags = vec!["--verbose".to_string(), "--quiet".to_string()];
+        assert_eq!(
+            not_mirrored_of(&mixed),
+            vec![
+                "-Bc".to_string(),
+                "--quiet".to_string(),
+                "--verbose".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn sync_first_mirrors_the_y_so_the_record_restates_the_sync() {
+        // H9 honesty: a `-Syu` run's continuation is `gsa -Syu …`, never a
+        // silent downgrade to `-Su` (which updates with NO sync pass).
+        let mut inv = inv_for(Family::S);
+        inv.action = Some('u');
+        inv.sync_first = true;
+        inv.targets = vec!["pkg1".to_string()];
+        let (plan, order) = plan_and_order(&selection(1), PlanAction::Build);
+        let outcomes = vec![OutcomeRow {
+            pkg: RecipeId::new("pkg1").unwrap(),
+            status: RowStatus::Succeeded,
+            rc: Some(0),
+            dur: Some(1),
+            reason: "ok".to_string(),
+        }];
+        let run_outcome = gsa_model::RunOutcome::compute(&outcomes, false, false, false);
+        let record = build_run_record(
+            &inv,
+            &["pkg1".to_string()],
+            &[],
+            None,
+            plan,
+            order,
+            outcomes,
+            &run_outcome,
+            None,
+        );
+        assert_eq!(record.continuation.command, "gsa -Syu");
+        // The full spelling is restated, so nothing is withheld for it.
+        assert!(record.continuation.not_mirrored.is_empty());
     }
 }

@@ -25,6 +25,10 @@ pub struct TxnRequest {
     /// Trailing `-- <pacman args…>`, forwarded verbatim before the archives
     /// (today's `-ia --overwrite '*'` idiom).
     pub pacman_args: Vec<String>,
+    /// In-run repair targets (rule 25(d)): `(consumer, provider)` pairs
+    /// whose forced-rebuild markers the transaction stages BEFORE pacman
+    /// runs (§E.3 gap-G1) — fail-closed, nothing mutated on failure.
+    pub repairs: Vec<(String, String)>,
 }
 
 /// The outcome vocabulary of one transaction attempt.
@@ -150,6 +154,12 @@ pub fn sudo_credential_lost(rc: i32, stdout: &str, stderr: &str) -> bool {
 /// state-root mutex. `-S` runs call this once per built package (an install
 /// transaction per package, install-before-dependents); `-U` runs once.
 pub fn execute_txn(req: &TxnRequest) -> TxnOutcome {
+    // Rule 25(d): the consumers' forced-rebuild markers stage BEFORE the
+    // transaction lands (fish `repair_marker_write`) — fail-closed, a
+    // marker that cannot be recorded aborts with nothing mutated.
+    if let Err(message) = crate::stage_repair_markers(&req.state_dir, &req.repairs) {
+        return TxnOutcome::Failed { rc: -1, message };
+    }
     let mutex_path = gsa_build::shim::mutex_path(&req.state_dir);
     let _guard = match acquire_mutex(&mutex_path, Duration::from_secs(600)) {
         Some(file) => file,
@@ -235,6 +245,7 @@ mod tests {
             conf: Some(PathBuf::from("/etc/pacman.conf")),
             archives: vec![PathBuf::from("/a.pkg.tar.zst")],
             pacman_args: vec!["--overwrite".to_string(), "*".to_string()],
+            repairs: Vec::new(),
         };
         let txn = sudo_pacman_command(&req);
         assert!(

@@ -226,7 +226,13 @@ pub fn run(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
         return code;
     }
 
-    let state_dir = gsa_state::resolve_state_root(inv.state_dir.as_deref());
+    let state_dir = match gsa_state::resolve_state_root(inv.state_dir.as_deref()) {
+        Ok(dir) => dir,
+        Err(message) => {
+            let _ = writeln!(err, "gsa: {message}");
+            return 2;
+        }
+    };
     let state = match StateRoot::open(&state_dir) {
         Ok(state) => state,
         Err(error) => {
@@ -245,6 +251,7 @@ pub fn run(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
         project: &project,
         graph: &graph,
         db: &db,
+        user_sets: select::load_user_sets(inv),
     };
 
     let mut rows: Vec<Row> = Vec::new();

@@ -16,6 +16,7 @@ gsa-qa = { workspace = true }
 gsa-build = { workspace = true }
 gsa-sched = { workspace = true }
 gsa-fetch = { workspace = true }
+gsa-abi = { workspace = true }
 
 [dev-dependencies]
 tar = { workspace = true }

@@ -191,6 +191,57 @@ pub const CONFIRMATION_REQUIRED: &str =
 /// over a state root"): hold the returned lock for the verb's duration. A
 /// busy lock is `run-in-flight` — an archive a run is currently using is
 /// never pruned (§J.4's guard seen from the maintain side).
+///
+/// Build-user fallback (finding H10): `-Mm` must run as the build user
+/// (§B.7), so it cannot create the root-owned state root's `run.lock`
+/// (EACCES) — and the root supervisor that could is refused by design. When
+/// — and ONLY when — the state lock fails with EACCES/EPERM (lock-busy
+/// contention never falls back), the gate holds a build-user-owned lock in
+/// the build cache root instead: [`gsa_model::config::build_root`]
+/// (`GSA_BUILD_DIR` env > config `build_dir` > the build user's
+/// `~/.cache/gsa`) is the build-user working-data root the engine already
+/// resolves for build state, so the fallback lands in build-user-owned
+/// space under every layer. Honest limitation: the fallback serializes
+/// build-user maintain runs among themselves but does NOT mutually exclude
+/// root engine runs over the same state root — a permission split cannot
+/// provide one mutex.
 pub fn hold_run_lock(state: &Path) -> Result<gsa_sched::lock::RunLock, String> {
-    gsa_sched::lock::acquire_run_lock(state).map_err(|e| format!("run-in-flight: {e}"))
+    match gsa_sched::lock::try_acquire_run_lock(state) {
+        Ok(lock) => Ok(lock),
+        Err(gsa_sched::lock::RunLockError::Permission(_)) => {
+            let cfg = gsa_model::config::load().unwrap_or_default();
+            let fallback = gsa_model::config::build_root(&cfg)
+                .map_err(|e| format!("cannot resolve the build-user fallback run lock: {e}"))?
+                .join("run.lock");
+            hold_fallback_lock(&fallback)
+        }
+        Err(e) => Err(format!("run-in-flight: {e}")),
+    }
+}
+
+/// [`hold_run_lock`] with the fallback path supplied by the caller — the
+/// test seam; production resolves the build-cache root itself. Same gate
+/// policy: the fallback triggers on a permission failure of the state lock
+/// only; contention is always `run-in-flight`.
+pub fn hold_run_lock_with_fallback(
+    state: &Path,
+    fallback: &Path,
+) -> Result<gsa_sched::lock::RunLock, String> {
+    match gsa_sched::lock::try_acquire_run_lock(state) {
+        Ok(lock) => Ok(lock),
+        Err(gsa_sched::lock::RunLockError::Permission(_)) => hold_fallback_lock(fallback),
+        Err(e) => Err(format!("run-in-flight: {e}")),
+    }
+}
+
+/// The fallback arm: a busy fallback lock is `run-in-flight` exactly like a
+/// busy state lock; any other fallback failure surfaces its own message
+/// (never a false in-flight claim).
+fn hold_fallback_lock(fallback: &Path) -> Result<gsa_sched::lock::RunLock, String> {
+    gsa_sched::lock::acquire_run_lock_file(fallback, "same build-user cache root").map_err(|e| {
+        match e {
+            gsa_sched::lock::RunLockError::Busy(m) => format!("run-in-flight: {m}"),
+            other => format!("cannot hold the build-user fallback run lock: {other}"),
+        }
+    })
 }

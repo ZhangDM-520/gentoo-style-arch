@@ -149,11 +149,33 @@ pub fn stock_pinners(view: &InstalledView, affected: &[String]) -> Vec<(String, 
     out
 }
 
+/// The ABI gate's outcome for one drifted candidate (rule 25(d); fish
+/// `abi_provide_refusals`): the refusal rows plus the in-run repair targets.
+#[derive(Clone, Debug, Default)]
+pub struct AbiGate {
+    /// The refusal rows — EMPTY when nothing is stranded: the provide move
+    /// lands with every exposure covered (the abi-soname rows are refusal
+    /// rows and never ride a clean plan).
+    pub rows: Vec<DecisionRow>,
+    /// Consumers the run itself rebuilds and reinstalls later
+    /// (`DecisionContext.later_installs`). The provider's plan row carries
+    /// `repair <consumer> <provider-id>` detail in its open REASON and the
+    /// provider's install stages the forced-rebuild marker (§E.3 gap-G1
+    /// amendment) — repairs ride the plan even alongside refusals.
+    pub repairs: Vec<String>,
+}
+
 /// The ABI gate's rows for one drifted candidate (the shapes the fixtures
-/// pin byte-for-byte): `abi-soname` per drifted provide, plus
-/// `abi-consumer` per installed LINKED consumer and `abi-stock-pinner` per
-/// installed out-of-tree pinner that this transaction and in-run repair
-/// (rule 25(d), `later_installs`) do not cover.
+/// pin): `abi-soname` per drifted provide plus `abi-consumer` per uncovered
+/// linked consumer and `abi-stock-pinner` per uncovered out-of-tree pinner —
+/// and ONLY while something is uncovered ("the refusal is conditional"):
+/// coverage by the transaction (`tx_names`) or in-run repair
+/// (`later_installs`, rule 25(d)) plans the move clean.
+///
+/// Class split (fish's split rule): a pinner whose name is a workspace
+/// recipe OUTPUT stays with the consumer logic — out-of-tree pinners alone
+/// are `abi-stock-pinner`, and their coverage is transaction membership
+/// ONLY (in-run repair structurally cannot rebuild an out-of-tree package).
 pub fn abi_refusal_rows(
     subject: &str,
     archive: &str,
@@ -161,45 +183,67 @@ pub fn abi_refusal_rows(
     view: &InstalledView,
     tx_names: &[String],
     later_installs: &[String],
-) -> Vec<DecisionRow> {
-    let mut rows: Vec<DecisionRow> = Vec::new();
-    for d in drift {
-        rows.push(DecisionRow {
-            subject: subject.to_string(),
-            decision: Decision::Refuse,
-            reason: format!(
-                "abi-soname {archive} {} {} {} {}",
-                d.pkgname,
-                d.name,
-                d.inst_ver,
-                d.built_ver.clone().unwrap_or_else(|| "-".to_string())
-            ),
-        });
-    }
+    workspace: &std::collections::BTreeSet<String>,
+) -> AbiGate {
     let affected: Vec<String> = drift.iter().map(|d| d.name.clone()).collect();
-    let covered =
-        |name: &str| tx_names.iter().any(|t| t == name) || later_installs.iter().any(|t| t == name);
+    let in_tx = |name: &str| tx_names.iter().any(|t| t == name);
+    let in_run = |name: &str| later_installs.iter().any(|t| t == name);
+    // Consumer class (link truth): covered by the transaction, or repaired
+    // in-run; anything else strands the move.
+    let mut uncovered: Vec<String> = Vec::new();
+    let mut repairs: Vec<String> = Vec::new();
     for consumer in linked_consumers(view, &affected) {
-        if covered(&consumer) {
+        if in_tx(&consumer) {
             continue;
         }
-        rows.push(DecisionRow {
-            subject: subject.to_string(),
-            decision: Decision::Refuse,
-            reason: format!("abi-consumer {archive} {consumer}"),
-        });
-    }
-    for (pinner, dep) in stock_pinners(view, &affected) {
-        if covered(&pinner) {
+        if in_run(&consumer) {
+            repairs.push(consumer);
             continue;
         }
-        rows.push(DecisionRow {
-            subject: subject.to_string(),
-            decision: Decision::Refuse,
-            reason: format!("abi-stock-pinner {archive} {pinner} {dep}"),
-        });
+        uncovered.push(consumer);
     }
-    rows
+    // Stock-pinner class: out-of-tree declared pinners only, uncovered
+    // unless they ride THIS transaction. A name already in the consumer
+    // class is never double-rowed.
+    let pinners: Vec<(String, String)> = stock_pinners(view, &affected)
+        .into_iter()
+        .filter(|(pinner, _)| !workspace.contains(pinner))
+        .filter(|(pinner, _)| !in_tx(pinner))
+        .filter(|(pinner, _)| !uncovered.iter().any(|c| c == pinner))
+        .filter(|(pinner, _)| !repairs.iter().any(|c| c == pinner))
+        .collect();
+
+    let mut rows: Vec<DecisionRow> = Vec::new();
+    if !uncovered.is_empty() || !pinners.is_empty() {
+        for d in drift {
+            rows.push(DecisionRow {
+                subject: subject.to_string(),
+                decision: Decision::Refuse,
+                reason: format!(
+                    "abi-soname {archive} {} {} {} {}",
+                    d.pkgname,
+                    d.name,
+                    d.inst_ver,
+                    d.built_ver.clone().unwrap_or_else(|| "-".to_string())
+                ),
+            });
+        }
+        for consumer in &uncovered {
+            rows.push(DecisionRow {
+                subject: subject.to_string(),
+                decision: Decision::Refuse,
+                reason: format!("abi-consumer {archive} {consumer}"),
+            });
+        }
+        for (pinner, dep) in &pinners {
+            rows.push(DecisionRow {
+                subject: subject.to_string(),
+                decision: Decision::Refuse,
+                reason: format!("abi-stock-pinner {archive} {pinner} {dep}"),
+            });
+        }
+    }
+    AbiGate { rows, repairs }
 }
 
 /// One under-coverage refusal row (§E.3 `abi-consumer-uncovered`): the
@@ -251,7 +295,10 @@ mod tests {
     }
 
     #[test]
-    fn rows_keep_the_frozen_shapes() {
+    fn zero_exposure_plans_clean() {
+        // The refusal is conditional: a drift with nothing stranded (the
+        // consumer owns no probeable ELF, no declared pinner) plans clean —
+        // the abi-soname row is a refusal row and never rides a clean plan.
         let view = InstalledView::new([pkg("consumer-app", &[], &[], &["usr/lib/libconsumer.so"])]);
         let drift = vec![Drift {
             pkgname: "abipkg".to_string(),
@@ -259,26 +306,146 @@ mod tests {
             inst_ver: "1-64".to_string(),
             built_ver: Some("2-64".to_string()),
         }];
-        let rows = abi_refusal_rows(
+        let gate = abi_refusal_rows(
             "abipkg",
             "/a/abipkg.pkg.tar.zst",
             &drift,
             &view,
             &["abipkg".to_string()],
             &[],
+            &Default::default(),
         );
-        let rendered: Vec<String> = rows.iter().map(|r| r.render()).collect();
+        assert!(gate.rows.is_empty(), "nothing stranded plans clean");
+        assert!(gate.repairs.is_empty());
+    }
+
+    #[test]
+    fn rows_keep_the_frozen_shapes() {
+        // An out-of-tree declared pinner strands the move: abi-soname per
+        // drift plus abi-stock-pinner with the exact depstring.
+        let view = InstalledView::new([pkg(
+            "stock-pin",
+            &[],
+            &["libfoo.so=1-64"],
+            &["usr/lib/libstock.so"],
+        )]);
+        let drift = vec![Drift {
+            pkgname: "abipkg".to_string(),
+            name: "libfoo.so".to_string(),
+            inst_ver: "1-64".to_string(),
+            built_ver: Some("2-64".to_string()),
+        }];
+        let gate = abi_refusal_rows(
+            "abipkg",
+            "/a/abipkg.pkg.tar.zst",
+            &drift,
+            &view,
+            &["abipkg".to_string()],
+            &[],
+            &Default::default(),
+        );
+        let rendered: Vec<String> = gate.rows.iter().map(|r| r.render()).collect();
         assert!(rendered.contains(
             &"abipkg refuse abi-soname /a/abipkg.pkg.tar.zst abipkg libfoo.so 1-64 2-64"
                 .to_string()
         ));
-        // The consumer owns no probed ELF here (missing file skipped), so
-        // only the drift row exists — and the uncovered row shape is fixed.
-        assert_eq!(rendered.len(), 1);
+        assert!(rendered.contains(
+            &"abipkg refuse abi-stock-pinner /a/abipkg.pkg.tar.zst stock-pin libfoo.so=1-64"
+                .to_string()
+        ));
+        assert_eq!(rendered.len(), 2);
+        assert!(gate.repairs.is_empty());
+        // The uncovered row shape is fixed.
         assert_eq!(
             abi_uncovered_row("p", "c").render(),
             "c refuse abi-consumer-uncovered p"
         );
+    }
+
+    #[test]
+    fn coverage_plans_clean_and_schedules_repairs() {
+        let dir = std::env::temp_dir().join(format!("gsa-abi-cover-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("usr/lib")).unwrap();
+        let elf = crate::test_support::elf64(Some("libconsumer.so.1"), &["libfoo.so.1"]);
+        std::fs::write(dir.join("usr/lib/libconsumer.so.1"), &elf).unwrap();
+        let view = InstalledView::with_root(
+            dir.clone(),
+            [pkg("consumer-app", &[], &[], &["usr/lib/libconsumer.so.1"])],
+        );
+        let drift = vec![Drift {
+            pkgname: "abipkg".to_string(),
+            name: "libfoo.so".to_string(),
+            inst_ver: "1-64".to_string(),
+            built_ver: Some("2-64".to_string()),
+        }];
+        // Uncovered linked consumer: the move refuses (abi-soname rides the
+        // refusal plan alongside the abi-consumer row).
+        let gate = abi_refusal_rows(
+            "abipkg",
+            "/a/abipkg.pkg.tar.zst",
+            &drift,
+            &view,
+            &["abipkg".to_string()],
+            &[],
+            &Default::default(),
+        );
+        let rendered: Vec<String> = gate.rows.iter().map(|r| r.render()).collect();
+        assert_eq!(rendered.len(), 2, "abi-soname + abi-consumer: {rendered:?}");
+        assert!(rendered.contains(
+            &"abipkg refuse abi-consumer /a/abipkg.pkg.tar.zst consumer-app".to_string()
+        ));
+        assert!(gate.repairs.is_empty());
+        // Rule 25(d): the run rebuilds the consumer later — the move lands
+        // clean and the repair target rides the plan.
+        let gate = abi_refusal_rows(
+            "abipkg",
+            "/a/abipkg.pkg.tar.zst",
+            &drift,
+            &view,
+            &["abipkg".to_string()],
+            &["consumer-app".to_string()],
+            &Default::default(),
+        );
+        assert!(gate.rows.is_empty(), "covered plans clean");
+        assert_eq!(gate.repairs, vec!["consumer-app".to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn workspace_pinners_stay_with_the_consumer_class() {
+        // A workspace recipe output never rows as abi-stock-pinner (fish's
+        // split rule) — and a workspace pinner with no link truth is not a
+        // strand at all (its pin is pacman's transaction-time backstop).
+        let view = InstalledView::new([pkg(
+            "app-git",
+            &[],
+            &["libfoo.so=1-64"],
+            &["usr/lib/libapp.so"],
+        )]);
+        let drift = vec![Drift {
+            pkgname: "abipkg".to_string(),
+            name: "libfoo.so".to_string(),
+            inst_ver: "1-64".to_string(),
+            built_ver: Some("2-64".to_string()),
+        }];
+        let mut workspace = std::collections::BTreeSet::new();
+        workspace.insert("app-git".to_string());
+        let gate = abi_refusal_rows(
+            "abipkg",
+            "/a/abipkg.pkg.tar.zst",
+            &drift,
+            &view,
+            &["abipkg".to_string()],
+            &[],
+            &workspace,
+        );
+        let rendered: Vec<String> = gate.rows.iter().map(|r| r.render()).collect();
+        assert!(
+            !rendered.iter().any(|r| r.contains("abi-stock-pinner")),
+            "workspace outputs are never stock-pinner rows: {rendered:?}"
+        );
+        assert!(gate.rows.is_empty(), "nothing stranded plans clean");
     }
 
     #[test]

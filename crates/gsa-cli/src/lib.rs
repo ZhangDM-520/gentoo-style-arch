@@ -47,12 +47,13 @@ pub(crate) const RC_REFUSED: i32 = 3;
 enum Command {
     Topology,
     List,
-    RecipeInfo,
-    UniverseSearch,
-    Groups,
     QueryList,
     QueryInfo,
     QuerySearch,
+    QueryGroups,
+    QueryFiles,
+    QueryOwner,
+    QueryUpdates,
     QueryBinpkg,
     QueryProbe,
     QueryAbi,
@@ -99,10 +100,10 @@ pub fn help_text() -> String {
 ///    into place on sight (gsa_state::recipes::ensure_store).
 /// `fetch` enables that on-demand store fetch; read paths pass `false`.
 fn find_root() -> Option<PathBuf> {
-    resolve_root(false).ok()
+    resolve_root(false, None).ok()
 }
 
-pub(crate) fn resolve_root(fetch: bool) -> Result<PathBuf, String> {
+pub(crate) fn resolve_root(fetch: bool, state_flag: Option<&str>) -> Result<PathBuf, String> {
     let cfg = gsa_model::config::load()?;
     if let Some(project) = &cfg.project {
         return Ok(project.clone());
@@ -119,7 +120,7 @@ pub(crate) fn resolve_root(fetch: bool) -> Result<PathBuf, String> {
         }
         return Ok(root);
     }
-    let state = gsa_model::config::resolve_state_dir(None)?;
+    let state = gsa_model::config::resolve_state_dir(state_flag)?;
     let (store, note) = gsa_state::recipes::ensure_store(&state)?;
     if let Some(note) = note {
         eprintln!("gsa: note: {note}");
@@ -162,26 +163,35 @@ fn cwd_workspace() -> Option<PathBuf> {
 pub(crate) fn resolve_workspace(inv: &Invocation) -> Result<PathBuf, String> {
     match &inv.standalone_root {
         Some(root) => Ok(root.clone()),
-        None => resolve_root(true),
+        None => resolve_root(true, inv.state_dir.as_deref()),
     }
 }
 
 fn classify(inv: &Invocation) -> Disposition {
     // The build-run modifiers (§B.8) are real on the runs that build or
     // install and still deferred on every other spelling; everything else
-    // deferred stays deferred everywhere.
-    let is_build_run = inv.family == Family::B && inv.action.is_none() && !inv.dry_run;
-    let is_install_run = inv.family == Family::S && inv.action.is_none() && !inv.dry_run;
+    // deferred stays deferred everywhere. A `--dry-run` plan accepts the
+    // roster of the run it PLANS (I4, 2026-10-28: §B.8's "combinable with
+    // the families that can act" — the plan reads those flags and its
+    // `command:` continuation must be replayable).
+    let is_build_run = inv.family == Family::B && inv.action.is_none();
+    let is_install_run = inv.family == Family::S && inv.action.is_none();
     let is_upgrade_run = inv.family == Family::U;
-    // `-Su` (§B.4): `-Sy`, then build+install the stale set — a build run
-    // plus the five §B.8 sync/freshness/toolchain modifiers.
+    // `-Su`/`-Syu` (§B.4, H9): build+install the stale set — `-Syu` syncs
+    // first, `-Su` never does. Both take a build run's five §B.8
+    // sync/freshness/toolchain modifiers.
     let is_update_run = inv.family == Family::S && inv.action == Some('u');
-    // `-Sy` (§B.4): the version-sync pass only; it takes no build modifiers.
+    // `-Sy` (§B.4): the version-sync pass only; it takes no build modifiers
+    // beyond the state root its recipe work resolves through (§J.3).
     let is_sync_pass = inv.family == Family::S && inv.action == Some('y');
-    // The side-car queries (§B.3 `-Qb`/`-Qp`) read the state root, so they
-    // take `--state-dir` like every other state-root surface (§J.3).
-    let is_side_car_query = inv.family == Family::Q
-        && matches!(inv.action, Some('b') | Some('p') | Some('a') | Some('r'));
+    // `-Sw` (§B.4): fetch-only; its run record resolves the state root
+    // (§J.4 registration context) — the same `--state-dir` surface.
+    let is_fetch_run = inv.family == Family::S && inv.action == Some('w');
+    // The queries that read the state root (`-Q`/`-Qi`'s side-car columns,
+    // `-Qb`/`-Qp`/`-Qa`/`-Qr`) take `--state-dir` like every other
+    // state-root surface (§J.3).
+    let is_state_query = inv.family == Family::Q
+        && matches!(inv.action, None | Some('i') | Some('b') | Some('p') | Some('a') | Some('r'));
     let is_maint = inv.family == Family::M;
     // A `-M` cluster's accepted flags are per-verb (§B.7's sub-flags); a
     // cluster that spells no verb yet reports its own usage error from
@@ -198,9 +208,12 @@ fn classify(inv: &Invocation) -> Disposition {
         flags
     } else if is_upgrade_run {
         install::REAL_UPGRADE_FLAGS.to_vec()
-    } else if is_sync_pass {
-        Vec::new()
-    } else if is_side_car_query {
+    } else if is_sync_pass || is_fetch_run {
+        // I4 (2026-10-28): the §B.8 roster is combinable with the families
+        // that act — a sync/fetch run reads the state root and takes the
+        // override like every other state-root surface.
+        vec!["--state-dir"]
+    } else if is_state_query {
         vec!["--state-dir"]
     } else if is_maint {
         maint::verb_of(inv)
@@ -226,11 +239,25 @@ fn classify(inv: &Invocation) -> Disposition {
                 .to_string(),
         );
     }
+    // H7/H8 (2026-10-28): the query actions are `-Q`'s, and `-S` keeps only
+    // its build+install grammar. A retired spelling is a usage error naming
+    // its new home — never silently re-routed.
+    if let (Family::S, Some(letter @ ('i' | 's' | 'g'))) = (inv.family, inv.action) {
+        return Disposition::Bad(match letter {
+            'i' => "-Si is retired (H7): 'gsa -Qi <ref…>' carries the merged info (recipe, topology, side-car, installed)".to_string(),
+            's' => "-Ss is retired (H7): 'gsa -Qs <pattern…>' searches installed names/descriptions (pacman -Qs semantics)".to_string(),
+            _ => "-Sg is retired (H7): 'gsa -Qg [name…]' lists groups/sets and their members".to_string(),
+        });
+    }
     let action = inv.action;
     let command = match (inv.family, action) {
         (Family::Q, None) => Command::QueryList,
         (Family::Q, Some('i')) => Command::QueryInfo,
         (Family::Q, Some('s')) => Command::QuerySearch,
+        (Family::Q, Some('g')) => Command::QueryGroups,
+        (Family::Q, Some('l')) => Command::QueryFiles,
+        (Family::Q, Some('o')) => Command::QueryOwner,
+        (Family::Q, Some('u')) => Command::QueryUpdates,
         (Family::Q, Some('b')) => Command::QueryBinpkg,
         (Family::Q, Some('p')) => Command::QueryProbe,
         (Family::Q, Some('a')) => Command::QueryAbi,
@@ -238,9 +265,6 @@ fn classify(inv: &Invocation) -> Disposition {
         (Family::Q, Some('t')) => Command::Topology,
         (Family::S, None) if inv.dry_run => Command::Plan,
         (Family::S, Some('l')) => Command::List,
-        (Family::S, Some('i')) => Command::RecipeInfo,
-        (Family::S, Some('s')) => Command::UniverseSearch,
-        (Family::S, Some('g')) => Command::Groups,
         (Family::B, None) if inv.dry_run => Command::Plan,
         (Family::B, None) => Command::Build,
         (Family::B, Some('l')) => Command::List,
@@ -316,12 +340,13 @@ pub(crate) fn command_privilege(command: &Command) -> Privilege {
     match command {
         Command::Topology
         | Command::List
-        | Command::RecipeInfo
-        | Command::UniverseSearch
-        | Command::Groups
         | Command::QueryList
         | Command::QueryInfo
         | Command::QuerySearch
+        | Command::QueryGroups
+        | Command::QueryFiles
+        | Command::QueryOwner
+        | Command::QueryUpdates
         | Command::QueryBinpkg
         | Command::QueryProbe
         | Command::QueryAbi
@@ -480,6 +505,16 @@ fn execute(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<i32, String> {
+    // `-Ql`/`-Qo` are pacman delegates (H8: "pacman queries stay pacman"):
+    // they need no workspace — the argv goes straight to pacman.
+    if matches!(command, Command::QueryFiles | Command::QueryOwner) {
+        let action = if command == Command::QueryFiles {
+            "-Ql"
+        } else {
+            "-Qo"
+        };
+        return query::pacman_delegate(action, inv, out, err);
+    }
     let root = match &inv.standalone_root {
         // A standalone-target run staged its own workspace (plan W4); the
         // report verbs' own discovery never fetches (read-only, §B.10).
@@ -500,6 +535,7 @@ fn execute(
             project: &project,
             graph: &graph,
             db: &RecipeDb::load(&root, &[]).map_err(|e| cmd_error(e.to_string()))?,
+            user_sets: select::load_user_sets(inv),
         };
         let _ = write!(out, "{}", render::render_topology_channel(&ctx));
         return Ok(RC_OK);
@@ -510,10 +546,13 @@ fn execute(
         project: &project,
         graph: &graph,
         db: &db,
+        user_sets: select::load_user_sets(inv),
     };
 
     match command {
         Command::Topology
+        | Command::QueryFiles
+        | Command::QueryOwner
         | Command::Build
         | Command::BuildInstall
         | Command::Fetch
@@ -532,93 +571,23 @@ fn execute(
             };
             let _ = write!(out, "{}", render::render_listing(&ctx, &listed, whole_set));
         }
-        Command::RecipeInfo => {
-            no_ranges(inv)?;
-            require_refs(inv, "at least one reference")?;
-            let indices = resolve_records(&ctx, &inv.targets, err)?;
-            if indices.is_empty() {
-                return Err(cmd_error("no recipes resolved".to_string()));
-            }
-            for (n, &idx) in indices.iter().enumerate() {
-                if n > 0 {
-                    let _ = writeln!(out);
-                }
-                let _ = write!(
-                    out,
-                    "{}",
-                    render::render_recipe_info(&ctx, ctx.graph.record(idx))
-                );
-            }
-        }
-        Command::UniverseSearch => {
-            no_ranges(inv)?;
-            require_refs(inv, "at least one search pattern")?;
-            let _ = write!(
-                out,
-                "{}",
-                render::render_universe_search(&ctx, &inv.targets)
-            );
-        }
-        Command::Groups => {
+        Command::QueryGroups => {
             no_ranges(inv)?;
             let text =
                 render::render_groups(&ctx, &inv.targets).map_err(|e| cmd_error(e.to_string()))?;
             let _ = write!(out, "{text}");
         }
         Command::QueryList => {
-            no_ranges(inv)?;
-            let mut entries: Vec<(String, String)> = Vec::new();
-            if inv.targets.is_empty() {
-                for (name, meta) in db.pkgnames_sorted() {
-                    let version = meta.full_version().map_err(|e| cmd_error(e.to_string()))?;
-                    entries.push((name, version));
-                }
-            } else {
-                let indices = resolve_records(&ctx, &inv.targets, err)?;
-                let mut seen = std::collections::BTreeSet::new();
-                for idx in indices {
-                    let meta = db
-                        .get(ctx.graph.record(idx).id.as_str())
-                        .ok_or_else(|| cmd_error("recipe metadata missing".to_string()))?;
-                    let version = meta.full_version().map_err(|e| cmd_error(e.to_string()))?;
-                    for name in meta.pkgnames() {
-                        if seen.insert(name.clone()) {
-                            entries.push((name, version.clone()));
-                        }
-                    }
-                }
-                entries.sort_by(|a, b| a.0.cmp(&b.0));
-            }
-            let _ = write!(out, "{}", render::render_query_list(&entries));
+            query::query_list(inv, out).map_err(cmd_error)?;
         }
         Command::QueryInfo => {
-            no_ranges(inv)?;
-            require_refs(inv, "at least one reference")?;
-            let indices = resolve_records(&ctx, &inv.targets, err)?;
-            let mut first = true;
-            for idx in indices {
-                let record = ctx.graph.record(idx);
-                let meta = db
-                    .get(record.id.as_str())
-                    .ok_or_else(|| cmd_error("recipe metadata missing".to_string()))?;
-                let version = meta.full_version().map_err(|e| cmd_error(e.to_string()))?;
-                for pkgname in meta.pkgnames() {
-                    if !first {
-                        let _ = writeln!(out);
-                    }
-                    first = false;
-                    let _ = write!(
-                        out,
-                        "{}",
-                        render::render_package_info(&ctx, record, &pkgname, &version)
-                    );
-                }
-            }
+            query::query_info(&ctx, inv, out, err).map_err(cmd_error)?;
         }
         Command::QuerySearch => {
-            no_ranges(inv)?;
-            require_refs(inv, "at least one search pattern")?;
-            let _ = write!(out, "{}", render::render_query_search(&ctx, &inv.targets));
+            query::query_search(inv, out).map_err(cmd_error)?;
+        }
+        Command::QueryUpdates => {
+            query::query_updates(&ctx, &root, inv, out).map_err(cmd_error)?;
         }
         Command::QueryBinpkg => {
             query::query_binpkg(&ctx, inv, out, err).map_err(cmd_error)?;
@@ -640,20 +609,12 @@ fn execute(
     Ok(RC_OK)
 }
 
-fn require_refs(inv: &Invocation, what: &str) -> Result<(), String> {
-    if inv.targets.is_empty() {
-        Err(cmd_error(format!("requires {what}")))
-    } else {
-        Ok(())
-    }
-}
-
 /// Run one invocation against the current directory's repository. Returns
 /// the process exit code and writes all output through `out`/`err`.
 pub fn run(argv: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
     let parsed = args::parse(argv);
     // Pin the output mode before any rendering (output::mode() falls back to
-    // stdout's tty-ness when neither --machine nor --human was given).
+    // stdout's tty-ness when --machine was not given).
     if let Ok(Parsed::Invoke(inv)) = &parsed {
         if let Some(m) = inv.output_mode {
             output::set_mode(m);
@@ -783,18 +744,45 @@ mod tests {
 
     #[test]
     fn deferred_spellings_refuse_with_a_clear_message() {
-        for spelling in ["-Ql"] {
+        // -Ql/-Qo are LIVE pacman delegates (I3, contract §B.3): a misuse
+        // is a usage-class error naming the shape, never the deferred
+        // refusal. -Qu is live too but reports the whole stale set — assert
+        // it at the classifier, never through `run` (it version-evaluates
+        // the workspace).
+        for spelling in ["-Ql", "-Qo"] {
             let (code, _out, err) = run_capture(&[spelling]);
-            assert_eq!(code, 2, "{spelling} must be deferred");
+            assert_eq!(code, 2, "{spelling} must be a usage error");
             assert!(
-                err.contains("deferred to a later phase"),
-                "{spelling}: {err}"
+                !err.contains("deferred to a later phase"),
+                "{spelling} is live: {err}"
             );
         }
-        // -Sy/-Su are LIVE (contract §B.4). Assert at the classifier — never
-        // through `run`, which would execute a real version-sync pass against
-        // whatever repository the test runs in.
-        for spelling in ["-Sy", "-Su"] {
+        for spelling in ["-Qu"] {
+            let argv: Vec<String> = [spelling].iter().map(|s| s.to_string()).collect();
+            let parsed = args::parse(&argv).expect("a bare spelling parses");
+            let Parsed::Invoke(inv) = parsed else {
+                panic!("{spelling} must parse as an invocation");
+            };
+            assert!(
+                matches!(classify(&inv), Disposition::Run(_)),
+                "{spelling} is live and must not defer"
+            );
+        }
+        // H7/H8: the retired `-S` query spellings answer a named usage
+        // error pointing at their new `-Q` homes — never a silent re-route.
+        for (spelling, moved_to) in [("-Si", "gsa -Qi"), ("-Ss", "gsa -Qs"), ("-Sg", "gsa -Qg")] {
+            let (code, _out, err) = run_capture(&[spelling]);
+            assert_eq!(code, 2, "{spelling} must be a usage error");
+            assert!(err.contains("retired"), "{spelling}: {err}");
+            assert!(
+                err.contains(moved_to),
+                "{spelling} must name {moved_to}: {err}"
+            );
+        }
+        // -Sy/-Su/-Syu are LIVE (contract §B.4). Assert at the classifier —
+        // never through `run`, which would execute a real version-sync pass
+        // against whatever repository the test runs in.
+        for spelling in ["-Sy", "-Su", "-Syu"] {
             let argv: Vec<String> = [spelling].iter().map(|s| s.to_string()).collect();
             let parsed = args::parse(&argv).expect("a bare spelling parses");
             let Parsed::Invoke(inv) = parsed else {
@@ -837,6 +825,44 @@ mod tests {
         let (code, _out, err) = run_capture(&["--qa-check", "no-such-check"]);
         assert_eq!(code, 2, "an unknown check name is usage (§G)");
         assert!(err.contains("unknown check 'no-such-check'"), "{err}");
+    }
+
+    #[test]
+    fn b8_modifiers_combine_with_the_families_that_act() {
+        // I4 (2026-10-28): a `--dry-run` plan accepts the roster of the run
+        // it plans, and `-Sw`/`-Sy` take the `--state-dir` their paths read.
+        // These are exactly the combinations an §H.2 `command:`
+        // continuation restates — a rendered resume must parse and run.
+        for argv in [
+            vec!["-S", "--dry-run", "--skip", "--state-dir", "/x"],
+            vec!["-B", "--dry-run", "--lanes", "2", "--fail-fast"],
+            vec!["-S", "--dry-run", "--state-dir", "/x", "--no-sync"],
+            vec!["-Sw", "--state-dir", "/x"],
+            vec!["-Sy", "--state-dir", "/x"],
+            vec!["-Q", "--state-dir", "/x"],
+            vec!["-Qi", "--state-dir", "/x", "ref"],
+        ] {
+            let argv: Vec<String> = argv.iter().map(|s| s.to_string()).collect();
+            let parsed = args::parse(&argv).expect("a roster invocation parses");
+            let Parsed::Invoke(inv) = parsed else {
+                panic!("{argv:?} must parse as an invocation");
+            };
+            assert!(
+                matches!(classify(&inv), Disposition::Run(_)),
+                "{argv:?} must be live — the §H.2 continuation restates these flags"
+            );
+        }
+        // `-Sy` keeps its no-dry-form refusal (recipe rewrites left
+        // uncommitted — there is no dry form).
+        let argv: Vec<String> = ["-Sy", "--dry-run"].iter().map(|s| s.to_string()).collect();
+        let parsed = args::parse(&argv).expect("parses");
+        let Parsed::Invoke(inv) = parsed else {
+            panic!("must parse");
+        };
+        assert!(
+            matches!(classify(&inv), Disposition::Bad(_)),
+            "-Sy has no dry form (recipe rewrites left uncommitted)"
+        );
     }
 
     #[test]
