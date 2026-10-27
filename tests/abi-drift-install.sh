@@ -13,10 +13,12 @@ set -euo pipefail
 #      installed consumer closure is NOT in the transaction → silent
 #      `refuse abi-soname` + `refuse abi-consumer` rows, rc 1 (both modes);
 #   B. closure complete: the consumer's archive rides in the same
-#      transaction → the covered consumer is never named
-#      (FISH-DRIVEN clean-plan meaning — DEVIATION 2);
+#      transaction → the covered consumer is never named and the move
+#      plans CLEAN on both sides (the clean-plan meaning is the truth —
+#      DEVIATION 2 CLOSED 2026-10-28 with the conditional gate);
 #   C. nothing to protect: the consumer is not installed → the consumer
-#      rows are absent (FISH-DRIVEN clean-plan meaning — DEVIATION 2);
+#      rows are absent and the move plans CLEAN (DEVIATION 2 CLOSED
+#      2026-10-28, as B);
 #   D. no provide diff (same soname versions) → rc 0, `install` rows;
 #   E. a DISAPPEARING provide (built archive drops the soname entirely) →
 #      `refuse abi-soname … <installed-ver> -` + consumer rows, rc 1;
@@ -75,8 +77,8 @@ set -euo pipefail
 #      DEVIATION 3);
 #   Q. a stock-side pinner whose OWN archive rides the transaction is
 #      covered: pacman re-checks its new depends against the new provides in
-#      the same transaction → the pinner is never named (FISH-DRIVEN
-#      clean-plan meaning — DEVIATION 2).
+#      the same transaction → the pinner is never named (the clean-plan
+#      meaning — DEVIATION 2 CLOSED 2026-10-28, as B).
 #
 # Flip notes (docs/gsa-fixture-migration.md row `tests/abi-drift-install.sh`;
 # colon line cites below are the PRE-P2 fixture's, as in that inventory):
@@ -111,19 +113,22 @@ set -euo pipefail
 # seam's rows field-wise (tabs normalized) — the retired codec's byte
 # framing is gone; §E.2 has no repair decision to re-pin through.
 # DEVIATION 2 (inventory KEEP cell "gate semantics (:288-378)" vs
-# crates/gsa-abi/src/rows.rs): fish's gate is coverage-aware ("the refusal
-# is conditional", build-all.fish abi_provide_refusals) — B/C/Q plan CLEAN
-# when nothing is stranded. The engine refuses every drifting bare-soname
-# provide UNCONDITIONALLY (`abi-soname` per drifted provide) and coverage
-# suppresses only the `abi-consumer`/`abi-stock-pinner` rows. Both sides
-# pin their own truth: the clean-plan meanings keep their fish-era pins and
-# the engine rows are pinned exactly as emitted (B/C/Q §E.2 blocks).
-# DEVIATION 3 (inventory case P split): the engine's stock_pinners scan has
-# no workspace filter (crates/gsa-abi/src/rows.rs stock_pinners) — it names
-# the workspace output app-git as an `abi-stock-pinner` alongside its
-# `abi-consumer` row, where fish keeps workspace pins in the `abi-consumer`
-# class only. The engine rows are pinned as emitted (4 rows); the split
-# meaning keeps its fish-era pin.
+# crates/gsa-abi/src/rows.rs) — CLOSED 2026-10-28: the engine's provide gate
+# is coverage-aware too ("the refusal is conditional" — the fish oracle's
+# abi_provide_refusals semantics now live in `abi_refusal_rows`), so B/C/Q
+# plan CLEAN when nothing is stranded on BOTH sides and the "engine refuses
+# every drifting bare-soname provide UNCONDITIONALLY (`abi-soname` per
+# drifted provide)" drift claim retires with this note. The clean-plan
+# meanings keep their fish-era pins and the engine rows are pinned as
+# emitted (B/C/Q §E.2 blocks — now the clean plan).
+# DEVIATION 3 (inventory case P split) — CLOSED 2026-10-28 with the
+# conditional gate: `abi_refusal_rows` now applies fish's split rule (a
+# pinner whose name is a workspace recipe OUTPUT stays in the consumer
+# class; out-of-tree pinners alone are `abi-stock-pinner`) and never
+# double-rows a pinner already named as an uncovered consumer. The engine
+# rows are the fish split (3 rows, pinned as emitted with the stockpin2
+# detail), so the "engine names app-git as a stock-side pinner too" drift
+# claim retires; the split meaning keeps its fish-era pin.
 # DEVIATION 4 (inventory new-contract target cell): the target names
 # `refuse abi-consumer-uncovered`; the seam emits `refuse abi-consumer`
 # (rows.rs; `abi-consumer-uncovered` is the wave planner's under-coverage
@@ -635,10 +640,11 @@ EOF
 checks=$((checks + 1))
 
 # ─── B. closure complete: the consumer rides in the transaction ────────────
-# FISH-DRIVEN meaning (DEVIATION 2): the covered consumer's archive rides
-# the same transaction → the fish gate plans CLEAN. The engine refuses the
-# drifting surface per se and suppresses only the consumer row; its rows are
-# pinned exactly as emitted.
+# The covered consumer's archive rides the same transaction → nothing is
+# stranded and the move plans CLEAN on both sides (fish
+# `abi_provide_refusals` and the engine's conditional gate — DEVIATION 2
+# CLOSED 2026-10-28: the "engine refuses the moving surface even covered"
+# drift claim retires; the clean-plan meaning was always the truth).
 : >"$ws/pacman.log"
 decide force "$libs_arch" "$app_arch"
 ((FIXTURE_RC == 0)) ||
@@ -652,16 +658,17 @@ gsa_consumer
 g_arch=$(gsa_archive libs-git 'libgreet.so=2-64')
 g_app_arch=$(gsa_archive app-git 'libapp.so=1-64')
 gsa_decide force "$g_arch" "$g_app_arch"
-assert_decisions 'B: §E.2 rows over the covered closure (DEVIATION 2)' 1 <<'EOF'
-libs-git refuse abi-soname
+assert_decisions 'B: §E.2 rows over the covered closure (DEVIATION 2 closed: clean plan)' 0 <<'EOF'
+libs-git install ok
 app-git install ok
 EOF
 checks=$((checks + 3))
 
 # ─── C. consumer not installed — nothing to protect ────────────────────────
-# FISH-DRIVEN meaning (DEVIATION 2): an uninstalled consumer cannot break →
-# the fish gate plans clean; the engine's unconditional abi-soname refusal
-# is pinned as emitted.
+# An uninstalled consumer cannot break → the move plans CLEAN on both sides
+# (DEVIATION 2 CLOSED 2026-10-28: the unconditional abi-soname refusal
+# retires — with no linked consumer and no out-of-tree pinner nothing is
+# stranded).
 GSA_FAKE_APP_INSTALLED=0
 GSA_FAKE_QI_APP=''
 : >"$ws/pacman.log"
@@ -675,8 +682,8 @@ gsa_db_reset
 gsa_provider
 g_arch=$(gsa_archive libs-git 'libgreet.so=2-64')
 gsa_decide force "$g_arch"
-assert_decisions 'C: §E.2 rows with the consumer absent (DEVIATION 2)' 1 <<'EOF'
-libs-git refuse abi-soname
+assert_decisions 'C: §E.2 rows with the consumer absent (DEVIATION 2 closed: clean plan)' 0 <<'EOF'
+libs-git install ok
 EOF
 checks=$((checks + 3))
 
@@ -982,8 +989,8 @@ checks=$((checks + 3))
 # must be named; app-git — a WORKSPACE recipe output — carries the same
 # moving pin in the local DB but belongs to the surface-consumer logic (link
 # truth → `refuse abi-consumer`), never to the stock-pinner row. The split
-# is FISH-DRIVEN (DEVIATION 3: the engine names app-git as a stock-side
-# pinner too — its rows are pinned as emitted, 4 rows).
+# is FISH-DRIVEN and now the engine truth (DEVIATION 3 CLOSED 2026-10-28:
+# the engine rows are the fish split, pinned as emitted).
 (
     set -euo pipefail
     GSA_FAKE_QI_LIBS='Name : libs-git
@@ -1014,30 +1021,32 @@ Depends On : libgreet.so'
         fail "P: a workspace output must never be named as a stock-side pinner: $p_rows"
     fi
     assert_no_u P
-    # The engine rows for this state are pinned as emitted (DEVIATION 3):
-    # the stock_pinner scan has no workspace filter, so app-git appears as
-    # an abi-stock-pinner row alongside its abi-consumer row.
+    # The engine rows for this state are the fish split now (DEVIATION 3
+    # CLOSED 2026-10-28): a pinner whose name is a workspace recipe output
+    # stays in the consumer class (its `refuse abi-consumer` row), and only
+    # the out-of-tree bare-link pinner rows as `abi-stock-pinner` — never
+    # double-rowed beside its consumer row.
     gsa_db_reset
     gsa_provider
     gsa_consumer 'libgreet.so=1-64'
     gsa_db stockpin2 9.9-1 '' 'libgreet.so'
     g_arch=$(gsa_archive libs-git 'libgreet.so=2-64')
     gsa_decide force "$g_arch"
-    assert_decisions 'P: §E.2 rows for the bare-link/split case (DEVIATION 3)' 1 <<'EOF'
+    assert_decisions 'P: §E.2 rows for the bare-link/split case (DEVIATION 3 closed: fish split)' 1 <<'EOF'
 libs-git refuse abi-soname
 libs-git refuse abi-consumer
 libs-git refuse abi-stock-pinner
-libs-git refuse abi-stock-pinner
 EOF
+    seam_row_has P "abi-stock-pinner $g_arch stockpin2 libgreet.so" # the out-of-tree pinner, named
 )
-checks=$((checks + 4))
+checks=$((checks + 5))
 
 # ─── Q. a stock-side pinner whose OWN archive rides the transaction ────────
 # The pinner's own archive installs in the SAME pacman -U: the old pin dies
 # with the old package and pacman re-checks the new record's depends against
-# the new provides — nothing to protect (FISH-DRIVEN clean-plan meaning,
-# DEVIATION 2); the engine suppresses the pinner row (its `stockpin install
-# ok` row) but refuses the drift per se — pinned as emitted.
+# the new provides — nothing to protect, so the move plans CLEAN on both
+# sides (DEVIATION 2 CLOSED 2026-10-28: the covered pinner is never named
+# and no exposure is stranded).
 (
     set -euo pipefail
     mkdir -p "$ws/packages/stockpin"
@@ -1065,8 +1074,8 @@ Depends On : libgreet.so=1-64'
     g_arch=$(gsa_archive libs-git 'libgreet.so=2-64')
     g_stock_arch=$(gsa_archive stockpin 'libstock.so=1-64')
     gsa_decide force "$g_arch" "$g_stock_arch"
-    assert_decisions 'Q: §E.2 rows for a pinner riding the transaction (DEVIATION 2)' 1 <<'EOF'
-libs-git refuse abi-soname
+    assert_decisions 'Q: §E.2 rows for a pinner riding the transaction (DEVIATION 2 closed: clean plan)' 0 <<'EOF'
+libs-git install ok
 stockpin install ok
 EOF
 )

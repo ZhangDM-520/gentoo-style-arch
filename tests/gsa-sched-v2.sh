@@ -257,11 +257,22 @@ codec_roundtrip() {
     [ "$remaining_rows" = "$remaining_line" ] \
         || fail "continuation remaining [$remaining_line] != rows-derived remaining [$remaining_rows]"
 
-    # hidden seams are never mirrored into a continuation (§H.2)
+    # H3 (argv-scoped §H.2): this run's argv carried no hidden seam, so a
+    # seam may appear in NEITHER the command NOR the not-mirrored line —
+    # the line lists only the run's own spellings the command drops, never
+    # a roster.
+    nm=$(rr2_continuation not-mirrored <<<"$FIXTURE_OUTPUT")
+    cmd=$(rr2_continuation command <<<"$FIXTURE_OUTPUT")
     for seam in --lane-job --stale-lock-check --install-decide --fetch-job; do
-        rr2_continuation not-mirrored <<<"$FIXTURE_OUTPUT" | tr ' ' '\n' | grep -Fx -- "$seam" >/dev/null \
-            || fail "hidden seam $seam is not in the not-mirrored list:" "$fixture/cone/output.txt"
+        case " $nm " in
+        *" $seam "*) fail "hidden seam $seam must not be listed (the run carried none): $nm" ;;
+        esac
+        case " $cmd " in
+        *" $seam "*) fail "hidden seam $seam leaked into the command: $cmd" ;;
+        esac
     done
+    [ "$nm" = "-" ] ||
+        fail "a plain build run mirrors everything it carried (H3), not-mirrored: $nm"
 
     # child-process hygiene: nothing survives the run (§K.3)
     if ps -eo args= | grep -F "$ws" | grep -v grep >/dev/null; then
@@ -631,14 +642,23 @@ EOF
     set -euo pipefail
     ws="$fixture/parkkill/ws"
     make_workspace "$ws" 2 auto xhigh
+    add_package "$ws" base "$gsa_meta_any" git
     add_package "$ws" a "$gsa_meta_any" git
     add_package "$ws" b "$gsa_meta_any" git
-    # coupled batch, NO build-order edge (abi=must): both lanes dispatch at
-    # once, and a's failure parks its IN-FLIGHT batch mate b through the
-    # marker handshake — the one path that writes a park marker for a live
-    # lane (a Pending consumer just settles as a parked row).
-    set_topology_record "$ws" a git '' 'abi=must'
-    set_topology_record "$ws" b git '' 'abi=must'
+    # ONE anchored coupled batch (crates/gsa-cli/src/build.rs `build_batches`
+    # — one batch per anchor, never one per severity): `base` is the anchor
+    # (abi=must, no abi-tagged dependency) and a/b its abi=must members
+    # (both consume base; a and b carry NO edge to each other — two
+    # unrelated abi=must anchors would be TWO batches and never park each
+    # other). The anchor's build lands first (the edge orders a and b after
+    # it), then both member lanes dispatch at once, and a's failure parks
+    # its IN-FLIGHT batch mate b with reason `coupled-batch` through the
+    # marker handshake (gsa-sched machine.rs mate parking) — the one path
+    # that writes a park marker for a live lane (a Pending consumer just
+    # settles as a parked row).
+    set_topology_record "$ws" base git '' 'abi=must'
+    set_topology_record "$ws" a git base 'abi=must'
+    set_topology_record "$ws" b git base 'abi=must'
     write_stub_makepkg "$ws"
     export PATH="$ws/bin:$PATH"
     export GSA_FAKE_SPAWN_LOG="$fixture/parkkill/spawn.log"
@@ -677,7 +697,7 @@ EOF
     ) &
     watcher=$!
 
-    run_engine "$ws" -B --state-dir "$fixture/parkkill/state" a b
+    run_engine "$ws" -B --state-dir "$fixture/parkkill/state" base a b
     kill "$watcher" 2>/dev/null || true
     wait "$watcher" 2>/dev/null || true
     {

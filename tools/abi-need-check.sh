@@ -29,13 +29,22 @@ set -uo pipefail
 #
 #   Archives (*.pkg.tar.*) are extracted under $TMPDIR only — inputs are
 #   never modified. `--from-names` is the pacman PreTransaction hook shape:
-#   alpm passes package NAMES on stdin (measured 2026-10-22 with a probe
-#   hook: NeedsTargets + Type=Package + When=PreTransaction), so each name
-#   resolves to its newest cached ARCHIVE — real package extensions only;
-#   the detached `…pkg.tar.zst.sig` siblings share the name glob but are
-#   never candidates (regression 2026-10-22). A name with no cached archive
-#   (a `pacman -U` of a file elsewhere) is SKIPPED loudly-but-quietly: the
-#   engine gates its own installs. An input that fails to extract is warned
+#   alpm feeds bare package NAMES on stdin, one per line and NO versions
+#   (lib/libalpm/hook.c `_alpm_hook_feed_targets` writes `pkg->name`;
+#   measured 2026-10-22 with a probe hook: NeedsTargets + Type=Package +
+#   When=PreTransaction). A cached archive is therefore only verifiably the
+#   payload of a SYNC transaction — a same-name stale twin cannot be told
+#   apart from the file being installed by name alone. The stand-down is
+#   NOT cache-conditioned: a local file install (the pacman argv of the
+#   transaction carries `-U`, read from the process ancestry) SKIPS every
+#   name outright — cached twin or not — because the engine gates its own
+#   installs (2026-10-25: weston/colord's archives had to be moved out of
+#   the cache by hand to buy this). A sync name resolves to its newest
+#   cached ARCHIVE — the archive pacman is actually installing — real
+#   package extensions only; the detached `…pkg.tar.zst.sig` siblings share
+#   the name glob but are never candidates (regression 2026-10-22). A name
+#   with no cached archive is SKIPPED loudly-but-quietly the same way. An
+#   input that fails to extract is warned
 #   about and SKIPPED too — pacman's integrity checks already passed it, so
 #   failing the transaction on a check we could not perform is a false
 #   alarm; real findings stay fatal.
@@ -97,17 +106,66 @@ cache_dir=${GSA_ABI_NEED_CHECK_CACHE:-/var/cache/pacman/pkg}
 # qualify. `linux-cachyos-headers` carries 22 real runtime links (measured
 # 2026-10-22) and stays scannable; if a listed package ever grows a
 # userspace ELF, it leaves this list.
+#
+# The flavour roster is EXPLICIT names, never a `linux-*` wildcard: the old
+# wildcard swallowed real userspace payloads (`linux-tools` ships
+# perf/turbostat, `linux-atm` its own daemons — config/topology.conf:91
+# carries linux-tools' edges). Enumerated literally from the repo's kernel
+# recipe (packages/misc/linux-cachyos; tests/kernel-recipes.sh pins that
+# one recipe) plus the flavour names this host actually transacts
+# (`pacman -Q linux*`, each vmlinuz + modules with no userspace DT_NEEDED
+# surface, 2026-10-28). A name joins this list the day its payload is
+# verified kernel-class and leaves it the day it grows a userspace ELF.
 kernel_class() {
     case $1 in
         *-headers | *-src | *-dkms) return 1 ;;
-        linux | linux-* | *-firmware) return 0 ;;
+        linux | linux-cachyos | linux-cachyos-lts | linux-cachyos-bore-lto | \
+            linux-cachyos-bore-lto-dbg)
+            return 0
+            ;;
+        *-firmware) return 0 ;;
     esac
     return 1
 }
 
+# file_install_txn — is the transaction behind this run a local FILE
+# install? alpm feeds bare names (no versions), so the only witness to the
+# transaction shape is the pacman process that spawned this hook: walk up
+# the process ancestry for it and read its argv. `pacman -U <files>`
+# (single-dash clusters containing `U`; `-Syu`'s `u` is lowercase and never
+# matches) installs the named FILES and must STAND DOWN — the cached
+# same-name twin is not the payload. A sync argv (`-S…`) — or no pacman
+# ancestor at all, the standalone/test shape — installs from the cache,
+# where the cached archive IS the payload.
+file_install_txn() {
+    local pid=$PPID depth=0 arg
+    local -a argv
+    while ((depth < 16)) && [[ -n ${pid:-} && $pid -gt 1 && -r /proc/$pid/cmdline ]]; do
+        argv=()
+        while IFS= read -r -d '' arg; do argv+=("$arg"); done <"/proc/$pid/cmdline"
+        if ((${#argv[@]} > 0)) && [[ ${argv[0]##*/} == pacman ]]; then
+            for arg in "${argv[@]:1}"; do
+                [[ $arg == --* ]] && continue
+                [[ $arg == -*U* ]] && return 0
+            done
+            return 1
+        fi
+        pid=$(sed -n 's/^PPid:[[:space:]]*//p' "/proc/$pid/status" 2>/dev/null)
+        depth=$((depth + 1))
+    done
+    return 1
+}
+
 if ((from_names)); then
+    file_install=0
+    file_install_txn && file_install=1
     while IFS= read -r name; do
         [[ -n $name ]] || continue
+        if ((file_install)); then
+            ((quiet)) ||
+                printf 'abi-need-check: %s: skipped (local file install — the engine gates its own installs)\n' "$name"
+            continue
+        fi
         if kernel_class "$name"; then
             ((quiet)) ||
                 printf 'abi-need-check: %s: skipped (kernel-class payload — no userspace ABI surface)\n' "$name"
@@ -408,7 +466,17 @@ for root in "${roots[@]}"; do
             if ((covered == 0)); then
                 for name in ${tx_provides[@]+"${tx_provides[@]}"}; do
                     if [[ $needed == "$name" || $needed == "$name".* ]]; then
-                        covered=1
+                        # The runtime oracle is the FILE SYSTEM, not the
+                        # pacman database: a provide-name match covers a
+                        # stem only when a real file stands behind the
+                        # needed name — the SAME resolution the direct
+                        # (non-provide) hit path performs. A declared
+                        # provide with no file behind it (the tk `libtk.so`
+                        # dangling symlink, 2026-10-22) is exactly as fatal
+                        # as no provide at all and must NOT set covered.
+                        if host_resolves "$needed" "$libdirs" "$elf_dir"; then
+                            covered=1
+                        fi
                         break
                     fi
                 done

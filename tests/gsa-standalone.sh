@@ -8,8 +8,8 @@ set -euo pipefail
 # builds through a stub makepkg — the real /var/lib/gsa and the host's
 # pacman.conf are never read or written.
 #
-# Pinned here (five ( subshell ) sections, run one alone with
-# GSA_STANDALONE_ONLY=a…e):
+# Pinned here (six ( subshell ) sections, run one alone with
+# GSA_STANDALONE_ONLY=a…f):
 #   a. a directory holding a PKGBUILD is staged as its own one-node workspace
 #      and the run record names the staged id; a --dry-run stages EPHEMERALLY
 #      (no state left behind — §B.10 reads);
@@ -23,7 +23,11 @@ set -euo pipefail
 #      binpkg index records the instance, and the staging area persists
 #      under <state>/standalone/;
 #   e. a URL target (file:// — the network-free curl seam) is fetched and
-#      staged like a local PKGBUILD.
+#      staged like a local PKGBUILD;
+#   f. a discoverable workspace root's shared `lib/` (lib/pgo.sh,
+#      lib/cups-config) is staged into the one-node workspace — the shared
+#      PGO gate is sourced by a repo-relative path and a standalone
+#      shared-gate recipe must not hard-fail at PKGBUILD parse (S5).
 #
 # House conventions: ( subshell ) sections with their own workspace and state
 # root, inline stubs and oracles, fail() prefixes, rr-v2.bash's
@@ -229,6 +233,33 @@ if [ -z "$only" ] || [ "$only" = e ]; then
         *'order: url-pkg'*) ;;
         *) fail "e: the run record must name the URL-derived id: $FIXTURE_OUTPUT" ;;
         esac
+    )
+fi
+
+# ── f. shared lib/ staged from the discoverable workspace root ───────────
+if [ -z "$only" ] || [ "$only" = f ]; then
+    (
+        ws="$fixture/f/empty-cwd"
+        state="$fixture/f/state"
+        cache="$fixture/f/cache"
+        log="$fixture/f/makepkg.log"
+        repo="$fixture/f/repo"
+        mkdir -p "$ws" "$repo/lib" "$repo/config"
+        printf '#!/usr/bin/env bash\n# fixture shared PGO gate\n' >"$repo/lib/pgo.sh"
+        printf '#!/bin/sh\n# fixture cups-config shim\n' >"$repo/lib/cups-config"
+        : >"$repo/config/topology.conf"
+        conf_f="$fixture/f/gsa.conf"
+        printf 'project=%s\n' "$repo" >"$conf_f"
+        make_recipe "$fixture/f/shared/solo-recipe" solo-recipe
+        make_stubs "$fixture/f/bin"
+        PATH="$fixture/f/bin:$PATH" GSA_CONF="$conf_f" GSA_STATE_DIR="$state" \
+            GSA_BUILD_DIR="$cache" GSA_FAKE_MAKEPKG_LOG="$log" \
+            run_engine "$ws" -B "$fixture/f/shared/solo-recipe"
+        [ "$FIXTURE_RC" -eq 0 ] || fail "f: rc=$FIXTURE_RC want 0: $FIXTURE_OUTPUT"
+        [ -f "$state/standalone/lib/pgo.sh" ] ||
+            fail "f: the staged workspace must carry the shared lib/pgo.sh: $(ls -R "$state/standalone" 2>&1)"
+        [ -f "$state/standalone/lib/cups-config" ] ||
+            fail "f: the staged workspace must carry the shared lib/cups-config: $(ls -R "$state/standalone" 2>&1)"
     )
 fi
 

@@ -10,7 +10,9 @@ set -euo pipefail
 #      per-lane rows with RUN-SCOPED log tails (the `<run>/<pkg>.started`
 #      log-offset), spinner + last-event footer, and balanced cursor
 #      hide/show (`\033[?25l` once in, `\033[?25h` once out before the record).
-#   B. pipe + --human: append-only event lines + the 10 s `STATUS:` hint
+#   B. a human-mode non-interactive stream (PTY with TERM=dumb — `--human`
+#      is retired, H2): append-only event lines + the 10 s `STATUS:` hint;
+#      the retired `--human` flag itself answers a usage error (rc 2);
 #      (the "is it stuck?" surface for redirected logs).
 #   C. pipe + machine (default): the leveled kv stream gains NO dashboard
 #      noise — no STATUS lines, no cursor sequences.
@@ -58,16 +60,18 @@ gsa_bin=$(readlink -f "$gsa_bin")
 
 # run_pty SECONDS STATE-DIR [extra gsa args...] — the engine on a PTY, like
 # app-group's run_pty but privileged (W5 §B.10: -B is a root mutation) and
-# TERM=xterm so the dashboard gate opens. $out keeps the raw PTY stream.
+# TERM=xterm so the dashboard gate opens (GSA_FIXTURE_TERM overrides TERM —
+# section B drives the non-interactive human surface with TERM=dumb). $out
+# keeps the raw PTY stream.
 run_pty() {
-    local secs=$1 state=$2 out=$3
+    local secs=$1 state=$2 out=$3 term=${GSA_FIXTURE_TERM:-xterm}
     shift 3
     set +e
     timeout 90 script -qec \
         "/usr/bin/sudo -n env PATH='$ws/bin:/usr/bin:/bin' HOME='$ws/home' \
             TMPDIR='$fixture/tmp' GSA_STATE_DIR='$state' GSA_BUILD_DIR='$fixture/build' \
             GSA_RECIPES_DIR='$fixture/recipes' GSA_CPU_THREADS=8 GSA_MEMORY_GIB=16 \
-            GSA_FAKE_BUILD_SECONDS='$secs' TERM=xterm \
+            GSA_FAKE_BUILD_SECONDS='$secs' TERM='$term' \
             bash -c 'cd \"$ws\" && exec $gsa_bin -B --leaf --lanes 2 --intensity low \
                 --state-dir \"$state\" $* p1 p2'" /dev/null >"$out" 2>&1
     RC=$?
@@ -131,15 +135,24 @@ shows=$(grep -cF $'\033[?25h' "$fixture/tty.raw" || true)
 grep -qF $'\033[10A' "$fixture/tty.raw" \
     || fail "the redraw never moved the cursor up over the 10-row box:" "$out"
 
-# ─── B. the pipe STATUS hint under --human ─────────────────────────────────
-echo "B: pipe --human STATUS hint"
+# ─── B. the non-interactive human surface (and the retired --human flag) ──
+echo "B: dumb-TTY human event lines + STATUS hint; --human is a usage error"
 out=$fixture/pipe-human.out
-run_pipe 6 "$fixture/state-human" "$out" --human \
-    || fail "the --human pipe run failed (rc=$RC)" "$out"
+GSA_FIXTURE_TERM=dumb run_pty 6 "$fixture/state-human" "$out" \
+    || fail "the dumb-TTY human run failed (rc=$RC)" "$out"
 grep -Fq '→ started p1 -j2' "$out" \
     || fail "the human event lines are gone:" "$out"
 grep -Eq '  STATUS: lane 1: p1 \([0-9]+s\) \| lane 2: p2 \([0-9]+s\)' "$out" \
-    || fail "the 10 s STATUS hint never fired on the human pipe:" "$out"
+    || fail "the 10 s STATUS hint never fired on the human stream:" "$out"
+if grep -qF $'\033[' "$out"; then
+    fail "the non-interactive human stream gained cursor sequences:" "$out"
+fi
+out=$fixture/human-flag.out
+run_pipe 1 "$fixture/state-human-flag" "$out" --human || true
+[ "$RC" -eq 2 ] \
+    || fail "the retired --human flag must answer rc 2, got rc=$RC:" "$out"
+grep -Fq "unknown flag '--human'" "$out" \
+    || fail "the refusal must name the retired flag:" "$out"
 
 # ─── C. the machine stream stays clean ─────────────────────────────────────
 echo "C: machine pipe gains no dashboard noise"
@@ -155,4 +168,4 @@ if grep -qF $'\033[' "$out"; then
     fail "the machine stream gained cursor sequences:" "$out"
 fi
 
-printf 'dashboard-pty fixture: PASS (TTY box, pipe STATUS, machine purity)\n'
+printf 'dashboard-pty fixture: PASS (TTY box, human STATUS, machine purity)\n'

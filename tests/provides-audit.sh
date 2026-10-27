@@ -9,8 +9,11 @@ set -euo pipefail
 # two-adapter pairing as tools/go-modcache-check.sh ↔ tests/modcache-check.sh.
 #
 # What is pinned here:
-#   * presence-only semantics: a declared bare stem OR the full soname covers
-#     it — the FORM rule (declare bare) belongs to the audit lint, not here;
+#   * presence-only semantics: the declared name must be the bare stem
+#     (`libfoo.so` — covering `libfoo.so` itself and `libfoo.so.<generation>`)
+#     or the full soname (`libfoo.so.1` == `libfoo.so.1`); a plain `libfoo`
+#     is neither shape and covers NOTHING — the FORM rule (declare bare)
+#     belongs to the audit lint, not here;
 #   * the exact finding message, including the derived bare stem;
 #   * archive input extracts under $TMPDIR only;
 #   * inputs are never modified (a decoy that is never named must survive
@@ -99,6 +102,21 @@ make_payload "$full/usr/lib" libbaz.so.2
 out=$("$tool" "$full") || fail "a full-soname provide must cover presence (got $?): $out"
 grep -Fq 'libbaz: clean (1 soname(s))' <<<"$out" ||
     fail "form is the audit lint's rule, not this tool's; got: $out"
+
+# --- red: a plain `libfoo` declaration covers NOTHING (the S9 shape) --------
+# The declared name must be the bare stem (`libfoo.so`, pinned green above
+# covering `libfoo.so.1`) or the full soname (pinned green just above); a
+# bare `libfoo` is neither and must NOT cover `libfoo.so.1`.
+bare=$tmp/bare
+make_pkgroot "$bare" libbare 'libbare'
+make_payload "$bare/usr/lib" libbare.so.1
+set +e
+out=$("$tool" "$bare" 2>&1)
+rc=$?
+set -e
+((rc == 1)) || fail "a bare non-stem provide must not cover the soname (got $rc): $out"
+grep -Fq "libbare: soname 'libbare.so.1' is not declared in provides — declare the bare stem 'libbare.so'" <<<"$out" ||
+    fail "a bare non-stem provide changed the verdict, got: $out"
 
 # --- archive input: same verdict, extraction stays under $TMPDIR ------------
 mkdir -p "$tmp/dist"

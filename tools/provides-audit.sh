@@ -113,11 +113,23 @@ for target in "${targets[@]}"; do
         [[ -n $soname ]] || continue
         covered=0
         for name in ${declared[@]+"${declared[@]}"}; do
-            # Presence only: the declared name may be the bare stem or the
-            # full soname — which of those it SHOULD be is the lint's rule.
-            if [[ $soname == "$name" || $soname == "$name".* ]]; then
+            # Presence only — and the declared name must be one of exactly
+            # two shapes: (a) the FULL soname (`libfoo.so.1` declares
+            # `libfoo.so.1`), or (b) the bare stem — a name ENDING in `.so`
+            # (`libfoo.so`) covering `libfoo.so` itself and
+            # `libfoo.so.<generation>`. A plain `libfoo` is neither shape
+            # and covers NOTHING here. Which shape it SHOULD be is the
+            # lint's rule (declare the bare stem).
+            if [[ $soname == "$name" ]]; then
                 covered=1
                 break
+            fi
+            if [[ $name == *.so && $soname == "$name".* ]]; then
+                gen=${soname#"$name".}
+                if [[ $gen =~ ^[0-9]+(\.[0-9]+)*$ ]]; then
+                    covered=1
+                    break
+                fi
             fi
         done
         if ((covered == 0)); then

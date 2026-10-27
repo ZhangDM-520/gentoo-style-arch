@@ -102,7 +102,6 @@ intensity=$intensity
 memory_per_job_gib=3
 core_memory_per_job_gib=4
 reserved_memory_gib=2
-state_dir=auto
 EOF
     cat >"$dir/config/topology.conf" <<'EOF'
 # One record per package: id|path|groups|edges[|tags]

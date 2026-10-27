@@ -14,8 +14,8 @@ set -euo pipefail
 # where a summary carries a count (`audit <family> N finding(s)`,
 # `doctor report N finding(s)`) the fixture recomputes N from the row stream.
 #
-# Pinned here (eight ( subshell ) sections; run one alone with
-# GSA_MAINT_V2_ONLY=a…h):
+# Pinned here (nine ( subshell ) sections; run one alone with
+# GSA_MAINT_V2_ONLY=a…i):
 #   a. `-Ma` audit report is report-only (§E.4): rc 0 on a synthetic
 #      workspace that deliberately carries findings (unregistered recipe
 #      dir, legacy `.Stable/` path reference, stale `.tmp.` artifact); rows
@@ -78,6 +78,19 @@ set -euo pipefail
 #      contains an `-M` token. rc classes asserted by exact code: usage 2
 #      (bare `-M`, `-Mc` without selection), refusal 3 (confirmation,
 #      run-in-flight).
+#   i. `-Mm` permission split, the build-user fallback run lock (finding
+#      H10): the verb must run as the build user (§B.7) but the state
+#      root's `run.lock` is unopenable to that user — with the state root
+#      modeled untouchable (§J.1 dirs pre-created, tree and `locks/` mode
+#      555; the fixture is not the real build user, so a mode carries the
+#      split) the run passes the lock gate through the build-user fallback
+#      lock and reaches its mirror work (the applied link row is the
+#      post-lock observable — the no-`--noconfirm` stop answers BEFORE the
+#      lock), `sudo gsa -Mm` still refuses rc 3 naming the build-user
+#      requirement, and a held fallback lock answers `run-in-flight` naming
+#      the fallback path (so the refusal provably came through the
+#      fallback, never the state lock). Red-first mutation probes (fallback
+#      removed; busy state lock falling back) recorded in the change report.
 #
 # Red-first (contract §L.4): the pruning-safety deliverable is mutation-
 # probed during development — breaking `protect::referenced_by_run` in
@@ -110,7 +123,7 @@ fail() {
     exit 1
 }
 
-# Section filter: GSA_MAINT_V2_ONLY=<a..h> runs exactly one section.
+# Section filter: GSA_MAINT_V2_ONLY=<a..i> runs exactly one section.
 want() { [ -z "${GSA_MAINT_V2_ONLY:-}" ] || [ "${GSA_MAINT_V2_ONLY}" = "$1" ]; }
 
 # The real /var/lib/gsa must never move under this fixture (§J.3: every
@@ -556,6 +569,17 @@ if want f; then
         has_row "$FIXTURE_OUTPUT" "toolchain member setc" "kv-side member row"
         has_row "$FIXTURE_OUTPUT" "toolchain drift only-in-state setc" "state-only member"
         [ "$(config_sha)" = "$config_before" ] || fail "an edit must never rewrite config/sets"
+
+        # I5: `@name` resolves over kv user-sets ∪ config/sets/ — a
+        # selection sees BOTH halves of the set (the `-Ms` kv write side was
+        # invisible to `@name` before). The state root rides GSA_STATE_DIR:
+        # `--state-dir` is a deferred spelling on a listing verb (§B.8).
+        GSA_STATE_DIR="$state" run_engine "$ws" -Sl @toolchain
+        [ "$FIXTURE_RC" = 0 ] || fail "-Sl @toolchain is rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        for member in seta setb setc; do
+            printf '%s\n' "$FIXTURE_OUTPUT" | grep -Eq "^[[:space:]]*[0-9]+\. $member\$" ||
+                fail "@toolchain must resolve $member (I5: kv ∪ config/sets): $FIXTURE_OUTPUT"
+        done
         run_engine "$ws" -Ms --remove toolchain setc --state-dir "$state"
         [ "$FIXTURE_RC" = 0 ] || fail "-Ms --remove is rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
         has_row "$FIXTURE_OUTPUT" "toolchain removed setc" "remove row names the edit"
@@ -746,22 +770,23 @@ source=("git+https://example.invalid/gsrc.git")' git
         rr2_body <<<"$FIXTURE_OUTPUT" >/dev/null ||
             fail "the build run must emit a strict format: 2 block: $FIXTURE_OUTPUT"
 
-        # Continuation hygiene (§H.2/§L.1): every -M spelling and sub-flag
-        # is not-mirrored, and the command never replays an -M token.
+        # Continuation hygiene (H3, argv-scoped §H.2/§L.1): the seeding
+        # build carried no -M spelling or sub-flag, so NEITHER the command
+        # NOR the not-mirrored line may name one — the line lists only the
+        # run's own argv spellings the command does not restate.
         nm=$(rr2_continuation not-mirrored <<<"$FIXTURE_OUTPUT")
+        cmd=$(rr2_continuation command <<<"$FIXTURE_OUTPUT")
         for token in -Ma -Mc -Mcc -Mccc -Md -Mi -Ml -Mm -Ms -Mw -Mh \
             --fix --prune --backfill --tail --keep --show --add --remove --noconfirm; do
             case " $nm " in
-            *" $token "*) ;;
-            *) fail "continuation not-mirrored must list $token (§L.1), got: $nm" ;;
+            *" $token "*) fail "continuation not-mirrored must not list $token (the run carried none), got: $nm" ;;
+            esac
+            case " $cmd " in
+            *" $token "*) fail "the continuation must never replay $token (§H.2): $cmd" ;;
             esac
         done
-        cmd=$(rr2_continuation command <<<"$FIXTURE_OUTPUT")
-        for token in $cmd; do
-            case $token in
-            -M*) fail "the continuation command must never carry an -M token (§H.2): $cmd" ;;
-            esac
-        done
+        [ "$nm" = "-" ] ||
+            fail "the seeding build mirrors everything it carried (H3), not-mirrored: $nm"
 
         # The stored record the pruning guard consults: the newest run
         # record's `remaining:` names pralpha, so pralpha's files earn
@@ -928,6 +953,102 @@ source=("git+https://example.invalid/gsrc.git")' git
         [ -L "$ws/packages/prbeta/prbeta-link-1.0.0-1-any.pkg.tar.zst" ] ||
             fail "the symlinked archive must survive every strength"
         [ -f "$outside" ] || fail "strength 3 must never follow the symlink"
+        assert_varlib_unchanged
+    )
+fi
+
+# ─── i. -Mm permission split: the build-user fallback run lock (H10) ───────
+if want i; then
+    (
+        set -euo pipefail
+        ws="$fixture/i/ws"
+        state="$fixture/i/state"
+        make_workspace "$ws" 1 auto low
+
+        # One duplicated git-source group so the post-lock mirror work has
+        # an observable apply row: ffirst's clone is the canonical, fsecond
+        # (missing clone) earns the link (section e's group model).
+        for id in ffirst fsecond; do
+            add_package "$ws" "$id" 'pkgver=1.0.0
+pkgrel=1
+arch=(any)
+source=("git+https://example.invalid/fmirror.git")' git
+        done
+        mkdir -p "$ws/packages/ffirst/fmirror"
+        GIT_CONFIG_COUNT=0 git -C "$ws/packages/ffirst/fmirror" init -q 2>/dev/null
+        GIT_CONFIG_COUNT=0 git -C "$ws/packages/ffirst/fmirror" remote add origin \
+            git+https://example.invalid/fmirror.git
+
+        # The permission split, hermetic (the fixture is not the real build
+        # user, so a MODE — not an owner — carries it): the §J.1 dirs EXIST
+        # so StateRoot::open passes, but the tree and its locks/ are mode
+        # 555 — the run.lock open needs write access this user does not
+        # have, exactly the build user's EACCES on the root-owned state root.
+        mkdir -p "$state/index" "$state/runs" "$state/kv" "$state/locks"
+        chmod 555 "$state" "$state/locks"
+        # The fallback lock's home is the build cache root (build_root:
+        # GSA_BUILD_DIR > config build_dir > ~/.cache/gsa) — pinned to the
+        # fixture tree on the env layer so the section is hermetic.
+        export GSA_BUILD_DIR="$fixture/i/build-cache"
+
+        if [ "$(id -u)" = 0 ]; then
+            # Root cannot model the split (root ignores modes) and -Mm
+            # refuses root anyway — as in section e, the refusal IS the
+            # assertion and the model is skipped.
+            run_engine "$ws" -Mm --noconfirm --state-dir "$state"
+            [ "$FIXTURE_RC" = 3 ] || fail "as root -Mm must refuse (rc 3), got $FIXTURE_RC: $FIXTURE_OUTPUT"
+            vgrep "$FIXTURE_OUTPUT" -F "must run as the build user" >/dev/null ||
+                fail "the root refusal must say why: $FIXTURE_OUTPUT"
+            echo "skip: -Mm fallback lock model (fixture runs as root; the engine's refusal was asserted)"
+        else
+            # (b) the root supervisor stays refused rc 3 naming the
+            # build-user requirement — unchanged by the fallback.
+            run_engine "$ws" -Mm --noconfirm --state-dir "$state"
+            [ "$FIXTURE_RC" = 3 ] || fail "sudo gsa -Mm must refuse (rc 3), got $FIXTURE_RC: $FIXTURE_OUTPUT"
+            vgrep "$FIXTURE_OUTPUT" -F "must run as the build user" >/dev/null ||
+                fail "the root refusal must name the build-user requirement: $FIXTURE_OUTPUT"
+
+            # (a) the build-user run passes the lock gate through the
+            # fallback and REACHES its mirror work. --noconfirm is the
+            # observable that crosses the gate: the no-`--noconfirm` stop
+            # (confirmation-required) answers BEFORE the lock, so only the
+            # applied row proves the gate passed.
+            run_engine_user "$ws" -Mm --noconfirm --state-dir "$state"
+            [ "$FIXTURE_RC" = 0 ] || fail "-Mm as the build user past an untouchable state root is rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
+            absent_row "$FIXTURE_OUTPUT" "Permission denied" "the fallback absorbs the state-root permission failure"
+            has_row "$FIXTURE_OUTPUT" "link applied -> ../ffirst/fmirror" "mirror work ran past the lock gate"
+            [ -L "$ws/packages/fsecond/fmirror" ] || fail "the mirror work must have applied its link"
+
+            # (c) a held fallback lock answers run-in-flight — and the
+            # refusal names the FALLBACK path, pinning that the gate went
+            # through the fallback here (never the state lock).
+            mkdir -p "$GSA_BUILD_DIR"
+            : >"$GSA_BUILD_DIR/run.lock"
+            ready="$fixture/i/lock.ready"
+            # flock(1) in fd mode (section h's model): the background pid
+            # IS the lock holder and killing it releases the lock.
+            (
+                exec 9<"$GSA_BUILD_DIR/run.lock"
+                flock -x 9
+                : >"$ready"
+                exec sleep 30
+            ) &
+            holder=$!
+            for _ in $(seq 1 100); do
+                [ -f "$ready" ] && break
+                sleep 0.05
+            done
+            [ -f "$ready" ] || fail "the flock holder never took the fallback run lock"
+            run_engine_user "$ws" -Mm --noconfirm --state-dir "$state"
+            [ "$FIXTURE_RC" = 3 ] || fail "a held fallback lock is rc 3 (§K.3), got $FIXTURE_RC: $FIXTURE_OUTPUT"
+            vgrep "$FIXTURE_OUTPUT" -F "run-in-flight" >/dev/null ||
+                fail "the refusal must name run-in-flight: $FIXTURE_OUTPUT"
+            vgrep "$FIXTURE_OUTPUT" -F "$GSA_BUILD_DIR/run.lock" >/dev/null ||
+                fail "the refusal must name the held fallback lock: $FIXTURE_OUTPUT"
+            kill "$holder" 2>/dev/null || true
+            wait "$holder" 2>/dev/null || true
+        fi
+        chmod 755 "$state" "$state/locks" # release the modeled split for cleanup
         assert_varlib_unchanged
     )
 fi

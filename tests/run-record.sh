@@ -12,7 +12,7 @@ set -euo pipefail
 # the lane's own outcome code, and the continuation's `remaining:` is the
 # resume set (the non-succeeded rows in row order).
 #
-# Pinned here (five ( subshell ) sections + an enum closure):
+# Pinned here (six ( subshell ) sections + an enum closure):
 #   1. block shape + scalars — the markers exactly once each, `format: 2`,
 #      the fixed-order scalars (selection-source / order / lanes /
 #      normal-jobs / core-jobs / intensity / outcome / rc) over a
@@ -33,6 +33,9 @@ set -euo pipefail
 #      and the run exits §G.1's deferral-only 5;
 #   5. interrupt: one SIGINT mid-build tears the run down, the FULL record
 #      (plan, outcomes, continuation) is emitted first, rc 130.
+#   6. the deferred globals `--quiet`/`--verbose` (§B.8): recognised and
+#      refused (rc 2, naming the flag) by every command family, and never
+#      mirrored — a continuation names neither spelling (§H.2).
 #
 # Flip notes (docs/gsa-fixture-migration.md row `tests/run-record.sh`):
 # the fish argv (`--no-deps`/`--no-sync`/`--allow-broken-rustc`) retires for
@@ -236,10 +239,20 @@ remaining_matches() {
         *) fail "continuation command dropped '$flag': $command" "$fixture/s1.out" ;;
         esac
     done
+    # H3 (argv-scoped §H.2): the run's argv carried no hidden seam, so a
+    # seam may appear in NEITHER the command NOR the not-mirrored line (the
+    # line lists only spellings the command drops — never a roster).
+    nm=$(rr2_continuation not-mirrored <"$fixture/s1.out")
     for seam in --lane-job --stale-lock-check --install-decide --fetch-job; do
-        rr2_continuation not-mirrored <"$fixture/s1.out" | tr ' ' '\n' | grep -Fx -- "$seam" >/dev/null \
-            || fail "hidden seam $seam is not in the not-mirrored list:" "$fixture/s1.out"
+        case " $nm " in
+        *" $seam "*) fail "hidden seam $seam must not be listed (the run carried none): $nm" ;;
+        esac
+        case " $command " in
+        *" $seam "*) fail "hidden seam $seam leaked into the command: $command" ;;
+        esac
     done
+    [ "$nm" = "-" ] ||
+        fail "a plain build run mirrors everything it carried (H3), not-mirrored: $nm"
 )
 
 # ─── 2. Failure under --fail-fast: rc 1, dispatch stopped, resume set ───────
@@ -481,7 +494,62 @@ EOF
     esac
 )
 
-# ─── 6. Enum closure: every §H.3 status was produced by some scenario ───────
+# ─── 6. Deferred globals: --quiet/--verbose refused by every command, never
+#        mirrored (§B.8 deferred row; §H.2 NOT_MIRRORED) ────────────────────
+# §B.8 promises both flags are "recognised and refused (rc 2, naming the
+# flag) by every command; never mirrored (§H.2)" and §L.1 wants at least one
+# fixture per flag. The refusal fires before any run can start, so the
+# family matrix below is cheap — bare (no family yet) plus a representative
+# command of every family. And because no run can ever CARRY either flag,
+# §H.2's argv-scoped `not-mirrored:` line (H3) must name neither: a
+# continuation may mention a deferred global only when the run carried it
+# and the command drops it.
+(
+    set -euo pipefail
+    ws="$fixture/deferred-globals/ws"
+    make_case_workspace "$ws"
+    export PATH="$ws/bin:$PATH"
+    export GSA_CPU_THREADS=8 GSA_MEMORY_GIB=16
+
+    expect_refused() { # <flag> <what> <argv...> — the refusal class of §B.8
+        local flag=$1 what=$2
+        shift 2
+        run_engine "$ws" "$@"
+        [ "$FIXTURE_RC" = 2 ] ||
+            fail "$what must be refused rc 2 (§B.8 deferred), got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        [[ $FIXTURE_OUTPUT == *"$flag"* ]] ||
+            fail "$what is refused without naming $flag (§B.8): $FIXTURE_OUTPUT"
+    }
+
+    for flag in --quiet --verbose; do
+        expect_refused "$flag" "$flag bare (no family)" "$flag" p1
+        expect_refused "$flag" "-Qt $flag" -Qt "$flag"
+        expect_refused "$flag" "-Sl $flag" -Sl "$flag"
+        expect_refused "$flag" "-S --dry-run $flag" -S --dry-run "$flag" p1
+        expect_refused "$flag" "-B $flag" -B "$flag" p1
+        expect_refused "$flag" "-U $flag" -U "$flag" p1
+        expect_refused "$flag" "-Ma $flag" -Ma "$flag"
+    done
+
+    # never mirrored: one clean run's continuation mentions neither spelling
+    # in `command:` NOR in `not-mirrored:` (the run carried none — H3).
+    run_engine "$ws" -B --leaf --fail-fast --lanes 1 --jobs 2 --intensity low p1
+    [ "$FIXTURE_RC" = 0 ] || fail "the mirror-probe run failed: $FIXTURE_OUTPUT"
+    printf '%s\n' "$FIXTURE_OUTPUT" >"$fixture/s6.out"
+    record_ok "$fixture/s6.out"
+    command=$(rr2_continuation command <"$fixture/s6.out")
+    nm=$(rr2_continuation not-mirrored <"$fixture/s6.out")
+    for flag in --quiet --verbose; do
+        case " $command " in
+        *" $flag"* | *"$flag "*) fail "$flag leaked into the continuation command: $command" ;;
+        esac
+        case " $nm " in
+        *" $flag "*) fail "$flag must not be listed not-mirrored (the run carried none): $nm" ;;
+        esac
+    done
+)
+
+# ─── 7. Enum closure: every §H.3 status was produced by some scenario ───────
 for status in $STATUSES; do
     grep -qx "$status" "$seen_statuses" ||
         fail "status '$status' was never produced by any scenario — the enum pin is incomplete"

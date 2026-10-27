@@ -13,7 +13,9 @@ set -euo pipefail
 #      names what broke (format: 1 blocks, scalar order/duplication, bad
 #      plan/status values, bad rc shapes and status/code mismatches, unknown
 #      continuation keys, missing/duplicate sections, two blocks, stray
-#      markers, control characters, row/order disagreement).
+#      markers, control characters, row/order disagreement — missing or
+#      extra rows included (§M gap G8: one plan and one outcome row per
+#      `order` entry, never fewer)).
 #   3. run_engine dispatches to the selected engine (gsa by default since the
 #      Phase 5 cutover; GSA_TEST_ENGINE=fish runs the frozen oracle copy) and
 #      captures output and exit status like run_builder.
@@ -204,6 +206,10 @@ EOF
         /^niri-spicy-git succeeded 0 1450 ok$/ { print; print held; next }
         { print }
     ' "$g" | expect_reject order-mismatch 'does not match order scalar position'
+    grep -v '^niri-spicy-git build-install ok$' "$g" \
+        | expect_reject missing-plan-row 'missing plan row'
+    grep -v '^niri-spicy-git succeeded 0 1450 ok$' "$g" \
+        | expect_reject missing-outcome-row 'missing outcome row'
     printf 'prose only, no block\n' | expect_reject no-block 'no run-record block found'
     sed '$d' "$g" | expect_reject unclosed 'is not closed'
 )

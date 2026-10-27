@@ -15,10 +15,15 @@ set -euo pipefail
 #   * the runtime oracle is the file system: a dangling symlink does NOT
 #     resolve (tk `libtk.so` lesson) and a file needs no provide;
 #   * transaction-internal coverage: a soname another payload in the same
-#     batch ships is fine, and a declared provide covers its stems;
+#     batch ships is fine, and a declared provide covers its stems ONLY
+#     when a file stands behind them (the same file-system resolution the
+#     direct path performs — a provide with no file behind it stays a
+#     finding, the tk `libtk.so` lesson);
 #   * the exact finding message and the 0/1/2 exit contract;
 #   * --from-names resolves names through a cache dir (hook shape: alpm
-#     passes package names on stdin) and skips unresolvable names.
+#     passes package names on stdin) and skips unresolvable names — and
+#     stands down for EVERY name of a local `-U` file install (the pacman
+#     argv carries `-U`): a stale cached twin is never scanned instead.
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 tool="$root/tools/abi-need-check.sh"
@@ -229,6 +234,28 @@ out=$(printf 'linux-cachyos\n' |
 [[ $out == *'skipped (kernel-class'* ]] || fail "missing kernel-class skip note: $out"
 [[ $out != *'libmissing-fixture'* ]] || fail "kernel payload was scanned: $out"
 
+# …every OTHER listed kernel flavour is skipped the same way — the roster
+# is kernel_class()'s explicit name list (S2: never a `linux-*` wildcard).
+for flav in linux linux-cachyos-lts linux-cachyos-bore-lto linux-cachyos-bore-lto-dbg; do
+    tar --zstd -cf "$tmp/cache/$flav-1.0-1-any.pkg.tar.zst" -C "$tmp/b" .
+    status=0
+    out=$(printf '%s\n' "$flav" |
+        GSA_ABI_NEED_CHECK_CACHE="$tmp/cache" "$tool" --from-names 2>/dev/null) || status=$?
+    [[ $status == 0 ]] || fail "kernel flavour $flav not skipped (want 0), got $status: $out"
+    [[ $out == *'skipped (kernel-class'* ]] || fail "missing kernel-class skip note for $flav: $out"
+done
+
+# …and a `linux-tools`-SHAPED userspace name is NOT kernel-class (S2: the
+# old `linux-*` wildcard swallowed real userspace payloads — perf and
+# turbostat live in linux-tools, config/topology.conf:91): its fatal payload
+# must abort exactly like any userspace package.
+tar --zstd -cf "$tmp/cache/linux-tools-1.0-1-any.pkg.tar.zst" -C "$tmp/b" .
+status=0
+out=$(printf 'linux-tools\n' |
+    GSA_ABI_NEED_CHECK_CACHE="$tmp/cache" "$tool" --from-names 2>/dev/null) || status=$?
+[[ $status == 1 ]] || fail "linux-tools-shaped name skipped (want fatal 1), got $status: $out"
+[[ $out == *'libmissing-fixture.so.42'* ]] || fail "linux-tools-shaped payload not scanned: $out"
+
 # …but the -headers carve-out is NOT kernel-class (22 runtime links
 # measured in linux-cachyos-headers, 2026-10-22): same fatal payload stays
 # fatal under the carve-out name.
@@ -287,5 +314,73 @@ run out err -- "$tmp/m" || status=$?
     fail "first file's finding lost/misattributed: $out"
 [[ $out == *"pkg-multi: 'second-broken' needs 'libmissing-b.so.2'"* ]] ||
     fail "second file's finding lost/misattributed: $out"
+
+# ── 12. S1: a provide covers its stems ONLY with a file behind them ─────
+# The runtime oracle is the file system: a provide-name match must go
+# through the same file resolution the direct path performs. A provide
+# whose backing file is absent (the tk `libtk.so` dangling symlink class)
+# must NOT set covered — it stays a finding.
+make_bin "$tmp/s1/usr/bin" consumer libp-fixture.so.7 '$ORIGIN/lib'
+mkdir -p "$tmp/s1/usr/bin/lib"
+ln -s nowhere-fixture.so "$tmp/s1/usr/bin/lib/libp-fixture.so.7"
+make_pkgroot "$tmp/s1" pkg-provide-dangling libp-fixture.so
+status=0
+run out err -- "$tmp/s1" || status=$?
+[[ $status == 1 ]] || fail "provide with no file behind it resolved (want fatal 1), got $status: $out"
+[[ $out == *"needs 'libp-fixture.so.7'"* ]] || fail "provide-without-file finding lost: $out"
+
+# green: the same provide with a REAL file behind the needed name is a
+# clean cover (the file is a symlink, so no shipped SONAME backs it — the
+# provide + file resolution is what covers the stem).
+ln -f -s libp-fixture-real "$tmp/s1/usr/bin/lib/libp-fixture.so.7"
+printf 'fixture payload\n' >"$tmp/s1/usr/bin/lib/libp-fixture-real"
+status=0
+run out err -- "$tmp/s1" || status=$?
+[[ $status == 0 ]] || fail "provide with a real file behind it did not cover (want 0), got $status: $out"
+
+# ── 13. S3: a cached twin is never scanned for a `pacman -U` install ─────
+# The stand-down for local file installs must NOT be cache-conditioned: a
+# same-name archive sitting in the cache (a stale stock twin of a house
+# build — NOTE 2026-10-25 made weston/colord move theirs out by hand) must
+# not be scanned when the transaction installs a DIFFERENT file. alpm feeds
+# bare names (no versions), so the transaction shape is read from the
+# pacman argv — the fixture drives the tool under a stub named `pacman`
+# whose argv carries `-U`.
+tar --zstd -cf "$tmp/cache/pkg-twin-1.0.0-1-any.pkg.tar.zst" -C "$tmp/b" .
+mkdir -p "$tmp/elsewhere"
+tar --zstd -cf "$tmp/elsewhere/pkg-twin-9.9.9-1-any.pkg.tar.zst" -C "$tmp/a" .
+
+# control: outside a `-U` transaction the cached archive IS the payload,
+# and its fatal finding stays fatal…
+status=0
+out=$(printf 'pkg-twin\n' |
+    GSA_ABI_NEED_CHECK_CACHE="$tmp/cache" "$tool" --from-names 2>/dev/null) || status=$?
+[[ $status == 1 ]] || fail "cached twin not scanned outside -U (want fatal 1), got $status: $out"
+[[ $out == *'libmissing-fixture.so.42'* ]] || fail "cached payload finding lost: $out"
+
+# …but under `pacman -U <different file>` the hook stands down entirely.
+cc -x c - "-DTOOL_PATH=\"$tool\"" -o "$tmp/pacman" <<'STUB' || fail "cannot build the pacman argv stub"
+#include <sys/wait.h>
+#include <unistd.h>
+int main(void)
+{
+    pid_t pid = fork();
+    if (pid == 0) {
+        char *args[] = { "gsa-abi-need-check", "--from-names", NULL };
+        execv(TOOL_PATH, args);
+        _exit(127);
+    }
+    int status = 0;
+    waitpid(pid, &status, 0);
+    return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+}
+STUB
+status=0
+out=$(printf 'pkg-twin\n' |
+    GSA_ABI_NEED_CHECK_CACHE="$tmp/cache" \
+    "$tmp/pacman" -U "$tmp/elsewhere/pkg-twin-9.9.9-1-any.pkg.tar.zst" 2>/dev/null) || status=$?
+[[ $status == 0 ]] || fail "cached twin was scanned for a -U install (want stand-down 0), got $status: $out"
+[[ $out == *'pkg-twin: skipped (local file install'* ]] || fail "missing -U stand-down note: $out"
+[[ $out != *'libmissing-fixture'* ]] || fail "cached twin was scanned instead of standing down: $out"
 
 printf 'abi-need-check fixture: ok\n'

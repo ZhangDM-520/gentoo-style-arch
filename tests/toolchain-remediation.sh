@@ -76,7 +76,19 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/rr-v2.bash"
 
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-toolchain-remediation.XXXXXX")
-trap '/usr/bin/sudo -n rm -rf -- "$fixture" 2>/dev/null || rm -rf -- "$fixture" 2>/dev/null || true' EXIT
+# Keep-on-fail: a failing workspace is the evidence — the binpkg index rows
+# versus the archive bytes at the same PKGDEST path are how an index-invalid
+# race is diagnosed after the fact. Cleanup happens only after a green run;
+# a red run names the kept path loudly and leaves it in place.
+fixture_cleanup() {
+    local rc=$?
+    if [ "$rc" -ne 0 ]; then
+        printf 'toolchain-remediation fixture: kept failing workspace %s\n' "$fixture" >&2
+        return
+    fi
+    /usr/bin/sudo -n rm -rf -- "$fixture" 2>/dev/null || rm -rf -- "$fixture" 2>/dev/null || true
+}
+trap fixture_cleanup EXIT
 
 fail() {
     printf 'toolchain-remediation fixture: %s\n' "$1" >&2
@@ -201,6 +213,11 @@ p2)
 esac
 # A real archive with its own .PKGINFO truth: the engine's install pipeline
 # discovers candidates from the archive itself (never a glob-all fallback).
+# The build-stamp member makes every rebuild byte-distinct from the build
+# before it (real makepkg output always is — fresh tar header timestamps):
+# an accidentally identical same-PKGDEST rebuild would let a stale binpkg
+# index row verify the fresh bytes by accident, faking a green §J.4 gate.
+# The spawn log's line count is the per-run build serial — deterministic.
 stage="$PWD/.stage-$id"
 mkdir -p "$stage"
 {
@@ -209,7 +226,8 @@ mkdir -p "$stage"
     printf 'pkgver = 1.0.0-1\n'
     printf 'arch = any\n'
 } >"$stage/.PKGINFO"
-tar --zstd -cf "$PWD/$id-1.0.0-1-any.pkg.tar.zst" -C "$stage" .PKGINFO
+printf 'build-stamp %s\n' "$(wc -l <"${GSA_FAKE_SPAWN_LOG:?}")" >"$stage/.build-stamp"
+tar --zstd -cf "$PWD/$id-1.0.0-1-any.pkg.tar.zst" -C "$stage" .PKGINFO .build-stamp
 rm -rf -- "$stage"
 exit 0
 EOF

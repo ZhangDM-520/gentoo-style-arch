@@ -31,16 +31,16 @@ set -euo pipefail
 # prose pin becomes `env-required:` (§H.2) naming GSA_CPU_THREADS and
 # GSA_MEMORY_GIB. Plan refusal re-pins per §E.3/§G.1/§H.3 (see the second
 # DEVIATION below).
-# DEVIATION (§H.2 mirrored-flag list vs the engine): the continuation's
-# `mirror_flags` (crates/gsa-cli/src/record.rs:154) mirrors only family/force,
-# `--leaf`, `--fail-fast`, `--state-dir`/`--config`, `--no-register-ignorepkg`,
-# the prefetch knobs and the resolved `--lanes`/`--jobs`/`--intensity`; it
-# never mirrors `--no-sync`, `--allow-broken-rustc`, `--skip*` or
-# `--vcs-skip-tolerance` (they land in `deferred_flags`, record.rs:56-63).
-# The old pins (:83, :101, :106, :121) required THOSE to survive a resume; that
-# half is unpinnable on the engine and retires here — only what mirrors is
-# pinned — and the scenarios no longer pass the unmirrorable flags (their
-# live wiring belongs to the sync/toolchain stream).
+# §H.2 mirrored-flag pins: `mirror_flags` (crates/gsa-cli/src/record.rs)
+# mirrors the five §B.8 sync/freshness/toolchain modifiers (`--skip`,
+# `--skip-built`, `--vcs-skip-tolerance N`, `--no-sync`,
+# `--allow-broken-rustc`) beside the selection/failure/plan flags — a
+# continuation that drops one silently changes what the resume means, so
+# the scenario below pins every one of them (a dropped semantic flag is a
+# bug, §H.2; the earlier "unmirrorable" DEVIATION was a stale claim about
+# record.rs and retired with it). `--skip` and `--skip-built` are two
+# claims of ONE mode (never combinable, §B.8), so each claim is mirrored
+# in its own run.
 # DEVIATION (plan-refusal re-pin, inventory §E.3): the decision-row spelling
 # `p2 refuse partial-set …` is unreachable through `gsa --install-decide` —
 # that seam takes direct archive paths only and never runs recipe discovery
@@ -436,5 +436,41 @@ for var in GSA_CPU_THREADS GSA_MEMORY_GIB; do
         exit 1
     fi
 done
+
+# ─── The five §B.8 sync/freshness/toolchain modifiers survive a resume ──────
+# §H.2 pins that a continuation never drops a semantic flag: `--skip`,
+# `--skip-built`, `--vcs-skip-tolerance N`, `--no-sync` and
+# `--allow-broken-rustc` are MIRRORED (record.rs mirror_flags) — the copy is
+# the resume's meaning, not decoration. `--skip` and `--skip-built` are the
+# two claims of one mode (§B.8: never combinable), so each claim pins in its
+# own run. Each scenario gets its own build cache so a claim can never key
+# off a sibling scenario's archives.
+dir="$fixture/mirror-flags-skip"
+make_case_workspace "$dir"
+export GSA_BUILD_DIR="$dir/build-cache"
+run_expecting_failure "$dir" 'mirror --skip claims' \
+    -B --leaf --fail-fast --skip --vcs-skip-tolerance 3 --no-sync --allow-broken-rustc
+unset GSA_BUILD_DIR
+for flag in --skip --vcs-skip-tolerance --no-sync --allow-broken-rustc; do
+    if [[ "$RESUME_CMD" != *"$flag"* ]]; then
+        printf 'mirror --skip claims: resume command dropped %s (§H.2):\n  %s\n' "$flag" "$RESUME_CMD" >&2
+        exit 1
+    fi
+done
+if [[ "$RESUME_CMD" != *'--vcs-skip-tolerance 3'* ]]; then
+    printf 'mirror --skip claims: resume command dropped the tolerance VALUE (§H.2):\n  %s\n' "$RESUME_CMD" >&2
+    exit 1
+fi
+
+dir="$fixture/mirror-flags-skip-built"
+make_case_workspace "$dir"
+export GSA_BUILD_DIR="$dir/build-cache"
+run_expecting_failure "$dir" 'mirror --skip-built claim' \
+    -B --leaf --fail-fast --skip-built
+unset GSA_BUILD_DIR
+if [[ "$RESUME_CMD" != *'--skip-built'* ]]; then
+    printf 'mirror --skip-built claim: resume command dropped --skip-built (§H.2):\n  %s\n' "$RESUME_CMD" >&2
+    exit 1
+fi
 
 printf 'resume command fixture: PASS\n'

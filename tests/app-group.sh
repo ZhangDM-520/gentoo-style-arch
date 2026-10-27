@@ -73,11 +73,11 @@ set -euo pipefail
 #     selections — engine gap) and stay `format: 1` until the prompt lands;
 #     the same record semantics re-pin on the engine as `format: 2` through
 #     rr2_* in `gsa 7`.
-#   * dry-run records render `lanes: -`, which tests/lib/rr-v2.bash's rr2_body
-#     rejects (strict integer rule, §8 G12 of the migration doc); dry-run
-#     scalars are read through the local rr_dry_scalar extractor
-#     (tests/project.sh's pattern). Real-run records parse through rr2_*. Do
-#     not weaken rr-v2.bash.
+#   * dry-run records parse through the strict rr2_body reader like every
+#     other `format: 2` block: the §H.2 budget-conformance amendment renders
+#     `lanes`/`normal-jobs`/`core-jobs` as `0` — never `-` — for a record
+#     whose run dispatched nothing, and the pins assert those zeros
+#     (tests/project.sh's early lenient extractor retired with its shape).
 #   * kept-fish sections 5/6 cross-check their prompt anchors against the
 #     scenario-4 listing file ($fixture/o4), which the flip now produces with
 #     `gsa -Sl @app` — the row shape (`<index>. <id>`) is shared and both
@@ -295,29 +295,6 @@ sorted_ids() {
     printf '%s\n' $1 | sort
 }
 
-# rr_dry_scalar KEY — one scalar of a `--dry-run` run record, read from
-# $FIXTURE_OUTPUT. rr2_body rejects that record shape (it renders `lanes: -`
-# and the parser's integer rule is strict — tests/project.sh's recorded
-# deviation, and rr-v2.bash is NOT weakened), so dry-run scalars go through
-# this extractor; real-run records parse through rr2_* unchanged.
-rr_dry_scalar() {
-    printf '%s\n' "$FIXTURE_OUTPUT" | awk -v key="$1" '
-        /^--- run record begin ---$/ { inb = 1; next }
-        /^--- plan ---$/ { exit }
-        inb {
-            p = index($0, ":")
-            if (p && substr($0, 1, p - 1) == key) {
-                v = substr($0, p + 1); sub(/^ /, "", v); print v; found = 1; exit
-            }
-        }
-        END {
-            if (!found) {
-                printf("rr_dry_scalar: no %s scalar in the dry-run record\n", key) > "/dev/stderr"
-                exit 1
-            }
-        }'
-}
-
 # run_pty_gsa <input printf fmt> <outfile> [args...] — the gsa twin of
 # run_pty: the engine under a PTY with scripted stdin (proves a listing never
 # reads its input; nothing here asserts colours or rendering).
@@ -423,12 +400,20 @@ expanded_set "$qt" "$fixture/app.seeds" >"$fixture/app.expected"
 run_engine "$fixture" -B --dry-run @app
 printf '%s\n' "$FIXTURE_OUTPUT" >"$fixture/o3"
 [ "$FIXTURE_RC" = 0 ] || fail "non-TTY -B --dry-run @app failed" "$fixture/o3"
-order=$(rr_dry_scalar order)
+rr2_body <<<"$FIXTURE_OUTPUT" >/dev/null \
+    || fail "the non-TTY dry-run record is not strict format: 2 (§H.2)" "$fixture/o3"
+order=$(rr2_scalar order <<<"$FIXTURE_OUTPUT")
 [ "$(sorted_ids "$order")" = "$(cat "$fixture/app.expected")" ] \
     || fail "non-TTY selection [$(sorted_ids "$order" | tr '\n' ' ')] != @app members + consumers [$(tr '\n' ' ' <"$fixture/app.expected")] (derived from gsa -Qt)" "$fixture/o3"
 assert_topological "$qt" "$order"
-[ "$(rr_dry_scalar selection-source)" = 'sets=@app leaf=no range=-' ] \
-    || fail "the non-TTY run did not record expanded selection: $(rr_dry_scalar selection-source)" "$fixture/o3"
+[ "$(rr2_scalar selection-source <<<"$FIXTURE_OUTPUT")" = 'sets=@app leaf=no range=-' ] \
+    || fail "the non-TTY run did not record expanded selection: $(rr2_scalar selection-source <<<"$FIXTURE_OUTPUT")" "$fixture/o3"
+# §H.2 budget conformance: a record whose run dispatched nothing renders
+# `lanes`/`normal-jobs`/`core-jobs` as `0` — never `-`.
+for budget in lanes normal-jobs core-jobs; do
+    [ "$(rr2_scalar "$budget" <<<"$FIXTURE_OUTPUT")" = 0 ] \
+        || fail "dry-run budget scalar $budget is [$(rr2_scalar "$budget" <<<"$FIXTURE_OUTPUT")], want 0 (§H.2)" "$fixture/o3"
+done
 # The count is DATA (the record's rows — the derived set above), never a
 # pinned count; and that set excludes extdep, the non-app workspace package
 # app2 consumes. Expansion walks CONSUMERS only (§C.3): a build-order edge to
@@ -494,10 +479,12 @@ want_tail=$(listing_pairs <"$fixture/o4" | sed -n '2,$p')
 run_engine "$fixture" -B --dry-run @app 2..3
 printf '%s\n' "$FIXTURE_OUTPUT" >"$fixture/o5d"
 [ "$FIXTURE_RC" = 0 ] || fail "gsa -B --dry-run @app 2..3 failed (rc=$FIXTURE_RC)" "$fixture/o5d"
-[ "$(rr_dry_scalar order)" = "$(listing_rows <"$fixture/o5r" | paste -sd' ' -)" ] \
-    || fail "ranged dry-run order [$(rr_dry_scalar order)] but the ranged listing is [$(listing_rows <"$fixture/o5r" | paste -sd' ' -)]" "$fixture/o5d"
-[ "$(rr_dry_scalar selection-source)" = 'sets=@app leaf=no range=2..3' ] \
-    || fail "the ranged dry run did not record its selection source: $(rr_dry_scalar selection-source)" "$fixture/o5d"
+rr2_body <<<"$FIXTURE_OUTPUT" >/dev/null \
+    || fail "the ranged dry-run record is not strict format: 2 (§H.2)" "$fixture/o5d"
+[ "$(rr2_scalar order <<<"$FIXTURE_OUTPUT")" = "$(listing_rows <"$fixture/o5r" | paste -sd' ' -)" ] \
+    || fail "ranged dry-run order [$(rr2_scalar order <<<"$FIXTURE_OUTPUT")] but the ranged listing is [$(listing_rows <"$fixture/o5r" | paste -sd' ' -)]" "$fixture/o5d"
+[ "$(rr2_scalar selection-source <<<"$FIXTURE_OUTPUT")" = 'sets=@app leaf=no range=2..3' ] \
+    || fail "the ranged dry run did not record its selection source: $(rr2_scalar selection-source <<<"$FIXTURE_OUTPUT")" "$fixture/o5d"
 
 # ── gsa 6. Mixed groups: @app combined with @git is the deduplicated union of
 # both expansions in one topological order (§C.3/§C.5) ──────────────────────

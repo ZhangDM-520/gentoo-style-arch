@@ -35,10 +35,13 @@ set -euo pipefail
 # House conventions: `( subshell )` sections (each an isolated scenario with
 # its own workspace), inline oracle stubs (§D.2), `fail()` prefixes, and
 # tests/lib/rr-v2.bash's run_engine with GSA_TEST_ENGINE=gsa. `-U` run
-# records render `lanes: -` and one plan row per DECISION row, so rr2_*
-# (strict: integer budget scalars) cannot read them — those sections extract
-# record fields inline and say so. No new GSA_FAKE_* knobs: the stubs use the
-# existing GSA_FAKE_PACMAN_LOG / GSA_FAKE_SUDO_LOG vocabulary.
+# records are strict-`format: 2`-parseable (§H.2 amendment (a), the cutover
+# gap-(a) fix): integer budget scalars (a transaction run dispatches no
+# lanes — `lanes: 0`) and one plan/outcome row per SUBJECT (a multi-row
+# candidate collapses in the record), so every record below parses through
+# rr2_* and the -U sections pin that collapse where they read one. No new
+# GSA_FAKE_* knobs: the stubs use the existing GSA_FAKE_PACMAN_LOG /
+# GSA_FAKE_SUDO_LOG vocabulary.
 
 source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/rr-v2.bash"
@@ -192,19 +195,41 @@ db_install() {
 }
 
 # record_scalar KEY — one scalar of the machine block of a capture (the -U
-# record sections parse inline: rr2_* rejects their `lanes: -`).
+# records parse strict `format: 2` — §H.2 amendment (a) — so the rr2_*
+# readers are the record surface here, as in tests/gsa-install-v2.sh).
 record_scalar() {
-    printf '%s\n' "$FIXTURE_OUTPUT" | sed -n '/^--- run record begin ---$/,/^--- run record end ---$/p' \
-        | sed -n "s/^$1: //p" | head -n 1
+    rr2_scalar "$1" <<<"$FIXTURE_OUTPUT"
 }
 
 # record_section plan|outcome — one section's rows of the machine block.
 record_section() {
-    printf '%s\n' "$FIXTURE_OUTPUT" | sed -n '/^--- run record begin ---$/,/^--- run record end ---$/p' \
-        | awk -v sec="$1" '
-            $0 == "--- " sec " ---" { p = 1; next }
-            /^--- / { p = 0 }
-            p { print }'
+    case $1 in
+    plan) rr2_plan_rows <<<"$FIXTURE_OUTPUT" ;;
+    outcome) rr2_outcome_rows <<<"$FIXTURE_OUTPUT" ;;
+    *) fail "record_section: unknown section $1" ;;
+    esac
+}
+
+# record_collapse_ok WHAT — the §H.2 amendment (a) collapse contract of the
+# current -U capture: one plan row AND one outcome row per SUBJECT (the
+# `order` entries — rr2_body's agreement rule is the same promise enforced
+# a second time) and integer budget scalars (a transaction dispatches no
+# lanes: `0`, never `-`).
+record_collapse_ok() {
+    local what=$1 order
+    rr2_body <<<"$FIXTURE_OUTPUT" >/dev/null \
+        || fail "$what: the -U record is not strict format: 2 (§H.2 amendment (a)): $FIXTURE_OUTPUT"
+    order=$(rr2_scalar order <<<"$FIXTURE_OUTPUT")
+    local nsub
+    nsub=$(set -- $order; echo $#)
+    [ "$(record_section plan | wc -l)" = "$nsub" ] \
+        || fail "$what: $nsub subject(s) in order but $(record_section plan | wc -l) plan rows (§H.2 amendment (a) collapse): $FIXTURE_OUTPUT"
+    [ "$(record_section outcome | wc -l)" = "$nsub" ] \
+        || fail "$what: $nsub subject(s) in order but $(record_section outcome | wc -l) outcome rows (§H.2 amendment (a) collapse): $FIXTURE_OUTPUT"
+    for budget in lanes normal-jobs core-jobs; do
+        [ "$(record_scalar "$budget")" = 0 ] \
+            || fail "$what: budget scalar $budget is [$(record_scalar "$budget")], want 0 (§H.2 budget conformance): $FIXTURE_OUTPUT"
+    done
 }
 
 # decision_rows — the §E.2 decision rows of a capture (rows come before any
@@ -342,6 +367,9 @@ pkgname = viol"
             || fail "the transaction must run exactly once:" "$GSA_FAKE_PACMAN_LOG"
         [ "$(record_scalar outcome)" = success ] || fail "record outcome must be success:" "$FIXTURE_OUTPUT"
         [ "$(record_scalar rc)" = 0 ] || fail "record rc must be 0:" "$FIXTURE_OUTPUT"
+        # §H.2 amendment (a): the -U record collapses per subject and keeps
+        # integer budget scalars — the shape rr2_* just validated above.
+        record_collapse_ok "report-only -U run"
         vgrep "$FIXTURE_OUTPUT" -Fq "INFO qa-report mode=report-only findings=2" \
             || fail "the QA block must count the two staged violations:" "$fixture/b/out"
         grep < <(qa_lines) -Fq "purged-tools:_viol:_makedepends_reintroduces_purged_tool_'cuda'" \
@@ -403,6 +431,9 @@ pkgname = stale"
             || fail "a refused run still emits the run record (§H.1):" "$fixture/c/out"
         [ "$(record_scalar outcome)" = refused ] || fail "record outcome must be refused:" "$FIXTURE_OUTPUT"
         [ "$(record_scalar rc)" = 3 ] || fail "record rc must be 3:" "$FIXTURE_OUTPUT"
+        # §H.2 amendment (a): the refusing record is the same collapsed
+        # shape — one row pair per subject, integer budget scalars.
+        record_collapse_ok "refusing -U run"
         grep < <(record_section plan) -q ' refused ' \
             || fail "the record's plan rows must carry the refusal:" "$FIXTURE_OUTPUT"
         [ ! -s "$GSA_FAKE_PACMAN_LOG" ] || fail "a refusing plan must make zero pacman calls:" "$GSA_FAKE_PACMAN_LOG"

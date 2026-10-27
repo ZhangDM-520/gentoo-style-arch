@@ -28,13 +28,15 @@ set -euo pipefail
 #      `refusing to rewrite — integrity-stop` / `restored byte-for-byte` on
 #      stderr, recipe byte-identical (the updpkgsums rewrite is rolled back
 #      with the version rewrite).
-#   4. `gsa -Su`: the sync moves a version → the stale set is exactly that
+#   4. `gsa -Syu`: the sync moves a version → the stale set is exactly that
 #      recipe → the run builds (stub makepkg) + installs (stub pacman) and
 #      the run record covers it; a re-run with nothing stale is
-#      `- noop empty-list` / `- succeeded 0 - empty-list`, rc 0; `-Su
+#      `- noop empty-list` / `- succeeded 0 - empty-list`, rc 0; `-Syu
 #      --dry-run` renders the plan record (build-install + never-started
 #      dry-run rows) while never querying, never rewriting and never
-#      building.
+#      building. `gsa -Su` (H9) updates the stale set with NO sync pass:
+#      the provider is never queried, the recipe is never rewritten, and
+#      the committed version builds + installs.
 #   5. skip claims on a build run: `--skip` claims a fresh prebuilt set as
 #      plan `skip ok` / outcome `succeeded - - ok` with ZERO makepkg
 #      invocations; `--skip-built` claims as `skip skip-built`; `--no-sync`
@@ -391,6 +393,19 @@ record_block() {
         fail "-Sy must not emit a run record:" "$fixture/s1/out"
     fi
 
+    # H4: the per-recipe status line (machine vocabulary, §L.6) — every
+    # recipe answers with exactly one line, the rewrite included.
+    grep -Fx 'INFO sync pkg=demo status=version-moved old=1.0.0-1 new=2.0.0-2' "$fixture/s1/out" >/dev/null \
+        || fail "the per-recipe sync status line is missing/wrong:" "$fixture/s1/out"
+
+    # H4: a second pass has nothing to do — and says so per recipe (the
+    # silent majority was the complaint: no status update at all).
+    run_sy "$ws" "$fixture/s1/out2" "$fixture/s1/err2" "$fixture/s1/state"
+    [ "$SY_RC" = 0 ] \
+        || fail "a second -Sy over the rewritten recipe is rc 0, got $SY_RC:" "$fixture/s1/err2"
+    grep -Fx 'INFO sync pkg=demo status=no-change reason=current' "$fixture/s1/out2" >/dev/null \
+        || fail "the no-change outcome must answer with its status line (H4):" "$fixture/s1/out2"
+
     # the rewrite: pkgver/pkgrel moved and the sums carry the PUBLISHED
     # digest (the staged source hashes to it — a real anchor, not a fetch hash
     # echo: the pre-image placeholder differs)
@@ -538,7 +553,7 @@ record_block() {
         || fail "the integrity stop built something:" "$GSA_FAKE_SYNC_MAKEPKG_LOG"
 )
 
-# ─── 4. -Su: sync → stale set → build+install; noop; dry-run ───────────────
+# ─── 4. -Syu: sync → stale set → build+install; noop; dry-run; -Su no-sync ─
 (
     set -euo pipefail
     ws="$fixture/s4/ws"
@@ -572,18 +587,18 @@ record_block() {
     # provider will move the recipe to 2.0.0-2
     : >"$recipe/demo-1.0.0-1-any.pkg.tar.zst"
 
-    # ── run 1: -Sy moves the version, the stale set is exactly that recipe,
+    # ── run 1: -Syu moves the version, the stale set is exactly that recipe,
     #    and the run builds + installs it (rule 11's pipeline) ─────────────
-    run_engine "$ws" -Su --state-dir "$state" --config "$ws/pacman.conf" --no-prefetch
+    run_engine "$ws" -Syu --state-dir "$state" --config "$ws/pacman.conf" --no-prefetch
     {
         echo "$FIXTURE_OUTPUT"
     } >"$fixture/s4/run1.txt"
     [ "$FIXTURE_RC" = 0 ] \
-        || fail "-Su with a stale recipe rc=$FIXTURE_RC, want 0:" "$fixture/s4/run1.txt"
+        || fail "-Syu with a stale recipe rc=$FIXTURE_RC, want 0:" "$fixture/s4/run1.txt"
     grep -F 'demo: 1.0.0-1 → 2.0.0-2 (synced with Arch repo)' "$fixture/s4/run1.txt" >/dev/null \
-        || fail "-Su did not run the -Sy disposition:" "$fixture/s4/run1.txt"
+        || fail "-Syu did not run the -Sy disposition:" "$fixture/s4/run1.txt"
     rr2_body <<<"$FIXTURE_OUTPUT" >/dev/null \
-        || fail "-Su emitted no complete run record:" "$fixture/s4/run1.txt"
+        || fail "-Syu emitted no complete run record:" "$fixture/s4/run1.txt"
     [ "$(rr2_scalar order <<<"$FIXTURE_OUTPUT")" = "demo" ] \
         || fail "the stale set must be exactly [demo], order=$(rr2_scalar order <<<"$FIXTURE_OUTPUT"):" "$fixture/s4/run1.txt"
     [ "$(rr2_plan demo plan <<<"$FIXTURE_OUTPUT")" = "build-install" ] \
@@ -595,18 +610,18 @@ record_block() {
     [ "$(rr2_outcome demo reason <<<"$FIXTURE_OUTPUT")" = "ok" ] \
         || fail "the built row's reason is not ok:" "$fixture/s4/run1.txt"
     grep -F 'makepkg ' "$GSA_FAKE_SYNC_MAKEPKG_LOG" >/dev/null \
-        || fail "-Su never invoked makepkg:" "$GSA_FAKE_SYNC_MAKEPKG_LOG"
+        || fail "-Syu never invoked makepkg:" "$GSA_FAKE_SYNC_MAKEPKG_LOG"
     grep -F 'pacman -U' "$GSA_FAKE_SYNC_PACMAN_LOG" >/dev/null \
-        || fail "-Su never transacted the install:" "$GSA_FAKE_SYNC_PACMAN_LOG"
+        || fail "-Syu never transacted the install:" "$GSA_FAKE_SYNC_PACMAN_LOG"
     [ -f "$recipe/demo-2.0.0-2-any.pkg.tar.zst" ] \
         || fail "the stub build produced no archive at the new version"
 
     # ── run 2: re-run with nothing stale — §E.3's noop empty-list, rc 0 ───
-    run_engine "$ws" -Su --state-dir "$state" --config "$ws/pacman.conf" --no-prefetch
+    run_engine "$ws" -Syu --state-dir "$state" --config "$ws/pacman.conf" --no-prefetch
     {
         echo "$FIXTURE_OUTPUT"
     } >"$fixture/s4/run2.txt"
-    [ "$FIXTURE_RC" = 0 ] || fail "-Su with nothing stale rc=$FIXTURE_RC, want 0:" "$fixture/s4/run2.txt"
+    [ "$FIXTURE_RC" = 0 ] || fail "-Syu with nothing stale rc=$FIXTURE_RC, want 0:" "$fixture/s4/run2.txt"
     grep -F 'Version and checksum sync: nothing to do' "$fixture/s4/run2.txt" >/dev/null \
         || fail "the re-run's sync phase is not a no-op:" "$fixture/s4/run2.txt"
     # budget-less record: lanes: - cannot pass rr2_'s strict scalar grammar
@@ -619,7 +634,7 @@ record_block() {
     printf '%s\n' "$block" | grep -Fx -- 'rc: 0' >/dev/null \
         || fail "the noop record's rc scalar is not 0:" "$fixture/s4/run2.txt"
 
-    # ── run 3: -Su --dry-run — the plan record only, nothing mutated. A live
+    # ── run 3: -Syu --dry-run — the plan record only, nothing mutated. A live
     #    -Sy first stages a STALE recipe state (3.0.0 tracked vs 2.0.0-2
     #    built); the dry run then faces a provider version (4.0.0) that WOULD
     #    rewrite again and must neither query nor rewrite nor build. ───────
@@ -636,11 +651,11 @@ record_block() {
     mk_before=$(wc -l <"$GSA_FAKE_SYNC_MAKEPKG_LOG")
 
     export GSA_FAKE_SYNC_SI_VERSION=4.0.0-1
-    run_engine "$ws" -Su --dry-run --state-dir "$state" --config "$ws/pacman.conf" --no-prefetch
+    run_engine "$ws" -Syu --dry-run --state-dir "$state" --config "$ws/pacman.conf" --no-prefetch
     {
         echo "$FIXTURE_OUTPUT"
     } >"$fixture/s4/run3.txt"
-    [ "$FIXTURE_RC" = 0 ] || fail "-Su --dry-run rc=$FIXTURE_RC, want 0:" "$fixture/s4/run3.txt"
+    [ "$FIXTURE_RC" = 0 ] || fail "-Syu --dry-run rc=$FIXTURE_RC, want 0:" "$fixture/s4/run3.txt"
     block=$(record_block "$fixture/s4/run3.txt")
     printf '%s\n' "$block" | grep -Fx -- 'demo build-install ok' >/dev/null \
         || fail "the dry-run plan record must plan the stale recipe:" "$fixture/s4/run3.txt"
@@ -649,11 +664,32 @@ record_block() {
     printf '%s\n' "$block" | grep -Fx -- 'dry-run: yes' >/dev/null \
         || fail "the dry-run record must carry the dry-run: yes scalar:" "$fixture/s4/run3.txt"
     cmp -s "$fixture/s4/PKGBUILD.pre-dry" "$recipe/PKGBUILD" \
-        || fail "-Su --dry-run rewrote the recipe:" "$recipe/PKGBUILD"
+        || fail "-Syu --dry-run rewrote the recipe:" "$recipe/PKGBUILD"
     [ "$(wc -l <"$GSA_FAKE_SYNC_SI_LOG")" = "$si_before" ] \
-        || fail "-Su --dry-run queried the provider (it must run no sync)"
+        || fail "-Syu --dry-run queried the provider (it must run no sync)"
     [ "$(wc -l <"$GSA_FAKE_SYNC_MAKEPKG_LOG")" = "$mk_before" ] \
-        || fail "-Su --dry-run invoked makepkg:" "$GSA_FAKE_SYNC_MAKEPKG_LOG"
+        || fail "-Syu --dry-run invoked makepkg:" "$GSA_FAKE_SYNC_MAKEPKG_LOG"
+
+    # ── run 4: `gsa -Su` (H9) — the stale-set update with NO sync pass. The
+    #    provider (4.0.0-1 waiting in the stub) is never queried, the recipe
+    #    is never rewritten (stays 3.0.0), and the committed version builds
+    #    + installs. ─────────────────────────────────────────────────────
+    si_before=$(wc -l <"$GSA_FAKE_SYNC_SI_LOG")
+    cp "$recipe/PKGBUILD" "$fixture/s4/PKGBUILD.pre-su"
+    run_engine "$ws" -Su --state-dir "$state" --config "$ws/pacman.conf" --no-prefetch
+    {
+        echo "$FIXTURE_OUTPUT"
+    } >"$fixture/s4/run4.txt"
+    [ "$FIXTURE_RC" = 0 ] \
+        || fail "-Su with a stale recipe rc=$FIXTURE_RC, want 0:" "$fixture/s4/run4.txt"
+    [ "$(wc -l <"$GSA_FAKE_SYNC_SI_LOG")" = "$si_before" ] \
+        || fail "-Su queried the provider (H9: -Su runs no sync):" "$GSA_FAKE_SYNC_SI_LOG"
+    cmp -s "$fixture/s4/PKGBUILD.pre-su" "$recipe/PKGBUILD" \
+        || fail "-Su rewrote the recipe (H9: -Su runs no sync):" "$recipe/PKGBUILD"
+    [ "$(rr2_scalar order <<<"$FIXTURE_OUTPUT")" = "demo" ] \
+        || fail "the -Su stale set must be exactly [demo]:" "$fixture/s4/run4.txt"
+    [ "$(rr2_outcome demo status <<<"$FIXTURE_OUTPUT")" = "succeeded" ] \
+        || fail "-Su did not build the stale recipe:" "$fixture/s4/run4.txt"
 )
 
 # ─── 5. skip claims (--skip / --skip-built) and the --no-sync no-query proof ─

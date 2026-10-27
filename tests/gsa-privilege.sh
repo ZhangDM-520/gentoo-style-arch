@@ -98,7 +98,6 @@ make_ws() {
         echo 'jobs=2'
         echo 'intensity=low'
         echo 'memory_per_job_gib=1'
-        echo 'state_dir=auto'
     } >"$ws/config/build-defaults.conf"
     cat >"$ws/packages/misc/pkg1/PKGBUILD" <<'PKGB'
 pkgname=pkg1

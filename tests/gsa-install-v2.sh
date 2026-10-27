@@ -19,12 +19,12 @@ set -euo pipefail
 #      skip (`already-current` — the same-version + install-date rule, plus
 #      its doubt-installs half), refuse (`pgo-*`, `abi-soname`, `needed` —
 #      gates force mode never bypasses); `noop empty-list` where §E.3 defines
-#      it (`-Ua`, zero eligible archives); `parked` where it is observable —
-#      the cone-stop park row of an `-S` install refusal. NOTE (gap,
-#      reported): a decision-row `parked` needs `DecisionContext.parks`, which
-#      no production caller populates, so the seam never emits one; the park
-#      is observable only as the run-record row (§E.3 "the row records the
-#      park").
+#      it (`-Ua`, zero eligible archives); `parked` (§E.3/§E.5) — the
+#      cone-stop park row of an `-S` install refusal, and the decision-row
+#      park the state root's run-record rows report: a parked subject's
+#      plan row is `parked <reason>`, its stale twin is never probed or
+#      installed, a parked-only plan is rc 0 (§E.5), and the run itself is
+#      §G.1's deferral-only class.
 #   b. `gsa -S` installs each package BEFORE its consumers compile (rule 11):
 #      per-edge ordering proven from the stub clocks (a provider's `pacman -U`
 #      ends before its consumer's makepkg spawn), plan rows `build-install`,
@@ -472,12 +472,17 @@ if want a; then
         assert_row "$rows" pgopkg refuse "pgo-hit $pgo usr/lib/libp.so" "PGO payload refusal (rule 25(h))"
         assert_row "$rows" pgopkg refuse "pgo-instrumented $pgo" "PGO payload refusal (rule 25(h))"
 
-        # ── refuse ABI provide drift (§E.3 abi-soname): the installed
-        # auto-version 1-64 moves to 2-64 in the build
+        # ── the ABI provide gate is CONDITIONAL (F1, per the fish oracle's
+        # abi_provide_refusals: a move with NOTHING stranded — no linked
+        # consumer, no pinner — plans clean). abipkg is alone in this
+        # workspace and installed at the same version, so the move stands
+        # down and rule 11's same-version skip answers; the refusal row
+        # shape stays covered by tests/abi-batch-policy.sh's stranded case.
         run_engine "$ws" --install-decide checked "$abi"
-        [ "$FIXTURE_RC" = 1 ] || fail "an ABI refusal is rc 1 (§E.5), got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        [ "$FIXTURE_RC" = 0 ] || fail "an unstranded provide move plans clean (F1), got $FIXTURE_RC: $FIXTURE_OUTPUT"
         rows=$(printf '%s\n' "$FIXTURE_OUTPUT" | rows_only)
-        assert_row "$rows" abipkg refuse "abi-soname $abi abipkg libfoo.so 1-64 2-64" "ABI provide-drift refusal (rule 25(a))"
+        assert_row "$rows" abipkg skip "already-current $canon" "unstranded provide move stands down to the rule-11 skip (F1)"
+        assert_no_row "$rows" abipkg refuse "nothing is stranded, so no abi-soname refusal (F1)"
 
         # ── refuse NEEDED miss (§E.3 needed): the archive's own ELF member
         # needs a soname nothing resolves (rule 25(b)/(e))
@@ -490,7 +495,7 @@ if want a; then
         run_engine "$ws" --install-decide force "$same"
         rows=$(printf '%s\n' "$FIXTURE_OUTPUT" | rows_only)
         assert_row "$rows" samever install 'ok' "force bypasses the same-version skip (§B.6)"
-        for pair in "$pgo|PGO payload|pgopkg" "$abi|ABI provide drift|abipkg" "$needed|NEEDED miss|neededpkg"; do
+        for pair in "$pgo|PGO payload|pgopkg" "$needed|NEEDED miss|neededpkg"; do
             arch=${pair%%|*}
             rest=${pair#*|}
             what=${rest%%|*}
@@ -502,6 +507,11 @@ if want a; then
                 || fail "force must not bypass the $what gate (a refuse row survives force):
 $rows"
         done
+        # The unstranded provide move is not a safety gate (F1): force skips
+        # past rule 11 and installs it.
+        run_engine "$ws" --install-decide force "$abi"
+        rows=$(printf '%s\n' "$FIXTURE_OUTPUT" | rows_only)
+        assert_row "$rows" abipkg install 'ok' "force installs an unstranded provide move (F1)"
 
         # ── noop (§E.3): `empty-list` under -Ua with zero eligible archives.
         # -Ua is force, so the empty plan is a noop, not a refusal (§B.6);
@@ -515,6 +525,14 @@ $rows"
         run_engine "$empty" -Ua --dry-run --state-dir "$fixture/a/state" --config "$empty/pacman.conf"
         [ "$FIXTURE_RC" = 0 ] || fail "an empty -Ua plan is a noop, not a failure (§E.5), got $FIXTURE_RC: $FIXTURE_OUTPUT"
         assert_row "$(printf '%s\n' "$FIXTURE_OUTPUT" | rows_only)" - noop 'empty-list' "noop empty-list under -Ua (§E.3)"
+        # H3 (argv-scoped §H.2): the run carried the one-shot `-Ua` — the
+        # not-mirrored line lists exactly that spelling (the one the command
+        # drops) and nothing else, and the command never replays it.
+        [ "$(rr2_continuation not-mirrored <<<"$FIXTURE_OUTPUT")" = "-Ua" ] ||
+            fail "a -Ua run's not-mirrored line must be exactly '-Ua', got: $(rr2_continuation not-mirrored <<<"$FIXTURE_OUTPUT")"
+        case " $(rr2_continuation command <<<"$FIXTURE_OUTPUT") " in
+        *" -Ua "*) fail "the continuation must never replay -Ua (§H.2): $(rr2_continuation command <<<"$FIXTURE_OUTPUT")" ;;
+        esac
 
         # ── the seam touches nothing (§D.1): every stub log above is still
         # empty (the -S park run below uses its own log paths)
@@ -534,11 +552,12 @@ $rows"
         run_engine "$ws" --install-decide
         [ "$FIXTURE_RC" = 2 ] || fail "an empty argument list is rc 2 (§E.5), got $FIXTURE_RC"
 
-        # ── parked (§E.3): the run-record park row of an -S install refusal.
-        # A decision-row `parked` needs DecisionContext.parks, which no
-        # production caller populates (§D.1's fixed seam shape cannot express
-        # a park), so the park is asserted where it is observable: the row
-        # records it, and the parked position never builds or installs.
+        # ── parked (§E.3/§E.5): the run-record park row of an -S install
+        # refusal. The park is also DECISION-row visible: the state root's
+        # run-record rows — the build path's park/deferral state — feed
+        # DecisionContext.parks, so an install plan reports `parked
+        # <reason>` for the parked subject instead of probing or installing
+        # its stale twin (the pins below).
         park_ws="$fixture/a/park-ws"
         park_db="$fixture/a/park-db"
         make_workspace "$park_ws" 2 auto low
@@ -566,6 +585,58 @@ $rows"
         fi
         [ "$(txn_count "$GSA_FAKE_PACMAN_LOG")" = 0 ] \
             || fail "a parked plan transacts nothing (rule 25(h)):" "$GSA_FAKE_PACMAN_LOG"
+
+        # ── the same park as a DECISION row (§E.3/§E.5): the parked
+        # subject's stale twin — an instrumented recipe with a baked payload,
+        # the exact archive the pgo gate refuses WHEN it is probed (the
+        # control below) — must never install over a park.
+        twin_stage="$fixture/a/park-twin-stage"
+        stage_pkginfo "$twin_stage" consumer consumer "$ver" "$epoch"
+        mkdir -p "$twin_stage/usr/lib"
+        printf '# baked /home/u/build/train.gcda\n' >"$twin_stage/usr/lib/libc.so"
+        twin="$park_ws/packages/consumer/consumer-$ver-any.pkg.tar.zst"
+        make_archive "$twin" "$twin_stage"
+        # PGO witness: only an instrumented recipe can leak a payload (§E.3)
+        printf 'CFLAGS+=" -fprofile-generate=/tmp/p"\n' >>"$park_ws/packages/consumer/PKGBUILD"
+
+        # control: with no park state the twin IS probed — and the pgo gate
+        # refuses it (§E.3 pgo-*). This is the probe the park below pre-empts.
+        export GSA_STATE_DIR="$fixture/a/no-parks"
+        run_engine "$park_ws" --install-decide checked "$twin"
+        [ "$FIXTURE_RC" = 1 ] || fail "the stale twin must refuse when probed (control, §E.5), got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        rows=$(printf '%s\n' "$FIXTURE_OUTPUT" | rows_only)
+        assert_row "$rows" consumer refuse "pgo-hit $twin usr/lib/libc.so" "stale-twin control (the pgo gate fires when probed)"
+        unset GSA_STATE_DIR
+
+        # the park reports itself: `parked <reason>` (§E.3), never probed
+        # (no pgo refusal survives the park), never installed (no install
+        # row), and a parked-only plan is rc 0 (§E.5).
+        export GSA_STATE_DIR="$fixture/a/park-state"
+        run_engine "$park_ws" --install-decide checked "$twin"
+        [ "$FIXTURE_RC" = 0 ] || fail "a parked-only plan is rc 0 (§E.5), got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        rows=$(printf '%s\n' "$FIXTURE_OUTPUT" | rows_only)
+        assert_row "$rows" consumer parked 'waits-on-failed' "the parked decision row (§E.3/§E.5)"
+        assert_no_row "$rows" consumer refuse "a parked subject is never probed (§E.3)"
+        assert_no_row "$rows" consumer install "a parked subject is never installed (§E.3)"
+        unset GSA_STATE_DIR
+
+        # the production -U flow reports the same park in its record: the
+        # plan row records the park (§E.3 "the row records the park"), the
+        # stale twin transacts nothing (§E.3), and the run is §G.1's
+        # deferral-only class (≥1 parked row, no failed row).
+        : >"$GSA_FAKE_PACMAN_LOG"
+        run_engine "$park_ws" -U --state-dir "$fixture/a/park-state" --config "$park_ws/pacman.conf" consumer
+        [ "$FIXTURE_RC" = 5 ] || fail "a parked-only run is §G.1's deferral-only 5, got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        rr2_body <<<"$FIXTURE_OUTPUT" >/dev/null \
+            || fail "the parked -U record must parse strict format: 2 (§H.2): $FIXTURE_OUTPUT"
+        [ "$(rr2_plan consumer plan <<<"$FIXTURE_OUTPUT")" = parked ] \
+            || fail "the parked subject's plan row must be parked (§H.2): $FIXTURE_OUTPUT"
+        [ "$(rr2_plan consumer reason <<<"$FIXTURE_OUTPUT")" = waits-on-failed ] \
+            || fail "the park plan row must carry waits-on-failed: $FIXTURE_OUTPUT"
+        [ "$(rr2_outcome consumer status <<<"$FIXTURE_OUTPUT")" = parked ] \
+            || fail "the park outcome row must be parked (§H.3): $FIXTURE_OUTPUT"
+        [ "$(txn_count "$GSA_FAKE_PACMAN_LOG")" = 0 ] \
+            || fail "a parked subject's stale twin must never transact (§E.3):" "$GSA_FAKE_PACMAN_LOG"
 
         # ── self-explaining refusal (§H.2 amendment (a), 2026-10-14): a
         # shrunken split set refuses through its OWN rows (partial-set) and

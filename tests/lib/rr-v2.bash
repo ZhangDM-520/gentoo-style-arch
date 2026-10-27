@@ -85,8 +85,9 @@ vgrep() {
 # parser takes the strict reading and docs/gsa-fixture-migration.md "Contract
 # gaps found" records the silence: blank lines and control characters inside
 # the block are rejected, duplicate scalars/rows/continuation keys are
-# rejected, plan and outcome rows must agree with the `order` scalar
-# (§C.5: one topological order everywhere), rc must be the row status's lane
+# rejected, plan and outcome rows must agree with the `order` scalar — one
+# per entry, no more AND no fewer (§M gap G8; §C.5: one topological order
+# everywhere), rc must be the row status's lane
 # code or "-" (§H.3/§G.2), and `format` must be exactly `2` (a `format: 1`
 # block is data for tests/lib/fixture-lib.bash's rr_*, not for these helpers).
 
@@ -253,6 +254,13 @@ rr2_body() {
             if (sec == 0) bad("missing section plan")
             if (sec == 1) bad("missing section outcome")
             if (sec == 2) bad("missing section continuation")
+            # §M gap G8: one plan row and one outcome row per order entry —
+            # fewer AND more are both malformed (more is rejected row-wise
+            # above; the missing case is named by its order position).
+            if (nplan < nord) \
+                bad("missing plan row: order scalar position " (nplan + 1) " (" ord[nplan + 1] ") has no plan row")
+            if (nout < nord) \
+                bad("missing outcome row: order scalar position " (nout + 1) " (" ord[nout + 1] ") has no outcome row")
 
             for (i = 1; i <= n; i++) print body[i]
         }

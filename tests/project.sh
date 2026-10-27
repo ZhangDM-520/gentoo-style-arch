@@ -58,19 +58,19 @@ set -euo pipefail
 #     failure exits §G.1's 4 (not 1), and the fish-era `never-started`
 #     consumer row becomes `parked … waits-on-failed` (§H.3) — the kept
 #     behaviour is that the failure's consumers never build.
-#   * gap G4: the engine's DRY-RUN continuations spell `--leaf` as
-#     `--leaf=no`/`--leaf=yes` (§H.4's spelling, undefined in §B.8), and gsa
-#     accepts both spellings as leaf-only (measured: `gsa -B --leaf=no x`
-#     records `selection-source: … leaf=yes`) — a §H.4 continuation replayed
-#     verbatim would silently lose expansion. Real-run continuations omit
-#     `--leaf` for an expanded run and use bare `--leaf` for a leaf run;
-#     those are the §B.8 spellings this fixture pins and re-drives.
-#   * rr-v2.bash strictness vs the dry-run record shape: a `--dry-run` record
-#     carries `lanes: -`/`normal-jobs: -`/`core-jobs: -`, which rr2_body's
-#     integer rule rejects (its strict reading predates the dry-run shape,
-#     docs/gsa-fixture-migration.md §8 G12). Dry-run scalars and its
-#     continuation are therefore read through the local rr_dry_scalar /
-#     rr_dry_cont extractors; real-run records go through rr2_* unchanged.
+#   * gap G4 (§B.8 amendment 3): `--leaf` is the bare boolean and the ONLY
+#     spelling — `--leaf=no`/`--leaf=yes` are refused (rc 2, naming `--leaf`)
+#     and no engine output surface may contain them. Continuations mirror
+#     bare `--leaf` for a leaf run and OMIT it when expansion applies (the
+#     absence IS the negation, §H.2), and `selection-source`'s `leaf=<yes|no>`
+#     is a VALUE, not a flag spelling. The ban pins below assert the refusal
+#     and re-drive the bare spelling through the continuation.
+#   * dry-run records parse through the strict rr2_body reader like every
+#     other `format: 2` block: the §H.2 budget-conformance amendment renders
+#     `lanes`/`normal-jobs`/`core-jobs` as `0` — never `-` — for a record
+#     whose run dispatched nothing (dry-run plan records), and the pins below
+#     assert those zeros. The early lenient rr_dry_* extractors retired with
+#     the `lanes: -` shape they were written for.
 #   * the fish-era parallel pre-executor (column-0 run/run_split scraping and
 #     its self-pin) retires with the fish argv it cached: gsa invocations are
 #     cheap and every call now goes through run_engine (tests/lib/rr-v2.bash).
@@ -182,47 +182,6 @@ consumers_closure() {
         }' "$1" | sort
 }
 
-# rr_dry_scalar KEY / rr_dry_cont KEY — one scalar / continuation line of a
-# `--dry-run` run record. rr2_body rejects that record shape (see the flip
-# notes: `lanes: -` vs its integer rule), so the dry-run record is read
-# through these two extractors and pinned on its §H.2 fields; everything
-# else in this fixture parses through rr2_*.
-rr_dry_scalar() {
-    printf '%s\n' "$FIXTURE_OUTPUT" | awk -v key="$1" '
-        /^--- run record begin ---$/ { inb = 1; next }
-        /^--- plan ---$/ { exit }
-        inb {
-            p = index($0, ":")
-            if (p && substr($0, 1, p - 1) == key) {
-                v = substr($0, p + 1); sub(/^ /, "", v); print v; found = 1; exit
-            }
-        }
-        END {
-            if (!found) {
-                printf("rr_dry_scalar: no %s scalar in the dry-run record\n", key) > "/dev/stderr"
-                exit 1
-            }
-        }'
-}
-
-rr_dry_cont() {
-    printf '%s\n' "$FIXTURE_OUTPUT" | awk -v key="$1" '
-        /^--- continuation ---$/ { p = 1; next }
-        /^--- run record end ---$/ { exit }
-        p {
-            c = index($0, ":")
-            if (c && substr($0, 1, c - 1) == key) {
-                v = substr($0, c + 1); sub(/^ /, "", v); print v; found = 1; exit
-            }
-        }
-        END {
-            if (!found) {
-                printf("rr_dry_cont: no %s line in the dry-run continuation\n", key) > "/dev/stderr"
-                exit 1
-            }
-        }'
-}
-
 # ─── 1. reference resolution: four exact forms, a typo is never guessed ─────
 (
     set -euo pipefail
@@ -326,6 +285,33 @@ rr_dry_cont() {
     [[ $FIXTURE_OUTPUT == *'--intenstiy'* ]] ||
         fail "the mistyped option --intenstiy is not named: $FIXTURE_OUTPUT"
 
+    # gap G4 (§B.8 amendment 3): `--leaf` is the bare boolean — `--leaf=no`
+    # and `--leaf=yes` are not accepted spellings and NO engine output may
+    # contain them. Both are refused (rc 2, naming `--leaf`) in-grammar and
+    # before the family, and the refusal echoes neither spelling.
+    for spelling in --leaf=no --leaf=yes; do
+        run_engine "$root" -B "$spelling" @git
+        [ "$FIXTURE_RC" = 2 ] || fail "$spelling must be refused (§B.8 gap G4), got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        [[ $FIXTURE_OUTPUT == *'--leaf'* ]] ||
+            fail "$spelling is refused without naming --leaf: $FIXTURE_OUTPUT"
+        [[ $FIXTURE_OUTPUT != *"$spelling"* ]] ||
+            fail "the refusal of $spelling echoes the banned spelling (§B.8 gap G4): $FIXTURE_OUTPUT"
+        run_engine "$root" "$spelling" -B @git
+        [ "$FIXTURE_RC" = 2 ] || fail "$spelling before the family must be refused (§B.8 gap G4), got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        [[ $FIXTURE_OUTPUT != *"$spelling"* ]] ||
+            fail "the pre-family refusal of $spelling echoes the banned spelling (§B.8 gap G4): $FIXTURE_OUTPUT"
+    done
+    # The continuation surface mirrors bare `--leaf` and never a `=value`
+    # spelling (§H.2 gap G4): the whole record surface is spelling-free.
+    run_engine "$root" -B --dry-run --leaf mesa-git
+    [ "$FIXTURE_RC" = 0 ] || fail "the leaf dry run failed: $FIXTURE_OUTPUT"
+    rr2_body <<<"$FIXTURE_OUTPUT" >/dev/null \
+        || fail "the leaf dry-run record is not strict format: 2 (§H.2): $FIXTURE_OUTPUT"
+    [[ $(rr2_continuation command <<<"$FIXTURE_OUTPUT") == *'--leaf mesa-git'* ]] ||
+        fail "the leaf continuation does not mirror bare --leaf (§H.2 gap G4): $(rr2_continuation command <<<"$FIXTURE_OUTPUT")"
+    [[ $FIXTURE_OUTPUT != *'--leaf=no'* && $FIXTURE_OUTPUT != *'--leaf=yes'* ]] ||
+        fail "an engine output surface contains a banned --leaf=<value> spelling (§B.8 gap G4): $FIXTURE_OUTPUT"
+
     printf 'reference resolution fixture: PASS\n'
 )
 
@@ -376,10 +362,12 @@ rr_dry_cont() {
     # selection-source) — one selection, two renderings
     run_engine "$root" -B --dry-run @git 22..24
     [ "$FIXTURE_RC" = 0 ] || fail "the ranged dry run @git 22..24 failed: $FIXTURE_OUTPUT"
-    [[ $(rr_dry_scalar selection-source) == 'sets=@git leaf=no range=22..24' ]] ||
-        fail "the ranged dry run did not record its selection source: $(rr_dry_scalar selection-source)"
-    [[ $(rr_dry_scalar order) == "$(listing_rows <<<"$git_listing" | sed -n '22,24p' | paste -sd' ' -)" ]] ||
-        fail "ranged dry-run order [$(rr_dry_scalar order)] but listing anchors 22-24 are [$(listing_rows <<<"$git_listing" | sed -n '22,24p' | paste -sd' ' -)]"
+    rr2_body <<<"$FIXTURE_OUTPUT" >/dev/null \
+        || fail "the ranged dry-run record is not strict format: 2 (§H.2): $FIXTURE_OUTPUT"
+    [[ $(rr2_scalar selection-source <<<"$FIXTURE_OUTPUT") == 'sets=@git leaf=no range=22..24' ]] ||
+        fail "the ranged dry run did not record its selection source: $(rr2_scalar selection-source <<<"$FIXTURE_OUTPUT")"
+    [[ $(rr2_scalar order <<<"$FIXTURE_OUTPUT") == "$(listing_rows <<<"$git_listing" | sed -n '22,24p' | paste -sd' ' -)" ]] ||
+        fail "ranged dry-run order [$(rr2_scalar order <<<"$FIXTURE_OUTPUT")] but listing anchors 22-24 are [$(listing_rows <<<"$git_listing" | sed -n '22,24p' | paste -sd' ' -)]"
 
     # one open-ended form end-to-end: N.. runs from its anchor to the end of
     # the selection — numbers and names alike
@@ -703,18 +691,27 @@ rr_dry_cont() {
     # carries the selection source, the order, and nothing is built
     run_engine "$ws" -B --dry-run x
     [ "$FIXTURE_RC" = 0 ] || fail "f: dry run of x failed: $FIXTURE_OUTPUT"
-    [ "$(rr_dry_scalar format)" = 2 ] || fail "f: dry-run record is not format 2: $FIXTURE_OUTPUT"
-    [ "$(rr_dry_scalar selection-source)" = 'sets=x leaf=no range=-' ] ||
-        fail "f: unexpected selection source: $(rr_dry_scalar selection-source)"
-    [ "$(rr_dry_scalar order)" = 'x c1 c2' ] ||
-        fail "f: dry-run order is [$(rr_dry_scalar order)], want [x c1 c2]"
-    [ "$(rr_dry_scalar outcome)" = planned ] ||
+    rr2_body <<<"$FIXTURE_OUTPUT" >/dev/null \
+        || fail "f: the dry-run record is not strict format: 2 (§H.2): $FIXTURE_OUTPUT"
+    [ "$(rr2_scalar format <<<"$FIXTURE_OUTPUT")" = 2 ] || fail "f: dry-run record is not format 2: $FIXTURE_OUTPUT"
+    [ "$(rr2_scalar selection-source <<<"$FIXTURE_OUTPUT")" = 'sets=x leaf=no range=-' ] ||
+        fail "f: unexpected selection source: $(rr2_scalar selection-source <<<"$FIXTURE_OUTPUT")"
+    [ "$(rr2_scalar order <<<"$FIXTURE_OUTPUT")" = 'x c1 c2' ] ||
+        fail "f: dry-run order is [$(rr2_scalar order <<<"$FIXTURE_OUTPUT")], want [x c1 c2]"
+    [ "$(rr2_scalar outcome <<<"$FIXTURE_OUTPUT")" = planned ] ||
         fail "f: a dry run must record outcome 'planned': $FIXTURE_OUTPUT"
-    [ "$(rr_dry_scalar rc)" = 0 ] || fail "f: a dry run exits 0: $FIXTURE_OUTPUT"
-    [[ $(rr_dry_cont command) == *'--dry-run'* ]] ||
-        fail "f: the dry-run continuation does not mirror --dry-run (§H.2): $(rr_dry_cont command)"
-    [ "$(rr_dry_cont remaining)" = 'x c1 c2' ] ||
-        fail "f: dry-run remaining [$(rr_dry_cont remaining)] != its rows [x c1 c2]"
+    [ "$(rr2_scalar rc <<<"$FIXTURE_OUTPUT")" = 0 ] || fail "f: a dry run exits 0: $FIXTURE_OUTPUT"
+    # §H.2 budget conformance: a record whose run dispatched nothing renders
+    # `lanes`/`normal-jobs`/`core-jobs` as `0` — never `-` (rr2_body's
+    # integer rule is the same promise enforced a second time).
+    for budget in lanes normal-jobs core-jobs; do
+        [ "$(rr2_scalar "$budget" <<<"$FIXTURE_OUTPUT")" = 0 ] ||
+            fail "f: dry-run budget scalar $budget is [$(rr2_scalar "$budget" <<<"$FIXTURE_OUTPUT")], want 0 (§H.2)"
+    done
+    [[ $(rr2_continuation command <<<"$FIXTURE_OUTPUT") == *'--dry-run'* ]] ||
+        fail "f: the dry-run continuation does not mirror --dry-run (§H.2): $(rr2_continuation command <<<"$FIXTURE_OUTPUT")"
+    [ "$(rr2_continuation remaining <<<"$FIXTURE_OUTPUT")" = 'x c1 c2' ] ||
+        fail "f: dry-run remaining [$(rr2_continuation remaining <<<"$FIXTURE_OUTPUT")] != its rows [x c1 c2]"
     if grep < <(find "$ws/packages" -name '*.pkg.tar.zst' -print -quit) -q .; then
         fail "f: --dry-run built an archive (it must never build)"
     fi

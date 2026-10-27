@@ -83,12 +83,14 @@ set -euo pipefail
 # engine trigger and no stub can flip one. Section C keeps driving the fish
 # builder this workspace carries, against its fish-era stubs and byte pins.
 # DEVIATION 3 (inventory KEEP cells :850-852 / :872-941 — the G gate's
-# fail-closed flip): the engine's provide gate refuses a MOVING surface even
-# when the closure is covered or no consumer is installed, where the fish
-# layer-2 selection gate planned clean — the same GAP
-# tests/abi-drift-install.sh records at its case-B re-pin ("gsa's provide gate
-# refuses a moving surface even with the closure covered"). The gate MEANINGS
-# keep: the refusal names the drifted surface (`refuse abi-soname … <inst>
+# fail-closed flip) — CLOSED 2026-10-28: the conditional provide gate
+# landed per the fish oracle (tests/assets/build-all.fish
+# `abi_provide_refusals`), so the engine plans a MOVING surface CLEAN when
+# nothing is stranded exactly as the fish layer-2 selection gate did — the
+# "refuses even covered / even with no consumer installed" drift claim
+# retires with this note (the same gap tests/abi-drift-install.sh recorded
+# at its case-B re-pin is closed there too). The gate MEANINGS keep: the
+# refusal names the drifted surface (`refuse abi-soname … <inst>
 # <built>`) and exactly the uncovered linked consumers (`refuse abi-consumer
 # … <consumer>`), covered consumers ride the transaction and are never named,
 # and an uninstalled consumer never gates (no `abi-consumer` row). "Nothing
@@ -176,6 +178,10 @@ write_real_makepkg() {
 #!/usr/bin/env bash
 set -eu
 id=$(basename "$PWD")
+[[ "${GSA_FAKE_FAIL_PACKAGE:-}" == "$id" ]] && exit 1
+if [ -n "${GSA_FAKE_BUILD_SECONDS:-}" ]; then
+    /usr/bin/sleep "$GSA_FAKE_BUILD_SECONDS"
+fi
 printf 'BUILD %s\n' "$id" >>"${GSA_FAKE_MAKEPKG_LOG:?}"
 stage="$PWD/.stage-$id"
 mkdir -p "$stage"
@@ -594,6 +600,125 @@ $FIXTURE_OUTPUT"
 $FIXTURE_OUTPUT"
 )
 
+# ─── B5/B6. anchored batches: one batch per anchor, never one per severity ──
+# The promise's shape (docs/maintainer-guide.md "Updating coupled stacks":
+# "every abi-tagged package that transitively depends on a selected anchor";
+# config/topology.conf: "a batch anchor is an abi=must package with no
+# abi-tagged dependency") in two INDEPENDENT stacks — llvm-git→rust-git and
+# qt5-base-git→{qt5-a,qt5-b}, the real topology's three-anchor shape in
+# miniature. A severity bucket would treat all four abi=must records as one
+# batch: a qt5-base-git token move plans llvm-git and rust-git under
+# `coupled-must` (B5), and a failing qt5 member parks the llvm stack under
+# `coupled-batch` (B6). Both pins are exact-set assertions — the bucket
+# fails each of them.
+(
+    set -euo pipefail
+    dir="$fixture/anchored"
+    make_workspace "$dir" 2 2 low
+    add_meta_package "$dir" llvm-git ''
+    add_meta_package "$dir" rust-git ''
+    add_meta_package "$dir" qt5-base-git ''
+    add_meta_package "$dir" qt5-a ''
+    add_meta_package "$dir" qt5-b ''
+    add_meta_package "$dir" q5 ''
+    set_topology_record "$dir" llvm-git git '' 'abi=must'
+    set_topology_record "$dir" rust-git git 'llvm-git' 'abi=must'
+    set_topology_record "$dir" qt5-base-git git '' 'abi=must'
+    set_topology_record "$dir" qt5-a git 'qt5-base-git' 'abi=must'
+    set_topology_record "$dir" qt5-b git 'qt5-base-git' 'abi=must'
+    set_topology_record "$dir" q5 git 'qt5-base-git'
+    engine_ws "$dir" "$dir/db"
+
+    # One stub build pass registers every token in the binpkg index (B's
+    # precedent).
+    run_engine "$dir" -B --no-prefetch llvm-git rust-git qt5-base-git qt5-a qt5-b q5
+    [ "$FIXTURE_RC" -eq 0 ] || fail "B5: the token-registering build pass failed (rc=$FIXTURE_RC):
+$FIXTURE_OUTPUT"
+    run_engine "$dir" -Qa qt5-base-git
+    tok_qt5=$(awk '$1 == "qt5-base-git" && $2 == "token" { print $3 }' <<<"$FIXTURE_OUTPUT")
+    [ -n "$tok_qt5" ] || fail "B5: -Qa derived no token for qt5-base-git:
+$FIXTURE_OUTPUT"
+    run_engine "$dir" -Qa llvm-git
+    tok_llvm=$(awk '$1 == "llvm-git" && $2 == "token" { print $3 }' <<<"$FIXTURE_OUTPUT")
+    [ -n "$tok_llvm" ] || fail "B5: -Qa derived no token for llvm-git:
+$FIXTURE_OUTPUT"
+
+    # B5: the qt5 move's wave is the qt5 anchor's batch and NOTHING else.
+    # q5 records a STALE token (the observable move); qt5-a, qt5-b and
+    # rust-git record MATCHING tokens — qt5-a/qt5-b can only ride in as the
+    # anchor's batch members (E2: the batch is the anchor plus every
+    # abi-tagged package that transitively depends on it), and the llvm
+    # stack must never enter the plan at all.
+    /usr/bin/sudo -n mkdir -p "$GSA_STATE_DIR/abi"
+    {
+        printf 'q5|0:1.0.0-1|qt5-base-git|stale-token\n'
+        printf 'qt5-a|0:1.0.0-1|qt5-base-git|%s\n' "$tok_qt5"
+        printf 'qt5-b|0:1.0.0-1|qt5-base-git|%s\n' "$tok_qt5"
+        printf 'rust-git|0:1.0.0-1|llvm-git|%s\n' "$tok_llvm"
+    } | /usr/bin/sudo -n tee "$GSA_STATE_DIR/abi/subscriptions" >/dev/null
+    : >"$GSA_FAKE_MAKEPKG_LOG"
+    : >"$GSA_FAKE_PACMAN_LOG"
+    run_engine "$dir" -B --no-prefetch --leaf qt5-base-git
+    [ "$FIXTURE_RC" -eq 0 ] ||
+        fail "B5: the qt5 batch must build (rc=$FIXTURE_RC):
+$FIXTURE_OUTPUT"
+    rr2_body <<<"$FIXTURE_OUTPUT" >/dev/null ||
+        fail "B5: no complete format: 2 run record:
+$FIXTURE_OUTPUT"
+    waves=$(grep '^abi-wave ' <<<"$FIXTURE_OUTPUT" | sort)
+    [ "$waves" = "abi-wave qt5-base-git q5 recorded
+abi-wave qt5-base-git qt5-a coupled-must
+abi-wave qt5-base-git qt5-b coupled-must" ] ||
+        fail "B5: a qt5-base-git move must plan its OWN anchored batch only (E2), never the llvm stack:
+$FIXTURE_OUTPUT"
+    for id in qt5-base-git qt5-a qt5-b q5; do
+        grep -Fqx "BUILD $id" "$GSA_FAKE_MAKEPKG_LOG" ||
+            fail "B5: $id never reached the stub makepkg: $(cat "$GSA_FAKE_MAKEPKG_LOG")"
+    done
+    if grep -Eq '^BUILD (llvm-git|rust-git)$' "$GSA_FAKE_MAKEPKG_LOG"; then
+        fail "B5: a qt5-base-git move planned the llvm stack: $(cat "$GSA_FAKE_MAKEPKG_LOG")"
+    fi
+
+    # B6: park isolation (contract §I.1: a failed member parks its batch
+    # mates with reason `coupled-batch`) — the failing member is qt5-a; its
+    # batch mate qt5-b must park, and the llvm stack (a DIFFERENT anchor's
+    # batch) must build out untouched. The failure lands while every other
+    # build is mid-pass (GSA_FAKE_BUILD_SECONDS), so the old severity bucket
+    # deterministically parks rust-git and the pin fails against it.
+    {
+        printf 'q5|0:1.0.0-1|qt5-base-git|%s\n' "$tok_qt5"
+        printf 'qt5-a|0:1.0.0-1|qt5-base-git|%s\n' "$tok_qt5"
+        printf 'qt5-b|0:1.0.0-1|qt5-base-git|%s\n' "$tok_qt5"
+        printf 'rust-git|0:1.0.0-1|llvm-git|%s\n' "$tok_llvm"
+    } | /usr/bin/sudo -n tee "$GSA_STATE_DIR/abi/subscriptions" >/dev/null
+    : >"$GSA_FAKE_MAKEPKG_LOG"
+    : >"$GSA_FAKE_PACMAN_LOG"
+    export GSA_FAKE_FAIL_PACKAGE=qt5-a
+    export GSA_FAKE_BUILD_SECONDS=3
+    run_engine "$dir" -B --no-prefetch llvm-git rust-git qt5-base-git qt5-a qt5-b q5
+    [ "$FIXTURE_RC" -ne 0 ] ||
+        fail "B6: the failed member must fail the run:
+$FIXTURE_OUTPUT"
+    rr2_body <<<"$FIXTURE_OUTPUT" >/dev/null ||
+        fail "B6: no complete format: 2 run record:
+$FIXTURE_OUTPUT"
+    [ "$(rr2_outcome qt5-a status <<<"$FIXTURE_OUTPUT")" = failed ] ||
+        fail "B6: qt5-a did not fail:
+$FIXTURE_OUTPUT"
+    [ "$(rr2_outcome qt5-b status <<<"$FIXTURE_OUTPUT")" = parked ] ||
+        fail "B6: the failing member's own batch mate qt5-b must park:
+$FIXTURE_OUTPUT"
+    [ "$(rr2_outcome qt5-b reason <<<"$FIXTURE_OUTPUT")" = coupled-batch ] ||
+        fail "B6: qt5-b's park reason is $(rr2_outcome qt5-b reason <<<"$FIXTURE_OUTPUT"), want coupled-batch:
+$FIXTURE_OUTPUT"
+    for id in llvm-git rust-git qt5-base-git q5; do
+        [ "$(rr2_outcome "$id" status <<<"$FIXTURE_OUTPUT")" = succeeded ] ||
+            fail "B6: $id must never be parked by an unrelated stack's failure (E2):
+$FIXTURE_OUTPUT"
+    done
+    unset GSA_FAKE_FAIL_PACKAGE GSA_FAKE_BUILD_SECONDS
+)
+
 # ─── C. dispatcher: mid-run probe after the run's own llvm install ─────────
 # FISH-DRIVEN (DEVIATION 2): the engine has no mid-run rustc probe wiring, so
 # this section keeps driving the fish builder this workspace carries, with
@@ -958,6 +1083,11 @@ offenders=$(awk -F'|' '
 # surface (`refuse abi-soname …`) and exactly the uncovered consumers that
 # LINK the moving soname (`refuse abi-consumer … <consumer>`), covered
 # consumers ride the transaction, and an uninstalled consumer never gates.
+# The gate is CONDITIONAL (2026-10-28, fish `abi_provide_refusals`): while
+# every linked consumer is covered — or none is installed and no out-of-tree
+# pinner pins the provide — nothing is stranded and the move plans CLEAN
+# (the abi-soname row is a refusal row and never rides a clean plan); only
+# G1/G5's stranded state carries refusal rows.
 # The consumer relation's link-truth half (2026-10-07 gate fix v2: naming a
 # provider is not linking it) is the ELF file truth the view probes. The
 # seam touches nothing (§D.1) — the KEEP "nothing dispatched before it
@@ -1035,24 +1165,23 @@ $FIXTURE_OUTPUT"
 
     # G2: the covered closure — the consumer's archive rides the same
     # transaction, so no `abi-consumer` refusal may name it (rule 25(d)
-    # in-run repair coverage). DEVIATION 3: the engine's provide gate still
-    # refuses the MOVING surface itself (`refuse abi-soname`), where the fish
-    # gate planned clean — the coverage half keeps, the drift-alone half
-    # flips fail-closed.
+    # transaction coverage) and nothing is stranded: the move plans CLEAN
+    # (the conditional gate, 2026-10-28 — the abi-soname row is a refusal
+    # row and never rides a clean plan; fish `abi_provide_refusals`).
     rm -rf "$dir/db"
     mkdir -p "$dir/db/local"
     db_entry "$dir/db" libs 1-1 'libgreet.so=1-64'
     db_entry "$dir/db" app-git 1-1 '' "${dir#/}/elf/app.so"
     run_engine "$dir" --install-decide checked "$a_libs" "$a_app"
-    [ "$FIXTURE_RC" -eq 1 ] ||
-        fail "G2: the engine refuses the moving surface even covered (DEVIATION 3), got $FIXTURE_RC:
+    [ "$FIXTURE_RC" -eq 0 ] ||
+        fail "G2: a covered closure must plan clean (rc §E.5 0), got $FIXTURE_RC:
 $FIXTURE_OUTPUT"
     want_rows G2 <<'EOF'
 app-git install ok
-libs-git refuse abi-soname
+libs-git install ok
 EOF
-    if grep < <(printf '%s\n' "$FIXTURE_OUTPUT" | rows_only) -Fq 'abi-consumer'; then
-        fail "G2: a covered consumer was named in a refusal:
+    if grep < <(printf '%s\n' "$FIXTURE_OUTPUT" | rows_only) -Fq 'refuse'; then
+        fail "G2: a covered closure carries no refusal row at all:
 $FIXTURE_OUTPUT"
     fi
 
@@ -1072,28 +1201,30 @@ libs-git-same install ok
 EOF
 
     # G4: drifted surface but the consumer is NOT installed ⇒ nothing to
-    # protect: no `abi-consumer` row may exist. DEVIATION 3: the fish gate
-    # built the provider clean here; the engine's provide gate refuses the
-    # drift itself — the consumer-negative half keeps exactly.
+    # protect: no `abi-consumer` row may exist, and with no linked consumer
+    # and no out-of-tree pinner nothing is stranded — the move plans CLEAN
+    # (the conditional gate, 2026-10-28; the fish gate built the provider
+    # clean here too).
     rm -rf "$dir/db"
     mkdir -p "$dir/db/local"
     db_entry "$dir/db" libs 1-1 'libgreet.so=1-64'
     run_engine "$dir" --install-decide checked "$a_libs"
-    [ "$FIXTURE_RC" -eq 1 ] ||
-        fail "G4: the engine refuses the drift itself (DEVIATION 3), got $FIXTURE_RC:
+    [ "$FIXTURE_RC" -eq 0 ] ||
+        fail "G4: an uninstalled consumer must not gate (rc §E.5 0), got $FIXTURE_RC:
 $FIXTURE_OUTPUT"
     want_rows G4 <<'EOF'
-libs-git refuse abi-soname
+libs-git install ok
 EOF
-    if grep < <(printf '%s\n' "$FIXTURE_OUTPUT" | rows_only) -Fq 'abi-consumer'; then
-        fail "G4: an uninstalled consumer produced a refusal row:
+    if grep < <(printf '%s\n' "$FIXTURE_OUTPUT" | rows_only) -Fq 'refuse'; then
+        fail "G4: nothing is stranded, so no refusal row may exist:
 $FIXTURE_OUTPUT"
     fi
 
     # G6: the direct surface consumers covered ⇒ the whole linked set rides
-    # the transaction; leaf-git and nlink-git stay untouched (never dragged
-    # in, never named) — a non-linking consumer of a consumer is not part of
-    # the batch. DEVIATION 3 applies to the drift row.
+    # the transaction and nothing is stranded — the move plans CLEAN (the
+    # conditional gate, 2026-10-28); leaf-git and nlink-git stay untouched
+    # (never dragged in, never named) — a non-linking consumer of a consumer
+    # is not part of the batch.
     rm -rf "$dir/db"
     mkdir -p "$dir/db/local"
     db_entry "$dir/db" libs 1-1 'libgreet.so=1-64'
@@ -1102,12 +1233,12 @@ $FIXTURE_OUTPUT"
     db_entry "$dir/db" leaf-git 1-1 '' "${dir#/}/elf/leaf.so"
     db_entry "$dir/db" nlink-git 1-1 '' "${dir#/}/elf/nlink.so"
     run_engine "$dir" --install-decide checked "$a_libs" "$a_app" "$a_mid"
-    [ "$FIXTURE_RC" -eq 1 ] ||
-        fail "G6: the engine refuses the moving surface even covered (DEVIATION 3), got $FIXTURE_RC:
+    [ "$FIXTURE_RC" -eq 0 ] ||
+        fail "G6: a fully covered linked set must plan clean (rc §E.5 0), got $FIXTURE_RC:
 $FIXTURE_OUTPUT"
     want_rows G6 <<'EOF'
 app-git install ok
-libs-git refuse abi-soname
+libs-git install ok
 mid-git install ok
 EOF
     if grep < <(printf '%s\n' "$FIXTURE_OUTPUT" | rows_only) -Eq 'leaf-git|nlink-git'; then
