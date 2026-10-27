@@ -75,7 +75,7 @@ sha256sums=('SKIP'
             '6bfc61519439d329344b7ab3dbebcd20dc810fa988af68e7a3cd61615c9fb140'
             '5fc4cb98a3d4d24e596c6f912d4d81fb68317535523d9647d68873538d120879'
             'cbccab7c6601b6adbe48fd4dfbf0de258c46d5ba4b91dedf3f7fd2e00257b169'
-            '166e566ebebd1cd59e3869f9e2129007bf9e139157985ce267d9af62afbdc6ca')
+            '6c6d0af687fd9c1de7402419a26bcd9c2098b0cd92387d4bdcfc596a59176733')
 
 pkgver() {
   cd "${_pkgname}"
@@ -191,11 +191,13 @@ prepare() {
   # moves keep the overview exclusion), two-finger scrolling pans both
   # pan-only under the hold (no filmstrip step or focus move; the drop settles
   # at the panned position), and wheel notches are inert while the hold is
-  # live. Upstream PR noctalia-dev/umbriel#584; sha256 166e566e…, full range
-  # d9497f36..1d4563ad (four commits: strip edge auto-scroll, held-drag
-  # finger-scroll with the review rounds, docs, workspace-axis input);
-  # regenerate with `git format-patch --stdout <merge-base>..pr-584` when a
-  # drift breaks the apply. (Retire on merge: 0017 → PR #584.)
+  # live. Upstream PR noctalia-dev/umbriel#584; sha256 6c6d0af6…, full range
+  # 36673995..c27bb4e7 (six commits on the merged base: strip edge
+  # auto-scroll, held-drag finger-scroll with the review rounds, docs,
+  # workspace-axis input, the empty CI re-trigger, and the talia-review
+  # targeting fixes); regenerate with `git format-patch --stdout
+  # <merge-base with main>..pr-584` when a drift breaks the apply.
+  # (Retire on merge: 0017 → PR #584.)
   git apply -3 ../0017-overview-card-drag-input.patch
 }
 

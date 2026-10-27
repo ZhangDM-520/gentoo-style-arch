@@ -1,7 +1,7 @@
 From 6ceab3167771d6ec41911acc4b41210aab48f123 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Tue, 27 Oct 2026 00:35:40 +0800
-Subject: [PATCH 1/4] overview: edge auto-scroll for card drags (user feedback
+Subject: [PATCH 1/6] overview: edge auto-scroll for card drags (user feedback
  2026-10-26)
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -273,7 +273,7 @@ index 00000000..12cd77b7
 From 5a635403720072adcd4ab03973c51932807f01fe Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Tue, 27 Oct 2026 00:35:51 +0800
-Subject: [PATCH 2/4] overview: keep finger-scroll live during a held card drag
+Subject: [PATCH 2/6] overview: keep finger-scroll live during a held card drag
  (user feedback 2026-10-26)
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -640,7 +640,7 @@ index 00000000..10eb81e2
 From c2f3ebc6cf72656d1272c71a80e86936ea677e6f Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Tue, 27 Oct 2026 01:39:42 +0800
-Subject: [PATCH 3/4] docs: cover overview card drag input (user feedback
+Subject: [PATCH 3/6] docs: cover overview card drag input (user feedback
  2026-10-26)
 
 Document the held-card-drag navigation behaviors added for the 2026-10-26
@@ -701,7 +701,7 @@ index 91dafced..cbabdfa8 100644
 From 1d4563ad366049a43567a7de75b86f6b8c71a5a7 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Tue, 27 Oct 2026 09:01:44 +0800
-Subject: [PATCH 4/4] overview: workspace-axis card drag input (user feedback
+Subject: [PATCH 4/6] overview: workspace-axis card drag input (user feedback
  2026-10-27)
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -1656,6 +1656,540 @@ index 00000000..8d99006f
 +fi
 +
 +echo "GREEN: overview card drag at the right edge slid the filmstrip and dropped on $dropped (horizontal arrangement)"
+-- 
+2.56.0.236.g7e34d8174d
+
+
+From 065efcb9a623cd32c993af52041e4ade012ad16d Mon Sep 17 00:00:00 2001
+From: ZhangDM-520 <jixianqiang1540@gmail.com>
+Date: Tue, 27 Oct 2026 10:34:25 +0800
+Subject: [PATCH 5/6] chore(ci): re-trigger the suite after a transient mirror
+ failure
+
+The Lint job on the previous head died in container setup (pacman could not
+retrieve dbus-1.16.2-2-x86_64.pkg.tar.zst.sig from fastly.mirror.pkgbuild.com),
+before any linting ran. This empty commit re-triggers CI on the unchanged
+tree.
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+-- 
+2.56.0.236.g7e34d8174d
+
+
+From c27bb4e74056112303c7a207af1c087858d53201 Mon Sep 17 00:00:00 2001
+From: ZhangDM-520 <jixianqiang1540@gmail.com>
+Date: Tue, 27 Oct 2026 15:04:13 +0800
+Subject: [PATCH 6/6] overview: fix card-drag edge-scroll targeting and scope
+ the end-row hitbox to drops
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Response to the talia review on PR #584 (4 P2s, two distinct issues):
+
+- Findings 1+2: the layout-strip edge scroll resolved its sink from
+  group->active() even during a card drag, so a corner push panned the
+  active row's strip while the held card targeted the row under the pointer
+  (the drop target). Cursor::edgeScrollTargets now resolves the strip sink
+  through Overview::dragTargetWorkspace() — the row refreshDragTarget last
+  resolved — matching the finger-pan path's navigationWorkspace(); data
+  drags and tiled moves keep the active workspace, and a card over an
+  insertion gap has no row to slide. The edge ramp runs on the target
+  workspace's usable area.
+- Findings 3+4: the filmstrip end-band widening rode the shared drag flag,
+  which wheel-notch, pointer-scroll and navigation lookups also pass —
+  silently changing their hit-testing in the extreme gaps. workspaceAtPoint
+  now takes extendScrollingAxis and extendFilmstripEnds separately; only
+  the card-drop resolution (updateDrag) passes the end-band widening, so
+  every other caller keeps its pre-PR hitboxes byte-identically.
+
+Hardening from our own review pass (S3): the drop row is validated by
+pointer-identity membership (workspaceRowAlive, navigationWorkspace()'s
+never-deref pattern) before the edge timer touches it, and
+onWorkspaceInventoryChanged clears a pruned row out of the drop state with
+its hint (closing the same hole endDrag shared); a concurrent middle-press
+pointer-scroll pan stands the card-drag edge machinery down instead of
+pairing the card's frozen drop row with the live pointer's ramp.
+
+Checks: drag/overview_card_row_edge_scroll.sh pins the sink choice (the
+hovered row slides >50px, the active row stays put, the drop lands on the
+hovered row) and overview/wheel_extreme_gap.sh pins the restored hitboxes
+(a notch over the extreme gap stays inert, the in-band control moves
+focus). Both falsified by mutation: forcing the active-workspace sink turns
+the first red, handing the wheel path the widened hitbox turns the second
+red. Full drag/+overview/ suites green apart from the known pre-existing
+reds (floating_release_settle fails at the upstream base; two untracked
+MoveGrab research loops). clang-tidy 234/234, just format clean. Reviewed
+by our own code-review pass (APPROVE after the two S3 hardenings).
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+---
+ src/input/cursor.cpp                          |  23 ++--
+ src/overview/overview.cpp                     |  58 +++++++--
+ src/overview/overview.h                       |  24 +++-
+ .../drag/overview_card_row_edge_scroll.sh     | 122 ++++++++++++++++++
+ .../checks/overview/wheel_extreme_gap.sh      |  81 ++++++++++++
+ 5 files changed, 281 insertions(+), 27 deletions(-)
+ create mode 100644 tests/harness/checks/drag/overview_card_row_edge_scroll.sh
+ create mode 100644 tests/harness/checks/overview/wheel_extreme_gap.sh
+
+diff --git a/src/input/cursor.cpp b/src/input/cursor.cpp
+index 70047f92..7e6f787f 100644
+--- a/src/input/cursor.cpp
++++ b/src/input/cursor.cpp
+@@ -499,10 +499,11 @@ namespace umbriel {
+     const bool overviewActive = overview != nullptr && overview->active();
+     // An overview card drag is a first-class drag here: it may slide the strip AND the workspace filmstrip. Data
+     // drags AND compositor tiled moves keep the overview exclusion (DnD-overview semantics, pinned by
+-    // drag/data_drag_edge_scroll.sh; the MoveGrab-in-overview drag model belongs to a later wave). The target
+-    // maths resolve the output's ACTIVE workspace at the real usable-area edges — not the row under the pointer
+-    // or the preview bounds (shared with the data-drag and tiled-move paths).
+-    const bool cardDrag = overview != nullptr && overview->cardDragging();
++    // drag/data_drag_edge_scroll.sh; the MoveGrab-in-overview drag model belongs to a later wave). A concurrent
++    // middle-press pointer-scroll pan owns the motion while it runs, so the card's frozen drop row must not pair
++    // with the live pointer's edge ramp — the machinery stands down until the hold is the card's alone. The
++    // target maths resolve the real usable-area edges — not the row under the pointer or the preview bounds.
++    const bool cardDrag = overview != nullptr && overview->cardDragging() && !overview->middlePressed();
+     const bool tiledMove = tiledMoveDragActive();
+     if (!edge.enabled
+         || m_server->sessionLocked()
+@@ -514,12 +515,18 @@ namespace umbriel {
+     wlr_output* wlrOutput = wlr_output_layout_output_at(m_server->outputLayout(), m_cursor->x, m_cursor->y);
+     Output* output = m_server->outputFromWlr(wlrOutput);
+     WorkspaceGroup* group = output != nullptr ? output->workspaceGroup() : nullptr;
+-    Workspace* workspace = group != nullptr ? group->active() : nullptr;
+-    if (output == nullptr || workspace == nullptr) {
++    Workspace* active = group != nullptr ? group->active() : nullptr;
++    if (output == nullptr || active == nullptr) {
+       return targets;
+     }
+ 
+-    const wlr_box area = workspace->usableArea();
++    // A held card aims at the row under the drag pointer — its drop target, the same row the finger-pan path
++    // resolves through navigationWorkspace() — so the strip it must reveal is that workspace's, not the active
++    // one's. A card over an insertion gap has no row to slide. Data drags and tiled moves keep the active
++    // workspace. The shared edge ramp runs on the target workspace's real usable-area edges.
++    Workspace* workspace = cardDrag ? overview->dragTargetWorkspace() : active;
++
++    const wlr_box area = workspace != nullptr ? workspace->usableArea() : active->usableArea();
+     // The shared edge ramp: signed screen px/s from the pointer's depth into the trigger zone at either end of
+     // the usable area along `verticalAxis`.
+     const auto edgeSpeed = [&](bool verticalAxis, double* speed) {
+@@ -539,7 +546,7 @@ namespace umbriel {
+       return *speed != 0;
+     };
+ 
+-    ScrollingLayout* scrolling = workspace->scrollingLayout();
++    ScrollingLayout* scrolling = workspace != nullptr ? workspace->scrollingLayout() : nullptr;
+     if (scrolling != nullptr && !scrolling->columns().empty()) {
+       const bool vertical = workspace->scrollingVertical();
+       double speed = 0;
+diff --git a/src/overview/overview.cpp b/src/overview/overview.cpp
+index c1760412..a46c8932 100644
+--- a/src/overview/overview.cpp
++++ b/src/overview/overview.cpp
+@@ -2398,6 +2398,12 @@ namespace umbriel {
+     if (m_navigationOutput == group->output()) {
+       cancelNavigation();
+     }
++    // A row pruned mid-drag must not survive in the drop state: endDrag and the edge-scroll timer both resolve
++    // the strip through it. The hint clears with it, like every other drop-state reset (onOutputRemoved).
++    if (m_drop.workspace != nullptr && !workspaceRowAlive(m_drop.workspace)) {
++      hideDropHint();
++      m_drop = {};
++    }
+     OutputState* state = stateFor(group->output());
+     if (state == nullptr) {
+       return;
+@@ -2524,8 +2530,9 @@ namespace umbriel {
+     return nullptr;
+   }
+ 
+-  Workspace*
+-  Overview::workspaceAtPoint(double lx, double ly, OutputState** outState, size_t* outIndex, bool forDragTarget) {
++  Workspace* Overview::workspaceAtPoint(
++      double lx, double ly, OutputState** outState, size_t* outIndex, bool extendScrollingAxis, bool extendFilmstripEnds
++  ) {
+     for (const auto& state : m_outputs) {
+       PreviewMetrics metrics{};
+       if (!previewMetrics(*state, *m_server, zoom(), metrics)) {
+@@ -2550,7 +2557,7 @@ namespace umbriel {
+         // the centered preview. Drag targeting must cover that same visible area
+         // along the scrolling axis or the extreme gaps become dead zones.
+         // Background clicks retain the narrower preview hitbox.
+-        const bool extend = forDragTarget && workspace->scrollingLayout() != nullptr;
++        const bool extend = extendScrollingAxis && workspace->scrollingLayout() != nullptr;
+         wlr_box box = previewBox(metrics, state->rowScroll.current(), index);
+         if (extend) {
+           if (horizontalWorkspaces) {
+@@ -2561,11 +2568,12 @@ namespace umbriel {
+             box.width = metrics.outputBox.width;
+           }
+         }
+-        if (forDragTarget) {
+-          // The same dead-zone fix along the workspace axis: the rows at either end of the filmstrip claim the
+-          // space out to the output edge, so a card dragged (or edge-scroll panned) past the last preview still
+-          // drops on the end workspace. Insertion gaps keep priority — workspaceGapAt runs first and still owns
+-          // the spaces between previews and the dynamic edge before row 0.
++        if (extendFilmstripEnds) {
++          // The same dead-zone fix along the workspace axis, drop targeting only: the rows at either end of the
++          // filmstrip claim the space out to the output edge, so a card dragged (or edge-scroll panned) past the
++          // last preview still drops on the end workspace. Insertion gaps keep priority — workspaceGapAt runs
++          // first and still owns the spaces between previews and the dynamic edge before row 0. Wheel, pointer
++          // scroll and navigation lookups pass this false and keep their previous hitboxes.
+           const size_t count = state->workspaceBackgrounds.size();
+           if (index == 0) {
+             if (horizontalWorkspaces) {
+@@ -2740,7 +2748,7 @@ namespace umbriel {
+       m_middlePressCard = card;
+       Workspace* workspace = card != nullptr && card->view != nullptr
+           ? card->view->workspace()
+-          : workspaceAtPoint(lx, ly, nullptr, nullptr, false);
++          : workspaceAtPoint(lx, ly, nullptr, nullptr, false, false);
+       m_middleOutput = workspace != nullptr && workspace->group() != nullptr ? workspace->group()->output() : nullptr;
+       m_middlePressX = lx;
+       m_middlePressY = ly;
+@@ -2760,7 +2768,7 @@ namespace umbriel {
+     m_pressX = lx;
+     m_pressY = ly;
+     if (card == nullptr) {
+-      m_pressWorkspace = workspaceAtPoint(lx, ly, nullptr, nullptr, false);
++      m_pressWorkspace = workspaceAtPoint(lx, ly, nullptr, nullptr, false, false);
+     }
+     return true;
+   }
+@@ -2879,7 +2887,7 @@ namespace umbriel {
+       selectRelativeWorkspace(sign, output);
+       return true;
+     }
+-    Workspace* workspace = workspaceAtPoint(lx, ly, nullptr, nullptr, true);
++    Workspace* workspace = workspaceAtPoint(lx, ly, nullptr, nullptr, true, false);
+     ScrollingLayout* scrolling = workspace != nullptr ? workspace->scrollingLayout() : nullptr;
+     if (scrolling == nullptr) {
+       return true;
+@@ -2904,7 +2912,7 @@ namespace umbriel {
+     if (!interactive()) {
+       return nullptr;
+     }
+-    return workspaceAtPoint(lx, ly, nullptr, nullptr, true);
++    return workspaceAtPoint(lx, ly, nullptr, nullptr, true, false);
+   }
+ 
+   Workspace* Overview::navigationWorkspace() const {
+@@ -2919,6 +2927,28 @@ namespace umbriel {
+     return nullptr;
+   }
+ 
++  bool Overview::workspaceRowAlive(const Workspace* workspace) const {
++    if (workspace == nullptr) {
++      return false;
++    }
++    for (const auto& state : m_outputs) {
++      const WorkspaceGroup* group = state->output != nullptr ? state->output->workspaceGroup() : nullptr;
++      if (group == nullptr) {
++        continue;
++      }
++      for (size_t index = 0; index < group->workspaceCount(); ++index) {
++        if (group->workspaceAt(index) == workspace) {
++          return true;
++        }
++      }
++    }
++    return false;
++  }
++
++  Workspace* Overview::dragTargetWorkspace() const {
++    return m_dragCard != nullptr && workspaceRowAlive(m_drop.workspace) ? m_drop.workspace : nullptr;
++  }
++
+   void Overview::onNavigationDeviceDestroyed(wl_listener* listener, void* /*data*/) {
+     Overview* self;
+     self = wl_container_of(listener, self, m_navigationDeviceDestroy);
+@@ -2941,7 +2971,7 @@ namespace umbriel {
+     }
+     m_navigationOutput = output;
+     m_navigationHorizontalWorkspaces = output->workspaceGroup()->workspaceAxis() == WorkspaceAxis::Horizontal;
+-    m_navigationWorkspace = workspaceAtPoint(lx, ly, nullptr, nullptr, true);
++    m_navigationWorkspace = workspaceAtPoint(lx, ly, nullptr, nullptr, true, false);
+     if (m_navigationWorkspace == nullptr || m_navigationWorkspace->group() != output->workspaceGroup()) {
+       m_navigationWorkspace = output->workspaceGroup()->active();
+     }
+@@ -3481,7 +3511,7 @@ namespace umbriel {
+     m_dropWorkspaceGroup = nullptr;
+ 
+     size_t workspacePosition = 0;
+-    Workspace* workspace = workspaceAtPoint(lx, ly, &state, &workspacePosition, true);
++    Workspace* workspace = workspaceAtPoint(lx, ly, &state, &workspacePosition, true, true);
+     m_drop = {.workspace = workspace};
+     if (workspace == nullptr || state == nullptr) {
+       hideDropHint();
+diff --git a/src/overview/overview.h b/src/overview/overview.h
+index be2c1cf9..98a6f160 100644
+--- a/src/overview/overview.h
++++ b/src/overview/overview.h
+@@ -135,9 +135,16 @@ namespace umbriel {
+     [[nodiscard]] static double settledZoom();
+     [[nodiscard]] bool dragging() const { return m_dragCard != nullptr || m_middlePressed; }
+     [[nodiscard]] bool cardDragging() const { return m_dragCard != nullptr; }
++    // A middle-press pointer-scroll pan owns the motion while it runs (handleMotion routes it ahead of the card
++    // drag), so the held card's drop row must not drive edge-scroll pairing in that window.
++    [[nodiscard]] bool middlePressed() const { return m_middlePressed; }
+     // Re-resolves the drop under the stationary drag pointer after the strip moved beneath it (edge auto-scroll or
+     // finger-scroll pan). A no-op without a live card drag.
+     void refreshDragTarget();
++    // The workspace a held card would drop into — the row under the drag pointer as refreshDragTarget last
++    // resolved it. Null without a live card drag, while the pointer sits in an insertion gap, or when the row
++    // has been pruned from its group underneath the drag.
++    [[nodiscard]] Workspace* dragTargetWorkspace() const;
+     // Workspace-filmstrip twin of the layout-strip edge auto-scroll (input.drag_edge_scroll drives both during a
+     // held card drag): pan the rows along the workspace axis. speedPxPerSec is the edge ramp's signed screen-px/s;
+     // the filmstrip converts it to rows through the preview step so the visible slide matches the strip's.
+@@ -150,6 +157,9 @@ namespace umbriel {
+   private:
+     static void onNavigationDeviceDestroyed(wl_listener* listener, void* data);
+     [[nodiscard]] Workspace* navigationWorkspace() const;
++    // Pointer-identity membership test that never dereferences `workspace`: dynamic-workspace reconciliation can
++    // prune a row while the drop state still holds it (navigationWorkspace()'s pattern).
++    [[nodiscard]] bool workspaceRowAlive(const Workspace* workspace) const;
+     OverviewNavigation m_navigation;
+     Output* m_navigationOutput = nullptr;
+     Workspace* m_navigationWorkspace = nullptr;
+@@ -388,11 +398,15 @@ namespace umbriel {
+     void scheduleFrames() const;
+ 
+     [[nodiscard]] Card* cardAt(double lx, double ly);
+-    // Hit-test a workspace preview. `forDragTarget` widens the boxes the way a drag needs them: along the scrolling
+-    // axis over the whole output (overhanging cards), and to the output edges at both ends of the filmstrip (the
+-    // extreme gaps were dead zones). Background clicks keep the narrow preview hitbox.
+-    [[nodiscard]] Workspace*
+-    workspaceAtPoint(double lx, double ly, OutputState** outState, size_t* outIndex, bool forDragTarget);
++    // Hit-test a workspace preview. `extendScrollingAxis` widens the boxes over the whole output along the
++    // scrolling axis (overhanging cards must stay targetable there). `extendFilmstripEnds` is drop-targeting
++    // only: the rows at either end of the filmstrip claim the space out to the output edge along the workspace
++    // axis, so a card released past the last preview lands on the end workspace instead of nowhere. Wheel,
++    // pointer-scroll and navigation lookups pass it false and keep the narrow preview hitbox in those extremes.
++    [[nodiscard]] Workspace* workspaceAtPoint(
++        double lx, double ly, OutputState** outState, size_t* outIndex, bool extendScrollingAxis,
++        bool extendFilmstripEnds
++    );
+     [[nodiscard]] WorkspaceGroup*
+     workspaceGapAt(double lx, double ly, OutputState** outState, size_t* outIndex, wlr_box* outHintBox);
+     [[nodiscard]] Workspace* preferredWorkspace() const;
+diff --git a/tests/harness/checks/drag/overview_card_row_edge_scroll.sh b/tests/harness/checks/drag/overview_card_row_edge_scroll.sh
+new file mode 100644
+index 00000000..7d71ec5d
+--- /dev/null
++++ b/tests/harness/checks/drag/overview_card_row_edge_scroll.sh
+@@ -0,0 +1,122 @@
++#!/usr/bin/env bash
++# harness: outputs=1
++# Regression check (talia review findings 1+2 on the overview card drag input): while a card drag is
++# held, the layout-strip edge auto-scroll must slide the strip of the ROW UNDER THE DRAG POINTER (the
++# drop target), not the active workspace's — a corner push must reveal the hovered preview's offscreen
++# columns, the same row the finger-pan path resolves through navigationWorkspace(). Pins the lookup
++# against a regression to group->active().
++# Asserts: while the held card rides at the strip edge over the second row's band, that row's columns
++# slide (>50 px) and the active row's columns stay put, then the drop lands on the hovered row.
++set -euo pipefail
++
++source "$UMBRIEL_HARNESS_LIB"
++
++readonly BTN_LEFT=272
++readonly OUTPUT_W=1280
++readonly OUTPUT_H=720
++
++spawn_client() {
++  foot --title="card-row-$1" sh -c 'sleep 120' > /dev/null 2>&1 &
++}
++
++window_x() {
++  jq -r --arg title "$1" '.[] | select(.title == $title) | .x' <<< "$2"
++}
++
++cat >> "$UMBRIEL_CONFIG" <<'EOF'
++
++[output."HEADLESS-1"]
++workspaces = 2
++
++[layout.scrolling]
++default_extent_fraction = 0.5
++center_focused = "never"
++
++[overview]
++background_blur = false
++shortcuts = false
++zoom = 0.5
++EOF
++"$UMBRIEL" msg config-reload > /dev/null
++
++count=0
++for ws in 1 2; do
++  "$UMBRIEL" msg "workspace-switch:$ws" > /dev/null
++  for id in $(seq 1 4); do
++    spawn_client "$ws-$id"
++    count=$((count + 1))
++    for _ in $(seq 60); do
++      [[ $("$UMBRIEL" windows --json | jq 'length') -eq $count ]] && break
++      sleep 0.25
++    done
++  done
++done
++"$UMBRIEL" msg column-focus-first > /dev/null
++"$UMBRIEL" settle
++"$UMBRIEL" msg workspace-switch:1 > /dev/null
++"$UMBRIEL" msg column-focus-first > /dev/null
++"$UMBRIEL" settle
++
++windows=$("$UMBRIEL" windows --json)
++if (( $(window_x card-row-2-4 "$windows") < OUTPUT_W )); then
++  echo "workspace 2's last column began inside its viewport instead of offscreen: $windows"
++  exit 1
++fi
++
++"$UMBRIEL_POINTER_CLIENT" "$OUTPUT_W" "$OUTPUT_H" move 640 360
++"$UMBRIEL" msg overview-open > /dev/null
++"$UMBRIEL" settle
++
++# The card comes from the active row (workspace 1). At zoom 0.5 rows step 396 px: the pointer at
++# y=650 rides inside workspace 2's band (576..936) and outside the filmstrip's bottom trigger zone
++# (y>690), while x=1279 is inside the strip's right edge zone.
++start_x=$(jq -r '.[] | select(.title == "card-row-1-1") | (.x + .w / 2 | round)' <<< "$windows")
++start_y=$(jq -r '.[] | select(.title == "card-row-1-1") | (.y + .h / 2 | round)' <<< "$windows")
++press_x=$((320 + start_x / 2))
++press_y=$((180 + start_y / 2))
++
++pointer_hold "$OUTPUT_W" "$OUTPUT_H" \
++  move "$press_x" "$press_y" press "$BTN_LEFT" move $((press_x + 20)) "$press_y" \
++  -- move 1279 650 mark atedge hold release "$BTN_LEFT"
++
++windows=$("$UMBRIEL" windows --json)
++base_hover_x=$(window_x card-row-2-4 "$windows")
++base_active_x=$(window_x card-row-1-4 "$windows")
++echo "probe: post-detach baselines hovered row card-row-2-4 x=$base_hover_x, active row card-row-1-4 x=$base_active_x"
++
++pointer_step atedge
++
++slid=false
++hover_x=$base_hover_x
++for _ in $(seq 120); do
++  windows=$("$UMBRIEL" windows --json)
++  hover_x=$(window_x card-row-2-4 "$windows")
++  if ((hover_x < base_hover_x - 50)); then
++    slid=true
++    break
++  fi
++  sleep 0.05
++done
++
++active_x=$(window_x card-row-1-4 "$windows")
++pointer_release
++"$UMBRIEL" settle
++
++if [[ $slid != true ]]; then
++  echo "RED: the edge scroll did not slide the hovered row's strip: card-row-2-4 x $base_hover_x -> $hover_x (active row moved x $base_active_x -> $active_x)"
++  exit 1
++fi
++
++if ((active_x > base_active_x + 10 || active_x < base_active_x - 10)); then
++  echo "RED: the edge scroll panned the ACTIVE row while the card hovered another: card-row-1-4 x $base_active_x -> $active_x"
++  exit 1
++fi
++
++windows=$("$UMBRIEL" windows --json)
++dropped=$(jq -r '.[] | select(.title == "card-row-1-1") | .workspace' <<< "$windows")
++if [[ $dropped != *":2" ]]; then
++  echo "the drop did not land on the hovered row: $dropped ($windows)"
++  exit 1
++fi
++
++echo "GREEN: edge scroll slid the hovered row (card-row-2-4 x $base_hover_x -> $hover_x) with the active row still (x $base_active_x), drop on $dropped"
+diff --git a/tests/harness/checks/overview/wheel_extreme_gap.sh b/tests/harness/checks/overview/wheel_extreme_gap.sh
+new file mode 100644
+index 00000000..a73d9986
+--- /dev/null
++++ b/tests/harness/checks/overview/wheel_extreme_gap.sh
+@@ -0,0 +1,81 @@
++#!/usr/bin/env bash
++# harness: outputs=1
++# Regression check (talia review findings 3+4 on the overview card drag input): the filmstrip
++# end-band widening in workspaceAtPoint is DROP-ONLY. Wheel notches — and the pointer-scroll and
++# navigation lookups sharing the same hit-test flags — keep the narrow preview hitbox, so a
++# Shift-wheel notch over the extreme gap beyond the first preview stays inert instead of focusing
++# the end row's columns as the widened drop hitbox would.
++# Asserts: the notch over the gap changes nothing, the same notch inside the row's band moves column
++# focus (proving the notch driver and direction).
++set -euo pipefail
++
++source "$UMBRIEL_HARNESS_LIB"
++
++readonly OUTPUT_W=1280
++readonly OUTPUT_H=720
++
++spawn_client() {
++  foot --title="wheel-gap-$1" sh -c 'sleep 120' > /dev/null 2>&1 &
++}
++
++selected_title() {
++  "$UMBRIEL" windows --json | jq -r '.[] | select(.focused == true) | .title'
++}
++
++cat >> "$UMBRIEL_CONFIG" <<'EOF'
++
++[output."HEADLESS-1"]
++workspaces = 3
++
++[layout.scrolling]
++default_extent_fraction = 0.5
++center_focused = "never"
++
++[overview]
++background_blur = false
++shortcuts = false
++zoom = 0.5
++EOF
++"$UMBRIEL" msg config-reload > /dev/null
++
++for id in 1 2; do
++  spawn_client "$id"
++  for _ in $(seq 60); do
++    [[ $("$UMBRIEL" windows --json | jq 'length') -eq $id ]] && break
++    sleep 0.25
++  done
++done
++"$UMBRIEL" msg column-focus-first > /dev/null
++"$UMBRIEL" settle
++
++"$UMBRIEL_POINTER_CLIENT" "$OUTPUT_W" "$OUTPUT_H" move 640 360
++"$UMBRIEL" msg overview-open > /dev/null
++"$UMBRIEL" settle
++
++before=$(selected_title)
++
++# The extreme gap above the first row's band (rows start at y=180 at zoom 0.5): the notch must be
++# inert. A widened drop hitbox would resolve the end row and step its column focus here.
++"$UMBRIEL_POINTER_CLIENT" "$OUTPUT_W" "$OUTPUT_H" move 640 100 mod shift notch 1 mod none
++"$UMBRIEL" settle
++after_gap=$(selected_title)
++
++if [[ $after_gap != "$before" ]]; then
++  echo "RED: a wheel notch over the extreme gap focused the end row's columns: $before -> $after_gap"
++  exit 1
++fi
++
++# Control: the same notch inside the row's band does step column focus.
++"$UMBRIEL_POINTER_CLIENT" "$OUTPUT_W" "$OUTPUT_H" move 640 360 mod shift notch 1 mod none
++for _ in $(seq 20); do
++  after_band=$(selected_title)
++  [[ $after_band != "$before" ]] && break
++  sleep 0.1
++done
++
++if [[ $after_band == "$before" ]]; then
++  echo "the control notch inside the row band did not move column focus (driver broken?): $before"
++  exit 1
++fi
++
++echo "GREEN: wheel notch over the extreme gap stayed inert ($before), inside the band it moved focus ($after_band)"
 -- 
 2.56.0.236.g7e34d8174d
 
