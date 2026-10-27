@@ -39,6 +39,11 @@ build() {
     # House style (mold-git): mold is probed, never a makedepend.
     local _rustflags="${RUSTFLAGS:-}"
     command -v mold >/dev/null 2>&1 && _rustflags+=" -C link-arg=-fuse-ld=mold"
+    # Keep Rust-side $srcdir references out of the shipped binary. The
+    # embedded eBPF object still carries its clang compile paths (needs an
+    # upstream build.rs clang_args prefix-map; cosmetic leak present since
+    # v0.1.0) so makepkg's srcdir-reference lint stays a warning.
+    _rustflags+=" --remap-path-prefix=${srcdir}=/"
 
     RUSTFLAGS="${_rustflags}" cargo build --frozen --release \
         -j "${GSA_BUILD_JOBS:-$(nproc)}"
