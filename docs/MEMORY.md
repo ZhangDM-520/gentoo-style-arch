@@ -43,6 +43,12 @@
    - toolchain -git packages need VERSIONED provides
      (`provides=("meson=${pkgver}")`) — unversioned provides cannot satisfy
      `>=N` makedeps; pacman falls back to the conflicting repo package.
+   - the quotes are load-bearing: use double (`provides=("X=${pkgver}")`).
+     makepkg's pkgver() update rewrites `pkgver=` and **re-sources** the
+     PKGBUILD, so a double-quoted provide tracks the BUILT version; single
+     quotes ship the literal `${pkgver}` string into .PKGINFO. The
+     `provides-versioning` finding text renders single quotes — never copy
+     it verbatim (2026-10-28 noctalia-git).
    - every lib-shipping package declares BARE soname provides (`libfoo.so`) —
      undeclared = repo consumers break on the stock→house swap.
    - provides live in .PKGINFO: any provides change needs a real rebuild

@@ -377,7 +377,6 @@ logseq-desktop-git: logseq
 logseq-desktop-git: logseq-desktop
 mimalloc-git: mimalloc
 nghttp3-git: nghttp3
-noctalia-git: noctalia
 onlyoffice-git: onlyoffice
 onlyoffice-git: onlyoffice-desktopeditors
 pango-git: pango

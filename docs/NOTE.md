@@ -17611,3 +17611,37 @@ the disposition call. BUILD HELD per owner.
   predates this bump (report-only lint; snapshot refresh is gsa-pm's beat).
 - Host upgrade to 0.2.0-1: makepkg build + `pacman -U` + service restart —
   recorded in `docs/CURRENT.md`.
+
+### 2026-10-28 — noctalia-git: drop the merged idle bridge patch, version the noctalia provide
+
+- **WHAT**: `packages/git/noctalia-git`: (1) `provides=('noctalia')` →
+  `provides=("noctalia=${pkgver}")` (mapped swap name versioned); (2) DELETED
+  `0001-idle-lock-resume-and-inhibit-tracking.patch` + its source/sha256sums
+  entries + the `prepare()` that applied it — upstream **PR #4002 (fixes
+  #4190) MERGED 2026-10-27** (f1a113534), the drop condition the recipe
+  header itself named; (3) pkgver refreshed by the build's makepkg `pkgver()`
+  (5.3.0.r5994.g1af14b8cd → 5.4.0.r6028.g490d327d7), `.SRCINFO` re-synced
+  pre- and post-build; (4) `tests/recipe-contract.sh` §E `mapping.expected`
+  shrunk by `noctalia-git: noctalia` (the sanctioned ratchet update).
+- **WHY**: two live failures from the 11:23 run — build-failed rc 1 (the
+  floating `#branch=main` source moved past the snapshot; `git apply -3`
+  conflicted in `prepare()`) and the QA `provides-versioning` finding
+  (unversioned mapped provide cannot satisfy `noctalia>=N`; pacman falls back
+  to the repo package). Drop verified by content, not just the merge fact:
+  merged main carries the full patch semantics (kInhibitReleaseDebounce,
+  applyScreenSaverInhibitRelease, screenSaverInhibited, heartbeat idle
+  recorded while inhibited, suppressed-idle no-recreate; upstream folded the
+  patch's `resumeIfIdled` parameter into call-site phase filtering — same
+  behavior). Quoting is load-bearing (makepkg re-sources the PKGBUILD after
+  its pkgver rewrite): double quotes make the provide track the BUILT
+  version; the finding text's single quotes would ship the literal — lesson
+  recorded in MEMORY §4 provides discipline.
+- **VERIFY**: `bash -n` clean; `makepkg --printsrcinfo` diffs = exactly the
+  intended rows; `tests/noctalia-pgo.sh`, `tests/recipe-contract.sh`
+  (E real-repo gates), `tests/recipe-sources.sh` (548 sources, all tracked)
+  PASS; `gsa --qa-check provides-versioning` 0 noctalia rows;
+  `sudo gsa -S noctalia-git` (repo cwd) **succeeded, rc 0**, run-record
+  `qa-report findings=0`; deliverable checked per §4: `pacman -Qi
+  noctalia-git` → `Provides: noctalia=5.4.0.r6028.g490d327d7`.
+- Fourth stale-bridge-patch instance (after mlt, obs-browser, qt6-quick3d —
+  MEMORY pitfall digest): the drop condition firing IS the fix trigger.

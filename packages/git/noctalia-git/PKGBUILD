@@ -6,7 +6,7 @@ source "$startdir/../../../lib/pgo.sh"
 
 pkgname=noctalia-git
 _pkgname=noctalia
-pkgver=5.3.0.r5994.g1af14b8cd
+pkgver=5.4.0.r6028.g490d327d7
 pkgrel=1
 pkgdesc='A sleek, customizable desktop shell crafted for Wayland'
 arch=('x86_64' 'aarch64')
@@ -63,12 +63,10 @@ makedepends=(
 #          with the explicit -Db_lto=true in build())
 # !debug:  no separate debug package
 options=('!debug' 'lto')
-provides=('noctalia')
+provides=("noctalia=${pkgver}")
 conflicts=('noctalia' 'noctalia-bin')
-source=("${_pkgname}::git+${url}.git#branch=main"
-        0001-idle-lock-resume-and-inhibit-tracking.patch)
-sha256sums=('SKIP'
-            '1a582aac227369cca7bd1eac072875e6c5a7998a63e8ed3e0c8338569d1903fe')
+source=("${_pkgname}::git+${url}.git#branch=main")
+sha256sums=('SKIP')
 
 pkgver() {
   cd "${_pkgname}"
@@ -82,28 +80,6 @@ pkgver() {
     version="$(<VERSION)"
   fi
   printf '%s.r%s.g%s' "${version}" "$(git rev-list --count HEAD)" "$(git rev-parse --short=9 HEAD)"
-}
-
-prepare() {
-  cd "${_pkgname}"
-
-  # Locking must not undo the idle chain. Re-arming notifications ran the resume action of every
-  # already-idled behaviour, and screen_off's resume action is PowerOnMonitors - so the panel lit
-  # back up the moment the session locked, then had to wait out the blanking timeout again.
-  # Candidate upstream fix, PR #4002 (fixes #4190), snapshotted from its head 9d530d40 as a
-  # code-only diff — the PR's docs/user/services/idle.mdx hunks are excluded. REBASED 2026-10-20
-  # onto upstream main ee75f7adcc (3-way): idle_manager.{cpp,h} were resolved over upstream
-  # b0af9ffde's lock fixes, which cover #4002's lock-side intent independently (#4843); the
-  # inhibit-debounce chain is still patch-only. REBASED AGAIN 2026-10-26 onto main 1af14b8c:
-  # upstream replaced the m_liveIdleSeconds counter with a m_heartbeatIdleSince timestamp model
-  # (liveIdleSeconds()), so the patch's counter fixups were re-expressed against it (the withheld
-  # compositor idle is recorded while inhibited, the readout is suppressed via
-  # screenSaverInhibited(), and release restarts the timestamp). Refresh the snapshot whenever
-  # #4002 gains commits (pre-flight `git apply -3` against current main first: this source floats
-  # on #branch=main); drop the patch, its source/sha256sums entry and this prepare() once #4002
-  # merges. The -dirty version suffix is the reminder that the patch is in.
-  # Verified on niri 26.04: /sys/class/drm/<connector>/dpms goes On at the lock without it.
-  git apply -3 ../0001-idle-lock-resume-and-inhibit-tracking.patch
 }
 
 # Run the PGO training workload: exercise the real shell under a headless sway
