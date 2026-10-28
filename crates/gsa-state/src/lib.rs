@@ -31,7 +31,11 @@ pub use index::{
     IndexRow, Match, RegisterOutcome, Retention, Verification,
 };
 pub use kv::Kv;
-pub use ownership::StateError;
+// `ownership_gate` is the rule-19 write gate (§J.5) every state-file write
+// must open through — re-exported so sibling crates' state-write sites
+// (e.g. gsa-install's forced-rebuild markers) share the one seam instead of
+// hand-rolling an open the gate would refuse.
+pub use ownership::{ownership_gate, StateError};
 pub use runs::{wire_run, RunHistory};
 pub use store::CorruptLine;
 

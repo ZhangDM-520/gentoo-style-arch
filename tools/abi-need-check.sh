@@ -145,6 +145,10 @@ file_install_txn() {
         while IFS= read -r -d '' arg; do argv+=("$arg"); done <"/proc/$pid/cmdline"
         if ((${#argv[@]} > 0)) && [[ ${argv[0]##*/} == pacman ]]; then
             for arg in "${argv[@]:1}"; do
+                # `pacman --upgrade <file>` is the same file-install witness
+                # as `-U` (S3: the stand-down must see the long spelling too
+                # — skipping `--*` wholesale classed it as a sync).
+                [[ $arg == --upgrade ]] && return 0
                 [[ $arg == --* ]] && continue
                 [[ $arg == -*U* ]] && return 0
             done

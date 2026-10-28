@@ -460,6 +460,11 @@ fn run_build_with(
             let mut later: Vec<String> = ids.iter().map(|id| id.as_str().to_string()).collect();
             let workspace_names: Vec<String> =
                 crate::install::workspace_output_names(&db).into_iter().collect();
+            // The canonical repair-marker key map (rule 25(d), §E.3 gap-G1):
+            // the run order names recipe ids, link truth names pkgnames —
+            // this map is the ONE boundary that lets the ABI gate compare
+            // them and stage markers the consume side can read back.
+            let recipe_of_name = crate::install::workspace_recipe_of_name(&db);
             Box::new(
                 move |pkg: &str, recipe_dir: &std::path::Path, forced: bool| {
                     later.retain(|subject| subject != pkg);
@@ -473,6 +478,7 @@ fn run_build_with(
                         pacman_args: pacman_args.clone(),
                         register_ignorepkg,
                         later_installs: later.clone(),
+                        recipe_of_name: recipe_of_name.clone(),
                         workspace_names: workspace_names.clone(),
                     };
                     crate::install::install_step_from_result(gsa_install::install_built_package(
@@ -762,7 +768,7 @@ fn run_build_with(
     // install decisions, which the one decision seam made (rule 20).
     let qa = if is_install_run {
         let qa_targets: Vec<String> = ids.iter().map(|id| id.as_str().to_string()).collect();
-        crate::qa::report_lines(&qa_targets)
+        crate::qa::report_lines(&qa_targets, inv.state_dir.as_deref())
     } else {
         None
     };

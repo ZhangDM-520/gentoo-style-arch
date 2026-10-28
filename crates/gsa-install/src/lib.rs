@@ -75,8 +75,19 @@ pub struct DecisionContext {
     pub empty_list: EmptyListPolicy,
     /// Subjects that will be installed later in this same run: in-run repair
     /// coverage for the ABI gate (rule 25(d)) — never a license to skip a
-    /// gate for the archive itself.
+    /// gate for the archive itself. RECIPE IDS (the canonical repair-marker
+    /// key, §E.3 gap-G1 `<consumer-id>`); the gate matches them against the
+    /// consumers' resolved recipe ids, never raw pkgnames.
     pub later_installs: Vec<String>,
+    /// Workspace output name → owning recipe id (rule 25(d), §E.3 gap-G1):
+    /// the ONE key-space map so the forced-rebuild marker file name,
+    /// prepare's freshness-gate lookup, the post-install clear and the
+    /// `later_installs` coverage check all use the same key — split outputs
+    /// (several pkgnames per recipe) resolve to their shared recipe id.
+    /// Threaded from the callers that hold the graph; EMPTY (the order-blind
+    /// `--install-decide` seam) falls every name back to itself — the marker
+    /// key is then the name the seam CAN name, never a dropped repair.
+    pub recipe_of_name: std::collections::BTreeMap<String, String>,
     /// Workspace recipe OUTPUT names (`pkgbase` + `pkgname`s of every
     /// committed recipe). The ABI gate's class split (§E.3): a pinner whose
     /// name is a workspace output stays with the consumer logic — only
@@ -335,9 +346,12 @@ pub fn decide_with_repairs(
 /// `repair_marker_write`): one file per consumer under
 /// `<state root>/abi-repair/<consumer-id>`, written by the provider's
 /// install BEFORE the transaction lands and fail-closed — a marker that
-/// cannot be recorded aborts the install with nothing mutated. The read
-/// side is the freshness gate (`abi-repair-pending`); the consumer's own
-/// install consumes the marker.
+/// cannot be recorded aborts the install with nothing mutated. `repairs`
+/// carries the gate's canonical keys (recipe ids, §E.3 gap-G1), the same
+/// key prepare's freshness gate reads and the consumer's own install
+/// consumes. The write goes through the rule-19 write-time ownership gate
+/// (§J.5): `O_NOFOLLOW` open + fstat of the very fd written, so a
+/// final-component symlink swap can never redirect a root-owned write.
 pub fn stage_repair_markers(
     state_dir: &Path,
     repairs: &[(String, String)],
@@ -354,10 +368,60 @@ pub fn stage_repair_markers(
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        std::fs::write(&path, format!("provider={provider}\nrecorded={recorded}\n"))
+        let content = format!("provider={provider}\nrecorded={recorded}\n");
+        // rule 19 / §J.5: a state-file write opens through the fd-based
+        // ownership gate and writes through that checked fd only — never a
+        // plain path write a symlink swap could redirect.
+        let mut notes = Vec::new();
+        let mut file = gsa_state::ownership_gate(&path, &mut notes)
             .map_err(|e| format!("abi-repair marker {}: {e}", path.display()))?;
+        {
+            use std::io::Write as _;
+            // The gate hands back a checked APPEND handle; a re-staged
+            // marker replaces its record (the read side is existence-only),
+            // matching the plain write this gate replaced.
+            file.set_len(0)
+                .and_then(|_| file.write_all(content.as_bytes()))
+                .map_err(|e| format!("abi-repair marker {}: {e}", path.display()))?;
+        }
+        // The gate's quarantine announcements are loud (rule 19) — a
+        // relocated foreign file must never be a silent event.
+        if !notes.is_empty() {
+            eprint!("{}", String::from_utf8_lossy(&notes));
+        }
     }
     Ok(())
+}
+
+/// The canonical forced-rebuild-marker key of one installed output name
+/// (rule 25(d), §E.3 gap-G1 `<consumer-id>`): its owning recipe id when the
+/// name resolves, else the name itself. The same rule keys the write side
+/// (`AbiGate.repairs`), prepare's freshness-gate lookup and the post-install
+/// consume — one key space, split outputs included.
+pub fn repair_marker_key(
+    recipe_of_name: &std::collections::BTreeMap<String, String>,
+    pkgname: &str,
+) -> String {
+    recipe_of_name
+        .get(pkgname)
+        .cloned()
+        .unwrap_or_else(|| pkgname.to_string())
+}
+
+/// Consume one forced-rebuild marker after the marked recipe's own install
+/// landed (rule 25(d); fish `repair_markers_clear`). A consume failure is
+/// loud but never fails the landed transaction — the read side then forces
+/// one extra rebuild (the fail-closed direction).
+pub fn consume_repair_marker(state_dir: &Path, marker_key: &str) {
+    let marker = state_dir.join("abi-repair").join(marker_key);
+    if marker.exists() {
+        if let Err(error) = std::fs::remove_file(&marker) {
+            eprintln!(
+                "gsa: note: abi-repair marker {} could not be consumed after install: {error} (the read side will mark {marker_key} for rebuild again)",
+                marker.display()
+            );
+        }
+    }
 }
 
 /// One candidate's parsed identity plus its row block: the decision is
@@ -755,6 +819,7 @@ fn plan(candidates: &[Candidate], ctx: &DecisionContext, db: &LocalDb) -> Result
                 &view,
                 &tx_names,
                 &ctx.later_installs,
+                &ctx.recipe_of_name,
                 &ctx.workspace_names,
             );
             if !gate.rows.is_empty() {
@@ -937,6 +1002,7 @@ pub fn install_built_package(
             DecideMode::Force => EmptyListPolicy::Noop,
         },
         later_installs: run.later_installs.clone(),
+        recipe_of_name: run.recipe_of_name.clone(),
         workspace_names: run.workspace_names.iter().cloned().collect(),
         parks: Vec::new(),
         abi_exclusions: None,
@@ -1087,16 +1153,15 @@ pub fn install_built_package(
             // actually installed clears it, so a skipped build, a refused
             // plan or a failed transaction leaves the marker pending (fish
             // `repair_markers_clear`). Without this the read side would make
-            // a marked recipe rebuild forever.
-            let marker = run.state_dir.join("abi-repair").join(&recipe_id);
-            if marker.exists() {
-                if let Err(error) = std::fs::remove_file(&marker) {
-                    eprintln!(
-                        "gsa: note: abi-repair marker {} could not be consumed after install: {error} (the read side will mark {recipe_id} for rebuild again)",
-                        marker.display()
-                    );
-                }
-            }
+            // a marked recipe rebuild forever. The consume reads the SAME
+            // canonical key the marker staged (§E.3 gap-G1 `<consumer-id>`)
+            // — never a second key space (that is the pkgname/id leak).
+            let marker_key = group
+                .pkginfo
+                .as_ref()
+                .map(|info| repair_marker_key(&run.recipe_of_name, &info.pkgname))
+                .unwrap_or_else(|| recipe_id.clone());
+            consume_repair_marker(&run.state_dir, &marker_key);
             let Some(info) = group.pkginfo.as_ref() else {
                 continue;
             };
@@ -1176,8 +1241,12 @@ pub struct InstallRun {
     pub pacman_args: Vec<String>,
     /// False under `--no-register-ignorepkg` (the skip is loud).
     pub register_ignorepkg: bool,
-    /// In-run repair coverage (rule 25(d)).
+    /// In-run repair coverage (rule 25(d)) — RECIPE IDS.
     pub later_installs: Vec<String>,
+    /// Workspace output name → owning recipe id (rule 25(d), §E.3 gap-G1):
+    /// the canonical forced-rebuild-marker key map — see
+    /// [`DecisionContext::recipe_of_name`].
+    pub recipe_of_name: std::collections::BTreeMap<String, String>,
     /// Workspace recipe OUTPUT names (`pkgbase` + `pkgname`s of every
     /// committed recipe) — the ABI gate's workspace/out-of-tree class split.
     pub workspace_names: Vec<String>,

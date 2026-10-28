@@ -1096,4 +1096,58 @@ mod tests {
         assert!(sync_status_line(id, &loud, true).is_none());
         assert!(sync_status_line(id, &loud, false).is_none());
     }
+
+    /// Split-output pin (rule 25(d), §E.3 gap-G1 `<consumer-id>`): the
+    /// forced-rebuild marker rides the RECIPE-id key the write side stages
+    /// (a consumer whose ELF-owning pkgname differs from its recipe id) —
+    /// the freshness gate reads exactly that key, so the pending repair
+    /// outranks every freshness claim instead of leaking unseen.
+    #[test]
+    fn a_pending_abi_repair_marker_forces_the_rebuild_by_recipe_id() {
+        use gsa_model::TopologyRecord;
+        let dir =
+            std::env::temp_dir().join(format!("gsa-cli-prepare-marker-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let state = dir.join("state");
+        std::fs::create_dir_all(state.join("abi-repair")).unwrap();
+        std::fs::write(
+            state.join("abi-repair").join("consumer-app"),
+            "provider=libs-git\n",
+        )
+        .unwrap();
+        let records = vec![TopologyRecord {
+            id: RecipeId::new("consumer-app").unwrap(),
+            path: "git/consumer-app".to_string(),
+            groups: Vec::new(),
+            edges: Vec::new(),
+            tags: Vec::new(),
+            source_line: 1,
+        }];
+        let graph = Graph::build(&records).unwrap();
+        let cfg = PassConfig {
+            skip_mode: Some(SkipMode::Skip),
+            tolerance: 1,
+            no_sync: true,
+            notes: Vec::new(),
+        };
+        let mut log = Vec::new();
+        let plan = skip_decision(
+            &dir.join("recipe"),
+            "consumer-app",
+            &state,
+            &cfg,
+            true,
+            &graph,
+            0,
+            &mut log,
+        );
+        assert_eq!(
+            plan,
+            NodePlan::Build {
+                reason: "abi-repair-pending".to_string()
+            },
+            "a recipe-id-keyed pending marker outranks every freshness claim: {log:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

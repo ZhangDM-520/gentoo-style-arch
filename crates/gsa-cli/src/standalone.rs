@@ -123,7 +123,7 @@ pub(crate) fn apply(
         .collect();
     // The discoverable workspace root, resolved once: the disambiguation
     // probe reads it and staging takes the shared `lib/` from it (S5).
-    let ws_root = crate::resolve_root(false, None).ok();
+    let ws_root = crate::resolve_root(false, inv.state_dir.as_deref()).ok();
     // I5: a kv user set is a workspace answer too (@name resolves over
     // kv user-sets ∪ config/sets/).
     let user_sets = crate::select::load_user_sets(inv);

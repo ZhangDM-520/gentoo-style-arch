@@ -225,7 +225,7 @@ pub fn run_local_db_check(args: &[String], out: &mut dyn Write, err: &mut dyn Wr
             // it is given — under the engine's ONE layout error policy: an
             // unusable layout is fatal for the operation, never a silent
             // home switch.
-            let mut scan_dirs = match crate::find_root() {
+            let mut scan_dirs = match crate::find_root(state_flag) {
                 Some(root) => match gsa_topo::load_project(&root) {
                     Ok(project) => project
                         .topology
@@ -299,7 +299,7 @@ pub fn query_abi(
     for line in &subs.corrupt {
         let _ = writeln!(err, "gsa: note: {line}");
     }
-    let repo = crate::find_root();
+    let repo = crate::find_root(inv.state_dir.as_deref());
     for &idx in &indices {
         let record = ctx.graph.record(idx);
         let id = record.id.as_str();

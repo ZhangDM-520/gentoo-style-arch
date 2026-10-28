@@ -11,9 +11,10 @@ use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use gsa_install::{
-    decide, decide_mode, discover_recipe, install_built_package, rollback_registration_names,
-    rows_rc, Candidate, DecideMode, DecisionContext, EmptyListPolicy, InstallRun, InstalledPackage,
-    LocalDb,
+    consume_repair_marker, decide, decide_mode, decide_with_repairs, discover_recipe,
+    install_built_package, repair_marker_key, rollback_registration_names, rows_rc,
+    stage_repair_markers, Candidate, DecideMode, DecisionContext, EmptyListPolicy, InstallRun,
+    InstalledPackage, LocalDb,
 };
 use gsa_model::{Decision, Group, RecipeId, TopologyRecord};
 
@@ -617,6 +618,138 @@ fn abi_soname_gate_is_conditional_on_exposure() {
 }
 
 #[test]
+fn split_output_repairs_stage_under_the_recipe_id() {
+    let dir = scratch("repair-key");
+    // The provider archive moves libfoo.so's auto-version against the
+    // installed surface.
+    let archive = dir.join("foo-2.1-1-x86_64.pkg.tar.zst");
+    write_archive(
+        &archive,
+        &[(
+            ".PKGINFO",
+            &pkginfo_body("foo", "2.1-1", &["libfoo.so=2-64"]),
+        )],
+    );
+    // The linked consumer is the ELF-owning SPLIT output of recipe
+    // `consumer-app` (pkgname `consumer-app-libs`): link truth names
+    // pkgnames, the run order names recipe ids.
+    let consumer_elf = dir.join("libconsumer.so.1");
+    std::fs::write(&consumer_elf, elf64_with_needed("libfoo.so.1")).unwrap();
+    let mut consumer = installed(
+        "consumer-app-libs",
+        "0:1.0-1",
+        &[],
+        &[],
+        Some(SystemTime::now()),
+    );
+    // Link truth probes the owned file's bytes — the absolute owned path
+    // routes the probe at this scratch file (the same shape
+    // tests/abi-drift-install.sh records in its local-DB files entry).
+    consumer.files = vec![consumer_elf.display().to_string()];
+    let db = LocalDb::from_packages(vec![
+        installed(
+            "foo",
+            "0:1.0-1",
+            &["libfoo.so=1-64"],
+            &[],
+            Some(SystemTime::now()),
+        ),
+        consumer,
+    ]);
+    let recipe = dir.join("provider-recipe");
+    std::fs::create_dir_all(&recipe).unwrap();
+    let mut ctx = force_ctx();
+    // The run-order remainder is recipe-id form (gsa-cli::build's hook);
+    // the name→id map is the ONE boundary (rule 25(d)) resolving the
+    // ELF-owning pkgname to its recipe id.
+    ctx.later_installs = vec!["consumer-app".to_string()];
+    ctx.recipe_of_name = std::collections::BTreeMap::from([
+        ("consumer-app-libs".to_string(), "consumer-app".to_string()),
+        ("consumer-app".to_string(), "consumer-app".to_string()),
+    ]);
+    let (rows, repairs) = decide_with_repairs(
+        std::slice::from_ref(&candidate(&archive, Some(&recipe))),
+        &ctx,
+        &db,
+    )
+    .unwrap();
+    assert_eq!(
+        rendered(&rows),
+        vec!["foo install ok repair consumer-app provider-recipe".to_string()],
+        "in-run coverage plans the move clean and names the repair: {rows:?}"
+    );
+    assert_eq!(
+        repairs,
+        vec![("consumer-app".to_string(), "provider-recipe".to_string())],
+        "the repair key is the RECIPE id (§E.3 gap-G1 <consumer-id>), never the ELF-owning pkgname"
+    );
+    let state = dir.join("state");
+    stage_repair_markers(&state, &repairs).unwrap();
+    assert!(
+        state.join("abi-repair").join("consumer-app").exists(),
+        "the marker must ride the recipe-id key prepare.rs's freshness gate reads"
+    );
+    assert!(
+        !state.join("abi-repair").join("consumer-app-libs").exists(),
+        "a pkgname-keyed marker is never written (the consume side cannot read it back)"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_consumer_install_consumes_the_marker_under_its_recipe_id() {
+    let dir = scratch("repair-clear");
+    let state = dir.join("state");
+    // The marker the provider staged under the canonical key (§E.3 gap-G1
+    // `<consumer-id>`) — the same key prepare.rs's freshness gate reads.
+    let markers = state.join("abi-repair");
+    std::fs::create_dir_all(&markers).unwrap();
+    std::fs::write(markers.join("consumer-app"), "provider=libs-git\n").unwrap();
+    let recipe_of_name =
+        std::collections::BTreeMap::from([("consumer-app-libs".to_string(), "consumer-app".to_string())]);
+    // The consumer's own install lands: its ELF-owning output name resolves
+    // to the RECIPE-id key, so the clear reads exactly the key the write
+    // used — never a second key space (that is the marker leak).
+    let key = repair_marker_key(&recipe_of_name, "consumer-app-libs");
+    assert_eq!(key, "consumer-app");
+    consume_repair_marker(&state, &key);
+    assert!(
+        !markers.join("consumer-app").exists(),
+        "the consumer's install must consume the marker the freshness gate found"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn repair_marker_write_refuses_a_final_component_symlink_swap() {
+    let dir = scratch("marker-gate");
+    let state = dir.join("state");
+    let markers = state.join("abi-repair");
+    std::fs::create_dir_all(&markers).unwrap();
+    let sentinel = dir.join("sentinel");
+    std::fs::write(&sentinel, "kept\n").unwrap();
+    std::os::unix::fs::symlink(&sentinel, markers.join("consumer-app")).unwrap();
+    // rule 19 / §J.5: every state-file write goes through the fd-based
+    // ownership gate (O_NOFOLLOW + fstat of the very fd written) — a
+    // final-component symlink swap must abort the staging (fail closed
+    // before pacman), never redirect the write into the swap target.
+    let outcome = stage_repair_markers(
+        &state,
+        &[("consumer-app".to_string(), "libs-git".to_string())],
+    );
+    assert!(
+        outcome.is_err(),
+        "a swapped final component must refuse the marker write, never follow it"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&sentinel).unwrap(),
+        "kept\n",
+        "nothing may land through the swapped symlink"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn index_invalid_archives_never_install() {
     let dir = scratch("index-invalid");
     let state_dir = dir.join("state");
@@ -896,6 +1029,7 @@ fn install_built_package_refuses_an_incomplete_output_set_pacman_free() {
         pacman_args: Vec::new(),
         register_ignorepkg: false,
         later_installs: Vec::new(),
+        recipe_of_name: Default::default(),
         workspace_names: Vec::new(),
     };
     let (rows, outcome) = install_built_package(&recipe, &run).unwrap();
@@ -936,6 +1070,7 @@ fn install_built_package_refuses_a_mixed_version_set() {
         pacman_args: Vec::new(),
         register_ignorepkg: false,
         later_installs: Vec::new(),
+        recipe_of_name: Default::default(),
         workspace_names: Vec::new(),
     };
     let (rows, outcome) = install_built_package(&recipe, &run).unwrap();

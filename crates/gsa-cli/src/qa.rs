@@ -36,7 +36,21 @@ fn installed_view() -> Vec<QaInstalled> {
 /// findings never change rc), 2 usage/unknown name, 3 an install-refusing
 /// check found ≥1 finding (gsa_qa::seam holds the classes).
 pub fn run_qa_check(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
-    let Some(root) = crate::find_root() else {
+    // `--state-dir PATH` is the §J.3 modifier this seam accepts (the same
+    // strip as `--local-db-check`): the state tier must reach root discovery
+    // too (E1 — one state tree per invocation).
+    let mut positional: Vec<String> = Vec::with_capacity(args.len());
+    let mut state_flag: Option<&str> = None;
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--state-dir" {
+            state_flag = iter.next().map(String::as_str);
+            continue;
+        }
+        positional.push(arg.clone());
+    }
+    let args: &[String] = &positional;
+    let Some(root) = crate::find_root(state_flag) else {
         let _ = writeln!(
             err,
             "gsa: cannot find a recipe workspace: {}",
@@ -53,8 +67,8 @@ pub fn run_qa_check(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -
 /// report-severity check over the run's subjects with workspace-wide
 /// context, the run's own archive sets probed. `None` when no workspace is
 /// reachable from the run.
-pub fn report_lines(targets: &[String]) -> Option<Vec<String>> {
-    let root = crate::find_root()?;
+pub fn report_lines(targets: &[String], state_flag: Option<&str>) -> Option<Vec<String>> {
+    let root = crate::find_root(state_flag)?;
     let workspace = load_workspace(&root).ok()?;
     let archives = collect_archives(&workspace.recipes, targets);
     let installed = installed_view();

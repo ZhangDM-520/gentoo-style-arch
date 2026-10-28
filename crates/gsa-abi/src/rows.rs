@@ -158,10 +158,12 @@ pub struct AbiGate {
     /// rows and never ride a clean plan).
     pub rows: Vec<DecisionRow>,
     /// Consumers the run itself rebuilds and reinstalls later
-    /// (`DecisionContext.later_installs`). The provider's plan row carries
-    /// `repair <consumer> <provider-id>` detail in its open REASON and the
-    /// provider's install stages the forced-rebuild marker (§E.3 gap-G1
-    /// amendment) — repairs ride the plan even alongside refusals.
+    /// (`DecisionContext.later_installs`) — canonical RECIPE-ID keys (§E.3
+    /// gap-G1 `<consumer-id>`), deduped across split outputs of one recipe.
+    /// The provider's plan row carries `repair <consumer> <provider-id>`
+    /// detail in its open REASON and the provider's install stages the
+    /// forced-rebuild marker under that same key (§E.3 gap-G1 amendment) —
+    /// repairs ride the plan even alongside refusals.
     pub repairs: Vec<String>,
 }
 
@@ -171,6 +173,15 @@ pub struct AbiGate {
 /// and ONLY while something is uncovered ("the refusal is conditional"):
 /// coverage by the transaction (`tx_names`) or in-run repair
 /// (`later_installs`, rule 25(d)) plans the move clean.
+///
+/// `recipe_of_name` is the ONE key-space boundary (§E.3 gap-G1
+/// `<consumer-id>`): link truth names installed pkgnames (split outputs
+/// included) while `later_installs` names recipe ids, so every consumer
+/// resolves to its owning recipe id here — the marker file name, prepare's
+/// freshness-gate lookup, the post-install clear and the later_installs
+/// coverage check below all compare in that same key. An unresolvable name
+/// stays itself: the marker key is then the name this seam CAN name, never
+/// a dropped repair (fail closed).
 ///
 /// Class split (fish's split rule): a pinner whose name is a workspace
 /// recipe OUTPUT stays with the consumer logic — out-of-tree pinners alone
@@ -183,21 +194,34 @@ pub fn abi_refusal_rows(
     view: &InstalledView,
     tx_names: &[String],
     later_installs: &[String],
+    recipe_of_name: &std::collections::BTreeMap<String, String>,
     workspace: &std::collections::BTreeSet<String>,
 ) -> AbiGate {
     let affected: Vec<String> = drift.iter().map(|d| d.name.clone()).collect();
     let in_tx = |name: &str| tx_names.iter().any(|t| t == name);
     let in_run = |name: &str| later_installs.iter().any(|t| t == name);
+    let canon = |name: &str| -> String {
+        recipe_of_name
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| name.to_string())
+    };
     // Consumer class (link truth): covered by the transaction, or repaired
-    // in-run; anything else strands the move.
+    // in-run (F1: "coverage = same transaction OR later in-run install for
+    // consumers"); anything else strands the move. The coverage check runs
+    // in the canonical key space, matching the key the repair marker — and
+    // its consume side — use.
     let mut uncovered: Vec<String> = Vec::new();
     let mut repairs: Vec<String> = Vec::new();
     for consumer in linked_consumers(view, &affected) {
         if in_tx(&consumer) {
             continue;
         }
-        if in_run(&consumer) {
-            repairs.push(consumer);
+        let key = canon(&consumer);
+        if in_run(&key) {
+            if !repairs.contains(&key) {
+                repairs.push(key);
+            }
             continue;
         }
         uncovered.push(consumer);
@@ -210,7 +234,7 @@ pub fn abi_refusal_rows(
         .filter(|(pinner, _)| !workspace.contains(pinner))
         .filter(|(pinner, _)| !in_tx(pinner))
         .filter(|(pinner, _)| !uncovered.iter().any(|c| c == pinner))
-        .filter(|(pinner, _)| !repairs.iter().any(|c| c == pinner))
+        .filter(|(pinner, _)| !repairs.iter().any(|c| c == &canon(pinner)))
         .collect();
 
     let mut rows: Vec<DecisionRow> = Vec::new();
@@ -314,6 +338,7 @@ mod tests {
             &["abipkg".to_string()],
             &[],
             &Default::default(),
+            &Default::default(),
         );
         assert!(gate.rows.is_empty(), "nothing stranded plans clean");
         assert!(gate.repairs.is_empty());
@@ -343,6 +368,7 @@ mod tests {
             &["abipkg".to_string()],
             &[],
             &Default::default(),
+            &Default::default(),
         );
         let rendered: Vec<String> = gate.rows.iter().map(|r| r.render()).collect();
         assert!(rendered.contains(
@@ -369,9 +395,18 @@ mod tests {
         std::fs::create_dir_all(dir.join("usr/lib")).unwrap();
         let elf = crate::test_support::elf64(Some("libconsumer.so.1"), &["libfoo.so.1"]);
         std::fs::write(dir.join("usr/lib/libconsumer.so.1"), &elf).unwrap();
+        // The ELF-owning output of recipe `consumer-app` is a SPLIT output
+        // (`consumer-app-libs`): link truth names pkgnames, the run order
+        // (`later_installs`) names recipe ids. The identical name/id of the
+        // old fixture masked the key mismatch entirely.
         let view = InstalledView::with_root(
             dir.clone(),
-            [pkg("consumer-app", &[], &[], &["usr/lib/libconsumer.so.1"])],
+            [pkg(
+                "consumer-app-libs",
+                &[],
+                &[],
+                &["usr/lib/libconsumer.so.1"],
+            )],
         );
         let drift = vec![Drift {
             pkgname: "abipkg".to_string(),
@@ -389,15 +424,22 @@ mod tests {
             &["abipkg".to_string()],
             &[],
             &Default::default(),
+            &Default::default(),
         );
         let rendered: Vec<String> = gate.rows.iter().map(|r| r.render()).collect();
         assert_eq!(rendered.len(), 2, "abi-soname + abi-consumer: {rendered:?}");
         assert!(rendered.contains(
-            &"abipkg refuse abi-consumer /a/abipkg.pkg.tar.zst consumer-app".to_string()
+            &"abipkg refuse abi-consumer /a/abipkg.pkg.tar.zst consumer-app-libs".to_string()
         ));
         assert!(gate.repairs.is_empty());
-        // Rule 25(d): the run rebuilds the consumer later — the move lands
-        // clean and the repair target rides the plan.
+        // Rule 25(d) / F1 ("coverage = same transaction OR later in-run
+        // install for consumers"): the run rebuilds recipe `consumer-app`
+        // later — the move lands clean and the repair target rides the plan
+        // under the RECIPE-ID key the marker surface reads back.
+        let recipe_of_name = std::collections::BTreeMap::from([(
+            "consumer-app-libs".to_string(),
+            "consumer-app".to_string(),
+        )]);
         let gate = abi_refusal_rows(
             "abipkg",
             "/a/abipkg.pkg.tar.zst",
@@ -405,6 +447,7 @@ mod tests {
             &view,
             &["abipkg".to_string()],
             &["consumer-app".to_string()],
+            &recipe_of_name,
             &Default::default(),
         );
         assert!(gate.rows.is_empty(), "covered plans clean");
@@ -438,6 +481,7 @@ mod tests {
             &view,
             &["abipkg".to_string()],
             &[],
+            &Default::default(),
             &workspace,
         );
         let rendered: Vec<String> = gate.rows.iter().map(|r| r.render()).collect();

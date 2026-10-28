@@ -1742,12 +1742,11 @@ OpenShadingLanguage -> blender.
   pinned in exactly ONE place, the rendering section of `tests/dashboard.sh`;
   scenario-bound rendering pins (prompt layout, deferral label, sudo message
   frequency) stay co-located with the scenario they describe.
-- `tests/project.sh` pins its own topology-command inventory:
-  `expected_invocations=20` is the count of column-0 `run`/`run_split` calls
-  the fixture scrapes out of itself and pre-executes (the call syntax is
-  load-bearing — a call indented off column 0 is never pre-executed and its
-  replay fails). A change to the topology commands the fixture drives must
-  update the pin in the same change, or the self-scan fails.
+- `tests/project.sh` drives its topology commands through `run_engine`
+  (`tests/lib/rr-v2.bash`), one runner for every gsa invocation. The fish-era
+  parallel pre-executor and its `expected_invocations` self-scrape pin retired
+  2026-10-28 with the fish argv they cached — a fixture that grows new
+  commands adds `run_engine` calls and needs no inventory pin.
 - Fixture assertions never pipe a producer into an early-exit `grep`
   (`printf '%s\n' "$VAR" | grep -q …`): under `pipefail`, contention can
   SIGPIPE the producer after `grep -q` matched, reddening a passing capture.

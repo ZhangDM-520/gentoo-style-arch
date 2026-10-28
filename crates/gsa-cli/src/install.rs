@@ -811,6 +811,9 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
             EmptyListPolicy::Refuse
         },
         later_installs: Vec::new(),
+        // Inert here: the `-U` path claims no in-run repair coverage (its
+        // `later_installs` stays empty), so no marker key is ever resolved.
+        recipe_of_name: Default::default(),
         parks: parks.iter().map(|(s, r)| (s.clone(), r.clone())).collect(),
         workspace_names: workspace_output_names_of_root(&root),
         abi_exclusions: workspace_exclusions(&root),
@@ -1361,6 +1364,47 @@ pub(crate) fn workspace_output_names_of_root(
     }
 }
 
+/// Workspace output name → owning recipe id (rule 25(d), §E.3 gap-G1
+/// `<consumer-id>`): the canonical forced-rebuild-marker key map threaded
+/// into the install seam so split outputs resolve to their shared recipe id.
+/// A name claimed by more than one recipe resolves to NOTHING — the seam
+/// then falls that name back to itself (the marker name it CAN name), never
+/// a guessed owner.
+pub(crate) fn workspace_recipe_of_name(
+    db: &RecipeDb,
+) -> std::collections::BTreeMap<String, String> {
+    use std::collections::BTreeMap;
+    let mut claimed: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for id in &db.order {
+        let Some(meta) = db.get(id.as_str()) else {
+            continue;
+        };
+        let mut names = meta.pkgnames();
+        if let Some(info) = &meta.srcinfo {
+            if let Some(base) = &info.pkgbase {
+                if !names.contains(base) {
+                    names.push(base.clone());
+                }
+            }
+        }
+        let key = id.as_str().to_string();
+        if !names.contains(&key) {
+            names.push(key.clone());
+        }
+        for name in names {
+            claimed.entry(name).or_default().push(key.clone());
+        }
+    }
+    claimed
+        .into_iter()
+        .filter_map(|(name, mut owners)| {
+            owners.sort();
+            owners.dedup();
+            (owners.len() == 1).then(|| (name, owners.pop().unwrap()))
+        })
+        .collect()
+}
+
 pub(crate) fn state_dir_of(inv: &Invocation) -> Result<PathBuf, String> {
     gsa_model::config::resolve_state_dir(inv.state_dir.as_deref())
 }
@@ -1424,7 +1468,7 @@ fn finish_record(
             qa_targets.push(target);
         }
     }
-    let qa = crate::qa::report_lines(&qa_targets);
+    let qa = crate::qa::report_lines(&qa_targets, inv.state_dir.as_deref());
     let record = record::build_txn_record(inv, &inv.targets, plan, outcomes, &run_outcome);
     let _ = write!(
         out,
@@ -1726,6 +1770,11 @@ pub fn run_install_decide(args: &[String], out: &mut dyn Write, err: &mut dyn Wr
             DecideMode::Force => EmptyListPolicy::Noop,
         },
         later_installs: Vec::new(),
+        // The order-blind seam holds no graph (§D.1), so no name resolves
+        // to a recipe id — a repair key would fall back to the name the seam
+        // CAN name (fail closed, never a dropped marker). Coverage is empty
+        // here regardless: `--install-decide` takes no run order.
+        recipe_of_name: Default::default(),
         // §E.3/§E.5: the build-side park state of the resolved state root —
         // a parked subject reports `parked <reason>` here too (the seam
         // never defers by itself; deferral originates in the build path).
