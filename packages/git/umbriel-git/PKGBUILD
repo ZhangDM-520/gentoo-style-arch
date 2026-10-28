@@ -8,7 +8,7 @@ source "$startdir/../../../lib/pgo.sh"
 
 pkgname=umbriel-git
 _pkgname=umbriel
-pkgver=0.1.0.r1400.3667399
+pkgver=0.1.0.r1418.b456dc2
 pkgrel=1
 epoch=1
 pkgdesc='A Wayland compositor built on wlroots'
@@ -71,7 +71,7 @@ sha256sums=('SKIP'
             '2600cb2ce8eee8f06f6d7cf557d862d139751091210e002ee7d818c6ec911fff'
             '1d92976c7370860d8846773c1bc7aa7a5815ef785f324dcd3bdd80d0aec9f4b5'
             '98b2ba7224d23f00031b235006e03fb0edef44be5d484dc0e3c248f41938b583'
-            '746579b9d315c60cef73656eab62c52935b1686f78550335576eec35266b0ea6'
+            '5297413e484221031c48b762a69229c43471c2c0243480be63efe240e118d97f'
             '6bfc61519439d329344b7ab3dbebcd20dc810fa988af68e7a3cd61615c9fb140'
             '5fc4cb98a3d4d24e596c6f912d4d81fb68317535523d9647d68873538d120879'
             'cbccab7c6601b6adbe48fd4dfbf0de258c46d5ba4b91dedf3f7fd2e00257b169'
@@ -142,9 +142,12 @@ prepare() {
   # opt-in SDR gamut mapping (`"srgb"` confines untagged SDR to the sRGB gamut
   # in the panel's colorimetry; the default `"native"` stages no transform),
   # plus client ICC image descriptions (`create_icc`) and `icc_file`
-  # advertising. Upstream issue noctalia-dev/umbriel#574; sha256 746579b9….
-  # Cut on top of 0008+0009+0011+0012 at main@36673995 (cherry-pick of the
-  # main-based range 76477c29..ea28ce9d — eleven commits; 0012 collisions in
+  # advertising. Upstream issue noctalia-dev/umbriel#574; sha256 5297413e….
+  # Cut on top of 0008+0009+0011+0012 at main@36673995, the newest base where
+  # the full stack still applies (0012 drifts on main >= c028006b; see
+  # docs/CURRENT.md) (cherry-pick of the
+  # main-based range 76477c29..275e323a — twelve first-parent feature commits (the
+  # main merge 57b86d88 is not part of the slice); 0012 collisions in
   # docs/user/outputs.md and tests/unit/config_schema.cpp hand-merged, both
   # sides kept). The
   # upstream-able branch stays main-based for the PR; regenerate from plain
