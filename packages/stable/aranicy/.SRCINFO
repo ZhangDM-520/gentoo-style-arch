@@ -1,6 +1,6 @@
 pkgbase = aranicy
 	pkgdesc = Auto-nice daemon in Rust (eBPF exec events, ananicy-compatible rules)
-	pkgver = 0.2.0
+	pkgver = 0.2.1
 	pkgrel = 1
 	url = https://github.com/ZhangDM-520/aranicy
 	arch = x86_64
@@ -14,7 +14,7 @@ pkgbase = aranicy
 	depends = zlib
 	conflicts = ananicy-cpp
 	backup = etc/ananicy.d/ananicy.conf
-	source = aranicy-0.2.0.tar.gz::https://github.com/ZhangDM-520/aranicy/archive/v0.2.0.tar.gz
-	sha256sums = b3fd679594ba73504a76e0f3f4dbc6b008ea6fffa3fe311973850ff589972854
+	source = aranicy-0.2.1.tar.gz::https://github.com/ZhangDM-520/aranicy/archive/v0.2.1.tar.gz
+	sha256sums = a2ed99492e6e4dfbb4416902bd1cfc121381146a061d06d818ac9d914087eac7
 
 pkgname = aranicy
