@@ -17717,3 +17717,28 @@ the disposition call. BUILD HELD per owner.
   remounts/prunes after drops. FOLLOW-UP (not done): gsa build_dir device
   preflight to kill the tmpfs-impostor class; gsa-fetch-v2.sh one-off flake in
   the mid-wave battery run (passes standalone).
+
+### 2026-10-29 — retire vscodium-insiders-git + the misc group (owner directive)
+
+- **WHAT**: removed from the tree per owner: `packages/git/vscodium-insiders-git/`
+  and the ENTIRE `misc` group (`packages/misc/` — its only recipe was
+  `linux-cachyos`, already build-scope-excluded since 2026-10-03). Also: the
+  vscodium topology record + the commented linux-cachyos record (with its
+  2026-10-03 rationale) deleted from `config/topology.conf`; the 3
+  `linux-cachyos-*-headers` rows deleted from `config/abi-exclusions.conf`;
+  4 fixtures retired with their subjects (`tests/kernel-recipes.sh`,
+  `tests/vscodium-npm-retry.sh`, `tests/vscodium-asar-stream.sh`,
+  `tests/vscodium-foreign-prebuilds.sh`); `tests/project.sh` exclusion list
+  shrunk to `packages/deprecated/shelly`; fixture-migration ledger row marked
+  RETIRED.
+- **SCOPE DECISION**: the `misc` group stays in the engine's GROUP vocabulary
+  (Group::Misc variant + GROUP_ROSTER) — it is a persisted-state/CLI contract
+  (index records, `gsa -Mc @misc` prune spellings) and removing the enum would
+  risk state-compat for no gain. The group is now valid-but-unused. Comment
+  references to the retired recipes in other recipes' rationale notes
+  (vscodium npm-shim precedent) and historical test comments kept as history.
+- **VERIFY**: `gsa -Sl` lists 0 vscodium/cachyos rows; `gsa -S --dry-run
+  vscodium-insiders-git` refuses `unknown reference`; `gsa --qa-check
+  provides-versioning` clean; fixture battery **PASS 73/73** (74 test files
+  minus the runner). Installed packages left in place (tree-level retirement
+  only).
