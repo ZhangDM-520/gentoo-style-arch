@@ -1,0 +1,831 @@
+From db2d86ab0c77e534a1b82fa16cf92b5184e3bcd1 Mon Sep 17 00:00:00 2001
+From: ZhangDM-520 <jixianqiang1540@gmail.com>
+Date: Fri, 30 Oct 2026 00:52:35 +0800
+Subject: [PATCH] feat(capture): add zoom and pan to the annotation editor
+
+The capture in the annotation editor now shows through a display-only
+view transform layered on the fitted canvas: Ctrl+wheel zooms around the
+pointer (0.5x-16x fit-relative), Ctrl+left-drag pans with a clamp that
+keeps a visible slice on screen, and zoom-out/fit/zoom-in buttons step
+the same view. Annotation geometry, rasterization and export stay in
+canvas space, so delivered pixels are unchanged. The touchpad path
+accumulates axis deltas at the InputArea scroll rate and the whole axis
+stream is consumed while Ctrl is held. In live annotation only the ink
+layers magnify (the desktop behind cannot), documented as a caveat.
+Relayout keeps the zoom and re-clamps the pan; Live/Frozen switches
+reset the view.
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+---
+ assets/translations/en.json        |   5 +-
+ docs/user/ipc/media-and-ui.mdx     |   2 +
+ meson.build                        |   1 +
+ src/capture/annotation_overlay.cpp | 313 ++++++++++++++++++++++++-----
+ src/capture/annotation_overlay.h   |  16 ++
+ src/capture/annotation_view.h      | 105 ++++++++++
+ tests/annotation_view_test.cpp     |  99 +++++++++
+ 7 files changed, 486 insertions(+), 55 deletions(-)
+ create mode 100644 src/capture/annotation_view.h
+ create mode 100644 tests/annotation_view_test.cpp
+
+diff --git a/assets/translations/en.json b/assets/translations/en.json
+index f1e9c96c2..e4d136ae2 100644
+--- a/assets/translations/en.json
++++ b/assets/translations/en.json
+@@ -89,7 +89,10 @@
+       "tool-numbering": "Numbered marker (n)",
+       "tool-rectangle": "Rectangle (s) · hold Shift for a square",
+       "tool-text": "Text (t)",
+-      "undo": "Undo (Ctrl+Z)"
++      "undo": "Undo (Ctrl+Z)",
++      "zoom-in": "Zoom in (Ctrl+wheel up)",
++      "zoom-out": "Zoom out (Ctrl+wheel down)",
++      "zoom-reset": "Fit to view (reset zoom)"
+     },
+     "screenshot": {
+       "annotate-export-failed": "Failed to build the annotated image",
+diff --git a/docs/user/ipc/media-and-ui.mdx b/docs/user/ipc/media-and-ui.mdx
+index 1a4467988..e08b236d3 100644
+--- a/docs/user/ipc/media-and-ui.mdx
++++ b/docs/user/ipc/media-and-ui.mdx
+@@ -196,6 +196,8 @@ Noctalia also installs a hidden desktop entry, `dev.noctalia.Noctalia.Annotator.
+ 
+ Annotation tool keys (no modifier): **`m`** move, **`b`** brush, **`h`** highlighter, **`l`** line, **`a`** arrow, **`s`** rectangle, **`o`** circle, **`t`** text, **`n`** numbering, **`u`** blur, **`e`** eraser, **`c`** crop, **`z`** freeze (live overlay), **`p`** toggle the captured pointer, **`f`** cycle the shape fill through off, semi-transparent, and opaque, **`1`** to **`8`** pick the current tool's color from the eight swatches, **`[`** and **`]`** change the current tool's size. **`Ctrl+Z`** undoes, **`Ctrl+Shift+Z`** and **`Ctrl+Y`** redo, **`[keybinds].copy`** copies, **`[keybinds].save`** saves.
+ 
++The capture view zooms and pans without touching the recorded pixels: **`Ctrl`** and the mousewheel zoom around the pointer from half to sixteen times the fitted size, **`Ctrl`** and a left-drag pan the capture, and the zoom-out, fit, and zoom-in buttons in the toolbar step the same view and restore it. Panning is limited so part of the capture always stays on screen, and moving or resizing the toolbar never reflows the zoomed canvas. In live annotation the ink layers zoom while the live desktop behind them does not, so freeze with **`z`** first when the zoomed view must match the screen.
++
+ The pointer button and **P** work the same in region, fullscreen, and frozen-screen editing. `[shell.screenshot].show_cursor` sets the initial choice; toggling does not change that setting. Only the pointer recorded inside the captured area can appear. Noctalia captures the cursor separately through `ext-image-copy-capture-v1` and composites it over the same cursor-free background for both choices. When separate cursor capture is unsupported or fails, the ordinary screenshot keeps the configured pointer choice, the button is disabled with an explanatory tooltip, and **P** shows the same explanation. In live annotation, freeze with **Z** first.
+ 
+ **Exception**: window capture never includes the pointer, so `[shell.screenshot].show_cursor` applies only to region, fullscreen, and frozen-screen capture. The pointer button and **P** stay disabled for window capture.
+diff --git a/meson.build b/meson.build
+index 3767c7636..8cb8de91d 100644
+--- a/meson.build
++++ b/meson.build
+@@ -1225,6 +1225,7 @@ if build_tests
+   _cpp_test_names = [
+     'annotation_document',
+     'annotation_raster',
++    'annotation_view',
+     'animation_manager',
+     'app_identity',
+     'audio_glyphs',
+diff --git a/src/capture/annotation_overlay.cpp b/src/capture/annotation_overlay.cpp
+index e638431ee..7c0f265a5 100644
+--- a/src/capture/annotation_overlay.cpp
++++ b/src/capture/annotation_overlay.cpp
+@@ -1,6 +1,7 @@
+ #include "capture/annotation_overlay.h"
+ 
+ #include "capture/annotation_raster.h"
++#include "capture/annotation_view.h"
+ #include "core/deferred_call.h"
+ #include "core/input/key_modifiers.h"
+ #include "core/input/key_symbols.h"
+@@ -69,6 +70,16 @@ namespace capture {
+     constexpr float kCaretWidth = 2.0F;
+     constexpr float kSizeLabelWidth = 26.0F;
+     constexpr float kToolbarEdgeMargin = 4.0F;
++    // Zoom multiplier applied per Ctrl+wheel notch.
++    constexpr double kWheelZoomStep = 1.25;
++    // Zoom multiplier per toolbar zoom-in / zoom-out click.
++    constexpr double kToolbarZoomStep = 1.5;
++    // Continuous-source axis units that trigger one zoom step; mirrors InputArea's
++    // kScrollUnitsPerStep (render/scene/input_area.cpp).
++    constexpr double kZoomScrollUnitsPerStep = 20.0;
++    // Detent-less streams emit frames as fast as the finger moves; zoom steps from them are
++    // rate-capped like InputArea's kContinuousStepInterval so a flick cannot race the zoom.
++    constexpr auto kZoomContinuousStepInterval = std::chrono::milliseconds(80);
+ 
+     // S / M / L multiply the tool's own default width, so a preset means the same relative
+     // weight for a 6 px brush and a 32 px blur.
+@@ -492,6 +503,9 @@ namespace capture {
+     Button* cursorButton = nullptr;
+     Button* undoButton = nullptr;
+     Button* redoButton = nullptr;
++    Button* zoomOutButton = nullptr;
++    Button* zoomResetButton = nullptr;
++    Button* zoomInButton = nullptr;
+     Button* copyButton = nullptr;
+     Button* saveButton = nullptr;
+     Button* doneButton = nullptr;
+@@ -519,6 +533,11 @@ namespace capture {
+     Image* backdropPreview = nullptr;
+     Box* imageOutline = nullptr;
+     std::optional<ScreenshotBackdrop> previewBackdrop;
++    // Raster dimensions of the cached preview frame; placement re-maps it under zoom/pan.
++    int previewFrameWidth = 0;
++    int previewFrameHeight = 0;
++    int previewStandInWidth = 0;
++    int previewStandInHeight = 0;
+     AnnotationRect previewCanvas{};
+     // -2 = chips not yet painted, -1 = no preset matches the current colors.
+     int markedGradient = -2;
+@@ -538,6 +557,9 @@ namespace capture {
+     std::uint64_t renderedGeneration = 0;
+ 
+     AnnotationRect canvasRect{};
++    // Display lens over the fitted canvas: zoom + pan affect only where the canvas is shown
++    // and how surface points map to canvas points (annotation_view.h).
++    ViewTransform view{};
+     double canvasScale = 1.0;
+     int deviceWidth = 0;
+     int deviceHeight = 0;
+@@ -612,6 +634,14 @@ namespace capture {
+         && (m_tools.tool == AnnotationTool::Blur || m_tools.tool == AnnotationTool::Crop)) {
+       m_tools.tool = AnnotationTool::Brush;
+     }
++    // The canvas semantics change between Live (full-surface ink) and Frozen (fitted capture),
++    // so a view that made sense in one mode must not leak into the other.
++    for (auto& inst : m_instances) {
++      if (inst != nullptr) {
++        inst->view = ViewTransform{};
++        applyCanvasView(*inst);
++      }
++    }
+   }
+ 
+   void AnnotationOverlay::setCursorVisible(bool visible) { m_cursorVisible = visible; }
+@@ -846,6 +876,7 @@ namespace capture {
+     m_instances.clear();
+     m_gestureInstance = nullptr;
+     m_gestureActive = false;
++    m_panInstance = nullptr;
+     m_textInstance = nullptr;
+     m_textIndex.reset();
+     m_moveIndex.reset();
+@@ -975,6 +1006,7 @@ namespace capture {
+       inst.canvasScale = std::max(0.1, static_cast<double>(inst.scale));
+       inst.deviceWidth = static_cast<int>(inst.surface->bufferWidthFor(inst.surface->width()));
+       inst.deviceHeight = static_cast<int>(inst.surface->bufferHeightFor(inst.surface->height()));
++      clampView(inst);
+       return;
+     }
+ 
+@@ -1005,6 +1037,81 @@ namespace capture {
+     inst.canvasScale = fitScale;
+     inst.deviceWidth = m_image.image.width;
+     inst.deviceHeight = m_image.image.height;
++    // A relayout keeps the user's zoom, but the pan must stay reachable in the new viewport.
++    clampView(inst);
++  }
++
++  // Re-places the canvas nodes for the current view transform without rebuilding the scene:
++  // annotation textures stay in canvas space and are simply displayed scaled.
++  void AnnotationOverlay::applyCanvasView(Instance& inst) {
++    const AnnotationRect v = viewRect(inst.view, inst.canvasRect);
++    const auto x = static_cast<float>(v.x);
++    const auto y = static_cast<float>(v.y);
++    const auto width = static_cast<float>(v.width);
++    const auto height = static_cast<float>(v.height);
++    for (Image* layer : {inst.backdrop, inst.committedLayer, inst.activeLayer}) {
++      if (layer != nullptr) {
++        layer->setSize(width, height);
++        layer->setPosition(x, y);
++      }
++    }
++    if (inst.imageOutline != nullptr) {
++      inst.imageOutline->setSize(width, height);
++      inst.imageOutline->setPosition(x, y);
++    }
++    updateCropVisuals(inst);
++    if (inst.surface == nullptr || inst.sceneRoot == nullptr) {
++      return;
++    }
++    // Backdrop preview texture work stays in prepareFrame (updateBackdropPreview there),
++    // which runs under the RenderContext's makeCurrent; input paths must not upload textures.
++    if (inst.sceneRoot->layoutDirty()) {
++      inst.surface->requestLayout();
++    } else {
++      inst.surface->requestRedraw();
++    }
++  }
++
++  void AnnotationOverlay::clampView(Instance& inst) {
++    if (inst.surface == nullptr) {
++      return;
++    }
++    inst.view = clampViewPan(
++        inst.view, inst.canvasRect, static_cast<double>(inst.surface->width()),
++        static_cast<double>(inst.surface->height())
++    );
++  }
++
++  void AnnotationOverlay::zoomViewTo(Instance& inst, double anchorX, double anchorY, double factor) {
++    if (inst.surface == nullptr) {
++      return;
++    }
++    inst.view = zoomViewAt(inst.view, inst.canvasRect, anchorX, anchorY, factor);
++    clampView(inst);
++    applyCanvasView(inst);
++  }
++
++  void AnnotationOverlay::zoomViewByButton(Instance& inst, double factor) {
++    if (inst.surface == nullptr) {
++      return;
++    }
++    // Anchor at the on-screen center of the canvas so the visible area expands in place.
++    const AnnotationRect v = viewRect(inst.view, inst.canvasRect);
++    const auto surfaceW = static_cast<double>(inst.surface->width());
++    const auto surfaceH = static_cast<double>(inst.surface->height());
++    const double left = std::clamp(v.x, 0.0, surfaceW);
++    const double right = std::clamp(v.x + v.width, 0.0, surfaceW);
++    const double top = std::clamp(v.y, 0.0, surfaceH);
++    const double bottom = std::clamp(v.y + v.height, 0.0, surfaceH);
++    const double anchorX = right > left ? (left + right) * 0.5 : surfaceW * 0.5;
++    const double anchorY = bottom > top ? (top + bottom) * 0.5 : surfaceH * 0.5;
++    zoomViewTo(inst, anchorX, anchorY, factor);
++  }
++
++  void AnnotationOverlay::resetView(Instance& inst) {
++    inst.view = ViewTransform{};
++    clampView(inst);
++    applyCanvasView(inst);
+   }
+ 
+   void AnnotationOverlay::buildScene(Instance& inst) {
+@@ -1035,6 +1142,7 @@ namespace capture {
+     inst.strokeButton = inst.fillButton = inst.freezeButton = inst.cursorButton = nullptr;
+     inst.cursorTooltip = nullptr;
+     inst.undoButton = inst.redoButton = inst.copyButton = inst.saveButton = inst.doneButton = inst.dragHandle = nullptr;
++    inst.zoomOutButton = inst.zoomResetButton = inst.zoomInButton = nullptr;
+     inst.strokeSeparator = inst.exportSeparator = nullptr;
+     inst.backdropButton = nullptr;
+     inst.strokePanel = inst.strokeSwatchRow = nullptr;
+@@ -1054,6 +1162,10 @@ namespace capture {
+     inst.backdropPreview = nullptr;
+     inst.imageOutline = nullptr;
+     inst.previewBackdrop.reset();
++    inst.previewFrameWidth = 0;
++    inst.previewFrameHeight = 0;
++    inst.previewStandInWidth = 0;
++    inst.previewStandInHeight = 0;
+     inst.markedGradient = -2;
+     inst.activePainted = AnnotationRect{};
+     inst.committedDirty.reset();
+@@ -1099,10 +1211,11 @@ namespace capture {
+     }
+     inst.backdropImage = bg;
+ 
+-    const auto canvasX = static_cast<float>(inst.canvasRect.x);
+-    const auto canvasY = static_cast<float>(inst.canvasRect.y);
+-    const auto canvasW = static_cast<float>(inst.canvasRect.width);
+-    const auto canvasH = static_cast<float>(inst.canvasRect.height);
++    const AnnotationRect canvasView = viewRect(inst.view, inst.canvasRect);
++    const auto canvasX = static_cast<float>(canvasView.x);
++    const auto canvasY = static_cast<float>(canvasView.y);
++    const auto canvasW = static_cast<float>(canvasView.width);
++    const auto canvasH = static_cast<float>(canvasView.height);
+ 
+     auto canvas = ui::inputArea({
+         .acceptedButtons = InputArea::buttonMask(BTN_LEFT),
+@@ -1201,6 +1314,7 @@ namespace capture {
+     canvas->setOnMotion([this, instPtr](const InputArea::PointerData& data) {
+       onCanvasMotion(*instPtr, static_cast<double>(data.localX), static_cast<double>(data.localY));
+     });
++    canvas->setOnCancel([this] { m_panInstance = nullptr; });
+ 
+     inst.canvas = canvas.get();
+     inst.sceneRoot->addChild(std::move(canvas));
+@@ -1294,8 +1408,9 @@ namespace capture {
+           kLog.warn("failed to re-upload annotation backdrop");
+         }
+         inst.backdrop->setFit(ImageFit::Stretch);
+-        inst.backdrop->setSize(static_cast<float>(inst.canvasRect.width), static_cast<float>(inst.canvasRect.height));
+-        inst.backdrop->setPosition(static_cast<float>(inst.canvasRect.x), static_cast<float>(inst.canvasRect.y));
++        const AnnotationRect canvasView = viewRect(inst.view, inst.canvasRect);
++        inst.backdrop->setSize(static_cast<float>(canvasView.width), static_cast<float>(canvasView.height));
++        inst.backdrop->setPosition(static_cast<float>(canvasView.x), static_cast<float>(canvasView.y));
+         if (inst.backgroundSurface != nullptr) {
+           cairo_surface_destroy(inst.backgroundSurface);
+         }
+@@ -1387,6 +1502,17 @@ namespace capture {
+     inst.redoButton = addGhostButton("arrow-forward-up", "bar.annotate.redo", [this] { redo(); });
+     addSeparator();
+ 
++    // View controls: the button faces for Ctrl+wheel zoom and Ctrl+drag pan.
++    inst.zoomOutButton = addGhostButton("zoom-out", "bar.annotate.zoom-out", [this, instPtr] {
++      zoomViewByButton(*instPtr, 1.0 / kToolbarZoomStep);
++    });
++    inst.zoomResetButton =
++        addGhostButton("zoom-reset", "bar.annotate.zoom-reset", [this, instPtr] { resetView(*instPtr); });
++    inst.zoomInButton = addGhostButton("zoom-in", "bar.annotate.zoom-in", [this, instPtr] {
++      zoomViewByButton(*instPtr, kToolbarZoomStep);
++    });
++    addSeparator();
++
+     for (const auto& spec : kToolButtons) {
+       inst.toolButtons[toolIndex(spec.tool)] = static_cast<Button*>(toolbar->addChild(
+           ui::button({
+@@ -1877,14 +2003,18 @@ namespace capture {
+       return;
+     }
+ 
+-    const auto left = static_cast<float>(inst.canvasRect.x);
+-    const auto top = static_cast<float>(inst.canvasRect.y);
+-    const auto right = static_cast<float>(inst.canvasRect.x + inst.canvasRect.width);
+-    const auto bottom = static_cast<float>(inst.canvasRect.y + inst.canvasRect.height);
+-    const float holeX0 = std::clamp(static_cast<float>(inst.canvasRect.x + crop->x), left, right);
+-    const float holeY0 = std::clamp(static_cast<float>(inst.canvasRect.y + crop->y), top, bottom);
+-    const float holeX1 = std::clamp(static_cast<float>(inst.canvasRect.x + crop->x + crop->width), left, right);
+-    const float holeY1 = std::clamp(static_cast<float>(inst.canvasRect.y + crop->y + crop->height), top, bottom);
++    const AnnotationRect canvasView = viewRect(inst.view, inst.canvasRect);
++    const auto left = static_cast<float>(canvasView.x);
++    const auto top = static_cast<float>(canvasView.y);
++    const auto right = static_cast<float>(canvasView.x + canvasView.width);
++    const auto bottom = static_cast<float>(canvasView.y + canvasView.height);
++    const AnnotationPoint holeStart = canvasToSurface(inst.view, inst.canvasRect, {.x = crop->x, .y = crop->y});
++    const AnnotationPoint holeEnd =
++        canvasToSurface(inst.view, inst.canvasRect, {.x = crop->x + crop->width, .y = crop->y + crop->height});
++    const float holeX0 = std::clamp(static_cast<float>(holeStart.x), left, right);
++    const float holeY0 = std::clamp(static_cast<float>(holeStart.y), top, bottom);
++    const float holeX1 = std::clamp(static_cast<float>(holeEnd.x), left, right);
++    const float holeY1 = std::clamp(static_cast<float>(holeEnd.y), top, bottom);
+     if (holeX1 <= holeX0 || holeY1 <= holeY0) {
+       hide();
+       return;
+@@ -1981,6 +2111,38 @@ namespace capture {
+     }
+     case PointerEvent::Type::Axis:
+       if (onTarget || target->pointerInside) {
++        // Ctrl+wheel zooms the capture, anchored at the pointer. The whole axis stream is
++        // consumed while Ctrl is held (including axis_stop frames), so panel scrolling never
++        // fights the zoom gesture. Plain wheel keeps its normal widget routing.
++        const std::uint32_t modifiers = m_wayland != nullptr ? m_wayland->keyboardModifiers() : 0;
++        if ((modifiers & KeyMod::Ctrl) != 0 && event.axis == 0U /* WL_POINTER_AXIS_VERTICAL_SCROLL */) {
++          double steps = 0.0;
++          if (event.axisValue120 != 0 || event.axisDiscrete != 0) {
++            // Detent events: the compositor counted the notches, every notch zooms one step.
++            steps = event.axisValue120 != 0 ? static_cast<double>(event.axisValue120) / 120.0
++                                            : static_cast<double>(event.axisDiscrete);
++          } else if (event.axisValue != 0.0 || event.axisLines != 0.0F) {
++            // Detent-less streams (touchpads) accumulate to whole steps at a capped rate,
++            // mirroring InputArea's scroll-step logic (render/scene/input_area.cpp).
++            const double delta = event.axisLines != 0.0F ? static_cast<double>(event.axisLines)
++                                                         : event.axisValue / kZoomScrollUnitsPerStep;
++            if (m_zoomScrollAccum != 0.0 && (delta > 0.0) != (m_zoomScrollAccum > 0.0)) {
++              m_zoomScrollAccum = 0.0;
++            }
++            m_zoomScrollAccum += delta;
++            const auto now = std::chrono::steady_clock::now();
++            if (std::trunc(m_zoomScrollAccum) != 0.0 && now - m_lastZoomStep >= kZoomContinuousStepInterval) {
++              steps = std::copysign(1.0, m_zoomScrollAccum);
++              m_zoomScrollAccum -= steps;
++              m_lastZoomStep = now;
++            }
++          }
++          if (steps != 0.0) {
++            // Scroll-up (negative axis values) zooms in, matching image-editor convention.
++            zoomViewTo(*target, event.sx, event.sy, std::pow(kWheelZoomStep, -steps));
++          }
++          return true;
++        }
+         return target->inputDispatcher.pointerAxis(
+             static_cast<float>(event.sx), static_cast<float>(event.sy), event.axis, event.axisSource, event.axisValue,
+             event.axisDiscrete, event.axisValue120, event.axisLines
+@@ -1994,10 +2156,32 @@ namespace capture {
+ 
+   void AnnotationOverlay::onCanvasPress(Instance& inst, double localX, double localY, bool pressed) {
+     if (!pressed) {
++      if (m_panInstance != nullptr) {
++        m_panInstance = nullptr;
++        return;
++      }
+       finishGesture();
+       return;
+     }
+ 
++    // Ctrl+drag pans the capture view instead of drawing.
++    const std::uint32_t pressModifiers = m_wayland != nullptr ? m_wayland->keyboardModifiers() : 0;
++    if ((pressModifiers & KeyMod::Ctrl) != 0) {
++      if (m_strokePanelOpen) {
++        m_strokePanelOpen = false;
++        requestRedrawAll();
++      }
++      if (m_textIndex.has_value()) {
++        commitTextEdit();
++      }
++      m_panInstance = &inst;
++      m_panAnchorX = localX;
++      m_panAnchorY = localY;
++      m_panStartX = inst.view.panX;
++      m_panStartY = inst.view.panY;
++      return;
++    }
++
+     // Drawing dismisses the stroke popover; the press still starts the mark.
+     if (m_strokePanelOpen) {
+       m_strokePanelOpen = false;
+@@ -2009,7 +2193,7 @@ namespace capture {
+       commitTextEdit();
+     }
+ 
+-    const AnnotationPoint point{.x = localX - inst.canvasRect.x, .y = localY - inst.canvasRect.y};
++    const AnnotationPoint point = surfaceToCanvas(inst.view, inst.canvasRect, {.x = localX, .y = localY});
+     if (point.x < 0.0 || point.y < 0.0 || point.x > inst.canvasRect.width || point.y > inst.canvasRect.height) {
+       return;
+     }
+@@ -2029,7 +2213,8 @@ namespace capture {
+ 
+     switch (tool) {
+     case AnnotationTool::Move: {
+-      const auto hit = doc.hitTest(point, kMoveHitTolerance);
++      // Screen-space hit tolerance stays constant regardless of zoom.
++      const auto hit = doc.hitTest(point, kMoveHitTolerance / inst.view.zoom);
+       if (!hit.has_value()) {
+         m_gestureInstance = nullptr;
+         return;
+@@ -2135,11 +2320,18 @@ namespace capture {
+   }
+ 
+   void AnnotationOverlay::onCanvasMotion(Instance& inst, double localX, double localY) {
++    if (m_panInstance == &inst && inst.surface != nullptr) {
++      inst.view.panX = m_panStartX + (localX - m_panAnchorX);
++      inst.view.panY = m_panStartY + (localY - m_panAnchorY);
++      clampView(inst);
++      applyCanvasView(inst);
++      return;
++    }
+     if (!m_gestureActive || m_gestureInstance != &inst) {
+       return;
+     }
+     AnnotationDocument& doc = documentFor(inst);
+-    const AnnotationPoint point{.x = localX - inst.canvasRect.x, .y = localY - inst.canvasRect.y};
++    const AnnotationPoint point = surfaceToCanvas(inst.view, inst.canvasRect, {.x = localX, .y = localY});
+ 
+     if (m_moveIndex.has_value()) {
+       doc.offset(*m_moveIndex, point.x - m_gestureLast.x, point.y - m_gestureLast.y);
+@@ -2951,9 +3143,10 @@ namespace capture {
+     const std::optional<ScreenshotBackdrop> backdrop = resolveScreenshotBackdrop(m_backdrop);
+ 
+     const float maxRadius = static_cast<float>(std::min(inst.deviceWidth, inst.deviceHeight)) * 0.5F;
+-    const float radius = backdrop.has_value()
+-        ? std::clamp(static_cast<float>(backdrop->cornerRadius), 0.0F, maxRadius) / static_cast<float>(inst.canvasScale)
+-        : 0.0F;
++    const float radius = backdrop.has_value() ? std::clamp(static_cast<float>(backdrop->cornerRadius), 0.0F, maxRadius)
++            / static_cast<float>(inst.canvasScale)
++            * static_cast<float>(inst.view.zoom)
++                                              : 0.0F;
+     for (Image* layer : {inst.backdrop, inst.committedLayer, inst.activeLayer}) {
+       if (layer != nullptr) {
+         layer->setRadius(radius);
+@@ -2968,54 +3161,66 @@ namespace capture {
+       inst.previewBackdrop.reset();
+       return;
+     }
+-    const AnnotationRect& rect = inst.canvasRect;
+-    if (inst.previewBackdrop == backdrop
+-        && inst.previewCanvas.x == rect.x
+-        && inst.previewCanvas.y == rect.y
+-        && inst.previewCanvas.width == rect.width
+-        && inst.previewCanvas.height == rect.height) {
+-      return;
+-    }
+-
++    const AnnotationRect rect = viewRect(inst.view, inst.canvasRect);
+     const double downscale =
+         std::max(1.0, (inst.canvasScale / std::max(0.1, static_cast<double>(inst.scale))) * kBackdropPreviewDownscale);
+     const auto scaled = [downscale](int pixels) { return static_cast<int>(std::lround(pixels / downscale)); };
+     const int standInWidth = std::max(1, scaled(inst.deviceWidth));
+     const int standInHeight = std::max(1, scaled(inst.deviceHeight));
+-    const ScreencopyImage standIn{
+-        .width = standInWidth,
+-        .height = standInHeight,
+-        .yInvert = false,
+-        .rgba = std::vector<std::uint8_t>(static_cast<std::size_t>(standInWidth) * standInHeight * 4U, 0),
+-    };
+-    ScreenshotBackdrop previewBackdrop = *backdrop;
+-    previewBackdrop.padding = scaled(backdrop->padding);
+-    previewBackdrop.cornerRadius = scaled(backdrop->cornerRadius);
+-    previewBackdrop.shadowBlur = scaled(backdrop->shadowBlur);
+-    previewBackdrop.shadowOffsetX = scaled(backdrop->shadowOffsetX);
+-    previewBackdrop.shadowOffsetY = scaled(backdrop->shadowOffsetY);
+-    const ScreencopyImage frame = applyScreenshotBackdrop(standIn, previewBackdrop);
+-
+-    inst.backdropPreview->clear(renderer);
+-    if (!inst.backdropPreview->setSourceRaw(
+-            renderer, frame.rgba.data(), frame.rgba.size(), frame.width, frame.height, frame.width * 4,
+-            PixmapFormat::RGBA, false
+-        )) {
+-      kLog.warn("failed to upload screenshot backdrop preview");
+-      inst.backdropPreview->setVisible(false);
++
++    // The frame raster depends only on the capture size and the backdrop settings; zoom and
++    // pan only re-place it below, so a re-render is skipped while the view is moving.
++    const bool sameRect = inst.previewCanvas.x == rect.x
++        && inst.previewCanvas.y == rect.y
++        && inst.previewCanvas.width == rect.width
++        && inst.previewCanvas.height == rect.height;
++    if (inst.previewBackdrop != backdrop
++        || inst.previewStandInWidth != standInWidth
++        || inst.previewStandInHeight != standInHeight) {
++      const ScreencopyImage standIn{
++          .width = standInWidth,
++          .height = standInHeight,
++          .yInvert = false,
++          .rgba = std::vector<std::uint8_t>(static_cast<std::size_t>(standInWidth) * standInHeight * 4U, 0),
++      };
++      ScreenshotBackdrop previewBackdrop = *backdrop;
++      previewBackdrop.padding = scaled(backdrop->padding);
++      previewBackdrop.cornerRadius = scaled(backdrop->cornerRadius);
++      previewBackdrop.shadowBlur = scaled(backdrop->shadowBlur);
++      previewBackdrop.shadowOffsetX = scaled(backdrop->shadowOffsetX);
++      previewBackdrop.shadowOffsetY = scaled(backdrop->shadowOffsetY);
++      const ScreencopyImage frame = applyScreenshotBackdrop(standIn, previewBackdrop);
++
++      inst.backdropPreview->clear(renderer);
++      if (!inst.backdropPreview->setSourceRaw(
++              renderer, frame.rgba.data(), frame.rgba.size(), frame.width, frame.height, frame.width * 4,
++              PixmapFormat::RGBA, false
++          )) {
++        kLog.warn("failed to upload screenshot backdrop preview");
++        inst.backdropPreview->setVisible(false);
++        return;
++      }
++      inst.previewBackdrop = backdrop;
++      inst.previewFrameWidth = frame.width;
++      inst.previewFrameHeight = frame.height;
++      inst.previewStandInWidth = standInWidth;
++      inst.previewStandInHeight = standInHeight;
++    } else if (sameRect) {
+       return;
+     }
++
+     // Map preview pixels onto the canvas so the stand-in lands exactly under it.
+     const double unitX = rect.width / standInWidth;
+     const double unitY = rect.height / standInHeight;
+     inst.backdropPreview->setFit(ImageFit::Stretch);
+-    inst.backdropPreview->setSize(static_cast<float>(frame.width * unitX), static_cast<float>(frame.height * unitY));
++    inst.backdropPreview->setSize(
++        static_cast<float>(inst.previewFrameWidth * unitX), static_cast<float>(inst.previewFrameHeight * unitY)
++    );
+     inst.backdropPreview->setPosition(
+-        static_cast<float>(rect.x - (previewBackdrop.padding * unitX)),
+-        static_cast<float>(rect.y - (previewBackdrop.padding * unitY))
++        static_cast<float>(rect.x - (scaled(backdrop->padding) * unitX)),
++        static_cast<float>(rect.y - (scaled(backdrop->padding) * unitY))
+     );
+     inst.backdropPreview->setVisible(true);
+-    inst.previewBackdrop = backdrop;
+     inst.previewCanvas = rect;
+   }
+ 
+diff --git a/src/capture/annotation_overlay.h b/src/capture/annotation_overlay.h
+index aafc331e5..33fd6b57c 100644
+--- a/src/capture/annotation_overlay.h
++++ b/src/capture/annotation_overlay.h
+@@ -5,6 +5,7 @@
+ #include "capture/screenshot_image.h"
+ 
+ #include <array>
++#include <chrono>
+ #include <cstdint>
+ #include <functional>
+ #include <memory>
+@@ -139,6 +140,11 @@ namespace capture {
+     void syncToolbarPositionsForConnectedOutputs();
+     void beginToolbarDrag(Instance& instance);
+     void dragToolbarTo(double surfaceX, double surfaceY);
++    void applyCanvasView(Instance& instance);
++    void zoomViewTo(Instance& instance, double anchorX, double anchorY, double factor);
++    void zoomViewByButton(Instance& instance, double factor);
++    void resetView(Instance& instance);
++    void clampView(Instance& instance);
+     [[nodiscard]] std::size_t nearestSizePreset(AnnotationTool tool) const;
+     void applySizePreset(std::size_t index);
+     void layoutCanvas(Instance& instance);
+@@ -220,6 +226,16 @@ namespace capture {
+     bool m_cropDragging = false;
+     AnnotationPoint m_cropStart{};
+ 
++    // Ctrl+drag pans the view transform, anchored at the press in surface coordinates.
++    Instance* m_panInstance = nullptr;
++    double m_panAnchorX = 0.0;
++    double m_panAnchorY = 0.0;
++    double m_panStartX = 0.0;
++    double m_panStartY = 0.0;
++    // Ctrl+wheel zoom step accumulation for detent-less (touchpad) axis streams.
++    double m_zoomScrollAccum = 0.0;
++    std::chrono::steady_clock::time_point m_lastZoomStep{};
++
+     Instance* m_textInstance = nullptr;
+     std::optional<std::size_t> m_textIndex;
+ 
+diff --git a/src/capture/annotation_view.h b/src/capture/annotation_view.h
+new file mode 100644
+index 000000000..efc38c311
+--- /dev/null
++++ b/src/capture/annotation_view.h
+@@ -0,0 +1,105 @@
++#pragma once
++
++#include "capture/annotation_document.h"
++
++#include <algorithm>
++#include <utility>
++
++namespace capture {
++
++  // View transform layered on top of the fitted canvas rect computed by layoutCanvas.
++  // It only changes where the canvas is displayed and how surface points map to canvas
++  // points; annotation geometry, cairo rendering and export all stay in canvas space.
++
++  constexpr double kMinViewZoom = 0.5;
++  constexpr double kMaxViewZoom = 16.0;
++  // Minimum slice of the zoomed canvas kept inside the viewport while panning
++  // (surface-logical pixels), so the canvas can never be dragged fully out of reach.
++  constexpr double kViewPanMinVisible = 64.0;
++
++  struct ViewTransform {
++    // Multiplier over the fitted canvas size. 1.0 = the unzoomed fitted view.
++    double zoom = 1.0;
++    // Surface-logical offset of the zoomed canvas origin from the fitted origin.
++    double panX = 0.0;
++    double panY = 0.0;
++
++    [[nodiscard]] constexpr bool isIdentity() const noexcept { return zoom == 1.0 && panX == 0.0 && panY == 0.0; }
++  };
++
++  [[nodiscard]] constexpr double clampViewZoom(double zoom) noexcept {
++    return std::clamp(zoom, kMinViewZoom, kMaxViewZoom);
++  }
++
++  // Displayed rect of the canvas under the view transform (surface-logical coordinates).
++  [[nodiscard]] constexpr AnnotationRect viewRect(const ViewTransform& view, const AnnotationRect& fitted) noexcept {
++    return AnnotationRect{
++        .x = fitted.x + view.panX,
++        .y = fitted.y + view.panY,
++        .width = fitted.width * view.zoom,
++        .height = fitted.height * view.zoom,
++    };
++  }
++
++  [[nodiscard]] constexpr AnnotationPoint
++  surfaceToCanvas(const ViewTransform& view, const AnnotationRect& fitted, AnnotationPoint surface) noexcept {
++    return AnnotationPoint{
++        .x = (surface.x - fitted.x - view.panX) / view.zoom,
++        .y = (surface.y - fitted.y - view.panY) / view.zoom,
++    };
++  }
++
++  [[nodiscard]] constexpr AnnotationPoint
++  canvasToSurface(const ViewTransform& view, const AnnotationRect& fitted, AnnotationPoint canvas) noexcept {
++    return AnnotationPoint{
++        .x = fitted.x + view.panX + canvas.x * view.zoom,
++        .y = fitted.y + view.panY + canvas.y * view.zoom,
++    };
++  }
++
++  // Zoom by `factor`, keeping the canvas point under the surface anchor fixed.
++  [[nodiscard]] constexpr ViewTransform zoomViewAt(
++      const ViewTransform& view, const AnnotationRect& fitted, double anchorX, double anchorY, double factor
++  ) noexcept {
++    const AnnotationPoint anchor = surfaceToCanvas(view, fitted, {.x = anchorX, .y = anchorY});
++    const double zoom = clampViewZoom(view.zoom * factor);
++    return ViewTransform{
++        .zoom = zoom,
++        .panX = anchorX - fitted.x - anchor.x * zoom,
++        .panY = anchorY - fitted.y - anchor.y * zoom,
++    };
++  }
++
++  // Clamp pan so at least kViewPanMinVisible of the zoomed canvas stays inside the
++  // viewport. A canvas smaller than the viewport may still move, but never leave it.
++  [[nodiscard]] constexpr ViewTransform clampViewPan(
++      const ViewTransform& view, const AnnotationRect& fitted, double viewportWidth, double viewportHeight
++  ) noexcept {
++    const double width = fitted.width * view.zoom;
++    const double height = fitted.height * view.zoom;
++    const double rectX = fitted.x + view.panX;
++    const double rectY = fitted.y + view.panY;
++
++    // rect.x >= minVisible - width keeps the right edge reachable;
++    // rect.x <= viewportWidth - minVisible keeps the left edge reachable.
++    const double lowX = kViewPanMinVisible - width;
++    const double highX = viewportWidth - kViewPanMinVisible;
++    const double lowY = kViewPanMinVisible - height;
++    const double highY = viewportHeight - kViewPanMinVisible;
++
++    const auto clampAxis = [](double value, double low, double high) noexcept {
++      if (low > high) {
++        // Degenerate viewport: pin to the interval midpoint instead of clamping UB.
++        return (low + high) * 0.5;
++      }
++      return std::clamp(value, low, high);
++    };
++
++    return ViewTransform{
++        .zoom = view.zoom,
++        .panX = clampAxis(rectX, lowX, highX) - fitted.x,
++        .panY = clampAxis(rectY, lowY, highY) - fitted.y,
++    };
++  }
++
++} // namespace capture
+diff --git a/tests/annotation_view_test.cpp b/tests/annotation_view_test.cpp
+new file mode 100644
+index 000000000..bbf3e968a
+--- /dev/null
++++ b/tests/annotation_view_test.cpp
+@@ -0,0 +1,99 @@
++#include "capture/annotation_view.h"
++#include "tests/test_check.h"
++
++#include <cmath>
++#include <print>
++
++namespace {
++
++  bool near(double a, double b) { return std::abs(a - b) < 1e-9; }
++
++  const capture::AnnotationRect kFitted{.x = 100.0, .y = 200.0, .width = 800.0, .height = 600.0};
++
++} // namespace
++
++int main() {
++  // Zoom is clamped to the agreed 0.5x-16x range.
++  TEST_CHECK(near(capture::clampViewZoom(0.1), capture::kMinViewZoom));
++  TEST_CHECK(near(capture::clampViewZoom(100.0), capture::kMaxViewZoom));
++  TEST_CHECK(near(capture::clampViewZoom(2.5), 2.5));
++  TEST_CHECK(near(capture::clampViewZoom(1.0), 1.0));
++
++  // Identity view reproduces the unzoomed fitted layout exactly.
++  const capture::ViewTransform view{};
++  const capture::AnnotationRect rect = capture::viewRect(view, kFitted);
++  TEST_CHECK(rect.x == kFitted.x);
++  TEST_CHECK(rect.y == kFitted.y);
++  TEST_CHECK(rect.width == kFitted.width);
++  TEST_CHECK(rect.height == kFitted.height);
++  TEST_CHECK(view.isIdentity());
++
++  const capture::AnnotationPoint surface{.x = 350.0, .y = 450.0};
++  const capture::AnnotationPoint canvas = capture::surfaceToCanvas(view, kFitted, surface);
++  TEST_CHECK(near(canvas.x, 250.0));
++  TEST_CHECK(near(canvas.y, 250.0));
++  const capture::AnnotationPoint back = capture::canvasToSurface(view, kFitted, canvas);
++  TEST_CHECK(near(back.x, surface.x));
++  TEST_CHECK(near(back.y, surface.y));
++
++  // Mapping roundtrips under an arbitrary zoom + pan.
++  const capture::ViewTransform arbitrary{.zoom = 3.25, .panX = -40.0, .panY = 17.5};
++  const capture::AnnotationPoint surface2{.x = 1234.5, .y = 678.25};
++  const capture::AnnotationPoint canvas2 = capture::surfaceToCanvas(arbitrary, kFitted, surface2);
++  const capture::AnnotationPoint back2 = capture::canvasToSurface(arbitrary, kFitted, canvas2);
++  TEST_CHECK(near(back2.x, surface2.x));
++  TEST_CHECK(near(back2.y, surface2.y));
++
++  // Pointer-anchored zoom keeps the canvas point under the anchor fixed.
++  const double anchorX = 500.0;
++  const double anchorY = 400.0;
++  const capture::AnnotationPoint before = capture::surfaceToCanvas(view, kFitted, {.x = anchorX, .y = anchorY});
++  const capture::ViewTransform zoomed = capture::zoomViewAt(view, kFitted, anchorX, anchorY, 2.0);
++  TEST_CHECK(near(zoomed.zoom, 2.0));
++  const capture::AnnotationPoint after = capture::surfaceToCanvas(zoomed, kFitted, {.x = anchorX, .y = anchorY});
++  TEST_CHECK(near(after.x, before.x));
++  TEST_CHECK(near(after.y, before.y));
++
++  // Anchored zoom clamps at both range ends, and the anchor invariant holds at the clamped zoom.
++  const capture::ViewTransform huge = capture::zoomViewAt(view, kFitted, anchorX, anchorY, 1000.0);
++  TEST_CHECK(near(huge.zoom, capture::kMaxViewZoom));
++  const capture::ViewTransform tiny = capture::zoomViewAt(view, kFitted, anchorX, anchorY, 0.001);
++  TEST_CHECK(near(tiny.zoom, capture::kMinViewZoom));
++  const capture::AnnotationPoint afterClamp = capture::surfaceToCanvas(huge, kFitted, {.x = anchorX, .y = anchorY});
++  TEST_CHECK(near(afterClamp.x, before.x));
++  TEST_CHECK(near(afterClamp.y, before.y));
++
++  // Pan clamp keeps at least kViewPanMinVisible of the canvas inside the viewport.
++  const double viewportW = 1920.0;
++  const double viewportH = 1080.0;
++  TEST_CHECK(capture::clampViewPan(view, kFitted, viewportW, viewportH).isIdentity());
++
++  const capture::ViewTransform wild{.zoom = 1.0, .panX = 1e6, .panY = -1e6};
++  const capture::ViewTransform clamped = capture::clampViewPan(wild, kFitted, viewportW, viewportH);
++  const capture::AnnotationRect clampedRect = capture::viewRect(clamped, kFitted);
++  TEST_CHECK(clampedRect.x <= viewportW - capture::kViewPanMinVisible);
++  TEST_CHECK(clampedRect.x + clampedRect.width >= capture::kViewPanMinVisible);
++  TEST_CHECK(clampedRect.y <= viewportH - capture::kViewPanMinVisible);
++  TEST_CHECK(clampedRect.y + clampedRect.height >= capture::kViewPanMinVisible);
++
++  // Zoomed-in pans clamp on the same rule: an oversized canvas keeps a visible slice.
++  const capture::ViewTransform zoomedWild{.zoom = 8.0, .panX = 5000.0, .panY = -5000.0};
++  const capture::ViewTransform zoomedClamped = capture::clampViewPan(zoomedWild, kFitted, 1280.0, 720.0);
++  const capture::AnnotationRect zoomedRect = capture::viewRect(zoomedClamped, kFitted);
++  TEST_CHECK(zoomedRect.x <= 1280.0 - capture::kViewPanMinVisible);
++  TEST_CHECK(zoomedRect.x + zoomedRect.width >= capture::kViewPanMinVisible);
++  TEST_CHECK(zoomedRect.y <= 720.0 - capture::kViewPanMinVisible);
++  TEST_CHECK(zoomedRect.y + zoomedRect.height >= capture::kViewPanMinVisible);
++  TEST_CHECK(near(zoomedClamped.zoom, 8.0));
++
++  // viewRect scales the fitted size by the zoom and offsets by the pan.
++  const capture::ViewTransform scaled{.zoom = 2.5, .panX = 10.0, .panY = -10.0};
++  const capture::AnnotationRect scaledRect = capture::viewRect(scaled, kFitted);
++  TEST_CHECK(near(scaledRect.width, kFitted.width * 2.5));
++  TEST_CHECK(near(scaledRect.height, kFitted.height * 2.5));
++  TEST_CHECK(near(scaledRect.x, kFitted.x + 10.0));
++  TEST_CHECK(near(scaledRect.y, kFitted.y - 10.0));
++
++  std::println("annotation_view_test: all checks passed");
++  return 0;
++}
+-- 
+2.56.0.236.g7e34d8174d
+

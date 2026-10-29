@@ -17796,3 +17796,15 @@ the disposition call. BUILD HELD per owner.
   plus the one uncovered notice). Contract §C.4 records the @app-only gate,
   the one-line abort and anchor stability normatively. Not addressed
   (judgement-call smells): the repeated CR-strip one-liners in the fixture.
+
+## 2026-10-30 — packages/git/noctalia-git: annotation zoom/pan patch
+
+- Added `0001-capture-annotate-zoom-pan.patch` (upstream PR noctalia-dev/noctalia#5111,
+  commit db2d86ab0 on ZhangDM-520/noctalia feat/annotate-zoom-pan): display-only view
+  transform for the screenshot annotation editor — Ctrl+wheel anchored zoom (0.5x-16x),
+  Ctrl+left-drag pan with visible-slice clamp, toolbar zoom-out/fit/zoom-in; export pixels
+  unchanged. Reviewed two-axis (subagents) + agy external review (request-changes -> approve).
+- PKGBUILD: patch added to source()/sha256sums, prepare() applies it with `git apply -3`
+  (glib2-git house style). Upstream main drift fails prepare() loudly — rebase the patch then.
+- makepkg verification passed with the full PGO flow: noctalia-git 5.4.0.r6061.gaa66386ce-1
+  (patch rebased cleanly past the r6032 pkgver base via git apply -3).

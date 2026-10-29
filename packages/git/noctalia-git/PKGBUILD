@@ -6,7 +6,7 @@ source "$startdir/../../../lib/pgo.sh"
 
 pkgname=noctalia-git
 _pkgname=noctalia
-pkgver=5.4.0.r6032.g6a06bfc3e
+pkgver=5.4.0.r6061.gaa66386ce
 pkgrel=1
 pkgdesc='A sleek, customizable desktop shell crafted for Wayland'
 arch=('x86_64' 'aarch64')
@@ -65,8 +65,10 @@ makedepends=(
 options=('!debug' 'lto')
 provides=("noctalia=${pkgver}")
 conflicts=('noctalia' 'noctalia-bin')
-source=("${_pkgname}::git+${url}.git#branch=main")
-sha256sums=('SKIP')
+source=("${_pkgname}::git+${url}.git#branch=main"
+        0001-capture-annotate-zoom-pan.patch)
+sha256sums=('SKIP'
+            '75eebefb67ad884a8b376d74394e866b86bea9d896e10e038d9c37a47ac28803')
 
 pkgver() {
   cd "${_pkgname}"
@@ -80,6 +82,13 @@ pkgver() {
     version="$(<VERSION)"
   fi
   printf '%s.r%s.g%s' "${version}" "$(git rev-list --count HEAD)" "$(git rev-parse --short=9 HEAD)"
+}
+
+prepare() {
+  cd "${_pkgname}"
+
+  # Zoom and pan for the screenshot annotation editor (upstream PR noctalia-dev/noctalia#5111).
+  git apply -3 ../0001-capture-annotate-zoom-pan.patch
 }
 
 # Run the PGO training workload: exercise the real shell under a headless sway
