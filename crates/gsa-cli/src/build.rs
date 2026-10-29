@@ -134,14 +134,15 @@ fn run_build_with(
         db: &db,
         user_sets: select::load_user_sets(inv),
     };
-    let mut selection = match select::build_selection(&ctx, &inv.targets, &inv.ranges, inv.leaf) {
-        Ok(selection) => selection,
+    // ── usage preflight: resolve the selection (§G.1 rc 2 class) ─────────
+    let draft = match select::resolve_selection(&ctx, &inv.targets, &inv.ranges, inv.leaf) {
+        Ok(draft) => draft,
         Err(error) => {
             let _ = writeln!(err, "gsa: {}", error.message);
             return 2;
         }
     };
-    crate::write_notes(err, &selection.notes);
+    crate::write_notes(err, draft.notes());
 
     // ── privilege gate (contract §B.10; after every usage preflight) ─────
     if let Some(code) = crate::privilege_gate(
@@ -152,6 +153,16 @@ fn run_build_with(
     ) {
         return code;
     }
+
+    // ── §C.4 prompt, AFTER the gate: an unprivileged run must refuse
+    //    (rc 3) before any interactive input is rendered or consumed ──────
+    let mut selection = match draft.finish_for_build(&ctx, err) {
+        Ok(selection) => selection,
+        Err(error) => {
+            let _ = writeln!(err, "gsa: {}", error.message);
+            return 2;
+        }
+    };
 
     // ── state root (contract §J.3): --state-dir > GSA_STATE_DIR > the
     //    gsa.conf layers (user > system) > /var/lib/gsa ─────────────────
@@ -812,7 +823,7 @@ pub(crate) fn plan_only(
     if inv.targets.is_empty() {
         return Err("selection is mandatory: a build never starts without a selection".to_string());
     }
-    let mut selection = select::build_selection(ctx, &inv.targets, &inv.ranges, inv.leaf)
+    let mut selection = select::build_selection_for_build(ctx, &inv.targets, &inv.ranges, inv.leaf, err)
         .map_err(|error| error.message)?;
     crate::write_notes(err, &selection.notes);
     // The same pre-dispatch ABI wave check the build pipeline runs (§E.3):
@@ -822,14 +833,17 @@ pub(crate) fn plan_only(
     let wave = wave_check(out, err, ctx.graph, &selection, &state_dir)?;
     extend_selection(&mut selection, &wave.additions);
     let intensity = crate::resolve_intensity(project)?;
-    let expansion_added = selection.closure_size.saturating_sub(selection.seeds.len());
+    // The note counts the POST-PROMPT closure: the prompt filters the
+    // selection before the ordinary pipeline runs (§C.4), so its drops are
+    // not consumer expansion and not part of the selected count.
+    let expansion_added = selection.expansion_added;
     let _ = write!(
         out,
         "{}",
         render::render_plan_prose(
             &selection.listed,
             expansion_added,
-            selection.closure_size,
+            selection.seeds.len() + expansion_added,
             inv.leaf,
             true
         )

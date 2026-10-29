@@ -748,6 +748,7 @@ mod tests {
                 .map(|i| (i, RecipeId::new(format!("pkg{i}")).unwrap()))
                 .collect(),
             closure_size: n,
+            expansion_added: n.saturating_sub(1),
             seeds: vec![RecipeId::new("pkg1").unwrap()],
             notes: Vec::new(),
         }

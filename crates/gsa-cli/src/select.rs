@@ -6,12 +6,15 @@
 //! substitution is announced; anything else is a usage error naming the
 //! unknown reference and its nearest candidates.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
+use std::io::{BufRead, Write};
 
 use gsa_graph::Graph;
-use gsa_model::RecipeId;
+use gsa_model::{Group, RecipeId, Tag};
 use gsa_recipe::RecipeDb;
 use gsa_topo::ProjectConfig;
+
+use crate::prompt::{self, AppRow, PromptOutcome};
 
 /// Everything selection needs: the loaded config, the validated graph, the
 /// recipe cache, and the kv user sets (I5 — `@name` resolves over the kv
@@ -80,9 +83,14 @@ pub struct Selection {
     /// `(anchor, recipe)` in canonical build order; anchors are 1-based
     /// positions in the unfiltered closure and survive filtering with gaps.
     pub listed: Vec<(usize, RecipeId)>,
-    /// Size of the closure before range filtering.
+    /// Size of the unfiltered closure — the anchor space a range addresses
+    /// and wave additions anchor after.
     pub closure_size: usize,
-    /// The seed recipes the targets resolved to (deduplicated).
+    /// How many closure members came from consumer expansion beyond the
+    /// seeds (0 for `--leaf`). Measured on the POST-PROMPT closure — the
+    /// §C.4 prompt filters the selection before the ordinary pipeline runs.
+    pub expansion_added: usize,
+    /// The seed recipes the selection resolved to (deduplicated).
     pub seeds: Vec<RecipeId>,
     /// Announced substitutions (case-variant ids, package names), for stderr.
     pub notes: Vec<String>,
@@ -340,90 +348,282 @@ fn ensure_selection_nonempty(listed: &[(usize, RecipeId)]) -> Result<(), SelectE
     Ok(())
 }
 
+/// Resolve targets into seeds — the usage preflight's product (unknown
+/// refs, empty targets). Split from `SelectionDraft::finish` so a build path
+/// can put its §B.10 privilege gate BETWEEN them: an unprivileged run
+/// refuses (rc 3) before the §C.4 prompt renders or consumes input, while
+/// usage errors still win (§G.1: usage 2 > refusal 3).
+pub fn resolve_selection(
+    ctx: &Ctx<'_>,
+    targets: &[String],
+    ranges: &[String],
+    leaf: bool,
+) -> Result<SelectionDraft, SelectError> {
+    if targets.is_empty() {
+        return Err(SelectError::new(
+            "a range requires a selection to anchor it (name a target or @group)",
+        ));
+    }
+    let mut other_seeds: BTreeSet<usize> = BTreeSet::new();
+    let mut app_seeds: BTreeSet<usize> = BTreeSet::new();
+    let mut notes: Vec<String> = Vec::new();
+    for token in targets {
+        let (indices, resolved_notes) = resolve_ref(ctx, token, 0)?;
+        // §C.4 / fish-era `test "$g" = app`: ONLY the `@app` group's
+        // contribution is prompt-filtered. Positional packages, other groups
+        // and sets never prompt — an app member named positionally is not
+        // the group's to drop and survives an unchecked row.
+        let dest = match token.strip_prefix('@').and_then(Group::from_name) {
+            Some(Group::App) => &mut app_seeds,
+            _ => &mut other_seeds,
+        };
+        dest.extend(indices);
+        notes.extend(resolved_notes);
+    }
+    Ok(SelectionDraft {
+        other_seeds: other_seeds.into_iter().collect(),
+        app_seeds: app_seeds.into_iter().collect(),
+        ranges: ranges.to_vec(),
+        leaf,
+        notes,
+    })
+}
+
+/// Targets resolved to seeds, before the prompt and expansion.
+pub struct SelectionDraft {
+    /// Seeds from every target except the `@app` group — untouched by the
+    /// prompt.
+    other_seeds: Vec<usize>,
+    /// The `@app` group's contribution — the prompt's only surface.
+    app_seeds: Vec<usize>,
+    ranges: Vec<String>,
+    leaf: bool,
+    notes: Vec<String>,
+}
+
 pub fn build_selection(
     ctx: &Ctx<'_>,
     targets: &[String],
     ranges: &[String],
     leaf: bool,
 ) -> Result<Selection, SelectError> {
-    if targets.is_empty() {
-        return Err(SelectError::new(
-            "a range requires a selection to anchor it (name a target or @group)",
-        ));
-    }
-    let mut seeds: BTreeSet<usize> = BTreeSet::new();
-    let mut notes: Vec<String> = Vec::new();
-    for token in targets {
-        let (indices, resolved_notes) = resolve_ref(ctx, token, 0)?;
-        seeds.extend(indices);
-        notes.extend(resolved_notes);
-    }
-    let seed_vec: Vec<usize> = seeds.into_iter().collect();
-    let closure: Vec<usize> = if leaf {
-        let mut s = seed_vec.clone();
-        s.sort_by_key(|&i| ctx.graph.position(i));
-        s
-    } else {
-        ctx.graph.consumer_closure(&seed_vec)
-    };
-    let closure_size = closure.len();
-    let listed: Vec<(usize, RecipeId)> = closure
-        .iter()
-        .enumerate()
-        .map(|(pos, &idx)| (pos + 1, ctx.graph.record(idx).id.clone()))
-        .collect();
+    resolve_selection(ctx, targets, ranges, leaf)?.finish(ctx, None)
+}
 
-    ensure_selection_nonempty(&listed)?;
+/// The build paths' selection: the §C.4 prompt engages only when the
+/// selection carries an `@app` group contribution AND stdin is a terminal
+/// (fish-era `test -t 0` rule) — a piped run can never hang on it.
+/// App-member seeds render as toggle rows (app-cluster members share one
+/// row) and only the confirmed subset seeds the closure; non-app seeds pass
+/// through untouched.
+pub fn build_selection_for_build(
+    ctx: &Ctx<'_>,
+    targets: &[String],
+    ranges: &[String],
+    leaf: bool,
+    menu: &mut dyn Write,
+) -> Result<Selection, SelectError> {
+    resolve_selection(ctx, targets, ranges, leaf)?.finish_for_build(ctx, menu)
+}
 
-    if ranges.is_empty() {
-        return Ok(Selection {
+impl SelectionDraft {
+    /// Announced substitutions (case-variant ids, package names) — the
+    /// resolution output a caller may print before gating or prompting.
+    pub fn notes(&self) -> &[String] {
+        &self.notes
+    }
+
+    /// Finish with the §C.4 prompt when stdin is a terminal (fish-era
+    /// `test -t 0` rule); a piped run takes the whole `@app` contribution.
+    pub fn finish_for_build(
+        self,
+        ctx: &Ctx<'_>,
+        menu: &mut dyn Write,
+    ) -> Result<Selection, SelectError> {
+        let stdin = std::io::stdin();
+        if std::io::IsTerminal::is_terminal(&stdin) {
+            self.finish(ctx, Some((menu, &mut stdin.lock())))
+        } else {
+            self.finish(ctx, None)
+        }
+    }
+
+    /// Expand and record the selection. `prompt` filters ONLY the `@app`
+    /// contribution (§C.4: it is a filter in front of the ordinary
+    /// pipeline); the anchor space stays the UNFILTERED closure — a
+    /// filtered run's rows keep their listing positions (gaps intended and
+    /// honest, owner directive 2026-10-08: anchors never renumber).
+    pub fn finish(
+        self,
+        ctx: &Ctx<'_>,
+        prompt: Option<(&mut dyn Write, &mut dyn BufRead)>,
+    ) -> Result<Selection, SelectError> {
+        let SelectionDraft {
+            other_seeds,
+            mut app_seeds,
+            ranges,
+            leaf,
+            notes,
+        } = self;
+
+        let unfiltered: Vec<usize> = other_seeds
+            .iter()
+            .copied()
+            .chain(app_seeds.iter().copied())
+            .collect();
+        let anchor_of: HashMap<usize, usize> = closure_of(ctx, &unfiltered, leaf)
+            .into_iter()
+            .enumerate()
+            .map(|(pos, idx)| (idx, pos + 1))
+            .collect();
+        let closure_size = anchor_of.len();
+
+        if let Some((menu, input)) = prompt {
+            if !app_seeds.is_empty() {
+                app_seeds = prompt_filter_app_seeds(ctx, &app_seeds, menu, input)?;
+            }
+        }
+
+        let mut merged: BTreeSet<usize> = other_seeds.iter().copied().collect();
+        merged.extend(app_seeds);
+        let seed_vec: Vec<usize> = merged.into_iter().collect();
+
+        let closure: Vec<usize> = closure_of(ctx, &seed_vec, leaf);
+        let expansion_added = closure.len().saturating_sub(seed_vec.len());
+        let listed: Vec<(usize, RecipeId)> = closure
+            .iter()
+            .map(|&idx| (anchor_of[&idx], ctx.graph.record(idx).id.clone()))
+            .collect();
+
+        ensure_selection_nonempty(&listed)?;
+
+        if ranges.is_empty() {
+            return Ok(Selection {
+                listed,
+                closure_size,
+                expansion_added,
+                seeds: seed_vec
+                    .iter()
+                    .map(|&i| ctx.graph.record(i).id.clone())
+                    .collect(),
+                notes,
+            });
+        }
+
+        // Range filtering over the anchors (contract §C.3) — the anchor
+        // space is the UNFILTERED closure, so the bounds check sees it too.
+        let total = closure_size as u32;
+        let mut chosen: BTreeSet<u32> = BTreeSet::new();
+        for token in &ranges {
+            let spec = parse_range(token)?;
+            let start = spec.start.unwrap_or(1);
+            let end = spec.end.unwrap_or(total);
+            if start > total || end < 1 {
+                return Err(SelectError::new(format!(
+                    "range {token} is outside the {total}-package selection (valid: 1..{total})"
+                )));
+            }
+            if start > end {
+                return Err(SelectError::new(format!(
+                    "range {token} is empty — the start is past the end"
+                )));
+            }
+            let start = start.max(1);
+            let end = end.min(total);
+            for i in start..=end {
+                chosen.insert(i);
+            }
+        }
+        let listed: Vec<(usize, RecipeId)> = listed
+            .into_iter()
+            .filter(|(anchor, _)| chosen.contains(&(*anchor as u32)))
+            .collect();
+        ensure_selection_nonempty(&listed)?;
+        Ok(Selection {
             listed,
             closure_size,
+            expansion_added,
             seeds: seed_vec
                 .iter()
                 .map(|&i| ctx.graph.record(i).id.clone())
                 .collect(),
             notes,
-        });
+        })
     }
+}
 
-    // Range filtering over the anchors (contract §C.3).
-    let total = closure_size as u32;
-    let mut chosen: BTreeSet<u32> = BTreeSet::new();
-    for token in ranges {
-        let spec = parse_range(token)?;
-        let start = spec.start.unwrap_or(1);
-        let end = spec.end.unwrap_or(total);
-        if start > total || end < 1 {
-            return Err(SelectError::new(format!(
-                "range {token} is outside the {total}-package selection (valid: 1..{total})"
-            )));
-        }
-        if start > end {
-            return Err(SelectError::new(format!(
-                "range {token} is empty — the start is past the end"
-            )));
-        }
-        let start = start.max(1);
-        let end = end.min(total);
-        for i in start..=end {
-            chosen.insert(i);
+fn closure_of(ctx: &Ctx<'_>, seeds: &[usize], leaf: bool) -> Vec<usize> {
+    if leaf {
+        let mut s = seeds.to_vec();
+        s.sort_by_key(|&i| ctx.graph.position(i));
+        s
+    } else {
+        ctx.graph.consumer_closure(seeds)
+    }
+}
+
+/// §C.4 prompt layer — the `@app` group's contribution, and only that,
+/// renders as toggle rows: members sharing an `app-cluster=<name>` tag
+/// collapse into ONE row at their first member's build position, and the
+/// confirmed subset replaces the contribution. `Abort` refuses with its
+/// reason (the single error line, fish parity).
+fn prompt_filter_app_seeds(
+    ctx: &Ctx<'_>,
+    seeds: &[usize],
+    menu: &mut dyn Write,
+    input: &mut dyn BufRead,
+) -> Result<Vec<usize>, SelectError> {
+    let mut app_seeds: Vec<usize> = seeds.to_vec();
+    app_seeds.sort_by_key(|&idx| ctx.graph.position(idx));
+
+    // Rows in build order; a cluster row appears at its first member.
+    let mut rows: Vec<(Option<String>, Vec<usize>)> = Vec::new();
+    for &idx in &app_seeds {
+        let record = ctx.graph.record(idx);
+        let cluster = record.tags.iter().find_map(|tag| match tag {
+            Tag::AppCluster(name) => Some(name.clone()),
+            _ => None,
+        });
+        match cluster
+            .as_deref()
+            .and_then(|name| rows.iter().position(|(row, _)| row.as_deref() == Some(name)))
+        {
+            Some(row) => rows[row].1.push(idx),
+            None => rows.push((cluster, vec![idx])),
         }
     }
-    let listed: Vec<(usize, RecipeId)> = listed
+    let prompt_rows: Vec<AppRow> = rows
         .into_iter()
-        .filter(|(anchor, _)| chosen.contains(&(*anchor as u32)))
+        .map(|(cluster, members)| {
+            let ids: Vec<String> = members
+                .iter()
+                .map(|&idx| ctx.graph.record(idx).id.to_string())
+                .collect();
+            let label = match cluster {
+                Some(name) => format!("{name} [{}]", ids.join(" ")),
+                None => ids[0].clone(),
+            };
+            AppRow {
+                label,
+                members: ids,
+            }
+        })
         .collect();
-    ensure_selection_nonempty(&listed)?;
-    Ok(Selection {
-        listed,
-        closure_size,
-        seeds: seed_vec
-            .iter()
-            .map(|&i| ctx.graph.record(i).id.clone())
-            .collect(),
-        notes,
-    })
+
+    match prompt::prompt_app_selection(&prompt_rows, menu, input) {
+        Ok(PromptOutcome::All) => Ok(app_seeds),
+        Ok(PromptOutcome::Picked(ids)) => {
+            let chosen: std::collections::HashSet<&str> =
+                ids.iter().map(String::as_str).collect();
+            Ok(app_seeds
+                .iter()
+                .copied()
+                .filter(|&idx| chosen.contains(ctx.graph.record(idx).id.as_str()))
+                .collect())
+        }
+        Ok(PromptOutcome::Abort(reason)) => Err(SelectError::new(reason)),
+        Err(error) => Err(SelectError::new(format!("app selection aborted ({error})"))),
+    }
 }
 
 /// The whole-set listing (`-Sl` with no selection): every recipe in

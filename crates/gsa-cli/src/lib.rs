@@ -22,6 +22,7 @@ mod qa;
 mod query;
 mod record;
 mod render;
+mod prompt;
 mod select;
 mod standalone;
 

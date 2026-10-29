@@ -723,6 +723,7 @@ pub fn pass_selection(ctx: &Ctx<'_>, inv: &Invocation) -> Result<Selection, Stri
         let mut selection = Selection {
             listed: Vec::new(),
             closure_size: 0,
+            expansion_added: 0,
             seeds: Vec::new(),
             notes: Vec::new(),
         };

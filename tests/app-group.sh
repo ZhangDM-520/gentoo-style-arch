@@ -1,17 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# app group + TTY multi-select prompt fixture — PARTIAL FLIP: this file
-# drives BOTH engines. Everything the NATIVE engine (`gsa`,
-# docs/gsa-contract.md §B.4/§B.5/§C/§G.1/§H.2) expresses runs through
-# tests/lib/rr-v2.bash's run_engine (sections `gsa 1`-`gsa 7` below); the PTY
-# multi-select prompt sections stay fish-driven and byte-unchanged (the
-# numbered sections 5-12 at the bottom) because the engine has NO app prompt:
-# §C.4 carries the prompt and the `app-cluster` prompt rows as contract, but
-# no prompt/multi-select code exists in crates/gsa-cli (measured 2026-10-12 —
-# `grep -rniE 'read_line|stdin|toggle|multi.?select' crates/gsa-cli/src/`
-# finds none; the only `prompt` hit is a comment saying the engine never
-# prompts). See docs/gsa-fixture-migration.md row `tests/app-group.sh`.
+# app group + TTY multi-select prompt fixture — FULLY FLIPPED to the native
+# engine (`gsa`, docs/gsa-contract.md §B.4/§B.5/§C/§C.4/§G.1/§H.2): the
+# loader/selection sections (`gsa 1`-`gsa 7`) and the PTY multi-select prompt
+# sections (5-12) all run through the engine — the §C.4 prompt landed in
+# crates/gsa-cli (prompt.rs + select.rs's build_selection_for_build) and the
+# fish build-all.fish driver is gone from this fixture. See
+# docs/gsa-fixture-migration.md row `tests/app-group.sh`.
 #
 # Pins (decisions recorded in docs/NOTE.md 2026-09-23; bracket = the surface
 # that pins each today):
@@ -29,7 +25,9 @@ set -euo pipefail
 #      abort/hang, so exit 0 with the whole list proves silence) and never
 #      builds (zero makepkg spawns)      [gsa 4]
 #   5. on a PTY: Enter = whole group, numbers = the checked subset (plus its
-#      consumers), q = non-zero abort      [fish 5-7 — engine gap]
+#      consumers), q = non-zero abort; and ONLY an `@app` selection prompts —
+#      a positional app member builds without a menu (§C.4, fish-era
+#      `test "$g" = app`)      [fish 5-7 — engine gap]
 #   6. -g app combined with -g git: the union of both groups' expansions
 #      dedupes into one topological order and its rows are the anchor space
 #      for ranges (§C.3/§C.5)      [gsa 6]; the prompt filtering only the
@@ -146,41 +144,6 @@ sleep "${GSA_FAKE_BUILD_SECONDS:-0.05}"
 EOF
 chmod +x "$fixture/bin/makepkg"
 
-# Read-only helpers. Each captures combined output into $out/$err files and
-# returns the builder's status (caller asserts with ||-style checks under -e).
-run_quiet() { # <outfile> [args...] — stdin /dev/null (never a TTY)
-    local out="$1"
-    shift
-    fish "$fixture/build-all.fish" "$@" </dev/null >"$out" 2>&1
-}
-
-run_pty() { # <input printf fmt> <outfile> <state-dir> [args...] — PTY stdin
-    local input="$1" out="$2" state="$3"
-    shift 3
-    set +e
-    # TERM=dumb on purpose: fish's terminal capability queries (DA1) have no
-    # responder under script(1)'s PTY, and fish then consumes the piped toggle
-    # input as bogus query replies (observed: "2" swallowed mid-exchange, the
-    # next read hanging until the timeout). A dumb terminal skips the queries
-    # entirely — the FD-level `test -t 0` the seam keys on stays true, and
-    # nothing in this fixture asserts colours or the dashboard.
-    printf '%b' "$input" | \
-        timeout 60 env TERM=dumb \
-            script -qec "PATH=\"$fixture/bin:\$PATH\" GSA_STATE_DIR='$state' \
-                fish '$fixture/build-all.fish' $*" /dev/null >"$out" 2>&1
-    RC=$?
-    set -e
-    return "$RC"
-}
-
-# Extract just the numbered package sequence from a dry-run preview.
-# PTY runs carry \r (the slave's ONLCR maps every \n) — strip it, or each
-# field compares as "app1\r" against the expected literal.
-order_seq() {
-    sed -n '/Build order (dry run):/,/^Total:/p' "$1" \
-        | grep -E '^ +[0-9]+\. ' | awk '{print $2}' | tr -d '\r'
-}
-
 # The same rows as 'anchor name' pairs — the printed anchor VALUES (the
 # pairing a later range filter relies on), not just the names. Anchors are
 # unfiltered-closure positions, so a prompt-filtered run prints gaps.
@@ -203,25 +166,6 @@ first_menu() {
 menu_rows() {
     first_menu "$1" | sed -n 's/^ *\[.\] *[0-9]*\. //p'
 }
-
-# Same numbered rows as a `-l` listing prints (the listing has no run record:
-# listing/dry-run runs never start a build, so the rows ARE the data channel).
-listed_seq() {
-    sed -n '/Selected packages in build order/,$p' "$1" \
-        | grep -E '^ +[0-9]+\. ' | awk '{print $2}' | tr -d '\r'
-}
-
-# A `-l` listing as 'anchor name' pairs — the unfiltered anchor map a
-# prompted run's printed indices must agree with.
-listed_pairs() {
-    sed -n '/Selected packages in build order/,$p' "$1" \
-        | grep -E '^ +[0-9]+\. ' | awk '{sub(/\.$/, "", $1); print $1, $2}' | tr -d '\r'
-}
-
-# The fish half's whole-group pin (kept): Enter builds exactly these three.
-# The gsa half derives its expectations instead (rule 25(j)) and never uses
-# this constant.
-expected3=$(printf 'app1\napp2\napp3')
 
 # ── gsa-half helpers: structural readers and derivations ────────────────────
 
@@ -295,19 +239,47 @@ sorted_ids() {
     printf '%s\n' $1 | sort
 }
 
-# run_pty_gsa <input printf fmt> <outfile> [args...] — the gsa twin of
-# run_pty: the engine under a PTY with scripted stdin (proves a listing never
-# reads its input; nothing here asserts colours or rendering).
-run_pty_gsa() {
-    local input="$1" out="$2"
-    shift 2
+# run_pty_gsa / run_pty_gsa_user <input printf fmt> <outfile> [args...] —
+# the gsa twins of run_pty: the engine under a PTY with scripted stdin
+# (proves a listing never reads its input; nothing here asserts colours or
+# rendering). The ROOT SEAM is rr2_engine_argv — run_pty_gsa models
+# `sudo gsa` (the real-build sections: a mutation the engine refuses for a
+# plain user, contract §B.10) exactly like run_engine; run_pty_gsa_user is
+# the unprivileged twin (the dry-run/read shapes run_engine_user models)
+# and the ONLY shape where a typed EOF (^D) reaches the engine — sudo's
+# PTY pump swallows the EOF condition (measured: the inner side sees a NUL
+# and blocks). script(1) -c hands its command string to $SHELL (fish on
+# this host) and the argv carries %q-quoted values, so the invocation is
+# staged through a small bash runner and the string script parses stays
+# plain argv.
+_run_pty_gsa_mode() {
+    local mode=$1 input="$2" out="$3"
+    shift 3
+    local -a argv=()
+    rr2_engine_argv "$mode" "$fixture" argv "$@"
+    local runner="$fixture/.rr2-pty-runner.sh"
+    {
+        printf '#!/bin/bash\n'
+        printf 'cd %q || exit 127\n' "$fixture"
+        printf 'exec'
+        printf ' %q' "${argv[@]}"
+        printf '\n'
+    } >"$runner"
     set +e
     printf '%b' "$input" | \
         timeout 60 env TERM=dumb \
-            script -qec "cd '$fixture' && PATH=\"$fixture/bin:\$PATH\" '$gsa_bin' $*" /dev/null >"$out" 2>&1
+            script -qec "/bin/bash $(printf %q "$runner")" /dev/null >"$out" 2>&1
     RC=$?
     set -e
     return "$RC"
+}
+
+run_pty_gsa() {
+    _run_pty_gsa_mode sudo "$@"
+}
+
+run_pty_gsa_user() {
+    _run_pty_gsa_mode user "$@"
 }
 
 # ── gsa 1. Loader: a missing topology file is an error; the roster is six
@@ -559,128 +531,160 @@ done <"$fixture/o7.unbuilt"
 [ "$(rr2_remaining <"$fixture/o7" | tr '\n' ' ' | sed 's/ $//')" = "$(rr2_continuation remaining <"$fixture/o7")" ] \
     || fail "continuation remaining disagrees with the rows-derived set:" "$fixture/o7"
 
-# ── fish half — KEPT byte-unchanged: the PTY multi-select prompt ───────────
-# These sections drive `fish build-all.fish` through run_quiet/run_pty because
-# the behaviour they pin lives in the §C.4 prompt, which the engine does not
-# implement yet (header engine-gap note). Their `format: 1` rr_scalar/rr_row
-# pins (old :293-302, :349, :366) come along until the prompt lands. Do not
-# flip these piecemeal: when gsa grows a prompt, re-contract the whole section.
+# ── 5-12. PTY multi-select prompt (§C.4) — engine-driven ────────────────────
+# The prompt landed in crates/gsa-cli (prompt.rs + select.rs's
+# build_selection_for_build), so these sections drive `gsa` through
+# run_pty_gsa. Every capture is CR-stripped before parsing (script(1)'s PTY
+# slave maps \n to \r\n); expectations derive from `gsa -Qt` (rule 25(j)).
 
 # ── 5. PTY + Enter: menu renders, whole group builds ────────────────────────
-run_pty '\n' "$fixture/o5" "$fixture/state-5" -n -g app \
-    || fail "PTY -n -g app with plain Enter failed" "$fixture/o5"
+run_pty_gsa '\n' "$fixture/o5" -B --state-dir "$fixture/state-5" --dry-run @app \
+    || fail "PTY -B --dry-run @app with plain Enter failed" "$fixture/o5"
 grep -q 'choose what to build' "$fixture/o5" \
     || fail "prompt menu did not render on a PTY" "$fixture/o5"
 grep -qF '[ ]' "$fixture/o5" \
     || fail "prompt menu rendered without unchecked entries" "$fixture/o5"
-seq5=$(order_seq "$fixture/o5")
-[ "$seq5" = "$expected3" ] \
-    || fail "Enter should build the whole group, got [$(echo "$seq5" | tr '\n' ' ')]" "$fixture/o5"
-# Enter drops nothing, so the printed anchors are the plain 1..3 of the
-# unfiltered closure — identical to the -l -g app listing from scenario 4.
-pairs5=$(order_pairs "$fixture/o5")
-[ "$pairs5" = "$(listed_pairs "$fixture/o4")" ] \
-    || fail "unfiltered prompted anchors diverge from the -l listing: got [$(echo "$pairs5" | tr '\n' '|')], listing [$(listed_pairs "$fixture/o4" | tr '\n' '|')]" "$fixture/o5"
+sed 's/\r$//' "$fixture/o5" >"$fixture/o5.clean"
+order5=$(rr2_scalar order <"$fixture/o5.clean")
+[ "$(sorted_ids "$order5")" = "$(cat "$fixture/app.expected")" ] \
+    || fail "Enter should build the whole group, got [$(echo $order5)]" "$fixture/o5"
+# Enter drops nothing, so the plan rows are the plain 1..3 anchors of the
+# unfiltered closure — identical to the -Sl @app listing from scenario 4.
+pairs5=$(order_pairs "$fixture/o5.clean")
+[ "$pairs5" = "$(listing_pairs <"$fixture/o4")" ] \
+    || fail "unfiltered prompted anchors diverge from the -Sl listing: got [$(echo "$pairs5" | tr '\n' '|')], listing [$(listing_pairs <"$fixture/o4" | tr '\n' '|')]" "$fixture/o5"
+
+# ONLY an @app selection prompts (§C.4): a positional app member builds
+# without a menu — the positive twin is the menu grep in the §5 Enter run.
+run_pty_gsa '' "$fixture/o5n" -B --state-dir "$fixture/state-5n" --dry-run app2 \
+    || fail "PTY -B --dry-run app2 failed" "$fixture/o5n"
+grep -q 'choose what to build' "$fixture/o5n" \
+    && fail "a positional app member rendered the @app prompt" "$fixture/o5n"
 
 # ── 6. PTY + toggle: only the checked subset — plus its consumers ──────────
-# Row 2 checks app2; app3 consumes app2, so consumer expansion carries it
-# along (app2 first). The menu still renders only the group's own rows.
-run_pty '2\n\n' "$fixture/o6" "$fixture/state-6" -n -g app \
-    || fail "PTY -n -g app with toggle input failed" "$fixture/o6"
-grep -qF '[x]' "$fixture/o6" \
-    || fail "toggled menu entry did not render as checked" "$fixture/o6"
-seq6=$(order_seq "$fixture/o6")
-expected6=$(printf 'app2\napp3')
-[ "$seq6" = "$expected6" ] \
-    || fail "checked-only preview wrong: got [$(echo "$seq6" | tr '\n' ' ')], want [app2 app3]" "$fixture/o6"
-# The printed anchors are the UNFILTERED closure positions: app2/app3 sit at
-# 2/3 in the whole -g app selection (the -l listing from scenario 4), even
-# though the prompt dropped app1 — the gap at 1 is intended and honest (owner
+# Row 2 is app2's row (build order); app3 consumes app2, so consumer expansion
+# carries it along. The menu renders only the group's own rows.
+echo app2 >"$fixture/o6.seeds"
+expanded_set "$qt" "$fixture/o6.seeds" >"$fixture/o6.expected"
+run_pty_gsa '2\n\n' "$fixture/o6p" -B --state-dir "$fixture/state-6p" --dry-run @app \
+    || fail "PTY -B --dry-run @app with toggle input failed" "$fixture/o6p"
+grep -qF '[x]' "$fixture/o6p" \
+    || fail "toggled menu entry did not render as checked" "$fixture/o6p"
+sed 's/\r$//' "$fixture/o6p" >"$fixture/o6p.clean"
+order6=$(rr2_scalar order <"$fixture/o6p.clean")
+[ "$(sorted_ids "$order6")" = "$(cat "$fixture/o6.expected")" ] \
+    || fail "checked-only selection wrong: got [$(echo $order6)], want [$(tr '\n' ' ' <"$fixture/o6.expected")]" "$fixture/o6p"
+# The plan anchors are the UNFILTERED closure positions: app2/app3 sit at 2/3
+# in the whole @app selection (the -Sl listing from scenario 4), even though
+# the prompt dropped app1 — the gap at 1 is intended and honest (owner
 # directive 2026-10-08: anchors must not renumber after prompt filtering).
-pairs6=$(order_pairs "$fixture/o6")
-expected6_pairs=$(printf '2 app2\n3 app3')
+pairs6=$(order_pairs "$fixture/o6p.clean")
+expected6_pairs=$(listing_pairs <"$fixture/o4" | grep -E ' (app2|app3)$')
 [ "$pairs6" = "$expected6_pairs" ] \
-    || fail "toggled preview anchors wrong: got [$(echo "$pairs6" | tr '\n' '|')], want [2 app2|3 app3] (unfiltered positions, gaps intended)" "$fixture/o6"
-# Cross-check against the -l -g app listing: the same package carries the
-# same index in a prompted run and in the listing, whatever was toggled.
+    || fail "toggled preview anchors wrong: got [$(echo "$pairs6" | tr '\n' '|')], want [$(echo "$expected6_pairs" | tr '\n' '|')] (unfiltered positions, gaps intended)" "$fixture/o6p"
 while read -r num name; do
-    lnum=$(listed_pairs "$fixture/o4" | awk -v n="$name" '$2 == n { print $1 }')
+    lnum=$(listing_pairs <"$fixture/o4" | awk -v n="$name" '$2 == n { print $1 }')
     [ "$lnum" = "$num" ] \
-        || fail "anchor drift: $name printed as $num in the prompted run but $lnum in the -l -g app listing" "$fixture/o6"
+        || fail "anchor drift: $name printed as $num in the prompted run but $lnum in the -Sl @app listing" "$fixture/o6p"
 done <<<"$pairs6"
 
-# ── 7. PTY + q: abort with non-zero ─────────────────────────────────────────
-if run_pty 'q\n' "$fixture/o7" "$fixture/state-7" -n -g app; then
-    fail "-n -g app accepted 'q' (abort must exit non-zero)" "$fixture/o7"
-fi
-grep -q 'app selection aborted' "$fixture/o7" \
-    || fail "abort path did not report the abort" "$fixture/o7"
+# The expansion note counts the POST-PROMPT closure (§C.4: the prompt
+# filters before the ordinary pipeline runs) — the checked subset expands to
+# its consumers only, never to the unfiltered group's leftovers.
+note6=$(grep -o 'consumer expansion added [0-9]* of the [0-9]* selected packages' "$fixture/o6p.clean" | head -1)
+expected6_note="consumer expansion added $(($(wc -l <"$fixture/o6.expected") - $(wc -l <"$fixture/o6.seeds"))) of the $(wc -l <"$fixture/o6.expected") selected packages"
+[ "$note6" = "$expected6_note" ] \
+    || fail "expansion note does not count the post-prompt closure: got [$note6], want [$expected6_note]" "$fixture/o6p"
 
-# ── 8. Combined -g app -g git: only the app portion is filtered ─────────────
-run_pty '1\n\n' "$fixture/o8" "$fixture/state-8" -n -g app -g git \
-    || fail "PTY -n -g app -g git failed" "$fixture/o8"
-seq8=$(order_seq "$fixture/o8")
-expected8=$(printf 'app1\ngitp1')
-[ "$seq8" = "$expected8" ] \
-    || fail "combined selection wrong: got [$(echo "$seq8" | tr '\n' ' ')], want [app1 gitp1]" "$fixture/o8"
-# The combined -g app -g git closure is the anchor space here: app1/gitp1
-# keep their unfiltered positions 1/3, with a gap where the prompt dropped
-# the app2/app3 rows — pinned against the matching -l listing.
-run_quiet "$fixture/o8l" -l -g app -g git \
-    || fail "-l -g app -g git failed" "$fixture/o8l"
-pairs8=$(order_pairs "$fixture/o8")
-expected8_pairs=$(printf '1 app1\n3 gitp1')
+# ── 7. PTY + q: abort with non-zero ─────────────────────────────────────────
+if run_pty_gsa 'q\n' "$fixture/o7p" -B --state-dir "$fixture/state-7p" --dry-run @app; then
+    fail "-B --dry-run @app accepted 'q' (abort must exit non-zero)" "$fixture/o7p"
+fi
+grep -q 'app selection aborted' "$fixture/o7p" \
+    || fail "abort path did not report the abort" "$fixture/o7p"
+# The abort is exactly ONE line (fish parity: the reason rides on it) — the
+# prompt and the caller must never both print it.
+[ "$(grep -c 'app selection aborted' "$fixture/o7p")" = 1 ] \
+    || fail "'q' abort printed more than one abort line" "$fixture/o7p"
+# EOF (a literal EOT on the PTY — a PTY slave has no hangup) aborts the
+# same way: non-zero, one line, reason attached. The unprivileged twin is
+# required here: sudo's PTY pump swallows the EOF condition (run_pty_gsa
+# header).
+if run_pty_gsa_user '\004' "$fixture/o7c" -B --state-dir "$fixture/state-7c" --dry-run @app; then
+    fail "-B --dry-run @app accepted input EOF (abort must exit non-zero)" "$fixture/o7c"
+fi
+grep -q 'app selection aborted (input closed)' "$fixture/o7c" \
+    || fail "EOF abort did not name its reason" "$fixture/o7c"
+[ "$(grep -c 'app selection aborted' "$fixture/o7c")" = 1 ] \
+    || fail "EOF abort printed more than one abort line" "$fixture/o7c"
+
+# ── 8. Combined @app @git: only the app portion is filtered ─────────────────
+{ echo app1; group_members "$qt" git; } >"$fixture/o8.seeds"
+expanded_set "$qt" "$fixture/o8.seeds" >"$fixture/o8.expected"
+run_pty_gsa '1\n\n' "$fixture/o8p" -B --state-dir "$fixture/state-8p" --dry-run @app @git \
+    || fail "PTY -B --dry-run @app @git with toggle input failed" "$fixture/o8p"
+sed 's/\r$//' "$fixture/o8p" >"$fixture/o8p.clean"
+order8=$(rr2_scalar order <"$fixture/o8p.clean")
+[ "$(sorted_ids "$order8")" = "$(cat "$fixture/o8.expected")" ] \
+    || fail "combined selection wrong: got [$(echo $order8)], want [$(tr '\n' ' ' <"$fixture/o8.expected")]" "$fixture/o8p"
+# The combined -Sl closure is the anchor space: checked rows keep their
+# unfiltered positions, with gaps where the prompt dropped rows — pinned
+# against the matching listing.
+run_engine "$fixture" -Sl @app @git
+printf '%s\n' "$FIXTURE_OUTPUT" >"$fixture/o8l"
+pairs8=$(order_pairs "$fixture/o8p.clean")
+expected8_pairs=$(listing_pairs <"$fixture/o8l" | awk -v names="$order8" '
+    BEGIN { n = split(names, a, " "); for (i = 1; i <= n; i++) keep[a[i]] = 1 }
+    keep[$2] { print $1, $2 }')
 [ "$pairs8" = "$expected8_pairs" ] \
-    || fail "combined-run anchors wrong: got [$(echo "$pairs8" | tr '\n' '|')], want [1 app1|3 gitp1] (unfiltered positions in the app+git closure)" "$fixture/o8"
+    || fail "combined-run anchors wrong: got [$(echo "$pairs8" | tr '\n' '|')], want [$(echo "$expected8_pairs" | tr '\n' '|')] (unfiltered positions in the @app @git closure)" "$fixture/o8p"
 while read -r num name; do
-    lnum=$(listed_pairs "$fixture/o8l" | awk -v n="$name" '$2 == n { print $1 }')
+    lnum=$(listing_pairs <"$fixture/o8l" | awk -v n="$name" '$2 == n { print $1 }')
     [ "$lnum" = "$num" ] \
-        || fail "anchor drift in combined selection: $name printed as $num in the prompted run but $lnum in the -l -g app -g git listing" "$fixture/o8"
+        || fail "anchor drift in combined selection: $name printed as $num in the prompted run but $lnum in the -Sl @app @git listing" "$fixture/o8p"
 done <<<"$pairs8"
 
 # ── 9. Real build prompts too, and builds the checked subset + consumers ────
-run_pty '2\n\n' "$fixture/o9" "$fixture/state-9" \
-    -g app --allow-broken-rustc --no-sync \
-    || fail "PTY build -g app with toggle input failed" "$fixture/o9"
+GSA_FAKE_SPAWN_LOG="$fixture/o9.spawn" PATH="$fixture/bin:$PATH" \
+    run_pty_gsa '2\n\n' "$fixture/o9" -B --state-dir "$fixture/state-9" @app \
+    || fail "PTY build @app with toggle input failed" "$fixture/o9"
 grep -q 'choose what to build' "$fixture/o9" \
     || fail "real build did not prompt" "$fixture/o9"
-# The real build emits a run record (PTY capture — the parsers strip the
-# slave's \r): the prompt's answer decided the SELECTION, and the record says
-# what that selection was and what happened to it. Checked app2 expands to
-# app2 + its consumer app3 (app3's edge names app2).
-[ "$(rr_scalar order <"$fixture/o9")" = "app2 app3" ] \
-    || fail "recorded selection is not exactly app2 app3 (checked app2 plus its consumer app3): $(rr_scalar order <"$fixture/o9")" "$fixture/o9"
-[ "$(rr_scalar outcome <"$fixture/o9")" = "success" ] \
-    || fail "recorded outcome is not success: $(rr_scalar outcome <"$fixture/o9")" "$fixture/o9"
-[ "$(rr_row app2 status <"$fixture/o9")" = "succeeded" ] \
-    || fail "app2 row is not succeeded: $(rr_row app2 <"$fixture/o9")" "$fixture/o9"
-[ "$(rr_row app2 rc <"$fixture/o9")" = "0" ] \
-    || fail "app2 row rc is not 0: $(rr_row app2 <"$fixture/o9")" "$fixture/o9"
-[ "$(rr_row app2 reason <"$fixture/o9")" = "ok" ] \
-    || fail "app2 row reason is not ok: $(rr_row app2 <"$fixture/o9")" "$fixture/o9"
-[ "$(rr_row app3 status <"$fixture/o9")" = "succeeded" ] \
-    || fail "app3 row is not succeeded: $(rr_row app3 <"$fixture/o9")" "$fixture/o9"
-[ -f "$fixture/state-9/logs/app2.log" ] \
-    || fail "checked package app2 was not built" "$fixture/o9"
-# app3 rides in as app2's CONSUMER; everything else — including extdep, which
-# is app2's UPSTREAM — must stay unbuilt.
-[ -f "$fixture/state-9/logs/app3.log" ] \
-    || fail "consumer app3 was not built alongside checked app2" "$fixture/o9"
-for unbuilt in app1 extdep gitp1; do
-    [ -f "$fixture/state-9/logs/$unbuilt.log" ] \
-        && fail "unselected package $unbuilt was built" "$fixture/o9"
+sed 's/\r$//' "$fixture/o9" >"$fixture/o9.clean"
+# Checked app2 expands to app2 + its consumer app3 (app3's edge names app2).
+[ "$(sorted_ids "$(rr2_scalar order <"$fixture/o9.clean")")" = "$(cat "$fixture/o6.expected")" ] \
+    || fail "recorded selection is not the checked subset plus consumers: $(rr2_scalar order <"$fixture/o9.clean")" "$fixture/o9"
+[ "$(rr2_scalar outcome <"$fixture/o9.clean")" = "success" ] \
+    || fail "recorded outcome is not success: $(rr2_scalar outcome <"$fixture/o9.clean")" "$fixture/o9"
+for pkg in $order6; do
+    [ "$(rr2_outcome "$pkg" status <"$fixture/o9.clean")" = "succeeded" ] \
+        || fail "$pkg row is not succeeded" "$fixture/o9"
+    [ "$(rr2_outcome "$pkg" rc <"$fixture/o9.clean")" = "0" ] \
+        || fail "$pkg row rc is not 0" "$fixture/o9"
+    [ "$(rr2_outcome "$pkg" reason <"$fixture/o9.clean")" = "ok" ] \
+        || fail "$pkg row reason is not ok" "$fixture/o9"
+    grep -qx "SPAWN $pkg" "$fixture/o9.spawn" \
+        || fail "checked package $pkg was not built" "$fixture/o9"
 done
+# Everything else — including extdep, app2's UPSTREAM — stays unbuilt.
+comm -23 <(qt_ids "$qt" | sort) "$fixture/o6.expected" >"$fixture/o9.unbuilt"
+while read -r pkg; do
+    grep -q "^SPAWN $pkg$" "$fixture/o9.spawn" \
+        && fail "unselected package $pkg was built" "$fixture/o9.spawn"
+done <"$fixture/o9.unbuilt"
 
 # ── 10. app-cluster: ONE shared row, and toggling it selects every member ───
-# Two app members share app-cluster=fcitx5 (the real tree's fcitx-family shape,
-# at two members); app1 stays an untagged plain member. Rendering pins are the
-# scenario's row counts and labels, never a full-screen snapshot. The scenario
-# re-tags the records and restores them once the cluster cases are done.
+# Two app members share app-cluster=fcitx5 (the real tree's fcitx-family
+# shape); app1 stays an untagged plain member. Rendering pins are row counts
+# and labels, never a full-screen snapshot. The records are re-tagged here
+# and restored once the cluster cases are done.
 set_topology_record "$fixture" app2 app 'extdep' 'app-cluster=fcitx5'
 set_topology_record "$fixture" app3 app 'app2' 'app-cluster=fcitx5'
+echo app2 >"$fixture/o10.seeds"
+expanded_set "$qt" "$fixture/o10.seeds" >"$fixture/o10.expected"
 
-run_pty '2\n\n' "$fixture/o10" "$fixture/state-10" \
-    -g app --allow-broken-rustc --no-sync \
+GSA_FAKE_SPAWN_LOG="$fixture/o10.spawn" PATH="$fixture/bin:$PATH" \
+    run_pty_gsa '2\n\n' "$fixture/o10" -B --state-dir "$fixture/state-10" @app \
     || fail "PTY cluster-toggle run failed" "$fixture/o10"
 # Exactly two rows: one plain, one cluster — and no per-member row for a
 # cluster member anywhere in the first render.
@@ -702,44 +706,64 @@ grep -q '1 checked' "$fixture/o10" \
     || fail "checked cluster row did not report 1 checked row" "$fixture/o10"
 grep -q '2 checked' "$fixture/o10" \
     && fail "the N-checked notice counted members, not rows" "$fixture/o10"
-# But the RUN carries every member (topo order: app2 before its dependent
+# But the RUN carries every member (build order: app2 before its dependent
 # app3) and never the plain member.
-[ "$(rr_scalar order <"$fixture/o10")" = "app2 app3" ] \
-    || fail "cluster row did not select both members: $(rr_scalar order <"$fixture/o10")" "$fixture/o10"
-[ "$(rr_scalar outcome <"$fixture/o10")" = "success" ] \
-    || fail "cluster-toggle run outcome is not success: $(rr_scalar outcome <"$fixture/o10")" "$fixture/o10"
-for member in app2 app3; do
-    [ "$(rr_row $member status <"$fixture/o10")" = "succeeded" ] \
-        || fail "$member row is not succeeded: $(rr_row $member <"$fixture/o10")" "$fixture/o10"
-    [ -f "$fixture/state-10/logs/$member.log" ] \
+sed 's/\r$//' "$fixture/o10" >"$fixture/o10.clean"
+[ "$(sorted_ids "$(rr2_scalar order <"$fixture/o10.clean")")" = "$(cat "$fixture/o10.expected")" ] \
+    || fail "cluster row did not select exactly its members: got [$(rr2_scalar order <"$fixture/o10.clean")], want [$(tr '\n' ' ' <"$fixture/o10.expected")]" "$fixture/o10"
+assert_topological "$qt" "$(rr2_scalar order <"$fixture/o10.clean")"
+[ "$(rr2_scalar outcome <"$fixture/o10.clean")" = "success" ] \
+    || fail "cluster-toggle run outcome is not success" "$fixture/o10"
+while read -r member; do
+    [ "$(rr2_outcome "$member" status <"$fixture/o10.clean")" = "succeeded" ] \
+        || fail "$member row is not succeeded" "$fixture/o10"
+    grep -qx "SPAWN $member" "$fixture/o10.spawn" \
         || fail "cluster member $member was not built" "$fixture/o10"
-done
-[ -f "$fixture/state-10/logs/app1.log" ] \
-    && fail "plain member app1 was built by the cluster row" "$fixture/o10"
+done <"$fixture/o10.expected"
+# The derived complement — the plain member included — stays unbuilt.
+comm -23 <(qt_ids "$qt" | sort) "$fixture/o10.expected" >"$fixture/o10.unbuilt"
+while read -r pkg; do
+    grep -q "^SPAWN $pkg$" "$fixture/o10.spawn" \
+        && fail "unselected package $pkg was built by the cluster row" "$fixture/o10"
+done <"$fixture/o10.unbuilt"
 
 # ── 11. The plain member's row toggles independently of the cluster ─────────
-run_pty '1\n\n' "$fixture/o11" "$fixture/state-11" \
-    -g app --allow-broken-rustc --no-sync \
+# Row 1 is the plain member's row (scenario input); its selection derives
+# from the topology like every other expectation.
+echo app1 >"$fixture/o11.seeds"
+expanded_set "$qt" "$fixture/o11.seeds" >"$fixture/o11.expected"
+GSA_FAKE_SPAWN_LOG="$fixture/o11.spawn" PATH="$fixture/bin:$PATH" \
+    run_pty_gsa '1\n\n' "$fixture/o11" -B --state-dir "$fixture/state-11" @app \
     || fail "PTY plain-member toggle run failed" "$fixture/o11"
-[ "$(rr_scalar order <"$fixture/o11")" = "app1" ] \
-    || fail "plain row did not select exactly app1: $(rr_scalar order <"$fixture/o11")" "$fixture/o11"
-[ "$(rr_row app1 status <"$fixture/o11")" = "succeeded" ] \
-    || fail "app1 row is not succeeded: $(rr_row app1 <"$fixture/o11")" "$fixture/o11"
-for member in app2 app3; do
-    [ -f "$fixture/state-11/logs/$member.log" ] \
-        && fail "cluster member $member was dragged in by the plain row" "$fixture/o11"
-done
+sed 's/\r$//' "$fixture/o11" >"$fixture/o11.clean"
+[ "$(sorted_ids "$(rr2_scalar order <"$fixture/o11.clean")")" = "$(cat "$fixture/o11.expected")" ] \
+    || fail "plain row did not select exactly its own member: got [$(rr2_scalar order <"$fixture/o11.clean")], want [$(tr '\n' ' ' <"$fixture/o11.expected")]" "$fixture/o11"
+assert_topological "$qt" "$(rr2_scalar order <"$fixture/o11.clean")"
+while read -r pkg; do
+    [ "$(rr2_outcome "$pkg" status <"$fixture/o11.clean")" = "succeeded" ] \
+        || fail "$pkg row is not succeeded" "$fixture/o11"
+done <"$fixture/o11.expected"
+# The derived complement — the cluster's members included — stays unbuilt.
+comm -23 <(qt_ids "$qt" | sort) "$fixture/o11.expected" >"$fixture/o11.unbuilt"
+while read -r pkg; do
+    grep -q "^SPAWN $pkg$" "$fixture/o11.spawn" \
+        && fail "unselected package $pkg was dragged in by the plain row" "$fixture/o11"
+done <"$fixture/o11.unbuilt"
 
 # ── 12. All-unchecked + Enter still builds the whole group, cluster included ─
-run_pty '\n' "$fixture/o12" "$fixture/state-12" \
-    -g app --allow-broken-rustc --no-sync \
+GSA_FAKE_SPAWN_LOG="$fixture/o12.spawn" PATH="$fixture/bin:$PATH" \
+    run_pty_gsa '\n' "$fixture/o12" -B --state-dir "$fixture/state-12" @app \
     || fail "PTY whole-group cluster run failed" "$fixture/o12"
-[ "$(rr_scalar order <"$fixture/o12")" = "app1 app2 app3" ] \
-    || fail "Enter did not build the whole group: $(rr_scalar order <"$fixture/o12")" "$fixture/o12"
-for pkg in app1 app2 app3; do
-    [ "$(rr_row $pkg status <"$fixture/o12")" = "succeeded" ] \
-        || fail "$pkg row is not succeeded: $(rr_row $pkg <"$fixture/o12")" "$fixture/o12"
-done
+sed 's/\r$//' "$fixture/o12" >"$fixture/o12.clean"
+[ "$(sorted_ids "$(rr2_scalar order <"$fixture/o12.clean")")" = "$(cat "$fixture/app.expected")" ] \
+    || fail "Enter did not build the whole group: got [$(rr2_scalar order <"$fixture/o12.clean")], want [$(tr '\n' ' ' <"$fixture/app.expected")]" "$fixture/o12"
+assert_topological "$qt" "$(rr2_scalar order <"$fixture/o12.clean")"
+while read -r pkg; do
+    [ "$(rr2_outcome "$pkg" status <"$fixture/o12.clean")" = "succeeded" ] \
+        || fail "$pkg row is not succeeded" "$fixture/o12"
+    grep -qx "SPAWN $pkg" "$fixture/o12.spawn" \
+        || fail "$pkg was not built" "$fixture/o12"
+done <"$fixture/app.expected"
 
 # Restore the untagged records the cluster scenario started from.
 set_topology_record "$fixture" app2 app 'extdep'

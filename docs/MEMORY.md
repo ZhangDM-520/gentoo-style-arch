@@ -22,6 +22,10 @@
    that `2>/dev/null` does NOT suppress — use `find -name`. The host's login
    shell is fish (check `fish --version`), so this applies to anything routed through `$SHELL`
    (commands handed to the user, `!cmd`, pasted snippets), not just to scripts.
+   `script(1) -qec` is such a boundary — it parses its command string with
+   `$SHELL`, so bash-only quoting (`printf %q`, `$'…'`) breaks there; stage the
+   invocation through a script FILE the boundary shell only has to name
+   (example: tests/app-group.sh's `run_pty_gsa`).
    Tool-call shells here are bash (`$0` = `/bin/bash`), so bash syntax is fine
    *inside* a tool call — the hazard is crossing a shell boundary.
    CachyOS additionally ships aliases that change what a name does

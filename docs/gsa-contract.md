@@ -558,14 +558,21 @@ the union of multiple targets/groups is deduplicated before sorting.
 
 An `@app` build or `--dry-run` on a TTY prompts to multi-select before the
 normal pipeline runs: all unchecked + Enter = the whole group; any checked =
-only those; `q` aborts with a usage-class exit. Non-TTY runs and listings take
-the whole group silently. Records carrying the same `app-cluster=<name>` tag
-present as ONE row (toggling checks the whole cluster; "N checked" counts
+only those; `q` aborts with a usage-class exit. Only the `@app` GROUP's
+contribution prompts — a positional app member (or an app member seeded
+through any other target) is never prompt-filtered (fish-era `test "$g" =
+app` rule), and an app member named both ways survives an unchecked row. An
+abort is exactly ONE error line carrying its reason (`app selection aborted`,
+or `app selection aborted (input closed)` on EOF). Non-TTY runs and listings
+take the whole group silently. Records carrying the same `app-cluster=<name>`
+tag present as ONE row (toggling checks the whole cluster; "N checked" counts
 rows). The prompt is a FILTER in front of the normal pipeline: whatever it
 returns becomes the group's contribution to the selection, and every later step
-(expansion, sort, ranges, lanes) is the ordinary path. Cluster presentation is
-presentation only — the packages stay separate in listings, the run record,
-ranges, and lanes.
+(expansion, sort, ranges, lanes) is the ordinary path. Filtering never
+renumbers anchors: rows keep their positions in the unfiltered closure, a
+filtered run prints gaps, and ranges address those positions (owner directive
+2026-10-08). Cluster presentation is presentation only — the packages stay
+separate in listings, the run record, ranges, and lanes.
 
 ### C.5 Build order
 

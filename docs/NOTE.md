@@ -17742,3 +17742,57 @@ the disposition call. BUILD HELD per owner.
   provides-versioning` clean; fixture battery **PASS 73/73** (74 test files
   minus the runner). Installed packages left in place (tree-level retirement
   only).
+
+### 2026-10-29 — @app group selection prompt: fish-era port + PTY root seam
+
+- **WHAT** (owner: "our @app group selection prompt is missing? check our
+  fish-era implementation"): ported the fish-era `prompt_app_selection`
+  (tests/assets/build-all.fish §app group multi-select prompt) into the
+  engine. New `crates/gsa-cli/src/prompt.rs` (contract §C.4 TTY multi-select:
+  all-unchecked default = build EVERY member, `N`/`a`/`c`/Enter/`q` cycle,
+  `app-cluster=<name>` members share ONE row labelled `name [member ids]`,
+  the "N checked" notice counts ROWS, menu+notices on the error stream);
+  `select.rs` grows `build_selection_for_build` (prompt engages only when
+  stdin IS a terminal — the fish-era `test -t 0` rule, so a piped run can
+  never hang; non-app seeds pass through untouched; the anchor space is the
+  UNFILTERED closure and a filtered run prints gaps — owner directive
+  2026-10-08, anchors never renumber); `build.rs` routes the build and
+  plan-only paths through it (`build_selection` stays silent for listings —
+  a listing never prompts). `tests/app-group.sh` flips its fish-era sections
+  5-12 to engine-driven PTY sections via a new `run_pty_gsa`, pins kept as
+  meaning (toggle semantics, cluster row selects every member, all-unchecked
+  + Enter = whole group, `q` aborts non-zero).
+- **ROOT SEAM FIX** (this window): the first flip drove the bare binary
+  unprivileged, so the real-build PTY sections died on the engine's §B.10
+  root refusal (`gsa: error: you cannot perform this operation unless you are
+  root`) while the prompt itself rendered correctly. The PTY twin must model
+  `sudo gsa` exactly like `run_engine`: extracted the shared seam as
+  `rr2_engine_argv` in tests/lib/rr-v2.bash (host's REAL `/usr/bin/sudo -n` +
+  `rr2_env_forward` whitelist across sudo's env_reset + the §J.3/W4/store
+  fixture-traffic guards) and both `rr2_invoke` and `run_pty_gsa` now build
+  their argv there — one home, no drift. The PTY invocation stages through a
+  generated bash runner because `script(1) -qec` parses its command string
+  with `$SHELL` (fish here) where bash's `printf %q` quoting is not valid.
+- **VERIFY**: red captured first (section 9 root refusal above; prompt menu +
+  toggle rendering already correct). After the seam: `tests/app-group.sh`
+  PASS end-to-end; full battery `tests/run-all.sh` **PASS 73/73** (the delta
+  from 77 = the 4 fixtures retired with the misc/vscodium commit e0e1d4e);
+  `cargo test --offline -p gsa-cli` 79+2+1 passed, 0 failed.
+- **REVIEW ROUND** (owner-ordered two-axis review before landing): five
+  findings fixed in the same change — (1) HIGH spec: the prompt engaged for
+  ANY app-member seed; now only an `@app` GROUP contribution prompts and is
+  filtered (fish-era `test "$g" = app`; a positional app member survives an
+  unchecked row) + fixture twin; (2) spec: the §B.10 gate now precedes the
+  prompt (usage preflight → gate → prompt) so an unprivileged run refuses
+  before consuming input; (3) spec: abort is exactly ONE line with its
+  reason (`app selection aborted`, `(input closed)` on EOF — new §7 pin;
+  the PTY EOF twin needs the unprivileged shape: sudo's PTY pump swallows
+  ^D-EOF, measured); (4) bug: the expansion note mixed the unfiltered
+  closure size with post-prompt seeds ("added 2 of 3" for a 1-of-2 truth) —
+  Selection.expansion_added now carries the post-prompt measure, pinned
+  derived in §6; (5) §L.3/§L.5 hard violations: §10-12 order pins literal →
+  derived (+ assert_topological), and prompt prose is now pinned in exactly
+  one place (the fixture's PTY sections; prompt.rs unit tests keep outcomes
+  plus the one uncovered notice). Contract §C.4 records the @app-only gate,
+  the one-line abort and anchor stability normatively. Not addressed
+  (judgement-call smells): the repeated CR-strip one-liners in the fixture.

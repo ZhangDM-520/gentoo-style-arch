@@ -493,39 +493,9 @@ rr2_invoke() {
         FIXTURE_RC=$?
         ;;
     gsa)
-        # §J.3 fail-safe state isolation: a fixture run must NEVER reach the
-        # live /var/lib/gsa (the default state root — under the W5 root model
-        # an unoverridden run really writes it; a battery run did, see
-        # docs/NOTE.md). When the caller gives neither GSA_STATE_DIR nor
-        # --state-dir, route state to a scratch root beside the workspace —
-        # inside the fixture tree, removed with the fixture.
-        local -a guard=()
-        if [[ -z ${GSA_STATE_DIR:-} ]] && ! rr2_has_state_root "$@"; then
-            guard=(GSA_STATE_DIR="$ws/../.rr2-state")
-        fi
-        # W4 build-cache isolation: the engine creates its build cache at the
-        # resolved root (default: the build user's ~/.cache/gsa). A fixture
-        # run must never create real home directories — route the cache into
-        # the fixture tree when the caller gave no GSA_BUILD_DIR.
-        if [[ -z ${GSA_BUILD_DIR:-} ]]; then
-            guard+=(GSA_BUILD_DIR="$ws/../.rr2-build")
-        fi
-        # Recipe-store isolation (design B, 2026-10-17): the store default is
-        # the build user's ~/.local/share/gsa/recipes. A fixture run must
-        # never read or write the live store — an unguarded negative test
-        # (missing config/topology.conf) resolved the real migrated store and
-        # passed against it. When the caller gives no GSA_RECIPES_DIR, route
-        # it beside the workspace, removed with the fixture.
-        if [[ -z ${GSA_RECIPES_DIR:-} ]]; then
-            guard+=(GSA_RECIPES_DIR="$ws/../.rr2-recipes")
-        fi
-        if [[ $mode == sudo ]]; then
-            local -a fwd=()
-            rr2_env_forward fwd
-            FIXTURE_OUTPUT=$(cd "$ws" && /usr/bin/sudo -n env "${fwd[@]}" "${guard[@]}" "${GSA_TEST_GSA_BIN:-gsa}" "$@" 2>&1)
-        else
-            FIXTURE_OUTPUT=$(cd "$ws" && env "${guard[@]}" "${GSA_TEST_GSA_BIN:-gsa}" "$@" 2>&1)
-        fi
+        local -a argv=()
+        rr2_engine_argv "$mode" "$ws" argv "$@"
+        FIXTURE_OUTPUT=$(cd "$ws" && "${argv[@]}" 2>&1)
         FIXTURE_RC=$?
         ;;
     *)
@@ -536,6 +506,65 @@ rr2_invoke() {
     esac
     ((had_errexit)) && set -e
     return 0
+}
+
+# rr2_engine_argv sudo|user WORKSPACE OUTARRNAME ARG... — the ROOT SEAM,
+# shared by every engine invocation a fixture makes (rr2_invoke's captured
+# runs and any PTY twin, e.g. tests/app-group.sh's run_pty_gsa): one place
+# that decides privilege and environment so no caller can drift from
+# `sudo gsa`. Appends the complete engine argv to OUTARRNAME.
+#
+#   sudo — the call a real user makes: the host's REAL /usr/bin/sudo -n
+#          (absolute path: PATH may carry a stub sudo that the engine's own
+#          `sudo -n` calls must still find, so only the wrapper here is
+#          real) with rr2_env_forward's whitelist across sudo's env_reset,
+#          because a mutation needs root and the engine refuses anything
+#          less (contract §B.10).
+#   user — the unprivileged form (§B.10 gate tests, `-Mm`): no sudo.
+#
+# The guards below route every fixture-side state root into the fixture
+# tree when the caller did not pin one:
+#   §J.3 fail-safe state isolation: a fixture run must NEVER reach the
+#   live /var/lib/gsa (the default state root — under the W5 root model an
+#   unoverridden run really writes it; a battery run did, see docs/NOTE.md).
+#   W4 build-cache isolation: the engine creates its build cache at the
+#   resolved root (default: the build user's ~/.cache/gsa). A fixture run
+#   must never create real home directories.
+#   Recipe-store isolation (design B, 2026-10-17): the store default is the
+#   build user's ~/.local/share/gsa/recipes. A fixture run must never read
+#   or write the live store — an unguarded negative test (missing
+#   config/topology.conf) resolved the real migrated store and passed
+#   against it.
+rr2_engine_argv() {
+    local mode=${1:?rr2_engine_argv: mode (sudo|user) required}
+    local ws=${2:?rr2_engine_argv: WORKSPACE argument required}
+    local out=${3:?rr2_engine_argv: OUTARRNAME argument required}
+    shift 3
+    local -n _rr2_argv_out=$out
+    local -a guard=()
+    if [[ -z ${GSA_STATE_DIR:-} ]] && ! rr2_has_state_root "$@"; then
+        guard=(GSA_STATE_DIR="$ws/../.rr2-state")
+    fi
+    if [[ -z ${GSA_BUILD_DIR:-} ]]; then
+        guard+=(GSA_BUILD_DIR="$ws/../.rr2-build")
+    fi
+    if [[ -z ${GSA_RECIPES_DIR:-} ]]; then
+        guard+=(GSA_RECIPES_DIR="$ws/../.rr2-recipes")
+    fi
+    case $mode in
+    sudo)
+        local -a fwd=()
+        rr2_env_forward fwd
+        _rr2_argv_out=(/usr/bin/sudo -n env "${fwd[@]}" "${guard[@]}" "${GSA_TEST_GSA_BIN:-gsa}" "$@")
+        ;;
+    user)
+        _rr2_argv_out=(env "${guard[@]}" "${GSA_TEST_GSA_BIN:-gsa}" "$@")
+        ;;
+    *)
+        printf 'rr2_engine_argv: unknown mode %q (want sudo|user)\n' "$mode" >&2
+        return 2
+        ;;
+    esac
 }
 
 # rr2_has_state_root ARG... — true when the argv already carries a state root
