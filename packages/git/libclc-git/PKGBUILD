@@ -9,7 +9,7 @@ pkgdesc="Library requirements of the OpenCL C programming language (git version)
 arch=('any')
 url="http://libclc.llvm.org/"
 license=('MIT')
-provides=('libclc')
+provides=("libclc=${pkgver}")
 conflicts=('libclc')
 makedepends=('clang' 'llvm-libs' 'llvm' 'git' 'python' 'ninja' 'cmake')
 # Trimmed 2026-09-04: amdgcn target only. The spirv* targets feed clover/rusticl

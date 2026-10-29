@@ -16,7 +16,7 @@ pkgbase = vulkan-icd-loader-git
 	makedepends = make
 	depends = glibc
 	optdepends = vulkan-driver: packaged vulkan driver
-	provides = vulkan-icd-loader
+	provides = vulkan-icd-loader=1.4.365.r2.gb82e310
 	provides = libvulkan.so
 	provides = vulkan-icd-loader-git
 	conflicts = vulkan-icd-loader

@@ -70,7 +70,7 @@ build() {
 
 package_qt6-base-git() {
   conflicts=(qt6-base)
-  provides=(qt6-base)
+  provides=("qt6-base=${pkgver}")
 
 
   DESTDIR="$pkgdir" cmake --install build
@@ -93,7 +93,7 @@ package_qt6-xcb-private-headers-git() {
   # ${pkgname[1]%-git} expands to nothing and ships empty provides/conflicts
   # (2026-10-04 swap-completeness fix).
   conflicts=(qt6-xcb-private-headers)
-  provides=(qt6-xcb-private-headers)
+  provides=("qt6-xcb-private-headers=${pkgver}")
 
   cd qtbase
   install -d -m755 "$pkgdir"/usr/include/qt6xcb-private/gl_integrations

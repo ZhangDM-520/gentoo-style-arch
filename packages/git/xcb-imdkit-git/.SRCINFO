@@ -14,7 +14,7 @@ pkgbase = xcb-imdkit-git
 	depends = xcb-util-keysyms
 	depends = glibc
 	depends = libxcb
-	provides = xcb-imdkit
+	provides = xcb-imdkit=1.0.9.r0.g44f5c82
 	conflicts = xcb-imdkit
 	source = git+https://github.com/fcitx/xcb-imdkit.git
 	sha512sums = SKIP

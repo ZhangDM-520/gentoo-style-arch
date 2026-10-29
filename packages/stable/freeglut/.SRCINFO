@@ -16,7 +16,7 @@ pkgbase = freeglut
 	depends = libxi
 	depends = libxrandr
 	depends = libxxf86vm
-	provides = glut
+	provides = glut=3.8.0
 	provides = libglut.so
 	conflicts = glut
 	source = git+https://github.com/FreeGLUTProject/freeglut#tag=v3.8.0

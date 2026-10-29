@@ -150,7 +150,7 @@ package_dbus-broker-git() {
     "libexpat.so"
     "libsystemd.so"
   )
-  provides=("dbus-broker")
+  provides=("dbus-broker=${pkgver}")
   conflicts=("dbus-broker")
 
   meson install -C build --destdir "$pkgdir"
@@ -162,8 +162,8 @@ package_dbus-broker-units-git() {
   pkgdesc+=" - Service units"
   depends=("dbus-broker")
   provides=(
-    "dbus-broker-units"
-    "dbus-units"
+    "dbus-broker-units=${pkgver}"
+    "dbus-units=${pkgver}"
   )
   conflicts=(
     "dbus-broker-units"

@@ -10,7 +10,7 @@ pkgbase = mimalloc-git
 	depends = glibc
 	depends = libatomic
 	depends = libatomic.so
-	provides = mimalloc
+	provides = mimalloc=3.5.4.r77.ga0c58a2f
 	provides = libmimalloc.so
 	conflicts = mimalloc
 	options = staticlibs

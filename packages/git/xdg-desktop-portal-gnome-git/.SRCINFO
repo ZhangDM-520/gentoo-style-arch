@@ -9,7 +9,7 @@ pkgbase = xdg-desktop-portal-gnome-git
 	makedepends = meson
 	depends = xdg-desktop-portal
 	depends = xdg-desktop-portal-gtk
-	provides = xdg-desktop-portal-gnome
+	provides = xdg-desktop-portal-gnome=51.0+2+ga4f6ed6
 	conflicts = xdg-desktop-portal-gnome
 	source = git+https://gitlab.gnome.org/GNOME/xdg-desktop-portal-gnome
 	b2sums = SKIP

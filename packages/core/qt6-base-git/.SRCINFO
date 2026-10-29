@@ -70,12 +70,12 @@ pkgbase = qt6-base-git
 	sha256sums = SKIP
 
 pkgname = qt6-base-git
-	provides = qt6-base
+	provides = qt6-base=6.12.0_r82007.g2beefb38db9
 	conflicts = qt6-base
 
 pkgname = qt6-xcb-private-headers-git
 	pkgdesc = Private headers for Qt6 Xcb
 	depends = qt6-base-git=6.12.0_r82007.g2beefb38db9
 	optdepends = 
-	provides = qt6-xcb-private-headers
+	provides = qt6-xcb-private-headers=6.12.0_r82007.g2beefb38db9
 	conflicts = qt6-xcb-private-headers

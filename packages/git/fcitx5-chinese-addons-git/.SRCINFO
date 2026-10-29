@@ -1,6 +1,6 @@
 pkgbase = fcitx5-chinese-addons-git
 	pkgdesc = Addons related to Chinese, including IME previous bundled inside fcitx4
-	pkgver = 5.1.15.r0.g61474bd
+	pkgver = 5.1.15.r2.ge8d930f
 	pkgrel = 1
 	url = https://github.com/fcitx/fcitx5-chinese-addons
 	arch = i686
@@ -18,7 +18,7 @@ pkgbase = fcitx5-chinese-addons-git
 	depends = fcitx5-qt6-git
 	depends = opencc
 	optdepends = fcitx5-lua-git: Lua and imeapi support from pinyin
-	provides = fcitx5-chinese-addons
+	provides = fcitx5-chinese-addons=5.1.15.r2.ge8d930f
 	conflicts = fcitx5-chinese-addons
 	source = git+https://github.com/fcitx/fcitx5-chinese-addons.git
 	sha512sums = SKIP

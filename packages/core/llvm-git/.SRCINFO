@@ -33,10 +33,10 @@ pkgname = llvm-git
 	provides = compiler-rt-git
 	provides = clang-git
 	provides = lld-git
-	provides = llvm
-	provides = compiler-rt
-	provides = clang
-	provides = lld
+	provides = llvm=24.0.0_r603149.908f46792fb9
+	provides = compiler-rt=24.0.0_r603149.908f46792fb9
+	provides = clang=24.0.0_r603149.908f46792fb9
+	provides = lld=24.0.0_r603149.908f46792fb9
 	conflicts = llvm
 	conflicts = compiler-rt
 	conflicts = clang
@@ -52,12 +52,12 @@ pkgname = llvm-libs-git
 	depends = libxml2
 	depends = z3
 	provides = aur-llvm-libs-git
-	provides = llvm-libs
+	provides = llvm-libs=24.0.0_r603149.908f46792fb9
 	conflicts = llvm-libs
 
 pkgname = clang-opencl-headers-git
 	pkgdesc = clang headers & include files for OpenCL, trunk version
 	depends = llvm-git=24.0.0_r603149.908f46792fb9-1
-	provides = clang-opencl-headers
+	provides = clang-opencl-headers=24.0.0_r603149.908f46792fb9
 	conflicts = clang-opencl-headers
 	conflicts = clang-opencl-headers-minimal-git

@@ -99,7 +99,7 @@ package_dbus-broker-units() {
     dbus
     dbus-broker
   )
-  provides=(dbus-units)
+  provides=("dbus-units=${pkgver}")
   conflicts=(dbus-daemon-units)
 
   mv unit/* "$pkgdir"

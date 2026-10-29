@@ -17645,3 +17645,75 @@ the disposition call. BUILD HELD per owner.
   noctalia-git` → `Provides: noctalia=5.4.0.r6028.g490d327d7`.
 - Fourth stale-bridge-patch instance (after mlt, obs-browser, qt6-quick3d —
   MEMORY pitfall digest): the drop condition firing IS the fix trigger.
+
+### 2026-10-28 — 59-pkg build wall triage + Q8 provides sweep cleared + stale-patch drops
+
+- **WHAT**: (1) The 59-package failure wall: the f2fs build drive unmounted at
+  13:56 (USB dock drop, dmesg) and `build_dir` was silently recreated on tmpfs
+  `/run`, filling 6.1G — ~30 ENOSPC failures (clone/extract/link/.eln writes)
+  plus gpg-status corruption (8 × "SIGNATURE NOT FOUND", gsa exports
+  `build_dir/tmp` as TMPDIR). Restored: rescued the 12 finished archives out of
+  the impostor, removed it (validated unmounted, no sibling mounts),
+  `udisksctl mount /dev/sda` (466G f2fs, 120G free), merged archives back.
+  (2) Q8 debt cleared per owner ask: all register rows versioned as
+  `provides=("<name>=${pkgver}")` across the swept recipes (fleet agents + hand-
+  resolved rows; gimp-git's `provides=` relocated below `pkgver=` — the
+  expansion is empty above it), `tests/recipe-contract.sh` §E emptied to a
+  strict gate, `gsa --qa-check provides-versioning: clean`, 3 recipe fixtures
+  re-pinned to the versioned shape (`has_versioned`).
+  (3) Wave re-run 40/52 green incl. the whole disk+PGP class; remaining fixes:
+  vlc dropped 0003 (absorbed upstream — tag 3.0.24 already carries the
+  post-state); easyeffects-git PGO teardown `rm` now tolerates dead FUSE
+  leftovers (gvfs/xdg-desktop-portal mount points kill `rm -rf`); transmission
+  + vscodium-insiders-git = root-owned `~/.npm` cache (chown per npm's own
+  remedy); hermes-agent-git — owner decision: ALL patches (0002-0005) dropped,
+  re-roll subagent cancelled mid-flight.
+- **WHY**: the QA provides findings were read as the failure cause; evidence
+  disproves it (vencord-git: finding + SUCCESS; vim/mpv/wine: failure + no
+  finding) — they are report-only. The sweep was still the explicit owner ask
+  ("doesn't feel specific to only these"), so it was done generally.
+- **VERIFY**: wave 1 run-record 40/52 ok (all ENOSPC + PGP classes green);
+  post-wave `--printsrcinfo` sweep regenerated 55 .SRCINFOs (makepkg bumps
+  `pkgver=` in VCS recipes during builds — the freshness fixture's "stale"
+  rows were exactly that); vlc/easyeffects/hermes `bash -n` + printsrcinfo
+  clean; hermes dir contains no patches and no references to them.
+  Continuation wave (12 pkgs) + full battery to follow.
+- MEMORY: §5 provides-debt entry CLEARED; §6 three lessons (SIGNATURE NOT
+  FOUND env trap + `GIT_CONFIG_COUNT=0 git verify-tag` discriminator; tmpfs
+  impostor + rescue/findmnt/rm/mount order; `provides=` after `pkgver=`).
+- Unchanged decisions: `~/.gsa-src` (81G) NOT pruned (owner said no earlier).
+- 2026-10-29: 0013 re-cut on the review-fix head (5297413e…, twelve first-parent commits,
+  gsa 3673351 pushed). STACK DRIFT surfaced: 0012 fails on main >= c028006b
+  (tests/unit/xwayland_outputs.cpp vs d1a09d41/4691901d) — see docs/CURRENT.md; 0012 owner
+  needs to refresh before any head-of-main build. 0013 stays cut at main@36673995.
+
+### 2026-10-29 — full 59-package wall cleared; tsgo mystery = ENOSPC behind a silent reporter
+
+- **WHAT**: every package from the 2026-10-28 59-pkg run now builds green
+  (vscodium-insiders-git last at 2014s). Late fixes this day: (1) vlc declared
+  its latent `librist` dep (makedepends + vlc-plugins-base depends — the plugin
+  lists always shipped `librist_plugin.so` but nothing pulled the lib); (2)
+  krita's blocker was the ABI gate correctly refusing Arch's python-pyqt6 (3
+  undeclared Qt6 binding links) — host fix: qt6-sensors/qt6-remoteobjects/
+  qt6-scxml installed; (3) fcitx5-chinese-addons URL patch REVERTED per owner
+  (cmake's file(DOWNLOAD) follows the 301 — proven by direct test; the 169-byte
+  saves were the owner's proxy breaking the chain); (4) hermes-agent-git all
+  patches dropped per owner — pure upstream builds green.
+- **tsgo mystery SOLVED**: vscodium's "tsgo exited with code 2" with zero
+  diagnostics = `ENOSPC: no space left on device`. vscode's `build/lib/tsgo.ts`
+  runReporter prints only `/error \w+:/` matches — environment errors vanish.
+  Repro'd via a tee-wrapper over `node_modules/@typescript/native/bin/tsc`
+  capturing raw output to /tmp/tsgo-raw.log. Root: the f2fs build drive DROPPED
+  mid-session again (2nd+ time; impostor tmpfs filled with vscodium staging) —
+  rescued archives, cleaned impostor, remounted (202G free), retry green.
+- **VERIFY**: battery `tests/run-all.sh` **PASS 77/77** (incl. re-pinned
+  provides fixtures + emptied ratchet); deliverable check on rebuilt register
+  packages: `pacman -Qi` shows `vencord=1.15.13.r0.g443688b536`,
+  `fcitx5-chinese-addons=5.1.15.r2.ge8d930f`, `codium=/vscodium=/vscodium-
+  insiders=1.143.17232.r0.gca7f7b44`, `krita=6.1.0.prealpha.r66862.f261777`.
+  srcinfo-freshness PASS (660 recipes) after post-wave regen.
+- Host fixes outside the repo this session: `~/.npm` ownership restored
+  (transmission+vscodium npm builds), Qt6 modules installed (krita), drive
+  remounts/prunes after drops. FOLLOW-UP (not done): gsa build_dir device
+  preflight to kill the tmpfs-impostor class; gsa-fetch-v2.sh one-off flake in
+  the mid-wave battery run (passes standalone).

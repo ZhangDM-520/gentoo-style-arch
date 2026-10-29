@@ -2159,13 +2159,14 @@ going stale.
 - **spandsp sign-off** (2026-10-03→04 ingestion): it resolves to the
   FreeSWITCH fork rather than the classic library; explicit sign-off wanted
   before it becomes the house provider.
-- **Versioned name-provides debt** (2026-10-04 Q8 follow-up): recipes
-  predate the soname+name rule (see §4 provides discipline) — each needs
-  `provides=(<name>=$pkgver)` for its swapped, VCS-counterpart or
-  compat-mapped stock names. The register is `tests/recipe-contract.sh` §E
-  (`mapping.expected`); counts come from running it, never from this file.
-  Shrink it recipe by recipe (a provides change needs a real rebuild — the
-  archive's `.PKGINFO` is the deliverable), never grow it.
+- **Versioned name-provides debt** (2026-10-04 Q8 follow-up) — **CLEARED
+  2026-10-28**: every register row was versioned as
+  `provides=("<name>=${pkgver}")`, and the `tests/recipe-contract.sh` §E
+  `mapping.expected` list is now empty (strict gate — a new unversioned
+  mapped provide fails the diff). Rule stands for new recipes: a swapped,
+  VCS-counterpart or compat-mapped stock name gets `provides=(<name>=$pkgver)`
+  on day one; a provides change needs a real rebuild — the archive's
+  `.PKGINFO` is the deliverable.
 - **version-sync vs pkgrel rebuild triggers** (2026-10-04 merge): a
   version-sync wave resets `pkgrel=1` on a new pkgver while fixture pins like
   `tests/noctalia-pgo.sh`'s `pkgrel >= 2` (the 2026-09-23 PGO fix's rebuild
@@ -4047,3 +4048,50 @@ constant, not a baked path); and the xorg-xwayland-git PGO end-to-end proof
     every tree reconciliation; exactly one writer per mutable tree (a pause
     means zero writes); and a concurrent job's own notes are self-reports —
     verify them by hash.
+
+- **`SIGNATURE NOT FOUND` on a `?signed` git source is usually the
+  environment, not the tag** (2026-10-28): makepkg's `verify_git_signature`
+  runs `git -C <SRCDEST-bare-cache> verify-tag --raw` and reports
+  "SIGNATURE NOT FOUND" whenever the gpg status file lacks `NEWSIG` — gpg
+  never processed a signature at all. Two measured causes: (1) the injected
+  `GIT_CONFIG_COUNT=3` hardening (`safe.bareRepository=explicit`) makes that
+  bare-repo command die (`fatal: cannot use bare repository`) — agent-run
+  non-sudo builds of ANY `?signed` VCS recipe fail this way; build under
+  `sudo` (env_reset drops the injection) or with `GIT_CONFIG_COUNT=0`;
+  (2) a full `$TMPDIR` (gsa exports `build_dir/tmp`) kills gpg's status
+  writes — same message. Discriminator before touching `?signed`/
+  `validpgpkeys`: `GIT_CONFIG_COUNT=0 git -C ~/.gsa-src/<pkg> verify-tag
+  <tag>` prints `Good signature` while the build says NOT FOUND → fix the
+  environment, never the recipe.
+
+- **A dropped USB dock turns `build_dir` into a tmpfs impostor** (2026-10-28
+  13:56, the 59-package wall): when the f2fs build drive unmounts
+  mid-session, `gsa.conf`'s `build_dir` path survives as plain directories
+  that the next `mkdir -p` recreates **on tmpfs `/run`** — writes "succeed"
+  until /run fills, then every build fails with ENOSPC at clone/extract/
+  link and gpg status writes die (→ SIGNATURE NOT FOUND). Tell:
+  `df <build_dir>` answers `tmpfs /run`. Fix order: rescue `pkgs/` (the
+  archives are the deliverable), `findmnt` to confirm nothing is mounted,
+  `rm -rf` ONLY the impostor UUID subtree (check no sibling mounts),
+  `udisksctl mount -b /dev/sda`, merge the rescued archives back. RECURRED
+  2026-10-29 (twice, plus the overnight crash) — the drive drops mid-session
+  repeatedly; a gsa preflight asserting `build_dir` is on the expected device
+  would kill this class (follow-up, not done).
+
+- **`provides=` must be assigned AFTER `pkgver=`** (2026-10-28 gimp-git):
+  `"name=${pkgver}"` expands at assignment time; above the `pkgver=` line it
+  expands empty and makepkg rejects the parse ("pkgver in provides is not
+  allowed to be empty", rc=12) — a loud failure that tempts a wrong fix
+  (dropping the versioning). Move the `provides=` assignment below
+  `pkgver=` (gimp-git's swap pair sat at the top of the file); `conflicts=`
+  has no ordering dependency and can stay put.
+
+- **A "silent exit N" from a build tool means its reporter swallowed the
+  failure text** (2026-10-29 vscodium tsgo mystery): vscode's
+  `build/lib/tsgo.ts` runReporter prints only lines matching `/error \w+:/`,
+  so `ENOSPC: no space left on device` vanished and the build reported
+  "tsgo exited with code 2" with zero diagnostics. Diagnosis recipe: wrap the
+  failing binary with a tee (pass-through + append to a log file), re-run the
+  step, read the raw capture. Never accept a build tool's summary when an
+  exit code carries no message — and remember the message may be about the
+  ENVIRONMENT (disk), not the code.

@@ -10,7 +10,7 @@ license=('MIT')
 depends=('libdrm' 'libgl' 'libx11' 'libxext' 'libxfixes' 'wayland')
 makedepends=('git' 'libglvnd' 'mesa' 'meson')
 optdepends=('libva-mesa-driver: backend for AMD GPUs (from mesa-git)')
-provides=('libva' 'libva-drm.so' 'libva-glx.so' 'libva-wayland.so'
+provides=("libva=${pkgver}" 'libva-drm.so' 'libva-glx.so' 'libva-wayland.so'
           'libva-x11.so' 'libva.so')
 conflicts=('libva')
 backup=('etc/libva.conf')

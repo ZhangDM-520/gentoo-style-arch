@@ -12,7 +12,7 @@ pkgbase = libdex-git
 	depends = glibc
 	depends = libatomic
 	depends = liburing
-	provides = libdex
+	provides = libdex=1.2.0.r13.gdd075ea
 	provides = libdex-1.so
 	conflicts = libdex
 	source = git+https://gitlab.gnome.org/GNOME/libdex

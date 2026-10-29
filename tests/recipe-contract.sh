@@ -304,107 +304,16 @@ write_srcinfo() {
     # The SONAME side and the constraint side stay strictly forbidden on the
     # real repo (P2 debt cleared 2026-10-04: bare stems only; an unversioned
     # provide of a constrained name is the meson-incident class). The NAME
-    # mapping side carries the Q8 debt register instead: the 2026-10-04 scope
-    # decision (SONAME + NAME) was audited the same day, and these recipes
-    # still declare mapped names unversioned. More than five, so recipe work
-    # stays gated — version one (declare provides=('<name>=$pkgver')) or
-    # update this ratchet consciously.
+    # mapping side is now strict too: the Q8 debt register was cleared
+    # 2026-10-28 (every mapped swap/compat provide versioned as
+    # provides=('<name>=$pkgver')), so the expected list below is EMPTY and
+    # any new unversioned mapped provide lands as a diff here.
     if grep -q . < <(grep -v ' mapped swap/compat provide ' < <(grep '^provides-versioning: ' <<<"$FIXTURE_OUTPUT")); then
         fail "E: soname/constraint provides finding on the real repo: $FIXTURE_OUTPUT"
     fi
     sed -n "s/^provides-versioning: \([^:]*\): mapped swap\/compat provide '\([^']*\)' is unversioned.*/\1: \2/p" \
         <<<"$FIXTURE_OUTPUT" | LC_ALL=C sort >"$tmp/mapping.actual"
     cat >"$tmp/mapping.expected" <<'EOF'
-blender-git: blender
-bpftune-git: bpftune
-dbus-broker-git: dbus-broker
-dbus-broker-git: dbus-broker-units
-dbus-broker-git: dbus-units
-dbus-broker: dbus-units
-dbus: libdbus
-easyeffects-git: easyeffects
-fcitx5-chinese-addons-git: fcitx5-chinese-addons
-fcitx5-git: fcitx5
-fcitx5-gtk-git: fcitx5-gtk
-fcitx5-lua-git: fcitx5-lua
-fcitx5-qt-git: fcitx5-qt
-fcitx5-qt-git: fcitx5-qt5
-fcitx5-qt-git: fcitx5-qt6
-flatpak-git: flatpak
-freeglut: glut
-gcc-snapshot: gcc
-gcc-snapshot: gcc-fortran
-gcc-snapshot: gcc-fortran-multilib
-gcc-snapshot: gcc-libs-multilib
-gcc-snapshot: gcc-multilib
-gcc-snapshot: lib32-gcc-libs
-gcc-snapshot: libasan
-gcc-snapshot: libatomic
-gcc-snapshot: libgcc
-gcc-snapshot: libgccjit
-gcc-snapshot: libgfortran
-gcc-snapshot: libgomp
-gcc-snapshot: libitm
-gcc-snapshot: liblsan
-gcc-snapshot: libquadmath
-gcc-snapshot: libstdc++
-gcc-snapshot: libtsan
-gcc-snapshot: libubsan
-gcc-snapshot: lto-dump
-gimp-git: gimp
-git-git: git
-gtk3-git: gtk3-print-backends
-jack2-git: jack
-jack2-git: jack2-dbus
-libadwaita-git: libadwaita
-libcamera-git: libcamera-ipa
-libclc-git: libclc
-libdex-git: libdex
-libdrm-git: libdrm
-libime-git: libime
-libinput-git: libinput
-libisl-git: isl
-libisl-git: libisl
-liburing-git: liburing
-libva-git: libva
-llvm-git: clang
-llvm-git: clang-opencl-headers
-llvm-git: compiler-rt
-llvm-git: lld
-llvm-git: llvm
-llvm-git: llvm-libs
-logseq-desktop-git: logseq
-logseq-desktop-git: logseq-desktop
-mimalloc-git: mimalloc
-nghttp3-git: nghttp3
-onlyoffice-git: onlyoffice
-onlyoffice-git: onlyoffice-desktopeditors
-pango-git: pango
-pipewire: pulse-native-provider
-qt6-base-git: qt6-base
-qt6-base-git: qt6-xcb-private-headers
-seatd-git: libseat
-seatd-git: seatd
-systemd: libsystemd
-systemd: nss-myhostname
-systemd: resolvconf
-util-linux: hardlink
-util-linux: libutil-linux
-util-linux: rfkill
-vencord-git: vencord
-vscodium-insiders-git: codium
-vscodium-insiders-git: vscodium
-vulkan-icd-loader-git: vulkan-icd-loader
-wireplumber: pipewire-session-manager
-xcb-imdkit-git: xcb-imdkit
-xdg-desktop-portal-gnome-git: xdg-desktop-portal-gnome
-xorg-xwayland-git: xorg-server-xwayland
-xorg-xwayland-git: xorg-server-xwayland-git
-xorg-xwayland-git: xorg-xwayland
-xwayland-satellite-git: xwayland-satellite
-zlib-ng-compat-git: zlib
-zlib-ng-git: zlib-ng
-zstd-git: zstd
 EOF
     LC_ALL=C sort -o "$tmp/mapping.expected" "$tmp/mapping.expected"
     diff -u "$tmp/mapping.expected" "$tmp/mapping.actual" >&2 ||

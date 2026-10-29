@@ -18,8 +18,8 @@ depends=(glibc
          gmp) # libgmp.so.10; provider carries no provide to pair with
 makedepends=(git)
 provides=(
-  isl
-  libisl
+  "isl=${pkgver}"
+  "libisl=${pkgver}"
   libisl.so
 )
 conflicts=(isl libisl)

@@ -12,7 +12,7 @@ url="https://github.com/fcitx/fcitx5-gtk"
 license=('GPL')
 depends=('cairo' 'gdk-pixbuf2' 'glib2' 'graphene' 'gtk3' 'gtk4' 'libx11' 'libxkbcommon' 'pango')
 makedepends=('extra-cmake-modules' 'gobject-introspection' 'gtk3' 'gtk4' 'vulkan-headers' 'git')
-provides=(${_pkgname})
+provides=("${_pkgname}=${pkgver}")
 conflicts=(${_pkgname})
 source=("git+$url.git")
 sha512sums=('SKIP')

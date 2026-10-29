@@ -13,6 +13,6 @@ pkgbase = zlib-ng-git
 	sha256sums = SKIP
 
 pkgname = zlib-ng-git
-	provides = zlib-ng
+	provides = zlib-ng=2.3.1.r596.gg8b61b4ef
 	provides = libz-ng.so
 	conflicts = zlib-ng

@@ -35,6 +35,6 @@ pkgname = libadwaita-git
 	depends = gtk4-git
 	depends = pango
 	depends = libgtk-4.so
-	provides = libadwaita
+	provides = libadwaita=1.10.0.r26.g0531b4c
 	provides = libadwaita-1.so
 	conflicts = libadwaita

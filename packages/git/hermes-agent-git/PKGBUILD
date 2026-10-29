@@ -1,5 +1,5 @@
 pkgname=hermes-agent-git
-pkgver=2026.10.02.183545.gc9ea214
+pkgver=2026.10.28.083505.gee987d9
 pkgrel=1
 pkgdesc='CLI AI agent with a TUI and web dashboard (Git main)'
 arch=('x86_64')
@@ -11,22 +11,8 @@ provides=("hermes-agent=$pkgver")
 conflicts=('hermes-agent')
 source=(
   'hermes-agent::git+https://github.com/NousResearch/hermes-agent.git#branch=main'
-  # 0001-unattended-memory-audit.patch RETIRED (2026-10-19): upstream main
-  # (3752497cc4d) shipped _background_delete_gate (#105921) — unattended
-  # patch/remove are staged for user approval instead of applied, which
-  # supersedes the house apply-and-audit model (owner decision: drop).
-  '0002-pacman-update-policy.patch'
-  '0003-cron-show.patch'
-  '0004-interrupted-turn-recovery-marker.patch'
-  '0005-notify-union-coercion.patch'
 )
-sha256sums=(
-  'SKIP'
-  'aa9eb765cbe79e2584498e49f4422cc90e947c794afe052b46aa6b5c19a6cd92'
-  'af96bd05e2236e95a2a70cdf6a225abd60a83cd8547c1aa45769b9f0da3fa10a'
-  '9bddb73ed18c709fd49dd93632dd9f43477a3136954e934c0f04b1ac0f206015'
-  'b766a2f2bcc13e9f5d63f9eadcf00a4de71f1b72ff9ca159d242ee5495d1e263'
-)
+sha256sums=('SKIP')
 
 pkgver() {
   cd "$srcdir/hermes-agent"
@@ -36,27 +22,11 @@ pkgver() {
 }
 
 prepare() {
-  local patch
   cd "$srcdir/hermes-agent"
   # makepkg resets tracked state between builds but leaves untracked files
-  # behind — patches that CREATE files (tests, scripts) then fail with
-  # "already exists in working directory" on every rebuild. Clean them first.
+  # behind (prior build() artifacts in a reused checkout) — clean so every
+  # build starts from a pristine tree.
   GIT_CONFIG_COUNT=0 git clean -fdq
-  for patch in \
-    "$srcdir/0002-pacman-update-policy.patch" \
-    "$srcdir/0003-cron-show.patch" \
-    "$srcdir/0004-interrupted-turn-recovery-marker.patch" \
-    "$srcdir/0005-notify-union-coercion.patch"
-  do
-    if ! GIT_CONFIG_COUNT=0 git apply --check "$patch"; then
-      error "upstream context drift in ${patch##*/}"
-      return 1
-    fi
-    if ! GIT_CONFIG_COUNT=0 git apply "$patch"; then
-      error "failed to apply ${patch##*/}"
-      return 1
-    fi
-  done
 }
 
 build() {

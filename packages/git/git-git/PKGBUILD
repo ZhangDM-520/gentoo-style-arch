@@ -26,7 +26,7 @@ optdepends=('tk: gitk and git gui'
             'subversion: git svn'
             'org.freedesktop.secrets: keyring credential helper')
 conflicts=('git')
-provides=('git')
+provides=("git=${pkgver}")
 options=()
 install=git-git.install
 source=('git+https://github.com/git/git.git'

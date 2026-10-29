@@ -16,7 +16,7 @@ depends=('alsa-lib' 'db5.3' 'dbus' 'expat' 'glibc' 'libgcc' 'portaudio' 'libport
 makedepends=('git' 'waf')
 # One output supersedes stock jack2 + jack2-dbus (dbus integration merged in);
 # stock jack2-docs is dropped (doxygen docs trimmed).
-provides=("jack2=$pkgver" 'jack' 'jack2-dbus' 'libjack.so' 'libjacknet.so' 'libjackserver.so')
+provides=("jack2=$pkgver" "jack=${pkgver}" "jack2-dbus=${pkgver}" 'libjack.so' 'libjacknet.so' 'libjackserver.so')
 conflicts=('jack2' 'jack' 'jack2-dbus')
 optdepends=(
   'a2jmidid: for ALSA MIDI to JACK MIDI bridging'

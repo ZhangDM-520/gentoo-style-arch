@@ -27,8 +27,8 @@ pkgbase = jack2-git
 	optdepends = python-dbus: for the jack_control script
 	optdepends = realtime-privileges: for realtime privileges
 	provides = jack2=1.9.22.r41.g17959465
-	provides = jack
-	provides = jack2-dbus
+	provides = jack=1.9.22.r41.g17959465
+	provides = jack2-dbus=1.9.22.r41.g17959465
 	provides = libjack.so
 	provides = libjacknet.so
 	provides = libjackserver.so

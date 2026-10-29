@@ -99,7 +99,7 @@ check() {
 }
 
 package() {
-    provides=(zlib-ng libz-ng.so)
+    provides=("zlib-ng=${pkgver}" libz-ng.so)
     conflicts=(zlib-ng)
 
     DESTDIR="${pkgdir}" cmake --install build

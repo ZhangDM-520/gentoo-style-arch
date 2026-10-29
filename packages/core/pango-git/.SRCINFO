@@ -26,7 +26,7 @@ pkgbase = pango-git
 	sha256sums = SKIP
 
 pkgname = pango-git
-	provides = pango
+	provides = pango=1.58.2.r13.g8e74c27c
 	provides = libpango-1.0.so
 	provides = libpangocairo-1.0.so
 	provides = libpangoft2-1.0.so

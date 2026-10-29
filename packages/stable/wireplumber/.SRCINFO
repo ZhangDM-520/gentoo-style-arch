@@ -37,7 +37,7 @@ pkgname = wireplumber
 	depends = pipewire
 	depends = systemd-libs
 	optdepends = 
-	provides = pipewire-session-manager
+	provides = pipewire-session-manager=0.5.18
 	conflicts = pipewire-media-session
 
 pkgname = libwireplumber

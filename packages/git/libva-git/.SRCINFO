@@ -16,7 +16,7 @@ pkgbase = libva-git
 	depends = libxfixes
 	depends = wayland
 	optdepends = libva-mesa-driver: backend for AMD GPUs (from mesa-git)
-	provides = libva
+	provides = libva=2.24.1.r6.gf3fefceb
 	provides = libva-drm.so
 	provides = libva-glx.so
 	provides = libva-wayland.so

@@ -56,7 +56,7 @@ _mv_pkg(){
 
 package_fcitx5-qt6-git(){
   depends=('fcitx5-git' 'qt6-base' 'qt6-wayland' 'libxkbcommon' 'gcc-libs' 'wayland' 'glibc' 'libxcb')
-  provides=('fcitx5-qt6' 'fcitx5-qt')
+  provides=("fcitx5-qt6=${pkgver}" "fcitx5-qt=${pkgver}")
   conflicts=('fcitx5-qt6' 'fcitx5-qt')
   pkgdesc="Fcitx Qt Library, for Qt6"
 
@@ -74,7 +74,7 @@ package_fcitx5-qt6-git(){
 
 package_fcitx5-qt5-git(){
   depends=('fcitx5-git' 'qt5-base' 'libxkbcommon' 'gcc-libs' 'libxcb' 'glibc')
-  provides=('fcitx5-qt5')
+  provides=("fcitx5-qt5=${pkgver}")
   conflicts=('fcitx5-qt5')
   pkgdesc="Fcitx Qt Library, for Qt5"
 

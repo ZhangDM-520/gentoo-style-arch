@@ -42,7 +42,7 @@ check() {
 
 package() {
     pkgdesc+=" (zlib compat)"
-    provides=('zlib' 'libz.so')
+    provides=("zlib=${pkgver}" 'libz.so')
     conflicts=(zlib)
     # Name-level swap metadata (house rule): the stock zlib-ng-compat must be
     # replaced by this build and its dependents must resolve here (2026-10-04).

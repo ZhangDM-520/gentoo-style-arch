@@ -1,6 +1,6 @@
 pkgbase = paru-git
 	pkgdesc = Feature packed AUR helper (git version; house-muted IgnorePkg notices)
-	pkgver = 2.1.0.r68.g7830fac
+	pkgver = 2.1.0.r99.g5211508
 	pkgrel = 1
 	url = https://github.com/morganamilo/paru
 	arch = x86_64
@@ -12,7 +12,7 @@ pkgbase = paru-git
 	depends = libalpm.so
 	optdepends = bat: colored pkgbuild printing
 	optdepends = devtools: build in chroot and downloading pkgbuilds
-	provides = paru=2.1.0.r68.g7830fac
+	provides = paru=2.1.0.r99.g5211508
 	conflicts = paru
 	options = !debug
 	backup = etc/paru.conf

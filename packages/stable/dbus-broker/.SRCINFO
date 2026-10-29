@@ -45,7 +45,7 @@ pkgname = dbus-broker-units
 	pkgdesc = Linux D-Bus Message Broker - Service units
 	depends = dbus
 	depends = dbus-broker
-	provides = dbus-units
+	provides = dbus-units=37
 	conflicts = dbus-daemon-units
 
 pkgname = dbus-units

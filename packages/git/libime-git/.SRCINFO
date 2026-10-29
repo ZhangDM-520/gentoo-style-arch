@@ -1,6 +1,6 @@
 pkgbase = libime-git
 	pkgdesc = A library to support generic input method implementation
-	pkgver = 1.1.17.r0.g171edcf
+	pkgver = 1.1.17.r2.g5be1300
 	pkgrel = 1
 	url = https://github.com/fcitx/libime
 	arch = i686
@@ -12,7 +12,7 @@ pkgbase = libime-git
 	makedepends = python
 	depends = boost-libs
 	depends = fcitx5-git
-	provides = libime
+	provides = libime=1.1.17.r2.g5be1300
 	conflicts = libime
 	source = git+https://github.com/fcitx/libime.git
 	sha512sums = SKIP

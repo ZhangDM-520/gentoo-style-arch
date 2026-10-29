@@ -1,6 +1,6 @@
 pkgbase = gimp-git
 	pkgdesc = GNU Image Manipulation Program
-	pkgver = 3.3.1.r1847.aee612eff1
+	pkgver = 3.3.1.r2017.19cdc1abe5
 	pkgrel = 1
 	epoch = 2
 	url = https://www.gimp.org
@@ -80,7 +80,7 @@ pkgbase = gimp-git
 	optdepends = cfitsio: for FITS support
 	optdepends = gvfs: for HTTP/S support (and many other schemes)
 	optdepends = xdg-utils: xdg-email required for sending support email
-	provides = gimp
+	provides = gimp=3.3.1.r2017.19cdc1abe5
 	conflicts = gimp
 	source = git+https://gitlab.gnome.org/GNOME/gimp.git
 	source = gimp-data::git+https://gitlab.gnome.org/GNOME/gimp-data

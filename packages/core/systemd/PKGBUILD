@@ -270,7 +270,7 @@ package_systemd() {
     'libgcrypt' 'libxcrypt' 'libidn2' 'lz4' 'pam'
     'libelf' 'libgcc' 'libseccomp' 'util-linux' 'xz' 'pcre2' 'audit'
     'openssl')
-  provides=('nss-myhostname' "systemd-tools=$pkgver" "udev=$pkgver")
+  provides=("nss-myhostname=${pkgver}" "systemd-tools=$pkgver" "udev=$pkgver")
   replaces=('nss-myhostname' 'systemd-tools' 'udev')
   conflicts=('nss-myhostname' 'systemd-tools' 'udev')
   optdepends=(
@@ -386,7 +386,7 @@ package_systemd-libs() {
     'CC0-1.0' # siphash
     'GPL-2.0-or-later WITH Linux-syscall-note' # src/basic/linux/*
   )
-  provides=('libsystemd' 'libsystemd.so' 'libudev.so')
+  provides=("libsystemd=${pkgver}" 'libsystemd.so' 'libudev.so')
   conflicts=('libsystemd')
   replaces=('libsystemd')
 
@@ -404,7 +404,7 @@ package_systemd-libs() {
 package_systemd-resolvconf() {
   pkgdesc='systemd resolvconf replacement (for use with systemd-resolved)'
   depends=("systemd=${pkgver}")
-  provides=('openresolv' 'resolvconf')
+  provides=('openresolv' "resolvconf=${pkgver}")
   conflicts=('resolvconf')
 
   install -d -m0755 "$pkgdir"/usr/bin

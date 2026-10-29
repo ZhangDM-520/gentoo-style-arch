@@ -49,6 +49,11 @@ has() {
     grep -Fxq "$1=$2" <<<"$vars"
 }
 
+has_versioned() {
+    # A mapped swap/compat provide carries its version (QA provides-versioning).
+    grep -Eq "^$1=$2=[^[:space:]]+" <<<"$vars"
+}
+
 # Self-tracking: the VCS source follows upstream master and pkgver() reads the
 # version the tree carries, so the package version moves with upstream.
 has src 'logseq::git+https://github.com/logseq/logseq.git#branch=master' ||
@@ -126,7 +131,7 @@ grep -Fq 'command -v mold' "$pkgbuild" ||
     fail "native Node addons are not linked through the house mold probe"
 grep -Fq 'CCACHE_DIR' "$pkgbuild" ||
     fail "native Node addons do not reuse the compiler cache"
-has provides 'logseq-desktop' || fail "does not provide logseq-desktop"
+has_versioned provides 'logseq-desktop' || fail "does not provide versioned logseq-desktop"
 
 # The bundled Electron sandbox helper only works when it is setuid root.
 grep -Fq 'chmod 4755' "$pkgbuild" || fail "chrome-sandbox is not made setuid"

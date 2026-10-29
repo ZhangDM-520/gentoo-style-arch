@@ -18,7 +18,7 @@ makedepends=(cmake python-lxml libx11 libxrandr wayland "vulkan-headers>=1:${pkg
 depends=(glibc)
 optdepends=('vulkan-driver: packaged vulkan driver')
 conflicts=(vulkan-icd-loader)
-provides=(vulkan-icd-loader libvulkan.so vulkan-icd-loader-git)
+provides=("vulkan-icd-loader=${pkgver}" libvulkan.so vulkan-icd-loader-git)
 source=(git+https://github.com/KhronosGroup/Vulkan-Loader.git)
 
 pkgver(){

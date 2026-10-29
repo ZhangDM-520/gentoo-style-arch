@@ -59,6 +59,11 @@ has() {
     grep -Fxq "$1=$2" <<<"$vars"
 }
 
+has_versioned() {
+    # A mapped swap/compat provide carries its version (QA provides-versioning).
+    grep -Eq "^$1=$2=[^[:space:]]+" <<<"$vars"
+}
+
 has pkgname 'vencord-git' || fail "pkgname is not vencord-git"
 
 # Desktop standalone scope: tracks upstream main, arch-neutral JavaScript
@@ -66,7 +71,7 @@ has pkgname 'vencord-git' || fail "pkgname is not vencord-git"
 has src 'Vencord::git+https://github.com/Vendicated/Vencord.git#branch=main' ||
     fail "does not track upstream main"
 has arch 'any' || fail "payload is plain JavaScript; arch must be any"
-has provides 'vencord' || fail "does not provide vencord"
+has_versioned provides 'vencord' || fail "does not provide versioned vencord"
 has conflicts 'vencord' || fail "does not conflict with vencord"
 
 # The only runtime depend is python (vencord-inject, stdlib only). The host

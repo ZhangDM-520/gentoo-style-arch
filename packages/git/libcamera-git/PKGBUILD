@@ -23,7 +23,7 @@ makedepends=('cmake' 'git' 'meson' 'ninja' 'python-jinja' 'python-ply' 'python-p
 # Delivers stock libcamera + libcamera-ipa (usr/lib/libcamera/ IPA modules and
 # v4l2 compat layer, stock's -ipa split). Stock -tools/-docs/gst-plugin/python
 # splits are dropped and not even built (see meson options below).
-provides=("libcamera=$pkgver" 'libcamera-ipa' 'libcamera.so' 'libcamera-base.so')
+provides=("libcamera=$pkgver" "libcamera-ipa=${pkgver}" 'libcamera.so' 'libcamera-base.so')
 conflicts=('libcamera' 'libcamera-ipa')
 # upstream moved hosting: git.libcamera.org redirects to freedesktop gitlab
 source=("git+https://gitlab.freedesktop.org/camera/${_pkgname}.git")

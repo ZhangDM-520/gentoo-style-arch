@@ -444,7 +444,7 @@ package_pipewire-pulse() {
     libpulse libpulse.so
     pipewire-session-manager
   )
-  provides=(pulse-native-provider)
+  provides=("pulse-native-provider=${pkgver}")
   conflicts=(pulseaudio)
   install=pipewire-pulse.install
 

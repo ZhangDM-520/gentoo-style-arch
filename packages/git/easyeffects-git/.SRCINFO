@@ -1,6 +1,6 @@
 pkgbase = easyeffects-git
 	pkgdesc = Audio Effects for PipeWire applications
-	pkgver = 8.3.0.r0.g2bd138377
+	pkgver = 8.3.0.r242.g7e314dc53
 	pkgrel = 1
 	url = https://github.com/wwmm/easyeffects
 	arch = x86_64
@@ -46,7 +46,7 @@ pkgbase = easyeffects-git
 	optdepends = mda.lv2: bass loudness
 	optdepends = x42-plugins-lv2: autotune
 	optdepends = libdeep_filter_ladspa: deep noise remover
-	provides = easyeffects
+	provides = easyeffects=8.3.0.r242.g7e314dc53
 	conflicts = easyeffects
 	source = easyeffects::git+https://github.com/wwmm/easyeffects
 	sha512sums = SKIP

@@ -13,7 +13,7 @@ pkgbase = xwayland-satellite-git
 	depends = libxcb
 	depends = xcb-util-cursor
 	depends = xorg-xwayland
-	provides = xwayland-satellite
+	provides = xwayland-satellite=0.8.2.r17.gb5690b5
 	conflicts = xwayland-satellite
 	source = git+https://github.com/Supreeeme/xwayland-satellite.git
 	source = 0001-round-half-up.patch

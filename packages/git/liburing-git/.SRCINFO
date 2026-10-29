@@ -6,7 +6,7 @@ pkgbase = liburing-git
 	arch = x86
 	arch = x86_64
 	license = LGPL2.1
-	provides = liburing
+	provides = liburing=2.15.r35.g78dce99b
 	provides = liburing.so
 	provides = liburing-ffi.so
 	conflicts = liburing

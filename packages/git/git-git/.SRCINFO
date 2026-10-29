@@ -35,7 +35,7 @@ pkgbase = git-git
 	optdepends = python: git svn & git p4
 	optdepends = subversion: git svn
 	optdepends = org.freedesktop.secrets: keyring credential helper
-	provides = git
+	provides = git=2.56.0.r116.g6de20f6092
 	conflicts = git
 	source = git+https://github.com/git/git.git
 	source = git-daemon@.service

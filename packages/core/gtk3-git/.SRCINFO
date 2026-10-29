@@ -71,7 +71,7 @@ pkgname = gtk3-git
 	depends = gtk-update-icon-cache
 	optdepends = evince: Default print preview command
 	provides = gtk3=3.24.52.r67.g2776f156e2
-	provides = gtk3-print-backends
+	provides = gtk3-print-backends=3.24.52.r67.g2776f156e2
 	provides = libgailutil-3.so
 	provides = libgdk-3.so
 	provides = libgtk-3.so

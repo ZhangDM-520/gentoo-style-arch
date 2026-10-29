@@ -13,7 +13,7 @@ pkgbase = libdrm-git
 	makedepends = git
 	makedepends = ninja
 	depends = libpciaccess
-	provides = libdrm
+	provides = libdrm=2.4.134.r16.gb97cbde1
 	conflicts = libdrm
 	source = git+https://gitlab.freedesktop.org/mesa/libdrm.git
 	source = COPYING

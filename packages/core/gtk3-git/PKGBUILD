@@ -190,7 +190,7 @@ package_gtk3-git() {
     'evince: Default print preview command')
   provides=(
     "gtk3=${pkgver}"
-    "${_pkgbase}-print-backends"
+    "${_pkgbase}-print-backends=${pkgver}"
     libgailutil-3.so
     libgdk-3.so
     "lib${_pkg}-3.so"

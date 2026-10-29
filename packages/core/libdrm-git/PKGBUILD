@@ -13,7 +13,7 @@ depends=('libpciaccess')
 makedepends=('python-docutils' 'meson' 'git' 'ninja')
 checkdepends=('cairo' 'cunit')
 url="http://dri.freedesktop.org/"
-provides=('libdrm')
+provides=("libdrm=${pkgver}")
 conflicts=('libdrm')
 
 source=(git+https://gitlab.freedesktop.org/mesa/libdrm.git

@@ -21,7 +21,7 @@ pkgbase = fcitx5-gtk-git
 	depends = libx11
 	depends = libxkbcommon
 	depends = pango
-	provides = fcitx5-gtk
+	provides = fcitx5-gtk=5.1.7.r1.g0445d4f
 	conflicts = fcitx5-gtk
 	source = git+https://github.com/fcitx/fcitx5-gtk.git
 	sha512sums = SKIP

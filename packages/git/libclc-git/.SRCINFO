@@ -14,7 +14,7 @@ pkgbase = libclc-git
 	makedepends = python
 	makedepends = ninja
 	makedepends = cmake
-	provides = libclc
+	provides = libclc=24.0.0_r600405.de20437cafa5
 	conflicts = libclc
 	source = llvm-project-git::git+https://github.com/llvm/llvm-project.git
 	md5sums = SKIP

@@ -16,7 +16,7 @@ license=(LGPL2.1)
 # Not trimmable.
 depends=('ostree' 'libarchive' 'bubblewrap' 'appstream-glib' 'polkit' 'appstream' 'xdg-dbus-proxy' 'glib2-devel' 'gobject-introspection' 'socat' 'libmalcontent')
 makedepends=('git' 'meson' 'ninja' 'docbook-xsl' 'docbook-xml' 'python' 'python-pyparsing' 'gi-docgen')
-provides=('flatpak' 'libflatpak.so')
+provides=("flatpak=${pkgver}" 'libflatpak.so')
 conflicts=('flatpak')
 source=("git+https://github.com/flatpak/flatpak.git")
 sha256sums=('SKIP')

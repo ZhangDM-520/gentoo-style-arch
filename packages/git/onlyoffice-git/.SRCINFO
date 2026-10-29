@@ -46,8 +46,8 @@ pkgbase = onlyoffice-git
 	optdepends = libreoffice: OpenSymbol fonts
 	optdepends = otf-takao: japanese Takao fonts
 	optdepends = ttf-ms-fonts: Microsoft fonts
-	provides = onlyoffice
-	provides = onlyoffice-desktopeditors
+	provides = onlyoffice=9.4.0.130
+	provides = onlyoffice-desktopeditors=9.4.0.130
 	conflicts = onlyoffice
 	conflicts = onlyoffice-bin
 	conflicts = onlyoffice-desktopeditors

@@ -10,8 +10,8 @@ pkgbase = seatd-git
 	makedepends = scdoc
 	makedepends = git
 	depends = systemd
-	provides = seatd
-	provides = libseat
+	provides = seatd=r365.427b5d956a
+	provides = libseat=r365.427b5d956a
 	provides = libseat.so
 	conflicts = seatd
 	conflicts = libseat

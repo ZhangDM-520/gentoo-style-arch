@@ -21,7 +21,7 @@ makedepends=(
 	clang
 	rust
 )
-provides=($_pkgname)
+provides=("$_pkgname=${pkgver}")
 conflicts=($_pkgname)
 source=(git+$url.git
         0001-round-half-up.patch)

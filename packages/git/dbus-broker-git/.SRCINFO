@@ -48,13 +48,13 @@ pkgname = dbus-broker-git
 	depends = libcap-ng.so
 	depends = libexpat.so
 	depends = libsystemd.so
-	provides = dbus-broker
+	provides = dbus-broker=37.102.g2956b5d
 	conflicts = dbus-broker
 
 pkgname = dbus-broker-units-git
 	pkgdesc = Linux D-Bus Message Broker - Service units
 	depends = dbus-broker
-	provides = dbus-broker-units
-	provides = dbus-units
+	provides = dbus-broker-units=37.102.g2956b5d
+	provides = dbus-units=37.102.g2956b5d
 	conflicts = dbus-broker-units
 	conflicts = dbus-daemon-units

@@ -53,7 +53,7 @@ build() {
 # Not running checks according to official PKGBUILD
 
 package_pango-git() {
-  provides=(pango libpango{,cairo,ft2,xft}-1.0.so)
+  provides=("pango=${pkgver}" libpango{,cairo,ft2,xft}-1.0.so)
   conflicts=(pango)
 
   meson install -C build --destdir "$pkgdir"

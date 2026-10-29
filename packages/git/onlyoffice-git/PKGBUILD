@@ -69,7 +69,7 @@ makedepends=(
     'java-environment=11'
     libxml2-legacy   # V8 toolchain
 )
-provides=('onlyoffice' 'onlyoffice-desktopeditors')
+provides=("onlyoffice=${pkgver}" "onlyoffice-desktopeditors=${pkgver}")
 conflicts=('onlyoffice' 'onlyoffice-bin' 'onlyoffice-desktopeditors')
 
 _url=https://github.com/ONLYOFFICE

@@ -33,7 +33,7 @@ pkgname = dbus
 	depends = libcap-ng.so
 	depends = libexpat.so
 	depends = libsystemd.so
-	provides = libdbus
+	provides = libdbus=1.16.2
 	provides = libdbus-1.so
 	conflicts = libdbus
 	replaces = libdbus

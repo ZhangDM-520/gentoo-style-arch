@@ -11,7 +11,7 @@ pkgbase = zstd-git
 	depends = xz
 	depends = zlib
 	depends = lz4
-	provides = zstd
+	provides = zstd=1.5.7.r0.gf8745da6f
 	provides = libzstd.so
 	conflicts = zstd
 	source = git+https://github.com/facebook/zstd.git#branch=release

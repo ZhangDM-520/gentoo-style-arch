@@ -63,6 +63,7 @@ vars=$(bash -c '
 ' _ "$pkgbuild") || fail "cannot source the PKGBUILD"
 
 has() { grep -Fxq "$1=$2" <<<"$vars"; }
+has_versioned() { grep -Eq "^$1=$2=[^[:space:]]+" <<<"$vars"; }
 field() { sed -n "s/^$1=//p" <<<"$vars"; }
 
 # ---------------------------------------------------------------- namespaces
@@ -210,8 +211,8 @@ for dep in qt5-base qt5-multimedia qt5-svg qt5-x11extras; do
     has depends "$dep" || fail "missing dependency: $dep"
 done
 
-has provides 'onlyoffice' || fail "does not provide onlyoffice"
-has provides 'onlyoffice-desktopeditors' || fail "does not provide onlyoffice-desktopeditors"
+has_versioned provides 'onlyoffice' || fail "does not provide versioned onlyoffice"
+has_versioned provides 'onlyoffice-desktopeditors' || fail "does not provide versioned onlyoffice-desktopeditors"
 has conflicts 'onlyoffice' || fail "would not conflict with the archlinuxcn build"
 
 # -O2 plus LTO segfaults the linker in this build; the option is load-bearing.

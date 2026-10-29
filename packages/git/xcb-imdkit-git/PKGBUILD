@@ -12,7 +12,7 @@ url="https://github.com/fcitx/xcb-imdkit"
 license=('GPL')
 depends=('xcb-util' 'xcb-util-keysyms' 'glibc' 'libxcb')
 makedepends=('extra-cmake-modules' 'git' 'ninja' 'uthash')
-provides=(${_pkgname})
+provides=("${_pkgname}=${pkgver}")
 conflicts=(${_pkgname})
 source=("git+https://github.com/fcitx/xcb-imdkit.git")
 sha512sums=('SKIP')

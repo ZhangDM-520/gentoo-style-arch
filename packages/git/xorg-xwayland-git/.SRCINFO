@@ -59,9 +59,9 @@ pkgbase = xorg-xwayland-git
 	depends = libei
 	depends = libxshmfence
 	depends = glibc
-	provides = xorg-xwayland
-	provides = xorg-server-xwayland
-	provides = xorg-server-xwayland-git
+	provides = xorg-xwayland=24.1.14.r1232.g0780950be
+	provides = xorg-server-xwayland=24.1.14.r1232.g0780950be
+	provides = xorg-server-xwayland-git=24.1.14.r1232.g0780950be
 	conflicts = xorg-xwayland
 	conflicts = xorg-server-xwayland
 	conflicts = xorg-server-xwayland-git

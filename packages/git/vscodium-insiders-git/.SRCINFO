@@ -1,6 +1,6 @@
 pkgbase = vscodium-insiders-git
 	pkgdesc = Free/Libre Open Source Software Binaries of VSCode Insiders (git build from latest commit).
-	pkgver = 1.140.06880.r1.gbe70704a
+	pkgver = 1.143.17232.r0.gca7f7b44
 	pkgrel = 1
 	url = https://github.com/VSCodium/vscodium.git
 	arch = x86_64
@@ -31,9 +31,9 @@ pkgbase = vscodium-insiders-git
 	depends = libxkbfile
 	optdepends = gvfs: For move to trash functionality
 	optdepends = libdbusmenu-glib: For KDE global menu
-	provides = codium
-	provides = vscodium
-	provides = vscodium-insiders=1.140.06880.r1.gbe70704a
+	provides = codium=1.143.17232.r0.gca7f7b44
+	provides = vscodium=1.143.17232.r0.gca7f7b44
+	provides = vscodium-insiders=1.143.17232.r0.gca7f7b44
 	conflicts = codium
 	conflicts = vscodium
 	conflicts = vscodium-bin

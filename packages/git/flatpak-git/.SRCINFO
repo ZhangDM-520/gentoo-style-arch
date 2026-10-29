@@ -25,7 +25,7 @@ pkgbase = flatpak-git
 	depends = gobject-introspection
 	depends = socat
 	depends = libmalcontent
-	provides = flatpak
+	provides = flatpak=1.19.2+21+gddbee83f4
 	provides = libflatpak.so
 	conflicts = flatpak
 	options = !debug

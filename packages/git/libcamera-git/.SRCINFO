@@ -32,7 +32,7 @@ pkgbase = libcamera-git
 	depends = sh
 	depends = systemd-libs
 	provides = libcamera=0.7.2.r165.ga92285e9c
-	provides = libcamera-ipa
+	provides = libcamera-ipa=0.7.2.r165.ga92285e9c
 	provides = libcamera.so
 	provides = libcamera-base.so
 	conflicts = libcamera

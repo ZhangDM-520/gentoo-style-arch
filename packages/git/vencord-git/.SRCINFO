@@ -1,6 +1,6 @@
 pkgbase = vencord-git
 	pkgdesc = The cutest Discord client mod (git build)
-	pkgver = 1.15.9.r0.g7f0c10cc2
+	pkgver = 1.15.13.r0.g443688b536
 	pkgrel = 1
 	url = https://github.com/Vendicated/Vencord
 	install = vencord-git.install
@@ -13,7 +13,7 @@ pkgbase = vencord-git
 	depends = python
 	optdepends = discord: official host client the desktop patcher modifies
 	optdepends = vesktop: desktop client with Vencord support built in
-	provides = vencord
+	provides = vencord=1.15.13.r0.g443688b536
 	conflicts = vencord
 	options = !strip
 	options = !debug

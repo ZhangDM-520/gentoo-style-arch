@@ -108,7 +108,7 @@ package_wireplumber() {
     systemd-libs
   )
   optdepends=()
-  provides=(pipewire-session-manager)
+  provides=("pipewire-session-manager=${pkgver}")
   conflicts=(pipewire-media-session)
   install=wireplumber.install
 

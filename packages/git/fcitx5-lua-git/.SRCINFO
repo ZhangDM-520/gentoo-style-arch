@@ -14,7 +14,7 @@ pkgbase = fcitx5-lua-git
 	depends = fcitx5-git
 	depends = gettext
 	depends = lua
-	provides = fcitx5-lua
+	provides = fcitx5-lua=5.0.18.r0.g9bf8d3d
 	conflicts = fcitx5-lua
 	source = git+https://github.com/fcitx/fcitx5-lua.git
 	sha512sums = SKIP

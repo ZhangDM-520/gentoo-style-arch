@@ -15,7 +15,7 @@ depends=('glibc')
 makedepends=('git')
 # soname shipped: libnghttp3.so.9
 # stock output superseded: libnghttp3; 'nghttp3' kept for AUR-era consumers
-provides=("libnghttp3=$pkgver" 'libnghttp3.so' 'nghttp3')
+provides=("libnghttp3=$pkgver" 'libnghttp3.so' "nghttp3=${pkgver}")
 conflicts=('libnghttp3' 'nghttp3')
 source=('git+https://github.com/ngtcp2/nghttp3.git'
         'git+https://github.com/ngtcp2/munit.git'

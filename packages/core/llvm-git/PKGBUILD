@@ -115,7 +115,7 @@ package_llvm-git() {
     depends=("llvm-libs-git=$pkgver-$pkgrel" 'perl')
     optdepends=('python: for scripts')
     provides=(aur-llvm-git compiler-rt-git clang-git lld-git
-              llvm compiler-rt clang lld )
+              "llvm=${pkgver}" "compiler-rt=${pkgver}" "clang=${pkgver}" "lld=${pkgver}" )
     # A package always provides itself, so there's no need to provide llvm-git
     conflicts=('llvm' 'compiler-rt' 'clang' 'lld')
 
@@ -170,7 +170,7 @@ package_llvm-git() {
 package_llvm-libs-git() {
     pkgdesc="runtime libraries for llvm-git"
     depends=('gcc-libs' 'zlib' 'libffi' 'libedit' 'ncurses' 'libxml2' 'z3')
-    provides=(aur-llvm-libs-git llvm-libs)
+    provides=(aur-llvm-libs-git "llvm-libs=${pkgver}")
     conflicts=('llvm-libs')
 
     install -d "$pkgdir"/usr/lib
@@ -195,7 +195,7 @@ package_llvm-libs-git() {
 package_clang-opencl-headers-git() {
     pkgdesc="clang headers & include files for OpenCL, trunk version"
     depends=("llvm-git=$pkgver-$pkgrel")
-    provides=('clang-opencl-headers')
+    provides=("clang-opencl-headers=${pkgver}")
     conflicts=('clang-opencl-headers' 'clang-opencl-headers-minimal-git')
 
     cp --preserve --recursive "$srcdir"/clang-opencl-headers/* "$pkgdir"/

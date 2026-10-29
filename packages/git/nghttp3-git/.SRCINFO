@@ -9,7 +9,7 @@ pkgbase = nghttp3-git
 	depends = glibc
 	provides = libnghttp3=1.18.0.r0.g2304973e5a
 	provides = libnghttp3.so
-	provides = nghttp3
+	provides = nghttp3=1.18.0.r0.g2304973e5a
 	conflicts = libnghttp3
 	conflicts = nghttp3
 	source = git+https://github.com/ngtcp2/nghttp3.git

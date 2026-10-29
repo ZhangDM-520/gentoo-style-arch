@@ -17,7 +17,7 @@ arch=('x86_64')
 url='https://github.com/microsoft/mimalloc'
 license=('MIT')
 conflicts=("${_pkgbase}")
-provides=("${_pkgbase}" 'libmimalloc.so')
+provides=("${_pkgbase}=${pkgver}" 'libmimalloc.so')
 # libatomic/libatomic.so: x4 shipped DT_NEEDED libatomic.so.1 (rule-54 declared-deps
 # sweep) — libatomic-snapshot carries stock libatomic + stamped libatomic.so=1-64
 # (expac-evidenced; sibling idiom boost's 'libgcc' 'libgcc_s.so').

@@ -23,7 +23,7 @@ pkgname = fcitx5-qt5-git
 	depends = gcc-libs
 	depends = libxcb
 	depends = glibc
-	provides = fcitx5-qt5
+	provides = fcitx5-qt5=5.1.16.r1.g0285a5d
 	conflicts = fcitx5-qt5
 
 pkgname = fcitx5-qt6-git
@@ -36,7 +36,7 @@ pkgname = fcitx5-qt6-git
 	depends = wayland
 	depends = glibc
 	depends = libxcb
-	provides = fcitx5-qt6
-	provides = fcitx5-qt
+	provides = fcitx5-qt6=5.1.16.r1.g0285a5d
+	provides = fcitx5-qt=5.1.16.r1.g0285a5d
 	conflicts = fcitx5-qt6
 	conflicts = fcitx5-qt

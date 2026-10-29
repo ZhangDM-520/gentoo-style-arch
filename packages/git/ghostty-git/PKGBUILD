@@ -4,7 +4,7 @@
 
 pkgname=ghostty-git
 _pkgname=ghostty
-pkgver=1.3.1.r3172.gf54340ad7
+pkgver=1.4.0.r9.g6ba144158
 pkgrel=1
 pkgdesc='Fast, native, feature-rich terminal emulator (git version)'
 arch=('x86_64')

@@ -12,7 +12,7 @@ sha256sums=('SKIP')
 conflicts=(seatd libseat)
 # libseat.so: bare entry so pacman 7.1 auto-derives the soname provide
 # (libseat.so=1-64) needed by wlroots0.20 — added 2026-09-07 after trim audit
-provides=(seatd libseat libseat.so)
+provides=("seatd=${pkgver}" "libseat=${pkgver}" libseat.so)
 depends=(systemd)
 makedepends=(meson ninja scdoc git)
 

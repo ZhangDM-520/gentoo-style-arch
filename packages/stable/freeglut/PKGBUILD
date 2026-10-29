@@ -24,7 +24,7 @@ makedepends=(
   mesa
   ninja
 )
-provides=(glut libglut.so)
+provides=("glut=${pkgver}" libglut.so)
 conflicts=(glut)
 source=("git+https://github.com/FreeGLUTProject/freeglut#tag=v${pkgver/[a-z]/-&}")
 b2sums=('2681b876d8867c6fb1f5a4242068434575c0c5ea14ce62b4754f1656bb5297821a95ce24eb14f326acccc929675211e908e6c702796a6d8c72b0f96e6503fbc0')

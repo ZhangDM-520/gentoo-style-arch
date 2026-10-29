@@ -138,7 +138,7 @@ package_dbus() {
     libsystemd.so
   )
   provides=(
-    libdbus
+    "libdbus=${pkgver}"
     libdbus-1.so
   )
   conflicts=(libdbus)

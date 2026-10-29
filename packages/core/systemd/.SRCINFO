@@ -136,7 +136,7 @@ pkgname = systemd
 	optdepends = systemd-sysvcompat: symlink package to provide sysvinit binaries
 	optdepends = systemd-ukify: combine kernel and initrd into a signed Unified Kernel Image
 	optdepends = tpm2-tss: unlocking LUKS2 volumes with TPM2
-	provides = nss-myhostname
+	provides = nss-myhostname=262
 	provides = systemd-tools=262
 	provides = udev=262
 	conflicts = nss-myhostname
@@ -174,7 +174,7 @@ pkgname = systemd-libs
 	depends = lz4
 	depends = xz
 	depends = zstd
-	provides = libsystemd
+	provides = libsystemd=262
 	provides = libsystemd.so
 	provides = libudev.so
 	conflicts = libsystemd
@@ -184,7 +184,7 @@ pkgname = systemd-resolvconf
 	pkgdesc = systemd resolvconf replacement (for use with systemd-resolved)
 	depends = systemd=262
 	provides = openresolv
-	provides = resolvconf
+	provides = resolvconf=262
 	conflicts = resolvconf
 
 pkgname = systemd-sysvcompat

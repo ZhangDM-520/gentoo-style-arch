@@ -16,7 +16,7 @@ groups=()
 depends=('xz' 'zlib' 'lz4')
 makedepends=('git')
 conflicts=('zstd')
-provides=('zstd' 'libzstd.so')
+provides=("zstd=${pkgver}" 'libzstd.so')
 # Track the release branch — dev branch tags diverged after v1.4.7
 # (release tags are on a separate branch, unreachable from dev via git describe)
 source=('git+https://github.com/facebook/zstd.git#branch=release')

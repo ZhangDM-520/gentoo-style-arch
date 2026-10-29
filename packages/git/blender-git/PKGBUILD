@@ -21,7 +21,7 @@ _git_revert=(49414a72f607ccd15f8b71b81edc9aff040d581e) # v3.1 arch
 [[ -v HIP_ARCH  ]] && _CMAKE_FLAGS+=(-DCYCLES_HIP_BINARIES_ARCH="${HIP_ARCH}")
 
 pkgname=blender-git
-pkgver=5.4.r166485.g8af6c380a19a
+pkgver=5.4.r166897.g12c5d0e6589e
 pkgrel=1
 pkgdesc="A fully integrated 3D graphics creation suite (development)"
 arch=('i686' 'x86_64')
@@ -48,7 +48,7 @@ makedepends+=('wayland-protocols')
 makedepends+=('cython')
 makedepends+=('vulkan-headers')
 makedepends+=('makepkg-git-lfs-proto') # provides /usr/share/makepkg/source/git-lfs.sh (download_git-lfs, extract_git-lfs)
-provides=('blender')
+provides=("blender=${pkgver}")
 conflicts=('blender')
 license=('GPL')
 # cmake-git 4.4 hard-errors on the trailing `DEPENDS blender` in the manpage

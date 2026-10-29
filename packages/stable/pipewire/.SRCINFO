@@ -187,7 +187,7 @@ pkgname = pipewire-pulse
 	depends = libpulse
 	depends = libpulse.so
 	depends = pipewire-session-manager
-	provides = pulse-native-provider
+	provides = pulse-native-provider=1.6.10
 	conflicts = pulseaudio
 
 pkgname = pipewire-session-manager

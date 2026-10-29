@@ -8,8 +8,8 @@ pkgbase = libisl-git
 	makedepends = git
 	depends = glibc
 	depends = gmp
-	provides = isl
-	provides = libisl
+	provides = isl=0.28
+	provides = libisl=0.28
 	provides = libisl.so
 	conflicts = isl
 	conflicts = libisl

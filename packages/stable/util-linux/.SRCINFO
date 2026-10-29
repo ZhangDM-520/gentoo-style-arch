@@ -68,8 +68,8 @@ pkgname = util-linux
 	depends = libudev.so
 	depends = zlib
 	optdepends = words: default dictionary for look
-	provides = rfkill
-	provides = hardlink
+	provides = rfkill=2.42.4
+	provides = hardlink=2.42.4
 	conflicts = rfkill
 	conflicts = hardlink
 	replaces = rfkill
@@ -89,7 +89,7 @@ pkgname = util-linux-libs
 	depends = sqlite
 	depends = systemd-libs
 	depends = libsystemd.so
-	provides = libutil-linux
+	provides = libutil-linux=2.42.4
 	provides = libblkid.so
 	provides = libfdisk.so
 	provides = libmount.so

@@ -88,7 +88,7 @@ _pick() {
 
 package_libadwaita-git() {
   depends+=(libgtk-4.so)
-  provides=(libadwaita)
+  provides=("libadwaita=${pkgver}")
   conflicts=(libadwaita)
   provides+=(libadwaita-1.so)
 

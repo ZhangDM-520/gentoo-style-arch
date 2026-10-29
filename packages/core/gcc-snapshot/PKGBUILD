@@ -182,7 +182,7 @@ package_gcc-snapshot() {
   pkgdesc="GNU Compiler Collection - C and C++ front-ends (snapshot)"
   depends=("libgcc-snapshot=${pkgver}-${pkgrel}" "libstdc++-snapshot=${pkgver}-${pkgrel}" "glibc>=2.40" zstd)
   optdepends=("lib32-gcc-libs-snapshot: for generating code for 32-bit ABI")
-  provides=(${pkgname}-multilib gcc-multilib gcc)
+  provides=(${pkgname}-multilib "gcc-multilib=${pkgver}" "gcc=${pkgver}")
   replaces=(${pkgname}-multilib gcc-multilib gcc)
   conflicts=(gcc-multilib gcc)
   options=(!emptydirs staticlibs)
@@ -267,7 +267,7 @@ package_gcc-snapshot() {
 package_gcc-fortran-snapshot() {
   pkgdesc="GNU Compiler Collection - Fortran front-end (snapshot)"
   depends=("gcc-snapshot=${pkgver}-${pkgrel}" "libgfortran-snapshot=${pkgver}-${pkgrel}" "glibc>=2.40")
-  provides=(${pkgname}-multilib gcc-fortran-multilib gcc-fortran)
+  provides=(${pkgname}-multilib "gcc-fortran-multilib=${pkgver}" "gcc-fortran=${pkgver}")
   replaces=(${pkgname}-multilib gcc-fortran-multilib gcc-fortran)
   conflicts=(gcc-fortran-multilib gcc-fortran)
   options=(!emptydirs staticlibs)
@@ -290,7 +290,7 @@ package_gcc-fortran-snapshot() {
 package_gcc-libs-snapshot() {
   pkgdesc="GNU Compiler Collection - Runtime libraries (snapshot)"
   depends=("libasan-snapshot=${pkgver}-${pkgrel}" "libatomic-snapshot=${pkgver}-${pkgrel}" "libgfortran-snapshot=${pkgver}-${pkgrel}" "libgcc-snapshot=${pkgver}-${pkgrel}" "libgomp-snapshot=${pkgver}-${pkgrel}" "libitm-snapshot=${pkgver}-${pkgrel}" "liblsan-snapshot=${pkgver}-${pkgrel}" "libquadmath-snapshot=${pkgver}-${pkgrel}" "libstdc++-snapshot=${pkgver}-${pkgrel}" "libtsan-snapshot=${pkgver}-${pkgrel}" "libubsan-snapshot=${pkgver}-${pkgrel}" "glibc>=2.40")
-  provides=(${pkgname}-multilib gcc-libs-multilib "gcc-libs=${pkgver}-${pkgrel}")
+  provides=(${pkgname}-multilib "gcc-libs-multilib=${pkgver}" "gcc-libs=${pkgver}-${pkgrel}")
   replaces=(${pkgname}-multilib gcc-libs-multilib gcc-libs)
   conflicts=(gcc-libs-multilib gcc-libs)
   options=(!emptydirs)
@@ -299,7 +299,7 @@ package_gcc-libs-snapshot() {
 package_libasan-snapshot() {
   pkgdesc="GNU Compiler Collection - Address Sanitizer runtime libraries (snapshot)"
   depends=("glibc>=2.40")
-  provides=(${pkgname}-multilib libasan libasan.so)
+  provides=(${pkgname}-multilib "libasan=${pkgver}" libasan.so)
   replaces=(${pkgname}-multilib libasan)
   conflicts=(libasan)
   options=(!emptydirs)
@@ -317,7 +317,7 @@ package_libasan-snapshot() {
 package_libatomic-snapshot() {
   pkgdesc="GNU Compiler Collection - GNU Atomic runtime libraries (snapshot)"
   depends=("glibc>=2.40")
-  provides=(${pkgname}-multilib libatomic libatomic.so)
+  provides=(${pkgname}-multilib "libatomic=${pkgver}" libatomic.so)
   replaces=(${pkgname}-multilib libatomic)
   conflicts=(libatomic)
   options=(!emptydirs)
@@ -335,7 +335,7 @@ package_libatomic-snapshot() {
 package_libgcc-snapshot() {
   pkgdesc="GNU Compiler Collection - Low-level runtime libraries (snapshot)"
   depends=("glibc>=2.40")
-  provides=(${pkgname}-multilib libgcc libgcc_s.so libgcc_s_asneeded.so)
+  provides=(${pkgname}-multilib "libgcc=${pkgver}" libgcc_s.so libgcc_s_asneeded.so)
   replaces=(${pkgname}-multilib libgcc)
   conflicts=(libgcc)
   options=(!emptydirs)
@@ -354,7 +354,7 @@ package_libgcc-snapshot() {
 package_libgccjit-snapshot() {
   pkgdesc="GNU Compiler Collection - Just-In-Time compilation framework (snapshot)"
   depends=("gcc-snapshot=${pkgver}-${pkgrel}")
-  provides=(${pkgname}-multilib libgccjit)
+  provides=(${pkgname}-multilib "libgccjit=${pkgver}")
   replaces=(${pkgname}-multilib libgccjit)
   conflicts=(libgccjit)
   options=(!emptydirs)
@@ -372,7 +372,7 @@ package_libgccjit-snapshot() {
 package_libgfortran-snapshot() {
   pkgdesc="GNU Compiler Collection - Fortran runtime libraries (snapshot)"
   depends=("glibc>=2.40")
-  provides=(${pkgname}-multilib libgfortran libgfortran.so)
+  provides=(${pkgname}-multilib "libgfortran=${pkgver}" libgfortran.so)
   replaces=(${pkgname}-multilib libgfortran)
   conflicts=(libgfortran)
   options=(!emptydirs)
@@ -390,7 +390,7 @@ package_libgfortran-snapshot() {
 package_libgomp-snapshot() {
   pkgdesc="GNU Compiler Collection - OpenMP and GPU Offload runtime libraries (snapshot)"
   depends=("glibc>=2.40")
-  provides=(${pkgname}-multilib libgomp libgomp.so)
+  provides=(${pkgname}-multilib "libgomp=${pkgver}" libgomp.so)
   replaces=(${pkgname}-multilib libgomp)
   conflicts=(libgomp)
   options=(!emptydirs)
@@ -409,7 +409,7 @@ package_libgomp-snapshot() {
 package_libitm-snapshot() {
   pkgdesc="GNU Compiler Collection - GNU Transactional Memory runtime libraries (snapshot)"
   depends=("glibc>=2.40")
-  provides=(${pkgname}-multilib libitm libitm.so)
+  provides=(${pkgname}-multilib "libitm=${pkgver}" libitm.so)
   replaces=(${pkgname}-multilib libitm)
   conflicts=(libitm)
   options=(!emptydirs)
@@ -428,7 +428,7 @@ package_libitm-snapshot() {
 package_liblsan-snapshot() {
   pkgdesc="GNU Compiler Collection - Leak Sanitizer runtime libraries (snapshot)"
   depends=("glibc>=2.40")
-  provides=(${pkgname}-multilib liblsan liblsan.so)
+  provides=(${pkgname}-multilib "liblsan=${pkgver}" liblsan.so)
   replaces=(${pkgname}-multilib liblsan)
   conflicts=(liblsan)
   options=(!emptydirs)
@@ -446,7 +446,7 @@ package_liblsan-snapshot() {
 package_libquadmath-snapshot() {
   pkgdesc="GNU Compiler Collection - Quad-Precision Math runtime libraries (snapshot)"
   depends=("glibc>=2.40")
-  provides=(${pkgname}-multilib libquadmath libquadmath.so)
+  provides=(${pkgname}-multilib "libquadmath=${pkgver}" libquadmath.so)
   replaces=(${pkgname}-multilib libquadmath)
   conflicts=(libquadmath)
   options=(!emptydirs)
@@ -465,7 +465,7 @@ package_libquadmath-snapshot() {
 package_libstdc++-snapshot() {
   pkgdesc="GNU Compiler Collection - C++ runtime libraries (snapshot)"
   depends=("glibc>=2.40")
-  provides=(${pkgname}-multilib libstdc++ libstdc++.so)
+  provides=(${pkgname}-multilib "libstdc++=${pkgver}" libstdc++.so)
   replaces=(${pkgname}-multilib libstdc++)
   conflicts=(libstdc++)
   options=(!emptydirs)
@@ -484,7 +484,7 @@ package_libstdc++-snapshot() {
 package_libtsan-snapshot() {
   pkgdesc="GNU Compiler Collection - Thread Sanitizer runtime libraries (snapshot)"
   depends=("glibc>=2.40")
-  provides=(${pkgname}-multilib libtsan libtsan.so)
+  provides=(${pkgname}-multilib "libtsan=${pkgver}" libtsan.so)
   replaces=(${pkgname}-multilib libtsan)
   conflicts=(libtsan)
   options=(!emptydirs)
@@ -502,7 +502,7 @@ package_libtsan-snapshot() {
 package_libubsan-snapshot() {
   pkgdesc="GNU Compiler Collection - Undefined Behavior Sanitizer runtime libraries (snapshot)"
   depends=("glibc>=2.40")
-  provides=(${pkgname}-multilib libubsan libubsan.so)
+  provides=(${pkgname}-multilib "libubsan=${pkgver}" libubsan.so)
   replaces=(${pkgname}-multilib libubsan)
   conflicts=(libubsan)
   options=(!emptydirs)
@@ -520,7 +520,7 @@ package_libubsan-snapshot() {
 package_lib32-gcc-libs-snapshot() {
   pkgdesc="GNU Compiler Collection - 32-bit Runtime libraries (snapshot)"
   depends=("lib32-glibc>=2.40")
-  provides=(${pkgname}-multilib lib32-gcc-libs libasan.so libatomic.so libgfortran.so libgcc_s.so libgomp.so libitm.so libquadmath.so libstdc++.so libubsan.so)
+  provides=(${pkgname}-multilib "lib32-gcc-libs=${pkgver}" libasan.so libatomic.so libgfortran.so libgcc_s.so libgomp.so libitm.so libquadmath.so libstdc++.so libubsan.so)
   replaces=(${pkgname}-multilib lib32-gcc-libs)
   conflicts=(lib32-gcc-libs-multilib lib32-gcc-libs)
   options=(!emptydirs)
@@ -546,7 +546,7 @@ package_lib32-gcc-libs-snapshot() {
 package_lto-dump-snapshot() {
   pkgdesc="GNU Compiler Collection - Dump link time optimization object files tool (snapshot)"
   depends=("gcc-snapshot=${pkgver}-${pkgrel}" libgcc-snapshot)
-  provides=(${pkgname}-multilib lto-dump)
+  provides=(${pkgname}-multilib "lto-dump=${pkgver}")
   replaces=(${pkgname}-multilib lto-dump)
   conflicts=(lto-dump)
   options=(!emptydirs)

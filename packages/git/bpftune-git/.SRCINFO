@@ -14,7 +14,7 @@ pkgbase = bpftune-git
 	depends = libbpf
 	depends = libnl
 	depends = libcap
-	provides = bpftune
+	provides = bpftune=r772.d5d9f60
 	conflicts = bpftune
 	options = strip
 	source = git+https://github.com/oracle-samples/bpftune
