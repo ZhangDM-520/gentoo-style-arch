@@ -1,6 +1,6 @@
 pkgbase = glycin
 	pkgdesc = Sandboxed and extendable image decoding
-	pkgver = 2.2.4
+	pkgver = 2.2.5
 	pkgrel = 1.1
 	url = https://gnome.pages.gitlab.gnome.org/glycin/
 	arch = x86_64
@@ -27,9 +27,9 @@ pkgbase = glycin
 	depends = libjxl
 	depends = librsvg
 	depends = libseccomp
-	source = git+https://gitlab.gnome.org/GNOME/glycin.git#tag=2.2.4
+	source = git+https://gitlab.gnome.org/GNOME/glycin.git#tag=2.2.5
 	source = git+https://gitlab.gnome.org/sophie-h/test-images.git
-	b2sums = 10fbd7f78f9508a5dab978226e88a059ec00523bc5b6da4379151fd95b62ff363c453a4d4a76b93a18c333a703644af4430b3095ca60056ae61705a04bda008f
+	b2sums = 46956b6c29875427b33262881e8793348c37c2d1c5a10e2cd19b60e515e8d1e078fc5e1769a9944ef7dd8d173d86f549cb74cc44296b50e5613e46f1e7e5f143
 	b2sums = SKIP
 
 pkgname = glycin
