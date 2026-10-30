@@ -17818,3 +17818,45 @@ the disposition call. BUILD HELD per owner.
 - PKGBUILD scrub: source() still listed 0015 while its file/apply-line/sha were gone (8 sources vs 7 sums, shifted pairing) — stale entry removed; all 7 source↔sha256sums pairs verified by hash.
 - Full stack rehearsal on real main 3caa9ead, prepare() order: 0011, 0012, 0013, 0014, 0016, 0017 ALL OK (static git apply -3 only — no builds, per owner's battery constraint).
 - Note: an earlier rehearsal round falsely failed 0012/0013/0014 — it ran against a stale local `main` (fd0a6e9a, an ancestor) due to a scratch clone's origin pointing at the workspace; caught by an is-ancestor check. Real base = 3caa9ead.
+
+### 2026-10-30 — recipe: r 4.6.2 (icu-git swap breakage) + abi-need-check cache truth
+
+- **WHAT** (owner: paru -Syu hit `abi-need-check: r: … needs 'libR.so' /
+  'libicuuc.so.78' — no file resolves it (fatal)`; chose "add r to the
+  tree"): `packages/stable/r/` mirrors Arch extra/r 4.6.2-1 (pkgrel=1.1
+  convention; local assets r.desktop/r.png/R.conf fetched from the official
+  packaging repo — sha256 match upstream). Root cause of the fatal: stock/CachyOS
+  r linked `libicuuc.so.78` while our 64-bit icu-git moved to soname .79
+  (ldd: "not found") — r was ALREADY broken before the update; the tree
+  recipe rebuilds it against icu-git. Topology: `r|packages/stable/r|app|
+  …icu-git…` (edges = the dep names that have records; blas/lapack/
+  libdeflate/which/texlive-*/gcc-fortran have none and stay stock).
+  The hub rule (≥2 edge-consumers ⇒ core) fired on `tk` — its second
+  consumer is r — so `tk` gains `core` dual membership (tcl parity; the
+  gate's own sanctioned remedy).
+- **QA fix**: the upstream `provides+=(…)` loop in package() renders an
+  EMPTY `provides = ` row in .SRCINFO (makepkg --printsrcinfo textually
+  extracts provides assignments from package() and evals the RHS in an
+  empty scope — measured; MEMORY §4). Moved behind a helper
+  (`_r_bundled_provides`): .SRCINFO clean, built .PKGINFO keeps the
+  r-boot/r-class/… provides (pacman -Qi verified), qa-report findings=0.
+- **abi-need-check cache truth** (the other 30 lines of the owner's
+  paste): `libR.so` carries NO DT_SONAME and R's modules have no RUNPATH —
+  only the loader cache (/etc/ld.so.conf.d/R.conf → /usr/lib/R/lib) maps
+  the name, and host_resolves scanned RUNPATH + /usr/lib* only. The
+  checker now falls back to `ldconfig -p` (class-tagged, file-truth
+  checked, loaded once) — still file-system oracle, now the WHOLE map
+  ld.so uses. Fixture: new section 14 pins cache-only resolution + the
+  dangling-cache-row twin (red-first: the case failed against the old
+  scanner). Post-fix the built archive reads `r: clean (122 runtime
+  links)`.
+- **VERIFY**: `sudo gsa -S r` then `sudo gsa -Sf r` (QA rerun after the
+  provides fix) both build-install ok, rc 0, qa-report findings=0;
+  pacman -Qi r = 4.6.2-1.1 with the bundled r-* provides; ldd libR.so
+  resolves libicu{uc,i18n,data}.so.79; `R --version` runs;
+  `IgnorePkg = r` registered at install acceptance (gsa -Mi closure
+  clean); tests/abi-need-check.sh PASS; abi-batch-policy PASS; battery
+  **71 passed, 2 failed — both the parallel session's committed drift**
+  (noctalia-git/umbriel-git PKGBUILD↔.SRCINFO pkgver desync from
+  f2d0e98/371a959: srcinfo-freshness + noctalia-pgo-train; left alone —
+  one writer per mutable state).

@@ -55,6 +55,14 @@
      it verbatim (2026-10-28 noctalia-git).
    - every lib-shipping package declares BARE soname provides (`libfoo.so`) —
      undeclared = repo consumers break on the stock→house swap.
+   - dynamic `provides+=()` in `package()` must go through a HELPER
+     function: `makepkg --printsrcinfo` textually extracts provides
+     assignments from the package() body and evals their RHS in an empty
+     scope, so a computed entry renders as an EMPTY `provides = ` row in
+     .SRCINFO (swap-drift QA: "metadata that names nothing"; the built
+     .PKGINFO is unaffected — the statement runs at package() time).
+     Measured 2026-10-30 on packages/stable/r; probe: a literal
+     `provides+=("x=1")` in package() DOES appear in --printsrcinfo.
    - provides live in .PKGINFO: any provides change needs a real rebuild
      (`makepkg -Rf` repackages without rebuilding).
    - verify artifacts: `tar -xOf pkg.tar.zst .PKGINFO | grep provides`.

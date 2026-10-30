@@ -58,4 +58,3 @@ pkgbase = r
 	sha256sums = b7833166041b06f716b6a79095d27d4abd83549816dc53193213827139eae6ef
 
 pkgname = r
-	provides = 
