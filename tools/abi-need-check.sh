@@ -18,9 +18,11 @@ set -uo pipefail
 # transaction. It does NOT check symbol versions, versioned provides, or
 # pin drift — those degrade features, they do not kill the package (owner's
 # scope call, 2026-10-22). The runtime oracle is the FILE SYSTEM, not the
-# pacman database: `ld.so` resolves by path, so a declared provide with no
-# file behind it is exactly as fatal (the tk `libtk.so` dangling symlink,
-# 2026-10-22) and a file with no provide is harmless.
+# pacman database: `ld.so` resolves by path — the consumer's RUNPATH, the
+# default lib dirs, and the loader cache (`ldconfig -p`: ld.so.conf.d dirs
+# and filename-indexed libraries, R's libR.so class) — so a declared
+# provide with no file behind it is exactly as fatal (the tk `libtk.so`
+# dangling symlink, 2026-10-22) and a file with no provide is harmless.
 #
 # Inputs
 # ------
@@ -400,7 +402,8 @@ fi
 # not a file (audit root cause 3).
 host_resolves() {
     # $1 = soname, $2 = libdirs (colon separated), $3 = elf dir (for $ORIGIN)
-    local soname=$1 dir elf_dir=$3 path
+    # $4 = ELF class (ELF64|ELF32) for the cache fallback
+    local soname=$1 dir elf_dir=$3 path class=${4:-ELF64}
     local IFS=':'
     for dir in $2; do
         dir=${dir//\$ORIGIN/$elf_dir}
@@ -411,11 +414,42 @@ host_resolves() {
             return 0
         fi
     done
+    # `ldconfig -p` is the map ld.so itself loads: a row's name is the
+    # indexed name (DT_SONAME or bare file name). The class tag must match
+    # (audit root cause 1: a 64-bit consumer is never satisfied by a lib32
+    # row) and the file must exist (audit root cause 3: a cache row pointing
+    # at nothing resolves nothing).
+    if ((ld_cache_loaded == 0)); then
+        ld_cache=$(ldconfig -p 2>/dev/null || true)
+        ld_cache_loaded=1
+    fi
+    local line name tag arrow
+    while IFS= read -r line; do
+        [[ $line == *' => '* ]] || continue
+        IFS=$' \t' read -r name tag arrow path <<<"$line" || continue
+        [[ $arrow == '=>' && $name == "$soname" ]] || continue
+        tag=${tag#\(}
+        tag=${tag%\)}
+        case $class in
+        ELF64) [[ $tag == *x86-64* ]] || continue ;;
+        ELF32) [[ $tag != *x86-64* ]] || continue ;;
+        esac
+        if [[ -e $path ]]; then
+            return 0
+        fi
+    done <<<"$ld_cache"
     return 1
 }
 
 findings=0
 idx=0
+# ld.so.cache truth, loaded once (spawn count is the whole cost): the
+# loader's search includes the ld.so.conf.d dirs and filename-indexed
+# libraries that no dir scan sees (R's libR.so has NO DT_SONAME —
+# /usr/lib/R/lib/libR.so is cached under its file name; measured 2026-10-30).
+ld_cache_loaded=0
+ld_cache=''
+
 for root in "${roots[@]}"; do
     pkg=${pkgnames[$idx]}
     blob=${factblobs[$idx]}
@@ -478,14 +512,14 @@ for root in "${roots[@]}"; do
                         # provide with no file behind it (the tk `libtk.so`
                         # dangling symlink, 2026-10-22) is exactly as fatal
                         # as no provide at all and must NOT set covered.
-                        if host_resolves "$needed" "$libdirs" "$elf_dir"; then
+                        if host_resolves "$needed" "$libdirs" "$elf_dir" "$class"; then
                             covered=1
                         fi
                         break
                     fi
                 done
             fi
-            if ((covered == 0)) && host_resolves "$needed" "$libdirs" "$elf_dir"; then
+            if ((covered == 0)) && host_resolves "$needed" "$libdirs" "$elf_dir" "$class"; then
                 covered=1
             fi
 

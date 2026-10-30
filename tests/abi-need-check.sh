@@ -13,7 +13,10 @@ set -euo pipefail
 #   * fatal-only semantics: missing FILE is fatal, missing version pins are
 #     invisible (the owner's loose-scope call, 2026-10-22);
 #   * the runtime oracle is the file system: a dangling symlink does NOT
-#     resolve (tk `libtk.so` lesson) and a file needs no provide;
+#     resolve (tk `libtk.so` lesson) and a file needs no provide — and the
+#     file system includes the loader cache: a soname visible only through
+#     an ld.so.conf.d dir resolves (R's /usr/lib/R/lib class), with the
+#     same file-truth rule;
 #   * transaction-internal coverage: a soname another payload in the same
 #     batch ships is fine, and a declared provide covers its stems ONLY
 #     when a file stands behind them (the same file-system resolution the
@@ -382,5 +385,32 @@ out=$(printf 'pkg-twin\n' |
 [[ $status == 0 ]] || fail "cached twin was scanned for a -U install (want stand-down 0), got $status: $out"
 [[ $out == *'pkg-twin: skipped (local file install'* ]] || fail "missing -U stand-down note: $out"
 [[ $out != *'libmissing-fixture'* ]] || fail "cached twin was scanned instead of standing down: $out"
+
+# ── 14. ld.so.cache truth: resolution through an ld.so.conf.d dir ─────────
+# A soname visible only through the loader cache resolves (R's
+# /usr/lib/R/lib class — /etc/ld.so.conf.d/R.conf, 2026-10-30: libR.so has
+# NO DT_SONAME and the modules carry no RUNPATH, so only the cache maps the
+# name to the file), with the SAME file-truth rule as the dir scan — a cache
+# row pointing at nothing stays fatal (the dangling-symlink lesson,
+# cache-shaped). The provider stands in for an ALREADY-INSTALLED file (it
+# is never part of the scanned payload) and the cache is stubbed through
+# PATH (the checker consults `ldconfig -p`, the map ld.so loads).
+make_lib "$tmp/hostroot/usr/lib/rprivate" libgsc.so.3 libgsc.so.3
+make_bin "$tmp/e/usr/bin" cache-consumer libgsc.so.3
+make_bin "$tmp/e/usr/bin" dangling-consumer libdang.so.5
+mkdir -p "$tmp/stubbin"
+cat >"$tmp/stubbin/ldconfig" <<EOF
+#!/usr/bin/env bash
+printf '2 libs found in cache\n'
+printf '\tlibgsc.so.3 (libc6,x86-64) => $tmp/hostroot/usr/lib/rprivate/libgsc.so.3\n'
+printf '\tlibdang.so.5 (libc6,x86-64) => $tmp/hostroot/usr/lib/rprivate/libdang.so.5\n'
+EOF
+chmod +x "$tmp/stubbin/ldconfig"
+make_pkgroot "$tmp/e" pkg-cache
+status=0
+PATH="$tmp/stubbin:$PATH" run out err -- --quiet "$tmp/e" || status=$?
+[[ $status == 1 ]] || fail "dangling cache row resolved (want fatal 1), got $status: $out"
+[[ $out == *"'dangling-consumer' needs 'libdang.so.5'"* ]] || fail "dangling cache row not flagged: $out"
+[[ $out != *'libgsc.so.3'* ]] || fail "cache-visible soname not resolved: $out"
 
 printf 'abi-need-check fixture: ok\n'
