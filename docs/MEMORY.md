@@ -823,7 +823,14 @@
     (choices: enabled/disabled/auto). Validate `-D` values against
     `meson_options.txt` types before the first real build; red/green
     rehearsal at the configure seam (extract the pinned ref from SRCDEST,
-    run the recipe's exact meson args) catches both in seconds.
+    run the recipe's exact meson args) catches both in seconds. Parsing
+    `meson_options.txt`/`meson.options` for such checks (2026-10-30 sweep):
+    `option(` and the name may sit on separate lines — flatten with
+    `tr '\n' ' '` before grepping; strip `#` comments per-LINE *before*
+    flattening (post-flatten `#`-to-next-quote stripping eats option
+    names → false stales); match option names exactly (prefix-matching a
+    clone directory resolves the wrong package's options); upstream
+    default branch is not always `main` (babl = `master`).
 32. **A patch dropped from a set must be checked for what it replaced; gate
     the SHIPPED symbols, not the build exit code** (2026-10-06 nspr-git):
     the recipe applied stock's `0002` (removing the atomic asm files from the

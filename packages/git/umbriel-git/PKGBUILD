@@ -8,7 +8,7 @@ source "$startdir/../../../lib/pgo.sh"
 
 pkgname=umbriel-git
 _pkgname=umbriel
-pkgver=0.1.0.r1418.b456dc2
+pkgver=0.1.0.r1445.d1db16a
 pkgrel=1
 epoch=1
 pkgdesc='A Wayland compositor built on wlroots'
@@ -229,12 +229,12 @@ build() {
   CXXFLAGS="${_gen_cxxflags# } -fprofile-generate=$_pgo_dir"
   LDFLAGS="${_gen_ldflags# } -fprofile-generate=$_pgo_dir"
 
-  # -Dtests/-Dtest_ipc are enabled ONLY for the training phase: a release
+  # -Dtests/-Dharness are enabled ONLY for the training phase: a release
   # build compiles nothing but the compositor and its data otherwise
   # (PACKAGING.md). Phase 2 switches them back off so no test or harness-IPC
   # target is even compiled into the final build.
   arch-meson "${_pkgname}" build-release "${meson_flags[@]}" \
-    -Db_lto=false -Dtests=enabled -Dtest_ipc=enabled
+    -Db_lto=false -Dtests=enabled -Dharness=enabled
   meson compile -C build-release
 
   # Training run: the upstream suite is the broadest coverage upstream ships
@@ -266,7 +266,7 @@ build() {
       -Dcpp_args="$CXXFLAGS" \
       -Dc_link_args="$LDFLAGS" \
       -Dcpp_link_args="$LDFLAGS"
-    meson configure build-release -Db_lto=true -Dtests=disabled -Dtest_ipc=disabled
+    meson configure build-release -Db_lto=true -Dtests=disabled -Dharness=disabled
   else
     msg "PGO profile: %d gcda files — rebuilding with profile" "$_gcda_count"
     # Phase 2: profile-used build. Tolerance flags are load-bearing
@@ -285,7 +285,7 @@ build() {
       -Dcpp_args="$CXXFLAGS" \
       -Dc_link_args="$LDFLAGS" \
       -Dcpp_link_args="$LDFLAGS"
-    meson configure build-release -Db_lto=true -Dtests=disabled -Dtest_ipc=disabled
+    meson configure build-release -Db_lto=true -Dtests=disabled -Dharness=disabled
   fi
 
   meson compile -C build-release

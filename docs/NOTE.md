@@ -17885,3 +17885,36 @@ the disposition call. BUILD HELD per owner.
   "more than 2 … (max 3)"). MEMORY open item closed with the resolution.
 - **VERIFY**: tests/noctalia-pgo.sh both halves PASS; srcinfo-freshness
   PASS (660 recipes); full battery re-run green (see the run below).
+
+### 2026-10-30 — umbriel test_ipc→harness rename + tree-wide meson option sweep
+
+- **WHAT** (owner: "sweep all recipes … test_ipc won't be specific to
+  umbriel recipe"): umbrella PGO build broke — upstream umbriel d1db16a5
+  renamed meson option `test_ipc` → `harness`; our `packages/git/umbriel-git`
+  still passed `-Dtest_ipc=` (meson: "Unknown options"). Fixed 4 sites
+  (training setup + both phase-2 `meson configure` lines + the comment).
+  Build verified: `sudo gsa -B umbriel-git` → "succeeded 0 244 ok" rc 0
+  (build-only; compositor running, never installed). pkgver= refreshed to
+  0.1.0.r1445.d1db16a in the same rewrite (rule-18 rewrite).
+- **SWEEP** (owner generalization — renames are not umbriel-specific):
+  every `-D<option>=` passed to meson across ALL recipes checked against
+  upstream option definitions (recipe src, SRCDEST clone at pkgver-pinned
+  rev + HEAD, SRCDEST tarball for stable; meson builtins whitelisted).
+  **Result: 36 targets — 24 verified + 6 real-option targets
+  (babl-git, wayland-git, systemd, appstream 1.2.1, rubberband 4.0.0,
+  util-linux 2.42.4) fetched-and-compared just now, ALL OK, 0 stale;**
+  6 builtin-only (cairo-git, glib2-git, gtk3-git, gtk4-git,
+  xorg-xwayland-git, wireplumber — only b_*/c_args families → nothing
+  to verify). No stale option beyond umbriel's rename.
+- **Sweep false-positives were ALL tooling bugs** (none real): parser
+  quote bug → pacman ×4; prefix clone-match → appstream ×5; comment
+  extraction → flatpak ×1; post-flatten `#`-to-next-quote comment strip
+  ate option names → systemd `version-tag` + util-linux `build-python`
+  false stales (both exist upstream); babl default branch is `master`,
+  not `main` (FETCH-FAIL resolved). Parser lessons condensed into
+  MEMORY rule 31.
+- **VERIFY**: sweep script (transient /tmp/meson-opt-sweep2.sh — needs
+  local checkouts, cannot gate a clean checkout) + the 6-target
+  curl comparison above; `bash -n` clean on the PKGBUILD edit.
+  Uncommitted: packages/git/umbriel-git/PKGBUILD only — ask-first
+  git disposition pending.
