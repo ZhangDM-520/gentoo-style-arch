@@ -126,6 +126,10 @@ grep -Eq 'env -u WAYLAND_DISPLAY "\$bin" --help' "$pkgbuild" ||
 #    carry).
 # shellcheck disable=SC1090
 read -r pkgver_src pkgrel_src < <(bash -c '
+    # startdir as makepkg sets it — the recipe parse-time pgo.sh gate
+    # resolves against it (a bare source prints a misleading
+    # "No such file or directory" for a module that exists).
+    startdir=$(dirname "$1")
     source "$1" >/dev/null || exit 1
     printf "%s %s\n" "$pkgver" "$pkgrel"
 ' _ "$pkgbuild") || fail "cannot source the PKGBUILD"
