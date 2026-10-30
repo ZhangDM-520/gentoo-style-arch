@@ -193,6 +193,17 @@ event_ts() {
     awk -v kind="$1" -v id="$2" '$1 == kind && $2 == id { print $3; exit }' "$GSA_FAKE_FETCH_LOG"
 }
 
+# Build-child clock skew (2026-10-17 open item, resolved 2026-10-30): the
+# engine frees a prefetch-window slot at lane DISPATCH (its `Started`
+# state — the spawned lane cannot be taken back, so that is the disk-
+# exposure boundary), while these stub clocks only observe the build CHILD
+# logging BUILD_START ~0.5–1 ms later. Under load an instant fetch fits in
+# that gap and strict log ordering flakes (measured: FETCH_END 405 µs
+# before BUILD_START). The pins therefore order BUILD_* clocks 50 ms EARLY
+# — spawn-lag noise, three orders under the fixture's 2 s builds: a real
+# window overshoot spans until the next BUILD_START and still fires.
+build_lag_ns=50000000
+
 # assert_no_transactions WHAT — fetch-ahead never transacts. The toolchain
 # preflight's read-only `pacman -Q rust-git` probe runs on every build-family
 # run (2026-10-14, the probe-gating decision) and is tolerated here; what must
@@ -215,8 +226,12 @@ $FIXTURE_OUTPUT"
 # max_fetched_unstarted — the window-bound measurement (plan.md §2.1): the
 # largest number of packages that were fetched (FETCH_END) and had not yet
 # started compiling (BUILD_START) at any one instant, from the stub clocks.
+# BUILD_START clocks are ordered build_lag_ns early (see above).
 max_fetched_unstarted() {
-    awk '$1 == "FETCH_END" || $1 == "BUILD_START" { print $3, $1, $2 }' "$GSA_FAKE_FETCH_LOG" |
+    awk -v lag="$build_lag_ns" '
+        $1 == "FETCH_END" { printf "%.0f %s %s\n", $3, $1, $2 }
+        $1 == "BUILD_START" { printf "%.0f %s %s\n", $3 - lag, $1, $2 }
+    ' "$GSA_FAKE_FETCH_LOG" |
         sort -k1,1n | awk '
             $2 == "FETCH_END" && !($3 in open) { open[$3] = 1; n++ }
             $2 == "BUILD_START" && ($3 in open) { delete open[$3]; n-- }
@@ -243,6 +258,10 @@ if want a; then
         f2=$(event_ts FETCH_START p2)
         { [ -n "$b1" ] && [ -n "$e1" ] && [ -n "$f2" ]; } \
             || fail "a: missing FETCH/BUILD clocks in the stub log:" "$GSA_FAKE_FETCH_LOG"
+        # Order the build clock build_lag_ns early (see build_lag_ns): a
+        # spawn-lag tie between the build child's BUILD_START and the fetch
+        # child's start is noise, not a fetch racing the compile.
+        b1=$((b1 - build_lag_ns))
         [ "$b1" -lt "$f2" ] || fail "a: p2's fetch ($f2) must start while p1 compiles (build start $b1)" "$GSA_FAKE_FETCH_LOG"
         [ "$f2" -lt "$e1" ] || fail "a: p2's fetch ($f2) must start before p1's build ends ($e1)" "$GSA_FAKE_FETCH_LOG"
         [ "$(fetch_attempts p2)" = 1 ] || fail "a: p2 must fetch exactly once" "$GSA_FAKE_FETCH_LOG"

@@ -2012,15 +2012,17 @@ going stale.
   fetch/build-version race.
 
 - **gsa-fetch-v2's window-bound timing pins race under battery load**
-  (2026-10-17, hit again 2026-10-18): the prefetch window slot frees at
-  lane DISPATCH while the pins count until the build stub logs
-  `BUILD_START` — under load that gap fits an extra single-flight fetch
-  (`--prefetch-ahead 2`, 3 fetched-but-unstarted) or lets a fetch start
-  ~0.5ms before the build's `BUILD_START` lands in the log. Both shapes
-  pass standalone and fail only in the parallel battery. Decide the
-  boundary semantics (slot frees at dispatch vs BUILD_START) and/or make
-  the pins order-robust (assert interval overlap from the timestamps, not
-  strict log ordering).
+  (2026-10-17, hit again 2026-10-18; RESOLVED 2026-10-30): the prefetch
+  window slot frees at lane DISPATCH while the pins counted until the
+  build stub logged `BUILD_START` — under load that gap fits an extra
+  single-flight fetch (`--prefetch-ahead 2`, 3 fetched-but-unstarted).
+  Resolution: boundary semantics = slot frees at DISPATCH (a spawned lane
+  cannot be un-fetched — that is the disk-exposure boundary; the engine's
+  `Started` state stands) and the pins are order-robust: BUILD_* clocks
+  are ordered `build_lag_ns` (50 ms) early to absorb the build-child
+  spawn lag (tests/gsa-fetch-v2.sh). Sensitivity kept — a real overshoot
+  is O(build-seconds) wide and still fires (mutation-probed with
+  `--prefetch-ahead 3`).
 
 - **Resolve the sqlite doc-zip checksum mismatch before trusting its sums**
   (2026-10-18 smoke 2; verified same day): the stop only bites the version

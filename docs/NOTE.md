@@ -17860,3 +17860,28 @@ the disposition call. BUILD HELD per owner.
   (noctalia-git/umbriel-git PKGBUILD↔.SRCINFO pkgver desync from
   f2d0e98/371a959: srcinfo-freshness + noctalia-pgo-train; left alone —
   one writer per mutable state).
+
+### 2026-10-30 — red sweep: stale .SRCINFOs + the gsa-fetch-v2 window flake
+
+- **WHAT** (owner: "the concurrent session is finished; please check and
+  solve the red"): (1) srcinfo-freshness + noctalia-pgo-train were red on
+  the parallel session's committed drift — noctalia-git/umbriel-git PKGBUILD
+  pkgver moved without .SRCINFO regen (f2d0e98/371a959). Regenerated both
+  .SRCINFOs from the committed PKGBUILDs (the fixtures' own remedy);
+  also hardened the train's PKGBUILD sourcing (set `startdir` as makepkg
+  does — the recipes' parse-time `lib/pgo.sh` gate was printing a
+  misleading "No such file or directory" for a module that exists).
+- **(2) gsa-fetch-v2 window-bound flake SOLVED** (the 2026-10-17 open
+  item): reproduced under parallel load (1/8 runs; `max 3` on the
+  `--prefetch-ahead 2` pin). Root cause as journaled: the engine frees
+  the prefetch slot at lane DISPATCH while the pin counted until the
+  build CHILD logs BUILD_START — measured gap 405 µs of spawn-lag noise.
+  DECIDED: boundary semantics = slot frees at DISPATCH (a spawned lane
+  cannot be un-fetched — the disk-exposure boundary; window.rs `Started`
+  state stands) and the pins are order-robust (BUILD_* clocks ordered
+  `build_lag_ns` = 50 ms early, documented in tests/gsa-fetch-v2.sh).
+  Causation: the same 8-run parallel stress is now 8/8 green; sensitivity
+  mutation-probed (`--prefetch-ahead 3` scratch copy still fires
+  "more than 2 … (max 3)"). MEMORY open item closed with the resolution.
+- **VERIFY**: tests/noctalia-pgo.sh both halves PASS; srcinfo-freshness
+  PASS (660 recipes); full battery re-run green (see the run below).
