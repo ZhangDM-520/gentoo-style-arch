@@ -1,4 +1,4 @@
-From 67bb5ee4f8bff8fba65e74e5c68ab63fa6f400af Mon Sep 17 00:00:00 2001
+From d8b292f842c48406093f3592f9ed5c6374e5b0e7 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 12:33:12 +0800
 Subject: [PATCH 1/3] feat(render): average the texel footprint when the scene
@@ -62,7 +62,7 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
  create mode 100755 tests/harness/checks/render/downsample_box.sh
 
 diff --git a/docs/user/appearance.md b/docs/user/appearance.md
-index 9b7ab2b9..25b73066 100644
+index 6dec5ff2..1cbb071a 100644
 --- a/docs/user/appearance.md
 +++ b/docs/user/appearance.md
 @@ -96,6 +96,7 @@ outer_border_width = 0
@@ -89,10 +89,10 @@ index 9b7ab2b9..25b73066 100644
  
  Borders render outside window content and are included in layout spacing. `corner_radius = 0` keeps every contour square. A [window rule](window-rules.md#decoration) can override `border_width`, `outer_border_width`, and `corner_radius` for the windows it matches.
 diff --git a/docs/user/outputs.md b/docs/user/outputs.md
-index 65da9d68..99957ae4 100644
+index 558d2053..57a3439e 100644
 --- a/docs/user/outputs.md
 +++ b/docs/user/outputs.md
-@@ -113,7 +113,7 @@ Omit `position` to place outputs automatically from left to right. Explicitly po
+@@ -115,7 +115,7 @@ Omit `position` to place outputs automatically from left to right. Explicitly po
  
  ### Supersampling with `render_scale`
  
@@ -102,10 +102,10 @@ index 65da9d68..99957ae4 100644
  Applications that ignore the scale hints render as they always have. Values below `scale` are honored but undersample, which looks blurry. The configuration warning compares `render_scale` against the configured `scale` (1.0 when `scale` is unset), so it cannot see an auto-detected output scale. Hint-following buffers sized at `render_scale` no longer match the output mode while `render_scale` differs from `scale`, so they do not qualify for [direct scanout](#direct-scanout); set `render_scale` equal to `scale` for scanout-sensitive games.
  
 diff --git a/examples/config.toml b/examples/config.toml
-index e799ba4c..732e0cea 100644
+index a1794e63..f4f533c0 100644
 --- a/examples/config.toml
 +++ b/examples/config.toml
-@@ -74,6 +74,11 @@ files = []
+@@ -79,6 +79,11 @@ files = []
  # Blur uses a smaller radius than the built-in default.
  # https://docs.noctalia.dev/umbriel/appearance/
  #
@@ -168,7 +168,7 @@ index 379206f4..99eafa3e 100644
            || layerEffects
            || animation
 diff --git a/src/config/config.h b/src/config/config.h
-index 377ee5e3..5fe16635 100644
+index 7dc5f821..90e4e51f 100644
 --- a/src/config/config.h
 +++ b/src/config/config.h
 @@ -34,6 +34,9 @@ namespace umbriel {
@@ -181,7 +181,7 @@ index 377ee5e3..5fe16635 100644
    enum class ModifierKey {
      Super,
      Alt,
-@@ -774,6 +777,12 @@ namespace umbriel {
+@@ -789,6 +792,12 @@ namespace umbriel {
        } tabBar;
        bool preferNoCsd = true;
  
@@ -195,7 +195,7 @@ index 377ee5e3..5fe16635 100644
        bool operator==(const Appearance&) const = default;
      } appearance;
 diff --git a/src/config/fields_general.cpp b/src/config/fields_general.cpp
-index ba5de33c..d8e887a6 100644
+index e591378f..e3f65981 100644
 --- a/src/config/fields_general.cpp
 +++ b/src/config/fields_general.cpp
 @@ -167,6 +167,14 @@ namespace umbriel {
@@ -214,10 +214,10 @@ index ba5de33c..d8e887a6 100644
            boolean("opaque_fullscreen", &A::opaqueFullscreen),
            registry::table("blur", &A::blur, blur),
 diff --git a/src/server/server.cpp b/src/server/server.cpp
-index f57c6d49..3fb899fd 100644
+index 9935e558..d74f74b3 100644
 --- a/src/server/server.cpp
 +++ b/src/server/server.cpp
-@@ -597,6 +597,8 @@ namespace umbriel {
+@@ -705,6 +705,8 @@ namespace umbriel {
          },
          this
      );
@@ -227,10 +227,10 @@ index f57c6d49..3fb899fd 100644
        wlr_scene_set_linux_dmabuf_v1(m_scene, linuxDmabuf);
      }
 diff --git a/src/server/server.h b/src/server/server.h
-index 0177da6a..3de52869 100644
+index 7e38c25d..24cb90c7 100644
 --- a/src/server/server.h
 +++ b/src/server/server.h
-@@ -427,6 +427,7 @@ namespace umbriel {
+@@ -432,6 +432,7 @@ namespace umbriel {
      // Re-send every surface's output scale (views, layer surfaces, popups). Run after anything that changes an output's
      // scale or moves surfaces between outputs outside setWorkspace; the notifies dedup, so extra calls are cheap.
      void refreshSurfaceScales();
@@ -239,10 +239,10 @@ index 0177da6a..3de52869 100644
      void refreshOutputPolicies();
      [[nodiscard]] wlr_output* preferredOutput() const;
 diff --git a/src/server/server_events.cpp b/src/server/server_events.cpp
-index 52b94813..6a1c75d4 100644
+index 70b50884..1f0d8b49 100644
 --- a/src/server/server_events.cpp
 +++ b/src/server/server_events.cpp
-@@ -803,6 +803,12 @@ namespace umbriel {
+@@ -804,6 +804,12 @@ namespace umbriel {
          output->markDirty(Dirty::LayerArrange);
        }
      }
@@ -256,7 +256,7 @@ index 52b94813..6a1c75d4 100644
        applyKeyboardConfig();
        for (const auto& pointer : m_pointers) {
 diff --git a/src/server/server_outputs.cpp b/src/server/server_outputs.cpp
-index c576f0fa..65f17517 100644
+index b79ae59b..dc152fe4 100644
 --- a/src/server/server_outputs.cpp
 +++ b/src/server/server_outputs.cpp
 @@ -107,6 +107,20 @@ namespace umbriel {
@@ -400,7 +400,7 @@ index 00000000..67b9d58c
 +
 +echo "capped box grid spans the full minification footprint"
 diff --git a/tests/unit/config_change.cpp b/tests/unit/config_change.cpp
-index b05ce77d..413a30b3 100644
+index b3bec73d..ef93e4bd 100644
 --- a/tests/unit/config_change.cpp
 +++ b/tests/unit/config_change.cpp
 @@ -376,6 +376,15 @@ UMBRIEL_TEST(identicalConfigsProduceNoRuntimeEffects) {
@@ -428,7 +428,7 @@ index b05ce77d..413a30b3 100644
    CHECK(effects.layerEffects);
    CHECK(effects.animation);
 diff --git a/tests/unit/config_load.cpp b/tests/unit/config_load.cpp
-index f2eac0ef..8a91b117 100644
+index 953f7903..d17e6f99 100644
 --- a/tests/unit/config_load.cpp
 +++ b/tests/unit/config_load.cpp
 @@ -796,6 +796,34 @@ render_scale = 1.0
@@ -467,10 +467,10 @@ index f2eac0ef..8a91b117 100644
    const TempConfig file;
    ConfigStore& store = umbriel::configStore();
 diff --git a/umbrielfx/include/umbrielfx/render/pass.h b/umbrielfx/include/umbrielfx/render/pass.h
-index c2f84445..3c43f6d5 100644
+index 33e4b0db..00f3a7d5 100644
 --- a/umbrielfx/include/umbrielfx/render/pass.h
 +++ b/umbrielfx/include/umbrielfx/render/pass.h
-@@ -132,6 +132,11 @@ struct fx_render_texture_options {
+@@ -135,6 +135,11 @@ struct fx_render_texture_options {
    // Compress HDR highlights into the SDR range before blending this content.
    // Intermediate textures leave this unset so a scene is not mapped twice.
    bool map_hdr_to_sdr;
@@ -483,7 +483,7 @@ index c2f84445..3c43f6d5 100644
  
  struct fx_render_rect_options {
 diff --git a/umbrielfx/include/umbrielfx/types/wlr_scene.h b/umbrielfx/include/umbrielfx/types/wlr_scene.h
-index dbf8dfae..61682591 100644
+index e6691f68..3a129d86 100644
 --- a/umbrielfx/include/umbrielfx/types/wlr_scene.h
 +++ b/umbrielfx/include/umbrielfx/types/wlr_scene.h
 @@ -122,6 +122,19 @@ enum wlr_scene_direct_scanout_status {
@@ -506,7 +506,7 @@ index dbf8dfae..61682591 100644
  /**
   * A sub-tree in the scene-graph.
   *
-@@ -174,6 +187,10 @@ struct wlr_scene {
+@@ -176,6 +189,10 @@ struct wlr_scene {
      // output's own scale.
      double (*preferred_scale_provider)(struct wlr_output* output, void* data);
      void* preferred_scale_provider_data;
@@ -517,7 +517,7 @@ index dbf8dfae..61682591 100644
    } WLR_PRIVATE;
  };
  
-@@ -595,6 +612,13 @@ void wlr_scene_set_preferred_scale_provider(
+@@ -600,6 +617,13 @@ void wlr_scene_set_preferred_scale_provider(
      struct wlr_scene* scene, double (*get)(struct wlr_output* output, void* data), void* data
  );
  
@@ -532,10 +532,10 @@ index dbf8dfae..61682591 100644
   * Add a node displaying nothing but its children.
   */
 diff --git a/umbrielfx/internal/render/fx_renderer/fx_renderer.h b/umbrielfx/internal/render/fx_renderer/fx_renderer.h
-index ca79f903..7e17ef3c 100644
+index 3d64eae0..c0a5d19f 100644
 --- a/umbrielfx/internal/render/fx_renderer/fx_renderer.h
 +++ b/umbrielfx/internal/render/fx_renderer/fx_renderer.h
-@@ -253,6 +253,18 @@ struct fx_renderer {
+@@ -262,6 +262,18 @@ struct fx_renderer {
      struct tex_shader tex_clamp_effects_rgba;
      struct tex_shader tex_clamp_effects_rgbx;
      struct tex_shader tex_clamp_effects_ext;
@@ -581,10 +581,10 @@ index 1b3334a2..c0692d7d 100644
  struct output_shader {
    GLuint program;
 diff --git a/umbrielfx/render/fx_renderer/fx_pass.c b/umbrielfx/render/fx_renderer/fx_pass.c
-index 379eec64..d83b450b 100644
+index e74cb674..038b4243 100644
 --- a/umbrielfx/render/fx_renderer/fx_pass.c
 +++ b/umbrielfx/render/fx_renderer/fx_pass.c
-@@ -1929,22 +1929,35 @@ void fx_render_pass_add_texture(struct fx_gles_render_pass* pass, const struct f
+@@ -1936,22 +1936,35 @@ void fx_render_pass_add_texture(struct fx_gles_render_pass* pass, const struct f
    // the same fetch as before the clamp existed, so a driver only ever sees
    // the extra uniform on fractionally cropped surfaces.
    bool use_clamp = !wlr_fbox_empty(&fx_options->sample_box);
@@ -626,7 +626,7 @@ index 379eec64..d83b450b 100644
      break;
    default:
      abort();
-@@ -1956,6 +1969,23 @@ void fx_render_pass_add_texture(struct fx_gles_render_pass* pass, const struct f
+@@ -1963,6 +1976,23 @@ void fx_render_pass_add_texture(struct fx_gles_render_pass* pass, const struct f
    wlr_render_texture_options_get_dst_box(options, &dst_box);
    float alpha = wlr_render_texture_options_get_alpha(options);
  
@@ -650,7 +650,7 @@ index 379eec64..d83b450b 100644
    const struct wlr_box* clip_box = &dst_box;
    if (!wlr_box_empty(fx_options->clip_box)) {
      clip_box = fx_options->clip_box;
-@@ -2047,6 +2077,10 @@ void fx_render_pass_add_texture(struct fx_gles_render_pass* pass, const struct f
+@@ -2054,6 +2084,10 @@ void fx_render_pass_add_texture(struct fx_gles_render_pass* pass, const struct f
  
    glUniform1i(shader->tex, 0);
    glUniform1f(shader->alpha, alpha);
@@ -662,10 +662,10 @@ index 379eec64..d83b450b 100644
    struct wlr_color_primaries primaries_srgb;
    wlr_color_primaries_from_named(&primaries_srgb, WLR_COLOR_NAMED_PRIMARIES_SRGB);
 diff --git a/umbrielfx/render/fx_renderer/fx_renderer.c b/umbrielfx/render/fx_renderer/fx_renderer.c
-index 70c9981a..c2bc4124 100644
+index 9f0f98df..9bf80f48 100644
 --- a/umbrielfx/render/fx_renderer/fx_renderer.c
 +++ b/umbrielfx/render/fx_renderer/fx_renderer.c
-@@ -469,58 +469,110 @@ static bool link_shaders(struct fx_renderer* renderer) {
+@@ -477,58 +477,110 @@ static bool link_shaders(struct fx_renderer* renderer) {
    }
  
    // Basic fragment shaders
@@ -887,10 +887,10 @@ index 22e254da..86a317a0 100644
  }
  
 diff --git a/umbrielfx/types/scene/wlr_scene.c b/umbrielfx/types/scene/wlr_scene.c
-index fdb2213d..00745584 100644
+index 12e3a3b3..bf92d0d0 100644
 --- a/umbrielfx/types/scene/wlr_scene.c
 +++ b/umbrielfx/types/scene/wlr_scene.c
-@@ -3582,6 +3582,23 @@ static void scene_entry_render(struct render_list_entry* entry, const struct ren
+@@ -3605,6 +3605,23 @@ static void scene_entry_render(struct render_list_entry* entry, const struct ren
        snapped_src_box.height = src_dst_height;
      }
  
@@ -914,7 +914,7 @@ index fdb2213d..00745584 100644
      // Adopting a one-texel-larger destination extent deliberately reaches
      // past the source region so that sampling stays exactly texel-centered
      // and the final row or column duplicates the edge texel. Whether that
-@@ -3601,6 +3618,12 @@ static void scene_entry_render(struct render_list_entry* entry, const struct ren
+@@ -3624,6 +3641,12 @@ static void scene_entry_render(struct render_list_entry* entry, const struct ren
            || (snapped_src_box.y + snapped_src_box.height > sample_box.y + sample_box.height
                && sample_box.y + sample_box.height < texture->height);
      }
@@ -927,7 +927,7 @@ index fdb2213d..00745584 100644
      if (!crosses_crop_edge) {
        sample_box = (struct wlr_fbox){0};
      }
-@@ -3614,7 +3637,7 @@ static void scene_entry_render(struct render_list_entry* entry, const struct ren
+@@ -3637,7 +3660,7 @@ static void scene_entry_render(struct render_list_entry* entry, const struct ren
                  .transform = transform,
                  .clip = &render_region, // Render with the smaller region, clipping CSD
                  .alpha = &scene_buffer->opacity,
@@ -936,7 +936,7 @@ index fdb2213d..00745584 100644
                  .blend_mode = !data->output->scene->calculate_visibility || !pixman_region32_empty(&opaque)
                      ? WLR_RENDER_BLEND_MODE_PREMULTIPLIED
                      : WLR_RENDER_BLEND_MODE_NONE,
-@@ -3630,6 +3653,7 @@ static void scene_entry_render(struct render_list_entry* entry, const struct ren
+@@ -3653,6 +3676,7 @@ static void scene_entry_render(struct render_list_entry* entry, const struct ren
          .corners = fx_corner_radii_scale(buffer_corners, data->scale),
          .clipped_region = {0},
          .sample_box = sample_box,
@@ -944,7 +944,7 @@ index fdb2213d..00745584 100644
          .luminances = scene_buffer->luminances.reference > 0.0f ? &scene_buffer->luminances : NULL,
          .map_hdr_to_sdr = !data->hdr
              && (source_tf == WLR_COLOR_TRANSFER_FUNCTION_ST2084_PQ
-@@ -4373,6 +4397,10 @@ void wlr_scene_set_preferred_scale_provider(
+@@ -4413,6 +4437,10 @@ void wlr_scene_set_preferred_scale_provider(
    scene->preferred_scale_provider_data = data;
  }
  
@@ -959,7 +959,7 @@ index fdb2213d..00745584 100644
 2.56.0.236.g7e34d8174d
 
 
-From fab4608eac4ba7fe6f0b01b67dcaf97aad4fca19 Mon Sep 17 00:00:00 2001
+From 4457c5b5e5e0fdd2751edba257f5fbec3289e51a Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 14:58:55 +0800
 Subject: [PATCH 2/3] fix(review): pin the capped downsample in raster space
@@ -1042,10 +1042,10 @@ index 67b9d58c..042b1701 100755
  
  echo "capped box grid spans the full minification footprint"
 diff --git a/umbrielfx/include/umbrielfx/types/wlr_scene.h b/umbrielfx/include/umbrielfx/types/wlr_scene.h
-index 61682591..683d9b81 100644
+index 3a129d86..56dcd652 100644
 --- a/umbrielfx/include/umbrielfx/types/wlr_scene.h
 +++ b/umbrielfx/include/umbrielfx/types/wlr_scene.h
-@@ -615,7 +615,8 @@ void wlr_scene_set_preferred_scale_provider(
+@@ -620,7 +620,8 @@ void wlr_scene_set_preferred_scale_provider(
  /**
   * Chooses how minified scene buffers are sampled. Sources that are not
   * minified and buffers that pin WLR_SCALE_FILTER_NEAREST are unaffected.
@@ -1059,7 +1059,7 @@ index 61682591..683d9b81 100644
 2.56.0.236.g7e34d8174d
 
 
-From f75b2161522dc87814e2b5751ae8dfe2d28e80fd Mon Sep 17 00:00:00 2001
+From 1ebfd0459b716a23952b4902327a83142ce8524f Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 16:28:00 +0800
 Subject: [PATCH 3/3] fix(review): apply the downsample policy to
@@ -1079,15 +1079,15 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
  src/server/server.h                           |  3 ++
  src/server/server_outputs.cpp                 | 22 +++++++++----
  src/view/view.cpp                             |  7 ++++
- src/view/view.h                               |  3 ++
+ src/view/view.h                               |  4 +++
  tests/harness/checks/render/downsample_box.sh | 32 +++++++++++++++++++
- 5 files changed, 60 insertions(+), 7 deletions(-)
+ 5 files changed, 61 insertions(+), 7 deletions(-)
 
 diff --git a/src/server/server.h b/src/server/server.h
-index 3de52869..571a3862 100644
+index 24cb90c7..a4709650 100644
 --- a/src/server/server.h
 +++ b/src/server/server.h
-@@ -428,6 +428,9 @@ namespace umbriel {
+@@ -433,6 +433,9 @@ namespace umbriel {
      // scale or moves surfaces between outputs outside setWorkspace; the notifies dedup, so extra calls are cheap.
      void refreshSurfaceScales();
      void applyDownsampleMode();
@@ -1098,7 +1098,7 @@ index 3de52869..571a3862 100644
      void refreshOutputPolicies();
      [[nodiscard]] wlr_output* preferredOutput() const;
 diff --git a/src/server/server_outputs.cpp b/src/server/server_outputs.cpp
-index 65f17517..4883d818 100644
+index dc152fe4..0d3887de 100644
 --- a/src/server/server_outputs.cpp
 +++ b/src/server/server_outputs.cpp
 @@ -107,17 +107,25 @@ namespace umbriel {
@@ -1135,10 +1135,10 @@ index 65f17517..4883d818 100644
    }
  
 diff --git a/src/view/view.cpp b/src/view/view.cpp
-index 812eabf2..0bdf0eda 100644
+index 194952b8..49f03d6c 100644
 --- a/src/view/view.cpp
 +++ b/src/view/view.cpp
-@@ -198,6 +198,7 @@ namespace umbriel {
+@@ -199,6 +199,7 @@ namespace umbriel {
        } else {
          wlr_scene_subsurface_tree_create(&m_captureScene->tree, surface);
        }
@@ -1146,7 +1146,7 @@ index 812eabf2..0bdf0eda 100644
      }
      if (m_xsurface != nullptr) {
        // Until the first configure places it, the window is drawn at the scale of the output its X position is on.
-@@ -360,6 +361,12 @@ namespace umbriel {
+@@ -361,6 +362,12 @@ namespace umbriel {
  
    wlr_scene_tree* View::captureTree() const { return m_captureScene != nullptr ? &m_captureScene->tree : nullptr; }
  
@@ -1160,13 +1160,14 @@ index 812eabf2..0bdf0eda 100644
      moveToWorkspace(workspace, attachToLayout, LayoutAttachOrigin::ExistingView);
    }
 diff --git a/src/view/view.h b/src/view/view.h
-index c0bc05e2..a1098c0d 100644
+index 7063d417..fbf52af9 100644
 --- a/src/view/view.h
 +++ b/src/view/view.h
-@@ -135,6 +135,9 @@ namespace umbriel {
-     [[nodiscard]] bool effectSelectionPending() const { return m_effectSelectionIdle != nullptr; }
-     void refreshEffectSelection();
+@@ -137,6 +137,10 @@ namespace umbriel {
      [[nodiscard]] wlr_scene_tree* captureTree() const;
+     [[nodiscard]] bool captureBlocked() const { return m_captureBlocked; }
+     void refreshCaptureProtection();
++
 +    // The capture mirror scene carries its own downsample policy; keep it in
 +    // step with the server's appearance.downsample.
 +    void applyDownsampleMode(enum wlr_scene_downsample_mode mode);

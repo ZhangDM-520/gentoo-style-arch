@@ -1,4 +1,4 @@
-From bde15817d1ce7a4235a805ae1e6c0957f44c30bd Mon Sep 17 00:00:00 2001
+From 7d4ef35c454a039d31796ba99d7a76fac0a45f9d Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 18:19:43 +0800
 Subject: [PATCH 01/12] feat(color): characterize outputs from ICC/EDID and map
@@ -45,7 +45,7 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
  create mode 100644 tests/unit/colorimetry.cpp
 
 diff --git a/meson.build b/meson.build
-index 0d2bb6de..66d1c42e 100644
+index 2c58f788..eb1a6a17 100644
 --- a/meson.build
 +++ b/meson.build
 @@ -127,6 +127,14 @@ pangocairo_dep = dependency('pangocairo')
@@ -63,7 +63,7 @@ index 0d2bb6de..66d1c42e 100644
  # sd-bus reads the systemd-localed keymap a keyboard without XKB config uses.
  libsystemd_dep = dependency('libsystemd', version: '>=243', required: get_option('localed'))
  xcb_dep = dependency('xcb')
-@@ -777,6 +785,7 @@ core_sources = files(
+@@ -799,6 +807,7 @@ core_sources = files(
    'src/server/effects.cpp',
    'src/output/output.cpp',
    'src/output/hdr_metadata.cpp',
@@ -71,7 +71,7 @@ index 0d2bb6de..66d1c42e 100644
    'src/input/seat.cpp',
    'src/input/toplevel_drag.cpp',
    'src/input/keyboard.cpp',
-@@ -835,6 +844,14 @@ core_sources = files(
+@@ -861,6 +870,14 @@ core_sources = files(
    'src/server/ipc_commands.cpp',
  )
  
@@ -86,9 +86,9 @@ index 0d2bb6de..66d1c42e 100644
  umbriel_core_deps = [
    libeis_dep,
    umbrielfx_dep,
-@@ -859,6 +876,9 @@ umbriel_core_deps = [
-   xcb_ewmh_dep,
+@@ -886,6 +903,9 @@ umbriel_core_deps = [
    xcb_shape_dep,
+   xcb_randr_dep,
  ]
 +if lcms2_dep.found()
 +  umbriel_core_deps += lcms2_dep
@@ -124,10 +124,10 @@ index 193ddef7..55e1dddd 100644
      }
  
 diff --git a/src/config/config.h b/src/config/config.h
-index 8028c4dc..bb99c513 100644
+index 7dc5f821..847b99b1 100644
 --- a/src/config/config.h
 +++ b/src/config/config.h
-@@ -274,6 +274,13 @@ namespace umbriel {
+@@ -282,6 +282,13 @@ namespace umbriel {
      Gamma22,
      Srgb,
    };
@@ -141,7 +141,7 @@ index 8028c4dc..bb99c513 100644
    [[nodiscard]] constexpr std::string_view hdrModeName(HdrMode mode) {
      switch (mode) {
      case HdrMode::Off:
-@@ -326,6 +333,11 @@ namespace umbriel {
+@@ -334,6 +341,11 @@ namespace umbriel {
      HdrMode hdr = HdrMode::Off;
      float sdrWhite = 203.0F;
      SdrTransfer sdrTransfer = SdrTransfer::Gamma22;
@@ -1204,7 +1204,7 @@ index d1c2f4bd..6bfbab46 100644
    // display's desired content luminances in cd/m², with unavailable fields left at zero.
    [[nodiscard]] std::optional<HdrStaticMetadata> hdrStaticMetadataFromEdid(std::span<const uint8_t> edid);
 diff --git a/src/output/output.cpp b/src/output/output.cpp
-index f4250b45..85ec0473 100644
+index 34404e73..f789aee7 100644
 --- a/src/output/output.cpp
 +++ b/src/output/output.cpp
 @@ -8,6 +8,7 @@
@@ -1224,7 +1224,7 @@ index f4250b45..85ec0473 100644
  
  #ifdef TRACY_ENABLE
  #include <set>
-@@ -459,6 +462,117 @@ namespace umbriel {
+@@ -451,6 +454,117 @@ namespace umbriel {
      return rule != nullptr ? rule->sdrTransfer : SdrTransfer::Gamma22;
    }
  
@@ -1342,7 +1342,7 @@ index f4250b45..85ec0473 100644
    void Output::setRuntimeSdrWhite(float nits) {
      if (m_runtimeSdrWhite && *m_runtimeSdrWhite == nits) {
        return;
-@@ -615,6 +729,7 @@ namespace umbriel {
+@@ -607,6 +721,7 @@ namespace umbriel {
        m_workspaceGroup->abandonReveal();
      }
      const OutputRule* rule = findOutputRule(config(), identity());
@@ -1350,10 +1350,10 @@ index f4250b45..85ec0473 100644
      const auto sdrTransfer = configuredSdrTransfer() == SdrTransfer::Srgb ? WLR_COLOR_TRANSFER_FUNCTION_SRGB
                                                                            : WLR_COLOR_TRANSFER_FUNCTION_GAMMA22;
      if (!wlr_scene_output_set_sdr_transfer_function(m_sceneOutput, sdrTransfer)) {
-@@ -822,6 +937,12 @@ namespace umbriel {
-         sceneOptions.capture_sdr = targetHdr && captureLocks > 0;
+@@ -815,6 +930,12 @@ namespace umbriel {
          sceneOptions.effect_capture_pending = effectCapturePending(captureLocks);
-         m_effectCaptureBuilt = sceneOptions.effect_capture_pending;
+         sceneOptions.capture_exclusion = captureExclusionPending(captureLocks);
+         m_effectCaptureBuilt = sceneOptions.effect_capture_pending || sceneOptions.capture_exclusion;
 +        // The SDR gamut mapping rides the scene's supplied transform. An active
 +        // HDR image description owns the output transform instead (the scene
 +        // asserts the two are never combined).
@@ -1363,7 +1363,7 @@ index f4250b45..85ec0473 100644
  
          const RenderedStateCommitResult commitResult = commitRenderedState(
              frameState,
-@@ -1721,6 +1842,9 @@ namespace umbriel {
+@@ -1749,6 +1870,9 @@ namespace umbriel {
      } else {
        // Mode changes can drop the DRM gamma LUT; re-apply on the next frame.
        m_gammaDirty = true;
@@ -1373,10 +1373,10 @@ index f4250b45..85ec0473 100644
        updateHdrAvailability();
        m_server->updateColorPreferences();
      }
-@@ -1958,6 +2082,9 @@ namespace umbriel {
-       sceneOptions.capture_sdr = hdrActive() && captureLocks > 0;
+@@ -1987,6 +2111,9 @@ namespace umbriel {
        sceneOptions.effect_capture_pending = effectCapturePending(captureLocks);
-       m_effectCaptureBuilt = sceneOptions.effect_capture_pending;
+       sceneOptions.capture_exclusion = captureExclusionPending(captureLocks);
+       m_effectCaptureBuilt = sceneOptions.effect_capture_pending || sceneOptions.capture_exclusion;
 +      if (sdrGamutStaged(m_sdrGamutTransform != nullptr, configuredSdrGamut(), hdrActive())) {
 +        sceneOptions.color_transform = m_sdrGamutTransform.get();
 +      }
@@ -1384,7 +1384,7 @@ index f4250b45..85ec0473 100644
        if (sceneOptions.require_animation_success) {
          sceneOptions.workspace_from = m_workspaceGroup->revealRoot(false);
 diff --git a/src/output/output.h b/src/output/output.h
-index 8832575d..382e4db1 100644
+index a69015a6..3238b875 100644
 --- a/src/output/output.h
 +++ b/src/output/output.h
 @@ -1,6 +1,7 @@
@@ -1395,7 +1395,7 @@ index 8832575d..382e4db1 100644
  #include "output/cursor_plane_pace.h"
  #include "output/direct_scanout.h"
  #include "output/frame_schedule.h"
-@@ -35,11 +36,13 @@ namespace umbriel {
+@@ -36,11 +37,13 @@ namespace umbriel {
  
    enum class FormatTier : uint8_t;
    enum class HdrMode;
@@ -1409,7 +1409,7 @@ index 8832575d..382e4db1 100644
  
    class Output {
    public:
-@@ -119,6 +122,25 @@ namespace umbriel {
+@@ -120,6 +123,25 @@ namespace umbriel {
      [[nodiscard]] float configuredSdrWhite() const;
      [[nodiscard]] float sdrWhite() const;
      [[nodiscard]] SdrTransfer configuredSdrTransfer() const;
@@ -1435,7 +1435,7 @@ index 8832575d..382e4db1 100644
      void setRuntimeSdrWhite(float nits);
      [[nodiscard]] int configuredBitDepth() const;
      [[nodiscard]] const std::string& bitDepthFallbackReason() const { return m_bitDepthFallbackReason; }
-@@ -221,12 +243,28 @@ namespace umbriel {
+@@ -238,12 +260,28 @@ namespace umbriel {
      void arrangeLayer(wlr_scene_tree* tree, const wlr_box* fullArea, wlr_box* usableArea, bool exclusive);
      void updateOptimizedBlur(const wlr_box& fullArea);
      void updateHdrAvailability(bool activationRejected = false);
@@ -1465,10 +1465,10 @@ index 8832575d..382e4db1 100644
      wlr_scene_tree* m_layerTrees[kLayerCount]{};
      wlr_scene_tree* m_layerPopupTrees[kLayerCount]{};
 diff --git a/tests/meson.build b/tests/meson.build
-index 0bea048c..a92e7490 100644
+index 4cc58f0c..f9aee862 100644
 --- a/tests/meson.build
 +++ b/tests/meson.build
-@@ -38,7 +38,10 @@ unit_tests = [
+@@ -41,7 +41,10 @@ unit_tests = [
    ['output-format-sequence', ['unit/output_format_sequence.cpp'], []],
    ['output-gamma-transition', ['unit/output_gamma_transition.cpp'], []],
    ['hdr-metadata', ['unit/hdr_metadata.cpp'], [umbriel_core_dep]],
@@ -2151,7 +2151,7 @@ index 00000000..08acb799
 +
 +int main() { return RUN_TESTS(); }
 diff --git a/tests/unit/config_change.cpp b/tests/unit/config_change.cpp
-index b05ce77d..43097cd2 100644
+index b3bec73d..8c474ac5 100644
 --- a/tests/unit/config_change.cpp
 +++ b/tests/unit/config_change.cpp
 @@ -651,6 +651,48 @@ UMBRIEL_TEST(outputSdrTransferReloadOnlyRefreshesOutputState) {
@@ -2204,7 +2204,7 @@ index b05ce77d..43097cd2 100644
    Config before;
    OutputRule output;
 diff --git a/tests/unit/config_load.cpp b/tests/unit/config_load.cpp
-index 9e5f888b..5c83f186 100644
+index 953f7903..b51c3aed 100644
 --- a/tests/unit/config_load.cpp
 +++ b/tests/unit/config_load.cpp
 @@ -24,6 +24,7 @@ using umbriel::HdrMode;
@@ -2215,7 +2215,7 @@ index 9e5f888b..5c83f186 100644
  using umbriel::SdrTransfer;
  using umbriel::TrackLayout;
  using umbriel::VrrMode;
-@@ -1737,6 +1738,93 @@ UMBRIEL_TEST(outputSdrTransferRejectsInvalidValuesWithoutUnknownKeyWarnings) {
+@@ -1712,6 +1713,93 @@ UMBRIEL_TEST(outputSdrTransferRejectsInvalidValuesWithoutUnknownKeyWarnings) {
    }
  }
  
@@ -2352,7 +2352,7 @@ index 4800e27c..38bc70ac 100644
 2.56.0.236.g7e34d8174d
 
 
-From 63ee885cb7b8fa42bae6430a00500933200ff01c Mon Sep 17 00:00:00 2001
+From 9d28bfaba02b044fa05283c5ccb226635ac3fd38 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 18:19:43 +0800
 Subject: [PATCH 02/12] feat(color): ICC image descriptions and icc_file
@@ -2375,7 +2375,7 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
  src/server/color_description.h                |  63 ++++
  src/server/color_manager.cpp                  | 278 +++++++++++++-
  src/server/color_manager.h                    |   5 +-
- src/server/ipc_commands.cpp                   |  93 ++++-
+ src/server/ipc_commands.cpp                   |  92 ++++-
  src/server/server.cpp                         |  10 +-
  src/server/server.h                           |   5 +-
  src/server/server_events.cpp                  |   3 +
@@ -2384,7 +2384,7 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
  .../harness/clients/color_feedback_client.cpp | 174 ++++++++-
  tests/unit/color_description.cpp              | 356 ++++++++++++++++++
  tests/unit/ipc_commands.cpp                   |  65 ++++
- 13 files changed, 1130 insertions(+), 44 deletions(-)
+ 13 files changed, 1129 insertions(+), 44 deletions(-)
 
 diff --git a/src/server/color_description.cpp b/src/server/color_description.cpp
 index a84d4237..f5da6709 100644
@@ -3040,26 +3040,18 @@ index f6f97c92..5d6e583a 100644
      // Register before adding surfaces. Scene destruction removes the registration.
      [[nodiscard]] bool registerScene(wlr_scene* scene);
 diff --git a/src/server/ipc_commands.cpp b/src/server/ipc_commands.cpp
-index 77015edf..e09e3b24 100644
+index 906d9e5c..f8d7ceb5 100644
 --- a/src/server/ipc_commands.cpp
 +++ b/src/server/ipc_commands.cpp
-@@ -8,6 +8,7 @@
- #include "output/output.h"
+@@ -10,6 +10,7 @@
  #include "scene/effect_registry.h"
  #include "scene/effect_selection.h"
+ #include "server/action_request.h"
 +#include "server/color_description.h"
  #include "server/focus.h"
  #include "server/server.h"
  #include "view/view.h"
-@@ -19,6 +20,7 @@
- #include <cctype>
- #include <cmath>
- #include <drm_fourcc.h>
-+#include <format>
- #include <map>
- #include <nlohmann/json.hpp>
- #include <print>
-@@ -385,6 +387,18 @@ namespace umbriel {
+@@ -400,6 +401,18 @@ namespace umbriel {
        return "unknown";
      }
  
@@ -3078,7 +3070,7 @@ index 77015edf..e09e3b24 100644
      const char* protocolTransferFunctionName(uint32_t value) {
        switch (value) {
        case 0:
-@@ -422,6 +436,22 @@ namespace umbriel {
+@@ -437,6 +450,22 @@ namespace umbriel {
        }
      }
  
@@ -3101,7 +3093,7 @@ index 77015edf..e09e3b24 100644
      const char* protocolPrimariesName(uint32_t value) {
        switch (value) {
        case 0:
-@@ -516,6 +546,28 @@ namespace umbriel {
+@@ -531,6 +560,28 @@ namespace umbriel {
            std::println("  fallback: {}", fallback);
          }
  
@@ -3130,7 +3122,7 @@ index 77015edf..e09e3b24 100644
          const int configuredDepth = output.value("bit_depth", 8);
          const std::string format = output.value("render_format", "invalid");
          const std::string_view activeDepth = !output.value("enabled", false) ? "none"
-@@ -967,6 +1019,7 @@ namespace umbriel {
+@@ -987,6 +1038,7 @@ namespace umbriel {
        const wlr_output* wlrOutput = output->wlr();
        const wlr_output_image_description* description = wlrOutput->image_description;
        const bool hdrRequested = output->hdrRequested();
@@ -3138,7 +3130,7 @@ index 77015edf..e09e3b24 100644
        nlohmann::json entry = {
            {"name", wlrOutput->name},
            {"enabled", wlrOutput->enabled},
-@@ -979,6 +1032,11 @@ namespace umbriel {
+@@ -999,6 +1051,11 @@ namespace umbriel {
            {"primaries", description != nullptr ? primariesName(description->primaries) : "none"},
            {"sdr_white", output->sdrWhite()},
            {"sdr_transfer", output->configuredSdrTransfer() == SdrTransfer::Srgb ? "srgb" : "gamma22"},
@@ -3150,7 +3142,7 @@ index 77015edf..e09e3b24 100644
            {"bit_depth", output->configuredBitDepth()},
            {"bit_depth_active", output->bitDepthActive()},
            {"bit_depth_fallback_reason", output->bitDepthFallbackReason()},
-@@ -987,6 +1045,18 @@ namespace umbriel {
+@@ -1007,6 +1064,18 @@ namespace umbriel {
            {"max_cll", description != nullptr ? description->max_cll : 0.0},
            {"max_fall", description != nullptr ? description->max_fall : 0.0},
        };
@@ -3169,7 +3161,7 @@ index 77015edf..e09e3b24 100644
        entry["mastering_display_primaries"] = nullptr;
        entry["mastering_luminance"] = nullptr;
        if (description != nullptr) {
-@@ -1015,26 +1085,27 @@ namespace umbriel {
+@@ -1035,26 +1104,27 @@ namespace umbriel {
          continue;
        }
        wlr_surface* surface = view->rootSurface();
@@ -3205,7 +3197,7 @@ index 77015edf..e09e3b24 100644
          entry["mastering_display_primaries"] = {
              {"red", xy(primaries.red)},
              {"green", xy(primaries.green)},
-@@ -1042,10 +1113,10 @@ namespace umbriel {
+@@ -1062,10 +1132,10 @@ namespace umbriel {
              {"white", xy(primaries.white)},
          };
        }
@@ -3220,10 +3212,10 @@ index 77015edf..e09e3b24 100644
        }
        surfaces.push_back(std::move(entry));
 diff --git a/src/server/server.cpp b/src/server/server.cpp
-index f57c6d49..b0fde34e 100644
+index 9935e558..840a8ea3 100644
 --- a/src/server/server.cpp
 +++ b/src/server/server.cpp
-@@ -993,19 +993,19 @@ namespace umbriel {
+@@ -1104,19 +1104,19 @@ namespace umbriel {
      wl_display_destroy(m_display);
    }
  
@@ -3247,7 +3239,7 @@ index f57c6d49..b0fde34e 100644
      } context{.server = this};
  
      wlr_surface_for_each_surface(
-@@ -1015,7 +1015,7 @@ namespace umbriel {
+@@ -1126,7 +1126,7 @@ namespace umbriel {
            if (context->description != nullptr) {
              return;
            }
@@ -3257,7 +3249,7 @@ index f57c6d49..b0fde34e 100644
              return;
            }
 diff --git a/src/server/server.h b/src/server/server.h
-index a4a72efb..ff93e019 100644
+index 7e38c25d..55de5889 100644
 --- a/src/server/server.h
 +++ b/src/server/server.h
 @@ -136,6 +136,7 @@ namespace umbriel {
@@ -3268,7 +3260,7 @@ index a4a72efb..ff93e019 100644
    class SyncobjAcquireBarrier;
    class SyncobjSupersededRelease;
    class SyncobjUnmapRelease;
-@@ -193,8 +194,8 @@ namespace umbriel {
+@@ -195,8 +196,8 @@ namespace umbriel {
      [[nodiscard]] bool hasCopyCaptureFor(const wlr_output* output) const;
      [[nodiscard]] wlr_tearing_control_manager_v1* tearingControlManager() const { return m_tearingControlManager; }
      [[nodiscard]] ColorManager* colorManager() const { return m_colorManager.get(); }
@@ -3280,10 +3272,10 @@ index a4a72efb..ff93e019 100644
      [[nodiscard]] wlr_scene_tree* xdgTree() const { return m_xdgTree; }
      [[nodiscard]] wlr_scene_tree* scratchpadTree() const { return m_scratchpadTree; }
 diff --git a/src/server/server_events.cpp b/src/server/server_events.cpp
-index 3d00931f..0c584908 100644
+index 70b50884..8c4f7147 100644
 --- a/src/server/server_events.cpp
 +++ b/src/server/server_events.cpp
-@@ -3892,6 +3892,9 @@ namespace umbriel {
+@@ -3943,6 +3943,9 @@ namespace umbriel {
          output->markBlurBackgroundDirty();
          wlr_scene_output_state_options options{};
          options.swapchain = wlr_output_swapchain_manager_get_swapchain(&manager, pending[i].output);
@@ -3307,7 +3299,7 @@ index 26776a39..81699e3c 100644
    echo "native color manager capabilities were incorrect: $(cat "$CLIENT_LOG")"
    exit 1
 diff --git a/tests/harness/checks/protocol/color_management.sh b/tests/harness/checks/protocol/color_management.sh
-index 01adff2f..99b7f847 100755
+index d8929651..90196f80 100755
 --- a/tests/harness/checks/protocol/color_management.sh
 +++ b/tests/harness/checks/protocol/color_management.sh
 @@ -61,6 +61,10 @@ if ! jq -e '
@@ -3963,10 +3955,10 @@ index fdcf58e0..9711f358 100644
 +
  int main() { return RUN_TESTS(); }
 diff --git a/tests/unit/ipc_commands.cpp b/tests/unit/ipc_commands.cpp
-index 06024dbe..d7a07a23 100644
+index dd42c70e..ee855137 100644
 --- a/tests/unit/ipc_commands.cpp
 +++ b/tests/unit/ipc_commands.cpp
-@@ -52,6 +52,12 @@ namespace {
+@@ -60,6 +60,12 @@ namespace {
          {"transfer_function", "none"},
          {"primaries", "none"},
          {"sdr_white", 203.0},
@@ -3979,9 +3971,9 @@ index 06024dbe..d7a07a23 100644
          {"bit_depth", 8},
          {"bit_depth_active", false},
          {"bit_depth_fallback_reason", ""},
-@@ -180,6 +186,65 @@ UMBRIEL_TEST(colorHumanShowsCommittedHdrOutputMetadata) {
-   CHECK(out.contains("output metadata: 0.005 to 400 cd/m2; MaxCLL: 400; MaxFALL: 200"));
- }
+@@ -198,6 +204,65 @@ namespace {
+ 
+ } // namespace
  
 +UMBRIEL_TEST(colorHumanReportsCharacterizationFields) {
 +  const umbriel::IpcCommandSpec* spec = umbriel::findIpcCommand("color");
@@ -4049,7 +4041,7 @@ index 06024dbe..d7a07a23 100644
 2.56.0.236.g7e34d8174d
 
 
-From eabe612569e182de714bb16cae07175b1d216121 Mon Sep 17 00:00:00 2001
+From 470df29afa713b529fc01be0474a86d989717226 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 18:19:52 +0800
 Subject: [PATCH 03/12] test(color): live color-profile coverage
@@ -4376,7 +4368,7 @@ index 00000000..e1530639
 2.56.0.236.g7e34d8174d
 
 
-From a79427883c8bded2cb3caf93ee4d3de3ef7675f0 Mon Sep 17 00:00:00 2001
+From 53d6046284dda6ee7e4edda05986eeb8e6666169 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 18:19:52 +0800
 Subject: [PATCH 04/12] docs(color): document color profiles and client ICC
@@ -4384,12 +4376,12 @@ Subject: [PATCH 04/12] docs(color): document color profiles and client ICC
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 ---
  PACKAGING.md         |  2 +-
- docs/user/outputs.md | 30 +++++++++++++++++++++++++++++-
+ docs/user/outputs.md | 29 +++++++++++++++++++++++++++++
  examples/config.toml |  2 ++
- 3 files changed, 32 insertions(+), 2 deletions(-)
+ 3 files changed, 32 insertions(+), 1 deletion(-)
 
 diff --git a/PACKAGING.md b/PACKAGING.md
-index af46ac69..2df86987 100644
+index b7ebc3ec..4b05bcbb 100644
 --- a/PACKAGING.md
 +++ b/PACKAGING.md
 @@ -80,7 +80,7 @@ The archive is linked as a whole so its internal utility symbols survive distrib
@@ -4402,7 +4394,7 @@ index af46ac69..2df86987 100644
  
  The canonical dependency declarations are in [`meson.build`](meson.build). Distribution package names vary.
 diff --git a/docs/user/outputs.md b/docs/user/outputs.md
-index 65da9d68..1d418f72 100644
+index 558d2053..17231b27 100644
 --- a/docs/user/outputs.md
 +++ b/docs/user/outputs.md
 @@ -44,6 +44,8 @@ Umbriel first uses the first remaining enabled output in its internal output ord
@@ -4414,15 +4406,7 @@ index 65da9d68..1d418f72 100644
  | `bit_depth`                                | int                               | `8`          | Render bit depth for SDR output: `8` or `10`.                                                         |
  | `workspaces`                               | int, string array, or `"dynamic"` | `"dynamic"`  | Workspace inventory for this output.                                                                  |
  | `min_workspaces`                           | int                               | `1`          | Minimum count for a dynamic output.                                                                   |
-@@ -51,7 +53,6 @@ Umbriel first uses the first remaining enabled output in its internal output ord
- | `workspace_axis`                           | string                            | `"vertical"` | Workspace arrangement axis.                                                                           |
- | `layout.scrolling.default_extent_fraction` | float                             | inherited    | Initial scrolling-column extent on this output, 0.1 to 4.0.                                           |
- | `screen_effect`                            | string                            | inherited    | Replace `effects.screen` with a screen preset or pool, or `"off"` to disable it on this output.       |
--
- Umbriel tries an unadvertised resolution as a custom mode. If it cannot apply the configured mode, it uses the preferred advertised mode and logs a warning. Backend tests include the 8-bit SDR fallback, so a rejected swapchain can reach the preferred mode. On that mode, Umbriel retries the configured HDR and bit-depth preferences. A temporary rendering failure after an accepted backend test retries the current candidate instead of changing modes.
- 
- ### Workspace count
-@@ -262,6 +263,33 @@ Existing gamma-control clients, including Night Light tools, can adjust white po
+@@ -281,6 +283,33 @@ Existing gamma-control clients, including Night Light tools, can adjust white po
  
  Custom gamma-curve calibration applies only in SDR. Umbriel keeps the client's latest full gamma table and restores it when the output returns to SDR. An HDR white-point adjustment applies to the whole display, including the cursor, and requires composition while active. SDR screenshots and recordings exclude this adjustment.
  
@@ -4457,10 +4441,10 @@ index 65da9d68..1d418f72 100644
  
  Set `bit_depth = 10` to request a 10-bit SDR compositor render format:
 diff --git a/examples/config.toml b/examples/config.toml
-index 01bff86c..58100200 100644
+index a1794e63..8493f56b 100644
 --- a/examples/config.toml
 +++ b/examples/config.toml
-@@ -68,6 +68,8 @@ files = []
+@@ -73,6 +73,8 @@ files = []
  # vrr = "fullscreen"
  # hdr = "auto"
  # sdr_transfer = "gamma22" # Or "srgb" for piecewise SDR decoding in HDR.
@@ -4473,7 +4457,7 @@ index 01bff86c..58100200 100644
 2.56.0.236.g7e34d8174d
 
 
-From 888fd3fd961192f83342ff2ee22e387e1b9bdc4d Mon Sep 17 00:00:00 2001
+From 70fd7a786290a477eff8895c5c7bf28511d4bb7d Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 18:53:26 +0800
 Subject: [PATCH 05/12] fix(color): fold composed LUT stages and fix the
@@ -4594,10 +4578,10 @@ index 4c445300..ecb69074 100644
        std::vector<float> decode(kCurveSamples);
        for (size_t index = 0; index < kCurveSamples; ++index) {
 diff --git a/src/output/output.h b/src/output/output.h
-index 382e4db1..1d6026c9 100644
+index 3238b875..18788965 100644
 --- a/src/output/output.h
 +++ b/src/output/output.h
-@@ -132,10 +132,9 @@ namespace umbriel {
+@@ -133,10 +133,9 @@ namespace umbriel {
      [[nodiscard]] const PanelColorimetry* panelColorimetry() const {
        return m_panelColorimetry ? &*m_panelColorimetry : nullptr;
      }
@@ -4666,10 +4650,10 @@ index b7ab1081..f21d6131 100644
  
  } // namespace umbriel
 diff --git a/src/server/ipc_commands.cpp b/src/server/ipc_commands.cpp
-index e09e3b24..573fd132 100644
+index f8d7ceb5..5997a33e 100644
 --- a/src/server/ipc_commands.cpp
 +++ b/src/server/ipc_commands.cpp
-@@ -436,9 +436,8 @@ namespace umbriel {
+@@ -450,9 +450,8 @@ namespace umbriel {
        }
      }
  
@@ -4720,10 +4704,10 @@ index e1530639..20b41b60 100644
    echo "EDID characterization was not inert on headless: $( "$UMBRIEL" color --json)"
    exit 1
 diff --git a/umbrielfx/meson.build b/umbrielfx/meson.build
-index ad293d87..e7f82b00 100644
+index bfaf9135..4ddba7ed 100644
 --- a/umbrielfx/meson.build
 +++ b/umbrielfx/meson.build
-@@ -210,6 +210,7 @@ if build_tests
+@@ -221,6 +221,7 @@ if build_tests
      'scene-scrgb-absolute-luminance',
      'scene-hdr-sdr-fallback',
      'hdr-white-point-math',
@@ -4812,7 +4796,7 @@ index e173917e..c80166e0 100644
      *result = wlr_color_transform_ref(result_transforms[0]);
    } else {
 diff --git a/umbrielfx/tests/color.c b/umbrielfx/tests/color.c
-index 04317a4c..fb0d5b5c 100644
+index e1fae00a..5fe04a04 100644
 --- a/umbrielfx/tests/color.c
 +++ b/umbrielfx/tests/color.c
 @@ -332,6 +332,40 @@ static bool check_matrix_near(const float actual[static 9], const float expected
@@ -4856,7 +4840,7 @@ index 04317a4c..fb0d5b5c 100644
  // These calculations need no renderer. In particular, a uniform dimming ramp
  // must retain its brightness instead of normalizing the adapted white to Y=1.
  static bool test_hdr_white_point_math(void) {
-@@ -3179,6 +3213,9 @@ int main(int argc, char* argv[]) {
+@@ -3227,6 +3261,9 @@ int main(int argc, char* argv[]) {
    if (strcmp(argv[1], "hdr-white-point-math") == 0) {
      return test_hdr_white_point_math() ? EXIT_SUCCESS : EXIT_FAILURE;
    }
@@ -4870,7 +4854,7 @@ index 04317a4c..fb0d5b5c 100644
 2.56.0.236.g7e34d8174d
 
 
-From 69ac8a67a58f40c9ae6b64bf3ba1896340d37bb6 Mon Sep 17 00:00:00 2001
+From 4c130d6d97a51464fb37b7bd2bc02c8ed9e927d3 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Tue, 27 Oct 2026 00:36:57 +0800
 Subject: [PATCH 06/12] fix(color): address the external review round
@@ -4955,7 +4939,7 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
  create mode 100644 tests/harness/checks/protocol/color_profile_limits.sh
 
 diff --git a/PACKAGING.md b/PACKAGING.md
-index 2df86987..7e934ed3 100644
+index 4b05bcbb..b9e63820 100644
 --- a/PACKAGING.md
 +++ b/PACKAGING.md
 @@ -80,7 +80,7 @@ The archive is linked as a whole so its internal utility symbols survive distrib
@@ -4968,10 +4952,10 @@ index 2df86987..7e934ed3 100644
  
  The canonical dependency declarations are in [`meson.build`](meson.build). Distribution package names vary.
 diff --git a/docs/user/outputs.md b/docs/user/outputs.md
-index 1d418f72..86b5ba5c 100644
+index 17231b27..09ddcce7 100644
 --- a/docs/user/outputs.md
 +++ b/docs/user/outputs.md
-@@ -267,12 +267,28 @@ Custom gamma-curve calibration applies only in SDR. Umbriel keeps the client's l
+@@ -287,12 +287,28 @@ Custom gamma-curve calibration applies only in SDR. Umbriel keeps the client's l
  
  A wide-color-gamut panel reads every signal in its own primaries. Untagged SDR content carries sRGB-encoded values and no tag, so the panel saturates them into its native gamut: reds and greens more vivid than the content, which is why a window that looks right on an sRGB monitor looks wrong here. Compositors fix this by characterizing the display and converting during composition.
  
@@ -5002,7 +4986,7 @@ index 1d418f72..86b5ba5c 100644
  
  Tagged clients are separate from this policy: whenever a characterization is active, output and preferred color descriptions advertise the panel's real custom primaries under both settings, so applications with explicit color management convert accurately. Their pixels can therefore change as soon as a profile is configured, even under `sdr_gamut = "native"`; untagged content is untouched unless `sdr_gamut = "srgb"` stages the mapping.
  
-@@ -280,7 +296,7 @@ ICC import accepts matrix-shaper profiles only. LUT-based profiles (`A2B0`/`B2A0
+@@ -300,7 +316,7 @@ ICC import accepts matrix-shaper profiles only. LUT-based profiles (`A2B0`/`B2A0
  
  The characterization applies to SDR-mode composition only. Under HDR the PQ/BT.2020 pipeline, `sdr_white`, and `sdr_transfer` behave exactly as described above. Run `umbriel color` to inspect the resolved `panel_primaries` and `panel_transfer` alongside the configured `color_profile` and `sdr_gamut`.
  
@@ -5012,10 +4996,10 @@ index 1d418f72..86b5ba5c 100644
  #### Client ICC descriptions
  
 diff --git a/examples/config.toml b/examples/config.toml
-index 58100200..a95991c0 100644
+index 8493f56b..a19ce628 100644
 --- a/examples/config.toml
 +++ b/examples/config.toml
-@@ -69,7 +69,7 @@ files = []
+@@ -74,7 +74,7 @@ files = []
  # hdr = "auto"
  # sdr_transfer = "gamma22" # Or "srgb" for piecewise SDR decoding in HDR.
  # color_profile = "edid" # Or a factory ICC path; characterized panels describe themselves to tagged clients.
@@ -5025,7 +5009,7 @@ index 58100200..a95991c0 100644
  # ==============================================================================
  # Appearance
 diff --git a/meson.build b/meson.build
-index 66d1c42e..1cd713c9 100644
+index eb1a6a17..8bd712e8 100644
 --- a/meson.build
 +++ b/meson.build
 @@ -127,13 +127,13 @@ pangocairo_dep = dependency('pangocairo')
@@ -5070,7 +5054,7 @@ index 55e1dddd..c1679bd6 100644
            && lhs.bitDepth == rhs.bitDepth;
      }
 diff --git a/src/config/config.h b/src/config/config.h
-index bb99c513..56d2583a 100644
+index 847b99b1..e3a82bff 100644
 --- a/src/config/config.h
 +++ b/src/config/config.h
 @@ -11,6 +11,7 @@
@@ -5081,7 +5065,7 @@ index bb99c513..56d2583a 100644
  #include <filesystem>
  #include <map>
  #include <optional>
-@@ -334,9 +335,12 @@ namespace umbriel {
+@@ -342,9 +343,12 @@ namespace umbriel {
      float sdrWhite = 203.0F;
      SdrTransfer sdrTransfer = SdrTransfer::Gamma22;
      // Panel characterization for SDR gamut limiting: "none", "edid", or a path
@@ -6125,7 +6109,7 @@ index 8078d59c..532857a0 100644
  
  #if UMBRIEL_HAS_DRM_BACKEND
 diff --git a/src/output/output.cpp b/src/output/output.cpp
-index 85ec0473..39d7bf9d 100644
+index f789aee7..6cecf306 100644
 --- a/src/output/output.cpp
 +++ b/src/output/output.cpp
 @@ -39,12 +39,17 @@ extern "C" {
@@ -6164,7 +6148,7 @@ index 85ec0473..39d7bf9d 100644
  #ifdef TRACY_ENABLE
      // Tracy keeps a plot's name pointer and reads it while a capture runs, so
      // the per-output names live for the rest of the process.
-@@ -477,10 +492,23 @@ namespace umbriel {
+@@ -469,10 +484,23 @@ namespace umbriel {
                                                                                               : nullptr;
    }
  
@@ -6189,7 +6173,7 @@ index 85ec0473..39d7bf9d 100644
      if (!force && m_sdrGamutResolved && m_sdrGamutSource == key) {
        return;
      }
-@@ -501,32 +529,54 @@ namespace umbriel {
+@@ -493,32 +521,54 @@ namespace umbriel {
      // down that chain instead of failing the config (never fail the output).
      std::optional<PanelColorimetry> panel;
      if (source != "edid") {
@@ -6594,10 +6578,10 @@ index 4441cd23..f986e553 100644
  
    ColorManager::ColorManager(Server& server) : m_impl(std::make_unique<Impl>(server)) {}
 diff --git a/src/server/ipc_commands.cpp b/src/server/ipc_commands.cpp
-index 573fd132..337573cf 100644
+index 5997a33e..dcc5d3f7 100644
 --- a/src/server/ipc_commands.cpp
 +++ b/src/server/ipc_commands.cpp
-@@ -436,21 +436,6 @@ namespace umbriel {
+@@ -450,21 +450,6 @@ namespace umbriel {
        }
      }
  
@@ -6619,7 +6603,7 @@ index 573fd132..337573cf 100644
      const char* protocolPrimariesName(uint32_t value) {
        switch (value) {
        case 0:
-@@ -549,14 +534,18 @@ namespace umbriel {
+@@ -563,14 +548,18 @@ namespace umbriel {
              "  color profile: {}, SDR gamut: {}", output.value("color_profile", "none"),
              output.value("sdr_gamut", "native")
          );
@@ -6646,7 +6630,7 @@ index 573fd132..337573cf 100644
            std::println(
                "  panel primaries: r {:.4f},{:.4f} g {:.4f},{:.4f} b {:.4f},{:.4f} w {:.4f},{:.4f}; panel transfer: {}",
                red.at("x").get<double>(), red.at("y").get<double>(), green.at("x").get<double>(),
-@@ -758,6 +747,23 @@ namespace umbriel {
+@@ -772,6 +761,23 @@ namespace umbriel {
  
    } // namespace
  
@@ -6667,10 +6651,10 @@ index 573fd132..337573cf 100644
 +    return "unspecified";
 +  }
 +
-   nlohmann::json IpcCommands::windows(Server& server, std::string_view /*arg*/) {
+   nlohmann::json IpcCommands::windows(Server& server, IpcArgs /*args*/) {
      nlohmann::json windows = nlohmann::json::array();
      PendingLayouts pendingLayouts;
-@@ -1044,7 +1050,7 @@ namespace umbriel {
+@@ -1063,7 +1069,7 @@ namespace umbriel {
            {"max_cll", description != nullptr ? description->max_cll : 0.0},
            {"max_fall", description != nullptr ? description->max_fall : 0.0},
        };
@@ -6680,7 +6664,7 @@ index 573fd132..337573cf 100644
        entry["panel_transfer"] = nullptr;
        if (panel != nullptr) {
 diff --git a/src/server/ipc_commands.h b/src/server/ipc_commands.h
-index 638e08d2..5e764d6f 100644
+index 07989329..3951454a 100644
 --- a/src/server/ipc_commands.h
 +++ b/src/server/ipc_commands.h
 @@ -12,6 +12,12 @@
@@ -6694,8 +6678,8 @@ index 638e08d2..5e764d6f 100644
 +  // curve reports "unspecified", and no description at all reports "none".
 +  std::string surfaceTransferLabel(const ColorDescription* description);
  
-   struct IpcCommands {
-     static nlohmann::json keyboardLayouts(Server& server, std::string_view arg);
+   // A request's `args` array, one string per CLI word.
+   using IpcArgs = std::span<const std::string>;
 diff --git a/tests/harness/checks/protocol/color_profile.sh b/tests/harness/checks/protocol/color_profile.sh
 index 20b41b60..887d33d0 100644
 --- a/tests/harness/checks/protocol/color_profile.sh
@@ -7227,12 +7211,12 @@ index 056fc149..623f7e7b 100644
      if (fd < 0) {
        std::println(stderr, "color-feedback-client: cannot open ICC profile {}", argv[2]);
 diff --git a/tests/harness/lib.sh b/tests/harness/lib.sh
-index 7fde45cb..45288fe8 100644
+index 11e8018f..bf6d5c21 100644
 --- a/tests/harness/lib.sh
 +++ b/tests/harness/lib.sh
-@@ -103,3 +103,121 @@ corner_radius = 0
- enabled = false
- CONFIG
+@@ -163,3 +163,121 @@ capture_set_protection() {
+   sed -i "0,/^block_capture = /s/^block_capture = .*/block_capture = $1/" "$UMBRIEL_CONFIG"
+   "$UMBRIEL" msg config-reload > /dev/null
  }
 +
 +# Builds the matrix-shaper ICC v2 display profile the color checks pin: Display-P3-like colorants with a gamma 1.8 TRC,
@@ -7353,10 +7337,10 @@ index 7fde45cb..45288fe8 100644
 +PY
 +}
 diff --git a/tests/meson.build b/tests/meson.build
-index a92e7490..ed765888 100644
+index f9aee862..795cf3e7 100644
 --- a/tests/meson.build
 +++ b/tests/meson.build
-@@ -39,9 +39,9 @@ unit_tests = [
+@@ -42,9 +42,9 @@ unit_tests = [
    ['output-gamma-transition', ['unit/output_gamma_transition.cpp'], []],
    ['hdr-metadata', ['unit/hdr_metadata.cpp'], [umbriel_core_dep]],
    # Client-ICC cases skip at runtime when lcms2 is absent at build time.
@@ -8560,7 +8544,7 @@ index 08acb799..5cf77322 100644
 +
  int main() { return RUN_TESTS(); }
 diff --git a/tests/unit/config_change.cpp b/tests/unit/config_change.cpp
-index 43097cd2..def5f972 100644
+index 8c474ac5..5b3b9b84 100644
 --- a/tests/unit/config_change.cpp
 +++ b/tests/unit/config_change.cpp
 @@ -672,6 +672,27 @@ UMBRIEL_TEST(outputColorProfileReloadOnlyRefreshesOutputState) {
@@ -8592,7 +8576,7 @@ index 43097cd2..def5f972 100644
    Config before;
    OutputRule original;
 diff --git a/tests/unit/config_load.cpp b/tests/unit/config_load.cpp
-index 5c83f186..2a9f85d5 100644
+index b51c3aed..d6edd9a0 100644
 --- a/tests/unit/config_load.cpp
 +++ b/tests/unit/config_load.cpp
 @@ -5,6 +5,7 @@
@@ -8623,7 +8607,7 @@ index 5c83f186..2a9f85d5 100644
    class TempConfig {
    public:
      TempConfig()
-@@ -1762,20 +1769,124 @@ UMBRIEL_TEST(outputColorProfileLoadsDefaultsEdidAndPaths) {
+@@ -1737,20 +1744,124 @@ UMBRIEL_TEST(outputColorProfileLoadsDefaultsEdidAndPaths) {
    file.write("[output.DP-1]\ncolor_profile = \"" + profilePath.string() + "\"\n");
    CHECK(store.reload().success);
    CHECK_EQ(store.config().outputs[0].colorProfile, profilePath.string());
@@ -8751,18 +8735,18 @@ index 5c83f186..2a9f85d5 100644
    const TempConfig file;
    ConfigStore& store = umbriel::configStore();
 diff --git a/tests/unit/ipc_commands.cpp b/tests/unit/ipc_commands.cpp
-index d7a07a23..f24cef19 100644
+index ee855137..173df46d 100644
 --- a/tests/unit/ipc_commands.cpp
 +++ b/tests/unit/ipc_commands.cpp
-@@ -1,6 +1,7 @@
- #include "server/ipc_commands.h"
- 
+@@ -3,6 +3,7 @@
  #include "check.h"
+ #include "config/keybind_parse.h"
+ #include "server/action_request.h"
 +#include "server/color_description.h"
  
  #include <cstdio>
  #include <limits>
-@@ -243,6 +244,19 @@ UMBRIEL_TEST(colorHumanLabelsFittedPowerTransferForSurfaces) {
+@@ -261,6 +262,19 @@ UMBRIEL_TEST(colorHumanLabelsFittedPowerTransferForSurfaces) {
    });
    const std::string out = captureHumanOutput(*spec, payload);
    CHECK(out.contains("power 1.8"));
@@ -8783,7 +8767,7 @@ index d7a07a23..f24cef19 100644
  
  UMBRIEL_TEST(parsesOutputCreateNameOnly) {
 diff --git a/umbrielfx/meson.build b/umbrielfx/meson.build
-index e7f82b00..e9fc3fb6 100644
+index 4ddba7ed..bc576aeb 100644
 --- a/umbrielfx/meson.build
 +++ b/umbrielfx/meson.build
 @@ -71,11 +71,12 @@ umbrielfx_deps = [
@@ -8892,7 +8876,7 @@ index c80166e0..c68d62c0 100644
        continue;
      }
 diff --git a/umbrielfx/tests/color.c b/umbrielfx/tests/color.c
-index fb0d5b5c..b73aaec5 100644
+index 5fe04a04..31b0d275 100644
 --- a/umbrielfx/tests/color.c
 +++ b/umbrielfx/tests/color.c
 @@ -332,6 +332,102 @@ static bool check_matrix_near(const float actual[static 9], const float expected
@@ -9072,7 +9056,7 @@ index fb0d5b5c..b73aaec5 100644
    return ok;
  }
  
-@@ -3214,7 +3377,9 @@ int main(int argc, char* argv[]) {
+@@ -3262,7 +3425,9 @@ int main(int argc, char* argv[]) {
      return test_hdr_white_point_math() ? EXIT_SUCCESS : EXIT_FAILURE;
    }
    if (strcmp(argv[1], "compose-lut-fold") == 0) {
@@ -9087,7 +9071,7 @@ index fb0d5b5c..b73aaec5 100644
 2.56.0.236.g7e34d8174d
 
 
-From f84e622dab5fc101d05d6bae069ad45d7fbc7f33 Mon Sep 17 00:00:00 2001
+From 83253ba128587149c8ab0dc54b2eefb5c689f14d Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Tue, 27 Oct 2026 06:15:27 +0800
 Subject: [PATCH 07/12] fix(color): polish items from external review round 2
@@ -9175,7 +9159,7 @@ index 5cf77322..06a01539 100644
    const wlr_color_primaries defaults = displayP3Primaries();
    const std::optional<umbriel::PanelColorimetry> source = umbriel::panelColorimetryFromEdid(edid, &defaults);
 diff --git a/tests/unit/config_change.cpp b/tests/unit/config_change.cpp
-index def5f972..2acce2d2 100644
+index 5b3b9b84..37edb444 100644
 --- a/tests/unit/config_change.cpp
 +++ b/tests/unit/config_change.cpp
 @@ -678,7 +678,8 @@ UMBRIEL_TEST(aRereadProfileRuleWithUnchangedFileChangesNothing) {
@@ -9218,7 +9202,7 @@ index c68d62c0..83de1d5c 100644
 2.56.0.236.g7e34d8174d
 
 
-From 848c193f21fda271b33b55b1a7b408e4cd5a9a2f Mon Sep 17 00:00:00 2001
+From 31c4a67d2f7eecc86ff9cf78b97b145d0d50dd26 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Tue, 27 Oct 2026 07:02:31 +0800
 Subject: [PATCH 08/12] style(color): normalize formatting in the lut-fold test
@@ -9250,7 +9234,7 @@ index 83de1d5c..a3da1238 100644
  // Sample one table row at a normalized position, linearly the way the shaders
  // sample a LUT.
 diff --git a/umbrielfx/tests/color.c b/umbrielfx/tests/color.c
-index b73aaec5..ae56cff9 100644
+index 31b0d275..3f781bc1 100644
 --- a/umbrielfx/tests/color.c
 +++ b/umbrielfx/tests/color.c
 @@ -404,8 +404,8 @@ static bool run_lut_fold_case(const struct lut_fold_case* fold_case) {
@@ -9282,7 +9266,7 @@ index b73aaec5..ae56cff9 100644
 2.56.0.236.g7e34d8174d
 
 
-From e0cd97f64d5e68f504bf4dcb6b3cde909b1e51b4 Mon Sep 17 00:00:00 2001
+From 1e2860966feff760f374ea75429e2e2eeea25fa4 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Tue, 27 Oct 2026 07:21:00 +0800
 Subject: [PATCH 09/12] fix(color): bind range-for loop variables by reference
@@ -9330,7 +9314,7 @@ index 06a01539..fd3db1cc 100644
 2.56.0.236.g7e34d8174d
 
 
-From 2503d53001859f21fc81857376834aac22265178 Mon Sep 17 00:00:00 2001
+From 263f2552165f0851c06e2de3aaee9f7b98a55114 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Tue, 27 Oct 2026 07:25:17 +0800
 Subject: [PATCH 10/12] style(color): wrap the white-point range-for under the
@@ -9363,7 +9347,7 @@ index fd3db1cc..eea74f17 100644
 2.56.0.236.g7e34d8174d
 
 
-From 10df35ba9d6a133d9e4581ea214476871576aa08 Mon Sep 17 00:00:00 2001
+From 18072466b07971df86dfaf685bbaeb698ad0e873 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Tue, 27 Oct 2026 07:56:53 +0800
 Subject: [PATCH 11/12] style(color): adopt clang-tidy suggestions in the color
@@ -9445,10 +9429,10 @@ index a0e18ddc..25a1a3fa 100644
  
      if (matchesDecode(redDecode, srgbDecodeSample)) {
 diff --git a/src/output/output.cpp b/src/output/output.cpp
-index 39d7bf9d..940da816 100644
+index 6cecf306..718b88be 100644
 --- a/src/output/output.cpp
 +++ b/src/output/output.cpp
-@@ -534,7 +534,7 @@ namespace umbriel {
+@@ -526,7 +526,7 @@ namespace umbriel {
        // since. O_NONBLOCK plus the regular-file check keeps a FIFO or device
        // path from blocking the compositor thread.
        constexpr size_t kMaxProfileBytes = 32 * 1024 * 1024;
@@ -9496,7 +9480,7 @@ index eea74f17..b7e91b70 100644
 2.56.0.236.g7e34d8174d
 
 
-From d0080781786560fc3b5f20efa493b2701619f9fb Mon Sep 17 00:00:00 2001
+From 08672f5757c059860c9dc204f15d8b5c63f9a8a2 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Thu, 29 Oct 2026 00:36:46 +0800
 Subject: [PATCH 12/12] fix(color): address the review findings on #585
@@ -9535,7 +9519,7 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
  8 files changed, 68 insertions(+), 15 deletions(-)
 
 diff --git a/PACKAGING.md b/PACKAGING.md
-index 7e934ed3..1784395a 100644
+index b9e63820..fd543fbc 100644
 --- a/PACKAGING.md
 +++ b/PACKAGING.md
 @@ -80,7 +80,7 @@ The archive is linked as a whole so its internal utility symbols survive distrib
@@ -9548,10 +9532,10 @@ index 7e934ed3..1784395a 100644
  
  The canonical dependency declarations are in [`meson.build`](meson.build). Distribution package names vary.
 diff --git a/docs/user/outputs.md b/docs/user/outputs.md
-index 86b5ba5c..c676bdab 100644
+index 09ddcce7..58ebe025 100644
 --- a/docs/user/outputs.md
 +++ b/docs/user/outputs.md
-@@ -300,7 +300,7 @@ Building ICC support requires lcms2 (the `lcms2` meson feature option, which gat
+@@ -320,7 +320,7 @@ Building ICC support requires lcms2 (the `lcms2` meson feature option, which gat
  
  #### Client ICC descriptions
  
@@ -9577,10 +9561,10 @@ index 25a1a3fa..02f8c250 100644
      }
  
 diff --git a/src/output/output.cpp b/src/output/output.cpp
-index 940da816..1574be03 100644
+index 718b88be..516b2227 100644
 --- a/src/output/output.cpp
 +++ b/src/output/output.cpp
-@@ -779,7 +779,10 @@ namespace umbriel {
+@@ -771,7 +771,10 @@ namespace umbriel {
        m_workspaceGroup->abandonReveal();
      }
      const OutputRule* rule = findOutputRule(config(), identity());

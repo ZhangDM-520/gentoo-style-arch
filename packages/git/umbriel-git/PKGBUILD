@@ -57,24 +57,18 @@ makedepends=(
 provides=("umbriel=${pkgver}")
 conflicts=('umbriel')
 source=("${_pkgname}::git+${url}.git#branch=main"
-        '0008-strip-travel-scale.patch'
-        '0009-hot-corner-overview.patch'
         '0011-drag-deform-settle-crop.patch'
         '0012-per-output-render-scale.patch'
         '0013-icc-gamut.patch'
         '0014-downsample-box.patch'
-        '0015-unaccel-gesture-deltas.patch'
         '0016-border-unfocused.patch'
         '0017-overview-card-drag-input.patch')
 sha256sums=('SKIP'
-            '03258711f3a2afdcd53dc3cff3a90180e97b4297e59245604d087826ee37581c'
-            '2600cb2ce8eee8f06f6d7cf557d862d139751091210e002ee7d818c6ec911fff'
             '1d92976c7370860d8846773c1bc7aa7a5815ef785f324dcd3bdd80d0aec9f4b5'
-            '98b2ba7224d23f00031b235006e03fb0edef44be5d484dc0e3c248f41938b583'
-            '5297413e484221031c48b762a69229c43471c2c0243480be63efe240e118d97f'
-            '6bfc61519439d329344b7ab3dbebcd20dc810fa988af68e7a3cd61615c9fb140'
-            '5fc4cb98a3d4d24e596c6f912d4d81fb68317535523d9647d68873538d120879'
-            'cbccab7c6601b6adbe48fd4dfbf0de258c46d5ba4b91dedf3f7fd2e00257b169'
+            '32104893fe2edbd3cf0909d7dd660d329f80e7048712d53253b0ea33ae398955'
+            'ce5eec0ff71c03683fad58752b1c684121420ffacffd9f51792ba2380e38e2bf'
+            '5b89e79b3547c0f16c8a37161ff22b82a8ed5eb4fcb0ba39d56a5d72510d705d'
+            'd9f6f7c5caab89b3d2a2788ea3e18eafafbb54b170d1cab9e2233d5a773e6f07'
             '6c6d0af687fd9c1de7402419a26bcd9c2098b0cd92387d4bdcfc596a59176733')
 
 pkgver() {
@@ -93,38 +87,25 @@ pkgver() {
 prepare() {
   cd "${_pkgname}"
 
-  # [input.gesture] travel_scale_horizontal/_vertical: three-finger swipes
-  # move content along each axis at a configured travel (strip pans and
-  # workspace switches, desktop and overview alike; below 1.0 covers less
-  # ground per swipe) without touching pointer speed. Upstream PR
-  # noctalia-dev/umbriel#566; while the recipe tracks
-  # upstream main, rebase the patch with `git format-patch` from its scratch
-  # branch when a drift breaks the apply. (0002, PR #508's windows_drag physics
-  # tuning, merged upstream e045d637 and retired; 0003, PR #548's floating
-  # release settle, merged upstream 0bb8befd and retired; 0004, PR #556's
-  # hover_raises, merged upstream e57420b0 and retired; 0005/0006, perf PRs
-  # #559/#560, rebuffed upstream and retired 2026-10-25; 0007, the
-  # deform-settle-crop fix, retired the same day — it was cut on the 0005/0006
-  # stack, and the main-based variant returns rebased when that thread
-  # restarts; 0010, PR #569's wide columns, merged upstream 5e241f54 and
-  # retired.)
-  git apply -3 ../0008-strip-travel-scale.patch
-
-  # Hot corners fire while the overview is open: the modal gate no longer
-  # swallows corners behind the shell's exclusive-keyboard overview chrome
-  # (Noctalia's type-to-launch capture), while a real modal on the desktop, a
-  # closing overview, and fullscreen suppression stay suppressed. Upstream PR
-  # noctalia-dev/umbriel#568; same refresh procedure. (Retire on merge: 0008 →
-  # PR #566, 0009 → PR #568.)
-  git apply -3 ../0009-hot-corner-overview.patch
-
   # Drag-release re-home waits for the deform settle (and the drag tree
   # demotes only when its last drag-presented view leaves). Upstream PR
   # noctalia-dev/umbriel#570; 0011-drag-deform-settle-crop.patch (sha256
   # 1d92976c…, full range 77ec5ae6..8a3c231d — three commits: the defer fix,
   # the review round, and the settle round; regenerate with
   # `git format-patch --stdout <merge-base>..pr-570` when a drift breaks the
-  # apply). (Retire on merge: 0011 → PR #570.)
+  # apply). (0002, PR #508's windows_drag physics tuning, merged upstream
+  # e045d637 and retired; 0003, PR #548's floating release settle, merged
+  # upstream 0bb8befd and retired; 0004, PR #556's hover_raises, merged
+  # upstream e57420b0 and retired; 0005/0006, perf PRs #559/#560, rebuffed
+  # upstream and retired 2026-10-25; 0007, the deform-settle-crop fix,
+  # retired the same day — it was cut on the 0005/0006 stack, and the
+  # main-based variant returns rebased when that thread restarts; 0008, PR
+  # #566's travel_scale, rejected by the maintainer and retired 2026-10-30;
+  # 0009, PR #568's hot-corner-overview, merged upstream e71c825b and
+  # retired 2026-10-30; 0010, PR #569's wide columns, merged upstream
+  # 5e241f54 and retired; 0015, PR #577's unaccelerated gesture deltas,
+  # rejected by the maintainer and retired 2026-10-30.) (Retire on merge:
+  # 0011 → PR #570.)
   git apply -3 ../0011-drag-deform-settle-crop.patch
 
   # [output] render_scale: per-output HiDPI supersampling — clients render at
@@ -132,9 +113,9 @@ prepare() {
   # follows the output scale bit-identically, direct scanout declines while
   # render_scale != scale, and mirror scenes are isolated from render_scale
   # hints. Upstream PR noctalia-dev/umbriel#573; same refresh procedure
-  # (0012-per-output-render-scale.patch, sha256 98b2ba72…, full range
-  # d9497f36..0e484016 — four commits: feat + two review rounds + the X
-  # rectangle P1 fix; rebased onto main d9497f36 on 2026-10-26). (Retire on
+  # (0012-per-output-render-scale.patch, sha256 32104893…, full range
+  # 1ecefc2e..2083bd00 — four commits: feat + two review rounds + the X
+  # rectangle P1 fix; rebased onto main 1ecefc2e on 2026-10-30). (Retire on
   # merge: 0012 → PR #573.)
   git apply -3 ../0012-per-output-render-scale.patch
 
@@ -142,48 +123,41 @@ prepare() {
   # opt-in SDR gamut mapping (`"srgb"` confines untagged SDR to the sRGB gamut
   # in the panel's colorimetry; the default `"native"` stages no transform),
   # plus client ICC image descriptions (`create_icc`) and `icc_file`
-  # advertising. Upstream issue noctalia-dev/umbriel#574; sha256 5297413e….
-  # Cut on top of 0008+0009+0011+0012 at main@36673995, the newest base where
-  # the full stack still applies (0012 drifts on main >= c028006b; see
-  # docs/CURRENT.md) (cherry-pick of the
-  # main-based range 76477c29..275e323a — twelve first-parent feature commits (the
-  # main merge 57b86d88 is not part of the slice); 0012 collisions in
-  # docs/user/outputs.md and tests/unit/config_schema.cpp hand-merged, both
-  # sides kept). The
-  # upstream-able branch stays main-based for the PR; regenerate from plain
-  # main once 0008/0009/0011/0012 retire. (Retire on merge.)
+  # advertising. Upstream PR noctalia-dev/umbriel#585; sha256 ce5eec0f….
+  # Cut on top of 0011+0012 at main@1ecefc2e (cherry-pick of PR #585's twelve
+  # first-parent feature commits 18e50892..275e323a; its two main merges are
+  # not part of the slice). Collisions hand-merged, both sides kept:
+  # docs/user/outputs.md key table and tests/unit/config_schema.cpp tests vs
+  # 0012; src/output/output.cpp and src/server/ipc_commands.cpp unions match
+  # #585's own main merge ae14b793 (capture_exclusion + sdrGamut staging,
+  # surfaceTransferLabel + IpcArgs); tests/harness/lib.sh helper sets unioned.
+  # The upstream-able branch stays main-based (PR #585); regenerate from plain
+  # main + 0011+0012 once those retire. (Retire on merge.)
   git apply -3 ../0013-icc-gamut.patch
 
   # [output] downsample texel footprint: the capped-downsample pass averages
   # the texel footprint in raster space (review fixes: capped-downsample
   # raster-space pinning, and the downsample policy applied to window-capture
-  # mirrors). Upstream PR noctalia-dev/umbriel#575; sha256 6bfc6151….
+  # mirrors). Upstream PR noctalia-dev/umbriel#575; sha256 5b89e79b….
   # CUT AS A SLICE on top of 0012: PR #575 is stacked on #573's head, so the
-  # range is 0e484016..f75b2161 (three commits) — never 76477c29..pr-575,
+  # range is 2083bd00..1ebfd045 (three commits) — never 76477c29..pr-575,
   # which would duplicate 0012. Regenerate with
-  # `git format-patch --stdout 0e484016..pr-575` when a drift breaks the
-  # apply. #573 rebased onto main d9497f36 (head 0e484016) on 2026-10-26 and
-  # the slice was re-cut on that base (sha256 6bfc6151…); if a later #573
+  # `git format-patch --stdout 2083bd00..pr-575` when a drift breaks the
+  # apply. #573 rebased onto main 1ecefc2e (head 2083bd00) on 2026-10-30 and
+  # the slice was re-cut on that base (sha256 5b89e79b…); if a later #573
   # force-update breaks the slice again, refresh 0012 to
   # <merge-base>..<#573-head> and re-cut the slice on the new head.
   # (Retire on merge: 0014 → PR #575, with its 0012 base → PR #573.)
   git apply -3 ../0014-downsample-box.patch
 
-  # [input.gesture] unaccelerated gesture deltas: swipe tracking reads the
-  # unaccelerated pointer deltas (selectSwipeDelta warning-clean fix, plus a
-  # clang-format round). Upstream PR noctalia-dev/umbriel#577; sha256
-  # 5fc4cb98…. Cut on top of 0008..0014 (cherry-pick of the main-based range
-  # 76477c29..971a1ead — three commits; the 0008 collision in
-  # tests/unit/gesture_physics.cpp union-merged, both test blocks kept). The
-  # upstream-able branch stays main-based for the PR; regenerate from plain
-  # main once 0008 retires. (Retire on merge: 0015 → PR #577.)
-  git apply -3 ../0015-unaccel-gesture-deltas.patch
-
   # [effects] border effects on unfocused windows: opt-in border styling for
   # unfocused views (config keys in [effects], rule evaluation in
   # src/view/effects_rules.cpp). Upstream PR noctalia-dev/umbriel#580; sha256
-  # cbccab7c…, full range 76477c29..ca657214 (one commit); regenerate with
-  # `git format-patch --stdout <merge-base>..pr-580`.
+  # d9f6f7c5…, recut 2026-10-30 on main@1ecefc2e: replay of the PR's feature
+  # commit ca657214 plus its formatting fix c98506ad (the branch's two main
+  # merges re-derived; tree-identical to PR tip, one commit). Regenerate by
+  # replaying `git log --first-parent --no-merges pr-580` onto <merge-base>
+  # and format-patching the result.
   # (Retire on merge: 0016 → PR #580.)
   git apply -3 ../0016-border-unfocused.patch
 

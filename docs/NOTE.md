@@ -17808,3 +17808,13 @@ the disposition call. BUILD HELD per owner.
   (glib2-git house style). Upstream main drift fails prepare() loudly — rebase the patch then.
 - makepkg verification passed with the full PGO flow: noctalia-git 5.4.0.r6061.gaa66386ce-1
   (patch rebased cleanly past the r6032 pkgver base via git apply -3).
+- 2026-10-30: PR #585 conflicts resolved via main merge ae14b793 (4 union resolutions). The
+  drift escalated: only 0008 applies on main@1ecefc2e — STACK-WIDE re-cut wave needed (see
+  docs/CURRENT.md). 0013 slice unchanged by merges; 5297413e… current.
+
+## 2026-10-30 11:3x — umbriel-git scrub: 0013 recut (PR #585), 0016 refreshed, arrays realigned
+- 0013-icc-gamut.patch RECUT (sha256 ce5eec0f…): 12 first-parent feature commits of PR #585 cherry-picked onto main@1ecefc2e + 0011 + 0012; the 0012-vs-color collisions (outputs.md table, config_schema tests, output.cpp capture_exclusion+sdrGamut, ipc includes, lib.sh helper sets) hand-merged, unions matching #585's own main merge ae14b793 where applicable. Multi-author history preserved via cherry-pick. Statically validated (applies on main@3caa9ead).
+- 0016-border-unfocused.patch REFRESHED (sha256 d9f6f7c5…): PR #580's tip c98506ad replayed onto 1ecefc2e (feature commit + formatting fix; its two main merges re-derived; tree-identical to PR tip). Fixes its docs/user/effects.md drift.
+- PKGBUILD scrub: source() still listed 0015 while its file/apply-line/sha were gone (8 sources vs 7 sums, shifted pairing) — stale entry removed; all 7 source↔sha256sums pairs verified by hash.
+- Full stack rehearsal on real main 3caa9ead, prepare() order: 0011, 0012, 0013, 0014, 0016, 0017 ALL OK (static git apply -3 only — no builds, per owner's battery constraint).
+- Note: an earlier rehearsal round falsely failed 0012/0013/0014 — it ran against a stale local `main` (fd0a6e9a, an ancestor) due to a scratch clone's origin pointing at the workspace; caught by an is-ancestor check. Real base = 3caa9ead.

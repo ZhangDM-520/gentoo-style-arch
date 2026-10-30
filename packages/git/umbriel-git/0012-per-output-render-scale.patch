@@ -1,4 +1,4 @@
-From 00dd360058598961f1313d110861f37bc7470196 Mon Sep 17 00:00:00 2001
+From 98e1cf4629e1e47299ea34ec360ac6f4afcdef54 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 03:59:43 +0800
 Subject: [PATCH 1/4] feat(output): add per-output render_scale for HiDPI
@@ -60,10 +60,10 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
  create mode 100644 tests/harness/checks/protocol/render_scale.sh
 
 diff --git a/docs/user/configuration.md b/docs/user/configuration.md
-index fc1e2b6c..8ad749b6 100644
+index d0481f9b..e0cbe8ab 100644
 --- a/docs/user/configuration.md
 +++ b/docs/user/configuration.md
-@@ -103,9 +103,9 @@ honor_restored_maximize = false
+@@ -107,9 +107,9 @@ honor_restored_maximize = false
  
  X11 bounding shapes clip windows to their visible regions, including holes and separate rectangles. Shape changes apply while the window is open and are preserved in overview previews, window captures, and close animations. Input shapes remain independent, so a click-through overlay can keep drawing its visible widgets.
  
@@ -73,10 +73,10 @@ index fc1e2b6c..8ad749b6 100644
 -With `xwayland_xsettings = true`, Umbriel tells X11 applications that read XSETTINGS, such as GTK, Chromium, Electron, and Steam, the scale to draw their interface at: the largest output scale with `xwayland_native_resolution = true`, and `1` without it. It also announces `[input.cursor]` `theme` and `size`, the size scaled the same way. At native resolution X11 has one scale for every output, so on outputs with a smaller scale these applications look larger than native ones.
 +With `xwayland_xsettings = true`, Umbriel tells X11 applications that read XSETTINGS, such as GTK, Chromium, Electron, and Steam, the scale to draw their interface at: the largest output render scale with `xwayland_native_resolution = true`, and `1` without it. It also announces `[input.cursor]` `theme` and `size`, the size scaled the same way. At native resolution X11 has one scale for every output, so on outputs with a smaller scale these applications look larger than native ones.
  
- ## DRM devices
+ ### X11 primary monitor
  
 diff --git a/docs/user/outputs.md b/docs/user/outputs.md
-index fb8edba1..8930cf21 100644
+index cde7fa89..b1f87d92 100644
 --- a/docs/user/outputs.md
 +++ b/docs/user/outputs.md
 @@ -36,6 +36,7 @@ Umbriel first uses the first remaining enabled output in its internal output ord
@@ -87,7 +87,7 @@ index fb8edba1..8930cf21 100644
  | `transform`                                | string                            | `"normal"`   | Rotation or reflection.                                                                         |
  | `vrr`                                      | string                            | `"disabled"` | Variable refresh rate policy.                                                                   |
  | `tearing`                                  | bool                              | `false`      | Allow eligible fullscreen windows to use asynchronous page flips.                               |
-@@ -110,6 +111,14 @@ Positions use logical coordinates after scale and transform. A `3840x2160` outpu
+@@ -112,6 +113,14 @@ Positions use logical coordinates after scale and transform. A `3840x2160` outpu
  
  Omit `position` to place outputs automatically from left to right. Explicitly positioned outputs must touch or overlap for the pointer to move between them.
  
@@ -103,10 +103,10 @@ index fb8edba1..8930cf21 100644
  
  Accepted values are `normal`, `90`, `180`, `270`, `flipped`, `flipped-90`, `flipped-180`, and `flipped-270`.
 diff --git a/examples/config.toml b/examples/config.toml
-index ae3e7ec8..e799ba4c 100644
+index 8d51078c..a1794e63 100644
 --- a/examples/config.toml
 +++ b/examples/config.toml
-@@ -64,6 +64,7 @@ files = []
+@@ -69,6 +69,7 @@ files = []
  # mode = "2560x1440@144"
  # position = [0, 0]
  # scale = 1.25
@@ -127,10 +127,10 @@ index a29b6719..193ddef7 100644
            && lhs.vrr == rhs.vrr
            && lhs.hdr == rhs.hdr
 diff --git a/src/config/config.h b/src/config/config.h
-index bb850428..377ee5e3 100644
+index b99dd41c..7dc5f821 100644
 --- a/src/config/config.h
 +++ b/src/config/config.h
-@@ -312,6 +312,9 @@ namespace umbriel {
+@@ -320,6 +320,9 @@ namespace umbriel {
      std::optional<OutputMode> mode;
      std::optional<std::array<int, 2>> position;
      std::optional<double> scale;
@@ -169,10 +169,10 @@ index 18860d2b..30ed2348 100644
        recordRuleEffect(context, keys, "screen_effect", EffectKind::Screen, [&loaded, name] {
          if (OutputRule* output = findOutputRuleMutable(loaded, name)) {
 diff --git a/src/output/output.cpp b/src/output/output.cpp
-index 8cbf5c76..f4250b45 100644
+index d168b994..34404e73 100644
 --- a/src/output/output.cpp
 +++ b/src/output/output.cpp
-@@ -481,6 +481,11 @@ namespace umbriel {
+@@ -473,6 +473,11 @@ namespace umbriel {
      return rule == nullptr || rule->directScanout;
    }
  
@@ -184,7 +184,7 @@ index 8cbf5c76..f4250b45 100644
    bool Output::configuredTearingAllowed() const {
      const OutputRule* rule = findOutputRule(config(), identity());
      return rule != nullptr && rule->allowTearing;
-@@ -989,8 +994,9 @@ namespace umbriel {
+@@ -985,8 +990,9 @@ namespace umbriel {
      m_server->updateIdleInhibit();
      if (enabled) {
        kLog.info(
@@ -196,7 +196,7 @@ index 8cbf5c76..f4250b45 100644
        );
      } else if (!desktopEnabled()) {
        const OutputRule* rule = findOutputRule(config(), identity());
-@@ -1328,8 +1334,12 @@ namespace umbriel {
+@@ -1324,8 +1330,12 @@ namespace umbriel {
      if (surface == nullptr || self == nullptr || self->m_output == nullptr) {
        return;
      }
@@ -212,10 +212,10 @@ index 8cbf5c76..f4250b45 100644
  
    Output::~Output() {
 diff --git a/src/output/output.h b/src/output/output.h
-index e82e6844..8832575d 100644
+index ab4b80cf..a69015a6 100644
 --- a/src/output/output.h
 +++ b/src/output/output.h
-@@ -123,6 +123,9 @@ namespace umbriel {
+@@ -124,6 +124,9 @@ namespace umbriel {
      [[nodiscard]] int configuredBitDepth() const;
      [[nodiscard]] const std::string& bitDepthFallbackReason() const { return m_bitDepthFallbackReason; }
      [[nodiscard]] bool configuredDirectScanoutEnabled() const;
@@ -226,10 +226,10 @@ index e82e6844..8832575d 100644
      // Whether a workspace step wraps around the ends of this output's inventory.
      [[nodiscard]] bool configuredCyclicWorkspaces() const;
 diff --git a/src/server/ipc_commands.cpp b/src/server/ipc_commands.cpp
-index 8664112f..77015edf 100644
+index 8db9e3fe..906d9e5c 100644
 --- a/src/server/ipc_commands.cpp
 +++ b/src/server/ipc_commands.cpp
-@@ -297,6 +297,7 @@ namespace umbriel {
+@@ -312,6 +312,7 @@ namespace umbriel {
          std::println("  Position: {},{}", position.value("x", 0), position.value("y", 0));
          std::println("  Transform: {}", output.value("transform", "normal"));
          std::println("  Scale: {:f}", output.value("scale", 1.0));
@@ -237,7 +237,7 @@ index 8664112f..77015edf 100644
          const auto& usable = output.at("usable_area");
          std::println(
              "  Usable area: {}x{}{:+}{:+}", usable.value("width", 0), usable.value("height", 0), usable.value("x", 0),
-@@ -950,6 +951,7 @@ namespace umbriel {
+@@ -970,6 +971,7 @@ namespace umbriel {
            {"usable_area", {{"x", usable.x}, {"y", usable.y}, {"width", usable.width}, {"height", usable.height}}},
            {"transform", transformName(wlrOutput->transform)},
            {"scale", wlrOutput->scale},
@@ -246,10 +246,10 @@ index 8664112f..77015edf 100644
            {"hdr_active", output->hdrActive()},
            {"direct_scanout", std::move(directScanout)},
 diff --git a/src/server/server.cpp b/src/server/server.cpp
-index aa63892b..431f34e9 100644
+index 6a392cbb..0f1960d7 100644
 --- a/src/server/server.cpp
 +++ b/src/server/server.cpp
-@@ -585,6 +585,17 @@ namespace umbriel {
+@@ -693,6 +693,17 @@ namespace umbriel {
        throw std::runtime_error(std::string("umbrielfx scene helpers are not linked correctly: ") + mismatch);
      }
      m_scene = wlr_scene_create();
@@ -268,10 +268,10 @@ index aa63892b..431f34e9 100644
        wlr_scene_set_linux_dmabuf_v1(m_scene, linuxDmabuf);
      }
 diff --git a/src/server/server_events.cpp b/src/server/server_events.cpp
-index 0a9dfe3a..52b94813 100644
+index c14d5a03..70b50884 100644
 --- a/src/server/server_events.cpp
 +++ b/src/server/server_events.cpp
-@@ -856,6 +856,10 @@ namespace umbriel {
+@@ -857,6 +857,10 @@ namespace umbriel {
        // Scale may have changed; every surface must hear about it or scale-aware
        // clients keep mapping input with the stale scale.
        refreshSurfaceScales();
@@ -283,10 +283,10 @@ index 0a9dfe3a..52b94813 100644
      if (effects.tearingPolicy) {
        for (const auto& output : m_outputs) {
 diff --git a/src/xwayland/outputs.cpp b/src/xwayland/outputs.cpp
-index 91600e2c..4d244390 100644
+index a762e1b4..5a8b715b 100644
 --- a/src/xwayland/outputs.cpp
 +++ b/src/xwayland/outputs.cpp
-@@ -52,8 +52,10 @@ namespace umbriel {
+@@ -53,8 +53,10 @@ namespace umbriel {
      return wlr_box_equal(&layout, &other.layout) && wlr_box_equal(&x, &other.x) && scale == other.scale;
    }
  
@@ -299,7 +299,7 @@ index 91600e2c..4d244390 100644
      m_global = wl_global_create(display, &zxdg_output_manager_v1_interface, kVersion, this, bind);
      update();
    }
-@@ -88,7 +90,8 @@ namespace umbriel {
+@@ -110,7 +112,8 @@ namespace umbriel {
        }
        XwaylandRegion region{.layout = box, .x = {.x = 0, .y = 0, .width = box.width, .height = box.height}};
        if (m_nativeResolution) {
@@ -310,7 +310,7 @@ index 91600e2c..4d244390 100644
        }
        positionScale = std::max(positionScale, region.scale);
 diff --git a/src/xwayland/outputs.h b/src/xwayland/outputs.h
-index e1368885..1fc73c1f 100644
+index 9df9963c..b88f49ef 100644
 --- a/src/xwayland/outputs.h
 +++ b/src/xwayland/outputs.h
 @@ -1,5 +1,6 @@
@@ -318,9 +318,9 @@ index e1368885..1fc73c1f 100644
  
 +#include <functional>
  #include <memory>
- #include <vector>
- #include <wayland-server-core.h>
-@@ -43,7 +44,13 @@ namespace umbriel {
+ #include <optional>
+ #include <string>
+@@ -46,7 +47,13 @@ namespace umbriel {
    // goes through an XwaylandRegion.
    class XwaylandOutputs {
    public:
@@ -335,7 +335,7 @@ index e1368885..1fc73c1f 100644
      ~XwaylandOutputs();
  
      XwaylandOutputs(const XwaylandOutputs&) = delete;
-@@ -91,6 +98,7 @@ namespace umbriel {
+@@ -97,6 +104,7 @@ namespace umbriel {
      wlr_output_layout* m_layout = nullptr;
      wl_global* m_global = nullptr;
      bool m_nativeResolution = false;
@@ -344,7 +344,7 @@ index e1368885..1fc73c1f 100644
      // Stands in when no output is in the layout: a plain translation to the X origin.
      XwaylandRegion m_fallback;
 diff --git a/src/xwayland/xwayland.cpp b/src/xwayland/xwayland.cpp
-index 8ca191b3..41636e07 100644
+index 62e1e160..36489e13 100644
 --- a/src/xwayland/xwayland.cpp
 +++ b/src/xwayland/xwayland.cpp
 @@ -4,6 +4,7 @@
@@ -354,8 +354,8 @@ index 8ca191b3..41636e07 100644
 +#include "output/output.h"
  #include "server/server.h"
  #include "wlr.h"
- #include "xwayland/shape.h"
-@@ -75,7 +76,12 @@ namespace umbriel {
+ #include "xwayland/primary.h"
+@@ -76,7 +77,12 @@ namespace umbriel {
        kLog.error("failed to create the Xwayland server");
        return;
      }
@@ -367,8 +367,8 @@ index 8ca191b3..41636e07 100644
 +        }
 +    );
      m_shapes = std::make_unique<XwaylandShapes>(server.display());
+     m_primary = std::make_unique<XwaylandPrimary>(server.display());
      m_wlr->data = this;
-     m_wlr->user_event_handler = onXEvent;
 diff --git a/tests/harness/checks/protocol/render_scale.sh b/tests/harness/checks/protocol/render_scale.sh
 new file mode 100644
 index 00000000..cff4dbad
@@ -442,7 +442,7 @@ index 00000000..cff4dbad
 +fi
 +echo "render_scale drives the client hints and falls back to the logical scale on reload"
 diff --git a/tests/unit/config_change.cpp b/tests/unit/config_change.cpp
-index 2db8fcbb..b05ce77d 100644
+index a885142f..b3bec73d 100644
 --- a/tests/unit/config_change.cpp
 +++ b/tests/unit/config_change.cpp
 @@ -204,6 +204,22 @@ UMBRIEL_TEST(eachSectionIsReportedOnItsOwn) {
@@ -469,7 +469,7 @@ index 2db8fcbb..b05ce77d 100644
    const Config before;
    Config after;
 diff --git a/tests/unit/config_load.cpp b/tests/unit/config_load.cpp
-index 9e35010c..496beffc 100644
+index 42f78f24..1c771049 100644
 --- a/tests/unit/config_load.cpp
 +++ b/tests/unit/config_load.cpp
 @@ -755,6 +755,39 @@ center_focused = true
@@ -513,7 +513,7 @@ index 9e35010c..496beffc 100644
    const TempConfig file;
    ConfigStore& store = umbriel::configStore();
 diff --git a/tests/unit/config_schema.cpp b/tests/unit/config_schema.cpp
-index 17246cf3..8d449c0e 100644
+index 3ae7c688..4800e27c 100644
 --- a/tests/unit/config_schema.cpp
 +++ b/tests/unit/config_schema.cpp
 @@ -254,6 +254,21 @@ UMBRIEL_TEST(outputSdrTransferSchemaListsCanonicalValuesAndDefault) {
@@ -539,11 +539,11 @@ index 17246cf3..8d449c0e 100644
    const auto descriptions = umbriel::registry::describeConfig(umbriel::Config{});
    bool kind = false;
 diff --git a/tests/unit/xwayland_outputs.cpp b/tests/unit/xwayland_outputs.cpp
-index 75815f42..133068d9 100644
+index 5a671970..8c36bd68 100644
 --- a/tests/unit/xwayland_outputs.cpp
 +++ b/tests/unit/xwayland_outputs.cpp
-@@ -157,4 +157,18 @@ UMBRIEL_TEST(wholeOutputMapsExactlyAtFractionalScale) {
-   CHECK_EQ(region.toLayoutHeight(1440), region.layout.height);
+@@ -184,4 +184,18 @@ UMBRIEL_TEST(primarySelectorFollowsIdentityAndLayoutMembership) {
+   CHECK_EQ(outputs.primaryOutput("missing").value_or("unmanaged"), "");
  }
  
 +UMBRIEL_TEST(nativeScreenPublishesTheRenderScale) {
@@ -562,13 +562,13 @@ index 75815f42..133068d9 100644
 +
  int main() { return RUN_TESTS(); }
 diff --git a/umbrielfx/include/umbrielfx/types/wlr_scene.h b/umbrielfx/include/umbrielfx/types/wlr_scene.h
-index 35f7de93..a264149d 100644
+index e4125a44..a68d083a 100644
 --- a/umbrielfx/include/umbrielfx/types/wlr_scene.h
 +++ b/umbrielfx/include/umbrielfx/types/wlr_scene.h
-@@ -168,6 +168,12 @@ struct wlr_scene {
-     // Painted where no node covers the output. A rect matching it exactly
-     // is dropped from the render list instead of drawn.
+@@ -170,6 +170,12 @@ struct wlr_scene {
      float background_color[4];
+     size_t capture_protected_nodes;
+     bool capture_policy_failed;
 +
 +    // May be NULL: the scale clients should render at for a surface presented
 +    // on a given output (its render scale). Derivation falls back to the
@@ -578,7 +578,7 @@ index 35f7de93..a264149d 100644
    } WLR_PRIVATE;
  };
  
-@@ -578,6 +584,15 @@ void wlr_scene_set_gamma_control_manager_v1(
+@@ -583,6 +589,15 @@ void wlr_scene_set_gamma_control_manager_v1(
   */
  void wlr_scene_set_color_manager_v1(struct wlr_scene* scene, struct wlr_color_manager_v1* manager);
  
@@ -595,10 +595,10 @@ index 35f7de93..a264149d 100644
   * Add a node displaying nothing but its children.
   */
 diff --git a/umbrielfx/types/scene/surface.c b/umbrielfx/types/scene/surface.c
-index 5a05c869..6e1cce87 100644
+index bd79dda4..a4f19dcd 100644
 --- a/umbrielfx/types/scene/surface.c
 +++ b/umbrielfx/types/scene/surface.c
-@@ -16,12 +16,16 @@
+@@ -17,12 +17,16 @@
  #include <wlr/util/region.h>
  #include <wlr/util/transform.h>
  
@@ -618,7 +618,7 @@ index 5a05c869..6e1cce87 100644
      }
    }
    return scale;
-@@ -143,7 +147,7 @@ static void handle_scene_buffer_outputs_update(struct wl_listener* listener, voi
+@@ -144,7 +148,7 @@ static void handle_scene_buffer_outputs_update(struct wl_listener* listener, voi
      wlr_surface_send_enter(surface->surface, event->active[i]->output);
    }
  
@@ -628,10 +628,10 @@ index 5a05c869..6e1cce87 100644
    wlr_surface_set_preferred_buffer_scale(surface->surface, ceil(scale));
  
 diff --git a/umbrielfx/types/scene/wlr_scene.c b/umbrielfx/types/scene/wlr_scene.c
-index 70e6ce36..fdb2213d 100644
+index 300af9df..12e3a3b3 100644
 --- a/umbrielfx/types/scene/wlr_scene.c
 +++ b/umbrielfx/types/scene/wlr_scene.c
-@@ -4366,6 +4366,13 @@ void wlr_scene_set_color_manager_v1(struct wlr_scene* scene, struct wlr_color_ma
+@@ -4406,6 +4406,13 @@ void wlr_scene_set_color_manager_v1(struct wlr_scene* scene, struct wlr_color_ma
    wl_signal_add(&manager->events.destroy, &scene->color_manager_v1_destroy);
  }
  
@@ -649,7 +649,7 @@ index 70e6ce36..fdb2213d 100644
 2.56.0.236.g7e34d8174d
 
 
-From 5a5262952f0b7c542a41c3b1f8fd63fb8880e9bc Mon Sep 17 00:00:00 2001
+From fece752d37d680e8606e2cf91f89d984bec7cd31 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 04:44:47 +0800
 Subject: [PATCH 2/4] fix(review): isolate mirror scenes from render_scale
@@ -690,10 +690,10 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
  9 files changed, 86 insertions(+), 35 deletions(-)
 
 diff --git a/docs/user/configuration.md b/docs/user/configuration.md
-index 8ad749b6..4910f644 100644
+index e0cbe8ab..339a57a1 100644
 --- a/docs/user/configuration.md
 +++ b/docs/user/configuration.md
-@@ -103,7 +103,7 @@ honor_restored_maximize = false
+@@ -107,7 +107,7 @@ honor_restored_maximize = false
  
  X11 bounding shapes clip windows to their visible regions, including holes and separate rectangles. Shape changes apply while the window is open and are preserved in overview previews, window captures, and close animations. Input shapes remain independent, so a click-through overlay can keep drawing its visible widgets.
  
@@ -703,7 +703,7 @@ index 8ad749b6..4910f644 100644
  With `xwayland_xsettings = true`, Umbriel tells X11 applications that read XSETTINGS, such as GTK, Chromium, Electron, and Steam, the scale to draw their interface at: the largest output render scale with `xwayland_native_resolution = true`, and `1` without it. It also announces `[input.cursor]` `theme` and `size`, the size scaled the same way. At native resolution X11 has one scale for every output, so on outputs with a smaller scale these applications look larger than native ones.
  
 diff --git a/docs/user/outputs.md b/docs/user/outputs.md
-index 8930cf21..f686ba2b 100644
+index b1f87d92..adfc2e87 100644
 --- a/docs/user/outputs.md
 +++ b/docs/user/outputs.md
 @@ -29,28 +29,28 @@ Umbriel first uses the first remaining enabled output in its internal output ord
@@ -756,7 +756,7 @@ index 8930cf21..f686ba2b 100644
  
  Umbriel tries an unadvertised resolution as a custom mode. If it cannot apply the configured mode, it uses the preferred advertised mode and logs a warning. Backend tests include the 8-bit SDR fallback, so a rejected swapchain can reach the preferred mode. On that mode, Umbriel retries the configured HDR and bit-depth preferences. A temporary rendering failure after an accepted backend test retries the current candidate instead of changing modes.
  
-@@ -115,7 +115,7 @@ Omit `position` to place outputs automatically from left to right. Explicitly po
+@@ -117,7 +117,7 @@ Omit `position` to place outputs automatically from left to right. Explicitly po
  
  `render_scale` separates what things look like from what clients render at, the way macOS handles HiDPI. With `scale = 1.35` and `render_scale = 2.0`, clients are asked to render at 2.0 and the compositor samples their buffers down to the output's `scale` raster, which smooths text and fine detail on low-ppi and non-RGB-subpixel panels. Logical geometry is unchanged: windows keep their `scale` sizes, and the output still advertises `scale` so client interfaces size as before.
  
@@ -786,10 +786,10 @@ index 30ed2348..5ef27d15 100644
              renderNode->source(), "{} below the logical scale undersamples (blurry output)",
              keys.qualified("render_scale")
 diff --git a/src/server/server.cpp b/src/server/server.cpp
-index 431f34e9..f57c6d49 100644
+index 0f1960d7..9935e558 100644
 --- a/src/server/server.cpp
 +++ b/src/server/server.cpp
-@@ -592,7 +592,8 @@ namespace umbriel {
+@@ -700,7 +700,8 @@ namespace umbriel {
          [](wlr_output* output, void* data) -> double {
            auto* server = static_cast<Server*>(data);
            const Output* bound = server->outputFromWlr(output);
@@ -800,10 +800,10 @@ index 431f34e9..f57c6d49 100644
          this
      );
 diff --git a/src/xwayland/outputs.h b/src/xwayland/outputs.h
-index 1fc73c1f..9b1b86a8 100644
+index b88f49ef..8a3bcd7e 100644
 --- a/src/xwayland/outputs.h
 +++ b/src/xwayland/outputs.h
-@@ -47,7 +47,7 @@ namespace umbriel {
+@@ -50,7 +50,7 @@ namespace umbriel {
      // The scale X11 clients are asked to render each output at — its render
      // scale, resolved through the shell's output binding.
      using RenderScale = std::function<double(const wlr_output*)>;
@@ -858,7 +858,7 @@ index cff4dbad..9290cbc7 100644
 +fi
  echo "render_scale drives the client hints and falls back to the logical scale on reload"
 diff --git a/tests/unit/config_load.cpp b/tests/unit/config_load.cpp
-index 496beffc..f2eac0ef 100644
+index 1c771049..953f7903 100644
 --- a/tests/unit/config_load.cpp
 +++ b/tests/unit/config_load.cpp
 @@ -783,9 +783,17 @@ render_scale = 1.0
@@ -880,10 +880,10 @@ index 496beffc..f2eac0ef 100644
  
  UMBRIEL_TEST(outputWorkspaceAxisAcceptsOnlyItsTwoNames) {
 diff --git a/umbrielfx/include/umbrielfx/types/wlr_scene.h b/umbrielfx/include/umbrielfx/types/wlr_scene.h
-index a264149d..dbf8dfae 100644
+index a68d083a..e6691f68 100644
 --- a/umbrielfx/include/umbrielfx/types/wlr_scene.h
 +++ b/umbrielfx/include/umbrielfx/types/wlr_scene.h
-@@ -587,7 +587,9 @@ void wlr_scene_set_color_manager_v1(struct wlr_scene* scene, struct wlr_color_ma
+@@ -592,7 +592,9 @@ void wlr_scene_set_color_manager_v1(struct wlr_scene* scene, struct wlr_color_ma
  /**
   * Overrides the preferred client scale derived when a surface's outputs
   * change. `get` answers with the scale clients should render at for the given
@@ -895,10 +895,10 @@ index a264149d..dbf8dfae 100644
  void wlr_scene_set_preferred_scale_provider(
      struct wlr_scene* scene, double (*get)(struct wlr_output* output, void* data), void* data
 diff --git a/umbrielfx/types/scene/surface.c b/umbrielfx/types/scene/surface.c
-index 6e1cce87..09534e35 100644
+index a4f19dcd..e4d4f582 100644
 --- a/umbrielfx/types/scene/surface.c
 +++ b/umbrielfx/types/scene/surface.c
-@@ -17,18 +17,22 @@
+@@ -18,18 +18,22 @@
  #include <wlr/util/transform.h>
  
  static double get_surface_preferred_buffer_scale(struct wlr_scene* scene, struct wlr_surface* surface) {
@@ -923,7 +923,7 @@ index 6e1cce87..09534e35 100644
  }
  
  // Output used for frame pacing (surface frame callbacks, presentation
-@@ -147,9 +151,15 @@ static void handle_scene_buffer_outputs_update(struct wl_listener* listener, voi
+@@ -148,9 +152,15 @@ static void handle_scene_buffer_outputs_update(struct wl_listener* listener, voi
      wlr_surface_send_enter(surface->surface, event->active[i]->output);
    }
  
@@ -946,7 +946,7 @@ index 6e1cce87..09534e35 100644
 2.56.0.236.g7e34d8174d
 
 
-From feae22dcd839e1827706d7e9f9154fefbfce5cfb Mon Sep 17 00:00:00 2001
+From e3c51e6cee122f51831cf531ff00fe9acc90f205 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 09:55:07 +0800
 Subject: [PATCH 3/4] fix(review): pin mirror isolation and harden the
@@ -983,10 +983,10 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
  create mode 100644 umbrielfx/tests/scale_hints.c
 
 diff --git a/docs/user/outputs.md b/docs/user/outputs.md
-index f686ba2b..65da9d68 100644
+index adfc2e87..558d2053 100644
 --- a/docs/user/outputs.md
 +++ b/docs/user/outputs.md
-@@ -115,7 +115,7 @@ Omit `position` to place outputs automatically from left to right. Explicitly po
+@@ -117,7 +117,7 @@ Omit `position` to place outputs automatically from left to right. Explicitly po
  
  `render_scale` separates what things look like from what clients render at, the way macOS handles HiDPI. With `scale = 1.35` and `render_scale = 2.0`, clients are asked to render at 2.0 and the compositor samples their buffers down to the output's `scale` raster, which smooths text and fine detail on low-ppi and non-RGB-subpixel panels. Logical geometry is unchanged: windows keep their `scale` sizes, and the output still advertises `scale` so client interfaces size as before.
  
@@ -1060,10 +1060,10 @@ index 9290cbc7..2e369357 100644
  echo "presented after a workspace round-trip: $presented"
  if [[ $presented != *"scale 60/120"* ]]; then
 diff --git a/umbrielfx/meson.build b/umbrielfx/meson.build
-index 57f7ec46..ad293d87 100644
+index eba8e120..bfaf9135 100644
 --- a/umbrielfx/meson.build
 +++ b/umbrielfx/meson.build
-@@ -261,6 +261,22 @@ if build_tests
+@@ -272,6 +272,22 @@ if build_tests
      suite: 'umbrielfx',
    )
  
@@ -1218,10 +1218,10 @@ index 00000000..5bd0ce42
 +  return failures ? 1 : 0;
 +}
 diff --git a/umbrielfx/types/scene/capture.c b/umbrielfx/types/scene/capture.c
-index 900d0534..cfb139ae 100644
+index 15c7989d..6dd17f3a 100644
 --- a/umbrielfx/types/scene/capture.c
 +++ b/umbrielfx/types/scene/capture.c
-@@ -343,6 +343,10 @@ struct wlr_ext_image_capture_source_v1* wlr_ext_image_capture_source_v1_create_w
+@@ -372,6 +372,10 @@ struct wlr_ext_image_capture_source_v1* wlr_ext_image_capture_source_v1_create_w
    source->backend.buffer_caps = WLR_BUFFER_CAP_DMABUF | WLR_BUFFER_CAP_SHM;
  
    wlr_output_init(&source->output, &source->backend, &output_impl, event_loop, NULL);
@@ -1236,7 +1236,7 @@ index 900d0534..cfb139ae 100644
 2.56.0.236.g7e34d8174d
 
 
-From 0e4840168d9897fffcc5b74792dce7215e042409 Mon Sep 17 00:00:00 2001
+From 2083bd00f64064eef1321aa2bc997242fbf34f97 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 13:07:25 +0800
 Subject: [PATCH 4/4] fix(xwayland): keep the X output rectangle in
@@ -1271,10 +1271,10 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
  2 files changed, 22 insertions(+)
 
 diff --git a/src/xwayland/outputs.cpp b/src/xwayland/outputs.cpp
-index 4d244390..16662d09 100644
+index 5a8b715b..8c05c1b9 100644
 --- a/src/xwayland/outputs.cpp
 +++ b/src/xwayland/outputs.cpp
-@@ -92,7 +92,13 @@ namespace umbriel {
+@@ -114,7 +114,13 @@ namespace umbriel {
        if (m_nativeResolution) {
          // X11 clients render at the output's render scale, like Wayland clients.
          region.scale = m_renderScale != nullptr ? m_renderScale(output) : static_cast<double>(output->scale);
@@ -1289,10 +1289,10 @@ index 4d244390..16662d09 100644
        positionScale = std::max(positionScale, region.scale);
        regions.push_back({.output = output, .region = region});
 diff --git a/tests/unit/xwayland_outputs.cpp b/tests/unit/xwayland_outputs.cpp
-index 133068d9..63e04649 100644
+index 8c36bd68..f13cbac3 100644
 --- a/tests/unit/xwayland_outputs.cpp
 +++ b/tests/unit/xwayland_outputs.cpp
-@@ -169,6 +169,22 @@ UMBRIEL_TEST(nativeScreenPublishesTheRenderScale) {
+@@ -196,6 +196,22 @@ UMBRIEL_TEST(nativeScreenPublishesTheRenderScale) {
    CHECK_EQ(main.scale, 2.5);
    CHECK_EQ(main.toXWidth(1000), 2500);
    CHECK_EQ(main.toLayoutWidth(2500), 1000);
