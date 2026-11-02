@@ -1,4 +1,4 @@
-From d8b292f842c48406093f3592f9ed5c6374e5b0e7 Mon Sep 17 00:00:00 2001
+From 8c5b6743b4f497d46d598bb1429db6338e220c2c Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 12:33:12 +0800
 Subject: [PATCH 1/3] feat(render): average the texel footprint when the scene
@@ -40,7 +40,7 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
  examples/config.toml                          |   5 +
  src/config/change.cpp                         |   3 +
  src/config/change.h                           |   4 +
- src/config/config.h                           |   9 ++
+ src/config/config.h                           |   8 ++
  src/config/fields_general.cpp                 |   8 ++
  src/server/server.cpp                         |   2 +
  src/server/server.h                           |   1 +
@@ -58,11 +58,11 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
  umbrielfx/render/fx_renderer/shaders.c        |  12 +-
  umbrielfx/render/fx_renderer/shaders/tex.frag |  39 +++++-
  umbrielfx/types/scene/wlr_scene.c             |  30 ++++-
- 23 files changed, 432 insertions(+), 29 deletions(-)
+ 23 files changed, 431 insertions(+), 29 deletions(-)
  create mode 100755 tests/harness/checks/render/downsample_box.sh
 
 diff --git a/docs/user/appearance.md b/docs/user/appearance.md
-index 6dec5ff2..1cbb071a 100644
+index 1146a02c..5766eec4 100644
 --- a/docs/user/appearance.md
 +++ b/docs/user/appearance.md
 @@ -96,6 +96,7 @@ outer_border_width = 0
@@ -89,10 +89,10 @@ index 6dec5ff2..1cbb071a 100644
  
  Borders render outside window content and are included in layout spacing. `corner_radius = 0` keeps every contour square. A [window rule](window-rules.md#decoration) can override `border_width`, `outer_border_width`, and `corner_radius` for the windows it matches.
 diff --git a/docs/user/outputs.md b/docs/user/outputs.md
-index 558d2053..57a3439e 100644
+index b729590f..02f55937 100644
 --- a/docs/user/outputs.md
 +++ b/docs/user/outputs.md
-@@ -115,7 +115,7 @@ Omit `position` to place outputs automatically from left to right. Explicitly po
+@@ -125,7 +125,7 @@ Omit `position` to place outputs automatically from left to right. Explicitly po
  
  ### Supersampling with `render_scale`
  
@@ -102,10 +102,10 @@ index 558d2053..57a3439e 100644
  Applications that ignore the scale hints render as they always have. Values below `scale` are honored but undersample, which looks blurry. The configuration warning compares `render_scale` against the configured `scale` (1.0 when `scale` is unset), so it cannot see an auto-detected output scale. Hint-following buffers sized at `render_scale` no longer match the output mode while `render_scale` differs from `scale`, so they do not qualify for [direct scanout](#direct-scanout); set `render_scale` equal to `scale` for scanout-sensitive games.
  
 diff --git a/examples/config.toml b/examples/config.toml
-index a1794e63..f4f533c0 100644
+index 868585df..bcdba5eb 100644
 --- a/examples/config.toml
 +++ b/examples/config.toml
-@@ -79,6 +79,11 @@ files = []
+@@ -81,6 +81,11 @@ files = []
  # Blur uses a smaller radius than the built-in default.
  # https://docs.noctalia.dev/umbriel/appearance/
  #
@@ -118,10 +118,10 @@ index a1794e63..f4f533c0 100644
  radius = 3
  
 diff --git a/src/config/change.cpp b/src/config/change.cpp
-index 193ddef7..7b6dc5b4 100644
+index 73661bca..39711684 100644
 --- a/src/config/change.cpp
 +++ b/src/config/change.cpp
-@@ -242,6 +242,7 @@ namespace umbriel {
+@@ -246,6 +246,7 @@ namespace umbriel {
              || before.appearance.tabBar != after.appearance.tabBar
              || before.appearance.titleBar != after.appearance.titleBar,
          .sceneBlur = sceneBlur,
@@ -129,7 +129,7 @@ index 193ddef7..7b6dc5b4 100644
          // [colors] owns the border, backdrop, insert-hint, and shadow colors, so
          // any color edit refreshes window chrome.
          .viewChrome = before.appearance != after.appearance
-@@ -268,6 +269,7 @@ namespace umbriel {
+@@ -272,6 +273,7 @@ namespace umbriel {
          .workspaceInventory = true,
          .workspaceLayout = true,
          .sceneBlur = true,
@@ -137,7 +137,7 @@ index 193ddef7..7b6dc5b4 100644
          .viewChrome = true,
          .layerEffects = true,
          .animation = true,
-@@ -380,6 +382,7 @@ namespace umbriel {
+@@ -384,6 +386,7 @@ namespace umbriel {
      add(workspaceInventory, "workspace inventory");
      add(workspaceLayout, "workspace layout");
      add(sceneBlur, "scene blur");
@@ -146,7 +146,7 @@ index 193ddef7..7b6dc5b4 100644
      add(internalUi, "internal UI");
      add(animation, "animation state");
 diff --git a/src/config/change.h b/src/config/change.h
-index 379206f4..99eafa3e 100644
+index 3d9806e1..2e1437f3 100644
 --- a/src/config/change.h
 +++ b/src/config/change.h
 @@ -77,6 +77,9 @@ namespace umbriel {
@@ -168,20 +168,19 @@ index 379206f4..99eafa3e 100644
            || layerEffects
            || animation
 diff --git a/src/config/config.h b/src/config/config.h
-index 7dc5f821..90e4e51f 100644
+index b714e97d..3cde3a13 100644
 --- a/src/config/config.h
 +++ b/src/config/config.h
-@@ -34,6 +34,9 @@ namespace umbriel {
+@@ -35,6 +35,8 @@ namespace umbriel {
  
    enum class TitleBarMode : uint8_t { On, Negotiated, Forced, Off };
  
 +  // How the scene samples a source that shrinks into its destination.
 +  enum class DownsampleMode : uint8_t { Box, Bilinear, Nearest };
-+
+   enum class TitleBarButtonGlyph : uint8_t { Always, Hover, Never };
+ 
    enum class ModifierKey {
-     Super,
-     Alt,
-@@ -789,6 +792,12 @@ namespace umbriel {
+@@ -815,6 +817,12 @@ namespace umbriel {
        } tabBar;
        bool preferNoCsd = true;
  
@@ -191,14 +190,14 @@ index 7dc5f821..90e4e51f 100644
 +      // point- or linear-sample a single texel.
 +      DownsampleMode downsample = DownsampleMode::Box;
 +
-       [[nodiscard]] int totalBorderWidth() const { return borderWidth + outerBorderWidth; }
+       int totalBorderWidth() const { return borderWidth + outerBorderWidth; }
        bool operator==(const Appearance&) const = default;
      } appearance;
 diff --git a/src/config/fields_general.cpp b/src/config/fields_general.cpp
-index e591378f..e3f65981 100644
+index 3e1a9910..54fcc974 100644
 --- a/src/config/fields_general.cpp
 +++ b/src/config/fields_general.cpp
-@@ -167,6 +167,14 @@ namespace umbriel {
+@@ -182,6 +182,14 @@ namespace umbriel {
            integer("outer_border_width", 0, 100, &A::outerBorderWidth),
            integer("corner_radius", 0, 100, &A::cornerRadius),
            real("drag_opacity", 0.0, 1.0, &A::dragOpacity),
@@ -214,10 +213,10 @@ index e591378f..e3f65981 100644
            boolean("opaque_fullscreen", &A::opaqueFullscreen),
            registry::table("blur", &A::blur, blur),
 diff --git a/src/server/server.cpp b/src/server/server.cpp
-index 9935e558..d74f74b3 100644
+index 556eea4c..460cae48 100644
 --- a/src/server/server.cpp
 +++ b/src/server/server.cpp
-@@ -705,6 +705,8 @@ namespace umbriel {
+@@ -718,6 +718,8 @@ namespace umbriel {
          },
          this
      );
@@ -227,22 +226,22 @@ index 9935e558..d74f74b3 100644
        wlr_scene_set_linux_dmabuf_v1(m_scene, linuxDmabuf);
      }
 diff --git a/src/server/server.h b/src/server/server.h
-index 7e38c25d..24cb90c7 100644
+index 21e5b71a..3a6b1de0 100644
 --- a/src/server/server.h
 +++ b/src/server/server.h
-@@ -432,6 +432,7 @@ namespace umbriel {
+@@ -433,6 +433,7 @@ namespace umbriel {
      // Re-send every surface's output scale (views, layer surfaces, popups). Run after anything that changes an output's
      // scale or moves surfaces between outputs outside setWorkspace; the notifies dedup, so extra calls are cheap.
      void refreshSurfaceScales();
 +    void applyDownsampleMode();
      // Re-evaluate each output's policy after keyboard focus or a dynamic window rule changes.
      void refreshOutputPolicies();
-     [[nodiscard]] wlr_output* preferredOutput() const;
+     wlr_output* preferredOutput() const;
 diff --git a/src/server/server_events.cpp b/src/server/server_events.cpp
-index 70b50884..1f0d8b49 100644
+index 2326ad50..301b759c 100644
 --- a/src/server/server_events.cpp
 +++ b/src/server/server_events.cpp
-@@ -804,6 +804,12 @@ namespace umbriel {
+@@ -805,6 +805,12 @@ namespace umbriel {
          output->markDirty(Dirty::LayerArrange);
        }
      }
@@ -256,7 +255,7 @@ index 70b50884..1f0d8b49 100644
        applyKeyboardConfig();
        for (const auto& pointer : m_pointers) {
 diff --git a/src/server/server_outputs.cpp b/src/server/server_outputs.cpp
-index b79ae59b..dc152fe4 100644
+index 3525bb25..064ac18b 100644
 --- a/src/server/server_outputs.cpp
 +++ b/src/server/server_outputs.cpp
 @@ -107,6 +107,20 @@ namespace umbriel {
@@ -400,10 +399,10 @@ index 00000000..67b9d58c
 +
 +echo "capped box grid spans the full minification footprint"
 diff --git a/tests/unit/config_change.cpp b/tests/unit/config_change.cpp
-index b3bec73d..ef93e4bd 100644
+index 14d903f4..02cc90b9 100644
 --- a/tests/unit/config_change.cpp
 +++ b/tests/unit/config_change.cpp
-@@ -376,6 +376,15 @@ UMBRIEL_TEST(identicalConfigsProduceNoRuntimeEffects) {
+@@ -397,6 +397,15 @@ UMBRIEL_TEST(identicalConfigsProduceNoRuntimeEffects) {
    CHECK(!ConfigEffects::between(before, after).any());
  }
  
@@ -419,7 +418,7 @@ index b3bec73d..ef93e4bd 100644
  UMBRIEL_TEST(firstLoadInvalidatesEveryRuntimeConsumer) {
    const ConfigEffects effects = ConfigEffects::everything();
    CHECK(effects.outputState);
-@@ -384,6 +393,7 @@ UMBRIEL_TEST(firstLoadInvalidatesEveryRuntimeConsumer) {
+@@ -405,6 +414,7 @@ UMBRIEL_TEST(firstLoadInvalidatesEveryRuntimeConsumer) {
    CHECK(effects.workspaceInventory);
    CHECK(effects.workspaceLayout);
    CHECK(effects.sceneBlur);
@@ -428,10 +427,10 @@ index b3bec73d..ef93e4bd 100644
    CHECK(effects.layerEffects);
    CHECK(effects.animation);
 diff --git a/tests/unit/config_load.cpp b/tests/unit/config_load.cpp
-index 953f7903..d17e6f99 100644
+index 484eff2d..117f79da 100644
 --- a/tests/unit/config_load.cpp
 +++ b/tests/unit/config_load.cpp
-@@ -796,6 +796,34 @@ render_scale = 1.0
+@@ -829,6 +829,34 @@ render_scale = 1.0
    CHECK(!containsDiagnostic(store, "render_scale"));
  }
  
@@ -956,10 +955,10 @@ index 12e3a3b3..bf92d0d0 100644
    struct wlr_scene_output* scene_output = wl_container_of(addon, scene_output, addon);
    wlr_scene_output_destroy(scene_output);
 -- 
-2.56.0.236.g7e34d8174d
+2.56.0.307.g50fe5cc63f
 
 
-From 4457c5b5e5e0fdd2751edba257f5fbec3289e51a Mon Sep 17 00:00:00 2001
+From 6a1de587edbe682f7976d0ecb3fab1ea4a504602 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 14:58:55 +0800
 Subject: [PATCH 2/3] fix(review): pin the capped downsample in raster space
@@ -1056,10 +1055,10 @@ index 3a129d86..56dcd652 100644
  void wlr_scene_set_downsample_mode(struct wlr_scene* scene, enum wlr_scene_downsample_mode mode);
  
 -- 
-2.56.0.236.g7e34d8174d
+2.56.0.307.g50fe5cc63f
 
 
-From 1ebfd0459b716a23952b4902327a83142ce8524f Mon Sep 17 00:00:00 2001
+From 8bfb8f561447fd7438911a81973654501e640a9c Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 16:28:00 +0800
 Subject: [PATCH 3/3] fix(review): apply the downsample policy to
@@ -1084,10 +1083,10 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
  5 files changed, 61 insertions(+), 7 deletions(-)
 
 diff --git a/src/server/server.h b/src/server/server.h
-index 24cb90c7..a4709650 100644
+index 3a6b1de0..d5d4356c 100644
 --- a/src/server/server.h
 +++ b/src/server/server.h
-@@ -433,6 +433,9 @@ namespace umbriel {
+@@ -434,6 +434,9 @@ namespace umbriel {
      // scale or moves surfaces between outputs outside setWorkspace; the notifies dedup, so extra calls are cheap.
      void refreshSurfaceScales();
      void applyDownsampleMode();
@@ -1096,9 +1095,9 @@ index 24cb90c7..a4709650 100644
 +    [[nodiscard]] enum wlr_scene_downsample_mode sceneDownsampleMode();
      // Re-evaluate each output's policy after keyboard focus or a dynamic window rule changes.
      void refreshOutputPolicies();
-     [[nodiscard]] wlr_output* preferredOutput() const;
+     wlr_output* preferredOutput() const;
 diff --git a/src/server/server_outputs.cpp b/src/server/server_outputs.cpp
-index dc152fe4..0d3887de 100644
+index 064ac18b..53d09410 100644
 --- a/src/server/server_outputs.cpp
 +++ b/src/server/server_outputs.cpp
 @@ -107,17 +107,25 @@ namespace umbriel {
@@ -1135,7 +1134,7 @@ index dc152fe4..0d3887de 100644
    }
  
 diff --git a/src/view/view.cpp b/src/view/view.cpp
-index 194952b8..49f03d6c 100644
+index 6bc4912b..da52d43b 100644
 --- a/src/view/view.cpp
 +++ b/src/view/view.cpp
 @@ -199,6 +199,7 @@ namespace umbriel {
@@ -1160,20 +1159,20 @@ index 194952b8..49f03d6c 100644
      moveToWorkspace(workspace, attachToLayout, LayoutAttachOrigin::ExistingView);
    }
 diff --git a/src/view/view.h b/src/view/view.h
-index 7063d417..fbf52af9 100644
+index 5356e6b1..c2f97395 100644
 --- a/src/view/view.h
 +++ b/src/view/view.h
-@@ -137,6 +137,10 @@ namespace umbriel {
-     [[nodiscard]] wlr_scene_tree* captureTree() const;
-     [[nodiscard]] bool captureBlocked() const { return m_captureBlocked; }
+@@ -140,6 +140,10 @@ namespace umbriel {
+     wlr_scene_tree* captureTree() const;
+     bool captureBlocked() const { return m_captureBlocked; }
      void refreshCaptureProtection();
 +
 +    // The capture mirror scene carries its own downsample policy; keep it in
 +    // step with the server's appearance.downsample.
 +    void applyDownsampleMode(enum wlr_scene_downsample_mode mode);
-     [[nodiscard]] bool mapped() const { return m_mapped; }
+     bool mapped() const { return m_mapped; }
      // The pid of the application process, or -1 when it is unknown (an X11 client that sets no _NET_WM_PID).
-     [[nodiscard]] pid_t pid() const;
+     pid_t pid() const;
 diff --git a/tests/harness/checks/render/downsample_box.sh b/tests/harness/checks/render/downsample_box.sh
 index 042b1701..961a2f71 100755
 --- a/tests/harness/checks/render/downsample_box.sh
@@ -1247,5 +1246,5 @@ index 042b1701..961a2f71 100755
  echo "downsample method controls minified sampling and reload re-renders"
  
 -- 
-2.56.0.236.g7e34d8174d
+2.56.0.307.g50fe5cc63f
 

@@ -1,4 +1,4 @@
-From b6d7542a1cf6fbbafea595a07e59bdfcc7bf7598 Mon Sep 17 00:00:00 2001
+From bc3744ad28ca8517303c98251f4475fdf2096ee3 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 01:52:25 +0800
 Subject: [PATCH 1/3] fix(view): defer the release re-home until the deform
@@ -46,10 +46,10 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
  create mode 100644 tests/harness/checks/drag/physics_release_settle.sh
 
 diff --git a/src/view/view.cpp b/src/view/view.cpp
-index 6e47c4ba..0606f9af 100644
+index 2a3b3bcc..1dc4242e 100644
 --- a/src/view/view.cpp
 +++ b/src/view/view.cpp
-@@ -776,7 +776,30 @@ namespace umbriel {
+@@ -795,7 +795,30 @@ namespace umbriel {
      refreshStateRuleEffects();
    }
  
@@ -81,10 +81,10 @@ index 6e47c4ba..0606f9af 100644
      syncShadowPool();
      // Another parent can put the window elsewhere in layout coordinates.
 diff --git a/src/view/view.h b/src/view/view.h
-index 47ec5913..ded0eb77 100644
+index 52a43f63..841b0814 100644
 --- a/src/view/view.h
 +++ b/src/view/view.h
-@@ -734,6 +734,9 @@ namespace umbriel {
+@@ -738,6 +738,9 @@ namespace umbriel {
      void setDragPhysicsGrab(double localX, double localY);
      void moveDragPhysics(double dx, double dy);
      void endDragPhysics();
@@ -94,7 +94,7 @@ index 47ec5913..ded0eb77 100644
      // Refits the sheet to the content tree's drawn bounds when they changed, or when the grab moved.
      void fitDragPhysics(bool grabMoved);
      struct DragFit {
-@@ -951,6 +954,12 @@ namespace umbriel {
+@@ -959,6 +962,12 @@ namespace umbriel {
      ViewPresentation m_presentation;
      DragPhysics m_dragPhysics;
      double m_dragPhysicsMsec = 0; // animation clock at the sheet's last tick
@@ -108,10 +108,10 @@ index 47ec5913..ded0eb77 100644
      double m_dragGrabX = 0;
      double m_dragGrabY = 0;
 diff --git a/src/view/view_animation.cpp b/src/view/view_animation.cpp
-index 3f600980..966bac5f 100644
+index b669f753..c6d95001 100644
 --- a/src/view/view_animation.cpp
 +++ b/src/view/view_animation.cpp
-@@ -452,7 +452,12 @@ namespace umbriel {
+@@ -463,7 +463,12 @@ namespace umbriel {
      }
    }
  
@@ -125,16 +125,16 @@ index 3f600980..966bac5f 100644
  
    void View::restoreHomePresentation() {
      // The drag derived its own presented size and crop; drop them so the
-@@ -940,7 +945,7 @@ namespace umbriel {
-       m_decoration.setBorderRawColor(m_borderColorAnim.current(), effectiveOpacity());
-       active = active || m_borderColorAnim.animating();
+@@ -966,7 +971,7 @@ namespace umbriel {
+       );
+       active = active || m_borderColorAnim.animating() || m_outerBorderColorAnim.animating();
      }
 -    if (m_dragPhysics.active() || m_dragPhysics.grabbed()) {
 +    if (dragSheetDisplaced()) {
        if (effectRegistry().deformationShader() == nullptr) {
          // Without the program (physics turned off), the window stays rigid for the rest of the drag.
          m_dragPhysics = DragPhysics{};
-@@ -956,6 +961,20 @@ namespace umbriel {
+@@ -982,6 +987,20 @@ namespace umbriel {
          active = m_dragPhysics.tick(elapsed / 1000.0, cadenceS) || active;
        }
      }
@@ -156,10 +156,10 @@ index 3f600980..966bac5f 100644
      if (!active && m_mapped && m_xsurface != nullptr) {
        syncXwaylandConfigure();
 diff --git a/src/view/view_lifecycle.cpp b/src/view/view_lifecycle.cpp
-index 27c3434c..d11aa58a 100644
+index c32740da..74d14d33 100644
 --- a/src/view/view_lifecycle.cpp
 +++ b/src/view/view_lifecycle.cpp
-@@ -645,6 +645,16 @@ namespace umbriel {
+@@ -681,6 +681,16 @@ namespace umbriel {
      m_dragSlotBound = false;
      // The snapshot holds the frozen deformation; the live sheet ends here.
      m_dragPhysics = DragPhysics{};
@@ -371,10 +371,10 @@ index 00000000..0d27b248
 +fi
 +echo "a transferred sheet keeps drawing across the shared edge until the deform settles"
 -- 
-2.56.0.236.g7e34d8174d
+2.56.0.307.g50fe5cc63f
 
 
-From 7ac93ec1e223dd44a9e9476340ea0c0584f0c214 Mon Sep 17 00:00:00 2001
+From ddad9cf3e1f05063f2c04797f56dfa4f0306965c Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 02:31:48 +0800
 Subject: [PATCH 2/3] fix(view): land deferred release re-homes safely (review
@@ -408,12 +408,12 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
  8 files changed, 85 insertions(+), 31 deletions(-)
 
 diff --git a/src/input/cursor.cpp b/src/input/cursor.cpp
-index 0d824e3a..baa6c7f4 100644
+index 04ee05c5..91d09e98 100644
 --- a/src/input/cursor.cpp
 +++ b/src/input/cursor.cpp
-@@ -1301,6 +1301,9 @@ namespace umbriel {
-         view->settleFloatingDrop(view->layoutX(), view->layoutY());
-       }
+@@ -1394,6 +1394,9 @@ namespace umbriel {
+     if (!liftedTabs.tabs.empty()) {
+       landTabGroup(*view, liftedTabs, /*closing=*/!view->mapped());
      }
 +    if (view != nullptr) {
 +      view->closeReleaseRehomeWindow();
@@ -422,10 +422,10 @@ index 0d824e3a..baa6c7f4 100644
      // an unchanged clip otherwise keeps the scaled source/destination until the client commits again.
      if (resizedWorkspace != nullptr) {
 diff --git a/src/overview/overview.cpp b/src/overview/overview.cpp
-index cdc9144c..c76fd3a6 100644
+index 258117dc..9668f92d 100644
 --- a/src/overview/overview.cpp
 +++ b/src/overview/overview.cpp
-@@ -1737,6 +1737,14 @@ namespace umbriel {
+@@ -1749,6 +1749,14 @@ namespace umbriel {
      }
  
      m_active = true;
@@ -441,10 +441,10 @@ index cdc9144c..c76fd3a6 100644
      m_progress = 0.0;
      m_targetProgress = 0.0;
 diff --git a/src/view/view.cpp b/src/view/view.cpp
-index 0606f9af..79ca2427 100644
+index 1dc4242e..31d73335 100644
 --- a/src/view/view.cpp
 +++ b/src/view/view.cpp
-@@ -779,15 +779,13 @@ namespace umbriel {
+@@ -798,15 +798,13 @@ namespace umbriel {
    bool View::dragSheetDisplaced() const { return m_dragPhysics.active() || m_dragPhysics.grabbed(); }
  
    void View::setSceneParent(wlr_scene_tree* parent) {
@@ -467,7 +467,7 @@ index 0606f9af..79ca2427 100644
      const bool waitingForThisTree = m_pendingHomeParent != nullptr && m_pendingHomeParent == parent;
      const bool displacedInDragTree =
          parent != m_server->dragTree() && m_sceneTree->node.parent == m_server->dragTree() && dragSheetDisplaced();
-@@ -797,17 +795,47 @@ namespace umbriel {
+@@ -816,17 +814,47 @@ namespace umbriel {
        }
        return;
      }
@@ -516,10 +516,10 @@ index 0606f9af..79ca2427 100644
      wlr_scene_tree* pool = m_workspace != nullptr && m_sceneTree->node.parent == m_workspace->viewLayer(true)
          ? m_workspace->tileShadowLayer()
 diff --git a/src/view/view.h b/src/view/view.h
-index ded0eb77..77925a32 100644
+index 841b0814..c1fbc96a 100644
 --- a/src/view/view.h
 +++ b/src/view/view.h
-@@ -737,6 +737,12 @@ namespace umbriel {
+@@ -741,6 +741,12 @@ namespace umbriel {
      // True while the physics sheet is displaced from its resting box: grabbed,
      // or still settling after the release.
      [[nodiscard]] bool dragSheetDisplaced() const;
@@ -532,7 +532,7 @@ index ded0eb77..77925a32 100644
      // Refits the sheet to the content tree's drawn bounds when they changed, or when the grab moved.
      void fitDragPhysics(bool grabMoved);
      struct DragFit {
-@@ -957,8 +963,8 @@ namespace umbriel {
+@@ -965,8 +971,8 @@ namespace umbriel {
      // The resting re-home requested while the released sheet was still
      // displaced (setSceneParent defers it); applied when the spring settles.
      wlr_scene_tree* m_pendingHomeParent = nullptr;
@@ -544,10 +544,10 @@ index ded0eb77..77925a32 100644
      // The frame-local grab and the content tree's drawn bounds the sheet was last fitted to.
      double m_dragGrabX = 0;
 diff --git a/src/view/view_animation.cpp b/src/view/view_animation.cpp
-index 966bac5f..c090d527 100644
+index c6d95001..fe273a36 100644
 --- a/src/view/view_animation.cpp
 +++ b/src/view/view_animation.cpp
-@@ -454,8 +454,7 @@ namespace umbriel {
+@@ -465,8 +465,7 @@ namespace umbriel {
  
    void View::endDragPhysics() {
      m_dragPhysics.release();
@@ -557,7 +557,7 @@ index 966bac5f..c090d527 100644
      m_releaseRehomeArmed = true;
    }
  
-@@ -468,7 +467,6 @@ namespace umbriel {
+@@ -479,7 +478,6 @@ namespace umbriel {
      if (m_ssdFrame != nullptr)
        m_ssdFrame->setBlurLive(false);
      setFadeAlpha(m_fadeAlpha);
@@ -565,7 +565,7 @@ index 966bac5f..c090d527 100644
      if (ScratchpadManager* scratchpad = m_server->scratchpadManager();
          scratchpad != nullptr && scratchpad->contains(this)) {
        scratchpad->restorePresentation(this);
-@@ -963,17 +961,18 @@ namespace umbriel {
+@@ -989,17 +987,18 @@ namespace umbriel {
      }
      // The deferred resting re-home lands in the same tick the spring settles —
      // a later tick may never come — or earlier while an overview is open and
@@ -607,10 +607,10 @@ index 533c7d64..e787624e 100644
      syncShadowPool();
      setOnActiveWorkspace(true);
 diff --git a/src/view/view_lifecycle.cpp b/src/view/view_lifecycle.cpp
-index d11aa58a..46aaac8e 100644
+index 74d14d33..523be007 100644
 --- a/src/view/view_lifecycle.cpp
 +++ b/src/view/view_lifecycle.cpp
-@@ -645,14 +645,13 @@ namespace umbriel {
+@@ -681,14 +681,13 @@ namespace umbriel {
      m_dragSlotBound = false;
      // The snapshot holds the frozen deformation; the live sheet ends here.
      m_dragPhysics = DragPhysics{};
@@ -667,10 +667,10 @@ index 0d27b248..cbc9ee13 100644
 +fi
  echo "a transferred sheet keeps drawing across the shared edge until the deform settles"
 -- 
-2.56.0.236.g7e34d8174d
+2.56.0.307.g50fe5cc63f
 
 
-From 8a3c231da30bfd6a7aa24b3fe7aaae3acf7e8317 Mon Sep 17 00:00:00 2001
+From 45afe6ff957d2a0d5ecf9a26b009126ecb339df3 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 03:16:29 +0800
 Subject: [PATCH 3/3] fix(view): demote the drag tree only when its last
@@ -698,10 +698,10 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
  create mode 100644 tests/harness/checks/drag/settle_overlap_drag.sh
 
 diff --git a/src/view/view.cpp b/src/view/view.cpp
-index 79ca2427..410588e0 100644
+index 31d73335..6bc4912b 100644
 --- a/src/view/view.cpp
 +++ b/src/view/view.cpp
-@@ -802,10 +802,16 @@ namespace umbriel {
+@@ -821,10 +821,16 @@ namespace umbriel {
      wlr_scene_node_reparent(&m_sceneTree->node, parent);
      syncShadowPool();
      if (leavingDragTree) {
@@ -721,7 +721,7 @@ index 79ca2427..410588e0 100644
      }
      // Another parent can put the window elsewhere in layout coordinates.
      if (m_xsurface != nullptr && m_mapped) {
-@@ -836,6 +842,17 @@ namespace umbriel {
+@@ -855,6 +861,17 @@ namespace umbriel {
      }
    }
  
@@ -740,10 +740,10 @@ index 79ca2427..410588e0 100644
      wlr_scene_tree* pool = m_workspace != nullptr && m_sceneTree->node.parent == m_workspace->viewLayer(true)
          ? m_workspace->tileShadowLayer()
 diff --git a/src/view/view.h b/src/view/view.h
-index 77925a32..babf2010 100644
+index c1fbc96a..5356e6b1 100644
 --- a/src/view/view.h
 +++ b/src/view/view.h
-@@ -743,6 +743,8 @@ namespace umbriel {
+@@ -747,6 +747,8 @@ namespace umbriel {
      void flushReleaseRehome();
      // Re-points transient children at the trees this view now lives under.
      void syncTransientChildren();
@@ -887,5 +887,5 @@ index 00000000..94c043af
 +fi
 +echo "a settling re-home leaves an in-progress drag elevated"
 -- 
-2.56.0.236.g7e34d8174d
+2.56.0.307.g50fe5cc63f
 
