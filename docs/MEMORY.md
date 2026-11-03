@@ -2040,18 +2040,6 @@ going stale.
 
 ### Queued (claim by editing this section)
 
-- **gsa engine dispatch inconsistencies — FIXED IN TREE, pending the
-  gsa-pm rebuild (2026-11-03)**: root-caused — NOT the identity gate but the
-  ABI-wave false-move class (index fold dropped split outputs' token rows;
-  `-` placeholder records read as mismatches), fixed + fixture-pinned
-  (`tests/gsa-abi-v2.sh` g/h; NOTE.md 2026-11-03 "engine job 3"). The fixed
-  engine builds from the working tree; the gsa-pm source floats on the
-  default branch, so `/usr/bin/gsa` carries it only after the commit lands
-  and `packages/core/gsa-pm` is rebuilt with plain `makepkg` + `pacman -U`.
-  Until then the directive stands: recipe one-offs build with plain
-  `makepkg` from the recipe directory. DONE when: installed `gsa` replays
-  the glib2-git `--leaf` repro with zero `abi-wave` rows and
-  `bash tests/run-all.sh` is green WITHOUT `GSA_TEST_GSA_BIN`.
 - **flag-revision validation rebuild (2026-11-03)**: the T1→T2→T3
   per-recipe compile-flag appends (133 recipes, `# flag-audit 2026-11-01`
   markers; NOTE.md 2026-11-03) are edit-only and deliberately unvalidated —
