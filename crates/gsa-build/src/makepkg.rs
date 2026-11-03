@@ -95,6 +95,65 @@ pub fn strip_job_flags(value: &str) -> String {
     out.join(" ")
 }
 
+/// The GSA_LANE_* value and the plain var value for one job-flag variable
+/// (§K.1): the caller's non-job flags are preserved on the plain var, and
+/// the lane's `-jN` wins over any caller/config `-j`.
+fn lane_flags(jobs: u32, caller: &str) -> (String, String) {
+    let stripped = strip_job_flags(caller);
+    let lane = if stripped.is_empty() {
+        format!("-j{jobs}")
+    } else {
+        format!("{stripped} -j{jobs}")
+    };
+    (lane, stripped)
+}
+
+/// The lane makepkg.conf shim's file name inside the build-cache root (§K.1).
+pub const LANE_MAKEPKG_CONF_NAME: &str = "lane-makepkg.conf";
+
+/// The lane job-budget shim (§K.1). makepkg sources its config AFTER the
+/// environment and preserves only `PKGDEST`/`SRCDEST`/… from env, so a
+/// config-file `MAKEFLAGS="-j$(nproc)"` silently overrode the lane budget
+/// (2026-11-01 wall: llvm-git ran `ninja -j24` against `core-jobs: 7` —
+/// the exact OOM hazard the budget exists to prevent). `--config` makes
+/// makepkg skip the user override file, so the shim replicates
+/// `source_makepkg_config`'s layering verbatim (system conf +
+/// `/etc/makepkg.conf.d` drop-ins + the user override) and then re-asserts
+/// the lane's job flags from `GSA_LANE_MAKEFLAGS`/`GSA_LANE_NINJAFLAGS`.
+/// Content is job-independent (the values ride the env), so one file serves
+/// every lane and concurrent lanes cannot race its content.
+const LANE_MAKEPKG_CONF_BODY: &str = "\
+# gsa lane makepkg.conf (generated — do not edit; §K.1)
+# Replicates makepkg's source_makepkg_config layering, then re-asserts the
+# lane's job flags: makepkg.conf's own MAKEFLAGS/NINJAFLAGS would otherwise
+# win over the environment (makepkg preserves only PKGDEST/SRCDEST/…).
+source /etc/makepkg.conf
+for _gsa_conf in /etc/makepkg.conf.d/*.conf; do
+    [ -r \"$_gsa_conf\" ] && source \"$_gsa_conf\"
+done
+_gsa_user_conf=\"${XDG_CONFIG_HOME:-$HOME/.config}/pacman/makepkg.conf\"
+if [ -r \"$_gsa_user_conf\" ]; then
+    source \"$_gsa_user_conf\"
+elif [ -r \"$HOME/.makepkg.conf\" ]; then
+    source \"$HOME/.makepkg.conf\"
+fi
+MAKEFLAGS=\"$GSA_LANE_MAKEFLAGS\"
+NINJAFLAGS=\"$GSA_LANE_NINJAFLAGS\"
+";
+
+/// Install the lane makepkg.conf shim under the build-cache `root` via
+/// temp + rename (concurrent lanes write identical content; the rename
+/// keeps readers from ever seeing a partial file).
+fn write_lane_makepkg_conf(root: &Path) -> Result<PathBuf, String> {
+    let path = root.join(LANE_MAKEPKG_CONF_NAME);
+    let tmp = root.join(format!(".{LANE_MAKEPKG_CONF_NAME}.tmp-{}", std::process::id()));
+    std::fs::write(&tmp, LANE_MAKEPKG_CONF_BODY)
+        .map_err(|error| format!("cannot write {}: {error}", tmp.display()))?;
+    std::fs::rename(&tmp, &path)
+        .map_err(|error| format!("cannot install {}: {error}", path.display()))?;
+    Ok(path)
+}
+
 /// Build the makepkg command for one lane: recipe-directory cwd, the base
 /// argv plus the validated payload, `GSA_BUILD_JOBS` exported, job flags
 /// stripped from `MAKEFLAGS`/`NINJAFLAGS` (caller's other flags preserved),
@@ -166,13 +225,15 @@ pub fn makepkg_command_in(
         .env("GSA_BUILD_JOBS", jobs.to_string())
         .env("GIT_CONFIG_COUNT", "0");
     for var in ["MAKEFLAGS", "NINJAFLAGS"] {
-        if let Ok(value) = std::env::var(var) {
-            let stripped = strip_job_flags(&value);
-            if stripped.is_empty() {
-                cmd.env_remove(var);
-            } else {
-                cmd.env(var, stripped);
-            }
+        // The lane's job flags ride GSA_LANE_* (consumed by the makepkg.conf
+        // shim below — makepkg.conf's own assignment would clobber these);
+        // the caller's non-job flags stay on the plain vars (§K.1).
+        let (lane, stripped) = lane_flags(jobs, &std::env::var(var).unwrap_or_default());
+        cmd.env(format!("GSA_LANE_{var}"), lane);
+        if stripped.is_empty() {
+            cmd.env_remove(var);
+        } else {
+            cmd.env(var, stripped);
         }
     }
     // W4 build cache: makepkg's build trees, staging and archives land in
@@ -201,6 +262,18 @@ pub fn makepkg_command_in(
     if shim.is_file() {
         cmd.env("PACMAN", absolute_for_child(&shim));
     }
+    // §K.1 job budget: the lane makepkg.conf shim (installed under the
+    // cache root the create_owned_dir walk just materialized) re-asserts
+    // GSA_LANE_* after makepkg's config layering — the only way to beat a
+    // config-file `MAKEFLAGS="-j$(nproc)"` (makepkg preserves only
+    // PKGDEST/SRCDEST/… from env).
+    let lane_conf = write_lane_makepkg_conf(&layout.root)?;
+    cmd.args([
+        "--config",
+        lane_conf
+            .to_str()
+            .ok_or_else(|| format!("{} is not valid UTF-8", lane_conf.display()))?,
+    ]);
     Ok(cmd)
 }
 
@@ -268,6 +341,61 @@ mod tests {
     }
 
     #[test]
+    fn the_lane_budget_beats_caller_job_flags_without_losing_them() {
+        // Caller -j is stripped (the lane owns the budget), other flags
+        // survive, and the lane -jN is appended on GSA_LANE_* (§K.1).
+        assert_eq!(lane_flags(6, ""), ("-j6".to_string(), String::new()));
+        assert_eq!(
+            lane_flags(6, "-j99 --warn-undefined-variables"),
+            (
+                "--warn-undefined-variables -j6".to_string(),
+                "--warn-undefined-variables".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn the_lane_makepkg_conf_replicates_layering_then_reasserts_the_budget() {
+        let dir = std::env::temp_dir().join(format!("gsa-makepkg-shim-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let layout = gsa_model::config::BuildLayout {
+            builddir: dir.join("build"),
+            pkgdir: dir.join("pkg"),
+            pkgdest: dir.join("pkgs"),
+            root: dir.clone(),
+        };
+        let cmd = makepkg_command_in(
+            Path::new("/recipes/llvm-git"),
+            7,
+            &[],
+            Path::new("/state"),
+            &layout,
+        )
+        .expect("the layout is usable");
+        let body = std::fs::read_to_string(dir.join(LANE_MAKEPKG_CONF_NAME))
+            .expect("the shim is installed under the cache root");
+        // The layering makepkg's --config path skips must live in the shim…
+        assert!(body.contains("source /etc/makepkg.conf"));
+        assert!(body.contains("/etc/makepkg.conf.d/"));
+        assert!(body.contains(".makepkg.conf"));
+        // …and the budget re-assertion comes last.
+        assert!(body.contains("MAKEFLAGS=\"$GSA_LANE_MAKEFLAGS\""));
+        assert!(body.contains("NINJAFLAGS=\"$GSA_LANE_NINJAFLAGS\""));
+        assert!(
+            body.rfind("GSA_LANE_").unwrap() > body.find("source /etc/makepkg.conf").unwrap(),
+            "the re-assertion must come after the layering"
+        );
+        // The values ride the env: the lane's job count, nothing else.
+        let env = cmd
+            .get_envs()
+            .find(|(k, _)| k.to_string_lossy() == "GSA_LANE_NINJAFLAGS")
+            .and_then(|(_, v)| v.map(|v| v.to_string_lossy().into_owned()))
+            .unwrap_or_default();
+        assert_eq!(env, "-j7");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn makepkg_argv_keeps_the_lane_shape_and_never_weakens_verification() {
         let dir = std::env::temp_dir().join(format!("gsa-makepkg-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -289,7 +417,14 @@ mod tests {
             .get_args()
             .map(|a| a.to_string_lossy().into_owned())
             .collect();
-        assert_eq!(argv, vec!["-sf", "--noconfirm"]);
+        // Base args + the §K.1 --config shim; nothing else may appear.
+        assert_eq!(argv.len(), 4, "unexpected argv: {argv:?}");
+        assert_eq!(&argv[..2], ["-sf", "--noconfirm"]);
+        assert_eq!(argv[2], "--config");
+        assert!(
+            argv[3].ends_with(LANE_MAKEPKG_CONF_NAME),
+            "the --config target must be the lane shim: {argv:?}"
+        );
         // No forbidden token can be constructed through the base argv.
         for forbidden in FORBIDDEN_ARGS {
             assert!(!argv.iter().any(|a| a == forbidden));

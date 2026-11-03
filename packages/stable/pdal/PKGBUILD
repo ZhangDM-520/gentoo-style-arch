@@ -78,6 +78,8 @@ build() {
     # behind BUILD_DOCS, which stays at its OFF default)
     -DWITH_TESTS=OFF
   )
+  CFLAGS+=" -fipa-pta -fstack-reuse=all -fprefetch-loop-arrays" # flag-audit 2026-11-01
+  CXXFLAGS+=" -fipa-pta -fstack-reuse=all -fprefetch-loop-arrays" # flag-audit 2026-11-01
   cmake -B build -S PDAL-$pkgver-src -G Ninja \
     -DCMAKE_INSTALL_PREFIX=/usr \
     "${cmake_options[@]}"

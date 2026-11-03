@@ -111,6 +111,8 @@ build() {
   export VST3SDK='/usr/src/vst3sdk'
   export CFLAGS+=" -DNDEBUG -std=gnu17"
   export CXXFLAGS+=" -DNDEBUG"
+  export CFLAGS+=" -fipa-pta -fstack-reuse=all"  # flag-audit 2026-11-01
+  export CXXFLAGS+=" -fipa-pta -fstack-reuse=all"  # flag-audit 2026-11-01
   cmake "${cmake_options[@]}"
   cmake --build build --verbose --parallel "${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
 }

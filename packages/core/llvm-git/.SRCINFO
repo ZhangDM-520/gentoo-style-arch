@@ -1,5 +1,5 @@
 pkgbase = llvm-git
-	pkgver = 24.0.0_r603149.908f46792fb9
+	pkgver = 24.0.0_r604528.caf7a716fe6e
 	pkgrel = 1
 	url = https://llvm.org/
 	arch = x86_64
@@ -17,7 +17,7 @@ pkgbase = llvm-git
 	makedepends = jsoncpp
 	options = staticlibs
 	options = !lto
-	source = llvm-project::git+https://github.com/llvm/llvm-project.git
+	source = llvm-project::git+https://github.com/llvm/llvm-project.git#commit=caf7a716fe6eb7fbc0f0cec7b745b94ab3706ddf
 	source = llvm-config.h
 	md5sums = SKIP
 	md5sums = 295c343dcd457dc534662f011d7cff1a
@@ -26,17 +26,17 @@ pkgbase = llvm-git
 
 pkgname = llvm-git
 	pkgdesc = LLVM development version. includes clang and many other tools
-	depends = llvm-libs-git=24.0.0_r603149.908f46792fb9-1
+	depends = llvm-libs-git=24.0.0_r604528.caf7a716fe6e-1
 	depends = perl
 	optdepends = python: for scripts
 	provides = aur-llvm-git
 	provides = compiler-rt-git
 	provides = clang-git
 	provides = lld-git
-	provides = llvm=24.0.0_r603149.908f46792fb9
-	provides = compiler-rt=24.0.0_r603149.908f46792fb9
-	provides = clang=24.0.0_r603149.908f46792fb9
-	provides = lld=24.0.0_r603149.908f46792fb9
+	provides = llvm=24.0.0_r604528.caf7a716fe6e
+	provides = compiler-rt=24.0.0_r604528.caf7a716fe6e
+	provides = clang=24.0.0_r604528.caf7a716fe6e
+	provides = lld=24.0.0_r604528.caf7a716fe6e
 	conflicts = llvm
 	conflicts = compiler-rt
 	conflicts = clang
@@ -52,12 +52,12 @@ pkgname = llvm-libs-git
 	depends = libxml2
 	depends = z3
 	provides = aur-llvm-libs-git
-	provides = llvm-libs=24.0.0_r603149.908f46792fb9
+	provides = llvm-libs=24.0.0_r604528.caf7a716fe6e
 	conflicts = llvm-libs
 
 pkgname = clang-opencl-headers-git
 	pkgdesc = clang headers & include files for OpenCL, trunk version
-	depends = llvm-git=24.0.0_r603149.908f46792fb9-1
-	provides = clang-opencl-headers=24.0.0_r603149.908f46792fb9
+	depends = llvm-git=24.0.0_r604528.caf7a716fe6e-1
+	provides = clang-opencl-headers=24.0.0_r604528.caf7a716fe6e
 	conflicts = clang-opencl-headers
 	conflicts = clang-opencl-headers-minimal-git

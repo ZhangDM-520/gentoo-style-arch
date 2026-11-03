@@ -1,6 +1,6 @@
 diff -ruN a/src/cmake/externalpackages.cmake b/src/cmake/externalpackages.cmake
 --- a/src/cmake/externalpackages.cmake	2026-09-08 00:59:49.000000000 +0800
-+++ b/src/cmake/externalpackages.cmake	2026-10-03 09:39:51.259231811 +0800
++++ b/src/cmake/externalpackages.cmake	2026-10-31 06:29:23.694418393 +0800
 @@ -58,7 +58,7 @@
  # LLVM library setup
  checked_find_package (LLVM REQUIRED
@@ -12,7 +12,7 @@ diff -ruN a/src/cmake/externalpackages.cmake b/src/cmake/externalpackages.cmake
  # ensure include directory is added (in case of non-standard locations
 diff -ruN a/src/liboslexec/llvm_passes.h b/src/liboslexec/llvm_passes.h
 --- a/src/liboslexec/llvm_passes.h	2026-09-08 00:59:49.000000000 +0800
-+++ b/src/liboslexec/llvm_passes.h	2026-10-03 09:39:51.259314043 +0800
++++ b/src/liboslexec/llvm_passes.h	2026-10-31 06:29:23.694592339 +0800
 @@ -380,7 +380,7 @@
  // New pass manager adapter
  template<int WidthT>
@@ -24,7 +24,7 @@ diff -ruN a/src/liboslexec/llvm_passes.h b/src/liboslexec/llvm_passes.h
  
 diff -ruN a/src/liboslexec/llvm_util.cpp b/src/liboslexec/llvm_util.cpp
 --- a/src/liboslexec/llvm_util.cpp	2026-09-08 00:59:49.000000000 +0800
-+++ b/src/liboslexec/llvm_util.cpp	2026-10-03 09:39:51.270112932 +0800
++++ b/src/liboslexec/llvm_util.cpp	2026-10-31 06:29:23.698199832 +0800
 @@ -1545,8 +1545,18 @@
      // faster). Since we call the option "jit_fma", we interpret that as
      // switching between Strict and Standard. We will need some other control
@@ -113,6 +113,15 @@ diff -ruN a/src/liboslexec/llvm_util.cpp b/src/liboslexec/llvm_util.cpp
          options.NoZerosInBSS          = 0;
          options.GuaranteedTailCallOpt = 0;
          options.UseInitArray          = 0;
+@@ -1939,7 +1984,7 @@
+     llvm::TargetMachine* target_machine = (target_host)
+                                               ? execengine()->getTargetMachine()
+                                               : nullptr;
+-    llvm::PassBuilder pass_builder(target_machine);
++    llvm::PassBuilder pass_builder(context(), target_machine);
+ 
+     if (target_host) {
+         llvm::Triple ModuleTriple(module()->getTargetTriple());
 @@ -2336,7 +2381,7 @@
              case 16: {
                  // MUST BE THE FINAL PASS!

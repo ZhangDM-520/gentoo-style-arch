@@ -27,6 +27,8 @@ build() {
 
   CXXFLAGS+=" -ffat-lto-objects"
   # house: pin the system interpreter (uv/pyenv shims lead PATH; NOTE.md 2026-10-10)
+  CFLAGS+=" -fprefetch-loop-arrays" # flag-audit 2026-11-01
+  CXXFLAGS+=" -fprefetch-loop-arrays" # flag-audit 2026-11-01
   cmake \
     -GNinja \
     -DPython_EXECUTABLE=/usr/bin/python \

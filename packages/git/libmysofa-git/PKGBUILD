@@ -26,6 +26,7 @@ build() {
     if command -v mold >/dev/null 2>&1; then
         export LDFLAGS+=" -fuse-ld=mold"
     fi
+    CFLAGS+=" -fstack-reuse=all"  # flag-audit 2026-11-01
 
     cmake -B libmysofa/build -S libmysofa \
         -DCMAKE_BUILD_TYPE:STRING='None' \

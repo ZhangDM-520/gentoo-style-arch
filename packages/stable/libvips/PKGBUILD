@@ -32,6 +32,7 @@ build() {
     -D vapi=true
   )
 
+  CFLAGS+=" -fipa-pta -fstack-reuse=all -fprefetch-loop-arrays" # flag-audit 2026-11-01
   arch-meson vips-$pkgver build "${meson_options[@]}"
 
   # House style: mold linker when available (arch-meson consumes LDFLAGS env)

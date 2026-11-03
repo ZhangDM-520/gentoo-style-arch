@@ -1,6 +1,6 @@
 pkgbase = libclc-git
 	pkgdesc = Library requirements of the OpenCL C programming language (git version)
-	pkgver = 24.0.0_r600405.de20437cafa5
+	pkgver = 24.0.0_r604528.caf7a716fe6e
 	pkgrel = 1
 	epoch = 1
 	url = http://libclc.llvm.org/
@@ -14,9 +14,9 @@ pkgbase = libclc-git
 	makedepends = python
 	makedepends = ninja
 	makedepends = cmake
-	provides = libclc=24.0.0_r600405.de20437cafa5
+	provides = libclc=24.0.0_r604528.caf7a716fe6e
 	conflicts = libclc
-	source = llvm-project-git::git+https://github.com/llvm/llvm-project.git
+	source = llvm-project-git::git+https://github.com/llvm/llvm-project.git#commit=caf7a716fe6eb7fbc0f0cec7b745b94ab3706ddf
 	md5sums = SKIP
 
 pkgname = libclc-git

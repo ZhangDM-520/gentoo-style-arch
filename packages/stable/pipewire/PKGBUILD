@@ -79,6 +79,11 @@ b2sums=('3c4645252b9affb46852be4d3103fc94664f76df1a1b64b7a8aee011f26b38f10d5bd18
 
 prepare() {
   cd pipewire
+  # libcamera 0.8 renamed the location properties (CameraLocation* →
+  # Location*, property_ids.h) — adapt the plugin until the pin advances
+  # past the upstream fix (2026-11-02 libcamera/pipewire pair wall).
+  sed -i 's/properties::CameraLocation/properties::Location/g' \
+    spa/plugins/libcamera/libcamera-device.cpp
 }
 
 # PGO toggle — set false for quick rebuilds

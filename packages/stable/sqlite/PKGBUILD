@@ -12,7 +12,7 @@ pkgbase="sqlite"
 pkgname=('sqlite' 'sqlite-tcl' 'sqlite-analyzer' 'lemon')
 pkgver=3.54.0
 _srcver=$(echo "$pkgver" | awk -F. '{ printf "%d%02d%02d00", $1, $2, $3 }')
-pkgrel=1
+pkgrel=2
 pkgdesc="A C library that implements an SQL database engine"
 arch=('x86_64')
 license=('LicenseRef-Sqlite')
@@ -40,6 +40,17 @@ build() {
   # this uses malloc_usable_size, which is incompatible with fortification level 3
   export CFLAGS="${CFLAGS/_FORTIFY_SOURCE=3/_FORTIFY_SOURCE=2}"
   export CXXFLAGS="${CXXFLAGS/_FORTIFY_SOURCE=3/_FORTIFY_SOURCE=2}"
+
+  # Documented exception (glibc-git/python/jq class, NOTE.md 2026-10-31):
+  # the host's -Ofast (-ffast-math) folds sqlite3IsNaN's `x != x` to false,
+  # so NaN stops converting to NULL (API-visible: python's test_sqlite3
+  # test_func_return_nan/test_nan_float fail; probed 2026-10-31 — installed
+  # 3.54.0-1 returns is-null=0 for NaN). Drop the LEVEL to -O3 (no
+  # -ffast-math); the rest of CFLAGS stays host-derived. Same for CXXFLAGS.
+  CFLAGS=${CFLAGS/-Ofast/-O3}
+  CXXFLAGS=${CXXFLAGS/-Ofast/-O3}
+  CFLAGS+=" -fipa-pta -fprefetch-loop-arrays" # flag-audit 2026-11-01
+  CXXFLAGS+=" -fipa-pta -fprefetch-loop-arrays" # flag-audit 2026-11-01
 
   export CPPFLAGS="$CPPFLAGS \
         -DSQLITE_ENABLE_COLUMN_METADATA=1 \

@@ -73,6 +73,7 @@ EOF
 
 build() {
   export CFLAGS="${CFLAGS} -Wno-error=discarded-qualifiers"
+  CFLAGS+=" -fstack-reuse=all -fprefetch-loop-arrays" # flag-audit 2026-11-01
 
   echo ':: perf'
   pushd "$_srcname"/tools/perf

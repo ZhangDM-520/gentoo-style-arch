@@ -300,9 +300,15 @@ if test "$style" = autotools; then
         exit 1
     }
 
-    # Optimisation policy: the host makepkg.conf is the only source of
-    # optimisation flags; the recipe must not add its own.
-    if grep -nE -- '-(O3|march[= ]|mtune[= ])' "$pkb"; then
+    # Optimisation policy (2026-10-31 lane): the host makepkg.conf is the
+    # source of optimisation flags; the recipe must not add its own. The
+    # ONE documented exception is the -Ofast→-O3 LEVEL drop
+    # (`${CFLAGS/-Ofast/-O3}`) for the fast-math victims (MEMORY §4) —
+    # comments never count.
+    opt_lines=$(sed -e 's/^[[:space:]]*#.*$//' -e 's/[[:space:]]#.*$//' "$pkb" \
+        | grep -nE -- '-(O3|march[= ]|mtune[= ])' | grep -vF '/-Ofast/-O3' || true)
+    if [ -n "$opt_lines" ]; then
+        printf '%s\n' "$opt_lines" >&2
         printf 'recipe adds its own optimisation flags\n' >&2
         exit 1
     fi

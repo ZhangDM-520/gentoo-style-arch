@@ -52,6 +52,7 @@ build() {
   export CFLAGS=${CFLAGS/-fno-plt}
   export CXXFLAGS=${CXXFLAGS/-fno-plt}
   export LDFLAGS=${LDFLAGS/-Wl,-z,now}
+  CFLAGS+=" -fipa-pta -fstack-reuse=all" # flag-audit 2026-11-01
 
   # House style: mold linker when available (arch-meson consumes LDFLAGS env)
   local _mold=""

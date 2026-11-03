@@ -151,6 +151,8 @@ build() {
 
   # fix build with v4l2-utils 1.30 with gcc 14 and later
   export CFLAGS+=' -Wno-error=incompatible-pointer-types'
+  CFLAGS+=" -fipa-pta -fstack-reuse=all -fira-hoist-pressure -fprefetch-loop-arrays" # flag-audit 2026-11-01
+  CXXFLAGS+=" -fipa-pta -fstack-reuse=all -fira-hoist-pressure -fprefetch-loop-arrays" # flag-audit 2026-11-01
 
   # house LLVM builds X86;AMDGPU;BPF only — no NVPTX target, so cuda_llvm
   # (compile CUDA kernels to PTX with clang) can never probe true and the

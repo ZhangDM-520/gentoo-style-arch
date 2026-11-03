@@ -10,7 +10,7 @@ pkgbase=python
 # path below; the test tree is trimmed from the python output instead
 pkgname=(python)
 pkgver=3.14.8
-pkgrel=2
+pkgrel=5
 _pybasever=${pkgver%.*}
 pkgdesc="The Python programming language"
 arch=('x86_64')
@@ -38,13 +38,25 @@ validpgpkeys=('0D96DF4D4110E5C43FBFB17F2D347EA6AA65421D'  # Ned Deily (Python re
 prepare() {
   cd Python-${pkgver}
 
+  # Idempotent over a warm $srcdir (NOTE.md 2026-11-01, rule 70 class):
+  # makepkg skips re-extraction when the tree exists, so a wave re-pull
+  # re-runs prepare() over already-prepared sources. Every step below
+  # guards (gcc-snapshot constexpr.cc precedent) — unguarded, the second
+  # pass dies in 2s on "hunk ignored" and parks python's whole cone.
   # Ensure that we are using the system copy of various libraries (expat, libffi, and libmpdec),
   # rather than copies shipped in the tarball
-  rm -r Modules/expat
-  rm -r Modules/_decimal/libmpdec
+  [ ! -d Modules/expat ] || rm -r Modules/expat
+  [ ! -d Modules/_decimal/libmpdec ] || rm -r Modules/_decimal/libmpdec
 
   # Build Python with POSIX 2024 https://github.com/python/cpython/commit/927eb448aad6436d794ec9f55780013e25609600
-  patch -p1 < ../python-posix-2024.patch
+  # The patch also CREATES the NEWS.d entry below — created files are not
+  # in the tarball, so they survive re-extraction and block the patch's
+  # create-file hunk on the next prepare() ("would create the file … which
+  # already exists", 2026-11-01 wall). Remove it first so the re-patch is
+  # deterministic; the grep keeps the fully-applied case cheap.
+  rm -f Misc/NEWS.d/next/Build/2026-01-28-19-04-12.gh-issue-144309.3sMFOh.rst
+  grep -q '_POSIX_C_SOURCE 202405L' configure ||
+    patch -p1 < ../python-posix-2024.patch
 }
 
 build() {
@@ -54,6 +66,14 @@ build() {
   # with -O3" CFLAGS substitution dropped (no hard-coded -O3/-march/-mtune).
   # -ffat-lto-objects kept (load-bearing for the LTO build, not an ISA/level
   # choice); the --enable-optimizations PGO suite is kept.
+  # Documented exception (glibc-git/jq/sqlite class, NOTE.md 2026-10-31):
+  # the host's -Ofast (-ffast-math) breaks CPython's float/int boundary
+  # semantics (test_time's -32768.000000001 round-trip and object_to_timeval
+  # range checks fail; 442 tests, 15 files) and poisons the PGO profile-run —
+  # drop the LEVEL to -O3 (policy 2026-10-31: prefer -O3 over -O2 when
+  # -Ofast breaks a package; -O3 carries no -ffast-math); the rest of CFLAGS
+  # (ISA/LTO) stays host-derived.
+  CFLAGS=${CFLAGS/-Ofast/-O3}
   CFLAGS+=" -ffat-lto-objects"
 
   # House style: mold linker when available

@@ -543,7 +543,7 @@ consumers_closure() {
     # topology records state, ratcheted here so an accidental opt-in is loud
     sync_ids=$(awk -F'|' 'index("," $5 ",", ",version-sync=nvchecker,") { print $1 }' \
         "$fixture/topo.out" | sort)
-    expected_sync_ids=$'bettbox\ngcc-snapshot\nzen-browser-pgo'
+    expected_sync_ids=$'bettbox\nzen-browser-pgo'
     [[ $sync_ids == "$expected_sync_ids" ]] ||
         fail "version-sync topology opt-in is [$(tr '\n' ' ' <<<"$sync_ids")], expected [$(tr '\n' ' ' <<<"$expected_sync_ids")]"
 

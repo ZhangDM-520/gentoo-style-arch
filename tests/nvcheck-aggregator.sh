@@ -292,13 +292,25 @@ zen_provider=$(
 )
 [[ $zen_provider == $'github\nzen-browser/desktop' ]] ||
     fail "--provider did not read Zen's GitHub source"
+# The AUR provider shape used to be read from gcc-snapshot's real
+# .nvchecker.toml; that recipe migrated to a pinned git checkout
+# (2026-10-31) and carries no provider file, so the shape is pinned with a
+# synthetic config instead — the tool's AUR support is still under test.
+aur_config="$tmp/aur/.nvchecker.toml"
+mkdir -p "$(dirname "$aur_config")"
+cat >"$aur_config" <<'EOF'
+[gcc-snapshot]
+source = "aur"
+aur = "gcc-snapshot"
+strip_release = true
+EOF
 aur_provider=$(
     PATH="$query_bin:$PATH" TMPDIR="$tmp" NVCHECK_STATE_DIR="$normal_state" \
         FAKE_NVCHECKER_LOG="$tmp/nvchecker.log" \
-        "$tool" --provider "$root/packages/core/gcc-snapshot/.nvchecker.toml" gcc-snapshot
+        "$tool" --provider "$aur_config" gcc-snapshot
 )
 [[ $aur_provider == $'aur\ngcc-snapshot' ]] ||
-    fail "--provider did not read gcc-snapshot's AUR source"
+    fail "--provider did not read an AUR source"
 if PATH="$query_bin:$PATH" TMPDIR="$tmp" NVCHECK_STATE_DIR="$normal_state" \
     "$tool" --provider "$query_config" missing-section >"$tmp/provider-missing.out" \
     2>"$tmp/provider-missing.err"; then

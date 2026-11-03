@@ -39,6 +39,8 @@ build() {
     export LDFLAGS+=" -fuse-ld=mold"
   fi
 
+  CFLAGS+=" -fipa-pta -fstack-reuse=all" # flag-audit 2026-11-01
+  CXXFLAGS+=" -fipa-pta -fstack-reuse=all" # flag-audit 2026-11-01
   cmake -B build -S qtbase -G Ninja \
     -DCMAKE_INSTALL_PREFIX=/usr \
     -DCMAKE_BUILD_TYPE=Release \
@@ -83,6 +85,14 @@ package_qt6-base-git() {
   while read _line; do
     ln -s $_line
   done < "$srcdir"/build/user_facing_tool_links.txt
+  # ECM's ecm_query_qt falls back to a PATH lookup for qtpaths6 when
+  # find_package(Qt6) has not run yet (e.g. KDEInstallDirs6 first) — expose
+  # the versioned spelling (2026-11-01 kdeconnect wall: "Qt6 qtpaths call
+  # failed: 127"). The UNVERSIONED qtpaths belongs to qt5-tools (which also
+  # mirrors it as qtpaths-qt5): sharing it collided at pacman install
+  # (2026-11-02 install-failed, "exists in filesystem (owned by qt5-tools)").
+  # Ownership split: unversioned + -qt5 mirrors = Qt5, -6 suffixed = Qt6.
+  ln -sf /usr/lib/qt6/bin/qtpaths6 usr/bin/qtpaths6
 }
 
 package_qt6-xcb-private-headers-git() {

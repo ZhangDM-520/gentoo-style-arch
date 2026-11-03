@@ -102,6 +102,7 @@ build() {
   # because 'int' and 'bool' are used interchangeably in the code.
   # see also https://bugs.ghostscript.com/show_bug.cgi?id=708608
   export CFLAGS="$CFLAGS -std=gnu17"
+  CFLAGS+=" -fipa-pta -fstack-reuse=all" # flag-audit 2026-11-01
 
   ./configure --prefix=/usr \
               --with-ijs \

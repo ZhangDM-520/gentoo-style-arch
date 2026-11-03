@@ -26,6 +26,8 @@ build() {
   export LDFLAGS+=" ${_mold}"
 
   local python_version=$(python -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
+  CFLAGS+=" -fstack-reuse=all -fprefetch-loop-arrays" # flag-audit 2026-11-01
+  CXXFLAGS+=" -fstack-reuse=all -fprefetch-loop-arrays" # flag-audit 2026-11-01
   cmake \
     -Bbuild \
     -GNinja \

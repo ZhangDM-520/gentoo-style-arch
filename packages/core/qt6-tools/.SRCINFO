@@ -1,6 +1,6 @@
 pkgbase = qt6-tools
 	pkgdesc = A cross-platform application and UI framework (Development Tools, QtHelp)
-	pkgver = 6.13.0_r7614.g3496da5f9
+	pkgver = 6.13.0_r7640.gddaa106f4
 	pkgrel = 1
 	url = https://www.qt.io
 	arch = x86_64
@@ -24,7 +24,7 @@ pkgbase = qt6-tools
 	depends = qt6-declarative
 	depends = zstd
 	optdepends = clang: for qdoc and lupdate
-	source = git+https://code.qt.io/qt/qttools#branch=dev
+	source = git+https://code.qt.io/qt/qttools#commit=ddaa106f4044ad7f96b99238538544f4e1cd936c
 	source = git+https://code.qt.io/playground/qlitehtml
 	sha256sums = SKIP
 	sha256sums = SKIP

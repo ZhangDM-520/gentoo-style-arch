@@ -61,6 +61,7 @@ build() {
     -D system-console-users=sddm
   )
 
+  CFLAGS+=" -fipa-pta" # flag-audit 2026-11-01
   arch-meson $pkgbase-$pkgver build "${meson_options[@]}"
   meson compile -C build
 }

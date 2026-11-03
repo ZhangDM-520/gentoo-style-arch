@@ -1,7 +1,7 @@
 pkgbase = cifs-utils
 	pkgdesc = CIFS filesystem user-space tools
 	pkgver = 7.9
-	pkgrel = 1.1
+	pkgrel = 1.2
 	url = https://wiki.samba.org/index.php/LinuxCIFS_utils
 	arch = x86_64
 	license = GPL-3.0-or-later
@@ -14,6 +14,7 @@ pkgbase = cifs-utils
 	depends = libwbclient
 	depends = talloc
 	optdepends = python: for smb2-quota and smbinfo script
+	options = !lto
 	source = git+https://git.samba.org/cifs-utils.git?signed#tag=cifs-utils-7.9
 	validpgpkeys = C699981A31F338706C817650DF5BA9D30642D5A0
 	validpgpkeys = E9FB2EF297488ED584FC3A4B8A2CBD7007724F51

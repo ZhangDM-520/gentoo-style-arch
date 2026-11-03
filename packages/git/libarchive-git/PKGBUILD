@@ -47,6 +47,7 @@ build() {
   local _jobs="${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
 
   cd "$_pkgname"
+  CFLAGS+=" -fstack-reuse=all" # flag-audit 2026-11-01
   ./configure --prefix=/usr \
               --without-nettle \
               --disable-static

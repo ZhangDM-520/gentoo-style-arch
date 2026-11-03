@@ -10,7 +10,7 @@
 
 pkgname=nodejs
 pkgver=26.12.1
-pkgrel=2
+pkgrel=4
 pkgdesc='Evented I/O for V8 javascript ("Current" release)'
 arch=('x86_64')
 url='https://nodejs.org/'
@@ -49,7 +49,7 @@ source=("git+https://github.com/nodejs/node.git#tag=v$pkgver?signed"
 
 sha512sums=('bbf66cd385c68f1bdfa85ea4f9a547a4e9302c59558bc514be87cb0e724bea5bdeda23f7f7cb14c45bf02fafebf2725ad0bd5b275b18d51f93fdea6fe6b061f7'
             '6d3b819a703faa6f25b118c7467afaf8900472e83f58aed68e643f36b711741d2faf1a9cc025ae222731d7013c98e1d59b61d1717c02eabebc0e8106eef52305'
-            'f3a15526e9513f050b7923e71badbf4305be72fd7a006f95ffa41435c1ca78701fa02b5d2efee675af45209a14bd8964018674477966384f384b3e5a1d37b08c')
+            'b053f6c21f5dc3d36d48a1c142038bc9f2f5d7184f9a878c5e78eba5fb025d12a5e674b6cc3d5e35e3d504551b3c90f9047cc12f9561624bdd850607fa925113')
 validpgpkeys=(
   '8FCCA13FEF1D0C2E91008E09770F7A9A5AE15600' # Michaël Zasso (Targos) <targos@protonmail.com>
   '890C08DB8579162FEE0DF9DB8BEAB4DFCF555EF4' # RafaelGSS <rafael.nunu@hotmail.com>
@@ -81,6 +81,10 @@ prepare() {
   # gcc-snapshot 17 toolchain this set installs no longer transitively
   # provides std::ostringstream via other headers, and LIEF relied on that
   # in 18 files (first wall: PE/ResourcesManager.hpp); measured 2026-10-08.
+  # 2026-10-31: the bundled LIEF rolled forward and now carries the include
+  # in 17 of the 18 — only src/PE/json.cpp still needs the explicit line,
+  # and the refreshed patch is exactly that one hunk (the old 18-file patch
+  # no longer applies).
   patch -Np1 --fuzz=0 \
     -i "$srcdir/0002-lief-include-sstream-explicitly.patch"
 }
@@ -88,6 +92,20 @@ prepare() {
 build() {
   _set_flags
   cd node
+
+  # Documented exception (glibc-git/python/jq/sqlite class, NOTE.md
+  # 2026-10-31): the host's -Ofast miscompiles Node's path segment
+  # normalization — path.resolve('/usr/lib/node_modules/npm/lib/cli',
+  # '../../package.json') returned '/package.json' (probe 2026-11-01;
+  # stock 26.12.1-2 returns the correct path on the same probe), which
+  # broke npm's own CLI loader and every npm-driven build (hermes-agent-git,
+  # the dev tooling skew). A/B-proven against the stock binary. Drop the
+  # LEVEL to -O3 (no -ffast-math); the rest of CFLAGS stays host-derived.
+  # Same for CXXFLAGS.
+  CFLAGS=${CFLAGS/-Ofast/-O3}
+  CXXFLAGS=${CXXFLAGS/-Ofast/-O3}
+  CFLAGS+=" -fipa-pta -fstack-reuse=all -fira-hoist-pressure -fprefetch-loop-arrays" # flag-audit 2026-11-01
+  CXXFLAGS+=" -fipa-pta -fstack-reuse=all -fira-hoist-pressure -fprefetch-loop-arrays" # flag-audit 2026-11-01
 
   # House style: mold linker when available
   local _mold=""

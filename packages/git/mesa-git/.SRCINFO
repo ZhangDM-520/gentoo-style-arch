@@ -78,14 +78,17 @@ pkgbase = mesa-git
 	conflicts = vulkan-mesa-device-select
 	conflicts = vulkan-mesa-implicit-layers
 	options = !debug
-	source = mesa::git+https://gitlab.freedesktop.org/mesa/mesa.git#branch=main
+	source = mesa::git+https://gitlab.freedesktop.org/mesa/mesa.git#commit=18879c94176c777064cbc5223a7206468c7a00a7
 	source = LICENSE
 	source = mesa-llvm24-target-include.patch
+	source = mesa-llvm24-passbuilder-context.patch
 	sha256sums = SKIP
 	sha256sums = 7fdc119cf53c8ca65396ea73f6d10af641ba41ea1dd2bd44a824726e01c8b3f2
 	sha256sums = 67b1a38b23b1035ff2558ac0dfc6981c1fa9a1375a3e8cdd95c4ebab986600d8
+	sha256sums = 9bc108ae1904569c02628eafb187d9d1fc7d3b6590fe2ea20f354451cc9a8e0b
 	b2sums = SKIP
 	b2sums = cc60238726b35133b5b729fb4ed1e76e04136588533615d84b4a54656d5b41727d5e7ff06ef4de3eb102eed6669d6c5c5cb8ac9fbdf6fc25aa477877c5c3ba87
 	b2sums = 4bc5ea99dd4f30ce27120a557d5f4520b583b890c1e8f55690f79c72a336ba00cd243898679d7dceb871d8c1a17a8f503ccd4e7e421ddf264c6c1ecfd6e69b38
+	b2sums = 055ce840f11e7860b437f07afe70f60c5cd2d33f294e6e39ff2ff3b72b3951895b2e8666a4c58513e36ea1a7b9e24f7cfb6a66c2872d3509abb09f6b3362971c
 
 pkgname = mesa-git

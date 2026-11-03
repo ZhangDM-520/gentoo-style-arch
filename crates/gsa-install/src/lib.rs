@@ -73,8 +73,13 @@ pub struct DecisionContext {
     pub mode: DecideMode,
     /// What a zero-candidate plan means (§B.6).
     pub empty_list: EmptyListPolicy,
-    /// Subjects that will be installed later in this same run: in-run repair
-    /// coverage for the ABI gate (rule 25(d)) — never a license to skip a
+    /// Subjects strictly after this provider in the run's canonical BUILD
+    /// order — rule 25(d)'s
+    /// coverage test is order truth ("the consumer sits strictly after the
+    /// provider in the run order"), never a landed/pending remainder:
+    /// parallel lanes finish out of order, and an early-landed consumer is
+    /// still covered by the order the run must honor. In-run repair coverage
+    /// for the ABI gate — never a license to skip a
     /// gate for the archive itself. RECIPE IDS (the canonical repair-marker
     /// key, §E.3 gap-G1 `<consumer-id>`); the gate matches them against the
     /// consumers' resolved recipe ids, never raw pkgnames.
@@ -1209,8 +1214,18 @@ pub fn record_subscriptions(
     let state = gsa_state::StateRoot::open(state_root).map_err(|e| e.to_string())?;
     let index = gsa_state::BinpkgIndex::load(&state).map_err(|e| e.to_string())?;
     let resolve = |pkg: &gsa_abi::InstalledPkg| -> Option<(String, String)> {
-        for row in &index.rows {
-            if row.pkgnames.iter().any(|n| n == &pkg.name) {
+        // The NEWEST registered row for this output (the fold's rows are log
+        // order — oldest first; first-match would freeze the oldest token
+        // into every later install), and a `-` placeholder abi-token is no
+        // token truth: derive from the installed surface instead of writing
+        // a placeholder a later wave would misread as a move (2026-11-03).
+        let newest = index
+            .rows
+            .iter()
+            .filter(|row| row.pkgnames.iter().any(|n| n == &pkg.name))
+            .max_by_key(|row| row.instance);
+        if let Some(row) = newest {
+            if row.abi_token != gsa_abi::NO_TOKEN {
                 return Some((row.recipe_id.clone(), row.abi_token.clone()));
             }
         }
@@ -1241,7 +1256,9 @@ pub struct InstallRun {
     pub pacman_args: Vec<String>,
     /// False under `--no-register-ignorepkg` (the skip is loud).
     pub register_ignorepkg: bool,
-    /// In-run repair coverage (rule 25(d)) — RECIPE IDS.
+    /// In-run repair coverage (rule 25(d)) — RECIPE IDS strictly after the
+    /// provider in run order (order truth, see
+    /// [`DecisionContext::later_installs`]).
     pub later_installs: Vec<String>,
     /// Workspace output name → owning recipe id (rule 25(d), §E.3 gap-G1):
     /// the canonical forced-rebuild-marker key map — see

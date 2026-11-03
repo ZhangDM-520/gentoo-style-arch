@@ -27,7 +27,6 @@ pkgname=(
   gst-plugin-qsv
   gst-plugin-svthevcenc
   gst-plugin-va
-  gst-plugin-wpe2
   gst-devtools-libs
   gst-devtools
   gst-rtsp-server
@@ -35,7 +34,7 @@ pkgname=(
   gst-python
 )
 pkgver=1.28.8
-pkgrel=1
+pkgrel=2
 pkgdesc="Multimedia graph framework"
 url="https://gstreamer.freedesktop.org/"
 arch=(x86_64)
@@ -199,7 +198,6 @@ makedepends=(
   wayland-protocols
   webrtc-audio-processing-1
   wildmidi
-  wpewebkit
   x264
   x265
   zbar
@@ -290,6 +288,7 @@ build() {
     -D gst-plugins-bad:wasapi2=disabled
     -D gst-plugins-bad:wasapi=disabled
     -D gst-plugins-bad:wpe=disabled
+    -D gst-plugins-bad:wpe2=disabled
     -D gst-plugins-base:libvisual=disabled
     -D gst-plugins-base:tremor=disabled
     -D gst-plugins-good:rpicamsrc=disabled
@@ -314,6 +313,8 @@ build() {
     export LDFLAGS+=" -fuse-ld=mold"
   fi
 
+  CFLAGS+=" -fprefetch-loop-arrays -fstack-reuse=all" # flag-audit 2026-11-01
+  CXXFLAGS+=" -fprefetch-loop-arrays -fstack-reuse=all" # flag-audit 2026-11-01
   # Cargo sub-build: Use debug and LTO
   export CARGO_PROFILE_RELEASE_DEBUG=2 CARGO_PROFILE_RELEASE_STRIP=false
   export CARGO_PROFILE_RELEASE_LTO=true CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
@@ -1514,28 +1515,6 @@ package_gst-plugin-va() {
 
   cd root; local files=(
     usr/lib/gstreamer-1.0/libgstva.so
-  ); _install
-}
-
-package_gst-plugin-wpe2() {
-  pkgdesc+=" - wpe2 plugin"
-  provides=(
-    libgstwpe2.so
-  )
-  depends=(
-    gst-plugins-base-libs=$pkgver-$pkgrel
-    gstreamer=$pkgver-$pkgrel
-    glib2
-    glibc
-    libgcc
-    libglvnd
-    libstdc++
-    libxkbcommon
-    wpewebkit
-  )
-
-  cd root; local files=(
-    usr/lib/gstreamer-1.0/libgstwpe2.so
   ); _install
 }
 

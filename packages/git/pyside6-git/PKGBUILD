@@ -6,7 +6,7 @@
 
 pkgbase=pyside6-git
 pkgname=pyside6-git
-pkgver=6.12.0.r12518.g7fcec1b26
+pkgver=6.12.0.r12579.gf0c57cc12
 pkgrel=1
 pkgdesc='Python/C++ Qt6 bindings (shiboken6 + PySide6) from pyside-setup dev, built against qt6-base-git'
 arch=(x86_64)
@@ -44,7 +44,14 @@ conflicts=(pyside6
            shiboken6-generator)
 replaces=(pyside6
           shiboken6)
-source=(git+https://code.qt.io/pyside/pyside-setup.git#branch=dev)
+# WEEKLY SNAPSHOT policy (rule 64, 2026-11-01): core ABI provider
+# (shiboken binds libclang; Qt-private-API-coupled) — pin = last commit at
+# or before Monday 00:00 UTC of the current week (boundary
+# 2026-10-26T00:00Z = f0c57cc12c1cd5114f62a0665465e065771f8061, commit
+# date 2026-10-23T08:34Z). ADVANCE THE PIN on the Monday cadence together
+# with the llvm/Qt coupled sets: move #commit= and pkgver together
+# (pkgver() recomputes the same value at the pin).
+source=(git+https://code.qt.io/pyside/pyside-setup.git#commit=f0c57cc12c1cd5114f62a0665465e065771f8061)
 sha256sums=('SKIP')
 
 pkgver() {

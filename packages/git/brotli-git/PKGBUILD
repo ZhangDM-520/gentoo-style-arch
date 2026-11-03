@@ -32,6 +32,8 @@ build() {
   fi
 
   # CMAKE_BUILD_TYPE=None: makepkg.conf owns the opt level (no hard-coded -O3)
+  CFLAGS+=" -fipa-pta -fstack-reuse=all" # flag-audit 2026-11-01
+  CXXFLAGS+=" -fipa-pta -fstack-reuse=all" # flag-audit 2026-11-01
   cmake -B _build -S brotli \
     -DCMAKE_BUILD_TYPE=None \
     -DCMAKE_INSTALL_PREFIX=/usr \

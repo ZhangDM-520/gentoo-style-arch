@@ -49,9 +49,9 @@ build() {
     cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr \
         -Dbuild_wizard=NO \
         -Dbuild_search=NO \
-        -DCMAKE_EXE_LINKER_FLAGS="-fuse-ld=mold -fprofile-generate" \
-        -DCMAKE_C_FLAGS="-fprofile-generate" \
-        -DCMAKE_CXX_FLAGS="-fprofile-generate" \
+        -DCMAKE_EXE_LINKER_FLAGS="$LDFLAGS -fuse-ld=mold -fprofile-generate" \
+        -DCMAKE_C_FLAGS="$CFLAGS -fprofile-generate" \
+        -DCMAKE_CXX_FLAGS="$CXXFLAGS -fprofile-generate" \
         "../$pkgname"
     make
 
@@ -78,13 +78,14 @@ EOF
     fi
     echo "Profile data generated: $gcda_count .gcda files"
 
-    # Phase 2: Use profile data
+    # Phase 2: Use profile data. Append to the baseline flags — a wholesale
+    # CMAKE_*_FLAGS assignment here silently dropped CFLAGS/CXXFLAGS/LDFLAGS.
     cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr \
         -Dbuild_wizard=NO \
         -Dbuild_search=NO \
-        -DCMAKE_EXE_LINKER_FLAGS="-fuse-ld=mold -fprofile-use" \
-        -DCMAKE_C_FLAGS="-fprofile-use" \
-        -DCMAKE_CXX_FLAGS="-fprofile-use" \
+        -DCMAKE_EXE_LINKER_FLAGS="$LDFLAGS -fuse-ld=mold -fprofile-use" \
+        -DCMAKE_C_FLAGS="$CFLAGS -fprofile-use" \
+        -DCMAKE_CXX_FLAGS="$CXXFLAGS -fprofile-use" \
         "../$pkgname"
     make clean
     make

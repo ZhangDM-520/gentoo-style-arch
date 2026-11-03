@@ -47,6 +47,7 @@ build() {
 
   # No -j here: options=(!makeflags) — upstream lua 5.1's makefile is not
   # parallel-safe, so GSA_BUILD_JOBS is deliberately not applied to `make`.
+  CFLAGS+=" -fstack-reuse=all" # flag-audit 2026-11-01
   make MYCFLAGS="$CFLAGS -fPIC" MYLDFLAGS="$LDFLAGS" linux
 }
 

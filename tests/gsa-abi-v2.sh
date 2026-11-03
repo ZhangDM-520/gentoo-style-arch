@@ -14,8 +14,8 @@ set -euo pipefail
 # subscription records it seeded, and every token compared is read from the
 # engine's own `-Qa` surface — never hardcoded.
 #
-# Pinned here (six ( subshell ) sections; run one alone with
-# GSA_ABI_V2_ONLY=a…f):
+# Pinned here (eight ( subshell ) sections; run one alone with
+# GSA_ABI_V2_ONLY=a…h):
 #   a. token stability + the `abi-rev=` override (§J.4): the same archive
 #      answers the same `-Qa` token twice; bumping `abi-rev=` moves the
 #      effective token and LEAVES the derived hash unchanged (the override
@@ -39,6 +39,17 @@ set -euo pipefail
 #   f. the `-Qa`/`-Qr` surfaces (§B.3): token/index-token/
 #      subscription-in/subscription-out rows, and the revdep report naming
 #      an unresolved `DT_NEEDED` by consumer, member and soname.
+#   g. the multi-output false-move wall (2026-11-03): a split provider's
+#      outputs share one registration instance and each carries its own
+#      abi-token — a record is current when ANY shipped output still
+#      carries it. Records matching the shipped token set are NO move: no
+#      wave rows, and the `--leaf` plan stays exactly the named recipe
+#      (the wave-flood class this wall retires).
+#   h. the placeholder-record wall (2026-11-03): a `-` subscription
+#      placeholder carries NO token truth — record-less, never a token
+#      that could mismatch. With matching records it gates nothing; under
+#      a REAL move it fails toward the whole closure (rule 25(c)) as an
+#      `unrecorded` member — never under-expand.
 #
 # Red-first (contract §L.4): the fail-toward default is mutation-probed —
 # breaking it makes section (c) fail naming the under-expansion; the probe
@@ -64,7 +75,7 @@ fail() {
     exit 1
 }
 
-# Section filter: GSA_ABI_V2_ONLY=<a..f> runs exactly one section.
+# Section filter: GSA_ABI_V2_ONLY=<a..h> runs exactly one section.
 want() { [ -z "${GSA_ABI_V2_ONLY:-}" ] || [ "${GSA_ABI_V2_ONLY}" = "$1" ]; }
 
 # ─── Stub-knob vocabulary (§D.2: declared here in the change that adds them) ─
@@ -237,6 +248,23 @@ case " $* " in
 esac
 id=$(basename "$PWD")
 src="${GSA_FAKE_STAGE_DIR:?}/$id"
+# Split-output build (§D.2 knob use): every pre-staged tree under
+# $src/split/<pkgname>/ becomes its own archive — one build, one
+# registration instance, one row per output (the multi-output walls g/h).
+if [ -d "$src/split" ]; then
+    for out in "$src/split"/*; do
+        name=$(basename "$out")
+        stage="$PWD/.stage-$name"
+        cp -a "$out" "$stage"
+        if [ -d "$stage/usr" ]; then
+            tar --zstd -cf "$PWD/$name-1.0.0-1-any.pkg.tar.zst" -C "$stage" .PKGINFO usr
+        else
+            tar --zstd -cf "$PWD/$name-1.0.0-1-any.pkg.tar.zst" -C "$stage" .PKGINFO
+        fi
+        rm -rf "$stage"
+    done
+    exit 0
+fi
 stage="$PWD/.stage-$id"
 cp -a "$src" "$stage"
 if [ -d "$stage/usr" ]; then
@@ -325,10 +353,15 @@ qa_row() {
 }
 
 # sub_token STATE CONSUMER PROVIDER — the recorded token, empty when the
-# record is absent.
+# record is absent OR carries the `-` placeholder (a record without token
+# truth is record-less for every wave decision — never a token that could
+# match or mismatch, 2026-11-03).
 sub_token() {
-    awk -F'|' -v c="$2" -v p="$3" '$1 == c && $3 == p { print $4; exit }' \
-        "$1/abi/subscriptions" 2>/dev/null || true
+    local tok
+    tok=$(awk -F'|' -v c="$2" -v p="$3" '$1 == c && $3 == p { print $4; exit }' \
+        "$1/abi/subscriptions" 2>/dev/null || true)
+    [ "$tok" = "-" ] && tok=""
+    printf '%s\n' "$tok"
 }
 
 # assert_wave_rows BLOB WHAT — every `abi-wave` row carries the basis
@@ -617,10 +650,14 @@ if want d; then
         make_archive "$ws/packages/lib/lib-1.0.0-1-any.pkg.tar.zst" "$stage"
         db_entry "$db" lib "0:1.0.0-1" 'libx.so=1-64' >/dev/null
 
-        # A recorded subscriber (`ghost`) the topology has no record for:
-        # it can never be built here, so the swap is under-covered.
+        # A recorded subscriber (`ghost`) the topology has no record for AND
+        # the local DB still carries: it will break when the provides move
+        # and this workspace can never rebuild it, so the swap is
+        # under-covered. (A subscriber NEITHER in the topology NOR installed
+        # is a dead record instead — skipped by name, d2 below.)
         # (W5: seeded through the real sudo — state/ may already be
         # engine-owned from an earlier section's runs.)
+        db_entry "$db" ghost 1-1 >/dev/null
         /usr/bin/sudo -n mkdir -p "$state/abi"
         printf 'ghost|0:1.0.0-1|lib|stale-token\n' \
             | /usr/bin/sudo -n tee "$state/abi/subscriptions" >/dev/null
@@ -637,6 +674,35 @@ $FIXTURE_OUTPUT"
         if grep -q '^pacman ' "$GSA_FAKE_PACMAN_LOG"; then
             fail "d: a refusing plan is pacman-free end to end (rule 25(h)):" "$GSA_FAKE_PACMAN_LOG"
         fi
+
+        # d2: the dead-record refinement (2026-10-30). `deadghost` is NEITHER
+        # in the topology NOR installed — a retired/uninstalled build's
+        # leftover record that can neither break nor be covered. It is
+        # skipped by name (never silently), the live wave member (c1, stale
+        # record, archive present) still lands, and the run is NOT refused.
+        stage="$fixture/d/stage-c1"
+        stage_pkginfo "$stage" c1 c1 "1.0.0-1"
+        make_archive "$ws/packages/c1/c1-1.0.0-1-any.pkg.tar.zst" "$stage"
+        {
+            printf 'c1|0:1.0.0-1|lib|stale-token\n'
+            printf 'deadghost|0:1.0.0-1|lib|stale-token\n'
+        } | /usr/bin/sudo -n tee "$state/abi/subscriptions" >/dev/null
+        : >"$GSA_FAKE_PACMAN_LOG"
+        run_engine "$ws" -U --state-dir "$state" --config "$ws/pacman.conf" lib
+        [ "$FIXTURE_RC" = 0 ] \
+            || fail "d2: a dead record must not refuse the swap (got $FIXTURE_RC): $FIXTURE_OUTPUT"
+        vgrep "$FIXTURE_OUTPUT" -Fxq 'abi-stale-record lib deadghost dead-record' \
+            || fail "d2: the skipped record is not reported by name, got:
+$FIXTURE_OUTPUT"
+        if grep -q 'abi-consumer-uncovered' <<<"$FIXTURE_OUTPUT"; then
+            fail "d2: a dead record rendered a refusal row: $FIXTURE_OUTPUT"
+        fi
+        vgrep "$FIXTURE_OUTPUT" -Eq '^c1 install ok$' \
+            || fail "d2: the live wave member must still land, got:
+$FIXTURE_OUTPUT"
+        txn_count=$(grep -c '^pacman ' "$GSA_FAKE_PACMAN_LOG" || true)
+        [ "$txn_count" = 1 ] \
+            || fail "d2: the wave lands in ONE pacman -U, got $txn_count:" "$GSA_FAKE_PACMAN_LOG"
         echo "section d ok"
     )
 fi
@@ -785,6 +851,143 @@ if want f; then
             || fail "f: -Qr names the unresolved need (consumer member soname), got:
 $FIXTURE_OUTPUT"
         echo "section f ok"
+    )
+fi
+
+if want g; then
+    # ─── 7. the multi-output false-move wall (2026-11-03) ─────────────────
+    # A split provider's outputs share ONE registration instance and each
+    # carries its own abi-token: a consumer record is CURRENT when ANY
+    # shipped output still carries it. Comparing against one arbitrary
+    # output row made every rebuild of a split recipe read as a token move
+    # and drag the consumer world into the plan (the `--leaf` wave flood).
+    # The wall: records matching the shipped token set → NO wave, and the
+    # `--leaf` plan stays exactly the named recipe.
+    (
+        set -euo pipefail
+        ws="$fixture/g/ws"
+        state="$fixture/g/state"
+        db="$fixture/g/db"
+        make_workspace "$ws" 1 auto low
+        abi_ws "$ws" "$db" "$fixture/g/stage"
+        mkdir -p "$db"
+        export GSA_STATE_DIR="$state"
+        add_package "$ws" lib "$gsa_meta_any" git
+        add_package "$ws" c1 "$gsa_meta_any" git
+        add_package "$ws" c2 "$gsa_meta_any" git
+        set_topology_record "$ws" lib git "" ""
+        set_topology_record "$ws" c1 git "lib" ""
+        set_topology_record "$ws" c2 git "lib" ""
+        # The split recipe: one build, two outputs, two distinct tokens.
+        printf 'pkgname=(lib libx-devel)\n' >"$ws/packages/lib/PKGBUILD"
+        stage_pkginfo "$fixture/g/stage/lib/split/lib" lib lib "1.0.0-1" \
+            'provides = libx.so=1-64'
+        stage_pkginfo "$fixture/g/stage/lib/split/libx-devel" lib libx-devel "1.0.0-1" \
+            'provides = liby.so=1-64'
+        stage_tree "$fixture/g/stage" c1 "1.0.0-1"
+        stage_tree "$fixture/g/stage" c2 "1.0.0-1"
+        run_engine "$ws" -B --no-prefetch --state-dir "$state" lib c1 c2
+        [ "$FIXTURE_RC" = 0 ] || fail "g: the stub build pass is rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
+
+        # Registered token truth, one row per output, straight from the
+        # engine's own index (the exact rows the wave check reads).
+        index_token() {
+            {
+                grep "\"recipe_id\":\"$2\"" "$state/index/binpkg.jsonl" \
+                    | grep "\"pkgnames\":\[\"$3\"\]" \
+                    | sed -n 's/.*"abi_token":"\([^"]*\)".*/\1/p' \
+                    | tail -1
+            } || true
+        }
+        t_main=$(index_token "$state" lib lib)
+        t_devel=$(index_token "$state" lib libx-devel)
+        [ -n "$t_main" ] && [ -n "$t_devel" ] && [ "$t_main" != "$t_devel" ] \
+            || fail "g: the two outputs must register distinct tokens (t_main=$t_main t_devel=$t_devel)"
+        # c1 linked the main output's library, c2 the devel output's — each
+        # recorded ITS provider output's token, both currently shipped.
+        /usr/bin/sudo -n mkdir -p "$state/abi"
+        {
+            printf 'c1|0:1.0.0-1|lib|%s\n' "$t_main"
+            printf 'c2|0:1.0.0-1|lib|%s\n' "$t_devel"
+        } | /usr/bin/sudo -n tee "$state/abi/subscriptions" >/dev/null
+
+        run_engine "$ws" -B --dry-run --leaf lib
+        [ "$FIXTURE_RC" = 0 ] || fail "g: the wall plan is rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        vgrep "$FIXTURE_OUTPUT" -q '^abi-wave ' \
+            && fail "g: records matching the shipped token set are NO move — a split rebuild must not drag a wave:
+$FIXTURE_OUTPUT"
+        [ "$(rr2_scalar order <<<"$FIXTURE_OUTPUT")" = "lib" ] \
+            || fail "g: --leaf plans exactly the named recipe (no wave additions): $FIXTURE_OUTPUT"
+        echo "section g ok"
+    )
+fi
+
+if want h; then
+    # ─── 8. the placeholder-record wall (2026-11-03) ──────────────────────
+    # A `-` subscription placeholder carries NO token truth — record-less,
+    # never a token that could mismatch (the false-move class). Beside
+    # matching records it gates nothing; under a REAL move it fails toward
+    # the whole closure (rule 25(c)) as an `unrecorded` member — never
+    # under-expand.
+    (
+        set -euo pipefail
+        ws="$fixture/h/ws"
+        state="$fixture/h/state"
+        db="$fixture/h/db"
+        make_workspace "$ws" 1 auto low
+        abi_ws "$ws" "$db" "$fixture/h/stage"
+        mkdir -p "$db"
+        export GSA_STATE_DIR="$state"
+        add_package "$ws" lib2 "$gsa_meta_any" git
+        add_package "$ws" c4 "$gsa_meta_any" git
+        add_package "$ws" c5 "$gsa_meta_any" git
+        set_topology_record "$ws" lib2 git "" ""
+        set_topology_record "$ws" c4 git "lib2" ""
+        set_topology_record "$ws" c5 git "lib2" ""
+        stage_tree "$fixture/h/stage" lib2 "1.0.0-1" 'provides = libz.so=1-64'
+        stage_tree "$fixture/h/stage" c4 "1.0.0-1"
+        stage_tree "$fixture/h/stage" c5 "1.0.0-1"
+        run_engine "$ws" -B --no-prefetch --state-dir "$state" lib2 c4 c5
+        [ "$FIXTURE_RC" = 0 ] || fail "h: the stub build pass is rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
+
+        # Tokens come from the engine's own -Qa surface, never hardcoded.
+        run_engine "$ws" -Qa --state-dir "$state" lib2
+        t_lib2=$(qa_row "$FIXTURE_OUTPUT" lib2 token | awk '{ print $3 }')
+        [ -n "$t_lib2" ] || fail "h: -Qa derived the lib2 token: $FIXTURE_OUTPUT"
+
+        # c4's record is a `-` placeholder (no token truth); c5's matches.
+        /usr/bin/sudo -n mkdir -p "$state/abi"
+        {
+            printf 'c4|0:1.0.0-1|lib2|-\n'
+            printf 'c5|0:1.0.0-1|lib2|%s\n' "$t_lib2"
+        } | /usr/bin/sudo -n tee "$state/abi/subscriptions" >/dev/null
+
+        run_engine "$ws" -B --dry-run --leaf lib2
+        [ "$FIXTURE_RC" = 0 ] || fail "h: the wall plan is rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        vgrep "$FIXTURE_OUTPUT" -q '^abi-wave ' \
+            && fail "h: a placeholder is record-less, never a token move:
+$FIXTURE_OUTPUT"
+        [ "$(rr2_scalar order <<<"$FIXTURE_OUTPUT")" = "lib2" ] \
+            || fail "h: --leaf plans exactly the named recipe (no wave additions): $FIXTURE_OUTPUT"
+
+        # Contrast (the over-suppression wall): a REAL record mismatch still
+        # drags the wave — and the placeholder consumer rides it as a
+        # record-less member (fail-toward, never under-expand).
+        {
+            printf 'c4|0:1.0.0-1|lib2|-\n'
+            printf 'c5|0:1.0.0-1|lib2|stale-token\n'
+        } | /usr/bin/sudo -n tee "$state/abi/subscriptions" >/dev/null
+        run_engine "$ws" -B --dry-run --leaf lib2
+        [ "$FIXTURE_RC" = 0 ] || fail "h: the real-move plan is rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        expected=$(expected_wave_members "$ws" "$state" lib2 "$t_lib2")
+        got=$(wave_members "$FIXTURE_OUTPUT" lib2)
+        [ "$got" = "$expected" ] \
+            || fail "h: a real move drags the derived wave (placeholder = record-less): want [$expected], got [$got]:
+$FIXTURE_OUTPUT"
+        vgrep "$FIXTURE_OUTPUT" -Eq '^abi-wave lib2 c4 unrecorded$' \
+            || fail "h: the placeholder member plans as record-less (unrecorded):
+$FIXTURE_OUTPUT"
+        echo "section h ok"
     )
 fi
 

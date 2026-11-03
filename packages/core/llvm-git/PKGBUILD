@@ -16,7 +16,7 @@
 
 
 pkgname=('llvm-git' 'llvm-libs-git' 'clang-opencl-headers-git')  # llvm-ocaml-git split dropped 2026-09-04 (no consumer)
-pkgver=24.0.0_r603149.908f46792fb9
+pkgver=24.0.0_r604528.caf7a716fe6e
 pkgrel=1
 arch=('x86_64')
 url="https://llvm.org/"
@@ -24,12 +24,20 @@ license=('custom:Apache 2.0 with LLVM Exception')
 makedepends=('git' 'cmake' 'ninja' 'libffi' 'libedit' 'ncurses' 'libxml2'
              'python-setuptools' 'python' 'z3'
              'jsoncpp')
-# UNPINNED again 2026-09-07 evening (was pinned to r595808.29fda2c4ecca for the
-# rust-ABI downgrade rebuild). RULE: whenever llvm-libs-git moves, rebuild
-# rust-git + mesa-git + spirv-llvm-translator-git + openshadinglanguage IN THE
-# SAME PASS — LLVM snapshots have no stable C++ ABI; rustc segfaults on any
-# compile otherwise (2026-09-07 incident, see NOTE.md).
-source=("llvm-project::git+https://github.com/llvm/llvm-project.git"
+# WEEKLY SNAPSHOT policy (2026-10-31, replacing free git tracking): the pin
+# below is the last commit at or before Monday 00:00 UTC of the current week
+# (boundary 2026-10-26T00:00Z = caf7a716fe6eb7fbc0f0cec7b745b94ab3706ddf,
+# commit date 2026-10-25T23:57Z). Upstream master moves several commits per
+# hour; free tracking made every rebuild fetch a NEWER llvm and re-invalidate
+# the coupled batch — endless re-waves (2026-10-31 campaign: three llvm
+# builds in one day chasing a moving ABI). ADVANCE THE PIN on the Monday
+# cadence (or at any deliberate upgrade): move #commit= and pkgver together.
+# RULE (unchanged): whenever llvm-libs-git moves — pin advance or otherwise —
+# rebuild rust-git + mesa-git + spirv-llvm-translator-git +
+# openshadinglanguage IN THE SAME PASS — LLVM snapshots have no stable C++
+# ABI; rustc segfaults on any compile otherwise (2026-09-07 incident, see
+# NOTE.md).
+source=("llvm-project::git+https://github.com/llvm/llvm-project.git#commit=caf7a716fe6eb7fbc0f0cec7b745b94ab3706ddf"
         "llvm-config.h")
 
 md5sums=('SKIP'
@@ -72,6 +80,8 @@ build() {
     # crashing pass for this build only; drop the flag once the snapshot
     # compiler's VRP survives this TU.
     export CXXFLAGS+=" -fno-tree-vrp"
+    CFLAGS+=" -fipa-pta -fstack-reuse=all" # flag-audit 2026-11-01
+    CXXFLAGS+=" -fipa-pta -fstack-reuse=all" # flag-audit 2026-11-01
     # NOTE: MODULE targets (LLVMgold plugin) use CMAKE_MODULE_LINKER_FLAGS;
     # without mold they fall back to bfd, which rejects --color-diagnostics.
     # NOTE: LLVM_ENABLE_LTO=ON (not Full) — GCC's cc1 rejects '-flto=full'.

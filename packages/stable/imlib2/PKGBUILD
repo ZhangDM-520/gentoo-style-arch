@@ -45,6 +45,7 @@ build() {
     config_opts+=(--enable-amd64)
   fi
 
+  CFLAGS+=" -fprefetch-loop-arrays -fstack-reuse=all" # flag-audit 2026-11-01
   ./configure "${config_opts[@]}"
   sed -i -e 's/ -shared / -Wl,-O1,--as-needed\0/g' libtool
   make

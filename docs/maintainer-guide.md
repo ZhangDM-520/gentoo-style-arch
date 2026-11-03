@@ -154,6 +154,11 @@ A real build whose selection includes an `abi=must` anchor while an installed
 `abi=must` batch member is omitted ADDS the member to the plan as a wave
 addition (basis `coupled-must`, even under `--leaf`) — the fish-era refusal
 trigger retired with `tests/abi-batch-policy.sh`'s register (DEVIATION 1).
+Direction rule (2026-11-01, `docs/gsa-contract.md` §C.3 amendment): a wave
+addition is made only for members that are transitive CONSUMERS of the moved
+provider. Batch membership alone never drags an upstream (e.g. the llvm-git
+anchor into a rust-git wave) or lateral member into a plan — rebuilding a
+provider cannot break what the provider itself consumes.
 The gate refuses only what the topology cannot build at all (`refuse
 abi-consumer-uncovered`, rc 3, nothing dispatched), and `--dry-run` gates that
 same state (exit 3, full plan rendered, nothing built) while listings (`-Bl`)

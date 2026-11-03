@@ -37,6 +37,8 @@ build() {
   # -Ddoxygen-doc=disabled: the docs feature is auto and turns on whenever
   # host doxygen exists; its output was pure waste (dropped in package())
   # and the doxygen run is a build wall (run #92 class)
+  CFLAGS+=" -fprefetch-loop-arrays" # flag-audit 2026-11-01
+  CXXFLAGS+=" -fprefetch-loop-arrays" # flag-audit 2026-11-01
   arch-meson -Dgconv=disabled -Ddoxygen-doc=disabled "${pkgname}-${pkgver}" build
   meson compile -C build -j "${GSA_BUILD_JOBS:-$(nproc)}"
 }

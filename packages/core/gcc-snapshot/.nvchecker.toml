@@ -1,4 +1,0 @@
-[gcc-snapshot]
-source = "aur"
-aur = "gcc-snapshot"
-strip_release = true

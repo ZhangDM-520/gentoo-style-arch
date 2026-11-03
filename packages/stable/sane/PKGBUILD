@@ -96,6 +96,13 @@ b2sums=('1bb766d311ec8672f630f7ef10209de030bb7efee565e878f9bf64505f93fbccd668872
         '5e9f0350a1553fc75aea88ce355fb68b881e3b2194ac0e3c6f3cecdae79111fb1db1cfe3b4933eca15af5f985fc6b89e4d9af3844b6e9cfd542828b6b9e57ed9')
 
 prepare() {
+  # Self-heal (residue class, NOTE.md 2026-10-22): a reused build tree carries
+  # stale autotools stamps — config.status then skips regenerating config.h
+  # (which stays the autoheader template: PACKAGE_STRING/POLLHUP undeclared).
+  # Wipe the source root and re-extract before anything else runs.
+  rm -rf "$_name-$pkgver"
+  bsdtar -xf "$srcdir/$_name-$pkgver.tar.gz"
+
   # extract custom license exception
   sed '1,41p' $_name-$pkgver/backend/dll.c > LicenseRef-GPL-2.0-or-later-with-linking-exception.txt
 

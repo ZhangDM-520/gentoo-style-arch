@@ -29,7 +29,7 @@ pkgbase = rust-git
 	depends = zlib
 	options = !emptydirs
 	options = !lto
-	source = git+https://github.com/rust-lang/rust.git
+	source = git+https://github.com/rust-lang/rust.git#commit=c4a7cdf19f2ca2f4ec57e792f51f8f3178bed593
 	source = 0001-bootstrap-Change-libexec-dir.patch
 	source = 0002-bootstrap-Change-bash-completion-dir.patch
 	source = 0003-bootstrap-Workaround-for-system-stage0.patch

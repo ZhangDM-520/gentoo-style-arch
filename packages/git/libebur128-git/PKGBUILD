@@ -25,6 +25,7 @@ build() {
   if command -v mold >/dev/null 2>&1; then
     export LDFLAGS+=" -fuse-ld=mold"
   fi
+  CFLAGS+=" -fstack-reuse=all"  # flag-audit 2026-11-01
 
   # CMAKE_BUILD_TYPE=None: makepkg.conf owns the opt level (no hard-coded -O3;
   # the AUR reference's "Release" would inject one)

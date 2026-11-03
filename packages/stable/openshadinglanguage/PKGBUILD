@@ -2,7 +2,7 @@
 
 pkgname=openshadinglanguage
 pkgver=1.15.7.0
-pkgrel=2.1
+pkgrel=2.2
 pkgdesc="Advanced shading language for production GI renderers"
 arch=('x86_64')
 url="https://github.com/imageworks/OpenShadingLanguage"
@@ -14,7 +14,7 @@ optdepends=('python: the Python module')
 source=($pkgname-$pkgver.tar.gz::https://github.com/AcademySoftwareFoundation/OpenShadingLanguage/archive/refs/tags/v${pkgver}.tar.gz
         osl-llvm-compat.patch)
 sha512sums=('38f75b9ee90b90cead708642f47a494aadd4bc1d776385e91a495cd28d26ff5d867a29ae2559baa5268c9e7f9ef27a514d37f1609124f8ef3cca36b37caa2d8f'
-            '4240f25fbea0ad3ea4499e75ebb1defaf22ac27828670be224b5eaedea6e40eb1a9d48c715b527fc1363c5bb1e279dd2f3666c5271d72c18c292575b55f9866d')
+            'c8d35658cc7403d624134785084eec16043d8b2187bf8ad3867bfba1df517fb30f5a41a394a927f1dd28d8b6345f640da10c54879f49edd69c077e9e75af6a6b')
 prepare() {
   cd OpenShadingLanguage-$pkgver
 
@@ -36,7 +36,9 @@ prepare() {
   # from llvm::OptionalPassInfoMixin and createModuleToFunctionPassAdaptor is
   # llvm::-qualified, and op_alloca's insertion-point assertion moves to save
   # time (IRBuilderBase::InsertPoint became a bare BasicBlock::iterator alias
-  # in LLVM 24, losing isSet()).
+  # in LLVM 24, losing isSet()). The LLVM 24 cycle also removed the
+  # `PassBuilder(TargetMachine*)` constructor — setup_new_optimization_passes
+  # passes the context first (r605529 wall, 2026-10-31).
   patch -Np1 < "$srcdir"/osl-llvm-compat.patch
 }
 
@@ -44,6 +46,8 @@ build() {
   cd OpenShadingLanguage-$pkgver
 
   # house: pin the system interpreter (uv/pyenv shims lead PATH; NOTE.md 2026-10-10)
+  CFLAGS+=" -fipa-pta -fstack-reuse=all" # flag-audit 2026-11-01
+  CXXFLAGS+=" -fipa-pta -fstack-reuse=all" # flag-audit 2026-11-01
   cmake \
     -B build \
     -DPython_EXECUTABLE=/usr/bin/python \

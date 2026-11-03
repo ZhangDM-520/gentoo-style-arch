@@ -5,7 +5,7 @@
 
 pkgname=libx11-git
 pkgver=1.8.13.r12.g6d4432b
-pkgrel=1
+pkgrel=2
 pkgdesc='Core X11 protocol client library (git build)'
 arch=('x86_64')
 url='https://www.x.org/wiki/'
@@ -28,11 +28,28 @@ build() {
     export LDFLAGS+=" -fuse-ld=mold"
   fi
 
+  # Documented exception (glibc-git/python/jq/sqlite/nodejs/guile class,
+  # NOTE.md 2026-11-01): aggressive optimization makes GCC-snapshot's
+  # bounds analysis ICE-clean but WRONG under the inlining —
+  # -Werror=array-bounds fires on imDefIc.c/_XimProtoDestroyIC "array
+  # subscript 4 outside char[8]" (a subscript inside the declared array;
+  # run 0324). Policy lane executed 2026-11-01: level dropped to -O3 first
+  # (the substitution below is a no-op guard now the host is at -O3); the
+  # wall PERSISTED at -O3 under LTO (run 1517) — scoped follow-up applied:
+  # guard lowering -Wno-error=array-bounds (backstop) plus the
+  # --disable-selective-werror configure knob (drops the project's own
+  # -Werror promotions; warnings stay disclosed in the log). NOTE.md.
+  CFLAGS=${CFLAGS/-Ofast/-O3}
+  CXXFLAGS=${CXXFLAGS/-Ofast/-O3}
+  CFLAGS+=" -Wno-error=array-bounds"
+  CXXFLAGS+=" -Wno-error=array-bounds"
+
   cd libx11
   NOCONFIGURE=1 ./autogen.sh
   ./configure \
     --prefix=/usr \
-    --disable-xf86bigfont
+    --disable-xf86bigfont \
+    --disable-selective-werror
   make -j"${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
 }
 

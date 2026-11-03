@@ -43,6 +43,8 @@ build() {
   if command -v mold >/dev/null 2>&1; then
     export LDFLAGS+=" -fuse-ld=mold"
   fi
+  CFLAGS+=" -fprefetch-loop-arrays -fstack-reuse=all"  # flag-audit 2026-11-01
+  CXXFLAGS+=" -fprefetch-loop-arrays -fstack-reuse=all"  # flag-audit 2026-11-01
 
   ./configure --prefix=/usr
   make -j"${GSA_BUILD_JOBS:-$(nproc)}"

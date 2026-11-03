@@ -73,6 +73,8 @@ build() {
   # Harfbuzz wants no exceptions
   CFLAGS="${CFLAGS/-fexceptions/}"
   CXXFLAGS="${CXXFLAGS/-fexceptions/}"
+  CFLAGS+=" -fipa-pta -fstack-reuse=all" # flag-audit 2026-11-01
+  CXXFLAGS+=" -fipa-pta -fstack-reuse=all" # flag-audit 2026-11-01
 
   local meson_options=(
     -D graphite2=enabled

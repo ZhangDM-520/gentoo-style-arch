@@ -36,6 +36,7 @@ build() {
     export LDFLAGS+=" -fuse-ld=mold"
   fi
 
+  CFLAGS+=" -fstack-reuse=all" # flag-audit 2026-11-01
   make -f makefile.shared IGNORE_SPEED=1 -j"${GSA_BUILD_JOBS:-$(nproc)}"
 }
 

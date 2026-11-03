@@ -44,6 +44,8 @@ build() {
     -D cpp_std=c++17
   )
 
+  CFLAGS+=" -fprefetch-loop-arrays"  # flag-audit 2026-11-01
+  CXXFLAGS+=" -fprefetch-loop-arrays"  # flag-audit 2026-11-01
   arch-meson webrtc-audio-processing build "${meson_options[@]}"
   meson compile -C build
 }

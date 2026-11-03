@@ -6,7 +6,7 @@
 
 pkgname=libxml2-legacy
 pkgver=2.13.9
-pkgrel=2.3
+pkgrel=2.4
 pkgdesc="XML C parser and toolkit (legacy version)"
 url="https://gitlab.gnome.org/GNOME/libxml2/-/wikis/home"
 arch=(x86_64)
@@ -35,8 +35,11 @@ _prefix=usr/lib/$pkgname
 prepare() {
   cd libxml2
 
-  # Use xmlconf from conformance test suite
-  ln -s ../xmlconf
+  # Use xmlconf from conformance test suite. -sfn: prepare() must survive a
+  # warm $srcdir — the symlink is untracked in the git working copy and
+  # survives "git checkout"; a bare `ln -s` then dies with "File exists"
+  # (2026-11-01 wall class, same shape as the python prepare() guard).
+  ln -sfn ../xmlconf xmlconf
 
   # Meson fixes
   git apply -3 ../0001-meson-Build-fixes.patch
@@ -51,6 +54,7 @@ build() {
     -D python=false
   )
 
+  CFLAGS+=" -fstack-reuse=all" # flag-audit 2026-11-01
   arch-meson libxml2 build "${meson_options[@]}"
   meson compile -C build
 }

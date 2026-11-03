@@ -67,8 +67,8 @@ exact_dep=$(printf '\tdepends = glibc-git=%s' "$pkgver")
 topology=$("$GSA_TEST_GSA_BIN" -Qt) || fail 'gsa -Qt failed'
 grep -Fqx 'glibc-git|packages/core/glibc-git|core|linux-api-headers|' \
     <<<"$topology" || fail 'glibc-git topology row or linux-api-headers edge is missing'
-grep -Fqx 'gcc-snapshot|packages/core/gcc-snapshot|core,build-tools|glibc-git,binutils,git-git,python,zstd-git|version-sync=nvchecker' \
-    <<<"$topology" || fail 'gcc-snapshot topology row, build-tools groups, edge, or version-sync opt-in is missing'
+grep -Fqx 'gcc-snapshot|packages/core/gcc-snapshot|core,build-tools|glibc-git,binutils,git-git,python,zstd-git|' \
+    <<<"$topology" || fail 'gcc-snapshot topology row, build-tools groups, or edge is missing'
 
 for pkgname in lib32-glibc-git glibc-locales-git; do
     output=$("$GSA_TEST_GSA_BIN" -S --dry-run --leaf "$pkgname" 2>&1) ||

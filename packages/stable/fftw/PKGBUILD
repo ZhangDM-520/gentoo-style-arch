@@ -104,6 +104,7 @@ build() {
   # no hard-coded -O3/-march/-mtune here. -ffast-math is kept because FFTW's
   # generated code paths assume it (load-bearing, not an ISA/level choice).
   CFLAGS+=" -ffast-math"
+  CFLAGS+=" -fipa-pta" # flag-audit 2026-11-01
 
   for _name in "${_build_types[@]}"; do
     (

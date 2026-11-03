@@ -58,7 +58,14 @@ impl std::fmt::Display for PkginfoError {
 /// DB's `%VERSION%`: `epoch:pkgver-pkgrel` with the epoch always present
 /// (`0:` when pacman recorded none), so exact version equality is one string
 /// compare across both surfaces (`docs/MEMORY.md` rule 27(a) family).
+/// A leading bare-`0:` in front of ANOTHER epoch is the pre-2026-11-01
+/// epoch-stacking artifact ("0:2:1.2-1" for the real "2:1.2-1") — repaired
+/// here so stale side-car rows compare truthfully.
 pub fn canonical_version(raw: &str) -> String {
+    let raw = raw
+        .strip_prefix("0:")
+        .filter(|rest| rest.contains(':'))
+        .unwrap_or(raw);
     if raw.contains(':') {
         raw.to_string()
     } else {
@@ -160,6 +167,17 @@ fn parse_pkginfo_body(body: &str) -> Result<Pkginfo, PkginfoError> {
     let ver = match pkgrel {
         Some(rel) if !pkgver.ends_with(&format!("-{rel}")) => format!("{pkgver}-{rel}"),
         _ => pkgver,
+    };
+    // makepkg writes the FULL version into `pkgver` (epoch inline when
+    // non-zero, no separate key); naively stacking "{epoch}:{ver}" then
+    // produced "0:2:…" — the 2026-11-01 audit's version-sync-skew rows and
+    // a vercmp inversion (0:2:… sorts BELOW 2:…). An inline epoch wins;
+    // the explicit key covers the older archive shape.
+    let (epoch, ver) = match ver.split_once(':') {
+        Some((e, rest)) if !e.is_empty() && e.bytes().all(|b| b.is_ascii_digit()) => {
+            (e.to_string(), rest.to_string())
+        }
+        _ => (epoch, ver),
     };
 
     Ok(Pkginfo {
@@ -404,6 +422,25 @@ mod tests {
     }
 
     #[test]
+    fn read_pkginfo_inline_epoch_is_never_stacked() {
+        // makepkg's real .PKGINFO shape: the full version in `pkgver`
+        // (epoch inline), no `epoch` key. The parse must not stack a
+        // default "0:" onto "2:…" (2026-11-01 wall: "0:2:17.0.0_…").
+        let dir = scratch("inline-epoch");
+        let archive = dir.join("foo-2:1.2.3-1-x86_64.pkg.tar.zst");
+        write_archive(
+            &archive,
+            &[(
+                ".PKGINFO",
+                b"pkgname = foo\npkgver = 2:1.2.3-1\narch = x86_64\n",
+            )],
+        );
+        let info = read_pkginfo(&archive).unwrap();
+        assert_eq!(info.version, "2:1.2.3-1");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn read_pkginfo_epoch_zero_and_pkgbase_fallback() {
         let dir = scratch("fallback");
         let archive = dir.join("foo.pkg.tar.zst");
@@ -478,6 +515,10 @@ mod tests {
     fn canonical_version_prefixes_epoch_zero() {
         assert_eq!(canonical_version("1.2-1"), "0:1.2-1");
         assert_eq!(canonical_version("2:1.2-1"), "2:1.2-1");
+        // The pre-2026-11-01 epoch-stacking artifact repairs to the real
+        // version; an explicit epoch 0 stays untouched.
+        assert_eq!(canonical_version("0:2:1.2-1"), "2:1.2-1");
+        assert_eq!(canonical_version("0:1.2-1"), "0:1.2-1");
     }
 
     #[test]

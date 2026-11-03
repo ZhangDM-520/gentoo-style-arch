@@ -41,6 +41,9 @@ build() {
 
   local _jobs="${GSA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
 
+  CFLAGS+=" -fipa-pta -fstack-reuse=all -fprefetch-loop-arrays" # flag-audit 2026-11-01
+  CXXFLAGS+=" -fipa-pta -fstack-reuse=all -fprefetch-loop-arrays" # flag-audit 2026-11-01
+
   # stock enables v4l2/test; tests and the tool/app/plugin/bindings options are
   # newer than the stale AUR reference — disabled here to keep the qt/gst/docs
   # makedeps out (docs/tests trimmed per house style)

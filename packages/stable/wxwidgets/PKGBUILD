@@ -40,6 +40,8 @@ build() {
   command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
   export LDFLAGS+=" ${_mold}"
 
+  CFLAGS+=" -fipa-pta" # flag-audit 2026-11-01
+  CXXFLAGS+=" -fipa-pta" # flag-audit 2026-11-01
   cmake -B build-base -S wxWidgets \
     -DCMAKE_INSTALL_PREFIX=/usr \
     -DCMAKE_BUILD_TYPE=None \

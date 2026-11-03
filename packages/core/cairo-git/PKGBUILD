@@ -44,6 +44,13 @@ pkgver() {
   git describe --tags | sed 's/[^-]*-g/r&/;s/-/./g'
 }
 
+prepare() {
+  # perf/ benchmarks are not payload, and their gtk2-compat graph widget
+  # predates modern gtk3-git headers (widget.allocation wall, 2026-11-01).
+  # pgo_train_meson runs the test/ suite — perf is not needed for training.
+  sed -i "/subdir('perf')/d" cairo/meson.build
+}
+
 build() {
   if command -v mold >/dev/null 2>&1; then
     export LDFLAGS+=" -fuse-ld=mold"

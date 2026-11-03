@@ -49,6 +49,7 @@ pub use provides::{
 };
 pub use records::{
     record_install, subscriptions_for_install, subscriptions_path, Subscription, Subscriptions,
+    NO_TOKEN,
 };
 pub use revdep::{
     load_preserved, preserved_registry_path, render as render_revdep, revdep_report,
@@ -78,5 +79,59 @@ pub fn token_moved(recorded: Option<&str>, current: &str) -> bool {
         // No record: the move is unobservable here; the wave planner's
         // fail-toward fallback is what covers record-less states.
         None => false,
+    }
+}
+
+/// The set-based `:=` movement verdict the wave surfaces share: the
+/// provider's registered token set MOVED iff some record with token truth
+/// names a token it no longer ships. A split provider ships one token per
+/// output (any match is current — never one arbitrary output's row alone),
+/// and a [`records::NO_TOKEN`] placeholder is record-less: "No index row or
+/// no record is no observable move here" (the planner's fail-toward
+/// fallback owns record-less states).
+pub fn records_moved(
+    recorded: &[&Subscription],
+    current: &std::collections::BTreeSet<String>,
+) -> bool {
+    recorded
+        .iter()
+        .filter(|s| s.has_token())
+        .any(|s| !current.contains(&s.token))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sub(token: &str) -> Subscription {
+        Subscription {
+            consumer: "c".to_string(),
+            version: "0:1-1".to_string(),
+            provider: "p".to_string(),
+            token: token.to_string(),
+        }
+    }
+
+    fn set(tokens: &[&str]) -> std::collections::BTreeSet<String> {
+        tokens.iter().map(|t| t.to_string()).collect()
+    }
+
+    #[test]
+    fn the_movement_verdict_is_set_based_and_placeholder_blind() {
+        // No record: no observable move (the fallback owns record-less).
+        assert!(!records_moved(&[], &set(&["T2"])));
+        // Placeholder rows are record-less — never a move by themselves.
+        assert!(!records_moved(&[&sub(records::NO_TOKEN)], &set(&["T2"])));
+        // A current record is satisfied — including across a multi-output
+        // provider's token set (ANY shipped output's token matches).
+        assert!(!records_moved(&[&sub("Ta")], &set(&["Ta", "Tb"])));
+        assert!(!records_moved(&[&sub("Tb")], &set(&["Ta", "Tb"])));
+        // A record naming a token the provider no longer ships is the move.
+        assert!(records_moved(&[&sub("T1")], &set(&["Ta", "Tb"])));
+        // Mixed sets decide on the real records only.
+        assert!(records_moved(
+            &[&sub(records::NO_TOKEN), &sub("T1")],
+            &set(&["T2"])
+        ));
     }
 }

@@ -81,6 +81,7 @@ pkgver() {
 build() {
   # gcc-snapshot compatibility
   export CFLAGS+=" -Wno-error=implicit-function-declaration"
+  export CFLAGS+=" -fipa-pta -fstack-reuse=all -fprefetch-loop-arrays" # flag-audit 2026-11-01
 
   # House style: mold linker when available (arch-meson consumes LDFLAGS env)
   local _mold=""

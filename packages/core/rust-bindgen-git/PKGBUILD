@@ -8,7 +8,14 @@
 
 pkgname=rust-bindgen-git
 _pkgname=bindgen
-pkgver=0.73.2.r8.g2829d9a5
+# WEEKLY SNAPSHOT policy (rule 64, 2026-11-01): core ABI provider (bindgen
+# consumes libclang) — pin = last commit at or before Monday 00:00 UTC of
+# the current week (boundary 2026-10-26T00:00Z =
+# f08d4fff0e060fb4081222b0ad624e0bd7ec247d, commit date 2026-10-16T11:44Z).
+# ADVANCE THE PIN on the Monday cadence together with the llvm coupled set:
+# move #commit= and pkgver together (pkgver() recomputes the same value at
+# the pin).
+pkgver=0.73.2.r17.gf08d4fff
 pkgrel=1
 pkgdesc="Automatically generates Rust FFI bindings to C (and some C++) libraries"
 arch=('x86_64')
@@ -18,7 +25,7 @@ depends=('glibc' 'libgcc' 'clang')
 makedepends=('cargo' 'git')
 provides=("rust-bindgen=$pkgver")
 conflicts=('rust-bindgen')
-source=("git+${url}.git")
+source=("git+${url}.git#commit=f08d4fff0e060fb4081222b0ad624e0bd7ec247d")
 sha512sums=('SKIP')
 
 pkgver() {

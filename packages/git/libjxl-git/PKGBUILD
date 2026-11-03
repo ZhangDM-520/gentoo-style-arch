@@ -81,6 +81,8 @@ build() {
 
     export CFLAGS+=' -DNDEBUG -ffat-lto-objects'
     export CXXFLAGS+=' -DNDEBUG -ffat-lto-objects'
+    export CFLAGS+=' -fipa-pta -fstack-reuse=all -fprefetch-loop-arrays'  # flag-audit 2026-11-01
+    export CXXFLAGS+=' -fipa-pta -fstack-reuse=all -fprefetch-loop-arrays'  # flag-audit 2026-11-01
     # Pin the manpage generator's interpreter to the SYSTEM python: upstream's
     # manpages seam runs `python3 a2x` via find_package(Python3), and a
     # user-local python shim earlier in PATH (uv/pyenv in ~/.local/bin) binds

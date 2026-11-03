@@ -58,6 +58,8 @@ build() {
     -D tests=disabled
   )
 
+  CFLAGS+=" -fipa-pta -fstack-reuse=all" # flag-audit 2026-11-01
+  CXXFLAGS+=" -fipa-pta -fstack-reuse=all" # flag-audit 2026-11-01
   arch-meson freetype build "${meson_options[@]}"
   meson compile -C build -j "${GSA_BUILD_JOBS:-$(nproc)}"
 }

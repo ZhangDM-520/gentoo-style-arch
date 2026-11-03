@@ -20,6 +20,7 @@ use gsa_graph::Graph;
 use gsa_model::{Decision, DecisionRow};
 
 use crate::records::Subscriptions;
+use crate::rows::Drift;
 use crate::view::InstalledView;
 
 /// One observed abi-token move of one provider.
@@ -28,11 +29,23 @@ pub struct TokenMove {
     pub provider: String,
     /// What consumers recorded (or the previous built token), when known.
     pub old: Option<String>,
-    /// The token now built/declared.
-    pub new: String,
-    /// Bare provide names that moved — the content-truth term's input
-    /// (installed `DT_NEEDED` resolving through a dropped/changed provide).
-    pub changed_provides: Vec<String>,
+    /// The token set the provider ships NOW — one entry per output of its
+    /// newest built instance (a split provider carries one token per output;
+    /// a record is current when ANY shipped output still carries it). The
+    /// swap path passes the installed archive's own token as a singleton.
+    pub current: std::collections::BTreeSet<String>,
+    /// The provide ENTRIES that moved (name + removed auto-version, `Drift`)
+    /// — the content-truth term's input (installed `DT_NEEDED` resolving
+    /// through a dropped/changed provide; matched by `linked_consumers`).
+    pub changed_provides: Vec<Drift>,
+}
+
+impl TokenMove {
+    /// `:=` satisfaction: the recorded token is still shipped by one of the
+    /// provider's outputs. Never true for a placeholder (no token truth).
+    pub fn is_current(&self, token: &str) -> bool {
+        token != crate::records::NO_TOKEN && self.current.contains(token)
+    }
 }
 
 /// Why one package is in a wave.
@@ -97,6 +110,12 @@ pub struct WavePlan {
     /// Wave members that cannot be built this run (unknown to the topology),
     /// per provider: the `refuse abi-consumer-uncovered` class (§E.3).
     pub uncovered: Vec<(String, Vec<String>)>,
+    /// Dead records skipped as members: `(provider, consumer)` subscription
+    /// rows whose consumer is neither topology-known nor installed — a
+    /// retired/uninstalled build's leftover record. Nothing on the system
+    /// links through it and nothing can rebuild it, so it never gates the
+    /// run; the list exists so the skip is never silent.
+    pub stale_records: Vec<(String, String)>,
 }
 
 impl WavePlan {
@@ -131,13 +150,27 @@ pub struct WaveInputs<'a> {
     pub moves: &'a [TokenMove],
     pub installed: Option<&'a InstalledView>,
     pub planned: &'a BTreeSet<String>,
+    /// The workspace output→recipe-id map (§E.3 gap-G1's ONE key-space
+    /// boundary, the same map the install gate uses as `recipe_of_name`):
+    /// link truth and subscriptions name installed pkgnames (split outputs
+    /// included) while the topology names recipe ids. Every seed
+    /// canonicalizes through it — `smbclient` plans as `samba`, never as an
+    /// uncoverable external — and an unresolvable name stays itself (the
+    /// failure names what this seam CAN name).
+    pub recipe_of_name: &'a BTreeMap<String, String>,
+}
+
+/// The gap-G1 key-space boundary of [`WaveInputs::recipe_of_name`] applied
+/// to one name: an unresolvable name stays itself (fail closed).
+fn canon(recipe_of_name: &BTreeMap<String, String>, id: &str) -> String {
+    recipe_of_name.get(id).cloned().unwrap_or_else(|| id.to_string())
 }
 
 /// Compute the waves: exact `:=` mismatches ∪ unrecorded consumers
-/// (fail-toward whole closure) ∪ content truth ∪ `abi=must` batch members,
-/// closed over transitive consumers (`wave = R(P) ∪ consumers*(R(P))`,
-/// plan §4.3), then partitioned into covered / added / uncovered against
-/// the run's planned set.
+/// (fail-toward whole closure) ∪ content truth ∪ `abi=must` batch members
+/// (strictly downstream of the provider), closed over transitive consumers
+/// (`wave = R(P) ∪ consumers*(R(P))`, plan §4.3), then partitioned into
+/// covered / added / uncovered against the run's planned set.
 pub fn plan_waves(input: &WaveInputs<'_>) -> WavePlan {
     let WaveInputs {
         graph,
@@ -145,6 +178,7 @@ pub fn plan_waves(input: &WaveInputs<'_>) -> WavePlan {
         moves,
         installed,
         planned,
+        recipe_of_name,
     } = *input;
     let mut plan = WavePlan::default();
 
@@ -154,6 +188,7 @@ pub fn plan_waves(input: &WaveInputs<'_>) -> WavePlan {
         let mut seeds: Vec<WaveMember> = Vec::new();
         let mut seen: BTreeSet<String> = BTreeSet::new();
         let mut push = |id: String, basis: MemberBasis, seeds: &mut Vec<WaveMember>| {
+            let id = canon(recipe_of_name, &id);
             if id == provider {
                 return;
             }
@@ -182,7 +217,7 @@ pub fn plan_waves(input: &WaveInputs<'_>) -> WavePlan {
             for consumer_idx in &direct_consumers {
                 let id = graph.record(*consumer_idx).id.as_str();
                 match subs.token_for(id, provider) {
-                    Some(token) if token == movement.new => {
+                    Some(token) if movement.is_current(token) => {
                         if fallback {
                             // Fallback sweep: a matching record cannot
                             // shrink the whole-closure rule.
@@ -211,18 +246,39 @@ pub fn plan_waves(input: &WaveInputs<'_>) -> WavePlan {
         // Recorded subscribers without a direct edge (content-truth links:
         // the consumer's ELF binds the provider's provide directly) follow
         // their record; an unknown-to-topology subscriber is external and
-        // surfaces as uncovered below.
+        // surfaces as uncovered below. A subscriber also ABSENT from the
+        // installed world is a dead record — a retired/uninstalled build's
+        // leftover: nothing links through it and nothing can rebuild it, so
+        // it can neither break nor be covered and must not gate the run
+        // (skipped as `stale_records`, never silently). When the installed
+        // world is unknown (`installed: None`), fail closed and keep the
+        // refusal.
         for row in subs.for_provider(provider) {
+            let consumer = canon(recipe_of_name, &row.consumer);
             if direct_consumers
                 .iter()
-                .any(|&i| graph.record(i).id.as_str() == row.consumer)
+                .any(|&i| graph.record(i).id.as_str() == consumer)
             {
                 continue;
             }
-            if row.token == movement.new {
+            if movement.is_current(&row.token) {
                 continue;
             }
-            push(row.consumer.clone(), MemberBasis::Recorded, &mut seeds);
+            if graph.index_of(&consumer).is_none() {
+                if let Some(view) = installed {
+                    // Existence checks BOTH names: the record's raw pkgnames
+                    // (split outputs name installed packages the canonical
+                    // recipe id cannot) and the canonical id.
+                    let present = view.get(row.consumer.as_str()).is_some()
+                        || view.get(consumer.as_str()).is_some();
+                    if !present {
+                        plan.stale_records
+                            .push((provider.to_string(), consumer));
+                        continue;
+                    }
+                }
+            }
+            push(consumer, MemberBasis::Recorded, &mut seeds);
         }
 
         // Term 2: content truth — installed packages whose DT_NEEDED
@@ -241,6 +297,19 @@ pub fn plan_waves(input: &WaveInputs<'_>) -> WavePlan {
         // "Updating coupled stacks"), so a touch pulls the Touched
         // anchor's batch only — never another anchor's subtree — and each
         // member's own tag decides its treatment (E2).
+        //
+        // Direction rule (2026-11-01 owner directive): expansion is
+        // strictly DOWNSTREAM. A coupled member joins the wave only when
+        // the topology puts it in the provider's transitive consumer
+        // closure. Upstream and lateral members are never pulled — a
+        // package only breaks when its OWN output consumers move against
+        // its ABI; rebuilding a provider cannot break what the provider
+        // itself consumes. (The pre-rule batch sweep dragged e.g. an
+        // llvm-git anchor into every rust-git wave and re-pulled settled
+        // toolchain packages; that is also why `--leaf` became a
+        // workaround. Batch membership alone is not evidence of direction.)
+        let downstream: Option<BTreeSet<usize>> = provider_idx
+            .map(|idx| graph.consumer_closure(&[idx]).into_iter().collect());
         let batches = graph.coupled_batches();
         let mut noted: Vec<String> = Vec::new();
         let mut must_members: Vec<String> = Vec::new();
@@ -253,6 +322,14 @@ pub fn plan_waves(input: &WaveInputs<'_>) -> WavePlan {
             }
             for m in &batch.members {
                 if m.id.as_str() == provider {
+                    continue;
+                }
+                let member_downstream = graph
+                    .index_of(m.id.as_str())
+                    .zip(downstream.as_ref())
+                    .map(|(mi, down)| down.contains(&mi))
+                    .unwrap_or(false);
+                if !member_downstream {
                     continue;
                 }
                 match m.severity {
@@ -329,6 +406,8 @@ pub fn plan_waves(input: &WaveInputs<'_>) -> WavePlan {
 
     plan.additions.sort();
     plan.additions.dedup();
+    plan.stale_records.sort();
+    plan.stale_records.dedup();
     merge_overlapping(&mut plan.waves);
     plan
 }
@@ -437,7 +516,7 @@ mod tests {
         TokenMove {
             provider: provider.to_string(),
             old: old.map(|s| s.to_string()),
-            new: new.to_string(),
+            current: [new.to_string()].into_iter().collect(),
             changed_provides: Vec::new(),
         }
     }
@@ -482,6 +561,7 @@ mod tests {
             moves: &[mv("p", "T2", Some("T1"))],
             installed: None,
             planned: &planned,
+            recipe_of_name: &Default::default(),
         });
         assert_eq!(plan.waves.len(), 1);
         let wave = &plan.waves[0];
@@ -503,6 +583,7 @@ mod tests {
             moves: &[mv("p", "T2", None)],
             installed: None,
             planned: &planned,
+            recipe_of_name: &Default::default(),
         });
         let wave = &plan.waves[0];
         // The OLD rule 25(c): a moved provider rebuilds its FULL consumer
@@ -534,6 +615,7 @@ mod tests {
             moves: &[mv("p", "T2", Some("T1"))],
             installed: None,
             planned: &planned,
+            recipe_of_name: &Default::default(),
         });
         let wave = &plan.waves[0];
         assert_eq!(
@@ -572,6 +654,7 @@ mod tests {
             moves: &[mv("m1", "T9", Some("T8"))],
             installed: None,
             planned: &planned,
+            recipe_of_name: &Default::default(),
         });
         let wave = &plan.waves[0];
         assert_eq!(ids(wave), vec!["m2"], "the touched anchor's must batch moves as one pass");
@@ -581,6 +664,94 @@ mod tests {
             vec!["s1".to_string()],
             "the batch's abi=should member is noted, never forced"
         );
+    }
+
+    #[test]
+    fn upstream_and_lateral_coupled_members_never_ride() {
+        // Direction rule (2026-11-01 owner directive): a batch MEMBER
+        // moving must not drag its anchor (upstream) or lateral siblings
+        // — expansion is strictly downstream. The provider's own consumer
+        // still rides on its recorded mismatch.
+        let records = vec![
+            record("anchor", &[], &[Tag::AbiMust]),
+            record("m1", &["anchor"], &[Tag::AbiMust]),
+            record("m2", &["anchor"], &[Tag::AbiMust]),
+            record("s2", &["anchor"], &[Tag::AbiShould]),
+            record("c1", &["m1"], &[]),
+        ];
+        let graph = Graph::build(&records).unwrap();
+        let mut subs = Subscriptions::empty();
+        subs.upsert(sub("c1", "m1", "T-old"));
+        let planned = BTreeSet::new();
+        let plan = plan_waves(&WaveInputs {
+            graph: &graph,
+            subs: &subs,
+            moves: &[mv("m1", "T9", Some("T8"))],
+            installed: None,
+            planned: &planned,
+            recipe_of_name: &Default::default(),
+        });
+        let wave = &plan.waves[0];
+        assert_eq!(
+            ids(wave),
+            vec!["c1"],
+            "only the provider's downstream moves: the upstream anchor and \
+             the lateral siblings stay"
+        );
+        assert_eq!(wave.members[0].basis, MemberBasis::Recorded);
+        assert!(
+            wave.coupled_noted.is_empty(),
+            "a lateral abi=should sibling is neither forced nor noted"
+        );
+    }
+
+    #[test]
+    fn a_placeholder_record_is_record_less_and_fails_toward_the_closure() {
+        // 2026-11-03: a `-` wire placeholder carries no token truth — it
+        // must never read as a token that MISMATCHES (a false recorded
+        // seed) nor as one that matches; it is a MISSING record, and the
+        // fail-toward whole-closure fallback is what covers it (rule 25(c)).
+        let records = vec![record("p", &[], &[]), record("c1", &["p"], &[]), record("c2", &["p"], &[])];
+        let graph = Graph::build(&records).unwrap();
+        let mut subs = Subscriptions::empty();
+        subs.upsert(sub("c1", "p", crate::records::NO_TOKEN));
+        subs.upsert(sub("c2", "p", "T2"));
+        let plan = plan_waves(&WaveInputs {
+            graph: &graph,
+            subs: &subs,
+            moves: &[mv("p", "T2", Some("T1"))],
+            installed: None,
+            planned: &BTreeSet::new(),
+            recipe_of_name: &Default::default(),
+        });
+        assert_eq!(plan.waves.len(), 1);
+        assert!(
+            plan.waves[0].fallback,
+            "the record-less direct consumer (placeholder) engages the fallback"
+        );
+        let basis = plan.waves[0]
+            .members
+            .iter()
+            .find(|m| m.id == "c1")
+            .map(|m| m.basis);
+        assert_eq!(
+            basis,
+            Some(MemberBasis::Unrecorded),
+            "a placeholder is record-less, never a mismatched Recorded seed"
+        );
+        // The token-set membership the surfaces share: a multi-output
+        // provider is current across its whole set; a placeholder is never
+        // current even if it somehow sat in a token set.
+        let multi = TokenMove {
+            provider: "p".to_string(),
+            old: None,
+            current: ["Ta".to_string(), "Tb".to_string()].into_iter().collect(),
+            changed_provides: Vec::new(),
+        };
+        assert!(multi.is_current("Ta"));
+        assert!(multi.is_current("Tb"));
+        assert!(!multi.is_current("Tc"));
+        assert!(!multi.is_current(crate::records::NO_TOKEN));
     }
 
     #[test]
@@ -598,6 +769,7 @@ mod tests {
             moves: &[mv("p", "T2", Some("T1"))],
             installed: None,
             planned: &planned,
+            recipe_of_name: &Default::default(),
         });
         // c1 is planned (covered); c2 is buildable → added to the plan.
         assert_eq!(plan.additions, vec!["c2".to_string()]);
@@ -625,8 +797,13 @@ mod tests {
         let movement = TokenMove {
             provider: "p".to_string(),
             old: Some("T1".to_string()),
-            new: "T2".to_string(),
-            changed_provides: vec!["libfoo.so".to_string()],
+            current: ["T2".to_string()].into_iter().collect(),
+            changed_provides: vec![Drift {
+                pkgname: "p".to_string(),
+                name: "libfoo.so".to_string(),
+                inst_ver: "1-64".to_string(),
+                built_ver: Some("2-64".to_string()),
+            }],
         };
         let plan = plan_waves(&WaveInputs {
             graph: &graph,
@@ -634,6 +811,7 @@ mod tests {
             moves: &[movement],
             installed: Some(&installed),
             planned: &planned,
+            recipe_of_name: &Default::default(),
         });
         assert_eq!(
             plan.uncovered,
@@ -645,6 +823,66 @@ mod tests {
             rows[0].render(),
             "consumer-out-of-tree refuse abi-consumer-uncovered p"
         );
+    }
+
+    #[test]
+    fn content_truth_split_outputs_canonicalize_to_their_recipe() {
+        use crate::view::{InstalledPkg, InstalledView};
+        // 2026-10-30 icu-git wall (§E.3 gap-G1): link truth names the
+        // installed PKGNAME (`smbclient`) while the topology names the
+        // recipe id (`samba`) — a split output of an in-workspace recipe
+        // must plan as a wave member, never as an uncoverable external.
+        let records = vec![record("p", &[], &[]), record("samba", &["p"], &[])];
+        let graph = Graph::build(&records).unwrap();
+        let subs = Subscriptions::empty();
+        let dir = std::env::temp_dir().join(format!("gsa-abi-wave-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("usr/lib")).unwrap();
+        let elf = crate::test_support::elf64(Some("libsamba-util.so.0"), &["libicuuc.so.79"]);
+        std::fs::write(dir.join("usr/lib/libsamba-util.so.0"), &elf).unwrap();
+        let installed = InstalledView::with_root(
+            dir.clone(),
+            [InstalledPkg {
+                name: "smbclient".to_string(),
+                version: "0:1-1".to_string(),
+                provides: Vec::new(),
+                depends: Vec::new(),
+                files: vec!["usr/lib/libsamba-util.so.0".to_string()],
+            }],
+        );
+        let mut recipe_of_name = BTreeMap::new();
+        recipe_of_name.insert("smbclient".to_string(), "samba".to_string());
+        let movement = TokenMove {
+            provider: "p".to_string(),
+            old: Some("T1".to_string()),
+            current: ["T2".to_string()].into_iter().collect(),
+            changed_provides: vec![Drift {
+                pkgname: "p".to_string(),
+                name: "libicuuc.so".to_string(),
+                inst_ver: "79-64".to_string(),
+                built_ver: Some("80-64".to_string()),
+            }],
+        };
+        let planned = BTreeSet::new();
+        let plan = plan_waves(&WaveInputs {
+            graph: &graph,
+            subs: &subs,
+            moves: &[movement],
+            installed: Some(&installed),
+            planned: &planned,
+            recipe_of_name: &recipe_of_name,
+        });
+        assert!(
+            plan.uncovered.is_empty(),
+            "a split output maps to its recipe: {:?}",
+            plan.uncovered
+        );
+        assert!(
+            plan.additions.contains(&"samba".to_string()),
+            "samba rides the wave: {:?}",
+            plan.additions
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

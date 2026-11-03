@@ -529,9 +529,13 @@ $FIXTURE_OUTPUT"
     done
 
     # B2: refusal BEFORE dispatch (the KEEP cell :242-244 re-pin). A recorded
-    # subscriber the topology has no record for can never be built here, so
-    # the plan is under-covered: the run refuses by name (§E.2–E.3), exits 3
-    # (§G.1), every row is never-started, and nothing is dispatched.
+    # subscriber the topology has no record for AND the local DB still
+    # carries is a real consumer this workspace can never rebuild — the
+    # provides move will break it, so the plan is under-covered: the run
+    # refuses by name (§E.2–E.3), exits 3 (§G.1), every row is never-started,
+    # and nothing is dispatched. (A subscriber NEITHER in the topology NOR
+    # installed is a dead record instead — skipped by name, B2'.)
+    db_entry "$dir/db" ghost 1-1
     printf 'ghost|0:1.0.0-1|llvm-git|stale-token\n' \
         | /usr/bin/sudo -n tee "$GSA_STATE_DIR/abi/subscriptions" >/dev/null
     : >"$GSA_FAKE_MAKEPKG_LOG"
@@ -598,6 +602,38 @@ $FIXTURE_OUTPUT"
     grep -Fq 'llvm-git' <<<"$FIXTURE_OUTPUT" ||
         fail "B4: the listing does not name the selection:
 $FIXTURE_OUTPUT"
+
+    # B2': the dead-record refinement (2026-10-30). A recorded subscriber
+    # the topology has no record for AND the local DB does NOT carry is a
+    # retired/uninstalled build's leftover record: nothing on the system
+    # links through it and nothing can rebuild it, so it can neither break
+    # nor be covered and must not gate the run. It is skipped by name
+    # (`abi-stale-record <provider> <consumer> dead-record`), no refusal
+    # row renders, the live wave is unchanged, and the run proceeds.
+    {
+        printf 'q1|0:1.0.0-1|llvm-git|stale-token\n'
+        printf 'rust-git|0:1.0.0-1|llvm-git|%s\n' "$tok"
+        printf 'deadghost|0:1.0.0-1|llvm-git|stale-token\n'
+    } | /usr/bin/sudo -n tee "$GSA_STATE_DIR/abi/subscriptions" >/dev/null
+    : >"$GSA_FAKE_MAKEPKG_LOG"
+    run_engine "$dir" -B --no-prefetch --leaf llvm-git
+    [ "$FIXTURE_RC" -eq 0 ] ||
+        fail "B2': a dead record must not refuse the run (got $FIXTURE_RC):
+$FIXTURE_OUTPUT"
+    grep -Fxq 'abi-stale-record llvm-git deadghost dead-record' <<<"$FIXTURE_OUTPUT" ||
+        fail "B2': the skipped record is not reported by name:
+$FIXTURE_OUTPUT"
+    if grep -Fq 'refuse abi-consumer-uncovered' <<<"$FIXTURE_OUTPUT"; then
+        fail "B2': a dead record rendered a refusal row:
+$FIXTURE_OUTPUT"
+    fi
+    waves=$(grep '^abi-wave ' <<<"$FIXTURE_OUTPUT" | sort)
+    [ "$waves" = "abi-wave llvm-git q1 recorded
+abi-wave llvm-git rust-git coupled-must" ] ||
+        fail "B2': the live wave must be unchanged by the dead record:
+$FIXTURE_OUTPUT"
+    [ -s "$GSA_FAKE_MAKEPKG_LOG" ] ||
+        fail "B2': the run never proceeded to dispatch"
 )
 
 # ─── B5/B6. anchored batches: one batch per anchor, never one per severity ──
@@ -1100,10 +1136,11 @@ offenders=$(awk -F'|' '
     mkdir -p "$dir/elf" "$dir/archives"
 
     # Link truth: app-git and mid-git LINK the stock soname the swap removes
-    # (`libgreet.so.1-64`); leaf-git links only its mid-git provider; nlink-git
+    # (`libgreet.so.1` — the SONAME; its makepkg auto-version is `1-64`); leaf-git
+    # links only its mid-git provider; nlink-git
     # links libc — it names libs-git but can never break on libgreet moving.
-    write_elf64_needed "$dir/elf/app.so" 'libgreet.so.1-64'
-    write_elf64_needed "$dir/elf/mid.so" 'libgreet.so.1-64'
+    write_elf64_needed "$dir/elf/app.so" 'libgreet.so.1'
+    write_elf64_needed "$dir/elf/mid.so" 'libgreet.so.1'
     write_elf64_needed "$dir/elf/leaf.so" 'libmid-git.so.1'
     write_elf64_needed "$dir/elf/nlink.so" 'libc.so.6'
 
@@ -1267,7 +1304,7 @@ $FIXTURE_OUTPUT"
     members=()
     for num in $(seq -w 1 240); do
         id="h-mem$num"
-        write_elf64_needed "$dir/elf/$id.so" 'libgone.so.1-64'
+        write_elf64_needed "$dir/elf/$id.so" 'libgone.so.1'
         db_entry "$dir/db" "$id" 1-1 '' "${dir#/}/elf/$id.so"
         members+=("$id")
     done
@@ -1451,7 +1488,7 @@ set -u
 for a in "$@"; do
     [[ $a == -* ]] && continue
     printf 'File: %s\n' "$a"
-    printf ' 0x0000000000000001 (NEEDED)             Shared library: [libgone.so.1-64]\n'
+    printf ' 0x0000000000000001 (NEEDED)             Shared library: [libgone.so.1]\n'
 done
 exit 0
 EOF

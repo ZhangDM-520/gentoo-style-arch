@@ -99,6 +99,8 @@ EOF
 }
 
 build() {
+  CFLAGS+=" -fipa-pta -fstack-reuse=all" # flag-audit 2026-11-01
+  CXXFLAGS+=" -fipa-pta -fstack-reuse=all" # flag-audit 2026-11-01
   local _pgo_dir="${srcdir}/qt6declarative-pgo"
   local _cxx_orig="${CXXFLAGS}"
   local _ldf_orig="${LDFLAGS}"

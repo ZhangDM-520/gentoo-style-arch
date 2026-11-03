@@ -136,6 +136,8 @@ build() {
   # use fat LTO objects for static libraries
   CFLAGS+=" -ffat-lto-objects"
   CXXFLAGS+=" -ffat-lto-objects"
+  CFLAGS+=" -fipa-pta -fstack-reuse=all -fprefetch-loop-arrays" # flag-audit 2026-11-01
+  CXXFLAGS+=" -fipa-pta -fstack-reuse=all -fprefetch-loop-arrays" # flag-audit 2026-11-01
 
   mkdir -p build; cd build
   ../postgresql-${pkgver}/configure "${configure_options[@]}"

@@ -40,6 +40,7 @@ build() {
   command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
   export LDFLAGS+=" ${_mold}"
 
+  CFLAGS+=" -fprefetch-loop-arrays" # flag-audit 2026-11-01
   meson setup build \
     --prefix=/usr \
     --wrap-mode=nofallback \

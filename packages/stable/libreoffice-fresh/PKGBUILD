@@ -167,6 +167,7 @@ MAKE_EOF
         esac
         ARCH_FLAGS="$ARCH_FLAGS $i"
     done
+    ARCH_FLAGS+=" -fipa-pta -fstack-reuse=all -fira-hoist-pressure -fprefetch-loop-arrays" # flag-audit 2026-11-01
     export ARCH_FLAGS
     export CFLAGS="$ARCH_FLAGS"
     export CXXFLAGS="$ARCH_FLAGS"

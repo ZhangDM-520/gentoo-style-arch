@@ -3,7 +3,15 @@ _srcname=SPIRV-LLVM-Translator
 pkgname=spirv-llvm-translator-git
 pkgdesc="Tool and a library for bi-directional translation between SPIR-V and LLVM IR, trunk version"
 epoch=1
-pkgver=r2545.01625b9
+# WEEKLY SNAPSHOT policy (2026-10-31, replacing free git tracking): the pin
+# below is the last commit at or before Monday 00:00 UTC of the current week
+# (boundary 2026-10-26T00:00Z = f89dc59402850c993d530fff2520d3e9dfbfe307,
+# commit date 2026-10-23T20:49Z). ADVANCE THE PIN on the Monday cadence (or
+# at any deliberate upgrade): move #commit= and pkgver together (pkgver()
+# recomputes the same value at the pin). Rebuild in the same pass as
+# llvm-git — the translator links libLLVM and the LLVM snapshots have no
+# stable C++ ABI (coupled batch, abi=must).
+pkgver=r2566.f89dc59
 pkgrel=1
 arch=('x86_64')
 url="https://github.com/KhronosGroup/SPIRV-LLVM-Translator"
@@ -13,11 +21,18 @@ checkdepends=(python python-setuptools llvm-git clang-opencl-headers-git)
 depends=(llvm-libs-git spirv-tools gcc-libs glibc)
 provides=("spirv-llvm-translator=$pkgver")
 conflicts=(spirv-llvm-translator spirv-llvm-translator-minimal-git)
-source=("git+https://github.com/KhronosGroup/SPIRV-LLVM-Translator.git"
+source=("git+https://github.com/KhronosGroup/SPIRV-LLVM-Translator.git#commit=f89dc59402850c993d530fff2520d3e9dfbfe307"
+        # Headers generation pinned by the translator's own
+        # spirv-headers-tag.conf (commit cb42dec) — the system spirv-headers
+        # package lags it (missing SubgroupBitcastShuffleINTEL enums,
+        # 2026-11-01 build wall), so build against the guaranteed pair.
+        "git+https://github.com/KhronosGroup/SPIRV-Headers.git#commit=cb42dec3830d3ac67fa449ecdc0c0f73d5e74498"
 )
 md5sums=('SKIP'
+         'SKIP'
 )
 sha512sums=('SKIP'
+            'SKIP'
 )
 options=(!lto !debug)
 
@@ -42,7 +57,7 @@ build() {
         -D CMAKE_POSITION_INDEPENDENT_CODE=ON \
         -D CMAKE_SKIP_RPATH=ON \
         -D LLVM_EXTERNAL_LIT=/usr/bin/lit \
-        -D LLVM_EXTERNAL_SPIRV_HEADERS_SOURCE_DIR=/usr/include/spirv/ \
+        -D LLVM_EXTERNAL_SPIRV_HEADERS_SOURCE_DIR="$srcdir"/SPIRV-Headers \
         -D LLVM_SPIRV_INCLUDE_TESTS=ON \
         -D BUILD_SHARED_LIBS=ON \
         -Wno-dev

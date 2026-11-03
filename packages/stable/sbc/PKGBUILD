@@ -23,6 +23,7 @@ prepare() {
 
 build() {
   cd sbc
+  CFLAGS+=" -fprefetch-loop-arrays"  # flag-audit 2026-11-01
   ./configure --prefix=/usr --disable-static --disable-tester
   make
 }

@@ -4,7 +4,7 @@ pkgbase=glibc-git
 pkgname=(glibc-git lib32-glibc-git glibc-locales-git)
 pkgver=2.44+r50+g1848099f063e
 _commit=1848099f063e99d4ffecbd7667766d54862398b9
-pkgrel=1
+pkgrel=2
 pkgdesc='GNU C Library development snapshot'
 arch=(x86_64)
 url='https://www.gnu.org/software/libc'
@@ -106,6 +106,15 @@ build() {
   )
 
   CFLAGS=${CFLAGS/-Wp,-D_FORTIFY_SOURCE=3/}
+
+  # The host makepkg.conf's -Ofast implies -ffast-math, which defines
+  # __FINITE_MATH_ONLY__=1: glibc's include/math.h then skips
+  # math-use-builtins.h and master's e_hypot.c uses USE_FMAX_BUILTIN
+  # undeclared (2026-10-30 build wall). glibc is not fast-math-safe by
+  # design. Drop the LEVEL to -O3 (policy 2026-10-31: prefer -O3 over -O2
+  # when -Ofast breaks a package; -O3 carries no -ffast-math), everything
+  # else in the host's flags is kept (the lib32 pass inherits this CFLAGS).
+  CFLAGS=${CFLAGS/-Ofast/-O3}
 
   # mold cannot build this package correctly: its link map defeats the
   # librtld member parse, its -r links drop symbol versions from the output

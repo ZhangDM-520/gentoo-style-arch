@@ -38,6 +38,8 @@ build() {
   # non-fatal; maintainer mode itself stays on because a git checkout lacks
   # the generated files (configure refuses without it).
   sed -i 's/,-Werror)/,)/g' config/eu.am
+  CFLAGS+=" -fipa-pta -fstack-reuse=all" # flag-audit 2026-11-01
+  CXXFLAGS+=" -fipa-pta -fstack-reuse=all" # flag-audit 2026-11-01
 
   autoreconf -fi
   CFLAGS="$CFLAGS -ffat-lto-objects -g" \

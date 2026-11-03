@@ -5,7 +5,7 @@
 pkgname=qt6-quick3d
 # placeholder — overridden by pkgver() (git describe on dev branch)
 pkgver=6.13.0_r5545.gf6f469c8f
-pkgrel=1
+pkgrel=2
 arch=(x86_64)
 url='https://www.qt.io'
 license=(GPL-3.0-only
@@ -31,20 +31,43 @@ makedepends=(assimp
 optdepends=('assimp: assimp import plugin')
 groups=(qt6)
 _pkgfn=${pkgname/6-/}
-# qtquick3d upstream adapted to qtbase's QRhiShaderResourceBinding::Data rework
-# in dev e711caa11 ("Adapt to the dynamic texture list in QRhiShaderResourceBinding",
-# 2026-10-07) — the former 0001 bridge patch is dropped (its output is
-# upstream's now); the prepare() assertions below stay as the tripwire.
-source=(git+https://code.qt.io/qt/$_pkgfn#branch=dev)
-sha256sums=('SKIP')
+# qtquick3d upstream absorbed the Sep-2026 QRhiShaderResourceBinding::Data
+# rework in dev e711caa11 ("Adapt to the dynamic texture list in
+# QRhiShaderResourceBinding", 2026-10-07) — the former 0001 bridge patch is
+# dropped (its output is upstream's now) — but NOT the 2026-10-21 std::variant
+# rework (qtbase 383e7ffe429): qssgrhicontext.cpp is hand-ported by
+# qtquick3d-srb-variant-adapt.patch (provenance + RETIRE condition in
+# prepare()); the prepare() assertions stay as the tripwire.
+source=(git+https://code.qt.io/qt/$_pkgfn#branch=dev
+        qtquick3d-srb-variant-adapt.patch)
+sha256sums=('SKIP'
+            'dcd44cb80f121d0187eeb85dd560b9dce8304177819e08e5ed3cc09d853d627d')
 
 prepare() {
-  # Assert the adapted API contract verbatim — a tripwire against the next
+  # [rhi] SRB variant port — hand-port of the four QRhiShaderResourceBinding::Data
+  # call sites in src/runtimerender/qssgrhicontext.cpp (fillImage,
+  # fillStorageBuffer, addUniformBuffer, addTexture) to qtbase 383e7ffe429
+  # ("rhi: Store the shader resource binding data in a std::variant",
+  # 2026-10-21): the type field + union u { ubuf, simage, sbuf } + stex member
+  # became a std::variant whose index is the type (accessors type()/ubuf()/
+  # stex()/simage()/sbuf()).  Mirrors qtbase qrhi.cpp's own factory rewrites
+  # (u.emplace<Type>(Data::XxxData{...})); semantic-preserving.  Upstream
+  # expects it ("Qt Quick 3D needs a corresponding patch"; qtquick3d dev
+  # eaf90eeb8 predates any adaptation).  qtquick3d-srb-variant-adapt.patch
+  # (sha256 dcd44cb8…).  RETIRE when upstream adapts qssgrhicontext.cpp to the
+  # variant API — watch for a qssgrhicontext.cpp commit after 2026-09-17; drop
+  # the patch and this ledger then.  --fuzz=0 keeps the patch a drift tripwire:
+  # any upstream movement in the touched lines aborts prepare() for re-review.
+  patch -Np1 --fuzz=0 -d "$_pkgfn" -i "$srcdir"/qtquick3d-srb-variant-adapt.patch
+
+  # Assert the patched API contract verbatim — a tripwire against the next
   # upstream rework of QRhiShaderResourceBinding::Data (fail fast in
   # prepare(), not mid-compile).
-  grep -qF 'd->stex.texSamplers.resize(1);' "$_pkgfn"/src/runtimerender/qssgrhicontext.cpp
-  grep -qF 'd->stex.texSamplers[0].sampler = sampler;' "$_pkgfn"/src/runtimerender/qssgrhicontext.cpp
-  ! grep -qF 'u.stex' "$_pkgfn"/src/runtimerender/qssgrhicontext.cpp
+  grep -qF 'd->u.emplace<QRhiShaderResourceBinding::ImageLoad>(image);' "$_pkgfn"/src/runtimerender/qssgrhicontext.cpp
+  grep -qF 'stex.texSamplers[0].sampler = sampler;' "$_pkgfn"/src/runtimerender/qssgrhicontext.cpp
+  ! grep -qF 'd->u.simage' "$_pkgfn"/src/runtimerender/qssgrhicontext.cpp
+  ! grep -qF 'd->stex' "$_pkgfn"/src/runtimerender/qssgrhicontext.cpp
+  ! grep -qF 'd->type =' "$_pkgfn"/src/runtimerender/qssgrhicontext.cpp
 }
 
 build() {

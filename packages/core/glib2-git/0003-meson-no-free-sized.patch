@@ -1,0 +1,54 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: gentoo-style-arch house patch <noreply@localhost>
+Date: Mon, 3 Nov 2026 12:30:00 +0800
+Subject: [PATCH] meson: don't use libc free_sized()/free_aligned_sized()
+
+The C23 sized-deallocation entry points (glibc 2.43+) are not wrapped by
+malloc interposers: tbbmalloc_proxy, mozjemalloc and the Chromium/Electron
+allocator shim all export malloc()/free() but not free_sized().  GLib
+allocating through the interposed malloc() and then freeing through the
+*libc* free_sized() crosses allocators and aborts with "free(): invalid
+size" at load time (g_type_class_get -> g_slist_free), taking down every
+binary that carries its own allocator (blender, zen/firefox, electron).
+
+Drop the two functions from the probe list so glibconfig.h stays without
+G_HAVE_FREE_SIZED and gmem.c compiles its plain free()/aligned_free()
+fallbacks, which bind through the interposers like any pre-2.78 GLib.
+Measuring: `readelf -Ws libglib-2.0.so.0 | grep UND.free_sized` must be
+empty after the rebuild.
+
+---
+ meson.build | 10 +++++-----
+ 1 file changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/meson.build b/meson.build
+index 4ce31f0260..5571cbaeb2 100644
+--- a/meson.build
++++ b/meson.build
+@@ -728,8 +728,6 @@
+   'fchmod',
+   'fchown',
+   'fdwalk',
+-  'free_aligned_sized',
+-  'free_sized',
+   'fsync',
+   'ftruncate64',
+   'getauxval',
+@@ -852,9 +850,11 @@
+   endif
+ endforeach
+ 
+-# Export the information about free_sized() so we can correctly define a macro
+-# wrapper around g_free()/g_free_sized() depending on whether it’s available
+-glibconfig_conf.set('G_HAVE_FREE_SIZED', have_func_free_sized)
++# House patch: free_sized()/free_aligned_sized() probing is disabled above —
++# malloc interposers (tbbmalloc_proxy, mozjemalloc, Chromium allocator shim)
++# do not wrap the C23 sized frees, so g_free() must keep its plain free()
++# form (see patch header).
++glibconfig_conf.set('G_HAVE_FREE_SIZED', false)
+ 
+ # Check that stpcpy() is usable; must use header.
+ # See:
+-- 
+2.52.0
+

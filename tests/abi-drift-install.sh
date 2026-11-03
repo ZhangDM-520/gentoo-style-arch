@@ -234,12 +234,13 @@ write_elf64_needed() {
 }
 
 # The linked-consumer file truth: app-git's installed record owns this ELF,
-# whose DT_NEEDED is libgreet.so.1-64 (the fish stub readelf answers the
+# whose DT_NEEDED is libgreet.so.1 (the SONAME; the provide auto-version is
+# libgreet.so=1-64 — makepkg derives `${soversion}-${soarch}`) (the fish stub readelf answers the
 # same). The local-DB files entry carries the path minus its leading slash
 # (crates/gsa-install/src/localdb.rs reads `/<files-entry>`).
 consumer_elf="$tmp/consumer/lib-app-git.so"
 mkdir -p "$tmp/consumer"
-write_elf64_needed "$consumer_elf" 'libgreet.so.1-64'
+write_elf64_needed "$consumer_elf" 'libgreet.so.1'
 
 # The engine seam's Tier-2 exclusions lookup walks up from each archive
 # (crates/gsa-install/src/gates.rs find_repo_exclusions) — shadow the real
@@ -555,7 +556,7 @@ EOF
 chmod +x "$ws/bin/pacman"
 
 # The stub readelf: DT_NEEDED truth for the fish link filter. app-git LINKS
-# the provider's soname (`libgreet.so.1-64`) — the fixture's installed
+# the provider's soname (`libgreet.so.1`) — the fixture's installed
 # consumer is exactly the class the gate protects; a consumer that never
 # references the moving soname must not gate (pinned in tests/abi-batch-policy.sh G5).
 cat >"$ws/bin/readelf" <<'EOF'
@@ -566,7 +567,7 @@ for a in "$@"; do
     printf 'File: %s\n' "$a"
     case $a in
     *app-git*)
-        printf ' 0x0000000000000001 (NEEDED)             Shared library: [libgreet.so.1-64]\n'
+        printf ' 0x0000000000000001 (NEEDED)             Shared library: [libgreet.so.1]\n'
         ;;
     *)
         printf ' 0x0000000000000001 (NEEDED)             Shared library: [libc.so.6]\n'

@@ -100,6 +100,8 @@ _pkgsrc="${srcdir}"/samba-pkg
   install -Dm755 "$startdir/../../../lib/cups-config" "$srcdir/bin/cups-config"
   export PATH="$srcdir/bin:$PATH"
   export CPPFLAGS+=" $(pkg-config --cflags cups)"
+  CFLAGS+=" -fipa-pta -fstack-reuse=all" # flag-audit 2026-11-01
+  CXXFLAGS+=" -fipa-pta -fstack-reuse=all" # flag-audit 2026-11-01
   ./configure --enable-fhs \
     --prefix=/usr \
     --sysconfdir=/etc \

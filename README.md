@@ -104,6 +104,7 @@ installing anything you have not reviewed.
 | `docs/package-policy.md`, `docs/source-sharing.md` | What a recipe may contain; shared source mirrors |
 | `SECURITY.md` | Trust model and safe-operation rules |
 | `CONTEXT.md` | The project's vocabulary |
+| `AGENTS.md`, `docs/JOURNAL.md` | Memory-management architecture and the one-line action journal |
 | `docs/MEMORY.md`, `docs/NOTE.md` | Operational rules and the incident history behind them |
 
 ## Licensing

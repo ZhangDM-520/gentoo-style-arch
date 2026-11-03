@@ -221,6 +221,8 @@ build() {
 This build is otherwise very likely to use more RAM than
 the system has, especially with a high `-j`!'
   [[ -z "$USING_MAKEPKG_CG" ]] && warning "$MAKEPKG_CG_WARNING"
+  CFLAGS+=" -fstack-reuse=all -fira-hoist-pressure" # flag-audit 2026-11-01
+  CXXFLAGS+=" -fstack-reuse=all -fira-hoist-pressure" # flag-audit 2026-11-01
   cmake -S blender -B build -G Ninja "${_CMAKE_FLAGS[@]}"
   cmake --build build ${MAKEFLAGS:--j1}
 }

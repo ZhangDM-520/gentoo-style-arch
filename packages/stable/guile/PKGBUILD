@@ -4,7 +4,7 @@
 
 pkgname=guile
 pkgver=3.0.11
-pkgrel=1.1
+pkgrel=1.2
 pkgdesc='Portable, embeddable Scheme implementation written in C'
 url='https://www.gnu.org/software/guile/'
 arch=(x86_64)
@@ -25,6 +25,17 @@ sha256sums=('3c9c16972a73bb792752f2e4f1cce7212d7638d5494b5f7e8e19f3819dbf3a19'
 
 build() {
   cd $pkgname-$pkgver
+
+  # Documented exception (glibc-git/python/jq/sqlite/nodejs class, NOTE.md
+  # 2026-11-01): the host's -Ofast makes guile's boot compiler DIE with
+  # SIGFPE ("Floating point exception (core dumped)" building
+  # language/cps/types.go, run 0324) — fast-math folds a FP edge into a
+  # trap. Drop the LEVEL to -O3 (no -ffast-math); the rest of CFLAGS stays
+  # host-derived. Same for CXXFLAGS.
+  CFLAGS=${CFLAGS/-Ofast/-O3}
+  CXXFLAGS=${CXXFLAGS/-Ofast/-O3}
+  CFLAGS+=" -fstack-reuse=all" # flag-audit 2026-11-01
+
   ./configure --prefix=/usr \
     --disable-static  \
     --disable-error-on-warning

@@ -27,6 +27,7 @@ build() {
   command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
   export LDFLAGS+=" ${_mold}"
 
+  CFLAGS+=" -fstack-reuse=all" # flag-audit 2026-11-01
   cmake -B build -S $pkgname \
     -DCMAKE_INSTALL_PREFIX=/usr \
     -DMZ_LIB_SUFFIX="-ng" \

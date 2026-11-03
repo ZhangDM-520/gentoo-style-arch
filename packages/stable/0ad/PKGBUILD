@@ -50,6 +50,8 @@ build() {
   # When buidling the included spidermonkey, we need to
   # a compile error: https://gitea.wildfiregames.com/0ad/0ad/issues/8571
   export CXXFLAGS="${CXXFLAGS/-fexceptions/}"
+  CXXFLAGS+=" -fstack-reuse=all" # flag-audit 2026-11-01
+  CFLAGS+=" -fstack-reuse=all" # flag-audit 2026-11-01
 
   cd libraries
   ./build-source-libs.sh \

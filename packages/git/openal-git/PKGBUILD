@@ -48,6 +48,8 @@ build() {
   if command -v mold >/dev/null 2>&1; then
     export LDFLAGS+=" -fuse-ld=mold"
   fi
+  CFLAGS+=" -fprefetch-loop-arrays -fstack-reuse=all"  # flag-audit 2026-11-01
+  CXXFLAGS+=" -fprefetch-loop-arrays -fstack-reuse=all"  # flag-audit 2026-11-01
 
   # CMAKE_BUILD_TYPE=None: stock convention — uses makepkg CFLAGS, adds no -O3
   # Modules off (ALSOFT_ENABLE_MODULES=OFF + CMAKE_CXX_SCAN_FOR_MODULES=OFF +

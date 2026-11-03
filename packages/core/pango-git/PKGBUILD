@@ -46,6 +46,7 @@ build() {
     -D b_lto=true
     -D b_ndebug=true
   )
+  CFLAGS+=" -fipa-pta -fstack-reuse=all" # flag-audit 2026-11-01
   arch-meson pango build "${meson_options[@]}"
   meson compile -C build
 }

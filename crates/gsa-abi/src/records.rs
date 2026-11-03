@@ -11,6 +11,14 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+/// The wire placeholder for "no token established" — the same `-`-means-none
+/// convention as an index row's `vcs_baseline`. A record carrying it holds NO
+/// token truth: readers treat it as record-less (never as a token that could
+/// mismatch — a placeholder must never read as a token move, 2026-11-03), and
+/// no writer emits it (registration derives fail-closed; the install recorder
+/// derives from the installed surface).
+pub const NO_TOKEN: &str = "-";
+
 /// One recorded `:=` subscription: at `consumer` `version`'s build/install,
 /// `provider`'s abi-token was `token`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -22,6 +30,11 @@ pub struct Subscription {
 }
 
 impl Subscription {
+    /// Whether the row carries token truth (never [`NO_TOKEN`]).
+    pub fn has_token(&self) -> bool {
+        self.token != NO_TOKEN
+    }
+
     /// The §J.1 wire line.
     pub fn wire(&self) -> String {
         format!(
@@ -119,11 +132,15 @@ impl Subscriptions {
         &self.rows
     }
 
-    /// What `consumer` recorded for `provider` at its last install.
+    /// What `consumer` recorded for `provider` at its last install — `None`
+    /// when the winning row carries no token truth (a [`NO_TOKEN`]
+    /// placeholder is a record WITHOUT a token: unverifiable, never a token
+    /// that could read as matching or mismatching).
     pub fn token_for(&self, consumer: &str, provider: &str) -> Option<&str> {
         self.rows
             .iter()
             .find(|r| r.consumer == consumer && r.provider == provider)
+            .filter(|r| r.has_token())
             .map(|r| r.token.as_str())
     }
 
@@ -283,6 +300,32 @@ mod tests {
         assert_eq!(store.for_consumer("c1").len(), 1);
         assert!(store.has_records_for("p1"));
         assert!(!store.has_records_for("p9"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_placeholder_token_record_carries_no_token_truth() {
+        // 2026-11-03: a `-` wire placeholder is a record WITHOUT a token —
+        // record-less for every decision, never a token that could read as
+        // matching or mismatching a provider's (the false-move class).
+        let placeholder = sub("c1", "p1", NO_TOKEN);
+        assert!(!placeholder.has_token());
+        assert!(sub("c1", "p1", "tok").has_token());
+        let dir =
+            std::env::temp_dir().join(format!("gsa-abi-records-none-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = subscriptions_path(&dir);
+        Subscriptions::append(&path, &placeholder).unwrap();
+        Subscriptions::append(&path, &sub("c2", "p1", "tok")).unwrap();
+        let store = Subscriptions::load(&path).unwrap();
+        assert_eq!(
+            store.token_for("c1", "p1"),
+            None,
+            "a placeholder is no record"
+        );
+        assert_eq!(store.token_for("c2", "p1"), Some("tok"));
+        // The row itself stays visible to the display surfaces (`-Qa`).
+        assert_eq!(store.for_provider("p1").len(), 2);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

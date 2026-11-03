@@ -31,6 +31,7 @@ build() {
   if command -v mold >/dev/null 2>&1; then
     export LDFLAGS+=" -fuse-ld=mold"
   fi
+  CFLAGS+=" -fprefetch-loop-arrays -fstack-reuse=all"  # flag-audit 2026-11-01
 
   # Stock Arch's CMake option set, minus its 0001-cmake-Install-anim-utils
   # patch (stale for git HEAD — it only teaches the build to install the

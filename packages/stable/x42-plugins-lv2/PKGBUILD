@@ -76,6 +76,8 @@ build() {
   local _mold=""
   command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
   export LDFLAGS+=" ${_mold}"
+  CFLAGS+=" -fstack-reuse=all"  # flag-audit 2026-11-01
+  CXXFLAGS+=" -fstack-reuse=all"  # flag-audit 2026-11-01
 
   make BUILDJACKAPP=no -j"${GSA_BUILD_JOBS:-$(nproc)}"
 }

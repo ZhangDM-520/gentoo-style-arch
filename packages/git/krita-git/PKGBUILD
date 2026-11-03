@@ -78,6 +78,8 @@ build() {
 	# House style: mold linker when available (CMake 3-var pattern)
 	local _mold=""
 	command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+	CFLAGS+=" -fipa-pta -fstack-reuse=all" # flag-audit 2026-11-01
+	CXXFLAGS+=" -fipa-pta -fstack-reuse=all" # flag-audit 2026-11-01
 	cmake -B build -S "${_pkgname}" -G Ninja \
 		-DCMAKE_BUILD_TYPE=Release \
 		-DCMAKE_INSTALL_PREFIX=/usr \

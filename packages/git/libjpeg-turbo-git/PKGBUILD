@@ -28,6 +28,8 @@ build() {
 
   # CMAKE_BUILD_TYPE=None: makepkg.conf owns the opt level (no hard-coded -O3);
   # -ffat-lto-objects kept: static + shared objects must both stay usable
+  CFLAGS+=" -fstack-reuse=all" # flag-audit 2026-11-01
+  CXXFLAGS+=" -fstack-reuse=all" # flag-audit 2026-11-01
   CFLAGS="$CFLAGS -ffat-lto-objects" \
   CXXFLAGS="$CXXFLAGS -ffat-lto-objects" \
   cmake -B _build -S "$_pkgname" \

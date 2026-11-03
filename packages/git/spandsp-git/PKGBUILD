@@ -57,6 +57,7 @@ build() {
   if command -v mold >/dev/null 2>&1; then
     export LDFLAGS+=" -fuse-ld=mold"
   fi
+  CFLAGS+=" -fprefetch-loop-arrays -fstack-reuse=all"  # flag-audit 2026-11-01
 
   # stock's --enable-doc + docbook-xsl/doxygen makedeps dropped with the
   # spandsp-docs output

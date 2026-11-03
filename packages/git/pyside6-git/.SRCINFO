@@ -1,6 +1,6 @@
 pkgbase = pyside6-git
 	pkgdesc = Python/C++ Qt6 bindings (shiboken6 + PySide6) from pyside-setup dev, built against qt6-base-git
-	pkgver = 6.12.0.r12518.g7fcec1b26
+	pkgver = 6.12.0.r12579.gf0c57cc12
 	pkgrel = 1
 	url = https://www.qt.io
 	arch = x86_64
@@ -20,11 +20,11 @@ pkgbase = pyside6-git
 	depends = glibc
 	depends = python
 	depends = qt6-base-git
-	provides = pyside6=6.12.0.r12518.g7fcec1b26
-	provides = python-pyside6=6.12.0.r12518.g7fcec1b26
-	provides = shiboken6=6.12.0.r12518.g7fcec1b26
-	provides = python-shiboken6=6.12.0.r12518.g7fcec1b26
-	provides = shiboken6-generator=6.12.0.r12518.g7fcec1b26
+	provides = pyside6=6.12.0.r12579.gf0c57cc12
+	provides = python-pyside6=6.12.0.r12579.gf0c57cc12
+	provides = shiboken6=6.12.0.r12579.gf0c57cc12
+	provides = python-shiboken6=6.12.0.r12579.gf0c57cc12
+	provides = shiboken6-generator=6.12.0.r12579.gf0c57cc12
 	provides = qt6-python-bindings
 	conflicts = pyside6
 	conflicts = python-pyside6
@@ -33,7 +33,7 @@ pkgbase = pyside6-git
 	conflicts = shiboken6-generator
 	replaces = pyside6
 	replaces = shiboken6
-	source = git+https://code.qt.io/pyside/pyside-setup.git#branch=dev
+	source = git+https://code.qt.io/pyside/pyside-setup.git#commit=f0c57cc12c1cd5114f62a0665465e065771f8061
 	sha256sums = SKIP
 
 pkgname = pyside6-git

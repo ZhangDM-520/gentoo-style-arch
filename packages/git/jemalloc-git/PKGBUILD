@@ -26,6 +26,7 @@ build() {
   cd "jemalloc"
 
   export LDFLAGS="$LDFLAGS -fuse-ld=mold"
+  CFLAGS+=" -fipa-pta -fstack-reuse=all" # flag-audit 2026-11-01
   ./autogen.sh \
     --prefix="/usr" \
     CFLAGS="$CFLAGS -flto" \

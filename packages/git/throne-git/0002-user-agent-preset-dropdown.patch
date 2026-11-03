@@ -1,0 +1,49 @@
+diff --git a/include/ui/setting/dialog_basic_settings.ui b/include/ui/setting/dialog_basic_settings.ui
+index 9db470b5..a623cf97 100644
+--- a/include/ui/setting/dialog_basic_settings.ui
++++ b/include/ui/setting/dialog_basic_settings.ui
+@@ -1108,7 +1108,10 @@
+         </widget>
+        </item>
+        <item row="3" column="1">
+-        <widget class="MyLineEdit" name="user_agent">
++        <widget class="QComboBox" name="user_agent">
++         <property name="toolTip">
++          <string>Some subscription servers answer differently per User-Agent: unknown clients can get a 502 or an empty body, browsers a block page. Pick the client your subscription expects, or type any User-Agent; leave it empty for the Throne default.</string>
++         </property>
+          <property name="uiLevel" stdset="0">
+           <string notr="true">advanced</string>
+          </property>
+diff --git a/src/ui/setting/dialog_basic_settings.cpp b/src/ui/setting/dialog_basic_settings.cpp
+index 9cd025e8..7a8625cf 100644
+--- a/src/ui/setting/dialog_basic_settings.cpp
++++ b/src/ui/setting/dialog_basic_settings.cpp
+@@ -402,8 +402,17 @@ DialogBasicSettings::DialogBasicSettings(QWidget *parent)
+         refreshUrlSchemeStatus();
+     });
+ 
+-    ui->user_agent->setText(Configs::dataManager->settingsRepo->user_agent);
+-    ui->user_agent->setPlaceholderText(Configs::dataManager->settingsRepo->GetUserAgent(true));
++    // Presets are the client User-Agents subscription servers commonly recognize; the field stays free text.
++    // Versions are representative: some servers match whole strings, others only a client prefix.
++    static const QStringList userAgentPresets = {
++        QStringLiteral("clash-verge/v2.0.0"), QStringLiteral("mihomo/1.18.0"), QStringLiteral("NekoBox/1.3"),
++        QStringLiteral("v2rayN/7.0"), QStringLiteral("sing-box/1.12.0"),
++    };
++    ui->user_agent->setEditable(true);
++    ui->user_agent->setInsertPolicy(QComboBox::NoInsert);
++    ui->user_agent->addItems(userAgentPresets);
++    ui->user_agent->setCurrentText(Configs::dataManager->settingsRepo->user_agent);
++    ui->user_agent->lineEdit()->setPlaceholderText(Configs::dataManager->settingsRepo->GetUserAgent(true));
+     ui->sub_tls_version->setCurrentIndex(std::clamp(Configs::dataManager->settingsRepo->sub_tls_version, 0, ui->sub_tls_version->count() - 1));
+     ui->sub_http_version->setCurrentIndex(std::clamp(Configs::dataManager->settingsRepo->sub_http_version, 0, ui->sub_http_version->count() - 1));
+     if (auto *model = qobject_cast<QStandardItemModel *>(ui->sub_tls_version->model()); model && !QSslSocket::isProtocolSupported(QSsl::TlsV1_3)) {
+@@ -709,7 +718,7 @@ void DialogBasicSettings::accept() {
+ 
+     // The PeriodicRunner reads these intervals live; no timer needs restarting.
+ 
+-    Configs::dataManager->settingsRepo->user_agent = ui->user_agent->text().trimmed();
++    Configs::dataManager->settingsRepo->user_agent = ui->user_agent->currentText().trimmed();
+     Configs::dataManager->settingsRepo->sub_tls_version = ui->sub_tls_version->currentIndex();
+     Configs::dataManager->settingsRepo->sub_http_version = ui->sub_http_version->currentIndex();
+     D_SAVE_BOOL(net_use_proxy)

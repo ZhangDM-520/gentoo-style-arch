@@ -53,6 +53,8 @@ build() {
   local _mold=""
   command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
   export LDFLAGS+=" ${_mold}"
+  CFLAGS+=" -fstack-reuse=all -fira-hoist-pressure"  # flag-audit 2026-11-01
+  CXXFLAGS+=" -fstack-reuse=all -fira-hoist-pressure"  # flag-audit 2026-11-01
 
   make "${config_options[@]}"
   make VERBOSE=1 -j"${GSA_BUILD_JOBS:-$(nproc)}" -C $_dir

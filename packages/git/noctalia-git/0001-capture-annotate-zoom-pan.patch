@@ -1,35 +1,23 @@
-From db2d86ab0c77e534a1b82fa16cf92b5184e3bcd1 Mon Sep 17 00:00:00 2001
-From: ZhangDM-520 <jixianqiang1540@gmail.com>
-Date: Fri, 30 Oct 2026 00:52:35 +0800
-Subject: [PATCH] feat(capture): add zoom and pan to the annotation editor
+From f36dafe60adc6726b923355b2ab376814230f628 Mon Sep 17 00:00:00 2001
+From: Copilot <223556219+Copilot@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 20:06:57 +0800
+Subject: [PATCH] capture: zoom and pan for the annotation editor (PR #5111,
+ re-cut 2026-11-02)
 
-The capture in the annotation editor now shows through a display-only
-view transform layered on the fitted canvas: Ctrl+wheel zooms around the
-pointer (0.5x-16x fit-relative), Ctrl+left-drag pans with a clamp that
-keeps a visible slice on screen, and zoom-out/fit/zoom-in buttons step
-the same view. Annotation geometry, rasterization and export stay in
-canvas space, so delivered pixels are unchanged. The touchpad path
-accumulates axis deltas at the InputArea scroll rate and the whole axis
-stream is consumed while Ctrl is held. In live annotation only the ink
-layers magnify (the desktop behind cannot), documented as a caveat.
-Relayout keeps the zoom and re-clamps the pan; Live/Frozen switches
-reset the view.
-
-Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 ---
  assets/translations/en.json        |   5 +-
  docs/user/ipc/media-and-ui.mdx     |   2 +
  meson.build                        |   1 +
  src/capture/annotation_overlay.cpp | 313 ++++++++++++++++++++++++-----
- src/capture/annotation_overlay.h   |  16 ++
+ src/capture/annotation_overlay.h   |  18 +-
  src/capture/annotation_view.h      | 105 ++++++++++
  tests/annotation_view_test.cpp     |  99 +++++++++
- 7 files changed, 486 insertions(+), 55 deletions(-)
+ 7 files changed, 487 insertions(+), 56 deletions(-)
  create mode 100644 src/capture/annotation_view.h
  create mode 100644 tests/annotation_view_test.cpp
 
 diff --git a/assets/translations/en.json b/assets/translations/en.json
-index f1e9c96c2..e4d136ae2 100644
+index 1be76cc5f..c01bb1ef3 100644
 --- a/assets/translations/en.json
 +++ b/assets/translations/en.json
 @@ -89,7 +89,10 @@
@@ -58,10 +46,10 @@ index 1a4467988..e08b236d3 100644
  
  **Exception**: window capture never includes the pointer, so `[shell.screenshot].show_cursor` applies only to region, fullscreen, and frozen-screen capture. The pointer button and **P** stay disabled for window capture.
 diff --git a/meson.build b/meson.build
-index 3767c7636..8cb8de91d 100644
+index af5c23805..a6392c335 100644
 --- a/meson.build
 +++ b/meson.build
-@@ -1225,6 +1225,7 @@ if build_tests
+@@ -1231,6 +1231,7 @@ if build_tests
    _cpp_test_names = [
      'annotation_document',
      'annotation_raster',
@@ -70,7 +58,7 @@ index 3767c7636..8cb8de91d 100644
      'app_identity',
      'audio_glyphs',
 diff --git a/src/capture/annotation_overlay.cpp b/src/capture/annotation_overlay.cpp
-index e638431ee..7c0f265a5 100644
+index e3f3bb09c..a13121519 100644
 --- a/src/capture/annotation_overlay.cpp
 +++ b/src/capture/annotation_overlay.cpp
 @@ -1,6 +1,7 @@
@@ -98,7 +86,7 @@ index e638431ee..7c0f265a5 100644
  
      // S / M / L multiply the tool's own default width, so a preset means the same relative
      // weight for a 6 px brush and a 32 px blur.
-@@ -492,6 +503,9 @@ namespace capture {
+@@ -489,6 +500,9 @@ namespace capture {
      Button* cursorButton = nullptr;
      Button* undoButton = nullptr;
      Button* redoButton = nullptr;
@@ -108,7 +96,7 @@ index e638431ee..7c0f265a5 100644
      Button* copyButton = nullptr;
      Button* saveButton = nullptr;
      Button* doneButton = nullptr;
-@@ -519,6 +533,11 @@ namespace capture {
+@@ -516,6 +530,11 @@ namespace capture {
      Image* backdropPreview = nullptr;
      Box* imageOutline = nullptr;
      std::optional<ScreenshotBackdrop> previewBackdrop;
@@ -120,7 +108,7 @@ index e638431ee..7c0f265a5 100644
      AnnotationRect previewCanvas{};
      // -2 = chips not yet painted, -1 = no preset matches the current colors.
      int markedGradient = -2;
-@@ -538,6 +557,9 @@ namespace capture {
+@@ -535,6 +554,9 @@ namespace capture {
      std::uint64_t renderedGeneration = 0;
  
      AnnotationRect canvasRect{};
@@ -130,7 +118,7 @@ index e638431ee..7c0f265a5 100644
      double canvasScale = 1.0;
      int deviceWidth = 0;
      int deviceHeight = 0;
-@@ -612,6 +634,14 @@ namespace capture {
+@@ -609,6 +631,14 @@ namespace capture {
          && (m_tools.tool == AnnotationTool::Blur || m_tools.tool == AnnotationTool::Crop)) {
        m_tools.tool = AnnotationTool::Brush;
      }
@@ -145,7 +133,7 @@ index e638431ee..7c0f265a5 100644
    }
  
    void AnnotationOverlay::setCursorVisible(bool visible) { m_cursorVisible = visible; }
-@@ -846,6 +876,7 @@ namespace capture {
+@@ -843,6 +873,7 @@ namespace capture {
      m_instances.clear();
      m_gestureInstance = nullptr;
      m_gestureActive = false;
@@ -153,7 +141,7 @@ index e638431ee..7c0f265a5 100644
      m_textInstance = nullptr;
      m_textIndex.reset();
      m_moveIndex.reset();
-@@ -975,6 +1006,7 @@ namespace capture {
+@@ -972,6 +1003,7 @@ namespace capture {
        inst.canvasScale = std::max(0.1, static_cast<double>(inst.scale));
        inst.deviceWidth = static_cast<int>(inst.surface->bufferWidthFor(inst.surface->width()));
        inst.deviceHeight = static_cast<int>(inst.surface->bufferHeightFor(inst.surface->height()));
@@ -161,7 +149,7 @@ index e638431ee..7c0f265a5 100644
        return;
      }
  
-@@ -1005,6 +1037,81 @@ namespace capture {
+@@ -1002,6 +1034,81 @@ namespace capture {
      inst.canvasScale = fitScale;
      inst.deviceWidth = m_image.image.width;
      inst.deviceHeight = m_image.image.height;
@@ -243,7 +231,7 @@ index e638431ee..7c0f265a5 100644
    }
  
    void AnnotationOverlay::buildScene(Instance& inst) {
-@@ -1035,6 +1142,7 @@ namespace capture {
+@@ -1032,6 +1139,7 @@ namespace capture {
      inst.strokeButton = inst.fillButton = inst.freezeButton = inst.cursorButton = nullptr;
      inst.cursorTooltip = nullptr;
      inst.undoButton = inst.redoButton = inst.copyButton = inst.saveButton = inst.doneButton = inst.dragHandle = nullptr;
@@ -251,7 +239,7 @@ index e638431ee..7c0f265a5 100644
      inst.strokeSeparator = inst.exportSeparator = nullptr;
      inst.backdropButton = nullptr;
      inst.strokePanel = inst.strokeSwatchRow = nullptr;
-@@ -1054,6 +1162,10 @@ namespace capture {
+@@ -1051,6 +1159,10 @@ namespace capture {
      inst.backdropPreview = nullptr;
      inst.imageOutline = nullptr;
      inst.previewBackdrop.reset();
@@ -262,7 +250,7 @@ index e638431ee..7c0f265a5 100644
      inst.markedGradient = -2;
      inst.activePainted = AnnotationRect{};
      inst.committedDirty.reset();
-@@ -1099,10 +1211,11 @@ namespace capture {
+@@ -1096,10 +1208,11 @@ namespace capture {
      }
      inst.backdropImage = bg;
  
@@ -278,7 +266,7 @@ index e638431ee..7c0f265a5 100644
  
      auto canvas = ui::inputArea({
          .acceptedButtons = InputArea::buttonMask(BTN_LEFT),
-@@ -1201,6 +1314,7 @@ namespace capture {
+@@ -1198,6 +1311,7 @@ namespace capture {
      canvas->setOnMotion([this, instPtr](const InputArea::PointerData& data) {
        onCanvasMotion(*instPtr, static_cast<double>(data.localX), static_cast<double>(data.localY));
      });
@@ -286,7 +274,7 @@ index e638431ee..7c0f265a5 100644
  
      inst.canvas = canvas.get();
      inst.sceneRoot->addChild(std::move(canvas));
-@@ -1294,8 +1408,9 @@ namespace capture {
+@@ -1291,8 +1405,9 @@ namespace capture {
            kLog.warn("failed to re-upload annotation backdrop");
          }
          inst.backdrop->setFit(ImageFit::Stretch);
@@ -298,7 +286,7 @@ index e638431ee..7c0f265a5 100644
          if (inst.backgroundSurface != nullptr) {
            cairo_surface_destroy(inst.backgroundSurface);
          }
-@@ -1387,6 +1502,17 @@ namespace capture {
+@@ -1384,6 +1499,17 @@ namespace capture {
      inst.redoButton = addGhostButton("arrow-forward-up", "bar.annotate.redo", [this] { redo(); });
      addSeparator();
  
@@ -316,7 +304,7 @@ index e638431ee..7c0f265a5 100644
      for (const auto& spec : kToolButtons) {
        inst.toolButtons[toolIndex(spec.tool)] = static_cast<Button*>(toolbar->addChild(
            ui::button({
-@@ -1877,14 +2003,18 @@ namespace capture {
+@@ -1874,14 +2000,18 @@ namespace capture {
        return;
      }
  
@@ -343,7 +331,7 @@ index e638431ee..7c0f265a5 100644
      if (holeX1 <= holeX0 || holeY1 <= holeY0) {
        hide();
        return;
-@@ -1981,6 +2111,38 @@ namespace capture {
+@@ -1978,6 +2108,38 @@ namespace capture {
      }
      case PointerEvent::Type::Axis:
        if (onTarget || target->pointerInside) {
@@ -382,7 +370,7 @@ index e638431ee..7c0f265a5 100644
          return target->inputDispatcher.pointerAxis(
              static_cast<float>(event.sx), static_cast<float>(event.sy), event.axis, event.axisSource, event.axisValue,
              event.axisDiscrete, event.axisValue120, event.axisLines
-@@ -1994,10 +2156,32 @@ namespace capture {
+@@ -1991,10 +2153,32 @@ namespace capture {
  
    void AnnotationOverlay::onCanvasPress(Instance& inst, double localX, double localY, bool pressed) {
      if (!pressed) {
@@ -415,7 +403,7 @@ index e638431ee..7c0f265a5 100644
      // Drawing dismisses the stroke popover; the press still starts the mark.
      if (m_strokePanelOpen) {
        m_strokePanelOpen = false;
-@@ -2009,7 +2193,7 @@ namespace capture {
+@@ -2006,7 +2190,7 @@ namespace capture {
        commitTextEdit();
      }
  
@@ -424,7 +412,7 @@ index e638431ee..7c0f265a5 100644
      if (point.x < 0.0 || point.y < 0.0 || point.x > inst.canvasRect.width || point.y > inst.canvasRect.height) {
        return;
      }
-@@ -2029,7 +2213,8 @@ namespace capture {
+@@ -2026,7 +2210,8 @@ namespace capture {
  
      switch (tool) {
      case AnnotationTool::Move: {
@@ -434,7 +422,7 @@ index e638431ee..7c0f265a5 100644
        if (!hit.has_value()) {
          m_gestureInstance = nullptr;
          return;
-@@ -2135,11 +2320,18 @@ namespace capture {
+@@ -2132,11 +2317,18 @@ namespace capture {
    }
  
    void AnnotationOverlay::onCanvasMotion(Instance& inst, double localX, double localY) {
@@ -454,7 +442,7 @@ index e638431ee..7c0f265a5 100644
  
      if (m_moveIndex.has_value()) {
        doc.offset(*m_moveIndex, point.x - m_gestureLast.x, point.y - m_gestureLast.y);
-@@ -2951,9 +3143,10 @@ namespace capture {
+@@ -2948,9 +3140,10 @@ namespace capture {
      const std::optional<ScreenshotBackdrop> backdrop = resolveScreenshotBackdrop(m_backdrop);
  
      const float maxRadius = static_cast<float>(std::min(inst.deviceWidth, inst.deviceHeight)) * 0.5F;
@@ -468,7 +456,7 @@ index e638431ee..7c0f265a5 100644
      for (Image* layer : {inst.backdrop, inst.committedLayer, inst.activeLayer}) {
        if (layer != nullptr) {
          layer->setRadius(radius);
-@@ -2968,54 +3161,66 @@ namespace capture {
+@@ -2965,54 +3158,66 @@ namespace capture {
        inst.previewBackdrop.reset();
        return;
      }
@@ -570,7 +558,7 @@ index e638431ee..7c0f265a5 100644
    }
  
 diff --git a/src/capture/annotation_overlay.h b/src/capture/annotation_overlay.h
-index aafc331e5..33fd6b57c 100644
+index 9ab0a04d1..edbb931c9 100644
 --- a/src/capture/annotation_overlay.h
 +++ b/src/capture/annotation_overlay.h
 @@ -5,6 +5,7 @@
@@ -581,18 +569,20 @@ index aafc331e5..33fd6b57c 100644
  #include <cstdint>
  #include <functional>
  #include <memory>
-@@ -139,6 +140,11 @@ namespace capture {
+@@ -139,7 +140,12 @@ namespace capture {
      void syncToolbarPositionsForConnectedOutputs();
      void beginToolbarDrag(Instance& instance);
      void dragToolbarTo(double surfaceX, double surfaceY);
+-    std::size_t nearestSizePreset(AnnotationTool tool) const;
 +    void applyCanvasView(Instance& instance);
 +    void zoomViewTo(Instance& instance, double anchorX, double anchorY, double factor);
 +    void zoomViewByButton(Instance& instance, double factor);
 +    void resetView(Instance& instance);
 +    void clampView(Instance& instance);
-     [[nodiscard]] std::size_t nearestSizePreset(AnnotationTool tool) const;
++    [[nodiscard]] std::size_t nearestSizePreset(AnnotationTool tool) const;
      void applySizePreset(std::size_t index);
      void layoutCanvas(Instance& instance);
+     void redrawCommitted(Instance& instance);
 @@ -220,6 +226,16 @@ namespace capture {
      bool m_cropDragging = false;
      AnnotationPoint m_cropStart{};
@@ -827,5 +817,5 @@ index 000000000..bbf3e968a
 +  return 0;
 +}
 -- 
-2.56.0.236.g7e34d8174d
+2.56.0.307.g50fe5cc63f
 

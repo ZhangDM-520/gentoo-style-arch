@@ -2,7 +2,7 @@
 
 pkgname=roc-toolkit
 pkgver=0.4.0
-pkgrel=3.1
+pkgrel=3.2
 pkgdesc="Real-time audio streaming over the network"
 arch=(x86_64)
 url="https://github.com/roc-streaming/roc-toolkit/"
@@ -56,6 +56,12 @@ build() {
   local scons_options=(
     --prefix=/usr
     --libdir=/usr/lib
+    # --compiler=gcc 2026-11-01 (campaign wall class): scons autodetection
+    # prefers clang (supported_compilers order) and then consumes the host
+    # GCC-flavored CFLAGS verbatim — clang rejects -fdevirtualize-at-ltrans
+    # (and -flto=auto) and every conftest dies. The host default is cc=gcc;
+    # pin it so the recipe matches makepkg.conf's flags.
+    --compiler=gcc
   )
 
   cd $pkgname-$pkgver
@@ -66,6 +72,7 @@ package() {
   local scons_options=(
     --prefix=/usr
     --libdir=/usr/lib
+    --compiler=gcc
   )
   depends+=(
     openfec libopenfec.so

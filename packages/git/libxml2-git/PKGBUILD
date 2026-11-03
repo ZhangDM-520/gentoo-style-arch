@@ -45,6 +45,7 @@ build() {
   if command -v mold >/dev/null 2>&1; then
     export LDFLAGS+=" -fuse-ld=mold"
   fi
+  CFLAGS+=" -fipa-pta -fstack-reuse=all" # flag-audit 2026-11-01
 
   local meson_options=(
     -D b_lto=true

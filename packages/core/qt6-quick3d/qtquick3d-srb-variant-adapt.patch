@@ -1,0 +1,115 @@
+From: Copilot <223556219+Copilot@users.noreply.github.com>
+Date: Mon, 02 Nov 2026 23:30:00 +0800
+Subject: [PATCH] rhi: adapt QSSGRhiShaderResourceBindingList to the std::variant
+ SRB data
+
+Hand-port of qtquick3d's four QRhiShaderResourceBinding::Data call sites
+in src/runtimerender/qssgrhicontext.cpp (fillImage, fillStorageBuffer,
+addUniformBuffer, addTexture) to the qtbase rework of commit 383e7ffe429
+("rhi: Store the shader resource binding data in a std::variant",
+qtbase, 2026-10-21).
+
+That commit replaced Data's `type` field, `union u { ubuf, simage, sbuf }`
+and `stex` member with a std::variant of Alternative<Type, T> wrappers
+whose index IS the type; type(), ubuf(), stex(), simage(), sbuf() became
+const accessors (qtbase src/gui/rhi/qrhi.h).  The upstream commit message
+notes "Qt Quick 3D needs a corresponding patch to follow these changes";
+qtquick3d dev has not adapted yet (qssgrhicontext.cpp last touched
+2026-09-17, dev HEAD eaf90eeb8).
+
+The port mirrors qtbase qrhi.cpp's own factory rewrites
+(d.u.emplace<Type>(Data::XxxData{ ... })) and is semantic-preserving:
+the variant index now carries what d->type held, the payload fields are
+unchanged, and the addTexture texSamplers writes keep their shape.
+
+RETIRES when: qtquick3d upstream adapts qssgrhicontext.cpp to the
+variant API -- watch for a qssgrhicontext.cpp commit after 2026-09-17.
+Drop this patch then.
+---
+ src/runtimerender/qssgrhicontext.cpp | 52 +++++++++++++++++++++++++-----------
+ 1 file changed, 36 insertions(+), 16 deletions(-)
+
+diff --git a/src/runtimerender/qssgrhicontext.cpp b/src/runtimerender/qssgrhicontext.cpp
+index 1c8f765ca..6a1dd9e80 100644
+--- a/src/runtimerender/qssgrhicontext.cpp
++++ b/src/runtimerender/qssgrhicontext.cpp
+@@ -1741,9 +1741,21 @@ void QSSGRhiShaderResourceBindingList::fillImage(QRhiShaderResourceBinding::Data
+ {
+     d->binding = binding;
+     d->stage = stage;
+-    d->type = t;
+-    d->u.simage.tex = tex;
+-    d->u.simage.level = level;
++    // The variant's index is the binding type (see QRhiShaderResourceBinding::Data)
++    const QRhiShaderResourceBinding::Data::StorageImageData image { tex, level };
++    switch (t) {
++    case QRhiShaderResourceBinding::ImageLoad:
++        d->u.emplace<QRhiShaderResourceBinding::ImageLoad>(image);
++        break;
++    case QRhiShaderResourceBinding::ImageStore:
++        d->u.emplace<QRhiShaderResourceBinding::ImageStore>(image);
++        break;
++    case QRhiShaderResourceBinding::ImageLoadStore:
++        d->u.emplace<QRhiShaderResourceBinding::ImageLoadStore>(image);
++        break;
++    default:
++        Q_UNREACHABLE();
++    }
+     h ^= qintptr(tex) ^ qintptr(level);
+ }
+ 
+@@ -1751,10 +1763,20 @@ void QSSGRhiShaderResourceBindingList::fillStorageBuffer(QRhiShaderResourceBindi
+ {
+     d->binding = binding;
+     d->stage = stage;
+-    d->type = t;
+-    d->u.sbuf.buf = buf;
+-    d->u.sbuf.offset = offset;
+-    d->u.sbuf.maybeSize = size; // 0 = all
++    const QRhiShaderResourceBinding::Data::StorageBufferData buffer { buf, quint32(offset), quint32(size) }; // size 0 = all
++    switch (t) {
++    case QRhiShaderResourceBinding::BufferLoad:
++        d->u.emplace<QRhiShaderResourceBinding::BufferLoad>(buffer);
++        break;
++    case QRhiShaderResourceBinding::BufferStore:
++        d->u.emplace<QRhiShaderResourceBinding::BufferStore>(buffer);
++        break;
++    case QRhiShaderResourceBinding::BufferLoadStore:
++        d->u.emplace<QRhiShaderResourceBinding::BufferLoadStore>(buffer);
++        break;
++    default:
++        Q_UNREACHABLE();
++    }
+     h ^= qintptr(buf);
+ }
+ 
+@@ -1766,11 +1788,8 @@ void QSSGRhiShaderResourceBindingList::addUniformBuffer(int binding, QRhiShaderR
+     h ^= qintptr(buf);
+     d->binding = binding;
+     d->stage = stage;
+-    d->type = QRhiShaderResourceBinding::UniformBuffer;
+-    d->u.ubuf.buf = buf;
+-    d->u.ubuf.offset = offset;
+-    d->u.ubuf.maybeSize = size; // 0 = all
+-    d->u.ubuf.hasDynamicOffset = hasDynamicOffset;
++    d->u.emplace<QRhiShaderResourceBinding::UniformBuffer>(
++                QRhiShaderResourceBinding::Data::UniformBufferData{ buf, quint32(offset), quint32(size), hasDynamicOffset }); // size 0 = all
+ }
+ 
+ void QSSGRhiShaderResourceBindingList::addStorageBufferLoadStore(int binding, QRhiShaderResourceBinding::StageFlags stage, QRhiBuffer *buf, int offset, int size)
+@@ -1805,10 +1824,11 @@ void QSSGRhiShaderResourceBindingList::addTexture(int binding, QRhiShaderResourc
+     h ^= qintptr(tex) ^ qintptr(sampler);
+     d->binding = binding;
+     d->stage = stage;
+-    d->type = QRhiShaderResourceBinding::SampledTexture;
+-    d->stex.texSamplers.resize(1);
+-    d->stex.texSamplers[0].tex = tex;
+-    d->stex.texSamplers[0].sampler = sampler;
++    d->u.emplace<QRhiShaderResourceBinding::SampledTexture>();
++    auto &stex = *std::get_if<QRhiShaderResourceBinding::SampledTexture>(&d->u);
++    stex.texSamplers.resize(1);
++    stex.texSamplers[0].tex = tex;
++    stex.texSamplers[0].sampler = sampler;
+ }
+ 
+ void QSSGRhiShaderResourceBindingList::addImageLoad(int binding, QRhiShaderResourceBinding::StageFlags stage, QRhiTexture *tex, int level)

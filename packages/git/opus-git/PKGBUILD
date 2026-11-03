@@ -62,6 +62,14 @@ build() {
     export LDFLAGS+=" -fuse-ld=mold"
   fi
 
+  # The host makepkg.conf's -Ofast implies -ffast-math; opus's celt/arch.h
+  # refuses that combination unless FLOAT_APPROX is defined — the upstream
+  # opt-in acknowledging fast-math's NaN/Inf semantics (2026-10-30 build
+  # wall). Rides CFLAGS (the channel meson demonstrably bakes into every
+  # compile); the optimization flags are kept, the caveat is accepted.
+  export CFLAGS+=" -DFLOAT_APPROX"
+  CFLAGS+=" -fprefetch-loop-arrays -fstack-reuse=all"  # flag-audit 2026-11-01
+
   local meson_options=(
     # kept from stock
     -D asm=disabled

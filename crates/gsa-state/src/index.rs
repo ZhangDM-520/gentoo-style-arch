@@ -131,12 +131,18 @@ impl BinpkgIndex {
     /// populates it).
     pub fn load(root: &StateRoot) -> Result<BinpkgIndex, StateError> {
         let read: store::StoreRead<IndexEntry> = store::read_json(&root.index_path(), "index")?;
-        let mut live: BTreeMap<(String, u64), IndexRow> = BTreeMap::new();
-        let mut order: Vec<(String, u64)> = Vec::new();
+        // One fold row per (recipe id, instance, OUTPUT): a split build's
+        // outputs share an instance and every one of them must survive
+        // (2026-11-03: keying by (recipe_id, instance) alone kept only the
+        // LAST output row, so a multi-output provider's token comparisons
+        // read the wrong output's abi-token and every rebuild read as a
+        // token move). A prune tombstones the whole instance — all outputs.
+        let mut live: BTreeMap<(String, u64, Vec<String>), IndexRow> = BTreeMap::new();
+        let mut order: Vec<(String, u64, Vec<String>)> = Vec::new();
         for entry in read.rows {
             match entry {
                 IndexEntry::Row { row } => {
-                    let key = (row.recipe_id.clone(), row.instance);
+                    let key = (row.recipe_id.clone(), row.instance, row.pkgnames.clone());
                     if !live.contains_key(&key) {
                         order.push(key.clone());
                     }
@@ -146,7 +152,7 @@ impl BinpkgIndex {
                     recipe_id,
                     instance,
                 } => {
-                    live.remove(&(recipe_id, instance));
+                    live.retain(|(id, inst, _), _| !(id == &recipe_id && *inst == instance));
                 }
             }
         }
@@ -1059,6 +1065,54 @@ mod tests {
         assert!(result.is_err(), "no metadata truth, no row (fail closed)");
         let index = BinpkgIndex::load(&root).unwrap();
         assert!(index.rows.is_empty());
+    }
+
+    #[test]
+    fn a_split_builds_every_output_row_survives_the_fold() {
+        // 2026-11-03: the live fold keyed by (recipe_id, instance) alone
+        // kept only the LAST output row — token comparisons then read the
+        // wrong output's abi-token and every rebuild of a split recipe read
+        // as a token move (the wave-flood class).
+        let dir = scratch("split-fold");
+        let root = StateRoot::open(&dir).unwrap();
+        let main = make_archive(&dir, "leaf", "1.0.0-1");
+        let devel = make_archive(&dir, "leaf-devel", "1.0.0-1");
+        let retention = Retention::from_records(&synthetic_topology()).unwrap();
+        let mut err = Vec::new();
+        register_instance(
+            &root,
+            "leaf",
+            &[main.clone(), devel.clone()],
+            &retention,
+            &BTreeSet::new(),
+            None,
+            &mut err,
+        )
+        .unwrap();
+        let index = BinpkgIndex::load(&root).unwrap();
+        let rows = index.rows_for("leaf");
+        assert_eq!(rows.len(), 2, "both output rows survive the fold");
+        assert_eq!(rows[0].instance, rows[1].instance, "one build, one instance");
+        let names: BTreeSet<&str> = rows
+            .iter()
+            .flat_map(|r| r.pkgnames.iter().map(|n| n.as_str()))
+            .collect();
+        assert_eq!(
+            names,
+            ["leaf", "leaf-devel"].into_iter().collect::<BTreeSet<_>>()
+        );
+        let tokens: BTreeSet<&str> = rows.iter().map(|r| r.abi_token.as_str()).collect();
+        assert_eq!(tokens.len(), 2, "each output carries its own abi-token");
+        // The per-output rows stay findable by their archives…
+        assert!(index.find_archive(&main).is_some());
+        assert!(index.find_archive(&devel).is_some());
+        // …and a prune tombstones the WHOLE instance — every output.
+        assert!(prune_instance(&root, "leaf", rows[0].instance, &mut err).unwrap());
+        let index = BinpkgIndex::load(&root).unwrap();
+        assert!(
+            index.rows_for("leaf").is_empty(),
+            "the tombstone kills every output row"
+        );
     }
 
     #[test]

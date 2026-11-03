@@ -1,6 +1,6 @@
 pkgbase = rust-bindgen-git
 	pkgdesc = Automatically generates Rust FFI bindings to C (and some C++) libraries
-	pkgver = 0.73.2.r8.g2829d9a5
+	pkgver = 0.73.2.r17.gf08d4fff
 	pkgrel = 1
 	url = https://github.com/rust-lang-nursery/rust-bindgen
 	arch = x86_64
@@ -10,9 +10,9 @@ pkgbase = rust-bindgen-git
 	depends = glibc
 	depends = libgcc
 	depends = clang
-	provides = rust-bindgen=0.73.2.r8.g2829d9a5
+	provides = rust-bindgen=0.73.2.r17.gf08d4fff
 	conflicts = rust-bindgen
-	source = git+https://github.com/rust-lang-nursery/rust-bindgen.git
+	source = git+https://github.com/rust-lang-nursery/rust-bindgen.git#commit=f08d4fff0e060fb4081222b0ad624e0bd7ec247d
 	sha512sums = SKIP
 
 pkgname = rust-bindgen-git

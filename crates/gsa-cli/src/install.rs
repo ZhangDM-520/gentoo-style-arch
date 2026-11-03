@@ -308,11 +308,17 @@ fn compute_swap(
     candidates: &[Candidate],
     localdb: &LocalDb,
     state_dir: &Path,
+    recipe_of_name: &std::collections::BTreeMap<String, String>,
 ) -> Result<WavePlan, String> {
     let subs = Subscriptions::load(&gsa_abi::subscriptions_path(state_dir))?;
     let view = gsa_install::abi_view(localdb);
-    let mut moves: Vec<TokenMove> = Vec::new();
-    let mut seen: BTreeSet<String> = BTreeSet::new();
+    // One movement per provider over the WHOLE candidate set: a multi-output
+    // recipe's archives share one provider and contribute one current token
+    // each (a record is current when ANY shipped output still carries it).
+    let mut order: Vec<String> = Vec::new();
+    let mut current_of: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut drift_of: BTreeMap<String, Vec<(String, Vec<String>)>> = BTreeMap::new();
+    let mut old_of: BTreeMap<String, Option<String>> = BTreeMap::new();
     let mut planned: BTreeSet<String> = BTreeSet::new();
     for candidate in candidates {
         // An unreadable archive stays out of the wave input; the decision
@@ -322,9 +328,6 @@ fn compute_swap(
         };
         let id = candidate_id(graph, candidate, &info.pkgname);
         planned.insert(id.clone());
-        if !seen.insert(id.clone()) {
-            continue;
-        }
         let rev = graph
             .records()
             .iter()
@@ -333,18 +336,52 @@ fn compute_swap(
         let Ok(token) = gsa_abi::token_for_archive(&candidate.archive, rev) else {
             continue;
         };
+        if let std::collections::btree_map::Entry::Vacant(slot) = current_of.entry(id.clone()) {
+            slot.insert(BTreeSet::new());
+            order.push(id.clone());
+            let recorded = subs.for_provider(&id);
+            old_of.insert(
+                id.clone(),
+                recorded
+                    .iter()
+                    .find(|s| s.has_token())
+                    .map(|s| s.token.clone()),
+            );
+            drift_of.insert(id.clone(), Vec::new());
+        }
+        current_of
+            .get_mut(&id)
+            .expect("just inserted")
+            .insert(token.effective.clone());
+        drift_of
+            .get_mut(&id)
+            .expect("just inserted")
+            .push((info.pkgname.clone(), info.provides.clone()));
+    }
+    let mut moves: Vec<TokenMove> = Vec::new();
+    for id in order {
+        let current = current_of.remove(&id).unwrap_or_default();
+        // The one movement verdict (`gsa_abi::records_moved`): a `-`
+        // placeholder record is record-less and a multi-output provider is
+        // current across its whole token set.
         let recorded = subs.for_provider(&id);
-        if recorded.is_empty() || recorded.iter().all(|s| s.token == token.effective) {
+        if !gsa_abi::records_moved(&recorded, &current) {
             continue;
         }
+        let mut changed: Vec<gsa_abi::Drift> = Vec::new();
+        for (pkgname, provides) in drift_of.remove(&id).unwrap_or_default() {
+            for drift in gsa_abi::provide_drift(&pkgname, &provides, &view) {
+                if !changed.contains(&drift) {
+                    changed.push(drift);
+                }
+            }
+        }
+        let old = old_of.remove(&id).flatten();
         moves.push(TokenMove {
             provider: id,
-            old: recorded.first().map(|s| s.token.clone()),
-            new: token.effective.clone(),
-            changed_provides: gsa_abi::provide_drift(&info.pkgname, &info.provides, &view)
-                .into_iter()
-                .map(|drift| drift.name)
-                .collect(),
+            old,
+            current,
+            changed_provides: changed,
         });
     }
     if moves.is_empty() {
@@ -356,6 +393,7 @@ fn compute_swap(
         moves: &moves,
         installed: Some(&view),
         planned: &planned,
+        recipe_of_name,
     }))
 }
 
@@ -734,7 +772,13 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
     let swap_plan = if all {
         WavePlan::default()
     } else {
-        match compute_swap(&graph, &candidates, &localdb, &state_dir) {
+        match compute_swap(
+            &graph,
+            &candidates,
+            &localdb,
+            &state_dir,
+            &workspace_recipe_of_name(&db),
+        ) {
             Ok(plan) => plan,
             Err(message) => {
                 return finish_refused(
@@ -749,6 +793,12 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
             }
         }
     };
+    // Dead records the wave planner skipped surface here too (never
+    // silently): a subscriber that is neither topology-known nor installed
+    // cannot gate the swap.
+    for (provider, consumer) in &swap_plan.stale_records {
+        let _ = writeln!(out, "abi-stale-record {provider} {consumer} dead-record");
+    }
     if !swap_plan.uncovered.is_empty() {
         return finish_refused(
             inv,

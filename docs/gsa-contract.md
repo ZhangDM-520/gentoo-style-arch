@@ -548,6 +548,33 @@ fresh builds use group runs. Rebuilding X cannot break what X consumes; the ABI
 risk lives in X's consumers. `--leaf` suppresses the expansion and builds
 exactly the named recipes.
 
+*Amendment (2026-11-01, direction rule).* The ABI rebuild wave (`gsa-abi`'s
+coupled batches and `:=` subscription terms) obeys the same direction rule:
+wave members are only ever the provider's transitive consumers, plus its
+*factual* consumers (recorded `:=` links and DT_NEEDED link truth —
+downstream even without an edge). `abi=must` coupled-batch membership alone
+never drags an upstream or lateral member into a wave: a rust-git rebuild
+must not re-pull llvm-git (its batch anchor), and a lateral sibling never
+rides. Rationale (owner): a package is safe as long as its own consumers are
+built against its current ABI; what a package consumes is unaffected by its
+rebuild. `--leaf` is no longer needed to suppress upstream pulls — it keeps
+only its documented meaning (exact selection, no consumer expansion).
+
+*Amendment (2026-11-03, movement truth).* A wave engages on a **real**
+token move only. The provider's registered token SET is one abi-token per
+output row of its newest built instance (a split build's outputs share the
+instance, each carrying its own derived token), and a recorded `:=` token is
+current when ANY shipped output still carries it — never one arbitrary
+output row's token alone. A subscription row whose token is the `-`
+placeholder carries no token truth (the same `-`-means-none convention as
+`vcs_baseline`): it is record-less for every decision — never a match and
+never a mismatch — so it can neither fire a wave by itself nor satisfy one;
+the fail-toward-whole-closure rule above owns it. "No index row or no record
+is no observable move" — and no writer records a placeholder (registration
+derives fail-closed; the install recorder derives from the installed
+surface). Pinned by `tests/gsa-abi-v2.sh` sections g/h and `gsa-abi`'s
+`records_moved`/`Subscriptions::token_for` unit tests.
+
 Ranges (`22..38`, `22..`, `..15`) index the **selection** in build order after
 expansion, exactly as the `-Sl` listing prints them. A range requires a
 selection to anchor it; a bare range is a usage error. Group runs may cross
@@ -1208,8 +1235,16 @@ A lane is an isolated child process group per package that **exec's** the
 makepkg supervisor — no interpreter per lane. Build-side commands are dropped
 to the build user (§B.10); `makepkg` never runs as root. The engine exports
 the lane's job count as `GSA_BUILD_JOBS` and rewrites `MAKEFLAGS`/`NINJAFLAGS`
-(stripping their `-jN`, preserving the caller's other flags). Every makepkg
-spawn additionally carries `BUILDDIR`/`PKGDIR`/`PKGDEST` for the build-user
+(stripping their `-jN`, preserving the caller's other flags). Because makepkg
+sources its config AFTER the environment and preserves only
+`PKGDEST`/`SRCDEST`/… from env, the rewrite alone could never beat a
+config-file `MAKEFLAGS="-j$(nproc)"` (2026-11-01 wall: llvm-git ran
+`ninja -j24` against `core-jobs: 7`) — every makepkg spawn therefore also
+gets `--config <build-cache>/lane-makepkg.conf`, a generated shim that
+replicates makepkg's own config layering (system conf + `/etc/makepkg.conf.d`
+drop-ins + the user override) and then re-asserts the lane's job flags from
+`GSA_LANE_MAKEFLAGS`/`GSA_LANE_NINJAFLAGS` (amendment 2026-11-01). Every
+makepkg spawn additionally carries `BUILDDIR`/`PKGDIR`/`PKGDEST` for the build-user
 cache (§J.2) and `GIT_CONFIG_COUNT=0`; the `PACMAN` shim keeps makepkg's own
 dependency installs on the transaction lock (§K.3). Per-package logs are
 written under the state root through the ownership gate (§J.5).

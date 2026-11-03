@@ -179,7 +179,14 @@ fn run_build_with(
     // row ≠ what its consumers recorded at install) drags its consumer
     // wave into the plan: wave members outside the selection are added,
     // and an uncovered member refuses the run (rc 3) before anything runs.
-    let wave = match wave_check(out, err, &graph, &selection, &state_dir) {
+    let wave = match wave_check(
+        out,
+        err,
+        &graph,
+        &selection,
+        &state_dir,
+        &crate::install::workspace_recipe_of_name(&db),
+    ) {
         Ok(wave) => wave,
         Err(message) => {
             let _ = writeln!(err, "gsa: {message}");
@@ -457,8 +464,8 @@ fn run_build_with(
     let is_install_run = install.is_some();
     // The post-build install hook (install-before-dependents, rule 11):
     // called per package on the supervisor's event loop, before its result
-    // reaches the machine. `later_installs` is the run-order remainder
-    // (in-run repair coverage, rule 25(d)).
+    // reaches the machine. `later_installs` is `later_after`'s order-truth
+    // tail (rule 25(d) in-run repair coverage).
     let install_hook: Option<Box<dyn FnMut(&str, &std::path::Path, bool) -> InstallStep + Send>> =
         install.map(|mode| {
             let state_dir = state_dir.clone();
@@ -468,7 +475,10 @@ fn run_build_with(
                 .deferred_flags
                 .iter()
                 .any(|f| f == "--no-register-ignorepkg");
-            let mut later: Vec<String> = ids.iter().map(|id| id.as_str().to_string()).collect();
+            let order = build_order_ids(&graph, &ids);
+            // Settled-lane ledger for `later_after_settled`: the hook fires
+            // per settled lane, so this is the run's landed set.
+            let mut settled: Vec<String> = Vec::new();
             let workspace_names: Vec<String> =
                 crate::install::workspace_output_names(&db).into_iter().collect();
             // The canonical repair-marker key map (rule 25(d), §E.3 gap-G1):
@@ -478,7 +488,10 @@ fn run_build_with(
             let recipe_of_name = crate::install::workspace_recipe_of_name(&db);
             Box::new(
                 move |pkg: &str, recipe_dir: &std::path::Path, forced: bool| {
-                    later.retain(|subject| subject != pkg);
+                    // Rule 25(d) coverage reads the ORDER, minus what has
+                    // already settled (see `later_after_settled`).
+                    let later = later_after_settled(&order, pkg, &settled);
+                    settled.push(pkg.to_string());
                     // A remediation force build installs in force mode (fish
                     // `lane_force_install=1`): never the same-version skip.
                     let mode = if forced { DecideMode::Force } else { mode };
@@ -488,7 +501,7 @@ fn run_build_with(
                         conf: conf.clone(),
                         pacman_args: pacman_args.clone(),
                         register_ignorepkg,
-                        later_installs: later.clone(),
+                        later_installs: later,
                         recipe_of_name: recipe_of_name.clone(),
                         workspace_names: workspace_names.clone(),
                     };
@@ -830,7 +843,14 @@ pub(crate) fn plan_only(
     // the dry-run shows the wave it would build — additions join the plan,
     // and an under-covered member refuses (rc 3).
     let state_dir = gsa_state::resolve_state_root(inv.state_dir.as_deref())?;
-    let wave = wave_check(out, err, ctx.graph, &selection, &state_dir)?;
+    let wave = wave_check(
+        out,
+        err,
+        ctx.graph,
+        &selection,
+        &state_dir,
+        &crate::install::workspace_recipe_of_name(ctx.db),
+    )?;
     extend_selection(&mut selection, &wave.additions);
     let intensity = crate::resolve_intensity(project)?;
     // The note counts the POST-PROMPT closure: the prompt filters the
@@ -1206,6 +1226,46 @@ fn build_batches(graph: &Graph<'_>, selection: &Selection) -> Vec<Vec<usize>> {
     batches
 }
 
+/// Rule 25(d)'s "run order" is the canonical BUILD order the supervisor
+/// sequences installs in — not the plan listing, which `extend_selection`
+/// grows by appending wave additions AFTER the ids that consume them.
+fn build_order_ids(graph: &Graph<'_>, ids: &[RecipeId]) -> Vec<String> {
+    let mut order: Vec<String> = ids.iter().map(|id| id.as_str().to_string()).collect();
+    order.sort_by_key(|id| {
+        let idx = graph.index_of(id).expect("selection ids resolve");
+        graph.position(idx)
+    });
+    order
+}
+
+/// The in-run repair coverage set of one finished provider — the ids
+/// strictly after `provider` in canonical build order (the input of
+/// [`gsa_install::DecisionContext::later_installs`], rule 25(d) semantics
+/// live there). A provider missing from the order covers nothing: fail
+/// closed, never a dropped exposure.
+fn later_after(order: &[String], provider: &str) -> Vec<String> {
+    order
+        .iter()
+        .position(|subject| subject == provider)
+        .map(|at| order[at + 1..].to_vec())
+        .unwrap_or_default()
+}
+
+/// Rule 25(d) fail-closed refinement of [`later_after`]: an id the run has
+/// ALREADY settled built against the PREVIOUS provider generation and can
+/// never be repaired in-run, so a settled consumer is not coverage even when
+/// it sits after the provider in build order (the landed-consumer hole).
+/// Edge-ful consumers can never be settled at their provider's gate — their
+/// dispatch waits on that provider's `done-ok` — so this only narrows the
+/// edge-less subscriber class, which is exactly the class whose build order
+/// is advisory and whose early landing otherwise strands a live link.
+fn later_after_settled(order: &[String], provider: &str, settled: &[String]) -> Vec<String> {
+    later_after(order, provider)
+        .into_iter()
+        .filter(|id| !settled.iter().any(|s| s == id))
+        .collect()
+}
+
 /// The pre-dispatch ABI wave check's outcome (plan-native-pm.md §4.3).
 #[derive(Default)]
 pub(crate) struct WaveCheck {
@@ -1234,6 +1294,7 @@ pub(crate) fn wave_check(
     graph: &Graph<'_>,
     selection: &Selection,
     state_dir: &std::path::Path,
+    recipe_of_name: &std::collections::BTreeMap<String, String>,
 ) -> Result<WaveCheck, String> {
     // State truth, read-only and best-effort: the binpkg index (the
     // registered tokens) and the install-time `:=` subscription records.
@@ -1283,26 +1344,53 @@ pub(crate) fn wave_check(
     // input) is read ONLY below, once a move exists — the common case
     // costs no installed-DB parse.
     let mut moves: Vec<TokenMove> = Vec::new();
-    let mut drift_inputs: Vec<(String, Vec<String>)> = Vec::new();
+    let mut drift_inputs: Vec<Vec<(String, Vec<String>)>> = Vec::new();
     for (_, id) in &selection.listed {
         let rows = index.rows_for(id.as_str());
-        let Some(row) = rows.first().copied() else {
-            continue;
-        };
-        let recorded = subs.for_provider(id.as_str());
-        if recorded.is_empty() || recorded.iter().all(|s| s.token == row.abi_token) {
+        if rows.is_empty() {
             continue;
         }
-        let pkgname = row
-            .pkgnames
-            .first()
-            .map(|name| name.as_str())
-            .unwrap_or(row.pkgbase.as_str());
-        drift_inputs.push((pkgname.to_string(), row.provides.clone()));
+        let newest_instance = rows[0].instance;
+        // The provider's CURRENT token set: every output row of its newest
+        // instance. A split provider ships one token per output, and a
+        // record is current when ANY shipped output still carries it —
+        // comparing against one arbitrary output's row made every rebuild
+        // of a split recipe read as a token move (2026-11-03).
+        let current: std::collections::BTreeSet<String> = rows
+            .iter()
+            .filter(|r| r.instance == newest_instance)
+            .map(|r| r.abi_token.clone())
+            .collect();
+        // The one movement verdict (`gsa_abi::records_moved`): a `-`
+        // placeholder record is record-less ("No index row or no record is
+        // no observable move here") and a multi-output provider is current
+        // across its whole token set — never one arbitrary row alone.
+        let recorded = subs.for_provider(id.as_str());
+        if !gsa_abi::records_moved(&recorded, &current) {
+            continue;
+        }
+        // The content-truth input: one (pkgname, provides) pair per output
+        // of the newest instance — a move is a whole-build fact.
+        drift_inputs.push(
+            rows.iter()
+                .filter(|r| r.instance == newest_instance)
+                .map(|r| {
+                    let pkgname = r
+                        .pkgnames
+                        .first()
+                        .map(|name| name.as_str())
+                        .unwrap_or(r.pkgbase.as_str());
+                    (pkgname.to_string(), r.provides.clone())
+                })
+                .collect(),
+        );
         moves.push(TokenMove {
             provider: id.as_str().to_string(),
-            old: recorded.first().map(|s| s.token.clone()),
-            new: row.abi_token.clone(),
+            old: recorded
+                .iter()
+                .find(|s| s.has_token())
+                .map(|s| s.token.clone()),
+            current,
             changed_provides: Vec::new(),
         });
     }
@@ -1311,25 +1399,30 @@ pub(crate) fn wave_check(
     }
 
     // The content-truth term's input: the installed-ELF view over the
-    // parsed local DB. An unreadable installed DB is "nothing installed":
-    // the record terms still run, only the content-truth term goes quiet
-    // (and loudly so).
-    let db = match LocalDb::load(&pacman_db_root()) {
-        Ok(db) => db,
+    // parsed local DB. An unreadable installed DB is UNKNOWN WORLD STATE,
+    // not "nothing installed": the record and topology terms still run, the
+    // content-truth term goes quiet (and loudly so), and `installed: None`
+    // tells the planner to fail closed — dead-record skips need a readable
+    // world (rule 25(c): never under-expand).
+    let (db, db_readable) = match LocalDb::load(&pacman_db_root()) {
+        Ok(db) => (db, true),
         Err(error) => {
             let _ = writeln!(
                 err,
                 "gsa: note: ABI wave check: installed view unavailable ({error}) — content-truth term disabled"
             );
-            LocalDb::default()
+            (LocalDb::default(), false)
         }
     };
     let view = gsa_install::abi_view(&db);
-    for (movement, (pkgname, provides)) in moves.iter_mut().zip(drift_inputs) {
-        movement.changed_provides = gsa_abi::provide_drift(&pkgname, &provides, &view)
-            .into_iter()
-            .map(|drift| drift.name)
-            .collect();
+    for (movement, inputs) in moves.iter_mut().zip(drift_inputs) {
+        for (pkgname, provides) in inputs {
+            for drift in gsa_abi::provide_drift(&pkgname, &provides, &view) {
+                if !movement.changed_provides.contains(&drift) {
+                    movement.changed_provides.push(drift);
+                }
+            }
+        }
     }
 
     let planned: BTreeSet<String> = selection
@@ -1341,8 +1434,9 @@ pub(crate) fn wave_check(
         graph,
         subs: &subs,
         moves: &moves,
-        installed: Some(&view),
+        installed: db_readable.then_some(&view),
         planned: &planned,
+        recipe_of_name,
     });
     for wave in &plan.waves {
         for member in &wave.members {
@@ -1357,6 +1451,9 @@ pub(crate) fn wave_check(
     }
     for row in plan.refusal_rows() {
         let _ = writeln!(out, "{}", row.render());
+    }
+    for (provider, consumer) in &plan.stale_records {
+        let _ = writeln!(out, "abi-stale-record {provider} {consumer} dead-record");
     }
     Ok(WaveCheck {
         additions: plan.additions,
@@ -1541,4 +1638,91 @@ fn emit_refusal_record(
     // like every other emission through the one store path.
     record::emit_machine_record(out, &record, state_dir, err);
     run_outcome.rc
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_order_ids, later_after, later_after_settled};
+
+    fn order(ids: &[&str]) -> Vec<String> {
+        ids.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn record(id: &str, edges: &[&str]) -> gsa_model::TopologyRecord {
+        gsa_model::TopologyRecord {
+            id: gsa_model::RecipeId::new(id).expect("fixture id"),
+            path: format!("{id}/PKGBUILD"),
+            groups: Vec::new(),
+            edges: edges
+                .iter()
+                .map(|e| gsa_model::RecipeId::new(*e).expect("fixture edge"))
+                .collect(),
+            tags: Vec::new(),
+            source_line: 1,
+        }
+    }
+
+    /// Rule 25(d) is ORDER truth: a consumer strictly after the provider is
+    /// covered even when its lane already landed (parallel lanes finish out
+    /// of order — the completion-based remainder false-refused icu-git over
+    /// exactly this, 2026-10-30).
+    #[test]
+    fn later_after_covers_every_id_strictly_after_the_provider() {
+        let o = order(&["a", "provider", "c", "d"]);
+        assert_eq!(later_after(&o, "provider"), order(&["c", "d"]));
+    }
+
+    /// The completion-based remainder's opposite bug: an id BEFORE the
+    /// provider is never coverage, no matter what has landed.
+    #[test]
+    fn later_after_never_covers_ids_before_the_provider() {
+        let o = order(&["before", "provider", "after"]);
+        assert_eq!(later_after(&o, "provider"), order(&["after"]));
+    }
+
+    /// The landed-consumer hole (2026-10-31 review): a consumer that
+    /// already settled built against the PREVIOUS provider generation and
+    /// is un-repairable in-run — order position alone must not cover it,
+    /// while a still-queued later consumer stays coverage.
+    #[test]
+    fn later_after_settled_excludes_already_landed_consumers() {
+        let o = order(&["provider", "early", "queued"]);
+        assert_eq!(
+            later_after_settled(&o, "provider", &order(&["early"])),
+            order(&["queued"])
+        );
+        assert_eq!(
+            later_after_settled(&o, "provider", &[]),
+            order(&["early", "queued"])
+        );
+    }
+
+    /// A provider missing from the order covers nothing (fail closed).
+    #[test]
+    fn later_after_unknown_provider_covers_nothing() {
+        let o = order(&["a", "b"]);
+        assert!(later_after(&o, "stranger").is_empty());
+        assert!(later_after(&[], "a").is_empty());
+    }
+
+    /// The additions path: `extend_selection` APPENDS wave additions after
+    /// the ids that consume them, while the supervisor dispatches by the
+    /// build-order edges — coverage must read the build order, or a
+    /// dragged-in provider false-refuses its own listed-earlier consumer
+    /// (the icu-git wall class through the additions door).
+    #[test]
+    fn coverage_reads_build_order_not_listing_order() {
+        let records = vec![
+            record("consumer", &["provider"]),
+            record("provider", &[]),
+        ];
+        let graph = gsa_graph::Graph::build(&records).expect("acyclic fixture");
+        let listed = order(&["consumer", "provider"]);
+        let listed_ids: Vec<gsa_model::RecipeId> = listed
+            .iter()
+            .map(|id| gsa_model::RecipeId::new(id.as_str()).expect("fixture id"))
+            .collect();
+        let built = build_order_ids(&graph, &listed_ids);
+        assert_eq!(later_after(&built, "provider"), order(&["consumer"]));
+    }
 }

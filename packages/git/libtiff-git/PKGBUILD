@@ -60,6 +60,7 @@ build() {
   if command -v mold >/dev/null 2>&1; then
     export LDFLAGS+=" -fuse-ld=mold"
   fi
+  CFLAGS+=" -fprefetch-loop-arrays -fstack-reuse=all"  # flag-audit 2026-11-01
 
   cmake -B build -S "$_pkgname" \
     -DCMAKE_INSTALL_PREFIX=/usr \

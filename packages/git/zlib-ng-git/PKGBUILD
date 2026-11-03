@@ -75,6 +75,10 @@ build() {
     msg "Profile data generated: $gcda_count .gcda files"
 
     # Phase 3: rebuild with profile + LTO
+    # -Wno-error=coverage-mismatch/missing-profile: a profile whose function
+    # checksums drift (LTO repartitioning/training coverage) degrades to
+    # compiler estimates for the mismatched functions instead of aborting —
+    # the family's "fallback when the floor is missed" doctrine (2026-11-01).
     msg "PGO Phase 3: optimized build"
     rm -rf build
     cmake -B build -S zlib-ng \
@@ -82,7 +86,7 @@ build() {
         -DCMAKE_BUILD_TYPE=None \
         -DCMAKE_INSTALL_PREFIX=/usr \
         -DCMAKE_INSTALL_LIBDIR=lib \
-        -DCMAKE_C_FLAGS="$CFLAGS -flto -fprofile-use=$(pwd)/pgo-profiles" \
+        -DCMAKE_C_FLAGS="$CFLAGS -flto -fprofile-use=$(pwd)/pgo-profiles -Wno-error=coverage-mismatch -Wno-error=missing-profile" \
         -DCMAKE_EXE_LINKER_FLAGS="-fuse-ld=mold -flto -fprofile-use=$(pwd)/pgo-profiles" \
         -DCMAKE_SHARED_LINKER_FLAGS="-fuse-ld=mold -flto -fprofile-use=$(pwd)/pgo-profiles" \
         -DWITH_GTEST=OFF \

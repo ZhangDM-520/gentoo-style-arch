@@ -19,6 +19,7 @@ pkgver() {
 }
 
 build() {
+    CFLAGS+=" -fprefetch-loop-arrays -fstack-reuse=all" # flag-audit 2026-11-01
     cmake -B build -S zlib-ng \
         -G Ninja \
         -DCMAKE_BUILD_TYPE=None \

@@ -42,6 +42,7 @@ build() {
   # -O3/-march/-mtune flag); CMAKE_BUILD_TYPE=None: stock convention, uses
   # makepkg CFLAGS and adds no -O3
   CFLAGS+=" -ffat-lto-objects"
+  CFLAGS+=" -fprefetch-loop-arrays -fstack-reuse=all"  # flag-audit 2026-11-01
 
   cmake -S SDL -B build -G Ninja \
     -D CMAKE_BUILD_TYPE=None \

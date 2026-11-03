@@ -1,0 +1,311 @@
+diff --git a/include/configs/common/DialFields.h b/include/configs/common/DialFields.h
+index 61276476..6d6e1cb5 100644
+--- a/include/configs/common/DialFields.h
++++ b/include/configs/common/DialFields.h
+@@ -1,4 +1,5 @@
+ #pragma once
++#include <QJsonValue>
+ #include "include/configs/baseConfig.h"
+ #include "include/global/Validation.hpp"
+ 
+@@ -20,6 +21,11 @@ namespace Configs
+         QString bind_interface;
+         QString inet4_bind_address;
+         QString inet6_bind_address;
++        // sing-box DialerOptions.domain_resolver: a DNS server tag, or {"server": tag, "strategy": ...}.
++        QJsonValue domain_resolver;
++        // The referenced DNS server definition taken from an imported subscription's "dns.servers".
++        // Internal: generation names it and rewrites the ref; it never reaches the core config verbatim.
++        QJsonValue domain_resolver_server;
+ 
+         bool ParseFromLink(const QString& link) override;
+         bool ParseFromJson(const QJsonObject& object) override;
+diff --git a/src/configs/common/DialFields.cpp b/src/configs/common/DialFields.cpp
+index 8dc6db35..aa2adafb 100644
+--- a/src/configs/common/DialFields.cpp
++++ b/src/configs/common/DialFields.cpp
+@@ -20,7 +20,7 @@ namespace Configs {
+         {
+             static const QStringList unmodelled = {"detour", "bind_address_no_port", "protect_path", "routing_mark", "netns",
+                                                    "disable_tcp_keep_alive", "tcp_keep_alive", "tcp_keep_alive_interval",
+-                                                   "domain_resolver", "network_strategy", "network_type", "fallback_network_type",
++                                                   "network_strategy", "network_type", "fallback_network_type",
+                                                    "fallback_delay", "tls_fragment", "domain_strategy"};
+             // The core matches keys case-insensitively.
+             QStringList dropped;
+@@ -32,9 +32,6 @@ namespace Configs {
+             if (dropped.contains("detour")) {
+                 message += ' ' + QCoreApplication::translate("Validation", "To reach this server through another one, build a chain profile instead of a detour.");
+             }
+-            if (dropped.contains("domain_resolver")) {
+-                message += ' ' + QCoreApplication::translate("Validation", "Throne picks the resolver for server names itself.");
+-            }
+             ParseDiag::Warn(QString(), message);
+         }
+     }
+@@ -87,6 +84,8 @@ namespace Configs {
+             const auto value = object[key].toString().trimmed();
+             if (!importing || AcceptOptional(key, dialFieldsRule(key, value), value)) *target = value;
+         }
++        if (object.contains("domain_resolver")) domain_resolver = object["domain_resolver"];
++        if (object.contains("domain_resolver_server")) domain_resolver_server = object["domain_resolver_server"];
+         if (importing) dialFieldsReportUnmodelled(object);
+         return true;
+     }
+@@ -114,11 +113,18 @@ namespace Configs {
+         if (!bind_interface.isEmpty()) object["bind_interface"] = bind_interface;
+         if (!inet4_bind_address.isEmpty()) object["inet4_bind_address"] = inet4_bind_address;
+         if (!inet6_bind_address.isEmpty()) object["inet6_bind_address"] = inet6_bind_address;
++        if (!domain_resolver.isNull()) object["domain_resolver"] = domain_resolver;
++        if (!domain_resolver_server.isNull()) object["domain_resolver_server"] = domain_resolver_server;
+         return object;
+     }
+     BuildResult DialFields::Build()
+     {
+-        return {ExportToJson(), ""};
++        // The resolver ref is rewritten to a generated dns server tag at config generation, and the
++        // stored definition is turned into that server there; neither may leak into the core config.
++        auto object = ExportToJson();
++        object.remove("domain_resolver");
++        object.remove("domain_resolver_server");
++        return {object, ""};
+     }
+ 
+     void DialFields::Validate(Validation::Issues& issues)
+@@ -128,6 +134,14 @@ namespace Configs {
+                                          std::pair{QStringLiteral("inet6_bind_address"), inet6_bind_address}}) {
+             if (const auto message = dialFieldsRule(key, value); !message.isEmpty()) issues.append({Validation::Severity::Error, key, message, value});
+         }
++        if (!domain_resolver.isNull()) {
++            auto ref = domain_resolver.toString();
++            if (ref.isEmpty() && domain_resolver.isObject()) ref = domain_resolver.toObject()["server"].toString();
++            if (ref.trimmed().isEmpty())
++                issues.append({Validation::Severity::Error, QStringLiteral("domain_resolver"),
++                               QCoreApplication::translate("Validation", "Expected a DNS server tag or an object with \"server\"."),
++                               QString()});
++        }
+     }
+ }
+ 
+diff --git a/src/configs/generate.cpp b/src/configs/generate.cpp
+index 66593c58..daffd9ff 100644
+--- a/src/configs/generate.cpp
++++ b/src/configs/generate.cpp
+@@ -60,6 +60,7 @@ namespace Configs {
+             constexpr auto dnsHosts = "dns-hosts";
+             constexpr auto dnsVpnPrefix = "dns-vpn";
+             constexpr auto dnsEchPrefix = "dns-ech";
++            constexpr auto dnsResolverPrefix = "dns-resolver";
+ 
+             constexpr auto dnsIn = "dns-in";
+             constexpr auto mixedIn = "mixed-in";
+@@ -218,6 +219,10 @@ namespace Configs {
+             QList<coreBridgeConfig> singToXrayBridges;
+             QList<coreBridgeConfig> xrayToSingBridges;
+             QMap<QString, QString> echResolvers;
++            // Imported dial resolvers: generated dns tag -> the subscription's server definition.
++            QMap<QString, QJsonValue> domainResolverDefs;
++            // Compact definition -> generated tag, so subscriptions sharing a resolver share its server.
++            QMap<QString, QString> domainResolverTagByDef;
+             std::shared_ptr<BuildConfigResult> result = std::make_shared<BuildConfigResult>();
+         };
+ 
+@@ -1080,10 +1085,52 @@ namespace Configs {
+             return known.value(server, "https://8.8.8.8/dns-query");
+         }
+ 
++        // Throne's dns tags pass through; "local" names its dns-local server; anything else falls back.
++        QString mappedResolverTag(const QJsonValue &ref, const QString &fallback) {
++            auto name = ref.toString();
++            if (name.isEmpty() && ref.isObject()) name = ref.toObject()["server"].toString();
++            name = name.trimmed();
++            if (name == "local" || name == "localhost") return tags::dnsLocal;
++            if (name == tags::dnsLocal || name == tags::dnsDirect || name == tags::dnsRemote || name == tags::dnsFake) return name;
++            return fallback;
++        }
++
++        // The imported resolver definitions as named dns servers. A bootstrap defers unknown names in
++        // the definition to dns-local, which only Throne's own dns section provides.
++        QJsonArray domainResolverServers(BuildContext &ctx, bool bootstrap) {
++            QJsonArray result;
++            for (auto it = ctx.domainResolverDefs.cbegin(); it != ctx.domainResolverDefs.cend(); ++it) {
++                QJsonObject obj;
++                if (it.value().isString()) obj = buildDnsObj(ctx, it.value().toString());
++                else {
++                    obj = it.value().toObject();
++                    obj.remove("tag");
++                }
++                obj["tag"] = it.key();
++                if (obj.contains("domain_resolver"))
++                    obj["domain_resolver"] = QJsonObject{{"server", mappedResolverTag(obj["domain_resolver"], QString(tags::dnsLocal))}};
++                else if (bootstrap)
++                    obj["domain_resolver"] = QJsonObject{{"server", tags::dnsLocal}};
++                result += obj;
++            }
++            return result;
++        }
++
++        // A custom DNS object owns its servers, so the imported resolvers join it rather than vanish.
++        void appendDomainResolverServers(QJsonObject &dnsObj, BuildContext &ctx, bool bootstrap) {
++            const auto extra = domainResolverServers(ctx, bootstrap);
++            if (extra.isEmpty()) return;
++            auto servers = dnsObj["servers"].toArray();
++            for (const auto &server : extra) servers += server;
++            dnsObj["servers"] = servers;
++        }
++
+         void buildDNSSection(BuildContext &ctx, bool useDnsObj = true) {
+             const auto &settings = *dataManager->settingsRepo;
+             if (!ctx.routeOwnsDns && settings.use_dns_object && useDnsObj) {
+-                ctx.result->coreConfig["dns"] = QString2QJsonObject(settings.dns_object);
++                auto dnsObj = QString2QJsonObject(settings.dns_object);
++                appendDomainResolverServers(dnsObj, ctx, false);
++                ctx.result->coreConfig["dns"] = dnsObj;
+                 return;
+             }
+ 
+@@ -1297,6 +1344,8 @@ namespace Configs {
+                 });
+             }
+ 
++            for (const auto &server : domainResolverServers(ctx, true)) servers += server;
++
+             if (!headRules.isEmpty()) {
+                 for (const auto &rule : rules) headRules.append(rule);
+                 rules = headRules;
+@@ -1593,6 +1642,39 @@ namespace Configs {
+             }
+         }
+ 
++        // A subscription may name the resolver for its server hostname. The definition travels with the
++        // profile; naming it here and emitting it in buildDNSSection keeps the ref and its server together.
++        // Registrations are idempotent, so a caller may collect them before or while building the chains.
++        QString collectDomainResolver(BuildContext &ctx, const Profile &hop) {
++            const auto &dial = hop.outbound->dialFields;
++            if (dial->domain_resolver_server.isNull()) return {};
++            const auto fingerprint = QString::fromUtf8(QJsonDocument(QJsonArray{dial->domain_resolver_server}).toJson(QJsonDocument::Compact));
++            if (ctx.domainResolverTagByDef.contains(fingerprint)) return ctx.domainResolverTagByDef.value(fingerprint);
++            const auto tag = hopTag(tags::dnsResolverPrefix, ctx.domainResolverTagByDef.size());
++            ctx.domainResolverTagByDef.insert(fingerprint, tag);
++            ctx.domainResolverDefs.insert(tag, dial->domain_resolver_server);
++            return tag;
++        }
++
++        void applyDomainResolver(BuildContext &ctx, const Profile &hop, QJsonObject &object) {
++            const auto &dial = hop.outbound->dialFields;
++            if (dial->domain_resolver.isNull()) return;
++            QString strategy;
++            if (dial->domain_resolver.isObject()) strategy = dial->domain_resolver.toObject()["strategy"].toString();
++            QString tag = collectDomainResolver(ctx, hop);
++            if (tag.isEmpty()) {
++                tag = mappedResolverTag(dial->domain_resolver, QString());
++                if (tag.isEmpty()) {
++                    if (!ctx.forTest)
++                        MW_show_log(QCoreApplication::translate("Validation", "The \"domain_resolver\" value could not be mapped to a DNS server and was ignored."));
++                    return;
++                }
++            }
++            QJsonObject value{{"server", tag}};
++            if (!strategy.isEmpty()) value["strategy"] = strategy;
++            object["domain_resolver"] = value;
++        }
++
+         void buildSingboxChain(BuildContext &ctx, const QList<std::shared_ptr<Profile>> &ents, const hopChainOptions &opts) {
+             for (int idx = 0; idx < ents.size(); idx++)
+             {
+@@ -1630,8 +1712,10 @@ namespace Configs {
+                 object["tag"] = tag;
+                 collectEchQueryName(ctx, *ent);
+                 collectDnsTunnelDomains(ctx, *ent);
++                applyDomainResolver(ctx, *ent, object);
+                 // Realm reads its STUN resolver off this key only; without it the hosts go through DNS rules.
+-                if (auto hy = ent->Hysteria(); hy != nullptr && hy->RealmActive())
++                // A subscription-declared resolver wins: it is what resolves this hop's server name.
++                if (auto hy = ent->Hysteria(); hy != nullptr && hy->RealmActive() && !object.contains("domain_resolver"))
+                     object["domain_resolver"] = QJsonObject{{"server", tags::dnsDirect}};
+                 if (!nextTag.isEmpty() && opts.link) object["detour"] = nextTag;
+                 if (opts.warpWrap && idx == 0) object["detour"] = tags::warpBypass;
+@@ -3085,7 +3169,11 @@ namespace Configs {
+         for (const auto &item : profiles) {
+             if (item == nullptr) continue;
+             for (int hopId : unwrapChain(item->id)) {
+-                if (const auto hop = getProfile(hopId); hop != nullptr) collectEchQueryName(ctx, *hop);
++                if (const auto hop = getProfile(hopId); hop != nullptr) {
++                    collectEchQueryName(ctx, *hop);
++                    // The dns section is built before the chains here, so the resolvers are collected first.
++                    collectDomainResolver(ctx, *hop);
++                }
+             }
+         }
+ 
+diff --git a/src/configs/sub/SubscriptionParser.cpp b/src/configs/sub/SubscriptionParser.cpp
+index ca5844ae..2971224a 100644
+--- a/src/configs/sub/SubscriptionParser.cpp
++++ b/src/configs/sub/SubscriptionParser.cpp
+@@ -14,6 +14,8 @@
+ #include <QJsonArray>
+ #include <QJsonDocument>
+ #include <QJsonObject>
++#include <QJsonValue>
++#include <QMap>
+ #include <QRegularExpression>
+ #include <QSet>
+ #include <QUrl>
+@@ -776,12 +778,49 @@ namespace Subscription {
+             if (text.find("version") != npos && text.find("servers") != npos) sip008(doc);
+         }
+ 
++        // A subscription can name the resolver for a server hostname ("domain_resolver") and define it
++        // under "dns.servers". Keep both on the profile: generation names the definition and rewrites the ref.
++        void captureDomainResolver(const ProfilePtr &ent, const QJsonObject &out, const QMap<QString, QJsonValue> &dnsServers) {
++            if (!out.contains("domain_resolver")) return;
++            const auto &dial = ent->outbound->dialFields;
++            auto ref = out["domain_resolver"].toString();
++            if (ref.isEmpty() && out["domain_resolver"].isObject()) ref = out["domain_resolver"].toObject()["server"].toString();
++            ref = ref.trimmed();
++            if (ref.isEmpty()) {
++                Configs::ParseDiag::Warn(QString(), QCoreApplication::translate("Validation", "The \"domain_resolver\" value is not a DNS server tag and was ignored."));
++                return;
++            }
++            if (dnsServers.contains(ref)) {
++                const auto def = dnsServers.value(ref);
++                if (def.isObject() && def.toObject()["type"].toString() == "fakeip") {
++                    Configs::ParseDiag::Warn(QString(), QCoreApplication::translate("Validation", "The \"domain_resolver\" value points at a fakeip DNS server and was ignored."));
++                    return;
++                }
++                dial->domain_resolver = out["domain_resolver"];
++                dial->domain_resolver_server = def;
++                return;
++            }
++            // Throne's own servers carry these tags, so the ref needs no definition to survive.
++            static const QSet<QString> withoutDefinition = {"local", "localhost", "dns-local", "dns-direct", "dns-remote", "dns-fake"};
++            if (withoutDefinition.contains(ref)) {
++                dial->domain_resolver = out["domain_resolver"];
++                return;
++            }
++            Configs::ParseDiag::Warn(QString(), QCoreApplication::translate("Validation", "The \"domain_resolver\" value names DNS server \"%1\", which the subscription does not define; it was ignored.").arg(ref));
++        }
++
+         void Parser::singBox(const QJsonDocument &doc, SingBoxSubType type) {
+             QJsonArray outbounds, endpoints;
++            QMap<QString, QJsonValue> dnsServers;
+             if (type == SingBoxSubType::outboundInJson) {
+                 const auto json = doc.object();
+                 outbounds = json["outbounds"].toArray();
+                 endpoints = json["endpoints"].toArray();
++                for (const auto &server : json["dns"].toObject()["servers"].toArray()) {
++                    if (!server.isObject()) continue;
++                    const auto tag = server.toObject()["tag"].toString();
++                    if (!tag.isEmpty()) dnsServers.insert(tag, server);
++                }
+             } else if (type == SingBoxSubType::outboundJsonArray) {
+                 outbounds = doc.array();
+             } else {
+@@ -808,6 +847,7 @@ namespace Subscription {
+                 auto ent = Configs::ProfilesRepo::NewProfile(profileType);
+                 Validation::Issues issues;
+                 const bool parsed = scoped([&] { return ent->outbound->ParseFromJson(out); }, issues);
++                if (parsed) captureDomainResolver(ent, out, dnsServers);
+                 accept(ent, parsed, std::move(issues), source);
+             };
+             int index = 0;

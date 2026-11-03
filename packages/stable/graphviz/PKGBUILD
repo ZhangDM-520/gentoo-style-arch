@@ -40,6 +40,8 @@ build() {
 
 	export LIBPOSTFIX=/
 	export CXXFLAGS+=' -fPIC -fpermissive'
+	CFLAGS+=" -fipa-pta" # flag-audit 2026-11-01
+	CXXFLAGS+=" -fipa-pta" # flag-audit 2026-11-01
 
 	# House style: mold linker when available
 	local _mold=""

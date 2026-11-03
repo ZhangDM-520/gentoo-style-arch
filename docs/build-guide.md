@@ -989,3 +989,27 @@ re-probe. `-Wno-error=coverage-mismatch` cannot be avoided: `-fprofile-use`
 enables passes the generate phase never ran, so a few functions come back with a
 different arc count, which GCC treats as an error by default; downgraded, those
 functions compile without profile data while the rest keep it.
+
+### Stale configure caches after a flags edit
+
+A `makepkg.conf` flag edit does **not** invalidate cached configure state:
+CMake bakes `CMAKE_CXX_FLAGS` into `CMakeCache.txt`, Meson into
+`meson-private/coredata.dat`, autotools into `config.status`, and a reconfigure
+reuses those values instead of re-reading the environment. The engine's GCC
+build-identity marker keys on `gcc --version` alone, so it reports "identity
+unchanged" across a pure flag change and cleans nothing (measured 2026-11-01:
+ninja-git reused the pre-edit `-fapprox-func` cache and failed in 1s while the
+edited config compiled cleanly standalone).
+
+After ANY `makepkg.conf` CFLAGS/CXXFLAGS/LTOFLAGS edit, wipe the makepkg build
+cache before the next run — everything under `build_dir` except the shared
+`pkgs/` archive store:
+
+```sh
+G="<build_dir>"; /usr/bin/rm -rf "$G/build" "$G/pkg" "$G/tmp" && mkdir -p "$G/build" "$G/pkg" "$G/tmp"
+```
+
+`pkgs/` is kept as rollback evidence; the wave rebuilds every selected recipe
+anyway. Do this with no run in flight (the trees are live build state while
+lanes run). The engine-side fix — folding a flags digest into the identity
+marker or a cache-sweep seam — is queued in `docs/MEMORY.md` §5.

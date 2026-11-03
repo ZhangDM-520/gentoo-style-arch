@@ -57,8 +57,15 @@ options=(
   # bootstrap.toml is unaffected.
   !lto
 )
+# WEEKLY SNAPSHOT policy (2026-10-31, replacing free git tracking): the pin
+# below is the last commit at or before Monday 00:00 UTC of the current week
+# (boundary 2026-10-26T00:00Z = c4a7cdf19f2ca2f4ec57e792f51f8f3178bed593).
+# ADVANCE THE PIN on the Monday cadence (or at any deliberate upgrade): move
+# #commit= and pkgver together (pkgver() recomputes the same value at the
+# pin). Rebuild in the same pass as llvm-git — rustc links libLLVM and the
+# LLVM snapshots have no stable C++ ABI (see NOTE.md 2026-09-07).
 source=(
-  git+https://github.com/rust-lang/rust.git
+  git+https://github.com/rust-lang/rust.git#commit=c4a7cdf19f2ca2f4ec57e792f51f8f3178bed593
   0001-bootstrap-Change-libexec-dir.patch
   0002-bootstrap-Change-bash-completion-dir.patch
   0003-bootstrap-Workaround-for-system-stage0.patch

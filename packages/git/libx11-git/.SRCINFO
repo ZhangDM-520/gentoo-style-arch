@@ -1,7 +1,7 @@
 pkgbase = libx11-git
 	pkgdesc = Core X11 protocol client library (git build)
 	pkgver = 1.8.13.r12.g6d4432b
-	pkgrel = 1
+	pkgrel = 2
 	url = https://www.x.org/wiki/
 	arch = x86_64
 	license = MIT AND X11

@@ -57,6 +57,7 @@ build() {
   command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
   export LDFLAGS+=" ${_mold}"
 
+  CFLAGS+=" -fstack-reuse=all -fprefetch-loop-arrays" # flag-audit 2026-11-01
   python -m build --wheel --no-isolation
 }
 

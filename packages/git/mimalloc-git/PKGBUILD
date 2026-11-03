@@ -85,6 +85,10 @@ build() {
   msg "Profile data generated: $gcda_count .gcda files"
 
   # Phase 3: rebuild with profile + LTO
+  # -Wno-error=coverage-mismatch/missing-profile: mismatched/absent profile
+  # coverage degrades to compiler estimates instead of aborting (family
+  # fallback doctrine, 2026-11-01 — the Rust-contrib test link failure and
+  # partial training otherwise kill the build at use-phase).
   msg "PGO Phase 3: optimized build"
   rm -rf build
   cmake \
@@ -96,8 +100,8 @@ build() {
     -D MI_BUILD_OBJECT=OFF \
     -D MI_INSTALL_TOPLEVEL=ON \
     -D CMAKE_INTERPROCEDURAL_OPTIMIZATION=ON \
-    -D CMAKE_C_FLAGS="-fprofile-use=$(pwd)/pgo-profiles" \
-    -D CMAKE_CXX_FLAGS="-fprofile-use=$(pwd)/pgo-profiles" \
+    -D CMAKE_C_FLAGS="-fprofile-use=$(pwd)/pgo-profiles -Wno-error=coverage-mismatch -Wno-error=missing-profile" \
+    -D CMAKE_CXX_FLAGS="-fprofile-use=$(pwd)/pgo-profiles -Wno-error=coverage-mismatch -Wno-error=missing-profile" \
     -D CMAKE_EXE_LINKER_FLAGS="-fuse-ld=mold -fprofile-use=$(pwd)/pgo-profiles" \
     -D CMAKE_SHARED_LINKER_FLAGS="-fuse-ld=mold -fprofile-use=$(pwd)/pgo-profiles"
 

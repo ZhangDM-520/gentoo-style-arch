@@ -64,6 +64,8 @@ build() {
 
   mkdir -p build-curl{,-compat,-gnutls}
 
+  CFLAGS+=" -fipa-pta" # flag-audit 2026-11-01
+
   # build curl
   cd "${srcdir}"/build-curl
 

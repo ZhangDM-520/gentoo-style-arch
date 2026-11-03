@@ -108,6 +108,8 @@ build() {
 
   # Flag policy: host makepkg.conf owns optimisation (never hard-code ISA
   # flags); -DENABLE_IPO=ON is stock's own IPO choice and is kept as-is.
+  CFLAGS+=" -fipa-pta -fstack-reuse=all -fprefetch-loop-arrays" # flag-audit 2026-11-01
+  CXXFLAGS+=" -fipa-pta -fstack-reuse=all -fprefetch-loop-arrays" # flag-audit 2026-11-01
   cmake -B build -S $pkgbase-$pkgver \
     -DCMAKE_INSTALL_PREFIX=/usr \
     -DCMAKE_CXX_STANDARD=20 \

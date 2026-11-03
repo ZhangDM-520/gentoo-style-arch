@@ -38,6 +38,8 @@ build() {
   command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
   export LDFLAGS+=" ${_mold}"
 
+  CFLAGS+=" -fprefetch-loop-arrays" # flag-audit 2026-11-01
+  CXXFLAGS+=" -fprefetch-loop-arrays" # flag-audit 2026-11-01
   cmake -S frei0r -B build \
     -DCMAKE_INSTALL_PREFIX=/usr
   cmake --build build --parallel "${GSA_BUILD_JOBS:-$(nproc)}"

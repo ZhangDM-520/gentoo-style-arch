@@ -82,6 +82,7 @@ build() {
   # -O3/-march/-mtune flag)
   CFLAGS+=" -ffat-lto-objects"
   CXXFLAGS+=" -ffat-lto-objects"
+  CFLAGS+=" -fstack-reuse=all" # flag-audit 2026-11-01
 
   ./configure "${configure_options[@]}"
   make -j"${GSA_BUILD_JOBS:-$(nproc)}"

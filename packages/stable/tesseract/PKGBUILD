@@ -13,7 +13,7 @@ _langs=(afr amh ara asm aze aze_cyrl bel ben bod bos bre bul cat ceb ces
     tel tgk tgl tha tir ton tur uig ukr urd uzb uzb_cyrl vie yid yor)
 
 pkgname=tesseract
-pkgver=5.5.3
+pkgver=5.5.4
 pkgrel=1.1
 pkgdesc='An OCR program'
 arch=(x86_64)
@@ -39,7 +39,7 @@ for _lang in "${_langs[@]}"; do
 done
 provides=(libtesseract.so)
 source=("$url/archive/$pkgver/$pkgname-$pkgver.tar.gz")
-sha256sums=('9218e62793116d42a9f6d14cd9348518b27f382096eea3d0f2d1a24616bb5884')
+sha256sums=('a8dbf8b8c8ee427ff6ad1d99116502feaf59440af1adb893caf60a6576826cf4')
 
 build() {
   cd "$srcdir"/$pkgname-${pkgver}
@@ -47,6 +47,8 @@ build() {
   if command -v mold >/dev/null 2>&1; then
     export LDFLAGS+=" -fuse-ld=mold"
   fi
+  CFLAGS+=" -fipa-pta -fprefetch-loop-arrays" # flag-audit 2026-11-01
+  CXXFLAGS+=" -fipa-pta -fprefetch-loop-arrays" # flag-audit 2026-11-01
   [ -x configure ] || ./autogen.sh
   [ -f Makefile ] || ./configure --prefix=/usr
   make -j"${GSA_BUILD_JOBS:-$(nproc)}"

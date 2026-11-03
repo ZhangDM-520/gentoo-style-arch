@@ -25,6 +25,7 @@ build() {
   local _mold=""
   command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
   export LDFLAGS+=" ${_mold}"
+  CFLAGS+=" -fipa-pta -fstack-reuse=all -fprefetch-loop-arrays"  # flag-audit 2026-11-01
 
   # trim: -DBUILD_DOC dropped with the doxygen/graphviz makedepends above
   cmake -B build -S openjpeg-"${pkgver}" \

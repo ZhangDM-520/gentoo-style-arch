@@ -1,7 +1,7 @@
 pkgbase = qt6-quick3d
 	pkgdesc = Qt module and API for defining 3D content in Qt Quick
 	pkgver = 6.13.0_r5545.gf6f469c8f
-	pkgrel = 1
+	pkgrel = 2
 	url = https://www.qt.io
 	arch = x86_64
 	groups = qt6
@@ -26,6 +26,8 @@ pkgbase = qt6-quick3d
 	depends = zlib
 	optdepends = assimp: assimp import plugin
 	source = git+https://code.qt.io/qt/qtquick3d#branch=dev
+	source = qtquick3d-srb-variant-adapt.patch
 	sha256sums = SKIP
+	sha256sums = dcd44cb80f121d0187eeb85dd560b9dce8304177819e08e5ed3cc09d853d627d
 
 pkgname = qt6-quick3d

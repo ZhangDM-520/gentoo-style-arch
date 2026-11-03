@@ -59,6 +59,8 @@ build() {
   cp -a tools/boostbook/{xsl,dtd} "$srcdir"/fakeinstall/share/boostbook/
 
   # install to $srcdir/fakeinstall in preparation for split packaging
+  CFLAGS+=" -fipa-pta" # flag-audit 2026-11-01
+  CXXFLAGS+=" -fipa-pta" # flag-audit 2026-11-01
   ./b2 install \
     variant=release \
     debug-symbols=on \

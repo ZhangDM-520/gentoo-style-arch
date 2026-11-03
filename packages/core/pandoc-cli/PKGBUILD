@@ -14,7 +14,7 @@
 
 pkgname=pandoc-cli
 pkgver=3.11
-pkgrel=2
+pkgrel=3
 pkgdesc='Conversion between documentation formats'
 arch=('x86_64')
 url='https://pandoc.org'
@@ -82,6 +82,24 @@ build() {
   if [[ ! -e "$_base_imports/Prelude.hi" ]]; then
     _ghc_opts+=(-dynamic)
     _cabal_way=(--enable-executable-dynamic)
+    # Way wrapper (load-bearing): cabal drives the custom-Setup compile
+    # ("legacy fallback" — xml-conduit's cabal-doctest Setup) with the
+    # compiler's DEFAULT way, ignoring both --ghc-options and the
+    # cabal.project stanza, so it dies vanilla "files missing in the
+    # ‘base’ package" on this dynamic-only toolchain. A ghc shim on PATH
+    # appending -dynamic forces the way for every ghc cabal drives, setup
+    # compile included (red-first: a minimal custom-Setup repro dies
+    # without the shim and builds with it, 2026-10-31).
+    local _ghc_wrap="$srcdir/ghc-way-wrap"
+    local _ghc_real
+    _ghc_real=$(command -v ghc)
+    mkdir -p "$_ghc_wrap"
+    cat > "$_ghc_wrap/ghc" <<EOF
+#!/bin/bash
+exec "$_ghc_real" -dynamic "\$@"
+EOF
+    chmod +x "$_ghc_wrap/ghc"
+    PATH="$_ghc_wrap:$PATH"
     # The dep compiles take their way from prepare()'s cabal.project
     # stanza (see there). No mold in this branch: it rejects the distro's
     # prebuilt haskell .so set at the final link ("mold: fatal: … invalid

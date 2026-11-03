@@ -106,6 +106,8 @@ build() {
   local _mold=""
   command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
   export LDFLAGS+=" ${_mold}"
+  CFLAGS+=" -fstack-reuse=all"  # flag-audit 2026-11-01
+  CXXFLAGS+=" -fstack-reuse=all"  # flag-audit 2026-11-01
 
   # house: pin the system interpreter (uv/pyenv shims lead PATH; NOTE.md 2026-10-10)
   cmake -B build -S $pkgname \

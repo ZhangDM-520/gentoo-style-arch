@@ -1,0 +1,103 @@
+# Maintainer: gentoo-style-arch
+# Based on the AUR throne recipe (Mahdi Sarikhani / parhelia), rebuilt from
+# the upstream git tree as a house recipe.
+
+pkgname=throne-git
+pkgver=1.4.0.beta.5.r6.g77aa05b
+pkgrel=1
+pkgdesc='Cross-platform GUI proxy utility (Empowered by sing-box)'
+url='https://github.com/throneproj/Throne'
+license=('GPL-3.0-or-later')
+arch=(x86_64)
+depends=('glibc' 'qt6-base')
+makedepends=('cmake' 'git' 'go' 'mold' 'ninja' 'protobuf' 'qt6-tools' 'vulkan-headers')
+conflicts=('throne' 'throne-bin' 'throne-sysqt-bin')
+provides=("throne=${pkgver%%.r*}")
+source=("throne::git+https://github.com/throneproj/Throne.git"
+        "routeprofiles::git+https://github.com/throneproj/routeprofiles.git#branch=rule-set"
+        0001-honor-subscription-domain-resolver.patch
+        0002-user-agent-preset-dropdown.patch
+        throne.sh
+        throne.desktop)
+b2sums=('SKIP'
+        'SKIP'
+        '2dddfc79dabd7e6dd6fca46a40657eee1a5d8851dcbdcfdf12e6a6b9b9445b4d28be0478523b1992a9f292816727b1cc48acf463cecc8df949a6c96a43c571c9'
+        '55fb73727b0377fabf8ed615ecfcdfaa3b4c35b0455a7f2d7c7bd7ab2d0be84495285f398af6f24b27ef1195f84141ac3b122bd5421cd29beb35363fa7cb0010'
+        '0e185479d1169c90d99cd9b3a39b3d3868dfcdc4be7d076dab771b51ed72a9d8c395b9a1e124abbd4c76c373585f2e14dca571ba9902c988105048a043248d79'
+        '3d352b41df61efb97650e2be72c9e4c802661e8ca58ad630f0358c5973397b46ea4903a6371dc4ea4977fc543e9b66fd2359ac2c25545e24c97318d9cecad1ac')
+
+pkgver() {
+  cd throne
+  git describe --long --tags --abbrev=7 | sed 's/\([^-]*-g\)/r\1/;s/-/./g'
+}
+
+prepare() {
+  # Upstream-pending fixes from the throne-dev PR branches (based on dev @
+  # 77aa05b): 0001 keeps subscription domain_resolver (plus the referenced
+  # dns server) so nodes behind split-horizon DNS resolve instead of dying on
+  # decoy records; 0002 turns the subscription User-Agent field into a preset
+  # dropdown of client UAs. Drop both when the PRs land upstream.
+  cd throne
+  git apply -3 ../0001-honor-subscription-domain-resolver.patch
+  git apply -3 ../0002-user-agent-preset-dropdown.patch
+  cd ..
+
+  # Upstream's build embeds the rule-set SRS list from the routeprofiles
+  # checkout via the build directory.
+  mkdir -p build
+  cp routeprofiles/srslist.h build/
+
+  # Go protobuf codegen tooling, fetched at build time (not in the set).
+  export GOBIN="$srcdir/bin"
+  export PATH="$GOBIN:$PATH"
+  go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+  go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+
+  cd throne/core/gen
+  protoc -I . --go_out=. --go-grpc_out=. libcore.proto
+}
+
+build() {
+  export INPUT_VERSION="$pkgver"
+
+  # Layer 1: the Qt GUI (CMake/Ninja). Host makepkg.conf flags govern
+  # (CMAKE_BUILD_TYPE=None — no recipe-side -O*/-march); mold arrives
+  # through LDFLAGS like everything else.
+  cmake -B build -S throne -G Ninja -W no-dev \
+    -D CMAKE_BUILD_TYPE=None \
+    -D CMAKE_INSTALL_PREFIX=/usr \
+    -D CMAKE_C_FLAGS="$CFLAGS" \
+    -D CMAKE_CXX_FLAGS="$CXXFLAGS" \
+    -D CMAKE_EXE_LINKER_FLAGS="$LDFLAGS" \
+    -D CMAKE_SHARED_LINKER_FLAGS="$LDFLAGS"
+  cmake --build build --parallel "${GSA_BUILD_JOBS:-$(nproc)}"
+
+  # Layer 2: the Go core (module ThroneCore). Host flags reach the CGO-
+  # compiled C/C++ through the CGO_* variables; the go toolchain's own
+  # optimization layer is the upstream build flags below (-trimpath -pie).
+  # -fno-lto keeps CGO linking predictable when the host enables LTO.
+  cd throne/core
+  export CGO_CPPFLAGS="$CPPFLAGS"
+  export CGO_CFLAGS="$CFLAGS -fno-lto"
+  export CGO_CXXFLAGS="$CXXFLAGS -fno-lto"
+  export CGO_LDFLAGS="$LDFLAGS -fno-lto"
+
+  local VERSION_SINGBOX
+  VERSION_SINGBOX=$(go list -m -f '{{.Version}}' github.com/sagernet/sing-box)
+  go build -o "$srcdir/build" \
+    -trimpath \
+    -buildmode=pie \
+    -mod=readonly \
+    -modcacherw \
+    -ldflags="-linkmode=external -w -s -X 'github.com/sagernet/sing-box/constant.Version=${VERSION_SINGBOX}' -X 'internal/godebug.defaultGODEBUG=multipathtcp=0' -checklinkname=0" \
+    -tags="with_clash_api,with_gvisor,with_quic,with_wireguard,with_utls,with_dhcp,with_tailscale,badlinkname,tfogo_checklinkname0,with_naive_outbound"
+}
+
+package() {
+  install -Dm755 build/Throne build/ThroneCore -t "$pkgdir/usr/lib/throne"
+  install -Dm755 throne.sh "$pkgdir/usr/bin/throne"
+  install -Dm644 throne.desktop -t "$pkgdir/usr/share/applications"
+  install -Dm644 throne/res/public/Throne.png "$pkgdir/usr/share/pixmaps/throne.png"
+}
+
+# vim: set ts=2 sw=2 et:

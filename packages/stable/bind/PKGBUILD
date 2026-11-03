@@ -57,6 +57,7 @@ build() {
   export CFLAGS
   # support to chase DNSSEC signature chains
   CFLAGS+=' -DDIG_SIGCHASE'
+  CFLAGS+=" -fipa-pta -fstack-reuse=all" # flag-audit 2026-11-01
   # House style: mold linker when available
   local _mold=""
   command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"

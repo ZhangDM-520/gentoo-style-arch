@@ -13,8 +13,8 @@ use std::collections::BTreeSet;
 
 use gsa_model::{Decision, DecisionRow};
 
-use crate::provides::{provide_name, stock_name};
-use crate::view::InstalledView;
+use crate::provides::{provide_covers, provide_name, stock_name};
+use crate::view::{path_class, ElfClass, InstalledView};
 
 /// One installed bare-soname provide that disappears or version-moves in a
 /// build (fish `abi_provide_refusals`' per-archive diff).
@@ -97,12 +97,28 @@ fn elf_home(path: &str) -> bool {
         || path.contains(".so")
 }
 
+/// The ELF-class tag of a makepkg auto-version (`79-64` → 64-bit,
+/// `zbar.so-64` → 64-bit, `1-32` → 32-bit). `None` when the version does not
+/// end in a class tag (hand-versioned shapes scope by version only).
+fn entry_class(ver: &str) -> Option<ElfClass> {
+    match ver.rsplit('-').next() {
+        Some("64") => Some(ElfClass::X64),
+        Some("32") => Some(ElfClass::X32),
+        _ => None,
+    }
+}
+
 /// Link truth (rule 25(c)/(d)): the INSTALLED packages whose ELF outputs
-/// `DT_NEEDED` one of the affected provide names. Name/graph reachability is
-/// never consulted — naming a provider is not linking it. Owned files in ELF
-/// homes (or ELF-shaped names) are probed through the view root; a missing
-/// file is skipped.
-pub fn linked_consumers(view: &InstalledView, affected: &[String]) -> Vec<String> {
+/// `DT_NEEDED` a provide ENTRY the provider dropped or version-moved. The
+/// match is the ONE resolution matcher (`provide_covers`) scoped to the
+/// moved entry's generation and ELF class — a stem-prefix match is NOT
+/// enough: `libicuuc.so.78` must not count as affected by a
+/// `libicuuc.so=79-64 → 80-64` move (2026-10-30 icu-git wall), nor a
+/// `usr/lib32` need a 64-bit provide (class truth, 2026-10-22).
+/// Name/graph reachability is never consulted — naming a provider is not
+/// linking it. Owned files in ELF homes (or ELF-shaped names) are probed
+/// through the view root; a missing file is skipped.
+pub fn linked_consumers(view: &InstalledView, affected: &[Drift]) -> Vec<String> {
     if affected.is_empty() {
         return Vec::new();
     }
@@ -115,11 +131,23 @@ pub fn linked_consumers(view: &InstalledView, affected: &[String]) -> Vec<String
             let Some(bytes) = view.read_file(file) else {
                 continue;
             };
+            let class = path_class(file);
             let needed = gsa_recipe::elf::needed_libs(&bytes);
-            if needed
-                .iter()
-                .any(|n| affected.iter().any(|a| n == a || n.starts_with(a.as_str())))
-            {
+            if needed.iter().any(|n| {
+                affected.iter().any(|d| {
+                    if entry_class(&d.inst_ver).is_some_and(|want| want != class) {
+                        return false;
+                    }
+                    if d.inst_ver == "-" {
+                        // A `.so` file with no SONAME gets no auto-version
+                        // to scope by — fail toward coverage for its family
+                        // (the ver-less provide's own semantics, the ONE
+                        // matcher).
+                        return provide_covers(&d.name, n);
+                    }
+                    provide_covers(&format!("{}={}", d.name, d.inst_ver), n)
+                })
+            }) {
                 out.insert(pkg.name.clone());
                 break;
             }
@@ -129,11 +157,15 @@ pub fn linked_consumers(view: &InstalledView, affected: &[String]) -> Vec<String
 }
 
 /// Stock-side pinners (fish `abi_local_depend_rows`): every installed
-/// package declaring a `Depends` on an affected provide name — the pin
-/// pacman will enforce at transaction time before any in-run repair could
-/// run. Only exact declareable shapes match (`X`, `X=ver`, `X.so=N-64`,
-/// `X.so`): the depend name must equal the affected provide name.
-pub fn stock_pinners(view: &InstalledView, affected: &[String]) -> Vec<(String, String)> {
+/// package declaring a `Depends` that pins the MOVING provide entry — the
+/// pin pacman will enforce at transaction time before any in-run repair
+/// could run. The scope is the ENTRY, not just its name (rule 25(c)'s
+/// generation and class truth — the `linked_consumers` wall's twin):
+/// `libicuuc.so=78-32` does not pin the `libicuuc.so=79-64 → 80-64` move.
+/// A versioned pin matches only the exact generation that is vanishing; a
+/// bare shape (`X`, `X.so`) has no version to scope by and stays a pinner
+/// (fail closed — it is the shape that breaks when the provide is removed).
+pub fn stock_pinners(view: &InstalledView, affected: &[Drift]) -> Vec<(String, String)> {
     if affected.is_empty() {
         return Vec::new();
     }
@@ -141,8 +173,15 @@ pub fn stock_pinners(view: &InstalledView, affected: &[String]) -> Vec<(String, 
     for pkg in view.packages() {
         for dep in &pkg.depends {
             let name = provide_name(dep);
-            if affected.iter().any(|a| a == name) {
-                out.push((pkg.name.clone(), dep.clone()));
+            let dep_ver = ver_of(dep);
+            for d in affected {
+                if d.name != name {
+                    continue;
+                }
+                if dep_ver == "-" || dep_ver == d.inst_ver {
+                    out.push((pkg.name.clone(), dep.clone()));
+                    break;
+                }
             }
         }
     }
@@ -197,7 +236,6 @@ pub fn abi_refusal_rows(
     recipe_of_name: &std::collections::BTreeMap<String, String>,
     workspace: &std::collections::BTreeSet<String>,
 ) -> AbiGate {
-    let affected: Vec<String> = drift.iter().map(|d| d.name.clone()).collect();
     let in_tx = |name: &str| tx_names.iter().any(|t| t == name);
     let in_run = |name: &str| later_installs.iter().any(|t| t == name);
     let canon = |name: &str| -> String {
@@ -213,7 +251,7 @@ pub fn abi_refusal_rows(
     // its consume side — use.
     let mut uncovered: Vec<String> = Vec::new();
     let mut repairs: Vec<String> = Vec::new();
-    for consumer in linked_consumers(view, &affected) {
+    for consumer in linked_consumers(view, drift) {
         if in_tx(&consumer) {
             continue;
         }
@@ -229,7 +267,7 @@ pub fn abi_refusal_rows(
     // Stock-pinner class: out-of-tree declared pinners only, uncovered
     // unless they ride THIS transaction. A name already in the consumer
     // class is never double-rowed.
-    let pinners: Vec<(String, String)> = stock_pinners(view, &affected)
+    let pinners: Vec<(String, String)> = stock_pinners(view, drift)
         .into_iter()
         .filter(|(pinner, _)| !workspace.contains(pinner))
         .filter(|(pinner, _)| !in_tx(pinner))
@@ -456,6 +494,35 @@ mod tests {
     }
 
     #[test]
+    /// The icu-git wall's third false positive (2026-10-30): an out-of-tree
+    /// pin on ANOTHER generation/class (`libicuuc.so=78-32`) must not row
+    /// against the `libicuuc.so=79-64 → 80-64` move — while a pin on the
+    /// vanishing generation itself still rows.
+    fn stock_pinners_scope_to_the_moving_entry() {
+        let view = InstalledView::new([
+            pkg(
+                "lib32-libxml2",
+                &[],
+                &["libicuuc.so=78-32"],
+                &["usr/lib32/libxml2.so.16"],
+            ),
+            pkg("stock-pin", &[], &["libicuuc.so=79-64"], &["usr/lib/libpin.so"]),
+        ]);
+        let drift = vec![Drift {
+            pkgname: "icu-git".to_string(),
+            name: "libicuuc.so".to_string(),
+            inst_ver: "79-64".to_string(),
+            built_ver: Some("80-64".to_string()),
+        }];
+        let pinners = stock_pinners(&view, &drift);
+        assert_eq!(
+            pinners,
+            vec![("stock-pin".to_string(), "libicuuc.so=79-64".to_string())],
+            "a 78-32 pin is a different class+generation and must not count: {pinners:?}"
+        );
+    }
+
+    #[test]
     fn workspace_pinners_stay_with_the_consumer_class() {
         // A workspace recipe output never rows as abi-stock-pinner (fish's
         // split rule) — and a workspace pinner with no link truth is not a
@@ -503,11 +570,60 @@ mod tests {
             dir.clone(),
             [pkg("consumer-app", &[], &[], &["usr/lib/libconsumer.so.1"])],
         );
-        assert_eq!(
-            linked_consumers(&view, &["libfoo.so".to_string()]),
-            vec!["consumer-app".to_string()]
+        let moved = Drift {
+            pkgname: "abipkg".to_string(),
+            name: "libfoo.so".to_string(),
+            inst_ver: "1-64".to_string(),
+            built_ver: Some("2-64".to_string()),
+        };
+        assert_eq!(linked_consumers(&view, std::slice::from_ref(&moved)), vec![
+            "consumer-app".to_string()
+        ]);
+        let other = Drift {
+            pkgname: "abipkg".to_string(),
+            name: "libother.so".to_string(),
+            inst_ver: "1-64".to_string(),
+            built_ver: Some("2-64".to_string()),
+        };
+        assert!(linked_consumers(&view, &[other]).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn link_truth_is_scoped_to_the_moved_generation_and_class() {
+        // 2026-10-30 icu-git wall: a `libicuuc.so=79-64 → 80-64` move must
+        // flag the .79 linker and NEVER the .78 linkers (stranded by an
+        // EARLIER move — not this one) nor a 32-bit need (class truth).
+        let dir = std::env::temp_dir().join(format!("gsa-abi-scope-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("usr/lib")).unwrap();
+        std::fs::create_dir_all(dir.join("usr/lib32")).unwrap();
+        let write = |rel: &str, needed: &str| {
+            let elf = crate::test_support::elf64(Some("libconsumer.so.1"), &[needed]);
+            std::fs::write(dir.join(rel), &elf).unwrap();
+        };
+        write("usr/lib/libc79.so", "libicuuc.so.79");
+        write("usr/lib/libc78.so", "libicuuc.so.78");
+        write("usr/lib32/libc79-32.so", "libicuuc.so.79");
+        let view = InstalledView::with_root(
+            dir.clone(),
+            [
+                pkg("consumer79", &[], &[], &["usr/lib/libc79.so"]),
+                pkg("consumer78", &[], &[], &["usr/lib/libc78.so"]),
+                pkg("consumer79-32", &[], &[], &["usr/lib32/libc79-32.so"]),
+            ],
         );
-        assert!(linked_consumers(&view, &["libother.so".to_string()]).is_empty());
+        let moved = Drift {
+            pkgname: "icu-git".to_string(),
+            name: "libicuuc.so".to_string(),
+            inst_ver: "79-64".to_string(),
+            built_ver: Some("80-64".to_string()),
+        };
+        assert_eq!(
+            linked_consumers(&view, std::slice::from_ref(&moved)),
+            vec!["consumer79".to_string()],
+            "only the moved generation AND class is a linked consumer"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

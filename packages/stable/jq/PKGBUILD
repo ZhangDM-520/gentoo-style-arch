@@ -8,7 +8,7 @@ source "$startdir/../../../lib/pgo.sh"
 
 pkgname=jq
 pkgver=1.8.2
-pkgrel=1.1
+pkgrel=1.3
 pkgdesc='Command-line JSON processor'
 arch=('x86_64')
 url='https://jqlang.github.io/jq/'
@@ -32,6 +32,14 @@ build() {
 
   # Upstream 1.8.x is autotools-only; do not switch to cmake.
 
+  # Documented exception (like glibc-git/python, NOTE.md 2026-10-31): the
+  # host's -Ofast (-ffast-math) hangs jq's tojson/fromjson path — the NaN
+  # sentinel comparisons never terminate (PGO training spun at 99% CPU on a
+  # trivial filter). A/B 2026-10-31, identical source: -O3 runs the filter
+  # instantly, -Ofast times out. Drop the LEVEL to -O3 (no -ffast-math);
+  # the rest of CFLAGS (ISA/LTO) stays host-derived.
+  CFLAGS=${CFLAGS/-Ofast/-O3}
+
   # PGO: instrument -> train -> use (C-autotools tier).
   # CFLAGS/LDFLAGS bake into the generated Makefile at ./configure time, so
   # every phase below re-runs ./configure and then make clean — make clean
@@ -40,6 +48,10 @@ build() {
   # as <dir>/<mangled-object-path>.gcda, so a bare generate paired with
   # use=<dir> misses every profile and silently compiles a profile-less build.
   local _pgo_dir="$PWD/pgo-profiles"
+  # Attempt-pure profiles: stale .gcda from an interrupted earlier attempt
+  # (crash or kill) merges garbage counts into the profile this build
+  # trusts. Fresh directory per build().
+  rm -rf "$_pgo_dir"
   mkdir -p "$_pgo_dir"
   local _final_cflags="$CFLAGS"
   local _final_ldflags="$LDFLAGS"
@@ -62,10 +74,15 @@ build() {
     esac
   done
 
-  # Phase 1: instrumented build.
+  # Phase 1: instrumented build. `make clean` is load-bearing on a WARM
+  # tree: a retry after an interrupted attempt (the 2026-10-31 USB drop
+  # tore jq mid-phase-2) otherwise links stale -fprofile-use objects with
+  # fresh -fprofile-generate ones — make does not track flag changes — and
+  # the mixed binary computes nonsense (`jq -n '1+1'` printed NaN).
   export CFLAGS="${_gen_cflags# } -fprofile-generate=$_pgo_dir"
   export LDFLAGS="${_gen_ldflags# } -fprofile-generate=$_pgo_dir"
   ./configure --prefix=/usr
+  make clean
   make
 
   # Training run: the upstream suite is the broadest coverage (parser,

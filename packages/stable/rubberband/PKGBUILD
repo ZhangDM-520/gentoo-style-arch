@@ -51,6 +51,8 @@ build() {
   )
   export JAVA_HOME="/usr/lib/jvm/java-$java_major-openjdk"
 
+  CFLAGS+=" -fprefetch-loop-arrays -fstack-reuse=all"  # flag-audit 2026-11-01
+  CXXFLAGS+=" -fprefetch-loop-arrays -fstack-reuse=all"  # flag-audit 2026-11-01
   arch-meson build $pkgbase-$pkgver "${meson_options[@]}"
   meson compile -C build
 }

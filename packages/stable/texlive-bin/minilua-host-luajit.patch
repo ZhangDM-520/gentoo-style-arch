@@ -1,0 +1,33 @@
+diff -ruN a/libs/luajit/native/Makefile.am b/libs/luajit/native/Makefile.am
+--- a/libs/luajit/native/Makefile.am	2026-10-31 06:56:03.105707808 +0800
++++ b/libs/luajit/native/Makefile.am	2026-10-31 06:56:03.106537100 +0800
+@@ -25,11 +25,11 @@
+ 
+ 
+ luajit.h: minilua$(EXEEXT)
+-	$(AM_V_GEN)./minilua $(srcdir)/$(LUAJIT_TREE)/src/host/genversion.lua $(srcdir)/$(LUAJIT_TREE)/src/luajit_rolling.h $(srcdir)/$(LUAJIT_TREE)/.relver
++	$(AM_V_GEN)luajit $(srcdir)/$(LUAJIT_TREE)/src/host/genversion.lua $(srcdir)/$(LUAJIT_TREE)/src/luajit_rolling.h $(srcdir)/$(LUAJIT_TREE)/.relver
+ 
+ 
+ buildvm_arch.h: minilua$(EXEEXT) $(LUAJIT_TREE)/dynasm/dynasm.lua
+-	$(AM_V_GEN)./minilua $(srcdir)/$(LUAJIT_TREE)/dynasm/dynasm.lua \
++	$(AM_V_GEN)luajit $(srcdir)/$(LUAJIT_TREE)/dynasm/dynasm.lua \
+ 	  `cat ../dynasm_flags` \
+ 	  -o $@ $(srcdir)/$(LUAJIT_TREE)/src/vm_$(DASM_ARCH).dasc
+ 
+diff -ruN a/libs/luajit/native/Makefile.in b/libs/luajit/native/Makefile.in
+--- a/libs/luajit/native/Makefile.in	2026-10-31 06:56:03.107403069 +0800
++++ b/libs/luajit/native/Makefile.in	2026-10-31 06:56:03.108215029 +0800
+@@ -932,10 +932,10 @@
+ $(buildvm_OBJECTS): buildvm_arch.h luajit.h
+ 
+ luajit.h: minilua$(EXEEXT)
+-	$(AM_V_GEN)./minilua $(srcdir)/$(LUAJIT_TREE)/src/host/genversion.lua $(srcdir)/$(LUAJIT_TREE)/src/luajit_rolling.h $(srcdir)/$(LUAJIT_TREE)/.relver
++	$(AM_V_GEN)luajit $(srcdir)/$(LUAJIT_TREE)/src/host/genversion.lua $(srcdir)/$(LUAJIT_TREE)/src/luajit_rolling.h $(srcdir)/$(LUAJIT_TREE)/.relver
+ 
+ buildvm_arch.h: minilua$(EXEEXT) $(LUAJIT_TREE)/dynasm/dynasm.lua
+-	$(AM_V_GEN)./minilua $(srcdir)/$(LUAJIT_TREE)/dynasm/dynasm.lua \
++	$(AM_V_GEN)luajit $(srcdir)/$(LUAJIT_TREE)/dynasm/dynasm.lua \
+ 	  `cat ../dynasm_flags` \
+ 	  -o $@ $(srcdir)/$(LUAJIT_TREE)/src/vm_$(DASM_ARCH).dasc
+ 

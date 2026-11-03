@@ -1,7 +1,7 @@
 # Maintainer: Tobias Powalowski <tpowa@archlinux.org>
 pkgname=cifs-utils
 pkgver=7.9
-pkgrel=1.1
+pkgrel=1.2
 pkgdesc="CIFS filesystem user-space tools"
 arch=(x86_64)
 url="https://wiki.samba.org/index.php/LinuxCIFS_utils"
@@ -18,6 +18,13 @@ makedepends=(
   git
   python-docutils
 )
+# !lto 2026-11-01 (campaign wall class): glibc's fortified strlcpy wrapper is
+# always_inline but calls __strlcpy_alias (an alias to the external symbol);
+# at LTO ltrans the wrapper is refused ("inlining failed in call to
+# always_inline 'strlcpy.localalias': function not inlinable") and the
+# pam_cifscreds.so link dies. The PAM module is tiny — LTO buys nothing;
+# keep _FORTIFY_SOURCE and drop LTO instead.
+options=(!lto)
 optdepends=('python: for smb2-quota and smbinfo script')
 source=("git+https://git.samba.org/cifs-utils.git?signed#tag=${pkgname}-${pkgver}")
 validpgpkeys=(

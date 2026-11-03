@@ -44,6 +44,7 @@ build() {
   local _mold=""
   command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
   export LDFLAGS+=" ${_mold}"
+  CFLAGS+=" -fprefetch-loop-arrays" # flag-audit 2026-11-01
 
   arch-meson "${_pkgname}" build -Dwith-docs=${_build_doc}
   meson compile -C build

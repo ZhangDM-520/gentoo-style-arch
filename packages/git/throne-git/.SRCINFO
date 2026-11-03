@@ -1,0 +1,35 @@
+pkgbase = throne-git
+	pkgdesc = Cross-platform GUI proxy utility (Empowered by sing-box)
+	pkgver = 1.4.0.beta.5.r6.g77aa05b
+	pkgrel = 1
+	url = https://github.com/throneproj/Throne
+	arch = x86_64
+	license = GPL-3.0-or-later
+	makedepends = cmake
+	makedepends = git
+	makedepends = go
+	makedepends = mold
+	makedepends = ninja
+	makedepends = protobuf
+	makedepends = qt6-tools
+	makedepends = vulkan-headers
+	depends = glibc
+	depends = qt6-base
+	provides = throne=1.4.0.beta.5
+	conflicts = throne
+	conflicts = throne-bin
+	conflicts = throne-sysqt-bin
+	source = throne::git+https://github.com/throneproj/Throne.git
+	source = routeprofiles::git+https://github.com/throneproj/routeprofiles.git#branch=rule-set
+	source = 0001-honor-subscription-domain-resolver.patch
+	source = 0002-user-agent-preset-dropdown.patch
+	source = throne.sh
+	source = throne.desktop
+	b2sums = SKIP
+	b2sums = SKIP
+	b2sums = 2dddfc79dabd7e6dd6fca46a40657eee1a5d8851dcbdcfdf12e6a6b9b9445b4d28be0478523b1992a9f292816727b1cc48acf463cecc8df949a6c96a43c571c9
+	b2sums = 55fb73727b0377fabf8ed615ecfcdfaa3b4c35b0455a7f2d7c7bd7ab2d0be84495285f398af6f24b27ef1195f84141ac3b122bd5421cd29beb35363fa7cb0010
+	b2sums = 0e185479d1169c90d99cd9b3a39b3d3868dfcdc4be7d076dab771b51ed72a9d8c395b9a1e124abbd4c76c373585f2e14dca571ba9902c988105048a043248d79
+	b2sums = 3d352b41df61efb97650e2be72c9e4c802661e8ca58ad630f0358c5973397b46ea4903a6371dc4ea4977fc543e9b66fd2359ac2c25545e24c97318d9cecad1ac
+
+pkgname = throne-git

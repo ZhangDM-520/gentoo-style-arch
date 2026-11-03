@@ -178,6 +178,7 @@ build() {
   export LDFLAGS+=" ${_mold}"
 
   export TZ=UTC
+  CFLAGS+=" -fipa-pta -fstack-reuse=all" # flag-audit 2026-11-01
   ./Configure -des -Dusethreads -Duseshrplib -Doptimize="${CFLAGS}" \
     -Dprefix=/usr -Dvendorprefix=/usr \
     -Dprivlib=/usr/share/perl5/core_perl \

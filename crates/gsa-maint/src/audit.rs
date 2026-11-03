@@ -294,7 +294,13 @@ pub fn report(ctx: &MaintCtx<'_>) -> Vec<Row> {
                 let Some(committed) = ctx.committed_version(id) else {
                     continue;
                 };
-                if built != committed {
+                // Compare canonicalized on BOTH sides (2026-11-01): the
+                // index side always carries an epoch while `committed`
+                // spells epoch 0 bare — a raw compare flagged every
+                // epoch-0 rebuild as a false skew ("built=0:X committed=X").
+                if gsa_recipe::pkginfo::canonical_version(&built)
+                    != gsa_recipe::pkginfo::canonical_version(&committed)
+                {
                     out.push((
                         id.to_string(),
                         format!("built={built} committed={committed}"),

@@ -1,7 +1,8 @@
 pkgbase = gcc-snapshot
 	pkgdesc = The GNU Compiler Collection (snapshot)
-	pkgver = 17.0.0.snapshot20261025
-	pkgrel = 1
+	pkgver = 17.0.0_r233981.9f6f255b68b0
+	pkgrel = 2
+	epoch = 2
 	url = https://gcc.gnu.org
 	arch = x86_64
 	license = GFDL-1.3-or-later
@@ -18,7 +19,7 @@ pkgbase = gcc-snapshot
 	makedepends = zstd
 	options = !emptydirs
 	options = !lto
-	source = https://ftp.fu-berlin.de/unix/languages/gcc/snapshots/17-20261025/gcc-17-20261025.tar.xz
+	source = gcc::git+https://github.com/gcc-mirror/gcc.git#commit=9f6f255b68b08218234d6c59aeee8a66943c99c7
 	source = git+https://github.com/Meinersbur/isl.git#branch=master
 	source = https://gmplib.org/download/gmp/gmp-6.3.0.tar.xz
 	source = https://gmplib.org/download/gmp/gmp-6.3.0.tar.xz.sig
@@ -35,7 +36,7 @@ pkgbase = gcc-snapshot
 	validpgpkeys = 343C2FF0FBEE5EC2EDBEF399F3599FF828C67298
 	validpgpkeys = A534BE3F83E241D918280AEB5831D11A0D4DB02A
 	validpgpkeys = AD17A21EF8AED8F1CC02DBD9F7D5C9BF765C61E3
-	sha256sums = 9b5a34c89e85becd292339f7c70931721b2d6ee5eb57a07c46b9c3295f1a3b83
+	sha256sums = SKIP
 	sha256sums = SKIP
 	sha256sums = a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898
 	sha256sums = SKIP
@@ -48,14 +49,14 @@ pkgbase = gcc-snapshot
 
 pkgname = gcc-snapshot
 	pkgdesc = GNU Compiler Collection - C and C++ front-ends (snapshot)
-	depends = libgcc-snapshot=17.0.0.snapshot20261025-1
-	depends = libstdc++-snapshot=17.0.0.snapshot20261025-1
+	depends = libgcc-snapshot=2:17.0.0_r233981.9f6f255b68b0-2
+	depends = libstdc++-snapshot=2:17.0.0_r233981.9f6f255b68b0-2
 	depends = glibc>=2.40
 	depends = zstd
 	optdepends = lib32-gcc-libs-snapshot: for generating code for 32-bit ABI
 	provides = gcc-snapshot-multilib
-	provides = gcc-multilib=17.0.0.snapshot20261025
-	provides = gcc=17.0.0.snapshot20261025
+	provides = gcc-multilib=2:17.0.0_r233981.9f6f255b68b0
+	provides = gcc=2:17.0.0_r233981.9f6f255b68b0
 	conflicts = gcc-multilib
 	conflicts = gcc
 	replaces = gcc-snapshot-multilib
@@ -66,12 +67,12 @@ pkgname = gcc-snapshot
 
 pkgname = gcc-fortran-snapshot
 	pkgdesc = GNU Compiler Collection - Fortran front-end (snapshot)
-	depends = gcc-snapshot=17.0.0.snapshot20261025-1
-	depends = libgfortran-snapshot=17.0.0.snapshot20261025-1
+	depends = gcc-snapshot=2:17.0.0_r233981.9f6f255b68b0-2
+	depends = libgfortran-snapshot=2:17.0.0_r233981.9f6f255b68b0-2
 	depends = glibc>=2.40
 	provides = gcc-fortran-snapshot-multilib
-	provides = gcc-fortran-multilib=17.0.0.snapshot20261025
-	provides = gcc-fortran=17.0.0.snapshot20261025
+	provides = gcc-fortran-multilib=2:17.0.0_r233981.9f6f255b68b0
+	provides = gcc-fortran=2:17.0.0_r233981.9f6f255b68b0
 	conflicts = gcc-fortran-multilib
 	conflicts = gcc-fortran
 	replaces = gcc-fortran-snapshot-multilib
@@ -82,21 +83,21 @@ pkgname = gcc-fortran-snapshot
 
 pkgname = gcc-libs-snapshot
 	pkgdesc = GNU Compiler Collection - Runtime libraries (snapshot)
-	depends = libasan-snapshot=17.0.0.snapshot20261025-1
-	depends = libatomic-snapshot=17.0.0.snapshot20261025-1
-	depends = libgfortran-snapshot=17.0.0.snapshot20261025-1
-	depends = libgcc-snapshot=17.0.0.snapshot20261025-1
-	depends = libgomp-snapshot=17.0.0.snapshot20261025-1
-	depends = libitm-snapshot=17.0.0.snapshot20261025-1
-	depends = liblsan-snapshot=17.0.0.snapshot20261025-1
-	depends = libquadmath-snapshot=17.0.0.snapshot20261025-1
-	depends = libstdc++-snapshot=17.0.0.snapshot20261025-1
-	depends = libtsan-snapshot=17.0.0.snapshot20261025-1
-	depends = libubsan-snapshot=17.0.0.snapshot20261025-1
+	depends = libasan-snapshot=2:17.0.0_r233981.9f6f255b68b0-2
+	depends = libatomic-snapshot=2:17.0.0_r233981.9f6f255b68b0-2
+	depends = libgfortran-snapshot=2:17.0.0_r233981.9f6f255b68b0-2
+	depends = libgcc-snapshot=2:17.0.0_r233981.9f6f255b68b0-2
+	depends = libgomp-snapshot=2:17.0.0_r233981.9f6f255b68b0-2
+	depends = libitm-snapshot=2:17.0.0_r233981.9f6f255b68b0-2
+	depends = liblsan-snapshot=2:17.0.0_r233981.9f6f255b68b0-2
+	depends = libquadmath-snapshot=2:17.0.0_r233981.9f6f255b68b0-2
+	depends = libstdc++-snapshot=2:17.0.0_r233981.9f6f255b68b0-2
+	depends = libtsan-snapshot=2:17.0.0_r233981.9f6f255b68b0-2
+	depends = libubsan-snapshot=2:17.0.0_r233981.9f6f255b68b0-2
 	depends = glibc>=2.40
 	provides = gcc-libs-snapshot-multilib
-	provides = gcc-libs-multilib=17.0.0.snapshot20261025
-	provides = gcc-libs=17.0.0.snapshot20261025-1
+	provides = gcc-libs-multilib=2:17.0.0_r233981.9f6f255b68b0
+	provides = gcc-libs=2:17.0.0_r233981.9f6f255b68b0-2
 	conflicts = gcc-libs-multilib
 	conflicts = gcc-libs
 	replaces = gcc-libs-snapshot-multilib
@@ -108,7 +109,7 @@ pkgname = libasan-snapshot
 	pkgdesc = GNU Compiler Collection - Address Sanitizer runtime libraries (snapshot)
 	depends = glibc>=2.40
 	provides = libasan-snapshot-multilib
-	provides = libasan=17.0.0.snapshot20261025
+	provides = libasan=2:17.0.0_r233981.9f6f255b68b0
 	provides = libasan.so
 	conflicts = libasan
 	replaces = libasan-snapshot-multilib
@@ -119,7 +120,7 @@ pkgname = libatomic-snapshot
 	pkgdesc = GNU Compiler Collection - GNU Atomic runtime libraries (snapshot)
 	depends = glibc>=2.40
 	provides = libatomic-snapshot-multilib
-	provides = libatomic=17.0.0.snapshot20261025
+	provides = libatomic=2:17.0.0_r233981.9f6f255b68b0
 	provides = libatomic.so
 	conflicts = libatomic
 	replaces = libatomic-snapshot-multilib
@@ -130,7 +131,7 @@ pkgname = libgcc-snapshot
 	pkgdesc = GNU Compiler Collection - Low-level runtime libraries (snapshot)
 	depends = glibc>=2.40
 	provides = libgcc-snapshot-multilib
-	provides = libgcc=17.0.0.snapshot20261025
+	provides = libgcc=2:17.0.0_r233981.9f6f255b68b0
 	provides = libgcc_s.so
 	provides = libgcc_s_asneeded.so
 	conflicts = libgcc
@@ -140,9 +141,9 @@ pkgname = libgcc-snapshot
 
 pkgname = libgccjit-snapshot
 	pkgdesc = GNU Compiler Collection - Just-In-Time compilation framework (snapshot)
-	depends = gcc-snapshot=17.0.0.snapshot20261025-1
+	depends = gcc-snapshot=2:17.0.0_r233981.9f6f255b68b0-2
 	provides = libgccjit-snapshot-multilib
-	provides = libgccjit=17.0.0.snapshot20261025
+	provides = libgccjit=2:17.0.0_r233981.9f6f255b68b0
 	conflicts = libgccjit
 	replaces = libgccjit-snapshot-multilib
 	replaces = libgccjit
@@ -152,7 +153,7 @@ pkgname = libgfortran-snapshot
 	pkgdesc = GNU Compiler Collection - Fortran runtime libraries (snapshot)
 	depends = glibc>=2.40
 	provides = libgfortran-snapshot-multilib
-	provides = libgfortran=17.0.0.snapshot20261025
+	provides = libgfortran=2:17.0.0_r233981.9f6f255b68b0
 	provides = libgfortran.so
 	conflicts = libgfortran
 	replaces = libgfortran-snapshot-multilib
@@ -163,7 +164,7 @@ pkgname = libgomp-snapshot
 	pkgdesc = GNU Compiler Collection - OpenMP and GPU Offload runtime libraries (snapshot)
 	depends = glibc>=2.40
 	provides = libgomp-snapshot-multilib
-	provides = libgomp=17.0.0.snapshot20261025
+	provides = libgomp=2:17.0.0_r233981.9f6f255b68b0
 	provides = libgomp.so
 	conflicts = libgomp
 	replaces = libgomp-snapshot-multilib
@@ -174,7 +175,7 @@ pkgname = libitm-snapshot
 	pkgdesc = GNU Compiler Collection - GNU Transactional Memory runtime libraries (snapshot)
 	depends = glibc>=2.40
 	provides = libitm-snapshot-multilib
-	provides = libitm=17.0.0.snapshot20261025
+	provides = libitm=2:17.0.0_r233981.9f6f255b68b0
 	provides = libitm.so
 	conflicts = libitm
 	replaces = libitm-snapshot-multilib
@@ -185,7 +186,7 @@ pkgname = liblsan-snapshot
 	pkgdesc = GNU Compiler Collection - Leak Sanitizer runtime libraries (snapshot)
 	depends = glibc>=2.40
 	provides = liblsan-snapshot-multilib
-	provides = liblsan=17.0.0.snapshot20261025
+	provides = liblsan=2:17.0.0_r233981.9f6f255b68b0
 	provides = liblsan.so
 	conflicts = liblsan
 	replaces = liblsan-snapshot-multilib
@@ -196,7 +197,7 @@ pkgname = libquadmath-snapshot
 	pkgdesc = GNU Compiler Collection - Quad-Precision Math runtime libraries (snapshot)
 	depends = glibc>=2.40
 	provides = libquadmath-snapshot-multilib
-	provides = libquadmath=17.0.0.snapshot20261025
+	provides = libquadmath=2:17.0.0_r233981.9f6f255b68b0
 	provides = libquadmath.so
 	conflicts = libquadmath
 	replaces = libquadmath-snapshot-multilib
@@ -207,7 +208,7 @@ pkgname = libstdc++-snapshot
 	pkgdesc = GNU Compiler Collection - C++ runtime libraries (snapshot)
 	depends = glibc>=2.40
 	provides = libstdc++-snapshot-multilib
-	provides = libstdc++=17.0.0.snapshot20261025
+	provides = libstdc++=2:17.0.0_r233981.9f6f255b68b0
 	provides = libstdc++.so
 	conflicts = libstdc++
 	replaces = libstdc++-snapshot-multilib
@@ -218,7 +219,7 @@ pkgname = libtsan-snapshot
 	pkgdesc = GNU Compiler Collection - Thread Sanitizer runtime libraries (snapshot)
 	depends = glibc>=2.40
 	provides = libtsan-snapshot-multilib
-	provides = libtsan=17.0.0.snapshot20261025
+	provides = libtsan=2:17.0.0_r233981.9f6f255b68b0
 	provides = libtsan.so
 	conflicts = libtsan
 	replaces = libtsan-snapshot-multilib
@@ -229,7 +230,7 @@ pkgname = libubsan-snapshot
 	pkgdesc = GNU Compiler Collection - Undefined Behavior Sanitizer runtime libraries (snapshot)
 	depends = glibc>=2.40
 	provides = libubsan-snapshot-multilib
-	provides = libubsan=17.0.0.snapshot20261025
+	provides = libubsan=2:17.0.0_r233981.9f6f255b68b0
 	provides = libubsan.so
 	conflicts = libubsan
 	replaces = libubsan-snapshot-multilib
@@ -240,7 +241,7 @@ pkgname = lib32-gcc-libs-snapshot
 	pkgdesc = GNU Compiler Collection - 32-bit Runtime libraries (snapshot)
 	depends = lib32-glibc>=2.40
 	provides = lib32-gcc-libs-snapshot-multilib
-	provides = lib32-gcc-libs=17.0.0.snapshot20261025
+	provides = lib32-gcc-libs=2:17.0.0_r233981.9f6f255b68b0
 	provides = libasan.so
 	provides = libatomic.so
 	provides = libgfortran.so
@@ -258,10 +259,10 @@ pkgname = lib32-gcc-libs-snapshot
 
 pkgname = lto-dump-snapshot
 	pkgdesc = GNU Compiler Collection - Dump link time optimization object files tool (snapshot)
-	depends = gcc-snapshot=17.0.0.snapshot20261025-1
+	depends = gcc-snapshot=2:17.0.0_r233981.9f6f255b68b0-2
 	depends = libgcc-snapshot
 	provides = lto-dump-snapshot-multilib
-	provides = lto-dump=17.0.0.snapshot20261025
+	provides = lto-dump=2:17.0.0_r233981.9f6f255b68b0
 	conflicts = lto-dump
 	replaces = lto-dump-snapshot-multilib
 	replaces = lto-dump

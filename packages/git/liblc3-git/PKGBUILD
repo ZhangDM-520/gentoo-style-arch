@@ -35,6 +35,7 @@ build() {
     -D python=true
     -D tools=true
   )
+  CFLAGS+=" -fstack-reuse=all"  # flag-audit 2026-11-01
   arch-meson "$_pkgname" build "${meson_options[@]}"
   meson compile -C build
 }

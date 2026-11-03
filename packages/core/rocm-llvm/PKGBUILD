@@ -26,6 +26,8 @@ build() {
     # Build only minimal debug info to reduce size
     CFLAGS+=' -g1'
     CXXFLAGS+=' -g1'
+    CFLAGS+=" -fstack-reuse=all" # flag-audit 2026-11-01
+    CXXFLAGS+=" -fstack-reuse=all" # flag-audit 2026-11-01
 
     # This package is huge: clang/flang translation units at -O3 can consume
     # multiple GiB each. Prefer the builder's memory-aware job budget, while
