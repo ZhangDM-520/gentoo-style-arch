@@ -4,7 +4,7 @@ pkgbase=openjph
 # trim: stock split openjph-doc dropped (docs) — see the build() trim note
 pkgname=(
     'openjph')
-pkgver=0.32.0
+pkgver=0.33.0
 pkgrel=1.1
 pkgdesc='Open-source implementation of JPEG2000 Part-15'
 arch=('x86_64')
@@ -15,7 +15,7 @@ makedepends=(
     'git'
     'libtiff')
 source=("git+https://github.com/aous72/OpenJPH#tag=$pkgver")
-sha256sums=('08bdab8ec90f7fd930c310aaafad2ae5a1c59288a91420edb218738a86b26aa7')
+sha256sums=('6279cc5a8e4269c23c843ee78bbfd360f0a32ad54b0bf55cf8289b06fae04e7f')
 
 build() {
     # trim: the openjph-doc split (docs: doxygen HTML) went together with the
@@ -48,7 +48,7 @@ package_openjph() {
         'libstdc++'
         'libtiff')
     # House standard: bare soname provide per ELF output (never pinned).
-    # Upstream soname is libopenjph.so.0.32.
+    # Upstream soname is libopenjph.so.0.33.
     provides=('libopenjph.so')
 
     DESTDIR="$pkgdir" cmake --install build

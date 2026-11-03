@@ -1,0 +1,61 @@
+# Maintainer: Daniel Bermond <dbermond@archlinux.org>
+
+pkgname=avisynthplus
+pkgver=3.7.6
+pkgrel=2.1
+pkgdesc='An improved version of the AviSynth frameserver'
+arch=('x86_64')
+url='https://avs-plus.net/'
+license=('GPL-2.0-or-later')
+depends=(
+    'glibc'
+    'hicolor-icon-theme'
+    'libgcc'
+    'libstdc++')
+optdepends=(
+    'devil: for ImageSeq plugin'
+    'soundtouch: for TimeStretch plugin')
+makedepends=(
+    'cmake'
+    'devil'
+    'patchutils'
+    'soundtouch')
+provides=('libavisynth.so')
+source=("https://github.com/AviSynth/AviSynthPlus/archive/v${pkgver}/${pkgname}-${pkgver}.tar.gz"
+        '010-avisynthplus-fix-lto.patch'  # vendored: upstream commit b37efbe .patch URL output drifts with the GitHub git version
+        'avisynthplus.xml')
+sha256sums=('8c019a934189688e73fe1cd85e6768cc0bc120fe1f4a3310c889060283c9e083'
+            'c1e0e91b8217407bde78e381c04a205325c8de2d074ac7feab9a3fdc7031b8e9'
+            'c4b270a3df7fbe1c153400215169c4ae4cae3b7a8710c843393e3a6ed0fd8a3e')
+
+prepare() {
+    filterdiff -x '*.txt' -x '*.rst' 010-avisynthplus-fix-lto.patch | patch -d "AviSynthPlus-${pkgver}" -Np1
+}
+
+build() {
+    # House style: mold linker when available (cmake consumes LDFLAGS env)
+    local _mold=""
+    command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+    export LDFLAGS+=" ${_mold}"
+
+    cmake -B build -S "AviSynthPlus-${pkgver}" \
+        -G 'Unix Makefiles' \
+        -DCMAKE_BUILD_TYPE:STRING='None' \
+        -DCMAKE_INSTALL_PREFIX:PATH='/usr' \
+        -Wno-author
+    cmake --build build --parallel "${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package() {
+    DESTDIR="$pkgdir" cmake --install build
+    install -D -m644 avisynthplus.xml -t "${pkgdir}/usr/share/mime/packages"
+    
+    local _icon
+    local _res
+    while read -r -d '' _icon
+    do
+        _res="$(sed 's/[[:alpha:]]*\([0-9]\+\)\.png/\1/' <<< "${_icon##*/}")"
+        [ -n "$_res" ] && install -D -m644 "$_icon" \
+            "${pkgdir}/usr/share/icons/hicolor/${_res}x${_res}/mimetypes/avisynthplus-script.png"
+    done < <(find "AviSynthPlus-${pkgver}/distrib/Icons/Rastered" -type f -name 'AvsPlusIcon*.png' -print0)
+}

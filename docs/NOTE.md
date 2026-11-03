@@ -1,3 +1,12 @@
+## 2026-11-04 — stock `openexr`/`avisynthplus` blocked by the ABI hook: openjph 0.33, devil, openexr, avisynthplus join the tree
+
+- **Symptom:** the pacman ABI hook (`abi-need-check`) refused stock `openexr` (`libOpenEXRCore-3_5.so` needs `libopenjph.so.0.33`) and stock `avisynthplus` (`libimageseq.so` needs `libIL.so.1`) — no installed file resolved either soname.
+- **Root cause:** the tree shipped `openjph` 0.32 (soname `.0.32`) and no owner of `libIL.so.1` (`devil`); the host ran `openexr-git` (4.0 sonames, outside the tree). Stock packages fed in from the repo therefore had unresolvable needs.
+- **Fix:** new recipes `devil` (stock recipe + soversion/jasper patches, bare `libIL/ILU/ILUT` provides), `openexr` (3.5.3, source URL aligned with the existing `~/.gsa-src/openexr` mirror remote, soname provides declared), `avisynthplus` (the upstream LTO-fix `.patch` is vendored — the GitHub `.patch` URL output drifts with its git version and failed the pinned sha256); `openjph` bumped 0.32.0→0.33.0. Topology: `devil`→`jasper,lcms2,…`, `avisynthplus`→`devil`, `openexr`→`openjph,…`; rule 21(a) promoted `jasper` and `openjph` to `core` (≥2 edge-consumers, `tests/abi-batch-policy.sh` F).
+- **Landing:** `openjph` is a soname move (`.0.32→.0.33`), so the engine refused it (`abi-soname`, MEMORY 2026-11-02 rule); landed with `pacman -U --assume-installed 'libopenjph.so=0.32-64'`, then `gsa -S --skip-built` re-blessed. Swapping `openexr-git` (4.0) for 3.5.3 left `openimageio` and `blender-git` linking `libOpenEXR-4_0` (`gsa -Qr` unresolved rows) — rebuilt against 3.5.3 with `gsa -Sf --leaf --no-sync openimageio` (wave closure).
+- **Validation:** `ldconfig -p` resolves `libopenjph.so.0.33` and `libIL.so.1`; `ldd` clean on `libOpenEXRCore-3_5.so` and `libimageseq.so`; `gsa -Qr` shows no unresolved rows for the four packages or their consumers; fixtures `abi-batch-policy`, `project`, `recipe-sources`, `recipe-contract`, `srcinfo-freshness` green.
+- **Durable rule:** a stock package blocked by the ABI hook means a soname owner is missing from the tree — add the owner as a recipe, never bypass the hook. A provider swap (`-git` 4.0 → stock 3.5) changes sonames: run `gsa -Qr` afterwards and rebuild every unresolved consumer in the same pass.
+
 ## 2026-11-03 — umbriel-git render-scale and dependent patch refresh
 
 The recipe now targets upstream main `e0da1063` (`0.1.0.r1504.e0da106-1`)

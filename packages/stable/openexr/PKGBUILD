@@ -1,0 +1,52 @@
+# Maintainer: Tobias Powalowski <tpowa@archlinux.org>
+
+pkgname=openexr
+pkgver=3.5.3
+pkgrel=3.1
+pkgdesc='A high dynamic-range image file format library'
+url='https://www.openexr.com/'
+arch=(x86_64)
+license=(BSD-3-Clause)
+depends=(glibc
+         imath
+         libdeflate
+         libgcc
+         libstdc++
+         openjph
+         zstd)
+makedepends=(cmake
+             git
+             pybind11)
+# House standard: bare soname provide per ELF output (never pinned).
+provides=('libIex-3_5.so' 'libIlmThread-3_5.so' 'libOpenEXR-3_5.so' 'libOpenEXRCore-3_5.so' 'libOpenEXRUtil-3_5.so')
+optdepends=('python: for python bindings')
+source=(git+https://github.com/AcademySoftwareFoundation/openexr.git#tag=v$pkgver)
+sha256sums=('3d1b14e7cedc2cf50aec4209cfdc38ce9323050c1315b0c82e257fdfb0b0bd94')
+
+prepare() {
+# unpin scikit-build-core version
+  sed 's|scikit-build-core[^"]*|scikit-build-core|' -i openexr/pyproject.toml
+# Fix building with system OpenJPH
+  sed -i -E 's/(find_package\(openjph) +[0-9][0-9.]*/\1/' openexr/cmake/OpenEXRSetup.cmake
+}
+
+build() {
+  # House style: mold linker when available (cmake consumes LDFLAGS env)
+  local _mold=""
+  command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
+  export LDFLAGS+=" ${_mold}"
+
+  cmake -B build -S $pkgname \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DCMAKE_BUILD_TYPE=None \
+    -DOPENEXR_BUILD_PYTHON=ON
+  cmake --build build --parallel "${GSA_BUILD_JOBS:-$(nproc)}"
+}
+
+package() {
+  DESTDIR="$pkgdir" cmake --install build
+  install -Dm644 $pkgname/LICENSE.md -t "$pkgdir"/usr/share/licenses/$pkgname
+
+  python -m compileall "$pkgdir"/usr/lib/python*
+  python -Om compileall "$pkgdir"/usr/lib/python*
+}

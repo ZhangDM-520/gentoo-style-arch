@@ -1,0 +1,87 @@
+From b37efbea3c65611db454dc515861f9ac38cf1537 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Ferenc=20Pint=C3=A9r?= <pinterfer@gmail.com>
+Date: Sat, 31 Oct 2026 19:51:10 +0100
+Subject: [PATCH] Fix #531: GCC LTO build failure in SSE4.1 float mask rowprep
+
+Add __target__("sse4.1") to do_fill_chroma_row_float_sse41 and drop the
+needless AVS_FORCEINLINE from the explicitly instantiated float rowprep
+functions (SSE4.1, AVX2).
+---
+ avs_core/filters/overlay/intel/blend_common_sse.cpp       | 3 +++
+ avs_core/filters/overlay/intel/masked_rowprep_avx2.cpp    | 2 +-
+ avs_core/filters/overlay/intel/masked_rowprep_sse41.cpp   | 2 +-
+ distrib/Readme/readme_history.txt                         | 6 ++++++
+ distrib/docs/english/source/avisynthdoc/changelist377.rst | 3 +++
+ 5 files changed, 14 insertions(+), 2 deletions(-)
+
+diff --git a/avs_core/filters/overlay/intel/blend_common_sse.cpp b/avs_core/filters/overlay/intel/blend_common_sse.cpp
+index 01b07b1aa..eaa9eb4d1 100644
+--- a/avs_core/filters/overlay/intel/blend_common_sse.cpp
++++ b/avs_core/filters/overlay/intel/blend_common_sse.cpp
+@@ -577,6 +577,9 @@ template void do_fill_chroma_row_sse41<uint16_t, true> (std::vector<uint16_t>&,
+ template void do_fill_chroma_row_sse41<uint16_t, false>(std::vector<uint16_t>&, const uint16_t*, int, int, MaskMode, int, int, MagicDiv);
+ 
+ template<bool full_opacity>
++#if defined(GCC) || defined(CLANG)
++__attribute__((__target__("sse4.1")))
++#endif
+ void do_fill_chroma_row_float_sse41(
+   std::vector<float>& buf, const float* luma_row,
+   int luma_pitch_pixels, int chroma_w, MaskMode mode,
+diff --git a/avs_core/filters/overlay/intel/masked_rowprep_avx2.cpp b/avs_core/filters/overlay/intel/masked_rowprep_avx2.cpp
+index c8d46682c..c1b9a63fb 100644
+--- a/avs_core/filters/overlay/intel/masked_rowprep_avx2.cpp
++++ b/avs_core/filters/overlay/intel/masked_rowprep_avx2.cpp
+@@ -963,7 +963,7 @@ template<MaskMode maskMode, bool full_opacity>
+ #if defined(GCC) || defined(CLANG)
+ __attribute__((__target__("avx2")))
+ #endif
+-AVS_FORCEINLINE const float* prepare_effective_mask_for_row_float_avx2(
++const float* prepare_effective_mask_for_row_float_avx2(
+   const float* maskp,
+   int mask_pitch,
+   int width,
+diff --git a/avs_core/filters/overlay/intel/masked_rowprep_sse41.cpp b/avs_core/filters/overlay/intel/masked_rowprep_sse41.cpp
+index d7cdaa3d4..4624dc086 100644
+--- a/avs_core/filters/overlay/intel/masked_rowprep_sse41.cpp
++++ b/avs_core/filters/overlay/intel/masked_rowprep_sse41.cpp
+@@ -898,7 +898,7 @@ template<MaskMode maskMode, bool full_opacity>
+ #if defined(GCC) || defined(CLANG)
+ __attribute__((__target__("sse4.1")))
+ #endif
+-AVS_FORCEINLINE const float* prepare_effective_mask_for_row_float_sse41(
++const float* prepare_effective_mask_for_row_float_sse41(
+   const float* maskp,
+   int mask_pitch,
+   int width,
+diff --git a/distrib/Readme/readme_history.txt b/distrib/Readme/readme_history.txt
+index b96649bae..f280abf12 100644
+--- a/distrib/Readme/readme_history.txt
++++ b/distrib/Readme/readme_history.txt
+@@ -11,6 +11,12 @@ https://avisynthplus.readthedocs.io/en/latest/avisynthdoc/changelist376.html
+ 
+ 20261031 3.7.6.rXXXX (pre 3.7.7)
+ --------------------------------
++- Fix #531: GCC build with LTO (-flto) failed at link time on x86/x64 Linux:
++  "inlining failed in call to 'always_inline' prepare_effective_mask_for_row_float_sse41: target specific
++  option mismatch". The force-inlined SSE4.1 function, defined in another source file, was called from a
++  function without the SSE4.1 target; LTO tried to inline it across the files.
++  The caller now has the SSE4.1 target, and the needless force-inline was removed (also from the AVX2 twin).
++  Existed since 3.7.6.
+ - Fix #530: AddAlphaPlane() refused greyscale (Y) clips. Now Y gives YA (e.g. Y8 -> YA8, Y32 -> YAS), with
+   the default opaque alpha, a mask value, opacity= or a mask clip (Y, or any alpha format, also YA).
+   RemoveAlphaPlane() turns YA back into Y. Existed since 3.7.6 (new YA formats).
+diff --git a/distrib/docs/english/source/avisynthdoc/changelist377.rst b/distrib/docs/english/source/avisynthdoc/changelist377.rst
+index aa0d1bb7c..7f6f5b89b 100644
+--- a/distrib/docs/english/source/avisynthdoc/changelist377.rst
++++ b/distrib/docs/english/source/avisynthdoc/changelist377.rst
+@@ -6,6 +6,9 @@ Additions, changes
+ 
+ Build environment, Interface
+ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
++- Fix: GCC build with LTO (link-time optimization) failed with "inlining failed in call to 'always_inline'
++  ... target specific option mismatch" in the SSE4.1 Overlay/Layer mask row preparation (x86/x64).
++  (`issue #531 <https://github.com/AviSynth/AviSynthPlus/issues/531>`_)
+ 
+ Bugfixes
+ ~~~~~~~~
