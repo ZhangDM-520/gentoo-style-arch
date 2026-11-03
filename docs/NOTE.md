@@ -1,3 +1,22 @@
+## 2026-11-03 — umbriel-git render-scale and dependent patch refresh
+
+The recipe now targets upstream main `e0da1063` (`0.1.0.r1504.e0da106-1`)
+and carries PR #573 head `a75c7bae`, including physical-scale X11 by default
+and the `force_x11_supersample` opt-in. The ICC, downsample and unfocused
+border stack patches were flattened and adapted to preserve upstream
+`screen_cast_effect` and the existing downstream behavior. The old border
+patch accidentally carried an absolute local `node_modules` symlink; it is
+excluded. An ICC patch application initially misplaced a capture-helper
+closing brace; the corrected patch parses and preserves both helper sets.
+
+The five recipe patches were applied in order with `git apply -3` in a fresh
+upstream checkout without intermediate commits or synthetic objects, yielding
+tree `2bf879329736395c928b9b2fd8e3331763dfb8d4`. All 465 tracked shell scripts
+passed `bash -n`; recipe checksums and generated `.SRCINFO` agree. A combined
+debug build passed 10 focused unit targets and 14 headless checks spanning
+X11/Wayland scales, ICC, downsampling, borders and screen capture. No package
+archive was built and no live installation was changed.
+
 ## 2026-11-03 — dashboard progress total counted the remediation latent pool (`--leaf` run showed 1/332)
 
 - SYMPTOM: `sudo gsa -S --leaf onlyoffice-git` rendered `Progress: 1/332

@@ -1,6 +1,6 @@
 pkgbase = umbriel-git
 	pkgdesc = A Wayland compositor built on wlroots
-	pkgver = 0.1.0.r1499.6d142d1
+	pkgver = 0.1.0.r1504.e0da106
 	pkgrel = 1
 	epoch = 1
 	url = https://github.com/noctalia-dev/umbriel
@@ -34,7 +34,7 @@ pkgbase = umbriel-git
 	depends = xorg-xwayland
 	depends = xdg-desktop-portal-umbriel
 	depends = wlroots0.20
-	provides = umbriel=0.1.0.r1499.6d142d1
+	provides = umbriel=0.1.0.r1504.e0da106
 	conflicts = umbriel
 	options = !debug
 	options = lto
@@ -46,9 +46,9 @@ pkgbase = umbriel-git
 	source = 0016-border-unfocused.patch
 	sha256sums = SKIP
 	sha256sums = 817ffce311dbb4b162de5b261ef89d011f5f484db390eafec4ace1a4bf94c6ea
-	sha256sums = 669ad7674f84d4351749249837bf530db0d7a087ebcaa8a860d25bc2e8ab6a94
-	sha256sums = d0d2ca5cceb9f9da981adad46e669706b0b550c77f9759cceeffce64e29963c7
-	sha256sums = 6462baf16a6a2921a2bb837557eeaa39d7b6bf51000a5b217b74a57334f004d0
-	sha256sums = a5a0f422310a08b7e47186cd3c5d40869fa97e59a5660b5830f8b2efbf4fcec9
+	sha256sums = e58e07b4c66452d8204cc1a2231a2bfdb2218f54bd64edda1233c73d81332e20
+	sha256sums = 7c4de03d135dc74529c7cafc2a81ae659c1e9a917094aeafb248175c94db8400
+	sha256sums = 3b4d84d318cd0865c561c9e64f3dc367658dd1060e7465f9e862fd9ac1ccd3d6
+	sha256sums = 4b026b469b7d2244cc343efeab260c3fa79ca25d0442ebb27e0356fb9f4cb77f
 
 pkgname = umbriel-git

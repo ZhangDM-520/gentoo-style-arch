@@ -8,7 +8,7 @@ source "$startdir/../../../lib/pgo.sh"
 
 pkgname=umbriel-git
 _pkgname=umbriel
-pkgver=0.1.0.r1499.6d142d1
+pkgver=0.1.0.r1504.e0da106
 pkgrel=1
 epoch=1
 pkgdesc='A Wayland compositor built on wlroots'
@@ -64,10 +64,10 @@ source=("${_pkgname}::git+${url}.git#branch=main"
         '0016-border-unfocused.patch')
 sha256sums=('SKIP'
             '817ffce311dbb4b162de5b261ef89d011f5f484db390eafec4ace1a4bf94c6ea'
-            '669ad7674f84d4351749249837bf530db0d7a087ebcaa8a860d25bc2e8ab6a94'
-            'd0d2ca5cceb9f9da981adad46e669706b0b550c77f9759cceeffce64e29963c7'
-            '6462baf16a6a2921a2bb837557eeaa39d7b6bf51000a5b217b74a57334f004d0'
-            'a5a0f422310a08b7e47186cd3c5d40869fa97e59a5660b5830f8b2efbf4fcec9')
+            'e58e07b4c66452d8204cc1a2231a2bfdb2218f54bd64edda1233c73d81332e20'
+            '7c4de03d135dc74529c7cafc2a81ae659c1e9a917094aeafb248175c94db8400'
+            '3b4d84d318cd0865c561c9e64f3dc367658dd1060e7465f9e862fd9ac1ccd3d6'
+            '4b026b469b7d2244cc343efeab260c3fa79ca25d0442ebb27e0356fb9f4cb77f')
 
 pkgver() {
   cd "${_pkgname}"
@@ -89,8 +89,7 @@ prepare() {
   # demotes only when its last drag-presented view leaves). Upstream PR
   # noctalia-dev/umbriel#570; 0011-drag-deform-settle-crop.patch (sha256
   # 817ffce3…, three commits b6d7542a/7ac93ec1/8a3c231d, re-cut 2026-11-02
-  # from fresh upstream main@6d142d12 by cherry-pick — the whole stack is
-  # generated this way now; the cursor.cpp tab-group union keeps
+  # from upstream main@6d142d12 by cherry-pick; the cursor.cpp tab-group union keeps
   # landTabGroup before closeReleaseRehomeWindow: the wait covers every
   # reparent the release issues, and the disarm ends the release's say).
   # (0002, PR #508's
@@ -115,11 +114,10 @@ prepare() {
   # follows the output scale bit-identically, direct scanout declines while
   # render_scale != scale, and mirror scenes are isolated from render_scale
   # hints. Upstream PR noctalia-dev/umbriel#573;
-  # 0012-per-output-render-scale.patch (sha256 669ad767…, four commits
-  # 98e1cf46/fece752d/e3c51e6c/2083bd00 — feat + two review rounds + the X
-  # rectangle P1 fix, re-cut 2026-11-02 from fresh upstream main@6d142d12
-  # by cherry-pick; output.h keeps main's 34a10b88 annotation policy and
-  # tests/unit/config_change.cpp keeps both test blocks). (Retire on merge:
+  # Native-resolution X11 uses the physical output scale by default;
+  # force_x11_supersample opts back into render_scale. Flattened PR head
+  # a75c7bae relative to main@e0da1063 on top of 0011; sha256 e58e07b4….
+  # (Retire on merge:
   # 0012 → PR #573.)
   git apply -3 ../0012-per-output-render-scale.patch
 
@@ -128,44 +126,29 @@ prepare() {
   # in the panel's colorimetry; the default `"native"` stages no transform),
   # plus client ICC image descriptions (`create_icc`) and `icc_file`
   # advertising. Upstream PR noctalia-dev/umbriel#585; 0013-icc-gamut.patch
-  # (sha256 d0d2ca5c…, the twelve first-parent feature commits
-  # 18e50892..275e323a plus one upstream-adaptation commit (probe-mode
-  # collect exit; COMPOUND_POWER_2_4 default pin), re-cut 2026-11-02 from
-  # fresh upstream main@6d142d12 on top of 0011+0012 by cherry-pick.
-  # Unions kept on both sides:
-  # docs/user/outputs.md key table and tests/unit/config_schema.cpp tests vs
-  # 0012; src/output/output.cpp capture_exclusion + sdrGamut staging and
-  # src/server/ipc_commands.cpp surfaceTransferLabel + IpcArgs;
-  # tests/harness/lib.sh helper sets;
-  # src/server/color_manager.cpp: main's 1e84f566 colorTransferFunctionToWire
-  # mapping kept inside the tf_named != 0 carve-out for the fitted-power
-  # tfPower path.
-  # The upstream-able branch stays main-based (PR #585); regenerate from plain
-  # main + 0011+0012 once those retire. (Retire on merge.)
+  # Flattened existing downstream stack adaptation on main@e0da1063 over
+  # 0011+0012, preserving the ICC fields, upstream screen_cast_effect, and
+  # both capture and ICC harness helpers; sha256 7c4de03d…. (Retire on merge.)
   git apply -3 ../0013-icc-gamut.patch
 
   # [output] downsample texel footprint: the capped-downsample pass averages
   # the texel footprint in raster space (review fixes: capped-downsample
   # raster-space pinning, and the downsample policy applied to window-capture
   # mirrors). Upstream PR noctalia-dev/umbriel#575;
-  # 0014-downsample-box.patch (sha256 6462baf1…, three commits
-  # d8b292f8/4457c5b5/1ebfd045 — the slice above the shared render-scale
-  # prefix of PR #575's first-parent chain, never the full range, which
-  # would duplicate 0012; re-cut 2026-11-02 from fresh upstream
-  # main@6d142d12 on top of 0011+0012+0013 by cherry-pick; config.h keeps
-  # both enums and view.h keeps main's annotation policy).
+  # 0014-downsample-box.patch: flattened existing downstream stack adaptation
+  # on main@e0da1063 over 0011+0012+0013; the render-scale prefix remains in
+  # 0012, and the documentation preserves both X11 and sampling details.
+  # sha256 3b4d84d3….
   # (Retire on merge: 0014 → PR #575, with its 0012 base → PR #573.)
   git apply -3 ../0014-downsample-box.patch
 
   # [effects] border effects on unfocused windows: opt-in border styling for
   # unfocused views (config keys in [effects], rule evaluation in
   # src/view/effects_rules.cpp). Upstream PR noctalia-dev/umbriel#580;
-  # 0016-border-unfocused.patch (sha256 a5a0f422…, four commits
-  # ca657214/c98506ad/a17a081d — the feature, its formatting fix, and the
-  # barrulus-review cleanup — plus the stack-level outputs.md table-format
-  # fold; re-cut 2026-11-02 from fresh upstream
-  # main@6d142d12 on top of 0011..0014 by cherry-pick; effects.h follows
-  # main's 34a10b88 annotation policy, which the PR branch predates).
+  # 0016-border-unfocused.patch: flattened existing downstream stack
+  # adaptation on main@e0da1063 over 0011..0014, preserving screen_cast and
+  # dropping an accidentally included machine-local node_modules symlink.
+  # sha256 4b026b46….
   # (Retire on merge: 0016 → PR #580.)
   git apply -3 ../0016-border-unfocused.patch
 }
