@@ -17,6 +17,7 @@
 
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
+use std::collections::BTreeSet;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use gsa_sched::supervisor::SupEvent;
@@ -115,7 +116,15 @@ pub struct View {
     interactive: bool,
     state_dir: PathBuf,
     ids: Vec<String>,
+    /// The run's OWN package count — the selection, never the un-activated
+    /// remediation latents (§H `order` semantics: a latent joins the run
+    /// only when activated). An activated latent grows the total at its
+    /// dispatch (the box learns of activation no later than that).
     total: usize,
+    /// Latent node ids (not counted in `total` until they join).
+    latent_ids: BTreeSet<String>,
+    /// Latent ids that already joined the run (counted).
+    joined: BTreeSet<String>,
     lanes: Vec<Lane>,
     dispatched: usize,
     succeeded: usize,
@@ -138,6 +147,7 @@ impl View {
         ids: Vec<String>,
         total: usize,
         lane_count: usize,
+        latent_ids: Vec<String>,
     ) -> Self {
         let interactive = human && tty_enabled();
         View {
@@ -146,6 +156,8 @@ impl View {
             state_dir,
             ids,
             total,
+            latent_ids: latent_ids.into_iter().collect(),
+            joined: BTreeSet::new(),
             lanes: (0..lane_count.max(1))
                 .map(|_| Lane {
                     pkg: None,
@@ -183,6 +195,12 @@ impl View {
             SupEvent::Started { index, .. } => {
                 self.dispatched += 1;
                 let pkg = self.ids.get(*index).cloned().unwrap_or_default();
+                // A remediation latent joins the run's total at its
+                // dispatch — never before (2026-11-03: counting the latent
+                // pool up front showed a `--leaf` 1-package run as 1/332).
+                if self.latent_ids.contains(&pkg) && self.joined.insert(pkg.clone()) {
+                    self.total += 1;
+                }
                 let (epoch, offset) = self.lane_state(&pkg);
                 if let Some(lane) = self
                     .lanes
@@ -423,6 +441,7 @@ mod tests {
             vec!["p1".to_string(), "p2".to_string()],
             2,
             2,
+            Vec::new(),
         );
         view.interactive = true;
         view.width = 80;
@@ -448,8 +467,64 @@ mod tests {
     }
 
     #[test]
+    fn a_latent_never_inflates_the_total_until_it_joins() {
+        // 2026-11-03: a `--leaf` one-package install run rendered as
+        // "1/332 started" — the box counted the never-activated remediation
+        // latents up front. The total counts the run's own packages; an
+        // activated latent joins at its dispatch (§H `order` semantics).
+        let mut view = View::new(
+            true,
+            PathBuf::new(),
+            vec![
+                "leaf".to_string(),
+                "rust-git".to_string(),
+                "core-x".to_string(),
+            ],
+            1,
+            1,
+            vec!["rust-git".to_string(), "core-x".to_string()],
+        );
+        view.interactive = true;
+        view.width = 80;
+        let mut out = Vec::new();
+        // The selection's package runs while both latents stay parked.
+        view.handle(
+            &SupEvent::Started {
+                index: 0,
+                jobs: 1,
+                core: false,
+            },
+            "-",
+            &mut out,
+        );
+        let rows = view.rows_at(0);
+        assert_eq!(
+            rows[0], "Progress: 1/1 started | 0 done | 0 failed | → RUNNING",
+            "the latent pool must not inflate the total"
+        );
+        // Remediation activates the latents: each joins the total exactly
+        // at its dispatch.
+        for index in [1, 2] {
+            view.handle(
+                &SupEvent::Started {
+                    index,
+                    jobs: 1,
+                    core: false,
+                },
+                "-",
+                &mut out,
+            );
+        }
+        let rows = view.rows_at(0);
+        assert_eq!(
+            rows[0], "Progress: 3/3 started | 0 done | 0 failed | → RUNNING",
+            "an activated latent joins the run's total"
+        );
+    }
+
+    #[test]
     fn failed_stops_the_header_first() {
-        let mut view = View::new(true, PathBuf::new(), Vec::new(), 3, 1);
+        let mut view = View::new(true, PathBuf::new(), Vec::new(), 3, 1, Vec::new());
         view.dispatched = 3;
         view.failed = 1;
         view.stop_starting = true;

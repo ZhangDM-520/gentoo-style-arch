@@ -36,6 +36,10 @@ ws=$fixture/ws
 make_workspace "$ws" 2 2 low
 add_package "$ws" p1 "$gsa_meta_any" git
 add_package "$ws" p2 "$gsa_meta_any" git
+# One core record the selection never names: on install runs it rides the
+# node list as a remediation LATENT (owner rule 2026-10-02) — section D pins
+# that the latent pool never inflates the box's progress total.
+add_package "$ws" cx "$gsa_meta_any" core
 
 # The makepkg stub is the clock: two log steps, each GSA_FAKE_BUILD_SECONDS
 # (the knob shape tests/prefetch.rs already owns), so a section sizes its own
@@ -48,9 +52,58 @@ echo "step 1: preparing $id"
 sleep "${GSA_FAKE_BUILD_SECONDS:-1}"
 echo "step 2: building $id"
 sleep "${GSA_FAKE_BUILD_SECONDS:-1}"
-: >"$PWD/$id-1.0.0-1-any.pkg.tar.zst"
+if [ -n "${GSA_FAKE_REAL_ARCHIVE:-}" ]; then
+    # The install run (section D) needs .PKGINFO truth (rule 9): a real
+    # one-output archive, the gsa-abi-v2 shape.
+    stage="$PWD/.stage-$id"
+    mkdir -p "$stage"
+    {
+        printf 'pkgbase = %s\n' "$id"
+        printf 'pkgname = %s\n' "$id"
+        printf 'pkgver = 1.0.0-1\n'
+        printf 'arch = any\n'
+    } >"$stage/.PKGINFO"
+    tar --zstd -cf "$PWD/$id-1.0.0-1-any.pkg.tar.zst" -C "$stage" .PKGINFO
+    rm -rf "$stage"
+else
+    : >"$PWD/$id-1.0.0-1-any.pkg.tar.zst"
+fi
 EOF
 chmod +x "$ws/bin/makepkg"
+
+# The install section's transaction oracle: the engine's inner `sudo -n …`
+# resolves to this passthrough (never /usr/bin/sudo's secure_path), pacman
+# logs its argv, and pacman-conf answers the fixture's DB root.
+cat >"$ws/bin/sudo" <<'EOF'
+#!/usr/bin/env bash
+set -u
+args=()
+for a in "$@"; do
+    case $a in
+    -n | -v | --preserve-env | --preserve-env=* | --) ;;
+    *) args+=("$a") ;;
+    esac
+done
+((${#args[@]})) || exit 0
+exec "${args[@]}"
+EOF
+chmod +x "$ws/bin/sudo"
+cat >"$ws/bin/pacman" <<EOF
+#!/usr/bin/env bash
+set -u
+printf 'pacman %s\n' "\$*" >>"$fixture/pacman.log"
+exit 0
+EOF
+chmod +x "$ws/bin/pacman"
+cat >"$ws/bin/pacman-conf" <<EOF
+#!/usr/bin/env bash
+set -u
+if [ "\${1:-}" = DBPath ]; then printf '%s\n' "$fixture/db"; exit 0; fi
+exit 1
+EOF
+chmod +x "$ws/bin/pacman-conf"
+mkdir -p "$fixture/db"
+printf '[options]\n' >"$ws/pacman.conf"
 mkdir -p "$fixture/tmp" "$ws/home"
 
 gsa_bin=${GSA_TEST_GSA_BIN:-$(command -v gsa || true)}
@@ -168,4 +221,29 @@ if grep -qF $'\033[' "$out"; then
     fail "the machine stream gained cursor sequences:" "$out"
 fi
 
-printf 'dashboard-pty fixture: PASS (TTY box, human STATUS, machine purity)\n'
+# ─── D. the box counts the run's own packages (latent accounting) ──────────
+echo "D: a --leaf install run shows its own count, never the latent pool"
+out=$fixture/latent.out
+set +e
+timeout 90 script -qec \
+    "/usr/bin/sudo -n env PATH='$ws/bin:/usr/bin:/bin' HOME='$ws/home' \
+        TMPDIR='$fixture/tmp' GSA_STATE_DIR='$fixture/state-latent' \
+        GSA_BUILD_DIR='$fixture/build' GSA_RECIPES_DIR='$fixture/recipes' \
+        GSA_CPU_THREADS=8 GSA_MEMORY_GIB=16 GSA_FAKE_BUILD_SECONDS=1 \
+        GSA_FAKE_REAL_ARCHIVE=1 TERM=xterm \
+        bash -c 'cd \"$ws\" && exec $gsa_bin -S --leaf --lanes 2 --intensity low \
+            --config \"$ws/pacman.conf\" --no-prefetch \
+            --state-dir \"$fixture/state-latent\" p1'" /dev/null >"$out" 2>&1
+RC=$?
+set -e
+[ "$RC" = 0 ] || fail "the latent-accounting install run failed (rc=$RC)" "$out"
+tr -d '\r' <"$out" | sed -E 's#\x1b\[[0-9;?]*[[:alpha:]]##g' >"$fixture/latent.txt"
+grep -Fq 'Progress: 1/1 started | 1 done | 0 failed | ✓ DONE' "$fixture/latent.txt" \
+    || fail "the box must count the run's own packages (1 selection + parked latents = 1/1): $(grep -o 'Progress: [^|]*' "$fixture/latent.txt" | head -3)" "$out"
+if grep -oE 'Progress: [0-9]+/[0-9]+' "$fixture/latent.txt" | grep -vq '/1$'; then
+    fail "a Progress total counted the remediation latent pool:" "$out"
+fi
+grep -q 'pacman ' "$fixture/pacman.log" \
+    || fail "the install never reached the pacman stub:" "$out"
+
+printf 'dashboard-pty fixture: PASS (TTY box, human STATUS, machine purity, latent accounting)\n'

@@ -708,13 +708,23 @@ fn run_build_with(
     // plus any activated remediation latent).
     let event_ids: Vec<RecipeId> = setup.nodes.iter().map(|node| node.id.clone()).collect();
     // The live run view (ux): a TTY human run gets the progress box, a human
-    // pipe gets the 10 s STATUS hint, the machine stream passes through.
+    // pipe gets the 10 s STATUS hint, the machine stream passes through. The
+    // box counts the run's OWN packages — the un-activated remediation
+    // latents never inflate a `--leaf` run's total (2026-11-03; §H `order`
+    // semantics: a latent joins the run only when activated).
+    let latent_ids: Vec<String> = setup
+        .nodes
+        .iter()
+        .filter(|node| node.latent)
+        .map(|node| node.id.as_str().to_string())
+        .collect();
     let mut view = crate::dashboard::View::new(
         crate::output::is_human(),
         state_dir.clone(),
         event_ids.iter().map(|id| id.as_str().to_string()).collect(),
-        setup.nodes.len(),
+        setup.nodes.len() - latent_ids.len(),
         setup.budget.lanes as usize,
+        latent_ids,
     );
     let run_result = supervisor::run(
         setup,

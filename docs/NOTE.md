@@ -1,3 +1,28 @@
+## 2026-11-03 — dashboard progress total counted the remediation latent pool (`--leaf` run showed 1/332)
+
+- SYMPTOM: `sudo gsa -S --leaf onlyoffice-git` rendered `Progress: 1/332
+  started` on the TTY box. The run itself was correct (`order:
+  onlyoffice-git`, `Build run: 1 package(s)`) — the box denominator was
+  not: install runs append the remediation LATENTS (rust-git + the 331
+  `core` records, owner rule 2026-10-02) to the node list, and the View
+  was seeded with `nodes.len()` — a 1-package `--leaf` run displayed as
+  1/332. Owner read it as "the expand issue still wasn't cleared".
+- ROOT CAUSE: `gsa-cli` build.rs passed `setup.nodes.len()` as the
+  dashboard total; the run record's `order`/`Build run` counts were always
+  honest (§H: latents join `order` only when ACTIVATED) and the prefetch
+  window was already latent-safe (sync-before-spawn marks them settled).
+- FIX: the box counts the run's own packages — `nodes.len() - latents`;
+  an activated remediation latent joins the total exactly at its dispatch
+  (the §H activation rule mirrored into the box). Pinned by the
+  `a_latent_never_inflates_the_total_until_it_joins` unit test and
+  `tests/dashboard-pty.sh` section D (an install run over a workspace with
+  an unselected core record: red-first `Progress: 1/2` on the unfixed
+  engine, `Progress: 1/1 … ✓ DONE` after; the section brings the
+  gsa-abi-v2 install-stub layer — real-archive makepkg knob, stub
+  sudo/pacman/pacman-conf — inline).
+- DURABLE RULE: any human-facing run count comes from the `order`/activation
+  semantics (selection + activated latents), never the raw node list.
+
 ## 2026-11-03 — engine job 3: the ABI-wave false-move class (the `--leaf` dispatch hijack) root-caused and fixed; rule 21(a) hub fallout enforced
 
 **Symptom.** `gsa -Sf --leaf --intensity max --no-sync glib2-git` (run
