@@ -1,0 +1,181 @@
+# Maintainer: Gentoo_Style_Arch <maintainer@localhost>
+#
+# GenOffice (AI-native office suite: docs, sheets, slides, PDF, Markdown,
+# HTML) built from upstream `main`. Upstream publishes only AppImage/deb/rpm
+# release artifacts; there is no AUR/Arch recipe, so this one mirrors the
+# release pipeline (`npm run dist:linux` = `build:all` + electron-builder),
+# stopping at the unpacked Electron tree that package() installs:
+#
+#   npm ci -> npm run build:all (electron-vite per module, the CLI bundle and
+#   the Rust `xlsx-sidecar` spreadsheet engine) -> electron-builder --linux dir
+#
+# The Electron release pinned by package-lock.json is bundled into the package
+# (same convention as logseq-desktop-git): the app embeds the runtime it was
+# built against and ships its own setuid sandbox helper.
+#
+# Telemetry and auto-update are inert by construction: electron-builder.cjs
+# only bakes the update feed and the GA4 credentials in when
+# GENOFFICE_UPDATE_URL / GENOFFICE_GA4_* are set, and this build sets none.
+
+pkgname=genoffice-git
+_pkgname=genoffice
+pkgver=0.12.0.r1213.g8ad8dc9
+pkgrel=1
+pkgdesc='AI-native office suite: Word, Excel, PowerPoint, PDF and Markdown in one local app (git build)'
+arch=('x86_64')
+url='https://github.com/genspark-ai/genoffice'
+license=('Apache-2.0')
+# !strip: the bundled Electron runtime and its helpers must not be rewritten
+#         by makepkg (the Rust sidecar is stripped by rustc, see build()).
+# !debug: an Electron tree has no useful separate debug symbols.
+# !lto:   makepkg's LTOFLAGS would only reach the Rust sidecar, which builds
+#         fat LTO through cargo's own profile — nothing here is a C/C++ build.
+options=('!strip' '!debug' '!lto')
+depends=(
+  'alsa-lib'
+  'cairo'
+  'fontconfig'
+  'glibc'
+  'gtk3'
+  'libgcc'
+  'libnotify'
+  'libsecret'
+  'libxkbfile'
+  'libxss'
+  'libxtst'
+  'nss'
+)
+optdepends=(
+  'libappindicator-gtk3: system tray icon'
+  'xdg-utils: open external links in the browser'
+)
+makedepends=(
+  'git'
+  'mold'
+  'nodejs>=22.12'
+  'npm'
+  'rust'
+)
+provides=("genoffice=${pkgver}")
+conflicts=('genoffice' 'genoffice-bin')
+source=("${_pkgname}::git+${url}.git#branch=main")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "${_pkgname}"
+
+  # apps/shell/package.json carries the release version; the commit count and
+  # hash keep the package version monotonic on upstream `main`.
+  local _version
+  _version="$(node -p "require('./apps/shell/package.json').version")"
+  printf '%s.r%s.g%s' "${_version}" \
+    "$(git rev-list --count HEAD)" \
+    "$(git rev-parse --short=7 HEAD)"
+}
+
+prepare() {
+  cd "${_pkgname}"
+
+  # Private npm cache: a shared ~/.npm that an earlier root-run npm left
+  # root-owned fails every install with EACCES.
+  export npm_config_cache="${srcdir}/npm-cache"
+  export npm_config_fund=false npm_config_audit=false npm_config_update_notifier=false
+
+  # Everything the network is needed for happens here; build() is offline.
+  # Cargo's lockfile is honored (--locked); npm ci installs the lockfile
+  # verbatim and verifies every tarball's integrity hash. The root
+  # `postinstall` (install-electron) fetches the pinned Electron binary.
+  cargo fetch --locked --target host-tuple \
+    --manifest-path apps/sheets/native/xlsx-engine/Cargo.toml
+  npm ci
+}
+
+build() {
+  cd "${_pkgname}"
+
+  export npm_config_cache="${srcdir}/npm-cache"
+  export npm_config_fund=false npm_config_audit=false npm_config_update_notifier=false
+  export CARGO_NET_OFFLINE=true
+
+  # Optimisation standard for the one compiled component, the Rust
+  # `xlsx-sidecar` (apps/sheets build -> `cargo build --release`): host
+  # RUSTFLAGS first, native CPU only when they carry no target-cpu, mold,
+  # fat LTO in one codegen unit, symbols stripped by rustc. No PGO: the
+  # sidecar has no representative training corpus to run unattended, so an
+  # instrumented phase would only add build time.
+  unset RUSTC_WRAPPER
+  local _rustflags="${RUSTFLAGS:-}"
+  if ! grep -q 'target-cpu' <<<"${_rustflags}"; then
+    _rustflags+=" -C target-cpu=native"
+  fi
+  if command -v mold >/dev/null 2>&1; then
+    _rustflags+=" -C link-arg=-fuse-ld=mold"
+  fi
+  _rustflags+=" -Cstrip=symbols --remap-path-prefix=${srcdir}=/"
+  export RUSTFLAGS="${_rustflags}"
+  export CARGO_PROFILE_RELEASE_LTO=fat
+  export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
+
+  # Every module (docs, sheets + the sidecar, slides, pdf, markdown, html),
+  # the CLI bundle and the shell, exactly as upstream's dist:linux does.
+  npm run build:all
+
+  # Unsigned unpacked tree; AppImage/deb/rpm are not what this package ships.
+  # electronDist reuses the Electron that npm ci already fetched instead of
+  # downloading a second copy.
+  cd apps/shell
+  npx electron-builder --config electron-builder.cjs --linux dir \
+    --publish never -c.electronDist=../../node_modules/electron/dist
+}
+
+package() {
+  cd "${_pkgname}"
+
+  local _app="apps/shell/release/linux-unpacked"
+  local _opt="/opt/${pkgname}"
+
+  install -d "${pkgdir}${_opt}"
+  cp -a "${_app}/." "${pkgdir}${_opt}/"
+
+  # Electron's sandbox helper must remain setuid root to be usable.
+  chown root:root "${pkgdir}${_opt}/chrome-sandbox"
+  chmod 4755 "${pkgdir}${_opt}/chrome-sandbox"
+
+  # /usr/bin/genoffice is the bundled command line (it runs on the app's own
+  # Node runtime); the GUI is the app binary the desktop entry starts.
+  install -d "${pkgdir}/usr/bin"
+  ln -s "${_opt}/resources/cli/genoffice" "${pkgdir}/usr/bin/genoffice"
+
+  install -Dm644 /dev/stdin "${pkgdir}/usr/share/applications/genoffice.desktop" <<'DESKTOP'
+[Desktop Entry]
+Name=GenOffice
+GenericName=Office Suite
+Comment=AI-native office suite: Word, Excel, PowerPoint, PDF and Markdown in one local app
+Exec=/opt/genoffice-git/genoffice %U
+Terminal=false
+Type=Application
+Icon=genoffice
+StartupWMClass=genoffice
+Categories=Office;
+MimeType=application/vnd.openxmlformats-officedocument.wordprocessingml.document;application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;application/vnd.ms-excel.sheet.macroEnabled.12;application/vnd.openxmlformats-officedocument.presentationml.presentation;application/vnd.ms-excel;text/csv;text/tab-separated-values;application/vnd.oasis.opendocument.spreadsheet;application/vnd.oasis.opendocument.spreadsheet-template;application/vnd.oasis.opendocument.text;application/vnd.oasis.opendocument.text-template;application/vnd.oasis.opendocument.presentation;application/vnd.oasis.opendocument.presentation-template;application/pdf;text/markdown;text/html;
+DESKTOP
+
+  local _size
+  for _size in 16 32 48 64 128 256 512 1024; do
+    install -Dm644 "apps/shell/build/icons/${_size}x${_size}.png" \
+      "${pkgdir}/usr/share/icons/hicolor/${_size}x${_size}/apps/genoffice.png"
+  done
+
+  # Blank templates for the file manager's "Create New" menu (what upstream's
+  # deb/rpm post-install copies); only these three exact names.
+  install -Dm644 apps/shell/build/shell-new/blank.docx \
+    "${pkgdir}/usr/share/templates/GenOffice Document.docx"
+  install -Dm644 apps/shell/build/shell-new/blank.xlsx \
+    "${pkgdir}/usr/share/templates/GenOffice Spreadsheet.xlsx"
+  install -Dm644 apps/shell/build/shell-new/blank.pptx \
+    "${pkgdir}/usr/share/templates/GenOffice Presentation.pptx"
+
+  install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+  install -Dm644 LICENSE-UNICODE.txt "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE-UNICODE.txt"
+  install -Dm644 NOTICE "${pkgdir}/usr/share/licenses/${pkgname}/NOTICE"
+}
