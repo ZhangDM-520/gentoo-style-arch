@@ -8,7 +8,7 @@ source "$startdir/../../../lib/pgo.sh"
 
 pkgname=umbriel-git
 _pkgname=umbriel
-pkgver=0.1.0.r1504.e0da106
+pkgver=0.1.0.r1510.b6c4b7d
 pkgrel=1
 epoch=1
 pkgdesc='A Wayland compositor built on wlroots'
@@ -60,14 +60,12 @@ source=("${_pkgname}::git+${url}.git#branch=main"
         '0011-drag-deform-settle-crop.patch'
         '0012-per-output-render-scale.patch'
         '0013-icc-gamut.patch'
-        '0014-downsample-box.patch'
-        '0016-border-unfocused.patch')
+        '0014-downsample-box.patch')
 sha256sums=('SKIP'
             '817ffce311dbb4b162de5b261ef89d011f5f484db390eafec4ace1a4bf94c6ea'
-            'e58e07b4c66452d8204cc1a2231a2bfdb2218f54bd64edda1233c73d81332e20'
+            '1fe6f5683efc79957e00d458ade22ff3080c76dbcbcb6d7fca21203523e2bdb7'
             '7c4de03d135dc74529c7cafc2a81ae659c1e9a917094aeafb248175c94db8400'
-            '3b4d84d318cd0865c561c9e64f3dc367658dd1060e7465f9e862fd9ac1ccd3d6'
-            '4b026b469b7d2244cc343efeab260c3fa79ca25d0442ebb27e0356fb9f4cb77f')
+            'cd3af7389d09dd485512f06932d52db4ae111bc092fe07ea5edf7ab0c5915a39')
 
 pkgver() {
   cd "${_pkgname}"
@@ -106,17 +104,22 @@ prepare() {
   # 5e241f54 and retired; 0015, PR #577's unaccelerated gesture deltas,
   # rejected by the maintainer and retired 2026-10-30; 0017, PR #584's
   # overview card drag input, merged upstream eae7e8fb and retired
-  # 2026-11-02.) (Retire on merge: 0011 → PR #570.)
+  # 2026-11-02; 0016, PR #580's border_unfocused, merged upstream 43146f7d
+  # and retired 2026-11-05.) (Retire on merge: 0011 → PR #570.)
   git apply -3 ../0011-drag-deform-settle-crop.patch
 
   # [output] render_scale: per-output HiDPI supersampling — clients render at
   # the configured render_scale (fractional-scale protocol hint), unset
   # follows the output scale bit-identically, direct scanout declines while
   # render_scale != scale, and mirror scenes are isolated from render_scale
-  # hints. Upstream PR noctalia-dev/umbriel#573;
-  # Native-resolution X11 uses the physical output scale by default;
-  # force_x11_supersample opts back into render_scale. Flattened PR head
-  # a75c7bae relative to main@e0da1063 on top of 0011; sha256 e58e07b4….
+  # hints. Upstream PR noctalia-dev/umbriel#573. Fullscreen windows and game
+  # or video content render at `scale`
+  # instead (direct scanout stays), and a `supersample` window rule decides
+  # outright either way. Native-resolution X11 uses the physical output scale
+  # by default; force_x11_supersample opts back into render_scale. Flattened
+  # PR head a6f61941 (render_scale + X11 default + dMopp's 1b4a4801 exemption
+  # fold + hardened harness leg + review fix) relative to main@e0da1063 on
+  # top of 0011 over main@b6c4b7dd; sha256 1fe6f568….
   # (Retire on merge:
   # 0012 → PR #573.)
   git apply -3 ../0012-per-output-render-scale.patch
@@ -126,31 +129,22 @@ prepare() {
   # in the panel's colorimetry; the default `"native"` stages no transform),
   # plus client ICC image descriptions (`create_icc`) and `icc_file`
   # advertising. Upstream PR noctalia-dev/umbriel#585; 0013-icc-gamut.patch
-  # Flattened existing downstream stack adaptation on main@e0da1063 over
-  # 0011+0012, preserving the ICC fields, upstream screen_cast_effect, and
-  # both capture and ICC harness helpers; sha256 7c4de03d…. (Retire on merge.)
+  # Flattened downstream stack adaptation, first cut on main@e0da1063 over
+  # 0011+0012 and applied unchanged on main@b6c4b7dd, preserving the ICC
+  # fields, upstream screen_cast_effect, and both capture and ICC harness
+  # helpers; sha256 7c4de03d…. (Retire on merge.)
   git apply -3 ../0013-icc-gamut.patch
 
   # [output] downsample texel footprint: the capped-downsample pass averages
   # the texel footprint in raster space (review fixes: capped-downsample
   # raster-space pinning, and the downsample policy applied to window-capture
   # mirrors). Upstream PR noctalia-dev/umbriel#575;
-  # 0014-downsample-box.patch: flattened existing downstream stack adaptation
-  # on main@e0da1063 over 0011+0012+0013; the render-scale prefix remains in
-  # 0012, and the documentation preserves both X11 and sampling details.
-  # sha256 3b4d84d3….
+  # 0014-downsample-box.patch: flattened downstream stack adaptation,
+  # re-cut 2026-11-05 on main@b6c4b7dd over 0011+0012+0013 with the
+  # wlr_scene.h contexts adapted to the per-surface preferred-scale provider
+  # (delta unchanged: 25 files, +504/-29). sha256 cd3af738….
   # (Retire on merge: 0014 → PR #575, with its 0012 base → PR #573.)
   git apply -3 ../0014-downsample-box.patch
-
-  # [effects] border effects on unfocused windows: opt-in border styling for
-  # unfocused views (config keys in [effects], rule evaluation in
-  # src/view/effects_rules.cpp). Upstream PR noctalia-dev/umbriel#580;
-  # 0016-border-unfocused.patch: flattened existing downstream stack
-  # adaptation on main@e0da1063 over 0011..0014, preserving screen_cast and
-  # dropping an accidentally included machine-local node_modules symlink.
-  # sha256 4b026b46….
-  # (Retire on merge: 0016 → PR #580.)
-  git apply -3 ../0016-border-unfocused.patch
 }
 
 build() {

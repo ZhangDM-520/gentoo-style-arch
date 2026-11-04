@@ -1,9 +1,7 @@
-From 620efe07306cba1c935a785e53ab56334730999a Mon Sep 17 00:00:00 2001
+From dc30adf6e33017637f2701a932477be830f1aaa1 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
-Date: Tue, 3 Nov 2026 22:54:45 +0800
-Subject: [PATCH] Stack downstream downsample changes
-
-Flatten the existing 0014 stack on upstream e0da106 with the 0012 and 0013 adaptations.
+Date: Thu, 5 Nov 2026 07:32:36 +0800
+Subject: [PATCH] 0014 recut
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 ---
@@ -63,7 +61,7 @@ index 1146a02c..5766eec4 100644
  
  Borders render outside window content and are included in layout spacing. `corner_radius = 0` keeps every contour square. A [window rule](window-rules.md#decoration) can override `border_width`, `outer_border_width`, and `corner_radius` for the windows it matches.
 diff --git a/docs/user/outputs.md b/docs/user/outputs.md
-index af4e1d38..e8518cef 100644
+index f90289ad..811db898 100644
 --- a/docs/user/outputs.md
 +++ b/docs/user/outputs.md
 @@ -133,7 +133,7 @@ Omit `position` to place outputs automatically from left to right. Explicitly po
@@ -76,7 +74,7 @@ index af4e1d38..e8518cef 100644
  Native-resolution X11 applications use the physical output scale by default. To opt them into `render_scale`, see [`force_x11_supersample`](configuration.md#general).
  
 diff --git a/examples/config.toml b/examples/config.toml
-index 209585ee..ee1562d9 100644
+index e0f724f9..1f31751e 100644
 --- a/examples/config.toml
 +++ b/examples/config.toml
 @@ -83,6 +83,11 @@ files = []
@@ -142,7 +140,7 @@ index 3d9806e1..2e1437f3 100644
            || layerEffects
            || animation
 diff --git a/src/config/config.h b/src/config/config.h
-index f2854ef9..19d092ca 100644
+index ad84ad7a..8c1ff6ec 100644
 --- a/src/config/config.h
 +++ b/src/config/config.h
 @@ -35,6 +35,8 @@ namespace umbriel {
@@ -154,7 +152,7 @@ index f2854ef9..19d092ca 100644
    enum class TitleBarButtonGlyph : uint8_t { Always, Hover, Never };
  
    enum class ModifierKey {
-@@ -816,6 +818,12 @@ namespace umbriel {
+@@ -822,6 +824,12 @@ namespace umbriel {
        } tabBar;
        bool preferNoCsd = true;
  
@@ -187,10 +185,10 @@ index 40e9e033..d2e37653 100644
            boolean("opaque_fullscreen", &A::opaqueFullscreen),
            registry::table("blur", &A::blur, blur),
 diff --git a/src/server/server.cpp b/src/server/server.cpp
-index 09cbcdfb..c9bedfa0 100644
+index a1c75819..8be9ae1d 100644
 --- a/src/server/server.cpp
 +++ b/src/server/server.cpp
-@@ -718,6 +718,8 @@ namespace umbriel {
+@@ -719,6 +719,8 @@ namespace umbriel {
          },
          this
      );
@@ -265,7 +263,7 @@ index 3525bb25..53d09410 100644
      for (const auto& output : m_outputs) {
        output->updateVrr();
 diff --git a/src/view/view.cpp b/src/view/view.cpp
-index 6bc4912b..da52d43b 100644
+index 0a78c4b9..e7de53b3 100644
 --- a/src/view/view.cpp
 +++ b/src/view/view.cpp
 @@ -199,6 +199,7 @@ namespace umbriel {
@@ -290,7 +288,7 @@ index 6bc4912b..da52d43b 100644
      moveToWorkspace(workspace, attachToLayout, LayoutAttachOrigin::ExistingView);
    }
 diff --git a/src/view/view.h b/src/view/view.h
-index 5356e6b1..c2f97395 100644
+index 5033af9b..a7265b2c 100644
 --- a/src/view/view.h
 +++ b/src/view/view.h
 @@ -140,6 +140,10 @@ namespace umbriel {
@@ -557,7 +555,7 @@ index 33e4b0db..00f3a7d5 100644
  
  struct fx_render_rect_options {
 diff --git a/umbrielfx/include/umbrielfx/types/wlr_scene.h b/umbrielfx/include/umbrielfx/types/wlr_scene.h
-index e6691f68..56dcd652 100644
+index 6e335661..82c0a2f3 100644
 --- a/umbrielfx/include/umbrielfx/types/wlr_scene.h
 +++ b/umbrielfx/include/umbrielfx/types/wlr_scene.h
 @@ -122,6 +122,19 @@ enum wlr_scene_direct_scanout_status {
@@ -581,8 +579,8 @@ index e6691f68..56dcd652 100644
   * A sub-tree in the scene-graph.
   *
 @@ -176,6 +189,10 @@ struct wlr_scene {
-     // output's own scale.
-     double (*preferred_scale_provider)(struct wlr_output* output, void* data);
+     // Derivation falls back to the output's own scale.
+     double (*preferred_scale_provider)(struct wlr_output* output, struct wlr_surface* surface, void* data);
      void* preferred_scale_provider_data;
 +
 +    // How minified scene buffers sample their source; see
@@ -591,8 +589,8 @@ index e6691f68..56dcd652 100644
    } WLR_PRIVATE;
  };
  
-@@ -600,6 +617,14 @@ void wlr_scene_set_preferred_scale_provider(
-     struct wlr_scene* scene, double (*get)(struct wlr_output* output, void* data), void* data
+@@ -601,6 +618,14 @@ void wlr_scene_set_preferred_scale_provider(
+     void* data
  );
  
 +/**
@@ -962,7 +960,7 @@ index 22e254da..86a317a0 100644
  }
  
 diff --git a/umbrielfx/types/scene/wlr_scene.c b/umbrielfx/types/scene/wlr_scene.c
-index 12e3a3b3..bf92d0d0 100644
+index 58d93566..5ddcb2ce 100644
 --- a/umbrielfx/types/scene/wlr_scene.c
 +++ b/umbrielfx/types/scene/wlr_scene.c
 @@ -3605,6 +3605,23 @@ static void scene_entry_render(struct render_list_entry* entry, const struct ren
@@ -1019,7 +1017,7 @@ index 12e3a3b3..bf92d0d0 100644
          .luminances = scene_buffer->luminances.reference > 0.0f ? &scene_buffer->luminances : NULL,
          .map_hdr_to_sdr = !data->hdr
              && (source_tf == WLR_COLOR_TRANSFER_FUNCTION_ST2084_PQ
-@@ -4413,6 +4437,10 @@ void wlr_scene_set_preferred_scale_provider(
+@@ -4414,6 +4438,10 @@ void wlr_scene_set_preferred_scale_provider(
    scene->preferred_scale_provider_data = data;
  }
  

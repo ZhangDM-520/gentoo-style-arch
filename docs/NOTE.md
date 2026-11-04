@@ -18564,3 +18564,25 @@ application verified from the packaged binaries (0001 `domain_resolver`
 strings in Throne/ThroneCore; 0002 preset QStrings `mihomo/1.18.0`,
 `clash-verge/v2.0.0`, `NekoBox/1.3` in Throne). Not claimed: runtime
 install/smoke — `pacman -U` pending owner disposition.
+
+## 2026-11-05 — umbriel-git stack rebase on b6c4b7dd; 0016 retired
+
+PR #573 gained dMopp's supersample exemptions (1b4a4801 folded into head
+`a6f61941`): fullscreen and game/video windows render at `scale`, a
+`supersample` window rule overrides both ways, and the scene's preferred-scale
+provider is per-surface. Recipe 0012 re-cut from that head (sha `1fe6f568`);
+0013 (`7c4de03d`) applies unchanged; 0014 recut (`cd3af738`) with only its
+`wlr_scene.h` contexts adapted to the per-surface provider signature (delta
+identical: 25 files, +504/-29). 0016 retired: PR #580 merged upstream as
+`43146f7d`, so `border_unfocused` is upstream now. pkgver
+`0.1.0.r1510.b6c4b7d-1`.
+
+**Validation.** Makepkg-style sequential `git apply -3` rehearsal on
+b6c4b7dd without intermediate commits: every patch contributes a nonempty
+delta, final tree `f8e99b7b` matches the synthesis tree, no conflict markers,
+all 467 tracked shell scripts pass `bash -n` (this gate catches the misplaced-
+brace class from 2026-11-03). Declared PKGBUILD hashes verified, `.SRCINFO`
+regenerated and byte-compared. Combined debug stack: 12 focused unit targets
+(incl. `scale-hints`, `config-resolve`) and 14 headless checks (x11/wayland
+render_scale + exempt, ICC, color, downsample_box, screen_cast) pass. No
+package archive built; no live installation changed.
