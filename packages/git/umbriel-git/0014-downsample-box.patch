@@ -1,7 +1,9 @@
-From dc30adf6e33017637f2701a932477be830f1aaa1 Mon Sep 17 00:00:00 2001
+From 9defa1285a59d268303588621c8990b7982634ae Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
-Date: Thu, 5 Nov 2026 07:32:36 +0800
-Subject: [PATCH] 0014 recut
+Date: Fri, 6 Nov 2026 00:40:58 +0800
+Subject: [PATCH] Stack downstream downsample changes
+
+Flatten the existing 0014 stack on upstream 28de32d0 and average the box downsample in linear light.
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 ---
@@ -18,7 +20,7 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
  src/server/server_outputs.cpp                 |  22 +++
  src/view/view.cpp                             |   7 +
  src/view/view.h                               |   4 +
- tests/harness/checks/render/downsample_box.sh | 163 ++++++++++++++++++
+ tests/harness/checks/render/downsample_box.sh | 167 ++++++++++++++++++
  tests/unit/config_change.cpp                  |  10 ++
  tests/unit/config_load.cpp                    |  28 +++
  umbrielfx/include/umbrielfx/render/pass.h     |   5 +
@@ -28,9 +30,9 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
  umbrielfx/render/fx_renderer/fx_pass.c        |  46 ++++-
  umbrielfx/render/fx_renderer/fx_renderer.c    |  76 ++++++--
  umbrielfx/render/fx_renderer/shaders.c        |  12 +-
- umbrielfx/render/fx_renderer/shaders/tex.frag |  39 ++++-
+ umbrielfx/render/fx_renderer/shaders/tex.frag |  91 ++++++++--
  umbrielfx/types/scene/wlr_scene.c             |  30 +++-
- 25 files changed, 504 insertions(+), 29 deletions(-)
+ 25 files changed, 554 insertions(+), 35 deletions(-)
  create mode 100755 tests/harness/checks/render/downsample_box.sh
 
 diff --git a/docs/user/appearance.md b/docs/user/appearance.md
@@ -304,10 +306,10 @@ index 5033af9b..a7265b2c 100644
      pid_t pid() const;
 diff --git a/tests/harness/checks/render/downsample_box.sh b/tests/harness/checks/render/downsample_box.sh
 new file mode 100755
-index 00000000..961a2f71
+index 00000000..4ceac58c
 --- /dev/null
 +++ b/tests/harness/checks/render/downsample_box.sh
-@@ -0,0 +1,163 @@
+@@ -0,0 +1,167 @@
 +#!/usr/bin/env bash
 +# harness: outputs=1
 +# appearance.downsample picks how the scene samples a minified source. A client
@@ -417,10 +419,12 @@ index 00000000..961a2f71
 +  exit 1
 +}
 +
-+# Box: output px 41 covers two green texels and one blue (0,170,85), px 42 the
-+# mirror (0,85,170) in the sRGB screenshot.
-+expect_pair "box downsample" 170 85 85 170
-+expect_toplevel_pair "box downsample in window captures" 170 85 85 170
++# Box: output px 41 covers two green texels and one blue, px 42 the mirror.
++# The box averages light, not encoded values: 2/3 and 1/3 coverage re-encode
++# through gamma 2.2 to (0,212,155) and (0,155,212); averaging the encoded
++# values would report (0,170,85).
++expect_pair "box downsample" 212 155 155 212
++expect_toplevel_pair "box downsample in window captures" 212 155 155 212
 +
 +sed -i 's/downsample = "box"/downsample = "bilinear"/' "$UMBRIEL_CONFIG"
 +"$UMBRIEL" msg config-reload > /dev/null
@@ -433,8 +437,8 @@ index 00000000..961a2f71
 +sed -i 's/downsample = "bilinear"/downsample = "box"/' "$UMBRIEL_CONFIG"
 +"$UMBRIEL" msg config-reload > /dev/null
 +"$UMBRIEL" settle > /dev/null
-+expect_pair "box restored on reload" 170 85 85 170
-+expect_toplevel_pair "capture downsample restored on reload" 170 85 85 170
++expect_pair "box restored on reload" 212 155 155 212
++expect_toplevel_pair "capture downsample restored on reload" 212 155 155 212
 +
 +echo "downsample method controls minified sampling and reload re-renders"
 +
@@ -444,9 +448,11 @@ index 00000000..961a2f71
 +# client's 1600-texel buffer into the window's 320-pixel raster (5:1), and the
 +# window's logical (40,40) lands at raster (32,32). Capture at raster
 +# resolution so probes read framebuffer pixels: px 41 and 42 cover 5-texel
-+# footprints whose 1.25-texel taps average 5:3 and 3:5 green mixes,
-+# (0,159,96) and (0,96,159); the one-texel-step mutation reaches only 4 of
-+# the 5 texels and reports the even mix (0,127,127) at every pixel.
++# footprints of four taps 1.25 texels apart. Each tap is a hardware bilinear
++# mix of its two encoded neighbours (0.875/0.125 or 0.625/0.375); the shader
++# decodes the taps and averages them in light, (0,174,118) and (0,118,174).
++# The one-texel-step mutation reaches only 4 of the 5 texels and reports the
++# even mix (0,186,186) at every pixel.
 +mapped_before=$(grep -c '^mapped ' "$CLIENT_LOG")
 +sed -i 's/scale = 1.0/scale = 0.8/; s/render_scale = 3.0/render_scale = 4.0/' "$UMBRIEL_CONFIG"
 +"$UMBRIEL" msg config-reload > /dev/null
@@ -468,7 +474,7 @@ index 00000000..961a2f71
 +  echo "window raster rect is not (32,32,320,240): x31..32 $(pixel 31 190)/$(pixel 32 190), x351..352 $(pixel 351 190)/$(pixel 352 190), y31..32 $(pixel 41 31)/$(pixel 41 32), y271..272 $(pixel 41 271)/$(pixel 41 272)"
 +  exit 1
 +fi
-+expect_pair "capped box spans the footprint" 159 96 96 159
++expect_pair "capped box spans the footprint" 174 118 118 174
 +
 +echo "capped box grid spans the full minification footprint"
 diff --git a/tests/unit/config_change.cpp b/tests/unit/config_change.cpp
@@ -892,7 +898,7 @@ index 0ef2b138..cf73ce25 100644
    if (!effects) {
      return true;
 diff --git a/umbrielfx/render/fx_renderer/shaders/tex.frag b/umbrielfx/render/fx_renderer/shaders/tex.frag
-index 22e254da..86a317a0 100644
+index 22e254da..0918f609 100644
 --- a/umbrielfx/render/fx_renderer/shaders/tex.frag
 +++ b/umbrielfx/render/fx_renderer/shaders/tex.frag
 @@ -1,12 +1,13 @@
@@ -910,7 +916,7 @@ index 22e254da..86a317a0 100644
  #error "Missing shader preamble"
  #endif
  
-@@ -68,15 +69,45 @@ uniform float discard_transparent;
+@@ -68,15 +69,27 @@ uniform float discard_transparent;
  // every other draw keeps the exact fetch drivers already handle well.
  uniform vec4 sample_bounds;
  #define SAMPLE_UV clamp(v_texcoord, sample_bounds.xy, sample_bounds.zw)
@@ -938,10 +944,78 @@ index 22e254da..86a317a0 100644
  #elif SOURCE == SOURCE_TEXTURE_RGBX
 -  return vec4(texture2D(tex, SAMPLE_UV).rgb, 1.0);
 +  return vec4(texture2D(tex, SAMPLE_AT(uv)).rgb, 1.0);
-+#endif
+ #endif
+ }
+ 
+@@ -131,11 +144,9 @@ vec3 hdr_to_sdr(vec3 color) {
+   return color * (mapped_peak / peak);
+ }
+ 
+-vec4 convert_color(vec4 color) {
+-  if (source_tf == TRANSFER_FUNCTION_PASSTHROUGH) {
+-    return color;
+-  }
+-
++// Premultiplied source color to premultiplied linear light, before any
++// luminance, primaries or target encoding is applied.
++vec4 decode_color(vec4 color) {
+   float color_alpha = color.a;
+   vec3 rgb = color_alpha == 0.0 ? vec3(0.0) : color.rgb / color_alpha;
+   // Extended-linear negative channels carry colors outside the source gamut.
+@@ -154,6 +165,14 @@ vec4 convert_color(vec4 color) {
+     rgb = bt1886_color_to_linear(rgb);
+   }
+ 
++  return vec4(rgb * color_alpha, color_alpha);
 +}
 +
-+vec4 sample_texture() {
++// Premultiplied linear light from decode_color() to the pass's target.
++vec4 encode_color(vec4 color) {
++  float color_alpha = color.a;
++  vec3 rgb = color_alpha == 0.0 ? vec3(0.0) : color.rgb / color_alpha;
++
+   rgb *= lum_multiplier;
+   rgb = primaries_matrix * rgb;
+   if (map_hdr_to_sdr) {
+@@ -168,6 +187,58 @@ vec4 convert_color(vec4 color) {
+   return vec4(rgb * color_alpha, color_alpha);
+ }
+ 
++vec4 convert_color(vec4 color) {
++  if (source_tf == TRANSFER_FUNCTION_PASSTHROUGH) {
++    return color;
++  }
++  return encode_color(decode_color(color));
++}
++
++#if DOWNSAMPLE
++// Passthrough passes have no transfer function to decode with: treat their
++// content as gamma 2.2, like the default sdr_transfer, so the box still
++// averages light instead of encoded values.
++vec4 sample_linear(vec2 uv) {
++  vec4 color = sample_texel(uv);
++  if (source_tf == TRANSFER_FUNCTION_PASSTHROUGH) {
++    float color_alpha = color.a;
++    vec3 rgb = color_alpha == 0.0 ? vec3(0.0) : max(color.rgb / color_alpha, vec3(0.0));
++    return vec4(pow(rgb, vec3(2.2)) * color_alpha, color_alpha);
++  }
++  return decode_color(color);
++}
++
++vec4 encode_linear(vec4 color) {
++  if (source_tf == TRANSFER_FUNCTION_PASSTHROUGH) {
++    float color_alpha = color.a;
++    vec3 rgb = color_alpha == 0.0 ? vec3(0.0) : color.rgb / color_alpha;
++    return vec4(linear_color_to_gamma22(rgb) * color_alpha, color_alpha);
++  }
++  return encode_color(color);
++}
++#endif
++
++// Source color converted for the pass. Downsampling averages the box in linear
++// light: averaging encoded values darkens every partially covered pixel, which
++// thins light text on dark backgrounds and fattens dark text on light ones.
++vec4 sample_converted() {
 +#if DOWNSAMPLE
 +  vec4 acc = vec4(0.0);
 +  for (int y = 0; y < 4; y++) {
@@ -950,15 +1024,27 @@ index 22e254da..86a317a0 100644
 +        continue;
 +      }
 +      vec2 offset = (vec2(float(x), float(y)) + 0.5 - taps * 0.5) * tap_step;
-+      acc += sample_texel(v_texcoord + offset);
++      acc += sample_linear(v_texcoord + offset);
 +    }
 +  }
-+  return acc / (taps.x * taps.y);
++  return encode_linear(acc / (taps.x * taps.y));
 +#else
-+  return sample_texel(SAMPLE_UV);
++  return convert_color(sample_texel(SAMPLE_UV));
++#endif
++}
++
+ #if EFFECTS
+ float corner_alpha(
+     vec2 size, vec2 position, bool is_cutout, float radius_tl, float radius_tr, float radius_bl, float radius_br
+@@ -175,7 +246,7 @@ float corner_alpha(
  #endif
- }
  
+ void main() {
+-  vec4 color = convert_color(sample_texture());
++  vec4 color = sample_converted();
+ #if EFFECTS
+   float quad_corner_alpha = corner_alpha(
+       size - 0.5, position + 0.25, false, radius_top_left, radius_top_right, radius_bottom_left, radius_bottom_right
 diff --git a/umbrielfx/types/scene/wlr_scene.c b/umbrielfx/types/scene/wlr_scene.c
 index 58d93566..5ddcb2ce 100644
 --- a/umbrielfx/types/scene/wlr_scene.c

@@ -18586,3 +18586,24 @@ regenerated and byte-compared. Combined debug stack: 12 focused unit targets
 (incl. `scale-hints`, `config-resolve`) and 14 headless checks (x11/wayland
 render_scale + exempt, ICC, color, downsample_box, screen_cast) pass. No
 package archive built; no live installation changed.
+
+## 2026-11-06 — umbriel-git 0014 carries the linear-light box downsample
+
+PR #575 adopted dMopp's `ba92c1d3` ("average the box downsample in linear
+light", head `5477e96b`): the box now decodes each tap before averaging and
+re-encodes the result, so partially covered pixels keep their weight instead of
+darkening (light text on dark backgrounds no longer erodes). Passthrough
+passes have no transfer function, so they average as gamma 2.2. Recipe 0014
+re-cut on main `28de32d0` over 0011+0012+0013 (sha `92514f4a`, delta 25 files,
++554/-35); 0011/0012/0013 apply unchanged. pkgver `0.1.0.r1511.28de32d-1`.
+
+**Validation.** Fresh makepkg-style sequential `git apply -3` on `28de32d0`
+without intermediate commits: every patch nonempty, final tree `fc1d46f2`
+matches the synthesis tree, no conflict markers, 467 shell files `bash -n`.
+Declared hashes verified; `.SRCINFO` regenerated and byte-compared. Combined
+debug stack: 10 focused unit targets and 45 headless checks (render/ subset,
+downsample_box, render_scale, xwayland_render_scale, protocol/color) pass.
+Mutation probe on the PR tree (shader reverted, updated pins kept) fails with
+exactly the old encoded-average values `0 170 85 / 0 85 170`, so the pin
+discriminates linear from encoded averaging. No archive built; no live
+installation changed.

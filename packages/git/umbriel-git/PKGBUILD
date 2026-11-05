@@ -8,7 +8,7 @@ source "$startdir/../../../lib/pgo.sh"
 
 pkgname=umbriel-git
 _pkgname=umbriel
-pkgver=0.1.0.r1510.b6c4b7d
+pkgver=0.1.0.r1511.28de32d
 pkgrel=1
 epoch=1
 pkgdesc='A Wayland compositor built on wlroots'
@@ -65,7 +65,7 @@ sha256sums=('SKIP'
             '817ffce311dbb4b162de5b261ef89d011f5f484db390eafec4ace1a4bf94c6ea'
             '1fe6f5683efc79957e00d458ade22ff3080c76dbcbcb6d7fca21203523e2bdb7'
             '7c4de03d135dc74529c7cafc2a81ae659c1e9a917094aeafb248175c94db8400'
-            'cd3af7389d09dd485512f06932d52db4ae111bc092fe07ea5edf7ab0c5915a39')
+            '92514f4aa7244e524aa73bf392efff5675a7e32e715715d182bad5324ed70492')
 
 pkgver() {
   cd "${_pkgname}"
@@ -113,13 +113,13 @@ prepare() {
   # follows the output scale bit-identically, direct scanout declines while
   # render_scale != scale, and mirror scenes are isolated from render_scale
   # hints. Upstream PR noctalia-dev/umbriel#573. Fullscreen windows and game
-  # or video content render at `scale`
-  # instead (direct scanout stays), and a `supersample` window rule decides
-  # outright either way. Native-resolution X11 uses the physical output scale
-  # by default; force_x11_supersample opts back into render_scale. Flattened
-  # PR head a6f61941 (render_scale + X11 default + dMopp's 1b4a4801 exemption
-  # fold + hardened harness leg + review fix) relative to main@e0da1063 on
-  # top of 0011 over main@b6c4b7dd; sha256 1fe6f568….
+  # or video content render at `scale` instead (direct scanout stays), and a
+  # `supersample` window rule decides outright either way. Native-resolution
+  # X11 uses the physical output scale by default; force_x11_supersample opts
+  # back into render_scale. Flattened PR head a6f61941 (render_scale + X11
+  # default + dMopp's 1b4a4801 exemption fold + hardened harness leg + review
+  # fix) relative to main@e0da1063 on top of 0011; unchanged on main@28de32d0;
+  # sha256 1fe6f568….
   # (Retire on merge:
   # 0012 → PR #573.)
   git apply -3 ../0012-per-output-render-scale.patch
@@ -130,7 +130,7 @@ prepare() {
   # plus client ICC image descriptions (`create_icc`) and `icc_file`
   # advertising. Upstream PR noctalia-dev/umbriel#585; 0013-icc-gamut.patch
   # Flattened downstream stack adaptation, first cut on main@e0da1063 over
-  # 0011+0012 and applied unchanged on main@b6c4b7dd, preserving the ICC
+  # 0011+0012 and applied unchanged on main@28de32d0, preserving the ICC
   # fields, upstream screen_cast_effect, and both capture and ICC harness
   # helpers; sha256 7c4de03d…. (Retire on merge.)
   git apply -3 ../0013-icc-gamut.patch
@@ -139,10 +139,11 @@ prepare() {
   # the texel footprint in raster space (review fixes: capped-downsample
   # raster-space pinning, and the downsample policy applied to window-capture
   # mirrors). Upstream PR noctalia-dev/umbriel#575;
-  # 0014-downsample-box.patch: flattened downstream stack adaptation,
-  # re-cut 2026-11-05 on main@b6c4b7dd over 0011+0012+0013 with the
-  # wlr_scene.h contexts adapted to the per-surface preferred-scale provider
-  # (delta unchanged: 25 files, +504/-29). sha256 cd3af738….
+  # 0014-downsample-box.patch: flattened downstream stack adaptation. Re-cut
+  # 2026-11-06 on main@28de32d0 over 0011+0012+0013 to carry dMopp's ba92c1d3:
+  # the box now decodes each tap before averaging and re-encodes the result, so
+  # partially covered pixels keep their weight (passthrough passes average as
+  # gamma 2.2). Delta 25 files, +554/-35; sha256 92514f4a….
   # (Retire on merge: 0014 → PR #575, with its 0012 base → PR #573.)
   git apply -3 ../0014-downsample-box.patch
 }
