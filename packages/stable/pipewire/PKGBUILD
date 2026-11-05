@@ -126,6 +126,11 @@ build() {
     export LDFLAGS+=" -fprofile-generate=${_pgo_profile_dir}"
   fi
 
+  # The build dir is purged because `meson setup` on a configured dir only
+  # prints "Directory already configured." and exits 0: a reused srcdir would
+  # otherwise keep the previous run's options, instrument nothing, and (with
+  # its gcda still around) feed stale profiles to phase 2 (NOTE.md 2026-11-06).
+  rm -rf build "${_pgo_profile_dir}"
   arch-meson pipewire build "${meson_options[@]}"
   meson compile -C build
 

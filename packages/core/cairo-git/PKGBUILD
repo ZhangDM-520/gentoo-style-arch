@@ -73,6 +73,10 @@ build() {
   # back to an LTO-only build.
   local pgo_min_gcda=50
   CFLAGS+=" -fprofile-generate" CXXFLAGS+=" -fprofile-generate"
+  # `meson setup` on a configured dir only prints "Directory already
+  # configured." and exits 0, so a reused srcdir would keep phase 2's options
+  # and instrument nothing (NOTE.md 2026-11-06).
+  rm -rf build
   arch-meson cairo build "${meson_options[@]}" \
     -D tests=enabled \
     -D b_lto=false

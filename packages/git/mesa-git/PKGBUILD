@@ -318,6 +318,9 @@ build () {
     if $_pgo; then
         echo "==> PGO: Building instrumented version (Phase 1/2)..."
         local _pgo_profile_dir="${srcdir}/mesa-pgo-profile"
+        # A reused srcdir must not feed an older revision's gcda into this
+        # profiling run (NOTE.md 2026-11-06).
+        rm -rf "${_pgo_profile_dir}"
         mkdir -p "${_pgo_profile_dir}"
 
         # Save original flags for Phase 2

@@ -35,3 +35,4 @@ here: it lives in `docs/NOTE.md` (dated `##` sections, newest first) and
 - 2026-11-05 — umbriel-git stack rebased on b6c4b7dd (supersample fold in 0012, 0014 provider-signature recut, 0016 retired on #580 merge) → .logs/action-2026-11-05-supersample-recipe.md
 - 2026-11-06 — PR #575 adopted linear-light box averaging (dMopp ba92c1d3); recipe 0014 re-cut on 28de32d0, stack rehearsed and tested → .logs/action-2026-11-06-linear-downsample-recipe.md
 - 2026-11-06 — umbriel-git phase-2 "failure" traced to the install step; recipe now purges build-release and the profile dir before phase 1 (PGO no longer silently degrades on a reused srcdir) — details: NOTE.md 2026-11-06, export: .logs/action-2026-11-06-umbriel-pgo-builddir.md
+- 2026-11-06 — PGO phase-1 purge swept across every two-phase Meson recipe (cairo/glib2/gtk3/gtk4/xwayland/pipewire/dbus/mesa); reuse path re-verified on cairo-git and dbus → .logs/action-2026-11-06-pgo-phase1-purge-sweep.md
