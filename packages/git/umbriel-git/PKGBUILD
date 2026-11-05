@@ -161,7 +161,13 @@ build() {
   # OUTSIDE the build dir (mesa precedent): DW_AT_comp_dir equals the build
   # dir, and the payload gate's literal predicate would otherwise risk
   # false-matching debug info.
+  # Start the profile dir empty. A reused srcdir (makepkg --noextract) would
+  # otherwise carry the previous revision's gcda into this build, and
+  # -fprofile-use would read arc counts for code that no longer exists — the
+  # -Wcoverage-mismatch shape, but silent and stale rather than expected.
+  # Same idiom as mold-git.
   local _pgo_dir="$srcdir/pgo-profiles"
+  rm -rf "$_pgo_dir"
   mkdir -p "$_pgo_dir"
   local _final_cflags="$CFLAGS"
   local _final_cxxflags="$CXXFLAGS"
@@ -203,6 +209,13 @@ build() {
   # build compiles nothing but the compositor and its data otherwise
   # (PACKAGING.md). Phase 2 switches them back off so no test or harness-IPC
   # target is even compiled into the final build.
+  #
+  # The dir is purged first: a reused srcdir (a plain `makepkg -f` retry)
+  # still holds the previous run's build-release, and `meson setup` on a
+  # configured dir only prints "Directory already configured." — the
+  # instrument leg then reuses phase 2's profile-use options, produces no
+  # gcda at all, and the floor guard silently falls back to a plain build.
+  rm -rf build-release
   arch-meson "${_pkgname}" build-release "${meson_flags[@]}" \
     -Db_lto=false -Dtests=enabled -Dharness=enabled
   meson compile -C build-release
@@ -244,7 +257,10 @@ build() {
     # never ran a warning instead of a hard error; -Wno-error=coverage-mismatch
     # downgrades GCC's arc-count mismatch the same way — those functions
     # compile without profile data, everything else keeps the real profile,
-    # and the payload stays uninstrumented either way. No
+    # and the payload stays uninstrumented either way. The expected mismatch
+    # here is structural: -Dharness=enabled is phase-1-only, so every
+    # UMBRIEL_HARNESS block inside ipc.cpp (dispatchRequest,
+    # notifyOutputFrame) changes that TU's arc counts between the legs. No
     # -fprofile-correction: the house pattern (cmake-git, glib2-git) does not
     # use it.
     CFLAGS="$_final_cflags -fprofile-use=$_pgo_dir -Wno-error=missing-profile -Wno-error=coverage-mismatch"

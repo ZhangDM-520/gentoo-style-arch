@@ -1912,7 +1912,11 @@ install history lives in `NOTE.md`.
 - **PGO phase-2 reconfigure**: a phase-2 pass must re-run the *configure* step,
   not only the build — the argument cache survives `make clean`. Meson:
   `meson setup --reconfigure` with both compiler and linker caches replaced
-  (§1 rule 6, `docs/build-guide.md`). CMake: `cmake-git` reads
+  (§1 rule 6, `docs/build-guide.md`), and phase 1 must start from a purged
+  build dir: `meson setup` on a configured dir only prints "Directory already
+  configured." and exits 0, so a reused srcdir (a plain `makepkg -f` retry)
+  re-compiles with the previous phase-2 options, produces no gcda, and the
+  floor guard falls back to a plain build (umbriel-git, 2026-11-06). CMake: `cmake-git` reads
   `CFLAGS`/`CXXFLAGS`/`LDFLAGS` only while initialising `CMakeCache.txt`, so
   phase 2 rewrites the flag strings **inside** that file and touches a tracked
   input (`CMakeLists.txt`) so the generated `Makefile` regenerates — without it
