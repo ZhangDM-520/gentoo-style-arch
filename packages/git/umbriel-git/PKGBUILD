@@ -8,7 +8,7 @@ source "$startdir/../../../lib/pgo.sh"
 
 pkgname=umbriel-git
 _pkgname=umbriel
-pkgver=0.1.0.r1511.28de32d
+pkgver=0.1.0.r1518.aa3b6b3
 pkgrel=1
 epoch=1
 pkgdesc='A Wayland compositor built on wlroots'
@@ -60,12 +60,14 @@ source=("${_pkgname}::git+${url}.git#branch=main"
         '0011-drag-deform-settle-crop.patch'
         '0012-per-output-render-scale.patch'
         '0013-icc-gamut.patch'
-        '0014-downsample-box.patch')
+        '0014-downsample-box.patch'
+        '0018-underfull-strip-align.patch')
 sha256sums=('SKIP'
             '817ffce311dbb4b162de5b261ef89d011f5f484db390eafec4ace1a4bf94c6ea'
             '1fe6f5683efc79957e00d458ade22ff3080c76dbcbcb6d7fca21203523e2bdb7'
             '7c4de03d135dc74529c7cafc2a81ae659c1e9a917094aeafb248175c94db8400'
-            '92514f4aa7244e524aa73bf392efff5675a7e32e715715d182bad5324ed70492')
+            '92514f4aa7244e524aa73bf392efff5675a7e32e715715d182bad5324ed70492'
+            '21c9a199b8a513fb1b3b8eba10a2d686bda3d455bc23da940b109d4f024953a7')
 
 pkgver() {
   cd "${_pkgname}"
@@ -146,6 +148,19 @@ prepare() {
   # gamma 2.2). Delta 25 files, +554/-35; sha256 92514f4a….
   # (Retire on merge: 0014 → PR #575, with its 0012 base → PR #573.)
   git apply -3 ../0014-downsample-box.patch
+
+  # [layout] underfull_strip: a scrolling strip narrower than the viewport
+  # rests at its start, in the centre, or at its end, replacing the
+  # `layout.scrolling.center_underfull_strip` boolean (breaking: the removed
+  # key warns `unknown key`, and the docs map true -> "center", false ->
+  # "start"). Placement is a whole-strip property and the value names are
+  # axis-neutral so vertical strips read correctly. Resize gestures follow:
+  # an end-aligned fitting strip refuses the last column's trailing edge and
+  # trades width across interior boundaries, while centre keeps its symmetric
+  # growth. Upstream PR noctalia-dev/umbriel#713, four commits
+  # (d1c4c53/7eec2b3/33680fa/b001a86) on main@aa3b6b3; sha256 21c9a199….
+  # (Retire on merge: 0018 -> PR #713.)
+  git apply -3 ../0018-underfull-strip-align.patch
 }
 
 build() {
