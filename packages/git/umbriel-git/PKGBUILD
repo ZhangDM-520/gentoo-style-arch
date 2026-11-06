@@ -9,7 +9,7 @@ source "$startdir/../../../lib/pgo.sh"
 pkgname=umbriel-git
 _pkgname=umbriel
 pkgver=0.1.0.r1518.aa3b6b3
-pkgrel=2
+pkgrel=3
 epoch=1
 pkgdesc='A Wayland compositor built on wlroots'
 arch=('x86_64' 'aarch64')
@@ -61,13 +61,15 @@ source=("${_pkgname}::git+${url}.git#branch=main"
         '0012-per-output-render-scale.patch'
         '0013-icc-gamut.patch'
         '0014-downsample-box.patch'
-        '0018-underfull-strip-align.patch')
+        '0018-underfull-strip-align.patch'
+        '0019-background-effect.patch')
 sha256sums=('SKIP'
             '817ffce311dbb4b162de5b261ef89d011f5f484db390eafec4ace1a4bf94c6ea'
             '1fe6f5683efc79957e00d458ade22ff3080c76dbcbcb6d7fca21203523e2bdb7'
             '7c4de03d135dc74529c7cafc2a81ae659c1e9a917094aeafb248175c94db8400'
             '92514f4aa7244e524aa73bf392efff5675a7e32e715715d182bad5324ed70492'
-            'da533d362314d028cf575128ace45b1781e39d9385478fd648f5e9bffffaf621')
+            'da533d362314d028cf575128ace45b1781e39d9385478fd648f5e9bffffaf621'
+            '36a5f944bd57b067d293900355dd6bd41fb20643e6f0e4bfba6f8d3689425f16')
 
 pkgver() {
   cd "${_pkgname}"
@@ -162,6 +164,22 @@ prepare() {
   # (d1c4c53/7eec2b3/33680fa/b001a86/57c27d3) on main@aa3b6b3; sha256 da533d36….
   # (Retire on merge: 0018 -> PR #713.)
   git apply -3 ../0018-underfull-strip-align.patch
+
+  # [appearance.blur] client_requests + ext_background_effect_v1: applications
+  # (GTK4 terminals such as Zashterminal) name the part of their own surface
+  # that should show the blurred backdrop. The global is advertised with the
+  # blur capability; the requested surface-local region becomes a node clip on
+  # the blur node its owner already keeps, so the transparency mask stays
+  # aligned. Toplevels, popups and layer surfaces forward the committed region;
+  # an empty region means no blur, no request leaves the rule in charge, and
+  # client_requests = false keeps the global advertised while ignoring
+  # requests. Upstream PR noctalia-dev/umbriel#715;
+  # 0019-background-effect.patch: flattened downstream stack adaptation on
+  # main@aa3b6b3e over 0011+0012+0013+0014+0018 (delta 31 files, +1553/-43,
+  # sha256 36a5f944…; the only downstream conflict is server.h's
+  # ColorDescription forward declaration next to BackgroundEffectManager).
+  # (Retire on merge: 0019 -> PR #715.)
+  git apply -3 ../0019-background-effect.patch
 }
 
 build() {

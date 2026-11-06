@@ -1,0 +1,2245 @@
+From 5a553ae31b39809c181cce820ca522bbe50db468 Mon Sep 17 00:00:00 2001
+From: ZhangDM-520 <jixianqiang1540@gmail.com>
+Date: Fri, 6 Nov 2026 20:26:55 +0800
+Subject: [PATCH] feat(blur): honor backdrop blur regions requested by clients
+
+Applications such as GTK4 terminals ask the compositor to blur the part of
+their own surface that shows the desktop, through ext_background_effect_v1,
+and fall back to a window rule when the protocol is missing. Advertise the
+global with the blur capability and blur exactly the requested area.
+
+The manager keeps one double-buffered region per surface in the surface's
+synced state, so set_blur_region composes with wl_surface.commit. Blur owners
+read the committed region where they already own a blur node: toplevels,
+popups and layer surfaces. The region is a node clip rather than a smaller
+blur node, because the transparency mask stretches the surface buffer over
+the whole node box and shrinking it would misalign the mask. A request turns
+the blur on for that surface and an empty region turns it off; a window rule
+still applies when there is no request, and a requesting view keeps its fade
+and overview alpha instead of the rule's blur fade.
+
+appearance.blur.client_requests (default true) keeps the capability
+advertised while ignoring requests, and appearance.blur.enabled still wins
+over both.
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+---
+ docs/design/README.md                         |   1 +
+ docs/design/background-effect.md              |  25 ++
+ docs/user/appearance.md                       |  12 +-
+ examples/config.toml                          |   4 +
+ meson.build                                   |  29 ++
+ src/config/config.h                           |   4 +
+ src/config/fields_general.cpp                 |  13 +-
+ src/layer/layer_surface.cpp                   |  13 +-
+ src/overview/overview.cpp                     |   7 +-
+ src/scene/surface_blur.cpp                    |  82 ++++-
+ src/scene/surface_blur.h                      |  31 +-
+ src/server/background_effect.cpp              | 262 ++++++++++++++
+ src/server/background_effect.h                |  40 +++
+ src/server/server.cpp                         |  12 +-
+ src/server/server.h                           |   3 +
+ src/server/server_events.cpp                  |   8 +-
+ src/view/decoration.cpp                       |   4 +-
+ src/view/decoration.h                         |   2 +-
+ src/view/popup.cpp                            |  40 ++-
+ src/view/popup.h                              |  17 +-
+ src/view/view.cpp                             |   2 +
+ src/view/view.h                               |   8 +
+ src/view/view_animation.cpp                   |   2 +-
+ src/view/view_chrome.cpp                      |  61 +++-
+ src/view/view_lifecycle.cpp                   |   1 +
+ tests/harness/check.sh                        |   1 +
+ .../checks/protocol/background_blur.sh        | 336 ++++++++++++++++++
+ .../checks/protocol/security_context.sh       |   1 +
+ .../clients/background_effect_client.cpp      | 304 ++++++++++++++++
+ tests/meson.build                             |  15 +
+ tests/unit/blur_region.cpp                    | 256 +++++++++++++
+ 31 files changed, 1553 insertions(+), 43 deletions(-)
+ create mode 100644 docs/design/background-effect.md
+ create mode 100644 src/server/background_effect.cpp
+ create mode 100644 src/server/background_effect.h
+ create mode 100755 tests/harness/checks/protocol/background_blur.sh
+ create mode 100644 tests/harness/clients/background_effect_client.cpp
+ create mode 100644 tests/unit/blur_region.cpp
+
+diff --git a/docs/design/README.md b/docs/design/README.md
+index 678d0ae4..e558042c 100644
+--- a/docs/design/README.md
++++ b/docs/design/README.md
+@@ -6,6 +6,7 @@ Start with the user guide when a detail affects configuration or normal use. Use
+ 
+ - [Configuration reload](configuration-reload.md)
+ - [Effects](effects.md)
++- [Client-requested background blur](background-effect.md)
+ - [Audio shader input](audio-shader-input.md)
+ - [Workspace lifecycle](workspace-lifecycle.md)
+ - [Live workspace reveal](workspace-reveal.md)
+diff --git a/docs/design/background-effect.md b/docs/design/background-effect.md
+new file mode 100644
+index 00000000..9a87b4d1
+--- /dev/null
++++ b/docs/design/background-effect.md
+@@ -0,0 +1,25 @@
++# Client-requested background blur
++
++`ext_background_effect_v1` lets a client name the part of its own surface that should show the backdrop blurred. Umbriel advertises the manager with the `blur` capability and applies the request as a clip on the blur node its owner already maintains; the user-facing keys are in the [appearance guide](../user/appearance.md#blur).
++
++## Ownership
++
++[`BackgroundEffectManager`](../../src/server/background_effect.h) owns the global, one object per surface, and each object's double-buffered region. `set_blur_region` writes the pending region; `wlr_surface` publishes it to the current state on commit, so a client can request and commit in one batch. The manager never creates scene nodes: `region()` reports what the current state asks for and each blur owner decides what to do with it.
++
++Requests are read per surface, not per tree. `View` tracks `rootSurface()`, `Popup` tracks the popup's own surface, and `LayerSurface` tracks the layer surface; subsurfaces have no owner of their own and are not covered. Every owner re-reads the region when it refreshes its blur, and the `View` surface watch re-runs `updateBlur()` when the committed region changes, because a commit that only changes the region carries no new buffer.
++
++Blur options resolve in [`SurfaceBlur::update`](../../src/scene/surface_blur.cpp): a non-empty request turns the blur on and clips it to the region, an empty request turns it off, and no request leaves the window or layer rule in charge. `appearance.blur.enabled` still wins over all three, and `appearance.blur.client_requests = false` drops the request before this logic so a client cannot opt itself in. A requested surface is drawn even when its opaque region covers the surface: the mask still hides opaque pixels, and the request is the client's own statement about what it draws.
++
++## Rendering
++
++The blur node keeps its full-surface box. `wlr_scene_blur`'s transparency mask stretches the masked buffer over the whole node, so shrinking the node would shift the mask against the content; the request is therefore a node clip, intersected with the shape clip the mask already contributes. A node clip is a scissor that SceneFX folds into visibility, damage, and hit testing, so no other geometry changes.
++
++The region is surface-local, in logical pixels. `mapBlurRegionToNode` scales each rectangle by the node box over the surface box — an identity ratio in the steady state and the animation ratio while a window opens, closes, resizes, or enters fullscreen — and rounds the far edges outward so a fractional ratio cannot shave a blurred pixel. Blur alpha derives from the window's fade and the overview opacity only when a request is present, so a rule that leaves blur off does not suppress a request.
++
++Optimized blur samples the cached background beneath the window stack, so over a bottom-layer surface it shows the blurred backdrop rather than a gradient; the requested region still bounds it. The harness check pins both the live and the optimized paths.
++
++## Protocol build
++
++`wayland-protocols >= 1.47` already ships `staging/ext-background-effect/ext-background-effect-v1.xml`, so the server and harness-client bindings are two more `custom_target` scanner rules in `meson.build`, with no new dependency. The global is added to the security-context allowlist in [`Server`](../../src/server/server.cpp): it exposes nothing about other clients, so sandboxed applications keep it.
++
++`org_kde_kwin_blur` is not part of wayland-protocols and its XML is LGPL-2.1-or-later; it is not advertised. A client that only speaks that protocol still needs a window or layer rule for blur.
+diff --git a/docs/user/appearance.md b/docs/user/appearance.md
+index 5766eec4..9068ee17 100644
+--- a/docs/user/appearance.md
++++ b/docs/user/appearance.md
+@@ -247,6 +247,7 @@ The bar is hidden while its window is fullscreen or maximized to the edges. Titl
+ ```toml
+ [appearance.blur]
+ enabled = true
++client_requests = true
+ optimized = true
+ passes = 2
+ radius = 5
+@@ -258,10 +259,13 @@ saturation = 1.1
+ 
+ `enabled` is the master switch. Individual surfaces still opt in through [window rules](window-rules.md) or [layer rules](layer-rules.md). Blur appears only where a surface is transparent.
+ 
+-| Key          | Default | Description                                                    |
+-| ------------ | ------- | -------------------------------------------------------------- |
+-| `enabled`    | `true`  | Enable blur rendering.                                         |
+-| `optimized`  | `true`  | Share one cached background blur across surfaces on an output. |
++Applications that draw their own backdrop blur can ask for it instead: Umbriel advertises `ext_background_effect_v1`, so a client names the part of its surface that should be blurred. A request turns blur on for that surface and limits it to the requested area, which combines with a rule rather than replacing it: an empty region means no blur. `client_requests = false` keeps the protocol advertised but ignores requests, so a client cannot opt itself in.
++
++| Key               | Default | Description                                                    |
++| ----------------- | ------- | -------------------------------------------------------------- |
++| `enabled`         | `true`  | Enable blur rendering.                                         |
++| `client_requests` | `true`  | Honor blur regions that clients request for their own surface. |
++| `optimized`       | `true`  | Share one cached background blur across surfaces on an output. |
+ | `passes`     | `2`     | Blur passes from 0 to 8.                                       |
+ | `radius`     | `5`     | Blur radius from 0 to 100.                                     |
+ | `noise`      | `0.02`  | Noise overlay from 0.0 to 1.0.                                 |
+diff --git a/examples/config.toml b/examples/config.toml
+index 80359aba..835cf965 100644
+--- a/examples/config.toml
++++ b/examples/config.toml
+@@ -91,6 +91,10 @@ files = []
+ [appearance.blur]
+ radius = 3
+ 
++# Applications using ext_background_effect_v1 ask for blur on their own surface.
++# Set to false to keep the protocol advertised but ignore the requests.
++# client_requests = true
++
+ # Optional title bar with modifier-free dragging and floating frame resizing.
+ # [appearance.title_bar]
+ # mode = "on" # Follow client decoration preferences.
+diff --git a/meson.build b/meson.build
+index 84b969aa..947dfecc 100644
+--- a/meson.build
++++ b/meson.build
+@@ -445,6 +445,32 @@ color_management_server_c = custom_target(
+   output: 'color-management-v1-server-protocol.c',
+   command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'],
+ )
++ext_background_effect_xml = wayland_protocols_dep.get_variable(pkgconfig: 'pkgdatadir') / 'staging/ext-background-effect/ext-background-effect-v1.xml'
++ext_background_effect_server_h = custom_target(
++  'ext-background-effect-v1-server-protocol.h',
++  input: ext_background_effect_xml,
++  output: 'ext-background-effect-v1-server-protocol.h',
++  command: [wayland_scanner, 'server-header', '@INPUT@', '@OUTPUT@'],
++)
++ext_background_effect_server_c = custom_target(
++  'ext-background-effect-v1-server-protocol.c',
++  input: ext_background_effect_xml,
++  output: 'ext-background-effect-v1-server-protocol.c',
++  command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'],
++)
++ext_background_effect_client_h = custom_target(
++  'ext-background-effect-v1-client-protocol.h',
++  input: ext_background_effect_xml,
++  output: 'ext-background-effect-v1-client-protocol.h',
++  command: [wayland_scanner, 'client-header', '@INPUT@', '@OUTPUT@'],
++)
++ext_background_effect_client_c = custom_target(
++  'ext-background-effect-v1-client-protocol.c',
++  input: ext_background_effect_xml,
++  output: 'ext-background-effect-v1-client-protocol.c',
++  command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'],
++)
++
+ xdg_output_server_h = custom_target(
+   'xdg-output-unstable-v1-protocol.h',
+   input: wayland_protocols_dep.get_variable(pkgconfig: 'pkgdatadir') / 'unstable/xdg-output/xdg-output-unstable-v1.xml',
+@@ -793,6 +819,7 @@ core_sources = files(
+   'src/layout/drop_target.cpp',
+   'src/server/color_manager.cpp',
+   'src/server/color_description.cpp',
++  'src/server/background_effect.cpp',
+   'src/server/backend_manager.cpp',
+   'src/server/drm_lease.cpp',
+   'src/server/allocator.cpp',
+@@ -919,6 +946,8 @@ umbriel_core = static_library(
+     xdg_shell_client_c,
+     color_management_server_h,
+     color_management_server_c,
++    ext_background_effect_server_h,
++    ext_background_effect_server_c,
+     xdg_output_server_h,
+     xdg_output_server_c,
+   ],
+diff --git a/src/config/config.h b/src/config/config.h
+index ca395335..3e7e04c1 100644
+--- a/src/config/config.h
++++ b/src/config/config.h
+@@ -776,6 +776,10 @@ namespace umbriel {
+       bool opaqueFullscreen = true;
+       struct Blur {
+         bool enabled = true;
++        // Honour client-requested backdrop blur (ext_background_effect_v1).
++        // Turning this off keeps the global advertised but ignores requests,
++        // like a compositor policy.
++        bool clientRequests = true;
+         bool optimized = true;
+         int passes = 2;
+         int radius = 5;
+diff --git a/src/config/fields_general.cpp b/src/config/fields_general.cpp
+index d2e37653..7a584b36 100644
+--- a/src/config/fields_general.cpp
++++ b/src/config/fields_general.cpp
+@@ -123,10 +123,15 @@ namespace umbriel {
+           ),
+       };
+       static const registry::Fields<A::Blur> blur{
+-          boolean("enabled", &A::Blur::enabled),          boolean("optimized", &A::Blur::optimized),
+-          integer("passes", 0, 8, &A::Blur::passes),      integer("radius", 0, 100, &A::Blur::radius),
+-          real("noise", 0.0, 1.0, &A::Blur::noise),       real("brightness", 0.0, 2.0, &A::Blur::brightness),
+-          real("contrast", 0.0, 2.0, &A::Blur::contrast), real("saturation", 0.0, 2.0, &A::Blur::saturation),
++          boolean("enabled", &A::Blur::enabled),
++          boolean("client_requests", &A::Blur::clientRequests),
++          boolean("optimized", &A::Blur::optimized),
++          integer("passes", 0, 8, &A::Blur::passes),
++          integer("radius", 0, 100, &A::Blur::radius),
++          real("noise", 0.0, 1.0, &A::Blur::noise),
++          real("brightness", 0.0, 2.0, &A::Blur::brightness),
++          real("contrast", 0.0, 2.0, &A::Blur::contrast),
++          real("saturation", 0.0, 2.0, &A::Blur::saturation),
+       };
+       static const registry::Fields<A::Shadow> shadow{
+           boolean("enabled", &A::Shadow::enabled),
+diff --git a/src/layer/layer_surface.cpp b/src/layer/layer_surface.cpp
+index c972f1ab..733e8beb 100644
+--- a/src/layer/layer_surface.cpp
++++ b/src/layer/layer_surface.cpp
+@@ -11,6 +11,7 @@ extern "C" {
+ #include "input/seat.h"
+ #include "output/output.h"
+ #include "overview/overview.h"
++#include "server/background_effect.h"
+ #include "server/server.h"
+ #include "view/popup.h"
+ #include "wlr.h"
+@@ -395,7 +396,15 @@ namespace umbriel {
+ 
+   void LayerSurface::updateBlur() {
+     const wlr_box box{0, 0, m_layerSurface->surface->current.width, m_layerSurface->surface->current.height};
+-    m_blur.update(m_scene->tree, m_layerSurface->surface, box, box, corner_radii_none(), nullptr, blurOptions());
++    const pixman_region32_t* clientRegion = nullptr;
++    if (m_server->backgroundEffect() != nullptr) {
++      clientRegion = m_server->backgroundEffect()->region(m_layerSurface->surface);
++    }
++    // A layer surface is drawn 1:1 at its own origin, so the surface box is what the node shows.
++    m_blur.update(
++        m_scene->tree, m_layerSurface->surface, box, box, corner_radii_none(), nullptr, blurOptions(), 1.0F, nullptr,
++        ClientBlurRegion{.region = clientRegion, .source = box}
++    );
+   }
+ 
+   void LayerSurface::applyConfig() {
+@@ -583,7 +592,7 @@ namespace umbriel {
+     auto* popup = static_cast<wlr_xdg_popup*>(data);
+     // The popup tree shares the surface origin and stacks above its shell layer's regular surfaces.
+     wlr_scene_node_raise_to_top(&m_popupTree->node);
+-    new Popup(popup, m_popupTree);
++    new Popup(popup, m_popupTree, nullptr, m_server);
+   }
+ 
+ } // namespace umbriel
+diff --git a/src/overview/overview.cpp b/src/overview/overview.cpp
+index 14718696..67d0dbb4 100644
+--- a/src/overview/overview.cpp
++++ b/src/overview/overview.cpp
+@@ -26,6 +26,7 @@ extern "C" {
+ #include "scene/ssd_frame.h"
+ #include "scene/surface_shape.h"
+ #include "scene/text_buffer.h"
++#include "server/background_effect.h"
+ #include "server/color_manager.h"
+ #include "server/focus.h"
+ #include "server/server.h"
+@@ -459,10 +460,14 @@ namespace umbriel {
+       applySurfaceShape(entry->buffer, surface, shape);
+       roundToCardBox(entry->buffer);
+       const wlr_box blurBox{0, 0, contentW, contentH};
++      // The card draws the committed geometry over the card box, so a client-requested region maps with that source.
++      const pixman_region32_t* clientRegion = m_server->backgroundEffect() != nullptr && entry->isRoot
++          ? m_server->backgroundEffect()->region(surface)
++          : nullptr;
+       card.blur.setAlpha(1.0F);
+       card.blur.update(
+           card.tree, surface, blurBox, geometry, contentCorners, nullptr, view->blurOptions(), entry->buffer->opacity,
+-          entry->buffer
++          entry->buffer, ClientBlurRegion{.region = clientRegion, .source = geometry}
+       );
+       blurUpdated = true;
+     }
+diff --git a/src/scene/surface_blur.cpp b/src/scene/surface_blur.cpp
+index fbbc9833..4ec309c9 100644
+--- a/src/scene/surface_blur.cpp
++++ b/src/scene/surface_blur.cpp
+@@ -2,6 +2,7 @@
+ 
+ #include "config/config.h"
+ // clang-format off
++#include <algorithm>
+ #include <cmath> // IWYU pragma: keep
+ #include "wlr.h"
+ // clang-format on
+@@ -43,12 +44,45 @@ namespace umbriel {
+     return pixman_region32_contains_rectangle(&surface->opaque_region, &box) != PIXMAN_REGION_IN;
+   }
+ 
++  void mapBlurRegionToNode(
++      const pixman_region32_t& region, const wlr_box& surfaceBox, int nodeWidth, int nodeHeight, pixman_region32_t* out
++  ) {
++    if (surfaceBox.width <= 0 || surfaceBox.height <= 0 || nodeWidth <= 0 || nodeHeight <= 0) {
++      return;
++    }
++    const double scaleX = static_cast<double>(nodeWidth) / surfaceBox.width;
++    const double scaleY = static_cast<double>(nodeHeight) / surfaceBox.height;
++    // A surface-local point is relative to the surface box, whose origin the scene helper puts at the node origin;
++    // subtract it before scaling. Clamping before the conversion keeps a wild client coordinate out of int range.
++    const auto mappedX = [&](int x) {
++      return std::clamp((static_cast<double>(x) - surfaceBox.x) * scaleX, 0.0, static_cast<double>(nodeWidth));
++    };
++    const auto mappedY = [&](int y) {
++      return std::clamp((static_cast<double>(y) - surfaceBox.y) * scaleY, 0.0, static_cast<double>(nodeHeight));
++    };
++    int rectCount = 0;
++    const pixman_box32_t* rects = pixman_region32_rectangles(const_cast<pixman_region32_t*>(&region), &rectCount);
++    for (int i = 0; i < rectCount; ++i) {
++      const pixman_box32_t& box = rects[i];
++      // Outward rounding keeps a fractional animation scale from shaving a
++      // blurred edge; the node clip is a scissor, so the extra pixel is safe.
++      const int x1 = static_cast<int>(std::floor(mappedX(box.x1)));
++      const int y1 = static_cast<int>(std::floor(mappedY(box.y1)));
++      const int x2 = static_cast<int>(std::ceil(mappedX(box.x2)));
++      const int y2 = static_cast<int>(std::ceil(mappedY(box.y2)));
++      pixman_region32_union_rect(out, out, x1, y1, std::max(0, x2 - x1), std::max(0, y2 - y1));
++    }
++  }
++
+   void SurfaceBlur::update(
+       wlr_scene_tree* parent, wlr_surface* surface, const wlr_box& nodeBox, const wlr_box& surfaceBox,
+       fx_corner_radii corners, const wlr_box* clipBox, const SurfaceBlurOptions& options, float surfaceOpacity,
+-      wlr_scene_buffer* maskSource
++      wlr_scene_buffer* maskSource, const ClientBlurRegion& clientBlur
+   ) {
+     const Config::Appearance::Blur& cfg = config().appearance.blur;
++    // The opt-out key is the single place the policy is applied, so every
++    // owner that forwards a request behaves the same.
++    const pixman_region32_t* clientRegion = cfg.clientRequests ? clientBlur.region : nullptr;
+     wlr_box drawBox = nodeBox;
+     if (clipBox != nullptr
+         && (!wlr_box_intersection(&drawBox, &nodeBox, clipBox) || drawBox.width <= 0 || drawBox.height <= 0)) {
+@@ -60,11 +94,18 @@ namespace umbriel {
+     // A compositor opacity below 1 makes even a client-declared opaque surface
+     // reveal the backdrop, so it also requires a blur node. Its opacity does
+     // not attenuate the blur itself: client-provided alpha does not either.
++    // A client request stands in for the rule: the client knows what its own
++    // surface draws, so it does not have to look opaque.
++    // An empty request is a client asking for no blur at all, which also overrides the rule; a missing request leaves
++    // the rule in charge.
++    const bool clientRequested = clientRegion != nullptr;
++    const bool clientArea = clientRequested && !pixman_region32_empty(clientRegion);
++    const bool ruleEnabled = options.enabled.value_or(false);
+     const bool want = cfg.enabled
+-        && options.enabled.value_or(false)
++        && (clientArea || (!clientRequested && ruleEnabled))
+         && drawBox.width > 0
+         && drawBox.height > 0
+-        && (surfaceOpacity < 1.0F || surfaceTransparent(surface, surfaceBox));
++        && (clientArea || surfaceOpacity < 1.0F || surfaceTransparent(surface, surfaceBox));
+     if (!want) {
+       if (m_node != nullptr) {
+         wlr_scene_node_set_enabled(&m_node->node, false);
+@@ -118,21 +159,34 @@ namespace umbriel {
+     wlr_scene_buffer* shapeSource = wlr_scene_blur_get_transparency_mask_source(m_node);
+     const pixman_region32_t* shape =
+         shapeSource != nullptr ? wlr_scene_node_get_clip_region(&shapeSource->node) : nullptr;
+-    if (shape != nullptr) {
++    if (shape == nullptr && !clientArea) {
++      wlr_scene_node_set_clip_region(&m_node->node, nullptr);
++    } else {
+       pixman_region32_t clip;
+       pixman_region32_init(&clip);
+-      pixman_region32_copy(&clip, shape);
+-      int sourceX = 0;
+-      int sourceY = 0;
+-      int blurX = 0;
+-      int blurY = 0;
+-      wlr_scene_node_coords(&shapeSource->node, &sourceX, &sourceY);
+-      wlr_scene_node_coords(&m_node->node, &blurX, &blurY);
+-      pixman_region32_translate(&clip, sourceX - blurX, sourceY - blurY);
++      if (shape != nullptr) {
++        pixman_region32_copy(&clip, shape);
++        int sourceX = 0;
++        int sourceY = 0;
++        int blurX = 0;
++        int blurY = 0;
++        wlr_scene_node_coords(&shapeSource->node, &sourceX, &sourceY);
++        wlr_scene_node_coords(&m_node->node, &blurX, &blurY);
++        pixman_region32_translate(&clip, sourceX - blurX, sourceY - blurY);
++      } else {
++        pixman_region32_init_rect(&clip, 0, 0, drawBox.width, drawBox.height);
++      }
++      if (clientArea) {
++        // The request is in surface-local coordinates, which is exactly what surfaceBox measures; only the node
++        // ratio (animation scale, resized box) differs.
++        pixman_region32_t mapped;
++        pixman_region32_init(&mapped);
++        mapBlurRegionToNode(*clientRegion, clientBlur.source, drawBox.width, drawBox.height, &mapped);
++        pixman_region32_intersect(&clip, &clip, &mapped);
++        pixman_region32_fini(&mapped);
++      }
+       wlr_scene_node_set_clip_region(&m_node->node, &clip);
+       pixman_region32_fini(&clip);
+-    } else {
+-      wlr_scene_node_set_clip_region(&m_node->node, nullptr);
+     }
+   }
+ 
+diff --git a/src/scene/surface_blur.h b/src/scene/surface_blur.h
+index d9059207..9f35be19 100644
+--- a/src/scene/surface_blur.h
++++ b/src/scene/surface_blur.h
+@@ -1,9 +1,13 @@
+ #pragma once
+ 
+ #include <optional>
++#include <pixman.h>
++
++extern "C" {
++#include <wlr/util/box.h>
++}
+ 
+ struct fx_corner_radii;
+-struct wlr_box;
+ struct wlr_scene_buffer;
+ struct wlr_scene_blur;
+ struct wlr_scene_tree;
+@@ -20,6 +24,25 @@ namespace umbriel {
+   // True when the surface's opaque region does not cover surfaceBox, given in surface-local coordinates.
+   bool surfaceTransparent(wlr_surface* surface, const wlr_box& surfaceBox);
+ 
++  // A client's ext_background_effect_v1 request. The region is committed state in surface-local coordinates;
++  // `source` is the surface-local box the blur node shows. It is not always the committed geometry: a fullscreen
++  // buffer is centred and a cropped tiled window is clipped 1:1, so the owner names the box that maps onto the node.
++  struct ClientBlurRegion {
++    const pixman_region32_t* region = nullptr;
++    wlr_box source{};
++  };
++
++  // Maps `region`, in surface-local coordinates, into the blur node's space.
++  // The node's transparency mask stretches the whole surface over the node box,
++  // so the region follows the same ratio and origin shift: surfaceBox is the
++  // surface-local content box (whose origin the scene helper places at the node's
++  // origin) and nodeWidth/Height the blur node's size. Edges are clamped to the
++  // node and rounded outward, so a fractional animation scale never clips a
++  // blurred pixel and an oversized request cannot overflow.
++  void mapBlurRegionToNode(
++      const pixman_region32_t& region, const wlr_box& surfaceBox, int nodeWidth, int nodeHeight, pixman_region32_t* out
++  );
++
+   // Owns the desired-state logic for one SceneFX backdrop-blur node. The node itself is a child of the owner's scene
+   // tree and is freed by scene-tree teardown, never by this class (no destructor).
+   class SurfaceBlur {
+@@ -28,11 +51,13 @@ namespace umbriel {
+     // (position + size of the node). surfaceBox: content box in surface-local coordinates (opaque-region test).
+     // clipBox: optional visible subset in `parent` coordinates; nullptr = full nodeBox. surfaceOpacity: opacity applied
+     // to the surface buffers, used only to decide whether an opaque client reveals the blur. maskSource: optional scene
+-    // buffer to use instead of finding the surface's regular scene buffer.
++    // buffer to use instead of finding the surface's regular scene buffer. clientBlur: the region the client asked for
++    // through ext_background_effect_v1; a null region means no request. A non-null region enables the blur on its own
++    // and clips it; the node box stays the whole surface so the mask keeps its alignment.
+     void update(
+         wlr_scene_tree* parent, wlr_surface* surface, const wlr_box& nodeBox, const wlr_box& surfaceBox,
+         fx_corner_radii corners, const wlr_box* clipBox = nullptr, const SurfaceBlurOptions& options = {},
+-        float surfaceOpacity = 1.0F, wlr_scene_buffer* maskSource = nullptr
++        float surfaceOpacity = 1.0F, wlr_scene_buffer* maskSource = nullptr, const ClientBlurRegion& clientBlur = {}
+     );
+     // Opacity of the blur effect itself. Keep this independent from surface
+     // opacity so compositor opacity matches equivalent client alpha.
+diff --git a/src/server/background_effect.cpp b/src/server/background_effect.cpp
+new file mode 100644
+index 00000000..d6e62ed9
+--- /dev/null
++++ b/src/server/background_effect.cpp
+@@ -0,0 +1,262 @@
++#include "server/background_effect.h"
++
++#include "ext-background-effect-v1-server-protocol.h"
++#include "wlr.h"
++
++#include <algorithm>
++#include <cstdint>
++#include <memory>
++#include <unordered_map>
++
++namespace umbriel {
++
++  namespace {
++
++    // One surface's double-buffered blur request. `requested` separates "no
++    // request" from a request whose region is empty; the protocol's NULL region
++    // clears the request entirely.
++    struct RegionState {
++      pixman_region32_t region;
++      bool requested = false;
++    };
++
++    void initState(void* raw) {
++      auto* state = static_cast<RegionState*>(raw);
++      pixman_region32_init(&state->region);
++      state->requested = false;
++    }
++
++    void finishState(void* raw) {
++      auto* state = static_cast<RegionState*>(raw);
++      pixman_region32_fini(&state->region);
++    }
++
++    // States move between the surface's cached and current slots. The default
++    // memcpy would alias the two pixman allocations and double-free them, so
++    // copy deeply and leave both sides owning their storage.
++    void moveState(void* dstRaw, void* srcRaw) {
++      auto* dst = static_cast<RegionState*>(dstRaw);
++      const auto* src = static_cast<const RegionState*>(srcRaw);
++      pixman_region32_fini(&dst->region);
++      pixman_region32_init(&dst->region);
++      pixman_region32_copy(&dst->region, &src->region);
++      dst->requested = src->requested;
++    }
++
++    const wlr_surface_synced_impl kSyncedImpl{
++        .state_size = sizeof(RegionState),
++        .init_state = initState,
++        .finish_state = finishState,
++        .move_state = moveState,
++        .commit = nullptr,
++    };
++
++  } // namespace
++
++  struct BackgroundEffectManager::Impl {
++    struct Surface {
++      Impl* manager = nullptr;
++      wlr_surface* surface = nullptr;
++      wl_resource* resource = nullptr;
++      wlr_surface_synced synced{};
++      RegionState pending{};
++      RegionState current{};
++      // The object was destroyed but the surface lives: the effect region stays until the surface's next commit, as the
++      // protocol requires, so the entry stays here until the surface dies or a new object reuses it.
++      bool destroyPending = false;
++      wl_listener surfaceDestroy{};
++
++      // The live state slots belong to the surface's own state objects, so resolve them through the API rather than
++      // through the two members above, which only seed the initial states.
++      RegionState* slot(bool pendingState) {
++        return static_cast<RegionState*>(
++            wlr_surface_synced_get_state(&synced, pendingState ? &surface->pending : &surface->current)
++        );
++      }
++    };
++
++    wl_display* display = nullptr;
++    wl_global* global = nullptr;
++    std::unordered_map<wlr_surface*, std::unique_ptr<Surface>> surfaces;
++
++    static void destroySurface(Surface* surface) {
++      if (surface == nullptr) {
++        return;
++      }
++      if (surface->resource != nullptr) {
++        wl_resource_set_user_data(surface->resource, nullptr);
++        surface->resource = nullptr;
++      }
++      wl_list_remove(&surface->surfaceDestroy.link);
++      // Take the owner out of the map first: erasing it would free the Surface before the synced state is finished.
++      // The extracted owner frees the Surface when it leaves scope, after finish.
++      auto owned = surface->manager->surfaces.extract(surface->surface);
++      wlr_surface_synced_finish(&surface->synced);
++    }
++
++    static void handleSurfaceWlrDestroy(wl_listener* listener, void*) {
++      Surface* state;
++      state = wl_container_of(listener, state, surfaceDestroy);
++      destroySurface(state);
++    }
++
++    static void handleSurfaceResourceDestroy(wl_resource* resource) {
++      auto* surface = static_cast<Surface*>(wl_resource_get_user_data(resource));
++      if (surface == nullptr) {
++        return;
++      }
++      // The object is gone, the surface is not: "The effect regions will be removed on the next commit". Drop the
++      // pending request so the next commit publishes "no region", and keep the current one until then.
++      surface->resource = nullptr;
++      surface->destroyPending = true;
++      RegionState* pending = surface->slot(true);
++      pixman_region32_clear(&pending->region);
++      pending->requested = false;
++    }
++
++    static void handleSurfaceSetBlurRegion(wl_client*, wl_resource* resource, wl_resource* regionResource) {
++      auto* surface = static_cast<Surface*>(wl_resource_get_user_data(resource));
++      if (surface == nullptr) {
++        wl_resource_post_error(
++            resource, EXT_BACKGROUND_EFFECT_SURFACE_V1_ERROR_SURFACE_DESTROYED, "surface was destroyed"
++        );
++        return;
++      }
++      RegionState* pending = surface->slot(true);
++      pixman_region32_clear(&pending->region);
++      pending->requested = regionResource != nullptr;
++      if (regionResource != nullptr) {
++        const pixman_region32_t* region = wlr_region_from_resource(regionResource);
++        if (region != nullptr) {
++          pixman_region32_copy(&pending->region, region);
++        }
++      }
++    }
++
++    static void handleSurfaceDestroy(wl_client*, wl_resource* resource) { wl_resource_destroy(resource); }
++
++    static const struct ext_background_effect_surface_v1_interface& surfaceImplementation() {
++      static const struct ext_background_effect_surface_v1_interface implementation{
++          .destroy = handleSurfaceDestroy,
++          .set_blur_region = handleSurfaceSetBlurRegion,
++      };
++      return implementation;
++    }
++
++    static void handleGetBackgroundEffect(
++        wl_client* client, wl_resource* managerResource, uint32_t id, wl_resource* surfaceResource
++    ) {
++      auto* impl = static_cast<Impl*>(wl_resource_get_user_data(managerResource));
++      wlr_surface* surface = wlr_surface_from_resource(surfaceResource);
++      if (surface == nullptr) {
++        return;
++      }
++      if (const auto found = impl->surfaces.find(surface); found != impl->surfaces.end()) {
++        if (!found->second->destroyPending) {
++          wl_resource_post_error(
++              managerResource, EXT_BACKGROUND_EFFECT_MANAGER_V1_ERROR_BACKGROUND_EFFECT_EXISTS,
++              "surface already has a background effect object"
++          );
++          return;
++        }
++        // The previous object was destroyed before its commit; the surface may bind a new one, which reuses the slot.
++        Surface* reused = found->second.get();
++        reused->destroyPending = false;
++        RegionState* pending = reused->slot(true);
++        pixman_region32_clear(&pending->region);
++        pending->requested = false;
++        wl_resource* reusedResource = wl_resource_create(
++            client, &ext_background_effect_surface_v1_interface, wl_resource_get_version(managerResource), id
++        );
++        if (reusedResource == nullptr) {
++          reused->destroyPending = true;
++          wl_client_post_no_memory(client);
++          return;
++        }
++        reused->resource = reusedResource;
++        wl_resource_set_implementation(reusedResource, &surfaceImplementation(), reused, handleSurfaceResourceDestroy);
++        return;
++      }
++
++      auto owned = std::make_unique<Surface>(impl, surface);
++      if (!wlr_surface_synced_init(&owned->synced, surface, &kSyncedImpl, &owned->pending, &owned->current)) {
++        wl_client_post_no_memory(client);
++        return;
++      }
++      wl_resource* resource = wl_resource_create(
++          client, &ext_background_effect_surface_v1_interface, wl_resource_get_version(managerResource), id
++      );
++      if (resource == nullptr) {
++        wlr_surface_synced_finish(&owned->synced);
++        wl_client_post_no_memory(client);
++        return;
++      }
++      owned->resource = resource;
++      wl_resource_set_implementation(resource, &surfaceImplementation(), owned.get(), handleSurfaceResourceDestroy);
++
++      Surface* surfaceState = owned.get();
++      surfaceState->surfaceDestroy.notify = handleSurfaceWlrDestroy;
++      wl_signal_add(&surface->events.destroy, &surfaceState->surfaceDestroy);
++      impl->surfaces.emplace(surface, std::move(owned));
++    }
++
++    static void handleManagerDestroy(wl_client*, wl_resource* resource) { wl_resource_destroy(resource); }
++
++    static const struct ext_background_effect_manager_v1_interface& managerImplementation() {
++      static const struct ext_background_effect_manager_v1_interface implementation{
++          .destroy = handleManagerDestroy,
++          .get_background_effect = handleGetBackgroundEffect,
++      };
++      return implementation;
++    }
++
++    static void bindManager(wl_client* client, void* data, uint32_t version, uint32_t id) {
++      auto* impl = static_cast<Impl*>(data);
++      wl_resource* resource =
++          wl_resource_create(client, &ext_background_effect_manager_v1_interface, std::min<uint32_t>(version, 1), id);
++      if (resource == nullptr) {
++        wl_client_post_no_memory(client);
++        return;
++      }
++      wl_resource_set_implementation(resource, &managerImplementation(), impl, nullptr);
++      ext_background_effect_manager_v1_send_capabilities(resource, EXT_BACKGROUND_EFFECT_MANAGER_V1_CAPABILITY_BLUR);
++    }
++  };
++
++  BackgroundEffectManager::BackgroundEffectManager(wl_display* display) : m_impl(std::make_unique<Impl>()) {
++    m_impl->display = display;
++    m_impl->global =
++        wl_global_create(display, &ext_background_effect_manager_v1_interface, 1, m_impl.get(), Impl::bindManager);
++  }
++
++  BackgroundEffectManager::~BackgroundEffectManager() {
++    if (m_impl->global != nullptr) {
++      wl_global_destroy(m_impl->global);
++    }
++    for (auto& [surface, state] : m_impl->surfaces) {
++      (void)surface;
++      // A resource destroyed later must not call back into a Surface this manager is about to free.
++      if (state->resource != nullptr) {
++        wl_resource_set_user_data(state->resource, nullptr);
++      }
++      wl_list_remove(&state->surfaceDestroy.link);
++      wlr_surface_synced_finish(&state->synced);
++    }
++  }
++
++  wl_global* BackgroundEffectManager::global() const { return m_impl->global; }
++
++  const pixman_region32_t* BackgroundEffectManager::region(wlr_surface* surface) {
++    const auto found = m_impl->surfaces.find(surface);
++    if (found == m_impl->surfaces.end()) {
++      return nullptr;
++    }
++    const auto* state =
++        static_cast<const RegionState*>(wlr_surface_synced_get_state(&found->second->synced, &surface->current));
++    if (state == nullptr || !state->requested) {
++      return nullptr;
++    }
++    return &state->region;
++  }
++
++} // namespace umbriel
+diff --git a/src/server/background_effect.h b/src/server/background_effect.h
+new file mode 100644
+index 00000000..d4e91d5a
+--- /dev/null
++++ b/src/server/background_effect.h
+@@ -0,0 +1,40 @@
++#pragma once
++
++#include <memory>
++#include <pixman.h>
++
++struct wl_display;
++struct wl_global;
++struct wlr_surface;
++
++namespace umbriel {
++
++  // Advertises ext_background_effect_manager_v1 and tracks the blur region each
++  // surface asks for. set_blur_region is double-buffered: the request lands in
++  // pending state and wl_surface.commit publishes it to current state.
++  //
++  // The manager owns no scene nodes. Owners of a surface's backdrop blur read
++  // region() and apply it as a clip on the blur node they already manage.
++  class BackgroundEffectManager {
++  public:
++    explicit BackgroundEffectManager(wl_display* display);
++    ~BackgroundEffectManager();
++
++    BackgroundEffectManager(const BackgroundEffectManager&) = delete;
++    BackgroundEffectManager& operator=(const BackgroundEffectManager&) = delete;
++
++    wl_global* global() const;
++
++    // Committed blur region in surface-local coordinates, nullptr when the
++    // surface made no request. An empty region is still a request: the client
++    // asked for no area to be blurred. The returned region belongs to the
++    // surface's current state and stays valid until that state is replaced or
++    // the surface is destroyed.
++    const pixman_region32_t* region(wlr_surface* surface);
++
++  private:
++    struct Impl;
++    std::unique_ptr<Impl> m_impl;
++  };
++
++} // namespace umbriel
+diff --git a/src/server/server.cpp b/src/server/server.cpp
+index fa95b074..7025b33d 100644
+--- a/src/server/server.cpp
++++ b/src/server/server.cpp
+@@ -29,6 +29,7 @@
+ #include "scene/quit_confirm.h"
+ #include "server/allocator.h"
+ #include "server/backend_manager.h"
++#include "server/background_effect.h"
+ #include "server/color_manager.h"
+ #include "server/drm_lease.h"
+ #include "server/ipc.h"
+@@ -72,7 +73,7 @@ namespace umbriel {
+     // Security-context clients only receive reviewed, ordinary application
+     // protocols. New globals stay unavailable until they are classified here.
+     // [[security_context_rule]] widens the set for matching clients.
+-    constexpr std::array<std::string_view, 32> kAllowedSecurityContextGlobals{
++    constexpr std::array<std::string_view, 33> kAllowedSecurityContextGlobals{
+         "wl_shm",
+         "wl_drm",
+         "zwp_linux_dmabuf_v1",
+@@ -105,6 +106,7 @@ namespace umbriel {
+         "wl_seat",
+         "wp_cursor_shape_manager_v1",
+         "zwp_text_input_manager_v3",
++        "ext_background_effect_manager_v1",
+     };
+ 
+     bool isAllowedSecurityContextGlobal(std::string_view interface) {
+@@ -730,6 +732,13 @@ namespace umbriel {
+         throw std::runtime_error("failed to create color-management manager");
+       }
+     }
++    // Client-requested backdrop blur (ext_background_effect_v1). Created after
++    // the compositor so ext-background-effect's surfaces can be looked up, and
++    // before any client can bind it.
++    m_backgroundEffect = std::make_unique<BackgroundEffectManager>(m_display);
++    if (m_backgroundEffect->global() == nullptr) {
++      throw std::runtime_error("failed to create ext-background-effect manager");
++    }
+     const Config::Appearance::Blur& blur = config().appearance.blur;
+     wlr_scene_set_blur_data(
+         m_scene, blur.passes, blur.radius, static_cast<float>(blur.noise), static_cast<float>(blur.brightness),
+@@ -1110,6 +1119,7 @@ namespace umbriel {
+     wl_display_destroy_clients(m_display);
+     m_drmLeaseManager.reset();
+     m_colorManager.reset();
++    m_backgroundEffect.reset();
+     m_syncobjAcquireBarrier.reset();
+     m_syncobjUnmapRelease.reset();
+     m_syncobjSupersededRelease.reset();
+diff --git a/src/server/server.h b/src/server/server.h
+index 5fa6d9ed..4c0ea7ad 100644
+--- a/src/server/server.h
++++ b/src/server/server.h
+@@ -142,6 +142,7 @@ namespace umbriel {
+   class Gestures;
+   class ColorManager;
+   struct ColorDescription;
++  class BackgroundEffectManager;
+   class SyncobjAcquireBarrier;
+   class SyncobjSupersededRelease;
+   class SyncobjUnmapRelease;
+@@ -203,6 +204,7 @@ namespace umbriel {
+     bool outputCaptured(const wlr_output* output) const;
+     wlr_tearing_control_manager_v1* tearingControlManager() const { return m_tearingControlManager; }
+     ColorManager* colorManager() const { return m_colorManager.get(); }
++    BackgroundEffectManager* backgroundEffect() const { return m_backgroundEffect.get(); }
+     const ColorDescription* surfaceImageDescription(wlr_surface* surface) const;
+     const ColorDescription* surfaceTreeHdrDescription(wlr_surface* surface) const;
+     void updateColorPreferences();
+@@ -754,6 +756,7 @@ namespace umbriel {
+     wlr_content_type_manager_v1* m_contentTypeManager = nullptr;
+     wlr_security_context_manager_v1* m_securityContextManager = nullptr;
+     std::unique_ptr<ColorManager> m_colorManager;
++    std::unique_ptr<BackgroundEffectManager> m_backgroundEffect;
+     std::unique_ptr<SyncobjAcquireBarrier> m_syncobjAcquireBarrier;
+     std::unique_ptr<SyncobjUnmapRelease> m_syncobjUnmapRelease;
+     std::unique_ptr<SyncobjSupersededRelease> m_syncobjSupersededRelease;
+diff --git a/src/server/server_events.cpp b/src/server/server_events.cpp
+index fbc90500..329fcf21 100644
+--- a/src/server/server_events.cpp
++++ b/src/server/server_events.cpp
+@@ -902,6 +902,8 @@ namespace umbriel {
+       for (View* view : sortedEffectViews()) {
+         view->refreshConfigChrome();
+       }
++      // An open menu never commits again, so a blur change would otherwise wait for its next frame.
++      Popup::refreshAllBlur();
+       // Screen and cursor presets take their palette from [colors] too.
+       m_effects.applyOutputEffects();
+       markDirty(Dirty::Backdrop);
+@@ -1340,7 +1342,9 @@ namespace umbriel {
+     }
+   }
+ 
+-  void Server::onNewXdgPopup(wl_listener* /*listener*/, void* data) {
++  void Server::onNewXdgPopup(wl_listener* listener, void* data) {
++    Server* self;
++    self = wl_container_of(listener, self, m_newXdgPopup);
+     auto* popup = static_cast<wlr_xdg_popup*>(data);
+     // Layer-shell popups (and any popup without a parent yet) are handled
+     // elsewhere; parent can be null when xdg_shell emits new_popup.
+@@ -1348,7 +1352,7 @@ namespace umbriel {
+       return;
+     }
+     View* owner = View::fromSurface(popup->parent);
+-    new Popup(popup, nullptr, owner != nullptr ? owner->captureTree() : nullptr);
++    new Popup(popup, nullptr, owner != nullptr ? owner->captureTree() : nullptr, self);
+   }
+ 
+   void Server::onNewXdgDecoration(wl_listener* listener, void* data) {
+diff --git a/src/view/decoration.cpp b/src/view/decoration.cpp
+index 54d56c06..1129e05c 100644
+--- a/src/view/decoration.cpp
++++ b/src/view/decoration.cpp
+@@ -144,10 +144,10 @@ namespace umbriel {
+   void ViewDecoration::updateBlur(
+       wlr_scene_tree* tree, wlr_surface* surface, const wlr_box& nodeBox, const wlr_box& geometry,
+       fx_corner_radii corners, const wlr_box* clip, float surfaceOpacity, float blurAlpha,
+-      const SurfaceBlurOptions& options
++      const SurfaceBlurOptions& options, const ClientBlurRegion& clientBlur
+   ) {
+     m_blur.setAlpha(blurAlpha);
+-    m_blur.update(tree, surface, nodeBox, geometry, corners, clip, options, surfaceOpacity);
++    m_blur.update(tree, surface, nodeBox, geometry, corners, clip, options, surfaceOpacity, nullptr, clientBlur);
+   }
+ 
+   void ViewDecoration::hideBlur() { m_blur.hide(); }
+diff --git a/src/view/decoration.h b/src/view/decoration.h
+index 18621341..51953a87 100644
+--- a/src/view/decoration.h
++++ b/src/view/decoration.h
+@@ -59,7 +59,7 @@ namespace umbriel {
+     void updateBlur(
+         wlr_scene_tree* tree, wlr_surface* surface, const wlr_box& nodeBox, const wlr_box& geometry,
+         fx_corner_radii corners, const wlr_box* clip, float surfaceOpacity, float blurAlpha,
+-        const SurfaceBlurOptions& options
++        const SurfaceBlurOptions& options, const ClientBlurRegion& clientBlur = {}
+     );
+     void hideBlur();
+     void setBlurLive(bool live) { m_blur.setLive(live); }
+diff --git a/src/view/popup.cpp b/src/view/popup.cpp
+index 702a788f..71a6c5b0 100644
+--- a/src/view/popup.cpp
++++ b/src/view/popup.cpp
+@@ -3,14 +3,18 @@
+ #include "layer/layer_surface.h"
+ #include "output/output.h"
+ #include "scene/node.h"
++#include "server/background_effect.h"
++#include "server/server.h"
+ #include "view/view.h"
+ #include "wlr.h"
+ 
++#include <algorithm>
+ #include <cassert>
+ 
+ namespace umbriel {
+ 
+-  Popup::Popup(wlr_xdg_popup* popup, wlr_scene_tree* parentTree, wlr_scene_tree* captureTree) : m_popup(popup) {
++  Popup::Popup(wlr_xdg_popup* popup, wlr_scene_tree* parentTree, wlr_scene_tree* captureTree, Server* server)
++      : m_popup(popup), m_server(server) {
+     if (parentTree == nullptr) {
+       wlr_xdg_surface* parent = wlr_xdg_surface_try_from_wlr_surface(m_popup->parent);
+       assert(parent != nullptr);
+@@ -31,9 +35,12 @@ namespace umbriel {
+     wl_signal_add(&m_popup->base->surface->events.unmap, &m_unmap);
+     m_destroy.notify = onDestroy;
+     wl_signal_add(&m_popup->events.destroy, &m_destroy);
++    livePopups().push_back(this);
+   }
+ 
+   Popup::~Popup() {
++    auto& popups = livePopups();
++    popups.erase(std::remove(popups.begin(), popups.end(), this), popups.end());
+     if (m_commit.link.next != nullptr) {
+       wl_list_remove(&m_commit.link);
+       wl_list_remove(&m_reposition.link);
+@@ -68,7 +75,22 @@ namespace umbriel {
+     self->handleDestroy();
+   }
+ 
+-  void Popup::handleCommit() {
++  std::vector<Popup*>& Popup::livePopups() {
++    static std::vector<Popup*> popups;
++    return popups;
++  }
++
++  void Popup::refreshAllBlur() {
++    for (Popup* popup : livePopups()) {
++      popup->updateBlur();
++    }
++  }
++
++  void Popup::updateBlur() {
++    auto* tree = static_cast<wlr_scene_tree*>(m_popup->base->data);
++    if (tree == nullptr) {
++      return;
++    }
+     const wlr_box& geometry = m_popup->base->geometry;
+     SurfaceBlurOptions blurOptions;
+     if (LayerSurface* layer = LayerSurface::fromSurface(m_popup->parent)) {
+@@ -76,10 +98,20 @@ namespace umbriel {
+     } else if (View* view = View::fromSurface(m_popup->parent)) {
+       blurOptions = view->popupBlurOptions();
+     }
++    // A client-requested region follows the popup's own surface, like the rule. The popup surface is drawn 1:1 from
++    // its geometry origin, so that box is what the blur node shows.
++    const pixman_region32_t* clientRegion = nullptr;
++    if (m_server != nullptr && m_server->backgroundEffect() != nullptr) {
++      clientRegion = m_server->backgroundEffect()->region(m_popup->base->surface);
++    }
+     m_blur.update(
+-        static_cast<wlr_scene_tree*>(m_popup->base->data), m_popup->base->surface,
+-        wlr_box{0, 0, geometry.width, geometry.height}, geometry, corner_radii_none(), nullptr, blurOptions
++        tree, m_popup->base->surface, wlr_box{0, 0, geometry.width, geometry.height}, geometry, corner_radii_none(),
++        nullptr, blurOptions, 1.0F, nullptr, ClientBlurRegion{.region = clientRegion, .source = geometry}
+     );
++  }
++
++  void Popup::handleCommit() {
++    updateBlur();
+     if (!m_popup->base->initial_commit) {
+       return;
+     }
+diff --git a/src/view/popup.h b/src/view/popup.h
+index 66641847..0fb909a1 100644
+--- a/src/view/popup.h
++++ b/src/view/popup.h
+@@ -1,6 +1,7 @@
+ #pragma once
+ #include "scene/surface_blur.h"
+ 
++#include <vector>
+ #include <wayland-server-core.h>
+ 
+ struct wlr_xdg_popup;
+@@ -8,15 +9,28 @@ struct wlr_scene_tree;
+ 
+ namespace umbriel {
+ 
++  class Server;
++
+   class Popup {
+   public:
+-    explicit Popup(wlr_xdg_popup* popup, wlr_scene_tree* parentTree = nullptr, wlr_scene_tree* captureTree = nullptr);
++    explicit Popup(
++        wlr_xdg_popup* popup, wlr_scene_tree* parentTree = nullptr, wlr_scene_tree* captureTree = nullptr,
++        Server* server = nullptr
++    );
+     ~Popup();
+ 
+     Popup(const Popup&) = delete;
+     Popup& operator=(const Popup&) = delete;
+ 
++    // Re-reads the blur configuration for every live popup; a popup commits no frame while a menu sits open, so a
++    // reload would otherwise leave its blur on screen.
++    static void refreshAllBlur();
++
+   private:
++    static std::vector<Popup*>& livePopups();
++
++    void updateBlur();
++
+     static void onCommit(wl_listener* listener, void* data);
+     static void onReposition(wl_listener* listener, void* data);
+     static void onMap(wl_listener* listener, void* data);
+@@ -29,6 +43,7 @@ namespace umbriel {
+     void handleDestroy();
+ 
+     wlr_xdg_popup* m_popup = nullptr;
++    Server* m_server = nullptr;
+     SurfaceBlur m_blur;
+ 
+     wl_listener m_commit{};
+diff --git a/src/view/view.cpp b/src/view/view.cpp
+index e7de53b3..627fb2e9 100644
+--- a/src/view/view.cpp
++++ b/src/view/view.cpp
+@@ -148,6 +148,7 @@ namespace umbriel {
+   }
+ 
+   void View::initCommon() {
++    pixman_region32_init(&m_clientBlurRegion);
+     wlr_surface* surface = rootSurface();
+     m_server->registerAnimatable(this);
+     // Register map/unmap listeners BEFORE creating the scene tree so our handlers fire before wlroots' internal unmap
+@@ -290,6 +291,7 @@ namespace umbriel {
+   }
+ 
+   View::~View() {
++    pixman_region32_fini(&m_clientBlurRegion);
+     clearLaunchPlacement(true, true);
+     if (m_effectSelectionIdle != nullptr) {
+       wl_event_source_remove(m_effectSelectionIdle);
+diff --git a/src/view/view.h b/src/view/view.h
+index f3031e43..62e615a4 100644
+--- a/src/view/view.h
++++ b/src/view/view.h
+@@ -17,6 +17,7 @@
+ #include <cmath>
+ #include <memory>
+ #include <optional>
++#include <pixman.h>
+ #include <string>
+ #include <string_view>
+ #include <sys/types.h>
+@@ -646,8 +647,13 @@ namespace umbriel {
+     void refreshConfigChrome();
+     void updateBlur();
+     void updateBlur(int contentWidth, int contentHeight);
++    // Picks up a committed ext_background_effect_v1 request for the root surface. Subsurfaces keep their own owners,
++    // and popups have theirs, so only the root surface is tracked here.
++    void syncClientBlur(wlr_surface* surface);
+     SurfaceBlurOptions blurOptions() const;
+     float blurAlpha() const;
++    // Blur alpha that also counts a client's ext_background_effect_v1 request, which opts in without a rule.
++    float surfaceBlurAlpha() const;
+     SurfaceBlurOptions popupBlurOptions() const { return m_decoration.popupBlurOptions(); }
+     void updateShadow();
+     void updateShadow(int contentWidth, int contentHeight);
+@@ -1112,6 +1118,8 @@ namespace umbriel {
+     AnimatedValue m_ruleOpacity{1.0};
+     AnimatedValue m_ruleBlur{0.0};
+     bool m_backgroundRender = false;
++    bool m_clientBlurRequested = false;
++    pixman_region32_t m_clientBlurRegion{};
+     bool m_allowShortcutsInhibit = true;
+     std::optional<bool> m_appliedSupersampleRule;
+     float m_dragOpacity = 1.0F;
+diff --git a/src/view/view_animation.cpp b/src/view/view_animation.cpp
+index 4cd2cf44..af5613c2 100644
+--- a/src/view/view_animation.cpp
++++ b/src/view/view_animation.cpp
+@@ -91,7 +91,7 @@ namespace umbriel {
+     // The analytic fallback still follows the lifecycle fade. Shader-shaped
+     // shadows get their opacity from captured pixels instead of this multiplier.
+     const float shadowOpacity = fadeComposited() ? effective * m_fadeAlpha : effective;
+-    m_decoration.setAlpha(shadowOpacity, blurAlpha());
++    m_decoration.setAlpha(shadowOpacity, surfaceBlurAlpha());
+     if (m_chromeAttachment != nullptr) {
+       m_chromeAttachment->setAlpha(chromeAlpha());
+     }
+diff --git a/src/view/view_chrome.cpp b/src/view/view_chrome.cpp
+index d6668d66..709f18ac 100644
+--- a/src/view/view_chrome.cpp
++++ b/src/view/view_chrome.cpp
+@@ -8,6 +8,7 @@
+ #include "overview/overview.h"
+ #include "scene/effect_registry.h"
+ #include "scene/surface_blur.h"
++#include "server/background_effect.h"
+ #include "server/server.h"
+ #include "view/view.h"
+ extern "C" {
+@@ -297,8 +298,17 @@ namespace umbriel {
+   }
+ 
+   void View::updateBlur() {
++    // Blur follows the presented frame, like the shadow: an unacked configure or a resize animation shows a size the
++    // committed content box does not describe.
+     const wlr_box content = committedContentBox();
+-    updateBlur(content.width, content.height);
++    const bool usePresentedSize =
++        (m_tiled || sizeAnimating() || sizeGrabActive() || m_floating.pendingSize().has_value())
++        && m_presentation.width() > 0
++        && m_presentation.height() > 0;
++    updateBlur(
++        usePresentedSize ? m_presentation.width() : content.width,
++        usePresentedSize ? m_presentation.height() : content.height
++    );
+   }
+ 
+   SurfaceBlurOptions View::blurOptions() const {
+@@ -312,6 +322,33 @@ namespace umbriel {
+     return m_fadeAlpha * m_overviewOpacity * static_cast<float>(std::clamp(m_ruleBlur.current(), 0.0, 1.0));
+   }
+ 
++  float View::surfaceBlurAlpha() const {
++    // A client request is its own opt-in, so the rule's blur fade must not gate it; a window with a rule keeps the
++    // rule's fade. Both paths still follow the lifecycle fade and the overview dim.
++    const bool clientBlur =
++        m_clientBlurRequested && config().appearance.blur.enabled && config().appearance.blur.clientRequests;
++    return clientBlur ? m_fadeAlpha * m_overviewOpacity : blurAlpha();
++  }
++
++  void View::syncClientBlur(wlr_surface* surface) {
++    if (surface == nullptr || surface != rootSurface() || m_server->backgroundEffect() == nullptr) {
++      return;
++    }
++    const pixman_region32_t* committed = m_server->backgroundEffect()->region(surface);
++    const bool requested = committed != nullptr;
++    const bool changed =
++        requested != m_clientBlurRequested || (requested && !pixman_region32_equal(committed, &m_clientBlurRegion));
++    if (!changed) {
++      return;
++    }
++    pixman_region32_clear(&m_clientBlurRegion);
++    if (committed != nullptr) {
++      pixman_region32_copy(&m_clientBlurRegion, committed);
++    }
++    m_clientBlurRequested = requested;
++    updateBlur();
++  }
++
+   void View::updateBlur(int contentWidth, int contentHeight) {
+     UMBRIEL_ZONE("View::updateBlur");
+     if (m_ssdFrame != nullptr) {
+@@ -327,9 +364,27 @@ namespace umbriel {
+     // Content and its backdrop share a square seam below the title bar.
+     const fx_corner_radii corners =
+         titleBarHeight() > 0 ? corner_radii_new(0, 0, radius, radius) : corner_radii_all(radius);
++    // A client request (ext_background_effect_v1) opts the surface in and clips the blur to its region.
++    const pixman_region32_t* clientRegion =
++        m_server->backgroundEffect() != nullptr ? m_server->backgroundEffect()->region(rootSurface()) : nullptr;
++    m_clientBlurRequested = clientRegion != nullptr;
++    const wlr_box geometry = geometryBox();
++    // An owned or grabbed presentation stretches the committed geometry over the node; otherwise the buffer is drawn
++    // 1:1 from its own origin, which a fullscreen offset shifts and a tile crop keeps.
++    const bool stretched = layoutPresentationOwned() || sizeGrabActive();
++    const ClientBlurRegion clientBlur{
++        .region = clientRegion,
++        .source = stretched ? geometry
++                            : wlr_box{
++                                  geometry.x - m_presentation.offsetX(),
++                                  geometry.y - m_presentation.offsetY(),
++                                  contentWidth,
++                                  contentHeight,
++                              },
++    };
+     m_decoration.updateBlur(
+-        m_contentTree, rootSurface(), nodeBox, geometryBox(), corners, nullptr, effectiveOpacity(), blurAlpha(),
+-        blurOptions()
++        m_contentTree, rootSurface(), nodeBox, geometry, corners, nullptr, effectiveOpacity(), surfaceBlurAlpha(),
++        blurOptions(), clientBlur
+     );
+   }
+ 
+diff --git a/src/view/view_lifecycle.cpp b/src/view/view_lifecycle.cpp
+index 413f6123..536b2ea3 100644
+--- a/src/view/view_lifecycle.cpp
++++ b/src/view/view_lifecycle.cpp
+@@ -175,6 +175,7 @@ namespace umbriel {
+     ViewSurfaceWatch* watch;
+     watch = wl_container_of(listener, watch, commit);
+     watch->view->syncContentType(watch->surface);
++    watch->view->syncClientBlur(watch->surface);
+   }
+ 
+   void View::onViewSurfaceNewSubsurface(wl_listener* listener, void* data) {
+diff --git a/tests/harness/check.sh b/tests/harness/check.sh
+index a3c3b843..ac9e392d 100755
+--- a/tests/harness/check.sh
++++ b/tests/harness/check.sh
+@@ -177,6 +177,7 @@ export UMBRIEL_SYNCOBJ_CLIENT="$CLIENT_DIR/syncobj-client"
+ export UMBRIEL_SECURITY_CONTEXT_CLIENT="$CLIENT_DIR/security-context-client"
+ export UMBRIEL_SEAT_LOG_CLIENT="$CLIENT_DIR/seat-log-client"
+ export UMBRIEL_COLOR_FEEDBACK_CLIENT="$CLIENT_DIR/color-feedback-client"
++export UMBRIEL_BACKGROUND_EFFECT_CLIENT="$CLIENT_DIR/background-effect-client"
+ export UMBRIEL_XWAYLAND_FOCUS_CLIENT="$CLIENT_DIR/xwayland-focus-client"
+ export UMBRIEL_XWAYLAND_OUTPUT_CLIENT="$CLIENT_DIR/xwayland-output-client"
+ export UMBRIEL_XWAYLAND_ASSOCIATION_CLIENT="$CLIENT_DIR/xwayland-association-client"
+diff --git a/tests/harness/checks/protocol/background_blur.sh b/tests/harness/checks/protocol/background_blur.sh
+new file mode 100755
+index 00000000..e8d3fbe7
+--- /dev/null
++++ b/tests/harness/checks/protocol/background_blur.sh
+@@ -0,0 +1,336 @@
++#!/usr/bin/env bash
++# ext_background_effect_v1: the manager is advertised with the blur capability, a client's surface-local region blurs
++# exactly that area, a later commit moves it, a NULL region clears it, and the [appearance.blur] keys still decide
++# whether any of that is honored. The window paints nothing, so outside a requested region the frame must stay
++# pixel-identical to the wallpaper and a blurred area is the only difference.
++set -euo pipefail
++source "$UMBRIEL_HARNESS_LIB"
++
++readonly BASE="$UMBRIEL_RUNTIME_DIR/background-blur-base.png"
++readonly FRAME="$UMBRIEL_RUNTIME_DIR/background-blur.png"
++readonly CLIENT_LOG="$UMBRIEL_RUNTIME_DIR/background-blur-client.log"
++# The wallpaper's square ends at (200, 200) and the window spans (100, 100) to (500, 400), so this crop goes through
++# the square's corner: a crisp edge holds green and backdrop values only, while blur fills it with the mixture.
++readonly FEATURE="60x60+170+170"
++
++fail() {
++  echo "$1"
++  exit 1
++}
++
++# Pixels between the square's green (0, 1, 0) and the backdrop (0.33, 0.47, 0.67): a crisp edge holds neither r nor b,
++# while the blur gradient spans both. Both channels stay clear of the two end colours, so antialiasing cannot fake it.
++mixture() { "$UMBRIEL_PIXEL_PROBE" "$1" count 'r > 0.06 && r < 0.28 && b > 0.06 && b < 0.60' "$FEATURE"; }
++
++# The frame must equal the wallpaper-only baseline: a transparent window with no blur adds nothing.
++identical() {
++  local largest differing
++  read -r largest differing < <("$UMBRIEL_PIXEL_PROBE" "$BASE" diff "$1")
++  if ((largest > 1 || differing > 0)); then
++    fail "$2: the frame differs from the wallpaper by up to $largest in $differing pixels"
++  fi
++}
++
++blurred() {
++  local count
++  count=$(mixture "$1")
++  if ((count < 40)); then
++    fail "$2: only $count mixed pixels at the square's corner; the blur is missing"
++  fi
++}
++
++crisp() {
++  local count
++  count=$(mixture "$1")
++  if ((count > 0)); then
++    fail "$2: $count mixed pixels at the square's corner; the blur was not clipped away"
++  fi
++}
++
++# Optimized blur samples the background beneath the window stack, so over the square it shows the backdrop instead of
++# a green gradient; the square's own pixels are the signal there.
++readonly INTERIOR="40x40+120+120"
++green() { "$UMBRIEL_PIXEL_PROBE" "$1" count 'g > 0.9 && r < 0.1' "$INTERIOR"; }
++
++# $1 blur rule on the window, $2 client_requests, $3 optimized, $4 enabled.
++configure() {
++  cat > "$UMBRIEL_CONFIG" <<EOF
++[general]
++xwayland = false
++show_cheatsheet = false
++autostart = []
++
++[output.HEADLESS-1]
++scale = 1.0
++
++[animation]
++enabled = false
++
++[appearance]
++border_width = 0
++outer_border_width = 0
++corner_radius = 0
++
++[appearance.title_bar]
++mode = "off"
++
++[appearance.shadow]
++enabled = false
++
++[appearance.blur]
++enabled = ${4:-true}
++client_requests = ${2:-true}
++optimized = ${3:-false}
++passes = 2
++radius = 6
++noise = 0.0
++brightness = 1.0
++contrast = 1.0
++saturation = 1.0
++
++[[window_rule]]
++match.title = "^background-blur\$"
++default_floating = true
++default_floating_size_px = { width = 400, height = 300 }
++default_position = { x = 100, y = 100, anchor = "top_left" }
++blur = ${1:-false}
++EOF
++  "$UMBRIEL" msg config-reload > /dev/null
++}
++
++configure
++
++"$UMBRIEL_LAYER_CLIENT" HEADLESS-1 0 > "$UMBRIEL_RUNTIME_DIR/background.log" 2>&1 &
++await_lines "$UMBRIEL_RUNTIME_DIR/background.log" ready 1
++"$UMBRIEL_LAYER_CLIENT" HEADLESS-1 0 bottom-layer > "$UMBRIEL_RUNTIME_DIR/square.log" 2>&1 &
++await_lines "$UMBRIEL_RUNTIME_DIR/square.log" ready 1
++"$UMBRIEL" settle
++grim "$BASE"
++
++mkfifo "$UMBRIEL_RUNTIME_DIR/background-blur.fifo"
++# One long-lived window keeps the same surface across rule changes; regions arrive over the pipe and every command
++# echoes the applied region, so the check waits on the commit instead of on a delay.
++FILL_COLOR=0x00000000 "$UMBRIEL_BACKGROUND_EFFECT_CLIENT" background-blur 400 300 \
++  < "$UMBRIEL_RUNTIME_DIR/background-blur.fifo" > "$CLIENT_LOG" 2>&1 &
++CLIENT_PID=$!
++exec 3> "$UMBRIEL_RUNTIME_DIR/background-blur.fifo"
++send() { printf '%s\n' "$1" >&3; }
++
++await_lines "$CLIENT_LOG" 'bound' 1
++await_lines "$CLIENT_LOG" 'mapped 400x300' 1
++await_lines "$CLIENT_LOG" 'capabilities ' 1
++grep -qx 'capabilities 1' "$CLIENT_LOG" \
++  || fail "the manager did not advertise the blur capability: $(grep '^capabilities ' "$CLIENT_LOG")"
++
++read -r wx wy ww wh < <(
++  "$UMBRIEL" windows --json | jq -r '.[] | select(.title == "background-blur") | "\(.x) \(.y) \(.w) \(.h)"'
++)
++[[ $wx == 100 && $wy == 100 && $ww == 400 && $wh == 300 ]] \
++  || fail "window is at $wx,$wy ${ww}x${wh}, not the 400x300 at 100,100 the region arithmetic assumes"
++"$UMBRIEL" settle
++
++# No request: the window stays invisible and no blur appears.
++grim "$FRAME"
++identical "$FRAME" "no request"
++
++# A left-half region covers the square's corner.
++send "r 0 0 200 300"
++await_lines "$CLIENT_LOG" 'region 0 0 200 300' 1
++"$UMBRIEL" settle
++grim "$FRAME"
++blurred "$FRAME" "left-half region"
++
++# Moving the region away from the corner must move the blur with it.
++send "r 200 0 400 300"
++await_lines "$CLIENT_LOG" 'region 200 0 400 300' 1
++"$UMBRIEL" settle
++grim "$FRAME"
++crisp "$FRAME" "right-half region"
++
++# NULL clears the request entirely.
++send "n"
++await_lines "$CLIENT_LOG" 'region none' 1
++"$UMBRIEL" settle
++grim "$FRAME"
++identical "$FRAME" "cleared region"
++
++# A window rule still blurs the whole surface on its own, and a request narrows it to the region.
++configure true
++"$UMBRIEL" settle
++grim "$FRAME"
++blurred "$FRAME" "rule without a region"
++send "r 200 0 400 300"
++await_lines "$CLIENT_LOG" 'region 200 0 400 300' 2
++"$UMBRIEL" settle
++grim "$FRAME"
++crisp "$FRAME" "rule restricted by a region"
++
++# The master switch wins over both.
++configure true true false false
++"$UMBRIEL" settle
++send "r 0 0 200 300"
++await_lines "$CLIENT_LOG" 'region 0 0 200 300' 2
++"$UMBRIEL" settle
++grim "$FRAME"
++identical "$FRAME" "blur disabled"
++# A new client proves the global is still advertised while blur is off; the long-lived log cannot show that.
++probe=$("$UMBRIEL_BACKGROUND_EFFECT_CLIENT" --probe 2>&1) \
++  || fail "the manager disappeared when blur was disabled: $probe"
++grep -qx 'capabilities 1' <<<"$probe" \
++  || fail "a new client lost the blur capability when blur was disabled: $probe"
++if grep -qx 'capabilities 0' "$CLIENT_LOG"; then
++  fail "the manager sent an empty capability set"
++fi
++
++# The opt-out key keeps the global advertised but ignores the request, so the rule covers the whole surface again.
++configure true false
++"$UMBRIEL" settle
++send "r 200 0 400 300"
++await_lines "$CLIENT_LOG" 'region 200 0 400 300' 3
++"$UMBRIEL" settle
++grim "$FRAME"
++blurred "$FRAME" "client requests disabled"
++
++# Without a rule, ignored requests leave the surface alone.
++configure false false
++"$UMBRIEL" settle
++send "r 0 0 400 300"
++await_lines "$CLIENT_LOG" 'region 0 0 400 300' 1
++"$UMBRIEL" settle
++grim "$FRAME"
++identical "$FRAME" "client requests disabled without a rule"
++
++# Optimized blur has to honor the same region boundary.
++configure false true true
++"$UMBRIEL" settle
++send "r 0 0 200 300"
++await_lines "$CLIENT_LOG" 'region 0 0 200 300' 3
++"$UMBRIEL" settle
++grim "$FRAME"
++green_count=$(green "$FRAME")
++if ((green_count > 100)); then
++  fail "optimized blur with a region: $green_count square pixels survived inside the requested area"
++fi
++send "r 200 0 400 300"
++await_lines "$CLIENT_LOG" 'region 200 0 400 300' 4
++"$UMBRIEL" settle
++grim "$FRAME"
++green_count=$(green "$FRAME")
++if ((green_count < 1500)); then
++  fail "optimized blur with the region moved away: only $green_count square pixels left outside the request"
++fi
++
++# The protocol defers removal to the next wl_surface.commit: destroying the object alone keeps the blur on screen.
++send "r 0 0 200 300"
++await_lines "$CLIENT_LOG" 'region 0 0 200 300' 4
++"$UMBRIEL" settle
++grim "$FRAME"
++green_count=$(green "$FRAME")
++if ((green_count > 100)); then
++  fail "destroy setup: $green_count square pixels survived before the object was destroyed"
++fi
++send "d"
++await_lines "$CLIENT_LOG" 'destroyed' 1
++# A reload that touches window chrome re-derives every blur without the client committing; the region must still be the
++# committed one.
++printf '\n[colors]\naccent_primary = "#7AA3FF"\n' >> "$UMBRIEL_CONFIG"
++"$UMBRIEL" msg config-reload > /dev/null
++"$UMBRIEL" settle
++grim "$FRAME"
++green_count=$(green "$FRAME")
++if ((green_count > 100)); then
++  fail "destroying the object removed the blur before the next commit: $green_count square pixels came back"
++fi
++send "p"
++await_lines "$CLIENT_LOG" 'committed' 1
++"$UMBRIEL" settle
++grim "$FRAME"
++green_count=$(green "$FRAME")
++if ((green_count < 1500)); then
++  fail "the commit after destroy kept the blur: only $green_count square pixels came back"
++fi
++
++# Animated leg: a client-only blur has no window rule, so the rule's own blur fade must not zero it while the window
++# opens, while it loses focus, and after the focus dim settles.
++cat > "$UMBRIEL_CONFIG" <<CONFIG
++[general]
++xwayland = false
++show_cheatsheet = false
++autostart = []
++
++[output.HEADLESS-1]
++scale = 1.0
++
++[animation]
++enabled = true
++duration_ms = 300
++curve = "linear"
++
++[animation.windows_in]
++style = "fade"
++
++[animation.windows_move]
++enabled = false
++
++[animation.dim_unfocused]
++enabled = true
++
++[appearance]
++border_width = 0
++outer_border_width = 0
++corner_radius = 0
++
++[appearance.title_bar]
++mode = "off"
++
++[appearance.shadow]
++enabled = false
++
++[appearance.blur]
++enabled = true
++client_requests = true
++optimized = false
++passes = 2
++radius = 6
++noise = 0.0
++brightness = 1.0
++contrast = 1.0
++saturation = 1.0
++
++[[window_rule]]
++match.title = "^background-blur-anim\$"
++default_floating = true
++default_floating_size_px = { width = 400, height = 300 }
++default_position = { x = 100, y = 100, anchor = "top_left" }
++blur = false
++CONFIG
++"$UMBRIEL" msg config-reload > /dev/null
++mkfifo "$UMBRIEL_RUNTIME_DIR/background-blur-anim.fifo"
++FILL_COLOR=0x00000000 "$UMBRIEL_BACKGROUND_EFFECT_CLIENT" background-blur-anim 400 300 \
++  < "$UMBRIEL_RUNTIME_DIR/background-blur-anim.fifo" > "$UMBRIEL_RUNTIME_DIR/background-blur-anim.log" 2>&1 &
++ANIM_PID=$!
++exec 4> "$UMBRIEL_RUNTIME_DIR/background-blur-anim.fifo"
++send_anim() { printf '%s\n' "$1" >&4; }
++await_lines "$UMBRIEL_RUNTIME_DIR/background-blur-anim.log" 'mapped 400x300' 1
++send_anim "r 0 0 200 300"
++await_lines "$UMBRIEL_RUNTIME_DIR/background-blur-anim.log" 'region 0 0 200 300' 1
++"$UMBRIEL" settle
++grim "$FRAME"
++blurred "$FRAME" "animated open finished"
++
++# Focus moves to a new window: the dim transition animates the blurred window without any commit from it.
++FILL_COLOR=0xFF445566 "$UMBRIEL_UNMAP_CLIENT" background-blur-focus 200 200 \
++  > "$UMBRIEL_RUNTIME_DIR/background-blur-focus.log" 2>&1 &
++await_lines "$UMBRIEL_RUNTIME_DIR/background-blur-focus.log" mapped 1
++"$UMBRIEL" settle
++grim "$FRAME"
++blurred "$FRAME" "after the unfocused dim settled"
++
++send_anim "q"
++exec 4>&-
++wait "$ANIM_PID" || true
++
++send "q"
++exec 3>&-
++wait "$CLIENT_PID" || true
++echo "ext_background_effect_v1 blurs exactly the requested region and [appearance.blur] still gates it"
+diff --git a/tests/harness/checks/protocol/security_context.sh b/tests/harness/checks/protocol/security_context.sh
+index d747deb5..23383b70 100644
+--- a/tests/harness/checks/protocol/security_context.sh
++++ b/tests/harness/checks/protocol/security_context.sh
+@@ -41,6 +41,7 @@ readonly -a NORMAL_GLOBALS=(
+   wl_seat
+   wp_cursor_shape_manager_v1
+   zwp_text_input_manager_v3
++  ext_background_effect_manager_v1
+ )
+ 
+ readonly -a RESTRICTED_GLOBALS=(
+diff --git a/tests/harness/clients/background_effect_client.cpp b/tests/harness/clients/background_effect_client.cpp
+new file mode 100644
+index 00000000..cdb626be
+--- /dev/null
++++ b/tests/harness/clients/background_effect_client.cpp
+@@ -0,0 +1,304 @@
++// Maps a translucent xdg toplevel that requests background blur through
++// ext_background_effect_v1. Prints "capabilities <flags>" when the manager is
++// bound, "bound" when the surface object is created, and "mapped <w>x<h>" once
++// the toplevel is up. Reads commands from stdin:
++//   r <x1> <y1> <x2> <y2>  set that surface-local blur region and commit
++//   n                      clear the region (NULL) and commit
++//   d                      destroy the blur object without committing
++//   p                      commit without changing the region
++//   q                      disconnect
++// `--probe` binds the manager instead of mapping a window, prints its capabilities, and exits.
++// Every applied command prints "region <x1> <y1> <x2> <y2>" or "region none"
++// so a check can wait for the commit instead of sleeping.
++// FILL_COLOR=<ARGB> paints the toplevel; the default is half-transparent black
++// so a backdrop blur underneath is visible. Usage: background-effect-client
++// [title [width height]].
++#include "ext-background-effect-v1-client-protocol.h"
++#include "xdg-shell-client-protocol.h"
++
++#include <cstdint>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <iostream>
++#include <poll.h>
++#include <print>
++#include <string>
++#include <sys/mman.h>
++#include <unistd.h>
++#include <wayland-client.h>
++
++namespace {
++
++  struct State {
++    wl_display* display = nullptr;
++    wl_compositor* compositor = nullptr;
++    wl_shm* shm = nullptr;
++    xdg_wm_base* wmBase = nullptr;
++    ext_background_effect_manager_v1* blurManager = nullptr;
++    ext_background_effect_surface_v1* blur = nullptr;
++    wl_surface* surface = nullptr;
++    xdg_surface* xdgSurface = nullptr;
++    xdg_toplevel* toplevel = nullptr;
++    wl_buffer* buffer = nullptr;
++    uint32_t fill = 0x80000000U;
++    int width = 500;
++    int height = 520;
++    int configuredWidth = 0;
++    int configuredHeight = 0;
++    bool configured = false;
++    bool running = true;
++  };
++
++  bool present(State& state) {
++    if (!state.configured) {
++      return true;
++    }
++    const int width = state.width;
++    const int height = state.height;
++    const size_t stride = static_cast<size_t>(width) * 4;
++    const size_t size = stride * static_cast<size_t>(height);
++    const int fd = memfd_create("umbriel-background-effect-client", MFD_CLOEXEC);
++    if (fd < 0 || ftruncate(fd, static_cast<off_t>(size)) < 0) {
++      if (fd >= 0) {
++        close(fd);
++      }
++      return false;
++    }
++    void* pixels = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
++    if (pixels == MAP_FAILED) {
++      close(fd);
++      return false;
++    }
++    auto* words = static_cast<uint32_t*>(pixels);
++    for (size_t i = 0; i < size / 4; ++i) {
++      words[i] = state.fill;
++    }
++    munmap(pixels, size);
++
++    wl_shm_pool* pool = wl_shm_create_pool(state.shm, fd, static_cast<int>(size));
++    if (state.buffer != nullptr) {
++      wl_buffer_destroy(state.buffer);
++    }
++    state.buffer = wl_shm_pool_create_buffer(pool, 0, width, height, static_cast<int>(stride), WL_SHM_FORMAT_ARGB8888);
++    wl_shm_pool_destroy(pool);
++    close(fd);
++    if (state.buffer == nullptr) {
++      return false;
++    }
++    wl_surface_attach(state.surface, state.buffer, 0, 0);
++    wl_surface_damage_buffer(state.surface, 0, 0, width, height);
++    wl_surface_commit(state.surface);
++    std::println("mapped {}x{}", width, height);
++    std::fflush(stdout);
++    return true;
++  }
++
++  void xdgSurfaceConfigure(void* data, xdg_surface* xdgSurface, uint32_t serial) {
++    auto& state = *static_cast<State*>(data);
++    xdg_surface_ack_configure(xdgSurface, serial);
++    // Follow the compositor's size, so a window rule's floating size is the surface size the check reasons about.
++    if (state.configuredWidth > 0) {
++      state.width = state.configuredWidth;
++    }
++    if (state.configuredHeight > 0) {
++      state.height = state.configuredHeight;
++    }
++    state.configured = true;
++    if (!present(state)) {
++      std::println(stderr, "background-effect-client: could not present");
++    }
++  }
++
++  constexpr xdg_surface_listener kXdgSurfaceListener = {
++      .configure = xdgSurfaceConfigure,
++  };
++
++  void toplevelConfigure(void* data, xdg_toplevel*, int32_t width, int32_t height, wl_array*) {
++    auto& state = *static_cast<State*>(data);
++    state.configuredWidth = width;
++    state.configuredHeight = height;
++  }
++  void toplevelClose(void* data, xdg_toplevel*) { static_cast<State*>(data)->running = false; }
++  void toplevelConfigureBounds(void*, xdg_toplevel*, int32_t, int32_t) {}
++  void toplevelWmCapabilities(void*, xdg_toplevel*, wl_array*) {}
++
++  constexpr xdg_toplevel_listener kToplevelListener = {
++      .configure = toplevelConfigure,
++      .close = toplevelClose,
++      .configure_bounds = toplevelConfigureBounds,
++      .wm_capabilities = toplevelWmCapabilities,
++  };
++
++  void wmBasePing(void*, xdg_wm_base* wmBase, uint32_t serial) { xdg_wm_base_pong(wmBase, serial); }
++
++  constexpr xdg_wm_base_listener kWmBaseListener = {
++      .ping = wmBasePing,
++  };
++
++  void managerCapabilities(void*, ext_background_effect_manager_v1*, uint32_t flags) {
++    std::println("capabilities {}", flags);
++    std::fflush(stdout);
++  }
++
++  constexpr ext_background_effect_manager_v1_listener kManagerListener = {
++      .capabilities = managerCapabilities,
++  };
++
++  void registryGlobal(void* data, wl_registry* registry, uint32_t name, const char* interface, uint32_t version) {
++    auto& state = *static_cast<State*>(data);
++    if (std::strcmp(interface, wl_compositor_interface.name) == 0) {
++      state.compositor = static_cast<wl_compositor*>(wl_registry_bind(registry, name, &wl_compositor_interface, 4));
++    } else if (std::strcmp(interface, wl_shm_interface.name) == 0) {
++      state.shm = static_cast<wl_shm*>(wl_registry_bind(registry, name, &wl_shm_interface, 1));
++    } else if (std::strcmp(interface, xdg_wm_base_interface.name) == 0) {
++      state.wmBase = static_cast<xdg_wm_base*>(wl_registry_bind(registry, name, &xdg_wm_base_interface, 1));
++    } else if (std::strcmp(interface, ext_background_effect_manager_v1_interface.name) == 0) {
++      state.blurManager = static_cast<ext_background_effect_manager_v1*>(
++          wl_registry_bind(registry, name, &ext_background_effect_manager_v1_interface, 1)
++      );
++    }
++  }
++
++  void registryGlobalRemove(void*, wl_registry*, uint32_t) {}
++
++  constexpr wl_registry_listener kRegistryListener = {
++      .global = registryGlobal,
++      .global_remove = registryGlobalRemove,
++  };
++
++  bool applyRegion(State& state, const std::string& line) {
++    if (line == "n") {
++      ext_background_effect_surface_v1_set_blur_region(state.blur, nullptr);
++      wl_surface_commit(state.surface);
++      std::println("region none");
++      std::fflush(stdout);
++      return true;
++    }
++    if (line == "p") {
++      wl_surface_commit(state.surface);
++      std::println("committed");
++      std::fflush(stdout);
++      return true;
++    }
++    if (line == "d") {
++      if (state.blur != nullptr) {
++        ext_background_effect_surface_v1_destroy(state.blur);
++        state.blur = nullptr;
++      }
++      std::println("destroyed");
++      std::fflush(stdout);
++      return true;
++    }
++    if (state.blur == nullptr) {
++      std::println(stderr, "background-effect-client: the blur object is gone");
++      return false;
++    }
++    if (line.starts_with("r ")) {
++      int x1 = 0;
++      int y1 = 0;
++      int x2 = 0;
++      int y2 = 0;
++      if (std::sscanf(line.c_str(), "r %d %d %d %d", &x1, &y1, &x2, &y2) != 4) {
++        std::println(stderr, "background-effect-client: bad region '{}'", line);
++        return false;
++      }
++      wl_region* region = wl_compositor_create_region(state.compositor);
++      wl_region_add(region, x1, y1, x2 - x1, y2 - y1);
++      ext_background_effect_surface_v1_set_blur_region(state.blur, region);
++      wl_region_destroy(region);
++      wl_surface_commit(state.surface);
++      std::println("region {} {} {} {}", x1, y1, x2, y2);
++      std::fflush(stdout);
++      return true;
++    }
++    return true;
++  }
++
++} // namespace
++
++int main(int argc, char** argv) {
++  State state;
++  const bool probe = argc > 1 && std::string(argv[1]) == "--probe";
++  const char* title = !probe && argc > 1 ? argv[1] : "background-effect";
++  if (argc > 3) {
++    const int width = std::atoi(argv[2]);
++    const int height = std::atoi(argv[3]);
++    if (width > 0) {
++      state.width = width;
++    }
++    if (height > 0) {
++      state.height = height;
++    }
++  }
++  if (const char* fill = std::getenv("FILL_COLOR")) {
++    state.fill = static_cast<uint32_t>(std::strtoul(fill, nullptr, 0));
++  }
++
++  state.display = wl_display_connect(nullptr);
++  if (state.display == nullptr) {
++    std::println(stderr, "background-effect-client: no display");
++    return 1;
++  }
++  wl_registry* registry = wl_display_get_registry(state.display);
++  wl_registry_add_listener(registry, &kRegistryListener, &state);
++  wl_display_roundtrip(state.display);
++  if (state.compositor == nullptr || state.shm == nullptr || state.wmBase == nullptr) {
++    std::println(stderr, "background-effect-client: missing core globals");
++    return 1;
++  }
++  if (state.blurManager == nullptr) {
++    std::println(stderr, "background-effect-client: ext_background_effect_manager_v1 is not advertised");
++    return 1;
++  }
++  ext_background_effect_manager_v1_add_listener(state.blurManager, &kManagerListener, &state);
++  if (probe) {
++    // A roundtrip delivers the capabilities event the manager sends on bind.
++    wl_display_roundtrip(state.display);
++    wl_display_disconnect(state.display);
++    return 0;
++  }
++
++  state.surface = wl_compositor_create_surface(state.compositor);
++  state.blur = ext_background_effect_manager_v1_get_background_effect(state.blurManager, state.surface);
++  std::println("bound");
++  std::fflush(stdout);
++
++  xdg_wm_base_add_listener(state.wmBase, &kWmBaseListener, &state);
++  state.xdgSurface = xdg_wm_base_get_xdg_surface(state.wmBase, state.surface);
++  xdg_surface_add_listener(state.xdgSurface, &kXdgSurfaceListener, &state);
++  state.toplevel = xdg_surface_get_toplevel(state.xdgSurface);
++  xdg_toplevel_add_listener(state.toplevel, &kToplevelListener, &state);
++  xdg_toplevel_set_title(state.toplevel, title);
++  wl_surface_commit(state.surface);
++
++  while (state.running) {
++    if (wl_display_dispatch_pending(state.display) < 0 || wl_display_flush(state.display) < 0) {
++      break;
++    }
++    pollfd fds[]{{wl_display_get_fd(state.display), POLLIN, 0}, {STDIN_FILENO, POLLIN, 0}};
++    if (poll(fds, 2, -1) < 0) {
++      break;
++    }
++    if ((fds[0].revents & POLLIN) != 0 && wl_display_dispatch(state.display) < 0) {
++      break;
++    }
++    if ((fds[1].revents & (POLLIN | POLLHUP)) != 0) {
++      std::string line;
++      if (std::getline(std::cin, line) && !line.empty()) {
++        if (line == "q") {
++          break;
++        }
++        applyRegion(state, line);
++      } else {
++        break;
++      }
++    }
++  }
++
++  if (state.blur != nullptr) {
++    ext_background_effect_surface_v1_destroy(state.blur);
++  }
++  wl_display_disconnect(state.display);
++  return 0;
++}
+diff --git a/tests/meson.build b/tests/meson.build
+index 591451f0..6a27b6f5 100644
+--- a/tests/meson.build
++++ b/tests/meson.build
+@@ -16,6 +16,7 @@ unit_tests = [
+   ['effects', ['unit/effects.cpp'], []],
+   ['effect-selection', ['unit/effect_selection.cpp'], []],
+   ['window-opacity-blur', ['unit/window_opacity_blur.cpp'], [umbriel_core_dep]],
++  ['blur-region', ['unit/blur_region.cpp'], [umbriel_core_dep]],
+   ['value-parse', ['unit/value_parse.cpp'], []],
+   ['keybind-parse', ['unit/keybind_parse.cpp'], []],
+   ['lid-state', ['unit/lid_state.cpp'], []],
+@@ -388,6 +389,19 @@ color_feedback_client = executable(
+   dependencies: [wayland_client_dep],
+ )
+ 
++# Harness helper that asks for backdrop blur through ext_background_effect_v1 and applies regions on demand.
++background_effect_client = executable(
++  'background-effect-client',
++  [
++    'harness/clients/background_effect_client.cpp',
++    xdg_shell_client_h,
++    xdg_shell_client_c,
++    ext_background_effect_client_h,
++    ext_background_effect_client_c,
++  ],
++  dependencies: [wayland_client_dep],
++)
++
+ # Harness helper that logs the seat input events a window receives, for input state checks.
+ seat_log_client = executable(
+   'seat-log-client',
+@@ -542,6 +556,7 @@ harness_client_targets = [
+   input_capture_compositor,
+   input_capture_client,
+   color_feedback_client,
++  background_effect_client,
+   pixel_probe,
+   capture_client,
+   pointer_client,
+diff --git a/tests/unit/blur_region.cpp b/tests/unit/blur_region.cpp
+new file mode 100644
+index 00000000..877d32be
+--- /dev/null
++++ b/tests/unit/blur_region.cpp
+@@ -0,0 +1,256 @@
++// Blur regions requested by clients through ext_background_effect_v1. The region is surface-local, while the blur node
++// keeps the whole surface box because its transparency mask stretches the surface buffer over that box; the request is
++// therefore applied as a node clip, mapped by the same ratio the mask uses and rounded outward so a fractional
++// animation scale never eats a blurred edge.
++#include "check.h"
++#include "scene/surface_blur.h"
++
++// clang-format off
++#include <cmath> // IWYU pragma: keep
++#include "wlr.h"
++// clang-format on
++
++namespace {
++
++  pixman_region32_t rect(int x1, int y1, int x2, int y2) {
++    pixman_region32_t region;
++    pixman_region32_init_rect(&region, x1, y1, static_cast<unsigned>(x2 - x1), static_cast<unsigned>(y2 - y1));
++    return region;
++  }
++
++  bool equals(const pixman_region32_t& actual, int x1, int y1, int x2, int y2) {
++    pixman_region32_t expected = rect(x1, y1, x2, y2);
++    const bool same = pixman_region32_equal(&actual, &expected) != 0;
++    pixman_region32_fini(&expected);
++    return same;
++  }
++
++  wlr_scene_blur* onlyBlurChild(wlr_scene_tree& tree) {
++    CHECK(!wl_list_empty(&tree.children));
++    if (wl_list_empty(&tree.children)) {
++      return nullptr;
++    }
++    wlr_scene_node* child;
++    child = wl_container_of(tree.children.next, child, link);
++    CHECK_EQ(child->type, WLR_SCENE_NODE_BLUR);
++    if (child->type != WLR_SCENE_NODE_BLUR) {
++      return nullptr;
++    }
++    return wlr_scene_blur_from_node(child);
++  }
++
++  const pixman_region32_t* blurClip(wlr_scene_blur* blur) { return wlr_scene_node_get_clip_region(&blur->node); }
++
++} // namespace
++
++UMBRIEL_TEST(blurRegionMapsIdentityWhenNodeMatchesSurface) {
++  pixman_region32_t source = rect(10, 20, 30, 40);
++  pixman_region32_t mapped;
++  pixman_region32_init(&mapped);
++  umbriel::mapBlurRegionToNode(source, wlr_box{0, 0, 100, 100}, 100, 100, &mapped);
++  CHECK(equals(mapped, 10, 20, 30, 40));
++  pixman_region32_fini(&mapped);
++  pixman_region32_fini(&source);
++}
++
++UMBRIEL_TEST(blurRegionFollowsAnimationScale) {
++  pixman_region32_t source = rect(10, 20, 30, 40);
++  pixman_region32_t mapped;
++  pixman_region32_init(&mapped);
++  umbriel::mapBlurRegionToNode(source, wlr_box{0, 0, 100, 100}, 150, 150, &mapped);
++  CHECK(equals(mapped, 15, 30, 45, 60));
++  pixman_region32_fini(&mapped);
++  pixman_region32_fini(&source);
++}
++
++UMBRIEL_TEST(blurRegionRoundsOutwardForFractionalScales) {
++  pixman_region32_t source = rect(1, 1, 2, 2);
++  pixman_region32_t mapped;
++  pixman_region32_init(&mapped);
++  umbriel::mapBlurRegionToNode(source, wlr_box{0, 0, 100, 100}, 133, 133, &mapped);
++  // 1.33..2.66 covers pixels 1 and 2: floor on the near edge, ceil on the far edge.
++  CHECK(equals(mapped, 1, 1, 3, 3));
++  pixman_region32_fini(&mapped);
++  pixman_region32_fini(&source);
++}
++
++UMBRIEL_TEST(blurRegionClampsToNodeBox) {
++  pixman_region32_t source = rect(-20, -20, 200, 200);
++  pixman_region32_t mapped;
++  pixman_region32_init(&mapped);
++  umbriel::mapBlurRegionToNode(source, wlr_box{0, 0, 100, 100}, 100, 100, &mapped);
++  CHECK(equals(mapped, 0, 0, 100, 100));
++  pixman_region32_fini(&mapped);
++  pixman_region32_fini(&source);
++}
++
++UMBRIEL_TEST(blurRegionIgnoresDegenerateSizes) {
++  pixman_region32_t source = rect(0, 0, 10, 10);
++  pixman_region32_t mapped;
++  pixman_region32_init(&mapped);
++  umbriel::mapBlurRegionToNode(source, wlr_box{0, 0, 0, 100}, 100, 100, &mapped);
++  CHECK(pixman_region32_empty(&mapped) != 0);
++  pixman_region32_fini(&mapped);
++  pixman_region32_fini(&source);
++}
++
++// The node stays the whole surface so the mask keeps its alignment; only the clip narrows.
++// Client-side decorations put the surface origin at the geometry origin: the scene helper places the surface tree at
++// the negative of it, so a surface-local request has to subtract it before the ratio applies.
++UMBRIEL_TEST(blurRegionSubtractsSurfaceBoxOrigin) {
++  pixman_region32_t source = rect(10, 10, 60, 110);
++  pixman_region32_t mapped;
++  pixman_region32_init(&mapped);
++  umbriel::mapBlurRegionToNode(source, wlr_box{10, 10, 100, 100}, 100, 100, &mapped);
++  CHECK(equals(mapped, 0, 0, 50, 100));
++  pixman_region32_fini(&mapped);
++  pixman_region32_fini(&source);
++}
++
++// wl_region coordinates are arbitrary int32; clamping before the conversion keeps a wild request inside the node.
++UMBRIEL_TEST(blurRegionClampsOversizedRequests) {
++  pixman_region32_t source;
++  pixman_region32_init_rect(&source, -1000000, -1000000, 4000000, 4000000);
++  pixman_region32_t mapped;
++  pixman_region32_init(&mapped);
++  umbriel::mapBlurRegionToNode(source, wlr_box{0, 0, 100, 100}, 150, 150, &mapped);
++  CHECK(equals(mapped, 0, 0, 150, 150));
++  pixman_region32_fini(&mapped);
++  pixman_region32_fini(&source);
++}
++
++UMBRIEL_TEST(clientBlurRegionClipsTheWholeSurfaceNode) {
++  wlr_scene* scene = wlr_scene_create();
++  CHECK(scene != nullptr);
++  if (scene == nullptr) {
++    return;
++  }
++
++  umbriel::SurfaceBlur blur;
++  const wlr_box box{0, 0, 200, 100};
++  pixman_region32_t region = rect(0, 0, 100, 100);
++  blur.update(
++      &scene->tree, nullptr, box, box, corner_radii_none(), nullptr, {}, 1.0F, nullptr,
++      umbriel::ClientBlurRegion{.region = &region, .source = box}
++  );
++
++  wlr_scene_blur* node = onlyBlurChild(scene->tree);
++  CHECK(node != nullptr);
++  if (node != nullptr) {
++    CHECK(node->node.enabled);
++    CHECK_EQ(node->width, 200);
++    CHECK_EQ(node->height, 100);
++    const pixman_region32_t* clip = blurClip(node);
++    CHECK(clip != nullptr);
++    if (clip != nullptr) {
++      CHECK(equals(*clip, 0, 0, 100, 100));
++    }
++  }
++
++  pixman_region32_fini(&region);
++  wlr_scene_node_destroy(&scene->tree.node);
++}
++
++// A request replaces the rule's whole-surface blur; the rule can stay enabled.
++UMBRIEL_TEST(clientBlurRegionRestrictsRuleBlur) {
++  wlr_scene* scene = wlr_scene_create();
++  CHECK(scene != nullptr);
++  if (scene == nullptr) {
++    return;
++  }
++
++  umbriel::SurfaceBlur blur;
++  const wlr_box box{0, 0, 200, 100};
++  umbriel::SurfaceBlurOptions options;
++  options.enabled = true;
++  pixman_region32_t region = rect(50, 0, 100, 100);
++  blur.update(
++      &scene->tree, nullptr, box, box, corner_radii_none(), nullptr, options, 1.0F, nullptr,
++      umbriel::ClientBlurRegion{.region = &region, .source = box}
++  );
++
++  wlr_scene_blur* node = onlyBlurChild(scene->tree);
++  CHECK(node != nullptr);
++  if (node != nullptr) {
++    const pixman_region32_t* clip = blurClip(node);
++    CHECK(clip != nullptr);
++    if (clip != nullptr) {
++      CHECK(equals(*clip, 50, 0, 100, 100));
++    }
++  }
++
++  pixman_region32_fini(&region);
++  wlr_scene_node_destroy(&scene->tree.node);
++}
++
++// An empty region is a client saying "no blur here", not a missing request.
++UMBRIEL_TEST(emptyClientRegionSuppressesBlur) {
++  wlr_scene* scene = wlr_scene_create();
++  CHECK(scene != nullptr);
++  if (scene == nullptr) {
++    return;
++  }
++
++  umbriel::SurfaceBlur blur;
++  const wlr_box box{0, 0, 200, 100};
++  umbriel::SurfaceBlurOptions options;
++  options.enabled = true;
++  pixman_region32_t region;
++  pixman_region32_init(&region);
++  blur.update(
++      &scene->tree, nullptr, box, box, corner_radii_none(), nullptr, options, 1.0F, nullptr,
++      umbriel::ClientBlurRegion{.region = &region, .source = box}
++  );
++
++  CHECK(wl_list_empty(&scene->tree.children));
++
++  pixman_region32_fini(&region);
++  wlr_scene_node_destroy(&scene->tree.node);
++}
++
++// No request and no rule leaves the surface alone, even though it looks transparent.
++UMBRIEL_TEST(noRequestAndNoRuleSkipsBlur) {
++  wlr_scene* scene = wlr_scene_create();
++  CHECK(scene != nullptr);
++  if (scene == nullptr) {
++    return;
++  }
++
++  umbriel::SurfaceBlur blur;
++  const wlr_box box{0, 0, 200, 100};
++  blur.update(&scene->tree, nullptr, box, box, corner_radii_none(), nullptr, {}, 0.5F, nullptr, {});
++
++  CHECK(wl_list_empty(&scene->tree.children));
++
++  wlr_scene_node_destroy(&scene->tree.node);
++}
++
++// Dropping the request turns the blur off again on the next update.
++UMBRIEL_TEST(clearedClientRegionRemovesBlur) {
++  wlr_scene* scene = wlr_scene_create();
++  CHECK(scene != nullptr);
++  if (scene == nullptr) {
++    return;
++  }
++
++  umbriel::SurfaceBlur blur;
++  const wlr_box box{0, 0, 200, 100};
++  pixman_region32_t region = rect(0, 0, 100, 100);
++  blur.update(
++      &scene->tree, nullptr, box, box, corner_radii_none(), nullptr, {}, 1.0F, nullptr,
++      umbriel::ClientBlurRegion{.region = &region, .source = box}
++  );
++  wlr_scene_blur* node = onlyBlurChild(scene->tree);
++  CHECK(node != nullptr);
++
++  blur.update(&scene->tree, nullptr, box, box, corner_radii_none(), nullptr, {}, 0.5F, nullptr, {});
++  CHECK(node != nullptr);
++  if (node != nullptr) {
++    CHECK(!node->node.enabled);
++  }
++
++  pixman_region32_fini(&region);
++  wlr_scene_node_destroy(&scene->tree.node);
++}
++
++int main() { return RUN_TESTS(); }
+-- 
+2.56.0.341.gebdc087dc9
+
