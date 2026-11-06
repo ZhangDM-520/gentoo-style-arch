@@ -1,7 +1,7 @@
 From d1c4c53bce8ff171bb343e6967ec08e321eee96c Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Fri, 6 Nov 2026 14:10:30 +0800
-Subject: [PATCH 1/4] feat(layout)!: place an underfull scrolling strip at
+Subject: [PATCH 1/5] feat(layout)!: place an underfull scrolling strip at
  start, center or end
 
 `layout.scrolling.center_underfull_strip` could only center a strip narrower than the viewport or start-align it. `underfull_strip` replaces it with three placements, so a workspace holding one or two windows can rest against either edge. The old names map onto the new ones: true is "center" (the default) and false is "start".
@@ -791,7 +791,7 @@ index c9f3b68..a33376d 100644
 From 7eec2b3b8a6e7987244e47348ca604b8b5b09c19 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Fri, 6 Nov 2026 14:53:25 +0800
-Subject: [PATCH 2/4] fix(layout): keep interior strip boundaries draggable and
+Subject: [PATCH 2/5] fix(layout): keep interior strip boundaries draggable and
  re-judge rests on reload
 
 An end-aligned strip that fits used to refuse the trailing edge of every
@@ -1042,7 +1042,7 @@ index a33376d..98e793c 100644
 From 33680fa5e7e93761d5fabfbf44670365baccde7f Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Fri, 6 Nov 2026 15:15:20 +0800
-Subject: [PATCH 3/4] fix(layout): share the pair resize math and keep centre's
+Subject: [PATCH 3/5] fix(layout): share the pair resize math and keep centre's
  growth symmetric
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -1430,7 +1430,7 @@ index 98e793c..7521da4 100644
 From b001a860622729450ea5368c4ecd46acd3d0ce4e Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Fri, 6 Nov 2026 15:31:12 +0800
-Subject: [PATCH 4/4] test(layout): bind the survivor loop by reference
+Subject: [PATCH 4/5] test(layout): bind the survivor loop by reference
 
 -Werror=range-loop-construct rejects copying the pair from the initializer
 list, which broke the musl CI leg.
@@ -1453,6 +1453,115 @@ index 7521da4..d13d200 100644
         {std::pair{UnderfullStripAlign::Start, 0}, std::pair{UnderfullStripAlign::Center, 280},
          std::pair{UnderfullStripAlign::End, 560}}) {
      Fixture fixture;
+-- 
+2.56.0.341.gebdc087dc9
+
+
+From 57c27d3dd6fab4f2cd35357942f01b31a7e8c796 Mon Sep 17 00:00:00 2001
+From: ZhangDM-520 <jixianqiang1540@gmail.com>
+Date: Fri, 6 Nov 2026 20:06:12 +0800
+Subject: [PATCH 5/5] fix(layout): let an end-aligned pair drag fall through to
+ the cross axis
+
+The interior trailing branch returned once it had set both lane widths, so a
+corner drag (RIGHT|BOTTOM) applied only dx and silently ignored dy. The pair
+case now takes the else arm of the primary-end path and the cross-axis block
+runs as it does for every other edge combination.
+
+Pinned by a two-window column drag that asserts both the width trade and the
+height split; restoring the return reds only the cross-axis assertions.
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+---
+ src/layout/scrolling.cpp        | 32 ++++++++++++++++----------------
+ tests/unit/scrolling_layout.cpp | 29 +++++++++++++++++++++++++++++
+ 2 files changed, 45 insertions(+), 16 deletions(-)
+
+diff --git a/src/layout/scrolling.cpp b/src/layout/scrolling.cpp
+index f677d02..883ee44 100644
+--- a/src/layout/scrolling.cpp
++++ b/src/layout/scrolling.cpp
+@@ -1693,24 +1693,24 @@ namespace umbriel {
+               // The pair grew, so the strip re-anchors; nothing else can keep the boundary on the pointer.
+               layout.setScroll(0.0);
+             }
+-            return;
+-          }
+-          // While the strip fits, centering keeps its midpoint fixed: a boundary extent changes by two pointer
+-          // pixels for each pixel the centered outer edge moves. An aligned rest keeps its anchored edge instead.
+-          const double extentDelta = symmetricGrowth ? centeredPrimaryDelta(dPrimary) : dPrimary;
+-          const int newExtent = std::clamp(
+-              m_startPrimaryPx + static_cast<int>(std::lround(extentDelta)), columnMinPrimary(m_column),
+-              columnMaxPrimary(m_column)
+-          );
+-          setColumnPrimaryPx(m_column, newExtent);
+-          if (symmetricGrowth || endAlignedRest) {
+-            // Centering keeps the midpoint; an anchored alignment re-rests on its edge (the layout refuses that
+-            // boundary while it fits, see sanitizeResizeEdges, so this covers a programmatic resize).
+-            layout.setScroll(0.0);
+           } else {
+-            layout.setScroll(
+-                m_startScroll + static_cast<double>(layout.columnX(m_column, viewportPrimary) - m_startColumnX)
++            // While the strip fits, centering keeps its midpoint fixed: a boundary extent changes by two pointer
++            // pixels for each pixel the centered outer edge moves. An aligned rest keeps its anchored edge instead.
++            const double extentDelta = symmetricGrowth ? centeredPrimaryDelta(dPrimary) : dPrimary;
++            const int newExtent = std::clamp(
++                m_startPrimaryPx + static_cast<int>(std::lround(extentDelta)), columnMinPrimary(m_column),
++                columnMaxPrimary(m_column)
+             );
++            setColumnPrimaryPx(m_column, newExtent);
++            if (symmetricGrowth || endAlignedRest) {
++              // Centering keeps the midpoint; an anchored alignment re-rests on its edge (the layout refuses that
++              // boundary while it fits, see sanitizeResizeEdges, so this covers a programmatic resize).
++              layout.setScroll(0.0);
++            } else {
++              layout.setScroll(
++                  m_startScroll + static_cast<double>(layout.columnX(m_column, viewportPrimary) - m_startColumnX)
++              );
++            }
+           }
+         } else if ((m_edges & primaryStartEdge) != 0) {
+           if (m_column > 0 && !m_soloPrimary) {
+diff --git a/tests/unit/scrolling_layout.cpp b/tests/unit/scrolling_layout.cpp
+index d13d200..ccf8089 100644
+--- a/tests/unit/scrolling_layout.cpp
++++ b/tests/unit/scrolling_layout.cpp
+@@ -643,6 +643,35 @@ UMBRIEL_TEST(interiorTrailingBoundaryKeepsTrackingPastTheLaneMinimum) {
+   CHECK_EQ(secondAfter.x + secondAfter.width, secondBefore.x + secondBefore.width);
+ }
+ 
++UMBRIEL_TEST(endAlignedInteriorCornerResizeAlsoResizesAcrossTheAxis) {
++  Fixture fixture;
++  fixture.config.scrolling.underfullStrip = UnderfullStripAlign::End;
++  fixture.layout.insertView(stub(0), 0);
++  fixture.layout.insertViewIntoColumn(stub(1), 0, 1);
++  fixture.layout.insertView(stub(2), 1);
++  CHECK(fixture.layout.setWidthFraction(0, 0.25));
++  CHECK(fixture.layout.setWidthFraction(1, 0.25));
++  fixture.layout.arrange(kUsable);
++
++  const wlr_box firstBefore = fixture.layout.targetBox(stub(0));
++  const wlr_box siblingBefore = fixture.layout.targetBox(stub(1));
++  const wlr_box nextBefore = fixture.layout.targetBox(stub(2));
++
++  // A corner drag carries both a primary and a cross delta: the pair branch must not swallow the latter.
++  auto resize = fixture.layout.beginResize(stub(0), WLR_EDGE_RIGHT | WLR_EDGE_BOTTOM, kUsable);
++  CHECK(resize != nullptr);
++  resize->applyDelta(40.0, 40.0, kUsable);
++  fixture.layout.arrange(kUsable);
++
++  const wlr_box firstAfter = fixture.layout.targetBox(stub(0));
++  const wlr_box siblingAfter = fixture.layout.targetBox(stub(1));
++  const wlr_box nextAfter = fixture.layout.targetBox(stub(2));
++  CHECK_EQ(firstAfter.width, firstBefore.width + 40);
++  CHECK_EQ(nextAfter.width, nextBefore.width - 40);
++  CHECK(firstAfter.height > firstBefore.height);
++  CHECK(siblingAfter.height < siblingBefore.height);
++}
++
+ UMBRIEL_TEST(centeredInteriorTrailingBoundaryStillGrowsTheStrip) {
+   Fixture fixture;
+   fixture.addColumns(2);
 -- 
 2.56.0.341.gebdc087dc9
 
