@@ -9,7 +9,7 @@ source "$startdir/../../../lib/pgo.sh"
 pkgname=umbriel-git
 _pkgname=umbriel
 pkgver=0.1.0.r1518.aa3b6b3
-pkgrel=3
+pkgrel=4
 epoch=1
 pkgdesc='A Wayland compositor built on wlroots'
 arch=('x86_64' 'aarch64')
@@ -69,7 +69,7 @@ sha256sums=('SKIP'
             '7c4de03d135dc74529c7cafc2a81ae659c1e9a917094aeafb248175c94db8400'
             '92514f4aa7244e524aa73bf392efff5675a7e32e715715d182bad5324ed70492'
             'da533d362314d028cf575128ace45b1781e39d9385478fd648f5e9bffffaf621'
-            '36a5f944bd57b067d293900355dd6bd41fb20643e6f0e4bfba6f8d3689425f16')
+            '7a8f6146b35ea24694209a1bc206c7e91a404e90b27435556efd976771c7f7d9')
 
 pkgver() {
   cd "${_pkgname}"
@@ -174,9 +174,11 @@ prepare() {
   # an empty region means no blur, no request leaves the rule in charge, and
   # client_requests = false keeps the global advertised while ignoring
   # requests. Upstream PR noctalia-dev/umbriel#715;
-  # 0019-background-effect.patch: flattened downstream stack adaptation on
+  # 0019-background-effect.patch (re-cut at 57d4299b: client parsing passes
+  # clang-tidy, popup registry erases with std::erase): flattened downstream
+  # stack adaptation on
   # main@aa3b6b3e over 0011+0012+0013+0014+0018 (delta 31 files, +1553/-43,
-  # sha256 36a5f944…; the only downstream conflict is server.h's
+  # sha256 7a8f6146…; the only downstream conflict is server.h's
   # ColorDescription forward declaration next to BackgroundEffectManager).
   # (Retire on merge: 0019 -> PR #715.)
   git apply -3 ../0019-background-effect.patch
