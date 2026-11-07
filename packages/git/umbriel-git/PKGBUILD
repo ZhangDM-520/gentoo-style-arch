@@ -8,8 +8,8 @@ source "$startdir/../../../lib/pgo.sh"
 
 pkgname=umbriel-git
 _pkgname=umbriel
-pkgver=0.1.0.r1518.aa3b6b3
-pkgrel=6
+pkgver=0.1.0.r1532.f5dd36b
+pkgrel=7
 epoch=1
 pkgdesc='A Wayland compositor built on wlroots'
 arch=('x86_64' 'aarch64')
@@ -62,14 +62,16 @@ source=("${_pkgname}::git+${url}.git#branch=main"
         '0013-icc-gamut.patch'
         '0014-downsample-box.patch'
         '0018-underfull-strip-align.patch'
-        '0019-background-effect.patch')
+        '0019-background-effect.patch'
+        '0020-adaptive-title-bar.patch')
 sha256sums=('SKIP'
             '817ffce311dbb4b162de5b261ef89d011f5f484db390eafec4ace1a4bf94c6ea'
             '1fe6f5683efc79957e00d458ade22ff3080c76dbcbcb6d7fca21203523e2bdb7'
             '7c4de03d135dc74529c7cafc2a81ae659c1e9a917094aeafb248175c94db8400'
             '92514f4aa7244e524aa73bf392efff5675a7e32e715715d182bad5324ed70492'
             'da533d362314d028cf575128ace45b1781e39d9385478fd648f5e9bffffaf621'
-            '714cf0a301e874458fed8ff95506a6495cc4ffced44720e68118a921cc88a6a2')
+            '714cf0a301e874458fed8ff95506a6495cc4ffced44720e68118a921cc88a6a2'
+            'e4365cb2d81ff323c0aa56282f0998f3c2b721cdb7e80c89e7e00c07c397d45b')
 
 pkgver() {
   cd "${_pkgname}"
@@ -183,6 +185,21 @@ prepare() {
   # ColorDescription declarations next to BackgroundEffectManager).
   # (Retire on merge: 0019 -> PR #715.)
   git apply -3 ../0019-background-effect.patch
+
+  # [appearance.title_bar] color_source = "window": the bar paints itself
+  # with the top 5 logical pixels of the window's own content instead of
+  # [colors.title_bar] background, follows repaints live, keeps the palette
+  # as the fallback under a transparent edge, dims when unfocused, and gives
+  # the title and symbols a contrast edge. No readback: the bar mirrors the
+  # window's committed buffer (crop, transform, damage, syncobj, ICC), so it
+  # costs a strip copy per commit rather than a glFinish per frame. Stack
+  # adaptation on main@f5dd36b over 0011+0012+0013+0014+0018+0019 (3 commits,
+  # sha256 e4365cb2…; the strip follows xdg window geometry, marks the mirror's
+  # client-buffer lock ignorable through a new umbrielfx helper, and keeps the
+  # close snapshot's fill under the text and buttons).
+  # (Retire on merge: 0020 -> the adaptive title bar PR, opened after the
+  # owner's live test.)
+  git apply -3 ../0020-adaptive-title-bar.patch
 }
 
 build() {
