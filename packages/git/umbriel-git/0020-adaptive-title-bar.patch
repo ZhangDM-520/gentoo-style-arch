@@ -1,8 +1,8 @@
 From 4fbcba1a1b02107d0f224c27745b7c01eee43c6b Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Sat, 7 Nov 2026 14:56:14 +0800
-Subject: [PATCH 1/9] feat(title_bar): paint the bar with the window's own top
- edge
+Subject: [PATCH 01/13] feat(title_bar): paint the bar with the window's own
+ top edge
 
 A server-side title bar could only use the palette colour, so it stood out
 from applications that paint their own header. With
@@ -972,7 +972,7 @@ index 00820af0..df638fba 100644
 From f1bb6783a124b24bf291256b855ee1c80becd8b2 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Sat, 7 Nov 2026 18:12:24 +0800
-Subject: [PATCH 2/9] fix(title_bar): keep the close snapshot's text, fill
+Subject: [PATCH 02/13] fix(title_bar): keep the close snapshot's text, fill
  order and buffer locks
 
 The adaptive fill was copied into the close snapshot after the title and the
@@ -1427,7 +1427,7 @@ index 8f285193..5d13cf52 100755
 From 72d148b149ade491700c5ff6ff743f271884f6ec Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Sat, 7 Nov 2026 18:58:08 +0800
-Subject: [PATCH 3/9] fix(title_bar): address the external review round
+Subject: [PATCH 03/13] fix(title_bar): address the external review round
 
 - The strip box now takes the minimum last, so a viewport that maps less than
   one buffer pixel onto the surface cannot invert std::clamp's bounds (which
@@ -1981,8 +1981,8 @@ index bd79dda4..8cf2a853 100644
 From 0819e69858323b94579131a6832323401e9f2fb4 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Sat, 7 Nov 2026 19:46:49 +0800
-Subject: [PATCH 4/9] feat(title_bar): sample 1-4 rows of the window edge, one
- by default
+Subject: [PATCH 04/13] feat(title_bar): sample 1-4 rows of the window edge,
+ one by default
 
 Five rows stretched over the bar kept the top row of the window's own UI
 legible inside it, so tab rows and buttons along that edge read as fragments
@@ -2178,7 +2178,7 @@ index 6451cb50..ba7a822e 100644
 From 9a7d7ca8fec1711a7a0c4dcb642e47fcd0eb8d8a Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Sat, 7 Nov 2026 20:11:33 +0800
-Subject: [PATCH 5/9] feat(title_bar): add an average colour mode
+Subject: [PATCH 05/13] feat(title_bar): add an average colour mode
 
 `color_source = "average"` paints the bar with the mean colour of the same
 1-4 row strip instead of mirroring it, so the bar is one uniform colour and the
@@ -2759,7 +2759,8 @@ index 00000000..ca7e3f8f
 From 01ea3a981731af51b430be111c21309ef5290281 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Sat, 7 Nov 2026 20:37:07 +0800
-Subject: [PATCH 6/9] fix(title_bar): keep the average live, sRGB, and readable
+Subject: [PATCH 06/13] fix(title_bar): keep the average live, sRGB, and
+ readable
 
 Review of the average mode found that its cache compared the new mean with
 itself, so the bar kept the first colour it was baked with for the frame's whole
@@ -3217,7 +3218,8 @@ index ca7e3f8f..c7988f33 100644
 From dc8714a5378a9773a56f4ec013e93ba8e032cd70 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Sat, 7 Nov 2026 20:50:26 +0800
-Subject: [PATCH 7/9] fix(title_bar): never remember the mirrored client buffer
+Subject: [PATCH 07/13] fix(title_bar): never remember the mirrored client
+ buffer
 
 The ignore-lock mark was undone through a stored `wlr_client_buffer*`. Once the
 client releases its buffer the scene drops its own lock, the client buffer can
@@ -3281,8 +3283,8 @@ index 148b86e4..45241beb 100644
 From 8f091c673d576da48766e925fa5b47bbabd3fd14 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Sat, 7 Nov 2026 21:15:54 +0800
-Subject: [PATCH 8/9] fix(title_bar): make the average's damage guard real, and
- cut its cost
+Subject: [PATCH 08/13] fix(title_bar): make the average's damage guard real,
+ and cut its cost
 
 `pixman_region32_intersect` reports whether the operation succeeded, not
 whether the result is non-empty: a disjoint strip and damage region still
@@ -3890,7 +3892,7 @@ index 895f7a90..24a5da12 100644
 From cd0cb22fc6019a5caaa4aed532930f434118078d Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Sun, 8 Nov 2026 00:26:21 +0800
-Subject: [PATCH 9/9] style(title_bar): tighten the comments
+Subject: [PATCH 09/13] style(title_bar): tighten the comments
 
 Drop the explanation that the code already shows, keep the reasons it does not,
 and let one line stand where three did.
@@ -4329,6 +4331,853 @@ index ba7a822e..ba734e57 100644
    const wlr_fbox halfTurn = titleBarStripSourceBox({0.0, 0.0, 100.0, 0.5}, 100, 10, 100, 1, WL_OUTPUT_TRANSFORM_180, 5);
    CHECK_EQ(halfTurn.x, 0.0);
    CHECK_EQ(halfTurn.y, 0.0);
+-- 
+2.56.0.341.gebdc087dc9
+
+
+From c9adbbfb9be54d46de220260735f7895063d3dcf Mon Sep 17 00:00:00 2001
+From: ZhangDM-520 <jixianqiang1540@gmail.com>
+Date: Sun, 8 Nov 2026 01:07:54 +0800
+Subject: [PATCH 10/13] fix(title_bar): crop the strip upright, and drop a
+ transparent mean
+
+Talia's preliminary review on #735 found three medium issues; all three
+were real.
+
+- The window-geometry crop scaled the surface box onto the buffer axes
+  before applying the buffer transform, so a 90 or 270 turn took the
+  offset off the wrong axis: the strip started somewhere other than the
+  visible top edge, and its thickness was derived from the wrong scale.
+  The crop now happens in upright space, like the scene's own src-box
+  mapping, and lives in titleBarStripSourceBox with the geometry as an
+  argument, so the whole mapping is unit-tested (including a quarter turn
+  with shadow padding, which the old code fails).
+- A transparent edge left the last mean on the bar, contradicting the
+  documented palette fallback. The sample now reports `Empty` separately
+  from `Refused`: an edge that was read and holds no colour drops the mean
+  so the palette shows, while an unreadable buffer still keeps the last
+  colour. Pinned by a new harness phase that repaints the band clear.
+- kTitleBarStripHeightMin/Max were dead declarations: the field now
+  registers its range from them.
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+---
+ src/config/fields_general.cpp                 |  4 +-
+ src/scene/ssd_frame.cpp                       | 39 +++-------
+ src/scene/ssd_frame.h                         |  7 +-
+ src/scene/ssd_frame_geometry.cpp              | 23 ++++--
+ src/scene/ssd_frame_geometry.h                |  9 ++-
+ .../checks/render/title_bar_adaptive.sh       |  9 +++
+ tests/harness/clients/unmap_client.cpp        | 25 +++++-
+ tests/unit/ssd_frame_geometry.cpp             | 76 ++++++++++++++++---
+ 8 files changed, 135 insertions(+), 57 deletions(-)
+
+diff --git a/src/config/fields_general.cpp b/src/config/fields_general.cpp
+index 2b7a68eb..a508bd5d 100644
+--- a/src/config/fields_general.cpp
++++ b/src/config/fields_general.cpp
+@@ -116,7 +116,9 @@ namespace umbriel {
+               }
+           ),
+           // One flat colour row up to four rows of the window's own detail; the bar stretches them over its height.
+-          integer("color_source_height", 1, 4, &A::TitleBar::colorSourceHeight),
++          integer(
++              "color_source_height", kTitleBarStripHeightMin, kTitleBarStripHeightMax, &A::TitleBar::colorSourceHeight
++          ),
+           registry::text("font", &A::TitleBar::font),
+           registry::choice(
+               "button_position", &A::TitleBar::buttonPosition,
+diff --git a/src/scene/ssd_frame.cpp b/src/scene/ssd_frame.cpp
+index 1d08780e..b5d45201 100644
+--- a/src/scene/ssd_frame.cpp
++++ b/src/scene/ssd_frame.cpp
+@@ -269,7 +269,7 @@ namespace umbriel {
+     const int bottom = static_cast<int>(std::ceil(strip.y + strip.height));
+     const wlr_box box{left, top, std::max(0, right - left), std::max(0, bottom - top)};
+     if (box.width <= 0 || box.height <= 0) {
+-      return {StripSample::State::Refused, std::nullopt};
++      return {StripSample::State::Empty, std::nullopt};
+     }
+     // Ask which format the renderer can read: assuming BGRA silently disables the mode without EXT_read_format_bgra.
+     const uint32_t format = wlr_texture_preferred_read_format(m_content->buffer->texture);
+@@ -308,7 +308,7 @@ namespace umbriel {
+     }
+     auto mean = averagePixels(m_strip.data(), m_strip.size(), *order);
+     if (!mean.has_value()) {
+-      return {StripSample::State::Refused, std::nullopt};
++      return {StripSample::State::Empty, std::nullopt};
+     }
+     logDebug("[title_bar] averaged a {}x{} strip read back from the window", box.width, box.height);
+     return {StripSample::State::Fresh, mean};
+@@ -366,42 +366,17 @@ namespace umbriel {
+       m_adaptive->point_accepts_input = rejectInput;
+       wlr_scene_node_place_above(&m_adaptive->node, &m_background->node);
+     }
+-    const int surfaceWidth = m_content->current.width;
+-    const int surfaceHeight = m_content->current.height;
+     wlr_fbox base{};
+     wlr_surface_get_buffer_source_box(m_content, &base);
+-    // The window's geometry, not the buffer's: a client-drawn window's transparent shadow margins stay out of it.
+-    wlr_box visible{0, 0, surfaceWidth, surfaceHeight};
+-    if (m_contentGeometry.width > 0 && m_contentGeometry.height > 0) {
+-      wlr_box clipped{};
+-      wlr_box_intersection(&clipped, &m_contentGeometry, &visible);
+-      if (clipped.width > 0 && clipped.height > 0) {
+-        visible = clipped;
+-      }
+-    }
+-    const double scaleX = surfaceWidth > 0 ? base.width / static_cast<double>(surfaceWidth) : 0.0;
+-    const double scaleY = surfaceHeight > 0 ? base.height / static_cast<double>(surfaceHeight) : 0.0;
+-    wlr_fbox source = base;
+-    int sourceSurfaceWidth = surfaceWidth;
+-    int sourceSurfaceHeight = surfaceHeight;
+-    if (scaleX > 0.0 && scaleY > 0.0 && base.width > 0.0 && base.height > 0.0) {
+-      const double left = std::max(base.x, base.x + visible.x * scaleX);
+-      const double top = std::max(base.y, base.y + visible.y * scaleY);
+-      const double right = std::min(base.x + base.width, base.x + (visible.x + visible.width) * scaleX);
+-      const double bottom = std::min(base.y + base.height, base.y + (visible.y + visible.height) * scaleY);
+-      if (right > left && bottom > top) {
+-        source = {left, top, right - left, bottom - top};
+-        sourceSurfaceWidth = std::max(1, static_cast<int>(std::lround(source.width / scaleX)));
+-        sourceSurfaceHeight = std::max(1, static_cast<int>(std::lround(source.height / scaleY)));
+-      }
+-    }
+     // Cannot sit behind the guard below: colour management can change on a commit with no buffer damage. The readback
+     // returns the window's encoded values, so the flat colour is described as the window is.
+     if (m_colors != nullptr) {
+       m_colors->applySurfaceDescriptionToBuffer(m_content, m_adaptive);
+     }
++    // The window's geometry, not the buffer's: a client-drawn window's transparent shadow margins stay out of the
++    // strip, and the crop happens upright so a quarter turn does not take its offset off the wrong buffer axis.
+     const wlr_fbox strip = titleBarStripSourceBox(
+-        source, buffer->width, buffer->height, sourceSurfaceWidth, sourceSurfaceHeight,
++        base, buffer->width, buffer->height, m_contentGeometry, m_content->current.width, m_content->current.height,
+         static_cast<uint32_t>(m_content->current.transform), style.colorSourceHeight
+     );
+     // Damage is in buffer coordinates, like the strip. Round outward: the strip is fractional at fractional scales. It
+@@ -436,6 +411,10 @@ namespace umbriel {
+         m_stripDeferred = sample.state == StripSample::State::Deferred;
+         if (sample.color.has_value()) {
+           m_averageColor = sample.color;
++        } else if (sample.state == StripSample::State::Empty) {
++          // A readable edge with no colour in it (transparent, or a strip with no area): the palette shows, as it does
++          // for the mirrored mode. An unreadable buffer keeps the last colour instead, since its content is unknown.
++          m_averageColor.reset();
+         }
+       }
+       shown = m_averageColor.has_value() ? averageBufferFor(*m_averageColor) : nullptr;
+diff --git a/src/scene/ssd_frame.h b/src/scene/ssd_frame.h
+index 63f3ce88..dd75c738 100644
+--- a/src/scene/ssd_frame.h
++++ b/src/scene/ssd_frame.h
+@@ -67,9 +67,12 @@ namespace umbriel {
+     void updateColors();
+     void updateAdaptive(bool fromCommit);
+     void hideAdaptive();
+-    // What one attempt at the mean colour produced: a value, a reason to try again later, or a refusal.
++    // What one attempt at the mean colour produced: a value, a reason to try again later, a refusal, or a readable
++    // edge with nothing to average.
+     struct StripSample {
+-      enum class State : uint8_t { Fresh, Deferred, Refused };
++      // `Empty` means the strip was read and holds no colour (a transparent edge), so the palette is the honest
++      // answer; `Refused` means it could not be read (protected or external-only), so the last colour still stands.
++      enum class State : uint8_t { Fresh, Deferred, Refused, Empty };
+       State state = State::Refused;
+       std::optional<std::array<float, 4>> color;
+     };
+diff --git a/src/scene/ssd_frame_geometry.cpp b/src/scene/ssd_frame_geometry.cpp
+index aa9ef079..1a314dec 100644
+--- a/src/scene/ssd_frame_geometry.cpp
++++ b/src/scene/ssd_frame_geometry.cpp
+@@ -157,8 +157,8 @@ namespace umbriel {
+   }
+ 
+   wlr_fbox titleBarStripSourceBox(
+-      const wlr_fbox& source, int bufferWidth, int bufferHeight, int surfaceWidth, int surfaceHeight,
+-      uint32_t transform, int logicalHeight
++      const wlr_fbox& source, int bufferWidth, int bufferHeight, const wlr_box& geometry, int surfaceWidth,
++      int surfaceHeight, uint32_t transform, int logicalHeight
+   ) {
+     const auto rotation = static_cast<wl_output_transform>(transform & 3U);
+     const bool quarterTurn = rotation == WL_OUTPUT_TRANSFORM_90 || rotation == WL_OUTPUT_TRANSFORM_270;
+@@ -173,14 +173,27 @@ namespace umbriel {
+         || surfaceHeight <= 0) {
+       return {};
+     }
+-    // Where the visible buffer sits once upright; the surface's coordinates stretch over exactly this box.
++    // Upright first: the window geometry is in surface coordinates, and a quarter turn puts surface x on buffer y, so
++    // cropping the buffer box before the turn would take the offset off the wrong axis.
+     wlr_fbox visible = source;
+     if (rotation != WL_OUTPUT_TRANSFORM_NORMAL) {
+       wlr_fbox_transform(&visible, &source, rotation, bufferWidth, bufferHeight);
+     }
++    // The surface's coordinates stretch over exactly `visible`, so the geometry scales into it. A window geometry that
++    // is empty, or that misses the visible part, leaves the whole surface visible.
++    const double scaleX = visible.width / static_cast<double>(surfaceWidth);
++    const double scaleY = visible.height / static_cast<double>(surfaceHeight);
++    if (geometry.width > 0 && geometry.height > 0) {
++      const double left = std::max(visible.x, visible.x + geometry.x * scaleX);
++      const double top = std::max(visible.y, visible.y + geometry.y * scaleY);
++      const double right = std::min(visible.x + visible.width, visible.x + (geometry.x + geometry.width) * scaleX);
++      const double bottom = std::min(visible.y + visible.height, visible.y + (geometry.y + geometry.height) * scaleY);
++      if (right > left && bottom > top) {
++        visible = {left, top, right - left, bottom - top};
++      }
++    }
+     // Minimum last: a viewport can make the source shorter than a buffer pixel, which would invert clamp's bounds.
+-    const double scale = visible.height / static_cast<double>(surfaceHeight);
+-    const double thickness = std::min(visible.height, std::max(1.0, static_cast<double>(logicalHeight) * scale));
++    const double thickness = std::min(visible.height, std::max(1.0, static_cast<double>(logicalHeight) * scaleY));
+     const wlr_fbox strip{visible.x, visible.y, visible.width, thickness};
+     wlr_fbox inBuffer = strip;
+     if (rotation != WL_OUTPUT_TRANSFORM_NORMAL) {
+diff --git a/src/scene/ssd_frame_geometry.h b/src/scene/ssd_frame_geometry.h
+index a6f525b7..40dffb65 100644
+--- a/src/scene/ssd_frame_geometry.h
++++ b/src/scene/ssd_frame_geometry.h
+@@ -62,10 +62,11 @@ namespace umbriel {
+   inline constexpr int kTitleBarStripHeightMax = 4;
+   // The slice of a surface's buffer that appears as the top `logicalHeight` pixels of the window content.
+   // `source` is the visible part of the buffer in buffer coordinates, `bufferWidth`/`bufferHeight` its full size,
+-  // `surfaceWidth`/`surfaceHeight` the surface's own size in surface-local pixels, and `transform` its buffer
+-  // transform. A box with no area means the caller has no usable buffer.
++  // `geometry` the window geometry in surface-local coordinates (an empty box means the whole surface, and its
++  // margins stay out of the strip), `surfaceWidth`/`surfaceHeight` the surface's own size in surface-local pixels,
++  // and `transform` its buffer transform. A box with no area means the caller has no usable buffer.
+   wlr_fbox titleBarStripSourceBox(
+-      const wlr_fbox& source, int bufferWidth, int bufferHeight, int surfaceWidth, int surfaceHeight,
+-      uint32_t transform, int logicalHeight
++      const wlr_fbox& source, int bufferWidth, int bufferHeight, const wlr_box& geometry, int surfaceWidth,
++      int surfaceHeight, uint32_t transform, int logicalHeight
+   );
+ } // namespace umbriel
+diff --git a/tests/harness/checks/render/title_bar_adaptive.sh b/tests/harness/checks/render/title_bar_adaptive.sh
+index 095a3f33..eaf5b547 100755
+--- a/tests/harness/checks/render/title_bar_adaptive.sh
++++ b/tests/harness/checks/render/title_bar_adaptive.sh
+@@ -259,3 +259,12 @@ after=$(readbacks)
+ if (( after != before )); then
+   fail "a body-only commit read the strip back: $before -> $after"
+ fi
++
++# A transparent edge is a readable edge with no colour in it, so the palette comes back. A buffer that cannot be read
++# at all is the other case: it keeps the last colour the window gave. The two must not share a path.
++printf 't' >&4
++await_lines "$LOG2" repainted 4
++"$UMBRIEL" settle
++grim "$FRAME"
++expect "$magenta" 1000 "the palette colour under a transparent averaged edge"
++expect_none 'g > 0.4 && g < 0.6 && b > 0.4 && b < 0.6' "the averaged colour survived a transparent edge"
+diff --git a/tests/harness/clients/unmap_client.cpp b/tests/harness/clients/unmap_client.cpp
+index 24a5da12..591ef47a 100644
+--- a/tests/harness/clients/unmap_client.cpp
++++ b/tests/harness/clients/unmap_client.cpp
+@@ -29,7 +29,9 @@
+ // default the window keeps its own size.
+ // FULLSCREEN_ON_STDIN makes `f` request fullscreen and `u` request windowed state.
+ // REPAINT_ON_STDIN makes R/G/B request a frame callback, then commit a fresh red/green/blue buffer. `b` repaints the
+-// body only: the top band keeps its colour and only the rows below it are damaged.
++// body only: the top band keeps its colour and only the rows below it are damaged. `t` repaints the top band fully
++// transparent and leaves the body alone, so a check can tell a readable edge with no colour in it from one that could
++// not be read.
+ // FILL_COLOR=<ARGB> paints the buffer that colour (default 0xFF5577AA), so screenshots can tell windows apart.
+ // TOP_BAND_COLOR=<ARGB> with TOP_BAND_HEIGHT=<px> paints the top rows of the buffer in another colour, so a check can
+ // tell which edge of the content a compositor sampled. A repaint recolours the band too. TOP_BAND_SPLIT=<ARGB> paints
+@@ -134,6 +136,7 @@ namespace {
+     wl_callback* repaintFrame = nullptr;
+     uint32_t repaintColor = 0;
+     bool repaintBodyOnly = false;
++    bool repaintBandOnly = false;
+     bool closed = false;
+     bool redrawOnClose = false;
+     bool redrawOnceOnClose = false;
+@@ -180,6 +183,8 @@ namespace {
+     uint32_t topBandColor = 0;
+     uint32_t topBandSplit = 0;
+     int topBandHeight = 0;
++    // A transparent band is a colour of its own, so the band cannot be keyed off a non-zero colour.
++    bool topBandEnabled = false;
+     std::optional<uint32_t> resizeFillColor;
+     int configuredWidth = 0;
+     int configuredHeight = 0;
+@@ -329,7 +334,7 @@ namespace {
+       return buffer;
+     }
+     std::fill_n(static_cast<uint32_t*>(buffer.pixels), buffer.size / sizeof(uint32_t), state.fillColor);
+-    if (state.topBandColor != 0 && state.topBandHeight > 0) {
++    if (state.topBandEnabled && state.topBandHeight > 0) {
+       auto* pixels = static_cast<uint32_t*>(buffer.pixels);
+       const int band = std::min(state.topBandHeight, height);
+       for (int row = 0; row < band; ++row) {
+@@ -356,8 +361,12 @@ namespace {
+     wl_callback_destroy(callback);
+     state.repaintFrame = nullptr;
+     const bool bodyOnly = state.repaintBodyOnly;
++    const bool bandOnly = state.repaintBandOnly;
+     state.repaintBodyOnly = false;
+-    state.fillColor = state.repaintColor;
++    state.repaintBandOnly = false;
++    if (!bandOnly) {
++      state.fillColor = state.repaintColor;
++    }
+     if (!bodyOnly) {
+       state.topBandColor = state.repaintColor;
+     }
+@@ -963,6 +972,7 @@ int main(int argc, char** argv) {
+     const auto value = std::strtoul(band, &end, 0);
+     if (end != band) {
+       state.topBandColor = static_cast<uint32_t>(value);
++      state.topBandEnabled = true;
+     }
+   }
+   if (const char* split = std::getenv("TOP_BAND_SPLIT")) {
+@@ -1310,12 +1320,19 @@ int main(int argc, char** argv) {
+         if (read(STDIN_FILENO, &command, 1) > 0) {
+           if (repaintOnStdin
+               && state.mapped
+-              && (command == 'R' || command == 'G' || command == 'B' || command == 'b')) {
++              && (command == 'R' || command == 'G' || command == 'B' || command == 'b' || command == 't')) {
+             state.repaintColor = command == 'R' ? 0xFFFF0000
+                 : command == 'G'                ? 0xFF00FF00
+                 : command == 'B'                ? 0xFF0000FF
++                : command == 't'                ? 0x00000000
+                                                 : 0xFFFF8000;
+             state.repaintBodyOnly = command == 'b';
++            if (command == 't') {
++              state.repaintBandOnly = true;
++              state.topBandEnabled = true;
++              // A split band would repaint half of it in its second colour, so the whole band has to go clear.
++              state.topBandSplit = 0;
++            }
+             if (state.repaintFrame == nullptr) {
+               state.repaintFrame = wl_surface_frame(state.surface);
+               wl_callback_add_listener(state.repaintFrame, &kRepaintListener, &state);
+diff --git a/tests/unit/ssd_frame_geometry.cpp b/tests/unit/ssd_frame_geometry.cpp
+index ba734e57..a243b9fb 100644
+--- a/tests/unit/ssd_frame_geometry.cpp
++++ b/tests/unit/ssd_frame_geometry.cpp
+@@ -291,26 +291,26 @@ UMBRIEL_TEST(stripSourceBoxTakesTheVisibleTopEdge) {
+   const wlr_fbox full{0.0, 0.0, 400.0, 300.0};
+   // No rotation: the buffer's own top rows. A half turn shows the bottom rows instead; a quarter turn shows a
+   // vertical band, which is the buffer's left edge at 90 and its right edge at 270.
+-  const wlr_fbox none = titleBarStripSourceBox(full, 400, 300, 400, 300, WL_OUTPUT_TRANSFORM_NORMAL, 5);
++  const wlr_fbox none = titleBarStripSourceBox(full, 400, 300, {}, 400, 300, WL_OUTPUT_TRANSFORM_NORMAL, 5);
+   CHECK_EQ(none.x, 0.0);
+   CHECK_EQ(none.y, 0.0);
+   CHECK_EQ(none.width, 400.0);
+   CHECK_EQ(none.height, 5.0);
+   // The thinnest sample is one logical row: the bar shows a single flat colour.
+-  const wlr_fbox single = titleBarStripSourceBox(full, 400, 300, 400, 300, WL_OUTPUT_TRANSFORM_NORMAL, 1);
++  const wlr_fbox single = titleBarStripSourceBox(full, 400, 300, {}, 400, 300, WL_OUTPUT_TRANSFORM_NORMAL, 1);
+   CHECK_EQ(single.height, 1.0);
+   CHECK_EQ(single.width, 400.0);
+-  const wlr_fbox half = titleBarStripSourceBox(full, 400, 300, 400, 300, WL_OUTPUT_TRANSFORM_180, 5);
++  const wlr_fbox half = titleBarStripSourceBox(full, 400, 300, {}, 400, 300, WL_OUTPUT_TRANSFORM_180, 5);
+   CHECK_EQ(half.x, 0.0);
+   CHECK_EQ(half.y, 295.0);
+   CHECK_EQ(half.width, 400.0);
+   CHECK_EQ(half.height, 5.0);
+-  const wlr_fbox left = titleBarStripSourceBox(full, 400, 300, 300, 400, WL_OUTPUT_TRANSFORM_90, 5);
++  const wlr_fbox left = titleBarStripSourceBox(full, 400, 300, {}, 300, 400, WL_OUTPUT_TRANSFORM_90, 5);
+   CHECK_EQ(left.x, 0.0);
+   CHECK_EQ(left.y, 0.0);
+   CHECK_EQ(left.width, 5.0);
+   CHECK_EQ(left.height, 300.0);
+-  const wlr_fbox right = titleBarStripSourceBox(full, 400, 300, 300, 400, WL_OUTPUT_TRANSFORM_270, 5);
++  const wlr_fbox right = titleBarStripSourceBox(full, 400, 300, {}, 300, 400, WL_OUTPUT_TRANSFORM_270, 5);
+   CHECK_EQ(right.x, 395.0);
+   CHECK_EQ(right.y, 0.0);
+   CHECK_EQ(right.width, 5.0);
+@@ -320,7 +320,7 @@ UMBRIEL_TEST(stripSourceBoxTakesTheVisibleTopEdge) {
+ UMBRIEL_TEST(stripSourceBoxFollowsTheVisibleCrop) {
+   // A cropped window shows the middle of its buffer, so the strip starts where the visible part does.
+   const wlr_fbox crop =
+-      titleBarStripSourceBox({100.0, 120.0, 800.0, 400.0}, 1000, 800, 800, 400, WL_OUTPUT_TRANSFORM_NORMAL, 5);
++      titleBarStripSourceBox({100.0, 120.0, 800.0, 400.0}, 1000, 800, {}, 800, 400, WL_OUTPUT_TRANSFORM_NORMAL, 5);
+   CHECK_EQ(crop.x, 100.0);
+   CHECK_EQ(crop.y, 120.0);
+   CHECK_EQ(crop.width, 800.0);
+@@ -330,30 +330,84 @@ UMBRIEL_TEST(stripSourceBoxFollowsTheVisibleCrop) {
+ UMBRIEL_TEST(stripSourceBoxScalesWithTheBuffer) {
+   // A surface rendered at an output scale keeps 5 logical pixels as a longer run of buffer pixels.
+   const wlr_fbox scaled =
+-      titleBarStripSourceBox({0.0, 0.0, 800.0, 600.0}, 800, 600, 400, 300, WL_OUTPUT_TRANSFORM_NORMAL, 5);
++      titleBarStripSourceBox({0.0, 0.0, 800.0, 600.0}, 800, 600, {}, 400, 300, WL_OUTPUT_TRANSFORM_NORMAL, 5);
+   CHECK_EQ(scaled.height, 10.0);
+   CHECK_EQ(scaled.width, 800.0);
+   // A window shorter than the strip still yields a real box.
+-  const wlr_fbox tiny = titleBarStripSourceBox({0.0, 0.0, 40.0, 3.0}, 40, 3, 40, 3, WL_OUTPUT_TRANSFORM_NORMAL, 5);
++  const wlr_fbox tiny = titleBarStripSourceBox({0.0, 0.0, 40.0, 3.0}, 40, 3, {}, 40, 3, WL_OUTPUT_TRANSFORM_NORMAL, 5);
+   CHECK_EQ(tiny.height, 3.0);
+   // Nothing usable: the caller's own buffer box comes back untouched.
+-  const wlr_fbox empty = titleBarStripSourceBox({0.0, 0.0, 0.0, 0.0}, 0, 0, 0, 0, WL_OUTPUT_TRANSFORM_NORMAL, 5);
++  const wlr_fbox empty = titleBarStripSourceBox({0.0, 0.0, 0.0, 0.0}, 0, 0, {}, 0, 0, WL_OUTPUT_TRANSFORM_NORMAL, 5);
+   CHECK_EQ(empty.width, 0.0);
+ }
+ 
+ UMBRIEL_TEST(stripSourceBoxKeepsASubPixelEdgeInsideTheBuffer) {
+   // A viewport can map less than one buffer pixel onto the surface; the strip must stay inside the buffer.
+-  const wlr_fbox halfTurn = titleBarStripSourceBox({0.0, 0.0, 100.0, 0.5}, 100, 10, 100, 1, WL_OUTPUT_TRANSFORM_180, 5);
++  const wlr_fbox halfTurn =
++      titleBarStripSourceBox({0.0, 0.0, 100.0, 0.5}, 100, 10, {}, 100, 1, WL_OUTPUT_TRANSFORM_180, 5);
+   CHECK_EQ(halfTurn.x, 0.0);
+   CHECK_EQ(halfTurn.y, 0.0);
+   CHECK_EQ(halfTurn.width, 100.0);
+   CHECK_EQ(halfTurn.height, 0.5);
+   const wlr_fbox quarterTurn =
+-      titleBarStripSourceBox({0.0, 0.0, 100.0, 0.5}, 100, 10, 10, 100, WL_OUTPUT_TRANSFORM_90, 5);
++      titleBarStripSourceBox({0.0, 0.0, 100.0, 0.5}, 100, 10, {}, 10, 100, WL_OUTPUT_TRANSFORM_90, 5);
+   CHECK_EQ(quarterTurn.x, 0.0);
+   CHECK_EQ(quarterTurn.y, 0.0);
+   CHECK_EQ(quarterTurn.width, 5.0);
+   CHECK_EQ(quarterTurn.height, 0.5);
+ }
+ 
++UMBRIEL_TEST(stripSourceBoxCropsTheWindowGeometryUpright) {
++  // A client-drawn window reports a geometry smaller than its surface: the transparent shadow margin around it stays
++  // out of the strip. Asserted upright, because the buffer axis that carries the surface's top edge depends on the
++  // transform, and cropping before the turn would take the offset off the wrong one.
++  const wlr_fbox full{0.0, 0.0, 400.0, 300.0};
++  const auto uprightOf = [](const wlr_fbox& box, wl_output_transform transform, int bufferWidth, int bufferHeight) {
++    wlr_fbox upright = box;
++    if (transform != WL_OUTPUT_TRANSFORM_NORMAL) {
++      wlr_fbox_transform(&upright, &box, transform, bufferWidth, bufferHeight);
++    }
++    return upright;
++  };
++
++  const wlr_fbox straight =
++      titleBarStripSourceBox(full, 400, 300, {10, 20, 380, 260}, 400, 300, WL_OUTPUT_TRANSFORM_NORMAL, 5);
++  CHECK_EQ(straight.x, 10.0);
++  CHECK_EQ(straight.y, 20.0);
++  CHECK_EQ(straight.width, 380.0);
++  CHECK_EQ(straight.height, 5.0);
++
++  for (const wl_output_transform transform :
++       {WL_OUTPUT_TRANSFORM_90, WL_OUTPUT_TRANSFORM_180, WL_OUTPUT_TRANSFORM_270}) {
++    const bool quarterTurn = transform == WL_OUTPUT_TRANSFORM_90 || transform == WL_OUTPUT_TRANSFORM_270;
++    const int surfaceWidth = quarterTurn ? 300 : 400;
++    const int surfaceHeight = quarterTurn ? 400 : 300;
++    const wlr_box geometry = quarterTurn ? wlr_box{10, 20, 280, 380} : wlr_box{10, 20, 380, 260};
++    const wlr_fbox strip = titleBarStripSourceBox(full, 400, 300, geometry, surfaceWidth, surfaceHeight, transform, 5);
++    const wlr_fbox upright = uprightOf(strip, transform, 400, 300);
++    CHECK_NEAR(upright.x, 10.0, 0.001);
++    CHECK_NEAR(upright.y, 20.0, 0.001);
++    CHECK_NEAR(upright.width, static_cast<double>(geometry.width), 0.001);
++    CHECK_NEAR(upright.height, 5.0, 0.001);
++  }
++
++  // At an output scale the shadow margin and the strip are both in surface pixels, so both double in the buffer.
++  const wlr_fbox scaled = titleBarStripSourceBox(
++      {0.0, 0.0, 800.0, 600.0}, 800, 600, {10, 20, 280, 380}, 300, 400, WL_OUTPUT_TRANSFORM_90, 5
++  );
++  const wlr_fbox scaledUpright = uprightOf(scaled, WL_OUTPUT_TRANSFORM_90, 800, 600);
++  CHECK_NEAR(scaledUpright.x, 20.0, 0.001);
++  CHECK_NEAR(scaledUpright.y, 40.0, 0.001);
++  CHECK_NEAR(scaledUpright.width, 560.0, 0.001);
++  CHECK_NEAR(scaledUpright.height, 10.0, 0.001);
++
++  // A geometry that misses the visible part leaves the whole surface visible, as an unset one does.
++  const wlr_fbox outside =
++      titleBarStripSourceBox(full, 400, 300, {-40, -60, 10, 10}, 400, 300, WL_OUTPUT_TRANSFORM_NORMAL, 5);
++  CHECK_EQ(outside.x, 0.0);
++  CHECK_EQ(outside.y, 0.0);
++  CHECK_EQ(outside.width, 400.0);
++  CHECK_EQ(outside.height, 5.0);
++}
++
+ int main() { return RUN_TESTS(); }
+-- 
+2.56.0.341.gebdc087dc9
+
+
+From 3828fe52b7c712c93c44de2034a136765b2d4a17 Mon Sep 17 00:00:00 2001
+From: ZhangDM-520 <jixianqiang1540@gmail.com>
+Date: Sun, 8 Nov 2026 01:26:10 +0800
+Subject: [PATCH 11/13] fix(title_bar): keep the flip bit when locating the
+ strip
+
+`titleBarStripSourceBox` masked the transform to `& 3U`, which drops the
+flip bit. That was harmless while the crop was a whole-buffer box, but the
+window-geometry crop now depends on which buffer pixels the surface's
+top-left corner maps to: with `FLIPPED_90` and an off-centre geometry the
+strip came from the mirror image of the visible edge.
+
+The flip bit decides where the geometry lands, while only a quarter turn
+swaps the buffer's dimensions, so the two transform calls now take the full
+transform (`invert`ed on the way back) and the dimension swap keeps using
+the masked rotation, as `umbrielfx/types/scene/surface.c` does.
+
+The unit case loops over all eight transforms with an off-centre geometry:
+without this, the crop lands at x 190/290 instead of 10.
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+---
+ src/scene/ssd_frame_geometry.cpp  | 11 +++++++----
+ tests/unit/ssd_frame_geometry.cpp | 10 +++++++---
+ 2 files changed, 14 insertions(+), 7 deletions(-)
+
+diff --git a/src/scene/ssd_frame_geometry.cpp b/src/scene/ssd_frame_geometry.cpp
+index 1a314dec..66f45143 100644
+--- a/src/scene/ssd_frame_geometry.cpp
++++ b/src/scene/ssd_frame_geometry.cpp
+@@ -160,6 +160,9 @@ namespace umbriel {
+       const wlr_fbox& source, int bufferWidth, int bufferHeight, const wlr_box& geometry, int surfaceWidth,
+       int surfaceHeight, uint32_t transform, int logicalHeight
+   ) {
++    // The whole transform, flip bit included: a flip moves which buffer pixels the geometry maps to, while only a
++    // quarter turn swaps the buffer's dimensions.
++    const auto full = static_cast<wl_output_transform>(transform);
+     const auto rotation = static_cast<wl_output_transform>(transform & 3U);
+     const bool quarterTurn = rotation == WL_OUTPUT_TRANSFORM_90 || rotation == WL_OUTPUT_TRANSFORM_270;
+     // The whole buffer as it shows upright on screen: a quarter turn swaps its dimensions.
+@@ -176,8 +179,8 @@ namespace umbriel {
+     // Upright first: the window geometry is in surface coordinates, and a quarter turn puts surface x on buffer y, so
+     // cropping the buffer box before the turn would take the offset off the wrong axis.
+     wlr_fbox visible = source;
+-    if (rotation != WL_OUTPUT_TRANSFORM_NORMAL) {
+-      wlr_fbox_transform(&visible, &source, rotation, bufferWidth, bufferHeight);
++    if (full != WL_OUTPUT_TRANSFORM_NORMAL) {
++      wlr_fbox_transform(&visible, &source, full, bufferWidth, bufferHeight);
+     }
+     // The surface's coordinates stretch over exactly `visible`, so the geometry scales into it. A window geometry that
+     // is empty, or that misses the visible part, leaves the whole surface visible.
+@@ -196,8 +199,8 @@ namespace umbriel {
+     const double thickness = std::min(visible.height, std::max(1.0, static_cast<double>(logicalHeight) * scaleY));
+     const wlr_fbox strip{visible.x, visible.y, visible.width, thickness};
+     wlr_fbox inBuffer = strip;
+-    if (rotation != WL_OUTPUT_TRANSFORM_NORMAL) {
+-      wlr_fbox_transform(&inBuffer, &strip, wlr_output_transform_invert(rotation), uprightWidth, uprightHeight);
++    if (full != WL_OUTPUT_TRANSFORM_NORMAL) {
++      wlr_fbox_transform(&inBuffer, &strip, wlr_output_transform_invert(full), uprightWidth, uprightHeight);
+     }
+     // Keep the box inside the buffer: the scene refuses a negative origin, and overshoot samples outside it.
+     const double right = std::min(inBuffer.x + inBuffer.width, static_cast<double>(bufferWidth));
+diff --git a/tests/unit/ssd_frame_geometry.cpp b/tests/unit/ssd_frame_geometry.cpp
+index a243b9fb..5b5137ac 100644
+--- a/tests/unit/ssd_frame_geometry.cpp
++++ b/tests/unit/ssd_frame_geometry.cpp
+@@ -377,12 +377,16 @@ UMBRIEL_TEST(stripSourceBoxCropsTheWindowGeometryUpright) {
+   CHECK_EQ(straight.width, 380.0);
+   CHECK_EQ(straight.height, 5.0);
+ 
++  // Every transform, flips included, and an off-centre geometry: a crop mirrored about the buffer centre would pass a
++  // symmetric one, and a dropped flip bit only shows up once the offset is off-centre.
+   for (const wl_output_transform transform :
+-       {WL_OUTPUT_TRANSFORM_90, WL_OUTPUT_TRANSFORM_180, WL_OUTPUT_TRANSFORM_270}) {
+-    const bool quarterTurn = transform == WL_OUTPUT_TRANSFORM_90 || transform == WL_OUTPUT_TRANSFORM_270;
++       {WL_OUTPUT_TRANSFORM_90, WL_OUTPUT_TRANSFORM_180, WL_OUTPUT_TRANSFORM_270, WL_OUTPUT_TRANSFORM_FLIPPED,
++        WL_OUTPUT_TRANSFORM_FLIPPED_90, WL_OUTPUT_TRANSFORM_FLIPPED_180, WL_OUTPUT_TRANSFORM_FLIPPED_270}) {
++    const auto rotation = static_cast<wl_output_transform>(transform & 3U);
++    const bool quarterTurn = rotation == WL_OUTPUT_TRANSFORM_90 || rotation == WL_OUTPUT_TRANSFORM_270;
+     const int surfaceWidth = quarterTurn ? 300 : 400;
+     const int surfaceHeight = quarterTurn ? 400 : 300;
+-    const wlr_box geometry = quarterTurn ? wlr_box{10, 20, 280, 380} : wlr_box{10, 20, 380, 260};
++    const wlr_box geometry = quarterTurn ? wlr_box{10, 20, 100, 380} : wlr_box{10, 20, 100, 260};
+     const wlr_fbox strip = titleBarStripSourceBox(full, 400, 300, geometry, surfaceWidth, surfaceHeight, transform, 5);
+     const wlr_fbox upright = uprightOf(strip, transform, 400, 300);
+     CHECK_NEAR(upright.x, 10.0, 0.001);
+-- 
+2.56.0.341.gebdc087dc9
+
+
+From c9fda3a18c34f7a8234504bed37406d7d9b6784f Mon Sep 17 00:00:00 2001
+From: ZhangDM-520 <jixianqiang1540@gmail.com>
+Date: Sun, 8 Nov 2026 01:35:47 +0800
+Subject: [PATCH 12/13] fix(title_bar): keep the mean alive for the close
+ snapshot
+
+An average bar's 1x1 mean buffer was stored with only its creation
+reference. Once the scene uploads it, the scene drops its own lock, the
+release clears `scene_buffer->buffer`, and `snapshot()` then copies nothing:
+the close animation and the overview close card faded the palette instead of
+the window's mean. A rebuilt renderer would also come back to a node with no
+buffer to upload. The frame now holds a consumer lock on the mean, like
+`holdLabelBuffer` and the icon buffers do, and releases it on replacement and
+teardown.
+
+Pinned by closing in average mode and sampling a quarter of the fade in: the
+frame shows the blue mean at 0.75, not the palette's magenta at 0.75. Without
+the lock the phase finds no mean at all.
+
+Also fixes the single-pixel guard in `umbrielfx_scene_buffer_ignore_client_lock`:
+it tested the wrapper, whose impl is the client-buffer one, so the test could
+never fire. It now tests `client->source` with the same NULL guard as
+`scene_surface_set_buffer()`; without the guard a wrapper that carries no
+source crashes the compositor on a config reload.
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+---
+ src/scene/ssd_frame.cpp                       | 14 ++++++++-----
+ .../checks/render/title_bar_adaptive.sh       | 20 +++++++++++++++++++
+ umbrielfx/types/scene/surface.c               |  5 ++++-
+ 3 files changed, 33 insertions(+), 6 deletions(-)
+
+diff --git a/src/scene/ssd_frame.cpp b/src/scene/ssd_frame.cpp
+index b5d45201..51ee6144 100644
+--- a/src/scene/ssd_frame.cpp
++++ b/src/scene/ssd_frame.cpp
+@@ -70,7 +70,7 @@ namespace umbriel {
+     wlr_scene_node_destroy(&m_gripTree->node);
+     wlr_scene_node_destroy(&m_tree->node);
+     if (m_averageBuffer != nullptr) {
+-      wlr_buffer_drop(m_averageBuffer);
++      wlr_buffer_unlock(m_averageBuffer);
+       m_averageBuffer = nullptr;
+     }
+     for (wlr_buffer* buffer : {m_labelBuffer, m_shadowBuffer}) {
+@@ -325,14 +325,18 @@ namespace umbriel {
+     cairo_set_source_rgba(cr, color[0], color[1], color[2], color[3]);
+     cairo_paint(cr);
+     cairo_destroy(cr);
+-    wlr_buffer* buffer = createCairoBuffer(surface);
+-    if (buffer == nullptr) {
++    wlr_buffer* created = createCairoBuffer(surface);
++    if (created == nullptr) {
+       return nullptr;
+     }
++    // Hold the mean ourselves: once the scene has uploaded it, the scene drops its own lock, which would clear its
++    // buffer and leave `snapshot()` with nothing to copy and a rebuilt renderer with no buffer to upload again.
++    wlr_buffer* held = wlr_buffer_lock(created);
++    wlr_buffer_drop(created);
+     if (m_averageBuffer != nullptr) {
+-      wlr_buffer_drop(m_averageBuffer);
++      wlr_buffer_unlock(m_averageBuffer);
+     }
+-    m_averageBuffer = buffer;
++    m_averageBuffer = held;
+     m_averageBufferColor = color;
+     return m_averageBuffer;
+   }
+diff --git a/tests/harness/checks/render/title_bar_adaptive.sh b/tests/harness/checks/render/title_bar_adaptive.sh
+index eaf5b547..c2f463ec 100755
+--- a/tests/harness/checks/render/title_bar_adaptive.sh
++++ b/tests/harness/checks/render/title_bar_adaptive.sh
+@@ -268,3 +268,23 @@ await_lines "$LOG2" repainted 4
+ grim "$FRAME"
+ expect "$magenta" 1000 "the palette colour under a transparent averaged edge"
+ expect_none 'g > 0.4 && g < 0.6 && b > 0.4 && b < 0.6' "the averaged colour survived a transparent edge"
++
++# The mean has to outlive the scene's upload, which drops the scene's own lock once a texture exists: a bar that does
++# not hold its own would snapshot nothing and fade the palette instead of the mean. The repaint also proves the mean
++# comes back after a transparent edge dropped it.
++printf 'B' >&4
++await_lines "$LOG2" repainted 5
++"$UMBRIEL" settle
++window_id=$("$UMBRIEL" windows --json | jq -r '.[] | select(.title == "adaptive-bar") | .id')
++[[ -n $window_id && $window_id != null ]] || fail "the adaptive-bar window is gone before the average close animation"
++configure average "#00000000" closing
++"$UMBRIEL" settle
++"$UMBRIEL" clock-freeze > /dev/null
++"$UMBRIEL" msg window-close "$window_id" > /dev/null
++"$UMBRIEL" clock-advance 250 > /dev/null
++grim "$FRAME"
++# A quarter of a 1000 ms linear fade: the blue mean at 0.75, not the palette's magenta at 0.75.
++expect_in 'b > 0.6 && b < 0.9 && r < 0.15 && g < 0.15' "$BAR" 1000 "the mean in the average bar's close animation"
++expect_none_in 'r > 0.6 && b > 0.6' "$BAR" "the palette replaced the mean in the close animation"
++"$UMBRIEL" clock-advance 1000 > /dev/null
++"$UMBRIEL" settle
+diff --git a/umbrielfx/types/scene/surface.c b/umbrielfx/types/scene/surface.c
+index 8cf2a853..7226c2da 100644
+--- a/umbrielfx/types/scene/surface.c
++++ b/umbrielfx/types/scene/surface.c
+@@ -230,7 +230,10 @@ struct wlr_client_buffer* umbrielfx_scene_buffer_ignore_client_lock(struct wlr_b
+     return NULL;
+   }
+   struct wlr_client_buffer* client = wlr_client_buffer_get(buffer);
+-  if (client == NULL || wlr_single_pixel_buffer_v1_try_from_buffer(buffer) != NULL) {
++  // The wrapper's own impl is the client-buffer one; the single-pixel check needs the source the client committed,
++  // and a wrapper can carry none. Same shape as scene_surface_set_buffer() below.
++  if (client == NULL
++      || (client->source != NULL && wlr_single_pixel_buffer_v1_try_from_buffer(client->source) != NULL)) {
+     return NULL;
+   }
+   client_buffer_mark_next_can_damage(client);
+-- 
+2.56.0.341.gebdc087dc9
+
+
+From 0f03345d7db0e35b8403e58c17f9695d50a620fa Mon Sep 17 00:00:00 2001
+From: ZhangDM-520 <jixianqiang1540@gmail.com>
+Date: Sun, 8 Nov 2026 02:14:19 +0800
+Subject: [PATCH 13/13] fix(title_bar): clip the fill to the rounded frame
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The adaptive fill set its corner radii from `m_background->corners`, which is
+never assigned: the palette rect is rounded through
+`wlr_scene_rect_set_clipped_region(frameClip(...))`. A window with
+`corner_radius > 0` therefore got a square fill over its rounded top corners,
+and because the fill sits above the background, any frame whose border was
+raised after it — overview cards, close snapshots — painted the window's
+colour over the corner and the desktop.
+
+The fill now takes the same `frameClip` as the background (`corners` plus
+corner box) and the `reshaped` comparison tracks both, so a live radius change
+reaches an idle window. Snapshots carry the corner box as well, which they
+previously dropped.
+
+The new harness phase switches to a 12 px radius and reads the bar's first
+pixel: unclipped it is the fill; clipped it is the desktop. Falsified both
+ways.
+
+Docs, now that the third review round checked them against the code:
+
+- "anything the application draws along that edge appears in it too" is a
+  `"window"` claim; `"average"` reduces that detail to one colour.
+- A geometry or strip-height change reads the edge back once more, so the
+  readback paragraph says so.
+- The fill is opaque, so it covers the blurred backdrop in the bar; the blur
+  paragraph now says that.
+- The paragraph claimed both "keeps the last colour it gave" and "falls back
+  to the palette" for an unreadable window; only the first is true after the
+  first sample.
+
+Tests: the window-mode close phase now asserts the fill it always claimed to
+cover, two average predicates no longer accept the palette, and the z-order
+comment matches the tree (fill under the buttons).
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+---
+ docs/user/appearance.md                       |  4 +--
+ src/scene/ssd_frame.cpp                       | 10 +++++--
+ .../checks/render/title_bar_adaptive.sh       | 29 +++++++++++++++----
+ 3 files changed, 34 insertions(+), 9 deletions(-)
+
+diff --git a/docs/user/appearance.md b/docs/user/appearance.md
+index fbdc096e..6d41f2dc 100644
+--- a/docs/user/appearance.md
++++ b/docs/user/appearance.md
+@@ -178,9 +178,9 @@ The `close`, `maximize`, and `minimize` colors control button backgrounds. Each
+ 
+ `button_corner_radius` uses logical pixels, from `0` to `100`. Its default, `-1`, follows the window's `corner_radius`, including window rules. Use `0` for square buttons or a small positive value for rounded squares. The radius is capped at half the button size, producing circles at larger values. Buttons and symbols scale with the output and overview zoom, and update on reload. The maximize button is disabled for fixed-size windows. The minimize button shows only while the window can [minimize](layout.md#minimize), so tiled and pinned windows do not have one. `background` and `text` apply to the focused window; their `_unfocused` variants apply to other windows. Colors and title bar settings reload live.
+ 
+-`color_source = "window"` paints the bar with a thin strip of the window's own content instead of `background`, so the bar takes on the application's colour and follows it as the application repaints that edge. `color_source = "average"` paints the bar with that strip's mean colour instead, one uniform colour with none of the window's own detail, so a title bar, tab row or loading bar along that edge does not read as fragments of itself inside the bar. It costs a pixel readback each time the window repaints that edge, which finishes the frame before reading it, so leave it off for windows that repaint that edge every frame, such as video. `color_source_height` sets how many logical pixels that strip takes, from `1` to `4`; its default, `1`, samples the single top row and reads as one flat colour, while a larger value keeps more of the window's own detail. Because the bar is only ever the window's own pixels, anything the application draws along that edge — a toolbar, a tab row, a loading bar — appears in it too. A window whose top edge is transparent keeps the configured `background` there, because the bar colour stays painted underneath, and the values in `[colors.title_bar]` remain the fallback for applications that draw nothing. Unfocused windows keep their own colour, dimmed over `background_unfocused`. Because the bar can be any colour the application paints, the title and the button symbols carry a dark edge, so they stay readable on light and dark windows alike. A client-drawn window that reports its own geometry keeps the transparent shadows around it out of the colour, so the bar follows the visible window rather than its padding. `"window"` mirrors the window's own buffer instead of reading pixels back, so it adds one bar-sized rectangle per window and a copy of that strip each time the window commits. `"average"` does read that strip back, once for each commit that actually repaints it, which finishes the frame first; the resulting colour is a single pixel, so no further readback follows until that edge changes again. An explicit-sync window's strip is read only once its frame is reported ready, and a window that cannot be read — protected or external-only content — keeps the last colour it gave, or the palette if it never gave one. The average is taken in the window's own colour space and shown in it. A protected or external-only window cannot be read, and the bar falls back to the palette colour there, as it does while a window has not committed a buffer yet.
++`color_source = "window"` paints the bar with a thin strip of the window's own content instead of `background`, so the bar takes on the application's colour and follows it as the application repaints that edge. `color_source = "average"` paints the bar with that strip's mean colour instead, one uniform colour with none of the window's own detail, so a title bar, tab row or loading bar along that edge does not read as fragments of itself inside the bar. It costs a pixel readback each time the window repaints that edge, which finishes the frame before reading it, so leave it off for windows that repaint that edge every frame, such as video. `color_source_height` sets how many logical pixels that strip takes, from `1` to `4`; its default, `1`, samples the single top row and reads as one flat colour, while a larger value keeps more of the window's own detail. In `"window"` mode the bar is only ever the window's own pixels, so anything the application draws along that edge — a toolbar, a tab row, a loading bar — appears in it too; `"average"` reduces that detail to one colour and shows none of it. A window whose top edge is transparent keeps the configured `background` there, because the bar colour stays painted underneath, and the values in `[colors.title_bar]` remain the fallback for applications that draw nothing. Unfocused windows keep their own colour, dimmed over `background_unfocused`. Because the bar can be any colour the application paints, the title and the button symbols carry a dark edge, so they stay readable on light and dark windows alike. A client-drawn window that reports its own geometry keeps the transparent shadows around it out of the colour, so the bar follows the visible window rather than its padding. `"window"` mirrors the window's own buffer instead of reading pixels back, so it adds one bar-sized rectangle per window and a copy of that strip each time the window commits. `"average"` does read that strip back, once for each commit that actually repaints it, and once more when the bar's geometry or strip height changes, which finishes the frame first each time; the resulting colour is a single pixel, so no further readback follows until that edge changes again. An explicit-sync window's strip is read only once its frame is reported ready, and a window that cannot be read — protected or external-only content — keeps the last colour it gave, or the palette if it never gave one. The average is taken in the window's own colour space and shown in it. An adaptive fill is opaque, so no part of the blurred backdrop below it shows through the bar, however transparent `background` is.
+ 
+-The title bar follows its window's `blur`, `blur_optimized`, and `blur_ignore_alpha` rules, together with the global [blur settings](#blur). Give `background` and `background_unfocused` some transparency, such as `"#292933CC"`, to see the blurred backdrop. The alpha threshold applies to the title bar's own background color, independently of the application's content. Opaque title bar backgrounds remain opaque with blur enabled, including after leaving overview or switching focus between windows. No layer rule is needed. Dragging, overview previews, and close animations keep the blur with the window.
++The title bar follows its window's `blur`, `blur_optimized`, and `blur_ignore_alpha` rules, together with the global [blur settings](#blur). Give `background` and `background_unfocused` some transparency, such as `"#292933CC"`, to see the blurred backdrop. A `color_source` of `"window"` or `"average"` paints an opaque fill over it in the bar itself. The alpha threshold applies to the title bar's own background color, independently of the application's content. Opaque title bar backgrounds remain opaque with blur enabled, including after leaving overview or switching focus between windows. No layer rule is needed. Dragging, overview previews, and close animations keep the blur with the window.
+ 
+ Rounded windows keep a straight join between the title bar and transparent content, including the content's blur and overview preview. The outer frame retains its rounded corners; hiding the title bar restores rounding to the top of the content.
+ 
+diff --git a/src/scene/ssd_frame.cpp b/src/scene/ssd_frame.cpp
+index 51ee6144..d873761a 100644
+--- a/src/scene/ssd_frame.cpp
++++ b/src/scene/ssd_frame.cpp
+@@ -400,6 +400,9 @@ namespace umbriel {
+     const float opacity = m_alpha * (m_focused ? 1.0F : kAdaptiveUnfocusedOpacity);
+     const int barX = m_background->node.x;
+     const int barY = m_background->node.y;
++    // The fill is the bar's top edge, so it takes the same rounded corners as the palette it covers.
++    const clipped_region clip = frameClip(barX, barY);
++    const wlr_box clipBox = clip.inside ? clip.area : wlr_box{};
+     const bool stripMoved = !fboxEqual(m_adaptiveStrip, strip);
+     // A mode switch is not a commit, so it must force the work: otherwise an idle window keeps the stale colour.
+     const bool modeChanged = m_adaptiveMode != style.colorSource;
+@@ -439,7 +442,8 @@ namespace umbriel {
+         || m_adaptiveOpacity != opacity
+         || m_adaptive->node.x != barX
+         || m_adaptive->node.y != barY
+-        || !fx_corner_radii_eq(m_adaptive->corners, m_background->corners);
++        || !fx_corner_radii_eq(m_adaptive->corners, clip.corners)
++        || !wlr_box_equal(&m_adaptive->corner_box, &clipBox);
+     // A commit that leaves the top edge alone, and changes nothing about the bar, costs nothing.
+     if (!restrip && !reshaped) {
+       return;
+@@ -474,7 +478,8 @@ namespace umbriel {
+     wlr_scene_buffer_set_source_box(m_adaptive, sourceBox);
+     wlr_scene_buffer_set_transform(m_adaptive, transform);
+     wlr_scene_buffer_set_dest_size(m_adaptive, m_background->width, m_background->height);
+-    wlr_scene_buffer_set_corner_radii(m_adaptive, m_background->corners);
++    wlr_scene_buffer_set_corner_radii(m_adaptive, clip.corners);
++    wlr_scene_buffer_set_corner_box(m_adaptive, clip.inside ? &clip.area : nullptr);
+     // Unfocus dims the window's own colour over the palette's unfocused tone rather than dropping back to it.
+     wlr_scene_buffer_set_opacity(m_adaptive, opacity);
+     wlr_scene_node_set_position(&m_adaptive->node, barX, barY);
+@@ -844,6 +849,7 @@ namespace umbriel {
+         wlr_scene_buffer_set_transform(copy, m_adaptive->transform);
+         wlr_scene_buffer_set_dest_size(copy, m_adaptive->dst_width, m_adaptive->dst_height);
+         wlr_scene_buffer_set_corner_radii(copy, m_adaptive->corners);
++        wlr_scene_buffer_set_corner_box(copy, &m_adaptive->corner_box);
+         wlr_scene_buffer_set_opacity(copy, m_adaptive->opacity);
+         wlr_scene_buffer_copy_color(copy, m_adaptive);
+         wlr_scene_node_set_position(
+diff --git a/tests/harness/checks/render/title_bar_adaptive.sh b/tests/harness/checks/render/title_bar_adaptive.sh
+index c2f463ec..d63fd98a 100755
+--- a/tests/harness/checks/render/title_bar_adaptive.sh
++++ b/tests/harness/checks/render/title_bar_adaptive.sh
+@@ -21,7 +21,7 @@ fail() {
+ # $1 color_source, $2 title colour (default transparent), $3 "closing" to enable a fade-out the checks can
+ # sample, $4 "buttons" to paint the button backgrounds, $5 rows of the window's edge to sample.
+ configure() {
+-  local source=$1 text=${2:-"#00000000"} closing=${3:-} buttons=${4:-} rows=${5:-1}
++  local source=$1 text=${2:-"#00000000"} closing=${3:-} buttons=${4:-} rows=${5:-1} radius=${6:-0}
+   {
+     cat <<EOF
+ [general]
+@@ -50,7 +50,7 @@ EOF
+ [appearance]
+ border_width = 0
+ outer_border_width = 0
+-corner_radius = 0
++corner_radius = $radius
+ 
+ [appearance.title_bar]
+ mode = "forced"
+@@ -161,6 +161,21 @@ grim "$FRAME"
+ expect "$blue" 1000 "a bar following a repaint"
+ expect_none "$green" "the bar kept the previous window colour"
+ 
++# The fill is clipped to the frame's rounded corner, like the palette it covers: an unclipped fill squares that corner
++# off and paints the window's colour over the desktop. The window starts at 173,109, so (174,82) is the bar's first
++# pixel and lies outside a 12 px arc. The band is blue at this point, so the fill is blue and the desktop is black.
++configure window "" "" "" 1 12
++"$UMBRIEL" settle
++grim "$FRAME"
++read -r corner_r corner_g corner_b < <(pixel 174 82)
++if (( corner_r < 32 && corner_g < 32 && corner_b > 128 )); then
++  fail "the window-coloured fill squared off the rounded corner: $corner_r $corner_g $corner_b"
++fi
++configure window
++"$UMBRIEL" settle
++grim "$FRAME"
++expect "$blue" 1000 "the window-coloured bar after the radius returns to zero"
++
+ # The palette colour is still the fixed choice, and the switch works live.
+ configure fixed
+ "$UMBRIEL" settle
+@@ -180,7 +195,10 @@ expect_in 'r > 0.9 && g > 0.9 && b > 0.9' "$BAR_FULL" 40 "the title over the win
+ "$UMBRIEL" clock-advance 250 > /dev/null
+ grim "$FRAME"
+ expect_in 'r > 0.6 && g > 0.6 && b > 0.6' "$BAR_FULL" 40 "the title in the bar's close animation"
+-# The button backgrounds are painted under the fill in the live bar; the snapshot has to keep that order too.
++# The fill sits under the buttons in the live bar, so the snapshot has to keep that order: buttons over fill, and the
++# fill itself present rather than faded to the palette.
++expect_in 'b > 0.6 && b < 0.9 && r < 0.15 && g < 0.15' "$BAR_FULL" 1000 \
++  "the window-coloured fill in the bar's close animation"
+ expect_in 'r > 0.6 && g < 0.15 && b < 0.15' "$BAR_FULL" 40 "the button backgrounds in the bar's close animation"
+ "$UMBRIEL" clock-advance 1000 > /dev/null
+ "$UMBRIEL" settle
+@@ -231,7 +249,7 @@ configure average
+ grim "$FRAME"
+ read -r left_r left_g left_b < <(pixel 200 84)
+ read -r right_r right_g right_b < <(pixel 620 84)
+-if ! near "$left_g" "$right_g" || ! (( left_b > 200 && left_g < 40 )); then
++if ! near "$left_g" "$right_g" || ! (( left_b > 200 && left_g < 40 && left_r < 40 )); then
+   fail "an averaged bar was stale after switching live: left $left_r $left_g $left_b, right $right_r $right_g $right_b"
+ fi
+ 
+@@ -242,7 +260,8 @@ await_lines "$LOG2" repainted 2
+ grim "$FRAME"
+ read -r left_r left_g left_b < <(pixel 200 84)
+ read -r right_r right_g right_b < <(pixel 620 84)
+-if ! near "$left_r" "$right_r" || ! near "$left_b" "$right_b" || ! (( left_r > 100 && left_b > 100 && left_g < 40 )); then
++if ! near "$left_r" "$right_r" || ! near "$left_b" "$right_b" \
++   || ! (( left_r > 100 && left_r < 200 && left_b > 100 && left_b < 200 && left_g < 40 )); then
+   fail "an averaged bar did not follow a repaint: left $left_r $left_g $left_b, right $right_r $right_g $right_b"
+ fi
+ 
 -- 
 2.56.0.341.gebdc087dc9
 
