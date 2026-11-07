@@ -8,8 +8,8 @@ source "$startdir/../../../lib/pgo.sh"
 
 pkgname=umbriel-git
 _pkgname=umbriel
-pkgver=0.1.0.r1532.f5dd36b
-pkgrel=12
+pkgver=0.1.0.r1536.d171ccb
+pkgrel=14
 epoch=1
 pkgdesc='A Wayland compositor built on wlroots'
 arch=('x86_64' 'aarch64')
@@ -66,7 +66,7 @@ source=("${_pkgname}::git+${url}.git#branch=main"
         '0020-adaptive-title-bar.patch'
         '0021-minimize-animation.patch')
 sha256sums=('SKIP'
-            '1beb3b259b5d2b2226cf2c2749206158b17e6049799ae7bb3c662d87bb70b4d5'
+            '449debf1f218a332ed0973089ba534e191c797a5d9d8e789276d613c3fc4777e'
             '55b7e50a9b1ce7c2a4e47755e3ee0bb07773608750e8441b873bb0507a13a57e'
             '7c4de03d135dc74529c7cafc2a81ae659c1e9a917094aeafb248175c94db8400'
             '92514f4aa7244e524aa73bf392efff5675a7e32e715715d182bad5324ed70492'
@@ -94,14 +94,18 @@ prepare() {
   # Drag-release re-home waits for the deform settle (and the drag tree
   # demotes only when its last drag-presented view leaves). Upstream PR
   # noctalia-dev/umbriel#570; 0011-drag-deform-settle-crop.patch (sha256
-  # 1beb3b25…, seven commits b6d7542a/7ac93ec1/8a3c231d/01540344/c3f073c8/
-  # f86099e4/8c8ee795, re-cut 2026-11-07 from upstream main@6493e461 by
-  # cherry-pick; the cursor.cpp tab-group union keeps landTabGroup before
-  # closeReleaseRehomeWindow: the wait covers every reparent the release issues,
-  # and the disarm ends the release's say). The 2026-11-07 commits end a release
-  # wait when the workspace stops presenting the view (deactivation, gesture
-  # slideBegin), let a held window keep its drag presentation, and make a
-  # dragged window's transient children ride it.
+  # 449debf1…, ONE squashed patch — `git diff upstream/main..HEAD` at the merge
+  # 1e8f9d71, 13 files +1180/-9 — because the branch style is merge commits and
+  # the per-commit stream conflicts on intermediate hunks once main moves (the
+  # cursor.cpp tab-group region did). The union in resetMode keeps landTabGroup
+  # before closeReleaseRehomeWindow: the wait covers every reparent the release
+  # issues, and the disarm ends the release's say). The 2026-11-07
+  # commits end a release wait when the workspace stops presenting the view
+  # (deactivation, gesture slideBegin), let a held window keep its drag
+  # presentation, make a dragged window's transient children ride it, keep that
+  # ride's visibility ownership through the settle and a pinned landing, run
+  # attach's re-parent through setSceneParent, and land the wait before keyboard
+  # activation and workspace transfers travel.
   # (0002, PR #508's
   # windows_drag physics tuning, merged upstream e045d637 and retired; 0003,
   # PR #548's floating release settle, merged
