@@ -1,7 +1,7 @@
-From 4b6041245b9ef4cc2fdc85ef77140a1b42ec318a Mon Sep 17 00:00:00 2001
+From 3d739476c93bc602d3bc179f7fcc8c43d86e2c76 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Sat, 7 Nov 2026 20:43:27 +0800
-Subject: [PATCH 1/4] feat(animation): animate floating-window minimize and
+Subject: [PATCH 1/6] feat(animation): animate floating-window minimize and
  restore
 
 A minimized floating window used to disappear in one frame. It now fades and
@@ -95,10 +95,10 @@ index 29a8e7b9..46526635 100644
  
  A minimized window comes back when:
 diff --git a/src/config/config.h b/src/config/config.h
-index 36d2f71b..ba813f06 100644
+index f616ff17..2b6b6a26 100644
 --- a/src/config/config.h
 +++ b/src/config/config.h
-@@ -889,6 +889,20 @@ namespace umbriel {
+@@ -902,6 +902,20 @@ namespace umbriel {
          bool operator==(const Scratchpad&) const = default;
        } scratchpad;
  
@@ -266,10 +266,10 @@ index a0a1c9b1..bcd0bfb4 100644
 +
  } // namespace umbriel
 diff --git a/src/view/view.cpp b/src/view/view.cpp
-index 0410930d..dffcdcf0 100644
+index 05efa4c7..ef3a29a9 100644
 --- a/src/view/view.cpp
 +++ b/src/view/view.cpp
-@@ -660,7 +660,8 @@ namespace umbriel {
+@@ -661,7 +661,8 @@ namespace umbriel {
    }
  
    void View::setNodeEnabled(bool enabled) {
@@ -280,10 +280,10 @@ index 0410930d..dffcdcf0 100644
      m_decoration.setShadowEnabled(enabled);
      m_server->updateIdleInhibit();
 diff --git a/src/view/view.h b/src/view/view.h
-index d8209819..e65c8017 100644
+index ab322401..11aa7677 100644
 --- a/src/view/view.h
 +++ b/src/view/view.h
-@@ -448,6 +448,15 @@ namespace umbriel {
+@@ -450,6 +450,15 @@ namespace umbriel {
      void cancelPositionAnimation();
      void snapPosition(int x, int y);
      void animateFadeTo(float toAlpha, int durationMs, const AnimationCurve& curve);
@@ -299,7 +299,7 @@ index d8209819..e65c8017 100644
      const ViewPresentation& presentation() const { return m_presentation; }
      // Size/position to the full output and drop tile clips (exclusive zones do not apply).
      void applyFullscreenLayout(bool animate = false);
-@@ -1046,6 +1055,12 @@ namespace umbriel {
+@@ -1048,6 +1057,12 @@ namespace umbriel {
      // (1.0 = none) and a slide offset in logical pixels (0 = none).
      double m_openingScale = 1.0;
      int m_openingSlide = 0;
@@ -451,7 +451,7 @@ index 417f8b51..c85787c4 100644
          || m_outerBorderColorAnim.animating()
          || m_ruleOpacity.animating()
 diff --git a/src/view/view_state.cpp b/src/view/view_state.cpp
-index c171665e..01df1671 100644
+index d2d80278..48d10db2 100644
 --- a/src/view/view_state.cpp
 +++ b/src/view/view_state.cpp
 @@ -295,7 +295,20 @@ namespace umbriel {
@@ -644,7 +644,7 @@ index 00000000..5b50c363
 +
 +echo "minimize collapsed from $before_width to $hiding_width px and was gone at the end; reveal grew it back to $revealed_width px"
 diff --git a/tests/unit/config_load.cpp b/tests/unit/config_load.cpp
-index e79a656d..1e0e8159 100644
+index 11369899..ace27c8f 100644
 --- a/tests/unit/config_load.cpp
 +++ b/tests/unit/config_load.cpp
 @@ -1175,6 +1175,38 @@ UMBRIEL_TEST(overviewWorkspaceCurveLoadsAndFallsBackToItsSpring) {
@@ -742,10 +742,10 @@ index e6a374be..41eeb3f0 100644
 2.56.0.341.gebdc087dc9
 
 
-From 250cc18fbbb2800f067b0881f7c9ddf6d1633231 Mon Sep 17 00:00:00 2001
+From 225b2401859d4e8620c9c7ea2b47cd126cb1f3da Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Sat, 7 Nov 2026 21:15:28 +0800
-Subject: [PATCH 2/4] fix(animation): keep the minimize fade out of the
+Subject: [PATCH 2/6] fix(animation): keep the minimize fade out of the
  lifecycle shader
 
 Review fixes for the minimize animation:
@@ -799,10 +799,10 @@ index b789a892..3a93d98e 100644
  ### Scene processing
  
 diff --git a/src/view/view.h b/src/view/view.h
-index e65c8017..57ec7379 100644
+index 11aa7677..1e37cd1e 100644
 --- a/src/view/view.h
 +++ b/src/view/view.h
-@@ -455,8 +455,11 @@ namespace umbriel {
+@@ -457,8 +457,11 @@ namespace umbriel {
      void beginMinimizeReveal();
      // Land a conceal: disable the node and restore the resting presentation while it is off screen.
      void finishMinimizeConceal();
@@ -816,7 +816,7 @@ index e65c8017..57ec7379 100644
      const ViewPresentation& presentation() const { return m_presentation; }
      // Size/position to the full output and drop tile clips (exclusive zones do not apply).
      void applyFullscreenLayout(bool animate = false);
-@@ -1056,9 +1059,10 @@ namespace umbriel {
+@@ -1058,9 +1061,10 @@ namespace umbriel {
      double m_openingScale = 1.0;
      int m_openingSlide = 0;
      // A minimize conceal owns the fade and the presented box until it lands: the node stays enabled, animateTo refuses
@@ -974,7 +974,7 @@ index a28244f7..6347fdf7 100644
  
      const bool automatic = !placementSize
 diff --git a/src/view/view_state.cpp b/src/view/view_state.cpp
-index 01df1671..ee7b2751 100644
+index 48d10db2..f5992aa5 100644
 --- a/src/view/view_state.cpp
 +++ b/src/view/view_state.cpp
 @@ -104,6 +104,10 @@ namespace umbriel {
@@ -1012,7 +1012,7 @@ index 01df1671..ee7b2751 100644
      }
      if (m_foreign != nullptr) {
        wlr_foreign_toplevel_handle_v1_set_minimized(m_foreign, minimized);
-@@ -979,6 +990,10 @@ namespace umbriel {
+@@ -982,6 +993,10 @@ namespace umbriel {
  
    void View::setFullscreen(bool fullscreen, FullscreenExitLayout exitLayout) {
      assert(!attached());
@@ -1200,10 +1200,10 @@ index 5b50c363..aad6cce4 100755
 2.56.0.341.gebdc087dc9
 
 
-From e0785ad4e510a54cbd388db270b7d6da978a97ae Mon Sep 17 00:00:00 2001
+From 69747b4fc987fd8d27e3b25aefe62897818d12d8 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Sat, 7 Nov 2026 21:27:54 +0800
-Subject: [PATCH 3/4] fix(animation): keep a mid-conceal restore on its resting
+Subject: [PATCH 3/6] fix(animation): keep a mid-conceal restore on its resting
  box
 
 A conceal retargets the live node to its collapsed origin, so a restore
@@ -1325,10 +1325,10 @@ index bcd0bfb4..52f0acad 100644
  
  } // namespace umbriel
 diff --git a/src/view/view.cpp b/src/view/view.cpp
-index dffcdcf0..1c7b0bd9 100644
+index ef3a29a9..2cda0afd 100644
 --- a/src/view/view.cpp
 +++ b/src/view/view.cpp
-@@ -661,7 +661,7 @@ namespace umbriel {
+@@ -662,7 +662,7 @@ namespace umbriel {
  
    void View::setNodeEnabled(bool enabled) {
      // A minimize conceal keeps the node up until its fade lands, so the window can be seen leaving.
@@ -1338,10 +1338,10 @@ index dffcdcf0..1c7b0bd9 100644
      m_decoration.setShadowEnabled(enabled);
      m_server->updateIdleInhibit();
 diff --git a/src/view/view.h b/src/view/view.h
-index 57ec7379..fad93478 100644
+index 1e37cd1e..810fe363 100644
 --- a/src/view/view.h
 +++ b/src/view/view.h
-@@ -459,7 +459,9 @@ namespace umbriel {
+@@ -461,7 +461,9 @@ namespace umbriel {
      // unmap, or a re-placement (fullscreen, maximize, output or workspace move) that makes the hide meaningless.
      void abandonMinimizeTransition();
      // True while a minimize fade runs in either direction. Neither runs a lifecycle shader.
@@ -1352,7 +1352,7 @@ index 57ec7379..fad93478 100644
      const ViewPresentation& presentation() const { return m_presentation; }
      // Size/position to the full output and drop tile clips (exclusive zones do not apply).
      void applyFullscreenLayout(bool animate = false);
-@@ -1058,11 +1060,15 @@ namespace umbriel {
+@@ -1060,11 +1062,15 @@ namespace umbriel {
      // (1.0 = none) and a slide offset in logical pixels (0 = none).
      double m_openingScale = 1.0;
      int m_openingSlide = 0;
@@ -1632,10 +1632,10 @@ index 41eeb3f0..2f264d09 100644
 2.56.0.341.gebdc087dc9
 
 
-From 6555421be61aa603de182b80bce306cf55761d72 Mon Sep 17 00:00:00 2001
+From a701c0de0d0b9af26125dea322a5dbaa682f2a2d Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Sat, 7 Nov 2026 21:49:21 +0800
-Subject: [PATCH 4/4] fix(animation): refuse input on a fading window's
+Subject: [PATCH 4/6] fix(animation): refuse input on a fading window's
  decorated frame
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -1800,6 +1800,593 @@ index a5459c95..6b3f842f 100755
 +fi
 +
  echo "minimize collapsed from $before_width to $hiding_width px and was gone at the end; reveal grew it back to $revealed_width px"
+-- 
+2.56.0.341.gebdc087dc9
+
+
+From e48c557773403e128e0a203e198d369673a234bc Mon Sep 17 00:00:00 2001
+From: ZhangDM-520 <jixianqiang1540@gmail.com>
+Date: Sun, 8 Nov 2026 00:25:35 +0800
+Subject: [PATCH 5/6] feat(animation): anchor a minimize collapse on any
+ usable-area edge
+
+The anchor set was center, top_left and bottom_center; `top_left` pinned
+the window's own corner, which read as a different kind of anchor from the
+other two. It becomes a consistent set of five: `center` for the window's
+own centre, `left` and `right` for those edges of the usable area at its
+vertical middle, `top_center` and `bottom_center` for those edges at its
+horizontal middle.
+
+Also trims the comments this branch added to the ones that carry a reason.
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+---
+ docs/user/animation.md                        |  2 +-
+ src/config/config.h                           |  6 ++--
+ src/config/fields_animation.cpp               |  4 ++-
+ src/core/animation.h                          |  8 +++--
+ src/scene/effect_registry.h                   |  4 +--
+ src/server/focus.cpp                          |  6 ++--
+ src/view/presentation.cpp                     | 26 ++++++++------
+ src/view/presentation.h                       |  7 ++--
+ src/view/view.h                               | 16 ++++-----
+ src/view/view_animation.cpp                   | 36 +++++++++----------
+ src/view/view_floating.cpp                    |  2 +-
+ src/view/view_state.cpp                       | 10 +++---
+ .../checks/animation/floating_minimize.sh     | 26 ++++++--------
+ tests/unit/config_load.cpp                    |  7 ++--
+ tests/unit/presentation.cpp                   | 26 +++++++-------
+ 15 files changed, 92 insertions(+), 94 deletions(-)
+
+diff --git a/docs/user/animation.md b/docs/user/animation.md
+index 3aa48133..4c54fcf9 100644
+--- a/docs/user/animation.md
++++ b/docs/user/animation.md
+@@ -93,7 +93,7 @@ Each event other than `windows_drag` also accepts `enabled`, `duration_ms`, and
+ | `[animation.layers]`           | none                                                                | Layer-shell map and unmap                                  |
+ | `[animation.windows_drag]`     | `physics` (default `false`) plus the drag-physics tuning keys below | Drag physics                                               |
+ 
+-`windows_minimize` accepts `popin` or `fade`. `popin` scales the window to `scale` while it fades; `fade` leaves its geometry alone. `anchor` picks where a `popin` collapse goes: `"center"` keeps the window's own centre, `"top_left"` keeps its top-left corner still, and `"bottom_center"` rests the scaled window's bottom edge on the bottom of the output's usable area. The restore plays the same timeline in reverse, so a window grows back from exactly where it left. Animation time is spent on the live window: `minimized`, `visible`, focus handoff, and taskbars change at once, while the window is still leaving. A workspace switch or an overview reopening mid-fade can therefore still draw it for the rest of the timeline. A fading window takes no pointer input. Custom effects do not apply here, because a transition animates one of the fixed event slots and minimize has none of its own.
++`windows_minimize` accepts `popin` or `fade`. `popin` scales the window to `scale` while it fades; `fade` leaves its geometry alone. `anchor` picks where a `popin` collapse goes: `"center"` keeps the window's own centre, `"left"` and `"right"` put the scaled box on that edge of the output's usable area at its vertical middle, and `"top_center"` and `"bottom_center"` put it on that edge at its horizontal middle. The restore plays the same timeline in reverse, so a window grows back from exactly where it left. Animation time is spent on the live window: `minimized`, `visible`, focus handoff, and taskbars change at once, while the window is still leaving. A workspace switch or an overview reopening mid-fade can therefore still draw it for the rest of the timeline. A fading window takes no pointer input. Custom effects do not apply here, because a transition animates one of the fixed event slots and minimize has none of its own.
+ 
+ `windows_in` accepts `popin`, `zoom`, `slide`, `fade`, or `none`. `windows_out` accepts `fade`, `slide`, `popin`, or `zoom`. `workspaces` accepts `slide` or `reveal` (see [Workspace reveal](#workspace-reveal)). `scale` applies to `popin`: an opening window grows from it to full size, and a closing window shrinks toward it, while both fade.
+ 
+diff --git a/src/config/config.h b/src/config/config.h
+index 2b6b6a26..9ece95e8 100644
+--- a/src/config/config.h
++++ b/src/config/config.h
+@@ -902,10 +902,8 @@ namespace umbriel {
+         bool operator==(const Scratchpad&) const = default;
+       } scratchpad;
+ 
+-      // Hiding and showing a minimized floating window. Unlike a close, the window keeps its surface, box and stacking
+-      // slot, so the live view animates in place instead of a snapshot. `popin` shrinks the presented box toward
+-      // `anchor` while it fades; `fade` leaves the geometry alone. No effect key: minimize has no effect slot, so the
+-      // built-in style alone drives it.
++      // Hiding and showing a minimized floating window. The live view animates in place, because the window keeps its
++      // surface and box. No effect key: minimize has no effect slot.
+       struct WindowsMinimize {
+         bool enabled = true;
+         int durationMs = 250;
+diff --git a/src/config/fields_animation.cpp b/src/config/fields_animation.cpp
+index 3b7b576c..ba8c8be3 100644
+--- a/src/config/fields_animation.cpp
++++ b/src/config/fields_animation.cpp
+@@ -180,7 +180,9 @@ namespace umbriel {
+     const registry::Choices<MinimizeAnchor>& minimizeAnchors() {
+       static const registry::Choices<MinimizeAnchor> choices{
+           {.name = "center", .value = MinimizeAnchor::Center},
+-          {.name = "top_left", .value = MinimizeAnchor::TopLeft},
++          {.name = "left", .value = MinimizeAnchor::Left},
++          {.name = "right", .value = MinimizeAnchor::Right},
++          {.name = "top_center", .value = MinimizeAnchor::TopCenter},
+           {.name = "bottom_center", .value = MinimizeAnchor::BottomCenter},
+       };
+       return choices;
+diff --git a/src/core/animation.h b/src/core/animation.h
+index c3c98272..29bf676c 100644
+--- a/src/core/animation.h
++++ b/src/core/animation.h
+@@ -74,11 +74,13 @@ namespace umbriel {
+     bool operator==(const SpringConfig&) const = default;
+   };
+ 
+-  // Where a minimizing window collapses to: its own centre, its top-left corner, or the bottom centre of the output's
+-  // usable area. Spelled out in config as "center", "top_left", and "bottom_center".
++  // Where a minimizing window collapses to: its own centre, or an edge midpoint of the output's usable area.
++  // Spelled out in config as "center", "left", "right", "top_center", and "bottom_center".
+   enum class MinimizeAnchor : uint8_t {
+     Center,
+-    TopLeft,
++    Left,
++    Right,
++    TopCenter,
+     BottomCenter,
+   };
+ 
+diff --git a/src/scene/effect_registry.h b/src/scene/effect_registry.h
+index 3f87a9f7..de4136de 100644
+--- a/src/scene/effect_registry.h
++++ b/src/scene/effect_registry.h
+@@ -129,8 +129,8 @@ namespace umbriel {
+   void
+   bindAnimationEffect(wlr_scene_node* node, AnimationEvent event, const AnimatedValue& value, float direction = 0.0F);
+   void bindAnimationEffect(wlr_scene_node* node, AnimationEvent event, const AnimatedColor& value, float direction);
+-  // Unbind `event`'s slot on `node`. A transition with no effect slot of its own (minimize) uses this so a program a
+-  // previous event bound to the same node cannot run for it.
++  // Unbind `event`'s slot on `node`, so a program an earlier event bound cannot run for a transition that has no slot
++  // of its own (minimize).
+   void clearAnimationEffect(wlr_scene_node* node, AnimationEvent event);
+ 
+   // Seconds elapsed from `epochMsec` to `nowMsec`, computed in double precision so the result keeps
+diff --git a/src/server/focus.cpp b/src/server/focus.cpp
+index 4aaee2a5..29d8d9e5 100644
+--- a/src/server/focus.cpp
++++ b/src/server/focus.cpp
+@@ -470,8 +470,7 @@ namespace umbriel {
+         return std::nullopt;
+       }
+       auto* view = static_cast<View*>(tag);
+-      // A minimize conceal keeps the decorated frame enabled until its fade lands, but the window is already
+-      // minimized: its title bar and resize border take no pointer input on the way out.
++      // A concealing window is already minimized, so its fading frame takes no pointer input either.
+       if (!view->mapped()
+           || view->minimizeConcealing()
+           || (!view->pinned() && !view->onActiveWorkspace())
+@@ -538,8 +537,7 @@ namespace umbriel {
+       *surface = nullptr;
+       return nullptr;
+     }
+-    // A minimize conceal keeps the node enabled until its fade lands, but the window is already minimized: it takes no
+-    // pointer input on its way out, so a click cannot focus the window that is leaving.
++    // A concealing window is already minimized: a click must not focus the remnant and restore it.
+     if (view->minimizeConcealing()) {
+       *surface = nullptr;
+       return nullptr;
+diff --git a/src/view/presentation.cpp b/src/view/presentation.cpp
+index dabc6a3e..33d56218 100644
+--- a/src/view/presentation.cpp
++++ b/src/view/presentation.cpp
+@@ -186,21 +186,27 @@ namespace umbriel {
+     collapsed.width = std::max(1, static_cast<int>(std::lround(resting.width * factor)));
+     collapsed.height = std::max(1, static_cast<int>(std::lround(resting.height * factor)));
+     switch (anchor) {
+-    case MinimizeAnchor::TopLeft:
+-      // The resting top-left corner stays still, so the box shrinks into it.
+-      collapsed.x = resting.x;
+-      collapsed.y = resting.y;
+-      break;
+-    case MinimizeAnchor::BottomCenter:
+-      // The scaled box's bottom edge rests on the usable bottom, centred horizontally.
+-      collapsed.x = usable.x + (usable.width - collapsed.width) / 2;
+-      collapsed.y = usable.y + usable.height - collapsed.height;
+-      break;
+     case MinimizeAnchor::Center:
+       // The scaled box keeps the resting centre.
+       collapsed.x = resting.x + (resting.width - collapsed.width) / 2;
+       collapsed.y = resting.y + (resting.height - collapsed.height) / 2;
+       break;
++    case MinimizeAnchor::Left:
++      collapsed.x = usable.x;
++      collapsed.y = usable.y + (usable.height - collapsed.height) / 2;
++      break;
++    case MinimizeAnchor::Right:
++      collapsed.x = usable.x + usable.width - collapsed.width;
++      collapsed.y = usable.y + (usable.height - collapsed.height) / 2;
++      break;
++    case MinimizeAnchor::TopCenter:
++      collapsed.x = usable.x + (usable.width - collapsed.width) / 2;
++      collapsed.y = usable.y;
++      break;
++    case MinimizeAnchor::BottomCenter:
++      collapsed.x = usable.x + (usable.width - collapsed.width) / 2;
++      collapsed.y = usable.y + usable.height - collapsed.height;
++      break;
+     }
+     return collapsed;
+   }
+diff --git a/src/view/presentation.h b/src/view/presentation.h
+index 52f0acad..30656bf1 100644
+--- a/src/view/presentation.h
++++ b/src/view/presentation.h
+@@ -84,10 +84,9 @@ namespace umbriel {
+     bool m_fullscreenOpaque = true;
+   };
+ 
+-  // The box a minimizing window collapses to: `resting` scaled about its anchor. `center` keeps the resting centre,
+-  // `top_left` leaves the resting corner where it was, and `bottom_center` rests the scaled box's bottom edge on the
+-  // bottom of `usable`, centred horizontally. Never smaller than one pixel, so the presented box stays valid at every
+-  // scale.
++  // The box a minimizing window collapses to: `resting` scaled to `scale`, with `center` holding the resting centre
++  // and the other anchors putting that edge of the scaled box on the matching edge of `usable`. Never smaller than one
++  // pixel, so the presented box stays valid at every scale.
+   wlr_box minimizeCollapseBox(const wlr_box& resting, double scale, const wlr_box& usable, MinimizeAnchor anchor);
+ 
+ } // namespace umbriel
+diff --git a/src/view/view.h b/src/view/view.h
+index 810fe363..6eea29a3 100644
+--- a/src/view/view.h
++++ b/src/view/view.h
+@@ -450,19 +450,18 @@ namespace umbriel {
+     void cancelPositionAnimation();
+     void snapPosition(int x, int y);
+     void animateFadeTo(float toAlpha, int durationMs, const AnimationCurve& curve);
+-    // Hide the window for a minimize with `[animation.windows_minimize]`: fade and, for `popin`, collapse the presented
+-    // box toward the configured anchor. The node stays enabled until the fade lands, then finishes hidden. A reveal
+-    // plays the same timeline in reverse from the collapsed box.
++    // Fade the window out and, for `popin`, collapse it toward the configured anchor. The node stays enabled until the
++    // fade lands, so the window is seen leaving; the reveal plays the same timeline in reverse.
+     void beginMinimizeConceal();
+     void beginMinimizeReveal();
+     // Land a conceal: disable the node and restore the resting presentation while it is off screen.
+     void finishMinimizeConceal();
+-    // End a minimize transition early and put the window back at its resting box: a restore that will not animate, an
+-    // unmap, or a re-placement (fullscreen, maximize, output or workspace move) that makes the hide meaningless.
++    // End a transition early and put the window back at its resting box: a restore that will not animate, an unmap, or
++    // a re-placement that makes the hide meaningless.
+     void abandonMinimizeTransition();
+     // True while a minimize fade runs in either direction. Neither runs a lifecycle shader.
+     bool minimizeFadeActive() const { return m_minimizePhase != MinimizePhase::None; }
+-    // True only while the window is on its way out; the node has to stay enabled and the box belongs to the transition.
++    // True only while the window is on its way out: the node stays enabled and the box belongs to the transition.
+     bool minimizeConcealing() const { return m_minimizePhase == MinimizePhase::Concealing; }
+     const ViewPresentation& presentation() const { return m_presentation; }
+     // Size/position to the full output and drop tile clips (exclusive zones do not apply).
+@@ -1062,9 +1061,8 @@ namespace umbriel {
+     // (1.0 = none) and a slide offset in logical pixels (0 = none).
+     double m_openingScale = 1.0;
+     int m_openingSlide = 0;
+-    // One minimize transition at a time. A conceal owns the node, the fade and the presented box until it lands: the
+-    // node stays enabled, animateTo refuses layout retargets, and the fade binds no lifecycle shader (minimize has no
+-    // effect slot). The reveal is the same timeline in reverse, so it is equally not a lifecycle transition.
++    // One minimize transition at a time. A conceal owns the node, the fade and the presented box until it lands; the
++    // reveal is the same timeline in reverse, so neither is a lifecycle transition.
+     enum class MinimizePhase : uint8_t {
+       None,
+       Concealing,
+diff --git a/src/view/view_animation.cpp b/src/view/view_animation.cpp
+index de4c924f..3435f674 100644
+--- a/src/view/view_animation.cpp
++++ b/src/view/view_animation.cpp
+@@ -41,9 +41,8 @@ namespace umbriel {
+   }
+ 
+   bool View::fadeComposited() const {
+-    // A minimize fade is not a lifecycle transition: it has no effect slot, so it composites the plain alpha instead of
+-    // borrowing whatever the opening did. That must hold in both directions, or the reveal would fade the client
+-    // through the opening program while the border and title bar snapped to full opacity.
++    // A minimize fade has no effect slot, so it composites plain alpha in both directions: borrowing the opening
++    // program would fade the client through it while the border and title bar snapped to full opacity.
+     if (!m_fade.animating() || minimizeFadeActive()) {
+       return false;
+     }
+@@ -123,9 +122,8 @@ namespace umbriel {
+   }
+ 
+   void View::cancelFadeAnimation() {
+-    // An unmap or a fresh map abandons a minimize transition: nothing is left to fade out, and the next enable must be
+-    // free to act. A conceal left the node and the presented box collapsed, so they go back to the resting box rather
+-    // than waiting for a presentation that a re-map may never issue.
++    // An unmap or a fresh map abandons a minimize transition. A conceal left the node and box collapsed, and a re-map
++    // may never issue the presentation that would put them back.
+     if (minimizeConcealing()) {
+       abandonMinimizeTransition();
+     }
+@@ -751,15 +749,14 @@ namespace umbriel {
+ 
+   void View::finishMinimizeConceal() {
+     if (!m_minimized) {
+-      // A restore overtook the conceal without cancelling it. Nothing is being hidden any more, so the window goes back
+-      // to its resting box at full opacity instead of disappearing under a state that says it is visible.
++      // A restore overtook the conceal: nothing is being hidden, so the window goes back to its resting box instead of
++      // disappearing while it reports itself visible.
+       abandonMinimizeTransition();
+       return;
+     }
+     m_minimizePhase = MinimizePhase::None;
+     setNodeEnabled(false);
+-    // Everything below runs while the node is off screen, so the hide does not snap: the window returns to its resting
+-    // box and full opacity for its next reveal.
++    // Below runs off screen, so the window returns to its resting box and full opacity without a visible snap.
+     setPosition(m_minimizeResting.x, m_minimizeResting.y);
+     finishSizeAnimation();
+     m_fade.snap(1.0);
+@@ -770,22 +767,21 @@ namespace umbriel {
+     const auto& animation = config().animation;
+     const auto& minimize = animation.windowsMinimize;
+     const auto [width, height] = floatingSize();
+-    // A conceal in flight already retargeted the node to its collapsed origin, so the live target is not the resting
+-    // box any more; the box captured when the conceal started is.
++    // A conceal already retargeted the live box to its collapsed origin, so the resting box is the one it captured.
+     const bool reversing = minimizeConcealing();
+     const wlr_box captured = reversing && m_minimizeResting.width > 0
+         ? m_minimizeResting
+         : wlr_box{layoutTargetX(), layoutTargetY(), width, height};
+     m_minimizePhase = MinimizePhase::Revealing;
+     setNodeEnabled(true);
+-    // A reversal always has to retarget the box: a conceal that moved it did so under the style in force at the time,
+-    // so a config reload to `fade` mid-flight must not skip the tweens back to the resting box.
++    // A reversal always retargets the box: the conceal moved it, so a reload to `fade` mid-flight must not skip the
++    // tweens back.
+     const bool popin = captured.width > 0 && captured.height > 0 && (minimize.style == "popin" || reversing);
+     if (reversing) {
+-      // Reverse from wherever the conceal has drawn the window: snapping back to the collapsed box would jump.
++      // Reverse from where the window is drawn; snapping to the collapsed box would jump.
+       m_fade.snap(m_fadeAlpha);
+     } else {
+-      // Hidden at rest, so the reveal starts from the collapsed box and grows out of the same place it left.
++      // Hidden at rest: grow out of the box it left.
+       setFadeAlpha(0.0F);
+       m_fade.snap(0.0);
+       if (popin) {
+@@ -816,8 +812,8 @@ namespace umbriel {
+     if (!wasHiding) {
+       return;
+     }
+-    // The conceal moved the node and the presented box; put both back before whatever asked takes over. The node may
+-    // still be enabled here, so the restore has to go through the cancel path rather than leaving a stale tween behind.
++    // Put the node and the presented box back before the caller takes over, through the cancel path so no stale tween
++    // outlives it.
+     setPosition(m_minimizeResting.x, m_minimizeResting.y);
+     cancelSizeAnimation();
+   }
+@@ -842,7 +838,7 @@ namespace umbriel {
+   }
+ 
+   void View::animateTo(int x, int y) {
+-    // A conceal owns the node's position until its fade lands; a layout pass in between must not pull it back.
++    // A conceal owns the node's position until its fade lands.
+     if (minimizeConcealing()) {
+       return;
+     }
+@@ -908,7 +904,7 @@ namespace umbriel {
+       m_effects.detach();
+       return;
+     }
+-    // A minimize transition deforms its own box, so a `windows_move` preset must not warp the picture on top of it.
++    // A minimize transition deforms its own box, so no `windows_move` preset warps it on top.
+     if (minimizeFadeActive()) {
+       clearAnimationEffect(&target->node, AnimationEvent::WindowsMove);
+     } else if (m_posX.animating() || m_posY.animating() || m_presentation.animating()) {
+diff --git a/src/view/view_floating.cpp b/src/view/view_floating.cpp
+index 6347fdf7..3253326d 100644
+--- a/src/view/view_floating.cpp
++++ b/src/view/view_floating.cpp
+@@ -333,7 +333,7 @@ namespace umbriel {
+     if (attached()) {
+       return;
+     }
+-    // A new placement (output or workspace move, a changed usable area) supersedes a minimize collapse in flight.
++    // A new placement moots a minimize collapse in flight.
+     abandonMinimizeTransition();
+     const wlr_box usable = floatingUsableArea();
+ 
+diff --git a/src/view/view_state.cpp b/src/view/view_state.cpp
+index f5992aa5..68f3f0f0 100644
+--- a/src/view/view_state.cpp
++++ b/src/view/view_state.cpp
+@@ -105,7 +105,7 @@ namespace umbriel {
+ 
+   void View::setMaximized(bool maximized, bool animate) {
+     if (maximized) {
+-      // A maximize re-places the window in a state it has to be seen in, so a conceal in flight is dropped.
++      // A maximize re-places a window that has to be seen, so a conceal in flight is dropped.
+       abandonMinimizeTransition();
+     }
+     if (m_tiled && m_workspace != nullptr) {
+@@ -300,7 +300,7 @@ namespace umbriel {
+       m_minimizeSerial = ++gNextMinimizeSerial;
+     }
+     // A conceal animates the live window out before the node goes; a reveal grows it back from the same box. Both are
+-    // skipped where nothing is on screen to animate, leaving the plain hide/show below.
++    // skipped when there is nothing on screen to animate.
+     const auto& animation = config().animation;
+     const bool animateMinimize = animation.enabled
+         && animation.windowsMinimize.enabled
+@@ -315,8 +315,8 @@ namespace umbriel {
+     } else if (!minimized && animateMinimize) {
+       beginMinimizeReveal();
+     } else {
+-      // A transition already running has no better ending than this branch's: the window is not leaving, so put it back
+-      // at its resting box rather than letting a pending finish hide it after it was restored.
++      // A running transition has no better ending here: put the window back rather than let a pending finish hide it
++      // after it was restored.
+       abandonMinimizeTransition();
+       if (m_sceneTree != nullptr) {
+         setNodeEnabled(!minimized && m_mapped && m_onActiveWorkspace);
+@@ -994,7 +994,7 @@ namespace umbriel {
+   void View::setFullscreen(bool fullscreen, FullscreenExitLayout exitLayout) {
+     assert(!attached());
+     if (fullscreen) {
+-      // Fullscreen re-places the window and must be visible, so a conceal in flight is dropped.
++      // Fullscreen re-places a window that must be visible, so a conceal in flight is dropped.
+       abandonMinimizeTransition();
+     }
+     m_deferredUnfullscreen.clear();
+diff --git a/tests/harness/checks/animation/floating_minimize.sh b/tests/harness/checks/animation/floating_minimize.sh
+index 6b3f842f..a3e93cf7 100755
+--- a/tests/harness/checks/animation/floating_minimize.sh
++++ b/tests/harness/checks/animation/floating_minimize.sh
+@@ -122,8 +122,8 @@ if (( before_width < 300 || before_count < 100000 )); then
+   exit 1
+ fi
+ 
+-# A quarter of the way out the window is smaller but still on screen; the same instant of the reveal shows the mirrored
+-# box, which is the whole point of animating the live view instead of hiding it in one frame.
++# A quarter of the way out the window is smaller but still on screen, and the same instant of the reveal shows the
++# mirrored box.
+ "$UMBRIEL" msg window-minimize "$WINDOW" > /dev/null
+ "$UMBRIEL" clock-advance 500
+ grim "$HIDING"
+@@ -201,8 +201,8 @@ fi
+ expect_no_lifecycle_shader "$REVEALED" "revealed"
+ 
+ 
+-# `windows_in.style = "slide"` brightens a lifecycle fade with sqrt(). A minimize fade follows its own curve, so with
+-# the same 25 % instant the window must sit at the linear 0.75 alpha, not at 0.87.
++# `windows_in.style = "slide"` brightens a lifecycle fade with sqrt(); at the same 25 % instant the minimize fade must
++# sit at the linear 0.75 alpha, not 0.87.
+ sed -i 's/^effect = "minimize_anim_green"$//' "$UMBRIEL_CONFIG"
+ sed -i '/^\[animation\.windows_in\]$/,/^\[/ s/^curve = "linear"$/curve = "linear"\nstyle = "slide"/' "$UMBRIEL_CONFIG"
+ "$UMBRIEL" msg config-reload > /dev/null
+@@ -224,9 +224,8 @@ set_minimize_enabled() {
+   "$UMBRIEL" msg config-reload > /dev/null
+ }
+ 
+-# An animated restore that lands mid-conceal must end at the resting box. The conceal has already retargeted the live
+-# box to its collapsed origin, so a reveal that reads its destination from the live target grows back off-centre and
+-# small. The taskbar path shows the window without focusing it, so no arrange follows to repair the geometry.
++# An animated restore mid-conceal must end at the resting box: the conceal already moved the live box to its collapsed
++# origin. The taskbar path shows the window without focusing it, so no arrange repairs the geometry.
+ "$UMBRIEL" msg window-minimize "$WINDOW" > /dev/null
+ "$UMBRIEL" clock-advance 500
+ "$FOREIGN_TOPLEVEL" minimize-anim "$(field_of minimize-anim output)" unminimize > /dev/null
+@@ -249,8 +248,7 @@ if [[ $(field_of minimize-anim minimized) != false ]]; then
+   exit 1
+ fi
+ 
+-# The conceal leaves the node enabled so the window can be seen leaving, but it is already minimized: a click on the
+-# fading remnant must fall through instead of focusing and unminimizing the window underneath it.
++# The fading window is already minimized, so a click on the remnant must fall through.
+ pointer move 0 0
+ "$UMBRIEL" msg window-minimize "$WINDOW" > /dev/null
+ "$UMBRIEL" clock-advance 500
+@@ -274,9 +272,8 @@ pointer move 0 0
+ "$UMBRIEL" msg window-restore-minimized > /dev/null
+ "$UMBRIEL" clock-advance 2000
+ 
+-# A restore that will not animate (the block is off) while a conceal is still fading must cancel the conceal. A
+-# taskbar unminimize shows the window without focusing it, so no arrange follows to paper over a finish that hides a
+-# window which is no longer minimized.
++# A restore that will not animate while a conceal is still fading must cancel it. The taskbar path shows the window
++# without focusing it, so no arrange papers over a finish that hides a window no longer minimized.
+ "$UMBRIEL" msg window-minimize "$WINDOW" > /dev/null
+ "$UMBRIEL" clock-advance 300
+ set_minimize_enabled false
+@@ -367,9 +364,8 @@ fi
+ sed -i '/^\[animation\.windows_minimize\]$/,/^\[/ s/^style = "fade"$/style = "popin"/' "$UMBRIEL_CONFIG"
+ "$UMBRIEL" msg config-reload > /dev/null
+ 
+-# The decorated frame is enabled for the fade too, so its title bar and resize border must refuse the same input as the
+-# content: a press there would focus the view, and focusing a minimized view restores it. The check above runs
+-# undecorated so its pixel maths stays simple; this leg turns the frame back on for the hit test alone.
++# The decorated frame is enabled for the fade too and must refuse the same input: a press on the title bar would focus
++# the view, and focusing a minimized view restores it. This leg turns the frame back on for the hit test alone.
+ sed -i 's/^border_width = 0$/border_width = 2/' "$UMBRIEL_CONFIG"
+ sed -i '/^\[appearance\.title_bar\]$/,/^\[/ s/^mode = "off"$/mode = "on"/' "$UMBRIEL_CONFIG"
+ "$UMBRIEL" msg config-reload > /dev/null
+diff --git a/tests/unit/config_load.cpp b/tests/unit/config_load.cpp
+index ace27c8f..0b667eb2 100644
+--- a/tests/unit/config_load.cpp
++++ b/tests/unit/config_load.cpp
+@@ -1180,7 +1180,7 @@ UMBRIEL_TEST(windowsMinimizeParsesEveryStyleAndAnchor) {
+   ConfigStore& store = umbriel::configStore();
+   store.setRootPath(file.path(), true);
+ 
+-  // Defaults: the block animates a shrink toward the window's own centre.
++  // Defaults: a popin shrink toward the window's own centre.
+   file.write("[animation]\n");
+   CHECK(store.reload().success);
+   const auto& defaults = store.config().animation.windowsMinimize;
+@@ -1190,7 +1190,8 @@ UMBRIEL_TEST(windowsMinimizeParsesEveryStyleAndAnchor) {
+   CHECK_EQ(defaults.scale, 0.5);
+ 
+   for (const auto& [name, expected] :
+-       {std::pair{"center", umbriel::MinimizeAnchor::Center}, std::pair{"top_left", umbriel::MinimizeAnchor::TopLeft},
++       {std::pair{"center", umbriel::MinimizeAnchor::Center}, std::pair{"left", umbriel::MinimizeAnchor::Left},
++        std::pair{"right", umbriel::MinimizeAnchor::Right}, std::pair{"top_center", umbriel::MinimizeAnchor::TopCenter},
+         std::pair{"bottom_center", umbriel::MinimizeAnchor::BottomCenter}}) {
+     file.write(std::format("[animation.windows_minimize]\nanchor = \"{}\"\n", name));
+     CHECK(store.reload().success);
+@@ -1202,7 +1203,7 @@ UMBRIEL_TEST(windowsMinimizeParsesEveryStyleAndAnchor) {
+   CHECK_EQ(store.config().animation.windowsMinimize.scale, 0.25);
+   file.write("[animation.windows_minimize]\nstyle = \"zoom\"\n");
+   CHECK(store.reload().success);
+-  // An unknown style leaves the default in place and names the accepted set.
++  // An unknown style keeps the default and names the accepted set.
+   CHECK(store.config().animation.windowsMinimize.style == "popin");
+   CHECK(containsDiagnostic(store, "windows_minimize.style \"zoom\" (expected \"popin\" or \"fade\")"));
+ }
+diff --git a/tests/unit/presentation.cpp b/tests/unit/presentation.cpp
+index 2f264d09..5b593fe9 100644
+--- a/tests/unit/presentation.cpp
++++ b/tests/unit/presentation.cpp
+@@ -63,19 +63,21 @@ UMBRIEL_TEST(minimizeCollapseScalesAboutTheConfiguredAnchor) {
+   CHECK_EQ(centered.x + centered.width / 2, resting.x + resting.width / 2);
+   CHECK_EQ(centered.y + centered.height / 2, resting.y + resting.height / 2);
+ 
+-  // Top-left: the corner stays put.
+-  const wlr_box corner = umbriel::minimizeCollapseBox(resting, 0.5, usable, umbriel::MinimizeAnchor::TopLeft);
+-  CHECK_EQ(corner.x, resting.x);
+-  CHECK_EQ(corner.y, resting.y);
+-  CHECK_EQ(corner.width, 200);
+-  CHECK_EQ(corner.height, 150);
+-
+-  // Bottom center: the scaled box sits on the bottom edge of the usable area, centred on it.
++  const wlr_box left = umbriel::minimizeCollapseBox(resting, 0.5, usable, umbriel::MinimizeAnchor::Left);
++  CHECK_EQ(left.x, usable.x);
++  CHECK_EQ(left.y + left.height / 2, usable.y + usable.height / 2);
++
++  const wlr_box right = umbriel::minimizeCollapseBox(resting, 0.5, usable, umbriel::MinimizeAnchor::Right);
++  CHECK_EQ(right.x + right.width, usable.x + usable.width);
++  CHECK_EQ(right.y + right.height / 2, usable.y + usable.height / 2);
++
++  const wlr_box top = umbriel::minimizeCollapseBox(resting, 0.5, usable, umbriel::MinimizeAnchor::TopCenter);
++  CHECK_EQ(top.y, usable.y);
++  CHECK_EQ(top.x + top.width / 2, usable.x + usable.width / 2);
++
+   const wlr_box bottom = umbriel::minimizeCollapseBox(resting, 0.5, usable, umbriel::MinimizeAnchor::BottomCenter);
+-  CHECK_EQ(bottom.width, 200);
+-  CHECK_EQ(bottom.height, 150);
+-  CHECK_EQ(bottom.x + bottom.width / 2, usable.x + usable.width / 2);
+   CHECK_EQ(bottom.y + bottom.height, usable.y + usable.height);
++  CHECK_EQ(bottom.x + bottom.width / 2, usable.x + usable.width / 2);
+ }
+ 
+ UMBRIEL_TEST(minimizeCollapseIsIdentityAtFullScaleAndNeverEmpty) {
+@@ -91,7 +93,7 @@ UMBRIEL_TEST(minimizeCollapseIsIdentityAtFullScaleAndNeverEmpty) {
+   const wlr_box tiny = umbriel::minimizeCollapseBox(resting, 0.0, usable, umbriel::MinimizeAnchor::Center);
+   CHECK_EQ(tiny.width, 1);
+   CHECK_EQ(tiny.height, 1);
+-  const wlr_box over = umbriel::minimizeCollapseBox(resting, 4.0, usable, umbriel::MinimizeAnchor::TopLeft);
++  const wlr_box over = umbriel::minimizeCollapseBox(resting, 4.0, usable, umbriel::MinimizeAnchor::Left);
+   CHECK_EQ(over.width, resting.width);
+   CHECK_EQ(over.height, resting.height);
+ }
+-- 
+2.56.0.341.gebdc087dc9
+
+
+From 2b20bdfde3fe92cb4a220bdd63329bf48912692c Mon Sep 17 00:00:00 2001
+From: ZhangDM-520 <jixianqiang1540@gmail.com>
+Date: Sun, 8 Nov 2026 00:27:00 +0800
+Subject: [PATCH 6/6] docs(examples): show the windows_minimize block
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+---
+ examples/config.toml | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/examples/config.toml b/examples/config.toml
+index 5efe79f5..ba22e388 100644
+--- a/examples/config.toml
++++ b/examples/config.toml
+@@ -453,6 +453,15 @@ action = "overview-open"
+ # curve = "spring:1,900"
+ # duration_ms = 250 # For non-spring curves; a spring sets its own length.
+ 
++# A minimizing floating window fades out and, with `popin`, shrinks toward its
++# anchor; the restore plays the same timeline back. `fade` keeps the geometry.
++# [animation.windows_minimize]
++# enabled = true
++# curve = "spring:1,1200"
++# style = "popin"           # Or "fade"
++# scale = 0.5
++# anchor = "center"         # Or "left", "right", "top_center", "bottom_center"
++
+ # Without a size animation, a resized window shows its stretched old frame until
+ # it redraws. Wait for the redraws instead (at most 150 ms), then switch to the
+ # new layout in one frame.
 -- 
 2.56.0.341.gebdc087dc9
 

@@ -73,7 +73,7 @@ sha256sums=('SKIP'
             'da533d362314d028cf575128ace45b1781e39d9385478fd648f5e9bffffaf621'
             '2afaf966628550c1aa9d0b2ab9dbed4dade3c51479355e4e295cbe36497b7af2'
             '13f56b34a97649cb76964a11eebedf47ee0967935a34bf342a740e051f03bd6f'
-            '1cdaf0212a393d15cbca2cdcee03e12bebe5e252ea04c562c78795cb0638f270')
+            '4bc48f1e2f3e9c0138e9a66d9ea942a002e93177f35b28433864ade0491778b2')
 
 pkgver() {
   cd "${_pkgname}"
@@ -217,11 +217,10 @@ prepare() {
   git apply -3 ../0020-adaptive-title-bar.patch
 
   # [animation.windows_minimize]: a minimizing floating window leaves and returns with an animation instead of
-  # vanishing in one frame: `style` (popin scale/fade), `scale` and an `anchor`, on the live view, with the
-  # semantic state (minimized/visible/focus/taskbars) immediate and the node disabled only when the fade lands.
-  # Four commits (4b60412/250cc18/e0785ad/6555421) cut on main@f5dd36b and applied unchanged on top of
-  # 0011+0012+0013+0014+0018+0019+0020; sha256 1cdaf021…. (Retire on merge: 0021 -> the minimize animation PR,
-  # opened after the owner's live test.)
+  # vanishing in one frame: `style` (popin scale/fade), `scale` and an `anchor` (center, left, right, top_center,
+  # bottom_center), on the live view, with the semantic state (minimized/visible/focus/taskbars) immediate and the
+  # node disabled only when the fade lands. Six commits cut on main@ad46c7d1 and applied unchanged on top of
+  # 0011+0012+0013+0014+0018+0019+0020; sha256 4bc48f1e…. (Retire on merge: 0021 -> the minimize animation PR.)
   git apply -3 ../0021-minimize-animation.patch
 }
 
