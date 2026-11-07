@@ -9,7 +9,7 @@ source "$startdir/../../../lib/pgo.sh"
 pkgname=umbriel-git
 _pkgname=umbriel
 pkgver=0.1.0.r1532.f5dd36b
-pkgrel=10
+pkgrel=11
 epoch=1
 pkgdesc='A Wayland compositor built on wlroots'
 arch=('x86_64' 'aarch64')
@@ -63,7 +63,8 @@ source=("${_pkgname}::git+${url}.git#branch=main"
         '0014-downsample-box.patch'
         '0018-underfull-strip-align.patch'
         '0019-background-effect.patch'
-        '0020-adaptive-title-bar.patch')
+        '0020-adaptive-title-bar.patch'
+        '0021-minimize-animation.patch')
 sha256sums=('SKIP'
             '817ffce311dbb4b162de5b261ef89d011f5f484db390eafec4ace1a4bf94c6ea'
             '1fe6f5683efc79957e00d458ade22ff3080c76dbcbcb6d7fca21203523e2bdb7'
@@ -71,7 +72,8 @@ sha256sums=('SKIP'
             '92514f4aa7244e524aa73bf392efff5675a7e32e715715d182bad5324ed70492'
             'da533d362314d028cf575128ace45b1781e39d9385478fd648f5e9bffffaf621'
             '714cf0a301e874458fed8ff95506a6495cc4ffced44720e68118a921cc88a6a2'
-            '13f56b34a97649cb76964a11eebedf47ee0967935a34bf342a740e051f03bd6f')
+            '13f56b34a97649cb76964a11eebedf47ee0967935a34bf342a740e051f03bd6f'
+            '1cdaf0212a393d15cbca2cdcee03e12bebe5e252ea04c562c78795cb0638f270')
 
 pkgver() {
   cd "${_pkgname}"
@@ -201,6 +203,14 @@ prepare() {
   # (Retire on merge: 0020 -> the adaptive title bar PR, opened after the
   # owner's live test.)
   git apply -3 ../0020-adaptive-title-bar.patch
+
+  # [animation.windows_minimize]: a minimizing floating window leaves and returns with an animation instead of
+  # vanishing in one frame: `style` (popin scale/fade), `scale` and an `anchor`, on the live view, with the
+  # semantic state (minimized/visible/focus/taskbars) immediate and the node disabled only when the fade lands.
+  # Four commits (4b60412/250cc18/e0785ad/6555421) cut on main@f5dd36b and applied unchanged on top of
+  # 0011+0012+0013+0014+0018+0019+0020; sha256 1cdaf021…. (Retire on merge: 0021 -> the minimize animation PR,
+  # opened after the owner's live test.)
+  git apply -3 ../0021-minimize-animation.patch
 }
 
 build() {
