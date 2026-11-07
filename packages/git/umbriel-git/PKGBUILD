@@ -9,7 +9,7 @@ source "$startdir/../../../lib/pgo.sh"
 pkgname=umbriel-git
 _pkgname=umbriel
 pkgver=0.1.0.r1532.f5dd36b
-pkgrel=9
+pkgrel=10
 epoch=1
 pkgdesc='A Wayland compositor built on wlroots'
 arch=('x86_64' 'aarch64')
@@ -71,7 +71,7 @@ sha256sums=('SKIP'
             '92514f4aa7244e524aa73bf392efff5675a7e32e715715d182bad5324ed70492'
             'da533d362314d028cf575128ace45b1781e39d9385478fd648f5e9bffffaf621'
             '714cf0a301e874458fed8ff95506a6495cc4ffced44720e68118a921cc88a6a2'
-            '254c195680ad4d1765c4c4cd34e4ccb1e6a2ee7cb2db670a54caf20953892255')
+            '13f56b34a97649cb76964a11eebedf47ee0967935a34bf342a740e051f03bd6f')
 
 pkgver() {
   cd "${_pkgname}"
@@ -194,7 +194,7 @@ prepare() {
   # the title and symbols a contrast edge. No readback: the bar mirrors the
   # window's committed buffer (crop, transform, damage, syncobj, ICC), so it
   # costs a strip copy per commit rather than a glFinish per frame. Stack
-  # adaptation on main@f5dd36b over 0011+0012+0013+0014+0018+0019 (6 commits,
+  # adaptation on main@f5dd36b over 0011+0012+0013+0014+0018+0019 (8 commits,
   # sha256 e4365cb2…; the strip follows xdg window geometry, marks the mirror's
   # client-buffer lock ignorable through a new umbrielfx helper, and keeps the
   # close snapshot's fill under the text and buttons).
