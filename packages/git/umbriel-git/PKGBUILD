@@ -9,7 +9,7 @@ source "$startdir/../../../lib/pgo.sh"
 pkgname=umbriel-git
 _pkgname=umbriel
 pkgver=0.1.0.r1536.d171ccb
-pkgrel=14
+pkgrel=15
 epoch=1
 pkgdesc='A Wayland compositor built on wlroots'
 arch=('x86_64' 'aarch64')
@@ -71,7 +71,7 @@ sha256sums=('SKIP'
             '7c4de03d135dc74529c7cafc2a81ae659c1e9a917094aeafb248175c94db8400'
             '92514f4aa7244e524aa73bf392efff5675a7e32e715715d182bad5324ed70492'
             'da533d362314d028cf575128ace45b1781e39d9385478fd648f5e9bffffaf621'
-            '714cf0a301e874458fed8ff95506a6495cc4ffced44720e68118a921cc88a6a2'
+            '2afaf966628550c1aa9d0b2ab9dbed4dade3c51479355e4e295cbe36497b7af2'
             '13f56b34a97649cb76964a11eebedf47ee0967935a34bf342a740e051f03bd6f'
             '1cdaf0212a393d15cbca2cdcee03e12bebe5e252ea04c562c78795cb0638f270')
 
@@ -192,8 +192,11 @@ prepare() {
   # P2 on #715): flattened downstream
   # stack adaptation on
   # main@aa3b6b3e over 0011+0012+0013+0014+0018 (delta 34 files, +1782/-63,
-  # sha256 714cf0a3…; the only downstream conflict is server.h's
+  # sha256 2afaf966…; the only downstream conflict is server.h's
   # ColorDescription declarations next to BackgroundEffectManager).
+  # CONTRIBUTING hunk re-cut 2026-11-07 for upstream ad46c7d1's condensed
+  # "Never wait on the wall clock" bullet: same frame-callback sentence,
+  # inserted into the new one-line rule instead of the old bullet list.
   # (Retire on merge: 0019 -> PR #715.)
   git apply -3 ../0019-background-effect.patch
 
