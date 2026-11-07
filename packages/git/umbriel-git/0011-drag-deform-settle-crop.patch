@@ -1,7 +1,7 @@
-From bc3744ad28ca8517303c98251f4475fdf2096ee3 Mon Sep 17 00:00:00 2001
+From d1f997afdceebf28b67675e3beb89886131dcb2d Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 01:52:25 +0800
-Subject: [PATCH 1/3] fix(view): defer the release re-home until the deform
+Subject: [PATCH 1/7] fix(view): defer the release re-home until the deform
  settles
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -36,6 +36,7 @@ reproduces identically on a pristine base build and predates this change;
 clang-format --dry-run -Werror clean.
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+(cherry picked from commit b6d7542a1cf6fbbafea595a07e59bdfcc7bf7598)
 ---
  src/view/view.cpp                             |  23 +++
  src/view/view.h                               |   9 +
@@ -46,10 +47,10 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
  create mode 100644 tests/harness/checks/drag/physics_release_settle.sh
 
 diff --git a/src/view/view.cpp b/src/view/view.cpp
-index 2a3b3bcc..1dc4242e 100644
+index 05efa4c7..5e092860 100644
 --- a/src/view/view.cpp
 +++ b/src/view/view.cpp
-@@ -795,7 +795,30 @@ namespace umbriel {
+@@ -800,7 +800,30 @@ namespace umbriel {
      refreshStateRuleEffects();
    }
  
@@ -81,10 +82,10 @@ index 2a3b3bcc..1dc4242e 100644
      syncShadowPool();
      // Another parent can put the window elsewhere in layout coordinates.
 diff --git a/src/view/view.h b/src/view/view.h
-index 52a43f63..841b0814 100644
+index 121f0a11..ce06ab78 100644
 --- a/src/view/view.h
 +++ b/src/view/view.h
-@@ -738,6 +738,9 @@ namespace umbriel {
+@@ -752,6 +752,9 @@ namespace umbriel {
      void setDragPhysicsGrab(double localX, double localY);
      void moveDragPhysics(double dx, double dy);
      void endDragPhysics();
@@ -94,7 +95,7 @@ index 52a43f63..841b0814 100644
      // Refits the sheet to the content tree's drawn bounds when they changed, or when the grab moved.
      void fitDragPhysics(bool grabMoved);
      struct DragFit {
-@@ -959,6 +962,12 @@ namespace umbriel {
+@@ -979,6 +982,12 @@ namespace umbriel {
      ViewPresentation m_presentation;
      DragPhysics m_dragPhysics;
      double m_dragPhysicsMsec = 0; // animation clock at the sheet's last tick
@@ -108,10 +109,10 @@ index 52a43f63..841b0814 100644
      double m_dragGrabX = 0;
      double m_dragGrabY = 0;
 diff --git a/src/view/view_animation.cpp b/src/view/view_animation.cpp
-index b669f753..c6d95001 100644
+index 417f8b51..354f75c7 100644
 --- a/src/view/view_animation.cpp
 +++ b/src/view/view_animation.cpp
-@@ -463,7 +463,12 @@ namespace umbriel {
+@@ -472,7 +472,12 @@ namespace umbriel {
      }
    }
  
@@ -125,7 +126,7 @@ index b669f753..c6d95001 100644
  
    void View::restoreHomePresentation() {
      // The drag derived its own presented size and crop; drop them so the
-@@ -966,7 +971,7 @@ namespace umbriel {
+@@ -991,7 +996,7 @@ namespace umbriel {
        );
        active = active || m_borderColorAnim.animating() || m_outerBorderColorAnim.animating();
      }
@@ -134,7 +135,7 @@ index b669f753..c6d95001 100644
        if (effectRegistry().deformationShader() == nullptr) {
          // Without the program (physics turned off), the window stays rigid for the rest of the drag.
          m_dragPhysics = DragPhysics{};
-@@ -982,6 +987,20 @@ namespace umbriel {
+@@ -1007,6 +1012,20 @@ namespace umbriel {
          active = m_dragPhysics.tick(elapsed / 1000.0, cadenceS) || active;
        }
      }
@@ -156,10 +157,10 @@ index b669f753..c6d95001 100644
      if (!active && m_mapped && m_xsurface != nullptr) {
        syncXwaylandConfigure();
 diff --git a/src/view/view_lifecycle.cpp b/src/view/view_lifecycle.cpp
-index c32740da..74d14d33 100644
+index 6312678f..21abf5bf 100644
 --- a/src/view/view_lifecycle.cpp
 +++ b/src/view/view_lifecycle.cpp
-@@ -681,6 +681,16 @@ namespace umbriel {
+@@ -690,6 +690,16 @@ namespace umbriel {
      m_dragSlotBound = false;
      // The snapshot holds the frozen deformation; the live sheet ends here.
      m_dragPhysics = DragPhysics{};
@@ -371,13 +372,13 @@ index 00000000..0d27b248
 +fi
 +echo "a transferred sheet keeps drawing across the shared edge until the deform settles"
 -- 
-2.56.0.307.g50fe5cc63f
+2.56.0.341.gebdc087dc9
 
 
-From ddad9cf3e1f05063f2c04797f56dfa4f0306965c Mon Sep 17 00:00:00 2001
+From 10bb5b528dc54ab2f56a3870f282ebf6262fb8cf Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 02:31:48 +0800
-Subject: [PATCH 2/3] fix(view): land deferred release re-homes safely (review
+Subject: [PATCH 2/7] fix(view): land deferred release re-homes safely (review
  round)
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -396,6 +397,7 @@ Validated: units 142/142; full harness 386 pass — the 7 failures reproduce on
 pristine 77ec5ae6 (5) or pass in isolation (2 load flakes); clang-format clean.
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+(cherry picked from commit 7ac93ec1e223dd44a9e9476340ea0c0584f0c214)
 ---
  src/input/cursor.cpp                          |  3 ++
  src/overview/overview.cpp                     |  8 ++++
@@ -408,7 +410,7 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
  8 files changed, 85 insertions(+), 31 deletions(-)
 
 diff --git a/src/input/cursor.cpp b/src/input/cursor.cpp
-index 04ee05c5..91d09e98 100644
+index eff21c43..e85d3e3d 100644
 --- a/src/input/cursor.cpp
 +++ b/src/input/cursor.cpp
 @@ -1394,6 +1394,9 @@ namespace umbriel {
@@ -422,10 +424,10 @@ index 04ee05c5..91d09e98 100644
      // an unchanged clip otherwise keeps the scaled source/destination until the client commits again.
      if (resizedWorkspace != nullptr) {
 diff --git a/src/overview/overview.cpp b/src/overview/overview.cpp
-index 258117dc..9668f92d 100644
+index aea640da..4f271a68 100644
 --- a/src/overview/overview.cpp
 +++ b/src/overview/overview.cpp
-@@ -1749,6 +1749,14 @@ namespace umbriel {
+@@ -1762,6 +1762,14 @@ namespace umbriel {
      }
  
      m_active = true;
@@ -441,10 +443,10 @@ index 258117dc..9668f92d 100644
      m_progress = 0.0;
      m_targetProgress = 0.0;
 diff --git a/src/view/view.cpp b/src/view/view.cpp
-index 1dc4242e..31d73335 100644
+index 5e092860..fbc907b9 100644
 --- a/src/view/view.cpp
 +++ b/src/view/view.cpp
-@@ -798,15 +798,13 @@ namespace umbriel {
+@@ -803,15 +803,13 @@ namespace umbriel {
    bool View::dragSheetDisplaced() const { return m_dragPhysics.active() || m_dragPhysics.grabbed(); }
  
    void View::setSceneParent(wlr_scene_tree* parent) {
@@ -467,7 +469,7 @@ index 1dc4242e..31d73335 100644
      const bool waitingForThisTree = m_pendingHomeParent != nullptr && m_pendingHomeParent == parent;
      const bool displacedInDragTree =
          parent != m_server->dragTree() && m_sceneTree->node.parent == m_server->dragTree() && dragSheetDisplaced();
-@@ -816,17 +814,47 @@ namespace umbriel {
+@@ -821,17 +819,47 @@ namespace umbriel {
        }
        return;
      }
@@ -516,10 +518,10 @@ index 1dc4242e..31d73335 100644
      wlr_scene_tree* pool = m_workspace != nullptr && m_sceneTree->node.parent == m_workspace->viewLayer(true)
          ? m_workspace->tileShadowLayer()
 diff --git a/src/view/view.h b/src/view/view.h
-index 841b0814..c1fbc96a 100644
+index ce06ab78..d5f5387b 100644
 --- a/src/view/view.h
 +++ b/src/view/view.h
-@@ -741,6 +741,12 @@ namespace umbriel {
+@@ -755,6 +755,12 @@ namespace umbriel {
      // True while the physics sheet is displaced from its resting box: grabbed,
      // or still settling after the release.
      [[nodiscard]] bool dragSheetDisplaced() const;
@@ -532,7 +534,7 @@ index 841b0814..c1fbc96a 100644
      // Refits the sheet to the content tree's drawn bounds when they changed, or when the grab moved.
      void fitDragPhysics(bool grabMoved);
      struct DragFit {
-@@ -965,8 +971,8 @@ namespace umbriel {
+@@ -985,8 +991,8 @@ namespace umbriel {
      // The resting re-home requested while the released sheet was still
      // displaced (setSceneParent defers it); applied when the spring settles.
      wlr_scene_tree* m_pendingHomeParent = nullptr;
@@ -544,10 +546,10 @@ index 841b0814..c1fbc96a 100644
      // The frame-local grab and the content tree's drawn bounds the sheet was last fitted to.
      double m_dragGrabX = 0;
 diff --git a/src/view/view_animation.cpp b/src/view/view_animation.cpp
-index c6d95001..fe273a36 100644
+index 354f75c7..a45b1475 100644
 --- a/src/view/view_animation.cpp
 +++ b/src/view/view_animation.cpp
-@@ -465,8 +465,7 @@ namespace umbriel {
+@@ -474,8 +474,7 @@ namespace umbriel {
  
    void View::endDragPhysics() {
      m_dragPhysics.release();
@@ -557,15 +559,15 @@ index c6d95001..fe273a36 100644
      m_releaseRehomeArmed = true;
    }
  
-@@ -479,7 +478,6 @@ namespace umbriel {
-     if (m_ssdFrame != nullptr)
+@@ -489,7 +488,6 @@ namespace umbriel {
        m_ssdFrame->setBlurLive(false);
+     }
      setFadeAlpha(m_fadeAlpha);
 -    wlr_scene_node_place_below(&m_server->dragTree()->node, &m_server->dragIconTree()->node);
      if (ScratchpadManager* scratchpad = m_server->scratchpadManager();
          scratchpad != nullptr && scratchpad->contains(this)) {
        scratchpad->restorePresentation(this);
-@@ -989,17 +987,18 @@ namespace umbriel {
+@@ -1014,17 +1012,18 @@ namespace umbriel {
      }
      // The deferred resting re-home lands in the same tick the spring settles —
      // a later tick may never come — or earlier while an overview is open and
@@ -607,10 +609,10 @@ index 533c7d64..e787624e 100644
      syncShadowPool();
      setOnActiveWorkspace(true);
 diff --git a/src/view/view_lifecycle.cpp b/src/view/view_lifecycle.cpp
-index 74d14d33..523be007 100644
+index 21abf5bf..de3b762e 100644
 --- a/src/view/view_lifecycle.cpp
 +++ b/src/view/view_lifecycle.cpp
-@@ -681,14 +681,13 @@ namespace umbriel {
+@@ -690,14 +690,13 @@ namespace umbriel {
      m_dragSlotBound = false;
      // The snapshot holds the frozen deformation; the live sheet ends here.
      m_dragPhysics = DragPhysics{};
@@ -667,13 +669,13 @@ index 0d27b248..cbc9ee13 100644
 +fi
  echo "a transferred sheet keeps drawing across the shared edge until the deform settles"
 -- 
-2.56.0.307.g50fe5cc63f
+2.56.0.341.gebdc087dc9
 
 
-From 45afe6ff957d2a0d5ecf9a26b009126ecb339df3 Mon Sep 17 00:00:00 2001
+From 702a32609db24254b7581b9710a818ba443e1f19 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Mon, 26 Oct 2026 03:16:29 +0800
-Subject: [PATCH 3/3] fix(view): demote the drag tree only when its last
+Subject: [PATCH 3/7] fix(view): demote the drag tree only when its last
  drag-presented view leaves
 
 The F1-F8 round moved the drag-tree demotion into setSceneParent's
@@ -690,6 +692,7 @@ between the two grabs so the overlap cannot race away; red-first
 verified (held green 6400 -> overlap 0 without the gate).
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+(cherry picked from commit 8a3c231da30bfd6a7aa24b3fe7aaae3acf7e8317)
 ---
  src/view/view.cpp                             |  23 +++-
  src/view/view.h                               |   2 +
@@ -698,10 +701,10 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
  create mode 100644 tests/harness/checks/drag/settle_overlap_drag.sh
 
 diff --git a/src/view/view.cpp b/src/view/view.cpp
-index 31d73335..6bc4912b 100644
+index fbc907b9..bf4edd92 100644
 --- a/src/view/view.cpp
 +++ b/src/view/view.cpp
-@@ -821,10 +821,16 @@ namespace umbriel {
+@@ -826,10 +826,16 @@ namespace umbriel {
      wlr_scene_node_reparent(&m_sceneTree->node, parent);
      syncShadowPool();
      if (leavingDragTree) {
@@ -721,7 +724,7 @@ index 31d73335..6bc4912b 100644
      }
      // Another parent can put the window elsewhere in layout coordinates.
      if (m_xsurface != nullptr && m_mapped) {
-@@ -855,6 +861,17 @@ namespace umbriel {
+@@ -860,6 +866,17 @@ namespace umbriel {
      }
    }
  
@@ -740,10 +743,10 @@ index 31d73335..6bc4912b 100644
      wlr_scene_tree* pool = m_workspace != nullptr && m_sceneTree->node.parent == m_workspace->viewLayer(true)
          ? m_workspace->tileShadowLayer()
 diff --git a/src/view/view.h b/src/view/view.h
-index c1fbc96a..5356e6b1 100644
+index d5f5387b..ebf0ba2e 100644
 --- a/src/view/view.h
 +++ b/src/view/view.h
-@@ -747,6 +747,8 @@ namespace umbriel {
+@@ -761,6 +761,8 @@ namespace umbriel {
      void flushReleaseRehome();
      // Re-points transient children at the trees this view now lives under.
      void syncTransientChildren();
@@ -887,5 +890,972 @@ index 00000000..94c043af
 +fi
 +echo "a settling re-home leaves an in-progress drag elevated"
 -- 
-2.56.0.307.g50fe5cc63f
+2.56.0.341.gebdc087dc9
+
+
+From c3e11b3b64866799dade6a57bae045e0ebab4f73 Mon Sep 17 00:00:00 2001
+From: ZhangDM-520 <jixianqiang1540@gmail.com>
+Date: Mon, 2 Nov 2026 17:41:39 +0800
+Subject: [PATCH 4/7] chore: use std::ranges::any_of in dragTreeOccupied
+
+Transcribes the readability-use-anyofallof prescription from upstream's
+merged lint config; short-circuits and guards identical.
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+(cherry picked from commit 015403449fba1e61db43c3315a7d97088c1f5461)
+---
+ src/view/view.cpp | 9 +++------
+ 1 file changed, 3 insertions(+), 6 deletions(-)
+
+diff --git a/src/view/view.cpp b/src/view/view.cpp
+index bf4edd92..8cf9bced 100644
+--- a/src/view/view.cpp
++++ b/src/view/view.cpp
+@@ -868,13 +868,10 @@ namespace umbriel {
+ 
+   bool View::dragTreeOccupied() const {
+     const auto views = m_server->registry().all();
+-    for (const auto& view : std::views::reverse(views)) {
++    return std::ranges::any_of(std::views::reverse(views), [this](const auto& view) {
+       View* other = view.get();
+-      if (other != nullptr && other != this && other->m_sceneTree->node.parent == m_server->dragTree()) {
+-        return true;
+-      }
+-    }
+-    return false;
++      return other != nullptr && other != this && other->m_sceneTree->node.parent == m_server->dragTree();
++    });
+   }
+ 
+   void View::syncShadowPool() {
+-- 
+2.56.0.341.gebdc087dc9
+
+
+From f4520977fda3f2d296034bac882647fae24e5e2b Mon Sep 17 00:00:00 2001
+From: ZhangDM-520 <jixianqiang1540@gmail.com>
+Date: Sat, 7 Nov 2026 21:18:32 +0800
+Subject: [PATCH 5/7] fix(view): keep a deforming window with its workspace
+
+The release deferral parks a still-displaced sheet under the shared drag
+tree, which lives outside every workspace layer. A workspace switch never
+ended that wait: the outgoing workspace re-enabled and re-presented the
+view, but its slide offset and clip only reach its own trees, so the
+window hung at its old screen position until the spring settled and the
+deferred re-home finally dropped it out of sight.
+
+Landing the resting re-home as soon as the view leaves its workspace's
+presentation ends the wait: the window is a workspace child again, so it
+travels and hides with the workspace and comes back with it. The deferral
+still covers the reparents a release issues, including a transfer's park
+and re-home onto the active destination.
+
+A window still held by the cursor keeps its drag presentation instead.
+The drag tree owns its visibility, so a workspace no longer hides it at
+the end of the slide it was carried out of (it used to vanish mid-drag)
+and no longer reveals it as its own.
+
+Pinned by drag/settle_workspace_switch: a released sheet is carried out
+with a 300 ms slide while a slow spring still deforms it, is absent once
+the slide ends, returns with the workspace, and a held window stays drawn
+across the switch before landing on the workspace it is dropped on. Both
+halves are falsified separately: without the flush the sheet keeps drawing
+at its old x mid-slide, without the ownership guard the held window
+vanishes at the slide's end.
+
+Validated: meson units 150/150; harness drag/ workspace/ animation/
+overview/ transient/ render/title_bar 126 pass, the 2 failures
+(animation/drag_toggle, drag/overview_card_workspace_edge_scroll) fail
+identically on the parent commit and predate this change; clang-format and
+clang-tidy clean.
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+(cherry picked from commit c3f073c86f611894e28439f2c310c8db7b77a7a7)
+---
+ src/view/view.cpp                             |  17 +-
+ src/view/view.h                               |   3 +
+ src/workspace/workspace.cpp                   |   6 +-
+ .../checks/drag/settle_workspace_switch.sh    | 207 ++++++++++++++++++
+ 4 files changed, 230 insertions(+), 3 deletions(-)
+ create mode 100755 tests/harness/checks/drag/settle_workspace_switch.sh
+
+diff --git a/src/view/view.cpp b/src/view/view.cpp
+index 8cf9bced..d6dad425 100644
+--- a/src/view/view.cpp
++++ b/src/view/view.cpp
+@@ -615,9 +615,19 @@ namespace umbriel {
+       return;
+     }
+     m_onActiveWorkspace = active;
++    if (!active) {
++      // The deferred resting re-home exists only to keep visible displaced
++      // pixels out of the output clip. Once the workspace stops presenting the
++      // view there is nothing left to preserve, and a view parked under the
++      // shared drag tree cannot travel or hide with its workspace: it hangs on
++      // screen until the spring settles. Land the resting tree first.
++      flushReleaseRehome();
++    }
+     // A hidden tab or a minimized window stays hidden when its workspace comes back.
+     const bool shown = active && !m_tabHidden && !m_minimized;
+-    if (m_sceneTree != nullptr) {
++    if (m_sceneTree != nullptr && !dragPresentationOwnsVisibility()) {
++      // A held window is the drag's payload; its presentation belongs to the
++      // drag tree, not to a workspace it was carried out of.
+       wlr_scene_node_set_enabled(&m_sceneTree->node, shown);
+     }
+     m_decoration.setShadowEnabled(shown);
+@@ -660,6 +670,11 @@ namespace umbriel {
+     m_server->scheduleIpcWindowsEvent();
+   }
+ 
++  bool View::dragPresentationOwnsVisibility() const {
++    const Cursor* cursor = m_server->cursor();
++    return cursor != nullptr && cursor->isDraggingView(this);
++  }
++
+   void View::setNodeEnabled(bool enabled) {
+     enabled = enabled && !presentationSuppressed();
+     wlr_scene_node_set_enabled(&m_sceneTree->node, enabled);
+diff --git a/src/view/view.h b/src/view/view.h
+index ebf0ba2e..87040b16 100644
+--- a/src/view/view.h
++++ b/src/view/view.h
+@@ -300,6 +300,9 @@ namespace umbriel {
+     // A member of a tabbed column other than the one it shows. It keeps its layout slot and stays mapped and configured
+     // at that size, but its frame stays disabled whatever else asks to enable it.
+     void setTabHidden(bool hidden);
++    // True while the cursor holds this view: the drag's own scene tree owns the
++    // node's presentation, so a workspace must not enable or disable it.
++    [[nodiscard]] bool dragPresentationOwnsVisibility() const;
+     bool tabHidden() const { return m_tabHidden; }
+     // Minimized: hidden, but keeping its workspace, floating box, stacking slot, and taskbar entries. Focusing the
+     // window shows it again.
+diff --git a/src/workspace/workspace.cpp b/src/workspace/workspace.cpp
+index 762af5ec..f371c32e 100644
+--- a/src/workspace/workspace.cpp
++++ b/src/workspace/workspace.cpp
+@@ -2591,7 +2591,7 @@ namespace umbriel {
+       // Persistent resting state: an inactive workspace keeps its nodes disabled so the shared scene never renders them
+       // on any output. Active (and in-transition) views are enabled + clipped to their home output by
+       // syncViewPresentation (arrange / slide).
+-      if (!m_active && !m_inSwitchTransition) {
++      if (!m_active && !m_inSwitchTransition && !view->dragPresentationOwnsVisibility()) {
+         view->setNodeEnabled(false);
+       }
+     }
+@@ -2624,7 +2624,9 @@ namespace umbriel {
+ 
+   void Workspace::showSwitchViews() {
+     for (View* view : m_switchViews) {
+-      if (!m_active) {
++      // A held window is presented by the drag tree; revealing it with this
++      // workspace would place it back under a workspace that just went away.
++      if (!m_active && !view->dragPresentationOwnsVisibility()) {
+         view->setNodeEnabled(true);
+       }
+     }
+diff --git a/tests/harness/checks/drag/settle_workspace_switch.sh b/tests/harness/checks/drag/settle_workspace_switch.sh
+new file mode 100755
+index 00000000..12a9d3db
+--- /dev/null
++++ b/tests/harness/checks/drag/settle_workspace_switch.sh
+@@ -0,0 +1,207 @@
++#!/usr/bin/env bash
++# harness: outputs=1
++# A window that still deforms must not outlive the workspace it lives in. The
++# drag physics keeps a released sheet displaced past the drop, and the deferred
++# re-home leaves the view under the shared drag tree — outside every workspace
++# layer, so a workspace switch's slide offset and clip never reach it: the
++# window hangs at its old screen position after the workspace has gone. It must
++# travel (and hide) with its workspace, and come back with it.
++#
++# A window still held by the cursor is the drag's payload: switching workspace
++# must not steal its presentation from the drag.
++set -euo pipefail
++source "$UMBRIEL_HARNESS_LIB"
++
++readonly BTN_LEFT=272
++readonly OUTPUT_W=1280
++readonly OUTPUT_H=720
++readonly TITLE=stuck-sheet
++readonly IMAGE="$UMBRIEL_RUNTIME_DIR/switch.png"
++# A quarter of the 400x300 sheet: proof the window is drawn, not a stray edge.
++readonly FLOOR=20000
++
++cat >> "$UMBRIEL_CONFIG" <<'EOF'
++
++[layout]
++mode = "floating"
++
++[input.focus]
++follows_mouse = false
++
++[colors]
++backdrop = "#000000FF"
++[appearance]
++border_width = 0
++outer_border_width = 0
++corner_radius = 0
++drag_opacity = 1.0
++[appearance.shadow]
++enabled = false
++[animation]
++duration_ms = 1
++[animation.windows_in]
++enabled = false
++[animation.windows_out]
++enabled = false
++# A slow spring keeps the sheet displaced far past the workspace slide, so every
++# sample below lands while the deform is still running.
++[animation.windows_drag]
++physics = true
++stiffness = 1.0
++damping = 1.0
++max_displacement_px = 200
++[animation.workspaces]
++enabled = true
++duration_ms = 300
++
++# Static workspaces: a dynamic inventory would prune the emptied workspace and
++# move the window instead of leaving it where the check put it.
++[output.HEADLESS-1]
++position = [0, 0]
++workspaces = ["ONE", "TWO"]
++
++[[window_rule]]
++match.title = "^stuck-sheet$"
++default_floating = true
++default_floating_size_px = { width = 400, height = 300 }
++EOF
++"$UMBRIEL" msg config-reload > /dev/null
++
++FILL_COLOR=0xFF00FF00 "$UMBRIEL_UNMAP_CLIENT" "$TITLE" 400 300 > "$UMBRIEL_RUNTIME_DIR/$TITLE.log" 2>&1 &
++for _ in $(seq 80); do
++  "$UMBRIEL" windows --json | jq -e --arg title "$TITLE" 'any(.[]; .title == $title)' > /dev/null && break
++  sleep 0.025
++done
++"$UMBRIEL" settle > /dev/null
++
++box() { "$UMBRIEL" windows --json | jq -r --arg title "$TITLE" '.[] | select(.title == $title) | "\(.x) \(.y) \(.w) \(.h)"'; }
++home() { "$UMBRIEL" windows --json | jq -r --arg title "$TITLE" '.[] | select(.title == $title) | .workspace'; }
++# The window reports the canonical "<output>:<serial>" id; the assertions speak names.
++home_name() {
++  local id
++  id=$(home)
++  "$UMBRIEL" workspaces --json | jq -r --arg id "$id" '.[] | select(.id == $id) | .name'
++}
++active() { "$UMBRIEL" workspaces --json | jq -r '.[] | select(.active) | .name'; }
++capture() { grim -o HEADLESS-1 "$IMAGE"; }
++green() { capture; "$UMBRIEL_PIXEL_PROBE" "$IMAGE" count 'g > 0.8 && r < 0.2 && b < 0.2'; }
++green_x() { capture; "$UMBRIEL_PIXEL_PROBE" "$IMAGE" bbox 'g > 0.8 && r < 0.2 && b < 0.2' | cut -d' ' -f1; }
++
++read -r wx wy ww wh < <(box)
++gx=$((wx + ww / 2))
++gy=$((wy + wh / 2))
++# The drawn resting extent is the baseline the settled deform must return to;
++# the client's surface and the presented box are not the same rectangle.
++capture
++read -r bx by bw bh < <("$UMBRIEL_PIXEL_PROBE" "$IMAGE" bbox 'g > 0.8 && r < 0.2 && b < 0.2')
++if ((bw < ww / 2 || bh < wh / 2)); then
++  echo "scenario never engaged: the window draws ${bw}x${bh} in a ${ww}x${wh} box"
++  exit 1
++fi
++
++# Phase 1 — released while the spring still displaces the sheet. The window
++# keeps living on ONE: it must slide out with it, not hang at its old spot.
++pointer_hold "$OUTPUT_W" "$OUTPUT_H" \
++  move "$gx" "$gy" mod super press "$BTN_LEFT" \
++  move $((gx + 40)) "$gy" move $((gx + 80)) "$gy" move $((gx + 120)) "$gy" \
++  -- release "$BTN_LEFT" mod none
++"$UMBRIEL" clock-freeze
++"$UMBRIEL" clock-advance 16 > /dev/null
++held=$(green)
++pointer_release
++"$UMBRIEL" clock-advance 16 > /dev/null
++
++if [[ $(home_name) != ONE || $(active) != ONE ]]; then
++  echo "scenario never engaged: window on '$(home_name)', active '$(active)', want ONE/ONE"
++  exit 1
++fi
++if ((held < FLOOR)); then
++  echo "scenario never engaged: the deformed sheet does not draw before the switch (green=$held)"
++  exit 1
++fi
++
++# Sample halfway through a 300 ms slide: the window must be carried by it.
++"$UMBRIEL" msg workspace-switch TWO > /dev/null
++"$UMBRIEL" clock-advance 150 > /dev/null
++mid_x=$(green_x)
++"$UMBRIEL" clock-advance 300 > /dev/null
++away=$(green)
++active_after=$(active)
++
++if [[ $active_after != TWO ]]; then
++  echo "the switch never happened: on workspace '$active_after', want TWO"
++  exit 1
++fi
++if [[ $(home_name) != ONE ]]; then
++  echo "the release moved the window off its workspace: '$(home_name)', want ONE"
++  exit 1
++fi
++# Halfway through the slide the window has travelled left with its workspace; a
++# view left under the drag tree keeps drawing at its old x.
++if ((mid_x >= wx - 40)); then
++  echo "the deforming window did not travel with its workspace (drawn at x=$mid_x, box x=$wx, mid-slide)"
++  exit 1
++fi
++if ((away >= FLOOR)); then
++  echo "the deforming window stayed on screen after its workspace left (green=$away)"
++  exit 1
++fi
++
++# Switching back presents it again, at rest on its committed box once the slow
++# spring has run out; the clock stays frozen so that settle is ordered here.
++"$UMBRIEL" msg workspace-switch ONE > /dev/null
++"$UMBRIEL" clock-advance 300 > /dev/null
++"$UMBRIEL" clock-advance 6000 > /dev/null
++back=$(green)
++read -r rx ry rw rh < <("$UMBRIEL_PIXEL_PROBE" "$IMAGE" bbox 'g > 0.8 && r < 0.2 && b < 0.2')
++"$UMBRIEL" clock-resume
++"$UMBRIEL" settle > /dev/null
++if ((back < FLOOR)); then
++  echo "the window did not come back with its workspace (green=$back)"
++  exit 1
++fi
++if (((rw - bw) > 2 || (bw - rw) > 2 || (rh - bh) > 2 || (bh - rh) > 2)); then
++  echo "the deform left a residue once it settled: drawn ${rw}x${rh}, resting ${bw}x${bh}"
++  exit 1
++fi
++
++# Phase 2 — the window is still held by the cursor when the workspace switches.
++# The drag owns its presentation: it must stay drawn for the whole slide, then
++# land on the workspace it is dropped on.
++read -r wx wy ww wh < <(box)
++gx=$((wx + ww / 2))
++gy=$((wy + wh / 2))
++pointer_hold "$OUTPUT_W" "$OUTPUT_H" \
++  move "$gx" "$gy" mod super press "$BTN_LEFT" \
++  move $((gx + 40)) "$gy" move $((gx + 80)) "$gy" move $((gx + 120)) "$gy"
++"$UMBRIEL" clock-freeze
++"$UMBRIEL" clock-advance 16 > /dev/null
++"$UMBRIEL" msg workspace-switch TWO > /dev/null
++"$UMBRIEL" clock-advance 450 > /dev/null
++grabbed=$(green)
++"$UMBRIEL" clock-resume
++pointer_release
++"$UMBRIEL" settle > /dev/null
++posed=$(green)
++dropped=$(home_name)
++
++if ((grabbed < FLOOR)); then
++  echo "the held window vanished with the workspace it was dragged from (green=$grabbed)"
++  exit 1
++fi
++if [[ $dropped != TWO ]]; then
++  echo "the drop did not land the window on the visible workspace: '$dropped', want TWO"
++  exit 1
++fi
++if ((posed < FLOOR)); then
++  echo "the dropped window is not presented on its own workspace (green=$posed)"
++  exit 1
++fi
++"$UMBRIEL" msg workspace-switch ONE > /dev/null
++"$UMBRIEL" settle > /dev/null
++left_behind=$(green)
++if ((left_behind >= FLOOR)); then
++  echo "the dropped window stayed on screen after its workspace left (green=$left_behind)"
++  exit 1
++fi
++echo "a deforming window travels and hides with its workspace, and a held one stays with the cursor"
+-- 
+2.56.0.341.gebdc087dc9
+
+
+From 6b606dadeef4622329105c4bac5f0b5ef9729054 Mon Sep 17 00:00:00 2001
+From: ZhangDM-520 <jixianqiang1540@gmail.com>
+Date: Sat, 7 Nov 2026 21:52:04 +0800
+Subject: [PATCH 6/7] fix(workspace): land the drag-release wait before the
+ trees travel
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A gesture switches workspace without deactivating the outgoing one until
+it commits: slideBegin moves the base workspace's tree under the fingers
+and setActive(false) only runs at the release. The first commit's flush
+hung off that deactivation, so for the whole swipe a released, still
+deforming sheet stayed parked under the shared drag tree — outside the
+trees that travel — and snapped into place at commit.
+
+slideBegin now lands every participant's deferred re-home while the trees
+are still at rest. The activate path keeps its own flush (deactivation
+happens inside the switch), so a swipe and a switch end up in the same
+place by different routes.
+
+The pin gains the gesture phase, an explicit linear slide curve (the
+default curve is a spring and ignores duration_ms, which made the
+"halfway" sample meaningless), and an engagement floor: the sheet must
+still move on ordered ticks after the release, otherwise the deferral
+under test was never taken and the check would pass vacuously. Its travel
+assertion is axis-agnostic and requires the sheet to stay drawn, so
+hiding the view on deactivation cannot pass as travelling.
+
+Falsified per mechanism: without the deactivation flush the activate
+phase stops travelling; without the slideBegin flush the gesture phase
+stops travelling; without the ownership guard the held window vanishes at
+the slide's end.
+
+Validated: meson units 150/150; harness drag/ workspace/ animation/
+effect/workspace output/ transient/ overview/ 148 pass, the 4 failures
+(animation/drag_toggle, drag/overview_card_workspace_edge_scroll,
+output/two_output_containment pre-existing on 01540344;
+drag/toplevel_drag_lifecycle a load flake that passes in isolation);
+clang-format and clang-tidy clean.
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+(cherry picked from commit f86099e400f861b037b16301075a4b5fa40c315b)
+---
+ src/workspace/workspace.cpp                   |  18 +++
+ src/workspace/workspace.h                     |   3 +
+ .../checks/drag/settle_workspace_switch.sh    | 147 ++++++++++++++----
+ 3 files changed, 138 insertions(+), 30 deletions(-)
+
+diff --git a/src/workspace/workspace.cpp b/src/workspace/workspace.cpp
+index f371c32e..4659ab06 100644
+--- a/src/workspace/workspace.cpp
++++ b/src/workspace/workspace.cpp
+@@ -2597,6 +2597,14 @@ namespace umbriel {
+     }
+   }
+ 
++  void Workspace::flushDeferredRehomes() {
++    for (View* view : m_views) {
++      if (!view->pinned()) {
++        view->flushReleaseRehome();
++      }
++    }
++  }
++
+   bool Workspace::isSwitchTransitionView(const View* view) const {
+     return std::ranges::find(m_switchViews, view) != m_switchViews.end();
+   }
+@@ -3595,6 +3603,16 @@ namespace umbriel {
+     const size_t idx = m_active->index();
+     m_slide.previous = (includePrev && idx > 0) ? workspaceAt(idx - 1) : nullptr;
+     m_slide.next = includeNext ? workspaceAt(idx + 1) : nullptr;
++    // A gesture moves these trees while the outgoing workspace is still active:
++    // deactivation only happens when the gesture commits. A deferred release
++    // re-home would keep its view under the shared drag tree, outside the trees
++    // that travel, and glue the window to the screen for the whole swipe. Land
++    // the waits while the trees are still at rest.
++    for (Workspace* workspace : {m_slide.base, m_slide.previous, m_slide.next}) {
++      if (workspace != nullptr) {
++        workspace->flushDeferredRehomes();
++      }
++    }
+     m_slide.base->beginSwitchTransition();
+     if (m_slide.previous != nullptr) {
+       m_slide.previous->beginSwitchTransition();
+diff --git a/src/workspace/workspace.h b/src/workspace/workspace.h
+index df03b236..8a945d47 100644
+--- a/src/workspace/workspace.h
++++ b/src/workspace/workspace.h
+@@ -261,6 +261,9 @@ namespace umbriel {
+     void snapVisible(const View* view);
+     double scrollFractionToReveal(const View* view) const;
+     void applyVisibility();
++    // Lands every view's deferred release re-home: the wait is only correct
++    // while this workspace's trees rest, not once they start travelling.
++    void flushDeferredRehomes();
+     void beginSwitchTransition();
+     void showSwitchViews();
+     void endSwitchTransition();
+diff --git a/tests/harness/checks/drag/settle_workspace_switch.sh b/tests/harness/checks/drag/settle_workspace_switch.sh
+index 12a9d3db..1fea7d95 100755
+--- a/tests/harness/checks/drag/settle_workspace_switch.sh
++++ b/tests/harness/checks/drag/settle_workspace_switch.sh
+@@ -3,9 +3,10 @@
+ # A window that still deforms must not outlive the workspace it lives in. The
+ # drag physics keeps a released sheet displaced past the drop, and the deferred
+ # re-home leaves the view under the shared drag tree — outside every workspace
+-# layer, so a workspace switch's slide offset and clip never reach it: the
+-# window hangs at its old screen position after the workspace has gone. It must
+-# travel (and hide) with its workspace, and come back with it.
++# layer, so the workspace's slide offset and clip never reach it: the window
++# hangs at its old screen position after its workspace has gone. It must travel
++# (and hide) with its workspace, come back with it, and do the same under a
++# gesture, whose trees move before the outgoing workspace is deactivated.
+ #
+ # A window still held by the cursor is the drag's payload: switching workspace
+ # must not steal its presentation from the drag.
+@@ -17,6 +18,7 @@ readonly OUTPUT_W=1280
+ readonly OUTPUT_H=720
+ readonly TITLE=stuck-sheet
+ readonly IMAGE="$UMBRIEL_RUNTIME_DIR/switch.png"
++readonly REGION="${OUTPUT_W}x${OUTPUT_H}+0+0"
+ # A quarter of the 400x300 sheet: proof the window is drawn, not a stray edge.
+ readonly FLOOR=20000
+ 
+@@ -50,9 +52,12 @@ physics = true
+ stiffness = 1.0
+ damping = 1.0
+ max_displacement_px = 200
++# A linear slide makes duration_ms meaningful (the default curve is a spring and
++# ignores it) and puts the halfway sample at half the travel.
+ [animation.workspaces]
+ enabled = true
+ duration_ms = 300
++curve = "linear"
+ 
+ # Static workspaces: a dynamic inventory would prune the emptied workspace and
+ # move the window instead of leaving it where the check put it.
+@@ -85,31 +90,118 @@ home_name() {
+ active() { "$UMBRIEL" workspaces --json | jq -r '.[] | select(.active) | .name'; }
+ capture() { grim -o HEADLESS-1 "$IMAGE"; }
+ green() { capture; "$UMBRIEL_PIXEL_PROBE" "$IMAGE" count 'g > 0.8 && r < 0.2 && b < 0.2'; }
+-green_x() { capture; "$UMBRIEL_PIXEL_PROBE" "$IMAGE" bbox 'g > 0.8 && r < 0.2 && b < 0.2' | cut -d' ' -f1; }
++bbox() { capture; "$UMBRIEL_PIXEL_PROBE" "$IMAGE" bbox 'g > 0.8 && r < 0.2 && b < 0.2'; }
++
++# The drawn sheet must have travelled with its workspace: still drawn, and moved
++# along whichever axis this output arranges workspaces on by a large share of the
++# slide, or clipped at the edge it left through. A view parked under the shared
++# drag tree keeps drawing at its own coordinates.
++assert_travelled() { # $1 label, $2 box "x y w h", $3 drawn bbox, $4 minimum shift
++  local label=$1 bxx bxy bxw bxh drx dry drw drh
++  read -r bxx bxy bxw bxh <<< "$2"
++  read -r drx dry drw drh <<< "$3"
++  local dx=$((drx - bxx)) dy=$((dry - bxy))
++  ((dx < 0)) && dx=$((-dx))
++  ((dy < 0)) && dy=$((-dy))
++  local moved=$((dx > dy ? dx : dy))
++  if ((moved >= $4)); then
++    return 0
++  fi
++  if (((drx == 0 && bxx >= $4) || (dry == 0 && bxy >= $4))); then
++    return 0
++  fi
++  echo "$label: the deforming window did not travel with its workspace (drawn at ${drx},${dry}, box ${bxx},${bxy})"
++  exit 1
++}
++
++# The frame must keep moving on ordered ticks while the spring rings: every other
++# animation in this config is 1 ms, so a static window means the deform never
++# engaged and the deferral under test was never taken.
++require_deforming() {
++  local label=$1 _ changed
++  capture
++  cp "$IMAGE" "$UMBRIEL_RUNTIME_DIR/deform-before.png"
++  "$UMBRIEL" clock-advance 200 > /dev/null
++  capture
++  read -r _ changed < <("$UMBRIEL_PIXEL_PROBE" "$UMBRIEL_RUNTIME_DIR/deform-before.png" diff "$IMAGE" "$REGION")
++  if ((changed == 0)); then
++    echo "$label: the released sheet is not deforming (no pixel moved in 200 ms), the wait was never taken"
++    exit 1
++  fi
++}
++
++# Drags the window by 120 px and releases it, leaving the spring ringing.
++drag_and_release() {
++  local wx wy ww wh
++  read -r wx wy ww wh < <(box)
++  local gx=$((wx + ww / 2)) gy=$((wy + wh / 2))
++  pointer_hold "$OUTPUT_W" "$OUTPUT_H" \
++    move "$gx" "$gy" mod super press "$BTN_LEFT" \
++    move $((gx + 40)) "$gy" move $((gx + 80)) "$gy" move $((gx + 120)) "$gy" \
++    -- release "$BTN_LEFT" mod none
++}
++
++# Grabs the window and holds it, leaving the sheet displaced under the cursor.
++grab_and_hold() {
++  local wx wy ww wh
++  read -r wx wy ww wh < <(box)
++  local gx=$((wx + ww / 2)) gy=$((wy + wh / 2))
++  pointer_hold "$OUTPUT_W" "$OUTPUT_H" \
++    move "$gx" "$gy" mod super press "$BTN_LEFT" \
++    move $((gx + 40)) "$gy" move $((gx + 80)) "$gy" move $((gx + 120)) "$gy"
++}
+ 
+ read -r wx wy ww wh < <(box)
+-gx=$((wx + ww / 2))
+-gy=$((wy + wh / 2))
+ # The drawn resting extent is the baseline the settled deform must return to;
+ # the client's surface and the presented box are not the same rectangle.
+-capture
+-read -r bx by bw bh < <("$UMBRIEL_PIXEL_PROBE" "$IMAGE" bbox 'g > 0.8 && r < 0.2 && b < 0.2')
++read -r bx by bw bh < <(bbox)
+ if ((bw < ww / 2 || bh < wh / 2)); then
+   echo "scenario never engaged: the window draws ${bw}x${bh} in a ${ww}x${wh} box"
+   exit 1
+ fi
+ 
+-# Phase 1 — released while the spring still displaces the sheet. The window
+-# keeps living on ONE: it must slide out with it, not hang at its old spot.
+-pointer_hold "$OUTPUT_W" "$OUTPUT_H" \
+-  move "$gx" "$gy" mod super press "$BTN_LEFT" \
+-  move $((gx + 40)) "$gy" move $((gx + 80)) "$gy" move $((gx + 120)) "$gy" \
+-  -- release "$BTN_LEFT" mod none
++# Phase 1 — a gesture switch. A swipe moves the base workspace's tree before the
++# outgoing workspace is deactivated, so nothing but an explicit flush can land
++# the released sheet's wait in time.
++drag_and_release
++"$UMBRIEL" clock-freeze
++"$UMBRIEL" clock-advance 16 > /dev/null
++pre=$(green)
++pointer_release
++"$UMBRIEL" clock-advance 16 > /dev/null
++require_deforming "gesture"
++read -r wx wy ww wh < <(box)
++# The active workspace axis decides which delta travels; send the same travel on
++# both so the swipe works whichever axis this output arranges.
++"$UMBRIEL" swipe-test begin 1000 > /dev/null
++"$UMBRIEL" swipe-test update 1016 -80 -80 > /dev/null
++"$UMBRIEL" clock-advance 16 > /dev/null
++gesture_count=$(green)
++read -r gx gy gw gh < <(bbox)
++"$UMBRIEL" swipe-test end 1032 1 > /dev/null
++"$UMBRIEL" clock-advance 600 > /dev/null
++"$UMBRIEL" clock-resume
++"$UMBRIEL" settle > /dev/null
++
++if ((pre < FLOOR)); then
++  echo "scenario never engaged: the deformed sheet does not draw before the swipe (green=$pre)"
++  exit 1
++fi
++if ((gesture_count < FLOOR)); then
++  echo "the deforming window left the slide instead of travelling with it (green=$gesture_count)"
++  exit 1
++fi
++assert_travelled "into a gesture" "$wx $wy $ww $wh" "$gx $gy $gw $gh" 120
++
++# Phase 2 — an activate switch. The window keeps living on ONE: it must slide out
++# with it, not hang at its old spot.
++drag_and_release
+ "$UMBRIEL" clock-freeze
+ "$UMBRIEL" clock-advance 16 > /dev/null
+ held=$(green)
+ pointer_release
+ "$UMBRIEL" clock-advance 16 > /dev/null
++require_deforming "switch"
+ 
+ if [[ $(home_name) != ONE || $(active) != ONE ]]; then
+   echo "scenario never engaged: window on '$(home_name)', active '$(active)', want ONE/ONE"
+@@ -119,12 +211,13 @@ if ((held < FLOOR)); then
+   echo "scenario never engaged: the deformed sheet does not draw before the switch (green=$held)"
+   exit 1
+ fi
++read -r wx wy ww wh < <(box)
+ 
+-# Sample halfway through a 300 ms slide: the window must be carried by it.
+ "$UMBRIEL" msg workspace-switch TWO > /dev/null
+-"$UMBRIEL" clock-advance 150 > /dev/null
+-mid_x=$(green_x)
+-"$UMBRIEL" clock-advance 300 > /dev/null
++"$UMBRIEL" clock-advance 60 > /dev/null
++mid=$(green)
++read -r mx my mw mh < <(bbox)
++"$UMBRIEL" clock-advance 400 > /dev/null
+ away=$(green)
+ active_after=$(active)
+ 
+@@ -136,12 +229,11 @@ if [[ $(home_name) != ONE ]]; then
+   echo "the release moved the window off its workspace: '$(home_name)', want ONE"
+   exit 1
+ fi
+-# Halfway through the slide the window has travelled left with its workspace; a
+-# view left under the drag tree keeps drawing at its old x.
+-if ((mid_x >= wx - 40)); then
+-  echo "the deforming window did not travel with its workspace (drawn at x=$mid_x, box x=$wx, mid-slide)"
++if ((mid < FLOOR)); then
++  echo "the deforming window left the slide instead of travelling with it (green=$mid halfway)"
+   exit 1
+ fi
++assert_travelled "mid-slide" "$wx $wy $ww $wh" "$mx $my $mw $mh" 120
+ if ((away >= FLOOR)); then
+   echo "the deforming window stayed on screen after its workspace left (green=$away)"
+   exit 1
+@@ -153,7 +245,7 @@ fi
+ "$UMBRIEL" clock-advance 300 > /dev/null
+ "$UMBRIEL" clock-advance 6000 > /dev/null
+ back=$(green)
+-read -r rx ry rw rh < <("$UMBRIEL_PIXEL_PROBE" "$IMAGE" bbox 'g > 0.8 && r < 0.2 && b < 0.2')
++read -r rx ry rw rh < <(bbox)
+ "$UMBRIEL" clock-resume
+ "$UMBRIEL" settle > /dev/null
+ if ((back < FLOOR)); then
+@@ -165,15 +257,10 @@ if (((rw - bw) > 2 || (bw - rw) > 2 || (rh - bh) > 2 || (bh - rh) > 2)); then
+   exit 1
+ fi
+ 
+-# Phase 2 — the window is still held by the cursor when the workspace switches.
++# Phase 3 — the window is still held by the cursor when the workspace switches.
+ # The drag owns its presentation: it must stay drawn for the whole slide, then
+ # land on the workspace it is dropped on.
+-read -r wx wy ww wh < <(box)
+-gx=$((wx + ww / 2))
+-gy=$((wy + wh / 2))
+-pointer_hold "$OUTPUT_W" "$OUTPUT_H" \
+-  move "$gx" "$gy" mod super press "$BTN_LEFT" \
+-  move $((gx + 40)) "$gy" move $((gx + 80)) "$gy" move $((gx + 120)) "$gy"
++grab_and_hold
+ "$UMBRIEL" clock-freeze
+ "$UMBRIEL" clock-advance 16 > /dev/null
+ "$UMBRIEL" msg workspace-switch TWO > /dev/null
+-- 
+2.56.0.341.gebdc087dc9
+
+
+From fc31d8f5c9aa13a0c229312e7804a909738ed833 Mon Sep 17 00:00:00 2001
+From: ZhangDM-520 <jixianqiang1540@gmail.com>
+Date: Sat, 7 Nov 2026 22:19:03 +0800
+Subject: [PATCH 7/7] fix(view): let a dragged window's dialogs ride its
+ presentation
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+External-review round on the workspace-stick delta (M1, M2, L1, N1).
+
+M1: dragPresentationOwnsVisibility() only asked whether the cursor held
+this exact view. A dragged window carries its transient children into the
+shared drag tree (syncTransientSceneParent), so a workspace deactivation
+still disabled an unattached dialog and flushed its wait, and the dialog
+vanished mid-drag. The predicate now walks the transient-parent chain: an
+ancestor under the cursor owns the presentation of everything riding it.
+
+M2: the same guard protected the view's scene node but left its decoration
+shadow written unconditionally, so a held window lost its shadow the
+moment its workspace deactivated. Both writes now sit behind the guard.
+Not pinned: the harness draws no window shadow in this configuration (a
+band under a resting window measures the bare backdrop), so there is
+nothing to measure; the fix mirrors the node guard.
+
+L1: the pin exercised only a cancelled swipe. It now drives a committed
+swipe as well — the window travels with the slide, the release lands on
+the next workspace, and the window leaves the screen with its workspace —
+and asserts the cancelled swipe returns it to rest on its own workspace.
+
+N1: the clipped-at-the-edge case in assert_travelled now also requires the
+drawn sheet to be smaller than its own box, so a window that merely sat on
+the edge cannot pass as having travelled.
+
+M1 is falsified: with the single-view predicate restored, the new phase
+fails at "the drag's child dialog was hidden with the workspace".
+
+Validated: meson units 150/150; harness drag/ workspace/ animation/
+transient/ focus/transient 99 pass, the 2 failures
+(animation/drag_toggle, drag/overview_card_workspace_edge_scroll)
+pre-existing on the base; clang-format and clang-tidy clean.
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+(cherry picked from commit 8c8ee7954177982d3930743409485e84e2d71db8)
+---
+ src/view/view.cpp                             |  25 ++++-
+ .../checks/drag/settle_workspace_switch.sh    | 106 +++++++++++++++++-
+ 2 files changed, 123 insertions(+), 8 deletions(-)
+
+diff --git a/src/view/view.cpp b/src/view/view.cpp
+index d6dad425..830aa864 100644
+--- a/src/view/view.cpp
++++ b/src/view/view.cpp
+@@ -624,13 +624,16 @@ namespace umbriel {
+       flushReleaseRehome();
+     }
+     // A hidden tab or a minimized window stays hidden when its workspace comes back.
++    // A held window (or a child riding its drag) is the drag's payload: its node
++    // and its shadow belong to the drag tree, not to a workspace it was carried
++    // out of, so a deactivation must leave both exactly as the drag set them.
+     const bool shown = active && !m_tabHidden && !m_minimized;
+-    if (m_sceneTree != nullptr && !dragPresentationOwnsVisibility()) {
+-      // A held window is the drag's payload; its presentation belongs to the
+-      // drag tree, not to a workspace it was carried out of.
+-      wlr_scene_node_set_enabled(&m_sceneTree->node, shown);
++    if (!dragPresentationOwnsVisibility()) {
++      if (m_sceneTree != nullptr) {
++        wlr_scene_node_set_enabled(&m_sceneTree->node, shown);
++      }
++      m_decoration.setShadowEnabled(shown);
+     }
+-    m_decoration.setShadowEnabled(shown);
+     m_server->scheduleSuspensionSync();
+     if (!m_mapped) {
+       return;
+@@ -672,7 +675,17 @@ namespace umbriel {
+ 
+   bool View::dragPresentationOwnsVisibility() const {
+     const Cursor* cursor = m_server->cursor();
+-    return cursor != nullptr && cursor->isDraggingView(this);
++    if (cursor == nullptr) {
++      return false;
++    }
++    // A dragged window carries its transient children into the drag tree
++    // (syncTransientSceneParent), so the drag owns their presentation too.
++    for (const View* view = this; view != nullptr; view = view->transientParent()) {
++      if (cursor->isDraggingView(view)) {
++        return true;
++      }
++    }
++    return false;
+   }
+ 
+   void View::setNodeEnabled(bool enabled) {
+diff --git a/tests/harness/checks/drag/settle_workspace_switch.sh b/tests/harness/checks/drag/settle_workspace_switch.sh
+index 1fea7d95..fac53aeb 100755
+--- a/tests/harness/checks/drag/settle_workspace_switch.sh
++++ b/tests/harness/checks/drag/settle_workspace_switch.sh
+@@ -69,6 +69,13 @@ workspaces = ["ONE", "TWO"]
+ match.title = "^stuck-sheet$"
+ default_floating = true
+ default_floating_size_px = { width = 400, height = 300 }
++
++# An unattached dialog keeps its own scene node inside its parent's tree, so a
++# workspace hiding it is visible on screen rather than riding the parent's node.
++[[window_rule]]
++match.title = "^settle-child$"
++default_floating = true
++attach_to_parent = false
+ EOF
+ "$UMBRIEL" msg config-reload > /dev/null
+ 
+@@ -90,6 +97,9 @@ home_name() {
+ active() { "$UMBRIEL" workspaces --json | jq -r '.[] | select(.active) | .name'; }
+ capture() { grim -o HEADLESS-1 "$IMAGE"; }
+ green() { capture; "$UMBRIEL_PIXEL_PROBE" "$IMAGE" count 'g > 0.8 && r < 0.2 && b < 0.2'; }
++red() { capture; "$UMBRIEL_PIXEL_PROBE" "$IMAGE" count 'r > 0.8 && g < 0.2 && b < 0.2'; }
++box_of() { "$UMBRIEL" windows --json | jq -r --arg title "$1" '.[] | select(.title == $title) | "\(.x) \(.y) \(.w) \(.h)"'; }
++window_count() { "$UMBRIEL" windows --json | jq 'length'; }
+ bbox() { capture; "$UMBRIEL_PIXEL_PROBE" "$IMAGE" bbox 'g > 0.8 && r < 0.2 && b < 0.2'; }
+ 
+ # The drawn sheet must have travelled with its workspace: still drawn, and moved
+@@ -107,7 +117,13 @@ assert_travelled() { # $1 label, $2 box "x y w h", $3 drawn bbox, $4 minimum shi
+   if ((moved >= $4)); then
+     return 0
+   fi
+-  if (((drx == 0 && bxx >= $4) || (dry == 0 && bxy >= $4))); then
++  # Clipped against the edge it travelled out through, and drawn smaller than its
++  # own box: the sheet really moved out, it did not just change shape. Requiring
++  # the box to have started at least the minimum away rejects a window that
++  # already sat on the edge.
++  local drawn_area=$((drw * drh))
++  local box_area=$((bxw * bxh))
++  if ((((drx <= 1 && bxx >= $4) || (dry <= 1 && bxy >= $4)) && drawn_area < box_area)); then
+     return 0
+   fi
+   echo "$label: the deforming window did not travel with its workspace (drawn at ${drx},${dry}, box ${bxx},${bxy})"
+@@ -173,6 +189,7 @@ require_deforming "gesture"
+ read -r wx wy ww wh < <(box)
+ # The active workspace axis decides which delta travels; send the same travel on
+ # both so the swipe works whichever axis this output arranges.
++# A cancelled swipe comes back; a committed one takes the window with it.
+ "$UMBRIEL" swipe-test begin 1000 > /dev/null
+ "$UMBRIEL" swipe-test update 1016 -80 -80 > /dev/null
+ "$UMBRIEL" clock-advance 16 > /dev/null
+@@ -180,8 +197,24 @@ gesture_count=$(green)
+ read -r gx gy gw gh < <(bbox)
+ "$UMBRIEL" swipe-test end 1032 1 > /dev/null
+ "$UMBRIEL" clock-advance 600 > /dev/null
++returned=$(green)
++returned_workspace=$(active)
++
++"$UMBRIEL" swipe-test begin 2000 > /dev/null
++"$UMBRIEL" swipe-test update 2016 -80 -80 > /dev/null
++"$UMBRIEL" clock-advance 16 > /dev/null
++committed=$(green)
++read -r cx cy cw ch < <(bbox)
++# Carry the step past the halfway point so the release commits it.
++"$UMBRIEL" swipe-test update 2032 -220 -220 > /dev/null
++"$UMBRIEL" swipe-test end 2048 0 > /dev/null
++"$UMBRIEL" clock-advance 800 > /dev/null
++committed_away=$(green)
++committed_workspace=$(active)
+ "$UMBRIEL" clock-resume
+ "$UMBRIEL" settle > /dev/null
++"$UMBRIEL" msg workspace-switch ONE > /dev/null
++"$UMBRIEL" settle > /dev/null
+ 
+ if ((pre < FLOOR)); then
+   echo "scenario never engaged: the deformed sheet does not draw before the swipe (green=$pre)"
+@@ -192,6 +225,23 @@ if ((gesture_count < FLOOR)); then
+   exit 1
+ fi
+ assert_travelled "into a gesture" "$wx $wy $ww $wh" "$gx $gy $gw $gh" 120
++if [[ $returned_workspace != ONE || $returned -lt $FLOOR ]]; then
++  echo "a cancelled swipe did not leave the window on its workspace (workspace $returned_workspace, green=$returned)"
++  exit 1
++fi
++if ((committed < FLOOR)); then
++  echo "the window left the committed slide instead of travelling with it (green=$committed)"
++  exit 1
++fi
++assert_travelled "into a committed swipe" "$wx $wy $ww $wh" "$cx $cy $cw $ch" 120
++if [[ $committed_workspace != TWO ]]; then
++  echo "the committed swipe did not switch workspace: on '$committed_workspace', want TWO"
++  exit 1
++fi
++if ((committed_away >= FLOOR)); then
++  echo "the window stayed on screen after its workspace left (green=$committed_away)"
++  exit 1
++fi
+ 
+ # Phase 2 — an activate switch. The window keeps living on ONE: it must slide out
+ # with it, not hang at its old spot.
+@@ -291,4 +341,56 @@ if ((left_behind >= FLOOR)); then
+   echo "the dropped window stayed on screen after its workspace left (green=$left_behind)"
+   exit 1
+ fi
+-echo "a deforming window travels and hides with its workspace, and a held one stays with the cursor"
++# Phase 4 — a dragged window carries its transient child into the drag tree. A
++# workspace switch must not disable a dialog the drag elevated with its parent.
++readonly CHILD_FLOOR=5000
++mapped=$(window_count)
++EXPORT_TOPLEVEL=1 "$UMBRIEL_SEAT_LOG_CLIENT" settle-parent > "$UMBRIEL_RUNTIME_DIR/settle-parent.log" 2>&1 &
++for _ in $(seq 80); do
++  [[ $(window_count) -eq $((mapped + 1)) ]] && break
++  sleep 0.05
++done
++handle=
++for _ in $(seq 60); do
++  handle=$(sed -n 's/^exported handle=//p' "$UMBRIEL_RUNTIME_DIR/settle-parent.log")
++  [[ -n $handle ]] && break
++  sleep 0.05
++done
++if [[ -z $handle ]]; then
++  echo "scenario never engaged: the parent never exported its toplevel: $(cat "$UMBRIEL_RUNTIME_DIR/settle-parent.log")"
++  exit 1
++fi
++TRANSIENT_FOREIGN_HANDLE=$handle FILL_COLOR=0xFFFF0000 "$UMBRIEL_UNMAP_CLIENT" settle-child 200 150 \
++  > "$UMBRIEL_RUNTIME_DIR/settle-child.log" 2>&1 &
++for _ in $(seq 80); do
++  [[ $(window_count) -eq $((mapped + 2)) ]] && break
++  sleep 0.05
++done
++"$UMBRIEL" settle > /dev/null
++
++read -r px py pw ph < <(box_of settle-parent)
++# Grab the parent well away from the dialog the compositor centered over it.
++gx=$((px + pw / 4))
++gy=$((py + ph * 3 / 4))
++pointer_hold "$OUTPUT_W" "$OUTPUT_H" \
++  move "$gx" "$gy" mod super press "$BTN_LEFT" \
++  move $((gx + 40)) "$gy" move $((gx + 80)) "$gy"
++"$UMBRIEL" clock-freeze
++"$UMBRIEL" clock-advance 16 > /dev/null
++child_held=$(red)
++"$UMBRIEL" msg workspace-switch TWO > /dev/null
++"$UMBRIEL" clock-advance 450 > /dev/null
++child_across=$(red)
++"$UMBRIEL" clock-resume
++pointer_release
++"$UMBRIEL" settle > /dev/null
++
++if ((child_held < CHILD_FLOOR)); then
++  echo "scenario never engaged: the dialog does not draw with its parent's drag (red=$child_held)"
++  exit 1
++fi
++if ((child_across < CHILD_FLOOR)); then
++  echo "the drag's child dialog was hidden with the workspace (red=$child_held -> $child_across)"
++  exit 1
++fi
++echo "a deforming window travels and hides with its workspace, a held one stays with the cursor, and its dialogs ride along"
+-- 
+2.56.0.341.gebdc087dc9
 

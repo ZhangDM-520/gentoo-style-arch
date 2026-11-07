@@ -1,58 +1,3 @@
-From 7ca4cc08c0010cdeeca68d301698dd7b70a77c32 Mon Sep 17 00:00:00 2001
-From: ZhangDM-520 <jixianqiang1540@gmail.com>
-Date: Thu, 5 Nov 2026 07:31:07 +0800
-Subject: [PATCH] 0012 synth
-
-Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
----
- docs/user/configuration.md                    |   8 +-
- docs/user/outputs.md                          |  63 ++++++---
- docs/user/window-rules.md                     |  53 ++++----
- examples/config.toml                          |   3 +
- src/config/change.cpp                         |   1 +
- src/config/config.h                           |  11 ++
- src/config/fields_general.cpp                 |   1 +
- src/config/fields_output.cpp                  |  11 ++
- src/config/fields_rules.cpp                   |   1 +
- src/config/resolve.cpp                        |   3 +
- src/output/output.cpp                         |  28 +++-
- src/output/output.h                           |   7 +
- src/server/ipc_commands.cpp                   |   2 +
- src/server/server.cpp                         |  13 ++
- src/server/server_events.cpp                  |   4 +
- src/view/view.cpp                             |  19 ++-
- src/view/view.h                               |   8 ++
- src/view/view_lifecycle.cpp                   |   2 +
- src/view/view_role.cpp                        |   4 +
- src/view/view_rules.cpp                       |   4 +
- src/xwayland/outputs.cpp                      |  15 ++-
- src/xwayland/outputs.h                        |   9 +-
- src/xwayland/xwayland.cpp                     |   9 +-
- tests/harness/check.sh                        |  10 +-
- tests/harness/checks/protocol/render_scale.sh | 104 ++++++++++++++
- .../checks/protocol/render_scale_exempt.sh    |  97 +++++++++++++
- .../checks/protocol/xwayland_render_scale.sh  | 121 +++++++++++++++++
- .../protocol/xwayland_render_scale_forced.sh  |   9 ++
- tests/harness/clients/fractional_client.cpp   |  20 +++
- tests/meson.build                             |   2 +
- tests/unit/config_change.cpp                  |  16 +++
- tests/unit/config_load.cpp                    |  58 ++++++++
- tests/unit/config_resolve.cpp                 |   4 +
- tests/unit/config_schema.cpp                  |  15 +++
- tests/unit/xwayland_outputs.cpp               |  38 +++++-
- umbrielfx/include/umbrielfx/types/wlr_scene.h |  18 +++
- umbrielfx/meson.build                         |  16 +++
- umbrielfx/tests/scale_hints.c                 | 127 ++++++++++++++++++
- umbrielfx/types/scene/capture.c               |   4 +
- umbrielfx/types/scene/surface.c               |  31 +++--
- umbrielfx/types/scene/wlr_scene.c             |   8 ++
- 41 files changed, 904 insertions(+), 73 deletions(-)
- create mode 100644 tests/harness/checks/protocol/render_scale.sh
- create mode 100755 tests/harness/checks/protocol/render_scale_exempt.sh
- create mode 100644 tests/harness/checks/protocol/xwayland_render_scale.sh
- create mode 100644 tests/harness/checks/protocol/xwayland_render_scale_forced.sh
- create mode 100644 umbrielfx/tests/scale_hints.c
-
 diff --git a/docs/user/configuration.md b/docs/user/configuration.md
 index b5c1e678..fcf68946 100644
 --- a/docs/user/configuration.md
@@ -169,71 +114,19 @@ index 97ed350b..659cd048 100644
  
  Accepted values are `normal`, `90`, `180`, `270`, `flipped`, `flipped-90`, `flipped-180`, and `flipped-270`.
 diff --git a/docs/user/window-rules.md b/docs/user/window-rules.md
-index cf7300d2..c0319ec4 100644
+index 299e5f6a..016a3dba 100644
 --- a/docs/user/window-rules.md
 +++ b/docs/user/window-rules.md
-@@ -179,32 +179,33 @@ Add `default_column_display = "tabbed"` to keep such a column as [tabs](layout.m
- 
- ## Settings updated while a window is open
- 
--| Key                       | Description                                                                                                                                                                                                                                                            |
--| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
--| `opacity`                 | Surface opacity from 0.0 to 1.0.                                                                                                                                                                                                                                       |
--| `blur`                    | Enable or disable window blur, including translucent Umbriel title bars.                                                                                                                                                                                               |
--| `blur_popups`             | Apply blur to descendant XDG popups.                                                                                                                                                                                                                                   |
--| `blur_ignore_alpha`       | Skip blur below an alpha threshold.                                                                                                                                                                                                                                    |
--| `blur_optimized`          | Override the global optimized-blur choice.                                                                                                                                                                                                                             |
--| `confine_pointer`         | Keep the pointer inside this window while it has keyboard focus (default `false`).                                                                                                                                                                                     |
--| `allow_shortcuts_inhibit` | Allow client-requested keyboard shortcut inhibition (default `true`). Set `false` to keep compositor shortcuts available. See [Keyboard shortcuts inhibition](#keyboard-shortcuts-inhibition).                                                                         |
--| `block_capture`           | Omit this window from screenshots and recordings (default `false`). See [Capture protection](#capture-protection).                                                                                                                                                     |
--| `background_render`       | Keep this window drawing while hidden (default `false`). See [Background rendering](#background-rendering).                                                                                                                                                            |
--| `focus_on_activate`       | Override activation focus for this window.                                                                                                                                                                                                                             |
--| `vrr`                     | Override the focused output's VRR policy.                                                                                                                                                                                                                              |
--| `tearing`                 | Request or veto asynchronous presentation.                                                                                                                                                                                                                             |
--| `hdr`                     | Override the focused output's HDR policy.                                                                                                                                                                                                                              |
--| `border_color_focused`    | Override `colors.border.focused`.                                                                                                                                                                                                                                      |
--| `border_color_unfocused`  | Override `colors.border.unfocused`.                                                                                                                                                                                                                                    |
--| `border_color_outer`      | Override `colors.border.outer`.                                                                                                                                                                                                                                        |
--| `border_width`            | Override `appearance.border_width`, 0 to 100.                                                                                                                                                                                                                          |
--| `outer_border_width`      | Override `appearance.outer_border_width`, 0 to 100.                                                                                                                                                                                                                    |
--| `title_bar`               | `"on"` follows client decoration preferences, `"negotiated"` requires Wayland decoration negotiation selecting server-side decorations, `"forced"` forces a title bar, and `"off"` hides it. Overrides `appearance.title_bar.mode`; omission inherits the global mode. |
--| `title_bar_buttons`       | Title bar buttons for this window, from the title outward: any of `"minimize"`, `"maximize"`, and `"close"`, or `[]` for none. Overrides `appearance.title_bar.buttons`; omission inherits it.                                                                         |
--| `corner_radius`           | Override `appearance.corner_radius`, 0 to 100.                                                                                                                                                                                                                         |
--| `shadow`                  | Override `appearance.shadow.enabled`.                                                                                                                                                                                                                                  |
--| `border_effect`           | Replace `effects.border` with a border preset or pool, or `"off"` to disable it.                                                                                                                                                                                       |
--| `window_effect`           | Replace `effects.window` with a window preset or pool, or `"off"` to disable it.                                                                                                                                                                                       |
-+| Key                       | Description                                                                                                                                                                                                                                                                                                  |
-+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-+| `opacity`                 | Surface opacity from 0.0 to 1.0.                                                                                                                                                                                                                                                                             |
-+| `blur`                    | Enable or disable window blur, including translucent Umbriel title bars.                                                                                                                                                                                                                                     |
-+| `blur_popups`             | Apply blur to descendant XDG popups.                                                                                                                                                                                                                                                                         |
-+| `blur_ignore_alpha`       | Skip blur below an alpha threshold.                                                                                                                                                                                                                                                                          |
-+| `blur_optimized`          | Override the global optimized-blur choice.                                                                                                                                                                                                                                                                   |
-+| `confine_pointer`         | Keep the pointer inside this window while it has keyboard focus (default `false`).                                                                                                                                                                                                                           |
-+| `allow_shortcuts_inhibit` | Allow client-requested keyboard shortcut inhibition (default `true`). Set `false` to keep compositor shortcuts available. See [Keyboard shortcuts inhibition](#keyboard-shortcuts-inhibition).                                                                                                               |
-+| `block_capture`           | Omit this window from screenshots and recordings (default `false`). See [Capture protection](#capture-protection).                                                                                                                                                                                           |
-+| `background_render`       | Keep this window drawing while hidden (default `false`). See [Background rendering](#background-rendering).                                                                                                                                                                                                  |
-+| `focus_on_activate`       | Override activation focus for this window.                                                                                                                                                                                                                                                                   |
-+| `vrr`                     | Override the focused output's VRR policy.                                                                                                                                                                                                                                                                    |
-+| `tearing`                 | Request or veto asynchronous presentation.                                                                                                                                                                                                                                                                   |
-+| `supersample`             | Render at the output's `render_scale` (`true`) or at its `scale` (`false`). Omitted supersamples every window except fullscreen ones and game or video content. Native-resolution X11 windows ignore this rule: their mapping is per output and follows [`force_x11_supersample`](configuration.md#general). |
-+| `hdr`                     | Override the focused output's HDR policy.                                                                                                                                                                                                                                                                    |
-+| `border_color_focused`    | Override `colors.border.focused`.                                                                                                                                                                                                                                                                            |
-+| `border_color_unfocused`  | Override `colors.border.unfocused`.                                                                                                                                                                                                                                                                          |
-+| `border_color_outer`      | Override `colors.border.outer`.                                                                                                                                                                                                                                                                              |
-+| `border_width`            | Override `appearance.border_width`, 0 to 100.                                                                                                                                                                                                                                                                |
-+| `outer_border_width`      | Override `appearance.outer_border_width`, 0 to 100.                                                                                                                                                                                                                                                          |
-+| `title_bar`               | `"on"` follows client decoration preferences, `"negotiated"` requires Wayland decoration negotiation selecting server-side decorations, `"forced"` forces a title bar, and `"off"` hides it. Overrides `appearance.title_bar.mode`; omission inherits the global mode.                                       |
-+| `title_bar_buttons`       | Title bar buttons for this window, from the title outward: any of `"minimize"`, `"maximize"`, and `"close"`, or `[]` for none. Overrides `appearance.title_bar.buttons`; omission inherits it.                                                                                                               |
-+| `corner_radius`           | Override `appearance.corner_radius`, 0 to 100.                                                                                                                                                                                                                                                               |
-+| `shadow`                  | Override `appearance.shadow.enabled`.                                                                                                                                                                                                                                                                        |
-+| `border_effect`           | Replace `effects.border` with a border preset or pool, or `"off"` to disable it.                                                                                                                                                                                                                             |
-+| `window_effect`           | Replace `effects.window` with a window preset or pool, or `"off"` to disable it.                                                                                                                                                                                                                             |
- 
- These values refresh when matching identity or state changes. Fullscreen bypasses rule opacity unless [`appearance.opaque_fullscreen`](appearance.md#window-appearance) is `false`.
- 
+@@ -197,6 +197,7 @@ Add `default_column_display = "tabbed"` to keep such a column as [tabs](layout.m
+ | `focus_on_activate`       | Override activation focus for this window.                                                                                                                                                                                                                             |
+ | `vrr`                     | Override the focused output's VRR policy.                                                                                                                                                                                                                              |
+ | `tearing`                 | Request or veto asynchronous presentation.                                                                                                                                                                                                                             |
++| `supersample`             | Render at the output's `render_scale` (`true`) or `scale` (`false`); omitted supersamples everything but fullscreen and game or video windows. Native-resolution X11 windows ignore it.                                                                                |
+ | `hdr`                     | Override the focused output's HDR policy.                                                                                                                                                                                                                              |
+ | `border_color_focused`    | Override `colors.border.focused`.                                                                                                                                                                                                                                      |
+ | `border_color_unfocused`  | Override `colors.border.unfocused`.                                                                                                                                                                                                                                    |
 diff --git a/examples/config.toml b/examples/config.toml
-index 5083cbf3..5b79fb10 100644
+index e00fd053..1d1c8ecd 100644
 --- a/examples/config.toml
 +++ b/examples/config.toml
 @@ -28,6 +28,8 @@ files = []
@@ -254,7 +147,7 @@ index 5083cbf3..5b79fb10 100644
  # hdr = "auto"
  # sdr_transfer = "gamma22" # Or "srgb" for piecewise SDR decoding in HDR.
 diff --git a/src/config/change.cpp b/src/config/change.cpp
-index ab6c48f6..ac7e7c6e 100644
+index 11caa145..4a70a3e6 100644
 --- a/src/config/change.cpp
 +++ b/src/config/change.cpp
 @@ -46,6 +46,7 @@ namespace umbriel {
@@ -266,7 +159,7 @@ index ab6c48f6..ac7e7c6e 100644
            && lhs.vrr == rhs.vrr
            && lhs.hdr == rhs.hdr
 diff --git a/src/config/config.h b/src/config/config.h
-index 86a6825c..33bd1468 100644
+index 6795c547..ef42f6c1 100644
 --- a/src/config/config.h
 +++ b/src/config/config.h
 @@ -322,6 +322,9 @@ namespace umbriel {
@@ -279,7 +172,7 @@ index 86a6825c..33bd1468 100644
      std::optional<int> transform;
      VrrMode vrr = VrrMode::Disabled;
      bool focusAtStartup = false;
-@@ -469,6 +472,10 @@ namespace umbriel {
+@@ -471,6 +474,10 @@ namespace umbriel {
      // Overrides the client's tearing-control hint. Omitted follows the hint,
      // true forces async preference, and false vetoes it.
      std::optional<bool> allowTearing;
@@ -288,9 +181,9 @@ index 86a6825c..33bd1468 100644
 +    // whose content type is game or video; true and false decide outright.
 +    std::optional<bool> supersample;
      std::optional<HdrMode> hdr;
+     std::optional<double> dimBehind;
      std::optional<double> opacity; // 0.0-1.0
-     std::optional<bool> blur;
-@@ -533,6 +540,7 @@ namespace umbriel {
+@@ -537,6 +544,7 @@ namespace umbriel {
            && allowShortcutsInhibit == other.allowShortcutsInhibit
            && backgroundRender == other.backgroundRender
            && blockCapture == other.blockCapture
@@ -298,15 +191,15 @@ index 86a6825c..33bd1468 100644
            && vrr == other.vrr
            && allowTearing == other.allowTearing
            && hdr == other.hdr
-@@ -584,6 +592,7 @@ namespace umbriel {
+@@ -589,6 +597,7 @@ namespace umbriel {
      std::optional<bool> blockCapture;
      std::optional<VrrMode> vrr;
      std::optional<bool> allowTearing;
 +    std::optional<bool> supersample;
      std::optional<HdrMode> hdr;
+     std::optional<double> dimBehind;
      std::optional<double> opacity;
-     std::optional<bool> blur;
-@@ -1076,6 +1085,8 @@ namespace umbriel {
+@@ -1098,6 +1107,8 @@ namespace umbriel {
        // Present outputs to X11 clients at their physical resolution, so they render at native size instead of being
        // upscaled on scaled outputs. Requires restart.
        bool xwaylandNativeResolution = false;
@@ -316,10 +209,10 @@ index 86a6825c..33bd1468 100644
        bool xwaylandXsettings = true;
        // Connector or monitor identity to publish as the X11 primary. Empty leaves RandR unmanaged.
 diff --git a/src/config/fields_general.cpp b/src/config/fields_general.cpp
-index 3e1a9910..40e9e033 100644
+index 83d73c3f..78dc3d92 100644
 --- a/src/config/fields_general.cpp
 +++ b/src/config/fields_general.cpp
-@@ -336,6 +336,7 @@ namespace umbriel {
+@@ -339,6 +339,7 @@ namespace umbriel {
            ),
            boolean("xwayland", &G::xwayland),
            boolean("xwayland_native_resolution", &G::xwaylandNativeResolution),
@@ -357,10 +250,10 @@ index 9447fde6..149da6d3 100644
        recordRuleEffect(context, keys, "screen_effect", EffectKind::Screen, [&loaded, name] {
          if (OutputRule* output = findOutputRuleMutable(loaded, name)) {
 diff --git a/src/config/fields_rules.cpp b/src/config/fields_rules.cpp
-index 61dc5cf7..f25f7586 100644
+index 27a93a54..acf329d0 100644
 --- a/src/config/fields_rules.cpp
 +++ b/src/config/fields_rules.cpp
-@@ -205,6 +205,7 @@ namespace umbriel {
+@@ -231,6 +231,7 @@ namespace umbriel {
            boolean("background_render", &W::backgroundRender),
            boolean("block_capture", &W::blockCapture),
            boolean("tearing", &W::allowTearing),
@@ -369,10 +262,10 @@ index 61dc5cf7..f25f7586 100644
            boolean("blur_popups", &W::blurPopups),
            boolean("blur_optimized", &W::blurOptimized),
 diff --git a/src/config/resolve.cpp b/src/config/resolve.cpp
-index 16a64d47..d992d0e1 100644
+index dee2ccaa..b6272504 100644
 --- a/src/config/resolve.cpp
 +++ b/src/config/resolve.cpp
-@@ -361,6 +361,9 @@ namespace umbriel {
+@@ -365,6 +365,9 @@ namespace umbriel {
        if (rule.allowTearing) {
          resolved.allowTearing = rule.allowTearing;
        }
@@ -383,7 +276,7 @@ index 16a64d47..d992d0e1 100644
          resolved.hdr = rule.hdr;
        }
 diff --git a/src/output/output.cpp b/src/output/output.cpp
-index 12b377cc..fc282b84 100644
+index 3238e6fe..90d4192d 100644
 --- a/src/output/output.cpp
 +++ b/src/output/output.cpp
 @@ -473,6 +473,21 @@ namespace umbriel {
@@ -474,7 +367,7 @@ index 7e1bd5d9..8dc3f3af 100644
            {"hdr_active", output->hdrActive()},
            {"direct_scanout", std::move(directScanout)},
 diff --git a/src/server/server.cpp b/src/server/server.cpp
-index 560eef66..56a70fe0 100644
+index aaee6dd4..8bca8763 100644
 --- a/src/server/server.cpp
 +++ b/src/server/server.cpp
 @@ -706,6 +706,19 @@ namespace umbriel {
@@ -498,10 +391,10 @@ index 560eef66..56a70fe0 100644
        wlr_scene_set_linux_dmabuf_v1(m_scene, linuxDmabuf);
      }
 diff --git a/src/server/server_events.cpp b/src/server/server_events.cpp
-index 11f0d54d..459145be 100644
+index 9e15d8b9..f9edaaf4 100644
 --- a/src/server/server_events.cpp
 +++ b/src/server/server_events.cpp
-@@ -858,6 +858,10 @@ namespace umbriel {
+@@ -862,6 +862,10 @@ namespace umbriel {
        // Scale may have changed; every surface must hear about it or scale-aware
        // clients keep mapping input with the stale scale.
        refreshSurfaceScales();
@@ -513,10 +406,10 @@ index 11f0d54d..459145be 100644
      if (effects.tearingPolicy) {
        for (const auto& output : m_outputs) {
 diff --git a/src/view/view.cpp b/src/view/view.cpp
-index 6bc4912b..0a78c4b9 100644
+index 05efa4c7..b83523ab 100644
 --- a/src/view/view.cpp
 +++ b/src/view/view.cpp
-@@ -1039,12 +1039,27 @@ namespace umbriel {
+@@ -976,12 +976,27 @@ namespace umbriel {
      if (m_captureSource != nullptr) {
        umbrielfx_scene_capture_source_set_scale(m_captureSource, output->wlr()->scale);
      }
@@ -547,10 +440,10 @@ index 6bc4912b..0a78c4b9 100644
      if (popup == nullptr || m_sceneTree == nullptr || m_toplevel == nullptr) {
        return;
 diff --git a/src/view/view.h b/src/view/view.h
-index 5356e6b1..5033af9b 100644
+index 121f0a11..1c701d31 100644
 --- a/src/view/view.h
 +++ b/src/view/view.h
-@@ -150,6 +150,10 @@ namespace umbriel {
+@@ -151,6 +151,10 @@ namespace umbriel {
      Output* currentOutput() const;
      // Effective optional window-rule override used by tearing diagnostics.
      std::optional<bool> tearingRuleOverride();
@@ -561,7 +454,7 @@ index 5356e6b1..5033af9b 100644
      bool confinePointer();
      bool allowsShortcutsInhibit();
      // A `background_render` rule applies: while hidden, the window stays unsuspended and gets frame callbacks at its
-@@ -772,6 +776,9 @@ namespace umbriel {
+@@ -775,6 +779,9 @@ namespace umbriel {
      // popups included). Scale-aware clients size and map pointer coordinates by this, so it must follow the view across
      // outputs and track scale changes.
      void notifyOutputScale();
@@ -571,7 +464,7 @@ index 5356e6b1..5033af9b 100644
      // Keep floats visually at the last requested size while client geometry lags.
      void syncFloatingSurfaceClip();
      void beginFloatingResize(uint32_t edges);
-@@ -1093,6 +1100,7 @@ namespace umbriel {
+@@ -1099,6 +1106,7 @@ namespace umbriel {
      AnimatedValue m_ruleBlur{0.0};
      bool m_backgroundRender = false;
      bool m_allowShortcutsInhibit = true;
@@ -580,10 +473,10 @@ index 5356e6b1..5033af9b 100644
      float m_overviewOpacity = 1.0F;
      std::vector<std::unique_ptr<ViewSurfaceWatch>> m_viewSurfaceWatches;
 diff --git a/src/view/view_lifecycle.cpp b/src/view/view_lifecycle.cpp
-index 523be007..652b798d 100644
+index 6312678f..acb4da96 100644
 --- a/src/view/view_lifecycle.cpp
 +++ b/src/view/view_lifecycle.cpp
-@@ -847,6 +847,8 @@ namespace umbriel {
+@@ -850,6 +850,8 @@ namespace umbriel {
      }
      m_contentType = next;
      m_server->scheduleIpcWindowsEvent();
@@ -593,7 +486,7 @@ index 523be007..652b798d 100644
        if (!m_initialContentTypeRulesSettled && next != ContentType::None) {
          m_initialContentTypeRulesSettled = true;
 diff --git a/src/view/view_role.cpp b/src/view/view_role.cpp
-index 86bdbe89..fcac5604 100644
+index ae3a2cd4..64f11fd7 100644
 --- a/src/view/view_role.cpp
 +++ b/src/view/view_role.cpp
 @@ -122,6 +122,10 @@ namespace umbriel {
@@ -608,10 +501,10 @@ index 86bdbe89..fcac5604 100644
    }
  
 diff --git a/src/view/view_rules.cpp b/src/view/view_rules.cpp
-index 16d9e470..704dd5c3 100644
+index 2f8aaa42..5f8caaa5 100644
 --- a/src/view/view_rules.cpp
 +++ b/src/view/view_rules.cpp
-@@ -644,6 +644,10 @@ namespace umbriel {
+@@ -709,6 +709,10 @@ namespace umbriel {
        m_allowShortcutsInhibit = allowed;
        m_server->refreshKeyboardShortcutsInhibitors();
      }
@@ -1108,7 +1001,7 @@ index 00000000..107b22f7
 +export UMBRIEL_X11_EXPECT_OUTPUT_WIDTH=2560 UMBRIEL_X11_EXPECT_OUTPUT_HEIGHT=1920
 +source "$UMBRIEL_REPO/tests/harness/checks/protocol/xwayland_render_scale.sh"
 diff --git a/tests/harness/clients/fractional_client.cpp b/tests/harness/clients/fractional_client.cpp
-index 1cf1e0a9..b374fb84 100644
+index 559596de..bad24525 100644
 --- a/tests/harness/clients/fractional_client.cpp
 +++ b/tests/harness/clients/fractional_client.cpp
 @@ -15,7 +15,9 @@
@@ -1129,7 +1022,7 @@ index 1cf1e0a9..b374fb84 100644
      wl_surface* surface = nullptr;
      wp_viewport* viewport = nullptr;
      xdg_surface* xdgSurface = nullptr;
-@@ -342,6 +345,12 @@ namespace {
+@@ -343,6 +346,12 @@ namespace {
        state.scaleManager = static_cast<wp_fractional_scale_manager_v1*>(
            wl_registry_bind(registry, name, &wp_fractional_scale_manager_v1_interface, 1)
        );
@@ -1142,7 +1035,7 @@ index 1cf1e0a9..b374fb84 100644
      }
    }
  
-@@ -409,6 +418,17 @@ int main(int argc, char** argv) {
+@@ -410,6 +419,17 @@ int main(int argc, char** argv) {
    wp_fractional_scale_v1* fractionalScale =
        wp_fractional_scale_manager_v1_get_fractional_scale(state.scaleManager, state.surface);
    wp_fractional_scale_v1_add_listener(fractionalScale, &kFractionalScaleListener, &state);
@@ -1174,7 +1067,7 @@ index c7919d4d..3ea88642 100644
    dependencies: [wayland_client_dep],
  )
 diff --git a/tests/unit/config_change.cpp b/tests/unit/config_change.cpp
-index d3cf2a3b..b6cd5d9c 100644
+index 6ce24969..627daa15 100644
 --- a/tests/unit/config_change.cpp
 +++ b/tests/unit/config_change.cpp
 @@ -204,6 +204,22 @@ UMBRIEL_TEST(eachSectionIsReportedOnItsOwn) {
@@ -1201,7 +1094,7 @@ index d3cf2a3b..b6cd5d9c 100644
    Config before;
    Config after = before;
 diff --git a/tests/unit/config_load.cpp b/tests/unit/config_load.cpp
-index 4e2e3612..ee36028b 100644
+index 11369899..aea3f414 100644
 --- a/tests/unit/config_load.cpp
 +++ b/tests/unit/config_load.cpp
 @@ -780,6 +780,47 @@ center_focused = true
@@ -1252,7 +1145,7 @@ index 4e2e3612..ee36028b 100644
  UMBRIEL_TEST(outputWorkspaceAxisAcceptsOnlyItsTwoNames) {
    const TempConfig file;
    ConfigStore& store = umbriel::configStore();
-@@ -2315,6 +2356,23 @@ UMBRIEL_TEST(nvidiaSyncWorkaroundReloadsAndDefaultsOn) {
+@@ -2350,6 +2391,23 @@ UMBRIEL_TEST(nvidiaSyncWorkaroundReloadsAndDefaultsOn) {
    CHECK(!containsDiagnostic(store, "unknown key general.nvidia_sync_workaround"));
  }
  
@@ -1277,7 +1170,7 @@ index 4e2e3612..ee36028b 100644
    const TempConfig file;
    ConfigStore& store = umbriel::configStore();
 diff --git a/tests/unit/config_resolve.cpp b/tests/unit/config_resolve.cpp
-index 7e95653e..95f8a69c 100644
+index ac699bfb..2b7d908e 100644
 --- a/tests/unit/config_resolve.cpp
 +++ b/tests/unit/config_resolve.cpp
 @@ -587,6 +587,7 @@ UMBRIEL_TEST(windowRulesMergeMatchingFieldsInOrder) {
@@ -1395,7 +1288,7 @@ index 5a671970..9fc74fb2 100644
 +
  int main() { return RUN_TESTS(); }
 diff --git a/umbrielfx/include/umbrielfx/types/wlr_scene.h b/umbrielfx/include/umbrielfx/types/wlr_scene.h
-index e4125a44..6e335661 100644
+index 5597b1d6..806f5dd6 100644
 --- a/umbrielfx/include/umbrielfx/types/wlr_scene.h
 +++ b/umbrielfx/include/umbrielfx/types/wlr_scene.h
 @@ -170,6 +170,12 @@ struct wlr_scene {
@@ -1411,7 +1304,7 @@ index e4125a44..6e335661 100644
    } WLR_PRIVATE;
  };
  
-@@ -583,6 +589,18 @@ void wlr_scene_set_gamma_control_manager_v1(
+@@ -592,6 +598,18 @@ void wlr_scene_set_gamma_control_manager_v1(
   */
  void wlr_scene_set_color_manager_v1(struct wlr_scene* scene, struct wlr_color_manager_v1* manager);
  
@@ -1659,10 +1552,10 @@ index bd79dda4..7f644195 100644
    if (scene->color_manager_v1 != NULL) {
      struct wlr_image_description_v1_data img_desc = {0};
 diff --git a/umbrielfx/types/scene/wlr_scene.c b/umbrielfx/types/scene/wlr_scene.c
-index 300af9df..58d93566 100644
+index d87ab27e..c50409fc 100644
 --- a/umbrielfx/types/scene/wlr_scene.c
 +++ b/umbrielfx/types/scene/wlr_scene.c
-@@ -4406,6 +4406,14 @@ void wlr_scene_set_color_manager_v1(struct wlr_scene* scene, struct wlr_color_ma
+@@ -4556,6 +4556,14 @@ void wlr_scene_set_color_manager_v1(struct wlr_scene* scene, struct wlr_color_ma
    wl_signal_add(&manager->events.destroy, &scene->color_manager_v1_destroy);
  }
  
@@ -1677,6 +1570,3 @@ index 300af9df..58d93566 100644
  static void scene_output_handle_destroy(struct wlr_addon* addon) {
    struct wlr_scene_output* scene_output = wl_container_of(addon, scene_output, addon);
    wlr_scene_output_destroy(scene_output);
--- 
-2.56.0.341.gebdc087dc9
-

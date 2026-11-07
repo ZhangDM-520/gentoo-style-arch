@@ -9,7 +9,7 @@ source "$startdir/../../../lib/pgo.sh"
 pkgname=umbriel-git
 _pkgname=umbriel
 pkgver=0.1.0.r1532.f5dd36b
-pkgrel=11
+pkgrel=12
 epoch=1
 pkgdesc='A Wayland compositor built on wlroots'
 arch=('x86_64' 'aarch64')
@@ -66,8 +66,8 @@ source=("${_pkgname}::git+${url}.git#branch=main"
         '0020-adaptive-title-bar.patch'
         '0021-minimize-animation.patch')
 sha256sums=('SKIP'
-            '817ffce311dbb4b162de5b261ef89d011f5f484db390eafec4ace1a4bf94c6ea'
-            '1fe6f5683efc79957e00d458ade22ff3080c76dbcbcb6d7fca21203523e2bdb7'
+            '1beb3b259b5d2b2226cf2c2749206158b17e6049799ae7bb3c662d87bb70b4d5'
+            '55b7e50a9b1ce7c2a4e47755e3ee0bb07773608750e8441b873bb0507a13a57e'
             '7c4de03d135dc74529c7cafc2a81ae659c1e9a917094aeafb248175c94db8400'
             '92514f4aa7244e524aa73bf392efff5675a7e32e715715d182bad5324ed70492'
             'da533d362314d028cf575128ace45b1781e39d9385478fd648f5e9bffffaf621'
@@ -94,10 +94,14 @@ prepare() {
   # Drag-release re-home waits for the deform settle (and the drag tree
   # demotes only when its last drag-presented view leaves). Upstream PR
   # noctalia-dev/umbriel#570; 0011-drag-deform-settle-crop.patch (sha256
-  # 817ffce3…, three commits b6d7542a/7ac93ec1/8a3c231d, re-cut 2026-11-02
-  # from upstream main@6d142d12 by cherry-pick; the cursor.cpp tab-group union keeps
-  # landTabGroup before closeReleaseRehomeWindow: the wait covers every
-  # reparent the release issues, and the disarm ends the release's say).
+  # 1beb3b25…, seven commits b6d7542a/7ac93ec1/8a3c231d/01540344/c3f073c8/
+  # f86099e4/8c8ee795, re-cut 2026-11-07 from upstream main@6493e461 by
+  # cherry-pick; the cursor.cpp tab-group union keeps landTabGroup before
+  # closeReleaseRehomeWindow: the wait covers every reparent the release issues,
+  # and the disarm ends the release's say). The 2026-11-07 commits end a release
+  # wait when the workspace stops presenting the view (deactivation, gesture
+  # slideBegin), let a held window keep its drag presentation, and make a
+  # dragged window's transient children ride it.
   # (0002, PR #508's
   # windows_drag physics tuning, merged upstream e045d637 and retired; 0003,
   # PR #548's floating release settle, merged
@@ -127,7 +131,8 @@ prepare() {
   # back into render_scale. Flattened PR head a6f61941 (render_scale + X11
   # default + dMopp's 1b4a4801 exemption fold + hardened harness leg + review
   # fix) relative to main@e0da1063 on top of 0011; unchanged on main@28de32d0;
-  # sha256 1fe6f568….
+  # sha256 55b7e50a… (doc table hunk re-cut 2026-11-07: main's window-rules
+  # settings table grew, so the row is re-inserted without re-padding it).
   # (Retire on merge:
   # 0012 → PR #573.)
   git apply -3 ../0012-per-output-render-scale.patch
