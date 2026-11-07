@@ -72,7 +72,7 @@ sha256sums=('SKIP'
             '92514f4aa7244e524aa73bf392efff5675a7e32e715715d182bad5324ed70492'
             'da533d362314d028cf575128ace45b1781e39d9385478fd648f5e9bffffaf621'
             '2afaf966628550c1aa9d0b2ab9dbed4dade3c51479355e4e295cbe36497b7af2'
-            '13f56b34a97649cb76964a11eebedf47ee0967935a34bf342a740e051f03bd6f'
+            'bf5a8a65c24adec2145b6f3bd1a8e1e4ecc1e4af6ab248f094a30816e4e17ed8'
             '4bc48f1e2f3e9c0138e9a66d9ea942a002e93177f35b28433864ade0491778b2')
 
 pkgver() {
@@ -205,15 +205,15 @@ prepare() {
   # ("window"), or with that strip's mean colour ("average"), instead of
   # [colors.title_bar] background, follows repaints live, keeps the palette
   # as the fallback under a transparent edge, dims when unfocused, and gives
-  # the title and symbols a contrast edge. No readback: the bar mirrors the
-  # window's committed buffer (crop, transform, damage, syncobj, ICC), so it
-  # costs a strip copy per commit rather than a glFinish per frame. Stack
-  # adaptation on main@f5dd36b over 0011+0012+0013+0014+0018+0019 (8 commits,
-  # sha256 e4365cb2…; the strip follows xdg window geometry, marks the mirror's
-  # client-buffer lock ignorable through a new umbrielfx helper, and keeps the
-  # close snapshot's fill under the text and buttons).
-  # (Retire on merge: 0020 -> the adaptive title bar PR, opened after the
-  # owner's live test.)
+  # the title and symbols a contrast edge. "window" mirrors the window's
+  # committed buffer (crop, transform, damage, syncobj, ICC) and costs a strip
+  # copy per commit; "average" reads that strip back once per repaint of it,
+  # after the frame is reported ready. Stack adaptation on main@ad46c7d1 over
+  # 0011+0012+0013+0014+0018+0019 (9 commits, sha256 bf5a8a65…; the strip
+  # follows xdg window geometry, marks the mirror's client-buffer lock
+  # ignorable through a new umbrielfx helper, and keeps the close snapshot's
+  # fill under the text and buttons).
+  # (Retire on merge: 0020 -> PR #735.)
   git apply -3 ../0020-adaptive-title-bar.patch
 
   # [animation.windows_minimize]: a minimizing floating window leaves and returns with an animation instead of
