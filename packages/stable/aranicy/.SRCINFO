@@ -1,6 +1,6 @@
 pkgbase = aranicy
-	pkgdesc = Auto-nice daemon in Rust (eBPF exec events, ananicy-compatible rules)
-	pkgver = 0.2.3
+	pkgdesc = Auto-nice daemon in Rust (ananicy-compatible rules, learned nice bias)
+	pkgver = 0.3.0
 	pkgrel = 1
 	url = https://github.com/ZhangDM-520/aranicy
 	arch = x86_64
@@ -8,13 +8,21 @@ pkgbase = aranicy
 	makedepends = cargo
 	makedepends = clang
 	makedepends = llvm
-	depends = glibc
-	depends = gcc-libs
-	depends = libelf
-	depends = zlib
-	conflicts = ananicy-cpp
-	backup = etc/ananicy.d/ananicy.conf
-	source = aranicy-0.2.3.tar.gz::https://github.com/ZhangDM-520/aranicy/archive/v0.2.3.tar.gz
-	sha256sums = 44e691d533da7d5cf6c83317b85a1a84886fe09a45a4052e7c519777c178816a
+	makedepends = libbpf
+	makedepends = pkgconf
+	source = git+https://github.com/ZhangDM-520/aranicy#commit=922a3edabfce1ea2f7342a78686a53184db10b80
+	sha256sums = SKIP
 
 pkgname = aranicy
+	depends = glibc
+	depends = gcc-libs
+	depends = aranicy-collector=0.3.0
+	conflicts = ananicy-cpp
+	backup = etc/ananicy.d/ananicy.conf
+
+pkgname = aranicy-collector
+	license = GPL-2.0-only
+	depends = glibc
+	depends = gcc-libs
+	depends = libbpf
+	conflicts = aranicy<0.3.0

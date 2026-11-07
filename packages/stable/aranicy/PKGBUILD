@@ -1,35 +1,54 @@
 # Maintainer: ZhangDM-520 <jixianqiang1540@gmail.com>
-# Packager note: clean-room MIT rewrite of the ananicy auto-nice role (eBPF
-# exec events; ananicy-compatible JSONL rules), so the replaced daemon's
-# /etc/ananicy.d rule data keeps working unchanged. provides stays EMPTY on
-# purpose — the daemon name and unit are aranicy's own; conflicts=(ananicy-cpp)
-# because both own the auto-nice role and /etc/ananicy.d.
+# Packager note: clean-room MIT rewrite of the ananicy auto-nice role (ananicy-
+# compatible JSONL rules), so the replaced daemon's /etc/ananicy.d rule data
+# keeps working unchanged. provides stays EMPTY on purpose — the daemon name and
+# unit are aranicy's own; conflicts=(ananicy-cpp) because both own the auto-nice
+# role and /etc/ananicy.d.
+#
+# Split package since 0.3.0: the BPF statistics collector moved out of the
+# daemon into its own GPL-2.0-only binary package. The license boundary is the
+# package boundary (nothing GPL lives under crates/), systemd owns the
+# collector's lifecycle (aranicy.service has Requires=/After=), and aranicy
+# itself runs without CAP_BPF. aranicy depends on the exact collector version
+# because the socket protocol and the 8-field sample contract are internal.
+#
+# libbpf: the collector links the DISTRO libbpf (libbpf-rs is declared with
+# default-features = false). A vendored static archive is built with the
+# ambient CFLAGS, and the global `lto` option adds -flto=auto, which turns it
+# into an LTO archive the final ld.lld link cannot consume (every bpf_* symbol
+# undefined). Linking libbpf.so also keeps security updates in the distro.
+#
+# Source pin: commit until v0.3.0 is tagged; switch to
+# "git+$url#tag=v$pkgver" (and drop _commit) with the release.
 
-pkgname=aranicy
-pkgver=0.2.3
+pkgbase=aranicy
+pkgname=(aranicy
+         aranicy-collector)
+pkgver=0.3.0
 pkgrel=1
-pkgdesc="Auto-nice daemon in Rust (eBPF exec events, ananicy-compatible rules)"
+pkgdesc="Auto-nice daemon in Rust (ananicy-compatible rules, learned nice bias)"
 arch=('x86_64')
 url="https://github.com/ZhangDM-520/aranicy"
 license=('MIT')
-depends=('glibc' 'gcc-libs' 'libelf' 'zlib')
-# rust: rustc + cargo; clang/llvm: the eBPF/libbpf build
-makedepends=('cargo' 'clang' 'llvm')
-conflicts=('ananicy-cpp')
-backup=('etc/ananicy.d/ananicy.conf')
-source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
-sha256sums=('44e691d533da7d5cf6c83317b85a1a84886fe09a45a4052e7c519777c178816a')
+# rust: rustc + cargo; clang/llvm: the BPF object; libbpf/pkgconf: distro libbpf
+makedepends=('cargo' 'clang' 'llvm' 'libbpf' 'pkgconf')
+_commit=922a3edabfce1ea2f7342a78686a53184db10b80
+source=("git+$url#commit=$_commit")
+sha256sums=('SKIP')
 
 prepare() {
-    cd "$pkgname-$pkgver"
+    cd "$srcdir/aranicy"
 
     # Upstream lock refresh path: cargo fetch --locked pins the committed
-    # Cargo.lock; --frozen on the build below then refuses any drift.
-    cargo fetch --locked --target "$(rustc -vV | sed -n 's|host: ||p')"
+    # Cargo.lock; --frozen on the build below then refuses any drift. The
+    # collector is its own workspace with its own lockfile.
+    local -a _fetch=(--locked --target "$(rustc -vV | sed -n 's|host: ||p')")
+    cargo fetch "${_fetch[@]}"
+    ( cd collector && cargo fetch "${_fetch[@]}" )
 }
 
 build() {
-    cd "$pkgname-$pkgver"
+    cd "$srcdir/aranicy"
 
     # optimize standards: LTO for the Rust build (target-cpu comes from
     # makepkg.conf rust.conf RUSTFLAGS)
@@ -39,26 +58,43 @@ build() {
     # House style (mold-git): mold is probed, never a makedepend.
     local _rustflags="${RUSTFLAGS:-}"
     command -v mold >/dev/null 2>&1 && _rustflags+=" -C link-arg=-fuse-ld=mold"
-    # Keep Rust-side $srcdir references out of the shipped binary. The
-    # embedded eBPF object still carries its clang compile paths (needs an
-    # upstream build.rs clang_args prefix-map; cosmetic leak present since
-    # v0.1.0) so makepkg's srcdir-reference lint stays a warning.
+    # Keep Rust-side $srcdir references out of the shipped binaries.
     _rustflags+=" --remap-path-prefix=${srcdir}=/"
 
     RUSTFLAGS="${_rustflags}" cargo build --frozen --release \
         -j "${GSA_BUILD_JOBS:-$(nproc)}"
+    ( cd collector && RUSTFLAGS="${_rustflags}" cargo build --frozen --release \
+        -j "${GSA_BUILD_JOBS:-$(nproc)}" )
 }
 
-package() {
-    cd "$pkgname-$pkgver"
+package_aranicy() {
+    cd "$srcdir/aranicy"
+
+    depends=('glibc' 'gcc-libs' "aranicy-collector=$pkgver")
+    conflicts=('ananicy-cpp')
+    backup=('etc/ananicy.d/ananicy.conf')
 
     install -Dm755 target/release/aranicy "$pkgdir/usr/bin/aranicy"
     install -Dm644 contrib/ananicy.service \
         "$pkgdir/usr/lib/systemd/system/aranicy.service"
     install -Dm644 contrib/ananicy.conf \
         "$pkgdir/etc/ananicy.d/ananicy.conf"
-
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}
+
+package_aranicy-collector() {
+    cd "$srcdir/aranicy"
+
+    depends=('glibc' 'gcc-libs' 'libbpf')
+    license=('GPL-2.0-only')
+    conflicts=('aranicy<0.3.0')
+
+    install -Dm755 collector/target/release/aranicy-collectord \
+        "$pkgdir/usr/bin/aranicy-collectord"
+    install -Dm644 contrib/aranicy-collector.service \
+        "$pkgdir/usr/lib/systemd/system/aranicy-collector.service"
+    install -Dm644 collector/LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
     install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
 }
 
