@@ -9,7 +9,7 @@ source "$startdir/../../../lib/pgo.sh"
 pkgname=umbriel-git
 _pkgname=umbriel
 pkgver=0.1.0.r1532.f5dd36b
-pkgrel=8
+pkgrel=9
 epoch=1
 pkgdesc='A Wayland compositor built on wlroots'
 arch=('x86_64' 'aarch64')
@@ -71,7 +71,7 @@ sha256sums=('SKIP'
             '92514f4aa7244e524aa73bf392efff5675a7e32e715715d182bad5324ed70492'
             'da533d362314d028cf575128ace45b1781e39d9385478fd648f5e9bffffaf621'
             '714cf0a301e874458fed8ff95506a6495cc4ffced44720e68118a921cc88a6a2'
-            'c5287883074104947e2db5640835b757a7c68d7b7740932e83ecb052a68321cb')
+            '254c195680ad4d1765c4c4cd34e4ccb1e6a2ee7cb2db670a54caf20953892255')
 
 pkgver() {
   cd "${_pkgname}"
@@ -186,15 +186,15 @@ prepare() {
   # (Retire on merge: 0019 -> PR #715.)
   git apply -3 ../0019-background-effect.patch
 
-  # [appearance.title_bar] color_source = "window": the bar paints itself
-  # with a 1-4 row strip (color_source_height, one row by default) of the
-  # window's own content instead of
+  # [appearance.title_bar] color_source: the bar paints itself with a 1-4 row
+  # strip (color_source_height, one row by default) of the window's own content
+  # ("window"), or with that strip's mean colour ("average"), instead of
   # [colors.title_bar] background, follows repaints live, keeps the palette
   # as the fallback under a transparent edge, dims when unfocused, and gives
   # the title and symbols a contrast edge. No readback: the bar mirrors the
   # window's committed buffer (crop, transform, damage, syncobj, ICC), so it
   # costs a strip copy per commit rather than a glFinish per frame. Stack
-  # adaptation on main@f5dd36b over 0011+0012+0013+0014+0018+0019 (4 commits,
+  # adaptation on main@f5dd36b over 0011+0012+0013+0014+0018+0019 (6 commits,
   # sha256 e4365cb2…; the strip follows xdg window geometry, marks the mirror's
   # client-buffer lock ignorable through a new umbrielfx helper, and keeps the
   # close snapshot's fill under the text and buttons).

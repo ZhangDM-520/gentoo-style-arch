@@ -1,7 +1,7 @@
 From c4a5d5760f786acd0224845c7d1313ea9d316c4e Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Sat, 7 Nov 2026 14:56:14 +0800
-Subject: [PATCH 1/4] feat(title_bar): paint the bar with the window's own top
+Subject: [PATCH 1/6] feat(title_bar): paint the bar with the window's own top
  edge
 
 A server-side title bar could only use the palette colour, so it stood out
@@ -972,7 +972,7 @@ index 00820af0..df638fba 100644
 From f05df18aa18bafb06e6aa43f42fe3506ddcedecf Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Sat, 7 Nov 2026 18:12:24 +0800
-Subject: [PATCH 2/4] fix(title_bar): keep the close snapshot's text, fill
+Subject: [PATCH 2/6] fix(title_bar): keep the close snapshot's text, fill
  order and buffer locks
 
 The adaptive fill was copied into the close snapshot after the title and the
@@ -1427,7 +1427,7 @@ index 8f285193..5d13cf52 100755
 From 4bc3f42e11bc54cb461625a1649ca499aeaa2a96 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Sat, 7 Nov 2026 18:58:08 +0800
-Subject: [PATCH 3/4] fix(title_bar): address the external review round
+Subject: [PATCH 3/6] fix(title_bar): address the external review round
 
 - The strip box now takes the minimum last, so a viewport that maps less than
   one buffer pixel onto the surface cannot invert std::clamp's bounds (which
@@ -1981,7 +1981,7 @@ index bd79dda4..8cf2a853 100644
 From 31465bf26d8cccdf03bc3d2a3dcc17df831f18a3 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
 Date: Sat, 7 Nov 2026 19:46:49 +0800
-Subject: [PATCH 4/4] feat(title_bar): sample 1-4 rows of the window edge, one
+Subject: [PATCH 4/6] feat(title_bar): sample 1-4 rows of the window edge, one
  by default
 
 Five rows stretched over the bar kept the top row of the window's own UI
@@ -2171,6 +2171,1045 @@ index 6451cb50..ba7a822e 100644
    const wlr_fbox half = titleBarStripSourceBox(full, 400, 300, 400, 300, WL_OUTPUT_TRANSFORM_180, 5);
    CHECK_EQ(half.x, 0.0);
    CHECK_EQ(half.y, 295.0);
+-- 
+2.56.0.341.gebdc087dc9
+
+
+From 2bf8e4defce07f854dffc2654871e45d72e2f322 Mon Sep 17 00:00:00 2001
+From: ZhangDM-520 <jixianqiang1540@gmail.com>
+Date: Sat, 7 Nov 2026 20:11:33 +0800
+Subject: [PATCH 5/6] feat(title_bar): add an average colour mode
+
+`color_source = "average"` paints the bar with the mean colour of the same
+1-4 row strip instead of mirroring it, so the bar is one uniform colour and the
+window's own title bar, tab row or loading indicator along that edge does not
+read as fragments of itself inside it.
+
+A mean cannot be taken without reading pixels back, so this mode finishes the
+frame and reads the strip when the window repaints it, then keeps the result
+until the edge changes: the flat colour is a single pixel stretched over the
+bar, and no per-frame readback follows. Protected and external-only buffers
+refuse the read, and the palette stays painted underneath as for the smear. The
+colour is a plain sRGB value, so the surface's transfer function does not apply
+to it.
+
+Pins: three unit cases for the weighting (opaque mean, transparent pixels
+contributing no hue, an empty or fully transparent strip), and a harness phase
+whose client paints its edge green on one side and blue on the other - the
+average must read the same blend at both ends, the smear the two sides.
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+---
+ docs/user/appearance.md                       |   2 +-
+ examples/config.toml                          |   2 +-
+ src/config/config.h                           |   8 +-
+ src/config/fields_general.cpp                 |   1 +
+ src/scene/color.h                             |  31 ++++
+ src/scene/ssd_frame.cpp                       | 162 ++++++++++++++----
+ src/scene/ssd_frame.h                         |   9 +
+ .../checks/render/title_bar_adaptive.sh       |  32 ++++
+ tests/harness/clients/unmap_client.cpp        |  17 +-
+ tests/meson.build                             |   1 +
+ tests/unit/colour_average.cpp                 |  45 +++++
+ 11 files changed, 268 insertions(+), 42 deletions(-)
+ create mode 100644 tests/unit/colour_average.cpp
+
+diff --git a/docs/user/appearance.md b/docs/user/appearance.md
+index d39d130f..a0277c2a 100644
+--- a/docs/user/appearance.md
++++ b/docs/user/appearance.md
+@@ -178,7 +178,7 @@ The `close`, `maximize`, and `minimize` colors control button backgrounds. Each
+ 
+ `button_corner_radius` uses logical pixels, from `0` to `100`. Its default, `-1`, follows the window's `corner_radius`, including window rules. Use `0` for square buttons or a small positive value for rounded squares. The radius is capped at half the button size, producing circles at larger values. Buttons and symbols scale with the output and overview zoom, and update on reload. The maximize button is disabled for fixed-size windows. The minimize button shows only while the window can [minimize](layout.md#minimize), so tiled and pinned windows do not have one. `background` and `text` apply to the focused window; their `_unfocused` variants apply to other windows. Colors and title bar settings reload live.
+ 
+-`color_source = "window"` paints the bar with a thin strip of the window's own content instead of `background`, so the bar takes on the application's colour and follows it as the application repaints that edge. `color_source_height` sets how many logical pixels that strip takes, from `1` to `4`; its default, `1`, samples the single top row and reads as one flat colour, while a larger value keeps more of the window's own detail. Because the bar is only ever the window's own pixels, anything the application draws along that edge — a toolbar, a tab row, a loading bar — appears in it too. A window whose top edge is transparent keeps the configured `background` there, because the bar colour stays painted underneath, and the values in `[colors.title_bar]` remain the fallback for applications that draw nothing. Unfocused windows keep their own colour, dimmed over `background_unfocused`. Because the bar can be any colour the application paints, the title and the button symbols carry a dark edge, so they stay readable on light and dark windows alike. A client-drawn window that reports its own geometry keeps the transparent shadows around it out of the colour, so the bar follows the visible window rather than its padding. The bar mirrors the window's own buffer instead of reading pixels back: it adds one bar-sized rectangle per window and a copy of that strip each time the window commits, not a per-frame readback.
++`color_source = "window"` paints the bar with a thin strip of the window's own content instead of `background`, so the bar takes on the application's colour and follows it as the application repaints that edge. `color_source = "average"` paints the bar with that strip's mean colour instead, one uniform colour with none of the window's own detail, so a title bar, tab row or loading bar along that edge does not read as fragments of itself inside the bar. It costs a pixel readback each time the window repaints that edge, which finishes the frame before reading it, so leave it off for windows that repaint that edge every frame, such as video. `color_source_height` sets how many logical pixels that strip takes, from `1` to `4`; its default, `1`, samples the single top row and reads as one flat colour, while a larger value keeps more of the window's own detail. Because the bar is only ever the window's own pixels, anything the application draws along that edge — a toolbar, a tab row, a loading bar — appears in it too. A window whose top edge is transparent keeps the configured `background` there, because the bar colour stays painted underneath, and the values in `[colors.title_bar]` remain the fallback for applications that draw nothing. Unfocused windows keep their own colour, dimmed over `background_unfocused`. Because the bar can be any colour the application paints, the title and the button symbols carry a dark edge, so they stay readable on light and dark windows alike. A client-drawn window that reports its own geometry keeps the transparent shadows around it out of the colour, so the bar follows the visible window rather than its padding. The bar mirrors the window's own buffer instead of reading pixels back: it adds one bar-sized rectangle per window and a copy of that strip each time the window commits, not a per-frame readback.
+ 
+ The title bar follows its window's `blur`, `blur_optimized`, and `blur_ignore_alpha` rules, together with the global [blur settings](#blur). Give `background` and `background_unfocused` some transparency, such as `"#292933CC"`, to see the blurred backdrop. The alpha threshold applies to the title bar's own background color, independently of the application's content. Opaque title bar backgrounds remain opaque with blur enabled, including after leaving overview or switching focus between windows. No layer rule is needed. Dragging, overview previews, and close animations keep the blur with the window.
+ 
+diff --git a/examples/config.toml b/examples/config.toml
+index 8fa43f74..aaaa9c67 100644
+--- a/examples/config.toml
++++ b/examples/config.toml
+@@ -96,7 +96,7 @@ radius = 3
+ # button_corner_radius = -1 # Follow the window's corner_radius; 0 makes square buttons.
+ # button_glyph = "hover" # X, square, and underscore symbols: "always", "hover" (while hovered or pressed), or "never".
+ # button_background = true # Show colored backgrounds behind the symbols.
+-# color_source = "fixed" # "window" paints the bar with the top of the window's own content.
++# color_source = "fixed" # "window" paints the bar with the top of the window's own content; "average" with its mean colour.
+ # color_source_height = 1 # Rows of that edge it takes, 1 (one flat colour) to 4.
+ 
+ # Optional button palette. Glyph colors also apply when button backgrounds are off.
+diff --git a/src/config/config.h b/src/config/config.h
+index d839961f..6483fbdb 100644
+--- a/src/config/config.h
++++ b/src/config/config.h
+@@ -36,8 +36,8 @@ namespace umbriel {
+ 
+   enum class TitleBarButtonGlyph : uint8_t { Always, Hover, Never };
+ 
+-  // Where a title bar takes its fill from: the palette, or the top of the window it belongs to.
+-  enum class TitleBarColorSource : uint8_t { Fixed, Window };
++  // Where a title bar takes its fill from: the palette, the window's own top edge, or the average of that edge.
++  enum class TitleBarColorSource : uint8_t { Fixed, Window, Average };
+ 
+   enum class ModifierKey {
+     Super,
+@@ -742,8 +742,8 @@ namespace umbriel {
+         int buttonPadding = -1;
+         TitleBarButtonGlyph buttonGlyph = TitleBarButtonGlyph::Hover;
+         bool buttonBackground = true;
+-        // "window" paints the bar with the top strip of the window's own content instead of the palette colour; the
+-        // palette colour stays underneath as the fallback for a transparent strip.
++        // "window" paints the bar with the top strip of the window's own content instead of the palette colour, and
++        // "average" paints it with that strip's mean colour; the palette stays underneath as the fallback.
+         TitleBarColorSource colorSource = TitleBarColorSource::Fixed;
+         // How many logical pixels of the window's top edge that strip takes. The bar stretches them over its whole
+         // height, so a thinner strip reads as one flat colour and a thicker one keeps more of the window's own detail.
+diff --git a/src/config/fields_general.cpp b/src/config/fields_general.cpp
+index b6e1620c..2b7a68eb 100644
+--- a/src/config/fields_general.cpp
++++ b/src/config/fields_general.cpp
+@@ -112,6 +112,7 @@ namespace umbriel {
+               {
+                   {.name = "fixed", .value = TitleBarColorSource::Fixed},
+                   {.name = "window", .value = TitleBarColorSource::Window},
++                  {.name = "average", .value = TitleBarColorSource::Average},
+               }
+           ),
+           // One flat colour row up to four rows of the window's own detail; the bar stretches them over its height.
+diff --git a/src/scene/color.h b/src/scene/color.h
+index 4446f029..36a63593 100644
+--- a/src/scene/color.h
++++ b/src/scene/color.h
+@@ -3,7 +3,9 @@
+ #include <array>
+ #include <cmath>
+ #include <cstddef>
++#include <cstdint>
+ #include <format>
++#include <optional>
+ #include <string>
+ 
+ namespace umbriel {
+@@ -94,6 +96,35 @@ namespace umbriel {
+     return result;
+   }
+ 
++  // Mean colour of packed DRM_FORMAT_ARGB8888 pixels, weighted by alpha so a transparent pixel contributes no hue.
++  // Null when there is nothing to average, or the whole strip is transparent.
++  inline std::optional<std::array<float, 4>> averageArgb(const uint32_t* pixels, size_t count) {
++    if (pixels == nullptr || count == 0) {
++      return std::nullopt;
++    }
++    double alpha = 0.0;
++    double red = 0.0;
++    double green = 0.0;
++    double blue = 0.0;
++    for (size_t index = 0; index < count; ++index) {
++      const uint32_t pixel = pixels[index];
++      const double weight = ((pixel >> 24U) & 0xFFU) / 255.0;
++      alpha += weight;
++      red += ((pixel >> 16U) & 0xFFU) / 255.0 * weight;
++      green += ((pixel >> 8U) & 0xFFU) / 255.0 * weight;
++      blue += (pixel & 0xFFU) / 255.0 * weight;
++    }
++    if (alpha <= 0.0) {
++      return std::nullopt;
++    }
++    return std::array<float, 4>{
++        static_cast<float>(red / alpha),
++        static_cast<float>(green / alpha),
++        static_cast<float>(blue / alpha),
++        static_cast<float>(alpha / static_cast<double>(count)),
++    };
++  }
++
+   inline std::string rgbaHex(const std::array<float, 4>& color) {
+     const auto byte = [](float component) {
+       return static_cast<int>(std::lround(std::clamp(component, 0.0F, 1.0F) * 255.0F));
+diff --git a/src/scene/ssd_frame.cpp b/src/scene/ssd_frame.cpp
+index a7fddaa4..4ad88151 100644
+--- a/src/scene/ssd_frame.cpp
++++ b/src/scene/ssd_frame.cpp
+@@ -1,6 +1,7 @@
+ #include "scene/ssd_frame.h"
+ 
+ #include "config/config.h"
++#include "scene/cairo_buffer.h"
+ #include "scene/color.h"
+ #include "scene/tab_label_cache.h"
+ #include "scene/title_bar_icon.h"
+@@ -10,7 +11,9 @@
+ 
+ #include <algorithm>
+ #include <cmath>
++#include <drm_fourcc.h>
+ #include <utility>
++#include <vector>
+ 
+ namespace umbriel {
+   namespace {
+@@ -65,6 +68,10 @@ namespace umbriel {
+     }
+     wlr_scene_node_destroy(&m_gripTree->node);
+     wlr_scene_node_destroy(&m_tree->node);
++    if (m_averageBuffer != nullptr) {
++      wlr_buffer_drop(m_averageBuffer);
++      m_averageBuffer = nullptr;
++    }
+     for (auto* buffer : m_iconBuffers) {
+       if (buffer != nullptr) {
+         wlr_buffer_unlock(buffer);
+@@ -207,28 +214,87 @@ namespace umbriel {
+     wlr_scene_blur_set_alpha(m_blur, m_blurAlpha);
+   }
+ 
++  void SsdFrame::hideAdaptive() {
++    if (m_adaptive == nullptr) {
++      return;
++    }
++    wlr_scene_node_set_enabled(&m_adaptive->node, false);
++    // Drop the mirror as well: a node that keeps the buffer holds its lock, and the client's wl_buffer.release never
++    // arrives, which stalls a client that waits for it before drawing again.
++    releaseIgnoredLock();
++    wlr_scene_buffer_set_buffer(m_adaptive, nullptr);
++    m_adaptiveBuffer = nullptr;
++  }
++
++  std::optional<std::array<float, 4>> SsdFrame::averageStrip(const wlr_fbox& strip) const {
++    // A readback is the only way to collapse a strip into one colour, and it is the one cost this mode cannot avoid:
++    // wlroots finishes the frame before it reads. Everything else in this class mirrors buffers instead.
++    if (m_content == nullptr || m_content->buffer == nullptr || m_content->buffer->texture == nullptr) {
++      return std::nullopt;
++    }
++    const int left = static_cast<int>(std::floor(strip.x));
++    const int top = static_cast<int>(std::floor(strip.y));
++    const int right = static_cast<int>(std::ceil(strip.x + strip.width));
++    const int bottom = static_cast<int>(std::ceil(strip.y + strip.height));
++    const wlr_box box{left, top, std::max(0, right - left), std::max(0, bottom - top)};
++    if (box.width <= 0 || box.height <= 0) {
++      return std::nullopt;
++    }
++    std::vector<uint32_t> pixels(static_cast<size_t>(box.width) * static_cast<size_t>(box.height));
++    const wlr_texture_read_pixels_options options{
++        .data = pixels.data(),
++        .format = DRM_FORMAT_ARGB8888,
++        .stride = static_cast<uint32_t>(box.width) * 4U,
++        .dst_x = 0,
++        .dst_y = 0,
++        .src_box = box,
++    };
++    // Refused for a protected or external-only buffer; the palette stays painted underneath either way.
++    if (!wlr_texture_read_pixels(m_content->buffer->texture, &options)) {
++      return std::nullopt;
++    }
++    return averageArgb(pixels.data(), pixels.size());
++  }
++
++  wlr_buffer* SsdFrame::averageBufferFor(const std::array<float, 4>& color) {
++    if (m_averageBuffer != nullptr && m_averageColor == color) {
++      return m_averageBuffer;
++    }
++    // One pixel, stretched over the bar: a flat colour costs no per-frame readback once it is known.
++    cairo_surface_t* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 1, 1);
++    cairo_t* cr = cairo_create(surface);
++    cairo_set_source_rgba(cr, color[0], color[1], color[2], color[3]);
++    cairo_paint(cr);
++    cairo_destroy(cr);
++    wlr_buffer* buffer = createCairoBuffer(surface);
++    if (buffer == nullptr) {
++      return nullptr;
++    }
++    if (m_averageBuffer != nullptr) {
++      wlr_buffer_drop(m_averageBuffer);
++    }
++    m_averageBuffer = buffer;
++    m_averageColor = color;
++    return m_averageBuffer;
++  }
++
+   void SsdFrame::updateAdaptive(bool fromCommit) {
+     // The palette colour stays painted underneath: a window whose top edge is transparent, or one that has not
+     // committed a buffer yet, keeps the configured bar instead of leaving a hole.
+     const auto& style = config().appearance.titleBar;
+-    wlr_buffer* buffer = nullptr;
+-    if (style.colorSource == TitleBarColorSource::Window
+-        && m_content != nullptr
+-        && m_content->buffer != nullptr
+-        && m_tree->node.enabled
+-        && m_background->width > 0
+-        && m_background->height > 0) {
+-      buffer = &m_content->buffer->base;
+-    }
++    const bool average = style.colorSource == TitleBarColorSource::Average;
++    wlr_buffer* buffer = style.colorSource != TitleBarColorSource::Fixed
++            && m_content != nullptr
++            && m_content->buffer != nullptr
++            && m_tree->node.enabled
++            && m_background->width > 0
++            && m_background->height > 0
++        ? &m_content->buffer->base
++        : nullptr;
+     if (buffer == nullptr) {
+-      if (m_adaptive != nullptr) {
+-        wlr_scene_node_set_enabled(&m_adaptive->node, false);
+-        // Drop the mirror as well: a node that keeps the buffer holds its lock, and the client's wl_buffer.release
+-        // never arrives, which stalls a client that waits for it before drawing again.
+-        releaseIgnoredLock();
+-        wlr_scene_buffer_set_buffer(m_adaptive, nullptr);
+-      }
+-      m_adaptiveBuffer = nullptr;
++      hideAdaptive();
++      m_adaptiveContent = nullptr;
++      m_averageColor.reset();
+       return;
+     }
+     if (m_adaptive == nullptr) {
+@@ -270,8 +336,9 @@ namespace umbriel {
+       }
+     }
+     // Colour management can change on a commit that carries no buffer damage, so this cannot sit behind the guard
+-    // below; the setters it reaches are no-ops when nothing changed.
+-    if (m_colors != nullptr) {
++    // below; the setters it reaches are no-ops when nothing changed. The averaged colour is a plain sRGB value of its
++    // own, so it is not re-described with the window's transfer function.
++    if (m_colors != nullptr && !average) {
+       m_colors->applySurfaceDescriptionToBuffer(m_content, m_adaptive);
+     }
+     const wlr_fbox strip = titleBarStripSourceBox(
+@@ -292,9 +359,31 @@ namespace umbriel {
+     const float opacity = m_alpha * (m_focused ? 1.0F : kAdaptiveUnfocusedOpacity);
+     const int barX = m_background->node.x;
+     const int barY = m_background->node.y;
+-    const bool reshaped = m_adaptiveBuffer != buffer
+-        || !fboxEqual(m_adaptiveStrip, strip)
+-        || m_adaptiveTransform != m_content->current.transform
++    const bool stripMoved = !fboxEqual(m_adaptiveStrip, strip);
++    // The edge changed: the smear re-mirrors it, and the average reads it back and replaces its flat colour.
++    const bool restrip = touched || m_adaptiveContent != buffer || stripMoved;
++    // What the bar shows. The smear mirrors the strip itself; the average stretches one pixel, so it carries none of
++    // the window's own detail and is one uniform colour by construction.
++    wlr_buffer* shown = buffer;
++    const wlr_fbox* sourceBox = &strip;
++    wl_output_transform transform = m_content->current.transform;
++    if (average) {
++      if (restrip) {
++        m_averageColor = averageStrip(strip);
++      }
++      shown = m_averageColor.has_value() ? averageBufferFor(*m_averageColor) : nullptr;
++      if (shown == nullptr) {
++        hideAdaptive();
++        m_adaptiveContent = buffer;
++        m_adaptiveStrip = strip;
++        return;
++      }
++      sourceBox = nullptr;
++      transform = WL_OUTPUT_TRANSFORM_NORMAL;
++    }
++    const bool reshaped = m_adaptiveBuffer != shown
++        || stripMoved
++        || m_adaptiveTransform != transform
+         || m_adaptiveWidth != m_background->width
+         || m_adaptiveHeight != m_background->height
+         || m_adaptiveOpacity != opacity
+@@ -302,35 +391,40 @@ namespace umbriel {
+         || m_adaptive->node.y != barY
+         || !fx_corner_radii_eq(m_adaptive->corners, m_background->corners);
+     // A commit that leaves the top edge alone, and changes nothing about the bar, costs nothing.
+-    if (!touched && !reshaped) {
++    if (!restrip && !reshaped) {
+       return;
+     }
+-    if (touched || m_adaptiveBuffer != buffer) {
++    if (m_adaptiveBuffer != shown || (touched && !average)) {
+       // Mirror the window the same way the overview mirrors a card: the surface's committed buffer plus its damage, and
+       // the explicit-sync acquire point when the client uses it, so the bar never samples a half-presented frame.
+       wlr_scene_buffer_set_buffer_options options{
+-          .damage = fromCommit ? &m_content->buffer_damage : nullptr,
++          .damage = fromCommit && !average ? &m_content->buffer_damage : nullptr,
+           .wait_timeline = nullptr,
+           .wait_point = 0,
+       };
+-      if (wlr_linux_drm_syncobj_surface_v1_state* sync = wlr_linux_drm_syncobj_v1_get_surface_state(m_content)) {
+-        options.wait_timeline = sync->acquire_timeline;
+-        options.wait_point = sync->acquire_point;
++      if (!average) {
++        if (wlr_linux_drm_syncobj_surface_v1_state* sync = wlr_linux_drm_syncobj_v1_get_surface_state(m_content)) {
++          options.wait_timeline = sync->acquire_timeline;
++          options.wait_point = sync->acquire_point;
++        }
+       }
+       releaseIgnoredLock();
+-      wlr_scene_buffer_set_buffer_with_options(m_adaptive, buffer, &options);
++      wlr_scene_buffer_set_buffer_with_options(m_adaptive, shown, &options);
+       // The scene holds a second lock on the client's buffer; without this wlroots cannot reuse its texture for
+       // in-place shm damage and rebuilds the whole window's texture on every commit.
+-      ignoreLock(buffer);
++      if (!average) {
++        ignoreLock(shown);
++      }
+     }
+-    m_adaptiveBuffer = buffer;
++    m_adaptiveBuffer = shown;
++    m_adaptiveContent = buffer;
+     m_adaptiveStrip = strip;
+-    m_adaptiveTransform = m_content->current.transform;
++    m_adaptiveTransform = transform;
+     m_adaptiveWidth = m_background->width;
+     m_adaptiveHeight = m_background->height;
+     m_adaptiveOpacity = opacity;
+-    wlr_scene_buffer_set_source_box(m_adaptive, &strip);
+-    wlr_scene_buffer_set_transform(m_adaptive, m_content->current.transform);
++    wlr_scene_buffer_set_source_box(m_adaptive, sourceBox);
++    wlr_scene_buffer_set_transform(m_adaptive, transform);
+     wlr_scene_buffer_set_dest_size(m_adaptive, m_background->width, m_background->height);
+     wlr_scene_buffer_set_corner_radii(m_adaptive, m_background->corners);
+     // Unfocus dims the window's own colour over the palette's unfocused tone rather than dropping back to it.
+diff --git a/src/scene/ssd_frame.h b/src/scene/ssd_frame.h
+index 4c9a78db..f048d44e 100644
+--- a/src/scene/ssd_frame.h
++++ b/src/scene/ssd_frame.h
+@@ -66,6 +66,11 @@ namespace umbriel {
+     void redraw();
+     void updateColors();
+     void updateAdaptive(bool fromCommit);
++    void hideAdaptive();
++    // The mean colour of the strip, read back from the window's committed texture.
++    std::optional<std::array<float, 4>> averageStrip(const wlr_fbox& strip) const;
++    // A one-pixel buffer of `color`, kept until the colour changes.
++    wlr_buffer* averageBufferFor(const std::array<float, 4>& color);
+     // The mirrored client buffer is locked by the scene; tell wlroots to ignore that lock so it can still reuse the
+     // texture for in-place shm damage, and undo it when the mirror is replaced or cleared.
+     void ignoreLock(wlr_buffer* buffer);
+@@ -101,6 +106,10 @@ namespace umbriel {
+     // What the strip node last mirrored, so a commit that leaves the top edge alone costs nothing.
+     wlr_buffer* m_adaptiveBuffer = nullptr;
+     wlr_fbox m_adaptiveStrip{};
++    // The client buffer the node's current contents came from, so a swap re-mirrors or re-reads it.
++    wlr_buffer* m_adaptiveContent = nullptr;
++    std::optional<std::array<float, 4>> m_averageColor;
++    wlr_buffer* m_averageBuffer = nullptr;
+     wl_output_transform m_adaptiveTransform = WL_OUTPUT_TRANSFORM_NORMAL;
+     int m_adaptiveWidth = 0;
+     int m_adaptiveHeight = 0;
+diff --git a/tests/harness/checks/render/title_bar_adaptive.sh b/tests/harness/checks/render/title_bar_adaptive.sh
+index 499d8aa1..18c238df 100755
+--- a/tests/harness/checks/render/title_bar_adaptive.sh
++++ b/tests/harness/checks/render/title_bar_adaptive.sh
+@@ -90,6 +90,7 @@ EOF
+ # Pixels in the bar crop matching a predicate.
+ count() { "$UMBRIEL_PIXEL_PROBE" "$FRAME" count "$1" "$BAR"; }
+ count_in() { "$UMBRIEL_PIXEL_PROBE" "$FRAME" count "$1" "$2"; }
++pixel() { "$UMBRIEL_PIXEL_PROBE" "$FRAME" pixel "$1" "$2"; }
+ 
+ expect() {
+   local predicate=$1 minimum=$2 what=$3 found
+@@ -188,3 +189,34 @@ expect_in 'r > 0.6 && g > 0.6 && b > 0.6' "$BAR_FULL" 40 "the title in the bar's
+ expect_in 'r > 0.6 && g < 0.15 && b < 0.15' "$BAR_FULL" 40 "the button backgrounds in the bar's close animation"
+ "$UMBRIEL" clock-advance 1000 > /dev/null
+ "$UMBRIEL" settle
++
++# The average takes one colour from the whole edge: a band that is green on one side and blue on the other must show the
++# same blend at both ends of the bar. The smear shows the sides. This is what tells the two modes apart, and it is what
++# keeps a tab row or a loading bar on that edge out of the colour.
++readonly LOG2="$UMBRIEL_RUNTIME_DIR/adaptive-average.log"
++configure average
++FILL_COLOR=0xFFFF0000 TOP_BAND_COLOR=0xFF00FF00 TOP_BAND_SPLIT=0xFF0000FF TOP_BAND_HEIGHT=2 \
++  "$CLIENT" adaptive-bar 480 300 < /dev/null > "$LOG2" 2>&1 &
++await_lines "$LOG2" mapped 1
++"$UMBRIEL" settle
++grim "$FRAME"
++read -r left_r left_g left_b < <(pixel 200 84)
++read -r right_r right_g right_b < <(pixel 620 84)
++near() { (( $1 >= $2 - 12 && $1 <= $2 + 12 )); }
++if ! near "$left_g" "$right_g" || ! near "$left_b" "$right_b" || ! near "$left_r" "$right_r"; then
++  fail "an averaged bar was not uniform: left $left_r $left_g $left_b, right $right_r $right_g $right_b"
++fi
++# A blend of the green and blue halves, not either of them and not the palette.
++if (( left_g < 60 || left_b < 60 || left_r > 40 )); then
++  fail "an averaged bar did not blend the window edge: $left_r $left_g $left_b"
++fi
++
++# The same window in smear mode keeps the two sides distinct.
++configure window
++"$UMBRIEL" settle
++grim "$FRAME"
++read -r left_r left_g left_b < <(pixel 200 84)
++read -r right_r right_g right_b < <(pixel 620 84)
++if ! (( left_g > 200 && left_b < 40 && right_b > 200 && right_g < 40 )); then
++  fail "a smeared bar did not keep the window edge: left $left_r $left_g $left_b, right $right_r $right_g $right_b"
++fi
+diff --git a/tests/harness/clients/unmap_client.cpp b/tests/harness/clients/unmap_client.cpp
+index b4e56f16..895f7a90 100644
+--- a/tests/harness/clients/unmap_client.cpp
++++ b/tests/harness/clients/unmap_client.cpp
+@@ -31,7 +31,8 @@
+ // REPAINT_ON_STDIN makes R/G/B request a frame callback, then commit a fresh red/green/blue buffer.
+ // FILL_COLOR=<ARGB> paints the buffer that colour (default 0xFF5577AA), so screenshots can tell windows apart.
+ // TOP_BAND_COLOR=<ARGB> with TOP_BAND_HEIGHT=<px> paints the top rows of the buffer in another colour, so a check can
+-// tell which edge of the content a compositor sampled. A repaint recolours the band too.
++// tell which edge of the content a compositor sampled. A repaint recolours the band too. TOP_BAND_SPLIT=<ARGB> paints
++// the right half of those rows in a second colour, so a check can tell a sampled strip from its average.
+ // OPAQUE_BUFFER uses XRGB so the compositor can cull completely covered clients.
+ // RESIZE_FILL_COLOR=<ARGB> maps at the first configured size, then redraws at every later configured size in that
+ // colour, the way a real client follows its tile.
+@@ -175,6 +176,7 @@ namespace {
+     int tearingHint = -1;
+     uint32_t fillColor = 0xFF5577AA;
+     uint32_t topBandColor = 0;
++    uint32_t topBandSplit = 0;
+     int topBandHeight = 0;
+     std::optional<uint32_t> resizeFillColor;
+     int configuredWidth = 0;
+@@ -329,7 +331,11 @@ namespace {
+       auto* pixels = static_cast<uint32_t*>(buffer.pixels);
+       const int band = std::min(state.topBandHeight, height);
+       for (int row = 0; row < band; ++row) {
+-        std::fill_n(pixels + static_cast<ptrdiff_t>(row) * width, width, state.topBandColor);
++        auto* line = pixels + static_cast<ptrdiff_t>(row) * width;
++        std::fill_n(line, width, state.topBandColor);
++        if (state.topBandSplit != 0) {
++          std::fill_n(line + width / 2, width - width / 2, state.topBandSplit);
++        }
+       }
+     }
+ 
+@@ -948,6 +954,13 @@ int main(int argc, char** argv) {
+       state.topBandColor = static_cast<uint32_t>(value);
+     }
+   }
++  if (const char* split = std::getenv("TOP_BAND_SPLIT")) {
++    char* end = nullptr;
++    const auto value = std::strtoul(split, &end, 0);
++    if (end != split) {
++      state.topBandSplit = static_cast<uint32_t>(value);
++    }
++  }
+   if (const char* rows = std::getenv("TOP_BAND_HEIGHT")) {
+     state.topBandHeight = static_cast<int>(std::strtol(rows, nullptr, 10));
+   }
+diff --git a/tests/meson.build b/tests/meson.build
+index c7919d4d..c4cd03d9 100644
+--- a/tests/meson.build
++++ b/tests/meson.build
+@@ -54,6 +54,7 @@ unit_tests = [
+   ['cheatsheet-rows', ['unit/cheatsheet_rows.cpp'], []],
+   ['shortcut-labels', ['unit/shortcut_labels.cpp'], []],
+   ['border-ring', ['unit/border_ring.cpp'], []],
++  ['colour-average', ['unit/colour_average.cpp'], []],
+   ['ssd-frame-geometry', ['unit/ssd_frame_geometry.cpp'], []],
+   ['title-bar-icon', ['unit/title_bar_icon.cpp'], [umbriel_core_dep]],
+   ['floating', ['unit/floating.cpp'], []],
+diff --git a/tests/unit/colour_average.cpp b/tests/unit/colour_average.cpp
+new file mode 100644
+index 00000000..ca7e3f8f
+--- /dev/null
++++ b/tests/unit/colour_average.cpp
+@@ -0,0 +1,45 @@
++#include "check.h"
++#include "scene/color.h"
++
++#include <array>
++#include <cstdint>
++
++using umbriel::averageArgb;
++
++namespace {
++  constexpr uint32_t argb(uint32_t red, uint32_t green, uint32_t blue, uint32_t alpha) {
++    return (alpha << 24U) | (red << 16U) | (green << 8U) | blue;
++  }
++} // namespace
++
++UMBRIEL_TEST(averageArgbIsTheMeanOfAnOpaqueStrip) {
++  // A green edge over a red body averages to the midpoint of the two colours it covers.
++  const std::array<uint32_t, 4> strip{
++      argb(255, 0, 0, 255), argb(255, 0, 0, 255), argb(0, 255, 0, 255), argb(0, 255, 0, 255)
++  };
++  const auto mean = averageArgb(strip.data(), strip.size());
++  CHECK(mean.has_value());
++  CHECK_NEAR((*mean)[0], 0.5, 0.002);
++  CHECK_NEAR((*mean)[1], 0.5, 0.002);
++  CHECK_NEAR((*mean)[2], 0.0, 0.002);
++  CHECK_NEAR((*mean)[3], 1.0, 0.002);
++}
++
++UMBRIEL_TEST(averageArgbIgnoresTransparentPixels) {
++  // A transparent pixel must not pull the hue toward black; only its own alpha contributes.
++  const std::array<uint32_t, 3> strip{argb(0, 0, 0, 0), argb(0, 255, 0, 255), argb(0, 255, 0, 255)};
++  const auto mean = averageArgb(strip.data(), strip.size());
++  CHECK(mean.has_value());
++  CHECK_NEAR((*mean)[0], 0.0, 0.002);
++  CHECK_NEAR((*mean)[1], 1.0, 0.002);
++  CHECK_NEAR((*mean)[3], 2.0 / 3.0, 0.002);
++}
++
++UMBRIEL_TEST(averageArgbHasNothingToShowForAFullyTransparentStrip) {
++  const std::array<uint32_t, 2> strip{argb(255, 0, 0, 0), argb(0, 0, 255, 0)};
++  CHECK(!averageArgb(strip.data(), strip.size()).has_value());
++  CHECK(!averageArgb(nullptr, 4).has_value());
++  CHECK(!averageArgb(strip.data(), 0).has_value());
++}
++
++int main() { return RUN_TESTS(); }
+-- 
+2.56.0.341.gebdc087dc9
+
+
+From a45668fc896fad22af7d1f613428edd34dd40d18 Mon Sep 17 00:00:00 2001
+From: ZhangDM-520 <jixianqiang1540@gmail.com>
+Date: Sat, 7 Nov 2026 20:37:07 +0800
+Subject: [PATCH 6/6] fix(title_bar): keep the average live, sRGB, and readable
+
+Review of the average mode found that its cache compared the new mean with
+itself, so the bar kept the first colour it was baked with for the frame's whole
+life. Track the colour actually baked into the buffer instead.
+
+A mode switch is not a commit, so `window` -> `average` never re-read the edge
+and an idle window kept the palette, or the mean of an edge that had changed
+while the bar was smearing. The mode the node was built for is now part of the
+"redo the work" signal.
+
+The bar also lost its contrast edge in average mode, although an average can be
+any colour too; the title shadow and the symbol outline now cover both
+window-derived modes. The flat colour is reset to sRGB rather than inheriting
+the window's transfer function, and the readback asks for the format the
+renderer prefers (decoding ARGB, ABGR and their opaque variants) instead of
+assuming BGRA. The readback buffer is kept between commits.
+
+The mean is computed from premultiplied pixels, so dividing by the alpha total
+is the whole correction: weighting the components by alpha again made a
+translucent edge render at half strength.
+
+Pins: a semi-transparent unit case and an ABGR one; harness phases for a repaint
+while averaging (fails with the frozen cache), for a live switch to average
+after the edge changed while smearing (fails without the mode signal), and for
+the mean following a repaint.
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+---
+ docs/user/appearance.md                       |  2 +-
+ src/scene/color.h                             | 21 ++++---
+ src/scene/ssd_frame.cpp                       | 59 ++++++++++++++-----
+ src/scene/ssd_frame.h                         |  9 ++-
+ src/server/color_manager.cpp                  |  8 ++-
+ src/server/color_manager.h                    |  2 +
+ .../checks/render/title_bar_adaptive.sh       | 34 ++++++++++-
+ tests/unit/colour_average.cpp                 | 48 +++++++++++----
+ 8 files changed, 144 insertions(+), 39 deletions(-)
+
+diff --git a/docs/user/appearance.md b/docs/user/appearance.md
+index a0277c2a..94e2c600 100644
+--- a/docs/user/appearance.md
++++ b/docs/user/appearance.md
+@@ -178,7 +178,7 @@ The `close`, `maximize`, and `minimize` colors control button backgrounds. Each
+ 
+ `button_corner_radius` uses logical pixels, from `0` to `100`. Its default, `-1`, follows the window's `corner_radius`, including window rules. Use `0` for square buttons or a small positive value for rounded squares. The radius is capped at half the button size, producing circles at larger values. Buttons and symbols scale with the output and overview zoom, and update on reload. The maximize button is disabled for fixed-size windows. The minimize button shows only while the window can [minimize](layout.md#minimize), so tiled and pinned windows do not have one. `background` and `text` apply to the focused window; their `_unfocused` variants apply to other windows. Colors and title bar settings reload live.
+ 
+-`color_source = "window"` paints the bar with a thin strip of the window's own content instead of `background`, so the bar takes on the application's colour and follows it as the application repaints that edge. `color_source = "average"` paints the bar with that strip's mean colour instead, one uniform colour with none of the window's own detail, so a title bar, tab row or loading bar along that edge does not read as fragments of itself inside the bar. It costs a pixel readback each time the window repaints that edge, which finishes the frame before reading it, so leave it off for windows that repaint that edge every frame, such as video. `color_source_height` sets how many logical pixels that strip takes, from `1` to `4`; its default, `1`, samples the single top row and reads as one flat colour, while a larger value keeps more of the window's own detail. Because the bar is only ever the window's own pixels, anything the application draws along that edge — a toolbar, a tab row, a loading bar — appears in it too. A window whose top edge is transparent keeps the configured `background` there, because the bar colour stays painted underneath, and the values in `[colors.title_bar]` remain the fallback for applications that draw nothing. Unfocused windows keep their own colour, dimmed over `background_unfocused`. Because the bar can be any colour the application paints, the title and the button symbols carry a dark edge, so they stay readable on light and dark windows alike. A client-drawn window that reports its own geometry keeps the transparent shadows around it out of the colour, so the bar follows the visible window rather than its padding. The bar mirrors the window's own buffer instead of reading pixels back: it adds one bar-sized rectangle per window and a copy of that strip each time the window commits, not a per-frame readback.
++`color_source = "window"` paints the bar with a thin strip of the window's own content instead of `background`, so the bar takes on the application's colour and follows it as the application repaints that edge. `color_source = "average"` paints the bar with that strip's mean colour instead, one uniform colour with none of the window's own detail, so a title bar, tab row or loading bar along that edge does not read as fragments of itself inside the bar. It costs a pixel readback each time the window repaints that edge, which finishes the frame before reading it, so leave it off for windows that repaint that edge every frame, such as video. `color_source_height` sets how many logical pixels that strip takes, from `1` to `4`; its default, `1`, samples the single top row and reads as one flat colour, while a larger value keeps more of the window's own detail. Because the bar is only ever the window's own pixels, anything the application draws along that edge — a toolbar, a tab row, a loading bar — appears in it too. A window whose top edge is transparent keeps the configured `background` there, because the bar colour stays painted underneath, and the values in `[colors.title_bar]` remain the fallback for applications that draw nothing. Unfocused windows keep their own colour, dimmed over `background_unfocused`. Because the bar can be any colour the application paints, the title and the button symbols carry a dark edge, so they stay readable on light and dark windows alike. A client-drawn window that reports its own geometry keeps the transparent shadows around it out of the colour, so the bar follows the visible window rather than its padding. `"window"` mirrors the window's own buffer instead of reading pixels back, so it adds one bar-sized rectangle per window and a copy of that strip each time the window commits. `"average"` does read that strip back, once for each commit that repaints it, which finishes the frame first; the resulting colour is a single pixel, so no further readback follows until the edge changes again. A protected or external-only window cannot be read, and the bar falls back to the palette colour there, as it does while a window has not committed a buffer yet.
+ 
+ The title bar follows its window's `blur`, `blur_optimized`, and `blur_ignore_alpha` rules, together with the global [blur settings](#blur). Give `background` and `background_unfocused` some transparency, such as `"#292933CC"`, to see the blurred backdrop. The alpha threshold applies to the title bar's own background color, independently of the application's content. Opaque title bar backgrounds remain opaque with blur enabled, including after leaving overview or switching focus between windows. No layer rule is needed. Dragging, overview previews, and close animations keep the blur with the window.
+ 
+diff --git a/src/scene/color.h b/src/scene/color.h
+index 36a63593..72221f84 100644
+--- a/src/scene/color.h
++++ b/src/scene/color.h
+@@ -96,23 +96,28 @@ namespace umbriel {
+     return result;
+   }
+ 
+-  // Mean colour of packed DRM_FORMAT_ARGB8888 pixels, weighted by alpha so a transparent pixel contributes no hue.
+-  // Null when there is nothing to average, or the whole strip is transparent.
+-  inline std::optional<std::array<float, 4>> averageArgb(const uint32_t* pixels, size_t count) {
++  // Byte order of a packed 32-bit pixel. The X variants carry no alpha and are read as opaque.
++  enum class PixelOrder : uint8_t { Argb, Abgr, Xrgb, Xbgr };
++
++  // Mean colour of packed 32-bit pixels, as Wayland buffers store them: premultiplied. The sums are therefore already
++  // weighted by alpha, so dividing by the alpha total recovers the straight colour, and a transparent pixel adds
++  // nothing to the hue. Null when there is nothing to average, or the whole strip is transparent.
++  inline std::optional<std::array<float, 4>> averagePixels(const uint32_t* pixels, size_t count, PixelOrder order) {
+     if (pixels == nullptr || count == 0) {
+       return std::nullopt;
+     }
++    const bool opaque = order == PixelOrder::Xrgb || order == PixelOrder::Xbgr;
++    const bool redLow = order == PixelOrder::Abgr || order == PixelOrder::Xbgr;
+     double alpha = 0.0;
+     double red = 0.0;
+     double green = 0.0;
+     double blue = 0.0;
+     for (size_t index = 0; index < count; ++index) {
+       const uint32_t pixel = pixels[index];
+-      const double weight = ((pixel >> 24U) & 0xFFU) / 255.0;
+-      alpha += weight;
+-      red += ((pixel >> 16U) & 0xFFU) / 255.0 * weight;
+-      green += ((pixel >> 8U) & 0xFFU) / 255.0 * weight;
+-      blue += (pixel & 0xFFU) / 255.0 * weight;
++      alpha += opaque ? 1.0 : ((pixel >> 24U) & 0xFFU) / 255.0;
++      red += (redLow ? (pixel & 0xFFU) : ((pixel >> 16U) & 0xFFU)) / 255.0;
++      green += ((pixel >> 8U) & 0xFFU) / 255.0;
++      blue += (redLow ? ((pixel >> 16U) & 0xFFU) : (pixel & 0xFFU)) / 255.0;
+     }
+     if (alpha <= 0.0) {
+       return std::nullopt;
+diff --git a/src/scene/ssd_frame.cpp b/src/scene/ssd_frame.cpp
+index 4ad88151..6a7e32a6 100644
+--- a/src/scene/ssd_frame.cpp
++++ b/src/scene/ssd_frame.cpp
+@@ -226,7 +226,7 @@ namespace umbriel {
+     m_adaptiveBuffer = nullptr;
+   }
+ 
+-  std::optional<std::array<float, 4>> SsdFrame::averageStrip(const wlr_fbox& strip) const {
++  std::optional<std::array<float, 4>> SsdFrame::averageStrip(const wlr_fbox& strip) {
+     // A readback is the only way to collapse a strip into one colour, and it is the one cost this mode cannot avoid:
+     // wlroots finishes the frame before it reads. Everything else in this class mirrors buffers instead.
+     if (m_content == nullptr || m_content->buffer == nullptr || m_content->buffer->texture == nullptr) {
+@@ -240,10 +240,33 @@ namespace umbriel {
+     if (box.width <= 0 || box.height <= 0) {
+       return std::nullopt;
+     }
+-    std::vector<uint32_t> pixels(static_cast<size_t>(box.width) * static_cast<size_t>(box.height));
++    // Ask for the format this renderer can read rather than assuming BGRA: an implementation without
++    // EXT_read_format_bgra refuses it, and the mode would silently never work there.
++    const uint32_t format = wlr_texture_preferred_read_format(m_content->buffer->texture);
++    std::optional<PixelOrder> order;
++    switch (format) {
++    case DRM_FORMAT_ARGB8888:
++      order = PixelOrder::Argb;
++      break;
++    case DRM_FORMAT_XRGB8888:
++      order = PixelOrder::Xrgb;
++      break;
++    case DRM_FORMAT_ABGR8888:
++      order = PixelOrder::Abgr;
++      break;
++    case DRM_FORMAT_XBGR8888:
++      order = PixelOrder::Xbgr;
++      break;
++    default:
++      break;
++    }
++    if (!order.has_value()) {
++      return std::nullopt;
++    }
++    m_strip.resize(static_cast<size_t>(box.width) * static_cast<size_t>(box.height));
+     const wlr_texture_read_pixels_options options{
+-        .data = pixels.data(),
+-        .format = DRM_FORMAT_ARGB8888,
++        .data = m_strip.data(),
++        .format = format,
+         .stride = static_cast<uint32_t>(box.width) * 4U,
+         .dst_x = 0,
+         .dst_y = 0,
+@@ -253,11 +276,13 @@ namespace umbriel {
+     if (!wlr_texture_read_pixels(m_content->buffer->texture, &options)) {
+       return std::nullopt;
+     }
+-    return averageArgb(pixels.data(), pixels.size());
++    return averagePixels(m_strip.data(), m_strip.size(), *order);
+   }
+ 
+   wlr_buffer* SsdFrame::averageBufferFor(const std::array<float, 4>& color) {
+-    if (m_averageBuffer != nullptr && m_averageColor == color) {
++    // Compare against the colour baked into the buffer, never against `m_averageColor`: that already holds the new
++    // mean by the time this is called, so comparing with it would always match and freeze the first colour.
++    if (m_averageBuffer != nullptr && m_averageBufferColor == color) {
+       return m_averageBuffer;
+     }
+     // One pixel, stretched over the bar: a flat colour costs no per-frame readback once it is known.
+@@ -274,7 +299,7 @@ namespace umbriel {
+       wlr_buffer_drop(m_averageBuffer);
+     }
+     m_averageBuffer = buffer;
+-    m_averageColor = color;
++    m_averageBufferColor = color;
+     return m_averageBuffer;
+   }
+ 
+@@ -294,6 +319,7 @@ namespace umbriel {
+     if (buffer == nullptr) {
+       hideAdaptive();
+       m_adaptiveContent = nullptr;
++      m_adaptiveMode = TitleBarColorSource::Fixed;
+       m_averageColor.reset();
+       return;
+     }
+@@ -337,9 +363,9 @@ namespace umbriel {
+     }
+     // Colour management can change on a commit that carries no buffer damage, so this cannot sit behind the guard
+     // below; the setters it reaches are no-ops when nothing changed. The averaged colour is a plain sRGB value of its
+-    // own, so it is not re-described with the window's transfer function.
+-    if (m_colors != nullptr && !average) {
+-      m_colors->applySurfaceDescriptionToBuffer(m_content, m_adaptive);
++    // own, so a null surface resets the node to sRGB rather than inheriting the window's transfer function.
++    if (m_colors != nullptr) {
++      m_colors->applySurfaceDescriptionToBuffer(average ? nullptr : m_content, m_adaptive);
+     }
+     const wlr_fbox strip = titleBarStripSourceBox(
+         source, buffer->width, buffer->height, sourceSurfaceWidth, sourceSurfaceHeight,
+@@ -360,8 +386,11 @@ namespace umbriel {
+     const int barX = m_background->node.x;
+     const int barY = m_background->node.y;
+     const bool stripMoved = !fboxEqual(m_adaptiveStrip, strip);
++    // A mode switch is not a commit, so it has to force the work itself: otherwise an idle window keeps the palette
++    // (or the mean of an edge that changed while the bar was smearing) until its next top-edge damage.
++    const bool modeChanged = m_adaptiveMode != style.colorSource;
+     // The edge changed: the smear re-mirrors it, and the average reads it back and replaces its flat colour.
+-    const bool restrip = touched || m_adaptiveContent != buffer || stripMoved;
++    const bool restrip = touched || modeChanged || m_adaptiveContent != buffer || stripMoved;
+     // What the bar shows. The smear mirrors the strip itself; the average stretches one pixel, so it carries none of
+     // the window's own detail and is one uniform colour by construction.
+     wlr_buffer* shown = buffer;
+@@ -375,6 +404,7 @@ namespace umbriel {
+       if (shown == nullptr) {
+         hideAdaptive();
+         m_adaptiveContent = buffer;
++        m_adaptiveMode = style.colorSource;
+         m_adaptiveStrip = strip;
+         return;
+       }
+@@ -418,6 +448,7 @@ namespace umbriel {
+     }
+     m_adaptiveBuffer = shown;
+     m_adaptiveContent = buffer;
++    m_adaptiveMode = style.colorSource;
+     m_adaptiveStrip = strip;
+     m_adaptiveTransform = transform;
+     m_adaptiveWidth = m_background->width;
+@@ -576,7 +607,7 @@ namespace umbriel {
+           || (style.buttonGlyph == TitleBarButtonGlyph::Hover && (hovered || pressed));
+       updateButtonIcon(
+           which, glyphColor, m_alpha * (enabled ? 1.0F : 0.35F), glyphVisible,
+-          style.colorSource == TitleBarColorSource::Window ? adaptiveOutline(glyphColor[3]) : std::nullopt
++          style.colorSource != TitleBarColorSource::Fixed ? adaptiveOutline(glyphColor[3]) : std::nullopt
+       );
+     };
+     button(
+@@ -670,7 +701,7 @@ namespace umbriel {
+     const int labelWidth = label != nullptr ? label->width : 0;
+     const int labelHeight = label != nullptr ? label->height : 0;
+     // A window-coloured bar can be lighter or darker than the palette, so the title keeps a dark edge under it.
+-    const bool shadowed = style.colorSource == TitleBarColorSource::Window;
++    const bool shadowed = style.colorSource != TitleBarColorSource::Fixed;
+     const TabLabel* shadow = nullptr;
+     if (shadowed && labelBuffer != nullptr && textColor[3] > 0.0F) {
+       // The shadow re-measures the same layout; keep the title's copy intact for the text below it.
+@@ -821,7 +852,7 @@ namespace umbriel {
+     // The cache is an LRU and the shadow lookup below can evict the entry `label` points at, so hold the buffer.
+     wlr_buffer* labelBuffer = label != nullptr ? wlr_buffer_lock(label->buffer) : nullptr;
+     wlr_buffer* shadow = nullptr;
+-    if (style.colorSource == TitleBarColorSource::Window && textColor[3] > 0.0F) {
++    if (style.colorSource != TitleBarColorSource::Fixed && textColor[3] > 0.0F) {
+       TitleBarLayout shadowParts = parts;
+       if (const TabLabel* rendered = measureTitle(kAdaptiveShadowColor, textColor[3], shadowParts, radius)) {
+         shadow = rendered->buffer;
+diff --git a/src/scene/ssd_frame.h b/src/scene/ssd_frame.h
+index f048d44e..148b86e4 100644
+--- a/src/scene/ssd_frame.h
++++ b/src/scene/ssd_frame.h
+@@ -1,5 +1,6 @@
+ #pragma once
+ 
++#include "config/config.h"
+ #include "scene/ssd_frame_geometry.h"
+ #include "scene/surface_blur.h"
+ #include "view/chrome_attachment.h"
+@@ -68,7 +69,7 @@ namespace umbriel {
+     void updateAdaptive(bool fromCommit);
+     void hideAdaptive();
+     // The mean colour of the strip, read back from the window's committed texture.
+-    std::optional<std::array<float, 4>> averageStrip(const wlr_fbox& strip) const;
++    std::optional<std::array<float, 4>> averageStrip(const wlr_fbox& strip);
+     // A one-pixel buffer of `color`, kept until the colour changes.
+     wlr_buffer* averageBufferFor(const std::array<float, 4>& color);
+     // The mirrored client buffer is locked by the scene; tell wlroots to ignore that lock so it can still reuse the
+@@ -109,7 +110,13 @@ namespace umbriel {
+     // The client buffer the node's current contents came from, so a swap re-mirrors or re-reads it.
+     wlr_buffer* m_adaptiveContent = nullptr;
+     std::optional<std::array<float, 4>> m_averageColor;
++    // The colour baked into `m_averageBuffer`, which is not the same thing as the current mean.
++    std::array<float, 4> m_averageBufferColor{};
+     wlr_buffer* m_averageBuffer = nullptr;
++    // Scratch for one strip readback, kept so a repainting window does not allocate per commit.
++    std::vector<uint32_t> m_strip;
++    // The mode the node's contents were built for: a switch is not a commit, so it has to force the work.
++    TitleBarColorSource m_adaptiveMode = TitleBarColorSource::Fixed;
+     wl_output_transform m_adaptiveTransform = WL_OUTPUT_TRANSFORM_NORMAL;
+     int m_adaptiveWidth = 0;
+     int m_adaptiveHeight = 0;
+diff --git a/src/server/color_manager.cpp b/src/server/color_manager.cpp
+index 8e053dc2..deea74f9 100644
+--- a/src/server/color_manager.cpp
++++ b/src/server/color_manager.cpp
+@@ -1103,7 +1103,9 @@ namespace umbriel {
+     }
+ 
+     void applySurfaceDescriptionToBuffer(wlr_surface* surface, wlr_scene_buffer* buffer) const {
+-      if (surface == nullptr || buffer == nullptr) {
++      // A null surface means "none": the sRGB defaults below are applied as they stand. Callers that own a persistent
++      // buffer use that to reset a node which no longer shows surface content.
++      if (buffer == nullptr) {
+         return;
+       }
+       // No early return for a surface without a description: `resolveSurfaceColor` leaves the sRGB defaults in place,
+@@ -1116,7 +1118,9 @@ namespace umbriel {
+           .luminances = {},
+           .absolute_luminance = false,
+       };
+-      resolveSurfaceColor(surface, &state, const_cast<Impl*>(this));
++      if (surface != nullptr) {
++        resolveSurfaceColor(surface, &state, const_cast<Impl*>(this));
++      }
+       wlr_scene_buffer_set_transfer_function(buffer, state.transfer_function);
+       wlr_scene_buffer_set_primaries(buffer, state.primaries);
+       wlr_scene_buffer_set_custom_primaries(buffer, state.custom_primaries);
+diff --git a/src/server/color_manager.h b/src/server/color_manager.h
+index 37190a9f..0eadbdfe 100644
+--- a/src/server/color_manager.h
++++ b/src/server/color_manager.h
+@@ -26,6 +26,8 @@ namespace umbriel {
+     bool surfaceRequiresHdrOutput(wlr_surface* surface) const;
+     // Register before adding surfaces. Scene destruction removes the registration.
+     [[nodiscard]] bool registerScene(wlr_scene* scene);
++    // Describes `buffer` with the surface's colour state. A null surface resets it to the sRGB default, for a node
++    // that shows a compositor-drawn colour rather than surface content.
+     void applySurfaceDescriptionToBuffer(wlr_surface* surface, wlr_scene_buffer* buffer) const;
+     void updatePreferredDescriptions();
+ 
+diff --git a/tests/harness/checks/render/title_bar_adaptive.sh b/tests/harness/checks/render/title_bar_adaptive.sh
+index 18c238df..68aa500f 100755
+--- a/tests/harness/checks/render/title_bar_adaptive.sh
++++ b/tests/harness/checks/render/title_bar_adaptive.sh
+@@ -195,8 +195,11 @@ expect_in 'r > 0.6 && g < 0.15 && b < 0.15' "$BAR_FULL" 40 "the button backgroun
+ # keeps a tab row or a loading bar on that edge out of the colour.
+ readonly LOG2="$UMBRIEL_RUNTIME_DIR/adaptive-average.log"
+ configure average
+-FILL_COLOR=0xFFFF0000 TOP_BAND_COLOR=0xFF00FF00 TOP_BAND_SPLIT=0xFF0000FF TOP_BAND_HEIGHT=2 \
+-  "$CLIENT" adaptive-bar 480 300 < /dev/null > "$LOG2" 2>&1 &
++# A fresh pipe: the first client's write end is closed with it.
++mkfifo "$UMBRIEL_RUNTIME_DIR/adaptive-average.fifo"
++FILL_COLOR=0xFFFF0000 TOP_BAND_COLOR=0xFF00FF00 TOP_BAND_SPLIT=0xFF0000FF TOP_BAND_HEIGHT=2 REPAINT_ON_STDIN=1 \
++  "$CLIENT" adaptive-bar 480 300 < "$UMBRIEL_RUNTIME_DIR/adaptive-average.fifo" > "$LOG2" 2>&1 &
++exec 4> "$UMBRIEL_RUNTIME_DIR/adaptive-average.fifo"
+ await_lines "$LOG2" mapped 1
+ "$UMBRIEL" settle
+ grim "$FRAME"
+@@ -220,3 +223,30 @@ read -r right_r right_g right_b < <(pixel 620 84)
+ if ! (( left_g > 200 && left_b < 40 && right_b > 200 && right_g < 40 )); then
+   fail "a smeared bar did not keep the window edge: left $left_r $left_g $left_b, right $right_r $right_g $right_b"
+ fi
++
++# Repaint while the bar is smearing, so the mean cached before this point is out of date.
++printf 'B' >&4
++await_lines "$LOG2" repainted 1
++"$UMBRIEL" settle
++
++# Switching to average is live on its own: an idle window must not wait for its next commit, and the mean must be the
++# edge as it is now, not the one the bar last averaged.
++configure average
++"$UMBRIEL" settle
++grim "$FRAME"
++read -r left_r left_g left_b < <(pixel 200 84)
++read -r right_r right_g right_b < <(pixel 620 84)
++if ! near "$left_g" "$right_g" || ! (( left_b > 200 && left_g < 40 )); then
++  fail "an averaged bar was stale after switching live: left $left_r $left_g $left_b, right $right_r $right_g $right_b"
++fi
++
++# And the mean follows further repaints rather than freezing on the colour it was first baked with.
++printf 'R' >&4
++await_lines "$LOG2" repainted 2
++"$UMBRIEL" settle
++grim "$FRAME"
++read -r left_r left_g left_b < <(pixel 200 84)
++read -r right_r right_g right_b < <(pixel 620 84)
++if ! near "$left_r" "$right_r" || ! near "$left_b" "$right_b" || ! (( left_r > 100 && left_b > 100 && left_g < 40 )); then
++  fail "an averaged bar did not follow a repaint: left $left_r $left_g $left_b, right $right_r $right_g $right_b"
++fi
+diff --git a/tests/unit/colour_average.cpp b/tests/unit/colour_average.cpp
+index ca7e3f8f..c7988f33 100644
+--- a/tests/unit/colour_average.cpp
++++ b/tests/unit/colour_average.cpp
+@@ -4,7 +4,8 @@
+ #include <array>
+ #include <cstdint>
+ 
+-using umbriel::averageArgb;
++using umbriel::averagePixels;
++using umbriel::PixelOrder;
+ 
+ namespace {
+   constexpr uint32_t argb(uint32_t red, uint32_t green, uint32_t blue, uint32_t alpha) {
+@@ -12,12 +13,12 @@ namespace {
+   }
+ } // namespace
+ 
+-UMBRIEL_TEST(averageArgbIsTheMeanOfAnOpaqueStrip) {
++UMBRIEL_TEST(averagePixelsIsTheMeanOfAnOpaqueStrip) {
+   // A green edge over a red body averages to the midpoint of the two colours it covers.
+   const std::array<uint32_t, 4> strip{
+       argb(255, 0, 0, 255), argb(255, 0, 0, 255), argb(0, 255, 0, 255), argb(0, 255, 0, 255)
+   };
+-  const auto mean = averageArgb(strip.data(), strip.size());
++  const auto mean = averagePixels(strip.data(), strip.size(), PixelOrder::Argb);
+   CHECK(mean.has_value());
+   CHECK_NEAR((*mean)[0], 0.5, 0.002);
+   CHECK_NEAR((*mean)[1], 0.5, 0.002);
+@@ -25,21 +26,46 @@ UMBRIEL_TEST(averageArgbIsTheMeanOfAnOpaqueStrip) {
+   CHECK_NEAR((*mean)[3], 1.0, 0.002);
+ }
+ 
+-UMBRIEL_TEST(averageArgbIgnoresTransparentPixels) {
+-  // A transparent pixel must not pull the hue toward black; only its own alpha contributes.
++UMBRIEL_TEST(averagePixelsReadsPremultipliedPixelsOnce) {
++  // A Wayland buffer stores premultiplied values: half-transparent red is (128, 0, 0, 128), and its colour is still
++  // red. Weighting the components by alpha a second time would return half red.
++  const std::array<uint32_t, 2> strip{argb(128, 0, 0, 128), argb(128, 0, 0, 128)};
++  const auto mean = averagePixels(strip.data(), strip.size(), PixelOrder::Argb);
++  CHECK(mean.has_value());
++  CHECK_NEAR((*mean)[0], 1.0, 0.004);
++  CHECK_NEAR((*mean)[3], 128.0 / 255.0, 0.004);
++}
++
++UMBRIEL_TEST(averagePixelsIgnoresTransparentPixels) {
++  // Premultiplied transparency is zero, so a cleared pixel adds no hue and only its own alpha to the total.
+   const std::array<uint32_t, 3> strip{argb(0, 0, 0, 0), argb(0, 255, 0, 255), argb(0, 255, 0, 255)};
+-  const auto mean = averageArgb(strip.data(), strip.size());
++  const auto mean = averagePixels(strip.data(), strip.size(), PixelOrder::Argb);
+   CHECK(mean.has_value());
+   CHECK_NEAR((*mean)[0], 0.0, 0.002);
+   CHECK_NEAR((*mean)[1], 1.0, 0.002);
+   CHECK_NEAR((*mean)[3], 2.0 / 3.0, 0.002);
+ }
+ 
+-UMBRIEL_TEST(averageArgbHasNothingToShowForAFullyTransparentStrip) {
+-  const std::array<uint32_t, 2> strip{argb(255, 0, 0, 0), argb(0, 0, 255, 0)};
+-  CHECK(!averageArgb(strip.data(), strip.size()).has_value());
+-  CHECK(!averageArgb(nullptr, 4).has_value());
+-  CHECK(!averageArgb(strip.data(), 0).has_value());
++UMBRIEL_TEST(averagePixelsFollowsTheReadOrder) {
++  // The renderer may hand back ABGR, and the X variants carry no alpha at all.
++  // In ABGR the red byte sits lowest, so opaque red packs as 0xFF0000FF.
++  const std::array<uint32_t, 1> abgr{0xFF0000FFU};
++  const auto abgrMean = averagePixels(abgr.data(), abgr.size(), PixelOrder::Abgr);
++  CHECK(abgrMean.has_value());
++  CHECK_NEAR((*abgrMean)[0], 1.0, 0.002);
++  CHECK_NEAR((*abgrMean)[2], 0.0, 0.002);
++  const std::array<uint32_t, 1> xrgb{argb(0, 0, 255, 0)};
++  const auto opaque = averagePixels(xrgb.data(), xrgb.size(), PixelOrder::Xrgb);
++  CHECK(opaque.has_value());
++  CHECK_NEAR((*opaque)[2], 1.0, 0.002);
++  CHECK_NEAR((*opaque)[3], 1.0, 0.002);
++}
++
++UMBRIEL_TEST(averagePixelsHasNothingToShowForAFullyTransparentStrip) {
++  const std::array<uint32_t, 2> strip{argb(0, 0, 0, 0), argb(0, 0, 0, 0)};
++  CHECK(!averagePixels(strip.data(), strip.size(), PixelOrder::Argb).has_value());
++  CHECK(!averagePixels(nullptr, 4, PixelOrder::Argb).has_value());
++  CHECK(!averagePixels(strip.data(), 0, PixelOrder::Argb).has_value());
+ }
+ 
+ int main() { return RUN_TESTS(); }
 -- 
 2.56.0.341.gebdc087dc9
 
