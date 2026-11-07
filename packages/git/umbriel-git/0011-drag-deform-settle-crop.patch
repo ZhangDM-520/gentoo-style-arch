@@ -13,15 +13,15 @@ index ecbb5778..189e9213 100644
      // an unchanged clip otherwise keeps the scaled source/destination until the client commits again.
      if (resizedWorkspace != nullptr) {
 diff --git a/src/overview/overview.cpp b/src/overview/overview.cpp
-index aea640da..4f271a68 100644
+index aea640da..3adcee65 100644
 --- a/src/overview/overview.cpp
 +++ b/src/overview/overview.cpp
 @@ -1762,6 +1762,14 @@ namespace umbriel {
      }
  
      m_active = true;
-+    // Cards need their home trees now; land deferred release re-homes without
-+    // waiting for the next tick.
++    // Cards need their home trees now, so land deferred release re-homes here
++    // instead of waiting for the tick.
 +    const auto overviewViews = m_server->registry().all();
 +    for (const auto& entry : overviewViews) {
 +      if (View* v = entry.get(); v != nullptr) {
@@ -32,25 +32,22 @@ index aea640da..4f271a68 100644
      m_progress = 0.0;
      m_targetProgress = 0.0;
 diff --git a/src/view/view.cpp b/src/view/view.cpp
-index 05efa4c7..934d6e76 100644
+index 05efa4c7..2f97d7ef 100644
 --- a/src/view/view.cpp
 +++ b/src/view/view.cpp
-@@ -615,12 +615,25 @@ namespace umbriel {
+@@ -615,12 +615,22 @@ namespace umbriel {
        return;
      }
      m_onActiveWorkspace = active;
 +    if (!active) {
-+      // The deferred resting re-home exists only to keep visible displaced
-+      // pixels out of the output clip. Once the workspace stops presenting the
-+      // view there is nothing left to preserve, and a view parked under the
-+      // shared drag tree cannot travel or hide with its workspace: it hangs on
-+      // screen until the spring settles. Land the resting tree first.
++      // The deferral only protects visible displaced pixels. A view parked under
++      // the shared drag tree cannot travel or hide with its workspace, so land it
++      // before the workspace stops presenting it.
 +      flushReleaseRehome();
 +    }
      // A hidden tab or a minimized window stays hidden when its workspace comes back.
-+    // A held window (or a child riding its drag) is the drag's payload: its node
-+    // and its shadow belong to the drag tree, not to a workspace it was carried
-+    // out of, so a deactivation must leave both exactly as the drag set them.
++    // A window the drag tree presents belongs to it, not to the workspace it was
++    // carried out of, so leave its node and shadow exactly as the drag set them.
      const bool shown = active && !m_tabHidden && !m_minimized;
 -    if (m_sceneTree != nullptr) {
 -      wlr_scene_node_set_enabled(&m_sceneTree->node, shown);
@@ -64,20 +61,17 @@ index 05efa4c7..934d6e76 100644
      m_server->scheduleSuspensionSync();
      if (!m_mapped) {
        return;
-@@ -660,6 +673,27 @@ namespace umbriel {
+@@ -660,6 +670,24 @@ namespace umbriel {
      m_server->scheduleIpcWindowsEvent();
    }
  
 +  bool View::dragPresentationOwnsVisibility() const {
 +    const Cursor* cursor = m_server->cursor();
 +    wlr_scene_tree* dragTree = m_server->dragTree();
-+    // A dragged window carries its transient children into the drag tree
-+    // (syncTransientSceneParent), so the drag owns their presentation too. The
-+    // ride outlives the grab: a released sheet stays under the shared drag tree
-+    // until its spring settles, and a pinned release lands under the output's
-+    // pinned root after that. Key on where the view rests — it or a transient
-+    // ancestor under the drag tree — so every phase of the presentation owns
-+    // visibility, not just the held one.
++    // A dragged window carries its transient children into the drag tree, and the
++    // ride outlives the grab: the sheet rests there until its spring settles, and a
++    // pinned release lands under the output's pinned root. Key on where the view
++    // rests, not on who holds it, so every phase owns its visibility.
 +    for (const View* view = this; view != nullptr; view = view->transientParent()) {
 +      if (view->m_sceneTree != nullptr && view->m_sceneTree->node.parent == dragTree) {
 +        return true;
@@ -92,20 +86,17 @@ index 05efa4c7..934d6e76 100644
    void View::setNodeEnabled(bool enabled) {
      enabled = enabled && !presentationSuppressed();
      wlr_scene_node_set_enabled(&m_sceneTree->node, enabled);
-@@ -800,15 +834,87 @@ namespace umbriel {
+@@ -800,15 +828,81 @@ namespace umbriel {
      refreshStateRuleEffects();
    }
  
 +  bool View::dragSheetDisplaced() const { return m_dragPhysics.active() || m_dragPhysics.grabbed(); }
 +
    void View::setSceneParent(wlr_scene_tree* parent) {
-+    // A released sheet stays displaced past a home tree's output clip while the
-+    // spring settles; the release's resting re-homes wait for it (the invisible
-+    // part is only correct when the window is settled). The wait covers every
-+    // reparent the release issues, including a transfer's park + re-home; a
-+    // later state change (fullscreen, pin, scratchpad) applies immediately and
-+    // drops it, and a repeated request for the tree already waiting is
-+    // absorbed. closeReleaseRehomeWindow() ends the release's say.
++    // A released sheet stays displaced past its home tree's clip while the spring
++    // settles, so the release's re-homes wait for it; a later state change
++    // (fullscreen, pin, scratchpad) applies immediately and drops the wait.
++    // closeReleaseRehomeWindow() ends the release's say over where the view rests.
 +    const bool waitingForThisTree = m_pendingHomeParent != nullptr && m_pendingHomeParent == parent;
 +    const bool displacedInDragTree =
 +        parent != m_server->dragTree() && m_sceneTree->node.parent == m_server->dragTree() && dragSheetDisplaced();
@@ -124,11 +115,9 @@ index 05efa4c7..934d6e76 100644
 +    if (leavingDragTree) {
 +      // Transient children elevated with this view follow it home.
 +      syncTransientChildren();
-+      // The drag tree's elevation over pinned/fullscreen serves the whole drag
-+      // presentation, not just the departing view: a settling release or an
-+      // elevated transient child unmapping must not demote a drag that is still
-+      // in progress. The elevation drops when the last drag-presented view
-+      // leaves (the insert hint is not one).
++      // The elevation serves the whole drag presentation, not just the departing
++      // view: a settling release or an unmapping rider must not demote a drag still
++      // in progress. It drops when the last drag-presented view leaves.
 +      if (!dragTreeOccupied()) {
 +        wlr_scene_node_place_below(&m_server->dragTree()->node, &m_server->dragIconTree()->node);
 +      }
@@ -166,9 +155,8 @@ index 05efa4c7..934d6e76 100644
 +    const auto views = m_server->registry().all();
 +    return std::ranges::any_of(std::views::reverse(views), [this](const auto& view) {
 +      View* other = view.get();
-+      // Registry membership outlives the scene node by construction (removal
-+      // precedes node teardown on every path); assert it so a reordering fails
-+      // here instead of dereferencing a dead node.
++      // Registry removal precedes node teardown on every path; assert it so a
++      // reordering fails here instead of reading a dead node.
 +      assert(other == nullptr || other->m_sceneTree != nullptr);
 +      return other != nullptr
 +          && other != this
@@ -181,15 +169,15 @@ index 05efa4c7..934d6e76 100644
      wlr_scene_tree* pool = m_workspace != nullptr && m_sceneTree->node.parent == m_workspace->viewLayer(true)
          ? m_workspace->tileShadowLayer()
 diff --git a/src/view/view.h b/src/view/view.h
-index ab322401..d4ff906f 100644
+index ab322401..f27284a9 100644
 --- a/src/view/view.h
 +++ b/src/view/view.h
 @@ -301,6 +301,9 @@ namespace umbriel {
      // A member of a tabbed column other than the one it shows. It keeps its layout slot and stays mapped and configured
      // at that size, but its frame stays disabled whatever else asks to enable it.
      void setTabHidden(bool hidden);
-+    // True while the cursor holds this view: the drag's own scene tree owns the
-+    // node's presentation, so a workspace must not enable or disable it.
++    // True while the drag tree presents this view or a transient ancestor (held,
++    // settling, or landed on a pinned root): a workspace must not show or hide it.
 +    [[nodiscard]] bool dragPresentationOwnsVisibility() const;
      bool tabHidden() const { return m_tabHidden; }
      // Minimized: hidden, but keeping its workspace, floating box, stacking slot, and taskbar entries. Focusing the
@@ -226,7 +214,7 @@ index ab322401..d4ff906f 100644
      double m_dragGrabX = 0;
      double m_dragGrabY = 0;
 diff --git a/src/view/view_animation.cpp b/src/view/view_animation.cpp
-index 417f8b51..e1272105 100644
+index 417f8b51..6ddac625 100644
 --- a/src/view/view_animation.cpp
 +++ b/src/view/view_animation.cpp
 @@ -472,7 +472,11 @@ namespace umbriel {
@@ -259,17 +247,13 @@ index 417f8b51..e1272105 100644
        if (effectRegistry().deformationShader() == nullptr) {
          // Without the program (physics turned off), the window stays rigid for the rest of the drag.
          m_dragPhysics = DragPhysics{};
-@@ -1007,6 +1010,24 @@ namespace umbriel {
+@@ -1007,6 +1010,20 @@ namespace umbriel {
          active = m_dragPhysics.tick(elapsed / 1000.0, cadenceS) || active;
        }
      }
-+    // The deferred resting re-home lands in the same tick the spring settles —
-+    // a later tick may never come — or earlier while an overview is open and
-+    // its cards need the home tree. This tick is also the backstop that closes
-+    // the release's say over where the view rests. It cannot starve: a displaced
-+    // view always animates on at least one output (animatesOn falls back to its
-+    // workspace's output, or to currentOutput() when it has none), so a frame is
-+    // always scheduled even when the sheet has left every output's box.
++    // The wait lands in the tick the spring settles (a later tick may never come),
++    // or earlier while the overview needs the home tree. A displaced view always
++    // animates on some output, so this backstop cannot starve.
 +    m_releaseRehomeArmed = false;
 +    if (m_pendingHomeParent != nullptr
 +        && (!dragSheetDisplaced() || (m_server->overview() != nullptr && m_server->overview()->active()))) {
@@ -285,18 +269,17 @@ index 417f8b51..e1272105 100644
      if (!active && m_mapped && m_xsurface != nullptr) {
        syncXwaylandConfigure();
 diff --git a/src/view/view_attachment.cpp b/src/view/view_attachment.cpp
-index 533c7d64..2fdd0133 100644
+index 533c7d64..5f4522ec 100644
 --- a/src/view/view_attachment.cpp
 +++ b/src/view/view_attachment.cpp
-@@ -161,7 +161,13 @@ namespace umbriel {
+@@ -161,7 +161,12 @@ namespace umbriel {
  
      m_attachedTo = parent;
      parent->m_attachments.push_back(this);
 -    wlr_scene_node_reparent(&m_sceneTree->node, parent->m_attachmentTree);
-+    // The attach re-parent supersedes any deferred resting re-home. Going through
-+    // setSceneParent runs the leaving-drag-tree bookkeeping the raw reparent
-+    // skipped: riders of this view follow it, and the drag tree demotes when this
-+    // was its last occupant.
++    // The attach re-parent supersedes any deferred re-home. setSceneParent also runs
++    // the leaving-drag-tree bookkeeping a raw reparent skips: riders follow this
++    // view, and the drag tree demotes once it has no occupant left.
 +    m_pendingHomeParent = nullptr;
 +    m_releaseRehomeArmed = false;
 +    setSceneParent(parent->m_attachmentTree);
@@ -304,16 +287,15 @@ index 533c7d64..2fdd0133 100644
      setOnActiveWorkspace(true);
      setNodeEnabled(true);
 diff --git a/src/view/view_lifecycle.cpp b/src/view/view_lifecycle.cpp
-index 6312678f..de3b762e 100644
+index 6312678f..7027bf7f 100644
 --- a/src/view/view_lifecycle.cpp
 +++ b/src/view/view_lifecycle.cpp
-@@ -690,6 +690,15 @@ namespace umbriel {
+@@ -690,6 +690,14 @@ namespace umbriel {
      m_dragSlotBound = false;
      // The snapshot holds the frozen deformation; the live sheet ends here.
      m_dragPhysics = DragPhysics{};
-+    // Land the resting tree now so a later remap cannot reappear unclipped
-+    // under the drag tree. homeTree() is authoritative here: pinned, scratchpad
-+    // and attachment state are already stripped above.
++    // Land the resting tree so a later remap cannot reappear unclipped under the
++    // drag tree. homeTree() is authoritative: the states above are already stripped.
 +    const bool needsRehome = m_pendingHomeParent != nullptr || m_sceneTree->node.parent == m_server->dragTree();
 +    m_releaseRehomeArmed = false;
 +    m_pendingHomeParent = nullptr;
@@ -324,22 +306,21 @@ index 6312678f..de3b762e 100644
      if (m_effects.needsSurface()) {
        wlr_surface* surface = rootSurface();
 diff --git a/src/workspace/workspace.cpp b/src/workspace/workspace.cpp
-index e1685b83..de3b1e7b 100644
+index e1685b83..3f529953 100644
 --- a/src/workspace/workspace.cpp
 +++ b/src/workspace/workspace.cpp
-@@ -252,6 +252,11 @@ namespace umbriel {
+@@ -252,6 +252,10 @@ namespace umbriel {
    }
  
    void Workspace::transferTo(WorkspaceGroup& group) {
-+    // Land the deferred resting re-homes before the trees travel. A released
-+    // sheet parked under the shared drag tree is outside them: its remembered
-+    // position would be rewritten in the old output's coordinate space mid-spring,
-+    // and the settle would then re-home it a second time.
++    // Land deferred re-homes before the trees travel: a sheet parked under the
++    // shared drag tree is outside them, and its position would be rewritten in the
++    // old output's coordinates mid-spring.
 +    flushDeferredRehomes();
      endSwitchTransition();
      endLayoutMotion();
      discardCloseSnapshots();
-@@ -2591,12 +2596,20 @@ namespace umbriel {
+@@ -2591,12 +2595,20 @@ namespace umbriel {
        // Persistent resting state: an inactive workspace keeps its nodes disabled so the shared scene never renders them
        // on any output. Active (and in-transition) views are enabled + clipped to their home output by
        // syncViewPresentation (arrange / slide).
@@ -361,18 +342,18 @@ index e1685b83..de3b1e7b 100644
    bool Workspace::isSwitchTransitionView(const View* view) const {
      return std::ranges::find(m_switchViews, view) != m_switchViews.end();
    }
-@@ -2624,7 +2637,9 @@ namespace umbriel {
+@@ -2624,7 +2636,9 @@ namespace umbriel {
  
    void Workspace::showSwitchViews() {
      for (View* view : m_switchViews) {
 -      if (!m_active) {
-+      // A held window is presented by the drag tree; revealing it with this
-+      // workspace would place it back under a workspace that just went away.
++      // The drag tree presents this window; revealing it here would put it back
++      // under a workspace that just went away.
 +      if (!m_active && !view->dragPresentationOwnsVisibility()) {
          view->setNodeEnabled(true);
        }
      }
-@@ -3568,6 +3583,14 @@ namespace umbriel {
+@@ -3568,6 +3582,14 @@ namespace umbriel {
      m_slide = {};
    }
  
@@ -387,36 +368,32 @@ index e1685b83..de3b1e7b 100644
    bool WorkspaceGroup::slideBegin(bool includePrev, bool includeNext) {
      if (m_active == nullptr) {
        return false;
-@@ -3593,6 +3616,12 @@ namespace umbriel {
+@@ -3593,6 +3615,10 @@ namespace umbriel {
      const size_t idx = m_active->index();
      m_slide.previous = (includePrev && idx > 0) ? workspaceAt(idx - 1) : nullptr;
      m_slide.next = includeNext ? workspaceAt(idx + 1) : nullptr;
-+    // A gesture moves these trees while the outgoing workspace is still active:
-+    // deactivation only happens when the gesture commits. A deferred release
-+    // re-home would keep its view under the shared drag tree, outside the trees
-+    // that travel, and glue the window to the screen for the whole swipe. Land
-+    // the waits while the trees are still at rest.
++    // A gesture moves these trees while the outgoing workspace is still active (it
++    // deactivates at commit), and a wait left parked under the drag tree would glue
++    // its window to the screen for the whole swipe. Land them before they travel.
 +    flushSlideRehomes();
      m_slide.base->beginSwitchTransition();
      if (m_slide.previous != nullptr) {
        m_slide.previous->beginSwitchTransition();
-@@ -3764,6 +3793,9 @@ namespace umbriel {
+@@ -3764,6 +3790,8 @@ namespace umbriel {
      } else {
        m_slide.previous = workspace;
      }
-+    // The trees travel before the outgoing workspace deactivates on this path:
-+    // land the deferred waits while they are still at rest.
++    // The trees travel before the outgoing workspace deactivates: land the waits first.
 +    flushSlideRehomes();
      m_slide.base->beginSwitchTransition();
      workspace->beginSwitchTransition();
      slideApply(0.0);
-@@ -3840,6 +3872,11 @@ namespace umbriel {
+@@ -3840,6 +3868,10 @@ namespace umbriel {
        return reject("output already has a workspace with that name");
      }
  
-+    // Both groups' trees travel next; land the deferred resting re-homes while
-+    // they are still at rest. A sheet parked under the shared drag tree is
-+    // outside every tree this transfer moves.
++    // Both groups' trees travel next; land the re-homes while they are at rest. A
++    // sheet parked under the shared drag tree is outside every tree this moves.
 +    flushSlideRehomes();
 +    destination.flushSlideRehomes();
      slideFinish();
@@ -783,10 +760,10 @@ index 00000000..94c043af
 +echo "a settling re-home leaves an in-progress drag elevated"
 diff --git a/tests/harness/checks/drag/settle_workspace_switch.sh b/tests/harness/checks/drag/settle_workspace_switch.sh
 new file mode 100755
-index 00000000..b0b23092
+index 00000000..7add6b2c
 --- /dev/null
 +++ b/tests/harness/checks/drag/settle_workspace_switch.sh
-@@ -0,0 +1,469 @@
+@@ -0,0 +1,465 @@
 +#!/usr/bin/env bash
 +# harness: outputs=1
 +# A window that still deforms must not outlive the workspace it lives in. The
@@ -797,16 +774,14 @@ index 00000000..b0b23092
 +# (and hide) with its workspace, come back with it, and do the same under a
 +# gesture, whose trees move before the outgoing workspace is deactivated.
 +#
-+# A window still held by the cursor is the drag's payload: switching workspace
-+# must not steal its presentation from the drag. That ownership outlives the
-+# grab: the settle keeps the sheet (and the dialogs riding it) under the drag
-+# tree until the spring lands, so a switch during the settle must not hide them
-+# either — see Phase 5.
++# A window the drag presents is its payload: switching workspace must not steal
++# it. That ownership outlives the grab — the settle keeps the sheet and its
++# dialogs under the drag tree until the spring lands — so a switch during the
++# settle must not hide them either (Phase 5).
 +#
-+# Accepted limit, unpinned: opening the overview mid-settle flushes every
-+# registered waiting re-home (the overview's cards need the home tree), so the
-+# cross-edge drawing these phases preserve is deliberately sacrificed there. A
-+# regression to "overview flushes nothing" would pass this check.
++# Accepted limit, unpinned: opening the overview mid-settle flushes every waiting
++# re-home (its cards need the home trees), so the drawing these phases preserve is
++# deliberately sacrificed there; a regression to "overview flushes nothing" passes.
 +set -euo pipefail
 +source "$UMBRIEL_HARNESS_LIB"
 +
@@ -1191,11 +1166,9 @@ index 00000000..b0b23092
 +  exit 1
 +fi
 +
-+# Phase 5 — the ride outlives the grab. A pinned window's release parks its wait
-+# on the output's pinned root, so the sheet keeps settling under the drag tree
-+# while its dialog rides it. A switch in that window must not hide the dialog:
-+# the pinned view is skipped by every flush, so only the ride's own ownership of
-+# visibility can keep it presented.
++# Phase 5 — the ride outlives the grab. A pinned release parks its wait on the
++# output's pinned root, so the sheet settles under the drag tree while its dialog
++# rides it, and every flush skips a pinned view: only the ride can keep it shown.
 +id_of() { "$UMBRIEL" windows --json | jq -r --arg title "$1" '.[] | select(.title == $title) | .id'; }
 +workspace_name_of() {
 +  local id
@@ -1258,23 +1231,20 @@ index 00000000..b0b23092
 +echo "a deforming window travels and hides with its workspace, a held one stays with the cursor, and its dialogs ride along"
 diff --git a/tests/harness/checks/drag/settle_workspace_transfer.sh b/tests/harness/checks/drag/settle_workspace_transfer.sh
 new file mode 100755
-index 00000000..b92d6964
+index 00000000..b08045db
 --- /dev/null
 +++ b/tests/harness/checks/drag/settle_workspace_transfer.sh
-@@ -0,0 +1,163 @@
+@@ -0,0 +1,160 @@
 +#!/usr/bin/env bash
 +# harness: outputs=2
 +# Moving a workspace to another output while one of its windows still deforms
-+# must land the released sheet's deferred re-home first. The sheet is parked
-+# under the shared drag tree — outside every workspace tree — so a transfer that
-+# travels the trees without landing it leaves the sheet drawn at its old SCREEN
-+# position on the source output, and rewrites its remembered position in the old
-+# output's coordinate space, so the settle lands it a second time somewhere
-+# else. The sheet must leave with its workspace and appear on the destination.
++# must land the released sheet's re-home first. The sheet is parked under the
++# shared drag tree, outside every workspace tree, so a transfer that travels them
++# without landing it draws the sheet at its old SCREEN position and rewrites its
++# position in the old output's coordinates, so the settle lands it twice.
 +#
-+# The transfer also deactivates the workspace, which lands the wait on its own —
-+# this check pins that ordering as much as the explicit flush before the trees
-+# travel: a path that defers the deactivation (as gestures do) would break it.
++# The transfer also deactivates the workspace, which lands the wait on its own:
++# this pins the user-visible result and the ordering, not the flush alone.
 +set -euo pipefail
 +source "$UMBRIEL_HARNESS_LIB"
 +

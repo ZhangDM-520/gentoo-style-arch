@@ -1,7 +1,7 @@
 pkgbase = umbriel-git
 	pkgdesc = A Wayland compositor built on wlroots
-	pkgver = 0.1.0.r1532.f5dd36b
-	pkgrel = 12
+	pkgver = 0.1.0.r1540.ad46c7d
+	pkgrel = 2
 	epoch = 1
 	url = https://github.com/noctalia-dev/umbriel
 	arch = x86_64
@@ -34,7 +34,7 @@ pkgbase = umbriel-git
 	depends = xorg-xwayland
 	depends = xdg-desktop-portal-umbriel
 	depends = wlroots0.20
-	provides = umbriel=0.1.0.r1532.f5dd36b
+	provides = umbriel=0.1.0.r1540.ad46c7d
 	conflicts = umbriel
 	options = !debug
 	options = lto
@@ -48,12 +48,12 @@ pkgbase = umbriel-git
 	source = 0020-adaptive-title-bar.patch
 	source = 0021-minimize-animation.patch
 	sha256sums = SKIP
-	sha256sums = 1beb3b259b5d2b2226cf2c2749206158b17e6049799ae7bb3c662d87bb70b4d5
+	sha256sums = 797d118d903858403e3ea4e8de25567968d85118d928ad208c27225c1199cc3c
 	sha256sums = 55b7e50a9b1ce7c2a4e47755e3ee0bb07773608750e8441b873bb0507a13a57e
 	sha256sums = 7c4de03d135dc74529c7cafc2a81ae659c1e9a917094aeafb248175c94db8400
 	sha256sums = 92514f4aa7244e524aa73bf392efff5675a7e32e715715d182bad5324ed70492
 	sha256sums = da533d362314d028cf575128ace45b1781e39d9385478fd648f5e9bffffaf621
-	sha256sums = 714cf0a301e874458fed8ff95506a6495cc4ffced44720e68118a921cc88a6a2
+	sha256sums = 2afaf966628550c1aa9d0b2ab9dbed4dade3c51479355e4e295cbe36497b7af2
 	sha256sums = bf5a8a65c24adec2145b6f3bd1a8e1e4ecc1e4af6ab248f094a30816e4e17ed8
 	sha256sums = 4bc48f1e2f3e9c0138e9a66d9ea942a002e93177f35b28433864ade0491778b2
 
