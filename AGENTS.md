@@ -789,11 +789,6 @@ split.
 
 ## 6 · Queued
 
-- **Recipe-repository split (2026-11-08): finish E1, then cut the tree.** The
-  gate for everything else. E1 is the `store_format` marker in `gsa-topo`, the
-  store retarget in `gsa-state/src/recipes.rs`, and `GSA_RECIPE_CHECKOUT` for
-  the real-tree checks; then `git filter-repo` the recipe half out and repoint
-  `DEFAULT_RECIPE_URL`. Blocked on: engine release E1 and a green battery.
 - **Wave freshness gate (2026-11-01).** `gsa-graph`/`gsa-sched` wave members
   must gate on binpkg-index freshness. Blocked on: the `-O3` restart finishing.
 - **Toolchain marker ignores flag changes (2026-11-01, CFLAGS incident).**

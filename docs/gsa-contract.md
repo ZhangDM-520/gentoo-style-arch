@@ -479,6 +479,24 @@ shared hint (code truth: `gsa_model::config::WORKSPACE_HINT`): *set `project`
 in gsa.conf, run inside the recipe repository, or fetch the store with
 `sudo gsa -Sy`* — the old cwd-only advice is retired.
 
+**Amendment 2026-11-09 — the store's upstream moved.** `DEFAULT_RECIPE_URL` is
+now `https://github.com/ZhangDM-520/gsa-recipe.git`: the recipe half lives in
+its own repository, and this one ships no recipes. A store created before the
+split still points at the old URL, so a refresh **retargets** it instead of
+leaving a stale origin: `gsa-state`'s refresh compares `remote.origin.url`
+against the resolved `recipe_url` and rewrites it (`git remote set-url`, or
+`remote add` when the origin is missing), then prints the one operator-visible
+line
+
+```
+gsa: recipe store origin retargeted: <old> → <new>
+```
+
+so the change is never silent. A store that cannot be retargeted (a populated
+non-Git directory, or a missing remote in an unreadable repo) prints a named
+note and keeps fetching from where it is — it is never replaced or deleted.
+Pinned by `tests/store-retarget.sh`.
+
 **Standalone staging** (plan-gsa-isolation.md W4, target shapes in §C.1): a
 run of standalone targets stages each as `packages/misc/<id>/` in its own
 one-node workspace under `<state-dir>/standalone/` (`config/topology.conf`
