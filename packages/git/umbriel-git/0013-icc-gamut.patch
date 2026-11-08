@@ -1,12 +1,12 @@
-From ca56dfd466ce3874f53aa1b4c9e54c0e65f23619 Mon Sep 17 00:00:00 2001
+From 97f30a5a35b24385ce6475c83d1e10c77bca8e16 Mon Sep 17 00:00:00 2001
 From: umbriel <umbriel@local>
-Date: Sun, 8 Nov 2026 10:00:05 +0800
+Date: Sun, 8 Nov 2026 10:33:42 +0800
 Subject: [PATCH] Stack ICC gamut changes with upstream capture helpers
 
 ---
  PACKAGING.md                                  |    2 +-
  docs/design/README.md                         |    1 +
- docs/design/color-management.md               |   43 +
+ docs/design/color-management.md               |   44 +
  docs/user/outputs.md                          |   38 +
  examples/config.toml                          |    2 +
  meson.build                                   |   20 +
@@ -25,7 +25,7 @@ Subject: [PATCH] Stack ICC gamut changes with upstream capture helpers
  src/output/output.h                           |   37 +
  src/server/color_description.cpp              |  126 ++
  src/server/color_description.h                |   64 +
- src/server/color_manager.cpp                  |  463 ++++-
+ src/server/color_manager.cpp                  |  467 ++++-
  src/server/color_manager.h                    |    5 +-
  src/server/ipc_commands.cpp                   |   93 +-
  src/server/ipc_commands.h                     |    6 +
@@ -35,8 +35,8 @@ Subject: [PATCH] Stack ICC gamut changes with upstream capture helpers
  .../harness/checks/protocol/color_feedback.sh |   27 +-
  .../checks/protocol/color_management.sh       |    6 +
  .../harness/checks/protocol/color_profile.sh  |  320 ++++
- .../checks/protocol/color_profile_limits.sh   |  112 ++
- .../harness/clients/color_feedback_client.cpp |  470 ++++-
+ .../checks/protocol/color_profile_limits.sh   |  119 ++
+ .../harness/clients/color_feedback_client.cpp |  549 +++++-
  tests/harness/lib.sh                          |  121 ++
  tests/meson.build                             |    3 +
  tests/unit/color_description.cpp              |  429 +++++
@@ -48,7 +48,7 @@ Subject: [PATCH] Stack ICC gamut changes with upstream capture helpers
  umbrielfx/meson.build                         |   12 +-
  umbrielfx/render/color.c                      |   86 +
  umbrielfx/tests/color.c                       |  203 ++
- 44 files changed, 6094 insertions(+), 108 deletions(-)
+ 44 files changed, 6185 insertions(+), 108 deletions(-)
  create mode 100644 docs/design/color-management.md
  create mode 100644 src/output/colorimetry.cpp
  create mode 100644 src/output/colorimetry.h
@@ -86,10 +86,10 @@ index 075dc400..647e6c38 100644
  - [Portal input capture](input-capture.md)
 diff --git a/docs/design/color-management.md b/docs/design/color-management.md
 new file mode 100644
-index 00000000..7a96c699
+index 00000000..ba501efe
 --- /dev/null
 +++ b/docs/design/color-management.md
-@@ -0,0 +1,43 @@
+@@ -0,0 +1,44 @@
 +# Color management
 +
 +Implementation notes for the color-management protocol and the `color_profile`/`sdr_gamut` output settings. The user-facing contract is in [Outputs](../user/outputs.md#color-profile-and-sdr-gamut); this note explains the pieces that are easy to break.
@@ -107,8 +107,8 @@ index 00000000..7a96c699
 +
 +`ColorDescription::data` is wlroots' protocol struct, and `wlr_scene_buffer_set_transfer_function` takes only a named `wlr_color_transfer_function`. There is no per-buffer exponent or LUT, so a transfer curve is representable only when it is exactly one of the named curves the renderer implements.
 +
-+- `clientIccDescription` (`src/server/color_description.cpp`) accepts the `Srgb` and `Gamma22` fits and refuses `TransferFit::Kind::Power` with `unsupported`. The power fit of an arbitrary TRC is an approximation, and substituting the nearest named curve would advertise colorimetry the profile does not contain.
-+- The parametric `set_tf_power` request admits exponents in `[1.0, 10.0]` per protocol, but `handleParametricCreate` canonicalizes only 1.0 (ext_linear) and 2.2 (gamma 2.2) through `namedTransferForPower` and fails the description otherwise. BT.1886 is *not* a plain 2.4: it carries the BT.2035 luminance offset, so a 2.4 power has no exact named equivalent.
++- `clientIccDescription` (`src/server/color_description.cpp`) accepts the `Srgb`, `Linear` and `Gamma22` fits and refuses `TransferFit::Kind::Unsupported` with `unsupported`. A curve with no exact named equivalent cannot be painted, and substituting the nearest named curve would advertise colorimetry the profile does not contain.
++- The parametric `set_tf_power` request admits exponents in `[1.0, 10.0]` per protocol; `namedTransferForPower` canonicalizes only the values within `1e-3` of 1.0 (ext_linear) and 2.2 (gamma 2.2), and `handleParametricCreate` fails the description otherwise. The `eexp` wire step is `1e-4`, so the window absorbs the four-decimal quantization (at most 0.015% relative error) rather than admitting a different curve. BT.1886 is *not* a plain 2.4: it carries the BT.2035 luminance offset, so a 2.4 power has no exact named equivalent.
 +- `ColorDescription` therefore has no power field of its own; a description's transfer curve is always `data.tf_named`.
 +
 +The ICC parser applies one curve to all three channels, so a profile whose RGB TRCs differ is rejected (`per-channel TRCs differ`) instead of being rendered with the red curve: a gray-axis cast is not something the clients asked for, and the same bytes are advertised back through `icc_file`. Curves are compared after the monotone repair (`evaluateCurve`), so a shared non-monotone table is repaired once per channel, compares equal, and stays accepted.
@@ -120,7 +120,8 @@ index 00000000..7a96c699
 +- `iccStoreForFileProfile` takes an optional release hook. The store's deleter runs it when the last copy dies, which is exactly when the compositor stops retaining those bytes.
 +- The budget is one `bytes` bucket covering staged *and* retained bytes per `wl_client` (`kMaxIccBytesPerClient`), plus `kMaxIccCreatorsPerClient` concurrent creators. `IccCreator::charge` owns the staged charge and `handleIccCreate` moves it into the payload; the creator never touches the ledger afterwards. Charging at create *and* keeping the staged charge would double count, and releasing the staged charge at create would zero the retained charge.
 +- `IccCharge` holds the `IccBudget` object, not the `wl_client*`: wl_client addresses are reused, and a late release must not debit a later client. A `wl_client` destroy listener removes the budget from the map so a reused address starts empty while live payloads keep their budget alive.
-+- `SurfaceState` embeds `ColorDescription`, so its `wlr_surface_synced_impl` must provide real `init_state`, `finish_state`, and `move_state` hooks. wlroots `memcpy`s a synchronized state when `move_state` is null (including the cached-commit path), which shares a `shared_ptr` control block nobody counted; `finish_state` releases the payload without ending the object because wlroots frees cached states itself.
++- `SurfaceState` embeds `ColorDescription`, so its `wlr_surface_synced_impl` must provide real `init_state`, `finish_state` and `move_state` hooks. wlroots `memcpy`s a synchronized state when `move_state` is null (including the cached-commit path), which would share a `shared_ptr` control block nobody counted; `finish_state` releases the payload without ending the object because wlroots frees cached states itself. `move_state` copies rather than moves, because wlroots reuses `surface->pending` across commits. `wlr_surface_synced_init` memsets the pending/current members before `init_state`'s placement new (its documented contract); they are empty at that point today, but a future member with a non-trivial default would be zeroed there.
++- `unset_image_description` clears the pending description as well as `set`, so the payload it held is released instead of staying charged until something overwrites it.
 +
 +## Advertising bytes
 +
@@ -134,7 +135,7 @@ index 00000000..7a96c699
 +- `tests/harness/checks/protocol/color_profile_limits.sh`: staged, retained, and surface-retained budget accounting.
 +- `tests/harness/checks/protocol/color_feedback.sh`: parametric validation including `set_tf_power`.
 diff --git a/docs/user/outputs.md b/docs/user/outputs.md
-index 659cd048..d58ac1f4 100644
+index 659cd048..24935e57 100644
 --- a/docs/user/outputs.md
 +++ b/docs/user/outputs.md
 @@ -52,6 +52,8 @@ Locking the session or switching away from its active VT revokes outstanding lea
@@ -176,11 +177,11 @@ index 659cd048..d58ac1f4 100644
 +
 +Applications with explicit color management are separate from this policy: output and preferred color descriptions always advertise the panel's real custom primaries, so tagged clients can convert accurately under either setting and their pixels can change as soon as a profile is configured. Characterization applies to SDR composition only; under HDR the PQ/BT.2020 pipeline behaves exactly as described above.
 +
-+ICC import accepts matrix-shaper profiles whose three color channels share one transfer curve. That curve is rendered exactly: linear, sRGB and gamma 2.2 are named curves, and any other curve is sampled into a lookup table, with a non-monotone table flattened to its monotone envelope and reported. LUT-based profiles and profiles whose channel curves differ are rejected with a warning and fall back down the chain — one curve cannot render three different channels without a cast the profile does not describe. A `vcgt` tag is ignored: it is a pre-dispatch gamma ramp, not content colorimetry.
++ICC import accepts matrix-shaper profiles whose three color channels share one transfer curve. That curve is rendered exactly: sRGB and gamma 2.2 map to named curves, and any other curve — linear included — is sampled into a lookup table, with a non-monotone table first flattened to its monotone envelope and reported. LUT-based profiles and profiles whose channel curves differ are rejected with a warning and fall back down the chain — one curve cannot render three different channels without a cast the profile does not describe. A `vcgt` tag is ignored: it is a pre-dispatch gamma ramp, not content colorimetry.
 +
 +While a mapping is staged, direct scanout is disabled (`color_profile = "none"` restores it) and SDR frames leave the 8-bit fast path for FP16 composition with a per-damage re-encode. That increases composition and encoding work on redraws and may increase GPU power use. Screenshots and recordings show the on-screen mapped result.
 +
-+Applications can also create ICC-based image descriptions through the color-management protocol. Umbriel accepts matrix-shaper ICC v2 or v4 profiles up to 32 MB whose three channel curves are identical and exactly linear, sRGB or gamma 2.2; anything else fails the description gracefully instead of rendering an approximation. Such a description never answers `get_information`, so it carries no ICC file; output and preferred descriptions do send one whenever a characterization is active.
++Applications can also create ICC-based image descriptions through the color-management protocol. Umbriel accepts matrix-shaper ICC v2 or v4 profiles whose three channel curves are identical and equal to linear, sRGB or gamma 2.2 (an exponent within a thousandth of 2.2 counts); anything else fails the description gracefully instead of rendering an approximation. One client may hold 32 MB of ICC payload in total, counting the profiles it created as well as one being staged, and exceeding that fails the profile with `bad_size`. Such a description never answers `get_information`, so it carries no ICC file; output and preferred descriptions do send one whenever a characterization is active.
 +
 +Run `umbriel color` to inspect the resolved state: `color_profile`, `sdr_gamut`, whether a mapping is staged (`sdr_gamut_staged`), and the panel's `panel_primaries` and `panel_transfer`. The JSON form (`umbriel color --json`) adds per-output details such as the active bit depth.
 +
@@ -2361,7 +2362,7 @@ index d9694467..33bbb215 100644
 +
  } // namespace umbriel
 diff --git a/src/server/color_manager.cpp b/src/server/color_manager.cpp
-index 0e5b12e6..8038786d 100644
+index 0e5b12e6..a78ef7f4 100644
 --- a/src/server/color_manager.cpp
 +++ b/src/server/color_manager.cpp
 @@ -1,6 +1,7 @@
@@ -2544,7 +2545,18 @@ index 0e5b12e6..8038786d 100644
            .commit = nullptr,
        };
        if (!wlr_surface_synced_init(
-@@ -596,8 +695,183 @@ namespace umbriel {
+@@ -483,6 +582,10 @@ namespace umbriel {
+         return;
+       }
+       surface->pending.set = false;
++      // Readers gate on `set`, but the payload would otherwise stay charged to
++      // the client's budget until something overwrote it: a client cycling
++      // set/unset would run out of budget with no bytes in use.
++      surface->pending.description = {};
+     }
+ 
+     static void handleSurfaceCommit(wl_listener* listener, void*) {
+@@ -596,8 +699,183 @@ namespace umbriel {
        delete feedback;
      }
  
@@ -2730,7 +2742,7 @@ index 0e5b12e6..8038786d 100644
      }
  
      static void handleCreateParametricCreator(wl_client* client, wl_resource* managerResource, uint32_t id) {
-@@ -640,6 +914,26 @@ namespace umbriel {
+@@ -640,6 +918,26 @@ namespace umbriel {
          wl_resource_destroy(resource);
          return;
        }
@@ -2757,7 +2769,7 @@ index 0e5b12e6..8038786d 100644
        if (creator->description.customLuminances
            && creator->description.data.tf_named == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ) {
          creator->description.luminances.max = creator->description.luminances.min + 10000.0F;
-@@ -679,11 +973,27 @@ namespace umbriel {
+@@ -679,11 +977,27 @@ namespace umbriel {
        creator->transferFunctionSet = true;
      }
  
@@ -2790,7 +2802,7 @@ index 0e5b12e6..8038786d 100644
      }
  
      static void handleParametricSetPrimaries(wl_client*, wl_resource* resource, uint32_t namedPrimaries) {
-@@ -840,18 +1150,21 @@ namespace umbriel {
+@@ -840,18 +1154,21 @@ namespace umbriel {
        );
      }
  
@@ -2815,7 +2827,7 @@ index 0e5b12e6..8038786d 100644
        }
        auto* imageDescription = new ImageDescription{
            .description = description,
-@@ -863,13 +1176,14 @@ namespace umbriel {
+@@ -863,13 +1180,14 @@ namespace umbriel {
        if (imageDescription->resource == nullptr) {
          delete imageDescription;
          wl_resource_post_no_memory(parent);
@@ -2831,7 +2843,7 @@ index 0e5b12e6..8038786d 100644
      }
  
      static void createFailedImageDescription(wl_resource* parent, uint32_t id, uint32_t cause, const char* message) {
-@@ -926,9 +1240,11 @@ namespace umbriel {
+@@ -926,9 +1244,11 @@ namespace umbriel {
          wp_image_description_info_v1_send_primaries_named(information, description.data.primaries_named);
        }
        sendPrimaries(information, primaryCoordinates);
@@ -2846,7 +2858,7 @@ index 0e5b12e6..8038786d 100644
        wp_image_description_info_v1_send_luminances(
            information, static_cast<uint32_t>(std::lround(description.luminances.min * 10000.0F)),
            static_cast<uint32_t>(std::lround(description.luminances.max)),
-@@ -957,10 +1273,65 @@ namespace umbriel {
+@@ -957,10 +1277,65 @@ namespace umbriel {
        if (description.data.max_fall != 0) {
          wp_image_description_info_v1_send_target_max_fall(information, description.data.max_fall);
        }
@@ -2912,7 +2924,7 @@ index 0e5b12e6..8038786d 100644
      static void sendPrimaries(wl_resource* information, const wlr_color_primaries& primaries) {
        wp_image_description_info_v1_send_primaries(
            information, encodeCoordinate(primaries.red.x), encodeCoordinate(primaries.red.y),
-@@ -978,14 +1349,31 @@ namespace umbriel {
+@@ -978,14 +1353,31 @@ namespace umbriel {
      }
  
      static void handleImageDescriptionResourceDestroy(wl_resource* resource) {
@@ -2946,7 +2958,7 @@ index 0e5b12e6..8038786d 100644
      }
  
      ColorDescription preferredDescription(wlr_surface* surface) const {
-@@ -1069,9 +1457,7 @@ namespace umbriel {
+@@ -1069,9 +1461,7 @@ namespace umbriel {
          return;
        }
        const ColorDescription& description = found->second->current.description;
@@ -2957,7 +2969,7 @@ index 0e5b12e6..8038786d 100644
        state->primaries = description.data.primaries_named != 0
            ? wlr_color_manager_v1_primaries_to_wlr(
                  static_cast<wp_color_manager_v1_primaries>(description.data.primaries_named)
-@@ -1126,6 +1512,34 @@ namespace umbriel {
+@@ -1126,6 +1516,34 @@ namespace umbriel {
        wlr_scene_buffer_set_luminance_multiplier(buffer, state.luminance_multiplier);
      }
  
@@ -2992,7 +3004,7 @@ index 0e5b12e6..8038786d 100644
      Server& server;
      wl_global* global = nullptr;
      uint64_t lastIdentity = 0;
-@@ -1135,6 +1549,7 @@ namespace umbriel {
+@@ -1135,6 +1553,7 @@ namespace umbriel {
      std::unordered_set<SurfaceFeedback*> feedbacks;
      std::unordered_set<ManagedOutput*> outputs;
      std::unordered_map<wlr_scene*, std::unique_ptr<ManagedScene>> scenes;
@@ -3000,7 +3012,7 @@ index 0e5b12e6..8038786d 100644
    };
  
    ColorManager::ColorManager(Server& server) : m_impl(std::make_unique<Impl>(server)) {}
-@@ -1143,9 +1558,9 @@ namespace umbriel {
+@@ -1143,9 +1562,9 @@ namespace umbriel {
    bool ColorManager::valid() const { return m_impl->global != nullptr; }
    wl_global* ColorManager::global() const { return m_impl->global; }
  
@@ -3697,10 +3709,10 @@ index 00000000..6f01febf
 +echo "ICC characterization, native pass-through, srgb gamut mapping, icc_file bytes and the create_icc contract verified live"
 diff --git a/tests/harness/checks/protocol/color_profile_limits.sh b/tests/harness/checks/protocol/color_profile_limits.sh
 new file mode 100644
-index 00000000..96152c89
+index 00000000..0b0c7fc1
 --- /dev/null
 +++ b/tests/harness/checks/protocol/color_profile_limits.sh
-@@ -0,0 +1,112 @@
+@@ -0,0 +1,119 @@
 +#!/usr/bin/env bash
 +# Resource bounds on client-driven color work: get_information must not
 +# accumulate the icc_file memfd, and one client must not stage or retain more
@@ -3800,6 +3812,13 @@ index 00000000..96152c89
 +  exit 1
 +fi
 +
++# --- unsetting a description releases the bytes it retained -----------------
++rc=$(run_icc_mode surface-unset icc-surface-unset "$PADDED")
++if [[ $rc != 0 ]] || ! grep -Fq '{"event":"icc_unset_released"' "$RUNTIME/icc-surface-unset.log"; then
++  echo "unsetting descriptions kept their ICC bytes charged: rc=$rc $(cat "$RUNTIME/icc-surface-unset.log")"
++  exit 1
++fi
++
 +# --- the budget is per client: a later client must not inherit the charges ---
 +rc=$(run_icc_mode post-surface-ready icc-ready "$PADDED")
 +if [[ $rc != 0 ]] || ! grep -Fq '{"event":"icc_ready"' "$RUNTIME/icc-post-surface-ready.log"; then
@@ -3812,9 +3831,9 @@ index 00000000..96152c89
 +  exit 1
 +fi
 +
-+echo "icc_file fd stability, the creator budget and the staged/retained/surface-retained byte budgets verified live"
++echo "icc_file fd stability, the creator budget and the staged/retained/unset byte budgets verified live"
 diff --git a/tests/harness/clients/color_feedback_client.cpp b/tests/harness/clients/color_feedback_client.cpp
-index 036f4f19..9b17de8a 100644
+index 036f4f19..a716b5f2 100644
 --- a/tests/harness/clients/color_feedback_client.cpp
 +++ b/tests/harness/clients/color_feedback_client.cpp
 @@ -10,13 +10,18 @@
@@ -3992,7 +4011,7 @@ index 036f4f19..9b17de8a 100644
    }
    constexpr wp_image_description_v1_listener kResultListener{
        .failed = resultFailed,
-@@ -451,9 +540,372 @@ int main(int argc, char** argv) {
+@@ -451,9 +540,451 @@ int main(int argc, char** argv) {
      wl_display_disconnect(state.display);
      return 0;
    }
@@ -4215,6 +4234,85 @@ index 036f4f19..9b17de8a 100644
 +      }
 +      std::println(stderr, "color-feedback-client: the retained surface profiles did not fill the byte budget");
 +      return 1;
++    }
++    if (std::strcmp(mode, "surface-unset") == 0) {
++      // Unsetting a description must release the ICC payload it held: a client
++      // that sets, commits, unsets and commits again must not accumulate dead
++      // charges against its budget.
++      std::array<wl_surface*, 2> surfaces{};
++      std::array<wp_color_management_surface_v1*, 2> colorSurfaces{};
++      for (size_t index = 0; index < surfaces.size(); ++index) {
++        const int profile = open(argv[2], O_RDONLY);
++        if (profile < 0) {
++          std::println(stderr, "color-feedback-client: cannot open ICC budget fixture {}", argv[2]);
++          return 1;
++        }
++        const off_t length = lseek(profile, 0, SEEK_END);
++        lseek(profile, 0, SEEK_SET);
++        auto* creator = wp_color_manager_v1_create_icc_creator(state.manager);
++        wp_image_description_creator_icc_v1_set_icc_file(creator, profile, 0, static_cast<uint32_t>(length));
++        close(profile);
++        auto* description = wp_image_description_creator_icc_v1_create(creator);
++        DescriptionResult result;
++        wp_image_description_v1_add_listener(description, &kResultListener, &result);
++        while (!result.ready && !result.failed && wl_display_dispatch(state.display) >= 0) {
++        }
++        if (!result.ready) {
++          std::println(stderr, "color-feedback-client: budget fixture did not parse (cause {})", result.cause);
++          return 1;
++        }
++        surfaces[index] = wl_compositor_create_surface(state.compositor);
++        colorSurfaces[index] = wp_color_manager_v1_get_surface(state.manager, surfaces[index]);
++        state.surface = surfaces[index];
++        state.colorSurface = colorSurfaces[index];
++        state.selectedDescription = description;
++        state.tagged = true;
++        if (!present(state)) {
++          std::println(stderr, "color-feedback-client: cannot present the unset surface");
++          return 1;
++        }
++        wp_color_management_surface_v1_unset_image_description(state.colorSurface);
++        state.tagged = false;
++        if (!present(state)) {
++          std::println(stderr, "color-feedback-client: cannot commit the unset surface");
++          return 1;
++        }
++        wp_image_description_v1_destroy(description);
++        if (wl_display_roundtrip(state.display) < 0) {
++          std::println(stderr, "color-feedback-client: the display died while unsetting the description");
++          return 1;
++        }
++      }
++      // Nothing is set any more, so a third profile has to be admitted.
++      const int profile = open(argv[2], O_RDONLY);
++      if (profile < 0) {
++        std::println(stderr, "color-feedback-client: cannot open ICC budget fixture {}", argv[2]);
++        return 1;
++      }
++      const off_t length = lseek(profile, 0, SEEK_END);
++      lseek(profile, 0, SEEK_SET);
++      auto* creator = wp_color_manager_v1_create_icc_creator(state.manager);
++      wp_image_description_creator_icc_v1_set_icc_file(creator, profile, 0, static_cast<uint32_t>(length));
++      close(profile);
++      if (expectProtocolError(
++              state, &wp_image_description_creator_icc_v1_interface, WP_IMAGE_DESCRIPTION_CREATOR_ICC_V1_ERROR_BAD_SIZE
++          )) {
++        std::println(stderr, "color-feedback-client: an unset description kept its ICC bytes charged");
++        return 1;
++      }
++      auto* description = wp_image_description_creator_icc_v1_create(creator);
++      DescriptionResult result;
++      wp_image_description_v1_add_listener(description, &kResultListener, &result);
++      while (!result.ready && !result.failed && wl_display_dispatch(state.display) >= 0) {
++      }
++      if (!result.ready) {
++        std::println(stderr, "color-feedback-client: the profile after the unsets did not become ready");
++        return 1;
++      }
++      std::println(R"({{"event":"icc_unset_released","iterations":2}})");
++      wp_image_description_v1_destroy(description);
++      wl_display_disconnect(state.display);
++      return 0;
 +    }
 +    if (argc != 3) {
 +      std::println(stderr, "color-feedback-client: icc mode {} needs a profile argument", mode);

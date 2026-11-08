@@ -1,7 +1,7 @@
 pkgbase = umbriel-git
 	pkgdesc = A Wayland compositor built on wlroots
 	pkgver = 0.1.0.r1540.ad46c7d
-	pkgrel = 8
+	pkgrel = 9
 	epoch = 1
 	url = https://github.com/noctalia-dev/umbriel
 	arch = x86_64
@@ -50,7 +50,7 @@ pkgbase = umbriel-git
 	sha256sums = SKIP
 	sha256sums = 797d118d903858403e3ea4e8de25567968d85118d928ad208c27225c1199cc3c
 	sha256sums = 36442c0a3d52d421b94134fb81123155169d2cc43bde14d070e7d98c36cd068b
-	sha256sums = 772767efc147758f65a90de0564038ac7589755ad4ef8e13b2d4119f5369d819
+	sha256sums = 837460c6faf16c956be535dd3d51c8d47cb2f6a66f951f1d2b0f630a49cea1ae
 	sha256sums = 99ae6cbc53708c78e4dd7fc0fb19507ac6db4e1f2a873ff185a106225d6564e5
 	sha256sums = da533d362314d028cf575128ace45b1781e39d9385478fd648f5e9bffffaf621
 	sha256sums = 2afaf966628550c1aa9d0b2ab9dbed4dade3c51479355e4e295cbe36497b7af2
