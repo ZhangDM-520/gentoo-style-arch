@@ -1,5 +1,0 @@
-# FETCHED-ONLY — source names this recipe fetches at build time and keeps out
-# of Git. One glob per line, matched against the source's basename; '#' lines
-# and blank lines are ignored.
-#
-# python-posix-2024.patch is committed with the recipe (VENDORED 2026-10-19); nothing is excused here.

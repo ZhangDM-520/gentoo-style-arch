@@ -1,5 +1,12 @@
 # `gsa` fixture re-contract — per-fixture migration inventory and staging plan
 
+> **Archive scope (annotated 2026-11-09).** This inventory covers the battery as
+> it stood before the recipe split. The 26 recipe fixtures and their rows moved
+> to `ZhangDM-520/gsa-recipe` with the recipe half, and the root `build-all.fish`
+> retirement shim was deleted a release past its window. The rows below remain
+> the engine half's record of what each surviving fixture replaced; read a row
+> for a fixture that is no longer here as history, not as a live plan.
+
 Date: 2026-10-12. Status: staging plan for the clean-slate fixture re-contract
 (docs/gsa-contract.md §L, owner decision). This document is the inventory the
 fixture rewrite works from: one row per existing fixture, what it pins, which

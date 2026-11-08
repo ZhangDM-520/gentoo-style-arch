@@ -484,7 +484,8 @@ pub fn run_fetch_job(args: &[String], err: &mut dyn Write) -> i32 {
     let Some(root) = find_root(&cwd) else {
         let _ = writeln!(
             err,
-            "gsa --fetch-job: cannot find config/topology.conf from the current directory upward — set `project` in gsa.conf, run inside the recipe repository, or fetch the store with `sudo gsa -Sy`"
+            "gsa --fetch-job: cannot find config/topology.conf from the current directory upward — {}",
+            gsa_model::config::WORKSPACE_HINT
         );
         return 2;
     };

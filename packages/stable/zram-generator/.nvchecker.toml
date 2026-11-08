@@ -1,4 +1,0 @@
-[zram-generator]
-source = "git"
-git = "https://github.com/systemd/zram-generator.git"
-prefix = "v"

@@ -1,5 +1,0 @@
-[dbus]
-source = "git"
-git = "https://gitlab.freedesktop.org/dbus/dbus.git"
-include_regex = 'dbus-\d+\.\d*[02468]\.\d+'
-prefix = "dbus-"

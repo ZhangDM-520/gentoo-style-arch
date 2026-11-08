@@ -74,7 +74,9 @@ source "$root/tests/lib/rr-v2.bash"
 # `GSA_RECIPE_CHECKOUT` (contract §B.8). No tree → SKIP loudly (rc 0, one
 # line), never a silent pass and never a failure.
 root=$(gsa_recipe_root)
-require_recipe_tree recipe-contract.sh
+if [[ -z $root ]]; then
+    printf 'recipe-contract.sh: section E (real recipe tree) skipped — GSA_RECIPE_CHECKOUT is unset and no recipe tree is present\n'
+fi
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/gsa-recipe-contract.XXXXXX")
 trap '/usr/bin/sudo -n rm -rf -- "$tmp" 2>/dev/null || rm -rf -- "$tmp" 2>/dev/null || true' EXIT
@@ -302,6 +304,7 @@ write_srcinfo() {
     printf 'D: -Ma integration + report-only OK\n'
 )
 
+if [[ -n $root ]]; then
 # ─── E. real-repo gates ──────────────────────────────────────────────────────
 (
     set -euo pipefail
@@ -333,6 +336,7 @@ EOF
 
     printf 'E: real-repo gates OK\n'
 )
+fi
 
 # ─── F. one name surface: pkgbase + pkgname resolve as CLI references ────────
 # The CLI name surface is the union of a recipe's committed-.SRCINFO pkgbase

@@ -1,6 +1,0 @@
-*.pkg.tar.*
-pkg/
-src/
-.fvm/
-Bettbox-*.tar.gz
-Bettbox-*/

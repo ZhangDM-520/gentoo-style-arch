@@ -1,7 +1,0 @@
-# makepkg keeps SVN checkouts and downloads beside the recipe (SRCDEST=$startdir).
-# Listed explicitly rather than with a wildcard so a newly committed asset can
-# never be hidden by this file.
-texmf-dist/
-tlpkg/
-x86_64-linux/
-*.whl

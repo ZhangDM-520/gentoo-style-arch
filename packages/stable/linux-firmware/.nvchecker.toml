@@ -1,3 +1,0 @@
-[linux-firmware]
-source = "git"
-git = "https://gitlab.com/kernel-firmware/linux-firmware.git"

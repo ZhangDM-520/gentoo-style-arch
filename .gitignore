@@ -32,14 +32,15 @@ packages/*/*/*/
 *.src.tar.*
 *.tar
 *.tar.*
-# Upstream archive types "*.tar.*" does not reach. makepkg's SRCDEST is the
-# recipe directory, so a download lands beside the PKGBUILD and must never be
-# committed. A file a recipe needs *locally* is still protected:
-# tests/recipe-sources.sh fails when a non-URL source=() entry exists on disk
-# but is not committed, so a missing negation here is caught, not silent.
-# This set is the same set `-ccc`/`--nuclear` deletes: `_DOWNLOAD_ARCHIVE_EXTS`
-# in build-all.fish. Keep the two in step — when they drifted, a cleanup left ten
-# downloads behind for a commit sweep to pick up (2026-09-20).
+# Upstream archive types "*.tar.*" does not reach. The engine derives its
+# download set from THESE rules (`gsa-maint`'s `download_patterns`), so this
+# block is both an ignore list and the maintain surface's classification: a new
+# archive type needs its rule here, or `-M` will not treat a stray download as
+# one. The recipe repository mirrors the same set in its own `.gitignore`, and
+# its `tests/recipe-sources.sh` fails when a non-URL source=() entry exists on
+# disk but is not committed — so a missing negation there is caught, not silent.
+# When the two drifted before the split, a cleanup left ten downloads behind for
+# a commit sweep to pick up (2026-09-20).
 *.tgz
 *.zip
 *.jar

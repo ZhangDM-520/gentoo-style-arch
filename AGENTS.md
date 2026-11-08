@@ -24,10 +24,14 @@ The `gsa` engine: a 13-crate Rust workspace (`crates/`) plus its fixtures
 `gsa`, built with `cargo build --release` and installed as `/usr/bin/gsa` by
 the `gsa-pm` recipe (a recipe, so it lives in `gsa-recipe`).
 
-The recipe half lives in the **`gsa-recipe`** repository: `packages/`
-(`PKGBUILD`, `.SRCINFO`, local assets), `config/topology.conf`,
+The recipe half lives in the **`gsa-recipe`** repository
+(`https://github.com/ZhangDM-520/gsa-recipe`): `packages/` (`PKGBUILD`,
+`.SRCINFO`, local assets), `config/topology.conf`,
 `config/build-defaults.conf`, `config/abi-exclusions.conf`, `lib/` (shared
 recipe modules), and the recipe fixtures. This repository holds none of it.
+Its memory is that repository's own `AGENTS.md`; recipe policy — what a recipe
+directory may hold, the ignore layers, the optimization playbook, trimming,
+the PGO gate — is stated there and never restated here.
 
 The boundary: the engine CONSUMES the recipe repository through the canonical
 recipe store — a build-user working copy fetched from `recipe_url` (default
@@ -52,7 +56,7 @@ other document, including this one. When they disagree, fix the document.
 | `docs/adr/0003-run-record.md` | Why one record, three renderings, default-on machine block |
 | `docs/adr/0004-prefetch-advisory.md` | Why fetch-ahead is advisory and makepkg stays the build-time gate |
 | `CONTEXT.md` | Vocabulary: recipe, topology record, build-order edge, consumer expansion, lane, run record, continuation, deferral, decision row |
-| `CONTRIBUTING.md` | Change hygiene, validation standard, commit policy, trimming standard |
+| `CONTRIBUTING.md` | What an engine change looks like, the validation block, the commit policy |
 | `SECURITY.md` | Trust model, privilege boundary, what must never be committed |
 | `docs/JOURNAL.md` | The chronological log — read the tail for what just changed; grep by date, never read end to end |
 
@@ -100,7 +104,8 @@ Non-obvious, in order:
   multiple groups, edges or tags (replace-or-append); `stub_sudo`/`stub_pacman`/`stub_makepkg`/`stub_sleep` write the trivial
   byte-identical PATH stubs. A fixture section that exercises the frozen fish
   oracle installs it explicitly next to its scratch workspace with
-  `install_fish_oracle` (the root shim is never picked up by accident).
+  `install_fish_oracle` (the root shim was deleted 2026-11-09, so only that
+  explicit call can supply it).
   `stub_sudo` is a passthrough that strips the
   builder's non-interactive flags (`-n`, `-v`, `--`) **and `--preserve-env`** —
   some hosts wrap `sudo` in a fish function that re-execs it as `command sudo

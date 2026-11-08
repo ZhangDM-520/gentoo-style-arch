@@ -1,7 +1,0 @@
-[libreoffice-fresh]
-source = "regex"
-regex = 'LibreOffice \d+\.\d+\.\d+ \(.*?\) - Latest Branch'
-url = "https://www.libreoffice.org/release-notes/"
-prefix = "LibreOffice "
-from_pattern = '(\d+\.\d+\.\d+) \(.*?\) - Latest Branch'
-to_pattern = '\1'

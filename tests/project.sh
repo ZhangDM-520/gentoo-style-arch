@@ -189,8 +189,11 @@ consumers_closure() {
 # loudly (rc 0, one line) rather than failing: an engine-only checkout is a
 # supported state, and skipping must never look like passing.
 root=$(gsa_recipe_root)
-require_recipe_tree project.sh
+if [[ -z $root ]]; then
+    printf 'project.sh: sections 1-4 (real recipe tree) skipped — GSA_RECIPE_CHECKOUT is unset and no recipe tree is present\n'
+fi
 
+if [[ -n $root ]]; then
 # ─── 1. reference resolution: four exact forms, a typo is never guessed ─────
 (
     set -euo pipefail
@@ -562,6 +565,7 @@ require_recipe_tree project.sh
     printf 'topology channel fixture: PASS (%s in-scope, %s excluded; channel rows are 5-field)\n' \
         "$topo_rows" "${#excluded_set[@]}"
 )
+fi
 
 # ─── 5. strict loader: one broken record breaks every command, rc 2 ────────
 (
@@ -845,12 +849,12 @@ require_recipe_tree project.sh
     printf 'consumer expansion order fixture: PASS (diamond, record-order tie-break, duplicate seed)\n'
 )
 
-# ─── 8. the retired-engine surface: root shim + frozen oracle (Phase 5) ─────
-# The root build-all.fish is the migration shim: every spelling maps to its
-# gsa spelling and the run exits non-zero — muscle memory fails loudly, and
-# nothing builds. The fish ENGINE lives under tests/assets/ as the frozen
-# oracle and must keep parsing (fixtures' fish-only deviation sections run a
-# copy of it). Pinned here so neither surface can rot silently.
+# ─── 8. the frozen oracle parses (the root shim retired at the split) ──────
+# The fish ENGINE lives under tests/assets/ as the frozen differential oracle:
+# the fixtures' fish-only deviation sections run a copy of it, so it must keep
+# parsing. Its retirement shim (`build-all.fish` at the repository root) was
+# deleted with the recipe split — one release past its 2026-10-14 window — and
+# nothing here may resurrect it.
 (
     set -euo pipefail
 
@@ -860,23 +864,8 @@ require_recipe_tree project.sh
         fail "the frozen oracle's lib/sources.fish no longer parses"
     fish -n "$gsa_repo_root/tests/assets/lib/audit.fish" ||
         fail "the frozen oracle's lib/audit.fish no longer parses"
+    [ ! -e "$gsa_repo_root/build-all.fish" ] ||
+        fail "the retired root shim is back (build-all.fish) — it must stay deleted"
 
-    shim=$(cd "$gsa_repo_root" && fish build-all.fish --list @git 2>&1) && rc=0 || rc=$?
-    [ "$rc" != 0 ] ||
-        fail "the retired-engine shim must exit non-zero, got 0"
-    grep -Fq -- 'Migration table' <<<"$shim" ||
-        fail "the shim prints no migration table: $shim"
-    # every mapping begins with '-', so every pattern needs '--' or grep eats
-    # it as an option and the assert fails against a healthy shim
-    for mapping in '-g GRP / --group GRP' '--no-deps' '-ccc / --nuclear' '--audit' '--topology' '-ia / --installall [--overwrite …]'; do
-        grep -Fq -- "$mapping" <<<"$shim" ||
-            fail "the shim's migration table drops '$mapping': $shim"
-    done
-    grep -Fq -- 'gsa -Sl' <<<"$shim" || fail "the shim maps no spelling to gsa: $shim"
-    grep -Fq -- 'deprecation window' <<<"$shim" ||
-        fail "the shim states no deprecation window: $shim"
-    if grep -Fq -- '--- run record begin ---' <<<"$shim"; then
-        fail "the shim emitted a run record — it must build nothing: $shim"
-    fi
-    printf 'retired-engine surface fixture: PASS (root shim migration table, frozen oracle parses)\n'
+    printf 'retired-engine surface fixture: PASS (frozen oracle parses, root shim gone)\n'
 )

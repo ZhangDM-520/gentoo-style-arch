@@ -59,9 +59,13 @@ set -euo pipefail
 # must carry; the finding COUNTS stay derived (§L.3) from the red/green
 # scenarios.
 
-root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-source "$root/tests/lib/fixture-lib.bash"
-source "$root/tests/lib/rr-v2.bash"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/rr-v2.bash"
+
+# The recipe half lives in its own repository (contract §B.8): section G reads
+# that checkout through GSA_RECIPE_CHECKOUT and skips loudly without one; every
+# synthetic section below runs either way.
+root=$(gsa_recipe_root)
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/gsa-swap-completeness.XXXXXX")
 trap '/usr/bin/sudo -n rm -rf -- "$tmp" 2>/dev/null || rm -rf -- "$tmp" 2>/dev/null || true' EXIT
@@ -300,37 +304,41 @@ lint() {
     printf 'F: -Ma integration + report-only OK\n'
 )
 
-# ─── G. real-repo gates: hardened recipes clean, debt ratcheted ──────────────
-# Runs against the FABRICATED (empty) installed database: G pins the REPO's
-# swap DECLARATIONS, which are host-independent — the drift half's
-# installed-database semantics are pinned against fabricated RECORDS in H/I,
-# never against whatever this host happens to have installed.
-(
-    set -euo pipefail
-    run_engine "$root" --qa-check swap-drift
-    ((FIXTURE_RC == 0)) || fail "G: real-repo swap lint failed (rc=$FIXTURE_RC)"
+if [[ -n $root ]]; then
+    # ─── G. real-repo gates: hardened recipes clean, debt ratcheted ──────────────
+    # Runs against the FABRICATED (empty) installed database: G pins the REPO's
+    # swap DECLARATIONS, which are host-independent — the drift half's
+    # installed-database semantics are pinned against fabricated RECORDS in H/I,
+    # never against whatever this host happens to have installed.
+    (
+        set -euo pipefail
+        run_engine "$root" --qa-check swap-drift
+        ((FIXTURE_RC == 0)) || fail "G: real-repo swap lint failed (rc=$FIXTURE_RC)"
 
-    # The two hardened recipes (qt6-base-git outputs + zlib-ng-compat-git)
-    # must contribute NOTHING — their stock counterparts are fully declared.
-    for name in qt6-base-git qt6-xcb-private-headers-git zlib-ng-compat-git; do
-        if grep -Fq "swap-drift: $name:" <<<"$FIXTURE_OUTPUT"; then
-            fail "G: hardened recipe '$name' must pass the swap lint: $FIXTURE_OUTPUT"
-        fi
-    done
+        # The two hardened recipes (qt6-base-git outputs + zlib-ng-compat-git)
+        # must contribute NOTHING — their stock counterparts are fully declared.
+        for name in qt6-base-git qt6-xcb-private-headers-git zlib-ng-compat-git; do
+            if grep -Fq "swap-drift: $name:" <<<"$FIXTURE_OUTPUT"; then
+                fail "G: hardened recipe '$name' must pass the swap lint: $FIXTURE_OUTPUT"
+            fi
+        done
 
-    # Known-debt ratchet (report-only): new debt fails here; removing debt
-    # shrinks the list — update this ratchet consciously; an empty list ends
-    # it. The 2026-10-06 debt (niri-spicy-git's counterpart provides +
-    # conflicts, vscodium-insiders-git's counterpart provide) was FIXED in
-    # place, so the list is empty and the ratchet now pins it staying empty.
-    { grep '^swap-drift: ' <<<"$FIXTURE_OUTPUT" || true; } | LC_ALL=C sort >"$tmp/swap.actual"
-    : >"$tmp/swap.expected"
-    diff -u "$tmp/swap.expected" "$tmp/swap.actual" >&2 ||
-        fail 'G: the swap-lint debt set drifted — fix the recipe (declare the stock counterpart) or update this ratchet consciously'
-    grep -Fq 'qa-check swap-drift: clean' <<<"$FIXTURE_OUTPUT" ||
-        fail "G: expected a clean real-repo verdict, got: $FIXTURE_OUTPUT"
-    printf 'G: real-repo gates OK (hardened recipes clean, debt ratchet empty)\n'
-)
+        # Known-debt ratchet (report-only): new debt fails here; removing debt
+        # shrinks the list — update this ratchet consciously; an empty list ends
+        # it. The 2026-10-06 debt (niri-spicy-git's counterpart provides +
+        # conflicts, vscodium-insiders-git's counterpart provide) was FIXED in
+        # place, so the list is empty and the ratchet now pins it staying empty.
+        { grep '^swap-drift: ' <<<"$FIXTURE_OUTPUT" || true; } | LC_ALL=C sort >"$tmp/swap.actual"
+        : >"$tmp/swap.expected"
+        diff -u "$tmp/swap.expected" "$tmp/swap.actual" >&2 ||
+            fail 'G: the swap-lint debt set drifted — fix the recipe (declare the stock counterpart) or update this ratchet consciously'
+        grep -Fq 'qa-check swap-drift: clean' <<<"$FIXTURE_OUTPUT" ||
+            fail "G: expected a clean real-repo verdict, got: $FIXTURE_OUTPUT"
+        printf 'G: real-repo gates OK (hardened recipes clean, debt ratchet empty)\n'
+    )
+else
+    printf 'swap-completeness.sh: section G (real-repo swap lint) skipped — GSA_RECIPE_CHECKOUT is unset and no recipe tree is present\n'
+fi
 
 # ─── H. soname drift against the installed stock counterpart is reported ────
 # The swap's ABI half: name-level swap COMPLETE (so only drift rows can

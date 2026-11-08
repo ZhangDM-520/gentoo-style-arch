@@ -43,7 +43,7 @@ pub const SYSTEM_CONFIG: &str = "/etc/gsa.conf";
 pub const USER_CONFIG: &str = ".config/gsa/gsa.conf";
 
 /// The built-in recipe-store upstream (the recipe repository's origin).
-pub const DEFAULT_RECIPE_URL: &str = "https://github.com/ZhangDM-520/gentoo-style-arch.git";
+pub const DEFAULT_RECIPE_URL: &str = "https://github.com/ZhangDM-520/gsa-recipe.git";
 
 /// The shared "no recipe workspace found" remedy. One string, one home:
 /// every user-visible not-found path renders this same clause (the CLI's

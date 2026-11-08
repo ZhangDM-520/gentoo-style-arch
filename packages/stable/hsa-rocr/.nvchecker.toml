@@ -1,5 +1,0 @@
-[hsa-rocr]
-source = 'git'
-git = 'https://github.com/ROCm/rocm-systems.git'
-prefix = 'rocm-'
-include_regex = 'rocm-.*'

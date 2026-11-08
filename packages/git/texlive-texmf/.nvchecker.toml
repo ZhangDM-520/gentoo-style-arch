@@ -1,5 +1,0 @@
-[texlive-texmf]
-source = 'regex'
-url = 'https://git.texlive.info/texlive/'
-user_agent = 'curl'
-regex = 'tags/texlive-([\d.]+)'

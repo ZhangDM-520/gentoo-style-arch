@@ -1,11 +1,13 @@
 # Architecture
 
-Gentoo_Style_Arch is a curated Arch Linux recipe set plus the `gsa` build
-engine. Three parts, deliberately separate:
+`gsa` is the build engine for a curated Arch Linux recipe set. Three parts,
+deliberately separate:
 
-1. **The recipe set and its topology** — what is built, and in what order.
+1. **The recipe set and its topology** — what is built and in what order. It
+   lives in its own repository, `ZhangDM-520/gsa-recipe`; this engine consumes
+   it as a workspace.
 2. **The `gsa` engine** — the Rust workspace under `crates/`, shipped as one
-   binary.
+   binary. This repository.
 3. **Runtime state** — split by who owns it: engine state under the state
    root, makepkg state in the build user's cache, and the canonical recipe
    store as build-user working data.
@@ -13,16 +15,16 @@ engine. Three parts, deliberately separate:
 The earlier four-module framing (recipes / topology / a fish builder /
 runtime state) predates the engine migration and is gone.
 
-## 1. The recipe set and topology
+## 1. The recipe set and topology the engine reads
 
 **Recipes** live under `packages/<category>/<package-id>/`: a `PKGBUILD`, its
-committed `.SRCINFO`, the local files `makepkg` needs (patches, hooks, install
-scripts, desktop/asset files), the package's upstream attribution and license
-material (`LICENSE`, `LICENSES/`, `REUSE.toml` where upstream provides it),
-and optional maintenance metadata (`.nvchecker.toml`, `BUILDING`). A new local
-asset must survive two ignore layers — the recipe's own (most recipes
-default-deny) and the root `.gitignore`, which denies new subdirectories
-except `LICENSES/`; see `CONTRIBUTING.md` and `docs/maintainer-guide.md`.
+committed `.SRCINFO`, and the local files `makepkg` needs (patches, hooks,
+install scripts, desktop/asset files). The recipe half's own policy — what a
+recipe directory may hold, the ignore layers, licence material — is stated in
+that repository's `AGENTS.md`, `docs/package-policy.md` and
+`docs/maintainer-guide.md`; nothing about it is authoritative here. The engine
+treats a recipe directory as data: it parses `.SRCINFO`/`PKGBUILD`, reads
+local assets, and never writes to the recipe tree.
 
 **Topology** is one declarative file, `config/topology.conf`: one record per
 recipe, `id|path|groups|edges[|tags]`.
@@ -36,8 +38,7 @@ recipe, `id|path|groups|edges[|tags]`.
   categories (`autofdo-git` and `libclc-git` are `packages/git/` recipes,
   `openssl` is a `packages/stable/` recipe — all core members), and
   `build-tools` members always carry `core,build-tools` because the band is
-  dispatch priority, not a partition. Group purposes and membership rules are
-  in `docs/maintainer-guide.md`.
+  dispatch priority, not a partition.
 - `edges` is the comma list of recipes this one consumes — its local
   build-order edges (a record ending in a bare `|` is a deliberate no-edge
   record). The vocabulary is `CONTEXT.md`'s: "dependency" means a pacman
@@ -48,7 +49,11 @@ recipe, `id|path|groups|edges[|tags]`.
   change a recipe's build-time version source.
 
 `config/build-defaults.conf` stays separate: lanes/jobs/intensity and the
-memory budgets are knobs, not topology.
+memory budgets are knobs, not topology. It also carries `store_format`, the
+schema version the engine must understand before it may read the store at all
+(absent means 1); a newer value is a load-time refusal with rc 2, not a partial
+read. `config/abi-exclusions.conf` holds the reviewed ABI-exclusion rows the
+audit reads.
 
 The strict loader resolves every record — map, graph and a complete
 topological sort — on EVERY invocation, and one malformed record (or cycle)
@@ -60,8 +65,9 @@ scheduler implementation.
 ## 2. The `gsa` engine
 
 The engine is the Rust workspace under `crates/`, shipped as one binary, `gsa`
-(packaged by `packages/core/gsa-pm` as `/usr/bin/gsa`); it has been the
-engine of record since the 2026-10-14 Phase 5 cutover. `docs/gsa-contract.md`
+(installed as `/usr/bin/gsa` by the `gsa-pm` recipe, which lives in the recipe
+repository because it is a recipe); it has been the engine of record since the
+2026-10-14 Phase 5 cutover. `docs/gsa-contract.md`
 is the authoritative interface contract: where this document and the contract
 disagree, the contract wins.
 

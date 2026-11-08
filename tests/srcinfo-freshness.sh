@@ -31,9 +31,14 @@ set -euo pipefail
 #     prose pins stay byte-pins because that part does not flip before the
 #     cutover pass (gap G9 governs flipped prose only).
 
-root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/rr-v2.bash"
+
+# The recipe half lives in its own repository (contract §B.8): the real-tree
+# sweep below reads that checkout through GSA_RECIPE_CHECKOUT, and an
+# engine-only checkout is a supported state — so the sweep SKIPS loudly while
+# the synthetic sections below still run.
+root=$(gsa_recipe_root)
 # Concurrency: makepkg --printsrcinfo is cheap and pure, so the whole map is
 # checked at once (one job per hardware thread; override with GSA_FAKE_SRCINFO_JOBS).
 jobs=${GSA_FAKE_SRCINFO_JOBS:-$(nproc 2>/dev/null || echo 8)}
@@ -82,32 +87,37 @@ export -f check_recipe
 export -f makepkg_printsrcinfo
 export root tmp
 
-# `gsa -Qt` is THE tooling data channel (§B.3): resolved records on stdout,
-# id|path|groups|edges|tags, one per line. A resolved channel carries no
-# comment lines, so the fish-era `!/^#/` filter retires with the argv; the
-# five-field row filter keeps the sweep's recipe derivation unchanged.
-run_engine "$root" -Qt
-((FIXTURE_RC == 0)) || {
-    printf 'srcinfo freshness fixture: gsa -Qt failed (rc=%d)\n%s\n' \
-        "$FIXTURE_RC" "$FIXTURE_OUTPUT" >&2
-    exit 1
-}
-mapfile -t recipes < <(awk -F'|' 'NF == 5 {print $2}' <<<"$FIXTURE_OUTPUT")
-((${#recipes[@]} > 0)) || {
-    printf 'srcinfo freshness fixture: the gsa -Qt channel listed no recipes\n' >&2
-    exit 1
-}
+recipes=()
+if [[ -n $root ]]; then
+    # `gsa -Qt` is THE tooling data channel (§B.3): resolved records on stdout,
+    # id|path|groups|edges|tags, one per line. A resolved channel carries no
+    # comment lines, so the fish-era `!/^#/` filter retires with the argv; the
+    # five-field row filter keeps the sweep's recipe derivation unchanged.
+    run_engine "$root" -Qt
+    ((FIXTURE_RC == 0)) || {
+        printf 'srcinfo freshness fixture: gsa -Qt failed (rc=%d)\n%s\n' \
+            "$FIXTURE_RC" "$FIXTURE_OUTPUT" >&2
+        exit 1
+    }
+    mapfile -t recipes < <(awk -F'|' 'NF == 5 {print $2}' <<<"$FIXTURE_OUTPUT")
+    ((${#recipes[@]} > 0)) || {
+        printf 'srcinfo freshness fixture: the gsa -Qt channel listed no recipes\n' >&2
+        exit 1
+    }
 
-stale=$(printf '%s\n' "${recipes[@]}" |
-    xargs -P "$jobs" -I{} bash -c 'check_recipe "$1"' _ {} |
-    sort)
+    stale=$(printf '%s\n' "${recipes[@]}" |
+        xargs -P "$jobs" -I{} bash -c 'check_recipe "$1"' _ {} |
+        sort)
 
-if [[ -n $stale ]]; then
-    printf 'srcinfo freshness fixture: %d recipe(s) have a stale .SRCINFO\n' \
-        "$(wc -l <<<"$stale")" >&2
-    printf '%s\n' "$stale" >&2
-    printf 'regenerate with: cd <recipe> && GIT_CONFIG_COUNT=0 makepkg --printsrcinfo > .SRCINFO\n' >&2
-    exit 1
+    if [[ -n $stale ]]; then
+        printf 'srcinfo freshness fixture: %d recipe(s) have a stale .SRCINFO\n' \
+            "$(wc -l <<<"$stale")" >&2
+        printf '%s\n' "$stale" >&2
+        printf 'regenerate with: cd <recipe> && GIT_CONFIG_COUNT=0 makepkg --printsrcinfo > .SRCINFO\n' >&2
+        exit 1
+    fi
+else
+    printf 'srcinfo-freshness.sh: real-recipe-tree sweep skipped — GSA_RECIPE_CHECKOUT is unset and no recipe tree is present\n'
 fi
 
 (

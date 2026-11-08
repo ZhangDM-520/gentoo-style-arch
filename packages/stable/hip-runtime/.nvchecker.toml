@@ -1,5 +1,0 @@
-[hip-runtime]
-source = 'git'
-git = 'https://github.com/ROCm/rocminfo.git'
-prefix = 'rocm-'
-include_regex = 'rocm-.*'

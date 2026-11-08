@@ -1,4 +1,0 @@
-[gc]
-source = "git"
-git = "https://github.com/ivmai/bdwgc.git"
-prefix = "v"

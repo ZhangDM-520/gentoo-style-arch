@@ -1,194 +1,85 @@
-# Contributing
+# Contributing to the engine
 
-Contributions should improve a recipe or the `gsa` engine for a clean Arch
-checkout. **This set is maintained for AMD laptops** — AMD CPUs with
-amdgpu/radeon graphics — and the hardware-support trims follow from that
-target: a recipe may drop Intel- and NVIDIA-only firmware, drivers and code
-paths, and should name the platform or family it trims against, so a reader can
-see what the recipe no longer covers. Non-AMD paths stay when a maintained
-feature needs them. Do not submit upstream source clones, generated build
-trees, package archives, downloaded signatures, local PGP key caches, or
-host-specific logs and profiles.
+This repository holds `gsa`, the build engine. The recipe set it builds —
+`PKGBUILD` files, topology, recipe policy and the recipe battery — lives in
+[`ZhangDM-520/gsa-recipe`](https://github.com/ZhangDM-520/gsa-recipe); its
+`CONTRIBUTING.md` is the checklist for recipe changes, and nothing about
+`packages/` or `config/` is authoritative here.
 
-Explain non-obvious decisions in the recipe. **A comment explains the code, the
-kernel option, or the trim decision; it does not inventory the machine it was
-written on.** Kernel versions, package versions installed on the author's
-machine, CPU thread counts, bootloader command lines and incident narratives
-belong in `docs/JOURNAL.md`; `AGENTS.md` §6 holds a live decision.
-`linux-cachyos` is the worked example (2026-09-19).
+## What an engine change looks like
 
-## Recipe changes
-
-1. Work in the relevant directory under `packages/`.
-2. Keep upstream attribution, package-local license files, checksums, and
-   source URLs intact.
-3. Put necessary local patches, hooks, install files, and desktop assets next
-   to the recipe. Explain non-obvious compatibility patches in the recipe.
-   **A new local asset must survive two ignore layers.** Some recipes
-   default-deny with a bare `*` (or `/*`) plus `!` negations, so a file added
-   without a matching negation is silently dropped from the commit while still
-   building locally — a clean checkout then fails with "was not found in the
-   build directory" (2026-09-16). The ROOT `.gitignore` is the second layer:
-   it denies every new subdirectory under a recipe and negates only
-   `LICENSES/`, so a recipe that gains a directory of its own needs the
-   matching root negation too. Add the negations in the same change and
-   confirm with `git check-ignore -v <asset>` (no output = visible). Never let
-   a recipe `.gitignore` match itself: an ignore file that hides itself cannot
-   be committed, so on a clean checkout the rule is simply absent.
-4. Update `config/topology.conf` when adding or relocating a recipe. The
-   record format is exactly `id|path|groups|edges[|tags]`; the loader rejects
-   any other shape, and the record is the only place that binds an ID to a
-   path.
-5. Record group membership (`groups`, a comma list from the group roster —
-   `gsa -Sg` prints it) and any local build-order edges (`edges`) in the same
-   record, and only after verifying the relationship against the package
-   metadata and a build-order reason. Coupled-batch tags
-   (`abi=must`/`abi=should`) belong in the same record's `tags` field — see
-   "Updating coupled stacks" in `docs/maintainer-guide.md`.
-6. Regenerate `.SRCINFO` from the repository root:
-
-   ```sh
-   makepkg --printsrcinfo --dir packages/<category>/<pkg> > packages/<category>/<pkg>/.SRCINFO
-   ```
-
-### Source verification and signing keys
-
-1. Never disable verification with `--skippgpcheck` or remove `#signed` from a
-   source to work around a failure. Scope (owner ruling 2026-10-06): a
-   *floating* VCS source (`git+URL` with no ref) whose upstream signs only
-   tags carries no `?signed` to drop — such recipes use the plain family
-   form (AGENTS.md rule 31); `#signed`/`?signed` remains mandatory on every
-   pinned release artifact and `#tag=` source.
-2. A tag can be signed by a signing **subkey**, while the upstream
-   `validpgpkeys` array lists only the **primary** fingerprint. Compare
-   `git verify-tag <tag>` (or `gpg --verify`) against the maintainer's
-   published key:
-
-   ```sh
-   git verify-tag v42            # reports the key that made the signature
-   gpg --list-keys --with-subkey-fingerprint <primary-fingerprint>
-   ```
-
-3. Confirm the reported fingerprint belongs to a UID and subkey published by
-   the maintainer (for example `https://github.com/<maintainer>.gpg`), then add
-   that fingerprint to `validpgpkeys` with a comment naming the role. Import
-   the verified key locally so the build can check the signature.
-4. If a fingerprint cannot be confirmed against a published key, stop and
-   report the mismatch instead of trusting it.
-
-### The `?signed` rule (2026-10-28)
-
-`?signed` is mandatory on every `#tag=` source whose upstream signs its tags
-with a GPG signature verifiable against the recipe's `validpgpkeys` (the pin
-names the actual signer, primary or signing subkey). Documented exceptions:
-unsigned-tag, lightweight-tag, and SSH-signed upstreams (fetch attestation =
-TLS). A signed tag whose signer is not yet pinned needs the pin fixed first
-(CONTRIBUTING #2–4 publisher-material confirmation) — adding `?signed`
-alone fails fetch (SIGNATURE NOT FOUND / FAILED invalid public key /
-unknown public key).
-
-### Provides discipline
-
-Toolchain `-git` packages carry *versioned* provides
-(`provides=("meson=${pkgver}")`): an unversioned provide cannot satisfy a
-`>=N` makedepend, and pacman silently falls back to the conflicting repo
-package. Every library-shipping package declares *bare* soname provides
-(`libfoo.so`); makepkg then auto-versions them from the packaged ELF soname.
-Request a capability through its virtual (`java-runtime`, `java-environment`,
-`libgl`, …), never through one concrete provider — Arch's OpenJDK packages
-are mutually exclusive, so naming `jre-openjdk` can make pacman demand
-removal of a package the dependency graph needs. Provides live in
-`.PKGINFO`, so a provides change requires a real rebuild (`makepkg -Rf` only
-repackages):
-
-```sh
-tar -xOf <archive>.pkg.tar.zst .PKGINFO | grep provides
-```
-
-## Optimization and trimming standard
-
-Use the host's `makepkg.conf` as the default optimization policy. Do not
-append hard-coded `-O3`, `-march`, `-mtune`, or other host-specific ISA flags
-to a recipe; documented per-package exceptions live in the recipe
-repository's `AGENTS.md` §4 (the optimization playbook) —
-the current list: `zen-browser-pgo`'s `--enable-optimize=-O3` (PGO-trained
-Mozilla build). Use host-derived native settings only when they are already
-provided by the build environment; an explicit target such as
-`GSA_TARGET_CPU` must be intentional and documented.
-
-Trim packaging to the maintained target:
-
-- remove dead documentation, man pages, examples, tests, split packages,
-  `depends`, `makedepends`, `_pick` paths, install paths, and check paths
-  together;
-- keep PGO-training test suites, kmod compressors, the GTK4 Vulkan renderer,
-  Rust `profiler=true`, the `clang-opencl-headers` split, and CUPS/printing
-  support when they are part of the maintained feature set;
-- keep mold, LTO, and PGO phases aligned with the package's documented
-  exception (the Meson reconfigure rules and the verification procedure are in
-  `docs/build-guide.md`; the failure mechanisms are in `AGENTS.md` §5); a
-  recipe that trains with `-fprofile-generate` must call the shared payload
-  gate (`lib/pgo.sh`) as the last statement of its package function(s) —
-  never copy its implementation; a new PGO family earns a fixture and extends
-  the module when its leak shapes are new (the 2026-09-28 C-autotools and Go
-  flavors needed no module change) — and the engine's fail-closed payload
-  check at the install seam does not make the call optional; and
-- never use invalid `options` such as `!check` or `autodeps` to paper over a
-  recipe problem.
-
-After a trim, verify that disabled features have no remaining packaging
-paths, removed tools are absent from `makedepends`, and the resulting
-`.SRCINFO` matches the recipe. Do not remove a test or feature merely because
-it is not installed at runtime if it trains PGO or protects a maintained
-capability.
+- **Start from the contract.** `docs/gsa-contract.md` is authoritative: the
+  action-pass grammar (§B), selection (§C), the hidden seams (§D), the decision
+  rows and rc contract (§E), outcome vocabularies (§F), exit codes (§G), the
+  `format: 2` run record (§H), failure policy (§I), state layout (§J),
+  concurrency (§K) and change control (§L). When a document and the contract
+  disagree, the contract wins — fix the document, never the contract in
+  passing.
+- **Keep the seams where they are.** Install decisions are computed once as
+  typed rows; the record is computed once and rendered three ways; resolution
+  ladders name their rung; an early exit is a typed `Exit` behind one renderer.
+  A change that adds a second decision site or a second counter is the change
+  to reject in review.
+- **Change hygiene.** Make precise, complete, surgical changes. A behavioural
+  change to scheduling, install, state, fetch or signals ships with a fixture
+  in the same change, and a change that retires a behaviour removes its dead
+  code and its config in the same pass. Do not fix unrelated pre-existing
+  issues in the same commit.
+- **Fixtures are the test suite.** `tests/*.sh` are self-contained bash
+  scripts, non-mutating and `$TMPDIR`-scoped, discovered recursively by
+  `tests/run-all.sh`; a new fixture needs no runner edit. The run-record
+  machine block (`format: 2`) is the assertion surface — assert on the record,
+  not on prose. Stubs fail closed; oracle-shaped stubs stay inline in the
+  fixture that gives them meaning.
+- **Never weaken a verification.** Checksums, signatures, the PGO payload gate
+  and the ABI gates are fail-closed by design. A green run that skipped the
+  check is not a green run.
 
 ## Validation
 
-Engine changes live in the Rust workspace (`crates/`); `cargo build
---release` produces `target/release/gsa`, which the `gsa-pm` recipe installs
-as `/usr/bin/gsa`. Before submitting a change, run:
+Before submitting an engine change:
 
 ```sh
-cargo test --workspace
-bash -n packages/<category>/<pkg>/PKGBUILD
-makepkg --printsrcinfo --dir packages/<category>/<pkg> > packages/<category>/<pkg>/.SRCINFO
-gsa -Ma                       # audit lints are report-only; read the report
-gsa -Sl                       # listing re-validates map, graph and sort
-gsa -S --dry-run @git         # repeat for @stable, @core
-bash tests/run-all.sh
+cargo test --workspace                       # the crate suite
+bash tests/run-all.sh                        # the whole fixture battery
+GSA_RECIPE_CHECKOUT=~/Projects/gsa-recipe \
+  bash tests/run-all.sh                      # the real-recipe-tree sections
+gsa -Ma                                      # audit lints are report-only; read the report
 ```
 
-`tests/run-all.sh` runs every fixture (discovered, so new ones need no edit
-here) — in parallel by default, because every fixture is non-mutating and
-`$TMPDIR`-scoped; pass a substring to narrow it,
-e.g. `bash tests/run-all.sh recipe`, or `--serial` to debug one at a time. The
-fixtures cover the project configuration, recipe
-registration and assets, source sharing, PGO transitions and the PGO install
-gate, and the scheduler's resource profiles, so run the whole battery rather
-than only the file matching the recipe you touched — the map-format change of
-2026-09-17 was caught by two unrelated recipe fixtures.
+- `tests/run-all.sh` defaults to the installed `/usr/bin/gsa` — the contract's
+  smoke-the-shipped-binary rule — and prints the binary and its owning package.
+  `GSA_TEST_GSA_BIN=$PWD/target/release/gsa` is the explicit pre-install
+  override and is reported as a deviation, never passed off as validated.
+- Fixtures that read the real recipe tree take `GSA_RECIPE_CHECKOUT` and SKIP
+  loudly when it is unset: the battery must be green both with and without a
+  recipe checkout on disk.
+- `cargo test --workspace` runs two supervisor timing tests that are load-flaky
+  under full parallelism (pre-existing, measured at HEAD).
+  `cargo test --workspace -- --test-threads=1` is the deterministic run.
+- Never use a real rebuild as a syntax check.
 
-Install behaviour has a dedicated entry point: the hidden
-`gsa --install-decide <checked|force> <archive…>` seam prints the install
-decision rows (`install`/`skip`/`refuse`/`noop`/`parked`) and exits 0 for an
-executable plan, 1 for a refusal, 2 for bad usage — fixtures assert those rows
-and statuses, never rendered output.
+## Committing
 
-`gsa -Ma` also reports installed files under a PGO recipe that still carry a
-baked `.gcda` path, and names PGO recipes that are not installed at all, so it
-is the quickest way to spot a stale install that predates a recipe fix.
+Never commit or push unprompted: a green battery is evidence, not consent.
+Each commit carries a descriptive body — what changed, why, and how it was
+validated — and the trailer:
 
-Do not use a full real rebuild as a syntax check. For changes to scheduling,
-installation, cleanup, source sharing, or signals, add or run a focused
-fixture with fake build/install commands and verify exit status, logs, and
-child-process cleanup.
+```
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+```
 
-## Topology and ABI coupling
+## Trust and privilege
 
-Keep ABI-coupled packages in the same documented batch. LLVM consumers,
-Rust, Qt private-API modules, ROCm, and the system replacement packages are
-not ordinary independent leaf updates. Batch membership is declared in the
-`tags` field of the package's `config/topology.conf` record
-(`abi=must` / `abi=should`); the batch itself is derived from the edge graph.
-Record the reason for a new edge in `docs/JOURNAL.md` and update the maintainer
-rules in `AGENTS.md` when the operational contract changes.
+The engine runs privileged, `makepkg` runs as the build user, and the engine
+never prompts for privilege (`sudo -n` throughout). `SECURITY.md` is the trust
+model; read it before changing anything that touches privilege, the state root
+or a filesystem write.
+
+## Documentation
+
+`docs/JOURNAL.md` gets one dense dated line per action; the detail belongs in
+the action export, not in the line. `AGENTS.md` holds the rules and pitfalls —
+update it when an operational contract changes, and record the incident that
+justified a new rule in the journal line. `docs/gsa-contract.md` changes are
+amendments: they are dated, and the rule they encode is named.

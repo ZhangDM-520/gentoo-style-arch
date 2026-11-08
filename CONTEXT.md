@@ -1,10 +1,12 @@
 # gentoo-style-arch
 
-A curated Arch Linux package set (recipes + declarative topology) built and
-installed by `gsa`, the native Rust engine (workspace `crates/`; interface
-contract in `docs/gsa-contract.md`). This glossary names the project's own
-concepts; implementation lives in `docs/architecture.md`, history in
-`docs/JOURNAL.md`, rules in `AGENTS.md`.
+`gsa`, the native Rust engine (workspace `crates/`; interface contract in
+`docs/gsa-contract.md`) that builds and installs a curated Arch Linux package
+set. The set itself — recipes and declarative topology — lives in its own
+repository (`ZhangDM-520/gsa-recipe`), which keeps the same glossary for its
+readers; the terms below are the data model this engine implements, so they
+appear in code, the contract and the run record. Implementation lives in
+`docs/architecture.md`, history in `docs/JOURNAL.md`, rules in `AGENTS.md`.
 
 ## Language
 

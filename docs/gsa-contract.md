@@ -27,7 +27,8 @@ scheduler invariants); `CONTEXT.md` (vocabulary and terms to avoid);
 `AGENTS.md` rules 11, 15, 19, 20, 23, 25 (rule numbers, not page dumps);
 `docs/adr/0003-run-record.md` (one record, three renderings);
 `tests/lib/fixture-lib.bash` (`rr_*` parser, `GSA_FAKE_*` stub knobs); and the
-authoritative current flag inventory `fish build-all.fish --help`.
+authoritative current flag inventory `gsa --help` (amended 2026-11-09: the
+fish entry point it once named is deleted).
 
 ---
 

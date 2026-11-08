@@ -1,4 +1,0 @@
-[ccache]
-source = "git"
-git = "https://github.com/ccache/ccache.git"
-prefix = "v"

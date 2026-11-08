@@ -1,4 +1,0 @@
-[upower]
-source = "git"
-git = "https://gitlab.freedesktop.org/upower/upower.git"
-prefix = "v"

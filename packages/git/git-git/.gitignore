@@ -1,8 +1,0 @@
-git/
-pkg/
-src/
-logs/
-*.tar
-*.log
-*.xz
-*.zst

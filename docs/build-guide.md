@@ -94,11 +94,12 @@ topology records — the tooling data channel), `gsa -Qi`/`gsa -Qs`/`gsa -Q`
 (package info/search/list), `gsa -Qb`/`gsa -Qp` (binpkg index rows / archive
 probe). Anything else the roster does not print is not a spelling.
 
-The retired fish entry point still exists at the repo root as a **retirement
-shim**: `build-all.fish` prints the old-spelling → `gsa` migration table
-(contract §B.9) and exits non-zero without running anything. It is kept for
-one release cycle after the 2026-10-14 cutover; the fish engine itself is
-frozen as a fixture oracle under `tests/assets/`, not an engine any more.
+The retired fish entry point is **gone**: the root `build-all.fish` retirement
+shim (it printed the old-spelling → `gsa` migration table and exited non-zero)
+was deleted on 2026-11-09, one release past its 2026-10-14 window. Contract §B.9
+still maps every retired spelling, which is the migration table's durable home;
+the fish engine itself is frozen as a fixture oracle under `tests/assets/`, not
+an engine any more.
 
 ## Installation semantics
 
