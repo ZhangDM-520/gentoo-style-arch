@@ -39,12 +39,13 @@ use gsa_model::{PlanAction, PlanRow, RecipeId, Tag};
 use gsa_recipe::freshness::{self, Discovery, FreshnessContext, ProbeOptions, SkipMode, Verdict};
 use gsa_recipe::sync::{
     self, AnchorOutcome, DispositionRow, NvcheckerRunner, ProviderError, ProviderFamily,
-    RefusalClass, SyncOutcome, SyncPolicy, SyncReport, VersionProvider,
+    SyncOutcome, SyncPolicy, SyncReport, VersionProvider,
 };
 use gsa_recipe::toolchain;
 use gsa_topo::load_project;
 
 use crate::args::Invocation;
+use crate::exit::{self, Exit, Refusal, RefusalClass};
 use crate::select::{self, Ctx, Selection};
 
 /// How many transitive consumers may wait on one parked recipe before the
@@ -285,7 +286,7 @@ pub fn sync_one(recipe_dir: &Path, root: &Path, idx: usize, graph: &Graph<'_>) -
             return SyncReport {
                 pkg,
                 outcome: SyncOutcome::Refused {
-                    class: RefusalClass::UnsafeVersionText,
+                    class: sync::RefusalClass::UnsafeVersionText,
                     message: format!(
                         "cannot classify the nvchecker provider — {message}; version sync cannot rewrite blind"
                     ),
@@ -311,8 +312,8 @@ pub enum SyncClass {
     /// Provider outage/anchoring refusal: park with this §H.3 reason.
     Defer(&'static str),
     /// Fail-closed (integrity stop or named refusal): run-wide abort (§G.1
-    /// rc 3) with this row reason.
-    Refuse(String),
+    /// rc 3) with this refusal class.
+    Refuse(RefusalClass),
 }
 
 /// Classify one sync report. `absorb` answers whether the consumer chain can
@@ -333,11 +334,11 @@ pub fn classify_sync(report: &SyncReport, absorb: bool) -> (SyncClass, Vec<Strin
                 return (SyncClass::Defer(reason.clone().key()), notes);
             }
             AnchorOutcome::IntegrityStop { .. } => {
-                return (SyncClass::Refuse("integrity-stop".to_string()), notes);
+                return (SyncClass::Refuse(RefusalClass::IntegrityStop), notes);
             }
             AnchorOutcome::Refused { message, .. } => {
                 push_once(&mut notes, message.clone());
-                return (SyncClass::Refuse("anchor-refused".to_string()), notes);
+                return (SyncClass::Refuse(RefusalClass::AnchorRefused), notes);
             }
             _ => {}
         },
@@ -382,7 +383,7 @@ pub fn classify_sync(report: &SyncReport, absorb: bool) -> (SyncClass, Vec<Strin
         }
         SyncOutcome::Refused { message, .. } | SyncOutcome::Unsupported { message, .. } => {
             push_once(&mut notes, message.clone());
-            (SyncClass::Refuse("sync-refused".to_string()), notes)
+            (SyncClass::Refuse(RefusalClass::SyncRefused), notes)
         }
     }
 }
@@ -675,9 +676,11 @@ fn prepare_one(
                     log,
                 };
             }
-            SyncClass::Refuse(reason) => {
+            SyncClass::Refuse(class) => {
                 return PackagePrep {
-                    plan: NodePlan::Refuse { reason },
+                    plan: NodePlan::Refuse {
+                        reason: class.key().to_string(),
+                    },
                     log,
                 };
             }
@@ -821,8 +824,8 @@ fn sync_status_line(id: &str, outcome: &SyncOutcome, human: bool) -> Option<Stri
 /// key the build pipeline's rows use; a deferral is reported per recipe and
 /// re-derived as a row by the pipeline's own idempotent sync.
 pub struct SyncPhase {
-    /// The first refusing recipe's reason key, `None` when nothing refused.
-    pub refused: Option<String>,
+    /// The first refusing recipe's class, `None` when nothing refused.
+    pub refused: Option<RefusalClass>,
     /// Every deferred recipe with its §H.3 reason key.
     pub deferred: Vec<(String, String)>,
 }
@@ -835,7 +838,7 @@ pub fn sync_phase(
     err: &mut dyn Write,
 ) -> SyncPhase {
     let mut rows: Vec<DispositionRow> = Vec::new();
-    let mut refused: Option<String> = None;
+    let mut refused: Option<RefusalClass> = None;
     let mut deferred: Vec<(String, String)> = Vec::new();
     for (_, id) in &selection.listed {
         let idx = graph.index_of(id.as_str()).expect("selection ids resolve");
@@ -860,15 +863,16 @@ pub fn sync_phase(
                 );
                 deferred.push((id.as_str().to_string(), key.to_string()));
             }
-            SyncClass::Refuse(reason) => {
+            SyncClass::Refuse(class) => {
                 let _ = writeln!(
                     err,
-                    "gsa: {}: refusing to rewrite — {reason}; the recipe was restored byte-for-byte",
-                    id.as_str()
+                    "gsa: {}: refusing to rewrite — {}; the recipe was restored byte-for-byte",
+                    id.as_str(),
+                    class.key()
                 );
                 // The first refusal is the run's class (§G.1: an integrity
                 // stop or a named sync refusal aborts before dispatch).
-                refused.get_or_insert(reason);
+                refused.get_or_insert(class);
             }
             _ => {}
         }
@@ -887,13 +891,15 @@ pub fn sync_phase(
 /// the run-level disposition block. rc: 0 clean, 3 refusal class (§G.1
 /// integrity stop), 5 deferral-only.
 pub fn run_sync_pass(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
-    let root = match crate::resolve_workspace(inv) {
-        Ok(root) => root,
-        Err(message) => {
-            let _ = writeln!(err, "gsa: {message}");
-            return 2;
-        }
-    };
+    exit::render(run_sync_pass_inner(inv, out, err), err)
+}
+
+fn run_sync_pass_inner(
+    inv: &Invocation,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<i32, Exit> {
+    let root = crate::resolve_workspace(inv).map_err(Exit::Usage)?;
     // W3 store semantics: `-Sy` refreshes the canonical store alongside the
     // version-sync pass. A `project` override (dev checkout) supersedes the
     // store and is never refreshed; a cwd workspace is the deprecated path
@@ -906,36 +912,18 @@ pub fn run_sync_pass(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write)
             );
         }
         Ok(cfg) => {
-            let state = match gsa_model::config::resolve_state_dir(inv.state_dir.as_deref()) {
-                Ok(state) => state,
-                Err(message) => {
-                    let _ = writeln!(err, "gsa: {message}");
-                    return 2;
-                }
-            };
+            let state = gsa_model::config::resolve_state_dir(inv.state_dir.as_deref())
+                .map_err(Exit::Usage)?;
             // The workspace comparison uses the RESOLVED store root (pure);
             // resolve_workspace already ran the ensure/migrate step and
             // printed its note — a second ensure here would double-print.
-            let store = match gsa_state::recipes::store_dir() {
-                Ok(store) => store,
-                Err(message) => {
-                    let _ = writeln!(err, "gsa: {message}");
-                    return 2;
-                }
-            };
+            let store = gsa_state::recipes::store_dir().map_err(Exit::Usage)?;
             if root == store {
                 let url = cfg
                     .recipe_url
                     .unwrap_or_else(|| gsa_model::config::DEFAULT_RECIPE_URL.to_string());
-                match gsa_state::recipes::refresh(&state, &url) {
-                    Ok(head) => {
-                        let _ = writeln!(err, "gsa: recipe store refreshed: {head}");
-                    }
-                    Err(message) => {
-                        let _ = writeln!(err, "gsa: {message}");
-                        return 2;
-                    }
-                }
+                let head = gsa_state::recipes::refresh(&state, &url).map_err(Exit::Usage)?;
+                let _ = writeln!(err, "gsa: recipe store refreshed: {head}");
             } else {
                 let _ = writeln!(
                     err,
@@ -943,32 +931,13 @@ pub fn run_sync_pass(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write)
                 );
             }
         }
-        Err(message) => {
-            let _ = writeln!(err, "gsa: {message}");
-            return 2;
-        }
+        Err(message) => return Err(Exit::Usage(message)),
     }
-    let project = match load_project(&root) {
-        Ok(project) => project,
-        Err(error) => {
-            let _ = writeln!(err, "gsa: {error}");
-            return 2;
-        }
-    };
-    let graph = match Graph::build(&project.topology.records) {
-        Ok(graph) => graph,
-        Err(error) => {
-            let _ = writeln!(err, "gsa: config/topology.conf: {error}");
-            return 2;
-        }
-    };
-    let db = match gsa_recipe::RecipeDb::load(&root, graph.records()) {
-        Ok(db) => db,
-        Err(error) => {
-            let _ = writeln!(err, "gsa: {error}");
-            return 2;
-        }
-    };
+    let project = load_project(&root).map_err(|error| Exit::Usage(error.to_string()))?;
+    let graph = Graph::build(&project.topology.records)
+        .map_err(|error| Exit::Usage(format!("config/topology.conf: {error}")))?;
+    let db = gsa_recipe::RecipeDb::load(&root, graph.records())
+        .map_err(|error| Exit::Usage(error.to_string()))?;
     let ctx = Ctx {
         project: &project,
         graph: &graph,
@@ -977,36 +946,31 @@ pub fn run_sync_pass(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write)
     };
     // A selection is optional here (§B.4 spells `gsa -Sy` with no targets):
     // no selection = every recipe, in canonical build order.
-    let selection = match pass_selection(&ctx, inv) {
-        Ok(selection) => selection,
-        Err(error) => {
-            let _ = writeln!(err, "gsa: {error}");
-            return 2;
-        }
-    };
+    let selection = pass_selection(&ctx, inv).map_err(Exit::Usage)?;
     crate::write_notes(err, &selection.notes);
 
     // ── privilege gate (contract §B.10; after every usage preflight) ─────
-    if let Some(code) = crate::privilege_gate(
+    if let Some(exit) = crate::privilege_gate(
         &inv.spelling(),
         crate::invocation_privilege(inv, &crate::Command::SyncPass),
         true,
         err,
     ) {
-        return code;
+        return Err(exit);
     }
 
     let phase = sync_phase(&root, &graph, &selection, out, err);
-    if phase.refused.is_some() {
+    if let Some(class) = phase.refused {
         // A one-shot `-Sy` renders the disposition block only: the contract
         // (§H.1/H.2) owes a run record to build-shaped runs, and `-Sy` is
-        // never mirrored into a continuation — the refusal class is the rc.
-        return 3;
+        // never mirrored into a continuation — the refusal class is the rc,
+        // and the per-recipe refusal line was already printed by the pass.
+        return Err(Exit::Refuse(Refusal::silent(class)));
     }
     if !phase.deferred.is_empty() {
-        return 5;
+        return Ok(5);
     }
-    0
+    Ok(0)
 }
 
 /// The `-Su` stale set (contract §B.3 `-Qu` / §B.4 `-Su`): recipes whose

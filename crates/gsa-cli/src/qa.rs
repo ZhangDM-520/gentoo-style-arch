@@ -7,6 +7,7 @@
 
 use std::io::Write;
 
+use crate::exit::{self, Exit};
 use gsa_qa::input::{collect_archives, load_workspace, QaInput};
 use gsa_qa::QaInstalled;
 
@@ -36,6 +37,14 @@ fn installed_view() -> Vec<QaInstalled> {
 /// findings never change rc), 2 usage/unknown name, 3 an install-refusing
 /// check found ≥1 finding (gsa_qa::seam holds the classes).
 pub fn run_qa_check(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
+    exit::render(run_qa_check_inner(args, out, err), err)
+}
+
+fn run_qa_check_inner(
+    args: &[String],
+    out: &mut dyn Write,
+    _err: &mut dyn Write,
+) -> Result<i32, Exit> {
     // `--state-dir PATH` is the §J.3 modifier this seam accepts (the same
     // strip as `--local-db-check`): the state tier must reach root discovery
     // too (E1 — one state tree per invocation).
@@ -51,14 +60,18 @@ pub fn run_qa_check(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -
     }
     let args: &[String] = &positional;
     let Some(root) = crate::find_root(state_flag) else {
-        let _ = writeln!(
-            err,
-            "gsa: cannot find a recipe workspace: {}",
+        return Err(Exit::Usage(format!(
+            "cannot find a recipe workspace: {}",
             gsa_model::config::WORKSPACE_HINT
-        );
-        return 2;
+        )));
     };
-    gsa_qa::seam::run_qa_check(args, &root, &installed_view(), out, err)
+    Ok(gsa_qa::seam::run_qa_check(
+        args,
+        &root,
+        &installed_view(),
+        out,
+        _err,
+    ))
 }
 
 /// The report surface's prose lines for one install run (contract §E.4:

@@ -6,6 +6,9 @@
 //! - [`machine`]: the dispatch state machine — build-order readiness,
 //!   core-solo / build-tools band invariants, and the failure policy
 //!   (cone-stop default, `--fail-fast`, deferral).
+//! - [`progress`]: the ONE projection of the event stream into the run's
+//!   plan order and settled rows — the shared source of the live dashboard's
+//!   tallies and the run record (contract §H one-record rule).
 //! - [`signals`]: signal receipt, the teardown grace window, process-group
 //!   signalling.
 //! - [`lock`]: the run lock, write-time ownership (rule 19), orphan sweeps,
@@ -16,5 +19,6 @@ pub mod budget;
 pub mod codec;
 pub mod lock;
 pub mod machine;
+pub mod progress;
 pub mod signals;
 pub mod supervisor;

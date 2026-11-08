@@ -19,6 +19,7 @@ use gsa_install::localdb::{pacman_db_root, LocalDb};
 use gsa_recipe::pkginfo::read_pkginfo;
 
 use crate::args::Invocation;
+use crate::exit::{self, Exit, Refusal, RefusalClass};
 use crate::render;
 use crate::select::Ctx;
 use gsa_state::{verify_row, wire_row, BinpkgIndex, Match, StateRoot};
@@ -152,7 +153,6 @@ pub fn query_probe(
 /// findings" class, so `health`'s findings use rc 1 in the §E.5 seam shape
 /// (findings present, full report still printed).
 pub fn run_local_db_check(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
-    const USAGE: &str = "gsa --local-db-check [health|runs]: unknown argument";
     // `--state-dir PATH` is the §J.3 modifier this seam accepts (stripped
     // before verb matching so the flag tier behaves like on public verbs).
     let mut positional: Vec<String> = Vec::with_capacity(args.len());
@@ -165,8 +165,11 @@ pub fn run_local_db_check(args: &[String], out: &mut dyn Write, err: &mut dyn Wr
         }
         positional.push(arg.clone());
     }
-    let args: &[String] = &positional;
-    let verb = match args {
+    // The verb fence speaks the seam's own voice (`gsa --local-db-check: …`),
+    // not the engine's `gsa: …` prefix, so it stays here rather than being
+    // forced through `Exit::Usage` (which would add the prefix and change
+    // the bytes). The rest of the seam is typed.
+    let verb = match positional.as_slice() {
         [] => "health",
         [one] if one == "health" || one == "runs" => one.as_str(),
         [one] => {
@@ -174,28 +177,30 @@ pub fn run_local_db_check(args: &[String], out: &mut dyn Write, err: &mut dyn Wr
                 err,
                 "gsa --local-db-check: unknown argument '{one}' (want health|runs)"
             );
-            let _ = writeln!(err, "{USAGE}");
+            let _ = writeln!(err, "gsa --local-db-check [health|runs]: unknown argument");
             return 2;
         }
         _ => {
-            let _ = writeln!(err, "{USAGE}");
+            let _ = writeln!(err, "gsa --local-db-check [health|runs]: unknown argument");
             return 2;
         }
     };
-    let root_path = match gsa_state::resolve_state_root(state_flag) {
-        Ok(path) => path,
-        Err(message) => {
-            let _ = writeln!(err, "gsa: {message}");
-            return 2;
-        }
-    };
-    let root = match StateRoot::open(&root_path) {
-        Ok(root) => root,
-        Err(error) => {
-            let _ = writeln!(err, "gsa: {error}");
-            return 3;
-        }
-    };
+    exit::render(run_local_db_check_inner(verb, state_flag, out, err), err)
+}
+
+fn run_local_db_check_inner(
+    verb: &str,
+    state_flag: Option<&str>,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<i32, Exit> {
+    let root_path = gsa_state::resolve_state_root(state_flag).map_err(Exit::Usage)?;
+    let root = StateRoot::open(&root_path).map_err(|error| {
+        Exit::Refuse(Refusal::noted(
+            RefusalClass::StartupRefused,
+            vec![format!("gsa: {error}")],
+        ))
+    })?;
     match verb {
         "runs" => match gsa_state::RunHistory::read(&root) {
             Ok((records, corrupt)) => {
@@ -206,15 +211,15 @@ pub fn run_local_db_check(args: &[String], out: &mut dyn Write, err: &mut dyn Wr
                     let _ = write!(out, "{}", record.render_machine());
                 }
                 if corrupt.is_empty() {
-                    0
+                    Ok(0)
                 } else {
-                    1
+                    Ok(1)
                 }
             }
-            Err(error) => {
-                let _ = writeln!(err, "gsa: {error}");
-                3
-            }
+            Err(error) => Err(Exit::Refuse(Refusal::noted(
+                RefusalClass::StartupRefused,
+                vec![format!("gsa: {error}")],
+            ))),
         },
         _ => {
             // The orphan-archive oracle scans the two homes archives
@@ -234,8 +239,7 @@ pub fn run_local_db_check(args: &[String], out: &mut dyn Write, err: &mut dyn Wr
                         .map(|r| root.join(&r.path))
                         .collect::<Vec<_>>(),
                     Err(error) => {
-                        let _ = writeln!(err, "gsa: {error}");
-                        return 2;
+                        return Err(Exit::Usage(error.to_string()));
                     }
                 },
                 None => Vec::new(),
@@ -243,8 +247,10 @@ pub fn run_local_db_check(args: &[String], out: &mut dyn Write, err: &mut dyn Wr
             match gsa_model::config::build_layout_for_run() {
                 Ok(layout) => scan_dirs.push(layout.pkgdest),
                 Err(error) => {
-                    let _ = writeln!(err, "gsa: {error}");
-                    return 3;
+                    return Err(Exit::Refuse(Refusal::noted(
+                        RefusalClass::StartupRefused,
+                        vec![format!("gsa: {error}")],
+                    )));
                 }
             }
             match gsa_state::check(&root, &scan_dirs) {
@@ -254,15 +260,15 @@ pub fn run_local_db_check(args: &[String], out: &mut dyn Write, err: &mut dyn Wr
                     }
                     let _ = writeln!(out, "{}", report.summary());
                     if report.clean() {
-                        0
+                        Ok(0)
                     } else {
-                        1
+                        Ok(1)
                     }
                 }
-                Err(error) => {
-                    let _ = writeln!(err, "gsa: {error}");
-                    3
-                }
+                Err(error) => Err(Exit::Refuse(Refusal::noted(
+                    RefusalClass::StartupRefused,
+                    vec![format!("gsa: {error}")],
+                ))),
             }
         }
     }

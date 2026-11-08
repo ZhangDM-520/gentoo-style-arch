@@ -13,6 +13,7 @@ mod args;
 mod build;
 mod builddir;
 mod dashboard;
+mod exit;
 mod fetch;
 mod help;
 mod install;
@@ -31,6 +32,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use args::{Family, Hidden, Invocation, Parsed};
+use exit::Exit;
 use gsa_graph::Graph;
 use gsa_recipe::RecipeDb;
 use gsa_topo::load_project;
@@ -374,7 +376,7 @@ pub(crate) fn command_privilege(command: &Command) -> Privilege {
 
 /// The transparent privilege gate (contract §B.10): pacman's shape —
 /// `you cannot perform this operation unless you are root` — plus one banner
-/// line naming who builds. Returns `Some(rc)` when the run must stop here
+/// line naming who builds. Returns `Some(exit)` when the run must stop here
 /// (§G.1 rc 3, "the run refused to start"), before any state is written.
 /// `announce` is false for hidden fixture seams, whose output is parsed.
 pub(crate) fn privilege_gate(
@@ -382,8 +384,9 @@ pub(crate) fn privilege_gate(
     privilege: Privilege,
     announce: bool,
     err: &mut dyn Write,
-) -> Option<i32> {
+) -> Option<Exit> {
     use gsa_model::privilege as p;
+    let refused = Exit::refuse(crate::exit::RefusalClass::StartupRefused);
     match privilege {
         Privilege::ReadOnly => None,
         Privilege::BuildUserOnly => {
@@ -392,7 +395,7 @@ pub(crate) fn privilege_gate(
                     err,
                     "gsa: {spelling} rewrites your source-mirror tree and must run as the build user, never under a root supervisor (docs/source-sharing.md)"
                 );
-                return Some(RC_REFUSED);
+                return Some(refused);
             }
             None
         }
@@ -406,14 +409,14 @@ pub(crate) fn privilege_gate(
                     err,
                     "gsa: hint: rerun as 'sudo gsa {spelling} …' — the engine and pacman run as root; builds run as your user"
                 );
-                return Some(RC_REFUSED);
+                return Some(refused);
             }
             if needs_build_user && p::build_user().is_none() {
                 let _ = writeln!(
                     err,
                     "gsa: a build run needs a build user: run 'sudo gsa {spelling} …' from your build user's shell (makepkg cannot run as root, and a root shell has no user to drop to)"
                 );
-                return Some(RC_REFUSED);
+                return Some(refused);
             }
             if announce {
                 let _ = writeln!(err, "{}", p::privileged_banner(needs_build_user));
@@ -1091,7 +1094,7 @@ mod tests {
                     true,
                     &mut err
                 ),
-                Some(RC_REFUSED)
+                Some(Exit::refuse(crate::exit::RefusalClass::StartupRefused))
             );
             let err = String::from_utf8_lossy(&err);
             assert!(

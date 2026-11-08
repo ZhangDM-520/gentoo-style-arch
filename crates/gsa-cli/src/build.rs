@@ -32,6 +32,7 @@ use gsa_sched::supervisor::{self, InstallStep, PreSettle, PrefetchSetup, RunSetu
 use gsa_topo::ProjectConfig;
 
 use crate::args::Invocation;
+use crate::exit::{self, Exit, Refusal, RefusalClass};
 use crate::prepare;
 use crate::select::{self, Ctx, Selection};
 use crate::{record, render};
@@ -70,7 +71,7 @@ pub const REAL_INSTALL_FLAGS: [&str; 11] = [
 /// `gsa -B <targets…> [ranges…]` — run the selection build-only. Returns the
 /// process exit code (§G.1) and writes every rendering through `out`/`err`.
 pub fn run_build(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
-    run_build_with(inv, out, err, None)
+    exit::render(run_build_with(inv, out, err, None), err)
 }
 
 /// `gsa -S <targets…> [ranges…]` (contract §B.4): the build pipeline plus
@@ -84,15 +85,17 @@ pub fn run_build_install(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Wr
     } else {
         DecideMode::Checked
     };
-    run_build_with(inv, out, err, Some(mode))
+    exit::render(run_build_with(inv, out, err, Some(mode)), err)
 }
 
+/// `Ok(code)` is a computed run code (§G.1's outcome classes); `Err(exit)` is
+/// a gate that refused before the run existed — the ONE renderer maps it.
 fn run_build_with(
     inv: &Invocation,
     out: &mut dyn Write,
     err: &mut dyn Write,
     install: Option<DecideMode>,
-) -> i32 {
+) -> Result<i32, Exit> {
     // The build-dir answer (a `--build-dir` flag or the prompt's) is written
     // back into this run's invocation so the run record's continuation
     // restates the tree this run actually built into (§J.2/§H.2).
@@ -100,43 +103,19 @@ fn run_build_with(
     let inv = &mut owned;
     // ── selection is mandatory (contract §B.1) ───────────────────────────
     if inv.targets.is_empty() {
-        let _ = writeln!(
-            err,
-            "gsa: selection is mandatory: a build never starts without a selection"
-        );
-        return 2;
+        return Err(Exit::Usage(
+            "selection is mandatory: a build never starts without a selection".to_string(),
+        ));
     }
     // ── workspace, topology, selection (usage class: rc 2) ────────────────
     // A standalone-target run staged its own workspace (plan W4); the rest
     // discover the recipe workspace as before.
-    let root = match crate::resolve_workspace(inv) {
-        Ok(root) => root,
-        Err(message) => {
-            let _ = writeln!(err, "gsa: {message}");
-            return 2;
-        }
-    };
-    let project = match gsa_topo::load_project(&root) {
-        Ok(project) => project,
-        Err(error) => {
-            let _ = writeln!(err, "gsa: {error}");
-            return 2;
-        }
-    };
-    let graph = match Graph::build(&project.topology.records) {
-        Ok(graph) => graph,
-        Err(error) => {
-            let _ = writeln!(err, "gsa: config/topology.conf: {error}");
-            return 2;
-        }
-    };
-    let db = match RecipeDb::load(&root, graph.records()) {
-        Ok(db) => db,
-        Err(error) => {
-            let _ = writeln!(err, "gsa: {error}");
-            return 2;
-        }
-    };
+    let root = crate::resolve_workspace(inv).map_err(Exit::Usage)?;
+    let project = gsa_topo::load_project(&root).map_err(|error| Exit::Usage(error.to_string()))?;
+    let graph = Graph::build(&project.topology.records)
+        .map_err(|error| Exit::Usage(format!("config/topology.conf: {error}")))?;
+    let db =
+        RecipeDb::load(&root, graph.records()).map_err(|error| Exit::Usage(error.to_string()))?;
     let ctx = Ctx {
         project: &project,
         graph: &graph,
@@ -144,50 +123,34 @@ fn run_build_with(
         user_sets: select::load_user_sets(inv),
     };
     // ── usage preflight: resolve the selection (§G.1 rc 2 class) ─────────
-    let draft = match select::resolve_selection(&ctx, &inv.targets, &inv.ranges, inv.leaf) {
-        Ok(draft) => draft,
-        Err(error) => {
-            let _ = writeln!(err, "gsa: {}", error.message);
-            return 2;
-        }
-    };
+    let draft = select::resolve_selection(&ctx, &inv.targets, &inv.ranges, inv.leaf)
+        .map_err(|error| Exit::Usage(error.message))?;
     crate::write_notes(err, draft.notes());
 
     // ── privilege gate (contract §B.10; after every usage preflight) ─────
-    if let Some(code) = crate::privilege_gate(
+    if let Some(exit) = crate::privilege_gate(
         &inv.spelling(),
         crate::invocation_privilege(inv, &crate::Command::Build),
         true,
         err,
     ) {
-        return code;
+        return Err(exit);
     }
 
     // ── §C.4 prompt, AFTER the gate: an unprivileged run must refuse
     //    (rc 3) before any interactive input is rendered or consumed ──────
-    let mut selection = match draft.finish_for_build(&ctx, err) {
-        Ok(selection) => selection,
-        Err(error) => {
-            let _ = writeln!(err, "gsa: {}", error.message);
-            return 2;
-        }
-    };
+    let mut selection = draft
+        .finish_for_build(&ctx, err)
+        .map_err(|error| Exit::Usage(error.message))?;
 
     // ── build-cache root (§J.2): asked AFTER the selection prompt, before
     //    anything resolves the layout ─────────────────────────────────────
-    if let Err(code) = crate::builddir::resolve(inv, err) {
-        return code;
-    }
+    crate::builddir::resolve(inv, err)?;
 
     // ── state root (contract §J.3): --state-dir > GSA_STATE_DIR > the
     //    gsa.conf layers (user > system) > /var/lib/gsa ─────────────────
-    let state_dir = match gsa_model::config::resolve_state_dir(inv.state_dir.as_deref()) {
-        Ok(dir) => dir,
-        Err(message) => {
-            let _ = writeln!(err, "gsa: {message}");
-            return 2;
-        }
-    };
+    let state_dir =
+        gsa_model::config::resolve_state_dir(inv.state_dir.as_deref()).map_err(Exit::Usage)?;
 
     // ── the pre-dispatch ABI wave check (plan-native-pm.md §4.3, §E.3) ──
     // A provider whose registered token already moved (newest binpkg index
@@ -209,107 +172,95 @@ fn run_build_with(
             // and the refusal owes the full record (§H.1) like every other
             // startup gate.
             let _ = writeln!(err, "gsa: {message}");
-            return refuse_startup(
+            return Err(refuse_startup(
                 inv,
                 &selection,
                 &state_dir,
                 out,
                 err,
-                "startup-refused",
+                RefusalClass::StartupRefused,
                 || resolve_budget(inv, &project, selection.listed.len()),
-            );
+            ));
         }
     };
     extend_selection(&mut selection, &wave.additions);
 
     // ── resource budget (host-derived; the parallelism line is the truth) ─
-    let budget = match resolve_budget(inv, &project, selection.listed.len()) {
-        Ok(budget) => budget,
-        Err(message) => {
-            let _ = writeln!(err, "gsa: {message}");
-            return 2;
-        }
-    };
+    let budget = resolve_budget(inv, &project, selection.listed.len()).map_err(Exit::Usage)?;
     // ── fetch-ahead (owner decision 1): default-on, `--no-prefetch` opt-out ─
-    let prefetch_ahead = match resolve_prefetch(inv) {
-        Ok(ahead) => ahead,
-        Err(message) => {
-            let _ = writeln!(err, "gsa: {message}");
-            return 2;
-        }
-    };
+    let prefetch_ahead = resolve_prefetch(inv).map_err(Exit::Usage)?;
 
     // ── startup refusals (§G.1 rc 3) ─────────────────────────────────────
     // Under-coverage (§E.3): a wave member the topology cannot build —
     // the refusal rows are already printed; nothing transacts, nothing
     // builds.
     if wave.uncovered {
-        return refuse_before_dispatch(
+        return Err(refuse_before_dispatch(
             inv,
             &selection,
             &budget,
             &state_dir,
             out,
             err,
-            "abi-consumer-uncovered",
-        );
+            RefusalClass::AbiConsumerUncovered,
+        ));
     }
     // Install preflight (contract §K.3): an install run whose installs
     // cannot succeed non-interactively refuses BEFORE any build (§G.1 rc 3).
     if install.is_some() {
         if let Err(message) = preflight_installs() {
             let _ = writeln!(err, "gsa: {message}");
-            return refuse_before_dispatch(
+            return Err(refuse_before_dispatch(
                 inv,
                 &selection,
                 &budget,
                 &state_dir,
                 out,
                 err,
-                "preflight-refused",
-            );
+                RefusalClass::PreflightRefused,
+            ));
         }
     }
     if let Err(message) = lock::ensure_state_dirs(&state_dir, err) {
         let _ = writeln!(err, "gsa: {message}");
-        return refuse_before_dispatch(
+        return Err(refuse_before_dispatch(
             inv,
             &selection,
             &budget,
             &state_dir,
             out,
             err,
-            "startup-refused",
-        );
+            RefusalClass::StartupRefused,
+        ));
     }
     // The PACMAN shim (§K.3): makepkg's own dependency installs share the
     // transaction lock and run through `sudo -n` — the engine never prompts.
     if let Err(message) = gsa_build::shim::ensure_pacman_shim(&state_dir) {
         let _ = writeln!(err, "gsa: {message}");
-        return refuse_before_dispatch(
+        return Err(refuse_before_dispatch(
             inv,
             &selection,
             &budget,
             &state_dir,
             out,
             err,
-            "startup-refused",
-        );
+            RefusalClass::StartupRefused,
+        ));
     }
     let run_id = supervisor::run_id_now();
     let _run_lock = match lock::acquire_run_lock(&state_dir) {
         Ok(lock) => lock,
         Err(message) => {
             let _ = writeln!(err, "gsa: {message}");
-            return refuse_before_dispatch(
+            return Err(refuse_before_dispatch(
                 inv,
                 &selection,
                 &budget,
                 &state_dir,
                 out,
                 err,
-                "startup-refused",
-            );
+                RefusalClass::StartupRefused,
+            ));
         }
     };
     // Startup orphan sweep (§K.3): dead runs' lane jobs and stale artifacts.
@@ -326,15 +277,15 @@ fn run_build_with(
             Ok(layout) => layout,
             Err(message) => {
                 let _ = writeln!(err, "gsa: {message}");
-                return refuse_before_dispatch(
+                return Err(refuse_before_dispatch(
                     inv,
                     &selection,
                     &budget,
                     &state_dir,
                     out,
                     err,
-                    "startup-refused",
-                );
+                    RefusalClass::StartupRefused,
+                ));
             }
         };
         for (_, id) in &selection.listed {
@@ -389,26 +340,20 @@ fn run_build_with(
             toolchain::ProbeStatus::Failed { detail } => {
                 let _ = writeln!(err, "gsa: {detail}");
                 let _ = writeln!(err, "{}", toolchain::remediation_refusal_text());
-                return refuse_before_dispatch(
+                return Err(refuse_before_dispatch(
                     inv,
                     &selection,
                     &budget,
                     &state_dir,
                     out,
                     err,
-                    "preflight-refused",
-                );
+                    RefusalClass::PreflightRefused,
+                ));
             }
         }
     }
     // 2. the version-sync + freshness pass (one pass, canonical order).
-    let cfg = match prepare::pass_config(inv) {
-        Ok(cfg) => cfg,
-        Err(message) => {
-            let _ = writeln!(err, "gsa: {message}");
-            return 2;
-        }
-    };
+    let cfg = prepare::pass_config(inv).map_err(Exit::Usage)?;
     for line in &cfg.notes {
         let _ = writeln!(err, "gsa: note: {line}");
     }
@@ -423,9 +368,9 @@ fn run_build_with(
     //    other row is `never-started - - startup-refused`, plan rows keep
     //    the planned action.
     if let Some(at) = prepared.first_refusal() {
-        return refuse_prepared(
+        return Err(refuse_prepared(
             inv, &selection, &budget, &state_dir, &prepared, at, out, err,
-        );
+        ));
     }
     // 4. per-node pre-settlements (§B.8) ride the supervisor's nodes: a
     //    `--skip` claim settles at readiness (register+install hooks, no
@@ -474,15 +419,15 @@ fn run_build_with(
                 err,
                 "gsa: cannot locate the engine binary for lane children: {error}"
             );
-            return refuse_before_dispatch(
+            return Err(refuse_before_dispatch(
                 inv,
                 &selection,
                 &budget,
                 &state_dir,
                 out,
                 err,
-                "startup-refused",
-            );
+                RefusalClass::StartupRefused,
+            ));
         }
     };
     let ids: Vec<RecipeId> = selection.listed.iter().map(|(_, id)| id.clone()).collect();
@@ -739,17 +684,16 @@ fn run_build_with(
     // box counts the run's OWN packages — the un-activated remediation
     // latents never inflate a `--leaf` run's total (2026-11-03; §H `order`
     // semantics: a latent joins the run only when activated).
-    let latent_ids: Vec<String> = setup
+    let latent_ids: Vec<RecipeId> = setup
         .nodes
         .iter()
         .filter(|node| node.latent)
-        .map(|node| node.id.as_str().to_string())
+        .map(|node| node.id.clone())
         .collect();
     let mut view = crate::dashboard::View::new(
         crate::output::is_human(),
         state_dir.clone(),
-        event_ids.iter().map(|id| id.as_str().to_string()).collect(),
-        setup.nodes.len() - latent_ids.len(),
+        event_ids.clone(),
         setup.budget.lanes as usize,
         latent_ids,
     );
@@ -768,17 +712,28 @@ fn run_build_with(
         Ok(outcome) => outcome,
         Err(message) => {
             let _ = writeln!(err, "gsa: {message}");
-            return refuse_before_dispatch(
+            return Err(refuse_before_dispatch(
                 inv,
                 &selection,
                 &budget,
                 &state_dir,
                 out,
                 err,
-                "startup-refused",
-            );
+                RefusalClass::StartupRefused,
+            ));
         }
     };
+    // The dashboard is a PROJECTION of the run, never a fourth derivation of
+    // its state (§H one-record rule): its fold over the event stream must be
+    // the record's own rows and plan order. A divergence here is the class of
+    // defect that once rendered a `--leaf` one-package run as `1/332`
+    // (2026-11-03) — the box and the record disagreeing about the same run.
+    let drift = view.progress().drift(&outcome.rows, &outcome.order);
+    debug_assert!(
+        drift.is_none(),
+        "dashboard/record drift (the live view stopped being a projection of the run): {}",
+        drift.unwrap_or_default()
+    );
     // Post-run orphan sweep (§K.3) — the current run's artifacts survive.
     lock::sweep_orphans(&state_dir, &run_id, err);
 
@@ -846,7 +801,7 @@ fn run_build_with(
     // The machine block AND the side-car run history: the §H.1 amendment
     // stores the same structure, never a fourth derivation.
     record::emit_machine_record(out, &record, &state_dir, err);
-    run_outcome.rc
+    Ok(run_outcome.rc)
 }
 
 /// The rustc sanity probe scratch for THIS engine process: the module's
@@ -880,9 +835,9 @@ pub(crate) fn plan_only(
     let mut selection = select::build_selection_for_build(ctx, &inv.targets, &inv.ranges, inv.leaf, err)
         .map_err(|error| error.message)?;
     crate::write_notes(err, &selection.notes);
-    // resolve() prints its own diagnostic; the plan's rc is the run's (§H.2).
-    if let Err(code) = crate::builddir::resolve(inv, err) {
-        return Ok(code);
+    // resolve() owns its typed usage exit; the plan's rc is the run's (§H.2).
+    if let Err(exit) = crate::builddir::resolve(inv, err) {
+        return Ok(exit.render(err));
     }
     // The same pre-dispatch ABI wave check the build pipeline runs (§E.3):
     // the dry-run shows the wave it would build — additions join the plan,
@@ -946,17 +901,15 @@ fn refuse_startup(
     state_dir: &std::path::Path,
     out: &mut dyn Write,
     err: &mut dyn Write,
-    reason: &str,
+    class: RefusalClass,
     budget: impl FnOnce() -> Result<Budget, String>,
-) -> i32 {
-    let budget = match budget() {
-        Ok(budget) => budget,
-        Err(message) => {
-            let _ = writeln!(err, "gsa: {message}");
-            return crate::RC_USAGE;
-        }
-    };
-    refuse_before_dispatch(inv, selection, &budget, state_dir, out, err, reason)
+) -> Exit {
+    // A budget spelling error outranks the refusal with the usage class
+    // (§G.1 precedence: usage 2 > refusal 3) — decided BEFORE any record.
+    match budget() {
+        Ok(budget) => refuse_before_dispatch(inv, selection, &budget, state_dir, out, err, class),
+        Err(message) => Exit::Usage(message),
+    }
 }
 
 /// The `-Syu` sync step's routing (§B.4): a refusal is a fail-closed STARTUP
@@ -977,10 +930,10 @@ fn after_sync_phase(
     err: &mut dyn Write,
     phase: &prepare::SyncPhase,
     budget: impl FnOnce() -> Result<Budget, String>,
-) -> Option<i32> {
-    let reason = phase.refused.as_deref()?;
+) -> Option<Exit> {
+    let class = phase.refused?;
     Some(refuse_startup(
-        inv, selection, state_dir, out, err, reason, budget,
+        inv, selection, state_dir, out, err, class, budget,
     ))
 }
 
@@ -1000,78 +953,51 @@ fn after_sync_phase(
 /// renders the plan record only. An empty stale set is the §E.3 `noop
 /// empty-list` row, rc 0.
 pub fn run_update(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
-    let root = match crate::resolve_workspace(inv) {
-        Ok(root) => root,
-        Err(message) => {
-            let _ = writeln!(err, "gsa: {message}");
-            return 2;
-        }
-    };
-    let project = match gsa_topo::load_project(&root) {
-        Ok(project) => project,
-        Err(error) => {
-            let _ = writeln!(err, "gsa: {error}");
-            return 2;
-        }
-    };
-    let graph = match Graph::build(&project.topology.records) {
-        Ok(graph) => graph,
-        Err(error) => {
-            let _ = writeln!(err, "gsa: config/topology.conf: {error}");
-            return 2;
-        }
-    };
-    let db = match RecipeDb::load(&root, graph.records()) {
-        Ok(db) => db,
-        Err(error) => {
-            let _ = writeln!(err, "gsa: {error}");
-            return 2;
-        }
-    };
+    exit::render(run_update_inner(inv, out, err), err)
+}
+
+fn run_update_inner(
+    inv: &Invocation,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<i32, Exit> {
+    let root = crate::resolve_workspace(inv).map_err(Exit::Usage)?;
+    let project = gsa_topo::load_project(&root).map_err(|error| Exit::Usage(error.to_string()))?;
+    let graph = Graph::build(&project.topology.records)
+        .map_err(|error| Exit::Usage(format!("config/topology.conf: {error}")))?;
+    let db =
+        RecipeDb::load(&root, graph.records()).map_err(|error| Exit::Usage(error.to_string()))?;
     let ctx = Ctx {
         project: &project,
         graph: &graph,
         db: &db,
         user_sets: select::load_user_sets(inv),
     };
-    let selection = match prepare::pass_selection(&ctx, inv) {
-        Ok(selection) => selection,
-        Err(error) => {
-            let _ = writeln!(err, "gsa: {error}");
-            return 2;
-        }
-    };
+    let selection = prepare::pass_selection(&ctx, inv).map_err(Exit::Usage)?;
     crate::write_notes(err, &selection.notes);
 
     // ── privilege gate (contract §B.10; after every usage preflight) ─────
-    if let Some(code) = crate::privilege_gate(
+    if let Some(exit) = crate::privilege_gate(
         &inv.spelling(),
         crate::invocation_privilege(inv, &crate::Command::Update),
         true,
         err,
     ) {
-        return code;
+        return Err(exit);
     }
 
     let ids: Vec<RecipeId> = selection.listed.iter().map(|(_, id)| id.clone()).collect();
-    let state_dir = match gsa_state::resolve_state_root(inv.state_dir.as_deref()) {
-        Ok(dir) => dir,
-        Err(message) => {
-            let _ = writeln!(err, "gsa: {message}");
-            return 2;
-        }
-    };
+    let state_dir = gsa_state::resolve_state_root(inv.state_dir.as_deref()).map_err(Exit::Usage)?;
 
     // ── 1. the `-Sy` phase (`gsa -Syu` only — H9: `gsa -Su` updates with no
     //    sync pass). A dry run never rewrites recipes, so it runs no sync at
     //    all; the routing below owns the rc classes.
     if inv.sync_first && !inv.no_sync && !inv.dry_run {
         let phase = prepare::sync_phase(&root, &graph, &selection, out, err);
-        let code = after_sync_phase(inv, &selection, &state_dir, out, err, &phase, || {
+        if let Some(exit) = after_sync_phase(inv, &selection, &state_dir, out, err, &phase, || {
             resolve_budget(inv, &project, selection.listed.len())
-        });
-        if let Some(code) = code {
-            return code;
+        }) {
+            return Err(exit);
         }
     }
 
@@ -1111,7 +1037,7 @@ pub fn run_update(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) ->
             render::render_run_prose(&record, &state_dir.join("logs"), &[], None)
         );
         record::emit_machine_record(out, &record, &state_dir, err);
-        return run_outcome.rc;
+        return Ok(run_outcome.rc);
     }
 
     // ── 3. build+install the stale set through the normal pipeline ───────
@@ -1124,10 +1050,9 @@ pub fn run_update(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) ->
         update_inv.no_sync = true;
     }
     if inv.dry_run {
-        return plan_only(&ctx, &update_inv, &project, out, err).unwrap_or_else(|message| {
-            let _ = writeln!(err, "gsa: {message}");
-            2
-        });
+        // `plan_only` keeps its `String` usage error (the Plan command's own
+        // entry renders it); the typed exit owns the rc here.
+        return plan_only(&ctx, &update_inv, &project, out, err).map_err(Exit::Usage);
     }
     let mode = if inv.modifiers.contains(&'f') {
         DecideMode::Force
@@ -1641,8 +1566,8 @@ fn refuse_before_dispatch(
     state_dir: &std::path::Path,
     out: &mut dyn Write,
     err: &mut dyn Write,
-    reason: &str,
-) -> i32 {
+    class: RefusalClass,
+) -> Exit {
     let outcomes: Vec<OutcomeRow> = selection
         .listed
         .iter()
@@ -1651,7 +1576,7 @@ fn refuse_before_dispatch(
             status: RowStatus::NeverStarted,
             rc: None,
             dur: None,
-            reason: reason.to_string(),
+            reason: class.key().to_string(),
         })
         .collect();
     let order: Vec<RecipeId> = selection.listed.iter().map(|(_, id)| id.clone()).collect();
@@ -1668,7 +1593,8 @@ fn refuse_before_dispatch(
             reason: "ok".to_string(),
         })
         .collect();
-    emit_refusal_record(inv, plan, order, outcomes, budget, state_dir, out, err)
+    emit_refusal_record(inv, plan, order, outcomes, budget, state_dir, out, err);
+    Exit::Refuse(Refusal::recorded(class))
 }
 
 /// A run the pre-dispatch pass refused (§G.1 rc 3 — integrity stop or a
@@ -1684,10 +1610,18 @@ fn refuse_prepared(
     at: usize,
     out: &mut dyn Write,
     err: &mut dyn Write,
-) -> i32 {
+) -> Exit {
     let order: Vec<RecipeId> = selection.listed.iter().map(|(_, id)| id.clone()).collect();
     let build_install = inv.family != crate::args::Family::B;
     let plan = prepared.plan_rows(&order, build_install);
+    // The row carries the §H.3 reason key verbatim; the class only carries
+    // the rc, and falls back to the startup class for keys outside the
+    // refusal roster (e.g. `toolchain-identity`).
+    let class = match &prepared.packages[at].plan {
+        prepare::NodePlan::Refuse { reason } => RefusalClass::from_key(reason),
+        _ => None,
+    }
+    .unwrap_or(RefusalClass::StartupRefused);
     let outcomes: Vec<OutcomeRow> = order
         .iter()
         .enumerate()
@@ -1715,11 +1649,14 @@ fn refuse_prepared(
             }
         })
         .collect();
-    emit_refusal_record(inv, plan, order, outcomes, budget, state_dir, out, err)
+    emit_refusal_record(inv, plan, order, outcomes, budget, state_dir, out, err);
+    Exit::Refuse(Refusal::recorded(class))
 }
 
 /// The one refusal-record emitter: plan + order + outcome rows → the three
-/// renderings, `refused` outcome (§G.1 rc 3).
+/// renderings, `refused` outcome (§G.1 rc 3). Every caller returns the
+/// typed [`Exit::Refuse`] afterwards — the code is not this function's to
+/// pick.
 fn emit_refusal_record(
     inv: &Invocation,
     plan: Vec<PlanRow>,
@@ -1729,8 +1666,13 @@ fn emit_refusal_record(
     state_dir: &std::path::Path,
     out: &mut dyn Write,
     err: &mut dyn Write,
-) -> i32 {
+) {
     let run_outcome = RunOutcome::compute(&outcomes, inv.fail_fast, false, true);
+    debug_assert_eq!(
+        run_outcome.rc,
+        crate::RC_REFUSED,
+        "a refusal record must carry the refusal class (§G.1)"
+    );
     // A refused run never reached fetch-ahead participation (owner decision
     // 5: the scalar counts a build run's prefetch advisories only).
     let record = record::build_run_record(
@@ -1752,7 +1694,6 @@ fn emit_refusal_record(
     // A refused run is still a completed run record (§H.1) — persisted
     // like every other emission through the one store path.
     record::emit_machine_record(out, &record, state_dir, err);
-    run_outcome.rc
 }
 
 #[cfg(test)]
@@ -1856,20 +1797,37 @@ mod tests {
         let selection = selection_of(&["glib2-git", "gtk4-git"]);
         let mut out: Vec<u8> = Vec::new();
         let mut err: Vec<u8> = Vec::new();
-        let rc = after_sync_phase(
+        let exit = after_sync_phase(
             &inv,
             &selection,
             &dir,
             &mut out,
             &mut err,
             &prepare::SyncPhase {
-                refused: Some("sync-refused".to_string()),
+                refused: Some(crate::exit::RefusalClass::SyncRefused),
                 deferred: Vec::new(),
             },
             || Ok(budget()),
         )
         .expect("a sync refusal is an exit, not a continue");
-        assert_eq!(rc, 3, "a sync refusal is the refusal class (§G.1)");
+        // The refusal site returns the TYPED exit — class and record state —
+        // never a bare number the renderer would have to guess about.
+        assert!(
+            matches!(
+                &exit,
+                crate::exit::Exit::Refuse(crate::exit::Refusal {
+                    class: crate::exit::RefusalClass::SyncRefused,
+                    record: crate::exit::RecordOwed::Yes,
+                    note,
+                }) if note.is_empty()
+            ),
+            "a -Syu sync refusal is a recorded SyncRefused: {exit:?}"
+        );
+        assert_eq!(
+            exit.render(&mut err),
+            3,
+            "a sync refusal is the refusal class (§G.1)"
+        );
         let text = String::from_utf8(out).expect("utf-8 record");
         for needle in [
             "--- run record begin ---",
@@ -1918,12 +1876,12 @@ mod tests {
                 &mut out,
                 &mut err,
                 &prepare::SyncPhase {
-                    refused: Some("sync-refused".to_string()),
+                    refused: Some(crate::exit::RefusalClass::SyncRefused),
                     deferred: Vec::new(),
                 },
                 || Err("--lanes: garbage".to_string()),
             ),
-            Some(2)
+            Some(crate::exit::Exit::Usage("--lanes: garbage".to_string()))
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

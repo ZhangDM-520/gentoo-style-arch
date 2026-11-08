@@ -39,6 +39,7 @@ use gsa_sched::supervisor::InstallStep;
 use gsa_topo::load_project;
 
 use crate::args::Invocation;
+use crate::exit::{self, Exit};
 use crate::select::{self, Ctx};
 use crate::{record, render};
 
@@ -557,55 +558,36 @@ enum Item {
 /// named archives/refs from disk in one transaction; nothing is built.
 /// Returns the process exit code (§G.1).
 pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
+    exit::render(run_upgrade_inner(inv, out, err), err)
+}
+
+fn run_upgrade_inner(
+    inv: &Invocation,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<i32, Exit> {
     let all = inv.modifiers.contains(&'a');
     if all && !inv.targets.is_empty() {
-        let _ = writeln!(
-            err,
-            "gsa: -Ua installs the whole workspace and takes no targets"
-        );
-        return 2;
+        return Err(Exit::Usage(
+            "-Ua installs the whole workspace and takes no targets".to_string(),
+        ));
     }
     if !inv.ranges.is_empty() {
-        let _ = writeln!(
-            err,
-            "gsa: index ranges address an -S/-B selection (see 'gsa -Sl')"
-        );
-        return 2;
+        return Err(Exit::Usage(
+            "index ranges address an -S/-B selection (see 'gsa -Sl')".to_string(),
+        ));
     }
     if !all && inv.targets.is_empty() {
-        let _ = writeln!(err, "gsa: selection resolved to no packages");
-        return 2;
+        return Err(Exit::Usage("selection resolved to no packages".to_string()));
     }
 
     // ── workspace, topology (usage class: rc 2) ─────────────────────────
-    let root = match crate::resolve_workspace(inv) {
-        Ok(root) => root,
-        Err(message) => {
-            let _ = writeln!(err, "gsa: {message}");
-            return 2;
-        }
-    };
-    let project = match load_project(&root) {
-        Ok(project) => project,
-        Err(error) => {
-            let _ = writeln!(err, "gsa: {error}");
-            return 2;
-        }
-    };
-    let graph = match Graph::build(&project.topology.records) {
-        Ok(graph) => graph,
-        Err(error) => {
-            let _ = writeln!(err, "gsa: config/topology.conf: {error}");
-            return 2;
-        }
-    };
-    let db = match RecipeDb::load(&root, graph.records()) {
-        Ok(db) => db,
-        Err(error) => {
-            let _ = writeln!(err, "gsa: {error}");
-            return 2;
-        }
-    };
+    let root = crate::resolve_workspace(inv).map_err(Exit::Usage)?;
+    let project = load_project(&root).map_err(|error| Exit::Usage(error.to_string()))?;
+    let graph = Graph::build(&project.topology.records)
+        .map_err(|error| Exit::Usage(format!("config/topology.conf: {error}")))?;
+    let db =
+        RecipeDb::load(&root, graph.records()).map_err(|error| Exit::Usage(error.to_string()))?;
     let ctx = Ctx {
         project: &project,
         graph: &graph,
@@ -614,13 +596,13 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
     };
 
     // ── privilege gate (contract §B.10; after every usage preflight) ─────
-    if let Some(code) = crate::privilege_gate(
+    if let Some(exit) = crate::privilege_gate(
         &inv.spelling(),
         crate::invocation_privilege(inv, &crate::Command::Upgrade),
         true,
         err,
     ) {
-        return code;
+        return Err(exit);
     }
 
     // §E.5: the build-side park state of this run's state root. A subject
@@ -680,16 +662,10 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
                 continue;
             }
             if token.ends_with(".pkg.tar.zst") {
-                let _ = writeln!(err, "gsa: malformed archive argument '{token}'");
-                return 2;
+                return Err(Exit::Usage(format!("malformed archive argument '{token}'")));
             }
-            let (found, notes) = match select::resolve_ref(&ctx, token, 0) {
-                Ok(found) => found,
-                Err(error) => {
-                    let _ = writeln!(err, "gsa: {error}");
-                    return 2;
-                }
-            };
+            let (found, notes) = select::resolve_ref(&ctx, token, 0)
+                .map_err(|error| Exit::Usage(error.to_string()))?;
             crate::write_notes(err, &notes);
             for idx in found {
                 let record = graph.record(idx);
@@ -746,19 +722,13 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
     // coverage refuses pacman-free (rc 3). `-Ua` is exempt: it installs
     // the whole workspace, so its single transaction already carries every
     // consumer (contract §B.6).
-    let state_dir = match state_dir_of(inv) {
-        Ok(dir) => dir,
-        Err(message) => {
-            let _ = writeln!(err, "gsa: {message}");
-            return 2;
-        }
-    };
+    let state_dir = state_dir_of(inv).map_err(Exit::Usage)?;
     let log_dir = state_dir.join("logs");
     let db_root = pacman_db_root();
     let localdb = match LocalDb::load(&db_root) {
         Ok(localdb) => localdb,
         Err(message) => {
-            return finish_refused(
+            return Ok(finish_refused(
                 inv,
                 out,
                 err,
@@ -766,7 +736,7 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
                 &[],
                 "refused-plan-pacman-free",
                 &log_dir,
-            );
+            ));
         }
     };
     let swap_plan = if all {
@@ -781,7 +751,7 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
         ) {
             Ok(plan) => plan,
             Err(message) => {
-                return finish_refused(
+                return Ok(finish_refused(
                     inv,
                     out,
                     err,
@@ -789,7 +759,7 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
                     &[],
                     "refused-plan-pacman-free",
                     &log_dir,
-                );
+                ));
             }
         }
     };
@@ -800,7 +770,7 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
         let _ = writeln!(out, "abi-stale-record {provider} {consumer} dead-record");
     }
     if !swap_plan.uncovered.is_empty() {
-        return finish_refused(
+        return Ok(finish_refused(
             inv,
             out,
             err,
@@ -808,7 +778,7 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
             &[],
             "refused-plan-pacman-free",
             &log_dir,
-        );
+        ));
     }
     // Wave members the user did not name join the plan as candidates —
     // their archive sets must resolve, or the wave cannot land wholly and
@@ -889,7 +859,7 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
                 rows
             }
             Err(message) => {
-                return finish_refused(
+                return Ok(finish_refused(
                     inv,
                     out,
                     err,
@@ -897,7 +867,7 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
                     &[],
                     "refused-plan-pacman-free",
                     &log_dir,
-                );
+                ));
             }
         }
     };
@@ -968,12 +938,12 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
             render::render_run_prose(&record, &log_dir, &[], None)
         );
         let _ = write!(out, "{}", record.render_machine());
-        return 0;
+        return Ok(0);
     }
 
     // ── a refusing plan is pacman-free end to end (rule 25(h)) ──────────
     if rows.iter().any(|row| row.decision == Decision::Refuse) {
-        return finish_refused(
+        return Ok(finish_refused(
             inv,
             out,
             err,
@@ -981,7 +951,7 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
             &[],
             "refused-plan-pacman-free",
             &log_dir,
-        );
+        ));
     }
 
     // ── preflight, run lock (§K.3) ──────────────────────────────────────
@@ -997,11 +967,13 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
                 reason: "preflight-refused".to_string(),
             })
             .collect();
-        return finish_record(inv, out, err, plan, outcomes, true, false, &log_dir);
+        return Ok(finish_record(
+            inv, out, err, plan, outcomes, true, false, &log_dir,
+        ));
     }
     if let Err(message) = gsa_sched::lock::ensure_state_dirs(&state_dir, err) {
         let _ = writeln!(err, "gsa: {message}");
-        return finish_refused(
+        return Ok(finish_refused(
             inv,
             out,
             err,
@@ -1009,14 +981,14 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
             &[],
             "startup-refused",
             &log_dir,
-        );
+        ));
     }
     let run_id = gsa_sched::supervisor::run_id_now();
     let _run_lock = match gsa_sched::lock::acquire_run_lock(&state_dir) {
         Ok(lock) => lock,
         Err(message) => {
             let _ = writeln!(err, "gsa: {message}");
-            return finish_refused(
+            return Ok(finish_refused(
                 inv,
                 out,
                 err,
@@ -1024,7 +996,7 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
                 &[],
                 "startup-refused",
                 &log_dir,
-            );
+            ));
         }
     };
 
@@ -1082,7 +1054,7 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
                         row.subject.clone(),
                         format!("names-unestablished {message}"),
                     )];
-                    return finish_refused(
+                    return Ok(finish_refused(
                         inv,
                         out,
                         err,
@@ -1090,7 +1062,7 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
                         &overrides,
                         "refused-plan-pacman-free",
                         &log_dir,
-                    );
+                    ));
                 }
             }
         }
@@ -1123,7 +1095,7 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
                     .iter()
                     .map(|subject| (subject.clone(), format!("register-failed {message}")))
                     .collect();
-                return finish_refused(
+                return Ok(finish_refused(
                     inv,
                     out,
                     err,
@@ -1131,7 +1103,7 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
                     &overrides,
                     "refused-plan-pacman-free",
                     &log_dir,
-                );
+                ));
             }
         }
     }
@@ -1164,7 +1136,7 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
             }
             let mut all_rows = rows.clone();
             all_rows.extend(refusals);
-            return finish_refused(
+            return Ok(finish_refused(
                 inv,
                 out,
                 err,
@@ -1172,7 +1144,7 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
                 &[],
                 "refused-plan-pacman-free",
                 &log_dir,
-            );
+            ));
         }
     };
     let started = Instant::now();
@@ -1279,11 +1251,15 @@ pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -
                 }
             })
             .collect();
-        return finish_record(inv, out, err, plan, outcomes, false, true, &log_dir);
+        return Ok(finish_record(
+            inv, out, err, plan, outcomes, false, true, &log_dir,
+        ));
     }
 
     let outcomes = grouped_txn_outcome_rows(&paired, &fates, dur);
-    finish_record(inv, out, err, plan, outcomes, false, false, &log_dir)
+    Ok(finish_record(
+        inv, out, err, plan, outcomes, false, false, &log_dir,
+    ))
 }
 
 /// One `refuse` row for the "plan failed without a row" class (§E.3).
@@ -1786,27 +1762,32 @@ fn rollback_uninstalled(
 /// local-DB directory read and `decide`; the register/exec modules that
 /// spawn processes are never called here.
 pub fn run_install_decide(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
+    exit::render(run_install_decide_inner(args, out, err), err)
+}
+
+fn run_install_decide_inner(
+    args: &[String],
+    out: &mut dyn Write,
+    _err: &mut dyn Write,
+) -> Result<i32, Exit> {
     let Some((mode_word, archives)) = args.split_first() else {
-        let _ = writeln!(err, "gsa: --install-decide: unreadable argument list");
-        return 2;
+        return Err(Exit::Usage(
+            "--install-decide: unreadable argument list".to_string(),
+        ));
     };
-    let mode = match decide_mode(mode_word) {
-        Ok(mode) => mode,
-        Err(message) => {
-            let _ = writeln!(err, "gsa: {message}");
-            return 2;
-        }
-    };
+    let mode = decide_mode(mode_word).map_err(Exit::Usage)?;
     if archives.is_empty() {
-        let _ = writeln!(err, "gsa: --install-decide: unreadable argument list");
-        return 2;
+        return Err(Exit::Usage(
+            "--install-decide: unreadable argument list".to_string(),
+        ));
     }
     let mut candidates = Vec::new();
     for archive in archives {
         let path = PathBuf::from(archive);
         if !path.is_file() {
-            let _ = writeln!(err, "gsa: malformed archive argument '{archive}'");
-            return 2;
+            return Err(Exit::Usage(format!(
+                "malformed archive argument '{archive}'"
+            )));
         }
         candidates.push(Candidate {
             recipe_dir: path.parent().map(|p| p.to_path_buf()),
@@ -1857,27 +1838,33 @@ pub fn run_install_decide(args: &[String], out: &mut dyn Write, err: &mut dyn Wr
         Err(message) => vec![plan_failed_row(&message)],
     };
     let _ = write!(out, "{}", render_rows(&rows));
-    rows_rc(&rows)
+    Ok(rows_rc(&rows))
 }
 
 /// `gsa --install-register <conf> <subject> <names…>` (§D.1): the IgnorePkg
 /// registration write path in isolation, including its bounded `db.lck`
 /// wait (never a deletion — rule 23).
 pub fn run_install_register(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
+    exit::render(run_install_register_inner(args, out, err), err)
+}
+
+fn run_install_register_inner(
+    args: &[String],
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<i32, Exit> {
     if args.len() < 3 {
-        let _ = writeln!(
-            err,
-            "gsa: --install-register: wants <conf> <subject> <names…> (got {} argument(s))",
+        return Err(Exit::Usage(format!(
+            "--install-register: wants <conf> <subject> <names…> (got {} argument(s))",
             args.len()
-        );
-        return 2;
+        )));
     }
     let conf = Path::new(&args[0]);
     let subject = &args[1];
     let names = &args[2..];
     // Privilege gate (contract §B.10) AFTER the usage fence — §G.1 ranks
     // usage (2) above refusal (3).
-    if let Some(code) = crate::privilege_gate(
+    if let Some(exit) = crate::privilege_gate(
         "--install-register",
         crate::Privilege::Root {
             needs_build_user: false,
@@ -1885,16 +1872,16 @@ pub fn run_install_register(args: &[String], out: &mut dyn Write, err: &mut dyn 
         false,
         err,
     ) {
-        return code;
+        return Err(exit);
     }
     match register_ignorepkg(conf, subject, names, &pacman_db_root()) {
         Ok(report) => {
             let _ = writeln!(out, "{}", register_report_line(subject, conf, &report));
-            0
+            Ok(0)
         }
         Err(message) => {
             let _ = writeln!(err, "gsa: --install-register: {message}");
-            1
+            Ok(1)
         }
     }
 }
@@ -1904,36 +1891,30 @@ pub fn run_install_register(args: &[String], out: &mut dyn Write, err: &mut dyn 
 /// from the committed `.SRCINFO`s through `gsa-recipe`'s parsed metadata —
 /// never a PKGBUILD grep.
 pub fn run_register_ignorepkg(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
+    exit::render(run_register_ignorepkg_inner(args, out, err), err)
+}
+
+fn run_register_ignorepkg_inner(
+    args: &[String],
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<i32, Exit> {
     if args.len() > 1 {
-        let _ = writeln!(
-            err,
-            "gsa: --register-ignorepkg: takes at most one <conf> argument (got {})",
+        return Err(Exit::Usage(format!(
+            "--register-ignorepkg: takes at most one <conf> argument (got {})",
             args.len()
-        );
-        return 2;
+        )));
     }
     let conf = PathBuf::from(
         args.first()
             .cloned()
             .unwrap_or_else(|| DEFAULT_CONF.to_string()),
     );
-    let root = match crate::resolve_root(true, None) {
-        Ok(root) => root,
-        Err(message) => {
-            let _ = writeln!(err, "gsa: {message}");
-            return 2;
-        }
-    };
-    let db = match RecipeDb::load(&root, &[]) {
-        Ok(db) => db,
-        Err(error) => {
-            let _ = writeln!(err, "gsa: {error}");
-            return 2;
-        }
-    };
+    let root = crate::resolve_root(true, None).map_err(Exit::Usage)?;
+    let db = RecipeDb::load(&root, &[]).map_err(|error| Exit::Usage(error.to_string()))?;
     // Privilege gate (contract §B.10) AFTER the usage fences — §G.1 ranks
     // usage (2) above refusal (3).
-    if let Some(code) = crate::privilege_gate(
+    if let Some(exit) = crate::privilege_gate(
         "--register-ignorepkg",
         crate::Privilege::Root {
             needs_build_user: false,
@@ -1941,7 +1922,7 @@ pub fn run_register_ignorepkg(args: &[String], out: &mut dyn Write, err: &mut dy
         false,
         err,
     ) {
-        return code;
+        return Err(exit);
     }
     let mut names: BTreeSet<String> = BTreeSet::new();
     for id in &db.order {
@@ -1967,11 +1948,11 @@ pub fn run_register_ignorepkg(args: &[String], out: &mut dyn Write, err: &mut dy
     match register_ignorepkg(&conf, "workspace", &names, &pacman_db_root()) {
         Ok(report) => {
             let _ = writeln!(out, "{}", register_report_line("workspace", &conf, &report));
-            0
+            Ok(0)
         }
         Err(message) => {
             let _ = writeln!(err, "gsa: --register-ignorepkg: {message}");
-            1
+            Ok(1)
         }
     }
 }

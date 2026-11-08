@@ -17,9 +17,10 @@
 
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
-use std::collections::BTreeSet;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use gsa_model::RecipeId;
+use gsa_sched::progress::Progress;
 use gsa_sched::supervisor::SupEvent;
 
 use crate::render::fmt_dur;
@@ -111,24 +112,18 @@ struct Lane {
 }
 
 /// The run view fed by the supervisor's event stream (plus its ~1s tick).
+///
+/// Every tally is a PROJECTION: the view folds the events into a
+/// [`Progress`] — the same plan order and settled rows the run record renders
+/// (§H one-record rule) — and reads its numbers from there. The view owned
+/// its own counters until 2026-11-09 and drifted (`1/332` for a `--leaf`
+/// run, 2026-11-03); a derived tally cannot disagree with the rows.
 pub struct View {
     human: bool,
     interactive: bool,
     state_dir: PathBuf,
-    ids: Vec<String>,
-    /// The run's OWN package count — the selection, never the un-activated
-    /// remediation latents (§H `order` semantics: a latent joins the run
-    /// only when activated). An activated latent grows the total at its
-    /// dispatch (the box learns of activation no later than that).
-    total: usize,
-    /// Latent node ids (not counted in `total` until they join).
-    latent_ids: BTreeSet<String>,
-    /// Latent ids that already joined the run (counted).
-    joined: BTreeSet<String>,
+    progress: Progress,
     lanes: Vec<Lane>,
-    dispatched: usize,
-    succeeded: usize,
-    failed: usize,
     stop_starting: bool,
     last_event: String,
     spinner: usize,
@@ -141,23 +136,23 @@ pub struct View {
 const SPINNER_FRAMES: [char; 4] = ['-', '\\', '|', '/'];
 
 impl View {
+    /// `ids` is the run's carried node list in plan order (the `Started`
+    /// index addresses it); `latent_ids` names the remediation latents, which
+    /// stay out of the total until an activation dispatches them (§H `order`
+    /// semantics — a `--leaf` run must never render `1/332`).
     pub fn new(
         human: bool,
         state_dir: PathBuf,
-        ids: Vec<String>,
-        total: usize,
+        ids: Vec<RecipeId>,
         lane_count: usize,
-        latent_ids: Vec<String>,
+        latent_ids: Vec<RecipeId>,
     ) -> Self {
         let interactive = human && tty_enabled();
         View {
             human,
             interactive,
             state_dir,
-            ids,
-            total,
-            latent_ids: latent_ids.into_iter().collect(),
-            joined: BTreeSet::new(),
+            progress: Progress::new(ids, latent_ids),
             lanes: (0..lane_count.max(1))
                 .map(|_| Lane {
                     pkg: None,
@@ -165,9 +160,6 @@ impl View {
                     offset: 0,
                 })
                 .collect(),
-            dispatched: 0,
-            succeeded: 0,
-            failed: 0,
             stop_starting: false,
             last_event: String::new(),
             spinner: 1,
@@ -184,6 +176,11 @@ impl View {
     /// catalog line, or the machine kv line in machine mode — which simply
     /// passes through).
     pub fn handle(&mut self, event: &SupEvent, line: &str, out: &mut dyn Write) {
+        // The projection folds EVERY event, in every output mode: the run's
+        // tallies and the record must be the same structure whichever surface
+        // renders them (a machine stream carries no box but the run still
+        // settles against the record).
+        self.progress.observe(event);
         if !self.human {
             let _ = write!(out, "{line}");
             return;
@@ -193,14 +190,11 @@ impl View {
                 self.spinner = self.spinner % SPINNER_FRAMES.len() + 1;
             }
             SupEvent::Started { index, .. } => {
-                self.dispatched += 1;
-                let pkg = self.ids.get(*index).cloned().unwrap_or_default();
-                // A remediation latent joins the run's total at its
-                // dispatch — never before (2026-11-03: counting the latent
-                // pool up front showed a `--leaf` 1-package run as 1/332).
-                if self.latent_ids.contains(&pkg) && self.joined.insert(pkg.clone()) {
-                    self.total += 1;
-                }
+                let pkg = self
+                    .progress
+                    .pkg(*index)
+                    .map(|id| id.as_str().to_string())
+                    .unwrap_or_default();
                 let (epoch, offset) = self.lane_state(&pkg);
                 if let Some(lane) = self
                     .lanes
@@ -214,11 +208,6 @@ impl View {
                 self.last_event = line.trim_end().to_string();
             }
             SupEvent::Finished { row, .. } => {
-                match row.status {
-                    gsa_model::RowStatus::Succeeded => self.succeeded += 1,
-                    gsa_model::RowStatus::Failed => self.failed += 1,
-                    _ => {}
-                }
                 let pkg = row.pkg.as_str();
                 for lane in self.lanes.iter_mut() {
                     if lane.pkg.as_deref() == Some(pkg) {
@@ -243,6 +232,13 @@ impl View {
             let _ = write!(out, "{line}");
             self.status_hint(out);
         }
+    }
+
+    /// The projection this view renders — the caller binds it to the run
+    /// record after the run (`build.rs`): the dashboard is a view of the
+    /// record, never a fourth derivation of the run's state.
+    pub fn progress(&self) -> &Progress {
+        &self.progress
     }
 
     /// Restore the terminal when the box is done (and before any other
@@ -319,18 +315,24 @@ impl View {
     /// The box's rows (fish `render_dashboard`): progress header, one row per
     /// lane plus its three tail rows, spinner + last-event footer.
     fn rows_at(&self, now: u64) -> Vec<String> {
-        let (state, icon) = if self.failed > 0 {
+        let failed = self.progress.failed();
+        let succeeded = self.progress.succeeded();
+        let total = self.progress.total();
+        let (state, icon) = if failed > 0 {
             ("FAILED", '✗')
         } else if self.stop_starting {
             ("STOPPING", '⚠')
-        } else if self.succeeded == self.total && self.total > 0 {
+        } else if succeeded == total && total > 0 {
             ("DONE", '✓')
         } else {
             ("RUNNING", '→')
         };
         let mut rows = vec![format!(
             "Progress: {}/{} started | {} done | {} failed | {icon} {state}",
-            self.dispatched, self.total, self.succeeded, self.failed
+            self.progress.dispatched(),
+            total,
+            succeeded,
+            failed
         )];
         for (i, lane) in self.lanes.iter().enumerate() {
             match &lane.pkg {
@@ -405,6 +407,32 @@ impl View {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gsa_model::{OutcomeRow, RowStatus};
+
+    fn id(name: &str) -> RecipeId {
+        RecipeId::new(name).expect("test id")
+    }
+
+    fn started(index: usize) -> SupEvent {
+        SupEvent::Started {
+            index,
+            jobs: 1,
+            core: false,
+        }
+    }
+
+    fn settled(pkg: &str, status: RowStatus, rc: Option<i32>) -> SupEvent {
+        SupEvent::Finished {
+            index: 0,
+            row: OutcomeRow {
+                pkg: id(pkg),
+                status,
+                rc,
+                dur: Some(1),
+                reason: "test".to_string(),
+            },
+        }
+    }
 
     #[test]
     fn sanitize_strips_terminal_controls() {
@@ -432,24 +460,24 @@ mod tests {
         std::fs::create_dir_all(state.join("runs/42-1")).unwrap();
         std::fs::create_dir_all(state.join("logs")).unwrap();
         std::fs::write(state.join("runs/current"), "42-1\n").unwrap();
-        std::fs::write(state.join("runs/42-1/p1.started"), "pid=9 epoch=100 log-offset=0\n").unwrap();
+        // The offset is the run-scoped tail start: 13 bytes skipped.
+        std::fs::write(state.join("runs/42-1/p1.started"), "pid=9 epoch=100 log-offset=13\n").unwrap();
         std::fs::write(state.join("logs/p1.log"), "old run line\nmake: up to date\ncc p1.c\n").unwrap();
 
         let mut view = View::new(
             true,
             state.clone(),
-            vec!["p1".to_string(), "p2".to_string()],
-            2,
+            vec![id("p1"), id("p2")],
             2,
             Vec::new(),
         );
         view.interactive = true;
         view.width = 80;
+        let mut out = Vec::new();
         // p1 has been running 5s; p2 is done; one lane idles.
-        view.dispatched = 2;
-        view.succeeded = 1;
-        view.lanes[0] = Lane { pkg: Some("p1".to_string()), epoch: 100, offset: 13 };
-        view.last_event = "✓ p2 (1s)".to_string();
+        view.handle(&started(0), "→ p1", &mut out);
+        view.handle(&started(1), "→ p2", &mut out);
+        view.handle(&settled("p2", RowStatus::Succeeded, Some(0)), "✓ p2 (1s)", &mut out);
         let rows = view.rows_at(105);
         assert_eq!(
             rows[0],
@@ -475,28 +503,15 @@ mod tests {
         let mut view = View::new(
             true,
             PathBuf::new(),
-            vec![
-                "leaf".to_string(),
-                "rust-git".to_string(),
-                "core-x".to_string(),
-            ],
+            vec![id("leaf"), id("rust-git"), id("core-x")],
             1,
-            1,
-            vec!["rust-git".to_string(), "core-x".to_string()],
+            vec![id("rust-git"), id("core-x")],
         );
         view.interactive = true;
         view.width = 80;
         let mut out = Vec::new();
         // The selection's package runs while both latents stay parked.
-        view.handle(
-            &SupEvent::Started {
-                index: 0,
-                jobs: 1,
-                core: false,
-            },
-            "-",
-            &mut out,
-        );
+        view.handle(&started(0), "-", &mut out);
         let rows = view.rows_at(0);
         assert_eq!(
             rows[0], "Progress: 1/1 started | 0 done | 0 failed | → RUNNING",
@@ -505,15 +520,7 @@ mod tests {
         // Remediation activates the latents: each joins the total exactly
         // at its dispatch.
         for index in [1, 2] {
-            view.handle(
-                &SupEvent::Started {
-                    index,
-                    jobs: 1,
-                    core: false,
-                },
-                "-",
-                &mut out,
-            );
+            view.handle(&started(index), "-", &mut out);
         }
         let rows = view.rows_at(0);
         assert_eq!(
@@ -523,18 +530,79 @@ mod tests {
     }
 
     #[test]
+    fn the_box_totals_are_the_projection() {
+        // The tallies the box renders are DERIVED from the same order and
+        // rows the run record renders (§H one-record rule) — the view keeps
+        // no counter of its own to drift from them.
+        let mut view = View::new(
+            true,
+            PathBuf::new(),
+            vec![id("p1"), id("p2"), id("p3")],
+            2,
+            vec![id("p3")],
+        );
+        let mut out = Vec::new();
+        assert_eq!(
+            (
+                view.progress().total(),
+                view.progress().dispatched(),
+                view.progress().succeeded(),
+                view.progress().failed(),
+            ),
+            (2, 0, 0, 0),
+            "the latent pool is not in the run's total"
+        );
+        view.handle(&started(0), "-", &mut out);
+        view.handle(&started(1), "-", &mut out);
+        view.handle(&settled("p1", RowStatus::Succeeded, Some(0)), "-", &mut out);
+        view.handle(&settled("p2", RowStatus::Failed, Some(1)), "-", &mut out);
+        assert_eq!(
+            view.rows_at(0)[0],
+            "Progress: 2/2 started | 1 done | 1 failed | ✗ FAILED"
+        );
+        view.handle(&started(2), "-", &mut out);
+        assert_eq!(
+            view.rows_at(0)[0],
+            "Progress: 3/3 started | 1 done | 1 failed | ✗ FAILED",
+            "an activated latent grows the total, never the settled counts"
+        );
+        // Derived: the counts ARE a fold over the settled rows, not fields.
+        let rows = view.progress().rows();
+        assert_eq!(
+            view.progress().succeeded(),
+            rows.iter().filter(|r| r.status == RowStatus::Succeeded).count()
+        );
+        assert_eq!(
+            view.progress().failed(),
+            rows.iter().filter(|r| r.status == RowStatus::Failed).count()
+        );
+    }
+
+    #[test]
     fn failed_stops_the_header_first() {
-        let mut view = View::new(true, PathBuf::new(), Vec::new(), 3, 1, Vec::new());
-        view.dispatched = 3;
-        view.failed = 1;
+        let ids = vec![id("p1"), id("p2"), id("p3")];
+        let mut out = Vec::new();
+        // One failure outranks the stop and the completion.
+        let mut view = View::new(true, PathBuf::new(), ids.clone(), 1, Vec::new());
+        for index in 0..3 {
+            view.handle(&started(index), "-", &mut out);
+        }
+        view.handle(&settled("p1", RowStatus::Failed, Some(1)), "-", &mut out);
         view.stop_starting = true;
-        view.succeeded = 2;
         assert!(view.rows_at(0)[0].ends_with("✗ FAILED"));
-        view.failed = 0;
+
+        // A clean run: dispatch stopped mid-way, then every lane landed.
+        let mut view = View::new(true, PathBuf::new(), ids.clone(), 1, Vec::new());
+        for index in 0..3 {
+            view.handle(&started(index), "-", &mut out);
+        }
+        view.stop_starting = true;
+        view.handle(&settled("p1", RowStatus::Succeeded, Some(0)), "-", &mut out);
+        view.handle(&settled("p2", RowStatus::Succeeded, Some(0)), "-", &mut out);
         assert!(view.rows_at(0)[0].ends_with("⚠ STOPPING"));
         view.stop_starting = false;
         assert!(view.rows_at(0)[0].ends_with("→ RUNNING"));
-        view.succeeded = 3;
+        view.handle(&settled("p3", RowStatus::Succeeded, Some(0)), "-", &mut out);
         assert!(view.rows_at(0)[0].ends_with("✓ DONE"));
     }
 }

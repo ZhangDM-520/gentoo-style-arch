@@ -10,12 +10,13 @@
 use std::io::Write;
 use std::path::PathBuf;
 
-use gsa_maint::{MaintCtx, Row, RC_OK, RC_REFUSAL, RC_USAGE};
+use gsa_maint::{MaintCtx, Row, RC_OK, RC_REFUSAL};
 use gsa_recipe::RecipeDb;
 use gsa_state::StateRoot;
 use gsa_topo::load_project;
 
 use crate::args::Invocation;
+use crate::exit::{self, Exit};
 use crate::install::DEFAULT_CONF;
 use crate::select::{self, Ctx};
 use crate::{cmd_error, write_notes};
@@ -128,116 +129,79 @@ pub(crate) fn privilege(inv: &Invocation) -> super::Privilege {
 }
 
 pub fn run(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
-    let verb = match verb_of(inv) {
-        Ok(verb) => verb,
-        Err(message) => {
-            let _ = writeln!(err, "gsa: {message}");
-            return RC_USAGE;
-        }
-    };
+    exit::render(run_inner(inv, out, err), err)
+}
+
+/// `Ok(code)` carries the §G.1 outcome rc the verb computed (0/1/3);
+/// `Err(exit)` is a usage-class gate the ONE renderer maps.
+fn run_inner(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> Result<i32, Exit> {
+    let verb = verb_of(inv).map_err(Exit::Usage)?;
 
     // Per-verb usage fences (§B.7's shapes).
     match verb {
         MaintVerb::Audit | MaintVerb::Mirrors if !inv.targets.is_empty() => {
-            let _ = writeln!(err, "gsa: {} takes no targets", inv.spelling());
-            return RC_USAGE;
+            return Err(Exit::Usage(format!("{} takes no targets", inv.spelling())));
         }
         MaintVerb::Doctor | MaintVerb::IgnorePkg | MaintVerb::History
             if !inv.targets.is_empty() =>
         {
-            let _ = writeln!(
-                err,
-                "gsa: {} takes no targets (its arguments are flags: --fix / --prune --backfill / --show)",
+            return Err(Exit::Usage(format!(
+                "{} takes no targets (its arguments are flags: --fix / --prune --backfill / --show)",
                 inv.spelling()
-            );
-            return RC_USAGE;
+            )));
         }
         MaintVerb::Logs if !inv.targets.is_empty() => {
-            let _ = writeln!(
-                err,
-                "gsa: -Ml takes no targets (browse with --tail <ref>, prune with --keep N)"
-            );
-            return RC_USAGE;
+            return Err(Exit::Usage(
+                "-Ml takes no targets (browse with --tail <ref>, prune with --keep N)".to_string(),
+            ));
         }
         MaintVerb::Prune(2) | MaintVerb::Prune(3) if !inv.targets.is_empty() => {
-            let _ = writeln!(
-                err,
-                "gsa: {} takes no targets (it is a workspace-wide wipe)",
+            return Err(Exit::Usage(format!(
+                "{} takes no targets (it is a workspace-wide wipe)",
                 inv.spelling()
-            );
-            return RC_USAGE;
+            )));
         }
         _ => {}
     }
     if !inv.ranges.is_empty() && !matches!(verb, MaintVerb::Prune(1)) {
-        let _ = writeln!(
-            err,
-            "gsa: index ranges address an -S/-B selection (see 'gsa -Sl')"
-        );
-        return RC_USAGE;
+        return Err(Exit::Usage(
+            "index ranges address an -S/-B selection (see 'gsa -Sl')".to_string(),
+        ));
     }
     if inv.leaf && !matches!(verb, MaintVerb::Prune(1)) {
-        let _ = writeln!(err, "gsa: --leaf applies to -Mc's pruning selection");
-        return RC_USAGE;
+        return Err(Exit::Usage(
+            "--leaf applies to -Mc's pruning selection".to_string(),
+        ));
     }
     if has_flag(inv, "--add") && has_flag(inv, "--remove") {
-        let _ = writeln!(
-            err,
-            "gsa: --add and --remove are alternatives (one per invocation)"
-        );
-        return RC_USAGE;
+        return Err(Exit::Usage(
+            "--add and --remove are alternatives (one per invocation)".to_string(),
+        ));
     }
     if has_flag(inv, "--prune") && has_flag(inv, "--backfill") {
-        let _ = writeln!(err, "gsa: -Mi takes ONE of --prune / --backfill");
-        return RC_USAGE;
+        return Err(Exit::Usage(
+            "-Mi takes ONE of --prune / --backfill".to_string(),
+        ));
     }
 
-    let root = match crate::resolve_workspace(inv) {
-        Ok(root) => root,
-        Err(message) => {
-            let _ = writeln!(err, "gsa: {message}");
-            return RC_USAGE;
-        }
-    };
-    let project = match load_project(&root) {
-        Ok(project) => project,
-        Err(error) => {
-            let _ = writeln!(err, "gsa: {}", cmd_error(error.to_string()));
-            return RC_USAGE;
-        }
-    };
-    let graph = match gsa_graph::Graph::build(&project.topology.records) {
-        Ok(graph) => graph,
-        Err(error) => {
-            let _ = writeln!(err, "gsa: config/topology.conf: {error}");
-            return RC_USAGE;
-        }
-    };
-    let db = match RecipeDb::load(&root, graph.records()) {
-        Ok(db) => db,
-        Err(error) => {
-            let _ = writeln!(err, "gsa: {}", cmd_error(error.to_string()));
-            return RC_USAGE;
-        }
-    };
+    let root = crate::resolve_workspace(inv).map_err(Exit::Usage)?;
+    let project = load_project(&root).map_err(|error| Exit::Usage(cmd_error(error.to_string())))?;
+    let graph = gsa_graph::Graph::build(&project.topology.records)
+        .map_err(|error| Exit::Usage(format!("config/topology.conf: {error}")))?;
+    let db = RecipeDb::load(&root, graph.records())
+        .map_err(|error| Exit::Usage(cmd_error(error.to_string())))?;
     // ── privilege gate (contract §B.10; after every usage preflight and
     //    before the first state access) ──────────────────────────────────
-    if let Some(code) = crate::privilege_gate(&inv.spelling(), privilege(inv), true, err) {
-        return code;
+    if let Some(exit) = crate::privilege_gate(&inv.spelling(), privilege(inv), true, err) {
+        return Err(exit);
     }
 
-    let state_dir = match gsa_state::resolve_state_root(inv.state_dir.as_deref()) {
-        Ok(dir) => dir,
-        Err(message) => {
-            let _ = writeln!(err, "gsa: {message}");
-            return 2;
-        }
-    };
+    let state_dir = gsa_state::resolve_state_root(inv.state_dir.as_deref()).map_err(Exit::Usage)?;
     let state = match StateRoot::open(&state_dir) {
         Ok(state) => state,
         Err(error) => {
             let _ = writeln!(err, "gsa: {error}");
-            return RC_REFUSAL;
+            return Ok(RC_REFUSAL);
         }
     };
     let ctx = MaintCtx {
@@ -270,7 +234,7 @@ pub fn run(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
                         (outcome.rows, rc)
                     })
                 });
-                return finish(result, out, err, "-Md --fix");
+                return Ok(finish(result, out, err, "-Md --fix"));
             }
             rows.extend(gsa_maint::doctor::report(&ctx));
         }
@@ -287,7 +251,7 @@ pub fn run(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
             } else {
                 gsa_maint::ignorepkg::report(&ctx, &conf).map(|rows| (rows, RC_OK))
             };
-            return finish(result, out, err, "-Mi");
+            return Ok(finish(result, out, err, "-Mi"));
         }
         MaintVerb::Logs => {
             if let Some(spec) = &inv.tail {
@@ -310,15 +274,14 @@ pub fn run(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
                             rows.push(Row::new(&id, "log-missing", path.display().to_string()));
                         }
                     }
-                    Err(rc) => return rc,
+                    Err(exit) => return Err(exit),
                 }
             }
             if let Some(spec) = &inv.keep {
                 let keep: usize = match spec.parse() {
                     Ok(keep) => keep,
                     Err(_) => {
-                        let _ = writeln!(err, "gsa: --keep wants a number (got '{spec}')");
-                        return RC_USAGE;
+                        return Err(Exit::Usage(format!("--keep wants a number (got '{spec}')")));
                     }
                 };
                 match mutating_rows(&state_dir, inv, out, err, "logs", |apply| {
@@ -331,14 +294,14 @@ pub fn run(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
                         rows.extend(prune_rows);
                         if prune_rc != RC_OK {
                             let _ = write!(out, "{}", gsa_maint::render_rows(&rows));
-                            return prune_rc;
+                            return Ok(prune_rc);
                         }
                     }
                     Err(message) => {
                         if !message.is_empty() {
                             let _ = writeln!(err, "gsa: -Ml --keep: {message}");
                         }
-                        return RC_REFUSAL;
+                        return Ok(RC_REFUSAL);
                     }
                 }
             } else if inv.tail.is_none() {
@@ -376,17 +339,17 @@ pub fn run(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
                     }
                     Err(message) => {
                         let _ = writeln!(err, "gsa: -Mm: {message}");
-                        return RC_REFUSAL;
+                        return Ok(RC_REFUSAL);
                     }
                 }
                 let _ = writeln!(err, "gsa: -Mm {}", gsa_maint::CONFIRMATION_REQUIRED);
-                return RC_REFUSAL;
+                return Ok(RC_REFUSAL);
             }
             let apply = !inv.dry_run;
             let _lock = if apply {
                 match hold_lock(&state_dir, err, "mirrors") {
                     Ok(lock) => Some(lock),
-                    Err(rc) => return rc,
+                    Err(rc) => return Ok(rc),
                 }
             } else {
                 None
@@ -395,24 +358,20 @@ pub fn run(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
                 Ok(plan) => rows.extend(plan),
                 Err(message) => {
                     let _ = writeln!(err, "gsa: -Mm: {message}");
-                    return RC_REFUSAL;
+                    return Ok(RC_REFUSAL);
                 }
             }
         }
         MaintVerb::Prune(strength) => {
             let recipes: Vec<String> = if strength == 1 {
                 if inv.targets.is_empty() {
-                    let _ = writeln!(err, "gsa: -Mc requires a selection (targets or @set)");
-                    return RC_USAGE;
+                    return Err(Exit::Usage(
+                        "-Mc requires a selection (targets or @set)".to_string(),
+                    ));
                 }
                 let selection =
-                    match select::build_selection(&sel_ctx, &inv.targets, &inv.ranges, inv.leaf) {
-                        Ok(selection) => selection,
-                        Err(error) => {
-                            let _ = writeln!(err, "gsa: {}", cmd_error(error.to_string()));
-                            return RC_USAGE;
-                        }
-                    };
+                    select::build_selection(&sel_ctx, &inv.targets, &inv.ranges, inv.leaf)
+                        .map_err(|error| Exit::Usage(cmd_error(error.to_string())))?;
                 write_notes(err, &selection.notes);
                 selection
                     .listed
@@ -450,14 +409,14 @@ pub fn run(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
                     }
                     Err(message) => {
                         let _ = writeln!(err, "gsa: {}: {message}", inv.spelling());
-                        return RC_REFUSAL;
+                        return Ok(RC_REFUSAL);
                     }
                 }
                 let _ = writeln!(err, "gsa: -Mccc {}", gsa_maint::CONFIRMATION_REQUIRED);
-                return RC_REFUSAL;
+                return Ok(RC_REFUSAL);
             }
             let result = mutating_rows(&state_dir, inv, out, err, "prune", run_strength);
-            return finish(result, out, err, inv.spelling().as_str());
+            return Ok(finish(result, out, err, inv.spelling().as_str()));
         }
         MaintVerb::Sets => {
             let add = has_flag(inv, "--add");
@@ -467,30 +426,26 @@ pub fn run(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
                 let (name, refs) = match inv.targets.split_first() {
                     Some((name, refs)) => (name.clone(), refs),
                     None => {
-                        let _ = writeln!(
-                            err,
-                            "gsa: -Ms --add/--remove wants one set name and its references"
-                        );
-                        return RC_USAGE;
+                        return Err(Exit::Usage(
+                            "-Ms --add/--remove wants one set name and its references".to_string(),
+                        ));
                     }
                 };
                 // A name that is not an editable user set (computed set or
                 // bad id class) is a USAGE error (§G.1), before any kv work;
                 // what remains after this gate are write failures (rc 3).
-                if let Err(message) = gsa_maint::sets::user_set_name(&name) {
-                    let _ = writeln!(err, "gsa: {message}");
-                    return RC_USAGE;
-                }
+                gsa_maint::sets::user_set_name(&name).map_err(Exit::Usage)?;
                 let mut ids = Vec::new();
                 for spec in refs {
                     match resolve_one(&sel_ctx, spec, err) {
                         Ok(id) => ids.push(id),
-                        Err(rc) => return rc,
+                        Err(exit) => return Err(exit),
                     }
                 }
                 if ids.is_empty() {
-                    let _ = writeln!(err, "gsa: -Ms --add/--remove wants at least one reference");
-                    return RC_USAGE;
+                    return Err(Exit::Usage(
+                        "-Ms --add/--remove wants at least one reference".to_string(),
+                    ));
                 }
                 let result = mutating_rows(&state_dir, inv, out, err, "sets", |apply| {
                     gsa_maint::sets::edit_set(
@@ -503,14 +458,11 @@ pub fn run(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
                     )
                     .map(|rows| (rows, RC_OK))
                 });
-                return finish(result, out, err, "-Ms");
+                return Ok(finish(result, out, err, "-Ms"));
             }
             match gsa_maint::sets::set_rows(&ctx, &state, &inv.targets) {
                 Ok(listed) => rows.extend(listed),
-                Err(message) => {
-                    let _ = writeln!(err, "gsa: {message}");
-                    return RC_USAGE;
-                }
+                Err(message) => return Err(Exit::Usage(message)),
             }
         }
         MaintVerb::World => {
@@ -521,12 +473,13 @@ pub fn run(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
                 for spec in &inv.targets {
                     match resolve_one(&sel_ctx, spec, err) {
                         Ok(id) => ids.push(id),
-                        Err(rc) => return rc,
+                        Err(exit) => return Err(exit),
                     }
                 }
                 if ids.is_empty() {
-                    let _ = writeln!(err, "gsa: -Mw --add/--remove wants at least one reference");
-                    return RC_USAGE;
+                    return Err(Exit::Usage(
+                        "-Mw --add/--remove wants at least one reference".to_string(),
+                    ));
                 }
                 let result = mutating_rows(&state_dir, inv, out, err, "world", |apply| {
                     gsa_maint::sets::edit_world(
@@ -538,14 +491,11 @@ pub fn run(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
                     )
                     .map(|rows| (rows, RC_OK))
                 });
-                return finish(result, out, err, "-Mw");
+                return Ok(finish(result, out, err, "-Mw"));
             }
             match gsa_maint::sets::world_rows(&ctx, &state) {
                 Ok(listed) => rows.extend(listed),
-                Err(message) => {
-                    let _ = writeln!(err, "gsa: {message}");
-                    return RC_USAGE;
-                }
+                Err(message) => return Err(Exit::Usage(message)),
             }
         }
         MaintVerb::History => {
@@ -553,11 +503,9 @@ pub fn run(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
                 let id: usize = match spec.parse() {
                     Ok(id) if id > 0 => id,
                     _ => {
-                        let _ = writeln!(
-                            err,
-                            "gsa: --show wants a run id (1-based over the recorded history)"
-                        );
-                        return RC_USAGE;
+                        return Err(Exit::Usage(
+                            "--show wants a run id (1-based over the recorded history)".to_string(),
+                        ));
                     }
                 };
                 match gsa_maint::history::show(&state, id) {
@@ -565,8 +513,7 @@ pub fn run(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
                         let _ = write!(out, "{block}");
                     }
                     Err(message) => {
-                        let _ = writeln!(err, "gsa: -Mh --show: {message}");
-                        return RC_USAGE;
+                        return Err(Exit::Usage(format!("-Mh --show: {message}")));
                     }
                 }
             }
@@ -574,14 +521,14 @@ pub fn run(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
                 let result = mutating_rows(&state_dir, inv, out, err, "history", |apply| {
                     gsa_maint::history::prune(&state, apply).map(|rows| (rows, RC_OK))
                 });
-                return finish(result, out, err, "-Mh --prune");
+                return Ok(finish(result, out, err, "-Mh --prune"));
             }
             if inv.show.is_none() {
                 match gsa_maint::history::list_rows(&state) {
                     Ok(listed) => rows.extend(listed),
                     Err(message) => {
                         let _ = writeln!(err, "gsa: -Mh: {message}");
-                        return RC_REFUSAL;
+                        return Ok(RC_REFUSAL);
                     }
                 }
                 if rows.is_empty() {
@@ -591,23 +538,18 @@ pub fn run(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
         }
     }
     let _ = write!(out, "{}", gsa_maint::render_rows(&rows));
-    rc
+    Ok(rc)
 }
 
 /// Resolve one §C.1 reference to its recipe id (typo = usage error with
 /// nearest candidates, from the ordinary selection layer).
-fn resolve_one(ctx: &Ctx<'_>, spec: &str, err: &mut dyn Write) -> Result<String, i32> {
-    let (found, notes) = select::resolve_ref(ctx, spec, 0).map_err(|e| {
-        let _ = writeln!(err, "gsa: {}", cmd_error(e.to_string()));
-        RC_USAGE
-    })?;
+fn resolve_one(ctx: &Ctx<'_>, spec: &str, err: &mut dyn Write) -> Result<String, Exit> {
+    let (found, notes) =
+        select::resolve_ref(ctx, spec, 0).map_err(|e| Exit::Usage(cmd_error(e.to_string())))?;
     write_notes(err, &notes);
     match found.first() {
         Some(&idx) => Ok(ctx.graph.record(idx).id.as_str().to_string()),
-        None => {
-            let _ = writeln!(err, "gsa: selection resolved to no packages");
-            Err(RC_USAGE)
-        }
+        None => Err(Exit::Usage("selection resolved to no packages".to_string())),
     }
 }
 

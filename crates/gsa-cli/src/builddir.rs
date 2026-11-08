@@ -23,20 +23,16 @@ use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 
 use crate::args::Invocation;
+use crate::exit::Exit;
 use crate::prompt::{prompt_build_dir, BuildDirOutcome};
 
 /// Resolve the run's build root, prompting on a TTY when nothing named it.
-/// `Ok(())` means every later `build_layout_for_run()` call agrees; `Err(rc)`
-/// is the process exit code the caller returns unchanged.
-pub fn resolve(inv: &mut Invocation, err: &mut dyn Write) -> Result<(), i32> {
+/// `Ok(())` means every later `build_layout_for_run()` call agrees; `Err(exit)`
+/// is the typed usage-class failure the caller returns unchanged.
+pub fn resolve(inv: &mut Invocation, err: &mut dyn Write) -> Result<(), Exit> {
     if let Some(raw) = inv.build_dir.clone() {
-        let root = match operator_path(&raw) {
-            Ok(root) => root,
-            Err(message) => {
-                let _ = writeln!(err, "gsa: --build-dir: {message}");
-                return Err(2);
-            }
-        };
+        let root = operator_path(&raw)
+            .map_err(|message| Exit::Usage(format!("--build-dir: {message}")))?;
         apply(inv, root);
         return Ok(());
     }
@@ -47,20 +43,8 @@ pub fn resolve(inv: &mut Invocation, err: &mut dyn Write) -> Result<(), i32> {
     if !stdin.is_terminal() {
         return Ok(());
     }
-    let cfg = match gsa_model::config::load() {
-        Ok(cfg) => cfg,
-        Err(message) => {
-            let _ = writeln!(err, "gsa: {message}");
-            return Err(2);
-        }
-    };
-    let (default, source) = match gsa_model::config::build_root_with_source(&cfg) {
-        Ok(resolved) => resolved,
-        Err(message) => {
-            let _ = writeln!(err, "gsa: {message}");
-            return Err(2);
-        }
-    };
+    let cfg = gsa_model::config::load().map_err(Exit::Usage)?;
+    let (default, source) = gsa_model::config::build_root_with_source(&cfg).map_err(Exit::Usage)?;
     let home = gsa_model::config::build_user_home().unwrap_or_else(|_| PathBuf::from("/"));
     match prompt_build_dir(&default, source, &home, err, &mut stdin.lock()) {
         Ok(BuildDirOutcome::Default) => Ok(()),
@@ -68,14 +52,10 @@ pub fn resolve(inv: &mut Invocation, err: &mut dyn Write) -> Result<(), i32> {
             apply(inv, root);
             Ok(())
         }
-        Ok(BuildDirOutcome::Abort(reason)) => {
-            let _ = writeln!(err, "gsa: {reason}");
-            Err(2)
-        }
-        Err(error) => {
-            let _ = writeln!(err, "gsa: cannot read the build-dir answer: {error}");
-            Err(2)
-        }
+        Ok(BuildDirOutcome::Abort(reason)) => Err(Exit::Usage(reason.to_string())),
+        Err(error) => Err(Exit::Usage(format!(
+            "cannot read the build-dir answer: {error}"
+        ))),
     }
 }
 

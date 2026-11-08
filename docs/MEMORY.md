@@ -2048,22 +2048,6 @@ going stale.
 
 ### Queued (claim by editing this section)
 
-- **audit deepening wave 2 (2026-11-08, planned)**: the defects from the
-  review are fixed (NOTE.md 2026-11-08, silent-failure wave 1); these are the
-  structural deepenings it named, each needing a design decision rather than a
-  patch: (1) **one root resolution** — `resolve_state_dir_from`
-  (`gsa-model/src/config.rs:456`), `recipe_root_from` (:501),
-  `build_root_with_source` (:59) and `resolve_srcdest` (:352) hand-roll the
-  same env > config > default ladder; only the build root reports provenance,
-  and `gsa -Md`/`env-required` re-derive it. (2) **the dashboard projects the
-  run record** instead of recounting it (`gsa-cli/src/dashboard.rs:114-210`
-  keeps its own totals and already drifted once — commit `474b575`). (3) **one
-  refusal seam** for the exit-code contract: `refuse_before_dispatch` is now
-  the shape, but the remaining rc-3 sites are still hand-built. Report:
-  `/tmp/architecture-review-20261108-231647.html` §"Deepening candidates";
-  the store-format stamp (5) rides the recipe-repo split entry, the repo split
-  (6) is queued below.
-
 - **recipe repo split (2026-11-08, planned — research COMPLETE)**: move the
   recipe half (`packages/`, `config/`, `lib/`, the recipe docs, the fixtures
   that walk the real tree) into its own repository so recipe churn stops
@@ -2520,6 +2504,14 @@ constant, not a baked path); and the xorg-xwayland-git PGO end-to-end proof
 
 ## 6. Pitfall digest (full details: NOTE.md sections of same dates):
 
+- **A fourth derivation always drifts — make the second one a projection**
+  (2026-11-09, deepening wave 2): `gsa_sched::progress::Progress` is the one
+  fold of the supervisor's events (dashboard renders it, `drift()` binds it to
+  the record); the four root ladders collapsed onto
+  `gsa-model::config::resolve` with provenance; every `return 2`/`return 3` in
+  `gsa-cli` became a typed `Exit` rendered once. Rules 72–74 are the
+  contracts; details: NOTE.md 2026-11-09 (deepening wave 2). (last reviewed
+  2026-11-09)
 - **An unreadable read is not an absent one — and a `failed` row must reach
   the exit code** (2026-11-08, silent-failure wave 1): three-state reads
   (`gsa_model::read`), the `-Syu` refusal routed through
@@ -4441,6 +4433,29 @@ constant, not a baked path); and the xorg-xwayland-git PGO end-to-end proof
     refuse on `Broken`; a `failed` row that leaves the exit code at 0 is the
     same bug one layer up. Details: NOTE.md 2026-11-08 (silent-failure wave
     1). (last reviewed 2026-11-08)
+72. **A live view is a PROJECTION of the run record, never its own counters**
+    (2026-11-09, deepening wave 2): the dashboard counted `total`,
+    `dispatched`, `succeeded` and `failed` beside the record and drifted
+    (`474b575`: a `--leaf` run rendered `1/332`). `gsa_sched::progress::
+    Progress` is now the one fold (plan order + settled rows), every number is
+    derived from it, and `build.rs` asserts `drift()` is `None` after the run.
+    A new view reads `Progress`; it must not add a counter that can disagree
+    with the rows. (last reviewed 2026-11-09)
+73. **One resolution ladder per setting, and it names the rung** (2026-11-09,
+    deepening wave 2): build root, state root, recipe store and `SRCDEST` all
+    resolve through `gsa-model::config::{resolve,resolve_opt}` with a
+    provenance label; `gsa-state::DEFAULT_STATE_ROOT` re-exports the model's
+    literal. A new setting adds a rung list to that ladder — never a second
+    `if let Some(env) … if let Some(cfg)` chain, and never a copied default.
+    (last reviewed 2026-11-09)
+74. **An early exit is a typed `Exit`; one renderer owns the code** (2026-11-09,
+    deepening wave 2): `crates/gsa-cli/src/exit.rs` maps §G.1 and prints only
+    what a refusal still owes (a `record: Yes` refusal printed its record
+    already). Steps return `Err(Exit::Usage(..))`/`Err(Exit::Refuse(..))`; a
+    new step must never `return 2`/`return 3` on its own. The documented
+    exceptions (the `--local-db-check` verb fence, `lib.rs`'s dispatch-level
+    codes, `maint` row-derived refusals, `gsa-qa`) stay where they are.
+    (last reviewed 2026-11-09)
 - **`git apply -3 --check` exits 0 even when the patch conflicts — validate a
   repaired patch stack by CONTENT on a fresh clone, never by rc** (2026-11-02,
   umbriel-git drift repair): `--check` reported clean applies for a stack that

@@ -1936,6 +1936,29 @@ mod tests {
         stub
     }
 
+    /// [`run_watched`]'s sibling: the same watchdog, but every `SupEvent` the
+    /// run emits is captured — the input the live projection folds.
+    fn run_capturing(setup: RunSetup) -> (SupOutcome, Vec<SupEvent>, String) {
+        let _guard = crate::signals::TEST_SIGNAL_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut captured: Vec<SupEvent> = Vec::new();
+            let mut err: Vec<u8> = Vec::new();
+            let outcome = {
+                let mut sink = |event: &SupEvent| captured.push(event.clone());
+                run(setup, &mut sink, &mut err)
+            };
+            let _ = tx.send((outcome, captured, String::from_utf8_lossy(&err).into_owned()));
+        });
+        let (outcome, captured, err) = rx.recv_timeout(Duration::from_secs(20)).expect(
+            "the supervisor must terminate once its lane is gone — a teardown hang skips \
+             machine.record and the run never settles (contract §K)",
+        );
+        (outcome.expect("run must settle without error"), captured, err)
+    }
+
     /// Run one supervisor pass on its own thread behind a watchdog; the run
     /// MUST terminate — a hang fails the named expectation instead of the
     /// suite. Returns (outcome, count of `Finished` events, stderr).
@@ -2180,5 +2203,88 @@ mod tests {
                 "the parked lane's process must be gone after the run settled (pid {pid})"
             );
         }
+    }
+
+    /// §H one-record rule: the live view and the run record are two views of
+    /// ONE machine, bound by the event stream. Folding the captured events
+    /// through [`Progress`] must reproduce the record's rows and `order`
+    /// exactly — including the reordering that a settlement-ordered fold
+    /// would get wrong (p1 is the slow lane, so completion order is not plan
+    /// order).
+    #[test]
+    fn the_event_projection_equals_the_run_record() {
+        let dir = scratch("projection");
+        // Lanes publish through the codec's atomic rename; p1 holds its lane
+        // while p2/p3 run and settle.
+        let stub = write_stub(
+            &dir,
+            "stub-lane",
+            "#!/usr/bin/env bash\n\
+             pkg=$2\n\
+             result=$3\n\
+             if [ \"$pkg\" = p1 ]; then sleep 1; else sleep 0.05; fi\n\
+             printf 'v2 %s 0 1 ok\\n' \"$pkg\" >\"$result.tmp.$$\"\n\
+             mv \"$result.tmp.$$\" \"$result\"\n",
+        );
+        let ids: Vec<RecipeId> = ["p1", "p2", "p3"]
+            .iter()
+            .map(|name| RecipeId::new(*name).expect("test id"))
+            .collect();
+        let mut setup = one_node_setup(&dir, &stub, "projection");
+        setup.budget.lanes = 2;
+        for id in &ids[1..] {
+            setup.nodes.push(SupNode {
+                id: id.clone(),
+                recipe_dir: dir.join("root/packages").join(id.as_str()),
+                core: false,
+                build_tools: false,
+                prereqs: Vec::new(),
+                consumers: Vec::new(),
+                batch: None,
+                pre: None,
+                latent: false,
+            });
+        }
+
+        let (outcome, events, err) = run_capturing(setup);
+        assert!(
+            err.is_empty() || !err.contains("gsa:"),
+            "the run must settle cleanly: {err}"
+        );
+        let mut progress = crate::progress::Progress::new(ids.clone(), Vec::new());
+        for event in &events {
+            progress.observe(event);
+        }
+
+        // The completion order really is NOT plan order here: without the
+        // reordering the equality below would be vacuous.
+        let settled: Vec<&RecipeId> = events
+            .iter()
+            .filter_map(|event| match event {
+                SupEvent::Finished { row, .. } => Some(&row.pkg),
+                _ => None,
+            })
+            .collect();
+        let planned: Vec<&RecipeId> = outcome.order.iter().collect();
+        assert_ne!(
+            settled, planned,
+            "this fixture's lane timing is what makes the projection's ordering testable"
+        );
+
+        assert_eq!(
+            progress.order(),
+            outcome.order.as_slice(),
+            "the projection's plan order must be the record's `order` (§H)"
+        );
+        assert_eq!(
+            progress.rows(),
+            outcome.rows.as_slice(),
+            "the projection's settled rows must be the record's rows (§H)"
+        );
+        assert_eq!(progress.drift(&outcome.rows, &outcome.order), None);
+        assert_eq!(progress.total(), 3);
+        assert_eq!(progress.dispatched(), 3);
+        assert_eq!(progress.succeeded(), 3);
+        assert_eq!(progress.failed(), 0);
     }
 }

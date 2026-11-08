@@ -17,6 +17,12 @@
 //! `~` at a value's start expands to the same build-user home, in either
 //! file. `--state-dir` and `GSA_STATE_DIR` stay above the config layers
 //! (explicit operator intent and fixture control; §J.3).
+//!
+//! Four settings resolve through one ladder (`resolve` below): the build root
+//! (§J.2), the state root (§J.3), the recipe store and the makepkg `SRCDEST`.
+//! Each rung carries the label its surfaces show, so "where did this value
+//! come from?" has one answer per setting and no surface re-derives the
+//! precedence by hand.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -59,6 +65,56 @@ pub struct BuildLayout {
     pub pkgdest: PathBuf,
 }
 
+/// One value plus the rung of its ladder that decided it. The label is the
+/// user-visible provenance (the build-dir prompt renders it as
+/// `current: <path>  [gsa.conf build_dir]`), so it must name where the value
+/// came from, not what it is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Resolved<T> {
+    value: T,
+    source: &'static str,
+}
+
+/// The ONE resolution ladder: rungs are ordered highest precedence first and
+/// the first `Some` wins, its label becoming the provenance of the result.
+/// `default` is a closure because the built-in rung can itself fail (no
+/// resolvable build-user home) and must stay unevaluated when a higher rung
+/// already answered — an explicit override never fails on identity home
+/// resolution.
+fn resolve<T: Clone>(
+    tiers: &[(&'static str, Option<T>)],
+    default: impl FnOnce() -> Result<(T, &'static str), String>,
+) -> Result<Resolved<T>, String> {
+    match resolve_opt(tiers) {
+        Some(resolved) => Ok(resolved),
+        None => default().map(|(value, source)| Resolved { value, source }),
+    }
+}
+
+/// The same ladder for a setting whose "unset" is a real answer (`SRCDEST`):
+/// `None` means no rung supplied a value, and the caller names that case.
+fn resolve_opt<T: Clone>(tiers: &[(&'static str, Option<T>)]) -> Option<Resolved<T>> {
+    tiers.iter().find_map(|(source, value)| {
+        value.as_ref().map(|value| Resolved {
+            value: value.clone(),
+            source,
+        })
+    })
+}
+
+/// A blank environment value is "unset" — the convention the `GSA_*`
+/// inputs share (`GSA_BUILD_DIR`, `GSA_STATE_DIR`, `GSA_RECIPES_DIR`): a
+/// whitespace-only override never means the empty path. `SRCDEST` keeps its
+/// own stricter rule (only a truly empty value is unset).
+fn nonempty(value: Option<&str>) -> Option<&str> {
+    value.filter(|v| !v.trim().is_empty())
+}
+
+/// One `GSA_*` path input, when it is set and non-empty.
+fn env_path(name: &str) -> Option<PathBuf> {
+    nonempty(std::env::var(name).ok().as_deref()).map(PathBuf::from)
+}
+
 /// The build cache root, highest precedence first: the run-scoped override
 /// ([`set_build_root_override`] — `--build-dir` or the prompt's answer), the
 /// `GSA_BUILD_DIR` environment input, the config `build_dir` key, then the
@@ -71,21 +127,20 @@ pub fn build_root(cfg: &GsaConfig) -> Result<PathBuf, String> {
 /// current value's provenance so an operator can tell a gsa.conf default
 /// from a stray environment override.
 pub fn build_root_with_source(cfg: &GsaConfig) -> Result<(PathBuf, &'static str), String> {
-    if let Some(root) = BUILD_ROOT_OVERRIDE.get() {
-        return Ok((root.clone(), "this run's choice"));
-    }
-    if let Ok(v) = std::env::var("GSA_BUILD_DIR") {
-        if !v.trim().is_empty() {
-            return Ok((PathBuf::from(v), "GSA_BUILD_DIR"));
-        }
-    }
-    if let Some(v) = &cfg.build_dir {
-        return Ok((v.clone(), "gsa.conf build_dir"));
-    }
-    Ok((
-        build_user_home()?.join(".cache").join("gsa"),
-        "the built-in default",
-    ))
+    let resolved = resolve(
+        &[
+            ("this run's choice", BUILD_ROOT_OVERRIDE.get().cloned()),
+            ("GSA_BUILD_DIR", env_build_root()),
+            ("gsa.conf build_dir", cfg.build_dir.clone()),
+        ],
+        || {
+            Ok((
+                build_user_home()?.join(".cache").join("gsa"),
+                "the built-in default",
+            ))
+        },
+    )?;
+    Ok((resolved.value, resolved.source))
 }
 
 /// Pin the run's build root (contract §J.2). Called once, by the CLI, before
@@ -105,10 +160,7 @@ pub fn build_root_override() -> Option<&'static Path> {
 
 /// The `GSA_BUILD_DIR` environment input, when it is set and non-empty.
 pub fn env_build_root() -> Option<PathBuf> {
-    std::env::var("GSA_BUILD_DIR")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-        .map(PathBuf::from)
+    env_path("GSA_BUILD_DIR")
 }
 
 /// The full layout for a run.
@@ -350,26 +402,60 @@ pub fn build_user_home() -> Result<PathBuf, String> {
 /// source-unfetchable), and `$HOME` there is root's (same
 /// identity-follows-the-drop rule as `privilege::drop_identity_env`).
 pub fn resolve_srcdest() -> Option<PathBuf> {
-    if let Ok(dir) = std::env::var("SRCDEST") {
-        if !dir.is_empty() {
-            return Some(PathBuf::from(dir));
-        }
-    }
+    resolve_srcdest_with_source().0
+}
+
+/// [`resolve_srcdest`] plus the rung that decided it; `"no SRCDEST"` when no
+/// tier supplied one (the callers' `None` branch, unchanged). Both conf files
+/// are read up front (two small local files); which one decides the value is
+/// the ladder's answer, never the read order.
+pub fn resolve_srcdest_with_source() -> (Option<PathBuf>, &'static str) {
     // The home the conf's shell would expand against is the BUILD USER's
     // (same identity-follows-the-drop rule as `privilege::drop_identity_env`).
     let home = build_user_home().ok();
-    for conf in [
-        home.as_ref().map(|home| home.join(".makepkg.conf")),
-        Some(PathBuf::from("/etc/makepkg.conf")),
-    ] {
-        let Some(conf) = conf else { continue };
-        if let Ok(content) = std::fs::read_to_string(&conf) {
-            if let Some(dir) = makepkg_conf_assign(&content, "SRCDEST") {
-                return Some(expand_home_path(&dir, home.as_deref()));
-            }
-        }
+    let user_conf = home
+        .as_ref()
+        .and_then(|home| std::fs::read_to_string(home.join(".makepkg.conf")).ok());
+    let system_conf = std::fs::read_to_string("/etc/makepkg.conf").ok();
+    let env = std::env::var("SRCDEST").ok();
+    let resolved = resolve_srcdest_from(
+        env.as_deref(),
+        user_conf.as_deref(),
+        system_conf.as_deref(),
+        home.as_deref(),
+    );
+    (resolved.value, resolved.source)
+}
+
+/// The pure precedence seam for [`resolve_srcdest`]: both conf files arrive
+/// as text and `home` expands their home-relative shapes, so the ladder is
+/// testable without touching the process environment or the filesystem.
+fn resolve_srcdest_from(
+    env: Option<&str>,
+    user_conf: Option<&str>,
+    system_conf: Option<&str>,
+    home: Option<&Path>,
+) -> Resolved<Option<PathBuf>> {
+    let from_conf = |text: Option<&str>| {
+        text.and_then(|text| makepkg_conf_assign(text, "SRCDEST"))
+            .map(|dir| expand_home_path(&dir, home))
+    };
+    match resolve_opt(&[
+        // SRCDEST's own convention is stricter than the `GSA_*` inputs':
+        // only a truly empty value is unset.
+        ("SRCDEST", env.filter(|v| !v.is_empty()).map(PathBuf::from)),
+        ("~/.makepkg.conf SRCDEST", from_conf(user_conf)),
+        ("/etc/makepkg.conf SRCDEST", from_conf(system_conf)),
+    ]) {
+        Some(resolved) => Resolved {
+            value: Some(resolved.value),
+            source: resolved.source,
+        },
+        None => Resolved {
+            value: None,
+            source: "no SRCDEST",
+        },
     }
-    None
 }
 
 /// Makepkg.conf is shell and a path-valued key realistically takes the two
@@ -448,6 +534,13 @@ fn read_layer(path: &Path, home: &Path) -> Result<GsaConfig, String> {
 /// `GSA_STATE_DIR` beats the config layers beats the built-in. There is
 /// never a silent workspace fallback.
 pub fn resolve_state_dir(cli: Option<&str>) -> Result<PathBuf, String> {
+    resolve_state_dir_with_source(cli).map(|(dir, _)| dir)
+}
+
+/// [`resolve_state_dir`] plus the rung that decided it (`--state-dir`,
+/// `GSA_STATE_DIR`, `gsa.conf state_dir`, `the built-in default`) — one
+/// answer for the surfaces that report why a run owns the root it owns.
+pub fn resolve_state_dir_with_source(cli: Option<&str>) -> Result<(PathBuf, &'static str), String> {
     let env = std::env::var("GSA_STATE_DIR").ok();
     resolve_state_dir_from(cli, env.as_deref(), &load()?)
 }
@@ -457,18 +550,16 @@ pub fn resolve_state_dir_from(
     cli: Option<&str>,
     env: Option<&str>,
     cfg: &GsaConfig,
-) -> Result<PathBuf, String> {
-    let nonempty = |v: &str| !v.trim().is_empty();
-    if let Some(v) = cli.filter(|v| nonempty(v)) {
-        return Ok(PathBuf::from(v));
-    }
-    if let Some(v) = env.filter(|v| nonempty(v)) {
-        return Ok(PathBuf::from(v));
-    }
-    if let Some(v) = &cfg.state_dir {
-        return Ok(v.clone());
-    }
-    Ok(PathBuf::from(DEFAULT_STATE_DIR))
+) -> Result<(PathBuf, &'static str), String> {
+    let resolved = resolve(
+        &[
+            ("--state-dir", nonempty(cli).map(PathBuf::from)),
+            ("GSA_STATE_DIR", nonempty(env).map(PathBuf::from)),
+            ("gsa.conf state_dir", cfg.state_dir.clone()),
+        ],
+        || Ok((PathBuf::from(DEFAULT_STATE_DIR), "the built-in default")),
+    )?;
+    Ok((resolved.value, resolved.source))
 }
 
 /// The canonical recipe store root (2026-10-17 relocation): the build
@@ -480,20 +571,18 @@ pub fn resolve_state_dir_from(
 /// root keeps index/, abi/, world+sets/, runs/, logs/, locks/,
 /// toolchains/, abi-repair/ only).
 pub fn recipe_root(cfg: &GsaConfig) -> Result<PathBuf, String> {
-    let env = std::env::var("GSA_RECIPES_DIR").ok();
-    if let Some(v) = env.as_deref().filter(|v| !v.trim().is_empty()) {
-        return Ok(PathBuf::from(v));
-    }
-    if let Some(v) = &cfg.recipe_dir {
-        return Ok(v.clone());
-    }
-    // The home is only needed for the built-in default, so an explicit
-    // override never fails on an unresolvable identity home.
-    Ok(build_user_home()?
-        .join(".local")
-        .join("share")
-        .join("gsa")
-        .join("recipes"))
+    let resolved = resolve(
+        &recipe_tiers(std::env::var("GSA_RECIPES_DIR").ok().as_deref(), cfg),
+        // The home is only needed for the built-in default, so an explicit
+        // override never fails on an unresolvable identity home.
+        || {
+            Ok((
+                default_recipe_root(&build_user_home()?),
+                "the built-in default",
+            ))
+        },
+    )?;
+    Ok(resolved.value)
 }
 
 /// The pure precedence seam for [`recipe_root`] (testable without touching
@@ -502,14 +591,25 @@ pub fn recipe_root_from(
     env: Option<&str>,
     cfg: &GsaConfig,
     home: &Path,
-) -> Result<PathBuf, String> {
-    if let Some(v) = env.filter(|v| !v.trim().is_empty()) {
-        return Ok(PathBuf::from(v));
-    }
-    if let Some(v) = &cfg.recipe_dir {
-        return Ok(v.clone());
-    }
-    Ok(home.join(".local").join("share").join("gsa").join("recipes"))
+) -> Result<(PathBuf, &'static str), String> {
+    let resolved = resolve(&recipe_tiers(env, cfg), || {
+        Ok((default_recipe_root(home), "the built-in default"))
+    })?;
+    Ok((resolved.value, resolved.source))
+}
+
+fn recipe_tiers(env: Option<&str>, cfg: &GsaConfig) -> [(&'static str, Option<PathBuf>); 2] {
+    [
+        ("GSA_RECIPES_DIR", nonempty(env).map(PathBuf::from)),
+        ("gsa.conf recipe_dir", cfg.recipe_dir.clone()),
+    ]
+}
+
+fn default_recipe_root(home: &Path) -> PathBuf {
+    home.join(".local")
+        .join("share")
+        .join("gsa")
+        .join("recipes")
 }
 
 #[cfg(test)]
@@ -671,19 +771,24 @@ mod tests {
         };
         assert_eq!(
             resolve_state_dir_from(Some("--flag"), Some("/env"), &cfg).unwrap(),
-            PathBuf::from("--flag")
+            (PathBuf::from("--flag"), "--state-dir")
         );
         assert_eq!(
             resolve_state_dir_from(None, Some("/env"), &cfg).unwrap(),
-            PathBuf::from("/env")
+            (PathBuf::from("/env"), "GSA_STATE_DIR")
         );
         assert_eq!(
             resolve_state_dir_from(None, None, &cfg).unwrap(),
-            PathBuf::from("/cfg")
+            (PathBuf::from("/cfg"), "gsa.conf state_dir")
         );
         assert_eq!(
             resolve_state_dir_from(None, Some("  "), &GsaConfig::default()).unwrap(),
-            PathBuf::from(DEFAULT_STATE_DIR)
+            (PathBuf::from(DEFAULT_STATE_DIR), "the built-in default")
+        );
+        // A blank flag is unset too, and a blank env never masks the config.
+        assert_eq!(
+            resolve_state_dir_from(Some(" "), Some("  "), &cfg).unwrap(),
+            (PathBuf::from("/cfg"), "gsa.conf state_dir")
         );
     }
 
@@ -695,21 +800,104 @@ mod tests {
         };
         assert_eq!(
             recipe_root_from(Some("/env/recipes"), &cfg, &home()).unwrap(),
-            PathBuf::from("/env/recipes")
+            (PathBuf::from("/env/recipes"), "GSA_RECIPES_DIR")
         );
         assert_eq!(
             recipe_root_from(None, &cfg, &home()).unwrap(),
-            PathBuf::from("/cfg/recipes")
+            (PathBuf::from("/cfg/recipes"), "gsa.conf recipe_dir")
         );
         // A blank env value is unset (the build_root convention), and the
         // default is the build user's XDG data home — never the state root.
         assert_eq!(
             recipe_root_from(Some("  "), &GsaConfig::default(), &home()).unwrap(),
-            home()
-                .join(".local")
-                .join("share")
-                .join("gsa")
-                .join("recipes")
+            (
+                home()
+                    .join(".local")
+                    .join("share")
+                    .join("gsa")
+                    .join("recipes"),
+                "the built-in default"
+            )
+        );
+    }
+
+    #[test]
+    fn srcdest_precedence_is_env_then_the_user_conf_then_the_system_conf() {
+        let home = home();
+        let user = "SRCDEST=~/u-src\n";
+        let system = "SRCDEST=/etc-src\n";
+        assert_eq!(
+            resolve_srcdest_from(Some("/env-src"), Some(user), Some(system), Some(&home)),
+            Resolved {
+                value: Some(PathBuf::from("/env-src")),
+                source: "SRCDEST",
+            }
+        );
+        assert_eq!(
+            resolve_srcdest_from(None, Some(user), Some(system), Some(&home)),
+            Resolved {
+                value: Some(home.join("u-src")),
+                source: "~/.makepkg.conf SRCDEST",
+            }
+        );
+        assert_eq!(
+            resolve_srcdest_from(None, None, Some(system), Some(&home)),
+            Resolved {
+                value: Some(PathBuf::from("/etc-src")),
+                source: "/etc/makepkg.conf SRCDEST",
+            }
+        );
+        // No tier supplied one: `None` survives, with the label the callers'
+        // `None` branch would otherwise have to invent.
+        assert_eq!(
+            resolve_srcdest_from(None, None, None, Some(&home)),
+            Resolved {
+                value: None,
+                source: "no SRCDEST",
+            }
+        );
+        // An empty env value is unset (SRCDEST's own convention: trim does
+        // not enter into it), so the next rung answers.
+        assert_eq!(
+            resolve_srcdest_from(Some(""), Some(user), None, Some(&home)),
+            Resolved {
+                value: Some(home.join("u-src")),
+                source: "~/.makepkg.conf SRCDEST",
+            }
+        );
+        // A conf file without the key contributes nothing.
+        assert_eq!(
+            resolve_srcdest_from(None, Some("PKGDEST=/pkgs\n"), None, Some(&home)),
+            Resolved {
+                value: None,
+                source: "no SRCDEST",
+            }
+        );
+    }
+
+    #[test]
+    fn the_one_ladder_takes_the_first_supplied_rung_and_its_label() {
+        let tiers = [
+            ("top", None),
+            ("middle", Some("/mid")),
+            ("bottom", Some("/low")),
+        ];
+        assert_eq!(
+            resolve(&tiers, || Ok(("/default", "the built-in default"))).unwrap(),
+            Resolved {
+                value: "/mid",
+                source: "middle",
+            }
+        );
+        // No rung supplied a value: the default rung answers with its own
+        // label, and only then is the closure evaluated.
+        let none: [(&'static str, Option<&str>); 2] = [("top", None), ("bottom", None)];
+        assert_eq!(
+            resolve(&none, || Ok(("/default", "the built-in default"))).unwrap(),
+            Resolved {
+                value: "/default",
+                source: "the built-in default",
+            }
         );
     }
 

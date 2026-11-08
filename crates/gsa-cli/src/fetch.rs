@@ -18,6 +18,7 @@ use gsa_recipe::RecipeDb;
 use gsa_topo::load_project;
 
 use crate::args::Invocation;
+use crate::exit::{self, Exit};
 use crate::select::{self, Ctx};
 use crate::{record, render};
 
@@ -25,66 +26,45 @@ use crate::{record, render};
 /// process exit code (§G.1: from the verdict rows, `failed` rows included)
 /// and writes every rendering through `out`/`err`.
 pub fn run_fetch_only(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
+    exit::render(run_fetch_only_inner(inv, out, err), err)
+}
+
+fn run_fetch_only_inner(
+    inv: &Invocation,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<i32, Exit> {
     // ── selection is mandatory (contract §B.1) ───────────────────────────
     if inv.targets.is_empty() {
-        let _ = writeln!(
-            err,
-            "gsa: selection is mandatory: a fetch never starts without a selection"
-        );
-        return 2;
+        return Err(Exit::usage(
+            "selection is mandatory: a fetch never starts without a selection",
+        ));
     }
     // ── workspace, topology, selection (usage class: rc 2) ────────────────
-    let root = match crate::resolve_workspace(inv) {
-        Ok(root) => root,
-        Err(message) => {
-            let _ = writeln!(err, "gsa: {message}");
-            return 2;
-        }
-    };
-    let project = match load_project(&root) {
-        Ok(project) => project,
-        Err(error) => {
-            let _ = writeln!(err, "gsa: {error}");
-            return 2;
-        }
-    };
-    let graph = match Graph::build(&project.topology.records) {
-        Ok(graph) => graph,
-        Err(error) => {
-            let _ = writeln!(err, "gsa: config/topology.conf: {error}");
-            return 2;
-        }
-    };
-    let db = match RecipeDb::load(&root, graph.records()) {
-        Ok(db) => db,
-        Err(error) => {
-            let _ = writeln!(err, "gsa: {error}");
-            return 2;
-        }
-    };
+    let root = crate::resolve_workspace(inv).map_err(Exit::Usage)?;
+    let project = load_project(&root).map_err(|error| Exit::Usage(error.to_string()))?;
+    let graph = Graph::build(&project.topology.records)
+        .map_err(|error| Exit::Usage(format!("config/topology.conf: {error}")))?;
+    let db = RecipeDb::load(&root, graph.records())
+        .map_err(|error| Exit::Usage(error.to_string()))?;
     let ctx = Ctx {
         project: &project,
         graph: &graph,
         db: &db,
         user_sets: select::load_user_sets(inv),
     };
-    let selection = match select::build_selection(&ctx, &inv.targets, &inv.ranges, inv.leaf) {
-        Ok(selection) => selection,
-        Err(error) => {
-            let _ = writeln!(err, "gsa: {}", error.message);
-            return 2;
-        }
-    };
+    let selection = select::build_selection(&ctx, &inv.targets, &inv.ranges, inv.leaf)
+        .map_err(|error| Exit::Usage(error.message))?;
     crate::write_notes(err, &selection.notes);
 
     // ── privilege gate (contract §B.10; after every usage preflight) ─────
-    if let Some(code) = crate::privilege_gate(
+    if let Some(exit) = crate::privilege_gate(
         &inv.spelling(),
         crate::invocation_privilege(inv, &crate::Command::Fetch),
         true,
         err,
     ) {
-        return code;
+        return Err(exit);
     }
 
     // ── plan rows: `fetch` for candidates, `skip <reason>` for the rest ──
@@ -145,7 +125,7 @@ pub fn run_fetch_only(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write
         // A dry-run record mutates nothing: emit renders it, never stores it.
         let rec_state = crate::install::record_state_dir(inv, err);
         record::emit_machine_record(out, &record, &rec_state, err);
-        return outcome.rc;
+        return Ok(outcome.rc);
     }
 
     // ── the fetches, one verdict row per package in plan order ───────────
@@ -188,8 +168,8 @@ pub fn run_fetch_only(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write
     );
     let _ = write!(out, "{}", render::render_fetch_prose(&results));
     let rec_state = crate::install::record_state_dir(inv, err);
-        record::emit_machine_record(out, &record, &rec_state, err);
-    outcome.rc
+    record::emit_machine_record(out, &record, &rec_state, err);
+    Ok(outcome.rc)
 }
 
 /// The non-candidate skip reason of one recipe (`vcs-only`,
