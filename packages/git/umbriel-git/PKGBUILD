@@ -189,7 +189,8 @@ prepare() {
   # growth, and a corner drag keeps its cross-axis half. Upstream PR
   # noctalia-dev/umbriel#713, five commits
   # (d1c4c53/7eec2b3/33680fa/b001a86/57c27d3) on main@aa3b6b3; sha256 da533d36….
-  # (Retire on merge: 0018 -> PR #713.)
+  # (KEPT DOWNSTREAM: the maintainer declined the change on 2026-11-07 and the
+  # PR is closed unmerged, so this patch has no upstream to retire against.)
   git apply -3 ../0018-underfull-strip-align.patch
 
   # [appearance.blur] client_requests + ext_background_effect_v1: applications
