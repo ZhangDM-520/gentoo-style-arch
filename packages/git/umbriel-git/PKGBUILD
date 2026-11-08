@@ -9,7 +9,7 @@ source "$startdir/../../../lib/pgo.sh"
 pkgname=umbriel-git
 _pkgname=umbriel
 pkgver=0.1.0.r1540.ad46c7d
-pkgrel=5
+pkgrel=7
 epoch=1
 pkgdesc='A Wayland compositor built on wlroots'
 arch=('x86_64' 'aarch64')
@@ -68,8 +68,8 @@ source=("${_pkgname}::git+${url}.git#branch=main"
 sha256sums=('SKIP'
             '797d118d903858403e3ea4e8de25567968d85118d928ad208c27225c1199cc3c'
             '36442c0a3d52d421b94134fb81123155169d2cc43bde14d070e7d98c36cd068b'
-            '7c4de03d135dc74529c7cafc2a81ae659c1e9a917094aeafb248175c94db8400'
-            '7ab7b22764fe290cb58c01d1d5011d9f0f09de9ec7434de340d1cf2ac06b5804'
+            '523a2ccfb8b760dd40a0302b4f58fecd679b413f4bef89706bc20d45c8d02ad7'
+            '99ae6cbc53708c78e4dd7fc0fb19507ac6db4e1f2a873ff185a106225d6564e5'
             'da533d362314d028cf575128ace45b1781e39d9385478fd648f5e9bffffaf621'
             '2afaf966628550c1aa9d0b2ab9dbed4dade3c51479355e4e295cbe36497b7af2'
             'cbcd201aadb419aa9116417752700f9c336ec3103371d38a7f1acdfb0a44bf4e'
@@ -150,10 +150,15 @@ prepare() {
   # in the panel's colorimetry; the default `"native"` stages no transform),
   # plus client ICC image descriptions (`create_icc`) and `icc_file`
   # advertising. Upstream PR noctalia-dev/umbriel#585; 0013-icc-gamut.patch
-  # Flattened downstream stack adaptation, first cut on main@e0da1063 over
-  # 0011+0012 and applied unchanged on main@28de32d0, preserving the ICC
-  # fields, upstream screen_cast_effect, and both capture and ICC harness
-  # helpers; sha256 7c4de03d…. (Retire on merge.)
+  # Flattened downstream stack adaptation on main@ad46c7d1 over 0011+0012,
+  # preserving the ICC fields, upstream screen_cast_effect, and both capture
+  # and ICC harness helpers. Re-cut 2026-11-08 for the round-3 review: the ICC
+  # byte charge follows the payload's lifetime (surface states copy the store),
+  # the per-client budget is pruned when its wl_client goes away, only exactly
+  # representable transfer curves (sRGB, gamma 2.2) are accepted for imported
+  # profiles and `set_tf_power`, profiles whose RGB TRCs differ are refused, and
+  # the user docs split from the design notes. Delta 44 files, +6177/-108;
+  # sha256 523a2ccf…. (Retire on merge.)
   git apply -3 ../0013-icc-gamut.patch
 
   # [output] downsample texel footprint: the capped-downsample pass averages
@@ -163,11 +168,13 @@ prepare() {
   # 0014-downsample-box.patch: flattened downstream stack adaptation. Re-cut
   # 2026-11-08 on main@ad46c7d1 over 0011+0012+0013 to carry dMopp's ba92c1d3
   # plus the round-2 review fixes: box_tf carries the pass's target curve so a
-  # linear target is not decoded as gamma 2.2, the clamp variant is picked only
-  # for a cropped box source, the box programs are freed, a sampling-only
+  # linear target is not decoded as gamma 2.2, an SDR passthrough box draw is
+  # sRGB (the swapchain curve, not the output's gamma 2.2), the clamp variant
+  # is judged by the source extents, the box programs are freed, a sampling-only
   # reload no longer rebuilds view chrome, capture mirrors repaint on the mode
-  # change, and the docs claim is scoped to the 4x4 grid. Delta 26 files,
-  # +638/-36; sha256 7ab7b227….
+  # change, the docs claim is scoped to the 4x4 grid, and three new pins cover
+  # the source-box predicate, the box curve, and a live capture reload. Delta
+  # 29 files, +857/-36; sha256 99ae6cbc53708c78e4dd7fc0fb19507ac6db4e1f2a873ff185a106225d6564e5….
   # (Retire on merge: 0014 → PR #575, with its 0012 base → PR #573.)
   git apply -3 ../0014-downsample-box.patch
 
