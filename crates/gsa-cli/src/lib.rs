@@ -11,6 +11,7 @@
 
 mod args;
 mod build;
+mod builddir;
 mod dashboard;
 mod fetch;
 mod help;
@@ -232,7 +233,7 @@ fn classify(inv: &Invocation) -> Disposition {
         .find(|f| !maint_gate_stands_down && !accepted.contains(&f.as_str()))
     {
         return Disposition::Deferred(format!(
-            "{flag} (a later phase owns it; a build run accepts --skip, --skip-built, --vcs-skip-tolerance, --no-sync, --allow-broken-rustc, --fail-fast, --lanes, --jobs, --intensity, --state-dir; an install run (-S/-U) additionally accepts --no-register-ignorepkg, --config)"
+            "{flag} (a later phase owns it; a build run accepts --skip, --skip-built, --vcs-skip-tolerance, --no-sync, --allow-broken-rustc, --fail-fast, --lanes, --jobs, --intensity, --state-dir, --build-dir, --no-build-dir-prompt; an install run (-S/-U) additionally accepts --no-register-ignorepkg, --config)"
         ));
     }
     let accepts_pacman_args = matches!(inv.family, Family::S | Family::U) && inv.action.is_none();

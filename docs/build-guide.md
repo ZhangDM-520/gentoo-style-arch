@@ -575,10 +575,16 @@ makepkg's working state is the **build user's cache**, never the recipe tree
 | `PKGDIR` | `<build_dir>/pkg` | staging |
 | `PKGDEST` | `<build_dir>/pkgs` | finished `.pkg.tar.zst` archives |
 
-`build_dir` defaults to the build user's `~/.cache/gsa` and is set by the
-gsa.conf `build_dir` key or `GSA_BUILD_DIR` (env wins); the engine creates the
-three directories and hands them to the build user. Finished archives do
-**not** land in the recipe directory: archive discovery scans the shared
+`build_dir` resolves `--build-dir PATH` > `GSA_BUILD_DIR` > the gsa.conf
+`build_dir` key > the build user's `~/.cache/gsa`; the engine creates the
+three directories and hands them to the build user. A build-shaped run
+(`-S`/`-B`, the `-Su`/`-Syu` stale-set build, and their `--dry-run` plans)
+asks for the root on a TTY — the prompt shows the resolved path AND its
+provenance, Enter keeps it, an absolute or `~/…` path replaces it for that
+run, `q` aborts. The question is skipped when `--build-dir`, `GSA_BUILD_DIR`,
+`--no-build-dir-prompt` or a non-TTY stdin already answered it; the answer is
+mirrored as `--build-dir` in the run record's continuation. Finished archives
+do **not** land in the recipe directory: archive discovery scans the shared
 `PKGDEST` first and the recipe directory only as a pre-W4a legacy fallback for
 old trees, and every candidate is matched by `.PKGINFO`/output-name truth, so
 a shared `PKGDEST` can never hand over another recipe's archive. A run whose
@@ -630,7 +636,8 @@ the three planning defaults):
   is `/var/lib/gsa`.
 - `GSA_BUILD_DIR` — the build-cache root (**Runtime state and the build
   cache**): makepkg `BUILDDIR`/`PKGDIR`/`PKGDEST` land below it (`build/`,
-  `pkg/`, `pkgs/`). Beats the config `build_dir` key; default: the build
+  `pkg/`, `pkgs/`). Setting it also answers the build-dir prompt silently;
+  `--build-dir` beats it. Beats the config `build_dir` key; default: the build
   user's `~/.cache/gsa`. `SRCDEST` is NOT part of this surface — `makepkg.conf`
   governs sources.
 - `GSA_RECIPES_DIR` — the canonical recipe store root (**Runtime state and the

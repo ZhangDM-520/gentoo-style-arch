@@ -1377,19 +1377,23 @@
     reported as a deviation. The companion fix is gsa-pm's git self-tracking
     recipe (no `_commit` pin to forget). (last reviewed 2026-10-23)
 
-62. **An unmounted build drive silently degrades to tmpfs — freshness
-    evidence vanishes with it** (2026-10-23, measured): `build_dir` lives
-    under `/run/media/<uuid>/…`; when the drive is absent that path is just
-    a directory under the `/run` tmpfs (6 GiB), so archives land on tmpfs,
-    index rows point at paths nobody can see, and every freshness/stale
-    measurement ("build cache has only 3 archives", `-Su` `noop empty-list`)
-    measures the tmpfs shadow instead of the real pkgs/ tree. Probe FIRST,
-    always: `findmnt -T <build_dir>` must name the drive's fstype (f2fs),
-    never `tmpfs`; `df -h <build_dir>` second. Recovery order (same night,
-    measured): rescue any tmpfs-written archives (`cp -p` out — they hide
-    under the mount shadow but survive), `fsck.f2fs -a <dev>`, mount,
-    copy the rescues into `pkgs/`, `sudo gsa -Md --fix`, then re-measure
-    anything previously called blind. (last reviewed 2026-10-23)
+62. **The build-cache root is a decision, not an assumption** (2026-11-08,
+    replacing the 2026-10-23 unmounted-drive rule): `build_dir` used to ride
+    an external f2fs drive, and a missing mount left a `/run` tmpfs shadow —
+    archives nobody could see and blind freshness measurements. The chain is
+    now `--build-dir` > `GSA_BUILD_DIR` > gsa.conf `build_dir` >
+    `~/.cache/gsa`, and a build-shaped run asks on a TTY, showing the resolved
+    root WITH its provenance (`gsa-cli::builddir`, contract §B.8 amendment
+    2026-11-08); the answer is mirrored as `--build-dir` in the continuation,
+    while a `GSA_BUILD_DIR` answer stays `env-required`. Current layout:
+    `build_dir = ~/tmp` → `/run/user/1000/tmp` (tmpfs, RAM by owner decision
+    2026-11-08), `/tmp` a dedicated f2fs partition, compiler `TMPDIR` left on
+    `/tmp`. When a measurement looks blind, read the prompt line (or the
+    build-layout row of `gsa -Md`) before anything else; an unusable root
+    (dangling `~/tmp` symlink after a reboot, unavailable mount) fails loudly
+    at `create_owned_dir`, never by silently writing elsewhere. `~/tmp`'s
+    target is recreated at login by the user `systemd-tmpfiles-setup.service`
+    plus `~/.config/tmpfiles.d/10-tmp.conf`. (last reviewed 2026-11-08)
 63. **A version-sync rewrite is volatile store state — rescue it before the
     next `-Sy`** (2026-10-25, measured): the sync pass leaves its recipe
     rewrites UNCOMMITTED in the canonical store (rule 18), and the store is

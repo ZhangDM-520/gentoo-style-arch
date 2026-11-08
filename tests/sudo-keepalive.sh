@@ -342,7 +342,7 @@ GSA_FAKE_SUDO_MODE=cold GSA_FAKE_SUDO_LOG='$fixture/state-tty-cold/sudo.log' \
 GSA_FAKE_SUDO_STATE='$fixture/state-tty-cold' \
 GSA_FAKE_MARKER_DIR='$fixture/state-tty-cold/built' GSA_FAKE_BUILD_SECONDS=1.2 \
 '$GSA_TEST_GSA_BIN' -S --leaf --config '$fixture/state-tty-cold/pacman.conf' \
---lanes 2 --jobs 2 ${ids[*]}" /dev/null 2>&1
+--no-build-dir-prompt --lanes 2 --jobs 2 ${ids[*]}" /dev/null 2>&1
     ) || pty_rc=$?
     if [[ $pty_rc -ne 3 ]]; then
         fail "cold-credential TTY run must refuse with rc 3 (§G.1), got rc=$pty_rc" "$pty_output"
@@ -413,7 +413,7 @@ GSA_FAKE_SUDO_MODE=cold GSA_FAKE_SUDO_LOG='$fixture/state-gate/sudo.log' \
 GSA_FAKE_SUDO_STATE='$fixture/state-gate' \
 GSA_FAKE_MARKER_DIR='$fixture/state-gate/built' GSA_FAKE_BUILD_SECONDS=1.2 \
 '$GSA_TEST_GSA_BIN' -S --leaf --config '$fixture/state-gate/pacman.conf' \
---lanes 2 --jobs 2 ${ids[*]}" /dev/null 2>&1
+--no-build-dir-prompt --lanes 2 --jobs 2 ${ids[*]}" /dev/null 2>&1
     ) || pty_rc=$?
     if [[ $pty_rc -ne 3 ]]; then
         fail "the TTY gate run must refuse with rc 3 (§B.10/§G.1), got rc=$pty_rc" "$pty_output"

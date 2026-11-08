@@ -271,10 +271,29 @@ is a pure read with no confirmation at all. Wording-only (§L.2); pinned by
 | `--fail-fast` | restore the stop-dispatch-and-drain failure policy (§I) |
 | `--lanes N\|auto`, `--jobs N\|auto`, `--intensity LEVEL` | parallelism overrides (kept; a flag beats its env twin) |
 | `--state-dir PATH` | state-root override (§J.3); flag beats `GSA_STATE_DIR` |
+| `--build-dir PATH` | build-cache override (§J.2): `BUILDDIR`/`PKGDIR`/`PKGDEST` land below it; flag beats `GSA_BUILD_DIR` beats config `build_dir` beats the build user's `~/.cache/gsa`. Mirrored into the continuation. Real on build-shaped runs only |
+| `--no-build-dir-prompt` | restore the pre-prompt behaviour: resolve the build root silently from the layers above instead of asking on a TTY. Mirrored into the continuation |
 | `--no-prefetch`, `--prefetch-ahead N` | advisory fetch-ahead window (default-on): `--no-prefetch` opts out, `--prefetch-ahead N` sizes it; the two are mutually exclusive (added 2026-10-14, see amendment 4) |
 | `--config PATH`, `--noconfirm` | pacman-familiar globals; `--noconfirm` applies to the engine's own confirmations (`-Mm`, `-Mccc`) and never to a pacman question flag |
 | `--quiet`, `--verbose` | **deferred**: recognised and refused (rc 2, naming the flag) by every command; never mirrored (§H.2) |
 | `--machine` | select the machine vocabulary explicitly (the default when stdout is captured); presentation only, never mirrored (§H.2) |
+
+*Amendment (2026-11-08, the build-dir prompt).* A build-shaped run — `-S`,
+`-B`, the `-Su`/`-Syu` stale-set build and their `--dry-run` plans — asks
+which root the build cache lives under BEFORE anything resolves the layout,
+and blocks for the answer on a TTY. The question is skipped when something
+already answered it: `--build-dir`, `GSA_BUILD_DIR` (an explicit environment
+override is an answer, not a default — it is also what keeps fixtures and
+scripts silent), `--no-build-dir-prompt`, or a non-TTY stdin. The prompt
+shows the resolved root WITH its provenance (`gsa.conf build_dir`,
+`GSA_BUILD_DIR`, `the built-in default`), so a stale config path or a stray
+environment override is visible before it is accepted; Enter keeps it, an
+absolute or `~/…` path replaces it for that run, `q` aborts (rc 2). The
+answer is pinned process-wide, exported to lane and fetch children through
+`GSA_BUILD_DIR`, and mirrored as `--build-dir PATH` in the continuation. A
+relative path, or an existing non-directory, is a usage error naming
+`--build-dir`. Both spellings are refused by non-build families through the
+ordinary deferred vocabulary. Pinned by `tests/build-dir-prompt.sh`.
 
 Engine environment inputs (the roster `gsa --help` must print; rendered from
 `crates/gsa-cli/src/help.rs`, the single layout source): `GSA_CONF`,
@@ -927,9 +946,15 @@ implemented).* The mirrored set is exactly what
 the resume fixtures pin that a dropped semantic flag is a bug. Mirrored:
 `--dry-run`, `--leaf` (**true form only**), `--skip`, `--skip-built`,
 `--vcs-skip-tolerance N`, `--no-sync`, `--allow-broken-rustc`, `--fail-fast`,
-`--state-dir PATH`, `--config PATH`, `--no-register-ignorepkg`,
+`--state-dir PATH`, `--build-dir PATH`, `--no-build-dir-prompt`,
+`--config PATH`, `--no-register-ignorepkg`,
 `--no-prefetch`, `--prefetch-ahead N` (non-default only), the `f` cluster
-letter, and the resolved `--lanes`/`--jobs`/`--intensity` values. Never
+letter, and the resolved `--lanes`/`--jobs`/`--intensity` values. (The
+`--build-dir` mirror is also what the prompt writes: an answered prompt's
+continuation rebuilds into the same tree, while an accepted default mirrors
+nothing. A `GSA_BUILD_DIR` that answered the question stays an
+`env-required` entry, never a flag — the engine's own export of the chosen
+root is excluded from that list.) Never
 mirrored: the prune-strength `c` and `-Mc`/`-Mcc`/`-Mccc`; one-shot actions
 (`-Q*`, `-Sy`, `-Su`, `-Syu`, `-Ua`, `-M*`) and their sub-flags (`--fix`,
 `--prune`, `--backfill`, `--tail`, `--keep`, `--show`, `--add`, `--remove`);
@@ -1127,9 +1152,12 @@ dashboard tails (`tests/dashboard-pty.sh` section A).
 
 makepkg's working state lands in the **build user's cache**, never beside the
 recipe: the engine passes `BUILDDIR` (build trees), `PKGDIR` (staging) and
-`PKGDEST` (finished `.pkg.tar.zst` archives) at `$GSA_BUILD_DIR` /
-config `build_dir` / `<build-user-home>/.cache/gsa` (`build/`, `pkg/`, `pkgs/`
-below it), creating and handing those dirs to the build user (§B.10).
+`PKGDEST` (finished `.pkg.tar.zst` archives) at `--build-dir PATH` /
+`$GSA_BUILD_DIR` / config `build_dir` / `<build-user-home>/.cache/gsa`
+(`build/`, `pkg/`, `pkgs/` below it), creating and handing those dirs to the
+build user (§B.10). A build-shaped run asks for the root on a TTY unless one
+of those tiers (or `--no-build-dir-prompt`) already answered it (§B.8
+amendment 2026-11-08).
 `SRCDEST` stays governed by `makepkg.conf` untouched. The binpkg index refers
 to the archives by hash wherever they live; archive discovery scans the shared
 `PKGDEST` plus the recipe dir (pre-W4 trees) and matches every candidate by
@@ -1167,8 +1195,8 @@ run sudo gsa -Sy once`).
 resolved root is unwritable and no override is given, the run fails early,
 naming `--state-dir` as the remedy. There is never a silent fallback to a home
 or workspace-local directory: a split state root is the failure mode §J.5
-exists to prevent. `GSA_BUILD_DIR` (or config `build_dir`, §J.2) is the
-matching override for the build cache — the two roots are relocated
+exists to prevent. `--build-dir PATH` (or `GSA_BUILD_DIR`, or config
+`build_dir`, §J.2) is the matching override for the build cache — the two roots are relocated
 separately and never silently merged. The canonical recipe store is
 deliberately outside this override: `--state-dir`/`GSA_STATE_DIR` never
 influence it (§J.2) — its twins are `GSA_RECIPES_DIR` and config

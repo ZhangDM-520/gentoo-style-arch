@@ -39,24 +39,28 @@ use crate::{record, render};
 /// The five build-run modifiers (§B.8): real on a `-B` build, deferred on
 /// every other spelling (the classifier consults this roster). The two
 /// fetch-ahead knobs (owner decision 1) ride along.
-pub const REAL_BUILD_FLAGS: [&str; 7] = [
+pub const REAL_BUILD_FLAGS: [&str; 9] = [
     "--fail-fast",
     "--lanes",
     "--jobs",
     "--intensity",
     "--state-dir",
+    "--build-dir",
+    "--no-build-dir-prompt",
     "--no-prefetch",
     "--prefetch-ahead",
 ];
 
 /// What a `-S` build+install run additionally accepts (§B.8): the dynamic
 /// IgnorePkg registration switch and the target pacman.conf.
-pub const REAL_INSTALL_FLAGS: [&str; 9] = [
+pub const REAL_INSTALL_FLAGS: [&str; 11] = [
     "--fail-fast",
     "--lanes",
     "--jobs",
     "--intensity",
     "--state-dir",
+    "--build-dir",
+    "--no-build-dir-prompt",
     "--no-prefetch",
     "--prefetch-ahead",
     "--no-register-ignorepkg",
@@ -89,6 +93,11 @@ fn run_build_with(
     err: &mut dyn Write,
     install: Option<DecideMode>,
 ) -> i32 {
+    // The build-dir answer (a `--build-dir` flag or the prompt's) is written
+    // back into this run's invocation so the run record's continuation
+    // restates the tree this run actually built into (§J.2/§H.2).
+    let mut owned = inv.clone();
+    let inv = &mut owned;
     // ── selection is mandatory (contract §B.1) ───────────────────────────
     if inv.targets.is_empty() {
         let _ = writeln!(
@@ -163,6 +172,12 @@ fn run_build_with(
             return 2;
         }
     };
+
+    // ── build-cache root (§J.2): asked AFTER the selection prompt, before
+    //    anything resolves the layout ─────────────────────────────────────
+    if let Err(code) = crate::builddir::resolve(inv, err) {
+        return code;
+    }
 
     // ── state root (contract §J.3): --state-dir > GSA_STATE_DIR > the
     //    gsa.conf layers (user > system) > /var/lib/gsa ─────────────────
@@ -846,9 +861,17 @@ pub(crate) fn plan_only(
     if inv.targets.is_empty() {
         return Err("selection is mandatory: a build never starts without a selection".to_string());
     }
+    // Same write-back as the real run: a plan answers the build-dir question
+    // so its continuation restates the chosen root (§J.2/§H.2).
+    let mut owned = inv.clone();
+    let inv = &mut owned;
     let mut selection = select::build_selection_for_build(ctx, &inv.targets, &inv.ranges, inv.leaf, err)
         .map_err(|error| error.message)?;
     crate::write_notes(err, &selection.notes);
+    // resolve() prints its own diagnostic; the plan's rc is the run's (§H.2).
+    if let Err(code) = crate::builddir::resolve(inv, err) {
+        return Ok(code);
+    }
     // The same pre-dispatch ABI wave check the build pipeline runs (§E.3):
     // the dry-run shows the wave it would build — additions join the plan,
     // and an under-covered member refuses (rc 3).

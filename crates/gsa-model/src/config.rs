@@ -19,6 +19,13 @@
 //! (explicit operator intent and fixture control; §J.3).
 
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+
+/// The run-scoped build-root choice (contract §J.2): `--build-dir` or the
+/// interactive answer. Set once, before any layout resolves, and above the
+/// environment on purpose — a lane child that re-resolves the layout must
+/// land on the same tree as its supervisor.
+static BUILD_ROOT_OVERRIDE: OnceLock<PathBuf> = OnceLock::new();
 
 /// The built-in state root (contract §J.3).
 pub const DEFAULT_STATE_DIR: &str = "/var/lib/gsa";
@@ -52,18 +59,56 @@ pub struct BuildLayout {
     pub pkgdest: PathBuf,
 }
 
-/// The build cache root: `GSA_BUILD_DIR` env > config `build_dir` > the
+/// The build cache root, highest precedence first: the run-scoped override
+/// ([`set_build_root_override`] — `--build-dir` or the prompt's answer), the
+/// `GSA_BUILD_DIR` environment input, the config `build_dir` key, then the
 /// build user's `~/.cache/gsa`.
 pub fn build_root(cfg: &GsaConfig) -> Result<PathBuf, String> {
+    build_root_with_source(cfg).map(|(root, _)| root)
+}
+
+/// [`build_root`] plus the tier that decided it — the prompt names its
+/// current value's provenance so an operator can tell a gsa.conf default
+/// from a stray environment override.
+pub fn build_root_with_source(cfg: &GsaConfig) -> Result<(PathBuf, &'static str), String> {
+    if let Some(root) = BUILD_ROOT_OVERRIDE.get() {
+        return Ok((root.clone(), "this run's choice"));
+    }
     if let Ok(v) = std::env::var("GSA_BUILD_DIR") {
         if !v.trim().is_empty() {
-            return Ok(PathBuf::from(v));
+            return Ok((PathBuf::from(v), "GSA_BUILD_DIR"));
         }
     }
     if let Some(v) = &cfg.build_dir {
-        return Ok(v.clone());
+        return Ok((v.clone(), "gsa.conf build_dir"));
     }
-    Ok(build_user_home()?.join(".cache").join("gsa"))
+    Ok((
+        build_user_home()?.join(".cache").join("gsa"),
+        "the built-in default",
+    ))
+}
+
+/// Pin the run's build root (contract §J.2). Called once, by the CLI, before
+/// the first layout resolution; a later call is ignored so a lane child can
+/// never repoint the tree mid-run.
+pub fn set_build_root_override(root: PathBuf) {
+    if root.as_os_str().is_empty() {
+        return;
+    }
+    let _ = BUILD_ROOT_OVERRIDE.set(root);
+}
+
+/// Whether the run pinned a build root ([`set_build_root_override`]).
+pub fn build_root_override() -> Option<&'static Path> {
+    BUILD_ROOT_OVERRIDE.get().map(PathBuf::as_path)
+}
+
+/// The `GSA_BUILD_DIR` environment input, when it is set and non-empty.
+pub fn env_build_root() -> Option<PathBuf> {
+    std::env::var("GSA_BUILD_DIR")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .map(PathBuf::from)
 }
 
 /// The full layout for a run.

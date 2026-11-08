@@ -114,6 +114,68 @@ pub fn prompt_app_selection(
     Ok(PromptOutcome::Picked(picked))
 }
 
+/// What the build-dir prompt resolved to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BuildDirOutcome {
+    /// Empty line: keep the root the layers resolved.
+    Default,
+    /// An operator-typed root, `~` expanded.
+    Chosen(std::path::PathBuf),
+    /// `q`, or the input stream closed before an answer — the caller prints
+    /// the abort line (the prompt never does).
+    Abort(&'static str),
+}
+
+/// Ask which build-cache root this run uses (contract §J.2). The current
+/// resolution is shown WITH its provenance — an operator must be able to
+/// tell a `gsa.conf` default from a stray `GSA_BUILD_DIR` before accepting
+/// it. One line of input per cycle: Enter keeps the resolved root, an
+/// absolute or `~/…` path replaces it for this run only, `q` aborts.
+pub fn prompt_build_dir(
+    default: &std::path::Path,
+    source: &str,
+    home: &std::path::Path,
+    out: &mut dyn Write,
+    input: &mut dyn BufRead,
+) -> std::io::Result<BuildDirOutcome> {
+    loop {
+        writeln!(
+            out,
+            "build directory (makepkg BUILDDIR/PKGDIR/PKGDEST live under it):"
+        )?;
+        writeln!(out, "  current: {}  [{source}]", default.display())?;
+        writeln!(
+            out,
+            "Enter keeps it, an absolute path (or ~/…) uses that root for this run, 'q' aborts"
+        )?;
+        write!(out, "build dir> ")?;
+        out.flush()?;
+        let mut line = String::new();
+        if input.read_line(&mut line)? == 0 {
+            return Ok(BuildDirOutcome::Abort("build-dir selection aborted (input closed)"));
+        }
+        let answer = line.trim();
+        if answer.is_empty() {
+            return Ok(BuildDirOutcome::Default);
+        }
+        if answer == "q" || answer == "quit" {
+            return Ok(BuildDirOutcome::Abort("build-dir selection aborted"));
+        }
+        let path = gsa_model::config::expand_home(answer, home);
+        if !path.is_absolute() {
+            writeln!(out, " not an absolute path: {} — give /path or ~/path", answer)?;
+            writeln!(out)?;
+            continue;
+        }
+        if path.exists() && !path.is_dir() {
+            writeln!(out, " not a directory: {}", path.display())?;
+            writeln!(out)?;
+            continue;
+        }
+        return Ok(BuildDirOutcome::Chosen(path));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,6 +243,58 @@ mod tests {
         assert!(matches!(
             outcome,
             PromptOutcome::Abort("app selection aborted (input closed)")
+        ));
+    }
+
+    fn run_dir(feed: &str) -> (BuildDirOutcome, String) {
+        let mut out: Vec<u8> = Vec::new();
+        let mut input = Cursor::new(feed.to_string());
+        let outcome = prompt_build_dir(
+            std::path::Path::new("/var/cache/gsa"),
+            "gsa.conf build_dir",
+            std::path::Path::new("/home/u"),
+            &mut out,
+            &mut input,
+        )
+        .unwrap();
+        (outcome, String::from_utf8(out).unwrap())
+    }
+
+    #[test]
+    fn empty_answer_keeps_the_resolved_root_and_shows_its_provenance() {
+        let (outcome, menu) = run_dir("\n");
+        assert_eq!(outcome, BuildDirOutcome::Default);
+        assert!(menu.contains("/var/cache/gsa  [gsa.conf build_dir]"), "{menu}");
+    }
+
+    #[test]
+    fn typed_path_is_chosen_with_home_expanded() {
+        let (outcome, _menu) = run_dir("~/tmp\n");
+        assert_eq!(
+            outcome,
+            BuildDirOutcome::Chosen(std::path::PathBuf::from("/home/u/tmp"))
+        );
+    }
+
+    #[test]
+    fn relative_path_re_renders_instead_of_being_accepted() {
+        let (outcome, menu) = run_dir("tmp\n/abs/tree\n");
+        assert_eq!(
+            outcome,
+            BuildDirOutcome::Chosen(std::path::PathBuf::from("/abs/tree"))
+        );
+        assert!(menu.contains(" not an absolute path: tmp"), "{menu}");
+    }
+
+    #[test]
+    fn q_and_closed_input_abort() {
+        assert!(matches!(
+            run_dir("q\n").0,
+            BuildDirOutcome::Abort("build-dir selection aborted")
+        ));
+        assert!(matches!(
+            run_dir("").0,
+            BuildDirOutcome::Abort("build-dir selection aborted (input closed)")
         ));
     }
 }

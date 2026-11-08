@@ -257,6 +257,14 @@ fn mirror_flags(inv: &Invocation, budget: Option<&gsa_sched::budget::Budget>) ->
     if let Some(dir) = &inv.state_dir {
         out.push_str(&format!(" --state-dir {dir}"));
     }
+    // The build root this run actually used (§J.2): a resume must not land in
+    // a different cache because the prompt was answered once.
+    if let Some(dir) = &inv.build_dir {
+        out.push_str(&format!(" --build-dir {dir}"));
+    }
+    if inv.no_build_dir_prompt {
+        out.push_str(" --no-build-dir-prompt");
+    }
     if let Some(conf) = &inv.config {
         out.push_str(&format!(" --config {conf}"));
     }
@@ -724,6 +732,12 @@ fn env_required(inv: &Invocation) -> Vec<String> {
     let mut env: Vec<String> = ENV_ROSTER
         .iter()
         .filter(|name| {
+            // `--build-dir`/the prompt export GSA_BUILD_DIR to the lane
+            // children; that is the run's own choice (mirrored as a flag),
+            // not an environment input the resume must reproduce.
+            if **name == "GSA_BUILD_DIR" && inv.build_dir.is_some() {
+                return false;
+            }
             std::env::var_os(name)
                 .map(|v| !v.is_empty())
                 .unwrap_or(false)
@@ -783,6 +797,8 @@ mod tests {
             skip_built: false,
             vcs_skip_tolerance: None,
             no_sync: false,
+            build_dir: None,
+            no_build_dir_prompt: false,
             allow_broken_rustc: false,
             standalone_root: None,
         };
@@ -832,6 +848,8 @@ mod tests {
             skip_built: false,
             vcs_skip_tolerance: None,
             no_sync: false,
+            build_dir: None,
+            no_build_dir_prompt: false,
             allow_broken_rustc: false,
             standalone_root: None,
         };
@@ -877,6 +895,8 @@ mod tests {
             skip_built: false,
             vcs_skip_tolerance: None,
             no_sync: false,
+            build_dir: None,
+            no_build_dir_prompt: false,
             allow_broken_rustc: false,
             standalone_root: None,
         };
@@ -1004,6 +1024,8 @@ mod tests {
             skip_built: false,
             vcs_skip_tolerance: None,
             no_sync: false,
+            build_dir: None,
+            no_build_dir_prompt: false,
             allow_broken_rustc: false,
             standalone_root: None,
         }

@@ -138,6 +138,13 @@ pub struct Invocation {
     /// `--no-sync`: build the committed version and sums as-is — no provider
     /// query, no anchoring, no rewrite (§B.8).
     pub no_sync: bool,
+    /// `--build-dir PATH`: the build-cache root for this run (§J.2) — beats
+    /// `GSA_BUILD_DIR` beats config `build_dir`. Also written by the prompt,
+    /// so the run record's continuation restates the chosen root.
+    pub build_dir: Option<String>,
+    /// `--no-build-dir-prompt`: resolve the build root silently from the
+    /// layers instead of asking on a TTY (the pre-prompt behaviour).
+    pub no_build_dir_prompt: bool,
     /// `--allow-broken-rustc`: skip the rustc sanity probe entirely (§B.8;
     /// escape hatch for runs that compile no Rust).
     pub allow_broken_rustc: bool,
@@ -346,6 +353,8 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
         skip_built: false,
         vcs_skip_tolerance: None,
         no_sync: false,
+        build_dir: None,
+        no_build_dir_prompt: false,
         allow_broken_rustc: false,
         standalone_root: None,
     };
@@ -406,6 +415,13 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
                     inv.no_sync = true;
                     inv.deferred_flags.push("--no-sync".to_string());
                 }
+                "no-build-dir-prompt" => {
+                    if value.is_some() {
+                        return Err(format!("flag '--{name}' takes no value"));
+                    }
+                    inv.no_build_dir_prompt = true;
+                    inv.deferred_flags.push(format!("--{name}"));
+                }
                 "allow-broken-rustc" => {
                     if value.is_some() {
                         return Err("flag '--allow-broken-rustc' takes no value".to_string());
@@ -445,7 +461,7 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
                     inv.deferred_flags.push(format!("--{name}"));
                 }
                 "vcs-skip-tolerance" | "lanes" | "jobs" | "intensity" | "state-dir" | "config"
-                | "tail" | "keep" | "show" | "prefetch-ahead" => {
+                | "tail" | "keep" | "show" | "prefetch-ahead" | "build-dir" => {
                     let value = match value {
                         Some(v) => v,
                         None => {
@@ -467,6 +483,7 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
                         "jobs" => inv.jobs = Some(value.clone()),
                         "intensity" => inv.intensity = Some(value.clone()),
                         "state-dir" => inv.state_dir = Some(value.clone()),
+                        "build-dir" => inv.build_dir = Some(value.clone()),
                         "config" => inv.config = Some(value.clone()),
                         "prefetch-ahead" => inv.prefetch_ahead = Some(value.clone()),
                         "vcs-skip-tolerance" => inv.vcs_skip_tolerance = Some(value.clone()),
