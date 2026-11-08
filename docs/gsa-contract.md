@@ -155,7 +155,7 @@ gsa <FAMILY>[cluster] [long-modifiers] [targets…] [ranges…] [-- <pacman args
 | --- | --- |
 | `gsa -S <targets…> [ranges…]` | build the selection in build order; install each package's archives immediately after its build and **before any consumer builds** (install-before-dependents, `docs/MEMORY.md` rule 11). Install decision is *checked* (§E) |
 | `gsa -Sl [targets…] [ranges…]` | list the ordered selection with the indices ranges address (today `-l`; with no selection, the whole set in build order) |
-| `gsa -Sw <targets…>` | **fetch-only, Phase 4** (`plan.md` §2): fetch and verify sources ahead of builds; no build, no install. Verdict rows are advisory (§D) |
+| `gsa -Sw <targets…>` | fetch-only (live; `gsa fetch` is the alias) (`plan.md` §2): fetch and verify sources ahead of builds; no build, no install. Verdict rows are advisory (§D) |
 | `gsa -Sy` | version-sync pass only: provider queries, recipe rewrites left uncommitted, disposition block printed (today's automatic pre-build sync made explicitly runnable) |
 | `gsa -Su [targets…] [ranges…]` | update: build+install the stale set (recipes whose tracked version moved past their newest built instance) with **no sync pass** — the committed versions build as-is (`pacman -Su` semantics) |
 | `gsa -Syu [targets…] [ranges…]` | sync first (`-Sy`), then build+install the stale set |
@@ -260,7 +260,7 @@ is a pure read with no confirmation at all. Wording-only (§L.2); pinned by
 
 | Modifier | Meaning |
 | --- | --- |
-| `--dry-run` | render plan + decision rows without building, installing, fetching, or mutating anything (today `-n`) |
+| `--dry-run` | render the plan without building, installing, fetching, or mutating anything (today `-n`); an install run (`-U`, `-S`) also renders its §E decision rows, while a build plan carries plan rows only — the archives do not exist yet, so there is no install decision to compute |
 | `--leaf` | leaf-only selection: build exactly the named recipes, no consumer expansion (today `--no-deps`) |
 | `--skip` | skip-if-fresh resume (today `-s`): skip a package whose archive set is fresh against its recorded VCS baselines; the `freshness-waived` and `abi-provider-waived` waiver reasons and the `upstream-unverified` deferral are kept verbatim (`docs/build-guide.md` "Skip and resume") |
 | `--skip-built` | skip anything already built: newest complete, payload-valid output set at any version; no upstream probes, no waivers; a recipe commit newer than the set rebuilds (kept verbatim) |
@@ -378,7 +378,7 @@ The dumb-TTY rule is §L.9.
 | `--no-deps` | `--leaf` | renamed (leaf-only mode) |
 | `-c/--clean` | `-Mc`, and cluster letter `c` on `-S`/`-B` | split: prune verb vs build-run modifier |
 | `-cc/--cleanup` | `-Mcc` | carried |
-| `-ccc/--nuclear` | `-Mccc` | carried (still asks first, still prints targets) |
+| `-ccc/--nuclear` | `-Mccc` | carried (prints its targets and stops rc 3 `confirmation-required` without `--noconfirm` — the engine never prompts, §B.7/§K.3) |
 | `-s/--skip` | `--skip` | carried as long-only; short `-s` dropped (collides with the pacman search idiom `-Ss`) |
 | `--skip-built` | `--skip-built` | carried |
 | `--vcs-skip-tolerance N` | same | carried |
@@ -425,7 +425,7 @@ gsa is pacman-shaped: **reads run as any user; mutations require root.**
 
 | Class | Spellings | Rule |
 | --- | --- | --- |
-| read-only | every `-Q*`, `-Ss/-Si/-Sl/-Sg`, `-Bl`, `--dry-run` plans, `-Ma`, report forms of `-Md/-Mi/-Ml/-Mh/-Ms/-Mw`, the hidden read seams (`--install-decide`, `--local-db-check`, `--qa-check`, `--stale-lock-check`), `--help` | any user; never writes state |
+| read-only | every `-Q*`, `-Sl`, `-Bl`, `--dry-run` plans, `-Ma`, report forms of `-Md/-Mi/-Ml/-Mh/-Ms/-Mw`, the hidden read seams (`--install-decide`, `--local-db-check`, `--qa-check`, `--stale-lock-check`), `--help` | any user; never writes state |
 | mutating | `-S`, `-B`, `-U`, `-Sw`, `-Sy`, `-Su`, `-Mi --prune/--backfill`, `-Md --fix`, `-Ml --keep`, `-Mh --prune`, `-Ms/-Mw --add/--remove`, every `-Mc/-Mcc/-Mccc`, hidden write seams (`--install-register`, `--register-ignorepkg`) | **root required**; unprivileged → early refusal, **rc 3** (§G.1), wording `you cannot perform this operation unless you are root` plus a `sudo` remedy |
 | build-user-only | `-Mm` (mirrors) | never under a root supervisor (`docs/source-sharing.md`); refused with rc 3 when euid 0 |
 
@@ -643,10 +643,11 @@ invocations with rc 2, and are callable only by fixtures.
 | --- | --- | --- |
 | `--install-decide` | `gsa --install-decide <checked\|force> <archive…>` | prints decision rows (§E) on stdout and touches nothing else: no pacman, sudo, flock, or makepkg. rc 0 plan / 1 refusal / 2 bad usage |
 | `--lane-job` | `gsa --lane-job <pkg> <result-path> <jobs> <flags…>` | the lane child entry: one package, one result file. Positional payload, control characters rejected, invalid flag/job rejected with rc 2 and a message naming the argument. Writes exactly one result row through the typed codec (§F.2) |
-| `--fetch-job` | `gsa --fetch-job <pkg> <result-path> …` | **Phase 4** (`plan.md` §2.1): one-shot fetch child, `makepkg --verifysource` as the only fetch/verify engine. Publishes `ok\|failed\|skipped` + kebab reason (`not-a-candidate`, `vcs-only`, …). Advisory: it never writes a run-record row and never changes the run rc (`plan.md` §3.3) |
+| `--fetch-job` | `gsa --fetch-job <pkg> <result-path> …` | live (`plan.md` §2.1): one-shot fetch child, `makepkg --verifysource` as the only fetch/verify engine. Publishes `ok\|failed\|skipped` + kebab reason (`not-a-candidate`, `vcs-only`, …). Advisory: it never writes a run-record row and never changes the run rc (`plan.md` §3.3) |
 | `--stale-lock-check` | `gsa --stale-lock-check` | the production pacman-lock probe without a run (holder identification via `/proc/*/fd`, never `db.lck` deletion) |
-| `--local-db-check` | `gsa --local-db-check` | the production pacman local-DB health probe without a run |
+| `--local-db-check` | `gsa --local-db-check [health\|runs]` | the production pacman local-DB health probe without a run (`health`, the default) or a run-history dump (`runs`); `--state-dir` applies |
 | `--install-register` | `gsa --install-register <conf> <subject> <names…>` | the IgnorePkg registration write path in isolation, including its bounded `db.lck` wait |
+| `--register-ignorepkg` | `gsa --register-ignorepkg <conf> <names…>` | the one-shot IgnorePkg backfill in isolation (the public verb is `gsa -Mi --backfill`; the seam stays for fixtures and for an engine older than the verb) |
 | `--qa-check` | `gsa --qa-check <name> …` | run exactly one QA check (today `--audit-lint <family>`); the check registry's single-entry point |
 
 *Amendment (2026-10-14, cutover gap G10 — the `--lane-job` flags payload
@@ -937,7 +938,10 @@ arguments come from ONE flag-rule table with an explicit not-mirrored list;
 `--no-sync`, `--allow-broken-rustc`, `--fail-fast`, and the resolved
 `--lanes`/`--jobs`/`--intensity` values are mirrored as explicit flags;
 prune strengths, one-shot actions (`-Q*`, `-Sy`, `-Ua`, `-M*`), and hidden
-seams are never mirrored. Environment inputs are warned about (`env-required`),
+seams are never mirrored. **The update spellings are the exception:** `-Su`
+and `-Syu` mirror as themselves (H9 — a `-Syu` continuation that downgraded
+to `-Su` would silently drop the sync it recorded), so `-Su`/`-Syu` do
+not belong in the never-mirrored list. Environment inputs are warned about (`env-required`),
 never baked in.
 
 *Amendment (2026-10-14, cutover gap (b)/G4 — the flag-rule table as
@@ -998,7 +1002,13 @@ not `ok`.
 *Amendment (2026-10-14, cutover gap G3 — additive keys named).* §L.2 makes
 reason keys open; this closes their opacity. Observed additions beyond the
 table above (fixtures pin them): `mutex-timeout` (failed),
-`result-clear-failed` (failed), `install-refused <cause>` (never-started — the
+`install-failed <cause>` (failed — the install-time rows, e.g. an unopenable
+pacman mutex; the row's last field is the specific cause),
+`build-killed-by-signal-<n>` (failed — makepkg died of signal `n` other than
+HUP/INT/TERM, which have their own lane codes), `lane-wait-failed` (failed —
+the wait for makepkg never delivered an end state; the lane sends one TERM and
+reaps, and the reason never claims a build failure),
+`install-refused <cause>` (never-started — the
 §E.3 refusal seen through the outcome rendering), `dry-run` (never-started),
 `held-after-install-failed` (never-started — a staged wave group after an
 earlier group failed), `startup-refused` (never-started — the run was refused
@@ -1316,6 +1326,15 @@ dispatch; a failure parks a cone (§I).
   `_GSA_STOP_GRACE_S` — deliberately **not** in the §B.8 roster: an
   unadvertised fixture override (the fish `_LANE_STOP_GRACE_S` seam carried
   over unchanged), unparsable values falling back to the default.
+
+  *Amendment (2026-11-08, the unadvertised-override class).* The `_GSA_`
+  prefix IS the convention, and every member of the class is named here so a
+  reader can tell a fixture knob from an operator knob: `_GSA_STOP_GRACE_S`
+  (above), `_GSA_FETCH_RETRY_S` and `_GSA_DISK_FLOOR_GIB` (`gsa-fetch`), and
+  `_GSA_TEST_PROBE_ROOT` (`gsa-install`'s local-DB liveness probe). A
+  `GSA_`-prefixed name is an operator input and belongs in the §B.8 roster;
+  a fixture-only knob that needs to act on a production path therefore
+  carries `_GSA_`, never `GSA_` (the 2026-11-08 rename).
 - **Orphan sweeps**: startup and post-run sweeps reap `--lane-job` /
   `--fetch-job` processes from earlier runs whose result files are unowned,
   and stale run artifacts (`.tmp.*`, abandoned result files). Unrelated

@@ -19,10 +19,10 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
 use gsa_recipe::toolchain::{
-    check_identity, clean_targets_in, force_queue, gcc_identity, marker_path, probe_scratch_base,
-    read_marker, remediation_plan, remediation_refusal_text, resolve_probe_scratch,
-    rustc_sanity_probe, sanitize_user_tag, write_marker, CleanTargets, IdentityState, ProbeStatus,
-    Remediation, GCC_UNAVAILABLE_IDENTITY,
+    check_identity, clean_targets, clean_targets_in, force_queue, gcc_identity, marker_path,
+    probe_scratch_base, read_marker, remediation_plan, remediation_refusal_text,
+    resolve_probe_scratch, rustc_sanity_probe, sanitize_user_tag, write_marker, CleanTargets,
+    IdentityState, ProbeStatus, Remediation, GCC_UNAVAILABLE_IDENTITY,
 };
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -39,7 +39,7 @@ struct EnvGuard {
 impl EnvGuard {
     fn lock() -> Self {
         let lock = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
-        let saved = ["PATH", "TMPDIR", "USER"]
+        let saved = ["PATH", "TMPDIR", "USER", "GSA_CONF"]
             .map(|key| (key, std::env::var_os(key)))
             .to_vec();
         EnvGuard { _lock: lock, saved }
@@ -493,6 +493,31 @@ fn clean_targets_reach_the_w4_cache_homes_with_name_truth() {
             .contains(&layout.pkgdest.join("p1-libs-2.0-1-any.pkg.tar.zst")),
         "a name-prefix neighbour in the shared PKGDEST must never be a clean target"
     );
+}
+
+#[test]
+fn clean_targets_refuses_an_unusable_layout_instead_of_degrading() {
+    let _env = EnvGuard::lock();
+    let root = scratch("clean-targets-unusable-layout");
+    let recipe = recipe_fixture(&root);
+    // An unknown gsa.conf key is a named error, so the layout cannot resolve.
+    let conf = root.join("gsa.conf");
+    fs::write(&conf, "not_a_key = 1\n").unwrap();
+    std::env::set_var("GSA_CONF", &conf);
+
+    let error = clean_targets(&recipe)
+        .err()
+        .expect("an unusable layout must not degrade to the recipe-dir half");
+    let text = error.to_string();
+    assert!(
+        text.contains("build-cache layout is unusable"),
+        "the wrapper must propagate the layout error verbatim, got: {text}"
+    );
+    // Targets are data and nothing is deleted when the target set cannot be
+    // computed in full.
+    assert!(recipe.join("p1-1.0.0-1-any.pkg.tar.zst").is_file());
+    assert!(recipe.join("src/stale-lto.o").is_file());
+    let _ = fs::remove_dir_all(&root);
 }
 
 #[test]

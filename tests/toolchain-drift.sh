@@ -158,23 +158,12 @@ exit 1
 EOF
 chmod +x "$ws/bin/pacman"
 
-# ENGINE DEFECT ISOLATION (recorded in the flip report; this fixture asserts
-# no index behaviour): the binpkg-index retention sweep of `register_instance`
-# (crates/gsa-state/src/index.rs — "retention pruned … (archive)") deletes the
-# pruned instance's archive PATH without checking whether a KEPT row still
-# references it, and a same-version rebuild's instances share ONE path
-# (PKGDEST=$startdir). Measured repro: two consecutive `gsa -B` runs of one
-# package end with NO archive ("retention pruned p1 instance 1
-# (p1-1.0.0-1-any.pkg.tar.zst)" deletes the file instance 2 just registered),
-# which starves a later --skip claim AND runs before the post-build VCS
-# baseline step, so a rebuild's baseline cannot fingerprint its archive and
-# the toolchain marker never advances. Pre-creating the index store as a
-# directory disables the registration (its read path is best-effort — "ABI
-# wave check skipped" — and a failing registration is a note, never a run
-# failure), keeping the drift-gate subject — the baselines-then-marker half of
-# the hook is the production path — under test instead of the sweep. Drop this
-# when the sweep stops deleting paths that kept rows still reference.
-mkdir -p "$ws/state/index/binpkg.jsonl"
+# The old workaround (a DIRECTORY at `state/index/binpkg.jsonl` to make the
+# index read "best-effort") is gone with the sweep defect it isolated: the
+# retention sweep has kept a path a surviving row still references since
+# 3ce575a, and an unreadable index is now a fail-closed startup refusal (the
+# 2026-11-08 silent-failure wave), so the index must stay READABLE here — the
+# drift gate is the subject, not the store.
 
 export PATH="$ws/bin:$PATH"
 export GSA_FAKE_MAKEPKG_COUNT="$fixture/makepkg.count"

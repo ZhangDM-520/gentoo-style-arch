@@ -526,3 +526,48 @@ fn strength3_prunes_pulled_sources_in_both_homes() {
         "an extension-unmatched download survives in SRCDEST"
     );
 }
+
+#[test]
+fn an_unreadable_index_refuses_the_strength_instead_of_keeping_everything() {
+    let (fx, alpha, _beta) = workspace("prune-unreadable-index");
+    seed_live_home(&fx, "alpha", "alpha");
+    let state = fx.state();
+    // A directory where the index file belongs: a read failure, never the
+    // empty index a clean checkout answers with.
+    std::fs::create_dir_all(state.index_path()).unwrap();
+    let before = common::snapshot_tree(&fx.root);
+
+    fx.with_ctx(|ctx| {
+        for rows in [
+            prune::strength1(ctx, &["alpha".to_string()], true),
+            prune::strength2(ctx, true),
+            prune::strength3(ctx, true),
+        ] {
+            common::assert_row_grammar(&rows);
+            let refusal = common::find_row(&rows, "binpkg-index", "failed")
+                .expect("an unreadable index refuses the strength by name");
+            assert!(
+                refusal.reason.contains("cannot read the binpkg index"),
+                "{:?}",
+                refusal.reason
+            );
+            assert!(
+                rows.iter().all(|r| r.action != "prune" && r.action != "pruned"),
+                "no target may be planned or deleted against an untrusted index: {rows:?}"
+            );
+        }
+        // The same refusal for the plan and the apply pass: the tombstone
+        // step and the truth filter both depend on the index.
+        let applied = prune::strength2(ctx, true);
+        assert!(common::find_row(&applied, "binpkg-index", "failed").is_some());
+    });
+    assert_eq!(
+        common::snapshot_tree(&fx.root),
+        before,
+        "a refused strength deletes nothing"
+    );
+    assert!(
+        alpha.join("alpha-1.0-1-any.pkg.tar.zst").exists(),
+        "the legacy archive survives"
+    );
+}

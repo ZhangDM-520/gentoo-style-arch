@@ -117,11 +117,11 @@ set_topology_record "$ws" bareapp-git git ''
 mkdir -p "$ws/db/local"
 
 # Rule 25(b) liveness probes owned files at a synthetic probe root (the
-# `GSA_TEST_PROBE_ROOT` seam, the `from_packages_at` twin): db_install
+# `_GSA_TEST_PROBE_ROOT` seam, the `from_packages_at` twin): db_install
 # fabricates DB truth only, `root_materialize` is the fixture's explicit
 # "the file is really there at the root". Unset, the engine probes
 # production `/`.
-export GSA_TEST_PROBE_ROOT="$ws/root"
+export _GSA_TEST_PROBE_ROOT="$ws/root"
 mkdir -p "$ws/root"
 
 # Payloads: the provider ships usr/lib/libgreet.so.1 (DT_SONAME); the

@@ -172,18 +172,26 @@ pub fn discover_recipe_ranked(
     // Expected output names: the committed `.SRCINFO`'s `pkgname` lines —
     // the names built archives actually carry (a recipe whose pkgbase
     // differs from its outputs must never demand an archive named after the
-    // pkgbase) — falling back to pkgbase for a base-only record. No
-    // `.SRCINFO` means no expectation: every readable archive is eligible.
+    // pkgbase) — falling back to pkgbase for a base-only record.
+    // An ABSENT `.SRCINFO` is legitimate (a base-only record) and means no
+    // expectation — but a committed one that cannot be read or parsed is
+    // damage: with `expected` empty every readable archive is eligible and
+    // the `partial-set` refusal can never fire. Hard error; the caller turns
+    // it into a `refuse discover-failed` row (§E.3), never a widened set.
     let mut expected: Vec<String> = Vec::new();
     let srcinfo_path = recipe_dir.join(".SRCINFO");
-    if let Ok(text) = std::fs::read_to_string(&srcinfo_path) {
+    if let Some(text) = gsa_model::read::optional(&srcinfo_path)? {
         let origin = srcinfo_path.to_string_lossy().into_owned();
-        if let Ok(info) = gsa_recipe::parse_srcinfo(&text, &origin) {
-            if !info.pkgnames.is_empty() {
-                expected = info.pkgnames.clone();
-            } else if let Some(base) = info.pkgbase.clone() {
-                expected.push(base);
-            }
+        let info = gsa_recipe::parse_srcinfo(&text, &origin).map_err(|error| {
+            format!(
+                "cannot parse the committed metadata {}: {error}",
+                srcinfo_path.display()
+            )
+        })?;
+        if !info.pkgnames.is_empty() {
+            expected = info.pkgnames.clone();
+        } else if let Some(base) = info.pkgbase.clone() {
+            expected.push(base);
         }
     }
 
@@ -477,18 +485,28 @@ fn row(subject: &str, decision: Decision, reason: impl Into<String>) -> Decision
 
 /// The second name authority (rule 9): the recipe directory's committed
 /// `.SRCINFO` pkgbase + pkgnames.
-fn recipe_srcinfo_names(recipe_dir: Option<&Path>) -> Vec<String> {
+///
+/// An ABSENT `.SRCINFO` is a base-only record and answers with no names; a
+/// committed one that cannot be read or parsed is damage, and answering
+/// "no names" there would narrow the name chain — skipping the park and
+/// index-validity lookups a name would have reached. `Err` carries the
+/// damage and the caller refuses.
+fn recipe_srcinfo_names(recipe_dir: Option<&Path>) -> Result<Vec<String>, String> {
     let Some(dir) = recipe_dir else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     let path = dir.join(".SRCINFO");
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return Vec::new();
+    let text = match gsa_model::read::optional(&path)? {
+        Some(text) => text,
+        None => return Ok(Vec::new()),
     };
     let origin = path.to_string_lossy().into_owned();
-    let Ok(info) = gsa_recipe::parse_srcinfo(&text, &origin) else {
-        return Vec::new();
-    };
+    let info = gsa_recipe::parse_srcinfo(&text, &origin).map_err(|error| {
+        format!(
+            "cannot parse the committed metadata {}: {error}",
+            path.display()
+        )
+    })?;
     let mut names = Vec::new();
     if let Some(base) = info.pkgbase {
         names.push(base);
@@ -498,7 +516,7 @@ fn recipe_srcinfo_names(recipe_dir: Option<&Path>) -> Vec<String> {
             names.push(name);
         }
     }
-    names
+    Ok(names)
 }
 
 /// The ABI subsystem's installed-ELF view over the parsed local DB — the
@@ -571,9 +589,10 @@ fn already_current(info: &Pkginfo, archive: &Path, db: &LocalDb) -> Option<Strin
 /// `refuse <keyword> …` rows (`gsa_qa::gate`; report-severity checks cannot
 /// reach that conversion at all). The input is one candidate's archive plus
 /// the recipe beside it (both name authorities, rule 9) and the installed
-/// DB; a candidate with no readable committed `.SRCINFO` leaves the check
-/// nothing to compare and it stands down (that damage is the discovery
-/// gate's `partial-set`/`discover-failed` class).
+/// DB. An ABSENT committed `.SRCINFO` leaves the check nothing to compare
+/// (legitimate for a base-only record, and discovery's `partial-set` covers
+/// the rest); an unreadable or unparseable one must NOT stand the gate down
+/// — it emits `refuse discover-failed`, the same class discovery raises.
 fn qa_refusals(
     candidate: &Candidate,
     info: &Pkginfo,
@@ -587,13 +606,27 @@ fn qa_refusals(
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
         let srcinfo = dir.join(".SRCINFO");
-        if let Ok(content) = std::fs::read_to_string(&srcinfo) {
-            if let Ok(rows) = gsa_recipe::parse_srcinfo_rows(&content, &srcinfo.to_string_lossy()) {
-                recipes.push(gsa_qa::QaRecipe {
+        let content = match gsa_model::read::optional(&srcinfo) {
+            Ok(None) => None,
+            Ok(Some(content)) => Some(content),
+            Err(error) => return vec![qa_unreadable(info, &error)],
+        };
+        if let Some(content) = content {
+            match gsa_recipe::parse_srcinfo_rows(&content, &srcinfo.to_string_lossy()) {
+                Ok(rows) => recipes.push(gsa_qa::QaRecipe {
                     id: recipe_id.clone(),
                     dir: dir.to_path_buf(),
                     rows,
-                });
+                }),
+                Err(error) => {
+                    return vec![qa_unreadable(
+                        info,
+                        &format!(
+                            "cannot parse the committed metadata {}: {error}",
+                            srcinfo.display()
+                        ),
+                    )]
+                }
             }
         }
     }
@@ -610,6 +643,17 @@ fn qa_refusals(
         exclusions: &[],
     };
     gsa_qa::gate::install_refusals(&input)
+}
+
+/// A committed-metadata read the QA gate could not perform: the gate cannot
+/// verify what it cannot read, so the row is a refusal of the documented
+/// discovery-damage class (§E.3 `discover-failed`), never a silent pass.
+fn qa_unreadable(info: &Pkginfo, error: &str) -> DecisionRow {
+    row(
+        &info.pkgname,
+        Decision::Refuse,
+        format!("discover-failed {error}"),
+    )
 }
 
 fn plan(candidates: &[Candidate], ctx: &DecisionContext, db: &LocalDb) -> Result<Plan, String> {
@@ -686,12 +730,28 @@ fn plan(candidates: &[Candidate], ctx: &DecisionContext, db: &LocalDb) -> Result
     let mut plans: Vec<CandidatePlan> = Vec::new();
     for (idx, candidate) in candidates.iter().enumerate() {
         let pkginfo = parsed[idx].clone();
-        let src_names = recipe_srcinfo_names(candidate.recipe_dir.as_deref());
         let mut name_chain: Vec<String> = Vec::new();
         if let Some(info) = &pkginfo {
             name_chain.push(info.pkgbase.clone());
             name_chain.push(info.pkgname.clone());
         }
+        // A broken committed metadata read must refuse: answering "no names"
+        // would narrow the chain and skip every lookup those names reach.
+        let src_names = match recipe_srcinfo_names(candidate.recipe_dir.as_deref()) {
+            Ok(names) => names,
+            Err(error) => {
+                let subject = name_chain
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "-".to_string());
+                plans.push(CandidatePlan {
+                    candidate: candidate.clone(),
+                    pkginfo,
+                    rows: vec![row(&subject, Decision::Refuse, format!("discover-failed {error}"))],
+                });
+                continue;
+            }
+        };
         for name in &src_names {
             if !name_chain.contains(name) {
                 name_chain.push(name.clone());

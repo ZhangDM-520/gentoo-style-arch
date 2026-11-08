@@ -243,8 +243,13 @@ pub struct CleanTargets {
 /// unreachable ref must refuse while the archive and its VCS baseline still
 /// exist. Cleaning first destroys the evidence the refusal needs.
 pub fn clean_targets(recipe_dir: &Path) -> io::Result<CleanTargets> {
-    let layout = gsa_model::config::build_layout_for_run().ok();
-    clean_targets_in(recipe_dir, layout.as_ref())
+    // The layout is REQUIRED, not best-effort: degrading to the recipe-dir
+    // half is exactly the silent prune-that-stops-covering-the-cache this
+    // wrapper replaced (the sibling at `gsa-cli/src/build.rs`). The caller
+    // names the failure and deletes nothing.
+    let layout = gsa_model::config::build_layout_for_run()
+        .map_err(|error| io::Error::new(io::ErrorKind::Other, error))?;
+    clean_targets_in(recipe_dir, Some(&layout))
 }
 
 /// [`clean_targets`] against a given layout (`None` = recipe-dir half only).

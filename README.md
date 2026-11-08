@@ -83,7 +83,10 @@ installs the engine as `/usr/bin/gsa` for everyday use.
   exactly why; a refused install never touches pacman; an interrupted run
   prints the same record a finished one does.
 - **The build runs as you.** The engine and pacman act as root; `makepkg`
-  and all build-side tools run as your user. It never prompts.
+  and all build-side tools run as your user. It never prompts *for privilege*:
+  `sudo -n` throughout, no password question. The one question it does ask is
+  the build-cache root on a TTY (`--build-dir PATH` answers it, and
+  `--no-build-dir-prompt` keeps the old silent behaviour).
 
 ## Read before building
 

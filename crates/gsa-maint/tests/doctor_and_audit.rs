@@ -89,6 +89,41 @@ fn doctor_names_an_orphan_row_and_fix_tombstones_it() {
 }
 
 #[test]
+fn an_unreadable_index_is_named_and_refuses_the_repair() {
+    let fx = doctor_fixture("doctor-unreadable-index");
+    let archive = fx
+        .root
+        .join("packages/git/alpha/alpha-1.0-1-any.pkg.tar.zst");
+    make_archive(&archive, "alpha", "alpha", "1.0-1");
+    let state = fx.state();
+    // A directory where the index file belongs: a read failure, which the
+    // store never confuses with a missing index (that one is the empty
+    // store a clean checkout has).
+    std::fs::create_dir_all(state.index_path()).unwrap();
+
+    fx.with_ctx(|ctx| {
+        let rows = doctor::report(ctx);
+        common::assert_row_grammar(&rows);
+        let failure = common::find_row(&rows, "binpkg-index", "failed")
+            .expect("an unreadable index is a finding of its own");
+        assert!(
+            failure.reason.contains("cannot read the binpkg index"),
+            "{:?}",
+            failure.reason
+        );
+        assert!(
+            rows.iter()
+                .all(|r| r.action != "orphan-archive" && r.action != "orphan-row"),
+            "an unreadable index must not make every archive an orphan: {rows:?}"
+        );
+        // The repair refuses instead of reindexing against a fiction; the
+        // adapter maps this Err to the rc-3 refusal class.
+        assert!(doctor::fix(ctx, true).is_err());
+        assert!(doctor::fix(ctx, false).is_err());
+    });
+}
+
+#[test]
 fn fix_dry_run_plans_the_named_repairs_and_mutates_nothing() {
     let fx = doctor_fixture("doctor-dry-run");
     let state = fx.state();

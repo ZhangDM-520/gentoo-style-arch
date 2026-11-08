@@ -2048,6 +2048,49 @@ going stale.
 
 ### Queued (claim by editing this section)
 
+- **audit deepening wave 2 (2026-11-08, planned)**: the defects from the
+  review are fixed (NOTE.md 2026-11-08, silent-failure wave 1); these are the
+  structural deepenings it named, each needing a design decision rather than a
+  patch: (1) **one root resolution** — `resolve_state_dir_from`
+  (`gsa-model/src/config.rs:456`), `recipe_root_from` (:501),
+  `build_root_with_source` (:59) and `resolve_srcdest` (:352) hand-roll the
+  same env > config > default ladder; only the build root reports provenance,
+  and `gsa -Md`/`env-required` re-derive it. (2) **the dashboard projects the
+  run record** instead of recounting it (`gsa-cli/src/dashboard.rs:114-210`
+  keeps its own totals and already drifted once — commit `474b575`). (3) **one
+  refusal seam** for the exit-code contract: `refuse_before_dispatch` is now
+  the shape, but the remaining rc-3 sites are still hand-built. Report:
+  `/tmp/architecture-review-20261108-231647.html` §"Deepening candidates";
+  the store-format stamp (5) rides the recipe-repo split entry, the repo split
+  (6) is queued below.
+
+- **recipe repo split (2026-11-08, planned — research COMPLETE)**: move the
+  recipe half (`packages/`, `config/`, `lib/`, the recipe docs, the fixtures
+  that walk the real tree) into its own repository so recipe churn stops
+  drowning engine review (~30 of the last 40 commits are `umbriel-git` patch
+  re-cuts). The consume seam already exists — `recipe_url` (§B.11), the
+  canonical store, `gsa -Sy`'s fetch+hard-reset, and `gsa-pm` fetching the
+  engine by URL with no pin — so this is a directory move plus a default
+  change, not a new path. Researched facts that gate it (verify with
+  `git ls-files` at claim time; full executable plan in
+  `.logs/plan-2026-11-08-recipe-repo-split.md`): (a) **30 of 74** fixtures
+  read the real tree, not ~8 — 26 recipe-content fixtures move, 4 engine
+  fixtures (`project`, `recipe-contract`, `abi-batch-policy`,
+  `abi-need-check`) stay and need `GSA_RECIPE_CHECKOUT`;
+  `crates/gsa-cli/tests/real-tree.rs` resolves the root via
+  `CARGO_MANIFEST_DIR/../..` (a hard break); (b) the store needs a
+  **compatibility marker** it does not have today (`store_format = N` in
+  `config/build-defaults.conf`, owned by `gsa-topo`, absent = 1,
+  unknown/newer = loud rc 2) — one repo hides the skew, two make it live;
+  (c) **`gsa-state/src/recipes.rs:208-217` fetches the checkout's EXISTING
+  origin and never reads `recipe_url`**, so repointing the default does not
+  retarget an existing install — engine release E1 must make `refresh()`
+  compare and `git remote set-url`. Sequence: E1 (store_format gate +
+  set-url + `GSA_RECIPE_CHECKOUT` for the 4 real-tree fixtures) → split
+  (`git filter-repo`, history-preserving) → repoint `DEFAULT_RECIPE_URL` →
+  move fixtures. Land AFTER the 2026-11-08 audit fixes; promote to an ADR when
+  the gate design is settled.
+
 - **flag-revision validation rebuild (2026-11-03)**: the T1→T2→T3
   per-recipe compile-flag appends (133 recipes, `# flag-audit 2026-11-01`
   markers; NOTE.md 2026-11-03) are edit-only and deliberately unvalidated —
@@ -2477,6 +2520,14 @@ constant, not a baked path); and the xorg-xwayland-git PGO end-to-end proof
 
 ## 6. Pitfall digest (full details: NOTE.md sections of same dates):
 
+- **An unreadable read is not an absent one — and a `failed` row must reach
+  the exit code** (2026-11-08, silent-failure wave 1): three-state reads
+  (`gsa_model::read`), the `-Syu` refusal routed through
+  `refuse_before_dispatch`, the fail-closed ABI wave gate, `lane-wait-failed`
+  teardown, `MutexError::{Busy,Unopenable}`, the single `help::ENV_INPUTS`
+  roster and the `_GSA_` fixture-knob prefix. Rule 71 states the contract;
+  details: NOTE.md 2026-11-08 (silent-failure wave 1). (last reviewed
+  2026-11-08)
 - **A multi-output index instance is a SET of per-output token rows, and a
   `-` subscription token is NO token — compare sets, never one row**
   (2026-11-03, the ABI-wave false-move class / the `--leaf` dispatch hijack):
@@ -4378,6 +4429,18 @@ constant, not a baked path); and the xorg-xwayland-git PGO end-to-end proof
     flag change — for meson at least the configured `build/` dir, since
     `setup` otherwise no-ops — and force the rebuild even when a later run
     reports Succeeded. (last reviewed 2026-10-31)
+71. **An unreadable file is not an absent one — a gate that cannot read must
+    refuse** (2026-11-08, silent-failure wave 1): `if let Ok(..)` and
+    `.unwrap_or_default()` around a read collapse "legitimately absent" into
+    "could not read", and every gate built on it stands down silently — a
+    corrupt committed `.SRCINFO` widened archive discovery so the
+    `partial-set` refusal could never fire; an unreadable binpkg index made
+    `-Mccc` report success while covering nothing; an unopenable mutex
+    blamed a concurrent run (`mutex-timeout`); a malformed `MemAvailable`
+    became a 1 GiB host. Use `gsa_model::read::{required,optional}` and
+    refuse on `Broken`; a `failed` row that leaves the exit code at 0 is the
+    same bug one layer up. Details: NOTE.md 2026-11-08 (silent-failure wave
+    1). (last reviewed 2026-11-08)
 - **`git apply -3 --check` exits 0 even when the patch conflicts — validate a
   repaired patch stack by CONTENT on a fresh clone, never by rc** (2026-11-02,
   umbriel-git drift repair): `--check` reported clean applies for a stack that

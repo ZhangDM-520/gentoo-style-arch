@@ -423,18 +423,25 @@ pub fn run(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
                 Vec::new()
             };
             let run_strength = |apply: bool| -> Result<(Vec<Row>, i32), String> {
-                Ok((
-                    match strength {
-                        1 => gsa_maint::prune::strength1(&ctx, &recipes, apply),
-                        2 => gsa_maint::prune::strength2(&ctx, apply),
-                        _ => gsa_maint::prune::strength3(&ctx, apply),
-                    },
-                    RC_OK,
-                ))
+                let rows = match strength {
+                    1 => gsa_maint::prune::strength1(&ctx, &recipes, apply),
+                    2 => gsa_maint::prune::strength2(&ctx, apply),
+                    _ => gsa_maint::prune::strength3(&ctx, apply),
+                };
+                // A strength that aborted on a state read emits a named
+                // `failed` row (e.g. an unreadable binpkg index) and mutates
+                // nothing: the rc must carry that refusal, or the row is the
+                // only place the damage is visible.
+                let rc = if rows.iter().any(|row| row.action == "failed") {
+                    RC_REFUSAL
+                } else {
+                    RC_OK
+                };
+                Ok((rows, rc))
             };
-            // -Mccc prints its target list and asks first (§B.7): without
-            // --noconfirm the PLAN is printed and the run stops rc 3 —
-            // nothing is deleted (the engine never prompts, §K.3).
+            // -Mccc prints its target list and stops rc 3 (§B.7): without
+            // --noconfirm the PLAN is printed and the run stops — the
+            // engine never prompts (§K.3), nothing is deleted.
             let confirming = strength >= 3 && !inv.dry_run && !has_flag(inv, "--noconfirm");
             if confirming {
                 match run_strength(false) {

@@ -421,6 +421,18 @@ fn render_event_human(event: &SupEvent, pkg: &dyn Fn(usize) -> String) -> String
     }
 }
 
+/// A parked row's `action` (§H.3): the action IS the park's reason, so a
+/// deferral cone and a coupled batch never render as a failure cone. An
+/// unknown reason falls back to the failure-cone action — the row's own
+/// `reason` still carries the text, and a park is never a pass.
+fn park_action(reason: &str) -> &'static str {
+    match reason {
+        "waits-on-deferred" => "waits-on-deferred",
+        "coupled-batch" => "coupled-batch",
+        _ => "waits-on-failed",
+    }
+}
+
 fn render_event_machine(event: &SupEvent, pkg: &dyn Fn(usize) -> String) -> String {
     use Level::{Info, Warning};
     let line = match event {
@@ -446,7 +458,7 @@ fn render_event_machine(event: &SupEvent, pkg: &dyn Fn(usize) -> String) -> Stri
             let (level, name, action) = match row.status {
                 RowStatus::Succeeded => (Info, "lane-done", None),
                 RowStatus::Failed => (Warning, "lane-failed", Some("inspect-log")),
-                RowStatus::Parked => (Warning, "lane-parked", Some("waits-on-failed")),
+                RowStatus::Parked => (Warning, "lane-parked", Some(park_action(&row.reason))),
                 RowStatus::Deferred => (Warning, "lane-deferred", Some("revisit-deferral")),
                 RowStatus::NeverStarted => (Warning, "lane-never-started", Some("rerun")),
                 RowStatus::Interrupted => (Warning, "lane-interrupted", Some("rerun")),
@@ -469,7 +481,7 @@ fn render_event_machine(event: &SupEvent, pkg: &dyn Fn(usize) -> String) -> Stri
             &[
                 ("pkg", pkg(*index)),
                 ("reason", squash(reason)),
-                ("action", "waits-on-failed".to_string()),
+                ("action", park_action(reason).to_string()),
             ],
         ),
         SupEvent::Signal(sig) => kv_line(Warning, "signal", &[("sig", sig.to_string())]),
@@ -723,7 +735,7 @@ fn run_prose(
                             ("status", "parked".to_string()),
                             ("reason", squash(&row.reason)),
                             ("parked-by", squash(&by)),
-                            ("action", "waits-on-failed".to_string()),
+                            ("action", park_action(&row.reason).to_string()),
                         ],
                     ));
                     out.push('\n');
@@ -986,6 +998,65 @@ mod tests {
         // The view heartbeat is not a message: it renders EMPTY (no line to
         // terminate) so a machine stream gains nothing per tick.
         assert_eq!(render_event_machine(&SupEvent::Tick, &pkg), "");
+    }
+
+    /// §H.3: a parked row's `action` IS its park reason — a deferral cone
+    /// and a coupled batch used to render as a failure cone because the
+    /// action was hardcoded. An unknown reason keeps the failure-cone action
+    /// (the row's `reason` still carries the text; a park is never a pass).
+    #[test]
+    fn parked_actions_follow_the_park_reason() {
+        for (reason, action) in [
+            ("waits-on-failed", "waits-on-failed"),
+            ("waits-on-deferred", "waits-on-deferred"),
+            ("coupled-batch", "coupled-batch"),
+            ("park-marker-unwritable", "waits-on-failed"),
+        ] {
+            let finished = SupEvent::Finished {
+                index: 0,
+                row: row("vtk", RowStatus::Parked, None, None, reason),
+            };
+            assert_eq!(
+                render_event_machine(&finished, &pkg),
+                format!(
+                    "WARNING lane-parked pkg=vtk status=parked rc=- dur=- reason={reason} action={action}\n"
+                ),
+                "finished event, reason {reason}"
+            );
+            let parked = SupEvent::Parked {
+                index: 0,
+                reason: reason.to_string(),
+            };
+            assert_eq!(
+                render_event_machine(&parked, &pkg),
+                format!("WARNING lane-parked pkg=p0 reason={reason} action={action}\n"),
+                "park event, reason {reason}"
+            );
+        }
+        // The prose summary's machine half derives it from the row too.
+        let mut rec = prose_record();
+        rec.outcome = "deferral".to_string();
+        rec.rc = 5;
+        rec.outcomes = vec![row(
+            "umbriel-git",
+            RowStatus::Parked,
+            None,
+            None,
+            "waits-on-deferred",
+        )];
+        let out = run_prose(
+            &rec,
+            std::path::Path::new("/var/lib/gsa/logs"),
+            &[],
+            None,
+            false,
+        );
+        assert!(
+            out.contains(
+                "status=parked reason=waits-on-deferred parked-by=- action=waits-on-deferred"
+            ),
+            "{out}"
+        );
     }
 
     /// The human half of the catalog: every event renders in the readable

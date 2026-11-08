@@ -953,6 +953,27 @@ source=("git+https://example.invalid/gsrc.git")' git
         [ -L "$ws/packages/prbeta/prbeta-link-1.0.0-1-any.pkg.tar.zst" ] ||
             fail "the symlinked archive must survive every strength"
         [ -f "$outside" ] || fail "strength 3 must never follow the symlink"
+
+        # ── an unreadable binpkg index refuses the strength (rc 3) ────────
+        # The index names which instances died. A strength that cannot read
+        # it mutates nothing and says so in a `failed` row — and the exit
+        # code must carry that refusal, or the damage is visible only to a
+        # reader of the report.
+        printf 'fresh\n' >"$ws/packages/prgamma/keepme.pkg.tar.zst"
+        idx="$state/index/binpkg.jsonl"
+        /usr/bin/sudo -n mv "$idx" "$idx.saved"
+        # A directory where the file belongs: the read fails (EISDIR) rather
+        # than answering NotFound, whatever uid runs the engine.
+        /usr/bin/sudo -n mkdir "$idx"
+        run_engine "$ws" -Mcc --state-dir "$state"
+        [ "$FIXTURE_RC" = 3 ] ||
+            fail "an unreadable binpkg index must refuse the strength (rc 3), got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        vgrep "$FIXTURE_OUTPUT" -F "binpkg-index failed" >/dev/null ||
+            fail "the refusal must name the unreadable binpkg index: $FIXTURE_OUTPUT"
+        [ -f "$ws/packages/prgamma/keepme.pkg.tar.zst" ] ||
+            fail "a refused strength must delete nothing"
+        /usr/bin/sudo -n rmdir "$idx"
+        /usr/bin/sudo -n mv "$idx.saved" "$idx"
         assert_varlib_unchanged
     )
 fi

@@ -203,9 +203,21 @@ fn run_build_with(
         &crate::install::workspace_recipe_of_name(&db),
     ) {
         Ok(wave) => wave,
-        Err(message) => {
+        Err(WaveStateError(message)) => {
+            // Fail closed (§G.1 rc 3): the wave gate has no "unknown" state —
+            // it reads unreadable state as a refusal, never as an empty wave,
+            // and the refusal owes the full record (§H.1) like every other
+            // startup gate.
             let _ = writeln!(err, "gsa: {message}");
-            return 2;
+            return refuse_startup(
+                inv,
+                &selection,
+                &state_dir,
+                out,
+                err,
+                "startup-refused",
+                || resolve_budget(inv, &project, selection.listed.len()),
+            );
         }
     };
     extend_selection(&mut selection, &wave.additions);
@@ -876,14 +888,25 @@ pub(crate) fn plan_only(
     // the dry-run shows the wave it would build — additions join the plan,
     // and an under-covered member refuses (rc 3).
     let state_dir = gsa_state::resolve_state_root(inv.state_dir.as_deref())?;
-    let wave = wave_check(
+    // A dry run still plans: nothing mutates, so the plan is rendered, but an
+    // unreadable wave input makes the real run refuse (rc 3), and the plan's
+    // `rc` scalar reports that predicted class rather than a false 0.
+    let mut wave_refused = false;
+    let wave = match wave_check(
         out,
         err,
         ctx.graph,
         &selection,
         &state_dir,
         &crate::install::workspace_recipe_of_name(ctx.db),
-    )?;
+    ) {
+        Ok(wave) => wave,
+        Err(WaveStateError(message)) => {
+            let _ = writeln!(err, "gsa: {message}");
+            wave_refused = true;
+            WaveCheck::default()
+        }
+    };
     extend_selection(&mut selection, &wave.additions);
     let intensity = crate::resolve_intensity(project)?;
     // The note counts the POST-PROMPT closure: the prompt filters the
@@ -903,7 +926,7 @@ pub(crate) fn plan_only(
     );
     // §H.2: the record's `rc` scalar is the run's exit code — a refusing
     // plan reports its refusal, never a success.
-    let rc = if wave.uncovered {
+    let rc = if wave.uncovered || wave_refused {
         crate::RC_REFUSED
     } else {
         crate::RC_OK
@@ -911,6 +934,54 @@ pub(crate) fn plan_only(
     let rec = record::build_plan_record(inv, &selection, &inv.targets, &inv.ranges, &intensity, rc);
     let _ = write!(out, "{}", rec.render_machine());
     Ok(rc)
+}
+
+/// A fail-closed startup refusal raised after the plan exists but before the
+/// budget does: the refusal record owes its plan scalars, so the budget is
+/// resolved here — and a spelling error in it is a usage error that outranks
+/// the refusal (§G.1 precedence: usage 2 > refusal 3).
+fn refuse_startup(
+    inv: &Invocation,
+    selection: &Selection,
+    state_dir: &std::path::Path,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+    reason: &str,
+    budget: impl FnOnce() -> Result<Budget, String>,
+) -> i32 {
+    let budget = match budget() {
+        Ok(budget) => budget,
+        Err(message) => {
+            let _ = writeln!(err, "gsa: {message}");
+            return crate::RC_USAGE;
+        }
+    };
+    refuse_before_dispatch(inv, selection, &budget, state_dir, out, err, reason)
+}
+
+/// The `-Syu` sync step's routing (§B.4): a refusal is a fail-closed STARTUP
+/// gate — it owes the same prose summary + `format: 2` record + persisted
+/// history as every other refusal (§G.1 rc 3, §H.1) and carries the sync
+/// class key, never a bare rc. `None` means "continue to the stale set".
+///
+/// The deferral half needs no row of its own: a deferred recipe the stale
+/// set covers is re-deferred by the pipeline's own idempotent sync
+/// (`deferred 99`), and one the stale set does not cover has no build row to
+/// carry — the sync pass already said so on stderr, and the run's rc is
+/// earned by rows (§G.1).
+fn after_sync_phase(
+    inv: &Invocation,
+    selection: &Selection,
+    state_dir: &std::path::Path,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+    phase: &prepare::SyncPhase,
+    budget: impl FnOnce() -> Result<Budget, String>,
+) -> Option<i32> {
+    let reason = phase.refused.as_deref()?;
+    Some(refuse_startup(
+        inv, selection, state_dir, out, err, reason, budget,
+    ))
 }
 
 /// `gsa -Su` / `gsa -Syu` (contract §B.4): build+install the stale set.
@@ -993,12 +1064,14 @@ pub fn run_update(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) ->
 
     // ── 1. the `-Sy` phase (`gsa -Syu` only — H9: `gsa -Su` updates with no
     //    sync pass). A dry run never rewrites recipes, so it runs no sync at
-    //    all; a sync refusal aborts before anything builds, and a deferral
-    //    is reported and carried into the build rows below.
+    //    all; the routing below owns the rc classes.
     if inv.sync_first && !inv.no_sync && !inv.dry_run {
-        let (refused, _deferred) = prepare::sync_phase(&root, &graph, &selection, out, err);
-        if refused {
-            return crate::RC_REFUSED;
+        let phase = prepare::sync_phase(&root, &graph, &selection, out, err);
+        let code = after_sync_phase(inv, &selection, &state_dir, out, err, &phase, || {
+            resolve_budget(inv, &project, selection.listed.len())
+        });
+        if let Some(code) = code {
+            return code;
         }
     }
 
@@ -1309,6 +1382,12 @@ pub(crate) struct WaveCheck {
     pub uncovered: bool,
 }
 
+/// One state-read failure of the pre-dispatch ABI wave input, carried as the
+/// refusal message. The gate is fail-closed (§G.1 rc 3): unreadable state
+/// means the consumer wave is UNKNOWN, never empty, and a run that examined
+/// nothing must not build a provider past its consumers.
+pub(crate) struct WaveStateError(pub String);
+
 /// The `-S`/`-B` pre-dispatch ABI wave check (plan-native-pm.md §4.3,
 /// contract §E.3) — shared by the build pipeline and the `-n` plan. A
 /// provider whose registered token already moved (its newest binpkg index
@@ -1328,27 +1407,29 @@ pub(crate) fn wave_check(
     selection: &Selection,
     state_dir: &std::path::Path,
     recipe_of_name: &std::collections::BTreeMap<String, String>,
-) -> Result<WaveCheck, String> {
-    // State truth, read-only and best-effort: the binpkg index (the
-    // registered tokens) and the install-time `:=` subscription records.
-    // This seam never creates state and never fails the run — no readable
-    // state means no OBSERVABLE token move (loudly noted where it matters),
-    // and the run's own startup paths own state-root refusals (§G.1 rc 3).
+) -> Result<WaveCheck, WaveStateError> {
+    // A state root that does not exist is a clean checkout, not unreadable
+    // state: nothing was ever recorded, so no OBSERVABLE token move exists
+    // and there is nothing to read. A root that EXISTS but cannot be read is
+    // the refusal below (§J.1: the startup paths own creation).
     if !state_dir.is_dir() {
         return Ok(WaveCheck::default());
     }
     let state = match gsa_state::StateRoot::open(state_dir) {
         Ok(state) => state,
         Err(error) => {
-            let _ = writeln!(err, "gsa: note: ABI wave check skipped ({error})");
-            return Ok(WaveCheck::default());
+            return Err(WaveStateError(format!(
+                "ABI wave check refused: cannot open the state root {} ({error}) — the consumer wave is unknown, and a provider must never build past its consumers",
+                state_dir.display()
+            )));
         }
     };
     let index = match gsa_state::BinpkgIndex::load(&state) {
         Ok(index) => index,
         Err(error) => {
-            let _ = writeln!(err, "gsa: note: ABI wave check skipped: {error}");
-            return Ok(WaveCheck::default());
+            return Err(WaveStateError(format!(
+                "ABI wave check refused: cannot read the binpkg index ({error}) — the registered provider tokens are unknown"
+            )));
         }
     };
     for corrupt in &index.corrupt {
@@ -1361,8 +1442,9 @@ pub(crate) fn wave_check(
     let subs = match Subscriptions::load(&gsa_abi::subscriptions_path(state_dir)) {
         Ok(subs) => subs,
         Err(error) => {
-            let _ = writeln!(err, "gsa: note: ABI wave check skipped: {error}");
-            return Ok(WaveCheck::default());
+            return Err(WaveStateError(format!(
+                "ABI wave check refused: cannot read the install-time subscription records ({error}) — the consumers' recorded tokens are unknown"
+            )));
         }
     };
     for corrupt in &subs.corrupt {
@@ -1675,7 +1757,228 @@ fn emit_refusal_record(
 
 #[cfg(test)]
 mod tests {
-    use super::{build_order_ids, later_after, later_after_settled};
+    use super::{after_sync_phase, build_order_ids, later_after, later_after_settled, wave_check};
+    use crate::args::{Family, Invocation};
+    use crate::prepare;
+    use crate::select::Selection;
+    use gsa_model::RecipeId;
+    use gsa_sched::budget::Budget;
+    use std::path::PathBuf;
+
+    /// A per-process scratch state root, removed again by [`scratch`]'s
+    /// caller. Nothing outside it is touched (the fixture-battery rule).
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "gsa-cli-build-{name}-{}-{}",
+            std::process::id(),
+            std::thread::current()
+                .name()
+                .unwrap_or("t")
+                .replace(':', "_")
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        dir
+    }
+
+    fn budget() -> Budget {
+        Budget {
+            threads: 12,
+            memory_gib: 30,
+            intensity: "xhigh",
+            lanes: 2,
+            normal_jobs: 6,
+            core_jobs: 4,
+        }
+    }
+
+    fn selection_of(ids: &[&str]) -> Selection {
+        Selection {
+            listed: ids
+                .iter()
+                .enumerate()
+                .map(|(n, id)| (n + 1, RecipeId::new(*id).expect("fixture id")))
+                .collect(),
+            closure_size: ids.len(),
+            expansion_added: 0,
+            seeds: ids
+                .iter()
+                .map(|id| RecipeId::new(*id).expect("fixture id"))
+                .collect(),
+            notes: Vec::new(),
+        }
+    }
+
+    fn update_inv() -> Invocation {
+        Invocation {
+            output_mode: None,
+            family: Family::S,
+            action: None,
+            modifiers: Vec::new(),
+            sync_first: true,
+            dry_run: false,
+            leaf: false,
+            targets: vec!["@git".to_string()],
+            ranges: Vec::new(),
+            deferred_flags: Vec::new(),
+            fail_fast: false,
+            lanes: None,
+            jobs: None,
+            intensity: None,
+            state_dir: None,
+            config: None,
+            tail: None,
+            keep: None,
+            show: None,
+            pacman_args: None,
+            no_prefetch: false,
+            prefetch_ahead: None,
+            skip: false,
+            skip_built: false,
+            vcs_skip_tolerance: None,
+            no_sync: false,
+            build_dir: None,
+            no_build_dir_prompt: false,
+            allow_broken_rustc: false,
+            standalone_root: None,
+        }
+    }
+
+    /// `-Syu`'s pre-build sync refusal is a STARTUP gate (§G.1 rc 3) and
+    /// owes the same full record every other refusal emits (§H.1): the
+    /// `-Syu` path used to return a bare 3 with no prose, no `format: 2`
+    /// block and no run history. A deferral-only phase has no such row to
+    /// carry and continues to the stale set.
+    #[test]
+    fn sync_refusal_emits_a_complete_record_and_returns_refused() {
+        let dir = scratch("sync-refusal");
+        let inv = update_inv();
+        let selection = selection_of(&["glib2-git", "gtk4-git"]);
+        let mut out: Vec<u8> = Vec::new();
+        let mut err: Vec<u8> = Vec::new();
+        let rc = after_sync_phase(
+            &inv,
+            &selection,
+            &dir,
+            &mut out,
+            &mut err,
+            &prepare::SyncPhase {
+                refused: Some("sync-refused".to_string()),
+                deferred: Vec::new(),
+            },
+            || Ok(budget()),
+        )
+        .expect("a sync refusal is an exit, not a continue");
+        assert_eq!(rc, 3, "a sync refusal is the refusal class (§G.1)");
+        let text = String::from_utf8(out).expect("utf-8 record");
+        for needle in [
+            "--- run record begin ---",
+            "format: 2",
+            "outcome: refused",
+            "rc: 3",
+            "--- plan ---",
+            "glib2-git never-started - - sync-refused",
+            "gtk4-git never-started - - sync-refused",
+            "--- continuation ---",
+            "--- run record end ---",
+        ] {
+            assert!(text.contains(needle), "missing {needle:?} in:\n{text}");
+        }
+        // §H.1's amendment: the same record is persisted for `gsa -Mh`.
+        let root = gsa_state::StateRoot::open(&dir).expect("state root");
+        let (records, corrupt) = gsa_state::RunHistory::read(&root).expect("run history");
+        assert!(corrupt.is_empty(), "{corrupt:?}");
+        assert_eq!(records.len(), 1, "the refusal was not persisted");
+        assert_eq!(records[0].rc, 3);
+        assert_eq!(records[0].outcome, "refused");
+        // The deferral half is not an exit: the pipeline re-derives the
+        // `deferred 99` row for every stale recipe the sync deferred.
+        let mut deferred_out: Vec<u8> = Vec::new();
+        let mut err: Vec<u8> = Vec::new();
+        assert!(after_sync_phase(
+            &inv,
+            &selection,
+            &dir,
+            &mut deferred_out,
+            &mut err,
+            &prepare::SyncPhase {
+                refused: None,
+                deferred: vec![("gtk4-git".to_string(), "source-unfetchable".to_string())],
+            },
+            || Ok(budget()),
+        )
+        .is_none());
+        // A bad budget spelling outranks the refusal with the usage class.
+        let mut out: Vec<u8> = Vec::new();
+        assert_eq!(
+            after_sync_phase(
+                &inv,
+                &selection,
+                &dir,
+                &mut out,
+                &mut err,
+                &prepare::SyncPhase {
+                    refused: Some("sync-refused".to_string()),
+                    deferred: Vec::new(),
+                },
+                || Err("--lanes: garbage".to_string()),
+            ),
+            Some(2)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The ABI wave gate is fail-closed (§G.1 rc 3): a state root that
+    /// exists but cannot be read means the consumer wave is UNKNOWN. It used
+    /// to note-and-continue with an empty wave, so the run silently skipped
+    /// the gate and could build a provider past its consumers.
+    #[test]
+    fn an_unreadable_state_root_refuses_the_wave_gate_instead_of_carrying_on() {
+        let dir = scratch("wave-gate");
+        // A directory where the subscription-records FILE belongs: the path
+        // exists, so it is not the clean-checkout case, but it is no store.
+        std::fs::create_dir_all(dir.join("abi").join("subscriptions")).expect("subscriptions dir");
+        let records = vec![record("glib2-git", &[]), record("gtk4-git", &["glib2-git"])];
+        let graph = gsa_graph::Graph::build(&records).expect("acyclic fixture");
+        let selection = selection_of(&["glib2-git", "gtk4-git"]);
+        let mut out: Vec<u8> = Vec::new();
+        let mut err: Vec<u8> = Vec::new();
+        let result = wave_check(
+            &mut out,
+            &mut err,
+            &graph,
+            &selection,
+            &dir,
+            &std::collections::BTreeMap::new(),
+        );
+        let error = match result {
+            Ok(_) => panic!("unreadable state must refuse the wave gate, not skip it"),
+            Err(error) => error.0,
+        };
+        assert!(
+            error.contains("ABI wave check refused"),
+            "the refusal names itself: {error}"
+        );
+        let note = String::from_utf8(err).expect("utf-8 note");
+        assert!(
+            !note.contains("skipped"),
+            "the gate must never note-and-continue: {note}"
+        );
+        // A root that does NOT exist stays the clean-checkout case: nothing
+        // was ever recorded, so there is no observable token move.
+        let absent = dir.join("absent");
+        let mut err: Vec<u8> = Vec::new();
+        assert!(wave_check(
+            &mut out,
+            &mut err,
+            &graph,
+            &selection,
+            &absent,
+            &std::collections::BTreeMap::new()
+        )
+        .is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn order(ids: &[&str]) -> Vec<String> {
         ids.iter().map(|s| s.to_string()).collect()

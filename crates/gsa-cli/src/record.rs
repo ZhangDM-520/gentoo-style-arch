@@ -17,8 +17,10 @@ use crate::select::Selection;
 /// side-car run history (contract §H.1's amendment): persistence is storage
 /// of the one structure, never a fourth derivation. A dry-run record
 /// mutates nothing (§B.8) — it renders but is never stored. A persistence
-/// failure is loud (naming `--state-dir` as the remedy, §J.3) and never
-/// changes the record or its rc.
+/// failure never changes the record or its rc (the record already reached
+/// stdout), but it is loud and names the consequence: the run is missing
+/// from `gsa -Mh` and from continuation lookup. Remedy: `--state-dir`
+/// (§J.3).
 pub fn emit_machine_record(
     out: &mut dyn std::io::Write,
     record: &RunRecord,
@@ -36,25 +38,12 @@ pub fn emit_machine_record(
         let _ = err.write_all(&notes);
     }
     if let Err(error) = result {
-        let _ = writeln!(err, "gsa: error: run history not persisted: {error}");
+        let _ = writeln!(
+            err,
+            "gsa: error: run history not persisted: {error} — this run is absent from 'gsa -Mh' and from continuation lookup (check --state-dir)"
+        );
     }
 }
-
-/// The engine environment input roster (`gsa --help` must print it).
-/// `GSA_BUILD_JOBS` is engine output and deliberately absent.
-pub const ENV_ROSTER: [&str; 11] = [
-    "GSA_BUILD_DIR",
-    "GSA_CONF",
-    "GSA_RECIPES_DIR",
-    "GSA_STATE_DIR",
-    "GSA_LANES",
-    "GSA_JOBS",
-    "GSA_INTENSITY",
-    "GSA_CPU_THREADS",
-    "GSA_MEMORY_GIB",
-    "GSA_TARGET_CPU",
-    "GSA_VCS_SKIP_TOLERANCE",
-];
 
 /// The continuation flag-rule table's explicit not-mirrored vocabulary
 /// (§H.2): prune strengths, one-shot actions, query/maintain verbs and
@@ -71,15 +60,14 @@ pub const ENV_ROSTER: [&str; 11] = [
 /// This is a VOCABULARY, not a per-run roster (H3, 2026-10-28): a record's
 /// `not-mirrored:` line lists only the run's OWN argv spellings the composed
 /// `command:` does not restate — see [`not_mirrored_of`], which also fixes
-/// the output order to this table's. `-Ss`/`-Si`/`-Sg` are retired (H7) and
-/// gone from the table; `-Syu` names the sync-first update spelling whose
-/// `y` the command mirrors (H9).
+/// the output order to this table's. `-Ss`/`-Si`/`-Sg` are retired (H7).
+/// The update spellings are the exception (H9): `-Su`/`-Syu` mirror as
+/// themselves — a `-Syu` continuation that downgraded to `-Su` would
+/// silently drop the sync it recorded — so neither belongs here.
 pub const NOT_MIRRORED: &[&str] = &[
     "-Q",
     "-Sl",
     "-Sy",
-    "-Su",
-    "-Syu",
     "-Ua",
     "-Mc",
     "-Mcc",
@@ -728,19 +716,33 @@ fn selection_source(targets: &[String], leaf: bool, ranges: &[String]) -> String
 /// inputs are warned about, never baked in) — the roster variables actually
 /// set in the environment, plus `GSA_STATE_DIR` when the run relocated the
 /// state root by flag (the resume needs the same root).
+///
+/// The roster is `help::ENV_INPUTS` — the ONE table `gsa --help` renders
+/// (§B.8), so a name that reaches the help can never be missing here and
+/// silently under-report a resume's needs.
 fn env_required(inv: &Invocation) -> Vec<String> {
-    let mut env: Vec<String> = ENV_ROSTER
+    env_required_with(inv, |name| {
+        std::env::var_os(name)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_string_lossy().to_string())
+    })
+}
+
+/// The pure half of [`env_required`]: `lookup` answers "is this variable
+/// set?", so the roster filter is unit-testable without touching the
+/// process environment.
+fn env_required_with(inv: &Invocation, lookup: impl Fn(&str) -> Option<String>) -> Vec<String> {
+    let mut env: Vec<String> = crate::help::ENV_INPUTS
         .iter()
+        .map(|(name, _)| *name)
         .filter(|name| {
             // `--build-dir`/the prompt export GSA_BUILD_DIR to the lane
             // children; that is the run's own choice (mirrored as a flag),
             // not an environment input the resume must reproduce.
-            if **name == "GSA_BUILD_DIR" && inv.build_dir.is_some() {
+            if *name == "GSA_BUILD_DIR" && inv.build_dir.is_some() {
                 return false;
             }
-            std::env::var_os(name)
-                .map(|v| !v.is_empty())
-                .unwrap_or(false)
+            lookup(name).is_some()
         })
         .map(|name| name.to_string())
         .collect();
@@ -1029,6 +1031,99 @@ mod tests {
             allow_broken_rustc: false,
             standalone_root: None,
         }
+    }
+
+    /// The record shape: every env input read by the run is warned about, and a
+    /// name outside the roster can never leak in.
+    #[test]
+    fn env_required_filters_the_help_roster() {
+        let mut inv = inv_for(Family::S);
+        let set = ["GSA_STATE_DIR", "GSA_CPU_THREADS", "GSA_NOT_A_ROSTER_INPUT"];
+        let env = env_required_with(&inv, |name| set.contains(&name).then(|| "1".to_string()));
+        assert_eq!(
+            env,
+            vec!["GSA_STATE_DIR".to_string(), "GSA_CPU_THREADS".to_string()]
+        );
+        // The roster is help's table (§B.8): every input the help prints is
+        // listable, so a documented variable can never be dropped silently.
+        for (name, _) in crate::help::ENV_INPUTS {
+            assert!(
+                env_required_with(&inv, |n| (n == *name).then(|| "1".to_string()))
+                    .iter()
+                    .any(|listed| listed == name),
+                "roster input '{name}' is not filterable"
+            );
+        }
+        // A `--build-dir` flag is the run's own answer (mirrored as a flag), not
+        // an ambient input the resume must reproduce.
+        inv.build_dir = Some("/scratch/builds".to_string());
+        assert!(
+            env_required_with(&inv, |n| (n == "GSA_BUILD_DIR").then(|| "1".to_string())).is_empty()
+        );
+        // `--state-dir` still names the relocated root when the variable is unset.
+        inv.state_dir = Some("/scratch/state".to_string());
+        assert_eq!(
+            env_required_with(&inv, |_| None),
+            vec!["GSA_STATE_DIR".to_string()]
+        );
+    }
+
+    /// §H.1: a run-history write failure keeps the record's rc (the record
+    /// already reached stdout) but must SAY what is lost — the run will not
+    /// appear in `gsa -Mh`, and continuation lookup cannot find it.
+    #[test]
+    fn a_run_history_failure_names_the_lost_history_not_just_the_error() {
+        let dir = std::env::temp_dir().join(format!(
+            "gsa-cli-history-{}-{}",
+            std::process::id(),
+            std::thread::current()
+                .name()
+                .unwrap_or("t")
+                .replace(':', "_")
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        // A FILE where the state root must be: `StateRoot::open` cannot
+        // create below it.
+        let blocked = dir.join("blocked");
+        std::fs::write(&blocked, "not a directory").expect("blocking file");
+        let inv = inv_for(Family::B);
+        let (plan, order) = plan_and_order(&selection(1), PlanAction::Build);
+        let outcomes = vec![OutcomeRow {
+            pkg: RecipeId::new("pkg1").unwrap(),
+            status: RowStatus::Succeeded,
+            rc: Some(0),
+            dur: Some(1),
+            reason: "ok".to_string(),
+        }];
+        let run_outcome = gsa_model::RunOutcome::compute(&outcomes, false, false, false);
+        let record = build_run_record(
+            &inv,
+            &["pkg1".to_string()],
+            &[],
+            None,
+            plan,
+            order,
+            outcomes,
+            &run_outcome,
+            None,
+        );
+        let mut out: Vec<u8> = Vec::new();
+        let mut err: Vec<u8> = Vec::new();
+        emit_machine_record(&mut out, &record, &blocked, &mut err);
+        let note = String::from_utf8(err).expect("utf-8 note");
+        assert!(note.contains("run history not persisted"), "{note}");
+        assert!(
+            note.contains("'gsa -Mh'") && note.contains("continuation lookup"),
+            "the failure must name the consequence, not only the error: {note}"
+        );
+        assert!(
+            String::from_utf8(out)
+                .expect("utf-8 record")
+                .contains("--- run record end ---"),
+            "the record still renders and its rc stands"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

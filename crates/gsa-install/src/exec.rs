@@ -39,7 +39,9 @@ pub enum TxnOutcome {
     /// pacman exited non-zero (or could not run). `rc` is pacman's exit
     /// status (or -1 on spawn failure); `message` names what stopped.
     Failed { rc: i32, message: String },
-    /// The state-root mutex did not clear inside the bounded wait.
+    /// The state-root mutex is held by another transaction and did not
+    /// clear inside the bounded wait — contention only; a lock file that
+    /// cannot be opened is the named `Failed` class.
     MutexTimeout,
     /// `sudo -n` failed mid-run: the credential is gone and cannot be
     /// refreshed without prompting (§K.3) — dispatch stops exactly once.
@@ -53,27 +55,53 @@ extern "C" {
 const LOCK_EX: i32 = 2;
 const LOCK_NB: i32 = 4;
 
+/// Why the state-root mutex could not be taken. Contention and an unusable
+/// lock path are different failures: reporting the second as
+/// [`TxnOutcome::MutexTimeout`] blames a concurrent run for a permissions
+/// problem and returns instantly while the row claims a 600 s wait.
+#[derive(Debug, PartialEq, Eq)]
+enum MutexError {
+    /// The lock file is open and another holder keeps it — the bounded wait
+    /// expired.
+    Busy,
+    /// The lock file could not be opened at all; the reason names the path
+    /// and the remedy.
+    Unopenable(String),
+}
+
 /// Exclusive flock on the state-root mutex (the same lock the PACMAN shim
 /// serializes makepkg's own transactions on), bounded wait like the shim's
 /// `flock -w 600`. The file handle IS the guard: the lock releases on drop.
-fn acquire_mutex(path: &Path, timeout: Duration) -> Option<File> {
+fn acquire_mutex(path: &Path, timeout: Duration) -> Result<File, MutexError> {
     if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).ok()?;
+        std::fs::create_dir_all(dir).map_err(|error| {
+            MutexError::Unopenable(format!(
+                "cannot create the transaction mutex directory {}: {error} \
+                 (check the state root's ownership, or pass --state-dir)",
+                dir.display()
+            ))
+        })?;
     }
     // Never truncate a possibly-held lock inode (rule 19's exception).
     let file = OpenOptions::new()
         .create(true)
         .write(true)
         .open(path)
-        .ok()?;
+        .map_err(|error| {
+            MutexError::Unopenable(format!(
+                "cannot open the transaction mutex {}: {error} \
+                 (check that its directory is writable, or pass --state-dir)",
+                path.display()
+            ))
+        })?;
     let deadline = Instant::now() + timeout;
     loop {
         let rc = unsafe { flock(file.as_raw_fd(), LOCK_EX | LOCK_NB) };
         if rc == 0 {
-            return Some(file);
+            return Ok(file);
         }
         if Instant::now() >= deadline {
-            return None;
+            return Err(MutexError::Busy);
         }
         std::thread::sleep(Duration::from_millis(100));
     }
@@ -162,8 +190,13 @@ pub fn execute_txn(req: &TxnRequest) -> TxnOutcome {
     }
     let mutex_path = gsa_build::shim::mutex_path(&req.state_dir);
     let _guard = match acquire_mutex(&mutex_path, Duration::from_secs(600)) {
-        Some(file) => file,
-        None => return TxnOutcome::MutexTimeout,
+        Ok(file) => file,
+        // Contention: the documented bounded wait expired.
+        Err(MutexError::Busy) => return TxnOutcome::MutexTimeout,
+        // The lock file itself is unusable — a permissions/filesystem
+        // problem, never a concurrent run. The message names it and the
+        // remedy; reporting it as a timeout would blame the wrong cause.
+        Err(MutexError::Unopenable(message)) => return TxnOutcome::Failed { rc: -1, message },
     };
 
     let mut cmd = sudo_pacman_command(req);
@@ -214,14 +247,15 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = gsa_build::shim::mutex_path(&dir);
         let guard = acquire_mutex(&path, Duration::from_millis(100)).expect("first lock");
-        assert!(
-            acquire_mutex(&path, Duration::from_millis(100)).is_none(),
+        assert_eq!(
+            acquire_mutex(&path, Duration::from_millis(100)).err(),
+            Some(MutexError::Busy),
             "a second exclusive flock must time out"
         );
         drop(guard);
         let mut released = false;
         for _ in 0..100 {
-            if let Some(g) = acquire_mutex(&path, Duration::from_millis(20)) {
+            if let Ok(g) = acquire_mutex(&path, Duration::from_millis(20)) {
                 drop(g);
                 released = true;
                 break;
@@ -229,6 +263,48 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         assert!(released, "the mutex releases when the guard drops");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_unopenable_mutex_path_is_not_a_mutex_timeout() {
+        let dir = std::env::temp_dir().join(format!("gsa-exec-unopenable-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // A regular file where the lock directory must be: neither the
+        // directory creation nor the open can succeed, and neither is
+        // contention.
+        let blocker = dir.join("locks");
+        std::fs::write(&blocker, "not a directory\n").unwrap();
+        let path = blocker.join("pacman-mutex");
+        match acquire_mutex(&path, Duration::from_millis(50)) {
+            Err(MutexError::Unopenable(message)) => {
+                assert!(
+                    message.contains(&blocker.display().to_string()),
+                    "the reason names the unusable path: {message}"
+                );
+                assert!(message.contains("transaction mutex"), "{message}");
+                assert!(message.contains("--state-dir"), "{message}");
+            }
+            Err(MutexError::Busy) => panic!("an unusable lock path is not contention"),
+            Ok(_) => panic!("the lock file cannot be created below a regular file"),
+        }
+        // The production entry maps it to the named failure class, never the
+        // 600 s-timeout row.
+        let req = TxnRequest {
+            state_dir: dir.clone(),
+            conf: None,
+            archives: Vec::new(),
+            pacman_args: Vec::new(),
+            repairs: Vec::new(),
+        };
+        match execute_txn(&req) {
+            TxnOutcome::Failed { rc, message } => {
+                assert_eq!(rc, -1, "no pacman subprocess ran");
+                assert!(message.contains("transaction mutex"), "{message}");
+            }
+            other => panic!("expected a named failure, got {other:?}"),
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

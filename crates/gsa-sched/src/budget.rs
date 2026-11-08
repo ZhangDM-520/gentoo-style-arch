@@ -123,19 +123,44 @@ pub fn detect_threads() -> u32 {
 }
 
 /// Available memory in whole GiB from `/proc/meminfo` (`MemAvailable`),
-/// floor 1. Falls back to 1 when the file is unreadable so the formulas stay
-/// deterministic instead of guessing a workstation's RAM.
-pub fn detect_memory_gib() -> u32 {
-    let Ok(content) = std::fs::read_to_string("/proc/meminfo") else {
-        return 1;
+/// floor 1.
+pub fn detect_memory_gib() -> Result<u32, String> {
+    memory_gib_from_read(std::fs::read_to_string("/proc/meminfo").map_err(|e| e.to_string()))
+}
+
+/// Whole GiB of `MemAvailable` from one `/proc/meminfo` read.
+///
+/// An UNREADABLE file is the documented fallback (1 GiB): the formulas stay
+/// deterministic instead of guessing a workstation's RAM. A READABLE file
+/// whose field is missing or unparsable is an error, never the fallback — an
+/// unparsable field floored to 1 GiB masquerades as a one-GiB host and
+/// resolves one lane / one job for a build that should take minutes, with no
+/// diagnostic at all.
+fn memory_gib_from_read(read: Result<String, String>) -> Result<u32, String> {
+    let Ok(content) = read else {
+        return Ok(1);
     };
-    for line in content.lines() {
-        if let Some(rest) = line.strip_prefix("MemAvailable:") {
-            let kib: u64 = rest.trim().trim_end_matches(" kB").parse().unwrap_or(0);
-            return ((kib / 1024 / 1024).max(1)) as u32;
-        }
-    }
-    1
+    let field = content
+        .lines()
+        .find_map(|line| line.strip_prefix("MemAvailable:"))
+        .ok_or_else(|| {
+            "cannot detect available memory: /proc/meminfo has no MemAvailable field \
+             (set GSA_MEMORY_GIB to state the host's memory)"
+                .to_string()
+        })?;
+    let kib: u64 = field
+        .trim()
+        .trim_end_matches(" kB")
+        .trim()
+        .parse()
+        .map_err(|_| {
+            format!(
+                "cannot detect available memory: /proc/meminfo MemAvailable is not a number \
+                 (got '{}'; set GSA_MEMORY_GIB to state the host's memory)",
+                field.trim()
+            )
+        })?;
+    Ok((kib / 1024 / 1024).max(1) as u32)
 }
 
 /// Host facts honouring `GSA_CPU_THREADS` / `GSA_MEMORY_GIB` overrides
@@ -157,7 +182,7 @@ pub fn host_facts() -> Result<HostFacts, String> {
             .ok()
             .filter(|n| *n >= 1)
             .ok_or_else(|| format!("GSA_MEMORY_GIB must be a positive integer, got '{v}'"))?,
-        _ => detect_memory_gib(),
+        _ => detect_memory_gib()?,
     };
     Ok(HostFacts {
         threads,
@@ -207,8 +232,6 @@ impl Budget {
         let lanes = match lanes_override {
             Override::Value(n) => n,
             Override::Auto => {
-                let auto = normal_memory / normal_memory_per_job; // documented floor term
-                let _ = auto;
                 let lane_cap = profile.lane_cap;
                 let cpu_term = threads / profile.cpu_per_lane;
                 let mem_term = memory_gib / profile.memory_per_lane;
@@ -328,6 +351,29 @@ mod tests {
         )
         .unwrap();
         assert_eq!(b.lanes, 1);
+    }
+
+    #[test]
+    fn unparsable_mem_available_is_never_a_tiny_host() {
+        // Present but unparsable: an error naming the field, never the 1 GiB
+        // floor (which would silently plan one lane for a large host).
+        let error = memory_gib_from_read(Ok(
+            "MemTotal: 65536000 kB\nMemAvailable: plenty kB\n".to_string(),
+        ))
+        .unwrap_err();
+        assert!(error.contains("MemAvailable"), "{error}");
+        // A readable file without the field is the same class.
+        assert!(memory_gib_from_read(Ok("MemTotal: 65536000 kB\n".to_string())).is_err());
+        // A well-formed field still yields whole GiB.
+        assert_eq!(
+            memory_gib_from_read(Ok("MemAvailable:       30408704 kB\n".to_string())),
+            Ok(29)
+        );
+        // Only an unreadable file takes the documented 1 GiB fallback.
+        assert_eq!(
+            memory_gib_from_read(Err("No such file or directory".to_string())),
+            Ok(1)
+        );
     }
 
     #[test]

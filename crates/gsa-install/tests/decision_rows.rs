@@ -1083,6 +1083,104 @@ fn install_built_package_refuses_a_mixed_version_set() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn corrupt_committed_metadata_fails_discovery_instead_of_widening_the_set() {
+    let dir = scratch("corrupt-srcinfo-discovery");
+    let recipe = dir.join("recipe");
+    std::fs::create_dir_all(&recipe).unwrap();
+    // A committed `.SRCINFO` that cannot be parsed: its `pkgname` lines ARE
+    // the expectation set, so reading it as "absent" would make every
+    // readable archive eligible and the `partial-set` refusal unreachable.
+    std::fs::write(
+        recipe.join(".SRCINFO"),
+        "pkgbase = foo\nnot a key = value\n",
+    )
+    .unwrap();
+    write_archive(
+        &recipe.join("foo-1.0-1-x86_64.pkg.tar.zst"),
+        &[(".PKGINFO", &pkginfo_body("foo", "1.0-1", &[]))],
+    );
+
+    let error = discover_recipe(&recipe).expect_err("a corrupt .SRCINFO must not widen the set");
+    assert!(error.contains("committed metadata"), "{error}");
+    assert!(error.contains(".SRCINFO"), "{error}");
+
+    // The unreadable shape (a directory where the file belongs) is the same
+    // damage class and must not fall back to "no expectation" either.
+    std::fs::remove_file(recipe.join(".SRCINFO")).unwrap();
+    std::fs::create_dir_all(recipe.join(".SRCINFO")).unwrap();
+    let error = discover_recipe(&recipe).expect_err("an unreadable .SRCINFO must not widen the set");
+    assert!(error.contains("cannot read"), "{error}");
+    assert!(error.contains(".SRCINFO"), "{error}");
+
+    // The `-S` install entry propagates the same error (the caller renders
+    // its `refuse discover-failed` row); nothing reaches pacman.
+    let run = InstallRun {
+        mode: DecideMode::Checked,
+        state_dir: dir.join("state"),
+        conf: Some(dir.join("pacman.conf")),
+        pacman_args: Vec::new(),
+        register_ignorepkg: false,
+        later_installs: Vec::new(),
+        recipe_of_name: Default::default(),
+        workspace_names: Vec::new(),
+    };
+    let error = install_built_package(&recipe, &run)
+        .expect_err("an unreadable committed .SRCINFO is discovery damage");
+    assert!(error.contains("cannot read"), "{error}");
+    assert!(error.contains(".SRCINFO"), "{error}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn corrupt_committed_metadata_refuses_the_qa_gate_instead_of_standing_down() {
+    let dir = scratch("corrupt-srcinfo-qa");
+    let recipe = dir.join("foo");
+    std::fs::create_dir_all(&recipe).unwrap();
+    std::fs::write(
+        recipe.join(".SRCINFO"),
+        "pkgbase = foo\nnot a key = value\n",
+    )
+    .unwrap();
+    let archive = dir.join("foo-1.0-1-x86_64.pkg.tar.zst");
+    write_archive(&archive, &[(".PKGINFO", &pkginfo_body("foo", "1.0-1", &[]))]);
+
+    let rows = decide(
+        std::slice::from_ref(&candidate(&archive, Some(&recipe))),
+        &force_ctx(),
+        &LocalDb::default(),
+    )
+    .unwrap();
+    assert_eq!(rows.len(), 1, "one row per candidate: {rows:?}");
+    assert_eq!(rows[0].decision, Decision::Refuse);
+    assert_eq!(rows[0].subject, "foo");
+    assert!(
+        rows[0].reason.starts_with("discover-failed "),
+        "the QA gate's unreadable-metadata class is discovery damage: {:?}",
+        rows[0].reason
+    );
+    assert!(rows[0].reason.contains(".SRCINFO"), "{:?}", rows[0].reason);
+    assert_eq!(rows_rc(&rows), 1, "a refusal plan is rc 1");
+
+    // The unreadable shape stands down just as little.
+    std::fs::remove_file(recipe.join(".SRCINFO")).unwrap();
+    std::fs::create_dir_all(recipe.join(".SRCINFO")).unwrap();
+    let rows = decide(
+        std::slice::from_ref(&candidate(&archive, Some(&recipe))),
+        &force_ctx(),
+        &LocalDb::default(),
+    )
+    .unwrap();
+    assert_eq!(rows.len(), 1, "one row per candidate: {rows:?}");
+    assert_eq!(rows[0].decision, Decision::Refuse);
+    assert!(
+        rows[0].reason.starts_with("discover-failed ") && rows[0].reason.contains("cannot read"),
+        "{:?}",
+        rows[0].reason
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 // ─── the IgnorePkg rollback computation (rule 9's complement) ───────────────
 // The `-U` path feeds the same computation its staged-swap shape: `keep`
 // carries the skip (already-current) names AND the names whose archives

@@ -25,6 +25,25 @@ struct Section {
     blocks: &'static [(&'static str, &'static str)],
 }
 
+/// The engine environment INPUT roster (contract §B.8) — the ONE table: it
+/// renders in this help AND is what `record::env_required` filters (§H.2),
+/// so a variable can never be documented here yet silently vanish from a
+/// continuation's `env-required:` line. `GSA_BUILD_JOBS` is engine OUTPUT
+/// (exported per lane), deliberately absent.
+pub(crate) const ENV_INPUTS: &[(&str, &str)] = &[
+    ("GSA_CONF", "replaces the auto-read gsa.conf layers (/etc/gsa.conf, ~/.config/gsa/gsa.conf) with exactly one file — fixture and hermetic control"),
+    ("GSA_STATE_DIR", "the state root (the --state-dir chain above)"),
+    ("GSA_BUILD_DIR", "redirects the build cache (makepkg BUILDDIR/PKGDIR/PKGDEST; default: the build user's ~/.cache/gsa); setting it also answers the build-dir prompt silently — the flag --build-dir beats it"),
+    ("GSA_RECIPES_DIR", "redirects the canonical recipe store (gsa.conf `recipe_dir`; default: the build user's ~/.local/share/gsa/recipes — never below the state root)"),
+    ("GSA_LANES", "default for --lanes (the flag beats it)"),
+    ("GSA_JOBS", "default for --jobs (the flag beats it)"),
+    ("GSA_INTENSITY", "default for --intensity (the flag beats it)"),
+    ("GSA_CPU_THREADS", "budget override: the scheduler's CPU-thread truth"),
+    ("GSA_MEMORY_GIB", "budget override: the scheduler's memory truth, in GiB"),
+    ("GSA_TARGET_CPU", "the target CPU class for recipe selection"),
+    ("GSA_VCS_SKIP_TOLERANCE", "the --skip waive threshold (the flag beats it)"),
+];
+
 const SECTIONS: &[Section] = &[
     Section {
         head: "\
@@ -114,7 +133,7 @@ and a root shell without a build user is refused with guidance.",
             ("gsa -Mm", "shared-source mirrors: dedupe VCS clones into canonical mirrors (asks first: prints its targets and stops rc 3 without --noconfirm)"),
             ("gsa -Mc <targets…>", "prune strength 1: src/pkg/build trees and archives of the selection"),
             ("gsa -Mcc", "prune strength 2: every built archive in the workspace plus its VCS-revision sidecar (symlinks are never deleted or followed)"),
-            ("gsa -Mccc", "prune strength 3: additionally pulled sources (prints its target list and asks first)"),
+            ("gsa -Mccc", "prune strength 3: additionally pulled sources (prints its target list and stops rc 3 without --noconfirm)"),
             ("gsa -Ms [name…] [--add|--remove <ref…>]", "named sets: list sets and members; user sets are managed in the kv store against config/sets/ (computed sets are not editable)"),
             ("gsa -Mw [--add|--remove <ref…>]", "world: the explicitly wanted set"),
             ("gsa -Mh [--prune] [--show <run-id>]", "run history: list recorded runs and their continuations; --show re-renders one; --prune enforces the bounded retention"),
@@ -172,18 +191,8 @@ An install run (-S/-U) additionally accepts:",
 
 Deferred (parse and refuse, so the message names them): --quiet, --verbose.
 
-Engine environment inputs:",
-        blocks: &[
-            ("GSA_CONF", "replaces the auto-read gsa.conf layers (/etc/gsa.conf, ~/.config/gsa/gsa.conf) with exactly one file — fixture and hermetic control"),
-            ("GSA_STATE_DIR", "the state root (the --state-dir chain above)"),
-            ("GSA_BUILD_DIR", "redirects the build cache (makepkg BUILDDIR/PKGDIR/PKGDEST; default: the build user's ~/.cache/gsa); setting it also answers the build-dir prompt silently — the flag --build-dir beats it"),
-            ("GSA_RECIPES_DIR", "redirects the canonical recipe store (gsa.conf `recipe_dir`; default: the build user's ~/.local/share/gsa/recipes — never below the state root)"),
-            ("GSA_LANES, GSA_JOBS, GSA_INTENSITY", "defaults for the matching long modifiers"),
-            ("GSA_CPU_THREADS, GSA_MEMORY_GIB", "budget overrides for the scheduler's parallelism truth"),
-            ("GSA_TARGET_CPU", "the target CPU class for recipe selection"),
-            ("GSA_VCS_SKIP_TOLERANCE", "the --skip waive threshold (the flag beats it)"),
-            ("GSA_BUILD_JOBS", "engine output, never an input"),
-        ],
+Engine environment inputs (GSA_BUILD_JOBS is engine OUTPUT, exported per lane — never an input):",
+        blocks: ENV_INPUTS,
     },
     Section {
         head: "Exit codes (contract §G): 0 success; 1 build failure under --fail-fast; 2 usage error (bad flags, unknown reference with nearest candidates, invalid range, empty selection, malformed config record, deferred spelling); 3 refusal (the run refused to start or aborted at a fail-closed gate); 4 cone-stop run with >=1 failure (the parked cone is in the run record); 5 deferral-only (>=1 deferred/parked row, no failure); 130 interrupted — the full run record (plan, outcomes, continuation) is emitted first.",
@@ -374,6 +383,63 @@ mod tests {
                 rendered.contains(&format!("@{}", group.as_str())),
                 "group '{}' is missing from the help roster",
                 group.as_str()
+            );
+        }
+    }
+
+    /// §B.8/H.2: the environment roster is ONE table — every input renders
+    /// in the help AND is what the continuation's `env-required:` filters.
+    /// This is the pin that was missing: a variable added to the help but
+    /// not to the roster silently under-reported a resume's needs (and vice
+    /// versa). `GSA_BUILD_JOBS` is engine output, so it is named in the
+    /// section head and must never be a roster row.
+    #[test]
+    fn every_env_input_in_the_roster_is_rendered_in_the_help() {
+        // The roster §B.8 names, verbatim: a row removed from the ONE table
+        // silently under-reports a resume's needs, so the set itself is
+        // pinned here (the rendered-help half below proves each row prints).
+        let expected = [
+            "GSA_CONF",
+            "GSA_STATE_DIR",
+            "GSA_BUILD_DIR",
+            "GSA_RECIPES_DIR",
+            "GSA_LANES",
+            "GSA_JOBS",
+            "GSA_INTENSITY",
+            "GSA_CPU_THREADS",
+            "GSA_MEMORY_GIB",
+            "GSA_TARGET_CPU",
+            "GSA_VCS_SKIP_TOLERANCE",
+        ];
+        assert_eq!(
+            ENV_INPUTS.iter().map(|(name, _)| *name).collect::<Vec<_>>(),
+            expected,
+            "the engine environment input roster changed"
+        );
+        let rendered = render_at(CAPTURE_WIDTH);
+        for (name, description) in ENV_INPUTS {
+            assert!(
+                !description.trim().is_empty(),
+                "roster row {name} has no description"
+            );
+            assert!(
+                rendered.lines().any(|line| line.trim_start().starts_with(name)),
+                "roster input '{name}' is missing from the rendered help"
+            );
+        }
+        assert!(
+            !ENV_INPUTS.iter().any(|(name, _)| *name == "GSA_BUILD_JOBS"),
+            "GSA_BUILD_JOBS is engine output, never a roster input"
+        );
+        assert!(
+            rendered.contains("GSA_BUILD_JOBS is engine OUTPUT"),
+            "the help must still name GSA_BUILD_JOBS as output"
+        );
+        // No silent duplicates: one row per variable.
+        for (index, (name, _)) in ENV_INPUTS.iter().enumerate() {
+            assert!(
+                !ENV_INPUTS[..index].iter().any(|(other, _)| other == name),
+                "roster input '{name}' is listed twice"
             );
         }
     }

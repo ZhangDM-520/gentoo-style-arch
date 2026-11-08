@@ -8,7 +8,10 @@
 //! `defer 99 source-unfetchable` (the Phase-2 stand-in for the fetch and
 //! anchoring gates, which land with `gsa-fetch`/version-sync and are the only
 //! other paths allowed to emit deferral); any other exit → `failed 1
-//! build-failed`. The classification reads the child's own end state first:
+//! build-failed`, and a wait that never delivered an end state tears makepkg
+//! down with one TERM and settles `failed 1 lane-wait-failed` (§K.3 — never
+//! `build-failed`, which claims makepkg failed). The classification reads the
+//! child's own end state first:
 //! a makepkg killed by a signal carries its cause (HUP/INT/TERM → the lane
 //! codes 129/143/130, §K.3; any other signal → `failed 1
 //! build-killed-by-signal-<n>`), and this child's own received signal is
@@ -106,6 +109,28 @@ pub fn classify_build_exit(
                 _ => (LaneOutcome::Failed, "build-failed".to_string()),
             },
         },
+    }
+}
+
+/// Classify one wait result into the lane's `(outcome, reason)` (§F.1). A
+/// reaped child keeps the exit classification above; a wait that never
+/// delivered a status is `lane-wait-failed`, never `build-failed` — that
+/// reason claims makepkg failed, and nothing here observed makepkg at all.
+/// A teardown receipt does not turn such a child into an interrupt row:
+/// there is no end state to attribute, and the continuation re-runs it.
+fn classify_wait(
+    status: Result<std::process::ExitStatus, std::io::Error>,
+    received: i32,
+) -> (LaneOutcome, String) {
+    match status {
+        Ok(status) => {
+            let exit = match std::os::unix::process::ExitStatusExt::signal(&status) {
+                Some(sig) => signals::ChildExit::Signaled(sig),
+                None => signals::ChildExit::Exited(status.code().unwrap_or(1)),
+            };
+            classify_build_exit(exit, received)
+        }
+        Err(_) => (LaneOutcome::Failed, "lane-wait-failed".to_string()),
     }
 }
 
@@ -321,7 +346,7 @@ pub fn run_lane_job(args: &[String], err: &mut dyn Write) -> i32 {
     // with the grace SIGKILL sweep. Then reap and classify as ever.
     let spawn_at_ns = signals::monotonic_ns();
     let status = match cmd.spawn() {
-        Ok(mut child) => loop {
+        Ok(mut child) => Some(loop {
             match child.try_wait() {
                 Ok(Some(status)) => break Ok(status),
                 Ok(None) => {
@@ -333,30 +358,41 @@ pub fn run_lane_job(args: &[String], err: &mut dyn Write) -> i32 {
                     }
                     std::thread::sleep(std::time::Duration::from_millis(50));
                 }
-                Err(error) => break Err(error),
+                Err(error) => {
+                    // A bare break here would publish `failed 1 build-failed`
+                    // and exit while makepkg keeps compiling and writing the
+                    // shared PKGDEST — orphaned, colliding with the next
+                    // lane. Tear it down with ONE TERM (§K.3's discipline: one
+                    // sweep TERM, never a retry loop), then reap so
+                    // the classification sees a real end state. makepkg
+                    // shares THIS lane's process group, so the signal targets
+                    // its pid — `kill(-pid)` would address our own group,
+                    // i.e. this process.
+                    let _ = writeln!(
+                        err,
+                        "gsa --lane-job: cannot poll makepkg for {pkg}: {error}; one TERM, then reap"
+                    );
+                    let _ = signals::send_signal(child.id() as i32, signals::SIGTERM);
+                    break child.wait();
+                }
             }
-        },
-        Err(error) => Err(error),
+        }),
+        Err(error) => {
+            // The build never started: that is makepkg-run failure, not a
+            // lost child (a spawn error has no pid to tear down or reap).
+            let _ = writeln!(err, "gsa --lane-job: cannot run makepkg: {error}");
+            None
+        }
     };
     let dur = start.elapsed().as_secs();
 
+    if let Some(Err(error)) = &status {
+        let _ = writeln!(err, "gsa --lane-job: cannot wait for makepkg: {error}");
+        let _ = writeln!(&log, "gsa --lane-job: cannot wait for makepkg: {error}");
+    }
     let (code, reason) = match status {
-        Ok(status) => {
-            // §F.1's classification is the child's own exit status first
-            // (`ChildExit`), with this lane's received signal only as the
-            // normal-exit fallback — a late signal never downgrades a good
-            // build, and a signal death the lane never received still
-            // reports its cause.
-            let exit = match std::os::unix::process::ExitStatusExt::signal(&status) {
-                Some(sig) => signals::ChildExit::Signaled(sig),
-                None => signals::ChildExit::Exited(status.code().unwrap_or(1)),
-            };
-            classify_build_exit(exit, signals::received_signal())
-        }
-        Err(error) => {
-            let _ = writeln!(err, "gsa --lane-job: cannot run makepkg: {error}");
-            (LaneOutcome::Failed, "build-failed".to_string())
-        }
+        Some(status) => classify_wait(status, signals::received_signal()),
+        None => (LaneOutcome::Failed, "build-failed".to_string()),
     };
 
     let result = LaneResult::new(pkg, code, dur, &reason).unwrap();
@@ -475,6 +511,48 @@ mod tests {
         assert_eq!(
             classify_build_exit(ChildExit::Exited(99), 0),
             (LaneOutcome::Defer, "source-unfetchable".to_string())
+        );
+    }
+
+    #[test]
+    fn a_wait_without_an_end_state_is_lane_wait_failed_never_build_failed() {
+        use gsa_model::LaneOutcome;
+        use std::os::unix::process::ExitStatusExt;
+        let wait_error = || std::io::Error::other("wait(2) failed");
+        // The distinct reason: no end state was observed, so `build-failed`
+        // (which claims makepkg failed) would be a fabrication. A teardown
+        // receipt does not turn it into an interrupt row either — nothing
+        // ran to interrupt.
+        assert_eq!(
+            classify_wait(Err(wait_error()), 0),
+            (LaneOutcome::Failed, "lane-wait-failed".to_string())
+        );
+        assert_eq!(
+            classify_wait(Err(wait_error()), signals::SIGTERM),
+            (LaneOutcome::Failed, "lane-wait-failed".to_string())
+        );
+        // The reaped paths keep §F.1's classification — including the signal
+        // death the TERM-then-reap teardown produces.
+        assert_eq!(
+            classify_wait(Ok(std::process::ExitStatus::from_raw(0)), 0),
+            (LaneOutcome::Ok, "ok".to_string())
+        );
+        assert_eq!(
+            classify_wait(
+                Ok(std::process::ExitStatus::from_raw(signals::SIGTERM)),
+                0
+            ),
+            (LaneOutcome::Term, "interrupted-mid-build".to_string())
+        );
+        assert_eq!(
+            classify_wait(
+                Ok(std::process::ExitStatus::from_raw(signals::SIGKILL)),
+                0
+            ),
+            (
+                LaneOutcome::Failed,
+                "build-killed-by-signal-9".to_string()
+            )
         );
     }
 }

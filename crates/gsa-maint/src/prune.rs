@@ -401,8 +401,11 @@ fn run_targets(
 /// when ALL of its rows' archives are gone.
 fn tombstone_deleted(ctx: &MaintCtx<'_>, deleted: &[(String, PathBuf)]) -> Vec<Row> {
     let gone: BTreeSet<&Path> = deleted.iter().map(|(_, p)| p.as_path()).collect();
-    let Ok(index) = BinpkgIndex::load(ctx.state) else {
-        return Vec::new();
+    // An unreadable index cannot say which instances died: the deletion it
+    // would record is silently skipped, so the refusal is named instead.
+    let index = match strength_index(ctx) {
+        Ok(index) => index,
+        Err(rows) => return rows,
     };
     let mut rows = Vec::new();
     let mut seen: BTreeSet<(String, u64)> = BTreeSet::new();
@@ -449,6 +452,23 @@ fn strength_layout() -> Result<BuildLayout, Vec<Row>> {
     build_layout_for_run().map_err(|error| vec![Row::new("build-layout", "failed", error)])
 }
 
+/// The binpkg index for one strength, under the same refusal shape: an
+/// unreadable index is a named `failed` row, never an empty substitute. An
+/// empty index would force every shared-PKGDEST archive to `keep
+/// unattributed` (so the strength silently prunes nothing) and skip every
+/// tombstone — a pruning run that reports success while covering nothing.
+/// A MISSING index file is the store's own "clean checkout" answer (empty,
+/// not an error), so only genuine I/O failures reach this branch.
+fn strength_index(ctx: &MaintCtx<'_>) -> Result<BinpkgIndex, Vec<Row>> {
+    BinpkgIndex::load(ctx.state).map_err(|error| {
+        vec![Row::new(
+            "binpkg-index",
+            "failed",
+            format!("cannot read the binpkg index: {error}"),
+        )]
+    })
+}
+
 /// Collect one strength's targets, deduplicated by path (a path is deleted
 /// once and reported once even when two scans could reach it).
 fn push_unique(
@@ -482,10 +502,10 @@ pub fn strength1(ctx: &MaintCtx<'_>, recipes: &[String], apply: bool) -> Vec<Row
         Err(rows) => return rows,
     };
     let declared = ctx.declared_names();
-    let index = BinpkgIndex::load(ctx.state).unwrap_or(BinpkgIndex {
-        rows: Vec::new(),
-        corrupt: Vec::new(),
-    });
+    let index = match strength_index(ctx) {
+        Ok(index) => index,
+        Err(rows) => return rows,
+    };
     let pkgdest = pkgdest_targets(&layout, &index, &declared);
     let mut targets: Vec<(String, Target)> = Vec::new();
     let mut seen = BTreeSet::new();
@@ -534,10 +554,10 @@ pub fn strength2(ctx: &MaintCtx<'_>, apply: bool) -> Vec<Row> {
         Err(rows) => return rows,
     };
     let declared = ctx.declared_names();
-    let index = BinpkgIndex::load(ctx.state).unwrap_or(BinpkgIndex {
-        rows: Vec::new(),
-        corrupt: Vec::new(),
-    });
+    let index = match strength_index(ctx) {
+        Ok(index) => index,
+        Err(rows) => return rows,
+    };
     let mut targets: Vec<(String, Target)> = Vec::new();
     let mut seen = BTreeSet::new();
     for (id, dir) in ctx.recipe_dirs() {
@@ -565,10 +585,10 @@ pub fn strength3(ctx: &MaintCtx<'_>, apply: bool) -> Vec<Row> {
         Err(rows) => return rows,
     };
     let declared = ctx.declared_names();
-    let index = BinpkgIndex::load(ctx.state).unwrap_or(BinpkgIndex {
-        rows: Vec::new(),
-        corrupt: Vec::new(),
-    });
+    let index = match strength_index(ctx) {
+        Ok(index) => index,
+        Err(rows) => return rows,
+    };
     let patterns = download_patterns(ctx.root);
     let srcdest = resolve_srcdest();
     let mut targets: Vec<(String, Target)> = Vec::new();

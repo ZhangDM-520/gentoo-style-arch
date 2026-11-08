@@ -32,6 +32,10 @@ pub struct Findings {
     /// the orphan scan is missing, and `--fix` refuses to run (the engine's
     /// ONE layout error policy — never a silent home switch).
     pub layout_error: Option<String>,
+    /// The binpkg index could not be read: no row in it can be trusted, so
+    /// the index families stand down as a NAMED refusal of their own — never
+    /// as an empty index that makes every archive look like an orphan.
+    pub index_error: Option<String>,
 }
 
 /// The output-name truth filter of the orphan scan: the makepkg archive
@@ -57,10 +61,22 @@ pub fn findings(ctx: &MaintCtx<'_>) -> Findings {
         Err(error) => format!("unreadable {error}"),
     };
 
-    let index = BinpkgIndex::load(ctx.state).unwrap_or(BinpkgIndex {
-        rows: Vec::new(),
-        corrupt: Vec::new(),
-    });
+    // The index is REQUIRED: `unwrap_or(empty)` made an unreadable index
+    // report every archive as an orphan (and `--fix` would then reindex it
+    // under an invented id). Tolerable corruption INSIDE the fold (`corrupt`
+    // rows) is the store's own finding and stays; an I/O failure is not a
+    // finding about any package — it is a failed read of the evidence.
+    match BinpkgIndex::load(ctx.state) {
+        Ok(index) => index_findings(ctx, &mut out, &index),
+        Err(error) => out.index_error = Some(format!("cannot read the binpkg index: {error}")),
+    }
+    out
+}
+
+/// The index-derived families: `sha256`+`size` mismatches, orphan rows, and
+/// the two-home orphan-archive scan. Split out because an unreadable index
+/// yields no row about any package at all.
+fn index_findings(ctx: &MaintCtx<'_>, out: &mut Findings, index: &BinpkgIndex) {
     for row in &index.rows {
         if !row.archive.exists() {
             out.orphan_rows.push(row.clone());
@@ -123,7 +139,7 @@ pub fn findings(ctx: &MaintCtx<'_>) -> Findings {
         Ok(layout) => {
             let declared = ctx.declared_names();
             let Ok(entries) = std::fs::read_dir(&layout.pkgdest) else {
-                return out;
+                return;
             };
             for entry in entries.flatten() {
                 let path = entry.path();
@@ -133,14 +149,13 @@ pub fn findings(ctx: &MaintCtx<'_>) -> Findings {
                 if index.find_archive(&path).is_some() {
                     continue;
                 }
-                if let Some(id) = crate::archive_owner(&index, &declared, &path) {
+                if let Some(id) = crate::archive_owner(index, &declared, &path) {
                     out.orphan_archives.push((id, path));
                 }
             }
         }
         Err(error) => out.layout_error = Some(error),
     }
-    out
 }
 
 /// `-Md` default: the report. Rows: `doctor report <N> finding(s)` (or
@@ -181,6 +196,9 @@ pub fn report(ctx: &MaintCtx<'_>) -> Vec<Row> {
     }
     if let Some(error) = &found.layout_error {
         rows.push(Row::new("build-layout", "failed", error.clone()));
+    }
+    if let Some(error) = &found.index_error {
+        rows.push(Row::new("binpkg-index", "failed", error.clone()));
     }
     if found.installed_known {
         for (base, version) in &found.no_pacman {
@@ -232,6 +250,12 @@ pub struct FixOutcome {
 pub fn fix(ctx: &MaintCtx<'_>, apply: bool) -> Result<FixOutcome, String> {
     let found = findings(ctx);
     if let Some(error) = &found.layout_error {
+        return Err(error.clone());
+    }
+    // Unreadable evidence refuses the repair: with no trustworthy index the
+    // orphan families are unknown, and "repairing" would tombstone or
+    // reindex against a fiction. `fix`'s exit class is the adapter's rc 3.
+    if let Some(error) = &found.index_error {
         return Err(error.clone());
     }
     let mut rows = Vec::new();

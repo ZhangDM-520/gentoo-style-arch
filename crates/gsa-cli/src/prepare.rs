@@ -815,16 +815,28 @@ fn sync_status_line(id: &str, outcome: &SyncOutcome, human: bool) -> Option<Stri
     Some(line)
 }
 
+/// The answer of one `sync_phase` pass. A refusal aborts the run (§G.1 rc 3)
+/// and carries its `classify_sync` reason key (`integrity-stop` /
+/// `anchor-refused` / `sync-refused`) so the refusal record names the same
+/// key the build pipeline's rows use; a deferral is reported per recipe and
+/// re-derived as a row by the pipeline's own idempotent sync.
+pub struct SyncPhase {
+    /// The first refusing recipe's reason key, `None` when nothing refused.
+    pub refused: Option<String>,
+    /// Every deferred recipe with its §H.3 reason key.
+    pub deferred: Vec<(String, String)>,
+}
+
 pub fn sync_phase(
     root: &Path,
     graph: &Graph<'_>,
     selection: &Selection,
     out: &mut dyn Write,
     err: &mut dyn Write,
-) -> (bool, bool) {
+) -> SyncPhase {
     let mut rows: Vec<DispositionRow> = Vec::new();
-    let mut refused = false;
-    let mut deferred = false;
+    let mut refused: Option<String> = None;
+    let mut deferred: Vec<(String, String)> = Vec::new();
     for (_, id) in &selection.listed {
         let idx = graph.index_of(id.as_str()).expect("selection ids resolve");
         let recipe_dir = root.join(&graph.record(idx).path);
@@ -846,7 +858,7 @@ pub fn sync_phase(
                     "gsa: note: {}: deferred ({key}) — nothing was built; retry when provider metadata is available, or use '--no-sync' to build the committed version and sums",
                     id.as_str()
                 );
-                deferred = true;
+                deferred.push((id.as_str().to_string(), key.to_string()));
             }
             SyncClass::Refuse(reason) => {
                 let _ = writeln!(
@@ -854,7 +866,9 @@ pub fn sync_phase(
                     "gsa: {}: refusing to rewrite — {reason}; the recipe was restored byte-for-byte",
                     id.as_str()
                 );
-                refused = true;
+                // The first refusal is the run's class (§G.1: an integrity
+                // stop or a named sync refusal aborts before dispatch).
+                refused.get_or_insert(reason);
             }
             _ => {}
         }
@@ -865,7 +879,7 @@ pub fn sync_phase(
     } else {
         let _ = writeln!(out, "Version and checksum sync: nothing to do");
     }
-    (refused, deferred)
+    SyncPhase { refused, deferred }
 }
 
 /// `gsa -Sy [targets…] [ranges…]` (contract §B.4): the version-sync pass
@@ -982,11 +996,14 @@ pub fn run_sync_pass(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write)
         return code;
     }
 
-    let (refused, deferred) = sync_phase(&root, &graph, &selection, out, err);
-    if refused {
+    let phase = sync_phase(&root, &graph, &selection, out, err);
+    if phase.refused.is_some() {
+        // A one-shot `-Sy` renders the disposition block only: the contract
+        // (§H.1/H.2) owes a run record to build-shaped runs, and `-Sy` is
+        // never mirrored into a continuation — the refusal class is the rc.
         return 3;
     }
-    if deferred {
+    if !phase.deferred.is_empty() {
         return 5;
     }
     0

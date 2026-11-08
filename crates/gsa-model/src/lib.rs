@@ -15,6 +15,7 @@
 
 pub mod config;
 pub mod privilege;
+pub mod read;
 
 use std::fmt;
 use std::path::{Path, PathBuf};

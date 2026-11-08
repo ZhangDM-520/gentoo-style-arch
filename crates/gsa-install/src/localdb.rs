@@ -83,12 +83,15 @@ impl LocalDb {
     /// skipped loudly (doubt installs — rule 11), never guessed. A db root
     /// without a `local/` directory is an empty DB (synthetic workspaces).
     ///
-    /// Probe-root override for fixtures: `GSA_TEST_PROBE_ROOT` redirects
+    /// Probe-root override for fixtures: `_GSA_TEST_PROBE_ROOT` redirects
     /// the liveness half of rule 25(b) to a synthetic root (the
     /// `from_packages_at` twin) so fixtures can pin BOTH halves of file
-    /// truth. Unset (production) = `/`.
+    /// truth. Unset (production) = `/`. The leading underscore keeps it out
+    /// of the engine's advertised `GSA_` namespace: an unadvertised override
+    /// must never look like an operator knob (the `_GSA_STOP_GRACE_S`
+    /// convention).
     pub fn load(db_root: &Path) -> Result<LocalDb, String> {
-        let probe_root = std::env::var_os("GSA_TEST_PROBE_ROOT")
+        let probe_root = std::env::var_os("_GSA_TEST_PROBE_ROOT")
             .map(PathBuf::from)
             .unwrap_or_default();
         Self::load_at(probe_root, db_root)
@@ -304,6 +307,38 @@ mod tests {
         fs::write(dir.join("desc"), desc).unwrap();
         fs::write(dir.join("files"), files).unwrap();
         dir
+    }
+
+    #[test]
+    fn the_unadvertised_probe_root_override_steers_load() {
+        // `_GSA_TEST_PROBE_ROOT` (leading underscore = not an advertised
+        // `GSA_` operator knob) redirects the liveness half of rule 25(b)
+        // for fixtures; `load_at` remains the direct seam.
+        let root = scratch("probe-root-env");
+        let probe = root.join("root");
+        fs::create_dir_all(probe.join("usr/lib")).unwrap();
+        fs::write(probe.join("usr/lib/libprobe.so.1"), b"\x7fELF").unwrap();
+        write_entry(
+            &root,
+            "probe-0:1-1",
+            "%NAME%\nprobe\n\n%VERSION%\n1-1\n\n",
+            "%FILES%\nusr/lib/libprobe.so.1\n",
+        );
+
+        let saved = std::env::var_os("_GSA_TEST_PROBE_ROOT");
+        std::env::set_var("_GSA_TEST_PROBE_ROOT", &probe);
+        let db = LocalDb::load(&root);
+        match saved {
+            Some(value) => std::env::set_var("_GSA_TEST_PROBE_ROOT", value),
+            None => std::env::remove_var("_GSA_TEST_PROBE_ROOT"),
+        }
+        let db = db.unwrap();
+        assert!(db.get("probe").is_some(), "the synthetic entry parses");
+        assert!(
+            db.owns_file("usr/lib/libprobe.so.1"),
+            "the override steers the file-truth probe root"
+        );
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
