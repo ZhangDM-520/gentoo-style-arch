@@ -12,7 +12,7 @@
 //! file:line — a typo'd key must never silently mean "built-in default". The plan's fifth
 //! key group ("defaults") is deliberately not implemented: the project's
 //! `build-defaults.conf` already owns per-project defaults and a second
-//! surface for the same knobs is a trap (2026-10-16, noted in NOTE).
+//! surface for the same knobs is a trap (2026-10-16, noted in JOURNAL).
 //!
 //! `~` at a value's start expands to the same build-user home, in either
 //! file. `--state-dir` and `GSA_STATE_DIR` stay above the config layers
@@ -612,6 +612,32 @@ fn default_recipe_root(home: &Path) -> PathBuf {
         .join("recipes")
 }
 
+/// The operator's recipe-repository checkout (`GSA_RECIPE_CHECKOUT`, contract
+/// §B.8): the recipe half of the project is its own repository, so anything
+/// that needs the real `config/` + `packages/` tree — the fixture battery's
+/// real-tree sections and the `recipe-tree` integration test — reads its
+/// location from this input instead of assuming a path inside the engine
+/// checkout.
+///
+/// Deliberately not a rung on a ladder (rule 73): it has no config key and no
+/// built-in rung, because `None` is a real answer — an engine-only checkout has
+/// no recipe tree, and the caller skips loudly. One environment read.
+pub fn recipe_checkout() -> Option<PathBuf> {
+    let value = std::env::var("GSA_RECIPE_CHECKOUT").ok()?;
+    recipe_checkout_from(&value, build_user_home().ok().as_deref())
+}
+
+/// The pure half of [`recipe_checkout`]: a blank/whitespace value is unset
+/// (the `GSA_*` path-input convention) and `~`/`~/…` expands against the build
+/// user's home.
+fn recipe_checkout_from(value: &str, home: Option<&Path>) -> Option<PathBuf> {
+    let value = nonempty(Some(value))?;
+    Some(match home {
+        Some(home) => expand_home(value, home),
+        None => PathBuf::from(value),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -872,6 +898,29 @@ mod tests {
                 value: None,
                 source: "no SRCDEST",
             }
+        );
+    }
+
+    #[test]
+    fn recipe_checkout_is_one_env_read_blank_unset_and_tilde_expanded() {
+        // A blank/whitespace value is unset, like every `GSA_*` path input.
+        assert_eq!(recipe_checkout_from("", Some(&home())), None);
+        assert_eq!(recipe_checkout_from("   ", Some(&home())), None);
+        // `~`/`~/…` grows against the build user's home; everything else is
+        // taken literally (this input has no other relative shape).
+        assert_eq!(recipe_checkout_from("~", Some(&home())), Some(home()));
+        assert_eq!(
+            recipe_checkout_from("~/src/gsa-recipe", Some(&home())),
+            Some(home().join("src/gsa-recipe"))
+        );
+        assert_eq!(
+            recipe_checkout_from("/srv/gsa-recipe", Some(&home())),
+            Some(PathBuf::from("/srv/gsa-recipe"))
+        );
+        // No resolvable home: `~` stays literal rather than failing the read.
+        assert_eq!(
+            recipe_checkout_from("~/src", None),
+            Some(PathBuf::from("~/src"))
         );
     }
 

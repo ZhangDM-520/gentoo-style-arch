@@ -85,7 +85,7 @@ EOF
   # run against the BUILD-TREE libs). -L points the LINK at the build tree
   # too: /usr/lib/libQt6Multimedia.so may be a stock build whose Qt private
   # API tags (QtPrivate_6_11_2) do not resolve against our Qt 6.13
-  # (NOTE.md 2026-10-11).
+  # (JOURNAL 2026-10-11).
   if ! g++ "${srcdir}/pgo_train.cpp" -o "${srcdir}/pgo_train" \
       -I/usr/include/qt6 -I/usr/include/qt6/QtCore -I/usr/include/qt6/QtGui \
       -I/usr/include/qt6/QtMultimedia -I/usr/include/qt6/QtNetwork \
@@ -143,7 +143,7 @@ build() {
       # The phase-1 build dir still carries -fprofile-generate flags — an
       # env restore alone leaves instrumented objects in place (they ship
       # and the builder's payload gate refuses them). Clean rebuild with
-      # the restored flags (NOTE.md 2026-10-11).
+      # the restored flags (JOURNAL 2026-10-11).
       rm -rf build
       _configure_and_build
     fi

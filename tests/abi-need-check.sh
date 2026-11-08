@@ -28,8 +28,17 @@ set -euo pipefail
 #     stands down for EVERY name of a local `-U` file install (the pacman
 #     argv carries `-U`): a stale cached twin is never scanned instead.
 
-root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-tool="$root/tools/abi-need-check.sh"
+# This fixture belongs to the recipe tree's side of the split (its payloads are
+# recipe-shaped), so it takes the checkout from the operator input
+# `GSA_RECIPE_CHECKOUT` (contract §B.8) and SKIPS loudly (rc 0, one line) when
+# there is none. The TOOL it pins stays in the engine repository: `$tool` is
+# resolved from `$gsa_repo_root` (this fixture's own checkout), never from the
+# recipe root — which is why `root` answers the skip gate only and the tool path
+# keeps the engine-root name.
+source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
+root=$(gsa_recipe_root)
+require_recipe_tree abi-need-check.sh
+tool="$gsa_repo_root/tools/abi-need-check.sh"
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/gsa-abi-need-check-fixture.XXXXXX")
 trap 'rm -rf -- "$tmp"' EXIT
 
@@ -344,7 +353,7 @@ run out err -- "$tmp/s1" || status=$?
 # ── 13. S3: a cached twin is never scanned for a `pacman -U` install ─────
 # The stand-down for local file installs must NOT be cache-conditioned: a
 # same-name archive sitting in the cache (a stale stock twin of a house
-# build — NOTE 2026-10-25 made weston/colord move theirs out by hand) must
+# build — JOURNAL 2026-10-25 made weston/colord move theirs out by hand) must
 # not be scanned when the transaction installs a DIFFERENT file. alpm feeds
 # bare names (no versions), so the transaction shape is read from the
 # pacman argv — the fixture drives the tool under a stub named `pacman`

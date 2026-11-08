@@ -1,6 +1,6 @@
 //! Native ELF dynamic-section reads (`object` crate — never `readelf`):
 //! the `DT_NEEDED` set of one ELF image, the input of the package-internal
-//! NEEDED probe (contract §E, `docs/MEMORY.md` rule 25(b)/(e)).
+//! NEEDED probe (contract §E, `AGENTS.md` rule 25(b)/(e)).
 //!
 //! Resolution is the dynamic loader's own truth: the `PT_DYNAMIC` segment's
 //! entries with `DT_STRTAB` mapped through the `PT_LOAD` segments — section

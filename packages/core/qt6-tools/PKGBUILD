@@ -32,7 +32,7 @@ makedepends=(clang
              llvm
              ninja
              qt6-declarative
-             vulkan-headers)  # litehtml: QLITEHTML_USE_SYSTEM_LITEHTML=ON consumer (NOTE.md 2026-10-11)
+             vulkan-headers)  # litehtml: QLITEHTML_USE_SYSTEM_LITEHTML=ON consumer (JOURNAL 2026-10-11)
 optdepends=('clang: for qdoc and lupdate')
 groups=(qt6)
 _pkgfn=${pkgname/6-/}

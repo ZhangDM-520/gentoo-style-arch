@@ -224,7 +224,7 @@ a syntax check.
 
 ## Documentation history
 
-`docs/MEMORY.md` is the compact operational contract. `docs/NOTE.md` is the
+`AGENTS.md` is the compact operational contract. `docs/JOURNAL.md` is the
 chronological incident journal retained from the original workspace. Add a
 dated note for every non-trivial packaging or scheduler change:
 

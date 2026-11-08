@@ -1,5 +1,15 @@
 # plan-gsa-isolation.md — pacman-class isolation for the gsa engine (directories, privilege, distribution)
 
+> **Archive-class design record (annotated 2026-11-09).** This document is the
+> design provenance that `crates/` and `docs/gsa-contract.md` cite by section
+> (for example `plan-native-pm.md` §4.3), so it is kept, not deleted. Its
+> `docs/MEMORY.md` and `docs/NOTE.md` citations — including line ranges — name
+> the documents as they stood when it was written; both were retired on
+> 2026-11-09. The live equivalents are `AGENTS.md` (the same rule numbers) and
+> `docs/JOURNAL.md` (the incident history); the pre-retirement text is in the
+> `pre-split-2026-11` tag. This header is the only edit; the body is untouched.
+
+
 **Status: COMPLETE (2026-10-16).** W1 implemented and verified 2026-10-15
 (privilege handle; `gsa-model::privilege` is the landed home, not
 `gsa-build::priv`). W2 (config surface) and W3 (canonical recipe store)

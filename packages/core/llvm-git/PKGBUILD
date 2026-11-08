@@ -36,7 +36,7 @@ makedepends=('git' 'cmake' 'ninja' 'libffi' 'libedit' 'ncurses' 'libxml2'
 # rebuild rust-git + mesa-git + spirv-llvm-translator-git +
 # openshadinglanguage IN THE SAME PASS — LLVM snapshots have no stable C++
 # ABI; rustc segfaults on any compile otherwise (2026-09-07 incident, see
-# NOTE.md).
+# JOURNAL).
 source=("llvm-project::git+https://github.com/llvm/llvm-project.git#commit=caf7a716fe6eb7fbc0f0cec7b745b94ab3706ddf"
         "llvm-config.h")
 

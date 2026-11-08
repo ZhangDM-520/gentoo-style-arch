@@ -1,7 +1,7 @@
 /* House (Gentoo_Style_Arch) — cups 2.5 (the pre-3 development line) renamed
  * the IPP/HTTP enums to the IPP_OP_/IPP_STATUS_/IPP_JSTATE_/IPP_PSTATE_/
  * HTTP_ENCRYPTION_ spellings and dropped the legacy aliases that pycups
- * 2.0.4 predates (the same cups-2.5 wave as NOTE.md 2026-10-11's gtk3/gtk4
+ * 2.0.4 predates (the same cups-2.5 wave as JOURNAL 2026-10-11's gtk3/gtk4
  * enum-compat patches; upstream pycups has no fix). Force-included via
  * CFLAGS `-include`, so every macro below is guarded and only fills the
  * gap cups left. CUPS_ADD_CLASS merged into CUPS-Add-Modify-Class upstream;

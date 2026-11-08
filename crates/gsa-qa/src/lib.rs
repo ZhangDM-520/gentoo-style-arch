@@ -15,7 +15,7 @@
 //!   ([`gate::install_refusals`]).
 //! * `install-refusing` ([`MayRefuse`]) — findings render as `refuse
 //!   <keyword> …` decision rows in the ONE install decision seam
-//!   (`docs/MEMORY.md` rule 20; `gsa-install`'s `plan()` consults this
+//!   (`AGENTS.md` rule 20; `gsa-install`'s `plan()` consults this
 //!   registry and nothing else re-decides). A new `MayRefuse` check must
 //!   state in its change why `report` is insufficient (contract §E.4).
 //!

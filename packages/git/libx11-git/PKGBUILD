@@ -29,7 +29,7 @@ build() {
   fi
 
   # Documented exception (glibc-git/python/jq/sqlite/nodejs/guile class,
-  # NOTE.md 2026-11-01): aggressive optimization makes GCC-snapshot's
+  # JOURNAL 2026-11-01): aggressive optimization makes GCC-snapshot's
   # bounds analysis ICE-clean but WRONG under the inlining —
   # -Werror=array-bounds fires on imDefIc.c/_XimProtoDestroyIC "array
   # subscript 4 outside char[8]" (a subscript inside the declared array;
@@ -38,7 +38,7 @@ build() {
   # wall PERSISTED at -O3 under LTO (run 1517) — scoped follow-up applied:
   # guard lowering -Wno-error=array-bounds (backstop) plus the
   # --disable-selective-werror configure knob (drops the project's own
-  # -Werror promotions; warnings stay disclosed in the log). NOTE.md.
+  # -Werror promotions; warnings stay disclosed in the log). JOURNAL.
   CFLAGS=${CFLAGS/-Ofast/-O3}
   CXXFLAGS=${CXXFLAGS/-Ofast/-O3}
   CFLAGS+=" -Wno-error=array-bounds"

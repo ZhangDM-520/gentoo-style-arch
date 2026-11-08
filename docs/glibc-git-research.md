@@ -312,7 +312,7 @@ for version-constrained dependencies. Do not add `replaces` merely by copying
 a -git recipe pattern; choose that separately if automatic package-manager
 replacement is intended.
 [`PKGBUILD(5)`](https://man.archlinux.org/man/PKGBUILD.5.en),
-[`docs/MEMORY.md` provides discipline](MEMORY.md#1-golden-rules-violations-caused-real-breakage),
+[`AGENTS.md` provides discipline](../AGENTS.md),
 [`tests/recipe-contract.sh`](../tests/recipe-contract.sh)
 
 This metadata is needed by existing local consumers: `gcc-snapshot` has
@@ -375,8 +375,8 @@ Regenerate and commit `.SRCINFO`; update the static group/recipe counts in
 `README.md` and the descriptive package-name count in `tests/project.sh` from
 the resulting metadata. At the completion of the research phase, no such host
 or recipe changes had been made; the later implementation is recorded in
-[`docs/NOTE.md`](NOTE.md#2026-10-01--split-glibc-git-package-integration).
-[`docs/MEMORY.md` IgnorePkg rule](MEMORY.md#1-golden-rules-violations-caused-real-breakage),
+[`docs/JOURNAL.md`](JOURNAL.md).
+[`AGENTS.md` IgnorePkg rule](../AGENTS.md),
 [`tests/recipe-contract.sh` IgnorePkg lint](../tests/recipe-contract.sh),
 [`README.md`](../README.md#what-is-included),
 [`tests/project.sh`](../tests/project.sh#L5-L15)

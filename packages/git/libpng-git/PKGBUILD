@@ -15,8 +15,8 @@
 # (everything installed pins libpng16.so=16-64, including stock-side pinners
 # outside this workspace like harfbuzz). Pinned to #branch=libpng16, the
 # living 1.6 line (the master alias points there too), same one-line
-# reversibility as the libdisplay-info pin (docs/MEMORY.md rule 30(c)).
-# The so.18 migration is a coordinated consumer batch, parked in MEMORY §5.
+# reversibility as the libdisplay-info pin (AGENTS.md rule 30(c)).
+# The so.18 migration is a coordinated consumer batch, parked in AGENTS.md §6.
 
 pkgname=libpng-git
 _pkgname=libpng

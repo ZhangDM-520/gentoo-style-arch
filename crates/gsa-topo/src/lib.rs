@@ -341,6 +341,9 @@ pub struct BuildDefaults {
     pub memory_per_job_gib: String,
     pub core_memory_per_job_gib: String,
     pub reserved_memory_gib: String,
+    /// The recipe store's declared format, as written; the parser refuses a
+    /// value above [`STORE_FORMAT_MAX`] and holds the rest to `u32`.
+    pub store_format: String,
 }
 
 impl Default for BuildDefaults {
@@ -352,12 +355,26 @@ impl Default for BuildDefaults {
             memory_per_job_gib: "3".to_string(),
             core_memory_per_job_gib: "4".to_string(),
             reserved_memory_gib: "2".to_string(),
+            // Absent key = 1: the stores that predate the declaration.
+            store_format: "1".to_string(),
         }
     }
 }
 
 /// The intensity roster (`docs/portability.md`; `configure_intensity`).
 pub const INTENSITY_LEVELS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
+
+/// The newest recipe-store format this engine build understands. A store may
+/// declare anything up to this; above it the engine cannot know what the
+/// records mean and must refuse at load time rather than misread them (a split
+/// recipe repository can then move ahead of an older engine safely).
+pub const STORE_FORMAT_MAX: u32 = 1;
+
+fn store_format_too_new(found: u32) -> String {
+    format!(
+        "recipe store format {found} needs a newer gsa (this build supports {STORE_FORMAT_MAX}) — run 'sudo pacman -Syu gsa-pm', then 'sudo gsa -Sy'"
+    )
+}
 
 /// Parse `config/build-defaults.conf` content. Shape errors and unknown keys
 /// break every command naming the offender; values are validated against
@@ -393,6 +410,7 @@ pub fn parse_build_defaults(content: &str, file: &str) -> Result<BuildDefaults, 
             "memory_per_job_gib" => &mut defaults.memory_per_job_gib,
             "core_memory_per_job_gib" => &mut defaults.core_memory_per_job_gib,
             "reserved_memory_gib" => &mut defaults.reserved_memory_gib,
+            "store_format" => &mut defaults.store_format,
             // Never a silent no-op: the state root has exactly one ladder
             // (contract §J.3) and build-defaults.conf is not on it.
             "state_dir" => {
@@ -446,6 +464,22 @@ pub fn parse_build_defaults(content: &str, file: &str) -> Result<BuildDefaults, 
                         line_no,
                         format!("invalid value for {key} (expected a positive number): {value}"),
                     ));
+                }
+            }
+            // The store-compatibility gate: a store may advance its format,
+            // but only an engine that already knows it may read it.
+            "store_format" => {
+                let Ok(declared) = value.parse::<u32>() else {
+                    return Err(TopologyError::at(
+                        file,
+                        line_no,
+                        format!(
+                            "invalid value for store_format (expected a non-negative integer): {value}"
+                        ),
+                    ));
+                };
+                if declared > STORE_FORMAT_MAX {
+                    return Err(TopologyError::at(file, line_no, store_format_too_new(declared)));
                 }
             }
             _ => {}
@@ -633,14 +667,17 @@ pub fn load_project(root: &Path) -> Result<ProjectConfig, TopologyError> {
             ),
         ));
     }
+    let defaults_path = config_dir.join("build-defaults.conf");
+    // The store-compatibility gate speaks FIRST: defaults are parsed before a
+    // single topology record, so a store written for a newer engine is named as
+    // such instead of being reported through whatever record shape it changed.
+    let defaults = parse_build_defaults(&read_file(&defaults_path)?, "config/build-defaults.conf")?;
+
     let topology = parse_topology(
         &read_file(&topology_path)?,
         "config/topology.conf",
         &FsProbe { root },
     )?;
-
-    let defaults_path = config_dir.join("build-defaults.conf");
-    let defaults = parse_build_defaults(&read_file(&defaults_path)?, "config/build-defaults.conf")?;
 
     let exclusions_path = config_dir.join("abi-exclusions.conf");
     let abi_exclusions = if exclusions_path.is_file() {
@@ -823,6 +860,74 @@ delta|packages/app/delta|app|beta|app-cluster=qt5,version-sync=nvchecker
         let err = parse_build_defaults("intensity=ludicrous\n", "config/build-defaults.conf")
             .unwrap_err();
         assert!(err.to_string().contains("invalid value for intensity"));
+    }
+
+    #[test]
+    fn store_format_absent_is_the_legacy_format() {
+        let defaults = parse_build_defaults("lanes=auto\n", "config/build-defaults.conf").unwrap();
+        assert_eq!(defaults.store_format, "1");
+    }
+
+    #[test]
+    fn store_format_default_agrees_with_the_supported_maximum() {
+        // A bump of one side without the other must fail the suite: moving
+        // STORE_FORMAT_MAX re-opens the question of what an absent key means,
+        // and moving the default without teaching the parser the new format
+        // would let a store be read by an engine that does not know it.
+        assert_eq!(
+            BuildDefaults::default().store_format,
+            STORE_FORMAT_MAX.to_string()
+        );
+    }
+
+    #[test]
+    fn store_format_one_is_accepted() {
+        let defaults =
+            parse_build_defaults("store_format=1\n", "config/build-defaults.conf").unwrap();
+        assert_eq!(defaults.store_format, "1");
+    }
+
+    #[test]
+    fn store_format_two_is_refused_by_the_compatibility_gate() {
+        let err = parse_build_defaults("store_format=2\n", "config/build-defaults.conf").unwrap_err();
+        assert_eq!(
+            err.message,
+            "recipe store format 2 needs a newer gsa (this build supports 1) — run 'sudo pacman -Syu gsa-pm', then 'sudo gsa -Sy'"
+        );
+        // Named like every other build-defaults refusal: file and line.
+        assert_eq!(err.file, "config/build-defaults.conf");
+        assert_eq!(err.line, Some(1));
+    }
+
+    #[test]
+    fn store_format_above_the_maximum_is_refused_whatever_the_number() {
+        let err =
+            parse_build_defaults("store_format=4294967295\n", "config/build-defaults.conf")
+                .unwrap_err();
+        assert!(err.message.contains("needs a newer gsa"));
+        assert!(err.message.contains("recipe store format 4294967295"));
+        // Beyond u32 is a bad value, not a newer store.
+        let err =
+            parse_build_defaults("store_format=4294967296\n", "config/build-defaults.conf")
+                .unwrap_err();
+        assert!(err.message.contains("invalid value for store_format"));
+    }
+
+    #[test]
+    fn store_format_non_numeric_names_its_file_and_line() {
+        let err = parse_build_defaults(
+            "lanes=auto\nstore_format=abc\n",
+            "config/build-defaults.conf",
+        )
+        .unwrap_err();
+        assert_eq!(err.file, "config/build-defaults.conf");
+        assert_eq!(err.line, Some(2));
+        assert!(
+            err.message
+                .contains("invalid value for store_format (expected a non-negative integer): abc"),
+            "message was: {}",
+            err.message
+        );
     }
 
     #[test]

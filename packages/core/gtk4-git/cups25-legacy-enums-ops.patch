@@ -8,7 +8,7 @@
 + * the HTTP/IPP op/status/state enums to the _STATUS_/_OP_/_JSTATE_/_PSTATE_
 + * spellings while keeping CUPS_VERSION_MAJOR at 2 and dropped the legacy
 + * aliases, so the mapping below only applies up to cups 2.4
-+ * (NOTE.md 2026-10-11). The CUPS_PTYPE_* mappings above stay: the
++ * (JOURNAL 2026-10-11). The CUPS_PTYPE_* mappings above stay: the
 + * CUPS_PRINTER_* names survive in cups 2.5. */
 +#if CUPS_VERSION_MINOR < 5
 +#define HTTP_STATUS_NOT_FOUND         HTTP_NOT_FOUND

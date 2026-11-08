@@ -30,7 +30,7 @@ build() {
   # the stock include layout and adds no -I of its own — take the include
   # flags from the capability's pkg-config metadata, never a hard-coded path.
   # The force-included compat header restores the legacy IPP/HTTP enum names
-  # cups 2.5 renamed away (see the header's comment; NOTE.md 2026-10-18).
+  # cups 2.5 renamed away (see the header's comment; JOURNAL 2026-10-18).
   export CFLAGS+=" $(pkg-config --cflags cups) -include \"$srcdir\"/cups25-compat.h"
 
   python setup.py build

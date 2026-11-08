@@ -1,4 +1,4 @@
-//! The install-seam hook (contract §E.1/E.4, `docs/MEMORY.md` rule 20):
+//! The install-seam hook (contract §E.1/E.4, `AGENTS.md` rule 20):
 //! the ONE decision seam's row stream gains `refuse <keyword> …` rows from
 //! the registry's install-refusing checks — never a second seam, never a
 //! re-decision.

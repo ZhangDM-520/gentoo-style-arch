@@ -16,7 +16,7 @@
 # (man-db links it and is outside the run window). Pinned to
 # #branch=release-2.6, the living 2.x line (stamped 2.6.1 -> so.2, zero
 # provide move), same one-line reversibility as the libpng/libdisplay-info
-# pins (docs/MEMORY.md rule 30(c)).
+# pins (AGENTS.md rule 30(c)).
 
 pkgname=libseccomp-git
 _pkgname=libseccomp

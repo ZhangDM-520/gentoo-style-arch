@@ -1,5 +1,15 @@
 # plan-native-pm.md — a native, Portage-class package manager for Gentoo_Style_Arch
 
+> **Archive-class design record (annotated 2026-11-09).** This document is the
+> design provenance that `crates/` and `docs/gsa-contract.md` cite by section
+> (for example `plan-native-pm.md` §4.3), so it is kept, not deleted. Its
+> `docs/MEMORY.md` and `docs/NOTE.md` citations — including line ranges — name
+> the documents as they stood when it was written; both were retired on
+> 2026-11-09. The live equivalents are `AGENTS.md` (the same rule numbers) and
+> `docs/JOURNAL.md` (the incident history); the pre-retirement text is in the
+> `pre-split-2026-11` tag. This header is the only edit; the body is untouched.
+
+
 **Status:** design plan only. No implementation accompanies this document; it changes nothing
 else in the tree.
 

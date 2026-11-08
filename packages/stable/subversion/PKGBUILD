@@ -138,7 +138,7 @@ build() {
   local site_packages=$(python -c "import site; print(site.getsitepackages()[0])")
 
   CFLAGS+=" -Wno-incompatible-pointer-types -Wno-int-conversion"
-  # 2026-10-21 svn-checkout wall (NOTE.md): the GCC 17 snapshot's loop
+  # 2026-10-21 svn-checkout wall (JOURNAL): the GCC 17 snapshot's loop
   # vectorizer emits ALIGNED vector loads (vmovdqa64) for
   # svn_eol__find_eol_start()'s unaligned-tolerant word scan
   # (SVN_UNALIGNED_ACCESS_IS_OK), so a stream chunk at a non-aligned address

@@ -125,7 +125,7 @@ write_srcinfo() {
 }
 
 # The installed-DB probe answers the fixture's fabricated root, never the
-# host's /var/lib/pacman (docs/NOTE.md: fixtures never read host state).
+# host's /var/lib/pacman (docs/JOURNAL.md: fixtures never read host state).
 mkdir -p "$tmp/db" "$tmp/bin"
 cat >"$tmp/bin/pacman-conf" <<'EOF'
 #!/usr/bin/env bash

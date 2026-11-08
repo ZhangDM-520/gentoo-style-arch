@@ -38,7 +38,7 @@ validpgpkeys=('0D96DF4D4110E5C43FBFB17F2D347EA6AA65421D'  # Ned Deily (Python re
 prepare() {
   cd Python-${pkgver}
 
-  # Idempotent over a warm $srcdir (NOTE.md 2026-11-01, rule 70 class):
+  # Idempotent over a warm $srcdir (JOURNAL 2026-11-01, rule 70 class):
   # makepkg skips re-extraction when the tree exists, so a wave re-pull
   # re-runs prepare() over already-prepared sources. Every step below
   # guards (gcc-snapshot constexpr.cc precedent) — unguarded, the second
@@ -66,7 +66,7 @@ build() {
   # with -O3" CFLAGS substitution dropped (no hard-coded -O3/-march/-mtune).
   # -ffat-lto-objects kept (load-bearing for the LTO build, not an ISA/level
   # choice); the --enable-optimizations PGO suite is kept.
-  # Documented exception (glibc-git/jq/sqlite class, NOTE.md 2026-10-31):
+  # Documented exception (glibc-git/jq/sqlite class, JOURNAL 2026-10-31):
   # the host's -Ofast (-ffast-math) breaks CPython's float/int boundary
   # semantics (test_time's -32768.000000001 round-trip and object_to_timeval
   # range checks fail; 442 tests, 15 files) and poisons the PGO profile-run —

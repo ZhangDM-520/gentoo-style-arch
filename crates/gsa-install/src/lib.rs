@@ -2,7 +2,7 @@
 //! typed `DecisionRow`s, then the transaction executor (`pacman -U`
 //! subprocesses, `sudo -n` only) and the dynamic IgnorePkg registration.
 //!
-//! "One decision, one seam" (`docs/MEMORY.md` rule 20): `decide()` computes
+//! "One decision, one seam" (`AGENTS.md` rule 20): `decide()` computes
 //! the transaction plan ONCE as typed rows (`install|skip|refuse|noop|parked`,
 //! §E.3) with the §E.5 rc contract (0 plan / 1 refusal / 2 bad usage held by
 //! the caller). Rendering and execution never re-decide. The hidden

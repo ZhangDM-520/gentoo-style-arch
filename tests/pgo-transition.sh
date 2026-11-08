@@ -303,7 +303,7 @@ if test "$style" = autotools; then
     # Optimisation policy (2026-10-31 lane): the host makepkg.conf is the
     # source of optimisation flags; the recipe must not add its own. The
     # ONE documented exception is the -Ofast→-O3 LEVEL drop
-    # (`${CFLAGS/-Ofast/-O3}`) for the fast-math victims (MEMORY §4) —
+    # (`${CFLAGS/-Ofast/-O3}`) for the fast-math victims (AGENTS.md §4) —
     # comments never count.
     opt_lines=$(sed -e 's/^[[:space:]]*#.*$//' -e 's/[[:space:]]#.*$//' "$pkb" \
         | grep -nE -- '-(O3|march[= ]|mtune[= ])' | grep -vF '/-Ofast/-O3' || true)

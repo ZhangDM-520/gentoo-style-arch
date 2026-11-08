@@ -7,7 +7,7 @@
 +    /* House (Gentoo_Style_Arch): current spandsp made plc_state_t an
 +     * opaque type (typedef struct plc_state_s plc_state_t) with no
 +     * accessors, so the pitch stats are no longer reachable and are
-+     * dropped from this stats structure (NOTE.md 2026-10-11). */
++     * dropped from this stats structure (JOURNAL 2026-10-11). */
      s = gst_structure_new ("application/x-spanplc-stats",
          "num-pushed", G_TYPE_UINT64, self->num_pushed,
          "num-gap", G_TYPE_UINT64, self->num_gap,

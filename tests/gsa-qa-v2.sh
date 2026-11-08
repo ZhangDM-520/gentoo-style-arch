@@ -284,7 +284,7 @@ pkgname = clean"
         run_engine "$ws" --qa-check purged-tools
         [ "$FIXTURE_RC" = 0 ] || fail "a report check is rc 0 (§G), got $FIXTURE_RC: $FIXTURE_OUTPUT"
         vgrep "$FIXTURE_OUTPUT" -Fqx \
-            "purged-tools: viol: makedepends reintroduces purged tool 'cuda' — remove it (docs/MEMORY.md rule 8)" \
+            "purged-tools: viol: makedepends reintroduces purged tool 'cuda' — remove it (AGENTS.md rule 8)" \
             || fail "the staged purged tool must be named verbatim:" "$fixture/a/out"
         vgrep "$FIXTURE_OUTPUT" -Fqx "qa-check purged-tools: 1 finding(s)" \
             || fail "the tally line must count the staged finding:" "$fixture/a/out"

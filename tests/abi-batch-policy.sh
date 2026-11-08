@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Regression fixture for the 2026-09-25 LLVM-snapshot ABI-skew incident
-# (docs/NOTE.md, 2026-09-25): the run's own `llvm-git` install landed a new
+# (docs/JOURNAL.md, 2026-09-25): the run's own `llvm-git` install landed a new
 # LLVM C++ ABI mid-run and instantly broke the installed `rustc`
 # (`librustc_driver` cannot resolve `llvm::cl::ParseCommandLineOptions…,
 # version LLVM_24.0`). The preflight probe (check_rustc_sanity) had passed at
@@ -35,7 +35,7 @@ set -euo pipefail
 #   E. Non-ABI tags: app-cluster/version-sync-only records keep the ABI
 #      severity result at `none` at the real-build gate (the -S run succeeds).
 #   F. Grouping policy: the committed topology's group discipline
-#      (docs/MEMORY.md §1 rule 21) — raw-record reads of
+#      (AGENTS.md rule 21) — raw-record reads of
 #      ${1:-$root/config/topology.conf}; engine-independent, unchanged from
 #      the fish era.
 #   G. ABI-drift gate at the §E.2 decision seam (`gsa --install-decide`):
@@ -131,6 +131,13 @@ set -euo pipefail
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/rr-v2.bash"
+
+# Sections D/F read the committed recipe tree (the `-Qt` channel, the raw
+# topology records), which the split moved to its own repository: the checkout
+# is the operator input `GSA_RECIPE_CHECKOUT` (contract §B.8). No tree → SKIP
+# loudly (rc 0, one line), never a silent pass and never a failure.
+root=$(gsa_recipe_root)
+require_recipe_tree abi-batch-policy.sh
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-abi-batch.XXXXXX")
 # Root-safe cleanup: the engine writes its state tree as root (W5), so the
 # plain rm would leave Permission denied noise even on a passing run.
@@ -974,7 +981,7 @@ $FIXTURE_OUTPUT"
 )
 
 # ─── F. grouping policy: hub/toolchain membership in the topology records ───
-# docs/MEMORY.md §1 rule 21 membership tests, one pin per sub-check:
+# AGENTS.md rule 21 membership tests, one pin per sub-check:
 #   a. the compile-toolchain set carries BOTH core and build-tools;
 #   b. a package with ≥2 edge-consumers (a record listing X in edges consumes
 #      X) carries core, except the rule 21(a) app-cluster exception in F(b)
@@ -1017,7 +1024,7 @@ has_member() { # $1 = comma list (groups or edges field), $2 = wanted member
 }
 
 # a. compile toolchains carry core,build-tools. The set is hard-coded on
-# purpose — the toolchain records of the 2026-10-04 migration (docs/NOTE.md);
+# purpose — the toolchain records of the 2026-10-04 migration (docs/JOURNAL.md);
 # a new toolchain record means adding its id here.
 toolchain_set=(
     cmake-git gcc-snapshot llvm-git meson-git mold-git qt5-tools qt6-tools

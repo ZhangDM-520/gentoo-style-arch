@@ -1,4 +1,4 @@
-//! The fail-closed decision gates (contract §E.3, `docs/MEMORY.md` rule 25):
+//! The fail-closed decision gates (contract §E.3, `AGENTS.md` rule 25):
 //!
 //! * PGO payload — an archive from a `-fprofile-generate`/`-Cprofile-generate`
 //!   recipe carrying a baked `.gcda`/`.profraw` destination refuses

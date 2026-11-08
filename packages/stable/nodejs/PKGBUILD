@@ -93,7 +93,7 @@ build() {
   _set_flags
   cd node
 
-  # Documented exception (glibc-git/python/jq/sqlite class, NOTE.md
+  # Documented exception (glibc-git/python/jq/sqlite class, JOURNAL
   # 2026-10-31): the host's -Ofast miscompiles Node's path segment
   # normalization — path.resolve('/usr/lib/node_modules/npm/lib/cli',
   # '../../package.json') returned '/package.json' (probe 2026-11-01;

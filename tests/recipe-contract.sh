@@ -8,7 +8,7 @@ set -euo pipefail
 # (crates/gsa-qa/src/checks.rs `provides-versioning` / `purged-tools` /
 # `declared-deps` — the first two are ports of build-all.fish
 # audit_lint_provides / audit_lint_purged, the third is the
-# DT_NEEDED-vs-declared-deps guard of docs/MEMORY.md rule 54); `gsa -Ma`
+# DT_NEEDED-vs-declared-deps guard of AGENTS.md rule 54); `gsa -Ma`
 # renders them in its report and the hidden `gsa --qa-check <name>` seam
 # (contract §D.1) runs one of them — the seam is the interface, and this
 # fixture is its gating walker (red/green per rule, then the real-repo
@@ -68,6 +68,13 @@ set -euo pipefail
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 source "$root/tests/lib/fixture-lib.bash"
 source "$root/tests/lib/rr-v2.bash"
+
+# Section E's real-repo gates read the committed recipe tree, which the split
+# moved to its own repository: the checkout is the operator input
+# `GSA_RECIPE_CHECKOUT` (contract §B.8). No tree → SKIP loudly (rc 0, one
+# line), never a silent pass and never a failure.
+root=$(gsa_recipe_root)
+require_recipe_tree recipe-contract.sh
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/gsa-recipe-contract.XXXXXX")
 trap '/usr/bin/sudo -n rm -rf -- "$tmp" 2>/dev/null || rm -rf -- "$tmp" 2>/dev/null || true' EXIT
@@ -259,10 +266,10 @@ write_srcinfo() {
     printf '\tcheckdepends = po4a>=0.6\n' >>"$ws/packages/tools-git/.SRCINFO"
     lint "$ws" purged-tools
     ((FIXTURE_RC == 0)) || fail "B: --qa-check must stay report-only (rc=$FIXTURE_RC)"
-    grep -Fq "purged-tools: tools-git: makedepends reintroduces purged tool 'python-sphinx' — remove it (docs/MEMORY.md rule 8)" \
+    grep -Fq "purged-tools: tools-git: makedepends reintroduces purged tool 'python-sphinx' — remove it (AGENTS.md rule 8)" \
         <<<"$FIXTURE_OUTPUT" ||
         fail "B: missing makedepends finding, got: $FIXTURE_OUTPUT"
-    grep -Fq "purged-tools: tools-git: checkdepends reintroduces purged tool 'po4a' — remove it (docs/MEMORY.md rule 8)" \
+    grep -Fq "purged-tools: tools-git: checkdepends reintroduces purged tool 'po4a' — remove it (AGENTS.md rule 8)" \
         <<<"$FIXTURE_OUTPUT" ||
         fail "B: missing checkdepends finding, got: $FIXTURE_OUTPUT"
     grep -Fq 'qa-check purged-tools: 2 finding(s)' <<<"$FIXTURE_OUTPUT" ||
@@ -442,7 +449,7 @@ EOF
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ─── G. declared-deps: the DT_NEEDED-vs-declared-deps axis, red/green ───────
-# The guard for docs/MEMORY.md rule 54's gap (docs/NOTE.md 2026-10-14
+# The guard for AGENTS.md rule 54's gap (docs/JOURNAL.md 2026-10-14
 # "orphan-removal broke shared libs"): with !autodeps an archive's depends is
 # exactly what its PKGBUILD declares, so a payload link whose provider is not
 # in the declared-depends closure leaves the provider dep-installed,

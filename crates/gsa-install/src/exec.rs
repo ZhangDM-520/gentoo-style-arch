@@ -121,7 +121,7 @@ fn sudo_true_command() -> Command {
 /// non-interactively refuses BEFORE building starts (rc 3,
 /// `sudo cannot install non-interactively`). Proven with `sudo -n true` —
 /// never `sudo -v` (a NOPASSWD entry makes `-v` fail while every install
-/// succeeds, `docs/MEMORY.md` rule 11).
+/// succeeds, `AGENTS.md` rule 11).
 pub fn preflight_installs() -> Result<(), String> {
     let output = sudo_true_command()
         .output()

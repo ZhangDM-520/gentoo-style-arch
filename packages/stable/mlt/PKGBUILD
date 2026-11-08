@@ -109,7 +109,7 @@ build() {
   CFLAGS+=" -fstack-reuse=all"  # flag-audit 2026-11-01
   CXXFLAGS+=" -fstack-reuse=all"  # flag-audit 2026-11-01
 
-  # house: pin the system interpreter (uv/pyenv shims lead PATH; NOTE.md 2026-10-10)
+  # house: pin the system interpreter (uv/pyenv shims lead PATH; JOURNAL 2026-10-10)
   cmake -B build -S $pkgname \
     -DPython_EXECUTABLE=/usr/bin/python \
     -DPython3_EXECUTABLE=/usr/bin/python \

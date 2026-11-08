@@ -440,14 +440,14 @@ fn status_text(status: &std::process::ExitStatus) -> String {
 /// it so no failure rendering can drop the recovery options.
 const SKEW_NOTE: &str =
     "Almost certainly llvm-libs-git is NEWER than rust-git (LLVM snapshots have no
-stable C++ ABI — see docs/NOTE.md 2026-09-07 – 09). Every build using rustc
+stable C++ ABI — see docs/JOURNAL.md 2026-09-07 – 09). Every build using rustc
 in this run would fail or miscompile.
 Recovery: rebuild rust-git — its bootstrap uses the DOWNLOADED official
 stage0, so no working system rustc is needed (gsa -S --leaf rust-git; for a
 direct makepkg use a scratch copy of the recipe OUTSIDE the repo — an
 in-tree build collides with the engine's own Rust workspace). LAST resort:
 downgrade-rebuild llvm-libs at the snapshot rust-git was built against
-(old version in /var/log/pacman.log; procedure in docs/NOTE.md).
+(old version in /var/log/pacman.log; procedure in docs/JOURNAL.md).
 Bypass anyway: --allow-broken-rustc";
 
 /// Removes the probe scratch (rm -f semantics) and folds any leftover into

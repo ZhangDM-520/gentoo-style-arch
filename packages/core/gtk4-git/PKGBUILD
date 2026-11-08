@@ -83,7 +83,7 @@ source=(
   gtk4-querymodules.{hook,script}
 
   # House: cups 2.5 renamed the HTTP/IPP enums out from under GTK's
-  # cups<3 compat block (NOTE.md 2026-10-11)
+  # cups<3 compat block (JOURNAL 2026-10-11)
   cups25-legacy-enums.patch
   cups25-legacy-enums-ops.patch
 )
@@ -113,7 +113,7 @@ prepare() {
   sed -E -e 's&^(\s*can_use_objcopy_for_resources) = \S+$&\1 = false&' \
     -i "$_pkgsrc/meson.build"
 
-  # House: gate the legacy cups enum aliases on cups <= 2.4 (NOTE.md
+  # House: gate the legacy cups enum aliases on cups <= 2.4 (JOURNAL
   # 2026-10-11). Idempotent guard — repeat makepkg re-runs prepare().
   local _p
   for _p in cups25-legacy-enums.patch cups25-legacy-enums-ops.patch; do
@@ -150,7 +150,7 @@ build() {
   CFLAGS+=" -fprofile-generate" CXXFLAGS+=" -fprofile-generate"
   # `meson setup` on a configured dir only prints "Directory already
   # configured." and exits 0, so a reused srcdir would keep phase 2's options
-  # and instrument nothing (NOTE.md 2026-11-06).
+  # and instrument nothing (JOURNAL 2026-11-06).
   rm -rf build
   arch-meson "$_pkgsrc" build "${meson_options[@]}" -Db_lto=false
   meson compile -C build

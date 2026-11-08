@@ -104,14 +104,14 @@ build() {
   # <dir>/<mangled-object-path>.gcda, so the pre-2026-10-19 spelling (bare
   # generate + use=<dir>) missed every profile and silently compiled a
   # profile-less build — -Wno-error=missing-profile downgraded the miss to
-  # nothing visible (GCC probe + recipe fix: docs/NOTE.md 2026-10-19; jq's
+  # nothing visible (GCC probe + recipe fix: docs/JOURNAL.md 2026-10-19; jq's
   # C-autotools block is the template). Phase 1 also strips -flto:
   # generate-mode bookkeeping and LTO whole-program codegen interact badly
   # and meson's -Db_lto=false cannot remove what the env flags still carry.
   local _pgo_dir="$PWD/pgo-profiles"
   # A reused srcdir would otherwise carry the previous revision's gcda into
   # this build, and -fprofile-use then reads arc counts for code that no
-  # longer exists (umbriel-git's purge, NOTE.md 2026-11-06).
+  # longer exists (umbriel-git's purge, JOURNAL 2026-11-06).
   rm -rf "$_pgo_dir"
   mkdir -p "$_pgo_dir"
   local _gen_cflags="" _gen_cxxflags="" _gen_ldflags="" _flag
@@ -138,7 +138,7 @@ build() {
   export LDFLAGS="${_gen_ldflags# } -fprofile-generate=$_pgo_dir"
   # `meson setup` on a configured dir only prints "Directory already
   # configured." and exits 0, so a reused srcdir would keep phase 2's options
-  # and instrument nothing (NOTE.md 2026-11-06).
+  # and instrument nothing (JOURNAL 2026-11-06).
   rm -rf build
   arch-meson xserver build "${meson_options[@]}" -Db_lto=false
   meson compile -C build

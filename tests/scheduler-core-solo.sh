@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # "Core runs solo" is a scheduler invariant the docs state three times
-# (README, docs/architecture.md, docs/MEMORY.md): a core member builds alone
+# (README, docs/architecture.md, AGENTS.md): a core member builds alone
 # with its own, larger job budget, because its full -j is the memory peak the
 # guard exists for. Nothing asserted it. `tests/scheduler-intensity.sh` pins
 # the *plan numbers* (the run record's plan scalars) but not that the

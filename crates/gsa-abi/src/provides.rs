@@ -1,5 +1,5 @@
 //! Shared provide/soname semantics — the ONE matcher every ABI surface
-//! shares (`docs/MEMORY.md` rules 25(a)/25(b), `gsa-install::localdb`'s
+//! shares (`AGENTS.md` rules 25(a)/25(b), `gsa-install::localdb`'s
 //! original home). `gsa-install` and `gsa-abi` both resolve through these
 //! functions; nothing here is re-implemented anywhere downstream.
 
@@ -58,7 +58,7 @@ pub fn is_soname_name(name: &str) -> bool {
 
 /// Does one provide entry cover a dependency string? Bare soname provides
 /// (`libfoo.so`, makepkg-auto-versioned to `libfoo.so=<ver>`) cover the
-/// `libfoo.so.N` soname family (`docs/MEMORY.md` rule 25(a)); a versioned
+/// `libfoo.so.N` soname family (`AGENTS.md` rule 25(a)); a versioned
 /// NAME provide covers the name itself (constraint satisfaction stays
 /// pacman's job at transaction time). This is the ONE matcher every
 /// resolution source shares (fish `abi_provide_covers`).

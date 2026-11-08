@@ -205,7 +205,7 @@ _set_flags() {
 # exactly what is missing — so classify the TRANSIENT network class and
 # retry the step up to 3 times before failing; any other failure still fails
 # immediately with the real status (the vscodium npm-shim precedent,
-# NOTE.md 2026-10-20). tests/onlyoffice-gclient-retry.sh pins the contract.
+# JOURNAL 2026-10-20). tests/onlyoffice-gclient-retry.sh pins the contract.
 _gclient_sync() {
     local _gs_try _gs_out _gs_rc
     for _gs_try in 1 2 3; do

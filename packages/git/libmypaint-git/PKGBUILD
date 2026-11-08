@@ -7,7 +7,7 @@
 # krita-git) probe the module name `libmypaint` and use MyPaintSurface2
 # (mypaint_brush_stroke_to_2, …), so master can serve neither. Re-targeted
 # from master 2026-10-10 after gimp-git walled at the meson dependency
-# lookup (NOTE.md same date). AUR libmypaint-git and stock libmypaint are
+# lookup (JOURNAL same date). AUR libmypaint-git and stock libmypaint are
 # REFERENCES ONLY.
 # The AUR reference is stale and policy-violating: it force-sets
 # -Ofast/-march=native/-mtune=native (dropped — makepkg.conf owns opt level)

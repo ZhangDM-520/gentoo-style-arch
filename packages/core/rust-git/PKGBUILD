@@ -63,7 +63,7 @@ options=(
 # ADVANCE THE PIN on the Monday cadence (or at any deliberate upgrade): move
 # #commit= and pkgver together (pkgver() recomputes the same value at the
 # pin). Rebuild in the same pass as llvm-git — rustc links libLLVM and the
-# LLVM snapshots have no stable C++ ABI (see NOTE.md 2026-09-07).
+# LLVM snapshots have no stable C++ ABI (see JOURNAL 2026-09-07).
 source=(
   git+https://github.com/rust-lang/rust.git#commit=c4a7cdf19f2ca2f4ec57e792f51f8f3178bed593
   0001-bootstrap-Change-libexec-dir.patch

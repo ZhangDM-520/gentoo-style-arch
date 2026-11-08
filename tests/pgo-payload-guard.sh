@@ -193,7 +193,7 @@ cat >"$fixture/bin/pacman-conf" <<'EOF'
 #!/usr/bin/env bash
 set -u
 # The installed-DB probe answers the fixture's fabricated root, never the
-# host's /var/lib/pacman (docs/NOTE.md: fixtures never read host state).
+# host's /var/lib/pacman (docs/JOURNAL.md: fixtures never read host state).
 if [ "${1:-}" = DBPath ]; then
     printf '%s\n' "${GSA_FAKE_DB_PATH:?}"
     exit 0

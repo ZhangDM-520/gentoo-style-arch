@@ -4,7 +4,7 @@ set -euo pipefail
 # tests/scheduler-intensity.sh — each --intensity level's lanes/normal-jobs/
 # core-jobs plan, the per-lane job budget, and a failing run's drain/resume
 # invariants, driven through the NATIVE engine (docs/gsa-contract.md §B.5/§B.8,
-# §H.2, §K.1). Expectations are record-derived (docs/MEMORY.md rule 25(j)):
+# §H.2, §K.1). Expectations are record-derived (AGENTS.md rule 25(j)):
 # the budget triple is the intensity-profile plan this fixture pins (the
 # docs/portability.md formulas on its fixed GSA_CPU_THREADS/GSA_MEMORY_GIB
 # inputs), the resume set comes from the outcome rows, and the continuation

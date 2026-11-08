@@ -38,6 +38,43 @@
 _gsa_lib_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 gsa_repo_root=$(cd "$_gsa_lib_dir/../.." && pwd)
 
+# ─── The recipe tree: an operator input since the split ──────────────────────
+# The recipe half of the project lives in its own repository (contract §B.8
+# `GSA_RECIPE_CHECKOUT`), so a fixture section that reads the committed
+# `config/` + `packages/` takes that path from the operator. `$gsa_repo_root`
+# is only a fallback while both halves still coexist — never an assumption.
+
+# gsa_recipe_root — print the recipe checkout, or nothing when there is none.
+# `GSA_RECIPE_CHECKOUT` wins whenever it holds a non-blank value (a blank or
+# whitespace-only value is unset — the shared `GSA_*` path-input rule), else
+# this repository's own tree while both halves still coexist. Always exits 0:
+# fixtures assign with `root=$(gsa_recipe_root)` under `set -e`, so an
+# unresolved tree must be require_recipe_tree's decision, not a failed command
+# substitution.
+gsa_recipe_root() {
+    local value=${GSA_RECIPE_CHECKOUT:-}
+    if [[ -n ${value//[[:space:]]/} ]]; then
+        printf '%s\n' "$value"
+    elif [[ -f $gsa_repo_root/config/topology.conf ]]; then
+        printf '%s\n' "$gsa_repo_root"
+    fi
+    return 0
+}
+
+# require_recipe_tree FIXTURE — SKIP the fixture (rc 0, one stdout line) when
+# no recipe tree resolves. run-all.sh counts rc 0 as a pass, so the line is the
+# only trace that the real-tree sections never ran: never a silent pass.
+require_recipe_tree() {
+    local root
+    root=$(gsa_recipe_root)
+    if [[ -n $root ]]; then
+        return 0
+    fi
+    printf '%s: skipped — GSA_RECIPE_CHECKOUT is unset and no recipe tree is present at %s\n' \
+        "$1" "$gsa_repo_root"
+    exit 0
+}
+
 # The pkgver/pkgrel/arch triple most synthetic PKGBUILDs carry, for add_package's
 # extra-pkglines. The trivial stubs' archive names assume exactly this shape
 # ($id-1.0.0-1-any); a fixture whose stubs assume something else passes its own

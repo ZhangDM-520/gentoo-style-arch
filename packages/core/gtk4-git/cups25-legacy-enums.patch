@@ -7,7 +7,7 @@
 +/* House (Gentoo_Style_Arch): cups 2.5 (the pre-3 development line) renamed
 + * these enums to the _STATUS_/_STATE_ spellings while keeping
 + * CUPS_VERSION_MAJOR at 2 and dropped the legacy aliases, so the mapping
-+ * below only applies up to cups 2.4 (NOTE.md 2026-10-11). */
++ * below only applies up to cups 2.4 (JOURNAL 2026-10-11). */
 +#if CUPS_VERSION_MINOR < 5
  #define HTTP_STATUS_ERROR HTTP_ERROR
  #define HTTP_STATUS_CONTINUE HTTP_CONTINUE

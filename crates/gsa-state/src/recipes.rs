@@ -19,7 +19,11 @@
 //! (it is state, not store).
 //!
 //! Git child processes always carry `GIT_CONFIG_COUNT=0` (agent shells
-//! inject git config that breaks git operations).
+//! inject git config that breaks git operations). A refresh also re-points
+//! the store's `origin` at the requested `recipe_url` when the two disagree
+//! (only the first-use clone ever honoured that URL, so a repointed
+//! `DEFAULT_RECIPE_URL` or `recipe_url` would otherwise keep fetching the old
+//! repository); a matching origin runs the plain fetch/hard-reset silently.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -168,7 +172,10 @@ fn create_owned_levels(dir: &Path) -> Result<(), String> {
 pub fn fetch(state_dir: &Path, recipe_url: &str) -> Result<(PathBuf, String), String> {
     let (store, _note) = ensure_store(state_dir)?;
     if store.join(".git").is_dir() {
-        let head = refresh(state_dir, recipe_url)?;
+        // The retarget note is the `-Sy` surface's: an on-demand fetch already
+        // announces itself ("recipe store fetched: … at <head>") and the
+        // caller of this function has no note channel.
+        let (head, _note) = refresh(state_dir, recipe_url)?;
         return Ok((store, head));
     }
     if store.exists() {
@@ -204,9 +211,12 @@ pub fn fetch(state_dir: &Path, recipe_url: &str) -> Result<(PathBuf, String), St
     Ok((store, head))
 }
 
-/// Refresh an existing store in place. Returns the new HEAD revision.
-pub fn refresh(state_dir: &Path, _recipe_url: &str) -> Result<String, String> {
+/// Refresh an existing store in place. Returns the new HEAD revision plus the
+/// one note the caller prints (origin retargeted / origin added), if any —
+/// `None` when the store's origin already answers `recipe_url`.
+pub fn refresh(state_dir: &Path, recipe_url: &str) -> Result<(String, Option<String>), String> {
     let (store, _note) = ensure_store(state_dir)?;
+    let note = retarget_origin(&store, recipe_url)?;
     git(&store, &["fetch", "--depth", "1", "origin", "HEAD"])?;
     git(&store, &["reset", "--hard", "FETCH_HEAD"])?;
     // The reset writes as the engine (root under a privileged run): the
@@ -214,5 +224,54 @@ pub fn refresh(state_dir: &Path, _recipe_url: &str) -> Result<String, String> {
     gsa_model::privilege::own_to_build_user(&store)
         .map_err(|e| format!("cannot hand {} to the build user: {e}", store.display()))?;
     touch_stamp(state_dir)?;
-    git(&store, &["rev-parse", "HEAD"])
+    let head = git(&store, &["rev-parse", "HEAD"])?;
+    Ok((head, note))
+}
+
+/// Point the store's `origin` at `recipe_url` when it disagrees. Only the
+/// first-use clone ever honoured that URL, so a repointed
+/// `DEFAULT_RECIPE_URL` (or a `recipe_url` config change) kept fetching the
+/// old repository — silently. Returns the note the caller prints; `None` when
+/// the origin already matches, and an empty `recipe_url` is ignored rather
+/// than written.
+fn retarget_origin(store: &Path, recipe_url: &str) -> Result<Option<String>, String> {
+    let wanted = recipe_url.trim();
+    if wanted.is_empty() {
+        return Ok(None);
+    }
+    let current = origin_url(store)?;
+    if current.as_deref() == Some(wanted) {
+        return Ok(None);
+    }
+    match current {
+        // A store with no origin at all gets one through the same seam.
+        Some(_) => git(store, &["remote", "set-url", "origin", wanted])?,
+        None => git(store, &["remote", "add", "origin", wanted])?,
+    };
+    Ok(Some(format!(
+        "recipe store origin retargeted: {} → {wanted}",
+        current.as_deref().unwrap_or("(none)")
+    )))
+}
+
+/// `remote.origin.url`, or `None` when the store has no origin configured.
+fn origin_url(store: &Path) -> Result<Option<String>, String> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(store)
+        .args(["config", "--get", "remote.origin.url"])
+        .env("GIT_CONFIG_COUNT", "0")
+        .output()
+        .map_err(|e| format!("cannot run git: {e}"))?;
+    match out.status.code() {
+        Some(0) => Ok(Some(
+            String::from_utf8_lossy(&out.stdout).trim().to_string(),
+        )),
+        // `git config --get` exits 1 for an unset key: no origin, not an error.
+        Some(1) => Ok(None),
+        _ => Err(format!(
+            "git config --get remote.origin.url failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        )),
+    }
 }

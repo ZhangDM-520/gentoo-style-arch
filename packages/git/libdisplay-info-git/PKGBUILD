@@ -5,7 +5,7 @@
 # generation. meson.build sets `soversion: version_minor`, so master
 # (0.5.0-dev) ships libdisplay-info.so.5 while stock wlroots0.20 depends on
 # `libdisplay-info.so=3-64` and sway 1.12 rides wlroots0.20: swapping so.3
-# for so.5 is a soname bump and therefore a batch (icu precedent, NOTE.md
+# for so.5 is a soname bump and therefore a batch (icu precedent, JOURNAL
 # 2026-10-07), not a single package. Until the sway/wlroots stack can move
 # together (owner decision pending), this recipe is the drop-in so.3 swap —
 # content-identical to stock 0.3.0, so the installed surface does not move.

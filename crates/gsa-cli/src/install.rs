@@ -2,7 +2,7 @@
 //! the hidden install seams (`--install-decide`, `--install-register`,
 //! `--register-ignorepkg`, §D.1).
 //!
-//! One decision, one seam (`docs/MEMORY.md` rule 20): `gsa_install::decide`
+//! One decision, one seam (`AGENTS.md` rule 20): `gsa_install::decide`
 //! computes the plan once as typed `DecisionRow`s; this module renders them
 //! (the `--install-decide` stdout, the run-record plan rows, the prose
 //! summary) and executes them — never re-deciding. Every refusal is

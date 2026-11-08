@@ -79,7 +79,7 @@ options=(!strip) # Nothing to strip, save packaging time
 # recipe can do: wipe the husk wherever it lives, then re-fetch the pinned
 # revision from the declared source entry — anchored to `source=()`, never
 # a re-typed URL/rev (rule 18) — retried three times before giving up.
-# tlpkg's third strike is NOTE.md 2026-10-19; texmf-dist joined the class
+# tlpkg's third strike is JOURNAL 2026-10-19; texmf-dist joined the class
 # on 2026-10-21 (the SEGV-era interrupted checkout left a working copy
 # whose metadata claimed r78408 while only 27 of 459k files existed).
 _heal_svn_source() {

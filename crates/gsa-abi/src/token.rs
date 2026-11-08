@@ -13,7 +13,7 @@
 //! **Override semantics (`abi-rev=<n>`, topology tag):** the declared
 //! revision WINS over derivation's verdict of "unchanged" — for ABI moves
 //! derivation provably cannot see (LLVM C++ snapshots, Qt private API,
-//! `docs/MEMORY.md` rules 5 and 13) a revision bump alone moves the
+//! `AGENTS.md` rules 5 and 13) a revision bump alone moves the
 //! effective token. The override never suppresses derivation: a stem
 //! add/drop still moves the token even at a frozen revision, because
 //! suppressing it would under-detect a real soname move (rule 25(c)'s

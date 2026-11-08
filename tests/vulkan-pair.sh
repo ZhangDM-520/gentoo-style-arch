@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Policy fixture for the coupled Vulkan pair — 2026-09-25 incident
-# (docs/NOTE.md "vulkan pair" section): a `-s` batch kept vulkan-headers-git
+# (docs/JOURNAL.md "vulkan pair" section): a `-s` batch kept vulkan-headers-git
 # at 1.4.363 while vulkan-icd-loader-git fetched upstream v1.4.364, whose
 # CMake requires VulkanHeaders >= its own ${PROJECT_VERSION} — a cryptic
 # "not compatible with the version requested" error mid-build().

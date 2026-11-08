@@ -2,7 +2,7 @@
 # PySide6 + shiboken6 built from Qt's pyside-setup dev branch against
 # qt6-base-git (Qt 6.13-dev). Scoped to the essential base modules with
 # -DMODULES so no bindings are generated against the still-stock 6.11.2
-# optional modules (Qml, Quick, Multimedia, ...) — see NOTE.md.
+# optional modules (Qml, Quick, Multimedia, ...) — see JOURNAL.
 
 pkgbase=pyside6-git
 pkgname=pyside6-git
@@ -30,7 +30,7 @@ makedepends=(clang
 # The monorepo builds all five stock pyside/shiboken names — each mapped
 # name gets a versioned provide (unversioned cannot satisfy >=N makedeps,
 # and a missing name makes pacman pull the stock package into a file
-# conflict with these files; NOTE.md 2026-10-11 kguiaddons wall).
+# conflict with these files; JOURNAL 2026-10-11 kguiaddons wall).
 provides=("pyside6=$pkgver"
           "python-pyside6=$pkgver"
           "shiboken6=$pkgver"
@@ -67,7 +67,7 @@ pkgver() {
 build() {
   # house: pin the system interpreter — FindPython follows PATH and
   # ~/.local/bin carries uv/pyenv shims; the modules must land in the
-  # system python's site-packages (NOTE.md 2026-10-10 obs-studio)
+  # system python's site-packages (JOURNAL 2026-10-10 obs-studio)
   cmake -B build -S pyside-setup -G Ninja \
     -DCMAKE_INSTALL_PREFIX=/usr \
     -DCMAKE_BUILD_TYPE=None \

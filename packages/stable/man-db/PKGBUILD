@@ -9,7 +9,7 @@ arch=('x86_64')
 url="https://gitlab.com/man-db/man-db"
 license=('GPL-2.0-or-later AND GPL-3.0-or-later')
 depends=( 'bash' 'gdbm' 'zlib' 'groff' 'libpipeline' 'less' 'libseccomp' 'glibc')
-# trim: po4a makedep (purged system tool — MEMORY rule 8) together with the
+# trim: po4a makedep (purged system tool — AGENTS.md rule 8) together with the
 # po4a translated-man stage — NLS/translations are disabled in build() and the
 # translated man/locale outputs are trimmed in package() below
 makedepends=()
@@ -33,7 +33,7 @@ build() {
   command -v mold >/dev/null 2>&1 && _mold="-fuse-ld=mold"
   export LDFLAGS+=" ${_mold}"
   # trim: po4a translated man pages + gettext NLS (po4a is a purged system
-  # tool — MEMORY rule 8): --disable-nls empties upstream MAN_SUBDIRS
+  # tool — AGENTS.md rule 8): --disable-nls empties upstream MAN_SUBDIRS
   # (m4/man-linguas.m4) so the po4a stage and the translated man/locale
   # outputs are never built or installed
   ./configure --prefix=/usr \

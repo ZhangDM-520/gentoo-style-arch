@@ -4,7 +4,7 @@ A curated Arch Linux package set (recipes + declarative topology) built and
 installed by `gsa`, the native Rust engine (workspace `crates/`; interface
 contract in `docs/gsa-contract.md`). This glossary names the project's own
 concepts; implementation lives in `docs/architecture.md`, history in
-`docs/NOTE.md`, rules in `docs/MEMORY.md`.
+`docs/JOURNAL.md`, rules in `AGENTS.md`.
 
 ## Language
 

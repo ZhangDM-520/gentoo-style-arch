@@ -922,7 +922,11 @@ fn run_sync_pass_inner(
                 let url = cfg
                     .recipe_url
                     .unwrap_or_else(|| gsa_model::config::DEFAULT_RECIPE_URL.to_string());
-                let head = gsa_state::recipes::refresh(&state, &url).map_err(Exit::Usage)?;
+                let (head, note) =
+                    gsa_state::recipes::refresh(&state, &url).map_err(Exit::Usage)?;
+                if let Some(note) = note {
+                    let _ = writeln!(err, "gsa: {note}");
+                }
                 let _ = writeln!(err, "gsa: recipe store refreshed: {head}");
             } else {
                 let _ = writeln!(

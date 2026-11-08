@@ -1,6 +1,6 @@
 //! Version-sync providers and checksum anchoring (`gsa -Sy`;
 //! `docs/gsa-contract.md` §B.4, `docs/build-guide.md` "Stable version sync and
-//! checksum verification", `docs/MEMORY.md` rule 18).
+//! checksum verification", `AGENTS.md` rule 18).
 //!
 //! Providers: Arch official (`pacman -Si` + the official packaging repo's
 //! `.SRCINFO` anchor) for untagged `packages/stable` recipes, and the
@@ -47,7 +47,7 @@
 //! When a pass is called, the caller has already established authorization —
 //! for the nvchecker path that means the validated `version-sync=nvchecker`
 //! topology tag; a `.nvchecker.toml` file alone NEVER authorizes a query or a
-//! rewrite (`docs/MEMORY.md` rule 18, 2026-10-01).
+//! rewrite (`AGENTS.md` rule 18, 2026-10-01).
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -2700,7 +2700,7 @@ impl AnchorOutcome {
 }
 
 fn refresh_only_attestation() -> String {
-    "  Attestation: a detached signature is PGP-verified against the anchored payload at build time, a VCS source pinned by #tag/#commit is anchored to that ref, a #branch= pin tracks a branch tip — attested by the fetch (TLS) only, allowed only as a named maintenance branch (MEMORY rule 30) — and a plain download is attested by nothing but the fetch (TLS). Review these sums before committing; '--no-sync' builds the committed version as-is.".to_string()
+    "  Attestation: a detached signature is PGP-verified against the anchored payload at build time, a VCS source pinned by #tag/#commit is anchored to that ref, a #branch= pin tracks a branch tip — attested by the fetch (TLS) only, allowed only as a named maintenance branch (AGENTS.md rule 30) — and a plain download is attested by nothing but the fetch (TLS). Review these sums before committing; '--no-sync' builds the committed version as-is.".to_string()
 }
 
 /// The RULE-18 anchoring procedure end to end, over the *moved* entries only
@@ -3764,7 +3764,7 @@ pub fn sync_arch(
 /// The opted-in provider pass over one recipe. **Authorization is the
 /// caller's**: this pass must only run for a record carrying the validated
 /// `version-sync=nvchecker` topology tag — a `.nvchecker.toml` file alone is
-/// REPORT-ONLY and never authorizes a query or a rewrite (`docs/MEMORY.md`
+/// REPORT-ONLY and never authorizes a query or a rewrite (`AGENTS.md`
 /// rule 18, 2026-10-01).
 ///
 /// Policy in the shape of the fish reference: GitHub resets `pkgrel` to 1

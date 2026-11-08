@@ -170,7 +170,7 @@ make_archive() {
 
 # db_install DBROOT NAME FULL-VERSION [PROVIDE…] — one fabricated pacman
 # local-DB entry (`<db>/local/<name>-<ver>/{desc,files}`), like the fish-era
-# fixtures' DBs (docs/NOTE.md:89-93: fixtures never read host state). The
+# fixtures' DBs (docs/JOURNAL.md: fixtures never read host state). The
 # entry directory's mtime IS the install date (crates/gsa-install localdb.rs),
 # so the caller touches it to place the date against the archive.
 db_install() {

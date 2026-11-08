@@ -526,7 +526,7 @@ rr2_invoke() {
 # tree when the caller did not pin one:
 #   §J.3 fail-safe state isolation: a fixture run must NEVER reach the
 #   live /var/lib/gsa (the default state root — under the W5 root model an
-#   unoverridden run really writes it; a battery run did, see docs/NOTE.md).
+#   unoverridden run really writes it; a battery run did, see docs/JOURNAL.md).
 #   W4 build-cache isolation: the engine creates its build cache at the
 #   resolved root (default: the build user's ~/.cache/gsa). A fixture run
 #   must never create real home directories.

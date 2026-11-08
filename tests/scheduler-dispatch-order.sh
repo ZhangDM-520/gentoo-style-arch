@@ -7,7 +7,7 @@ set -euo pipefail
 # workspaces with stub `makepkg`/`sudo`/`pacman` executables — nothing is
 # built for real, no pacman transaction runs, nothing outside the fixture
 # tree is written. Expectations are DERIVED from the topology this fixture
-# wrote and the run record the run produced (docs/MEMORY.md rule 25(j), the
+# wrote and the run record the run produced (AGENTS.md rule 25(j), the
 # tests/gsa-sched-v2.sh edges-file pattern): the dispatch order comes from the
 # makepkg stub's own SPAWN/END log, band membership and build-order edges from
 # the fixture's own membership/edges files (three-way checked against the

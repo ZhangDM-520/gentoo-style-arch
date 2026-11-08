@@ -8,7 +8,7 @@
 //! RECORDED token for the provider differs from the provider's new token.
 //! Declaring a build-order edge is not enough to trigger. But when
 //! subscription records are missing the planner fails toward the OLD
-//! whole-closure rule (`docs/MEMORY.md` rule 25(c) direction — **never
+//! whole-closure rule (`AGENTS.md` rule 25(c) direction — **never
 //! under-expand**): if ANY direct topology consumer of the provider has no
 //! record for it, the fallback engages and the wave is the provider's FULL
 //! transitive consumer closure — exactly the pre-subscription rule.

@@ -1,6 +1,13 @@
 # Rust workspace build output (the native `gsa` engine)
 /target
 
+# Session memory layer: the ACTIVE buffer is a tracked stub so a clean
+# checkout has the documented layout, while per-action exports and any other
+# scratch (rule batches, journal batches, split simulations) are never
+# committed. `git add -A` must not be able to commit an export.
+.logs/*
+!.logs/scratchpad.md
+
 # Builder runtime state
 .state/
 .build-logs/

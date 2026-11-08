@@ -1,4 +1,4 @@
-//! Write-time ownership (contract §J.5, `docs/MEMORY.md` rule 19): engine
+//! Write-time ownership (contract §J.5, `AGENTS.md` rule 19): engine
 //! state is owned by the privileged runner (mutating runs are root —
 //! contract §B.10). A file owned by anyone the running engine is not is
 //! quarantined as `<path>.stale.<epoch>.<pid>` (preserved, announced) before

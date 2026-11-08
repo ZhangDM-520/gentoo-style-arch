@@ -271,7 +271,7 @@ build() {
   # <dir>/<mangled-object-path>.gcda, so a bare generate paired with
   # use=<dir> misses every profile and silently compiles a profile-less
   # build (2026-10-19 GCC probe; the xorg-xwayland-git spelling is such a
-  # miss — see docs/NOTE.md 2026-10-19).
+  # miss — see docs/JOURNAL.md 2026-10-19).
   local _gen_cflags="" _gen_cxxflags="" _gen_ldflags="" _flag
   for _flag in $_final_cflags; do
     case "$_flag" in
@@ -344,7 +344,7 @@ build() {
   else
     msg "PGO profile: %d gcda files — rebuilding with profile" "$_gcda_count"
     # Phase 2: profile-used build. Tolerance flags are load-bearing
-    # (docs/MEMORY.md §4): -Wno-error=missing-profile keeps a TU the training
+    # (AGENTS.md §4): -Wno-error=missing-profile keeps a TU the training
     # never ran a warning instead of a hard error; -Wno-error=coverage-mismatch
     # downgrades GCC's arc-count mismatch the same way — those functions
     # compile without profile data, everything else keeps the real profile,

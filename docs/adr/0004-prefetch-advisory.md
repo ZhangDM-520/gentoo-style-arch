@@ -13,7 +13,7 @@ remains the authoritative gate at build time. Verification is makepkg's and
 is never re-implemented or weakened: the fetch argv is exactly
 `makepkg --verifysource` with `GIT_CONFIG_COUNT=0` — never `-s`, `-o`,
 `--holdver`, `--skipchecksums`, `--skipinteg`, `--skippgpcheck` (the
-verification contract, `docs/MEMORY.md` rule 15, is untouched).
+verification contract, `AGENTS.md` rule 15, is untouched).
 
 ## Decisions
 

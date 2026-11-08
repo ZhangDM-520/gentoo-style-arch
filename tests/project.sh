@@ -6,7 +6,7 @@ set -euo pipefail
 # idempotence, driven through the NATIVE engine (`gsa`, docs/gsa-contract.md
 # §B.3-§B.4, §C.1-§C.5, §G.1, §H.2). Real-repo sections are READ-ONLY (`-Sl`,
 # `-Qt`, `-B --dry-run`); the synthetic sections build stub packages inside
-# $TMPDIR trees only. Expectations are DERIVED (docs/MEMORY.md rule 25(j)):
+# $TMPDIR trees only. Expectations are DERIVED (AGENTS.md rule 25(j)):
 # selections are compared against the engine's own listing and record
 # channels, the consumer closure is computed from `gsa -Qt` rows (never from
 # config/), and continuation expectations come from the run record.
@@ -182,10 +182,18 @@ consumers_closure() {
         }' "$1" | sort
 }
 
+# ─── The recipe tree: sections 1-4 read the committed `config/` + `packages/`,
+# which the split moved to their own repository. The checkout is the operator
+# input `GSA_RECIPE_CHECKOUT` (contract §B.8; `gsa_recipe_root` falls back to
+# this repository only while both halves coexist). No tree → the fixture SKIPS
+# loudly (rc 0, one line) rather than failing: an engine-only checkout is a
+# supported state, and skipping must never look like passing.
+root=$(gsa_recipe_root)
+require_recipe_tree project.sh
+
 # ─── 1. reference resolution: four exact forms, a typo is never guessed ─────
 (
     set -euo pipefail
-    root=$gsa_repo_root
 
     # the candidate names a hint may offer are the topology channel's ids
     # (one reader, one truth — never config/ and never a .SRCINFO count)
@@ -318,7 +326,6 @@ consumers_closure() {
 # ─── 2. a range indexes the selection, and the listing says which ───────────
 (
     set -euo pipefail
-    root=$gsa_repo_root
 
     run_engine "$root" -Sl @git
     [ "$FIXTURE_RC" = 0 ] || fail "the @git listing failed: $FIXTURE_OUTPUT"
@@ -418,7 +425,6 @@ consumers_closure() {
 # ─── 3. consumer expansion over the committed topology (never config/) ─────
 (
     set -euo pipefail
-    root=$gsa_repo_root
 
     # the derivation source is the topology channel: id|path|groups|edges|tags
     run_split_engine "$fixture/exp-topo.out" "$root" -Qt
@@ -455,7 +461,6 @@ consumers_closure() {
 # ─── 4. the topology channel shape and the project configuration ────────────
 (
     set -euo pipefail
-    root=$gsa_repo_root
 
     # `gsa -Qt` is THE tooling data channel (§B.3): resolved records,
     # `id|path|groups|edges|tags`, one per line, on STDOUT — captured as

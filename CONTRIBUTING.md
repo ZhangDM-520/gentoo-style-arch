@@ -14,7 +14,7 @@ Explain non-obvious decisions in the recipe. **A comment explains the code, the
 kernel option, or the trim decision; it does not inventory the machine it was
 written on.** Kernel versions, package versions installed on the author's
 machine, CPU thread counts, bootloader command lines and incident narratives
-belong in `docs/NOTE.md`; `docs/MEMORY.md` §5 holds a live decision.
+belong in `docs/JOURNAL.md`; `AGENTS.md` §6 holds a live decision.
 `linux-cachyos` is the worked example (2026-09-19).
 
 ## Recipe changes
@@ -57,7 +57,7 @@ belong in `docs/NOTE.md`; `docs/MEMORY.md` §5 holds a live decision.
    source to work around a failure. Scope (owner ruling 2026-10-06): a
    *floating* VCS source (`git+URL` with no ref) whose upstream signs only
    tags carries no `?signed` to drop — such recipes use the plain family
-   form (MEMORY rule 31); `#signed`/`?signed` remains mandatory on every
+   form (AGENTS.md rule 31); `#signed`/`?signed` remains mandatory on every
    pinned release artifact and `#tag=` source.
 2. A tag can be signed by a signing **subkey**, while the upstream
    `validpgpkeys` array lists only the **primary** fingerprint. Compare
@@ -109,7 +109,8 @@ tar -xOf <archive>.pkg.tar.zst .PKGINFO | grep provides
 
 Use the host's `makepkg.conf` as the default optimization policy. Do not
 append hard-coded `-O3`, `-march`, `-mtune`, or other host-specific ISA flags
-to a recipe; documented per-package exceptions live in `docs/MEMORY.md` §4 —
+to a recipe; documented per-package exceptions live in the recipe
+repository's `AGENTS.md` §4 (the optimization playbook) —
 the current list: `zen-browser-pgo`'s `--enable-optimize=-O3` (PGO-trained
 Mozilla build). Use host-derived native settings only when they are already
 provided by the build environment; an explicit target such as
@@ -125,7 +126,7 @@ Trim packaging to the maintained target:
   support when they are part of the maintained feature set;
 - keep mold, LTO, and PGO phases aligned with the package's documented
   exception (the Meson reconfigure rules and the verification procedure are in
-  `docs/build-guide.md`; the failure mechanisms are in `MEMORY.md` §6); a
+  `docs/build-guide.md`; the failure mechanisms are in `AGENTS.md` §5); a
   recipe that trains with `-fprofile-generate` must call the shared payload
   gate (`lib/pgo.sh`) as the last statement of its package function(s) —
   never copy its implementation; a new PGO family earns a fixture and extends
@@ -189,5 +190,5 @@ Rust, Qt private-API modules, ROCm, and the system replacement packages are
 not ordinary independent leaf updates. Batch membership is declared in the
 `tags` field of the package's `config/topology.conf` record
 (`abi=must` / `abi=should`); the batch itself is derived from the edge graph.
-Record the reason for a new edge in `docs/NOTE.md` and update the maintainer
-rules in `docs/MEMORY.md` when the operational contract changes.
+Record the reason for a new edge in `docs/JOURNAL.md` and update the maintainer
+rules in `AGENTS.md` when the operational contract changes.

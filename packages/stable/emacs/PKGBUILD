@@ -8,7 +8,7 @@ pkgbase=emacs
 # a single pacman transaction, so mutually exclusive full alternative builds
 # (emacs-nox/emacs-wayland each ship their own /usr/bin/emacs and elisp tree)
 # can never be installed together as splits. A variant is a separate recipe
-# with provides=(emacs) conflicts=(emacs) — see docs/NOTE.md 2026-10-10.
+# with provides=(emacs) conflicts=(emacs) — see docs/JOURNAL.md 2026-10-10.
 pkgname=(emacs)
 pkgver=31.1
 pkgrel=3

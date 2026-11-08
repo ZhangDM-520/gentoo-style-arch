@@ -27,7 +27,7 @@ provides=("cmake=${pkgver}")
 # Stock spelling: expat-git carries expat=…/libexpat.so=1-64 (expac-evidenced),
 # so 'expat' is satisfied by expat-git's provides and by the stock expat package.
 depends=('curl' 'libarchive' 'expat' 'hicolor-icon-theme' 'jsoncpp' 'libjsoncpp.so' 'libuv' 'rhash' 'cppdap')
-# python-sphinx dropped 2026-09-26 with --sphinx-man (MEMORY rule 8: purged
+# python-sphinx dropped 2026-09-26 with --sphinx-man (AGENTS.md rule 8: purged
 # tools stay purged; man pages are not part of this package set).
 makedepends=('nlohmann-json' 'git')
 optdepends=()

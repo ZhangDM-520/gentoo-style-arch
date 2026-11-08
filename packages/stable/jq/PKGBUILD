@@ -32,7 +32,7 @@ build() {
 
   # Upstream 1.8.x is autotools-only; do not switch to cmake.
 
-  # Documented exception (like glibc-git/python, NOTE.md 2026-10-31): the
+  # Documented exception (like glibc-git/python, JOURNAL 2026-10-31): the
   # host's -Ofast (-ffast-math) hangs jq's tojson/fromjson path — the NaN
   # sentinel comparisons never terminate (PGO training spun at 99% CPU on a
   # trivial filter). A/B 2026-10-31, identical source: -O3 runs the filter

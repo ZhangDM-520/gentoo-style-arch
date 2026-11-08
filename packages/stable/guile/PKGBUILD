@@ -26,7 +26,7 @@ sha256sums=('3c9c16972a73bb792752f2e4f1cce7212d7638d5494b5f7e8e19f3819dbf3a19'
 build() {
   cd $pkgname-$pkgver
 
-  # Documented exception (glibc-git/python/jq/sqlite/nodejs class, NOTE.md
+  # Documented exception (glibc-git/python/jq/sqlite/nodejs class, JOURNAL
   # 2026-11-01): the host's -Ofast makes guile's boot compiler DIE with
   # SIGFPE ("Floating point exception (core dumped)" building
   # language/cps/types.go, run 0324) — fast-math folds a FP edge into a

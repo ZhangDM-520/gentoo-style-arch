@@ -7,7 +7,7 @@ set -euo pipefail
 # §B.5/§B.8, §F.1, §G.1, §H.2–§H.3, §I.3): synthetic $TMPDIR workspaces and a
 # stub `makepkg`, no package is built, no pacman transaction runs, nothing
 # outside the fixture tree is written. Expectations are DERIVED from the
-# fixture's own build-order edges and the run record (docs/MEMORY.md rule
+# fixture's own build-order edges and the run record (AGENTS.md rule
 # 25(j) / contract §L.3) — never pinned counts, never prose.
 #
 # Flip notes (docs/gsa-fixture-migration.md row `tests/anchor-defer.sh`):

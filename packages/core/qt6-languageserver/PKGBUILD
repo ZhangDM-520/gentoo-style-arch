@@ -25,7 +25,7 @@ source=(git+https://code.qt.io/qt/$_pkgfn#branch=dev)
 # classes) and qtdeclarative's qmlls had not yet adapted. The documented exit
 # condition ("Unpin once qt/qtdeclarative dev adapts") is now met — qtdeclarative
 # dev uses the regenerated types — so the source returns to the pre-pin
-# #branch=dev idiom. Rebuild qt6-declarative in the same pass (MEMORY.md rule 14).
+# #branch=dev idiom. Rebuild qt6-declarative in the same pass (AGENTS.md rule 14).
 sha256sums=('SKIP')
 
 build() {

@@ -1,5 +1,15 @@
 # plan-gentoo-qol.md — Gentoo build-QoL mechanisms: research report + adoption plan
 
+> **Archive-class design record (annotated 2026-11-09).** This document is the
+> design provenance that `crates/` and `docs/gsa-contract.md` cite by section
+> (for example `plan-native-pm.md` §4.3), so it is kept, not deleted. Its
+> `docs/MEMORY.md` and `docs/NOTE.md` citations — including line ranges — name
+> the documents as they stood when it was written; both were retired on
+> 2026-11-09. The live equivalents are `AGENTS.md` (the same rule numbers) and
+> `docs/JOURNAL.md` (the incident history); the pre-retirement text is in the
+> `pre-split-2026-11` tag. This header is the only edit; the body is untouched.
+
+
 **Question answered:** how does Gentoo (Portage / eclasses / infrastructure) improve
 build QoL, and which of those mechanisms should gentoo-style-arch adopt?
 **Status:** research + plan only. No implementation. Nothing in this file changes

@@ -76,7 +76,7 @@ pub fn run_build(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> 
 
 /// `gsa -S <targets…> [ranges…]` (contract §B.4): the build pipeline plus
 /// install-before-dependents — each package's archives install through the
-/// post-build hook BEFORE any consumer compiles (`docs/MEMORY.md` rule 11).
+/// post-build hook BEFORE any consumer compiles (`AGENTS.md` rule 11).
 /// Cluster `f` is force install (no same-version skip); cluster `c` prunes
 /// strength 1 first. Trailing `-- <pacman args…>` reach every transaction.
 pub fn run_build_install(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> i32 {

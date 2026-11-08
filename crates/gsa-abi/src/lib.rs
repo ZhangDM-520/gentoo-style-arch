@@ -14,7 +14,7 @@
 //!   wave planner computes the exact rebuild set of a provider whose token
 //!   moved (recorded mismatches ∪ content truth ∪ `abi=must` coupled
 //!   batches, closed over transitive consumers) and fails toward the OLD
-//!   whole-closure rule (`docs/MEMORY.md` rule 25(c): never under-expand)
+//!   whole-closure rule (`AGENTS.md` rule 25(c): never under-expand)
 //!   when subscription records are missing.
 //! * **preserved-libs and revdeps** ([`view`], [`revdep`]) — the
 //!   installed-ELF view (read-only pacman local DB + file probe) answers

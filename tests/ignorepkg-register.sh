@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# AUTO-REGISTER IgnorePkg — the dynamic registration behind docs/MEMORY.md
+# AUTO-REGISTER IgnorePkg — the dynamic registration behind AGENTS.md
 # rule 9's write half (the read half is the report-only closure lint,
 # tests/recipe-contract.sh). The seam computes the workspace pkgname universe
 # (pkgbase+pkgname of every committed .SRCINFO) and appends the names the

@@ -24,7 +24,7 @@ vocabulary); `plan-gentoo-qol.md` §1 (shortlist items that become verbs/rows)
 and M4; `docs/build-guide.md` (current flags, `--install-decide` rows and rc
 contract, run-record `format: 1`); `docs/architecture.md` (four-module split,
 scheduler invariants); `CONTEXT.md` (vocabulary and terms to avoid);
-`docs/MEMORY.md` rules 11, 15, 19, 20, 23, 25 (rule numbers, not page dumps);
+`AGENTS.md` rules 11, 15, 19, 20, 23, 25 (rule numbers, not page dumps);
 `docs/adr/0003-run-record.md` (one record, three renderings);
 `tests/lib/fixture-lib.bash` (`rr_*` parser, `GSA_FAKE_*` stub knobs); and the
 authoritative current flag inventory `fish build-all.fish --help`.
@@ -80,14 +80,14 @@ compiled binary that keeps the same architecture: Recipes / Topology / Builder
    not a solver.
 2. **No second installed database of record.** `/usr` and `/var/lib/pacman`
    belong to pacman; a design that can brick `/var/lib/pacman` is wrong on
-   arrival (`docs/MEMORY.md` rule 23).
+   arrival (`AGENTS.md` rule 23).
 3. **No sandbox claims.** A recipe executes arbitrary shell at build time; the
    trust model is "review before running" (`SECURITY.md`). The narrowed read
    path (A.2.3) is not a sandbox and must never be described as one.
 4. **makepkg verification is never reimplemented and never weakened.**
    Checksums and PGP stay exactly where makepkg enforces them. There is no
    `--skipchecksums` and no `--skippgpcheck` anywhere in `gsa`, in any phase,
-   including hidden seams (`docs/MEMORY.md` rule 15; `docs/build-guide.md`
+   including hidden seams (`AGENTS.md` rule 15; `docs/build-guide.md`
    "never passed by the builder").
 5. **No byte-compatibility promise** to the fish engine's flags, output
    strings, run-record `format: 1`, or fixture argv shapes (owner decision:
@@ -109,7 +109,7 @@ gsa <FAMILY>[cluster] [long-modifiers] [targets…] [ranges…] [-- <pacman args
 
 - Exactly one family per invocation. A bare `gsa` is a usage error (rc 2) that
   prints `gsa --help`; a build never starts without a selection (invariant kept
-  from `docs/MEMORY.md` rule 12).
+  from `AGENTS.md` rule 12).
 - The cluster is a run of lowercase sub-option **letters**, family-scoped. One
   **action letter** per invocation (or none, meaning the family's default
   action). **Modifier letters** may join the cluster in any order after the
@@ -153,7 +153,7 @@ gsa <FAMILY>[cluster] [long-modifiers] [targets…] [ranges…] [-- <pacman args
 
 | Spelling | Action |
 | --- | --- |
-| `gsa -S <targets…> [ranges…]` | build the selection in build order; install each package's archives immediately after its build and **before any consumer builds** (install-before-dependents, `docs/MEMORY.md` rule 11). Install decision is *checked* (§E) |
+| `gsa -S <targets…> [ranges…]` | build the selection in build order; install each package's archives immediately after its build and **before any consumer builds** (install-before-dependents, `AGENTS.md` rule 11). Install decision is *checked* (§E) |
 | `gsa -Sl [targets…] [ranges…]` | list the ordered selection with the indices ranges address (today `-l`; with no selection, the whole set in build order) |
 | `gsa -Sw <targets…>` | fetch-only (live; `gsa fetch` is the alias) (`plan.md` §2): fetch and verify sources ahead of builds; no build, no install. Verdict rows are advisory (§D) |
 | `gsa -Sy` | version-sync pass only: provider queries, recipe rewrites left uncommitted, disposition block printed (today's automatic pre-build sync made explicitly runnable) |
@@ -213,7 +213,7 @@ behaviour is pinned elsewhere, no fixture changes.
 | Spelling | Action |
 | --- | --- |
 | `gsa -U <ref…|archive-path…>` | install the named packages' newest index-complete archives (or the named paths) in ONE `pacman -U` transaction; nothing is built |
-| `gsa -Ua` | install ALL index-complete archives in the workspace in one transaction (today `-ia`) — the group-install escape hatch: it cannot satisfy install-before-dependents and must never stand in for `-S` on a set whose members depend on each other (`docs/MEMORY.md` rule 11) |
+| `gsa -Ua` | install ALL index-complete archives in the workspace in one transaction (today `-ia`) — the group-install escape hatch: it cannot satisfy install-before-dependents and must never stand in for `-S` on a set whose members depend on each other (`AGENTS.md` rule 11) |
 | `gsa -Uf` | force: bypass the same-version already-installed skip (today `-fi` as applied to installs) |
 
 `-Ua` runs in force mode inherently (no same-version skip), matching today's
@@ -297,11 +297,17 @@ ordinary deferred vocabulary. Pinned by `tests/build-dir-prompt.sh`.
 
 Engine environment inputs (the roster `gsa --help` must print; rendered from
 `crates/gsa-cli/src/help.rs`, the single layout source): `GSA_CONF`,
-`GSA_STATE_DIR`, `GSA_BUILD_DIR`, `GSA_RECIPES_DIR`, `GSA_LANES`, `GSA_JOBS`,
-`GSA_INTENSITY`, `GSA_CPU_THREADS`, `GSA_MEMORY_GIB`, `GSA_TARGET_CPU`,
-`GSA_VCS_SKIP_TOLERANCE`. `GSA_BUILD_JOBS` is engine OUTPUT
+`GSA_STATE_DIR`, `GSA_BUILD_DIR`, `GSA_RECIPES_DIR`, `GSA_RECIPE_CHECKOUT`,
+`GSA_LANES`, `GSA_JOBS`, `GSA_INTENSITY`, `GSA_CPU_THREADS`, `GSA_MEMORY_GIB`,
+`GSA_TARGET_CPU`, `GSA_VCS_SKIP_TOLERANCE`. `GSA_BUILD_JOBS` is engine OUTPUT
 exported per lane, never an input. `GSA_FAKE_*` is not an engine vocabulary
-(§D.2).
+(§D.2). `GSA_RECIPE_CHECKOUT` is the recipe repository checkout the real-tree
+checks read (the battery's real-tree fixture sections and the `recipe-tree`
+integration test): one environment read
+(`gsa_model::config::recipe_checkout`), no config rung and no built-in
+default, `~`/`~/…` expanded against the build user's home — an engine-only
+checkout has no recipe tree, so those checks SKIP loudly (rc 0) rather than
+fail.
 
 *Amendments (2026-10-14, cutover gaps G6/G11 + G4).* Three operational
 points this section was silent on, resolved as the code behaves:
@@ -680,7 +686,7 @@ block and derives expectations from its rows rather than prose.
 ### E.1 One decision, one seam
 
 The install decision is computed ONCE, as typed rows, by one function
-(`docs/MEMORY.md` rule 20). Rendering and execution never re-decide. The hidden
+(`AGENTS.md` rule 20). Rendering and execution never re-decide. The hidden
 `--install-decide` seam prints exactly those rows. Transactions are `pacman -U`
 subprocesses; a future libalpm executor must consume the same rows without
 changing them.
@@ -711,7 +717,7 @@ subject (§H.2, same date).
 | Decision | Meaning |
 | --- | --- |
 | `install` | the archive clears every gate and joins the transaction |
-| `skip` | deliberately not transacted, with a named reason — `already-current` (checked mode: exact version installed with an install date not older than the archive), `skip-built`/`freshness-waived`/`abi-provider-waived` installs of a skipped build (the archive still installs), `unreadable-pkginfo` (excluded from discovery, never probed — `docs/MEMORY.md` rule 25(h)) |
+| `skip` | deliberately not transacted, with a named reason — `already-current` (checked mode: exact version installed with an install date not older than the archive), `skip-built`/`freshness-waived`/`abi-provider-waived` installs of a skipped build (the archive still installs), `unreadable-pkginfo` (excluded from discovery, never probed — `AGENTS.md` rule 25(h)) |
 | `refuse` | fail-closed: this row and everything downstream of it abort before any `pacman` call. Reasons include `empty-list`, `pgo-*` (baked profiling destination), `abi-soname`, `abi-consumer`, `abi-consumer-uncovered` (a moving/removed soname provide with a linked consumer outside the transaction — rule 25(d)), `abi-stock-pinner` (an out-of-tree package pins the moving provide exactly — 2026-10-14 amendment: named here as the code emits it, `gsa-abi::rows::abi_refusal_rows`), `partial-set`, `discover-failed`, `plan-failed`, and any `severity: refuse` QA keyword (§E.4) |
 | `noop` | nothing to do and that is not a failure — `empty-list` under `-Ua` |
 | `parked` | **new**: the package is parked — `waits-on-failed` (cone-stop) or `waits-on-deferred` / a deferral reason (`anchoring-refused`, `upstream-unverified`, `source-unfetchable`). The seam neither installs nor refuses; the row records the park |
@@ -1098,7 +1104,7 @@ its build when the park landed writes `parked 98` (§F.1).
 
 Today's documentation calls fail-fast load-bearing: it stopped the 2026-09-06
 rust-git-against-minimal-llvm-git class from compounding
-(`docs/MEMORY.md` rule 11 context; `plan-gentoo-qol.md` M4/Q2). The owner chose
+(`AGENTS.md` rule 11 context; `plan-gentoo-qol.md` M4/Q2). The owner chose
 cone-stop as the default anyway; the mitigation is **loud reporting plus the
 escape flag**, and both are normative here:
 
@@ -1231,10 +1237,10 @@ fallback with several same-named candidates still refuses to guess. `-s`
 currency, install discovery, and provenance
 read the index instead of re-deriving filenames. The ABI token is **derived**:
 `hash(sorted bare-soname provide set actually shipped)` (bare stems only —
-`libfoo.so`, never the auto-versioned form; `docs/MEMORY.md` rules 25(a) and
+`libfoo.so`, never the auto-versioned form; `AGENTS.md` rules 25(a) and
 30), with an optional declared `abi-rev=<n>` topology tag as an override for
 ABI moves derivation cannot see (LLVM C++ ABI snapshots, Qt private API —
-`docs/MEMORY.md` rules 5 and 13). The token is recorded in the index row at
+`AGENTS.md` rules 5 and 13). The token is recorded in the index row at
 build time and in the installed-ABI record at install time. **Signed indexes
 are deferred** (owner decision); the index is tamper-evident only through
 content hashes.
@@ -1352,7 +1358,7 @@ dispatch; a failure parks a cone (§I).
    land with the parser fixture updated in the same change, and are listed in
    this document. Additive scalars and additive reason keys do not bump.
 3. **Fixture expectations are derived from records, never from pinned counts**
-   (`docs/MEMORY.md` rule 25(j)): sizes, cone membership, order, and remaining
+   (`AGENTS.md` rule 25(j)): sizes, cone membership, order, and remaining
    sets are computed from the topology and the run record the run produced.
 4. **Every check is falsified red-first**: before trusting a new check, break
    one input in a scratch copy and watch it fail naming what broke. A check
@@ -1364,11 +1370,11 @@ dispatch; a failure parks a cone (§I).
 6. **Behavioural changes to scheduling, install, state, or signals require a
    fixture in the same change** — there is no CI and no compiled test surface
    beyond fixtures and `makepkg`; a real rebuild is never a syntax check.
-7. **`docs/MEMORY.md` and `docs/adr/` move with the contract**: an operational
-   contract change updates the matching MEMORY rule; this document's amendment
+7. **`AGENTS.md` and `docs/adr/` move with the contract**: an operational
+   contract change updates the matching AGENTS.md rule; this document's amendment
    to ADR 0003 (run-record persistence, §H.1) must be recorded in that ADR
    when the side-car run history lands.
-8. **Verification is never weakened to get green** (`docs/MEMORY.md` rule 15;
+8. **Verification is never weakened to get green** (`AGENTS.md` rule 15;
    §A.3.4): no `--skipchecksums`, no `--skippgpcheck`, no dropped `#signed`, in
    any code path including hidden seams and future phases.
 9. **Two vocabularies, one meaning** (owner decision 2026-10-23): the human
@@ -1424,13 +1430,14 @@ kv-store/`config/sets` union (§C.2). Fixture pins: `tests/gsa-sync-v2.sh`,
    of the same `abi=must`/`abi=should` coupled batch also be parked (reason
    `coupled-batch`) when one member fails, even if they are not consumers?
    — **Recommendation: yes, park them** (reason `coupled-batch`): a half-moved
-   ABI wave is precisely the bricking class `docs/MEMORY.md` rules 13/23
+   ABI wave is precisely the bricking class `AGENTS.md` rules 13/23
    guard against, and the batch is defined to move as one pass.
 2. **Binpkg retention budget.** §J.4 says "retained instance" without a number.
    — **Recommendation: N=2 instances for provider/hub recipes (`core`
    membership or ≥2 consumers), N=1 elsewhere**, citing the 38 GB texlive
-   landmine (`docs/MEMORY.md` §2 "Landmines") and the rollback use in ABI
-   waves; `gsa -Mh`-style `--prune` and `gsa -Md` enforce it.
+   landmine (the recipe repository's `AGENTS.md`, "Landmines / one-offs") and
+   the rollback use in ABI waves; `gsa -Mh`-style `--prune` and `gsa -Md`
+   enforce it.
 3. **World seeding at cutover.** The world file needs an initial content when
    the side-car DB is created. — **Recommendation: seed world with every recipe
    in `git`, `stable`, `core`, `misc`, `build-tools`, and leave `app` members

@@ -10,7 +10,7 @@
 //! comes from `input.recipes`, emitted findings are limited to
 //! `input.targets` (the run's/selection's recipes; empty = everything).
 //! `declared-deps` is the one check that is NOT a fish port: it is the new
-//! DT_NEEDED-vs-declared-deps guard (docs/MEMORY.md rule 54), added where
+//! DT_NEEDED-vs-declared-deps guard (AGENTS.md rule 54), added where
 //! `abi-closure` cannot see — against the recipe's DECLARED depends.
 
 use crate::abi;
@@ -19,7 +19,7 @@ use crate::CheckResult;
 
 /// Host-purged tools that must not re-enter through `makedepends`/
 /// `checkdepends` (makepkg reinstalls them silently) — the fish lint's
-/// denylist verbatim (`lib/audit.fish:706`, `docs/MEMORY.md` rule 8).
+/// denylist verbatim (`lib/audit.fish:706`, `AGENTS.md` rule 8).
 const PURGED_TOOLS: &[&str] = &[
     "po4a",
     "python-sphinx",
@@ -192,7 +192,7 @@ pub fn purged_tools(input: &QaInput<'_>) -> CheckResult {
             if PURGED_TOOLS.contains(&name) {
                 result = result.with(
                     &recipe.id,
-                    format!("{field} reintroduces purged tool '{name}' — remove it (docs/MEMORY.md rule 8)"),
+                    format!("{field} reintroduces purged tool '{name}' — remove it (AGENTS.md rule 8)"),
                 );
             }
         }
@@ -697,8 +697,8 @@ pub fn stale_ignorepkg(input: &QaInput<'_>) -> CheckResult {
 }
 
 /// `declared-deps` (archive scope): the DT_NEEDED-vs-declared-deps axis
-/// (docs/MEMORY.md rule 54's guard, the 2026-10-14 orphan incident —
-/// `docs/NOTE.md` "orphan-removal broke shared libs"). With `!autodeps` an
+/// (AGENTS.md rule 54's guard, the 2026-10-14 orphan incident —
+/// `docs/JOURNAL.md` "orphan-removal broke shared libs"). With `!autodeps` an
 /// archive's `depends` is exactly what its PKGBUILD declares, so a lib a
 /// build system auto-detects and links into the payload with no declared
 /// runtime dep leaves its provider dep-installed, later orphan-flagged

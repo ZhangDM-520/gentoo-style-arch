@@ -208,7 +208,7 @@ baseline each forces a rebuild with a named diagnostic; anomaly diagnostics
 print even in quiet output. A partial output set never reaches install
 discovery at all.
 
-Two flags reshape the skip decision (2026-10-06, `docs/NOTE.md`):
+Two flags reshape the skip decision (2026-10-06, `docs/JOURNAL.md`):
 
 - `--skip-built` claims "built remains built" with the freshness analysis
   **off**: the newest complete, payload-valid output set at **any** version is
@@ -242,7 +242,7 @@ answer, the recipe is *deferred* (lane rc 99, run-record reason
 `upstream-unverified`): nothing is skipped, built, or installed, its
 consumers wait, the rest of the run continues, and the run exits non-zero — an
 unverifiable upstream parks one recipe, it never fails the run and never
-licenses a skip (2026-10-02, `docs/NOTE.md`). A valid baseline whose ref
+licenses a skip (2026-10-02, `docs/JOURNAL.md`). A valid baseline whose ref
 moved follows the normal build path. On a genuine
 skip, `-S --skip` continues through the existing install path; a one-time
 legacy rebuild follows the normal build/install path.
@@ -411,7 +411,7 @@ Refresh-only entries get the loud record instead of a refusal:
   Attestation: a detached signature is PGP-verified against the anchored
   payload at build time, a VCS source pinned by #tag/#commit is anchored to
   that ref, a #branch= pin tracks a branch tip — attested by the fetch (TLS)
-  only, allowed only as a named maintenance branch (MEMORY rule 30) — and a
+  only, allowed only as a named maintenance branch (AGENTS.md rule 30) — and a
   plain download is attested by nothing but the fetch (TLS). Review these
   sums before committing; '--no-sync' builds the committed version as-is.
 ```
@@ -821,7 +821,7 @@ with a host-side sampler and then with a hardlink-farm reproduction; both are
 gone now, because the freezes were not the workload — they were
 [CVE-2026-90432](https://github.com/sched-ext/scx/issues/3687) in the kernel
 recipe's sched_ext fork/exec path, fixed by the 2026-09-19 move to the CachyOS
-RC channel (`docs/MEMORY.md`). What the measurement settled is worth keeping:
+RC channel (`AGENTS.md`). What the measurement settled is worth keeping:
 at full real scale the split loop moved io PSI 0.00
 with ≤2 processes in D state and ≤16 % device utilisation, so the loop was
 never the cause.
@@ -944,7 +944,7 @@ feature-detection failure. Instrumentation validation is performed against
 the staged package payload after `meson install`; temporary helpers under
 `build/meson-private/` are not shipped and must not be treated as package
 artifacts. This section is the operational reference for the PGO rules that
-`CONTRIBUTING.md` states and that `MEMORY.md` §6 explains as failure modes.
+`CONTRIBUTING.md` states and that `AGENTS.md` §5 explains as failure modes.
 
 A CMake-based PGO recipe has the same requirement with a sharper edge. CMake
 reads `CFLAGS`, `CXXFLAGS` and `LDFLAGS` only while it *initialises*
@@ -1019,4 +1019,4 @@ G="<build_dir>"; /usr/bin/rm -rf "$G/build" "$G/pkg" "$G/tmp" && mkdir -p "$G/bu
 `pkgs/` is kept as rollback evidence; the wave rebuilds every selected recipe
 anyway. Do this with no run in flight (the trees are live build state while
 lanes run). The engine-side fix — folding a flags digest into the identity
-marker or a cache-sweep seam — is queued in `docs/MEMORY.md` §5.
+marker or a cache-sweep seam — is queued in `AGENTS.md` §6.

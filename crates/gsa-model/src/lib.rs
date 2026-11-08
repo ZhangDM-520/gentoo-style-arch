@@ -346,7 +346,7 @@ impl fmt::Display for Decision {
 }
 
 /// One decision row: `<pkgbase> <decision> <reason…>` (contract §E.2).
-/// Computed ONCE by the one decision seam (`docs/MEMORY.md` rule 20); the
+/// Computed ONCE by the one decision seam (`AGENTS.md` rule 20); the
 /// seam's stdout, the run-record plan rows and the prose summary are three
 /// renderings of these rows, never re-decisions.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

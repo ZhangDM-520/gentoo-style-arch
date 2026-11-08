@@ -41,7 +41,7 @@ build() {
   export CFLAGS="${CFLAGS/_FORTIFY_SOURCE=3/_FORTIFY_SOURCE=2}"
   export CXXFLAGS="${CXXFLAGS/_FORTIFY_SOURCE=3/_FORTIFY_SOURCE=2}"
 
-  # Documented exception (glibc-git/python/jq class, NOTE.md 2026-10-31):
+  # Documented exception (glibc-git/python/jq class, JOURNAL 2026-10-31):
   # the host's -Ofast (-ffast-math) folds sqlite3IsNaN's `x != x` to false,
   # so NaN stops converting to NULL (API-visible: python's test_sqlite3
   # test_func_return_nan/test_nan_float fail; probed 2026-10-31 — installed

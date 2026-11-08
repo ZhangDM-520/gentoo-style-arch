@@ -20,7 +20,7 @@ conflicts=('vencord')
 install=vencord-git.install
 # Nothing is compiler-built: the payload is plain JavaScript and esbuild runs
 # from its prebuilt helper, so there is no ISA/LTO/PGO phase to apply. The
-# Electron/JavaScript standard (docs/MEMORY.md §4): strip would rewrite
+# Electron/JavaScript standard (AGENTS.md §4): strip would rewrite
 # nothing useful, debug packages would duplicate the source, and LTO flags
 # could only leak into an incidental native addon build.
 options=('!strip' '!debug' '!lto')

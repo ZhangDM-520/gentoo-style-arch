@@ -2,7 +2,7 @@
 //! out of `tar`+`zstd` (`.pkg.tar.zst`) archives, without shelling to
 //! `tar`/`pacman`. The engine's read path never evaluates recipe shell, so
 //! an archive's own `.PKGINFO` is the metadata truth for what a transaction
-//! would install (rule 9's first name authority; `docs/MEMORY.md` rule 25).
+//! would install (rule 9's first name authority; `AGENTS.md` rule 25).
 //!
 //! Also home of the PGO payload byte scan: a standalone absolute path ending
 //! in `.gcda`/`.profraw` baked into any member (fish
@@ -57,7 +57,7 @@ impl std::fmt::Display for PkginfoError {
 /// Canonical full version shared by [`Pkginfo::version`] and the installed
 /// DB's `%VERSION%`: `epoch:pkgver-pkgrel` with the epoch always present
 /// (`0:` when pacman recorded none), so exact version equality is one string
-/// compare across both surfaces (`docs/MEMORY.md` rule 27(a) family).
+/// compare across both surfaces (`AGENTS.md` rule 27(a) family).
 /// A leading bare-`0:` in front of ANOTHER epoch is the pre-2026-11-01
 /// epoch-stacking artifact ("0:2:1.2-1" for the real "2:1.2-1") — repaired
 /// here so stale side-car rows compare truthfully.

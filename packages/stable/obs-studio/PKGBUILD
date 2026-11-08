@@ -54,18 +54,18 @@ prepare() {
 
   # house: FindFFmpeg's version gate only parses release-style ffversion.h;
   # ffmpeg git snapshots report "N-<rev>-g<hash>" and were rejected at the
-  # 6.1 floor despite all components being found (NOTE.md 2026-10-10)
+  # 6.1 floor despite all components being found (JOURNAL 2026-10-10)
   patch -Np1 -i "$srcdir/obs-studio-ffmpeg-snapshot-version.patch"
 
   # house: UseSWIG's swig command receives SWIG_FLAGS generator expressions
   # unevaluated under the cmake 4.4 snapshot (obspython.i compile dies);
-  # flatten the two GUI-only flags (NOTE.md 2026-10-10)
+  # flatten the two GUI-only flags (JOURNAL 2026-10-10)
   patch -Np1 -i "$srcdir/obspython-swig-genex.patch"
 
   # obs-browser's pinned commit (3f0a2cd, 2.26.9) already contains the C++20
   # (PR #517) and CEF 6613+ (PR #523) changes plus the /usr/lib/cef/ rpath —
   # the former house patches and the rpath sed are dropped (they reverse-fail
-  # at the pin; NOTE.md 2026-10-10)
+  # at the pin; JOURNAL 2026-10-10)
 }
 
 build() {
@@ -100,7 +100,7 @@ build() {
     -DENABLE_WEBSOCKET=ON
     # house: pin the system interpreter — FindPython otherwise picks the
     # uv/pyenv shims that lead PATH (~/.local/bin/python3.11) and the
-    # outputs embed a libpython the payload cannot ship (NOTE.md 2026-10-10)
+    # outputs embed a libpython the payload cannot ship (JOURNAL 2026-10-10)
     -DPython_EXECUTABLE=/usr/bin/python
     -DPython3_EXECUTABLE=/usr/bin/python
     -Wno-dev

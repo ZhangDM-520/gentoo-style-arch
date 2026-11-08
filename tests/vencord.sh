@@ -118,7 +118,7 @@ grep -Fq -- '--ignore-workspace' "$pkgbuild" &&
 grep -Fq 'pnpm buildWeb' "$pkgbuild" &&
     fail "builds web/extension outputs - desktop standalone only"
 
-# Optimisation standard (docs/MEMORY.md §4, Electron/JavaScript bullet):
+# Optimisation standard (AGENTS.md §4, Electron/JavaScript bullet):
 # no hard-coded host ISA or optimisation level, the exceptions declared
 # explicitly, and the ccache + mold probe for incidental native addons.
 if grep -Eq -- '-march=|-mtune=|-O[0-9]' "$pkgbuild"; then
@@ -205,7 +205,7 @@ printf 'vencord-git recipe fixture: PASS\n'
 (
 
 # The payload alone is inert: this fixture pins the initiation contract of
-# vencord-git (docs/NOTE.md 2026-09-23) against scratch trees. Discovery goes
+# vencord-git (docs/JOURNAL.md 2026-09-23) against scratch trees. Discovery goes
 # through the standard XDG_CONFIG_HOME seam, so the real home is never
 # touched and no extra test knob exists.
 

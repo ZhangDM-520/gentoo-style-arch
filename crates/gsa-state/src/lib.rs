@@ -46,7 +46,7 @@ use std::path::{Path, PathBuf};
 /// and `GSA_STATE_DIR` relocating the entire root. There is never a silent
 /// fallback to a workspace-local directory.
 /// The built-in state root when no rung answers — ONE literal, owned by the
-/// resolver in `gsa-model::config` (`docs/MEMORY.md` rule: one ladder).
+/// resolver in `gsa-model::config` (`AGENTS.md` rule: one ladder).
 pub use gsa_model::config::DEFAULT_STATE_DIR as DEFAULT_STATE_ROOT;
 
 /// Resolve the state root the contract's precedence demands (§J.3):

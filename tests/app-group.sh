@@ -9,7 +9,7 @@ set -euo pipefail
 # fish build-all.fish driver is gone from this fixture. See
 # docs/gsa-fixture-migration.md row `tests/app-group.sh`.
 #
-# Pins (decisions recorded in docs/NOTE.md 2026-09-23; bracket = the surface
+# Pins (decisions recorded in docs/JOURNAL.md 2026-09-23; bracket = the surface
 # that pins each today):
 #   1. loader demands config/topology.conf (a missing file = rc 2 naming it;
 #      a record naming no group is rc 2 naming the record and its line; the
@@ -55,7 +55,7 @@ set -euo pipefail
 #     `build-install` rows (install semantics this fixture never pins;
 #     measured 2026-10-12: `gsa -S @app --dry-run` renders
 #     `appN build-install ok` and transacts nothing itself).
-#   * expectations are DERIVED (docs/MEMORY.md rule 25(j)): membership is a
+#   * expectations are DERIVED (AGENTS.md rule 25(j)): membership is a
 #     transitive-consumer closure computed from `gsa -Qt` rows (§B.3 — the
 #     only topology channel, never config/), anchors come from the `gsa -Sl`
 #     output itself, and recorded selections from the run record — never
