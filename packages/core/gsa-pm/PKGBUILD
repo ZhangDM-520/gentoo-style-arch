@@ -25,7 +25,7 @@
 # vendored and nothing is fetched without a hash check.
 
 pkgname=gsa-pm
-pkgver=0.1.0+r429+g03086875e4d0
+pkgver=0.1.0+r565+gbed39f4db0b5
 pkgrel=1
 pkgdesc='Native package manager engine for the Gentoo-style Arch package set'
 arch=('x86_64')
