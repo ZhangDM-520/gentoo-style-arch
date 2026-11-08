@@ -9,7 +9,7 @@ source "$startdir/../../../lib/pgo.sh"
 pkgname=umbriel-git
 _pkgname=umbriel
 pkgver=0.1.0.r1540.ad46c7d
-pkgrel=4
+pkgrel=5
 epoch=1
 pkgdesc='A Wayland compositor built on wlroots'
 arch=('x86_64' 'aarch64')
@@ -67,7 +67,7 @@ source=("${_pkgname}::git+${url}.git#branch=main"
         '0021-minimize-animation.patch')
 sha256sums=('SKIP'
             '797d118d903858403e3ea4e8de25567968d85118d928ad208c27225c1199cc3c'
-            '55b7e50a9b1ce7c2a4e47755e3ee0bb07773608750e8441b873bb0507a13a57e'
+            '36442c0a3d52d421b94134fb81123155169d2cc43bde14d070e7d98c36cd068b'
             '7c4de03d135dc74529c7cafc2a81ae659c1e9a917094aeafb248175c94db8400'
             '7ab7b22764fe290cb58c01d1d5011d9f0f09de9ec7434de340d1cf2ac06b5804'
             'da533d362314d028cf575128ace45b1781e39d9385478fd648f5e9bffffaf621'
@@ -132,11 +132,15 @@ prepare() {
   # or video content render at `scale` instead (direct scanout stays), and a
   # `supersample` window rule decides outright either way. Native-resolution
   # X11 uses the physical output scale by default; force_x11_supersample opts
-  # back into render_scale. Flattened PR head a6f61941 (render_scale + X11
+  # back into render_scale. Flattened PR head 43573f4d (render_scale + X11
   # default + dMopp's 1b4a4801 exemption fold + hardened harness leg + review
-  # fix) relative to main@e0da1063 on top of 0011; unchanged on main@28de32d0;
-  # sha256 55b7e50a… (doc table hunk re-cut 2026-11-07: main's window-rules
-  # settings table grew, so the row is re-inserted without re-padding it).
+  # fixes) relative to main@ad46c7d1 on top of 0011; delta 41 files,
+  # +1161/-80; sha256 36442c0a…. The whole-patch review round moved the
+  # neutral 1.0 scale floor from clientRenderScale() to the hint so IPC, logs
+  # and the X11 mapping report the configured value, took the hint as the max
+  # across a surface's outputs, broke X11 placement ties toward the furthest
+  # predecessor, and pinned the post-map content-type and render_scale-only
+  # reload re-hints.
   # (Retire on merge:
   # 0012 → PR #573.)
   git apply -3 ../0012-per-output-render-scale.patch

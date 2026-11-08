@@ -114,19 +114,75 @@ index 97ed350b..659cd048 100644
  
  Accepted values are `normal`, `90`, `180`, `270`, `flipped`, `flipped-90`, `flipped-180`, and `flipped-270`.
 diff --git a/docs/user/window-rules.md b/docs/user/window-rules.md
-index 299e5f6a..016a3dba 100644
+index 3ef807df..64ee5b0c 100644
 --- a/docs/user/window-rules.md
 +++ b/docs/user/window-rules.md
-@@ -197,6 +197,7 @@ Add `default_column_display = "tabbed"` to keep such a column as [tabs](layout.m
- | `focus_on_activate`       | Override activation focus for this window.                                                                                                                                                                                                                             |
- | `vrr`                     | Override the focused output's VRR policy.                                                                                                                                                                                                                              |
- | `tearing`                 | Request or veto asynchronous presentation.                                                                                                                                                                                                                             |
-+| `supersample`             | Render at the output's `render_scale` (`true`) or `scale` (`false`); omitted supersamples everything but fullscreen and game or video windows. Native-resolution X11 windows ignore it.                                                                                |
- | `hdr`                     | Override the focused output's HDR policy.                                                                                                                                                                                                                              |
- | `border_color_focused`    | Override `colors.border.focused`.                                                                                                                                                                                                                                      |
- | `border_color_unfocused`  | Override `colors.border.unfocused`.                                                                                                                                                                                                                                    |
+@@ -182,34 +182,35 @@ Add `default_column_display = "tabbed"` to keep such a column as [tabs](layout.m
+ 
+ ## Settings updated while a window is open
+ 
+-| Key                       | Description                                                                                                                                                                                                                                                            |
+-| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+-| `dim_behind`              | Darken content below this window on its output; `0.0`–`1.0`, default `0.0`.                                                                                                                                                                                            |
+-| `opacity`                 | Surface opacity from 0.0 to 1.0.                                                                                                                                                                                                                                       |
+-| `blur`                    | Enable or disable window blur, including translucent Umbriel title bars.                                                                                                                                                                                               |
+-| `blur_popups`             | Apply blur to descendant XDG popups.                                                                                                                                                                                                                                   |
+-| `blur_ignore_alpha`       | Skip blur below an alpha threshold.                                                                                                                                                                                                                                    |
+-| `blur_optimized`          | Override the global optimized-blur choice.                                                                                                                                                                                                                             |
+-| `confine_pointer`         | Keep the pointer inside this window while it has keyboard focus (default `false`).                                                                                                                                                                                     |
+-| `touchpad_scroll_factor`  | Touchpad scroll speed multiplier from 0.1 to 10.0 for this window, applied on top of [`input.touchpad.scroll_factor`](input.md#touchpad). Mouse wheels are unaffected.                                                                                                 |
+-| `allow_shortcuts_inhibit` | Allow client-requested keyboard shortcut inhibition (default `true`). Set `false` to keep compositor shortcuts available. See [Keyboard shortcuts inhibition](#keyboard-shortcuts-inhibition).                                                                         |
+-| `block_capture`           | Omit this window from screenshots and recordings (default `false`). See [Capture protection](#capture-protection).                                                                                                                                                     |
+-| `background_render`       | Keep this window drawing while hidden (default `false`). See [Background rendering](#background-rendering).                                                                                                                                                            |
+-| `focus_on_activate`       | Override activation focus for this window.                                                                                                                                                                                                                             |
+-| `vrr`                     | Override the focused output's VRR policy.                                                                                                                                                                                                                              |
+-| `tearing`                 | Request or veto asynchronous presentation.                                                                                                                                                                                                                             |
+-| `hdr`                     | Override the focused output's HDR policy.                                                                                                                                                                                                                              |
+-| `border_color_focused`    | Override `colors.border.focused`.                                                                                                                                                                                                                                      |
+-| `border_color_unfocused`  | Override `colors.border.unfocused`.                                                                                                                                                                                                                                    |
+-| `border_color_outer`      | Override `colors.border.outer`.                                                                                                                                                                                                                                        |
+-| `border_width`            | Override `appearance.border_width`, 0 to 100.                                                                                                                                                                                                                          |
+-| `outer_border_width`      | Override `appearance.outer_border_width`, 0 to 100.                                                                                                                                                                                                                    |
+-| `title_bar`               | `"on"` follows client decoration preferences, `"negotiated"` requires Wayland decoration negotiation selecting server-side decorations, `"forced"` forces a title bar, and `"off"` hides it. Overrides `appearance.title_bar.mode`; omission inherits the global mode. |
+-| `title_bar_buttons`       | Title bar buttons for this window, from the title outward: any of `"minimize"`, `"maximize"`, and `"close"`, or `[]` for none. Overrides `appearance.title_bar.buttons`; omission inherits it.                                                                         |
+-| `corner_radius`           | Override `appearance.corner_radius`, 0 to 100.                                                                                                                                                                                                                         |
+-| `shadow`                  | Override `appearance.shadow.enabled`.                                                                                                                                                                                                                                  |
+-| `border_effect`           | Replace `effects.border` with a border preset or pool, or `"off"` to disable it.                                                                                                                                                                                       |
+-| `window_effect`           | Replace `effects.window` with a window preset or pool, or `"off"` to disable it.                                                                                                                                                                                       |
++| Key                       | Description                                                                                                                                                                                                                                                                                                  |
++| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
++| `dim_behind`              | Darken content below this window on its output; `0.0`–`1.0`, default `0.0`.                                                                                                                                                                                                                                  |
++| `opacity`                 | Surface opacity from 0.0 to 1.0.                                                                                                                                                                                                                                                                             |
++| `blur`                    | Enable or disable window blur, including translucent Umbriel title bars.                                                                                                                                                                                                                                     |
++| `blur_popups`             | Apply blur to descendant XDG popups.                                                                                                                                                                                                                                                                         |
++| `blur_ignore_alpha`       | Skip blur below an alpha threshold.                                                                                                                                                                                                                                                                          |
++| `blur_optimized`          | Override the global optimized-blur choice.                                                                                                                                                                                                                                                                   |
++| `confine_pointer`         | Keep the pointer inside this window while it has keyboard focus (default `false`).                                                                                                                                                                                                                           |
++| `touchpad_scroll_factor`  | Touchpad scroll speed multiplier from 0.1 to 10.0 for this window, applied on top of [`input.touchpad.scroll_factor`](input.md#touchpad). Mouse wheels are unaffected.                                                                                                                                       |
++| `allow_shortcuts_inhibit` | Allow client-requested keyboard shortcut inhibition (default `true`). Set `false` to keep compositor shortcuts available. See [Keyboard shortcuts inhibition](#keyboard-shortcuts-inhibition).                                                                                                               |
++| `block_capture`           | Omit this window from screenshots and recordings (default `false`). See [Capture protection](#capture-protection).                                                                                                                                                                                           |
++| `background_render`       | Keep this window drawing while hidden (default `false`). See [Background rendering](#background-rendering).                                                                                                                                                                                                  |
++| `focus_on_activate`       | Override activation focus for this window.                                                                                                                                                                                                                                                                   |
++| `vrr`                     | Override the focused output's VRR policy.                                                                                                                                                                                                                                                                    |
++| `tearing`                 | Request or veto asynchronous presentation.                                                                                                                                                                                                                                                                   |
++| `supersample`             | Render at the output's `render_scale` (`true`) or at its `scale` (`false`). Omitted supersamples every window except fullscreen ones and game or video content. Native-resolution X11 windows ignore this rule: their mapping is per output and follows [`force_x11_supersample`](configuration.md#general). |
++| `hdr`                     | Override the focused output's HDR policy.                                                                                                                                                                                                                                                                    |
++| `border_color_focused`    | Override `colors.border.focused`.                                                                                                                                                                                                                                                                            |
++| `border_color_unfocused`  | Override `colors.border.unfocused`.                                                                                                                                                                                                                                                                          |
++| `border_color_outer`      | Override `colors.border.outer`.                                                                                                                                                                                                                                                                              |
++| `border_width`            | Override `appearance.border_width`, 0 to 100.                                                                                                                                                                                                                                                                |
++| `outer_border_width`      | Override `appearance.outer_border_width`, 0 to 100.                                                                                                                                                                                                                                                          |
++| `title_bar`               | `"on"` follows client decoration preferences, `"negotiated"` requires Wayland decoration negotiation selecting server-side decorations, `"forced"` forces a title bar, and `"off"` hides it. Overrides `appearance.title_bar.mode`; omission inherits the global mode.                                       |
++| `title_bar_buttons`       | Title bar buttons for this window, from the title outward: any of `"minimize"`, `"maximize"`, and `"close"`, or `[]` for none. Overrides `appearance.title_bar.buttons`; omission inherits it.                                                                                                               |
++| `corner_radius`           | Override `appearance.corner_radius`, 0 to 100.                                                                                                                                                                                                                                                               |
++| `shadow`                  | Override `appearance.shadow.enabled`.                                                                                                                                                                                                                                                                        |
++| `border_effect`           | Replace `effects.border` with a border preset or pool, or `"off"` to disable it.                                                                                                                                                                                                                             |
++| `window_effect`           | Replace `effects.window` with a window preset or pool, or `"off"` to disable it.                                                                                                                                                                                                                             |
+ 
+ These values refresh when matching identity or state changes. Fullscreen bypasses rule opacity unless [`appearance.opaque_fullscreen`](appearance.md#window-appearance) is `false`.
+ 
 diff --git a/examples/config.toml b/examples/config.toml
-index e00fd053..1d1c8ecd 100644
+index 5efe79f5..2d501810 100644
 --- a/examples/config.toml
 +++ b/examples/config.toml
 @@ -28,6 +28,8 @@ files = []
@@ -159,7 +215,7 @@ index 11caa145..4a70a3e6 100644
            && lhs.vrr == rhs.vrr
            && lhs.hdr == rhs.hdr
 diff --git a/src/config/config.h b/src/config/config.h
-index 6795c547..ef42f6c1 100644
+index f616ff17..f6bae598 100644
 --- a/src/config/config.h
 +++ b/src/config/config.h
 @@ -322,6 +322,9 @@ namespace umbriel {
@@ -172,7 +228,7 @@ index 6795c547..ef42f6c1 100644
      std::optional<int> transform;
      VrrMode vrr = VrrMode::Disabled;
      bool focusAtStartup = false;
-@@ -471,6 +474,10 @@ namespace umbriel {
+@@ -473,6 +476,10 @@ namespace umbriel {
      // Overrides the client's tearing-control hint. Omitted follows the hint,
      // true forces async preference, and false vetoes it.
      std::optional<bool> allowTearing;
@@ -183,7 +239,7 @@ index 6795c547..ef42f6c1 100644
      std::optional<HdrMode> hdr;
      std::optional<double> dimBehind;
      std::optional<double> opacity; // 0.0-1.0
-@@ -537,6 +544,7 @@ namespace umbriel {
+@@ -540,6 +547,7 @@ namespace umbriel {
            && allowShortcutsInhibit == other.allowShortcutsInhibit
            && backgroundRender == other.backgroundRender
            && blockCapture == other.blockCapture
@@ -191,7 +247,7 @@ index 6795c547..ef42f6c1 100644
            && vrr == other.vrr
            && allowTearing == other.allowTearing
            && hdr == other.hdr
-@@ -589,6 +597,7 @@ namespace umbriel {
+@@ -593,6 +601,7 @@ namespace umbriel {
      std::optional<bool> blockCapture;
      std::optional<VrrMode> vrr;
      std::optional<bool> allowTearing;
@@ -199,7 +255,7 @@ index 6795c547..ef42f6c1 100644
      std::optional<HdrMode> hdr;
      std::optional<double> dimBehind;
      std::optional<double> opacity;
-@@ -1098,6 +1107,8 @@ namespace umbriel {
+@@ -1102,6 +1111,8 @@ namespace umbriel {
        // Present outputs to X11 clients at their physical resolution, so they render at native size instead of being
        // upscaled on scaled outputs. Requires restart.
        bool xwaylandNativeResolution = false;
@@ -250,10 +306,10 @@ index 9447fde6..149da6d3 100644
        recordRuleEffect(context, keys, "screen_effect", EffectKind::Screen, [&loaded, name] {
          if (OutputRule* output = findOutputRuleMutable(loaded, name)) {
 diff --git a/src/config/fields_rules.cpp b/src/config/fields_rules.cpp
-index 27a93a54..acf329d0 100644
+index 21663714..72544976 100644
 --- a/src/config/fields_rules.cpp
 +++ b/src/config/fields_rules.cpp
-@@ -231,6 +231,7 @@ namespace umbriel {
+@@ -232,6 +232,7 @@ namespace umbriel {
            boolean("background_render", &W::backgroundRender),
            boolean("block_capture", &W::blockCapture),
            boolean("tearing", &W::allowTearing),
@@ -262,10 +318,10 @@ index 27a93a54..acf329d0 100644
            boolean("blur_popups", &W::blurPopups),
            boolean("blur_optimized", &W::blurOptimized),
 diff --git a/src/config/resolve.cpp b/src/config/resolve.cpp
-index dee2ccaa..b6272504 100644
+index 3fa55942..1aae0242 100644
 --- a/src/config/resolve.cpp
 +++ b/src/config/resolve.cpp
-@@ -365,6 +365,9 @@ namespace umbriel {
+@@ -368,6 +368,9 @@ namespace umbriel {
        if (rule.allowTearing) {
          resolved.allowTearing = rule.allowTearing;
        }
@@ -276,10 +332,10 @@ index dee2ccaa..b6272504 100644
          resolved.hdr = rule.hdr;
        }
 diff --git a/src/output/output.cpp b/src/output/output.cpp
-index 3238e6fe..90d4192d 100644
+index 3238e6fe..04e58e39 100644
 --- a/src/output/output.cpp
 +++ b/src/output/output.cpp
-@@ -473,6 +473,21 @@ namespace umbriel {
+@@ -473,6 +473,25 @@ namespace umbriel {
      return rule == nullptr || rule->directScanout;
    }
  
@@ -287,10 +343,14 @@ index 3238e6fe..90d4192d 100644
 +    // Subsurfaces and popups answer for their window, so a game or video
 +    // drawing into a subsurface stays with the rest of its window.
 +    View* view = surface != nullptr ? View::fromSurface(wlr_surface_get_root_surface(surface)) : nullptr;
-+    if (view != nullptr && !view->supersampled()) {
-+      return static_cast<double>(m_output->scale);
-+    }
-+    return clientRenderScale();
++    const OutputRule* rule = findOutputRule(config(), identity());
++    const bool configured = rule != nullptr && rule->renderScale.has_value();
++    const double scale =
++        view != nullptr && !view->supersampled() ? static_cast<double>(m_output->scale) : clientRenderScale();
++    // Hints keep the neutral floor the derivation this feature replaces had, so
++    // a legal sub-1 logical scale still asks clients for logical-size buffers.
++    // An explicit render_scale, a sub-1 one included, is honoured as given.
++    return configured ? scale : std::max(scale, 1.0);
 +  }
 +
 +  double Output::clientRenderScale() const {
@@ -301,7 +361,7 @@ index 3238e6fe..90d4192d 100644
    bool Output::configuredTearingAllowed() const {
      const OutputRule* rule = findOutputRule(config(), identity());
      return rule != nullptr && rule->allowTearing;
-@@ -985,8 +1000,9 @@ namespace umbriel {
+@@ -985,8 +1004,9 @@ namespace umbriel {
      m_server->updateIdleInhibit();
      if (enabled) {
        kLog.info(
@@ -313,7 +373,7 @@ index 3238e6fe..90d4192d 100644
        );
      } else if (!desktopEnabled()) {
        const OutputRule* rule = findOutputRule(config(), identity());
-@@ -1342,8 +1358,12 @@ namespace umbriel {
+@@ -1342,8 +1362,26 @@ namespace umbriel {
      if (surface == nullptr || self == nullptr || self->m_output == nullptr) {
        return;
      }
@@ -321,36 +381,52 @@ index 3238e6fe..90d4192d 100644
 -    wlr_surface_set_preferred_buffer_scale(surface, static_cast<int32_t>(std::ceil(self->m_output->scale)));
 +    // The hints carry the render scale alone: the scene samples the larger
 +    // buffers down to the output's `scale` raster, and logical geometry is
-+    // untouched. Must match the scene's preferred scale provider (server.cpp).
-+    const double renderScale = self->surfaceRenderScale(surface);
++    // untouched. Derive the same max the scene's provider does across every
++    // output presenting the surface: a state change seen through one output
++    // must not lower a hint the scene raises through another, and a window
++    // straddling two outputs with different render scales follows the larger.
++    double renderScale = 0;
++    wlr_surface_output* entered = nullptr;
++    wl_list_for_each(entered, &surface->current_outputs, link) {
++      if (const Output* output = self->m_server->outputFromWlr(entered->output)) {
++        renderScale = std::max(renderScale, output->surfaceRenderScale(surface));
++      }
++    }
++    if (renderScale <= 0) {
++      // Not entered anywhere yet (a popup before its first commit): answer for
++      // the output asking.
++      renderScale = self->surfaceRenderScale(surface);
++    }
 +    wlr_fractional_scale_v1_notify_scale(surface, renderScale);
 +    wlr_surface_set_preferred_buffer_scale(surface, static_cast<int32_t>(std::ceil(renderScale)));
    }
  
    Output::~Output() {
 diff --git a/src/output/output.h b/src/output/output.h
-index b17bbf0e..5a14e055 100644
+index b17bbf0e..ab9808ed 100644
 --- a/src/output/output.h
 +++ b/src/output/output.h
-@@ -126,6 +126,13 @@ namespace umbriel {
+@@ -126,6 +126,15 @@ namespace umbriel {
      int configuredBitDepth() const;
      const std::string& bitDepthFallbackReason() const { return m_bitDepthFallbackReason; }
      bool configuredDirectScanoutEnabled() const;
-+    // The scale clients are asked to render at: the rule's render_scale, or the
-+    // logical scale when it is unset.
++    // The configured render scale: the rule's render_scale, or the logical
++    // scale when it is unset. Reported by IPC, logs and the X11 mapping, which
++    // want the configured value rather than the hint's floor.
 +    double clientRenderScale() const;
-+    // The scale hint for `surface`: clientRenderScale(), except for windows
-+    // that skip the supersample (see View::supersampled) and stay at the
-+    // logical scale. Surfaces outside a window always follow the output.
++    // The scale hint for `surface`: the configured render scale, or the logical
++    // scale for windows that skip the supersample (see View::supersampled),
++    // with the neutral 1.0 floor applied while render_scale is unset. Surfaces
++    // outside a window always follow the output.
 +    double surfaceRenderScale(wlr_surface* surface) const;
      bool configuredTearingAllowed() const;
      // Whether a workspace step wraps around the ends of this output's inventory.
      bool configuredCyclicWorkspaces() const;
 diff --git a/src/server/ipc_commands.cpp b/src/server/ipc_commands.cpp
-index 7e1bd5d9..8dc3f3af 100644
+index 442c4947..0522258e 100644
 --- a/src/server/ipc_commands.cpp
 +++ b/src/server/ipc_commands.cpp
-@@ -312,6 +312,7 @@ namespace umbriel {
+@@ -313,6 +313,7 @@ namespace umbriel {
          std::println("  Position: {},{}", position.value("x", 0), position.value("y", 0));
          std::println("  Transform: {}", output.value("transform", "normal"));
          std::println("  Scale: {:f}", output.value("scale", 1.0));
@@ -358,7 +434,7 @@ index 7e1bd5d9..8dc3f3af 100644
          const auto& usable = output.at("usable_area");
          std::println(
              "  Usable area: {}x{}{:+}{:+}", usable.value("width", 0), usable.value("height", 0), usable.value("x", 0),
-@@ -970,6 +971,7 @@ namespace umbriel {
+@@ -971,6 +972,7 @@ namespace umbriel {
            {"usable_area", {{"x", usable.x}, {"y", usable.y}, {"width", usable.width}, {"height", usable.height}}},
            {"transform", transformName(wlrOutput->transform)},
            {"scale", wlrOutput->scale},
@@ -391,7 +467,7 @@ index aaee6dd4..8bca8763 100644
        wlr_scene_set_linux_dmabuf_v1(m_scene, linuxDmabuf);
      }
 diff --git a/src/server/server_events.cpp b/src/server/server_events.cpp
-index 9e15d8b9..f9edaaf4 100644
+index 29cfc231..2fa99326 100644
 --- a/src/server/server_events.cpp
 +++ b/src/server/server_events.cpp
 @@ -862,6 +862,10 @@ namespace umbriel {
@@ -440,7 +516,7 @@ index 05efa4c7..b83523ab 100644
      if (popup == nullptr || m_sceneTree == nullptr || m_toplevel == nullptr) {
        return;
 diff --git a/src/view/view.h b/src/view/view.h
-index 121f0a11..1c701d31 100644
+index ab322401..370b1f22 100644
 --- a/src/view/view.h
 +++ b/src/view/view.h
 @@ -151,6 +151,10 @@ namespace umbriel {
@@ -452,9 +528,9 @@ index 121f0a11..1c701d31 100644
 +    // supersample and remain eligible for direct scanout.
 +    bool supersampled();
      bool confinePointer();
+     double touchpadScrollFactor();
      bool allowsShortcutsInhibit();
-     // A `background_render` rule applies: while hidden, the window stays unsuspended and gets frame callbacks at its
-@@ -775,6 +779,9 @@ namespace umbriel {
+@@ -776,6 +780,9 @@ namespace umbriel {
      // popups included). Scale-aware clients size and map pointer coordinates by this, so it must follow the view across
      // outputs and track scale changes.
      void notifyOutputScale();
@@ -464,7 +540,7 @@ index 121f0a11..1c701d31 100644
      // Keep floats visually at the last requested size while client geometry lags.
      void syncFloatingSurfaceClip();
      void beginFloatingResize(uint32_t edges);
-@@ -1099,6 +1106,7 @@ namespace umbriel {
+@@ -1100,6 +1107,7 @@ namespace umbriel {
      AnimatedValue m_ruleBlur{0.0};
      bool m_backgroundRender = false;
      bool m_allowShortcutsInhibit = true;
@@ -501,10 +577,10 @@ index ae3a2cd4..64f11fd7 100644
    }
  
 diff --git a/src/view/view_rules.cpp b/src/view/view_rules.cpp
-index 2f8aaa42..5f8caaa5 100644
+index 99aeb35a..e58c295c 100644
 --- a/src/view/view_rules.cpp
 +++ b/src/view/view_rules.cpp
-@@ -709,6 +709,10 @@ namespace umbriel {
+@@ -711,6 +711,10 @@ namespace umbriel {
        m_allowShortcutsInhibit = allowed;
        m_server->refreshKeyboardShortcutsInhibitors();
      }
@@ -516,10 +592,19 @@ index 2f8aaa42..5f8caaa5 100644
      if (m_titleBarMode != titleBarMode) {
        m_titleBarMode = titleBarMode;
 diff --git a/src/xwayland/outputs.cpp b/src/xwayland/outputs.cpp
-index a762e1b4..64fb93d9 100644
+index a762e1b4..75f3f501 100644
 --- a/src/xwayland/outputs.cpp
 +++ b/src/xwayland/outputs.cpp
-@@ -53,8 +53,10 @@ namespace umbriel {
+@@ -7,6 +7,8 @@
+ #include <algorithm>
+ #include <cmath>
+ #include <limits>
++#include <numeric>
++#include <optional>
+ 
+ namespace umbriel {
+ 
+@@ -53,8 +55,10 @@ namespace umbriel {
      return wlr_box_equal(&layout, &other.layout) && wlr_box_equal(&x, &other.x) && scale == other.scale;
    }
  
@@ -532,7 +617,7 @@ index a762e1b4..64fb93d9 100644
      m_global = wl_global_create(display, &zxdg_output_manager_v1_interface, kVersion, this, bind);
      update();
    }
-@@ -110,8 +112,15 @@ namespace umbriel {
+@@ -110,16 +114,70 @@ namespace umbriel {
        }
        XwaylandRegion region{.layout = box, .x = {.x = 0, .y = 0, .width = box.width, .height = box.height}};
        if (m_nativeResolution) {
@@ -549,6 +634,65 @@ index a762e1b4..64fb93d9 100644
        }
        positionScale = std::max(positionScale, region.scale);
        regions.push_back({.output = output, .region = region});
+     }
+-    // The largest scale spreads the outputs at least as far apart as any of them grew.
+-    for (OutputRegion& entry : regions) {
+-      entry.region.x.x = scaled(entry.region.layout.x - extents.x, positionScale);
+-      entry.region.x.y = scaled(entry.region.layout.y - extents.y, positionScale);
++    // The largest scale spreads the outputs at least as far apart as any of them
++    // grew, but each rectangle is sized by its own factor, so scaling every
++    // origin by that factor leaves a hole wherever a narrow neighbour sits next
++    // to a wide one. Place each rectangle against its nearest neighbour on each
++    // axis instead: outputs that touch in the layout touch in X, and a real
++    // layout gap keeps its width at the largest scale.
++    const auto overlaps = [](int start, int length, int otherStart, int otherLength) {
++      return start < otherStart + otherLength && otherStart < start + length;
++    };
++    // Position of one region measured from the nearest region before it on one
++    // axis that shares space on the other; nullopt when nothing precedes it.
++    const auto nearestBefore = [&](const OutputRegion& entry, bool horizontal) -> std::optional<int> {
++      const wlr_box& layout = entry.region.layout;
++      const int lead = horizontal ? layout.x : layout.y;
++      const int cross = horizontal ? layout.y : layout.x;
++      const int crossSpan = horizontal ? layout.height : layout.width;
++      std::optional<int> position;
++      int nearestEdge = std::numeric_limits<int>::min();
++      for (const OutputRegion& candidate : regions) {
++        const wlr_box& other = candidate.region.layout;
++        const int edge = (horizontal ? other.x : other.y) + (horizontal ? other.width : other.height);
++        const int otherCross = horizontal ? other.y : other.x;
++        const int otherCrossSpan = horizontal ? other.height : other.width;
++        if (edge > lead || !overlaps(cross, crossSpan, otherCross, otherCrossSpan)) {
++          continue;
++        }
++        const wlr_box& placed = candidate.region.x;
++        const int reach =
++            (horizontal ? placed.x + placed.width : placed.y + placed.height) + scaled(lead - edge, positionScale);
++        // Predecessors that share the nearest layout edge can still differ in X;
++        // keep the furthest of them so the result never depends on list order.
++        if (edge > nearestEdge || (edge == nearestEdge && reach > position.value_or(std::numeric_limits<int>::min()))) {
++          nearestEdge = edge;
++          position = reach;
++        }
++      }
++      return position;
++    };
++    std::vector<size_t> order(regions.size());
++    std::ranges::iota(order, 0);
++    std::ranges::sort(order, {}, [&](size_t index) { return regions[index].region.layout.x; });
++    for (size_t index : order) {
++      const OutputRegion& entry = regions[index];
++      regions[index].region.x.x =
++          nearestBefore(entry, true).value_or(scaled(entry.region.layout.x - extents.x, positionScale));
++    }
++    std::ranges::sort(order, {}, [&](size_t index) { return regions[index].region.layout.y; });
++    for (size_t index : order) {
++      const OutputRegion& entry = regions[index];
++      regions[index].region.x.y =
++          nearestBefore(entry, false).value_or(scaled(entry.region.layout.y - extents.y, positionScale));
+     }
+     const XwaylandRegion fallback{.layout = {.x = extents.x, .y = extents.y, .width = 0, .height = 0}};
+     const bool changed = regions != m_regions || fallback != m_fallback;
 diff --git a/src/xwayland/outputs.h b/src/xwayland/outputs.h
 index a5411159..d52cbbdd 100644
 --- a/src/xwayland/outputs.h
@@ -647,10 +791,10 @@ index c8a99e10..a3c3b843 100755
  
 diff --git a/tests/harness/checks/protocol/render_scale.sh b/tests/harness/checks/protocol/render_scale.sh
 new file mode 100644
-index 00000000..2e369357
+index 00000000..1e8ed997
 --- /dev/null
 +++ b/tests/harness/checks/protocol/render_scale.sh
-@@ -0,0 +1,104 @@
+@@ -0,0 +1,131 @@
 +#!/usr/bin/env bash
 +# harness: outputs=1
 +# render_scale supersedes the logical scale in the client scale hints alone: a
@@ -754,13 +898,40 @@ index 00000000..2e369357
 +  echo "the scene re-derivation dropped the below-logical render scale ($presented)"
 +  exit 1
 +fi
++# A legal logical scale below 1 keeps the hint the pre-feature derivation gave
++# it: an unset render_scale follows `scale` but never shrinks client buffers, so
++# the hint stays at the neutral 1.0 (120/120) rather than following 0.8.
++sed -i '/render_scale/d' "$UMBRIEL_CONFIG"
++sed -i 's/^scale = 1\.25$/scale = 0.8/' "$UMBRIEL_CONFIG"
++"$UMBRIEL" msg config-reload > /dev/null
++readonly SUB1_LOG="$UMBRIEL_RUNTIME_DIR/render-scale-sub1-client.log"
++# Same title as the first client so the window rule that sizes it applies.
++"$CLIENT" render-scale 400 300 > "$SUB1_LOG" 2>&1 &
++for _ in $(seq 60); do
++  grep -q '^mapped ' "$SUB1_LOG" && break
++  sleep 0.05
++done
++presented=$(grep '^mapped ' "$SUB1_LOG" | tail -1)
++echo "presented at a sub-1 logical scale: $presented"
++if [[ $presented != *"buffer 400x300"* || $presented != *"scale 120/120"* ]]; then
++  echo "an unset render_scale followed a sub-1 logical scale into the client hint ($presented)"
++  exit 1
++fi
++# The floor belongs to the hint alone: the configured value other consumers see
++# (IPC, the startup/reload log, the X11 mapping) still follows `scale`.
++reported=$("$UMBRIEL" outputs --json | jq -r '.[] | select(.name == "HEADLESS-1") | .render_scale')
++if ! awk -v value="$reported" 'BEGIN { delta = value - 0.8; exit !(delta < 0.001 && delta > -0.001) }'; then
++  echo "outputs reports render_scale $reported for an unset key on a 0.8 output"
++  exit 1
++fi
++
 +echo "render_scale drives the client hints and falls back to the logical scale on reload"
 diff --git a/tests/harness/checks/protocol/render_scale_exempt.sh b/tests/harness/checks/protocol/render_scale_exempt.sh
 new file mode 100755
-index 00000000..1ed105dc
+index 00000000..dcbb05a9
 --- /dev/null
 +++ b/tests/harness/checks/protocol/render_scale_exempt.sh
-@@ -0,0 +1,97 @@
+@@ -0,0 +1,125 @@
 +#!/usr/bin/env bash
 +# harness: outputs=1
 +# Windows that skip the render_scale supersample: fullscreen windows and game or
@@ -857,13 +1028,41 @@ index 00000000..1ed105dc
 +echo "plain window with supersample = false: $presented"
 +expect "$presented" "scale 150/120" "supersample = false did not keep the window at the logical scale"
 +
-+echo "fullscreen and game windows skip the supersample, rules override both ways"
++# A content type can change after mapping: a browser or media player becomes
++# `video` when playback starts in an existing window. That path never sees a new
++# initial commit, so only View::syncContentType can move the hint.
++readonly DYNAMIC_LOG="$UMBRIEL_RUNTIME_DIR/render-scale-dynamic.log"
++readonly DYNAMIC_FIFO="$UMBRIEL_RUNTIME_DIR/render-scale-dynamic.fifo"
++mkfifo "$DYNAMIC_FIFO"
++exec {dynamic}<> "$DYNAMIC_FIFO"
++CONTENT_TYPE_CONTROL=1 "$CLIENT" rs-dynamic 400 300 <&"$dynamic" > "$DYNAMIC_LOG" 2>&1 &
++presented=$(next_presentation "$DYNAMIC_LOG" 0)
++echo "dynamic content window: $presented"
++expect "$presented" "scale 240/120" "a plain window was not supersampled"
++
++set_content_type() { # type, expected hint, message
++  local before
++  before=$(grep -c '^mapped ' "$DYNAMIC_LOG")
++  printf 'content-type %s\n' "$1" >&"$dynamic"
++  local presented
++  presented=$(next_presentation "$DYNAMIC_LOG" "$before")
++  echo "content-type $1 on a mapped window: $presented"
++  expect "$presented" "$2" "$3"
++}
++# Alternate exempt and normal so every toggle changes the hint; a same-value
++# re-notify is deduped below the wire and would assert nothing.
++set_content_type game "scale 150/120" "a game content type set after mapping did not exempt the window"
++set_content_type none "scale 240/120" "clearing the content type did not supersample again"
++set_content_type video "scale 150/120" "a video content type set after mapping did not exempt the window"
++set_content_type none "scale 240/120" "clearing the video content type did not supersample again"
++
++echo "fullscreen and game windows skip the supersample, rules override both ways, and a later content type follows"
 diff --git a/tests/harness/checks/protocol/xwayland_render_scale.sh b/tests/harness/checks/protocol/xwayland_render_scale.sh
 new file mode 100644
-index 00000000..91a60d7e
+index 00000000..e5ad1e52
 --- /dev/null
 +++ b/tests/harness/checks/protocol/xwayland_render_scale.sh
-@@ -0,0 +1,121 @@
+@@ -0,0 +1,150 @@
 +#!/usr/bin/env bash
 +# harness: xwayland=native
 +# X11 clients that draw a fixed number of pixels must stay at native output
@@ -981,16 +1180,45 @@ index 00000000..91a60d7e
 +  expect_state
 +fi
 +
++if [[ -n ${UMBRIEL_X11_RELOAD_TARGET:-} ]]; then
++  # Only render_scale changes: the mode and the logical scale stay put, so no
++  # output commit forces a layout refresh. The X rectangles must still follow.
++  sed -i "s/^render_scale = .*/render_scale = $UMBRIEL_X11_RELOAD_TARGET/" "$UMBRIEL_CONFIG"
++  "$UMBRIEL" msg config-reload > /dev/null
++  want_w=$(awk -v w=1280 -v s="$UMBRIEL_X11_RELOAD_TARGET" 'BEGIN { printf "%d", w * s / 1.25 }')
++  want_h=$(awk -v h=960 -v s="$UMBRIEL_X11_RELOAD_TARGET" 'BEGIN { printf "%d", h * s / 1.25 }')
++  for _ in $(seq 80); do
++    outputs=$("$UMBRIEL_XWAYLAND_OUTPUT_CLIENT") || true
++    jq -e --argjson w "$want_w" --argjson h "$want_h" \
++      'any(.outputs[]; .name == "HEADLESS-1" and .w == $w and .h == $h)' <<< "$outputs" > /dev/null && break
++    sleep 0.025
++  done
++  if ! jq -e --argjson w "$want_w" --argjson h "$want_h" \
++    'any(.outputs[]; .name == "HEADLESS-1" and .w == $w and .h == $h)' <<< "$outputs" > /dev/null; then
++    echo "X11 output size did not follow a render_scale-only reload (want ${want_w}x${want_h}): $outputs"
++    exit 1
++  fi
++  # The fixed-pixel X window keeps its X size; its logical size follows the mapping.
++  win_w=$(awk -v w=240 -v s="$UMBRIEL_X11_RELOAD_TARGET" 'BEGIN { printf "%d", w * 1.25 / s }')
++  win_h=$(awk -v h=160 -v s="$UMBRIEL_X11_RELOAD_TARGET" 'BEGIN { printf "%d", h * 1.25 / s }')
++  window=$("$UMBRIEL" windows --json | jq -c '.[] | select(.title == "x11-render-scale")')
++  read -r got_w got_h < <(jq -r '"\\(.w) \\(.h)"' <<< "$window")
++  if ((got_w != win_w || got_h != win_h)); then
++    echo "X11 window is ${got_w}x${got_h} logical after the reload; expected ${win_w}x${win_h}"
++    exit 1
++  fi
++fi
++
 +printf 'quit\n' >&"$client_fd"
 +wait "$client_pid"
 +exec {client_fd}>&-
 +echo "X11 window, native output pixels and XSETTINGS follow scale $EXPECT_SCALE"
 diff --git a/tests/harness/checks/protocol/xwayland_render_scale_forced.sh b/tests/harness/checks/protocol/xwayland_render_scale_forced.sh
 new file mode 100644
-index 00000000..107b22f7
+index 00000000..1c0081fd
 --- /dev/null
 +++ b/tests/harness/checks/protocol/xwayland_render_scale_forced.sh
-@@ -0,0 +1,9 @@
+@@ -0,0 +1,11 @@
 +#!/usr/bin/env bash
 +# harness: xwayland=native-supersample
 +export UMBRIEL_X11_EXPECT_SCALE=2.5
@@ -999,9 +1227,11 @@ index 00000000..107b22f7
 +export UMBRIEL_X11_EXPECT_RED_PIXELS=30000 UMBRIEL_X11_EXPECT_GDK_SCALE=2
 +export UMBRIEL_X11_EXPECT_XFT_DPI=245760
 +export UMBRIEL_X11_EXPECT_OUTPUT_WIDTH=2560 UMBRIEL_X11_EXPECT_OUTPUT_HEIGHT=1920
++# A render_scale-only reload must reach Xwayland without a mode or scale commit.
++export UMBRIEL_X11_RELOAD_TARGET=2.0
 +source "$UMBRIEL_REPO/tests/harness/checks/protocol/xwayland_render_scale.sh"
 diff --git a/tests/harness/clients/fractional_client.cpp b/tests/harness/clients/fractional_client.cpp
-index 559596de..bad24525 100644
+index 559596de..1a1739c2 100644
 --- a/tests/harness/clients/fractional_client.cpp
 +++ b/tests/harness/clients/fractional_client.cpp
 @@ -15,7 +15,9 @@
@@ -1014,20 +1244,38 @@ index 559596de..bad24525 100644
  #include "fractional-scale-v1-client-protocol.h"
  #include "parse_ints.h"
  #include "server-decoration-client-protocol.h"
-@@ -48,6 +50,7 @@ namespace {
+@@ -48,6 +50,8 @@ namespace {
      xdg_wm_base* wmBase = nullptr;
      wp_viewporter* viewporter = nullptr;
      wp_fractional_scale_manager_v1* scaleManager = nullptr;
 +    wp_content_type_manager_v1* contentTypeManager = nullptr;
++    wp_content_type_v1* contentType = nullptr;
      wl_surface* surface = nullptr;
      wp_viewport* viewport = nullptr;
      xdg_surface* xdgSurface = nullptr;
-@@ -343,6 +346,12 @@ namespace {
+@@ -288,6 +292,15 @@ namespace {
+       present(state);
+     } else if (command.starts_with("title ")) {
+       xdg_toplevel_set_title(state.toplevel, std::string(command.substr(6)).c_str());
++    } else if (command.starts_with("content-type ") && state.contentType != nullptr) {
++      const std::string_view type = command.substr(13);
++      const uint32_t value = type == "game" ? WP_CONTENT_TYPE_V1_TYPE_GAME
++          : type == "video"                 ? WP_CONTENT_TYPE_V1_TYPE_VIDEO
++                                            : WP_CONTENT_TYPE_V1_TYPE_NONE;
++      wp_content_type_v1_set_content_type(state.contentType, value);
++      // The compositor sees the new type on commit, and re-sends the scale hint for
++      // the window it exempts.
++      wl_surface_commit(state.surface);
+     } else {
+       std::println(stderr, "fractional-client: unknown decoration command {}", command);
+       state.running = false;
+@@ -343,6 +356,13 @@ namespace {
        state.scaleManager = static_cast<wp_fractional_scale_manager_v1*>(
            wl_registry_bind(registry, name, &wp_fractional_scale_manager_v1_interface, 1)
        );
 +    } else if (
-+        strcmp(interface, wp_content_type_manager_v1_interface.name) == 0 && std::getenv("CONTENT_TYPE") != nullptr
++        strcmp(interface, wp_content_type_manager_v1_interface.name) == 0
++        && (std::getenv("CONTENT_TYPE") != nullptr || std::getenv("CONTENT_TYPE_CONTROL") != nullptr)
 +    ) {
 +      state.contentTypeManager = static_cast<wp_content_type_manager_v1*>(
 +          wl_registry_bind(registry, name, &wp_content_type_manager_v1_interface, 1)
@@ -1035,29 +1283,41 @@ index 559596de..bad24525 100644
      }
    }
  
-@@ -410,6 +419,17 @@ int main(int argc, char** argv) {
+@@ -410,6 +430,20 @@ int main(int argc, char** argv) {
    wp_fractional_scale_v1* fractionalScale =
        wp_fractional_scale_manager_v1_get_fractional_scale(state.scaleManager, state.surface);
    wp_fractional_scale_v1_add_listener(fractionalScale, &kFractionalScaleListener, &state);
-+  if (const char* type = std::getenv("CONTENT_TYPE"); type != nullptr) {
++  const char* type = std::getenv("CONTENT_TYPE");
++  const bool contentTypeControl = std::getenv("CONTENT_TYPE_CONTROL") != nullptr;
++  if (type != nullptr || contentTypeControl) {
 +    if (state.contentTypeManager == nullptr) {
 +      std::println(stderr, "fractional-client: content type manager unavailable");
 +      return 1;
 +    }
-+    wp_content_type_v1* contentType =
-+        wp_content_type_manager_v1_get_surface_content_type(state.contentTypeManager, state.surface);
-+    wp_content_type_v1_set_content_type(
-+        contentType, strcmp(type, "video") == 0 ? WP_CONTENT_TYPE_V1_TYPE_VIDEO : WP_CONTENT_TYPE_V1_TYPE_GAME
-+    );
++    state.contentType = wp_content_type_manager_v1_get_surface_content_type(state.contentTypeManager, state.surface);
++    if (type != nullptr) {
++      wp_content_type_v1_set_content_type(
++          state.contentType, strcmp(type, "video") == 0 ? WP_CONTENT_TYPE_V1_TYPE_VIDEO : WP_CONTENT_TYPE_V1_TYPE_GAME
++      );
++    }
 +  }
  
    // Legacy clients can select decorations before assigning the xdg role.
    if (const char* mode = std::getenv("LEGACY_DECORATION"); mode != nullptr) {
+@@ -447,7 +481,7 @@ int main(int argc, char** argv) {
+   }
+   wl_surface_commit(state.surface);
+ 
+-  const bool controlled = std::getenv("DECORATION_CONTROL") != nullptr;
++  const bool controlled = std::getenv("DECORATION_CONTROL") != nullptr || contentTypeControl;
+   while (state.running) {
+     if (!controlled) {
+       if (wl_display_dispatch(state.display) < 0) {
 diff --git a/tests/meson.build b/tests/meson.build
-index c7919d4d..3ea88642 100644
+index a1d421fd..e54c0478 100644
 --- a/tests/meson.build
 +++ b/tests/meson.build
-@@ -311,6 +311,8 @@ fractional_client = executable(
+@@ -322,6 +322,8 @@ fractional_client = executable(
      legacy_decoration_client_c,
      xdg_decoration_client_h,
      xdg_decoration_client_c,
@@ -1232,7 +1492,7 @@ index 3ae7c688..4800e27c 100644
    const auto descriptions = umbriel::registry::describeConfig(umbriel::Config{});
    bool kind = false;
 diff --git a/tests/unit/xwayland_outputs.cpp b/tests/unit/xwayland_outputs.cpp
-index 5a671970..9fc74fb2 100644
+index 5a671970..d4710f08 100644
 --- a/tests/unit/xwayland_outputs.cpp
 +++ b/tests/unit/xwayland_outputs.cpp
 @@ -90,9 +90,15 @@ namespace {
@@ -1252,7 +1512,7 @@ index 5a671970..9fc74fb2 100644
    CHECK_EQ(main.x.x, 0);
    CHECK_EQ(main.x.y, 1440);
    CHECK_EQ(main.x.width, 3072);
-@@ -184,4 +190,34 @@ UMBRIEL_TEST(primarySelectorFollowsIdentityAndLayoutMembership) {
+@@ -184,4 +190,115 @@ UMBRIEL_TEST(primarySelectorFollowsIdentityAndLayoutMembership) {
    CHECK_EQ(outputs.primaryOutput("missing").value_or("unmanaged"), "");
  }
  
@@ -1284,6 +1544,87 @@ index 5a671970..9fc74fb2 100644
 +  const umbriel::XwaylandRegion right = outputs.region(fixture.outputs[2], 0, 0);
 +  CHECK_EQ(right.x.x, main.x.x + main.x.width);
 +  CHECK_EQ(right.x.y, main.x.y);
++}
++
++UMBRIEL_TEST(nativeScreenKeepsNeighboursAdjacentWithAMixedRenderScale) {
++  Fixture fixture;
++  CHECK(fixture.setUp(kMixedScales));
++  // The largest render scale sits on the RIGHT output, so scaling every origin
++  // by it would open a strip between the other two. Each rectangle is sized by
++  // its own factor: neighbours that touch in the layout must touch in X.
++  const umbriel::XwaylandOutputs outputs(fixture.display, fixture.layout, true, [&fixture](const wlr_output* output) {
++    return output == fixture.outputs[2] ? 5.0 : static_cast<double>(output->scale);
++  });
++
++  const wlr_box main = outputs.region(fixture.outputs[0], 0, 0).x;
++  const wlr_box above = outputs.region(fixture.outputs[1], 0, 0).x;
++  const wlr_box right = outputs.region(fixture.outputs[2], 0, 0).x;
++  CHECK_EQ(main.width, 3840);
++  CHECK_EQ(right.x, main.x + main.width);
++  CHECK_EQ(right.y, main.y);
++  CHECK_EQ(main.y, above.y + above.height);
++  wlr_box overlap{};
++  CHECK(!wlr_box_intersection(&overlap, &main, &right));
++  CHECK(!wlr_box_intersection(&overlap, &main, &above));
++}
++
++UMBRIEL_TEST(nativeScreenKeepsARealLayoutGap) {
++  Fixture fixture;
++  // An 80 px hole between two 1080p outputs is deliberate; the X screen must
++  // keep it, measured at the largest render scale.
++  CHECK(fixture.setUp({
++      {.width = 1920, .height = 1080, .scale = 1.0F, .x = 0, .y = 0},
++      {.width = 1920, .height = 1080, .scale = 1.0F, .x = 2000, .y = 0},
++  }));
++  const umbriel::XwaylandOutputs outputs(fixture.display, fixture.layout, true, [&fixture](const wlr_output* output) {
++    return output == fixture.outputs[1] ? 2.0 : 1.0;
++  });
++
++  const wlr_box left = outputs.region(fixture.outputs[0], 0, 0).x;
++  const wlr_box right = outputs.region(fixture.outputs[1], 0, 0).x;
++  CHECK_EQ(left.width, 1920);
++  CHECK_EQ(right.width, 3840);
++  CHECK_EQ(right.x - (left.x + left.width), 160);
++}
++
++UMBRIEL_TEST(nativeScreenPlacementIgnoresOutputRegistrationOrder) {
++  // Two uneven monitors stacked to the left of a tall one: both end at layout
++  // x = 1920, but the 2.0-scale one ends at X 3840 while the 1.0-scale one ends
++  // at 1920. A tie in the layout edge must not depend on which was registered
++  // first, and the tall output must start past the wider of them.
++  const std::vector<OutputSpec> touching = {
++      {.width = 1920, .height = 1080, .scale = 1.0F, .x = 0, .y = 0},
++      {.width = 3840, .height = 2160, .scale = 2.0F, .x = 0, .y = 1080},
++      {.width = 1920, .height = 2160, .scale = 1.0F, .x = 1920, .y = 0},
++  };
++  const std::vector<OutputSpec> reversed = {touching[1], touching[2], touching[0]};
++
++  const auto place = [](const std::vector<OutputSpec>& specs) {
++    Fixture fixture;
++    CHECK(fixture.setUp(specs));
++    const umbriel::XwaylandOutputs outputs(fixture.display, fixture.layout, true, [](const wlr_output* output) {
++      return static_cast<double>(output->scale);
++    });
++    std::vector<wlr_box> boxes;
++    boxes.reserve(fixture.outputs.size());
++    for (wlr_output* output : fixture.outputs) {
++      boxes.push_back(outputs.region(output, 0, 0).x);
++    }
++    for (size_t a = 0; a < boxes.size(); ++a) {
++      for (size_t b = a + 1; b < boxes.size(); ++b) {
++        wlr_box overlap{};
++        CHECK(!wlr_box_intersection(&overlap, &boxes[a], &boxes[b]));
++      }
++    }
++    const auto tall =
++        std::ranges::find_if(specs, [](const OutputSpec& spec) { return spec.width == 1920 && spec.height == 2160; });
++    return boxes[static_cast<size_t>(std::distance(specs.begin(), tall))].x;
++  };
++
++  const int first = place(touching);
++  const int second = place(reversed);
++  CHECK_EQ(first, 3840);
++  CHECK_EQ(first, second);
 +}
 +
  int main() { return RUN_TESTS(); }

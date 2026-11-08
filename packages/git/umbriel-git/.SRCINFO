@@ -1,7 +1,7 @@
 pkgbase = umbriel-git
 	pkgdesc = A Wayland compositor built on wlroots
 	pkgver = 0.1.0.r1540.ad46c7d
-	pkgrel = 4
+	pkgrel = 5
 	epoch = 1
 	url = https://github.com/noctalia-dev/umbriel
 	arch = x86_64
@@ -49,7 +49,7 @@ pkgbase = umbriel-git
 	source = 0021-minimize-animation.patch
 	sha256sums = SKIP
 	sha256sums = 797d118d903858403e3ea4e8de25567968d85118d928ad208c27225c1199cc3c
-	sha256sums = 55b7e50a9b1ce7c2a4e47755e3ee0bb07773608750e8441b873bb0507a13a57e
+	sha256sums = 36442c0a3d52d421b94134fb81123155169d2cc43bde14d070e7d98c36cd068b
 	sha256sums = 7c4de03d135dc74529c7cafc2a81ae659c1e9a917094aeafb248175c94db8400
 	sha256sums = 7ab7b22764fe290cb58c01d1d5011d9f0f09de9ec7434de340d1cf2ac06b5804
 	sha256sums = da533d362314d028cf575128ace45b1781e39d9385478fd648f5e9bffffaf621
