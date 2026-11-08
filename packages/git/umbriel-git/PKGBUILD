@@ -9,7 +9,7 @@ source "$startdir/../../../lib/pgo.sh"
 pkgname=umbriel-git
 _pkgname=umbriel
 pkgver=0.1.0.r1540.ad46c7d
-pkgrel=3
+pkgrel=4
 epoch=1
 pkgdesc='A Wayland compositor built on wlroots'
 arch=('x86_64' 'aarch64')
@@ -69,7 +69,7 @@ sha256sums=('SKIP'
             '797d118d903858403e3ea4e8de25567968d85118d928ad208c27225c1199cc3c'
             '55b7e50a9b1ce7c2a4e47755e3ee0bb07773608750e8441b873bb0507a13a57e'
             '7c4de03d135dc74529c7cafc2a81ae659c1e9a917094aeafb248175c94db8400'
-            '92514f4aa7244e524aa73bf392efff5675a7e32e715715d182bad5324ed70492'
+            '7ab7b22764fe290cb58c01d1d5011d9f0f09de9ec7434de340d1cf2ac06b5804'
             'da533d362314d028cf575128ace45b1781e39d9385478fd648f5e9bffffaf621'
             '2afaf966628550c1aa9d0b2ab9dbed4dade3c51479355e4e295cbe36497b7af2'
             'cbcd201aadb419aa9116417752700f9c336ec3103371d38a7f1acdfb0a44bf4e'
@@ -157,10 +157,13 @@ prepare() {
   # raster-space pinning, and the downsample policy applied to window-capture
   # mirrors). Upstream PR noctalia-dev/umbriel#575;
   # 0014-downsample-box.patch: flattened downstream stack adaptation. Re-cut
-  # 2026-11-06 on main@28de32d0 over 0011+0012+0013 to carry dMopp's ba92c1d3:
-  # the box now decodes each tap before averaging and re-encodes the result, so
-  # partially covered pixels keep their weight (passthrough passes average as
-  # gamma 2.2). Delta 25 files, +554/-35; sha256 92514f4a….
+  # 2026-11-08 on main@ad46c7d1 over 0011+0012+0013 to carry dMopp's ba92c1d3
+  # plus the round-2 review fixes: box_tf carries the pass's target curve so a
+  # linear target is not decoded as gamma 2.2, the clamp variant is picked only
+  # for a cropped box source, the box programs are freed, a sampling-only
+  # reload no longer rebuilds view chrome, capture mirrors repaint on the mode
+  # change, and the docs claim is scoped to the 4x4 grid. Delta 26 files,
+  # +638/-36; sha256 7ab7b227….
   # (Retire on merge: 0014 → PR #575, with its 0012 base → PR #573.)
   git apply -3 ../0014-downsample-box.patch
 

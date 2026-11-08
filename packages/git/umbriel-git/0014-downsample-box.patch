@@ -1,18 +1,18 @@
-From 9defa1285a59d268303588621c8990b7982634ae Mon Sep 17 00:00:00 2001
+From 68861bb086b3ba577bb6b19f000c6e2fcff5d930 Mon Sep 17 00:00:00 2001
 From: ZhangDM-520 <jixianqiang1540@gmail.com>
-Date: Fri, 6 Nov 2026 00:40:58 +0800
+Date: Sun, 8 Nov 2026 08:46:37 +0800
 Subject: [PATCH] Stack downstream downsample changes
 
-Flatten the existing 0014 stack on upstream 28de32d0 and average the box downsample in linear light.
+Flatten the existing 0014 stack on current main and carry the round-2 review fixes: box_tf for a linear target, the clamp restricted to cropped sources, freed box programs, the sampling reload kept out of view chrome, capture mirrors repainted, and the docs claim scoped.
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 ---
  docs/user/appearance.md                       |   4 +
  docs/user/outputs.md                          |   2 +-
- examples/config.toml                          |   5 +
- src/config/change.cpp                         |   3 +
+ examples/config.toml                          |   6 +
+ src/config/change.cpp                         |   5 +-
  src/config/change.h                           |   4 +
- src/config/config.h                           |   8 +
+ src/config/config.h                           |  17 ++
  src/config/fields_general.cpp                 |   8 +
  src/server/server.cpp                         |   2 +
  src/server/server.h                           |   4 +
@@ -21,22 +21,23 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
  src/view/view.cpp                             |   7 +
  src/view/view.h                               |   4 +
  tests/harness/checks/render/downsample_box.sh | 167 ++++++++++++++++++
- tests/unit/config_change.cpp                  |  10 ++
+ tests/unit/config_change.cpp                  |  14 ++
  tests/unit/config_load.cpp                    |  28 +++
  umbrielfx/include/umbrielfx/render/pass.h     |   5 +
- umbrielfx/include/umbrielfx/types/wlr_scene.h |  25 +++
+ umbrielfx/include/umbrielfx/types/wlr_scene.h |  27 +++
  .../internal/render/fx_renderer/fx_renderer.h |  12 ++
- .../internal/render/fx_renderer/shaders.h     |   8 +-
- umbrielfx/render/fx_renderer/fx_pass.c        |  46 ++++-
- umbrielfx/render/fx_renderer/fx_renderer.c    |  76 ++++++--
- umbrielfx/render/fx_renderer/shaders.c        |  12 +-
- umbrielfx/render/fx_renderer/shaders/tex.frag |  91 ++++++++--
- umbrielfx/types/scene/wlr_scene.c             |  30 +++-
- 25 files changed, 554 insertions(+), 35 deletions(-)
+ .../internal/render/fx_renderer/shaders.h     |   9 +-
+ umbrielfx/render/fx_renderer/fx_pass.c        |  52 +++++-
+ umbrielfx/render/fx_renderer/fx_renderer.c    |  88 +++++++--
+ umbrielfx/render/fx_renderer/shaders.c        |  13 +-
+ umbrielfx/render/fx_renderer/shaders/tex.frag | 113 ++++++++++--
+ umbrielfx/tests/capture_pacing.c              |  13 ++
+ umbrielfx/types/scene/wlr_scene.c             |  42 ++++-
+ 26 files changed, 638 insertions(+), 36 deletions(-)
  create mode 100755 tests/harness/checks/render/downsample_box.sh
 
 diff --git a/docs/user/appearance.md b/docs/user/appearance.md
-index 1146a02c..5766eec4 100644
+index 593d3213..39de77e2 100644
 --- a/docs/user/appearance.md
 +++ b/docs/user/appearance.md
 @@ -96,6 +96,7 @@ outer_border_width = 0
@@ -57,13 +58,13 @@ index 1146a02c..5766eec4 100644
  
  X11 bounding-shape cutouts show what is behind the window with either `opaque_fullscreen` setting.
  
-+`downsample` picks the sampling method whenever content shrinks: the [render_scale supersample](outputs.md#supersampling-with-render_scale) downsample, a window scaled down while it animates, or a thumbnail. `box` averages every source texel the destination pixel covers, which keeps text and fine detail crisp after supersampling; `bilinear` and `nearest` fetch a single texel per pixel and alias more. A reload applies the method immediately.
++`downsample` picks the sampling method whenever content shrinks: the [render_scale supersample](outputs.md#supersampling-with-render_scale) downsample, a window scaled down while it animates, or a thumbnail. `box` averages each destination pixel's source footprint on a fixed 4x4 grid: exact for integer ratios up to 4:1, every texel weighed up to 8:1, and above that some texels fall between taps. `bilinear` takes one interpolated sample per pixel and `nearest` the closest texel, so both alias more. A reload applies the method immediately, including to a capture already in progress.
 +
  Set `prefer_no_csd = false` to let newly connected applications draw their own decorations. Restart applications after changing it because decoration protocol availability is fixed when an application connects.
  
  Borders render outside window content and are included in layout spacing. `corner_radius = 0` keeps every contour square. A [window rule](window-rules.md#decoration) can override `border_width`, `outer_border_width`, and `corner_radius` for the windows it matches.
 diff --git a/docs/user/outputs.md b/docs/user/outputs.md
-index f90289ad..811db898 100644
+index f90289ad..70d56c0c 100644
 --- a/docs/user/outputs.md
 +++ b/docs/user/outputs.md
 @@ -133,7 +133,7 @@ Omit `position` to place outputs automatically from left to right. Explicitly po
@@ -71,39 +72,44 @@ index f90289ad..811db898 100644
  ### Supersampling with `render_scale`
  
 -`render_scale` separates what things look like from what Wayland clients render at, the way macOS handles HiDPI. With `scale = 1.35` and `render_scale = 2.0`, clients are asked to render at 2.0 and the compositor samples their buffers down to the output's `scale` raster, which smooths text and fine detail on low-ppi and non-RGB-subpixel panels. Logical geometry is unchanged: windows keep their `scale` sizes, and the output still advertises `scale` so client interfaces size as before.
-+`render_scale` separates what things look like from what Wayland clients render at, the way macOS handles HiDPI. With `scale = 1.35` and `render_scale = 2.0`, clients are asked to render at 2.0 and the compositor samples their buffers down to the output's `scale` raster, which smooths text and fine detail on low-ppi and non-RGB-subpixel panels. The sampling method is configurable (`appearance.downsample`): the default `box` averages every source texel the destination pixel covers. Logical geometry is unchanged: windows keep their `scale` sizes, and the output still advertises `scale` so client interfaces size as before.
++`render_scale` separates what things look like from what Wayland clients render at, the way macOS handles HiDPI. With `scale = 1.35` and `render_scale = 2.0`, clients are asked to render at 2.0 and the compositor samples their buffers down to the output's `scale` raster, which smooths text and fine detail on low-ppi and non-RGB-subpixel panels. The sampling method is configurable (`appearance.downsample`): the default `box` averages each destination pixel's source footprint. Logical geometry is unchanged: windows keep their `scale` sizes, and the output still advertises `scale` so client interfaces size as before.
  
  Native-resolution X11 applications use the physical output scale by default. To opt them into `render_scale`, see [`force_x11_supersample`](configuration.md#general).
  
 diff --git a/examples/config.toml b/examples/config.toml
-index e0f724f9..1f31751e 100644
+index 4bc9b30e..798d002e 100644
 --- a/examples/config.toml
 +++ b/examples/config.toml
-@@ -83,6 +83,11 @@ files = []
+@@ -83,6 +83,12 @@ files = []
  # Blur uses a smaller radius than the built-in default.
  # https://docs.noctalia.dev/umbriel/appearance/
  #
 +# [appearance]
-+# How content that shrinks is sampled: "box" averages the source texel
-+# footprint, "bilinear" and "nearest" fetch a single texel per pixel.
++# How content that shrinks is sampled: "box" averages each destination pixel's
++# source footprint, "bilinear" takes one interpolated sample per pixel, and
++# "nearest" the closest texel.
 +# downsample = "box"
 +
  [appearance.blur]
  radius = 3
  
 diff --git a/src/config/change.cpp b/src/config/change.cpp
-index 0f38b245..6933e559 100644
+index 4d7a6c23..708495f0 100644
 --- a/src/config/change.cpp
 +++ b/src/config/change.cpp
-@@ -246,6 +246,7 @@ namespace umbriel {
+@@ -247,9 +247,10 @@ namespace umbriel {
              || before.appearance.tabBar != after.appearance.tabBar
              || before.appearance.titleBar != after.appearance.titleBar,
          .sceneBlur = sceneBlur,
 +        .sceneDownsample = before.appearance.downsample != after.appearance.downsample,
          // [colors] owns the border, backdrop, insert-hint, and shadow colors, so
          // any color edit refreshes window chrome.
-         .viewChrome = before.appearance != after.appearance
-@@ -272,6 +273,7 @@ namespace umbriel {
+-        .viewChrome = before.appearance != after.appearance
++        .viewChrome = !before.appearance.chromeEquals(after.appearance)
+             || before.colors != after.colors
+             || before.windowRules != after.windowRules
+             || focusAppearance,
+@@ -273,6 +274,7 @@ namespace umbriel {
          .workspaceInventory = true,
          .workspaceLayout = true,
          .sceneBlur = true,
@@ -111,7 +117,7 @@ index 0f38b245..6933e559 100644
          .viewChrome = true,
          .layerEffects = true,
          .animation = true,
-@@ -384,6 +386,7 @@ namespace umbriel {
+@@ -385,6 +387,7 @@ namespace umbriel {
      add(workspaceInventory, "workspace inventory");
      add(workspaceLayout, "workspace layout");
      add(sceneBlur, "scene blur");
@@ -142,7 +148,7 @@ index 3d9806e1..2e1437f3 100644
            || layerEffects
            || animation
 diff --git a/src/config/config.h b/src/config/config.h
-index ad84ad7a..8c1ff6ec 100644
+index 9abda3dd..72587088 100644
 --- a/src/config/config.h
 +++ b/src/config/config.h
 @@ -35,6 +35,8 @@ namespace umbriel {
@@ -154,24 +160,35 @@ index ad84ad7a..8c1ff6ec 100644
    enum class TitleBarButtonGlyph : uint8_t { Always, Hover, Never };
  
    enum class ModifierKey {
-@@ -822,6 +824,12 @@ namespace umbriel {
+@@ -841,8 +843,23 @@ namespace umbriel {
        } tabBar;
        bool preferNoCsd = true;
  
 +      // Sampling method for sources the scene shrinks into their destination:
 +      // the render_scale supersample downsample, scaled-down windows, and
-+      // thumbnails. Box averages the source's texel footprint; the others
-+      // point- or linear-sample a single texel.
++      // thumbnails. Box averages the source's texel footprint on a fixed 4x4
++      // grid; the others take one sample per pixel.
 +      DownsampleMode downsample = DownsampleMode::Box;
 +
        int totalBorderWidth() const { return borderWidth + outerBorderWidth; }
        bool operator==(const Appearance&) const = default;
++
++      // Whether a change to the decoration itself separates these two: the
++      // sampling method is a scene policy, refreshed by a frame, and must not
++      // read as a chrome rebuild that dismisses the overview.
++      bool chromeEquals(const Appearance& other) const {
++        Appearance lhs = *this;
++        lhs.downsample = other.downsample;
++        return lhs == other;
++      }
      } appearance;
+ 
+     struct Animation {
 diff --git a/src/config/fields_general.cpp b/src/config/fields_general.cpp
-index 40e9e033..d2e37653 100644
+index 78dc3d92..782f6f00 100644
 --- a/src/config/fields_general.cpp
 +++ b/src/config/fields_general.cpp
-@@ -182,6 +182,14 @@ namespace umbriel {
+@@ -185,6 +185,14 @@ namespace umbriel {
            integer("outer_border_width", 0, 100, &A::outerBorderWidth),
            integer("corner_radius", 0, 100, &A::cornerRadius),
            real("drag_opacity", 0.0, 1.0, &A::dragOpacity),
@@ -187,7 +204,7 @@ index 40e9e033..d2e37653 100644
            boolean("opaque_fullscreen", &A::opaqueFullscreen),
            registry::table("blur", &A::blur, blur),
 diff --git a/src/server/server.cpp b/src/server/server.cpp
-index a1c75819..8be9ae1d 100644
+index ea10abd9..fa95b074 100644
 --- a/src/server/server.cpp
 +++ b/src/server/server.cpp
 @@ -719,6 +719,8 @@ namespace umbriel {
@@ -200,10 +217,10 @@ index a1c75819..8be9ae1d 100644
        wlr_scene_set_linux_dmabuf_v1(m_scene, linuxDmabuf);
      }
 diff --git a/src/server/server.h b/src/server/server.h
-index fb5d1a1f..cfca808e 100644
+index eeed958a..4b01bd9f 100644
 --- a/src/server/server.h
 +++ b/src/server/server.h
-@@ -435,6 +435,10 @@ namespace umbriel {
+@@ -439,6 +439,10 @@ namespace umbriel {
      // Re-send every surface's output scale (views, layer surfaces, popups). Run after anything that changes an output's
      // scale or moves surfaces between outputs outside setWorkspace; the notifies dedup, so extra calls are cheap.
      void refreshSurfaceScales();
@@ -215,10 +232,10 @@ index fb5d1a1f..cfca808e 100644
      void refreshOutputPolicies();
      wlr_output* preferredOutput() const;
 diff --git a/src/server/server_events.cpp b/src/server/server_events.cpp
-index d374812b..214b9d06 100644
+index 3b63e2e5..cf6ce6df 100644
 --- a/src/server/server_events.cpp
 +++ b/src/server/server_events.cpp
-@@ -805,6 +805,12 @@ namespace umbriel {
+@@ -809,6 +809,12 @@ namespace umbriel {
          output->markDirty(Dirty::LayerArrange);
        }
      }
@@ -265,7 +282,7 @@ index 3525bb25..53d09410 100644
      for (const auto& output : m_outputs) {
        output->updateVrr();
 diff --git a/src/view/view.cpp b/src/view/view.cpp
-index 0a78c4b9..e7de53b3 100644
+index d6f70880..d8579871 100644
 --- a/src/view/view.cpp
 +++ b/src/view/view.cpp
 @@ -199,6 +199,7 @@ namespace umbriel {
@@ -290,10 +307,10 @@ index 0a78c4b9..e7de53b3 100644
      moveToWorkspace(workspace, attachToLayout, LayoutAttachOrigin::ExistingView);
    }
 diff --git a/src/view/view.h b/src/view/view.h
-index 5033af9b..a7265b2c 100644
+index 40036208..bfdd11b4 100644
 --- a/src/view/view.h
 +++ b/src/view/view.h
-@@ -140,6 +140,10 @@ namespace umbriel {
+@@ -141,6 +141,10 @@ namespace umbriel {
      wlr_scene_tree* captureTree() const;
      bool captureBlocked() const { return m_captureBlocked; }
      void refreshCaptureProtection();
@@ -306,7 +323,7 @@ index 5033af9b..a7265b2c 100644
      pid_t pid() const;
 diff --git a/tests/harness/checks/render/downsample_box.sh b/tests/harness/checks/render/downsample_box.sh
 new file mode 100755
-index 00000000..4ceac58c
+index 00000000..8f9fe9dc
 --- /dev/null
 +++ b/tests/harness/checks/render/downsample_box.sh
 @@ -0,0 +1,167 @@
@@ -316,8 +333,8 @@ index 00000000..4ceac58c
 +# alternating per-texel columns, shrunk 3:1, makes the methods distinguishable
 +# by pixel: box averages the fragment's whole texel footprint and preserves the
 +# pattern's 2:1 coverage ratio per output pixel, while bilinear point-samples
-+# and invents an even 50/50 mix. The method is a scene policy, so flipping it
-+# on a reload must re-render.
++# and reports one texel pure. The method is a scene policy, so flipping it on a
++# reload must re-render.
 +set -euo pipefail
 +source "$UMBRIEL_HARNESS_LIB"
 +
@@ -478,10 +495,10 @@ index 00000000..4ceac58c
 +
 +echo "capped box grid spans the full minification footprint"
 diff --git a/tests/unit/config_change.cpp b/tests/unit/config_change.cpp
-index ab1c1738..87071958 100644
+index d034a4fb..0e090bbc 100644
 --- a/tests/unit/config_change.cpp
 +++ b/tests/unit/config_change.cpp
-@@ -397,6 +397,15 @@ UMBRIEL_TEST(identicalConfigsProduceNoRuntimeEffects) {
+@@ -397,6 +397,19 @@ UMBRIEL_TEST(identicalConfigsProduceNoRuntimeEffects) {
    CHECK(!ConfigEffects::between(before, after).any());
  }
  
@@ -491,13 +508,17 @@ index ab1c1738..87071958 100644
 +  after.appearance.downsample = umbriel::DownsampleMode::Nearest;
 +  const ConfigEffects effects = ConfigEffects::between(before, after);
 +  CHECK(effects.sceneDownsample);
++  // A sampling reload repaints; it must not read as a chrome rebuild, which
++  // would refresh every decoration and close an open overview.
++  CHECK(!effects.viewChrome);
++  CHECK(!effects.invalidatesOverview());
 +  CHECK(!ConfigEffects::between(before, before).sceneDownsample);
 +}
 +
  UMBRIEL_TEST(firstLoadInvalidatesEveryRuntimeConsumer) {
    const ConfigEffects effects = ConfigEffects::everything();
    CHECK(effects.outputState);
-@@ -405,6 +414,7 @@ UMBRIEL_TEST(firstLoadInvalidatesEveryRuntimeConsumer) {
+@@ -405,6 +418,7 @@ UMBRIEL_TEST(firstLoadInvalidatesEveryRuntimeConsumer) {
    CHECK(effects.workspaceInventory);
    CHECK(effects.workspaceLayout);
    CHECK(effects.sceneBlur);
@@ -506,7 +527,7 @@ index ab1c1738..87071958 100644
    CHECK(effects.layerEffects);
    CHECK(effects.animation);
 diff --git a/tests/unit/config_load.cpp b/tests/unit/config_load.cpp
-index e8d2555e..e9567d8f 100644
+index eb82cca3..628cec6a 100644
 --- a/tests/unit/config_load.cpp
 +++ b/tests/unit/config_load.cpp
 @@ -829,6 +829,34 @@ render_scale = 1.0
@@ -561,7 +582,7 @@ index 33e4b0db..00f3a7d5 100644
  
  struct fx_render_rect_options {
 diff --git a/umbrielfx/include/umbrielfx/types/wlr_scene.h b/umbrielfx/include/umbrielfx/types/wlr_scene.h
-index 6e335661..82c0a2f3 100644
+index 806f5dd6..dffe047f 100644
 --- a/umbrielfx/include/umbrielfx/types/wlr_scene.h
 +++ b/umbrielfx/include/umbrielfx/types/wlr_scene.h
 @@ -122,6 +122,19 @@ enum wlr_scene_direct_scanout_status {
@@ -595,13 +616,15 @@ index 6e335661..82c0a2f3 100644
    } WLR_PRIVATE;
  };
  
-@@ -601,6 +618,14 @@ void wlr_scene_set_preferred_scale_provider(
+@@ -610,6 +627,16 @@ void wlr_scene_set_preferred_scale_provider(
      void* data
  );
  
 +/**
 + * Chooses how minified scene buffers are sampled. Sources that are not
 + * minified and buffers that pin WLR_SCALE_FILTER_NEAREST are unaffected.
++ * Changing the mode damages every output of the scene, because a mirror such
++ * as a window-capture source renders only when its scene has damage.
 + * Defaults to WLR_SCENE_DOWNSAMPLE_BILINEAR in the library; Umbriel's shell
 + * sets the mode from `appearance.downsample`, which defaults to box.
 + */
@@ -634,21 +657,22 @@ index 3d64eae0..c0a5d19f 100644
  
      struct box_shadow_shader box_shadow;
 diff --git a/umbrielfx/internal/render/fx_renderer/shaders.h b/umbrielfx/internal/render/fx_renderer/shaders.h
-index 1b3334a2..c0692d7d 100644
+index 40d6ec40..9af22119 100644
 --- a/umbrielfx/internal/render/fx_renderer/shaders.h
 +++ b/umbrielfx/internal/render/fx_renderer/shaders.h
-@@ -148,6 +148,10 @@ struct tex_shader {
+@@ -150,6 +150,11 @@ struct tex_shader {
    GLint discard_transparent;
    GLint sample_bounds;
  
 +  // Only used for the downsample (box) variants
 +  GLint taps;
 +  GLint tap_step;
++  GLint box_tf;
 +
    // Only used for the effects shader
    struct {
      GLint size;
-@@ -160,7 +164,9 @@ struct tex_shader {
+@@ -163,7 +168,9 @@ struct tex_shader {
    } effects;
  };
  
@@ -660,10 +684,10 @@ index 1b3334a2..c0692d7d 100644
  struct output_shader {
    GLuint program;
 diff --git a/umbrielfx/render/fx_renderer/fx_pass.c b/umbrielfx/render/fx_renderer/fx_pass.c
-index e74cb674..038b4243 100644
+index cae93859..d1c5e7dc 100644
 --- a/umbrielfx/render/fx_renderer/fx_pass.c
 +++ b/umbrielfx/render/fx_renderer/fx_pass.c
-@@ -1936,22 +1936,35 @@ void fx_render_pass_add_texture(struct fx_gles_render_pass* pass, const struct f
+@@ -1945,22 +1945,35 @@ void fx_render_pass_add_texture(struct fx_gles_render_pass* pass, const struct f
    // the same fetch as before the clamp existed, so a driver only ever sees
    // the extra uniform on fractionally cropped surfaces.
    bool use_clamp = !wlr_fbox_empty(&fx_options->sample_box);
@@ -705,7 +729,7 @@ index e74cb674..038b4243 100644
      break;
    default:
      abort();
-@@ -1963,6 +1976,23 @@ void fx_render_pass_add_texture(struct fx_gles_render_pass* pass, const struct f
+@@ -1972,6 +1985,23 @@ void fx_render_pass_add_texture(struct fx_gles_render_pass* pass, const struct f
    wlr_render_texture_options_get_dst_box(options, &dst_box);
    float alpha = wlr_render_texture_options_get_alpha(options);
  
@@ -729,7 +753,7 @@ index e74cb674..038b4243 100644
    const struct wlr_box* clip_box = &dst_box;
    if (!wlr_box_empty(fx_options->clip_box)) {
      clip_box = fx_options->clip_box;
-@@ -2054,6 +2084,10 @@ void fx_render_pass_add_texture(struct fx_gles_render_pass* pass, const struct f
+@@ -2063,6 +2093,10 @@ void fx_render_pass_add_texture(struct fx_gles_render_pass* pass, const struct f
  
    glUniform1i(shader->tex, 0);
    glUniform1f(shader->alpha, alpha);
@@ -740,11 +764,43 @@ index e74cb674..038b4243 100644
  
    struct wlr_color_primaries primaries_srgb;
    wlr_color_primaries_from_named(&primaries_srgb, WLR_COLOR_NAMED_PRIMARIES_SRGB);
+@@ -2096,6 +2130,12 @@ void fx_render_pass_add_texture(struct fx_gles_render_pass* pass, const struct f
+       fx_options->luminances != NULL ? fx_options->luminances->max : 100.0F
+   );
+   glUniform1i(shader->target_tf, color_passthrough ? 0 : target_tf);
++  if (use_box) {
++    // A passthrough pass converts nothing, so its content already sits in the pass's target space: encoded for an
++    // SDR swapchain, linear behind colour management. The box average needs that curve, which the collapsed
++    // source_tf no longer carries.
++    glUniform1i(shader->box_tf, color_passthrough ? (GLint)target_tf : 0);
++  }
+   glUniform1i(shader->map_hdr_to_sdr, fx_options->map_hdr_to_sdr);
+ 
+   glUniform1f(shader->discard_transparent, fx_options->discard_transparent);
 diff --git a/umbrielfx/render/fx_renderer/fx_renderer.c b/umbrielfx/render/fx_renderer/fx_renderer.c
-index 9f0f98df..9bf80f48 100644
+index 9f0f98df..fe109e6f 100644
 --- a/umbrielfx/render/fx_renderer/fx_renderer.c
 +++ b/umbrielfx/render/fx_renderer/fx_renderer.c
-@@ -477,58 +477,110 @@ static bool link_shaders(struct fx_renderer* renderer) {
+@@ -102,6 +102,18 @@ static inline void free_shaders(struct fx_renderer* renderer) {
+   glDeleteProgram(renderer->shaders.tex_clamp_effects_rgba.program);
+   glDeleteProgram(renderer->shaders.tex_clamp_effects_rgbx.program);
+   glDeleteProgram(renderer->shaders.tex_clamp_effects_ext.program);
++  glDeleteProgram(renderer->shaders.tex_box_rgba.program);
++  glDeleteProgram(renderer->shaders.tex_box_rgbx.program);
++  glDeleteProgram(renderer->shaders.tex_box_ext.program);
++  glDeleteProgram(renderer->shaders.tex_box_effects_rgba.program);
++  glDeleteProgram(renderer->shaders.tex_box_effects_rgbx.program);
++  glDeleteProgram(renderer->shaders.tex_box_effects_ext.program);
++  glDeleteProgram(renderer->shaders.tex_box_clamp_rgba.program);
++  glDeleteProgram(renderer->shaders.tex_box_clamp_rgbx.program);
++  glDeleteProgram(renderer->shaders.tex_box_clamp_ext.program);
++  glDeleteProgram(renderer->shaders.tex_box_clamp_effects_rgba.program);
++  glDeleteProgram(renderer->shaders.tex_box_clamp_effects_rgbx.program);
++  glDeleteProgram(renderer->shaders.tex_box_clamp_effects_ext.program);
+   glDeleteProgram(renderer->shaders.output.program);
+   glDeleteProgram(renderer->shaders.box_shadow.program);
+   glDeleteProgram(renderer->shaders.blur1.program);
+@@ -477,58 +489,110 @@ static bool link_shaders(struct fx_renderer* renderer) {
    }
  
    // Basic fragment shaders
@@ -868,10 +924,10 @@ index 9f0f98df..9bf80f48 100644
      wlr_log(WLR_ERROR, "Could not link output shader");
      goto error;
 diff --git a/umbrielfx/render/fx_renderer/shaders.c b/umbrielfx/render/fx_renderer/shaders.c
-index 0ef2b138..cf73ce25 100644
+index f454bf1b..02eec553 100644
 --- a/umbrielfx/render/fx_renderer/shaders.c
 +++ b/umbrielfx/render/fx_renderer/shaders.c
-@@ -273,10 +273,12 @@ bool link_quad_grad_round_program(struct quad_grad_round_shader* shader, int max
+@@ -275,10 +275,12 @@ bool link_quad_grad_round_program(struct quad_grad_round_shader* shader, int max
    return true;
  }
  
@@ -888,17 +944,18 @@ index 0ef2b138..cf73ce25 100644
    snprintf(frag_src, sizeof(frag_src), "%s\n%s\n", frag_src_part, effects ? corner_alpha_frag_src : "");
  
    GLuint prog;
-@@ -299,6 +301,8 @@ bool link_tex_program(struct tex_shader* shader, enum fx_tex_shader_source sourc
+@@ -301,6 +303,9 @@ bool link_tex_program(struct tex_shader* shader, enum fx_tex_shader_source sourc
  
    shader->discard_transparent = glGetUniformLocation(prog, "discard_transparent");
    shader->sample_bounds = sample_clamp ? glGetUniformLocation(prog, "sample_bounds") : -1;
 +  shader->taps = downsample ? glGetUniformLocation(prog, "taps") : -1;
 +  shader->tap_step = downsample ? glGetUniformLocation(prog, "tap_step") : -1;
++  shader->box_tf = downsample ? glGetUniformLocation(prog, "box_tf") : -1;
  
    if (!effects) {
      return true;
 diff --git a/umbrielfx/render/fx_renderer/shaders/tex.frag b/umbrielfx/render/fx_renderer/shaders/tex.frag
-index 22e254da..0918f609 100644
+index 1ef703f7..85d280dd 100644
 --- a/umbrielfx/render/fx_renderer/shaders/tex.frag
 +++ b/umbrielfx/render/fx_renderer/shaders/tex.frag
 @@ -1,12 +1,13 @@
@@ -916,7 +973,7 @@ index 22e254da..0918f609 100644
  #error "Missing shader preamble"
  #endif
  
-@@ -68,15 +69,27 @@ uniform float discard_transparent;
+@@ -69,15 +70,30 @@ uniform float discard_transparent;
  // every other draw keeps the exact fetch drivers already handle well.
  uniform vec4 sample_bounds;
  #define SAMPLE_UV clamp(v_texcoord, sample_bounds.xy, sample_bounds.zw)
@@ -935,6 +992,9 @@ index 22e254da..0918f609 100644
 +// pass derives from the minification ratio (clamped to 4).
 +uniform vec2 taps;
 +uniform vec2 tap_step;
++// The curve a passthrough pass's content is in (0 when the pass converts). A passthrough draw converts nothing, so
++// `source_tf` says the pass is passthrough and `box_tf` says whether its content is encoded or already linear.
++uniform int box_tf;
 +#endif
 +
 +vec4 sample_texel(vec2 uv) {
@@ -947,7 +1007,7 @@ index 22e254da..0918f609 100644
  #endif
  }
  
-@@ -131,11 +144,9 @@ vec3 hdr_to_sdr(vec3 color) {
+@@ -132,11 +148,9 @@ vec3 hdr_to_sdr(vec3 color) {
    return color * (mapped_peak / peak);
  }
  
@@ -962,7 +1022,7 @@ index 22e254da..0918f609 100644
    float color_alpha = color.a;
    vec3 rgb = color_alpha == 0.0 ? vec3(0.0) : color.rgb / color_alpha;
    // Extended-linear negative channels carry colors outside the source gamut.
-@@ -154,6 +165,14 @@ vec4 convert_color(vec4 color) {
+@@ -155,6 +169,14 @@ vec4 convert_color(vec4 color) {
      rgb = bt1886_color_to_linear(rgb);
    }
  
@@ -977,7 +1037,7 @@ index 22e254da..0918f609 100644
    rgb *= lum_multiplier;
    rgb = primaries_matrix * rgb;
    if (map_hdr_to_sdr) {
-@@ -168,6 +187,58 @@ vec4 convert_color(vec4 color) {
+@@ -169,6 +191,77 @@ vec4 convert_color(vec4 color) {
    return vec4(rgb * color_alpha, color_alpha);
  }
  
@@ -989,24 +1049,43 @@ index 22e254da..0918f609 100644
 +}
 +
 +#if DOWNSAMPLE
-+// Passthrough passes have no transfer function to decode with: treat their
-+// content as gamma 2.2, like the default sdr_transfer, so the box still
-+// averages light instead of encoded values.
++// The box averages in linear light, so a passthrough pass still needs a curve: its content is already in the pass's
++// own target space, which `box_tf` names. An encoded target (an SDR swapchain) needs its curve; a linear one
++// (extended linear, behind colour management) needs none, because treating linear values as encoded over-brightens
++// every mixed pixel.
++vec4 passthrough_to_linear(vec4 color) {
++  float color_alpha = color.a;
++  vec3 rgb = color_alpha == 0.0 ? vec3(0.0) : color.rgb / color_alpha;
++  if (box_tf == TRANSFER_FUNCTION_SRGB) {
++    rgb = srgb_color_to_linear(max(rgb, vec3(0.0)));
++  } else if (box_tf == TRANSFER_FUNCTION_GAMMA22) {
++    rgb = pow(max(rgb, vec3(0.0)), vec3(2.2));
++  }
++  return vec4(rgb * color_alpha, color_alpha);
++}
++
++vec4 linear_to_passthrough(vec4 color) {
++  float color_alpha = color.a;
++  vec3 rgb = color_alpha == 0.0 ? vec3(0.0) : color.rgb / color_alpha;
++  if (box_tf == TRANSFER_FUNCTION_SRGB) {
++    rgb = linear_color_to_srgb(max(rgb, vec3(0.0)));
++  } else if (box_tf == TRANSFER_FUNCTION_GAMMA22) {
++    rgb = linear_color_to_gamma22(rgb);
++  }
++  return vec4(rgb * color_alpha, color_alpha);
++}
++
 +vec4 sample_linear(vec2 uv) {
 +  vec4 color = sample_texel(uv);
 +  if (source_tf == TRANSFER_FUNCTION_PASSTHROUGH) {
-+    float color_alpha = color.a;
-+    vec3 rgb = color_alpha == 0.0 ? vec3(0.0) : max(color.rgb / color_alpha, vec3(0.0));
-+    return vec4(pow(rgb, vec3(2.2)) * color_alpha, color_alpha);
++    return passthrough_to_linear(color);
 +  }
 +  return decode_color(color);
 +}
 +
 +vec4 encode_linear(vec4 color) {
 +  if (source_tf == TRANSFER_FUNCTION_PASSTHROUGH) {
-+    float color_alpha = color.a;
-+    vec3 rgb = color_alpha == 0.0 ? vec3(0.0) : color.rgb / color_alpha;
-+    return vec4(linear_color_to_gamma22(rgb) * color_alpha, color_alpha);
++    return linear_to_passthrough(color);
 +  }
 +  return encode_color(color);
 +}
@@ -1036,7 +1115,7 @@ index 22e254da..0918f609 100644
  #if EFFECTS
  float corner_alpha(
      vec2 size, vec2 position, bool is_cutout, float radius_tl, float radius_tr, float radius_bl, float radius_br
-@@ -175,7 +246,7 @@ float corner_alpha(
+@@ -176,7 +269,7 @@ float corner_alpha(
  #endif
  
  void main() {
@@ -1045,11 +1124,35 @@ index 22e254da..0918f609 100644
  #if EFFECTS
    float quad_corner_alpha = corner_alpha(
        size - 0.5, position + 0.25, false, radius_top_left, radius_top_right, radius_bottom_left, radius_bottom_right
+diff --git a/umbrielfx/tests/capture_pacing.c b/umbrielfx/tests/capture_pacing.c
+index 3cf119d5..967994fd 100644
+--- a/umbrielfx/tests/capture_pacing.c
++++ b/umbrielfx/tests/capture_pacing.c
+@@ -137,6 +137,19 @@ int main(void) {
+   extents = pixman_region32_extents(&capture_output->pending_commit_damage);
+   CHECK((extents->x2 - extents->x1) * (extents->y2 - extents->y1) == 24 * 24);
+   capture->transform = WL_OUTPUT_TRANSFORM_NORMAL;
++  // A sampling-policy change must damage the scene's own outputs: a capture
++  // source renders only when its scene output has damage, so a live mirror
++  // would otherwise keep the old method until the client's next frame.
++  pixman_region32_clear(&capture_output->pending_commit_damage);
++  pixman_region32_clear(&desktop_output->pending_commit_damage);
++  wlr_scene_set_downsample_mode(mirror, WLR_SCENE_DOWNSAMPLE_BOX);
++  CHECK(!pixman_region32_empty(&capture_output->pending_commit_damage));
++  CHECK(pixman_region32_empty(&desktop_output->pending_commit_damage));
++  // Setting the mode the scene already holds changes nothing, so it must not
++  // ask for a repaint.
++  pixman_region32_clear(&capture_output->pending_commit_damage);
++  wlr_scene_set_downsample_mode(mirror, WLR_SCENE_DOWNSAMPLE_BOX);
++  CHECK(pixman_region32_empty(&capture_output->pending_commit_damage));
+ 
+   wl_signal_emit_mutable(&surface.events.destroy, &surface);
+   wlr_scene_node_destroy(&desktop->tree.node);
 diff --git a/umbrielfx/types/scene/wlr_scene.c b/umbrielfx/types/scene/wlr_scene.c
-index 58d93566..5ddcb2ce 100644
+index c50409fc..f42b1b85 100644
 --- a/umbrielfx/types/scene/wlr_scene.c
 +++ b/umbrielfx/types/scene/wlr_scene.c
-@@ -3605,6 +3605,23 @@ static void scene_entry_render(struct render_list_entry* entry, const struct ren
+@@ -3743,6 +3743,23 @@ static void scene_entry_render(struct render_list_entry* entry, const struct ren
        snapped_src_box.height = src_dst_height;
      }
  
@@ -1073,20 +1176,23 @@ index 58d93566..5ddcb2ce 100644
      // Adopting a one-texel-larger destination extent deliberately reaches
      // past the source region so that sampling stays exactly texel-centered
      // and the final row or column duplicates the edge texel. Whether that
-@@ -3624,6 +3641,12 @@ static void scene_entry_render(struct render_list_entry* entry, const struct ren
+@@ -3762,6 +3779,15 @@ static void scene_entry_render(struct render_list_entry* entry, const struct ren
            || (snapped_src_box.y + snapped_src_box.height > sample_box.y + sample_box.height
                && sample_box.y + sample_box.height < texture->height);
      }
 +    if (!crosses_crop_edge) {
 +      // Box taps at non-integer ratios reach up to half a texel past the
 +      // single-tap footprint, so a cropped minified source needs the clamp
-+      // for its whole footprint too.
-+      crosses_crop_edge = downsample_box && !wlr_fbox_empty(&sample_box);
++      // for its whole footprint too. A whole-buffer source does not: taps that
++      // leave it land in the texture's own edge, which GL_CLAMP_TO_EDGE
++      // already duplicates, and the clamp variant on every minified draw is
++      // the configuration that flickered on NVIDIA.
++      crosses_crop_edge = downsample_box && !wlr_fbox_empty(&scene_buffer->src_box);
 +    }
      if (!crosses_crop_edge) {
        sample_box = (struct wlr_fbox){0};
      }
-@@ -3637,7 +3660,7 @@ static void scene_entry_render(struct render_list_entry* entry, const struct ren
+@@ -3775,7 +3801,7 @@ static void scene_entry_render(struct render_list_entry* entry, const struct ren
                  .transform = transform,
                  .clip = &render_region, // Render with the smaller region, clipping CSD
                  .alpha = &scene_buffer->opacity,
@@ -1095,7 +1201,7 @@ index 58d93566..5ddcb2ce 100644
                  .blend_mode = !data->output->scene->calculate_visibility || !pixman_region32_empty(&opaque)
                      ? WLR_RENDER_BLEND_MODE_PREMULTIPLIED
                      : WLR_RENDER_BLEND_MODE_NONE,
-@@ -3653,6 +3676,7 @@ static void scene_entry_render(struct render_list_entry* entry, const struct ren
+@@ -3791,6 +3817,7 @@ static void scene_entry_render(struct render_list_entry* entry, const struct ren
          .corners = fx_corner_radii_scale(buffer_corners, data->scale),
          .clipped_region = {0},
          .sample_box = sample_box,
@@ -1103,12 +1209,21 @@ index 58d93566..5ddcb2ce 100644
          .luminances = scene_buffer->luminances.reference > 0.0f ? &scene_buffer->luminances : NULL,
          .map_hdr_to_sdr = !data->hdr
              && (source_tf == WLR_COLOR_TRANSFER_FUNCTION_ST2084_PQ
-@@ -4414,6 +4438,10 @@ void wlr_scene_set_preferred_scale_provider(
+@@ -4564,6 +4591,19 @@ void wlr_scene_set_preferred_scale_provider(
    scene->preferred_scale_provider_data = data;
  }
  
 +void wlr_scene_set_downsample_mode(struct wlr_scene* scene, enum wlr_scene_downsample_mode mode) {
++  if (scene->downsample_mode == mode) {
++    return;
++  }
 +  scene->downsample_mode = mode;
++
++  // The choice changes how every output of this scene builds its next frame,
++  // and a mirror's last frame is not otherwise invalidated: a window-capture
++  // source renders only when its scene output has damage.
++  struct wlr_scene_output* scene_output;
++  wl_list_for_each(scene_output, &scene->outputs, link) { scene_output_damage_whole(scene_output); }
 +}
 +
  static void scene_output_handle_destroy(struct wlr_addon* addon) {
