@@ -9,7 +9,7 @@ source "$startdir/../../../lib/pgo.sh"
 pkgname=umbriel-git
 _pkgname=umbriel
 pkgver=0.1.0.r1540.ad46c7d
-pkgrel=7
+pkgrel=8
 epoch=1
 pkgdesc='A Wayland compositor built on wlroots'
 arch=('x86_64' 'aarch64')
@@ -68,7 +68,7 @@ source=("${_pkgname}::git+${url}.git#branch=main"
 sha256sums=('SKIP'
             '797d118d903858403e3ea4e8de25567968d85118d928ad208c27225c1199cc3c'
             '36442c0a3d52d421b94134fb81123155169d2cc43bde14d070e7d98c36cd068b'
-            '523a2ccfb8b760dd40a0302b4f58fecd679b413f4bef89706bc20d45c8d02ad7'
+            '772767efc147758f65a90de0564038ac7589755ad4ef8e13b2d4119f5369d819'
             '99ae6cbc53708c78e4dd7fc0fb19507ac6db4e1f2a873ff185a106225d6564e5'
             'da533d362314d028cf575128ace45b1781e39d9385478fd648f5e9bffffaf621'
             '2afaf966628550c1aa9d0b2ab9dbed4dade3c51479355e4e295cbe36497b7af2'
@@ -157,8 +157,8 @@ prepare() {
   # the per-client budget is pruned when its wl_client goes away, only exactly
   # representable transfer curves (sRGB, gamma 2.2) are accepted for imported
   # profiles and `set_tf_power`, profiles whose RGB TRCs differ are refused, and
-  # the user docs split from the design notes. Delta 44 files, +6177/-108;
-  # sha256 523a2ccf…. (Retire on merge.)
+  # the user docs split from the design notes. Delta 44 files, +6094/-108;
+  # sha256 772767ef…. (Retire on merge.)
   git apply -3 ../0013-icc-gamut.patch
 
   # [output] downsample texel footprint: the capped-downsample pass averages
