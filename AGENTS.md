@@ -789,64 +789,15 @@ split.
 
 ## 6 · Queued
 
-- **Wave freshness gate (2026-11-01).** `gsa-graph`/`gsa-sched` wave members
-  must gate on binpkg-index freshness. Blocked on: the `-O3` restart finishing.
-- **Toolchain marker ignores flag changes (2026-11-01, CFLAGS incident).**
-  Extend the GCC identity marker with a flags digest (or add an `-M`
-  cache-sweep seam); until then an operator MUST wipe
-  `<build_dir>/{build,pkg,tmp}` after a flag edit. Blocked on: an owner call on
-  digest versus sweep.
-- **Snapshot-pin expansion, `-git` → `-snapshot` (2026-11-01).** Owner
-  decided, implementation deferred; the `-Sy` "last commit ≤ Monday 00:00Z"
-  provider is engine work and must land LAST. Blocked on: the rebuild-campaign
-  goal and the recipe half landing first.
-- **`--skip` version-keyed local claim churns fast-VCS recipes (2026-10-18).**
-  `gsa-recipe::freshness`, contract-adjacent (§B.8). Blocked on: deciding the
-  semantics before coding, then a `skip-upstream.sh` scenario.
-- **"One-time clean" prints per recipe per invocation (2026-10-18).** The
-  prep-phase message fires dozens of times per run; find the trigger and make
-  it fire once. Blocked on: nothing but a repro.
-- **Freshness-gate `-S` sync prep (2026-10-18).** `-S` re-runs the provider
-  sync pass; skip already-anchored recipes via a `recipes.last-fetch` stamp
-  instead of `--no-sync`. Blocked on: nothing.
-- **Pre-install package-internal NEEDED probe (2026-10-07).** `gsa-install`
-  gate class (§E.3): `readelf -d` the staged payload and refuse
-  self-inconsistent sonames; fixture through `--install-decide`. Blocked on:
-  nothing.
-- **ABI-batch install deferral (2026-10-07).** Owner decision on design — (a)
-  a staged anchor, (b) SONAME coexistence, (c) status quo; a plain deferral is
-  unsound. Blocked on: the owner's choice, then `--install-decide` fixtures and
-  a record row.
-- **Fixture-safe pacman lock preflight (2026-10-06).** Give fixtures a
-  `pacman-conf` stub whose DBPath is workspace-local — an owner-blessed stub,
-  not a builder knob. Blocked on: nothing (the idiom is blessed).
-- **Swap-drift owner calls (2026-10-06).** Keep the soname-drift lint
-  symmetric or narrow it to drop-only; then dispose of the 18 host drift rows
-  as recipe fixes or retired debt. Blocked on: the owner's call.
-- **version-sync versus pkgrel rebuild triggers (2026-10-04).** Sync resets
-  `pkgrel=1` while fixture pins demand `pkgrel >= 2`: teach sync to preserve
-  trigger bumps, or re-express the pins as content checks. Blocked on: a
-  decision, then the fixture rewrite.
-- **ABI provide-refusal blind spot (2026-10-06, stock half fixed).** Decide
-  whether the stock-pinner check also names workspace exact pinners
-  (transaction coverage), or in-run repair requires a bare pin. Blocked on: the
-  owner's decision.
-- **rustc sanity probe misses non-Rust recipes that compile Rust
-  (2026-10-06).** The `--allow-broken-rustc` probe fires only for the Rust
-  family; widen it to rustc-in-makedepends or once per run. Blocked on: the
-  fixture-pinned probe seam.
-- **The 2026-09-01 unclean-shutdown cluster is still unexplained
-  (host-class).** `last -x` over the whole wtmp shows ~23 unclean shutdowns;
-  the first four sit inside 27 minutes of the first `ryzenadj` +
-  `ryzen_smu-dkms-git` install and predate `scx-scheds-git`, so the
-  CVE-2026-90432 freeze class cannot explain them. Prime suspect is the
-  per-login `ryzenadj` undervolt: its `--set-coper` half cannot be read back
-  (CO is not readable) and the login script discards `ryzenadj`'s exit
-  status. All AER counters are zero on the NVMe device and its root port, so
-  the link-fault lead is absence of evidence. The one full-length rebuild
-  that passed (Tctl 91 °C) ran with sched_ext unloaded, so it is not a
-  control. Blocked on: a control run with CO disabled and the exit status
-  recorded.
+- **Snapshot-pin expansion, `-git` → `-snapshot` (IN PROGRESS, opened
+  2026-11-09).** Scope is `@core`/`@build-tools`: 113 floating `-git` recipes
+  become `#commit=`-pinned snapshots (`#commit=` = last commit at or before
+  Monday 00:00 UTC) and are renamed `-git` → `-snapshot` with a permanent
+  versioned `provides=<old-name>`, so pacman's dependency graph never sees the
+  move. `gsa-pm` stays exempt (the engine may free-track). The `-Sy`
+  "last commit ≤ Monday 00:00Z" version-sync provider is engine work and lands
+  LAST. Reconciliation and wave plan: the recipe repository's
+  `docs/snapshot-expansion.md`. Blocked on: nothing — wave (a) is ready.
 
 ## 7 · Environment and shell boundaries
 
