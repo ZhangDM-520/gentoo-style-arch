@@ -789,15 +789,17 @@ split.
 
 ## 6 · Queued
 
-- **Snapshot-pin expansion, `-git` → `-snapshot` (IN PROGRESS, opened
-  2026-11-09).** Scope is `@core`/`@build-tools`: 113 floating `-git` recipes
-  become `#commit=`-pinned snapshots (`#commit=` = last commit at or before
-  Monday 00:00 UTC) and are renamed `-git` → `-snapshot` with a permanent
-  versioned `provides=<old-name>`, so pacman's dependency graph never sees the
-  move. `gsa-pm` stays exempt (the engine may free-track). The `-Sy`
-  "last commit ≤ Monday 00:00Z" version-sync provider is engine work and lands
-  LAST. Reconciliation and wave plan: the recipe repository's
-  `docs/snapshot-expansion.md`. Blocked on: nothing — wave (a) is ready.
+- **Snapshot pins in `@core`/`@build-tools` (IN PROGRESS, opened 2026-11-09).**
+  136 recipes whose source ref moves (113 floating + 23 `#branch=`-pinned) take
+  `#commit=` = the last commit at or before Monday 00:00 UTC. **Nothing is
+  renamed**: the recipe, its `pkgname`s and its `provides=` stay `-git`, so
+  pacman, topology, IgnorePkg and the index see no move at all. The snapshot
+  name is a FRONTEND surface — `gsa` must accept `<id>-snapshot` as an input
+  alias for a pinned `<id>` (rc 2, naming the ref, when it is not one) — which
+  is the engine half that lands FIRST; the `-Sy` provider that advances the pins
+  lands LAST. `gsa-pm` stays exempt. Reconciliation and waves: the recipe
+  repository's `docs/snapshot-expansion.md`. Blocked on: nothing — W0 (the
+  alias) is ready.
 
 ## 7 · Environment and shell boundaries
 
