@@ -65,7 +65,7 @@ pub struct Recorded {
 }
 
 /// Where a node stands in the dispatch machine, as the prefetch window
-/// (plan.md §2.1) sees it: pending (still to build), dispatched (started),
+/// (docs/plans/plan.md §2.1) sees it: pending (still to build), dispatched (started),
 /// or settled with its run-record status.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NodePhase {
@@ -152,7 +152,7 @@ impl Machine {
         &self.nodes[index]
     }
 
-    /// The node's phase for the prefetch window (plan.md §2.1: the
+    /// The node's phase for the prefetch window (docs/plans/plan.md §2.1: the
     /// dispatcher is the only brain — the window is derived from this).
     /// A never-activated latent node reads as settled (it is never
     /// prefetched and never dispatchable).

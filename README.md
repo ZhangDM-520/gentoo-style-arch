@@ -31,8 +31,10 @@ builds with `cargo`.
   `gsa-pm` package.
 - **`docs/`** — `gsa-contract.md` (the authoritative interface),
   `build-guide.md`, `architecture.md`, `portability.md`, the fixture
-  migration inventory, the decision records, and `JOURNAL.md` (one dense line
-  per action).
+  migration inventory, the decision records (`adr/`), and `JOURNAL.md` (one
+  dense line per action). `docs/plans/` holds the four archive-class design
+  records that code comments cite by section — provenance, never
+  specification (see `docs/plans/README.md`).
 
 What is deliberately absent: recipes, upstream source trees, package archives,
 signatures and build output. The engine consumes a recipe workspace and never

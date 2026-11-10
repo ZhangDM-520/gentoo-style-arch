@@ -1,5 +1,5 @@
-//! The hash-bound binpkg index (contract §J.4; plan-native-pm.md §5.2,
-//! plan-gentoo-qol.md M3): one row per built instance, written by the
+//! The hash-bound binpkg index (contract §J.4; docs/plans/plan-native-pm.md §5.2,
+//! docs/plans/plan-gentoo-qol.md M3): one row per built instance, written by the
 //! builder after a successful build, binding the archive bytes
 //! (`sha256`+`size`, manifest-v2 style — signed indexes deferred by owner
 //! decision). An archive whose bytes disagree with its row is index-invalid:

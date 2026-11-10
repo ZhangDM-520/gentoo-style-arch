@@ -1,5 +1,5 @@
 //! Derived abi-tokens with the optional declared `abi-rev=` override
-//! (contract §J.4; plan-native-pm.md §4.1; plan-gentoo-qol.md M1).
+//! (contract §J.4; docs/plans/plan-native-pm.md §4.1; docs/plans/plan-gentoo-qol.md M1).
 //!
 //! The token is **derived**: `hash(sorted bare-soname provide set actually
 //! shipped)` — the `.PKGINFO` bare-soname provide names (`libfoo.so`, never

@@ -1,4 +1,4 @@
-//! The fetch-verdict codec (contract §D.1, plan.md §3.4): the ONLY way a
+//! The fetch-verdict codec (contract §D.1, docs/plans/plan.md §3.4): the ONLY way a
 //! fetch outcome crosses the process boundary.
 //!
 //! Wire: `v2 <pkg> <verdict> <dur> <reason…>` — one line, typed on both
@@ -57,7 +57,7 @@ impl fmt::Display for FetchVerdict {
 // bump (contract §L.2); these are the named ones.
 pub const REASON_OK: &str = "ok";
 /// The first fetch attempt failed and a retry recovered (still a warning:
-/// the host misbehaved — plan.md §3.1).
+/// the host misbehaved — docs/plans/plan.md §3.1).
 pub const REASON_RETRY_OK: &str = "retry-ok";
 /// A cached file failed its pin, was quarantined (`<name>.gsa-bad-<ts>`),
 /// and the one retry re-fetched and verified it (owner decision 4).

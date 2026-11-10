@@ -54,6 +54,7 @@ other document, including this one. When they disagree, fix the document.
 | `docs/build-guide.md` | Operations: families, inspect/dry-run/build, installation semantics, skip/resume, version sync, privilege model, cleanup, environment surface, troubleshooting |
 | `docs/portability.md` | Intensity profiles and their formulas, `GSA_*` overrides, CPU/ISA policy |
 | `docs/gsa-fixture-migration.md` | Per-fixture inventory: what each fixture pins, KEEP vs REWRITE, what replaced each retired spelling |
+| `docs/adr/` | The decision records — `README.md` indexes them; numbering starts at 0003 because 0001/0002 moved to the recipe repository with that half |
 | `docs/adr/0003-run-record.md` | Why one record, three renderings, default-on machine block |
 | `docs/adr/0004-prefetch-advisory.md` | Why fetch-ahead is advisory and makepkg stays the build-time gate |
 | `docs/adr/0005-engine-owned-makepkg-conf.md` | Why the engine owns the makepkg configuration, the per-compiler bodies, the selection ladder and the identity digest |
@@ -61,6 +62,7 @@ other document, including this one. When they disagree, fix the document.
 | `CONTRIBUTING.md` | What an engine change looks like, the validation block, the commit policy |
 | `SECURITY.md` | Trust model, privilege boundary, what must never be committed |
 | `docs/JOURNAL.md` | The chronological log — read the tail for what just changed; grep by date, never read end to end |
+| `docs/plans/` | Archive-class design records cited by section from `crates/` and the contract — provenance, never specification (`README.md` is the index) |
 
 ## 2 · Commands
 

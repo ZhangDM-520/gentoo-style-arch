@@ -1,4 +1,4 @@
-//! The transparent privilege handle (plan-gsa-isolation.md W1; contract §B.10).
+//! The transparent privilege handle (docs/plans/plan-gsa-isolation.md W1; contract §B.10).
 //!
 //! gsa is pacman-shaped: read-only verbs run as any user, mutating runs run as
 //! root, and every build-side command (the makepkg family, recipe-code evals)
@@ -36,7 +36,7 @@ pub struct BuildUser {
     pub name: String,
 }
 
-/// The build user from the sudo environment (`plan-gsa-isolation.md`:
+/// The build user from the sudo environment (`docs/plans/plan-gsa-isolation.md`:
 /// `~/.cache/gsa` and every dropped command target this user). None outside
 /// sudo.
 pub fn build_user() -> Option<BuildUser> {

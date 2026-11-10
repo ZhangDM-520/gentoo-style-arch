@@ -123,7 +123,7 @@ EOF
 
 # ─── Run B meets run A's poisoned log ────────────────────────────────────────
 # Engine mapping (see header): under W1/W5 the privileged runner OWNS state
-# (plan-gsa-isolation.md: `run.lock` root-owned is correct state), so the
+# (docs/plans/plan-gsa-isolation.md: `run.lock` root-owned is correct state), so the
 # same-owner case is a ROOT-owned log the root lane cannot append to — 0444 is
 # not enough (CAP_DAC_OVERRIDE writes through it), the poison is `chattr +i`.
 # A wrong-owner (fixture-uid) log would take the §J.5 quarantine branch

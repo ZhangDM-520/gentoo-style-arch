@@ -6,7 +6,7 @@
 //! - a recipe with ≥1 plain-URL (non-VCS) source is a candidate; mixed
 //!   recipes (tarball + VCS source) ARE prefetched — their plain sources at
 //!   least, and a VCS side effect of `makepkg --verifysource` is acceptable
-//!   (plan.md Q3),
+//!   (docs/plans/plan.md Q3),
 //! - a pure-VCS recipe is `skipped vcs-only` (its mirrors come from the
 //!   build itself / `-Mm`),
 //! - a recipe with no fetchable source (none at all, or local files only)

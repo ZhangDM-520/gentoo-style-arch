@@ -108,7 +108,7 @@ pub struct DecisionContext {
     /// candidate's recipe directory; absent there means the empty registry
     /// (synthetic workspaces).
     pub abi_exclusions: Option<PathBuf>,
-    /// Subjects computed into an ABI rebuild wave (`plan-native-pm.md` §4.3):
+    /// Subjects computed into an ABI rebuild wave (`docs/plans/plan-native-pm.md` §4.3):
     /// a wave member's same-version skip is suppressed — the wave must land
     /// wholly, so its archive installs even when the exact version is
     /// already present. Gates are untouched (force never bypasses them).
@@ -943,7 +943,7 @@ fn plan(candidates: &[Candidate], ctx: &DecisionContext, db: &LocalDb) -> Result
         // Branch: force installs everything that survived the gates; checked
         // applies the same-version already-current skip (rule 11) — except
         // for a computed ABI-wave member, whose skip is suppressed so the
-        // wave lands wholly (plan-native-pm.md §4.5).
+        // wave lands wholly (docs/plans/plan-native-pm.md §4.5).
         let wave_heal = ctx
             .wave_heal
             .iter()

@@ -25,9 +25,6 @@
 **/_build/
 **/.git/
 **/keys/
-packages/*/*/*/
-!packages/*/*/LICENSES/
-!packages/*/*/LICENSES/**
 *.pkg.tar.*
 *.src.tar.*
 *.tar

@@ -1,4 +1,4 @@
-//! The `gsa.conf` config surface (plan-gsa-isolation.md W2, locked decision
+//! The `gsa.conf` config surface (docs/plans/plan-gsa-isolation.md W2, locked decision
 //! 5; contract §B.11/§J.4). Two directories, auto-read, no CLI flag:
 //!
 //!   `/etc/gsa/gsa.conf`                system layer (root)
@@ -69,7 +69,7 @@ pub const DEFAULT_RECIPE_URL: &str = "https://github.com/ZhangDM-520/gsa-recipe.
 pub const WORKSPACE_HINT: &str =
     "set `project` in gsa.conf, run inside the recipe repository, or fetch the store with `sudo gsa -Sy`";
 
-/// The build-cache layout (plan-gsa-isolation.md W4): the build user's
+/// The build-cache layout (docs/plans/plan-gsa-isolation.md W4): the build user's
 /// `~/.cache/gsa` (config `build_dir`; `GSA_BUILD_DIR` env = fixture control
 /// like `GSA_STATE_DIR`), with `build/` trees (makepkg `BUILDDIR`), `pkg/`
 /// staging (`PKGDIR`) and `pkgs/` archives (`PKGDEST`) below it. Sources

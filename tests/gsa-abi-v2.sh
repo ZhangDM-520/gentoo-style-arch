@@ -2,8 +2,8 @@
 set -euo pipefail
 
 # tests/gsa-abi-v2.sh — the ABI subsystem of the NATIVE engine (`gsa`,
-# docs/gsa-contract.md §B.3/§E/§I/§J; plan-native-pm.md §4;
-# plan-gentoo-qol.md M1+M2). Everything is synthetic: $TMPDIR workspaces,
+# docs/gsa-contract.md §B.3/§E/§I/§J; docs/plans/plan-native-pm.md §4;
+# docs/plans/plan-gentoo-qol.md M1+M2). Everything is synthetic: $TMPDIR workspaces,
 # stub `makepkg`/`sudo`/`pacman`/`pacman-conf`, a fabricated pacman local
 # DB whose `files` entries are this fixture's own paths, and a per-section
 # state root — the real /var/lib/gsa and /var/lib/pacman are never read or

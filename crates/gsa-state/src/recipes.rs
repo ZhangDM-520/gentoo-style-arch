@@ -1,4 +1,4 @@
-//! The canonical recipe store (plan-gsa-isolation.md W3): the build user's
+//! The canonical recipe store (docs/plans/plan-gsa-isolation.md W3): the build user's
 //! WORKING COPY of the recipe repository at the resolved store root
 //! (`gsa_model::config::recipe_root` — `GSA_RECIPES_DIR` > gsa.conf
 //! `recipe_dir` > `~/.local/share/gsa/recipes`), fetched on demand and

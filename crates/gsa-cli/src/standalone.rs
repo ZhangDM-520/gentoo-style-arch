@@ -1,4 +1,4 @@
-//! Standalone-PKGBUILD target input (plan-gsa-isolation.md W4's
+//! Standalone-PKGBUILD target input (docs/plans/plan-gsa-isolation.md W4's
 //! distribution unit: "stage → build → index"). A target may name a shared
 //! recipe instead of a workspace reference — a `PKGBUILD` file path, a
 //! directory holding one, or an `http(s)` URL of one — and the run stages it

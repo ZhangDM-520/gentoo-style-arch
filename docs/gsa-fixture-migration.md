@@ -347,7 +347,7 @@ reading it takes.
    `--install-register <conf> …` (§D.1) names its conf only for the isolated
    seam.
 7. **Phase mapping — the contract assigns none.** The five phases come from
-   `plan-native-pm.md` §7 via the owner's brief; in particular the `-M` band
+   `docs/plans/plan-native-pm.md` §7 via the owner's brief; in particular the `-M` band
    (`-Ma`, `--qa-check`, `-Md`, `-Mi`, `-Ml`, `-Mm`, `-Mc/-Mcc/-Mccc`) and
    the QA severity seam (§E.4) have no contract-stated phase. This inventory
    assigns them Phase 4.

@@ -7,7 +7,7 @@
 //! three renderings" seam of ADR 0003: the typed structure is computed once
 //! and the dashboard, prose and machine block are views of it. Phase 1 emits
 //! the machine block and a prose view from `gsa-cli`; the dashboard lands
-//! with the scheduler (`gsa-sched`, plan-native-pm.md §3.1).
+//! with the scheduler (`gsa-sched`, docs/plans/plan-native-pm.md §3.1).
 //!
 //! Nothing here evaluates recipes; it is pure data and rendering, plus the
 //! two host-surface modules the engine shares: `privilege` (the W1 drop) and
@@ -143,7 +143,7 @@ pub enum Tag {
     /// `version-sync=nvchecker`: explicit build-time provider opt-in.
     VersionSyncNvchecker,
     /// `abi-rev=<n>`: the declared ABI-revision override (contract §J.4,
-    /// plan-native-pm.md §4.1) — for ABI moves derivation cannot see (LLVM
+    /// docs/plans/plan-native-pm.md §4.1) — for ABI moves derivation cannot see (LLVM
     /// C++ snapshots, Qt private API). Participates in the derived abi-token
     /// so a revision bump alone moves the token.
     AbiRev(u64),

@@ -1,4 +1,4 @@
-//! The installed-ELF view (plan-native-pm.md §4.4): a read-only projection
+//! The installed-ELF view (docs/plans/plan-native-pm.md §4.4): a read-only projection
 //! of pacman's local database plus a file probe over the ELF files it owns
 //! — the "installed ELF DB" every revdep, preserved-lib and content-truth
 //! check reads. The hybrid model allows reads; nothing here writes.

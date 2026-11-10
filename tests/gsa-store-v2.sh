@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# tests/gsa-store-v2.sh — the canonical recipe store (plan-gsa-isolation.md
+# tests/gsa-store-v2.sh — the canonical recipe store (docs/plans/plan-gsa-isolation.md
 # W3; 2026-10-17 relocation: the BUILD USER's working copy at
 # `GSA_RECIPES_DIR` > gsa.conf `recipe_dir` > ~/.local/share/gsa/recipes —
 # never below the state root). Hermetic: a fixture-synthesised upstream git

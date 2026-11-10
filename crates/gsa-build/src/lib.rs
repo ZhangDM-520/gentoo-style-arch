@@ -1,5 +1,5 @@
 //! `gsa-build` — makepkg orchestration (`docs/gsa-contract.md` §K.1;
-//! plan-native-pm.md §3.1 "gsa-build: makepkg orchestration").
+//! docs/plans/plan-native-pm.md §3.1 "gsa-build: makepkg orchestration").
 //!
 //! - [`lane`]: the `--lane-job` child entry — one package, one result file.
 //! - [`makepkg`]: the makepkg argv/env contract (checksums/PGP never

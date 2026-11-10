@@ -11,7 +11,7 @@
 //! (SRCDEST) — and the recipe is retried ONCE, loudly. The recipe's
 //! checksum/`validpgpkeys` remain the trust anchor throughout; a bad file is
 //! never left at its final name (makepkg re-verifies such files forever —
-//! the wall class plan.md §3.5 documents).
+//! the wall class docs/plans/plan.md §3.5 documents).
 //!
 //! Attribution of the failing file is makepkg's own failure report (`<file>
 //! … FAILED` lines, `/usr/share/makepkg/integrity/verify_checksum.sh` and
@@ -32,13 +32,13 @@ use crate::verdict::{
     REASON_OK, REASON_QUARANTINED_RETRY_OK, REASON_RETRY_OK, REASON_VERIFY_FAILED,
 };
 
-/// Transport attempts per recipe before the lane takes over (plan.md §2.3
+/// Transport attempts per recipe before the lane takes over (docs/plans/plan.md §2.3
 /// `_PF_RETRY` = 2, 10 s apart).
 pub const FETCH_ATTEMPTS: u32 = 2;
 pub const FETCH_RETRY_DELAY_S: u64 = 10;
 
 /// Pause prefetch below this much free space on the SRCDEST filesystem
-/// (plan.md §2.3 `_PF_DISK_FREE_MIN_GIB` = 5 GiB, recorded in
+/// (docs/plans/plan.md §2.3 `_PF_DISK_FREE_MIN_GIB` = 5 GiB, recorded in
 /// docs/adr/0004-prefetch-advisory.md).
 pub const DISK_FREE_MIN_GIB: u64 = 5;
 
@@ -223,7 +223,7 @@ pub struct FetchReport {
 /// unit tests drive (and the reason the retry/quarantine policy is testable
 /// without processes).
 ///
-/// Policy (plan.md §2.2/§2.3, owner decision 4):
+/// Policy (docs/plans/plan.md §2.2/§2.3, owner decision 4):
 /// - transport failures retry up to `FETCH_ATTEMPTS` times, `delay_s` apart;
 /// - a failure that names a bad file quarantines it (plus signature
 ///   companions) and retries ONCE immediately — further bad files are still
@@ -270,7 +270,7 @@ pub fn run_fetch_attempts(
 
         let named = failing_files(&att.output);
         if named.is_empty() {
-            // Transport-class failure: retry once more, 10 s apart (plan.md).
+            // Transport-class failure: retry once more, 10 s apart (docs/plans/plan.md).
             if transport_retries < FETCH_ATTEMPTS.saturating_sub(1) {
                 transport_retries += 1;
                 if delay_s > 0 {
@@ -663,7 +663,7 @@ ERROR: One or more files did not pass the validity check!
         );
         assert_eq!(
             calls, FETCH_ATTEMPTS as usize,
-            "two attempts, 10 s apart (plan.md)"
+            "two attempts, 10 s apart (docs/plans/plan.md)"
         );
         assert_eq!(report.result.verdict, FetchVerdict::Failed);
         assert_eq!(report.result.reason, REASON_FETCH_FAILED);
@@ -694,7 +694,7 @@ ERROR: One or more files did not pass the validity check!
         assert_eq!(report.result.reason, REASON_RETRY_OK);
         assert!(
             report.result.is_warning(),
-            "a flaky host is loud (plan.md §3.1)"
+            "a flaky host is loud (docs/plans/plan.md §3.1)"
         );
     }
 

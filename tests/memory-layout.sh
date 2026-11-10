@@ -22,7 +22,7 @@ set -euo pipefail
 #
 # `tests/assets/**` is excluded from the citation scan because it is the frozen
 # differential oracle (the retired fish engine), not live documentation: those
-# files keep their pre-retirement text verbatim. Root `plan*.md` are excluded
+# files keep their pre-retirement text verbatim. `docs/plans/*` are excluded
 # too — archive-class design records whose MEMORY/NOTE citations are dated
 # provenance, annotated in their own headers.
 #
@@ -90,7 +90,7 @@ first=$(head -1 "$root/docs/JOURNAL.md")
 # ─── 4. No live citation of a retired path ─────────────────────────────────
 # Five exclusions, each with a reason. tests/assets/ is the frozen oracle.
 # docs/JOURNAL.md and AGENTS.md narrate the retirement itself (the journal
-# header explains it; AGENTS.md names the retired numbering). Root `plan*.md`
+# header explains it; AGENTS.md names the retired numbering). `docs/plans/*`
 # are archive-class design records: `crates/` and the contract cite them by
 # section, so they are kept, and their internal MEMORY/NOTE citations —
 # including line ranges — are annotated in their own headers rather than
@@ -100,7 +100,7 @@ first=$(head -1 "$root/docs/JOURNAL.md")
 # section 2 is what catches a re-created file. Anything else citing the paths
 # points a reader at a dead file.
 if out=$(git -C "$root" grep -n -E '(MEMORY|NOTE)\.md|\bMEMORY rule|\bMEMORY §' -- . \
-    ':!tests/assets' ':!docs/JOURNAL.md' ':!AGENTS.md' ':!plan*.md' \
+    ':!tests/assets' ':!docs/JOURNAL.md' ':!AGENTS.md' ':!docs/plans/*' \
     ':!tests/memory-layout.sh' 2>/dev/null); then
     hits=$(printf '%s\n' "$out" | head -5)
     fail "live citation of a retired path — docs/MEMORY.md moved to AGENTS.md (rule numbers preserved) and docs/NOTE.md moved to docs/JOURNAL.md; offending hits:

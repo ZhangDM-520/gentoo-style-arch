@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # tests/gsa-privilege.sh — the transparent privilege handle (contract §B.10,
-# plan-gsa-isolation.md W1). Everything is synthetic: $TMPDIR workspaces, a
+# docs/plans/plan-gsa-isolation.md W1). Everything is synthetic: $TMPDIR workspaces, a
 # stub `makepkg`, `GSA_STATE_DIR` overrides; the real /var/lib/gsa is never
 # read or written.
 #
@@ -19,7 +19,7 @@ set -euo pipefail
 #   f. the fetch half drops too: `gsa -Sw`'s `makepkg --verifysource` child
 #      runs as the build user (the §D.1 fetch engine is a build-side command);
 #   g. a real `-B` run under sudo prints the ONE banner line and its makepkg
-#      child runs as the build user (plan-gsa-isolation.md test (c); the
+#      child runs as the build user (docs/plans/plan-gsa-isolation.md test (c); the
 #      cache-placement half of that scenario lands with W4's build_dir).
 #
 # Sections c–e use real `sudo -n` (passwordless by the host contract) with

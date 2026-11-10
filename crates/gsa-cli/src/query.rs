@@ -276,7 +276,7 @@ fn run_local_db_check_inner(
 
 /// `gsa -Qa <ref…>` — the ABI report (contract §B.3): the derived
 /// abi-token, the `abi-rev=` override state, and the subscription records
-/// in/out (`consumer|version|provider|token`, plan-native-pm.md §4.1).
+/// in/out (`consumer|version|provider|token`, docs/plans/plan-native-pm.md §4.1).
 /// One row per fact: `<id> <kind> <detail…>`, deterministic order.
 ///
 /// Token sources, best first: the newest binpkg index row's recorded token,

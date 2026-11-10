@@ -1,4 +1,4 @@
-//! The prefetch lookahead window (plan.md §2.1/§2.3): a bounded window over
+//! The prefetch lookahead window (docs/plans/plan.md §2.1/§2.3): a bounded window over
 //! the plan (topological) order, one fetch in flight at a time.
 //!
 //! The dispatcher is the only brain: the window is re-derived from live
@@ -10,7 +10,7 @@
 
 /// The lookahead window over the plan (topological) order, `--prefetch-ahead
 /// N`'s default (owner decision 1/6: 8 upcoming recipes ≈ 1–2 h of runway
-/// at 15–30 min builds; bounded disk exposure — plan.md §2.3).
+/// at 15–30 min builds; bounded disk exposure — docs/plans/plan.md §2.3).
 pub const DEFAULT_PREFETCH_AHEAD: usize = 8;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PkgFetchState {

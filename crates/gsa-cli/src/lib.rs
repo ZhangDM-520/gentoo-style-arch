@@ -93,7 +93,7 @@ pub fn help_text() -> String {
     help::render()
 }
 
-/// The recipe workspace of a run (plan-gsa-isolation.md W3). Resolution:
+/// The recipe workspace of a run (docs/plans/plan-gsa-isolation.md W3). Resolution:
 /// 1. `project` from the gsa.conf layers (dev/deployment override);
 /// 2. the cwd walk — deprecated (fixtures and dev checkouts still use it;
 ///    a TTY run notes the deprecation, pipes stay byte-stable);
@@ -165,7 +165,7 @@ fn cwd_workspace() -> Option<PathBuf> {
 }
 
 /// The workspace a run operates on: the staged standalone workspace when
-/// `standalone::apply` staged one (plan-gsa-isolation.md W4), else the
+/// `standalone::apply` staged one (docs/plans/plan-gsa-isolation.md W4), else the
 /// normal discovery with its on-demand store fetch.
 pub(crate) fn resolve_workspace(inv: &Invocation) -> Result<PathBuf, String> {
     match &inv.standalone_root {
@@ -319,7 +319,7 @@ fn classify(inv: &Invocation) -> Disposition {
     Disposition::Run(command)
 }
 
-/// The privilege class of one command (plan-gsa-isolation.md W1; contract
+/// The privilege class of one command (docs/plans/plan-gsa-isolation.md W1; contract
 /// §B.10): reads run as any user, mutations require root, and `-Mm` alone
 /// stays build-user-only. Each run entry gates AFTER its usage preflights —
 /// §G.1 ranks usage (2) above refusal (3), so a typo is always reported
@@ -743,7 +743,7 @@ pub fn run(argv: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
                 RC_USAGE
             }
             Disposition::Run(command) => {
-                // Standalone targets (plan-gsa-isolation.md W4): stage the
+                // Standalone targets (docs/plans/plan-gsa-isolation.md W4): stage the
                 // shared recipe(s) and rewrite the selection to the staged
                 // ids BEFORE dispatch. An ephemeral staging area (a dry run,
                 // or a run the privilege gate will refuse) is cleaned up

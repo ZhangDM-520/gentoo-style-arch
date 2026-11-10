@@ -230,7 +230,7 @@ assert_verdict_row() {
 $FIXTURE_OUTPUT"
 }
 
-# max_fetched_unstarted — the window-bound measurement (plan.md §2.1): the
+# max_fetched_unstarted — the window-bound measurement (docs/plans/plan.md §2.1): the
 # largest number of packages that were fetched (FETCH_END) and had not yet
 # started compiling (BUILD_START) at any one instant, from the stub clocks.
 # BUILD_START clocks are ordered build_lag_ns early (see above).
@@ -247,7 +247,7 @@ max_fetched_unstarted() {
 }
 
 if want a; then
-    # ─── a. fetch-ahead-while-compiling (plan.md §2.1) ─────────────────────
+    # ─── a. fetch-ahead-while-compiling (docs/plans/plan.md §2.1) ─────────────────────
     (
         set -euo pipefail
         ws="$fixture/a/ws"
@@ -281,7 +281,7 @@ if want a; then
 fi
 
 if want b; then
-    # ─── b. flaky-host advisory (plan.md §3.1, owner decision 5) ───────────
+    # ─── b. flaky-host advisory (docs/plans/plan.md §3.1, owner decision 5) ───────────
     (
         set -euo pipefail
         ws="$fixture/b/ws"
@@ -313,7 +313,7 @@ if want b; then
 fi
 
 if want c; then
-    # ─── c. window bound (plan.md §2.1/§2.3, owner decision 1) ────────────
+    # ─── c. window bound (docs/plans/plan.md §2.1/§2.3, owner decision 1) ────────────
     (
         set -euo pipefail
         ws="$fixture/c/ws"
@@ -441,7 +441,7 @@ if want f; then
         [ "$greprc" = 0 ] \
             || fail_out "f: the quarantine must be loud (warning line) — pipeline rc $greprc:"
         [ "$(fetch_attempts p-q)" = 2 ] || fail "f: exactly 2 attempts (quarantine, then the one retry)" "$GSA_FAKE_FETCH_LOG"
-        # A bad file is never left at its final name (plan.md §3.5).
+        # A bad file is never left at its final name (docs/plans/plan.md §3.5).
         [ ! -e "$SRCDEST/bad.tar.gz" ] || fail "f: bad.tar.gz must not survive at its final name" "$SRCDEST"
         ls -la "$SRCDEST" >"$fixture/f.srcdest.txt" 2>&1 || true
         ls "$SRCDEST"/bad.tar.gz.gsa-bad-* >/dev/null 2>&1 \

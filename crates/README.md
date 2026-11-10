@@ -16,7 +16,7 @@ plans. It never evaluates recipe shell and never touches pacman's database.
 
 Not yet in this workspace (later phases, deliberately not stubbed):
 `gsa-sched`, `gsa-build`, `gsa-install`, `gsa-fetch`, `gsa-state`, `gsa-qa`,
-`gsa-maint`, `gsa-abi` (`plan-native-pm.md` §3.1).
+`gsa-maint`, `gsa-abi` (`docs/plans/plan-native-pm.md` §3.1).
 
 Build and check: `cargo build`, `cargo test`, `cargo fmt --check`.
 Run: `./target/release/gsa --help`.

@@ -1,6 +1,6 @@
 //! `gsa-abi` — the ABI subsystem of the native `gsa` engine
-//! (`docs/gsa-contract.md` §B.3/§E/§I/§J; `plan-native-pm.md` §4;
-//! `plan-gentoo-qol.md` M1+M2).
+//! (`docs/gsa-contract.md` §B.3/§E/§I/§J; `docs/plans/plan-native-pm.md` §4;
+//! `docs/plans/plan-gentoo-qol.md` M1+M2).
 //!
 //! Four surfaces, one vocabulary:
 //!
@@ -28,7 +28,7 @@
 //!
 //! The staged swap ([`wave::stage_swap`]) turns computed waves into
 //! transactions: ONE `pacman -U` per wave carrying every wave archive
-//! (plan-native-pm.md §4.5) — the old provider stays installed until the
+//! (docs/plans/plan-native-pm.md §4.5) — the old provider stays installed until the
 //! whole wave lands.
 
 pub mod provides;

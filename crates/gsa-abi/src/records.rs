@@ -1,4 +1,4 @@
-//! Subscription records — the `:=` analogue (plan-native-pm.md §4.2,
+//! Subscription records — the `:=` analogue (docs/plans/plan-native-pm.md §4.2,
 //! contract §J.1 `/var/lib/gsa/abi/`): `consumer|version|provider|token`,
 //! written at install time ("the installed-ABI record"), read by the wave
 //! planner and `-Qa`. One row per (consumer, provider) pair, latest wins.

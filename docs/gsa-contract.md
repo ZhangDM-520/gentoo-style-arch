@@ -17,10 +17,10 @@ default, the action-pass grammar, `format: 2`, the side-car database, and the
 hidden-seam set).
 
 Grounding that constrains this contract (cited inline where binding):
-`plan-native-pm.md` §3 (component layout), §3.3 (function mapping), §7
-(phases), §9 (testing), §10 (non-goals); `plan.md` §2 (fetch-ahead process
+`docs/plans/plan-native-pm.md` §3 (component layout), §3.3 (function mapping), §7
+(phases), §9 (testing), §10 (non-goals); `docs/plans/plan.md` §2 (fetch-ahead process
 model), §3 (advisory failure semantics), §4 (fetch result codec, verdict
-vocabulary); `plan-gentoo-qol.md` §1 (shortlist items that become verbs/rows)
+vocabulary); `docs/plans/plan-gentoo-qol.md` §1 (shortlist items that become verbs/rows)
 and M4; `docs/build-guide.md` (current flags, `--install-decide` rows and rc
 contract, run-record `format: 1`); `docs/architecture.md` (four-module split,
 scheduler invariants); `CONTEXT.md` (vocabulary and terms to avoid);
@@ -45,7 +45,7 @@ compiled binary that keeps the same architecture: Recipes / Topology / Builder
 ### A.2 Scope (normative)
 
 1. **Language and shape.** One shipped binary `gsa`, written in Rust
-   (`plan-native-pm.md` §2). Internal crate layout is an implementation matter;
+   (`docs/plans/plan-native-pm.md` §2). Internal crate layout is an implementation matter;
    the contract is this CLI and the record grammars below.
 2. **pacman relationship — HYBRID.** pacman remains the ONLY installed-package
    database of record and the ONLY transaction executor. Phases 0–3 transact
@@ -77,7 +77,7 @@ compiled binary that keeps the same architecture: Recipes / Topology / Builder
 1. **No dependency resolver, slot solver, USE flags, profiles, keyword masking,
    or license gating.** The build-order graph is hand-wired topology
    (`CONTEXT.md`: build-order edge, not "dependency"); the ABI subscription
-   model of `plan-native-pm.md` §4 is rebuild-set computation over that graph,
+   model of `docs/plans/plan-native-pm.md` §4 is rebuild-set computation over that graph,
    not a solver.
 2. **No second installed database of record.** `/usr` and `/var/lib/pacman`
    belong to pacman; a design that can brick `/var/lib/pacman` is wrong on
@@ -120,7 +120,7 @@ gsa <FAMILY>[cluster] [long-modifiers] [targets…] [ranges…] [-- <pacman args
   `pacman -U` invocation of an install transaction (today's `-ia --overwrite
   '*'` idiom). They never reach any other family.
 - Word alias: `gsa fetch` is accepted and is exactly `gsa -Sw` (owner decision
-  names it). No other word verbs exist; the verb list in `plan-native-pm.md`
+  names it). No other word verbs exist; the verb list in `docs/plans/plan-native-pm.md`
   §5.1 is superseded by this grammar.
 
 ### B.2 Families
@@ -146,9 +146,9 @@ gsa <FAMILY>[cluster] [long-modifiers] [targets…] [ranges…] [-- <pacman args
 | `gsa -Qp <archive…>` | archive probe: read `.PKGINFO`, match the binpkg index row, report hash/size agreement |
 | `gsa -Qb [ref…]` | binpkg index rows (retained built instances) |
 | `gsa -Qa <ref…>` | ABI report: derived token, `abi-rev=` override if any, subscriptions recorded against it |
-| `gsa -Qu` | stale set: recipes whose tracked upstream/provider version moved since their newest built instance (the `--stale` query, `plan-gentoo-qol.md` shortlist 6) |
+| `gsa -Qu` | stale set: recipes whose tracked upstream/provider version moved since their newest built instance (the `--stale` query, `docs/plans/plan-gentoo-qol.md` shortlist 6) |
 | `gsa -Qt` | print resolved topology records `id\|path\|groups\|edges\|tags`, one per line — the tooling data channel (today `--topology`; tooling must never parse `config/` directly) |
-| `gsa -Qr` | revdep report over the installed-ELF view: unresolved `DT_NEEDED`, preserved-lib survivors, exact-pin leftovers — live (read-only, rc 0) over an on-demand view. *Correction (2026-10-28, F3):* the row previously read "deferred to a later phase" while the verb shipped; the preserved-lib registry is still Phase 4 (§J.1) and nothing writes it, so that report class is structurally empty until the preserve mode of `plan-native-pm.md` §4.4 lands |
+| `gsa -Qr` | revdep report over the installed-ELF view: unresolved `DT_NEEDED`, preserved-lib survivors, exact-pin leftovers — live (read-only, rc 0) over an on-demand view. *Correction (2026-10-28, F3):* the row previously read "deferred to a later phase" while the verb shipped; the preserved-lib registry is still Phase 4 (§J.1) and nothing writes it, so that report class is structurally empty until the preserve mode of `docs/plans/plan-native-pm.md` §4.4 lands |
 
 ### B.4 `-S` — build + install
 
@@ -156,7 +156,7 @@ gsa <FAMILY>[cluster] [long-modifiers] [targets…] [ranges…] [-- <pacman args
 | --- | --- |
 | `gsa -S <targets…> [ranges…]` | build the selection in build order; install each package's archives immediately after its build and **before any consumer builds** (install-before-dependents, `AGENTS.md` rule 11). Install decision is *checked* (§E) |
 | `gsa -Sl [targets…] [ranges…]` | list the ordered selection with the indices ranges address (today `-l`; with no selection, the whole set in build order) |
-| `gsa -Sw <targets…>` | fetch-only (live; `gsa fetch` is the alias) (`plan.md` §2): fetch and verify sources ahead of builds; no build, no install. Verdict rows are advisory (§D) |
+| `gsa -Sw <targets…>` | fetch-only (live; `gsa fetch` is the alias) (`docs/plans/plan.md` §2): fetch and verify sources ahead of builds; no build, no install. Verdict rows are advisory (§D) |
 | `gsa -Sy` | version-sync pass only: provider queries, recipe rewrites left uncommitted, disposition block printed (today's automatic pre-build sync made explicitly runnable) |
 | `gsa -Su [targets…] [ranges…]` | update: build+install the stale set (recipes whose tracked version moved past their newest built instance) with **no sync pass** — the committed versions build as-is (`pacman -Su` semantics) |
 | `gsa -Syu [targets…] [ranges…]` | sync first (`-Sy`), then build+install the stale set |
@@ -425,7 +425,7 @@ Deliberately NOT carried over, with reasons:
   exactly the drift class `CONTEXT.md` warns about.
 - Byte-identical output strings, the `format: 1` block, and the old
   `--install-decide` row framing — clean-slate re-contract (§E, §H).
-- The verb surface proposed in `plan-native-pm.md` §5.1 (`gsa sync`,
+- The verb surface proposed in `docs/plans/plan-native-pm.md` §5.1 (`gsa sync`,
   `gsa build`, `gsa install`, …) — superseded by this action-pass grammar,
   except the single owner-named alias `gsa fetch` ≡ `-Sw`.
 
@@ -542,7 +542,7 @@ config>` — the composite's bytes plus the bytes of every site file it sources,
 because the composite only names those files and a flag edit in `/etc/gsa`
 must move the identity (rule 6).
 
-**Workspace resolution** (plan-gsa-isolation.md W3), in order: the `project`
+**Workspace resolution** (docs/plans/plan-gsa-isolation.md W3), in order: the `project`
 config key (dev/deployment override); the cwd walk (deprecated — a TTY run
 notes it, pipe output stays byte-stable); the canonical recipe store — the
 build user's working copy at `GSA_RECIPES_DIR` > config `recipe_dir` >
@@ -575,7 +575,7 @@ non-Git directory, or a missing remote in an unreadable repo) prints a named
 note and keeps fetching from where it is — it is never replaced or deleted.
 Pinned by `tests/store-retarget.sh`.
 
-**Standalone staging** (plan-gsa-isolation.md W4, target shapes in §C.1): a
+**Standalone staging** (docs/plans/plan-gsa-isolation.md W4, target shapes in §C.1): a
 run of standalone targets stages each as `packages/misc/<id>/` in its own
 one-node workspace under `<state-dir>/standalone/` (`config/topology.conf`
 record `<id>|packages/misc/<id>|misc|`, the build-defaults skeleton, no
@@ -637,7 +637,7 @@ and a recipe with no VCS source is refused the same way. A snapshot name
 whose base recipe does not exist stays the ordinary unknown reference with
 nearest candidates.
 
-**Standalone PKGBUILD input** (plan-gsa-isolation.md W4's distribution unit:
+**Standalone PKGBUILD input** (docs/plans/plan-gsa-isolation.md W4's distribution unit:
 "sharing a package = sharing its PKGBUILD; rebuilding = gsa + the recipe, no
 project clone required"). A target may also name a shared recipe directly:
 
@@ -760,7 +760,7 @@ invocations with rc 2, and are callable only by fixtures.
 | --- | --- | --- |
 | `--install-decide` | `gsa --install-decide <checked\|force> <archive…>` | prints decision rows (§E) on stdout and touches nothing else: no pacman, sudo, flock, or makepkg. rc 0 plan / 1 refusal / 2 bad usage |
 | `--lane-job` | `gsa --lane-job <pkg> <result-path> <jobs> <flags…>` | the lane child entry: one package, one result file. Positional payload, control characters rejected, invalid flag/job rejected with rc 2 and a message naming the argument. Writes exactly one result row through the typed codec (§F.2) |
-| `--fetch-job` | `gsa --fetch-job <pkg> <result-path> …` | live (`plan.md` §2.1): one-shot fetch child, `makepkg --verifysource` as the only fetch/verify engine. Publishes `ok\|failed\|skipped` + kebab reason (`not-a-candidate`, `vcs-only`, …). Advisory: it never writes a run-record row and never changes the run rc (`plan.md` §3.3) |
+| `--fetch-job` | `gsa --fetch-job <pkg> <result-path> …` | live (`docs/plans/plan.md` §2.1): one-shot fetch child, `makepkg --verifysource` as the only fetch/verify engine. Publishes `ok\|failed\|skipped` + kebab reason (`not-a-candidate`, `vcs-only`, …). Advisory: it never writes a run-record row and never changes the run rc (`docs/plans/plan.md` §3.3) |
 | `--stale-lock-check` | `gsa --stale-lock-check` | the production pacman-lock probe without a run (holder identification via `/proc/*/fd`, never `db.lck` deletion) |
 | `--local-db-check` | `gsa --local-db-check [health\|runs]` | the production pacman local-DB health probe without a run (`health`, the default) or a run-history dump (`runs`); `--state-dir` applies |
 | `--install-register` | `gsa --install-register <conf> <subject> <names…>` | the IgnorePkg registration write path in isolation, including its bounded `db.lck` wait |
@@ -928,7 +928,7 @@ mapping from lane code to status is total and defined in §H.3.
    Readers must ignore non-final names and must tolerate exactly one final
    result per lane; a second publication is a reap anomaly (`lost`).
 3. **Round-trip.** encode→decode is an identity on valid outcomes (property
-   test, `plan-native-pm.md` §9); decoding must fail closed, never guess.
+   test, `docs/plans/plan-native-pm.md` §9); decoding must fail closed, never guess.
 
 ---
 
@@ -1217,7 +1217,7 @@ its build when the park landed writes `parked 98` (§F.1).
 
 Today's documentation calls fail-fast load-bearing: it stopped the 2026-09-06
 rust-git-against-minimal-llvm-git class from compounding
-(`AGENTS.md` rule 11 context; `plan-gentoo-qol.md` M4/Q2). The owner chose
+(`AGENTS.md` rule 11 context; `docs/plans/plan-gentoo-qol.md` M4/Q2). The owner chose
 cone-stop as the default anyway; the mitigation is **loud reporting plus the
 escape flag**, and both are normative here:
 
@@ -1366,7 +1366,7 @@ content hashes.
 Every state file is owned by the **privileged runner** from the moment it is
 created: mutating runs are root (§B.10), so engine state (`index/`, `runs/`,
 `logs/`, `locks/`, `kv/`) is root-owned and `run.lock` root-owned is correct
-state, not corruption (plan-gsa-isolation.md). The gate covers the state root
+state, not corruption (docs/plans/plan-gsa-isolation.md). The gate covers the state root
 ONLY: the canonical recipe store (§J.2) is build-user working data outside it —
 build-user ownership there is correct state, and a root-owned store is the bug
 class the 2026-10-17 relocation removed. The write-time gate quarantines

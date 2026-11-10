@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # tests/gsa-standalone.sh — standalone-PKGBUILD target input
-# (plan-gsa-isolation.md W4's distribution unit: "stage → build → index").
+# (docs/plans/plan-gsa-isolation.md W4's distribution unit: "stage → build → index").
 # Hermetic: every workspace and state root is a $TMPDIR scratch tree, the
 # auto-read gsa.conf layers are replaced by an empty GSA_CONF, and section d
 # builds through a stub makepkg — the real /var/lib/gsa and the host's

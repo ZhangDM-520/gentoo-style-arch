@@ -1,4 +1,4 @@
-//! `gsa-qa` — the QA check REGISTRY (contract §E.4, `plan-native-pm.md`
+//! `gsa-qa` — the QA check REGISTRY (contract §E.4, `docs/plans/plan-native-pm.md`
 //! §5.3, the `bin/install-qa-check.d/` analogue): one declaration surface of
 //! named checks, each with a stable kebab keyword, a scope, a SEVERITY
 //! ATTRIBUTE and a check function.

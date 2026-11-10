@@ -1,5 +1,5 @@
 //! IgnorePkg closure repair (`gsa -Mi`, contract §B.7; rule 9's dynamic
-//! registration seen from the maintain side — plan-gentoo-qol.md shortlist 7
+//! registration seen from the maintain side — docs/plans/plan-gentoo-qol.md shortlist 7
 //! `emaint cleanconfmem` analogue). The closure semantics are exactly the
 //! registration's (cumulative `IgnorePkg =` inside `[options]` only) — this
 //! module plans, `gsa-install::register` writes; the two share one walker

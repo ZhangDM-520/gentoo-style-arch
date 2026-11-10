@@ -171,7 +171,7 @@ pub struct Invocation {
     pub show: Option<String>,
     /// Arguments after `--`, forwarded verbatim to a `pacman -U` transaction.
     pub pacman_args: Option<Vec<String>>,
-    /// The staged workspace of a standalone-target run (plan-gsa-isolation.md
+    /// The staged workspace of a standalone-target run (docs/plans/plan-gsa-isolation.md
     /// W4). Set by `standalone::apply`, which also rewrites `targets` to the
     /// staged ids; `crate::resolve_workspace` prefers this root over
     /// workspace discovery.

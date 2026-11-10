@@ -1,12 +1,12 @@
 //! `gsa-state` — the side-car state database under the state root
-//! (`docs/gsa-contract.md` §J; plan-native-pm.md §5.2, plan-gentoo-qol.md
+//! (`docs/gsa-contract.md` §J; docs/plans/plan-native-pm.md §5.2, docs/plans/plan-gentoo-qol.md
 //! M3). Three stores, all append-only JSONL: the hash-bound binpkg index
 //! (`index/binpkg.jsonl`, §J.4), the run history (`runs/history.jsonl`, the
 //! §H.1 persistence amendment), and a small key-value (`kv/kv.jsonl`) that
 //! is schema-ready for the future subscriptions/world records — JSONL over
 //! SQLite because the reads are whole-file folds, corruption tolerance is a
 //! line-skip away, and no native dependency may gate `cargo build --offline`
-//! (plan-native-pm.md §8: "SQLite or plain append-only files").
+//! (docs/plans/plan-native-pm.md §8: "SQLite or plain append-only files").
 //!
 //! The side-car never records what `/usr` contains as authority: pacman
 //! stays the only installed database (hybrid model, owner decision). Every

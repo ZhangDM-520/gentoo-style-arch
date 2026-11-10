@@ -1,5 +1,5 @@
 //! `gsa-sched` — the lane supervisor half of the native engine
-//! (`docs/gsa-contract.md` §F, §I, §K; plan-native-pm.md §3.1).
+//! (`docs/gsa-contract.md` §F, §I, §K; docs/plans/plan-native-pm.md §3.1).
 //!
 //! - [`budget`]: the `docs/portability.md` intensity formulas as data.
 //! - [`codec`]: the typed lane-result wire (`v2 …`) with atomic publication.

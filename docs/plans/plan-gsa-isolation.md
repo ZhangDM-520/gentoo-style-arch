@@ -7,7 +7,9 @@
 > the documents as they stood when it was written; both were retired on
 > 2026-11-09. The live equivalents are `AGENTS.md` (the same rule numbers) and
 > `docs/JOURNAL.md` (the incident history); the pre-retirement text is in the
-> `pre-split-2026-11` tag. This header is the only edit; the body is untouched.
+> `pre-split-2026-11` tag. It lives in `docs/plans/` since 2026-11-10, so a
+> citation names it by that path (`docs/plans/plan.md` §2.1). This header is
+> the only edit; the body is untouched.
 
 
 **Status: COMPLETE (2026-10-16).** W1 implemented and verified 2026-10-15

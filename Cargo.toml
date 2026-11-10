@@ -54,8 +54,8 @@ object = { version = "0.36", default-features = false, features = ["read", "elf"
 # (the side-car state database under the state root: binpkg index, run
 # history, key-value — docs/gsa-contract.md §J) and gsa-qa (the QA check
 # registry: named checks with scope + severity + stable keyword, the
-# install-qa-check.d analogue — plan-native-pm.md §5.3) and gsa-maint (the
+# install-qa-check.d analogue — docs/plans/plan-native-pm.md §5.3) and gsa-maint (the
 # `-M` maintain surface: host-state hygiene, IgnorePkg closure repair,
 # world/sets over the kv store, run-history inspection, the prune strengths,
-# shared-source mirrors and the audit/doctor reports — plan-native-pm.md
+# shared-source mirrors and the audit/doctor reports — docs/plans/plan-native-pm.md
 # §5.1's `maintain`/`logs`/`clean` verbs, contract §B.7).

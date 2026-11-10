@@ -1,4 +1,4 @@
-//! The one-shot fetch child's process shape (plan.md §2.1): `exec`-style
+//! The one-shot fetch child's process shape (docs/plans/plan.md §2.1): `exec`-style
 //! `<exe> --fetch-job <pkg> <result>` in its OWN process group, niced and
 //! ionice'd, output to the run's `prefetch.log` — killed with the run
 //! through the same TERM → grace → SIGKILL discipline as lanes (§K.3).

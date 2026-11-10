@@ -163,7 +163,7 @@ fn run_build_with(
     let state_dir =
         gsa_model::config::resolve_state_dir(inv.state_dir.as_deref()).map_err(Exit::Usage)?;
 
-    // ── the pre-dispatch ABI wave check (plan-native-pm.md §4.3, §E.3) ──
+    // ── the pre-dispatch ABI wave check (docs/plans/plan-native-pm.md §4.3, §E.3) ──
     // A provider whose registered token already moved (newest binpkg index
     // row ≠ what its consumers recorded at install) drags its consumer
     // wave into the plan: wave members outside the selection are added,
@@ -1331,7 +1331,7 @@ fn later_after_settled(order: &[String], provider: &str, settled: &[String]) -> 
         .collect()
 }
 
-/// The pre-dispatch ABI wave check's outcome (plan-native-pm.md §4.3).
+/// The pre-dispatch ABI wave check's outcome (docs/plans/plan-native-pm.md §4.3).
 #[derive(Default)]
 pub(crate) struct WaveCheck {
     /// Wave members outside the run's selection — appended to the plan.
@@ -1347,7 +1347,7 @@ pub(crate) struct WaveCheck {
 /// nothing must not build a provider past its consumers.
 pub(crate) struct WaveStateError(pub String);
 
-/// The `-S`/`-B` pre-dispatch ABI wave check (plan-native-pm.md §4.3,
+/// The `-S`/`-B` pre-dispatch ABI wave check (docs/plans/plan-native-pm.md §4.3,
 /// contract §E.3) — shared by the build pipeline and the `-n` plan. A
 /// provider whose registered token already moved (its newest binpkg index
 /// row ≠ what at least one consumer recorded at install) drags its consumer

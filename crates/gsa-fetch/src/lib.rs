@@ -1,5 +1,5 @@
 //! `gsa-fetch` — the fetch-ahead subsystem (`docs/gsa-contract.md` §B.4
-//! `-Sw`, §D.1 `--fetch-job`, plan.md §2): fetch-and-verify of recipe
+//! `-Sw`, §D.1 `--fetch-job`, docs/plans/plan.md §2): fetch-and-verify of recipe
 //! sources through `makepkg --verifysource` as the ONLY fetch/verify engine,
 //! plus the dispatcher's bounded lookahead prefetch window.
 //!

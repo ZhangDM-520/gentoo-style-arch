@@ -1,5 +1,5 @@
-//! `gsa-maint` — the `-M` maintain surface (contract §B.7; plan-native-pm.md
-//! §5.1's `maintain`/`logs`/`clean` verbs, plan-gentoo-qol.md shortlist 6/7).
+//! `gsa-maint` — the `-M` maintain surface (contract §B.7; docs/plans/plan-native-pm.md
+//! §5.1's `maintain`/`logs`/`clean` verbs, docs/plans/plan-gentoo-qol.md shortlist 6/7).
 //! Report/repair over engine state and sets: the audit report (`-Ma`), the
 //! doctor (`-Md`), the IgnorePkg closure repair (`-Mi`), log browse/retention
 //! (`-Ml`), shared-source mirrors (`-Mm`), the three prune strengths

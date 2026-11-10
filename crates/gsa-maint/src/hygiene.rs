@@ -1,4 +1,4 @@
-//! Host-state hygiene (plan-gentoo-qol.md shortlist 7): per-package log
+//! Host-state hygiene (docs/plans/plan-gentoo-qol.md shortlist 7): per-package log
 //! browse/tail with a documented retention policy, the stale run-artifact
 //! name classes, and the log-ownership report — all under the state root
 //! (contract §J.1: logs live with the rest of the engine's state, one root,

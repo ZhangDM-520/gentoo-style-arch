@@ -6,7 +6,7 @@
 //! Readiness is event-driven: every lane is reaped by a waiter thread that
 //! blocks in `wait(2)` and reports onto one channel; signal receipt and the
 //! teardown grace window arrive on the same channel through the self-pipe.
-//! There is no poll cycle (plan-native-pm.md §8: "the poll cycle dies by
+//! There is no poll cycle (docs/plans/plan-native-pm.md §8: "the poll cycle dies by
 //! construction").
 
 use std::collections::HashMap;
@@ -135,7 +135,7 @@ pub struct RunSetup {
                 + Send,
         >,
     >,
-    /// Fetch-ahead (contract §B.8 `--prefetch-ahead`/`--no-prefetch`, plan.md
+    /// Fetch-ahead (contract §B.8 `--prefetch-ahead`/`--no-prefetch`, docs/plans/plan.md
     /// §2): `None` is `--no-prefetch`. Advisory by construction — a fetch
     /// outcome never reaches [`Machine`] and never changes a run-record row.
     pub prefetch: Option<PrefetchSetup>,
@@ -321,12 +321,12 @@ struct ActiveLane {
     term_sent: bool,
 }
 
-/// The dispatcher-side prefetch driver (plan.md §2.1/§2.3): a lookahead
+/// The dispatcher-side prefetch driver (docs/plans/plan.md §2.1/§2.3): a lookahead
 /// window over plan order, ONE fetch child in flight (single-flight), the
 /// disk free-space floor, and the advisory records (owner decision 5).
 /// Every fetch outcome is advisory: it warns and logs, and never reaches
 /// the dispatch machine — a failed prefetch never gates dispatch and never
-/// changes any package's outcome row (plan.md §3.1).
+/// changes any package's outcome row (docs/plans/plan.md §3.1).
 struct Prefetcher {
     window: PrefetchWindow,
     log_path: PathBuf,
@@ -362,7 +362,7 @@ impl Prefetcher {
     }
 
     /// Sync the window with live dispatch state: started/finished/parked/
-    /// deferred packages leave the window (plan.md §2.1).
+    /// deferred packages leave the window (docs/plans/plan.md §2.1).
     fn sync(&mut self, machine: &Machine) {
         for index in 0..machine.len() {
             match machine.node_phase(index) {
@@ -1208,7 +1208,7 @@ pub fn run(
             &mut dispatch_halted,
         );
     }
-    // Fetch-ahead (plan.md §2.1): the dispatcher is the only brain — the
+    // Fetch-ahead (docs/plans/plan.md §2.1): the dispatcher is the only brain — the
     // lookahead window is derived from live dispatch state every tick.
     let mut prefetch: Option<Prefetcher> = setup
         .prefetch
@@ -1364,7 +1364,7 @@ pub fn run(
             }
         }
 
-        // Fetch-ahead (plan.md §2.1): derive the lookahead window from live
+        // Fetch-ahead (docs/plans/plan.md §2.1): derive the lookahead window from live
         // dispatcher state and keep ONE fetch child in flight. Advisory: a
         // fetch outcome never reaches `machine` and never gates dispatch.
         if let Some(pf) = prefetch.as_mut() {
@@ -1703,7 +1703,7 @@ pub fn run(
                 }
             }
             Event::FetchDone { index } => {
-                // Advisory reap (plan.md §3.1): warn and log, never a row.
+                // Advisory reap (docs/plans/plan.md §3.1): warn and log, never a row.
                 if let Some(pf) = prefetch.as_mut() {
                     if let Some(warning) = pf.reap(&setup, &run_dir(&setup), index, err) {
                         let message = format!(

@@ -1,5 +1,5 @@
 //! Computed rebuild sets — the `@preserved-rebuild` analogue
-//! (plan-native-pm.md §4.3, `plan-gentoo-qol.md` M1): given providers whose
+//! (docs/plans/plan-native-pm.md §4.3, `docs/plans/plan-gentoo-qol.md` M1): given providers whose
 //! abi-tokens moved, the exact wave of packages to rebuild, composed with
 //! coupled batches, and the staged-swap grouping that lands one wave in ONE
 //! `pacman -U`.
@@ -442,7 +442,7 @@ fn merge_overlapping(waves: &mut Vec<Wave>) {
     *waves = merged;
 }
 
-/// The staged-swap transaction plan (plan-native-pm.md §4.5): one
+/// The staged-swap transaction plan (docs/plans/plan-native-pm.md §4.5): one
 /// transaction per wave, ALL of the wave's archives together — the old
 /// provider stays installed until the whole wave lands in ONE `pacman -U`.
 #[derive(Clone, Debug, Default)]

@@ -2,7 +2,7 @@
 //!
 //! - The run lock is an `flock(2)` on `<state>/locks/run.lock`: one engine run
 //!   at a time over one state root. A held lock is a refusal, never a wait.
-//! - Write-time ownership (rule 19, plan-gsa-isolation.md W1): engine state is
+//! - Write-time ownership (rule 19, docs/plans/plan-gsa-isolation.md W1): engine state is
 //!   owned by the privileged runner — mutating runs are root (contract §B.10),
 //!   so root-owned state is the correct state, never corruption. A state file
 //!   owned by anyone the running engine is not is quarantined as

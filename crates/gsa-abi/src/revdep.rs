@@ -1,4 +1,4 @@
-//! Revdep queries (contract §B.3 `-Qr`, plan-native-pm.md §4.4): the
+//! Revdep queries (contract §B.3 `-Qr`, docs/plans/plan-native-pm.md §4.4): the
 //! installed-ELF view answers three questions, all read-only —
 //!
 //! * **unresolved `DT_NEEDED`**: an installed ELF member needs a soname no

@@ -1,5 +1,5 @@
 //! World and named sets (`gsa -Ms`/`gsa -Mw`, contract §B.7/§C.2,
-//! plan-native-pm.md §5.1 `world`/`sets`): the explicitly-wanted set and the
+//! docs/plans/plan-native-pm.md §5.1 `world`/`sets`): the explicitly-wanted set and the
 //! user sets live in the side-car kv store (`world`, `set:<name>` — the
 //! schema-ready tenants of `kv/kv.jsonl`); `config/sets/` stays the
 //! committed, read-only source. The two are reconciled and DRIFT IS
@@ -8,7 +8,7 @@
 //! Computed sets are listed but never editable (`@preserved-rebuild`,
 //! `@stale`, `@live-rebuild`, §B.7):
 //!
-//! - `@live-rebuild` is the `git` group (plan-native-pm.md §5.1).
+//! - `@live-rebuild` is the `git` group (docs/plans/plan-native-pm.md §5.1).
 //! - `@stale` is the stale-set query scoped to what the side-car knows:
 //!   recipes whose newest recorded built instance version differs from the
 //!   committed `.SRCINFO` version. Provider/upstream queries belong to the

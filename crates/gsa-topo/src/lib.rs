@@ -3,7 +3,7 @@
 //! One topology record per package (`id|path|groups|edges[|tags]`), plus
 //! `build-defaults.conf`, `abi-exclusions.conf` and the optional user sets
 //! under `config/sets/`. The loader contract is the fish engine's
-//! (`build-all.fish:481-710`, plan-native-pm.md §3.3 "verbatim semantics"):
+//! (`build-all.fish:481-710`, docs/plans/plan-native-pm.md §3.3 "verbatim semantics"):
 //! ONE malformed record breaks every command and the refusal names the
 //! offender and its line. A registry that silently misparses is exactly the
 //! silent gap strict loading exists to prevent.

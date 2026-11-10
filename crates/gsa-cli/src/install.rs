@@ -258,7 +258,7 @@ pub fn refusal_outcome_rows(
 }
 
 // ---------------------------------------------------------------------------
-// The ABI wave + staged swap (plan-native-pm.md §4.3/§4.5)
+// The ABI wave + staged swap (docs/plans/plan-native-pm.md §4.3/§4.5)
 // ---------------------------------------------------------------------------
 
 /// One staged-swap transaction's fate (§H.3, per group).
@@ -297,7 +297,7 @@ fn candidate_id(graph: &Graph<'_>, candidate: &Candidate, pkgname: &str) -> Stri
     name
 }
 
-/// The `-U` wave computation (plan-native-pm.md §4.3): which candidate
+/// The `-U` wave computation (docs/plans/plan-native-pm.md §4.3): which candidate
 /// provider's token moved against its consumers' recorded `:=` tokens, and
 /// the swap waves that movement demands. The wave itself is `gsa-abi`'s one
 /// planner (record mismatches ∪ content truth ∪ coupled batches,
@@ -398,7 +398,7 @@ fn compute_swap(
     }))
 }
 
-/// Stage the swap transactions (plan-native-pm.md §4.5): ONE group per wave
+/// Stage the swap transactions (docs/plans/plan-native-pm.md §4.5): ONE group per wave
 /// carrying every wave archive (the provider first), then one leftover
 /// group for the non-wave install archives. With no computed wave this is
 /// exactly today's single transaction. `Err` carries the §E.3 refusal rows
@@ -714,7 +714,7 @@ fn run_upgrade_inner(
         DecideMode::Checked
     };
 
-    // ── the ABI wave + staged swap (plan-native-pm.md §4.3/§4.5) ────────
+    // ── the ABI wave + staged swap (docs/plans/plan-native-pm.md §4.3/§4.5) ────────
     // BEFORE the decision seam (§E.3): a candidate provider whose token
     // moved against its consumers' recorded `:=` tokens drags its consumer
     // wave into this plan — the additions become candidates and each wave

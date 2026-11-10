@@ -281,7 +281,7 @@ pub fn report(ctx: &MaintCtx<'_>) -> Vec<Row> {
     };
     push_family(&mut rows, "recipe-contract", qa);
 
-    // The stale-set skew lint (plan-gentoo-qol.md shortlist 6), scoped to
+    // The stale-set skew lint (docs/plans/plan-gentoo-qol.md shortlist 6), scoped to
     // what the side-car records know.
     let skew: Vec<(String, String)> = match gsa_state::BinpkgIndex::load(ctx.state) {
         Ok(index) => {

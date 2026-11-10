@@ -146,7 +146,7 @@ pub fn makepkg_command_in(
     toolchain: Toolchain,
 ) -> Result<std::process::Command, String> {
     // Build-domain command: under a privileged run makepkg is dropped to the
-    // build user (makepkg refuses root; plan-gsa-isolation.md W1).
+    // build user (makepkg refuses root; docs/plans/plan-gsa-isolation.md W1).
     let mut cmd = gsa_model::privilege::build_command("makepkg");
     cmd.args(MAKEPKG_BASE_ARGS)
         .args(payload_flags)
@@ -166,7 +166,7 @@ pub fn makepkg_command_in(
         }
     }
     // W4 build cache: makepkg's build trees, staging and archives land in
-    // the build user's cache (plan-gsa-isolation.md), never beside the
+    // the build user's cache (docs/plans/plan-gsa-isolation.md), never beside the
     // recipe. The dirs are created here — fatal on failure with the remedy
     // named: a half-created layout writes beside the recipe.
     for dir in [&layout.builddir, &layout.pkgdir, &layout.pkgdest] {
