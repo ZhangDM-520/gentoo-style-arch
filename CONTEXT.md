@@ -10,6 +10,29 @@ appear in code, the contract and the run record. Implementation lives in
 
 ## Language
 
+### Build configuration
+
+**Toolchain family**:
+Which compiler a recipe's lane is configured for — `gcc` or `clang`. Resolved
+per recipe: the run's `--toolchain`, else the record's `toolchain=` tag, else
+the PKGBUILD's explicit driver markers, else `gcc`. Two families with no
+decision is a refusal, never a guess.
+_Avoid_: compiler stack, toolchain (unqualified — that word also means the
+recorded build identity)
+
+**Makepkg composite**:
+The generated file a lane is handed as `makepkg --config`: built-in universal
+body, built-in per-compiler body, the site files, then the engine's own paths
+and job flags. It replaces makepkg's own configuration layering.
+_Avoid_: makepkg.conf (that is the host file the engine stopped reading), shim
+(the retired job-flags-only shape)
+
+**Build identity**:
+The per-recipe marker `<family>|<compiler version line>|<composite digest>`
+that decides whether a cached build tree may be reused. A compiler upgrade or
+a flag edit changes it and forces the one-time clean.
+_Avoid_: toolchain marker (informal), version stamp
+
 ### Topology
 
 **Recipe**:

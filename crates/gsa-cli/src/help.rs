@@ -31,7 +31,8 @@ struct Section {
 /// continuation's `env-required:` line. `GSA_BUILD_JOBS` is engine OUTPUT
 /// (exported per lane), deliberately absent.
 pub(crate) const ENV_INPUTS: &[(&str, &str)] = &[
-    ("GSA_CONF", "replaces the auto-read gsa.conf layers (/etc/gsa.conf, ~/.config/gsa/gsa.conf) with exactly one file — fixture and hermetic control"),
+    ("GSA_CONF", "replaces the auto-read gsa.conf layers (/etc/gsa/gsa.conf, ~/.config/gsa/gsa.conf) with exactly one file — fixture and hermetic control"),
+    ("GSA_CONF_DIR", "replaces the whole configuration-directory resolution (/etc/gsa then ~/.config/gsa) with exactly one directory holding gsa.conf and the per-compiler makepkg bodies — fixture and hermetic control"),
     ("GSA_STATE_DIR", "the state root (the --state-dir chain above)"),
     ("GSA_BUILD_DIR", "redirects the build cache (makepkg BUILDDIR/PKGDIR/PKGDEST; default: the build user's ~/.cache/gsa); setting it also answers the build-dir prompt silently — the flag --build-dir beats it"),
     ("GSA_RECIPES_DIR", "redirects the canonical recipe store (gsa.conf `recipe_dir`; default: the build user's ~/.local/share/gsa/recipes — never below the state root)"),
@@ -171,7 +172,8 @@ Long modifiers (contract §B.8). A build run accepts:",
             ("--lanes N|auto", "concurrent build lanes"),
             ("--jobs N|auto", "makepkg jobs per lane"),
             ("--intensity LEVEL", "scheduler intensity profile"),
-            ("--state-dir PATH", "the state-root override (§J.3): --state-dir beats GSA_STATE_DIR beats the gsa.conf layers (/etc/gsa.conf and ~/.config/gsa/gsa.conf, user over system) beats /var/lib/gsa"),
+            ("--toolchain gcc|clang", "the run's compiler family: selects which engine-owned makepkg body (/etc/gsa/<family>-makepkg.conf) every lane is given; beats a recipe's `toolchain=` topology tag, which beats the PKGBUILD inference"),
+            ("--state-dir PATH", "the state-root override (§J.3): --state-dir beats GSA_STATE_DIR beats the gsa.conf layers (/etc/gsa/gsa.conf and ~/.config/gsa/gsa.conf, user over system) beats /var/lib/gsa"),
             ("--build-dir PATH", "the build-cache root this run's makepkg writes under (§J.2: BUILDDIR/PKGDIR/PKGDEST); --build-dir beats GSA_BUILD_DIR beats gsa.conf build_dir beats the build user's ~/.cache/gsa. A build run with neither the flag nor GSA_BUILD_DIR asks on a TTY"),
             ("--no-build-dir-prompt", "do not ask: resolve the build root silently from GSA_BUILD_DIR, gsa.conf build_dir or the built-in default"),
             ("--no-prefetch", "opt out of the advisory fetch-ahead"),
@@ -402,6 +404,7 @@ mod tests {
         // pinned here (the rendered-help half below proves each row prints).
         let expected = [
             "GSA_CONF",
+            "GSA_CONF_DIR",
             "GSA_STATE_DIR",
             "GSA_BUILD_DIR",
             "GSA_RECIPES_DIR",

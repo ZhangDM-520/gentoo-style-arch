@@ -331,13 +331,26 @@ pub fn run_fetch_attempts(
 /// gettext-translates `FAILED` and its validity summary, and its exit codes
 /// are all 1 (`exit 1 # TODO: error code` in `verify_checksum.sh`) so they
 /// discriminate nothing — C-locale prose is the only attribution channel.
-pub(crate) fn verifysource_command(recipe_dir: &Path) -> Command {
+pub(crate) fn verifysource_command(recipe_dir: &Path) -> Result<Command, String> {
     let mut cmd = gsa_model::privilege::build_command("makepkg");
     cmd.arg("--verifysource")
         .current_dir(recipe_dir)
         .env("GIT_CONFIG_COUNT", "0")
         .env("LC_ALL", "C");
-    cmd
+    // §B.11: the engine owns the makepkg configuration, so the fetch honours
+    // the same source cache the build will. `--verifysource` reads only the
+    // universal half (SRCDEST and friends); the compiler body in the
+    // composite is inert here, so the run override or the default family is
+    // enough and no recipe scan is needed.
+    let toolchain = gsa_model::toolchain::override_value()
+        .unwrap_or(gsa_model::toolchain::Toolchain::DEFAULT);
+    let layout = gsa_model::config::build_layout_for_run()?;
+    if let Some(srcdest) = gsa_model::config::resolve_srcdest() {
+        cmd.env("GSA_LANE_SRCDEST", srcdest);
+    }
+    let conf = gsa_model::makepkg_conf::install(&layout.root, toolchain)?;
+    cmd.arg("--config").arg(conf);
+    Ok(cmd)
 }
 
 /// One real `makepkg --verifysource` attempt in the recipe directory
@@ -345,7 +358,16 @@ pub(crate) fn verifysource_command(recipe_dir: &Path) -> Command {
 /// command (W1 privilege isolation): under a privileged run it runs as the
 /// build user, like every other makepkg invocation.
 pub fn makepkg_verifysource(recipe_dir: &Path) -> Attempt {
-    let output = verifysource_command(recipe_dir).output();
+    let mut command = match verifysource_command(recipe_dir) {
+        Ok(command) => command,
+        Err(message) => {
+            return Attempt {
+                ok: false,
+                output: format!("cannot configure makepkg: {message}"),
+            }
+        }
+    };
+    let output = command.output();
     match output {
         Ok(output) => {
             let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
@@ -721,7 +743,8 @@ ERROR: One or more files did not pass the validity check!
     fn verifysource_command_pins_the_c_locale_and_keeps_the_constant_argv() {
         // The failure prose `failing_files`/`is_verify_failure` parse is
         // gettext-translated by makepkg; the spawn must pin it to C.
-        let cmd = verifysource_command(Path::new("/nonexistent-recipe-dir"));
+        let cmd = verifysource_command(Path::new("/nonexistent-recipe-dir"))
+            .expect("a resolvable layout is the fixture's premise");
         assert!(
             cmd.get_envs().any(|(key, value)| {
                 key == std::ffi::OsStr::new("LC_ALL") && value == Some(std::ffi::OsStr::new("C"))

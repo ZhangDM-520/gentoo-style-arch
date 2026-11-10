@@ -272,6 +272,7 @@ is a pure read with no confirmation at all. Wording-only (§L.2); pinned by
 | `--fail-fast` | restore the stop-dispatch-and-drain failure policy (§I) |
 | `--lanes N\|auto`, `--jobs N\|auto`, `--intensity LEVEL` | parallelism overrides (kept; a flag beats its env twin) |
 | `--state-dir PATH` | state-root override (§J.3); flag beats `GSA_STATE_DIR` |
+| `--toolchain gcc\|clang` | the run's compiler family, selecting which engine-owned makepkg body every lane is given (§B.11); beats a recipe's `toolchain=` tag, which beats the PKGBUILD inference |
 | `--build-dir PATH` | build-cache override (§J.2): `BUILDDIR`/`PKGDIR`/`PKGDEST` land below it; flag beats `GSA_BUILD_DIR` beats config `build_dir` beats the build user's `~/.cache/gsa`. Mirrored into the continuation. Real on build-shaped runs only |
 | `--no-build-dir-prompt` | restore the pre-prompt behaviour: resolve the build root silently from the layers above instead of asking on a TTY. Mirrored into the continuation |
 | `--no-prefetch`, `--prefetch-ahead N` | advisory fetch-ahead window (default-on): `--no-prefetch` opts out, `--prefetch-ahead N` sizes it; the two are mutually exclusive (added 2026-10-14, see amendment 4) |
@@ -298,9 +299,12 @@ ordinary deferred vocabulary. Pinned by `tests/build-dir-prompt.sh`.
 
 Engine environment inputs (the roster `gsa --help` must print; rendered from
 `crates/gsa-cli/src/help.rs`, the single layout source): `GSA_CONF`,
-`GSA_STATE_DIR`, `GSA_BUILD_DIR`, `GSA_RECIPES_DIR`, `GSA_RECIPE_CHECKOUT`,
-`GSA_LANES`, `GSA_JOBS`, `GSA_INTENSITY`, `GSA_CPU_THREADS`, `GSA_MEMORY_GIB`,
-`GSA_TARGET_CPU`, `GSA_VCS_SKIP_TOLERANCE`. `GSA_BUILD_JOBS` is engine OUTPUT
+`GSA_CONF_DIR`, `GSA_STATE_DIR`, `GSA_BUILD_DIR`, `GSA_RECIPES_DIR`,
+`GSA_RECIPE_CHECKOUT`, `GSA_LANES`, `GSA_JOBS`, `GSA_INTENSITY`,
+`GSA_CPU_THREADS`, `GSA_MEMORY_GIB`, `GSA_TARGET_CPU`,
+`GSA_VCS_SKIP_TOLERANCE`. `SRCDEST` is NOT an input since the config rework
+(§B.11 amendment): the engine owns the source cache through the `srcdest`
+key. `GSA_BUILD_JOBS` is engine OUTPUT
 exported per lane, never an input. `GSA_FAKE_*` is not an engine vocabulary
 (§D.2). `GSA_RECIPE_CHECKOUT` is the recipe repository checkout the real-tree
 checks read (the battery's real-tree fixture sections and the `recipe-tree`
@@ -393,6 +397,7 @@ The dumb-TTY rule is §L.9.
 | `--audit` | `-Ma` | carried; still report-only |
 | `--audit-lint <family>` | hidden `--qa-check <name>` | renamed (§D.1) |
 | `--topology` | `-Qt` | carried as a query action |
+| `/etc/gsa.conf` (config layer) | `/etc/gsa/gsa.conf` | moved 2026-11-10 (§B.11): the old file is read as the lowest rung with one warning while the new one is absent, and ignored loudly once it exists |
 | `-ln/--link-sources` | `-Mm` | carried |
 | `--no-register-ignorepkg` | same | carried |
 | `--register-ignorepkg` (hidden one-shot backfill) | `gsa -Mi --backfill` | public maintain verb |
@@ -455,14 +460,79 @@ reported before privilege. `--dry-run` renders plans and is never gated.
 
 ### B.11 Configuration, workspace resolution, and staging
 
-**The `gsa.conf` layers** (plan-gsa-isolation.md W2): the engine auto-reads
-`/etc/gsa.conf` (system) then `~/.config/gsa/gsa.conf` (user), user over
-system over built-in defaults. Keys: `project`, `recipe_url`, `build_dir`,
-`state_dir`, `recipe_dir`. `~` expands to the build user's home (`SUDO_UID`'s home when
-running under `sudo`, else `HOME`); an unknown key or malformed line is an
-error naming file:line and key — never a silent default (usage class, rc 2).
-`GSA_CONF` replaces both auto-read layers with exactly one file (fixture and
-hermetic control, like `GSA_STATE_DIR`).
+**The configuration directories** (amended 2026-11-10 — the engine owns the
+makepkg configuration). Two directories, auto-read, per FILE:
+
+```
+/etc/gsa/gsa.conf              baseline (root-owned, shipped by gsa-pm)
+/etc/gsa/gcc-makepkg.conf      baseline, GCC flags
+/etc/gsa/clang-makepkg.conf    baseline, clang flags
+~/.config/gsa/gsa.conf         user override (the build user's home)
+~/.config/gsa/gcc-makepkg.conf
+~/.config/gsa/clang-makepkg.conf
+built-in defaults              compiled in — the rung that always exists
+```
+
+Precedence is **user over baseline over built-in**. `gsa.conf` merges per
+key; a `*-makepkg.conf` is SOURCED (baseline first, then the user file), so a
+user file overrides assignment by assignment without repeating the whole
+file. A half-populated directory is legal: a site may tune only `gcc`.
+`GSA_CONF` replaces the `gsa.conf` layers with exactly one file;
+`GSA_CONF_DIR` replaces the whole directory resolution with exactly one
+directory (fixture and hermetic control, like `GSA_STATE_DIR`).
+
+`gsa.conf` keys: `project`, `recipe_url`, `build_dir`, `state_dir`,
+`recipe_dir`, `srcdest`. `~` expands to the build user's home (`SUDO_UID`'s
+home when running under `sudo`, else `HOME`); an unknown key or malformed
+line is an error naming file:line and key — never a silent default (usage
+class, rc 2). The retired `/etc/gsa.conf` is still read (as the LOWEST rung,
+with one warning per process) while `/etc/gsa/gsa.conf` is absent, and is
+ignored loudly once the new file exists — §B.9 carries the row.
+
+**The makepkg composite.** Every lane is handed
+`makepkg --config <build root>/lane-makepkg-<family>.conf`, written temp +
+rename (one file per family, content independent of jobs and recipe, so
+concurrent lanes cannot race it). The composite is, lowest precedence first:
+the built-in universal body, the built-in per-compiler body, every site file
+in source order, then the engine-owned `BUILDDIR`/`PKGDIR`/`PKGDEST`/
+`SRCDEST` and the lane's `MAKEFLAGS`/`NINJAFLAGS` re-asserted from
+`GSA_LANE_*`. `/etc/makepkg.conf`, `/etc/makepkg.conf.d/*.conf` and
+`~/.makepkg.conf` are NEVER sourced (`crates/gsa-model/src/makepkg_conf.rs`).
+`SRCDEST` resolves through the `srcdest` key only — the environment rung and
+both makepkg.conf rungs are retired.
+
+**What the built-in bodies carry** (amended 2026-11-10, second audit). The
+compiler line is `-march=native -mtune=native` — never a literal ISA, so a
+body shipped to a reader is not mis-tuned for their machine while this host
+still compiles for itself (it resolves to `znver5` here). Both families carry
+`-fno-plt`, `-fno-semantic-interposition`, the Zen-5 alignment/vector-width
+pair, `-fno-math-errno`/`-fno-trapping-math`, `-Wp,-D_FORTIFY_SOURCE=3`, a
+C++-only `-fvisibility-inlines-hidden`, and `LDFLAGS` with mold, full RELRO
+(`-Wl,-z,relro -Wl,-z,now`, each its own token so a recipe's single-slash
+strip still matches) and RELR (`-Wl,-z,pack-relative-relocs`). The GCC-only
+passes live in the gcc body ALONE — `-fipa-pta` (clang hard-rejects) and
+`-fprefetch-loop-arrays` (clang accepts the spelling only to ignore it) — and
+`-fira-hoist-pressure`/`-fstack-reuse=all` are deliberately absent because
+they are gcc defaults at `-O3`. `FFLAGS` is gcc's; `LTOFLAGS` is `-flto=auto`
+for gcc and `-flto=thin` for clang.
+
+`RUSTFLAGS` (`-C opt-level=3 -C target-cpu=native`) is UNIVERSAL, not
+per-family: rustc's target is not a gcc/clang choice. The composite ends with
+`export RUSTFLAGS` because makepkg exports only its own buildenv list
+(`CPPFLAGS CFLAGS CXXFLAGS LDFLAGS`, plus `FFLAGS` through the fortran
+buildenv) — without that line a child `cargo` keeps its generic target and the
+body is a lie. `gsa --print-conf <family>` prints the body verbatim (§D.1), so
+`gsa-pm` installs `/etc/gsa/<family>-makepkg.conf` from the binary it just
+built.
+
+**Compiler selection.** `--toolchain gcc|clang` beats a record's
+`toolchain=<family>` tag, which beats the PKGBUILD inference (explicit driver
+markers only: `CC=clang`, `CXX=clang++`, `-DCMAKE_C_COMPILER=clang`, … — a
+`clang` makedepend is not evidence), which beats the `gcc` default. Two
+families with no decision REFUSE (lane reason `toolchain-ambiguous`, naming
+the recipe and both markers); the lane records its decision as
+`toolchain <family> (<rung>)` in the per-package log. The build-identity
+marker (§J.1) is `<family>|<compiler version line>|<sha256 of the composite>`.
 
 **Workspace resolution** (plan-gsa-isolation.md W3), in order: the `project`
 config key (dev/deployment override); the cwd walk (deprecated — a TTY run
@@ -688,6 +758,8 @@ invocations with rc 2, and are callable only by fixtures.
 | `--install-register` | `gsa --install-register <conf> <subject> <names…>` | the IgnorePkg registration write path in isolation, including its bounded `db.lck` wait |
 | `--register-ignorepkg` | `gsa --register-ignorepkg <conf> <names…>` | the one-shot IgnorePkg backfill in isolation (the public verb is `gsa -Mi --backfill`; the seam stays for fixtures and for an engine older than the verb) |
 | `--qa-check` | `gsa --qa-check <name> …` | run exactly one QA check (today `--audit-lint <family>`); the check registry's single-entry point |
+| `--build-identity` | `gsa --build-identity <gcc\|clang>` | prints the exact identity the toolchain drift marker records (§B.11/§J.1) — `<family>\|<compiler version line>\|<sha256 of the composite>` — so "why did this rebuild?" is answerable, and fixtures stage a CURRENT marker instead of predicting the digest. rc 0 / 2 bad family / 3 unreadable config |
+| `--print-conf` | `gsa --print-conf <gcc\|clang>` | prints the built-in per-compiler makepkg body verbatim, which is what the composite embeds. `gsa-pm` writes it to `/etc/gsa/<family>-makepkg.conf` at package time, so the shipped baseline is the binary's own text (no copied flag list to drift). Reads nothing, mutates nothing. rc 0 / 2 missing or unknown family |
 
 *Amendment (2026-10-14, cutover gap G10 — the `--lane-job` flags payload
 grammar).* `<flags…>` is the makepkg argument set the lane forwards verbatim
@@ -1207,7 +1279,10 @@ recipe: the engine passes `BUILDDIR` (build trees), `PKGDIR` (staging) and
 build user (§B.10). A build-shaped run asks for the root on a TTY unless one
 of those tiers (or `--no-build-dir-prompt`) already answered it (§B.8
 amendment 2026-11-08).
-`SRCDEST` stays governed by `makepkg.conf` untouched. The binpkg index refers
+`SRCDEST` is the engine's too since the config rework (§B.11): the `srcdest`
+gsa.conf key, built-in `~/.gsa-src`, with no environment rung and no
+makepkg.conf rung — a build that fetched into one cache can never compile from
+another. The binpkg index refers
 to the archives by hash wherever they live; archive discovery scans the shared
 `PKGDEST` plus the recipe dir (pre-W4 trees) and matches every candidate by
 `.PKGINFO`/output-name truth, so a shared `PKGDEST` can never hand over
@@ -1317,13 +1392,17 @@ sources its config AFTER the environment and preserves only
 `PKGDEST`/`SRCDEST`/… from env, the rewrite alone could never beat a
 config-file `MAKEFLAGS="-j$(nproc)"` (2026-11-01 wall: llvm-git ran
 `ninja -j24` against `core-jobs: 7`) — every makepkg spawn therefore also
-gets `--config <build-cache>/lane-makepkg.conf`, a generated shim that
-replicates makepkg's own config layering (system conf + `/etc/makepkg.conf.d`
-drop-ins + the user override) and then re-asserts the lane's job flags from
-`GSA_LANE_MAKEFLAGS`/`GSA_LANE_NINJAFLAGS` (amendment 2026-11-01). Every
-makepkg spawn additionally carries `BUILDDIR`/`PKGDIR`/`PKGDEST` for the build-user
-cache (§J.2) and `GIT_CONFIG_COUNT=0`; the `PACMAN` shim keeps makepkg's own
-dependency installs on the transaction lock (§K.3). Per-package logs are
+gets `--config <build-cache>/lane-makepkg-<family>.conf`, the generated
+composite of §B.11: the built-in universal and per-compiler bodies, the site
+files (baseline then the build user's clone), then the engine-owned paths and
+the lane's job flags from `GSA_LANE_*`. It does NOT replicate makepkg's own
+layering — `/etc/makepkg.conf`, its drop-ins and `~/.makepkg.conf` are never
+sourced (amendment 2026-11-01, superseded 2026-11-10 by the config rework).
+Every makepkg spawn additionally carries `BUILDDIR`/`PKGDIR`/`PKGDEST`/
+`SRCDEST` for the build-user cache (§J.2) and `GIT_CONFIG_COUNT=0`; the
+`PACMAN` shim keeps makepkg's own dependency installs on the transaction lock
+(§K.3). `makepkg --verifysource` (the fetch engine, §D.1) is handed the same
+composite, so a fetch and its build share one source cache. Per-package logs are
 written under the state root through the ownership gate (§J.5).
 
 ### K.2 Scheduling invariants (kept)

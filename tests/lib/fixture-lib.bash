@@ -148,6 +148,11 @@ EOF
 # ABI-guard exception registry: id|reason|review-by (format doc in
 # config/abi-exclusions.conf of the real repo; empty registry here)
 EOF
+    # Engine configuration beside the workspace (§B.11): an empty gsa.conf and
+    # no compiler bodies, so the engine uses its built-in defaults and the
+    # HOST's /etc/gsa never decides a fixture's flags.
+    mkdir -p "$dir/../.rr2-conf"
+    : >"$dir/../.rr2-conf/gsa.conf"
 }
 
 # install_fish_oracle DIR — install the FROZEN fish oracle beside a scratch

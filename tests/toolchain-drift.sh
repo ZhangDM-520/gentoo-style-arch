@@ -269,10 +269,33 @@ VERSION_B='17.0.0 20260920'
 IDENT_A="gcc (fixture) $VERSION_A"
 IDENT_B="gcc (fixture) $VERSION_B"
 
-assert_marker() { # $1 = marker path, $2 = expected identity line
+# The marker's contract (§B.11): `<family>|<compiler version line>|<sha256 of
+# the config bytes>`. The digest is the flags-digest rule 6 queued — a config
+# edit must move it — so this asserts the SHAPE and the compiler line, and
+# checks that a config edit really moves the digest (see the last section).
+assert_marker() { # $1 = marker path, $2 = expected compiler version line
     [ -f "$1" ] || fail "marker $1 was not written after the successful build"
-    [ "$(cat "$1")" = "$2" ] \
-        || fail "marker $1 holds '$(cat "$1")', want '$2'"
+    local holds family version digest rest
+    holds=$(cat "$1")
+    family=${holds%%|*}
+    rest=${holds#*|}
+    version=${rest%|*}
+    digest=${rest##*|}
+    [ "$family" = gcc ] \
+        || fail "marker $1 names family '$family', want gcc (no tag, no clang marker)"
+    [ "$version" = "$2" ] \
+        || fail "marker $1 holds '$holds', want compiler line '$2'"
+    [ ${#digest} -eq 64 ] \
+        || fail "marker $1 digest is not a sha256: '$digest'"
+    case $digest in
+    *[!0-9a-f]*) fail "marker $1 digest is not lowercase hex: '$digest'" ;;
+    esac
+}
+
+# The digest the CURRENT config renders, asked of the engine's own seam: the
+# same value the marker must carry when nothing was edited.
+current_digest() {
+    "$GSA_TEST_GSA_BIN" --build-identity gcc | awk -F'|' '{print $3}'
 }
 
 assert_no_marker() { # $1 = marker path
@@ -341,7 +364,7 @@ unset GSA_FAKE_FAIL_PACKAGE
 if [ "$FIXTURE_RC" = 0 ]; then
     fail "compiler drift was ignored by --skip:" "$fixture/out-drift-fail.txt"
 fi
-assert_msg drift-fail 'GCC build identity missing or changed; cleaning cached build artifacts (previous: gcc (fixture) 17.0.0 20260906; current: gcc (fixture) 17.0.0 20260920)'
+assert_msg drift-fail 'GCC build identity missing or changed; cleaning cached build artifacts (previous: gcc|gcc (fixture) 17.0.0 20260906|'; assert_msg drift-fail '; current: gcc|gcc (fixture) 17.0.0 20260920|'
 assert_record drift-fail p1
 assert_plan drift-fail p1 build
 assert_row drift-fail p1 failed 1
@@ -359,7 +382,7 @@ run_case drift-retry "$VERSION_B" --skip p1
 if [ "$FIXTURE_RC" != 0 ]; then
     fail "retry after the failed drift build did not clean and rebuild:" "$fixture/out-drift-retry.txt"
 fi
-assert_msg drift-retry 'GCC build identity missing or changed; cleaning cached build artifacts (previous: gcc (fixture) 17.0.0 20260906; current: gcc (fixture) 17.0.0 20260920)'
+assert_msg drift-retry 'GCC build identity missing or changed; cleaning cached build artifacts (previous: gcc|gcc (fixture) 17.0.0 20260906|'; assert_msg drift-retry '; current: gcc|gcc (fixture) 17.0.0 20260920|'
 assert_record drift-retry p1
 assert_plan drift-retry p1 build
 assert_row drift-retry p1 succeeded 0
@@ -413,7 +436,7 @@ if [ "$FIXTURE_RC" != 0 ]; then
     fail "p2's build should succeed even when its baseline cannot record:" \
         "$fixture/out-baseline-fail.txt"
 fi
-assert_msg baseline-fail 'GCC build identity missing or changed; cleaning cached build artifacts (previous: gcc (fixture) 17.0.0 20260906; current: gcc (fixture) 17.0.0 20260920)'
+assert_msg baseline-fail 'GCC build identity missing or changed; cleaning cached build artifacts (previous: gcc|gcc (fixture) 17.0.0 20260906|'; assert_msg baseline-fail '; current: gcc|gcc (fixture) 17.0.0 20260920|'
 assert_msg baseline-fail 'msg=vcs_baseline:_p2:'
 assert_record baseline-fail p2
 assert_plan baseline-fail p2 build
@@ -431,7 +454,7 @@ unset GSA_FAKE_CHECKOUT_MODE
 if [ "$FIXTURE_RC" != 0 ]; then
     fail "p2's baseline retry failed:" "$fixture/out-baseline-retry.txt"
 fi
-assert_msg baseline-retry 'GCC build identity missing or changed; cleaning cached build artifacts (previous: gcc (fixture) 17.0.0 20260906; current: gcc (fixture) 17.0.0 20260920)'
+assert_msg baseline-retry 'GCC build identity missing or changed; cleaning cached build artifacts (previous: gcc|gcc (fixture) 17.0.0 20260906|'; assert_msg baseline-retry '; current: gcc|gcc (fixture) 17.0.0 20260920|'
 assert_record baseline-retry p2
 assert_plan baseline-retry p2 build
 assert_row baseline-retry p2 succeeded 0

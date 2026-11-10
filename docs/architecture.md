@@ -230,8 +230,11 @@ lands in the **build user's cache**, never beside the recipe (the W4a
 relocation): the engine passes `BUILDDIR`/`PKGDIR`/`PKGDEST` at
 `<build_dir>/build|pkg|pkgs`, where `build_dir` resolves as `GSA_BUILD_DIR`
 beats `gsa.conf` `build_dir` beats `<build-user-home>/.cache/gsa`. `SRCDEST`
-stays governed by `makepkg.conf` untouched (env beats the build user's
-`~/.makepkg.conf` beats `/etc/makepkg.conf`). Archive discovery scans the
+is engine-owned since the config rework (contract §B.11): the `srcdest` key,
+built-in `~/.gsa-src`, no environment rung and no makepkg.conf rung. Each
+lane's makepkg is handed a generated `--config` composite
+(`gsa_model::makepkg_conf`); the host's `makepkg.conf` is not read. Archive
+discovery scans the
 shared `PKGDEST` plus the pre-W4 recipe dirs as a truth-filtered LEGACY
 fallback for old archives — every candidate is matched by its
 `.PKGINFO`/output-name truth, so a shared `PKGDEST` can never hand over

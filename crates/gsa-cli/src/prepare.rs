@@ -617,8 +617,10 @@ fn prepare_one(
     let mut log: Vec<String> = Vec::new();
     let mut skip_allowed = true;
 
-    // ── 1. GCC toolchain drift gate (docs/build-guide.md "Skip and resume") ─
-    let identity = match toolchain::gcc_identity() {
+    // ── 1. compiler toolchain drift gate (docs/build-guide.md "Skip and
+    //       resume"; the identity folds in the engine's config bytes, rule 6) ─
+    let toolchain = selected_toolchain(id.as_str(), graph.record(idx), recipe_dir);
+    let identity = match toolchain::build_identity(toolchain) {
         Ok(identity) => identity,
         Err(error) => {
             return PackagePrep {
@@ -626,7 +628,7 @@ fn prepare_one(
                     reason: "toolchain-identity".to_string(),
                 },
                 log: vec![format!(
-                    "{name}: could not determine the GCC build identity ({error})"
+                    "{name}: could not determine the {toolchain} build identity ({error})"
                 )],
             };
         }
@@ -1136,4 +1138,30 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
+}
+
+/// The recipe's compiler family at planning time (§B.11): the run's
+/// `--toolchain`, else the record's tag, else the PKGBUILD scan, else the
+/// default — the same ladder the lane child walks, so the identity the
+/// planner compares is the one the build will produce. An ambiguous recipe
+/// resolves to the default here; the LANE refuses it with the named message,
+/// which is the surface that can stop a build.
+fn selected_toolchain(
+    pkg: &str,
+    record: &gsa_model::TopologyRecord,
+    recipe_dir: &Path,
+) -> gsa_model::toolchain::Toolchain {
+    let source = std::fs::read_to_string(recipe_dir.join("PKGBUILD")).unwrap_or_default();
+    gsa_recipe::toolchain::select(
+        pkg,
+        gsa_model::toolchain::override_value(),
+        record.toolchain(),
+        &source,
+    )
+    .map(|selected| selected.toolchain)
+    .unwrap_or_else(|_| {
+        gsa_model::toolchain::override_value()
+            .or_else(|| record.toolchain())
+            .unwrap_or(gsa_model::toolchain::Toolchain::DEFAULT)
+    })
 }

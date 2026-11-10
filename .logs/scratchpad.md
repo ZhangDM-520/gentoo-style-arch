@@ -1,10 +1,10 @@
 # Scratchpad
 
-**Idle.** Memory condensation pass 1 (pitfalls → one line per mechanism) landed
-in both repositories; `memory-layout.sh` green in both.
+**Idle.** No active task.
 
-Last action: `.logs/action-2026-11-10-memory-condense-pitfalls.md`.
+Last action: `.logs/action-2026-11-10-shipped-flag-audit.md` (shipped-flag
+audit, `--print-conf`, universal exported RUSTFLAGS).
 
-Next: owner decision on pass 2 — compress rule prose in place (~430 chars/rule)
-or move rule rationale to `docs/` and keep numbered one-liners inline. Nothing
-is committed.
+Next: install window once the tree is committed and pushed —
+`gsa -Sy` then `sudo gsa -S gsa-pm` (the store builds fetched HEAD, so the
+`--print-conf` seam must exist upstream first). Nothing is committed.

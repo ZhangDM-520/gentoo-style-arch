@@ -1,14 +1,20 @@
 //! The `gsa.conf` config surface (plan-gsa-isolation.md W2, locked decision
-//! 5; contract §J.4). Two layers, auto-read, no CLI flag:
+//! 5; contract §B.11/§J.4). Two directories, auto-read, no CLI flag:
 //!
-//!   `/etc/gsa.conf`                    system layer (root)
+//!   `/etc/gsa/gsa.conf`                system layer (root)
 //!   `~/.config/gsa/gsa.conf`           user layer (the build user's home:
 //!                                      SUDO_UID's passwd home under a sudo
 //!                                      run, else `$HOME`)
 //!
+//! The same two directories also hold the per-compiler makepkg bodies
+//! (`gcc-makepkg.conf`, `clang-makepkg.conf` — see [`crate::makepkg_conf`]),
+//! which is why the layer unit is a DIRECTORY: one resolution answers "where
+//! does this site keep its engine configuration" for every file, instead of a
+//! second ladder per file name.
+//!
 //! Per key the USER layer wins over the system layer, which wins over the
 //! built-ins (locked decision 5). The keys are `project`, `recipe_url`,
-//! `build_dir`, `state_dir`, `recipe_dir`; an unknown key is an ERROR naming
+//! `build_dir`, `state_dir`, `recipe_dir`, `srcdest`; an unknown key is an ERROR naming
 //! file:line — a typo'd key must never silently mean "built-in default". The plan's fifth
 //! key group ("defaults") is deliberately not implemented: the project's
 //! `build-defaults.conf` already owns per-project defaults and a second
@@ -36,11 +42,22 @@ static BUILD_ROOT_OVERRIDE: OnceLock<PathBuf> = OnceLock::new();
 /// The built-in state root (contract §J.3).
 pub const DEFAULT_STATE_DIR: &str = "/var/lib/gsa";
 
-/// The system layer's fixed path.
-pub const SYSTEM_CONFIG: &str = "/etc/gsa.conf";
+/// The system configuration directory (baseline layer): root-owned, shipped
+/// by the `gsa-pm` recipe.
+pub const SYSTEM_CONF_DIR: &str = "/etc/gsa";
 
-/// The user layer's path below the build user's home.
-pub const USER_CONFIG: &str = ".config/gsa/gsa.conf";
+/// The user configuration directory below the build user's home — the clone
+/// that overrides the baseline file by file.
+pub const USER_CONF_DIR: &str = ".config/gsa";
+
+/// The engine's own config file name inside a configuration directory (strict
+/// `key = value`; NOT a shell body, never sourced by makepkg).
+pub const GSA_CONF_NAME: &str = "gsa.conf";
+
+/// The retired single-file system layer. Still read (with one warning) when
+/// the new directory holds no `gsa.conf`, so an upgraded engine never loses an
+/// operator's `build_dir` mid-transition; contract §B.9 carries the row.
+pub const LEGACY_SYSTEM_CONFIG: &str = "/etc/gsa.conf";
 
 /// The built-in recipe-store upstream (the recipe repository's origin).
 pub const DEFAULT_RECIPE_URL: &str = "https://github.com/ZhangDM-520/gsa-recipe.git";
@@ -267,12 +284,13 @@ pub fn checkout_roots(recipe_dir: &Path, pkgbase: Option<&str>, include_mirror: 
 }
 
 /// The known key roster — one place, reused by the parse error message.
-const KEYS: [&str; 5] = [
+const KEYS: [&str; 6] = [
     "project",
     "recipe_url",
     "build_dir",
     "state_dir",
     "recipe_dir",
+    "srcdest",
 ];
 
 /// One config layer's values. `None` = the key was not set in this layer
@@ -284,6 +302,9 @@ pub struct GsaConfig {
     pub build_dir: Option<PathBuf>,
     pub state_dir: Option<PathBuf>,
     pub recipe_dir: Option<PathBuf>,
+    /// The makepkg source cache (contract §B.11): the engine owns it now, so a
+    /// build domain that was retired from makepkg.conf still has one ladder.
+    pub srcdest: Option<PathBuf>,
 }
 
 impl GsaConfig {
@@ -295,6 +316,7 @@ impl GsaConfig {
             build_dir: over.build_dir.or(self.build_dir),
             state_dir: over.state_dir.or(self.state_dir),
             recipe_dir: over.recipe_dir.or(self.recipe_dir),
+            srcdest: over.srcdest.or(self.srcdest),
         }
     }
 }
@@ -331,6 +353,7 @@ pub fn parse_layer(text: &str, origin: &str, home: &Path) -> Result<GsaConfig, S
             "build_dir" => cfg.build_dir = Some(expand_home(value, home)),
             "state_dir" => cfg.state_dir = Some(expand_home(value, home)),
             "recipe_dir" => cfg.recipe_dir = Some(expand_home(value, home)),
+            "srcdest" => cfg.srcdest = Some(expand_home(value, home)),
             "recipe_url" => cfg.recipe_url = Some(value.to_string()),
             _ => unreachable!("KEYS is the roster"),
         }
@@ -393,121 +416,52 @@ pub fn build_user_home() -> Result<PathBuf, String> {
     Err("no home directory: neither SUDO_UID nor HOME is set — set HOME or run via sudo".to_string())
 }
 
-/// The makepkg `SRCDEST` of the build domain: the `SRCDEST` env (explicit
-/// and fixture control) beats the BUILD USER's `~/.makepkg.conf` beats
-/// `/etc/makepkg.conf`. Engine-side lookups must resolve through this, never
-/// the raw env alone — under a root supervisor `SRCDEST` is not in the
-/// environment at all and lives in the user's makepkg.conf (2026-10-16
-/// smoke: the checkout was invisible and the anchor deferred
-/// source-unfetchable), and `$HOME` there is root's (same
-/// identity-follows-the-drop rule as `privilege::drop_identity_env`).
+/// The makepkg `SRCDEST` of the build domain (contract §B.11): the engine's
+/// OWN `gsa.conf` ladder — the `srcdest` key (user layer already merged over
+/// the baseline) beats the built-in `~/.gsa-src`.
+///
+/// The `SRCDEST` environment rung and both makepkg.conf rungs are GONE: the
+/// engine stopped honouring makepkg.conf, and a second ladder for one path is
+/// how the 2026-10-16 "checkout invisible, anchor deferred
+/// source-unfetchable" smoke happened. An unreadable config contributes
+/// nothing here — every command loads the config through its own path first,
+/// so the loud failure belongs to that call, not to a silently different
+/// source mirror.
 pub fn resolve_srcdest() -> Option<PathBuf> {
     resolve_srcdest_with_source().0
 }
 
-/// [`resolve_srcdest`] plus the rung that decided it; `"no SRCDEST"` when no
-/// tier supplied one (the callers' `None` branch, unchanged). Both conf files
-/// are read up front (two small local files); which one decides the value is
-/// the ladder's answer, never the read order.
+/// [`resolve_srcdest`] plus the rung that decided it; `"no SRCDEST"` only
+/// when no rung could answer (no `srcdest` key AND no resolvable build-user
+/// home for the built-in).
 pub fn resolve_srcdest_with_source() -> (Option<PathBuf>, &'static str) {
-    // The home the conf's shell would expand against is the BUILD USER's
-    // (same identity-follows-the-drop rule as `privilege::drop_identity_env`).
+    let cfg = load().unwrap_or_default();
     let home = build_user_home().ok();
-    let user_conf = home
-        .as_ref()
-        .and_then(|home| std::fs::read_to_string(home.join(".makepkg.conf")).ok());
-    let system_conf = std::fs::read_to_string("/etc/makepkg.conf").ok();
-    let env = std::env::var("SRCDEST").ok();
-    let resolved = resolve_srcdest_from(
-        env.as_deref(),
-        user_conf.as_deref(),
-        system_conf.as_deref(),
-        home.as_deref(),
-    );
-    (resolved.value, resolved.source)
+    let (value, source) = resolve_srcdest_from(&cfg, home.as_deref());
+    (value, source)
 }
 
-/// The pure precedence seam for [`resolve_srcdest`]: both conf files arrive
-/// as text and `home` expands their home-relative shapes, so the ladder is
-/// testable without touching the process environment or the filesystem.
+/// The pure precedence seam for [`resolve_srcdest`] (testable without the
+/// process environment or the filesystem).
 fn resolve_srcdest_from(
-    env: Option<&str>,
-    user_conf: Option<&str>,
-    system_conf: Option<&str>,
+    cfg: &GsaConfig,
     home: Option<&Path>,
-) -> Resolved<Option<PathBuf>> {
-    let from_conf = |text: Option<&str>| {
-        text.and_then(|text| makepkg_conf_assign(text, "SRCDEST"))
-            .map(|dir| expand_home_path(&dir, home))
-    };
-    match resolve_opt(&[
-        // SRCDEST's own convention is stricter than the `GSA_*` inputs':
-        // only a truly empty value is unset.
-        ("SRCDEST", env.filter(|v| !v.is_empty()).map(PathBuf::from)),
-        ("~/.makepkg.conf SRCDEST", from_conf(user_conf)),
-        ("/etc/makepkg.conf SRCDEST", from_conf(system_conf)),
-    ]) {
-        Some(resolved) => Resolved {
-            value: Some(resolved.value),
-            source: resolved.source,
-        },
-        None => Resolved {
-            value: None,
-            source: "no SRCDEST",
+) -> (Option<PathBuf>, &'static str) {
+    match resolve_opt(&[("gsa.conf srcdest", cfg.srcdest.clone())]) {
+        Some(resolved) => (Some(resolved.value), resolved.source),
+        None => match home {
+            Some(home) => (Some(home.join(".gsa-src")), "the built-in default"),
+            None => (None, "no SRCDEST"),
         },
     }
 }
 
-/// Makepkg.conf is shell and a path-valued key realistically takes the two
-/// home-relative shapes expanded here (`~`, `$HOME`/`${HOME}`); anything
-/// else (command substitution, `include` directives) stays literal — the
-/// approximate parse is documented behaviour, and a dropped
-/// `bash -c 'source <conf>'` adapter is the honest future seam (2026-10-17
-/// sweep).
-fn expand_home_path(value: &str, home: Option<&Path>) -> PathBuf {
-    let Some(home) = home else {
-        return PathBuf::from(value);
-    };
-    if value == "~" {
-        return home.to_path_buf();
-    }
-    for prefix in ["~/", "$HOME/", "${HOME}/"] {
-        if let Some(rest) = value.strip_prefix(prefix) {
-            return home.join(rest);
-        }
-    }
-    PathBuf::from(value)
-}
-
-/// One `NAME=value` assignment from a makepkg.conf-shaped file (comments and
-/// shell quoting tolerated enough for the path-valued keys we read). Shell
-/// semantics: a LATER assignment wins — the 2026-10-17 sweep found the scan
-/// returning the first, resolving a different path than makepkg uses.
-fn makepkg_conf_assign(content: &str, name: &str) -> Option<String> {
-    let mut found = None;
-    for raw in content.lines() {
-        let line = raw.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-        if key.trim() != name {
-            continue;
-        }
-        let value = value.trim().trim_matches(|c| c == '"' || c == '\'');
-        if !value.is_empty() {
-            found = Some(value.to_string());
-        }
-    }
-    found
-}
-
-/// Load both layers, user over system over built-ins. Missing files are
-/// fine (the layer simply contributes nothing); malformed files fail loud.
+/// Load every auto-read layer, user over system over built-ins. Missing files
+/// are fine (the layer simply contributes nothing); malformed files fail loud.
 /// `GSA_CONF` (fixture/hermetic control, like `GSA_STATE_DIR`) replaces the
-/// two auto-read layers with exactly one file.
+/// `gsa.conf` layers with exactly one file; `GSA_CONF_DIR` replaces the whole
+/// directory resolution with one directory, which is what a fixture needs so
+/// the host's `/etc/gsa` can never leak into the battery.
 pub fn load() -> Result<GsaConfig, String> {
     if let Ok(path) = std::env::var("GSA_CONF") {
         if !path.is_empty() {
@@ -516,9 +470,116 @@ pub fn load() -> Result<GsaConfig, String> {
         }
     }
     let home = build_user_home()?;
-    let system = read_layer(Path::new(SYSTEM_CONFIG), &home)?;
-    let user = read_layer(&home.join(USER_CONFIG), &home)?;
-    Ok(system.merged_with(user))
+    let layers = conf_layers_with(std::env::var("GSA_CONF_DIR").ok().as_deref(), &home);
+    let mut cfg = GsaConfig::default();
+    // The retired single-file layer is the LOWEST rung, so a site that has
+    // already migrated wins outright; reading it keeps the transition silent
+    // in behaviour and loud only in the warning.
+    if layers.auto {
+        if let Some(legacy) = legacy_layer(&home)? {
+            cfg = cfg.merged_with(legacy);
+        }
+    }
+    for dir in &layers.dirs {
+        cfg = cfg.merged_with(read_layer(&dir.join(GSA_CONF_NAME), &home)?);
+    }
+    Ok(cfg)
+}
+
+/// One configuration-directory resolution: `dirs` are in SOURCE order (the
+/// baseline first, the override last), so merging walks them forwards.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfLayers {
+    pub dirs: Vec<PathBuf>,
+    /// Whether this is the auto-read resolution (the only one that consults
+    /// the retired `/etc/gsa.conf`).
+    pub auto: bool,
+    pub source: &'static str,
+}
+
+impl ConfLayers {
+    /// The directory a per-compiler body is looked up in, highest precedence
+    /// first.
+    pub fn lookup(&self) -> impl Iterator<Item = &Path> {
+        self.dirs.iter().rev().map(PathBuf::as_path)
+    }
+}
+
+/// The live directory resolution. `GSA_CONF_DIR` wins outright (one
+/// directory, both rungs collapse onto it) — the fixture and hermetic control,
+/// the same shape `GSA_CONF` has for the file.
+pub fn conf_layers() -> Result<ConfLayers, String> {
+    let home = build_user_home()?;
+    Ok(conf_layers_with(
+        std::env::var("GSA_CONF_DIR").ok().as_deref(),
+        &home,
+    ))
+}
+
+/// The pure half of [`conf_layers`] (testable without process env).
+pub fn conf_layers_with(env: Option<&str>, home: &Path) -> ConfLayers {
+    if let Some(dir) = nonempty(env) {
+        return ConfLayers {
+            dirs: vec![PathBuf::from(dir)],
+            auto: false,
+            source: "GSA_CONF_DIR",
+        };
+    }
+    ConfLayers {
+        dirs: vec![
+            PathBuf::from(SYSTEM_CONF_DIR),
+            home.join(USER_CONF_DIR),
+        ],
+        auto: true,
+        source: "the built-in directories",
+    }
+}
+
+/// The generated makepkg composite's source list for one toolchain: the
+/// universal body, then every configuration directory's per-compiler body in
+/// source order. Returns the paths only — the caller renders the shell, so
+/// this module stays the one place that knows the layout.
+pub fn makepkg_conf_sources(toolchain: crate::toolchain::Toolchain) -> Result<(ConfLayers, Vec<PathBuf>), String> {
+    let layers = conf_layers()?;
+    let name = toolchain.conf_name();
+    let paths = layers
+        .dirs
+        .iter()
+        .map(|dir| dir.join(name))
+        .filter(|path| path.is_file())
+        .collect();
+    Ok((layers, paths))
+}
+
+/// The retired `/etc/gsa.conf`, when it still exists. Warns exactly once per
+/// process: it is read as the baseline while `/etc/gsa/gsa.conf` is absent
+/// (the operator's `build_dir` keeps working), and ignored — loudly — once
+/// the new file exists, so two live homes can never drift apart.
+fn legacy_layer(home: &Path) -> Result<Option<GsaConfig>, String> {
+    let legacy = Path::new(LEGACY_SYSTEM_CONFIG);
+    if !legacy.is_file() {
+        return Ok(None);
+    }
+    let migrated = Path::new(SYSTEM_CONF_DIR).join(GSA_CONF_NAME).is_file();
+    if migrated {
+        warn_once(&format!(
+            "gsa: {LEGACY_SYSTEM_CONFIG} is retired and IGNORED ({SYSTEM_CONF_DIR}/{GSA_CONF_NAME} exists) — delete the old file"
+        ));
+        return Ok(None);
+    }
+    warn_once(&format!(
+        "gsa: {LEGACY_SYSTEM_CONFIG} is retired — move it to {SYSTEM_CONF_DIR}/{GSA_CONF_NAME}"
+    ));
+    read_layer(legacy, home).map(Some)
+}
+
+/// One warning per process: `load()` runs on every command that needs the
+/// config, and a migration notice repeated per invocation is noise, not a
+/// reminder.
+fn warn_once(message: &str) {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| eprintln!("{message}"));
 }
 
 fn read_layer(path: &Path, home: &Path) -> Result<GsaConfig, String> {
@@ -638,6 +699,40 @@ fn recipe_checkout_from(value: &str, home: Option<&Path>) -> Option<PathBuf> {
     })
 }
 
+/// Create `dir` for the build user, one level at a time: every missing
+/// ancestor the engine brings into existence is handed to the build user as
+/// it is created. A `create_dir_all` as root would leave the whole new chain
+/// root-owned and unremovable by the build user (rule 19; 2026-10-17 sweep:
+/// the battery's fresh per-fixture caches ended up `rm`-proof one level above
+/// the cache root).
+///
+/// One seam for every writer of the build-cache root (`gsa-build`'s lane
+/// command and `gsa-fetch`'s config install): the fetch path materializes the
+/// root before the first lane exists, so a second copy of this walk would be
+/// the one that forgot the ownership handoff.
+pub fn create_owned_dir(dir: &Path) -> Result<(), String> {
+    let mut missing: Vec<&Path> = Vec::new();
+    let mut cursor = dir;
+    while !cursor.exists() {
+        missing.push(cursor);
+        cursor = cursor
+            .parent()
+            .ok_or_else(|| format!("cannot resolve the parent of {}", dir.display()))?;
+    }
+    for path in missing.into_iter().rev() {
+        // Concurrent lanes resolve the same layout: another one may create a
+        // level between our exists() walk and here — EEXIST is success.
+        match std::fs::create_dir(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(format!("cannot create {}: {error}", path.display())),
+        }
+        crate::privilege::own_to_build_user(path)
+            .map_err(|error| format!("cannot hand {} to the build user: {error}", path.display()))?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -647,39 +742,56 @@ mod tests {
     }
 
     #[test]
-    fn makepkg_conf_assign_reads_quoted_path_values() {
+    fn conf_layers_put_the_baseline_first_and_the_user_clone_last() {
+        let home = home();
+        let layers = conf_layers_with(None, &home);
         assert_eq!(
-            makepkg_conf_assign("# comment\nSRCDEST = \"/x/y\"\n", "SRCDEST"),
-            Some("/x/y".to_string())
+            layers.dirs,
+            vec![PathBuf::from("/etc/gsa"), home.join(".config/gsa")]
         );
-        assert_eq!(makepkg_conf_assign("SRCDEST=\n", "SRCDEST"), None);
-        assert_eq!(makepkg_conf_assign("PKGDEST=/z\n", "SRCDEST"), None);
+        assert!(layers.auto, "the auto resolution consults the legacy file");
+        assert_eq!(layers.source, "the built-in directories");
+        // Lookup order is the reverse of source order: the user clone is
+        // consulted first, and the baseline is the fallback.
+        assert_eq!(
+            layers.lookup().collect::<Vec<_>>(),
+            vec![home.join(".config/gsa").as_path(), Path::new("/etc/gsa")]
+        );
     }
 
     #[test]
-    fn makepkg_conf_assign_follows_shell_last_assignment_wins() {
-        assert_eq!(
-            makepkg_conf_assign("SRCDEST=/first\nSRCDEST=/second\n", "SRCDEST"),
-            Some("/second".to_string())
-        );
+    fn gsa_conf_dir_collapses_the_resolution_and_skips_the_legacy_file() {
+        // One directory, exactly like `GSA_CONF` for the file: a fixture must
+        // never see the host's /etc/gsa, nor be warned about /etc/gsa.conf.
+        let layers = conf_layers_with(Some("/tmp/hermetic"), &home());
+        assert_eq!(layers.dirs, vec![PathBuf::from("/tmp/hermetic")]);
+        assert!(!layers.auto);
+        assert_eq!(layers.source, "GSA_CONF_DIR");
+        // A blank value is unset, like every `GSA_*` path input.
+        assert!(conf_layers_with(Some("   "), &home()).auto);
     }
 
     #[test]
-    fn expand_home_path_grows_the_two_home_relative_shapes() {
-        let home = PathBuf::from("/home/u");
-        assert_eq!(expand_home_path("~", Some(&home)), home);
-        assert_eq!(expand_home_path("~/src", Some(&home)), home.join("src"));
+    fn srcdest_is_gsa_conf_or_the_built_in() {
+        let home = home();
+        // The key decides when set — the env is no longer consulted at all.
+        let mut cfg = GsaConfig {
+            srcdest: Some(PathBuf::from("/mirror")),
+            ..GsaConfig::default()
+        };
         assert_eq!(
-            expand_home_path("$HOME/src", Some(&home)),
-            home.join("src")
+            resolve_srcdest_from(&cfg, Some(&home)),
+            (Some(PathBuf::from("/mirror")), "gsa.conf srcdest")
         );
+        // Unset falls to the built-in, which keeps the existing multi-GB
+        // source cache in place (~/.gsa-src) rather than orphaning it.
+        cfg.srcdest = None;
         assert_eq!(
-            expand_home_path("${HOME}/src", Some(&home)),
-            home.join("src")
+            resolve_srcdest_from(&cfg, Some(&home)),
+            (Some(home.join(".gsa-src")), "the built-in default")
         );
-        assert_eq!(expand_home_path("/abs/src", Some(&home)), PathBuf::from("/abs/src"));
-        // No home known: every shape stays literal rather than guessing.
-        assert_eq!(expand_home_path("~/src", None), PathBuf::from("~/src"));
+        // No home to expand against: the caller's `None` branch gets a label.
+        assert_eq!(resolve_srcdest_from(&cfg, None), (None, "no SRCDEST"));
     }
 
     #[test]
@@ -848,56 +960,19 @@ mod tests {
     }
 
     #[test]
-    fn srcdest_precedence_is_env_then_the_user_conf_then_the_system_conf() {
+    fn srcdest_has_exactly_one_ladder() {
+        // Regression for the retired two-ladder shape: a `SRCDEST` in the
+        // environment must NOT beat the config key any more (the engine owns
+        // the source cache; contract §B.11).
         let home = home();
-        let user = "SRCDEST=~/u-src\n";
-        let system = "SRCDEST=/etc-src\n";
+        let cfg = GsaConfig {
+            srcdest: Some(PathBuf::from("/cfg-src")),
+            ..GsaConfig::default()
+        };
         assert_eq!(
-            resolve_srcdest_from(Some("/env-src"), Some(user), Some(system), Some(&home)),
-            Resolved {
-                value: Some(PathBuf::from("/env-src")),
-                source: "SRCDEST",
-            }
-        );
-        assert_eq!(
-            resolve_srcdest_from(None, Some(user), Some(system), Some(&home)),
-            Resolved {
-                value: Some(home.join("u-src")),
-                source: "~/.makepkg.conf SRCDEST",
-            }
-        );
-        assert_eq!(
-            resolve_srcdest_from(None, None, Some(system), Some(&home)),
-            Resolved {
-                value: Some(PathBuf::from("/etc-src")),
-                source: "/etc/makepkg.conf SRCDEST",
-            }
-        );
-        // No tier supplied one: `None` survives, with the label the callers'
-        // `None` branch would otherwise have to invent.
-        assert_eq!(
-            resolve_srcdest_from(None, None, None, Some(&home)),
-            Resolved {
-                value: None,
-                source: "no SRCDEST",
-            }
-        );
-        // An empty env value is unset (SRCDEST's own convention: trim does
-        // not enter into it), so the next rung answers.
-        assert_eq!(
-            resolve_srcdest_from(Some(""), Some(user), None, Some(&home)),
-            Resolved {
-                value: Some(home.join("u-src")),
-                source: "~/.makepkg.conf SRCDEST",
-            }
-        );
-        // A conf file without the key contributes nothing.
-        assert_eq!(
-            resolve_srcdest_from(None, Some("PKGDEST=/pkgs\n"), None, Some(&home)),
-            Resolved {
-                value: None,
-                source: "no SRCDEST",
-            }
+            resolve_srcdest_from(&cfg, Some(&home)).0,
+            Some(PathBuf::from("/cfg-src")),
+            "the env rung is gone; only gsa.conf decides"
         );
     }
 

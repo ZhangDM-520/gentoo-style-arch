@@ -249,7 +249,7 @@ pub fn parse_topology(
                         file,
                         line_no,
                         format!(
-                            "unknown tag in topology record {id}: {tag} (allowed: abi=must,abi=should,abi-rev=<n>,app-cluster=<name>,version-sync=nvchecker)"
+                            "unknown tag in topology record {id}: {tag} (allowed: abi=must,abi=should,abi-rev=<n>,app-cluster=<name>,version-sync=nvchecker,toolchain=gcc|clang)"
                         ),
                     ));
                 };
@@ -288,6 +288,20 @@ pub fn parse_topology(
                     file,
                     line_no,
                     format!("topology record for {id} names more than one abi-rev tag"),
+                ));
+            }
+            // At most one toolchain declaration: two families would make the
+            // lane's config ambiguous, and a later edit must not silently win.
+            if tags
+                .iter()
+                .filter(|t| matches!(t, Tag::Toolchain(_)))
+                .count()
+                > 1
+            {
+                return Err(TopologyError::at(
+                    file,
+                    line_no,
+                    format!("topology record for {id} names more than one toolchain tag"),
                 ));
             }
         }

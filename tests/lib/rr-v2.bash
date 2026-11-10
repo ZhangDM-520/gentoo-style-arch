@@ -551,6 +551,13 @@ rr2_engine_argv() {
     if [[ -z ${GSA_RECIPES_DIR:-} ]]; then
         guard+=(GSA_RECIPES_DIR="$ws/../.rr2-recipes")
     fi
+    # Engine configuration (§B.11): one directory for gsa.conf and the
+    # per-compiler makepkg bodies, so the HOST's /etc/gsa (and its retired
+    # /etc/gsa.conf) can never leak into a fixture. Missing files are legal —
+    # the engine falls back to its built-in bodies.
+    if [[ -z ${GSA_CONF_DIR:-} ]]; then
+        guard+=(GSA_CONF_DIR="$ws/../.rr2-conf")
+    fi
     case $mode in
     sudo)
         local -a fwd=()

@@ -176,7 +176,14 @@ fetch_ws() {
     write_log_pacman "$ws"
     mkdir -p "$ws/srcdest"
     export PATH="$ws/bin:$PATH"
+    # The ENGINE owns SRCDEST now (§B.11): it reads the `srcdest` key from its
+    # own config and no longer honours the environment rung, so the fixture
+    # hands it a hermetic config directory. The shell variable stays for the
+    # stub-side writes the assertions inspect.
     export SRCDEST="$ws/srcdest"
+    export GSA_CONF_DIR="$fixture/conf"
+    mkdir -p "$GSA_CONF_DIR"
+    printf 'srcdest = %s\n' "$ws/srcdest" >"$GSA_CONF_DIR/gsa.conf"
     export GSA_FAKE_FETCH_LOG="$ws/fetch.log"
     export GSA_FAKE_PACMAN_LOG="$ws/pacman.log"
     export GSA_FAKE_SUDO_LOG="$ws/sudo.log"

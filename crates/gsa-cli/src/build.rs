@@ -40,7 +40,7 @@ use crate::{record, render};
 /// The five build-run modifiers (§B.8): real on a `-B` build, deferred on
 /// every other spelling (the classifier consults this roster). The two
 /// fetch-ahead knobs (owner decision 1) ride along.
-pub const REAL_BUILD_FLAGS: [&str; 9] = [
+pub const REAL_BUILD_FLAGS: [&str; 10] = [
     "--fail-fast",
     "--lanes",
     "--jobs",
@@ -50,11 +50,12 @@ pub const REAL_BUILD_FLAGS: [&str; 9] = [
     "--no-build-dir-prompt",
     "--no-prefetch",
     "--prefetch-ahead",
+    "--toolchain",
 ];
 
 /// What a `-S` build+install run additionally accepts (§B.8): the dynamic
 /// IgnorePkg registration switch and the target pacman.conf.
-pub const REAL_INSTALL_FLAGS: [&str; 11] = [
+pub const REAL_INSTALL_FLAGS: [&str; 12] = [
     "--fail-fast",
     "--lanes",
     "--jobs",
@@ -66,6 +67,7 @@ pub const REAL_INSTALL_FLAGS: [&str; 11] = [
     "--prefetch-ahead",
     "--no-register-ignorepkg",
     "--config",
+    "--toolchain",
 ];
 
 /// `gsa -B <targets…> [ranges…]` — run the selection build-only. Returns the
@@ -96,6 +98,15 @@ fn run_build_with(
     err: &mut dyn Write,
     install: Option<DecideMode>,
 ) -> Result<i32, Exit> {
+    // ── the run's compiler family (§B.11) ────────────────────────────────
+    // Pinned before any lane spawns: the supervisor exports it to every lane
+    // child, and a typo names the two alternatives here rather than
+    // defaulting to gcc silently.
+    if let Some(value) = &inv.toolchain {
+        let toolchain = gsa_model::toolchain::Toolchain::parse(value)
+            .map_err(|message| Exit::Usage(format!("--toolchain: {message}")))?;
+        gsa_model::toolchain::set_override(toolchain);
+    }
     // The build-dir answer (a `--build-dir` flag or the prompt's) is written
     // back into this run's invocation so the run record's continuation
     // restates the tree this run actually built into (§J.2/§H.2).
@@ -505,6 +516,14 @@ fn run_build_with(
             )
         })
         .collect();
+    // The declared `toolchain=` per recipe id (§B.11): the marker hook folds
+    // it into the build identity, and the run override still beats it.
+    let toolchains: std::collections::BTreeMap<String, Option<gsa_model::toolchain::Toolchain>> =
+        graph
+            .records()
+            .iter()
+            .map(|record| (record.id.as_str().to_string(), record.toolchain()))
+            .collect();
     let register_hook: Box<
         dyn FnMut(&str, &std::path::Path, &std::collections::BTreeSet<String>, bool) -> Vec<String>
             + Send,
@@ -573,7 +592,22 @@ fn run_build_with(
                             }
                         }
                         if baselines_ok {
-                            match gsa_recipe::toolchain::gcc_identity() {
+                            let source = std::fs::read_to_string(recipe_dir.join("PKGBUILD"))
+                                .unwrap_or_default();
+                            let declared = toolchains.get(pkg).copied().flatten();
+                            let selected = gsa_recipe::toolchain::select(
+                                pkg,
+                                gsa_model::toolchain::override_value(),
+                                declared,
+                                &source,
+                            )
+                            .map(|selected| selected.toolchain)
+                            .unwrap_or(
+                                gsa_model::toolchain::override_value()
+                                    .or(declared)
+                                    .unwrap_or(gsa_model::toolchain::Toolchain::DEFAULT),
+                            );
+                            match gsa_recipe::toolchain::build_identity(selected) {
                                 Ok(identity) => {
                                     if let Err(error) = gsa_recipe::toolchain::write_marker(
                                         &state_dir, pkg, &identity,
@@ -582,7 +616,7 @@ fn run_build_with(
                                     }
                                 }
                                 Err(error) => notes.push(format!(
-                                    "toolchain marker: {pkg}: cannot determine the GCC build identity ({error})"
+                                    "toolchain marker: {pkg}: cannot determine the {selected} build identity ({error})"
                                 )),
                             }
                         }
@@ -1767,6 +1801,7 @@ mod tests {
             jobs: None,
             intensity: None,
             state_dir: None,
+            toolchain: None,
             config: None,
             tail: None,
             keep: None,

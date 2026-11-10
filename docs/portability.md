@@ -106,11 +106,51 @@ calling `nproc` or hard-coding `-j`.
 
 ## CPU optimization
 
-The default optimization policy comes from the host's `makepkg.conf`. Set
-`GSA_TARGET_CPU` only when intentionally producing packages for a known
-target CPU; the Rust snapshot recipe uses it instead of a hard-coded
-`znver5`. Native optimizations in selected recipes are host-derived and
-should not be redistributed as portable binary artifacts.
+The optimization policy belongs to the **engine**, not to the host's
+`makepkg.conf` (contract §B.11, amended 2026-11-10). The engine ships a
+built-in per-compiler baseline in `/etc/gsa/gcc-makepkg.conf` and
+`/etc/gsa/clang-makepkg.conf` (the user's `~/.config/gsa/` clone overrides
+assignment by assignment), and every lane is handed it as a generated
+`makepkg --config` composite. `/etc/makepkg.conf` and `~/.makepkg.conf` are
+never sourced.
+
+The compiler line is `-march=native -mtune=native`, deliberately not a pinned
+target: it compiles for whatever host runs the build, so a body shipped to a
+reader is not mis-tuned for their machine (on this host it resolves to
+`znver5`, so today's codegen is unchanged). Besides `-O3`, the bodies carry
+`-fno-plt`, `-fno-semantic-interposition`, `-falign-functions=32
+-falign-loops=32`, `-mprefer-vector-width=256`, `-ffp-contract=fast`,
+`-fcf-protection=none`, `-fno-math-errno`, `-fno-trapping-math`,
+`-Wp,-D_FORTIFY_SOURCE=3`, and `LDFLAGS` = mold + `-Wl,-z,relro -Wl,-z,now` +
+`-Wl,-z,pack-relative-relocs` + `-flto` per family (`auto` gcc, `thin` clang).
+The GCC-only passes are in the gcc body alone: `-fipa-pta` (clang hard-rejects
+it) and `-fprefetch-loop-arrays` (clang accepts the spelling and silently
+ignores it). `-fira-hoist-pressure` and `-fstack-reuse=all` are NOT shipped —
+both are gcc defaults at `-O3`. `RUSTFLAGS` (`-C target-cpu=native`) is
+universal and `export`ed by the composite, because makepkg exports only its own
+buildenv list and a recipe that just runs `cargo` would otherwise keep a
+generic target.
+
+A different target CPU, or any single decision reversed, is a **site edit of
+that file**, not a flag on the command line; `GSA_TARGET_CPU` stays what it
+always was — the recipe-selection input the Rust snapshot recipe reads instead
+of pinning `znver5` in its PKGBUILD.
+
+A recipe may still append package-specific deltas (`CFLAGS+=" -ffast-math"`),
+but it no longer carries the per-compiler baseline: the switches 133 recipes
+used to append (`-fipa-pta`, `-fprefetch-loop-arrays`, `-fira-hoist-pressure`,
+`-fstack-reuse=all`) were stripped 2026-11-10 and live in the gcc body. Two
+idioms remain, and both are in `contributing` in the recipe repository:
+
+* a **delta** the package needs (`-ffast-math` for `fftw`, `-DNDEBUG` for
+  `libjxl`) with the reason in a comment;
+* a **removal** of a shipped flag, as a substitution —
+  `CFLAGS=${CFLAGS/-fno-math-errno/}` (the pattern `xorg-server` already uses
+  to drop `-fno-plt` and `-Wl,-z,now`) — never a re-assignment that discards
+  the rest of the line.
+
+Native optimizations in built packages are host-derived and should not be
+redistributed as portable binary artifacts.
 
 That last point separates two things that are easy to conflate:
 
@@ -121,10 +161,11 @@ That last point separates two things that are easy to conflate:
   kernel's `_processor_opt` is a knob with `zen4` and `generic` alternatives
   beside its `native` default. Copy those patterns rather than adding a new
   hard-coded `-march`.
-* **An artifact is not.** `makepkg.conf` supplies `-march=native`, so a package
-  built from this tree is tuned to the building machine and is not a
-  redistributable binary. Hard-coding a target in a recipe would only move that
-  problem from the build host to the reader.
+* **An artifact is not.** The engine's baseline body supplies
+  `-march=znver5` (or whatever the site's `/etc/gsa` body says), so a package
+  built from this tree is tuned to its target and is not a redistributable
+  binary. Hard-coding a target in a recipe would only move that problem from
+  the build host to the reader.
 
 The set is maintained against AMD laptop hardware (see `README.md`), and the
 hardware-support trims are validated on one such model. The recipes build on

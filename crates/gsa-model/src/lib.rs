@@ -14,8 +14,10 @@
 //! `config` (the W2 `gsa.conf` layers).
 
 pub mod config;
+pub mod makepkg_conf;
 pub mod privilege;
 pub mod read;
+pub mod toolchain;
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -145,6 +147,10 @@ pub enum Tag {
     /// C++ snapshots, Qt private API). Participates in the derived abi-token
     /// so a revision bump alone moves the token.
     AbiRev(u64),
+    /// `toolchain=gcc|clang`: the recipe's declared compiler family, which
+    /// selects which engine-owned makepkg body the lane is given (contract
+    /// §B.11). Absent means the engine infers it from the PKGBUILD.
+    Toolchain(crate::toolchain::Toolchain),
 }
 
 impl Tag {
@@ -154,6 +160,11 @@ impl Tag {
             "abi=should" => Some(Tag::AbiShould),
             "version-sync=nvchecker" => Some(Tag::VersionSyncNvchecker),
             _ => {
+                if let Some(toolchain) = s.strip_prefix("toolchain=") {
+                    return crate::toolchain::Toolchain::parse(toolchain)
+                        .ok()
+                        .map(Tag::Toolchain);
+                }
                 if let Some(rev) = s.strip_prefix("abi-rev=") {
                     // Strict: decimal digits only, no empty value — a
                     // malformed override must refuse the record, never
@@ -184,6 +195,7 @@ impl Tag {
             Tag::VersionSyncNvchecker => "version-sync=nvchecker".to_string(),
             Tag::AppCluster(name) => format!("app-cluster={name}"),
             Tag::AbiRev(n) => format!("abi-rev={n}"),
+            Tag::Toolchain(toolchain) => format!("toolchain={toolchain}"),
         }
     }
 }
@@ -232,6 +244,17 @@ impl TopologyRecord {
             .collect::<Vec<_>>()
             .join(",");
         format!("{}|{}|{}|{}|{}", self.id, self.path, groups, edges, tags)
+    }
+
+    /// The record's declared compiler family (`toolchain=` tag), when it names
+    /// one. A record without it resolves by inference at build time
+    /// (`gsa-recipe::toolchain::resolve`), never by defaulting here — the
+    /// record states what is KNOWN, the resolver states what was DECIDED.
+    pub fn toolchain(&self) -> Option<crate::toolchain::Toolchain> {
+        self.tags.iter().find_map(|tag| match tag {
+            Tag::Toolchain(toolchain) => Some(*toolchain),
+            _ => None,
+        })
     }
 }
 

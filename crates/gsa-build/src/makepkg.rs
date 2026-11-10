@@ -12,6 +12,8 @@
 
 use std::path::{Path, PathBuf};
 
+use gsa_model::toolchain::Toolchain;
+
 /// The base makepkg argv every lane uses (fish lane shape).
 pub const MAKEPKG_BASE_ARGS: [&str; 2] = ["-sf", "--noconfirm"];
 
@@ -108,52 +110,6 @@ fn lane_flags(jobs: u32, caller: &str) -> (String, String) {
     (lane, stripped)
 }
 
-/// The lane makepkg.conf shim's file name inside the build-cache root (§K.1).
-pub const LANE_MAKEPKG_CONF_NAME: &str = "lane-makepkg.conf";
-
-/// The lane job-budget shim (§K.1). makepkg sources its config AFTER the
-/// environment and preserves only `PKGDEST`/`SRCDEST`/… from env, so a
-/// config-file `MAKEFLAGS="-j$(nproc)"` silently overrode the lane budget
-/// (2026-11-01 wall: llvm-git ran `ninja -j24` against `core-jobs: 7` —
-/// the exact OOM hazard the budget exists to prevent). `--config` makes
-/// makepkg skip the user override file, so the shim replicates
-/// `source_makepkg_config`'s layering verbatim (system conf +
-/// `/etc/makepkg.conf.d` drop-ins + the user override) and then re-asserts
-/// the lane's job flags from `GSA_LANE_MAKEFLAGS`/`GSA_LANE_NINJAFLAGS`.
-/// Content is job-independent (the values ride the env), so one file serves
-/// every lane and concurrent lanes cannot race its content.
-const LANE_MAKEPKG_CONF_BODY: &str = "\
-# gsa lane makepkg.conf (generated — do not edit; §K.1)
-# Replicates makepkg's source_makepkg_config layering, then re-asserts the
-# lane's job flags: makepkg.conf's own MAKEFLAGS/NINJAFLAGS would otherwise
-# win over the environment (makepkg preserves only PKGDEST/SRCDEST/…).
-source /etc/makepkg.conf
-for _gsa_conf in /etc/makepkg.conf.d/*.conf; do
-    [ -r \"$_gsa_conf\" ] && source \"$_gsa_conf\"
-done
-_gsa_user_conf=\"${XDG_CONFIG_HOME:-$HOME/.config}/pacman/makepkg.conf\"
-if [ -r \"$_gsa_user_conf\" ]; then
-    source \"$_gsa_user_conf\"
-elif [ -r \"$HOME/.makepkg.conf\" ]; then
-    source \"$HOME/.makepkg.conf\"
-fi
-MAKEFLAGS=\"$GSA_LANE_MAKEFLAGS\"
-NINJAFLAGS=\"$GSA_LANE_NINJAFLAGS\"
-";
-
-/// Install the lane makepkg.conf shim under the build-cache `root` via
-/// temp + rename (concurrent lanes write identical content; the rename
-/// keeps readers from ever seeing a partial file).
-fn write_lane_makepkg_conf(root: &Path) -> Result<PathBuf, String> {
-    let path = root.join(LANE_MAKEPKG_CONF_NAME);
-    let tmp = root.join(format!(".{LANE_MAKEPKG_CONF_NAME}.tmp-{}", std::process::id()));
-    std::fs::write(&tmp, LANE_MAKEPKG_CONF_BODY)
-        .map_err(|error| format!("cannot write {}: {error}", tmp.display()))?;
-    std::fs::rename(&tmp, &path)
-        .map_err(|error| format!("cannot install {}: {error}", path.display()))?;
-    Ok(path)
-}
-
 /// Build the makepkg command for one lane: recipe-directory cwd, the base
 /// argv plus the validated payload, `GSA_BUILD_JOBS` exported, job flags
 /// stripped from `MAKEFLAGS`/`NINJAFLAGS` (caller's other flags preserved),
@@ -167,43 +123,15 @@ fn write_lane_makepkg_conf(root: &Path) -> Result<PathBuf, String> {
 /// refuse the build — never a silent degrade to `src/`/`pkg/`/archives
 /// beside the recipe (the pre-W4 shape §J.2 forbids), and never a
 /// root-owned cache dir the dropped makepkg cannot write.
-/// Create `dir` for the build user, one level at a time: every missing
-/// ancestor the engine brings into existence is handed to the build user as
-/// it is created. A `create_dir_all` as root would leave the whole new chain
-/// root-owned and unremovable by the build user (rule 19; 2026-10-17 sweep:
-/// the battery's fresh per-fixture caches ended up `rm`-proof one level
-/// above the cache root).
-fn create_owned_dir(dir: &Path) -> Result<(), String> {
-    let mut missing: Vec<&Path> = Vec::new();
-    let mut cursor = dir;
-    while !cursor.exists() {
-        missing.push(cursor);
-        cursor = cursor
-            .parent()
-            .ok_or_else(|| format!("cannot resolve the parent of {}", dir.display()))?;
-    }
-    for path in missing.into_iter().rev() {
-        // Concurrent lanes resolve the same layout: another one may create
-        // a level between our exists() walk and here — EEXIST is success.
-        match std::fs::create_dir(path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(error) => return Err(format!("cannot create {}: {error}", path.display())),
-        }
-        gsa_model::privilege::own_to_build_user(path)
-            .map_err(|error| format!("cannot hand {} to the build user: {error}", path.display()))?;
-    }
-    Ok(())
-}
-
 pub fn makepkg_command(
     recipe_dir: &Path,
     jobs: u32,
     payload_flags: &[String],
     state_dir: &Path,
+    toolchain: Toolchain,
 ) -> Result<std::process::Command, String> {
     let layout = gsa_model::config::build_layout_for_run()?;
-    makepkg_command_in(recipe_dir, jobs, payload_flags, state_dir, &layout)
+    makepkg_command_in(recipe_dir, jobs, payload_flags, state_dir, &layout, toolchain)
 }
 
 /// [`makepkg_command`] against an already-resolved [`BuildLayout`] (the
@@ -215,6 +143,7 @@ pub fn makepkg_command_in(
     payload_flags: &[String],
     state_dir: &Path,
     layout: &gsa_model::config::BuildLayout,
+    toolchain: Toolchain,
 ) -> Result<std::process::Command, String> {
     // Build-domain command: under a privileged run makepkg is dropped to the
     // build user (makepkg refuses root; plan-gsa-isolation.md W1).
@@ -225,8 +154,8 @@ pub fn makepkg_command_in(
         .env("GSA_BUILD_JOBS", jobs.to_string())
         .env("GIT_CONFIG_COUNT", "0");
     for var in ["MAKEFLAGS", "NINJAFLAGS"] {
-        // The lane's job flags ride GSA_LANE_* (consumed by the makepkg.conf
-        // shim below — makepkg.conf's own assignment would clobber these);
+        // The lane's job flags ride GSA_LANE_* (consumed by the generated
+        // composite below — a config-file assignment would clobber these);
         // the caller's non-job flags stay on the plain vars (§K.1).
         let (lane, stripped) = lane_flags(jobs, &std::env::var(var).unwrap_or_default());
         cmd.env(format!("GSA_LANE_{var}"), lane);
@@ -241,7 +170,7 @@ pub fn makepkg_command_in(
     // recipe. The dirs are created here — fatal on failure with the remedy
     // named: a half-created layout writes beside the recipe.
     for dir in [&layout.builddir, &layout.pkgdir, &layout.pkgdest] {
-        create_owned_dir(dir).map_err(|error| {
+        gsa_model::config::create_owned_dir(dir).map_err(|error| {
             format!(
                 "cannot create build-cache directory {}: {error} — point build_dir (gsa.conf) or GSA_BUILD_DIR at a writable cache",
                 dir.display()
@@ -258,16 +187,27 @@ pub fn makepkg_command_in(
     cmd.env("BUILDDIR", absolute_for_child(&layout.builddir));
     cmd.env("PKGDIR", absolute_for_child(&layout.pkgdir));
     cmd.env("PKGDEST", absolute_for_child(&layout.pkgdest));
+    // The composite re-asserts these AFTER any site file (§B.11), so a config
+    // file can never re-point the cache the engine resolved.
+    cmd.env("GSA_LANE_BUILDDIR", absolute_for_child(&layout.builddir));
+    cmd.env("GSA_LANE_PKGDIR", absolute_for_child(&layout.pkgdir));
+    cmd.env("GSA_LANE_PKGDEST", absolute_for_child(&layout.pkgdest));
+    if let Some(srcdest) = gsa_model::config::resolve_srcdest() {
+        // makepkg creates SRCDEST on demand; only an existing parent can be
+        // handed to the build user here, so the mirrored path itself is left
+        // to makepkg (the fetch path has always worked this way).
+        cmd.env("GSA_LANE_SRCDEST", absolute_for_child(&srcdest));
+    }
     let shim = crate::shim::shim_path(state_dir);
     if shim.is_file() {
         cmd.env("PACMAN", absolute_for_child(&shim));
     }
-    // §K.1 job budget: the lane makepkg.conf shim (installed under the
-    // cache root the create_owned_dir walk just materialized) re-asserts
-    // GSA_LANE_* after makepkg's config layering — the only way to beat a
-    // config-file `MAKEFLAGS="-j$(nproc)"` (makepkg preserves only
-    // PKGDEST/SRCDEST/… from env).
-    let lane_conf = write_lane_makepkg_conf(&layout.root)?;
+    // §B.11: the engine owns the makepkg configuration. The generated
+    // composite carries the built-in universal + per-compiler bodies, then
+    // the site's files (baseline before the build user's clone), then the
+    // engine-owned paths and job flags — makepkg sources it via `--config`,
+    // so the host's /etc/makepkg.conf is never consulted.
+    let lane_conf = gsa_model::makepkg_conf::install(&layout.root, toolchain)?;
     cmd.args([
         "--config",
         lane_conf
@@ -355,7 +295,7 @@ mod tests {
     }
 
     #[test]
-    fn the_lane_makepkg_conf_replicates_layering_then_reasserts_the_budget() {
+    fn the_lane_composite_owns_the_config_and_reasserts_the_budget() {
         let dir = std::env::temp_dir().join(format!("gsa-makepkg-shim-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let layout = gsa_model::config::BuildLayout {
@@ -370,20 +310,30 @@ mod tests {
             &[],
             Path::new("/state"),
             &layout,
+            gsa_model::toolchain::Toolchain::Gcc,
         )
         .expect("the layout is usable");
-        let body = std::fs::read_to_string(dir.join(LANE_MAKEPKG_CONF_NAME))
-            .expect("the shim is installed under the cache root");
-        // The layering makepkg's --config path skips must live in the shim…
-        assert!(body.contains("source /etc/makepkg.conf"));
-        assert!(body.contains("/etc/makepkg.conf.d/"));
-        assert!(body.contains(".makepkg.conf"));
+        let body = std::fs::read_to_string(
+            dir.join(gsa_model::makepkg_conf::lane_conf_name(
+                gsa_model::toolchain::Toolchain::Gcc,
+            )),
+        )
+        .expect("the composite is installed under the cache root");
+        // §B.11: the host's config layering is GONE — the engine owns the
+        // flags, so no /etc/makepkg.conf, no drop-ins, no user override.
+        assert!(!body.contains("source /etc/makepkg.conf"));
+        assert!(!body.contains("/etc/makepkg.conf.d/"));
+        assert!(!body.contains(".makepkg.conf"));
+        assert!(body.contains("gsa universal makepkg settings"));
+        assert!(body.contains("gsa gcc makepkg settings"));
+        // …and the engine re-asserts its own paths and budget LAST.
+        assert!(body.contains("GSA_LANE_BUILDDIR"));
+        assert!(body.contains("GSA_LANE_MAKEFLAGS"));
         // …and the budget re-assertion comes last.
-        assert!(body.contains("MAKEFLAGS=\"$GSA_LANE_MAKEFLAGS\""));
-        assert!(body.contains("NINJAFLAGS=\"$GSA_LANE_NINJAFLAGS\""));
+        assert!(body.contains("NINJAFLAGS="));
         assert!(
-            body.rfind("GSA_LANE_").unwrap() > body.find("source /etc/makepkg.conf").unwrap(),
-            "the re-assertion must come after the layering"
+            body.rfind("GSA_LANE_").unwrap() > body.find("gsa gcc makepkg settings").unwrap(),
+            "the re-assertion must come after the compiler body"
         );
         // The values ride the env: the lane's job count, nothing else.
         let env = cmd
@@ -411,6 +361,7 @@ mod tests {
             &[],
             Path::new("/state"),
             &layout,
+            gsa_model::toolchain::Toolchain::Gcc,
         )
         .expect("the layout is usable");
         let argv: Vec<String> = cmd
@@ -422,7 +373,9 @@ mod tests {
         assert_eq!(&argv[..2], ["-sf", "--noconfirm"]);
         assert_eq!(argv[2], "--config");
         assert!(
-            argv[3].ends_with(LANE_MAKEPKG_CONF_NAME),
+            argv[3].ends_with(&gsa_model::makepkg_conf::lane_conf_name(
+                gsa_model::toolchain::Toolchain::Gcc
+            )),
             "the --config target must be the lane shim: {argv:?}"
         );
         // No forbidden token can be constructed through the base argv.
@@ -448,6 +401,7 @@ mod tests {
             &[],
             Path::new("/state"),
             &layout,
+            gsa_model::toolchain::Toolchain::Gcc,
         )
         .expect("the layout is usable");
         // The cache dirs exist and makepkg is pointed at them — never at
@@ -488,6 +442,7 @@ mod tests {
             &[],
             Path::new("/state"),
             &layout,
+            gsa_model::toolchain::Toolchain::Gcc,
         )
         .unwrap_err();
         assert!(error.contains("build-cache directory"), "{error}");

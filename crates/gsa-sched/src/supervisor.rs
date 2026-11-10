@@ -622,6 +622,12 @@ fn spawn_lane(setup: &RunSetup, index: usize, jobs: u32) -> Result<Child, String
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .process_group(0);
+    // §B.11: the run's --toolchain rides to the lane as engine output, the
+    // same way GSA_BUILD_JOBS does, so the lane child resolves the family a
+    // decision already made instead of re-deriving it.
+    if let Some(toolchain) = gsa_model::toolchain::override_value() {
+        cmd.env("GSA_LANE_TOOLCHAIN", toolchain.as_str());
+    }
     cmd.spawn()
         .map_err(|e| format!("cannot spawn lane for {}: {e}", node.id))
 }

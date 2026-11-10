@@ -176,12 +176,25 @@ vcs_manifest() {
     } >"$archive.gsa-vcs-revisions"
 }
 
-# stage_marker WS [IDENTITY] — the GCC build-identity marker the drift gate
-# reads (`<state>/toolchains/<id>`). Staging the CURRENT identity keeps the
-# drift gate quiet so a scenario tests the freshness engine and not the
+# current_identity WS [GCC VERSION] — the marker value the engine records for
+# the gcc stub: `<family>|<compiler line>|<config digest>` (contract §B.11).
+# ASKED of the engine, never re-derived in bash — the digest covers config
+# bytes only the engine renders, and a guessed digest would stage a marker
+# that reads as drift, silently turning every claim in this fixture into a
+# rebuild.
+current_identity() {
+    local ws=$1 version=${2:-fixture}
+    PATH="$ws/bin:$PATH" GSA_FAKE_GCC_VERSION="$version" \
+        GSA_CONF_DIR="$ws/../.rr2-conf" "$gsa_bin" --build-identity gcc
+}
+
+# stage_marker WS [IDENTITY] — the compiler build-identity marker the drift
+# gate reads (`<state>/toolchains/<id>`). Staging the CURRENT identity keeps
+# the drift gate quiet so a scenario tests the freshness engine and not the
 # one-time clean; the drift section stages missing/changed markers on purpose.
 stage_marker() {
-    local ws=$1 identity=${2:-$GSA_FAKE_GCC_ID}
+    local ws=$1 identity=${2:-}
+    [ -n "$identity" ] || identity=$(current_identity "$ws")
     mkdir -p "$ws/state/toolchains"
     printf '%s\n' "$identity" >"$ws/state/toolchains/p1"
 }
@@ -719,11 +732,15 @@ assert_makepkg_count "$branch_dir/ws-mtime" 1 'newer PKGBUILD mtime'
     add_package "$drift_dir/ws-changed" p1 "$gsa_meta_any"$'\n'"source=(\"$drift_entry\")"$'\n'"sha256sums=('SKIP')"
     stage_vcs_set "$drift_dir/ws-changed" "$drift_entry" git "$drift_rev"
     mkdir -p "$drift_dir/ws-changed/state/toolchains"
-    printf '%s\n' 'gcc (fixture) 0.9' >"$drift_dir/ws-changed/state/toolchains/p1"
+    printf '%s\n' "$(current_identity "$drift_dir/ws-changed" 0.9)" \
+        >"$drift_dir/ws-changed/state/toolchains/p1"
     GSA_FAKE_GCC_VERSION=1.0 run_case "$drift_dir/ws-changed" -B --skip -- p1
     expect_built p1 'drift: changed identity marker forces a rebuild'
     assert_makepkg_count "$drift_dir/ws-changed" 1 'drift: changed identity marker forces a rebuild'
-    grep -Fq 'GCC build identity missing or changed; cleaning cached build artifacts (previous: gcc (fixture) 0.9; current: gcc (fixture) 1.0)' \
+    grep -Fq 'GCC build identity missing or changed; cleaning cached build artifacts (previous: gcc|gcc (fixture) 0.9|' \
+        <<<"$FIXTURE_OUTPUT" ||
+        fail 'drift: the change message does not name the previous identity:'$'\n'"$FIXTURE_OUTPUT"
+    grep -Fq '; current: gcc|gcc (fixture) 1.0|' \
         <<<"$FIXTURE_OUTPUT" ||
         fail 'drift: the change message does not name both identities:'$'\n'"$FIXTURE_OUTPUT"
 
@@ -733,7 +750,7 @@ assert_makepkg_count "$branch_dir/ws-mtime" 1 'newer PKGBUILD mtime'
     make_workspace_common "$drift_dir/ws-unchanged"
     add_package "$drift_dir/ws-unchanged" p1 "$gsa_meta_any"$'\n'"source=(\"$drift_entry\")"$'\n'"sha256sums=('SKIP')"
     stage_vcs_set "$drift_dir/ws-unchanged" "$drift_entry" git "$drift_rev"
-    stage_marker "$drift_dir/ws-unchanged" 'gcc (fixture) 1.0'
+    stage_marker "$drift_dir/ws-unchanged" "$(current_identity "$drift_dir/ws-unchanged" 1.0)"
     GSA_FAKE_GCC_VERSION=1.0 run_case "$drift_dir/ws-unchanged" -B --skip -- p1
     expect_claim p1 'drift: unchanged identity keeps the claim' ok
     assert_makepkg_count "$drift_dir/ws-unchanged" 0 'drift: unchanged identity keeps the claim'

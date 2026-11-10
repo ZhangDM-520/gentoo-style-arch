@@ -31,6 +31,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use gsa_model::toolchain::Toolchain;
+
 // ─── GCC build-identity drift gate ───────────────────────────────────────────
 
 /// The GCC build identity recorded when no `gcc` is on `PATH` (the fish
@@ -54,20 +56,24 @@ pub const GCC_UNAVAILABLE_IDENTITY: &str = "gcc unavailable";
 /// `LC_ALL=C` is pinned so the build line is locale-stable — a locale change
 /// must never read as compiler drift.
 pub fn gcc_identity() -> io::Result<String> {
-    let output = match Command::new("gcc")
+    version_line("gcc", "GCC", GCC_UNAVAILABLE_IDENTITY)
+}
+
+/// The identity line of one compiler driver (`<program> --version`, first
+/// line), with the missing-binary sentinel the caller names.
+fn version_line(program: &str, label: &str, unavailable: &str) -> io::Result<String> {
+    let output = match Command::new(program)
         .env("LC_ALL", "C")
         .arg("--version")
         .output()
     {
         Ok(output) => output,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {
-            return Ok(GCC_UNAVAILABLE_IDENTITY.to_string());
-        }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(unavailable.to_string()),
         Err(err) => return Err(err),
     };
     if !output.status.success() {
         return Err(io::Error::other(format!(
-            "could not determine the GCC build identity (gcc --version exited {})",
+            "could not determine the {label} build identity ({program} --version exited {})",
             output.status
         )));
     }
@@ -77,9 +83,9 @@ pub fn gcc_identity() -> io::Result<String> {
         .unwrap_or_default()
         .to_string();
     if line.is_empty() {
-        return Err(io::Error::other(
-            "could not determine the GCC build identity (gcc --version printed nothing)",
-        ));
+        return Err(io::Error::other(format!(
+            "could not determine the {label} build identity ({program} --version printed nothing)"
+        )));
     }
     Ok(line)
 }
@@ -715,4 +721,292 @@ pub fn force_queue(queue: &mut Vec<String>, targets: &[String]) -> usize {
         }
     }
     added
+}
+
+// ─── toolchain selection (contract §B.11) ────────────────────────────────────
+
+/// The compiler family a lane is configured for, plus the rung that decided
+/// it — the two things a lane log line and a refusal must name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectedToolchain {
+    pub toolchain: Toolchain,
+    pub source: &'static str,
+}
+
+impl SelectedToolchain {
+    pub fn log_line(&self) -> String {
+        format!("toolchain {} ({})", self.toolchain, self.source)
+    }
+}
+
+/// What the PKGBUILD scan found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Inference {
+    /// One family's markers, with the evidence that named it.
+    One(Toolchain, Vec<String>),
+    /// No explicit driver marker: the set default applies.
+    None,
+    /// Both families named: a guess here would configure half the build with
+    /// the wrong flag set, so the caller refuses instead.
+    Ambiguous {
+        clang: Vec<String>,
+        gcc: Vec<String>,
+    },
+}
+
+/// Resolve one recipe's compiler family (contract §B.11).
+///
+/// Order: the run's `--toolchain` beats the topology record's `toolchain=`
+/// tag, which beats the PKGBUILD inference, which beats the set's `gcc`
+/// default. A decision always beats a guess — the scan is only consulted when
+/// neither the flag nor the record spoke.
+pub fn select(
+    recipe_id: &str,
+    override_toolchain: Option<Toolchain>,
+    declared: Option<Toolchain>,
+    pkgbuild: &str,
+) -> Result<SelectedToolchain, String> {
+    if let Some(toolchain) = override_toolchain {
+        return Ok(SelectedToolchain {
+            toolchain,
+            source: "--toolchain",
+        });
+    }
+    if let Some(toolchain) = declared {
+        return Ok(SelectedToolchain {
+            toolchain,
+            source: "the topology record",
+        });
+    }
+    match infer(pkgbuild) {
+        Inference::One(toolchain, _) => Ok(SelectedToolchain {
+            toolchain,
+            source: "the PKGBUILD scan",
+        }),
+        Inference::None => Ok(SelectedToolchain {
+            toolchain: Toolchain::DEFAULT,
+            source: "the built-in default",
+        }),
+        Inference::Ambiguous { clang, gcc } => Err(format!(
+            "recipe {recipe_id} names both compilers (clang: {}; gcc: {}) — declare `toolchain=gcc` or `toolchain=clang` in its topology record, or pass --toolchain",
+            clang.join(", "),
+            gcc.join(", ")
+        )),
+    }
+}
+
+/// Driver markers that pin a family explicitly. Deliberately narrow: a
+/// `clang` entry in `makedepends` is NOT enough (bindgen and BPF helpers need
+/// clang while the C/C++ build stays gcc), so only an explicit driver
+/// assignment counts.
+const CLANG_MARKERS: [&str; 8] = [
+    "CC=clang",
+    "CXX=clang++",
+    "CC=\"clang\"",
+    "CXX=\"clang++\"",
+    "-DCMAKE_C_COMPILER=clang",
+    "-DCMAKE_CXX_COMPILER=clang++",
+    "--cc=clang",
+    "--cxx=clang++",
+];
+const GCC_MARKERS: [&str; 6] = [
+    "CC=gcc",
+    "CXX=g++",
+    "-DCMAKE_C_COMPILER=gcc",
+    "-DCMAKE_CXX_COMPILER=g++",
+    "--cc=gcc",
+    "--cxx=g++",
+];
+
+/// Infer the family from a PKGBUILD's text (read-only: no shell evaluation,
+/// comment lines skipped). Any explicit driver marker the build uses is
+/// visible here even inside a function body, which the top-level scan cannot
+/// see — that is why this reads the raw text rather than `PkgbuildScan`.
+pub fn infer(pkgbuild: &str) -> Inference {
+    let mut clang = Vec::new();
+    let mut gcc = Vec::new();
+    for raw in pkgbuild.lines() {
+        let line = strip_comment(raw).trim();
+        if line.is_empty() {
+            continue;
+        }
+        for marker in CLANG_MARKERS {
+            if line.contains(marker) && !clang.iter().any(|m| m == marker) {
+                clang.push(marker.to_string());
+            }
+        }
+        for marker in GCC_MARKERS {
+            // `CC=gcc` is a substring of nothing in the clang set, but
+            // `--cc=gcc` would match the broader `--cc=` shape; the explicit
+            // arrays keep the families disjoint.
+            if line.contains(marker) && !gcc.iter().any(|m| m == marker) {
+                gcc.push(marker.to_string());
+            }
+        }
+    }
+    match (clang.is_empty(), gcc.is_empty()) {
+        (false, true) => Inference::One(Toolchain::Clang, clang),
+        (true, false) => Inference::One(Toolchain::Gcc, gcc),
+        (false, false) => Inference::Ambiguous { clang, gcc },
+        (true, true) => Inference::None,
+    }
+}
+
+/// Drop a shell comment: everything from a `#` that starts a word. A `#`
+/// inside a quoted string (a URL fragment, a patch name) does not start a
+/// comment, which the preceding-character test approximates without a parser.
+fn strip_comment(line: &str) -> &str {
+    if line.trim_start().starts_with('#') {
+        return "";
+    }
+    let bytes = line.as_bytes();
+    let mut idx = 0;
+    while let Some(pos) = line[idx..].find('#') {
+        let at = idx + pos;
+        let prev = at.checked_sub(1).map(|i| bytes[i]);
+        if matches!(prev, None | Some(b' ') | Some(b'\t')) {
+            return &line[..at];
+        }
+        idx = at + 1;
+    }
+    line
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use super::*;
+
+    #[test]
+    fn a_flag_beats_a_tag_beats_the_scan_beats_the_default() {
+        let clang_build = "build() {\n  CC=clang make\n}\n";
+        assert_eq!(
+            select("demo", Some(Toolchain::Gcc), Some(Toolchain::Clang), clang_build)
+                .unwrap(),
+            SelectedToolchain {
+                toolchain: Toolchain::Gcc,
+                source: "--toolchain"
+            }
+        );
+        assert_eq!(
+            select("demo", None, Some(Toolchain::Clang), "CC=gcc make\n")
+                .unwrap()
+                .toolchain,
+            Toolchain::Clang
+        );
+        let scanned = select("demo", None, None, clang_build).unwrap();
+        assert_eq!(scanned.toolchain, Toolchain::Clang);
+        assert_eq!(scanned.source, "the PKGBUILD scan");
+        assert_eq!(
+            select("demo", None, None, "make\n").unwrap(),
+            SelectedToolchain {
+                toolchain: Toolchain::DEFAULT,
+                source: "the built-in default"
+            }
+        );
+    }
+
+    #[test]
+    fn two_families_refuse_naming_the_recipe_and_both_markers() {
+        let both = "prepare() {\n  CC=clang ./configure\n  CXX=g++ make\n}\n";
+        let err = select("demo", None, None, both).unwrap_err();
+        assert!(err.contains("demo"), "{err}");
+        assert!(err.contains("CC=clang"), "{err}");
+        assert!(err.contains("CXX=g++"), "{err}");
+        assert!(err.contains("toolchain=gcc"), "{err}");
+    }
+
+    #[test]
+    fn comments_are_not_evidence() {
+        let commented = "# CC=clang is what we do NOT use\nbuild() {\n  make\n}\n";
+        assert_eq!(infer(commented), Inference::None);
+        // An inline comment after a word boundary is dropped too.
+        assert_eq!(select("demo", None, None, "make # CC=clang\n").unwrap().toolchain, Toolchain::DEFAULT);
+        // A `#` inside a word (a URL fragment) is not a comment start.
+        assert_eq!(strip_comment("source=(x#y)"), "source=(x#y)");
+    }
+
+    #[test]
+    fn a_clang_makedepends_alone_is_not_a_clang_build() {
+        // rust bindgen and BPF helpers need clang while the C/C++ build stays
+        // gcc: only an explicit driver marker may decide the lane's config.
+        assert_eq!(infer("makedepends=(clang rust)\n"), Inference::None);
+    }
+}
+
+/// The sentinel recorded when the selected compiler is absent from `PATH`
+/// (clang's twin of [`GCC_UNAVAILABLE_IDENTITY`]: absence is data, so
+/// installing the compiler later reads as drift and forces one clean).
+pub const CLANG_UNAVAILABLE_IDENTITY: &str = "clang unavailable";
+
+/// The compiler version line for the selected family.
+pub fn compiler_identity(toolchain: Toolchain) -> io::Result<String> {
+    match toolchain {
+        Toolchain::Gcc => gcc_identity(),
+        Toolchain::Clang => version_line("clang", "clang", CLANG_UNAVAILABLE_IDENTITY),
+    }
+}
+
+/// The full build identity a marker records (rule 6, contract §B.11):
+/// `<toolchain>|<compiler version line>|<sha256 of the effective config>`.
+///
+/// The config digest is the piece rule 6 queued: editing
+/// `/etc/gsa/gcc-makepkg.conf` changes the composite's bytes, which changes
+/// the identity, which forces the one-time clean — without it a flag edit
+/// silently reused stale LTO objects (the 2026-10-08 doxygen-git class).
+pub fn build_identity(toolchain: Toolchain) -> io::Result<String> {
+    let version = compiler_identity(toolchain)?;
+    let digest = config_digest(toolchain)?;
+    Ok(format!("{toolchain}|{version}|{digest}"))
+}
+
+/// SHA-256 of the exact bytes makepkg will source for this family, site files
+/// included. Paths are part of the bytes, so two sites with identical content
+/// but different layouts hash differently — which is correct: the lane's
+/// config genuinely differs.
+fn config_digest(toolchain: Toolchain) -> io::Result<String> {
+    use sha2::{Digest, Sha256};
+    let (_, sources) = gsa_model::config::makepkg_conf_sources(toolchain)
+        .map_err(|error| io::Error::other(error))?;
+    let body = gsa_model::makepkg_conf::render(toolchain, &sources);
+    let mut hasher = Sha256::new();
+    hasher.update(body.as_bytes());
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+
+    #[test]
+    fn the_identity_folds_in_the_toolchain_and_the_config_bytes() {
+        let gcc = build_identity(Toolchain::Gcc).expect("a resolvable host config");
+        let clang = build_identity(Toolchain::Clang).expect("a resolvable host config");
+        assert!(gcc.starts_with("gcc|"), "{gcc}");
+        assert!(clang.starts_with("clang|"), "{clang}");
+        // Three fields, single line — the marker's own write contract.
+        assert_eq!(gcc.matches('|').count(), 2, "{gcc}");
+        assert!(!gcc.contains('\n'));
+        // The digest field is 64 hex characters.
+        let digest = gcc.rsplit('|').next().unwrap();
+        assert_eq!(digest.len(), 64, "{gcc}");
+        assert!(digest.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn a_config_edit_moves_the_identity() {
+        // The mechanism the drift gate rests on: same compiler, different
+        // bytes => different marker => one clean. `render` is the seam the
+        // digest covers, so comparing two renders proves it.
+        let sources: Vec<std::path::PathBuf> = Vec::new();
+        let a = gsa_model::makepkg_conf::render(Toolchain::Gcc, &sources);
+        let b = gsa_model::makepkg_conf::render(
+            Toolchain::Gcc,
+            &[std::path::PathBuf::from("/site/gcc-makepkg.conf")],
+        );
+        assert_ne!(a, b);
+    }
 }

@@ -87,6 +87,15 @@ pub enum Hidden {
     InstallRegister(Vec<String>),
     RegisterIgnorepkg(Vec<String>),
     QaCheck(Vec<String>),
+    /// `--build-identity <gcc|clang>`: the exact identity the toolchain
+    /// drift marker records (§B.11). One line, so a "why did it clean?"
+    /// question has an answer an operator or a fixture can diff.
+    BuildIdentity(String),
+    /// `--print-conf <gcc|clang>`: the built-in per-compiler makepkg body on
+    /// stdout. The `gsa-pm` recipe writes it to `/etc/gsa/<family>-makepkg.conf`
+    /// at package time, so the shipped file can never drift from the binary
+    /// that reads it (rule 58: one source of truth, no copied flag text).
+    PrintConf(Vec<String>),
 }
 
 /// One parsed invocation.
@@ -119,6 +128,10 @@ pub struct Invocation {
     pub jobs: Option<String>,
     pub intensity: Option<String>,
     pub state_dir: Option<String>,
+    /// `--toolchain gcc|clang` (§B.8): the run's compiler family, which
+    /// selects the engine-owned makepkg body. Real on a build run; validated
+    /// there, so a typo names the two alternatives instead of defaulting.
+    pub toolchain: Option<String>,
     /// Fetch-ahead knobs (owner decision 1): `--no-prefetch` opts out of
     /// the dispatcher's background prefetch; `--prefetch-ahead N` bounds the
     /// lookahead window (default 8). Real on a build run; every other
@@ -190,7 +203,7 @@ pub enum Parsed {
     Hidden(Hidden),
 }
 
-const HIDDEN_SEAMS: [&str; 8] = [
+const HIDDEN_SEAMS: [&str; 10] = [
     "--install-decide",
     "--lane-job",
     "--fetch-job",
@@ -199,6 +212,8 @@ const HIDDEN_SEAMS: [&str; 8] = [
     "--install-register",
     "--register-ignorepkg",
     "--qa-check",
+    "--build-identity",
+    "--print-conf",
 ];
 
 fn is_range_token(token: &str) -> bool {
@@ -227,6 +242,15 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
             let rest: Vec<String> = args[1..].to_vec();
             let hidden = match first {
                 "--install-decide" => Hidden::InstallDecide(rest),
+                "--build-identity" => match rest.as_slice() {
+                    [family] => Hidden::BuildIdentity(family.clone()),
+                    [] => Hidden::BuildIdentity(String::new()),
+                    [_, extra, ..] => {
+                        return Err(format!(
+                            "--build-identity takes exactly one family (gcc|clang), got extra '{extra}'"
+                        ))
+                    }
+                },
                 "--lane-job" => Hidden::LaneJob(rest),
                 "--fetch-job" => Hidden::FetchJob(rest),
                 "--stale-lock-check" => {
@@ -244,6 +268,7 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
                 "--install-register" => Hidden::InstallRegister(rest),
                 "--register-ignorepkg" => Hidden::RegisterIgnorepkg(rest),
                 "--qa-check" => Hidden::QaCheck(rest),
+                "--print-conf" => Hidden::PrintConf(rest),
                 _ => unreachable!(),
             };
             return Ok(Parsed::Hidden(hidden));
@@ -339,6 +364,7 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
         deferred_flags: Vec::new(),
         fail_fast: false,
         lanes: None,
+        toolchain: None,
         jobs: None,
         intensity: None,
         state_dir: None,
@@ -461,7 +487,7 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
                     inv.deferred_flags.push(format!("--{name}"));
                 }
                 "vcs-skip-tolerance" | "lanes" | "jobs" | "intensity" | "state-dir" | "config"
-                | "tail" | "keep" | "show" | "prefetch-ahead" | "build-dir" => {
+                | "tail" | "keep" | "show" | "prefetch-ahead" | "build-dir" | "toolchain" => {
                     let value = match value {
                         Some(v) => v,
                         None => {
@@ -483,6 +509,7 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
                         "jobs" => inv.jobs = Some(value.clone()),
                         "intensity" => inv.intensity = Some(value.clone()),
                         "state-dir" => inv.state_dir = Some(value.clone()),
+                        "toolchain" => inv.toolchain = Some(value.clone()),
                         "build-dir" => inv.build_dir = Some(value.clone()),
                         "config" => inv.config = Some(value.clone()),
                         "prefetch-ahead" => inv.prefetch_ahead = Some(value.clone()),
@@ -638,6 +665,12 @@ mod tests {
             parse(&["--stale-lock-check".to_string()]).unwrap(),
             Parsed::Hidden(Hidden::StaleLockCheck)
         ));
+        // `--print-conf` carries its family through to the dispatcher, which
+        // is what validates it (one family, gcc|clang).
+        match parse(&["--print-conf".to_string(), "clang".to_string()]).unwrap() {
+            Parsed::Hidden(Hidden::PrintConf(args)) => assert_eq!(args, vec!["clang"]),
+            other => panic!("expected the print-conf seam, got {other:?}"),
+        }
     }
 
     #[test]

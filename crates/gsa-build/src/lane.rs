@@ -160,6 +160,29 @@ fn settle_pending_receipt(pkg: &str, result_path: &Path, err: &mut dyn Write) ->
 /// `gsa --lane-job <pkg> <result-path> <jobs> <flags…>` — the lane child.
 /// Returns the lane's outcome code (§G.2: a lane's exit code IS its outcome
 /// code) or 2 for a bad payload.
+/// The lane's compiler family (§B.11): the run's `--toolchain`, carried to
+/// the lane child as `GSA_LANE_TOOLCHAIN` (engine OUTPUT to its own child,
+/// like `GSA_BUILD_JOBS`), beats the topology record's `toolchain=` tag,
+/// which beats the PKGBUILD scan, which beats the set's `gcc` default.
+///
+/// An unreadable PKGBUILD contributes no evidence (the build's own read fails
+/// loudly a moment later); a malformed `GSA_LANE_TOOLCHAIN` refuses the lane,
+/// because a typo'd override must never silently fall back to the default.
+fn lane_toolchain(
+    pkg: &str,
+    record: &gsa_model::TopologyRecord,
+    recipe_dir: &Path,
+) -> Result<gsa_recipe::toolchain::SelectedToolchain, String> {
+    let over = match std::env::var("GSA_LANE_TOOLCHAIN") {
+        Ok(value) if !value.trim().is_empty() => {
+            Some(gsa_model::toolchain::Toolchain::parse(value.trim())?)
+        }
+        _ => None,
+    };
+    let pkgbuild = std::fs::read_to_string(recipe_dir.join("PKGBUILD")).unwrap_or_default();
+    gsa_recipe::toolchain::select(pkg, over, record.toolchain(), &pkgbuild)
+}
+
 pub fn run_lane_job(args: &[String], err: &mut dyn Write) -> i32 {
     // ── argv check (contract §D.1) ────────────────────────────────────────
     if args.len() < 3 {
@@ -299,9 +322,31 @@ pub fn run_lane_job(args: &[String], err: &mut dyn Write) -> i32 {
         }
     };
 
+    // ── the lane's compiler family (§B.11) ────────────────────────────────
+    // A decision (the run's --toolchain, the record's tag) always beats the
+    // PKGBUILD guess; two families with no decision refuse the lane rather
+    // than configure half its build with the wrong flag set.
+    let selected = match lane_toolchain(pkg, record, &recipe_dir) {
+        Ok(selected) => selected,
+        Err(message) => {
+            let _ = writeln!(err, "gsa --lane-job: {message}");
+            let _ = writeln!(&log, "gsa --lane-job: {message}");
+            let result = LaneResult::new(pkg, LaneOutcome::Failed, 0, "toolchain-ambiguous").unwrap();
+            return match codec::publish(&result_path, &result) {
+                Ok(()) => LaneOutcome::Failed.code(),
+                Err(message) => {
+                    let _ = writeln!(err, "gsa --lane-job: {message}");
+                    LaneOutcome::Lost.code()
+                }
+            };
+        }
+    };
+    let _ = writeln!(&log, "gsa --lane-job: {}", selected.log_line());
+    let toolchain = selected.toolchain;
+
     // ── the build: makepkg in the recipe directory (§K.1) ────────────────
     let start = Instant::now();
-    let mut cmd = match crate::makepkg::makepkg_command(&recipe_dir, jobs, flags, &state_dir) {
+    let mut cmd = match crate::makepkg::makepkg_command(&recipe_dir, jobs, flags, &state_dir, toolchain) {
         Ok(cmd) => cmd,
         Err(message) => {
             // §J.2/§J.3's one layout error policy: fatal for the lane with

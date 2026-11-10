@@ -56,6 +56,7 @@ other document, including this one. When they disagree, fix the document.
 | `docs/gsa-fixture-migration.md` | Per-fixture inventory: what each fixture pins, KEEP vs REWRITE, what replaced each retired spelling |
 | `docs/adr/0003-run-record.md` | Why one record, three renderings, default-on machine block |
 | `docs/adr/0004-prefetch-advisory.md` | Why fetch-ahead is advisory and makepkg stays the build-time gate |
+| `docs/adr/0005-engine-owned-makepkg-conf.md` | Why the engine owns the makepkg configuration, the per-compiler bodies, the selection ladder and the identity digest |
 | `CONTEXT.md` | Vocabulary: recipe, topology record, build-order edge, consumer expansion, lane, run record, continuation, deferral, decision row |
 | `CONTRIBUTING.md` | What an engine change looks like, the validation block, the commit policy |
 | `SECURITY.md` | Trust model, privilege boundary, what must never be committed |
@@ -280,10 +281,12 @@ split.
    LFS store that extracts as `remote missing object`.
 
 6. **Toolchain identity, not mtime, decides whether a build tree is
-   reusable.** A flag edit leaves `<build_dir>/{build,pkg,tmp}` stale until the
-   per-recipe identity under the state root's `toolchains/` changes (queued: a
-   flags digest). Purge that tree after any flag edit. Meson `--reconfigure`,
-   `CMakeCache.txt` rewriting and `*.la` purging are `gsa-recipe`'s half.
+   reusable.** The per-recipe marker under the state root's `toolchains/` is
+   `<family>|<compiler version line>|<sha256 of the generated makepkg
+   composite>`, so a compiler upgrade AND a flag edit each change the identity
+   and force the one-time clean — no manual purge. `gsa --build-identity
+   gcc|clang` prints the value. Meson `--reconfigure`, `CMakeCache.txt`
+   rewriting and `*.la` purging are `gsa-recipe`'s half.
 
 9. **IgnorePkg registration is dynamic.** Each accepted archive's
    `pkgbase`/`pkgname` (`.PKGINFO`, else `.SRCINFO`, else PKGBUILD) enters the
@@ -394,8 +397,11 @@ split.
     following the drop; layout via `build_layout_for_run()` (fatal, never a
     silent fallback); `create_owned_dir` chowns the ancestors it creates;
     `checkout_roots` scopes `<build_dir>/<pkgbase>/src`, `SRCDEST` only for ref
-    recomputation; tool prose under `LC_ALL=C`; the `PACMAN` shim quotes
-    paths; fixtures fail closed with a per-fixture `GSA_BUILD_DIR`.
+    recomputation; the makepkg configuration via
+    `gsa_model::makepkg_conf::{render,install}` (one composite per family,
+    `--config` on every spawn, never the host's `makepkg.conf`); tool prose
+    under `LC_ALL=C`; the `PACMAN` shim quotes paths; fixtures fail closed
+    with a per-fixture `GSA_BUILD_DIR` and `GSA_CONF_DIR`.
 
 58. **A living doc teaches how to CHECK, never the shape of a retired era.**
     When a change moves a home or renames a spelling, update the doc; retired
@@ -558,6 +564,15 @@ only restates a numbered rule belongs nowhere. Grouped by the surface it bites.
   with the recipe's cwd, so a relative `--state-dir` yields
   `PACMAN=.state/locks/pacman-shim` and `makepkg -sf` dies "An unknown error has
   occurred."
+- **A config file beats the environment inside makepkg**: `--config` makes
+  makepkg skip its own layering, so the generated composite must end by
+  re-asserting `BUILDDIR`/`PKGDIR`/`PKGDEST`/`SRCDEST` from `GSA_LANE_*` and
+  the job flags last — a site file that sets them would otherwise own the
+  build cache again. The composite must never `source` `gsa.conf` (it is the
+  engine's `key = value` file, not shell: sourcing it prints
+  `build_dir: command not found` into every lane log), and
+  `makepkg --verifysource` needs the same `--config` or a fetch writes into a
+  different source cache than the build reads.
 - **makepkg source-cache mechanics**: it rejects a mirror whose origin URL
   differs ("is not a clone of"), re-fetches every build, leaves `<file>.part` on
   a partial download (servers without byte ranges then fail — delete it, `curl

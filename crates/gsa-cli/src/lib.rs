@@ -235,7 +235,7 @@ fn classify(inv: &Invocation) -> Disposition {
         .find(|f| !maint_gate_stands_down && !accepted.contains(&f.as_str()))
     {
         return Disposition::Deferred(format!(
-            "{flag} (a later phase owns it; a build run accepts --skip, --skip-built, --vcs-skip-tolerance, --no-sync, --allow-broken-rustc, --fail-fast, --lanes, --jobs, --intensity, --state-dir, --build-dir, --no-build-dir-prompt; an install run (-S/-U) additionally accepts --no-register-ignorepkg, --config)"
+            "{flag} (a later phase owns it; a build run accepts --skip, --skip-built, --vcs-skip-tolerance, --no-sync, --allow-broken-rustc, --fail-fast, --lanes, --jobs, --intensity, --state-dir, --build-dir, --no-build-dir-prompt, --toolchain; an install run (-S/-U) additionally accepts --no-register-ignorepkg, --config)"
         ));
     }
     let accepts_pacman_args = matches!(inv.family, Family::S | Family::U) && inv.action.is_none();
@@ -648,6 +648,63 @@ pub fn run(argv: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
                 return rc;
             }
             gsa_fetch::engine::run_fetch_job(&args, err)
+        }
+        Ok(Parsed::Hidden(Hidden::BuildIdentity(family))) => {
+            // The toolchain drift marker's identity (§B.11), one line: the
+            // same value the gate compares, so "why did it clean?" is
+            // answerable without reading the state root.
+            match gsa_model::toolchain::Toolchain::parse(&family) {
+                Err(message) => {
+                    let _ = writeln!(err, "gsa: --build-identity: {message}");
+                    2
+                }
+                Ok(toolchain) => match gsa_recipe::toolchain::build_identity(toolchain) {
+                    Ok(identity) => {
+                        let _ = writeln!(out, "{identity}");
+                        0
+                    }
+                    Err(error) => {
+                        let _ = writeln!(
+                            err,
+                            "gsa: --build-identity: cannot determine the {toolchain} build identity ({error})"
+                        );
+                        RC_REFUSED
+                    }
+                },
+            }
+        }
+        Ok(Parsed::Hidden(Hidden::PrintConf(args))) => {
+            // The built-in per-compiler body, verbatim (§D.1). `gsa-pm` runs
+            // this at package time for `/etc/gsa/<family>-makepkg.conf`, so
+            // the shipped baseline is the binary's own text and not a copy
+            // that can drift from it.
+            let family = match args.as_slice() {
+                [family] => family,
+                [] => {
+                    let _ = writeln!(
+                        err,
+                        "gsa: --print-conf: missing family (gcc|clang)"
+                    );
+                    return RC_USAGE;
+                }
+                [_, extra, ..] => {
+                    let _ = writeln!(
+                        err,
+                        "gsa: --print-conf: takes exactly one family (gcc|clang), got extra '{extra}'"
+                    );
+                    return RC_USAGE;
+                }
+            };
+            match gsa_model::toolchain::Toolchain::parse(family) {
+                Err(message) => {
+                    let _ = writeln!(err, "gsa: --print-conf: {message}");
+                    RC_USAGE
+                }
+                Ok(toolchain) => {
+                    let _ = write!(out, "{}", gsa_model::makepkg_conf::compiler(toolchain));
+                    RC_OK
+                }
+            }
         }
         Ok(Parsed::Hidden(Hidden::StaleLockCheck)) => {
             // The production pacman-lock probe without a run (§D.1).

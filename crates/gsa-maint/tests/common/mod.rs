@@ -45,10 +45,12 @@ impl LayoutEnv {
         // Filesystem-silent: the conf file itself is fixture construction
         // (`Fixture::new`), because dry-run tests snapshot the tree across
         // a `with_ctx` pass and must see no change.
-        let pinned: [(&'static str, OsString); 3] = [
+        // SRCDEST is not an environment input any more (§B.11): the fixture
+        // pins it through the `srcdest` key in the gsa.conf that GSA_CONF
+        // points at (`Fixture::new` writes it).
+        let pinned: [(&'static str, OsString); 2] = [
             ("GSA_CONF", root.join("gsa.conf").into_os_string()),
             ("GSA_BUILD_DIR", root.join(CACHE_DIR).into_os_string()),
-            ("SRCDEST", root.join(SRCDEST_DIR).into_os_string()),
         ];
         let mut saved = Vec::new();
         for (key, value) in pinned {
@@ -111,7 +113,14 @@ impl Fixture {
         // The empty gsa.conf the layout pin points GSA_CONF at (also
         // construction: dry-run snapshots must stay stable across a
         // `with_ctx` pass).
-        std::fs::write(root.join("gsa.conf"), "# fixture: empty layers\n").unwrap();
+        // The one key the layout needs: the pulled-source home the prune
+        // strengths own. `SRCDEST` itself stopped being an environment input
+        // when the engine took ownership of the makepkg config (§B.11).
+        std::fs::write(
+            root.join("gsa.conf"),
+            format!("# fixture layers\nsrcdest = {}\n", root.join(SRCDEST_DIR).display()),
+        )
+        .unwrap();
         Fixture {
             root,
             state_dir,

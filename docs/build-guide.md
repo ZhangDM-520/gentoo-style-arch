@@ -93,11 +93,13 @@ gsa -B @git --intensity xhigh
 ```
 
 Inspect without building: `gsa -Sl` (ordered selection with range indices),
-`gsa -Si <ref…>` (recipe info), `gsa -Ss <pattern…>` (search the buildable
-universe), `gsa -Sg [name…]` (groups/sets and members), `gsa -Qt` (resolved
-topology records — the tooling data channel), `gsa -Qi`/`gsa -Qs`/`gsa -Q`
-(package info/search/list), `gsa -Qb`/`gsa -Qp` (binpkg index rows / archive
-probe). Anything else the roster does not print is not a spelling.
+`gsa -Qi <ref…>` (merged recipe, topology, side-car and installed info — the
+home of the retired `-Si`), `gsa -Qs <pattern…>` (search installed names and
+descriptions — the home of the retired `-Ss`), `gsa -Qg [name…]` (groups/sets
+and their members — the home of the retired `-Sg`), `gsa -Qt` (resolved
+topology records — the tooling data channel), `gsa -Q` (installed list),
+`gsa -Qb`/`gsa -Qp` (binpkg index rows / archive probe). Anything else the
+roster does not print is not a spelling.
 
 The retired fish entry point is **gone**: the root `build-all.fish` retirement
 shim (it printed the old-spelling → `gsa` migration table and exited non-zero)
@@ -611,14 +613,27 @@ input roster — check it (or grep `crates/` for a variable name) rather than
 counting names. Planning defaults and the intensity formulas live in
 `docs/portability.md`.
 
-**Configuration files** (contract §B.11): the engine auto-reads
-`/etc/gsa.conf` (system) then `~/.config/gsa/gsa.conf` (user) — user wins —
-and `GSA_CONF` replaces both with exactly one file (fixture and hermetic
-control). The keys are `project`, `recipe_url`, `build_dir`, `state_dir`,
-`recipe_dir`; `~`
-expands to the build user's home (`SUDO_UID`'s home under `sudo`). An unknown
-key or malformed line is an error naming file:line and key — never a silent
-default.
+**Configuration directories** (contract §B.11): the engine auto-reads
+`/etc/gsa/` (baseline, shipped by `gsa-pm`) then `~/.config/gsa/` (user
+clone) — user wins, per file. Each holds `gsa.conf` (the engine's keys) and
+the per-compiler makepkg bodies `gcc-makepkg.conf` / `clang-makepkg.conf`.
+The keys are `project`, `recipe_url`, `build_dir`, `state_dir`, `recipe_dir`,
+`srcdest`; `~` expands to the build user's home (`SUDO_UID`'s home under
+`sudo`). An unknown key or malformed line is an error naming file:line and
+key — never a silent default. `GSA_CONF` replaces the `gsa.conf` layers with
+one file; `GSA_CONF_DIR` replaces the whole directory resolution with one
+directory. Missing files are legal at every rung: the engine's built-in
+bodies are the floor, so an engine upgraded ahead of the recipe still builds.
+
+**The engine owns makepkg's configuration.** Every `makepkg` spawn — build
+lane and `--verifysource` fetch alike — carries
+`--config <build root>/lane-makepkg-<family>.conf`. That composite is the
+built-in universal body, the built-in per-compiler body, then the site files
+(baseline before the user clone), then the engine's own
+`BUILDDIR`/`PKGDIR`/`PKGDEST`/`SRCDEST` and lane job flags. `/etc/makepkg.conf`,
+`/etc/makepkg.conf.d/*.conf` and `~/.makepkg.conf` are never read. A recipe
+that needs a package-specific flag appends it (`CFLAGS+=" …"`) as before; the
+base values come from the engine.
 
 **Inputs the engine reads** (the `--help` roster; a run-time flag overrides
 the three planning defaults):
@@ -637,6 +652,9 @@ the three planning defaults):
   is a usage error). Default: memory detection.
 - `GSA_CONF` — replaces the auto-read `gsa.conf` layers with exactly one file
   (see above).
+- `GSA_CONF_DIR` — replaces the whole configuration-directory resolution with
+  exactly one directory (fixture and hermetic control). Use it whenever a run
+  must not see the host's `/etc/gsa`.
 - `GSA_STATE_DIR` — the state-root override of contract §J.3; `--state-dir
   PATH` beats it, the gsa.conf `state_dir` key sits below it, and the default
   is `/var/lib/gsa`.
@@ -644,8 +662,9 @@ the three planning defaults):
   cache**): makepkg `BUILDDIR`/`PKGDIR`/`PKGDEST` land below it (`build/`,
   `pkg/`, `pkgs/`). Setting it also answers the build-dir prompt silently;
   `--build-dir` beats it. Beats the config `build_dir` key; default: the build
-  user's `~/.cache/gsa`. `SRCDEST` is NOT part of this surface — `makepkg.conf`
-  governs sources.
+  user's `~/.cache/gsa`. `SRCDEST` is NOT part of this surface either — the
+  engine owns the source cache through the `srcdest` gsa.conf key (built-in
+  `~/.gsa-src`), and no environment rung exists since the config rework.
 - `GSA_RECIPES_DIR` — the canonical recipe store root (**Runtime state and the
   build cache**): build-user working data, never below the state root. Beats
   the gsa.conf `recipe_dir` key; default: the build user's
@@ -1005,24 +1024,33 @@ functions compile without profile data while the rest keep it.
 
 ### Stale configure caches after a flags edit
 
-A `makepkg.conf` flag edit does **not** invalidate cached configure state:
-CMake bakes `CMAKE_CXX_FLAGS` into `CMakeCache.txt`, Meson into
-`meson-private/coredata.dat`, autotools into `config.status`, and a reconfigure
-reuses those values instead of re-reading the environment. The engine's GCC
-build-identity marker keys on `gcc --version` alone, so it reports "identity
-unchanged" across a pure flag change and cleans nothing (measured 2026-11-01:
-ninja-git reused the pre-edit `-fapprox-func` cache and failed in 1s while the
-edited config compiled cleanly standalone).
+A flag edit does **not** invalidate cached configure state by itself: CMake
+bakes `CMAKE_CXX_FLAGS` into `CMakeCache.txt`, Meson into
+`meson-private/coredata.dat`, autotools into `config.status`, and a
+reconfigure reuses those values instead of re-reading the environment.
 
-After ANY `makepkg.conf` CFLAGS/CXXFLAGS/LTOFLAGS edit, wipe the makepkg build
-cache before the next run — everything under `build_dir` except the shared
-`pkgs/` archive store:
+The compiler identity marker (§B.11) now closes this: it records
+`<family>|<compiler version line>|<sha256 of the generated composite>`, so
+editing `/etc/gsa/gcc-makepkg.conf` (or its user clone) changes the identity
+and the next run performs the one-time clean — trees, `pkg/` staging and
+archives — before rebuilding. Nothing needs wiping by hand.
+
+Two things to know when it looks wrong:
+
+- **"I edited the flags and nothing rebuilt"** — the edit landed in a file
+  the composite does not source. `gsa --build-identity gcc` prints the exact
+  identity being compared, including the digest; move the edit into
+  `/etc/gsa/<family>-makepkg.conf` or `~/.config/gsa/<family>-makepkg.conf`
+  and re-check.
+- **"It rebuilt once and has been quiet since"** — that is the gate working:
+  the marker is rewritten only after a successful build, so the clean happens
+  exactly once per identity.
+
+A hand-edited configure cache inside a tree the engine did not clean (an
+out-of-band `makepkg`) still needs the manual wipe:
 
 ```sh
 G="<build_dir>"; /usr/bin/rm -rf "$G/build" "$G/pkg" "$G/tmp" && mkdir -p "$G/build" "$G/pkg" "$G/tmp"
 ```
 
-`pkgs/` is kept as rollback evidence; the wave rebuilds every selected recipe
-anyway. Do this with no run in flight (the trees are live build state while
-lanes run). The engine-side fix — folding a flags digest into the identity
-marker or a cache-sweep seam — is queued in `AGENTS.md` §6.
+`pkgs/` is kept as rollback evidence. Do this with no run in flight.
