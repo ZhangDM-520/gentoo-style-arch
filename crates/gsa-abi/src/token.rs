@@ -133,7 +133,7 @@ pub fn token_for_installed(
 ) -> AbiToken {
     let mut sonames: Vec<String> = Vec::new();
     for file in &pkg.files {
-        let Some(bytes) = view.read_file(file) else {
+        let Some(bytes) = view.read_elf(file) else {
             continue;
         };
         if let Some(soname) = gsa_recipe::elf::soname(&bytes) {

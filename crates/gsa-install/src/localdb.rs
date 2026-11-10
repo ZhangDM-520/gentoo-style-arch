@@ -6,7 +6,7 @@
 //! date is the entry directory's mtime (what `pacman -Qi` reports as
 //! "Install Date").
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -33,11 +33,12 @@ pub struct InstalledPackage {
 #[derive(Clone, Debug, Default)]
 pub struct LocalDb {
     packages: BTreeMap<String, InstalledPackage>,
-    /// Every owned path (no leading slash) and every owned basename — the
-    /// runtime file truth of rule 25(b), indexed once per load.
-    paths: BTreeSet<String>,
     /// basename -> the owned paths carrying it (class + liveness filtering
-    /// needs the paths, not just the names).
+    /// needs the paths, not just the names). This is the ONE file index:
+    /// an exact-path set beside it was a second copy of every owned path for
+    /// no answer it could not give (a path is in `basenames` under its own
+    /// basename by construction, so membership is an equality test on that
+    /// entry) — 936 K allocations and a BTree node per path on this host.
     basenames: BTreeMap<String, Vec<String>>,
     /// Where owned files are probed for existence (production: `/`).
     root: PathBuf,
@@ -70,6 +71,28 @@ fn parse_sections(text: &str) -> BTreeMap<String, Vec<String>> {
 
 fn first(sections: &BTreeMap<String, Vec<String>>, key: &str) -> Option<String> {
     sections.get(key).and_then(|v| v.first().cloned())
+}
+
+/// One `%KEY%` section's values as borrowed lines — `parse_sections` for a
+/// caller that wants exactly one key. The `files` list is 936 K lines on a
+/// desktop host, and materializing the whole `BTreeMap<String, Vec<String>>`
+/// to read one of them cost two allocations per owned path (measured: 1.87 M
+/// of `gsa -Q`'s 5.08 M allocations, `heaptrack`). The body is not copied and
+/// the section is never built.
+fn section_lines<'a>(text: &'a str, key: &'a str) -> impl Iterator<Item = &'a str> {
+    let mut inside = false;
+    text.lines().filter_map(move |raw| {
+        let line = raw.trim();
+        if line.is_empty() {
+            inside = false;
+            return None;
+        }
+        if line.starts_with('%') && line.ends_with('%') && line.len() >= 2 {
+            inside = &line[1..line.len() - 1] == key;
+            return None;
+        }
+        inside.then_some(line)
+    })
 }
 
 /// Strip a leading slash so `files`-list paths and query paths compare as
@@ -142,16 +165,11 @@ impl LocalDb {
             let package_desc = first(&sections, "DESC");
             let mut files: Vec<String> = Vec::new();
             if let Ok(files_text) = std::fs::read_to_string(dir.join("files")) {
-                for path in parse_sections(&files_text)
-                    .get("FILES")
-                    .cloned()
-                    .unwrap_or_default()
-                {
-                    files.push(normalize_path(&path).to_string());
+                for path in section_lines(&files_text, "FILES") {
+                    files.push(normalize_path(path).to_string());
                 }
             }
             for path in &files {
-                db.paths.insert(path.to_string());
                 if let Some(base_name) = path.rsplit('/').next() {
                     db.basenames
                         .entry(base_name.to_string())
@@ -206,9 +224,8 @@ impl LocalDb {
                     db.basenames
                         .entry(base_name.to_string())
                         .or_default()
-                        .push(normalized.clone());
+                        .push(normalized);
                 }
-                db.paths.insert(normalized);
             }
             db.packages.insert(pkg.name.clone(), pkg);
         }
@@ -242,16 +259,11 @@ impl LocalDb {
     /// `gsa-abi::view::owns_file_as` twin: a lib32 basename must not resolve
     /// a 64-bit need, and a listed-but-dangling symlink is not file truth).
     pub fn owns_file_as(&self, path: &str, class: ElfClass) -> bool {
-        let normalized = normalize_path(path);
-        let base = normalized.rsplit('/').next().unwrap_or("");
-        let mut candidates: Vec<&str> = Vec::new();
-        if self.paths.contains(normalized) {
-            candidates.push(normalized);
-        }
-        if let Some(paths) = self.basenames.get(base) {
-            candidates.extend(paths.iter().map(|s| s.as_str()));
-        }
-        candidates.into_iter().any(|candidate| {
+        let base = normalize_path(path).rsplit('/').next().unwrap_or("");
+        let Some(candidates) = self.basenames.get(base) else {
+            return false;
+        };
+        candidates.iter().any(|candidate| {
             path_class(candidate) == class && self.probe_root().join(candidate).exists()
         })
     }

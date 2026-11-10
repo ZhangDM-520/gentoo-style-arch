@@ -8,7 +8,7 @@
 //! converts into this view at the seam — the parse stays there, the ABI
 //! semantics stay here.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use crate::provides::{provide_covers, provide_name};
@@ -50,9 +50,10 @@ pub struct InstalledPkg {
 #[derive(Clone, Debug, Default)]
 pub struct InstalledView {
     pkgs: BTreeMap<String, InstalledPkg>,
-    paths: BTreeSet<String>,
     /// basename -> the owned paths carrying it (class + liveness filtering
-    /// needs the paths, not just the names).
+    /// needs the paths, not just the names). ONE index: an exact-path set
+    /// beside it duplicated every owned path without answering anything
+    /// this cannot (a path sits in the map under its own basename).
     basenames: BTreeMap<String, Vec<String>>,
     root: PathBuf,
 }
@@ -67,14 +68,12 @@ impl InstalledView {
     pub fn with_root(root: PathBuf, pkgs: impl IntoIterator<Item = InstalledPkg>) -> InstalledView {
         let mut view = InstalledView {
             pkgs: BTreeMap::new(),
-            paths: BTreeSet::new(),
             basenames: BTreeMap::new(),
             root,
         };
         for pkg in pkgs {
             for file in &pkg.files {
                 let normalized = file.strip_prefix('/').unwrap_or(file);
-                view.paths.insert(normalized.to_string());
                 if let Some(base) = normalized.rsplit('/').next() {
                     view.basenames
                         .entry(base.to_string())
@@ -143,17 +142,17 @@ impl InstalledView {
     /// breakage), and a listed-but-dangling symlink must not count as a
     /// resolution (the `tk` `libtk.so -> libtk9.0.so` class).
     pub fn owns_file_as(&self, path: &str, class: ElfClass) -> bool {
-        let normalized = path.strip_prefix('/').unwrap_or(path);
-        let base = normalized.rsplit('/').next().unwrap_or("");
-        let mut candidates: Vec<&str> = Vec::new();
-        if self.paths.contains(normalized) {
-            candidates.push(normalized);
-        }
-        if let Some(paths) = self.basenames.get(base) {
-            candidates.extend(paths.iter().map(|s| s.as_str()));
-        }
+        let base = path
+            .strip_prefix('/')
+            .unwrap_or(path)
+            .rsplit('/')
+            .next()
+            .unwrap_or("");
+        let Some(candidates) = self.basenames.get(base) else {
+            return false;
+        };
         candidates
-            .into_iter()
+            .iter()
             .any(|candidate| path_class(candidate) == class && self.root.join(candidate).exists())
     }
 
@@ -163,12 +162,33 @@ impl InstalledView {
         self.owns_file_as(path, path_class(path))
     }
 
-    /// Read-only probe of one owned file's bytes through the view root.
-    /// Missing/unreadable files yield `None` and are skipped by callers
-    /// (never guessed).
-    pub fn read_file(&self, rel: &str) -> Option<Vec<u8>> {
+    /// Read one owned ELF file's bytes through the view root.
+    ///
+    /// The probe set is every file an ELF home can hold (`usr/lib` alone is
+    /// 371 K of this host's 936 K owned paths), but only 25 757 files under
+    /// `/usr` are ELF: 380 357 of one `@core` plan's 385 498 `openat` calls,
+    /// and 87% of its sampled cycles in the kernel, were spent reading files
+    /// whose first four bytes answer the question. The magic gate reads those
+    /// four bytes and stops, so a non-ELF path costs one `open` and one `read`
+    /// and never enters the allocator or `object::File::parse`.
+    ///
+    /// A caller that wants another file's bytes does not exist: every reader
+    /// here parses `DT_SONAME`/`DT_NEEDED`, and `object::File::parse` rejects
+    /// non-ELF anyway — the gate skips work, never a finding. Missing,
+    /// unreadable and non-ELF files all yield `None` and are skipped by
+    /// callers (never guessed).
+    pub fn read_elf(&self, rel: &str) -> Option<Vec<u8>> {
+        use std::io::Read;
         let normalized = rel.strip_prefix('/').unwrap_or(rel);
-        std::fs::read(self.root.join(normalized)).ok()
+        let mut file = std::fs::File::open(self.root.join(normalized)).ok()?;
+        let mut magic = [0u8; 4];
+        if file.read_exact(&mut magic).is_err() || magic != *b"\x7fELF" {
+            return None;
+        }
+        let mut bytes = Vec::with_capacity(64 * 1024);
+        bytes.extend_from_slice(&magic);
+        file.read_to_end(&mut bytes).ok()?;
+        Some(bytes)
     }
 
     /// The root-joined path a probe would read (report rendering).
@@ -249,10 +269,27 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("gsa-abi-view-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("usr/lib")).unwrap();
-        std::fs::write(dir.join("usr/lib/libx.so.1"), b"payload").unwrap();
-        let view = InstalledView::with_root(dir.clone(), [pkg("x", &[], &["usr/lib/libx.so.1"])]);
-        assert_eq!(view.read_file("usr/lib/libx.so.1").unwrap(), b"payload");
-        assert!(view.read_file("usr/lib/libmissing.so").is_none());
+        std::fs::write(
+            dir.join("usr/lib/libx.so.1"),
+            b"\x7fELF\x02\x01\x01\x00payload",
+        )
+        .unwrap();
+        std::fs::write(dir.join("usr/lib/python-stdlib.py"), b"import os\n").unwrap();
+        let view = InstalledView::with_root(
+            dir.clone(),
+            [
+                pkg("x", &[], &["usr/lib/libx.so.1"]),
+                pkg("py", &[], &["usr/lib/python-stdlib.py"]),
+            ],
+        );
+        assert_eq!(
+            view.read_elf("usr/lib/libx.so.1").unwrap(),
+            b"\x7fELF\x02\x01\x01\x00payload"
+        );
+        assert!(view.read_elf("usr/lib/libmissing.so").is_none());
+        // An ELF home is not an ELF file: the magic gate answers without
+        // reading the body, and no caller loses a finding to it.
+        assert!(view.read_elf("usr/lib/python-stdlib.py").is_none());
         assert_eq!(
             view.probe_path("usr/lib/libx.so.1"),
             dir.join("usr/lib/libx.so.1")

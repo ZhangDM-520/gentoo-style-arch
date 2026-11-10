@@ -59,3 +59,13 @@ object = { version = "0.36", default-features = false, features = ["read", "elf"
 # world/sets over the kv store, run-history inspection, the prune strengths,
 # shared-source mirrors and the audit/doctor reports — docs/plans/plan-native-pm.md
 # §5.1's `maintain`/`logs`/`clean` verbs, contract §B.7).
+
+# A symbol-bearing build of the release settings, for `tools/perf/` only: the
+# shipped binary is stripped, so `perf report` cannot name a function and every
+# cost lands in an anonymous frame. Nothing here changes codegen — `debug` adds
+# DWARF and `strip` keeps it — so a `--profile profiling` run measures the same
+# instructions the release binary executes.
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = false

@@ -68,6 +68,29 @@ gsa -Ma                                      # audit lints are report-only; read
   `cargo test --workspace -- --test-threads=1` is the deterministic run.
 - Never use a real rebuild as a syntax check.
 
+### Measuring, rather than guessing
+
+`tools/perf/` is a measurement tool, never a gate: no fixture reads it and the
+validation block above does not change. A change that claims a performance win
+owes the numbers, taken with these scripts and recorded with the delta:
+
+```sh
+cargo build --profile profiling              # release codegen + DWARF, for `perf`
+tools/perf/bench.sh --runs 7 -- gsa -Q       # median + IQR; the IQR is the noise floor
+tools/perf/probe.sh -- gsa -Q                # syscalls + which tree they touch
+tools/perf/matrix.sh --out /tmp/matrix.md    # the whole workload set, one run
+tools/perf/stub-run.sh --packages 32         # scheduler wall time, no compiler
+```
+
+- A difference smaller than the reported IQR is **not measured**, not faster.
+  Pair the runs (before/after, interleaved) when the host is busy, and quote
+  the count that does not move with load — instructions, syscalls, allocations
+  — as the primary evidence.
+- Every row records engine identity, the recipe-store commit, the pin set and
+  the load average; a row without them is not reproducible.
+- Prefer `perf`/`heaptrack`/`strace` counts over wall-clock on a shared or
+  hybrid-CPU host: `bench.sh` pins to the Zen 5 cores for exactly that reason.
+
 ## Committing
 
 Never commit or push unprompted: a green battery is evidence, not consent.

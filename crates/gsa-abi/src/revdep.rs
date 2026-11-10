@@ -172,8 +172,8 @@ pub fn revdep_report(view: &InstalledView, preserved: &[PreservedEntry]) -> Revd
     let mut needed_by: Vec<(String, String, String)> = Vec::new(); // (consumer, member, soname)
     for pkg in view.packages() {
         for file in &pkg.files {
-            let Some(bytes) = view.read_file(file) else {
-                continue; // missing/unreadable files are skipped, never guessed
+            let Some(bytes) = view.read_elf(file) else {
+                continue; // missing/unreadable/non-ELF files are skipped, never guessed
             };
             for soname in gsa_recipe::elf::needed_libs(&bytes) {
                 if base_lib_ok(&soname) {

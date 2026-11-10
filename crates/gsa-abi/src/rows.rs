@@ -128,7 +128,7 @@ pub fn linked_consumers(view: &InstalledView, affected: &[Drift]) -> Vec<String>
             if !elf_home(file) {
                 continue;
             }
-            let Some(bytes) = view.read_file(file) else {
+            let Some(bytes) = view.read_elf(file) else {
                 continue;
             };
             let class = path_class(file);
