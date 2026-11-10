@@ -148,9 +148,9 @@ child_env=$(env -u RUSTFLAGS bash --noprofile --norc -c '
   source "$1" >/dev/null 2>&1
   env | grep "^RUSTFLAGS=" || true
 ' _ "$composite")
-printf '%s\n' "$child_env" | grep -Fq 'target-cpu=native' ||
+vgrep "$child_env" -Fq 'target-cpu=native' ||
     fail 'F: a child process does not inherit RUSTFLAGS from the composite:'$'\n'"$child_env"
-printf '%s\n' "$child_env" | grep -Fq -- '-C link-arg=-fuse-ld=mold' ||
+vgrep "$child_env" -Fq -- '-C link-arg=-fuse-ld=mold' ||
     fail 'F: the child process RUSTFLAGS lost the mold link arg:'$'\n'"$child_env"
 
 # ── G. each family's flags are accepted by that family's compiler ───────────
