@@ -463,4 +463,26 @@ assert_row baseline-retry p2 succeeded 0
     || fail "the retry did not re-record its VCS revision baseline:" "$fixture/out-baseline-retry.txt"
 assert_marker "$marker_p2" "$IDENT_B"
 
-printf 'toolchain drift fixture: PASS (one-time clean, skip-preserve, drift clean + retry, baseline-before-marker)\n'
+# ─── 9. A SITE-FILE edit moves the identity ─────────────────────────────────
+# `/etc/gsa/<family>-makepkg.conf` is the documented way to reverse a shipped
+# flag, and it is the ONE input the composite does not contain — it only names
+# it. If the digest covered the composite alone, an in-place flag edit would
+# keep every marker and reuse stale LTO objects with the new flags (rule 6).
+site_dir="$fixture/site"
+mkdir -p "$site_dir"
+printf 'CFLAGS+=" -O1"\n' >"$site_dir/gcc-makepkg.conf"
+digest_a=$(GSA_CONF_DIR="$site_dir" "$GSA_TEST_GSA_BIN" --build-identity gcc |
+    awk -F'|' '{print $3}')
+printf 'CFLAGS+=" -O2"\n' >"$site_dir/gcc-makepkg.conf"
+digest_b=$(GSA_CONF_DIR="$site_dir" "$GSA_TEST_GSA_BIN" --build-identity gcc |
+    awk -F'|' '{print $3}')
+[ -n "$digest_a" ] && [ "$digest_a" != "$digest_b" ] \
+    || fail "a site-file content edit did not move the identity (both '$digest_a')"
+# Same path, file gone: the absent rung is not the bytes it used to have.
+command rm -f "$site_dir/gcc-makepkg.conf"
+digest_missing=$(GSA_CONF_DIR="$site_dir" "$GSA_TEST_GSA_BIN" --build-identity gcc |
+    awk -F'|' '{print $3}')
+[ "$digest_missing" != "$digest_b" ] \
+    || fail "removing the site file did not move the identity ('$digest_missing')"
+
+printf 'toolchain drift fixture: PASS (one-time clean, skip-preserve, drift clean + retry, baseline-before-marker, site-edit identity)\n'

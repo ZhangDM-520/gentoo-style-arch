@@ -282,8 +282,8 @@ split.
 
 6. **Toolchain identity, not mtime, decides whether a build tree is
    reusable.** The per-recipe marker under the state root's `toolchains/` is
-   `<family>|<compiler version line>|<sha256 of the generated makepkg
-   composite>`, so a compiler upgrade AND a flag edit each change the identity
+   `<family>|<compiler version line>|<sha256 of the effective makepkg
+   config>` (the composite plus its site files' bytes), so a compiler upgrade AND a flag edit each change the identity
    and force the one-time clean — no manual purge. `gsa --build-identity
    gcc|clang` prints the value. Meson `--reconfigure`, `CMakeCache.txt`
    rewriting and `*.la` purging are `gsa-recipe`'s half.

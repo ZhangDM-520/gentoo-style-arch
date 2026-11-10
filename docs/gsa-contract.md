@@ -537,7 +537,10 @@ markers only: `CC=clang`, `CXX=clang++`, `-DCMAKE_C_COMPILER=clang`, … — a
 families with no decision REFUSE (lane reason `toolchain-ambiguous`, naming
 the recipe and both markers); the lane records its decision as
 `toolchain <family> (<rung>)` in the per-package log. The build-identity
-marker (§J.1) is `<family>|<compiler version line>|<sha256 of the composite>`.
+marker (§J.1) is `<family>|<compiler version line>|<sha256 of the effective
+config>` — the composite's bytes plus the bytes of every site file it sources,
+because the composite only names those files and a flag edit in `/etc/gsa`
+must move the identity (rule 6).
 
 **Workspace resolution** (plan-gsa-isolation.md W3), in order: the `project`
 config key (dev/deployment override); the cwd walk (deprecated — a TTY run
@@ -763,7 +766,7 @@ invocations with rc 2, and are callable only by fixtures.
 | `--install-register` | `gsa --install-register <conf> <subject> <names…>` | the IgnorePkg registration write path in isolation, including its bounded `db.lck` wait |
 | `--register-ignorepkg` | `gsa --register-ignorepkg <conf> <names…>` | the one-shot IgnorePkg backfill in isolation (the public verb is `gsa -Mi --backfill`; the seam stays for fixtures and for an engine older than the verb) |
 | `--qa-check` | `gsa --qa-check <name> …` | run exactly one QA check (today `--audit-lint <family>`); the check registry's single-entry point |
-| `--build-identity` | `gsa --build-identity <gcc\|clang>` | prints the exact identity the toolchain drift marker records (§B.11/§J.1) — `<family>\|<compiler version line>\|<sha256 of the composite>` — so "why did this rebuild?" is answerable, and fixtures stage a CURRENT marker instead of predicting the digest. rc 0 / 2 bad family / 3 unreadable config |
+| `--build-identity` | `gsa --build-identity <gcc\|clang>` | prints the exact identity the toolchain drift marker records (§B.11/§J.1) — `<family>\|<compiler version line>\|<sha256 of the effective config>` — so "why did this rebuild?" is answerable, and fixtures stage a CURRENT marker instead of predicting the digest. rc 0 / 2 bad family / 3 unreadable config |
 | `--print-conf` | `gsa --print-conf <gcc\|clang>` | prints the built-in per-compiler makepkg body verbatim, which is what the composite embeds. `gsa-pm` writes it to `/etc/gsa/<family>-makepkg.conf` at package time, so the shipped baseline is the binary's own text (no copied flag list to drift). Reads nothing, mutates nothing. rc 0 / 2 missing or unknown family |
 
 *Amendment (2026-10-14, cutover gap G10 — the `--lane-job` flags payload

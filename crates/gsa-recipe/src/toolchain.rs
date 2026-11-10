@@ -950,9 +950,10 @@ pub fn compiler_identity(toolchain: Toolchain) -> io::Result<String> {
 /// `<toolchain>|<compiler version line>|<sha256 of the effective config>`.
 ///
 /// The config digest is the piece rule 6 queued: editing
-/// `/etc/gsa/gcc-makepkg.conf` changes the composite's bytes, which changes
-/// the identity, which forces the one-time clean — without it a flag edit
-/// silently reused stale LTO objects (the 2026-10-08 doxygen-git class).
+/// `/etc/gsa/gcc-makepkg.conf` changes the identity, which forces the
+/// one-time clean — without it a flag edit silently reused stale LTO objects
+/// (the 2026-10-08 doxygen-git class). The digest covers the site files'
+/// BYTES as well as their paths: the composite only names them.
 pub fn build_identity(toolchain: Toolchain) -> io::Result<String> {
     let version = compiler_identity(toolchain)?;
     let digest = config_digest(toolchain)?;
@@ -964,12 +965,41 @@ pub fn build_identity(toolchain: Toolchain) -> io::Result<String> {
 /// but different layouts hash differently — which is correct: the lane's
 /// config genuinely differs.
 fn config_digest(toolchain: Toolchain) -> io::Result<String> {
-    use sha2::{Digest, Sha256};
     let (_, sources) = gsa_model::config::makepkg_conf_sources(toolchain)
         .map_err(|error| io::Error::other(error))?;
-    let body = gsa_model::makepkg_conf::render(toolchain, &sources);
+    digest_of(toolchain, &sources)
+}
+
+/// The digest of one resolved lane config: the composite's own bytes plus the
+/// bytes of every site file it sources.
+///
+/// The composite only NAMES its site files (`[ -r … ] && source …`), so
+/// hashing it alone left `/etc/gsa/<family>-makepkg.conf` edits invisible —
+/// the documented way to reverse a shipped decision kept every stale marker.
+/// Path, presence and content are hashed in source order; a present-but-
+/// unreadable file is an error, never a silent "absent" (rule 71).
+fn digest_of(toolchain: Toolchain, sources: &[std::path::PathBuf]) -> io::Result<String> {
+    use sha2::{Digest, Sha256};
+    let body = gsa_model::makepkg_conf::render(toolchain, sources);
     let mut hasher = Sha256::new();
     hasher.update(body.as_bytes());
+    for source in sources {
+        hasher.update(source.display().to_string().as_bytes());
+        hasher.update([0]);
+        match std::fs::read(source) {
+            Ok(bytes) => {
+                hasher.update([1]);
+                hasher.update(&bytes);
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => hasher.update([2]),
+            Err(error) => {
+                return Err(io::Error::other(format!(
+                    "cannot read site config {}: {error}",
+                    source.display()
+                )))
+            }
+        }
+    }
     Ok(hasher
         .finalize()
         .iter()
@@ -999,14 +1029,37 @@ mod identity_tests {
     #[test]
     fn a_config_edit_moves_the_identity() {
         // The mechanism the drift gate rests on: same compiler, different
-        // bytes => different marker => one clean. `render` is the seam the
-        // digest covers, so comparing two renders proves it.
-        let sources: Vec<std::path::PathBuf> = Vec::new();
-        let a = gsa_model::makepkg_conf::render(Toolchain::Gcc, &sources);
-        let b = gsa_model::makepkg_conf::render(
-            Toolchain::Gcc,
-            &[std::path::PathBuf::from("/site/gcc-makepkg.conf")],
-        );
-        assert_ne!(a, b);
+        // bytes => different marker => one clean. A SITE FILE's content must
+        // count, not just its path — `/etc/gsa/<family>-makepkg.conf` is the
+        // documented way to reverse a shipped decision, so an in-place edit
+        // that left the identity alone would keep every stale marker (rule 6).
+        let dir = std::env::temp_dir().join(format!(
+            "gsa-identity-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let site = dir.join("gcc-makepkg.conf");
+        let sources = vec![site.clone()];
+
+        std::fs::write(&site, "CFLAGS+=\" -O1\"\n").expect("write site file");
+        let a = digest_of(Toolchain::Gcc, &sources).expect("digest a");
+        std::fs::write(&site, "CFLAGS+=\" -O2\"\n").expect("rewrite site file");
+        let b = digest_of(Toolchain::Gcc, &sources).expect("digest b");
+        assert_ne!(a, b, "a site-file content edit must move the identity");
+
+        // Same path, file gone: "missing" is a legal rung and must not read as
+        // the bytes it used to have.
+        std::fs::remove_file(&site).expect("remove site file");
+        let missing = digest_of(Toolchain::Gcc, &sources).expect("digest missing");
+        assert_ne!(missing, b, "a removed site file must move the identity");
+
+        // A different path with identical bytes is a different lane config.
+        let other = dir.join("other.conf");
+        std::fs::write(&other, "CFLAGS+=\" -O2\"\n").expect("write other");
+        let elsewhere = digest_of(Toolchain::Gcc, &[other]).expect("digest other");
+        assert_ne!(elsewhere, b, "the path is part of the lane's config");
+
+        std::fs::remove_dir_all(&dir).expect("cleanup");
     }
 }
