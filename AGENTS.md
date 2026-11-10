@@ -70,7 +70,8 @@ other document, including this one. When they disagree, fix the document.
 cargo build --release            # ./target/release/gsa
 cargo test --workspace           # workspace tests (see the flake note)
 cargo test -p gsa-sched          # one crate
-cargo clippy                     # lint pass
+cargo clippy                     # lint pass (clean at HEAD; `--all-targets` too)
+tools/fmt.sh                     # rustfmt check (`--write`); `cargo fmt` is broken here
 bash tests/run-all.sh            # the whole fixture battery, in parallel
 bash tests/run-all.sh abi        # substring filter; a mismatch exits 2 (typo)
 bash tests/run-all.sh --serial   # one at a time, for a flaky fixture
@@ -80,6 +81,12 @@ gsa --help                       # authoritative spelling roster, incl. environm
 
 Non-obvious, in order:
 
+- **There is no CI, by decision.** The validation block in `CONTRIBUTING.md`
+  is the gate and the maintainer runs it; do not propose a workflow, and never
+  write "CI is green" in a document (2026-11-10).
+- `tools/fmt.sh` is the formatting command. `cargo fmt` shells out to
+  `cargo-fmt`, which aborts at startup on the 2026-11 nightly (glibc malloc
+  assertion) while `rustfmt` itself is fine; the script calls it directly.
 - `tests/run-all.sh` defaults to the INSTALLED `/usr/bin/gsa` (`command -v
   gsa`) and prints the binary and its owning package. That is the contract
   (§L.10); `GSA_TEST_GSA_BIN` is the explicit pre-install override and must be
