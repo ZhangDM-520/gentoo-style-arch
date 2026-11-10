@@ -40,6 +40,8 @@ This repository holds `gsa`, the build engine. The recipe set it builds —
 Before submitting an engine change:
 
 ```sh
+tools/fmt.sh                                 # rustfmt check
+cargo clippy --workspace --all-targets        # must be clean
 cargo test --workspace                       # the crate suite
 bash tests/run-all.sh                        # the whole fixture battery
 GSA_RECIPE_CHECKOUT=~/Projects/gsa-recipe \
@@ -47,6 +49,13 @@ GSA_RECIPE_CHECKOUT=~/Projects/gsa-recipe \
 gsa -Ma                                      # audit lints are report-only; read the report
 ```
 
+- **There is no CI: this block is the gate, and the maintainer runs it.** A
+  submission that has not run it locally has not been validated — say which
+  items you ran, and report any deviation (a `GSA_TEST_GSA_BIN` run, a missing
+  recipe checkout) rather than presenting it as a full pass.
+- **Formatting is gated.** Use `tools/fmt.sh` (`--write` to apply): `cargo fmt`
+  shells out to `cargo-fmt`, which aborts at startup on the nightly toolchain
+  this repository builds with, so the script calls `rustfmt` directly.
 - `tests/run-all.sh` defaults to the installed `/usr/bin/gsa` — the contract's
   smoke-the-shipped-binary rule — and prints the binary and its owning package.
   `GSA_TEST_GSA_BIN=$PWD/target/release/gsa` is the explicit pre-install
@@ -63,7 +72,8 @@ gsa -Ma                                      # audit lints are report-only; read
 
 Never commit or push unprompted: a green battery is evidence, not consent.
 PR comments go through `gh` only (never the GitHub MCP service, whose checks
-table can be stale) and never before CI is green.
+table can be stale) and never before the validation block above is green on
+the maintainer's machine.
 Each commit carries a descriptive body — what changed, why, and how it was
 validated — and the trailer:
 
