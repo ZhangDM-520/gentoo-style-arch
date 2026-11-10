@@ -541,20 +541,12 @@ pub fn classify_source(raw: &str) -> ClassifiedSource {
     };
     let kind = {
         let loc = location.as_str();
-        let (scheme, _) = loc.split_once("://").unwrap_or((loc, ""));
-        let (vcs, _plus) = scheme.split_once('+').unwrap_or((scheme, ""));
-        match vcs {
-            "git" => SourceKind::Vcs(VcsKind::Git),
-            "svn" => SourceKind::Vcs(VcsKind::Svn),
-            "bzr" => SourceKind::Vcs(VcsKind::Bzr),
-            "hg" => SourceKind::Vcs(VcsKind::Hg),
-            _ => {
-                if loc.contains("://") {
-                    SourceKind::Remote
-                } else {
-                    SourceKind::Local
-                }
-            }
+        // ONE scheme rule (`freshness::scheme_vcs`, makepkg's `get_protocol`):
+        // a bare `git://` URL is a git checkout just like `git+https://`.
+        match crate::freshness::scheme_vcs(loc) {
+            Some(vcs) => SourceKind::Vcs(vcs),
+            None if loc.contains("://") => SourceKind::Remote,
+            None => SourceKind::Local,
         }
     };
     ClassifiedSource {

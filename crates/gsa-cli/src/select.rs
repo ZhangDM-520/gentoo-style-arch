@@ -11,7 +11,8 @@ use std::io::{BufRead, Write};
 
 use gsa_graph::Graph;
 use gsa_model::{Group, RecipeId, Tag};
-use gsa_recipe::RecipeDb;
+use gsa_recipe::freshness::{vcs_source_ref_info, RefKind, VcsRef};
+use gsa_recipe::{RecipeDb, SourceKind};
 use gsa_topo::ProjectConfig;
 
 use crate::prompt::{self, AppRow, PromptOutcome};
@@ -208,6 +209,75 @@ fn unknown_reference(ctx: &Ctx<'_>, token: &str, namespace: bool) -> SelectError
 
 const MAX_SET_DEPTH: usize = 4;
 
+/// The frontend snapshot suffix: `<id>-snapshot` is an INPUT spelling for a
+/// recipe whose primary VCS source is an immutable `#commit=` pin. The recipe
+/// keeps its `-git` name everywhere — the run record, listing and plan always
+/// print the true id, because a record must not misname the package it
+/// installed. A real id that ends in `-snapshot` (`gcc-snapshot`) is resolved
+/// by the exact-id branch first, so the alias can never shadow it.
+const SNAPSHOT_SUFFIX: &str = "-snapshot";
+
+/// The ref the recipe's primary (first) VCS source tracks. `None` for a
+/// recipe with no VCS source at all (a release tarball is not a snapshot).
+fn primary_vcs_ref(ctx: &Ctx<'_>, id: &str) -> Option<VcsRef> {
+    let meta = ctx.db.get(id)?;
+    let primary = meta
+        .sources()
+        .into_iter()
+        .find(|source| matches!(source.kind, SourceKind::Vcs(_)))?;
+    vcs_source_ref_info(&primary.location)
+}
+
+/// How a refusal names the ref a non-snapshot recipe tracks.
+fn tracked_ref_label(reference: &VcsRef) -> String {
+    match &reference.kind {
+        RefKind::Default => "the VCS default ref".to_string(),
+        RefKind::Revision => format!("#{}", reference.value),
+        RefKind::Commit => format!("#commit={}", reference.value),
+        RefKind::Branch => format!("#branch={}", reference.value),
+        RefKind::Tag => format!("#tag={}", reference.value),
+        RefKind::Other(kind) => format!("#{kind}={}", reference.value),
+    }
+}
+
+/// Resolve a `<id>-snapshot` alias: the true id when `base`'s primary VCS
+/// source is a `#commit=` pin, a usage refusal naming the ref it tracks
+/// otherwise. `NotAnAlias` means no alias branch applies and the ordinary
+/// unknown-reference path owns the token.
+enum SnapshotAlias {
+    Resolved(usize, String),
+    Refused(String),
+    NotAnAlias,
+}
+
+fn resolve_snapshot_alias(ctx: &Ctx<'_>, token: &str) -> SnapshotAlias {
+    let Some(base) = token.strip_suffix(SNAPSHOT_SUFFIX) else {
+        return SnapshotAlias::NotAnAlias;
+    };
+    if base.is_empty() {
+        return SnapshotAlias::NotAnAlias;
+    }
+    let Some(index) = ctx.graph.index_of(base) else {
+        return SnapshotAlias::NotAnAlias;
+    };
+    match primary_vcs_ref(ctx, base) {
+        Some(reference) if reference.kind == RefKind::Commit => SnapshotAlias::Resolved(
+            index,
+            format!(
+                "snapshot alias: '{token}' -> '{base}' (pinned at {})",
+                reference.value
+            ),
+        ),
+        Some(reference) => SnapshotAlias::Refused(format!(
+            "'{base}' is not a snapshot: it tracks {} — only a recipe whose primary VCS source carries '#commit=<sha>' resolves as '{token}'",
+            tracked_ref_label(&reference)
+        )),
+        None => SnapshotAlias::Refused(format!(
+            "'{base}' is not a snapshot: it has no VCS source — only a recipe whose primary VCS source carries '#commit=<sha>' resolves as '{token}'"
+        )),
+    }
+}
+
 /// Resolve one reference to seed record indices. Notes describe announced
 /// substitutions (case-variant id, package name → recipe) and belong on
 /// stderr so stdout stays machine-readable.
@@ -277,6 +347,16 @@ pub fn resolve_ref(
     // Exact recipe id.
     if let Some(idx) = ctx.graph.index_of(token) {
         return Ok((vec![idx], notes));
+    }
+    // Snapshot alias (`<id>-snapshot` for a `#commit=`-pinned `<id>`): an
+    // input spelling only — the resolved record keeps the true id.
+    match resolve_snapshot_alias(ctx, token) {
+        SnapshotAlias::Resolved(index, note) => {
+            notes.push(note);
+            return Ok((vec![index], notes));
+        }
+        SnapshotAlias::Refused(message) => return Err(SelectError::new(message)),
+        SnapshotAlias::NotAnAlias => {}
     }
     // Case-variant id: matched and announced.
     let lower = token.to_ascii_lowercase();

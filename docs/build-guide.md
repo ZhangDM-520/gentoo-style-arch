@@ -55,6 +55,11 @@ nearest candidates (contract §C.1):
 - a recipe ID (`mesa-git`), a recipe path (`packages/git/mesa-git`), a
   case-variant ID (matched and announced), or a pacman `pkgname` including a
   split output (`zen-browser` → `zen-browser-pgo`);
+- a **snapshot alias** `<id>-snapshot` (`mesa-git-snapshot`) for a recipe whose
+  primary `source=()` entry is an immutable `#commit=` pin. It is an input
+  spelling only — every output channel prints the true `-git` id — and a
+  recipe that still floats (or tracks a branch/tag, or has no VCS source) is
+  refused (rc 2) naming the ref it tracks;
 - a group or user set as `@name` (`@git`, `@core`, `@<set>`) — groups and
   sets share one `@` namespace;
 - a standalone PKGBUILD: a `PKGBUILD` file path, a directory holding one, or

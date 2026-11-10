@@ -148,6 +148,7 @@ Selection targets (contract §C; exact lookup only — a typo is never auto-corr
             ("recipe id", "mesa-git"),
             ("recipe path", "packages/git/mesa-git"),
             ("case-variant id", "Mesa-Git (matched and announced)"),
+            ("snapshot alias", "<id>-snapshot for a recipe whose primary VCS source is #commit=-pinned — an input spelling only: the recipe keeps its -git id and a floating recipe is refused (rc 2, the ref it tracks is named)"),
             ("pacman pkgname", "zen-browser (split outputs included; announced)"),
             ("group / user set", "@<group> over the computed groups ({groups}), or a named user set @<set> ('gsa -Ms' manages user sets)"),
             ("index ranges", "22..38, 22.., ..15 — 1-based over the -Sl listing of the same selection; a bare range is a usage error"),

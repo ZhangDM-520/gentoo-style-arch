@@ -707,23 +707,28 @@ pub fn source_url(entry: &str) -> Option<&str> {
     }
 }
 
+/// The VCS a source URL names, mirroring makepkg's `get_protocol`: the scheme
+/// before `://`, then the part before `+`. A bare `git://` URL is therefore a
+/// git checkout exactly like `git+https://`, and `https://` is a plain
+/// download. ONE derivation — `classify_source` calls this too, because the
+/// two used to disagree on the bare-scheme spelling.
+pub fn scheme_vcs(url: &str) -> Option<VcsKind> {
+    let scheme = url.split_once("://")?.0;
+    match scheme.split('+').next()? {
+        "git" => Some(VcsKind::Git),
+        "svn" => Some(VcsKind::Svn),
+        "hg" => Some(VcsKind::Hg),
+        "bzr" => Some(VcsKind::Bzr),
+        _ => None,
+    }
+}
+
 /// The VCS protocol of an entry (`git`/`svn`/`hg`/`bzr` prefix on the URL
 /// part), or `None` for a plain download. Read after the `name::` prefix is
 /// removed — `fish::git+https://…` is a git checkout, and testing the raw
-/// entry misses it.
+/// entry misses it. The scheme rule is [`scheme_vcs`]'s (makepkg's).
 pub fn source_vcs(entry: &str) -> Option<VcsKind> {
-    let url = source_url(entry)?;
-    for (kind, prefix) in [
-        (VcsKind::Git, "git+"),
-        (VcsKind::Svn, "svn+"),
-        (VcsKind::Hg, "hg+"),
-        (VcsKind::Bzr, "bzr+"),
-    ] {
-        if url.starts_with(prefix) {
-            return Some(kind);
-        }
-    }
-    None
+    scheme_vcs(source_url(entry)?)
 }
 
 /// The name makepkg gives one source entry: the `name::` override (up to the
@@ -2566,5 +2571,48 @@ fn parse_failure_state(src: &PendingSource) -> VcsSourceState {
         remote: RemoteRevisionState::Unverifiable {
             error: "cannot parse a VCS source ref".to_string(),
         },
+    }
+}
+
+#[cfg(test)]
+mod source_protocol_tests {
+    use super::*;
+
+    /// makepkg's `get_protocol` strips `+` from the scheme, so a bare
+    /// `git://` URL is a git checkout exactly like `git+https://`. The two
+    /// engine derivations disagreed here (2026-11-09): a `git://` source was
+    /// classified as a VCS entry by `classify_source` and as a plain download
+    /// by `source_vcs`, so its refs were never probed and no baseline was
+    /// recorded.
+    #[test]
+    fn bare_scheme_urls_are_vcs_in_both_derivations() {
+        for (entry, want) in [
+            ("git+https://host/x.git", VcsKind::Git),
+            ("git://host/x.git", VcsKind::Git),
+            ("alias::git://host/x.git", VcsKind::Git),
+            ("svn://host/x", VcsKind::Svn),
+            ("hg+https://host/x", VcsKind::Hg),
+        ] {
+            assert_eq!(source_vcs(entry), Some(want), "{entry}");
+            assert_eq!(
+                crate::classify_source(entry).kind,
+                crate::SourceKind::Vcs(want),
+                "{entry}"
+            );
+        }
+        for plain in ["https://host/x.tar.gz", "http://host/x", "fix.patch"] {
+            assert_eq!(source_vcs(plain), None, "{plain}");
+        }
+    }
+
+    /// The ref-fragment parse (the snapshot alias's "is it pinned" question)
+    /// must work on the bare-scheme spelling too.
+    #[test]
+    fn bare_scheme_ref_fragment_parses() {
+        let info = vcs_source_ref_info("git://host/x.git#commit=abc123").unwrap();
+        assert_eq!(info.protocol, VcsKind::Git);
+        assert_eq!(info.url, "git://host/x.git");
+        assert_eq!(info.kind, RefKind::Commit);
+        assert_eq!(info.value, "abc123");
     }
 }

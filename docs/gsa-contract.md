@@ -399,7 +399,7 @@ The dumb-TTY rule is §L.9.
 | `--lanes/--jobs/--intensity` | same | carried |
 | `--allow-broken-rustc` | same | carried |
 | `-h/--help` | `gsa --help` | carried; the roster printed is authoritative |
-| package refs: recipe ID / recipe path / case-variant ID / pacman pkgname incl. split outputs / typo + nearest candidates | same targets | carried verbatim (§C.1) |
+| package refs: recipe ID / recipe path / case-variant ID / pacman pkgname incl. split outputs / `<id>-snapshot` alias / typo + nearest candidates | same targets | carried verbatim (§C.1) |
 | index ranges `22..38`, `22..`, `..15` | same | carried verbatim (§C.3) |
 | `app` multi-select prompt, `app-cluster` rows | same behaviour | carried (§C.4) |
 | core auto-install; core-runs-solo; `build-tools` dispatch band | scheduler invariants | carried (§K.2); core auto-install is subsumed by `-S` |
@@ -544,6 +544,20 @@ naming the unknown reference and the nearest candidates. A selection that
 resolves to zero packages (for example a roster group with no members) is a
 usage error (rc 2) with the reason `selection resolved to no packages` — never
 a successful no-op.
+
+**Snapshot alias** (2026-11-09). `<id>-snapshot` is an input spelling for a
+recipe whose PRIMARY (first) VCS `source=()` entry is an immutable `#commit=`
+pin: a pin IS the snapshot, so the alias is derived from the source ref and
+needs no topology vocabulary and no per-recipe opt-in. The recipe keeps its
+own id, path, `pkgname`s and `provides=` — `<id>-snapshot` never appears in a
+listing, a plan or a run record (`selection-source:` echoes the input
+spelling; the continuation replays the resolved id). An exact id that ends in
+`-snapshot` (`gcc-snapshot`, a real package) is resolved by the exact-id
+branch first. A recipe that is not pinned is refused: rc 2 naming the recipe
+and the ref it tracks (`the VCS default ref`, `#branch=main`, `#tag=v1.0`),
+and a recipe with no VCS source is refused the same way. A snapshot name
+whose base recipe does not exist stays the ordinary unknown reference with
+nearest candidates.
 
 **Standalone PKGBUILD input** (plan-gsa-isolation.md W4's distribution unit:
 "sharing a package = sharing its PKGBUILD; rebuilding = gsa + the recipe, no

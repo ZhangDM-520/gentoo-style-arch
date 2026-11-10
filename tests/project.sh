@@ -37,6 +37,10 @@ set -euo pipefail
 #   7. the ORDER contract of the consumer walk: a diamond's independent
 #      consumers tie-break on record order, a doubly-seeded name is emitted
 #      once, and a tip seeded alone never pulls its upstream in.
+#   9. the snapshot alias — `<id>-snapshot` resolves for a recipe whose
+#      primary VCS source is a `#commit=` pin, prints the TRUE id in every
+#      output channel, and is refused (rc 2, naming the ref it tracks) for a
+#      floating/branch/tag/non-VCS recipe; a real `-snapshot` id wins.
 #
 # Flip notes (docs/gsa-fixture-migration.md row `tests/project.sh`; the row's
 # phase cell reads "1 (continuation half at 2)" and the flip is whole-file —
@@ -868,4 +872,105 @@ fi
         fail "the retired root shim is back (build-all.fish) — it must stay deleted"
 
     printf 'retired-engine surface fixture: PASS (frozen oracle parses, root shim gone)\n'
+)
+
+# ─── 9. the snapshot alias: a `#commit=` pin IS the snapshot name ──────────
+# The recipe keeps its `-git` identity everywhere (ids, dirs, pkgnames,
+# provides, topology); `<id>-snapshot` is an INPUT spelling only. Derived from
+# the source ref, so the alias needs no topology vocabulary and no per-recipe
+# opt-in, and a refusal names the ref the recipe actually tracks. A real id
+# ending in `-snapshot` (`gcc-snapshot` in the recipe tree) is resolved by
+# exact-id lookup before the alias can see it.
+(
+    set -euo pipefail
+
+    ws="$fixture/snapshot/ws"
+    state="$fixture/snapshot/state"
+    make_workspace "$ws" 1 1 low
+    # an empty GSA_CONF: the auto-read config layers must never steer a fixture
+    conf="$fixture/snapshot/gsa.conf"
+    : >"$conf"
+    add_package "$ws" pinned-git "$gsa_meta_any
+source=('git+https://example.invalid/pinned.git#commit=0123456789abcdef0123456789abcdef01234567')"
+    add_package "$ws" floating-git "$gsa_meta_any
+source=('git+https://example.invalid/floating.git')"
+    add_package "$ws" branch-git "$gsa_meta_any
+source=('git+https://example.invalid/branch.git#branch=main')"
+    add_package "$ws" tag-git "$gsa_meta_any
+source=('git+https://example.invalid/tag.git#tag=v1.0')"
+    add_package "$ws" tarball "$gsa_meta_any
+source=('https://example.invalid/tarball-1.0.tar.gz')"
+    add_package "$ws" tool-snapshot "$gsa_meta_any
+source=('https://example.invalid/tool.tar.gz')"
+
+    # a. a pinned recipe resolves through its snapshot name, and the listing
+    # carries the TRUE id — a record must never misname what it installed.
+    GSA_CONF="$conf" GSA_STATE_DIR="$state" run_engine "$ws" -Sl pinned-git-snapshot
+    [ "$FIXTURE_RC" = 0 ] ||
+        fail "a: a pinned recipe's snapshot name must resolve (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
+    [ "$(listing_rows <<<"$FIXTURE_OUTPUT")" = pinned-git ] ||
+        fail "a: the alias listed [$(listing_rows <<<"$FIXTURE_OUTPUT" | tr '\n' ' ')], want the true id [pinned-git]"
+    grep -F "'pinned-git-snapshot'" <<<"$FIXTURE_OUTPUT" >/dev/null ||
+        fail "a: the substitution is not announced outside the listing rows: $FIXTURE_OUTPUT"
+
+    # b. the alias reaches the BUILD path: the plan/record print the true id,
+    # `selection-source` echoes the input spelling, and the continuation
+    # replays the resolved id (never the alias).
+    GSA_CONF="$conf" GSA_STATE_DIR="$state" run_engine "$ws" -B --dry-run pinned-git-snapshot
+    [ "$FIXTURE_RC" = 0 ] || fail "b: dry run through the alias failed: $FIXTURE_OUTPUT"
+    rr2_body <<<"$FIXTURE_OUTPUT" >/dev/null ||
+        fail "b: the alias dry-run record is not strict format: 2: $FIXTURE_OUTPUT"
+    [ "$(rr2_scalar order <<<"$FIXTURE_OUTPUT")" = pinned-git ] ||
+        fail "b: dry-run order is [$(rr2_scalar order <<<"$FIXTURE_OUTPUT")], want [pinned-git] (the true id)"
+    [ "$(rr2_scalar selection-source <<<"$FIXTURE_OUTPUT")" = 'sets=pinned-git-snapshot leaf=no range=-' ] ||
+        fail "b: selection-source is [$(rr2_scalar selection-source <<<"$FIXTURE_OUTPUT")] — the input spelling is echoed"
+    [[ $(rr2_continuation command <<<"$FIXTURE_OUTPUT") != *'-snapshot'* ]] ||
+        fail "b: the continuation replays the alias instead of the resolved id: $(rr2_continuation command <<<"$FIXTURE_OUTPUT")"
+    [[ $(rr2_continuation command <<<"$FIXTURE_OUTPUT") == *' pinned-git' ]] ||
+        fail "b: the continuation does not end with the true id: $(rr2_continuation command <<<"$FIXTURE_OUTPUT")"
+
+    # c-e. a recipe that is NOT pinned refuses, naming itself and the ref it
+    # tracks (rc 2, usage class — never a silent empty selection).
+    for base in floating-git branch-git tag-git; do
+        case $base in
+            floating-git) ref='the VCS default ref' ;;
+            branch-git) ref='#branch=main' ;;
+            tag-git) ref='#tag=v1.0' ;;
+        esac
+        GSA_CONF="$conf" GSA_STATE_DIR="$state" run_engine "$ws" -Sl "$base-snapshot" || true
+        [ "$FIXTURE_RC" = 2 ] ||
+            fail "c: '$base-snapshot' must be a usage error (rc 2), got rc=$FIXTURE_RC: $FIXTURE_OUTPUT"
+        grep -F "'$base' is not a snapshot" <<<"$FIXTURE_OUTPUT" >/dev/null ||
+            fail "c: the refusal must name '$base' as a non-snapshot: $FIXTURE_OUTPUT"
+        grep -F "$ref" <<<"$FIXTURE_OUTPUT" >/dev/null ||
+            fail "c: the refusal must name the ref it tracks ($ref): $FIXTURE_OUTPUT"
+    done
+
+    # f. a recipe with no VCS source is not a snapshot either (a tarball
+    # release is an exact input, not a moving ref).
+    GSA_CONF="$conf" GSA_STATE_DIR="$state" run_engine "$ws" -Sl tarball-snapshot || true
+    [ "$FIXTURE_RC" = 2 ] || fail "f: 'tarball-snapshot' must be rc 2, got rc=$FIXTURE_RC: $FIXTURE_OUTPUT"
+    grep -F "'tarball' is not a snapshot" <<<"$FIXTURE_OUTPUT" >/dev/null ||
+        fail "f: the refusal must name 'tarball' as a non-snapshot: $FIXTURE_OUTPUT"
+    grep -F 'no VCS source' <<<"$FIXTURE_OUTPUT" >/dev/null ||
+        fail "f: the refusal must say the recipe has no VCS source: $FIXTURE_OUTPUT"
+
+    # g. a REAL id ending in -snapshot wins over the alias (the tree's
+    # `gcc-snapshot` is the live instance; here a synthetic one pins it).
+    GSA_CONF="$conf" GSA_STATE_DIR="$state" run_engine "$ws" -Sl tool-snapshot
+    [ "$FIXTURE_RC" = 0 ] || fail "g: the real id 'tool-snapshot' must resolve, got rc=$FIXTURE_RC: $FIXTURE_OUTPUT"
+    [ "$(listing_rows <<<"$FIXTURE_OUTPUT")" = tool-snapshot ] ||
+        fail "g: exact-id lookup must win over the suffix: listed [$(listing_rows <<<"$FIXTURE_OUTPUT" | tr '\n' ' ')]"
+
+    # h. a snapshot spelling with no base recipe stays the ordinary unknown
+    # reference (nearest candidates), never a snapshot refusal.
+    GSA_CONF="$conf" GSA_STATE_DIR="$state" run_engine "$ws" -Sl nosuch-git-snapshot || true
+    [ "$FIXTURE_RC" = 2 ] || fail "h: an unresolvable snapshot name must be rc 2, got rc=$FIXTURE_RC: $FIXTURE_OUTPUT"
+    grep -F "unknown reference 'nosuch-git-snapshot'" <<<"$FIXTURE_OUTPUT" >/dev/null ||
+        fail "h: the unknown reference must be reported by name: $FIXTURE_OUTPUT"
+    if grep -F 'is not a snapshot' <<<"$FIXTURE_OUTPUT" >/dev/null; then
+        fail "h: a missing base recipe is an unknown reference, not a snapshot refusal: $FIXTURE_OUTPUT"
+    fi
+
+    printf 'snapshot alias fixture: PASS (pinned resolves, four refusals name the ref, real id wins)\n'
 )
