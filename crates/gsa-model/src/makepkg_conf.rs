@@ -235,7 +235,10 @@ mod tests {
         assert!(GCC.contains("-fipa-pta"));
         assert!(GCC.contains("-fprefetch-loop-arrays"));
         for already_default in ["-fira-hoist-pressure", "-fstack-reuse"] {
-            assert!(!GCC.contains(already_default), "GCC body ships {already_default}");
+            assert!(
+                !GCC.contains(already_default),
+                "GCC body ships {already_default}"
+            );
         }
         assert!(compiler(Toolchain::Clang) == CLANG);
         assert!(compiler(Toolchain::Gcc) == GCC);
@@ -307,10 +310,7 @@ fn shell_single_quote(value: &str) -> String {
 
 /// Write the composite for one toolchain under `root` via temp + rename and
 /// return its path. Idempotent: concurrent lanes write identical bytes.
-pub fn install(
-    root: &std::path::Path,
-    toolchain: Toolchain,
-) -> Result<std::path::PathBuf, String> {
+pub fn install(root: &std::path::Path, toolchain: Toolchain) -> Result<std::path::PathBuf, String> {
     let (_, sources) = crate::config::makepkg_conf_sources(toolchain)?;
     let body = render(toolchain, &sources);
     // The fetch path installs the composite BEFORE any lane creates the
@@ -343,7 +343,10 @@ mod render_tests {
         let baseline = body.find("/etc/gsa/gcc-makepkg.conf").unwrap();
         let user = body.find("/home/u/.config/gsa/gcc-makepkg.conf").unwrap();
         let paths = body.find("BUILDDIR=\"${GSA_LANE_BUILDDIR").unwrap();
-        assert!(builtin < baseline && baseline < user && user < paths, "{body}");
+        assert!(
+            builtin < baseline && baseline < user && user < paths,
+            "{body}"
+        );
         // The host's config is never sourced.
         assert!(!body.contains("/etc/makepkg.conf"));
         assert!(!body.contains(".makepkg.conf"));
@@ -351,7 +354,10 @@ mod render_tests {
 
     #[test]
     fn a_missing_site_file_is_guarded_not_fatal() {
-        let body = render(Toolchain::Clang, &[std::path::PathBuf::from("/nope/x.conf")]);
+        let body = render(
+            Toolchain::Clang,
+            &[std::path::PathBuf::from("/nope/x.conf")],
+        );
         assert!(body.contains("[ -r '/nope/x.conf' ] && source '/nope/x.conf'"));
     }
 
@@ -371,7 +377,9 @@ mod render_tests {
         // body would be lost for every recipe that does not prefix cargo.
         let sources = vec![std::path::PathBuf::from("/etc/gsa/gcc-makepkg.conf")];
         let body = render(Toolchain::Gcc, &sources);
-        let set = body.find("\nRUSTFLAGS=\"").expect("the universal body assigns RUSTFLAGS");
+        let set = body
+            .find("\nRUSTFLAGS=\"")
+            .expect("the universal body assigns RUSTFLAGS");
         let site = body.find("/etc/gsa/gcc-makepkg.conf").unwrap();
         let export = body.find("\nexport RUSTFLAGS\n").unwrap();
         assert!(set < site && site < export, "{body}");

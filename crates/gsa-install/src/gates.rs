@@ -24,8 +24,8 @@ use std::path::{Path, PathBuf};
 
 use gsa_recipe::pkginfo::{member_names, members_with_needed};
 
-use gsa_abi::view::{path_class, ElfClass};
 use crate::localdb::{provide_covers, soname_stem, LocalDb};
+use gsa_abi::view::{path_class, ElfClass};
 
 // The base-system soname roster and its predicate are SHARED with the ABI
 // subsystem (`gsa-abi::provides`); re-exported here so the gate surface
@@ -212,7 +212,9 @@ impl ShippedBytes {
         if let Some(paths) = self.basenames.get(base) {
             candidates.extend(paths.iter().map(|s| s.as_str()));
         }
-        candidates.into_iter().any(|candidate| path_class(candidate) == class)
+        candidates
+            .into_iter()
+            .any(|candidate| path_class(candidate) == class)
     }
 
     /// The dominant class of the probe path itself (bare names: 64-bit).

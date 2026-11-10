@@ -165,10 +165,7 @@ pub fn discover_recipe(recipe_dir: &Path) -> Result<RecipeArchives, String> {
 }
 
 /// [`discover_recipe`] with an explicit ranking policy (see [`Rank`]).
-pub fn discover_recipe_ranked(
-    recipe_dir: &Path,
-    rank: Rank,
-) -> Result<RecipeArchives, String> {
+pub fn discover_recipe_ranked(recipe_dir: &Path, rank: Rank) -> Result<RecipeArchives, String> {
     // Expected output names: the committed `.SRCINFO`'s `pkgname` lines —
     // the names built archives actually carry (a recipe whose pkgbase
     // differs from its outputs must never demand an archive named after the
@@ -365,10 +362,7 @@ pub fn decide_with_repairs(
 /// consumes. The write goes through the rule-19 write-time ownership gate
 /// (§J.5): `O_NOFOLLOW` open + fstat of the very fd written, so a
 /// final-component symlink swap can never redirect a root-owned write.
-pub fn stage_repair_markers(
-    state_dir: &Path,
-    repairs: &[(String, String)],
-) -> Result<(), String> {
+pub fn stage_repair_markers(state_dir: &Path, repairs: &[(String, String)]) -> Result<(), String> {
     if repairs.is_empty() {
         return Ok(());
     }
@@ -747,7 +741,11 @@ fn plan(candidates: &[Candidate], ctx: &DecisionContext, db: &LocalDb) -> Result
                 plans.push(CandidatePlan {
                     candidate: candidate.clone(),
                     pkginfo,
-                    rows: vec![row(&subject, Decision::Refuse, format!("discover-failed {error}"))],
+                    rows: vec![row(
+                        &subject,
+                        Decision::Refuse,
+                        format!("discover-failed {error}"),
+                    )],
                 });
                 continue;
             }

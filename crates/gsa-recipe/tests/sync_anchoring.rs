@@ -1357,7 +1357,13 @@ fn transaction_begin_sweeps_own_staging_litter_only() {
     for name in litter {
         fs::write(dir.join(name), b"crash litter").unwrap();
     }
-    let survivors = ["PKGBUILD", ".SRCINFO", "PKGBUILD.tmp", ".SRCINFO.tmp", "PKGBUILD.orig"];
+    let survivors = [
+        "PKGBUILD",
+        ".SRCINFO",
+        "PKGBUILD.tmp",
+        ".SRCINFO.tmp",
+        "PKGBUILD.orig",
+    ];
     for name in ["PKGBUILD.tmp", ".SRCINFO.tmp", "PKGBUILD.orig"] {
         fs::write(dir.join(name), b"not ours").unwrap();
     }

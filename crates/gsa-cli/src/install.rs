@@ -27,9 +27,8 @@ use gsa_graph::Graph;
 use gsa_install::localdb::pacman_db_root;
 use gsa_install::{
     decide, decide_mode, decide_with_repairs, discover_recipe, execute_txn, names_for_archive,
-    preflight_installs,
-    register_ignorepkg, render_rows, rows_rc, workspace_exclusions, Candidate, DecideMode,
-    DecisionContext, EmptyListPolicy, LocalDb, RegisterReport, TxnOutcome, TxnRequest,
+    preflight_installs, register_ignorepkg, render_rows, rows_rc, workspace_exclusions, Candidate,
+    DecideMode, DecisionContext, EmptyListPolicy, LocalDb, RegisterReport, TxnOutcome, TxnRequest,
 };
 use gsa_model::{Decision, DecisionRow, OutcomeRow, PlanRow, RecipeId, RowStatus, RunOutcome};
 use gsa_recipe::pkginfo::read_pkginfo;
@@ -1381,9 +1380,7 @@ pub(crate) fn workspace_output_names(db: &RecipeDb) -> std::collections::BTreeSe
 
 /// [`workspace_output_names`] from a workspace root — an unresolvable
 /// workspace stands down to the empty universe (standalone `-U`).
-pub(crate) fn workspace_output_names_of_root(
-    root: &Path,
-) -> std::collections::BTreeSet<String> {
+pub(crate) fn workspace_output_names_of_root(root: &Path) -> std::collections::BTreeSet<String> {
     match RecipeDb::load(root, &[]) {
         Ok(db) => workspace_output_names(&db),
         Err(_) => std::collections::BTreeSet::new(),
@@ -2141,9 +2138,7 @@ mod tests {
         archive_names: &[(&str, &[&str])],
         skip: &[&str],
     ) -> RegisteredNames {
-        let strs = |list: &[&str]| -> Vec<String> {
-            list.iter().map(|s| s.to_string()).collect()
-        };
+        let strs = |list: &[&str]| -> Vec<String> { list.iter().map(|s| s.to_string()).collect() };
         RegisteredNames {
             added: strs(added),
             install_names: strs(install),

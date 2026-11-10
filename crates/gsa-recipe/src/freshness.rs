@@ -1045,7 +1045,11 @@ impl VcsBaseline {
 /// same-named checkout under another pkgbase is someone else's evidence
 /// (2026-10-17 sweep); `None` (nothing to scope by) degrades to scanning
 /// every tree.
-pub fn vcs_source_checkout(recipe_dir: &Path, entry: &str, pkgbase: Option<&str>) -> Option<PathBuf> {
+pub fn vcs_source_checkout(
+    recipe_dir: &Path,
+    entry: &str,
+    pkgbase: Option<&str>,
+) -> Option<PathBuf> {
     let name = source_filename(entry)?;
     let mut names = vec![name.clone()];
     if let Some(stripped) = name.strip_suffix(".git") {
@@ -1085,7 +1089,10 @@ mod checkout_tests {
         // The W4 layout: <builddir>/<pkgbase>/src/<stripped-name>.
         let cache_src = tmp.join("build").join("demo").join("src").join("demo");
         std::fs::create_dir_all(&cache_src).unwrap();
-        let roots = vec![tmp.join("recipe").join("src"), tmp.join("build").join("demo").join("src")];
+        let roots = vec![
+            tmp.join("recipe").join("src"),
+            tmp.join("build").join("demo").join("src"),
+        ];
         let names = vec!["demo.git".to_string(), "demo".to_string()];
         assert_eq!(find_checkout(&roots, &names), Some(cache_src));
         assert_eq!(find_checkout(&[tmp.join("nowhere")], &names), None);
@@ -1211,9 +1218,9 @@ pub fn record_vcs_archive_revisions(
             .ok_or_else(|| FreshnessError::Record("cannot parse a VCS source ref".to_string()))?;
         let checkout =
             vcs_source_checkout(recipe_dir, entry, pkgbase.as_deref()).ok_or_else(|| {
-            let name = source_filename(entry).unwrap_or_default();
-            FreshnessError::Record(format!("missing local checkout for {name}"))
-        })?;
+                let name = source_filename(entry).unwrap_or_default();
+                FreshnessError::Record(format!("missing local checkout for {name}"))
+            })?;
         let revision = vcs_local_revision(info.protocol, &checkout).map_err(|_| {
             let name = source_filename(entry).unwrap_or_default();
             FreshnessError::Record(format!("cannot read the built revision for {name}"))
@@ -1426,11 +1433,11 @@ fn list_archives(recipe_dir: &Path) -> Vec<ArchiveRow> {
     let mut rows: Vec<ArchiveRow> = Vec::new();
     // W4: the shared build-user PKGDEST plus the recipe dir (pre-W4 trees
     // and fixture stubs write there); callers filter by output-name truth.
-    let scan_dirs = match gsa_model::config::load().and_then(|c| gsa_model::config::build_layout(&c))
-    {
-        Ok(layout) => gsa_model::config::archive_dirs(recipe_dir, &layout),
-        Err(_) => vec![recipe_dir.to_path_buf()],
-    };
+    let scan_dirs =
+        match gsa_model::config::load().and_then(|c| gsa_model::config::build_layout(&c)) {
+            Ok(layout) => gsa_model::config::archive_dirs(recipe_dir, &layout),
+            Err(_) => vec![recipe_dir.to_path_buf()],
+        };
     for scan_dir in scan_dirs {
         let Ok(dir) = fs::read_dir(scan_dir) else {
             continue;

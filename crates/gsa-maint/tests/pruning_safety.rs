@@ -155,7 +155,8 @@ fn a_held_fallback_lock_answers_run_in_flight() {
 fn a_busy_state_lock_never_falls_back() {
     let fx = Fixture::new("runlock-busy");
     let fallback = fx.root.join("build-cache").join("run.lock");
-    let held = hold_run_lock_with_fallback(&fx.state_dir, &fallback).expect("the state lock is taken");
+    let held =
+        hold_run_lock_with_fallback(&fx.state_dir, &fallback).expect("the state lock is taken");
     let busy = hold_run_lock_with_fallback(&fx.state_dir, &fallback)
         .err()
         .expect("a second holder is refused");

@@ -462,8 +462,9 @@ fn run_build_with(
             // Settled-lane ledger for `later_after_settled`: the hook fires
             // per settled lane, so this is the run's landed set.
             let mut settled: Vec<String> = Vec::new();
-            let workspace_names: Vec<String> =
-                crate::install::workspace_output_names(&db).into_iter().collect();
+            let workspace_names: Vec<String> = crate::install::workspace_output_names(&db)
+                .into_iter()
+                .collect();
             // The canonical repair-marker key map (rule 25(d), §E.3 gap-G1):
             // the run order names recipe ids, link truth names pkgnames —
             // this map is the ONE boundary that lets the ABI gate compare
@@ -866,8 +867,9 @@ pub(crate) fn plan_only(
     // so its continuation restates the chosen root (§J.2/§H.2).
     let mut owned = inv.clone();
     let inv = &mut owned;
-    let mut selection = select::build_selection_for_build(ctx, &inv.targets, &inv.ranges, inv.leaf, err)
-        .map_err(|error| error.message)?;
+    let mut selection =
+        select::build_selection_for_build(ctx, &inv.targets, &inv.ranges, inv.leaf, err)
+            .map_err(|error| error.message)?;
     crate::write_notes(err, &selection.notes);
     // resolve() owns its typed usage exit; the plan's rc is the run's (§H.2).
     if let Err(exit) = crate::builddir::resolve(inv, err) {
@@ -2041,10 +2043,7 @@ mod tests {
     /// (the icu-git wall class through the additions door).
     #[test]
     fn coverage_reads_build_order_not_listing_order() {
-        let records = vec![
-            record("consumer", &["provider"]),
-            record("provider", &[]),
-        ];
+        let records = vec![record("consumer", &["provider"]), record("provider", &[])];
         let graph = gsa_graph::Graph::build(&records).expect("acyclic fixture");
         let listed = order(&["consumer", "provider"]);
         let listed_ids: Vec<gsa_model::RecipeId> = listed

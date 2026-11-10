@@ -57,10 +57,7 @@ impl LayoutEnv {
             saved.push((key, std::env::var_os(key)));
             std::env::set_var(key, &value);
         }
-        LayoutEnv {
-            _lock: lock,
-            saved,
-        }
+        LayoutEnv { _lock: lock, saved }
     }
 }
 
@@ -118,7 +115,10 @@ impl Fixture {
         // when the engine took ownership of the makepkg config (§B.11).
         std::fs::write(
             root.join("gsa.conf"),
-            format!("# fixture layers\nsrcdest = {}\n", root.join(SRCDEST_DIR).display()),
+            format!(
+                "# fixture layers\nsrcdest = {}\n",
+                root.join(SRCDEST_DIR).display()
+            ),
         )
         .unwrap();
         Fixture {

@@ -152,9 +152,9 @@ impl InstalledView {
         if let Some(paths) = self.basenames.get(base) {
             candidates.extend(paths.iter().map(|s| s.as_str()));
         }
-        candidates.into_iter().any(|candidate| {
-            path_class(candidate) == class && self.root.join(candidate).exists()
-        })
+        candidates
+            .into_iter()
+            .any(|candidate| path_class(candidate) == class && self.root.join(candidate).exists())
     }
 
     /// Strict file truth for the dominant class of the probe path itself

@@ -163,7 +163,10 @@ pub fn render_package_info(
             info.map(|i| join_list(&get(i)))
                 .unwrap_or_else(|| "(scan)".to_string())
         };
-        out.push_str(&field("URL", info.and_then(|i| i.url.as_deref()).unwrap_or("(none)")));
+        out.push_str(&field(
+            "URL",
+            info.and_then(|i| i.url.as_deref()).unwrap_or("(none)"),
+        ));
         out.push('\n');
         out.push_str(&field("Architecture", &multi(|i| i.arch.clone())));
         out.push('\n');
@@ -173,7 +176,10 @@ pub fn render_package_info(
         out.push('\n');
         out.push_str(&field("Make Depends On", &multi(|i| i.makedepends.clone())));
         out.push('\n');
-        out.push_str(&field("Check Depends On", &multi(|i| i.checkdepends.clone())));
+        out.push_str(&field(
+            "Check Depends On",
+            &multi(|i| i.checkdepends.clone()),
+        ));
         out.push('\n');
         out.push_str(&field("Opt Depends On", &multi(|i| i.optdepends.clone())));
         out.push('\n');
@@ -604,7 +610,11 @@ pub fn render_fetch_prose(results: &[gsa_fetch::verdict::FetchResult]) -> String
             results.len()
         );
     }
-    let level = if failed > 0 { Level::Warning } else { Level::Info };
+    let level = if failed > 0 {
+        Level::Warning
+    } else {
+        Level::Info
+    };
     format!(
         "{}\n",
         kv_line(
@@ -888,7 +898,13 @@ mod tests {
 
     use super::*;
 
-    fn row(pkg: &str, status: RowStatus, rc: Option<i32>, dur: Option<i64>, reason: &str) -> OutcomeRow {
+    fn row(
+        pkg: &str,
+        status: RowStatus,
+        rc: Option<i32>,
+        dur: Option<i64>,
+        reason: &str,
+    ) -> OutcomeRow {
         OutcomeRow {
             pkg: RecipeId::new(pkg).unwrap(),
             status,
@@ -1266,6 +1282,9 @@ mod tests {
         );
         let skip = FetchResult::new("mesa-git", FetchVerdict::Skipped, 0, REASON_VCS_ONLY).unwrap();
         assert_eq!(fetch_verdict_line(&skip, true), "");
-        assert_eq!(fetch_verdict_line(&skip, false), "mesa-git skipped 0 vcs-only\n");
+        assert_eq!(
+            fetch_verdict_line(&skip, false),
+            "mesa-git skipped 0 vcs-only\n"
+        );
     }
 }

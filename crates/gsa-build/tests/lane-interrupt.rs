@@ -87,7 +87,11 @@ fn a_pending_receipt_never_spawns_makepkg_and_settles_interrupted() {
     std::env::set_var("GSA_BUILD_DIR", ws.join("cache"));
     std::env::set_var(
         "PATH",
-        format!("{}:{}", ws.join("bin").display(), std::env::var("PATH").unwrap()),
+        format!(
+            "{}:{}",
+            ws.join("bin").display(),
+            std::env::var("PATH").unwrap()
+        ),
     );
     std::env::set_current_dir(&ws).unwrap();
     // Install the receipt handlers BEFORE any signal can be sent: a default
@@ -140,7 +144,8 @@ fn a_pending_receipt_never_spawns_makepkg_and_settles_interrupted() {
         !marker.exists(),
         "makepkg must never spawn under a pending receipt (§K.3)"
     );
-    let result = gsa_sched::codec::read_published(&result_path, "p1").expect("the row must publish");
+    let result =
+        gsa_sched::codec::read_published(&result_path, "p1").expect("the row must publish");
     assert_eq!(
         (result.code, result.reason.as_str()),
         (LaneOutcome::Term, "interrupted-mid-build"),

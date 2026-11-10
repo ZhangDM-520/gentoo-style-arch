@@ -269,8 +269,16 @@ pub fn checkout_roots_in(
 /// layout-resolution failure degrades to the legacy roots only — the
 /// caller's lookup then simply finds nothing in the cache, which fails
 /// closed at its own seam.
-pub fn checkout_roots(recipe_dir: &Path, pkgbase: Option<&str>, include_mirror: bool) -> Vec<PathBuf> {
-    let srcdest = if include_mirror { resolve_srcdest() } else { None };
+pub fn checkout_roots(
+    recipe_dir: &Path,
+    pkgbase: Option<&str>,
+    include_mirror: bool,
+) -> Vec<PathBuf> {
+    let srcdest = if include_mirror {
+        resolve_srcdest()
+    } else {
+        None
+    };
     match load().and_then(|c| build_layout(&c)) {
         Ok(layout) => checkout_roots_in(recipe_dir, pkgbase, &layout, srcdest.as_deref()),
         Err(_) => {
@@ -413,7 +421,10 @@ pub fn build_user_home() -> Result<PathBuf, String> {
             return Ok(PathBuf::from(home));
         }
     }
-    Err("no home directory: neither SUDO_UID nor HOME is set — set HOME or run via sudo".to_string())
+    Err(
+        "no home directory: neither SUDO_UID nor HOME is set — set HOME or run via sudo"
+            .to_string(),
+    )
 }
 
 /// The makepkg `SRCDEST` of the build domain (contract §B.11): the engine's
@@ -443,10 +454,7 @@ pub fn resolve_srcdest_with_source() -> (Option<PathBuf>, &'static str) {
 
 /// The pure precedence seam for [`resolve_srcdest`] (testable without the
 /// process environment or the filesystem).
-fn resolve_srcdest_from(
-    cfg: &GsaConfig,
-    home: Option<&Path>,
-) -> (Option<PathBuf>, &'static str) {
+fn resolve_srcdest_from(cfg: &GsaConfig, home: Option<&Path>) -> (Option<PathBuf>, &'static str) {
     match resolve_opt(&[("gsa.conf srcdest", cfg.srcdest.clone())]) {
         Some(resolved) => (Some(resolved.value), resolved.source),
         None => match home {
@@ -526,10 +534,7 @@ pub fn conf_layers_with(env: Option<&str>, home: &Path) -> ConfLayers {
         };
     }
     ConfLayers {
-        dirs: vec![
-            PathBuf::from(SYSTEM_CONF_DIR),
-            home.join(USER_CONF_DIR),
-        ],
+        dirs: vec![PathBuf::from(SYSTEM_CONF_DIR), home.join(USER_CONF_DIR)],
         auto: true,
         source: "the built-in directories",
     }
@@ -539,7 +544,9 @@ pub fn conf_layers_with(env: Option<&str>, home: &Path) -> ConfLayers {
 /// universal body, then every configuration directory's per-compiler body in
 /// source order. Returns the paths only — the caller renders the shell, so
 /// this module stays the one place that knows the layout.
-pub fn makepkg_conf_sources(toolchain: crate::toolchain::Toolchain) -> Result<(ConfLayers, Vec<PathBuf>), String> {
+pub fn makepkg_conf_sources(
+    toolchain: crate::toolchain::Toolchain,
+) -> Result<(ConfLayers, Vec<PathBuf>), String> {
     let layers = conf_layers()?;
     let name = toolchain.conf_name();
     let paths = layers
@@ -727,8 +734,9 @@ pub fn create_owned_dir(dir: &Path) -> Result<(), String> {
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(error) => return Err(format!("cannot create {}: {error}", path.display())),
         }
-        crate::privilege::own_to_build_user(path)
-            .map_err(|error| format!("cannot hand {} to the build user: {error}", path.display()))?;
+        crate::privilege::own_to_build_user(path).map_err(|error| {
+            format!("cannot hand {} to the build user: {error}", path.display())
+        })?;
     }
     Ok(())
 }
@@ -896,7 +904,10 @@ mod tests {
     fn passwd_lookup_finds_the_uid_home_only() {
         let passwd = "root:x:0:0::/root:/bin/bash\n\
                       u:x:1000:1000::/home/u:/bin/bash\n";
-        assert_eq!(home_from_passwd(passwd, 1000), Some(PathBuf::from("/home/u")));
+        assert_eq!(
+            home_from_passwd(passwd, 1000),
+            Some(PathBuf::from("/home/u"))
+        );
         assert_eq!(home_from_passwd(passwd, 0), Some(PathBuf::from("/root")));
         assert_eq!(home_from_passwd(passwd, 42), None);
     }
@@ -1027,8 +1038,8 @@ mod tests {
 
     #[test]
     fn recipe_dir_merges_per_key_like_every_other_key() {
-        let system = parse_layer("recipe_dir = /sys/store\nstate_dir = /sys\n", "s", &home())
-            .unwrap();
+        let system =
+            parse_layer("recipe_dir = /sys/store\nstate_dir = /sys\n", "s", &home()).unwrap();
         let user = parse_layer("recipe_dir = /usr/store\n", "u", &home()).unwrap();
         let merged = system.merged_with(user);
         assert_eq!(merged.recipe_dir, Some(PathBuf::from("/usr/store")));
@@ -1037,7 +1048,10 @@ mod tests {
 
     #[test]
     fn the_workspace_hint_teaches_the_store_era_remedy() {
-        assert!(WORKSPACE_HINT.contains("set `project` in gsa.conf"), "{WORKSPACE_HINT}");
+        assert!(
+            WORKSPACE_HINT.contains("set `project` in gsa.conf"),
+            "{WORKSPACE_HINT}"
+        );
         assert!(WORKSPACE_HINT.contains("sudo gsa -Sy"), "{WORKSPACE_HINT}");
     }
 }

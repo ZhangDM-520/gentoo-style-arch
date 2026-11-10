@@ -20,11 +20,11 @@ mod install;
 mod maint;
 mod output;
 mod prepare;
+mod prompt;
 mod qa;
 mod query;
 mod record;
 mod render;
-mod prompt;
 mod select;
 mod standalone;
 
@@ -198,7 +198,10 @@ fn classify(inv: &Invocation) -> Disposition {
     // `-Qb`/`-Qp`/`-Qa`/`-Qr`) take `--state-dir` like every other
     // state-root surface (§J.3).
     let is_state_query = inv.family == Family::Q
-        && matches!(inv.action, None | Some('i') | Some('b') | Some('p') | Some('a') | Some('r'));
+        && matches!(
+            inv.action,
+            None | Some('i') | Some('b') | Some('p') | Some('a') | Some('r')
+        );
     let is_maint = inv.family == Family::M;
     // A `-M` cluster's accepted flags are per-verb (§B.7's sub-flags); a
     // cluster that spells no verb yet reports its own usage error from
@@ -442,7 +445,8 @@ fn bare_root_refusal(err: &mut dyn Write) -> Option<i32> {
     None
 }
 
-pub(crate) fn resolve_intensity(project: &gsa_topo::ProjectConfig) -> Result<String, String> {    match std::env::var("GSA_INTENSITY") {
+pub(crate) fn resolve_intensity(project: &gsa_topo::ProjectConfig) -> Result<String, String> {
+    match std::env::var("GSA_INTENSITY") {
         Ok(value) if !value.is_empty() => {
             if gsa_topo::INTENSITY_LEVELS.contains(&value.as_str()) {
                 Ok(value)
@@ -473,7 +477,11 @@ fn write_notes(err: &mut dyn Write, notes: &[String]) {
             let _ = writeln!(
                 err,
                 "{}",
-                output::kv_line(output::Level::Info, "note", &[("msg", output::squash(note))])
+                output::kv_line(
+                    output::Level::Info,
+                    "note",
+                    &[("msg", output::squash(note))]
+                )
             );
         }
     }
@@ -681,10 +689,7 @@ pub fn run(argv: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
             let family = match args.as_slice() {
                 [family] => family,
                 [] => {
-                    let _ = writeln!(
-                        err,
-                        "gsa: --print-conf: missing family (gcc|clang)"
-                    );
+                    let _ = writeln!(err, "gsa: --print-conf: missing family (gcc|clang)");
                     return RC_USAGE;
                 }
                 [_, extra, ..] => {

@@ -683,9 +683,11 @@ mod tests {
                     reason: "ok".to_string(),
                 }
             };
-            for req in m.record(index, recorded) {
-                panic!("unexpected stand-down request: {req:?}");
-            }
+            let parked = m.record(index, recorded);
+            assert!(
+                parked.is_empty(),
+                "unexpected stand-down request: {parked:?}"
+            );
         }
         m.rows()
     }

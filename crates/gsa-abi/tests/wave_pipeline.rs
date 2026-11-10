@@ -229,7 +229,11 @@ fn a_dead_record_from_an_uninstalled_ghost_never_refuses_the_run() {
     });
 
     assert_eq!(plan.waves.len(), 1);
-    let ids: Vec<&str> = plan.waves[0].members.iter().map(|m| m.id.as_str()).collect();
+    let ids: Vec<&str> = plan.waves[0]
+        .members
+        .iter()
+        .map(|m| m.id.as_str())
+        .collect();
     assert_eq!(ids, vec!["c1"], "the ghost is not a wave member");
     assert!(
         plan.uncovered.is_empty(),

@@ -311,8 +311,7 @@ mod tests {
         let placeholder = sub("c1", "p1", NO_TOKEN);
         assert!(!placeholder.has_token());
         assert!(sub("c1", "p1", "tok").has_token());
-        let dir =
-            std::env::temp_dir().join(format!("gsa-abi-records-none-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("gsa-abi-records-none-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let path = subscriptions_path(&dir);
         Subscriptions::append(&path, &placeholder).unwrap();

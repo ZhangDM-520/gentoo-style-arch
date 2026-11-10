@@ -413,7 +413,10 @@ fn reap_dead_run_lanes(state_dir: &Path, err: &mut dyn Write) {
         {
             continue;
         }
-        let in_state = cmdline.iter().skip(2).any(|a| arg_in_state(a, &state_prefix));
+        let in_state = cmdline
+            .iter()
+            .skip(2)
+            .any(|a| arg_in_state(a, &state_prefix));
         if !in_state {
             continue;
         }
@@ -698,7 +701,10 @@ mod tests {
         // A sibling state root that merely SHARES the name prefix is not
         // inside it — prefix matching let a concurrent run's live lane be
         // swept.
-        assert!(!arg_in_state("/var/lib/gsa-alt/runs/1/x.result", "/var/lib/gsa"));
+        assert!(!arg_in_state(
+            "/var/lib/gsa-alt/runs/1/x.result",
+            "/var/lib/gsa"
+        ));
         assert!(!arg_in_state("/var/lib/gsa-extra", "/var/lib/gsa"));
     }
 

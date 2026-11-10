@@ -162,8 +162,8 @@ pub(crate) fn apply(
     // must leave no state behind (the gate itself fires in the entry, after
     // usage preflights — this probe only picks the staging area).
     let privilege = crate::invocation_privilege(inv, command);
-    let would_refuse = crate::privilege_gate(&inv.spelling(), privilege, false, &mut std::io::sink())
-        .is_some();
+    let would_refuse =
+        crate::privilege_gate(&inv.spelling(), privilege, false, &mut std::io::sink()).is_some();
     let ephemeral = inv.dry_run || would_refuse;
     let root = if ephemeral {
         std::env::temp_dir().join(format!(
@@ -238,7 +238,10 @@ fn workspace_answers(
         user_sets: user_sets.to_vec(),
     };
     for token in tokens {
-        out.insert(token.clone(), crate::select::resolve_ref(&ctx, token, 0).is_ok());
+        out.insert(
+            token.clone(),
+            crate::select::resolve_ref(&ctx, token, 0).is_ok(),
+        );
     }
     out
 }
@@ -279,9 +282,8 @@ fn stage(
         match kind {
             Kind::File => {
                 let dst = recipe.join("PKGBUILD");
-                std::fs::copy(token, &dst).map_err(|e| {
-                    format!("cannot stage standalone PKGBUILD '{token}': {e}")
-                })?;
+                std::fs::copy(token, &dst)
+                    .map_err(|e| format!("cannot stage standalone PKGBUILD '{token}': {e}"))?;
             }
             Kind::Dir => {
                 copy_recipe_tree(Path::new(token), &recipe)
@@ -289,8 +291,9 @@ fn stage(
             }
             Kind::Url => {
                 let body = fetch_url(token)?;
-                std::fs::write(recipe.join("PKGBUILD"), body)
-                    .map_err(|e| format!("cannot write the PKGBUILD fetched from '{token}': {e}"))?;
+                std::fs::write(recipe.join("PKGBUILD"), body).map_err(|e| {
+                    format!("cannot write the PKGBUILD fetched from '{token}': {e}")
+                })?;
             }
         }
         // The recipe tree is a build-domain path (makepkg's $startdir): an
@@ -319,7 +322,10 @@ fn stage(
     if let Some(src) = shared_root.map(|r| r.join("lib")).filter(|p| p.is_dir()) {
         let dst = root.join("lib");
         copy_entry(&src, &dst).map_err(|e| {
-            format!("cannot stage the shared gate library {}: {e}", src.display())
+            format!(
+                "cannot stage the shared gate library {}: {e}",
+                src.display()
+            )
         })?;
         // Read (and exec) during the build as the build user: hand it over
         // like the recipe tree.
@@ -483,7 +489,10 @@ mod tests {
 
     #[test]
     fn kinds_are_syntactic() {
-        assert_eq!(kind_of("https://example.invalid/a/PKGBUILD"), Some(Kind::Url));
+        assert_eq!(
+            kind_of("https://example.invalid/a/PKGBUILD"),
+            Some(Kind::Url)
+        );
         assert_eq!(kind_of("http://example.invalid/raw"), Some(Kind::Url));
         assert_eq!(kind_of("file:///tmp/a/PKGBUILD"), Some(Kind::Url));
         assert_eq!(kind_of("/nowhere/PKGBUILD"), Some(Kind::File));
@@ -498,7 +507,10 @@ mod tests {
         std::fs::create_dir_all(dir.join("empty")).unwrap();
         assert_eq!(kind_of(dir.join("empty").to_str().unwrap()), None);
         std::fs::write(dir.join("empty").join("PKGBUILD"), "pkgname=x\n").unwrap();
-        assert_eq!(kind_of(dir.join("empty").to_str().unwrap()), Some(Kind::Dir));
+        assert_eq!(
+            kind_of(dir.join("empty").to_str().unwrap()),
+            Some(Kind::Dir)
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -531,8 +543,14 @@ mod tests {
         let recipe = root.join("packages").join("misc").join("neat-pkg");
         assert!(recipe.join("PKGBUILD").is_file());
         assert!(recipe.join("fix.patch").is_file());
-        assert!(!recipe.join("src").exists(), "makepkg output dirs are not staged");
-        assert!(!recipe.join("pkg").exists(), "makepkg output dirs are not staged");
+        assert!(
+            !recipe.join("src").exists(),
+            "makepkg output dirs are not staged"
+        );
+        assert!(
+            !recipe.join("pkg").exists(),
+            "makepkg output dirs are not staged"
+        );
         assert!(
             !recipe.join("neat-pkg-1-1-any.pkg.tar.zst").exists(),
             "archives are not staged"

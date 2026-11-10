@@ -175,7 +175,11 @@ pub(crate) fn archive_owner(
     let info = gsa_recipe::pkginfo::read_pkginfo(path).ok()?;
     declared
         .iter()
-        .find(|(_, names)| names.iter().any(|n| *n == info.pkgbase || *n == info.pkgname))
+        .find(|(_, names)| {
+            names
+                .iter()
+                .any(|n| *n == info.pkgbase || *n == info.pkgname)
+        })
         .map(|(id, _)| id.clone())
 }
 

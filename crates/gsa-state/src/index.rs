@@ -741,7 +741,10 @@ mod tests {
         let file = std::fs::File::create(&out).unwrap();
         let enc = zstd::stream::Encoder::new(file, 0).unwrap();
         let mut tar = tar::Builder::new(enc);
-        for (member, data) in [(".PKGINFO", body.as_slice()), (".build-stamp", stamp.as_bytes())] {
+        for (member, data) in [
+            (".PKGINFO", body.as_slice()),
+            (".build-stamp", stamp.as_bytes()),
+        ] {
             let mut header = tar::Header::new_gnu();
             header.set_size(data.len() as u64);
             header.set_mode(0o644);
@@ -1092,7 +1095,10 @@ mod tests {
         let index = BinpkgIndex::load(&root).unwrap();
         let rows = index.rows_for("leaf");
         assert_eq!(rows.len(), 2, "both output rows survive the fold");
-        assert_eq!(rows[0].instance, rows[1].instance, "one build, one instance");
+        assert_eq!(
+            rows[0].instance, rows[1].instance,
+            "one build, one instance"
+        );
         let names: BTreeSet<&str> = rows
             .iter()
             .flat_map(|r| r.pkgnames.iter().map(|n| n.as_str()))
@@ -1154,7 +1160,10 @@ mod tests {
         // §J.4: the reindex derives the abi-token exactly like registration —
         // never the `-` placeholder a wave would misread as a move.
         let expected = gsa_abi::token_declared(&["libleaf.so".to_string()], None).effective;
-        assert_eq!(row.abi_token, expected, "derived abi-token lands at reindex");
+        assert_eq!(
+            row.abi_token, expected,
+            "derived abi-token lands at reindex"
+        );
         assert!(verify_row(row).agrees(), "the row binds the bytes");
         let again = reindex_archives(&root, "leaf", &[archive.clone()], None, &mut err).unwrap();
         assert!(again.is_empty(), "an indexed archive is never re-indexed");

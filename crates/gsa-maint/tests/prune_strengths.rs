@@ -338,7 +338,10 @@ fn a_run_referenced_archive_is_never_pruned() {
 fn seed_live_home(fx: &Fixture, id: &str, pkgbase: &str) -> (PathBuf, PathBuf) {
     let cache = fx.root.join(common::CACHE_DIR);
     let pkgdest = cache.join("pkgs");
-    for tree in [cache.join("build").join(pkgbase), cache.join("pkg").join(pkgbase)] {
+    for tree in [
+        cache.join("build").join(pkgbase),
+        cache.join("pkg").join(pkgbase),
+    ] {
         std::fs::create_dir_all(&tree).unwrap();
         std::fs::write(tree.join("inner.txt"), "inner\n").unwrap();
     }
@@ -369,7 +372,10 @@ fn strength1_prunes_both_homes_for_the_selection() {
         common::assert_row_grammar(&plan);
         assert!(common::has_row(
             &plan,
-            &pkgdest.join("alpha-1.0-1-any.pkg.tar.zst").display().to_string(),
+            &pkgdest
+                .join("alpha-1.0-1-any.pkg.tar.zst")
+                .display()
+                .to_string(),
             "prune"
         ));
         assert!(
@@ -380,10 +386,7 @@ fn strength1_prunes_both_homes_for_the_selection() {
         let rows = prune::strength1(ctx, &["alpha".to_string()], true);
         common::assert_row_grammar(&rows);
         for (gone, kind) in [
-            (
-                pkgdest.join("alpha-1.0-1-any.pkg.tar.zst"),
-                "live archive",
-            ),
+            (pkgdest.join("alpha-1.0-1-any.pkg.tar.zst"), "live archive"),
             (
                 pkgdest.join("alpha-1.0-1-any.pkg.tar.zst.gsa-vcs-revisions"),
                 "live sidecar",
@@ -391,10 +394,7 @@ fn strength1_prunes_both_homes_for_the_selection() {
             (cache.join("build").join("alpha"), "live build tree"),
             (cache.join("pkg").join("alpha"), "live staging tree"),
             (alpha.join("src"), "legacy tree"),
-            (
-                alpha.join("alpha-1.0-1-any.pkg.tar.zst"),
-                "legacy archive",
-            ),
+            (alpha.join("alpha-1.0-1-any.pkg.tar.zst"), "legacy archive"),
         ] {
             assert!(
                 common::has_row(&rows, &gone.display().to_string(), "pruned"),
@@ -503,7 +503,11 @@ fn strength3_prunes_pulled_sources_in_both_homes() {
             &srcdest.join("gsapkg-1.0.tar.gz").display().to_string(),
             "pruned"
         ));
-        assert!(common::has_row(&rows, &clone.display().to_string(), "pruned"));
+        assert!(common::has_row(
+            &rows,
+            &clone.display().to_string(),
+            "pruned"
+        ));
     });
 
     for gone in [
@@ -552,7 +556,8 @@ fn an_unreadable_index_refuses_the_strength_instead_of_keeping_everything() {
                 refusal.reason
             );
             assert!(
-                rows.iter().all(|r| r.action != "prune" && r.action != "pruned"),
+                rows.iter()
+                    .all(|r| r.action != "prune" && r.action != "pruned"),
                 "no target may be planned or deleted against an untrusted index: {rows:?}"
             );
         }

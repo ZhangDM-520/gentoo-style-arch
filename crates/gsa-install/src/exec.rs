@@ -339,7 +339,10 @@ mod tests {
         );
         assert!(args.contains(&"--config".to_string()));
         assert!(args.contains(&"/a.pkg.tar.zst".to_string()));
-        assert!(pinned_c(&sudo_true_command()), "the preflight pins LC_ALL=C");
+        assert!(
+            pinned_c(&sudo_true_command()),
+            "the preflight pins LC_ALL=C"
+        );
     }
 
     #[test]

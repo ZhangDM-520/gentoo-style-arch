@@ -358,7 +358,7 @@ mod tests {
         // Present but unparsable: an error naming the field, never the 1 GiB
         // floor (which would silently plan one lane for a large host).
         let error = memory_gib_from_read(Ok(
-            "MemTotal: 65536000 kB\nMemAvailable: plenty kB\n".to_string(),
+            "MemTotal: 65536000 kB\nMemAvailable: plenty kB\n".to_string()
         ))
         .unwrap_err();
         assert!(error.contains("MemAvailable"), "{error}");

@@ -99,19 +99,20 @@ fn engine_command(ws: &Path, extra: &[(&str, &str)]) -> Command {
         std::env::var("PATH").unwrap()
     ));
     cmd.arg(format!("SRCDEST={}", ws.join("srcdest").display()));
-    cmd.arg(format!("GSA_FAKE_FETCH_LOG={}", ws.join("fetch.log").display()));
+    cmd.arg(format!(
+        "GSA_FAKE_FETCH_LOG={}",
+        ws.join("fetch.log").display()
+    ));
     cmd.arg("_GSA_FETCH_RETRY_S=0");
     for (key, value) in extra {
         cmd.arg(format!("{key}={value}"));
     }
-    cmd.current_dir(ws)
-        .arg(env!("CARGO_BIN_EXE_gsa"))
-        .args([
-            "-B",
-            "--state-dir",
-            &ws.join("state").display().to_string(),
-            "p1",
-        ]);
+    cmd.current_dir(ws).arg(env!("CARGO_BIN_EXE_gsa")).args([
+        "-B",
+        "--state-dir",
+        &ws.join("state").display().to_string(),
+        "p1",
+    ]);
     cmd
 }
 
@@ -156,7 +157,10 @@ fn a_prefetch_failure_is_advisory_and_never_gates_the_run() {
     let ws = workspace("advisory");
     let mut cmd = engine_command(
         &ws,
-        &[("GSA_FAKE_FETCH_FAIL", "p2"), ("GSA_FAKE_BUILD_SECONDS", "1")],
+        &[
+            ("GSA_FAKE_FETCH_FAIL", "p2"),
+            ("GSA_FAKE_BUILD_SECONDS", "1"),
+        ],
     );
     let out = cmd.output().expect("engine must run");
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -197,7 +201,10 @@ fn b_sigint_tears_down_the_fetch_child_with_the_run() {
     let ws = workspace("sigint");
     let mut cmd = engine_command(
         &ws,
-        &[("GSA_FAKE_FETCH_STALL", "p2"), ("GSA_FAKE_BUILD_SECONDS", "30")],
+        &[
+            ("GSA_FAKE_FETCH_STALL", "p2"),
+            ("GSA_FAKE_BUILD_SECONDS", "30"),
+        ],
     );
     cmd.stdout(Stdio::from(
         std::fs::File::create(ws.join("stdout.txt")).unwrap(),

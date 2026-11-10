@@ -820,8 +820,13 @@ impl RecipeTransaction {
         }
         fs::rename(&self.staged, self.recipe_dir.join("PKGBUILD"))
             .map_err(|_| sync_err("could not publish the version rewrite"))?;
-        gsa_model::privilege::own_to_build_user(&self.recipe_dir.join("PKGBUILD"))
-            .map_err(|e| sync_err(format!("could not hand the published recipe back to the build user: {e}")))?;
+        gsa_model::privilege::own_to_build_user(&self.recipe_dir.join("PKGBUILD")).map_err(
+            |e| {
+                sync_err(format!(
+                    "could not hand the published recipe back to the build user: {e}"
+                ))
+            },
+        )?;
         self.dirty = true;
         Ok(())
     }
@@ -850,7 +855,9 @@ impl RecipeTransaction {
             return RestoreStatus::Failed(format!("could not republish the snapshot: {e}"));
         }
         if let Err(e) = gsa_model::privilege::own_to_build_user(&self.recipe_dir.join("PKGBUILD")) {
-            return RestoreStatus::Failed(format!("restored the recipe but could not hand it back to the build user: {e}"));
+            return RestoreStatus::Failed(format!(
+                "restored the recipe but could not hand it back to the build user: {e}"
+            ));
         }
         self.dirty = false;
         RestoreStatus::Restored
@@ -1587,7 +1594,10 @@ mod tests {
         assert_eq!(toml_str_value("k = 'a\"'", "k").as_deref(), Some("a\""));
         assert_eq!(toml_str_value("k = \"a'\"", "k").as_deref(), Some("a'"));
         assert_eq!(toml_str_value("k = \"a'", "k").as_deref(), Some("\"a'"));
-        assert_eq!(toml_str_value("k = unquoted", "k").as_deref(), Some("unquoted"));
+        assert_eq!(
+            toml_str_value("k = unquoted", "k").as_deref(),
+            Some("unquoted")
+        );
     }
 
     #[test]
@@ -1609,7 +1619,11 @@ mod tests {
         assert!(matches!(family, ProviderFamily::Github));
         assert_eq!(id, "appshubcc/Bettbox");
         // zen-browser-pgo's shape.
-        std::fs::write(&cfg, "[zen]\nsource = 'github'\ngithub = 'zen-browser/desktop'\n").unwrap();
+        std::fs::write(
+            &cfg,
+            "[zen]\nsource = 'github'\ngithub = 'zen-browser/desktop'\n",
+        )
+        .unwrap();
         let (family, id) = runner.provider_identity("zen").unwrap();
         assert!(matches!(family, ProviderFamily::Github));
         assert_eq!(id, "zen-browser/desktop");
@@ -1697,7 +1711,12 @@ pub enum VcsSum {
 /// ([`gsa_model::config::checkout_roots`] with the mirror tier on: the
 /// recomputation is ref-addressed, so a `SRCDEST` mirror is valid evidence
 /// here even though revision probing refuses it).
-pub fn vcs_source_sum(recipe_dir: &Path, pkgbase: Option<&str>, entry: &SourceEntry, alg: &str) -> VcsSum {
+pub fn vcs_source_sum(
+    recipe_dir: &Path,
+    pkgbase: Option<&str>,
+    entry: &SourceEntry,
+    alg: &str,
+) -> VcsSum {
     let Some((_, value)) = entry.vcs_ref() else {
         return VcsSum::NoCheckout;
     };
@@ -2059,8 +2078,9 @@ impl NvcheckerRunner {
         // Build-domain probe: dropped to the build user like every tool that
         // can materialize or read user-home state (2026-10-17 sweep), with
         // its scratch handed over so the dropped nvchecker can write.
-        gsa_model::privilege::own_to_build_user(scratch.path())
-            .map_err(|e| ProviderError::Invalid(format!("cannot hand nvchecker scratch over: {e}")))?;
+        gsa_model::privilege::own_to_build_user(scratch.path()).map_err(|e| {
+            ProviderError::Invalid(format!("cannot hand nvchecker scratch over: {e}"))
+        })?;
         let out = gsa_model::privilege::build_command("nvchecker")
             .arg("-c")
             .arg(&merged)

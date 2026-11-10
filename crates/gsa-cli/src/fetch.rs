@@ -45,8 +45,8 @@ fn run_fetch_only_inner(
     let project = load_project(&root).map_err(|error| Exit::Usage(error.to_string()))?;
     let graph = Graph::build(&project.topology.records)
         .map_err(|error| Exit::Usage(format!("config/topology.conf: {error}")))?;
-    let db = RecipeDb::load(&root, graph.records())
-        .map_err(|error| Exit::Usage(error.to_string()))?;
+    let db =
+        RecipeDb::load(&root, graph.records()).map_err(|error| Exit::Usage(error.to_string()))?;
     let ctx = Ctx {
         project: &project,
         graph: &graph,

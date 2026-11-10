@@ -304,10 +304,7 @@ pub fn resolve_ref(
         // are the union (the two sides drift and the drift is REPORTED by
         // `-Ms`; a selection sees both halves).
         let config_set = ctx.project.set(name);
-        let kv_set = ctx
-            .user_sets
-            .iter()
-            .find(|(set_name, _)| set_name == name);
+        let kv_set = ctx.user_sets.iter().find(|(set_name, _)| set_name == name);
         if config_set.is_some() || kv_set.is_some() {
             if depth >= MAX_SET_DEPTH {
                 return Err(SelectError::new(format!(
@@ -316,8 +313,12 @@ pub fn resolve_ref(
             }
             let mut indices = Vec::new();
             let mut seen: Vec<String> = Vec::new();
-            let config_members = config_set.map(|set| set.members.clone()).unwrap_or_default();
-            let kv_members = kv_set.map(|(_, members)| members.clone()).unwrap_or_default();
+            let config_members = config_set
+                .map(|set| set.members.clone())
+                .unwrap_or_default();
+            let kv_members = kv_set
+                .map(|(_, members)| members.clone())
+                .unwrap_or_default();
             for member in config_members.iter().chain(kv_members.iter()) {
                 if seen.iter().any(|m| m == member) {
                     continue;
@@ -664,10 +665,10 @@ fn prompt_filter_app_seeds(
             Tag::AppCluster(name) => Some(name.clone()),
             _ => None,
         });
-        match cluster
-            .as_deref()
-            .and_then(|name| rows.iter().position(|(row, _)| row.as_deref() == Some(name)))
-        {
+        match cluster.as_deref().and_then(|name| {
+            rows.iter()
+                .position(|(row, _)| row.as_deref() == Some(name))
+        }) {
             Some(row) => rows[row].1.push(idx),
             None => rows.push((cluster, vec![idx])),
         }
@@ -693,8 +694,7 @@ fn prompt_filter_app_seeds(
     match prompt::prompt_app_selection(&prompt_rows, menu, input) {
         Ok(PromptOutcome::All) => Ok(app_seeds),
         Ok(PromptOutcome::Picked(ids)) => {
-            let chosen: std::collections::HashSet<&str> =
-                ids.iter().map(String::as_str).collect();
+            let chosen: std::collections::HashSet<&str> = ids.iter().map(String::as_str).collect();
             Ok(app_seeds
                 .iter()
                 .copied()

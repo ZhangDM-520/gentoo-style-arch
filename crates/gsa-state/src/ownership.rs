@@ -41,7 +41,11 @@ impl std::error::Error for StateError {}
 /// The write-time ownership gate against an explicit uid (the testable seam;
 /// production passes [`current_uid`]). Returns the checked, opened handle —
 /// the caller appends through it and never re-opens the path.
-pub(crate) fn gate_with_uid(path: &Path, uid: u32, err: &mut dyn Write) -> Result<File, StateError> {
+pub(crate) fn gate_with_uid(
+    path: &Path,
+    uid: u32,
+    err: &mut dyn Write,
+) -> Result<File, StateError> {
     let mut opts = OpenOptions::new();
     opts.create(true).read(true).append(true);
     gsa_sched::lock::open_state_file_with_uid(path, &mut opts, uid, err).map_err(|e| match e {

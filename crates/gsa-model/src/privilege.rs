@@ -51,7 +51,9 @@ pub fn build_user() -> Option<BuildUser> {
 fn build_user_from_env(uid: &str, gid: &str, name: Option<String>) -> Option<BuildUser> {
     let uid: u32 = uid.parse().ok()?;
     let gid: u32 = gid.parse().ok()?;
-    let name = name.filter(|n| !n.is_empty()).unwrap_or_else(|| uid.to_string());
+    let name = name
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| uid.to_string());
     Some(BuildUser { uid, gid, name })
 }
 
@@ -127,8 +129,8 @@ pub fn own_to_build_user(path: &Path) -> Result<(), String> {
 }
 
 fn own_recursive(path: &Path, bu: &BuildUser) -> Result<(), String> {
-    let meta =
-        std::fs::symlink_metadata(path).map_err(|e| format!("cannot stat {}: {e}", path.display()))?;
+    let meta = std::fs::symlink_metadata(path)
+        .map_err(|e| format!("cannot stat {}: {e}", path.display()))?;
     if meta.file_type().is_symlink() {
         return std::os::unix::fs::lchown(path, Some(bu.uid), Some(bu.gid))
             .map_err(|e| format!("cannot lchown {}: {e}", path.display()));
@@ -187,18 +189,27 @@ mod tests {
         };
         let mut cmd = Command::new("makepkg");
         cmd.env("MAKEFLAGS", "-j2"); // caller env must survive
-        drop_identity_env(&mut cmd, &bu, Some(std::path::PathBuf::from("/home/builder")));
-        let env: Vec<(OsString, OsString)> = cmd.get_envs().map(|(k, v)| {
-            (
-                k.to_os_string(),
-                v.map(|v| v.to_os_string()).unwrap_or_default(),
-            )
-        }).collect();
+        drop_identity_env(
+            &mut cmd,
+            &bu,
+            Some(std::path::PathBuf::from("/home/builder")),
+        );
+        let env: Vec<(OsString, OsString)> = cmd
+            .get_envs()
+            .map(|(k, v)| {
+                (
+                    k.to_os_string(),
+                    v.map(|v| v.to_os_string()).unwrap_or_default(),
+                )
+            })
+            .collect();
         assert!(env.contains(&(OsString::from("HOME"), OsString::from("/home/builder"))));
         assert!(env.contains(&(OsString::from("USER"), OsString::from("builder"))));
         assert!(env.contains(&(OsString::from("LOGNAME"), OsString::from("builder"))));
-        assert!(env.contains(&(OsString::from("MAKEFLAGS"), OsString::from("-j2"))),
-            "non-identity env must survive the drop");
+        assert!(
+            env.contains(&(OsString::from("MAKEFLAGS"), OsString::from("-j2"))),
+            "non-identity env must survive the drop"
+        );
     }
 
     #[test]
@@ -210,14 +221,19 @@ mod tests {
         };
         let mut cmd = Command::new("makepkg");
         drop_identity_env(&mut cmd, &bu, None);
-        let env: Vec<(OsString, OsString)> = cmd.get_envs().map(|(k, v)| {
-            (
-                k.to_os_string(),
-                v.map(|v| v.to_os_string()).unwrap_or_default(),
-            )
-        }).collect();
-        assert!(env.contains(&(OsString::from("HOME"), OsString::from("/nonexistent"))),
-            "an unresolvable home must not leave the engine's own HOME in place");
+        let env: Vec<(OsString, OsString)> = cmd
+            .get_envs()
+            .map(|(k, v)| {
+                (
+                    k.to_os_string(),
+                    v.map(|v| v.to_os_string()).unwrap_or_default(),
+                )
+            })
+            .collect();
+        assert!(
+            env.contains(&(OsString::from("HOME"), OsString::from("/nonexistent"))),
+            "an unresolvable home must not leave the engine's own HOME in place"
+        );
     }
 
     #[test]

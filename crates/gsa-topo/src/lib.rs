@@ -428,13 +428,10 @@ pub fn parse_build_defaults(content: &str, file: &str) -> Result<BuildDefaults, 
             // Never a silent no-op: the state root has exactly one ladder
             // (contract §J.3) and build-defaults.conf is not on it.
             "state_dir" => {
-                return Err(TopologyError::at(
-                    file,
-                    line_no,
-                    format!(
-                        "state_dir is not a build default — set it in gsa.conf (contract §J.3): {line}"
-                    ),
-                ))
+                let detail = format!(
+                    "state_dir is not a build default — set it in gsa.conf (contract §J.3): {line}"
+                );
+                return Err(TopologyError::at(file, line_no, detail));
             }
             _ => {
                 return Err(TopologyError::at(
@@ -493,7 +490,11 @@ pub fn parse_build_defaults(content: &str, file: &str) -> Result<BuildDefaults, 
                     ));
                 };
                 if declared > STORE_FORMAT_MAX {
-                    return Err(TopologyError::at(file, line_no, store_format_too_new(declared)));
+                    return Err(TopologyError::at(
+                        file,
+                        line_no,
+                        store_format_too_new(declared),
+                    ));
                 }
             }
             _ => {}
@@ -863,7 +864,8 @@ delta|packages/app/delta|app|beta|app-cluster=qt5,version-sync=nvchecker
         // `state_dir` retired (2026-10-28): it was a silent no-op — the §J.3
         // ladder lives in gsa.conf, and the key names that home instead of
         // hiding a dead knob.
-        let err = parse_build_defaults("state_dir=auto\n", "config/build-defaults.conf").unwrap_err();
+        let err =
+            parse_build_defaults("state_dir=auto\n", "config/build-defaults.conf").unwrap_err();
         assert!(err.to_string().contains("gsa.conf"));
         assert!(err.to_string().contains("state_dir is not a build default"));
         let err = parse_build_defaults("bogus=1\n", "config/build-defaults.conf").unwrap_err();
@@ -903,7 +905,8 @@ delta|packages/app/delta|app|beta|app-cluster=qt5,version-sync=nvchecker
 
     #[test]
     fn store_format_two_is_refused_by_the_compatibility_gate() {
-        let err = parse_build_defaults("store_format=2\n", "config/build-defaults.conf").unwrap_err();
+        let err =
+            parse_build_defaults("store_format=2\n", "config/build-defaults.conf").unwrap_err();
         assert_eq!(
             err.message,
             "recipe store format 2 needs a newer gsa (this build supports 1) — run 'sudo pacman -Syu gsa-pm', then 'sudo gsa -Sy'"
@@ -915,15 +918,13 @@ delta|packages/app/delta|app|beta|app-cluster=qt5,version-sync=nvchecker
 
     #[test]
     fn store_format_above_the_maximum_is_refused_whatever_the_number() {
-        let err =
-            parse_build_defaults("store_format=4294967295\n", "config/build-defaults.conf")
-                .unwrap_err();
+        let err = parse_build_defaults("store_format=4294967295\n", "config/build-defaults.conf")
+            .unwrap_err();
         assert!(err.message.contains("needs a newer gsa"));
         assert!(err.message.contains("recipe store format 4294967295"));
         // Beyond u32 is a bad value, not a newer store.
-        let err =
-            parse_build_defaults("store_format=4294967296\n", "config/build-defaults.conf")
-                .unwrap_err();
+        let err = parse_build_defaults("store_format=4294967296\n", "config/build-defaults.conf")
+            .unwrap_err();
         assert!(err.message.contains("invalid value for store_format"));
     }
 

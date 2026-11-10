@@ -165,8 +165,7 @@ pub fn not_mirrored_of(inv: &Invocation) -> Vec<String> {
             continue;
         }
         let carried = if *token == "--machine" {
-            inv.output_mode.is_some()
-                || inv.deferred_flags.iter().any(|flag| flag == "--machine")
+            inv.output_mode.is_some() || inv.deferred_flags.iter().any(|flag| flag == "--machine")
         } else {
             inv.deferred_flags.iter().any(|flag| flag == *token)
         };
@@ -807,7 +806,10 @@ mod tests {
         };
         let record = build_plan_record(&inv, &selection(2), &["@git".to_string()], &[], "xhigh", 3);
         assert_eq!(record.outcome, "planned");
-        assert_eq!(record.rc, 3, "the record's rc is the run's exit code (§H.2)");
+        assert_eq!(
+            record.rc, 3,
+            "the record's rc is the run's exit code (§H.2)"
+        );
         assert_eq!(record.plan.len(), 2);
         assert_eq!(record.plan[0].action, PlanAction::BuildInstall);
         // The prune strength 'c' is never mirrored; --dry-run is; --leaf only
@@ -962,7 +964,11 @@ mod tests {
         // none — a seam appears in NEITHER the command NOR the line.
         for seam in ["--lane-job", "--stale-lock-check", "--install-decide"] {
             assert!(!record.continuation.not_mirrored.iter().any(|f| f == seam));
-            assert!(!record.continuation.command.split_whitespace().any(|t| t == seam));
+            assert!(!record
+                .continuation
+                .command
+                .split_whitespace()
+                .any(|t| t == seam));
         }
         assert!(
             record.continuation.not_mirrored.is_empty(),
@@ -1211,7 +1217,9 @@ mod tests {
             record.continuation.not_mirrored,
             vec!["--register-ignorepkg".to_string()]
         );
-        assert!(!command.split_whitespace().any(|t| t == "--register-ignorepkg"));
+        assert!(!command
+            .split_whitespace()
+            .any(|t| t == "--register-ignorepkg"));
     }
 
     #[test]

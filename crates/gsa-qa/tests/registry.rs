@@ -125,7 +125,8 @@ impl Scratch {
 fn set_mtime(path: &Path, seconds_after_epoch: u64) {
     let file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
     file.set_times(
-        std::fs::FileTimes::new().set_modified(UNIX_EPOCH + Duration::from_secs(seconds_after_epoch)),
+        std::fs::FileTimes::new()
+            .set_modified(UNIX_EPOCH + Duration::from_secs(seconds_after_epoch)),
     )
     .unwrap();
 }

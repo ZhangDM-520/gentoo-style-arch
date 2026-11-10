@@ -621,11 +621,17 @@ mod tests {
             let mut args = vec!["-B".to_string(), spelling.to_string()];
             args.push("mesa-git".to_string());
             let message = parse(&args).unwrap_err();
-            assert!(message.contains("flag '--leaf' takes no value"), "{message}");
+            assert!(
+                message.contains("flag '--leaf' takes no value"),
+                "{message}"
+            );
             assert!(!message.contains(spelling), "{message}");
             // The pre-family position refuses the same way (never echoes).
             let message = parse(&[spelling.to_string(), "-B".to_string()]).unwrap_err();
-            assert!(message.contains("flag '--leaf' takes no value"), "{message}");
+            assert!(
+                message.contains("flag '--leaf' takes no value"),
+                "{message}"
+            );
             assert!(!message.contains(spelling), "{message}");
         }
     }

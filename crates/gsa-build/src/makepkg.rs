@@ -131,7 +131,14 @@ pub fn makepkg_command(
     toolchain: Toolchain,
 ) -> Result<std::process::Command, String> {
     let layout = gsa_model::config::build_layout_for_run()?;
-    makepkg_command_in(recipe_dir, jobs, payload_flags, state_dir, &layout, toolchain)
+    makepkg_command_in(
+        recipe_dir,
+        jobs,
+        payload_flags,
+        state_dir,
+        &layout,
+        toolchain,
+    )
 }
 
 /// [`makepkg_command`] against an already-resolved [`BuildLayout`] (the
@@ -313,11 +320,9 @@ mod tests {
             gsa_model::toolchain::Toolchain::Gcc,
         )
         .expect("the layout is usable");
-        let body = std::fs::read_to_string(
-            dir.join(gsa_model::makepkg_conf::lane_conf_name(
-                gsa_model::toolchain::Toolchain::Gcc,
-            )),
-        )
+        let body = std::fs::read_to_string(dir.join(gsa_model::makepkg_conf::lane_conf_name(
+            gsa_model::toolchain::Toolchain::Gcc,
+        )))
         .expect("the composite is installed under the cache root");
         // §B.11: the host's config layering is GONE — the engine owns the
         // flags, so no /etc/makepkg.conf, no drop-ins, no user override.
@@ -417,7 +422,11 @@ mod tests {
                 .find(|(k, _)| k.to_string_lossy() == key)
                 .and_then(|(_, v)| v.map(|v| v.to_string_lossy().into_owned()))
                 .unwrap_or_default();
-            assert_eq!(env, dir.display().to_string(), "{key} must point at the cache");
+            assert_eq!(
+                env,
+                dir.display().to_string(),
+                "{key} must point at the cache"
+            );
         }
         let _ = std::fs::remove_dir_all(&dir);
     }

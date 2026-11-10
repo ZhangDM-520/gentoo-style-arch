@@ -307,7 +307,11 @@ impl<'a> Graph<'a> {
         self.order
             .iter()
             .filter_map(|&i| {
-                let severity = if seen[i] { self.abi_severity(i)? } else { return None };
+                let severity = if seen[i] {
+                    self.abi_severity(i)?
+                } else {
+                    return None;
+                };
                 Some(CoupledMember {
                     id: self.records[i].id.clone(),
                     severity,
@@ -485,7 +489,10 @@ mod tests {
         // no cross-anchor pruning); abi=should members ride the batch of
         // the anchor they depend on; untagged records never do.
         assert_eq!(batches[2].anchor, RecipeId::new("qt6-base-git").unwrap());
-        assert_eq!(ids(&batches[2]), vec!["qt6-base-git", "shared", "qt6-should"]);
+        assert_eq!(
+            ids(&batches[2]),
+            vec!["qt6-base-git", "shared", "qt6-should"]
+        );
         // The member's OWN tag decides its treatment, never the batch's.
         let sev = |batch: &CoupledBatch, id: &str| {
             batch

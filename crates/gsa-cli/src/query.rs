@@ -567,7 +567,10 @@ pub fn query_info(
                     ));
                 }
                 None => {
-                    extra.push(("Installed-Version".to_string(), "(not installed)".to_string()));
+                    extra.push((
+                        "Installed-Version".to_string(),
+                        "(not installed)".to_string(),
+                    ));
                 }
             }
             match row {

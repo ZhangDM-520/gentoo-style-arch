@@ -336,7 +336,11 @@ pub fn clean_targets_in(
     }
     archives.sort();
     sidecars.sort();
-    Ok(CleanTargets { trees, archives, sidecars })
+    Ok(CleanTargets {
+        trees,
+        archives,
+        sidecars,
+    })
 }
 
 // ─── rustc/cargo sanity probe ────────────────────────────────────────────────
@@ -880,8 +884,13 @@ mod selection_tests {
     fn a_flag_beats_a_tag_beats_the_scan_beats_the_default() {
         let clang_build = "build() {\n  CC=clang make\n}\n";
         assert_eq!(
-            select("demo", Some(Toolchain::Gcc), Some(Toolchain::Clang), clang_build)
-                .unwrap(),
+            select(
+                "demo",
+                Some(Toolchain::Gcc),
+                Some(Toolchain::Clang),
+                clang_build
+            )
+            .unwrap(),
             SelectedToolchain {
                 toolchain: Toolchain::Gcc,
                 source: "--toolchain"
@@ -920,7 +929,12 @@ mod selection_tests {
         let commented = "# CC=clang is what we do NOT use\nbuild() {\n  make\n}\n";
         assert_eq!(infer(commented), Inference::None);
         // An inline comment after a word boundary is dropped too.
-        assert_eq!(select("demo", None, None, "make # CC=clang\n").unwrap().toolchain, Toolchain::DEFAULT);
+        assert_eq!(
+            select("demo", None, None, "make # CC=clang\n")
+                .unwrap()
+                .toolchain,
+            Toolchain::DEFAULT
+        );
         // A `#` inside a word (a URL fragment) is not a comment start.
         assert_eq!(strip_comment("source=(x#y)"), "source=(x#y)");
     }

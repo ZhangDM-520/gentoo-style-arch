@@ -127,8 +127,11 @@ mod tests {
         let stub = base.join("bin");
         std::fs::create_dir_all(&stub).unwrap();
         let sudo = stub.join("sudo");
-        std::fs::write(&sudo, "#!/bin/sh\nprintf '%s|' \"$@\" >>\"$GSA_SHIM_LOG\"\nexit 0\n")
-            .unwrap();
+        std::fs::write(
+            &sudo,
+            "#!/bin/sh\nprintf '%s|' \"$@\" >>\"$GSA_SHIM_LOG\"\nexit 0\n",
+        )
+        .unwrap();
         {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&sudo, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -142,7 +145,11 @@ mod tests {
             .current_dir(&base)
             .env(
                 "PATH",
-                format!("{}:{}", stub.display(), std::env::var("PATH").unwrap_or_default()),
+                format!(
+                    "{}:{}",
+                    stub.display(),
+                    std::env::var("PATH").unwrap_or_default()
+                ),
             )
             .env("GSA_SHIM_LOG", &log)
             .status()

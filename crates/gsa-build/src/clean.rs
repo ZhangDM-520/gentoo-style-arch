@@ -50,9 +50,11 @@ pub fn clean_recipe(
         };
         match removed {
             Ok(()) => report.removed.push(path.display().to_string()),
-            Err(error) => report
-                .errors
-                .push(format!("cannot remove {}: {e}", path.display(), e = error)),
+            Err(error) => {
+                report
+                    .errors
+                    .push(format!("cannot remove {}: {e}", path.display(), e = error))
+            }
         }
     }
     remove_archives_in(recipe_dir, &|_| true, report);
@@ -72,10 +74,9 @@ pub fn clean_recipe(
             }
             match std::fs::remove_dir_all(&tree) {
                 Ok(()) => report.removed.push(tree.display().to_string()),
-                Err(error) => report.errors.push(format!(
-                    "cannot remove {}: {error}",
-                    tree.display()
-                )),
+                Err(error) => report
+                    .errors
+                    .push(format!("cannot remove {}: {error}", tree.display())),
             }
         }
     }
@@ -102,11 +103,7 @@ fn archive_belongs_to_outputs(
     }
 }
 
-fn remove_archives_in(
-    dir: &Path,
-    selected: &dyn Fn(&Path) -> bool,
-    report: &mut CleanReport,
-) {
+fn remove_archives_in(dir: &Path, selected: &dyn Fn(&Path) -> bool, report: &mut CleanReport) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -127,10 +124,9 @@ fn remove_archives_in(
                 match std::fs::symlink_metadata(&sidecar) {
                     Ok(_) => match std::fs::remove_file(&sidecar) {
                         Ok(()) => report.removed.push(sidecar.display().to_string()),
-                        Err(error) => report.errors.push(format!(
-                            "cannot remove {}: {error}",
-                            sidecar.display()
-                        )),
+                        Err(error) => report
+                            .errors
+                            .push(format!("cannot remove {}: {error}", sidecar.display())),
                     },
                     Err(_) => {}
                 }
@@ -179,7 +175,9 @@ mod tests {
         let file = std::fs::File::create(path).unwrap();
         let encoder = zstd::Encoder::new(file, 0).unwrap();
         let mut builder = tar::Builder::new(encoder);
-        let body = format!("pkgbase = {pkgname}\npkgname = {pkgname}\npkgver = {version}\narch = x86_64\n");
+        let body = format!(
+            "pkgbase = {pkgname}\npkgname = {pkgname}\npkgver = {version}\narch = x86_64\n"
+        );
         let mut header = tar::Header::new_gnu();
         header.set_size(body.len() as u64);
         header.set_mode(0o644);
@@ -260,15 +258,21 @@ mod tests {
             &mut report,
         );
         assert!(
-            pkgdest.join("python-attrs-2.0-1-x86_64.pkg.tar.zst").exists(),
+            pkgdest
+                .join("python-attrs-2.0-1-x86_64.pkg.tar.zst")
+                .exists(),
             "an unselected recipe's archive must survive the prune (output-name truth, not prefix)"
         );
         assert!(
-            pkgdest.join("python-attrs-2.0-1-x86_64.pkg.tar.zst.gsa-vcs-revisions").exists(),
+            pkgdest
+                .join("python-attrs-2.0-1-x86_64.pkg.tar.zst.gsa-vcs-revisions")
+                .exists(),
             "a surviving archive's sidecar must survive with it"
         );
         assert!(
-            pkgdest.join("python-libs-3.12-1-x86_64.pkg.tar.zst").exists(),
+            pkgdest
+                .join("python-libs-3.12-1-x86_64.pkg.tar.zst")
+                .exists(),
             "an output name this recipe never declared must survive the prune"
         );
         assert!(
@@ -276,7 +280,9 @@ mod tests {
             "the current-version archive must be pruned"
         );
         assert!(
-            !pkgdest.join("python-3.12-1-x86_64.pkg.tar.zst.gsa-vcs-revisions").exists(),
+            !pkgdest
+                .join("python-3.12-1-x86_64.pkg.tar.zst.gsa-vcs-revisions")
+                .exists(),
             "a pruned archive's sidecar must be pruned with it"
         );
         assert!(
@@ -290,11 +296,7 @@ mod tests {
     #[test]
     fn pruned_archives_take_their_vcs_sidecars_with_them() {
         let (dir, recipe, _layout) = scratch_layout("sidecar");
-        write_pkg_archive(
-            &recipe.join("a-1.0-1-any.pkg.tar.zst"),
-            "a",
-            "1.0-1",
-        );
+        write_pkg_archive(&recipe.join("a-1.0-1-any.pkg.tar.zst"), "a", "1.0-1");
         std::fs::write(
             recipe.join("a-1.0-1-any.pkg.tar.zst.gsa-vcs-revisions"),
             "revs",
@@ -304,7 +306,9 @@ mod tests {
         clean_recipe(&recipe, "a", &["a".to_string()], None, &mut report);
         assert!(!recipe.join("a-1.0-1-any.pkg.tar.zst").exists());
         assert!(
-            !recipe.join("a-1.0-1-any.pkg.tar.zst.gsa-vcs-revisions").exists(),
+            !recipe
+                .join("a-1.0-1-any.pkg.tar.zst.gsa-vcs-revisions")
+                .exists(),
             "the recipe-dir prune must take the sidecar exactly when its archive goes"
         );
         assert!(report.errors.is_empty(), "{:?}", report.errors);

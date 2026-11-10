@@ -247,7 +247,8 @@ pub fn run_lane_job(args: &[String], err: &mut dyn Write) -> i32 {
             // §J.3: a state root that cannot be resolved is fatal for the
             // lane — never a silent fallback to another root.
             let _ = writeln!(err, "gsa --lane-job: {message}");
-            let result = LaneResult::new(pkg, LaneOutcome::Failed, 0, "state-dir-unusable").unwrap();
+            let result =
+                LaneResult::new(pkg, LaneOutcome::Failed, 0, "state-dir-unusable").unwrap();
             return match codec::publish(&result_path, &result) {
                 Ok(()) => LaneOutcome::Failed.code(),
                 Err(message) => {
@@ -331,7 +332,8 @@ pub fn run_lane_job(args: &[String], err: &mut dyn Write) -> i32 {
         Err(message) => {
             let _ = writeln!(err, "gsa --lane-job: {message}");
             let _ = writeln!(&log, "gsa --lane-job: {message}");
-            let result = LaneResult::new(pkg, LaneOutcome::Failed, 0, "toolchain-ambiguous").unwrap();
+            let result =
+                LaneResult::new(pkg, LaneOutcome::Failed, 0, "toolchain-ambiguous").unwrap();
             return match codec::publish(&result_path, &result) {
                 Ok(()) => LaneOutcome::Failed.code(),
                 Err(message) => {
@@ -346,24 +348,26 @@ pub fn run_lane_job(args: &[String], err: &mut dyn Write) -> i32 {
 
     // ── the build: makepkg in the recipe directory (§K.1) ────────────────
     let start = Instant::now();
-    let mut cmd = match crate::makepkg::makepkg_command(&recipe_dir, jobs, flags, &state_dir, toolchain) {
-        Ok(cmd) => cmd,
-        Err(message) => {
-            // §J.2/§J.3's one layout error policy: fatal for the lane with
-            // the message, never a build that lands beside the recipe and
-            // reports success.
-            let _ = writeln!(err, "gsa --lane-job: {message}");
-            let _ = writeln!(&log, "gsa --lane-job: {message}");
-            let result = LaneResult::new(pkg, LaneOutcome::Failed, 0, "layout-unusable").unwrap();
-            return match codec::publish(&result_path, &result) {
-                Ok(()) => LaneOutcome::Failed.code(),
-                Err(message) => {
-                    let _ = writeln!(err, "gsa --lane-job: {message}");
-                    LaneOutcome::Lost.code()
-                }
-            };
-        }
-    };
+    let mut cmd =
+        match crate::makepkg::makepkg_command(&recipe_dir, jobs, flags, &state_dir, toolchain) {
+            Ok(cmd) => cmd,
+            Err(message) => {
+                // §J.2/§J.3's one layout error policy: fatal for the lane with
+                // the message, never a build that lands beside the recipe and
+                // reports success.
+                let _ = writeln!(err, "gsa --lane-job: {message}");
+                let _ = writeln!(&log, "gsa --lane-job: {message}");
+                let result =
+                    LaneResult::new(pkg, LaneOutcome::Failed, 0, "layout-unusable").unwrap();
+                return match codec::publish(&result_path, &result) {
+                    Ok(()) => LaneOutcome::Failed.code(),
+                    Err(message) => {
+                        let _ = writeln!(err, "gsa --lane-job: {message}");
+                        LaneOutcome::Lost.code()
+                    }
+                };
+            }
+        };
     let log_out = log.try_clone();
     let log_err = log.try_clone();
     cmd.stdin(Stdio::null());
@@ -533,10 +537,7 @@ mod tests {
         // received (the OOM-killer case is not plain `build-failed`).
         assert_eq!(
             classify_build_exit(ChildExit::Signaled(signals::SIGKILL), 0),
-            (
-                LaneOutcome::Failed,
-                "build-killed-by-signal-9".to_string()
-            )
+            (LaneOutcome::Failed, "build-killed-by-signal-9".to_string())
         );
         assert_eq!(
             classify_build_exit(ChildExit::Signaled(signals::SIGTERM), 0),
@@ -583,21 +584,12 @@ mod tests {
             (LaneOutcome::Ok, "ok".to_string())
         );
         assert_eq!(
-            classify_wait(
-                Ok(std::process::ExitStatus::from_raw(signals::SIGTERM)),
-                0
-            ),
+            classify_wait(Ok(std::process::ExitStatus::from_raw(signals::SIGTERM)), 0),
             (LaneOutcome::Term, "interrupted-mid-build".to_string())
         );
         assert_eq!(
-            classify_wait(
-                Ok(std::process::ExitStatus::from_raw(signals::SIGKILL)),
-                0
-            ),
-            (
-                LaneOutcome::Failed,
-                "build-killed-by-signal-9".to_string()
-            )
+            classify_wait(Ok(std::process::ExitStatus::from_raw(signals::SIGKILL)), 0),
+            (LaneOutcome::Failed, "build-killed-by-signal-9".to_string())
         );
     }
 }

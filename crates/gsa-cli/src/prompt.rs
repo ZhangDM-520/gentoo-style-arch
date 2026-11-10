@@ -54,7 +54,11 @@ pub fn prompt_app_selection(
         writeln!(out, "app group — choose what to build ({total} packages):")?;
         writeln!(out, "  default: nothing checked = build EVERY app package")?;
         for (i, row) in rows.iter().enumerate() {
-            let mark = if checked.contains(&(i + 1)) { "[x]" } else { "[ ]" };
+            let mark = if checked.contains(&(i + 1)) {
+                "[x]"
+            } else {
+                "[ ]"
+            };
             writeln!(out, "  {mark} {:>2}. {}", i + 1, row.label)?;
         }
         if !checked.is_empty() {
@@ -152,7 +156,9 @@ pub fn prompt_build_dir(
         out.flush()?;
         let mut line = String::new();
         if input.read_line(&mut line)? == 0 {
-            return Ok(BuildDirOutcome::Abort("build-dir selection aborted (input closed)"));
+            return Ok(BuildDirOutcome::Abort(
+                "build-dir selection aborted (input closed)",
+            ));
         }
         let answer = line.trim();
         if answer.is_empty() {
@@ -163,7 +169,11 @@ pub fn prompt_build_dir(
         }
         let path = gsa_model::config::expand_home(answer, home);
         if !path.is_absolute() {
-            writeln!(out, " not an absolute path: {} — give /path or ~/path", answer)?;
+            writeln!(
+                out,
+                " not an absolute path: {} — give /path or ~/path",
+                answer
+            )?;
             writeln!(out)?;
             continue;
         }
@@ -190,7 +200,10 @@ mod tests {
 
     fn rows() -> Vec<AppRow> {
         vec![
-            AppRow { label: "app1".into(), members: vec!["app1".into()] },
+            AppRow {
+                label: "app1".into(),
+                members: vec!["app1".into()],
+            },
             AppRow {
                 label: "fcitx5 [app2 app3]".into(),
                 members: vec!["app2".into(), "app3".into()],
@@ -234,7 +247,10 @@ mod tests {
     #[test]
     fn q_aborts_with_reason() {
         let (outcome, _menu) = run(&rows(), "q\n");
-        assert!(matches!(outcome, PromptOutcome::Abort("app selection aborted")));
+        assert!(matches!(
+            outcome,
+            PromptOutcome::Abort("app selection aborted")
+        ));
     }
 
     #[test]
@@ -264,7 +280,10 @@ mod tests {
     fn empty_answer_keeps_the_resolved_root_and_shows_its_provenance() {
         let (outcome, menu) = run_dir("\n");
         assert_eq!(outcome, BuildDirOutcome::Default);
-        assert!(menu.contains("/var/cache/gsa  [gsa.conf build_dir]"), "{menu}");
+        assert!(
+            menu.contains("/var/cache/gsa  [gsa.conf build_dir]"),
+            "{menu}"
+        );
     }
 
     #[test]

@@ -80,7 +80,10 @@ const CLOCK_MONOTONIC: i32 = 1;
 /// was in the process group when the teardown TERM was delivered (and so
 /// already got the sweep's single TERM) or escaped it by being forked later.
 pub fn monotonic_ns() -> u64 {
-    let mut ts = Timespec { tv_sec: 0, tv_nsec: 0 };
+    let mut ts = Timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
     if unsafe { clock_gettime(CLOCK_MONOTONIC, &mut ts) } != 0 {
         return 0;
     }
@@ -191,7 +194,8 @@ static FIRST_SIGNAL_AT_NS: AtomicU64 = AtomicU64::new(0);
 extern "C" fn handle_signal(sig: i32) {
     SIGNAL_COUNT.fetch_add(1, Ordering::SeqCst);
     let _ = FIRST_SIGNAL.compare_exchange(0, sig, Ordering::SeqCst, Ordering::SeqCst);
-    let _ = FIRST_SIGNAL_AT_NS.compare_exchange(0, monotonic_ns(), Ordering::SeqCst, Ordering::SeqCst);
+    let _ =
+        FIRST_SIGNAL_AT_NS.compare_exchange(0, monotonic_ns(), Ordering::SeqCst, Ordering::SeqCst);
     let fd = PIPE_WRITE.load(Ordering::SeqCst);
     if fd >= 0 {
         let byte = sig as u8;

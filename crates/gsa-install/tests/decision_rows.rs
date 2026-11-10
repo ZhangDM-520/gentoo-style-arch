@@ -705,8 +705,10 @@ fn the_consumer_install_consumes_the_marker_under_its_recipe_id() {
     let markers = state.join("abi-repair");
     std::fs::create_dir_all(&markers).unwrap();
     std::fs::write(markers.join("consumer-app"), "provider=libs-git\n").unwrap();
-    let recipe_of_name =
-        std::collections::BTreeMap::from([("consumer-app-libs".to_string(), "consumer-app".to_string())]);
+    let recipe_of_name = std::collections::BTreeMap::from([(
+        "consumer-app-libs".to_string(),
+        "consumer-app".to_string(),
+    )]);
     // The consumer's own install lands: its ELF-owning output name resolves
     // to the RECIPE-id key, so the clear reads exactly the key the write
     // used — never a second key space (that is the marker leak).
@@ -757,7 +759,10 @@ fn index_invalid_archives_never_install() {
     std::fs::create_dir_all(&recipe).unwrap();
     std::fs::write(recipe.join(".SRCINFO"), "pkgbase = foo\npkgname = foo\n").unwrap();
     let archive = recipe.join("foo-1.0-1-x86_64.pkg.tar.zst");
-    write_archive(&archive, &[(".PKGINFO", &pkginfo_body("foo", "1.0-1", &[]))]);
+    write_archive(
+        &archive,
+        &[(".PKGINFO", &pkginfo_body("foo", "1.0-1", &[]))],
+    );
 
     // Register the honest bytes, then re-write the archive with different
     // (still parseable) content: the row no longer agrees with the bytes.
@@ -835,7 +840,10 @@ fn a_same_path_rebuild_installs_against_the_newest_index_row() {
     }])
     .unwrap();
     let mut err = Vec::new();
-    write_archive(&archive, &[(".PKGINFO", &pkginfo_body("foo", "1.0-1", &[]))]);
+    write_archive(
+        &archive,
+        &[(".PKGINFO", &pkginfo_body("foo", "1.0-1", &[]))],
+    );
     gsa_state::register_instance(
         &root,
         "foo",
@@ -1109,7 +1117,8 @@ fn corrupt_committed_metadata_fails_discovery_instead_of_widening_the_set() {
     // damage class and must not fall back to "no expectation" either.
     std::fs::remove_file(recipe.join(".SRCINFO")).unwrap();
     std::fs::create_dir_all(recipe.join(".SRCINFO")).unwrap();
-    let error = discover_recipe(&recipe).expect_err("an unreadable .SRCINFO must not widen the set");
+    let error =
+        discover_recipe(&recipe).expect_err("an unreadable .SRCINFO must not widen the set");
     assert!(error.contains("cannot read"), "{error}");
     assert!(error.contains(".SRCINFO"), "{error}");
 
@@ -1143,7 +1152,10 @@ fn corrupt_committed_metadata_refuses_the_qa_gate_instead_of_standing_down() {
     )
     .unwrap();
     let archive = dir.join("foo-1.0-1-x86_64.pkg.tar.zst");
-    write_archive(&archive, &[(".PKGINFO", &pkginfo_body("foo", "1.0-1", &[]))]);
+    write_archive(
+        &archive,
+        &[(".PKGINFO", &pkginfo_body("foo", "1.0-1", &[]))],
+    );
 
     let rows = decide(
         std::slice::from_ref(&candidate(&archive, Some(&recipe))),

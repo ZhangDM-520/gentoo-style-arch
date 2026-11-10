@@ -47,12 +47,18 @@ fn precedence_is_override_then_env_then_config() {
     std::env::set_var("GSA_BUILD_DIR", "/env/tree");
 
     set_build_root_override(PathBuf::from("/chosen/tree"));
-    assert_eq!(build_root(&cfg(Some("/conf/tree"))).unwrap(), PathBuf::from("/chosen/tree"));
+    assert_eq!(
+        build_root(&cfg(Some("/conf/tree"))).unwrap(),
+        PathBuf::from("/chosen/tree")
+    );
     assert_eq!(
         build_root_override(),
         Some(std::path::Path::new("/chosen/tree"))
     );
-    assert_eq!(build_root_with_source(&cfg(None)).unwrap().1, "this run's choice");
+    assert_eq!(
+        build_root_with_source(&cfg(None)).unwrap().1,
+        "this run's choice"
+    );
 
     std::env::remove_var("GSA_BUILD_DIR");
 }

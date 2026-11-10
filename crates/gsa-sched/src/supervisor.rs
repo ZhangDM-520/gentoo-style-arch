@@ -397,8 +397,8 @@ impl Prefetcher {
         // The disk-floor probe follows where the fetch writes: the resolved
         // SRCDEST mirror, else makepkg's `$startdir` default — the node's
         // recipe dir (the same fallback gsa-fetch's engine takes).
-        let cache = engine::resolve_srcdest()
-            .unwrap_or_else(|| setup.nodes[index].recipe_dir.clone());
+        let cache =
+            engine::resolve_srcdest().unwrap_or_else(|| setup.nodes[index].recipe_dir.clone());
         if !engine::disk_floor_ok(&cache) {
             // Below the free-space floor: pause prefetch with an advisory,
             // never fail (owner decision 6).
@@ -561,12 +561,7 @@ fn park_marker_path(setup: &RunSetup, index: usize) -> PathBuf {
 /// (`gsa_model::log_path`), so the offset is what makes a tail run-scoped.
 /// Written at spawn, before the `Started` event renders. The caller samples
 /// [`log_start_offset`] BEFORE spawning: once the child exists it appends.
-fn write_started(
-    setup: &RunSetup,
-    index: usize,
-    pid: u32,
-    log_offset: u64,
-) -> Result<(), String> {
+fn write_started(setup: &RunSetup, index: usize, pid: u32, log_offset: u64) -> Result<(), String> {
     let pkg = setup.nodes[index].id.as_str();
     let epoch = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1853,9 +1848,9 @@ mod tests {
                 // The sink drops when the run returns — the disconnect IS
                 // the termination signal; a timeout before it is a hang.
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                Err(mpsc::RecvTimeoutError::Timeout) => panic!(
-                    "the supervisor must terminate once its lane is gone (contract §K)"
-                ),
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    panic!("the supervisor must terminate once its lane is gone (contract §K)")
+                }
             }
         }
 
@@ -1863,10 +1858,9 @@ mod tests {
             .expect("runs/current is written at run start");
         assert_eq!(current.trim(), run_id, "runs/current names THIS run");
 
-        let started = std::fs::read_to_string(
-            state_dir.join("runs").join(&run_id).join("p1.started"),
-        )
-        .expect("the lane's .started marker is written at spawn");
+        let started =
+            std::fs::read_to_string(state_dir.join("runs").join(&run_id).join("p1.started"))
+                .expect("the lane's .started marker is written at spawn");
         let pid = started
             .split_whitespace()
             .find_map(|f| f.strip_prefix("pid=")?.parse::<u32>().ok())
@@ -1956,13 +1950,21 @@ mod tests {
                 let mut sink = |event: &SupEvent| captured.push(event.clone());
                 run(setup, &mut sink, &mut err)
             };
-            let _ = tx.send((outcome, captured, String::from_utf8_lossy(&err).into_owned()));
+            let _ = tx.send((
+                outcome,
+                captured,
+                String::from_utf8_lossy(&err).into_owned(),
+            ));
         });
         let (outcome, captured, err) = rx.recv_timeout(Duration::from_secs(20)).expect(
             "the supervisor must terminate once its lane is gone — a teardown hang skips \
              machine.record and the run never settles (contract §K)",
         );
-        (outcome.expect("run must settle without error"), captured, err)
+        (
+            outcome.expect("run must settle without error"),
+            captured,
+            err,
+        )
     }
 
     /// Run one supervisor pass on its own thread behind a watchdog; the run

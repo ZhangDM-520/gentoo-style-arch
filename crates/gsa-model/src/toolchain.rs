@@ -15,9 +15,7 @@ use std::fmt;
 use std::sync::OnceLock;
 
 /// The compiler family a recipe builds with.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Toolchain {
     Gcc,
     Clang,
@@ -120,7 +118,10 @@ mod tests {
     #[test]
     fn only_the_tag_family_is_recognized() {
         assert_eq!(Toolchain::parse_tag("abi=must"), None);
-        assert_eq!(Toolchain::parse_tag("toolchain=clang"), Some(Ok(Toolchain::Clang)));
+        assert_eq!(
+            Toolchain::parse_tag("toolchain=clang"),
+            Some(Ok(Toolchain::Clang))
+        );
         assert!(Toolchain::parse_tag("toolchain=").unwrap().is_err());
         assert!(Toolchain::parse_tag("toolchain=GCC").unwrap().is_err());
     }

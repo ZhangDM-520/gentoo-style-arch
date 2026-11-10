@@ -223,8 +223,14 @@ fn terminal_width() -> Option<usize> {
             }
         }
     }
-    let out = std::process::Command::new("tput").arg("cols").output().ok()?;
-    let n = String::from_utf8_lossy(&out.stdout).trim().parse::<usize>().ok()?;
+    let out = std::process::Command::new("tput")
+        .arg("cols")
+        .output()
+        .ok()?;
+    let n = String::from_utf8_lossy(&out.stdout)
+        .trim()
+        .parse::<usize>()
+        .ok()?;
     if n > 0 {
         Some(n)
     } else {
@@ -360,7 +366,9 @@ mod tests {
             for section in SECTIONS {
                 for (left, _) in section.blocks {
                     assert!(
-                        rendered.lines().any(|line| line.trim_start().starts_with(left)),
+                        rendered
+                            .lines()
+                            .any(|line| line.trim_start().starts_with(left)),
                         "{w} cols: '{left}' is missing or wrapped mid-spelling"
                     );
                 }
@@ -429,7 +437,9 @@ mod tests {
                 "roster row {name} has no description"
             );
             assert!(
-                rendered.lines().any(|line| line.trim_start().starts_with(name)),
+                rendered
+                    .lines()
+                    .any(|line| line.trim_start().starts_with(name)),
                 "roster input '{name}' is missing from the rendered help"
             );
         }

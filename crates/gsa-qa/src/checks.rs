@@ -192,7 +192,9 @@ pub fn purged_tools(input: &QaInput<'_>) -> CheckResult {
             if PURGED_TOOLS.contains(&name) {
                 result = result.with(
                     &recipe.id,
-                    format!("{field} reintroduces purged tool '{name}' — remove it (AGENTS.md rule 8)"),
+                    format!(
+                        "{field} reintroduces purged tool '{name}' — remove it (AGENTS.md rule 8)"
+                    ),
                 );
             }
         }
@@ -822,7 +824,8 @@ pub fn declared_deps(input: &QaInput<'_>) -> CheckResult {
                 if abi::base_lib_ok(&lookup) {
                     continue;
                 }
-                if abi::excluded(input.exclusions, soname) || abi::excluded(input.exclusions, &lookup)
+                if abi::excluded(input.exclusions, soname)
+                    || abi::excluded(input.exclusions, &lookup)
                 {
                     continue;
                 }
@@ -1046,8 +1049,7 @@ fn effective_depends<'a>(rows: &'a gsa_recipe::SrcinfoRows, handle: &str) -> Vec
     if !specific.is_empty() {
         return specific;
     }
-    rows
-        .deps
+    rows.deps
         .iter()
         .filter(|(field, row_handle, value)| {
             field == "depends" && row_handle.is_empty() && !value.is_empty()
@@ -1609,7 +1611,12 @@ mod tests {
             "app-git",
             "pkgbase = app-git\npkgname = app-git\ndepends = mujs\n",
         )];
-        let result = run(&declared, &[archive("app-git", path.clone())], &installed, &[]);
+        let result = run(
+            &declared,
+            &[archive("app-git", path.clone())],
+            &installed,
+            &[],
+        );
         assert!(result.findings.is_empty(), "{:?}", result.findings);
 
         // Undeclared: the owner resolves by basename but lies outside the

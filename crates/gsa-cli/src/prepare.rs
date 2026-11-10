@@ -849,7 +849,9 @@ pub fn sync_phase(
         let (class, notes) = classify_sync(&report, absorb_wait(graph, idx));
         // H4: the per-recipe status line first (the verdict headline), then
         // the loud notes below as its detail.
-        if let Some(line) = sync_status_line(id.as_str(), &report.outcome, crate::output::is_human()) {
+        if let Some(line) =
+            sync_status_line(id.as_str(), &report.outcome, crate::output::is_human())
+        {
             let _ = write!(out, "{line}");
         }
         for line in &notes {

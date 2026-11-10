@@ -86,7 +86,12 @@ fn probe_width() -> usize {
         .arg("cols")
         .output()
         .ok()
-        .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<usize>().ok())
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .trim()
+                .parse::<usize>()
+                .ok()
+        })
         .or_else(|| {
             std::env::var("COLUMNS")
                 .ok()
@@ -196,11 +201,7 @@ impl View {
                     .map(|id| id.as_str().to_string())
                     .unwrap_or_default();
                 let (epoch, offset) = self.lane_state(&pkg);
-                if let Some(lane) = self
-                    .lanes
-                    .iter_mut()
-                    .find(|lane| lane.pkg.is_none())
-                {
+                if let Some(lane) = self.lanes.iter_mut().find(|lane| lane.pkg.is_none()) {
                     lane.pkg = Some(pkg);
                     lane.epoch = epoch;
                     lane.offset = offset;
@@ -338,10 +339,7 @@ impl View {
             match &lane.pkg {
                 Some(pkg) => {
                     let dur = fmt_dur(now.saturating_sub(lane.epoch) as i64);
-                    rows.push(format!(
-                        "Lane {}: → RUNNING {pkg} {dur}",
-                        i + 1
-                    ));
+                    rows.push(format!("Lane {}: → RUNNING {pkg} {dur}", i + 1));
                     rows.extend(self.tail_rows(Some((pkg.as_str(), lane.offset))));
                 }
                 None => {
@@ -447,7 +445,11 @@ mod tests {
         assert_eq!(fit("hello", 80), "hello");
         let long = "x".repeat(200);
         let fitted = fit(&long, 80);
-        assert_eq!(fitted.chars().count(), 79, "one cell unused at 80 cols: {fitted:?}");
+        assert_eq!(
+            fitted.chars().count(),
+            79,
+            "one cell unused at 80 cols: {fitted:?}"
+        );
         assert!(fitted.ends_with("..."), "truncated rows say so: {fitted:?}");
         let fitted = fit(&long, 160);
         assert_eq!(fitted.chars().count(), 159, "one cell unused at 160 cols");
@@ -461,23 +463,29 @@ mod tests {
         std::fs::create_dir_all(state.join("logs")).unwrap();
         std::fs::write(state.join("runs/current"), "42-1\n").unwrap();
         // The offset is the run-scoped tail start: 13 bytes skipped.
-        std::fs::write(state.join("runs/42-1/p1.started"), "pid=9 epoch=100 log-offset=13\n").unwrap();
-        std::fs::write(state.join("logs/p1.log"), "old run line\nmake: up to date\ncc p1.c\n").unwrap();
+        std::fs::write(
+            state.join("runs/42-1/p1.started"),
+            "pid=9 epoch=100 log-offset=13\n",
+        )
+        .unwrap();
+        std::fs::write(
+            state.join("logs/p1.log"),
+            "old run line\nmake: up to date\ncc p1.c\n",
+        )
+        .unwrap();
 
-        let mut view = View::new(
-            true,
-            state.clone(),
-            vec![id("p1"), id("p2")],
-            2,
-            Vec::new(),
-        );
+        let mut view = View::new(true, state.clone(), vec![id("p1"), id("p2")], 2, Vec::new());
         view.interactive = true;
         view.width = 80;
         let mut out = Vec::new();
         // p1 has been running 5s; p2 is done; one lane idles.
         view.handle(&started(0), "→ p1", &mut out);
         view.handle(&started(1), "→ p2", &mut out);
-        view.handle(&settled("p2", RowStatus::Succeeded, Some(0)), "✓ p2 (1s)", &mut out);
+        view.handle(
+            &settled("p2", RowStatus::Succeeded, Some(0)),
+            "✓ p2 (1s)",
+            &mut out,
+        );
         let rows = view.rows_at(105);
         assert_eq!(
             rows[0],
@@ -570,11 +578,15 @@ mod tests {
         let rows = view.progress().rows();
         assert_eq!(
             view.progress().succeeded(),
-            rows.iter().filter(|r| r.status == RowStatus::Succeeded).count()
+            rows.iter()
+                .filter(|r| r.status == RowStatus::Succeeded)
+                .count()
         );
         assert_eq!(
             view.progress().failed(),
-            rows.iter().filter(|r| r.status == RowStatus::Failed).count()
+            rows.iter()
+                .filter(|r| r.status == RowStatus::Failed)
+                .count()
         );
     }
 

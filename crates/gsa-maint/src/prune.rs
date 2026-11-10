@@ -178,10 +178,7 @@ fn staging_targets(dir: &Path, strength3: bool, root: PathBuf) -> Vec<Target> {
 /// else's tree).
 fn live_staging_targets(layout: &BuildLayout, pkgbase: &str) -> Vec<Target> {
     let mut out = Vec::new();
-    for dir in [
-        layout.builddir.join(pkgbase),
-        layout.pkgdir.join(pkgbase),
-    ] {
+    for dir in [layout.builddir.join(pkgbase), layout.pkgdir.join(pkgbase)] {
         let Ok(meta) = std::fs::symlink_metadata(&dir) else {
             continue;
         };
@@ -256,12 +253,7 @@ fn pkgdest_targets(
 /// set, and their companions — in ONE home (`home`, either the legacy
 /// recipe dir or the resolved `SRCDEST`), proven inside `root` before being
 /// collected. Symlinks are collected separately (preserved).
-fn source_targets(
-    home: &Path,
-    root: &Path,
-    meta: &RecipeMeta,
-    patterns: &[String],
-) -> Vec<Target> {
+fn source_targets(home: &Path, root: &Path, meta: &RecipeMeta, patterns: &[String]) -> Vec<Target> {
     let mut out = Vec::new();
     for source in meta.sources() {
         let name = match source.kind {
@@ -567,7 +559,11 @@ pub fn strength2(ctx: &MaintCtx<'_>, apply: bool) -> Vec<Row> {
             .collect();
         push_unique(&mut targets, &mut seen, mine);
     }
-    push_unique(&mut targets, &mut seen, pkgdest_targets(&layout, &index, &declared));
+    push_unique(
+        &mut targets,
+        &mut seen,
+        pkgdest_targets(&layout, &index, &declared),
+    );
     let (mut rows, deleted) = run_targets(ctx, &targets, apply);
     if apply {
         rows.extend(tombstone_deleted(ctx, &deleted));
@@ -619,7 +615,11 @@ pub fn strength3(ctx: &MaintCtx<'_>, apply: bool) -> Vec<Row> {
         }
         push_unique(&mut targets, &mut seen, mine);
     }
-    push_unique(&mut targets, &mut seen, pkgdest_targets(&layout, &index, &declared));
+    push_unique(
+        &mut targets,
+        &mut seen,
+        pkgdest_targets(&layout, &index, &declared),
+    );
     let (mut rows, deleted) = run_targets(ctx, &targets, apply);
     if apply {
         rows.extend(tombstone_deleted(ctx, &deleted));

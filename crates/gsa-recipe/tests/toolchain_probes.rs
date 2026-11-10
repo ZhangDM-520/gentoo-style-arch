@@ -462,17 +462,15 @@ fn clean_targets_reach_the_w4_cache_homes_with_name_truth() {
     // This recipe's live artifacts in the shared PKGDEST …
     fs::write(layout.pkgdest.join("p1-1.0.0-1-any.pkg.tar.zst"), b"").unwrap();
     fs::write(
-        layout.pkgdest.join("p1-1.0.0-1-any.pkg.tar.zst.gsa-vcs-revisions"),
+        layout
+            .pkgdest
+            .join("p1-1.0.0-1-any.pkg.tar.zst.gsa-vcs-revisions"),
         b"rev\n",
     )
     .unwrap();
     // … and a hyphen-extended name-prefix neighbour that must survive (the
     // `python` clean may never touch `python-libs`).
-    fs::write(
-        layout.pkgdest.join("p1-libs-2.0-1-any.pkg.tar.zst"),
-        b"",
-    )
-    .unwrap();
+    fs::write(layout.pkgdest.join("p1-libs-2.0-1-any.pkg.tar.zst"), b"").unwrap();
 
     let targets = clean_targets_in(&recipe, Some(&layout)).unwrap();
     assert!(
@@ -484,9 +482,11 @@ fn clean_targets_reach_the_w4_cache_homes_with_name_truth() {
     assert!(targets
         .archives
         .contains(&layout.pkgdest.join("p1-1.0.0-1-any.pkg.tar.zst")));
-    assert!(targets
-        .sidecars
-        .contains(&layout.pkgdest.join("p1-1.0.0-1-any.pkg.tar.zst.gsa-vcs-revisions")));
+    assert!(targets.sidecars.contains(
+        &layout
+            .pkgdest
+            .join("p1-1.0.0-1-any.pkg.tar.zst.gsa-vcs-revisions")
+    ));
     assert!(
         !targets
             .archives

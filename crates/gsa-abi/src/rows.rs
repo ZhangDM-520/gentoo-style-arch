@@ -506,7 +506,12 @@ mod tests {
                 &["libicuuc.so=78-32"],
                 &["usr/lib32/libxml2.so.16"],
             ),
-            pkg("stock-pin", &[], &["libicuuc.so=79-64"], &["usr/lib/libpin.so"]),
+            pkg(
+                "stock-pin",
+                &[],
+                &["libicuuc.so=79-64"],
+                &["usr/lib/libpin.so"],
+            ),
         ]);
         let drift = vec![Drift {
             pkgname: "icu-git".to_string(),
@@ -576,9 +581,10 @@ mod tests {
             inst_ver: "1-64".to_string(),
             built_ver: Some("2-64".to_string()),
         };
-        assert_eq!(linked_consumers(&view, std::slice::from_ref(&moved)), vec![
-            "consumer-app".to_string()
-        ]);
+        assert_eq!(
+            linked_consumers(&view, std::slice::from_ref(&moved)),
+            vec!["consumer-app".to_string()]
+        );
         let other = Drift {
             pkgname: "abipkg".to_string(),
             name: "libother.so".to_string(),

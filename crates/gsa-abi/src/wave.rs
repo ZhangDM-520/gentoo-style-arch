@@ -163,7 +163,10 @@ pub struct WaveInputs<'a> {
 /// The gap-G1 key-space boundary of [`WaveInputs::recipe_of_name`] applied
 /// to one name: an unresolvable name stays itself (fail closed).
 fn canon(recipe_of_name: &BTreeMap<String, String>, id: &str) -> String {
-    recipe_of_name.get(id).cloned().unwrap_or_else(|| id.to_string())
+    recipe_of_name
+        .get(id)
+        .cloned()
+        .unwrap_or_else(|| id.to_string())
 }
 
 /// Compute the waves: exact `:=` mismatches ∪ unrecorded consumers
@@ -272,8 +275,7 @@ pub fn plan_waves(input: &WaveInputs<'_>) -> WavePlan {
                     let present = view.get(row.consumer.as_str()).is_some()
                         || view.get(consumer.as_str()).is_some();
                     if !present {
-                        plan.stale_records
-                            .push((provider.to_string(), consumer));
+                        plan.stale_records.push((provider.to_string(), consumer));
                         continue;
                     }
                 }
@@ -308,15 +310,16 @@ pub fn plan_waves(input: &WaveInputs<'_>) -> WavePlan {
         // llvm-git anchor into every rust-git wave and re-pulled settled
         // toolchain packages; that is also why `--leaf` became a
         // workaround. Batch membership alone is not evidence of direction.)
-        let downstream: Option<BTreeSet<usize>> = provider_idx
-            .map(|idx| graph.consumer_closure(&[idx]).into_iter().collect());
+        let downstream: Option<BTreeSet<usize>> =
+            provider_idx.map(|idx| graph.consumer_closure(&[idx]).into_iter().collect());
         let batches = graph.coupled_batches();
         let mut noted: Vec<String> = Vec::new();
         let mut must_members: Vec<String> = Vec::new();
         for batch in &batches {
-            let touches = batch.members.iter().any(|m| {
-                m.id.as_str() == provider || seeds.iter().any(|s| s.id == m.id.as_str())
-            });
+            let touches = batch
+                .members
+                .iter()
+                .any(|m| m.id.as_str() == provider || seeds.iter().any(|s| s.id == m.id.as_str()));
             if !touches {
                 continue;
             }
@@ -657,7 +660,11 @@ mod tests {
             recipe_of_name: &Default::default(),
         });
         let wave = &plan.waves[0];
-        assert_eq!(ids(wave), vec!["m2"], "the touched anchor's must batch moves as one pass");
+        assert_eq!(
+            ids(wave),
+            vec!["m2"],
+            "the touched anchor's must batch moves as one pass"
+        );
         assert_eq!(wave.members[0].basis, MemberBasis::CoupledMust);
         assert_eq!(
             wave.coupled_noted,
@@ -711,7 +718,11 @@ mod tests {
         // must never read as a token that MISMATCHES (a false recorded
         // seed) nor as one that matches; it is a MISSING record, and the
         // fail-toward whole-closure fallback is what covers it (rule 25(c)).
-        let records = vec![record("p", &[], &[]), record("c1", &["p"], &[]), record("c2", &["p"], &[])];
+        let records = vec![
+            record("p", &[], &[]),
+            record("c1", &["p"], &[]),
+            record("c2", &["p"], &[]),
+        ];
         let graph = Graph::build(&records).unwrap();
         let mut subs = Subscriptions::empty();
         subs.upsert(sub("c1", "p", crate::records::NO_TOKEN));

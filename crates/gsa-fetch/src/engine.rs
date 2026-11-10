@@ -342,8 +342,8 @@ pub(crate) fn verifysource_command(recipe_dir: &Path) -> Result<Command, String>
     // universal half (SRCDEST and friends); the compiler body in the
     // composite is inert here, so the run override or the default family is
     // enough and no recipe scan is needed.
-    let toolchain = gsa_model::toolchain::override_value()
-        .unwrap_or(gsa_model::toolchain::Toolchain::DEFAULT);
+    let toolchain =
+        gsa_model::toolchain::override_value().unwrap_or(gsa_model::toolchain::Toolchain::DEFAULT);
     let layout = gsa_model::config::build_layout_for_run()?;
     if let Some(srcdest) = gsa_model::config::resolve_srcdest() {
         cmd.env("GSA_LANE_SRCDEST", srcdest);
@@ -764,7 +764,10 @@ ERROR: One or more files did not pass the validity check!
             "-o",
             "--holdver",
         ] {
-            assert!(!args.contains(&forbidden.to_string()), "argv carries {forbidden}");
+            assert!(
+                !args.contains(&forbidden.to_string()),
+                "argv carries {forbidden}"
+            );
         }
     }
 
