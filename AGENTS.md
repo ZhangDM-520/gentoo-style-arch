@@ -401,7 +401,11 @@ split.
     `gsa_model::makepkg_conf::{render,install}` (one composite per family,
     `--config` on every spawn, never the host's `makepkg.conf`); tool prose
     under `LC_ALL=C`; the `PACMAN` shim quotes paths; fixtures fail closed
-    with a per-fixture `GSA_BUILD_DIR` and `GSA_CONF_DIR`.
+    with a per-fixture `GSA_BUILD_DIR` and `GSA_CONF_DIR` — the configuration
+    guard is **exported** by `rr2_engine_argv` (the state/build/store guards
+    stay per-invocation, because a fixture tests those ladders), so a fixture
+    that builds its own env array for a direct engine call cannot silently read
+    the host's `/etc/gsa` and take a surprise identity clean mid-run.
 
 58. **A living doc teaches how to CHECK, never the shape of a retired era.**
     When a change moves a home or renames a spelling, update the doc; retired

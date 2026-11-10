@@ -555,8 +555,17 @@ rr2_engine_argv() {
     # per-compiler makepkg bodies, so the HOST's /etc/gsa (and its retired
     # /etc/gsa.conf) can never leak into a fixture. Missing files are legal —
     # the engine falls back to its built-in bodies.
+    #
+    # EXPORTED, not just prefixed: a fixture that builds its own env array for
+    # a direct engine call (gsa-state-v2's privileged lane run) or hands one to
+    # rr2_env_forward would otherwise fall back to the host config, and the
+    # shipped bodies' identity would differ from the built-in one — a silent
+    # "GCC build identity changed" clean in the middle of a fixture. The real
+    # state/build/store ladders stay per-invocation on purpose: fixtures that
+    # test a rung need the variable genuinely unset.
     if [[ -z ${GSA_CONF_DIR:-} ]]; then
-        guard+=(GSA_CONF_DIR="$ws/../.rr2-conf")
+        export GSA_CONF_DIR="$ws/../.rr2-conf"
+        guard+=(GSA_CONF_DIR="$GSA_CONF_DIR")
     fi
     case $mode in
     sudo)
