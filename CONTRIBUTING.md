@@ -62,6 +62,8 @@ gsa -Ma                                      # audit lints are report-only; read
 ## Committing
 
 Never commit or push unprompted: a green battery is evidence, not consent.
+PR comments go through `gh` only (never the GitHub MCP service, whose checks
+table can be stale) and never before CI is green.
 Each commit carries a descriptive body — what changed, why, and how it was
 validated — and the trailer:
 

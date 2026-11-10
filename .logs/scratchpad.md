@@ -1,14 +1,10 @@
 # Scratchpad
 
-**Idle.** The recipe split is complete: E0, E1, R1–R3, E2, E3 all landed.
+**Idle.** Memory condensation pass 1 (pitfalls → one line per mechanism) landed
+in both repositories; `memory-layout.sh` green in both.
 
-Last actions: `export .logs/action-2026-11-09-recipe-split.md` (engine) and
-`action-2026-11-09-memory-layout-cutover.md` (engine memory layout).
+Last action: `.logs/action-2026-11-10-memory-condense-pitfalls.md`.
 
-State: engine repo == engine only (crates/tests/tools/docs + its AGENTS.md and
-JOURNAL); recipe repo `~/Projects/gsa-recipe` == recipes + topology + recipe
-fixtures + its own memory. Installed engine `gsa-pm 0.1.0+r570+g05a6c9f39b08-1`.
-
-Remaining: nothing on the split plan. Open owner calls — delete the
-`RECIPE-MOVED-TO-\`gsa-recipe\`-...` marker at the engine root (their file), and
-the queued items in AGENTS.md §6.
+Next: owner decision on pass 2 — compress rule prose in place (~430 chars/rule)
+or move rule rationale to `docs/` and keep numbered one-liners inline. Nothing
+is committed.

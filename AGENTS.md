@@ -1,8 +1,9 @@
 # AGENTS.md — engine memory & entry point
 
-Last reviewed: 2026-11-09. This file is the engine repository's whole memory:
-overview, rules, pitfalls, queue, pointers. It holds the rule text; the
-history lives in `docs/JOURNAL.md` and never here.
+Last reviewed: 2026-11-10. This file is the engine repository's whole memory:
+overview, rules, pitfalls, queue, pointers. It holds the RULE text and one line
+per pitfall MECHANISM; the incidents, dates and measurements behind both live in
+`docs/JOURNAL.md` and never here.
 
 | Layer | Path | Role | Write policy |
 | --- | --- | --- | --- |
@@ -308,6 +309,10 @@ split.
     `--leaf` builds exactly the named recipes, so keep a consumer-bearing name
     leaf. ABI-coupled updates use `-S @core`. Add a build-order edge only after
     verifying it against `pacman -Qi` metadata and a build-order reason.
+    `<id>-snapshot` is an INPUT alias, not a name: it resolves only for a
+    recipe whose primary `source=()` entry carries `#commit=`, the refusal
+    names the ref it tracks, and every record, listing and continuation prints
+    the true `-git` id (contract §C.1).
 
 13. **A coupled ABI batch moves whole.** The `abi=must` gate adds omitted
     members to the selection, and a solo install of a provide-moving provider
@@ -492,314 +497,243 @@ split.
 
 ## 5 · Pitfalls
 
-- **An unreadable read is not an absent one — and a `failed` row must reach the
-  exit code** (2026-11-08): the wave that landed rule 71 across discovery, QA,
-  doctor — the `-Syu` refusal through `refuse_before_dispatch`, the fail-closed
-  ABI wave gate, `lane-wait-failed` teardown, `MutexError::{Busy,Unopenable}`,
-  one `help::ENV_INPUTS` roster, `_GSA_` fixture knobs.
-- **A fourth derivation always drifts — make the second one a projection**
-  (2026-11-09): the wave that landed rules 72–74 — the dashboard folded onto
-  `gsa_sched::progress::Progress`, four root ladders collapsed onto
-  `gsa-model::config::resolve` with provenance, every `return 2`/`return 3` in
-  `gsa-cli` turned into a typed `Exit` behind one renderer.
-- **A multi-output index instance is a SET of per-output token rows, and a `-`
-  token is NO token** (2026-11-03): a fold keyed `(recipe_id, instance)` kept
-  only the last output, so every split rebuild read as a token move and 306
-  placeholders as mismatches. One verdict: `gsa_abi::records_moved`.
-- **Re-contract a needle from a captured engine sample, never from memory of
-  the message** (2026-10-23): a guessed literal carried parens the squashed
-  text lacks. `output::squash` turns whitespace runs into `_` and keeps
-  punctuation verbatim. Capture first, paste the needle.
-- **A `{line}\n` frame wrapper turns "this event renders nothing" into a stray
-  blank line** (2026-10-23, `SupEvent::Tick`): one bare `\n` per second into
-  machine streams. A no-message event returns `String::new()` before the frame,
-  and the pin asserts the EMPTY string.
-- **Check which vocabulary a captured fixture file carries before
-  re-contracting its needles** (2026-10-23, `app-group.sh`): `order_seq`/
-  `order_pairs` parse fish PTY sections; flipped anchors matched nothing and
-  `set -e` exited green over zero lines. Sweep WHO produces each captured file.
-- **Fixture or build scratch inside the repository is doubly corrupting**
-  (2026-10-23, `TMPDIR=$PWD/.battery-tmp`): cwd discovery answered with the
-  real topology and a sync fixture rewrote real recipes. Keep scratch outside
-  the tree and outside `/tmp`; the engine refuses a `TMPDIR` inside the
-  repository.
-- **A cache glob `name-*.pkg.tar.*` matches detached `.sig` files and
-  prefix-twin names** (2026-10-22): a `.sig` won newest-wins and aborted a
-  50-package upgrade; `linux-cachyos` globbed `linux-cachyos-headers-*`.
-  Whitelist the real extensions, reconstruct
-  `<pkgname>-<pkgver>-<pkgrel>-<arch>` by right-split, never make a
-  check-transport failure fatal.
-- **`mountpoint -q` passes on a stale mount of an OFFLINE device — probe a
-  write** (2026-10-22): reads served from page cache while `mkdir` returned
-  EIO, and a `mountpoint`-guarded conf exported a dead `TMPDIR`. Guard with the
-  actual operation (`mkdir -p … 2>/dev/null`) and fall through.
-- **A build path can silently be a tmpfs shadow** (2026-10-21): an unmounted
-  drive leaves an empty mountpoint and writes land in `/run` or `/tmp` until
-  ENOSPC, reported as "No space left" with no disk error. Check the filesystem
-  behind the path (`df -h`, `mountpoint -q <mount-root>`), not the path.
-- **`gsa -Sy` refreshes only when the resolved workspace IS the store**
-  (2026-10-21): with a repo cwd it refreshes nothing (`sync_phase` compares
-  `root == store`). Run `sudo gsa -Sy` from a neutral cwd, then verify
-  `git -C ~/.local/share/gsa/recipes log --oneline -1`.
-- **A build run whose workspace is the git tree rewrites the git tree**
-  (2026-10-19): fetch-side `pkgver()` rewriting is workspace-local by design;
-  against the repo it dirtied 544 PKGBUILDs and left `.SRCINFO` stale, so
-  `srcinfo-freshness` failed. Clean with `git checkout -- <PKGBUILDs>` or run
-  from the store.
-- **A child spawned inside a `pacman -U` library-replacement window can die in
-  the dynamic loader** (2026-10-19, gdb during the libselinux swap): `mv: error
-  while loading shared libraries: libselinux.so.1`. Transient and
-  self-healing — retry the recipe, never "fix" it.
-- **A pushed engine or recipe fix is invisible to builds until the canonical
-  store syncs** (2026-10-19): builds read the store, so the order is commit →
-  push → `sudo gsa -Sy` → resume.
-- **A `Command failed: snapper …` notification during a run is a loader-window
-  artifact** (2026-10-19): snap-pac's pre-hook snapshot dies (exit 127) while a
-  swap replaces the library, until the post-hook succeeds. Filter at the
-  notifier while `/var/lib/pacman/db.lck` exists.
-- **A completeness check must not bless the empty set — test emptiness before
-  coverage** (2026-10-18, the `--skip-built` phantom): `missing.is_empty()`
-  read as "every output covered" over an empty expectation. Zero archives is
-  always `nothing-built` → build.
-- **Budget scalars are integers and a run record is one row per subject**
-  (2026-10-14): the strict `format: 2` parser rejects `lanes: -` and duplicate
-  `order:` entries. Cite contract §H.2, not this entry.
-- **`--leaf=no`/`--leaf=yes` are not replayable spellings** (2026-10-14): a
-  continuation mirrors `--leaf` only in its true form — absence IS the negation
-  (§B.8). Code truth: `gsa-cli/src/record.rs` (`mirror_flags`/`NOT_MIRRORED`);
-  any `--leaf=<value>` is rc 2 naming the flag.
-- **An amendment claiming "fixtures pin them" must name one that does**
-  (2026-10-28, T6/T9): §H.3 listed signal keys nothing emitted, while two
-  genuinely pinned keys were missing. A reason key is emitted-or-it-is-not,
-  never "planned".
-- **A fixture pacman oracle must count TRANSACTIONS, never invocations**
-  (2026-10-14): the toolchain preflight's read-only `pacman -Q rust-git` probe
-  runs on every build-family run. Assert on `pacman -U` lines, or tolerate
-  exactly the probe line.
-- **GNU tar emits byte-identical archives for same-content repeats within one
-  second** (2026-10-14): a fixture modelling "replaced bytes" must change the
-  payload — `tar --zstd` of a regenerated `.PKGINFO` gave equal sha256 twice.
-- **Paths handed to makepkg must be absolute** (2026-10-14): makepkg runs with
-  the recipe's cwd, so a relative `--state-dir` gave it
-  `PACMAN=.state/locks/pacman-shim` and `makepkg -sf` died "An unknown error
-  has occurred." Absolutise every path crossing into the makepkg child.
-- **Binpkg index rows share one `PKGDEST` path across same-version rebuilds**
-  (2026-10-14): retention may delete only a file no surviving row references,
-  and an `abi-repair` marker is consumed only by the marked recipe's own
-  successful install.
-- **A `$W` twin sync must cover `config/`, and a `--leaf` selection its
-  members' unmet HOUSE prerequisites** (2026-10-09): an edge fix sorted wrongly
-  because `topology.conf` was never copied; a `--leaf` set omitting
-  `qt6-quick3d` let makepkg install STOCK replacements. Include unmet house
-  prereqs or use a group run.
-- **An `-S` install of an LLVM-ABI provider replaces the SONAMEs the LIVE mesa
-  stack dlopens** (2026-10-07): a house `llvm-libs-git` swapped
-  `libLLVM.so.23.1` under stock mesa — black desktop, hard freeze. Stop the
-  GUI or accept a session restart; a black screen is first a `libLLVM*` check.
-- **`DT_NEEDED` has a path form** (2026-10-10): a SONAME-less DSO linked by
-  absolute path records the PATH, so NEEDED→package mapping matches exact
-  owned/shipped paths, never basenames. `install_needed_probe` does; pinned by
-  `tests/abi-postinstall-probe.sh` cases I/J.
-- **`makepkg` is a WRITER of the recipe it touches** (2026-10-06): `--nobuild`
-  still runs `pkgver()` and rewrites `pkgver=` in place, so a "read-only"
-  screening sweep dirtied 12 tracked PKGBUILDs and red-legged
-  `srcinfo-freshness`. Run any makepkg-shelling sweep in a recipe-dir COPY
-  (a global `SRCDEST` keeps the cache shared).
-- **The fixture battery is unsafe beside a live `-S`/`-Ua` install run**
-  (2026-10-06): install preflights read the REAL `/var/lib/pacman/db.lck`, so
-  a live `sudo pacman -U` makes fixtures refuse and install fixtures go red.
-  Run batteries between builds.
-- **A pkgrel floor is unsound on version-synced recipes** (2026-10-06): the
-  provider resets `pkgrel=1` when it advances pkgver (`sync.rs`
-  `new_pkgrel`), so `pkgrel >= N` ratchets break on the next advance. Pin the
-  fix's content greps, never its release number.
-- **Fixture stub argv shapes ARE the contract** (2026-10-05): a helper is safe
-  only when the forked argv is char-for-char identical — adding `--` to
-  `pacman -Q NAME` silently disabled the ABI-batch refusal path. Probe-count
-  oracles must be separator-agnostic (`OP [--] NAME`).
-- **Fixture scale pins are probe/CALL counts, never wall-clock** (2026-10-05):
-  a step that must follow a phase start waits on an EVENT (marker file, log
-  line), never a sleep — a `sleep 1.5` raced the pre-dispatch phase under
-  battery parallelism.
-- **The resume suggestion must include the failed package** (2026-09-26): the
-  "To resume, run:" line and its "Remaining" count both excluded it, leaving
-  it stale while dependents built against stale installed copies.
-  `tests/resume-command.sh` pins it.
-- **mtime alone over-reports recipe staleness** (2026-09-26): a
-  PKGBUILD-vs-archive mtime comparison flagged much of the tree after a
-  content-identical rewrite; the content-aware audit (last commit touching the
-  PKGBUILD vs newest archive, plus pkgver-vs-archive-name) showed none. Judge
-  by content and commit time.
-- **VCS `--skip` freshness includes each declared source ref** (2026-10-01):
-  after the mtime gate, skip only when every declared ref resolves to the
-  revision recorded for that archive; an unanswerable ref (6 attempts,
-  2/5/10/20/40 s) PARKS the recipe — lane rc 99, `upstream-unverified`.
-- **The recorded VCS baseline is read from the build's `$srcdir` working
-  copy** (2026-10-02): `vcs_source_checkout` probes
-  `<recipe>/src/<name{,.git-stripped}>`, then the package root, then an
-  exported `SRCDEST` — never the reverse; a mirror carries the default HEAD,
-  not the built ref.
-- **Self-consistent is not verified** (2026-09-20): a sync that bumps pkgver
-  without refreshing sums, plus `--skipchecksums` behind a quiet flag, is
-  disclosure rather than anchoring. Fetch the official `.SRCINFO`, match moved
-  sources, `updpkgsums`, verify; anchor-or-refuse, loud fetch-only, or DEFER
-  when no official document exists.
-- **Sources and checksums in a `.SRCINFO` line up only within one algorithm**
-  (2026-09-20): Arch concatenates one list per algorithm, so a flat read cannot
-  index by source (8 of 28 refused). Take the first contiguous same-algorithm
-  run; its length must equal the source list, else fail closed.
-- **The name makepkg fetches under is not the URL's basename** (2026-09-20): a
-  `name::url` override downloads to `name` (`udisks2`), and a renamed
-  `LICENSE` matched a different file of the same name. Resolve the filename as
-  makepkg does — override first.
-- **A VCS source's checksum is a git-archive hash** (2026-09-20):
-  `calc_checksum_git` hashes `git archive --format tar v`; off a
-  `--filter=blob:none` mirror an `export-subst` file renders differently.
-  Mirror with `git clone --bare`, never a filter.
-- **A deny-list and a delete-list are the same list** (2026-09-20): the root
-  archive set and `nuclear_cleanup()`'s match test drifted twice, committing
-  36 MB of upstream archives. One list now —
-  `gsa-maint/src/prune.rs` `download_patterns` — cross-checked in both
-  directions by `tests/cleanup-extensions.sh`.
-- **A diagnostic on captured stdout is swallowed, and a range indexes the
-  selection, not the whole set** (2026-09-19): a group-resolution error written
-  inside a command substitution exited 1 printing nothing — diagnostics go to
-  stderr. A typo is never auto-corrected (`≤3` candidates); ranges clamp and
-  refuse `..`.
-- **IgnorePkg closure drift** (undated): the closure drifted short twice; keep
-  the diff empty after adding any package (rule 9) — registration is dynamic,
-  so an install run registers accepted archives itself. Back up
-  `/etc/pacman.conf` first (`IgnorePkg =` lines accumulate).
-- **A signal storm corrupts what it kills** (2026-09-23): one TERM per child
-  group, one 30 s grace, one logged SIGKILL — a TERM every 50 ms left `db.lck`
-  and later installs failed. A stale lock needs two idle probes 1 s apart; lane
-  pacman shares one flock.
-- **Closing the terminal window SIGTERMs the whole run and half-commits
-  pacman's local db** (2026-09-24): the corpse is `local/<pkg>-<ver>/` missing
-  `desc`/`files`, and the headline `invalid or corrupted package` indicts the
-  LOCAL db. Repair by entry removal + `pacman -U` (`--overwrite '*'` for
-  orphans); the seam is `--local-db-check <path>`.
-- **A lane must record its own death** (2026-09-23): the dispatcher logs
-  `signal:` (INT/TERM/HUP) to `dispatcher.log`; the lane writes an honest
-  result (129/130/143) before re-raising. rc=125 with no bytes can be a lost
-  race, so the reap re-reads the result file.
-- **The parallel battery makes two things contractual** (2026-09-24): a
-  fixture must be parallel-safe (non-mutating, `$TMPDIR`-scoped, process
-  assertions scoped to its own `$fixture` path), and sibling subjects merge
-  into ONE file as `( subshell )` sections. `_LANE_STOP_GRACE_S` is an internal
-  seam, never a `GSA_*` input.
-- **User-level fish wrapper functions intercept the battery's PATH stubs**
-  (2026-09-26, corrected 2026-10-09): fish autoloads `$fish_function_path`
-  before PATH, so a user `sudo` wrapper shadows the stub (`stub_sudo` strips
-  `--preserve-env`). Never set `fish_function_path=/nonexistent-fp`: fish
-  imports it as one element and drops every function directory.
-- **Tree exclusions in `find` are `-prune`, never `-not -path`** (2026-10-09):
-  `-not -path` filters output only, so an artifact sweep descended every
-  `src/`/`pkg/`/`build/` — 11+ minutes before the first dispatch.
-  `tests/log-ownership.sh` §1b pins the boundary.
-- **A missing makepkg/lib file during a `pacman` recipe install is a
-  self-hosting race** (2026-10-09): installing house `pacman` replaces
-  `/usr/share/makepkg/*`, so a lane starting `makepkg` in that window dies on
-  `util.sh: No such file`. Verify the toolchain and resume; never "fix" the
-  victim recipe.
-- **The install gate halts at the first miss — a run sizes one offender, never
-  the class** (2026-10-21): two runs named tree-sitter/arm64 then
-  lightningcss/musl, one wall, ~45 min per peel. Census the artifact
-  (`tar -tf | grep -i musl`, `readelf -d` of every `*.node`/`*.so`) and strip
-  the class.
-- **A host-only lib census false-alarms on private libs the package itself
-  ships** (2026-10-21): `RUNPATH $ORIGIN` natives resolved nothing until the
-  gate consulted the transaction's shipped basenames (`ShippedBytes::ships`).
-  Check closure against host ∪ shipped basenames before naming an offender.
-- **Queued lanes that never start are usually the core-run-alone invariant,
-  not a stall** (2026-10-21): a `core` member starts only on an idle machine
-  and blocks other dispatch, and selected consumers chain behind
-  prerequisites. Read the group column and
-  `gsa-sched/src/machine.rs::can_dispatch`; progress truth is
-  `<state>/runs/<id>/*.result`.
-- **An automount-managed build drive can vanish with no kernel event**
-  (2026-10-22): writes spill into the mountpoint's parent tmpfs and the linker
-  dies SIGBUS. Diagnose with `findmnt`/`df`/`lsblk` (df shows the PARENT fs
-  when unmounted); long builds on removable media start from a kernel mount.
-- **A drifted soname provide refuses at install PER SE** (2026-10-22):
-  `abi-soname` is unconditional (in-run repair is fish-era; contract §M).
-  `--leaf` suppresses selection expansion, not the record-mismatch wave
-  closure; `--skip-built` claims closure members but forces real rebuilds of
-  wave providers; `--no-deps` is the retired spelling of `--leaf`.
-- **Moving `SRCDEST` strands `objects/info/alternates` in old VCS working
-  copies** (2026-10-22): the pre-move path is gone and every older tree
-  hard-fails at "Creating working copy". Sweep
-  `grep -rl "\.cache/gsa-src" $BUILD --include=alternates` and redirect each
-  to `~/.gsa-src/<name>/objects`.
-- **A build attached to a terminal scope dies with that terminal** (2026-10-22):
-  a Wayland protocol error killed the surface, its scope stopped, and every
-  descendant got SIGTERM (`interrupted-mid-build`, rc 143) — no OOM. Launch
-  long runs detached; progress truth is `<state>/runs/<id>/*.result`.
-- **A pacman hook's failing command does NOT stop the transaction without
-  `AbortOnFail`** (2026-10-22, measured): pacman logs `error: command failed to
-  execute correctly` and commits anyway — a red probe installed the broken
-  package. Probe every blocking gate at transaction level.
-- **alpm hook input is package NAMES on stdin, and a local-file `-U` is
-  skipped** (2026-10-22): `NeedsTargets` passes one name per line, no argv;
-  `Operation =` takes one line per value; the gate reads the transaction kind
-  from argv via process ancestry, never a cached twin.
-- **An `-S` plan drags the whole consumer wave of every selected provider
-  whose newest token ≠ its `:=` records** (2026-10-23): missing subscription
-  records engage the fail-toward whole-closure fallback; overlapping waves
-  merge into one. Keep heavy toolchains out by excluding wave TRIGGERS;
-  suppressing members parks installs at the ABI gate.
-- **PR comments go through `gh` only, and never before CI is green**
-  (2026-10-24): do not post through the GitHub MCP service; a confirmation
-  under red or unverified CI is wrong, and the checks table can be stale.
-- **makepkg source-cache mechanics** (2026-10-24, measured): makepkg rejects a
-  mirror whose origin URL differs ("is not a clone of"); every build fetches
-  the mirror; a partial download leaves `<file>.part` and the retry dies on
-  servers without byte ranges (delete it, `curl --retry`); a config-changing
-  retry must wipe the build workspace.
+One line per MECHANISM: the claim, then the tell or the fix. Dates,
+measurements and incident narratives belong in `docs/JOURNAL.md`; an entry that
+only restates a numbered rule belongs nowhere. Grouped by the surface it bites.
+
+### Sources, refs and freshness
+
+- **A source URL's scheme is makepkg's `get_protocol`, not a `<vcs>+` prefix**:
+  the scheme is the text before `://` minus any `+`, so bare `git://` is a git
+  checkout exactly like `git+https://`. One derivation —
+  `freshness::scheme_vcs`; `classify_source` only adds Remote-vs-Vcs.
+- **Self-consistent is not verified**: a pkgver bump without refreshed sums, or
+  `--skipchecksums` behind a quiet flag, is disclosure, not anchoring. Anchor
+  against the official `.SRCINFO` (`updpkgsums`, verify) or refuse; DEFER when
+  no official document exists.
+- **Matching a source to its checksum needs makepkg's own three rules**: sums
+  line up only within one algorithm (take the first contiguous same-algorithm
+  run; its length must equal the source list, else fail closed); the fetched
+  filename is the `name::url` override first, not the URL basename; and a VCS
+  source's sum is a git-archive hash, so mirror with `git clone --bare` — a
+  `--filter=blob:none` mirror renders `export-subst` differently.
 - **`SIGNATURE NOT FOUND` on a `?signed` git source is usually the
-  environment** (2026-10-28): the injected `GIT_CONFIG_COUNT=3` hardening makes
-  a bare cache unusable (`fatal: cannot use bare repository`), and a full
-  `$TMPDIR` kills gpg status writes. Discriminate with `GIT_CONFIG_COUNT=0 git
-  -C ~/.gsa-src/<pkg> verify-tag <tag>`.
-- **A dropped USB dock turns `build_dir` into a tmpfs impostor**
-  (2026-10-28): the unmounted tree survives as plain directories the next
-  `mkdir -p` recreates on `/run`; writes "succeed" until ENOSPC and gpg dies
-  (→ SIGNATURE NOT FOUND). Tell: `df <build_dir>` answers `tmpfs /run`. Rescue
-  `pkgs/`, `findmnt`, mount the device.
-- **A version-sync that moves a SONAME is a decision, not a build**
-  (2026-11-02, poppler 26.10): `abi-soname` refusals are unconditional and
-  run-level (rc 3, dispatch stopped). Check `.PKGINFO` provides against
-  installed before feeding a package to a wave; land with `pacman -U
-  --assume-installed <old-provide>` plus an engine re-bless, then
-  `--skip-built`.
-- **A completed build dir is not free disk; downstream builds can embed its
-  paths** (2026-11-02/03): pruning `build/qt6-base-git` broke every later Qt6
-  module through build-internals cmake paths. Prune only trees with no pending
-  consumers.
-- **An in-flight prune keep-list must come from live PIDs, never lane names**
-  (2026-11-03): the build-dir name can differ from the package id
-  (`build/zen-browser` vs lane `zen-browser-pgo`), and a name-mismatched prune
-  deleted a mid-build tree. Resolve keep-paths via
+  environment**: the injected `GIT_CONFIG_COUNT` hardening makes a bare cache
+  unusable (`fatal: cannot use bare repository`) and a full `$TMPDIR` kills gpg
+  status writes. Discriminate with `GIT_CONFIG_COUNT=0 git -C ~/.gsa-src/<pkg>
+  verify-tag <tag>`.
+- **mtime over-reports staleness**: a content-identical rewrite flags the tree.
+  Judge by content and commit time plus pkgver-vs-archive-name.
+- **VCS `--skip` freshness covers every declared ref**: skip only when each ref
+  resolves to the revision recorded for that archive; an unanswerable ref (6
+  attempts, 2/5/10/20/40 s) PARKS the recipe — lane rc 99, `upstream-unverified`.
+- **The VCS baseline is read from the build's `$srcdir` working copy**, then the
+  package root, then an exported `SRCDEST` — never the reverse: a mirror carries
+  the default HEAD, not the built ref.
+- **A pkgrel floor is unsound on version-synced recipes**: the provider resets
+  `pkgrel=1` on a pkgver advance, so pin the fix's content greps, never `>= N`.
+
+### Store, workspace and builders
+
+- **`gsa -Sy` refreshes only when the resolved workspace IS the store**
+  (`sync_phase` compares `root == store`): from a repo cwd it refreshes nothing,
+  so a pushed fix stays invisible to builds. Run it from a neutral cwd and
+  verify the store's own `git log -1`.
+- **makepkg WRITES the recipe it touches, and a run writes its workspace**:
+  `--nobuild` rewrites `pkgver=` in place and fetch-side rewriting is
+  workspace-local — against the git tree it dirties every PKGBUILD the run
+  touches and leaves `.SRCINFO` stale. Sweep in a COPY (a global `SRCDEST`
+  keeps the cache shared) or from the store; regenerate `.SRCINFO` for
+  everything a run touched.
+- **Scratch inside the repository is doubly corrupting**: cwd discovery answers
+  with the real topology and a sync fixture rewrites real recipes. Keep it
+  outside the tree and outside `/tmp`; the engine refuses a `TMPDIR` inside it.
+- **A twin sync must cover `config/`, and a `--leaf` selection its members'
+  unmet HOUSE prerequisites** — otherwise an edge fix sorts wrongly and makepkg
+  installs STOCK replacements. Include the unmet prereqs or use a group run.
+- **Moving `SRCDEST` strands `objects/info/alternates`**: older working copies
+  hard-fail at "Creating working copy". Sweep
+  `grep -rl "\.cache/gsa-src" $BUILD --include=alternates` and redirect each.
+- **Every path crossing into the makepkg child must be absolute**: makepkg runs
+  with the recipe's cwd, so a relative `--state-dir` yields
+  `PACMAN=.state/locks/pacman-shim` and `makepkg -sf` dies "An unknown error has
+  occurred."
+- **makepkg source-cache mechanics**: it rejects a mirror whose origin URL
+  differs ("is not a clone of"), re-fetches every build, leaves `<file>.part` on
+  a partial download (servers without byte ranges then fail — delete it, `curl
+  --retry`), and a config-changing retry must wipe the build workspace.
+
+### Install, ABI and the record
+
+- **A completeness check must not bless the empty set**: `missing.is_empty()`
+  over an empty expectation reads as "all covered". Zero archives is always
+  `nothing-built` → build.
+- **A cache glob `name-*.pkg.tar.*` matches detached `.sig` files and
+  prefix-twin names** (`linux-cachyos` vs `linux-cachyos-headers-*`). Whitelist
+  the real extensions and reconstruct the name by right-split; never make a
+  check-transport failure fatal.
+- **A drifted soname provide refuses at install PER SE**: `abi-soname` is
+  unconditional (contract §M). `--leaf` suppresses selection expansion, not the
+  record-mismatch wave closure, `--skip-built` still forces wave providers to
+  rebuild, and `--no-deps` is the retired `--leaf`.
+- **An `-S` plan drags the consumer wave of every selected provider whose newest
+  token ≠ its `:=` records** (missing records engage the whole-closure
+  fallback; waves merge). Exclude wave TRIGGERS to keep heavy toolchains out —
+  suppressing members parks at the ABI gate.
+- **A version-sync that moves a SONAME is a decision, not a build**:
+  `abi-soname` refuses unconditionally and run-level (rc 3). Compare `.PKGINFO`
+  provides with installed first, then land `pacman -U --assume-installed
+  <old-provide>` plus an engine re-bless.
+- **The install gate halts at the first miss, so one run sizes one offender** —
+  expect a wall per peel. Census the artifact (`tar -tf`, `readelf -d` of every
+  `*.node`/`*.so`) and strip the whole class.
+- **A lib census is host ∪ shipped, by exact path**: private libs the package
+  itself ships (`RUNPATH $ORIGIN` natives) resolve nothing until the gate
+  consults `ShippedBytes::ships`, and `DT_NEEDED` records a PATH for a
+  SONAME-less DSO linked by absolute path, so map NEEDED→package by exact
+  owned/shipped paths, never basenames (`install_needed_probe`;
+  `tests/abi-postinstall-probe.sh` I/J).
+- **An `-S` of an LLVM-ABI provider replaces SONAMEs the LIVE GUI stack
+  dlopens**: stock mesa dlopening `libLLVM.so.NN` under a house `llvm-libs-git`
+  is a black desktop and a hard freeze. Stop the GUI; a black screen is first a
+  `libLLVM*` check.
+- **alpm hook input is names on stdin, a local-file `-U` is skipped, and a
+  failing hook does NOT abort without `AbortOnFail`**: `NeedsTargets` gives one
+  name per line (no argv), `Operation =` one line per value, the transaction
+  kind comes from argv ancestry — and pacman logs `error: command failed to
+  execute correctly` and commits anyway. Probe gates at transaction level.
+- **A multi-output index instance is a SET of per-output token rows, and a `-`
+  token is NO token**: a fold keyed `(recipe_id, instance)` keeps only the last
+  output, so every split rebuild reads as a token move and every placeholder as
+  a mismatch. One verdict: `gsa_abi::records_moved`.
+- **Binpkg index rows share one `PKGDEST` path across same-version rebuilds**:
+  retention deletes only files no surviving row references, and an `abi-repair`
+  marker is consumed only by its own recipe's install.
+- **IgnorePkg closure drifts short with every addition**: registration is
+  dynamic (rule 9), so an install run registers accepted archives itself. Keep
+  the diff empty; back up `/etc/pacman.conf` first.
+- **The resume suggestion must include the failed package** — the resume line
+  and its remaining count once excluded it (`tests/resume-command.sh` pins it).
+- **A fourth derivation always drifts — make the second one a projection**: the
+  dashboard is a `Progress` fold, the roots resolve through
+  `config::resolve` with provenance, an early exit is a typed `Exit` behind one
+  renderer (rules 72–74).
+
+### Signals, lanes and runs
+
+- **A signal storm corrupts what it kills**: one TERM per group, one 30 s
+  grace, one logged SIGKILL (a TERM every 50 ms left `db.lck` behind); a stale
+  lock needs two idle probes 1 s apart, and lane pacman shares one flock. A run
+  killed mid-transaction leaves `local/<pkg>-<ver>/` without `desc`/`files`,
+  and `invalid or corrupted package` then indicts the LOCAL db — repair by
+  entry removal plus `pacman -U` (`--overwrite '*'` for orphans), seam
+  `--local-db-check <path>`.
+- **A lane records its own death**: `dispatcher.log` gets `signal:`, and the
+  lane writes an honest 129/130/143 before re-raising. rc=125 with no bytes is
+  a lost race — the reap re-reads the result file.
+- **A build attached to a terminal scope dies with that terminal**: a
+  compositor/protocol error stops the scope and SIGTERMs every descendant
+  (`interrupted-mid-build`, rc 143), with no OOM behind it. Launch detached;
+  progress truth is `<state>/runs/<id>/*.result`.
+- **Queued lanes that never start are the core-run-alone invariant, not a
+  stall**: a `core` member waits for an idle machine and blocks dispatch, and
+  consumers chain behind prerequisites. Read the group column and
+  `machine.rs::can_dispatch`.
+- **A swap window breaks children in ways that look like recipe bugs**: a child
+  spawned during `pacman -U` dies in the loader (`error while loading shared
+  libraries`); a lane starting `makepkg` while house `pacman` replaces
+  `/usr/share/makepkg/*` dies on `util.sh: No such file`; snap-pac's pre-hook
+  fails 127 until the post-hook succeeds (its `Command failed: snapper …`
+  notification is filterable while `db.lck` exists). Transient: verify the
+  toolchain and resume, never fix the victim.
+- **`gsa -S --leaf` can be hijacked wholesale by the GCC identity gate**: after
+  a compiler-identity change a leaf run dispatches the toolchain block and
+  unrelated lanes. Until fixed, recipe one-offs use plain `makepkg`
+  (`GIT_CONFIG_COUNT=0`, `PKGDEST` outside the repo) plus one `pacman -U`.
+
+### Build cache and disk
+
+- **The path is not the filesystem — a mount can be stale or phantom**:
+  `mountpoint -q` passes on a stale mount of an OFFLINE device (`mkdir` returns
+  EIO while reads come from page cache); an unmounted drive's writes land in
+  `/run`/`/tmp` until ENOSPC reads as "No space left" with no disk error; an
+  automount can vanish silently (the linker dies SIGBUS); a dropped dock leaves
+  `build_dir` as a tmpfs impostor whose writes "succeed" until ENOSPC and gpg
+  dies. Tell: `df <path>` answers the PARENT or `tmpfs /run`. Guard with the
+  real operation (`mkdir -p … 2>/dev/null`), never with `mountpoint`.
+- **A deny-list and a delete-list are the same list**: the root archive set and
+  the cleanup matcher drift apart otherwise (36 MB of upstream archives once
+  got committed). One list — `gsa-maint/src/prune.rs` `download_patterns` —
+  cross-checked in both directions by `tests/cleanup-extensions.sh`.
+- **A completed build dir is not free disk**: downstream builds embed
+  build-internals paths, so prune only trees with no pending consumers.
+- **An in-flight prune keep-list comes from live PIDs, never lane names**: the
+  build-dir name can differ from the package id (`build/zen-browser` vs lane
+  `zen-browser-pgo`). Resolve keep-paths via
   `ls -l /proc/<makepkg-pid>/cwd`.
-- **`gsa -S --leaf` can be hijacked wholesale by the GCC identity gate**
-  (2026-11-03): a `--leaf glib2-git` run dispatched the toolchain block and
-  unrelated lanes after a compiler-identity change, ignoring the selection.
-  Until fixed, recipe one-offs go through plain `makepkg`
-  (`GIT_CONFIG_COUNT=0`, `PKGDEST` outside the repo) and one `pacman -U`.
+
+### Fixtures
+
+- **Re-contract a needle from a captured sample, never from memory of the
+  message**: `output::squash` maps whitespace runs to `_` and keeps punctuation
+  verbatim. Capture first, paste the needle.
+- **A no-message event must render nothing, not an empty line**: a `{line}\n`
+  frame turns "renders nothing" into a stray blank per tick in machine streams.
+  Return `String::new()` before the frame and pin the empty string.
+- **Check which vocabulary a captured fixture file carries before
+  re-contracting its needles**: an anchor in the wrong vocabulary matches
+  nothing and `set -e` exits green over zero lines. Sweep WHO produces each
+  captured file.
+- **Fixture stub argv shapes ARE the contract**: a helper is safe only when the
+  forked argv is char-for-char identical (adding `--` to `pacman -Q NAME` once
+  disabled the ABI-batch refusal). Probe oracles stay separator-agnostic
+  (`OP [--] NAME`).
+- **Fixture scale pins are probe/CALL counts and EVENT waits, never
+  wall-clock**: wait on a marker or a log line; a `sleep 1.5` races the
+  pre-dispatch phase under parallelism.
+- **A fixture pacman oracle counts TRANSACTIONS, never invocations**: the
+  toolchain preflight's read-only `pacman -Q rust-git` probe runs on every
+  build-family run — assert on `pacman -U` lines or tolerate exactly that line.
+- **The parallel battery makes two things contractual**: every fixture is
+  parallel-safe (non-mutating, `$TMPDIR`-scoped, assertions scoped to its own
+  `$fixture`), and sibling subjects merge into ONE file as `( subshell )`
+  sections. `_LANE_STOP_GRACE_S` is internal, never a `GSA_*` input.
+- **The battery is unsafe beside a live `-S`/`-Ua`**: install preflights read
+  the REAL `db.lck`, so a live `pacman -U` makes fixtures refuse. Run batteries
+  between builds.
+- **User-level fish wrapper functions intercept the battery's PATH stubs**: fish
+  autoloads `$fish_function_path` before PATH, so a user `sudo` wrapper shadows
+  the stub. Never set `fish_function_path=/nonexistent-fp` — fish imports it as
+  one element and drops every function directory.
+- **GNU tar emits byte-identical archives for same-content repeats within one
+  second**: a fixture modelling "replaced bytes" must change the payload.
+- **Tree exclusions in `find` are `-prune`, never `-not -path`**: the latter
+  filters output only and the sweep descends every `src/`/`pkg/`/`build/`
+  (`tests/log-ownership.sh` §1b pins it).
+- **A diagnostic on captured stdout is swallowed**: write it to stderr. A typo
+  is never auto-corrected (≤3 candidates); a range indexes the SELECTION, not
+  the whole set.
 
 ## 6 · Queued
 
-- **Snapshot pins in `@core`/`@build-tools` (IN PROGRESS, opened 2026-11-09).**
+- **Snapshot pins in `@core`/`@build-tools` (QUEUED for the owner's weekend
+  full rebuild, opened 2026-11-09).**
   136 recipes whose source ref moves (113 floating + 23 `#branch=`-pinned) take
   `#commit=` = the last commit at or before Monday 00:00 UTC. **Nothing is
   renamed**: the recipe, its `pkgname`s and its `provides=` stay `-git`, so
   pacman, topology, IgnorePkg and the index see no move at all. The snapshot
-  name is a FRONTEND surface — `gsa` must accept `<id>-snapshot` as an input
-  alias for a pinned `<id>` (rc 2, naming the ref, when it is not one) — which
-  is the engine half that lands FIRST; the `-Sy` provider that advances the pins
-  lands LAST. `gsa-pm` stays exempt. Reconciliation and waves: the recipe
-  repository's `docs/snapshot-expansion.md`. Blocked on: nothing — W0 (the
-  alias) is ready.
+  name is a FRONTEND surface — `gsa` accepts `<id>-snapshot` as an input alias
+  for a pinned `<id>` (rc 2, naming the ref, when it is not one) — and that
+  engine half (W0) LANDED 2026-11-09 (`select::resolve_snapshot_alias`, contract
+  §C.1, `tests/project.sh` §9). The `-Sy` provider that advances the pins (W5)
+  is the remaining engine work and lands LAST, after the recipe waves.
+  State: W1 (64 fan-out ≤ 4 trackers) is PINNED with fresh `.SRCINFO` but not
+  built and not installed — the owner deferred every real build to the weekend
+  campaign ("do not do real build test, i am not ready"), so archives from the
+  discarded validation pass are stale and untrusted. W2–W4 (72 recipes) are
+  unpinned. `gsa-pm` stays exempt. Reconciliation and waves: the recipe
+  repository's `docs/snapshot-expansion.md` §8.
+  Blocked on: the owner's weekend rebuild (build + install W1, then W2–W4).
 
 ## 7 · Environment and shell boundaries
 
