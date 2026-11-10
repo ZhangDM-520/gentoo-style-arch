@@ -516,8 +516,13 @@ passes live in the gcc body ALONE — `-fipa-pta` (clang hard-rejects) and
 they are gcc defaults at `-O3`. `FFLAGS` is gcc's; `LTOFLAGS` is `-flto=auto`
 for gcc and `-flto=thin` for clang.
 
-`RUSTFLAGS` (`-C opt-level=3 -C target-cpu=native`) is UNIVERSAL, not
-per-family: rustc's target is not a gcc/clang choice. The composite ends with
+`RUSTFLAGS` (`-C opt-level=3 -C target-cpu=native -C link-arg=-fuse-ld=mold`)
+is UNIVERSAL, not per-family: rustc's target is not a gcc/clang choice. The
+link arg belongs to the same body because **cargo never reads `LDFLAGS`** — a
+recipe that only runs `cargo` linked with the default bfd while every C object
+in the same build went through mold. `-C link-arg` reaches rustc's default
+linker driver (cc), so the mold token is the one the family bodies ship, and a
+test keeps the two equal. The composite ends with
 `export RUSTFLAGS` because makepkg exports only its own buildenv list
 (`CPPFLAGS CFLAGS CXXFLAGS LDFLAGS`, plus `FFLAGS` through the fortran
 buildenv) — without that line a child `cargo` keeps its generic target and the

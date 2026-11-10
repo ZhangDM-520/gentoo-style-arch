@@ -42,7 +42,12 @@ SRCEXT='.src.tar.gz'
 # RUSTFLAGS (its buildenv list is CPPFLAGS/CFLAGS/CXXFLAGS/LDFLAGS), so
 # `render` exports it after the bodies — otherwise cargo, a child process,
 # never sees it. A recipe that assigns RUSTFLAGS itself still wins.
-RUSTFLAGS=\"-C opt-level=3 -C target-cpu=native\"
+# The link arg is the other half of the same problem: cargo never reads
+# LDFLAGS either, so a recipe that only runs cargo linked with the default
+# bfd while every C object in the same build went through mold. rustc's
+# default linker driver is cc, so `-C link-arg` reaches the driver's
+# `-fuse-ld=`; the tests keep it equal to what the family bodies ship.
+RUSTFLAGS=\"-C opt-level=3 -C target-cpu=native -C link-arg=-fuse-ld=mold\"
 
 STRIP_BINARIES=\"--strip-all\"
 STRIP_SHARED=\"--strip-unneeded\"
@@ -165,6 +170,35 @@ mod tests {
         assert!(!CLANG.contains("FFLAGS="));
         assert!(UNIVERSAL.contains("RUSTFLAGS="));
         assert!(UNIVERSAL.contains("-C target-cpu=native"));
+    }
+
+    #[test]
+    fn the_rust_linker_tracks_the_c_bodies_linker() {
+        // cargo never reads LDFLAGS, so a recipe that only runs `cargo` used
+        // to link with the default bfd while every C object went through
+        // mold. The universal RUSTFLAGS carries the same `-fuse-ld=` the
+        // family bodies ship, so one body decides the linker for both
+        // languages and a body edit cannot leave Rust behind.
+        let rustflags = UNIVERSAL
+            .lines()
+            .find(|line| line.starts_with("RUSTFLAGS=\""))
+            .expect("the universal body assigns RUSTFLAGS");
+        for body in [GCC, CLANG] {
+            let ldf = body
+                .lines()
+                .find(|line| line.starts_with("LDFLAGS=\""))
+                .expect("the family body assigns LDFLAGS");
+            let linker = ldf
+                .trim_start_matches("LDFLAGS=\"")
+                .split_whitespace()
+                .find_map(|token| token.strip_prefix("-fuse-ld="))
+                .expect("the family body names a linker");
+            let rust_arg = format!("-C link-arg=-fuse-ld={linker}");
+            assert!(
+                rustflags.contains(&rust_arg),
+                "RUSTFLAGS does not link with {linker}: {rustflags}"
+            );
+        }
     }
 
     #[test]
@@ -337,7 +371,7 @@ mod render_tests {
         // body would be lost for every recipe that does not prefix cargo.
         let sources = vec![std::path::PathBuf::from("/etc/gsa/gcc-makepkg.conf")];
         let body = render(Toolchain::Gcc, &sources);
-        let set = body.find("RUSTFLAGS=\"-C opt-level=3 -C target-cpu=native\"").unwrap();
+        let set = body.find("\nRUSTFLAGS=\"").expect("the universal body assigns RUSTFLAGS");
         let site = body.find("/etc/gsa/gcc-makepkg.conf").unwrap();
         let export = body.find("\nexport RUSTFLAGS\n").unwrap();
         assert!(set < site && site < export, "{body}");

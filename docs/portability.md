@@ -126,10 +126,11 @@ reader is not mis-tuned for their machine (on this host it resolves to
 The GCC-only passes are in the gcc body alone: `-fipa-pta` (clang hard-rejects
 it) and `-fprefetch-loop-arrays` (clang accepts the spelling and silently
 ignores it). `-fira-hoist-pressure` and `-fstack-reuse=all` are NOT shipped —
-both are gcc defaults at `-O3`. `RUSTFLAGS` (`-C target-cpu=native`) is
-universal and `export`ed by the composite, because makepkg exports only its own
-buildenv list and a recipe that just runs `cargo` would otherwise keep a
-generic target.
+both are gcc defaults at `-O3`. `RUSTFLAGS` (`-C opt-level=3 -C
+target-cpu=native -C link-arg=-fuse-ld=mold`) is universal and `export`ed by
+the composite, because makepkg exports only its own buildenv list and a recipe
+that just runs `cargo` would otherwise keep a generic target — and, since
+cargo never reads `LDFLAGS`, the default bfd linker as well.
 
 A different target CPU, or any single decision reversed, is a **site edit of
 that file**, not a flag on the command line; `GSA_TARGET_CPU` stays what it

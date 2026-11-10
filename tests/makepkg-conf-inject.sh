@@ -13,11 +13,14 @@ set -euo pipefail
 #   D. the `srcdest` key reaches the composite as an engine-owned path
 #   E. a clang selection writes its OWN composite (no FFLAGS), while the
 #      UNIVERSAL `RUSTFLAGS` rides both families (rustc is not a C family)
+#      and carries the same `-fuse-ld=` as the family LDFLAGS — cargo never
+#      reads LDFLAGS, so a Rust-only package would link with bfd
 #   F. the composite EXPORTS `RUSTFLAGS`: a child process (cargo) sees it,
 #      which makepkg's own buildenv list never does for that variable
 #   G. each family's shipped CFLAGS/CXXFLAGS are accepted by that family's
-#      compiler (GCC-only passes stay out of the clang body) — a missing
-#      compiler is a loud SKIP, never a pass
+#      compiler (GCC-only passes stay out of the clang body) and the
+#      universal RUSTFLAGS by rustc — a missing compiler is a loud SKIP,
+#      never a pass
 #   H. `--print-conf <family>` is byte-identical to the body the composite
 #      carries, which is what `gsa-pm` installs into `/etc/gsa`
 #
@@ -117,10 +120,11 @@ run_engine "$ws" -B --leaf p2
 clang_composite="$build_conf/lane-makepkg-clang.conf"
 [ -f "$clang_composite" ] || fail "E: the clang composite is missing at $clang_composite"
 # RUSTFLAGS is UNIVERSAL (rustc's target is not a gcc/clang choice), so both
-# composites carry the same native value…
+# composites carry the same native value, and the `-C link-arg` names the same
+# linker the family LDFLAGS ships — cargo ignores LDFLAGS entirely.
 for c in "$composite" "$clang_composite"; do
-    grep -Fq 'RUSTFLAGS="-C opt-level=3 -C target-cpu=native"' "$c" ||
-        fail "E: $c lost the universal native RUSTFLAGS" "$c"
+    grep -Fq 'RUSTFLAGS="-C opt-level=3 -C target-cpu=native -C link-arg=-fuse-ld=mold"' "$c" ||
+        fail "E: $c lost the universal native/mold RUSTFLAGS" "$c"
     grep -Fq -- '-march=native -mtune=native' "$c" ||
         fail "E: $c does not ship a native -march/-mtune" "$c"
 done
@@ -146,6 +150,8 @@ child_env=$(env -u RUSTFLAGS bash --noprofile --norc -c '
 ' _ "$composite")
 printf '%s\n' "$child_env" | grep -Fq 'target-cpu=native' ||
     fail 'F: a child process does not inherit RUSTFLAGS from the composite:'$'\n'"$child_env"
+printf '%s\n' "$child_env" | grep -Fq -- '-C link-arg=-fuse-ld=mold' ||
+    fail 'F: the child process RUSTFLAGS lost the mold link arg:'$'\n'"$child_env"
 
 # ── G. each family's flags are accepted by that family's compiler ───────────
 # The bodies are shipped text, so the only proof that clang will not choke on
@@ -174,6 +180,28 @@ compile_probe gcc c "$composite"
 compile_probe gcc c++ "$composite"
 compile_probe clang c "$clang_composite"
 compile_probe clang c++ "$clang_composite"
+
+# The universal body also names a Rust LINK argument, which only a real link
+# can prove: rustc accepts any `-C link-arg` string, and a driver that cannot
+# run the named linker fails at the end. Absent rustc or mold is a loud SKIP,
+# because the same host could not build a Rust package at all.
+if ! command -v rustc >/dev/null 2>&1; then
+    printf 'makepkg-conf-inject: SKIP section G for rustc (rustc not installed)\n' >&2
+elif ! command -v mold >/dev/null 2>&1; then
+    printf 'makepkg-conf-inject: SKIP section G for rustc (mold not installed)\n' >&2
+else
+    rustflags=$(bash --noprofile --norc -c '
+      set +u
+      source "$1" >/dev/null 2>&1
+      printf %s "${RUSTFLAGS:-}"
+    ' _ "$composite")
+    [ -n "$rustflags" ] || fail 'G: the composite sets no RUSTFLAGS' "$composite"
+    printf 'fn main() {}\n' >"$fixture/g.rs"
+    # Word-splitting is the point: the flags are a shell-assigned list.
+    # shellcheck disable=SC2086
+    rustc --edition 2021 -o "$fixture/g-rust" $rustflags "$fixture/g.rs" 2>"$fixture/g-rust.log" ||
+        fail 'G: rustc rejects its own shipped RUSTFLAGS:'$'\n'"$(cat "$fixture/g-rust.log")"
+fi
 
 # ── H. --print-conf IS the body the composite carries ───────────────────────
 for family in gcc clang; do

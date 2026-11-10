@@ -21,8 +21,9 @@ read.
 
 ## Decisions
 
-- **Per compiler, not per package.** Two families, two bodies. `RUSTFLAGS`
-  rides the clang body and `FFLAGS` the gcc body, so a recipe never needs a
+- **Per compiler, not per package.** Two families, two bodies. `FFLAGS` rides
+  the gcc body and the universal body carries `RUSTFLAGS` (rustc's target and
+  link arg are neither a gcc nor a clang choice), so a recipe never needs a
   flag drop-in of its own.
 - **`--config`, not environment variables.** makepkg's
   `source_makepkg_config` lets a config-file assignment beat the environment,
