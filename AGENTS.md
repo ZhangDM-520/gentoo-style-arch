@@ -630,6 +630,14 @@ only restates a numbered rule belongs nowhere. Grouped by the surface it bites.
   name per line (no argv), `Operation =` one line per value, the transaction
   kind comes from argv ancestry — and pacman logs `error: command failed to
   execute correctly` and commits anyway. Probe gates at transaction level.
+- **A transaction gate's attribution must be free on the clean path and the
+  loader cache must be indexed, not rescanned**: a fatal line that only names
+  the symptom is half a finding — say WHOSE package is behind it (the
+  `abi-need-check` summary reads `<stem>=` out of the side-car `binpkg.jsonl`
+  in one pass, names only, nothing read when there are no findings, never a
+  `gsa`/`pacman` spawn). And `ldconfig -p` is ~5.8k rows: build the map once
+  (103 ms per miss against 0.2 ms when the old loop rescanned per soname — a
+  100-miss payload went 9.25 s → 0.62 s).
 - **A multi-output index instance is a SET of per-output token rows, and a `-`
   token is NO token**: a fold keyed `(recipe_id, instance)` keeps only the last
   output, so every split rebuild reads as a token move and every placeholder as

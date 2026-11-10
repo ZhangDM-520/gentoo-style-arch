@@ -59,6 +59,16 @@ set -uo pipefail
 #
 # Findings look like:
 #   abi-need-check: qt6-webengine: 'QtWebEngineProcess' needs 'libicuuc.so.78' — no file resolves it (fatal)
+#   abi-need-check: gsa-owned provider behind: icu-git
+#
+# The second line is ATTRIBUTION, printed once at the end and only when the
+# run has findings: the missing soname's family stem is looked up in the
+# side-car binpkg index (${GSA_STATE_DIR:-/var/lib/gsa}/index/binpkg.jsonl,
+# overridable with $GSA_ABI_NEED_CHECK_BINPKG, one pass, names only). It
+# answers the question the fatal line leaves open — whether the provider is a
+# gsa-managed package the tree is behind on, the 2026-11-10 openssl 3.6.5 vs
+# core 4.1.0 case — without spawning gsa or pacman. A clean transaction
+# collects no stems and therefore reads no index.
 #
 # Exit status: 0 clean, 1 fatal findings, 2 usage or environment error.
 # --quiet suppresses the clean lines; findings are always printed.
@@ -419,17 +429,19 @@ host_resolves() {
     # (audit root cause 1: a 64-bit consumer is never satisfied by a lib32
     # row) and the file must exist (audit root cause 3: a cache row pointing
     # at nothing resolves nothing).
-    if ((ld_cache_loaded == 0)); then
-        ld_cache=$(ldconfig -p 2>/dev/null || true)
-        ld_cache_loaded=1
-    fi
-    local line name tag arrow
-    while IFS= read -r line; do
-        [[ $line == *' => '* ]] || continue
-        IFS=$' \t' read -r name tag arrow path <<<"$line" || continue
-        [[ $arrow == '=>' && $name == "$soname" ]] || continue
-        tag=${tag#\(}
-        tag=${tag%\)}
+    load_ld_cache
+    local entries entry tag
+    entries=${ld_cache_by_name[$soname]:-}
+    while [[ -n $entries ]]; do
+        if [[ $entries == *';'* ]]; then
+            entry=${entries%%;*}
+            entries=${entries#*;}
+        else
+            entry=$entries
+            entries=''
+        fi
+        tag=${entry%%|*}
+        path=${entry#*|}
         case $class in
         ELF64) [[ $tag == *x86-64* ]] || continue ;;
         ELF32) [[ $tag != *x86-64* ]] || continue ;;
@@ -437,18 +449,76 @@ host_resolves() {
         if [[ -e $path ]]; then
             return 0
         fi
-    done <<<"$ld_cache"
+    done
     return 1
 }
 
-findings=0
-idx=0
 # ld.so.cache truth, loaded once (spawn count is the whole cost): the
 # loader's search includes the ld.so.conf.d dirs and filename-indexed
 # libraries that no dir scan sees (R's libR.so has NO DT_SONAME —
 # /usr/lib/R/lib/libR.so is cached under its file name; measured 2026-10-30).
+#
+# Indexed by NAME into an associative array at first use. The cache runs to
+# ~5.8k rows on this host and the earlier shape rescanned EVERY row per
+# unresolved soname — measured 2026-11-11: 103 ms per miss against 0.2 ms for
+# an array hit, and misses are exactly what a fatal transaction is full of.
+# The value is a ';'-joined list of `tag|path` entries (one name may appear
+# under several class tags); the per-entry class/file test is unchanged.
 ld_cache_loaded=0
-ld_cache=''
+declare -A ld_cache_by_name=()
+load_ld_cache() {
+    ((ld_cache_loaded)) && return 0
+    local line name tag arrow path
+    while IFS= read -r line; do
+        [[ $line == *' => '* ]] || continue
+        IFS=$' \t' read -r name tag arrow path <<<"$line" || continue
+        [[ $arrow == '=>' ]] || continue
+        tag=${tag#\(}
+        tag=${tag%\)}
+        ld_cache_by_name[$name]+="${ld_cache_by_name[$name]:+;}$tag|$path"
+    done < <(ldconfig -p 2>/dev/null)
+    ld_cache_loaded=1
+}
+
+# report_owned_providers — name the gsa-managed package behind a missing
+# soname family. Call ABORT PATH ONLY: `missing_stems` is populated in the same
+# block that counts a finding, so gating the call on `findings` keeps a clean
+# transaction from opening the index at all — that is what keeps a
+# PreTransaction gate affordable, and the fixture pins it with a FIFO (an
+# unconditional read blocks). Names only — no version, no command, no
+# per-finding line: the fatal line is the finding and this says whose tree
+# package is behind it.
+#
+# The index is line-delimited JSON (recipe_id, pkgnames, version, provides), so
+# a row owns a stem when its provides array spells `<stem>=`; the soname stems
+# are matched, never the versioned names, because a provider declares
+# `libfoo.so` and makepkg versions it from the shipped ELF.
+binpkg_index=${GSA_ABI_NEED_CHECK_BINPKG:-${GSA_STATE_DIR:-/var/lib/gsa}/index/binpkg.jsonl}
+report_owned_providers() {
+    [[ -r $binpkg_index ]] || return 0
+    local stem stems='' owned
+    for stem in "${!missing_stems[@]}"; do
+        stems+="${stems:+ }$stem"
+    done
+    owned=$(awk -v stems="$stems" '
+        BEGIN { n = split(stems, S, " ") }
+        {
+            for (i = 1; i <= n; i++) {
+                if (index($0, "\"" S[i] "=") == 0) continue
+                if (match($0, /"recipe_id":"[^"]*"/)) {
+                    print substr($0, RSTART + 13, RLENGTH - 14)
+                }
+                break
+            }
+        }' "$binpkg_index" 2>/dev/null | sort -u | head -8)
+    [[ -n $owned ]] || return 0
+    printf 'abi-need-check: gsa-owned provider behind: %s\n' \
+        "$(printf '%s\n' "$owned" | paste -sd' ' -)"
+}
+
+findings=0
+idx=0
+declare -A missing_stems=()
 
 for root in "${roots[@]}"; do
     pkg=${pkgnames[$idx]}
@@ -527,6 +597,11 @@ for root in "${roots[@]}"; do
                 printf "abi-need-check: %s: '%s' needs '%s' — no file resolves it (fatal)\n" \
                     "$pkg" "${relpath##*/}" "$needed"
                 pkg_findings=$((pkg_findings + 1))
+                # Attribution input for the summary: the family stem, never the
+                # versioned name.
+                stem=$needed
+                while [[ $stem =~ \.[0-9]+$ ]]; do stem=${stem%.*}; done
+                missing_stems[$stem]=1
             fi
         done
     done <<<"$blob"
@@ -537,6 +612,7 @@ for root in "${roots[@]}"; do
 done
 
 if ((findings)); then
+    report_owned_providers
     exit 1
 fi
 exit 0

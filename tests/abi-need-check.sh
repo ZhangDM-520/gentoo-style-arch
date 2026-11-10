@@ -422,4 +422,150 @@ PATH="$tmp/stubbin:$PATH" run out err -- --quiet "$tmp/e" || status=$?
 [[ $out == *"'dangling-consumer' needs 'libdang.so.5'"* ]] || fail "dangling cache row not flagged: $out"
 [[ $out != *'libgsc.so.3'* ]] || fail "cache-visible soname not resolved: $out"
 
+# ── 15. attribution: name the gsa-managed provider behind a finding ──────
+# The fatal line leaves open whether the provider is a package the gsa tree
+# manages and is behind on (2026-11-10: openssl 3.6.5 here vs core 4.1.0, so
+# every rebuilt consumer needed libcrypto.so.4 and nothing resolved it). The
+# checker answers it from the side-car binpkg index — one pass over
+# line-delimited JSON, NAMES ONLY (never a version, never a command) — and
+# only on the abort path: a clean run collects no stems and reads no index.
+make_bin "$tmp/i/usr/bin" owned-consumer libmissing-fixture.so.42
+make_pkgroot "$tmp/i" pkg-owned
+printf '%s\n' \
+    '{"op":"row","recipe_id":"fixture-lib","pkgbase":"fixture-lib","version":"0:1.0.0-1","provides":["libmissing-fixture.so=1-64"],"instance":1}' \
+    '{"op":"row","recipe_id":"other-lib","pkgbase":"other-lib","version":"0:2.0.0-1","provides":["libother.so=2-64"],"instance":1}' \
+    >"$tmp/index.jsonl"
+status=0
+GSA_ABI_NEED_CHECK_BINPKG="$tmp/index.jsonl" run out err -- "$tmp/i" || status=$?
+[[ $status == 1 ]] || fail "attributed case exited $status (want 1): $err"
+[[ $out == *"'owned-consumer' needs 'libmissing-fixture.so.42'"* ]] ||
+    fail "fatal line lost under attribution: $out"
+[[ $out == *'gsa-owned provider behind: fixture-lib'* ]] ||
+    fail "attribution missing: $out"
+[[ ${out##*$'\n'} == 'abi-need-check: gsa-owned provider behind: fixture-lib' ]] ||
+    fail "attribution is not the closing summary line: $out"
+[[ $out != *'other-lib'* ]] || fail "unrelated index row reported: $out"
+
+# --quiet keeps findings, so it keeps the attribution with them.
+status=0
+GSA_ABI_NEED_CHECK_BINPKG="$tmp/index.jsonl" run out err -- --quiet "$tmp/i" || status=$?
+[[ $status == 1 ]] || fail "quiet attributed case exited $status (want 1): $err"
+[[ $out == *'gsa-owned provider behind: fixture-lib'* ]] ||
+    fail "quiet mode dropped the attribution: $out"
+
+# Unattributed: the index owns a DIFFERENT stem. The finding stands and the
+# summary invents no name — matching is per stem, never "some row exists".
+make_bin "$tmp/j/usr/bin" unowned-consumer libunowned-fixture.so.7
+make_pkgroot "$tmp/j" pkg-unowned
+status=0
+GSA_ABI_NEED_CHECK_BINPKG="$tmp/index.jsonl" run out err -- "$tmp/j" || status=$?
+[[ $status == 1 ]] || fail "unowned case exited $status (want 1): $err"
+[[ $out == *"'unowned-consumer' needs 'libunowned-fixture.so.7'"* ]] ||
+    fail "unowned finding lost: $out"
+[[ $out != *'gsa-owned provider behind'* ]] || fail "attribution invented: $out"
+
+# No index at all (fresh host, engine never ran): still fatal, still quiet
+# about ownership, never a crash.
+status=0
+GSA_ABI_NEED_CHECK_BINPKG="$tmp/no-such-index.jsonl" run out err -- "$tmp/j" || status=$?
+[[ $status == 1 ]] || fail "missing-index case exited $status (want 1): $err"
+[[ $out != *'gsa-owned provider behind'* ]] || fail "attribution without an index: $out"
+[[ $out == *"'unowned-consumer' needs 'libunowned-fixture.so.7'"* ]] ||
+    fail "missing index swallowed the finding: $out"
+
+# Clean payload: the attribution is gated on the call site, so the index is
+# never OPENED. A missing path proves nothing (awk would swallow it under
+# 2>/dev/null and print nothing anyway), so the index is a FIFO: any read
+# blocks until a writer appears, which makes an unconditional read observable
+# as a hang. The property has ONE owner — the `if ((findings))` call site — so
+# this catches its removal on its own.
+mkfifo "$tmp/index.fifo"
+status=0
+GSA_ABI_NEED_CHECK_BINPKG="$tmp/index.fifo" \
+    timeout 10 "$tool" "$tmp/a" >"$tmp/clean.out" 2>&1 || status=$?
+out=$(cat "$tmp/clean.out")
+[[ $status == 0 ]] || fail "clean run opened the side-car index (rc $status — the abort-path gate is gone): $out"
+[[ $out != *'gsa-owned provider behind'* ]] || fail "clean run printed an attribution: $out"
+[[ $out == *'pkg-clean: clean'* ]] || fail "clean run lost its clean line: $out"
+
+# ── 16. resolver equivalence: the class tag still discriminates ──────────
+# The loader cache is read ONCE into an associative map now (measured
+# 2026-11-11: 103 ms per miss rescanned all ~5.8k rows, 0.2 ms for a map
+# hit). The rule the old inline loop enforced must survive the reshape, in
+# ALL FOUR directions, and the multi-entry shape (one name carrying both a
+# libc6 and a libc6,x86-64 row — 301 names on this host, measured 2026-11-11)
+# must be traversed rather than truncated to its first entry:
+#   ELF32 accepts the libc6 row, ELF32 REFUSES the x86-64 row,
+#   ELF64 accepts the x86-64 row, ELF64 REFUSES the libc6 row.
+# The x86-64 entry is listed FIRST, the order a real `ldconfig -p` emits, so
+# an ELF32 lookup only resolves if the `;` list is walked past it.
+mkdir -p "$tmp/host/usr/lib" "$tmp/host/usr/lib32" "$tmp/stub32" \
+    "$tmp/f32/usr/lib" "$tmp/f32only/usr/lib" "$tmp/f64/usr/bin" "$tmp/f64only/usr/bin"
+printf 'int gsa64_anchor;\n' |
+    cc -shared -x c - -Wl,-soname,libg32.so.1 -o "$tmp/host/usr/lib/libg32.so.1"
+printf 'int gsa32_anchor;\n' |
+    cc -m32 -shared -x c - -Wl,-soname,libg32.so.1 -o "$tmp/host/usr/lib32/libg32.so.1"
+printf 'int gsa32_only;\n' |
+    cc -m32 -shared -x c - -Wl,-soname,libgonly32.so.1 -o "$tmp/host/usr/lib32/libgonly32.so.1"
+printf 'int gsa64_only;\n' |
+    cc -shared -x c - -Wl,-soname,libgonly64.so.1 -o "$tmp/host/usr/lib/libgonly64.so.1"
+
+# ELF32 consumers: link for real against the 32-bit provider, and through a
+# 32-bit stub for the name only a 64-bit row exists for (a 32-bit link
+# cannot consume the 64-bit file — which is exactly the shape the class
+# test must refuse).
+printf 'int gsa32_consumer;\n' |
+    cc -m32 -shared -x c - -Wl,--no-as-needed -o "$tmp/f32/usr/lib/libc32-consumer.so" \
+        -L"$tmp/host/usr/lib32" -l:libg32.so.1
+printf 'int gsa32only_stub;\n' |
+    cc -m32 -shared -x c - -Wl,-soname,libgonly64.so.1 -o "$tmp/stub32/stub-libgonly64.so.1"
+printf 'int gsa32only_consumer;\n' |
+    cc -m32 -shared -x c - -Wl,--no-as-needed -o "$tmp/f32only/usr/lib/libc32only-consumer.so" \
+        -L"$tmp/stub32" -l:stub-libgonly64.so.1
+readelf -dW "$tmp/f32/usr/lib/libc32-consumer.so" | grep -q 'NEEDED.*\[libg32.so.1\]' ||
+    fail 'synthesis failed to record the ELF32 DT_NEEDED (libg32)'
+readelf -hW "$tmp/f32/usr/lib/libc32-consumer.so" | grep -q 'Class: *ELF32' ||
+    fail 'synthesis did not produce an ELF32 consumer (the class case would pass for the wrong reason)'
+readelf -dW "$tmp/f32only/usr/lib/libc32only-consumer.so" | grep -q 'NEEDED.*\[libgonly64.so.1\]' ||
+    fail 'synthesis failed to record the ELF32 DT_NEEDED (libgonly64)'
+readelf -hW "$tmp/f32only/usr/lib/libc32only-consumer.so" | grep -q 'Class: *ELF32' ||
+    fail 'synthesis did not produce an ELF32 consumer (the refusal case would pass for the wrong reason)'
+# ELF64 consumers go through the stub for both names (a 64-bit link cannot
+# consume the 32-bit providers).
+make_bin "$tmp/f64/usr/bin" consumer64 libg32.so.1
+make_bin "$tmp/f64only/usr/bin" consumer64only libgonly32.so.1
+
+mkdir -p "$tmp/stubbin32"
+cat >"$tmp/stubbin32/ldconfig" <<EOF
+#!/usr/bin/env bash
+printf '4 libs found in cache\n'
+printf '\tlibg32.so.1 (libc6,x86-64) => $tmp/host/usr/lib/libg32.so.1\n'
+printf '\tlibg32.so.1 (libc6) => $tmp/host/usr/lib32/libg32.so.1\n'
+printf '\tlibgonly64.so.1 (libc6,x86-64) => $tmp/host/usr/lib/libgonly64.so.1\n'
+printf '\tlibgonly32.so.1 (libc6) => $tmp/host/usr/lib32/libgonly32.so.1\n'
+EOF
+chmod +x "$tmp/stubbin32/ldconfig"
+make_pkgroot "$tmp/f32" pkg-elf32
+status=0
+PATH="$tmp/stubbin32:$PATH" run out err -- --quiet "$tmp/f32" || status=$?
+[[ $status == 0 ]] || fail "ELF32 consumer did not walk past the x86-64 row to the libc6 one: $err $out"
+[[ $out != *'libg32.so.1'* ]] || fail "ELF32 cache row reported a finding: $out"
+make_pkgroot "$tmp/f32only" pkg-elf32-only64
+status=0
+PATH="$tmp/stubbin32:$PATH" run out err -- --quiet "$tmp/f32only" || status=$?
+[[ $status == 1 ]] || fail "ELF32 consumer accepted an x86-64 cache row (want fatal 1), got $status: $out"
+[[ $out == *"'libc32only-consumer.so' needs 'libgonly64.so.1'"* ]] ||
+    fail "ELF32 class-mismatch finding lost: $out"
+make_pkgroot "$tmp/f64" pkg-elf64
+status=0
+PATH="$tmp/stubbin32:$PATH" run out err -- --quiet "$tmp/f64" || status=$?
+[[ $status == 0 ]] || fail "ELF64 consumer did not resolve through the x86-64 row: $err $out"
+[[ $out != *'libg32.so.1'* ]] || fail "ELF64 cache row reported a finding: $out"
+make_pkgroot "$tmp/f64only" pkg-elf64-only32
+status=0
+PATH="$tmp/stubbin32:$PATH" run out err -- --quiet "$tmp/f64only" || status=$?
+[[ $status == 1 ]] || fail "64-bit consumer accepted a 32-bit cache row (want fatal 1), got $status: $out"
+[[ $out == *"'consumer64only' needs 'libgonly32.so.1'"* ]] ||
+    fail "ELF64 class-mismatch finding lost: $out"
+
 printf 'abi-need-check fixture: ok\n'
