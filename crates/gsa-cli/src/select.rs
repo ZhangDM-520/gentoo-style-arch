@@ -33,7 +33,13 @@ pub struct Ctx<'a> {
 /// A kv read that fails resolves to the empty half (config sets still
 /// resolve) and never fails a selection.
 pub fn load_user_sets(inv: &crate::args::Invocation) -> Vec<(String, Vec<String>)> {
-    let Ok(state) = gsa_model::config::resolve_state_dir(inv.state_dir.as_deref()) else {
+    load_user_sets_at(inv.state_dir.as_deref())
+}
+
+/// `load_user_sets` for a caller with no parsed invocation (completion):
+/// `state_dir` is the `--state-dir` value, `None` for the resolution ladder.
+pub fn load_user_sets_at(state_dir: Option<&str>) -> Vec<(String, Vec<String>)> {
+    let Ok(state) = gsa_model::config::resolve_state_dir(state_dir) else {
         return Vec::new();
     };
     // Read-only handle: loading user sets is a pure read (§D.1 "touches

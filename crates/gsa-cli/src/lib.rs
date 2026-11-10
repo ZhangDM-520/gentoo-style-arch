@@ -12,6 +12,7 @@
 mod args;
 mod build;
 mod builddir;
+mod complete;
 mod dashboard;
 mod exit;
 mod fetch;
@@ -108,6 +109,27 @@ pub fn help_text() -> String {
 /// a `--state-dir`'d query must read one state tree, not two.
 fn find_root(state_flag: Option<&str>) -> Option<PathBuf> {
     resolve_root(false, state_flag).ok()
+}
+
+/// Workspace discovery for a READ-ONLY seam (completion, contract §D.1): the
+/// same ladder as `resolve_root` minus every side effect. `ensure_store`
+/// migrates a legacy `<state>/recipes` (a move, a chown, a note on stderr);
+/// a TAB may not do any of that, so this rung simply asks whether the
+/// resolved store already holds a topology.
+pub(crate) fn resolve_root_readonly() -> Option<PathBuf> {
+    let cfg = gsa_model::config::load().ok()?;
+    if let Some(project) = &cfg.project {
+        return Some(project.clone());
+    }
+    if let Some(root) = cwd_workspace() {
+        return Some(root);
+    }
+    let store = gsa_state::recipes::store_dir().ok()?;
+    store
+        .join("config")
+        .join("topology.conf")
+        .is_file()
+        .then_some(store)
 }
 
 pub(crate) fn resolve_root(fetch: bool, state_flag: Option<&str>) -> Result<PathBuf, String> {
@@ -710,6 +732,13 @@ pub fn run(argv: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
                     RC_OK
                 }
             }
+        }
+        Ok(Parsed::Hidden(Hidden::Complete(words))) => {
+            // Shell completion (§D.1): advisory, fail-soft, never writes.
+            complete::run(&words, out)
+        }
+        Ok(Parsed::Hidden(Hidden::PrintCompletion(shell))) => {
+            complete::print_wrapper(&shell, out, err)
         }
         Ok(Parsed::Hidden(Hidden::StaleLockCheck)) => {
             // The production pacman-lock probe without a run (§D.1).

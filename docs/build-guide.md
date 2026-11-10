@@ -604,6 +604,31 @@ the environment `SRCDEST`, then the build user's `~/.makepkg.conf`, then
 `/etc/makepkg.conf` — and the engine resolves through that chain rather than
 re-inventing it.
 
+## Shell completion
+
+`gsa --print-completion fish|bash|zsh` prints the wrapper the `gsa-pm`
+package installs into the shell's completion directory
+(`/usr/share/fish/vendor_completions.d/gsa.fish`,
+`/usr/share/bash-completion/completions/gsa`,
+`/usr/share/zsh/site-functions/_gsa`). The wrappers carry no grammar: they
+forward the command line to the hidden `gsa --complete` seam, so a recipe id
+or a group added in the recipe repository appears on the next TAB with no
+engine change, and a shipped completion can never disagree with the parser.
+
+- `gsa -S <TAB>` offers the roster's recipe ids; `gsa -S @<TAB>` offers the
+  six groups and the user's `config/sets/` and kv sets; `gsa -S --tool<TAB>`
+  offers `gcc clang`; `gsa -U <TAB>` offers refs and hands a path back to the
+  shell.
+- Completion runs as the invoking user (a `sudo gsa …` line still completes
+  against your own recipe store) and reads only the topology and the sets.
+- It is **fail-soft by design**: with no workspace, an unreadable store or a
+  corrupt record it answers nothing and exits 0 rather than printing a
+  diagnostic into the prompt. That is the one place the
+  unreadable-is-not-absent rule does not apply — see contract §D.1.
+- Verifying a host: `gsa --print-completion fish | fish -n` (and the bash/zsh
+  equivalents) after an engine upgrade; re-centre the files if `gsa-pm` was
+  installed before this seam existed.
+
 ## Environment surface
 
 The engine's environment contract in four lists: the configuration files it

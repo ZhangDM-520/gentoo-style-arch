@@ -19,6 +19,9 @@ pub enum Family {
 }
 
 impl Family {
+    /// The roster, in contract order (completion's first-word order).
+    pub const ALL: [Family; 5] = [Family::Q, Family::S, Family::B, Family::U, Family::M];
+
     pub fn as_str(self) -> &'static str {
         match self {
             Family::Q => "-Q",
@@ -61,19 +64,443 @@ impl Family {
             Family::M => "",
         }
     }
+}
 
-    /// Letters whose presence is a terminal query/report action — combining
-    /// one with a build modifier is a usage error (contract §B.1).
-    fn terminal(self) -> &'static str {
-        match self {
-            Family::Q => "islopbautrg",
-            Family::S => "silgwyu",
-            Family::B => "l",
-            Family::U => "",
-            Family::M => "adilmshw",
-        }
+/// True when the letter is a TERMINAL query/report action of its family —
+/// combining one with a build modifier is a usage error (contract §B.1).
+/// Read from `ACTIONS`: the table is the roster, so a new letter carries its
+/// own property instead of needing a second string edited in step.
+pub fn action_is_terminal(family: Family, letter: char) -> bool {
+    ACTIONS
+        .iter()
+        .any(|action| action.family == family && action.letter == letter && action.terminal)
+}
+
+/// One long modifier the action pass accepts (contract §B.8).
+///
+/// This table is the ROSTER: `parse` looks a `--name` up here before it
+/// dispatches, so a flag that is absent can never parse and a flag that is
+/// present can never be dead. Completion reads the same rows, which is why
+/// there is no second list: the repo's "a deny-list and a delete-list are the
+/// same list" rule applies to a grammar too.
+pub struct FlagSpec {
+    pub name: &'static str,
+    /// Menu text for completion (`gsa -S --<TAB>`); never rendered by `--help`.
+    pub description: &'static str,
+    /// False = a bare boolean (`--name`); true = `--name <value>` or
+    /// `--name=value`. The pin test in this module holds both shapes to what
+    /// the parser actually does, so completion cannot offer the wrong one.
+    pub takes_value: bool,
+    /// The families whose documented surface names this flag. The parser is
+    /// deliberately permissive (it accepts the whole roster and lets the
+    /// dispatcher refuse a flag that does not apply), so this mask is the
+    /// DOCUMENTED affinity, not a legality claim: it can only narrow a
+    /// suggestion the documents already bind, and a flag with no stated home
+    /// stays on every family.
+    pub families: &'static [Family],
+}
+
+const ALL: &[Family] = &Family::ALL;
+const BUILD: &[Family] = &[Family::S, Family::B];
+
+impl FlagSpec {
+    pub fn applies_to(&self, family: Family) -> bool {
+        self.families.contains(&family)
     }
 }
+
+pub const FLAGS: &[FlagSpec] = &[
+    FlagSpec {
+        name: "dry-run",
+        description: "plan only — build, install and write nothing",
+        takes_value: false,
+        families: BUILD,
+    },
+    FlagSpec {
+        name: "leaf",
+        description: "build exactly the named recipes, no consumer expansion",
+        takes_value: false,
+        families: BUILD,
+    },
+    FlagSpec {
+        name: "machine",
+        description: "force the machine block even on a terminal",
+        takes_value: false,
+        families: ALL,
+    },
+    FlagSpec {
+        name: "help",
+        description: "print the spelling roster and exit",
+        takes_value: false,
+        families: ALL,
+    },
+    FlagSpec {
+        name: "skip",
+        description: "skip recipes whose sources are unchanged (freshness-gated)",
+        takes_value: false,
+        families: BUILD,
+    },
+    FlagSpec {
+        name: "skip-built",
+        description: "skip recipes whose selection is already built",
+        takes_value: false,
+        families: BUILD,
+    },
+    FlagSpec {
+        name: "no-sync",
+        description: "do not refresh the recipe store first",
+        takes_value: false,
+        families: BUILD,
+    },
+    FlagSpec {
+        name: "fail-fast",
+        description: "stop dispatching on the first failure",
+        takes_value: false,
+        families: BUILD,
+    },
+    FlagSpec {
+        name: "no-prefetch",
+        description: "opt out of the dispatcher's fetch-ahead window",
+        takes_value: false,
+        families: BUILD,
+    },
+    FlagSpec {
+        name: "no-build-dir-prompt",
+        description: "never ask where the build cache should live",
+        takes_value: false,
+        families: &[Family::S, Family::B, Family::U],
+    },
+    FlagSpec {
+        name: "no-register-ignorepkg",
+        description: "do not register accepted archives in IgnorePkg",
+        takes_value: false,
+        families: &[Family::S, Family::U],
+    },
+    FlagSpec {
+        name: "allow-broken-rustc",
+        description: "let a broken stock rustc preflight through",
+        takes_value: false,
+        families: BUILD,
+    },
+    FlagSpec {
+        name: "noconfirm",
+        description: "assume yes (non-interactive)",
+        takes_value: false,
+        families: ALL,
+    },
+    FlagSpec {
+        name: "quiet",
+        description: "suppress the progress lines",
+        takes_value: false,
+        families: ALL,
+    },
+    FlagSpec {
+        name: "verbose",
+        description: "more per-step detail",
+        takes_value: false,
+        families: ALL,
+    },
+    FlagSpec {
+        name: "fix",
+        description: "apply the named side-car repairs (-Md)",
+        takes_value: false,
+        families: &[Family::M],
+    },
+    FlagSpec {
+        name: "prune",
+        description: "drop stale IgnorePkg entries (-Mi)",
+        takes_value: false,
+        families: &[Family::M],
+    },
+    FlagSpec {
+        name: "backfill",
+        description: "add missing IgnorePkg entries (-Mi)",
+        takes_value: false,
+        families: &[Family::M],
+    },
+    FlagSpec {
+        name: "register-ignorepkg",
+        description: "register the named packages in IgnorePkg",
+        takes_value: false,
+        families: &[Family::M],
+    },
+    FlagSpec {
+        name: "add",
+        description: "add the named members to a set or to world",
+        takes_value: false,
+        families: &[Family::M],
+    },
+    FlagSpec {
+        name: "remove",
+        description: "remove the named members from a set or from world",
+        takes_value: false,
+        families: &[Family::M],
+    },
+    FlagSpec {
+        name: "toolchain",
+        description: "compiler family: gcc or clang",
+        takes_value: true,
+        families: BUILD,
+    },
+    FlagSpec {
+        name: "lanes",
+        description: "concurrent lane count (N or auto)",
+        takes_value: true,
+        families: BUILD,
+    },
+    FlagSpec {
+        name: "jobs",
+        description: "per-lane job count (N or auto)",
+        takes_value: true,
+        families: BUILD,
+    },
+    FlagSpec {
+        name: "intensity",
+        description: "scheduler intensity profile",
+        takes_value: true,
+        families: BUILD,
+    },
+    FlagSpec {
+        name: "state-dir",
+        description: "state root (default /var/lib/gsa)",
+        takes_value: true,
+        families: ALL,
+    },
+    FlagSpec {
+        name: "build-dir",
+        description: "build cache (BUILDDIR/PKGDIR/PKGDEST)",
+        takes_value: true,
+        families: ALL,
+    },
+    FlagSpec {
+        name: "config",
+        description: "target pacman.conf for the transaction",
+        takes_value: true,
+        families: &[Family::S, Family::U],
+    },
+    FlagSpec {
+        name: "prefetch-ahead",
+        description: "fetch-ahead window size (default 8)",
+        takes_value: true,
+        families: BUILD,
+    },
+    FlagSpec {
+        name: "vcs-skip-tolerance",
+        description: "attempts before an unanswerable ref parks the recipe",
+        takes_value: true,
+        families: BUILD,
+    },
+    FlagSpec {
+        name: "tail",
+        description: "log lines to show (-Ml)",
+        takes_value: true,
+        families: &[Family::M],
+    },
+    FlagSpec {
+        name: "keep",
+        description: "log copies to retain (-Ml)",
+        takes_value: true,
+        families: &[Family::M],
+    },
+    FlagSpec {
+        name: "show",
+        description: "which side-car rows to show (-Mb)",
+        takes_value: true,
+        families: &[Family::M],
+    },
+];
+
+/// The roster lookup `parse` gates on and completion lists from.
+pub fn flag_spec(name: &str) -> Option<&'static FlagSpec> {
+    FLAGS.iter().find(|spec| spec.name == name)
+}
+
+/// One action letter (contract §B.1's cluster vocabulary).
+///
+/// `terminal` is the property `Family::terminal()` encodes: a terminal
+/// query/report letter combines with no build modifier. The two `&'static
+/// str` spellings stay hand-written for zero-cost `contains` checks and are
+/// pinned equal to this table by a test — a letter added here without there
+/// fails the suite.
+pub struct ActionSpec {
+    pub family: Family,
+    pub letter: char,
+    pub terminal: bool,
+    /// Menu text for completion (`gsa -S --<TAB>`), the cluster spelling
+    /// (`-Syu` is offered as the whole token, never `y` + `u`).
+    pub description: &'static str,
+}
+
+pub const ACTIONS: &[ActionSpec] = &[
+    ActionSpec {
+        family: Family::Q,
+        letter: 'i',
+        terminal: true,
+        description: "merged info: pacman fields plus the side-car record",
+    },
+    ActionSpec {
+        family: Family::Q,
+        letter: 's',
+        terminal: true,
+        description: "search installed names and descriptions",
+    },
+    ActionSpec {
+        family: Family::Q,
+        letter: 'l',
+        terminal: true,
+        description: "list owned files (pacman -Ql)",
+    },
+    ActionSpec {
+        family: Family::Q,
+        letter: 'o',
+        terminal: true,
+        description: "file owner (pacman -Qo)",
+    },
+    ActionSpec {
+        family: Family::Q,
+        letter: 'p',
+        terminal: true,
+        description: "archive probe against its index row",
+    },
+    ActionSpec {
+        family: Family::Q,
+        letter: 'b',
+        terminal: true,
+        description: "binpkg index rows the side-car records",
+    },
+    ActionSpec {
+        family: Family::Q,
+        letter: 'a',
+        terminal: true,
+        description: "ABI report: token, abi-rev, subscriptions",
+    },
+    ActionSpec {
+        family: Family::Q,
+        letter: 'u',
+        terminal: true,
+        description: "stale set: tracked version moved past the built one",
+    },
+    ActionSpec {
+        family: Family::Q,
+        letter: 't',
+        terminal: true,
+        description: "resolved topology records (id|path|groups|edges|tags)",
+    },
+    ActionSpec {
+        family: Family::Q,
+        letter: 'r',
+        terminal: true,
+        description: "revdep report over the installed ELF index",
+    },
+    ActionSpec {
+        family: Family::Q,
+        letter: 'g',
+        terminal: true,
+        description: "groups and sets with their members",
+    },
+    ActionSpec {
+        family: Family::S,
+        letter: 's',
+        terminal: true,
+        description: "search the buildable set",
+    },
+    ActionSpec {
+        family: Family::S,
+        letter: 'i',
+        terminal: true,
+        description: "info for the selection",
+    },
+    ActionSpec {
+        family: Family::S,
+        letter: 'l',
+        terminal: true,
+        description: "ordered selection listing with range indices",
+    },
+    ActionSpec {
+        family: Family::S,
+        letter: 'g',
+        terminal: true,
+        description: "groups and sets with their members",
+    },
+    ActionSpec {
+        family: Family::S,
+        letter: 'w',
+        terminal: true,
+        description: "fetch and verify sources only (no build, no install)",
+    },
+    ActionSpec {
+        family: Family::S,
+        letter: 'y',
+        terminal: true,
+        description: "version-sync pass only (rewrites stay uncommitted)",
+    },
+    ActionSpec {
+        family: Family::S,
+        letter: 'u',
+        terminal: true,
+        description: "update the stale set with no sync pass",
+    },
+    ActionSpec {
+        family: Family::B,
+        letter: 'l',
+        terminal: true,
+        description: "ordered selection listing (nothing is built)",
+    },
+    ActionSpec {
+        family: Family::M,
+        letter: 'a',
+        terminal: true,
+        description: "audit report (report-only)",
+    },
+    ActionSpec {
+        family: Family::M,
+        letter: 'd',
+        terminal: true,
+        description: "doctor: runtime-state reconciliation",
+    },
+    ActionSpec {
+        family: Family::M,
+        letter: 'i',
+        terminal: true,
+        description: "IgnorePkg closure of the target pacman.conf",
+    },
+    ActionSpec {
+        family: Family::M,
+        letter: 'l',
+        terminal: true,
+        description: "per-package log browse and tail",
+    },
+    ActionSpec {
+        family: Family::M,
+        letter: 'm',
+        terminal: true,
+        description: "shared-source mirrors (dedupe VCS clones)",
+    },
+    ActionSpec {
+        family: Family::M,
+        letter: 'c',
+        terminal: false,
+        description: "prune strength 1: src/pkg/build trees and archives",
+    },
+    ActionSpec {
+        family: Family::M,
+        letter: 's',
+        terminal: true,
+        description: "named sets: list, add, remove",
+    },
+    ActionSpec {
+        family: Family::M,
+        letter: 'h',
+        terminal: true,
+        description: "run history",
+    },
+    ActionSpec {
+        family: Family::M,
+        letter: 'w',
+        terminal: true,
+        description: "world: the explicitly wanted set",
+    },
+];
 
 /// A hidden fixture seam (contract §D.1): excluded from `--help`, callable
 /// only by fixtures, and every Phase 1 one is deferred.
@@ -96,6 +523,15 @@ pub enum Hidden {
     /// at package time, so the shipped file can never drift from the binary
     /// that reads it (rule 58: one source of truth, no copied flag text).
     PrintConf(Vec<String>),
+    /// `--complete <words…>`: shell completion (contract §D.1). The words are
+    /// the argv after the program name; the LAST one is the partial token
+    /// being completed and may be empty. Advisory and fail-soft: it answers
+    /// with candidates and rc 0, or with nothing at all.
+    Complete(Vec<String>),
+    /// `--print-completion <fish|bash|zsh>`: the wrapper text for one shell,
+    /// which the `gsa-pm` recipe installs. Grammar-free by design — it calls
+    /// `--complete` rather than restating the grammar in three languages.
+    PrintCompletion(String),
 }
 
 /// One parsed invocation.
@@ -203,7 +639,7 @@ pub enum Parsed {
     Hidden(Hidden),
 }
 
-const HIDDEN_SEAMS: [&str; 10] = [
+const HIDDEN_SEAMS: [&str; 12] = [
     "--install-decide",
     "--lane-job",
     "--fetch-job",
@@ -214,6 +650,8 @@ const HIDDEN_SEAMS: [&str; 10] = [
     "--qa-check",
     "--build-identity",
     "--print-conf",
+    "--complete",
+    "--print-completion",
 ];
 
 fn is_range_token(token: &str) -> bool {
@@ -269,6 +707,16 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
                 "--register-ignorepkg" => Hidden::RegisterIgnorepkg(rest),
                 "--qa-check" => Hidden::QaCheck(rest),
                 "--print-conf" => Hidden::PrintConf(rest),
+                "--complete" => Hidden::Complete(rest),
+                "--print-completion" => match rest.as_slice() {
+                    [shell] => Hidden::PrintCompletion(shell.clone()),
+                    [] => Hidden::PrintCompletion(String::new()),
+                    [_, extra, ..] => {
+                        return Err(format!(
+                            "--print-completion takes exactly one shell (fish|bash|zsh), got extra '{extra}'"
+                        ))
+                    }
+                },
                 _ => unreachable!(),
             };
             return Ok(Parsed::Hidden(hidden));
@@ -342,7 +790,7 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
     }
     // Terminal query letters combine with no build modifier (contract §B.1).
     if let Some(action) = action {
-        if family.terminal().contains(action) && !modifiers.is_empty() {
+        if action_is_terminal(family, action) && !modifiers.is_empty() {
             return Err(format!(
                 "cannot combine the query letter '{action}' with build modifier(s) '{}' on {}",
                 modifiers.iter().collect::<String>(),
@@ -397,8 +845,26 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
                 Some((name, value)) => (name, Some(value.to_string())),
                 None => (flag, None),
             };
+            // The roster gate (contract §B.8): `FLAGS` decides what exists
+            // here, so a name can never parse without being listed and can
+            // never be listed without an arm below — the pin tests in this
+            // module hold both directions.
+            if flag_spec(name).is_none() {
+                return Err(format!(
+                    "unknown flag '--{name}' (run 'gsa --help' for the roster)"
+                ));
+            }
             match name {
-                "dry-run" => inv.dry_run = true,
+                "dry-run" => {
+                    // Every other boolean refuses a value; `--dry-run=yes`
+                    // was the one tolerant spelling, which the roster pin
+                    // test caught (a completion table cannot describe a flag
+                    // whose shape depends on the operator's mood).
+                    if value.is_some() {
+                        return Err("flag '--dry-run' takes no value".to_string());
+                    }
+                    inv.dry_run = true;
+                }
                 "leaf" => {
                     // §B.8 gap G4: `--leaf` is the bare boolean — the only
                     // spelling. `--leaf=no`/`--leaf=yes` are not accepted
@@ -522,11 +988,9 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
                     inv.deferred_flags.push(format!("--{name}"));
                     let _ = value;
                 }
-                _ => {
-                    return Err(format!(
-                        "unknown flag '--{name}' (run 'gsa --help' for the roster)"
-                    ))
-                }
+                // `flag_spec` above already refused every name that is not
+                // in the roster, so an unlisted name can never reach here.
+                _ => unreachable!("FLAGS entry '--{name}' has no parser arm"),
             }
             continue;
         }
@@ -677,6 +1141,166 @@ mod tests {
             Parsed::Hidden(Hidden::PrintConf(args)) => assert_eq!(args, vec!["clang"]),
             other => panic!("expected the print-conf seam, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn every_roster_flag_parses_with_its_declared_shape() {
+        // The roster is the gate, so a row the parser cannot reach is dead
+        // and a row whose shape lies about the parser breaks completion.
+        for spec in FLAGS {
+            let flag = format!("--{}", spec.name);
+            if spec.takes_value {
+                assert!(
+                    parse(&["-Q".to_string(), flag.clone(), "v".to_string()]).is_ok(),
+                    "roster flag {flag} (takes_value) does not parse with a separate value"
+                );
+                assert!(
+                    parse(&["-Q".to_string(), format!("{flag}=v")]).is_ok(),
+                    "roster flag {flag} (takes_value) does not parse as --name=value"
+                );
+            } else {
+                assert!(
+                    parse(&["-Q".to_string(), flag.clone()]).is_ok(),
+                    "roster flag {flag} (boolean) does not parse"
+                );
+                // `--help` short-circuits before any value check (it is the
+                // spelling roster, not an invocation), so its shape is not
+                // observable here.
+                if spec.name != "help" {
+                    let err = parse(&["-Q".to_string(), format!("{flag}=x")]).unwrap_err();
+                    assert!(
+                        err.contains("takes no value"),
+                        "roster flag {flag} claims boolean but accepted a value: {err}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn roster_flag_names_are_unique_and_prefixed_like_the_grammar() {
+        for (index, spec) in FLAGS.iter().enumerate() {
+            assert!(
+                !spec.name.is_empty()
+                    && spec
+                        .name
+                        .chars()
+                        .all(|c| c.is_ascii_lowercase() || c == '-'),
+                "roster name '{}' is not a long-flag spelling",
+                spec.name
+            );
+            assert!(
+                FLAGS[..index].iter().all(|other| other.name != spec.name),
+                "duplicate roster entry '{}'",
+                spec.name
+            );
+            // A description is completion menu text: one line, no field tabs.
+            assert!(
+                !spec.description.contains('\t') && !spec.description.contains('\n'),
+                "roster description for '{}' would break the candidate line",
+                spec.name
+            );
+        }
+    }
+
+    #[test]
+    fn every_roster_flag_is_documented_in_help() {
+        // Contract §L.1: `gsa --help` is the authoritative spelling roster, so
+        // a flag the parser accepts (and completion offers) must appear there —
+        // otherwise it exists only in the table. Two documented exceptions:
+        // `--help` is the invocation itself (never listed in its own output),
+        // and the deferred `--register-ignorepkg` long modifier, whose public
+        // spelling is `gsa -Mi --backfill` (§D.1 keeps the seam for fixtures).
+        let undocumented = ["help", "register-ignorepkg"];
+        let help = crate::help::render();
+        for spec in FLAGS {
+            if undocumented.contains(&spec.name) {
+                continue;
+            }
+            let needle = format!("--{}", spec.name);
+            assert!(
+                help.contains(&needle),
+                "roster flag {needle} is not in `gsa --help`, so it exists only in FLAGS (§L.1)"
+            );
+        }
+    }
+
+    #[test]
+    fn every_roster_flag_names_at_least_one_family() {
+        // A row with no family can never be offered: completion filters by the
+        // documented affinity, so an empty mask is a dead entry.
+        for spec in FLAGS {
+            assert!(
+                !spec.families.is_empty(),
+                "roster flag '--{}' applies to no family",
+                spec.name
+            );
+            for family in Family::ALL {
+                if spec.applies_to(family) {
+                    assert!(spec.families.contains(&family));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn action_letters_and_terminality_come_from_the_roster() {
+        for family in Family::ALL {
+            let letters: String = ACTIONS
+                .iter()
+                .filter(|action| action.family == family)
+                .map(|action| action.letter)
+                .collect();
+            assert_eq!(
+                family.actions(),
+                letters,
+                "{}: the hand-written cluster string and ACTIONS disagree",
+                family.as_str()
+            );
+            for action in ACTIONS.iter().filter(|action| action.family == family) {
+                assert_eq!(
+                    action_is_terminal(family, action.letter),
+                    action.terminal,
+                    "{}: terminality of '{}' disagrees with the roster",
+                    family.as_str(),
+                    action.letter
+                );
+                // Every roster action is a cluster the parser accepts on its
+                // own, so completion can never offer a dead letter.
+                let token = format!(
+                    "-{}{}",
+                    family.as_str().trim_start_matches('-'),
+                    action.letter
+                );
+                assert!(
+                    parse(&[token.clone()]).is_ok(),
+                    "roster action {token} does not parse"
+                );
+            }
+        }
+        assert!(
+            !action_is_terminal(Family::M, 'c'),
+            "the prune-strength letter is not a terminal query"
+        );
+    }
+
+    #[test]
+    fn completion_seams_parse_their_payload() {
+        match parse(&["--complete".to_string(), "-S".to_string()]).unwrap() {
+            Parsed::Hidden(Hidden::Complete(words)) => assert_eq!(words, vec!["-S"]),
+            other => panic!("expected the complete seam, got {other:?}"),
+        }
+        // An empty argv is the first-word position, not a usage error: the
+        // seam answers "which families", so the wrapper can call it always.
+        match parse(&["--complete".to_string()]).unwrap() {
+            Parsed::Hidden(Hidden::Complete(words)) => assert!(words.is_empty()),
+            other => panic!("expected the complete seam, got {other:?}"),
+        }
+        match parse(&["--print-completion".to_string(), "fish".to_string()]).unwrap() {
+            Parsed::Hidden(Hidden::PrintCompletion(shell)) => assert_eq!(shell, "fish"),
+            other => panic!("expected the print-completion seam, got {other:?}"),
+        }
+        assert!(parse_err(&["--print-completion", "fish", "bash"]).contains("exactly one shell"));
     }
 
     #[test]

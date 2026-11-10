@@ -71,6 +71,10 @@ run_bench() { # runs label cmd...
     run_bench "$cheap" 'gsa -Q' gsa -Q
     run_bench "$cheap" 'gsa -Qi zlib-ng-git' gsa -Qi zlib-ng-git
     run_bench "$cheap" 'gsa -Qa zlib-ng-git' gsa -Qa zlib-ng-git
+    # The completion seam runs once per TAB, so its cost is a latency
+    # budget: a flag position must not reach a store read.
+    run_bench "$cheap" 'gsa --complete -S ""' gsa --complete -S ""
+    run_bench "$cheap" 'gsa --complete -S --toolchain' gsa --complete -S --toolchain ""
     run_bench 2 'gsa -Ma' gsa -Ma
     run_bench "$cheap" 'gsa -S --dry-run --leaf zlib-ng-git' gsa -S --dry-run --leaf zlib-ng-git
     run_bench "$heavy" 'gsa -S --dry-run @core' gsa -S --dry-run @core

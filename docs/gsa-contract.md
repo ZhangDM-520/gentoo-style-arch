@@ -437,7 +437,7 @@ gsa is pacman-shaped: **reads run as any user; mutations require root.**
 
 | Class | Spellings | Rule |
 | --- | --- | --- |
-| read-only | every `-Q*`, `-Sl`, `-Bl`, `--dry-run` plans, `-Ma`, report forms of `-Md/-Mi/-Ml/-Mh/-Ms/-Mw`, the hidden read seams (`--install-decide`, `--local-db-check`, `--qa-check`, `--stale-lock-check`), `--help` | any user; never writes state |
+| read-only | every `-Q*`, `-Sl`, `-Bl`, `--dry-run` plans, `-Ma`, report forms of `-Md/-Mi/-Ml/-Mh/-Ms/-Mw`, the hidden read seams (`--install-decide`, `--local-db-check`, `--qa-check`, `--stale-lock-check`, `--complete`, `--print-completion`), `--help` | any user; never writes state |
 | mutating | `-S`, `-B`, `-U`, `-Sw`, `-Sy`, `-Su`, `-Mi --prune/--backfill`, `-Md --fix`, `-Ml --keep`, `-Mh --prune`, `-Ms/-Mw --add/--remove`, every `-Mc/-Mcc/-Mccc`, hidden write seams (`--install-register`, `--register-ignorepkg`) | **root required**; unprivileged → early refusal, **rc 3** (§G.1), wording `you cannot perform this operation unless you are root` plus a `sudo` remedy |
 | build-user-only | `-Mm` (mirrors) | never under a root supervisor (`docs/source-sharing.md`); refused with rc 3 when euid 0 |
 
@@ -751,8 +751,16 @@ ready package is dispatched, never the order the record reports.
 
 Hidden seams are argv shapes that drive production code paths without a build.
 They are excluded from `gsa --help`, excluded from the continuation table
-(never mirrored — a continuation must never replay one), reject invalid
-invocations with rc 2, and are callable only by fixtures.
+(never mirrored — a continuation must never replay one), and reject invalid
+invocations with rc 2. Most are callable only by fixtures.
+
+Two are **shipped interfaces**, not fixture affordances: `--print-conf` and
+`--print-completion` are run by `gsa-pm` at package time, and `--complete` is
+run by the completion wrappers on every TAB. The installed surfaces depend on
+them, so they carry the same rc-2 contract for a bad argument and one extra
+clause of their own: `--complete` answers rc 0 on every *runtime* failure
+(fail-soft, stated in its row) because a shell must never render a diagnostic
+into a prompt.
 
 ### D.1 Hidden seam set (v2)
 
@@ -768,6 +776,8 @@ invocations with rc 2, and are callable only by fixtures.
 | `--qa-check` | `gsa --qa-check <name> …` | run exactly one QA check (today `--audit-lint <family>`); the check registry's single-entry point |
 | `--build-identity` | `gsa --build-identity <gcc\|clang>` | prints the exact identity the toolchain drift marker records (§B.11/§J.1) — `<family>\|<compiler version line>\|<sha256 of the effective config>` — so "why did this rebuild?" is answerable, and fixtures stage a CURRENT marker instead of predicting the digest. rc 0 / 2 bad family / 3 unreadable config |
 | `--print-conf` | `gsa --print-conf <gcc\|clang>` | prints the built-in per-compiler makepkg body verbatim, which is what the composite embeds. `gsa-pm` writes it to `/etc/gsa/<family>-makepkg.conf` at package time, so the shipped baseline is the binary's own text (no copied flag list to drift). Reads nothing, mutates nothing. rc 0 / 2 missing or unknown family |
+| `--complete` | `gsa --complete <words…>` | shell completion, advisory and **fail-soft**: the words are argv after the program name and the LAST one is the partial token (it may be empty). Prints `value<TAB>description` per candidate, or the single line `#mode files` when the position is a path the shell should complete itself. **Always rc 0**, and silent on every failure — an absent workspace or an unreadable topology answers nothing instead of refusing. That is the one deliberate exception to the unreadable-is-not-an-absent-file rule (rule 71): completion decides nothing, so it may not decide to fail. Reads the topology and the user sets; never writes, never locks, never syncs, never needs root |
+| `--print-completion` | `gsa --print-completion <fish\|bash\|zsh>` | prints the completion wrapper for one shell, which `gsa-pm` installs (`fish/vendor_completions.d/gsa.fish`, `bash-completion/completions/gsa`, `zsh/site-functions/_gsa`). The wrapper carries **no grammar** — it forwards the command line to `--complete` — so a shipped completion cannot drift from the binary, for the same reason `--print-conf` exists. rc 0 / 2 missing or unknown shell |
 
 *Amendment (2026-10-14, cutover gap G10 — the `--lane-job` flags payload
 grammar).* `<flags…>` is the makepkg argument set the lane forwards verbatim
