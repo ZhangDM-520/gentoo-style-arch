@@ -1053,7 +1053,14 @@ fn run_update_inner(
     }
 
     // ── 2. the stale set (§B.3 `-Qu` / §B.4 `-Su`) ────────────────────────
-    let stale = prepare::stale_set(&root, &graph, &ids);
+    // The installed record is the reference point whenever one exists: an
+    // archive whose install was refused must stay stale, or the update
+    // disappears from this verb for good.
+    let installed = LocalDb::load(&pacman_db_root()).map_err(Exit::Usage)?;
+    let stale: Vec<RecipeId> = prepare::stale_set(&root, &graph, &db, &installed, &ids)
+        .into_iter()
+        .map(|row| row.id)
+        .collect();
     if stale.is_empty() {
         let subject = record::subject_id("-");
         let plan = vec![PlanRow {

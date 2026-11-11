@@ -51,6 +51,9 @@ set -euo pipefail
 #      (`updpkgsums`, dropped to the build user, cannot write where the sync
 #      stages → anchoring-refused); after the one-shot migration the same
 #      run anchors IN-STORE and the store's PKGBUILD ends with the new sums.
+#   8. `-Su`'s stale set is measured against the INSTALLED record when one
+#      exists: a recipe whose archive already carries the tracked version
+#      but whose install was refused is still stale (2026-11-11).
 #
 # Complement to tests/anchor-defer.sh (do not duplicate): that fixture drives
 # a BUILD run's pre-dispatch deferral through a makepkg rc 99 and pins the
@@ -952,6 +955,44 @@ record_block() {
         || fail "s7: the legacy store must be gone after the move"
     [ "$(stat -c %u "$recipe/PKGBUILD")" = "$(id -u)" ] \
         || fail "s7: the rewritten PKGBUILD must be owned by the run user"
+)
+
+# ─── 8. -Su measures the INSTALLED record, never the archive alone ────────
+# A refused install leaves the archive at the tracked version while the host
+# still runs the old one. Measuring the built set alone reported "nothing
+# stale" and the update vanished from `-Qu`/`-Su` for good (2026-11-11).
+(
+    set -euo pipefail
+    ws="$fixture/s8/ws"
+    make_workspace "$ws" 1 1 low
+    add_package "$ws" demo "$(printf 'pkgver=2.0.0\npkgrel=1\narch=(any)')"
+    write_stub_pacman "$ws"
+    write_stub_makepkg "$ws"
+    stub_sudo "$ws"
+    db="$fixture/s8/db"
+    mkdir -p "$db/local/demo-1.0.0-1"
+    printf '%%NAME%%\ndemo\n\n%%VERSION%%\n1.0.0-1\n' >"$db/local/demo-1.0.0-1/desc"
+    : >"$db/local/demo-1.0.0-1/files"
+    write_stub_pacman_conf "$ws" "$db"
+    export PATH="$ws/bin:$PATH"
+    export GSA_FAKE_SYNC_PACMAN_LOG="$fixture/s8/pacman.log"
+    export GSA_FAKE_SYNC_SI_LOG="$fixture/s8/si.log"
+    export GSA_FAKE_SYNC_MAKEPKG_LOG="$fixture/s8/makepkg.log"
+    state="$fixture/s8/state"
+    recipe="$ws/packages/demo"
+    : >"$recipe/demo-2.0.0-1-any.pkg.tar.zst"
+
+    run_engine "$ws" -Su --state-dir "$state" --config "$ws/pacman.conf" --no-prefetch
+    {
+        echo "$FIXTURE_OUTPUT"
+    } >"$fixture/s8/run.txt"
+    [ "$FIXTURE_RC" = 0 ] || fail "s8: -Su rc=$FIXTURE_RC, want 0:" "$fixture/s8/run.txt"
+    [ "$(rr2_scalar order <<<"$FIXTURE_OUTPUT")" = "demo" ] \
+        || fail "s8: an installed-behind recipe is stale even when its archive matches:" "$fixture/s8/run.txt"
+    [ "$(rr2_outcome demo status <<<"$FIXTURE_OUTPUT")" = "succeeded" ] \
+        || fail "s8: the stale recipe did not build:" "$fixture/s8/run.txt"
+    grep -F 'pacman -U' "$GSA_FAKE_SYNC_PACMAN_LOG" >/dev/null \
+        || fail "s8: the stale recipe was never installed:" "$GSA_FAKE_SYNC_PACMAN_LOG"
 )
 
 printf 'gsa sync v2 fixture: PASS\n'

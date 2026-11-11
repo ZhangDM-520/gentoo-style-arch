@@ -984,32 +984,98 @@ fn run_sync_pass_inner(
     Ok(0)
 }
 
+/// One stale-set row: the decision AND the evidence it was made on, computed
+/// once so `-Qu` renders exactly what `-Su` planned (rule 72 — a view never
+/// re-derives the decision).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StaleRow {
+    pub id: RecipeId,
+    /// The recipe's canonical tracked version (`[epoch:]pkgver-pkgrel`).
+    pub tracked: String,
+    /// The oldest INSTALLED output's version, when any output is installed.
+    pub installed: Option<String>,
+    /// The newest complete built instance's key, when one exists.
+    pub built: Option<String>,
+}
+
 /// The `-Su` stale set (contract §B.3 `-Qu` / §B.4 `-Su`): recipes whose
-/// tracked (committed) version moved past their newest complete built
-/// instance. A recipe with no built instance is NOT stale — fresh builds use
-/// an explicit selection. `vercmp` disagreement in either direction that
-/// cannot be compared is not stale (never invent movement).
-pub fn stale_set(root: &Path, graph: &Graph<'_>, ids: &[RecipeId]) -> Vec<RecipeId> {
+/// tracked (committed) version moved past what the host actually HAS.
+///
+/// The reference point is the INSTALLED record whenever any of the recipe's
+/// outputs is installed, and only then the newest complete built instance:
+/// measuring against the archive alone let a refused install vanish from
+/// `-Qu`/`-Su` — the archive read as "built", so no row ever asked for the
+/// install that was refused and the host stayed behind for good. A recipe
+/// with no installed output and no built instance is NOT stale (fresh builds
+/// use an explicit selection). `vercmp` disagreement — in either direction —
+/// is not stale (never invent movement).
+pub fn stale_set(
+    root: &Path,
+    graph: &Graph<'_>,
+    db: &gsa_recipe::RecipeDb,
+    installed: &gsa_install::localdb::LocalDb,
+    ids: &[RecipeId],
+) -> Vec<StaleRow> {
     let mut stale = Vec::new();
     for id in ids {
         let idx = match graph.index_of(id.as_str()) {
             Some(idx) => idx,
             None => continue,
         };
+        // The tracked version is read from the recipe AT CALL TIME, never
+        // from a `RecipeDb` loaded before the `-Syu` sync phase — that pass
+        // rewrites `pkgver` in place, and a pre-sync view would measure the
+        // stale set against the version that was just replaced.
         let recipe_dir = root.join(&graph.record(idx).path);
         let Ok((pv, pr)) = freshness::current_version_key(&recipe_dir) else {
             continue;
         };
         let tracked = format!("{pv}-{pr}");
-        let discovery = freshness::discover_newest_complete_set(&recipe_dir);
-        if discovery.status() != freshness::DiscoveryStatus::Complete {
-            continue;
-        }
-        let Some(built) = discovery.version_key else {
+        let Some(meta) = db.get(id.as_str()) else {
             continue;
         };
-        if matches!(sync::vercmp(&tracked, &built), Some(n) if n > 0) {
-            stale.push(id.clone());
+        let mut installed_version: Option<String> = None;
+        for pkgname in meta.pkgnames() {
+            let Some(pkg) = installed.get(&pkgname) else {
+                continue;
+            };
+            // The OLDEST installed output is the row's evidence and the
+            // comparison's operand: one output left behind is the recipe
+            // being behind, and split outputs share a version in practice.
+            let older = match &installed_version {
+                None => true,
+                Some(current) => {
+                    matches!(sync::vercmp(&pkg.version, current), Some(n) if n < 0)
+                }
+            };
+            if older {
+                installed_version = Some(pkg.version.clone());
+            }
+        }
+        let discovery = freshness::discover_newest_complete_set(&recipe_dir);
+        let built = if discovery.status() == freshness::DiscoveryStatus::Complete {
+            discovery.version_key
+        } else {
+            None
+        };
+        let is_stale = match &installed_version {
+            Some(installed) => {
+                matches!(sync::vercmp(&tracked, installed), Some(n) if n > 0)
+            }
+            // No installed output: the built set is the only evidence. A
+            // recipe with neither is never stale (explicit selection).
+            None => match &built {
+                Some(built) => matches!(sync::vercmp(&tracked, built), Some(n) if n > 0),
+                None => false,
+            },
+        };
+        if is_stale {
+            stale.push(StaleRow {
+                id: id.clone(),
+                tracked,
+                installed: installed_version,
+                built,
+            });
         }
     }
     stale

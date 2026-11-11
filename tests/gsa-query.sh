@@ -22,9 +22,11 @@ set -euo pipefail
 #      semantics — the installed DB, not the buildable universe);
 #   d. `gsa -Ql`/`gsa -Qo` are pacman delegates: the argv reaches pacman
 #      verbatim and its stdout and exit code pass through (H8);
-#   e. `gsa -Qu` reports the stale set as `id tracked=<pv-pr> built=<pv-pr>`
-#      (the `prepare::stale_set` definition — tracked moved past the newest
-#      built instance);
+#   e. `gsa -Qu` reports the stale set as
+#      `id tracked=<ver> installed=<ver|-> built=<ver|->` (the
+#      `prepare::stale_set` definition: the INSTALLED record when one
+#      exists, else the newest built instance — a refused install never
+#      vanishes from it);
 #   f. `gsa -Qg` lists the group roster with counts (the -Sg content, moved
 #      to the query family);
 #   g. `-Si`/`-Ss`/`-Sg` are RETIRED (H7/H8): rc 2, a usage error naming
@@ -288,27 +290,45 @@ if [ -z "$only" ] || [ "$only" = d ]; then
     )
 fi
 
-# ── e. -Qu: the stale set as id tracked= built= ───────────────────────────
+# ── e. -Qu: the stale set as id tracked= installed= built= ────────────────
 if [ -z "$only" ] || [ "$only" = e ]; then
     (
         ws="$fixture/e/ws"
         state="$fixture/e/state"
+        db="$fixture/e/db"
         make_workspace "$ws" 1 1 low
         add_package "$ws" stale-demo "$(printf 'pkgver=2.0.0\npkgrel=1\narch=(any)')"
         add_package "$ws" fresh-demo "$(printf 'pkgver=1.0.0\npkgrel=1\narch=(any)')"
+        add_package "$ws" refused-demo "$(printf 'pkgver=2.0.0\npkgrel=1\narch=(any)')"
         # Built instances beside the recipes (discovery is name-shaped):
         # stale-demo's newest built set is 1.0.0-1 (tracked 2.0.0-1), while
-        # fresh-demo's is its tracked version (not stale).
+        # fresh-demo's is its tracked version (not stale). refused-demo's
+        # archive IS its tracked version — the install was refused, so the
+        # installed record, not the archive, decides (2026-11-11).
         : >"$ws/packages/stale-demo/stale-demo-1.0.0-1-any.pkg.tar.zst"
         : >"$ws/packages/fresh-demo/fresh-demo-1.0.0-1-any.pkg.tar.zst"
-        make_pacman_stubs "$ws/bin" "$fixture/e/db"
+        : >"$ws/packages/refused-demo/refused-demo-2.0.0-1-any.pkg.tar.zst"
+        # The scratch installed DB: fresh-demo is current, refused-demo is
+        # one version behind its own archive.
+        mkdir -p "$db/local/fresh-demo-1.0.0-1" "$db/local/refused-demo-1.0.0-1"
+        printf '%%NAME%%\nfresh-demo\n\n%%VERSION%%\n1.0.0-1\n' \
+            >"$db/local/fresh-demo-1.0.0-1/desc"
+        printf '%%NAME%%\nrefused-demo\n\n%%VERSION%%\n1.0.0-1\n' \
+            >"$db/local/refused-demo-1.0.0-1/desc"
+        : >"$db/local/fresh-demo-1.0.0-1/files"
+        : >"$db/local/refused-demo-1.0.0-1/files"
+        make_pacman_stubs "$ws/bin" "$db"
         export PATH="$ws/bin:$PATH"
         GSA_CONF="$conf" GSA_STATE_DIR="$state" run_engine_user "$ws" -Qu
         [ "$FIXTURE_RC" -eq 0 ] || fail "e: rc=$FIXTURE_RC want 0: $FIXTURE_OUTPUT"
-        grep -Fx 'stale-demo tracked=2.0.0-1 built=1.0.0-1' <<<"$FIXTURE_OUTPUT" >/dev/null \
-            || fail "e: the stale row is missing/wrong: $FIXTURE_OUTPUT"
+        grep -Fx 'stale-demo tracked=2.0.0-1 installed=- built=1.0.0-1' <<<"$FIXTURE_OUTPUT" >/dev/null \
+            || fail "e: the built-set stale row is missing/wrong: $FIXTURE_OUTPUT"
+        # A refused install must never vanish: the archive matches the
+        # tracked version, yet the host still runs 1.0.0-1.
+        grep -Fx 'refused-demo tracked=2.0.0-1 installed=0:1.0.0-1 built=2.0.0-1' <<<"$FIXTURE_OUTPUT" >/dev/null \
+            || fail "e: a recipe whose INSTALL is behind its own archive is stale: $FIXTURE_OUTPUT"
         if grep -q 'fresh-demo' <<<"$FIXTURE_OUTPUT"; then
-            fail "e: a recipe whose built set matches the tracked version is not stale: $FIXTURE_OUTPUT"
+            fail "e: a recipe at its tracked version is not stale: $FIXTURE_OUTPUT"
         fi
     )
 fi

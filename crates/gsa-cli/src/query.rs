@@ -939,9 +939,10 @@ pub fn query_info(
 }
 
 /// `gsa -Qu` (§B.3, I3): the stale set — recipes whose tracked (committed)
-/// version moved past their newest complete built instance
-/// (`prepare::stale_set`'s definition). Rows:
-/// `id tracked=<pv-pr> built=<pv-pr>`.
+/// version moved past what the host actually has
+/// (`prepare::stale_set`'s definition: the installed record when one exists,
+/// else the newest complete built instance). Rows:
+/// `id tracked=<ver> installed=<ver|-> built=<ver|->`.
 pub fn query_updates(
     ctx: &Ctx<'_>,
     root: &Path,
@@ -955,20 +956,17 @@ pub fn query_updates(
         return Err("gsa -Qu takes no references (it reports the whole stale set)".to_string());
     }
     let ids: Vec<gsa_model::RecipeId> = ctx.graph.records().iter().map(|r| r.id.clone()).collect();
-    for id in crate::prepare::stale_set(root, ctx.graph, &ids) {
-        let idx = ctx
-            .graph
-            .index_of(id.as_str())
-            .expect("stale ids resolve to records");
-        let recipe_dir = root.join(&ctx.graph.record(idx).path);
-        let tracked = gsa_recipe::freshness::current_version_key(&recipe_dir)
-            .map(|(pv, pr)| format!("{pv}-{pr}"))
-            .unwrap_or_else(|_| "?".to_string());
-        let built = gsa_recipe::freshness::discover_newest_complete_set(&recipe_dir)
-            .version_key
-            .unwrap_or_else(|| "-".to_string());
-        writeln!(out, "{} tracked={tracked} built={built}", id.as_str())
-            .map_err(|e| e.to_string())?;
+    let installed = LocalDb::load(&pacman_db_root()).map_err(|e| e.to_string())?;
+    for row in crate::prepare::stale_set(root, ctx.graph, ctx.db, &installed, &ids) {
+        writeln!(
+            out,
+            "{} tracked={} installed={} built={}",
+            row.id.as_str(),
+            row.tracked,
+            row.installed.as_deref().unwrap_or("-"),
+            row.built.as_deref().unwrap_or("-"),
+        )
+        .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
