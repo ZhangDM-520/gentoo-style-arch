@@ -1304,6 +1304,10 @@ lanes: 2
 normal-jobs: 6
 core-jobs: 4
 intensity: xhigh
+toolchain: gcc                     <- the family the selection resolved to
+toolchain-identity: gcc|gcc (GCC) 15.2.1 20250617|9f2c…  <- §B.11 identity
+started: 1794412800                <- run began
+ended: 1794414600                  <- record closed
 outcome: failed                    <- run-level outcome, from the rows below
 rc: 4                              <- cone-stop run with a failure (§G.1)
 --- plan ---
@@ -1317,7 +1321,7 @@ gtk4-git parked - - waits-on-failed        <- consumer cone parked (§I.1)
 gimp-git parked - - waits-on-failed        <- cone reaches it through gtk4-git
 niri-spicy-git succeeded 0 1450 ok         <- unrelated work ran to completion
 --- continuation ---
-command: gsa -S glib2-git gtk4-git gimp-git
+command: sudo gsa -S glib2-git gtk4-git gimp-git   <- privileged run; omitted when remaining: is empty
 remaining: glib2-git gtk4-git gimp-git
 not-mirrored: -
 env-required: GSA_STATE_DIR

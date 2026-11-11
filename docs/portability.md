@@ -96,7 +96,10 @@ BELOW the automatic per-lane ceiling is honoured; ABOVE it the value is
 clamped to that ceiling and the clamp is announced on stderr with the value
 used — the automatic value is the host's safe ceiling (threads and memory
 shared across the lanes), and an unbounded `--jobs` would reintroduce the
-oversubscription the budget exists to prevent. `GSA_CPU_THREADS` and `GSA_MEMORY_GIB`
+oversubscription the budget exists to prevent. An explicit `--lanes` (or
+`GSA_LANES`) above the selection's package count is clamped to one lane per
+package and announced the same way; the automatic lane count already includes
+that bound. `GSA_CPU_THREADS` and `GSA_MEMORY_GIB`
 override resource discovery for a container or a deterministic scheduler
 fixture — leave them unset on a normal host. `GSA_TARGET_CPU` is the
 intentional CPU-tuning override of the next section. The numeric defaults in

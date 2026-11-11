@@ -864,6 +864,10 @@ lanes: …
 normal-jobs: …
 core-jobs: …
 intensity: …
+toolchain: gcc|clang|mixed|-      # the family the WHOLE selection resolved to
+toolchain-identity: <family>|<version>|<digest>|-   # - when nothing was probed
+started: <epoch|->                 # when the run began
+ended: <epoch|->                   # when the record closed
 outcome: planned|success|refused|failed|deferral|interrupted
 rc: <run exit code>
 --- plan ---
@@ -871,7 +875,7 @@ rc: <run exit code>
 --- outcome ---
 <pkg> <status> <rc> <dur> <reason…>
 --- continuation ---
-command: …
+command: …                         # omitted when `remaining:` is empty
 remaining: …
 not-mirrored: …
 env-required: …
@@ -879,10 +883,12 @@ env-required: …
 ```
 
 The budget scalars `lanes`, `normal-jobs` and `core-jobs` are always
-non-negative integers — they render `0`, never `-`, for any record whose run
-dispatched nothing (dry-run plans, `-U` transactions, preflight refusals);
-the 2026-10-14 amendment to §H.2 fixes that, and `-` remains valid only for a
-row's `rc`/`dur`. Rows are full, never exceptions-only: **one plan row and
+non-negative integers and never `-`. A dry-run plan and a pre-dispatch
+refusal render the budget they RESOLVED (so the plan answers what the run
+would have used), while a run that dispatched no lanes renders `0` — the
+§H.2 amendments of 2026-10-14 and 2026-11-11, also pinned by
+`tests/run-record.sh`; `-` remains valid only for a row's `rc`/`dur` and for
+the four extension scalars above. Rows are full, never exceptions-only: **one plan row and
 one outcome row per selected package**, in topological order, `order` free of
 duplicates — even when the decision seam emitted several findings for one
 subject, the record collapses per subject (§H.2, 2026-10-14). A row's reason

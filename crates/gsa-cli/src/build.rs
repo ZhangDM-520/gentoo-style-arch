@@ -1064,12 +1064,13 @@ pub(crate) fn plan_only(
     // A plan names the family it would use; it probes no compiler, so the
     // identity is `-` — the plan did not build.
     let (toolchain, _) = record_toolchain(ctx.graph, root, &selection);
-    let now = gsa_model::epoch_now();
     rec.stamp = gsa_model::RecordStamp {
         toolchain,
         toolchain_identity: None,
-        started: Some(now),
-        ended: Some(now),
+        // A plan answers WHEN the run began (the dispatch instant every
+        // other record now stamps), not when the plan finished rendering.
+        started: Some(record::run_started()),
+        ended: Some(gsa_model::epoch_now()),
     };
     let _ = write!(out, "{}", rec.render_machine());
     Ok(rc)
@@ -1300,8 +1301,10 @@ fn resolve_budget(
         Some(value) => value.clone(),
         None => crate::resolve_intensity(project)?,
     };
-    let lanes = override_value(inv.lanes.as_deref(), "GSA_LANES", &project.defaults.lanes)?;
-    let jobs = override_value(inv.jobs.as_deref(), "GSA_JOBS", &project.defaults.jobs)?;
+    let (lanes, lanes_source) =
+        override_value(inv.lanes.as_deref(), "GSA_LANES", &project.defaults.lanes)?;
+    let (jobs, jobs_source) =
+        override_value(inv.jobs.as_deref(), "GSA_JOBS", &project.defaults.jobs)?;
     let baseline = |raw: &str, name: &str| -> Result<f64, String> {
         raw.trim().parse::<f64>().map_err(|_| {
             format!("config/build-defaults.conf: {name} must be a number (got '{raw}')")
@@ -1336,7 +1339,7 @@ fn resolve_budget(
         if budget.lanes < requested {
             warnings.push(format!(
                 "gsa: warning: {} {} exceeds the selection ({} package(s)); using {} (one lane per package, docs/portability.md)",
-                lanes_source(inv),
+                lanes_source,
                 requested,
                 package_count.max(1),
                 budget.lanes
@@ -1347,7 +1350,7 @@ fn resolve_budget(
         if budget.normal_jobs < requested {
             warnings.push(format!(
                 "gsa: warning: {} {} exceeds the host budget; using {} (jobs are capped by CPU threads and memory, docs/portability.md)",
-                jobs_source(inv),
+                jobs_source,
                 requested,
                 budget.normal_jobs
             ));
@@ -1356,49 +1359,30 @@ fn resolve_budget(
     Ok((budget, warnings))
 }
 
-/// The spelling an over-count `--lanes` came from (§B.8 ladder: flag, env
-/// twin, config), so the clamp warning names the rung that was clamped.
-fn lanes_source(inv: &Invocation) -> &'static str {
-    if inv.lanes.is_some() {
-        "--lanes"
-    } else if std::env::var("GSA_LANES")
-        .map(|v| !v.is_empty())
-        .unwrap_or(false)
-    {
-        "GSA_LANES"
-    } else {
-        "config lanes"
-    }
-}
-
-/// The spelling an over-budget `--jobs` came from, so the clamp warning
-/// names the rung the §B.8 ladder actually used (flag, env twin, config).
-fn jobs_source(inv: &Invocation) -> &'static str {
-    if inv.jobs.is_some() {
-        "--jobs"
-    } else if std::env::var("GSA_JOBS")
-        .map(|v| !v.is_empty())
-        .unwrap_or(false)
-    {
-        "GSA_JOBS"
-    } else {
-        "config jobs"
-    }
-}
-
 /// One parallelism override: the flag, else its env twin, else the
-/// build-defaults value (contract §B.8: a flag beats its env twin).
-fn override_value(flag: Option<&str>, env_name: &str, conf: &str) -> Result<Override, String> {
+/// build-defaults value (contract §B.8: a flag beats its env twin). The rung
+/// comes back WITH the value — a clamp warning must name the spelling that
+/// answered, and re-deriving it from the environment would be a second ladder
+/// for one setting (rule 73).
+fn override_value(
+    flag: Option<&str>,
+    env_name: &str,
+    conf: &str,
+) -> Result<(Override, String), String> {
+    let name = env_name.trim_start_matches("GSA_").to_ascii_lowercase();
     if let Some(raw) = flag {
-        let name = env_name.trim_start_matches("GSA_").to_ascii_lowercase();
-        return Override::parse(raw).map_err(|e| format!("--{name}: {e}"));
+        let value = Override::parse(raw).map_err(|e| format!("--{name}: {e}"))?;
+        return Ok((value, format!("--{name}")));
     }
     if let Ok(raw) = std::env::var(env_name) {
         if !raw.is_empty() {
-            return Override::parse(&raw).map_err(|e| format!("{env_name}: {e}"));
+            let value = Override::parse(&raw).map_err(|e| format!("{env_name}: {e}"))?;
+            return Ok((value, env_name.to_string()));
         }
     }
-    Override::parse(conf.trim()).map_err(|e| format!("config/build-defaults.conf: {e}"))
+    let value =
+        Override::parse(conf.trim()).map_err(|e| format!("config/build-defaults.conf: {e}"))?;
+    Ok((value, format!("config {name}")))
 }
 
 /// The scheduling nodes: the selection in canonical build order, with
