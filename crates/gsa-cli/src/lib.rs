@@ -648,9 +648,53 @@ fn execute(
     Ok(RC_OK)
 }
 
+/// A `Write` that swallows a closed reader. Once the first write meets
+/// `BrokenPipe` the sink is done: later writes succeed without touching the
+/// stream, so the renderer finishes quietly and the exit code stays 0.
+struct ClosedPipeTolerant<'a> {
+    inner: &'a mut dyn Write,
+    closed: bool,
+}
+
+impl<'a> ClosedPipeTolerant<'a> {
+    fn new(inner: &'a mut dyn Write) -> Self {
+        ClosedPipeTolerant {
+            inner,
+            closed: false,
+        }
+    }
+}
+
+impl Write for ClosedPipeTolerant<'_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if self.closed {
+            return Ok(buf.len());
+        }
+        match self.inner.write(buf) {
+            Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => {
+                self.closed = true;
+                Ok(buf.len())
+            }
+            other => other,
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        if self.closed {
+            return Ok(());
+        }
+        self.inner.flush()
+    }
+}
+
 /// Run one invocation against the current directory's repository. Returns
 /// the process exit code and writes all output through `out`/`err`.
 pub fn run(argv: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
+    // A closed reader is normal Unix, not an error: `gsa -Q | head` must not
+    // print "Broken pipe" and must not exit 2 through the usage path. Every
+    // rendering writes through this guard, so no call site has to know.
+    let mut sink = ClosedPipeTolerant::new(out);
+    let out: &mut dyn Write = &mut sink;
     let parsed = args::parse(argv);
     // Pin the output mode before any rendering (output::mode() falls back to
     // stdout's tty-ness when --machine was not given).

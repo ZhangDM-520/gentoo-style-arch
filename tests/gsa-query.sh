@@ -8,8 +8,8 @@ set -euo pipefail
 # this fixture writes in the §J.4 storage format, and PATH pacman stubs
 # that record their argv.
 #
-# Pinned here (eight ( subshell ) sections, run one alone with
-# GSA_QUERY_ONLY=a…h):
+# Pinned here (nine ( subshell ) sections, run one alone with
+# GSA_QUERY_ONLY=a…i):
 #   a. `gsa -Q` lists the INSTALLED packages (never the recipe universe)
 #      with the side-car columns `abi= built= instances=` exactly where an
 #      index row exists (§B.3 "where a side-car row exists");
@@ -30,7 +30,9 @@ set -euo pipefail
 #   g. `-Si`/`-Ss`/`-Sg` are RETIRED (H7/H8): rc 2, a usage error naming
 #      the new `-Q` home — never a silent re-route;
 #   h. a `-Q` verb against a PRISTINE root creates no state (it must run
-#      unprivileged and report the empty side-car, never mkdir/chown).
+#      unprivileged and report the empty side-car, never mkdir/chown);
+#   i. a CLOSED READER is normal Unix: `gsa -Q | head` must exit 0 with no
+#      "Broken pipe" diagnostic, never route an EPIPE through the usage path.
 #
 # House conventions: ( subshell ) sections, `fail()` prefixes, rr-v2.bash's
 # run_engine_user (queries are read-only, §B.10).
@@ -348,6 +350,52 @@ if [ -z "$only" ] || [ "$only" = h ]; then
             [ ! -e "$state" ] \
                 || fail "h: $verb created the state root $state (a query never owns state)"
         done
+    )
+fi
+
+# ── i. a closed reader is normal Unix (SIGPIPE) ───────────────────────────
+if [ -z "$only" ] || [ "$only" = i ]; then
+    (
+        ws="$fixture/i2/ws"
+        state="$fixture/i2/state"
+        make_workspace "$ws" 1 1 low
+        add_package "$ws" foo "$gsa_meta_any"
+        # Enough rows that the listing overflows a pipe buffer: with fewer,
+        # the writer finishes before the reader closes and no EPIPE can ever
+        # be observed (the pin would pass vacuously).
+        db="$fixture/i2/db"
+        mkdir -p "$db/local"
+        for i in $(seq 1 2000); do
+            dir="$db/local/bulk-$i-1.0-1"
+            mkdir -p "$dir"
+            printf '%%NAME%%\nbulk-%s\n\n%%VERSION%%\n1.0-1\n\n%%DESC%%\n%s\n' \
+                "$i" "a bulk package row long enough to overflow the pipe buffer" >"$dir/desc"
+            : >"$dir/files"
+        done
+        make_pacman_stubs "$ws/bin" "$db"
+        export PATH="$ws/bin:$PATH"
+        export GSA_CONF="$conf" GSA_STATE_DIR="$state"
+
+        # `head -c 1` closes the reader as soon as the first byte lands, so
+        # the engine's next write is an EPIPE — the ordinary Unix ending of
+        # a paged listing, never an error.
+        errlog="$fixture/i2/err"
+        set +e
+        bash -c '"$1" -Q 2>"$2" | head -c 1 >/dev/null; exit "${PIPESTATUS[0]}"' \
+            _ "$engine" "$errlog"
+        rc=$?
+        set -e
+        [ "$rc" -eq 0 ] \
+            || fail "i: a closed reader must leave rc 0 (got $rc): $(cat "$errlog" 2>/dev/null)"
+        if grep -qi 'broken pipe' "$errlog"; then
+            fail "i: a closed reader must not print a broken-pipe diagnostic: $(cat "$errlog")"
+        fi
+
+        # The same listing still completes whole when nobody closes it.
+        run_engine_user "$ws" -Q
+        [ "$FIXTURE_RC" -eq 0 ] || fail "i: rc=$FIXTURE_RC want 0: $FIXTURE_OUTPUT"
+        grep -c '^bulk-1 0:1.0-1$' <<<"$FIXTURE_OUTPUT" >/dev/null \
+            || fail "i: the complete listing must carry every row: $FIXTURE_OUTPUT"
     )
 fi
 
