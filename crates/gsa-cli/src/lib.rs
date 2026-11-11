@@ -260,6 +260,36 @@ fn classify(inv: &Invocation) -> Disposition {
         .iter()
         .find(|f| !maint_gate_stands_down && !accepted.contains(&f.as_str()))
     {
+        if is_maint {
+            // A live flag of a SIBLING maintain verb is neither "deferred"
+            // nor a build flag: name the verbs that own it and the flags
+            // this one takes (2026-11-11 blind review: `-Md --prune`
+            // answered with the -S/-U roster).
+            let mut here = maint::verb_of(inv)
+                .map(maint::accepted_flags)
+                .unwrap_or_default()
+                .join(", ");
+            if here.is_empty() {
+                here = "none".to_string();
+            }
+            let owners: Vec<String> = maint::VERB_LETTERS
+                .iter()
+                .filter(|letter| {
+                    maint::verb_from_letter(Some(**letter), 1)
+                        .map(|verb| maint::accepted_flags(verb).contains(&flag.as_str()))
+                        .unwrap_or(false)
+                })
+                .map(|letter| format!("-M{letter}"))
+                .collect();
+            let owner_text = if owners.is_empty() {
+                "no -M action takes it".to_string()
+            } else {
+                format!("it belongs to {}", owners.join(", "))
+            };
+            return Disposition::Bad(format!(
+                "{flag} is not a flag of this -M action ({owner_text}; this one accepts: {here})"
+            ));
+        }
         return Disposition::Deferred(format!(
             "{flag} (a later phase owns it; a build run accepts --skip, --skip-built, --vcs-skip-tolerance, --no-sync, --allow-broken-rustc, --fail-fast, --lanes, --jobs, --intensity, --state-dir, --build-dir, --no-build-dir-prompt, --toolchain; an install run (-S/-U) additionally accepts --no-register-ignorepkg, --config)"
         ));
