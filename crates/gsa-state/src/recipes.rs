@@ -70,6 +70,13 @@ fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
 }
 
 fn touch_stamp(state_dir: &Path) -> Result<(), String> {
+    // The state root may not exist yet on a first `-Sy` (a fresh
+    // `--state-dir`): create it the way the clone path does, so the refresh
+    // does not die with a raw ENOENT on an internal stamp file the operator
+    // never named (blind-review 2026-11-11, airgapped-admin).
+    if !state_dir.exists() {
+        create_owned_levels(state_dir)?;
+    }
     std::fs::write(stamp_path(state_dir), b"")
         .map_err(|e| format!("cannot write {}: {e}", stamp_path(state_dir).display()))
 }

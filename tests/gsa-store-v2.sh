@@ -27,6 +27,9 @@ set -euo pipefail
 #      is noted and NEVER deleted;
 #   g. no workspace anywhere and no store: the failing read teaches the
 #      store-era remedy (never the retired cwd-only hint).
+#   h. `-Sy` on a NOT-yet-existing state root creates it and stamps the
+#      refresh — a raw ENOENT on `recipes.last-fetch` used to be the answer,
+#      naming an internal file the operator never asked for.
 #
 # Sections a/d/e/f run the engine through real `sudo -n` (fetch and
 # migration are root-side mutations; W5 convention: root-safe trap,
@@ -337,6 +340,45 @@ if [ -z "$only" ] || [ "$only" = g ]; then
         case $FIXTURE_OUTPUT in
         *"topology file not found"*"set \`project\` in gsa.conf"*) ;;
         *) fail "g: the topology not-found error must teach the store-era remedy: $FIXTURE_OUTPUT" ;;
+        esac
+    )
+fi
+
+# ── h. -Sy creates a missing state root; the refresh stamp lands ─────────
+if [ -z "$only" ] || [ "$only" = h ]; then
+    (
+        set -euo pipefail
+        up="$fixture/h/upstream"
+        state="$fixture/h/state"
+        store="$fixture/h/recipe-store"
+        conf="$fixture/h/gsa.conf"
+        empty="$fixture/h/empty"
+        mkdir -p "$empty"
+        make_upstream "$up"
+        printf 'recipe_url = %s\n' "$up" >"$conf"
+        export GSA_RECIPES_DIR="$store"
+        [ ! -e "$state" ] || fail "h: the state root must start absent"
+
+        run_store "$state" "$conf" "$empty" -Sy
+        [ "$FIXTURE_RC" = 0 ] \
+            || fail "h: -Sy on a missing state root must succeed, got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        [ -f "$store/config/topology.conf" ] \
+            || fail "h: the store must still be fetched: $FIXTURE_OUTPUT"
+        [ -f "$state/recipes.last-fetch" ] \
+            || fail "h: the refresh stamp must land in the created state root: $FIXTURE_OUTPUT"
+
+        # The refresh path, with the state root gone: the store already
+        # exists, so this is the SECOND -Sy of a fresh state root — the exact
+        # shape that answered `cannot write …/recipes.last-fetch: ENOENT`.
+        /usr/bin/sudo -n rm -rf -- "$state"
+        [ ! -e "$state" ] || fail "h: the state root must be gone for the refresh case"
+        run_store "$state" "$conf" "$empty" -Sy
+        [ "$FIXTURE_RC" = 0 ] \
+            || fail "h: the refresh into a missing state root must succeed, got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        [ -f "$state/recipes.last-fetch" ] \
+            || fail "h: the refresh stamp must land in the recreated state root: $FIXTURE_OUTPUT"
+        case $FIXTURE_OUTPUT in
+        *'cannot write'*) fail "h: no raw write failure may surface: $FIXTURE_OUTPUT" ;;
         esac
     )
 fi
