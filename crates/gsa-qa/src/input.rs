@@ -85,6 +85,13 @@ impl QaInput<'_> {
 pub struct Workspace {
     pub recipes: Vec<QaRecipe>,
     pub exclusions: Vec<String>,
+    /// Recipes the lints could NOT read, with the reason (today: no
+    /// committed `.SRCINFO`). The lints' input contract is the committed
+    /// metadata, so such a recipe contributes no findings — listing it here
+    /// is what lets `-Ma` say "not linted" instead of rendering the recipe
+    /// clean (blind-review finding, 2026-11-11: exactly the recipe shape
+    /// that hides a bad soname provide read as `recipe-contract clean`).
+    pub unlintable: Vec<(String, String)>,
 }
 
 /// Load the QA view of a workspace: every topology recipe with a committed
@@ -94,10 +101,18 @@ pub struct Workspace {
 pub fn load_workspace(root: &Path) -> Result<Workspace, String> {
     let project = gsa_topo::load_project(root).map_err(|e| format!("config: {e}"))?;
     let mut recipes = Vec::new();
+    let mut unlintable = Vec::new();
     for record in &project.topology.records {
         let dir = root.join(&record.path);
         let srcinfo = dir.join(".SRCINFO");
         let Ok(content) = std::fs::read_to_string(&srcinfo) else {
+            unlintable.push((
+                record.id.as_str().to_string(),
+                format!(
+                    "no committed .SRCINFO at {} — the recipe-contract lints read the committed metadata, so this recipe was not linted (regenerate it with makepkg --printsrcinfo)",
+                    srcinfo.display()
+                ),
+            ));
             continue;
         };
         let rows =
@@ -110,6 +125,7 @@ pub fn load_workspace(root: &Path) -> Result<Workspace, String> {
     }
     Ok(Workspace {
         recipes,
+        unlintable,
         exclusions: project
             .abi_exclusions
             .iter()

@@ -304,6 +304,31 @@ write_srcinfo() {
     printf 'D: -Ma integration + report-only OK\n'
 )
 
+# ─── D2. a recipe the lints cannot read is "unlintable", never clean ────────
+# Every recipe-contract lint reads the committed `.SRCINFO`; without one the
+# recipe contributed no rows and the family rendered clean — exactly the
+# recipe shape that hides a bad soname provide (blind-review 2026-11-11).
+(
+    set -euo pipefail
+    ws=$tmp/audit-unlintable-ws
+    make_workspace "$ws" 1 2 low
+    add_package "$ws" nosrc
+    run_engine "$ws" -Ma
+    ((FIXTURE_RC == 0)) ||
+        fail "D2: -Ma is report-only (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
+    grep -Fq 'recipe-contract unlintable: nosrc' <<<"$FIXTURE_OUTPUT" ||
+        fail "D2: a recipe with no .SRCINFO must be reported unlintable, got: $FIXTURE_OUTPUT"
+    grep -Fq 'no committed .SRCINFO' <<<"$FIXTURE_OUTPUT" ||
+        fail "D2: the row must say what is missing, got: $FIXTURE_OUTPUT"
+    # With the metadata committed the row disappears (red/green).
+    write_srcinfo "$ws/packages/nosrc" nosrc
+    run_engine "$ws" -Ma
+    case $FIXTURE_OUTPUT in
+    *'unlintable: nosrc'*) fail "D2: a committed .SRCINFO must clear the unlintable row: $FIXTURE_OUTPUT" ;;
+    esac
+    printf 'D2: unlintable recipe red/green OK\n'
+)
+
 if [[ -n $root ]]; then
 # ─── E. real-repo gates ──────────────────────────────────────────────────────
 (

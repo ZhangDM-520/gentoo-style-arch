@@ -267,7 +267,7 @@ pub fn report(ctx: &MaintCtx<'_>) -> Vec<Row> {
                 installed: &installed,
                 exclusions: &workspace.exclusions,
             };
-            gsa_qa::report::report_findings(&input)
+            let mut rows: Vec<(String, String)> = gsa_qa::report::report_findings(&input)
                 .iter()
                 .map(|finding| {
                     (
@@ -275,7 +275,12 @@ pub fn report(ctx: &MaintCtx<'_>) -> Vec<Row> {
                         finding.detail.clone(),
                     )
                 })
-                .collect()
+                .collect();
+            // A recipe the lints could not read is NOT a clean recipe.
+            for (id, reason) in &workspace.unlintable {
+                rows.push((format!("unlintable: {id}"), reason.clone()));
+            }
+            rows
         }
         Err(error) => vec![("(workspace)".to_string(), error.to_string())],
     };
