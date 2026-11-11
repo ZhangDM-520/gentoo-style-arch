@@ -366,7 +366,26 @@ mod render_tests {
             Toolchain::Clang,
             &[std::path::PathBuf::from("/nope/x.conf")],
         );
-        assert!(body.contains("[ -r '/nope/x.conf' ] && source '/nope/x.conf'"));
+        assert!(body.contains("[ -r '/nope/x.conf' ]"));
+        assert!(body.contains("source '/nope/x.conf'"));
+    }
+
+    /// A site file that is THERE and does not source must abort the lane:
+    /// the `[ -r ] && source` chain it replaced aborted only that file, so a
+    /// syntax error built with the floor body and the run reported success
+    /// (blind review, 2026-11-11).
+    #[test]
+    fn a_present_site_file_that_cannot_be_sourced_fails_the_lane() {
+        let body = render(
+            Toolchain::Clang,
+            &[std::path::PathBuf::from("/nope/x.conf")],
+        );
+        assert!(
+            body.contains("source '/nope/x.conf' ||"),
+            "a failed source must cascade: {body}"
+        );
+        assert!(body.contains("exit 1"));
+        assert!(!body.contains("] && source "));
     }
 
     #[test]
