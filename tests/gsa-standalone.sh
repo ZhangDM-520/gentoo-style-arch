@@ -281,3 +281,30 @@ if [ -z "$only" ] || [ "$only" = f ]; then
 fi
 
 printf 'gsa-standalone: PASS\n'
+
+# ── g. a token carrying a newline is echoed on ONE line ─────────────────
+# The staging note names the user's own token; a control character renders
+# as its escape so a path can never split the message across physical lines
+# (the record's one-line rule, §H.2; blind-review finding, 2026-11-11).
+if [ -z "$only" ] || [ "$only" = g ]; then
+    (
+        ws="$fixture/g/empty-cwd"
+        state="$fixture/g/state"
+        mkdir -p "$ws"
+        nl_dir="$fixture/g/shared/nl"$'\n'"dir"
+        make_recipe "$fixture/g/tmpl" nl-pkg
+        mkdir -p "$nl_dir"
+        cp "$fixture/g/tmpl/PKGBUILD" "$nl_dir/PKGBUILD"
+        GSA_CONF="$conf" GSA_STATE_DIR="$state" run_engine_user "$ws" \
+            -B --dry-run "$nl_dir/PKGBUILD"
+        [ "$FIXTURE_RC" -eq 0 ] || fail "g: rc=$FIXTURE_RC want 0: $FIXTURE_OUTPUT"
+        printf '%s\n' "$FIXTURE_OUTPUT" >"$fixture/g/out.txt"
+        notes=$(grep -c '^gsa: staged standalone target' "$fixture/g/out.txt" || true)
+        [ "$notes" = 1 ] ||
+            fail "g: the staging note must stay one physical line (got $notes)" "$fixture/g/out.txt"
+        case $FIXTURE_OUTPUT in
+        *'nl\ndir'*) ;;
+        *) fail "g: the note must escape the newline as \\n: $FIXTURE_OUTPUT" ;;
+        esac
+    )
+fi

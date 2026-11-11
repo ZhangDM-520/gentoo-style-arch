@@ -848,6 +848,14 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
     while let Some(token) = rest.first() {
         rest = &rest[1..];
         if token == "--" {
+            // Forwarded verbatim to `pacman -U` and mirrored on ONE line in
+            // the record's continuation (§H.2): a newline would break both.
+            if rest.iter().any(|arg| arg.contains(['\n', '\r'])) {
+                return Err(
+                    "a pacman argument after '--' must be a single line (the run record restates it on one)"
+                        .to_string(),
+                );
+            }
             inv.pacman_args = Some(rest.to_vec());
             break;
         }
@@ -976,6 +984,18 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
                             next.clone()
                         }
                     };
+                    // A path that carries a newline or carriage return
+                    // cannot be restated on the record's one-line
+                    // `command:` value (§H.2 forbids it): the continuation
+                    // would advertise an unreplayable command and the
+                    // machine block would break. Refuse at the flag.
+                    if matches!(name, "state-dir" | "build-dir" | "config")
+                        && value.contains(['\n', '\r'])
+                    {
+                        return Err(format!(
+                            "flag '--{name}' must be a single line (the run record restates it on one)"
+                        ));
+                    }
                     // The four build-run value flags are stored as well as
                     // deferred: a `-B` build reads them (§B.8), every other
                     // spelling keeps the deferred refusal. `--config` rides

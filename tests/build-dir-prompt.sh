@@ -183,6 +183,27 @@ run_dir "$fixture/gsa-nokey.conf" "$fixture/g.out" '\n' -B --dry-run --leaf p1 \
 grep -qF "current: $fixture/home/.cache/gsa  [the built-in default]" "$fixture/g.out" \
     || fail "the prompt did not report the built-in default" "$fixture/g.out"
 
+# ── G2. a root with a space is shell-quoted, and the paste really replays ──
+# (blind-review finding, 2026-11-11: raw interpolation made the advertised
+# command split `space` into a selection target.)
+spaceddir="$fixture/build space"
+run_pipe "$fixture/g2.out" -B --dry-run --leaf p1 --build-dir "$spaceddir" \
+    || fail "a spaced --build-dir plan failed (rc=$RC)" "$fixture/g2.out"
+g2cmd=$(continuation_command "$fixture/g2.out")
+case "$g2cmd" in
+*"--build-dir '$spaceddir'"*) ;;
+*) fail "the continuation pastes a spaced root unquoted: $g2cmd" "$fixture/g2.out" ;;
+esac
+(
+    cd "$ws" &&
+        env -u GSA_BUILD_DIR HOME="$fixture/home" TMPDIR="$fixture/tmp" \
+            GSA_CONF="$fixture/gsa.conf" GSA_STATE_DIR="$fixture/state" \
+            GSA_RECIPES_DIR="$fixture/recipes" \
+            bash -c "$g2cmd"
+) >"$fixture/g2-replay.out" 2>&1 && replay_rc=0 || replay_rc=$?
+[ "$replay_rc" = 0 ] ||
+    fail "the advertised continuation does not replay (rc=$replay_rc)" "$fixture/g2-replay.out"
+
 # ── H. refusals ───────────────────────────────────────────────────────────
 set +e
 run_dir "$fixture/gsa.conf" "$fixture/h1.out" 'q\n' -B --dry-run --leaf p1
@@ -196,6 +217,13 @@ run_pipe "$fixture/h2.out" -B --dry-run --leaf p1 --build-dir relative/tree
 [ "$RC" = 2 ] || fail "a relative --build-dir was not a usage error (rc=$RC)" "$fixture/h2.out"
 grep -q -- '--build-dir' "$fixture/h2.out" \
     || fail "the relative --build-dir refusal does not name the flag" "$fixture/h2.out"
+
+# A path carrying a newline can never be restated on the record's one-line
+# continuation (§H.2): refused at the flag rather than corrupting the block.
+run_pipe "$fixture/h3.out" -B --dry-run --leaf p1 --build-dir $'multi\nline'
+[ "$RC" = 2 ] || fail "a multi-line --build-dir was not a usage error (rc=$RC)" "$fixture/h3.out"
+grep -q 'single line' "$fixture/h3.out" \
+    || fail "the multi-line refusal does not say why" "$fixture/h3.out"
 
 # ── I. a read-only family refuses the build-run flag ──────────────────────
 run_pipe "$fixture/i.out" -Q --build-dir /tmp/x

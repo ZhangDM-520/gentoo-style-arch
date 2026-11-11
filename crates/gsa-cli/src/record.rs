@@ -247,18 +247,18 @@ fn mirror_flags(inv: &Invocation, budget: Option<&gsa_sched::budget::Budget>) ->
         out.push_str(" --fail-fast");
     }
     if let Some(dir) = &inv.state_dir {
-        out.push_str(&format!(" --state-dir {dir}"));
+        out.push_str(&format!(" --state-dir {}", shell_quote(dir)));
     }
     // The build root this run actually used (§J.2): a resume must not land in
     // a different cache because the prompt was answered once.
     if let Some(dir) = &inv.build_dir {
-        out.push_str(&format!(" --build-dir {dir}"));
+        out.push_str(&format!(" --build-dir {}", shell_quote(dir)));
     }
     if inv.no_build_dir_prompt {
         out.push_str(" --no-build-dir-prompt");
     }
     if let Some(conf) = &inv.config {
-        out.push_str(&format!(" --config {conf}"));
+        out.push_str(&format!(" --config {}", shell_quote(conf)));
     }
     if inv
         .deferred_flags
@@ -283,6 +283,28 @@ fn mirror_flags(inv: &Invocation, budget: Option<&gsa_sched::budget::Budget>) ->
     out
 }
 
+/// POSIX-shell quoting for a path pasted back into a continuation
+/// `command:` (contract §H.2 restates the invocation as something
+/// replayable): an already-safe token stays bare so the common case reads
+/// exactly as the user typed it; anything else is single-quoted, with each
+/// embedded `'` closed-quoted. A newline or carriage return never reaches
+/// here — the flag parser refuses those values, because the record's value
+/// grammar is one line (§H.2).
+fn shell_quote(value: &str) -> String {
+    let safe = !value.is_empty()
+        && value.chars().all(|c| {
+            c.is_ascii_alphanumeric()
+                || matches!(
+                    c,
+                    '-' | '_' | '.' | '/' | ':' | '@' | '+' | '=' | ',' | '%' | '~'
+                )
+        });
+    if safe {
+        return value.to_string();
+    }
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
 /// The trailing `-- <pacman args…>` of a run, mirrored verbatim (contract
 /// §B.1: forwarded to the `pacman -U` invocation of an install transaction).
 fn mirror_pacman_args(inv: &Invocation) -> String {
@@ -291,7 +313,7 @@ fn mirror_pacman_args(inv: &Invocation) -> String {
             let mut out = String::from(" --");
             for arg in args {
                 out.push(' ');
-                out.push_str(arg);
+                out.push_str(&shell_quote(arg));
             }
             out
         }
@@ -802,6 +824,18 @@ mod tests {
         }
     }
 
+    /// A continuation is a paste-back command, so a path that needs quoting
+    /// gets it — and a path that does not reads exactly as typed.
+    #[test]
+    fn continuation_quotes_paths_that_need_it() {
+        assert_eq!(shell_quote("/work/build"), "/work/build");
+        assert_eq!(shell_quote("~/cache/gsa"), "~/cache/gsa");
+        assert_eq!(shell_quote("/work/build space"), "'/work/build space'");
+        assert_eq!(shell_quote("/w/o'brien"), r"'/w/o'\''brien'");
+        assert_eq!(shell_quote("$(rm -rf /)"), "'$(rm -rf /)'");
+        assert_eq!(shell_quote(""), "''");
+    }
+
     #[test]
     fn dry_run_record_carries_plan_and_continuation() {
         let inv = Invocation {
@@ -1264,7 +1298,8 @@ mod tests {
         assert!(command.contains("--fail-fast"), "{command}");
         assert!(command.contains("--config /etc/pacman.conf"), "{command}");
         assert!(command.contains("--no-register-ignorepkg"), "{command}");
-        assert!(command.contains(" -- --overwrite *"), "{command}");
+        // Pacman args are shell-quoted too: a bare `*` would glob on paste.
+        assert!(command.contains(" -- --overwrite '*'"), "{command}");
         // The hidden seam this run actually carried is listed (H3 is
         // argv-scoped), and its exact token never lands in the command —
         // the mirrored `--no-register-ignorepkg` is a different token.

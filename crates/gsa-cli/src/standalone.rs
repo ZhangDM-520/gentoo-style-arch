@@ -188,11 +188,31 @@ pub(crate) fn apply(
     }
     let ids = stage(&standalone, &root, ws_root.as_deref())?;
     for ((token, _), id) in standalone.iter().zip(&ids) {
-        eprintln!("gsa: staged standalone target '{token}' as '{id}'");
+        eprintln!(
+            "gsa: staged standalone target '{}' as '{id}'",
+            one_line(token)
+        );
     }
     inv.targets = ids;
     inv.standalone_root = Some(root.clone());
     Ok(Some(Staged { root, ephemeral }))
+}
+
+/// A user-supplied token echoed on ONE line: a control character renders as
+/// its escape (`\n`, `\r`, `\t`) so a path can never split the message
+/// across physical lines — the same one-line rule the run record's values
+/// obey (§H.2).
+fn one_line(token: &str) -> String {
+    let mut out = String::with_capacity(token.len());
+    for c in token.chars() {
+        match c {
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 /// Which of `tokens` a discoverable workspace answers as a reference
