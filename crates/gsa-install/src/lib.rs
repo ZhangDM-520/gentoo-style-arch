@@ -281,7 +281,12 @@ pub fn discover_recipe_ranked(recipe_dir: &Path, rank: Rank) -> Result<RecipeArc
                             name.strip_prefix(want.as_str())
                                 .is_some_and(|rest| rest.starts_with('-'))
                         });
-                    if ours {
+                    // Only a DAMAGED file is reportable: a valid archive
+                    // whose metadata is missing or malformed is "not a
+                    // package" (ineligible, as before — `-Qp` reports the
+                    // metadata defect), while a truncated one is a file the
+                    // user named and must be told about.
+                    if ours && matches!(error, gsa_recipe::pkginfo::PkginfoError::Io(_)) {
                         unreadable.push((path.clone(), error.to_string()));
                     }
                     continue;
@@ -755,14 +760,15 @@ fn plan(candidates: &[Candidate], ctx: &DecisionContext, db: &LocalDb) -> Result
     // ("duplicate target"), so naming one archive path twice — or two paths
     // holding the same package — made the plan say `install ok` and the run
     // fail rc 4 (blind-review finding, 2026-11-11). Collapse by what pacman
-    // identifies a package by: `.PKGINFO`'s pkgbase + version. The FIRST
-    // spelling wins; an unreadable `.PKGINFO` is never collapsed (its own
-    // refusal owes a row).
+    // identifies a package by: `.PKGINFO`'s PKGNAME + version — never the
+    // pkgbase, which a split recipe's outputs share (collapsing on it
+    // dropped every second output). The FIRST spelling wins; an unreadable
+    // `.PKGINFO` is never collapsed (its own refusal owes a row).
     let mut kept: Vec<usize> = Vec::new();
     let mut seen: Vec<(String, String)> = Vec::new();
     for (index, info) in parsed.iter().enumerate() {
         if let Some(info) = info {
-            let key = (info.pkgbase.clone(), info.version.clone());
+            let key = (info.pkgname.clone(), info.version.clone());
             if seen.contains(&key) {
                 continue;
             }

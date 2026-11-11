@@ -628,18 +628,12 @@ fn run_upgrade_inner(
             match discover_recipe(&recipe_dir) {
                 Ok(found) => {
                     if found.candidates.is_empty() {
-                        // No usable archive — but an archive that IS there
-                        // and cannot be read is not an absent one (rule 71):
-                        // refuse loudly rather than let the empty list read
-                        // as "nothing to do".
-                        if !found.unreadable.is_empty() {
-                            items.push(Item::Rejected(unreadable_row(
-                                record.id.as_str(),
-                                &found.unreadable,
-                            )));
-                        }
-                        // Otherwise not eligible: the recipe has no archives
-                        // at all (`-Ua` installs the workspace's built ones).
+                        // Not eligible: the recipe has no archives at all
+                        // (`-Ua` installs the workspace's built archives). An
+                        // unreadable file here is NOT a refusal: `-Ua` sweeps
+                        // the whole workspace, and a stray or half-copied
+                        // archive must not abort it — the NAMED spelling
+                        // (`-U <ref>`) is where rule 71's loud refusal lives.
                         continue;
                     }
                     if !found.missing.is_empty() || found.mixed_versions {

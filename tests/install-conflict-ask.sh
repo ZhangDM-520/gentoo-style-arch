@@ -562,7 +562,12 @@ fi
     stage_archive "$arch_e" p1 p1 1.0.0-1
     : >"$ws/pacman.log"
     : >"$ws/sudo.log"
-    run_install "$ws" -Ua --state-dir "$ws/state" --config "$ws/pacman.conf"
+    # The STATE root stays outside the spaced workspace: a state root
+    # containing whitespace refuses at resolution (the lane PACMAN shim path
+    # reaches makepkg through an unquoted `type -P`), so a spaced workspace
+    # is exercised without inventing a root it cannot legally have. The
+    # archive path below is the spaced thing under test.
+    run_install "$ws" -Ua --state-dir "$dir_e/state" --config "$ws/pacman.conf"
     ((FIXTURE_RC == 0)) ||
         fail "E: -Ua over a spaced path must succeed, got rc=$FIXTURE_RC: $FIXTURE_OUTPUT"
     txn=$(txn_argv "$ws/pacman.log")
