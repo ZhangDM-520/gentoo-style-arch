@@ -19,6 +19,7 @@ use crate::args::Invocation;
 use crate::exit::{self, Exit};
 use crate::install::DEFAULT_CONF;
 use crate::select::{self, Ctx};
+use crate::style;
 use crate::{cmd_error, write_notes};
 
 /// The verb one `-M` cluster spells (§B.7). The `c` action carries its
@@ -594,6 +595,24 @@ fn mutating_rows(
     }
 }
 
+/// One `-M` row, byte-identical to `gsa_maint::Row::render` with colour
+/// off. The row vocabulary is `gsa-maint`'s; this maps the states a reader
+/// hunts for onto a role — `clean` green, `failed` red, a drift or a gap
+/// yellow — and leaves everything else plain.
+fn render_row(row: &Row) -> String {
+    let action = match row.action.as_str() {
+        "clean" => style::styled(style::Role::Ok, row.action.clone()),
+        "failed" => style::styled(style::Role::Fail, row.action.clone()),
+        "drift" | "missing" | "absent" => style::styled(style::Role::Warn, row.action.clone()),
+        _ => row.action.clone(),
+    };
+    if row.reason.is_empty() {
+        format!("{} {action}", row.subject)
+    } else {
+        format!("{} {action} {}", row.subject, row.reason)
+    }
+}
+
 fn finish(
     result: Result<(Vec<Row>, i32), String>,
     out: &mut dyn Write,
@@ -602,7 +621,9 @@ fn finish(
 ) -> i32 {
     match result {
         Ok((rows, rc)) => {
-            let _ = write!(out, "{}", gsa_maint::render_rows(&rows));
+            for row in &rows {
+                let _ = writeln!(out, "{}", render_row(row));
+            }
             rc
         }
         Err(message) if message.is_empty() => {

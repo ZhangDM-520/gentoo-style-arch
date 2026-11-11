@@ -24,6 +24,7 @@ use gsa_sched::progress::Progress;
 use gsa_sched::supervisor::SupEvent;
 
 use crate::render::fmt_dur;
+use crate::style::{self, Role};
 
 /// The dashboard gate (fish `_OUTPUT_INTERACTIVE`): stdout is a terminal and
 /// `TERM` is set and is not `dumb`.
@@ -64,38 +65,39 @@ fn sanitize(line: &str) -> String {
 }
 
 /// Keep one cell unused so a terminal never enters its pending-wrap state
-/// (fish `fit_dashboard_line`): truncate on character count with a `...`.
+/// (fish `fit_dashboard_line`). Escape-aware: the row may already carry a
+/// role's colour, and an escape is not a column (see `style::fit`).
 fn fit(text: &str, width: usize) -> String {
-    let max = width.saturating_sub(1).max(1);
-    if text.chars().count() <= max {
-        return text.to_string();
-    }
-    if max <= 3 {
-        return text.chars().take(max).collect();
-    }
-    let target = max - 3;
-    let prefix: String = text.chars().take(target).collect();
-    format!("{prefix}...")
+    crate::style::fit(text, width)
 }
 
-/// The terminal width (fish `dashboard_width`): `tput cols`, then `COLUMNS`,
-/// then 80 — floored at 20. Probed once per view (a mid-run resize refits on
-/// the next run; recorded deviation in docs/gsa-contract.md §L).
-fn probe_width() -> usize {
-    let width = std::process::Command::new("tput")
-        .arg("cols")
+/// The terminal width: `stty size` (the real terminal, read from fd 0),
+/// then `COLUMNS`, then 80 — floored at 20. `tput cols` is NOT consulted:
+/// this app captures its own stdout, so tput cannot see a terminal and
+/// answers its 80-column default even on a 40-column pty. Probed once per
+/// view (a mid-run resize refits on the next run; recorded deviation in
+/// docs/gsa-contract.md §L).
+pub(crate) fn terminal_width() -> usize {
+    let width = std::process::Command::new("stty")
+        .arg("size")
+        // `output()` would give stty a null stdin, and stty reads the
+        // terminal from fd 0 — the width must come from the real tty.
+        .stdin(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::null())
         .output()
         .ok()
-        .and_then(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .trim()
-                .parse::<usize>()
-                .ok()
+        .and_then(|out| {
+            let text = String::from_utf8_lossy(&out.stdout);
+            text.split_whitespace()
+                .nth(1)
+                .and_then(|cols| cols.parse::<usize>().ok())
         })
+        .filter(|cols| *cols > 0)
         .or_else(|| {
             std::env::var("COLUMNS")
                 .ok()
-                .and_then(|v| v.trim().parse::<usize>().ok())
+                .and_then(|value| value.trim().parse::<usize>().ok())
+                .filter(|cols| *cols > 0)
         })
         .unwrap_or(80);
     width.max(20)
@@ -170,7 +172,7 @@ impl View {
             spinner: 1,
             rows_drawn: 0,
             box_active: false,
-            width: if interactive { probe_width() } else { 0 },
+            width: if interactive { terminal_width() } else { 0 },
             // Fish starts the 10 s STATUS clock at run start: the first hint
             // is never immediate.
             last_status: now_epoch(),
@@ -319,27 +321,34 @@ impl View {
         let failed = self.progress.failed();
         let succeeded = self.progress.succeeded();
         let total = self.progress.total();
-        let (state, icon) = if failed > 0 {
-            ("FAILED", '✗')
+        // Colour is a second cue: the word and glyph already say the state.
+        let (state, icon, role) = if failed > 0 {
+            ("FAILED", '✗', Role::Fail)
         } else if self.stop_starting {
-            ("STOPPING", '⚠')
+            ("STOPPING", '⚠', Role::Warn)
         } else if succeeded == total && total > 0 {
-            ("DONE", '✓')
+            ("DONE", '✓', Role::Ok)
         } else {
-            ("RUNNING", '→')
+            ("RUNNING", '→', Role::Info)
         };
         let mut rows = vec![format!(
-            "Progress: {}/{} started | {} done | {} failed | {icon} {state}",
+            "{} {}/{} started | {} done | {} failed | {}",
+            style::styled(Role::Bold, "Progress:"),
             self.progress.dispatched(),
             total,
             succeeded,
-            failed
+            failed,
+            style::styled(role, format!("{icon} {state}"))
         )];
         for (i, lane) in self.lanes.iter().enumerate() {
             match &lane.pkg {
                 Some(pkg) => {
                     let dur = fmt_dur(now.saturating_sub(lane.epoch) as i64);
-                    rows.push(format!("Lane {}: → RUNNING {pkg} {dur}", i + 1));
+                    rows.push(format!(
+                        "Lane {}: {} {pkg} {dur}",
+                        i + 1,
+                        style::styled(Role::Info, "→ RUNNING")
+                    ));
                     rows.extend(self.tail_rows(Some((pkg.as_str(), lane.offset))));
                 }
                 None => {

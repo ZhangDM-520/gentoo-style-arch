@@ -1795,6 +1795,7 @@ mod tests {
             sync_first: true,
             dry_run: false,
             leaf: false,
+            color: crate::style::ColorChoice::Auto,
             targets: vec!["@git".to_string()],
             ranges: Vec::new(),
             deferred_flags: Vec::new(),

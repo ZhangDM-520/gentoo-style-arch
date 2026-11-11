@@ -734,6 +734,47 @@ knobs are fixture seams only (contract §D.2 and the 2026-10-14 §K.3
 amendment), and a scenario is expressed with a stub rather than a new engine
 knob.
 
+## Reading the output
+
+Every human surface — the dashboard, `-Q*`, `-Sl`/`-Bl`, `-M*`, `-Qi`, the
+plan and the run summary — paints its states through one seam
+(`gsa-cli::style`), and every surface answers to the same switch:
+
+```sh
+gsa -Q                    # a TTY: colour, and one aligned table
+gsa -Q | less             # a pipe: the machine rows, byte-identical, no escapes
+gsa -Q --color=never      # a TTY, plain: byte-identical to the piped text
+gsa -Q --color=always     # ask for the human rendering and colour, even into a pager
+NO_COLOR=1 gsa -Q         # the standard opt-out, same as --color=never
+```
+
+The ladder, first match wins: `--machine` → the machine vocabulary, no
+colour, ever; `--color=never` → the terminal's own choice, plain; `always`
+→ the human rendering WITH colour, even through a pipe (`gsa -Q
+--color=always | less -R`); `auto` (the default) → human on a terminal whose
+`TERM` is not `dumb`, with `NO_COLOR` unset or empty, machine everywhere
+else. `--color` is presentation only: it never appears in a continuation's
+`command:` (it is named in `not-mirrored:`) and it changes no decision.
+
+Colour is never the only signal. A failed lane still says `✗ FAILED`, a
+parked row still says `parked`, a deferred one still says `DEFERRED`; a
+stale `-Q` version is yellow AND differs from its `built=` column. Two
+consequences worth knowing:
+
+- **The machine channel never carries an escape.** `--machine`, a pipe and
+  every fixture get the same bytes they always did — `-Q`'s row stays
+  `name version abi=<full> built=<full> instances=N`. A parseable surface is
+  never a decorative one.
+- **Width is visible width.** The dashboard and the `-Q` table measure
+  columns after ignoring escape sequences, so a coloured row still fits the
+  terminal; `-Q` on a narrow terminal drops `instances`, then `built`, then
+  shortens the ABI token, and only truncates names last.
+
+`-Q` on a terminal is a headerless table: one visible width for every row,
+the ABI token shortened to eight hex digits and `…` (the full token stays in
+`-Qi`, `-Qa` and the machine row), and blank side-car columns where a
+package has no recorded instance — the absence is the information.
+
 ## Engine output: the run record
 
 One run record per run — plan plus one outcome row per package plus the

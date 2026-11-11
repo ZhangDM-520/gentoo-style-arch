@@ -513,6 +513,18 @@ split.
     `Err(Exit::Usage(..))`/`Err(Exit::Refuse(..))`, never `return 2` or
     `return 3`. Exceptions stay: the `--local-db-check` fence, `lib.rs` dispatch
     codes, `maint` row-derived refusals, `gsa-qa`.
+75. **Colour is one seam, never in the machine channel, never the only
+    signal.** Renderers ask `gsa-cli::style` for a ROLE (`Ok`/`Fail`/`Warn`/
+    `Accent`/`Dim`/`Bold`/`Info`); a raw escape at a call site is the change to
+    reject. The ladder is resolved once at dispatch (`--machine` or a captured
+    stdout → off; `--color=never` → off; `always` → on; `auto` → terminal,
+    `TERM` not `dumb`, `NO_COLOR` unset) so the record, the kv lines and the
+    decision rows can never carry an escape byte (§L.9). Width is VISIBLE
+    width (`style::{visible_width,fit,pad,truncate_middle}`), because a row is
+    painted before it is fitted. Every state keeps its word and glyph — a
+    `NO_COLOR` reader loses nothing — and the `-Q` human table is the only
+    shape that changed (machine rows are byte-identical; `tests/rendering.sh`
+    pins both).
 
 ## 5 · Pitfalls
 

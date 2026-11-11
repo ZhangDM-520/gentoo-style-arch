@@ -261,6 +261,12 @@ pub const FLAGS: &[FlagSpec] = &[
         families: BUILD,
     },
     FlagSpec {
+        name: "color",
+        description: "colour for the human rendering: auto, always or never",
+        takes_value: true,
+        families: ALL,
+    },
+    FlagSpec {
         name: "state-dir",
         description: "state root (default /var/lib/gsa)",
         takes_value: true,
@@ -547,6 +553,10 @@ pub struct Invocation {
     pub sync_first: bool,
     pub dry_run: bool,
     pub leaf: bool,
+    /// `--color=auto|always|never` (contract §B.8): the colour choice for the
+    /// human rendering. The seam resolves the ladder; `--machine` still wins
+    /// (a machine channel is never coloured).
+    pub color: crate::style::ColorChoice,
     /// Output mode override (`--machine`).
     /// Unset: stdout's tty-ness picks human vs machine (output::mode()).
     pub output_mode: Option<crate::output::Mode>,
@@ -806,6 +816,7 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
         sync_first,
         dry_run: false,
         leaf: false,
+        color: crate::style::ColorChoice::Auto,
         output_mode: None,
         targets: Vec::new(),
         ranges: Vec::new(),
@@ -952,8 +963,9 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
                     inv.no_prefetch = true;
                     inv.deferred_flags.push(format!("--{name}"));
                 }
-                "vcs-skip-tolerance" | "lanes" | "jobs" | "intensity" | "state-dir" | "config"
-                | "tail" | "keep" | "show" | "prefetch-ahead" | "build-dir" | "toolchain" => {
+                "vcs-skip-tolerance" | "lanes" | "jobs" | "intensity" | "color" | "state-dir"
+                | "config" | "tail" | "keep" | "show" | "prefetch-ahead" | "build-dir"
+                | "toolchain" => {
                     let value = match value {
                         Some(v) => v,
                         None => {
@@ -976,6 +988,15 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
                         "intensity" => inv.intensity = Some(value.clone()),
                         "state-dir" => inv.state_dir = Some(value.clone()),
                         "toolchain" => inv.toolchain = Some(value.clone()),
+                        "color" => match crate::style::ColorChoice::parse(&value) {
+                            Some(choice) => inv.color = choice,
+                            None => {
+                                return Err(format!(
+                                    "flag '--color' takes {} (got '{value}')",
+                                    crate::style::ColorChoice::SPELLINGS.join(", ")
+                                ))
+                            }
+                        },
                         "build-dir" => inv.build_dir = Some(value.clone()),
                         "config" => inv.config = Some(value.clone()),
                         "prefetch-ahead" => inv.prefetch_ahead = Some(value.clone()),
@@ -985,7 +1006,12 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
                         "show" => inv.show = Some(value.clone()),
                         _ => {}
                     }
-                    inv.deferred_flags.push(format!("--{name}"));
+                    // `--color` is a rendering choice every verb honours, so
+                    // it is never a deferred run modifier (the flag gate in
+                    // `classify` would otherwise refuse it on a query).
+                    if name != "color" {
+                        inv.deferred_flags.push(format!("--{name}"));
+                    }
                     let _ = value;
                 }
                 // `flag_spec` above already refused every name that is not
@@ -1149,6 +1175,16 @@ mod tests {
         // and a row whose shape lies about the parser breaks completion.
         for spec in FLAGS {
             let flag = format!("--{}", spec.name);
+            // `--color` is the one roster flag with a closed value set, so
+            // the generic "v" probe cannot stand for a legal invocation.
+            if spec.name == "color" {
+                assert!(parse(&["-Q".to_string(), format!("{flag}=always")]).is_ok());
+                assert!(
+                    parse(&["-Q".to_string(), format!("{flag}=nope")]).is_err(),
+                    "--color accepted a value outside its three rungs"
+                );
+                continue;
+            }
             if spec.takes_value {
                 assert!(
                     parse(&["-Q".to_string(), flag.clone(), "v".to_string()]).is_ok(),

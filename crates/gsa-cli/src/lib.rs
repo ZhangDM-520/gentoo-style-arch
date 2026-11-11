@@ -28,6 +28,7 @@ mod record;
 mod render;
 mod select;
 mod standalone;
+mod style;
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -656,7 +657,18 @@ pub fn run(argv: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
     if let Ok(Parsed::Invoke(inv)) = &parsed {
         if let Some(m) = inv.output_mode {
             output::set_mode(m);
+        } else if inv.color == style::ColorChoice::Always {
+            // `--color=always` is a request for the HUMAN rendering — the
+            // only one that has colour — so it also crosses a pipe (the
+            // operator asked for it, e.g. `gsa -Q --color=always | less -R`).
+            // `--machine` still wins above.
+            output::set_mode(output::Mode::Human);
         }
+        // The colour ladder reads the mode just pinned (`--machine` wins),
+        // so it is resolved after `set_mode` and before any rendering.
+        style::init(inv.color);
+    } else if matches!(parsed, Ok(Parsed::Help)) {
+        style::init(style::ColorChoice::Auto);
     }
     match parsed {
         Ok(Parsed::Help) => {

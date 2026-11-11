@@ -97,6 +97,7 @@ pub const NOT_MIRRORED: &[&str] = &[
     // Output-mode globals (presentation only — a resume picks its own):
     // never replayed.
     "--machine",
+    "--color",
     "--install-decide",
     "--lane-job",
     "--fetch-job",
@@ -166,6 +167,10 @@ pub fn not_mirrored_of(inv: &Invocation) -> Vec<String> {
         }
         let carried = if *token == "--machine" {
             inv.output_mode.is_some() || inv.deferred_flags.iter().any(|flag| flag == "--machine")
+        } else if *token == "--color" {
+            // Never deferred (every verb honours it), so presence is the
+            // choice being non-default.
+            inv.color != crate::style::ColorChoice::Auto
         } else {
             inv.deferred_flags.iter().any(|flag| flag == *token)
         };
@@ -779,6 +784,7 @@ mod tests {
             sync_first: false,
             dry_run: true,
             leaf: false,
+            color: crate::style::ColorChoice::Auto,
             targets: vec!["@git".to_string()],
             ranges: Vec::new(),
             deferred_flags: Vec::new(),
@@ -834,6 +840,7 @@ mod tests {
             sync_first: false,
             dry_run: true,
             leaf: true,
+            color: crate::style::ColorChoice::Auto,
             targets: vec!["mesa-git".to_string()],
             ranges: Vec::new(),
             deferred_flags: Vec::new(),
@@ -882,6 +889,7 @@ mod tests {
             sync_first: false,
             dry_run: false,
             leaf: false,
+            color: crate::style::ColorChoice::Auto,
             targets: vec!["@git".to_string()],
             ranges: Vec::new(),
             deferred_flags: Vec::new(),
@@ -1016,6 +1024,7 @@ mod tests {
             sync_first: false,
             dry_run: false,
             leaf: false,
+            color: crate::style::ColorChoice::Auto,
             targets: Vec::new(),
             ranges: Vec::new(),
             deferred_flags: Vec::new(),

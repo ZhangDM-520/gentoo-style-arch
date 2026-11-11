@@ -279,6 +279,7 @@ is a pure read with no confirmation at all. Wording-only (§L.2); pinned by
 | `--config PATH`, `--noconfirm` | pacman-familiar globals; `--noconfirm` applies to the engine's own confirmations (`-Mm`, `-Mccc`) and never to a pacman question flag |
 | `--quiet`, `--verbose` | **deferred**: recognised and refused (rc 2, naming the flag) by every command; never mirrored (§H.2) |
 | `--machine` | select the machine vocabulary explicitly (the default when stdout is captured); presentation only, never mirrored (§H.2) |
+| `--color auto\|always\|never` | colour for the HUMAN rendering, every family (added 2026-11-11): `auto` (the default) colours only when stdout is a terminal, `TERM` is set and not `dumb`, and `NO_COLOR` is unset or empty; `always` asks for the human rendering WITH colour even through a pipe (the only rendering that has colour), and `never` keeps the terminal's own vocabulary without colour. `--machine` is the machine vocabulary and is never coloured, whatever the flag says — an escape byte in the record, the kv lines or a decision row is a contract break, not a style choice. Colour is never the only signal: every state keeps its word and glyph (`✓ DONE`, `✗ FAILED`, `parked`, `deferred`), so a piped or `NO_COLOR` reader loses nothing. Presentation only, never mirrored (§H.2); resolved once in `gsa-cli::style`, never at a call site |
 
 *Amendment (2026-11-08, the build-dir prompt).* A build-shaped run — `-S`,
 `-B`, the `-Su`/`-Syu` stale-set build and their `--dry-run` plans — asks
@@ -1091,7 +1092,7 @@ root is excluded from that list.) Never
 mirrored: the prune-strength `c` and `-Mc`/`-Mcc`/`-Mccc`; one-shot actions
 (`-Q*`, `-Sy`, `-Su`, `-Syu`, `-Ua`, `-M*`) and their sub-flags (`--fix`,
 `--prune`, `--backfill`, `--tail`, `--keep`, `--show`, `--add`, `--remove`);
-`--noconfirm`, `--quiet`, `--verbose`, `--machine`; and every hidden seam (`--install-decide`,
+`--noconfirm`, `--quiet`, `--verbose`, `--machine`, `--color`; and every hidden seam (`--install-decide`,
 `--lane-job`, `--fetch-job`, `--stale-lock-check`, `--local-db-check`,
 `--install-register`, `--register-ignorepkg`, `--qa-check`). **`--leaf` is
 mirrored only as the bare flag when true (gap G4): `--leaf=no`/`--leaf=yes`
@@ -1519,7 +1520,12 @@ dispatch; a failure parks a cone (§I).
    Every event renders in BOTH vocabularies and the machine grammar is
    unit-pinned (`render::tests`), the box is fixture-pinned
    (`tests/dashboard-pty.sh`). A wording change breaks exactly those pins,
-   never the record grammar (§H/§L.2).
+   never the record grammar (§H/§L.2). **Colour belongs to the human
+   vocabulary only** (2026-11-11): one seam (`gsa-cli::style`) owns the
+   roles and the `--color`/`NO_COLOR` ladder, the machine channel never
+   carries an escape, width is measured in VISIBLE columns (so a coloured
+   row still fits `width - 1`), and no state is ever signalled by colour
+   alone. `tests/rendering.sh` pins all four.
 10. **Smoke tests run the INSTALLED engine** (owner decision 2026-10-23):
    "it works" means the packaged `gsa` binary behaves. Every smoke check and
    the fixture battery (`tests/run-all.sh`) default to `command -v gsa` and

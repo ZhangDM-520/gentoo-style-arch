@@ -178,6 +178,7 @@ Long modifiers (contract §B.8). A build run accepts:",
             ("--no-build-dir-prompt", "do not ask: resolve the build root silently from GSA_BUILD_DIR, gsa.conf build_dir or the built-in default"),
             ("--no-prefetch", "opt out of the advisory fetch-ahead"),
             ("--prefetch-ahead N", "fetch-ahead window, default 8"),
+            ("--color auto|always|never", "colour for the human rendering (every verb): auto is the default and colours only a terminal; --machine and NO_COLOR always win; the machine channel is never coloured"),
         ],
     },
     Section {

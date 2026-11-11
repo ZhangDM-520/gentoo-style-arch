@@ -5,6 +5,7 @@
 //! streaming dashboard line per supervisor event (ADR 0003: one record,
 //! three renderings — dashboard events, prose summary, machine block).
 
+use std::borrow::Cow;
 use std::path::Path;
 
 use gsa_model::{Group, RecipeId, RowStatus, RunRecord};
@@ -13,6 +14,16 @@ use gsa_sched::supervisor::SupEvent;
 
 use crate::output::{self, kv_line, squash, Level};
 use crate::select::{Ctx, SelectError};
+use crate::style::{self, Role};
+
+/// The spellings that mean "there is no value". They are dimmed so absence
+/// reads as absence instead of competing with data.
+fn is_absent(value: &str) -> bool {
+    matches!(
+        value,
+        "(none)" | "(scan)" | "(not installed)" | "(no side-car row)"
+    )
+}
 
 fn join_list(values: &[String]) -> String {
     if values.is_empty() {
@@ -22,8 +33,49 @@ fn join_list(values: &[String]) -> String {
     }
 }
 
+/// One `-Qi` row. The label is dim so the eye runs down the values; the
+/// several "no value" spellings are dim too. A long value wraps at the
+/// terminal with a hanging indent — but only in the human rendering, so a
+/// captured `-Qi` stays byte-identical and a fixture pin cannot depend on a
+/// terminal width.
 fn field(label: &str, value: &str) -> String {
-    format!("{label:<18}: {value}")
+    let label_cell = style::styled(Role::Dim, format!("{label:<18}"));
+    if value.is_empty() {
+        return format!("{label_cell}:");
+    }
+    // Absence is dim; everything else stays plain (a bold 20-item dependency
+    // list is noise). The two identity fields are painted by their caller.
+    let painted = if is_absent(value) {
+        style::paint(Role::Dim, value)
+    } else {
+        Cow::Borrowed(value)
+    };
+    let indent = " ".repeat(20);
+    let width = crate::dashboard::terminal_width();
+    let mut out = String::with_capacity(label_cell.len() + painted.len() + 2);
+    out.push_str(&label_cell);
+    out.push_str(": ");
+    if !output::is_human() || 20 + style::visible_width(&painted) <= width {
+        out.push_str(&painted);
+        return out;
+    }
+    let mut column = 20;
+    let mut first = true;
+    for word in painted.split(' ') {
+        let word_width = style::visible_width(word);
+        if !first && column + 1 + word_width > width {
+            out.push('\n');
+            out.push_str(&indent);
+            column = 20;
+        } else if !first {
+            out.push(' ');
+            column += 1;
+        }
+        out.push_str(word);
+        column += word_width;
+        first = false;
+    }
+    out
 }
 
 /// The tooling data channel (contract §B.3 `-Qt`): one resolved record per
@@ -57,11 +109,15 @@ pub fn render_listing(ctx: &Ctx<'_>, listed: &[(usize, RecipeId)], whole_set: bo
     out.push('\n');
     if whole_set {
         out.push_str("Groups:\n");
+        // One fixed name cell plus a right-aligned count: `build-tools:` is
+        // exactly 12 characters, so the old `{:<12}{}` collided there.
         for group in Group::ROSTER {
+            let count = ctx.project.topology.members(group).len();
+            let label = style::styled(Role::Accent, format!("{}:", group.as_str()));
             out.push_str(&format!(
-                "  {:<12}{} packages\n",
-                format!("{}:", group.as_str()),
-                ctx.project.topology.members(group).len()
+                "  {}{:>4} packages\n",
+                style::pad(&label, 13),
+                count
             ));
         }
     } else {
@@ -109,7 +165,11 @@ fn sources_block(meta: &RecipeMeta) -> String {
             SourceKind::Local => "local".to_string(),
         };
         let name = source.name.map(|n| format!("{n}::")).unwrap_or_default();
-        out.push_str(&format!("    [{label}] {name}{}\n", source.location));
+        out.push_str(&format!(
+            "    {} {name}{}\n",
+            style::styled(Role::Dim, format!("[{label}]")),
+            source.location
+        ));
     }
     out
 }
@@ -143,9 +203,9 @@ pub fn render_package_info(
 ) -> String {
     let meta = ctx.db.get(record.id.as_str());
     let mut out = String::new();
-    out.push_str(&field("Name", pkgname));
+    out.push_str(&field("Name", &style::paint(Role::Bold, pkgname)));
     out.push('\n');
-    out.push_str(&field("Version", version));
+    out.push_str(&field("Version", &style::paint(Role::Bold, version)));
     out.push('\n');
     out.push_str(&field(
         "Description",
@@ -211,8 +271,10 @@ pub fn render_package_info(
         out.push_str(&field(label, value));
         out.push('\n');
     }
-    for (label, value) in record_fields(record) {
-        out.push_str(&format!("{label:<18}: {value}\n"));
+    let fields = record_fields(record);
+    for (label, value) in &fields {
+        out.push_str(&field(label, value));
+        out.push('\n');
     }
     out.push_str(&field(
         "Metadata-Source",
@@ -230,18 +292,29 @@ pub fn render_package_info(
 pub fn render_groups(ctx: &Ctx<'_>, names: &[String]) -> Result<String, SelectError> {
     let mut out = String::new();
     if names.is_empty() {
+        // A fixed name cell and a right-aligned count, so every group's
+        // number starts in the same column (the old `{:<12}` collided for
+        // `build-tools`, and the counts were ragged).
+        let count_cell = |count: usize| {
+            let text = format!("{count:>4}");
+            if count == 0 {
+                style::styled(Role::Dim, text)
+            } else {
+                text
+            }
+        };
         for group in Group::ROSTER {
             out.push_str(&format!(
-                "{:<12} {} packages\n",
-                group.as_str(),
-                ctx.project.topology.members(group).len()
+                "{:<13}{} packages\n",
+                style::pad(group.as_str(), 13),
+                count_cell(ctx.project.topology.members(group).len())
             ));
         }
         for set in &ctx.project.sets {
             out.push_str(&format!(
-                "{:<12} {} packages\n",
-                set.name,
-                set.members.len()
+                "{:<13}{} packages\n",
+                style::pad(&set.name, 13),
+                count_cell(set.members.len())
             ));
         }
         return Ok(out);
@@ -250,14 +323,22 @@ pub fn render_groups(ctx: &Ctx<'_>, names: &[String]) -> Result<String, SelectEr
         let name = raw.strip_prefix('@').unwrap_or(raw);
         if let Some(group) = Group::from_name(name) {
             let members: Vec<RecipeId> = ctx.project.topology.members(group).to_vec();
-            out.push_str(&format!("{} ({}):\n", name, members.len()));
+            out.push_str(&format!(
+                "{} ({}):\n",
+                style::styled(Role::Bold, name),
+                members.len()
+            ));
             for member in members {
                 out.push_str(&format!("  {member}\n"));
             }
             continue;
         }
         if let Some(set) = ctx.project.set(name) {
-            out.push_str(&format!("{} ({}):\n", name, set.members.len()));
+            out.push_str(&format!(
+                "{} ({}):\n",
+                style::styled(Role::Bold, name),
+                set.members.len()
+            ));
             for member in &set.members {
                 out.push_str(&format!("  {member}\n"));
             }
@@ -290,13 +371,19 @@ pub fn render_plan_prose(
     if human {
         out.push_str(&format!(
             "Build order ({verb}): {} packages\n",
-            listed.len()
+            style::styled(Role::Bold, listed.len().to_string())
         ));
         if leaf {
-            out.push_str("· leaf selection: no consumer expansion (--leaf)\n");
+            out.push_str(&style::styled(
+                Role::Dim,
+                "· leaf selection: no consumer expansion (--leaf)\n",
+            ));
         } else if expansion_added > 0 {
-            out.push_str(&format!(
-                "· consumer expansion added {expansion_added} of the {closure_size} selected packages (--leaf builds only what you named)\n",
+            out.push_str(&style::styled(
+                Role::Dim,
+                format!(
+                    "· consumer expansion added {expansion_added} of the {closure_size} selected packages (--leaf builds only what you named)\n"
+                ),
             ));
         }
     } else {
@@ -388,10 +475,15 @@ pub(crate) fn fmt_dur(dur: i64) -> String {
 }
 
 fn render_event_human(event: &SupEvent, pkg: &dyn Fn(usize) -> String) -> String {
-    match event {
+    // The words and glyphs are the contract; the role is a SECOND cue, so a
+    // piped, colour-blind or `NO_COLOR` reader loses nothing.
+    let (line, role) = match event {
         SupEvent::Started { index, jobs, core } => {
             let core = if *core { " (core)" } else { "" };
-            format!("→ started {}{core} -j{jobs}\n", pkg(*index))
+            (
+                format!("→ started {}{core} -j{jobs}", pkg(*index)),
+                Role::Info,
+            )
         }
         SupEvent::Finished { index, row } => {
             let _ = index;
@@ -401,30 +493,47 @@ fn render_event_human(event: &SupEvent, pkg: &dyn Fn(usize) -> String) -> String
                 .unwrap_or_else(|| "-".to_string());
             let dur = row.dur.map(fmt_dur).unwrap_or_else(|| "-".to_string());
             match row.status {
-                RowStatus::Succeeded => format!("✓ {} ({dur})\n", row.pkg),
-                RowStatus::Failed => format!(
-                    "✗ {}: BUILD FAILED (rc {rc}, {dur}, {}) — see the run's failed rows for the log\n",
-                    row.pkg, row.reason
+                RowStatus::Succeeded => (format!("✓ {} ({dur})", row.pkg), Role::Ok),
+                RowStatus::Failed => (
+                    format!(
+                        "✗ {}: BUILD FAILED (rc {rc}, {dur}, {}) — see the run's failed rows for the log",
+                        row.pkg, row.reason
+                    ),
+                    Role::Fail,
                 ),
-                RowStatus::Parked => format!("⚠ {}: parked ({})\n", row.pkg, row.reason),
-                RowStatus::Deferred => format!("⚠ {}: DEFERRED ({})\n", row.pkg, row.reason),
-                RowStatus::NeverStarted => {
-                    format!("· {}: never started ({})\n", row.pkg, row.reason)
-                }
-                RowStatus::Interrupted => {
-                    format!("⚠ {}: interrupted (rc {rc}, {dur}, {})\n", row.pkg, row.reason)
-                }
+                RowStatus::Parked => (
+                    format!("⚠ {}: parked ({})", row.pkg, row.reason),
+                    Role::Warn,
+                ),
+                RowStatus::Deferred => (
+                    format!("⚠ {}: DEFERRED ({})", row.pkg, row.reason),
+                    Role::Accent,
+                ),
+                RowStatus::NeverStarted => (
+                    format!("· {}: never started ({})", row.pkg, row.reason),
+                    Role::Dim,
+                ),
+                RowStatus::Interrupted => (
+                    format!("⚠ {}: interrupted (rc {rc}, {dur}, {})", row.pkg, row.reason),
+                    Role::Warn,
+                ),
             }
         }
-        SupEvent::Parked { index, reason } => format!("⚠ {}: parked ({reason})\n", pkg(*index)),
-        SupEvent::Signal(sig) => format!("⚠ signal received ({sig}) — the run is winding down\n"),
-        SupEvent::Teardown(reason) => format!("⚠ teardown: {reason}\n"),
-        SupEvent::Diagnostic(message) => format!("· {message}\n"),
-        SupEvent::PrefetchWarning(message) => format!("⚠ {message}\n"),
+        SupEvent::Parked { index, reason } => {
+            (format!("⚠ {}: parked ({reason})", pkg(*index)), Role::Warn)
+        }
+        SupEvent::Signal(sig) => (
+            format!("⚠ signal received ({sig}) — the run is winding down"),
+            Role::Warn,
+        ),
+        SupEvent::Teardown(reason) => (format!("⚠ teardown: {reason}"), Role::Warn),
+        SupEvent::Diagnostic(message) => (format!("· {message}"), Role::Dim),
+        SupEvent::PrefetchWarning(message) => (format!("⚠ {message}"), Role::Warn),
         // A view heartbeat, never a message (the TTY dashboard redraws on
         // it) — it renders empty in BOTH vocabularies.
-        SupEvent::Tick => String::new(),
-    }
+        SupEvent::Tick => return String::new(),
+    };
+    format!("{}\n", style::paint(role, &line))
 }
 
 /// A parked row's `action` (§H.3): the action IS the park's reason, so a
@@ -672,7 +781,10 @@ fn run_prose(
         // separated by a blank line so a summary never packs against the
         // events above it or the machine record below it.
         out.push('\n');
-        out.push_str(&format!("Build run: {} package(s)\n", record.order.len()));
+        out.push_str(&format!(
+            "Build run: {} package(s)\n",
+            style::styled(Role::Bold, record.order.len().to_string())
+        ));
         out.push('\n');
     } else {
         out.push_str(&kv_line(
@@ -700,9 +812,12 @@ fn run_prose(
         match row.status {
             RowStatus::Failed => {
                 if human {
-                    out.push_str(&format!(
-                        "✗ failed: {} (rc {rc}, {}) — log: {log}\n",
-                        row.pkg, row.reason
+                    out.push_str(&style::styled(
+                        Role::Fail,
+                        format!(
+                            "✗ failed: {} (rc {rc}, {}) — log: {log}\n",
+                            row.pkg, row.reason
+                        ),
                     ));
                 } else {
                     out.push_str(&kv_line(
@@ -732,9 +847,9 @@ fn run_prose(
                     by.join(", ")
                 };
                 if human {
-                    out.push_str(&format!(
-                        "⚠ parked: {} ({}) — parked by {by}\n",
-                        row.pkg, row.reason
+                    out.push_str(&style::styled(
+                        Role::Warn,
+                        format!("⚠ parked: {} ({}) — parked by {by}\n", row.pkg, row.reason),
                     ));
                 } else {
                     out.push_str(&kv_line(
@@ -753,7 +868,10 @@ fn run_prose(
             }
             RowStatus::Deferred => {
                 if human {
-                    out.push_str(&format!("⚠ deferred: {} ({})\n", row.pkg, row.reason));
+                    out.push_str(&style::styled(
+                        Role::Accent,
+                        format!("⚠ deferred: {} ({})\n", row.pkg, row.reason),
+                    ));
                 } else {
                     out.push_str(&kv_line(
                         Level::Warning,
@@ -770,7 +888,10 @@ fn run_prose(
             }
             RowStatus::NeverStarted => {
                 if human {
-                    out.push_str(&format!("· never started: {} ({})\n", row.pkg, row.reason));
+                    out.push_str(&style::styled(
+                        Role::Dim,
+                        format!("· never started: {} ({})\n", row.pkg, row.reason),
+                    ));
                 } else {
                     out.push_str(&kv_line(
                         Level::Warning,
@@ -787,9 +908,9 @@ fn run_prose(
             }
             RowStatus::Interrupted => {
                 if human {
-                    out.push_str(&format!(
-                        "⚠ interrupted: {} (rc {rc}, {})\n",
-                        row.pkg, row.reason
+                    out.push_str(&style::styled(
+                        Role::Warn,
+                        format!("⚠ interrupted: {} (rc {rc}, {})\n", row.pkg, row.reason),
                     ));
                 } else {
                     out.push_str(&kv_line(
@@ -808,7 +929,10 @@ fn run_prose(
             }
             RowStatus::Succeeded => {
                 if human {
-                    out.push_str(&format!("✓ succeeded: {} ({})\n", row.pkg, row.reason));
+                    out.push_str(&style::styled(
+                        Role::Ok,
+                        format!("✓ succeeded: {} ({})\n", row.pkg, row.reason),
+                    ));
                 } else {
                     out.push_str(&kv_line(
                         Level::Info,
@@ -854,11 +978,11 @@ fn run_prose(
             // Blank-line separation (H3): the QA span is its own section.
             out.push('\n');
             if findings.is_empty() {
-                out.push_str("QA report (report-only): clean\n");
+                out.push_str(&style::styled(Role::Ok, "QA report (report-only): clean\n"));
             } else {
-                out.push_str(&format!(
-                    "QA report (report-only): {} finding(s)\n",
-                    findings.len()
+                out.push_str(&style::styled(
+                    Role::Warn,
+                    format!("QA report (report-only): {} finding(s)\n", findings.len()),
                 ));
                 for line in findings {
                     out.push_str(&format!("· {line}\n"));

@@ -22,6 +22,7 @@ use crate::args::Invocation;
 use crate::exit::{self, Exit, Refusal, RefusalClass};
 use crate::render;
 use crate::select::Ctx;
+use crate::style;
 use gsa_state::{verify_row, wire_row, BinpkgIndex, Match, StateRoot};
 
 /// `gsa -Qb [ref…]` — the binpkg index rows (retained built instances,
@@ -454,21 +455,186 @@ pub fn query_list(inv: &Invocation, out: &mut dyn Write) -> Result<(), String> {
             }
         }
     }
+    let mut rows: Vec<InstalledRow> = Vec::new();
     for pkg in db.packages() {
-        let mut line = format!("{} {}", pkg.name, pkg.version);
-        if let Some(row) = side.get(pkg.name.as_str()) {
-            let instances = index
+        let side_car = side.get(pkg.name.as_str()).map(|row| SideCar {
+            token: row.abi_token.clone(),
+            built: row.version.clone(),
+            instances: index
                 .as_ref()
                 .map(|i| i.instances_for(&row.recipe_id).len())
-                .unwrap_or(0);
+                .unwrap_or(0),
+        });
+        rows.push(InstalledRow {
+            name: pkg.name.clone(),
+            version: pkg.version.clone(),
+            side_car,
+        });
+    }
+    if crate::output::is_human() {
+        let table = installed_table(&rows, crate::dashboard::terminal_width());
+        write!(out, "{table}").map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+    // Machine mode: the row vocabulary is an interface (contract §L.5) —
+    // byte-identical to the pre-table rendering, never coloured.
+    for row in &rows {
+        let mut line = format!("{} {}", row.name, row.version);
+        if let Some(side_car) = &row.side_car {
             line.push_str(&format!(
                 " abi={} built={} instances={}",
-                row.abi_token, row.version, instances
+                side_car.token, side_car.built, side_car.instances
             ));
         }
         writeln!(out, "{line}").map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+/// One `-Q` row: the installed package plus its side-car columns, if any.
+struct InstalledRow {
+    name: String,
+    version: String,
+    side_car: Option<SideCar>,
+}
+
+struct SideCar {
+    token: String,
+    built: String,
+    instances: usize,
+}
+
+/// The human `-Q` view: a headerless aligned table (contract §B.3 names the
+/// columns, not their bytes). Column widths are computed once from the whole
+/// result set, so every line has the same visible width; the fit ladder drops
+/// the widest diagnostic columns in order before it truncates a name, because
+/// the name is what a reader copies.
+///
+/// Colour carries one fact the words cannot: a package whose installed
+/// version differs from its newest BUILT version is `Warn` — a rebuild is
+/// pending. The tokens themselves are `Dim`: they are for the eye to skip.
+fn installed_table(rows: &[InstalledRow], terminal: usize) -> String {
+    const NAME_CAP: usize = 32;
+    const VERSION_CAP: usize = 22;
+    const BUILT_CAP: usize = 22;
+    const ABI_SHORT: usize = 8;
+    const INSTANCES_W: usize = 4;
+
+    let widest = |f: &dyn Fn(&InstalledRow) -> usize, cap: usize| -> usize {
+        rows.iter().map(f).max().unwrap_or(0).min(cap)
+    };
+    let mut name_w = widest(&|row| row.name.chars().count(), NAME_CAP).max(1);
+    let version_w = widest(&|row| row.version.chars().count(), VERSION_CAP);
+    let built_w = widest(
+        &|row| {
+            row.side_car
+                .as_ref()
+                .map(|side_car| side_car.built.chars().count())
+                .unwrap_or(0)
+        },
+        BUILT_CAP,
+    );
+    let mut abi_w = 4 + ABI_SHORT + 1; // `abi=` + hex + `…`
+    let mut show_built = true;
+    let mut show_instances = true;
+
+    let total = |name_w: usize, abi_w: usize, built_w: usize| -> usize {
+        name_w + 1 + version_w + 2 + abi_w + 1 + built_w + 1 + INSTANCES_W
+    };
+    // The fit ladder: instances, then built, then the token halved, then the
+    // name cap — the last thing truncated is the name.
+    let mut width = total(name_w, abi_w, built_w);
+    if width > terminal {
+        show_instances = false;
+        // Recompute without the instances column (and its separating space).
+        width -= INSTANCES_W + 1;
+    }
+    if width > terminal && built_w > 0 {
+        show_built = false;
+        width -= built_w + 1;
+    }
+    if width > terminal {
+        abi_w = 4 + 4 + 1;
+        width -= (4 + ABI_SHORT + 1) - abi_w;
+    }
+    while width > terminal && name_w > 16 {
+        let shrink = (name_w - 16).min(8);
+        name_w -= shrink;
+        width -= shrink;
+    }
+
+    let mut out = String::with_capacity(rows.len() * (width + 1));
+    for row in rows {
+        let stale = row
+            .side_car
+            .as_ref()
+            .map(|side_car| side_car.built != row.version)
+            .unwrap_or(false);
+        // Truncate BEFORE painting: `truncate_middle` counts characters, so
+        // an escape byte in its input would spend width it does not own.
+        let version_text = style::truncate_middle(&row.version, version_w);
+        let version = if stale {
+            style::paint(style::Role::Warn, &version_text).into_owned()
+        } else {
+            version_text
+        };
+        let mut line = style::pad(&style::truncate_middle(&row.name, name_w), name_w);
+        line.push(' ');
+        line.push_str(&style::pad(&version, version_w));
+        match &row.side_car {
+            Some(side_car) => {
+                line.push_str("  ");
+                let token = installed_token(&side_car.token, abi_w - 4 - 1);
+                let short = style::paint(style::Role::Dim, &token);
+                line.push_str(&style::pad(&short, abi_w));
+                if show_built {
+                    line.push(' ');
+                    let built_text = style::truncate_middle(&side_car.built, built_w);
+                    let built = if stale {
+                        style::paint(style::Role::Warn, &built_text).into_owned()
+                    } else {
+                        style::paint(style::Role::Dim, &built_text).into_owned()
+                    };
+                    line.push_str(&style::pad(&built, built_w));
+                }
+                if show_instances {
+                    line.push(' ');
+                    let count = side_car.instances.to_string();
+                    let cell = if side_car.instances > 1 {
+                        count
+                    } else {
+                        style::paint(style::Role::Dim, &count).into_owned()
+                    };
+                    line.push_str(&style::pad(&cell, INSTANCES_W));
+                }
+            }
+            None => {
+                // The absence is the information: keep the columns so the
+                // table stays rectangular, and leave them empty.
+                line.push_str(&" ".repeat(2 + abi_w));
+                if show_built {
+                    line.push_str(&" ".repeat(1 + built_w));
+                }
+                if show_instances {
+                    line.push_str(&" ".repeat(1 + INSTANCES_W));
+                }
+            }
+        }
+        out.push_str(&line);
+        out.push('\n');
+    }
+    out
+}
+
+/// The shortened ABI token: `abi=` plus the first `keep` hex digits and `…`.
+/// Eight digits distinguish two tokens of the same provider at a glance; the
+/// full value stays in `-Qi`, `-Qa` and the machine row.
+fn installed_token(token: &str, keep: usize) -> String {
+    if token.chars().count() <= keep {
+        return format!("abi={token}");
+    }
+    let head: String = token.chars().take(keep).collect();
+    format!("abi={head}…")
 }
 
 /// `gsa -Qs <pattern…>` (§B.3, I1): search installed names/descriptions
@@ -486,8 +652,15 @@ pub fn query_search(inv: &Invocation, out: &mut dyn Write) -> Result<(), String>
     for pkg in db.packages() {
         let desc = pkg.desc.clone().unwrap_or_default();
         if matches(&inv.targets, &[pkg.name.clone(), desc.clone()]) {
-            writeln!(out, "{} {}", pkg.name, pkg.version).map_err(|e| e.to_string())?;
-            writeln!(out, "    {desc}").map_err(|e| e.to_string())?;
+            writeln!(
+                out,
+                "{} {}",
+                style::styled(style::Role::Bold, pkg.name.clone()),
+                style::styled(style::Role::Dim, pkg.version.clone())
+            )
+            .map_err(|e| e.to_string())?;
+            writeln!(out, "    {}", style::styled(style::Role::Dim, desc))
+                .map_err(|e| e.to_string())?;
         }
     }
     Ok(())
