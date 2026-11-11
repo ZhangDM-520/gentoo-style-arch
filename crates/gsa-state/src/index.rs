@@ -622,6 +622,17 @@ pub fn register_instance(
             drops.push((id.clone(), *dropped));
         }
     }
+    // The run's own PKGDEST — the directory its just-built archives were
+    // written to. The sweep may unlink only from it: a row from an earlier
+    // `--build-dir` names a foreign cache, and deleting that file destroyed
+    // the other half of a native/cross pair while the note named only the
+    // file, so it read like a lost build (blind-review 2026-11-11,
+    // embedded-cross-compiler F17). Those rows are pruned; their files stay.
+    let owned_dir = outcome
+        .rows
+        .first()
+        .and_then(|row| row.archive.parent())
+        .map(Path::to_path_buf);
     let dropped_keys: BTreeSet<(String, u64)> = drops.iter().cloned().collect();
     let mut kept_paths: BTreeSet<PathBuf> = BTreeSet::new();
     for row in &index.rows {
@@ -651,11 +662,20 @@ pub fn register_instance(
         let mut deletable = true;
         let mut kept = false;
         let mut removed: Vec<String> = Vec::new();
+        let mut foreign: Vec<String> = Vec::new();
         let mut already_gone = false;
         for row in &rows_of {
             let file = row.archive.clone();
             if kept_paths.contains(&file) {
                 kept = true;
+                continue;
+            }
+            if owned_dir.as_deref() != file.parent() {
+                foreign.push(
+                    file.parent()
+                        .map(|dir| dir.display().to_string())
+                        .unwrap_or_else(|| file.display().to_string()),
+                );
                 continue;
             }
             match std::fs::remove_file(&file) {
@@ -677,6 +697,14 @@ pub fn register_instance(
         if kept {
             outcome.notes.push(format!(
                 "binpkg index: retention pruned {id} instance {dropped} (archive kept — a kept row still references it)"
+            ));
+        }
+        if !foreign.is_empty() {
+            foreign.sort();
+            foreign.dedup();
+            outcome.notes.push(format!(
+                "binpkg index: retention pruned {id} instance {dropped} (archive left in place — another build root owns it: {})",
+                foreign.join(", ")
             ));
         }
         if !removed.is_empty() {
@@ -1010,6 +1038,65 @@ mod tests {
         assert!(
             dir.join("leaf-1.0.0-1-any.pkg.tar.zst").exists(),
             "the archive a kept row references survives the sweep"
+        );
+        let index = BinpkgIndex::load(&root).unwrap();
+        assert_eq!(index.instances_for("leaf"), vec![2]);
+    }
+
+    #[test]
+    fn retention_never_deletes_an_archive_another_build_root_owns() {
+        // Two `--build-dir`s over one state root (the normal native/cross
+        // pair): the sweep prunes the older instance's ROW but may not unlink
+        // a file outside the PKGDEST this run wrote to (blind-review
+        // 2026-11-11, embedded-cross-compiler F17).
+        let dir = scratch("foreign-root");
+        let root = StateRoot::open(&dir).unwrap();
+        let retention = Retention::from_records(&synthetic_topology()).unwrap();
+        let mut err = Vec::new();
+        let in_flight = BTreeSet::new();
+        let first_dir = dir.join("build-one");
+        let second_dir = dir.join("build-two");
+        std::fs::create_dir_all(&first_dir).unwrap();
+        std::fs::create_dir_all(&second_dir).unwrap();
+
+        let first = make_archive(&first_dir, "leaf", "1.0.0-1");
+        register_instance(
+            &root,
+            "leaf",
+            &[first.clone()],
+            &retention,
+            &in_flight,
+            None,
+            &mut err,
+        )
+        .unwrap();
+        let second = make_archive(&second_dir, "leaf", "1.0.1-1");
+        let outcome = register_instance(
+            &root,
+            "leaf",
+            &[second],
+            &retention,
+            &in_flight,
+            None,
+            &mut err,
+        )
+        .unwrap();
+
+        assert_eq!(
+            outcome.pruned[0].instance, 1,
+            "the older instance is pruned"
+        );
+        assert!(
+            first.exists(),
+            "another build root's archive is never unlinked by this run"
+        );
+        assert!(
+            outcome
+                .notes
+                .iter()
+                .any(|n| n.contains("another build root owns it")),
+            "the kept foreign archive is reported: {:?}",
+            outcome.notes
         );
         let index = BinpkgIndex::load(&root).unwrap();
         assert_eq!(index.instances_for("leaf"), vec![2]);
