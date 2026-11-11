@@ -633,6 +633,25 @@ fn prepare_one(
             };
         }
     };
+    // A compiler that is not installed is not a toolchain: the identity's
+    // sentinel is DATA for the drift comparison (installing the compiler
+    // later reads as drift), but WRITING that marker after a build certifies
+    // a phantom — and the build itself cannot succeed. The family named on
+    // the command line is a claim the host must be able to honour (blind
+    // review, 2026-11-11).
+    if let Some(unavailable) = toolchain::unavailable_sentinel(toolchain) {
+        if identity.starts_with(&format!("{toolchain}|{unavailable}|")) {
+            log.push(format!(
+                "{name}: the {toolchain} compiler is not installed ({unavailable}) — install it or pick another --toolchain"
+            ));
+            return PackagePrep {
+                plan: NodePlan::Refuse {
+                    reason: "toolchain-unavailable".to_string(),
+                },
+                log,
+            };
+        }
+    }
     let identity_state = toolchain::check_identity(state_dir, name, &identity);
     let drifted = identity_state.forces_clean_rebuild();
     if drifted && cfg.skip_mode.is_some() {

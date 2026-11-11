@@ -952,6 +952,16 @@ mod selection_tests {
 /// installing the compiler later reads as drift and forces one clean).
 pub const CLANG_UNAVAILABLE_IDENTITY: &str = "clang unavailable";
 
+/// The missing-driver sentinel of one family, when its compiler is absent.
+/// A caller that must not certify a toolchain the host cannot run asks here
+/// instead of pattern-matching the identity string it was handed.
+pub fn unavailable_sentinel(toolchain: Toolchain) -> Option<&'static str> {
+    match toolchain {
+        Toolchain::Gcc => Some(GCC_UNAVAILABLE_IDENTITY),
+        Toolchain::Clang => Some(CLANG_UNAVAILABLE_IDENTITY),
+    }
+}
+
 /// The compiler version line for the selected family.
 pub fn compiler_identity(toolchain: Toolchain) -> io::Result<String> {
     match toolchain {

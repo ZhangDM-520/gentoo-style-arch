@@ -897,8 +897,24 @@ pub fn run(argv: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
                 }
                 Ok(toolchain) => match gsa_recipe::toolchain::build_identity(toolchain) {
                     Ok(identity) => {
+                        // The identity still prints (it is what the gate would
+                        // record), but a probe of a compiler the host does not
+                        // have must not answer rc 0 "all good" (blind review,
+                        // 2026-11-11).
+                        let unavailable = gsa_recipe::toolchain::unavailable_sentinel(toolchain)
+                            .is_some_and(|sentinel| {
+                                identity.starts_with(&format!("{toolchain}|{sentinel}|"))
+                            });
                         let _ = writeln!(out, "{identity}");
-                        0
+                        if unavailable {
+                            let _ = writeln!(
+                                err,
+                                "gsa: --build-identity: the {toolchain} compiler is not installed — the identity records its absence"
+                            );
+                            RC_REFUSED
+                        } else {
+                            0
+                        }
                     }
                     Err(error) => {
                         let _ = writeln!(

@@ -123,4 +123,42 @@ case $gcc_id in gcc\|*) ;; *) fail "G: gcc identity has the wrong family: $gcc_i
 case $clang_id in clang\|*) ;; *) fail "G: clang identity has the wrong family: $clang_id" ;; esac
 [[ $gcc_id != "$clang_id" ]] || fail 'G: both families produced one identity'
 
-printf 'toolchain-select: PASS (default, scan, tag, flag, ambiguity refusal, typo)\n'
+# ── H. a compiler the host does not have is a refusal, not an identity ─────
+# The identity's `unavailable` sentinel is DATA for the drift comparison, but
+# writing that marker after a build certifies a toolchain the host cannot run
+# — and `--build-identity` answering rc 0 for it read as "this family is
+# fine" (blind review, 2026-11-11). A PATH shim answers `--version` for
+# NEITHER driver, so the family is absent whatever the host carries.
+# `version_line` sees a missing driver as NotFound, so the family must be
+# absent from PATH entirely: a bin dir carrying only the tools the probe
+# itself needs (and no compiler at all).
+mkdir -p "$fixture/h"
+empty_bin="$fixture/empty-bin"
+mkdir -p "$empty_bin"
+for tool in sh bash sed awk grep env sudo setpriv tar zstd git mv rm cp mkdir \
+    cat chmod ln find sort head tail tr cut id uname dirname basename mktemp \
+    date touch stat sleep ls; do
+    if resolved=$(command -v "$tool" 2>/dev/null); then
+        ln -sf "$resolved" "$empty_bin/$tool"
+    fi
+done
+set +e
+out=$(PATH="$empty_bin" "$GSA_TEST_GSA_BIN" --build-identity clang 2>"$fixture/h/clang.err")
+rc=$?
+set -e
+[ "$rc" -ne 0 ] || fail "H: --build-identity answered rc 0 for an absent clang (out: $out)"
+grep -Fq 'clang unavailable' <<<"$out" ||
+    fail "H: the absent-compiler identity is not named: $out"
+grep -Fq 'is not installed' "$fixture/h/clang.err" ||
+    fail 'H: --build-identity did not say the compiler is missing'
+
+# The BUILD path refuses for the same reason: a plan that accepted the run
+# would write a marker certifying a phantom toolchain.
+mkdir -p "$fixture/h/conf"
+PATH="$empty_bin" run_engine "$ws" -B --leaf --no-sync \
+    --state-dir "$fixture/h/state" --build-dir "$fixture/h/build" \
+    --toolchain clang p1
+grep -Fq 'toolchain-unavailable' <<<"$FIXTURE_OUTPUT" ||
+    fail "H: the build path accepted an absent compiler (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
+
+printf 'toolchain-select: PASS (default, scan, tag, flag, ambiguity refusal, typo, absent compiler, build refusal)\n'
