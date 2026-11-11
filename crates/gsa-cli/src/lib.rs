@@ -171,10 +171,7 @@ impl RootFailure {
     }
 }
 
-pub(crate) fn resolve_root(
-    fetch: bool,
-    state_flag: Option<&str>,
-) -> Result<PathBuf, RootFailure> {
+pub(crate) fn resolve_root(fetch: bool, state_flag: Option<&str>) -> Result<PathBuf, RootFailure> {
     let cfg = gsa_model::config::load().map_err(RootFailure::Usage)?;
     if let Some(project) = &cfg.project {
         return Ok(project.clone());

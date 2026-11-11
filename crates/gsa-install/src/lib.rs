@@ -1031,7 +1031,10 @@ fn plan(candidates: &[Candidate], ctx: &DecisionContext, db: &LocalDb) -> Result
         // this archive actually moves or ships a soname: a plain install on a
         // host with one damaged DB entry is unaffected.
         let moves_sonames = !shipped_sonames.is_empty()
-            || info.provides.iter().any(|p| p.starts_with('=') || p.contains(".so"));
+            || info
+                .provides
+                .iter()
+                .any(|p| p.starts_with('=') || p.contains(".so"));
         if moves_sonames && !db.unreadable.is_empty() {
             rows.push(row(
                 &info.pkgbase,

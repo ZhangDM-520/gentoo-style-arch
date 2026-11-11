@@ -977,7 +977,10 @@ fn unreadable_pkginfo_always_refuses_and_never_probes() {
     .unwrap();
     assert_eq!(
         rendered(&rows),
-        vec![format!("foo refuse unreadable-pkginfo {}", garbage2.display())]
+        vec![format!(
+            "foo refuse unreadable-pkginfo {}",
+            garbage2.display()
+        )]
     );
     assert_eq!(rows_rc(&rows), 1);
     let _ = std::fs::remove_dir_all(&dir);

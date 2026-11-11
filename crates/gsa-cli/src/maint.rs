@@ -202,7 +202,8 @@ fn run_inner(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> Resu
     // same guidance `-Sl` does when no workspace exists.
     let read_only = matches!(privilege(inv), super::Privilege::ReadOnly);
     let root = if read_only {
-        crate::resolve_root(false, inv.state_dir.as_deref()).map_err(|e| Exit::Usage(e.message()))?
+        crate::resolve_root(false, inv.state_dir.as_deref())
+            .map_err(|e| Exit::Usage(e.message()))?
     } else {
         crate::resolve_workspace(inv, err)?
     };

@@ -614,8 +614,8 @@ fn read_layer(path: &Path, home: &Path) -> Result<GsaConfig, String> {
 /// `read_layer` for a path the caller NAMED (`GSA_CONF`): absence is an
 /// error, not an empty layer.
 fn read_layer_required(path: &Path, home: &Path) -> Result<GsaConfig, String> {
-    let text =
-        std::fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     parse_layer(&text, &path.display().to_string(), home)
 }
 

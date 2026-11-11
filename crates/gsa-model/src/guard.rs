@@ -87,7 +87,10 @@ mod tests {
         std::fs::create_dir_all(root.join("tree/src")).unwrap();
         std::fs::create_dir_all(dir.join("victim/src")).unwrap();
         let escaped = root.join("tree/../../../victim/src");
-        assert!(escaped.normalize_starts_with(&root), "premise: lexical prefix passes");
+        assert!(
+            escaped.normalize_starts_with(&root),
+            "premise: lexical prefix passes"
+        );
         assert!(!delete_allowed(&root, &escaped));
         assert!(delete_allowed(&root, &root.join("tree/src")));
         let _ = std::fs::remove_dir_all(&dir);
@@ -129,7 +132,10 @@ mod tests {
         std::fs::create_dir_all(dir.join("elsewhere")).unwrap();
         assert!(!delete_allowed(&root, &root));
         assert!(!delete_allowed(&root, &dir.join("elsewhere")));
-        assert!(!delete_allowed(&dir.join("missing-root"), &dir.join("elsewhere")));
+        assert!(!delete_allowed(
+            &dir.join("missing-root"),
+            &dir.join("elsewhere")
+        ));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

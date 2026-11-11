@@ -30,8 +30,9 @@ use crate::Row;
 /// references, and the prune reported it as an ordinary `prune` (rule 71;
 /// blind review, 2026-11-11).
 pub fn referenced_by_run(state: &StateRoot) -> Result<BTreeSet<String>, String> {
-    let (records, _corrupt) = RunHistory::read(state)
-        .map_err(|e| format!("cannot read the run history — refusing to prune unreferenced archives: {e}"))?;
+    let (records, _corrupt) = RunHistory::read(state).map_err(|e| {
+        format!("cannot read the run history — refusing to prune unreferenced archives: {e}")
+    })?;
     let mut protected = BTreeSet::new();
     if let Some(newest) = records.last() {
         for id in &newest.continuation.remaining {
