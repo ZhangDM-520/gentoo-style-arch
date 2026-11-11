@@ -652,7 +652,15 @@ impl RunRecord {
             .map(|id| id.as_str())
             .collect::<Vec<_>>()
             .join(" ");
-        out.push_str(&format!("remaining: {}\n", scalar(&remaining)));
+        // The empty set renders the same `-` marker as `not-mirrored:` and
+        // `env-required:` — never a bare trailing space (blind-review
+        // finding, 2026-11-11).
+        let remaining = if remaining.is_empty() {
+            "-".to_string()
+        } else {
+            scalar(&remaining)
+        };
+        out.push_str(&format!("remaining: {remaining}\n"));
         // `not-mirrored:` is argv-scoped (H3): a run that mirrors everything
         // it carried lists nothing, and the empty set renders the same `-`
         // marker `env-required:` uses (never a bare trailing space).
@@ -852,6 +860,17 @@ mod tests {
         rec.continuation.not_mirrored = Vec::new();
         let block = rec.render_machine();
         assert!(block.contains("not-mirrored: -\n"), "{block}");
+    }
+
+    /// An empty `remaining:` renders the same `-` marker: the `-` a
+    /// subject-less plan row carries is a row spelling, never a package,
+    /// so the continuation names nothing and pastes cleanly.
+    #[test]
+    fn empty_remaining_renders_the_dash_marker() {
+        let mut rec = sample_record(true);
+        rec.continuation.remaining = Vec::new();
+        let block = rec.render_machine();
+        assert!(block.contains("remaining: -\n"), "{block}");
     }
 
     #[test]

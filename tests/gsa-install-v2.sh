@@ -535,6 +535,15 @@ $rows"
             || fail "an empty -Ua must record order '-' (§H.2), got '$(rr2_scalar order <<<"$FIXTURE_OUTPUT")'"
         grep -Eq '^INFO build-run packages=0 ' <<<"$FIXTURE_OUTPUT" \
             || fail "an empty -Ua must report packages=0: $FIXTURE_OUTPUT"
+        # The `-` placeholder is not a package in the CONTINUATION either:
+        # `remaining:` renders the empty spelling, and the restated command
+        # carries no trailing `-` (a paste used to exit 2 "unknown reference
+        # '-'"; blind-review finding, 2026-11-11).
+        [ "$(rr2_continuation remaining <<<"$FIXTURE_OUTPUT")" = "-" ] \
+            || fail "an empty -Ua's remaining line must be '-', got: $(rr2_continuation remaining <<<"$FIXTURE_OUTPUT")"
+        case " $(rr2_continuation command <<<"$FIXTURE_OUTPUT")" in
+        *" - ") fail "the continuation must not name the '-' placeholder: $(rr2_continuation command <<<"$FIXTURE_OUTPUT")" ;;
+        esac
 
         # H3 (argv-scoped §H.2): the run carried the one-shot `-Ua` — the
         # not-mirrored line lists exactly that spelling (the one the command

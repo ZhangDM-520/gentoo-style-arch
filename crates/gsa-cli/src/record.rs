@@ -440,10 +440,13 @@ pub fn build_run_record(
     }
     command.push_str(&mirror_flags(inv, budget));
 
-    // `remaining:` — every row not `succeeded`, in row order (§H.2).
+    // `remaining:` — every row not `succeeded`, in row order (§H.2). The
+    // `-` placeholder subject of an empty-list plan is NOT a package: naming
+    // it made the continuation `gsa -U … -`, which cannot be pasted
+    // (blind-review finding, 2026-11-11).
     let remaining: Vec<RecipeId> = outcomes
         .iter()
-        .filter(|row| row.status != RowStatus::Succeeded)
+        .filter(|row| row.status != RowStatus::Succeeded && row.pkg.as_str() != "-")
         .map(|row| row.pkg.clone())
         .collect();
     for id in &remaining {
@@ -686,10 +689,13 @@ pub fn build_txn_record(
     }
     command.push_str(&mirror_flags(inv, None));
 
-    // `remaining:` — every row not `succeeded`, in row order (§H.2).
+    // `remaining:` — every row not `succeeded`, in row order (§H.2). The
+    // `-` placeholder subject of an empty-list plan is NOT a package: naming
+    // it made the continuation `gsa -U … -`, which cannot be pasted
+    // (blind-review finding, 2026-11-11).
     let remaining: Vec<RecipeId> = outcomes
         .iter()
-        .filter(|row| row.status != RowStatus::Succeeded)
+        .filter(|row| row.status != RowStatus::Succeeded && row.pkg.as_str() != "-")
         .map(|row| row.pkg.clone())
         .collect();
     for id in &remaining {
