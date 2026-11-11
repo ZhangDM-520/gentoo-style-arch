@@ -268,6 +268,31 @@ fn backfill_adds_only_missing_names_and_is_idempotent() {
         "",
         &srcinfo("gsatest-beta", &["gsatest-beta"], "1.0", "1", &[]),
     );
+    // Only BUILT names are backfilled (blind review F9): stage the archives
+    // the two recipes shipped, and one declared-but-never-built recipe whose
+    // name must stay out of the closure (registering it would pin the stock
+    // package of that name).
+    fx.add_recipe(
+        "gamma",
+        "stable",
+        "stable",
+        "",
+        &srcinfo("gsatest-unbuilt", &["gsatest-unbuilt"], "1.0", "1", &[]),
+    );
+    let pkgdest = fx.root.join(common::CACHE_DIR).join("pkgs");
+    std::fs::create_dir_all(&pkgdest).unwrap();
+    for name in ["gsatest-alpha", "gsatest-alpha-extra", "gsatest-beta"] {
+        common::make_archive(
+            &pkgdest.join(format!("{name}-1.0-1-any.pkg.tar.zst")),
+            if name == "gsatest-alpha-extra" {
+                "gsatest-alpha"
+            } else {
+                name
+            },
+            name,
+            "1.0-1",
+        );
+    }
     let conf = fx.root.join("pacman.conf");
     std::fs::write(&conf, "[options]\nIgnorePkg = gsatest-alpha\n").unwrap();
     let before = std::fs::read_to_string(&conf).unwrap();
@@ -278,6 +303,13 @@ fn backfill_adds_only_missing_names_and_is_idempotent() {
         assert!(common::has_row(&rows, "gsatest-alpha", "present"));
         assert!(common::has_row(&rows, "gsatest-alpha-extra", "add"));
         assert!(common::has_row(&rows, "gsatest-beta", "add"));
+        assert!(
+            !common::has_row(&rows, "gsatest-unbuilt", "add"),
+            "a declared-but-never-built name must not be registered"
+        );
+        let skipped = common::find_row(&rows, "ignorepkg", "backfill")
+            .expect("the skipped unbuilt name is reported");
+        assert!(skipped.reason.contains("never built"), "{}", skipped.reason);
     });
     assert_eq!(std::fs::read_to_string(&conf).unwrap(), before, "dry-run");
 
@@ -289,9 +321,15 @@ fn backfill_adds_only_missing_names_and_is_idempotent() {
             1
         );
         assert_eq!(common::rows_with(&rows, "gsatest-beta", "add").len(), 1);
-        // Idempotent second pass: everything is present, nothing is re-added.
+        // Idempotent second pass: everything is present, nothing is re-added
+        // (the unbuilt-name summary row is not an add).
         let again = ignorepkg::backfill(ctx, &conf, true).unwrap();
-        assert!(again.iter().all(|r| r.action == "present"));
+        assert!(
+            again
+                .iter()
+                .all(|r| r.action == "present" || r.action == "backfill"),
+            "{again:?}"
+        );
     });
     let after = std::fs::read_to_string(&conf).unwrap();
     for name in ["gsatest-alpha", "gsatest-alpha-extra", "gsatest-beta"] {

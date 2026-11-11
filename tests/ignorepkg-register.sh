@@ -234,6 +234,20 @@ add_recipe() {
         >>"$ws/config/topology.conf"
 }
 
+# stage_archive DIR NAME [BASE] — one real archive whose `.PKGINFO` carries
+# pkgbase/pkgname, i.e. the name was BUILT (the registration's first
+# authority). The offline backfill registers only names an archive shipped
+# (blind review 2026-11-11, F9): a never-built declared name would pin the
+# stock package of that name.
+stage_archive() {
+    local dir=$1 name=$2 base=${3:-$2} stage ver=1.0-1
+    stage=$(mktemp -d "$dir/.stage.XXXXXX")
+    printf 'pkgbase = %s\npkgname = %s\npkgver = %s\narch = any\n' \
+        "$base" "$name" "$ver" >"$stage/.PKGINFO"
+    tar --zstd -cf "$dir/$name-$ver-any.pkg.tar.zst" -C "$stage" .PKGINFO
+    rm -rf "$stage"
+}
+
 # make_conf PATH — the synthetic pacman.conf: [options] carries a duplicate
 # name in its first IgnorePkg line (must be counted once) and the repo section
 # below carries an IgnorePkg line that must be IGNORED with a warning.
@@ -277,6 +291,13 @@ make_register_ws() {
     } >"$ws/packages/stable/split-demo/.SRCINFO"
     printf 'split-demo|packages/stable/split-demo|stable|\n' \
         >>"$ws/config/topology.conf"
+    # Every name the byte-exact expectations below append must look BUILT.
+    stage_archive "$ws/packages/git/alpha-git" alpha-git
+    stage_archive "$ws/packages/git/beta-git" beta-git
+    stage_archive "$ws/packages/misc/ghost-one" ghost-one
+    for i in {1..13}; do
+        stage_archive "$ws/packages/stable/split-demo" "split-demo-$i" split-demo
+    done
 }
 
 # run_backfill WS CONF [ARG...] — the offline backfill through the engine's
@@ -453,6 +474,7 @@ printf 'b: second run adds nothing (idempotent) OK\n'
 # original pre-image (`already present (kept as the day's pre-image)`) and
 # appends only the new name.
 add_recipe "$ws" git delta-git
+stage_archive "$ws/packages/git/delta-git" delta-git
 run_backfill "$ws" "$conf"
 ((FIXTURE_RC == 0)) ||
     fail "j: a second write of the day must proceed (rc 0), got rc=$FIXTURE_RC: $FIXTURE_OUTPUT"
@@ -470,6 +492,24 @@ shopt -u nullglob
 cmp "${baks[0]}" "$conf.orig" >/dev/null ||
     fail "j: the kept backup must stay the ORIGINAL pre-image, it was rewritten"
 printf 'j: second write proceeds, original .bak kept OK\n'
+
+# ─── k. a declared name that was NEVER built is not registered ──────────────
+# IgnorePkg protects the HOUSE-built packages from a stock replacement.
+# Registering a name no archive ever shipped pins the STOCK package of that
+# name instead — an update the operator never asked to hold (blind review
+# 2026-11-11, F9).
+add_recipe "$ws" git epsilon-git
+cp "$conf" "$tmp/k.before"
+run_backfill "$ws" "$conf"
+((FIXTURE_RC == 0)) || fail "k: rc 0 expected, got rc=$FIXTURE_RC: $FIXTURE_OUTPUT"
+if grep -Fq 'epsilon-git' "$conf"; then
+    fail "k: a never-built declared name reached IgnorePkg: $(cat "$conf")"
+fi
+cmp "$conf" "$tmp/k.before" >/dev/null ||
+    fail "k: the unbuilt name changed the conf: $(diff "$tmp/k.before" "$conf" || true)"
+grep -Fq 'never built' <<<"$FIXTURE_OUTPUT" ||
+    fail "k: the backfill must report the skipped unbuilt name: $FIXTURE_OUTPUT"
+printf 'k: a never-built declared name is not registered OK\n'
 
 # ─── d. non-writable target + dead sudo = refusal, file unchanged ────────────
 # DEVIATION 5: rc 3 (§G.1) and the escalation is the engine's own `sudo -n cp`

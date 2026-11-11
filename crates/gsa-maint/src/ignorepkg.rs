@@ -153,18 +153,36 @@ pub fn report(ctx: &MaintCtx<'_>, conf: &Path) -> Result<Vec<Row>, String> {
 
 /// `-Mi --backfill`: add every wanted name the closure is missing (today's
 /// hidden `--register-ignorepkg`, rule 9's one-shot backfill, now a public
-/// verb). Rows: `present`/`add`.
+/// verb). Rows: `present`/`add`, plus one summary row when declared names
+/// were skipped.
+///
+/// Only names an ARCHIVE actually shipped (`.PKGINFO` truth, the same first
+/// authority the acceptance-time registration reads) are added: a declared
+/// name that was never built has no house package to protect, and putting it
+/// in `IgnorePkg` pins whatever STOCK package carries the name — an update
+/// the operator never asked to hold (blind review 2026-11-11, F9).
 pub fn backfill(ctx: &MaintCtx<'_>, conf: &Path, apply: bool) -> Result<Vec<Row>, String> {
     let closure = read_ignorepkg(conf)?;
     let wanted = wanted_names(ctx);
+    let shipped = shipped_names(ctx)?;
     let mut rows = Vec::new();
     let mut missing: Vec<String> = Vec::new();
+    let mut unbuilt = 0usize;
     for name in &wanted {
         if closure.names.contains(name) {
             rows.push(Row::new(name, "present", "in-closure"));
-        } else {
+        } else if shipped.contains(name) {
             missing.push(name.clone());
+        } else {
+            unbuilt += 1;
         }
+    }
+    if unbuilt > 0 {
+        rows.push(Row::new(
+            "ignorepkg",
+            "backfill",
+            format!("{unbuilt} declared name(s) never built — not registered"),
+        ));
     }
     if missing.is_empty() {
         return Ok(rows);

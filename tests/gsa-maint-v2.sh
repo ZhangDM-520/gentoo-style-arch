@@ -399,6 +399,14 @@ if want c; then
         make_workspace "$ws" 1 auto low
         add_package "$ws" ignorea "$gsa_meta_any" git
         add_package "$ws" ignoreb "$gsa_meta_any" git
+        # `ignoreb` must look BUILT: the backfill registers only names an
+        # archive shipped (a never-built declared name would pin the stock
+        # package of that name, blind review 2026-11-11 F9).
+        mkdir -p "$fixture/c/stage"
+        printf 'pkgbase = ignoreb\npkgname = ignoreb\npkgver = 1.0.0-1\narch = any\n' \
+            >"$fixture/c/stage/.PKGINFO"
+        tar --zstd -cf "$ws/packages/ignoreb/ignoreb-1.0.0-1-any.pkg.tar.zst" \
+            -C "$fixture/c/stage" .PKGINFO
 
         # The closure under test: NEVER /etc/pacman.conf (§B.7's target is
         # the conf the verb is pointed at). `ignorea` is declared by a
